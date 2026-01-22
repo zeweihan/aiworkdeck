@@ -72,6 +72,12 @@ Copy `backend/.env.example` to `backend/.env.production`.
 | :--- | :--- | :--- | :--- |
 | **Server** | | | |
 | `SERVER_PORT` | Backend Port | `9696` | N/A |
+| **Database** | | | |
+| `DB_HOST` | Database Host | `localhost` | Local Install or Cloud Provider |
+| `DB_PORT` | Database Port | `5432` | |
+| `DB_NAME` | Database Name | `checkba` | `CREATE DATABASE checkba;` |
+| `DB_USERNAME` | Database User | `postgres` | |
+| `DB_PASSWORD` | Database Password | (Required) | |
 | **External APIs** | | | |
 | `QICHACHA_KEY` | Company Data | N/A | [Qichacha Open Platform](https://openapi.qcc.com/) |
 | `TUSHARE_TOKEN` | Stock Data | N/A | [Tushare](https://tushare.pro/) |
