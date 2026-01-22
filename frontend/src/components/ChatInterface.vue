@@ -794,15 +794,16 @@ export default {
     const pptConfigData = ref(null)
     const pptExportEditable = ref(false)
 
-    const cancelPptConfig = () => {
+   const cancelPptConfig = () => {
        showPptConfigDialog.value = false
        pptConfigData.value = null
-       // Optionally notify backend of cancellation? Not strictly needed as AI task handles timeout or just hangs.
-       // Ideally we should tell user "Cancelled".
        bubbles.value.push({
           role: 'ASSISTANT',
           content: 'PPT 生成已取消。',
-          timestamp: new Date().toLocaleTimeString()
+          timestamp: new Date().toLocaleTimeString(),
+          thinking: { status: 'done', content: '', duration: 0 },
+          processes: [],
+          artifacts: []
        })
     }
 
@@ -826,7 +827,10 @@ export default {
           bubbles.value.push({
              role: 'ASSISTANT',
              content: `开始生成 PPT (${pptExportEditable.value ? '可编辑版' : '高清图片版'})...\n请留意上方进度条。`,
-             timestamp: new Date().toLocaleTimeString()
+             timestamp: new Date().toLocaleTimeString(),
+             thinking: { status: 'done', content: '', duration: 0 },
+             processes: [],
+             artifacts: []
           })
 
        } catch (err) {

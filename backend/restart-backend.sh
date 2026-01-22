@@ -4,6 +4,18 @@ set -e
 # 确保脚本在 backend 目录下执行，解决从根目录即使 invoked 找不到 pom.xml 的问题
 cd "$(dirname "$0")"
 
+# Load environment variables from .env if it exists
+if [ -f "./.env" ]; then
+    echo "Found .env, loading environment variables..."
+    export $(grep -v '^#' ./.env | xargs)
+fi
+
+# Load environment variables from .env.production if it exists (overrides .env)
+if [ -f "./.env.production" ]; then
+    echo "Found .env.production, loading environment variables..."
+    export $(grep -v '^#' ./.env.production | xargs)
+fi
+
 echo "== 1. 打包 =="
 mvn clean package -DskipTests
 

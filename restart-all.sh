@@ -299,7 +299,13 @@ echo ">>> [启动 2/5] 启动后端 Java 服务..."
 cd "$PROJECT_ROOT/backend"
 
 # 调用现有的 restart-backend.sh
-# Load environment variables from backend/.env.production if it exists
+# Load environment variables from backend/.env if it exists
+if [ -f "./.env" ]; then
+    echo "Found backend/.env, loading environment variables..."
+    export $(grep -v '^#' ./.env | xargs)
+fi
+
+# Load environment variables from backend/.env.production if it exists (overrides .env)
 if [ -f "./.env.production" ]; then
     echo "Found backend/.env.production, loading environment variables..."
     export $(grep -v '^#' ./.env.production | xargs)
