@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Commercial licensing
+    url: mailto:hi@aiworkdeck.com
+    about: Contact us for proprietary SaaS, enterprise deployment, or support.
+  - name: AI Workdeck website
+    url: https://www.aiworkdeck.com
+    about: Watch the product walkthrough and feature showcase.
