@@ -1,118 +1,195 @@
-# AI Workdeck Community Edition (Kernel)
+# AI Workdeck
 
-> **AI Workdeck Community Edition (Kernel) — open-source core for document workflows (AGPLv3). Commercial license available for proprietary SaaS / enterprise use.**
+> The AI-native workspace for legal and document-heavy work.
 
-## 1. Project Positioning
-This repository hosts the **Community Edition (Kernel)** of AI Workdeck. It provides the core open-source infrastructure for verifiable, integrable document workflow and evidence chain capabilities.
+AI Workdeck is an IDE-style workbench that brings case files, document editing,
+AI agents, plugins, document parsing, and auditable work records into one deck.
 
-**It is NOT the full commercial SaaS product.**
-We open-source this kernel to empower developers to audit, integrate, and build upon our core document processing technologies.
+中文定位: 法律行业的 AI 工作环境与基础设施。不是把 AI 插进每个旧系统,
+而是把案件、文档、检索、协作和 Agent 放回同一个工作台。
 
-## 2. Intellectual Property & "Look and Feel"
-**Important Notice on Project Structure & Design:**
-The value of AI Workdeck lies not just in the lines of code, but in the specific **Structure, Sequence, and Organization (SSO)** of its IDE-based document workflow.
+[![GitHub stars](https://img.shields.io/github/stars/zeweihan/aiworkdeck?style=social)](https://github.com/zeweihan/aiworkdeck/stargazers)
+[![License: AGPLv3](https://img.shields.io/badge/license-AGPLv3-blue.svg)](legal/LICENSE)
+[![Commercial license](https://img.shields.io/badge/commercial%20license-available-0b5f3a.svg)](legal/COMMERCIAL-LICENSE.md)
+[![Website](https://img.shields.io/badge/website-aiworkdeck.com-0b5f3a.svg)](https://www.aiworkdeck.com)
 
-*   **Protected Expression:** We assert copyright over the unique arrangement of our "Document-as-Code" workflow, the specific orchestration of AI agents within the editor context, and the visual/functional hierarchy of the IDE panels.
-*   **Anti-Cloning:** If you create a derivative work that mimics this project's unique "IDE Structure and Logic Flow"—even if you reimplement the code from scratch—we generally consider this a derivative work of our **Trade Dress** and **Creative Expression**.
-*   **Good Faith:** If you are inspired by this architecture, strict compliance with the AGPLv3 is expected. If you attempt to clone the *concept* and *workflow* for a closed-source product, you are violating the spirit and potentially the letter of our IP rights.
+<p align="center">
+  <a href="https://www.aiworkdeck.com/zh/showcase">
+    <img src="https://www.aiworkdeck.com/images/hero-dashboard.png" alt="AI Workdeck dashboard" width="900">
+  </a>
+</p>
 
-## 3. Licensing Strategy
-We believe in sustainable open source.
-- **Community / Open Source Use:** You are free to use, modify, and distribute this software under the terms of the **GNU Affero General Public License v3.0 (AGPLv3)**.
-- **Proprietary / Commercial SaaS Use:** If you wish to use this software in a closed-source SaaS environment, proprietary enterprise deployment, or distribute it without releasing your modifications, **you must obtain a Commercial License**.
+## Why Star This Repo
 
-This dual-licensing model ensures the project remains free for the open-source community while providing a sustainable path for commercial integrations compared to closed-source copying.
+Star AI Workdeck if you care about any of these problems:
 
-## 3. Licensing Terms
+- Building AI-native legal or professional-service workflows.
+- Moving from chatbot add-ons to a real workspace where files, context, agents,
+  and plugins live together.
+- Self-hosting document AI infrastructure with private data, audit trails, and
+  organization-level workflows.
+- Exploring MCP-style agent orchestration, document parsing, WPS WebOffice
+  integration, AI slides, TTS, OCR, and evidence-chain workflows in one codebase.
 
-### Community Edition (AGPLv3)
-The "Community Edition / Kernel" of this project is released under the **AGPLv3**.
+## What It Is
 
-> If you modify this program and provide it as a network service to others (typical SaaS scenario), you must provide the corresponding source code to the users of that service under the AGPLv3.
+AI Workdeck Community Edition is the open-source kernel of AI Workdeck. It is
+not the full commercial SaaS product. The kernel is published so developers,
+law firms, legal-tech builders, and document-AI teams can inspect, self-host,
+integrate, and extend the core workflow infrastructure.
 
-### Commercial License
-If you wish to use this project for:
-- Closed-source SaaS delivery
-- Proprietary on-premise delivery
-- Distributing as part of a commercial non-open-source product
+The simplest mental model:
 
-Please [contact us to acquire a Commercial License](mailto:hi@aiworkdeck.com).
+> VS Code gives developers one place for files, extensions, terminals, Git, and
+> AI coding assistants. AI Workdeck aims to give lawyers and document-heavy teams
+> one place for matters, documents, agents, plugins, evidence, and review.
 
-*See [LICENSE](legal/LICENSE) for the full AGPLv3 text and [COMMERCIAL-LICENSE](legal/COMMERCIAL-LICENSE.md) for commercial licensing details.*
+## Demo
+
+- Website: [aiworkdeck.com](https://www.aiworkdeck.com)
+- Product walkthrough: [intro video](https://www.aiworkdeck.com/videos/intro.mp4)
+- Feature showcase: [AI Workdeck Showcase](https://www.aiworkdeck.com/zh/showcase)
+
+## Core Capabilities
+
+| Area | What the kernel provides |
+| --- | --- |
+| Workspace | Project/file tree, document staging, favorites, clipboard memory, work logs |
+| AI document work | Drafting, review, extraction, desensitization, Markdown and document preview |
+| Agent layer | Main agent interface, streaming responses, contextual file tags, MCP-oriented orchestration |
+| Document editing | WPS WebOffice integration, online DOCX/XLSX editing, document links, diff viewing |
+| Parsing and generation | MinerU document parsing, AI PPT generation, text-to-speech workflows |
+| Plugin surface | Left-sidebar plugins, tool configuration, dedicated panes for vertical workflows |
+| Deployment | Java/Spring backend, Vue/uni-app frontend, Electron desktop shell, Dockerized services |
+| Governance | Private deployment path, audit-friendly workflow records, commercial licensing path |
+
+## Architecture
+
+```mermaid
+flowchart TB
+  User["User workspace"] --> IDE["IDE interaction layer"]
+  IDE --> WPS["WPS WebOffice integration"]
+  IDE --> Agent["Agent and chat interface"]
+  Agent --> MCP["MCP / tool orchestration"]
+  MCP --> Skills["Document skills and plugins"]
+  Skills --> Data["PostgreSQL, object storage, file context"]
+  Skills --> Services["MinerU, PPTX service, TTS, OCR"]
+  Data --> Security["Private deployment and audit controls"]
+  Services --> Security
+```
+
+## Repository Map
+
+| Path | Purpose |
+| --- | --- |
+| `backend/` | Spring Boot backend, agent/tool APIs, document services |
+| `frontend/` | Vue/uni-app web frontend for the workbench |
+| `desktop/` | Electron desktop shell |
+| `pptx-service/` | AI-native PPT generation service |
+| `mineru-service/` | MinerU-based document parsing service |
+| `easyvoice/` | Text-to-speech service |
+| `docs/` | Engineering notes, WPS integration notes, storage and workflow docs |
+| `legal/` | AGPLv3 license, CLA, commercial license, trademark terms |
 
 ## Quick Start
 
-### 1. Clone Repository
+### 1. Clone
+
 ```bash
 git clone https://github.com/zeweihan/aiworkdeck.git
 cd aiworkdeck
 ```
 
-### 2. Prerequisites
-Before running the project, ensure you have the following installed. We provide links to the official installation guides:
+### 2. Install Prerequisites
 
-- **Docker** (Required for PPTX generation & MinerU)
-    - [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
-- **Java 17+** (Required for Backend)
-    - [Install JDK 17](https://www.oracle.com/java/technologies/downloads/#java17) or use [SDKMAN!](https://sdkman.io/) (`sdk install java 17.0.10-tem`)
-- **Node.js 18+** (Required for Frontend & Desktop)
-    - [Install Node.js](https://nodejs.org/en/download/) or use [nvm](https://github.com/nvm-sh/nvm) (`nvm install 18`)
-- **PostgreSQL Database** (Required for Backend)
-    - The project does **not** provide a Docker database container. You must have a running PostgreSQL instance.
-    - [Download PostgreSQL](https://www.postgresql.org/download/) or use a Cloud Database.
-    - **Setup**: Create a database named `checkba` (or customize in `.env`).
+- Docker Desktop for MinerU, PPTX, and TTS services.
+- Java 17+ for the Spring Boot backend. JDK 21 is also supported.
+- Node.js 18+ for the frontend and Electron desktop app.
+- PostgreSQL for the backend database.
 
-### 3. Configuration
-Copy the example configuration files to their production counterparts and fill in your API keys.
+Create a database named `checkba`, or update the backend environment variables
+to use your own database name.
 
-#### 3.1 Backend Configuration
-Copy `backend/.env.example` to `backend/.env.production`.
+### 3. Configure Environment Files
 
-| Variable | Description | Default / Fallback | How to Obtain |
-| :--- | :--- | :--- | :--- |
-| **Server** | | | |
-| `SERVER_PORT` | Backend Port | `9696` | N/A |
-| **External APIs** | | | |
-| `QICHACHA_KEY` | Company Data | N/A | [Qichacha Open Platform](https://openapi.qcc.com/) |
-| `TUSHARE_TOKEN` | Stock Data | N/A | [Tushare](https://tushare.pro/) |
-| `ELEVENLABS_KEY`| TTS Service | N/A | [ElevenLabs](https://elevenlabs.io/) |
-| `PKULAW_TOKEN` | Legal Data | N/A | [PKULaw](https://mcp.pkulaw.com/) |
-| `WPS_APP_ID` | Document Editor | N/A | [WPS WebOffice](https://wwo.wps.cn/) |
-| **AI Models** | | | |
-| `OPENROUTER_KEY`| LLM Aggregator | N/A | [OpenRouter](https://openrouter.ai/) |
-| `GEMINI_API_KEY`| Google LLM | N/A | [Google AI Studio](https://aistudio.google.com/) |
-| **Storage** | | | |
-| `OSS_ACCESS_KEY`| Aliyun OSS | N/A | [Aliyun Console](https://oss.console.aliyun.com/) |
+Copy the examples and fill in the providers you actually need:
 
-#### 3.2 PPTX Service Configuration (AI Slides)
-Copy `pptx-service/.env.example` to `pptx-service/.env`.
+```bash
+cp backend/.env.example backend/.env.production
+cp pptx-service/.env.example pptx-service/.env
+```
 
-| Variable | Description | Default / Fallback | How to Obtain |
-| :--- | :--- | :--- | :--- |
-| `AI_PROVIDER` | SDK Format | `gemini` | `gemini` or `openai` |
-| **Gemini** | | | |
-| `GOOGLE_API_KEY` | GenAI Key | (Required) | [Google AI Studio](https://aistudio.google.com/) |
-| `GOOGLE_API_BASE`| Base URL | `https://generativelanguage.googleapis.com`| Optional Proxy |
-| **OpenAI** | | | |
-| `OPENAI_API_KEY` | OpenAI Key | N/A | [OpenAI Platform](https://platform.openai.com/) |
-| `OPENAI_API_BASE`| Base URL | `https://api.openai.com/v1` | Optional Proxy |
-| **Common** | | | |
-| `TEXT_MODEL` | LLM Model | `gemini-2.0-flash-exp` | Model ID from Provider |
-| `IMAGE_MODEL` | Image Model | `gemini-2.0-flash-exp` | Model ID from Provider |
-| `MINERU_URL` | MinerU URL | `http://mineru-service:8000` | Local Docker Service |
+Common optional providers include OpenRouter, Gemini, Qichacha, Tushare,
+ElevenLabs, PKULaw, WPS WebOffice, and object storage. Not every provider is
+required to inspect the code or run the basic workbench.
 
-### 4. Build & Run
-We provide a one-click script to build and start all services (Backend, Frontend, Desktop, and Docker containers).
+### 4. Start Services
 
 ```bash
 chmod +x restart-all.sh
 ./restart-all.sh
 ```
-*Note: This script automatically checks for dependencies, stops old processes, packages the backend, and starts all services in the correct order.*
 
-### 5. Local Access (Intranet Penetration)
-If you are running this locally and need to expose it to the internet (e.g., for external API callbacks or remote access), we recommend using **cpolar**.
+The script checks local dependencies, stops old processes, builds the backend,
+and starts the frontend, desktop shell, and Docker services where available.
 
-- **Official Website**: [https://www.cpolar.com/](https://www.cpolar.com/)
+Typical local ports:
 
-You can use cpolar to easily map your local ports (e.g., 5173 for Frontend, 9696 for Backend) to a public URL.
+| Service | URL |
+| --- | --- |
+| Frontend | `http://localhost:5173` |
+| Backend | `http://localhost:9696` |
+| PPTX service | `http://localhost:5001` |
+| MinerU service | `http://localhost:8001` |
+| EasyVoice | `http://localhost:9549` |
+
+## Roadmap
+
+- Cleaner one-command local demo with sample data.
+- Public plugin SDK and example plugins.
+- More legal-document workflows: due diligence, shareholder meeting review,
+  contract review, evidence timelines.
+- Better self-hosting guides for private law-firm and enterprise deployments.
+- More auditable work records: version history, diff, citations, and review logs.
+- Bilingual documentation for the community edition.
+
+## Licensing
+
+AI Workdeck Community Edition is released under the GNU Affero General Public
+License v3.0.
+
+If you modify this project and provide it as a network service, AGPLv3 generally
+requires that you provide the corresponding source code to users of that service.
+
+Commercial licensing is available for:
+
+- Closed-source SaaS delivery.
+- Proprietary on-premise delivery.
+- Commercial products that need to integrate the kernel without releasing
+  proprietary modifications.
+- Dedicated enterprise support and implementation assistance.
+
+See [LICENSE](legal/LICENSE) and
+[COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md). For commercial licensing,
+contact [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com).
+
+## Contributing
+
+We welcome issues, discussions, docs improvements, integration notes, and focused
+pull requests. Please read [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md)
+before submitting a PR.
+
+Useful first contributions:
+
+- Reproduce and document local setup paths on different operating systems.
+- Improve self-hosting docs and `.env` examples.
+- Add plugin examples.
+- Add tests around document parsing, agent tool calls, and frontend workflows.
+- Improve English and Chinese documentation.
+
+## Background
+
+Read [WHY.md](WHY.md) for the product thesis and founder story.
+
+If this direction matters to you, please star the repo and share it with someone
+building legal AI, document AI, or professional-service infrastructure.
