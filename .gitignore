@@ -27,6 +27,14 @@ mineru-service/temp/
 *.tmp
 *.bak
 
+# macOS duplicate-copy artifacts (e.g. "file 2.md", "LICENSE 2")
+* 2
+* 3
+* 4
+* 2.*
+* 3.*
+* 4.*
+
 # IDE files
 .idea/
 .vscode/

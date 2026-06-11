@@ -34,7 +34,7 @@ public class WebTools {
 
     private static final String BOCHA_API_URL = "https://api.bochaai.com/v1/web-search";
     
-    @Value("${bocha.api.key:sk-710f820da522459ca85c6dfadef64684}")
+    @Value("${bocha.api.key:}")
     private String bochaApiKey;
 
     private final OkHttpClient httpClient = new OkHttpClient.Builder()
@@ -48,6 +48,9 @@ public class WebTools {
     @Tool("Search the web using Bocha AI. Useful for finding latest news, regulations, or legal cases. Returns a summary of search results.")
     public String search_web(String query) {
         log.info("Tool: search_web called for query='{}'", query);
+        if (bochaApiKey == null || bochaApiKey.isBlank()) {
+            return "Error searching web: Bocha API key is not configured. Set BOCHA_API_KEY in your environment.";
+        }
         try {
             // Build request body
             String requestBody = objectMapper.writeValueAsString(
