@@ -18,11 +18,11 @@ spring:
 external:
   qichacha:
     base-url: https://api.qichacha.com
-    key: ${QICHACHA_KEY:f4900a7dd885415cb305edc621f5b490}
-    secret: ${QICHACHA_SECRET:9C16665DB7BA6661FAAC35EF1321FA3C}
+    key: ${QICHACHA_KEY:}
+    secret: ${QICHACHA_SECRET:}
   wps:
-    app-id: SX20260104RLPEYU
-    app-secret: ${WPS_APP_SECRET:XwyPtBEirMxtitGECNKhIBYKNCJDVIyA}
+    app-id: ${WPS_APP_ID:}
+    app-secret: ${WPS_APP_SECRET:}
     callback-base-url: https://6e783f5e.r3.cpolar.cn  # 使用 cpolar 内网穿透地址（当前实际URL，每次重启会变化）
   tushare:
     base-url: http://api.tushare.pro
