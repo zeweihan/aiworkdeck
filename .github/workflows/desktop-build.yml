@@ -41,9 +41,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Safe here: GitHub never exposes secrets to fork PRs, so CSC_LINK is
-          # empty for untrusted PRs and signing is silently skipped for them.
-          CSC_FOR_PULL_REQUEST: 'true'
+          # GitHub never exposes secrets to fork PRs, so CSC_LINK is empty
+          # there — and force-signing with an empty CSC_LINK makes
+          # electron-builder fail ("not a file"). Only force signing when the
+          # cert secret is actually present; fork PRs fall back to
+          # electron-builder's default unsigned PR build.
+          CSC_FOR_PULL_REQUEST: ${{ secrets.CSC_LINK != '' }}
         run: npx electron-builder --publish never
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
