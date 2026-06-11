@@ -19,9 +19,6 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    env:
-      # Unsigned builds for now; signing/notarization tracked in issue #12
-      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -35,8 +32,22 @@ jobs:
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
-      - name: Package installers
+      - name: Package installers (macOS, signed & notarized)
+        if: runner.os == 'macOS'
         working-directory: desktop
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx electron-builder --publish never
+      - name: Package installers (Windows, unsigned)
+        if: runner.os == 'Windows'
+        working-directory: desktop
+        env:
+          # Windows code signing not set up yet (issue #12)
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder --publish never
       - uses: actions/upload-artifact@v4
         with:

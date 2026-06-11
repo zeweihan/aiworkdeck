@@ -42,7 +42,12 @@
           "arch": ["arm64", "x64"]
         }
       ],
-      "category": "public.app-category.productivity"
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "notarize": {
+        "teamId": "X9B97KVA84"
+      }
     },
     "win": {
       "target": [
