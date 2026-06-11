@@ -322,6 +322,64 @@ public class AdminConfigController {
                     .body(error("仅管理员可访问此接口"));
         }
 
+        Map<String, String> updates;
+        try {
+            updates = toSettingsUpdates(request, objectMapper);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(error(e.getMessage()));
+        }
+
+        systemSettingService.setMany(updates);
+
+        Map<String, Object> ok = new HashMap<>();
+        ok.put("code", 0);
+        ok.put("message", "保存成功");
+        ok.put("timestamp", LocalDateTime.now().toString());
+        return ResponseEntity.ok(ok);
+    }
+
+    /**
+     * 用户管理：简单返回用户列表（只读）
+     */
+    @GetMapping("/users")
+    public ResponseEntity<?> listUsers(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+
+        User admin = requireAdmin(sessionId);
+        if (admin == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(error("仅管理员可访问此接口"));
+        }
+
+        List<UserSummary> users = userRepository.findAll()
+                .stream()
+                .map(u -> {
+                    UserSummary dto = new UserSummary();
+                    dto.setId(u.getId());
+                    dto.setUsername(u.getUsername());
+                    dto.setDisplayName(u.getDisplayName());
+                    dto.setAvatarUrl(u.getAvatarUrl());
+                    dto.setEmail(u.getEmail());
+                    dto.setCreatedAt(u.getCreatedAt());
+                    dto.setUpdatedAt(u.getUpdatedAt());
+                    return dto;
+                })
+                .collect(Collectors.toList());
+
+        return ResponseEntity.ok(users);
+    }
+
+    // ============ 辅助方法 & DTO =============
+
+    /**
+     * 将配置更新请求映射为 system_setting 键值对。
+     * 供 /api/admin/config 与首次运行向导 /api/admin/wizard 共用，
+     * 保证两个入口写入的 key 完全一致。
+     *
+     * @throws IllegalArgumentException assistants 序列化失败时抛出
+     */
+    static Map<String, String> toSettingsUpdates(AdminConfigUpdateRequest request,
+                                                 com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         Map<String, String> updates = new HashMap<>();
 
         if (request.getExternal() != null) {
@@ -383,53 +441,13 @@ public class AdminConfigController {
                     String json = objectMapper.writeValueAsString(ai.getAssistants());
                     updates.put(KEY_AI_ASSISTANTS, json);
                 } catch (Exception e) {
-                    e.printStackTrace();
-                    return ResponseEntity.badRequest().body(error("Asssistants JSON serialization failed"));
+                    throw new IllegalArgumentException("Assistants JSON serialization failed", e);
                 }
             }
         }
 
-        systemSettingService.setMany(updates);
-
-        Map<String, Object> ok = new HashMap<>();
-        ok.put("code", 0);
-        ok.put("message", "保存成功");
-        ok.put("timestamp", LocalDateTime.now().toString());
-        return ResponseEntity.ok(ok);
+        return updates;
     }
-
-    /**
-     * 用户管理：简单返回用户列表（只读）
-     */
-    @GetMapping("/users")
-    public ResponseEntity<?> listUsers(
-            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-
-        User admin = requireAdmin(sessionId);
-        if (admin == null) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(error("仅管理员可访问此接口"));
-        }
-
-        List<UserSummary> users = userRepository.findAll()
-                .stream()
-                .map(u -> {
-                    UserSummary dto = new UserSummary();
-                    dto.setId(u.getId());
-                    dto.setUsername(u.getUsername());
-                    dto.setDisplayName(u.getDisplayName());
-                    dto.setAvatarUrl(u.getAvatarUrl());
-                    dto.setEmail(u.getEmail());
-                    dto.setCreatedAt(u.getCreatedAt());
-                    dto.setUpdatedAt(u.getUpdatedAt());
-                    return dto;
-                })
-                .collect(Collectors.toList());
-
-        return ResponseEntity.ok(users);
-    }
-
-    // ============ 辅助方法 & DTO =============
 
     private User requireAdmin(String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
@@ -448,7 +466,7 @@ public class AdminConfigController {
         return result;
     }
 
-    private String safe(String v) {
+    private static String safe(String v) {
         // 统一 trim，避免用户粘贴 key/secret 时带入换行/空格导致签名不匹配
         return v == null ? "" : v.trim();
     }

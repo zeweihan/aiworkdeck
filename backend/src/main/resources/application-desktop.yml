@@ -1,0 +1,22 @@
+# 桌面/单机模式 profile（Epic #18 T1）
+# 激活方式：java -jar backend.jar --spring.profiles.active=desktop
+# （或环境变量 SPRING_PROFILES_ACTIVE=desktop）
+#
+# 设计目标：零外部依赖启动——不需要 PostgreSQL，数据落在用户主目录的 H2 文件库。
+# 向量检索由 PgVectorConfig 自动降级为内存存储（PG 不可达时的既有回退路径）。
+
+spring:
+  datasource:
+    driver-class-name: org.h2.Driver
+    # H2 文件库：~/.aiworkdeck/local.mv.db
+    # MODE=PostgreSQL：兼容实体里的 PG 风格列定义（如 jsonb）
+    # NON_KEYWORDS=VALUE：system_setting.value 列与 H2 保留字冲突的豁免
+    # AUTO_SERVER=TRUE：进程重复启动时附着到已有实例而非文件锁报错
+    url: jdbc:h2:file:${user.home}/.aiworkdeck/local;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE;AUTO_SERVER=TRUE
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    database-platform: org.hibernate.dialect.H2Dialect
