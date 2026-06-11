@@ -2,6 +2,8 @@
   "name": "checkba-desktop",
   "private": true,
   "version": "0.1.0",
+  "description": "AI Workdeck desktop shell (Electron)",
+  "author": "AI Workdeck contributors",
   "main": "main/main.js",
   "scripts": {
     "clean": "node scripts/clean.js",
@@ -9,14 +11,46 @@
     "start": "electron .",
     "build": "electron-builder"
   },
-  "dependencies": {
-    "electron": "^30.0.0"
-  },
   "devDependencies": {
     "cross-env": "^7.0.3",
+    "electron": "^30.0.0",
     "electron-builder": "^24.13.3"
   },
   "engines": {
     "node": ">=18"
+  },
+  "build": {
+    "appId": "com.aiworkdeck.desktop",
+    "productName": "AI Workdeck",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main/**",
+      "preload/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../frontend/dist/build/h5",
+        "to": "frontend/dist/build/h5"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        }
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    }
   }
 }

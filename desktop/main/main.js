@@ -246,7 +246,10 @@ function createMainWindow() {
     mainWindow.webContents.openDevTools({ mode: 'detach' })
   } else {
     // Production Mode: Load from dist
-    const distPath = path.join(__dirname, '../../frontend/dist/build/h5/index.html')
+    // (packaged builds carry the frontend via electron-builder extraResources)
+    const distPath = app.isPackaged
+      ? path.join(process.resourcesPath, 'frontend/dist/build/h5/index.html')
+      : path.join(__dirname, '../../frontend/dist/build/h5/index.html')
     mainWindow.loadFile(distPath)
   }
 

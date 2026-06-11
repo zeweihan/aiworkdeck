@@ -1,0 +1,54 @@
+name: Desktop Build
+
+# Builds desktop installers (experimental: UI shell + bundled frontend; backend
+# services still require a local environment — see issue #11).
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - '.github/workflows/desktop-build.yml'
+      - 'desktop/**'
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      # Unsigned builds for now; signing/notarization tracked in issue #12
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci || npm install
+          npm run build:h5
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Package installers
+        working-directory: desktop
+        run: npx electron-builder --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aiworkdeck-${{ matrix.os }}
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.exe
+          if-no-files-found: error
+      - name: Attach to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/release/*.dmg
+            desktop/release/*.exe
