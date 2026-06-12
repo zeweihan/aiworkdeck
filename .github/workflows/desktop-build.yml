@@ -102,6 +102,32 @@ jobs:
           for d in desktop/bundled/mac-arm64 desktop/bundled/mac-x64; do
             bash desktop/scripts/sign-mac-natives.sh "$IDENTITY" "$d" desktop/build/entitlements.mac.plist
           done
+      - name: Smoke test bundled backend (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Boot the signed jar on the trimmed JRE exactly as the packaged app
+          # will — catches runtime/JRE/signing breakage that packaging alone
+          # cannot. (Cannot be tested on SIP-disabled dev machines: JDK-8326663.)
+          mkdir -p "$RUNNER_TEMP/awd-home"
+          desktop/bundled/mac-arm64/jre/bin/java \
+            -Duser.home="$RUNNER_TEMP/awd-home" \
+            -jar desktop/bundled/mac-arm64/backend.jar \
+            --spring.profiles.active=desktop --server.port=9696 \
+            > "$RUNNER_TEMP/backend-smoke.log" 2>&1 &
+          BACK_PID=$!
+          for i in $(seq 1 60); do
+            sleep 2
+            if curl -sf -o /dev/null http://127.0.0.1:9696/api/admin/wizard; then
+              echo "backend up after ~$((i*2))s"
+              curl -s http://127.0.0.1:9696/api/admin/wizard; echo
+              kill $BACK_PID
+              exit 0
+            fi
+          done
+          echo "backend failed to start within 120s"
+          tail -80 "$RUNNER_TEMP/backend-smoke.log"
+          kill $BACK_PID 2>/dev/null || true
+          exit 1
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
         working-directory: desktop
@@ -142,6 +168,30 @@ jobs:
             cat "$RUNNER_TEMP/notary-log-$SUB_ID.json" || true
             echo
           done
+      - name: Smoke test bundled backend (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/awd-home"
+          desktop/bundled/win-x64/jre/bin/java.exe \
+            -Duser.home="$RUNNER_TEMP/awd-home" \
+            -jar desktop/bundled/win-x64/backend.jar \
+            --spring.profiles.active=desktop --server.port=9696 \
+            > "$RUNNER_TEMP/backend-smoke.log" 2>&1 &
+          BACK_PID=$!
+          for i in $(seq 1 60); do
+            sleep 2
+            if curl -sf -o /dev/null http://127.0.0.1:9696/api/admin/wizard; then
+              echo "backend up after ~$((i*2))s"
+              curl -s http://127.0.0.1:9696/api/admin/wizard; echo
+              kill $BACK_PID
+              exit 0
+            fi
+          done
+          echo "backend failed to start within 120s"
+          tail -80 "$RUNNER_TEMP/backend-smoke.log"
+          kill $BACK_PID 2>/dev/null || true
+          exit 1
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
         working-directory: desktop
