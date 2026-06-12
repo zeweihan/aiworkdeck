@@ -55,11 +55,13 @@ jobs:
         env:
           JAVA_HOME: ${{ steps.jdk.outputs.path }}
         run: |
-          mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -f backend/pom.xml package
+          # One universal jar for both arches: javacpp.platform collapses to
+          # the build host (arm64) regardless of the requested value, so the
+          # Intel natives come from the mac-universal-natives pom profile.
+          mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -Dmac-universal -f backend/pom.xml package
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/mac-arm64
-          mvn -B -q -DskipTests -Djavacpp.platform=macosx-x86_64 -f backend/pom.xml package
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/mac-x64 \
@@ -121,24 +123,25 @@ jobs:
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # NOT the APPLE_TEAM_ID secret: notarytool history rejects it with
+          # 403 (it works for submission but not for the history API); the
+          # team id is public anyway (package.json mac.notarize.teamId)
+          TEAM_ID: X9B97KVA84
         run: |
           # Surface Apple's per-file rejection reasons; without this the build
           # log only says "Invalid"
           HISTORY=$(xcrun notarytool history --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$TEAM_ID" \
             --output-format json || true)
           echo "$HISTORY" | head -c 2000; echo
-          SUB_ID=$(echo "$HISTORY" | jq -r '.history[0].id // empty')
-          if [ -z "$SUB_ID" ]; then
-            echo "Could not determine submission id from history"
-            exit 0
-          fi
-          echo "Latest notarization submission: $SUB_ID"
-          xcrun notarytool log "$SUB_ID" --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
-            "$RUNNER_TEMP/notary-log.json" || true
-          cat "$RUNNER_TEMP/notary-log.json" || true
+          for SUB_ID in $(echo "$HISTORY" | jq -r '.history[0:2][].id // empty'); do
+            echo "=== notarization log for $SUB_ID"
+            xcrun notarytool log "$SUB_ID" --apple-id "$APPLE_ID" \
+              --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$TEAM_ID" \
+              "$RUNNER_TEMP/notary-log-$SUB_ID.json" || true
+            cat "$RUNNER_TEMP/notary-log-$SUB_ID.json" || true
+            echo
+          done
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
         working-directory: desktop

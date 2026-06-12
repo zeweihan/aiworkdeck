@@ -50,8 +50,13 @@ WORK="$(mktemp -d)"
 (cd "$WORK" && unzip -qq "$JAR" 'BOOT-INF/lib/*.jar')
 
 for libjar in "$WORK"/BOOT-INF/lib/*.jar; do
-  # candidate native entries (paths contain no whitespace in practice)
-  natives=$(unzip -Z1 "$libjar" | grep -E '\.(dylib|jnilib)$|(^|/)node$' || true)
+  # candidate native entries: dylib/jnilib/so plus extension-less files —
+  # bytedeco also ships bare CLI executables (ffmpeg, ffprobe, tesseract,
+  # opencv_*) and python .so bindings that notarization rejects when
+  # adhoc-signed/unsigned. The Mach-O magic check below filters out
+  # non-binary matches (LICENSE etc.). Paths contain no whitespace in
+  # practice.
+  natives=$(unzip -Z1 "$libjar" | grep -vE '/$' | grep -E '\.(dylib|jnilib|so)$|(^|/)[^./]+$' || true)
   [ -n "$natives" ] || continue
 
   EXT="$(mktemp -d)"
