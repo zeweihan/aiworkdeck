@@ -74,6 +74,32 @@ jobs:
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/win-x64
+      - name: Sign bundled backend natives (macOS)
+        if: runner.os == 'macOS'
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          # Notarization rejects the adhoc-signed bytedeco dylibs inside the
+          # fat jar (and any unsigned JRE binaries), so they must carry our
+          # Developer ID signature before electron-builder seals the app.
+          if [ -z "$CSC_LINK" ]; then
+            echo "No signing cert (fork PR) — skipping native signing"
+            exit 0
+          fi
+          KC="$RUNNER_TEMP/awd-sign.keychain-db"
+          KCPASS="awd-tmp-keychain"
+          echo "$CSC_LINK" | base64 --decode > "$RUNNER_TEMP/awd-cert.p12"
+          security create-keychain -p "$KCPASS" "$KC"
+          security unlock-keychain -p "$KCPASS" "$KC"
+          security import "$RUNNER_TEMP/awd-cert.p12" -k "$KC" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KCPASS" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" login.keychain-db
+          IDENTITY=$(security find-identity -v -p codesigning "$KC" | awk 'NR==1{print $2}')
+          echo "Signing with identity: $IDENTITY"
+          for d in desktop/bundled/mac-arm64 desktop/bundled/mac-x64; do
+            bash desktop/scripts/sign-mac-natives.sh "$IDENTITY" "$d" desktop/build/entitlements.mac.plist
+          done
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
         working-directory: desktop
@@ -99,12 +125,20 @@ jobs:
         run: |
           # Surface Apple's per-file rejection reasons; without this the build
           # log only says "Invalid"
-          SUB_ID=$(xcrun notarytool history --apple-id "$APPLE_ID" \
+          HISTORY=$(xcrun notarytool history --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
-            --output-format json | jq -r '.history[0].id')
+            --output-format json || true)
+          echo "$HISTORY" | head -c 2000; echo
+          SUB_ID=$(echo "$HISTORY" | jq -r '.history[0].id // empty')
+          if [ -z "$SUB_ID" ]; then
+            echo "Could not determine submission id from history"
+            exit 0
+          fi
           echo "Latest notarization submission: $SUB_ID"
           xcrun notarytool log "$SUB_ID" --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID"
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            "$RUNNER_TEMP/notary-log.json" || true
+          cat "$RUNNER_TEMP/notary-log.json" || true
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
         working-directory: desktop
