@@ -1155,10 +1155,20 @@ ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
   return { ok: true, confirmed: result }
 })
 
+function createBackendManager() {
+  // 打包模式下 jar/JRE 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck
+  return new BackendManager({
+    projectRoot: path.join(__dirname, '..', '..'),
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    dataDir: path.join(app.getPath('home'), '.aiworkdeck')
+  })
+}
+
 app.whenReady().then(() => {
   initLocalFileService()
   // 桌面端启动时自动拉起本机后端（9696）
-  backend = new BackendManager({ projectRoot: path.join(__dirname, '..', '..') })
+  backend = createBackendManager()
   backend
     .start()
     .then(() => createMainWindow())
@@ -1199,7 +1209,7 @@ app.on('before-quit', async (e) => {
 })
 
 ipcMain.handle('checkba:backend-restart', async () => {
-  if (!backend) backend = new BackendManager({ projectRoot: path.join(__dirname, '..', '..') })
+  if (!backend) backend = createBackendManager()
   return backend.restart()
 })
 

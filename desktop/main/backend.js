@@ -42,10 +42,28 @@ async function waitPort(port, timeoutMs = 12000) {
 
 class BackendManager {
   constructor(options) {
-    const projectRoot = options && options.projectRoot ? options.projectRoot : process.cwd()
+    const opts = options || {}
+    const projectRoot = opts.projectRoot ? opts.projectRoot : process.cwd()
     this.projectRoot = projectRoot
-    this.backendDir = path.join(projectRoot, 'backend')
-    this.jarPath = path.join(this.backendDir, 'target', 'backend-0.0.1-SNAPSHOT.jar')
+    this.packaged = !!opts.packaged
+    if (this.packaged) {
+      // 打包模式（Epic #18 T2）：jar + 裁剪版 JRE 由 electron-builder extraResources
+      // 捆绑进安装包（见 desktop/scripts/prepare-backend.js），数据与日志落在 ~/.aiworkdeck
+      // （与 desktop profile 的 H2 库同目录）
+      const resourcesPath = opts.resourcesPath || process.resourcesPath
+      this.dataDir = opts.dataDir || path.join(require('os').homedir(), '.aiworkdeck')
+      this.backendDir = this.dataDir
+      this.jarPath = path.join(resourcesPath, 'backend', 'backend.jar')
+      this.javaCmd = path.join(resourcesPath, 'jre', 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
+      this.defaultProfile = 'desktop'
+      this.startTimeoutMs = 60000
+    } else {
+      this.backendDir = path.join(projectRoot, 'backend')
+      this.jarPath = path.join(this.backendDir, 'target', 'backend-0.0.1-SNAPSHOT.jar')
+      this.javaCmd = process.platform === 'win32' ? 'java.exe' : 'java'
+      this.defaultProfile = 'prod'
+      this.startTimeoutMs = 15000
+    }
     this.port = Number(process.env.CHECKBA_BACKEND_PORT || 9696)
     this.proc = null
   }
@@ -53,6 +71,9 @@ class BackendManager {
   async ensureJar() {
     const fs = require('fs')
     if (fs.existsSync(this.jarPath)) return
+    if (this.packaged) {
+      throw new Error(`bundled backend jar missing: ${this.jarPath}`)
+    }
     await this.buildJar()
   }
 
@@ -89,20 +110,33 @@ class BackendManager {
       await this.stop()
     }
 
-    const javaCmd = process.platform === 'win32' ? 'java.exe' : 'java'
     const env = { ...process.env }
-    // 按你脚本意图：默认使用 prod profile（仍可用 env 覆盖）
-    if (!env.SPRING_PROFILES_ACTIVE) env.SPRING_PROFILES_ACTIVE = 'prod'
+    // 开发态默认 prod profile，打包态默认 desktop（H2 单机库），仍可用 env 覆盖
+    if (!env.SPRING_PROFILES_ACTIVE) env.SPRING_PROFILES_ACTIVE = this.defaultProfile
     // 统一端口（仍可用配置文件覆盖）
     if (!env.SERVER_PORT) env.SERVER_PORT = String(this.port)
 
-    this.proc = spawn(javaCmd, ['-jar', this.jarPath], {
+    let stdio = 'inherit'
+    let logStream = null
+    if (this.packaged) {
+      // 打包模式：工作目录必须可写（resources 目录只读），日志落盘便于排障
+      const fs = require('fs')
+      fs.mkdirSync(this.backendDir, { recursive: true })
+      logStream = fs.createWriteStream(path.join(this.backendDir, 'backend.log'), { flags: 'a' })
+      stdio = ['ignore', 'pipe', 'pipe']
+    }
+
+    this.proc = spawn(this.javaCmd, ['-jar', this.jarPath], {
       cwd: this.backendDir,
       env,
-      stdio: 'inherit'
+      stdio
     })
+    if (logStream) {
+      this.proc.stdout.pipe(logStream)
+      this.proc.stderr.pipe(logStream)
+    }
 
-    const ok = await waitPort(this.port, 15000)
+    const ok = await waitPort(this.port, this.startTimeoutMs)
     if (!ok) {
       try {
         await this.stop()

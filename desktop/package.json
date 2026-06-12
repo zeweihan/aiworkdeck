@@ -33,6 +33,14 @@
       {
         "from": "../frontend/dist/build/h5",
         "to": "frontend/dist/build/h5"
+      },
+      {
+        "from": "bundled/${os}-${arch}/backend.jar",
+        "to": "backend/backend.jar"
+      },
+      {
+        "from": "bundled/${os}-${arch}/jre",
+        "to": "jre"
       }
     ],
     "mac": {
@@ -44,6 +52,8 @@
       ],
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false,
       "notarize": {
         "teamId": "X9B97KVA84"

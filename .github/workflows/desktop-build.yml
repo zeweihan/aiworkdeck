@@ -1,7 +1,8 @@
 name: Desktop Build
 
-# Builds desktop installers (experimental: UI shell + bundled frontend; backend
-# services still require a local environment — see issue #11).
+# Builds desktop installers with the backend bundled in (Epic #18 T2):
+# Spring Boot jar (per-platform javacpp natives) + jlink-trimmed JRE, so the
+# installer works without a local Java/PostgreSQL environment.
 on:
   workflow_dispatch:
   push:
@@ -10,6 +11,7 @@ on:
     paths:
       - '.github/workflows/desktop-build.yml'
       - 'desktop/**'
+      - 'backend/**'
 
 jobs:
   build:
@@ -24,6 +26,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - uses: actions/setup-java@v4
+        id: jdk
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      # x64 JDK on the arm64 macOS runner: its jmods feed the cross-arch
+      # jlink for the Intel build (the backend jar itself is arch-specific
+      # too, via javacpp.platform)
+      - uses: actions/setup-java@v4
+        id: jdk-x64
+        if: runner.os == 'macOS'
+        with:
+          distribution: temurin
+          java-version: '21'
+          architecture: x64
       - name: Build frontend
         working-directory: frontend
         run: |
@@ -32,6 +50,30 @@ jobs:
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
+      - name: Bundle backend (macOS arm64 + x64)
+        if: runner.os == 'macOS'
+        env:
+          JAVA_HOME: ${{ steps.jdk.outputs.path }}
+        run: |
+          mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -f backend/pom.xml package
+          node desktop/scripts/prepare-backend.js \
+            --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
+            --out desktop/bundled/mac-arm64
+          mvn -B -q -DskipTests -Djavacpp.platform=macosx-x86_64 -f backend/pom.xml package
+          node desktop/scripts/prepare-backend.js \
+            --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
+            --out desktop/bundled/mac-x64 \
+            --jmods '${{ steps.jdk-x64.outputs.path }}/jmods'
+      - name: Bundle backend (Windows x64)
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          JAVA_HOME: ${{ steps.jdk.outputs.path }}
+        run: |
+          mvn -B -q -DskipTests -Djavacpp.platform=windows-x86_64 -f backend/pom.xml package
+          node desktop/scripts/prepare-backend.js \
+            --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
+            --out desktop/bundled/win-x64
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
         working-directory: desktop
