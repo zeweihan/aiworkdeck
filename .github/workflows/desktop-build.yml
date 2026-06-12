@@ -90,6 +90,21 @@ jobs:
           # electron-builder's default unsigned PR build.
           CSC_FOR_PULL_REQUEST: ${{ secrets.CSC_LINK != '' }}
         run: npx electron-builder --publish never
+      - name: Notarization failure log (macOS)
+        if: failure() && runner.os == 'macOS'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Surface Apple's per-file rejection reasons; without this the build
+          # log only says "Invalid"
+          SUB_ID=$(xcrun notarytool history --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --output-format json | jq -r '.history[0].id')
+          echo "Latest notarization submission: $SUB_ID"
+          xcrun notarytool log "$SUB_ID" --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID"
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
         working-directory: desktop
