@@ -41,6 +41,13 @@
 				"navigationBarTitleText": "系统管理",
 				"navigationStyle": "custom"
 			}
+		},
+		{
+			"path": "pages/wizard/wizard",
+			"style": {
+				"navigationBarTitleText": "首次运行设置",
+				"navigationStyle": "custom"
+			}
 		}
 	],
 	"globalStyle": {

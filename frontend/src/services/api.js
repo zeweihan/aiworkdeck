@@ -438,6 +438,26 @@ export function getAdminUsers() {
   });
 }
 
+// 查询首次运行向导状态（Epic #18 T4）：{ code, initialized }
+export function getWizardStatus() {
+  return request({
+    url: '/api/admin/wizard',
+    method: 'GET',
+  });
+}
+
+// 提交首次运行向导（仅未初始化时可调用，payload 结构同 saveAdminConfig）
+export function submitWizard(payload) {
+  return request({
+    url: '/api/admin/wizard',
+    method: 'POST',
+    data: payload,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 创建项目接口
 // payload: 项目创建请求数据
 export function createProject(payload) {
