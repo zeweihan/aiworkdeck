@@ -13,6 +13,13 @@ on:
       - 'desktop/**'
       - 'backend/**'
 
+# The "Attach to GitHub Release" step (softprops/action-gh-release) creates the
+# release for a v* tag, which needs write access to repository contents. The
+# default GITHUB_TOKEN is read-only, so without this the tag build fails with
+# "403 Resource not accessible by integration".
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build (${{ matrix.os }})
