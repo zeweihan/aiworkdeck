@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.exception.FeatureNotConfiguredException;
 import com.checkba.service.WpsService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -25,6 +26,11 @@ public class WpsApiController {
      */
     private static final String DEFAULT_USER_ID = "1780305141";
 
+    /** WPS 未配置时的双语提示，前端据 code=4001 降级为只读预览（#18 T6）。 */
+    private static final String WPS_NOT_CONFIGURED_MSG =
+            "文档编辑未配置：请在设置中配置 WPS WebOffice / "
+                    + "Document editing is not configured: set up WPS WebOffice in Settings.";
+
     @Autowired
     private WpsService wpsService;
 
@@ -42,6 +48,10 @@ public class WpsApiController {
             Map<String, Object> error = new HashMap<>();
             error.put("error", "fileId is required");
             return ResponseEntity.badRequest().body(error);
+        }
+
+        if (!wpsService.isConfigured()) {
+            throw new FeatureNotConfiguredException("wps", WPS_NOT_CONFIGURED_MSG);
         }
 
         String editUrl = wpsService.generateEditUrl(fileId, fileName, mode);
@@ -81,6 +91,10 @@ public class WpsApiController {
             Map<String, Object> error = new HashMap<>();
             error.put("error", "fileId is required");
             return ResponseEntity.badRequest().body(error);
+        }
+
+        if (!wpsService.isConfigured()) {
+            throw new FeatureNotConfiguredException("wps", WPS_NOT_CONFIGURED_MSG);
         }
 
         long timestamp = System.currentTimeMillis() / 1000;

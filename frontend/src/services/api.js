@@ -6,6 +6,26 @@
 // 导入认证工具
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 
+/**
+ * 功能未配置时的统一引导（#18 T7）。
+ * 调用方在 catch 到 err.featureNotConfigured 时调用，弹出"去设置"引导而非通用报错。
+ * @param {Error} err request() reject 出的错误，带 featureNotConfigured / feature / message
+ */
+export function promptFeatureNotConfigured(err) {
+  const message = (err && err.message) || '该功能尚未配置，请在设置中补充';
+  uni.showModal({
+    title: '功能未配置 / Not configured',
+    content: message,
+    confirmText: '去设置',
+    cancelText: '稍后',
+    success: (r) => {
+      if (r.confirm) {
+        uni.navigateTo({ url: '/pages/admin/admin' });
+      }
+    },
+  });
+}
+
 // 默认后端地址：
 // - 本地 H5 开发（localhost/127.0.0.1）：自动指向后端 9696
 // - 其他环境：可通过 VITE_API_BASE_URL 覆盖；否则使用默认网关地址
@@ -176,11 +196,35 @@ function request(options) {
           return;
         }
 
+        // 以 arraybuffer 接收却实际返回 JSON 时（如 TTS 未配置 → {code:4001}），
+        // 按 content-type 解码为对象，让下面的统一 {code} 逻辑能识别（#18 T5/T7）。
+        if (options.responseType === 'arraybuffer' && res.data && typeof res.data.byteLength === 'number') {
+          const h = res.header || {};
+          const ct = h['content-type'] || h['Content-Type'] || '';
+          if (ct.indexOf('application/json') !== -1) {
+            try {
+              res.data = JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(res.data)));
+            } catch (e) {
+              console.warn('arraybuffer JSON 解码失败:', e);
+            }
+          }
+        }
+
         // 统一处理后端返回的 { code: 0, data: ... } 或 { code: 1, message: ... } 格式
         if (res.data && typeof res.data.code !== 'undefined') {
           if (res.data.code === 0) {
             // 成功：code=0
             resolve(res.data);
+          } else if (res.data.code === 4001) {
+            // 功能未配置（#18 T7）：reject 时带 featureNotConfigured 标记，
+            // 由调用方决定如何引导（弹"去设置" / 降级为只读），避免在拦截器
+            // 层强弹全局弹窗导致打开文档时反复打扰。
+            const msg = res.data.message || '该功能尚未配置，请在设置中补充';
+            console.warn('功能未配置:', { feature: res.data.feature, message: msg });
+            const err = new Error(msg);
+            err.featureNotConfigured = true;
+            err.feature = res.data.feature || '';
+            reject(err);
           } else {
             // 业务失败：code=1 或其他非0值
             const errorMessage = res.data.message || '服务异常，请稍后重试'

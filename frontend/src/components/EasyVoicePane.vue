@@ -161,7 +161,7 @@
 </template>
 
 <script>
-import { getTtsVoices, generateTtsAudio } from '@/services/api.js'
+import { getTtsVoices, generateTtsAudio, promptFeatureNotConfigured } from '@/services/api.js'
 
 export default {
   name: 'EasyVoicePane',
@@ -418,7 +418,12 @@ export default {
 
       } catch (e) {
         console.error('[EasyVoicePane] Generation failed', e)
-        uni.showToast({ title: '生成失败', icon: 'none' })
+        if (e && e.featureNotConfigured) {
+          // TTS 未配置：引导去设置而非报"生成失败"（#18 T7）
+          promptFeatureNotConfigured(e)
+        } else {
+          uni.showToast({ title: '生成失败', icon: 'none' })
+        }
       } finally {
         this.generating = false
       }

@@ -56,6 +56,17 @@ public class WpsService {
     }
 
     /**
+     * WPS 文档编辑是否已配置（appId 与 appSecret 均非空）。
+     * 未配置时前端应降级为只读预览而非加载编辑器（#18 T6）。
+     */
+    public boolean isConfigured() {
+        String appId = getAppId();
+        String appSecret = getAppSecret();
+        return appId != null && !appId.isBlank()
+                && appSecret != null && !appSecret.isBlank();
+    }
+
+    /**
      * 生成 WPS 在线编辑链接（URL 直连方案预留）
      */
     public String generateEditUrl(String fileId, String fileName, String mode) {

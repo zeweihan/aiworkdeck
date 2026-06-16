@@ -1,5 +1,6 @@
 package com.checkba.service;
 
+import com.checkba.exception.FeatureNotConfiguredException;
 import com.checkba.service.ocr.AliyunOcrClientFactory;
 import com.checkba.service.ocr.OcrResult;
 import lombok.RequiredArgsConstructor;
@@ -55,7 +56,9 @@ public class OcrService {
         regionId = regionId == null ? "" : regionId.trim();
 
         if (!StringUtils.hasText(ak) || !StringUtils.hasText(sk)) {
-            throw new IllegalArgumentException("OCR 未配置：请在管理面板配置阿里云 OCR AccessKey");
+            throw new FeatureNotConfiguredException("ocr",
+                    "OCR 未配置：请在设置中配置阿里云 OCR AccessKey / "
+                            + "OCR is not configured: set up Aliyun OCR keys in Settings.");
         }
 
         // 脱敏诊断：只打印长度与尾号，定位“secret 为空/带空格/不成对”

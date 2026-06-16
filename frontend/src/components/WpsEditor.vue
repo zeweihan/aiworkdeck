@@ -17,6 +17,15 @@
           重试
         </button>
       </view>
+
+      <!-- WPS 未配置：降级为只读占位 + 去设置，替代白屏/500（#18 T6） -->
+      <view v-else-if="notConfigured" class="wps-status-overlay wps-not-configured">
+        <text class="error-text">文档在线编辑需配置 WPS WebOffice，当前暂不可编辑。</text>
+        <text class="error-text">Online editing requires WPS WebOffice (not configured).</text>
+        <button type="primary" size="mini" @tap="goToSettings" style="margin-top: 16rpx;">
+          去设置 / Configure
+        </button>
+      </view>
     </view>
   </view>
 </template>
@@ -96,6 +105,8 @@ export default {
     return {
       loading: false,
       error: null,
+      // WPS 未配置时降级为只读占位（#18 T6）
+      notConfigured: false,
       instance: null,
       // 自动生成容器 ID，避免多个组件实例冲突
       generatedContainerId: null,
@@ -185,6 +196,7 @@ export default {
 
       this.loading = true
       this.error = null
+      this.notConfigured = false
 
       try {
         // 1. 创建会话获取 token
@@ -198,6 +210,14 @@ export default {
             token = session.token
           }
         } catch (e) {
+          if (e && e.featureNotConfigured) {
+            // WPS 未配置：降级为只读占位，不再尝试初始化编辑器（否则白屏/报错）（#18 T6）
+            console.warn('WPS 未配置，降级为只读占位:', e)
+            this.loading = false
+            this.notConfigured = true
+            this.$emit('not-configured', e)
+            return
+          }
           console.warn('创建 WPS 会话失败，将使用空 token:', e)
           // 不阻断流程，允许在无 token 情况下继续
         }
@@ -436,6 +456,13 @@ export default {
     handleRetry() {
       this.destroy()
       this.load()
+    },
+
+    /**
+     * 跳转到设置页配置 WPS（#18 T6 未配置降级时使用）
+     */
+    goToSettings() {
+      uni.navigateTo({ url: '/pages/admin/admin' })
     },
 
     /**

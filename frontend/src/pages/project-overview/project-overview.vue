@@ -1231,7 +1231,8 @@ import {
   getPlugins, // Added
   sendWpsResult, // WPS 操作结果回调
   getWpsConfig, // WPS 配置获取
-  getFileText
+  getFileText,
+  promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { FILE_BATCH_ACTIONS, FILE_TREE_QUICK_ACTIONS } from '@/config/fileActions.js'
@@ -3856,7 +3857,12 @@ export default {
         }
       } catch (e) {
         console.error('OCR 识别失败:', e)
-        uni.showToast({ title: e.message || '识别失败', icon: 'none' })
+        if (e && e.featureNotConfigured) {
+          // OCR 未配置：引导去设置而非报"识别失败"（#18 T7）
+          promptFeatureNotConfigured(e)
+        } else {
+          uni.showToast({ title: e.message || '识别失败', icon: 'none' })
+        }
       } finally {
         uni.hideLoading()
       }

@@ -1,5 +1,6 @@
 package com.checkba.service;
 
+import com.checkba.exception.FeatureNotConfiguredException;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -114,6 +115,13 @@ public class TtsService {
      * @param volume Unused (ElevenLabs uses different settings)
      */
     public File generateAudio(String text, String voiceId, String rate, String pitch, String volume) {
+        // 未配置 TTS 密钥时直接返回"功能未配置"，前端引导去设置（#18 T5）
+        String configuredApiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);
+        if (configuredApiKey == null || configuredApiKey.isBlank()) {
+            throw new FeatureNotConfiguredException("tts",
+                    "语音合成未配置：请在设置中配置 ElevenLabs TTS / "
+                            + "Text-to-speech is not configured: set up ElevenLabs in Settings.");
+        }
         try {
             String baseUrl = systemSettingService.get("external.elevenlabs.baseUrl", defaultBaseUrl);
             String apiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);

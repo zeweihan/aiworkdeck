@@ -1,5 +1,6 @@
 package com.checkba.config;
 
+import com.checkba.exception.FeatureNotConfiguredException;
 import com.checkba.exception.UnauthorizedException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -25,6 +26,23 @@ public class GlobalExceptionHandler {
         result.put("code", 1);
         result.put("message", e.getMessage() != null ? e.getMessage() : "请先登录");
         // 统一返回 HTTP 200，通过 code 字段表示失败
+        return ResponseEntity.ok().body(result);
+    }
+
+    /**
+     * 功能未配置：返回可识别的 code=4001 + feature 字段，前端据此引导"去设置"
+     * 而非显示通用报错。/ Feature not configured — return a recognizable
+     * code=4001 with a feature id so the frontend can prompt "go to settings".
+     */
+    @ExceptionHandler(FeatureNotConfiguredException.class)
+    public ResponseEntity<Map<String, Object>> handleFeatureNotConfigured(FeatureNotConfiguredException e) {
+        log.info("Feature not configured [{}]: {}", e.getFeature(), e.getMessage());
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 4001);
+        result.put("feature", e.getFeature());
+        result.put("configured", false);
+        result.put("message", e.getMessage());
+        // 统一返回 HTTP 200，通过 code=4001 表示"功能未配置"
         return ResponseEntity.ok().body(result);
     }
 
