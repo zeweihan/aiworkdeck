@@ -12,6 +12,11 @@ on:
       - '.github/workflows/desktop-build.yml'
       - 'desktop/**'
       - 'backend/**'
+      # Installers bundle the built frontend (frontend/dist), so frontend-only
+      # changes affect the installer too and must run the build + smoke test.
+      # Without this, the first-run wizard (PR #25, frontend-only) shipped to
+      # v0.2.0 having never been validated inside an installer. See issue #27.
+      - 'frontend/**'
 
 # The "Attach to GitHub Release" step (softprops/action-gh-release) creates the
 # release for a v* tag, which needs write access to repository contents. The
