@@ -35,6 +35,10 @@
               </text>
             </view>
             <text class="provider-desc">{{ opt.desc }}</text>
+            <view v-if="form.ai.activeProvider === opt.value && opt.setupHint" class="provider-setup">
+              <text class="setup-line">{{ opt.setupHint }}</text>
+              <text class="setup-cmd" selectable>{{ opt.setupCmd }}</text>
+            </view>
             <view v-if="form.ai.activeProvider === opt.value && opt.keyField" class="provider-key">
               <input
                 class="text-input"
@@ -160,6 +164,8 @@ export default {
           local: true,
           desc: '零密钥、零费用，对话数据全程不离开本机。需先在本机安装并启动 Ollama（ollama.com）。',
           keyField: null,
+          setupHint: '安装并启动 Ollama 后，请在终端拉取本产品使用的模型（约 6GB，首次对话前必须完成）：',
+          setupCmd: 'ollama pull qwen3-vl:8b',
         },
         {
           value: 'OPENROUTER',
@@ -484,6 +490,34 @@ export default {
 
 .provider-key {
   margin-top: 10px;
+}
+
+.provider-setup {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f0fdf4;
+  border: 1px dashed rgba(22, 101, 52, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.setup-line {
+  font-size: 12px;
+  color: #166534;
+  line-height: 1.6;
+}
+
+.setup-cmd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
+  color: #0f172a;
+  background: #ffffff;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  border-radius: 6px;
+  padding: 6px 10px;
+  user-select: all;
 }
 
 .compliance-note {
