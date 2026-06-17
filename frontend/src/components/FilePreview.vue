@@ -40,13 +40,13 @@
           />
         </view>
 
-        <!-- PDF 预览 -->
+        <!-- PDF 预览：本地 blob 由浏览器/Electron 内置 PDF 引擎原生渲染，数据不出本机（#36） -->
         <view v-else-if="isPdf" class="preview-pdf">
           <!-- #ifdef H5 -->
-          <iframe :src="pdfViewerUrl" class="preview-iframe" frameborder="0"></iframe>
+          <iframe v-if="blobUrl" :src="blobUrl" class="preview-iframe" frameborder="0"></iframe>
           <!-- #endif -->
           <!-- #ifndef H5 -->
-          <web-view :src="pdfViewerUrl" />
+          <web-view v-if="blobUrl" :src="blobUrl" />
           <!-- #endif -->
         </view>
 
@@ -147,14 +147,14 @@ export default {
       return url
     },
     isPdf() {
-      // PDF is now handled by isOffice (WpsEditor)
-      return false
+      // PDF 走本地原生渲染（fetch 成 blob → Chromium/Electron 内置 PDF 引擎），无需 WPS（#36）
+      if (!this.file || !this.file.fileType) return false
+      return this.file.fileType.toLowerCase() === 'pdf'
     },
     isOffice() {
       if (!this.file || !this.file.fileType) return false
       const type = this.file.fileType.toLowerCase()
-      // Create 'pdf' as an office type to be handled by WpsEditor
-      return ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'pdf'].includes(type)
+      return ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(type)
     },
     isImage() {
       if (!this.file || !this.file.fileType) return false
@@ -186,16 +186,6 @@ export default {
       if (!this.file || !this.file.fileType) return false
       const type = this.file.fileType.toLowerCase()
       return ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(type) && !!this.file.wpsFileId
-    },
-    pdfViewerUrl() {
-      // 使用 PDF.js 预览
-      const pdfUrl = encodeURIComponent(this.fileUrl)
-      return `https://mozilla.github.io/pdf.js/web/viewer.html?file=${pdfUrl}`
-    },
-    officeViewerUrl() {
-      // 使用 Office Online 预览
-      const fileUrl = encodeURIComponent(this.fileUrl)
-      return `https://view.officeapps.live.com/op/view.aspx?src=${fileUrl}`
     }
   },
   watch: {
@@ -213,7 +203,7 @@ export default {
 
         if (this.isText) {
           this.loadTextContent()
-        } else if (this.isImage || this.isVideo || this.isAudio) {
+        } else if (this.isImage || this.isVideo || this.isAudio || this.isPdf) {
            this.loadMediaResource()
         }
       }
@@ -318,6 +308,7 @@ export default {
             'webp': 'image/webp',
             'svg': 'image/svg+xml',
             'bmp': 'image/bmp',
+            'pdf': 'application/pdf',
             'mp4': 'video/mp4',
             'webm': 'video/webm',
             'ogg': 'video/ogg',
