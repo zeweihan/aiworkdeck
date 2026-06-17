@@ -1,118 +1,128 @@
-# WPS 迁移至本地 LibreOffice 方案 (桌面版 IDE 模式)
+# WPS WebOffice → LibreOffice 迁移方案（RFC v2）
 
-## 1. 核心目标
-将现有的 `Checkba Cloud` 从依赖 WPS Web Office 的**在线模式**，转型为类似 IDE 的**本地桌面应用模式**。
-**关键要求：**
--   **本地化 (Local)**: 数据不上传服务器，直接读写用户本地磁盘文件。
--   **无服务 (No Serverless/Offline)**: 不依赖在线的 WOPI 服务或 WPS 云服务。
--   **IDE 体验**: 用户在软件内打开文件夹，左侧文件树，右侧直接编辑文档。
+> 本文档是 issue #13 的技术主文。v2（2026-06-17）基于对现有 AI↔文档交互链路的完整勘察，
+> 纠正了 v1 的重心错误：**v1 把文件读写/Electron 壳当主线、把 AI 交互降级为"第四阶段功能对齐"**，
+> 这是反的。本项目的命门是"AI 直接操作文档"，迁移的成败由它决定，不由文件 IO 决定。
 
 ---
 
-## 2. 技术选型与架构
+## 0. 核心判断（先读这一节）
 
-由于需要直接操作本地文件且无需上传，推荐使用 **Electron** 作为应用壳，集成 **LibreOffice WASM** 或 **本地调用模式**。
+### 0.1 换引擎是**必要条件，但不是充分条件**
 
-### 2.1 推荐方案：Electron + LibreOffice WASM (ZetaOffice / LOWA)
-利用最新的 WebAssembly 技术，将 LibreOffice 核心直接运行在 Electron 的渲染进程（浏览器环境）中。
+维护者对编辑器内核的真实诉求不是"换一个开源的壳"，而是三句话：**定位准确、修订优秀、交互丝滑**。
+而代码勘察揭示一个反直觉的事实：
 
-*   **架构原理**：
-    *   **主进程 (Main Process)**: 使用 Node.js `fs` 模块直接读写本地磁盘文件。
-    *   **渲染进程 (Renderer)**: 运行 `LibreOffice WASM` 实例。
-    *   **数据流**: 主进程读取 `.docx` -> `ArrayBuffer` -> 传递给 WASM -> 编辑器渲染 -> 用户保存 -> `ArrayBuffer` -> 主进程写入磁盘。
+> **"定位不准"不是 WPS 独有的缺陷，是当前定位架构的原罪——照搬到 LibreOffice 只会更糟。**
 
-*   **优点**:
-    *   **真·本地运行**: 完全不依赖外部进程，体验最接近 "IDE 集成编辑器"。
-    *   **零网络**: 即使断网也能完美工作。
-    *   **安全**: 文件仅在内存和本地磁盘流转。
+当前 AI 定位文本的链路（`frontend/src/composables/useWpsBridge.js:747` `findTextLocations`）：
 
-*   **缺点**:
-    *   **性能**: WASM 版本首次加载较慢 (需加载数百 MB 资源)，运行效率略低于原生应用。
-    *   **稳定性**: LibreOffice WASM 仍处于快速迭代期 (Refer to ZetaOffice / LOWA)。
+1. 取全文 `doc.Content.Text`；
+2. 在 **JS 纯文本字符串**里 `indexOf` 求字符 offset；
+3. 用整数 offset 调 `doc.Range(start, end)` 去富文本模型里定位、替换。
 
-### 2.2 备选方案：极简本地调用 (Launcher Mode)
-只做文件管理，编辑时唤起系统安装的原生 LibreOffice。
+**病根 = "纯文本字符 offset ↔ 富文本模型坐标"这个映射对不齐**：分页符/隐藏域/表格标记不计入 `Content.Text` 却占模型位置；`\r\n` vs `\n` 偏移；修订态下 Range 边界漂移。这是**任何富文本编辑器都存在**的映射裂缝。LibreOffice WASM 默认暴露的 JS API 比 WPS 更少（v1 自己都退到"靠剪贴板/Uno 中转取选区"）——**若照搬 offset 思路，AI 体验会倒退，不会前进。**
 
-*   **原理**: Electron 仅作为文件浏览器，双击文件时使用 `child_process.spawn` 调用本地安装的 LibreOffice 打开文件。
-*   **优点**: 性能最好，兼容性完美，开发成本极低。
-*   **缺点**: 无法实现 "嵌入式 IDE" 体验，编辑器是独立窗口，与主程序分离。
+### 0.2 正确的命题是三根支柱，不是"换引擎"
 
----
+| 支柱 | 现状（WPS） | LibreOffice 做到"优秀"的方式 |
+|---|---|---|
+| **定位准确** | JS 文本 offset → Range，系统性错位 | 改用**模型原生搜索**（UNO `com.sun.star.util.XSearchable` / `XReplaceable`）+ **文本游标**（`XTextCursor` / `XParagraphCursor`）直接在文档模型里定位；锚点用 **书签/文本字段**（`XBookmarksSupplier` / `XTextFieldsSupplier`），**彻底弃用整数字符 offset** |
+| **修订优秀** | AI 改动前**先关修订**（`useWpsBridge.js:232` `disableTrackRevisions`）→ 改动**不留痕**，对律师审阅是反的 | LibreOffice 修订（redline，`RecordChanges=true` + `XRedlinesSupplier`）是**一等公民、开源可控**。**默认开着修订让 AI 改**，每处 AI 改动即一条可接受/拒绝的 revision——这才叫"修订优秀"（是一次默认值纠偏，不只是换引擎） |
+| **交互丝滑** | SDK 易取选区，但闭源/依赖云 | **关键未知，必须原型验证**：ZetaOffice 的 **zetajs（JS→UNO 桥）**能否程序化取选区/搜索/写 redline（zetajs 可跑 UNO 脚本，远强于 v1 假设的"剪贴板 hack"）；**WASM canvas 上的中文输入法（IME）**是否可用——这是 WASM 桌面编辑器的经典硬骨头 |
 
-## 3. 详细迁移实施计划 (基于 WASM 嵌入方案)
+### 0.3 最大的好消息：后端 AI 契约**编辑器无关**，迁移范围可控
 
-### 第一阶段：桌面端环境搭建
-1.  **引入 Electron**:
-    如果当前项目仅为 Web 前端，需引入 Electron 构建桌面壳。
-    *   目录结构调整：`frontend/` -> `electron-app/renderer/`
-2.  **集成 LibreOffice WASM**:
-    *   下载 `LibreOffice WASM` 构建包 (或使用 ZetaOffice SDK)。
-    *   将其资源文件 (`.wasm`, `.data`, `.js`) 放入 Electron 的 `public/static` 目录。
+后端 agent 与文档之间是一层**抽象命令契约**，不绑定 WPS：
 
-### 第二阶段：文件系统桥接 (IDE 核心能力)
-实现类似 VS Code 的文件读写能力。
+- `WpsTools`（14 个工具，`backend/.../service/ai/tools/WpsTools.java`）→
+- `WpsActionService`（`backend/.../service/ai/WpsActionService.java:190`）经 **SSE 下发 `client_action` 事件 → 前端 executor 执行 → 回传 `/api/ai/agent/wps-result`**（30s 超时）。
 
-**1. 替换 `WpsController` 为 `LocalFileService` (Node.js)**
-由于不再需要后端 Java 服务处理文件，所有文件操作移至 Electron 主进程：
+这套契约不依赖任何 WPS 专有概念。**真正需要重写的只有前端 executor 一层**：`wps-sdk.js` + `useWpsBridge.js` + `WpsEditor.vue`（约 2–3k 行）。
+后端 agent/工具定义、SSE 编排、会话管理**基本不动**。
 
-```javascript
-// electron/main/file-service.js
-const fs = require('fs/promises');
-const { ipcMain } = require('electron');
-
-// 监听前端读取请求
-ipcMain.handle('fs:readFile', async (event, filePath) => {
-  return await fs.readFile(filePath); // 返回 Buffer
-});
-
-// 监听前端保存请求
-ipcMain.handle('fs:writeFile', async (event, { filePath, data }) => {
-  await fs.writeFile(filePath, data);
-  return { success: true };
-});
-```
-
-**2. 前端适配层**
-修改 `frontend` 代码，拦截 API 请求，改为调用 IPC：
-
-*   **原代码 (Web)**: `axios.get('/api/files/content')`
-*   **新代码 (Desktop)**: `window.electronAPI.readFile(filePath)`
-
-### 第三阶段：编辑器组件替换
-创建新的 `LocalEditor.vue` 组件替换 `WpsEditor.vue`。
-
-**组件逻辑：**
-1.  **初始化**: 加载 WASM 模块 (`Module.init(...)`).
-2.  **加载文件**:
-    *   调用 `window.electronAPI.readFile(path)` 获取二进制流。
-    *   将流写入 WASM 虚拟文件系统 (Emscripten FS)。
-    *   通知 LibreOffice 打开该虚拟路径。
-3.  **保存文件**:
-    *   监听编辑器的 "Save" 事件。
-    *   从 WASM 虚拟文件系统读取修改后的二进制流。
-    *   调用 `window.electronAPI.writeFile(path, stream)` 覆盖本地文件。
-
-### 第四阶段：功能对齐 (AI 与 高级功能)
-*   **AI 读取选区**:
-    *   LibreOffice WASM 可能不直接暴露 "获取选区文本" 的 JS API。
-    *   **替代方案**: 需通过 `Uno Command` (如 `.uno:Copy`) 将选区复制到剪贴板，然后 Electron 读取剪贴板内容传给 AI。
-*   **书签/超链接**:
-    *   需查阅 LibreOffice WASM 提供的 JS 绑定能力，或使用 Uno 命令进行操作。
+> 结论：这不是"重写一个编辑器"，而是"换一层适配器 + 重做定位/修订模型"。范围被后端契约的稳定性框住了。
+> （迁移期建议把工具契约里残留的 WPS 命名抽象为编辑器无关命名，如 `editor_find_text`，但可后置。）
 
 ---
 
-## 4. 方案对比表
+## 1. 技术选型
 
-| 特性 | 原 WPS Web 方案 | LibreOffice WASM (推荐) | 调用原生 LibreOffice |
-| :--- | :--- | :--- | :--- |
-| **部署方式** | 在线/私有化部署服务端 | **内置于桌面客户端** | 需用户单独安装 Office |
-| **文件存储** | 上传至服务器 | **直接读写本地磁盘** | 直接读写本地磁盘 |
-| **编辑体验** | 浏览器内嵌入 | **应用内嵌入 (IDE感)** | 弹出独立窗口 |
-| **网络依赖** | 强依赖 | **完全离线** | 完全离线 |
-| **AI 能力** | SDK 易获取选区 | 需通过剪贴板/Uno命令中转 | 难交互 (跨进程) |
-| **开发难度** | 低 (SDK 成熟) | **高 (WASM 集成复杂)** | 极低 |
+保留 v1 的三方案对比，结论不变：路线 A 是目标态，但**必须先过原型门控**。
 
-## 5. 建议下一步
-1.  **确认技术栈**: 确认项目是否接受引入 **Electron** 打包桌面端。
-2.  **原型验证**: 优先尝试运行 LibreOffice WASM 的 Hello World Demo，验证在 Electron 中的加载速度和中文输入支持情况。
-3.  **开始迁移**: 如果验证通过，按上述 "第三阶段" 开始改造编辑器组件。
+| 特性 | 原 WPS Web | **A. LibreOffice WASM（ZetaOffice/LOWA，目标）** | B. 唤起原生 LibreOffice |
+|---|---|---|---|
+| 部署 | 在线/私有化服务端 | **内置桌面客户端** | 用户自装 Office |
+| 文件 | 上传服务器 | **直接读写本地磁盘** | 本地磁盘 |
+| 编辑体验 | 浏览器内嵌 | **应用内嵌（IDE 感）** | 独立窗口 |
+| 网络 | 强依赖 | **完全离线** | 完全离线 |
+| **AI 取选区/改 redline** | SDK 易取 | **经 zetajs→UNO（待原型验证）** | 跨进程，难 |
+| 中文 IME | 成熟 | **WASM canvas 上待验证（最大风险）** | 原生，无问题 |
+| 开发成本 | 低 | **高** | 极低 |
+
+**B/C 作为退路**：若原型证明 A 的中文 IME 或 zetajs 桥不可行，退回 B（唤起原生 `soffice`，牺牲 IDE 嵌入感换确定性），或 C（headless `soffice --convert-to` 做格式转换 + 自研轻量只读/批注层）。
+
+---
+
+## 2. 实施路线（门控式，非时间表）
+
+> "什么时候能"不是一个日期，是一个 **gate**。在原型出数据之前，任何时间表都是编的。
+
+### Phase 0 — 原型 spike（解锁全局，唯一前置）
+
+目标：用最小代价证明路线 A 的三个生死项。**这三关任一过不了，A 不走，转 B。**
+
+**验收标准（go/no-go）**：
+- [ ] **中文 IME + 字体**：ZetaOffice WASM 跑在 Electron 渲染进程，能正常**中文输入**、渲染常见中文字体（宋体/黑体/仿宋），无明显错位/丢字。
+- [ ] **zetajs 程序化能力**：经 JS→UNO 桥，能 ①取当前选区文本与位置 ②用 `XSearchable` 在模型里搜索定位 ③以 **redline（修订）开启**的方式替换一段文本，改动在 UI 上呈现为可接受/拒绝的修订。
+- [ ] **性能**：典型 **50 页合同 docx** 打开 / 保存耗时可接受（建议阈值：打开 < 5s，保存 < 2s，首次 WASM 冷加载单独计量并评估可否预热）。
+- [ ] **包体**：WASM + data 资源体积对安装包的增量可接受（评估与当前 ~560MB 安装包的叠加）。
+
+产出：一个 `experiments/zetaoffice-spike/` 分支 + 一页实测数据（含录屏/截图）。**这是可被社区认领的最高价值实验**（见 issue #13 任务清单）。
+
+### Phase 1 — 桥接层按模型重写（核心工作量）
+
+原型过关后，重写前端 executor，**对齐后端既有命令契约**（后端不动）：
+
+- 定位：`findTextLocations`/`getParagraph` → UNO `XSearchable` + `XParagraphCursor`，**输出锚点（书签/段落游标）而非整数 offset**。
+- 修订：`ensureTrackRevisions` → `RecordChanges=true`，**AI 改动默认走 redline**；移除"AI 操作前关修订"的旧默认。
+- 选区/插入/替换：`replaceAtPosition`/`insertAtCursor` → UNO 游标 + `XReplaceable`。
+- 变量锚点：书签/文档域 → UNO `Bookmarks`/`TextFields`。
+- PPT：Impress UNO（架构差异大，**单列、可后置**；现状靠【】文本标记，迁移时保持降级或延后）。
+
+### Phase 2 — 文件 IO / Electron 壳（v1 已覆盖，降为支撑项）
+
+- 主进程 `fs` 直接读写本地 `.docx`；渲染进程 WASM 编辑；`ArrayBuffer` 双向桥（v1 第二、三阶段方案可复用）。
+- 与"双击可用"单机模式（Epic #18 已交付）对齐：文档不出本机，呼应"数据不出本机"叙事。
+
+### Phase 3 — 灰度
+
+- WPS 与 LibreOffice executor 并存、按开关切换；用真实合同回归"定位/修订"准确率；稳定后默认切换、移除 WPS SDK 依赖。
+
+---
+
+## 3. 风险登记
+
+| 风险 | 影响 | 缓解 |
+|---|---|---|
+| **WASM canvas 中文 IME 不可用** | 路线 A 致命 | Phase 0 首验；不行则转 B |
+| zetajs JS→UNO 桥能力不足以取选区/写 redline | AI 交互无法实现 | Phase 0 第二验收项；不行则转 B/C |
+| WASM 冷加载慢 / 包体大 | 体验与安装包膨胀 | 预热、按需加载、与 B 权衡 |
+| ZetaOffice 仍在快速迭代 | 接口不稳 | 锁版本、封装适配层隔离 |
+| 桥接层重写期 AI 功能回归 | 用户可感知退化 | Phase 3 双 executor 灰度 + 真实合同回归集 |
+
+---
+
+## 4. 下一步
+
+1. **Phase 0 原型 spike**（最高优先，已在 issue #13 列为可认领任务，含上方验收标准）。
+2. 原型数据出来后，本文档据实更新路线 A/B 取舍与 Phase 1 排期。
+3. 桥接层重写前，先把后端工具契约中的 WPS 命名抽象为编辑器无关命名（小重构，降低耦合）。
+
+> 维护原则：本文档随原型与实现进展持续更新；任何一项 Phase 0 验收的小实验，欢迎以评论或 PR 贡献到 issue #13。
+
+---
+
+## 附录：v1 历史方案（存档）
+
+v1 以"文件 IO + Electron 壳"为主线，其 Electron 主/渲染进程分工、`ipcMain` 文件桥、WASM 虚拟文件系统加载/保存流程在本 v2 的 **Phase 2** 仍然适用，作为支撑项保留。v2 的核心改动是把 **AI 交互（定位/修订/选区）从"第四阶段附属"提升为决定迁移成败的主轴，并以 Phase 0 原型门控前置**。
