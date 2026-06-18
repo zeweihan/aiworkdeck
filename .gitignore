@@ -54,6 +54,9 @@ env.production
 .trae/
 King IDE汇报/
 docs/
+软著材料/
+25-宝库/
+26-IDE汇报/
 
 # Website source code (separate repo)
 website/
