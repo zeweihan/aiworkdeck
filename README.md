@@ -44,6 +44,22 @@ Star AI Workdeck if you care about any of these problems:
 
 AI Workdeck Community Edition is the open-source kernel of AI Workdeck. It is not the full commercial SaaS product. The kernel is published so developers, law firms, legal-tech builders, and document-AI teams can inspect, self-host, integrate, and extend the core workflow infrastructure.
 
+## Download & Run
+
+Just want to try it? You don't need to build from source.
+
+**➡️ [Download the latest desktop app](https://github.com/zeweihan/aiworkdeck/releases/latest)**
+
+| Platform | Installer | Notes |
+|---|---|---|
+| macOS (Apple Silicon) | `AI Workdeck-<version>-arm64.dmg` | Signed and notarized |
+| macOS (Intel) | `AI Workdeck-<version>.dmg` | Signed and notarized |
+| Windows | `AI Workdeck Setup <version>.exe` | Not yet code-signed; SmartScreen may warn |
+
+Double-click to install. On first launch, a setup wizard lets you pick one AI provider — a cloud API key, or a fully local model via [Ollama](https://ollama.com) (zero key, data never leaves your machine). No Java, Docker, or PostgreSQL required: the backend, a trimmed JRE, and a local database are bundled in.
+
+> The desktop build is the fastest way to evaluate AI Workdeck. To self-host the full stack or contribute code, see [Quick Start](#quick-start) below.
+
 ## Demo
 
 | | |
@@ -171,6 +187,8 @@ See [`legal/COMMERCIAL-LICENSE.md`](legal/COMMERCIAL-LICENSE.md) or contact [hi@
 In a self-hosted deployment with Ollama + local storage + Docker services, **documents never leave your network**. No telemetry, no phone-home, no analytics by default. Optional external services (OCR, TTS, cloud AI) are explicitly configured and can be disabled entirely.
 
 ## Quick Start
+
+> For developers who want to self-host the full stack or contribute code. If you just want to try the app, use [Download & Run](#download--run) above instead.
 
 ### Prerequisites
 
