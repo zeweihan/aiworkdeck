@@ -1,0 +1,11 @@
+# Local LOWA runtime / vendored bridge — fetched when running the spike, never committed.
+zeta.js
+config.js
+soffice.*
+*.wasm
+*.data
+*.data.js.metadata
+node_modules/
+# Local test documents.
+*.docx
+*.odt

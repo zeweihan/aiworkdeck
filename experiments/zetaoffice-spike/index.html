@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- ZetaOffice (LibreOffice WASM) spike harness — #39 Phase 0. See README.md. -->
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>ZetaOffice Spike · AI Workdeck #39</title>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; font: 13px/1.5 system-ui, sans-serif; }
+    #bar { display: flex; gap: 8px; align-items: center; padding: 6px 10px; background: #1F2937; color: #fff; flex-wrap: wrap; }
+    #bar button { font: inherit; padding: 4px 10px; border: 0; border-radius: 4px; background: #059669; color: #fff; cursor: pointer; }
+    #bar button:disabled { background: #6b7280; cursor: not-allowed; }
+    #iso { padding: 2px 8px; border-radius: 4px; font-weight: 600; }
+    #iso.ok { background: #065f46; } #iso.bad { background: #991b1b; }
+    #wrap { display: flex; height: calc(100vh - 41px); }
+    #canvas-col { position: relative; flex: 1 1 65%; min-width: 0; }
+    #qtcanvas { width: 100%; height: 100%; border: 0; padding: 0; outline: 1px solid #ccc; visibility: hidden; }
+    #spinner { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #374151; text-align: center; }
+    #log { flex: 0 0 35%; max-width: 460px; margin: 0; padding: 8px; background: #0b1220; color: #d1fae5;
+           font: 11px/1.45 ui-monospace, monospace; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+    .k { color: #fbbf24; } .e { color: #fca5a5; } .ime { color: #93c5fd; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <strong>ZetaOffice Spike · #39</strong>
+    <span id="iso">crossOriginIsolated: …</span>
+    <button id="btnBoot">Boot ZetaOffice</button>
+    <button id="btnSel" disabled>测选区 selection</button>
+    <button id="btnRed" disabled>测修订 redline</button>
+    <button id="btnPerf" disabled>测50页性能 perf</button>
+    <span style="opacity:.8">中文 IME：boot 后直接在文档里用输入法打字，看右侧日志</span>
+  </div>
+  <div id="wrap">
+    <div id="canvas-col" onselectstart="event.preventDefault()">
+      <div id="spinner">点 “Boot ZetaOffice” 加载运行时<br>（首次数百 MB，看右侧进度）</div>
+      <!-- Qt REQUIRES id="qtcanvas"; canvas must have no border/padding (outline ok). -->
+      <canvas id="qtcanvas" contenteditable="true"
+        oncontextmenu="event.preventDefault()" onkeydown="event.preventDefault()"></canvas>
+    </div>
+    <pre id="log"></pre>
+  </div>
+
+  <script>
+    'use strict';
+    // ---- LOWA runtime location. CDN by default; self-host for the product. ----
+    // The CDN dir also serves zeta.js + soffice.{js,wasm,data}. If a future CDN
+    // layout omits zeta.js, copy it from the npm `zetajs` package (source/zeta.js)
+    // next to this file and set ZETA_JS = './zeta.js'.
+    const SOFFICE_BASE_URL = 'https://cdn.zetaoffice.net/zetaoffice_latest/';
+    const ZETA_JS = SOFFICE_BASE_URL + 'zeta.js';
+
+    const logEl = document.getElementById('log');
+    const canvas = document.getElementById('qtcanvas');
+    const spinner = document.getElementById('spinner');
+    const isoEl = document.getElementById('iso');
+    const btnBoot = document.getElementById('btnBoot');
+    const btnSel = document.getElementById('btnSel');
+    const btnRed = document.getElementById('btnRed');
+    const btnPerf = document.getElementById('btnPerf');
+
+    function out(html, cls) { logEl.insertAdjacentHTML('beforeend', (cls ? '<span class="' + cls + '">' : '<span>') + html + '</span>\n'); logEl.scrollTop = logEl.scrollHeight; }
+
+    // ---- cross-origin isolation self-check (SharedArrayBuffer prerequisite) ----
+    if (self.crossOriginIsolated) { isoEl.textContent = 'crossOriginIsolated: true ✓'; isoEl.className = 'ok'; }
+    else { isoEl.textContent = 'crossOriginIsolated: false ✗ (启动会失败，用 serve.mjs)'; isoEl.className = 'bad'; out('crossOriginIsolated=false → SharedArrayBuffer 不可用。请用 `node serve.mjs` 打开本页（带 COOP/COEP 头）。', 'e'); }
+
+    // ---- IME diagnostics on the DOM side: composition events on the canvas. ----
+    // Compare this stream with the worker's XKeyHandler stream. If composition
+    // fires here but XKeyHandler gets nothing meaningful, that pinpoints the gap.
+    for (const ev of ['compositionstart', 'compositionupdate', 'compositionend']) {
+      canvas.addEventListener(ev, (e) => out('[DOM ' + ev + '] data=' + JSON.stringify(e.data), 'ime'));
+    }
+
+    let thrPort = null;
+    function send(cmd, extra) { if (thrPort) thrPort.postMessage(Object.assign({ cmd }, extra || {})); else out('worker 未就绪 / not ready', 'e'); }
+
+    btnSel.onclick = () => send('selection');
+    btnRed.onclick = () => send('redline');
+    btnPerf.onclick = () => send('perf', { pages: 50 });
+
+    btnBoot.onclick = function () {
+      btnBoot.disabled = true;
+      out('Loading LOWA from ' + SOFFICE_BASE_URL + ' …');
+
+      // The two globals `canvas` and `Module` must exist before soffice.js loads.
+      window.Module = {
+        canvas,
+        uno_scripts: [ZETA_JS, './office_thread.js'],
+        locateFile: function (path, prefix) { return (prefix || SOFFICE_BASE_URL) + path; },
+      };
+      if (SOFFICE_BASE_URL !== '') {
+        window.Module.mainScriptUrlOrBlob = new Blob(
+          ["importScripts('" + SOFFICE_BASE_URL + "soffice.js');"], { type: 'text/javascript' });
+      }
+
+      // On the MAIN thread, Module.zetajs resolves to the thread PORT.
+      window.Module.zetajs && window.Module.zetajs.then(function (pThrPort) {
+        thrPort = pThrPort;
+        thrPort.onmessage = function (e) {
+          const d = e.data;
+          switch (d.cmd) {
+            case 'thr_running': out('worker running ✓'); break;
+            case 'ui_ready':
+              spinner.style.display = 'none'; canvas.style.visibility = 'visible';
+              btnSel.disabled = btnRed.disabled = btnPerf.disabled = false;
+              window.dispatchEvent(new Event('resize'));
+              out('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
+              break;
+            case 'log': out(d.msg); break;
+            case 'key': out('[UNO key ' + d.phase + '] code=' + d.code + ' char=' + JSON.stringify(d.ch), 'k'); break;
+            default: out('main: unknown cmd ' + d.cmd, 'e');
+          }
+        };
+      });
+
+      // Keep the embedded Qt window sized to the canvas.
+      setInterval(function () { window.dispatchEvent(new Event('resize')); }, 1000);
+
+      const s = document.createElement('script');
+      s.src = SOFFICE_BASE_URL + 'soffice.js';
+      s.onerror = () => out('soffice.js 加载失败 / failed to load — 检查网络与 CDN 路径', 'e');
+      document.body.appendChild(s);
+    };
+  </script>
+</body>
+</html>
