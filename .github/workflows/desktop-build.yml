@@ -225,3 +225,24 @@ jobs:
           files: |
             desktop/release/*.dmg
             desktop/release/*.exe
+          # Auto-generate a "What's Changed" changelog from merged PRs since the
+          # last tag, appended below the bilingual body template. Without this a
+          # tag build creates a Release with EMPTY notes (had to `gh release edit`
+          # by hand every time). The template is version-agnostic so it stays
+          # correct on every release; per-release highlights can still be edited in.
+          generate_release_notes: true
+          body: |
+            ## AI Workdeck — 律师的 AI 原生工作台 / The lawyer's AI-native workstation
+
+            **中文** · 桌面版「双击即用」：安装包已捆绑后端与精简 JRE，无需预装 PostgreSQL / Java。首次启动有向导，配置一项 AI 提供商即可解锁核心功能；可选「本地 Ollama」实现数据不出本机。
+
+            **English** · Desktop, double-click to run: the installer bundles the backend and a trimmed JRE — no PostgreSQL or Java setup. A first-run wizard gets you started; configure one AI provider to unlock core features. Pick local Ollama to keep all data on-device.
+
+            ### 下载 / Downloads
+            - **macOS · Apple Silicon (M 系列)** — `AI Workdeck-<ver>-arm64.dmg`（已签名公证 / signed & notarized）
+            - **macOS · Intel** — `AI Workdeck-<ver>.dmg`（已签名公证 / signed & notarized）
+            - **Windows · x64** — `AI Workdeck Setup <ver>.exe`（暂未签名，首次运行 SmartScreen 提示属正常 / not yet code-signed; a SmartScreen prompt on first run is expected）
+
+            官网 / Website: https://www.aiworkdeck.com
+
+            ---
