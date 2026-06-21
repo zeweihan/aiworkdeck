@@ -55,11 +55,24 @@ node serve.mjs            # 起带 COOP/COEP 头的本地服务器（默认 http
 4. **中文 IME**：在 canvas 文档里直接用系统输入法打字，观察候选与上屏；harness 会在
    日志里打 `compositionstart/update/end` 事件帮助判断事件链是否到位。
 
-### 真机/Electron 验证（权威）
+### 在 Electron 里跑（权威环境 / authoritative）
 
-中文 IME 这关**只有真机能下结论**。产品集成时把本 harness 的逻辑搬进 Electron 渲染进程
-（记得用 `onHeadersReceived` 注入 COOP/COEP），在 macOS + Windows 各测一遍中文输入法。
-本机若 `JDK SIGBUS` 跑不了桌面壳，可先用上面的浏览器流程验证 2/3/4，IME 留真机。
+中文 IME / canvas 渲染 / probe 往返这几关，**只有真机的 Electron 能下结论**。本目录带了一个
+**自包含的 Electron 启动器** `electron-main.js`——它不碰产品 `desktop/main/main.js`（spike 是纯
+前端、不需要后端，避免本机捆绑 JRE 的 SIGBUS），并用 `session.webRequest.onHeadersReceived`
+注入 COOP/COEP，**正是产品将来要用的机制**（内置静态服务器故意不设这俩头，专门验证 Electron 注头这条路）。
+
+复用项目已装的 Electron（无需额外下载）：
+```bash
+cd experiments/zetaoffice-spike
+../../desktop/node_modules/.bin/electron .     # 或 npx electron .
+```
+窗口打开后：点 **Boot ZetaOffice** → 看 canvas 是否渲染出 Writer 文档 → 用系统输入法在文档里打中文
+→ 点 selection / redline / perf 三个探针。devtools 已自动打开，配合右侧日志面板与 console 观察。
+请在 **macOS + Windows 各测一遍中文输入法**。
+
+> 浏览器路线（`node serve.mjs`，上一节）只能验证基础设施 + 部分 UNO；canvas 像素与中文 IME 的
+> 权威结论必须在这个 Electron 启动器里取。
 
 ## 现状 / Status
 

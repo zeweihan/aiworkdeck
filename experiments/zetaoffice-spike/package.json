@@ -1,0 +1,12 @@
+{
+  "name": "zetaoffice-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Phase 0 ZetaOffice (LibreOffice WASM) spike for aiworkdeck issue #39",
+  "license": "MIT",
+  "main": "electron-main.js",
+  "scripts": {
+    "serve": "node serve.mjs",
+    "electron": "electron ."
+  }
+}
