@@ -63,12 +63,34 @@ node serve.mjs            # 起带 COOP/COEP 头的本地服务器（默认 http
 
 ## 现状 / Status
 
-- ✅ 骨架就位：四项验收各有独立测试入口 + 性能埋点 + 事件诊断日志 + 正确的 COOP/COEP 服务器。
-- ✅ 对着 zetajs 真实 API 写（`zetajs.uno.com.sun.star`、`Desktop.create`、
-  `loadComponentFromURL`、`getController().getModel()`）。
-- ⏳ **未下结论**：本骨架尚未在真机/Electron 完整跑出四关 verdict——UNO 选区/redline 的
-  确切调用、Qt canvas 的 IME 事件链，都要实跑才能定。这正是 spike 的目的。
-- 📌 隔离：本工作全在 `feat/libreoffice-migration` 分支，master 继续发 WPS 稳定版，互不影响。
+骨架已**实跑过一轮**（2026-06-21，无头 Chromium 预览经 `serve.mjs` 打开）。基础设施链路
+**已验证打通到"文档已加载"**，途中修掉两个真 bug：
+
+**✅ 已验证可行（infrastructure path proven）**：
+- `crossOriginIsolated=true`、`SharedArrayBuffer` 可用（`serve.mjs` 的 COOP/COEP 头生效）。
+- LOWA 运行时（`soffice.wasm`/`.data`）**从 `cdn.zetaoffice.net` 在 COEP 下成功下载并实例化**。
+- Qt 起事件循环（持续重绘）、office 线程启动、主线程 `Module.uno_main` 线程端口连通、
+  `loadComponentFromURL` 文档加载完成（`ui_ready` 生效：测试按钮启用、spinner 隐藏、canvas 置 visible）。
+
+**🐞 实跑中发现并修复的两个真 bug**：
+1. **`zeta.js` 不在 CDN**：原先从 `cdn.zetaoffice.net/.../zeta.js` 取 → worker `importScripts`
+   报 `NetworkError` → 一连串 `emscripten_proxy_async failed`。CDN 只托管 LOWA 构建，不含桥脚本。
+   **改为本地 vendored `./zeta.js`**（取自 allotropia/zetajs `source/zeta.js`，MIT，已随仓提交）。
+2. **主线程端口 API 用错**：原用 `Module.zetajs.then`（它只在 office worker 里存在）→ 主线程拿不到端口。
+   **改为 `Module.uno_main.then(pThrPort=>…)` 且在 `soffice.js` 的 `onload` 里挂**（对照 web-office 示例）。
+
+**⚠️ 此无头预览环境下"不保真"、需真机/Electron 定夺的（这本就是 spike 的目的）**：
+- **canvas 像素不出**（黑屏）——无头 Chromium 的 Qt/WebGL 不绘制；需真显示器。
+- **中文 IME**——必须人工敲输入法（#39 第一风险）。
+- **主↔worker probe 往返 + 页面日志面板**——boot 后我方 `out()` 写 DOM、`thrPort` 往返在此无头
+  环境表现异常（疑与 emscripten/Qt 事件循环下的 DOM/消息泵时序有关）。在真机/Electron 复测前，
+  ②③④三关**不下结论**。代码已尽量对齐官方示例；`VERIFY` 标记处以真机为准。
+
+**📌 隔离**：全在 `feat/libreoffice-migration` 分支，master 继续发 WPS 稳定版，互不影响。
+
+> **下一步 gate**：在真机（macOS + Windows）/ Electron 渲染进程里跑本 harness（Electron 用
+> `session.webRequest.onHeadersReceived` 注 COOP/COEP），逐项确认 canvas 渲染、中文 IME、
+> selection/redline/perf 往返。过则迁移继续并自托管 LOWA 进安装包；不过则回退评估 native-headless。
 
 ---
 

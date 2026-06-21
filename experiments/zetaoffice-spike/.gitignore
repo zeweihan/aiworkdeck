@@ -1,5 +1,5 @@
-# Local LOWA runtime / vendored bridge — fetched when running the spike, never committed.
-zeta.js
+# Local LOWA runtime — fetched from the CDN at runtime, never committed.
+# (zeta.js, the MIT zetajs bridge, IS committed — the CDN does not serve it.)
 config.js
 soffice.*
 *.wasm

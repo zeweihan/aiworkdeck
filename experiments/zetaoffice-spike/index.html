@@ -44,11 +44,13 @@
   <script>
     'use strict';
     // ---- LOWA runtime location. CDN by default; self-host for the product. ----
-    // The CDN dir also serves zeta.js + soffice.{js,wasm,data}. If a future CDN
-    // layout omits zeta.js, copy it from the npm `zetajs` package (source/zeta.js)
-    // next to this file and set ZETA_JS = './zeta.js'.
+    // The CDN serves the LOWA build (soffice.{js,wasm,data}) but NOT the zetajs
+    // bridge — that is vendored locally as ./zeta.js (from allotropia/zetajs
+    // source/zeta.js, MIT). Loading zeta.js from the CDN fails with a worker
+    // importScripts NetworkError that cascades into "emscripten_proxy_async
+    // failed" — verified, see README.
     const SOFFICE_BASE_URL = 'https://cdn.zetaoffice.net/zetaoffice_latest/';
-    const ZETA_JS = SOFFICE_BASE_URL + 'zeta.js';
+    const ZETA_JS = './zeta.js';
 
     const logEl = document.getElementById('log');
     const canvas = document.getElementById('qtcanvas');
@@ -62,8 +64,23 @@
     function out(html, cls) { logEl.insertAdjacentHTML('beforeend', (cls ? '<span class="' + cls + '">' : '<span>') + html + '</span>\n'); logEl.scrollTop = logEl.scrollHeight; }
 
     // ---- cross-origin isolation self-check (SharedArrayBuffer prerequisite) ----
-    if (self.crossOriginIsolated) { isoEl.textContent = 'crossOriginIsolated: true ✓'; isoEl.className = 'ok'; }
-    else { isoEl.textContent = 'crossOriginIsolated: false ✗ (启动会失败，用 serve.mjs)'; isoEl.className = 'bad'; out('crossOriginIsolated=false → SharedArrayBuffer 不可用。请用 `node serve.mjs` 打开本页（带 COOP/COEP 头）。', 'e'); }
+    // COOP/COEP can ONLY come from HTTP response headers (no <meta> equivalent),
+    // so opening this file directly / through a preview that doesn't set them
+    // leaves crossOriginIsolated=false and ZetaOffice cannot boot. Not a bug in
+    // the harness — gate the Boot button and tell the user exactly what to do.
+    if (self.crossOriginIsolated) {
+      isoEl.textContent = 'crossOriginIsolated: true ✓'; isoEl.className = 'ok';
+    } else {
+      isoEl.textContent = 'crossOriginIsolated: false ✗'; isoEl.className = 'bad';
+      btnBoot.disabled = true;
+      spinner.innerHTML = '⚠️ 本页缺少 COOP/COEP 头，SharedArrayBuffer 不可用，无法启动 ZetaOffice。<br><br>'
+        + '请用本目录的服务器打开（已带正确响应头）：<br>'
+        + '<code style="background:#e5e7eb;padding:2px 6px;border-radius:4px">node serve.mjs</code>'
+        + ' &nbsp;→&nbsp; 浏览器开 <code style="background:#e5e7eb;padding:2px 6px;border-radius:4px">http://localhost:8777</code><br><br>'
+        + '<small>（直接打开文件 / 不带头的预览面板都会是这个状态——这是正常的，不是 harness 的 bug。'
+        + '产品集成时在 Electron 用 session.webRequest.onHeadersReceived 注入同样的头。）</small>';
+      out('crossOriginIsolated=false → SharedArrayBuffer 不可用，Boot 已禁用。请用 `node serve.mjs` 打开本页（带 COOP/COEP 头）。', 'e');
+    }
 
     // ---- IME diagnostics on the DOM side: composition events on the canvas. ----
     // Compare this stream with the worker's XKeyHandler stream. If composition
@@ -94,25 +111,23 @@
           ["importScripts('" + SOFFICE_BASE_URL + "soffice.js');"], { type: 'text/javascript' });
       }
 
-      // On the MAIN thread, Module.zetajs resolves to the thread PORT.
-      window.Module.zetajs && window.Module.zetajs.then(function (pThrPort) {
-        thrPort = pThrPort;
-        thrPort.onmessage = function (e) {
-          const d = e.data;
-          switch (d.cmd) {
-            case 'thr_running': out('worker running ✓'); break;
-            case 'ui_ready':
-              spinner.style.display = 'none'; canvas.style.visibility = 'visible';
-              btnSel.disabled = btnRed.disabled = btnPerf.disabled = false;
-              window.dispatchEvent(new Event('resize'));
-              out('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
-              break;
-            case 'log': out(d.msg); break;
-            case 'key': out('[UNO key ' + d.phase + '] code=' + d.code + ' char=' + JSON.stringify(d.ch), 'k'); break;
-            default: out('main: unknown cmd ' + d.cmd, 'e');
-          }
-        };
-      });
+      function onWorkerMessage(e) {
+        const d = e.data;
+        switch (d.cmd) {
+          case 'thr_running': out('worker running ✓'); break;
+          case 'ui_ready':
+            spinner.style.display = 'none'; canvas.style.visibility = 'visible';
+            btnSel.disabled = btnRed.disabled = btnPerf.disabled = false;
+            out('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
+            // resize last + guarded: a Qt relayout during init can throw, and it
+            // must not swallow the log line above or stall the message pump.
+            try { window.dispatchEvent(new Event('resize')); } catch (err) { out('resize warn: ' + err, 'e'); }
+            break;
+          case 'log': out(d.msg); break;
+          case 'key': out('[UNO key ' + d.phase + '] code=' + d.code + ' char=' + JSON.stringify(d.ch), 'k'); break;
+          default: out('main: unknown cmd ' + d.cmd, 'e');
+        }
+      }
 
       // Keep the embedded Qt window sized to the canvas.
       setInterval(function () { window.dispatchEvent(new Event('resize')); }, 1000);
@@ -120,6 +135,18 @@
       const s = document.createElement('script');
       s.src = SOFFICE_BASE_URL + 'soffice.js';
       s.onerror = () => out('soffice.js 加载失败 / failed to load — 检查网络与 CDN 路径', 'e');
+      // On the MAIN thread the thread port is Module.uno_main (NOT Module.zetajs,
+      // which only exists inside the office worker), and it is only available
+      // after soffice.js has run — so wire it in onload. (Verified against the
+      // allotropia/zetajs web-office example.)
+      s.onload = function () {
+        out('soffice.js loaded — 初始化 office 线程…');
+        Module.uno_main.then(function (pThrPort) {
+          thrPort = pThrPort;
+          thrPort.onmessage = onWorkerMessage;
+          out('thread port ready ✓');
+        });
+      };
       document.body.appendChild(s);
     };
   </script>
