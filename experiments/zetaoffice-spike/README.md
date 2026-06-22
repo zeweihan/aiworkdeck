@@ -114,10 +114,18 @@ cd experiments/zetaoffice-spike
 | **中文** | ❌ 显示为豆腐块 `口口`（ASCII/英文正常） | 见下，**两层、都可解** |
 
 **中文为什么是 `口口`——两层，别混为一谈**：
-1. **缺字体（首要）**：CDN 默认 LOWA 构建**不含 CJK 字体**，所以**连经 UNO 程序化插入的中文也是豆腐块**（"插入中文(无IME)"探针证实：ASCII 正常、中文 `口口`）。**可解**：自托管 LOWA 时把 Noto Sans CJK / 思源 打进虚拟 FS——LibreOffice+Noto 是完全标准的组合，本就在"自托管运行时进安装包"计划内。
-2. **IME 输入（次要）**：Qt5-for-WebAssembly 上游**几乎无 IME 支持**（[Qt 5.15 WASM 平台说明](https://doc.qt.io/archives/qt-5.15/qtwebassembly-platform-notes.html)明载"不支持虚拟键盘文本输入"），LOWA 用的就是 Qt5。**可解**：绕过 Qt 输入，**自建 JS 组合事件（compositionstart/update/end）→ UNO insertString 输入桥**（harness 已挂 DOM composition 日志作起点；我们控制 UNO 是独有优势）。
+1. **缺字体（首要）→ ✅ 已证实可解（2026-06-22 PoC 跑通）**：CDN 默认 LOWA 构建**不含 CJK 字体**（FS 实勘 `/instdir/share/fonts/truetype/` 有 Noto 拉丁/阿拉伯/希伯来…但无任何 CJK），所以连经 UNO 程序化插入的中文也是豆腐块（ASCII 正常）。**PoC：在 `Module.preRun`（LibreOffice fontconfig 启动扫描之前）把一个 CJK 字体写进 `/instdir/share/fonts/truetype/`，启动即被扫到——豆腐块 `口口` → 完整中文（简体「中文渲染测试」+ 繁体「中華人民共和國」全部正确渲染，截图为证）。** 产品做法：把 Noto Sans CJK/思源在**构建时**焙进自托管 LOWA bundle 的字体目录（比运行时注入更干净，fontconfig 原生扫到）。
+2. **IME 输入（次要）→ 仍是真正的硬骨头**：Qt5-for-WebAssembly 上游**几乎无 IME 支持**（[Qt 5.15 WASM 平台说明](https://doc.qt.io/archives/qt-5.15/qtwebassembly-platform-notes.html)明载"不支持虚拟键盘文本输入"），LOWA 用的就是 Qt5。**可解但需做**：绕过 Qt 输入，**自建 JS 组合事件（compositionstart/update/end）→ UNO insertString 输入桥**（harness 已挂 DOM composition 日志作起点；我们控制 UNO 是独有优势）。
 
-> **gate 结论**：不是"通过/失败"的二元，而是**"可行，但有两项已识别、已知可解的工作"**——①给自托管 LOWA 打包 CJK 字体（标准、低风险）；②自建 JS→UNO 中文输入桥（中等工作量，是迁移的真正硬骨头）。维护者据此权衡"这两项工作 vs 回退 native-headless"。
+> **gate 结论**：不是"通过/失败"的二元，而是**"可行，渲染关已 PoC 跑通，余一项工作"**——①CJK 字体渲染 ✅ **已证实**（构建时焙进 bundle）；②JS→UNO 中文输入桥（中等工作量，迁移真正的硬骨头，下一步原型）。
+
+### 复现字体 PoC
+
+字体文件 gitignore 不入仓。本机（macOS）一行拷一个覆盖简体的字体进本目录即可：
+```bash
+cp "/System/Library/Fonts/Hiragino Sans GB.ttc" experiments/zetaoffice-spike/cjk-test.ttc
+```
+然后 `node serve.mjs` → 真 Chrome:8777 → Boot → 点「插入中文(无IME)」。harness 会在 boot 前 fetch `./cjk-test.ttc` 并经 `preRun` 注入字体目录；没有该文件则优雅跳过（中文仍是豆腐块）。产品最终用 Noto Sans CJK（OFL）焙进 bundle，不依赖本机字体。
 
 ---
 

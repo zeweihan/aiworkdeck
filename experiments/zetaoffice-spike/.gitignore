@@ -9,3 +9,7 @@ node_modules/
 # Local test documents.
 *.docx
 *.odt
+
+# Local PoC CJK font (not committed; product bundles Noto OFL).
+cjk-test.*
+*.ttc
