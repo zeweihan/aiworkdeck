@@ -123,6 +123,17 @@
       imeCommit(e.data != null ? e.data : imeBridge.value);
     });
 
+    // FOCUS RACE FIX: clicking the canvas positions the LO cursor (Qt handles the
+    // click) but the canvas also STEALS keyboard focus — so the first keystroke
+    // after a click lands on the canvas (reported: typing "women", the leading
+    // "w" goes to the canvas and the bridge only sees "omen"). After Qt has
+    // processed the click (mouseup), hand keyboard focus back to the bridge so
+    // ALL typing — including the first char — goes through the IME bridge. The
+    // cursor position is set by the click coords, not by sustained focus, so it
+    // stays put. (Product overlay would do the same: pass clicks to Qt, keep the
+    // editable overlay focused for keys.)
+    canvas.addEventListener('mouseup', () => { if (!imeBridge.disabled) setTimeout(() => imeBridge.focus(), 0); });
+
     btnBoot.onclick = async function () {
       btnBoot.disabled = true;
       zlog('Loading LOWA from ' + SOFFICE_BASE_URL + ' …');
