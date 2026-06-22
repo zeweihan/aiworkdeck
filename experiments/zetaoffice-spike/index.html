@@ -61,7 +61,10 @@
     const btnRed = document.getElementById('btnRed');
     const btnPerf = document.getElementById('btnPerf');
 
-    function out(html, cls) { logEl.insertAdjacentHTML('beforeend', (cls ? '<span class="' + cls + '">' : '<span>') + html + '</span>\n'); logEl.scrollTop = logEl.scrollHeight; }
+    // NOTE: named zlog, NOT `out` — emscripten/soffice.js defines a global `out`
+    // (its stdout printer) that overwrites a global `out` after boot, which
+    // silently swallowed all post-boot log lines until this was found.
+    function zlog(html, cls) { logEl.insertAdjacentHTML('beforeend', (cls ? '<span class="' + cls + '">' : '<span>') + html + '</span>\n'); logEl.scrollTop = logEl.scrollHeight; }
 
     // ---- cross-origin isolation self-check (SharedArrayBuffer prerequisite) ----
     // COOP/COEP can ONLY come from HTTP response headers (no <meta> equivalent),
@@ -79,18 +82,18 @@
         + ' &nbsp;→&nbsp; 浏览器开 <code style="background:#e5e7eb;padding:2px 6px;border-radius:4px">http://localhost:8777</code><br><br>'
         + '<small>（直接打开文件 / 不带头的预览面板都会是这个状态——这是正常的，不是 harness 的 bug。'
         + '产品集成时在 Electron 用 session.webRequest.onHeadersReceived 注入同样的头。）</small>';
-      out('crossOriginIsolated=false → SharedArrayBuffer 不可用，Boot 已禁用。请用 `node serve.mjs` 打开本页（带 COOP/COEP 头）。', 'e');
+      zlog('crossOriginIsolated=false → SharedArrayBuffer 不可用，Boot 已禁用。请用 `node serve.mjs` 打开本页（带 COOP/COEP 头）。', 'e');
     }
 
     // ---- IME diagnostics on the DOM side: composition events on the canvas. ----
     // Compare this stream with the worker's XKeyHandler stream. If composition
     // fires here but XKeyHandler gets nothing meaningful, that pinpoints the gap.
     for (const ev of ['compositionstart', 'compositionupdate', 'compositionend']) {
-      canvas.addEventListener(ev, (e) => out('[DOM ' + ev + '] data=' + JSON.stringify(e.data), 'ime'));
+      canvas.addEventListener(ev, (e) => zlog('[DOM ' + ev + '] data=' + JSON.stringify(e.data), 'ime'));
     }
 
     let thrPort = null;
-    function send(cmd, extra) { if (thrPort) thrPort.postMessage(Object.assign({ cmd }, extra || {})); else out('worker 未就绪 / not ready', 'e'); }
+    function send(cmd, extra) { if (thrPort) thrPort.postMessage(Object.assign({ cmd }, extra || {})); else zlog('worker 未就绪 / not ready', 'e'); }
 
     btnSel.onclick = () => send('selection');
     btnRed.onclick = () => send('redline');
@@ -98,7 +101,7 @@
 
     btnBoot.onclick = function () {
       btnBoot.disabled = true;
-      out('Loading LOWA from ' + SOFFICE_BASE_URL + ' …');
+      zlog('Loading LOWA from ' + SOFFICE_BASE_URL + ' …');
 
       // The two globals `canvas` and `Module` must exist before soffice.js loads.
       window.Module = {
@@ -114,18 +117,18 @@
       function onWorkerMessage(e) {
         const d = e.data;
         switch (d.cmd) {
-          case 'thr_running': out('worker running ✓'); break;
+          case 'thr_running': zlog('worker running ✓'); break;
           case 'ui_ready':
             spinner.style.display = 'none'; canvas.style.visibility = 'visible';
             btnSel.disabled = btnRed.disabled = btnPerf.disabled = false;
-            out('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
+            zlog('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
             // resize last + guarded: a Qt relayout during init can throw, and it
             // must not swallow the log line above or stall the message pump.
-            try { window.dispatchEvent(new Event('resize')); } catch (err) { out('resize warn: ' + err, 'e'); }
+            try { window.dispatchEvent(new Event('resize')); } catch (err) { zlog('resize warn: ' + err, 'e'); }
             break;
-          case 'log': out(d.msg); break;
-          case 'key': out('[UNO key ' + d.phase + '] code=' + d.code + ' char=' + JSON.stringify(d.ch), 'k'); break;
-          default: out('main: unknown cmd ' + d.cmd, 'e');
+          case 'log': zlog(d.msg); break;
+          case 'key': zlog('[UNO key ' + d.phase + '] code=' + d.code + ' char=' + JSON.stringify(d.ch), 'k'); break;
+          default: zlog('main: unknown cmd ' + d.cmd, 'e');
         }
       }
 
@@ -134,18 +137,18 @@
 
       const s = document.createElement('script');
       s.src = SOFFICE_BASE_URL + 'soffice.js';
-      s.onerror = () => out('soffice.js 加载失败 / failed to load — 检查网络与 CDN 路径', 'e');
+      s.onerror = () => zlog('soffice.js 加载失败 / failed to load — 检查网络与 CDN 路径', 'e');
       // On the MAIN thread the thread port is Module.uno_main (NOT Module.zetajs,
       // which only exists inside the office worker), and it is only available
       // after soffice.js has run — so wire it in onload. (Verified against the
       // allotropia/zetajs web-office example.)
       s.onload = function () {
-        out('soffice.js loaded — 初始化 office 线程…');
+        zlog('soffice.js loaded — 初始化 office 线程…');
         Module.uno_main.then(function (pThrPort) {
           thrPort = pThrPort;
           thrPort.onmessage = onWorkerMessage;
-          out('thread port ready ✓');
-        });
+          zlog('thread port ready ✓');
+        }, function (err) { zlog('uno_main rejected: ' + err, 'e'); });
       };
       document.body.appendChild(s);
     };
