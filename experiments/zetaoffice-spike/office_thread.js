@@ -126,15 +126,23 @@ function testPerf(pages) {
 function testInsertText(text) {
   try {
     const t = text || '中文渲染测试 中華人民共和國 ABC 123';
+    const xText = xModel.getText();
     let vc = null;
     try { vc = ctrl.getViewCursor(); } catch {}
-    if (vc && typeof vc.setString === 'function') {
-      vc.setString(t);
-      log('inserttext: 经 UNO ViewCursor 插入「' + t + '」(无需 IME)。看 canvas 是否正确显示中文。');
+    if (vc) {
+      // NOT setString(): that REPLACES the cursor's range and leaves the inserted
+      // text SELECTED, so the next insert overwrites it (reported bug). Use
+      // insertString(range, str, bAbsorb=false): inserts at the cursor and leaves
+      // the cursor collapsed AFTER the text, so consecutive inserts append and
+      // nothing stays selected. collapseToEnd() first clears any prior selection
+      // (e.g. from a click-drag) so we append rather than overwrite.
+      try { vc.collapseToEnd(); } catch (e) {}
+      xText.insertString(vc, t, false);
+      try { vc.collapseToEnd(); } catch (e) {}
+      log('inserttext: 经 UNO insertString 在光标处插入「' + t + '」(追加、不选中)。');
     } else {
-      const xText = xModel.getText();
       xText.insertString(xText.getEnd(), '\n' + t, false);
-      log('inserttext: 经 UNO XText.insertString 追加「' + t + '」(无 ViewCursor 回退)。看 canvas。');
+      log('inserttext: 经 UNO XText.insertString 追加「' + t + '」(无 ViewCursor 回退)。');
     }
   } catch (e) { log('inserttext ERROR: ' + errStr(e)); }
 }
