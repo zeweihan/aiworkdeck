@@ -115,9 +115,9 @@ cd experiments/zetaoffice-spike
 
 **中文为什么是 `口口`——两层，别混为一谈**：
 1. **缺字体（首要）→ ✅ 已证实可解（2026-06-22 PoC 跑通）**：CDN 默认 LOWA 构建**不含 CJK 字体**（FS 实勘 `/instdir/share/fonts/truetype/` 有 Noto 拉丁/阿拉伯/希伯来…但无任何 CJK），所以连经 UNO 程序化插入的中文也是豆腐块（ASCII 正常）。**PoC：在 `Module.preRun`（LibreOffice fontconfig 启动扫描之前）把一个 CJK 字体写进 `/instdir/share/fonts/truetype/`，启动即被扫到——豆腐块 `口口` → 完整中文（简体「中文渲染测试」+ 繁体「中華人民共和國」全部正确渲染，截图为证）。** 产品做法：把 Noto Sans CJK/思源在**构建时**焙进自托管 LOWA bundle 的字体目录（比运行时注入更干净，fontconfig 原生扫到）。
-2. **IME 输入（次要）→ 仍是真正的硬骨头**：Qt5-for-WebAssembly 上游**几乎无 IME 支持**（[Qt 5.15 WASM 平台说明](https://doc.qt.io/archives/qt-5.15/qtwebassembly-platform-notes.html)明载"不支持虚拟键盘文本输入"），LOWA 用的就是 Qt5。**可解但需做**：绕过 Qt 输入，**自建 JS 组合事件（compositionstart/update/end）→ UNO insertString 输入桥**（harness 已挂 DOM composition 日志作起点；我们控制 UNO 是独有优势）。
+2. **IME 输入（次要）→ ✅ 桥接 PoC 已跑通**：实地确认 canvas 上 Qt5-WASM **不创建任何隐藏输入元素**（Qt6 才有），且 canvas 的 `onkeydown="event.preventDefault()"` 会**阻止浏览器启动 IME 合成** → 候选框根本不弹。[Qt 5.15 WASM 平台说明](https://doc.qt.io/archives/qt-5.15/qtwebassembly-platform-notes.html)明载"不支持虚拟键盘文本输入"。**解法（已实现 PoC）**：放一个真正的 `<input>` 承接系统 IME（普通 input 里候选框正常工作），`compositionend` 拿到上屏文本 → 经 worker UNO `getViewCursor().setString()` 插到 LO 光标处，**完全绕过 Qt 输入**；ASCII（无合成）走 `input` 事件同样路径，带去重（compositionend 后的尾随 input 跳过）。**验证**：一次合成周期＝恰好一次插入（截图证「合同审查」「输入法桥接验证」落入文档并正确渲染）。**产品做法**：把这个承接 input 做成**覆盖在 canvas 光标处的透明可编辑层**（跟随 LO 光标、合成中预览），用户感知就是"直接在文档里打中文"；本 PoC 用工具栏可见输入框先证机制。
 
-> **gate 结论**：不是"通过/失败"的二元，而是**"可行，渲染关已 PoC 跑通，余一项工作"**——①CJK 字体渲染 ✅ **已证实**（构建时焙进 bundle）；②JS→UNO 中文输入桥（中等工作量，迁移真正的硬骨头，下一步原型）。
+> **gate 结论**：**WASM 路线四关全部 PoC 跑通**——canvas 渲染✓、UNO 选区✓、模型原生 redline✓、**CJK 渲染✓（注入字体）**、**中文输入✓（IME 桥）**；唯一遗留＝性能（50 页批量生成 26.5s，需测真实编辑/加载场景）。迁移从"高风险未验证"降级为"机制已验证，剩工程化（字体焙进 bundle + IME 桥做成透明覆盖层 + 后端工具契约改名）"。
 
 ### 复现字体 PoC
 

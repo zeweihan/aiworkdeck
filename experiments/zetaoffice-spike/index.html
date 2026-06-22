@@ -30,7 +30,9 @@
     <button id="btnRed" disabled>测修订 redline</button>
     <button id="btnPerf" disabled>测50页性能 perf</button>
     <button id="btnCjk" disabled>插入中文(无IME)</button>
-    <span style="opacity:.8">中文 IME：先点「插入中文(无IME)」验渲染，再在文档里用输入法打字测输入</span>
+    <input id="imeBridge" disabled placeholder="① 在此用输入法打中文 → 自动插入文档（IME 桥 PoC）"
+      style="font:inherit;padding:4px 8px;border:0;border-radius:4px;width:280px" autocomplete="off" />
+    <span style="opacity:.8">canvas 上 Qt5-WASM 无 IME；这个输入框承接 IME 合成→经 UNO 插入光标处</span>
   </div>
   <div id="wrap">
     <div id="canvas-col" onselectstart="event.preventDefault()">
@@ -62,6 +64,7 @@
     const btnRed = document.getElementById('btnRed');
     const btnPerf = document.getElementById('btnPerf');
     const btnCjk = document.getElementById('btnCjk');
+    const imeBridge = document.getElementById('imeBridge');
 
     // NOTE: named zlog, NOT `out` — emscripten/soffice.js defines a global `out`
     // (its stdout printer) that overwrites a global `out` after boot, which
@@ -101,6 +104,24 @@
     btnRed.onclick = () => send('redline');
     btnPerf.onclick = () => send('perf', { pages: 50 });
     btnCjk.onclick = () => send('inserttext');
+
+    // ---- IME input bridge PoC (#39) ----------------------------------------
+    // Qt5-WASM gives the canvas no usable IME (no candidate box). A normal
+    // <input> DOES run the system IME natively, so we let it host composition,
+    // grab the committed text on compositionend, and insert it at the LO view
+    // cursor via UNO — bypassing Qt input entirely. ASCII (no composition)
+    // routes the same way via the input event. (Product: overlay a transparent
+    // editable on the canvas anchored at the cursor; here a visible field proves
+    // the mechanism.) dedup: the input event that trails compositionend is skipped.
+    let imeComposing = false, imeSkipNextInput = false;
+    function imeCommit(text) { if (text) { send('inserttext', { text: text }); zlog('IME 桥 → 插入「' + text + '」', 'ime'); } imeBridge.value = ''; }
+    imeBridge.addEventListener('compositionstart', () => { imeComposing = true; });
+    imeBridge.addEventListener('compositionend', (e) => { imeComposing = false; imeSkipNextInput = true; imeCommit(e.data); });
+    imeBridge.addEventListener('input', (e) => {
+      if (imeComposing) return;                       // mid-composition: wait for end
+      if (imeSkipNextInput) { imeSkipNextInput = false; return; } // trailing event after compositionend
+      imeCommit(e.data != null ? e.data : imeBridge.value);
+    });
 
     btnBoot.onclick = async function () {
       btnBoot.disabled = true;
@@ -151,6 +172,7 @@
           case 'ui_ready':
             spinner.style.display = 'none'; canvas.style.visibility = 'visible';
             btnSel.disabled = btnRed.disabled = btnPerf.disabled = btnCjk.disabled = false;
+            imeBridge.disabled = false; imeBridge.focus();
             zlog('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
             // resize last + guarded: a Qt relayout during init can throw, and it
             // must not swallow the log line above or stall the message pump.
