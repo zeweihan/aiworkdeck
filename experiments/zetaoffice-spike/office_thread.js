@@ -115,6 +115,30 @@ function testPerf(pages) {
   } catch (e) { log('perf ERROR: ' + errStr(e)); }
 }
 
+// ---- probe 5: insert CJK via UNO (NO IME) --------------------------------
+// Separates two questions that "can't type Chinese" conflates:
+//   (a) can LibreOffice WASM store + RENDER Chinese?  (this probe)
+//   (b) can you TYPE Chinese via the system IME?      (Qt5-WASM input path)
+// Qt-for-WebAssembly (Qt5) has little/no IME support upstream, so (b) likely
+// fails. If THIS probe makes 中文 appear on the canvas, then the migration's
+// IME answer is a custom JS-composition -> UNO-insert bridge (we control UNO),
+// not Qt's input. If Chinese shows as boxes/tofu, it's a deeper font problem.
+function testInsertText(text) {
+  try {
+    const t = text || '中文渲染测试 中華人民共和國 ABC 123';
+    let vc = null;
+    try { vc = ctrl.getViewCursor(); } catch {}
+    if (vc && typeof vc.setString === 'function') {
+      vc.setString(t);
+      log('inserttext: 经 UNO ViewCursor 插入「' + t + '」(无需 IME)。看 canvas 是否正确显示中文。');
+    } else {
+      const xText = xModel.getText();
+      xText.insertString(xText.getEnd(), '\n' + t, false);
+      log('inserttext: 经 UNO XText.insertString 追加「' + t + '」(无 ViewCursor 回退)。看 canvas。');
+    }
+  } catch (e) { log('inserttext ERROR: ' + errStr(e)); }
+}
+
 // ---- message loop --------------------------------------------------------
 Module.zetajs.then(function (pZetajs) {
   zetajs = pZetajs;
@@ -124,6 +148,7 @@ Module.zetajs.then(function (pZetajs) {
       case 'selection': testSelection(); break;
       case 'redline': testRedline(); break;
       case 'perf': testPerf(Number(e.data.pages) || 50); break;
+      case 'inserttext': testInsertText(e.data.text); break;
       default: log('unknown cmd: ' + e.data.cmd);
     }
   };

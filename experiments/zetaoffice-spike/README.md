@@ -101,9 +101,23 @@ cd experiments/zetaoffice-spike
 
 **📌 隔离**：全在 `feat/libreoffice-migration` 分支，master 继续发 WPS 稳定版，互不影响。
 
-> **下一步 gate**：在真机（macOS + Windows）/ Electron 渲染进程里跑本 harness（Electron 用
-> `session.webRequest.onHeadersReceived` 注 COOP/COEP），逐项确认 canvas 渲染、中文 IME、
-> selection/redline/perf 往返。过则迁移继续并自托管 LOWA 进安装包；不过则回退评估 native-headless。
+## 真机 verdict（2026-06-22，维护者 mac + serve.mjs / 真 Chrome）
+
+四关在真机跑出结论，比"能不能用"更精确：
+
+| 关 | 结果 | 性质 / 可解性 |
+|---|---|---|
+| canvas 渲染 | ✅ LibreOffice Writer 完整 UI + 文档都渲染出来（真机不黑屏） | 浏览器路径成立 |
+| selection（UNO） | ✅ `getSelection()` 返回当前选区 | RFC 编辑器无关契约成立 |
+| **redline（模型原生搜索）** | ✅ `RecordChanges=true` + `createSearchDescriptor`/`findFirst`·`findNext` 成功留修订痕 | **RFC v2 核心论点（弃 offset、用 XSearchable）功能性验证通过** |
+| 50 页性能 | ⚠️ UNO 批量插入 50 页 ≈ **26.5s** | 慢，但"批量生成"≠真实编辑；加载既有 docx 另测 |
+| **中文** | ❌ 显示为豆腐块 `口口`（ASCII/英文正常） | 见下，**两层、都可解** |
+
+**中文为什么是 `口口`——两层，别混为一谈**：
+1. **缺字体（首要）**：CDN 默认 LOWA 构建**不含 CJK 字体**，所以**连经 UNO 程序化插入的中文也是豆腐块**（"插入中文(无IME)"探针证实：ASCII 正常、中文 `口口`）。**可解**：自托管 LOWA 时把 Noto Sans CJK / 思源 打进虚拟 FS——LibreOffice+Noto 是完全标准的组合，本就在"自托管运行时进安装包"计划内。
+2. **IME 输入（次要）**：Qt5-for-WebAssembly 上游**几乎无 IME 支持**（[Qt 5.15 WASM 平台说明](https://doc.qt.io/archives/qt-5.15/qtwebassembly-platform-notes.html)明载"不支持虚拟键盘文本输入"），LOWA 用的就是 Qt5。**可解**：绕过 Qt 输入，**自建 JS 组合事件（compositionstart/update/end）→ UNO insertString 输入桥**（harness 已挂 DOM composition 日志作起点；我们控制 UNO 是独有优势）。
+
+> **gate 结论**：不是"通过/失败"的二元，而是**"可行，但有两项已识别、已知可解的工作"**——①给自托管 LOWA 打包 CJK 字体（标准、低风险）；②自建 JS→UNO 中文输入桥（中等工作量，是迁移的真正硬骨头）。维护者据此权衡"这两项工作 vs 回退 native-headless"。
 
 ---
 

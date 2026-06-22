@@ -29,7 +29,8 @@
     <button id="btnSel" disabled>测选区 selection</button>
     <button id="btnRed" disabled>测修订 redline</button>
     <button id="btnPerf" disabled>测50页性能 perf</button>
-    <span style="opacity:.8">中文 IME：boot 后直接在文档里用输入法打字，看右侧日志</span>
+    <button id="btnCjk" disabled>插入中文(无IME)</button>
+    <span style="opacity:.8">中文 IME：先点「插入中文(无IME)」验渲染，再在文档里用输入法打字测输入</span>
   </div>
   <div id="wrap">
     <div id="canvas-col" onselectstart="event.preventDefault()">
@@ -60,6 +61,7 @@
     const btnSel = document.getElementById('btnSel');
     const btnRed = document.getElementById('btnRed');
     const btnPerf = document.getElementById('btnPerf');
+    const btnCjk = document.getElementById('btnCjk');
 
     // NOTE: named zlog, NOT `out` — emscripten/soffice.js defines a global `out`
     // (its stdout printer) that overwrites a global `out` after boot, which
@@ -98,6 +100,7 @@
     btnSel.onclick = () => send('selection');
     btnRed.onclick = () => send('redline');
     btnPerf.onclick = () => send('perf', { pages: 50 });
+    btnCjk.onclick = () => send('inserttext');
 
     btnBoot.onclick = function () {
       btnBoot.disabled = true;
@@ -120,7 +123,7 @@
           case 'thr_running': zlog('worker running ✓'); break;
           case 'ui_ready':
             spinner.style.display = 'none'; canvas.style.visibility = 'visible';
-            btnSel.disabled = btnRed.disabled = btnPerf.disabled = false;
+            btnSel.disabled = btnRed.disabled = btnPerf.disabled = btnCjk.disabled = false;
             zlog('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
             // resize last + guarded: a Qt relayout during init can throw, and it
             // must not swallow the log line above or stall the message pump.
