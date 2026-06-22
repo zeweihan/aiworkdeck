@@ -37,11 +37,20 @@ function bootDoc() {
   ctrl = xModel.getCurrentController();
   try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch {}
 
+  // Seed REAL paragraphs (PARAGRAPH_BREAK), not '\n' line breaks within one
+  // paragraph — so paragraph-indexed commands (get_paragraph/modify_paragraph/
+  // get_outline) are meaningfully testable.
   const xText = xModel.getText();
   const cur = xText.createTextCursor();
-  cur.setString('AI Workdeck × LibreOffice WASM 原型 / prototype.\n'
-    + '请在此用系统输入法输入中文，观察候选与上屏 / Type Chinese here with your IME.\n'
-    + 'Search target: LibreOffice — used by the redline probe.\n');
+  const lines = [
+    'AI Workdeck × LibreOffice WASM 原型 / prototype.',
+    '请在此用系统输入法输入中文，观察候选与上屏 / Type Chinese here with your IME.',
+    'Search target: LibreOffice — used by the redline probe.'
+  ];
+  for (let i = 0; i < lines.length; i++) {
+    xText.insertString(cur, lines[i], false);
+    if (i < lines.length - 1) xText.insertControlCharacter(cur, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+  }
 
   installKeyHandler();
   post('ui_ready');
@@ -211,6 +220,101 @@ const EXEC = {
     while (hit !== null && matches.length < 500) { matches.push({ text: hit.getString() }); hit = xModel.findNext(hit, sd); }
     return { success: true, count: matches.length, matches: matches };
   },
+  // [verified-extend] replace the Nth (0-based) match under RecordChanges.
+  replace_nth_match(p) {
+    xModel.setPropertyValue('RecordChanges', true);
+    const sd = xModel.createSearchDescriptor();
+    sd.setSearchString(String(p.findText || ''));
+    const idx = Number(p.matchIndex) || 0;
+    let hit = xModel.findFirst(sd), i = 0;
+    while (hit !== null) {
+      if (i === idx) { hit.setString(String(p.replaceText || '')); return { success: true, replacedIndex: idx }; }
+      hit = xModel.findNext(hit, sd); i++;
+    }
+    return { success: false, message: 'match index out of range: ' + idx + ' (found ' + i + ')' };
+  },
+  // [verified-extend] delete the Nth match (replace with empty) under RecordChanges.
+  delete_match(p) {
+    xModel.setPropertyValue('RecordChanges', true);
+    const sd = xModel.createSearchDescriptor();
+    sd.setSearchString(String(p.findText || ''));
+    const idx = Number(p.matchIndex) || 0;
+    let hit = xModel.findFirst(sd), i = 0;
+    while (hit !== null) {
+      if (i === idx) { hit.setString(''); return { success: true, deletedIndex: idx }; }
+      hit = xModel.findNext(hit, sd); i++;
+    }
+    return { success: false, message: 'match index out of range: ' + idx };
+  },
+  // [verified-extend] delete all/first occurrences under RecordChanges.
+  delete_text(p) {
+    xModel.setPropertyValue('RecordChanges', true);
+    const sd = xModel.createSearchDescriptor();
+    sd.setSearchString(String(p.text || ''));
+    const all = p.deleteAll !== false;
+    let hit = xModel.findFirst(sd), n = 0;
+    while (hit !== null) { hit.setString(''); n++; if (!all) break; hit = xModel.findNext(hit, sd); }
+    return { success: true, deleted: n };
+  },
+  // [verified-extend] read the Nth (0-based) paragraph's text.
+  get_paragraph(p) {
+    const idx = Number(p.index) || 0;
+    const en = xModel.getText().createEnumeration();
+    let i = 0;
+    while (en.hasMoreElements()) {
+      const el = en.nextElement();
+      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
+        if (i === idx) return { success: true, index: idx, text: el.getString() };
+        i++;
+      }
+    }
+    return { success: false, message: 'paragraph index out of range: ' + idx + ' (count ' + i + ')' };
+  },
+  // [verified-extend] modify the Nth paragraph's text under RecordChanges.
+  modify_paragraph(p) {
+    xModel.setPropertyValue('RecordChanges', true);
+    const idx = Number(p.index) || 0;
+    const en = xModel.getText().createEnumeration();
+    let i = 0;
+    while (en.hasMoreElements()) {
+      const el = en.nextElement();
+      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
+        if (i === idx) { el.setString(String(p.newText || '')); return { success: true, index: idx }; }
+        i++;
+      }
+    }
+    return { success: false, message: 'paragraph index out of range: ' + idx };
+  },
+  // [verified-extend] outline = paragraphs carrying a heading style / outline level.
+  get_outline() {
+    const en = xModel.getText().createEnumeration();
+    const outline = []; let i = 0;
+    while (en.hasMoreElements()) {
+      const el = en.nextElement();
+      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
+        let lvl = 0, style = '';
+        try { style = el.getPropertyValue('ParaStyleName') || ''; } catch (e) {}
+        try { lvl = el.getPropertyValue('OutlineLevel') || 0; } catch (e) {}
+        if (lvl > 0 || /^(Heading|标题)/.test(style)) outline.push({ paragraphIndex: i, level: lvl || 1, style: style, text: el.getString() });
+        i++;
+      }
+    }
+    return { success: true, count: outline.length, outline: outline };
+  },
+  // [verified-extend] move the view cursor to doc start/end (line/para/bookmark nav = TODO anchor).
+  goto(p) {
+    const vc = ctrl.getViewCursor();
+    const type = String(p.type || '');
+    if (type === 'start') vc.gotoStart(false);
+    else if (type === 'end') vc.gotoEnd(false);
+    else return { success: false, message: 'goto type not supported yet: ' + type + ' (anchor-based nav TODO, §0.2)' };
+    return { success: true, type: type };
+  },
+  // [stub:§0.2] integer-offset selection is intentionally NOT implemented — RFC §0.2
+  // requires anchor-based selection. These pair with anchor-returning
+  // find_text_locations in the executor rewrite; do not reintroduce char offsets.
+  set_selection() { return { success: false, message: 'set_selection (integer offsets) intentionally unimplemented — §0.2 requires anchors' }; },
+  replace_at_position() { return { success: false, message: 'replace_at_position (integer offsets) intentionally unimplemented — §0.2 requires anchors' }; },
 };
 
 function execCommand(reqId, action, params) {
