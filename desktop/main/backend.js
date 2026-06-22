@@ -28,18 +28,6 @@ function isPortOpen(port, host = '127.0.0.1', timeoutMs = 250) {
   })
 }
 
-async function waitPort(port, timeoutMs = 12000) {
-  const start = Date.now()
-  while (Date.now() - start < timeoutMs) {
-    // eslint-disable-next-line no-await-in-loop
-    const ok = await isPortOpen(port)
-    if (ok) return true
-    // eslint-disable-next-line no-await-in-loop
-    await sleep(200)
-  }
-  return false
-}
-
 class BackendManager {
   constructor(options) {
     const opts = options || {}
@@ -126,26 +114,99 @@ class BackendManager {
       stdio = ['ignore', 'pipe', 'pipe']
     }
 
-    this.proc = spawn(this.javaCmd, ['-jar', this.jarPath], {
-      cwd: this.backendDir,
-      env,
-      stdio
-    })
-    if (logStream) {
-      this.proc.stdout.pipe(logStream)
-      this.proc.stderr.pipe(logStream)
+    // 候选 java：优先捆绑 JRE；仅当其启动失败时，才（惰性）解析系统 JDK 作为回退。
+    // 普通用户捆绑 JRE 正常启动 → 端口先就绪 → 回退分支永不进入（happy path 零开销、CI 冒烟不受影响）。
+    // 回退专为捆绑 JRE 启动即崩的机器（如 SIP 关闭 + amfi 的 macOS，JDK-8326663 SIGBUS）。
+    const candidates = [this.javaCmd]
+
+    for (let i = 0; i < candidates.length; i++) {
+      const javaCmd = candidates[i]
+      this.proc = spawn(javaCmd, ['-jar', this.jarPath], {
+        cwd: this.backendDir,
+        env,
+        stdio
+      })
+      if (logStream) {
+        this.proc.stdout.pipe(logStream)
+        this.proc.stderr.pipe(logStream)
+      }
+
+      // 等"端口就绪"或"进程提前退出（崩溃）"，谁先到算谁
+      // eslint-disable-next-line no-await-in-loop
+      const result = await this.waitStartOrExit(this.proc, this.startTimeoutMs)
+      if (result === 'started') {
+        return { ok: true, reused: false, javaCmd }
+      }
+      if (result === 'timeout') {
+        // 进程还活着但端口没起：杀掉再试下一个候选
+        try {
+          // eslint-disable-next-line no-await-in-loop
+          await this.stop()
+        } catch (e) {
+          // ignore
+        }
+      } else {
+        // 'exited'：进程已崩溃退出，丢引用即可，继续尝试下一个候选
+        this.proc = null
+      }
+
+      // 捆绑 JRE（首个候选）启动失败后，才解析系统 JDK 追加为回退候选
+      if (this.packaged && i === 0) {
+        for (const c of this.systemJavaFallbacks()) {
+          if (!candidates.includes(c)) candidates.push(c)
+        }
+      }
     }
 
-    const ok = await waitPort(this.port, this.startTimeoutMs)
-    if (!ok) {
-      try {
-        await this.stop()
-      } catch (e) {
-        // ignore
+    throw new Error(`backend failed to start on port ${this.port}`)
+  }
+
+  // 等后端端口就绪或进程退出，返回 'started' | 'exited' | 'timeout'
+  waitStartOrExit(proc, timeoutMs) {
+    return new Promise((resolve) => {
+      let settled = false
+      const finish = (v) => {
+        if (settled) return
+        settled = true
+        resolve(v)
       }
-      throw new Error(`backend failed to start on port ${this.port}`)
+      proc.once('exit', () => finish('exited'))
+      proc.once('error', () => finish('exited'))
+      const start = Date.now()
+      const poll = async () => {
+        while (!settled && Date.now() - start < timeoutMs) {
+          // eslint-disable-next-line no-await-in-loop
+          if (await isPortOpen(this.port)) return finish('started')
+          // eslint-disable-next-line no-await-in-loop
+          await sleep(200)
+        }
+        finish('timeout')
+      }
+      poll()
+    })
+  }
+
+  // 系统 JDK 回退候选（仅打包态、仅当捆绑 JRE 启动失败时才会被用到）
+  systemJavaFallbacks() {
+    const out = []
+    const exe = process.platform === 'win32' ? 'java.exe' : 'java'
+    if (process.platform === 'darwin') {
+      // 经 java_home 解析本机 JDK（避开 /usr/bin/java 安装存根弹窗）
+      const { execFileSync } = require('child_process')
+      for (const args of [['-v', '21'], []]) {
+        try {
+          const home = execFileSync('/usr/libexec/java_home', args, { encoding: 'utf8' }).trim()
+          if (home) out.push(path.join(home, 'bin', exe))
+        } catch (e) {
+          // 该版本/任意 JDK 不存在，忽略
+        }
+      }
+    } else {
+      // Windows/Linux：优先 JAVA_HOME，再退 PATH
+      if (process.env.JAVA_HOME) out.push(path.join(process.env.JAVA_HOME, 'bin', exe))
+      out.push(exe)
     }
-    return { ok: true, reused: false }
+    return out.filter((c, i) => out.indexOf(c) === i)
   }
 
   async stop() {
