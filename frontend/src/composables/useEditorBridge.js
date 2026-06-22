@@ -36,15 +36,20 @@ import { useLibreOfficeBridge } from './useLibreOfficeBridge.js'
 export const EDITOR_WPS = 'wps'
 export const EDITOR_LIBREOFFICE = 'libreoffice'
 
-export function useEditorBridge(initialEditor = EDITOR_WPS) {
+export function useEditorBridge(initialEditor = EDITOR_WPS, opts = {}) {
   const activeEditor = ref(initialEditor)
   const wps = useWpsBridge()
-  const libre = useLibreOfficeBridge()
+  // The LibreOffice executor is pluggable. Default = the in-context bridge (worker
+  // port via connectLibreOffice). The webview architecture passes the host-side
+  // relay executor instead:
+  //   useEditorBridge(EDITOR_WPS, { libreExecutor: createWebviewEditorExecutor(webviewEl) })
+  // — see useZetaOfficeWebview.js. Both expose executeCommand(action, params).
+  const libre = opts.libreExecutor || useLibreOfficeBridge()
 
-  // Wire the embedded ZetaOffice worker thread port (Module.uno_main result).
-  // Called once when the ZetaOffice editor finishes booting; safe to leave
-  // uncalled while the active editor stays WPS.
-  const connectLibreOffice = (port) => libre.connect(port)
+  // Wire the embedded ZetaOffice worker thread port (Module.uno_main result) —
+  // only meaningful for the in-context executor; the webview relay executor owns
+  // the worker on the other side of the boundary, so this is a no-op for it.
+  const connectLibreOffice = (port) => (typeof libre.connect === 'function' ? libre.connect(port) : undefined)
 
   // Editor-agnostic dispatch. `ctx` carries editor-specific handles the seam
   // normalizes away — currently only WPS's live document instance, which the
@@ -63,6 +68,6 @@ export function useEditorBridge(initialEditor = EDITOR_WPS) {
     setEditor,
     executeCommand,
     connectLibreOffice,
-    isLibreOfficeConnected: libre.isConnected,
+    isLibreOfficeConnected: libre.isConnected || (() => true),
   }
 }
