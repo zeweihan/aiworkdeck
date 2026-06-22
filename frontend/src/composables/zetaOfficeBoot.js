@@ -117,7 +117,15 @@ export function bootZetaOffice(options = {}) {
     function onMessage(e) {
       const d = (e && e.data) || {}
       if (d.cmd === 'log') log(d.msg)
-      else if (d.cmd === 'ui_ready') { log('UI ready'); if (onReady) onReady() }
+      else if (d.cmd === 'ui_ready') {
+        // Reveal the canvas (CSS keeps it hidden during boot to avoid showing a
+        // blank/garbage surface) and kick one repaint. The spike's page did this
+        // in its own ui_ready handler; the boot-module extraction (#46) must own
+        // it so every consumer gets a visible, painted canvas.
+        try { canvas.style.visibility = 'visible'; globalThis.dispatchEvent(new Event('resize')) } catch (err) { /* ignore */ }
+        log('UI ready')
+        if (onReady) onReady()
+      }
       if (onWorkerMessage) onWorkerMessage(d)
     }
 
