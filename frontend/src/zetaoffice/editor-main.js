@@ -55,6 +55,56 @@ function pickTransport() {
 // Runtime-configurable asset locations (query string), so the same bundle works
 // against the CDN LOWA in dev and a self-hosted bundle in the packaged app.
 const q = new URLSearchParams(location.search)
+const VERIFY = q.get('verify') === '1'
+
+// Standalone verification panel (?verify=1): a few buttons + an IME field that
+// drive the booted executor DIRECTLY (no host), so the editor can be exercised
+// inside the dedicated verification window (desktop/main/zetaoffice-verify.js)
+// of a packaged build. In normal (webview) mode the panel stays hidden and the
+// endpoint just serves the host over the transport.
+function vlog(m) {
+  const el = document.getElementById('vlog')
+  if (!el) return
+  el.classList.add('on')
+  el.textContent += m + '\n'
+  el.scrollTop = el.scrollHeight
+}
+
+function wireVerifyPanel(executor) {
+  const panel = document.getElementById('verify')
+  if (panel) panel.classList.add('on')
+  const status = document.getElementById('vstatus')
+  const ime = document.getElementById('vime')
+  const bIns = document.getElementById('vinsert')
+  const bRep = document.getElementById('vreplace')
+  const bSel = document.getElementById('vsel')
+  if (status) status.textContent = '就绪 / ready ✓'
+  for (const b of [ime, bIns, bRep, bSel]) if (b) b.disabled = false
+
+  const run = async (label, action, params) => {
+    vlog('▶ ' + label + ' …')
+    try { vlog('  ← ' + JSON.stringify(await executor.executeCommand(action, params))) }
+    catch (e) { vlog('  ✗ ' + (e && e.message ? e.message : e)) }
+  }
+  if (bIns) bIns.onclick = () => run('插入示例', 'insert_at_cursor',
+    { text: '本协议由甲方与乙方于本日签订；协议自双方签署之日起生效。' })
+  if (bRep) bRep.onclick = () => run('查找替换 协议→合同 (redline)', 'find_replace',
+    { findText: '协议', replaceText: '合同', replaceAll: true })
+  if (bSel) bSel.onclick = () => run('读选区', 'get_selection', {})
+
+  // IME: commit composed/typed text into the document at the cursor.
+  if (ime) {
+    let composing = false, skipNext = false
+    const commit = (t) => { if (t) run('IME 插入「' + t + '」', 'insert_at_cursor', { text: t }); ime.value = '' }
+    ime.addEventListener('compositionstart', () => { composing = true })
+    ime.addEventListener('compositionend', (e) => { composing = false; skipNext = true; commit(e.data) })
+    ime.addEventListener('input', (e) => {
+      if (composing) return
+      if (skipNext) { skipNext = false; return }
+      commit(e.data != null ? e.data : ime.value)
+    })
+  }
+}
 
 startEditorEndpoint({
   canvas: document.getElementById('qtcanvas'),
@@ -62,10 +112,14 @@ startEditorEndpoint({
   sofficeBaseUrl: q.get('lowa') || 'https://cdn.zetaoffice.net/zetaoffice_latest/',
   zetaJsUrl: q.get('zeta') || './zeta.js',
   workerScriptUrl: q.get('worker') || './office_thread.js',
-  fontUrl: q.get('font') || undefined,
-  onLog: (m) => console.log('[zeta-editor]', m),
-}).then(() => {
+  // Default to a CJK font served next to the page (the verify build drops one
+  // here); bootZetaOffice skips cleanly if it 404s (Chinese would be tofu then).
+  fontUrl: q.get('font') || './cjk.ttc',
+  onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
+}).then((endpoint) => {
   console.log('[zeta-editor] endpoint ready — serving host over transport')
+  if (VERIFY) wireVerifyPanel(endpoint.executor)
 }).catch((e) => {
   console.error('[zeta-editor] boot failed:', e)
+  if (VERIFY) vlog('boot failed: ' + (e && e.message ? e.message : e))
 })

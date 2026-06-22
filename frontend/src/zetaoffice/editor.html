@@ -1,16 +1,37 @@
 <!DOCTYPE html>
-<!-- Embedded LibreOffice editor page — runs inside the isolated <webview>. Epic #43. -->
+<!-- Embedded LibreOffice editor page — runs inside the isolated <webview> (or a
+     dedicated verification window with ?verify=1). Epic #43. -->
 <html lang="zh">
 <head>
   <meta charset="utf-8">
   <title>LibreOffice Editor</title>
   <style>
-    html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #fff; }
+    html, body { margin: 0; padding: 0; height: 100vh; overflow: hidden; background: #fff; font: 13px/1.5 system-ui, sans-serif; }
     /* Qt REQUIRES id="qtcanvas"; canvas must have no border/padding (outline ok). */
     #qtcanvas { width: 100%; height: 100%; border: 0; padding: 0; outline: 0; visibility: hidden; }
+    /* Verification panel (only shown with ?verify=1) */
+    #verify { position: fixed; top: 0; left: 0; right: 0; display: none; gap: 8px; align-items: center;
+      padding: 6px 10px; background: #1F2937; color: #fff; flex-wrap: wrap; z-index: 10; }
+    #verify.on { display: flex; }
+    #verify button { font: inherit; padding: 4px 10px; border: 0; border-radius: 4px; background: #059669; color: #fff; cursor: pointer; }
+    #verify button:disabled { background: #6b7280; cursor: not-allowed; }
+    #verify input { font: inherit; padding: 4px 8px; border: 0; border-radius: 4px; width: 240px; }
+    #vlog { position: fixed; right: 8px; bottom: 8px; width: 380px; max-height: 38vh; display: none;
+      padding: 8px; background: #0b1220; color: #d1fae5; font: 11px/1.45 ui-monospace, monospace;
+      overflow: auto; white-space: pre-wrap; word-break: break-all; border-radius: 6px; z-index: 10; }
+    #vlog.on { display: block; }
   </style>
 </head>
 <body>
+  <div id="verify">
+    <strong>LibreOffice 验证</strong>
+    <span id="vstatus">启动中… / booting…</span>
+    <input id="vime" disabled placeholder="① 在此用输入法打中文 → 插入文档（IME 验证）" autocomplete="off" />
+    <button id="vinsert" disabled>插入示例</button>
+    <button id="vreplace" disabled>查找替换(redline)</button>
+    <button id="vsel" disabled>读选区</button>
+  </div>
+  <pre id="vlog"></pre>
   <canvas id="qtcanvas" contenteditable="true"
     oncontextmenu="event.preventDefault()" onkeydown="event.preventDefault()"></canvas>
   <script type="module" src="./editor-main.js"></script>

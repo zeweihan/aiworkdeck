@@ -35,6 +35,10 @@
         "to": "frontend/dist/build/h5"
       },
       {
+        "from": "../frontend/dist/zetaoffice",
+        "to": "frontend/dist/zetaoffice"
+      },
+      {
         "from": "bundled/${os}-${arch}/backend.jar",
         "to": "backend/backend.jar"
       },

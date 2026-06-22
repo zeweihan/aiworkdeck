@@ -1167,6 +1167,16 @@ function createBackendManager() {
 
 app.whenReady().then(() => {
   initLocalFileService()
+  // Epic #43: experimental "LibreOffice 验证" window — dedicated, isolated, does
+  // NOT touch the WPS flow. Global shortcut is the only entry; the module is
+  // require()'d lazily on press, so it stays dormant until used.
+  try {
+    globalShortcut.register('CommandOrControl+Shift+L', () => {
+      require('./zetaoffice-verify')
+        .openZetaOfficeVerifyWindow()
+        .catch((e) => console.error('[zeta-verify]', e))
+    })
+  } catch (e) { /* ignore */ }
   // 桌面端启动时自动拉起本机后端（9696）
   backend = createBackendManager()
   backend

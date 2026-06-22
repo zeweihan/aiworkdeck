@@ -59,6 +59,25 @@ jobs:
         run: |
           npm ci || npm install
           npm run build:h5
+          # Epic #43: build the embedded LibreOffice editor bundle (dist/zetaoffice),
+          # shipped via extraResources for the experimental "LibreOffice 验证" window.
+          npm run build:zetaoffice
+      - name: Bundle a CJK font for the LibreOffice verify window (best-effort)
+        shell: bash
+        run: |
+          # The editor injects this font so Chinese renders (not tofu). Best-effort:
+          # if no system CJK font is found the editor skips it cleanly.
+          dest="frontend/dist/zetaoffice/cjk.ttc"
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            for f in "/System/Library/Fonts/Hiragino Sans GB.ttc" "/System/Library/Fonts/PingFang.ttc" "/System/Library/Fonts/Supplemental/Songti.ttc"; do
+              [ -f "$f" ] && cp "$f" "$dest" && break
+            done
+          else
+            for f in "/c/Windows/Fonts/msyh.ttc" "/c/Windows/Fonts/simsun.ttc" "C:/Windows/Fonts/msyh.ttc" "C:/Windows/Fonts/simsun.ttc"; do
+              [ -f "$f" ] && cp "$f" "$dest" && break
+            done
+          fi
+          ls -la "$dest" 2>/dev/null && echo "CJK font bundled" || echo "no CJK font found (Chinese will be tofu in verify window)"
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
