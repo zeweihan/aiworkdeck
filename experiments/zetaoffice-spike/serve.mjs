@@ -40,11 +40,19 @@ const server = createServer(async (req, res) => {
   let urlPath = decodeURIComponent((req.url || '/').split('?')[0])
   if (urlPath === '/') urlPath = '/index.html'
 
-  // Contain path traversal to ROOT.
-  const filePath = normalize(join(ROOT, urlPath))
-  if (!filePath.startsWith(ROOT)) {
-    res.writeHead(403).end('forbidden')
-    return
+  // /shared/<file> → the REAL product executor client modules
+  // (frontend/src/composables), so the spike can drive product code against a
+  // real LibreOffice. Scoped + read-only; basename only (no nested traversal).
+  let filePath
+  if (urlPath.startsWith('/shared/')) {
+    const base = urlPath.slice('/shared/'.length).replace(/[^A-Za-z0-9._-]/g, '')
+    const SHARED_ROOT = normalize(join(ROOT, '../../frontend/src/composables'))
+    filePath = normalize(join(SHARED_ROOT, base))
+    if (!filePath.startsWith(SHARED_ROOT)) { res.writeHead(403).end('forbidden'); return }
+  } else {
+    // Contain path traversal to ROOT.
+    filePath = normalize(join(ROOT, urlPath))
+    if (!filePath.startsWith(ROOT)) { res.writeHead(403).end('forbidden'); return }
   }
 
   try {

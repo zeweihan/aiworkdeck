@@ -30,6 +30,7 @@
     <button id="btnRed" disabled>测修订 redline</button>
     <button id="btnPerf" disabled>测50页性能 perf</button>
     <button id="btnCjk" disabled>插入中文(无IME)</button>
+    <button id="btnExec" disabled>executor 自测(产品客户端)</button>
     <input id="imeBridge" disabled placeholder="① 在此用输入法打中文 → 自动插入文档（IME 桥 PoC）"
       style="font:inherit;padding:4px 8px;border:0;border-radius:4px;width:280px" autocomplete="off" />
     <span style="opacity:.8">canvas 上 Qt5-WASM 无 IME；这个输入框承接 IME 合成→经 UNO 插入光标处</span>
@@ -64,7 +65,12 @@
     const btnRed = document.getElementById('btnRed');
     const btnPerf = document.getElementById('btnPerf');
     const btnCjk = document.getElementById('btnCjk');
+    const btnExec = document.getElementById('btnExec');
     const imeBridge = document.getElementById('imeBridge');
+
+    // The REAL product executor client (frontend/src/composables/), imported via
+    // the server's /shared/ route so this spike drives product code, not a copy.
+    let loExec = null;
 
     // NOTE: named zlog, NOT `out` — emscripten/soffice.js defines a global `out`
     // (its stdout printer) that overwrites a global `out` after boot, which
@@ -104,6 +110,22 @@
     btnRed.onclick = () => send('redline');
     btnPerf.onclick = () => send('perf', { pages: 50 });
     btnCjk.onclick = () => send('inserttext');
+
+    // Self-test the REAL product executor client end-to-end: client.executeCommand
+    // -> worker -> UNO -> result. Proves the product code path (not eval-driven).
+    btnExec.onclick = async () => {
+      if (!loExec) { zlog('executor 未连接', 'e'); return; }
+      zlog('=== executor 自测开始（产品客户端 executeCommand）===', 'k');
+      const r1 = await loExec.executeCommand('insert_at_cursor', { text: '【executor自测】' });
+      zlog('insert_at_cursor → ' + JSON.stringify(r1), 'k');
+      const r2 = await loExec.executeCommand('find_replace', { findText: 'executor', replaceText: 'EXECUTOR', replaceAll: true });
+      zlog('find_replace → ' + JSON.stringify(r2), 'k');
+      const r3 = await loExec.executeCommand('get_outline', {});
+      zlog('get_outline → ' + JSON.stringify(r3), 'k');
+      const r4 = await loExec.executeCommand('set_selection', { start: 0, end: 5 });
+      zlog('set_selection(§0.2 stub) → ' + JSON.stringify(r4), 'k');
+      zlog('=== executor 自测结束 ===', 'k');
+    };
 
     // ---- IME input bridge PoC (#39) ----------------------------------------
     // Qt5-WASM gives the canvas no usable IME (no candidate box). A normal
@@ -182,7 +204,7 @@
           case 'thr_running': zlog('worker running ✓'); break;
           case 'ui_ready':
             spinner.style.display = 'none'; canvas.style.visibility = 'visible';
-            btnSel.disabled = btnRed.disabled = btnPerf.disabled = btnCjk.disabled = false;
+            btnSel.disabled = btnRed.disabled = btnPerf.disabled = btnCjk.disabled = btnExec.disabled = false;
             imeBridge.disabled = false; imeBridge.focus();
             zlog('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
             // resize last + guarded: a Qt relayout during init can throw, and it
@@ -211,6 +233,13 @@
           thrPort = pThrPort;
           thrPort.onmessage = onWorkerMessage;
           zlog('thread port ready ✓');
+          // Import + connect the REAL product executor client (verifies the
+          // useLibreOfficeBridge core path drives the worker, not just hand rolled).
+          import('/shared/libreofficeExecutorClient.js').then(function (m) {
+            loExec = m.createLibreOfficeExecutor({ onError: function (e) { zlog('executor error: ' + e, 'e'); } });
+            loExec.connect(thrPort);
+            zlog('产品 executor 客户端已连接 ✓ (libreofficeExecutorClient)');
+          }).catch(function (e) { zlog('executor import 失败: ' + e, 'e'); });
         }, function (err) { zlog('uno_main rejected: ' + err, 'e'); });
       };
       document.body.appendChild(s);
