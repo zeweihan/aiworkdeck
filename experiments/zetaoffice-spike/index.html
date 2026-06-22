@@ -170,90 +170,47 @@
     btnBoot.onclick = async function () {
       btnBoot.disabled = true;
       zlog('Loading LOWA from ' + SOFFICE_BASE_URL + ' …');
-
-      // ---- CJK font PoC (#39) -------------------------------------------------
-      // The CDN LOWA build ships NO CJK font, so Chinese renders as tofu (口口).
-      // Fix proven here: fetch a CJK font (served same-origin) and write it into
-      // the LOWA font dir in preRun — i.e. BEFORE LibreOffice's fontconfig startup
-      // scan (writing after boot is too late; fonts are scanned once at init).
-      // In the product this font ships inside the self-hosted LOWA bundle.
-      // Optional: if ./cjk-test.ttc isn't served (it's gitignored), skip cleanly.
-      let cjkBytes = null;
       try {
-        const r = await fetch('./cjk-test.ttc');
-        if (r.ok) { cjkBytes = new Uint8Array(await r.arrayBuffer()); zlog('CJK 字体已取 (' + Math.round(cjkBytes.length / 1024) + ' KB)，将在 boot 前注入 LOWA 字体目录'); }
-        else { zlog('未找到 ./cjk-test.ttc（跳过字体注入；中文仍会是豆腐块）', 'e'); }
-      } catch (e) { zlog('CJK 字体 fetch 失败：' + e + '（跳过）', 'e'); }
-
-      // The two globals `canvas` and `Module` must exist before soffice.js loads.
-      window.Module = {
-        canvas,
-        uno_scripts: [ZETA_JS, './office_thread.js'],
-        locateFile: function (path, prefix) { return (prefix || SOFFICE_BASE_URL) + path; },
-        preRun: cjkBytes ? [function () {
-          // Runs before LibreOffice init. At this point /instdir is NOT mounted
-          // yet (FS / = tmp,home,dev,proc), but creating the dir tree and writing
-          // the font here WORKS: the LOWA data mount merges into MEMFS rather than
-          // replacing, so the font is present when fontconfig scans at startup.
-          // PROVEN: tofu (口口) -> real Chinese glyphs. In the product the font is
-          // baked into the self-hosted LOWA bundle's font dir at build time.
-          var dir = '/instdir/share/fonts/truetype';
-          var parts = dir.split('/').filter(Boolean), cur = '';
-          for (var i = 0; i < parts.length; i++) { cur += '/' + parts[i]; try { FS.mkdir(cur); } catch (e) {} }
-          try { FS.writeFile(dir + '/AAA-CJK-test.ttc', cjkBytes); zlog('CJK 字体已写入 ' + dir + ' ✓（boot 前，fontconfig 启动会扫到）'); }
-          catch (e) { zlog('CJK 字体写入 FS 失败：' + e, 'e'); }
-        }] : undefined,
-      };
-      if (SOFFICE_BASE_URL !== '') {
-        window.Module.mainScriptUrlOrBlob = new Blob(
-          ["importScripts('" + SOFFICE_BASE_URL + "soffice.js');"], { type: 'text/javascript' });
-      }
-
-      function onWorkerMessage(e) {
-        const d = e.data;
-        switch (d.cmd) {
-          case 'thr_running': zlog('worker running ✓'); break;
-          case 'ui_ready':
+        // Drive the REAL product boot core (frontend/src/composables) via the
+        // server's /shared/ route, so this spike verifies product code on a real
+        // LibreOffice — same module the app's editor component will import. The
+        // CJK font PoC (preRun injection) and the Module.uno_main main-thread
+        // port handshake now live inside bootZetaOffice(). ./cjk-test.ttc is
+        // gitignored; boot skips it cleanly if absent (CJK stays tofu).
+        const { bootZetaOffice } = await import('/shared/zetaOfficeBoot.js');
+        const { port } = await bootZetaOffice({
+          canvas,
+          sofficeBaseUrl: SOFFICE_BASE_URL,
+          zetaJsUrl: ZETA_JS,
+          workerScriptUrl: './office_thread.js',
+          fontUrl: './cjk-test.ttc',
+          onLog: function (m) { zlog(m); },
+          onReady: function () {
             spinner.style.display = 'none'; canvas.style.visibility = 'visible';
             btnSel.disabled = btnRed.disabled = btnPerf.disabled = btnCjk.disabled = btnExec.disabled = false;
             imeBridge.disabled = false; imeBridge.focus();
             zlog('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
-            // resize last + guarded: a Qt relayout during init can throw, and it
-            // must not swallow the log line above or stall the message pump.
             try { window.dispatchEvent(new Event('resize')); } catch (err) { zlog('resize warn: ' + err, 'e'); }
-            break;
-          case 'log': zlog(d.msg); break;
-          case 'key': zlog('[UNO key ' + d.phase + '] code=' + d.code + ' char=' + JSON.stringify(d.ch), 'k'); break;
-          default: zlog('main: unknown cmd ' + d.cmd, 'e');
-        }
+          },
+          onWorkerMessage: function (d) {
+            if (d.cmd === 'thr_running') zlog('worker running ✓');
+            else if (d.cmd === 'key') zlog('[UNO key ' + d.phase + '] code=' + d.code + ' char=' + JSON.stringify(d.ch), 'k');
+            else if (d.cmd !== 'log' && d.cmd !== 'ui_ready' && d.cmd !== 'result') zlog('main: unknown cmd ' + d.cmd, 'e');
+          },
+        });
+        thrPort = port;
+        zlog('thread port ready ✓');
+        // Connect the REAL product executor client to the same worker port.
+        // connect() uses addEventListener so it coexists with the boot core's
+        // port.onmessage dispatcher (which ignores cmd:'result').
+        const m = await import('/shared/libreofficeExecutorClient.js');
+        loExec = m.createLibreOfficeExecutor({ onError: function (e) { zlog('executor error: ' + e, 'e'); } });
+        loExec.connect(thrPort);
+        zlog('产品 executor 客户端已连接 ✓ (libreofficeExecutorClient)');
+      } catch (e) {
+        zlog('boot 失败：' + e, 'e');
+        btnBoot.disabled = false;
       }
-
-      // Keep the embedded Qt window sized to the canvas.
-      setInterval(function () { window.dispatchEvent(new Event('resize')); }, 1000);
-
-      const s = document.createElement('script');
-      s.src = SOFFICE_BASE_URL + 'soffice.js';
-      s.onerror = () => zlog('soffice.js 加载失败 / failed to load — 检查网络与 CDN 路径', 'e');
-      // On the MAIN thread the thread port is Module.uno_main (NOT Module.zetajs,
-      // which only exists inside the office worker), and it is only available
-      // after soffice.js has run — so wire it in onload. (Verified against the
-      // allotropia/zetajs web-office example.)
-      s.onload = function () {
-        zlog('soffice.js loaded — 初始化 office 线程…');
-        Module.uno_main.then(function (pThrPort) {
-          thrPort = pThrPort;
-          thrPort.onmessage = onWorkerMessage;
-          zlog('thread port ready ✓');
-          // Import + connect the REAL product executor client (verifies the
-          // useLibreOfficeBridge core path drives the worker, not just hand rolled).
-          import('/shared/libreofficeExecutorClient.js').then(function (m) {
-            loExec = m.createLibreOfficeExecutor({ onError: function (e) { zlog('executor error: ' + e, 'e'); } });
-            loExec.connect(thrPort);
-            zlog('产品 executor 客户端已连接 ✓ (libreofficeExecutorClient)');
-          }).catch(function (e) { zlog('executor import 失败: ' + e, 'e'); });
-        }, function (err) { zlog('uno_main rejected: ' + err, 'e'); });
-      };
-      document.body.appendChild(s);
     };
   </script>
 </body>

@@ -48,6 +48,16 @@ node serve.mjs            # 起带 COOP/COEP 头的本地服务器（默认 http
 # 浏览器打开 http://localhost:8777 —— 页面会先自检 crossOriginIsolated 是否为 true
 ```
 
+**这个 spike 现在驱动的是产品代码，不是副本**（Epic #43）：`serve.mjs` 的 `/shared/<file>`
+路由把请求映射到 `frontend/src/composables/`，index.html 经 `/shared/` 动态 import 两个**真实
+产品模块**——
+- `zetaOfficeBoot.js`（boot 核心：设 emscripten `Module`、注 `soffice.js`、preRun 注入 CJK 字体、
+  握手主线程 `Module.uno_main` 端口）——app 的编辑器组件将 import 同一份；
+- `libreofficeExecutorClient.js`（executor 客户端：`executeCommand(action,params)`→worker→UNO）。
+
+所以真机跑这个 spike＝直接验证产品 boot + executor 代码（环境差异——CDN vs 自托管 bundle、
+字体路径——是 `bootZetaOffice({...})` 的参数，spike 传 CDN/本地、产品传自托管/焙进路径）。
+
 页面加载后：
 1. 看顶部状态条 `crossOriginIsolated` 是否 ✅（否则 SharedArrayBuffer 不可用，WASM 起不来）。
 2. 点 **Boot ZetaOffice** 等运行时下载+初始化（首次慢，看日志面板进度）。
