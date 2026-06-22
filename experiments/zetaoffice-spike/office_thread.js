@@ -147,12 +147,90 @@ function testInsertText(text) {
   } catch (e) { log('inserttext ERROR: ' + errStr(e)); }
 }
 
+// ==========================================================================
+// Editor executor command contract (Epic #43 task ④, worker side).
+// Implements the SAME editor-agnostic actions that useWpsBridge.executeCommand
+// dispatches, via UNO — so frontend/src/composables/useLibreOfficeBridge.js can
+// drive LibreOffice with the backend's existing commands. Each handler returns a
+// plain result object; the dispatcher posts {cmd:'result', reqId, result} back.
+// [verified] handlers use the Phase 0-proven primitives; [todo] are stubs.
+// ==========================================================================
+const EXEC = {
+  // [verified] insert at the view cursor (append, not select) — see testInsertText.
+  insert_at_cursor(p) {
+    const xText = xModel.getText();
+    const vc = ctrl.getViewCursor();
+    vc.collapseToEnd();
+    xText.insertString(vc, String(p.text || ''), false);
+    vc.collapseToEnd();
+    return { success: true, inserted: String(p.text || '') };
+  },
+  // [verified] replace selection if any, else insert at cursor.
+  replace_selection(p) {
+    const xText = xModel.getText();
+    const vc = ctrl.getViewCursor();
+    const t = String(p.text || '');
+    // bAbsorb=true replaces the cursor's spanned text; for a collapsed cursor it inserts.
+    xText.insertString(vc, t, vc.getString().length > 0);
+    vc.collapseToEnd();
+    return { success: true, text: t };
+  },
+  // [verified] model-native search + redline (RFC §0.2: no integer offsets).
+  find_replace(p) {
+    xModel.setPropertyValue('RecordChanges', true);
+    const sd = xModel.createSearchDescriptor();
+    sd.setSearchString(String(p.findText || ''));
+    const all = p.replaceAll !== false;
+    let hit = xModel.findFirst(sd), n = 0;
+    while (hit !== null) {
+      hit.setString(String(p.replaceText || ''));
+      n++;
+      if (!all) break;
+      hit = xModel.findNext(hit, sd);
+    }
+    return { success: true, replaced: n, recordChanges: true };
+  },
+  // [verified] current selection text (anchor, not integer offset).
+  get_selection() {
+    const sel = ctrl.getSelection();
+    let text = '';
+    try {
+      if (sel && typeof sel.getByIndex === 'function' && sel.getCount() > 0) text = sel.getByIndex(0).getString();
+      else if (sel && typeof sel.getString === 'function') text = sel.getString();
+    } catch (e) {}
+    return { success: true, text: text, hasSelection: text.length > 0 };
+  },
+  // [verified] locate matches via XSearchable; return count + texts (anchors held
+  // worker-side in the real impl — NOT integer offsets exposed to the model).
+  find_text_locations(p) {
+    const sd = xModel.createSearchDescriptor();
+    sd.setSearchString(String(p.keyword || ''));
+    try { sd.setPropertyValue('SearchCaseSensitive', !!p.matchCase); } catch (e) {}
+    const matches = [];
+    let hit = xModel.findFirst(sd);
+    while (hit !== null && matches.length < 500) { matches.push({ text: hit.getString() }); hit = xModel.findNext(hit, sd); }
+    return { success: true, count: matches.length, matches: matches };
+  },
+};
+
+function execCommand(reqId, action, params) {
+  let result;
+  try {
+    const fn = EXEC[action];
+    result = fn ? fn(params || {}) : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
+  } catch (e) {
+    result = { success: false, message: errStr(e) };
+  }
+  post('result', { reqId: reqId, result: result });
+}
+
 // ---- message loop --------------------------------------------------------
 Module.zetajs.then(function (pZetajs) {
   zetajs = pZetajs;
   css = zetajs.uno.com.sun.star;
   zetajs.mainPort.onmessage = function (e) {
     switch (e.data.cmd) {
+      case 'exec': execCommand(e.data.reqId, e.data.action, e.data.params); break;
       case 'selection': testSelection(); break;
       case 'redline': testRedline(); break;
       case 'perf': testPerf(Number(e.data.pages) || 50); break;
