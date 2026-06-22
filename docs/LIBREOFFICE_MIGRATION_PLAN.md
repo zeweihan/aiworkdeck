@@ -68,17 +68,19 @@
 
 > "什么时候能"不是一个日期，是一个 **gate**。在原型出数据之前，任何时间表都是编的。
 
-### Phase 0 — 原型 spike（解锁全局，唯一前置）
+### Phase 0 — 原型 spike（解锁全局，唯一前置）✅ **已完成（2026-06-22）**
 
 目标：用最小代价证明路线 A 的三个生死项。**这三关任一过不了，A 不走，转 B。**
 
-**验收标准（go/no-go）**：
-- [ ] **中文 IME + 字体**：ZetaOffice WASM 跑在 Electron 渲染进程，能正常**中文输入**、渲染常见中文字体（宋体/黑体/仿宋），无明显错位/丢字。
-- [ ] **zetajs 程序化能力**：经 JS→UNO 桥，能 ①取当前选区文本与位置 ②用 `XSearchable` 在模型里搜索定位 ③以 **redline（修订）开启**的方式替换一段文本，改动在 UI 上呈现为可接受/拒绝的修订。
-- [ ] **性能**：典型 **50 页合同 docx** 打开 / 保存耗时可接受（建议阈值：打开 < 5s，保存 < 2s，首次 WASM 冷加载单独计量并评估可否预热）。
-- [ ] **包体**：WASM + data 资源体积对安装包的增量可接受（评估与当前 ~560MB 安装包的叠加）。
+**验收结果（go/no-go）→ 结论：GO，路线 A 走**（harness 在 `experiments/zetaoffice-spike/`，分支 `feat/libreoffice-migration`；实测见 [issue #39](https://github.com/zeweihan/aiworkdeck/issues/39)）：
+- [x] **中文 IME + 字体** → ✅ **解决，但两层各需一项工程**：①**渲染**——CDN 默认 LOWA 构建无 CJK 字体（中文显示豆腐块），PoC 证实**往字体目录注入 CJK 字体即正确渲染**（简繁皆可）；②**输入**——Qt5-WASM 上游无 IME（候选框不弹），PoC 证实**自建"真 input 承接系统 IME → `compositionend` → UNO 在光标处 `insertString` 插入"的输入桥可正常连续中文输入**（含焦点交还、追加不替换/不选中）。
+- [x] **zetajs 程序化能力** → ✅ **全部通过**：取选区（`XSelectionSupplier.getSelection`）、模型原生搜索定位（`createSearchDescriptor`/`findFirst`/`findNext`）、`RecordChanges=true` 下替换留修订痕——**RFC 0.2 的"弃 offset、用模型原生"主张功能性验证通过**。
+- [~] **性能** → ⚠️ **部分**：UNO 批量生成 50 页 ≈ 26.5s（仅程序化写入，**非真实编辑**）；**待补测**"加载既有 50 页 docx"打开/保存耗时与编辑流畅度（更接近真实场景）。
+- [~] **包体** → ⏳ **待测**：当前从 `cdn.zetaoffice.net` 拉运行时（首次数百 MB）；自托管进安装包的体积增量待评估（与现 ~560MB 安装包叠加）。
 
-产出：一个 `experiments/zetaoffice-spike/` 分支 + 一页实测数据（含录屏/截图）。**这是可被社区认领的最高价值实验**（见 issue #13 任务清单）。
+**关键工程事实（接手者必读）**：① LOWA 运行时＝`cdn.zetaoffice.net/zetaoffice_latest/` 的 `soffice.{js,wasm,data}`，但 **`zeta.js` 桥不在 CDN，必须本地 vendored**；② 主线程线程端口＝`Module.uno_main`（非 `Module.zetajs`，后者只在 office worker 里），且须在 `soffice.js` 的 `onload` 里挂；③ WASM 需 `SharedArrayBuffer` → 页面须跨源隔离（COOP `same-origin` + COEP `require-corp`），Electron 里用 `session.webRequest.onHeadersReceived` 注入；④ emscripten 全局 `out`（stdout）会覆盖页面全局 `out`，勿用 `out` 当全局名；⑤ 字体注入要在 fontconfig 启动扫描前（`Module.preRun`，LOWA data 挂载 merge 进 MEMFS 故有效）。
+
+产出：可运行 harness（`experiments/zetaoffice-spike/`：浏览器 `serve.mjs` + 真机 `electron-main.js`）+ 实测截图/日志（#39）。**四个生死项除"性能/包体"两项量化补测外，机制全部跑通 → 立项 Phase 1。**
 
 ### Phase 1 — 桥接层按模型重写（核心工作量）
 
@@ -113,13 +115,19 @@
 
 ---
 
-## 4. 下一步
+## 4. 下一步 — Phase 1 已立项（2026-06-22）
 
-1. **Phase 0 原型 spike**（最高优先，已在 issue #13 列为可认领任务，含上方验收标准）。
-2. 原型数据出来后，本文档据实更新路线 A/B 取舍与 Phase 1 排期。
-3. 桥接层重写前，先把后端工具契约中的 WPS 命名抽象为编辑器无关命名（小重构，降低耦合）。
+Phase 0 GO，正式立项 Phase 1。执行任务拆解（可认领，见 **Epic 立项 issue**）：
 
-> 维护原则：本文档随原型与实现进展持续更新；任何一项 Phase 0 验收的小实验，欢迎以评论或 PR 贡献到 issue #13。
+1. **字体焙进自托管 LOWA bundle**（解 CJK 渲染）：自托管 `cdn.zetaoffice.net` 的运行时到安装包，并把 **Noto Sans CJK / 思源（OFL）** 放进 `/instdir/share/fonts/truetype/`，构建期由 fontconfig 原生扫到（替代 PoC 的运行时注入）。
+2. **IME 输入桥工程化**（解中文输入）：把 PoC 的"真 input 承接 IME → UNO insertString"做成**覆盖在 canvas 光标处的透明可编辑层**（跟随 LO 光标、合成中预览、Backspace/方向键/Enter 转 UNO 命令），用户感知＝"直接在文档里打字"。
+3. **后端工具契约改名（小重构、先行、后端不动逻辑）**：`WpsTools`/`WpsActionService`/`useWpsBridge` 等 WPS 命名 → 编辑器无关命名，降低耦合（RFC 0.3：后端命令契约编辑器无关，迁移只动前端 executor）。
+4. **前端 executor 按模型重写**（核心 ~2–3k 行，见 Phase 1）：定位→`XSearchable`+游标+书签锚点（**弃整数 offset**）；修订→`RecordChanges` 默认开；选区/插入/替换→UNO 游标+`XReplaceable`。
+5. **性能/包体量化补测**：加载既有 50 页 docx 的打开/保存耗时 + 编辑流畅度；WASM+data 对安装包的体积增量。
+6. **Electron 集成**：把 spike 的 `onHeadersReceived` COOP/COEP 注入 + WASM 渲染窗，按独立 session/partition 接进 `desktop/main/main.js`（不影响主应用现有 webSecurity 设置）。
+7. **Phase 3 灰度**：WPS 与 LibreOffice executor 并存、开关切换、真实合同回归"定位/修订"准确率，稳定后默认切换、移除 WPS SDK。
+
+> 维护原则：本文档随实现进展持续更新；Phase 1 各任务欢迎以评论或 PR 认领（见 Epic 立项 issue）。
 
 ---
 
