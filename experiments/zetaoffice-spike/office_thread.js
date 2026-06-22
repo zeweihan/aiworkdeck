@@ -19,6 +19,7 @@
 // zetajs environment (global for easier debugging in the worker dev-tools).
 let zetajs, css;
 let context, desktop, xModel, ctrl;
+let anchorSeq = 0; // names hidden bookmarks used as stable location anchors (§0.2)
 
 function post(cmd, data) {
   zetajs.mainPort.postMessage(Object.assign({ cmd }, data || {}));
@@ -27,6 +28,22 @@ function log(msg) { post('log', { msg: String(msg) }); }
 function errStr(e) {
   try { return zetajs.getAnyType(zetajs.catchUnoException(e)) + ' ' + (e && e.message || ''); }
   catch { return String(e && e.message || e); }
+}
+
+// §0.2 anchors: a bookmark spanning a text range is a STABLE location handle that
+// moves with edits — the model-native replacement for fragile integer offsets.
+const ANCHOR_PREFIX = '__ai_anchor_';
+function anchorBookmark(range) {
+  const name = ANCHOR_PREFIX + (++anchorSeq);
+  const bm = xModel.createInstance('com.sun.star.text.Bookmark');
+  bm.setName(name);
+  xModel.getText().insertTextContent(range, bm, true); // bAbsorb: bookmark spans the range
+  return name;
+}
+function anchorRange(name) {
+  const bms = xModel.getBookmarks();
+  if (!bms.hasByName(name)) return null;
+  return bms.getByName(name).getAnchor(); // XTextRange
 }
 
 // ---- boot: open a fresh Writer doc seeded with Chinese + English ----------
@@ -211,13 +228,22 @@ const EXEC = {
   },
   // [verified] locate matches via XSearchable; return count + texts (anchors held
   // worker-side in the real impl — NOT integer offsets exposed to the model).
+  // [verified] locate matches and return STABLE ANCHORS (bookmark ids), not
+  // integer offsets (§0.2). Downstream set_selection/replace_at_position take
+  // these anchorIds. Collect ranges first, then bookmark, so anchoring doesn't
+  // perturb the findNext iteration.
   find_text_locations(p) {
     const sd = xModel.createSearchDescriptor();
     sd.setSearchString(String(p.keyword || ''));
     try { sd.setPropertyValue('SearchCaseSensitive', !!p.matchCase); } catch (e) {}
-    const matches = [];
+    const ranges = [];
     let hit = xModel.findFirst(sd);
-    while (hit !== null && matches.length < 500) { matches.push({ text: hit.getString() }); hit = xModel.findNext(hit, sd); }
+    while (hit !== null && ranges.length < 500) { ranges.push(hit); hit = xModel.findNext(hit, sd); }
+    const matches = ranges.map(function (r) {
+      let anchorId = null;
+      try { anchorId = anchorBookmark(r); } catch (e) {}
+      return { anchorId: anchorId, text: r.getString() };
+    });
     return { success: true, count: matches.length, matches: matches };
   },
   // [verified-extend] replace the Nth (0-based) match under RecordChanges.
@@ -310,11 +336,37 @@ const EXEC = {
     else return { success: false, message: 'goto type not supported yet: ' + type + ' (anchor-based nav TODO, §0.2)' };
     return { success: true, type: type };
   },
-  // [stub:§0.2] integer-offset selection is intentionally NOT implemented — RFC §0.2
-  // requires anchor-based selection. These pair with anchor-returning
-  // find_text_locations in the executor rewrite; do not reintroduce char offsets.
-  set_selection() { return { success: false, message: 'set_selection (integer offsets) intentionally unimplemented — §0.2 requires anchors' }; },
-  replace_at_position() { return { success: false, message: 'replace_at_position (integer offsets) intentionally unimplemented — §0.2 requires anchors' }; },
+  // [verified] §0.2 anchor-based selection. Takes {anchor} (a bookmark id from
+  // find_text_locations), NOT integer offsets — those are rejected on purpose.
+  set_selection(p) {
+    if (!p.anchor) return { success: false, message: 'set_selection requires {anchor}; integer offsets unsupported (§0.2)' };
+    const range = anchorRange(String(p.anchor));
+    if (!range) return { success: false, message: 'anchor not found: ' + p.anchor };
+    ctrl.select(range);
+    return { success: true, anchor: p.anchor, text: range.getString() };
+  },
+  // [verified] §0.2 anchor-based replace, under RecordChanges (redline).
+  replace_at_position(p) {
+    if (!p.anchor) return { success: false, message: 'replace_at_position requires {anchor}; integer offsets unsupported (§0.2)' };
+    xModel.setPropertyValue('RecordChanges', true);
+    const range = anchorRange(String(p.anchor));
+    if (!range) return { success: false, message: 'anchor not found: ' + p.anchor };
+    range.setString(String(p.newText || ''));
+    return { success: true, anchor: p.anchor };
+  },
+  // housekeeping: drop the hidden anchor bookmarks.
+  clear_anchors() {
+    const bms = xModel.getBookmarks();
+    const names = (bms.getElementNames && bms.getElementNames()) || [];
+    const xText = xModel.getText();
+    let n = 0;
+    for (let i = 0; i < names.length; i++) {
+      if (names[i].indexOf(ANCHOR_PREFIX) === 0) {
+        try { xText.removeTextContent(bms.getByName(names[i])); n++; } catch (e) {}
+      }
+    }
+    return { success: true, cleared: n };
+  },
 };
 
 function execCommand(reqId, action, params) {

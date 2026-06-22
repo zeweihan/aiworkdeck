@@ -14,11 +14,13 @@
 
 export const EDITOR_ACTIONS = [
   // [verified] proven against the Phase 0 spike UNO bridge
-  'insert_at_cursor', 'replace_selection', 'find_replace', 'get_selection', 'find_text_locations',
+  'insert_at_cursor', 'replace_selection', 'find_replace', 'get_selection',
+  // find_text_locations returns stable anchorIds (bookmarks), NOT integer offsets (§0.2)
+  'find_text_locations',
   // [verified-extend] Writer command set
   'replace_nth_match', 'delete_match', 'delete_text', 'get_paragraph', 'modify_paragraph', 'get_outline', 'goto',
-  // [stub:§0.2] integer-offset — must become anchor-based in the worker
-  'set_selection', 'replace_at_position',
+  // [§0.2 anchor-based] take {anchor} from find_text_locations; integer offsets rejected
+  'set_selection', 'replace_at_position', 'clear_anchors',
 ]
 
 /**

@@ -115,15 +115,26 @@
     // -> worker -> UNO -> result. Proves the product code path (not eval-driven).
     btnExec.onclick = async () => {
       if (!loExec) { zlog('executor 未连接', 'e'); return; }
-      zlog('=== executor 自测开始（产品客户端 executeCommand）===', 'k');
-      const r1 = await loExec.executeCommand('insert_at_cursor', { text: '【executor自测】' });
-      zlog('insert_at_cursor → ' + JSON.stringify(r1), 'k');
-      const r2 = await loExec.executeCommand('find_replace', { findText: 'executor', replaceText: 'EXECUTOR', replaceAll: true });
-      zlog('find_replace → ' + JSON.stringify(r2), 'k');
-      const r3 = await loExec.executeCommand('get_outline', {});
-      zlog('get_outline → ' + JSON.stringify(r3), 'k');
-      const r4 = await loExec.executeCommand('set_selection', { start: 0, end: 5 });
-      zlog('set_selection(§0.2 stub) → ' + JSON.stringify(r4), 'k');
+      zlog('=== executor 自测：§0.2 锚点定位流程（产品客户端）===', 'k');
+      // 1. insert a known target
+      await loExec.executeCommand('insert_at_cursor', { text: '甲方：示例公司A；甲方负责交付。' });
+      // 2. locate -> stable anchors (NOT offsets)
+      const loc = await loExec.executeCommand('find_text_locations', { keyword: '甲方' });
+      zlog('find_text_locations → ' + JSON.stringify(loc), 'k');
+      const anchor = loc && loc.matches && loc.matches[0] && loc.matches[0].anchorId;
+      if (!anchor) { zlog('无锚点，停止', 'e'); return; }
+      // 3. select by anchor, confirm it points at the right text
+      const sel = await loExec.executeCommand('set_selection', { anchor: anchor });
+      zlog('set_selection(anchor) → ' + JSON.stringify(sel), 'k');
+      // 4. integer offsets must be rejected (§0.2)
+      const off = await loExec.executeCommand('set_selection', { start: 0, end: 2 });
+      zlog('set_selection(offset, 应拒绝) → ' + JSON.stringify(off), 'k');
+      // 5. replace at the anchor under redline
+      const rep = await loExec.executeCommand('replace_at_position', { anchor: anchor, newText: '【甲方】' });
+      zlog('replace_at_position(anchor) → ' + JSON.stringify(rep), 'k');
+      const after = await loExec.executeCommand('find_text_locations', { keyword: '【甲方】' });
+      zlog('替换后定位【甲方】→ count=' + (after && after.count), 'k');
+      await loExec.executeCommand('clear_anchors', {});
       zlog('=== executor 自测结束 ===', 'k');
     };
 
