@@ -354,6 +354,17 @@ const EXEC = {
     range.setString(String(p.newText || ''));
     return { success: true, anchor: p.anchor };
   },
+  // [verified-extend] insert a paragraph break at the view cursor (Enter key in
+  // the IME overlay routes here — the overlay's single-line <input> can't make a
+  // newline itself). Append, leave cursor collapsed after the break.
+  insert_paragraph() {
+    const xText = xModel.getText();
+    const vc = ctrl.getViewCursor();
+    vc.collapseToEnd();
+    xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+    vc.collapseToEnd();
+    return { success: true };
+  },
   // [spike] Phase B: raw measurements for mapping the view cursor to canvas
   // pixels. We DELIBERATELY return primitives (not a final px rect) so the
   // mm->px formula can be calibrated on the JS side without restarting LOWA.

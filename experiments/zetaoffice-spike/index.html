@@ -75,8 +75,8 @@
     const cursorbox = document.getElementById('cursorbox');
     const imeBridge = document.getElementById('imeBridge');
 
-    // Phase B calibration helper, filled after the overlay module imports.
-    let mapCursorRect = null;
+    // Phase B overlay handle (self-calibrating via clicks), set after boot.
+    let imeOverlay = null;
 
     // The REAL product executor client (frontend/src/composables/), imported via
     // the server's /shared/ route so this spike drives product code, not a copy.
@@ -169,27 +169,24 @@
       zlog('=== executor 自测结束 ===', 'k');
     };
 
-    // ---- Phase B calibration: measure cursor rect, map to px, draw debug box ----
-    // Click in the document first to position the cursor, then click this. The red
-    // box should land ON the LO cursor; if offset, tune CURSOR_MAP in the overlay
-    // module (scale/offsetX/offsetY) and re-measure. This is the empirical gate for
-    // whether doc-coord -> canvas-px mapping is viable under WASM (#43 Phase B).
+    // ---- Phase B debug box: draw the overlay's COMPUTED cursor rect ----
+    // The overlay self-calibrates from clicks (offset = clickPx - scale*docPos),
+    // so click in the document first to anchor, then click this to see where the
+    // overlay thinks the cursor is. The red box should sit ON the LO caret.
     btnRect.onclick = async () => {
-      if (!thrPort) { zlog('worker 未就绪', 'e'); return; }
+      if (!imeOverlay) { zlog('overlay 未挂载', 'e'); return; }
       const raw = await workerRequest('get_cursor_rect', {});
+      const rect = await imeOverlay.computeRect();
       zlog('get_cursor_rect raw → ' + JSON.stringify(raw), 'k');
-      const rect = mapCursorRect ? mapCursorRect(raw) : null;
-      zlog('mapped px → ' + JSON.stringify(rect), 'k');
+      zlog('overlay computeRect → ' + JSON.stringify(rect) + (rect ? '' : '（先点一下文档放光标以锚定）'), 'k');
       if (rect) {
-        const w = 8; // a thin caret-width marker so we can see exactly where it points
         Object.assign(cursorbox.style, {
           display: 'block',
           left: Math.round(rect.left) + 'px', top: Math.round(rect.top) + 'px',
-          width: w + 'px', height: Math.round(rect.height) + 'px',
+          width: '8px', height: Math.round(rect.height) + 'px',
         });
       } else {
         cursorbox.style.display = 'none';
-        zlog('映射失败（无 pos）/ mapping failed — 看 raw 里 posErr/winErr', 'e');
       }
     };
 
@@ -268,33 +265,24 @@
         // via the product executor. The visible #imeBridge above stays as a
         // fallback/comparison. Phase A — not cursor-positioned, no inline preview.
         const ov = await import('/shared/zetaOfficeImeOverlay.js');
-        // Single-sourced mm->px mapping (also used by the calibration button).
-        mapCursorRect = ov.cursorRectToPixels;
-        ov.attachImeOverlay({
+        imeOverlay = ov.attachImeOverlay({
           canvas: canvas,
           commit: function (text) { return loExec.executeCommand('insert_at_cursor', { text: text }); },
-          // Phase B: query the LO view-cursor rect and map to host px so the
-          // overlay anchors at the cursor (candidate box + inline preview).
-          getCursorRect: async function () {
-            const raw = await workerRequest('get_cursor_rect', {});
-            return ov.cursorRectToPixels(raw);
-          },
+          // Phase B: overlay reads the raw view-cursor measurement; it derives the
+          // px mapping itself (stable scale + live offset from each click).
+          getCursorRaw: function () { return workerRequest('get_cursor_rect', {}); },
+          // Enter -> paragraph break at the LO cursor (single-line input can't).
+          onEnter: function () { return workerRequest('insert_paragraph', {}); },
           onLog: function (msg) { zlog(msg, 'ime'); },
         });
-        zlog('IME 透明覆盖层已挂载 ✓ (Phase B) — 点文档定位光标后直接打中文（无需点上面的输入框）', 'ime');
+        zlog('IME 透明覆盖层已挂载 ✓ (Phase B 自标定) — 点文档放光标后直接打中文、回车换行', 'ime');
 
-        // ---- Phase B live calibration (real-Chrome only; canvas is black headless) ----
-        // The mm->px mapping has 3 affine constants that need a VISIBLE canvas to
-        // fit (red debug box must sit on the cursor). Tune them live from the
-        // console — no edit/rebuild loop:
-        //   1) click in the document to place the cursor
-        //   2) 点「测光标矩形」→ red box appears at the COMPUTED position
-        //   3) tuneCursorMap({offsetX, offsetY, scale}) until the box hugs the cursor
-        //   4) report the final values back so they bake into CURSOR_MAP
-        window.cursorMap = ov.CURSOR_MAP;
-        window.tuneCursorMap = function (patch) { Object.assign(ov.CURSOR_MAP, patch || {}); zlog('CURSOR_MAP = ' + JSON.stringify(ov.CURSOR_MAP), 'k'); return ov.CURSOR_MAP; };
+        // Debug hooks: measureCursor() reads raw; overlayRect() = overlay's computed
+        // px (null until you click the doc to anchor); cursorMap = stable scale.
         window.measureCursor = function () { return workerRequest('get_cursor_rect', {}); };
-        zlog('标定钩子就绪：tuneCursorMap({offsetX,offsetY,scale}) / measureCursor() / cursorMap', 'k');
+        window.overlayRect = function () { return imeOverlay.computeRect(); };
+        window.cursorMap = ov.CURSOR_MAP;
+        zlog('调试钩子就绪：measureCursor() / overlayRect() / cursorMap', 'k');
       } catch (e) {
         zlog('boot 失败：' + e, 'e');
         btnBoot.disabled = false;
