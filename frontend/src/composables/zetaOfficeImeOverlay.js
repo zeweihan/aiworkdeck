@@ -36,9 +36,14 @@
 // not into the empty <input>. Backspace/arrows are not yet forwarded.
 
 // The STABLE half of the mapping. offset is derived live per click (see above).
+// nudgeX/nudgeY are a small constant px correction for the residual between the
+// click-derived anchor and the true caret (glyph-snap + caret-top vs click
+// estimate) — roughly constant at a given zoom; tune once, then bake.
 export const CURSOR_MAP = {
   scale: 96 / 2540, // CSS px per 1/100 mm at 100% zoom (verified exact)
   useZoom: true,
+  nudgeX: 0,
+  nudgeY: 0,
 }
 
 function scaleFromZoom(raw) {
@@ -56,8 +61,8 @@ export function cursorRectToPixels(raw, offset) {
   const s = scaleFromZoom(raw)
   const z = s / CURSOR_MAP.scale
   return {
-    left: offset.x + s * raw.pos.X,
-    top: offset.y + s * raw.pos.Y,
+    left: offset.x + s * raw.pos.X + (CURSOR_MAP.nudgeX || 0),
+    top: offset.y + s * raw.pos.Y + (CURSOR_MAP.nudgeY || 0),
     height: raw.charHeightPt ? raw.charHeightPt * (96 / 72) * z : 18,
   }
 }
@@ -135,11 +140,12 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, onLog 
       const s = scaleFromZoom(raw)
       const r = host.getBoundingClientRect()
       // pos.Y is the caret's TOP; a click lands ~mid-line, so the click Y sits
-      // ~half a caret-height BELOW the caret top. Subtract that, else the box
-      // renders a half-line too low (lands between lines). X snaps to a glyph
-      // boundary near the click, so no horizontal correction is needed.
+      // ~half a caret-height below the caret top — subtract that so the box top
+      // is near the caret top, not a half-line low. This assumes a roughly
+      // center-of-line click; the residual (click-height variance, glyph snap on
+      // X) is a small ~constant the maintainer zeroes once via CURSOR_MAP.nudge.
       const z = s / CURSOR_MAP.scale
-      const halfCaret = raw.charHeightPt ? raw.charHeightPt * (96 / 72) * z / 2 : 9
+      const halfCaret = raw.charHeightPt ? raw.charHeightPt * (96 / 72) * z / 2 : 8
       anchor = {
         x: (clientX - r.left) - s * raw.pos.X,
         y: (clientY - r.top) - halfCaret - s * raw.pos.Y,

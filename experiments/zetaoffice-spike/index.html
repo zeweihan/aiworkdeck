@@ -277,12 +277,14 @@
         });
         zlog('IME 透明覆盖层已挂载 ✓ (Phase B 自标定) — 点文档放光标后直接打中文、回车换行', 'ime');
 
-        // Debug hooks: measureCursor() reads raw; overlayRect() = overlay's computed
-        // px (null until you click the doc to anchor); cursorMap = stable scale.
+        // Debug hooks. tuneCursorMap({nudgeX,nudgeY}) shifts the box by a constant
+        // px to zero out the small click-snap / caret-top residual — click the doc,
+        // type, nudge until the box sits exactly on the caret, report the values.
         window.measureCursor = function () { return workerRequest('get_cursor_rect', {}); };
         window.overlayRect = function () { return imeOverlay.computeRect(); };
         window.cursorMap = ov.CURSOR_MAP;
-        zlog('调试钩子就绪：measureCursor() / overlayRect() / cursorMap', 'k');
+        window.tuneCursorMap = function (patch) { Object.assign(ov.CURSOR_MAP, patch || {}); if (imeOverlay) imeOverlay.reposition(); zlog('CURSOR_MAP = ' + JSON.stringify(ov.CURSOR_MAP), 'k'); return ov.CURSOR_MAP; };
+        zlog('调试钩子就绪：tuneCursorMap({nudgeX,nudgeY}) / measureCursor() / overlayRect()', 'k');
       } catch (e) {
         zlog('boot 失败：' + e, 'e');
         btnBoot.disabled = false;
