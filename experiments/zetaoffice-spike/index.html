@@ -207,6 +207,18 @@
         loExec = m.createLibreOfficeExecutor({ onError: function (e) { zlog('executor error: ' + e, 'e'); } });
         loExec.connect(thrPort);
         zlog('产品 executor 客户端已连接 ✓ (libreofficeExecutorClient)');
+
+        // Attach the REAL product IME overlay (frontend/src/composables) over the
+        // canvas: type Chinese directly in the document, commit at the LO cursor
+        // via the product executor. The visible #imeBridge above stays as a
+        // fallback/comparison. Phase A — not cursor-positioned, no inline preview.
+        const ov = await import('/shared/zetaOfficeImeOverlay.js');
+        ov.attachImeOverlay({
+          canvas: canvas,
+          commit: function (text) { return loExec.executeCommand('insert_at_cursor', { text: text }); },
+          onLog: function (msg) { zlog(msg, 'ime'); },
+        });
+        zlog('IME 透明覆盖层已挂载 ✓ — 点文档定位光标后直接打中文（无需点上面的输入框）', 'ime');
       } catch (e) {
         zlog('boot 失败：' + e, 'e');
         btnBoot.disabled = false;

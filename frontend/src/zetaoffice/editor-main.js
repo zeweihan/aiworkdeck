@@ -15,6 +15,7 @@
 // browser) can drive it the same way the host will.
 
 import { startEditorEndpoint } from '../composables/zetaOfficeEditorEndpoint.js'
+import { attachImeOverlay } from '../composables/zetaOfficeImeOverlay.js'
 
 // Electron renderer require is a runtime property access (NOT a static import),
 // so the bundler leaves it alone and the browser fallback path stays clean.
@@ -118,6 +119,17 @@ startEditorEndpoint({
   onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
 }).then((endpoint) => {
   console.log('[zeta-editor] endpoint ready — serving host over transport')
+  // Transparent IME overlay over the canvas, so users can type Chinese directly
+  // in the document (Qt5-WASM gives the canvas no IME). Commits at the LO cursor
+  // via the same verified path as agent commands. Attached in BOTH webview and
+  // verify modes — local typing is a real-user need, not just a verification one.
+  try {
+    attachImeOverlay({
+      canvas: document.getElementById('qtcanvas'),
+      commit: (text) => endpoint.executor.executeCommand('insert_at_cursor', { text }),
+      onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
+    })
+  } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
   if (VERIFY) wireVerifyPanel(endpoint.executor)
 }).catch((e) => {
   console.error('[zeta-editor] boot failed:', e)
