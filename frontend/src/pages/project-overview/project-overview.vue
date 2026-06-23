@@ -801,6 +801,15 @@
                   </view>
                 </view>
               </view>
+
+              <!-- Epic #43: embedded LibreOffice editor (experimental, ⌘⇧O).
+                   Scoped to the document area so the AI chat panel stays usable —
+                   a real backend AI command can be triggered while it's active.
+                   Dormant: only mounts when explicitly opened; the WPS flow is
+                   untouched. -->
+              <view v-if="showLibreEmbed" class="libre-embed-overlay">
+                <LibreOfficeEditor @ready="onLibreReady" @close="onLibreClose" />
+              </view>
             </view>
 
             <!-- 底部常用工具面板（仅占中间工作区宽度；右侧 AI 面板优先完整显示） -->
@@ -1173,13 +1182,6 @@
 
       <!-- OCR 结果不再使用弹窗：改为框选后的快捷命令条 -->
 
-      <!-- Epic #43: embedded LibreOffice editor overlay (experimental, ⌘⇧O).
-           Dormant — only mounts when explicitly opened; does NOT touch the WPS
-           document flow. -->
-      <view v-if="showLibreEmbed" class="libre-embed-overlay">
-        <LibreOfficeEditor @close="showLibreEmbed = false" />
-      </view>
-
     </view>
   </view>
 </template>
@@ -1458,8 +1460,11 @@ export default {
       draggingTab: null, // { fileId, fromPane }
       tabDragOver: null, // { fileId, pane }
 
-      // Epic #43: embedded LibreOffice editor overlay (experimental, ⌘⇧O)
+      // Epic #43: embedded LibreOffice editor (experimental, ⌘⇧O). When active,
+      // backend AI commands route to it instead of WPS (handleWpsCommand).
       showLibreEmbed: false,
+      libreOfficeActive: false,
+      libreOfficeExecutor: null,
 
       // WPS Config
       wpsAppId: '', // 从后端动态获取
@@ -5831,6 +5836,22 @@ export default {
         const { action: commandAction, params, requestId, conversationId } = action
         console.log('[ProjectOverview] commandAction:', commandAction, 'requestId:', requestId)
 
+        // Epic #43: when the embedded LibreOffice editor is active, route the
+        // (editor-agnostic) backend command to it instead of WPS — the SSE result
+        // contract (sendWpsResult) is identical. The WPS path below is left
+        // byte-for-byte unchanged; this only diverts while LibreOffice is open.
+        if (this.libreOfficeActive && this.libreOfficeExecutor) {
+            try {
+                const result = await this.libreOfficeExecutor.executeCommand(commandAction, params)
+                const successFlag = result && result.success !== false
+                await sendWpsResult(conversationId, requestId, successFlag, result, (result && result.error) || null)
+            } catch (e) {
+                console.error('[ProjectOverview] LibreOffice command error:', e)
+                await sendWpsResult(conversationId, requestId, false, null, e.message)
+            }
+            return
+        }
+
         try {
             // 获取当前活跃的 WPS 实例
             // FIX: 优先使用当前聚焦窗格的 WPS 实例，避免多窗口时操作错误的文档
@@ -5887,6 +5908,20 @@ export default {
             console.error('[ProjectOverview] Error stack:', e.stack)
             await sendWpsResult(conversationId, requestId, false, null, e.message)
         }
+    },
+
+    // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
+    // commands route to it (see handleWpsCommand divert).
+    onLibreReady(executor) {
+        this.libreOfficeExecutor = executor
+        this.libreOfficeActive = true
+        console.log('[ProjectOverview] LibreOffice editor ready — agent commands routed to LibreOffice')
+    },
+    onLibreClose() {
+        this.showLibreEmbed = false
+        this.libreOfficeActive = false
+        this.libreOfficeExecutor = null
+        console.log('[ProjectOverview] LibreOffice editor closed — agent commands routed to WPS')
     },
 
     // --- 文件选择/上传 ---
@@ -10466,14 +10501,16 @@ $bg-white: #FFFFFF;
   opacity: 1;
 }
 
-/* Epic #43: embedded LibreOffice editor overlay (experimental, ⌘⇧O) */
+/* Epic #43: embedded LibreOffice editor (experimental, ⌘⇧O).
+   Absolute within .editors-container (position:relative) so it covers the
+   document area only — the AI chat panel stays usable. */
 .libre-embed-overlay {
-  position: fixed;
+  position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 9999;
+  z-index: 50;
   background: #fff;
 }
 </style>
