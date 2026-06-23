@@ -18,7 +18,7 @@ import { extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url))
-const PORT = Number(process.argv[2]) || 8777
+const PORT = Number(process.argv[2]) || Number(process.env.PORT) || 8777
 
 const TYPES = {
   '.html': 'text/html; charset=utf-8',

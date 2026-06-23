@@ -354,6 +354,32 @@ const EXEC = {
     range.setString(String(p.newText || ''));
     return { success: true, anchor: p.anchor };
   },
+  // [spike] Phase B: raw measurements for mapping the view cursor to canvas
+  // pixels. We DELIBERATELY return primitives (not a final px rect) so the
+  // mm->px formula can be calibrated on the JS side without restarting LOWA.
+  //   - pos: XTextViewCursor.getPosition() -> awt.Point in 1/100 mm. The ORIGIN
+  //     (page top-left vs visible-area top-left) is the open question under
+  //     WASM; probe it empirically (short doc = no scroll hides the difference).
+  //   - charHeightPt: CharHeight (points) at the cursor -> caret height.
+  //   - zoom: ZoomValue (%) from the view settings.
+  //   - winPx: the Qt component window rect (px) — the canvas surface bounds.
+  // Each field is independently try/caught so a missing API degrades, not throws.
+  get_cursor_rect() {
+    const out = { success: true };
+    let vc = null;
+    try { vc = ctrl.getViewCursor(); } catch (e) { out.vcErr = errStr(e); }
+    if (vc) {
+      try { const pt = vc.getPosition(); out.pos = { X: pt.X, Y: pt.Y }; } catch (e) { out.posErr = errStr(e); }
+      try { out.charHeightPt = vc.getPropertyValue('CharHeight'); } catch (e) { out.charHeightErr = errStr(e); }
+      try { out.collapsed = (vc.getString() || '').length === 0; } catch (e) {}
+    }
+    try { out.zoom = ctrl.getViewSettings().getPropertyValue('ZoomValue'); } catch (e) { out.zoomErr = errStr(e); }
+    try {
+      const r = ctrl.getFrame().getComponentWindow().getPosSize();
+      out.winPx = { X: r.X, Y: r.Y, W: r.Width, H: r.Height };
+    } catch (e) { out.winErr = errStr(e); }
+    return out;
+  },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
     const bms = xModel.getBookmarks();
