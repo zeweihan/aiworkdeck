@@ -236,7 +236,10 @@ function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       // 允许跨域 Cookie（解决 WPS SameSite Cookie 被拦截导致 500 错误）
-      webSecurity: false
+      webSecurity: false,
+      // Epic #43: allow <webview> for the embedded LibreOffice editor (isolated
+      // on persist:zetaoffice). Inert until a <webview> is actually rendered.
+      webviewTag: true
     }
   })
 
@@ -1165,6 +1168,23 @@ function createBackendManager() {
   })
 }
 
+// Epic #43: tell the renderer where to load the embedded LibreOffice editor
+// <webview>. Lazily installs COOP/COEP on the persist:zetaoffice partition and
+// starts the shared same-origin server (so LOWA/page are isolated) on first ask,
+// then returns the URL + the webview preload path + the partition. Dormant until
+// the renderer (LibreOfficeEditor.vue) requests it.
+ipcMain.handle('checkba:zetaoffice-editor', async () => {
+  const { installZetaOfficeIsolation, ZETAOFFICE_PARTITION } = require('./zetaoffice-session')
+  const { startEditorServer, editorUrl } = require('./zetaoffice-server')
+  installZetaOfficeIsolation(ZETAOFFICE_PARTITION)
+  const { origin } = await startEditorServer()
+  return {
+    url: editorUrl(origin),
+    preload: 'file://' + path.join(__dirname, '../preload/zetaoffice-webview-preload.js'),
+    partition: ZETAOFFICE_PARTITION,
+  }
+})
+
 app.whenReady().then(() => {
   initLocalFileService()
   // Epic #43: experimental "LibreOffice 验证" window — dedicated, isolated, does
@@ -1175,6 +1195,12 @@ app.whenReady().then(() => {
       require('./zetaoffice-verify')
         .openZetaOfficeVerifyWindow()
         .catch((e) => console.error('[zeta-verify]', e))
+    })
+    // Epic #43: ⌘⇧O opens the embedded LibreOffice editor (a <webview> inside the
+    // MAIN renderer — the real-flow topology, vs ⌘⇧L's standalone window). Tells
+    // the renderer to mount the overlay; dormant until pressed.
+    globalShortcut.register('CommandOrControl+Shift+O', () => {
+      try { if (mainWindow) mainWindow.webContents.send('checkba:zetaoffice-open-embed') } catch (e) { /* ignore */ }
     })
   } catch (e) { /* ignore */ }
   // 桌面端启动时自动拉起本机后端（9696）

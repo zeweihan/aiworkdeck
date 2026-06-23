@@ -1173,6 +1173,12 @@
 
       <!-- OCR 结果不再使用弹窗：改为框选后的快捷命令条 -->
 
+      <!-- Epic #43: embedded LibreOffice editor overlay (experimental, ⌘⇧O).
+           Dormant — only mounts when explicitly opened; does NOT touch the WPS
+           document flow. -->
+      <view v-if="showLibreEmbed" class="libre-embed-overlay">
+        <LibreOfficeEditor @close="showLibreEmbed = false" />
+      </view>
 
     </view>
   </view>
@@ -1180,6 +1186,7 @@
 
 <script>
 import WpsEditor from '@/components/WpsEditor.vue'
+import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import BrowserPane from '@/components/BrowserPane.vue'
 import FileTree from '@/components/FileTree.vue'
 import FilePreview from '@/components/FilePreview.vue'
@@ -1254,6 +1261,7 @@ import ChatInterface from '@/components/ChatInterface.vue'
 export default {
   components: {
     WpsEditor,
+    LibreOfficeEditor,
     BrowserPane,
     FileTree,
     FilePreview,
@@ -1449,6 +1457,9 @@ export default {
       // Tabs 拖拽状态
       draggingTab: null, // { fileId, fromPane }
       tabDragOver: null, // { fileId, pane }
+
+      // Epic #43: embedded LibreOffice editor overlay (experimental, ⌘⇧O)
+      showLibreEmbed: false,
 
       // WPS Config
       wpsAppId: '', // 从后端动态获取
@@ -1707,6 +1718,8 @@ export default {
   },
   beforeUnmount() {
     this.teardownResponsiveListener()
+    // Epic #43: 解绑 ⌘⇧O 嵌入式编辑器监听
+    try { if (this._zetaOpenEmbedUnsub) { this._zetaOpenEmbedUnsub(); this._zetaOpenEmbedUnsub = null } } catch (e) { /* ignore */ }
     // 清理轮询定时器
     if (this.fileInfoPollingIntervals) {
       Object.values(this.fileInfoPollingIntervals).forEach(intervalId => {
@@ -1930,6 +1943,20 @@ export default {
     }
 
     // Manual binding removed (reverted to native modifier)
+
+    // Epic #43: ⌘⇧O 打开嵌入式 LibreOffice 编辑器覆盖层（实验）。仅切换覆盖层标志，
+    // 不触碰 WPS 文档流。
+    try {
+      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.zetaoffice && window.checkbaDesktop.zetaoffice.onOpenEmbed) {
+        if (!this._zetaOpenEmbedUnsub) {
+          this._zetaOpenEmbedUnsub = window.checkbaDesktop.zetaoffice.onOpenEmbed(() => {
+            this.showLibreEmbed = true
+          })
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
 
     // Desktop：拦截 WPS 中点击 “checkba://...” 的内部链接
     try {
@@ -10437,5 +10464,16 @@ $bg-white: #FFFFFF;
 
 .tag-close:hover {
   opacity: 1;
+}
+
+/* Epic #43: embedded LibreOffice editor overlay (experimental, ⌘⇧O) */
+.libre-embed-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 9999;
+  background: #fff;
 }
 </style>

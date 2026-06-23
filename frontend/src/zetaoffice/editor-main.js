@@ -31,6 +31,13 @@ function getIpcRenderer() {
 // {send, subscribe} over the host boundary — Electron <webview> IPC if present,
 // else postMessage to the parent (browser/iframe/spike harness).
 function pickTransport() {
+  // Preferred Electron <webview> path: the webview preload
+  // (desktop/preload/zetaoffice-webview-preload.js) exposes a fixed-shape bridge
+  // over contextBridge (contextIsolation stays ON). Already {send, subscribe}.
+  if (typeof window !== 'undefined' && window.zetaHostBridge) {
+    return window.zetaHostBridge
+  }
+  // Legacy fallback: nodeIntegration webview where window.require is available.
   const ipc = getIpcRenderer()
   if (ipc) {
     return {
