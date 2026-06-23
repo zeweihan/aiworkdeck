@@ -134,7 +134,16 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, onLog 
       if (!raw || !raw.pos) return
       const s = scaleFromZoom(raw)
       const r = host.getBoundingClientRect()
-      anchor = { x: (clientX - r.left) - s * raw.pos.X, y: (clientY - r.top) - s * raw.pos.Y }
+      // pos.Y is the caret's TOP; a click lands ~mid-line, so the click Y sits
+      // ~half a caret-height BELOW the caret top. Subtract that, else the box
+      // renders a half-line too low (lands between lines). X snaps to a glyph
+      // boundary near the click, so no horizontal correction is needed.
+      const z = s / CURSOR_MAP.scale
+      const halfCaret = raw.charHeightPt ? raw.charHeightPt * (96 / 72) * z / 2 : 9
+      anchor = {
+        x: (clientX - r.left) - s * raw.pos.X,
+        y: (clientY - r.top) - halfCaret - s * raw.pos.Y,
+      }
     } catch (e) {
       mapOk = false
       log('光标映射不可用，退回 Phase A 全覆盖 / cursor map unavailable: ' + (e && e.message || e))
