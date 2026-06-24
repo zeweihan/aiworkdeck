@@ -29,6 +29,7 @@
     <button id="btnSel" disabled>测选区 selection</button>
     <button id="btnRed" disabled>测修订 redline</button>
     <button id="btnPerf" disabled>测50页性能 perf</button>
+    <button id="btnPerfLoad" disabled>测50页加载 perf-load</button>
     <button id="btnCjk" disabled>插入中文(无IME)</button>
     <button id="btnExec" disabled>executor 自测(产品客户端)</button>
     <button id="btnRect" disabled>测光标矩形 cursor-rect</button>
@@ -69,6 +70,7 @@
     const btnSel = document.getElementById('btnSel');
     const btnRed = document.getElementById('btnRed');
     const btnPerf = document.getElementById('btnPerf');
+    const btnPerfLoad = document.getElementById('btnPerfLoad');
     const btnCjk = document.getElementById('btnCjk');
     const btnExec = document.getElementById('btnExec');
     const btnRect = document.getElementById('btnRect');
@@ -141,6 +143,19 @@
     btnRed.onclick = () => send('redline');
     btnPerf.onclick = () => send('perf', { pages: 50 });
     btnCjk.onclick = () => send('inserttext');
+
+    // perf-load: time the docx IMPORT path (generate -> save .docx -> reload).
+    // Structured result via workerRequest (NOT fire-and-forget) so we can print
+    // gen/save/load ms + page count. Heavy — may stress the headless preview.
+    btnPerfLoad.onclick = async () => {
+      zlog('=== perf-load：生成→存docx→重新加载 50 页（加载耗时见 loadMs）===', 'k');
+      btnPerfLoad.disabled = true;
+      try {
+        const r = await workerRequest('perf_load', { pages: 50 });
+        zlog('perf_load → ' + JSON.stringify(r), 'k');
+      } catch (e) { zlog('perf_load 失败：' + e, 'e'); }
+      btnPerfLoad.disabled = false;
+    };
 
     // Self-test the REAL product executor client end-to-end: client.executeCommand
     // -> worker -> UNO -> result. Proves the product code path (not eval-driven).
@@ -239,7 +254,7 @@
           onLog: function (m) { zlog(m); },
           onReady: function () {
             spinner.style.display = 'none'; canvas.style.visibility = 'visible';
-            btnSel.disabled = btnRed.disabled = btnPerf.disabled = btnCjk.disabled = btnExec.disabled = btnRect.disabled = false;
+            btnSel.disabled = btnRed.disabled = btnPerf.disabled = btnPerfLoad.disabled = btnCjk.disabled = btnExec.disabled = btnRect.disabled = false;
             imeBridge.disabled = false; imeBridge.focus();
             zlog('UI ready ✓ — 现在可以在文档里打中文、点测试按钮');
             try { window.dispatchEvent(new Event('resize')); } catch (err) { zlog('resize warn: ' + err, 'e'); }
@@ -273,9 +288,11 @@
           getCursorRaw: function () { return workerRequest('get_cursor_rect', {}); },
           // Enter -> paragraph break at the LO cursor (single-line input can't).
           onEnter: function () { return workerRequest('insert_paragraph', {}); },
+          // Control-key channel: Backspace -> delete_backward, arrows -> move_cursor.
+          sendCommand: function (action, params) { return workerRequest(action, params); },
           onLog: function (msg) { zlog(msg, 'ime'); },
         });
-        zlog('IME 透明覆盖层已挂载 ✓ (Phase B 自标定) — 点文档放光标后直接打中文、回车换行', 'ime');
+        zlog('IME 透明覆盖层已挂载 ✓ (Phase B 自标定) — 点文档放光标后直接打中文、回车换行、退格/方向键', 'ime');
 
         // Debug hooks. tuneCursorMap({nudgeX,nudgeY}) shifts the box by a constant
         // px to zero out the small click-snap / caret-top residual — click the doc,
@@ -284,7 +301,8 @@
         window.overlayRect = function () { return imeOverlay.computeRect(); };
         window.cursorMap = ov.CURSOR_MAP;
         window.tuneCursorMap = function (patch) { Object.assign(ov.CURSOR_MAP, patch || {}); if (imeOverlay) imeOverlay.reposition(); zlog('CURSOR_MAP = ' + JSON.stringify(ov.CURSOR_MAP), 'k'); return ov.CURSOR_MAP; };
-        zlog('调试钩子就绪：tuneCursorMap({nudgeX,nudgeY}) / measureCursor() / overlayRect()', 'k');
+        zlog('调试钩子就绪：tuneCursorMap({nudgeX,nudgeY,viewDataToMm}) / measureCursor() / overlayRect()', 'k');
+        zlog('滚动感知：滚动文档后打字应自动跟随；若不跟随，看 measureCursor().viewData 哪个字段随滚动变、单位是否需 viewDataToMm=2540/1440', 'k');
       } catch (e) {
         zlog('boot 失败：' + e, 'e');
         btnBoot.disabled = false;

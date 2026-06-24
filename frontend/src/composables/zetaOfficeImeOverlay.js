@@ -19,21 +19,31 @@
 // cursor; composing text shows inline (color turned visible), then clears on
 // commit while LO renders the real text.
 //
-//   MAPPING — doc 1/100 mm -> canvas CSS px is affine: px = scale*doc + offset.
+//   MAPPING — doc 1/100 mm -> canvas CSS px is affine: px = origin + scale*(doc - scroll).
 //   * scale is STABLE: 96/2540 CSS px per 1/100 mm at 100% zoom (CSS defines
 //     96 px/in; 2540 (1/100 mm)/in), times ZoomValue%. Verified exact against a
 //     real LibreOffice (click-correspondence calibration).
-//   * offset is VIEW-STATE-DEPENDENT (window size, scroll, LO chrome) so it is
-//     NOT a constant. We derive it LIVE: every canvas click gives both the click
-//     pixel AND (after Qt positions the cursor) the cursor's doc coords, so
-//     offset = clickPx - scale*docPos. The normal flow is "click to place the
-//     cursor, then type", so the anchor is always fresh where you're about to
-//     type — robust to any window/scroll without magic numbers. Before the first
-//     click we have no anchor, so the overlay stays full-cover (Phase A) and the
-//     candidate box sits top-left until the first click.
+//   * scroll is the SCROLLED view origin (VisibleTop/Left from get_cursor_rect's
+//     viewData). getPosition() is in document coords (from the page top), so once
+//     the view scrolls the cursor's doc Y jumps while its pixel stays in view.
+//     Subtracting `scroll` makes the mapping track the cursor through scroll
+//     WITHOUT re-clicking — the fix for the "anchor goes stale after auto-scroll"
+//     limitation. Absent viewData (older LOWA) -> scroll=0 -> identical to the
+//     pre-scroll-aware behavior. Unit (1/100 mm vs twips) is baked once on a real
+//     device via CURSOR_MAP.viewDataToMm.
+//   * origin is the canvas pixel of the visible-area top-left — VIEW-STATE-
+//     DEPENDENT (window size, LO chrome) but STABLE under scroll. We derive it
+//     LIVE from each canvas click: the click gives both the click pixel AND
+//     (after Qt positions the cursor) the cursor's doc coords + scroll, so
+//     origin = clickPx - scale*(docPos - scroll). The normal flow is "click to
+//     place the cursor, then type", so the anchor is always fresh. Before the
+//     first click we have no anchor, so the overlay stays full-cover (Phase A)
+//     and the candidate box sits top-left until the first click.
 //
-// Control keys: Enter inserts a paragraph break via onEnter (forwarded to UNO),
-// not into the empty <input>. Backspace/arrows are not yet forwarded.
+// Control keys (Phase B, when sendCommand is supplied): Enter inserts a paragraph
+// break via onEnter; Backspace deletes the char before the cursor; arrow keys move
+// the LO view cursor — all forwarded to UNO, not applied to the empty <input>.
+// Without sendCommand these keys fall through to the (harmless, empty) input.
 
 // The STABLE half of the mapping. offset is derived live per click (see above).
 // nudgeX/nudgeY are a small constant px correction for the residual between the
@@ -44,11 +54,26 @@ export const CURSOR_MAP = {
   useZoom: true,
   nudgeX: 0,
   nudgeY: 0,
+  // Unit of viewData scroll (VisibleTop/Left) -> 1/100 mm. 1 if viewData is
+  // already 1/100 mm; set 2540/1440 (~1.7639) if a real device shows it's twips.
+  viewDataToMm: 1,
 }
 
 function scaleFromZoom(raw) {
   const z = (CURSOR_MAP.useZoom && raw && raw.zoom) ? raw.zoom / 100 : 1
   return CURSOR_MAP.scale * z
+}
+
+// Scrolled view origin in 1/100 mm from get_cursor_rect's viewData, or null if
+// absent. Prefer VisibleTop/Left; fall back to ViewTop/Left.
+function scrollMm(raw) {
+  const vd = raw && raw.viewData
+  if (!vd) return null
+  const k = CURSOR_MAP.viewDataToMm || 1
+  const top = typeof vd.VisibleTop === 'number' ? vd.VisibleTop : vd.ViewTop
+  const left = typeof vd.VisibleLeft === 'number' ? vd.VisibleLeft : vd.ViewLeft
+  if (typeof top !== 'number' || typeof left !== 'number') return null
+  return { x: left * k, y: top * k }
 }
 
 /**
@@ -60,9 +85,10 @@ export function cursorRectToPixels(raw, offset) {
   if (!raw || !raw.pos || typeof raw.pos.X !== 'number' || !offset) return null
   const s = scaleFromZoom(raw)
   const z = s / CURSOR_MAP.scale
+  const sc = scrollMm(raw) || { x: 0, y: 0 }
   return {
-    left: offset.x + s * raw.pos.X + (CURSOR_MAP.nudgeX || 0),
-    top: offset.y + s * raw.pos.Y + (CURSOR_MAP.nudgeY || 0),
+    left: offset.x + s * (raw.pos.X - sc.x) + (CURSOR_MAP.nudgeX || 0),
+    top: offset.y + s * (raw.pos.Y - sc.y) + (CURSOR_MAP.nudgeY || 0),
     height: raw.charHeightPt ? raw.charHeightPt * (96 / 72) * z : 18,
   }
 }
@@ -80,10 +106,15 @@ export function cursorRectToPixels(raw, offset) {
  * @param {()=>(any|Promise<any>)} [options.onEnter] OPTIONAL. Inserts a paragraph
  *        break at the LO cursor (e.g. () => executor.executeCommand(
  *        'insert_paragraph')). Without it, Enter does nothing.
+ * @param {(action:string,params:object)=>Promise<any>} [options.sendCommand]
+ *        OPTIONAL. A raw UI-command channel to the worker (e.g. (a,p) =>
+ *        workerRequest(a,p)). Enables control-key forwarding: Backspace ->
+ *        delete_backward, arrow keys -> move_cursor. Without it, those keys fall
+ *        through to the (empty) input and the document is unaffected.
  * @param {(msg:string)=>void} [options.onLog] optional progress/diagnostic log.
  * @returns {{element, focus, reposition, computeRect, destroy}}
  */
-export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, onLog } = {}) {
+export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onLog } = {}) {
   if (!canvas) throw new Error('attachImeOverlay: canvas is required')
   if (typeof commit !== 'function') throw new Error('attachImeOverlay: commit(text) is required')
   const log = (m) => { if (onLog) onLog(m) }
@@ -146,9 +177,11 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, onLog 
       // X) is a small ~constant the maintainer zeroes once via CURSOR_MAP.nudge.
       const z = s / CURSOR_MAP.scale
       const halfCaret = raw.charHeightPt ? raw.charHeightPt * (96 / 72) * z / 2 : 8
+      const sc = scrollMm(raw) || { x: 0, y: 0 }
+      // origin = visible-area top-left in px (stable under scroll); see header.
       anchor = {
-        x: (clientX - r.left) - s * raw.pos.X,
-        y: (clientY - r.top) - halfCaret - s * raw.pos.Y,
+        x: (clientX - r.left) - s * (raw.pos.X - sc.x),
+        y: (clientY - r.top) - halfCaret - s * (raw.pos.Y - sc.y),
       }
     } catch (e) {
       mapOk = false
@@ -196,8 +229,18 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, onLog 
     reposition()
   })
 
-  // Enter -> paragraph break at the LO cursor (NOT into the single-line input).
-  // Only when NOT composing — during composition Enter confirms the IME candidate.
+  // Forward a worker UI command, then move the box to the (now-moved) cursor.
+  const forward = (action, params, label) => {
+    log('IME 覆盖层 → ' + label)
+    try { Promise.resolve(sendCommand(action, params || {})).then(reposition).catch((err) => log('overlay ' + action + ' error: ' + (err && err.message || err))) }
+    catch (err) { log('overlay ' + action + ' error: ' + (err && err.message || err)) }
+  }
+  const ARROW_DIR = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }
+
+  // Control keys -> UNO (NOT into the single-line input). Only when NOT composing:
+  // during composition these keys drive the IME candidate window. Enter routes to
+  // onEnter; Backspace/arrows route through sendCommand (skipped if not supplied,
+  // letting them fall through to the harmless empty input).
   input.addEventListener('keydown', (e) => {
     if (composing || e.isComposing) return
     if (e.key === 'Enter') {
@@ -206,6 +249,15 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, onLog 
       log('IME 覆盖层 → 回车换行 / paragraph break')
       try { Promise.resolve(onEnter()).then(reposition).catch((err) => log('overlay enter error: ' + (err && err.message || err))) }
       catch (err) { log('overlay enter error: ' + (err && err.message || err)) }
+      return
+    }
+    if (typeof sendCommand !== 'function') return
+    if (e.key === 'Backspace') {
+      e.preventDefault()
+      forward('delete_backward', {}, 'Backspace 删除 / delete')
+    } else if (ARROW_DIR[e.key]) {
+      e.preventDefault()
+      forward('move_cursor', { dir: ARROW_DIR[e.key], extend: e.shiftKey }, '方向键 ' + ARROW_DIR[e.key] + (e.shiftKey ? '+选择' : ''))
     }
   })
 

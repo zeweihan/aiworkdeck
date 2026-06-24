@@ -29,6 +29,9 @@ function errStr(e) {
   try { return zetajs.getAnyType(zetajs.catchUnoException(e)) + ' ' + (e && e.message || ''); }
   catch { return String(e && e.message || e); }
 }
+// Build a UNO PropertyValue the zetajs way (struct ctor takes a values object;
+// unset members default). Used for loadComponentFromURL/storeToURL filter args.
+function mkProp(name, value) { return new css.beans.PropertyValue({ Name: name, Value: value }); }
 
 // §0.2 anchors: a bookmark spanning a text range is a STABLE location handle that
 // moves with edits — the model-native replacement for fragile integer offsets.
@@ -365,6 +368,35 @@ const EXEC = {
     vc.collapseToEnd();
     return { success: true };
   },
+  // [spike] move the view cursor (arrow keys in the IME overlay route here — the
+  // overlay's single-line <input> would otherwise navigate the empty input, not
+  // the document). left/right are text-flow steps (XTextCursor.goLeft/goRight),
+  // up/down are visual lines (XViewCursor.goUp/goDown). extend=true (Shift+arrow)
+  // grows the selection. No content change, so no RecordChanges.
+  move_cursor(p) {
+    const vc = ctrl.getViewCursor();
+    const dir = String(p.dir || '');
+    const ex = !!p.extend;
+    switch (dir) {
+      case 'left': vc.goLeft(1, ex); break;
+      case 'right': vc.goRight(1, ex); break;
+      case 'up': vc.goUp(1, ex); break;
+      case 'down': vc.goDown(1, ex); break;
+      default: return { success: false, message: 'move_cursor: unsupported dir: ' + dir };
+    }
+    return { success: true, dir: dir, extend: ex };
+  },
+  // [spike] delete one char before the cursor (Backspace in the IME overlay). If
+  // text is selected, delete the selection; else extend one char left and clear.
+  // Inherits the current RecordChanges state (tracked if tracking is on).
+  delete_backward() {
+    const vc = ctrl.getViewCursor();
+    if ((vc.getString() || '').length === 0) vc.goLeft(1, true); // select char to the left
+    const had = (vc.getString() || '').length;
+    if (had === 0) return { success: true, deleted: 0 };          // at doc start: nothing to delete
+    vc.setString('');
+    return { success: true, deleted: had };
+  },
   // [spike] Phase B: raw measurements for mapping the view cursor to canvas
   // pixels. We DELIBERATELY return primitives (not a final px rect) so the
   // mm->px formula can be calibrated on the JS side without restarting LOWA.
@@ -389,7 +421,68 @@ const EXEC = {
       const r = ctrl.getFrame().getComponentWindow().getPosSize();
       out.winPx = { X: r.X, Y: r.Y, W: r.Width, H: r.Height };
     } catch (e) { out.winErr = errStr(e); }
+    // SCROLL-AWARE origin (Phase B): getPosition() is in document coords (from the
+    // page top), so after the view scrolls the click-derived offset goes stale.
+    // The view data carries the scrolled origin — VisibleLeft/Top (or ViewLeft/Top)
+    // — so the overlay can subtract it and follow the cursor WITHOUT re-clicking.
+    // We return the whole bag verbatim: which field tracks scroll AND its unit
+    // (1/100 mm vs twips) is the open question to confirm on a real device, then
+    // bake CURSOR_MAP.viewDataToMm accordingly.
+    try {
+      const vd = xModel.getViewData && xModel.getViewData();
+      if (vd && typeof vd.getByIndex === 'function' && vd.getCount() > 0) {
+        const seq = vd.getByIndex(0);
+        const view = {};
+        if (seq && seq.length) for (let i = 0; i < seq.length; i++) {
+          const pv = seq[i];
+          if (pv && pv.Name != null) view[pv.Name] = pv.Value;
+        }
+        out.viewData = view;
+      }
+    } catch (e) { out.viewDataErr = errStr(e); }
     return out;
+  },
+  // [spike] probe 4b: LOAD performance of a 50-page docx (#56 余项). The existing
+  // testPerf times GENERATION; this times the docx IMPORT path: generate N pages,
+  // store to a .docx in MEMFS, then loadComponentFromURL it (replacing the visible
+  // doc) and time the load. Reports gen/save/load ms + page count. loadMs covers
+  // model load + initial layout trigger; Qt repaint/scroll smoothness still needs
+  // eyes on a real device. Heavy — may stress a headless sandbox (reboot if it
+  // hangs); the authoritative numbers come from a real machine.
+  perf_load(p) {
+    const pages = Number(p.pages) || 50;
+    const r = { success: true, pages: pages };
+    try {
+      const xText = xModel.getText();
+      const cur = xText.createTextCursor();
+      cur.gotoEnd(false);
+      const tGen = performance.now();
+      for (let pg = 0; pg < pages; pg++) {
+        for (let l = 0; l < 28; l++) {
+          xText.insertString(cur, '第' + (pg + 1) + '页 第' + (l + 1) + '行 合同条款示例 / contract clause sample line.', false);
+          xText.insertControlCharacter(cur, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+        }
+        try { cur.setPropertyValue('BreakType', css.style.BreakType.PAGE_AFTER); } catch (e) {}
+      }
+      r.genMs = Math.round(performance.now() - tGen);
+
+      const url = 'file:///tmp/perf_' + pages + '.docx';
+      const tSave = performance.now();
+      xModel.storeToURL(url, [mkProp('FilterName', 'MS Word 2007 XML')]);
+      r.saveMs = Math.round(performance.now() - tSave);
+
+      const tLoad = performance.now();
+      const loaded = desktop.loadComponentFromURL(url, '_default', 0, []);
+      r.loadMs = Math.round(performance.now() - tLoad);
+
+      // The loaded docx now owns the frame; retarget the worker's model/controller
+      // so subsequent commands act on what's actually displayed.
+      xModel = loaded;
+      ctrl = loaded.getCurrentController();
+      try { const vc = ctrl.getViewCursor(); vc.gotoEnd(false); r.pageCount = vc.getPage(); }
+      catch (e) { r.pageErr = errStr(e); }
+    } catch (e) { r.success = false; r.message = errStr(e); }
+    return r;
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
