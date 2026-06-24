@@ -7,9 +7,11 @@
 // LOWA cross-origin from the CDN
 // (ERR_BLOCKED_BY_RESPONSE.NotSameOriginAfterDefaultedToSameOriginByCoep), and
 // injecting CORP on cross-origin responses proved unreliable in Electron (#53).
-// Serving the page + proxying LOWA same-origin (/lowa/*) sidesteps all of that —
-// every resource is same-origin so require-corp is trivially satisfied. This is
-// also the production direction (self-host LOWA in the bundle).
+// Serving the page + LOWA same-origin (/lowa/*) sidesteps all of that — every
+// resource is same-origin so require-corp is trivially satisfied. LOWA is baked
+// into the bundle at build time (Track A) and served locally so the app renders
+// offline; the same-origin proxy to the CDN remains only as a fallback for any
+// file not bundled.
 //
 // This module is the single source of that server. It was first proven in the
 // ⌘⇧L verification window (zetaoffice-verify.js, #53) and is now shared by both
@@ -20,7 +22,8 @@
 const path = require('path')
 const http = require('node:http')
 const https = require('node:https')
-const { readFile } = require('node:fs/promises')
+const { readFile, stat } = require('node:fs/promises')
+const { createReadStream, readFileSync } = require('node:fs')
 const { app } = require('electron')
 
 const LOWA_CDN = 'https://cdn.zetaoffice.net/zetaoffice_latest/'
@@ -47,6 +50,16 @@ function editorRoot() {
   return app.isPackaged
     ? path.join(process.resourcesPath, 'frontend/dist/zetaoffice')
     : path.join(__dirname, '../../frontend/dist/zetaoffice')
+}
+
+// lowa/.encodings.json (written by desktop/scripts/fetch-lowa-assets.js): map of
+// basename -> content-encoding to REPLAY when serving a baked file, because the
+// CDN ships soffice.wasm/.data brotli-compressed and the bytes are stored as-is.
+// Without this the browser would receive brotli bytes as raw wasm and fail to
+// boot. Empty in dev (nothing baked); then /lowa/* falls back to the CDN proxy.
+function loadLowaEncodings(root) {
+  try { return JSON.parse(readFileSync(path.join(root, 'lowa', '.encodings.json'), 'utf8')) }
+  catch (e) { return {} }
 }
 
 // Proxy a full https URL to res, following up to 4 redirects. Streams the body
@@ -76,13 +89,38 @@ function proxyUrl(url, res, redirects = 0) {
 function startEditorServer() {
   if (serverPromise) return serverPromise
   const root = editorRoot()
+  const lowaEncodings = loadLowaEncodings(root)
   serverPromise = new Promise((resolve, reject) => {
     const s = http.createServer(async (req, res) => {
       try {
         let urlPath = decodeURIComponent((req.url || '/').split('?')[0])
-        // Same-origin LOWA proxy: /lowa/<path> -> the LOWA CDN.
+        // Same-origin LOWA: serve the baked runtime (dist/zetaoffice/lowa/*,
+        // produced at build time by desktop/scripts/fetch-lowa-assets.js) so the
+        // app renders offline; fall back to the CDN proxy only for files not
+        // bundled. Local-first is what makes the packaged app independent of
+        // cdn.zetaoffice.net.
         if (urlPath.startsWith('/lowa/')) {
-          return proxyUrl(LOWA_CDN + urlPath.slice('/lowa/'.length), res)
+          const rel = urlPath.slice('/lowa/'.length)
+          const lowaDir = path.join(root, 'lowa')
+          const localPath = path.normalize(path.join(lowaDir, rel))
+          if (localPath.startsWith(lowaDir)) {
+            try {
+              const st = await stat(localPath)
+              if (st.isFile()) {
+                const headers = {
+                  'Content-Type': TYPES[path.extname(localPath)] || 'application/octet-stream',
+                  'Content-Length': st.size,
+                }
+                // Replay the brotli encoding for files the CDN pre-compressed.
+                const enc = lowaEncodings[path.basename(localPath)]
+                if (enc) headers['Content-Encoding'] = enc
+                res.writeHead(200, headers)
+                createReadStream(localPath).pipe(res)
+                return
+              }
+            } catch (e) { /* not bundled locally — fall through to the CDN proxy */ }
+          }
+          return proxyUrl(LOWA_CDN + rel, res)
         }
         if (urlPath === '/') urlPath = '/editor.html'
         const filePath = path.normalize(path.join(root, urlPath))

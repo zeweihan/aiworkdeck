@@ -62,22 +62,18 @@ jobs:
           # Epic #43: build the embedded LibreOffice editor bundle (dist/zetaoffice),
           # shipped via extraResources for the experimental "LibreOffice 验证" window.
           npm run build:zetaoffice
-      - name: Bundle a CJK font for the LibreOffice verify window (best-effort)
+      - name: Bake LOWA runtime + OFL CJK font into the editor bundle (offline)
         shell: bash
         run: |
-          # The editor injects this font so Chinese renders (not tofu). Best-effort:
-          # if no system CJK font is found the editor skips it cleanly.
-          dest="frontend/dist/zetaoffice/cjk.ttc"
-          if [ "$RUNNER_OS" = "macOS" ]; then
-            for f in "/System/Library/Fonts/Hiragino Sans GB.ttc" "/System/Library/Fonts/PingFang.ttc" "/System/Library/Fonts/Supplemental/Songti.ttc"; do
-              [ -f "$f" ] && cp "$f" "$dest" && break
-            done
-          else
-            for f in "/c/Windows/Fonts/msyh.ttc" "/c/Windows/Fonts/simsun.ttc" "C:/Windows/Fonts/msyh.ttc" "C:/Windows/Fonts/simsun.ttc"; do
-              [ -f "$f" ] && cp "$f" "$dest" && break
-            done
-          fi
-          ls -la "$dest" 2>/dev/null && echo "CJK font bundled" || echo "no CJK font found (Chinese will be tofu in verify window)"
+          # Track A (Epic #43): download the LibreOffice WASM runtime (soffice.*)
+          # into dist/zetaoffice/lowa and an OFL-licensed CJK font (Noto Sans SC)
+          # as cjk.ttc, so the packaged app renders Chinese OFFLINE without
+          # reaching cdn.zetaoffice.net. Replaces the old best-effort copy of a
+          # system font (non-deterministic, absent offline). Adds ~60 MB to the
+          # installer. The local HTTP server (zetaoffice-server.js) serves these
+          # first and falls back to the CDN only for anything not bundled.
+          node desktop/scripts/fetch-lowa-assets.js
+          ls -la frontend/dist/zetaoffice/lowa frontend/dist/zetaoffice/cjk.ttc
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
