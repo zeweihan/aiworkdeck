@@ -54,6 +54,7 @@
     "@dcloudio/uni-mp-xhs": "3.0.0-4080420251103001",
     "@dcloudio/uni-quickapp-webview": "3.0.0-4080420251103001",
     "animejs": "^4.2.2",
+    "docx-preview": "^0.3.7",
     "entities": "^7.0.0",
     "linkify-it": "^5.0.0",
     "markdown-it": "^14.1.0",

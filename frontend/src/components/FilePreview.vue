@@ -26,8 +26,14 @@
 
       <!-- 预览内容区域 -->
       <view class="preview-body">
-        <!-- Office 文件预览（使用 WPS 预览模式） -->
-        <view v-if="isOffice && file.wpsFileId" class="preview-wps">
+        <!-- Word 文档零配置只读渲染：docx-preview 本地解析，无需 WPS/密钥，数据不出本机（承接 #18 T6） -->
+        <view v-if="isWord && useDocxPreview && !docxRenderFailed" class="preview-docx">
+          <view v-if="docxLoading" class="docx-loading"><text>正在渲染文档…</text></view>
+          <view ref="docxContainer" class="docx-host"></view>
+        </view>
+
+        <!-- Office 文件预览（xls/ppt，或 docx 渲染失败/非 H5 时回退到 WPS 预览模式） -->
+        <view v-else-if="isOffice && file.wpsFileId" class="preview-wps">
           <WpsEditor
             :file-id="file.wpsFileId"
             :file-name="file.name"
@@ -105,6 +111,14 @@ import { getFileDownloadUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import WpsEditor from '@/components/WpsEditor.vue'
 
+// docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台回退原 WPS 路径
+// #ifdef H5
+const IS_H5 = true
+// #endif
+// #ifndef H5
+const IS_H5 = false
+// #endif
+
 export default {
   name: 'FilePreview',
   components: {
@@ -129,6 +143,10 @@ export default {
       textContent: '',
       loading: false,
       blobUrl: '',
+      docxLoading: false,
+      docxRenderFailed: false,
+      // docx-preview 仅在 H5/桌面（Chromium）渲染；非 H5 回退到原 WPS 路径
+      useDocxPreview: IS_H5,
       wpsContainerStyle: {
         width: '100%',
         height: '100%'
@@ -155,6 +173,10 @@ export default {
       if (!this.file || !this.file.fileType) return false
       const type = this.file.fileType.toLowerCase()
       return ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(type)
+    },
+    isWord() {
+      if (!this.file || !this.file.fileType) return false
+      return ['doc', 'docx'].includes(this.file.fileType.toLowerCase())
     },
     isImage() {
       if (!this.file || !this.file.fileType) return false
@@ -199,10 +221,14 @@ export default {
           this.blobUrl = ''
         }
 
+        this.docxRenderFailed = false
+
         if (!newFile) return
 
         if (this.isText) {
           this.loadTextContent()
+        } else if (this.isWord && this.useDocxPreview) {
+          this.renderDocx()
         } else if (this.isImage || this.isVideo || this.isAudio || this.isPdf) {
            this.loadMediaResource()
         }
@@ -296,6 +322,47 @@ export default {
         }
         
         xhr.send()
+    },
+    // 带鉴权下载为 Blob（复用 loadMediaResource 的 XHR 鉴权方式，但返回 Promise<Blob>）
+    fetchAuthedBlob() {
+      return new Promise((resolve, reject) => {
+        if (!this.fileUrl) return reject(new Error('文件地址为空'))
+        const headers = getAuthHeaders() || {}
+        const xhr = new XMLHttpRequest()
+        xhr.open('GET', this.fileUrl, true)
+        xhr.responseType = 'blob'
+        Object.keys(headers).forEach(key => xhr.setRequestHeader(key, headers[key]))
+        xhr.onload = () => xhr.status === 200 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status))
+        xhr.onerror = () => reject(new Error('网络错误'))
+        xhr.send()
+      })
+    },
+    // Word 文档零配置只读渲染：docx-preview 在本地（Chromium）解析 .docx，无需 WPS/任何密钥
+    async renderDocx() {
+      this.docxLoading = true
+      this.docxRenderFailed = false
+      try {
+        const blob = await this.fetchAuthedBlob()
+        await this.$nextTick()
+        const ref = this.$refs.docxContainer
+        const container = ref && (ref.$el || ref)
+        if (!container) throw new Error('渲染容器未就绪')
+        container.innerHTML = ''
+        const { renderAsync } = await import('docx-preview')
+        await renderAsync(blob, container, null, {
+          className: 'docx',
+          inWrapper: true,
+          ignoreWidth: false,
+          ignoreHeight: false,
+          breakPages: true,
+          experimental: true
+        })
+      } catch (error) {
+        console.error('docx 本地渲染失败，回退到 WPS 预览:', error)
+        this.docxRenderFailed = true
+      } finally {
+        this.docxLoading = false
+      }
     },
     getMimeType(fileType) {
         if (!fileType) return ''
@@ -505,6 +572,26 @@ export default {
 .preview-wps {
   width: 100%;
   height: 100%;
+}
+
+/* Word 文档零配置只读渲染容器（docx-preview） */
+.preview-docx {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: #f3f4f6;
+}
+
+.docx-host {
+  display: block;
+  width: 100%;
+}
+
+.docx-loading {
+  padding: 32rpx;
+  text-align: center;
+  color: #6b7280;
+  font-size: 28rpx;
 }
 
 .preview-iframe {
