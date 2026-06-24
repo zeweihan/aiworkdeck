@@ -694,6 +694,16 @@
                       @title-change="onBrowserTitleChange('left', $event)"
                       @open-new-tab="openBrowserTab($event)"
                     />
+                    <!-- Epic #43 Track B: embedded LibreOffice is the DEFAULT
+                         editor for Office docs when available (desktop). WPS is
+                         the fallback (web/h5 or embed unavailable). -->
+                    <LibreOfficeEditor
+                      v-else-if="useLibreEditor(activeFileLeft)"
+                      :key="'libre-left-' + activeFileLeft.id"
+                      variant="default"
+                      @ready="onLibreReady"
+                      @close="onLibreClose"
+                    />
                     <WpsEditor
                       v-else-if="isWpsFile(activeFileLeft)"
                       ref="wpsLeft"
@@ -755,6 +765,14 @@
                       @url-change="onBrowserUrlChange('right', $event)"
                       @title-change="onBrowserTitleChange('right', $event)"
                       @open-new-tab="openBrowserTab($event)"
+                    />
+                    <!-- Epic #43 Track B: embedded LibreOffice default (see left pane). -->
+                    <LibreOfficeEditor
+                      v-else-if="useLibreEditor(activeFileRight)"
+                      :key="'libre-right-' + activeFileRight.id"
+                      variant="default"
+                      @ready="onLibreReady"
+                      @close="onLibreClose"
                     />
                     <WpsEditor
                       v-else-if="isWpsFile(activeFileRight)"
@@ -1465,6 +1483,10 @@ export default {
       showLibreEmbed: false,
       libreOfficeActive: false,
       libreOfficeExecutor: null,
+      // Epic #43 Track B: when true, opening an Office document defaults to the
+      // inline embedded LibreOffice editor (WPS demoted to fallback). Set at init
+      // from desktop embed availability — install-and-use, no WPS config needed.
+      libreOfficePreferred: false,
 
       // WPS Config
       wpsAppId: '', // 从后端动态获取
@@ -1949,13 +1971,28 @@ export default {
 
     // Manual binding removed (reverted to native modifier)
 
-    // Epic #43: ⌘⇧O 打开嵌入式 LibreOffice 编辑器覆盖层（实验）。仅切换覆盖层标志，
-    // 不触碰 WPS 文档流。
+    // Epic #43 Track B: when the desktop app exposes the embedded editor, make it
+    // the DEFAULT editor for Office documents (inline, no ⌘⇧O needed). WPS is
+    // demoted to a fallback so users can edit without configuring WPS.
+    try {
+      this.libreOfficePreferred = !!(
+        this.isDesktopApp &&
+        window.checkbaDesktop &&
+        window.checkbaDesktop.zetaoffice &&
+        typeof window.checkbaDesktop.zetaoffice.getEditor === 'function'
+      )
+    } catch (e) {
+      this.libreOfficePreferred = false
+    }
+
+    // Epic #43: ⌘⇧O 打开嵌入式 LibreOffice 编辑器覆盖层（实验）。当嵌入式编辑器已是
+    // 文档的默认内联编辑器时（libreOfficePreferred），文档区已经承载它，⌘⇧O 变为
+    // 空操作以避免双重挂载（两个 webview/executor）；仅在未启用内联默认时回退到覆盖层。
     try {
       if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.zetaoffice && window.checkbaDesktop.zetaoffice.onOpenEmbed) {
         if (!this._zetaOpenEmbedUnsub) {
           this._zetaOpenEmbedUnsub = window.checkbaDesktop.zetaoffice.onOpenEmbed(() => {
-            this.showLibreEmbed = true
+            if (!this.libreOfficePreferred) this.showLibreEmbed = true
           })
         }
       }
@@ -5086,6 +5123,14 @@ export default {
       return wpsFormats.includes(type) || (file.wpsFileId && !mediaTypes.includes(type) && type !== 'md' && type !== 'markdown')
     },
 
+    // Epic #43 Track B: should this Office file open in the embedded LibreOffice
+    // editor instead of WPS? True only when the desktop embed is available
+    // (libreOfficePreferred). On web/h5 or when unavailable, returns false so the
+    // existing WPS path still renders the document.
+    useLibreEditor(file) {
+      return this.libreOfficePreferred && this.isWpsFile(file)
+    },
+
     // Check if file is a markdown tab (for AI artifacts or real .md files)
     isMarkdownTab(file) {
       if (!file) return false
@@ -5911,13 +5956,19 @@ export default {
     },
 
     // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
-    // commands route to it (see handleWpsCommand divert).
+    // commands route to it (see handleWpsCommand divert). Used by both the inline
+    // default editor (Track B) and the legacy ⌘⇧O overlay.
     onLibreReady(executor) {
         this.libreOfficeExecutor = executor
         this.libreOfficeActive = true
         console.log('[ProjectOverview] LibreOffice editor ready — agent commands routed to LibreOffice')
     },
-    onLibreClose() {
+    onLibreClose(executor) {
+        // The overlay close button emits no executor; an inline editor unmount
+        // (tab close/switch) emits its own. Only tear down routing if the editor
+        // going away owns the currently-active executor — so a fast switch
+        // between two Office docs can't clobber the newly-ready one.
+        if (executor && executor !== this.libreOfficeExecutor) return
         this.showLibreEmbed = false
         this.libreOfficeActive = false
         this.libreOfficeExecutor = null

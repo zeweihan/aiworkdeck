@@ -1,12 +1,18 @@
 <template>
   <view class="libre-editor-wrapper">
     <view class="libre-toolbar">
-      <text class="libre-title">LibreOffice 编辑器（嵌入式 webview · 实验）</text>
+      <text class="libre-title">{{ variant === 'default' ? 'LibreOffice 编辑器' : 'LibreOffice 编辑器（嵌入式 webview · 实验）' }}</text>
       <text class="libre-status" :class="{ ready }">{{ statusText }}</text>
-      <button class="libre-btn" :disabled="!ready" @click="runInsert">插入示例</button>
-      <button class="libre-btn" :disabled="!ready" @click="runReplace">查找替换(redline)</button>
-      <button class="libre-btn" :disabled="!ready" @click="runSelection">读选区</button>
-      <button class="libre-btn libre-close" @click="$emit('close')">关闭</button>
+      <!-- The dev probe buttons + close are the ⌘⇧O experimental overlay's
+           controls. In the inline 'default' variant (Track B: embedded editor is
+           the document's default editor) they are hidden — the document tab's ×
+           closes it and the AI agent drives commands. -->
+      <template v-if="variant !== 'default'">
+        <button class="libre-btn" :disabled="!ready" @click="runInsert">插入示例</button>
+        <button class="libre-btn" :disabled="!ready" @click="runReplace">查找替换(redline)</button>
+        <button class="libre-btn" :disabled="!ready" @click="runSelection">读选区</button>
+        <button class="libre-btn libre-close" @click="$emit('close')">关闭</button>
+      </template>
     </view>
     <!-- The Electron <webview> is created imperatively (uni-app's template
          compiler does not know the <webview> tag); it mounts into this host. -->
@@ -39,6 +45,11 @@ let seq = 0
 export default {
   name: 'LibreOfficeEditor',
   emits: ['close', 'ready'],
+  props: {
+    // 'experimental' = the original ⌘⇧O overlay (dev probe toolbar shown).
+    // 'default'      = inline document editor (Track B): toolbar chrome hidden.
+    variant: { type: String, default: 'experimental' },
+  },
   data() {
     return {
       hostId: 'libre-host-' + (++seq),
@@ -64,6 +75,10 @@ export default {
     }
   },
   beforeUnmount() {
+    // Tell the host this editor (and its executor) is going away — so it can
+    // stop routing AI commands to a disposed executor when the document tab is
+    // closed or switched. The executor ref lets the host ignore stale closes.
+    try { this.$emit('close', this.executor) } catch (e) { /* ignore */ }
     try { if (this.executor && typeof this.executor.dispose === 'function') this.executor.dispose() } catch (e) { /* ignore */ }
     try { if (this.webviewEl && this.webviewEl.remove) this.webviewEl.remove() } catch (e) { /* ignore */ }
     this.webviewEl = null
