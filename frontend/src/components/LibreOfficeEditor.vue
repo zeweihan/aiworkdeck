@@ -154,8 +154,16 @@ export default {
       if (!fileId) throw new Error('file has no id/wpsFileId')
       const url = getFileDownloadUrl(fileId)
       const buf = await this.fetchArrayBuffer(url)
-      const bytes = new Uint8Array(buf)
+      const bytes = new Uint8Array(buf || new ArrayBuffer(0))
       const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
+      // Empty body = a brand-new / unsaved document — the backend streams HTTP
+      // 200 with 0 bytes for it. That's NOT a load failure: keep the clean blank
+      // editor the worker booted (the user edits + saves into it). Only a real
+      // fetch error (non-200, handled in fetchArrayBuffer) surfaces as failed.
+      if (bytes.length === 0) {
+        this.appendLog('文档为空（新建/未保存）→ 显示空白文档 / empty doc → blank editor: ' + name)
+        return
+      }
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
       const res = await this.executor.executeCommand('load_document', { bytes, name })
       this.appendLog('  ← ' + JSON.stringify(res))

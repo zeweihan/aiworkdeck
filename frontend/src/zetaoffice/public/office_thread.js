@@ -34,6 +34,16 @@ function errStr(e) {
 // unset members default). Used for loadComponentFromURL/storeToURL filter args.
 function mkProp(name, value) { return new css.beans.PropertyValue({ Name: name, Value: value }); }
 
+// LibreOffice import filter names by extension — used only for the stream-load
+// fallback (private:stream has no URL extension to auto-detect a filter from).
+const IMPORT_FILTERS = {
+  docx: 'MS Word 2007 XML', doc: 'MS Word 97',
+  xlsx: 'Calc MS Excel 2007 XML', xls: 'MS Excel 97',
+  pptx: 'Impress MS PowerPoint 2007 XML', ppt: 'MS PowerPoint 97',
+  rtf: 'Rich Text Format', txt: 'Text',
+  odt: 'writer8', ods: 'calc8', odp: 'impress8',
+};
+
 // §0.2 anchors: a bookmark spanning a text range is a STABLE location handle that
 // moves with edits — the model-native replacement for fragile integer offsets.
 const ANCHOR_PREFIX = '__ai_anchor_';
@@ -50,7 +60,12 @@ function anchorRange(name) {
   return bms.getByName(name).getAnchor(); // XTextRange
 }
 
-// ---- boot: open a fresh Writer doc seeded with Chinese + English ----------
+// ---- boot: open a fresh BLANK Writer doc ----------------------------------
+// Production: a brand-new / empty document must show a clean blank page (the
+// host loads real bytes via load_document when the file has content). We do NOT
+// seed scaffolding text here — earlier dev-prototype seed text would otherwise
+// show through whenever a real load was skipped/failed, looking like the editor
+// loaded the wrong content.
 function bootDoc() {
   context = zetajs.getUnoComponentContext();
   desktop = css.frame.Desktop.create(context);
@@ -58,24 +73,9 @@ function bootDoc() {
   ctrl = xModel.getCurrentController();
   try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch {}
 
-  // Seed REAL paragraphs (PARAGRAPH_BREAK), not '\n' line breaks within one
-  // paragraph — so paragraph-indexed commands (get_paragraph/modify_paragraph/
-  // get_outline) are meaningfully testable.
-  const xText = xModel.getText();
-  const cur = xText.createTextCursor();
-  const lines = [
-    'AI Workdeck × LibreOffice WASM 原型 / prototype.',
-    '请在此用系统输入法输入中文，观察候选与上屏 / Type Chinese here with your IME.',
-    'Search target: LibreOffice — used by the redline probe.'
-  ];
-  for (let i = 0; i < lines.length; i++) {
-    xText.insertString(cur, lines[i], false);
-    if (i < lines.length - 1) xText.insertControlCharacter(cur, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
-  }
-
   installKeyHandler();
   post('ui_ready');
-  log('文档就绪 swriter / doc ready');
+  log('空白文档就绪 swriter / blank doc ready');
 }
 
 // ---- probe 1: 中文 IME diagnostics --------------------------------------
@@ -485,13 +485,13 @@ const EXEC = {
     } catch (e) { r.success = false; r.message = errStr(e); }
     return r;
   },
-  // [verified-extend] LOAD the user's REAL document (Track D). Replaces the
-  // seeded prototype with the bytes the host fetched (authed) from the backend.
-  // SAME store→load→retarget mechanism perf_load proved, but the bytes are the
-  // user's file (written into MEMFS via UNO SimpleFileAccess) instead of a
-  // generated docx. After loading we retarget the worker's model/controller so
-  // every subsequent command (AI redline, IME insert, cursor nav) acts on the
-  // real document, not the prototype.
+  // [verified-extend] LOAD the user's REAL document (Track D). Replaces the blank
+  // boot doc with the bytes the host fetched (authed) from the backend. SAME
+  // store→load→retarget mechanism perf_load proved, but the bytes are the user's
+  // file. After loading we retarget the worker's model/controller so every
+  // subsequent command (AI redline, IME insert, cursor nav) acts on the real
+  // document. Two independent load strategies (MEMFS file, then private:stream)
+  // so a single UNO-API quirk on a device can't blank the user's content.
   load_document(p) {
     const name = String(p && p.name || 'document.docx');
     const m = name.match(/\.([A-Za-z0-9]+)$/);
@@ -506,36 +506,57 @@ const EXEC = {
     if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
     else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength != null ? raw.byteLength : raw.length);
     else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
-    if (!u8 || u8.length === 0) return { success: false, message: 'load_document: empty/invalid bytes' };
+    // Empty body = a brand-new / unsaved document (the backend streams 200 + 0
+    // bytes for it). That is NOT an error: keep the blank boot doc as-is. The
+    // host also guards this, but defend here too.
+    if (!u8 || u8.length === 0) return { success: true, empty: true, name: name };
     const bytes = new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength);
 
+    // Retarget the worker's model/controller onto a freshly-loaded component.
+    const retarget = (loaded) => {
+      xModel = loaded;
+      ctrl = loaded.getCurrentController();
+      try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
+      try { installKeyHandler(); } catch (e) {}
+    };
+
+    const errs = [];
+
+    // Strategy 1: write bytes into MEMFS, load the file by URL (extension drives
+    // filter auto-detection — same as perf_load's proven storeToURL/load path).
     try {
-      // Write the bytes into MEMFS, then load that file. UNO file IO to
-      // file:///tmp is the same path perf_load's storeToURL/loadComponentFromURL
-      // proved works under WASM.
       const url = 'file:///tmp/ai_doc_' + (++docSeq) + '.' + ext;
       const sfa = css.ucb.SimpleFileAccess.create(context);
       try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
       const stream = css.io.SequenceInputStream.createStreamFromSequence(bytes);
       sfa.writeFile(url, stream);
       try { stream.closeInput(); } catch (e) {}
-
-      // '_default' replaces the visible (modified) prototype frame — same target
-      // and empty filter args (extension-based auto-detect) as perf_load.
       const loaded = desktop.loadComponentFromURL(url, '_default', 0, []);
-      if (!loaded) return { success: false, message: 'loadComponentFromURL returned null for ' + url };
+      if (loaded) {
+        retarget(loaded);
+        log('load_document: 已加载真实文档「' + name + '」/ loaded (' + u8.length + ' bytes, via file)');
+        return { success: true, name: name, bytes: u8.length, via: 'file' };
+      }
+      errs.push('file: loadComponentFromURL returned null');
+    } catch (e) { errs.push('file: ' + errStr(e)); }
 
-      // Retarget so all subsequent UNO commands act on the loaded document.
-      xModel = loaded;
-      ctrl = loaded.getCurrentController();
-      try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
-      try { installKeyHandler(); } catch (e) {}
+    // Strategy 2: load directly from an in-memory stream (no MEMFS write). Needs
+    // an explicit import filter since there is no URL extension to detect from.
+    try {
+      const filter = IMPORT_FILTERS[ext];
+      const stream2 = css.io.SequenceInputStream.createStreamFromSequence(bytes);
+      const args = [mkProp('InputStream', stream2)];
+      if (filter) args.push(mkProp('FilterName', filter));
+      const loaded = desktop.loadComponentFromURL('private:stream', '_default', 0, args);
+      if (loaded) {
+        retarget(loaded);
+        log('load_document: 已加载真实文档「' + name + '」/ loaded (' + u8.length + ' bytes, via stream)');
+        return { success: true, name: name, bytes: u8.length, via: 'stream' };
+      }
+      errs.push('stream: loadComponentFromURL returned null');
+    } catch (e) { errs.push('stream: ' + errStr(e)); }
 
-      log('load_document: 已加载真实文档「' + name + '」/ loaded real document (' + u8.length + ' bytes)');
-      return { success: true, name: name, url: url, bytes: u8.length };
-    } catch (e) {
-      return { success: false, message: errStr(e) };
-    }
+    return { success: false, message: 'load_document failed: ' + errs.join(' | ') };
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
