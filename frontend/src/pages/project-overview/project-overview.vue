@@ -706,7 +706,7 @@
                       @close="onLibreClose"
                     />
                     <WpsEditor
-                      v-else-if="isWpsFile(activeFileLeft)"
+                      v-else-if="isWpsFile(activeFileLeft) && !isDesktopApp"
                       ref="wpsLeft"
                       :file-id="activeFileLeft.wpsFileId"
                       :file-name="activeFileLeft.name"
@@ -777,7 +777,7 @@
                       @close="onLibreClose"
                     />
                     <WpsEditor
-                      v-else-if="isWpsFile(activeFileRight)"
+                      v-else-if="isWpsFile(activeFileRight) && !isDesktopApp"
                       ref="wpsRight"
                       :file-id="activeFileRight.wpsFileId"
                       :file-name="activeFileRight.name"

@@ -57,8 +57,10 @@
         </view>
       </view>
 
-      <!-- Step 2: WPS (optional) -->
-      <view class="section">
+      <!-- Step 2: WPS (optional). Hidden on the desktop app — desktop edits Office
+           docs with the embedded LibreOffice editor (no WPS config needed). WPS
+           config stays available on the web/cloud product. -->
+      <view v-if="!isDesktopApp" class="section">
         <view class="section-title">
           <text class="step-badge">2</text>
           <text class="title-text">文档在线编辑（WPS）</text>
@@ -198,6 +200,13 @@ export default {
         },
       },
     }
+  },
+  computed: {
+    // Desktop app (Electron) vs web/cloud. On desktop, Office editing uses the
+    // embedded LibreOffice editor, so the WPS setup step is hidden.
+    isDesktopApp() {
+      try { return !!(typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.ocr) } catch (e) { return false }
+    },
   },
   onLoad() {
     this.checkStatus()

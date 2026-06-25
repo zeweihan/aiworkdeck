@@ -32,8 +32,10 @@
           <view ref="docxContainer" class="docx-host"></view>
         </view>
 
-        <!-- Office 文件预览（xls/ppt，或 docx 渲染失败/非 H5 时回退到 WPS 预览模式） -->
-        <view v-else-if="isOffice && file.wpsFileId" class="preview-wps">
+        <!-- Office 文件预览（xls/ppt，或 docx 渲染失败/非 H5 时回退到 WPS 预览模式）。
+             桌面版禁用 WPS（仅 LibreOffice），故此处仅 web/cloud 生效；桌面 xls/ppt
+             落到下方「暂不支持预览 + 下载」。 -->
+        <view v-else-if="isOffice && file.wpsFileId && !isDesktopApp" class="preview-wps">
           <WpsEditor
             :file-id="file.wpsFileId"
             :file-name="file.name"
@@ -154,6 +156,10 @@ export default {
     }
   },
   computed: {
+    // Desktop (Electron) vs web/cloud. Desktop disables WPS preview (LibreOffice only).
+    isDesktopApp() {
+      try { return !!(typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.ocr) } catch (e) { return false }
+    },
     fileUrl() {
       if (!this.file) {
         console.log('FilePreview: file 为空')
