@@ -60,13 +60,20 @@ export function serveExecutor({ executor, send, subscribe }) {
  * @param {(handler:(msg:any)=>void)=>(()=>void)} args.subscribe register a
  *        webview-message handler; returns an unsubscribe fn.
  * @param {number} [args.timeoutMs=30000]
+ * @param {()=>void} [args.onReady] fired once when the webview endpoint signals
+ *        it is booted and serving ({type:'ready'}). The host uses this to know
+ *        when it may push commands that must not be dropped pre-boot (e.g. Track
+ *        D's load_document — sent before this, serveExecutor isn't subscribed yet).
  * @returns {{executeCommand:(a:string,p?:object)=>Promise<any>, dispose:()=>void}}
  */
-export function createRelayExecutor({ send, subscribe, timeoutMs = 30000 }) {
+export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onReady }) {
   let seq = 0
+  let readyCb = onReady
   const pending = new Map() // reqId -> {resolve, timer}
   const off = subscribe((msg) => {
-    if (!msg || msg.__lo !== TAG || msg.type !== 'result') return
+    if (!msg || msg.__lo !== TAG) return
+    if (msg.type === 'ready') { if (readyCb) { const cb = readyCb; readyCb = null; cb() } return }
+    if (msg.type !== 'result') return
     const entry = pending.get(msg.reqId)
     if (!entry) return
     clearTimeout(entry.timer)

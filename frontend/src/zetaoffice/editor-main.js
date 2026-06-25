@@ -114,9 +114,12 @@ function wireVerifyPanel(executor) {
   }
 }
 
+// One transport instance, reused to both serve the host AND signal readiness.
+const hostTransport = pickTransport()
+
 startEditorEndpoint({
   canvas: document.getElementById('qtcanvas'),
-  transport: pickTransport(),
+  transport: hostTransport,
   sofficeBaseUrl: q.get('lowa') || 'https://cdn.zetaoffice.net/zetaoffice_latest/',
   zetaJsUrl: q.get('zeta') || './zeta.js',
   workerScriptUrl: q.get('worker') || './office_thread.js',
@@ -126,6 +129,11 @@ startEditorEndpoint({
   onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
 }).then((endpoint) => {
   console.log('[zeta-editor] endpoint ready — serving host over transport')
+  // Tell the host the office endpoint is booted and serving (serveExecutor is now
+  // subscribed). The host (createRelayExecutor onReady) waits for this before
+  // pushing load_document — sending it earlier would drop it (no subscriber yet,
+  // office not booted). Track D's real-file load is gated on this handshake.
+  try { hostTransport.send({ __lo: 'lo-relay', type: 'ready' }) } catch (e) { /* ignore */ }
   // Transparent IME overlay over the canvas, so users can type Chinese directly
   // in the document (Qt5-WASM gives the canvas no IME). Commits at the LO cursor
   // via the same verified path as agent commands. Attached in BOTH webview and

@@ -39,6 +39,8 @@
 // (⌘⇧O overlay), so the WPS document flow is byte-for-byte unaffected.
 
 import { createWebviewEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
+import { getFileDownloadUrl } from '@/services/api.js'
+import { getAuthHeaders } from '@/utils/auth.js'
 
 let seq = 0
 
@@ -49,6 +51,11 @@ export default {
     // 'experimental' = the original ⌘⇧O overlay (dev probe toolbar shown).
     // 'default'      = inline document editor (Track B): toolbar chrome hidden.
     variant: { type: String, default: 'experimental' },
+    // Track D: the Office file to load into the editor ({ id, name, fileType,
+    // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
+    // REAL document once the office endpoint is ready. null (⌘⇧O overlay) keeps
+    // the seeded prototype.
+    file: { type: Object, default: null },
   },
   data() {
     return {
@@ -109,14 +116,64 @@ export default {
     onDomReady(wv) {
       if (this.executor) return // dom-ready can fire again on in-page navigation
       try {
-        this.executor = createWebviewEditorExecutor(wv)
-        this.ready = true
-        this.statusText = '就绪 / ready ✓'
-        this.appendLog('webview dom-ready — executor wired')
-        this.$emit('ready', this.executor)
+        // dom-ready means the webview's renderer is up — NOT that the office is
+        // booted. We wait for the endpoint-ready handshake (onReady) before
+        // marking ready / pushing the document, so load_document can't be dropped
+        // pre-boot. The dev-probe toolbar in the experimental variant stays
+        // disabled until then (ready=false).
+        this.executor = createWebviewEditorExecutor(wv, { onReady: () => this.onEndpointReady() })
+        this.statusText = this.file ? '加载文档中… / loading…' : '启动中… / booting…'
+        this.appendLog('webview dom-ready — executor wired, awaiting office endpoint')
       } catch (e) {
         this.appendLog('executor wiring failed: ' + (e && e.message ? e.message : e))
       }
+    },
+    // The office endpoint inside the webview is booted and serving. Load the real
+    // document (Track D) if we have one, then publish readiness so the host
+    // starts routing AI commands to the (now correctly-targeted) editor.
+    async onEndpointReady() {
+      if (!this.executor) return // unmounted during boot
+      if (this.file) {
+        try {
+          await this.loadDocument()
+        } catch (e) {
+          // Load failed → the seeded prototype is still showing. Surface it; the
+          // editor stays usable (AI/IME act on whatever is shown) but the content
+          // is wrong, so this is loud, not silent.
+          this.statusText = '文档加载失败 / load failed'
+          this.appendLog('load_document failed: ' + (e && e.message ? e.message : e))
+        }
+      }
+      this.ready = true
+      if (this.statusText.indexOf('失败') === -1) this.statusText = '就绪 / ready ✓'
+      this.$emit('ready', this.executor)
+    },
+    async loadDocument() {
+      const f = this.file
+      const fileId = f.wpsFileId || f.id
+      if (!fileId) throw new Error('file has no id/wpsFileId')
+      const url = getFileDownloadUrl(fileId)
+      const buf = await this.fetchArrayBuffer(url)
+      const bytes = new Uint8Array(buf)
+      const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
+      this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
+      const res = await this.executor.executeCommand('load_document', { bytes, name })
+      this.appendLog('  ← ' + JSON.stringify(res))
+      if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
+    },
+    // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
+    // but ArrayBuffer (the bytes we relay into the worker).
+    fetchArrayBuffer(url) {
+      return new Promise((resolve, reject) => {
+        const headers = getAuthHeaders() || {}
+        const xhr = new XMLHttpRequest()
+        xhr.open('GET', url, true)
+        xhr.responseType = 'arraybuffer'
+        Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]))
+        xhr.onload = () => (xhr.status === 200 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
+        xhr.onerror = () => reject(new Error('网络错误 / network error'))
+        xhr.send()
+      })
     },
     async run(label, action, params) {
       if (!this.executor) return

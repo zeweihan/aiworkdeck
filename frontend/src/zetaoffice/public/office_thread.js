@@ -20,6 +20,7 @@
 let zetajs, css;
 let context, desktop, xModel, ctrl;
 let anchorSeq = 0; // names hidden bookmarks used as stable location anchors (§0.2)
+let docSeq = 0;    // names the MEMFS temp file for each loaded user document
 
 function post(cmd, data) {
   zetajs.mainPort.postMessage(Object.assign({ cmd }, data || {}));
@@ -483,6 +484,58 @@ const EXEC = {
       catch (e) { r.pageErr = errStr(e); }
     } catch (e) { r.success = false; r.message = errStr(e); }
     return r;
+  },
+  // [verified-extend] LOAD the user's REAL document (Track D). Replaces the
+  // seeded prototype with the bytes the host fetched (authed) from the backend.
+  // SAME store→load→retarget mechanism perf_load proved, but the bytes are the
+  // user's file (written into MEMFS via UNO SimpleFileAccess) instead of a
+  // generated docx. After loading we retarget the worker's model/controller so
+  // every subsequent command (AI redline, IME insert, cursor nav) acts on the
+  // real document, not the prototype.
+  load_document(p) {
+    const name = String(p && p.name || 'document.docx');
+    const m = name.match(/\.([A-Za-z0-9]+)$/);
+    const ext = (m ? m[1] : 'docx').toLowerCase();
+
+    // Normalize the transported bytes to the Int8Array a UNO sequence<byte>
+    // expects (zetajs maps sequence<byte> -> Int8Array). The host sends a
+    // Uint8Array; structured clone across the relay/worker hops may surface it
+    // as Uint8Array / ArrayBuffer / Array — accept all.
+    const raw = p && p.bytes;
+    let u8 = null;
+    if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
+    else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength != null ? raw.byteLength : raw.length);
+    else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
+    if (!u8 || u8.length === 0) return { success: false, message: 'load_document: empty/invalid bytes' };
+    const bytes = new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength);
+
+    try {
+      // Write the bytes into MEMFS, then load that file. UNO file IO to
+      // file:///tmp is the same path perf_load's storeToURL/loadComponentFromURL
+      // proved works under WASM.
+      const url = 'file:///tmp/ai_doc_' + (++docSeq) + '.' + ext;
+      const sfa = css.ucb.SimpleFileAccess.create(context);
+      try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
+      const stream = css.io.SequenceInputStream.createStreamFromSequence(bytes);
+      sfa.writeFile(url, stream);
+      try { stream.closeInput(); } catch (e) {}
+
+      // '_default' replaces the visible (modified) prototype frame — same target
+      // and empty filter args (extension-based auto-detect) as perf_load.
+      const loaded = desktop.loadComponentFromURL(url, '_default', 0, []);
+      if (!loaded) return { success: false, message: 'loadComponentFromURL returned null for ' + url };
+
+      // Retarget so all subsequent UNO commands act on the loaded document.
+      xModel = loaded;
+      ctrl = loaded.getCurrentController();
+      try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
+      try { installKeyHandler(); } catch (e) {}
+
+      log('load_document: 已加载真实文档「' + name + '」/ loaded real document (' + u8.length + ' bytes)');
+      return { success: true, name: name, url: url, bytes: u8.length };
+    } catch (e) {
+      return { success: false, message: errStr(e) };
+    }
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {

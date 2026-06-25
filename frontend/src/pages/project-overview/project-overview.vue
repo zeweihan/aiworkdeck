@@ -701,6 +701,7 @@
                       v-else-if="useLibreEditor(activeFileLeft)"
                       :key="'libre-left-' + activeFileLeft.id"
                       variant="default"
+                      :file="activeFileLeft"
                       @ready="onLibreReady"
                       @close="onLibreClose"
                     />
@@ -771,6 +772,7 @@
                       v-else-if="useLibreEditor(activeFileRight)"
                       :key="'libre-right-' + activeFileRight.id"
                       variant="default"
+                      :file="activeFileRight"
                       @ready="onLibreReady"
                       @close="onLibreClose"
                     />

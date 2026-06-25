@@ -21,6 +21,9 @@ export const EDITOR_ACTIONS = [
   'replace_nth_match', 'delete_match', 'delete_text', 'get_paragraph', 'modify_paragraph', 'get_outline', 'goto',
   // [§0.2 anchor-based] take {anchor} from find_text_locations; integer offsets rejected
   'set_selection', 'replace_at_position', 'clear_anchors',
+  // [Track D] load the user's real document into the editor (host-initiated, not
+  // an AI-agent command): {bytes, name} -> MEMFS + loadComponentFromURL + retarget.
+  'load_document',
 ]
 
 /**

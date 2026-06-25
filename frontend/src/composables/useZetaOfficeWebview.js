@@ -46,10 +46,12 @@ export function webviewTransport(webviewEl) {
  * useEditorBridge(EDITOR_WPS, { libreExecutor: createWebviewEditorExecutor(el) }).
  *
  * @param {HTMLElement} webviewEl an Electron <webview> DOM element.
- * @param {{timeoutMs?:number}} [opts]
+ * @param {{timeoutMs?:number, onReady?:()=>void}} [opts] onReady fires once the
+ *        editor endpoint inside the webview is booted and serving (Track D uses
+ *        it to gate load_document — see createRelayExecutor).
  * @returns {{executeCommand:(a:string,p?:object)=>Promise<any>, dispose:()=>void}}
  */
 export function createWebviewEditorExecutor(webviewEl, opts = {}) {
   const transport = webviewTransport(webviewEl)
-  return createRelayExecutor({ send: transport.send, subscribe: transport.subscribe, timeoutMs: opts.timeoutMs })
+  return createRelayExecutor({ send: transport.send, subscribe: transport.subscribe, timeoutMs: opts.timeoutMs, onReady: opts.onReady })
 }
