@@ -24,6 +24,8 @@ export const EDITOR_ACTIONS = [
   // [Track D] load the user's real document into the editor (host-initiated, not
   // an AI-agent command): {bytes, name} -> MEMFS + loadComponentFromURL + retarget.
   'load_document',
+  // [diagnostic #66] report resolved UI locale (ooLocale) to confirm zh-CN took effect.
+  'get_ui_lang',
 ]
 
 /**

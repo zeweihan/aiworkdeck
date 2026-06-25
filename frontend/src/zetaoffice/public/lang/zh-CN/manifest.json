@@ -36,6 +36,9 @@
     "program/resource/zh_CN/LC_MESSAGES/wpt.mo",
     "program/resource/zh_CN/LC_MESSAGES/xsc.mo",
     "share/registry/Langpack-zh-CN.xcd",
-    "share/registry/ZZZ-zetaoffice-ui-locale-zh-CN.xcd"
+    "share/registry/ZZZ-zetaoffice-ui-locale-zh-CN.xcd",
+    "share/registry/cjk_zh-CN.xcd",
+    "share/registry/res/fcfg_langpack_zh-CN.xcd",
+    "share/registry/res/registry_zh-CN.xcd"
   ]
 }

@@ -34,6 +34,24 @@ function errStr(e) {
 // unset members default). Used for loadComponentFromURL/storeToURL filter args.
 function mkProp(name, value) { return new css.beans.PropertyValue({ Name: name, Value: value }); }
 
+// Diagnostic (#66): read the resolved UI locale from the config so we can tell
+// whether the injected zh-CN langpack + ooLocale override actually took effect.
+// ooLocale='zh-CN' but English menus => resources/path issue; ooLocale=''/'en-US'
+// => the override .xcd was not applied (need a different mechanism).
+function readConfigLocale() {
+  try {
+    const provider = context.getServiceManager().createInstanceWithContext(
+      'com.sun.star.configuration.ConfigurationProvider', context);
+    const access = provider.createInstanceWithArguments(
+      'com.sun.star.configuration.ConfigurationAccess',
+      [mkProp('nodepath', '/org.openoffice.Setup/L10N')]);
+    const out = {};
+    try { out.ooLocale = access.getByName('ooLocale'); } catch (e) { out.ooLocaleErr = errStr(e); }
+    try { out.sysLocale = access.getByName('ooSetupSystemLocale'); } catch (e) {}
+    return out;
+  } catch (e) { return { err: errStr(e) }; }
+}
+
 // LibreOffice import filter names by extension — used only for the stream-load
 // fallback (private:stream has no URL extension to auto-detect a filter from).
 const IMPORT_FILTERS = {
@@ -76,6 +94,7 @@ function bootDoc() {
   installKeyHandler();
   post('ui_ready');
   log('空白文档就绪 swriter / blank doc ready');
+  try { const loc = readConfigLocale(); log('UI locale 诊断 / config: ' + JSON.stringify(loc)); } catch (e) { log('UI locale 诊断失败: ' + errStr(e)); }
 }
 
 // ---- probe 1: 中文 IME diagnostics --------------------------------------
@@ -558,6 +577,9 @@ const EXEC = {
 
     return { success: false, message: 'load_document failed: ' + errs.join(' | ') };
   },
+  // [diagnostic #66] report the resolved UI locale (ooLocale) so the host/verify
+  // panel can confirm whether the injected zh-CN langpack took effect.
+  get_ui_lang() { return Object.assign({ success: true }, readConfigLocale()); },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
     const bms = xModel.getBookmarks();
