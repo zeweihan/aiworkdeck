@@ -55,6 +55,12 @@ export function bootZetaOffice(options = {}) {
     zetaJsUrl = './zeta.js',
     workerScriptUrl = './office_thread.js',
     fontUrl,
+    // Optional zh-CN UI langpack manifest (issue #66). Same-origin URL to a
+    // manifest.json ({ files: ["program/resource/zh_CN/LC_MESSAGES/sw.mo", ...,
+    // "share/registry/Langpack-zh-CN.xcd"] }, paths relative to /instdir). The
+    // files are fetched before boot and written into MEMFS in preRun so the
+    // LibreOffice UI comes up in Chinese. Missing/failed fetch -> skip -> English.
+    langpackUrl,
     onLog,
     onReady,
     onWorkerMessage,
@@ -71,13 +77,19 @@ export function bootZetaOffice(options = {}) {
   }
 
   return new Promise(async (resolve, reject) => {
-    // --- optional CJK font fetch (injected in preRun, before fontconfig scan) ---
-    let cjkBytes = null
+    // Files to write into the LOWA MEMFS in preRun (CJK font + zh-CN langpack).
+    // Each { path:'/instdir/...', bytes:Uint8Array }. Fetched here (async) because
+    // preRun runs synchronously; written there because /instdir merge-mounts only
+    // once boot starts.
+    const injections = []
+
+    // --- optional CJK font fetch (injected before fontconfig scan) ---
     if (fontUrl) {
       try {
         const r = await fetch(fontUrl)
         if (r.ok) {
-          cjkBytes = new Uint8Array(await r.arrayBuffer())
+          const cjkBytes = new Uint8Array(await r.arrayBuffer())
+          injections.push({ path: '/instdir/share/fonts/truetype/AAA-CJK.ttc', bytes: cjkBytes })
           log('CJK font fetched (' + Math.round(cjkBytes.length / 1024) + ' KB), will inject before boot')
         } else {
           log('CJK font not found at ' + fontUrl + ' (skipping; CJK will be tofu)')
@@ -87,25 +99,54 @@ export function bootZetaOffice(options = {}) {
       }
     }
 
+    // --- optional zh-CN UI langpack fetch (#66): manifest + .mo/.xcd, written
+    // into /instdir so LibreOffice loads a Chinese UI. Same merge-mount trick as
+    // the font. Any failure degrades cleanly to the English UI. ---
+    if (langpackUrl) {
+      try {
+        const baseUrl = langpackUrl.replace(/[^/]*$/, '') // dir of the manifest
+        const mr = await fetch(langpackUrl)
+        if (!mr.ok) throw new Error('manifest HTTP ' + mr.status)
+        const manifest = await mr.json()
+        const files = (manifest && manifest.files) || []
+        const fetched = await Promise.all(files.map(async (rel) => {
+          const fr = await fetch(baseUrl + rel)
+          if (!fr.ok) throw new Error(rel + ' HTTP ' + fr.status)
+          return { path: '/instdir/' + rel, bytes: new Uint8Array(await fr.arrayBuffer()) }
+        }))
+        for (const f of fetched) injections.push(f)
+        log('zh-CN langpack fetched (' + fetched.length + ' files), will inject before boot')
+      } catch (e) {
+        log('zh-CN langpack fetch failed: ' + (e && e.message ? e.message : e) + ' (skipping; UI stays English)')
+      }
+    }
+
     // The globals `canvas` and `Module` must exist before soffice.js loads.
     const Module = {
       canvas,
       uno_scripts: [zetaJsUrl, workerScriptUrl],
       locateFile: function (path, prefix) { return (prefix || sofficeBaseUrl) + path },
-      preRun: cjkBytes ? [function () {
+      preRun: injections.length ? [function () {
         // Runs before LibreOffice init. /instdir is NOT mounted yet at this point
-        // (FS / = tmp,home,dev,proc) but creating the dir tree and writing the
-        // font here WORKS: the LOWA data mount MERGES into MEMFS rather than
-        // replacing, so the font is present when fontconfig scans at startup.
-        // PROVEN in the spike: tofu (口口) -> real Chinese glyphs. The product
-        // bakes the font into the self-hosted LOWA bundle's font dir at build time.
+        // (FS / = tmp,home,dev,proc) but creating the dir tree and writing here
+        // WORKS: the LOWA data mount MERGES into MEMFS rather than replacing, so
+        // the files are present when LibreOffice scans at startup. PROVEN for the
+        // font (tofu 口口 -> real Chinese glyphs); the langpack uses the same path.
         const FS = globalThis.FS
-        const dir = '/instdir/share/fonts/truetype'
-        const parts = dir.split('/').filter(Boolean)
-        let cur = ''
-        for (let i = 0; i < parts.length; i++) { cur += '/' + parts[i]; try { FS.mkdir(cur) } catch (e) { /* exists */ } }
-        try { FS.writeFile(dir + '/AAA-CJK.ttc', cjkBytes); log('CJK font written to ' + dir + ' (before fontconfig scan)') }
-        catch (e) { log('CJK font write to FS failed: ' + e) }
+        const mkdirp = (dir) => {
+          const parts = dir.split('/').filter(Boolean)
+          let cur = ''
+          for (let i = 0; i < parts.length; i++) { cur += '/' + parts[i]; try { FS.mkdir(cur) } catch (e) { /* exists */ } }
+        }
+        let n = 0
+        for (const f of injections) {
+          try {
+            mkdirp(f.path.replace(/\/[^/]*$/, ''))
+            FS.writeFile(f.path, f.bytes)
+            n++
+          } catch (e) { log('FS write failed for ' + f.path + ': ' + e) }
+        }
+        log('MEMFS injected ' + n + '/' + injections.length + ' file(s) (font + zh-CN langpack) before boot')
       }] : undefined,
     }
     if (sofficeBaseUrl !== '') {
