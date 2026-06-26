@@ -1,0 +1,22 @@
+# LibreOffice WASM (LOWA) autogen.input — zh-CN-enabled GUI build for AI Workdeck (#66).
+# Copy into the LibreOffice core checkout (branch distro/allotropia/zeta-24-2) as
+# `autogen.input`, then run ./autogen.sh && make.
+#
+# --with-distro=LibreOfficeWASM32 already implies the WASM essentials
+# (--host=wasm32-local-emscripten, --enable-qt5, --disable-gen, --disable-scripting,
+# --with-package-format=emscripten); see distro-configs/LibreOfficeWASM32.conf.
+#
+# THE point of this file vs upstream: --with-lang adds zh-CN so soffice.data is built
+# WITH the Simplified-Chinese UI catalogs (.mo) + registry (Langpack-zh-CN.xcd,
+# res/registry_zh-CN.xcd, ...). en-US is kept so both UIs ship in one engine.
+
+--with-distro=LibreOfficeWASM32
+--with-package-format=emscripten
+--with-lang=en-US zh-CN
+
+# Qt5-for-wasm install prefix (built from allotropia/qt5 5.15.2+wasm) — build.sh sets this.
+QT5DIR=@QT5DIR@
+
+# ccache massively speeds up rebuilds (host-tool + target).
+--enable-ccache
+--with-build-platform-configure-options=--enable-ccache
