@@ -86,8 +86,9 @@ function wireVerifyPanel(executor) {
   const bIns = document.getElementById('vinsert')
   const bRep = document.getElementById('vreplace')
   const bSel = document.getElementById('vsel')
+  const bExp = document.getElementById('vexport')
   if (status) status.textContent = '就绪 / ready ✓'
-  for (const b of [ime, bIns, bRep, bSel]) if (b) b.disabled = false
+  for (const b of [ime, bIns, bRep, bSel, bExp]) if (b) b.disabled = false
 
   const run = async (label, action, params) => {
     vlog('▶ ' + label + ' …')
@@ -99,6 +100,30 @@ function wireVerifyPanel(executor) {
   if (bRep) bRep.onclick = () => run('查找替换 协议→合同 (redline)', 'find_replace',
     { findText: '协议', replaceText: '合同', replaceAll: true })
   if (bSel) bSel.onclick = () => run('读选区', 'get_selection', {})
+  // Track E save-pipeline verification: export the live document as .docx bytes
+  // (the exact worker path the host's 保存 uses), assert the ZIP magic, and hand
+  // the file to the browser so a human can open it in Word/LibreOffice.
+  if (bExp) bExp.onclick = async () => {
+    vlog('▶ export_document …')
+    try {
+      const res = await executor.executeCommand('export_document', { name: 'verify-export.docx' })
+      if (!res || !res.success) throw new Error((res && res.message) || 'no success')
+      const raw = res.bytes
+      const u8 = raw instanceof Uint8Array ? raw
+        : raw instanceof ArrayBuffer ? new Uint8Array(raw)
+        : raw && raw.buffer instanceof ArrayBuffer ? new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength)
+        : Array.isArray(raw) ? new Uint8Array(raw) : null
+      if (!u8 || !u8.length) throw new Error('no bytes in result')
+      const magicOk = u8[0] === 0x50 && u8[1] === 0x4b // 'PK' — docx is a ZIP
+      vlog('  ← ' + u8.length + ' bytes, ZIP magic ' + (magicOk ? 'OK (PK)' : 'BAD: ' + u8[0] + ',' + u8[1]))
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(new Blob([u8], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }))
+      a.download = 'verify-export.docx'
+      a.click()
+      setTimeout(() => URL.revokeObjectURL(a.href), 30000)
+      vlog('  ← 已触发下载 verify-export.docx——请用 Word/LibreOffice 打开核对内容')
+    } catch (e) { vlog('  ✗ ' + (e && e.message ? e.message : e)) }
+  }
 
   // IME: commit composed/typed text into the document at the cursor.
   if (ime) {

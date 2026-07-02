@@ -895,6 +895,12 @@ export function getFileDownloadUrl(fileId) {
   return `${baseUrl}/api/files/${fileId}/download`
 }
 
+// 获取文件上传URL（multipart "file"，与下载同一 fileId 契约）
+export function getFileUploadUrl(fileId) {
+  const baseUrl = getApiBaseUrl()
+  return `${baseUrl}/api/files/${fileId}/upload`
+}
+
 // 获取文件文本内容
 export function getFileText(fileId) {
   return request({
@@ -1373,6 +1379,7 @@ export default {
   moveFile,
   getFileDetail,
   getFileDownloadUrl,
+  getFileUploadUrl,
   ocrRecognize,
   getMyFavorites,
   getProjectFavorites,

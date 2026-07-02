@@ -3,6 +3,11 @@
     <view class="libre-toolbar">
       <text class="libre-title">{{ variant === 'default' ? 'LibreOffice 编辑器' : 'LibreOffice 编辑器（嵌入式 webview · 实验）' }}</text>
       <text class="libre-status" :class="{ ready }">{{ statusText }}</text>
+      <!-- Save is REAL product UI (Track E): shown in every variant whenever the
+           editor is bound to a backend file — without it edits die with the tab. -->
+      <button v-if="file" class="libre-btn" :disabled="!ready || saving" @click="saveDocument">
+        {{ saving ? '保存中…' : '保存' }}
+      </button>
       <!-- The dev probe buttons + close are the ⌘⇧O experimental overlay's
            controls. In the inline 'default' variant (Track B: embedded editor is
            the document's default editor) they are hidden — the document tab's ×
@@ -39,7 +44,7 @@
 // (⌘⇧O overlay), so the WPS document flow is byte-for-byte unaffected.
 
 import { createWebviewEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
-import { getFileDownloadUrl } from '@/services/api.js'
+import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 
 let seq = 0
@@ -65,6 +70,7 @@ export default {
       log: '',
       webviewEl: null,
       executor: null,
+      saving: false,
     }
   },
   async mounted() {
@@ -181,6 +187,61 @@ export default {
         xhr.onload = () => (xhr.status === 200 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
         xhr.onerror = () => reject(new Error('网络错误 / network error'))
         xhr.send()
+      })
+    },
+    // Track E: save — export the edited document from the worker (storeToURL →
+    // bytes) and persist via the backend upload endpoint (same fileId contract
+    // as the download the document was loaded from). Without this, edits die
+    // with the tab — the last functional gap vs. the WPS editor.
+    async saveDocument() {
+      const f = this.file
+      if (!f || !this.executor || this.saving) return
+      const fileId = f.wpsFileId || f.id
+      if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return }
+      this.saving = true
+      const prevStatus = this.statusText
+      this.statusText = '保存中… / saving…'
+      try {
+        const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
+        this.appendLog('▶ export_document「' + name + '」…')
+        const res = await this.executor.executeCommand('export_document', { name })
+        if (!res || !res.success) throw new Error((res && res.message) || 'export_document returned no success')
+        // Structured clone across the relay hops may surface bytes as
+        // Uint8Array / ArrayBuffer / plain array — normalize (mirror of the
+        // worker's load_document normalization).
+        const raw = res.bytes
+        let u8 = null
+        if (raw instanceof Uint8Array) u8 = raw
+        else if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw)
+        else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength)
+        else if (Array.isArray(raw)) u8 = new Uint8Array(raw)
+        if (!u8 || u8.length === 0) throw new Error('export produced no bytes')
+        this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
+        await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
+        this.statusText = '已保存 / saved ✓'
+        this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
+      } catch (e) {
+        this.statusText = '保存失败 / save failed'
+        this.appendLog('save failed: ' + (e && e.message ? e.message : e))
+      } finally {
+        this.saving = false
+        // Let the badge linger, then settle back to ready (unless a failure is showing).
+        setTimeout(() => { if (this.statusText === '已保存 / saved ✓') this.statusText = prevStatus }, 2500)
+      }
+    },
+    // Authed multipart POST — the upload twin of fetchArrayBuffer (backend
+    // contract: POST /api/files/{fileId}/upload, part name "file").
+    uploadBytes(url, u8, filename) {
+      return new Promise((resolve, reject) => {
+        const headers = getAuthHeaders() || {}
+        const form = new FormData()
+        form.append('file', new Blob([u8]), filename)
+        const xhr = new XMLHttpRequest()
+        xhr.open('POST', url, true)
+        Object.keys(headers).forEach((k) => { if (k.toLowerCase() !== 'content-type') xhr.setRequestHeader(k, headers[k]) })
+        xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
+        xhr.onerror = () => reject(new Error('网络错误 / network error'))
+        xhr.send(form)
       })
     },
     async run(label, action, params) {

@@ -21,6 +21,7 @@ let zetajs, css;
 let context, desktop, xModel, ctrl;
 let anchorSeq = 0; // names hidden bookmarks used as stable location anchors (§0.2)
 let docSeq = 0;    // names the MEMFS temp file for each loaded user document
+let saveSeq = 0;   // names the MEMFS temp file for each export (save) round-trip
 
 function post(cmd, data) {
   zetajs.mainPort.postMessage(Object.assign({ cmd }, data || {}));
@@ -576,6 +577,34 @@ const EXEC = {
     } catch (e) { errs.push('stream: ' + errStr(e)); }
 
     return { success: false, message: 'load_document failed: ' + errs.join(' | ') };
+  },
+  // [Track E] export the current document as bytes (host-initiated save — the
+  // mirror image of load_document): storeToURL into MEMFS, read the bytes back,
+  // hand them to the host, which persists them via the backend upload endpoint.
+  // The filter names in IMPORT_FILTERS are the registry FilterNames, valid for
+  // BOTH directions for these formats (e.g. 'MS Word 2007 XML' imports AND
+  // exports .docx).
+  export_document(p) {
+    const name = String(p && p.name || 'document.docx');
+    const m = name.match(/\.([A-Za-z0-9]+)$/);
+    const ext = (m ? m[1] : 'docx').toLowerCase();
+    const filter = IMPORT_FILTERS[ext];
+
+    const url = 'file:///tmp/ai_save_' + (++saveSeq) + '.' + ext;
+    const path = '/tmp/ai_save_' + saveSeq + '.' + ext;
+    const props = [mkProp('Overwrite', true)];
+    if (filter) props.push(mkProp('FilterName', filter));
+    xModel.storeToURL(url, props);
+
+    // Read the stored bytes straight out of MEMFS. Module.FS is exported by both
+    // the CDN engine (Qt6 build) and our self-built engine (gbuild patch makes
+    // the export unconditional) — office_thread.js already runs with `Module` in
+    // scope (see the boot promise below).
+    const u8 = Module.FS.readFile(path); // Uint8Array (throws if store failed)
+    try { const sfa = css.ucb.SimpleFileAccess.create(context); if (sfa.exists(url)) sfa.kill(url); } catch (e) { /* MEMFS temp cleanup is best-effort */ }
+    if (!u8 || u8.length === 0) return { success: false, message: 'export_document: storeToURL produced 0 bytes' };
+    log('export_document: 已导出「' + name + '」/ exported (' + u8.length + ' bytes, filter=' + (filter || 'auto') + ')');
+    return { success: true, name: name, size: u8.length, bytes: u8 };
   },
   // [diagnostic #66] report the resolved UI locale (ooLocale) so the host/verify
   // panel can confirm whether the injected zh-CN langpack took effect.
