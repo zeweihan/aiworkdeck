@@ -45,7 +45,7 @@
             <view class="section-header">
               <text class="section-title">外部服务供应商</text>
               <text class="section-subtitle">
-                配置 Google（Gemini）、企查查、Tushare、WPS 的接入参数
+                配置 Google（Gemini）、企查查、Tushare 的接入参数
               </text>
             </view>
             <view class="section-body">
@@ -153,37 +153,6 @@
                     v-model="form.external.tushare.token"
                     class="form-input"
                     placeholder="请输入 Token"
-                  />
-                </view>
-              </view>
-
-              <!-- WPS -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">WPS WebOffice</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">App ID</text>
-                  <input
-                    v-model="form.external.wps.appId"
-                    class="form-input"
-                    placeholder="请输入 App ID"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">App Secret</text>
-                  <input
-                    v-model="form.external.wps.appSecret"
-                    class="form-input"
-                    placeholder="请输入 App Secret"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">回调网关</text>
-                  <input
-                    v-model="form.external.wps.callbackBaseUrl"
-                    class="form-input"
-                    placeholder="https://..."
                   />
                 </view>
               </view>
@@ -526,7 +495,6 @@ export default {
           openRouter: { apiKey: '', baseUrl: '' },
           qichacha: { baseUrl: '', key: '', secret: '' },
           tushare: { baseUrl: '', token: '' },
-          wps: { appId: '', appSecret: '', callbackBaseUrl: '' },
           aliyunOcr: { accessKeyId: '', accessKeySecret: '', endpoint: '', regionId: '', publicBaseUrl: '' },
           pkulaw: { token: '' },
           elevenLabs: { apiKey: '', baseUrl: '', modelId: '', defaultVoiceId: '' },
@@ -604,18 +572,12 @@ export default {
               baseUrl: data.external.tushare?.baseUrl || '',
               token: data.external.tushare?.token || '',
             },
-            wps: {
-              appId: data.external.wps?.appId || '',
-              appSecret: data.external.wps?.appSecret || '',
-              callbackBaseUrl: data.external.wps?.callbackBaseUrl || '',
-            },
             aliyunOcr: {
               accessKeyId: data.external.aliyunOcr?.accessKeyId || '',
               accessKeySecret: data.external.aliyunOcr?.accessKeySecret || '',
               endpoint: data.external.aliyunOcr?.endpoint || 'ocr-api.cn-hangzhou.aliyuncs.com',
               regionId: data.external.aliyunOcr?.regionId || 'cn-hangzhou',
-              publicBaseUrl: data.external.aliyunOcr?.publicBaseUrl || data.external.wps?.callbackBaseUrl || '',
-              publicBaseUrl: data.external.aliyunOcr?.publicBaseUrl || data.external.wps?.callbackBaseUrl || '',
+              publicBaseUrl: data.external.aliyunOcr?.publicBaseUrl || '',
             },
             openRouter: {
               apiKey: data.external.openRouter?.apiKey || '',

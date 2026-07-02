@@ -68,15 +68,6 @@ public class AdminConfigController {
     @Value("${external.qichacha.secret:}")
     private String defaultQichachaSecret;
 
-    @Value("${external.wps.app-id:}")
-    private String defaultWpsAppId;
-
-    @Value("${external.wps.app-secret:}")
-    private String defaultWpsAppSecret;
-
-    @Value("${external.wps.callback-base-url:}")
-    private String defaultWpsCallbackBaseUrl;
-
     @Value("${external.tushare.base-url:http://api.tushare.pro}")
     private String defaultTushareBaseUrl;
 
@@ -141,11 +132,6 @@ public class AdminConfigController {
     private static final String KEY_TUSHARE_BASE_URL = "external.tushare.baseUrl";
     private static final String KEY_TUSHARE_TOKEN = "external.tushare.token";
 
-    // WPS
-    private static final String KEY_WPS_APP_ID = "external.wps.appId";
-    private static final String KEY_WPS_APP_SECRET = "external.wps.appSecret";
-    private static final String KEY_WPS_CALLBACK_BASE_URL = "external.wps.callbackBaseUrl";
-
     // Aliyun OCR
     private static final String KEY_ALIYUN_OCR_ACCESS_KEY_ID = "external.aliyunOcr.accessKeyId";
     private static final String KEY_ALIYUN_OCR_ACCESS_KEY_SECRET = "external.aliyunOcr.accessKeySecret";
@@ -190,9 +176,6 @@ public class AdminConfigController {
         defaults.put(KEY_QICHACHA_SECRET, defaultQichachaSecret);
         defaults.put(KEY_TUSHARE_BASE_URL, defaultTushareBaseUrl);
         defaults.put(KEY_TUSHARE_TOKEN, defaultTushareToken);
-        defaults.put(KEY_WPS_APP_ID, defaultWpsAppId);
-        defaults.put(KEY_WPS_APP_SECRET, defaultWpsAppSecret);
-        defaults.put(KEY_WPS_CALLBACK_BASE_URL, defaultWpsCallbackBaseUrl);
         defaults.put(KEY_ALIYUN_OCR_ACCESS_KEY_ID, defaultAliyunOcrAccessKeyId);
         defaults.put(KEY_ALIYUN_OCR_ACCESS_KEY_SECRET, defaultAliyunOcrAccessKeySecret);
         // 给出开箱即用的默认值：cn-hangzhou 通用 OCR Endpoint
@@ -204,11 +187,8 @@ public class AdminConfigController {
                 (defaultAliyunOcrRegionId == null || defaultAliyunOcrRegionId.isBlank())
                         ? "cn-hangzhou"
                         : defaultAliyunOcrRegionId);
-        // 公网 baseUrl：优先用专门配置，否则复用 WPS callbackBaseUrl（通常已是公网域名）
-        String defaultPublicBase = (defaultAliyunOcrPublicBaseUrl == null || defaultAliyunOcrPublicBaseUrl.isBlank())
-                ? defaultWpsCallbackBaseUrl
-                : defaultAliyunOcrPublicBaseUrl;
-        defaults.put(KEY_ALIYUN_OCR_PUBLIC_BASE_URL, defaultPublicBase == null ? "" : defaultPublicBase);
+        defaults.put(KEY_ALIYUN_OCR_PUBLIC_BASE_URL,
+                defaultAliyunOcrPublicBaseUrl == null ? "" : defaultAliyunOcrPublicBaseUrl);
 
         // PKULaw
         defaults.put(KEY_PKULAW_TOKEN, defaultPkulawToken);
@@ -258,11 +238,6 @@ public class AdminConfigController {
         external.setTushare(new TushareConfig(
                 all.get(KEY_TUSHARE_BASE_URL),
                 all.get(KEY_TUSHARE_TOKEN)
-        ));
-        external.setWps(new WpsConfig(
-                all.get(KEY_WPS_APP_ID),
-                all.get(KEY_WPS_APP_SECRET),
-                all.get(KEY_WPS_CALLBACK_BASE_URL)
         ));
         external.setAliyunOcr(new AliyunOcrConfig(
                 all.get(KEY_ALIYUN_OCR_ACCESS_KEY_ID),
@@ -402,11 +377,6 @@ public class AdminConfigController {
                 updates.put(KEY_TUSHARE_BASE_URL, safe(ext.getTushare().getBaseUrl()));
                 updates.put(KEY_TUSHARE_TOKEN, safe(ext.getTushare().getToken()));
             }
-            if (ext.getWps() != null) {
-                updates.put(KEY_WPS_APP_ID, safe(ext.getWps().getAppId()));
-                updates.put(KEY_WPS_APP_SECRET, safe(ext.getWps().getAppSecret()));
-                updates.put(KEY_WPS_CALLBACK_BASE_URL, safe(ext.getWps().getCallbackBaseUrl()));
-            }
             if (ext.getAliyunOcr() != null) {
                 updates.put(KEY_ALIYUN_OCR_ACCESS_KEY_ID, safe(ext.getAliyunOcr().getAccessKeyId()));
                 updates.put(KEY_ALIYUN_OCR_ACCESS_KEY_SECRET, safe(ext.getAliyunOcr().getAccessKeySecret()));
@@ -498,7 +468,6 @@ public class AdminConfigController {
         private OpenRouterConfig openRouter;
         private QichachaConfig qichacha;
         private TushareConfig tushare;
-        private WpsConfig wps;
         private AliyunOcrConfig aliyunOcr;
         private PkulawConfig pkulaw;
         private ElevenLabsConfig elevenLabs;
@@ -511,8 +480,6 @@ public class AdminConfigController {
         public void setQichacha(QichachaConfig qichacha) { this.qichacha = qichacha; }
         public TushareConfig getTushare() { return tushare; }
         public void setTushare(TushareConfig tushare) { this.tushare = tushare; }
-        public WpsConfig getWps() { return wps; }
-        public void setWps(WpsConfig wps) { this.wps = wps; }
         public AliyunOcrConfig getAliyunOcr() { return aliyunOcr; }
         public void setAliyunOcr(AliyunOcrConfig aliyunOcr) { this.aliyunOcr = aliyunOcr; }
         public PkulawConfig getPkulaw() { return pkulaw; }
@@ -578,27 +545,6 @@ public class AdminConfigController {
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public String getToken() { return token; }
         public void setToken(String token) { this.token = token; }
-    }
-
-    public static class WpsConfig {
-        private String appId;
-        private String appSecret;
-        private String callbackBaseUrl;
-
-        public WpsConfig() {}
-
-        public WpsConfig(String appId, String appSecret, String callbackBaseUrl) {
-            this.appId = appId;
-            this.appSecret = appSecret;
-            this.callbackBaseUrl = callbackBaseUrl;
-        }
-
-        public String getAppId() { return appId; }
-        public void setAppId(String appId) { this.appId = appId; }
-        public String getAppSecret() { return appSecret; }
-        public void setAppSecret(String appSecret) { this.appSecret = appSecret; }
-        public String getCallbackBaseUrl() { return callbackBaseUrl; }
-        public void setCallbackBaseUrl(String callbackBaseUrl) { this.callbackBaseUrl = callbackBaseUrl; }
     }
 
     public static class AliyunOcrConfig {

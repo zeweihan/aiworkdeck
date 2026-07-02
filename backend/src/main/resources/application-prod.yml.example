@@ -22,8 +22,4 @@ external:
     base-url: https://api.qichacha.com
     key: f4900a7dd885415cb305edc621f5b490
     secret: 9C16665DB7BA6661FAAC35EF1321FA3C
-  wps:
-    app-id: 你的WPS_AppID  # 从 WPS 控制台获取
-    app-secret: 你的WPS_AppSecret  # 从 WPS 控制台获取
-    callback-base-url: https://api.checkba.yourdomain.com  # 你的 API 域名
 
