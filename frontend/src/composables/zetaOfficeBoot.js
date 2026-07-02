@@ -61,6 +61,13 @@ export function bootZetaOffice(options = {}) {
     // files are fetched before boot and written into MEMFS in preRun so the
     // LibreOffice UI comes up in Chinese. Missing/failed fetch -> skip -> English.
     langpackUrl,
+    // UI language for the LibreOffice chrome (issue #66 follow-up). The engine
+    // derives its locale from navigator.languages (emscripten getEnvStrings ->
+    // LANG), so the UI silently follows the BROWSER/Electron language — an
+    // en-GB system got an English editor even with the zh-CN engine baked in
+    // (v0.3.1 real-machine report). Forcing it makes the product deterministic.
+    // Set to ''/null to follow the environment again.
+    uiLang = 'zh-CN',
     onLog,
     onReady,
     onWorkerMessage,
@@ -160,13 +167,25 @@ export function bootZetaOffice(options = {}) {
         log('MEMFS injected ' + n + '/' + injections.length + ' file(s) (font + zh-CN langpack) before main()')
       },
     }
+    // Force the engine's locale (LANG) by shimming navigator.languages BEFORE
+    // any engine code runs. Must happen on EVERY thread that computes env
+    // strings: the page (below) AND each pthread worker (prepended into the
+    // bootstrap blob, which we control). No engine rebuild needed.
+    const langShim = uiLang
+      ? "try{Object.defineProperty(navigator,'languages',{get:function(){return['" + uiLang + "']}});" +
+        "Object.defineProperty(navigator,'language',{get:function(){return'" + uiLang + "'}})}catch(e){}"
+      : ''
+    if (langShim) {
+      try { (0, eval)(langShim); log('UI language forced to ' + uiLang + ' (navigator shim)') }
+      catch (e) { log('UI language shim failed: ' + e) }
+    }
     if (sofficeBaseUrl !== '') {
       // Absolutize: this URL is imported from inside a BLOB worker, where a
       // relative/root path ('/lowa/soffice.js') is invalid — pthread spawn dies
       // with "The URL ... is invalid" and the office thread never starts.
       const absBase = new URL(sofficeBaseUrl, globalThis.location ? globalThis.location.href : undefined).href
       Module.mainScriptUrlOrBlob = new Blob(
-        ["importScripts('" + absBase + "soffice.js');"], { type: 'text/javascript' })
+        [langShim + "importScripts('" + absBase + "soffice.js');"], { type: 'text/javascript' })
     }
     globalThis.Module = Module
 

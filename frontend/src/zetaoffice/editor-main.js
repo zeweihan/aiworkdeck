@@ -151,6 +151,10 @@ startEditorEndpoint({
   // Default to a CJK font served next to the page (the verify build drops one
   // here); bootZetaOffice skips cleanly if it 404s (Chinese would be tofu then).
   fontUrl: q.get('font') || './cjk.ttc',
+  // Deterministic Chinese UI regardless of the browser/Electron language (the
+  // engine follows navigator.languages otherwise — v0.3.1 shipped English on an
+  // en-GB system). ?uilang=env follows the environment; ?uilang=xx-YY overrides.
+  uiLang: q.get('uilang') === 'env' ? '' : (q.get('uilang') || 'zh-CN'),
   // zh-CN UI langpack manifest baked into the bundle (issue #66): makes the
   // LibreOffice UI itself Chinese. bootZetaOffice skips cleanly if it 404s
   // (e.g. the CDN-only spike), leaving the English UI. ?lang= overrides/disables.
@@ -171,6 +175,13 @@ startEditorEndpoint({
     attachImeOverlay({
       canvas: document.getElementById('qtcanvas'),
       commit: (text) => endpoint.executor.executeCommand('insert_at_cursor', { text }),
+      // Control keys: the overlay swallows keystrokes (it IS the focused input),
+      // so Enter/Backspace/arrows must be forwarded to the worker explicitly.
+      // The worker actions (insert_paragraph/delete_backward/move_cursor) have
+      // existed since Track C and are whitelisted — this wiring was the missing
+      // link (v0.3.1 real-machine report: Backspace did nothing).
+      onEnter: () => endpoint.executor.executeCommand('insert_paragraph', {}),
+      sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
     })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }

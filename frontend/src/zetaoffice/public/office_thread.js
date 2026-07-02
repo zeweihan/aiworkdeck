@@ -707,19 +707,32 @@ const EXEC = {
     const ext = (m ? m[1] : 'docx').toLowerCase();
     const filter = IMPORT_FILTERS[ext];
 
-    const url = 'file:///tmp/ai_save_' + (++saveSeq) + '.' + ext;
-    const path = '/tmp/ai_save_' + saveSeq + '.' + ext;
-    const props = [mkProp('Overwrite', true)];
+    // Stream the store STRAIGHT INTO JS via a UNO XOutputStream implemented
+    // here. Do NOT storeToURL a MEMFS file and read it back with Module.FS:
+    // this office thread is an em-pthread whose JS-level FS is NOT the main
+    // thread's file system (FS state lives on the main runtime; pthreads only
+    // proxy at the syscall layer), so FS.readFile threw ENOENT on the device
+    // (v0.3.1 real-machine report: save failed "No such file or directory").
+    const chunks = [];
+    let total = 0;
+    const sink = zetajs.unoObject([css.io.XOutputStream], {
+      writeBytes(seq) { // sequence<byte> -> Int8Array view
+        const u8 = new Uint8Array(seq.buffer ? seq.buffer.slice(seq.byteOffset, seq.byteOffset + seq.byteLength) : seq);
+        chunks.push(u8); total += u8.length;
+      },
+      flush() {},
+      closeOutput() {},
+    });
+    const props = [mkProp('OutputStream', sink), mkProp('Overwrite', true)];
     if (filter) props.push(mkProp('FilterName', filter));
-    xModel.storeToURL(url, props);
-
-    // Read the stored bytes straight out of MEMFS. Module.FS is exported by both
-    // the CDN engine (Qt6 build) and our self-built engine (gbuild patch makes
-    // the export unconditional) — office_thread.js already runs with `Module` in
-    // scope (see the boot promise below).
-    const u8 = Module.FS.readFile(path); // Uint8Array (throws if store failed)
-    try { const sfa = css.ucb.SimpleFileAccess.create(context); if (sfa.exists(url)) sfa.kill(url); } catch (e) { /* MEMFS temp cleanup is best-effort */ }
-    if (!u8 || u8.length === 0) return { success: false, message: 'export_document: storeToURL produced 0 bytes' };
+    // private:stream = "write to the OutputStream in the media descriptor" —
+    // the standard LO idiom for exporting to memory (no filesystem involved).
+    xModel.storeToURL('private:stream', props);
+    saveSeq++;
+    if (total === 0) return { success: false, message: 'export_document: store produced 0 bytes' };
+    const u8 = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { u8.set(c, off); off += c.length; }
     log('export_document: 已导出「' + name + '」/ exported (' + u8.length + ' bytes, filter=' + (filter || 'auto') + ')');
     return { success: true, name: name, size: u8.length, bytes: u8 };
   },
