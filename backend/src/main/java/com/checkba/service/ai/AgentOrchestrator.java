@@ -280,6 +280,41 @@ public class AgentOrchestrator {
                  return wpsTools.wps_delete_text(text, deleteAll);
             } else if ("wps_debug_revisions".equals(toolName)) {
                  return wpsTools.wps_debug_revisions();
+            // ==================== 拟人式原语（LibreOffice 编辑器） ====================
+            } else if ("wps_get_document_text".equals(toolName)) {
+                 Integer startParagraph = safeParseInt(extractArg(args, "startParagraph"), "startParagraph");
+                 Integer maxParagraphs = safeParseInt(extractArg(args, "maxParagraphs"), "maxParagraphs");
+                 return wpsTools.wps_get_document_text(startParagraph, maxParagraphs);
+            } else if ("wps_get_cursor_context".equals(toolName)) {
+                 return wpsTools.wps_get_cursor_context();
+            } else if ("wps_select_anchor".equals(toolName)) {
+                 return wpsTools.wps_select_anchor(extractArg(args, "anchorId"));
+            } else if ("wps_select_paragraph".equals(toolName)) {
+                 return wpsTools.wps_select_paragraph(safeParseInt(extractArg(args, "index"), "index"));
+            } else if ("wps_collapse_cursor".equals(toolName)) {
+                 return wpsTools.wps_collapse_cursor(extractArg(args, "to"));
+            } else if ("wps_replace_at_anchor".equals(toolName)) {
+                 return wpsTools.wps_replace_at_anchor(extractArg(args, "anchorId"), extractArg(args, "newText"));
+            } else if ("wps_delete_selection".equals(toolName)) {
+                 return wpsTools.wps_delete_selection();
+            } else if ("wps_format_selection".equals(toolName)) {
+                 return wpsTools.wps_format_selection(
+                         safeParseBool(extractArg(args, "bold")),
+                         safeParseBool(extractArg(args, "italic")),
+                         safeParseBool(extractArg(args, "underline")),
+                         safeParseBool(extractArg(args, "strikeout")),
+                         extractArg(args, "highlight"),
+                         extractArg(args, "color"),
+                         safeParseDouble(extractArg(args, "fontSize")),
+                         extractArg(args, "fontName"));
+            } else if ("wps_set_paragraph_format".equals(toolName)) {
+                 return wpsTools.wps_set_paragraph_format(
+                         extractArg(args, "alignment"),
+                         safeParseInt(extractArg(args, "headingLevel"), "headingLevel"));
+            } else if ("wps_undo".equals(toolName)) {
+                 return wpsTools.wps_undo(safeParseInt(extractArg(args, "steps"), "steps"));
+            } else if ("wps_redo".equals(toolName)) {
+                 return wpsTools.wps_redo(safeParseInt(extractArg(args, "steps"), "steps"));
             // ==================== PPTX 文件管理工具 ====================
             } else if ("list_project_folders".equals(toolName)) {
                  return pptxTools.list_project_folders(projectId);
@@ -1231,6 +1266,26 @@ public class AgentOrchestrator {
             return Integer.parseInt(value.trim());
         } catch (NumberFormatException e) {
             log.warn("Failed to parse {} as Integer: {}", argName, value);
+            return null;
+        }
+    }
+
+    /**
+     * 可空 Boolean 解析（缺省参数保持 null，不误传 false）
+     */
+    private Boolean safeParseBool(String value) {
+        if (value == null || value.isEmpty()) return null;
+        return Boolean.valueOf(value.trim());
+    }
+
+    /**
+     * 可空 Double 解析
+     */
+    private Double safeParseDouble(String value) {
+        if (value == null || value.isEmpty()) return null;
+        try {
+            return Double.parseDouble(value.trim());
+        } catch (NumberFormatException e) {
             return null;
         }
     }

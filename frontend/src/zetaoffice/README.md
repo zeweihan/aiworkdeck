@@ -71,3 +71,23 @@ host (project-overview)                     isolated <webview partition="persist
    Route `handleWpsCommand` through `editor.executeCommand(action, params, { wpsInstance })`
    and call `editor.setEditor(EDITOR_LIBREOFFICE)` behind a gray-rollout flag.
 5. **IME overlay** + **perf** (load an existing 50-page docx) — separate #43 tasks.
+
+## AI 拟人式动作原语（2026-07）
+
+`office_thread.js` 的 EXEC 契约扩展为完整的拟人式原语集（看→找→选→改→验），
+设计与协议见 **docs/AI_EDITOR_PRIMITIVES.md**：
+
+- 感知：`get_document_text`（编号段落、分页）、`get_cursor_context`、升级版
+  `find_text_locations`（锚点 + 前后文 + 所在段落，用于同词多处消歧）
+- 定位（用户可见）：`set_selection`（视图跟随滚动）、`select_paragraph`、
+  `collapse_selection`
+- 编辑（修订默认开，boot/load 时设 `RecordChanges=true`）：`delete_selection`、
+  `insert_at_cursor`/`replace_selection`（`\n` 转段落分隔）、`undo`/`redo`
+- 格式：`format_selection`（粗/斜/下划线/删除线/高亮/字色/字号/字体，CJK 同步
+  Asian/Complex 属性）、`set_paragraph_format`（对齐 + `Heading N` 样式）
+
+改动类命令返回 `paragraphAfterEdit` 验证快照。后端对应 `wps_*` 新工具见
+`WpsTools.java`；提示词工作流见 `prompts/system_prompt.md` §7。
+
+全部原语已在真实 LOWA 引擎（自建 zh-CN 24.2.8）+ 无头/有头 Chrome 上端到端
+验证（`editor.html?verify=1` 暴露 `window.__loExecutor` 供自动化驱动）。

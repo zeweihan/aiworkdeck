@@ -126,12 +126,23 @@ export function bootZetaOffice(options = {}) {
       canvas,
       uno_scripts: [zetaJsUrl, workerScriptUrl],
       locateFile: function (path, prefix) { return (prefix || sofficeBaseUrl) + path },
-      preRun: injections.length ? [function () {
-        // Runs before LibreOffice init. /instdir is NOT mounted yet at this point
-        // (FS / = tmp,home,dev,proc) but creating the dir tree and writing here
-        // WORKS: the LOWA data mount MERGES into MEMFS rather than replacing, so
-        // the files are present when LibreOffice scans at startup. PROVEN for the
-        // font (tofu 口口 -> real Chinese glyphs); the langpack uses the same path.
+      // ALWAYS an array: LOWA's soffice.js prologue does `if(!("preRun" in
+      // Module))Module["preRun"]=[]; Module.preRun.push(...)` — a present-but-
+      // undefined preRun key crashes the engine head with "Cannot read
+      // properties of undefined (reading 'push')" and the boot never starts.
+      preRun: [],
+      // Inject font/langpack AFTER the data package is mounted but BEFORE
+      // LibreOffice main() runs (so fontconfig's startup scan still sees the
+      // font). This CANNOT be a preRun hook: preRun runs before the package
+      // loader processes soffice.data, and any injected path that ALSO exists in
+      // the package (e.g. a self-built engine with the zh-CN langpack baked in,
+      // issue #66) makes the loader's FS_createDataFile throw EEXIST — the
+      // preload stalls forever and the editor never boots. At
+      // onRuntimeInitialized the package files are in MEMFS and FS.writeFile
+      // simply overwrites content, so baked-in engines and runtime injection
+      // coexist.
+      onRuntimeInitialized: function () {
+        if (!injections.length) return
         const FS = globalThis.FS
         const mkdirp = (dir) => {
           const parts = dir.split('/').filter(Boolean)
@@ -146,12 +157,16 @@ export function bootZetaOffice(options = {}) {
             n++
           } catch (e) { log('FS write failed for ' + f.path + ': ' + e) }
         }
-        log('MEMFS injected ' + n + '/' + injections.length + ' file(s) (font + zh-CN langpack) before boot')
-      }] : undefined,
+        log('MEMFS injected ' + n + '/' + injections.length + ' file(s) (font + zh-CN langpack) before main()')
+      },
     }
     if (sofficeBaseUrl !== '') {
+      // Absolutize: this URL is imported from inside a BLOB worker, where a
+      // relative/root path ('/lowa/soffice.js') is invalid — pthread spawn dies
+      // with "The URL ... is invalid" and the office thread never starts.
+      const absBase = new URL(sofficeBaseUrl, globalThis.location ? globalThis.location.href : undefined).href
       Module.mainScriptUrlOrBlob = new Blob(
-        ["importScripts('" + sofficeBaseUrl + "soffice.js');"], { type: 'text/javascript' })
+        ["importScripts('" + absBase + "soffice.js');"], { type: 'text/javascript' })
     }
     globalThis.Module = Module
 
