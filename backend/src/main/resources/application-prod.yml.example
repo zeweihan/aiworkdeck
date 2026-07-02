@@ -20,8 +20,8 @@ spring:
 external:
   qichacha:
     base-url: https://api.qichacha.com
-    key: f4900a7dd885415cb305edc621f5b490
-    secret: 9C16665DB7BA6661FAAC35EF1321FA3C
+    key: 你的企查查Key  # 从企查查开放平台获取
+    secret: 你的企查查Secret  # 从企查查开放平台获取
   wps:
     app-id: 你的WPS_AppID  # 从 WPS 控制台获取
     app-secret: 你的WPS_AppSecret  # 从 WPS 控制台获取
