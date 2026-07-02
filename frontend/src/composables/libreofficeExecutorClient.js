@@ -24,6 +24,9 @@ export const EDITOR_ACTIONS = [
   // [Track D] load the user's real document into the editor (host-initiated, not
   // an AI-agent command): {bytes, name} -> MEMFS + loadComponentFromURL + retarget.
   'load_document',
+  // [Track E] export the current document as bytes (host-initiated save):
+  // {name} -> storeToURL into MEMFS -> {bytes, size}; the host uploads them.
+  'export_document',
 ]
 
 /**
