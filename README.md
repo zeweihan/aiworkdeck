@@ -38,7 +38,7 @@ Star AI Workdeck if you care about any of these problems:
 - Building AI-native legal or professional-service workflows
 - Moving from chatbot add-ons to a real workspace where files, context, agents, and plugins live together
 - Self-hosting document AI infrastructure with private data, audit trails, and organization-level workflows
-- Exploring MCP-style agent orchestration, document parsing, WPS WebOffice integration, AI slides, TTS, OCR, and evidence-chain workflows in one codebase
+- Exploring MCP-style agent orchestration, document parsing, embedded LibreOffice editing, AI slides, TTS, OCR, and evidence-chain workflows in one codebase
 
 ## What It Is
 
@@ -75,7 +75,7 @@ Double-click to install. On first launch, a setup wizard lets you pick one AI pr
 | **Workspace** | Project/file tree, document staging, favorites, clipboard memory, work logs |
 | **AI document work** | Drafting, review, extraction, desensitization, Markdown and document preview |
 | **Agent layer** | Main agent interface, streaming responses, contextual file tags, MCP-oriented orchestration |
-| **Document editing** | WPS WebOffice integration, online DOCX/XLSX editing, document links, diff viewing |
+| **Document editing** | Embedded LibreOffice (WASM) editor with native zh-CN UI, local DOCX editing with tracked changes, AI editor primitives, document links, diff viewing |
 | **Parsing and generation** | MinerU document parsing, AI PPT generation, text-to-speech workflows |
 | **Plugin surface** | Left-sidebar plugins, tool configuration, dedicated panes for vertical workflows |
 | **Deployment** | Java/Spring backend, Vue/uni-app frontend, Electron desktop shell, Dockerized services |
@@ -86,7 +86,7 @@ Double-click to install. On first launch, a setup wizard lets you pick one AI pr
 ```mermaid
 flowchart TB
   User["User workspace"] --> IDE["IDE interaction layer"]
-  IDE --> WPS["WPS WebOffice integration"]
+  IDE --> LO["Embedded LibreOffice editor"]
   IDE --> Agent["Agent and chat interface"]
   Agent --> MCP["MCP / tool orchestration"]
   MCP --> Skills["Document skills and plugins"]
@@ -229,7 +229,7 @@ chmod +x restart-all.sh
 | MinerU service | `http://localhost:8001` |
 | EasyVoice | `http://localhost:9549` |
 
-Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, ElevenLabs, PKULaw, WPS WebOffice, and object storage. Not every provider is required to inspect the code or run the basic workbench.
+Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, ElevenLabs, PKULaw, and object storage. Not every provider is required to inspect the code or run the basic workbench.
 
 ## Repository Map
 
@@ -241,7 +241,7 @@ Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, ElevenLabs, PK
 | `pptx-service/` | AI-native PPT generation service |
 | `mineru-service/` | MinerU-based document parsing service |
 | `easyvoice/` | Text-to-speech service |
-| `docs/` | Engineering notes, WPS integration notes, storage and workflow docs |
+| `docs/` | Engineering notes, editor migration notes, storage and workflow docs |
 | `legal/` | AGPLv3 license, CLA, commercial license, trademark terms |
 
 ## Roadmap

@@ -38,12 +38,12 @@ One-line contrast:
 - [x] README includes a clear "Why star this repo" section.
 - [x] README keeps AGPL/commercial licensing clear but lower on the page.
 - [ ] Add GitHub repository description:
-  `AI-native IDE workspace for legal and document-heavy workflows: files, agents, plugins, WPS editing, OCR, evidence chains.`
+  `AI-native IDE workspace for legal and document-heavy workflows: files, agents, plugins, built-in document editing, OCR, evidence chains.`
 - [ ] Set website URL to `https://www.aiworkdeck.com`.
 - [ ] Add topics:
   `legal-ai`, `legaltech`, `document-ai`, `ai-agents`, `mcp`, `rag`,
   `document-workflow`, `self-hosted`, `electron`, `vue`, `spring-boot`,
-  `wps`, `ocr`, `pptx`.
+  `libreoffice`, `ocr`, `pptx`.
 - [ ] Publish a `v0.1.0-community-kernel` GitHub release with screenshots and the intro video link.
 - [ ] Open 3-5 beginner-friendly issues tagged `good first issue`.
 
@@ -106,7 +106,7 @@ V2EX-style post:
 - Spring Boot 后端
 - Vue/uni-app 前端
 - Electron 桌面端
-- WPS WebOffice 集成
+- 内置 LibreOffice 编辑器
 - MinerU 文档解析
 - AI PPT 生成服务
 - TTS/插件/文件上下文等实验能力
@@ -135,7 +135,7 @@ inside a workspace where files, context, document editing, agents, plugins,
 parsing, review, and audit trails stay connected.
 
 The repo includes a Spring Boot backend, Vue/uni-app frontend, Electron shell,
-WPS WebOffice integration, MinerU document parsing, AI slides, TTS, and
+an embedded LibreOffice editor, MinerU document parsing, AI slides, TTS, and
 plugin/workflow experiments.
 
 GitHub: https://github.com/zeweihan/aiworkdeck
