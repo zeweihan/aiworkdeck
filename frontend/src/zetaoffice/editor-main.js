@@ -151,6 +151,10 @@ startEditorEndpoint({
   // Default to a CJK font served next to the page (the verify build drops one
   // here); bootZetaOffice skips cleanly if it 404s (Chinese would be tofu then).
   fontUrl: q.get('font') || './cjk.ttc',
+  // zh-CN UI langpack manifest baked into the bundle (issue #66): makes the
+  // LibreOffice UI itself Chinese. bootZetaOffice skips cleanly if it 404s
+  // (e.g. the CDN-only spike), leaving the English UI. ?lang= overrides/disables.
+  langpackUrl: q.get('lang') || './lang/zh-CN/manifest.json',
   onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
 }).then((endpoint) => {
   console.log('[zeta-editor] endpoint ready — serving host over transport')

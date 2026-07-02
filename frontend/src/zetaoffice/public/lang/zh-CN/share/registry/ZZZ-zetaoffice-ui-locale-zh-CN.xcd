@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AI Workdeck (issue #66): force the embedded LibreOffice UI language to
+     Simplified Chinese. Langpack-zh-CN.xcd only REGISTERS zh-CN as an installed
+     locale; this file makes it the DEFAULT by setting Setup/L10N/ooLocale. Shipped
+     in share/registry (the CONFIGURATION_LAYERS xcsxcu shared layer, loaded for all
+     users) instead of the user profile, because the LOWA build has
+     SecureUserConfig=true. Injected into MEMFS at boot (zetaOfficeBoot.js preRun).
+     The ZZZ- prefix sorts it after Langpack-zh-CN.xcd so the locale is registered
+     before it is selected. -->
+<oor:data xmlns:oor="http://openoffice.org/2001/registry" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dependency file="main"/>
+  <oor:component-data oor:name="Setup" oor:package="org.openoffice">
+    <node oor:name="L10N">
+      <prop oor:name="ooLocale" oor:op="fuse">
+        <value>zh-CN</value>
+      </prop>
+    </node>
+  </oor:component-data>
+</oor:data>

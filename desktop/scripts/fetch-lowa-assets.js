@@ -15,10 +15,25 @@
 // with Brotli (content-encoding: br) and ignores Accept-Encoding: identity — the
 // bytes on the wire ARE brotli. The old proxy "just worked" because it forwarded
 // content-encoding and the browser decompressed. We keep that: the br files are
-// stored compressed (also keeps the bundle ~53 MB instead of ~165 MB raw) and a
-// sidecar lowa/.encodings.json tells the server to replay Content-Encoding: br.
-// Each download asserts the encoding it actually received matches what we expect,
-// so a CDN change trips the build instead of silently shipping garbage.
+// stored as received (also keeps the bundle ~53 MB instead of ~165 MB raw) and a
+// sidecar lowa/.encodings.json records the encoding to REPLAY when serving each
+// file, so zetaoffice-server.js sets Content-Encoding correctly. The sidecar is
+// written from the encoding ACTUALLY received per file (not hardcoded), so a
+// self-hosted engine shipped as raw bytes (identity) records no encoding and the
+// server serves it as plain wasm/data. The decoded-content magic check below is
+// what catches truncation / HTML error bodies / corrupt brotli.
+//
+// SOURCE (self-hosting a custom-built LOWA): LOWA_BASE_URL overrides where the 4
+// runtime files (soffice.js/.wasm/.data/.data.js.metadata) come from. Default is
+// the ZetaOffice CDN, so the build is byte-for-byte unchanged when it's unset.
+// Set it to self-host a LOWA you built yourself (e.g. one compiled --with-lang to
+// include zh-CN — issue #66). The base may be:
+//   - an https/http URL  (e.g. an Aliyun OSS bucket: https://<bucket>.oss-<region>.aliyuncs.com/lowa/)
+//   - a file:// directory (e.g. file:///abs/path/to/lowa-build-output/  — verify locally first)
+// A self-built soffice.data/.wasm is usually raw bytes (identity); that's fine —
+// the encoding is detected per file and the server serves identity as-is. The CJK
+// font (cjk.ttc) is unaffected by LOWA_BASE_URL; it always comes from FONT_URL.
+// See desktop/scripts/lowa-selfhost.md for the end-to-end self-hosting flow.
 //
 // Targets (under the dedicated Vite build output, dist/zetaoffice/, which
 // electron-builder ships via extraResources — package.json):
@@ -38,10 +53,26 @@
 
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const https = require('https');
 const zlib = require('zlib');
+const { fileURLToPath } = require('url');
 
 const LOWA_CDN = 'https://cdn.zetaoffice.net/zetaoffice_latest/';
+
+// Where the LOWA runtime files come from. Default = the ZetaOffice CDN (so an
+// unset env keeps the build byte-identical). LOWA_BASE_URL self-hosts a custom
+// build — an https/http URL (e.g. Aliyun OSS) or a file:// directory. We force a
+// trailing slash so `base + 'soffice.js'` always joins correctly.
+const LOWA_BASE = withTrailingSlash(process.env.LOWA_BASE_URL || LOWA_CDN);
+const usingCustomBase = LOWA_BASE !== LOWA_CDN;
+
+function withTrailingSlash(s) { return s.endsWith('/') ? s : s + '/'; }
+
+// Content-encodings we know how to decode (for the magic check) AND replay (via
+// the sidecar). Anything else trips the build rather than shipping bytes the
+// server can't serve correctly. null = identity (raw bytes).
+const ALLOWED_ENCODINGS = new Set([null, 'br', 'gzip']);
 // Noto Sans SC Regular (OFL-1.1), pinned release tag, served via jsDelivr which
 // resolves the repo's Git-LFS blob to the real font bytes. SubsetOTF/SC = the
 // Simplified-Chinese subset (full SC coverage, ~8 MB) rather than the all-CJK
@@ -53,20 +84,34 @@ const distRoot = path.join(__dirname, '../../frontend/dist/zetaoffice');
 // serve: 'lowa'   -> served by /lowa/*; stored as received; encoding replayed.
 //        'static' -> served by the plain static handler (no encoding replay), so
 //                    it MUST be identity on disk (we request identity + assert).
-// encoding: the content-encoding we EXPECT (asserted against the response).
+// encoding: the content-encoding EXPECTED from the DEFAULT CDN; asserted only on
+//           the default path so a CDN change still trips the build. With a custom
+//           LOWA_BASE_URL the expected encoding is unknown, so we accept whatever
+//           the source actually sends (any ALLOWED_ENCODINGS) and record that.
 // magic: shape check applied to the DECOMPRESSED content.
 const ASSETS = [
-  { url: LOWA_CDN + 'soffice.js',               dest: 'lowa/soffice.js',               serve: 'lowa',   encoding: null, magic: 'js' },
-  { url: LOWA_CDN + 'soffice.wasm',             dest: 'lowa/soffice.wasm',             serve: 'lowa',   encoding: 'br', magic: 'wasm' },
-  { url: LOWA_CDN + 'soffice.data',             dest: 'lowa/soffice.data',             serve: 'lowa',   encoding: 'br', magic: 'blob' },
-  { url: LOWA_CDN + 'soffice.data.js.metadata', dest: 'lowa/soffice.data.js.metadata', serve: 'lowa',   encoding: null, magic: 'json' },
-  { url: FONT_URL,                              dest: 'cjk.ttc',                       serve: 'static', encoding: null, magic: 'font' },
+  { url: LOWA_BASE + 'soffice.js',               dest: 'lowa/soffice.js',               serve: 'lowa',   encoding: null, magic: 'js' },
+  { url: LOWA_BASE + 'soffice.wasm',             dest: 'lowa/soffice.wasm',             serve: 'lowa',   encoding: 'br', magic: 'wasm' },
+  { url: LOWA_BASE + 'soffice.data',             dest: 'lowa/soffice.data',             serve: 'lowa',   encoding: 'br', magic: 'blob' },
+  { url: LOWA_BASE + 'soffice.data.js.metadata', dest: 'lowa/soffice.data.js.metadata', serve: 'lowa',   encoding: null, magic: 'json' },
+  { url: FONT_URL,                               dest: 'cjk.ttc',                       serve: 'static', encoding: null, magic: 'font' },
 ];
+
+// Fetch a URL (http(s) or file://); resolves {encoding, body:Buffer}. file://
+// has no content-encoding, so it's always identity (null) — a self-built engine
+// dropped into a local directory is served raw.
+function fetchUrl(url, headers) {
+  if (url.startsWith('file://')) {
+    return Promise.resolve({ encoding: null, body: fs.readFileSync(fileURLToPath(url)) });
+  }
+  return get(url, headers);
+}
 
 // GET with up to 5 redirects; resolves {encoding, body:Buffer}.
 function get(url, headers, redirects = 0) {
+  const mod = url.startsWith('http://') ? http : https;
   return new Promise((resolve, reject) => {
-    const req = https.request(url, { method: 'GET', headers }, (res) => {
+    const req = mod.request(url, { method: 'GET', headers }, (res) => {
       const sc = res.statusCode || 0;
       if (sc >= 300 && sc < 400 && res.headers.location && redirects < 5) {
         res.resume();
@@ -116,48 +161,83 @@ function checkMagic(raw, magic, dest) {
   }
 }
 
-// True if an on-disk file already decodes + validates (idempotent re-runs).
+// Encoding each baked file was stored with, from the sidecar a previous run
+// wrote (basename -> encoding). Authoritative for idempotent re-runs on the
+// default CDN: a brotli blob must be decoded as br to validate, and 'blob'/'js'
+// magic is too lenient to infer that from the bytes alone. Missing/stale -> the
+// file just re-downloads.
+function loadExistingEncodings() {
+  try { return JSON.parse(fs.readFileSync(path.join(distRoot, 'lowa/.encodings.json'), 'utf8')); }
+  catch (e) { return {}; }
+}
+const existingEncodings = loadExistingEncodings();
+
+// If an on-disk file already decodes + validates, return {enc} (the encoding it
+// was stored with, for re-recording); else null (re-download).
 function cachedOk(destPath, a) {
+  const enc = existingEncodings[path.basename(a.dest)] || null;
   try {
-    checkMagic(decode(fs.readFileSync(destPath), a.encoding), a.magic, destPath);
-    return true;
-  } catch (e) { return false; }
+    checkMagic(decode(fs.readFileSync(destPath), enc), a.magic, destPath);
+    return { enc };
+  } catch (e) { return null; }
 }
 
+// Returns { size, enc } — enc is the content-encoding the bytes are stored with
+// (null = identity), used to build the sidecar.
 async function fetchAsset(a) {
   const destPath = path.join(distRoot, a.dest);
-  if (fs.existsSync(destPath) && cachedOk(destPath, a)) {
-    const mb = (fs.statSync(destPath).size / 1048576).toFixed(1);
-    console.log('  = ' + a.dest + ' (cached, ' + mb + ' MB on disk)');
-    return fs.statSync(destPath).size;
+  // Cache only on the default path; a custom LOWA_BASE_URL may point at a
+  // different engine than whatever is already on disk, so always re-fetch.
+  if (!usingCustomBase && fs.existsSync(destPath)) {
+    const hit = cachedOk(destPath, a);
+    if (hit) {
+      const mb = (fs.statSync(destPath).size / 1048576).toFixed(1);
+      console.log('  = ' + a.dest + ' (cached, ' + mb + ' MB on disk)');
+      return { size: fs.statSync(destPath).size, enc: hit.enc };
+    }
   }
   process.stdout.write('  ↓ ' + a.dest + ' …');
   // 'static' assets are served without encoding replay, so insist on identity.
   const reqHeaders = a.serve === 'static' ? { 'Accept-Encoding': 'identity' } : {};
-  const { encoding, body } = await get(a.url, reqHeaders);
+  const { encoding, body } = await fetchUrl(a.url, reqHeaders);
   const enc = encoding || null;
-  if (enc !== a.encoding) {
+  // Default CDN: assert the encoding we expect, so a CDN change trips the build.
+  // Custom LOWA_BASE_URL: the encoding is unknown, so accept whatever the source
+  // sends as long as we can decode + replay it (checked next).
+  if (!usingCustomBase && enc !== a.encoding) {
     throw new Error(a.dest + ': expected content-encoding ' + JSON.stringify(a.encoding) +
       ' but CDN sent ' + JSON.stringify(enc) + ' (serving would corrupt; aborting)');
+  }
+  if (!ALLOWED_ENCODINGS.has(enc)) {
+    throw new Error(a.dest + ': content-encoding ' + JSON.stringify(enc) +
+      ' is not supported (expected identity, br, or gzip)');
+  }
+  // 'static' files are served without encoding replay, so they must be identity.
+  if (a.serve === 'static' && enc !== null) {
+    throw new Error(a.dest + ': static asset must be identity but source sent ' + JSON.stringify(enc));
   }
   checkMagic(decode(body, enc), a.magic, a.dest);
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
   fs.writeFileSync(destPath + '.part', body);
   fs.renameSync(destPath + '.part', destPath);
   console.log(' ' + (body.length / 1048576).toFixed(1) + ' MB' + (enc ? ' (' + enc + ')' : ''));
-  return body.length;
+  return { size: body.length, enc };
 }
 
 async function main() {
   console.log('Fetching LOWA runtime + CJK font into ' + distRoot);
-  let total = 0;
-  for (const a of ASSETS) total += await fetchAsset(a);
+  if (usingCustomBase) console.log('  LOWA source: ' + LOWA_BASE + ' (LOWA_BASE_URL)');
 
-  // Sidecar so zetaoffice-server.js replays Content-Encoding for the files the
-  // CDN pre-compressed (otherwise the browser gets brotli bytes as raw wasm).
+  // Build the sidecar from the encoding ACTUALLY stored per file, so a
+  // self-hosted identity engine records nothing (served raw) while the CDN's
+  // brotli files record 'br'. zetaoffice-server.js replays these on serve;
+  // without it the browser would get brotli bytes as raw wasm and fail to boot.
+  let total = 0;
   const encodings = {};
   for (const a of ASSETS) {
-    if (a.serve === 'lowa' && a.encoding) encodings[path.basename(a.dest)] = a.encoding;
+    const { size, enc } = await fetchAsset(a);
+    total += size;
+    if (a.serve === 'lowa' && enc) encodings[path.basename(a.dest)] = enc;
   }
   fs.writeFileSync(path.join(distRoot, 'lowa/.encodings.json'), JSON.stringify(encodings) + '\n');
 

@@ -27,6 +27,8 @@ export const EDITOR_ACTIONS = [
   // [Track E] export the current document as bytes (host-initiated save):
   // {name} -> storeToURL into MEMFS -> {bytes, size}; the host uploads them.
   'export_document',
+  // [diagnostic #66] report resolved UI locale (ooLocale) to confirm zh-CN took effect.
+  'get_ui_lang',
 ]
 
 /**
