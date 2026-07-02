@@ -1,10 +1,8 @@
 import { ref, reactive, nextTick } from 'vue'
 import { getApiBaseUrl, getConversationMetadata } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
-import { useWpsBridge } from './useWpsBridge.js'
 
 export function useAgentStream() {
-    const wpsBridge = useWpsBridge()
     // STATE: List of all bubbles (history + active)
     const bubbles = ref([])
     const isConnected = ref(false)
@@ -362,8 +360,11 @@ export function useAgentStream() {
                 console.error('Failed to parse title_update', e)
             }
         } else if (evt === 'wps_stream_data') {
+            // Live document streaming (backend event name kept for contract
+            // stability, #79). Routed up the same client_action seam so the page
+            // can feed the embedded LibreOffice editor (buffered insert).
             try {
-                // Mark current bubble as WPS streaming to suppress chat duplication
+                // Mark current bubble as doc-streaming to suppress chat duplication
                 if (currentAssistantBubble.value && !currentAssistantBubble.value.isWpsStreaming) {
                     currentAssistantBubble.value.isWpsStreaming = true
                     // Add a placeholder message if content is empty
@@ -373,7 +374,9 @@ export function useAgentStream() {
                 }
 
                 const d = JSON.parse(dataStr)
-                wpsBridge.handleWpsStreamData(d.content || "")
+                if (clientActionHandler.value) {
+                    clientActionHandler.value({ action: 'wps_stream_data', content: d.content || '' })
+                }
             } catch (e) {
                 console.error('Failed to handle wps_stream_data', e)
             }

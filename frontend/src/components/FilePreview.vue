@@ -26,26 +26,20 @@
 
       <!-- 预览内容区域 -->
       <view class="preview-body">
-        <!-- Word 文档零配置只读渲染：docx-preview 本地解析，无需 WPS/密钥，数据不出本机（承接 #18 T6） -->
+        <!-- Word 文档零配置只读渲染：docx-preview 本地解析，无需任何密钥，数据不出本机（承接 #18 T6） -->
         <view v-if="isWord && useDocxPreview && !docxRenderFailed" class="preview-docx">
           <view v-if="docxLoading" class="docx-loading"><text>正在渲染文档…</text></view>
           <view ref="docxContainer" class="docx-host"></view>
         </view>
 
-        <!-- Office 文件预览（xls/ppt，或 docx 渲染失败/非 H5 时回退到 WPS 预览模式）。
-             桌面版禁用 WPS（仅 LibreOffice），故此处仅 web/cloud 生效；桌面 xls/ppt
-             落到下方「暂不支持预览 + 下载」。 -->
-        <view v-else-if="isOffice && file.wpsFileId && !isDesktopApp" class="preview-wps">
-          <WpsEditor
-            :file-id="file.wpsFileId"
-            :file-name="file.name"
-            :app-id="wpsAppId"
-            :mode="'view'"
-            :auto-load="true"
-            :container-style="wpsContainerStyle"
-            @ready="onWpsPreviewReady"
-            @error="onWpsPreviewError"
-          />
+        <!-- 其余 Office 文件（xls/ppt，或 docx 渲染失败/非 H5）：暂不支持在线预览（#79，
+             WPS 预览回退已移除；xls/ppt 走 LOWA Calc/Impress 是后续候选） -->
+        <view v-else-if="isOffice" class="preview-unsupported">
+          <text>该文件暂不支持在线预览</text>
+          <text class="preview-hint">文件类型: {{ file.fileType || '未知' }}，可下载后在本地打开</text>
+          <button class="btn-download" type="default" size="mini" @tap="handleDownload">
+            下载文件
+          </button>
         </view>
 
         <!-- PDF 预览：本地 blob 由浏览器/Electron 内置 PDF 引擎原生渲染，数据不出本机（#36） -->
@@ -111,9 +105,8 @@
 <script>
 import { getFileDownloadUrl } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
-import WpsEditor from '@/components/WpsEditor.vue'
 
-// docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台回退原 WPS 路径
+// docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台落 Office 占位分支
 // #ifdef H5
 const IS_H5 = true
 // #endif
@@ -123,9 +116,6 @@ const IS_H5 = false
 
 export default {
   name: 'FilePreview',
-  components: {
-    WpsEditor
-  },
   props: {
     file: {
       type: Object,
@@ -134,10 +124,6 @@ export default {
     baseUrl: {
       type: String,
       default: ''
-    },
-    wpsAppId: {
-      type: String,
-      default: '' // 由父组件从后端动态获取并传入
     }
   },
   data() {
@@ -147,19 +133,11 @@ export default {
       blobUrl: '',
       docxLoading: false,
       docxRenderFailed: false,
-      // docx-preview 仅在 H5/桌面（Chromium）渲染；非 H5 回退到原 WPS 路径
-      useDocxPreview: IS_H5,
-      wpsContainerStyle: {
-        width: '100%',
-        height: '100%'
-      }
+      // docx-preview 仅在 H5/桌面（Chromium）渲染；非 H5 落 Office 占位分支
+      useDocxPreview: IS_H5
     }
   },
   computed: {
-    // Desktop (Electron) vs web/cloud. Desktop disables WPS preview (LibreOffice only).
-    isDesktopApp() {
-      try { return !!(typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.ocr) } catch (e) { return false }
-    },
     fileUrl() {
       if (!this.file) {
         console.log('FilePreview: file 为空')
@@ -343,7 +321,7 @@ export default {
         xhr.send()
       })
     },
-    // Word 文档零配置只读渲染：docx-preview 在本地（Chromium）解析 .docx，无需 WPS/任何密钥
+    // Word 文档零配置只读渲染：docx-preview 在本地（Chromium）解析 .docx，无需任何密钥
     async renderDocx() {
       this.docxLoading = true
       this.docxRenderFailed = false
@@ -364,7 +342,7 @@ export default {
           experimental: true
         })
       } catch (error) {
-        console.error('docx 本地渲染失败，回退到 WPS 预览:', error)
+        console.error('docx 本地渲染失败，落 Office 占位分支:', error)
         this.docxRenderFailed = true
       } finally {
         this.docxLoading = false
@@ -443,17 +421,6 @@ export default {
       console.error('音频加载失败:', e)
       uni.showToast({
         title: '音频播放失败',
-        icon: 'none'
-      })
-    },
-    // WPS 预览相关方法
-    onWpsPreviewReady(instance) {
-      console.log('WPS 预览加载成功', instance)
-    },
-    onWpsPreviewError(error) {
-      console.error('WPS 预览加载失败:', error)
-      uni.showToast({
-        title: '预览加载失败，请稍后重试',
         icon: 'none'
       })
     },
@@ -574,8 +541,7 @@ export default {
 }
 
 .preview-pdf,
-.preview-office,
-.preview-wps {
+.preview-office {
   width: 100%;
   height: 100%;
 }

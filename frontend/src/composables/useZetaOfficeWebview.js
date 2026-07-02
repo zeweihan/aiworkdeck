@@ -19,7 +19,7 @@
 // the host as a 'ipc-message' event with {channel, args}. The page side needs a
 // preload exposing ipcRenderer (nodeIntegrationInSubFrames / a preload script).
 //
-// DORMANT until the host renders the <webview> and selects EDITOR_LIBREOFFICE.
+// DORMANT until the host renders the <webview> and wires the executor.
 
 import { createRelayExecutor } from './zetaOfficeRelay.js'
 
@@ -43,7 +43,7 @@ export function webviewTransport(webviewEl) {
 /**
  * Host-side LibreOffice executor driving the editor inside the <webview>.
  * Same executeCommand(action, params) contract as the bridges → pass to
- * useEditorBridge(EDITOR_WPS, { libreExecutor: createWebviewEditorExecutor(el) }).
+ * useEditorBridge({ libreExecutor: createWebviewEditorExecutor(el) }).
  *
  * @param {HTMLElement} webviewEl an Electron <webview> DOM element.
  * @param {{timeoutMs?:number, onReady?:()=>void}} [opts] onReady fires once the

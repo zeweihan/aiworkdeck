@@ -155,10 +155,8 @@ startEditorEndpoint({
   // engine follows navigator.languages otherwise — v0.3.1 shipped English on an
   // en-GB system). ?uilang=env follows the environment; ?uilang=xx-YY overrides.
   uiLang: q.get('uilang') === 'env' ? '' : (q.get('uilang') || 'zh-CN'),
-  // zh-CN UI langpack manifest baked into the bundle (issue #66): makes the
-  // LibreOffice UI itself Chinese. bootZetaOffice skips cleanly if it 404s
-  // (e.g. the CDN-only spike), leaving the English UI. ?lang= overrides/disables.
-  langpackUrl: q.get('lang') || './lang/zh-CN/manifest.json',
+  // (#79) The #66 runtime zh-CN langpack injection was removed: the self-built
+  // engine ships zh-CN baked in, so injecting 38 files was pure boot overhead.
   onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
 }).then((endpoint) => {
   console.log('[zeta-editor] endpoint ready — serving host over transport')
