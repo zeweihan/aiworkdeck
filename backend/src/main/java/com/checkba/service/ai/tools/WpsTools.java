@@ -254,7 +254,8 @@ public class WpsTools {
 
     // ==================== 查找和替换 ====================
 
-    @Tool("在 WPS 文档中查找指定文本，返回所有匹配位置的列表（start, end）。建议配合 wps_set_selection 使用。")
+    @Tool("【找】在文档中查找文本。每个匹配返回：anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
+          "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 配合 wps_select_anchor（选中查看）或 wps_replace_at_anchor（精准替换）操作。")
     public String wps_find_text(
             @P("要查找的文本") String keyword,
             @P("是否区分大小写，默认 false") Boolean matchCase
@@ -491,6 +492,190 @@ public class WpsTools {
             
         } catch (Exception e) {
             log.error("Failed to search related docs", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== 拟人式原语（嵌入式 LibreOffice 编辑器） ====================
+    // 设计文档：docs/AI_EDITOR_PRIMITIVES.md。工作循环：看 → 找 → 选 → 改 → 验。
+    // 定位一律使用 wps_find_text 返回的 anchorId（书签锚点，随文档编辑自动跟随），
+    // 禁止使用整数字符偏移（跨富文本必然错位）。
+
+    @Tool("【看】分段读取文档正文。返回带编号的段落列表（含标题级别），是了解文档内容的首选工具。" +
+          "文档很长时结果会分页：返回 truncated=true 和 nextStartParagraph，用它继续读下一段。")
+    public String wps_get_document_text(
+            @P("起始段落号（0 开始，默认 0）") Integer startParagraph,
+            @P("最多返回的段落数（默认 200）") Integer maxParagraphs
+    ) {
+        log.info("Tool: wps_get_document_text called start={}, max={}", startParagraph, maxParagraphs);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (startParagraph != null) params.put("startParagraph", startParagraph);
+            if (maxParagraphs != null) params.put("maxParagraphs", maxParagraphs);
+            return wpsActionService.executeWpsCommand("get_document_text", params);
+        } catch (Exception e) {
+            log.error("Failed to get document text", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【看】查看当前光标/选区周围的文本（选中内容、前后文、所在段落）。在插入或格式化之前先确认光标位置。")
+    public String wps_get_cursor_context() {
+        log.info("Tool: wps_get_cursor_context called");
+        try {
+            return wpsActionService.executeWpsCommand("get_cursor_context", null);
+        } catch (Exception e) {
+            log.error("Failed to get cursor context", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【选】选中 wps_find_text 返回的某个匹配（按 anchorId）。编辑器会滚动到该处并高亮选区，用户能看到 AI 正在操作哪里。" +
+          "选中后可接 wps_replace_selection / wps_delete_selection / wps_format_selection / wps_collapse_cursor。")
+    public String wps_select_anchor(
+            @P("wps_find_text 返回的 anchorId") String anchorId
+    ) {
+        log.info("Tool: wps_select_anchor called anchor={}", anchorId);
+        try {
+            return wpsActionService.executeWpsCommand("set_selection",
+                    java.util.Map.of("anchor", anchorId != null ? anchorId : ""));
+        } catch (Exception e) {
+            log.error("Failed to select anchor", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【选】按段落号选中整个段落（0 开始，配合 wps_get_document_text 的编号）。编辑器会滚动到该段落并高亮。")
+    public String wps_select_paragraph(
+            @P("段落号（0 开始）") Integer index
+    ) {
+        log.info("Tool: wps_select_paragraph called index={}", index);
+        try {
+            return wpsActionService.executeWpsCommand("select_paragraph",
+                    java.util.Map.of("index", index != null ? index : 0));
+        } catch (Exception e) {
+            log.error("Failed to select paragraph", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【选】把光标落到当前选区的开头或结尾（取消选中）。要在某处'之前/之后'插入文本时：先选中目标，再 collapse 到 start/end，然后 wps_insert_at_cursor。")
+    public String wps_collapse_cursor(
+            @P("start=选区开头, end=选区结尾") String to
+    ) {
+        log.info("Tool: wps_collapse_cursor called to={}", to);
+        try {
+            return wpsActionService.executeWpsCommand("collapse_selection",
+                    java.util.Map.of("to", to != null ? to : "end"));
+        } catch (Exception e) {
+            log.error("Failed to collapse cursor", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【改】把某个锚点（anchorId）处的文本替换为新文本，以修订模式进行。返回改动后所在段落的实际文本，务必核对确认改对了。" +
+          "这是最精准的替换方式：先 wps_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换。")
+    public String wps_replace_at_anchor(
+            @P("wps_find_text 返回的 anchorId") String anchorId,
+            @P("新文本") String newText
+    ) {
+        log.info("Tool: wps_replace_at_anchor called anchor={}", anchorId);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("anchor", anchorId != null ? anchorId : "");
+            params.put("newText", newText != null ? newText : "");
+            return wpsActionService.executeWpsCommand("replace_at_position", params);
+        } catch (Exception e) {
+            log.error("Failed to replace at anchor", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【改】删除当前选中的文本（以修订模式）。先用 wps_select_anchor / wps_select_paragraph 选中要删的内容。没有选区时会报错。")
+    public String wps_delete_selection() {
+        log.info("Tool: wps_delete_selection called");
+        try {
+            return wpsActionService.executeWpsCommand("delete_selection", null);
+        } catch (Exception e) {
+            log.error("Failed to delete selection", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【格式】给当前选中的文本设置字符格式：加粗/斜体/下划线/删除线/高亮/字色/字号/字体。只传需要改的参数。" +
+          "必须先选中文本（wps_select_anchor / wps_select_paragraph）。高亮支持 yellow/green/cyan/magenta/red/blue/gray/none 或 #RRGGBB；none 取消高亮。")
+    public String wps_format_selection(
+            @P("加粗 true/false，不改则不传") Boolean bold,
+            @P("斜体 true/false，不改则不传") Boolean italic,
+            @P("下划线 true/false，不改则不传") Boolean underline,
+            @P("删除线 true/false，不改则不传") Boolean strikeout,
+            @P("高亮颜色：yellow/green/cyan/magenta/red/blue/gray/none 或 #RRGGBB，不改则不传") String highlight,
+            @P("文字颜色：#RRGGBB 或 auto，不改则不传") String color,
+            @P("字号（磅），不改则不传") Double fontSize,
+            @P("字体名，不改则不传") String fontName
+    ) {
+        log.info("Tool: wps_format_selection called");
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (bold != null) params.put("bold", bold);
+            if (italic != null) params.put("italic", italic);
+            if (underline != null) params.put("underline", underline);
+            if (strikeout != null) params.put("strikeout", strikeout);
+            if (highlight != null && !highlight.isEmpty()) params.put("highlight", highlight);
+            if (color != null && !color.isEmpty()) params.put("color", color);
+            if (fontSize != null) params.put("fontSize", fontSize);
+            if (fontName != null && !fontName.isEmpty()) params.put("fontName", fontName);
+            return wpsActionService.executeWpsCommand("format_selection", params);
+        } catch (Exception e) {
+            log.error("Failed to format selection", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【格式】设置当前选区所在段落的段落格式：对齐方式和/或标题级别。" +
+          "headingLevel: 1-9 设为对应级别标题，0 恢复正文。alignment: left/right/center/justify。")
+    public String wps_set_paragraph_format(
+            @P("对齐：left/right/center/justify，不改则不传") String alignment,
+            @P("标题级别：1-9 为标题，0 恢复正文，不改则不传") Integer headingLevel
+    ) {
+        log.info("Tool: wps_set_paragraph_format called alignment={}, headingLevel={}", alignment, headingLevel);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (alignment != null && !alignment.isEmpty()) params.put("alignment", alignment);
+            if (headingLevel != null) params.put("headingLevel", headingLevel);
+            return wpsActionService.executeWpsCommand("set_paragraph_format", params);
+        } catch (Exception e) {
+            log.error("Failed to set paragraph format", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【验/撤销】撤销最近的编辑操作。改错了（核对返回的段落文本发现不对）就用它退回，再重新操作。")
+    public String wps_undo(
+            @P("撤销步数，默认 1") Integer steps
+    ) {
+        log.info("Tool: wps_undo called steps={}", steps);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (steps != null) params.put("steps", steps);
+            return wpsActionService.executeWpsCommand("undo", params);
+        } catch (Exception e) {
+            log.error("Failed to undo", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【验/撤销】重做刚撤销的操作。")
+    public String wps_redo(
+            @P("重做步数，默认 1") Integer steps
+    ) {
+        log.info("Tool: wps_redo called steps={}", steps);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (steps != null) params.put("steps", steps);
+            return wpsActionService.executeWpsCommand("redo", params);
+        } catch (Exception e) {
+            log.error("Failed to redo", e);
             return "Error: " + e.getMessage();
         }
     }

@@ -149,7 +149,13 @@ startEditorEndpoint({
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
     })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
-  if (VERIFY) wireVerifyPanel(endpoint.executor)
+  if (VERIFY) {
+    wireVerifyPanel(endpoint.executor)
+    // Automation hook: lets a headless-browser test driver call the executor
+    // directly (window.__loExecutor.executeCommand(...)) to exercise every
+    // primitive against the real LOWA engine. Verify mode only.
+    window.__loExecutor = endpoint.executor
+  }
 }).catch((e) => {
   console.error('[zeta-editor] boot failed:', e)
   if (VERIFY) vlog('boot failed: ' + (e && e.message ? e.message : e))

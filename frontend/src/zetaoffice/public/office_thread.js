@@ -78,6 +78,101 @@ function anchorRange(name) {
   return bms.getByName(name).getAnchor(); // XTextRange
 }
 
+// ---- 拟人式原语 helpers（感知/验证回路） ------------------------------------
+// Context around a range: the chars immediately before/after, read via a text
+// cursor spawned FROM THE RANGE'S OWN XText (so matches inside table cells /
+// frames read their local story, not the body text). This is what lets the AI
+// tell five identical "甲方" hits apart — the WPS-era failure mode.
+function contextAround(range, radius) {
+  const n = Math.max(1, Math.min(Number(radius) || 50, 200));
+  const out = { before: '', after: '' };
+  try {
+    const t = range.getText();
+    const b = t.createTextCursorByRange(range.getStart());
+    b.goLeft(n, true);
+    out.before = b.getString();
+    const a = t.createTextCursorByRange(range.getEnd());
+    a.goRight(n, true);
+    out.after = a.getString();
+  } catch (e) { out.ctxErr = errStr(e); }
+  return out;
+}
+// The paragraph text enclosing a range (start point), for match disambiguation
+// and post-edit verification. XParagraphCursor via createTextCursorByRange.
+function paragraphTextOf(range) {
+  try {
+    const t = range.getText();
+    const cur = t.createTextCursorByRange(range.getStart());
+    cur.gotoStartOfParagraph(false);
+    cur.gotoEndOfParagraph(true);
+    return cur.getString();
+  } catch (e) { return null; }
+}
+// Enumerate body paragraphs, calling fn(el, index); fn returns true to stop.
+function eachParagraph(fn) {
+  const en = xModel.getText().createEnumeration();
+  let i = 0;
+  while (en.hasMoreElements()) {
+    const el = en.nextElement();
+    if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
+      if (fn(el, i)) return;
+      i++;
+    }
+  }
+}
+// Select a range THE WAY A HUMAN WOULD: the view cursor jumps there (the view
+// scrolls to it) and the selection is visibly painted. gotoRange(range, false)
+// makes the view cursor span the range — the standard "select the found hit"
+// idiom. Falls back to ctrl.select if the view cursor balks (e.g. range in a
+// story the view cursor can't enter).
+function selectVisibly(range) {
+  try { ctrl.getViewCursor().gotoRange(range, false); return true; }
+  catch (e) { try { ctrl.select(range); return true; } catch (e2) { return false; } }
+}
+// Insert text at the view cursor, honoring '\n' as a PARAGRAPH BREAK.
+// XText.insertString does NOT split paragraphs on '\n' (verified against the
+// real engine: a multi-line insert landed as ONE paragraph), so multi-paragraph
+// inserts must interleave insertControlCharacter(PARAGRAPH_BREAK).
+function insertTextAtCursor(vc, text) {
+  const xText = xModel.getText();
+  const parts = String(text).split('\n');
+  for (let i = 0; i < parts.length; i++) {
+    if (i > 0) xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+    if (parts[i]) xText.insertString(vc, parts[i], false);
+  }
+}
+
+// Shared verification snapshot returned by mutating commands: where the cursor
+// is now + the paragraph as it reads AFTER the edit ("改完看一眼").
+function verifySnapshot() {
+  try {
+    const vc = ctrl.getViewCursor();
+    return { paragraphAfterEdit: paragraphTextOf(vc), selectedText: vc.getString() };
+  } catch (e) { return {}; }
+}
+
+// ---- 格式原语的取值映射 ------------------------------------------------------
+const HIGHLIGHT_COLORS = { // CharHighlight RGB; 'none' clears (-1)
+  yellow: 0xFFFF00, green: 0x00FF00, cyan: 0x00FFFF, magenta: 0xFF00FF,
+  red: 0xFF0000, blue: 0x0000FF, gray: 0xC0C0C0, none: -1,
+};
+function parseColor(v, names) {
+  if (v == null) return null;
+  const s = String(v).trim().toLowerCase();
+  if (names && s in names) return names[s];
+  if (s === 'auto') return -1;
+  const m = s.match(/^#?([0-9a-f]{6})$/);
+  return m ? parseInt(m[1], 16) : null;
+}
+// Set a char property together with its Asian/Complex siblings so CJK runs
+// (the product's main language) pick up the format too.
+function setCharProp(ps, base, value) {
+  ps.setPropertyValue(base, value);
+  for (const sfx of ['Asian', 'Complex']) {
+    try { ps.setPropertyValue(base + sfx, value); } catch (e) { /* not all props have siblings */ }
+  }
+}
+
 // ---- boot: open a fresh BLANK Writer doc ----------------------------------
 // Production: a brand-new / empty document must show a clean blank page (the
 // host loads real bytes via load_document when the file has content). We do NOT
@@ -90,6 +185,10 @@ function bootDoc() {
   xModel = desktop.loadComponentFromURL('private:factory/swriter', '_default', 0, []);
   ctrl = xModel.getCurrentController();
   try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch {}
+  // RFC v2: revisions default ON — every edit (AI or typed) lands as a tracked
+  // change the lawyer can accept/reject. Set once here (and on retarget) instead
+  // of per-command, so no edit path can slip through untracked.
+  try { xModel.setPropertyValue('RecordChanges', true); } catch {}
 
   installKeyHandler();
   post('ui_ready');
@@ -207,22 +306,21 @@ function testInsertText(text) {
 const EXEC = {
   // [verified] insert at the view cursor (append, not select) — see testInsertText.
   insert_at_cursor(p) {
-    const xText = xModel.getText();
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
-    xText.insertString(vc, String(p.text || ''), false);
+    insertTextAtCursor(vc, p.text || '');
     vc.collapseToEnd();
-    return { success: true, inserted: String(p.text || '') };
+    return Object.assign({ success: true, inserted: String(p.text || '') }, verifySnapshot());
   },
-  // [verified] replace selection if any, else insert at cursor.
+  // [verified] replace selection if any, else insert at cursor. '\n' in the new
+  // text becomes a paragraph break (insertTextAtCursor).
   replace_selection(p) {
-    const xText = xModel.getText();
     const vc = ctrl.getViewCursor();
-    const t = String(p.text || '');
-    // bAbsorb=true replaces the cursor's spanned text; for a collapsed cursor it inserts.
-    xText.insertString(vc, t, vc.getString().length > 0);
+    if ((vc.getString() || '').length > 0) vc.setString(''); // drop the selection (tracked)
     vc.collapseToEnd();
-    return { success: true, text: t };
+    insertTextAtCursor(vc, p.text || '');
+    vc.collapseToEnd();
+    return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
   },
   // [verified] model-native search + redline (RFC §0.2: no integer offsets).
   find_replace(p) {
@@ -261,11 +359,19 @@ const EXEC = {
     try { sd.setPropertyValue('SearchCaseSensitive', !!p.matchCase); } catch (e) {}
     const ranges = [];
     let hit = xModel.findFirst(sd);
-    while (hit !== null && ranges.length < 500) { ranges.push(hit); hit = xModel.findNext(hit, sd); }
-    const matches = ranges.map(function (r) {
+    while (hit !== null && ranges.length < 200) { ranges.push(hit); hit = xModel.findNext(hit, sd); }
+    // Each match carries DISAMBIGUATION CONTEXT (chars before/after + enclosing
+    // paragraph), so the AI can tell identical hits apart BEFORE editing — the
+    // WPS-era "replaced the wrong one" class of bug dies here.
+    const matches = ranges.map(function (r, i) {
       let anchorId = null;
       try { anchorId = anchorBookmark(r); } catch (e) {}
-      return { anchorId: anchorId, text: r.getString() };
+      const ctx = contextAround(r, 40);
+      return {
+        matchIndex: i, anchorId: anchorId, text: r.getString(),
+        contextBefore: ctx.before, contextAfter: ctx.after,
+        paragraph: (paragraphTextOf(r) || '').slice(0, 160),
+      };
     });
     return { success: true, count: matches.length, matches: matches };
   },
@@ -328,7 +434,11 @@ const EXEC = {
     while (en.hasMoreElements()) {
       const el = en.nextElement();
       if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
-        if (i === idx) { el.setString(String(p.newText || '')); return { success: true, index: idx }; }
+        if (i === idx) {
+          selectVisibly(el); // 拟人：先跳到目标段落
+          el.setString(String(p.newText || ''));
+          return { success: true, index: idx, paragraphAfterEdit: el.getString().slice(0, 200) };
+        }
         i++;
       }
     }
@@ -365,8 +475,10 @@ const EXEC = {
     if (!p.anchor) return { success: false, message: 'set_selection requires {anchor}; integer offsets unsupported (§0.2)' };
     const range = anchorRange(String(p.anchor));
     if (!range) return { success: false, message: 'anchor not found: ' + p.anchor };
-    ctrl.select(range);
-    return { success: true, anchor: p.anchor, text: range.getString() };
+    // 拟人：光标跳过去、视图滚过去、选区亮出来 — 用户看得见 AI 在操作哪里。
+    if (!selectVisibly(range)) return { success: false, message: 'could not select anchor: ' + p.anchor };
+    const ctx = contextAround(range, 40);
+    return { success: true, anchor: p.anchor, text: range.getString(), contextBefore: ctx.before, contextAfter: ctx.after };
   },
   // [verified] §0.2 anchor-based replace, under RecordChanges (redline).
   replace_at_position(p) {
@@ -374,8 +486,11 @@ const EXEC = {
     xModel.setPropertyValue('RecordChanges', true);
     const range = anchorRange(String(p.anchor));
     if (!range) return { success: false, message: 'anchor not found: ' + p.anchor };
+    selectVisibly(range); // 拟人：先看见目标再动手
     range.setString(String(p.newText || ''));
-    return { success: true, anchor: p.anchor };
+    // 验证回路：返回改动后所在段落的实际文本，AI 据此确认改对了。
+    return Object.assign({ success: true, anchor: p.anchor, newText: String(p.newText || '') },
+      { paragraphAfterEdit: (paragraphTextOf(range) || '').slice(0, 200) });
   },
   // [verified-extend] insert a paragraph break at the view cursor (Enter key in
   // the IME overlay routes here — the overlay's single-line <input> can't make a
@@ -537,6 +652,8 @@ const EXEC = {
       ctrl = loaded.getCurrentController();
       try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
       try { installKeyHandler(); } catch (e) {}
+      // Revisions default ON for the real document too (same as bootDoc).
+      try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
     };
 
     const errs = [];
@@ -580,6 +697,136 @@ const EXEC = {
   // [diagnostic #66] report the resolved UI locale (ooLocale) so the host/verify
   // panel can confirm whether the injected zh-CN langpack took effect.
   get_ui_lang() { return Object.assign({ success: true }, readConfigLocale()); },
+  // ==================== 拟人式原语（感知 / 定位 / 格式 / 撤销） ====================
+  // [感知] read the document as numbered paragraphs — the AI's "eyes". Windowed
+  // (startParagraph + maxParagraphs, plus a char budget) so a 200-page contract
+  // can be read in passes without blowing the tool-result size.
+  get_document_text(p) {
+    const start = Math.max(0, Number(p && p.startParagraph) || 0);
+    const maxParas = Math.max(1, Math.min(Number(p && p.maxParagraphs) || 200, 500));
+    const charBudget = 15000;
+    const paragraphs = [];
+    let total = 0, chars = 0, truncated = false;
+    eachParagraph(function (el, i) {
+      total = i + 1;
+      if (i < start || paragraphs.length >= maxParas || chars >= charBudget) return false;
+      const item = { index: i, text: el.getString() };
+      try {
+        const lvl = el.getPropertyValue('OutlineLevel') || 0;
+        if (lvl > 0) { item.headingLevel = lvl; item.style = el.getPropertyValue('ParaStyleName') || ''; }
+      } catch (e) {}
+      chars += item.text.length;
+      paragraphs.push(item);
+      return false;
+    });
+    if (start + paragraphs.length < total) truncated = true;
+    const r = { success: true, totalParagraphs: total, startParagraph: start, returned: paragraphs.length, paragraphs: paragraphs };
+    if (truncated) { r.truncated = true; r.nextStartParagraph = start + paragraphs.length; }
+    return r;
+  },
+  // [感知] what's around the cursor right now — selection, chars before/after,
+  // and the enclosing paragraph ("看一眼手边").
+  get_cursor_context(p) {
+    const vc = ctrl.getViewCursor();
+    const ctx = contextAround(vc, Number(p && p.radius) || 80);
+    return {
+      success: true, selectedText: vc.getString(), hasSelection: (vc.getString() || '').length > 0,
+      before: ctx.before, after: ctx.after, paragraph: (paragraphTextOf(vc) || '').slice(0, 300),
+    };
+  },
+  // [定位] select the Nth (0-based) body paragraph, visibly (view scrolls to it).
+  select_paragraph(p) {
+    const idx = Number(p.index) || 0;
+    let found = null;
+    eachParagraph(function (el, i) { if (i === idx) { found = el; return true; } return false; });
+    if (!found) return { success: false, message: 'paragraph index out of range: ' + idx };
+    if (!selectVisibly(found)) return { success: false, message: 'could not select paragraph ' + idx };
+    return { success: true, index: idx, text: found.getString() };
+  },
+  // [定位] drop the cursor at the start/end edge of the current selection — the
+  // human move for "insert BEFORE/AFTER this" (compose with insert_at_cursor).
+  collapse_selection(p) {
+    const vc = ctrl.getViewCursor();
+    const to = String(p && p.to || 'end');
+    if (to === 'start') vc.collapseToStart(); else vc.collapseToEnd();
+    return { success: true, to: to };
+  },
+  // [编辑] delete exactly what is selected (tracked). The anthropomorphic delete:
+  // select first (user sees what's about to go), then cut.
+  delete_selection() {
+    const vc = ctrl.getViewCursor();
+    const had = (vc.getString() || '');
+    if (had.length === 0) return { success: false, message: 'nothing selected — select_paragraph / set_selection first' };
+    vc.setString('');
+    return Object.assign({ success: true, deletedText: had.slice(0, 200), deletedChars: had.length }, verifySnapshot());
+  },
+  // [格式] character formatting on the CURRENT selection (select first, then
+  // format — same order a human works in). Any subset of the params applies;
+  // booleans false/'none' explicitly clear. CJK-safe via Asian/Complex siblings.
+  format_selection(p) {
+    const vc = ctrl.getViewCursor();
+    if ((vc.getString() || '').length === 0) return { success: false, message: 'nothing selected — select first, then format' };
+    const applied = {};
+    if (p.bold != null) { setCharProp(vc, 'CharWeight', p.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL); applied.bold = !!p.bold; }
+    if (p.italic != null) { setCharProp(vc, 'CharPosture', p.italic ? css.awt.FontSlant.ITALIC : css.awt.FontSlant.NONE); applied.italic = !!p.italic; }
+    if (p.underline != null) { vc.setPropertyValue('CharUnderline', p.underline ? css.awt.FontUnderline.SINGLE : css.awt.FontUnderline.NONE); applied.underline = !!p.underline; }
+    if (p.strikeout != null) { vc.setPropertyValue('CharStrikeout', p.strikeout ? css.awt.FontStrikeout.SINGLE : css.awt.FontStrikeout.NONE); applied.strikeout = !!p.strikeout; }
+    if (p.highlight != null) {
+      const c = parseColor(p.highlight, HIGHLIGHT_COLORS);
+      if (c == null) return { success: false, message: 'bad highlight color: ' + p.highlight + ' (use yellow/green/cyan/magenta/red/blue/gray/none or #RRGGBB)' };
+      vc.setPropertyValue('CharHighlight', c); applied.highlight = String(p.highlight);
+    }
+    if (p.color != null) {
+      const c = parseColor(p.color, { auto: -1 });
+      if (c == null) return { success: false, message: 'bad color: ' + p.color + ' (use #RRGGBB or auto)' };
+      vc.setPropertyValue('CharColor', c); applied.color = String(p.color);
+    }
+    if (p.fontSize != null) { setCharProp(vc, 'CharHeight', Number(p.fontSize)); applied.fontSize = Number(p.fontSize); }
+    if (p.fontName != null) { setCharProp(vc, 'CharFontName', String(p.fontName)); applied.fontName = String(p.fontName); }
+    if (Object.keys(applied).length === 0) return { success: false, message: 'no format params given' };
+    return { success: true, applied: applied, selectedText: vc.getString().slice(0, 100) };
+  },
+  // [格式] paragraph-level formatting on the selection's paragraph(s): alignment
+  // and/or paragraph style. headingLevel 1-9 maps to the programmatic style name
+  // ('Heading N', valid regardless of UI language); 0 = back to body ('Standard').
+  set_paragraph_format(p) {
+    const vc = ctrl.getViewCursor();
+    const applied = {};
+    if (p.alignment != null) {
+      const m = { left: css.style.ParagraphAdjust.LEFT, right: css.style.ParagraphAdjust.RIGHT, center: css.style.ParagraphAdjust.CENTER, justify: css.style.ParagraphAdjust.BLOCK };
+      const v = m[String(p.alignment).toLowerCase()];
+      if (v == null) return { success: false, message: 'bad alignment: ' + p.alignment + ' (left/right/center/justify)' };
+      vc.setPropertyValue('ParaAdjust', v); applied.alignment = String(p.alignment);
+    }
+    let styleName = p.styleName != null ? String(p.styleName) : null;
+    if (p.headingLevel != null) {
+      const lvl = Number(p.headingLevel);
+      styleName = lvl >= 1 && lvl <= 9 ? 'Heading ' + lvl : 'Standard';
+    }
+    if (styleName != null) { vc.setPropertyValue('ParaStyleName', styleName); applied.styleName = styleName; }
+    if (Object.keys(applied).length === 0) return { success: false, message: 'no paragraph format params given' };
+    return Object.assign({ success: true, applied: applied }, verifySnapshot());
+  },
+  // [撤销] the human safety net — back out the last step(s) when a verify shows
+  // the edit landed wrong. Steps clamp at 20.
+  undo(p) {
+    const um = xModel.getUndoManager();
+    const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
+    let done = 0;
+    for (; done < want; done++) {
+      try { um.undo(); } catch (e) { break; } // empty stack ends the loop
+    }
+    return Object.assign({ success: done > 0, undone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to undo' });
+  },
+  redo(p) {
+    const um = xModel.getUndoManager();
+    const want = Math.max(1, Math.min(Number(p && p.steps) || 1, 20));
+    let done = 0;
+    for (; done < want; done++) {
+      try { um.redo(); } catch (e) { break; }
+    }
+    return Object.assign({ success: done > 0, redone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to redo' });
+  },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
     const bms = xModel.getBookmarks();
