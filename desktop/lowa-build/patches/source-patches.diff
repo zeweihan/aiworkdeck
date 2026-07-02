@@ -1,0 +1,97 @@
+diff --git a/solenv/gbuild/platform/EMSCRIPTEN_INTEL_GCC.mk b/solenv/gbuild/platform/EMSCRIPTEN_INTEL_GCC.mk
+index 613cb0b3b..b1a643693 100644
+--- a/solenv/gbuild/platform/EMSCRIPTEN_INTEL_GCC.mk
++++ b/solenv/gbuild/platform/EMSCRIPTEN_INTEL_GCC.mk
+@@ -27,7 +27,7 @@ gb_EMSCRIPTEN_LDFLAGS += -sSTACK_SIZE=131072 -sDEFAULT_PTHREAD_STACK_SIZE=65536
+ # To keep the link time (and memory) down, prevent all rewriting options from wasm-emscripten-finalize
+ # See emscripten.py, finalize_wasm, modify_wasm = True
+ # So we need WASM_BIGINT=1 and ASSERTIONS=1 (2 implies STACK_OVERFLOW_CHECK)
+-gb_EMSCRIPTEN_LDFLAGS += --bind -s FORCE_FILESYSTEM=1 -s WASM_BIGINT=1 -s ERROR_ON_UNDEFINED_SYMBOLS=1 -s FETCH=1 -s ASSERTIONS=1 -s EXIT_RUNTIME=0 -s EXPORTED_RUNTIME_METHODS=["UTF16ToString","stringToUTF16","UTF8ToString","ccall","cwrap","addOnPreMain","addOnPostRun","registerType","throwBindingError","ClassHandle"$(if $(ENABLE_QT6),$(COMMA)"FS"$(COMMA)"callMain"$(COMMA)"specialHTMLTargets")]
++gb_EMSCRIPTEN_LDFLAGS += --bind -s FORCE_FILESYSTEM=1 -s WASM_BIGINT=1 -s ERROR_ON_UNDEFINED_SYMBOLS=1 -s FETCH=1 -s ASSERTIONS=1 -s EXIT_RUNTIME=0 -s EXPORTED_RUNTIME_METHODS=["UTF16ToString","stringToUTF16","UTF8ToString","ccall","cwrap","addOnPreMain","addOnPostRun","registerType","throwBindingError","ClassHandle"$(COMMA)"FS"$(COMMA)"callMain"$(COMMA)"specialHTMLTargets"]
+ gb_EMSCRIPTEN_QTDEFS := -DQT_NO_LINKED_LIST -DQT_NO_JAVA_STYLE_ITERATORS -DQT_NO_EXCEPTIONS -DQT_NO_DEBUG -DQT_WIDGETS_LIB -DQT_GUI_LIB -DQT_CORE_LIB
+ 
+ ifeq ($(ENABLE_EMSCRIPTEN_JSPI),TRUE)
+diff --git a/static/CustomTarget_emscripten_fs_image.mk b/static/CustomTarget_emscripten_fs_image.mk
+index a941084e5..90ca57a0f 100644
+--- a/static/CustomTarget_emscripten_fs_image.mk
++++ b/static/CustomTarget_emscripten_fs_image.mk
+@@ -1759,6 +1759,17 @@ gb_emscripten_fs_image_files += \
+ 
+ endif # !ENABLE_WASM_STRIP_CHART
+ 
++# AI Workdeck (#66): pack the zh-CN UI catalogs (.mo) + registry + the default
++# UI-locale override so the self-built engine ships Simplified Chinese natively
++# (resources produced by --with-lang=zh-CN). Mirrors the en-US registry entries.
++gb_emscripten_fs_image_files += \
++    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/registry/Langpack-zh-CN.xcd \
++    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/registry/cjk_zh-CN.xcd \
++    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/registry/res/fcfg_langpack_zh-CN.xcd \
++    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/registry/res/registry_zh-CN.xcd \
++    $(INSTROOT)/$(LIBO_SHARE_FOLDER)/registry/ZZZ-aiworkdeck-locale-zh-CN.xcd \
++    $(wildcard $(INSTROOT)/program/resource/zh_CN/LC_MESSAGES/*.mo)
++
+ $(foreach theme,$(WITH_THEMES), \
+     $(eval gb_emscripten_fs_image_files += $(INSTROOT)/$(LIBO_SHARE_FOLDER)/config/images_$(theme).zip))
+ 
+diff --git a/vcl/qt5/QtInstance.cxx b/vcl/qt5/QtInstance.cxx
+index 8ac9d2bda..2bcba8b6c 100644
+--- a/vcl/qt5/QtInstance.cxx
++++ b/vcl/qt5/QtInstance.cxx
+@@ -43,6 +43,10 @@
+ #include <QtCore/QThread>
+ #include <QtGui/QScreen>
+ #include <QtWidgets/QApplication>
++#include <QtGui/QFont>
++#include <QtGui/QFontDatabase>
++#include <QtCore/QDir>
++#include <QtCore/QFile>
+ #include <QtWidgets/QWidget>
+ 
+ #include <vclpluginapi.h>
+@@ -287,6 +291,46 @@ void QtInstance::AfterAppInit()
+         QGuiApplication::setDesktopFileName(QStringLiteral("zetaoffice24.2-startcenter.desktop"));
+     QGuiApplication::setLayoutDirection(AllSettings::GetLayoutRTL() ? Qt::RightToLeft
+                                                                     : Qt::LeftToRight);
++
++    // AI Workdeck (#66): native Qt QToolTip / quick-help bypasses VCL+fontconfig,
++    // so it cannot see the runtime-injected CJK font and renders Chinese as tofu.
++    // Register that font with Qt's QFontDatabase and append its family as a
++    // fallback on the application + tooltip fonts (Latin metrics stay on the
++    // primary family). Graceful no-op when no CJK font is present.
++    {
++        QStringList aCjkFamilies;
++        QStringList aCandidates;
++        const QString aKnownCjk(QStringLiteral("/instdir/share/fonts/truetype/AAA-CJK.ttc"));
++        if (QFile::exists(aKnownCjk))
++            aCandidates << aKnownCjk;
++        else
++        {
++            QDir aFontDir(QStringLiteral("/instdir/share/fonts/truetype"));
++            const QStringList aFilters{ QStringLiteral("*.ttc"), QStringLiteral("*.otf"),
++                                        QStringLiteral("*.ttf") };
++            for (const QString& rName : aFontDir.entryList(aFilters, QDir::Files))
++                aCandidates << aFontDir.absoluteFilePath(rName);
++        }
++        for (const QString& rPath : aCandidates)
++        {
++            const int nId = QFontDatabase::addApplicationFont(rPath);
++            if (nId != -1)
++                aCjkFamilies << QFontDatabase::applicationFontFamilies(nId);
++        }
++        if (!aCjkFamilies.isEmpty())
++        {
++            QFont aAppFont = QApplication::font();
++            QStringList aFamilies = aAppFont.families();
++            if (aFamilies.isEmpty())
++                aFamilies << aAppFont.family();
++            for (const QString& rFam : aCjkFamilies)
++                if (!aFamilies.contains(rFam))
++                    aFamilies << rFam;
++            aAppFont.setFamilies(aFamilies);
++            QApplication::setFont(aAppFont);
++            QApplication::setFont(aAppFont, "QTipLabel");
++        }
++    }
+ }
+ 
+ void QtInstance::localeChanged()
