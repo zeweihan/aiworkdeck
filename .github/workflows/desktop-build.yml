@@ -246,8 +246,12 @@ jobs:
           CSC_FOR_PULL_REQUEST: ${{ secrets.CSC_LINK != '' }}
         run: |
           # mineru lib（transformers 等）有数万个小文件，macOS 默认 fd 上限 256 会让
-          # electron-builder 在打包/装订阶段 EMFILE，先调高
-          ulimit -n 65536
+          # electron-builder 在打包/装订阶段 EMFILE。65536 实测仍复现——内核级
+          # kern.maxfilesperproc（默认 61440）同样要抬，三层一起调并打印生效值
+          sudo sysctl -w kern.maxfiles=524288 kern.maxfilesperproc=524288 || true
+          sudo launchctl limit maxfiles 524288 524288 || true
+          ulimit -n 524288 || ulimit -n "$(ulimit -Hn)" || true
+          echo "fd soft=$(ulimit -n) hard=$(ulimit -Hn)"
           npx electron-builder --publish never
       - name: Notarization failure log (macOS)
         if: failure() && runner.os == 'macOS'
