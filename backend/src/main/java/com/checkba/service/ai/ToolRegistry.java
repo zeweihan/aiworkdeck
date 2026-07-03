@@ -175,12 +175,26 @@ public class ToolRegistry {
     }
 
     /**
-     * 全部工具规格（内置 + 插件），传给 LLM 做原生 function calling。
+     * 全部工具规格（内置 + 已启用插件），传给 LLM 做原生 function calling。
+     * 禁用插件的工具规格不下发——LLM 看不到即不会调用。
      */
     public List<ToolSpecification> getAllSpecifications() {
         List<ToolSpecification> all = new ArrayList<>(builtinSpecifications);
-        all.addAll(pluginService.getToolSpecifications());
+        for (ToolSpecification spec : pluginService.getToolSpecifications()) {
+            if (pluginToolEnabled(spec.name())) {
+                all.add(spec);
+            }
+        }
         return all;
+    }
+
+    /**
+     * 插件启停过滤：内置工具（不属于任何插件，pid == null）恒可见；
+     * 插件工具仅在所属插件启用时可见。
+     */
+    private boolean pluginToolEnabled(String toolName) {
+        String pid = pluginService.getPluginIdForTool(toolName);
+        return pid == null || pluginService.isEnabled(pid);
     }
 
     public boolean hasTool(String name) {
@@ -193,7 +207,11 @@ public class ToolRegistry {
      */
     public List<String> toolNamesLongestFirst() {
         List<String> names = new ArrayList<>(builtinTools.keySet());
-        names.addAll(pluginService.getPluginTools().keySet());
+        for (String name : pluginService.getPluginTools().keySet()) {
+            if (pluginToolEnabled(name)) {
+                names.add(name);
+            }
+        }
         names.sort(Comparator.comparingInt(String::length).reversed());
         return names;
     }
@@ -206,7 +224,11 @@ public class ToolRegistry {
         if (tool != null) {
             return Optional.of(tool);
         }
-        // 插件工具：懒注册（插件可能在运行期热加载）
+        // 插件工具：先过启停过滤（禁用插件的工具视同不存在，重新启用即恢复）
+        if (!pluginToolEnabled(name)) {
+            return Optional.empty();
+        }
+        // 懒注册（插件可能在运行期热加载）
         RegisteredTool cached = pluginToolCache.get(name);
         if (cached != null) {
             return Optional.of(cached);
@@ -244,6 +266,17 @@ public class ToolRegistry {
             return new ToolResult("Tool not found or arguments invalid.", null, false);
         }
         RegisteredTool tool = toolOpt.get();
+
+        // 插件工具权限校验（规范 v2）：所需权限未在 manifest permissions 中声明即拒绝
+        if (tool.fromPlugin()) {
+            List<String> missing = pluginService.missingPermissionsForTool(resolvedName);
+            if (!missing.isEmpty()) {
+                log.warn("Tool '{}' rejected: requires undeclared permission(s) {}", resolvedName, missing);
+                return new ToolResult("Error: permission denied — tool '" + resolvedName
+                        + "' requires permission(s) " + missing
+                        + " not declared in the plugin manifest \"permissions\".", tool, true);
+            }
+        }
 
         // 装填线程上下文：修复流式回调线程与请求线程不一致导致的 ThreadLocal 丢失/串会话问题
         ToolContextHolder.set(ctx);

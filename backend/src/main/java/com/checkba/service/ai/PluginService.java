@@ -21,10 +21,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * Service to manage backend plugins.
  * Scans 'plugins/' directory for JAR files and registers AI tools.
  *
- * Manifest 规范 v1 见 docs/PLUGIN_SPEC.md；示例插件见 examples/hello-plugin/。
+ * Manifest 规范 v2 见 docs/PLUGIN_SPEC.md；示例插件见 examples/hello-plugin/。
  * 启停状态持久化在 system_setting 表（key = {@link #DISABLED_KEY}，值为被禁用插件 id 的 JSON 数组，
- * 默认全部启用）。{@link #isEnabled(String)} 供将来 ToolRegistry 过滤禁用插件的工具
- * （接入点见 docs/AI_ARCHITECTURE.md 的 Phase 3 TODO，本轮不改 ToolRegistry）。
+ * 默认全部启用）。{@link #isEnabled(String)} 由 ToolRegistry 在三处消费点过滤禁用插件的工具；
+ * {@link #missingPermissionsForTool(String)} 由 ToolRegistry 在分发插件工具前做权限校验（规范 v2）。
  */
 @Service
 @Slf4j
@@ -51,6 +51,15 @@ public class PluginService {
 
     /** 被禁用插件 id 集合（内存缓存，与 system_setting 同步） */
     private final Set<String> disabledPluginIds = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 禁用名单内存缓存的 TTL（毫秒）：同 JVM 内 setEnabled 即时生效；
+     * 外部直接改库（或多实例）在 TTL 内收敛。工具调用高频路径不打库。
+     */
+    @Value("${ai.plugins.disabled-cache-ttl-ms:5000}")
+    long disabledCacheTtlMs = 5000;
+
+    private volatile long disabledStateRefreshedAt = 0L;
 
     private final SystemSettingService systemSettingService;
 
@@ -89,6 +98,8 @@ public class PluginService {
     public static class PluginToolInfo {
         private String name;
         private String description;
+        /** 该工具运行所需的能力（规范 v2）：缺省视为不需要任何敏感能力（v1 兼容） */
+        private List<String> permissions;
     }
 
     @PostConstruct
@@ -113,10 +124,57 @@ public class PluginService {
 
     /**
      * 插件是否启用（默认启用，禁用名单持久化在 system_setting）。
-     * 供 PluginController 与将来的 ToolRegistry 查询。
+     * 供 PluginController 与 ToolRegistry 查询；内存缓存超过 TTL 时从配置表重读。
      */
     public boolean isEnabled(String pluginId) {
+        maybeRefreshDisabledState();
         return !disabledPluginIds.contains(pluginId);
+    }
+
+    private void maybeRefreshDisabledState() {
+        if (systemSettingService == null) {
+            return;
+        }
+        if (System.currentTimeMillis() - disabledStateRefreshedAt < disabledCacheTtlMs) {
+            return;
+        }
+        synchronized (this) {
+            if (System.currentTimeMillis() - disabledStateRefreshedAt < disabledCacheTtlMs) {
+                return;
+            }
+            loadDisabledState();
+        }
+    }
+
+    /**
+     * 插件工具在分发前的权限校验（规范 v2）：工具所需权限（manifest tools[].permissions）
+     * 必须全部包含在插件声明的 permissions 中。
+     *
+     * @return 所需但未在插件 permissions 中声明的权限；空列表 = 校验通过。
+     *         内置工具（不在 toolToPluginId 映射中）与未声明 permissions 的工具（v1 兼容）恒为通过。
+     */
+    public List<String> missingPermissionsForTool(String toolName) {
+        String pluginId = toolToPluginId.get(toolName);
+        if (pluginId == null) {
+            return List.of();
+        }
+        PluginMetadata meta = plugins.stream()
+                .filter(p -> Objects.equals(p.getId(), pluginId))
+                .findFirst().orElse(null);
+        if (meta == null || meta.getTools() == null) {
+            return List.of();
+        }
+        List<String> required = meta.getTools().stream()
+                .filter(t -> Objects.equals(t.getName(), toolName))
+                .findFirst()
+                .map(PluginToolInfo::getPermissions)
+                .orElse(null);
+        if (required == null || required.isEmpty()) {
+            return List.of();
+        }
+        Set<String> declared = meta.getPermissions() != null
+                ? new HashSet<>(meta.getPermissions()) : Set.of();
+        return required.stream().filter(p -> !declared.contains(p)).toList();
     }
 
     /**
@@ -158,6 +216,8 @@ public class PluginService {
             }
         } catch (Exception e) {
             log.error("Failed to load plugin disabled state, default to all enabled", e);
+        } finally {
+            disabledStateRefreshedAt = System.currentTimeMillis();
         }
     }
 
@@ -270,7 +330,7 @@ public class PluginService {
         registerToolObject(toolObject, null);
     }
 
-    private void registerToolObject(Object toolObject, String pluginId) {
+    void registerToolObject(Object toolObject, String pluginId) {
         try {
             List<ToolSpecification> specs = ToolSpecifications.toolSpecificationsFrom(toolObject);
             for (ToolSpecification spec : specs) {

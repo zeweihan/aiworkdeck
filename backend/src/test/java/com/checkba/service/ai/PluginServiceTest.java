@@ -194,6 +194,71 @@ class PluginServiceTest {
         assertTrue(service.isEnabled("hello-plugin"));
     }
 
+    // ==== 规范 v2：tools[].permissions 与权限校验 ====
+
+    private static final String V2_MANIFEST = """
+            {
+              "id": "v2-plugin",
+              "name": "V2 插件",
+              "permissions": ["file_read"],
+              "tools": [
+                {"name": "readTool", "description": "读文件", "permissions": ["file_read"]},
+                {"name": "netTool", "description": "网络请求", "permissions": ["network", "file_write"]},
+                {"name": "plainTool", "description": "无权限需求"}
+              ]
+            }
+            """;
+
+    @Test
+    @DisplayName("v2：解析 tools[].permissions 字段")
+    void parsesToolLevelPermissions() throws IOException {
+        writeManifest("v2-plugin", V2_MANIFEST);
+        service.init();
+
+        PluginService.PluginMetadata meta = service.getPlugins().get(0);
+        assertEquals(List.of("file_read"), meta.getTools().get(0).getPermissions());
+        assertEquals(List.of("network", "file_write"), meta.getTools().get(1).getPermissions());
+        assertNull(meta.getTools().get(2).getPermissions());
+    }
+
+    @Test
+    @DisplayName("v2：missingPermissionsForTool——覆盖/缺失/无需求/内置工具四种路径")
+    void missingPermissionsForToolPaths() throws IOException {
+        writeManifest("v2-plugin", V2_MANIFEST);
+        service.init();
+        // 手工建立工具归属映射（无 JAR 时 loadPlugins 不注册工具）
+        service.registerToolObject(new Object() {
+            @dev.langchain4j.agent.tool.Tool("read a file")
+            public String readTool(@dev.langchain4j.agent.tool.P("path") String path) { return path; }
+            @dev.langchain4j.agent.tool.Tool("call network")
+            public String netTool(@dev.langchain4j.agent.tool.P("url") String url) { return url; }
+            @dev.langchain4j.agent.tool.Tool("plain")
+            public String plainTool(@dev.langchain4j.agent.tool.P("x") String x) { return x; }
+        }, "v2-plugin");
+
+        assertTrue(service.missingPermissionsForTool("readTool").isEmpty(), "所需 file_read 已声明");
+        assertEquals(List.of("network", "file_write"), service.missingPermissionsForTool("netTool"),
+                "network/file_write 未在插件 permissions 中声明");
+        assertTrue(service.missingPermissionsForTool("plainTool").isEmpty(), "未声明所需权限的工具恒通过");
+        assertTrue(service.missingPermissionsForTool("builtin_tool").isEmpty(), "内置工具不参与校验");
+    }
+
+    // ==== 启停缓存 TTL ====
+
+    @Test
+    @DisplayName("TTL 过期后 isEnabled 从配置表重读（外部改库可收敛）")
+    void ttlRefreshPicksUpExternalChange() throws IOException {
+        writeManifest("hello-plugin", FULL_MANIFEST);
+        service.init();
+        assertTrue(service.isEnabled("hello-plugin"));
+
+        // 模拟外部直接改库（不经过 setEnabled）
+        settingStore.put(PluginService.DISABLED_KEY, "[\"hello-plugin\"]");
+        service.disabledCacheTtlMs = 0;
+
+        assertFalse(service.isEnabled("hello-plugin"), "TTL 过期后应从配置表重读");
+    }
+
     // ==== 重新扫描 ====
 
     @Test

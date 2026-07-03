@@ -1,6 +1,6 @@
-# 插件规范 v1（Plugin Spec v1）
+# 插件规范 v2（Plugin Spec v2）
 
-> 适用版本：0.4.x 起。示例插件见 [examples/hello-plugin/](../examples/hello-plugin/)。
+> 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A。示例插件见 [examples/hello-plugin/](../examples/hello-plugin/)。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）；
 > 前端管理页：`frontend/src/pages/plugin-market/plugin-market.vue`（插件广场，入口在系统管理侧边栏）。
 
@@ -47,16 +47,14 @@ plugins/
 | `icon` | string | 否 | emoji（如 `🔌`）或图片 URL/绝对路径；缺省时前端显示 `🧩`。 |
 | `author` | string | 否 | 作者 / 组织名。 |
 | `homepage` | string | 否 | 主页或仓库 URL。 |
-| `permissions` | string[] | 否 | 声明插件需要的能力，见 §3。缺省视为不需要任何敏感能力。 |
-| `tools` | object[] | 否 | 工具清单（`name` + 中文 `description`），用于插件广场展示与人工审查。`name` 应与 JAR 中 `@Tool` 方法名一致。 |
+| `permissions` | string[] | 否 | 声明插件**被授予**的能力，见 §3。缺省视为不需要任何敏感能力。 |
+| `tools` | object[] | 否 | 工具清单（`name` + 中文 `description` + 可选 `permissions`），用于插件广场展示、人工审查与 v2 权限校验。`name` 应与 JAR 中 `@Tool` 方法名一致；`permissions` 声明**该工具运行所需**的能力（v2 新增，见 §3）。 |
 | `frontendEntry` | string | 否 | 前端入口（预留，v1 不加载）。 |
 | `backendJars` | string[] | 否 | 相对插件目录的 JAR 文件名列表，启动/重扫时加载其中带 `@Tool` 注解的类。 |
 
 未知字段被忽略（向前兼容）；`permissions` 中出现 v1 未定义的值仅记录 WARN，不拒绝加载。
 
-## 3. permissions 权限声明（v1）
-
-v1 权限为**声明式**：用于插件广场展示与管理员审查，运行时沙箱强制执行在 Phase 3 后续（见 docs/AI_ARCHITECTURE.md TODO）。
+## 3. permissions 权限模型（v2）
 
 | 值 | 含义 |
 |---|---|
@@ -64,6 +62,22 @@ v1 权限为**声明式**：用于插件广场展示与管理员审查，运行�
 | `file_write` | 创建 / 修改 / 删除项目文件 |
 | `network` | 访问外部网络（HTTP 等出站请求） |
 | `editor` | 操作文档编辑器（LOWA/LibreOffice 相关原语） |
+
+### v2 执行语义（分发前校验）
+
+两级声明 + 分发时校验（实现在 `PluginService.missingPermissionsForTool()` +
+`ToolRegistry.execute()`）：
+
+- **插件级 `permissions`**：插件被授予的能力全集，管理员在插件广场审查的对象。
+- **工具级 `tools[].permissions`**：单个工具运行所需的能力。
+- **校验规则**：分发插件工具前检查「工具所需 ⊆ 插件声明」；有所需权限未在插件级
+  `permissions` 声明时**拒绝执行**，返回
+  `Error: permission denied — tool 'x' requires permission(s) [...] not declared in the plugin manifest "permissions"`。
+- **v1 兼容**：工具未列入 `tools[]` 或未写 `permissions` 视为无敏感能力需求，直接放行；
+  内置工具（不属于任何插件）不参与校验。
+
+> 边界：v2 校验发生在分发层（诚实声明模型），插件代码本身仍与宿主同进程运行，
+> **进程级沙箱（真正阻止未声明的文件/网络访问）是后续项**，见 docs/AI_ARCHITECTURE.md Phase 3 TODO。
 
 ## 4. 后端工具（backendJars）约定
 
@@ -75,7 +89,11 @@ v1 权限为**声明式**：用于插件广场展示与管理员审查，运行�
 
 - 默认**启用**；禁用名单持久化在 `system_setting` 表（key = `ai.plugins.disabled`，值为插件 id 的 JSON 数组），重启后保持。
 - 查询接口：`PluginService.isEnabled(pluginId)`；工具归属：`PluginService.getPluginIdForTool(toolName)`。
-- v1 范围：启停状态已持久化并在插件广场展示，**ToolRegistry 按启停过滤工具的接入是 Phase 3 后续**（接入点见 docs/AI_ARCHITECTURE.md TODO），即 v1 中禁用插件后其工具暂不会立即从 Agent 可用工具中移除。
+- **v2 起 ToolRegistry 按启停过滤**（Phase 3A）：禁用插件后其工具在三处消费点全部不可见——
+  LLM 拿不到工具规格（`getAllSpecifications`）、XML 协议解析不识别（`toolNamesLongestFirst`）、
+  分发返回 not found（`resolve`）；重新启用即时恢复，内置工具不受影响。
+- 启停查询走内存缓存，TTL（配置 `ai.plugins.disabled-cache-ttl-ms`，默认 5000ms）过期后从
+  `system_setting` 重读：同 JVM 内启停即时生效，外部直接改库在 TTL 内收敛，工具调用高频路径不打库。
 
 ## 6. HTTP API
 
@@ -90,5 +108,8 @@ v1 权限为**声明式**：用于插件广场展示与管理员审查，运行�
 
 ## 7. 版本演进
 
-- **v1（当前）**：声明式 manifest + 启停持久化 + 插件广场展示。
-- 规划中（Phase 3 后续，见 AI_ARCHITECTURE.md）：ToolRegistry 按启停/权限过滤、运行时沙箱强制 permissions、frontendEntry 动态加载、插件签名与来源校验。
+- **v1（0.4.x）**：声明式 manifest + 启停持久化 + 插件广场展示。
+- **v2（当前，Phase 3A）**：ToolRegistry 按启停过滤三处消费点 + `tools[].permissions`
+  分发前权限校验（诚实声明模型）+ 启停缓存 TTL。
+- 规划中（见 AI_ARCHITECTURE.md Phase 3 TODO）：进程级运行时沙箱（真正强制 file/network 隔离）、
+  frontendEntry 动态加载、插件签名与来源校验。

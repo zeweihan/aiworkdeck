@@ -120,12 +120,17 @@ Phase 2.5 未改动，命名迁移列入 Phase 3：
         `ai.plugins.disabled`，JSON 数组，默认全启用）、`PluginService.isEnabled()` /
         `getPluginIdForTool()` 查询接口、重扫接口、前端插件广场页
         （pages/plugin-market，入口在系统管理侧边栏）；示例插件 examples/hello-plugin/。
-  - [ ] **插件启停接入 ToolRegistry**（一次小改动，下次动 ToolRegistry 时顺手完成）：
-        在消费 `pluginService.getToolSpecifications()` / `getPluginTools()` 的三处
-        （构建 specs、列举工具名、按名取执行对象）过滤禁用插件的工具——
-        `String pid = pluginService.getPluginIdForTool(name)`，
-        `pid == null || pluginService.isEnabled(pid)` 才可见（`pid == null` 为内置工具，
-        不受插件启停影响）。`setEnabled()` 已同步更新内存态，ToolRegistry 无自建缓存则即时生效。
-  - [ ] 插件运行时沙箱：按 manifest `permissions`（file_read/file_write/network/editor，
-        v1 仅声明式展示，见 docs/PLUGIN_SPEC.md §3）做运行时强制。
+  - [x] **插件启停接入 ToolRegistry**（Phase 3A）：三处消费点（`getAllSpecifications` /
+        `toolNamesLongestFirst` / `resolve`）经 `pluginToolEnabled()` 过滤——
+        `pid == null || pluginService.isEnabled(pid)` 才可见（内置工具 `pid == null`
+        不受影响）。禁用后 LLM 看不到规格、XML 解析不识别、分发 not found；启用即恢复。
+        启停查询走内存缓存 + TTL 重读（`ai.plugins.disabled-cache-ttl-ms`，默认 5s），
+        工具调用高频路径不打库。
+  - [x] **manifest permissions 分发前校验**（Phase 3A，规范 v2 见 docs/PLUGIN_SPEC.md §3）：
+        工具级 `tools[].permissions` 声明所需能力，分发前校验「所需 ⊆ 插件声明」，
+        未声明即拒绝并返回明确错误（`PluginService.missingPermissionsForTool()` +
+        `ToolRegistry.execute()`）。
+  - [ ] 插件进程级运行时沙箱：v2 权限校验是分发层的诚实声明模型，插件代码仍与宿主同进程；
+        真正强制 file/network 隔离需进程级沙箱（独立进程 + IPC 或 SecurityManager 替代方案），
+        列为后续项。
   - [ ] MCP SDK 标准化、Skill 体系、多智能体协作。
