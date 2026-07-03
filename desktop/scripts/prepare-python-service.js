@@ -108,6 +108,15 @@ function prune(libDir) {
       else stack.push(p)
     }
   }
+  // SpeechRecognition 自带的预编译 flac 转码器（flac-mac 用 <10.9 SDK 构建）会被
+  // Apple 公证整包拒绝；音频转写不在 AI PPT 链路上，直接剔除（缺了它只在真正调用
+  // 音频转 FLAC 时才会抛错）
+  const srDir = path.join(libDir, 'speech_recognition')
+  if (fs.existsSync(srDir)) {
+    for (const entry of fs.readdirSync(srDir)) {
+      if (entry.startsWith('flac-')) fs.rmSync(path.join(srDir, entry), { recursive: true, force: true })
+    }
+  }
 }
 
 function main() {
