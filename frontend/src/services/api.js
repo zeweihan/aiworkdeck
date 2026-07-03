@@ -515,51 +515,6 @@ export function createProject(payload) {
   });
 }
 
-// 生成 WPS 在线编辑链接
-// payload: { fileId: string, fileName?: string, mode?: 'edit' | 'view' }
-export function generateWpsEditUrl(payload) {
-  return request({
-    url: '/api/wps/generate-url',
-    method: 'POST',
-    data: payload,
-    header: {
-      'Content-Type': 'application/json',
-    },
-  });
-}
-
-// 获取 WPS 回调网关地址
-export function getWpsCallbackBaseUrl() {
-  return request({
-    url: '/api/wps/callback-base-url',
-    method: 'GET',
-  });
-}
-
-// 创建 WPS 会话，获取用于前端 SDK 初始化的业务 token
-// payload: { fileId: string, userId?: string }
-export function createWpsSession(payload) {
-  return request({
-    url: '/api/wps/session',
-    method: 'POST',
-    data: payload,
-    header: {
-      'Content-Type': 'application/json',
-    },
-  });
-}
-
-/**
- * 获取 WPS 公开配置（appId 等，供前端 SDK 初始化使用）
- * 注意：此接口不返回 appSecret，secret 仅在后端使用
- */
-export function getWpsConfig() {
-  return request({
-    url: '/api/wps/config',
-    method: 'GET',
-  });
-}
-
 // ===================== 用户认证相关 API =====================
 
 // 用户注册
@@ -1359,9 +1314,6 @@ export default {
   exportAiDocx,
   fetchCompanyBasicInfo,
   createProject,
-  generateWpsEditUrl,
-  getWpsCallbackBaseUrl,
-  createWpsSession,
   register,
   login,
   clientLogin,

@@ -143,7 +143,7 @@
               <text class="wps-tip-icon">💡</text>
               <view class="wps-tip-text">
                 <text>如果助手在后续对话中修改了文档（Word/PPT），文件内容不会自动回退。</text>
-                <text class="wps-link-text">请使用 WPS 的“历史版本”功能恢复文件。</text>
+                <text class="wps-link-text">AI 的文档修改以修订痕迹记录，可在编辑器中「拒绝修订」恢复原文。</text>
               </view>
             </view>
             <view class="rollback-preview">

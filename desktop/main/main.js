@@ -235,7 +235,7 @@ function createMainWindow() {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      // 允许跨域 Cookie（解决 WPS SameSite Cookie 被拦截导致 500 错误）
+      // 允许跨域 Cookie（历史：为第三方在线编辑器 SameSite Cookie 而设；行为保留以兼容其它跨域资源）
       webSecurity: false,
       // Epic #43: allow <webview> for the embedded LibreOffice editor (isolated
       // on persist:zetaoffice). Inert until a <webview> is actually rendered.
@@ -256,7 +256,7 @@ function createMainWindow() {
     mainWindow.loadFile(distPath)
   }
 
-  // 拦截渲染进程里的 window.open（包括 WPS iframe 点击超链接）
+  // 拦截渲染进程里的 window.open（包括嵌入页/iframe 点击超链接）
   // - 内部协议 checkba://... => 交给渲染层打开“网核中心定位”
   // - 其它 http(s) => 走工作区浏览器新 tab
   try {
@@ -317,7 +317,7 @@ function createMainWindow() {
     restoreViewsVisibility()
   })
 
-  // 监听渲染层内的 copy/cut（WPS/页面内复制等），统一推送给前端入库
+  // 监听渲染层内的 copy/cut（编辑器/页面内复制等），统一推送给前端入库
   attachCopyListener(mainWindow.webContents, 'renderer')
 
   // Handle file downloads: ensure "Safe As" dialog appears
@@ -330,22 +330,6 @@ function createMainWindow() {
     // Note: If item.setSavePath() is NOT called, Electron implicitly shows the dialog 
     // (unless global "Always ask..." is disabled, but setSaveDialogOptions helps hint it).
     // To strictly FORCE it, we would need to check existing configuration, but usually this is enough.
-  })
-
-  // [Fix WPS 500 Error] Force Accept-Language to zh-CN for WPS domains
-  const wpsFilter = {
-    urls: [
-      '*://*.wps.cn/*',
-      '*://*.wps.com/*',
-      '*://*.wpsgo.com/*',
-      '*://*.wpscdn.cn/*',
-      '*://*.kingsoft.com/*'
-    ]
-  }
-  mainWindow.webContents.session.webRequest.onBeforeSendHeaders(wpsFilter, (details, callback) => {
-    // console.log('[WPS Fix] Modifying headers for:', details.url)
-    details.requestHeaders['Accept-Language'] = 'zh-CN,zh;q=0.9'
-    callback({ requestHeaders: details.requestHeaders })
   })
 
   startClipboardWatcher()
@@ -1045,7 +1029,7 @@ ipcMain.handle('checkba:ping', async () => {
   return { ok: true, pid: process.pid }
 })
 
-// 桌面端：统一的“应用内确认弹窗”（不依赖 uni.showModal，且不会被 BrowserView/WPS iframe 遮挡）
+// 桌面端：统一的“应用内确认弹窗”（不依赖 uni.showModal，且不会被 BrowserView/iframe 遮挡）
 ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
   if (!mainWindow) return { ok: false, confirmed: false, message: 'window not ready' }
   const title = payload && payload.title ? String(payload.title) : '确认'
@@ -1188,7 +1172,7 @@ ipcMain.handle('checkba:zetaoffice-editor', async () => {
 app.whenReady().then(() => {
   initLocalFileService()
   // Epic #43: experimental "LibreOffice 验证" window — dedicated, isolated, does
-  // NOT touch the WPS flow. Global shortcut is the only entry; the module is
+  // NOT touch the document flow. Global shortcut is the only entry; the module is
   // require()'d lazily on press, so it stays dormant until used.
   try {
     globalShortcut.register('CommandOrControl+Shift+L', () => {

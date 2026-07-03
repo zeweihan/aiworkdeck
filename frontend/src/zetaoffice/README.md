@@ -1,9 +1,8 @@
 # Embedded LibreOffice editor (ZetaOffice) — assembly
 
-Epic #43. This directory is the webview-side editor page; the host-side and
-Electron pieces live elsewhere. Everything here is **dormant** — the WPS editor
-still ships unchanged until the host renders the `<webview>` and selects
-`EDITOR_LIBREOFFICE`.
+Epic #43 / #79. This directory is the webview-side editor page; the host-side
+and Electron pieces live elsewhere. Since #79 (WPS removal) the embedded
+LibreOffice editor is the product's ONLY document editor.
 
 ## The six pieces (all landed, dormant)
 
@@ -64,12 +63,12 @@ host (project-overview)                     isolated <webview partition="persist
    `<webview partition="persist:zetaoffice" src="http://.../editor.html">`; build
    the bridge once with the webview executor:
    ```js
-   const editor = useEditorBridge(EDITOR_WPS, {
+   const editor = useEditorBridge({
      libreExecutor: createWebviewEditorExecutor(this.$refs.zetaWebview),
    })
    ```
-   Route `handleWpsCommand` through `editor.executeCommand(action, params, { wpsInstance })`
-   and call `editor.setEditor(EDITOR_LIBREOFFICE)` behind a gray-rollout flag.
+   Route `handleWpsCommand` through `editor.executeCommand(action, params)`
+   (the method/event names keep the historical `wps_` prefix — rename debt, #79).
 5. **IME overlay** + **perf** (load an existing 50-page docx) — separate #43 tasks.
 
 ## AI 拟人式动作原语（2026-07）

@@ -55,12 +55,6 @@ export function bootZetaOffice(options = {}) {
     zetaJsUrl = './zeta.js',
     workerScriptUrl = './office_thread.js',
     fontUrl,
-    // Optional zh-CN UI langpack manifest (issue #66). Same-origin URL to a
-    // manifest.json ({ files: ["program/resource/zh_CN/LC_MESSAGES/sw.mo", ...,
-    // "share/registry/Langpack-zh-CN.xcd"] }, paths relative to /instdir). The
-    // files are fetched before boot and written into MEMFS in preRun so the
-    // LibreOffice UI comes up in Chinese. Missing/failed fetch -> skip -> English.
-    langpackUrl,
     // UI language for the LibreOffice chrome (issue #66 follow-up). The engine
     // derives its locale from navigator.languages (emscripten getEnvStrings ->
     // LANG), so the UI silently follows the BROWSER/Electron language — an
@@ -84,10 +78,12 @@ export function bootZetaOffice(options = {}) {
   }
 
   return new Promise(async (resolve, reject) => {
-    // Files to write into the LOWA MEMFS in preRun (CJK font + zh-CN langpack).
-    // Each { path:'/instdir/...', bytes:Uint8Array }. Fetched here (async) because
+    // Files to write into the LOWA MEMFS before main() (CJK font). Each
+    // { path:'/instdir/...', bytes:Uint8Array }. Fetched here (async) because
     // preRun runs synchronously; written there because /instdir merge-mounts only
-    // once boot starts.
+    // once boot starts. (The #66 runtime zh-CN langpack injection was removed in
+    // #79 — the self-built engine ships zh-CN baked in, injection was pure boot
+    // overhead.)
     const injections = []
 
     // --- optional CJK font fetch (injected before fontconfig scan) ---
@@ -106,28 +102,6 @@ export function bootZetaOffice(options = {}) {
       }
     }
 
-    // --- optional zh-CN UI langpack fetch (#66): manifest + .mo/.xcd, written
-    // into /instdir so LibreOffice loads a Chinese UI. Same merge-mount trick as
-    // the font. Any failure degrades cleanly to the English UI. ---
-    if (langpackUrl) {
-      try {
-        const baseUrl = langpackUrl.replace(/[^/]*$/, '') // dir of the manifest
-        const mr = await fetch(langpackUrl)
-        if (!mr.ok) throw new Error('manifest HTTP ' + mr.status)
-        const manifest = await mr.json()
-        const files = (manifest && manifest.files) || []
-        const fetched = await Promise.all(files.map(async (rel) => {
-          const fr = await fetch(baseUrl + rel)
-          if (!fr.ok) throw new Error(rel + ' HTTP ' + fr.status)
-          return { path: '/instdir/' + rel, bytes: new Uint8Array(await fr.arrayBuffer()) }
-        }))
-        for (const f of fetched) injections.push(f)
-        log('zh-CN langpack fetched (' + fetched.length + ' files), will inject before boot')
-      } catch (e) {
-        log('zh-CN langpack fetch failed: ' + (e && e.message ? e.message : e) + ' (skipping; UI stays English)')
-      }
-    }
-
     // The globals `canvas` and `Module` must exist before soffice.js loads.
     const Module = {
       canvas,
@@ -138,7 +112,7 @@ export function bootZetaOffice(options = {}) {
       // undefined preRun key crashes the engine head with "Cannot read
       // properties of undefined (reading 'push')" and the boot never starts.
       preRun: [],
-      // Inject font/langpack AFTER the data package is mounted but BEFORE
+      // Inject the font AFTER the data package is mounted but BEFORE
       // LibreOffice main() runs (so fontconfig's startup scan still sees the
       // font). This CANNOT be a preRun hook: preRun runs before the package
       // loader processes soffice.data, and any injected path that ALSO exists in
@@ -164,7 +138,7 @@ export function bootZetaOffice(options = {}) {
             n++
           } catch (e) { log('FS write failed for ' + f.path + ': ' + e) }
         }
-        log('MEMFS injected ' + n + '/' + injections.length + ' file(s) (font + zh-CN langpack) before main()')
+        log('MEMFS injected ' + n + '/' + injections.length + ' file(s) (CJK font) before main()')
       },
     }
     // Force the engine's locale (LANG) by shimming navigator.languages BEFORE

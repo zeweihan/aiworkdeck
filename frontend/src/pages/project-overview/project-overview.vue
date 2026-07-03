@@ -555,7 +555,7 @@
         </view>
 
           <!-- 文件拖拽关联：浮窗落点区域 (移至侧边栏底部) -->
-          <!-- 1. 关联区域 (Priority: Dragging + WPS Word Open) -->
+          <!-- 1. 关联区域 (Priority: Dragging + Word 文档已打开) -->
           <FileLinkDropZone
             :visible="showAssociationDropZone"
             :file-name="fileLinkDrag.file ? fileLinkDrag.file.name : ''"
@@ -563,7 +563,7 @@
             @drop="onFileLinkZoneDrop"
           />
 
-          <!-- 2. 文件暂存区 (Visible if Staging has files OR Dragging without WPS Open) -->
+          <!-- 2. 文件暂存区 (Visible if Staging has files OR Dragging without a Word doc open) -->
           <FileStagingArea
             :visible="showStagingArea"
             :files="stagingFiles"
@@ -694,9 +694,9 @@
                       @title-change="onBrowserTitleChange('left', $event)"
                       @open-new-tab="openBrowserTab($event)"
                     />
-                    <!-- Epic #43 Track B: embedded LibreOffice is the DEFAULT
-                         editor for Office docs when available (desktop). WPS is
-                         the fallback (web/h5 or embed unavailable). -->
+                    <!-- Epic #43 Track B / #79: embedded LibreOffice is THE editor
+                         for Office docs when available (desktop). Web/h5 falls
+                         through to FilePreview (docx 本地只读渲染). -->
                     <LibreOfficeEditor
                       v-else-if="useLibreEditor(activeFileLeft)"
                       :key="'libre-left-' + activeFileLeft.id"
@@ -704,18 +704,6 @@
                       :file="activeFileLeft"
                       @ready="onLibreReady"
                       @close="onLibreClose"
-                    />
-                    <WpsEditor
-                      v-else-if="isWpsFile(activeFileLeft) && !isDesktopApp"
-                      ref="wpsLeft"
-                      :file-id="activeFileLeft.wpsFileId"
-                      :file-name="activeFileLeft.name"
-                      :app-id="wpsAppId"
-                      mode="edit"
-                      container-id="wps-container-left"
-                      :auto-load="true"
-                      @ready="onWpsReady($event, 'left')"
-                      @clipboard-copy="onWpsClipboardCopy($event)"
                     />
                     <MarkdownPreview
                       v-else-if="isMarkdownTab(activeFileLeft)"
@@ -767,7 +755,7 @@
                       @title-change="onBrowserTitleChange('right', $event)"
                       @open-new-tab="openBrowserTab($event)"
                     />
-                    <!-- Epic #43 Track B: embedded LibreOffice default (see left pane). -->
+                    <!-- Epic #43 Track B / #79: embedded LibreOffice (see left pane). -->
                     <LibreOfficeEditor
                       v-else-if="useLibreEditor(activeFileRight)"
                       :key="'libre-right-' + activeFileRight.id"
@@ -775,18 +763,6 @@
                       :file="activeFileRight"
                       @ready="onLibreReady"
                       @close="onLibreClose"
-                    />
-                    <WpsEditor
-                      v-else-if="isWpsFile(activeFileRight) && !isDesktopApp"
-                      ref="wpsRight"
-                      :file-id="activeFileRight.wpsFileId"
-                      :file-name="activeFileRight.name"
-                      :app-id="wpsAppId"
-                      mode="edit"
-                      container-id="wps-container-right"
-                      :auto-load="true"
-                      @ready="onWpsReady($event, 'right')"
-                      @clipboard-copy="onWpsClipboardCopy($event)"
                     />
                     <MarkdownPreview
                       v-else-if="isMarkdownTab(activeFileRight)"
@@ -822,11 +798,10 @@
                 </view>
               </view>
 
-              <!-- Epic #43: embedded LibreOffice editor (experimental, ⌘⇧O).
+              <!-- Epic #43: embedded LibreOffice editor overlay (legacy ⌘⇧O).
                    Scoped to the document area so the AI chat panel stays usable —
                    a real backend AI command can be triggered while it's active.
-                   Dormant: only mounts when explicitly opened; the WPS flow is
-                   untouched. -->
+                   Dormant: only mounts when explicitly opened. -->
               <view v-if="showLibreEmbed" class="libre-embed-overlay">
                 <LibreOfficeEditor @ready="onLibreReady" @close="onLibreClose" />
               </view>
@@ -889,7 +864,6 @@
                     v-if="activeToolKey === 'variables'"
                     ref="variablePanel"
                     :project-id="projectId"
-                    :get-wps="() => getCurrentWpsInstance()"
                     :search-keyword="toolsSearchKeyword"
                     @insert="handleInsertVariable"
                     @update-from-selection="handleUpdateVariable"
@@ -1207,7 +1181,6 @@
 </template>
 
 <script>
-import WpsEditor from '@/components/WpsEditor.vue'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import BrowserPane from '@/components/BrowserPane.vue'
 import FileTree from '@/components/FileTree.vue'
@@ -1258,8 +1231,7 @@ import {
   getAiConfig,
   getAssistants, // Added
   getPlugins, // Added
-  sendWpsResult, // WPS 操作结果回调
-  getWpsConfig, // WPS 配置获取
+  sendWpsResult, // 编辑器命令结果回调（历史命名，#79 记改名债）
   getFileText,
   promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
@@ -1274,7 +1246,6 @@ import {
 } from '@/config/leftSidebarPlugins.js'
 
 import { activityTracker } from '@/utils/activityTracker.js'
-import { useWpsBridge } from '@/composables/useWpsBridge.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
@@ -1282,7 +1253,6 @@ import ChatInterface from '@/components/ChatInterface.vue'
 
 export default {
   components: {
-    WpsEditor,
     LibreOfficeEditor,
     BrowserPane,
     FileTree,
@@ -1480,31 +1450,23 @@ export default {
       draggingTab: null, // { fileId, fromPane }
       tabDragOver: null, // { fileId, pane }
 
-      // Epic #43: embedded LibreOffice editor (experimental, ⌘⇧O). When active,
-      // backend AI commands route to it instead of WPS (handleWpsCommand).
+      // Epic #43: embedded LibreOffice editor. When active, backend AI commands
+      // route to it (handleWpsCommand — 历史命名，#79 记改名债).
       showLibreEmbed: false,
       libreOfficeActive: false,
       libreOfficeExecutor: null,
-      // Epic #43 Track B: when true, opening an Office document defaults to the
-      // inline embedded LibreOffice editor (WPS demoted to fallback). Set at init
-      // from desktop embed availability — install-and-use, no WPS config needed.
+      // 后端 wps_stream_data 流式写入的本地缓冲（#79：LibreOffice 消费端）
+      _docStreamBuffer: '',
+      _docStreamTimer: null,
+      _docStreamBusy: false,
+      // Epic #43 Track B: when true, opening an Office document uses the inline
+      // embedded LibreOffice editor. Set at init from desktop embed availability
+      // — install-and-use, zero config.
       libreOfficePreferred: false,
 
-      // WPS Config
-      wpsAppId: '', // 从后端动态获取
-      wpsInstances: {
-        left: null,
-        right: null
-      },
       // 文件信息轮询定时器
       fileInfoPollingIntervals: {}
       ,
-      // WPS 选区轮询：记录最近一次非空高亮选区（用于拖拽建立超链接）
-      selectionPollingIntervals: {},
-      lastWpsSelection: {
-        left: null,  // { start, end, text, ts }
-        right: null  // { start, end, text, ts }
-      },
       _desktopWebMarkUnsub: null
       ,
       _desktopOcrSelectionUnsub: null
@@ -1755,12 +1717,6 @@ export default {
         if (intervalId) clearInterval(intervalId)
       })
     }
-    if (this.selectionPollingIntervals) {
-      Object.values(this.selectionPollingIntervals).forEach(intervalId => {
-        if (intervalId) clearInterval(intervalId)
-      })
-    }
-
     // 清理拖拽监听
     try {
       this.stopResize()
@@ -1885,7 +1841,6 @@ export default {
     this.initAiModel()
     this.loadAssistants() // Fetch assistants
     this.loadDynamicPlugins() // Fetch dynamic plugins
-    this.loadWpsConfig() // 加载 WPS 配置
   },
   onShow() {
     // Sync UI state
@@ -1973,9 +1928,9 @@ export default {
 
     // Manual binding removed (reverted to native modifier)
 
-    // Epic #43 Track B: when the desktop app exposes the embedded editor, make it
-    // the DEFAULT editor for Office documents (inline, no ⌘⇧O needed). WPS is
-    // demoted to a fallback so users can edit without configuring WPS.
+    // Epic #43 Track B / #79: when the desktop app exposes the embedded editor,
+    // make it THE editor for Office documents (inline, no ⌘⇧O needed) —
+    // install-and-use, zero config.
     try {
       this.libreOfficePreferred = !!(
         this.isDesktopApp &&
@@ -2242,32 +2197,39 @@ export default {
         }
     },
 
-    // TTS Karaoke Highlighting
+    // TTS Karaoke Highlighting（#79：经 LibreOffice 执行器 find+select 实现）
     async handleTtsHighlight(sentence) {
       console.log('[TTS Highlight] Highlighting:', sentence?.substring(0, 50) + '...')
-      
-      // Get current active WPS instance
-      const wpsInstance = this.wpsInstances.left || this.wpsInstances.right
-      if (!wpsInstance) {
-        console.warn('[TTS] No WPS instance available for highlighting')
+
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+        console.warn('[TTS] No embedded editor available for highlighting')
         return
       }
-      
-      const { selectTextByFind } = useWpsBridge()
-      const result = await selectTextByFind(sentence, wpsInstance)
-      if (!result.success) {
-        console.warn('[TTS] Failed to highlight:', result.error)
+      try {
+        const keyword = String(sentence || '').trim()
+        if (!keyword) return
+        const found = await this.libreOfficeExecutor.executeCommand('find_text_locations', { keyword })
+        const first = found && Array.isArray(found.matches) && found.matches[0]
+        const anchor = first && first.anchorId
+        if (!anchor) {
+          console.warn('[TTS] Sentence not found in document')
+          return
+        }
+        await this.libreOfficeExecutor.executeCommand('set_selection', { anchor })
+      } catch (e) {
+        console.warn('[TTS] Failed to highlight:', e && e.message)
       }
     },
 
     async handleTtsClearHighlight() {
       console.log('[TTS] Clearing highlight')
-      
-      const wpsInstance = this.wpsInstances.left || this.wpsInstances.right
-      if (!wpsInstance) return
-      
-      const { clearSelection } = useWpsBridge()
-      await clearSelection(wpsInstance)
+
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) return
+      try {
+        await this.libreOfficeExecutor.executeCommand('collapse_selection', { to: 'start' })
+      } catch (e) {
+        // 无选区时忽略
+      }
     },
 
     async removeMember(member) {
@@ -2431,63 +2393,9 @@ export default {
       // 写入到文档里的超链接必须是 http/https，才能稳定触发 onHyperLinkOpen（对照官方 demo）
       return `${base}?u=${encodeURIComponent(inner)}`
     },
-    /**
-     * 启动选区轮询（仅对 Word 文档有效）
-     * 只有 doc/docx 文件才支持 Selection 选区操作，其他文件类型无需轮询
-     */
-    startSelectionPolling(pane) {
-      const p = pane === 'right' ? 'right' : 'left'
-
-      // 先清理旧的定时器
-      try {
-        const old = this.selectionPollingIntervals && this.selectionPollingIntervals[p]
-        if (old) clearInterval(old)
-      } catch (e) {
-        // ignore
-      }
-
-      // 检查当前打开的文件是否是 Word 文档
-      const activeFile = p === 'right' ? this.activeFileRight : this.activeFileLeft
-      if (!activeFile || !activeFile.name) {
-        // 没有打开文件，不启动轮询
-        return
-      }
-
-      const fileName = activeFile.name.toLowerCase()
-      const isWordDocument = fileName.endsWith('.doc') || fileName.endsWith('.docx')
-      if (!isWordDocument) {
-        // 不是 Word 文档，不启动选区轮询（pptx/xlsx/pdf 等不支持 Selection API）
-        return
-      }
-
-      const timer = setInterval(async () => {
-        try {
-          const wpsComp = this.$refs[p === 'right' ? 'wpsRight' : 'wpsLeft']
-          if (!wpsComp) return
-          const r = await wpsComp.getSelectionRange()
-          if (!r || typeof r.start !== 'number' || typeof r.end !== 'number' || r.end <= r.start) return
-          const text = await wpsComp.getSelectionText()
-          const t = String(text || '').trim()
-          if (!t) return
-          this.lastWpsSelection[p] = { start: r.start, end: r.end, text: t, ts: Date.now() }
-        } catch (e) {
-          // ignore
-        }
-      }, 650)
-      this.selectionPollingIntervals[p] = timer
-    },
-
-    stopSelectionPolling(pane) {
-      const p = pane === 'right' ? 'right' : 'left'
-      try {
-        const old = this.selectionPollingIntervals && this.selectionPollingIntervals[p]
-        if (old) clearInterval(old)
-      } catch (e) {
-        // ignore
-      }
-      if (this.selectionPollingIntervals) this.selectionPollingIntervals[p] = null
-    },
-    // === 文件拖拽到 WPS 选区建立关联（超链接） ===
+    // === 文件拖拽到文档选区建立关联（超链接）===
+    // #79：该功能原依赖 WPS 编辑器实例（选区轮询 + setHyperlinkAtRange），WPS 移除后
+    // 暂不可用（下方守卫会友好提示），LibreOffice 等价实现记债。
     onFileLinkDragStart(file) {
       if (!file || !file.id) return
       this.fileLinkDrag.active = true
@@ -2530,128 +2438,11 @@ export default {
       this.fileLinkPicker.files = []
       this.fileLinkPicker.linkKey = ''
     },
-    // 调试：手动添加超链接（绕过拖拽）
-    async debugAddHyperlink() {
-      const target = this.$refs.wpsLeft
-      if (!target) return
-      try {
-        const sel = await target.getSelectionText()
-        if (!sel) {
-          uni.showToast({ title: '无选区', icon: 'none' })
-          return
-        }
-        const range = await target.getSelectionRange()
-        console.log('Debug Link: Selection', range, sel)
-
-        const success = await target.setHyperlinkAtRange(
-          range.start,
-          range.end,
-          'https://www.wps.cn',
-          sel
-        )
-        uni.showToast({ title: success ? '调试链接成功' : '调试链接失败', icon: 'none' })
-      } catch (e) {
-        console.error('Debug Link Error:', e)
-        uni.showToast({ title: '调试出错', icon: 'none' })
-      }
-    },
-
     async createWpsSelectionFileLink(side, file) {
-      console.log('createWpsSelectionFileLink start:', { side, fileId: file.id })
-      // 1) 取目标 WPS 编辑器实例
-      const target = side === 'right' ? this.$refs.wpsRight : this.$refs.wpsLeft
-      if (!target) {
-        uni.showToast({ title: '请先打开一个 WPS 文档', icon: 'none' })
-        return
-      }
-
-      // 2) 获取选区（优先使用 getLastKnownSelection，因为它包含了实时失败时的 Fallback）
-      let selectionData = null
-      if (typeof target.getLastKnownSelection === 'function') {
-        selectionData = await target.getLastKnownSelection()
-      } else {
-        // 兼容旧版逻辑（虽然现在 WpsEditor 已经更新了）
-        const range = await target.getSelectionRange()
-        const text = await target.getSelectionText()
-        if (range && range.end > range.start && text) {
-          selectionData = { ...range, text }
-        }
-      }
-
-      console.log('createWpsSelectionFileLink got selection data:', selectionData)
-
-      if (!selectionData || !selectionData.text) {
-        console.warn('createWpsSelectionFileLink no valid selection')
-        uni.showToast({ title: '请先在文档中高亮一段文本（蓝色选区）', icon: 'none' })
-        return
-      }
-
-      const selText = String(selectionData.text).trim()
-      const rangeStart = selectionData.start
-      const rangeEnd = selectionData.end
-
-      // 3) 生成/复用 linkKey：优先从选区现有超链接读取（如果能读到）
-      let linkKey = ''
-      try {
-        if (typeof target.getSelectionHyperlinkUrl === 'function') {
-          const u = await target.getSelectionHyperlinkUrl()
-          const raw = u ? String(u) : ''
-          // 兼容：新包装链接（https://checkba-internal... ?u=checkba://filelink?...）
-          if (raw && this.WPS_INTERNAL_HTTP_LINK_BASE && raw.startsWith(this.WPS_INTERNAL_HTTP_LINK_BASE)) {
-            const q0 = raw.includes('?') ? raw.split('?')[1] : ''
-            const p0 = new URLSearchParams(q0)
-            const inner = p0.get('u') ? decodeURIComponent(String(p0.get('u'))) : ''
-            if (inner && inner.startsWith(this.INTERNAL_LINK_SCHEMES.fileLink)) {
-              const q = inner.includes('?') ? inner.split('?')[1] : ''
-              const p = new URLSearchParams(q)
-              linkKey = p.get('k') || ''
-            }
-          } else if (raw && raw.startsWith(this.INTERNAL_LINK_SCHEMES.fileLink)) {
-            const q = raw.includes('?') ? raw.split('?')[1] : ''
-            const p = new URLSearchParams(q)
-            linkKey = p.get('k') || ''
-          }
-        }
-      } catch (e) {
-        // ignore
-      }
-      if (!linkKey) {
-        linkKey = `lk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-        // 文档内写入“包装后的 https 链接”，点击时由 onHyperLinkOpen 接管并打开内部链接（新 tab）
-        const inner = `${this.INTERNAL_LINK_SCHEMES.fileLink}?k=${encodeURIComponent(linkKey)}&projectId=${encodeURIComponent(String(this.projectId || ''))}`
-        const url = this.wrapWpsInternalLink(inner)
-        try {
-          if (typeof target.setHyperlinkAtRange === 'function') {
-            await target.setHyperlinkAtRange(rangeStart, rangeEnd, url, selText)
-          } else {
-            // 兜底：替换为链接文本（与原文一致）
-            await target.insertEvidenceLink(selText || '关联文件', `FILE_LINK_${linkKey}`, url)
-          }
-        } catch (e) {
-          console.error('设置超链接失败:', e)
-          uni.showToast({ title: '设置超链接失败', icon: 'none' })
-          return
-        }
-      }
-      // 4) 入库：按 fileId 关联（文件移动/重命名不影响打开）
-      try {
-        const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-        const doc = side === 'right' ? this.activeFileRight : this.activeFileLeft
-        const docWpsFileId = doc && this.isWpsFile && this.isWpsFile(doc) ? (doc.wpsFileId || '') : ''
-        if (!docWpsFileId) throw new Error('文档未就绪')
-        const payload = await createDocFileLink(pid, {
-          linkKey,
-          docWpsFileId,
-          anchorText: selText || '',
-          rangeStart: rangeStart,
-          rangeEnd: rangeEnd,
-          fileIds: [Number(file.id)]
-        })
-        if (payload && payload.linkKey) linkKey = payload.linkKey
-        uni.showToast({ title: '已建立关联', icon: 'success' })
-      } catch (e) {
-        uni.showToast({ title: e.message || '关联失败', icon: 'none' })
-      }
+      // #79：文档选区↔文件关联原依赖 WPS 编辑器实例（选区读取 + setHyperlinkAtRange），
+      // WPS 移除后暂不可用，LibreOffice 等价实现记债（后端 DocFileLink 契约保留）。
+      console.log('createWpsSelectionFileLink (inert, #79):', { side, fileId: file && file.id })
+      uni.showToast({ title: '当前编辑器暂不支持选区关联', icon: 'none' })
     },
 
     // === Staging Area Methods ===
@@ -3302,25 +3093,6 @@ export default {
       document.addEventListener('copy', this._copyHandler, true)
       window.addEventListener('keydown', this._clipboardKeydownHandler, true)
       // #endif
-    },
-    // WPS 内部复制事件（ClipboardCopy）：解决 iframe 内复制无法冒泡到外层 document 的问题
-    // 这里保持逻辑极简：拿到 text 就入库并触发刷新，不做去重、不做复杂判断
-    async onWpsClipboardCopy(payload) {
-      try {
-        const raw = payload && (payload.text || payload.Text || payload.content)
-        const t = String(raw || '').trim()
-        if (!t) return
-        if (this._recordClipboardOnce) {
-          await this._recordClipboardOnce(t, 'wps')
-          return
-        }
-        const res = await saveClipboardText(t)
-        const saved = (res && res.data) ? res.data : res
-        this.onClipboardSaved(saved)
-      } catch (e) {
-        // best-effort：不阻断用户复制体验
-        console.warn('WPS 复制入库失败:', e)
-      }
     },
     onClipboardSaved(item) {
       // 1) 面板打开时：立即新增一张卡片（不等刷新）
@@ -4168,36 +3940,20 @@ export default {
       if (type === 'TEXT') {
          const t = (text || '').trim()
          if (!t) return
-         const wpsComp = this.getCurrentWpsInstance()
-         if (!wpsComp) {
-           uni.showToast({ title: '请先激活一个 WPS 文档窗口', icon: 'none' })
+         if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+           uni.showToast({ title: '请先打开一个文档', icon: 'none' })
            return
          }
          try {
-           await wpsComp.insertTextWithBookmark(t, `WEB_CLIP_${Date.now()}`)
+           await this.libreOfficeExecutor.executeCommand('insert_at_cursor', { text: t })
            uni.showToast({ title: '已插入文档', icon: 'success' })
          } catch (e) {
            console.error(e)
            uni.showToast({ title: '插入失败', icon: 'none' })
          }
       } else if (type === 'IMAGE') {
-         if (!content) return
-         const wpsComp = this.getCurrentWpsInstance()
-         if (!wpsComp) {
-           uni.showToast({ title: '请先激活一个 WPS 文档窗口', icon: 'none' })
-           return
-         }
-         try {
-           if (wpsComp.insertImage) {
-             await wpsComp.insertImage(content)
-             uni.showToast({ title: '已插入图片', icon: 'success' })
-           } else {
-             uni.showToast({ title: '当前编辑器不支持图片插入', icon: 'none' })
-           }
-         } catch (e) {
-           console.error(e)
-           uni.showToast({ title: '插入图片失败', icon: 'none' })
-         }
+         // #79：内置 LibreOffice 编辑器暂不支持图片插入（原 WPS 能力，记债）
+         uni.showToast({ title: '当前编辑器暂不支持图片插入', icon: 'none' })
       }
     },
 
@@ -4380,55 +4136,10 @@ export default {
     },
 
     async handleWebLinkDrop(x, y) {
-      // 检测是否落在 WPS 容器上（左/右）
-      const hit = (el) => {
-        if (!el) return false
-        const r = el.getBoundingClientRect()
-        return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom
-      }
-      const leftEl = typeof document !== 'undefined' ? document.getElementById('wps-container-left') : null
-      const rightEl = typeof document !== 'undefined' ? document.getElementById('wps-container-right') : null
-      let target = null
-      let side = 'left'
-      if (hit(leftEl)) {
-        target = this.$refs.wpsLeft
-        side = 'left'
-      } else if (hit(rightEl)) {
-        target = this.$refs.wpsRight
-        side = 'right'
-      }
-      if (!target) {
-        this.stopWebLinkDrag()
-        uni.showToast({ title: '请拖拽到文档区域进行关联', icon: 'none' })
-        return
-      }
-      try {
-        // 尽量把焦点给到编辑器（否则某些情况下插入会失败/不生效）
-        try {
-          if (target && typeof target.focusEditor === 'function') {
-            target.focusEditor()
-          }
-        } catch (e) {
-          // ignore
-        }
-        const favId = this.webLinkDrag.favoriteId
-        const host = this.webLinkDrag.sourceUrl ? (() => { try { return new URL(this.webLinkDrag.sourceUrl).host } catch (e) { return '网核' } })() : '网核'
-        const ts = new Date().toLocaleString()
-        const text = `【网核证据：${host}｜${ts}】`
-        const bookmarkName = `WEB_EVID_${favId || Date.now()}`
-        const internalUrl = this.wrapWpsInternalLink(`checkba://webfav?id=${encodeURIComponent(String(favId || ''))}&projectId=${encodeURIComponent(String(this.projectId || ''))}`)
-        if (target && typeof target.insertEvidenceLink === 'function') {
-          await target.insertEvidenceLink(text, bookmarkName, internalUrl)
-        } else {
-          await target.insertTextWithBookmark(text, bookmarkName)
-        }
-        uni.showToast({ title: '已插入网核标记', icon: 'success' })
-      } catch (e) {
-        console.error('插入网核标记失败:', e)
-        uni.showToast({ title: '插入失败', icon: 'none' })
-      } finally {
-        this.stopWebLinkDrag()
-      }
+      // #79：网核证据插入文档原依赖 WPS 编辑器实例（书签+超链接 API），WPS 移除后
+      // 暂不可用（守卫友好提示），LibreOffice 等价实现记债。
+      this.stopWebLinkDrag()
+      uni.showToast({ title: '当前编辑器暂不支持网核标记插入', icon: 'none' })
     },
     onFileTreeCheckedChange(ids) {
       this.checkedFileIds = Array.isArray(ids) ? ids : []
@@ -5090,7 +4801,7 @@ export default {
       return supportedTypes.includes(type)
     },
     isWpsFile(file) {
-      // 根据是否有 wpsFileId 判断是否用 WPS 打开
+      // 判断是否为「文档编辑器可打开」的 Office 类文件（历史命名，#79 记改名债）
       if (!file || file.tabType === 'web' || file.tabType === 'markdown' || !file.fileType) return false
 
       const type = file.fileType.toLowerCase()
@@ -5109,7 +4820,7 @@ export default {
       // 2. 排除 Markdown 文件，使用专门的 Markdown 预览组件
       if (type === 'md' || type === 'markdown') return false
 
-      // 3. WPS Supported Office Formats
+      // 3. Office 文档格式（沿用原 WPS 支持面）
       const wpsFormats = [
           // Writer
           'wps', 'wpt', 'doc', 'dot', 'docx', 'dotx', 'docm', 'dotm', 'rtf', 'odt',
@@ -5121,14 +4832,14 @@ export default {
           'pdf'
       ]
 
-      // Default to WPS if it has ID or is office type (but not media/markdown)
+      // Office 类型或带文件 ID（非媒体/markdown）即视为文档编辑器可打开
       return wpsFormats.includes(type) || (file.wpsFileId && !mediaTypes.includes(type) && type !== 'md' && type !== 'markdown')
     },
 
-    // Epic #43 Track B: should this Office file open in the embedded LibreOffice
-    // editor instead of WPS? True only when the desktop embed is available
-    // (libreOfficePreferred). On web/h5 or when unavailable, returns false so the
-    // existing WPS path still renders the document.
+    // Epic #43 Track B / #79: should this Office file open in the embedded
+    // LibreOffice editor? True only when the desktop embed is available
+    // (libreOfficePreferred). On web/h5 or when unavailable, returns false and
+    // the file falls through to FilePreview (docx 本地只读渲染).
     useLibreEditor(file) {
       return this.libreOfficePreferred && this.isWpsFile(file)
     },
@@ -5194,55 +4905,7 @@ export default {
       console.log('[ProjectOverview] 打开文档对比标签:', diffFile.name)
     },
 
-    // --- WPS 交互逻辑 ---
-    onWpsReady(instance, pane) {
-      console.log(`WPS Ready [${pane}]`, instance)
-      this.wpsInstances[pane] = instance
-      
-      // 注册到全局变量，供 handleWpsStreamData 等方法使用
-      // 这样 useWpsBridge.getWpsInstance() 可以从 window.__wpsInstance 获取实例
-      window.__wpsInstance = instance
-      console.log('[ProjectOverview] WPS instance registered to window.__wpsInstance')
-
-      // 注意：当前 WPS 环境会对未知事件名抛出 "Invalid event name"
-      // fileSave/fileRename 在你的控制台里已验证会刷屏，因此这里不再监听，统一改为轮询同步文件信息。
-      this.startFileInfoPolling(pane)
-
-      // 关联功能：轮询记录“最近一次非空选区”（用于拖拽时选区丢失的问题）
-      this.startSelectionPolling(pane)
-
-      // 如果有待写入的 AI 导出内容，尝试在文档就绪后写入
-      this.$nextTick(async () => {
-        try {
-          const activeFile = pane === 'left' ? this.activeFileLeft : this.activeFileRight
-          if (!activeFile || !activeFile.wpsFileId) return
-
-          const key = activeFile.wpsFileId
-          const payload = this.pendingAiExports && this.pendingAiExports[key]
-          if (!payload || !payload.text) return
-
-          const wpsComp = this.$refs[pane === 'left' ? 'wpsLeft' : 'wpsRight']
-          if (wpsComp && wpsComp.insertTextWithBookmark) {
-            await wpsComp.insertTextWithBookmark(
-              payload.text,
-              `AI_EXPORT_${Date.now()}`
-            )
-            uni.showToast({ title: 'AI 内容已写入文档', icon: 'none' })
-          }
-
-          // 写入成功后，从待写入队列中删除（保持状态干净）
-          if (this.pendingAiExports && this.pendingAiExports[key]) {
-            const nextMap = { ...this.pendingAiExports }
-            delete nextMap[key]
-            this.pendingAiExports = nextMap
-          }
-        } catch (e) {
-          console.error('写入 AI 导出内容失败', e)
-        }
-      })
-    },
-
-    // 处理文件重命名
+    // 处理文件重命名（历史：WPS 时代由文件信息轮询触发；现无调用方，保留为通用逻辑）
     async handleFileRename(pane, data) {
       const activeFile = pane === 'left' ? this.activeFileLeft : this.activeFileRight
       if (!activeFile) return
@@ -5278,7 +4941,7 @@ export default {
           }
         }
 
-        // 4) 触发响应式更新，确保 Tab 与 WpsEditor 的 fileName prop 立即刷新
+        // 4) 触发响应式更新，确保 Tab 与编辑器的 fileName prop 立即刷新
         this.$forceUpdate()
       } catch (e) {
         console.error('WPS 重命名同步到后端失败:', e)
@@ -5368,25 +5031,10 @@ export default {
         Object.values(this.fileInfoPollingIntervals).forEach(id => clearInterval(id))
         this.fileInfoPollingIntervals = {}
       }
-      // 清理 window 上的引用
-      if (window.__wpsInstance) {
-          window.__wpsInstance = null
-      }
     },
 
-    // 获取当前聚焦的 WPS 实例
-    getCurrentWpsInstance() {
-      // 优先获取聚焦窗格的实例
-      const instance = this.wpsInstances[this.focusedPane]
-      // 如果聚焦窗格没有实例（比如是预览或者空的），尝试获取另一个
-      if (instance) return this.$refs[this.focusedPane === 'left' ? 'wpsLeft' : 'wpsRight']
-
-      // Fallback
-      if (this.wpsInstances.left) return this.$refs.wpsLeft
-      return null
-    },
     getActiveAiTargetFile() {
-      // AI 仅对“当前激活的 WPS 文档”生效，避免出现“浏览器Tab名 + 文档上下文”错配
+      // AI 仅对“当前激活的文档”生效，避免出现“浏览器Tab名 + 文档上下文”错配
       let candidate = null
       if (this.focusedPane === 'right' && this.splitMode) {
         candidate = this.activeFileRight || this.activeFileLeft || null
@@ -5400,71 +5048,8 @@ export default {
       return candidate
     },
 
-    // --- 变量库交互 (复用原有逻辑) ---
-    async handleInsertVariable(variable) {
-      const wpsComp = this.getCurrentWpsInstance()
-      if (!wpsComp) {
-        uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
-        return
-      }
-
-      try {
-        await wpsComp.insertTextWithBookmark(variable.value, variable.name)
-        uni.showToast({ title: '插入成功', icon: 'success' })
-      } catch (e) {
-        console.error(e)
-        uni.showToast({ title: '插入失败', icon: 'none' })
-      }
-    },
-
-    async handleUpdateVariable(variable) {
-      const wpsComp = this.getCurrentWpsInstance()
-      if (!wpsComp) return
-
-      try {
-        const text = await wpsComp.getSelectionText()
-        if (!text) {
-          uni.showToast({ title: '请先选择内容', icon: 'none' })
-          return
-        }
-
-        uni.showModal({
-          title: '确认更新',
-          content: `确认将变量 "${variable.name}" 更新为选中文本？`,
-          success: async (res) => {
-            if (res.confirm) {
-               const updatedVar = { ...variable, value: text }
-               await saveProjectVariable(updatedVar)
-               await wpsComp.updateBookmark(variable.name, text)
-               this.$refs.variablePanel.refresh()
-               uni.showToast({ title: '更新成功', icon: 'success' })
-            }
-          }
-        })
-      } catch (e) {
-        uni.showToast({ title: '更新失败', icon: 'none' })
-      }
-    },
-
-    async handleSyncDocument() {
-      const wpsComp = this.getCurrentWpsInstance()
-      if (!wpsComp) {
-        uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
-        return
-      }
-
-      uni.showLoading({ title: '同步中...' })
-      try {
-        const vars = await getProjectVariables(this.projectId)
-        const list = Array.isArray(vars) ? vars : (vars?.data || [])
-        const res = await wpsComp.syncAllBookmarks(list)
-        uni.hideLoading()
-        uni.showToast({ title: `同步完成 (${res.updated})`, icon: 'none' })
-      } catch (e) {
-        uni.hideLoading()
-        uni.showToast({ title: '同步失败', icon: 'none' })
-      }
-    },
+    // 变量库交互：书签版实现随 WPS 移除删除（#79，本 methods 对象后部的同名方法
+    // 一直是实际生效者——对象字面量后键覆盖前键）。书签/文档域的 LibreOffice 等价记债。
 
     normalizeContextText(text, maxLen = 8000) {
       const raw = (text || '')
@@ -5540,32 +5125,31 @@ export default {
             documentText: ''
         }
 
-        // Try getting content from WPS if active
-        let wpsComp = null
+        // 从内置 LibreOffice 编辑器读选区/正文（#79：经执行器命令，替代原 WPS 实例方法）
+        let useEditor = false
         if (!isManual) {
-            wpsComp = this.getCurrentWpsInstance()
+            useEditor = true
         } else {
              const active = this.getActiveAiTargetFile()
              // Verify ID match
              const fid = file.id || file.fileId
              if (active && active.id === fid) {
-                 wpsComp = this.getCurrentWpsInstance()
+                 useEditor = true
              }
         }
 
-        if (wpsComp) {
-            if (typeof wpsComp.getSelectionText === 'function') {
-                try {
-                     const selection = await wpsComp.getSelectionText()
-                     context.selectionText = this.normalizeContextText(selection, 1500)
-                } catch(e) {}
-            }
-            if (typeof wpsComp.getDocumentPlainText === 'function') {
-                try {
-                     const docText = await wpsComp.getDocumentPlainText(8000)
-                     context.documentText = this.normalizeContextText(docText, 8000)
-                } catch(e) {}
-            }
+        if (useEditor && this.libreOfficeActive && this.libreOfficeExecutor) {
+            try {
+                 const sel = await this.libreOfficeExecutor.executeCommand('get_selection', {})
+                 context.selectionText = this.normalizeContextText((sel && sel.text) || '', 1500)
+            } catch(e) {}
+            try {
+                 const doc = await this.libreOfficeExecutor.executeCommand('get_document_text', {})
+                 const docText = doc && Array.isArray(doc.paragraphs)
+                   ? doc.paragraphs.map(p => (p && (p.text !== undefined ? p.text : p)) || '').join('\n')
+                   : (doc && doc.text) || ''
+                 context.documentText = this.normalizeContextText(docText, 8000)
+            } catch(e) {}
         }
 
         // Fallback or Summary
@@ -5662,7 +5246,7 @@ export default {
         else if (action.action === 'wps_reload_file') {
             this.handleWpsReloadFile(action)
         }
-        // AI Agent 请求执行 WPS 命令
+        // AI Agent 请求执行编辑器命令（事件名沿用 wps_command，#79 记改名债）
         else if (action.tool === 'wps_command') {
             // 特殊处理 wps_open_file_sync 命令（新建文件流式写入）
             if (action.action === 'wps_open_file_sync') {
@@ -5671,16 +5255,53 @@ export default {
                 this.handleWpsCommand(action)
             }
         }
+        // 后端流式写入数据（wps_start_stream 工具）：缓冲后经 LibreOffice 执行器落字
+        else if (action.action === 'wps_stream_data') {
+            this.handleDocStreamData(action.content || '')
+        }
+    },
+
+    // --- 流式写入（#79：LibreOffice 消费端，替代原 useWpsBridge.handleWpsStreamData）---
+    // 与原 WPS 实现同构：本地缓冲 + 定时批量 flush，减少 worker 往返。
+    handleDocStreamData(content) {
+        if (!content) return
+        this._docStreamBuffer = (this._docStreamBuffer || '') + content
+        if (!this._docStreamTimer) {
+            this._docStreamTimer = setTimeout(() => {
+                this._docStreamTimer = null
+                this.flushDocStreamBuffer()
+            }, 150)
+        }
+    },
+    async flushDocStreamBuffer() {
+        if (!this._docStreamBuffer || this._docStreamBusy) return
+        if (!this.libreOfficeActive || !this.libreOfficeExecutor) return
+        this._docStreamBusy = true
+        const text = this._docStreamBuffer
+        this._docStreamBuffer = ''
+        try {
+            await this.libreOfficeExecutor.executeCommand('insert_at_cursor', { text })
+        } catch (e) {
+            console.error('[ProjectOverview] doc stream insert error:', e)
+        } finally {
+            this._docStreamBusy = false
+            if (this._docStreamBuffer && !this._docStreamTimer) {
+                this._docStreamTimer = setTimeout(() => {
+                    this._docStreamTimer = null
+                    this.flushDocStreamBuffer()
+                }, 150)
+            }
+        }
     },
 
     /**
      * 处理 AI Agent 的同步打开文件请求 (用于流式写入)
-     * 这个命令需要打开文件，等待 WPS 就绪后返回结果给后端
+     * 打开文件，等待内置 LibreOffice 编辑器就绪后返回结果给后端（#79）
      */
     async handleWpsOpenFileSync(action) {
-        console.log('[ProjectOverview] WPS Open File Sync:', action)
+        console.log('[ProjectOverview] Open File Sync:', action)
         const { params, requestId, conversationId } = action
-        
+
         try {
             if (!params || !params.fileId) {
                 console.error('[ProjectOverview] No fileId in wps_open_file_sync')
@@ -5703,52 +5324,36 @@ export default {
 
             console.log('[ProjectOverview] Opening file for streaming:', file.name)
 
-            // 3. 打开文件（这会创建新的 WPS 实例或激活已有的）
+            // 3. 打开文件（挂载/激活内置 LibreOffice 编辑器）
             await this.openFile(file)
 
-            // 4. 等待 WPS 实例就绪（最多等待 15 秒）
-            // 需要等待两个条件：
-            // a) wpsInstances 中存在实例
-            // b) window.__wpsInstance 已注册（这是在 onWpsReady 中设置的）
-            let wpsReady = false
-            for (let i = 0; i < 30; i++) {
+            // 4. 等待编辑器就绪（onLibreReady 置位，最多等待 90 秒——LOWA 首次 boot 较慢）
+            let editorReady = false
+            for (let i = 0; i < 180; i++) {
                 await new Promise(resolve => setTimeout(resolve, 500))
-                
-                const wpsInstance = this.wpsInstances.left || this.wpsInstances.right
-                const globalInstance = window.__wpsInstance
-                
-                // 检查实例是否存在且有 Application 属性
-                if (wpsInstance && globalInstance) {
-                    try {
-                        // 尝试访问 Application 以确认 WPS 真正就绪
-                        const app = globalInstance.Application || globalInstance
-                        if (app) {
-                            wpsReady = true
-                            console.log('[ProjectOverview] WPS instance ready after', (i + 1) * 500, 'ms')
-                            console.log('[ProjectOverview] window.__wpsInstance is set:', !!window.__wpsInstance)
-                            break
-                        }
-                    } catch (e) {
-                        console.log('[ProjectOverview] WPS not fully ready yet, waiting...', e.message)
-                    }
+                if (this.libreOfficeActive && this.libreOfficeExecutor) {
+                    editorReady = true
+                    console.log('[ProjectOverview] LibreOffice editor ready after', (i + 1) * 500, 'ms')
+                    break
                 }
             }
 
-            if (!wpsReady) {
-                console.error('[ProjectOverview] WPS instance not ready after timeout')
-                await sendWpsResult(conversationId, requestId, false, null, 'WPS 编辑器未就绪')
+            if (!editorReady) {
+                console.error('[ProjectOverview] LibreOffice editor not ready after timeout')
+                await sendWpsResult(conversationId, requestId, false, null, '编辑器未就绪')
                 return
             }
 
-            // 5. 重置流式状态，准备接收新的流式数据
-            const wpsBridge = useWpsBridge()
-            wpsBridge.resetStreamState()
+            // 5. 重置流式缓冲，准备接收新的流式数据
+            this._docStreamBuffer = ''
+            if (this._docStreamTimer) { clearTimeout(this._docStreamTimer); this._docStreamTimer = null }
+            this._docStreamBusy = false
             console.log('[ProjectOverview] Stream state reset, ready for streaming')
-            
+
             // 6. 返回成功给后端
-            console.log('[ProjectOverview] WPS Open File Sync success')
-            await sendWpsResult(conversationId, requestId, true, { 
-                fileId: file.id, 
+            console.log('[ProjectOverview] Open File Sync success')
+            await sendWpsResult(conversationId, requestId, true, {
+                fileId: file.id,
                 fileName: file.name,
                 status: 'ready'
             }, null)
@@ -5795,13 +5400,12 @@ export default {
 
     /**
      * 处理 AI Agent 的重新加载文件请求
-     * 当后端修改了 PPTX 文件后，需要通知前端刷新 WPS 以显示最新内容
+     * 当后端修改了文件后，需要通知前端刷新编辑器以显示最新内容
      *
      * 工作原理：
-     * 1. 后端修改文件后会更新 wpsFileId（添加版本时间戳）
+     * 1. 后端修改文件后会更新 wpsFileId（通用文件 ID，添加版本时间戳）
      * 2. 前端获取最新文件信息，更新 leftFiles/rightFiles 中的 wpsFileId
-     * 3. WpsEditor 组件的 watch 检测到 fileId 变化后会自动调用 reload()
-     * 4. reload() 会销毁并重新创建 WPS 实例，触发新的文件下载
+     * 3. LibreOfficeEditor 以文件为 key/prop，检测到变化后重新加载
      */
     async handleWpsReloadFile(action) {
         console.log('[ProjectOverview] WPS Reload File:', action)
@@ -5874,91 +5478,35 @@ export default {
     },
 
     /**
-     * 处理 AI Agent 的 WPS 命令请求
+     * 处理 AI Agent 的编辑器命令请求（#79：LibreOffice 是唯一执行器；
+     * 方法名与 SSE 结果契约 sendWpsResult 沿用历史命名，记改名债）
      */
     async handleWpsCommand(action) {
-        console.log('[ProjectOverview] ========== WPS Command Start ==========')
-        console.log('[ProjectOverview] WPS Command:', JSON.stringify(action))
+        console.log('[ProjectOverview] ========== Editor Command Start ==========')
+        console.log('[ProjectOverview] Editor Command:', JSON.stringify(action))
 
         const { action: commandAction, params, requestId, conversationId } = action
         console.log('[ProjectOverview] commandAction:', commandAction, 'requestId:', requestId)
 
-        // Epic #43: when the embedded LibreOffice editor is active, route the
-        // (editor-agnostic) backend command to it instead of WPS — the SSE result
-        // contract (sendWpsResult) is identical. The WPS path below is left
-        // byte-for-byte unchanged; this only diverts while LibreOffice is open.
-        if (this.libreOfficeActive && this.libreOfficeExecutor) {
-            try {
-                const result = await this.libreOfficeExecutor.executeCommand(commandAction, params)
-                const successFlag = result && result.success !== false
-                await sendWpsResult(conversationId, requestId, successFlag, result, (result && result.error) || null)
-            } catch (e) {
-                console.error('[ProjectOverview] LibreOffice command error:', e)
-                await sendWpsResult(conversationId, requestId, false, null, e.message)
-            }
+        if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+            console.error('[ProjectOverview] No embedded editor available')
+            await sendWpsResult(conversationId, requestId, false, null, '编辑器未就绪，请先打开一个文档')
             return
         }
 
         try {
-            // 获取当前活跃的 WPS 实例
-            // FIX: 优先使用当前聚焦窗格的 WPS 实例，避免多窗口时操作错误的文档
-            let wpsInstance = null
-            console.log('[ProjectOverview] focusedPane:', this.focusedPane)
-            console.log('[ProjectOverview] wpsInstances:', {
-                left: !!this.wpsInstances.left,
-                right: !!this.wpsInstances.right
-            })
-
-            if (this.focusedPane && this.wpsInstances[this.focusedPane]) {
-                wpsInstance = this.wpsInstances[this.focusedPane]
-                console.log('[ProjectOverview] Using focused pane instance:', this.focusedPane)
-            } else {
-                // 降级策略：使用任一可用的实例
-                wpsInstance = this.wpsInstances.left || this.wpsInstances.right
-                console.log('[ProjectOverview] Using fallback instance:', wpsInstance ? 'found' : 'null')
-            }
-
-            if (!wpsInstance) {
-                console.error('[ProjectOverview] No WPS instance available')
-                await sendWpsResult(conversationId, requestId, false, null, 'WPS 编辑器未就绪，请先打开一个文档')
-                return
-            }
-
-            console.log('[ProjectOverview] WPS instance found, calling wpsBridge.executeCommand...')
-            console.log('[ProjectOverview] wpsInstance type:', typeof wpsInstance)
-            console.log('[ProjectOverview] wpsInstance.Application:', !!wpsInstance?.Application)
-
-            // 使用 WpsBridge 执行命令
-            const wpsBridge = useWpsBridge()
-            console.log('[ProjectOverview] wpsBridge created, calling executeCommand with:', commandAction, params)
-
-            const result = await wpsBridge.executeCommand(commandAction, params, wpsInstance)
-
-            console.log('[ProjectOverview] WPS Command Result:', JSON.stringify(result))
-
-            // 发送结果回后端
-            const successFlag = result.success !== false
-            console.log('[ProjectOverview] Sending result to backend: success=', successFlag)
-
-            await sendWpsResult(
-                conversationId,
-                requestId,
-                successFlag,
-                result,
-                result.error || null
-            )
-
-            console.log('[ProjectOverview] ========== WPS Command End ==========')
-
+            const result = await this.libreOfficeExecutor.executeCommand(commandAction, params)
+            const successFlag = result && result.success !== false
+            await sendWpsResult(conversationId, requestId, successFlag, result, (result && result.error) || null)
         } catch (e) {
-            console.error('[ProjectOverview] handleWpsCommand error:', e)
-            console.error('[ProjectOverview] Error stack:', e.stack)
+            console.error('[ProjectOverview] LibreOffice command error:', e)
             await sendWpsResult(conversationId, requestId, false, null, e.message)
         }
+        console.log('[ProjectOverview] ========== Editor Command End ==========')
     },
 
     // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
-    // commands route to it (see handleWpsCommand divert). Used by both the inline
+    // commands route to it (see handleWpsCommand). Used by both the inline
     // default editor (Track B) and the legacy ⌘⇧O overlay.
     onLibreReady(executor) {
         this.libreOfficeExecutor = executor
@@ -5974,7 +5522,7 @@ export default {
         this.showLibreEmbed = false
         this.libreOfficeActive = false
         this.libreOfficeExecutor = null
-        console.log('[ProjectOverview] LibreOffice editor closed — agent commands routed to WPS')
+        console.log('[ProjectOverview] LibreOffice editor closed — agent commands unavailable until reopened')
     },
 
     // --- 文件选择/上传 ---
@@ -5985,24 +5533,19 @@ export default {
     },
     async applyAiMessageToSelection(message) {
       if (!message || !message.content) return
-      const wpsComp = this.getCurrentWpsInstance()
-      if (!wpsComp || typeof wpsComp.getSelectionText !== 'function') {
-        uni.showToast({ title: '请先激活一个 WPS 文档窗口', icon: 'none' })
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+        uni.showToast({ title: '请先打开一个文档', icon: 'none' })
         return
       }
       try {
-        const selected = await wpsComp.getSelectionText()
-        if (!String(selected || '').trim()) {
+        const sel = await this.libreOfficeExecutor.executeCommand('get_selection', {})
+        if (!String((sel && sel.text) || '').trim()) {
           uni.showToast({ title: '请先在文档中选择要替换的内容', icon: 'none' })
           return
         }
-        if (typeof wpsComp.replaceSelectionText === 'function') {
-          await wpsComp.replaceSelectionText(message.content)
-          uni.showToast({ title: '已替换选区', icon: 'success' })
-          return
-        }
-        // 兜底：如果当前 SDK 未暴露替换能力，则退化为插入
-        await this.insertPlainTextToWps(message.content)
+        await this.libreOfficeExecutor.executeCommand('replace_selection', { text: message.content })
+        uni.showToast({ title: '已替换选区', icon: 'success' })
+        return
       } catch (e) {
         console.error('替换选区失败', e)
         uni.showToast({ title: e.message || '替换失败', icon: 'none' })
@@ -6262,23 +5805,6 @@ export default {
         }
       } catch (e) {
         console.error('Failed to load dynamic plugins:', e)
-      }
-    },
-
-    /**
-     * 加载 WPS 配置（从后端动态获取 appId）
-     */
-    async loadWpsConfig() {
-      try {
-        const res = await getWpsConfig()
-        if (res && res.data && res.data.appId) {
-          this.wpsAppId = res.data.appId
-          console.log('[WPS] 配置加载成功, appId:', this.wpsAppId)
-        } else {
-          console.warn('[WPS] 后端未返回有效的 appId，将无法初始化 WPS 编辑器')
-        }
-      } catch (e) {
-        console.error('[WPS] 加载配置失败:', e)
       }
     },
 
