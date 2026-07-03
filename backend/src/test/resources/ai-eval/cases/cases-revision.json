@@ -1,7 +1,7 @@
 [
   {
     "id": "revise-clause-find-replace-xml",
-    "title": "修订违约金条款（XML 协议 find_replace）",
+    "title": "修订违约金条款（XML 协议，wps_* 旧名→doc_* 别名灰度）",
     "category": "revision",
     "protocol": "xml",
     "userInput": "把合同里的违约金从百分之五改成百分之十",
@@ -14,12 +14,12 @@
       }
     ],
     "toolStubs": {
-      "wps_find_replace": "{\"replaced\":1,\"status\":\"success\"}"
+      "doc_find_replace": "{\"replaced\":1,\"status\":\"success\"}"
     },
     "expect": {
       "toolCalls": [
         {
-          "name": "wps_find_replace",
+          "name": "doc_find_replace",
           "argsContain": {
             "findText": "百分之五",
             "replaceText": "百分之十",
@@ -27,13 +27,16 @@
           }
         }
       ],
-      "structureContains": ["<process", "<final>"],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
       "bubbleEndStatus": "finished"
     }
   },
   {
     "id": "revise-clause-find-replace-native",
-    "title": "修订不可抗力条款（原生 function calling）",
+    "title": "修订不可抗力条款（原生 function calling，wps_* 旧名→doc_* 别名灰度）",
     "category": "revision",
     "protocol": "native",
     "userInput": "把不可抗力条款改成包含疫情防控措施",
@@ -55,16 +58,22 @@
       }
     ],
     "toolStubs": {
-      "wps_find_replace": "{\"replaced\":3,\"status\":\"success\"}"
+      "doc_find_replace": "{\"replaced\":3,\"status\":\"success\"}"
     },
     "expect": {
       "toolCalls": [
         {
-          "name": "wps_find_replace",
-          "argsContain": { "findText": "不可抗力", "replaceText": "疫情防控措施" }
+          "name": "doc_find_replace",
+          "argsContain": {
+            "findText": "不可抗力",
+            "replaceText": "疫情防控措施"
+          }
         }
       ],
-      "structureContains": ["<process", "<final>"],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
       "bubbleEndStatus": "finished"
     }
   },
@@ -83,14 +92,27 @@
       }
     ],
     "toolStubs": {
-      "wps_find_replace": "{\"replaced\":2,\"status\":\"success\"}"
+      "doc_find_replace": "{\"replaced\":2,\"status\":\"success\"}"
     },
     "expect": {
       "toolCalls": [
-        { "name": "wps_find_replace", "argsContain": { "findText": "北京旧名科技有限公司" } },
-        { "name": "wps_find_replace", "argsContain": { "replaceText": "2026年7月1日" } }
+        {
+          "name": "doc_find_replace",
+          "argsContain": {
+            "findText": "北京旧名科技有限公司"
+          }
+        },
+        {
+          "name": "doc_find_replace",
+          "argsContain": {
+            "replaceText": "2026年7月1日"
+          }
+        }
       ],
-      "structureContains": ["<process", "<final>"],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
       "bubbleEndStatus": "finished"
     }
   }

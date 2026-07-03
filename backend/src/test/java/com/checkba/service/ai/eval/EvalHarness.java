@@ -8,10 +8,10 @@ import com.checkba.service.ai.AgentOrchestrator;
 import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.ContextAssemblerService;
 import com.checkba.service.ai.ConversationFileChangeService;
+import com.checkba.service.ai.EditorBridgeService;
 import com.checkba.service.ai.PluginService;
 import com.checkba.service.ai.SseEmitterService;
 import com.checkba.service.ai.TokenUsageService;
-import com.checkba.service.ai.WpsActionService;
 import com.checkba.service.ai.XmlToolCallParser;
 import com.checkba.service.ai.memory.MemoryPipelineService;
 import dev.langchain4j.data.message.SystemMessage;
@@ -132,14 +132,14 @@ public final class EvalHarness {
             return null;
         }).when(projectFileService).renameConversationFolder(any(), any(), any());
 
-        WpsActionService wps = mock(WpsActionService.class);
-        when(wps.isStreamingMode(any())).thenReturn(false);
+        EditorBridgeService editorBridge = mock(EditorBridgeService.class);
+        when(editorBridge.isStreamingMode(any())).thenReturn(false);
 
         ConversationFileChangeService fileChange = mock(ConversationFileChangeService.class);
 
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
-                registry, parser, memoryPipeline, projectFileService, wps, fileChange);
+                registry, parser, memoryPipeline, projectFileService, editorBridge, fileChange);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);

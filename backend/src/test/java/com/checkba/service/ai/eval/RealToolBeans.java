@@ -1,6 +1,7 @@
 package com.checkba.service.ai.eval;
 
 import com.checkba.service.ai.tools.AgentToolComponent;
+import com.checkba.service.ai.tools.DocumentEditTools;
 import com.checkba.service.ai.tools.FileTools;
 import com.checkba.service.ai.tools.LegalTools;
 import com.checkba.service.ai.tools.MemoryTools;
@@ -8,7 +9,6 @@ import com.checkba.service.ai.tools.PptxEditTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.WebTools;
-import com.checkba.service.ai.tools.WpsTools;
 
 import java.lang.reflect.Constructor;
 import java.util.ArrayList;
@@ -33,14 +33,14 @@ final class RealToolBeans {
     /** 与生产 Spring 容器中注册的 AgentToolComponent 集合保持一致 */
     static List<AgentToolComponent> instantiateAll() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
+                DocumentEditTools.class,
                 FileTools.class,
                 LegalTools.class,
                 MemoryTools.class,
                 PptxEditTools.class,
                 PptxTools.class,
                 PythonTools.class,
-                WebTools.class,
-                WpsTools.class);
+                WebTools.class);
         List<AgentToolComponent> beans = new ArrayList<>();
         for (Class<? extends AgentToolComponent> type : toolClasses) {
             beans.add(instantiate(type));
