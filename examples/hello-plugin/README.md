@@ -1,6 +1,6 @@
 # hello-plugin 示例插件
 
-插件规范 v1（`docs/PLUGIN_SPEC.md`，本地私有文档目录）的最小可运行示例：
+插件规范 v1（[docs/PLUGIN_SPEC.md](../../docs/PLUGIN_SPEC.md)）的最小可运行示例：
 提供 `helloEcho`（文本回显）与 `helloWordCount`（字数统计）两个 AI 工具。
 
 ## 目录
