@@ -336,6 +336,17 @@ export function useAgentStream() {
             } catch (e) {
                 console.error('Failed to parse step_update', e)
             }
+        } else if (evt === 'subtask_progress') {
+            // Sub-agent subtask lifecycle (Phase 3C): show as a one-line status step
+            try {
+                const d = JSON.parse(dataStr)
+                handleStepUpdate({
+                    status: d.stage === 'started' ? 'loading' : 'done',
+                    message: d.message || `子任务${d.stage === 'started' ? '开始' : '结束'}`
+                })
+            } catch (e) {
+                console.error('Failed to parse subtask_progress', e)
+            }
         } else if (evt === 'artifact') {
             const d = JSON.parse(dataStr)
             handleArtifactEvent(d)

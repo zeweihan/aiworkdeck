@@ -1,0 +1,114 @@
+[
+  {
+    "id": "subagent-dispatch-and-summarize-native",
+    "title": "委派子任务：dispatch_subtask 正确分发，主循环拿到结构化结果后汇总输出",
+    "category": "subagent",
+    "protocol": "native",
+    "userInput": "帮我调研最近法院对对赌协议效力的裁判倾向，单独整理成一份要点摘要",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "dispatch_subtask",
+            "arguments": {
+              "task_description": "检索最高人民法院及各地法院关于对赌协议效力的最新裁判观点，整理成要点摘要",
+              "expected_output": "5 条以内的裁判要点列表，每条附来源",
+              "tool_scope": "search_web,browse_url"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>子任务已完成，对赌协议效力裁判要点摘要如下：\n1. 与股东对赌原则上有效；\n2. 与目标公司对赌需完成减资程序方可履行金钱补偿……</final>"
+      }
+    ],
+    "toolStubs": {
+      "dispatch_subtask": "{\"subtaskId\":\"subtask-eval-a\",\"success\":true,\"result\":\"1. 与股东对赌原则上有效（九民纪要第5条）；2. 与目标公司对赌，履行补偿义务须先完成减资……\",\"toolsUsed\":[\"search_web\",\"browse_url\"],\"rounds\":3}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "dispatch_subtask",
+          "argsContain": {
+            "task_description": "对赌协议",
+            "expected_output": "裁判要点",
+            "tool_scope": "search_web"
+          }
+        }
+      ],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "subagent-failure-graceful-xml",
+    "title": "子任务失败（超时）：主循环拿到 success=false 的结构化结果后正常收尾，不崩溃",
+    "category": "subagent",
+    "protocol": "xml",
+    "userInput": "把项目里所有合同的付款条款整理成一张对照表",
+    "turns": [
+      {
+        "text": "<process name=\"委派子任务\"><tool_code>dispatch_subtask({\"task_description\": \"逐个读取项目中的合同文件，抽取付款条款并整理为对照表\", \"expected_output\": \"文件名-付款条款对照表\", \"tool_scope\": [\"list_files\", \"read_document\"]})</tool_code></process>"
+      },
+      {
+        "text": "<final>子任务因超时未能完成（sub-agent timed out）。合同数量较多，建议先告诉我优先处理哪几份合同，我直接为你逐份提取付款条款。</final>"
+      }
+    ],
+    "toolStubs": {
+      "dispatch_subtask": "{\"subtaskId\":\"subtask-eval-b\",\"success\":false,\"error\":\"sub-agent timed out after 180s\",\"toolsUsed\":[\"list_files\",\"read_document\"],\"rounds\":4}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "dispatch_subtask",
+          "argsContain": {
+            "task_description": "付款条款",
+            "tool_scope": "read_document"
+          }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "subagent-recursion-refused-native",
+    "title": "递归拒绝：子 Agent 内调用 dispatch_subtask 被拒（结果透出拒绝错误），主循环只分发一次委派并正常收尾",
+    "category": "subagent",
+    "protocol": "native",
+    "userInput": "调研数据出境合规要求并整理清单，可以拆成子任务做",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "dispatch_subtask",
+            "arguments": {
+              "task_description": "调研中国数据出境的合规要求（安全评估/标准合同/认证三条路径），整理成清单；如有必要可再拆分子任务",
+              "expected_output": "三条路径的适用条件清单",
+              "tool_scope": "search_web"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>子任务已返回：子 Agent 尝试再次委派子任务被系统拒绝（nested delegation refused），其余检索正常完成。数据出境三条路径清单如下：……</final>"
+      }
+    ],
+    "toolStubs": {
+      "dispatch_subtask": "{\"subtaskId\":\"subtask-eval-c\",\"success\":true,\"result\":\"检索完成。注：子任务内再次调用 dispatch_subtask 已被拒绝：Error: dispatch_subtask is not available inside a sub-agent (nested delegation refused). 三条路径清单：1. 安全评估……\",\"toolsUsed\":[\"search_web\"],\"rounds\":4}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "dispatch_subtask",
+          "argsContain": {
+            "task_description": "数据出境",
+            "tool_scope": "search_web"
+          }
+        }
+      ],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

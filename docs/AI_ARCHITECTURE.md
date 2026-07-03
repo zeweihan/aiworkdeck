@@ -71,6 +71,31 @@ Phase 2.5 未改动，命名迁移列入 Phase 3：
 | write_docx 输出 JSON 键 | `wps_file_id`（前端有字符串匹配逻辑）|
 | 文件实体字段 | `ProjectFile.wpsFileId` |
 
+### 子 Agent（Phase 3C 多智能体协作第一阶段）
+
+主循环通过 `dispatch_subtask(task_description, expected_output, tool_scope)` 工具
+（`SubAgentTools`，普通 `AgentToolComponent`，不变式 1 保持——编排器无感知）把自包含的
+复杂子问题委派给 `SubAgentService`（`service/ai/subagent/`）。子 Agent = 独立消息栈 +
+受限工具集 + 独立模型 + 主循环的极简版双协议循环（原生 function calling + XML 兜底），
+**不复用**主循环的 SSE 推流与消息持久化，中间过程不进对话历史，只把最终结构化结果
+（success / result / error / toolsUsed / rounds，JSON）作为工具输出返回。
+
+约束清单（限值全部在 `ai.subagent.*` / `SubAgentProperties`，不变式 5）：
+
+| 约束 | 机制 | 默认值 |
+|-----|------|-------|
+| 轮数上限 | 循环轮数达 `max-rounds` 即返回明确失败结果 | 6 |
+| 并行度 | 专用线程池（与主循环 taskExecutor 隔离），池大小 = 同时运行子任务上限 | 3 |
+| token 预算 | 每轮前按 `token-budget × chars-per-token` 估算消息栈字符数，超限中止 | 30000 |
+| 超时 | `dispatch` 阻塞等待 `timeout-seconds`，超时取消任务并返回错误结果，不挂死主循环 | 180s |
+| 防递归 | 双防线：子 Agent 工具集无条件排除 `dispatch_subtask`；分发前二次拦截返回明确拒绝错误 | — |
+| 身份继承 | 子 Agent 工具调用的 `ToolContext` 继承主会话 projectId/conversationId/userId（不变式 3），模型可独立（`ai.subagent.model`，留空继承主会话） | — |
+
+子任务开始/结束向主会话推送 **新增** SSE 事件 `subtask_progress`（结构对齐
+`TaskProgressEvent`，taskType=SUBTASK / source=SUB_AGENT / stage=started|succeeded|failed），
+既有事件字典不变（不变式 4）。回放评测见 `cases-subagent.json`；
+循环上限/预算/超时/防递归/身份继承由 `SubAgentServiceTest` 单测守护。
+
 ### 记忆作用域（Phase 1）
 `MemoryEntry.scope`：`user`（跨项目偏好）/ `project`（默认）/ `conversation` / `file`（配 `sourceFileId`）/ `global`（通用知识）。
 
@@ -133,4 +158,7 @@ Phase 2.5 未改动，命名迁移列入 Phase 3：
   - [ ] 插件进程级运行时沙箱：v2 权限校验是分发层的诚实声明模型，插件代码仍与宿主同进程；
         真正强制 file/network 隔离需进程级沙箱（独立进程 + IPC 或 SecurityManager 替代方案），
         列为后续项。
-  - [ ] MCP SDK 标准化、Skill 体系、多智能体协作。
+  - [x] **多智能体协作第一阶段（Phase 3C）**：`dispatch_subtask` 委派子任务
+        （见 §3「子 Agent」）——独立消息栈/受限工具集/独立模型/轮数与预算与超时限值
+        （`ai.subagent.*`）/防递归/身份继承，新增 SSE 事件 `subtask_progress`。
+  - [ ] MCP SDK 标准化、Skill 体系、多智能体协作后续阶段（子任务规划器、跨子任务共享记忆）。
