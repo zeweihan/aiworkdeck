@@ -7,7 +7,7 @@ import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.BackgroundTaskService;
 import com.checkba.service.ai.PptxServiceClient;
-import com.checkba.service.ai.WpsActionService;
+import com.checkba.service.ai.EditorBridgeService;
 import com.checkba.storage.StorageServiceFactory;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
@@ -48,7 +48,7 @@ public class PptxTools implements AgentToolComponent {
     private final PptxServiceClient pptxServiceClient;
     private final ProjectFileService projectFileService;
     private final ProjectFileRepository projectFileRepository;
-    private final WpsActionService wpsActionService;
+    private final EditorBridgeService editorBridgeService;
     private final StorageServiceFactory storageServiceFactory;
     private final AiModelProperties aiModelProperties;
     private final BackgroundTaskService backgroundTaskService;
@@ -199,7 +199,7 @@ public class PptxTools implements AgentToolComponent {
             }
             
             // 通过 SSE 发送打开文件指令到前端
-            wpsActionService.sendOpenFileAction(file);
+            editorBridgeService.sendOpenFileAction(file);
             
             return String.format("已发送打开文件指令。文件名: %s。请等待 PPT 加载完成后再进行编辑操作。\n" +
                     "加载完成后，可以使用 pptx_get_presentation_info 获取 PPT 信息，" +
@@ -265,7 +265,7 @@ public class PptxTools implements AgentToolComponent {
         params.put("modelId", modelId);
         
         // 发送 SSE 唤起 UI
-        wpsActionService.sendPptConfigAction(params);
+        editorBridgeService.sendPptConfigAction(params);
         
         return "已唤起 PPT 生成配置界面，请在界面上选择生成选项（可编辑版/纯图片版）并确认。等待用户操作...";
     }
@@ -427,7 +427,7 @@ public class PptxTools implements AgentToolComponent {
                 }
                 
                 // 通知前端刷新文件列表
-                wpsActionService.sendRefreshFilesAction();
+                editorBridgeService.sendRefreshFilesAction();
                 
                 successMsg.append("\n文件已显示在项目文件树中。\n\n");
                 
@@ -573,7 +573,7 @@ public class PptxTools implements AgentToolComponent {
             }
             
             // 2. 尝试通过 WPS 获取页面内容
-            String slideContent = wpsActionService.executeWpsCommand("ppt_get_slide_content", 
+            String slideContent = editorBridgeService.executeEditorCommand("ppt_get_slide_content", 
                     java.util.Map.of("slideIndex", pageIndex));
             
             // 3. 分析返回结果，判断是否可编辑
@@ -641,7 +641,7 @@ public class PptxTools implements AgentToolComponent {
                     String newText = extractNewTextFromInstruction(text, instruction);
                     
                     // 调用 WPS 修改
-                    String result = wpsActionService.executeWpsCommand("ppt_modify_slide_text", 
+                    String result = editorBridgeService.executeEditorCommand("ppt_modify_slide_text", 
                             java.util.Map.of(
                                     "slideIndex", pageIndex,
                                     "shapeIndex", shapeIndex,
@@ -745,7 +745,7 @@ public class PptxTools implements AgentToolComponent {
             
             // 4. 通知前端重新加载文件（携带新的 wpsFileId）
             log.info("Notifying frontend to reload file: {}", file.getId());
-            wpsActionService.sendReloadFileAction(file);
+            editorBridgeService.sendReloadFileAction(file);
             
             return String.format("✅ 第 %d 页已使用 AI 成功修改！\n\n" +
                     "修改内容：%s\n\n" +

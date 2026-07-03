@@ -1231,7 +1231,7 @@ import {
   getAiConfig,
   getAssistants, // Added
   getPlugins, // Added
-  sendWpsResult, // 编辑器命令结果回调（历史命名，#79 记改名债）
+  sendEditorResult, // 编辑器命令结果回调（POST /wps-result，路由名为前后端契约）
   getFileText,
   promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
@@ -1451,7 +1451,7 @@ export default {
       tabDragOver: null, // { fileId, pane }
 
       // Epic #43: embedded LibreOffice editor. When active, backend AI commands
-      // route to it (handleWpsCommand — 历史命名，#79 记改名债).
+      // route to it (handleEditorCommand).
       showLibreEmbed: false,
       libreOfficeActive: false,
       libreOfficeExecutor: null,
@@ -4031,7 +4031,7 @@ export default {
             metaObj.sourceHost = (() => { try { return new URL(metaObj.sourceUrl).host } catch (e) { return '' } })()
           }
           const activeDoc = this.focusedPane === 'right' ? this.activeFileRight : this.activeFileLeft
-          metaObj.docFileName = activeDoc && this.isWpsFile && this.isWpsFile(activeDoc) ? (activeDoc.name || '') : ''
+          metaObj.docFileName = activeDoc && this.isEditorOpenableFile && this.isEditorOpenableFile(activeDoc) ? (activeDoc.name || '') : ''
           metaObj.docSide = this.focusedPane || 'left'
         } catch (e) {
           // ignore
@@ -4800,8 +4800,8 @@ export default {
 
       return supportedTypes.includes(type)
     },
-    isWpsFile(file) {
-      // 判断是否为「文档编辑器可打开」的 Office 类文件（历史命名，#79 记改名债）
+    isEditorOpenableFile(file) {
+      // 判断是否为「文档编辑器可打开」的 Office 类文件
       if (!file || file.tabType === 'web' || file.tabType === 'markdown' || !file.fileType) return false
 
       const type = file.fileType.toLowerCase()
@@ -4841,7 +4841,7 @@ export default {
     // (libreOfficePreferred). On web/h5 or when unavailable, returns false and
     // the file falls through to FilePreview (docx 本地只读渲染).
     useLibreEditor(file) {
-      return this.libreOfficePreferred && this.isWpsFile(file)
+      return this.libreOfficePreferred && this.isEditorOpenableFile(file)
     },
 
     // Check if file is a markdown tab (for AI artifacts or real .md files)
@@ -5042,7 +5042,7 @@ export default {
         candidate = this.activeFileLeft || this.activeFileRight || null
       }
       if (!candidate) return null
-      if (typeof this.isWpsFile === 'function' && !this.isWpsFile(candidate)) {
+      if (typeof this.isEditorOpenableFile === 'function' && !this.isEditorOpenableFile(candidate)) {
         return null
       }
       return candidate
@@ -5240,19 +5240,19 @@ export default {
         }
         // AI Agent 请求打开文件
         else if (action.action === 'wps_open_file') {
-            this.handleWpsOpenFile(action)
+            this.handleEditorOpenFile(action)
         }
         // AI Agent 请求重新加载文件（用于后端修改文件后刷新 WPS）
         else if (action.action === 'wps_reload_file') {
-            this.handleWpsReloadFile(action)
+            this.handleEditorReloadFile(action)
         }
-        // AI Agent 请求执行编辑器命令（事件名沿用 wps_command，#79 记改名债）
+        // AI Agent 请求执行编辑器命令（事件名沿用 wps_command，前后端契约；双轨迁移见 docs/AI_ARCHITECTURE.md Phase 3）
         else if (action.tool === 'wps_command') {
             // 特殊处理 wps_open_file_sync 命令（新建文件流式写入）
             if (action.action === 'wps_open_file_sync') {
-                this.handleWpsOpenFileSync(action)
+                this.handleEditorOpenFileSync(action)
             } else {
-                this.handleWpsCommand(action)
+                this.handleEditorCommand(action)
             }
         }
         // 后端流式写入数据（wps_start_stream 工具）：缓冲后经 LibreOffice 执行器落字
@@ -5298,14 +5298,14 @@ export default {
      * 处理 AI Agent 的同步打开文件请求 (用于流式写入)
      * 打开文件，等待内置 LibreOffice 编辑器就绪后返回结果给后端（#79）
      */
-    async handleWpsOpenFileSync(action) {
+    async handleEditorOpenFileSync(action) {
         console.log('[ProjectOverview] Open File Sync:', action)
         const { params, requestId, conversationId } = action
 
         try {
             if (!params || !params.fileId) {
                 console.error('[ProjectOverview] No fileId in wps_open_file_sync')
-                await sendWpsResult(conversationId, requestId, false, null, '缺少文件ID')
+                await sendEditorResult(conversationId, requestId, false, null, '缺少文件ID')
                 return
             }
 
@@ -5318,7 +5318,7 @@ export default {
             const file = await getFileDetail(this.projectId, params.fileId)
             if (!file) {
                 console.error('[ProjectOverview] File not found:', params.fileId)
-                await sendWpsResult(conversationId, requestId, false, null, '文件不存在')
+                await sendEditorResult(conversationId, requestId, false, null, '文件不存在')
                 return
             }
 
@@ -5340,7 +5340,7 @@ export default {
 
             if (!editorReady) {
                 console.error('[ProjectOverview] LibreOffice editor not ready after timeout')
-                await sendWpsResult(conversationId, requestId, false, null, '编辑器未就绪')
+                await sendEditorResult(conversationId, requestId, false, null, '编辑器未就绪')
                 return
             }
 
@@ -5352,7 +5352,7 @@ export default {
 
             // 6. 返回成功给后端
             console.log('[ProjectOverview] Open File Sync success')
-            await sendWpsResult(conversationId, requestId, true, {
+            await sendEditorResult(conversationId, requestId, true, {
                 fileId: file.id,
                 fileName: file.name,
                 status: 'ready'
@@ -5361,15 +5361,15 @@ export default {
             uni.showToast({ title: `已打开: ${file.name}`, icon: 'none' })
 
         } catch (e) {
-            console.error('[ProjectOverview] handleWpsOpenFileSync error:', e)
-            await sendWpsResult(conversationId, requestId, false, null, e.message)
+            console.error('[ProjectOverview] handleEditorOpenFileSync error:', e)
+            await sendEditorResult(conversationId, requestId, false, null, e.message)
         }
     },
 
     /**
      * 处理 AI Agent 的打开文件请求
      */
-    async handleWpsOpenFile(action) {
+    async handleEditorOpenFile(action) {
         console.log('[ProjectOverview] WPS Open File:', action)
         try {
             const fileId = action.fileId
@@ -5393,7 +5393,7 @@ export default {
             uni.showToast({ title: `已打开: ${file.name}`, icon: 'none' })
 
         } catch (e) {
-            console.error('[ProjectOverview] handleWpsOpenFile error:', e)
+            console.error('[ProjectOverview] handleEditorOpenFile error:', e)
             uni.showToast({ title: '打开文件失败', icon: 'none' })
         }
     },
@@ -5407,7 +5407,7 @@ export default {
      * 2. 前端获取最新文件信息，更新 leftFiles/rightFiles 中的 wpsFileId
      * 3. LibreOfficeEditor 以文件为 key/prop，检测到变化后重新加载
      */
-    async handleWpsReloadFile(action) {
+    async handleEditorReloadFile(action) {
         console.log('[ProjectOverview] WPS Reload File:', action)
         try {
             const fileId = action.fileId
@@ -5472,16 +5472,16 @@ export default {
             }
 
         } catch (e) {
-            console.error('[ProjectOverview] handleWpsReloadFile error:', e)
+            console.error('[ProjectOverview] handleEditorReloadFile error:', e)
             uni.showToast({ title: '刷新文件失败', icon: 'none' })
         }
     },
 
     /**
      * 处理 AI Agent 的编辑器命令请求（#79：LibreOffice 是唯一执行器；
-     * 方法名与 SSE 结果契约 sendWpsResult 沿用历史命名，记改名债）
+     * 结果经 sendEditorResult 回传后端，路由 /wps-result 为前后端契约）
      */
-    async handleWpsCommand(action) {
+    async handleEditorCommand(action) {
         console.log('[ProjectOverview] ========== Editor Command Start ==========')
         console.log('[ProjectOverview] Editor Command:', JSON.stringify(action))
 
@@ -5490,23 +5490,23 @@ export default {
 
         if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
             console.error('[ProjectOverview] No embedded editor available')
-            await sendWpsResult(conversationId, requestId, false, null, '编辑器未就绪，请先打开一个文档')
+            await sendEditorResult(conversationId, requestId, false, null, '编辑器未就绪，请先打开一个文档')
             return
         }
 
         try {
             const result = await this.libreOfficeExecutor.executeCommand(commandAction, params)
             const successFlag = result && result.success !== false
-            await sendWpsResult(conversationId, requestId, successFlag, result, (result && result.error) || null)
+            await sendEditorResult(conversationId, requestId, successFlag, result, (result && result.error) || null)
         } catch (e) {
             console.error('[ProjectOverview] LibreOffice command error:', e)
-            await sendWpsResult(conversationId, requestId, false, null, e.message)
+            await sendEditorResult(conversationId, requestId, false, null, e.message)
         }
         console.log('[ProjectOverview] ========== Editor Command End ==========')
     },
 
     // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
-    // commands route to it (see handleWpsCommand). Used by both the inline
+    // commands route to it (see handleEditorCommand). Used by both the inline
     // default editor (Track B) and the legacy ⌘⇧O overlay.
     onLibreReady(executor) {
         this.libreOfficeExecutor = executor

@@ -2,7 +2,7 @@
 //
 // Epic #43 (LibreOffice migration), WPS removal #79. The agent command pipeline is:
 //   backend SSE `client_action` -> useAgentStream -> ChatInterface emits
-//   -> project-overview.vue handleWpsCommand -> executor.executeCommand(action, params)
+//   -> project-overview.vue handleEditorCommand -> executor.executeCommand(action, params)
 //   -> POST /api/ai/agent/wps-result
 //
 // RFC v2's thesis (docs/LIBREOFFICE_MIGRATION_PLAN.md) was that the backend agent

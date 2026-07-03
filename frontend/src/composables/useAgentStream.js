@@ -365,8 +365,8 @@ export function useAgentStream() {
             // can feed the embedded LibreOffice editor (buffered insert).
             try {
                 // Mark current bubble as doc-streaming to suppress chat duplication
-                if (currentAssistantBubble.value && !currentAssistantBubble.value.isWpsStreaming) {
-                    currentAssistantBubble.value.isWpsStreaming = true
+                if (currentAssistantBubble.value && !currentAssistantBubble.value.isEditorStreaming) {
+                    currentAssistantBubble.value.isEditorStreaming = true
                     // Add a placeholder message if content is empty
                     if (!currentAssistantBubble.value.content) {
                         currentAssistantBubble.value.content = '*(Streaming content to document...)*'
@@ -723,8 +723,8 @@ export function useAgentStream() {
             // Untagged text -> Main Content
             if (!bubble.content && !text.trim()) return
 
-            // [Modified] If we are streaming to WPS, suppress untagged content from chat bubble
-            if (bubble.isWpsStreaming) {
+            // [Modified] If we are streaming to the document editor, suppress untagged content from chat bubble
+            if (bubble.isEditorStreaming) {
                 return
             }
 

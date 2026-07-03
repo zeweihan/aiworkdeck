@@ -1,6 +1,6 @@
 package com.checkba.service.ai.tools;
 
-import com.checkba.service.ai.WpsActionService;
+import com.checkba.service.ai.EditorBridgeService;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -21,7 +21,7 @@ import java.util.Map;
  * 
  * 技术说明：
  * - 通过 SSE client_action 发送命令到前端
- * - 前端 useWpsBridge.js 调用 WPS WebOffice SDK 执行操作
+ * - 前端 useEditorBridge.js 分发到嵌入式 LibreOffice 执行器执行操作
  * - PPT 不支持原生修订模式，使用视觉标记替代：
  *   - 新增内容：用【】括起来
  *   - 删除内容：用【删除：xxx】标记
@@ -31,7 +31,7 @@ import java.util.Map;
 @Slf4j
 public class PptxEditTools implements AgentToolComponent {
 
-    private final WpsActionService wpsActionService;
+    private final EditorBridgeService editorBridgeService;
 
     // ==================== 信息获取工具 ====================
 
@@ -39,7 +39,7 @@ public class PptxEditTools implements AgentToolComponent {
     public String pptx_get_presentation_info() {
         log.info("Tool: pptx_get_presentation_info called");
         try {
-            return wpsActionService.executeWpsCommand("ppt_get_presentation_info", null);
+            return editorBridgeService.executeEditorCommand("ppt_get_presentation_info", null);
         } catch (Exception e) {
             log.error("Failed to get presentation info", e);
             return "{\"error\": \"" + e.getMessage() + "\"}";
@@ -55,7 +55,7 @@ public class PptxEditTools implements AgentToolComponent {
             if (slideIndex == null || slideIndex < 1) {
                 return "{\"error\": \"幻灯片页码必须大于 0\"}";
             }
-            return wpsActionService.executeWpsCommand("ppt_get_slide_content", 
+            return editorBridgeService.executeEditorCommand("ppt_get_slide_content", 
                     Map.of("slideIndex", slideIndex));
         } catch (Exception e) {
             log.error("Failed to get slide content", e);
@@ -67,7 +67,7 @@ public class PptxEditTools implements AgentToolComponent {
     public String pptx_get_selection() {
         log.info("Tool: pptx_get_selection called");
         try {
-            return wpsActionService.executeWpsCommand("ppt_get_selection", null);
+            return editorBridgeService.executeEditorCommand("ppt_get_selection", null);
         } catch (Exception e) {
             log.error("Failed to get PPT selection", e);
             return "{\"error\": \"" + e.getMessage() + "\"}";
@@ -94,7 +94,7 @@ public class PptxEditTools implements AgentToolComponent {
                 return "{\"error\": \"新文本内容不能为空\"}";
             }
             
-            return wpsActionService.executeWpsCommand("ppt_modify_slide_text", 
+            return editorBridgeService.executeEditorCommand("ppt_modify_slide_text", 
                     Map.of(
                             "slideIndex", slideIndex,
                             "shapeIndex", shapeIndex,
@@ -132,7 +132,7 @@ public class PptxEditTools implements AgentToolComponent {
                 pos = "end";
             }
             
-            return wpsActionService.executeWpsCommand("ppt_insert_text", 
+            return editorBridgeService.executeEditorCommand("ppt_insert_text", 
                     Map.of(
                             "slideIndex", slideIndex,
                             "shapeIndex", shapeIndex,
@@ -163,7 +163,7 @@ public class PptxEditTools implements AgentToolComponent {
                 return "{\"error\": \"要删除的文本不能为空\"}";
             }
             
-            return wpsActionService.executeWpsCommand("ppt_mark_delete_text", 
+            return editorBridgeService.executeEditorCommand("ppt_mark_delete_text", 
                     Map.of(
                             "slideIndex", slideIndex,
                             "shapeIndex", shapeIndex,
@@ -181,7 +181,7 @@ public class PptxEditTools implements AgentToolComponent {
     public String pptx_save() {
         log.info("Tool: pptx_save called");
         try {
-            return wpsActionService.executeWpsCommand("ppt_save", null);
+            return editorBridgeService.executeEditorCommand("ppt_save", null);
         } catch (Exception e) {
             log.error("Failed to save PPT", e);
             return "{\"error\": \"" + e.getMessage() + "\"}";

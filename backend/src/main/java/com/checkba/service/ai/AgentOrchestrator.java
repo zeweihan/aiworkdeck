@@ -47,7 +47,7 @@ public class AgentOrchestrator {
     private final XmlToolCallParser xmlToolCallParser;
     private final com.checkba.service.ai.memory.MemoryPipelineService memoryPipelineService;
     private final com.checkba.service.ProjectFileService projectFileService;
-    private final WpsActionService wpsActionService;
+    private final EditorBridgeService editorBridgeService;
     private final ConversationFileChangeService conversationFileChangeService;
 
     // ==================== 取消功能相关方法 ====================
@@ -265,8 +265,8 @@ public class AgentOrchestrator {
             return;
         }
         
-        // 设置当前会话 ID 到 WpsActionService，以便 WPS 工具可以发送 SSE 事件
-        wpsActionService.setCurrentConversationId(conversationId);
+        // 设置当前会话 ID 到 EditorBridgeService，以便文档编辑工具可以发送 SSE 事件
+        editorBridgeService.setCurrentConversationId(conversationId);
 
         AgentStreamHandler handler = new AgentStreamHandler(
             sseEmitterService, 
@@ -286,9 +286,9 @@ public class AgentOrchestrator {
             }
         });
 
-        // WPS Real-time Streaming Interception (Filtered)
+        // 编辑器实时流式写入拦截（事件名沿用 wps_stream_data，前后端契约）
         handler.setOnWpsStream(token -> {
-            if (wpsActionService.isStreamingMode(conversationId)) {
+            if (editorBridgeService.isStreamingMode(conversationId)) {
                 sseEmitterService.send(conversationId, "wps_stream_data", java.util.Map.of("content", token));
             }
         });
@@ -297,7 +297,7 @@ public class AgentOrchestrator {
         handler.setOnComplete(response -> {
           try {
             // Unconditionally turn off streaming mode when generation ends
-            wpsActionService.setStreamingMode(conversationId, false);
+            editorBridgeService.setStreamingMode(conversationId, false);
 
             // 检查是否被取消
             if (isCancelled(conversationId)) {
@@ -307,7 +307,7 @@ public class AgentOrchestrator {
             }
             
             // 确保在回调线程中也能访问 conversationId（解决 ThreadLocal 线程隔离问题）
-            wpsActionService.setCurrentConversationId(conversationId);
+            editorBridgeService.setCurrentConversationId(conversationId);
             
             dev.langchain4j.data.message.AiMessage aiMessage = response.content();
             messages.add(aiMessage);
