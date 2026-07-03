@@ -40,7 +40,7 @@ public class FileTools implements AgentToolComponent {
 
     private final ProjectFileService projectFileService;
     private final ProjectFileRepository projectFileRepository;
-    private final com.checkba.service.ai.WpsActionService wpsActionService;
+    private final com.checkba.service.ai.EditorBridgeService editorBridgeService;
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
     private static final Long AGENT_USER_ID = 10001L;
 
@@ -257,7 +257,7 @@ public class FileTools implements AgentToolComponent {
                 );
                 
                 // 通知前端刷新文件列表
-                wpsActionService.sendRefreshFilesAction();
+                editorBridgeService.sendRefreshFilesAction();
                 
                 return String.format("{\"status\":\"success\", \"db_id\":%d, \"wps_file_id\":\"%s\", \"file_path\":\"%s\"}", pf.getId(), wpsId, targetPath.toAbsolutePath().toString().replace("\\", "\\\\"));
             } catch (Exception e) {
@@ -308,7 +308,7 @@ public class FileTools implements AgentToolComponent {
             }
             
             // 通知前端刷新文件列表
-            wpsActionService.sendRefreshFilesAction();
+            editorBridgeService.sendRefreshFilesAction();
             
             return report.toString();
         } catch (Exception e) {

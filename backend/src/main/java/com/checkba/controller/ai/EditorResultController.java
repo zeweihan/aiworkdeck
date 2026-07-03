@@ -1,55 +1,55 @@
 package com.checkba.controller.ai;
 
-import com.checkba.service.ai.WpsActionService;
+import com.checkba.service.ai.EditorBridgeService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 /**
- * WPS 操作结果接收控制器
+ * 编辑器操作结果接收控制器
  * 
- * 接收前端执行 WPS 操作后的结果回调
+ * 接收前端执行编辑器操作后的结果回调（路由 /wps-result 为前后端契约，保持旧名）
  */
 @RestController
 @RequestMapping("/api/ai/agent")
 @CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 @Slf4j
-public class WpsResultController {
+public class EditorResultController {
 
-    private final WpsActionService wpsActionService;
+    private final EditorBridgeService editorBridgeService;
 
     /**
-     * 接收 WPS 操作结果
+     * 接收编辑器操作结果
      * 
-     * 前端执行完 WPS 操作后，调用此接口返回结果
+     * 前端执行完编辑器操作后，调用此接口返回结果
      */
     @PostMapping("/wps-result")
-    public WpsResultResponse receiveWpsResult(@RequestBody WpsResultPayload payload) {
-        log.info("Received WPS result: requestId={}, success={}", payload.getRequestId(), payload.isSuccess());
+    public EditorResultResponse receiveEditorResult(@RequestBody EditorResultPayload payload) {
+        log.info("Received editor result: requestId={}, success={}", payload.getRequestId(), payload.isSuccess());
         
         try {
-            wpsActionService.completeWpsAction(
+            editorBridgeService.completeEditorAction(
                     payload.getRequestId(),
                     payload.isSuccess(),
                     payload.getData(),
                     payload.getError()
             );
             
-            return new WpsResultResponse(true, "Result received");
+            return new EditorResultResponse(true, "Result received");
             
         } catch (Exception e) {
-            log.error("Failed to process WPS result", e);
-            return new WpsResultResponse(false, e.getMessage());
+            log.error("Failed to process editor result", e);
+            return new EditorResultResponse(false, e.getMessage());
         }
     }
 
     /**
-     * WPS 结果请求体
+     * 编辑器结果请求体
      */
     @Data
-    public static class WpsResultPayload {
+    public static class EditorResultPayload {
         /**
          * 请求 ID（与 SSE 发送的 requestId 对应）
          */
@@ -77,10 +77,10 @@ public class WpsResultController {
     }
 
     /**
-     * WPS 结果响应
+     * 编辑器结果响应
      */
     @Data
-    public static class WpsResultResponse {
+    public static class EditorResultResponse {
         private final boolean received;
         private final String message;
     }

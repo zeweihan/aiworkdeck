@@ -8,12 +8,12 @@ import org.junit.jupiter.params.provider.CsvSource;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * WPS 替换意图识别测试
+ * 文档替换意图识别测试
  *
  * 测试 AI 助手能否正确理解用户的替换意图，并选择合适的工具。
  * 这不是测试实际的工具执行，而是测试工具选择逻辑。
  */
-class WpsReplaceIntentTest {
+class DocumentReplaceIntentTest {
 
     /**
      * 工具类型枚举

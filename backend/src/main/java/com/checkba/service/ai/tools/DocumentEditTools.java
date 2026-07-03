@@ -4,7 +4,7 @@ import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ai.SseEmitterService;
-import com.checkba.service.ai.WpsActionService;
+import com.checkba.service.ai.EditorBridgeService;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -15,26 +15,28 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * WPS 文档操作工具集
- * 
- * 提供 Agent 操作 WPS 文档的能力：
+ * 文档编辑工具集（嵌入式 LibreOffice 编辑器）
+ *
+ * 提供 Agent 操作文档的能力：
  * 1. 列出项目文档
  * 2. 打开文档进行编辑
  * 3. 获取选区、查找替换、段落操作等
  * 4. 搜索相关文档
- * 
+ *
  * 技术说明：
  * - wps_open_file 和 wps_list_project_files 可以直接在后端完成
  * - 其他操作需要通过 SSE client_action 发送到前端执行，然后等待结果返回
+ * - 历史沿革：原名 WpsTools（WPS WebOffice 时代）；编辑器已全面迁移到 LibreOffice，
+ *   工具名 wps_* 与 SSE 事件名暂保留旧名（前后端契约），见 docs/ai_agent_dev.md §2.2
  */
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class WpsTools implements AgentToolComponent {
+public class DocumentEditTools implements AgentToolComponent {
 
     private final ProjectFileService projectFileService;
     private final ProjectFileRepository projectFileRepository;
-    private final WpsActionService wpsActionService;
+    private final EditorBridgeService editorBridgeService;
 
     // ==================== 文件管理工具 ====================
 
@@ -85,7 +87,7 @@ public class WpsTools implements AgentToolComponent {
             }
             
             // 通过 SSE 发送打开文件指令到前端
-            wpsActionService.sendOpenFileAction(file);
+            editorBridgeService.sendOpenFileAction(file);
             
             return String.format("已发送打开文件指令。文件名: %s, 类型: %s。请等待文档加载完成后再进行后续操作。", 
                     file.getName(), file.getFileType());
@@ -111,7 +113,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_start_stream called fileId={}, fileName={}, projectId={}", fileId, fileName, projectId);
         try {
-            String conversationId = wpsActionService.getCurrentConversationId();
+            String conversationId = editorBridgeService.getCurrentConversationId();
             if (conversationId == null) {
                 return "Error: 无法获取当前会话上下文";
             }
@@ -178,7 +180,7 @@ public class WpsTools implements AgentToolComponent {
                 log.info("Created new docx file for streaming: id={}, name={}", file.getId(), file.getName());
                 
                 // 通知前端刷新文件列表
-                wpsActionService.sendRefreshFilesAction();
+                editorBridgeService.sendRefreshFilesAction();
             } else {
                 file = projectFileService.getFile(fileId);
                 if (file == null) {
@@ -187,7 +189,7 @@ public class WpsTools implements AgentToolComponent {
             }
 
             // 2. 同步打开文件 (Wait for Ready)
-            String resultJson = wpsActionService.executeWpsCommand("wps_open_file_sync", java.util.Map.of(
+            String resultJson = editorBridgeService.executeEditorCommand("wps_open_file_sync", java.util.Map.of(
                     "fileId", file.getId(),
                     "fileName", file.getName(),
                     "fileType", file.getFileType(),
@@ -200,7 +202,7 @@ public class WpsTools implements AgentToolComponent {
             }
 
             // 3. 开启流式模式
-            wpsActionService.setStreamingMode(conversationId, true);
+            editorBridgeService.setStreamingMode(conversationId, true);
 
             return "WPS 流式写入模式已激活，文件: " + file.getName() + "。请立即开始生成文档内容。**务必使用 Markdown 格式 (H1=#, H2=##) 输出内容。**";
         } catch (Exception e) {
@@ -215,7 +217,7 @@ public class WpsTools implements AgentToolComponent {
     public String wps_get_selection() {
         log.info("Tool: wps_get_selection called");
         try {
-            return wpsActionService.executeWpsCommand("get_selection", null);
+            return editorBridgeService.executeEditorCommand("get_selection", null);
         } catch (Exception e) {
             log.error("Failed to get selection", e);
             return "Error: " + e.getMessage();
@@ -229,7 +231,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_goto called type={}, target={}", type, target);
         try {
-            return wpsActionService.executeWpsCommand("goto", 
+            return editorBridgeService.executeEditorCommand("goto", 
                     java.util.Map.of("type", type, "target", target != null ? target : ""));
         } catch (Exception e) {
             log.error("Failed to goto position", e);
@@ -244,7 +246,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_set_selection called start={}, end={}", start, end);
         try {
-            return wpsActionService.executeWpsCommand("set_selection", 
+            return editorBridgeService.executeEditorCommand("set_selection", 
                     java.util.Map.of("start", start, "end", end));
         } catch (Exception e) {
             log.error("Failed to set selection", e);
@@ -263,7 +265,7 @@ public class WpsTools implements AgentToolComponent {
         log.info("Tool: wps_find_text called keyword={}", keyword);
         try {
             // Updated to call 'find_text_locations' which returns detailed positions
-            return wpsActionService.executeWpsCommand("find_text_locations", 
+            return editorBridgeService.executeEditorCommand("find_text_locations", 
                     java.util.Map.of("keyword", keyword, "matchCase", matchCase != null ? matchCase : false));
         } catch (Exception e) {
             log.error("Failed to find text", e);
@@ -280,7 +282,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_find_replace called find={}, replace={}", findText, replaceText);
         try {
-            return wpsActionService.executeWpsCommand("find_replace", 
+            return editorBridgeService.executeEditorCommand("find_replace", 
                     java.util.Map.of(
                             "findText", findText, 
                             "replaceText", replaceText, 
@@ -305,7 +307,7 @@ public class WpsTools implements AgentToolComponent {
             if (matchIndex == null || matchIndex < 1) {
                 return "Error: matchIndex 必须是从 1 开始的正整数";
             }
-            return wpsActionService.executeWpsCommand("replace_nth_match", 
+            return editorBridgeService.executeEditorCommand("replace_nth_match", 
                     java.util.Map.of(
                             "findText", findText, 
                             "replaceText", replaceText, 
@@ -327,7 +329,7 @@ public class WpsTools implements AgentToolComponent {
             if (matchIndex == null || matchIndex < 1) {
                 return "Error: matchIndex 必须是从 1 开始的正整数";
             }
-            return wpsActionService.executeWpsCommand("delete_match", 
+            return editorBridgeService.executeEditorCommand("delete_match", 
                     java.util.Map.of(
                             "findText", findText, 
                             "matchIndex", matchIndex
@@ -345,7 +347,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_delete_text called text={}, all={}", text, deleteAll);
         try {
-            return wpsActionService.executeWpsCommand("delete_text", 
+            return editorBridgeService.executeEditorCommand("delete_text", 
                     java.util.Map.of(
                             "text", text, 
                             "deleteAll", deleteAll != null ? deleteAll : true
@@ -362,7 +364,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_replace_selection called text length={}", text.length());
         try {
-            return wpsActionService.executeWpsCommand("replace_selection", 
+            return editorBridgeService.executeEditorCommand("replace_selection", 
                     java.util.Map.of("text", text));
         } catch (Exception e) {
             log.error("Failed to replace selection", e);
@@ -378,7 +380,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_insert_at_cursor called, text length={}", text.length());
         try {
-            return wpsActionService.executeWpsCommand("insert_at_cursor", 
+            return editorBridgeService.executeEditorCommand("insert_at_cursor", 
                     java.util.Map.of("text", text));
         } catch (Exception e) {
             log.error("Failed to insert at cursor", e);
@@ -392,7 +394,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_get_paragraph called index={}", paragraphIndex);
         try {
-            return wpsActionService.executeWpsCommand("get_paragraph", 
+            return editorBridgeService.executeEditorCommand("get_paragraph", 
                     java.util.Map.of("index", paragraphIndex));
         } catch (Exception e) {
             log.error("Failed to get paragraph", e);
@@ -408,7 +410,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_modify_paragraph called index={}, new text length={}", paragraphIndex, newText.length());
         try {
-            return wpsActionService.executeWpsCommand("modify_paragraph", 
+            return editorBridgeService.executeEditorCommand("modify_paragraph", 
                     java.util.Map.of("index", paragraphIndex, "newText", newText));
         } catch (Exception e) {
             log.error("Failed to modify paragraph", e);
@@ -422,7 +424,7 @@ public class WpsTools implements AgentToolComponent {
     public String wps_get_outline() {
         log.info("Tool: wps_get_outline called");
         try {
-            return wpsActionService.executeWpsCommand("get_outline", null);
+            return editorBridgeService.executeEditorCommand("get_outline", null);
         } catch (Exception e) {
             log.error("Failed to get outline", e);
             return "Error: " + e.getMessage();
@@ -436,7 +438,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_insert_under_heading called heading={}", headingText);
         try {
-            return wpsActionService.executeWpsCommand("insert_under_heading", 
+            return editorBridgeService.executeEditorCommand("insert_under_heading", 
                     java.util.Map.of("headingText", headingText, "content", content));
         } catch (Exception e) {
             log.error("Failed to insert under heading", e);
@@ -514,7 +516,7 @@ public class WpsTools implements AgentToolComponent {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             if (startParagraph != null) params.put("startParagraph", startParagraph);
             if (maxParagraphs != null) params.put("maxParagraphs", maxParagraphs);
-            return wpsActionService.executeWpsCommand("get_document_text", params);
+            return editorBridgeService.executeEditorCommand("get_document_text", params);
         } catch (Exception e) {
             log.error("Failed to get document text", e);
             return "Error: " + e.getMessage();
@@ -525,7 +527,7 @@ public class WpsTools implements AgentToolComponent {
     public String wps_get_cursor_context() {
         log.info("Tool: wps_get_cursor_context called");
         try {
-            return wpsActionService.executeWpsCommand("get_cursor_context", null);
+            return editorBridgeService.executeEditorCommand("get_cursor_context", null);
         } catch (Exception e) {
             log.error("Failed to get cursor context", e);
             return "Error: " + e.getMessage();
@@ -539,7 +541,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_select_anchor called anchor={}", anchorId);
         try {
-            return wpsActionService.executeWpsCommand("set_selection",
+            return editorBridgeService.executeEditorCommand("set_selection",
                     java.util.Map.of("anchor", anchorId != null ? anchorId : ""));
         } catch (Exception e) {
             log.error("Failed to select anchor", e);
@@ -553,7 +555,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_select_paragraph called index={}", index);
         try {
-            return wpsActionService.executeWpsCommand("select_paragraph",
+            return editorBridgeService.executeEditorCommand("select_paragraph",
                     java.util.Map.of("index", index != null ? index : 0));
         } catch (Exception e) {
             log.error("Failed to select paragraph", e);
@@ -567,7 +569,7 @@ public class WpsTools implements AgentToolComponent {
     ) {
         log.info("Tool: wps_collapse_cursor called to={}", to);
         try {
-            return wpsActionService.executeWpsCommand("collapse_selection",
+            return editorBridgeService.executeEditorCommand("collapse_selection",
                     java.util.Map.of("to", to != null ? to : "end"));
         } catch (Exception e) {
             log.error("Failed to collapse cursor", e);
@@ -586,7 +588,7 @@ public class WpsTools implements AgentToolComponent {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             params.put("anchor", anchorId != null ? anchorId : "");
             params.put("newText", newText != null ? newText : "");
-            return wpsActionService.executeWpsCommand("replace_at_position", params);
+            return editorBridgeService.executeEditorCommand("replace_at_position", params);
         } catch (Exception e) {
             log.error("Failed to replace at anchor", e);
             return "Error: " + e.getMessage();
@@ -597,7 +599,7 @@ public class WpsTools implements AgentToolComponent {
     public String wps_delete_selection() {
         log.info("Tool: wps_delete_selection called");
         try {
-            return wpsActionService.executeWpsCommand("delete_selection", null);
+            return editorBridgeService.executeEditorCommand("delete_selection", null);
         } catch (Exception e) {
             log.error("Failed to delete selection", e);
             return "Error: " + e.getMessage();
@@ -627,7 +629,7 @@ public class WpsTools implements AgentToolComponent {
             if (color != null && !color.isEmpty()) params.put("color", color);
             if (fontSize != null) params.put("fontSize", fontSize);
             if (fontName != null && !fontName.isEmpty()) params.put("fontName", fontName);
-            return wpsActionService.executeWpsCommand("format_selection", params);
+            return editorBridgeService.executeEditorCommand("format_selection", params);
         } catch (Exception e) {
             log.error("Failed to format selection", e);
             return "Error: " + e.getMessage();
@@ -645,7 +647,7 @@ public class WpsTools implements AgentToolComponent {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             if (alignment != null && !alignment.isEmpty()) params.put("alignment", alignment);
             if (headingLevel != null) params.put("headingLevel", headingLevel);
-            return wpsActionService.executeWpsCommand("set_paragraph_format", params);
+            return editorBridgeService.executeEditorCommand("set_paragraph_format", params);
         } catch (Exception e) {
             log.error("Failed to set paragraph format", e);
             return "Error: " + e.getMessage();
@@ -660,7 +662,7 @@ public class WpsTools implements AgentToolComponent {
         try {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             if (steps != null) params.put("steps", steps);
-            return wpsActionService.executeWpsCommand("undo", params);
+            return editorBridgeService.executeEditorCommand("undo", params);
         } catch (Exception e) {
             log.error("Failed to undo", e);
             return "Error: " + e.getMessage();
@@ -675,7 +677,7 @@ public class WpsTools implements AgentToolComponent {
         try {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             if (steps != null) params.put("steps", steps);
-            return wpsActionService.executeWpsCommand("redo", params);
+            return editorBridgeService.executeEditorCommand("redo", params);
         } catch (Exception e) {
             log.error("Failed to redo", e);
             return "Error: " + e.getMessage();
@@ -688,7 +690,7 @@ public class WpsTools implements AgentToolComponent {
     public String wps_debug_revisions() {
         log.info("Tool: wps_debug_revisions called");
         try {
-            return wpsActionService.executeWpsCommand("debug_revisions", null);
+            return editorBridgeService.executeEditorCommand("debug_revisions", null);
         } catch (Exception e) {
             log.error("Failed to debug revisions", e);
             return "Error: " + e.getMessage();
