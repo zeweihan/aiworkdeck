@@ -16,7 +16,8 @@ import java.util.Map;
  * Legal Tools Set for the Agent.
  * Includes:
  * 1. File Operations (Read Document) - using Tika or simple read
- * 2. PKULaw MCP Integration - using standard MCP SDK
+ * 2. PKULaw MCP Integration - 只做法律语义封装，协议细节在 service/ai/mcp 包
+ *    （服务器列表见配置 mcp.servers，传输实现见 McpProvider）
  */
 @Component
 @RequiredArgsConstructor
@@ -70,7 +71,7 @@ public class LegalTools implements AgentToolComponent {
     }
 
 
-    // --- PKULaw MCP Integration (using standard MCP SDK) ---
+    // --- PKULaw MCP Integration（服务器名对应配置 mcp.servers[].name）---
 
     @ToolMeta(displayName = "语义搜索法规", category = "legal")
     @Tool("Search for laws and regulations using PKULaw MCP Semantic Search. Use this for general legal questions. Returns a list of relevant articles.")
