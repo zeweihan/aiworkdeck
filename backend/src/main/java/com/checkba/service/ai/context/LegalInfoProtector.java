@@ -12,55 +12,71 @@ import java.util.regex.Pattern;
 /**
  * 法律信息保护器
  * 识别并保护法律关键信息，确保在上下文压缩时不被丢失
+ *
+ * 保护正则外置于资源文件 legal/protected-patterns.yml，此类只负责加载与匹配。
  */
 @Service
 public class LegalInfoProtector {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(LegalInfoProtector.class);
 
-    // 需要保护的法律信息类型及其正则模式
-    private static final List<ProtectedPattern> PROTECTED_PATTERNS = Arrays.asList(
-            // 法律法规名称及条款
-            new ProtectedPattern("《[^》]+》(?:第[一二三四五六七八九十百千万]+条)?(?:第[一二三四五六七八九十]+款)?", 
-                    ProtectionLevel.CRITICAL, "法律引用"),
-            
-            // 日期（多种格式）
-            new ProtectedPattern("\\d{4}年\\d{1,2}月\\d{1,2}日", 
-                    ProtectionLevel.CRITICAL, "日期"),
-            new ProtectedPattern("\\d{4}-\\d{2}-\\d{2}", 
-                    ProtectionLevel.HIGH, "日期"),
-            
-            // 金额
-            new ProtectedPattern("[\\d,]+\\.?\\d*\\s*(万元|亿元|元|万|亿)", 
-                    ProtectionLevel.CRITICAL, "金额"),
-            new ProtectedPattern("人民币[\\d,]+\\.?\\d*", 
-                    ProtectionLevel.CRITICAL, "金额"),
-            
-            // 统一社会信用代码
-            new ProtectedPattern("统一社会信用代码[：:]?\\s*[0-9A-Z]{18}", 
-                    ProtectionLevel.HIGH, "信用代码"),
-            new ProtectedPattern("[0-9A-Z]{18}", 
-                    ProtectionLevel.MEDIUM, "信用代码"),
-            
-            // 当事人
-            new ProtectedPattern("(甲方|乙方|丙方|丁方|发行人|标的公司|上市公司|交易对方)[：:：]\\s*[^\\n,，。]+", 
-                    ProtectionLevel.CRITICAL, "当事人"),
-            
-            // 合同编号
-            new ProtectedPattern("(合同|协议|编号)[：:]\\s*[A-Za-z0-9\\-]+", 
-                    ProtectionLevel.HIGH, "合同编号"),
-            
-            // 股权比例
-            new ProtectedPattern("\\d+\\.?\\d*\\s*%", 
-                    ProtectionLevel.HIGH, "比例"),
-            
-            // 期限
-            new ProtectedPattern("\\d+\\s*(个月|年|日|天|工作日)", 
-                    ProtectionLevel.HIGH, "期限"),
-            
-            // 法院/仲裁机构
-            new ProtectedPattern("[\\u4e00-\\u9fa5]+(?:人民法院|仲裁委员会)", 
-                    ProtectionLevel.HIGH, "司法机构")
-    );
+    /** 保护正则配置资源路径（classpath） */
+    static final String PATTERNS_RESOURCE = "legal/protected-patterns.yml";
+
+    // 需要保护的法律信息类型及其正则模式（从资源文件加载）
+    private final List<ProtectedPattern> protectedPatterns;
+
+    // 独立提取器正则（从资源文件加载）
+    private final Pattern legalReferencePattern;
+    private final Pattern amountPattern;
+    private final Pattern datePattern;
+
+    public LegalInfoProtector() {
+        Map<String, Object> config = loadPatternConfig();
+
+        List<ProtectedPattern> patterns = new ArrayList<>();
+        Object rawPatterns = config.get("protected-patterns");
+        if (rawPatterns instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> entry) {
+                    String pattern = String.valueOf(entry.get("pattern"));
+                    ProtectionLevel level = ProtectionLevel.valueOf(String.valueOf(entry.get("level")));
+                    String type = String.valueOf(entry.get("type"));
+                    patterns.add(new ProtectedPattern(pattern, level, type));
+                }
+            }
+        }
+        if (patterns.isEmpty()) {
+            throw new IllegalStateException("No protected patterns loaded from " + PATTERNS_RESOURCE);
+        }
+        this.protectedPatterns = Collections.unmodifiableList(patterns);
+
+        Object rawExtractors = config.get("extractors");
+        if (!(rawExtractors instanceof Map<?, ?> extractors)) {
+            throw new IllegalStateException("No extractors section in " + PATTERNS_RESOURCE);
+        }
+        this.legalReferencePattern = Pattern.compile(String.valueOf(extractors.get("legal-reference")));
+        this.amountPattern = Pattern.compile(String.valueOf(extractors.get("amount")));
+        this.datePattern = Pattern.compile(String.valueOf(extractors.get("date")));
+
+        log.info("LegalInfoProtector loaded {} protected patterns from {}", protectedPatterns.size(), PATTERNS_RESOURCE);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> loadPatternConfig() {
+        try (java.io.InputStream in = LegalInfoProtector.class.getClassLoader()
+                .getResourceAsStream(PATTERNS_RESOURCE)) {
+            if (in == null) {
+                throw new IllegalStateException("Pattern resource not found on classpath: " + PATTERNS_RESOURCE);
+            }
+            Object loaded = new org.yaml.snakeyaml.Yaml().load(in);
+            if (!(loaded instanceof Map)) {
+                throw new IllegalStateException("Invalid pattern resource format: " + PATTERNS_RESOURCE);
+            }
+            return (Map<String, Object>) loaded;
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("Failed to load pattern resource: " + PATTERNS_RESOURCE, e);
+        }
+    }
 
     /**
      * 保护级别
@@ -146,7 +162,7 @@ public class LegalInfoProtector {
 
         List<ProtectedSegment> segments = new ArrayList<>();
 
-        for (ProtectedPattern pp : PROTECTED_PATTERNS) {
+        for (ProtectedPattern pp : protectedPatterns) {
             try {
                 Pattern pattern = Pattern.compile(pp.getPattern());
                 Matcher matcher = pattern.matcher(content);
@@ -321,8 +337,7 @@ public class LegalInfoProtector {
      */
     public List<String> extractLegalReferences(String content) {
         List<String> refs = new ArrayList<>();
-        Pattern pattern = Pattern.compile("《[^》]+》(?:第[一二三四五六七八九十百千万]+条)?");
-        Matcher matcher = pattern.matcher(content);
+        Matcher matcher = legalReferencePattern.matcher(content);
         while (matcher.find()) {
             String ref = matcher.group();
             if (!refs.contains(ref)) {
@@ -337,8 +352,7 @@ public class LegalInfoProtector {
      */
     public List<String> extractAmounts(String content) {
         List<String> amounts = new ArrayList<>();
-        Pattern pattern = Pattern.compile("[\\d,]+\\.?\\d*\\s*(万元|亿元|元)");
-        Matcher matcher = pattern.matcher(content);
+        Matcher matcher = amountPattern.matcher(content);
         while (matcher.find()) {
             amounts.add(matcher.group());
         }
@@ -350,8 +364,7 @@ public class LegalInfoProtector {
      */
     public List<String> extractDates(String content) {
         List<String> dates = new ArrayList<>();
-        Pattern pattern = Pattern.compile("\\d{4}年\\d{1,2}月\\d{1,2}日");
-        Matcher matcher = pattern.matcher(content);
+        Matcher matcher = datePattern.matcher(content);
         while (matcher.find()) {
             dates.add(matcher.group());
         }

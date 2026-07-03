@@ -1,5 +1,6 @@
 package com.checkba.service.ai.context;
 
+import com.checkba.config.AiContextProperties;
 import com.checkba.service.OcrService;
 import com.checkba.service.ocr.OcrResult;
 import org.slf4j.Logger;
@@ -20,7 +21,6 @@ public class FileContentExtractorService {
 
     private static final Logger log = LoggerFactory.getLogger(FileContentExtractorService.class);
 
-    private static final long MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
     private static final Set<String> ALLOWED_TEXT_EXTENSIONS = new HashSet<>(Arrays.asList(
             "java", "kt", "scala", "groovy", // JVM
             "js", "jsx", "ts", "tsx", "vue", "svelte", // Frontend
@@ -28,16 +28,17 @@ public class FileContentExtractorService {
             "xml", "yml", "yaml", "json", "properties", "toml", // Config
             "md", "txt", "csv", "sql", "sh", "bat", "dockerfile", ".gitignore", ".env" // Misc
     ));
-    
-    // 支持 OCR 的文件扩展名（图片和 PDF）
-    private static final Set<String> OCR_EXTENSIONS = new HashSet<>(Arrays.asList(
-            "jpg", "jpeg", "png", "gif", "bmp", "webp", "pdf"
-    ));
 
     private final OcrService ocrService;
+    private final AiContextProperties contextProperties;
 
-    public FileContentExtractorService(OcrService ocrService) {
+    public FileContentExtractorService(OcrService ocrService, AiContextProperties contextProperties) {
         this.ocrService = ocrService;
+        this.contextProperties = contextProperties;
+    }
+
+    private long maxFileSize() {
+        return contextProperties.getFiles().getMaxFileSizeBytes();
     }
 
     /**
@@ -49,9 +50,9 @@ public class FileContentExtractorService {
             return "";
         }
 
-        if (file.length() > MAX_FILE_SIZE) {
-            log.warn("File skipped due to size limit ({} > 10MB): {}", file.length(), file.getName());
-            return "[System: File skipped - exceeds 10MB limit]";
+        if (file.length() > maxFileSize()) {
+            log.warn("File skipped due to size limit ({} > {}): {}", file.length(), maxFileSize(), file.getName());
+            return "[System: File skipped - exceeds size limit]";
         }
 
         String fileName = file.getName();
@@ -88,9 +89,9 @@ public class FileContentExtractorService {
             return "[System: 该文件类型不支持 OCR]";
         }
 
-        if (file.length() > MAX_FILE_SIZE) {
-            log.warn("File skipped due to size limit ({} > 10MB): {}", file.length(), file.getName());
-            return "[System: 文件超过 10MB 限制]";
+        if (file.length() > maxFileSize()) {
+            log.warn("File skipped due to size limit ({} > {}): {}", file.length(), maxFileSize(), file.getName());
+            return "[System: 文件超过大小限制]";
         }
 
         try {
@@ -171,7 +172,7 @@ public class FileContentExtractorService {
     public boolean isOcrSupported(String fileName) {
         if (!StringUtils.hasText(fileName)) return false;
         String ext = getExtension(fileName);
-        return OCR_EXTENSIONS.contains(ext);
+        return contextProperties.getOcrExtensions().contains(ext);
     }
 
     /**
