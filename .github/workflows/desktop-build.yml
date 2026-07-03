@@ -44,16 +44,6 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      # x64 JDK on the arm64 macOS runner: its jmods feed the cross-arch
-      # jlink for the Intel build (the backend jar itself is arch-specific
-      # too, via javacpp.platform)
-      - uses: actions/setup-java@v4
-        id: jdk-x64
-        if: runner.os == 'macOS'
-        with:
-          distribution: temurin
-          java-version: '21'
-          architecture: x64
       - name: Build frontend
         working-directory: frontend
         run: |
@@ -83,22 +73,27 @@ jobs:
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
-      - name: Bundle backend (macOS arm64 + x64)
+      - name: Desktop unit tests
+        working-directory: desktop
+        run: npm test
+      - name: Bundle backend (macOS arm64)
         if: runner.os == 'macOS'
         env:
           JAVA_HOME: ${{ steps.jdk.outputs.path }}
         run: |
-          # One universal jar for both arches: javacpp.platform collapses to
-          # the build host (arm64) regardless of the requested value, so the
-          # Intel natives come from the mac-universal-natives pom profile.
-          mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -Dmac-universal -f backend/pom.xml package
+          # Apple Silicon only（2026-07-03 决策放弃 Intel Mac）：单 arm64 jar + arm64 JRE
+          mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -f backend/pom.xml package
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/mac-arm64
-          node desktop/scripts/prepare-backend.js \
-            --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
-            --out desktop/bundled/mac-x64 \
-            --jmods '${{ steps.jdk-x64.outputs.path }}/jmods'
+      - name: Bundle pptx-service (macOS arm64)
+        if: runner.os == 'macOS'
+        run: |
+          node desktop/scripts/prepare-python-service.js \
+            --service pptx-service \
+            --src pptx-service/backend \
+            --requirements pptx-service/requirements.lock \
+            --out desktop/bundled/mac-arm64
       - name: Bundle backend (Windows x64)
         if: runner.os == 'Windows'
         shell: bash
@@ -108,6 +103,15 @@ jobs:
           mvn -B -q -DskipTests -Djavacpp.platform=windows-x86_64 -f backend/pom.xml package
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
+            --out desktop/bundled/win-x64
+      - name: Bundle pptx-service (Windows x64)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          node desktop/scripts/prepare-python-service.js \
+            --service pptx-service \
+            --src pptx-service/backend \
+            --requirements pptx-service/requirements.lock \
             --out desktop/bundled/win-x64
       - name: Sign bundled backend natives (macOS)
         if: runner.os == 'macOS'
@@ -132,9 +136,7 @@ jobs:
           security list-keychains -d user -s "$KC" login.keychain-db
           IDENTITY=$(security find-identity -v -p codesigning "$KC" | awk 'NR==1{print $2}')
           echo "Signing with identity: $IDENTITY"
-          for d in desktop/bundled/mac-arm64 desktop/bundled/mac-x64; do
-            bash desktop/scripts/sign-mac-natives.sh "$IDENTITY" "$d" desktop/build/entitlements.mac.plist
-          done
+          bash desktop/scripts/sign-mac-natives.sh "$IDENTITY" desktop/bundled/mac-arm64 desktop/build/entitlements.mac.plist
       - name: Smoke test bundled backend (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -160,6 +162,30 @@ jobs:
           echo "backend failed to start within 120s"
           tail -80 "$RUNNER_TEMP/backend-smoke.log"
           kill $BACK_PID 2>/dev/null || true
+          exit 1
+      - name: Smoke test bundled pptx-service (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # 用烙好的运行时按打包态同款方式拉起：先 alembic 迁移，后起服务，验 /health
+          export PPTX_DATA_DIR="$RUNNER_TEMP/pptx-data"
+          mkdir -p "$PPTX_DATA_DIR"
+          APP="$PWD/desktop/bundled/mac-arm64/pysvc/pptx-service/app"
+          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
+          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/pptx-service/lib"
+          (cd "$APP" && "$PY" -m alembic -c alembic.ini upgrade head)
+          PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
+          PPTX_PID=$!
+          for i in $(seq 1 30); do
+            sleep 2
+            if curl -sf http://127.0.0.1:5099/health; then
+              echo; echo "pptx-service up after ~$((i*2))s"
+              kill $PPTX_PID
+              exit 0
+            fi
+          done
+          echo "pptx-service failed to start within 60s"
+          tail -80 "$RUNNER_TEMP/pptx-smoke.log"
+          kill $PPTX_PID 2>/dev/null || true
           exit 1
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
@@ -225,6 +251,30 @@ jobs:
           tail -80 "$RUNNER_TEMP/backend-smoke.log"
           kill $BACK_PID 2>/dev/null || true
           exit 1
+      - name: Smoke test bundled pptx-service (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export PPTX_DATA_DIR="$RUNNER_TEMP/pptx-data"
+          mkdir -p "$PPTX_DATA_DIR"
+          APP="$PWD/desktop/bundled/win-x64/pysvc/pptx-service/app"
+          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
+          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/pptx-service/lib"
+          (cd "$APP" && "$PY" -m alembic -c alembic.ini upgrade head)
+          PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
+          PPTX_PID=$!
+          for i in $(seq 1 30); do
+            sleep 2
+            if curl -sf http://127.0.0.1:5099/health; then
+              echo; echo "pptx-service up after ~$((i*2))s"
+              kill $PPTX_PID
+              exit 0
+            fi
+          done
+          echo "pptx-service failed to start within 60s"
+          tail -80 "$RUNNER_TEMP/pptx-smoke.log"
+          kill $PPTX_PID 2>/dev/null || true
+          exit 1
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
         working-directory: desktop
@@ -261,8 +311,9 @@ jobs:
 
             ### 下载 / Downloads
             - **macOS · Apple Silicon (M 系列)** — `AI Workdeck-<ver>-arm64.dmg`（已签名公证 / signed & notarized）
-            - **macOS · Intel** — `AI Workdeck-<ver>.dmg`（已签名公证 / signed & notarized）
             - **Windows · x64** — `AI Workdeck Setup <ver>.exe`（暂未签名，首次运行 SmartScreen 提示属正常 / not yet code-signed; a SmartScreen prompt on first run is expected）
+
+            > 自本版本起不再提供 Intel Mac 安装包（依赖生态已停发 x86_64 预编译组件）。/ Intel mac builds are discontinued as of this release.
 
             官网 / Website: https://www.aiworkdeck.com
 

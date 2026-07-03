@@ -37,11 +37,14 @@ sign_file() {
   echo "  signed: $f"
 }
 
-# --- 1) JRE ---------------------------------------------------------------
-find "$BUNDLE_DIR/jre" -type f | while read -r f; do
-  file -b "$f" | grep -q 'Mach-O' || continue
-  needs_sign "$f" || continue
-  sign_file "$f"
+# --- 1) 捆绑的运行时（jlink JRE + python-build-standalone + pip 装的 C 扩展） ---
+for runtime_dir in "$BUNDLE_DIR/jre" "$BUNDLE_DIR/python" "$BUNDLE_DIR/pysvc"; do
+  [ -d "$runtime_dir" ] || continue
+  find "$runtime_dir" -type f | while read -r f; do
+    file -b "$f" | grep -q 'Mach-O' || continue
+    needs_sign "$f" || continue
+    sign_file "$f"
+  done
 done
 
 # --- 2) natives nested in the fat jar --------------------------------------

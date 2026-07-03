@@ -15,6 +15,7 @@
 | TTS 引擎 | **easyvoice（编排层）+ Kokoro（本地引擎）**。ElevenLabs 降级为可选云端高音质 | easyvoice 本身不是引擎，默认合成走云端接口；Kokoro 82M 参数、Apache 2.0、CPU/Apple Silicon 实时、中英双语，且 easyvoice 已预留 `localhost:8880/v1` 对接口 |
 | ViiTor Voice | **不用于本地版，记入云端版候选** | 硬依赖 NVIDIA CUDA（无 CPU/Apple Silicon 路径，目标用户多为 MacBook/办公本）；仓库无 License（分发即侵权风险）；维护弱（新仓 5 commits）。待云端版立项且其挂出可商用 License 再评估 |
 | 打包机制 | **内嵌运行时 + 统一 ServiceManager**（沿用 Java 后端已验证模式），不用 PyInstaller 冻结（torch/MinerU 冻结脆弱）也不内嵌容器运行时（体积/权限/虚拟机体验差） | CI 预烙每平台运行时 → extraResources 进包 → Electron spawn 管理，`prepare-backend.js` + jlink 这条链路已在生产验证 |
+| mac 架构 | **仅支持 Apple Silicon，放弃 Intel Mac**（2026-07-03 Phase 1 实施中确认） | onnxruntime 1.20+/pikepdf 9+ 等依赖已停发 macOS x86_64 wheel，交叉烙制不可持续；macos-13 Intel runner 已退役；Phase 2 的 torch 2.3+ 同样无 Intel mac 包 |
 
 ## 1. 目标与非目标
 
@@ -50,7 +51,7 @@
 | 服务 | 运行时 | 启动时机 | 说明 |
 |---|---|---|---|
 | Java 后端 | 捆绑 JRE（现状不变） | eager | 迁移为 ServiceManager 首个描述符，行为不变 |
-| pptx-service | 捆绑 Python | lazy（首次 AI PPT） | Flask + SQLite，秒级启动 |
+| pptx-service | 捆绑 Python | eager（轻量 Flask；触发方在 Java agent 工具循环内、渲染层无 ensure 拦截点，lazy 机制随 Phase 2 mineru 落地） | Flask + SQLite，秒级启动 |
 | mineru-service | 捆绑 Python | lazy（首次文档解析） | 内存大户；退出应用即停 |
 | easyvoice | **Electron utilityProcess**（复用自带 Node） | lazy | 无需捆绑 Node 运行时，省 50MB+ |
 | kokoro-tts | 捆绑 Python | 随 easyvoice 拉起 | 暴露 OpenAI 兼容 `/v1`，easyvoice 指向它 |
@@ -63,10 +64,11 @@
 
 新增 `desktop/scripts/prepare-python-service.js`（对标 `prepare-backend.js`）：
 
-1. 下载对应平台 [python-build-standalone](https://github.com/astral-sh/python-build-standalone)（统一 **3.11**——MinerU 与 pptx-service 均兼容；三平台各一份，**同一安装包内多个 Python 服务共享同一运行时**）；
+1. 下载对应平台 [python-build-standalone](https://github.com/astral-sh/python-build-standalone)（统一 **3.11**——MinerU 与 pptx-service 均兼容；mac arm64 + win x64 各一份，**同一安装包内多个 Python 服务共享同一运行时**）；
 2. 按各服务锁定的 `requirements.lock`（新增，pip-compile 生成）安装到独立 site-packages：`desktop/bundled/${os}-${arch}/pysvc/<service>/`；torch 用 **CPU 版 wheel**（mac 走默认含 MPS 的 wheel）；
-3. 裁剪：`__pycache__`、tests、`*.dist-info` 冗余、opencv 不用的模块；
-4. mac x64 交叉：在 arm64 runner 上 `pip download --platform macosx_x86_64 --only-binary=:all:` 交叉取 wheel（**本方案最大工程风险点，Phase 1 即验证**）。
+3. 裁剪：`__pycache__`、tests、`*.dist-info` 冗余、opencv 不用的模块。
+
+（原方案第 4 步「mac x64 交叉取 wheel」已随「放弃 Intel Mac」决策取消——Phase 1 验证时确认 onnxruntime/pikepdf 无 x86_64 wheel，该风险以缩小支持面方式消解。）
 
 easyvoice：CI 里 `pnpm build` 出 `dist/`，连同生产 `node_modules`（pruned）进 extraResources；另捆绑静态 ffmpeg（约 25MB/平台，BtbN/evermeet 构建，License 合规确认 GPL 版可随 AGPL 主体分发）。
 
@@ -115,7 +117,7 @@ easyvoice：CI 里 `pnpm build` 出 `dist/`，连同生产 `node_modules`（prun
 
 | 风险 | 等级 | 对策 |
 |---|---|---|
-| mac x64 交叉 wheel（arm64 runner 上取 Intel torch/opencv） | 高 | Phase 1 前置验证；兜底：x64 构建挪到 `macos-13`（Intel runner）矩阵项 |
+| ~~mac x64 交叉 wheel~~ | ~~高~~ | **已消解**：放弃 Intel Mac（见 §0 决策记录），mac 仅出 arm64 包 |
 | MinerU 内存要求（8GB+） | 中 | 启动前 `os.totalmem()` 检查，低配机提示「解析会较慢/建议关闭其他应用」，不阻断 |
 | 安装包 2GB 的下载/公证时长 | 中 | dmg 压缩已含 brotli 思路（LOWA 先例）；公证时间可接受（LOWA +60MB 先例）；发版说明标注体积变化 |
 | Windows 未签名 + 大量新二进制 → SmartScreen/杀软误报 | 中 | 已知现状（issue #12），签名另行推进；Python 运行时用官方 release 原样分发降低误报 |

@@ -25,9 +25,32 @@ npm run dev
   - 多半是桌面端未重启（主进程没加载新代码）。请先完全退出桌面端再重新 `npm run dev`。
   - 新版本已做 fallback（主进程 handler 缺失时会在 preload 里直接走 desktopCapturer）。
 
+## Packaging（本地打包）
+
+完整安装包由 CI（`.github/workflows/desktop-build.yml`）产出；本地打包需按序执行同样的四步（以 mac Apple Silicon 为例——mac 仅支持 M 芯片，Intel 已放弃）：
+
+```bash
+# 1. 前端构建（含 LibreOffice 编辑器 bundle）
+cd frontend && npm run build:h5 && npm run build:zetaoffice
+# 2. LOWA 运行时 + CJK 字体离线烘焙
+node desktop/scripts/fetch-lowa-assets.js
+# 3. 后端 jar + 裁剪 JRE（需 JDK 21）
+mvn -B -q -DskipTests -Djavacpp.platform=macosx-arm64 -f backend/pom.xml package
+node desktop/scripts/prepare-backend.js --jar backend/target/backend-0.0.1-SNAPSHOT.jar --out desktop/bundled/mac-arm64
+# 4. pptx-service（Python 运行时 + 依赖 + 源码）
+node desktop/scripts/prepare-python-service.js \
+  --service pptx-service --src pptx-service/backend \
+  --requirements pptx-service/requirements.lock --out desktop/bundled/mac-arm64
+# 出包（本地不签名）
+cd desktop && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never
+```
+
+打包态由 ServiceManager（`main/services/`）统一拉起本地服务：Java 后端固定 9696，pptx-service 动态端口（经 `EXTERNAL_PPTX_SERVICE_BASE_URL` 注入后端）。数据落 `~/.aiworkdeck/`（pptx 在 `~/.aiworkdeck/pptx/`），日志落 `~/.aiworkdeck/logs/<service>.log`。
+
 ## Notes
 
 - 开发模式下，Electron 会加载 Vite Dev Server（保留你的前端热更新体验）。
-- 生产模式下，会加载 `frontend` 的构建产物（后续补齐打包路径）。
+- 生产模式下，会加载 `frontend` 的构建产物。
+- 单元测试：`npm test`（node:test，覆盖 ServiceManager）。
 
 
