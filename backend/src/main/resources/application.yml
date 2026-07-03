@@ -45,6 +45,11 @@ external:
     base-url: https://api.elevenlabs.io/v1
     model-id: eleven_multilingual_v2
     default-voice-id: JBFqnCBsd6RMkjVDRZzb
+  # 语音合成提供方：elevenlabs（云端，默认）或 local（桌面捆绑的 Kokoro 本地服务）。
+  # 桌面打包态由 Electron 注入 EXTERNAL_TTS_PROVIDER=local + 动态端口的 local-base-url
+  tts:
+    provider: ${EXTERNAL_TTS_PROVIDER:elevenlabs}
+    local-base-url: ${EXTERNAL_TTS_LOCAL_BASE_URL:}
   # PPTX 生成服务配置（banana-slides Docker 容器）
   pptx-service:
     # 服务地址（Docker 容器映射端口）
