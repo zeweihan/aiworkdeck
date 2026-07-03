@@ -244,7 +244,11 @@ jobs:
           # cert secret is actually present; fork PRs fall back to
           # electron-builder's default unsigned PR build.
           CSC_FOR_PULL_REQUEST: ${{ secrets.CSC_LINK != '' }}
-        run: npx electron-builder --publish never
+        run: |
+          # mineru lib（transformers 等）有数万个小文件，macOS 默认 fd 上限 256 会让
+          # electron-builder 在打包/装订阶段 EMFILE，先调高
+          ulimit -n 65536
+          npx electron-builder --publish never
       - name: Notarization failure log (macOS)
         if: failure() && runner.os == 'macOS'
         env:
