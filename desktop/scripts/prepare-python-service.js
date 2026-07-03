@@ -70,8 +70,9 @@ function ensurePython(outDir) {
   fs.mkdirSync(outDir, { recursive: true })
   console.log(`downloading ${url}`)
   execFileSync('curl', ['-fSL', '--retry', '3', '-o', tarball, url], { stdio: 'inherit' })
-  // install_only 包解压即得顶层 python/ 目录
-  execFileSync('tar', ['-xzf', tarball, '-C', outDir], { stdio: 'inherit' })
+  // install_only 包解压即得顶层 python/ 目录。
+  // cwd + 相对文件名：Windows 上 GNU tar 会把 "D:\..." 的冒号当远程主机（host:file 语法）
+  execFileSync('tar', ['-xzf', name], { cwd: outDir, stdio: 'inherit' })
   fs.rmSync(tarball)
   if (!fs.existsSync(pythonBin(pyRoot))) {
     console.error(`unexpected layout after extract: ${pyRoot}`)
