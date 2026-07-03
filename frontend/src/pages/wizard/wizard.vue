@@ -57,32 +57,10 @@
         </view>
       </view>
 
-      <!-- Step 2: WPS (optional). Hidden on the desktop app — desktop edits Office
-           docs with the embedded LibreOffice editor (no WPS config needed). WPS
-           config stays available on the web/cloud product. -->
-      <view v-if="!isDesktopApp" class="section">
-        <view class="section-title">
-          <text class="step-badge">2</text>
-          <text class="title-text">文档在线编辑（WPS）</text>
-          <text class="optional-tag">可选</text>
-        </view>
-        <text class="section-hint">不填写时文档以只读模式查看，之后可在「系统管理」中补充。</text>
-        <view class="form-grid">
-          <view class="form-item">
-            <text class="form-label">WPS AppID</text>
-            <input class="text-input" v-model="form.external.wps.appId" placeholder="选填" />
-          </view>
-          <view class="form-item">
-            <text class="form-label">WPS AppSecret</text>
-            <input class="text-input" :password="true" v-model="form.external.wps.appSecret" placeholder="选填" />
-          </view>
-        </view>
-      </view>
-
-      <!-- Step 3: advanced (collapsed) -->
+      <!-- Step 2: advanced (collapsed) -->
       <view class="section">
         <view class="section-title collapsible" @tap="showAdvanced = !showAdvanced">
-          <text class="step-badge">3</text>
+          <text class="step-badge">2</text>
           <text class="title-text">高级选项（OCR / 语音 / 企业数据）</text>
           <text class="optional-tag">可选</text>
           <text class="collapse-arrow">{{ showAdvanced ? '▲ 收起' : '▼ 展开' }}</text>
@@ -191,7 +169,6 @@ export default {
           activeProvider: 'OLLAMA',
         },
         external: {
-          wps: { appId: '', appSecret: '' },
           aliyunOcr: { accessKeyId: '', accessKeySecret: '' },
           elevenLabs: { apiKey: '' },
           qichacha: { key: '', secret: '' },
@@ -200,13 +177,6 @@ export default {
         },
       },
     }
-  },
-  computed: {
-    // Desktop app (Electron) vs web/cloud. On desktop, Office editing uses the
-    // embedded LibreOffice editor, so the WPS setup step is hidden.
-    isDesktopApp() {
-      try { return !!(typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.ocr) } catch (e) { return false }
-    },
   },
   onLoad() {
     this.checkStatus()
@@ -236,10 +206,6 @@ export default {
         external.google = { apiKey: trim(this.apiKeys.GEMINI) }
       }
 
-      const wps = this.form.external.wps
-      if (trim(wps.appId) || trim(wps.appSecret)) {
-        external.wps = { appId: trim(wps.appId), appSecret: trim(wps.appSecret) }
-      }
       const ocr = this.form.external.aliyunOcr
       if (trim(ocr.accessKeyId) || trim(ocr.accessKeySecret)) {
         external.aliyunOcr = { accessKeyId: trim(ocr.accessKeyId), accessKeySecret: trim(ocr.accessKeySecret) }

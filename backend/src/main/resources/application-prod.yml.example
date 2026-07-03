@@ -22,8 +22,4 @@ external:
     base-url: https://api.qichacha.com
     key: 你的企查查Key  # 从企查查开放平台获取
     secret: 你的企查查Secret  # 从企查查开放平台获取
-  wps:
-    app-id: 你的WPS_AppID  # 从 WPS 控制台获取
-    app-secret: 你的WPS_AppSecret  # 从 WPS 控制台获取
-    callback-base-url: https://api.checkba.yourdomain.com  # 你的 API 域名
 

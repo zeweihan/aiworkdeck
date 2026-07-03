@@ -20,10 +20,6 @@ external:
     base-url: https://api.qichacha.com
     key: ${QICHACHA_KEY:}
     secret: ${QICHACHA_SECRET:}
-  wps:
-    app-id: ${WPS_APP_ID:}
-    app-secret: ${WPS_APP_SECRET:}
-    callback-base-url: https://6e783f5e.r3.cpolar.cn  # 使用 cpolar 内网穿透地址（当前实际URL，每次重启会变化）
   tushare:
     base-url: http://api.tushare.pro
     token: ${TUSHARE_TOKEN:}
