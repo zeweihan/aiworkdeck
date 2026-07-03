@@ -1,0 +1,76 @@
+# AI 编排器架构基线（AI Orchestrator Architecture）
+
+> 状态：现行基线。Phase 1（PR #83）、Phase 2（PR #84）已合并。
+>
+> 说明：Phase 1 曾撰写过本文档但未随 PR 入库，本文为按 PR #83/#84 实际代码重建的版本，
+> 以当前代码为准。后续架构变更必须同步更新本文。
+
+## 1. 分层基线
+
+自上而下七层，依赖只允许向下：
+
+| 层 | 职责 | 关键类 |
+|---|---|---|
+| 接入层 | HTTP/SSE 出入口、鉴权（session→userId）、DTO | `AiChatController`、`AiAgentController` |
+| 编排层 | Agent 循环（Thought→Action→Observation）、取消、SSE 事件分发 | `AgentOrchestrator`、`XmlToolCallParser` |
+| 业务编排 | 同步 chat 流程、多模态组装、助手实例管理 | `AiChatService`、`AiAssistantService`、`MultiModalContentService`、`GeminiCacheService` |
+| 上下文层 | 消息栈组装、上下文压缩、法律信息保护、文件内容加载 | `ContextAssemblerService`、`ContextCompressor`、`LegalInfoProtector`、`FileContextLoader`、`FileContentExtractorService` |
+| 能力层（工具） | 工具注册与分发、插件懒注册、服务端上下文注入 | `ToolRegistry`、`AgentToolComponent`、`@ToolMeta`、`ToolContextHolder` |
+| 记忆层 | 读侧检索（拟人化排序）、写侧管线（Episode/项目记忆/MemCell） | `MemoryManager`、`MemoryPipelineService`、`MemCellExtractor`、`AgenticRetriever` |
+| 模型/基础设施 | 模型工厂、向量存储、配置 | `ChatModelFactory`、`PgVectorConfig`、`AiModelProperties`、`AiContextProperties` |
+
+## 2. 五条不变式
+
+任何 AI 功能开发不得破坏以下不变式（重建版，语义与 Phase 1 一致）：
+
+1. **编排器不 import 具体工具类。** 新增工具只实现 `AgentToolComponent` + 标注 `@ToolMeta`，
+   由 `ToolRegistry` 自动注册；插件 JAR 工具懒注册。严禁改 `AgentOrchestrator` 加分发分支。
+2. **记忆读写侧分离。** 读侧 = `ContextAssemblerService`（组装时检索注入，不做提取式写入）；
+   写侧 = `MemoryPipelineService`（每轮循环结束后异步触发）。检索命中的
+   `lastAccessedAt/accessCount` 元数据更新属读侧统计，在 `MemoryManager` 内部完成。
+3. **身份字段服务端注入。** `projectId/conversationId/userId` 由 `ToolContextHolder` 每次调用
+   装填，LLM 传入的同名参数一律忽略，防伪造跨项目 ID。
+4. **SSE 事件字典与前端契约不动。** 事件名、chat 接口出入参结构是对外契约，重构不得更改；
+   新增能力用新事件/新字段向后兼容。
+5. **行为保持 + 配置外置。** 重构默认行为保持（默认配置值 = 原硬编码值）；新增限值/阈值一律
+   进 `@ConfigurationProperties`（`ai.context.*` 等）或资源文件，不写死在代码里。
+
+## 3. 关键机制速查
+
+### 工具层（Phase 1）
+- 内置工具：实现 `AgentToolComponent` 的 Bean 自动注册；`@ToolMeta` 声明中文显示名/分类/文件副作用。
+- XML `<tool_code>` 兜底协议解析在 `XmlToolCallParser`（多行 Python/三引号/JSON 风格/`<ctrl46>`/最长工具名优先，全容错）。
+
+### 记忆作用域（Phase 1）
+`MemoryEntry.scope`：`user`（跨项目偏好）/ `project`（默认）/ `conversation` / `file`（配 `sourceFileId`）/ `global`（通用知识）。
+
+### 记忆写入管线（Phase 1 接线，Phase 2 增强）
+每轮 Agent 循环结束后 `MemoryPipelineService` 异步执行：
+- Episode 摘要（消息数 ≥ 15）
+- 项目记忆正则提取（每轮，低成本）
+- MemCell LLM 提取（消息数 ≥ 4），写入走 `MemoryManager.saveMemoryDeduplicated`：
+  向量近重复检测（cos ≥ 0.95，即 relevanceScore ≥ 0.975），保留 importance 更高者。
+
+### 拟人化检索排序（Phase 2）
+检索综合分 = **隐含重要性 × 时间衰减 × 随机抖动**（`MemoryManager`）：
+- 隐含重要性 = importance + 受保护 0.15 + 类型加成（决策 0.10 / 结论 0.08 / 引用 0.05 / 偏好 0.03）
+- 时间衰减 = 0.5^(距上次命中天数 / (30 天 × 记忆强度))；记忆强度 = 1 + ln(1 + accessCount)
+  （复述效应）；受保护记忆不衰减
+- 随机性 = 分数 ±5% 抖动 + 10% 概率"偶然想起"候选池冷门记忆
+- RRF 混合检索融合分应用同样因子；检索命中批量更新 `lastAccessedAt/accessCount`
+
+### 配置外置（Phase 2）
+- `ai.context.*`（`AiContextProperties`）：token 预算（`model-token-budgets` 按模型覆盖，
+  modelKey 由编排器穿透到压缩器）、chars-per-token、压缩保留条数、文件大小/数量/字符上限、OCR 扩展名。
+- 法律保护正则：`src/main/resources/legal/protected-patterns.yml`，`LegalInfoProtector` 只加载与匹配。
+- 向量维度：`PgVectorConfig` 从 `EmbeddingModel.dimension()` 动态读取，失败回退 1536。
+  注意：切换 embedding 模型（维度变化）需 DROP 旧表由 `createTable` 重建。
+
+## 4. Phase 路线图
+
+- **Phase 1（PR #83，已完成）**：ToolRegistry 统一工具层、XML 协议解析抽取、记忆五作用域、
+  MemoryPipelineService 接线、AgentOrchestrator 1671→660 行。
+- **Phase 2（PR #84，已完成）**：AiChatController 847→290 行（业务下沉专职 Service）、
+  ContextAssembler 不再读文件系统、AiContextProperties 配置外置、法律正则外置、
+  拟人化记忆检索排序、MemCell 语义去重、向量维度动态化。
+- **Phase 3（计划）**：插件广场沙箱、MCP SDK 标准化、Skill 体系、多智能体协作。
