@@ -69,7 +69,7 @@ OPENROUTER_API_KEY=sk-or-... mvn test -Dtest=RealLlmSmokeTest -Dsurefire.failIfN
   "toolStubs": { "write_docx": "{\"status\":\"success\"}" },  // 回放给模型的工具输出，缺省 "OK (eval stub)"
   "expect": {
     "toolCalls": [                       // 按顺序断言分发序列；null=不断言；[]=断言零调用
-      { "name": "write_docx",            // 别名解析后的工具名（search_laws 写成 search_web）
+      { "name": "write_docx",            // 别名解析后的工具名（search_laws 写 search_web；wps_* 旧名写 doc_*）
         "argsContain": { "fileName": "x" } }   // 参数值子串断言
     ],
     "structureContains": ["<process", "<final>"],  // 最终保存的 ASSISTANT 消息应含的标签
