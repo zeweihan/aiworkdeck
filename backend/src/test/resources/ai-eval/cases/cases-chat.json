@@ -1,0 +1,65 @@
+[
+  {
+    "id": "chitchat-no-tools-xml",
+    "title": "闲聊问候不触发任何工具",
+    "category": "chat",
+    "protocol": "xml",
+    "userInput": "你好呀，今天过得怎么样？",
+    "smoke": { "anyOfFirstTools": [] },
+    "turns": [
+      {
+        "text": "<final>你好！我随时在线，状态很好。今天有什么合同、法条或者文档需要我帮忙处理吗？</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished",
+      "toolsOffered": true
+    }
+  },
+  {
+    "id": "ask-mode-consultation-no-tools",
+    "title": "ASK 模式纯咨询：不向 LLM 提供工具规格",
+    "category": "chat",
+    "protocol": "xml",
+    "mode": "ASK",
+    "userInput": "什么是表见代理？给我通俗解释一下",
+    "turns": [
+      {
+        "text": "<final>表见代理是指行为人虽无代理权，但相对人有理由相信其有代理权，该代理行为有效，由被代理人承担法律后果（《民法典》第一百七十二条）。通俗地说：公司让别人误以为某人能代表它，就要为这个误会买单。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished",
+      "toolsOffered": false
+    }
+  },
+  {
+    "id": "json-style-tool-call-xml",
+    "title": "JSON 风格 tool({...}) 调用解析（协议容错回归）",
+    "category": "chat",
+    "protocol": "xml",
+    "userInput": "查一下最高院关于对赌协议的最新司法解释",
+    "turns": [
+      {
+        "text": "<process name=\"联网检索\"><tool_code>search_web({\"query\": \"最高人民法院 对赌协议 司法解释 最新\"})</tool_code></process>"
+      },
+      {
+        "text": "<final>检索到最高院关于对赌协议的最新裁判观点如下……</final>"
+      }
+    ],
+    "toolStubs": {
+      "search_web": "[{\"title\":\"九民纪要对赌条款解读\",\"snippet\":\"……\"}]"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "search_web", "argsContain": { "query": "对赌协议" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

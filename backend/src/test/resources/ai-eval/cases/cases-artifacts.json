@@ -1,0 +1,57 @@
+[
+  {
+    "id": "task-list-artifact-saved",
+    "title": "任务清单 artifact 落盘且循环正常结束",
+    "category": "artifacts",
+    "protocol": "xml",
+    "userInput": "帮我列一个对目标公司做法律尽调的任务清单",
+    "turns": [
+      {
+        "text": "<artifact type=\"task_list\" name=\"尽调任务清单\">1. 收集目标公司章程与历次修订\n2. 核查股权结构与出资情况\n3. 梳理重大合同与对外担保\n4. 核查诉讼仲裁与行政处罚\n5. 排查劳动用工与社保合规</artifact>\n<final>已为您生成《尽调任务清单》，共 5 项，已保存到本会话的 AI 文件夹。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<artifact", "<final>"],
+      "artifact": { "type": "task_list", "filenameContains": "尽调任务清单" },
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "implementation-plan-awaits-approval",
+    "title": "PLAN 模式实施计划 artifact：停循环等待用户审批",
+    "category": "artifacts",
+    "protocol": "xml",
+    "mode": "PLAN",
+    "userInput": "给我一个并购重组项目的整体实施计划",
+    "turns": [
+      {
+        "text": "<artifact type=\"implementation_plan\" name=\"并购重组实施计划\">阶段一：尽职调查（4周）\n阶段二：交易架构设计与税务筹划（2周）\n阶段三：协议起草与谈判（3周）\n阶段四：交割与工商变更（2周）</artifact>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<artifact"],
+      "artifact": { "type": "implementation_plan", "filenameContains": "并购重组实施计划" },
+      "bubbleEndStatus": "awaiting_approval"
+    }
+  },
+  {
+    "id": "title-tag-renames-conversation",
+    "title": "<title> 协议触发会话文件夹重命名",
+    "category": "artifacts",
+    "protocol": "xml",
+    "userInput": "这轮我们主要在审股权转让协议，把会话改个合适的名字",
+    "turns": [
+      {
+        "text": "<title>股权转让协议审查</title>\n<final>好的，已把本会话命名为「股权转让协议审查」。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished",
+      "renamedTitleContains": "股权转让协议审查"
+    }
+  }
+]

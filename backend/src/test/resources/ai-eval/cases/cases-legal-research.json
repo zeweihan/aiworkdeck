@@ -1,0 +1,116 @@
+[
+  {
+    "id": "law-article-lookup-xml",
+    "title": "查询公司法具体法条（XML 协议）",
+    "category": "legal-research",
+    "protocol": "xml",
+    "userInput": "帮我查一下新公司法第八十八条的内容",
+    "smoke": { "anyOfFirstTools": ["law_search", "law_search_keyword", "get_law_article", "search_web"] },
+    "turns": [
+      {
+        "text": "<process name=\"查询法条\"><tool_code>get_law_article(title=\"中华人民共和国公司法\", number=\"第八十八条\")</tool_code></process>"
+      },
+      {
+        "text": "<final>《公司法》第八十八条规定：股东转让已认缴出资但未届出资期限的股权的，由受让人承担缴纳该出资的义务……（已为您整理全文）</final>"
+      }
+    ],
+    "toolStubs": {
+      "get_law_article": "《中华人民共和国公司法》第八十八条：股东转让已认缴出资但未届出资期限的股权的，由受让人承担缴纳该出资的义务……"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "get_law_article",
+          "argsContain": { "title": "公司法", "number": "第八十八条" }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "law-semantic-search-native",
+    "title": "语义检索对赌协议效力规定（原生 function calling）",
+    "category": "legal-research",
+    "protocol": "native",
+    "userInput": "对赌协议的效力有哪些法律规定和司法解释？",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "law_search",
+            "arguments": { "query": "对赌协议 效力 司法解释" }
+          }
+        ]
+      },
+      {
+        "text": "<final>关于对赌协议效力，主要依据《九民纪要》第5条：与目标公司对赌不因此无效，但履行需满足减资等程序……</final>"
+      }
+    ],
+    "toolStubs": {
+      "law_search": "[{\"title\":\"全国法院民商事审判工作会议纪要\",\"article\":\"第5条\",\"summary\":\"投资方与目标公司对赌的效力认定……\"}]"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "law_search", "argsContain": { "query": "对赌协议" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "search-laws-alias-resolution-xml",
+    "title": "search_laws 旧别名应解析为 search_web（协议兼容回归）",
+    "category": "legal-research",
+    "protocol": "xml",
+    "userInput": "查一下2024年公司法修订后注册资本认缴期限的最新报道",
+    "turns": [
+      {
+        "text": "<process name=\"联网检索\"><tool_code>search_laws(query=\"2024 公司法修订 注册资本 认缴期限 五年\")</tool_code></process>"
+      },
+      {
+        "text": "<final>根据检索结果：新公司法规定有限责任公司股东认缴出资应当自公司成立之日起五年内缴足……</final>"
+      }
+    ],
+    "toolStubs": {
+      "search_web": "[{\"title\":\"新公司法注册资本认缴期限解读\",\"snippet\":\"五年实缴过渡安排……\"}]"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "search_web", "argsContain": { "query": "注册资本" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "law-keyword-then-article-chain-xml",
+    "title": "关键词检索后追查具体法条（两轮工具链）",
+    "category": "legal-research",
+    "protocol": "xml",
+    "userInput": "劳动合同法里关于经济补偿的标准是哪一条？内容是什么？",
+    "turns": [
+      {
+        "text": "<process name=\"关键词检索法规\"><tool_code>law_search_keyword(title=\"劳动合同法\", fulltext=\"经济补偿\")</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"查询法条原文\"><tool_code>get_law_article(title=\"中华人民共和国劳动合同法\", number=\"第四十七条\")</tool_code></process>"
+      },
+      {
+        "text": "<final>经济补偿标准规定在《劳动合同法》第四十七条：按劳动者在本单位工作的年限，每满一年支付一个月工资……</final>"
+      }
+    ],
+    "toolStubs": {
+      "law_search_keyword": "[{\"title\":\"中华人民共和国劳动合同法\",\"hit\":\"第四十六条、第四十七条 经济补偿\"}]",
+      "get_law_article": "《劳动合同法》第四十七条：经济补偿按劳动者在本单位工作的年限，每满一年支付一个月工资的标准向劳动者支付……"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "law_search_keyword", "argsContain": { "title": "劳动合同法", "fulltext": "经济补偿" } },
+        { "name": "get_law_article", "argsContain": { "number": "第四十七条" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

@@ -1,0 +1,100 @@
+[
+  {
+    "id": "draft-labor-contract-xml",
+    "title": "起草劳动合同并落盘 docx（XML 协议）",
+    "category": "drafting",
+    "protocol": "xml",
+    "userInput": "帮我起草一份简单的劳动合同，保存为 docx 文件",
+    "smoke": { "anyOfFirstTools": ["write_docx", "write_file"] },
+    "turns": [
+      {
+        "text": "<bubble_type mode=\"execution\" />\n<process name=\"起草劳动合同\"><tool_code>write_docx(fileName=\"劳动合同\", markdownContent=\"# 劳动合同\n\n甲方（用人单位）：____\n乙方（劳动者）：____\n\n## 第一条 合同期限\n本合同自 ____ 年 __ 月 __ 日起至 ____ 年 __ 月 __ 日止。\n\n## 第二条 工作内容\n乙方从事 ____ 岗位工作。\")</tool_code></process>"
+      },
+      {
+        "text": "<final>已为您起草《劳动合同》并保存为 docx 文件，您可以在项目文件区查看和编辑。</final>"
+      }
+    ],
+    "toolStubs": {
+      "write_docx": "{\"status\":\"success\",\"file\":\"劳动合同.docx\",\"wps_file_id\":101}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "write_docx",
+          "argsContain": { "fileName": "劳动合同", "markdownContent": "合同期限" }
+        }
+      ],
+      "structureContains": ["<process", "<tool_code>", "<final>"],
+      "bubbleEndStatus": "finished",
+      "toolsOffered": true
+    }
+  },
+  {
+    "id": "draft-service-contract-native",
+    "title": "起草法律服务合同（原生 function calling）",
+    "category": "drafting",
+    "protocol": "native",
+    "userInput": "起草一份法律服务合同，落成 Word 文件",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "write_docx",
+            "arguments": {
+              "fileName": "法律服务合同",
+              "markdownContent": "# 法律服务合同\n\n委托方：____\n受托方：____律师事务所\n\n## 第一条 委托事项\n受托方接受委托方委托，就 ____ 事项提供法律服务。",
+              "projectId": 999
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>《法律服务合同》已生成并保存到项目文件，请查收。</final>"
+      }
+    ],
+    "toolStubs": {
+      "write_docx": "{\"status\":\"success\",\"file\":\"法律服务合同.docx\",\"wps_file_id\":102}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "write_docx",
+          "argsContain": { "fileName": "法律服务合同", "markdownContent": "委托事项" }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished",
+      "toolsOffered": true
+    }
+  },
+  {
+    "id": "read-then-draft-supplement-xml",
+    "title": "先读原协议再起草补充协议（两轮工具链）",
+    "category": "drafting",
+    "protocol": "xml",
+    "userInput": "看一下 42 号文件那份股权转让协议，然后帮我起草一份补充协议",
+    "turns": [
+      {
+        "text": "<process name=\"阅读原协议\"><tool_code>read_document(fileId=\"42\")</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"起草补充协议\"><tool_code>write_docx(fileName=\"股权转让补充协议\", markdownContent=\"# 股权转让补充协议\n\n鉴于双方已于 ____ 年签署《股权转让协议》，现就交割安排补充约定如下。\")</tool_code></process>"
+      },
+      {
+        "text": "<final>已阅读原《股权转让协议》，并据此起草了《股权转让补充协议》。</final>"
+      }
+    ],
+    "toolStubs": {
+      "read_document": "《股权转让协议》正文：转让方将其持有的目标公司 30% 股权转让给受让方……（略）",
+      "write_docx": "{\"status\":\"success\",\"file\":\"股权转让补充协议.docx\"}"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "read_document", "argsContain": { "fileId": "42" } },
+        { "name": "write_docx", "argsContain": { "fileName": "股权转让补充协议" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]
