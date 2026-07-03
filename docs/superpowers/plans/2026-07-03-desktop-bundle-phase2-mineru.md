@@ -22,6 +22,12 @@
 - **P1**：`mineru-api`/`mineru-models-download` 是 console-script，`pip --target` 装出的 `lib/bin/*` shim shebang 不可靠 → 必须找到等价 module 入口（形如 `python -m mineru.cli.fast_api` / `python -m mineru.cli.models_download`），从烙出的 lib 里读 `mineru-*.dist-info/entry_points.txt` 确认确切模块与函数名。
 - **P2**：模型缓存目录环境变量——MinerU 2.x 经 modelscope/huggingface SDK 下载，重定向用 `MODELSCOPE_CACHE` + `HF_HOME`（两个都设，指向 `~/.aiworkdeck/models/mineru/`）；从 lib 源码 grep `MINERU_MODEL_SOURCE|MODELSCOPE_CACHE|HF_HOME|snapshot_download` 确认，并确认 mineru 自身读取模型路径的 config（`mineru.json`/env）如何指向缓存。**以实际源码为准，下述代码中的 env 名在此步锁定。**
 
+**前置校证结论（2026-07-03，mineru 2.7.6 实测）：**
+- P1 服务入口：`python -m mineru.cli.fast_api --host 127.0.0.1 --port <port>`（fast_api.py:450 有 main guard）。下载入口：`python -c "from mineru.cli.models_download import download_models; download_models()" -s modelscope -m pipeline`（click 命令解析 argv，双参齐全即非交互）。
+- P2 模型落盘：`MODELSCOPE_CACHE=<models>/mineru` + `HF_HOME=<models>/mineru/hf`（snapshot_download 走 SDK 缓存）；配置文件 `MINERU_TOOLS_CONFIG_JSON=<models>/mineru/mineru.json`（源码是 `os.path.join(home, 值)`，传绝对路径即生效，下载与运行两侧同一 env）。注意 `configure_model` 会从 gcore.jsdelivr.net 拉模板 json（下载步骤本来在线，可接受）。
+- 冒烟形态：**无模型时 mineru-api 约 4s 可起、/docs 返回 200**（模型解析时懒加载）——CI 用完整拉起 + /docs 校验。
+- lib 体积实测 **1.5GB**（未压缩，mac-arm64，含 torch 2.12.1）。
+
 ---
 
 ### Task 1: mineru 依赖锁 + 烙制 + 本地拉起验证（风险前置）
