@@ -103,6 +103,16 @@ jobs:
             --requirements mineru-service/requirements.lock \
             --out desktop/bundled/mac-arm64
           du -sh desktop/bundled/mac-arm64/pysvc/mineru-service/lib
+      - name: Bundle kokoro-service (macOS arm64)
+        if: runner.os == 'macOS'
+        run: |
+          # 本地 TTS 包装层（Phase 3）：模型不进包，首启在「组件管理」下载
+          node desktop/scripts/prepare-python-service.js \
+            --service kokoro-service \
+            --src kokoro-service \
+            --requirements kokoro-service/requirements.lock \
+            --out desktop/bundled/mac-arm64
+          du -sh desktop/bundled/mac-arm64/pysvc/kokoro-service/lib
       - name: Bundle backend (Windows x64)
         if: runner.os == 'Windows'
         shell: bash
@@ -131,6 +141,16 @@ jobs:
             --requirements mineru-service/requirements.lock \
             --out desktop/bundled/win-x64
           du -sh desktop/bundled/win-x64/pysvc/mineru-service/lib
+      - name: Bundle kokoro-service (Windows x64)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          node desktop/scripts/prepare-python-service.js \
+            --service kokoro-service \
+            --src kokoro-service \
+            --requirements kokoro-service/requirements.lock \
+            --out desktop/bundled/win-x64
+          du -sh desktop/bundled/win-x64/pysvc/kokoro-service/lib
       - name: Sign bundled backend natives (macOS)
         if: runner.os == 'macOS'
         env:
@@ -237,6 +257,27 @@ jobs:
           echo "mineru-service failed to start within 60s"
           tail -80 "$RUNNER_TEMP/mineru-smoke.log"
           kill $MINERU_PID 2>/dev/null || true
+          exit 1
+      - name: Smoke test bundled kokoro-service (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # 无模型拉起（模型懒加载，/health 与 voices 不依赖模型）
+          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
+          APP="$PWD/desktop/bundled/mac-arm64/pysvc/kokoro-service/app"
+          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/kokoro-service/lib"
+          PORT=8881 "$PY" "$APP/app.py" > "$RUNNER_TEMP/kokoro-smoke.log" 2>&1 &
+          KOKORO_PID=$!
+          for i in $(seq 1 20); do
+            sleep 2
+            if curl -sf http://127.0.0.1:8881/health && curl -sf http://127.0.0.1:8881/v1/audio/voices | grep -q zf_001; then
+              echo; echo "kokoro-service up after ~$((i*2))s"
+              kill $KOKORO_PID
+              exit 0
+            fi
+          done
+          echo "kokoro-service failed to start within 40s"
+          tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
+          kill $KOKORO_PID 2>/dev/null || true
           exit 1
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
@@ -361,6 +402,27 @@ jobs:
           echo "mineru-service failed to start within 60s"
           tail -80 "$RUNNER_TEMP/mineru-smoke.log"
           kill $MINERU_PID 2>/dev/null || true
+          exit 1
+      - name: Smoke test bundled kokoro-service (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
+          APP="$PWD/desktop/bundled/win-x64/pysvc/kokoro-service/app"
+          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/kokoro-service/lib"
+          PORT=8881 "$PY" "$APP/app.py" > "$RUNNER_TEMP/kokoro-smoke.log" 2>&1 &
+          KOKORO_PID=$!
+          for i in $(seq 1 20); do
+            sleep 2
+            if curl -sf http://127.0.0.1:8881/health && curl -sf http://127.0.0.1:8881/v1/audio/voices | grep -q zf_001; then
+              echo; echo "kokoro-service up after ~$((i*2))s"
+              kill $KOKORO_PID
+              exit 0
+            fi
+          done
+          echo "kokoro-service failed to start within 40s"
+          tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
+          kill $KOKORO_PID 2>/dev/null || true
           exit 1
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'

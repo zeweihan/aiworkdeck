@@ -16,6 +16,7 @@
 | ViiTor Voice | **不用于本地版，记入云端版候选** | 硬依赖 NVIDIA CUDA（无 CPU/Apple Silicon 路径，目标用户多为 MacBook/办公本）；仓库无 License（分发即侵权风险）；维护弱（新仓 5 commits）。待云端版立项且其挂出可商用 License 再评估 |
 | 打包机制 | **内嵌运行时 + 统一 ServiceManager**（沿用 Java 后端已验证模式），不用 PyInstaller 冻结（torch/MinerU 冻结脆弱）也不内嵌容器运行时（体积/权限/虚拟机体验差） | CI 预烙每平台运行时 → extraResources 进包 → Electron spawn 管理，`prepare-backend.js` + jlink 这条链路已在生产验证 |
 | mac 架构 | **仅支持 Apple Silicon，放弃 Intel Mac**（2026-07-03 Phase 1 实施中确认） | onnxruntime 1.20+/pikepdf 9+ 等依赖已停发 macOS x86_64 wheel，交叉烙制不可持续；macos-13 Intel runner 已退役；Phase 2 的 torch 2.3+ 同样无 Intel mac 包 |
+| TTS 架构 | **跳过 easyvoice 与 ffmpeg，Kokoro 直连**（2026-07-03 Phase 3 勘察后确认） | 真实链路是 前端 → Java `/api/tts` → ElevenLabs 直连，easyvoice 生产已停用、无调用方、且不暴露 OpenAI 兼容端点；ffmpeg 只为其音频拼接存在。改为新增百行级 `kokoro-service/`（FastAPI，OpenAI 兼容 /v1），Java TtsService 加 local provider 分支 |
 
 ## 1. 目标与非目标
 
@@ -53,8 +54,7 @@
 | Java 后端 | 捆绑 JRE（现状不变） | eager | 迁移为 ServiceManager 首个描述符，行为不变 |
 | pptx-service | 捆绑 Python | eager（轻量 Flask；触发方在 Java agent 工具循环内、渲染层无 ensure 拦截点，lazy 机制随 Phase 2 mineru 落地） | Flask + SQLite，秒级启动 |
 | mineru-service | 捆绑 Python | lazy（首次文档解析） | 内存大户；退出应用即停 |
-| easyvoice | **Electron utilityProcess**（复用自带 Node） | lazy | 无需捆绑 Node 运行时，省 50MB+ |
-| kokoro-tts | 捆绑 Python | 随 easyvoice 拉起 | 暴露 OpenAI 兼容 `/v1`，easyvoice 指向它 |
+| kokoro-service | 捆绑 Python | 条件 eager（语音模型已下载才启动） | 自研百行 FastAPI 包装层，OpenAI 兼容 `/v1/audio/speech`，Java TtsService local 分支直连（easyvoice/ffmpeg 已跳过，见 §0） |
 
 **端口策略**：不再写死 5001/8001/9549/8880。ServiceManager 逐服务挑选空闲端口，经环境变量注入消费方（Java 后端读 `PPTX_SERVICE_URL`、easyvoice 读 `TTS_BASE_URL` 等，Spring 侧用 relaxed binding 已支持环境变量覆写 `application.yml`）。
 
@@ -84,7 +84,7 @@ easyvoice：CI 里 `pnpm build` 出 `dist/`，连同生产 `node_modules`（prun
 | 出网点 | 现状 | 桌面版处置 |
 |---|---|---|
 | MinerU 云端兜底（mineru.net） | pptx-service 在本地 MinerU 不可达时回落云端 | **默认关闭**，系统管理可显式开启并二次确认 |
-| easyvoice 云端 TTS（OpenRouter/OpenAI 接口） | 默认路径 | 默认指向本地 Kokoro；ElevenLabs 作为显式可选项保留 |
+| ElevenLabs 云端 TTS（Java TtsService 直连） | 默认路径 | 桌面默认 `external.tts.provider=local`（Kokoro，运行时 HF_HUB_OFFLINE=1 零出网）；ElevenLabs 作为显式可选项保留 |
 | LOWA CDN 兜底（cdn.zetaoffice.net） | 缺文件才触发 | 保持现状（正常打包不触发） |
 | 企查查/Tushare/北大法宝/阿里云 OCR | 用户填 key 才启用 | 保持现状 |
 | 向导数据流向文案 | 只写了对话内容 | 同步更新：语音合成、文档解析均不出本机；组件下载为一次性 |
@@ -106,12 +106,12 @@ easyvoice：CI 里 `pnpm build` 出 `dist/`，连同生产 `node_modules`（prun
 - MinerU 云端兜底默认关闭；
 - 冒烟测试：拉起 mineru-service（跳过模型下载，用最小 stub 或缓存层 mock）→ 健康检查。
 
-### Phase 3 — TTS 本地化（easyvoice + Kokoro + ffmpeg）
+### Phase 3 — TTS 本地化（Kokoro 直连，2026-07-03 修订：跳过 easyvoice/ffmpeg）
 
-- easyvoice 以 utilityProcess 进包；kokoro-tts venv 进包；静态 ffmpeg 进包；
-- easyvoice 默认指向本地 Kokoro；ElevenLabs 转显式可选；
+- 新增 `kokoro-service/`（FastAPI 包装层）venv 进包；Kokoro v1.1-zh 模型（约 300MB）进 ModelManager 组件；
+- Java TtsService 加 local provider 分支，桌面 spawn env 默认 local；ElevenLabs 转显式可选；
 - 向导与合规文案更新；
-- 冒烟测试：Kokoro 合成一句短文本出 wav → easyvoice 编排链路走通。
+- 冒烟测试：无模型拉起验 /health 与 voices（合成链路本地开发机验证）。
 
 ## 4. 风险与对策
 
@@ -129,7 +129,7 @@ easyvoice：CI 里 `pnpm build` 出 `dist/`，连同生产 `node_modules`（prun
 
 1. 全新 mac（无 Docker/Java/Python）装 dmg：AI PPT、文档解析、语音合成三项功能均可在确认组件下载后正常使用；
 2. 断网状态（组件已下载、选本地 Ollama）：三项功能全部可用，抓包无出网流量；
-3. 每平台 CI 冒烟测试覆盖四个捆绑服务（Java/pptx/mineru/kokoro+easyvoice）的真实拉起与健康检查；
+3. 每平台 CI 冒烟测试覆盖四个捆绑服务（Java / pptx / mineru / kokoro）的真实拉起与健康检查；
 4. 卸载后 `~/.aiworkdeck` 保留（用户数据与模型），文档说明手动清理方式。
 
 ## 6. 云端版备忘（不在本次范围）

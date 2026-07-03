@@ -53,7 +53,7 @@
           <text>
             数据流向说明：选择本地 Ollama 时，对话内容仅在本机处理；选择云端提供商时，对话内容将发送至该第三方服务，
             请律师朋友注意执业保密义务。当前使用的模型与提供商在产品内可见，且可随时在「系统管理」中更换或停用。
-            文档解析与 AI PPT 均在本机完成、数据不出本机；本地解析组件首次使用需在「系统管理 → 组件管理」一次性下载，之后离线可用。
+            文档解析、AI PPT 与语音合成均在本机完成、数据不出本机；本地组件（解析/语音模型）首次使用需在「系统管理 → 组件管理」一次性下载，之后离线可用。
           </text>
         </view>
       </view>
@@ -81,7 +81,7 @@
             </view>
           </view>
           <view class="adv-group">
-            <text class="adv-group-title">语音合成（ElevenLabs）</text>
+            <text class="adv-group-title">语音合成（可选云端 ElevenLabs——默认使用本地引擎，无需配置）</text>
             <view class="form-grid">
               <view class="form-item">
                 <text class="form-label">API Key</text>
