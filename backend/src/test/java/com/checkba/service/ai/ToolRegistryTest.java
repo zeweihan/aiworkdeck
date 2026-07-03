@@ -182,4 +182,90 @@ class ToolRegistryTest {
             }
         });
     }
+
+    // ==== 插件启停过滤 + 权限校验（Phase 3A） ====
+
+    /** 模拟插件 JAR 中的工具类 */
+    static class FakePluginTools {
+        @Tool("Plugin echo tool")
+        public String plugin_echo(@P("text to echo") String text) {
+            return "plugin:" + text;
+        }
+    }
+
+    /** 构造带一个已注册插件工具（plugin_echo）的 PluginService */
+    private PluginService pluginServiceWith(String pluginId, List<String> declaredPermissions,
+                                            List<String> toolRequiredPermissions) {
+        PluginService ps = new PluginService();
+        PluginService.PluginMetadata meta = new PluginService.PluginMetadata();
+        meta.setId(pluginId);
+        meta.setName(pluginId);
+        meta.setPermissions(declaredPermissions);
+        PluginService.PluginToolInfo info = new PluginService.PluginToolInfo();
+        info.setName("plugin_echo");
+        info.setPermissions(toolRequiredPermissions);
+        meta.setTools(List.of(info));
+        ps.getPlugins().add(meta);
+        ps.registerToolObject(new FakePluginTools(), pluginId);
+        return ps;
+    }
+
+    @Test
+    @DisplayName("启停：禁用插件后规格/名单/分发全部不可见，重新启用即恢复，内置工具不受影响")
+    void disabledPluginToolsAreHidden() {
+        PluginService ps = pluginServiceWith("my-plugin", List.of("network"), null);
+        ToolRegistry reg = new ToolRegistry(List.of(new FakeTools()), ps);
+        reg.init();
+
+        // 启用态：插件工具可见可分发
+        assertTrue(reg.getAllSpecifications().stream().anyMatch(s -> s.name().equals("plugin_echo")));
+        assertTrue(reg.toolNamesLongestFirst().contains("plugin_echo"));
+        assertEquals("plugin:hi", reg.execute("plugin_echo", "{\"text\":\"hi\"}", ctx).output());
+
+        ps.setEnabled("my-plugin", false);
+
+        assertFalse(reg.getAllSpecifications().stream().anyMatch(s -> s.name().equals("plugin_echo")),
+                "禁用后 LLM 不应看到插件工具规格");
+        assertFalse(reg.toolNamesLongestFirst().contains("plugin_echo"));
+        assertFalse(reg.hasTool("plugin_echo"));
+        ToolRegistry.ToolResult r = reg.execute("plugin_echo", "{\"text\":\"hi\"}", ctx);
+        assertFalse(r.found(), "禁用后分发应返回 not found");
+        // 内置工具不受插件启停影响
+        assertTrue(reg.hasTool("echo"));
+        assertEquals("echo:hi", reg.execute("echo", "{\"text\":\"hi\"}", ctx).output());
+
+        ps.setEnabled("my-plugin", true);
+
+        assertTrue(reg.getAllSpecifications().stream().anyMatch(s -> s.name().equals("plugin_echo")),
+                "重新启用后应恢复可见");
+        assertEquals("plugin:hi", reg.execute("plugin_echo", "{\"text\":\"hi\"}", ctx).output());
+    }
+
+    @Test
+    @DisplayName("权限：工具所需权限未在 manifest permissions 声明时分发被拒绝")
+    void undeclaredPermissionIsRejected() {
+        PluginService ps = pluginServiceWith("my-plugin", List.of("file_read"), List.of("network"));
+        ToolRegistry reg = new ToolRegistry(List.of(new FakeTools()), ps);
+        reg.init();
+
+        ToolRegistry.ToolResult r = reg.execute("plugin_echo", "{\"text\":\"hi\"}", ctx);
+        assertTrue(r.found(), "工具存在，只是被权限拒绝");
+        assertFalse(r.success());
+        assertTrue(r.output().startsWith("Error: permission denied"), "应返回明确的权限拒绝错误: " + r.output());
+        assertTrue(r.output().contains("network"), "错误信息应指明缺失的权限: " + r.output());
+    }
+
+    @Test
+    @DisplayName("权限：所需权限已声明时正常执行；未声明所需权限的工具（v1 兼容）不受影响")
+    void declaredPermissionAllowsExecution() {
+        PluginService declared = pluginServiceWith("p1", List.of("network"), List.of("network"));
+        ToolRegistry reg1 = new ToolRegistry(List.of(new FakeTools()), declared);
+        reg1.init();
+        assertEquals("plugin:ok", reg1.execute("plugin_echo", "{\"text\":\"ok\"}", ctx).output());
+
+        PluginService legacy = pluginServiceWith("p2", null, null);
+        ToolRegistry reg2 = new ToolRegistry(List.of(new FakeTools()), legacy);
+        reg2.init();
+        assertEquals("plugin:ok", reg2.execute("plugin_echo", "{\"text\":\"ok\"}", ctx).output());
+    }
 }
