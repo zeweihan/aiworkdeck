@@ -695,10 +695,11 @@ export default {
       })
     },
     async handleComponentEnable(comp) {
-      if (comp.id !== 'mineru-models') return
+      // serviceName 由主进程 model-status 按组件→服务映射带回
+      if (!comp.serviceName) return
       uni.showLoading({ title: '启动中...' })
       try {
-        const res = await window.checkbaDesktop.services.ensure('mineru-service')
+        const res = await window.checkbaDesktop.services.ensure(comp.serviceName)
         if (!res || !res.ok) {
           uni.showToast({ title: '启动失败：' + ((res && res.message) || '未知错误'), icon: 'none' })
         }

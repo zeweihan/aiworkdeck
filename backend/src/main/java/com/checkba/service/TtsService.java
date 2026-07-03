@@ -41,7 +41,14 @@ public class TtsService {
     
     @Value("${external.elevenlabs.default-voice-id}")
     private String defaultDefaultVoiceId;
-    
+
+    // 语音提供方：elevenlabs（云端，默认）| local（桌面捆绑 Kokoro，OpenAI 兼容 /v1）
+    @Value("${external.tts.provider:elevenlabs}")
+    private String defaultTtsProvider;
+
+    @Value("${external.tts.local-base-url:}")
+    private String defaultLocalBaseUrl;
+
     private final RestTemplate restTemplate = new RestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -53,7 +60,30 @@ public class TtsService {
      * Get available voices from ElevenLabs API
      * GET /voices
      */
+    // settings（系统管理可改）> env/yml 默认
+    private boolean isLocalProvider() {
+        return "local".equalsIgnoreCase(systemSettingService.get("external.tts.provider", defaultTtsProvider));
+    }
+
+    private String localBaseUrl() {
+        return systemSettingService.get("external.tts.localBaseUrl", defaultLocalBaseUrl);
+    }
+
+    // rate 容错解析成 Kokoro 的 speed：支持 "1.2" / "1.2x"，解析失败回 1.0
+    static double parseSpeed(String rate) {
+        if (rate == null || rate.isBlank()) return 1.0;
+        try {
+            double v = Double.parseDouble(rate.trim().replaceAll("[xX]$", ""));
+            return (v >= 0.5 && v <= 2.0) ? v : 1.0;
+        } catch (NumberFormatException e) {
+            return 1.0;
+        }
+    }
+
     public List<VoiceOption> getVoices() {
+        if (isLocalProvider()) {
+            return getLocalVoices();
+        }
         try {
             String baseUrl = systemSettingService.get("external.elevenlabs.baseUrl", defaultBaseUrl);
             String apiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);
@@ -115,6 +145,9 @@ public class TtsService {
      * @param volume Unused (ElevenLabs uses different settings)
      */
     public File generateAudio(String text, String voiceId, String rate, String pitch, String volume) {
+        if (isLocalProvider()) {
+            return generateLocalAudio(text, voiceId, rate);
+        }
         // 未配置 TTS 密钥时直接返回"功能未配置"，前端引导去设置（#18 T5）
         String configuredApiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);
         if (configuredApiKey == null || configuredApiKey.isBlank()) {
@@ -177,6 +210,85 @@ public class TtsService {
 
         } catch (Exception e) {
             logger.error("Failed to generate audio via ElevenLabs", e);
+            throw new RuntimeException("Failed to generate audio: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 本地 Kokoro 服务的音色列表（GET /v1/audio/voices，OpenAI 风格包装层）
+     */
+    private List<VoiceOption> getLocalVoices() {
+        String base = localBaseUrl();
+        if (base == null || base.isBlank()) {
+            logger.warn("TTS provider=local but external.tts.local-base-url is empty");
+            return new ArrayList<>();
+        }
+        try {
+            ResponseEntity<String> response = restTemplate.getForEntity(base + "/v1/audio/voices", String.class);
+            List<VoiceOption> result = new ArrayList<>();
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                JsonNode voicesNode = objectMapper.readTree(response.getBody()).get("voices");
+                if (voicesNode != null && voicesNode.isArray()) {
+                    for (JsonNode v : voicesNode) {
+                        VoiceOption vo = new VoiceOption();
+                        vo.setVoiceId(v.path("voiceId").asText());
+                        vo.setName(v.path("name").asText());
+                        vo.setGender(v.path("gender").asText("unknown"));
+                        vo.setLocale(v.path("locale").asText(""));
+                        result.add(vo);
+                    }
+                }
+            }
+            logger.info("Loaded {} voices from local Kokoro", result.size());
+            return result;
+        } catch (Exception e) {
+            logger.error("Failed to list voices from local Kokoro at {}", base, e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 本地 Kokoro 合成（POST /v1/audio/speech → WAV）。
+     * 服务不可达 = 组件未下载/未启用，走"功能未配置"引导（前端既有机制）。
+     */
+    private File generateLocalAudio(String text, String voiceId, String rate) {
+        String base = localBaseUrl();
+        if (base == null || base.isBlank()) {
+            throw new FeatureNotConfiguredException("tts",
+                    "本地语音组件未就绪：请在「系统管理 → 组件管理」下载语音组件 / "
+                            + "Local speech component is not ready: download it in Admin → Components.");
+        }
+        try {
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            Map<String, Object> body = new HashMap<>();
+            body.put("input", text);
+            if (voiceId != null && !voiceId.isEmpty()) body.put("voice", voiceId);
+            body.put("speed", parseSpeed(rate));
+
+            logger.info("Generating TTS via local Kokoro: voice={}, text length={}", voiceId, text.length());
+            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
+            ResponseEntity<byte[]> response = restTemplate.exchange(base + "/v1/audio/speech", HttpMethod.POST, entity, byte[].class);
+
+            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
+                throw new RuntimeException("local TTS generation failed: " + response.getStatusCode());
+            }
+            File outputFile = new File(TEMP_AUDIO_DIR, UUID.randomUUID() + ".wav");
+            try (FileOutputStream fos = new FileOutputStream(outputFile)) {
+                fos.write(response.getBody());
+            }
+            logger.info("Saved local TTS audio to: {}", outputFile.getAbsolutePath());
+            return outputFile;
+        } catch (org.springframework.web.client.ResourceAccessException e) {
+            // 连接被拒/超时：组件未启动（未下载或被删除）
+            throw new FeatureNotConfiguredException("tts",
+                    "本地语音组件未就绪：请在「系统管理 → 组件管理」下载并启用语音组件 / "
+                            + "Local speech component is not running: download & enable it in Admin → Components.");
+        } catch (FeatureNotConfiguredException e) {
+            throw e;
+        } catch (Exception e) {
+            logger.error("Failed to generate audio via local Kokoro", e);
             throw new RuntimeException("Failed to generate audio: " + e.getMessage(), e);
         }
     }

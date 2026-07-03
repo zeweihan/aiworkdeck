@@ -1,0 +1,6 @@
+kokoro>=0.9.4
+misaki[en,zh]>=0.9.4
+fastapi>=0.110
+uvicorn>=0.29
+soundfile>=0.12
+espeakng-loader>=0.2

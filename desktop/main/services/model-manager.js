@@ -25,7 +25,7 @@ function pyBin(resourcesPath) {
     : path.join(resourcesPath || '', 'python', 'bin', 'python3.11')
 }
 
-// 组件注册表：本期仅 MinerU pipeline 模型
+// 组件注册表：MinerU pipeline 模型 + Kokoro 语音模型
 const COMPONENTS = [
   {
     id: 'mineru-models',
@@ -49,6 +49,30 @@ const COMPONENTS = [
           MODELSCOPE_CACHE: dir,
           HF_HOME: path.join(dir, 'hf'),
           MINERU_TOOLS_CONFIG_JSON: path.join(dir, 'mineru.json')
+        },
+        cwd: dir
+      }
+    }
+  },
+  {
+    id: 'kokoro-models',
+    name: '语音合成模型（Kokoro）',
+    sizeHint: '约 300MB',
+    dir: (ctx) => path.join(ctx.dataDir, 'models', 'kokoro'),
+    // huggingface_hub snapshot（走国内镜像，env 可覆盖）；运行侧 HF_HOME 与此一致
+    spawnSpec: (ctx) => {
+      const dir = path.join(ctx.dataDir, 'models', 'kokoro')
+      return {
+        cmd: pyBin(ctx.resourcesPath),
+        args: [
+          '-c',
+          "from huggingface_hub import snapshot_download; snapshot_download('hexgrad/Kokoro-82M-v1.1-zh')"
+        ],
+        env: {
+          ...process.env,
+          PYTHONPATH: path.join(ctx.resourcesPath || '', 'pysvc', 'kokoro-service', 'lib'),
+          HF_HOME: dir,
+          HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com'
         },
         cwd: dir
       }
