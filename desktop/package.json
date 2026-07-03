@@ -9,7 +9,8 @@
     "clean": "node scripts/clean.js",
     "dev": "cross-env AIWORKDECK_DESKTOP_DEV=1 electron .",
     "start": "electron .",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "test": "node --test tests/service-manager.test.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
