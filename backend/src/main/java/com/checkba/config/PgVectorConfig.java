@@ -17,11 +17,27 @@ import javax.sql.DataSource;
  * PgVector 配置类
  * 配置向量存储用于记忆语义检索
  * 如果 PgVector 不可用，回退到内存存储
+ *
+ * 向量维度从 EmbeddingModel 动态读取（如 nomic-embed-text=768、OpenAI=1536），
+ * 读取失败时回退到默认值。
  */
 @Configuration
 public class PgVectorConfig {
 
     private static final Logger log = LoggerFactory.getLogger(PgVectorConfig.class);
+
+    /** EmbeddingModel 维度探测失败时的回退维度（历史默认值） */
+    static final int FALLBACK_DIMENSION = 1536;
+
+    /** 维度探测结果缓存（探测可能触发一次真实 embed 调用，避免每个 store bean 各探测一次） */
+    private volatile Integer cachedDimension;
+
+    private int dimensionFor(EmbeddingModel embeddingModel) {
+        if (cachedDimension == null) {
+            cachedDimension = resolveDimension(embeddingModel);
+        }
+        return cachedDimension;
+    }
 
     @Value("${spring.datasource.url}")
     private String jdbcUrl;
@@ -38,13 +54,13 @@ public class PgVectorConfig {
      * 如果 PgVector 不可用，回退到内存存储
      */
     @Bean(name = "memoryEmbeddingStore")
-    public EmbeddingStore<TextSegment> memoryEmbeddingStore() {
+    public EmbeddingStore<TextSegment> memoryEmbeddingStore(EmbeddingModel embeddingModel) {
         // 从 JDBC URL 提取主机和数据库信息
         // jdbc:postgresql://localhost:5432/checkba
         String host = "localhost";
         int port = 5432;
         String database = "checkba";
-        
+
         try {
             String urlWithoutPrefix = jdbcUrl.replace("jdbc:postgresql://", "");
             String[] parts = urlWithoutPrefix.split("/");
@@ -68,7 +84,7 @@ public class PgVectorConfig {
                     .user(username)
                     .password(password)
                     .table("memory_embedding_store")  // 自动创建的表
-                    .dimension(1536)  // OpenAI embedding 维度，Ollama nomic-embed-text 是 768
+                    .dimension(dimensionFor(embeddingModel))
                     .createTable(true)
                     .build();
         } catch (Exception e) {
@@ -78,12 +94,28 @@ public class PgVectorConfig {
     }
 
     /**
+     * 从 EmbeddingModel 动态读取向量维度（替换原硬编码 1536）。
+     * 读取可能触发一次真实 embed 调用；模型不可用时回退到默认维度，保持原有启动行为。
+     */
+    static int resolveDimension(EmbeddingModel embeddingModel) {
+        try {
+            int dimension = embeddingModel.dimension();
+            log.info("Embedding dimension resolved from model: {}", dimension);
+            return dimension;
+        } catch (Exception e) {
+            log.warn("Failed to resolve embedding dimension from model, falling back to {}. 错误: {}",
+                    FALLBACK_DIMENSION, e.getMessage());
+            return FALLBACK_DIMENSION;
+        }
+    }
+
+    /**
      * 项目文档向量存储
      * 用于 RAG 检索项目文档
      * 如果 PgVector 不可用，回退到内存存储
      */
     @Bean(name = "projectDocEmbeddingStore")
-    public EmbeddingStore<TextSegment> projectDocEmbeddingStore() {
+    public EmbeddingStore<TextSegment> projectDocEmbeddingStore(EmbeddingModel embeddingModel) {
         String host = "localhost";
         int port = 5432;
         String database = "checkba";
@@ -111,7 +143,7 @@ public class PgVectorConfig {
                     .user(username)
                     .password(password)
                     .table("project_doc_embedding")
-                    .dimension(1536)
+                    .dimension(dimensionFor(embeddingModel))
                     .createTable(true)
                     .build();
         } catch (Exception e) {

@@ -28,6 +28,38 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class MemoryManager {
 
+    /** 检索排序的时间衰减半衰期（天）：未被检索命中的记忆每过 30 天权重减半（受保护记忆不衰减） */
+    private static final double DECAY_HALF_LIFE_DAYS = 30.0;
+
+    /** 语义去重的余弦相似度阈值：cos >= 0.95 视为重复 */
+    private static final double DEDUP_COSINE_THRESHOLD = 0.95;
+
+    // ---- 拟人化检索排序参数 ----
+    // 人的记忆不是纯时间序：重要的事、反复想起的事记得更牢，偶尔还会随机想起冷门片段。
+
+    /** 隐含重要性：受保护记忆（法律关键信息）的显著性加成，类似"闪光灯记忆"不易遗忘 */
+    private static final double PROTECTED_SIGNIFICANCE_BOOST = 0.15;
+
+    /** 隐含重要性：按记忆类型的显著性加成（决策/结论比普通事实更"刻骨铭心"） */
+    private static final Map<String, Double> TYPE_SIGNIFICANCE_BOOST = Map.of(
+            MemoryEntry.MemoryType.DECISION, 0.10,
+            MemoryEntry.MemoryType.CONCLUSION, 0.08,
+            MemoryEntry.MemoryType.REFERENCE, 0.05,
+            MemoryEntry.MemoryType.PREFERENCE, 0.03);
+
+    /** 随机抖动幅度：检索分数乘以 [1-ratio, 1+ratio] 的随机因子，模拟回忆的不确定性 */
+    private static final double JITTER_RATIO = 0.05;
+
+    /** "偶然想起"概率：以小概率用候选池中的冷门记忆替换末位结果（不知道哪条旧记忆什么时候有用） */
+    private static final double SERENDIPITY_PROBABILITY = 0.1;
+
+    /** 随机源（测试可注入固定行为） */
+    private Random random = new Random();
+
+    void setRandom(Random random) {
+        this.random = random;
+    }
+
     private final MemoryEntryRepository memoryEntryRepository;
     private final ConversationSummaryRepository conversationSummaryRepository;
     private final ProjectMemoryRepository projectMemoryRepository;
@@ -73,6 +105,69 @@ public class MemoryManager {
     }
 
     /**
+     * 带语义去重的保存（MemCell 写入路径）。
+     *
+     * 写入前用向量相似度检索近重复记忆（cos >= {@value #DEDUP_COSINE_THRESHOLD} 视为重复，
+     * LangChain4j 的 relevanceScore = (1 + cos) / 2，故转换后过滤）：
+     * - 已有条目 importance 更高（或相等）→ 跳过写入，返回已有条目
+     * - 新条目 importance 更高 → 用新内容覆盖已有条目（保留 importance 更高者）
+     * - 无重复或去重检查失败 → 正常走 saveMemory
+     */
+    @Transactional
+    public MemoryEntry saveMemoryDeduplicated(MemoryEntry entry) {
+        try {
+            String textToEmbed = buildEmbeddingText(entry);
+            Embedding embedding = embeddingModel.embed(textToEmbed).content();
+
+            double minRelevance = (1.0 + DEDUP_COSINE_THRESHOLD) / 2.0;
+            EmbeddingSearchRequest request = EmbeddingSearchRequest.builder()
+                    .queryEmbedding(embedding)
+                    .maxResults(5)
+                    .minScore(minRelevance)
+                    .build();
+            List<EmbeddingMatch<TextSegment>> matches = memoryEmbeddingStore.search(request).matches();
+
+            for (EmbeddingMatch<TextSegment> match : matches) {
+                String pid = match.embedded().metadata().getString("projectId");
+                if (pid == null || !pid.equals(String.valueOf(entry.getProjectId()))) {
+                    continue;
+                }
+                String memoryIdStr = match.embedded().metadata().getString("memoryId");
+                if (memoryIdStr == null) {
+                    continue;
+                }
+                Optional<MemoryEntry> existingOpt = memoryEntryRepository.findById(Long.parseLong(memoryIdStr));
+                if (existingOpt.isEmpty()) {
+                    continue;
+                }
+                MemoryEntry existing = existingOpt.get();
+                double newImportance = entry.getImportanceScore() != null ? entry.getImportanceScore() : 0.5;
+                double oldImportance = existing.getImportanceScore() != null ? existing.getImportanceScore() : 0.5;
+
+                if (newImportance > oldImportance) {
+                    // 新条目更重要：以新内容覆盖旧条目
+                    existing.setMemoryType(entry.getMemoryType());
+                    existing.setMemoryKey(entry.getMemoryKey());
+                    existing.setMemoryValue(entry.getMemoryValue());
+                    existing.setImportanceScore(entry.getImportanceScore());
+                    if (Boolean.TRUE.equals(entry.getIsProtected())) {
+                        existing.setIsProtected(true);
+                    }
+                    log.info("Memory dedup: updated existing id={} with higher-importance content (score={})",
+                            existing.getId(), match.score());
+                    return memoryEntryRepository.save(existing);
+                }
+
+                log.info("Memory dedup: skipped near-duplicate of id={} (score={})", existing.getId(), match.score());
+                return existing;
+            }
+        } catch (Exception e) {
+            log.warn("Memory dedup check failed, falling back to plain save: {}", e.getMessage());
+        }
+        return saveMemory(entry);
+    }
+
+    /**
      * 构建用于嵌入的文本
      */
     private String buildEmbeddingText(MemoryEntry entry) {
@@ -88,28 +183,48 @@ public class MemoryManager {
     }
 
     /**
-     * 根据关键词检索记忆
+     * 根据关键词检索记忆（排序引入时间衰减因子，命中后更新 lastAccessedAt）
      */
     public List<MemoryEntry> retrieveMemories(Long projectId, String query, String memoryType, int limit) {
         log.info("Retrieving memories: projectId={}, query={}, type={}, limit={}",
                 projectId, query, memoryType, limit);
-        
-        if (query == null || query.isBlank()) {
-            // 没有查询时返回最重要的记忆
-            return memoryEntryRepository.findTopImportantMemories(projectId, PageRequest.of(0, limit));
-        }
-        
-        // 关键词搜索
-        return memoryEntryRepository.searchByKeywordAndType(
-                projectId, query, memoryType, PageRequest.of(0, limit));
+
+        List<MemoryEntry> ranked = rankWithTimeDecay(
+                fetchKeywordCandidates(projectId, query, memoryType, limit * 3), limit);
+        touchMemories(ranked);
+        return ranked;
     }
 
     /**
-     * 语义检索记忆
+     * 关键词候选检索（内部使用：不做衰减排序，不更新 lastAccessedAt）
+     */
+    private List<MemoryEntry> fetchKeywordCandidates(Long projectId, String query, String memoryType, int fetchLimit) {
+        if (query == null || query.isBlank()) {
+            // 没有查询时返回最重要的记忆
+            return memoryEntryRepository.findTopImportantMemories(projectId, PageRequest.of(0, fetchLimit));
+        }
+
+        // 关键词搜索
+        return memoryEntryRepository.searchByKeywordAndType(
+                projectId, query, memoryType, PageRequest.of(0, fetchLimit));
+    }
+
+    /**
+     * 语义检索记忆（排序引入时间衰减因子，命中后更新 lastAccessedAt）
      */
     public List<MemoryEntry> semanticSearch(Long projectId, String query, int limit) {
+        List<MemoryEntry> ranked = rankWithTimeDecay(
+                semanticSearchInternal(projectId, query, limit), limit);
+        touchMemories(ranked);
+        return ranked;
+    }
+
+    /**
+     * 语义检索（内部使用：不做衰减排序，不更新 lastAccessedAt）
+     */
+    private List<MemoryEntry> semanticSearchInternal(Long projectId, String query, int limit) {
         log.info("Semantic search: projectId={}, query={}, limit={}", projectId, query, limit);
-        
+
         try {
             Embedding queryEmbedding = embeddingModel.embed(query).content();
             
@@ -139,7 +254,7 @@ public class MemoryManager {
         } catch (Exception e) {
             log.error("Semantic search failed: {}", e.getMessage(), e);
             // 降级到关键词搜索
-            return retrieveMemories(projectId, query, null, limit);
+            return fetchKeywordCandidates(projectId, query, null, limit);
         }
     }
 
@@ -204,15 +319,16 @@ public class MemoryManager {
         
         // 1. 并行执行关键词检索和语义检索
         int fetchLimit = limit * 3;  // 多取一些用于融合
-        List<MemoryEntry> keywordResults = retrieveMemories(projectId, query, null, fetchLimit);
-        List<MemoryEntry> semanticResults = semanticSearch(projectId, query, fetchLimit);
-        
+        List<MemoryEntry> keywordResults = fetchKeywordCandidates(projectId, query, null, fetchLimit);
+        List<MemoryEntry> semanticResults = semanticSearchInternal(projectId, query, fetchLimit);
+
         log.debug("Keyword results: {}, Semantic results: {}", keywordResults.size(), semanticResults.size());
-        
-        // 2. RRF 融合
+
+        // 2. RRF 融合（分数带时间衰减因子）
         List<MemoryEntry> fusedResults = rrfFusion(keywordResults, semanticResults, limit);
-        
+
         log.info("Hybrid search completed: {} results after RRF fusion", fusedResults.size());
+        touchMemories(fusedResults);
         return fusedResults;
     }
 
@@ -256,29 +372,35 @@ public class MemoryManager {
      * @return 融合后的结果列表
      */
     private List<MemoryEntry> rrfFusion(List<MemoryEntry> list1, List<MemoryEntry> list2, int limit) {
-        final int k = 60;  // RRF 常数
+        return rrfFusionMultiple(List.of(list1, list2), limit);
+    }
+
+    /**
+     * 多列表 RRF 融合（支持多个检索源）
+     * 用于 Agentic 多轮召回时融合多个查询结果
+     * 最终分数 = RRF 分数 × 隐含重要性 × 时间衰减 × 随机抖动（受保护记忆不衰减）
+     */
+    public List<MemoryEntry> rrfFusionMultiple(List<List<MemoryEntry>> resultLists, int limit) {
+        final int k = 60;
         Map<Long, Double> scores = new HashMap<>();
         Map<Long, MemoryEntry> memoryMap = new HashMap<>();
-        
-        // 计算第一个列表的 RRF 分数
-        for (int i = 0; i < list1.size(); i++) {
-            MemoryEntry entry = list1.get(i);
-            Long id = entry.getId();
-            double score = 1.0 / (k + i + 1);  // rank 从 1 开始
-            scores.merge(id, score, Double::sum);
-            memoryMap.putIfAbsent(id, entry);
+
+        for (List<MemoryEntry> results : resultLists) {
+            for (int i = 0; i < results.size(); i++) {
+                MemoryEntry entry = results.get(i);
+                Long id = entry.getId();
+                double score = 1.0 / (k + i + 1);  // rank 从 1 开始
+                scores.merge(id, score, Double::sum);
+                memoryMap.putIfAbsent(id, entry);
+            }
         }
-        
-        // 计算第二个列表的 RRF 分数
-        for (int i = 0; i < list2.size(); i++) {
-            MemoryEntry entry = list2.get(i);
-            Long id = entry.getId();
-            double score = 1.0 / (k + i + 1);
-            scores.merge(id, score, Double::sum);
-            memoryMap.putIfAbsent(id, entry);
+
+        // 应用拟人化因子：隐含重要性 × 时间衰减 × 随机抖动
+        for (Map.Entry<Long, Double> e : scores.entrySet()) {
+            MemoryEntry m = memoryMap.get(e.getKey());
+            e.setValue(e.getValue() * impliedSignificance(m) * timeDecayFactor(m) * jitterFactor());
         }
-        
-        // 按 RRF 分数降序排序并返回
+
         return scores.entrySet().stream()
                 .sorted(Map.Entry.<Long, Double>comparingByValue().reversed())
                 .limit(limit)
@@ -287,31 +409,92 @@ public class MemoryManager {
                 .collect(Collectors.toList());
     }
 
+    // ==================== 拟人化检索排序与命中更新 ====================
+
     /**
-     * 多列表 RRF 融合（支持多个检索源）
-     * 用于 Agentic 多轮召回时融合多个查询结果
+     * 计算记忆的时间衰减因子：0.5 ^ (距上次命中天数 / (半衰期 × 记忆强度))。
+     * - 受保护记忆（法律关键信息）不衰减，恒为 1.0（"闪光灯记忆"）
+     * - 复述效应：命中次数越多记忆强度越高，衰减越慢——就像多年后仍记得反复想起过的时刻
      */
-    public List<MemoryEntry> rrfFusionMultiple(List<List<MemoryEntry>> resultLists, int limit) {
-        final int k = 60;
-        Map<Long, Double> scores = new HashMap<>();
-        Map<Long, MemoryEntry> memoryMap = new HashMap<>();
-        
-        for (List<MemoryEntry> results : resultLists) {
-            for (int i = 0; i < results.size(); i++) {
-                MemoryEntry entry = results.get(i);
-                Long id = entry.getId();
-                double score = 1.0 / (k + i + 1);
-                scores.merge(id, score, Double::sum);
-                memoryMap.putIfAbsent(id, entry);
-            }
+    double timeDecayFactor(MemoryEntry entry) {
+        if (entry == null) return 1.0;
+        if (Boolean.TRUE.equals(entry.getIsProtected())) return 1.0;
+        LocalDateTime ref = entry.getLastAccessedAt() != null ? entry.getLastAccessedAt()
+                : (entry.getUpdatedAt() != null ? entry.getUpdatedAt() : entry.getCreatedAt());
+        if (ref == null) return 1.0;
+        double days = java.time.Duration.between(ref, LocalDateTime.now()).toHours() / 24.0;
+        if (days <= 0) return 1.0;
+        int accessCount = entry.getAccessCount() != null ? entry.getAccessCount() : 0;
+        double stability = 1.0 + Math.log1p(accessCount);
+        return Math.pow(0.5, days / (DECAY_HALF_LIFE_DAYS * stability));
+    }
+
+    /**
+     * 隐含重要性（implied significance）：显式 importance 之外，
+     * 从记忆自身特征推断的显著性加成（受保护、类型）。
+     */
+    double impliedSignificance(MemoryEntry entry) {
+        double score = entry.getImportanceScore() != null ? entry.getImportanceScore() : 0.5;
+        if (Boolean.TRUE.equals(entry.getIsProtected())) {
+            score += PROTECTED_SIGNIFICANCE_BOOST;
         }
-        
-        return scores.entrySet().stream()
-                .sorted(Map.Entry.<Long, Double>comparingByValue().reversed())
-                .limit(limit)
-                .map(e -> memoryMap.get(e.getKey()))
-                .filter(Objects::nonNull)
+        if (entry.getMemoryType() != null) {
+            score += TYPE_SIGNIFICANCE_BOOST.getOrDefault(entry.getMemoryType().toLowerCase(), 0.0);
+        }
+        return score;
+    }
+
+    /**
+     * 检索综合分 = 隐含重要性 × 时间衰减 × 随机抖动。
+     */
+    private double retrievalScore(MemoryEntry entry) {
+        return impliedSignificance(entry) * timeDecayFactor(entry) * jitterFactor();
+    }
+
+    /** 随机抖动因子：[1 - JITTER_RATIO, 1 + JITTER_RATIO] */
+    private double jitterFactor() {
+        return 1.0 + (random.nextDouble() * 2 - 1) * JITTER_RATIO;
+    }
+
+    /**
+     * 拟人化排序并截取前 limit 条：
+     * 按综合分排序后，以小概率把候选池中一条"冷门"记忆替换进末位（偶然想起）。
+     */
+    private List<MemoryEntry> rankWithTimeDecay(List<MemoryEntry> candidates, int limit) {
+        if (candidates == null || candidates.isEmpty()) return Collections.emptyList();
+        List<MemoryEntry> ranked = candidates.stream()
+                .sorted(Comparator.comparingDouble(this::retrievalScore).reversed())
                 .collect(Collectors.toList());
+
+        List<MemoryEntry> top = new ArrayList<>(ranked.subList(0, Math.min(limit, ranked.size())));
+
+        // 偶然想起：候选池有落选者时，小概率用其中随机一条替换末位
+        if (ranked.size() > top.size() && !top.isEmpty()
+                && random.nextDouble() < SERENDIPITY_PROBABILITY) {
+            List<MemoryEntry> rest = ranked.subList(top.size(), ranked.size());
+            MemoryEntry lucky = rest.get(random.nextInt(rest.size()));
+            top.set(top.size() - 1, lucky);
+            log.debug("Serendipity recall: surfaced memory id={} into results", lucky.getId());
+        }
+        return top;
+    }
+
+    /**
+     * 检索命中后更新 lastAccessedAt（失败不影响检索主流程）。
+     */
+    private void touchMemories(List<MemoryEntry> hits) {
+        if (hits == null || hits.isEmpty()) return;
+        try {
+            List<Long> ids = hits.stream()
+                    .map(MemoryEntry::getId)
+                    .filter(Objects::nonNull)
+                    .collect(Collectors.toList());
+            if (!ids.isEmpty()) {
+                memoryEntryRepository.touchLastAccessedAt(ids, LocalDateTime.now());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to touch lastAccessedAt for memories: {}", e.getMessage());
+        }
     }
 
     /**
