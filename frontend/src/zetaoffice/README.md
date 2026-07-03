@@ -67,8 +67,9 @@ host (project-overview)                     isolated <webview partition="persist
      libreExecutor: createWebviewEditorExecutor(this.$refs.zetaWebview),
    })
    ```
-   Route `handleWpsCommand` through `editor.executeCommand(action, params)`
-   (the method/event names keep the historical `wps_` prefix — rename debt, #79).
+   Route `handleEditorCommand` through `editor.executeCommand(action, params)`
+   (SSE event names keep the historical `wps_` prefix — frontend/backend
+   contract; dual-track migration tracked in docs/AI_ARCHITECTURE.md Phase 3).
 5. **IME overlay** + **perf** (load an existing 50-page docx) — separate #43 tasks.
 
 ## AI 拟人式动作原语（2026-07）
@@ -85,8 +86,9 @@ host (project-overview)                     isolated <webview partition="persist
 - 格式：`format_selection`（粗/斜/下划线/删除线/高亮/字色/字号/字体，CJK 同步
   Asian/Complex 属性）、`set_paragraph_format`（对齐 + `Heading N` 样式）
 
-改动类命令返回 `paragraphAfterEdit` 验证快照。后端对应 `wps_*` 新工具见
-`WpsTools.java`；提示词工作流见 `prompts/system_prompt.md` §7。
+改动类命令返回 `paragraphAfterEdit` 验证快照。后端对应 `doc_*` 工具见
+`DocumentEditTools.java`（原 WpsTools，旧名 `wps_*` 经 ToolRegistry 别名兜底）；
+提示词工作流见 `prompts/system_prompt.md` §7。
 
 全部原语已在真实 LOWA 引擎（自建 zh-CN 24.2.8）+ 无头/有头 Chrome 上端到端
 验证（`editor.html?verify=1` 暴露 `window.__loExecutor` 供自动化驱动）。

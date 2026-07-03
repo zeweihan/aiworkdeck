@@ -8,7 +8,7 @@
 // reqId. The actual UNO operations run in the office worker (the spike's
 // office_thread.js, shared/evolved for the product).
 //
-// Contract = the SAME action names useWpsBridge.executeCommand dispatches
+// Contract = the editor-agnostic action names of the agent command pipeline
 // (get_selection / find_replace / insert_at_cursor / ...). RFC §0.2 invariant:
 // offset-shaped actions must map to anchors on the worker, never integer offsets.
 
@@ -97,11 +97,11 @@ export function createLibreOfficeExecutor(opts = {}) {
 
   /**
    * Editor-agnostic command entry point — SAME signature/contract as
-   * useWpsBridge.executeCommand(action, params). Unknown / ppt_* actions reject.
+   * the WPS-era useWpsBridge.executeCommand (removed #79). Unknown / ppt_* actions reject.
    */
   async function executeCommand(action, params = {}) {
     if (action && action.startsWith && action.startsWith('ppt_')) {
-      const m = 'ppt_* not supported by the LibreOffice executor (use WPS executor): ' + action
+      const m = 'ppt_* not supported by the LibreOffice executor: ' + action
       if (opts.onError) opts.onError(m)
       return { success: false, message: m }
     }

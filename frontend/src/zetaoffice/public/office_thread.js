@@ -298,7 +298,7 @@ function testInsertText(text) {
 
 // ==========================================================================
 // Editor executor command contract (Epic #43 task ④, worker side).
-// Implements the SAME editor-agnostic actions that useWpsBridge.executeCommand
+// Implements the SAME editor-agnostic actions that the agent command pipeline
 // dispatches, via UNO — so frontend/src/composables/useLibreOfficeBridge.js can
 // drive LibreOffice with the backend's existing commands. Each handler returns a
 // plain result object; the dispatcher posts {cmd:'result', reqId, result} back.

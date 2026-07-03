@@ -5,7 +5,7 @@
 // WHY a relay: ZetaOffice boots inside an isolated Electron <webview> (it needs
 // cross-origin isolation, which the main window can't have — see
 // desktop/main/zetaoffice-session.js). But the AI agent command pipeline runs in
-// the HOST (project-overview.vue's handleWpsCommand). So a host executeCommand
+// the HOST (project-overview.vue's handleEditorCommand). So a host executeCommand
 // must cross the boundary: the host sends {action, params}, the webview runs it
 // against the booted executor (libreofficeExecutorClient -> worker -> UNO), and
 // returns the result. This module is that relay.
@@ -52,7 +52,7 @@ export function serveExecutor({ executor, send, subscribe }) {
 
 /**
  * HOST side: an executeCommand(action, params) that round-trips to the webview.
- * SAME contract as useWpsBridge / libreofficeExecutorClient, so useEditorBridge
+ * SAME contract as libreofficeExecutorClient.executeCommand, so useEditorBridge
  * can use it as the LibreOffice executor when the editor lives in a webview.
  *
  * @param {object} args

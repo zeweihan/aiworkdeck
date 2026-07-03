@@ -1223,17 +1223,17 @@ export function copyDdRequest(requestId) {
   })
 }
 
-// ==================== WPS 操作结果回调 ====================
+// ==================== 编辑器操作结果回调 ====================
 
 /**
- * 发送 WPS 操作结果到后端
+ * 发送编辑器操作结果到后端（路由 /wps-result 为前后端契约，保持旧名）
  * @param {string} conversationId - 会话 ID
  * @param {string} requestId - 请求 ID
  * @param {boolean} success - 是否成功
  * @param {Object} data - 结果数据
  * @param {string} error - 错误信息
  */
-export function sendWpsResult(conversationId, requestId, success, data, error = null) {
+export function sendEditorResult(conversationId, requestId, success, data, error = null) {
   return request({
     url: '/api/ai/agent/wps-result',
     method: 'POST',
@@ -1373,7 +1373,7 @@ export default {
   getSensitiveOptions,
   desensitizeFile,
   // WPS 操作
-  sendWpsResult,
+  sendEditorResult,
   addDdRequestItems(requestId, content) {
     return request({
       url: `/api/dd/requests/${requestId}/items`,
