@@ -104,6 +104,21 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
       return () => ipcRenderer.removeListener('checkba:backend-status', listener)
     }
   },
+  // 组件管理（本地模型下载/状态，Phase 2）：状态查询 + 下载/取消/删除 + 进度订阅
+  model: {
+    status: () => ipcRenderer.invoke('checkba:model-status'),
+    download: (id) => ipcRenderer.invoke('checkba:model-download', { id }),
+    cancel: (id) => ipcRenderer.invoke('checkba:model-cancel', { id }),
+    remove: (id) => ipcRenderer.invoke('checkba:model-remove', { id }),
+    onProgress: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:model-progress', listener)
+      return () => ipcRenderer.removeListener('checkba:model-progress', listener)
+    }
+  },
+  services: {
+    ensure: (name) => ipcRenderer.invoke('checkba:service-ensure', { name })
+  },
   utils: {
     readFile: (path) => ipcRenderer.invoke('checkba:fs-read-file', { path })
   },

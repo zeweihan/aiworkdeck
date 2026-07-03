@@ -40,7 +40,8 @@ function parseArgs() {
       }
     }
   }
-  for (const k of ['service', 'src', 'requirements', 'out']) {
+  // --src 可选：mineru 这类纯 pip 包服务没有自有源码，只烙依赖
+  for (const k of ['service', 'requirements', 'out']) {
     if (!out[k]) {
       console.error(`missing --${k}`)
       process.exit(1)
@@ -127,7 +128,7 @@ function main() {
   const libDir = path.join(svcDir, 'lib')
   const appDir = path.join(svcDir, 'app')
   installDeps(pyRoot, path.resolve(args.requirements), libDir)
-  copyAppSource(path.resolve(args.src), appDir)
+  if (args.src) copyAppSource(path.resolve(args.src), appDir)
   prune(libDir)
   console.log(`bundled ${args.service}:`)
   console.log(`  runtime: ${pyRoot}`)

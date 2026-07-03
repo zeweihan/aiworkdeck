@@ -13,7 +13,7 @@
             </view>
             <view class="nav-list">
                 <view
-                  v-for="nav in navItems"
+                  v-for="nav in visibleNavItems"
                   :key="nav.key"
                   class="nav-item"
                   :class="{ active: activeNav === nav.key }"
@@ -379,6 +379,80 @@
           </view>
         </scroll-view>
 
+        <!-- 组件管理（仅桌面端：本地模型下载与服务启用） -->
+        <scroll-view
+          v-else-if="activeNav === 'components'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">组件管理</text>
+              <text class="section-subtitle">
+                本地 AI 组件按需下载，数据不出本机；下载为一次性，之后离线可用
+              </text>
+            </view>
+            <view class="section-body">
+              <view v-if="components.length === 0" class="empty">
+                <text class="empty-text">加载中...</text>
+              </view>
+              <view
+                v-for="comp in components"
+                :key="comp.id"
+                class="comp-row"
+              >
+                <view class="comp-main">
+                  <text class="comp-name">{{ comp.name }}</text>
+                  <text class="comp-sub">
+                    {{ comp.sizeHint }}
+                    <text v-if="comp.state === 'installed' && comp.serviceRunning"> · 服务运行中</text>
+                    <text v-else-if="comp.state === 'installed'"> · 已就绪</text>
+                    <text v-else-if="comp.state === 'downloading'"> · 下载中 {{ comp.percent != null ? comp.percent + '%' : '' }}</text>
+                    <text v-else-if="comp.state === 'error'" class="comp-error"> · 出错：{{ comp.message }}</text>
+                    <text v-else> · 未下载</text>
+                  </text>
+                  <view v-if="comp.state === 'downloading'" class="comp-progress">
+                    <view
+                      class="comp-progress-fill"
+                      :style="{ width: (comp.percent || 0) + '%' }"
+                    />
+                  </view>
+                </view>
+                <view class="comp-actions">
+                  <button
+                    v-if="comp.state === 'absent' || comp.state === 'error'"
+                    class="comp-btn primary"
+                    @tap="handleComponentDownload(comp)"
+                  >
+                    下载
+                  </button>
+                  <button
+                    v-if="comp.state === 'downloading'"
+                    class="comp-btn"
+                    @tap="handleComponentCancel(comp)"
+                  >
+                    取消
+                  </button>
+                  <button
+                    v-if="comp.state === 'installed' && !comp.serviceRunning"
+                    class="comp-btn primary"
+                    @tap="handleComponentEnable(comp)"
+                  >
+                    启用
+                  </button>
+                  <button
+                    v-if="comp.state === 'installed'"
+                    class="comp-btn danger"
+                    @tap="handleComponentRemove(comp)"
+                  >
+                    删除
+                  </button>
+                </view>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
+
         <!-- 用户管理 -->
         <scroll-view
           v-else
@@ -487,9 +561,11 @@ export default {
       navItems: [
         { key: 'config', label: '系统配置' },
         { key: 'ai', label: 'AI 功能设置' },
+        { key: 'components', label: '组件管理', desktopOnly: true },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
         { key: 'users', label: '用户管理' },
       ],
+      components: [],
       form: {
         external: {
           google: { apiKey: '', modelName: '', apiBaseUrl: '' },
@@ -534,6 +610,14 @@ export default {
       users: [],
     }
   },
+  computed: {
+    isDesktop() {
+      return typeof window !== 'undefined' && !!(window.checkbaDesktop && window.checkbaDesktop.model)
+    },
+    visibleNavItems() {
+      return this.navItems.filter((n) => !n.desktopOnly || this.isDesktop)
+    },
+  },
   onLoad() {
     const user = getCurrentUser()
     if (user) {
@@ -541,8 +625,88 @@ export default {
     }
     this.loadConfig()
     this.loadUsers()
+    if (this.isDesktop) {
+      this.loadComponents()
+      // 订阅主进程模型下载进度；onUnload 退订
+      this._modelProgressUnsub = window.checkbaDesktop.model.onProgress((evt) => {
+        const comp = this.components.find((c) => c.id === evt.id)
+        if (!comp) return
+        if (evt.phase === 'progress') {
+          comp.state = 'downloading'
+          if (typeof evt.percent === 'number') comp.percent = evt.percent
+        } else {
+          // done / error：以主进程状态为准，整体刷新
+          this.loadComponents()
+        }
+      })
+    }
+  },
+  onUnload() {
+    if (this._modelProgressUnsub) {
+      this._modelProgressUnsub()
+      this._modelProgressUnsub = null
+    }
   },
   methods: {
+    async loadComponents() {
+      if (!this.isDesktop) return
+      try {
+        const res = await window.checkbaDesktop.model.status()
+        this.components = (res && res.components ? res.components : []).map((c) => ({ percent: null, ...c }))
+      } catch (e) {
+        console.error('loadComponents failed', e)
+      }
+    },
+    handleComponentDownload(comp) {
+      uni.showModal({
+        title: '下载组件',
+        content: `「${comp.name}」需一次性下载${comp.sizeHint}到本机，之后离线可用。是否开始？`,
+        success: async (r) => {
+          if (!r.confirm) return
+          try {
+            await window.checkbaDesktop.model.download(comp.id)
+            comp.state = 'downloading'
+            comp.percent = 0
+          } catch (e) {
+            uni.showToast({ title: '启动下载失败', icon: 'none' })
+          }
+        },
+      })
+    },
+    async handleComponentCancel(comp) {
+      try {
+        await window.checkbaDesktop.model.cancel(comp.id)
+      } finally {
+        this.loadComponents()
+      }
+    },
+    handleComponentRemove(comp) {
+      uni.showModal({
+        title: '删除组件',
+        content: `将删除「${comp.name}」的本地文件（${comp.sizeHint}），再次使用需重新下载。确认删除？`,
+        success: async (r) => {
+          if (!r.confirm) return
+          try {
+            await window.checkbaDesktop.model.remove(comp.id)
+          } finally {
+            this.loadComponents()
+          }
+        },
+      })
+    },
+    async handleComponentEnable(comp) {
+      if (comp.id !== 'mineru-models') return
+      uni.showLoading({ title: '启动中...' })
+      try {
+        const res = await window.checkbaDesktop.services.ensure('mineru-service')
+        if (!res || !res.ok) {
+          uni.showToast({ title: '启动失败：' + ((res && res.message) || '未知错误'), icon: 'none' })
+        }
+      } finally {
+        uni.hideLoading()
+        this.loadComponents()
+      }
+    },
     goBack() {
       // 有历史就返回，否则回到个人中心
       try {
@@ -1368,5 +1532,76 @@ $border-color: #E9ECEF; // Gray-Light
 .empty-text {
   font-size: 14px;
   color: $text-secondary;
+}
+
+/* 组件管理（桌面端） */
+.comp-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.comp-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.comp-name {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.comp-sub {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.comp-error {
+  color: #d03050;
+}
+
+.comp-progress {
+  margin-top: 8px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+
+.comp-progress-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: #18a058;
+  transition: width 0.3s ease;
+}
+
+.comp-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: 16px;
+}
+
+.comp-btn {
+  font-size: 12px;
+  line-height: 1;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: #f2f3f5;
+  color: #333;
+}
+
+.comp-btn.primary {
+  background: #18a058;
+  color: #fff;
+}
+
+.comp-btn.danger {
+  background: #fef0f0;
+  color: #d03050;
 }
 </style>

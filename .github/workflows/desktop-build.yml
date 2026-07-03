@@ -94,6 +94,15 @@ jobs:
             --src pptx-service/backend \
             --requirements pptx-service/requirements.lock \
             --out desktop/bundled/mac-arm64
+      - name: Bundle mineru-service (macOS arm64)
+        if: runner.os == 'macOS'
+        run: |
+          # 纯 pip 包服务（无 --src）；模型不进包，首启在「组件管理」下载
+          node desktop/scripts/prepare-python-service.js \
+            --service mineru-service \
+            --requirements mineru-service/requirements.lock \
+            --out desktop/bundled/mac-arm64
+          du -sh desktop/bundled/mac-arm64/pysvc/mineru-service/lib
       - name: Bundle backend (Windows x64)
         if: runner.os == 'Windows'
         shell: bash
@@ -113,6 +122,15 @@ jobs:
             --src pptx-service/backend \
             --requirements pptx-service/requirements.lock \
             --out desktop/bundled/win-x64
+      - name: Bundle mineru-service (Windows x64)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          node desktop/scripts/prepare-python-service.js \
+            --service mineru-service \
+            --requirements mineru-service/requirements.lock \
+            --out desktop/bundled/win-x64
+          du -sh desktop/bundled/win-x64/pysvc/mineru-service/lib
       - name: Sign bundled backend natives (macOS)
         if: runner.os == 'macOS'
         env:
@@ -196,6 +214,30 @@ jobs:
           tail -80 "$RUNNER_TEMP/pptx-smoke.log"
           kill $PPTX_PID 2>/dev/null || true
           exit 1
+      - name: Smoke test bundled mineru-service (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # 无模型拉起（模型解析时懒加载，/docs 不依赖模型——本地实测约 4s 就绪）
+          export MDIR="$RUNNER_TEMP/mineru-data"
+          mkdir -p "$MDIR"
+          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
+          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/mineru-service/lib"
+          MINERU_DEVICE_MODE=cpu MINERU_MODEL_SOURCE=modelscope \
+            MODELSCOPE_CACHE="$MDIR" HF_HOME="$MDIR/hf" MINERU_TOOLS_CONFIG_JSON="$MDIR/mineru.json" \
+            "$PY" -m mineru.cli.fast_api --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/mineru-smoke.log" 2>&1 &
+          MINERU_PID=$!
+          for i in $(seq 1 30); do
+            sleep 2
+            if curl -sf -o /dev/null http://127.0.0.1:8098/docs; then
+              echo "mineru-service up after ~$((i*2))s"
+              kill $MINERU_PID
+              exit 0
+            fi
+          done
+          echo "mineru-service failed to start within 60s"
+          tail -80 "$RUNNER_TEMP/mineru-smoke.log"
+          kill $MINERU_PID 2>/dev/null || true
+          exit 1
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
         working-directory: desktop
@@ -211,7 +253,15 @@ jobs:
           # cert secret is actually present; fork PRs fall back to
           # electron-builder's default unsigned PR build.
           CSC_FOR_PULL_REQUEST: ${{ secrets.CSC_LINK != '' }}
-        run: npx electron-builder --publish never
+        run: |
+          # mineru lib（transformers 等）有数万个小文件，macOS 默认 fd 上限 256 会让
+          # electron-builder 在打包/装订阶段 EMFILE。65536 实测仍复现——内核级
+          # kern.maxfilesperproc（默认 61440）同样要抬，三层一起调并打印生效值
+          sudo sysctl -w kern.maxfiles=524288 kern.maxfilesperproc=524288 || true
+          sudo launchctl limit maxfiles 524288 524288 || true
+          ulimit -n 524288 || ulimit -n "$(ulimit -Hn)" || true
+          echo "fd soft=$(ulimit -n) hard=$(ulimit -Hn)"
+          npx electron-builder --publish never
       - name: Notarization failure log (macOS)
         if: failure() && runner.os == 'macOS'
         env:
@@ -287,6 +337,30 @@ jobs:
           echo "pptx-service failed to start within 60s"
           tail -80 "$RUNNER_TEMP/pptx-smoke.log"
           kill $PPTX_PID 2>/dev/null || true
+          exit 1
+      - name: Smoke test bundled mineru-service (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          export MDIR="$RUNNER_TEMP/mineru-data"
+          mkdir -p "$MDIR"
+          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
+          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/mineru-service/lib"
+          MINERU_DEVICE_MODE=cpu MINERU_MODEL_SOURCE=modelscope \
+            MODELSCOPE_CACHE="$MDIR" HF_HOME="$MDIR/hf" MINERU_TOOLS_CONFIG_JSON="$MDIR/mineru.json" \
+            "$PY" -m mineru.cli.fast_api --host 127.0.0.1 --port 8098 > "$RUNNER_TEMP/mineru-smoke.log" 2>&1 &
+          MINERU_PID=$!
+          for i in $(seq 1 30); do
+            sleep 2
+            if curl -sf -o /dev/null http://127.0.0.1:8098/docs; then
+              echo "mineru-service up after ~$((i*2))s"
+              kill $MINERU_PID
+              exit 0
+            fi
+          done
+          echo "mineru-service failed to start within 60s"
+          tail -80 "$RUNNER_TEMP/mineru-smoke.log"
+          kill $MINERU_PID 2>/dev/null || true
           exit 1
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'

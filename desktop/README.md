@@ -41,11 +41,15 @@ node desktop/scripts/prepare-backend.js --jar backend/target/backend-0.0.1-SNAPS
 node desktop/scripts/prepare-python-service.js \
   --service pptx-service --src pptx-service/backend \
   --requirements pptx-service/requirements.lock --out desktop/bundled/mac-arm64
+# 5. mineru-service（纯 pip 包，无 --src；模型不进包，首启在「系统管理 → 组件管理」下载）
+node desktop/scripts/prepare-python-service.js \
+  --service mineru-service \
+  --requirements mineru-service/requirements.lock --out desktop/bundled/mac-arm64
 # 出包（本地不签名）
 cd desktop && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never
 ```
 
-打包态由 ServiceManager（`main/services/`）统一拉起本地服务：Java 后端固定 9696，pptx-service 动态端口（经 `EXTERNAL_PPTX_SERVICE_BASE_URL` 注入后端）。数据落 `~/.aiworkdeck/`（pptx 在 `~/.aiworkdeck/pptx/`），日志落 `~/.aiworkdeck/logs/<service>.log`。
+打包态由 ServiceManager（`main/services/`）统一拉起本地服务：Java 后端固定 9696，pptx-service / mineru-service 动态端口（分别经 `EXTERNAL_PPTX_SERVICE_BASE_URL` 注入后端、`MINERU_LOCAL_URL` 注入 pptx）。mineru 为条件启动：模型未下载则跳过，在「系统管理 → 组件管理」下载（落 `~/.aiworkdeck/models/mineru/`）后自动拉起；云端 MinerU 兜底默认关闭（`CHECKBA_MINERU_FORCE_CLOUD=1` 可放开）。数据落 `~/.aiworkdeck/`（pptx 在 `~/.aiworkdeck/pptx/`），日志落 `~/.aiworkdeck/logs/<service>.log`。
 
 ## Notes
 
