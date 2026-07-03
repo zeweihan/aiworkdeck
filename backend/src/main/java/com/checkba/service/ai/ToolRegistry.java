@@ -51,22 +51,59 @@ public class ToolRegistry {
             "fileId", List.of("id")
     );
 
-    /** 旧编排器为部分工具提供的缺省参数值（行为保持） */
+    /** 旧编排器为部分工具提供的缺省参数值（行为保持；键为别名解析后的真实工具名） */
     private static final Map<String, Object> LEGACY_DEFAULTS = Map.of(
-            "wps_find_replace.replaceAll", Boolean.TRUE,
-            "wps_find_text.matchCase", Boolean.FALSE,
-            "wps_delete_text.deleteAll", Boolean.FALSE,
+            "doc_find_replace.replaceAll", Boolean.TRUE,
+            "doc_find_text.matchCase", Boolean.FALSE,
+            "doc_delete_text.deleteAll", Boolean.FALSE,
             "list_files.subPath", ".",
             "query_memory.type", "all",
-            "wps_get_paragraph.paragraphIndex", 1,
-            "wps_modify_paragraph.paragraphIndex", 1,
-            "wps_replace_nth_match.matchIndex", 1,
-            "wps_delete_match.matchIndex", 1
+            "doc_get_paragraph.paragraphIndex", 1,
+            "doc_modify_paragraph.paragraphIndex", 1,
+            "doc_replace_nth_match.matchIndex", 1,
+            "doc_delete_match.matchIndex", 1
     );
 
-    /** 工具名别名（旧 prompt 中出现过的名称映射到真实工具） */
-    public static final Map<String, String> TOOL_NAME_ALIASES = Map.of(
-            "search_laws", "search_web"
+    /**
+     * 工具名别名（旧 prompt / 老对话历史 / 模型惯性输出中出现过的名称映射到真实工具）。
+     *
+     * wps_* → doc_* 是 Phase 2.5 灰度更名（编辑器已从 WPS 迁移到 LibreOffice，
+     * LLM 面工具名同步去 WPS 化）的兜底：老对话历史、老 prompt、模型按惯性输出的
+     * 旧名仍能正确分发。该批别名至少保留两个发布版本（≥0.6.0）后再评估移除。
+     */
+    public static final Map<String, String> TOOL_NAME_ALIASES = Map.ofEntries(
+            Map.entry("search_laws", "search_web"),
+            // ---- Phase 2.5：WPS 时代旧工具名 → doc_*（since 0.4.x，移除不早于 0.6.0）----
+            Map.entry("wps_list_project_files", "doc_list_project_files"),
+            Map.entry("wps_open_file", "doc_open_file"),
+            Map.entry("wps_start_stream", "doc_start_stream"),
+            Map.entry("wps_get_selection", "doc_get_selection"),
+            Map.entry("wps_goto", "doc_goto"),
+            Map.entry("wps_set_selection", "doc_set_selection"),
+            Map.entry("wps_find_text", "doc_find_text"),
+            Map.entry("wps_find_replace", "doc_find_replace"),
+            Map.entry("wps_replace_nth_match", "doc_replace_nth_match"),
+            Map.entry("wps_delete_match", "doc_delete_match"),
+            Map.entry("wps_delete_text", "doc_delete_text"),
+            Map.entry("wps_replace_selection", "doc_replace_selection"),
+            Map.entry("wps_insert_at_cursor", "doc_insert_at_cursor"),
+            Map.entry("wps_get_paragraph", "doc_get_paragraph"),
+            Map.entry("wps_modify_paragraph", "doc_modify_paragraph"),
+            Map.entry("wps_get_outline", "doc_get_outline"),
+            Map.entry("wps_insert_under_heading", "doc_insert_under_heading"),
+            Map.entry("wps_search_related_docs", "doc_search_related_docs"),
+            Map.entry("wps_get_document_text", "doc_get_document_text"),
+            Map.entry("wps_get_cursor_context", "doc_get_cursor_context"),
+            Map.entry("wps_select_anchor", "doc_select_anchor"),
+            Map.entry("wps_select_paragraph", "doc_select_paragraph"),
+            Map.entry("wps_collapse_cursor", "doc_collapse_cursor"),
+            Map.entry("wps_replace_at_anchor", "doc_replace_at_anchor"),
+            Map.entry("wps_delete_selection", "doc_delete_selection"),
+            Map.entry("wps_format_selection", "doc_format_selection"),
+            Map.entry("wps_set_paragraph_format", "doc_set_paragraph_format"),
+            Map.entry("wps_undo", "doc_undo"),
+            Map.entry("wps_redo", "doc_redo"),
+            Map.entry("wps_debug_revisions", "doc_debug_revisions")
     );
 
     /**

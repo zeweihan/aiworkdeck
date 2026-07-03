@@ -132,7 +132,7 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "列出文件", category = "file")
-    @Tool("List files and directories in a project's data folder. Note: This lists physical files, not database records. For database files, use wps_list_project_files or pptx_list_files.")
+    @Tool("List files and directories in a project's data folder. Note: This lists physical files, not database records. For database files, use doc_list_project_files or pptx_list_files.")
     public String list_files(
             @P("Project ID - files will be listed from data/projects/{projectId}/") Long projectId,
             @P("Optional: Subdirectory path within the project folder. Use '.' or empty for project root.") String subPath
@@ -175,7 +175,7 @@ public class FileTools implements AgentToolComponent {
                 });
             }
             
-            sb.append("\nNote: These are physical files. Database file records may differ. Use wps_list_project_files for database files.");
+            sb.append("\nNote: These are physical files. Database file records may differ. Use doc_list_project_files for database files.");
             return sb.toString();
 
         } catch (IOException e) {
@@ -210,7 +210,7 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "生成Word文档", category = "file", fileEffect = "ADDED", fileArg = "fileName", refreshFiles = true)
-    @Tool("【STRICTLY NEW FILES ONLY】Create a NEW .docx from Markdown. FORBIDDEN for 'revise', 'update', or 'modify' tasks. If a similar file exists, you MUST use wps_open_file to edit it. DO NOT create 'Revised_Version.docx'.")
+    @Tool("【STRICTLY NEW FILES ONLY】Create a NEW .docx from Markdown. FORBIDDEN for 'revise', 'update', or 'modify' tasks. If a similar file exists, you MUST use doc_open_file to edit it. DO NOT create 'Revised_Version.docx'.")
     public String write_docx(
             @P("新文件名 (如 '报告.docx')") String fileName, 
             @P("Markdown 内容") String markdownContent,
@@ -221,7 +221,7 @@ public class FileTools implements AgentToolComponent {
         
         // Block suspicious filenames that suggest revision
         if (fileName.matches(".*(revise|revision|update|modify|change|修改|修订|更新|变动).*")) {
-            return "Error: Creation of files with 'revise/update/modify' in the name is FORBIDDEN. You MUST use 'wps_open_file' to open the original file and use editing tools (wps_find_replace, wps_modify_paragraph, etc.) to apply changes. DO NOT create a new file.";
+            return "Error: Creation of files with 'revise/update/modify' in the name is FORBIDDEN. You MUST use 'doc_open_file' to open the original file and use editing tools (doc_find_replace, doc_modify_paragraph, etc.) to apply changes. DO NOT create a new file.";
         }
         
         try {
@@ -230,7 +230,7 @@ public class FileTools implements AgentToolComponent {
             Path targetPath = projectDataDir.resolve(fileName);
             
             if (Files.exists(targetPath)) {
-                return "Error: File '" + fileName + "' already exists. Please use 'wps_open_file' and editing tools to modify the existing document instead of overwriting it.";
+                return "Error: File '" + fileName + "' already exists. Please use 'doc_open_file' and editing tools to modify the existing document instead of overwriting it.";
             }
             
             Parser parser = Parser.builder().build();

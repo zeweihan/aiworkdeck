@@ -52,7 +52,7 @@ class ToolRegistryTest {
         }
 
         @Tool("Find replace legacy default test")
-        public String wps_find_replace(@P("find") String findText, @P("replace") String replaceText, @P("all") Boolean replaceAll) {
+        public String doc_find_replace(@P("find") String findText, @P("replace") String replaceText, @P("all") Boolean replaceAll) {
             return findText + ">" + replaceText + ":" + replaceAll;
         }
 
@@ -81,7 +81,7 @@ class ToolRegistryTest {
     void registersAllTools() {
         assertEquals(7, registry.getAllSpecifications().size());
         assertTrue(registry.hasTool("echo"));
-        assertTrue(registry.hasTool("wps_find_replace"));
+        assertTrue(registry.hasTool("doc_find_replace"));
         assertFalse(registry.hasTool("nonexistent"));
     }
 
@@ -131,9 +131,9 @@ class ToolRegistryTest {
     }
 
     @Test
-    @DisplayName("行为保持：wps_find_replace 缺省 replaceAll=true")
+    @DisplayName("行为保持：doc_find_replace 缺省 replaceAll=true")
     void appliesLegacyDefaults() {
-        ToolRegistry.ToolResult r = registry.execute("wps_find_replace",
+        ToolRegistry.ToolResult r = registry.execute("doc_find_replace",
                 "{\"findText\":\"甲\",\"replaceText\":\"乙\"}", ctx);
         assertEquals("甲>乙:true", r.output());
     }
@@ -161,5 +161,25 @@ class ToolRegistryTest {
         // search_laws → search_web 不在 FakeTools 中，验证别名解析不误报 found
         ToolRegistry.ToolResult r = registry.execute("search_laws", "{\"query\":\"q\"}", ctx);
         assertFalse(r.found());
+    }
+
+    @Test
+    @DisplayName("灰度更名：旧名 wps_find_replace 经别名命中 doc_find_replace（含遗留默认值）")
+    void dispatchesLegacyWpsNameViaAlias() {
+        ToolRegistry.ToolResult r = registry.execute("wps_find_replace",
+                "{\"findText\":\"甲\",\"replaceText\":\"乙\"}", ctx);
+        assertTrue(r.found());
+        assertEquals("甲>乙:true", r.output());
+    }
+
+    @Test
+    @DisplayName("灰度更名：全部 wps_* 别名映射到同名 doc_* 工具")
+    void allWpsAliasesTargetDocNames() {
+        ToolRegistry.TOOL_NAME_ALIASES.forEach((alias, target) -> {
+            if (alias.startsWith("wps_")) {
+                assertEquals("doc_" + alias.substring(4), target,
+                        "别名 " + alias + " 应映射到同名 doc_* 工具");
+            }
+        });
     }
 }
