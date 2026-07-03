@@ -1,6 +1,6 @@
-# 插件规范 v2（Plugin Spec v2）
+# 插件规范 v2.1（Plugin Spec v2.1）
 
-> 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A。示例插件见 [examples/hello-plugin/](../examples/hello-plugin/)。
+> 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B。示例插件见 [examples/hello-plugin/](../examples/hello-plugin/)。
 > 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）；
 > 前端管理页：`frontend/src/pages/plugin-market/plugin-market.vue`（插件广场，入口在系统管理侧边栏）。
 
@@ -51,6 +51,7 @@ plugins/
 | `tools` | object[] | 否 | 工具清单（`name` + 中文 `description` + 可选 `permissions`），用于插件广场展示、人工审查与 v2 权限校验。`name` 应与 JAR 中 `@Tool` 方法名一致；`permissions` 声明**该工具运行所需**的能力（v2 新增，见 §3）。 |
 | `frontendEntry` | string | 否 | 前端入口（预留，v1 不加载）。 |
 | `backendJars` | string[] | 否 | 相对插件目录的 JAR 文件名列表，启动/重扫时加载其中带 `@Tool` 注解的类。 |
+| `skills` | string[] | 否 | **v2.1 新增**：插件携带的 Skill 子目录名列表（相对插件目录），见 §7。 |
 
 未知字段被忽略（向前兼容）；`permissions` 中出现 v1 未定义的值仅记录 WARN，不拒绝加载。
 
@@ -106,10 +107,31 @@ plugins/
 
 管理接口鉴权与 AdminConfigController 一致：`X-Session-Id` 请求头 → session 用户名为 `admin`。
 
-## 7. 版本演进
+## 7. 插件携带 Skill（v2.1）
+
+插件可通过 manifest 的 `skills` 字段携带 Skill（Skill 规范见 [docs/SKILL_SPEC.md](SKILL_SPEC.md)）：
+
+```
+plugins/
+└── my-plugin/
+    ├── manifest.json        # "skills": ["my-skill"]
+    └── my-skill/
+        ├── skill.yml
+        └── prompt.md
+```
+
+- `skills` 中的每一项是**相对插件目录**的 skill 子目录名；目录不存在时记 WARN 跳过。
+- `PluginService` 扫描时只**收集目录**（`getPluginSkillDirs()`），skill.yml 的解析、注册与
+  启停统一由 `SkillRegistry` 负责，并记录来源插件 id（`sourcePluginId`）。
+- **插件被禁用时，其携带的 skill 不参与触发匹配**（管理页仍可见）；插件重新启用即恢复。
+- skill 自身的启停独立持久化（`ai.skills.disabled`），与插件启停叠加生效。
+
+## 8. 版本演进
 
 - **v1（0.4.x）**：声明式 manifest + 启停持久化 + 插件广场展示。
-- **v2（当前，Phase 3A）**：ToolRegistry 按启停过滤三处消费点 + `tools[].permissions`
+- **v2（Phase 3A）**：ToolRegistry 按启停过滤三处消费点 + `tools[].permissions`
   分发前权限校验（诚实声明模型）+ 启停缓存 TTL。
+- **v2.1（当前，Phase 3B）**：manifest 新增 `skills` 字段，插件可携带 Skill（见 §7 与
+  docs/SKILL_SPEC.md）。
 - 规划中（见 AI_ARCHITECTURE.md Phase 3 TODO）：进程级运行时沙箱（真正强制 file/network 隔离）、
   frontendEntry 动态加载、插件签名与来源校验。

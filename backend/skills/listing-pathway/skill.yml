@@ -1,0 +1,43 @@
+# 上市路径选择比较分析 Skill（打包格式见 docs/SKILL_SPEC.md）
+id: listing-pathway
+name: 上市路径选择比较分析
+description: 面向中国资本市场律师的上市/证券化路径比较分析：境内主板/创业板/科创板/北交所、港股、美股、红筹/VIE、借壳、分拆、被并购、SPAC 等路径的可行性筛选与逐维度比较。
+
+# 触发条件：用户输入包含任一关键词即命中（不区分大小写）
+triggers:
+  - 上市路径
+  - 上市板块
+  - IPO
+  - 科创板
+  - 北交所
+  - 创业板上市
+  - 主板上市
+  - 红筹
+  - VIE
+  - 借壳
+  - 证券化
+  - 港股上市
+  - 美股上市
+  - SPAC
+  - 分拆上市
+  - 反向收购
+
+# prompt 模板文件名（相对本目录）
+prompt: prompt.md
+
+# 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）
+# 三类：法律检索（law_*）、网络搜索（search_web/browse_url）、成文输出（write_docx）
+allowed_tools:
+  - law_search
+  - law_search_keyword
+  - get_law_article
+  - law_recognition
+  - search_web
+  - browse_url
+  - write_docx
+
+# 输出结构约定（随 prompt 注入）
+output: |
+  最终交付一份结构化的《上市路径比较分析》：企业画像 → 可行路径筛选（含排除理由）→
+  逐路径比较表（监管门槛/时间/成本/控制权影响/后续融资）→ 结论与初步建议。
+  篇幅较长或用户明确要求成文时，用 write_docx 生成 Word 备忘录并在 <final> 中说明文件名。

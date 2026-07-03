@@ -94,6 +94,24 @@ class OrchestratorReplayEvalTest {
             }
         }
 
+        // 5.1 Skill 工具可见性裁剪：携带工具的 LLM 调用中可见工具的包含/排除断言
+        if (!c.expect.offeredToolsInclude.isEmpty() || !c.expect.offeredToolsExclude.isEmpty()) {
+            for (int i = 0; i < r.toolNamesOfferedPerLlmCall().size(); i++) {
+                List<String> offered = r.toolNamesOfferedPerLlmCall().get(i);
+                if (offered.isEmpty()) {
+                    continue; // 未携带工具的调用（如 ASK 模式）不参与该断言
+                }
+                for (String name : c.expect.offeredToolsInclude) {
+                    assertTrue(offered.contains(name),
+                            "第 " + (i + 1) + " 次 LLM 调用可见工具应包含 [" + name + "]，实际: " + offered);
+                }
+                for (String name : c.expect.offeredToolsExclude) {
+                    assertFalse(offered.contains(name),
+                            "第 " + (i + 1) + " 次 LLM 调用可见工具不应包含 [" + name + "]（Skill 裁剪失效），实际: " + offered);
+                }
+            }
+        }
+
         // 6. <title> 协议：会话文件夹重命名
         if (c.expect.renamedTitleContains != null) {
             assertTrue(r.folderRenames().stream().anyMatch(t -> t.contains(c.expect.renamedTitleContains)),

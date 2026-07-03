@@ -92,7 +92,17 @@ public class PluginService {
         private List<String> permissions;
         /** 插件提供的工具清单（名称 + 中文描述） */
         private List<PluginToolInfo> tools;
+        /** 插件携带的 skill 子目录名列表（规范 v2.1，见 docs/SKILL_SPEC.md） */
+        private List<String> skills;
     }
+
+    /** 插件携带的一个 skill 目录（交给 SkillRegistry 注册，见 docs/SKILL_SPEC.md） */
+    public record PluginSkillDir(File dir, String pluginId) {
+    }
+
+    /** 扫描时收集到的插件 skill 目录，SkillRegistry 启动/重扫时拉取 */
+    @Getter
+    private final List<PluginSkillDir> pluginSkillDirs = new ArrayList<>();
 
     @lombok.Data
     public static class PluginToolInfo {
@@ -117,6 +127,7 @@ public class PluginService {
         pluginTools.clear();
         toolSpecifications.clear();
         toolToPluginId.clear();
+        pluginSkillDirs.clear();
         loadDisabledState();
         loadPlugins();
         log.info("Plugin rescan done: {} plugins, {} tools", plugins.size(), pluginTools.size());
@@ -252,6 +263,19 @@ public class PluginService {
                     continue;
                 }
                 plugins.add(meta);
+
+                // 收集插件携带的 skill 目录（规范 v2.1）：交给 SkillRegistry 注册，本服务不解析 skill.yml
+                if (meta.getSkills() != null) {
+                    for (String skillSubdir : meta.getSkills()) {
+                        File skillDir = new File(pluginDir, skillSubdir);
+                        if (skillDir.isDirectory()) {
+                            pluginSkillDirs.add(new PluginSkillDir(skillDir, meta.getId()));
+                        } else {
+                            log.warn("Plugin {} declares skill dir '{}' but it does not exist, skip",
+                                    meta.getId(), skillSubdir);
+                        }
+                    }
+                }
 
                 // Load associated JARs if any
                 if (meta.getBackendJars() != null) {

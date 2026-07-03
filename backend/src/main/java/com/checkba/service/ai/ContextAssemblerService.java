@@ -40,6 +40,7 @@ public class ContextAssemblerService {
     private final ProjectAiMessageService messageService;
     private final FileContextLoader fileContextLoader;
     private final AiContextProperties contextProperties;
+    private final com.checkba.service.ai.skill.SkillRouter skillRouter;
 
     // 记忆系统组件（读侧：写侧见 MemoryPipelineService）
     private final MemoryManager memoryManager;
@@ -137,6 +138,14 @@ public class ContextAssemblerService {
 
         // [Injection] Mode-Specific Constraints (CRITICAL)
         systemText.append(getModeConstraints(agentMode));
+
+        // [Injection] Skill（Phase 3B，规范见 docs/SKILL_SPEC.md）：
+        // 用户输入命中触发词时把 skill 的 prompt 模板注入本轮系统消息。
+        // ASK 模式跳过（skill 指引以工具流程为主，与 ASK 禁用工具的约束冲突）；未命中不注入（行为保持）。
+        if (agentMode != AgentMode.ASK) {
+            skillRouter.match(userPrompt)
+                    .ifPresent(skill -> systemText.append(skillRouter.promptInjectionFor(skill)));
+        }
 
         // [Injection] State with Phase
         systemText.append("\n\n# Current Context\n[SYSTEM INJECTION]");

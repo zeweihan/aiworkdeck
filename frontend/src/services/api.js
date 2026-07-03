@@ -428,6 +428,30 @@ export function rescanPlugins() {
   });
 }
 
+// 获取 Skill 列表（规范见 docs/SKILL_SPEC.md）
+export function getSkills() {
+  return request({
+    url: '/api/skills/list',
+    method: 'GET'
+  });
+}
+
+// 启用 / 禁用 Skill（仅管理员）
+export function setSkillEnabled(skillId, enabled) {
+  return request({
+    url: `/api/skills/${encodeURIComponent(skillId)}/${enabled ? 'enable' : 'disable'}`,
+    method: 'POST'
+  });
+}
+
+// 重新扫描 skills/ 目录（仅管理员）
+export function rescanSkills() {
+  return request({
+    url: '/api/skills/rescan',
+    method: 'POST'
+  });
+}
+
 /**
  * 将一段 AI 文本（markdown）导出为 Word 文档并落地到项目文件树中（后端生成 docx）
  * payload: { projectId, parentId, fileName, markdown | content }
