@@ -44,6 +44,7 @@ public class AgentOrchestrator {
     private final TokenUsageService tokenUsageService;
     private final ContextAssemblerService contextAssemblerService;
     private final ToolRegistry toolRegistry;
+    private final com.checkba.service.ai.skill.SkillRouter skillRouter;
     private final XmlToolCallParser xmlToolCallParser;
     private final com.checkba.service.ai.memory.MemoryPipelineService memoryPipelineService;
     private final com.checkba.service.ProjectFileService projectFileService;
@@ -190,6 +191,9 @@ public class AgentOrchestrator {
                 });
             }
             
+            // 1.2 Skill 触发匹配（Phase 3B）：命中记录本轮激活的 skill，未命中行为与现状一致
+            skillRouter.activateForTurn(conversationId, request.getMessage());
+
             // 2. Build Context & History Message Stack (Spec v1.8)
             log.info("Assembling full message context for conversation: {}", conversationId);
             // TODO: Get taskListId/planId from session if available
@@ -555,7 +559,8 @@ public class AgentOrchestrator {
             model.generate(messages, handler);
         } else {
             // Agent 和 Plan 模式：传递工具规格（内置 + 插件，统一来自注册表）
-            List<ToolSpecification> allTools = toolRegistry.getAllSpecifications();
+            // Skill 命中时由 SkillRouter 做可见性白名单裁剪（Phase 3B，未命中原样返回）
+            List<ToolSpecification> allTools = skillRouter.visibleTools(conversationId, toolRegistry.getAllSpecifications());
             model.generate(messages, allTools, handler);
         }
     }

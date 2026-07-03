@@ -76,6 +76,10 @@ public class EvalCase {
         public String bubbleEndStatus = "finished";
         /** 每次 LLM 调用是否携带工具规格（null = 不断言；ASK 模式应为 false） */
         public Boolean toolsOffered;
+        /** 每次携带工具的 LLM 调用中，可见工具应包含的名字（Skill 裁剪断言；空 = 不断言） */
+        public List<String> offeredToolsInclude = new ArrayList<>();
+        /** 每次携带工具的 LLM 调用中，可见工具应排除的名字（Skill 裁剪断言；空 = 不断言） */
+        public List<String> offeredToolsExclude = new ArrayList<>();
         /** 会话文件夹重命名（<title> 协议）应包含的子串（null = 不断言） */
         public String renamedTitleContains;
     }

@@ -60,12 +60,48 @@
           </view>
         </view>
       </view>
+
+      <!-- Skill 区块（规范见 docs/SKILL_SPEC.md） -->
+      <view class="section-header">
+        <text class="section-title">Skill</text>
+        <text class="section-subtitle">命中触发词时自动注入提示模板并裁剪可用工具</text>
+      </view>
+      <view v-if="skills.length === 0" class="empty">
+        <text>暂无 Skill</text>
+        <text class="empty-hint">将 Skill 目录（含 skill.yml）放入服务端 skills/ 目录后，点击"重新扫描"</text>
+      </view>
+      <view v-else>
+        <view v-for="s in skills" :key="s.id" class="plugin-card" :class="{ disabled: !s.enabled }">
+          <view class="card-header">
+            <text class="plugin-icon">🎯</text>
+            <view class="title-block">
+              <view class="name-row">
+                <text class="plugin-name">{{ s.name || s.id }}</text>
+                <text class="plugin-version" v-if="s.sourcePluginId">来自插件 {{ s.sourcePluginId }}</text>
+              </view>
+              <text class="plugin-meta">触发方式：关键词匹配</text>
+            </view>
+            <switch
+              class="plugin-switch"
+              :checked="s.enabled"
+              :disabled="switching"
+              @change="onToggleSkill(s, $event)"
+            />
+          </view>
+
+          <text class="plugin-desc">{{ s.description || '暂无描述' }}</text>
+
+          <view class="tag-row">
+            <text v-for="t in s.triggers" :key="t" class="trigger-tag">{{ t }}</text>
+          </view>
+        </view>
+      </view>
     </scroll-view>
   </view>
 </template>
 
 <script>
-import { getPlugins, setPluginEnabled, rescanPlugins } from '@/services/api.js'
+import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillEnabled, rescanSkills } from '@/services/api.js'
 
 const PERMISSION_LABELS = {
   file_read: '读取文件',
@@ -79,6 +115,7 @@ export default {
   data() {
     return {
       plugins: [],
+      skills: [],
       loading: false,
       switching: false,
       rescanning: false,
@@ -86,6 +123,7 @@ export default {
   },
   onLoad() {
     this.loadPlugins()
+    this.loadSkills()
   },
   methods: {
     permissionLabel(perm) {
@@ -123,15 +161,43 @@ export default {
         this.switching = false
       }
     },
+    async loadSkills() {
+      try {
+        const res = await getSkills()
+        this.skills = Array.isArray(res) ? res : (res?.data || [])
+      } catch (e) {
+        console.error('加载 Skill 列表失败:', e)
+        uni.showToast({ title: '加载 Skill 列表失败', icon: 'none' })
+      }
+    },
+    async onToggleSkill(skill, event) {
+      const enabled = !!(event?.detail?.value)
+      this.switching = true
+      try {
+        await setSkillEnabled(skill.id, enabled)
+        skill.enabled = enabled
+        uni.showToast({ title: enabled ? '已启用' : '已禁用', icon: 'none' })
+      } catch (e) {
+        console.error('切换 Skill 状态失败:', e)
+        // 回滚开关显示
+        skill.enabled = !enabled
+        uni.showToast({ title: e?.message || '操作失败（需要管理员权限）', icon: 'none' })
+        await this.loadSkills()
+      } finally {
+        this.switching = false
+      }
+    },
     async rescan() {
       this.rescanning = true
       try {
         const res = await rescanPlugins()
+        const skillRes = await rescanSkills().catch(() => null)
         uni.showToast({
-          title: `扫描完成：${res?.pluginCount ?? 0} 个插件`,
+          title: `扫描完成：${res?.pluginCount ?? 0} 个插件、${skillRes?.skillCount ?? 0} 个 Skill`,
           icon: 'none'
         })
         await this.loadPlugins()
+        await this.loadSkills()
       } catch (e) {
         console.error('重新扫描失败:', e)
         uni.showToast({ title: e?.message || '扫描失败（需要管理员权限）', icon: 'none' })
@@ -312,6 +378,32 @@ export default {
   border-radius: 999rpx;
   background-color: rgba(#e6a23c, 0.12);
   color: #b88230;
+}
+
+.section-header {
+  display: flex;
+  flex-direction: column;
+  row-gap: 4rpx;
+  margin: 24rpx 4rpx 12rpx;
+}
+
+.section-title {
+  font-size: 30rpx;
+  font-weight: 500;
+  color: $uni-color-title;
+}
+
+.section-subtitle {
+  font-size: 22rpx;
+  color: $uni-text-color-grey;
+}
+
+.trigger-tag {
+  font-size: 22rpx;
+  padding: 2rpx 12rpx;
+  border-radius: 999rpx;
+  background-color: rgba(#67c23a, 0.12);
+  color: #4f9a2c;
 }
 
 .tool-list {

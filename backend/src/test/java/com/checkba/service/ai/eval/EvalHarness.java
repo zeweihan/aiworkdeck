@@ -14,6 +14,9 @@ import com.checkba.service.ai.SseEmitterService;
 import com.checkba.service.ai.TokenUsageService;
 import com.checkba.service.ai.XmlToolCallParser;
 import com.checkba.service.ai.memory.MemoryPipelineService;
+import com.checkba.service.ai.skill.SkillProperties;
+import com.checkba.service.ai.skill.SkillRegistry;
+import com.checkba.service.ai.skill.SkillRouter;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 
@@ -59,6 +62,7 @@ public final class EvalHarness {
             List<ArtifactSave> artifactSaves,
             List<String> folderRenames,
             List<Boolean> toolsOfferedPerLlmCall,
+            List<List<String>> toolNamesOfferedPerLlmCall,
             int remainingScriptTurns) {
 
         /** 最终保存的 ASSISTANT 消息（含 executionLog 前缀） */
@@ -82,12 +86,22 @@ public final class EvalHarness {
 
     /** 同步跑一个用例（handleUserMessage 直接调用，不经 Spring 代理，@Async 不生效） */
     public static RunResult run(EvalCase c) {
+        PluginService pluginService = new PluginService();
         RecordingToolRegistry registry =
-                new RecordingToolRegistry(RealToolBeans.instantiateAll(), new PluginService());
+                new RecordingToolRegistry(RealToolBeans.instantiateAll(), pluginService);
         registry.init();
         registry.setStubs(c.toolStubs);
         XmlToolCallParser parser = new XmlToolCallParser(registry);
         ScriptedStreamingModel scripted = new ScriptedStreamingModel(c.turns);
+
+        // 真实的 Skill 体系（Phase 3B）：扫描仓库内置 skills/ 目录，
+        // 让「skill 触发 → 工具可见性裁剪」路径在回放里被真实执行
+        SkillProperties skillProperties = new SkillProperties();
+        skillProperties.setDir(skillsDir());
+        skillProperties.setBaseTools(List.of("read_document", "list_files", "query_memory"));
+        SkillRegistry skillRegistry = new SkillRegistry(skillProperties, null, pluginService);
+        skillRegistry.init();
+        SkillRouter skillRouter = new SkillRouter(skillRegistry, skillProperties);
 
         ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
         when(chatModelFactory.getStreamingChatModel(any())).thenReturn(scripted);
@@ -139,7 +153,7 @@ public final class EvalHarness {
 
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
-                registry, parser, memoryPipeline, projectFileService, editorBridge, fileChange);
+                registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);
@@ -152,6 +166,16 @@ public final class EvalHarness {
 
         return new RunResult(c, registry.dispatches(), List.copyOf(sseEvents), List.copyOf(savedMessages),
                 List.copyOf(artifactSaves), List.copyOf(folderRenames),
-                scripted.toolsOfferedPerCall(), scripted.remainingTurns());
+                scripted.toolsOfferedPerCall(), scripted.toolNamesOfferedPerCall(), scripted.remainingTurns());
+    }
+
+    /** 内置 skills 目录（与 EvalCase.casesDir 同思路：兼容从 backend/ 或仓库根目录跑测试） */
+    private static String skillsDir() {
+        for (String candidate : List.of("skills", "backend/skills")) {
+            if (java.nio.file.Files.isDirectory(java.nio.file.Path.of(candidate))) {
+                return candidate;
+            }
+        }
+        return "skills";
     }
 }
