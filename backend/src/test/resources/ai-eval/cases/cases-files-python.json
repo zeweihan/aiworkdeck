@@ -1,0 +1,87 @@
+[
+  {
+    "id": "run-python-embedded-toolname-xml",
+    "title": "run_python 代码内含其他工具名不被误匹配（解析优先级回归）",
+    "category": "files",
+    "protocol": "xml",
+    "userInput": "帮我用 Python 统计一下检索脚本里调用了几次搜索",
+    "turns": [
+      {
+        "text": "<process name=\"运行Python\"><tool_code>run_python(code='script = open(\"crawl.py\").read()\ncount = script.count(\"search_web(\")\nprint(f\"search_web called {count} times\")')</tool_code></process>"
+      },
+      {
+        "text": "<final>脚本中共调用 search_web 3 次。</final>"
+      }
+    ],
+    "toolStubs": {
+      "run_python": "search_web called 3 times"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "run_python", "argsContain": { "code": "search_web" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "list-then-read-file-chain-xml",
+    "title": "浏览目录后读取文件（两轮工具链）",
+    "category": "files",
+    "protocol": "xml",
+    "userInput": "看看合同文件夹里有什么，把劳动合同模板打开读一下",
+    "turns": [
+      {
+        "text": "<process name=\"浏览项目文件\"><tool_code>list_files(subPath=\"合同\")</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"读取文件\"><tool_code>read_file(filePath=\"合同/劳动合同模板.docx\")</tool_code></process>"
+      },
+      {
+        "text": "<final>合同文件夹下共有 3 份文件。《劳动合同模板》主要条款包括合同期限、工作内容、劳动报酬与保密义务。</final>"
+      }
+    ],
+    "toolStubs": {
+      "list_files": "合同/\n  - 劳动合同模板.docx\n  - 保密协议模板.docx\n  - 竞业限制协议.docx",
+      "read_file": "劳动合同模板正文：第一条 合同期限……第四条 劳动报酬……"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "list_files", "argsContain": { "subPath": "合同" } },
+        { "name": "read_file", "argsContain": { "filePath": "劳动合同模板" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "browse-url-native",
+    "title": "浏览网页链接（原生 function calling）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "帮我看看这个链接说了什么：https://example.com/new-company-law",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "browse_url",
+            "arguments": { "url": "https://example.com/new-company-law" }
+          }
+        ]
+      },
+      {
+        "text": "<final>该页面是对新公司法注册资本制度的解读，要点：五年认缴期限、股东失权制度、董事催缴义务。</final>"
+      }
+    ],
+    "toolStubs": {
+      "browse_url": "页面标题：新公司法注册资本制度解读。正文摘要：认缴期限五年、股东失权、董事催缴……"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "browse_url", "argsContain": { "url": "example.com/new-company-law" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

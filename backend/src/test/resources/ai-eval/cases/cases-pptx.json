@@ -1,0 +1,68 @@
+[
+  {
+    "id": "pptx-generate-native",
+    "title": "生成股权激励方案 PPT（原生 function calling）",
+    "category": "pptx",
+    "protocol": "native",
+    "userInput": "把这份股权激励方案做成一个 PPT，商务简约风",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "pptx_generate",
+            "arguments": {
+              "topic": "股权激励方案：授予对象、行权条件与退出机制",
+              "fileName": "股权激励方案",
+              "style": "商务简约",
+              "language": "zh"
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>《股权激励方案》PPT 已开始生成，完成后会出现在项目文件区。</final>"
+      }
+    ],
+    "toolStubs": {
+      "pptx_generate": "{\"status\":\"generating\",\"task_id\":\"t-001\",\"file\":\"股权激励方案.pptx\"}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "pptx_generate",
+          "argsContain": { "topic": "股权激励", "style": "商务简约" }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "pptx-outline-longest-name-match-xml",
+    "title": "pptx_generate_outline 不被 pptx_generate 抢占（最长名优先回归）",
+    "category": "pptx",
+    "protocol": "xml",
+    "userInput": "先给我出一个数据合规专题培训的 PPT 大纲",
+    "turns": [
+      {
+        "text": "<process name=\"生成PPT大纲\"><tool_code>pptx_generate_outline(topic=\"数据合规专题培训：合规义务、跨境传输与执法案例\", language=\"zh\")</tool_code></process>"
+      },
+      {
+        "text": "<final>已生成《数据合规专题培训》PPT 大纲，共 8 个章节，您确认后我再生成完整 PPT。</final>"
+      }
+    ],
+    "toolStubs": {
+      "pptx_generate_outline": "{\"outline\":[\"一、数据合规监管框架\",\"二、企业合规义务\",\"三、跨境数据传输\"]}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "pptx_generate_outline",
+          "argsContain": { "topic": "数据合规", "language": "zh" }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

@@ -1,0 +1,97 @@
+[
+  {
+    "id": "revise-clause-find-replace-xml",
+    "title": "修订违约金条款（XML 协议 find_replace）",
+    "category": "revision",
+    "protocol": "xml",
+    "userInput": "把合同里的违约金从百分之五改成百分之十",
+    "turns": [
+      {
+        "text": "<process name=\"修订违约金条款\"><tool_code>wps_find_replace(findText=\"违约金为合同总额的百分之五\", replaceText=\"违约金为合同总额的百分之十\", replaceAll=true)</tool_code></process>"
+      },
+      {
+        "text": "<final>已将违约金条款由百分之五修订为百分之十。</final>"
+      }
+    ],
+    "toolStubs": {
+      "wps_find_replace": "{\"replaced\":1,\"status\":\"success\"}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "wps_find_replace",
+          "argsContain": {
+            "findText": "百分之五",
+            "replaceText": "百分之十",
+            "replaceAll": "true"
+          }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "revise-clause-find-replace-native",
+    "title": "修订不可抗力条款（原生 function calling）",
+    "category": "revision",
+    "protocol": "native",
+    "userInput": "把不可抗力条款改成包含疫情防控措施",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "wps_find_replace",
+            "arguments": {
+              "findText": "不可抗力",
+              "replaceText": "不可抗力（包括疫情防控措施）",
+              "replaceAll": true
+            }
+          }
+        ]
+      },
+      {
+        "text": "<final>已将不可抗力条款修订为包含疫情防控措施的表述。</final>"
+      }
+    ],
+    "toolStubs": {
+      "wps_find_replace": "{\"replaced\":3,\"status\":\"success\"}"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "wps_find_replace",
+          "argsContain": { "findText": "不可抗力", "replaceText": "疫情防控措施" }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "revise-two-tools-single-reply-xml",
+    "title": "单条回复内两个 tool_code 顺序分发（XML 协议）",
+    "category": "revision",
+    "protocol": "xml",
+    "userInput": "把甲方名称统一改成新公司名，同时把签署日期改成2026年7月1日",
+    "turns": [
+      {
+        "text": "<process name=\"批量修订\"><tool_code>wps_find_replace(findText=\"北京旧名科技有限公司\", replaceText=\"北京新名科技有限公司\", replaceAll=true)</tool_code></process>\n<process name=\"修订签署日期\"><tool_code>wps_find_replace(findText=\"2026年1月1日\", replaceText=\"2026年7月1日\", replaceAll=true)</tool_code></process>"
+      },
+      {
+        "text": "<final>已完成两处修订：甲方名称与签署日期均已更新。</final>"
+      }
+    ],
+    "toolStubs": {
+      "wps_find_replace": "{\"replaced\":2,\"status\":\"success\"}"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "wps_find_replace", "argsContain": { "findText": "北京旧名科技有限公司" } },
+        { "name": "wps_find_replace", "argsContain": { "replaceText": "2026年7月1日" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

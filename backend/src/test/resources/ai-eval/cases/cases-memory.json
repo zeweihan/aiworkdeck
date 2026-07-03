@@ -1,0 +1,88 @@
+[
+  {
+    "id": "memory-query-decision-xml",
+    "title": "查询项目记忆中的既往决定（XML 协议）",
+    "category": "memory",
+    "protocol": "xml",
+    "userInput": "我们之前关于竞业限制补偿标准是怎么定的来着？",
+    "turns": [
+      {
+        "text": "<process name=\"查询项目记忆\"><tool_code>query_memory(query=\"竞业限制 补偿标准\", type=\"decision\")</tool_code></process>"
+      },
+      {
+        "text": "<final>根据项目记忆：此前已确定竞业限制补偿按离职前十二个月平均工资的 40% 按月支付，期限不超过两年。</final>"
+      }
+    ],
+    "toolStubs": {
+      "query_memory": "[decision] 2026-05-12：竞业限制补偿标准定为离职前十二个月平均工资的40%，期限两年。"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "query_memory",
+          "argsContain": { "query": "竞业限制", "type": "decision" }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "memory-update-project-info-native",
+    "title": "更新项目信息记忆（原生 function calling）",
+    "category": "memory",
+    "protocol": "native",
+    "userInput": "记一下：这个项目的交易金额改成 2.3 亿元了",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "update_project_info",
+            "arguments": { "field": "transactionAmount", "value": "2.3亿元" }
+          }
+        ]
+      },
+      {
+        "text": "<final>好的，已把项目交易金额更新为 2.3 亿元。</final>"
+      }
+    ],
+    "toolStubs": {
+      "update_project_info": "✓ 项目信息已更新\n- 字段: transactionAmount\n- 新值: 2.3亿元"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "update_project_info",
+          "argsContain": { "field": "transactionAmount", "value": "2.3亿元" }
+        }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "memory-user-profile-noarg-xml",
+    "title": "无参工具调用 get_user_profile（XML 协议）",
+    "category": "memory",
+    "protocol": "xml",
+    "userInput": "按我平时的习惯格式，整理一份会议纪要模板的要点",
+    "turns": [
+      {
+        "text": "<process name=\"读取用户偏好\"><tool_code>get_user_profile()</tool_code></process>"
+      },
+      {
+        "text": "<final>根据您的偏好（要点式、先结论后论证），会议纪要模板建议包含：会议要素、结论清单、分歧与待办、责任人与期限。</final>"
+      }
+    ],
+    "toolStubs": {
+      "get_user_profile": "用户偏好：要点式表达；先结论后论证；文书默认宋体小四。"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "get_user_profile" }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]
