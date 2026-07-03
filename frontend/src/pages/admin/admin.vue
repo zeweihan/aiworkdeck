@@ -17,7 +17,7 @@
                   :key="nav.key"
                   class="nav-item"
                   :class="{ active: activeNav === nav.key }"
-                  @tap="activeNav = nav.key"
+                  @tap="onNavTap(nav)"
                 >
                   <text class="nav-text">{{ nav.label }}</text>
                 </view>
@@ -487,6 +487,7 @@ export default {
       navItems: [
         { key: 'config', label: '系统配置' },
         { key: 'ai', label: 'AI 功能设置' },
+        { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
         { key: 'users', label: '用户管理' },
       ],
       form: {
@@ -552,6 +553,14 @@ export default {
     },
     goToUserProfile() {
       uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+    },
+    onNavTap(nav) {
+      // 带 route 的导航项跳转独立页面（如插件广场），其余切换本页内容区
+      if (nav.route) {
+        uni.navigateTo({ url: nav.route })
+        return
+      }
+      this.activeNav = nav.key
     },
     async loadConfig() {
       try {

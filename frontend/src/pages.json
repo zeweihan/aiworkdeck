@@ -43,6 +43,13 @@
 			}
 		},
 		{
+			"path": "pages/plugin-market/plugin-market",
+			"style": {
+				"navigationBarTitleText": "插件广场",
+				"navigationStyle": "custom"
+			}
+		},
+		{
 			"path": "pages/wizard/wizard",
 			"style": {
 				"navigationBarTitleText": "首次运行设置",
