@@ -21,7 +21,7 @@ import java.util.Map;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class LegalTools {
+public class LegalTools implements AgentToolComponent {
 
     private final ProjectFileService projectFileService;
     private final McpClientService mcpClientService;
@@ -29,6 +29,7 @@ public class LegalTools {
 
     // --- File Operations ---
 
+    @ToolMeta(displayName = "读取文档", category = "file")
     @Tool("Read document content. Use this to read files from the project. Provide fileId.")
     public String read_document(String fileId) {
         log.info("Tool: read_document called for fileId={}", fileId);
@@ -71,12 +72,14 @@ public class LegalTools {
 
     // --- PKULaw MCP Integration (using standard MCP SDK) ---
 
+    @ToolMeta(displayName = "语义搜索法规", category = "legal")
     @Tool("Search for laws and regulations using PKULaw MCP Semantic Search. Use this for general legal questions. Returns a list of relevant articles.")
     public String law_search(String query) {
         log.info("Tool: law_search (semantic) called for query='{}'", query);
         return mcpClientService.callTool("pkulaw-semantic", "search_article", Map.of("query", query));
     }
 
+    @ToolMeta(displayName = "关键词搜索法规", category = "legal")
     @Tool("Search for laws by keywords in title or fulltext. Use this when you need specific laws by name.")
     public String law_search_keyword(String title, String fulltext) {
         log.info("Tool: law_search_keyword called for title='{}', fulltext='{}'", title, fulltext);
@@ -87,12 +90,14 @@ public class LegalTools {
         return mcpClientService.callTool("pkulaw-keyword", "get_law_list", args);
     }
 
+    @ToolMeta(displayName = "法条识别与溯源", category = "legal")
     @Tool("Identify law names and articles from text and trace their source.")
     public String law_recognition(String text) {
         log.info("Tool: law_recognition called for text length={}", text.length());
         return mcpClientService.callTool("pkulaw-recognition", "law_recognition", Map.of("text", text));
     }
 
+    @ToolMeta(displayName = "查询法条", category = "legal")
     @Tool("Get the full content of a specific law article by its title and article number. Use this when you have article info from law_search results.")
     public String get_law_article(String title, String number) {
         log.info("Tool: get_law_article called for title='{}', number='{}'", title, number);

@@ -29,7 +29,7 @@ import java.util.Map;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class PptxEditTools {
+public class PptxEditTools implements AgentToolComponent {
 
     private final WpsActionService wpsActionService;
 

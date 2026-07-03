@@ -30,7 +30,7 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class WpsTools {
+public class WpsTools implements AgentToolComponent {
 
     private final ProjectFileService projectFileService;
     private final ProjectFileRepository projectFileRepository;
@@ -271,6 +271,7 @@ public class WpsTools {
         }
     }
 
+    @ToolMeta(displayName = "查找替换", category = "document", fileEffect = "MODIFIED")
     @Tool("在 WPS 文档中查找并替换文本。所有修改将以修订模式进行，用户可以审阅后接受或拒绝。")
     public String wps_find_replace(
             @P("要查找的文本") String findText,
@@ -399,6 +400,7 @@ public class WpsTools {
         }
     }
 
+    @ToolMeta(displayName = "修改段落", category = "document", fileEffect = "MODIFIED")
     @Tool("修改 WPS 文档中指定段落的文本内容。修改将以修订模式进行，用户可以审阅后接受或拒绝。")
     public String wps_modify_paragraph(
             @P("段落索引，从 1 开始") Integer paragraphIndex,

@@ -5,14 +5,10 @@ import com.checkba.model.entity.ConversationSummary;
 import com.checkba.model.entity.MemoryEntry;
 import com.checkba.model.entity.ProjectMemory;
 import com.checkba.service.ai.context.ContextCompressor;
-import com.checkba.service.ai.context.ConversationSummarizer;
 import com.checkba.service.ai.context.ProjectContextHolder;
-import com.checkba.service.ai.memory.MemCellExtractor;
 import com.checkba.service.ai.memory.MemoryManager;
-import com.checkba.service.ai.memory.ProjectMemoryExtractor;
 import com.checkba.service.ai.tools.LegalTools;
 import com.checkba.service.ProjectAiMessageService;
-import dev.langchain4j.data.message.ChatMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -40,12 +36,9 @@ public class ContextAssemblerService {
     private final com.checkba.service.ProjectFileService projectFileService;
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
     
-    // 记忆系统组件
+    // 记忆系统组件（读侧：写侧见 MemoryPipelineService）
     private final MemoryManager memoryManager;
     private final ContextCompressor contextCompressor;
-    private final ConversationSummarizer conversationSummarizer;
-    private final ProjectMemoryExtractor projectMemoryExtractor;
-    private final MemCellExtractor memCellExtractor;
 
     /**
      * Assembles the full message stack for the LLM.
@@ -64,7 +57,8 @@ public class ContextAssemblerService {
             String taskListId,
             String planId,
             String projectId,
-            AgentMode agentMode) {
+            AgentMode agentMode,
+            Long userId) {
 
         java.util.List<dev.langchain4j.data.message.ChatMessage> messages = new java.util.ArrayList<>();
 
@@ -247,6 +241,9 @@ public class ContextAssemblerService {
         // 设置上下文（供 MemoryTools 使用）
         ProjectContextHolder.setProjectId(projectId);
         ProjectContextHolder.setConversationId(conversationId);
+        if (userId != null) {
+            ProjectContextHolder.setUserId(userId);
+        }
 
         // 2. 注入项目记忆（如果存在）
         Long projectIdLong = null;
@@ -271,6 +268,22 @@ public class ContextAssemblerService {
                 systemText.append("\n\n# 相关记忆\n");
                 for (MemoryEntry mem : relevantMemories) {
                     systemText.append("- [").append(mem.getMemoryType()).append("] ");
+                    if (mem.getMemoryKey() != null) {
+                        systemText.append(mem.getMemoryKey()).append(": ");
+                    }
+                    systemText.append(mem.getMemoryValue()).append("\n");
+                }
+            }
+        }
+
+        // 3. 注入用户级记忆（跨项目：偏好、行文习惯、常用表达）
+        if (userId != null) {
+            List<MemoryEntry> userMemories = memoryManager.retrieveUserMemories(userId, 5);
+            if (!userMemories.isEmpty()) {
+                systemText.append("\n\n# 用户偏好与习惯（跨项目记忆）\n");
+                systemText.append("以下是该用户长期积累的偏好与习惯，输出时应遵循：\n");
+                for (MemoryEntry mem : userMemories) {
+                    systemText.append("- ");
                     if (mem.getMemoryKey() != null) {
                         systemText.append(mem.getMemoryKey()).append(": ");
                     }
@@ -333,78 +346,6 @@ public class ContextAssemblerService {
         return messages;
     }
     
-    /**
-     * 对话结束后的记忆更新
-     * 在对话完成后调用，用于更新摘要和提取记忆
-     */
-    public void postConversationUpdate(String conversationId, String projectId, 
-                                        List<ChatMessage> messages) {
-        log.info("Post-conversation update: conversationId={}, messageCount={}", 
-                conversationId, messages.size());
-        
-        Long projectIdLong = null;
-        try {
-            projectIdLong = projectId != null ? Long.parseLong(projectId) : null;
-        } catch (NumberFormatException e) {
-            // ignore
-        }
-        
-        // 检查是否需要生成新摘要/Episode（超过 15 条消息）
-        if (messages.size() >= 15) {
-            try {
-                // 使用 Episode 生成器（借鉴 EverMemOS 的结构化情景记忆）
-                ConversationSummarizer.EpisodeResult episodeResult = 
-                        conversationSummarizer.generateEpisode(messages, conversationId, projectIdLong);
-                
-                ConversationSummarizer.SummaryResult summaryResult = episodeResult.getSummaryResult();
-                
-                // 更新完整的 Episode 信息
-                ConversationSummary summary = episodeResult.toEntity(conversationId, projectIdLong, null);
-                summary.setTokenCount(contextCompressor.estimateTokens(summaryResult.getSummaryText()));
-                summary.setMessageCount(messages.size());
-                
-                // 保存到数据库
-                memoryManager.updateConversationSummary(
-                        conversationId,
-                        summaryResult.getSummaryText(),
-                        summaryResult.getKeyPoints(),
-                        summaryResult.getLegalReferences(),
-                        summaryResult.getMentionedEntities(),
-                        summaryResult.getPendingTasks(),
-                        contextCompressor.estimateTokens(summaryResult.getSummaryText()),
-                        messages.size(),
-                        null  // lastMessageId - 可以从最后一条消息获取
-                );
-                
-                log.info("Episode generated: type={}, events={}, key points={}, legal refs={}",
-                        episodeResult.getEpisodeType(),
-                        episodeResult.getEvents() != null ? episodeResult.getEvents().size() : 0,
-                        summaryResult.getKeyPoints() != null ? summaryResult.getKeyPoints().size() : 0,
-                        summaryResult.getLegalReferences() != null ? summaryResult.getLegalReferences().size() : 0);
-            } catch (Exception e) {
-                log.error("Failed to generate Episode: {}", e.getMessage(), e);
-            }
-        }
-        
-        // 提取并更新项目记忆
-        if (projectIdLong != null) {
-            try {
-                // 1. 更新项目级记忆（法律引用、金额、日期等）
-                projectMemoryExtractor.extractAndUpdateProjectMemory(projectIdLong, messages);
-                
-                // 2. 使用 MemCellExtractor 自动提取原子记忆单元
-                // 这是借鉴 EverMemOS 的 MemCell 概念，使用 LLM 智能提取
-                int memCellCount = memCellExtractor.extractAndSave(projectIdLong, conversationId, messages);
-                
-                if (memCellCount > 0) {
-                    log.info("MemCell extraction completed: saved {} atomic memory units", memCellCount);
-                }
-            } catch (Exception e) {
-                log.error("Failed to extract project memory: {}", e.getMessage(), e);
-            }
-        }
-    }
-
     /**
      * Determines the current phase based on plan and task list state.
      * - CHAT: No plan, no task list (simple conversation)

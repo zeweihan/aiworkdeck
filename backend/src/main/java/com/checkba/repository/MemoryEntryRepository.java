@@ -79,6 +79,31 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     List<MemoryEntry> findByProjectIdAndUserIdOrderByCreatedAtDesc(Long projectId, Long userId);
 
     /**
+     * 按作用域查找用户级记忆（跨项目，如用户偏好）
+     */
+    @Query("SELECT m FROM MemoryEntry m WHERE m.userId = :userId AND m.scope = :scope " +
+           "ORDER BY m.importanceScore DESC, m.updatedAt DESC")
+    List<MemoryEntry> findByUserIdAndScope(@Param("userId") Long userId,
+                                            @Param("scope") String scope,
+                                            Pageable pageable);
+
+    /**
+     * 按作用域查找通用知识记忆（跨用户跨项目）
+     */
+    @Query("SELECT m FROM MemoryEntry m WHERE m.scope = :scope " +
+           "AND (LOWER(m.memoryKey) LIKE LOWER(CONCAT('%', :keyword, '%')) " +
+           "OR LOWER(m.memoryValue) LIKE LOWER(CONCAT('%', :keyword, '%'))) " +
+           "ORDER BY m.importanceScore DESC")
+    List<MemoryEntry> searchByScopeAndKeyword(@Param("scope") String scope,
+                                               @Param("keyword") String keyword,
+                                               Pageable pageable);
+
+    /**
+     * 按来源文件查找文件级记忆
+     */
+    List<MemoryEntry> findBySourceFileIdOrderByImportanceScoreDesc(Long sourceFileId);
+
+    /**
      * 统计项目的记忆数量
      */
     long countByProjectId(Long projectId);

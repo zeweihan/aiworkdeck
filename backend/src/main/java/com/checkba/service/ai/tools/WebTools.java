@@ -26,7 +26,7 @@ import java.util.stream.Collectors;
  */
 @Component
 @Slf4j
-public class WebTools {
+public class WebTools implements AgentToolComponent {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WebTools.class);
 
@@ -45,6 +45,7 @@ public class WebTools {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @ToolMeta(displayName = "网络搜索", category = "web")
     @Tool("Search the web using Bocha AI. Useful for finding latest news, regulations, or legal cases. Returns a summary of search results.")
     public String search_web(String query) {
         log.info("Tool: search_web called for query='{}'", query);
@@ -133,6 +134,7 @@ public class WebTools {
         }
     }
 
+    @ToolMeta(displayName = "浏览网页", category = "web")
     @Tool("Browse a specific URL and extract its main content.")
     public String browse_url(String url) {
         log.info("Tool: browse_url called for url='{}'", url);

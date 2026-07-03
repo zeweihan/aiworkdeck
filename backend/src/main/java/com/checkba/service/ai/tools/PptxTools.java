@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class PptxTools {
+public class PptxTools implements AgentToolComponent {
 
     private final PptxServiceClient pptxServiceClient;
     private final ProjectFileService projectFileService;
@@ -214,6 +214,7 @@ public class PptxTools {
 
     // ==================== 服务检查工具 ====================
 
+    @ToolMeta(displayName = "检查PPT服务", category = "pptx")
     @Tool("检查 PPTX 生成服务是否可用。在生成 PPT 之前应先调用此工具确认服务状态。")
     public String pptx_check_service() {
         log.info("Tool: pptx_check_service called");
@@ -230,6 +231,7 @@ public class PptxTools {
         }
     }
 
+    @ToolMeta(displayName = "生成PPT演示文稿", category = "pptx", fileEffect = "ADDED", fileArg = "fileName")
     @Tool("根据主题一键生成 PPTX 演示文稿。AI 将自动生成大纲、内容描述和幻灯片图片，最终输出可编辑的 PPTX 文件。默认保存到项目根目录（parentId 不传或传 null），只有用户明确指定保存位置时才需要查询文件夹。")
     public String pptx_generate(
             @P("PPT 主题或详细描述，如：'AI 在法律行业的应用' 或 '公司年度总结报告，包含业绩、成就和未来规划'") String topic,
@@ -239,8 +241,8 @@ public class PptxTools {
             @P("PPT 风格描述（可选），如：'科技风'、'商务简约'、'学术正式'。留空则使用默认风格。") String style,
             @P("输出语言：zh（中文，默认）、en（英文）、ja（日语）") String language
     ) {
-        // 调用带 modelId 的重载版本，使用默认模型配置
-        return pptx_generate(topic, projectId, parentId, fileName, style, language, null);
+        // 模型 ID 由 ToolRegistry 通过线程上下文透传（不暴露给 LLM 参数）
+        return pptx_generate(topic, projectId, parentId, fileName, style, language, ToolContextHolder.currentModelId());
     }
     
     /**
@@ -469,13 +471,14 @@ public class PptxTools {
         }
     }
 
+    @ToolMeta(displayName = "生成PPT大纲", category = "pptx")
     @Tool("生成 PPTX 大纲（不生成完整 PPT）。用于让用户先审阅和修改大纲结构，确认后再生成完整 PPT。")
     public String pptx_generate_outline(
             @P("PPT 主题或详细描述") String topic,
             @P("输出语言：zh（中文，默认）、en（英文）、ja（日语）") String language
     ) {
-        // 调用带 modelId 的重载版本
-        return pptx_generate_outline(topic, language, null);
+        // 模型 ID 由 ToolRegistry 通过线程上下文透传
+        return pptx_generate_outline(topic, language, ToolContextHolder.currentModelId());
     }
     
     /**
@@ -539,14 +542,15 @@ public class PptxTools {
 
     // ==================== 智能 PPT 修改工具 ====================
 
+    @ToolMeta(displayName = "智能修改PPT", category = "pptx", fileEffect = "MODIFIED")
     @Tool("智能修改 PPT 页面。会自动判断页面类型：如果是可编辑组件则直接修改文本，如果是纯图片则使用 AI 重新生成。这是修改 PPT 的首选工具。")
     public String pptx_smart_modify(
             @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId,
             @P("页面索引（从 1 开始）") Integer pageIndex,
             @P("修改要求，用自然语言描述，如：'把汇报人改成韩泽伟'、'标题改成红色'、'删除第三个要点'") String modifyInstruction
     ) {
-        // 调用带 modelId 的重载版本，使用默认模型配置
-        return pptx_smart_modify(fileId, pageIndex, modifyInstruction, null);
+        // 模型 ID 由 ToolRegistry 通过线程上下文透传
+        return pptx_smart_modify(fileId, pageIndex, modifyInstruction, ToolContextHolder.currentModelId());
     }
 
     /**
