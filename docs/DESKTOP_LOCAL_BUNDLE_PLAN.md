@@ -74,8 +74,8 @@ easyvoice：CI 里 `pnpm build` 出 `dist/`，连同生产 `node_modules`（prun
 
 ### 2.3 ModelManager（模型首启下载）
 
-- 下载目录统一 `~/.aiworkdeck/models/{mineru,kokoro}/`；MinerU 经环境变量（`MINERU_MODEL_SOURCE=modelscope` + cache dir 重定向）走 ModelScope 国内源；Kokoro 权重优先 ModelScope 镜像、回退 HuggingFace；
-- 断点续传 + sha256 校验；下载进度经 Electron IPC 推给前端；
+- 下载目录统一 `~/.aiworkdeck/models/{mineru,kokoro}/`；MinerU 经环境变量（`MINERU_MODEL_SOURCE=modelscope` + `MODELSCOPE_CACHE`/`HF_HOME`/`MINERU_TOOLS_CONFIG_JSON` 重定向）走 ModelScope 国内源；Kokoro 权重优先 ModelScope 镜像、回退 HuggingFace；
+- **下载器复用官方 CLI**（Phase 2 落地修订：`mineru-models-download`，ModelScope/HF SDK 原生断点续传与校验——不自研下载器，ModelManager 只做进程管理/进度解析/完成标记）；下载进度经 Electron IPC 推给前端；
 - 前端首次触发相关功能：确认框（「此功能需一次性下载约 xGB 组件」）→ 进度条 → 完成后自动拉起服务；
 - 系统管理新增「组件管理」页：各组件状态（未下载/已就绪/损坏）、占用空间、删除与重下。
 
@@ -122,6 +122,7 @@ easyvoice：CI 里 `pnpm build` 出 `dist/`，连同生产 `node_modules`（prun
 | 安装包 2GB 的下载/公证时长 | 中 | dmg 压缩已含 brotli 思路（LOWA 先例）；公证时间可接受（LOWA +60MB 先例）；发版说明标注体积变化 |
 | Windows 未签名 + 大量新二进制 → SmartScreen/杀软误报 | 中 | 已知现状（issue #12），签名另行推进；Python 运行时用官方 release 原样分发降低误报 |
 | ModelScope 源稳定性 | 低 | 双源（ModelScope 主、HF 备）+ 断点续传 + 校验 |
+| Apple 公证拒收 pip 包内古董/异常二进制（Phase 1 已遇 SpeechRecognition flac-mac） | 中 | prepare-python-service.js 的 prune() 剔除报告点名文件；torch 生态包新增时预期复发，按公证日志逐个处理 |
 | ffmpeg GPL 与 AGPL 主体共分发 | 低 | AGPL 兼容 GPL 二进制并置分发；保留 LGPL 构建选项备用 |
 
 ## 5. 验收标准（整体）
