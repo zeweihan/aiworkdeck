@@ -206,7 +206,8 @@ public class AgentOrchestrator {
                 planId,
                 projectId,
                 agentMode,
-                userId
+                userId,
+                request.getModel()
             );
             
             log.info("Message assembly complete. Total messages: {}", messages.size());
