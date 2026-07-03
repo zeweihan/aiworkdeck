@@ -4,6 +4,7 @@ const { createServiceManager } = require('./services/service-manager')
 const { createBackendDescriptor } = require('./services/backend-service')
 const { createPptxDescriptor } = require('./services/pptx-service')
 const { createMineruDescriptor } = require('./services/mineru-service')
+const { createKokoroDescriptor } = require('./services/kokoro-service')
 const { createModelManager } = require('./services/model-manager')
 const { initLocalFileService } = require('./file-service')
 
@@ -1147,6 +1148,12 @@ ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
   return { ok: true, confirmed: result }
 })
 
+// 组件 → 对应本地服务（下载完成自动拉起、「启用」按钮、删除前停服 都查这张表）
+const COMPONENT_SERVICE = {
+  'mineru-models': 'mineru-service',
+  'kokoro-models': 'kokoro-service'
+}
+
 function createServices() {
   // 打包模式下 jar/JRE/python 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck
   const dataDir = path.join(app.getPath('home'), '.aiworkdeck')
@@ -1159,9 +1166,10 @@ function createServices() {
         try {
           if (mainWindow) mainWindow.webContents.send('checkba:model-progress', evt)
         } catch (e) { /* ignore */ }
-        // 模型就绪后自动拉起本地解析服务（组件页无需再点「启用」）
-        if (evt.phase === 'done' && evt.id === 'mineru-models' && services) {
-          services.start('mineru-service').catch((e) => console.error('[mineru-service]', e))
+        // 模型就绪后自动拉起对应本地服务（组件页无需再点「启用」）
+        const svc = COMPONENT_SERVICE[evt.id]
+        if (evt.phase === 'done' && svc && services) {
+          services.start(svc).catch((e) => console.error(`[${svc}]`, e))
         }
       }
     })
@@ -1175,6 +1183,7 @@ function createServices() {
   mgr.register(createBackendDescriptor())
   mgr.register(createPptxDescriptor())
   mgr.register(createMineruDescriptor(modelManager))
+  mgr.register(createKokoroDescriptor(modelManager))
   return mgr
 }
 
@@ -1185,8 +1194,10 @@ ipcMain.handle('checkba:model-status', async () => {
   // 「运行中」标注：对应服务端口是否有监听
   const { isPortOpen } = require('./services/service-manager')
   for (const c of components) {
-    if (c.id === 'mineru-models' && services && services.ports['mineru-service']) {
-      c.serviceRunning = await isPortOpen(services.ports['mineru-service'])
+    const svc = COMPONENT_SERVICE[c.id]
+    if (svc && services && services.ports[svc]) {
+      c.serviceRunning = await isPortOpen(services.ports[svc])
+      c.serviceName = svc
     }
   }
   return { components }
@@ -1199,8 +1210,9 @@ ipcMain.handle('checkba:model-cancel', async (_evt, payload) => {
 })
 ipcMain.handle('checkba:model-remove', async (_evt, payload) => {
   // 先停服务再删模型，避免删除运行中文件
-  if (payload && payload.id === 'mineru-models' && services) {
-    try { await services.stop('mineru-service') } catch (e) { /* ignore */ }
+  const svc = payload && COMPONENT_SERVICE[payload.id]
+  if (svc && services) {
+    try { await services.stop(svc) } catch (e) { /* ignore */ }
   }
   return modelManager.remove(payload && payload.id)
 })

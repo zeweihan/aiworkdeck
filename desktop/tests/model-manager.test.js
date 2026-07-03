@@ -49,6 +49,12 @@ function waitFor(cond, timeoutMs = 5000) {
   })
 }
 
+test('status lists all registered components (mineru + kokoro)', () => {
+  const mm = makeManager(tmpDataDir(), FAKE_DOWNLOAD_OK, [])
+  const ids = mm.status().map((c) => c.id).sort()
+  assert.deepStrictEqual(ids, ['kokoro-models', 'mineru-models'])
+})
+
 test('status: absent initially, installed after successful download with marker', async () => {
   const dataDir = tmpDataDir()
   const events = []
