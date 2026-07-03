@@ -1,6 +1,8 @@
 const path = require('path')
 const { app, BrowserWindow, BrowserView, ipcMain, shell, desktopCapturer, screen, clipboard, Menu, globalShortcut } = require('electron')
-const { BackendManager } = require('./backend')
+const { createServiceManager } = require('./services/service-manager')
+const { createBackendDescriptor } = require('./services/backend-service')
+const { createPptxDescriptor } = require('./services/pptx-service')
 const { initLocalFileService } = require('./file-service')
 
 
@@ -18,7 +20,7 @@ function escapeHtml(s) {
 
 /** @type {BrowserWindow | null} */
 let mainWindow = null
-let backend = null
+let services = null
 
 /** @type {Map<string, BrowserView>} */
 const views = new Map()
@@ -1142,14 +1144,17 @@ ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
   return { ok: true, confirmed: result }
 })
 
-function createBackendManager() {
-  // 打包模式下 jar/JRE 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck
-  return new BackendManager({
+function createServices() {
+  // 打包模式下 jar/JRE/python 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck
+  const mgr = createServiceManager({
     projectRoot: path.join(__dirname, '..', '..'),
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
     dataDir: path.join(app.getPath('home'), '.aiworkdeck')
   })
+  mgr.register(createBackendDescriptor())
+  mgr.register(createPptxDescriptor())
+  return mgr
 }
 
 // Epic #43: tell the renderer where to load the embedded LibreOffice editor
@@ -1187,20 +1192,28 @@ app.whenReady().then(() => {
       try { if (mainWindow) mainWindow.webContents.send('checkba:zetaoffice-open-embed') } catch (e) { /* ignore */ }
     })
   } catch (e) { /* ignore */ }
-  // 桌面端启动时自动拉起本机后端（9696）
-  backend = createBackendManager()
-  backend
-    .start()
-    .then(() => createMainWindow())
-    .catch((e) => {
-      // 后端失败也允许打开 UI（方便你调试），但会提示错误
+  // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 打包态的 pptx-service）
+  services = createServices()
+  services
+    .allocatePorts()
+    .then(() => services.startEager())
+    .then((results) => {
       createMainWindow()
-      try {
-        if (mainWindow) {
-          mainWindow.webContents.send('checkba:backend-status', { ok: false, message: String(e && e.message ? e.message : e) })
+      const b = results.backend
+      if (b && !b.ok) {
+        // 后端失败也允许打开 UI（方便你调试），但会提示错误
+        try {
+          if (mainWindow) {
+            mainWindow.webContents.send('checkba:backend-status', { ok: false, message: b.error || 'backend failed' })
+          }
+        } catch (err) {
+          // ignore
         }
-      } catch (err) {
-        // ignore
+      }
+      const p = results['pptx-service']
+      if (p && !p.ok) {
+        // pptx 失败不阻塞主流程：功能触发时后端会报服务不可达，日志见 ~/.aiworkdeck/logs
+        console.error('[pptx-service]', p.error || 'failed to start')
       }
     })
 })
@@ -1214,23 +1227,26 @@ app.on('activate', () => {
 })
 
 app.on('before-quit', async (e) => {
-  // 尽量在退出时停止我们启动的后端进程
-  if (backend) {
+  // 尽量在退出时停止我们启动的本地服务进程
+  if (services) {
     try {
       e.preventDefault()
-      await backend.stop()
+      await services.stopAll()
     } catch (err) {
       // ignore
     }
-    backend = null
+    services = null
     stopClipboardWatcher()
     app.exit(0)
   }
 })
 
 ipcMain.handle('checkba:backend-restart', async () => {
-  if (!backend) backend = createBackendManager()
-  return backend.restart()
+  if (!services) {
+    services = createServices()
+    await services.allocatePorts()
+  }
+  return services.restart('backend')
 })
 
 

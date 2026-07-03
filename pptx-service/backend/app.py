@@ -55,17 +55,19 @@ def create_app():
     # Load configuration from Config class
     app.config.from_object(Config)
     
-    # Override with environment-specific paths (use absolute path)
+    # Override with environment-specific paths (use absolute path).
+    # PPTX_DATA_DIR: desktop 打包态注入（resources 目录只读，数据必须外置）
     backend_dir = os.path.dirname(os.path.abspath(__file__))
-    instance_dir = os.path.join(backend_dir, 'instance')
+    data_dir = os.getenv('PPTX_DATA_DIR')
+    instance_dir = os.path.join(data_dir or backend_dir, 'instance')
     os.makedirs(instance_dir, exist_ok=True)
-    
+
     db_path = os.path.join(instance_dir, 'database.db')
     app.config['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
-    
+
     # Ensure upload folder exists
     project_root = os.path.dirname(backend_dir)
-    upload_folder = os.path.join(project_root, 'uploads')
+    upload_folder = os.path.join(data_dir or project_root, 'uploads')
     os.makedirs(upload_folder, exist_ok=True)
     app.config['UPLOAD_FOLDER'] = upload_folder
     

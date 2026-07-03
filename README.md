@@ -53,8 +53,9 @@ Just want to try it? You don't need to build from source.
 | Platform | Installer | Notes |
 |---|---|---|
 | macOS (Apple Silicon) | `AI Workdeck-<version>-arm64.dmg` | Signed and notarized |
-| macOS (Intel) | `AI Workdeck-<version>.dmg` | Signed and notarized |
 | Windows | `AI Workdeck Setup <version>.exe` | Not yet code-signed; SmartScreen may warn |
+
+> Intel mac builds are discontinued (upstream Python dependencies no longer ship x86_64 wheels). The last Intel dmg remains available in older releases.
 
 Double-click to install. On first launch, a setup wizard lets you pick one AI provider — a cloud API key, or a fully local model via [Ollama](https://ollama.com) (zero key, data never leaves your machine). No Java, Docker, or PostgreSQL required: the backend, a trimmed JRE, and a local database are bundled in.
 
