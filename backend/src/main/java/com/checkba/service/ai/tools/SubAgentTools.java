@@ -3,6 +3,7 @@ package com.checkba.service.ai.tools;
 import com.checkba.service.ai.subagent.SubAgentResult;
 import com.checkba.service.ai.subagent.SubAgentService;
 import dev.langchain4j.agent.tool.Tool;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -23,7 +24,12 @@ public class SubAgentTools implements AgentToolComponent {
 
     private final SubAgentService subAgentService;
 
-    public SubAgentTools(SubAgentService subAgentService) {
+    // @Lazy 打破启动死环：ToolRegistry ← List<AgentToolComponent>(含本类)
+    // → SubAgentService → ToolRegistry/XmlToolCallParser(→ToolRegistry)。
+    // Spring Boot 默认禁止循环引用，这个环曾让 desktop 打包态后端启动即崩
+    // （CI 冒烟测试双平台超时）；subAgentService 只在工具调用运行期使用，
+    // 注入代理在此单点断环即可。
+    public SubAgentTools(@Lazy SubAgentService subAgentService) {
         this.subAgentService = subAgentService;
     }
 
