@@ -337,13 +337,13 @@ public class MemCellExtractor {
     }
 
     /**
-     * 批量保存提取的 MemCell
+     * 批量保存提取的 MemCell（写入前做向量相似度去重，见 MemoryManager.saveMemoryDeduplicated）
      */
     public int saveMemCells(List<MemoryEntry> memCells) {
         int saved = 0;
         for (MemoryEntry entry : memCells) {
             try {
-                memoryManager.saveMemory(entry);
+                memoryManager.saveMemoryDeduplicated(entry);
                 saved++;
             } catch (Exception e) {
                 log.error("Failed to save MemCell: {}", e.getMessage());

@@ -31,7 +31,8 @@ class ContextCompressorTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
         legalInfoProtector = new LegalInfoProtector();
-        compressor = new ContextCompressor(legalInfoProtector, conversationSummarizer);
+        compressor = new ContextCompressor(legalInfoProtector, conversationSummarizer,
+                new com.checkba.config.AiContextProperties());
         
         // 模拟摘要生成
         when(conversationSummarizer.generateQuickSummary(anyList()))

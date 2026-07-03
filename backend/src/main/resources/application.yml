@@ -76,6 +76,38 @@ ai:
       base-url: https://openrouter.ai/api/v1
       default-model: google/gemini-2.0-flash-exp:free
       timeout: 120s
+  # AI 上下文与压缩配置（对应 AiContextProperties，以下均为默认值，可按需覆盖）
+  context:
+    # 上下文总 token 预算
+    max-context-tokens: 100000
+    # 各项 token 预留
+    system-prompt-reserve: 8000
+    memory-reserve: 5000
+    response-reserve: 8000
+    # token 估算系数：每个 token 约折合多少字符
+    chars-per-token: 2.0
+    # 按模型覆盖 token 总预算（key 支持子串匹配模型标识），示例：
+    # model-token-budgets:
+    #   "[gemini]": 500000
+    #   "[qwen3-vl]": 30000
+    compression:
+      keep-recent-with-summary: 10
+      min-messages-for-summarize: 6
+      keep-recent-on-summarize: 4
+      keep-recent-aggressive: 2
+      max-history-messages: 30
+      tool-output-max-chars: 2000
+      tool-output-target-chars: 1500
+    files:
+      max-file-size-bytes: 10485760
+      max-files-per-context: 10
+      max-chars-per-file: 50000
+      folder-file-max-chars: 20000
+      chat-context-max-chars: 6000
+      chat-folder-context-max-chars: 50000
+      chat-selection-max-chars: 1500
+    # 支持 OCR 的文件扩展名
+    ocr-extensions: [jpg, jpeg, png, gif, bmp, webp, pdf]
 
 # 文件存储配置
 storage:

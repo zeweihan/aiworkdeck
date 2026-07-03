@@ -113,6 +113,18 @@ public class MemoryEntry {
     @Column(name = "expires_at")
     private LocalDateTime expiresAt;
 
+    /**
+     * 最近一次检索命中时间（用于检索排序的时间衰减；受保护记忆不衰减）
+     */
+    @Column(name = "last_accessed_at")
+    private LocalDateTime lastAccessedAt;
+
+    /**
+     * 累计检索命中次数（"复述效应"：被反复想起的记忆衰减更慢）
+     */
+    @Column(name = "access_count")
+    private Integer accessCount = 0;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
@@ -164,6 +176,10 @@ public class MemoryEntry {
     public void setIsProtected(Boolean isProtected) { this.isProtected = isProtected; }
     public LocalDateTime getExpiresAt() { return expiresAt; }
     public void setExpiresAt(LocalDateTime expiresAt) { this.expiresAt = expiresAt; }
+    public LocalDateTime getLastAccessedAt() { return lastAccessedAt; }
+    public void setLastAccessedAt(LocalDateTime lastAccessedAt) { this.lastAccessedAt = lastAccessedAt; }
+    public Integer getAccessCount() { return accessCount; }
+    public void setAccessCount(Integer accessCount) { this.accessCount = accessCount; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
     public LocalDateTime getUpdatedAt() { return updatedAt; }
@@ -173,6 +189,9 @@ public class MemoryEntry {
     protected void onCreate() {
         createdAt = LocalDateTime.now();
         updatedAt = LocalDateTime.now();
+        if (lastAccessedAt == null) {
+            lastAccessedAt = createdAt;
+        }
     }
 
     @PreUpdate

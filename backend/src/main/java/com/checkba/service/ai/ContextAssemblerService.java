@@ -1,10 +1,12 @@
 package com.checkba.service.ai;
 
+import com.checkba.config.AiContextProperties;
 import com.checkba.model.ai.AgentMode;
 import com.checkba.model.entity.ConversationSummary;
 import com.checkba.model.entity.MemoryEntry;
 import com.checkba.model.entity.ProjectMemory;
 import com.checkba.service.ai.context.ContextCompressor;
+import com.checkba.service.ai.context.FileContextLoader;
 import com.checkba.service.ai.context.ProjectContextHolder;
 import com.checkba.service.ai.memory.MemoryManager;
 import com.checkba.service.ai.tools.LegalTools;
@@ -19,11 +21,14 @@ import java.util.Optional;
 /**
  * Service to assemble context from files and other sources.
  * Injects <file> tags into the System Message.
- * 
+ *
  * 增强功能：
  * - 智能上下文压缩
  * - 记忆系统集成
  * - 法律信息保护
+ *
+ * Phase 2：本服务只负责"组装消息"，不再直接读文件系统——
+ * 文件/文件夹内容加载统一走 FileContextLoader。
  */
 @Service
 @RequiredArgsConstructor
@@ -33,9 +38,9 @@ public class ContextAssemblerService {
 
     private final LegalTools legalTools;
     private final ProjectAiMessageService messageService;
-    private final com.checkba.service.ProjectFileService projectFileService;
-    private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
-    
+    private final FileContextLoader fileContextLoader;
+    private final AiContextProperties contextProperties;
+
     // 记忆系统组件（读侧：写侧见 MemoryPipelineService）
     private final MemoryManager memoryManager;
     private final ContextCompressor contextCompressor;
@@ -48,17 +53,19 @@ public class ContextAssemblerService {
      * 
      * @param agentMode Agent 运行模式 (ASK, PLAN, AGENT)
      * @param activeContext NEW: 当前激活标签页（自动上下文，可为null）
+     * @param modelKey 当前使用的模型标识（用于按模型解析 token 预算，可为 null）
      */
     public java.util.List<dev.langchain4j.data.message.ChatMessage> assemble(
-            String conversationId, 
-            String userPrompt, 
+            String conversationId,
+            String userPrompt,
             java.util.List<com.checkba.controller.ai.AiAgentController.ContextItem> contextItems,
             com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
             String taskListId,
             String planId,
             String projectId,
             AgentMode agentMode,
-            Long userId) {
+            Long userId,
+            String modelKey) {
 
         java.util.List<dev.langchain4j.data.message.ChatMessage> messages = new java.util.ArrayList<>();
 
@@ -170,15 +177,18 @@ public class ContextAssemblerService {
         if (contextItems != null && !contextItems.isEmpty()) {
             systemText.append("\n\n# User Context Files\n");
             systemText.append("The user has provided the following files/folders for context:\n");
-            
-            int totalFileCount = 0; // Limit to 10 files max across all items
-            
+
+            int maxFiles = contextProperties.getFiles().getMaxFilesPerContext();
+            int maxCharsPerFile = contextProperties.getFiles().getMaxCharsPerFile();
+            int totalFileCount = 0; // Limit files max across all items
+
             for (com.checkba.controller.ai.AiAgentController.ContextItem item : contextItems) {
-                log.info("[Context] Processing item: id={}, name={}, isDir={}, fileType={}", 
+                log.info("[Context] Processing item: id={}, name={}, isDir={}, fileType={}",
                          item.getId(), item.getName(), item.isDir(), item.getFileType());
-                         
-                if (totalFileCount >= 10) {
-                    systemText.append("\n[System Note: Context limit reached (10 files max). Remaining items ignored.]\n");
+
+                if (totalFileCount >= maxFiles) {
+                    systemText.append("\n[System Note: Context limit reached (").append(maxFiles)
+                              .append(" files max). Remaining items ignored.]\n");
                     break;
                 }
 
@@ -186,23 +196,23 @@ public class ContextAssemblerService {
                     // Folder Logic
                     systemText.append("\n## Folder: ").append(item.getName())
                               .append(" (ID: ").append(item.getId()).append(")\n");
-                              
-                    String folderContent = buildFolderContext(item.getId(), projectId, totalFileCount);
+
+                    String folderContent = fileContextLoader.buildFolderContext(item.getId(), projectId, totalFileCount);
                     systemText.append(folderContent);
-                    
-                    // Update count based on how many files were read in folder? 
+
+                    // Update count based on how many files were read in folder?
                     // buildFolderContext returns string, we need to pass counter reference or approximate.
                     // Let's refine buildFolderContext to assume it consumes remaining slots.
-                    // Actually, simpler: just let buildFolderContext run and we don't strictly update 'totalFileCount' 
-                    // precisely here unless we return a count object. 
-                    // For simplicity, we assume a folder consumes slots. 
+                    // Actually, simpler: just let buildFolderContext run and we don't strictly update 'totalFileCount'
+                    // precisely here unless we return a count object.
+                    // For simplicity, we assume a folder consumes slots.
                     // Better: Pass proper AtomicInteger to buildFolderContext.
                 } else {
                     // Single File Logic
                     String content = legalTools.read_document(item.getId());
-                    // Truncate if too long (max 50000 chars per file)
-                    if (content != null && content.length() > 50000) {
-                        content = content.substring(0, 50000) + "\n... [TRUNCATED - File too long]";
+                    // Truncate if too long
+                    if (content != null && content.length() > maxCharsPerFile) {
+                        content = content.substring(0, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
                     }
                     systemText.append("<file id=\"").append(item.getId())
                               .append("\" name=\"").append(item.getName()).append("\"><![CDATA[\n");
@@ -223,8 +233,9 @@ public class ContextAssemblerService {
             String content = legalTools.read_document(activeContext.getId());
             if (content != null && !content.isEmpty()) {
                 // Truncate if too long
-                if (content.length() > 50000) {
-                    content = content.substring(0, 50000) + "\n... [TRUNCATED - File too long]";
+                int maxCharsPerFile = contextProperties.getFiles().getMaxCharsPerFile();
+                if (content.length() > maxCharsPerFile) {
+                    content = content.substring(0, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
                 }
                 
                 systemText.append("\n\n# Active Document (当前活跃文档)\n");
@@ -307,32 +318,32 @@ public class ContextAssemblerService {
             }
         }
         
-        // 检查是否需要压缩
-        if (contextCompressor.needsCompression(historyMessages)) {
+        // 检查是否需要压缩（token 预算按模型解析，可在 ai.context.model-token-budgets 覆盖）
+        if (contextCompressor.needsCompression(historyMessages, modelKey)) {
             log.info("Context compression triggered: {} messages, estimated {} tokens",
                     historyMessages.size(), contextCompressor.estimateTokens(historyMessages));
-            
+
             // 获取已有的对话摘要
             ConversationSummary existingSummary = memoryManager.getConversationSummary(conversationId)
                     .orElse(null);
-            
+
             // 获取项目记忆
-            ProjectMemory pm = projectIdLong != null ? 
+            ProjectMemory pm = projectIdLong != null ?
                     memoryManager.getProjectMemory(projectIdLong).orElse(null) : null;
-            
+
             // 执行压缩
             historyMessages = contextCompressor.compress(
                     historyMessages,
                     pm,
                     existingSummary,
-                    contextCompressor.getAvailableTokensForHistory()
+                    contextCompressor.getAvailableTokensForHistory(modelKey)
             );
-            
+
             log.info("Context compressed: {} messages, estimated {} tokens",
                     historyMessages.size(), contextCompressor.estimateTokens(historyMessages));
         } else {
-            // 不需要压缩时，仍然限制为最近 30 条消息
-            int maxHistory = 30;
+            // 不需要压缩时，仍然限制最近消息条数
+            int maxHistory = contextProperties.getCompression().getMaxHistoryMessages();
             if (historyMessages.size() > maxHistory) {
                 historyMessages = historyMessages.subList(historyMessages.size() - maxHistory, historyMessages.size());
             }
@@ -378,77 +389,6 @@ public class ContextAssemblerService {
               .append("\n</file>\n");
         }
         return sb.toString();
-    }
-    /**
-     * Builds folder context: Directory structure + Content of top files.
-     * Uses simple recursion limit and file count limit.
-     */
-    private String buildFolderContext(String folderIdStr, String projectIdStr, int currentTotalCount) {
-        StringBuilder sb = new StringBuilder();
-        try {
-            Long folderId = Long.parseLong(folderIdStr);
-            Long projectId = Long.parseLong(projectIdStr);
-            
-            // Get all children (flat list or just direct children? service usually returns direct)
-            // We need deep traversal? projectFileService.getFilesByParent returns direct children.
-            // We'll implement a simple BFS or recursive helper here.
-            
-            List<com.checkba.model.entity.ProjectFile> allFiles = new java.util.ArrayList<>();
-            collectFilesRecursive(projectId, folderId, allFiles, 0);
-            
-            // 1. Directory Structure
-            sb.append("### Directory Content:\n");
-            for (com.checkba.model.entity.ProjectFile f : allFiles) {
-                 String type = Boolean.TRUE.equals(f.getIsFolder()) ? "[DIR]" : "[FILE]";
-                 sb.append("- ").append(type).append(" ").append(f.getName())
-                   .append(" (ID: ").append(f.getId()).append(")\n");
-            }
-            sb.append("\n");
-            
-            // 2. File Contents (Limit total)
-            int reads = 0;
-            int maxReads = 10 - currentTotalCount; 
-            if (maxReads <= 0) return sb.toString();
-            
-            sb.append("### Folder Document Contents (First " + maxReads + " files):\n");
-            
-            for (com.checkba.model.entity.ProjectFile f : allFiles) {
-                if (reads >= maxReads) break;
-                if (Boolean.TRUE.equals(f.getIsFolder())) continue;
-                
-                // Read content
-                try {
-                    java.io.File physicalFile = new java.io.File(f.getFilePath());
-                    if (physicalFile.exists() && physicalFile.length() < 10 * 1024 * 1024) { // 10MB limit check
-                        String text = fileContentExtractorService.extractText(physicalFile);
-                        if (text != null && !text.isEmpty()) {
-                            if (text.length() > 20000) text = text.substring(0, 20000) + "...[Truncated]";
-                            
-                            sb.append("\n#### File: ").append(f.getName()).append("\n");
-                            sb.append("```\n").append(text).append("\n```\n");
-                            reads++;
-                        }
-                    }
-                } catch (Exception e) {
-                    // Ignore read errors for individual files
-                }
-            }
-            
-        } catch (Exception e) {
-            sb.append("\n[Error reading folder: ").append(e.getMessage()).append("]\n");
-        }
-        return sb.toString();
-    }
-    
-    private void collectFilesRecursive(Long projectId, Long parentId, List<com.checkba.model.entity.ProjectFile> collector, int depth) {
-        if (depth > 5) return; // safety
-        List<com.checkba.model.entity.ProjectFile> children = projectFileService.getFilesByParent(projectId, parentId);
-        for (com.checkba.model.entity.ProjectFile child : children) {
-            collector.add(child);
-            if (Boolean.TRUE.equals(child.getIsFolder())) {
-                collectFilesRecursive(projectId, child.getId(), collector, depth + 1);
-            }
-        }
     }
 
     /**

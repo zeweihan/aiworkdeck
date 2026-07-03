@@ -1,0 +1,65 @@
+# 法律信息保护正则配置（LegalInfoProtector）
+# 上下文压缩时按以下模式识别并保护法律关键信息；代码只负责加载与匹配。
+#
+# level 取值：CRITICAL（绝对不能丢失）/ HIGH（非常重要）/ MEDIUM（较重要）
+
+protected-patterns:
+  # 法律法规名称及条款
+  - pattern: '《[^》]+》(?:第[一二三四五六七八九十百千万]+条)?(?:第[一二三四五六七八九十]+款)?'
+    level: CRITICAL
+    type: 法律引用
+
+  # 日期（多种格式）
+  - pattern: '\d{4}年\d{1,2}月\d{1,2}日'
+    level: CRITICAL
+    type: 日期
+  - pattern: '\d{4}-\d{2}-\d{2}'
+    level: HIGH
+    type: 日期
+
+  # 金额
+  - pattern: '[\d,]+\.?\d*\s*(万元|亿元|元|万|亿)'
+    level: CRITICAL
+    type: 金额
+  - pattern: '人民币[\d,]+\.?\d*'
+    level: CRITICAL
+    type: 金额
+
+  # 统一社会信用代码
+  - pattern: '统一社会信用代码[：:]?\s*[0-9A-Z]{18}'
+    level: HIGH
+    type: 信用代码
+  - pattern: '[0-9A-Z]{18}'
+    level: MEDIUM
+    type: 信用代码
+
+  # 当事人
+  - pattern: '(甲方|乙方|丙方|丁方|发行人|标的公司|上市公司|交易对方)[：:：]\s*[^\n,，。]+'
+    level: CRITICAL
+    type: 当事人
+
+  # 合同编号
+  - pattern: '(合同|协议|编号)[：:]\s*[A-Za-z0-9\-]+'
+    level: HIGH
+    type: 合同编号
+
+  # 股权比例
+  - pattern: '\d+\.?\d*\s*%'
+    level: HIGH
+    type: 比例
+
+  # 期限
+  - pattern: '\d+\s*(个月|年|日|天|工作日)'
+    level: HIGH
+    type: 期限
+
+  # 法院/仲裁机构
+  - pattern: '[一-龥]+(?:人民法院|仲裁委员会)'
+    level: HIGH
+    type: 司法机构
+
+# 独立提取器使用的正则（extractLegalReferences/extractAmounts/extractDates）
+extractors:
+  legal-reference: '《[^》]+》(?:第[一二三四五六七八九十百千万]+条)?'
+  amount: '[\d,]+\.?\d*\s*(万元|亿元|元)'
+  date: '\d{4}年\d{1,2}月\d{1,2}日'

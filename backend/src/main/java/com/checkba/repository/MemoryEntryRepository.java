@@ -74,6 +74,15 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     void deleteExpiredMemories(@Param("now") LocalDateTime now);
 
     /**
+     * 批量更新检索命中时间与命中次数（时间衰减 + 复述效应依据；
+     * JPQL 批量更新绕过 @PreUpdate，不影响 updatedAt）
+     */
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Modifying
+    @Query("UPDATE MemoryEntry m SET m.lastAccessedAt = :now, m.accessCount = COALESCE(m.accessCount, 0) + 1 WHERE m.id IN :ids")
+    void touchLastAccessedAt(@Param("ids") List<Long> ids, @Param("now") LocalDateTime now);
+
+    /**
      * 根据项目ID和用户ID查找记忆
      */
     List<MemoryEntry> findByProjectIdAndUserIdOrderByCreatedAtDesc(Long projectId, Long userId);

@@ -1,5 +1,6 @@
 package com.checkba.service.ai.context;
 
+import com.checkba.config.AiContextProperties;
 import com.checkba.model.entity.ConversationSummary;
 import com.checkba.model.entity.ProjectMemory;
 import dev.langchain4j.data.message.AiMessage;
@@ -18,6 +19,9 @@ import java.util.stream.Collectors;
 /**
  * 上下文压缩器
  * 实现智能上下文压缩，在保留关键信息的前提下减少 token 使用
+ *
+ * Token 预算、估算系数与各层保留条数均由 AiContextProperties（ai.context.*）配置，
+ * token 总预算支持按模型覆盖（ai.context.model-token-budgets）。
  */
 @Service
 @Slf4j
@@ -26,16 +30,7 @@ public class ContextCompressor {
 
     private final LegalInfoProtector legalInfoProtector;
     private final ConversationSummarizer conversationSummarizer;
-
-    // Token 预算配置（基于 GPT-4 128K 或 Gemini 1M）
-    private static final int MAX_CONTEXT_TOKENS = 100000;
-    private static final int SYSTEM_PROMPT_RESERVE = 8000;
-    private static final int MEMORY_RESERVE = 5000;
-    private static final int RESPONSE_RESERVE = 8000;
-    private static final int AVAILABLE_FOR_HISTORY = MAX_CONTEXT_TOKENS - SYSTEM_PROMPT_RESERVE - MEMORY_RESERVE - RESPONSE_RESERVE;
-
-    // 估算每个字符约 0.5 个 token（中文约 1-2 token/字，英文约 0.25-0.5 token/字）
-    private static final double CHARS_PER_TOKEN = 2.0;
+    private final AiContextProperties contextProperties;
 
     /**
      * 压缩消息历史
@@ -60,26 +55,15 @@ public class ContextCompressor {
         }
 
         List<ChatMessage> result = new ArrayList<>();
-        
+
         // 第一层：如果有已存在的摘要，使用它代替旧消息
         if (conversationSummary != null && conversationSummary.getSummaryText() != null) {
             result.add(SystemMessage.from("[对话历史摘要]\n" + conversationSummary.getSummaryText()));
-            
-            // 只保留摘要之后的新消息
-            Long lastMessageId = conversationSummary.getLastMessageId();
-            if (lastMessageId != null) {
-                // 假设消息按时间顺序排列，找到摘要覆盖的最后一条消息
-                // 这里简化处理，保留最近的 N 条消息
-                int keepRecent = Math.min(10, messages.size());
-                for (int i = messages.size() - keepRecent; i < messages.size(); i++) {
-                    result.add(messages.get(i));
-                }
-            } else {
-                // 保留最近 10 条消息
-                int keepRecent = Math.min(10, messages.size());
-                for (int i = messages.size() - keepRecent; i < messages.size(); i++) {
-                    result.add(messages.get(i));
-                }
+
+            // 只保留摘要之后的新消息（简化处理：保留最近 N 条消息）
+            int keepRecent = Math.min(contextProperties.getCompression().getKeepRecentWithSummary(), messages.size());
+            for (int i = messages.size() - keepRecent; i < messages.size(); i++) {
+                result.add(messages.get(i));
             }
             
             int newTokens = estimateTokens(result);
@@ -138,7 +122,7 @@ public class ContextCompressor {
                 totalChars += text.length();
             }
         }
-        return (int) (totalChars / CHARS_PER_TOKEN);
+        return (int) (totalChars / contextProperties.getCharsPerToken());
     }
 
     /**
@@ -146,7 +130,7 @@ public class ContextCompressor {
      */
     public int estimateTokens(String text) {
         if (text == null) return 0;
-        return (int) (text.length() / CHARS_PER_TOKEN);
+        return (int) (text.length() / contextProperties.getCharsPerToken());
     }
 
     /**
@@ -278,11 +262,11 @@ public class ContextCompressor {
             String content = matcher.group(2);
             String closeTag = matcher.group(3);
             
-            // 如果输出超过 2000 字符，截断
-            if (content.length() > 2000) {
+            // 如果输出超过上限字符数，截断
+            if (content.length() > contextProperties.getCompression().getToolOutputMaxChars()) {
                 // 保留法律关键信息
-                LegalInfoProtector.CompressedResult compressed = 
-                        legalInfoProtector.safeCompress(content, 1500);
+                LegalInfoProtector.CompressedResult compressed =
+                        legalInfoProtector.safeCompress(content, contextProperties.getCompression().getToolOutputTargetChars());
                 content = compressed.getContent();
                 if (compressed.isWasCompressed()) {
                     content += "\n[输出已压缩，保留关键信息]";
@@ -301,15 +285,15 @@ public class ContextCompressor {
      * 第三层：摘要旧消息
      */
     private List<ChatMessage> summarizeOldMessages(List<ChatMessage> messages, int targetTokens) {
-        if (messages.size() <= 6) {
+        if (messages.size() <= contextProperties.getCompression().getMinMessagesForSummarize()) {
             // 消息太少，不需要摘要
             return messages;
         }
-        
+
         List<ChatMessage> result = new ArrayList<>();
-        
-        // 保留最近 4 条消息
-        int keepRecent = 4;
+
+        // 保留最近 N 条消息
+        int keepRecent = contextProperties.getCompression().getKeepRecentOnSummarize();
         List<ChatMessage> oldMessages = messages.subList(0, messages.size() - keepRecent);
         List<ChatMessage> recentMessages = messages.subList(messages.size() - keepRecent, messages.size());
         
@@ -377,9 +361,9 @@ public class ContextCompressor {
         }
         
         result.add(SystemMessage.from(coreContext.toString()));
-        
-        // 只保留最近 2 条消息
-        int keepRecent = Math.min(2, messages.size());
+
+        // 只保留最近 N 条消息
+        int keepRecent = Math.min(contextProperties.getCompression().getKeepRecentAggressive(), messages.size());
         for (int i = messages.size() - keepRecent; i < messages.size(); i++) {
             result.add(messages.get(i));
         }
@@ -388,18 +372,35 @@ public class ContextCompressor {
     }
 
     /**
-     * 检查是否需要压缩
+     * 检查是否需要压缩（使用默认 token 预算）
      */
     public boolean needsCompression(List<ChatMessage> messages) {
-        int tokens = estimateTokens(messages);
-        return tokens > AVAILABLE_FOR_HISTORY;
+        return needsCompression(messages, null);
     }
 
     /**
-     * 获取可用于历史的 token 预算
+     * 检查是否需要压缩（token 预算按模型解析）
+     */
+    public boolean needsCompression(List<ChatMessage> messages, String modelKey) {
+        int tokens = estimateTokens(messages);
+        return tokens > getAvailableTokensForHistory(modelKey);
+    }
+
+    /**
+     * 获取可用于历史的 token 预算（默认预算）
      */
     public int getAvailableTokensForHistory() {
-        return AVAILABLE_FOR_HISTORY;
+        return getAvailableTokensForHistory(null);
+    }
+
+    /**
+     * 获取可用于历史的 token 预算（按模型解析总预算后扣除各项预留）
+     */
+    public int getAvailableTokensForHistory(String modelKey) {
+        return contextProperties.maxContextTokensFor(modelKey)
+                - contextProperties.getSystemPromptReserve()
+                - contextProperties.getMemoryReserve()
+                - contextProperties.getResponseReserve();
     }
 
     /**
