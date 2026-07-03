@@ -412,6 +412,22 @@ export function getPlugins() {
   });
 }
 
+// 启用 / 禁用插件（仅管理员）
+export function setPluginEnabled(pluginId, enabled) {
+  return request({
+    url: `/api/plugins/${encodeURIComponent(pluginId)}/${enabled ? 'enable' : 'disable'}`,
+    method: 'POST'
+  });
+}
+
+// 重新扫描 plugins/ 目录（仅管理员）
+export function rescanPlugins() {
+  return request({
+    url: '/api/plugins/rescan',
+    method: 'POST'
+  });
+}
+
 /**
  * 将一段 AI 文本（markdown）导出为 Word 文档并落地到项目文件树中（后端生成 docx）
  * payload: { projectId, parentId, fileName, markdown | content }

@@ -115,4 +115,17 @@ Phase 2.5 未改动，命名迁移列入 Phase 3：
   - [ ] `wps_*` 工具名别名移除（不早于 0.6.0，见 §3「工具命名与别名」）。
   - [ ] 前端零散 WPS 遗留：`VariablePanel.getWps` prop、`ChatInterface.vue` `wps-tip-*`
         CSS 类、`ProjectFile.wpsFileId` 字段语义梳理。
-  - [ ] 插件广场沙箱、MCP SDK 标准化、Skill 体系、多智能体协作。
+  - [x] **插件广场 MVP**（PR #88）：manifest 规范 v1（见 docs/PLUGIN_SPEC.md，新增
+        permissions/tools/author/homepage）、启停持久化（`system_setting` key =
+        `ai.plugins.disabled`，JSON 数组，默认全启用）、`PluginService.isEnabled()` /
+        `getPluginIdForTool()` 查询接口、重扫接口、前端插件广场页
+        （pages/plugin-market，入口在系统管理侧边栏）；示例插件 examples/hello-plugin/。
+  - [ ] **插件启停接入 ToolRegistry**（一次小改动，下次动 ToolRegistry 时顺手完成）：
+        在消费 `pluginService.getToolSpecifications()` / `getPluginTools()` 的三处
+        （构建 specs、列举工具名、按名取执行对象）过滤禁用插件的工具——
+        `String pid = pluginService.getPluginIdForTool(name)`，
+        `pid == null || pluginService.isEnabled(pid)` 才可见（`pid == null` 为内置工具，
+        不受插件启停影响）。`setEnabled()` 已同步更新内存态，ToolRegistry 无自建缓存则即时生效。
+  - [ ] 插件运行时沙箱：按 manifest `permissions`（file_read/file_write/network/editor，
+        v1 仅声明式展示，见 docs/PLUGIN_SPEC.md §3）做运行时强制。
+  - [ ] MCP SDK 标准化、Skill 体系、多智能体协作。
