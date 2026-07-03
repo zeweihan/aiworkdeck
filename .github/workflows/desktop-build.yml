@@ -139,6 +139,15 @@ jobs:
           bash desktop/scripts/sign-mac-natives.sh "$IDENTITY" desktop/bundled/mac-arm64 desktop/build/entitlements.mac.plist
       - name: Smoke test bundled backend (macOS)
         if: runner.os == 'macOS'
+        env:
+          # The backend's WebTools pre-warm downloads chromium/firefox/webkit
+          # from playwright.azureedge.net on every boot; the 2026-07-03 CDN
+          # outage (400 GatewayExceptionResponse) pushed startup past 120s and
+          # failed this step on both platforms. The smoke test only curls the
+          # wizard endpoint — no browser needed — so skip the download to
+          # remove the live network dependency (playwright-java's Driver
+          # honors this env var).
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
           # Boot the signed jar on the trimmed JRE exactly as the packaged app
           # will — catches runtime/JRE/signing breakage that packaging alone
@@ -230,6 +239,10 @@ jobs:
       - name: Smoke test bundled backend (Windows)
         if: runner.os == 'Windows'
         shell: bash
+        env:
+          # Skip the live Playwright browser download — see the macOS smoke
+          # test step for the full rationale.
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
           mkdir -p "$RUNNER_TEMP/awd-home"
           desktop/bundled/win-x64/jre/bin/java.exe \
