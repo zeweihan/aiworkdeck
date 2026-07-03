@@ -46,13 +46,21 @@
       {
         "from": "bundled/${os}-${arch}/jre",
         "to": "jre"
+      },
+      {
+        "from": "bundled/${os}-${arch}/python",
+        "to": "python"
+      },
+      {
+        "from": "bundled/${os}-${arch}/pysvc",
+        "to": "pysvc"
       }
     ],
     "mac": {
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64", "x64"]
+          "arch": ["arm64"]
         }
       ],
       "category": "public.app-category.productivity",
