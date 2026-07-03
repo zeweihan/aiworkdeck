@@ -1,6 +1,7 @@
 # AI 编排器架构基线（AI Orchestrator Architecture）
 
-> 状态：现行基线。Phase 1（PR #83）、Phase 2（PR #84）、Phase 2.5（WPS 遗留命名清理）已合并。
+> 状态：现行基线。Phase 1（PR #83）、Phase 2（PR #84）、Phase 2.5（WPS 遗留命名清理）、
+> Phase 3A 插件启停+权限（PR #94）、Phase 3B Skill 体系（PR #96）、Phase 3C 多智能体第一阶段（PR #95）已合并。
 >
 > 说明：Phase 1 曾撰写过本文档但未随 PR 入库，本文为按 PR #83/#84 实际代码重建的版本，
 > 以当前代码为准。后续架构变更必须同步更新本文。
@@ -71,6 +72,19 @@ Phase 2.5 未改动，命名迁移列入 Phase 3：
 | write_docx 输出 JSON 键 | `wps_file_id`（前端有字符串匹配逻辑）|
 | 文件实体字段 | `ProjectFile.wpsFileId` |
 
+### Skill 体系（Phase 3B）
+
+Skill = prompt 模板 + 工具白名单 + 触发条件 + 输出约定的目录式打包
+（`skills/<id>/{skill.yml, prompt.md}`，规范见 docs/SKILL_SPEC.md）。
+`SkillRegistry`（`service/ai/skill/`）启动扫描 + rescan，插件可经 manifest `skills`
+字段携带 Skill（PLUGIN_SPEC v2.1）；`SkillRouter` 按关键词触发（多命中取最长），
+命中后 prompt 经 `ContextAssemblerService` 注入、本轮 LLM 可见工具裁剪为
+`allowed_tools ∪ ai.skills.base-tools`（在 `getAllSpecifications()` 出口外过滤，
+ToolRegistry 未动），未命中行为与现状完全一致。启停持久化复刻插件模式
+（`system_setting` key = `ai.skills.disabled`），管理界面在插件广场 Skill 区块。
+内置第一个 Skill：`backend/skills/listing-pathway/`（上市路径选择比较分析）。
+AgentOrchestrator 仅 3 行挂载点（字段 + activateForTurn + visibleTools 出口）。
+
 ### 子 Agent（Phase 3C 多智能体协作第一阶段）
 
 主循环通过 `dispatch_subtask(task_description, expected_output, tool_scope)` 工具
@@ -131,15 +145,8 @@ Phase 2.5 未改动，命名迁移列入 Phase 3：
 - **Phase 2.5（已完成）**：WPS 遗留命名清理——内部类名 editor 化（DocumentEditTools /
   EditorBridgeService / EditorResultController）、LLM 面工具名 `wps_*` → `doc_*`
   （TOOL_NAME_ALIASES 别名灰度）、system_prompt 同步、前端注释/内部命名 editor 化。
-- **Phase 3（计划）**：
-  - [ ] **SSE 事件名双轨迁移**：`wps_stream_data` → `doc_stream_data`、
-        `client_action.tool: wps_command` → `editor_command`、
-        `wps_open_file(_sync)` / `wps_reload_file` → `doc_*`、路由 `/wps-result` →
-        `/editor-result`。方案：后端双发（新旧事件并行）、前端双听，观察一个发布周期后
-        摘旧名；**合并前必须在 Electron 桌面端真机实测文档打开、查找替换、流式写入三条链路**。
-  - [ ] `wps_*` 工具名别名移除（不早于 0.6.0，见 §3「工具命名与别名」）。
-  - [ ] 前端零散 WPS 遗留：`VariablePanel.getWps` prop、`ChatInterface.vue` `wps-tip-*`
-        CSS 类、`ProjectFile.wpsFileId` 字段语义梳理。
+- **Phase 3（3A/3B/3C 已完成，剩余两项见清单末尾）**：
+  - [x] **MCP 标准化**（PR #86）：配置驱动服务器列表 + Provider 接口。
   - [x] **插件广场 MVP**（PR #88）：manifest 规范 v1（见 docs/PLUGIN_SPEC.md，新增
         permissions/tools/author/homepage）、启停持久化（`system_setting` key =
         `ai.plugins.disabled`，JSON 数组，默认全启用）、`PluginService.isEnabled()` /
@@ -155,10 +162,24 @@ Phase 2.5 未改动，命名迁移列入 Phase 3：
         工具级 `tools[].permissions` 声明所需能力，分发前校验「所需 ⊆ 插件声明」，
         未声明即拒绝并返回明确错误（`PluginService.missingPermissionsForTool()` +
         `ToolRegistry.execute()`）。
-  - [ ] 插件进程级运行时沙箱：v2 权限校验是分发层的诚实声明模型，插件代码仍与宿主同进程；
-        真正强制 file/network 隔离需进程级沙箱（独立进程 + IPC 或 SecurityManager 替代方案），
-        列为后续项。
-  - [x] **多智能体协作第一阶段（Phase 3C）**：`dispatch_subtask` 委派子任务
+  - [x] **多智能体协作第一阶段（Phase 3C，PR #95）**：`dispatch_subtask` 委派子任务
         （见 §3「子 Agent」）——独立消息栈/受限工具集/独立模型/轮数与预算与超时限值
         （`ai.subagent.*`）/防递归/身份继承，新增 SSE 事件 `subtask_progress`。
-  - [ ] MCP SDK 标准化、Skill 体系、多智能体协作后续阶段（子任务规划器、跨子任务共享记忆）。
+  - [x] **Skill 体系（Phase 3B，PR #96）**：目录式打包 + SkillRegistry/SkillRouter
+        关键词触发 + prompt 注入 + 工具可见性裁剪（见 §3「Skill 体系」与
+        docs/SKILL_SPEC.md）；插件可携带 Skill（PLUGIN_SPEC v2.1）；
+        内置 listing-pathway；前端插件广场 Skill 区块。
+
+  **Phase 3 剩余项（仅此两项）**：
+  - [ ] **SSE 事件名双轨迁移**：`wps_stream_data` → `doc_stream_data`、
+        `client_action.tool: wps_command` → `editor_command`、
+        `wps_open_file(_sync)` / `wps_reload_file` → `doc_*`、路由 `/wps-result` →
+        `/editor-result`。方案：后端双发（新旧事件并行）、前端双听，观察一个发布周期后
+        摘旧名；**合并前必须在 Electron 桌面端真机实测文档打开、查找替换、流式写入三条链路**。
+        随迁移一并清理：前端零散 WPS 遗留（`VariablePanel.getWps` prop、
+        `ChatInterface.vue` `wps-tip-*` CSS 类、`ProjectFile.wpsFileId` 字段语义梳理）；
+        `wps_*` 工具名别名移除仍受版本门槛约束（不早于 0.6.0，见 §3「工具命名与别名」）。
+  - [ ] **插件进程级运行时沙箱**：v2 权限校验是分发层的诚实声明模型，插件代码仍与宿主同进程；
+        真正强制 file/network 隔离需进程级沙箱（独立进程 + IPC 或 SecurityManager 替代方案）。
+
+  后续展望（Phase 4 候选，不在 Phase 3 范围）：多智能体协作后续阶段（子任务规划器、跨子任务共享记忆）。
