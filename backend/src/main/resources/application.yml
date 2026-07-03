@@ -52,6 +52,30 @@ external:
     # 请求超时时间（秒）- 生成 PPT 可能需要较长时间
     timeout: 120
 
+# MCP 服务器列表（配置驱动，可任意增删；对应 McpProperties）
+# transport 目前仅支持 streamable-http（JSON-RPC over HTTP POST）
+# token-setting-key：系统设置里的 token 覆盖键，后台管理界面可在线修改
+mcp:
+  servers:
+    - name: pkulaw-semantic
+      url: https://apim-gateway.pkulaw.com/mcp-law-search-service
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-keyword
+      url: https://apim-gateway.pkulaw.com/mcp-law
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+    - name: pkulaw-recognition
+      url: https://apim-gateway.pkulaw.com/law_recognition
+      token: ${PKULAW_TOKEN:}
+      token-setting-key: external.pkulaw.token
+      timeout-seconds: 60
+      enabled: true
+
 # AI 大模型配置（供应商可切换）
 ai:
   model:
