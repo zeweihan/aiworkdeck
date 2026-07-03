@@ -34,7 +34,7 @@ import java.io.OutputStream;
 @Component
 @Slf4j
 @RequiredArgsConstructor
-public class FileTools {
+public class FileTools implements AgentToolComponent {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(FileTools.class);
 
@@ -54,6 +54,7 @@ public class FileTools {
         return backendPath;
     }
 
+    @ToolMeta(displayName = "搜索项目文件", category = "file")
     @Tool("Search for files in the project. Can specify a sub-directory.")
     public String search_project_files(
             @P("Filename pattern (e.g. '*Controller.java' or 'User*.java')") String fileNamePattern,
@@ -108,6 +109,7 @@ public class FileTools {
         }
     }
 
+    @ToolMeta(displayName = "读取文件", category = "file")
     @Tool("Read the content of a file. Provide path (absolute or relative to project root).")
     public String read_file(String filePath) {
         log.info("Tool: read_file called for {}", filePath);
@@ -129,6 +131,7 @@ public class FileTools {
         }
     }
 
+    @ToolMeta(displayName = "列出文件", category = "file")
     @Tool("List files and directories in a project's data folder. Note: This lists physical files, not database records. For database files, use wps_list_project_files or pptx_list_files.")
     public String list_files(
             @P("Project ID - files will be listed from data/projects/{projectId}/") Long projectId,
@@ -181,6 +184,7 @@ public class FileTools {
         }
     }
 
+    @ToolMeta(displayName = "写入文件", category = "file", fileEffect = "ADDED", fileArg = "fileName")
     @Tool("Write content to a text file. Registers the file in the project database for WPS access.")
     public String write_file(
             @P("Target filename (e.g. 'notes.txt')") String fileName, 
@@ -205,6 +209,7 @@ public class FileTools {
         }
     }
 
+    @ToolMeta(displayName = "生成Word文档", category = "file", fileEffect = "ADDED", fileArg = "fileName", refreshFiles = true)
     @Tool("【STRICTLY NEW FILES ONLY】Create a NEW .docx from Markdown. FORBIDDEN for 'revise', 'update', or 'modify' tasks. If a similar file exists, you MUST use wps_open_file to edit it. DO NOT create 'Revised_Version.docx'.")
     public String write_docx(
             @P("新文件名 (如 '报告.docx')") String fileName, 
@@ -265,6 +270,7 @@ public class FileTools {
         }
     }
 
+    @ToolMeta(displayName = "扫描项目文件", category = "file")
     @Tool("Actively scan the project directory and register any missing files to the database. Repair DB inconsistency.")
     public String scan_files(
         @P("Project ID") Long projectId
@@ -310,6 +316,7 @@ public class FileTools {
         }
     }
 
+    @ToolMeta(displayName = "删除文件", category = "file")
     @Tool("Delete a file. DISABLED: AI Agent is not allowed to delete files.")
     public String delete_file(String filePath) {
         log.info("Tool: delete_file called for {} - DENIED (AI Agent cannot delete files)", filePath);
@@ -317,6 +324,7 @@ public class FileTools {
         return "Error: Permission Denied. AI Agent is not allowed to delete files. You can only create, move, or rename files.";
     }
 
+    @ToolMeta(displayName = "移动文件", category = "file")
     @Tool("Move or Rename a file.")
     public String move_file(
             @P("Source path") String sourcePath,

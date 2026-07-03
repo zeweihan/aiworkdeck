@@ -27,7 +27,7 @@ import java.util.stream.Collectors;
 @Component
 @RequiredArgsConstructor
 @Slf4j
-public class PythonTools {
+public class PythonTools implements AgentToolComponent {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(PythonTools.class);
 
@@ -118,6 +118,7 @@ default_api = _ToolAPI()
 
 """;
 
+    @ToolMeta(displayName = "执行Python代码", category = "python")
     @Tool("Run Python script. Use this for data analysis, Tushare stock data, or Qichacha API. You can call default_api.read_document(fileId='...') to read project files. Returns stdout/stderr.")
     public String run_python(String code) {
         log.info("Tool: run_python called. Code length={}", code.length());

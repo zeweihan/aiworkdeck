@@ -33,7 +33,7 @@ import java.util.Optional;
 @Component
 @Slf4j
 @RequiredArgsConstructor
-public class MemoryTools {
+public class MemoryTools implements AgentToolComponent {
 
     private final MemoryManager memoryManager;
     private final ProjectMemoryExtractor projectMemoryExtractor;
@@ -42,45 +42,116 @@ public class MemoryTools {
     /**
      * 保存结构化记忆
      */
-    @Tool("保存重要信息到项目记忆中。用于存储关键决策、结论、事实、法律引用等需要长期保留的信息。")
+    @Tool("保存重要信息到记忆中。用于存储关键决策、结论、事实、法律引用、用户偏好等需要长期保留的信息。" +
+          "通过 scope 参数指定记忆归属：用户个人习惯用 user，项目事实用 project（默认），通用法律知识用 global。")
+    @ToolMeta(displayName = "保存记忆", category = "memory")
     public String save_memory(
             @P("记忆类型: decision(决策)/conclusion(结论)/fact(事实)/reference(法律引用)/preference(偏好)") String type,
             @P("记忆标题或关键词，用于后续检索") String key,
             @P("记忆内容，详细描述需要保存的信息") String value,
-            @P("是否为法律关键信息需要特别保护（如法条引用、金额、日期等），受保护信息在压缩时不会丢失") boolean isProtected
+            @P("是否为法律关键信息需要特别保护（如法条引用、金额、日期等），受保护信息在压缩时不会丢失") boolean isProtected,
+            @P("记忆作用域(可选，默认project): user(用户级，跨项目的个人偏好与习惯)/project(项目级)/conversation(仅本对话)/file(绑定文件)/global(通用领域知识)") String scope,
+            @P("来源文件ID(可选)，scope=file 时必填，将记忆绑定到具体文件") Long sourceFileId
     ) {
-        log.info("Tool: save_memory called type={}, key={}, protected={}", type, key, isProtected);
-        
+        log.info("Tool: save_memory called type={}, key={}, protected={}, scope={}", type, key, isProtected, scope);
+
         Long projectId = ProjectContextHolder.getProjectIdAsLong();
         String conversationId = ProjectContextHolder.getConversationId();
-        
-        if (projectId == null) {
+        Long userId = ProjectContextHolder.getUserId();
+
+        // 归一化作用域，非法值回落到项目级
+        String normalizedScope = (scope != null && MemoryEntry.MemoryScope.isValid(scope))
+                ? scope.toLowerCase() : MemoryEntry.MemoryScope.PROJECT;
+
+        // 用户级/通用知识不强依赖项目上下文，其余作用域必须有项目ID
+        boolean projectFree = MemoryEntry.MemoryScope.USER.equals(normalizedScope)
+                || MemoryEntry.MemoryScope.GLOBAL.equals(normalizedScope);
+        if (projectId == null && !projectFree) {
             return "错误：无法获取当前项目ID，请确保在项目上下文中使用此工具。";
         }
-        
+        if (MemoryEntry.MemoryScope.USER.equals(normalizedScope) && userId == null) {
+            return "错误：无法获取当前用户ID，无法保存用户级记忆。";
+        }
+        if (MemoryEntry.MemoryScope.FILE.equals(normalizedScope) && sourceFileId == null) {
+            return "错误：文件级记忆(scope=file)必须提供 sourceFileId。";
+        }
+
         // 验证类型
         if (!isValidMemoryType(type)) {
             return "错误：无效的记忆类型。请使用: decision, conclusion, fact, reference, preference";
         }
-        
+
         try {
             MemoryEntry entry = MemoryEntry.builder()
                     .projectId(projectId)
+                    .userId(userId)
                     .conversationId(conversationId)
                     .memoryType(type.toLowerCase())
                     .memoryKey(key)
                     .memoryValue(value)
                     .isProtected(isProtected)
                     .importanceScore(isProtected ? 1.0 : 0.7)
+                    .scope(normalizedScope)
+                    .sourceFileId(sourceFileId)
                     .build();
-            
+
             memoryManager.saveMemory(entry);
-            
-            return String.format("✓ 记忆已保存\n- 类型: %s\n- 关键词: %s\n- 受保护: %s", 
-                    type, key, isProtected ? "是" : "否");
+
+            return String.format("✓ 记忆已保存\n- 类型: %s\n- 作用域: %s\n- 关键词: %s\n- 受保护: %s",
+                    type, normalizedScope, key, isProtected ? "是" : "否");
         } catch (Exception e) {
             log.error("Failed to save memory: {}", e.getMessage(), e);
             return "保存记忆时出错: " + e.getMessage();
+        }
+    }
+
+    /**
+     * 获取用户画像（跨项目的用户级记忆）
+     */
+    @Tool("获取当前用户的画像信息：跨项目的用户偏好、行文习惯、常用表达等。在需要个性化输出（如按用户习惯起草文书）时使用。")
+    @ToolMeta(displayName = "获取用户画像", category = "memory")
+    public String get_user_profile() {
+        log.info("Tool: get_user_profile called");
+
+        Long userId = ProjectContextHolder.getUserId();
+        if (userId == null) {
+            return "错误：无法获取当前用户ID。";
+        }
+
+        try {
+            StringBuilder sb = new StringBuilder("# 用户画像\n\n");
+            boolean hasContent = false;
+
+            // 1. UserMemory 结构化偏好
+            Optional<com.checkba.model.entity.UserMemory> umOpt = memoryManager.getUserMemory(userId);
+            if (umOpt.isPresent() && umOpt.get().getPreferences() != null && !umOpt.get().getPreferences().isEmpty()) {
+                sb.append("## 偏好设置\n");
+                umOpt.get().getPreferences().forEach((k, v) ->
+                        sb.append("- ").append(k).append(": ").append(v).append("\n"));
+                hasContent = true;
+            }
+
+            // 2. 用户级记忆条目
+            List<MemoryEntry> userMemories = memoryManager.retrieveUserMemories(userId, 20);
+            if (!userMemories.isEmpty()) {
+                sb.append("\n## 用户级记忆（跨项目）\n");
+                for (MemoryEntry mem : userMemories) {
+                    sb.append("- [").append(mem.getMemoryType()).append("] ");
+                    if (mem.getMemoryKey() != null) {
+                        sb.append(mem.getMemoryKey()).append(": ");
+                    }
+                    sb.append(mem.getMemoryValue()).append("\n");
+                }
+                hasContent = true;
+            }
+
+            if (!hasContent) {
+                return "当前用户暂无画像信息。可以使用 save_memory(scope=\"user\") 保存用户偏好与习惯。";
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            log.error("Failed to get user profile: {}", e.getMessage(), e);
+            return "获取用户画像时出错: " + e.getMessage();
         }
     }
 

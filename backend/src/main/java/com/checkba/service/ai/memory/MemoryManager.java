@@ -59,6 +59,9 @@ public class MemoryManager {
             segment.metadata().put("memoryId", saved.getId().toString());
             segment.metadata().put("projectId", String.valueOf(entry.getProjectId()));
             segment.metadata().put("memoryType", entry.getMemoryType());
+            if (entry.getScope() != null) {
+                segment.metadata().put("scope", entry.getScope());
+            }
             
             memoryEmbeddingStore.add(embedding, segment);
             log.debug("Memory embedding created for id={}", saved.getId());
@@ -145,6 +148,40 @@ public class MemoryManager {
      */
     public List<MemoryEntry> getProtectedMemories(Long projectId) {
         return memoryEntryRepository.findByProjectIdAndIsProtectedTrue(projectId);
+    }
+
+    // ==================== 作用域记忆操作 ====================
+
+    /**
+     * 获取用户级记忆（跨项目生效：偏好、常用表达、行文习惯）
+     */
+    public List<MemoryEntry> retrieveUserMemories(Long userId, int limit) {
+        if (userId == null) {
+            return Collections.emptyList();
+        }
+        return memoryEntryRepository.findByUserIdAndScope(
+                userId, MemoryEntry.MemoryScope.USER, PageRequest.of(0, limit));
+    }
+
+    /**
+     * 检索通用知识记忆（跨用户跨项目的领域知识）
+     */
+    public List<MemoryEntry> retrieveGlobalKnowledge(String keyword, int limit) {
+        if (keyword == null || keyword.isBlank()) {
+            return Collections.emptyList();
+        }
+        return memoryEntryRepository.searchByScopeAndKeyword(
+                MemoryEntry.MemoryScope.GLOBAL, keyword, PageRequest.of(0, limit));
+    }
+
+    /**
+     * 获取绑定到某个文件的记忆（如"该合同的审查结论"）
+     */
+    public List<MemoryEntry> retrieveFileMemories(Long sourceFileId) {
+        if (sourceFileId == null) {
+            return Collections.emptyList();
+        }
+        return memoryEntryRepository.findBySourceFileIdOrderByImportanceScoreDesc(sourceFileId);
     }
 
     // ==================== RRF 混合检索 ====================
