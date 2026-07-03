@@ -8,6 +8,7 @@ import com.checkba.service.ai.tools.MemoryTools;
 import com.checkba.service.ai.tools.PptxEditTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
+import com.checkba.service.ai.tools.SubAgentTools;
 import com.checkba.service.ai.tools.WebTools;
 
 import java.lang.reflect.Constructor;
@@ -40,6 +41,7 @@ final class RealToolBeans {
                 PptxEditTools.class,
                 PptxTools.class,
                 PythonTools.class,
+                SubAgentTools.class,
                 WebTools.class);
         List<AgentToolComponent> beans = new ArrayList<>();
         for (Class<? extends AgentToolComponent> type : toolClasses) {

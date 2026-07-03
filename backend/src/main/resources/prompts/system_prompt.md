@@ -375,6 +375,15 @@ for file_id in file_ids:
 ## 6. Memory (`add_memory`, `query_knowledge_base`)
 - Store and retrieve knowledge from RAG
 
+## 6.5 委派子任务 (`dispatch_subtask`)
+- `dispatch_subtask(task_description, expected_output, tool_scope)`：把一个自包含的复杂子问题交给独立子 Agent 执行，只返回最终结构化结果（JSON：success/result/error/toolsUsed/rounds），中间过程不占用当前对话。
+- **什么时候委派**：子问题需要独立的多步探索（如"检索并整理某专题的裁判观点"），或会产生大量中间产物（多轮搜索/浏览/读文件）而你只需要结论时。
+- **简单任务禁止委派**：一两次工具调用能直接完成的事（一次搜索、读一个文件、一次替换）必须自己做，不要委派。
+- `task_description` 必须自包含：子 Agent 看不到当前对话，把背景、对象、限定条件写全。
+- `expected_output` 要写清楚：明确结果的形式与要点（如"5 条以内的要点列表，每条附来源链接"），不要留空泛表述。
+- `tool_scope` 只给子任务所需的最小工具集（JSON 数组或逗号分隔，如 `"search_web,browse_url"`；留空 = 全部工具）。
+- 子任务失败（超时/超预算/轮数耗尽）会返回 `success=false` 与 error 说明：据此自己接手或换策略，不要重复原样委派。
+
 ## 7. 文档编辑（嵌入式 LibreOffice 编辑器）
 
 你具备直接编辑用户项目中文档的能力，如同一个坐在文档前的人类编辑：移动光标、选中、修改、排版。用户能在编辑器里**实时看到**你的光标跳转和选区高亮。

@@ -7,7 +7,7 @@
 
 | 部分 | 位置 | 说明 |
 | --- | --- | --- |
-| 评测用例集 | `backend/src/test/resources/ai-eval/cases/*.json` | 24 个法律场景用例（起草、修订、查法条、PPT、闲聊、记忆、artifact 等） |
+| 评测用例集 | `backend/src/test/resources/ai-eval/cases/*.json` | 27 个法律场景用例（起草、修订、查法条、PPT、闲聊、记忆、artifact、子任务委派等） |
 | 回放测试 | `backend/src/test/java/com/checkba/service/ai/eval/OrchestratorReplayEvalTest.java` | **进默认 `mvn test` 套件**，不调真实 LLM，全程离线毫秒级 |
 | 回放 harness | 同目录 `EvalHarness` / `ScriptedStreamingModel` / `RecordingToolRegistry` / `RealToolBeans` | 见下文原理 |
 | 真实 LLM 冒烟 | 同目录 `RealLlmSmokeTest.java` | 默认跳过；设 `OPENROUTER_API_KEY` 后跑 3 个标注 `smoke` 的关键用例 |
@@ -19,7 +19,7 @@
 
 - **真实**：`AgentOrchestrator`（完整 runLoop：XML 与原生两种工具协议、artifact、`<title>`、Ask 模式）、
   `XmlToolCallParser`（全部容错解析）、`ToolRegistry` 的注册与别名解析、**真实工具类的工具名/参数名**
-  （`RealToolBeans` 以空依赖反射实例化 8 个生产工具组件——重构改了工具名或参数名，评测立刻红）。
+  （`RealToolBeans` 以空依赖反射实例化 9 个生产工具组件——重构改了工具名或参数名，评测立刻红）。
 - **回放**：`ScriptedStreamingModel` 实现 `StreamingChatLanguageModel`，按用例 `turns` 逐轮回放预录的模型输出，
   不访问网络。
 - **记录**：`RecordingToolRegistry` 继承 `ToolRegistry`，`execute()` 只记录 `(toolName, argsJson)` 分发序列并返回

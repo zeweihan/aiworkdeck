@@ -132,6 +132,20 @@ ai:
       chat-selection-max-chars: 1500
     # 支持 OCR 的文件扩展名
     ocr-extensions: [jpg, jpeg, png, gif, bmp, webp, pdf]
+  # 子 Agent（dispatch_subtask 委派子任务）配置（对应 SubAgentProperties，以下均为默认值）
+  subagent:
+    # 单个子任务的循环轮数上限
+    max-rounds: 6
+    # 同时运行的子任务数上限（专用线程池大小）
+    max-parallel: 3
+    # 单个子任务超时（秒）
+    timeout-seconds: 180
+    # 子 Agent 消息栈 token 预算（估算）
+    token-budget: 30000
+    # token 估算系数（与 ai.context.chars-per-token 口径一致）
+    chars-per-token: 2.0
+    # 子 Agent 模型 ID；留空则继承主会话所选模型
+    model: ""
 
 # 文件存储配置
 storage:
