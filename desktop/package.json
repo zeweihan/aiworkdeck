@@ -10,7 +10,7 @@
     "dev": "cross-env AIWORKDECK_DESKTOP_DEV=1 electron .",
     "start": "electron .",
     "build": "electron-builder",
-    "test": "node --test tests/service-manager.test.js"
+    "test": "node --test tests/service-manager.test.js tests/model-manager.test.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
