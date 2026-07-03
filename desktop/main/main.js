@@ -3,6 +3,8 @@ const { app, BrowserWindow, BrowserView, ipcMain, shell, desktopCapturer, screen
 const { createServiceManager } = require('./services/service-manager')
 const { createBackendDescriptor } = require('./services/backend-service')
 const { createPptxDescriptor } = require('./services/pptx-service')
+const { createMineruDescriptor } = require('./services/mineru-service')
+const { createModelManager } = require('./services/model-manager')
 const { initLocalFileService } = require('./file-service')
 
 
@@ -21,6 +23,7 @@ function escapeHtml(s) {
 /** @type {BrowserWindow | null} */
 let mainWindow = null
 let services = null
+let modelManager = null
 
 /** @type {Map<string, BrowserView>} */
 const views = new Map()
@@ -1146,16 +1149,70 @@ ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
 
 function createServices() {
   // 打包模式下 jar/JRE/python 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck
+  const dataDir = path.join(app.getPath('home'), '.aiworkdeck')
+  if (!modelManager) {
+    modelManager = createModelManager({
+      dataDir,
+      resourcesPath: process.resourcesPath,
+      packaged: app.isPackaged,
+      onProgress: (evt) => {
+        try {
+          if (mainWindow) mainWindow.webContents.send('checkba:model-progress', evt)
+        } catch (e) { /* ignore */ }
+        // 模型就绪后自动拉起本地解析服务（组件页无需再点「启用」）
+        if (evt.phase === 'done' && evt.id === 'mineru-models' && services) {
+          services.start('mineru-service').catch((e) => console.error('[mineru-service]', e))
+        }
+      }
+    })
+  }
   const mgr = createServiceManager({
     projectRoot: path.join(__dirname, '..', '..'),
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
-    dataDir: path.join(app.getPath('home'), '.aiworkdeck')
+    dataDir
   })
   mgr.register(createBackendDescriptor())
   mgr.register(createPptxDescriptor())
+  mgr.register(createMineruDescriptor(modelManager))
   return mgr
 }
+
+// 组件管理（模型下载/状态）与服务按需拉起的 IPC 面
+ipcMain.handle('checkba:model-status', async () => {
+  if (!modelManager) return { components: [] }
+  const components = modelManager.status()
+  // 「运行中」标注：对应服务端口是否有监听
+  const { isPortOpen } = require('./services/service-manager')
+  for (const c of components) {
+    if (c.id === 'mineru-models' && services && services.ports['mineru-service']) {
+      c.serviceRunning = await isPortOpen(services.ports['mineru-service'])
+    }
+  }
+  return { components }
+})
+ipcMain.handle('checkba:model-download', async (_evt, payload) => {
+  return modelManager.download(payload && payload.id)
+})
+ipcMain.handle('checkba:model-cancel', async (_evt, payload) => {
+  return modelManager.cancel(payload && payload.id)
+})
+ipcMain.handle('checkba:model-remove', async (_evt, payload) => {
+  // 先停服务再删模型，避免删除运行中文件
+  if (payload && payload.id === 'mineru-models' && services) {
+    try { await services.stop('mineru-service') } catch (e) { /* ignore */ }
+  }
+  return modelManager.remove(payload && payload.id)
+})
+ipcMain.handle('checkba:service-ensure', async (_evt, payload) => {
+  if (!services) return { ok: false, message: 'services not ready' }
+  try {
+    const res = await services.start(payload && payload.name)
+    return { ok: !!res.ok, ...res }
+  } catch (e) {
+    return { ok: false, message: String(e && e.message ? e.message : e) }
+  }
+})
 
 // Epic #43: tell the renderer where to load the embedded LibreOffice editor
 // <webview>. Lazily installs COOP/COEP on the persist:zetaoffice partition and

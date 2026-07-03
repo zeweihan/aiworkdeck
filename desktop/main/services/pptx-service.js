@@ -22,13 +22,21 @@ function dataDir(ctx) {
 }
 
 function spawnEnv(ctx) {
-  return {
+  const env = {
     ...process.env,
     PYTHONPATH: libDir(ctx),
     PPTX_DATA_DIR: dataDir(ctx),
     PORT: String(ctx.ports['pptx-service']),
     FLASK_ENV: 'production'
   }
+  // 本地 MinerU 动态端口 + 云端兜底默认关闭（设计 §2.4 出网收口；可用 env 显式放开）
+  if (ctx.ports['mineru-service']) {
+    env.MINERU_LOCAL_URL = 'http://127.0.0.1:' + ctx.ports['mineru-service']
+  }
+  if (!env.MINERU_FORCE_CLOUD) {
+    env.MINERU_FORCE_CLOUD = process.env.CHECKBA_MINERU_FORCE_CLOUD || '0'
+  }
+  return env
 }
 
 function createPptxDescriptor() {
