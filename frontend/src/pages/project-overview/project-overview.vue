@@ -1365,8 +1365,6 @@ export default {
       currentAssistantId: 'default',
       showAssistantConfigDialog: false,
       editingAssistant: null,
-      showAssistantConfigDialog: false,
-      editingAssistant: null,
       assistants: [], // Dynamic now
       selectedContextNode: null, // Picker 中临时选中的节点
       // AI 导出 Word 相关（后端生成 docx）
@@ -1469,6 +1467,8 @@ export default {
       ,
       _desktopWebMarkUnsub: null
       ,
+      _desktopRendererOpenUnsub: null
+      ,
       _desktopOcrSelectionUnsub: null
       ,
       _desktopOcrSelectionErrUnsub: null,
@@ -1518,6 +1518,20 @@ export default {
     }
   },
   computed: {
+    // 桌面端：任一全屏蒙层/弹窗打开时为 true。BrowserView 是原生层，永远盖在
+    // HTML 之上，所以弹窗期间必须隐藏 BrowserView，否则弹窗会被网页挡住"点了没反应"。
+    desktopOverlayActive() {
+      return !!(
+        this.showOcrOverlay ||
+        this.showScreenshotSaveDialog ||
+        this.showExportDialog ||
+        this.showAssistantConfigDialog ||
+        this.showCompareDialog ||
+        this.showFilePicker ||
+        this.showInviteModal ||
+        (this.fileLinkPicker && this.fileLinkPicker.visible)
+      )
+    },
     LEFT_SIDEBAR_PLUGINS() {
       const user = getCurrentUser()
       if (user && user.role === 'CLIENT') {
@@ -1741,6 +1755,14 @@ export default {
     }
     this._desktopWebMarkUnsub = null
 
+    // Desktop：解绑 window.open(id='renderer') 消费监听
+    try {
+      if (this._desktopRendererOpenUnsub) this._desktopRendererOpenUnsub()
+    } catch (e) {
+      // ignore
+    }
+    this._desktopRendererOpenUnsub = null
+
     // Desktop：解绑内部链接打开监听
     try {
       if (this._desktopOpenInternalUnsub) this._desktopOpenInternalUnsub()
@@ -1857,9 +1879,10 @@ export default {
     }
 
     // Desktop：仅在工作区页面展示 BrowserView（否则会“飘”到其它页面）
+    // 注意尊重弹窗状态：若返回页面时仍有全屏弹窗打开，保持隐藏
     try {
       if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.setViewsVisible) {
-        window.checkbaDesktop.browser.setViewsVisible({ visible: true }).catch(() => {})
+        window.checkbaDesktop.browser.setViewsVisible({ visible: !this.desktopOverlayActive }).catch(() => {})
       }
     } catch (e) {
       // ignore
@@ -1918,6 +1941,27 @@ export default {
             } catch (e) {
               console.error('保存网核收藏失败:', e)
               uni.showToast({ title: e.message || '保存失败', icon: 'none' })
+            }
+          })
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    // Desktop：消费主进程拦截的 window.open（id='renderer'）。
+    // 主进程会把渲染层所有 window.open(http/https) 拦截为
+    // checkba:browser-open-new-tab { id: 'renderer' }，此前无人消费，
+    // 导致桌面端"文件下载/查看/收藏开网页"等 window.open 全部静默失效。
+    try {
+      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.onOpenNewTab) {
+        if (!this._desktopRendererOpenUnsub) {
+          this._desktopRendererOpenUnsub = window.checkbaDesktop.browser.onOpenNewTab((data) => {
+            try {
+              if (!data || data.id !== 'renderer' || !data.url) return
+              this.openBrowserTab(String(data.url))
+            } catch (e) {
+              // ignore
             }
           })
         }
@@ -2109,6 +2153,23 @@ export default {
       }
     } catch (e) {
       // ignore
+    }
+  },
+  watch: {
+    // 桌面端统一守卫：弹窗/蒙层打开 → 隐藏 BrowserView；全部关闭 → 恢复并重同步 bounds
+    desktopOverlayActive(open) {
+      if (!this.isDesktopApp) return
+      try {
+        const api = window.checkbaDesktop && window.checkbaDesktop.browser
+        if (!api || !api.setViewsVisible) return
+        api.setViewsVisible({ visible: !open }).catch(() => {})
+        if (!open) {
+          // 恢复后强制一次布局同步，防止蒙层期间的布局变化（如底部面板开合）留下过期 bounds
+          this.$nextTick(() => this.triggerWorkbenchResize())
+        }
+      } catch (e) {
+        // ignore
+      }
     }
   },
   methods: {
@@ -3162,15 +3223,9 @@ export default {
     },
     closeOcrOverlay() {
       // 关闭蒙层：H5 使用屏幕共享时可能涉及授权；Desktop 不需要授权
+      // Desktop：BrowserView 的恢复由 desktopOverlayActive watcher 统一处理
+      // （若此时还有其它弹窗打开，则保持隐藏，避免弹窗被网页遮挡）
       this.showOcrOverlay = false
-      // Desktop：恢复 BrowserView（否则会遮挡主页面）
-      try {
-        if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.setViewsVisible) {
-          window.checkbaDesktop.browser.setViewsVisible({ visible: true })
-        }
-      } catch (e) {
-        // ignore
-      }
       // #ifdef H5
       this.unbindOcrGlobalListeners()
       // #endif
@@ -3333,11 +3388,9 @@ export default {
         // 桌面端不需要浏览器授权：避免误导
         const title = this.isDesktopApp ? (e.message || '截图失败') : '截图失败（请允许共享标签页/窗口）'
         uni.showToast({ title, icon: 'none' })
-        // 失败时确保恢复 BrowserView
+        // 失败时统一走 closeOcrOverlay 复位（BrowserView 恢复由 watcher 处理）
         try {
-          if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.setViewsVisible) {
-            window.checkbaDesktop.browser.setViewsVisible({ visible: true })
-          }
+          this.closeOcrOverlay()
         } catch (err) {
           // ignore
         }
@@ -3708,6 +3761,7 @@ export default {
         }
       } finally {
         uni.hideLoading()
+        this.ocrLoading = false
       }
     },
 
@@ -3885,11 +3939,6 @@ export default {
       await this.startOcrCapture()
     },
 
-    async ocrDoFavorite() {
-      if (!this.ocrImageDataUrl) return
-      await this.saveOcrFavorite()
-    },
-
     async insertClipboardAndCopy(text, options = {}) {
       const t = (text || '').trim()
       if (!t) return
@@ -3977,10 +4026,11 @@ export default {
         // 立即给用户可见反馈：打开收藏夹并高亮新卡片
         this.showToolsPanel = true
         this.activeToolKey = 'favorites'
-        this.$nextTick(() => {
+        this.$nextTick(async () => {
           try {
             const panel = this.$refs.favoritesPanel
-            if (panel && typeof panel.refresh === 'function') panel.refresh()
+            // 先等列表刷新完成，新卡片进入列表后再定位高亮，否则高亮必然落空
+            if (panel && typeof panel.refresh === 'function') await panel.refresh()
             if (favId && panel && typeof panel.focusFavorite === 'function') panel.focusFavorite(Number(favId))
           } catch (e) {
             // ignore
@@ -4405,6 +4455,8 @@ export default {
         window.addEventListener('mouseup', this.boundStopResize, { passive: true })
         window.addEventListener('touchmove', this.boundResizeMove, { passive: false })
         window.addEventListener('touchend', this.boundStopResize, { passive: true })
+        // 兜底：鼠标移出窗口/窗口失焦时 mouseup 可能丢失，避免 is-resizing 卡死
+        window.addEventListener('blur', this.boundStopResize, { passive: true })
       }
     },
 
@@ -4497,6 +4549,7 @@ export default {
         if (this.boundStopResize) {
           window.removeEventListener('mouseup', this.boundStopResize)
           window.removeEventListener('touchend', this.boundStopResize)
+          window.removeEventListener('blur', this.boundStopResize)
         }
       }
 

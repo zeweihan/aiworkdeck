@@ -111,6 +111,12 @@ export default {
     openUrl(url) {
       if (!url) return
       // #ifdef H5
+      // 桌面端（Electron，同为 H5 构建）：window.open 会被主进程拦截后丢弃，
+      // 必须走 emit 让工作区开网页 tab
+      if (typeof window !== 'undefined' && window.checkbaDesktop) {
+        this.$emit('open-url', url)
+        return
+      }
       window.open(url, '_blank')
       // #endif
       // #ifndef H5
@@ -122,10 +128,12 @@ export default {
     },
     focusFavorite(id) {
       if (!id) return
+      if (this._highlightTimer) clearTimeout(this._highlightTimer)
       this.scrollIntoView = this.getCardDomId(id)
       this.highlightId = id
-      setTimeout(() => {
+      this._highlightTimer = setTimeout(() => {
         if (this.highlightId === id) this.highlightId = null
+        this._highlightTimer = null
       }, 1800)
     },
     getFavoriteImageUrl(id) {

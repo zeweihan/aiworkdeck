@@ -114,6 +114,9 @@ export function useAgentStream() {
         if (sseAbortController && isConnected.value) return Promise.resolve()
 
         sseAbortController = new AbortController()
+        // 持有本次连接自己的 controller 引用：旧连接结束时的清理（catch/finally）
+        // 只允许作用于"自己还是当前连接"的情况，否则会把新连接的状态清掉（切换会话竞态）
+        const myController = sseAbortController
         const baseUrl = getApiBaseUrl()
         const url = `${baseUrl}/api/agent/connect/${conversationId}`
         const sessionId = getSessionId()
@@ -124,7 +127,7 @@ export function useAgentStream() {
                 const response = await fetch(url, {
                     method: 'GET',
                     headers: { 'Content-Type': 'application/json', 'X-Session-Id': sessionId || '' },
-                    signal: sseAbortController.signal
+                    signal: myController.signal
                 })
 
                 if (!response.ok) throw new Error(`SSE Connection Failed: ${response.status}`)
@@ -157,32 +160,44 @@ export function useAgentStream() {
                     }
                 }
             } catch (err) {
+                // 关键：若本连接已被替换（切换会话后新连接已建立），不得清理全局状态
+                const isCurrent = sseAbortController === myController
                 if (err.name !== 'AbortError') {
                     console.error('[AgentStream] SSE Error:', err)
                     if (!isConnected.value && !isStreaming.value) reject(err)
                     // SSE 连接出错时，确保结束当前 bubble 的加载状态
-                    if (currentAssistantBubble.value && currentAssistantBubble.value.isStreaming) {
+                    if (isCurrent && currentAssistantBubble.value && currentAssistantBubble.value.isStreaming) {
                         currentAssistantBubble.value.isStreaming = false
                         currentAssistantBubble.value.content += '\n\n*[连接中断]*'
                     }
                 }
-                isConnected.value = false
-                isStreaming.value = false
-            } finally {
-                sseAbortController = null
-                isConnected.value = false
-                // SSE 连接结束时（包括正常结束），确保状态正确
-                if (isStreaming.value && currentAssistantBubble.value) {
-                    // 如果仍在流式状态但连接已结束，说明可能是意外断开
-                    console.warn('[AgentStream] SSE connection ended while still streaming')
-                    currentAssistantBubble.value.isStreaming = false
+                if (isCurrent) {
+                    isConnected.value = false
                     isStreaming.value = false
+                }
+            } finally {
+                // 同上：只有"自己仍是当前连接"时才清理，避免旧连接收尾时踩掉新连接
+                if (sseAbortController === myController) {
+                    sseAbortController = null
+                    isConnected.value = false
+                    // SSE 连接结束时（包括正常结束），确保状态正确
+                    if (isStreaming.value && currentAssistantBubble.value) {
+                        // 如果仍在流式状态但连接已结束，说明可能是意外断开
+                        console.warn('[AgentStream] SSE connection ended while still streaming')
+                        currentAssistantBubble.value.isStreaming = false
+                        isStreaming.value = false
+                    }
                 }
             }
         })
     }
 
     const sendMessage = async ({ prompt, contentHtml = '', fileList = [], projectId, modelId = 'default', assistantId, mode = 'AGENT', activeContext = null, _userImages = [], _userContextFiles = [] }) => {
+        // 防重入：流式进行中再触发发送（回车/连点）会产生重复气泡和并发请求
+        if (isStreaming.value) {
+            console.warn('[AgentStream] sendMessage ignored: already streaming')
+            return
+        }
         // Clear file changes for new turn
         fileChanges.value = []
 
