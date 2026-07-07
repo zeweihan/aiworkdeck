@@ -1,8 +1,11 @@
 <template>
   <view class="libre-editor-wrapper">
     <view class="libre-toolbar">
-      <text class="libre-title">{{ variant === 'default' ? 'LibreOffice 编辑器' : 'LibreOffice 编辑器（嵌入式 webview · 实验）' }}</text>
-      <text class="libre-status" :class="{ ready }">{{ statusText }}</text>
+      <!-- Engine name / debug status are dev-probe chrome: in the 'default'
+           (product) variant the tab already names the file, and a quiet editor
+           shows NO status — only booting/loading/saving/failure speak up. -->
+      <text v-if="variant !== 'default'" class="libre-title">LibreOffice 编辑器（嵌入式 webview · 实验）</text>
+      <text v-if="displayStatus" class="libre-status" :class="{ ready, error: isError }">{{ displayStatus }}</text>
       <!-- Save is REAL product UI (Track E): shown in every variant whenever the
            editor is bound to a backend file — without it edits die with the tab. -->
       <button v-if="file" class="libre-btn" :disabled="!ready || saving" @click="saveDocument">
@@ -22,7 +25,9 @@
     <!-- The Electron <webview> is created imperatively (uni-app's template
          compiler does not know the <webview> tag); it mounts into this host. -->
     <view :id="hostId" class="libre-host"></view>
-    <pre v-if="log" class="libre-log">{{ log }}</pre>
+    <!-- Log overlay is dev-probe UI only; product builds get the same lines via
+         devtools console (appendLog mirrors there). -->
+    <pre v-if="log && variant !== 'default'" class="libre-log">{{ log }}</pre>
   </view>
 </template>
 
@@ -66,24 +71,34 @@ export default {
     return {
       hostId: 'libre-host-' + (++seq),
       ready: false,
-      statusText: '启动中… / booting…',
+      statusText: '启动中…',
       log: '',
       webviewEl: null,
       executor: null,
       saving: false,
     }
   },
+  computed: {
+    isError() {
+      return this.statusText.indexOf('失败') !== -1
+    },
+    // Product variant stays quiet once ready — no permanent "就绪" badge.
+    displayStatus() {
+      if (this.variant !== 'default') return this.statusText
+      return this.statusText === '就绪' ? '' : this.statusText
+    },
+  },
   async mounted() {
     try {
       const api = typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
-        this.statusText = '仅桌面版可用 / desktop only'
+        this.statusText = '仅桌面版可用'
         return
       }
       const info = await api.getEditor() // { url, preload, partition }
       this.mountWebview(info)
     } catch (e) {
-      this.statusText = '初始化失败 / init failed'
+      this.statusText = '初始化失败'
       this.appendLog('init failed: ' + (e && e.message ? e.message : e))
     }
   },
@@ -99,6 +114,8 @@ export default {
   },
   methods: {
     appendLog(m) {
+      // Mirror to devtools so the product variant (overlay hidden) stays diagnosable.
+      console.log('[libre-editor]', m)
       this.log = (this.log + m + '\n').split('\n').slice(-200).join('\n')
     },
     mountWebview(info) {
@@ -128,7 +145,7 @@ export default {
         // pre-boot. The dev-probe toolbar in the experimental variant stays
         // disabled until then (ready=false).
         this.executor = createWebviewEditorExecutor(wv, { onReady: () => this.onEndpointReady() })
-        this.statusText = this.file ? '加载文档中… / loading…' : '启动中… / booting…'
+        this.statusText = this.file ? '加载文档中…' : '启动中…'
         this.appendLog('webview dom-ready — executor wired, awaiting office endpoint')
       } catch (e) {
         this.appendLog('executor wiring failed: ' + (e && e.message ? e.message : e))
@@ -146,12 +163,12 @@ export default {
           // Load failed → the seeded prototype is still showing. Surface it; the
           // editor stays usable (AI/IME act on whatever is shown) but the content
           // is wrong, so this is loud, not silent.
-          this.statusText = '文档加载失败 / load failed'
+          this.statusText = '文档加载失败'
           this.appendLog('load_document failed: ' + (e && e.message ? e.message : e))
         }
       }
       this.ready = true
-      if (this.statusText.indexOf('失败') === -1) this.statusText = '就绪 / ready ✓'
+      if (this.statusText.indexOf('失败') === -1) this.statusText = '就绪'
       this.$emit('ready', this.executor)
     },
     async loadDocument() {
@@ -200,7 +217,7 @@ export default {
       if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return }
       this.saving = true
       const prevStatus = this.statusText
-      this.statusText = '保存中… / saving…'
+      this.statusText = '保存中…'
       try {
         const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
         this.appendLog('▶ export_document「' + name + '」…')
@@ -218,15 +235,15 @@ export default {
         if (!u8 || u8.length === 0) throw new Error('export produced no bytes')
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
-        this.statusText = '已保存 / saved ✓'
+        this.statusText = '已保存'
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
       } catch (e) {
-        this.statusText = '保存失败 / save failed'
+        this.statusText = '保存失败'
         this.appendLog('save failed: ' + (e && e.message ? e.message : e))
       } finally {
         this.saving = false
         // Let the badge linger, then settle back to ready (unless a failure is showing).
-        setTimeout(() => { if (this.statusText === '已保存 / saved ✓') this.statusText = prevStatus }, 2500)
+        setTimeout(() => { if (this.statusText === '已保存') this.statusText = prevStatus }, 2500)
       }
     },
     // Authed multipart POST — the upload twin of fetchArrayBuffer (backend
@@ -267,8 +284,9 @@ export default {
 .libre-editor-wrapper { display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
 .libre-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; background: #1F2937; color: #fff; }
 .libre-title { font-size: 13px; font-weight: 600; }
-.libre-status { font-size: 12px; color: #fca5a5; }
+.libre-status { font-size: 12px; color: #d1d5db; }
 .libre-status.ready { color: #86efac; }
+.libre-status.error { color: #fca5a5; }
 .libre-btn { font-size: 12px; padding: 4px 10px; border: 0; border-radius: 4px; background: #059669; color: #fff; cursor: pointer; }
 .libre-btn[disabled] { background: #6b7280; cursor: not-allowed; }
 .libre-close { background: #4b5563; margin-left: auto; }
