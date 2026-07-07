@@ -79,6 +79,40 @@ function anchorRange(name) {
   return bms.getByName(name).getAnchor(); // XTextRange
 }
 
+// #104 variable fields: a NAMED bookmark spanning the inserted value marks a
+// "document field" bound to a (scope, varName) variable — the WPS 域 semantics
+// VariablePanel expects, on LibreOffice. The binding is encoded in the bookmark
+// NAME (scope + hex-encoded UTF-8 varName, name-safe chars only) so it survives
+// a docx save/reload — bookmarks round-trip through OOXML; no custom XML part
+// needed. (Word caps bookmark names at 40 chars, so a long CJK varName may get
+// mangled if the file is edited in Word itself; LibreOffice round-trips it.)
+const VAR_FIELD_PREFIX = '__ai_var_';
+let varFieldSeq = 0;
+function hexUtf8(s) {
+  const bytes = unescape(encodeURIComponent(String(s))); // UTF-8 byte string
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += ('0' + bytes.charCodeAt(i).toString(16)).slice(-2);
+  return out;
+}
+function unhexUtf8(h) {
+  let bytes = '';
+  for (let i = 0; i + 1 < h.length; i += 2) bytes += String.fromCharCode(parseInt(h.substr(i, 2), 16));
+  try { return decodeURIComponent(escape(bytes)); } catch (e) { return bytes; }
+}
+function newVarFieldName(scope, varName) {
+  const bms = xModel.getBookmarks();
+  let name;
+  do { name = VAR_FIELD_PREFIX + scope + '_' + hexUtf8(varName) + '_' + (++varFieldSeq); }
+  while (bms.hasByName(name)); // seq resets per session; skip names already in the doc
+  return name;
+}
+function parseVarFieldName(name) {
+  if (String(name).indexOf(VAR_FIELD_PREFIX) !== 0) return null;
+  const parts = String(name).slice(VAR_FIELD_PREFIX.length).split('_'); // [scope, hex, seq]
+  if (parts.length !== 3 || !parts[0]) return null;
+  return { scope: parts[0], varName: unhexUtf8(parts[1]) };
+}
+
 // ---- 拟人式原语 helpers（感知/验证回路） ------------------------------------
 // Context around a range: the chars immediately before/after, read via a text
 // cursor spawned FROM THE RANGE'S OWN XText (so matches inside table cells /
@@ -868,6 +902,59 @@ const EXEC = {
       try { um.redo(); } catch (e) { break; }
     }
     return Object.assign({ success: done > 0, redone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to redo' });
+  },
+  // ---- #104 文档变量域原语（VariablePanel via the getWps adapter) ------------
+  // list every variable field in the document: {fields: [{id, scope, varName, text}]}
+  var_list() {
+    const bms = xModel.getBookmarks();
+    const names = (bms.getElementNames && bms.getElementNames()) || [];
+    const fields = [];
+    for (let i = 0; i < names.length; i++) {
+      const meta = parseVarFieldName(names[i]);
+      if (!meta) continue;
+      let text = '';
+      try { text = bms.getByName(names[i]).getAnchor().getString(); } catch (e) {}
+      fields.push({ id: names[i], scope: meta.scope, varName: meta.varName, text: text });
+    }
+    return { success: true, count: fields.length, fields: fields };
+  },
+  // insert {text} at the view cursor, marked as a field of (scope, name).
+  var_insert(p) {
+    const name = String(p.name || '').trim();
+    if (!name) return { success: false, message: 'var_insert requires {name}' };
+    const scope = String(p.scope || 'D');
+    // a paragraph break inside the span would split the bookmark, so field
+    // values are inline-only: newlines flatten to spaces
+    const value = String(p.text == null ? '' : p.text).replace(/[\r\n]+/g, ' ');
+    const vc = ctrl.getViewCursor();
+    vc.collapseToEnd();
+    const xText = vc.getText(); // the story the cursor is in (body / table cell / frame)
+    const cur = xText.createTextCursorByRange(vc.getEnd());
+    xText.insertString(cur, value, true); // bAbsorb: cur now spans the inserted value
+    const id = newVarFieldName(scope, name);
+    const bm = xModel.createInstance('com.sun.star.text.Bookmark');
+    bm.setName(id);
+    xText.insertTextContent(cur, bm, true);
+    try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
+    return Object.assign({ success: true, id: id, scope: scope, varName: name, text: value }, verifySnapshot());
+  },
+  // replace the text span of field {id} with {text}, keeping the marker alive.
+  var_update(p) {
+    const id = String(p.id || '');
+    const bms = xModel.getBookmarks();
+    if (!id || !bms.hasByName(id)) return { success: false, message: 'variable field not found: ' + id };
+    if (!parseVarFieldName(id)) return { success: false, message: 'not a variable field: ' + id };
+    const value = String(p.text == null ? '' : p.text).replace(/[\r\n]+/g, ' ');
+    const bm = bms.getByName(id);
+    const anchor = bm.getAnchor();
+    const xText = anchor.getText();
+    const cur = xText.createTextCursorByRange(anchor);
+    xText.removeTextContent(bm); // setString over the span would swallow the marker; re-add below
+    cur.setString(value);
+    const bm2 = xModel.createInstance('com.sun.star.text.Bookmark');
+    bm2.setName(id);
+    xText.insertTextContent(cur, bm2, true);
+    return { success: true, id: id, text: value, paragraphAfterEdit: (paragraphTextOf(cur) || '').slice(0, 200) };
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
