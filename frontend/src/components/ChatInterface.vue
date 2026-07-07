@@ -899,6 +899,9 @@ export default {
     }
 
     const handleSubmit = async () => {
+      // 流式进行中禁止再发送（回车路径不走发送按钮的 abort 分支）：
+      // 必须在清空输入框之前拦截，否则用户输入会被静默丢弃
+      if (isStreaming.value) return
       // Create a clone to safely manipulate and extract text without tags
       let text = ''
       let contentHtml = ''

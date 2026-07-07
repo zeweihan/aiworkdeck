@@ -71,6 +71,15 @@ function closeOcrSelectWin() {
     // ignore
   }
   ocrSelectWin = null
+  // 解除跟随监听：否则每次截图都会叠加一个 move/resize 监听器
+  if (ocrSelectWinBound && mainWindow) {
+    try {
+      mainWindow.removeListener('move', syncOcrSelectWinBounds)
+      mainWindow.removeListener('resize', syncOcrSelectWinBounds)
+    } catch (e) {
+      // ignore
+    }
+  }
   ocrSelectWinBound = false
   // 兜底：关闭覆盖窗后解除全局 ESC（避免影响正常使用）
   try {
@@ -383,7 +392,7 @@ ipcMain.handle('checkba:ocr-start-selection', async (_evt, payload) => {
 <body>
   <div class="layer">
     <div class="shade"></div>
-    <div class="hint">拖动框选网页区域 · ESC 退出</div>
+    <div class="hint">拖动框选网页区域 · 点击其它区域或 ESC 退出</div>
     <div id="rect" class="rect"></div>
   </div>
   <script>
@@ -398,8 +407,12 @@ ipcMain.handle('checkba:ocr-start-selection', async (_evt, payload) => {
     window.addEventListener('mousedown', (e) => {
       if (e.button !== 0) return;
       const x = e.clientX, y = e.clientY;
-      // BrowserView 模式：只允许在其区域开始框选；window 模式：全局允许
-      if (!inView(x, y)) return;
+      // BrowserView 模式：只允许在其区域开始框选；区域外点击 = 取消退出
+      // （否则透明置顶窗会吞掉所有点击，用户点底栏/侧栏毫无反应，整个 app 像假死）
+      if (!inView(x, y)) {
+        ipcRenderer.send(ch, { ok: false, cancelled: true });
+        return;
+      }
       down = { x, y };
       rectEl.style.display = 'block';
       rectEl.style.left = x + 'px';
@@ -769,7 +782,13 @@ function setAllViewsVisible(visible) {
     return
   }
   // visible === true：把所有 view 重新 add 回来（按最后一次的 bounds）
+  // 先 remove 再 add：重复 add 已挂载的 view 会抛错，导致 attachedViewIds 不同步
   for (const [id, view] of views.entries()) {
+    try {
+      mainWindow.removeBrowserView(view)
+    } catch (e) {
+      // ignore
+    }
     try {
       mainWindow.addBrowserView(view)
       attachedViewIds.add(id)
