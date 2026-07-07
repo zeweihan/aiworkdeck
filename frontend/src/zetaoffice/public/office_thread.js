@@ -666,10 +666,9 @@ const EXEC = {
     const m = name.match(/\.([A-Za-z0-9]+)$/);
     const ext = (m ? m[1] : 'docx').toLowerCase();
 
-    // Normalize the transported bytes to the Int8Array a UNO sequence<byte>
-    // expects (zetajs maps sequence<byte> -> Int8Array). The host sends a
-    // Uint8Array; structured clone across the relay/worker hops may surface it
-    // as Uint8Array / ArrayBuffer / Array — accept all.
+    // Normalize the transported bytes. The host sends a Uint8Array; structured
+    // clone across the relay/worker hops may surface it as Uint8Array /
+    // ArrayBuffer / Array — accept all.
     const raw = p && p.bytes;
     let u8 = null;
     if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
@@ -679,7 +678,12 @@ const EXEC = {
     // bytes for it). That is NOT an error: keep the blank boot doc as-is. The
     // host also guards this, but defend here too.
     if (!u8 || u8.length === 0) return { success: true, empty: true, name: name };
-    const bytes = new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength);
+    // zeta.js marshals JS→UNO sequences ONLY from plain Arrays (translateToEmbind
+    // gates on Array.isArray), and sequence<byte> elements are SIGNED — so go
+    // through an Int8Array view, then Array.from. Passing the typed array itself
+    // reaches embind unconverted: 'Cannot pass "80,75,…" as …'. (Int8Array is
+    // the shape of RESULTS only, and only in some zetajs builds.)
+    const bytes = Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
 
     // Retarget the worker's model/controller onto a freshly-loaded component.
     const retarget = (loaded) => {
@@ -699,7 +703,12 @@ const EXEC = {
       const url = 'file:///tmp/ai_doc_' + (++docSeq) + '.' + ext;
       const sfa = css.ucb.SimpleFileAccess.create(context);
       try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
-      const stream = css.io.SequenceInputStream.createStreamFromSequence(bytes);
+      // zetajs named service constructors take the component context as the
+      // implicit FIRST argument (zeta.js: `const context = arguments[0]`).
+      // Omitting it made zetajs treat the byte sequence AS the context —
+      // "context.getServiceManager is not a function" — so load_document never
+      // succeeded on any engine until the host-side repro caught it.
+      const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
       sfa.writeFile(url, stream);
       try { stream.closeInput(); } catch (e) {}
       const loaded = desktop.loadComponentFromURL(url, '_default', 0, []);
@@ -715,7 +724,7 @@ const EXEC = {
     // an explicit import filter since there is no URL extension to detect from.
     try {
       const filter = IMPORT_FILTERS[ext];
-      const stream2 = css.io.SequenceInputStream.createStreamFromSequence(bytes);
+      const stream2 = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
       const args = [mkProp('InputStream', stream2)];
       if (filter) args.push(mkProp('FilterName', filter));
       const loaded = desktop.loadComponentFromURL('private:stream', '_default', 0, args);
