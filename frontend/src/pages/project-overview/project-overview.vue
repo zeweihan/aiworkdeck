@@ -864,6 +864,7 @@
                     v-if="activeToolKey === 'variables'"
                     ref="variablePanel"
                     :project-id="projectId"
+                    :get-wps="getLibreVariableBridge"
                     :search-keyword="toolsSearchKeyword"
                     @insert="handleInsertVariable"
                     @update-from-selection="handleUpdateVariable"
@@ -5576,6 +5577,50 @@ export default {
         this.libreOfficeActive = false
         this.libreOfficeExecutor = null
         console.log('[ProjectOverview] LibreOffice editor closed — agent commands unavailable until reopened')
+    },
+
+    // #104: WPS-era getWps() adapter for VariablePanel — the five document-field
+    // methods it expects, implemented over the LibreOffice executor's var_*
+    // commands. Returns null while no editor is active so the panel keeps its
+    // own “请先点击激活一个编辑窗口” fallback.
+    getLibreVariableBridge() {
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) return null
+      const exec = (action, params) => this.libreOfficeExecutor.executeCommand(action, params)
+      return {
+        async getSelectionText() {
+          const r = await exec('get_selection', {})
+          return (r && r.success && r.text) || ''
+        },
+        async listVariableFields() {
+          const r = await exec('var_list', {})
+          if (!r || !r.success) throw new Error((r && r.message) || '读取文档变量域失败')
+          return r.fields || []
+        },
+        async insertTextWithDocumentField(value, scope, name) {
+          const r = await exec('var_insert', { text: value == null ? '' : String(value), scope, name })
+          if (!r || !r.success) throw new Error((r && r.message) || '插入文档变量域失败')
+        },
+        async updateDocumentField(fieldId, nextText) {
+          const r = await exec('var_update', { id: fieldId, text: nextText == null ? '' : String(nextText) })
+          if (!r || !r.success) throw new Error((r && r.message) || '更新文档变量域失败')
+        },
+        // resolver 是面板本地回调，无法跨 worker 传递：在这一侧枚举字段、逐个求值并回写。
+        // 空值不回写——后端变量缺失时 resolver 返回 ''，同步不应清空文档里的内容。
+        async syncAllDocumentFields(resolver) {
+          const lr = await exec('var_list', {})
+          if (!lr || !lr.success) throw new Error((lr && lr.message) || '读取文档变量域失败')
+          let updated = 0
+          for (const f of lr.fields || []) {
+            let next
+            try { next = resolver(f.scope, f.varName, f.text) } catch (e) { continue }
+            next = next == null ? '' : String(next)
+            if (!next || next === f.text) continue
+            const ur = await exec('var_update', { id: f.id, text: next })
+            if (ur && ur.success) updated++
+          }
+          return { updated }
+        },
+      }
     },
 
     // --- 文件选择/上传 ---
