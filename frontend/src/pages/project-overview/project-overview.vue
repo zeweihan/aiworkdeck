@@ -1236,7 +1236,7 @@ import {
   getFileText,
   promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
-import { getCurrentUser } from '@/utils/auth.js'
+import { getCurrentUser, getSessionId } from '@/utils/auth.js'
 import { FILE_BATCH_ACTIONS, FILE_TREE_QUICK_ACTIONS } from '@/config/fileActions.js'
 import { WORKBENCH_TOOLS } from '@/config/tools.js'
 import { OCR_ACTION_LABELS, INTERNAL_LINK_SCHEMES, WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
@@ -3878,7 +3878,7 @@ export default {
 
         // 2. Upload File Content
         const fileToUpload = new File([blob], name, { type: 'image/png' })
-        const token = uni.getStorageSync('token')
+        const token = getSessionId()
         const baseUrl = getApiBaseUrl()
 
         await new Promise((resolve, reject) => {
@@ -3887,7 +3887,7 @@ export default {
                  name: 'file', // Param name expected by backend
                  file: fileToUpload,
                  header: {
-                     'Authorization': token ? `Bearer ${token}` : ''
+                     'X-Session-Id': token || ''
                  },
                  success: (res) => {
                      if (res.statusCode >= 200 && res.statusCode < 300) {

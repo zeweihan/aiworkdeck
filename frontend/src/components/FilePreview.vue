@@ -104,7 +104,7 @@
 
 <script>
 import { getFileDownloadUrl } from '@/services/api.js'
-import { getAuthHeaders } from '@/utils/auth.js'
+import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 
 // docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台落 Office 占位分支
 // #ifdef H5
@@ -235,7 +235,8 @@ export default {
       try {
         const response = await uni.request({
           url: this.fileUrl,
-          method: 'GET'
+          method: 'GET',
+          header: getAuthHeaders()
         })
         this.textContent = response.data || ''
       } catch (error) {
@@ -429,11 +430,12 @@ export default {
         console.log('下载文件:', this.fileUrl)
         // #ifdef H5
         // H5端直接打开下载链接
-        window.open(this.fileUrl, '_blank')
+        window.open(this.fileUrl + (this.fileUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(getSessionId()), '_blank')
         // #endif
         // #ifndef H5
         uni.downloadFile({
           url: this.fileUrl,
+          header: getAuthHeaders(),
           success: (res) => {
             if (res.statusCode === 200) {
               uni.openDocument({

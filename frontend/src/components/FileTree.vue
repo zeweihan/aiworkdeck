@@ -803,7 +803,7 @@
 
 <script>
 import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl } from '@/services/api.js'
-import { getAuthHeaders } from '@/utils/auth.js'
+import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 import CircularProgress from '@/components/CircularProgress.vue'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
@@ -2001,7 +2001,7 @@ export default {
        uni.showToast({ title: '开始下载...', icon: 'none' })
 
        const baseUrl = getApiBaseUrl()
-       const token = uni.getStorageSync('token') || ''
+       const token = getSessionId() || ''
 
        try {
           const url = `${baseUrl}/api/files/${item.id}/download?token=${encodeURIComponent(token)}`
@@ -2061,7 +2061,7 @@ export default {
     handleDownload(item) {
         if (!item || item.isFolder) return
         const baseUrl = getApiBaseUrl()
-        const token = uni.getStorageSync('token') || ''
+        const token = getSessionId() || ''
         const url = `${baseUrl}/api/files/${item.id}/download?token=${encodeURIComponent(token)}`
 
         // Trigger browser download; handled by Main process to show Save As dialog

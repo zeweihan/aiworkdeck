@@ -378,7 +378,7 @@ export default {
       })
     },
     viewFile(fileId) {
-       const url = `${getApiBaseUrl()}/api/files/${fileId}/download`
+       const url = `${getApiBaseUrl()}/api/files/${fileId}/download?token=${encodeURIComponent(getSessionId())}`
        window.open(url, '_blank')
     },
 
