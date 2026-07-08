@@ -462,8 +462,13 @@ public class MemoryManager {
      */
     private List<MemoryEntry> rankWithTimeDecay(List<MemoryEntry> candidates, int limit) {
         if (candidates == null || candidates.isEmpty()) return Collections.emptyList();
+        // 预计算每条综合分（含随机抖动/时间衰减，逐条只算一次）。retrievalScore 每次调用返回不同值，
+        // 直接用作比较器 key 会在排序中被多次调用得到不同结果，违反 Comparator 契约 →
+        // TimSort 抛 IllegalArgumentException（候选多时）或排序错乱（候选少时）。
+        java.util.Map<MemoryEntry, Double> scoreCache = new java.util.IdentityHashMap<>();
+        for (MemoryEntry e : candidates) scoreCache.put(e, retrievalScore(e));
         List<MemoryEntry> ranked = candidates.stream()
-                .sorted(Comparator.comparingDouble(this::retrievalScore).reversed())
+                .sorted(Comparator.comparingDouble((MemoryEntry e) -> scoreCache.get(e)).reversed())
                 .collect(Collectors.toList());
 
         List<MemoryEntry> top = new ArrayList<>(ranked.subList(0, Math.min(limit, ranked.size())));

@@ -150,7 +150,11 @@ public class MemCellExtractor {
             
             if (msg instanceof UserMessage um) {
                 role = "用户";
-                content = um.singleText();
+                // 安全提取：多模态消息 singleText() 会抛异常
+                content = um.contents().stream()
+                        .filter(dev.langchain4j.data.message.TextContent.class::isInstance)
+                        .map(c -> ((dev.langchain4j.data.message.TextContent) c).text())
+                        .collect(java.util.stream.Collectors.joining(" "));
             } else if (msg instanceof AiMessage am) {
                 role = "助理";
                 content = am.text();

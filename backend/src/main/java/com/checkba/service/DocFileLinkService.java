@@ -56,6 +56,16 @@ public class DocFileLinkService {
         if (!StringUtils.hasText(docWpsFileId)) throw new IllegalArgumentException("docWpsFileId 不能为空");
         if (fileIds == null || fileIds.isEmpty()) throw new IllegalArgumentException("fileIds 不能为空");
 
+        // 归属校验：只接受属于本项目的 fileId，防止把他人项目文件 ID 存入链接后经 getByKey
+        // 读回其文件名/存储路径/wpsFileId 等元数据（IDOR）
+        for (Long fid : fileIds) {
+            if (fid == null) continue;
+            ProjectFile pf = projectFileRepository.findById(fid).orElse(null);
+            if (pf == null || !projectId.equals(pf.getProjectId())) {
+                throw new IllegalArgumentException("文件不属于该项目: " + fid);
+            }
+        }
+
         String key = StringUtils.hasText(linkKey) ? linkKey.trim() : ("lk_" + UUID.randomUUID());
         DocFileLink link = docFileLinkRepository.findByProjectIdAndLinkKey(projectId, key).orElse(null);
         if (link == null) {

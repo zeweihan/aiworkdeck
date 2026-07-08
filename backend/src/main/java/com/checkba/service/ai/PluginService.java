@@ -37,17 +37,19 @@ public class PluginService {
     private static final Set<String> KNOWN_PERMISSIONS =
             Set.of("file_read", "file_write", "network", "editor");
 
+    // 并发安全：rescan() 会 clear()+重填这些集合，而 ToolRegistry 在高频请求线程上无同步地遍历读取，
+    // 普通 ArrayList/HashMap 会抛 ConcurrentModificationException / 读到半空状态。
     @Getter
-    private final List<PluginMetadata> plugins = new ArrayList<>();
+    private final List<PluginMetadata> plugins = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     @Getter
-    private final Map<String, Object> pluginTools = new HashMap<>(); // toolName -> toolObject
+    private final Map<String, Object> pluginTools = new ConcurrentHashMap<>(); // toolName -> toolObject
 
     @Getter
-    private final List<ToolSpecification> toolSpecifications = new ArrayList<>();
+    private final List<ToolSpecification> toolSpecifications = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     /** toolName -> pluginId，供将来 ToolRegistry 按插件启停过滤工具 */
-    private final Map<String, String> toolToPluginId = new HashMap<>();
+    private final Map<String, String> toolToPluginId = new ConcurrentHashMap<>();
 
     /** 被禁用插件 id 集合（内存缓存，与 system_setting 同步） */
     private final Set<String> disabledPluginIds = ConcurrentHashMap.newKeySet();

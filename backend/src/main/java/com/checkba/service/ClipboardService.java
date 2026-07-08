@@ -54,8 +54,10 @@ public class ClipboardService {
         // 存储路径：clipboard/{userId}/{uuid}
         String storagePath = "clipboard/" + userId + "/" + uuid;
         
-        // 保存文件到存储服务
-        getStorageService().save(storagePath, file.getInputStream());
+        // 保存文件到存储服务（try-with-resources 关闭上传源流，防句柄泄漏）
+        try (java.io.InputStream in = file.getInputStream()) {
+            getStorageService().save(storagePath, in);
+        }
 
         // 构建元数据 JSON
         String originalFilename = file.getOriginalFilename();

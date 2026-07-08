@@ -29,9 +29,11 @@ public class StorageServiceFactory {
      */
     public StorageService getStorageService() {
         String type = storageProperties.getType();
-        
+
         log.info("获取存储服务，类型: {}", type);
-        
+
+        // 空值防御：配置里 storage.type: 键存在但值为空时 type 为 null，避免 toLowerCase NPE 拖垮全站文件功能
+        if (type == null) return localFileStorageService;
         switch (type.toLowerCase()) {
             case "local":
                 return localFileStorageService;

@@ -61,7 +61,8 @@ public class GlobalExceptionHandler {
         log.error("GlobalExceptionHandler caught Exception: ", e);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 1);
-        result.put("message", e.getMessage() != null ? e.getMessage() : "服务器内部错误");
+        // 不回显内部异常 message（可能含 SQL/表名/文件路径/SDK 细节等），统一通用文案；详情仅进日志
+        result.put("message", "服务器内部错误");
         // 统一返回 HTTP 200，通过 code 字段表示失败
         return ResponseEntity.ok().body(result);
     }

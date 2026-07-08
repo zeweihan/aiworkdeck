@@ -50,7 +50,8 @@ public class WizardController {
     }
 
     @PostMapping
-    public ResponseEntity<?> initialize(@RequestBody AdminConfigUpdateRequest request) {
+    public synchronized ResponseEntity<?> initialize(@RequestBody AdminConfigUpdateRequest request) {
+        // synchronized：串行化初始化，堵住两个并发匿名 POST 同时通过 isInitialized()==false 的 TOCTOU 竞态
         if (isInitialized()) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(error("系统已初始化，请通过管理后台修改配置 / Already initialized; use the admin console instead"));
