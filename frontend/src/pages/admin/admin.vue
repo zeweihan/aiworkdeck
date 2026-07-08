@@ -752,7 +752,6 @@ export default {
               endpoint: data.external.aliyunOcr?.endpoint || 'ocr-api.cn-hangzhou.aliyuncs.com',
               regionId: data.external.aliyunOcr?.regionId || 'cn-hangzhou',
               publicBaseUrl: data.external.aliyunOcr?.publicBaseUrl || '',
-              publicBaseUrl: data.external.aliyunOcr?.publicBaseUrl || '',
             },
             openRouter: {
               apiKey: data.external.openRouter?.apiKey || '',
