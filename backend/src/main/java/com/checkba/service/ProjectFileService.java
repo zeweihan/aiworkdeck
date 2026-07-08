@@ -506,6 +506,11 @@ public class ProjectFileService {
         }
         for (Long id : request.getFileIds()) {
             if (id == null) continue;
+            // 归属校验：防止越权批量删除他人项目的文件（delete(id,...) 本身不校验 projectId）
+            ProjectFile owned = projectFileRepository.findById(id).orElse(null);
+            if (owned != null && !Objects.equals(owned.getProjectId(), projectId)) {
+                throw new IllegalArgumentException("跨项目删除不支持: " + id);
+            }
             try {
                 delete(id, userId);
             } catch (IllegalArgumentException e) {
@@ -533,6 +538,11 @@ public class ProjectFileService {
         List<ProjectFile> result = new ArrayList<>();
         for (Long id : request.getFileIds()) {
             if (id == null) continue;
+            // 归属校验：防止越权批量移动他人项目的文件（move(id,...) 本身不校验 projectId）
+            ProjectFile owned = projectFileRepository.findById(id).orElse(null);
+            if (owned != null && !Objects.equals(owned.getProjectId(), projectId)) {
+                throw new IllegalArgumentException("跨项目移动不支持: " + id);
+            }
             result.add(move(id, request.getTargetParentId(), null, userId));
         }
         return result;

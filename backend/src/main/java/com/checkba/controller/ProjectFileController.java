@@ -76,6 +76,18 @@ public class ProjectFileController {
     }
 
     /**
+     * 校验目标文件确实属于当前 projectId，防止越权操作他人项目的文件（IDOR）。
+     * checkFileTreeAccess 只校验用户是 URL 中 projectId 的成员；按全局 fileId 操作的接口
+     * 若不校验归属，成员可传入他人项目的 fileId 进行读/写/删。
+     */
+    private void checkFileInProject(Long fileId, Long projectId) {
+        ProjectFile file = projectFileService.getFile(fileId); // 文件不存在会抛异常
+        if (!projectId.equals(file.getProjectId())) {
+            throw new IllegalArgumentException("文件不属于该项目");
+        }
+    }
+
+    /**
      * 创建文件夹
      * POST /api/projects/{projectId}/files/folder
      */
@@ -133,6 +145,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
         return projectFileService.rename(fileId, request.getName(), userId);
     }
 
@@ -150,6 +163,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
         projectFileService.delete(fileId, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
@@ -242,6 +256,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
         return projectFileService.move(fileId, request.getParentId(), request.getSortOrder(), userId);
     }
 
@@ -259,6 +274,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
         return projectFileService.getFile(fileId);
     }
 
@@ -292,6 +308,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
         projectFileService.restore(fileId, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
@@ -313,6 +330,7 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
         projectFileService.permDelete(fileId, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
@@ -393,6 +411,7 @@ public class ProjectFileController {
             throw new IllegalArgumentException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
         fileTagService.addTagToFile(fileId, request.getTagId(), userId);
     }
 
@@ -411,6 +430,7 @@ public class ProjectFileController {
             throw new IllegalArgumentException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
         fileTagService.removeTagFromFile(fileId, tagId);
     }
 }
