@@ -128,11 +128,18 @@ function startClipboardWatcher() {
       if (hasImage) {
         const img = clipboard.readImage()
         if (img && !img.isEmpty()) {
-          const dataUrl = img.toDataURL()
-          const fingerprint = 'IMG_' + dataUrl.length + '_' + dataUrl.slice(0, 50)
+          // 用原始 bitmap（BGRA buffer，无 PNG+base64 编码开销）算指纹，避免每秒对大图 toDataURL 烧 CPU；
+          // 仅当指纹变化（新图）时才做一次昂贵的 toDataURL。
+          const bitmap = img.toBitmap()
+          const size = img.getSize()
+          const sample = bitmap.length > 64
+            ? bitmap.subarray(0, 32).toString('hex') + bitmap.subarray(bitmap.length - 32).toString('hex')
+            : bitmap.toString('hex')
+          const fingerprint = 'IMG_' + size.width + 'x' + size.height + '_' + bitmap.length + '_' + sample
           if (fingerprint !== lastClipboardFingerprint) {
-            console.log('[Clipboard] Image detected, size:', dataUrl.length)
             lastClipboardFingerprint = fingerprint
+            const dataUrl = img.toDataURL()
+            console.log('[Clipboard] Image detected, size:', dataUrl.length)
             if (mainWindow) {
               mainWindow.webContents.send('checkba:clipboard-copied', {
                 type: 'IMAGE',
@@ -142,7 +149,6 @@ function startClipboardWatcher() {
               })
             }
           }
-          // Return if image handled? 
           // If user copied "Mixed Content", we prefer Image.
           return
         }
@@ -966,7 +972,9 @@ ipcMain.handle('checkba:browser-wait-ready', async (_evt, payload) => {
     if (!wc.isLoading || wc.isLoading() === false) return { ok: true, ready: true }
     const start = Date.now()
     await new Promise((resolve) => {
+      let timer = null
       const done = () => {
+        if (timer) { clearTimeout(timer); timer = null }
         try { wc.removeListener('did-stop-loading', done) } catch (e) { }
         try { wc.removeListener('did-finish-load', done) } catch (e) { }
         resolve()
@@ -977,7 +985,7 @@ ipcMain.handle('checkba:browser-wait-ready', async (_evt, payload) => {
       } catch (e) {
         resolve()
       }
-      setTimeout(done, Math.max(200, timeoutMs))
+      timer = setTimeout(done, Math.max(200, timeoutMs))
     })
     const elapsed = Date.now() - start
     const still = wc.isLoading && wc.isLoading()
@@ -1231,12 +1239,15 @@ ipcMain.handle('checkba:model-status', async () => {
   return { components }
 })
 ipcMain.handle('checkba:model-download', async (_evt, payload) => {
+  if (!modelManager) return { ok: false, message: 'model manager 未就绪' }
   return modelManager.download(payload && payload.id)
 })
 ipcMain.handle('checkba:model-cancel', async (_evt, payload) => {
+  if (!modelManager) return { ok: false, message: 'model manager 未就绪' }
   return modelManager.cancel(payload && payload.id)
 })
 ipcMain.handle('checkba:model-remove', async (_evt, payload) => {
+  if (!modelManager) return { ok: false, message: 'model manager 未就绪' }
   // 先停服务再删模型，避免删除运行中文件
   const svc = payload && COMPONENT_SERVICE[payload.id]
   if (svc && services) {
@@ -1266,7 +1277,7 @@ ipcMain.handle('checkba:zetaoffice-editor', async () => {
   const { origin } = await startEditorServer()
   return {
     url: editorUrl(origin),
-    preload: 'file://' + path.join(__dirname, '../preload/zetaoffice-webview-preload.js'),
+    preload: require('url').pathToFileURL(path.join(__dirname, '../preload/zetaoffice-webview-preload.js')).href,
     partition: ZETAOFFICE_PARTITION,
   }
 })
