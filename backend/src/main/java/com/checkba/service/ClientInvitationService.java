@@ -12,7 +12,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
-import java.util.Random;
 import java.util.UUID;
 
 @Service
@@ -141,7 +140,8 @@ public class ClientInvitationService {
     private String generateUniqueCode() {
         String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
         StringBuilder sb = new StringBuilder();
-        Random random = new Random();
+        // 用 SecureRandom：该码是客户访问项目的唯一凭证，可预测的 java.util.Random 可被枚举/预测
+        java.security.SecureRandom random = new java.security.SecureRandom();
         String code;
         do {
             sb.setLength(0);
