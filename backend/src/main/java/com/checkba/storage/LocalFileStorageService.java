@@ -154,12 +154,19 @@ public class LocalFileStorageService implements StorageService {
     /**
      * 解析文件路径
      * 如果 fileId 包含路径分隔符，则直接使用；否则兼容旧逻辑添加 .docx
+     *
+     * 安全围栏：对 fileId 做 normalize 后校验解析结果仍落在 storageDir 内，
+     * 防止 fileId 含 "../" 逃出存储根读写/删除任意文件（纵深防御的最后一道）。
      */
     private Path resolveFilePath(String fileId) {
-        if (fileId.contains("/") || fileId.contains("\\")) {
-            return storageDir.resolve(fileId);
+        String relative = (fileId.contains("/") || fileId.contains("\\")) ? fileId : fileId + ".docx";
+        Path base = storageDir.normalize();
+        Path resolved = base.resolve(relative).normalize();
+        if (!resolved.startsWith(base)) {
+            log.warn("拒绝越界文件路径: fileId={}, resolved={}", fileId, resolved);
+            throw new StorageException("非法文件路径（越出存储根）: " + fileId);
         }
-        return storageDir.resolve(fileId + ".docx");
+        return resolved;
     }
 
     @Override

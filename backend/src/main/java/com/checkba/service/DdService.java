@@ -206,12 +206,17 @@ public class DdService {
         // Usually keep original filename is safer, but maybe prefix with Item title if requested.
         // User didn't specify renaming file, just "Sync placement".
         // Let's use original filename.
-        String fileName = originalFilename;
-        // Avoid conflict?
-        fileName = System.currentTimeMillis() + "_" + fileName;
+        // 清洗客户端上传的原始文件名：只取文件名段、剥离路径分隔符与特殊字符（保留中文），
+        // 防止 "../" 或绝对路径注入存储 key。客户端上传是外部可控入口；存储层另有围栏兜底。
+        String rawName = (originalFilename == null) ? "" : originalFilename.replace("\\", "/");
+        int slashIdx = rawName.lastIndexOf('/');
+        if (slashIdx >= 0) rawName = rawName.substring(slashIdx + 1);
+        rawName = rawName.replaceAll("[^A-Za-z0-9._\\u4e00-\\u9fa5-]", "_");
+        if (!StringUtils.hasText(rawName) || ".".equals(rawName) || "..".equals(rawName)) {
+            rawName = "upload";
+        }
+        String fileName = System.currentTimeMillis() + "_" + rawName;
 
-        // Build logical path for storage (just a key, physical structure handled by key)
-        // We can just use the flat storage path, but linking it to the folder system is what matters.
         String storagePath = "projects/" + projectId + "/client_uploads/" + fileName;
         
         // Physical Save

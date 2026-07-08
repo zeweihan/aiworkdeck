@@ -69,6 +69,7 @@ public class ProjectFileService {
         if (!StringUtils.hasText(name)) {
             throw new IllegalArgumentException("文件夹名称不能为空");
         }
+        validateNodeName(name);
         if (userId == null) {
             throw new IllegalArgumentException("用户 ID 不能为空");
         }
@@ -96,6 +97,17 @@ public class ProjectFileService {
         folder.setUpdatedAt(LocalDateTime.now());
 
         return projectFileRepository.save(folder);
+    }
+
+    /**
+     * 校验文件/文件夹名合法性：不得含路径分隔符或为 "." / ".."，
+     * 否则该名字会被 buildPhysicalPath 逐级拼进物理路径，导致文件写到项目目录之外。
+     */
+    private void validateNodeName(String name) {
+        String n = name == null ? "" : name.trim();
+        if (n.contains("/") || n.contains("\\") || ".".equals(n) || "..".equals(n)) {
+            throw new IllegalArgumentException("名称包含非法字符: " + name);
+        }
     }
 
     /**
@@ -235,6 +247,7 @@ public class ProjectFileService {
         if (!StringUtils.hasText(newName)) {
             throw new IllegalArgumentException("新名称不能为空");
         }
+        validateNodeName(newName);
 
         ProjectFile file = projectFileRepository.findById(fileId)
                 .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
