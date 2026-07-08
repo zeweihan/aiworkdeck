@@ -667,7 +667,8 @@ function ensureView(id) {
   view.webContents.on('will-navigate', (event, url) => {
     if (!/^https?:\/\//i.test(url)) {
       event.preventDefault()
-      shell.openExternal(url)
+      // 只把 mailto 交给系统；file://、自定义/危险 scheme 一律阻止，不无条件 openExternal
+      if (/^mailto:/i.test(url)) shell.openExternal(url)
     }
   })
 
@@ -801,10 +802,17 @@ function setAllViewsVisible(visible) {
 
 ipcMain.handle('checkba:browser-create', async (_evt, payload) => {
   const id = payload && payload.id ? String(payload.id) : `web_${Date.now()}`
-  const url = payload && payload.url ? String(payload.url) : 'about:blank'
+  let url = payload && payload.url ? String(payload.url) : 'about:blank'
+  // 仅允许 http(s)/about，禁止 file:// 等本地 scheme 经内嵌浏览器读取本地文件后回读
+  if (!/^(https?:|about:)/i.test(url)) url = 'about:blank'
   ensureView(id)
   attachView(id)
-  await views.get(id).webContents.loadURL(url)
+  try {
+    await views.get(id).webContents.loadURL(url)
+  } catch (e) {
+    // 避免 loadURL 的 ERR_ABORTED 等成为未处理 rejection（与 navigate 行为一致）
+    return { id, ok: false, code: e && e.code ? String(e.code) : '', message: e && e.message ? String(e.message) : String(e) }
+  }
   return { id }
 })
 
@@ -812,6 +820,7 @@ ipcMain.handle('checkba:browser-navigate', async (_evt, payload) => {
   const id = payload && payload.id ? String(payload.id) : null
   const url = payload && payload.url ? String(payload.url) : null
   if (!id || !url) return { ok: false }
+  if (!/^(https?:|about:)/i.test(url)) return { ok: false, message: 'blocked scheme' }
   const view = views.get(id)
   if (!view) return { ok: false }
   try {
@@ -1304,6 +1313,14 @@ app.whenReady().then(() => {
         console.error('[pptx-service]', p.error || 'failed to start')
       }
     })
+    .catch((err) => {
+      // 端口分配/启动链失败也要建出主窗口并提示，避免 app 起来却无窗口无提示（静默失败）
+      console.error('[startup] service init failed', err)
+      try { createMainWindow() } catch (e) { /* ignore */ }
+      try {
+        if (mainWindow) mainWindow.webContents.send('checkba:backend-status', { ok: false, message: String(err && err.message ? err.message : err) })
+      } catch (e) { /* ignore */ }
+    })
 })
 
 app.on('window-all-closed', () => {
@@ -1319,6 +1336,8 @@ app.on('before-quit', async (e) => {
   if (services) {
     try {
       e.preventDefault()
+      // 先终止进行中的模型下载子进程，否则退出时它们会变孤儿继续占用资源
+      if (modelManager) modelManager.killAllActive()
       await services.stopAll()
     } catch (err) {
       // ignore

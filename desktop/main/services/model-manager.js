@@ -212,6 +212,14 @@ class ModelManager {
     })
   }
 
+  /** 退出时批量终止所有进行中的下载子进程，防止孤儿 Python 进程继续占用 CPU/带宽/磁盘。 */
+  killAllActive() {
+    for (const [, child] of this.active) {
+      try { child._awdCancelled = true; child.kill('SIGTERM') } catch (e) { /* ignore */ }
+    }
+    this.active.clear()
+  }
+
   async remove(id) {
     if (this.active.has(id)) await this.cancel(id)
     fs.rmSync(this.dirOf(id), { recursive: true, force: true })

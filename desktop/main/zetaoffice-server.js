@@ -103,7 +103,7 @@ function startEditorServer() {
           const rel = urlPath.slice('/lowa/'.length)
           const lowaDir = path.join(root, 'lowa')
           const localPath = path.normalize(path.join(lowaDir, rel))
-          if (localPath.startsWith(lowaDir)) {
+          if (localPath === lowaDir || localPath.startsWith(lowaDir + path.sep)) {
             try {
               const st = await stat(localPath)
               if (st.isFile()) {
@@ -124,7 +124,7 @@ function startEditorServer() {
         }
         if (urlPath === '/') urlPath = '/editor.html'
         const filePath = path.normalize(path.join(root, urlPath))
-        if (!filePath.startsWith(root)) { res.writeHead(403).end('forbidden'); return }
+        if (filePath !== root && !filePath.startsWith(root + path.sep)) { res.writeHead(403).end('forbidden'); return }
         // No COOP/COEP here — Electron injects them on the partition.
         const body = await readFile(filePath)
         res.writeHead(200, { 'Content-Type': TYPES[path.extname(filePath)] || 'application/octet-stream' })
