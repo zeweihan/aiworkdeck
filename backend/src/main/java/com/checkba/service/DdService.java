@@ -291,6 +291,10 @@ public class DdService {
      */
     @Transactional
     public DdItem updateItemStatus(Long itemId, String status) {
+        // 状态机校验：只接受合法状态值，防止写入任意字符串（PENDING/UPLOADED/APPROVED/REJECTED）
+        if (status == null || !java.util.Set.of("PENDING", "UPLOADED", "APPROVED", "REJECTED").contains(status)) {
+            throw new IllegalArgumentException("非法的清单项状态: " + status);
+        }
         DdItem item = ddItemRepository.findById(itemId)
                 .orElseThrow(() -> new IllegalArgumentException("清单项不存在"));
         item.setStatus(status);

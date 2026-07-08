@@ -13,6 +13,7 @@ import com.checkba.model.entity.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
@@ -31,6 +32,7 @@ public class ProjectService {
     private final TushareService tushareService;
     private final ProjectVariableService projectVariableService;
 
+    @Transactional
     public Project createProject(ProjectCreateRequest request, Long userId) {
         if (!StringUtils.hasText(request.getProjectType())) {
             throw new IllegalArgumentException("项目类型不能为空");
