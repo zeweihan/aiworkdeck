@@ -357,7 +357,7 @@ public class AgentOrchestrator {
             // 2. Check for XML Tool Requests (Fallback for Root Bubble Protocol)
             // Pattern: <tool_code>legal_tools.method(args)</tool_code> OR <code>...</code>
             // We need to parse this manually because we forced XML output in System Prompt.
-            if (xmlToolCallParser.containsToolCall(content)) {
+            if (agentMode != AgentMode.ASK && xmlToolCallParser.containsToolCall(content)) {
                 log.info("Detected XML Tool Code in content. Parsing...");
 
                 // 提取LLM选择的process name，用于历史记录保存时保持一致性

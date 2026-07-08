@@ -41,6 +41,9 @@ public class AliyunOcrClient {
                 .setType("Advanced"); // 通用文字识别高精版
 
         RuntimeOptions runtime = new RuntimeOptions();
+        // 显式超时：此前无超时，网络卡死会无限期挂起并占用请求线程
+        runtime.setConnectTimeout(10000);
+        runtime.setReadTimeout(30000);
         RecognizeAllTextResponse resp = client.recognizeAllTextWithOptions(req, runtime);
 
         if (resp == null || resp.getBody() == null || resp.getBody().getData() == null) {
