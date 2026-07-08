@@ -460,10 +460,23 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         this.onCompleteCallback = callback;
     }
 
+    // 错误回调（由 AgentOrchestrator 注入，用于在流式出错时清理编排器状态并关闭 emitter）
+    private java.util.function.Consumer<Throwable> onErrorCallback;
+    public void setOnError(java.util.function.Consumer<Throwable> callback) {
+        this.onErrorCallback = callback;
+    }
+
     @Override
     public void onError(Throwable error) {
         log.error("Stream error for {}", conversationId, error);
         sseEmitterService.send(conversationId, "error", "Stream Error: " + error.getMessage());
+        // 关键：出错时必须关闭 emitter 并清理编排器状态，否则 SSE 连接会一直挂到 30 分钟超时，
+        // 且 activeStreamContent / cancelledConversations 条目永不清理、前端永久显示加载态。
+        if (onErrorCallback != null) {
+            onErrorCallback.accept(error);
+        } else {
+            sseEmitterService.close(conversationId);
+        }
     }
     
     private void startBubble(String type) {

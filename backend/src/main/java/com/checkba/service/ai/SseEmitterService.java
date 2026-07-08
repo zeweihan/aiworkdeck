@@ -65,8 +65,10 @@ public class SseEmitterService {
         if (emitter != null) {
             try {
                 emitter.send(SseEmitter.event().name(eventName).data(data));
-            } catch (IOException e) {
-                log.warn("Failed to send SSE event to {}, removing emitter.", connectionId);
+            } catch (Exception e) {
+                // IOException：客户端断开；IllegalStateException：emitter 已 complete（与 close() 竞态）。
+                // 两种情况该 emitter 都已失效，一并丢弃，避免异常逃逸打断推事件的调用线程。
+                log.warn("Failed to send SSE event to {} ({}), removing emitter.", connectionId, e.getClass().getSimpleName());
                 emitters.remove(connectionId);
             }
         } else {
