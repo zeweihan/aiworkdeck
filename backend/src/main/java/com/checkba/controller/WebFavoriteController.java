@@ -23,7 +23,6 @@ import java.util.Map;
  * - 我的收藏：/api/favorites/my
  */
 @RestController
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class WebFavoriteController {
 

@@ -28,7 +28,6 @@ import java.time.Duration;
  */
 @RestController
 @RequestMapping("/api/browser")
-@CrossOrigin(origins = "*")
 public class BrowserProxyController {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(BrowserProxyController.class);

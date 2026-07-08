@@ -9,7 +9,6 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/api/projects/{projectId}/doc-links")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class DocFileLinkController {
 

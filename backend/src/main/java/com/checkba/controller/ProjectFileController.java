@@ -22,7 +22,6 @@ import java.util.stream.Collectors;
  */
 @RestController
 @RequestMapping("/api/projects/{projectId}/files")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class ProjectFileController {
 

@@ -12,7 +12,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/clipboard")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class ClipboardController {
 

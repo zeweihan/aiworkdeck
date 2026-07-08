@@ -1,12 +1,13 @@
 package com.checkba.model.entity;
 
-import io.hypersistence.utils.hibernate.type.json.JsonType;
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.Type;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -20,6 +21,7 @@ import java.util.Map;
 @Entity
 @Table(name = "project_memory")
 @Data
+@EqualsAndHashCode(onlyExplicitlyIncluded = true) // 仅用 id，避免遍历 JSON 集合字段/未持久化时不稳
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
@@ -27,6 +29,7 @@ public class ProjectMemory {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     /**
@@ -74,36 +77,36 @@ public class ProjectMemory {
     /**
      * 关键日期（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "key_dates", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "key_dates")
     private Map<String, String> keyDates;
 
     /**
      * 交易各方（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "parties", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "parties")
     private List<Map<String, String>> parties;
 
     /**
      * 关键变量（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "key_variables", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "key_variables")
     private Map<String, String> keyVariables;
 
     /**
      * 法律引用（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "legal_refs", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "legal_refs")
     private List<String> legalRefs;
 
     /**
      * 核查结论（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "check_conclusions", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "check_conclusions")
     private List<Map<String, String>> checkConclusions;
 
     @Column(name = "created_at")

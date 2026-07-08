@@ -1354,8 +1354,6 @@ export default {
       activeAiFileName: '',
       manualContextFiles: [], // Multi Context Support
       dragOverAiPanel: false,
-      aiContextPreview: null,
-      aiContextLoading: false,
 
       // AI New Features
       showHistoryDrawer: false,
@@ -1441,7 +1439,6 @@ export default {
       activeFileIdRight: null, // 右侧当前激活ID
 
       // Members
-      projectMembers: [],
       currentUser: {},
       pageEnterTime: 0,
 
@@ -1489,7 +1486,6 @@ export default {
       hoverSplit: false,
       hoverCapture: false,
       hoverWeb: false,
-      hoverWeb: false,
       hoverRecord: false,
 
       // Sidebar Action Hovers
@@ -1499,8 +1495,6 @@ export default {
       hoverSort: false,
       hoverDownload: false,
       hoverCopy: false,
-      hoverBatchSelect: false, // existing
-      hoverRecycleBin: false,  // existing
 
       // Recording Toast
       showRecordingToast: false,

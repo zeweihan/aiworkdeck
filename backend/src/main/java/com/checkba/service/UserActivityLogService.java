@@ -25,6 +25,6 @@ public class UserActivityLogService {
     }
 
     public List<UserActivityLog> getUserLogs(Long userId) {
-        return repository.findByUserIdOrderByTimestampDesc(userId);
+        return repository.findTop500ByUserIdOrderByTimestampDesc(userId);
     }
 }

@@ -1,12 +1,13 @@
 package com.checkba.model.entity;
 
-import io.hypersistence.utils.hibernate.type.json.JsonType;
 import jakarta.persistence.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
-import org.hibernate.annotations.Type;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -25,6 +26,7 @@ import java.util.Map;
 @Entity
 @Table(name = "conversation_summary")
 @Data
+@EqualsAndHashCode(onlyExplicitlyIncluded = true) // 仅用 id：字段型 equals/hashCode 会遍历 List/Map JSON 字段且未持久化时不稳
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
@@ -32,6 +34,7 @@ public class ConversationSummary {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     /**
@@ -61,29 +64,29 @@ public class ConversationSummary {
     /**
      * 关键点列表（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "key_points", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "key_points")
     private List<String> keyPoints;
 
     /**
      * 法律引用列表（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "legal_references", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "legal_references")
     private List<String> legalReferences;
 
     /**
      * 提及的实体（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "mentioned_entities", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "mentioned_entities")
     private List<String> mentionedEntities;
 
     /**
      * 待办事项（JSON格式）
      */
-    @Type(JsonType.class)
-    @Column(name = "pending_tasks", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "pending_tasks")
     private List<String> pendingTasks;
 
     /**
@@ -122,24 +125,24 @@ public class ConversationSummary {
      * 事件列表（JSON格式）
      * 每个事件包含: timestamp, actor, action, content
      */
-    @Type(JsonType.class)
-    @Column(name = "events", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "events")
     private List<Map<String, Object>> events;
 
     /**
      * 参与者列表（JSON格式）
      * 包含用户和AI助手的标识
      */
-    @Type(JsonType.class)
-    @Column(name = "participants", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "participants")
     private List<Map<String, String>> participants;
 
     /**
      * 时间线摘要（JSON格式）
      * 按时间顺序记录关键节点
      */
-    @Type(JsonType.class)
-    @Column(name = "timeline", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "timeline")
     private List<Map<String, Object>> timeline;
 
     /**
@@ -157,8 +160,8 @@ public class ConversationSummary {
     /**
      * 关联的 MemCell ID 列表
      */
-    @Type(JsonType.class)
-    @Column(name = "related_memcell_ids", columnDefinition = "jsonb")
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "related_memcell_ids")
     private List<Long> relatedMemCellIds;
 
     @Column(name = "created_at")
