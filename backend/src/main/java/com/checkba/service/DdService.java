@@ -47,6 +47,17 @@ public class DdService {
                 .orElseThrow(() -> new IllegalArgumentException("请求不存在"));
     }
 
+    /** 返回请求所属项目 id（用于越权校验），不存在返回 null。 */
+    public Long getProjectIdByRequestId(Long requestId) {
+        return ddRequestRepository.findById(requestId).map(DdRequest::getProjectId).orElse(null);
+    }
+
+    /** 返回项所属项目 id（item → request → project），不存在返回 null。 */
+    public Long getProjectIdByItemId(Long itemId) {
+        DdItem item = ddItemRepository.findById(itemId).orElse(null);
+        return item == null ? null : getProjectIdByRequestId(item.getDdRequestId());
+    }
+
     /**
      * 获取请求下的所有项
      */

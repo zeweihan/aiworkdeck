@@ -4,6 +4,7 @@ import com.checkba.model.entity.DdComment;
 import com.checkba.model.entity.DdItem;
 import com.checkba.model.entity.DdRequest;
 import com.checkba.service.DdService;
+import com.checkba.service.ProjectMemberService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -21,10 +22,35 @@ import java.util.Map;
 public class DdController {
 
     private final DdService ddService;
+    private final ProjectMemberService projectMemberService;
+
+    // ==================== 越权校验 ====================
+    // 此前各端点仅校验"是否登录"、从不校验项目成员，且读端点完全无鉴权，
+    // 导致任意登录用户（含他人项目的 CLIENT）可跨项目读写删尽调数据。
+
+    private Long requireMemberByProject(String sessionId, Long projectId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) throw new IllegalArgumentException("未登录");
+        if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
+            throw new IllegalArgumentException("无权访问该资源");
+        }
+        return userId;
+    }
+
+    private Long requireMemberByRequest(String sessionId, Long requestId) {
+        return requireMemberByProject(sessionId, ddService.getProjectIdByRequestId(requestId));
+    }
+
+    private Long requireMemberByItem(String sessionId, Long itemId) {
+        return requireMemberByProject(sessionId, ddService.getProjectIdByItemId(itemId));
+    }
 
     // 获取项目的请求列表
     @GetMapping("/projects/{projectId}")
-    public List<DdRequest> getRequests(@PathVariable Long projectId) {
+    public List<DdRequest> getRequests(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMemberByProject(sessionId, projectId);
         return ddService.getRequests(projectId);
     }
 
@@ -34,17 +60,19 @@ public class DdController {
             @PathVariable Long projectId,
             @RequestBody CreateRequestDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        Long userId = requireMemberByProject(sessionId, projectId);
         return ddService.createRequest(projectId, dto.getName(), dto.getContent(), userId);
     }
 
     // 获取请求详情（含项）
     @GetMapping("/requests/{requestId}")
-    public Map<String, Object> getRequestDetails(@PathVariable Long requestId) {
+    public Map<String, Object> getRequestDetails(
+            @PathVariable Long requestId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMemberByRequest(sessionId, requestId);
         DdRequest request = ddService.getRequest(requestId);
         List<DdItem> items = ddService.getItems(requestId);
-        
+
         Map<String, Object> result = new HashMap<>();
         result.put("request", request);
         result.put("items", items);
@@ -57,8 +85,7 @@ public class DdController {
             @PathVariable Long requestId,
             @RequestBody CreateRequestDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        requireMemberByRequest(sessionId, requestId);
         return ddService.addItems(requestId, dto.getContent());
     }
 
@@ -68,8 +95,7 @@ public class DdController {
             @PathVariable Long requestId,
             @RequestBody UpdateRequestDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        requireMemberByRequest(sessionId, requestId);
         return ddService.updateRequest(requestId, dto.getName());
     }
 
@@ -79,8 +105,7 @@ public class DdController {
             @PathVariable Long requestId,
             @RequestBody AddItemDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        requireMemberByRequest(sessionId, requestId);
         return ddService.addItem(requestId, dto.getParentId());
     }
 
@@ -90,8 +115,7 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestBody MoveItemDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        requireMemberByItem(sessionId, itemId);
         return ddService.moveItem(itemId, dto.getParentId());
     }
 
@@ -101,8 +125,7 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestParam("file") MultipartFile file,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) throws IOException {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        Long userId = requireMemberByItem(sessionId, itemId);
         return ddService.uploadFile(itemId, file, userId);
     }
 
@@ -112,8 +135,7 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestBody UpdateStatusDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        requireMemberByItem(sessionId, itemId);
         return ddService.updateItemStatus(itemId, dto.getStatus());
     }
 
@@ -123,8 +145,7 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestBody UpdateInfoDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        requireMemberByItem(sessionId, itemId);
         return ddService.updateItemInfo(itemId, dto.getTitle(), dto.getDescription());
     }
 
@@ -134,14 +155,16 @@ public class DdController {
             @PathVariable Long itemId,
             @RequestBody CommentDto dto,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        Long userId = requireMemberByItem(sessionId, itemId);
         return ddService.addComment(itemId, userId, dto.getContent());
     }
 
     // 获取评论
     @GetMapping("/items/{itemId}/comments")
-    public List<DdComment> getComments(@PathVariable Long itemId) {
+    public List<DdComment> getComments(
+            @PathVariable Long itemId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMemberByItem(sessionId, itemId);
         return ddService.getComments(itemId);
     }
 
@@ -150,18 +173,16 @@ public class DdController {
     public ResponseEntity<Void> deleteItem(
             @PathVariable Long itemId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        Long userId = requireMemberByItem(sessionId, itemId);
         ddService.deleteItem(itemId, userId);
         return ResponseEntity.ok().build();
     }
-    
+
     @DeleteMapping("/requests/{requestId}")
     public ResponseEntity<Void> deleteRequest(
             @PathVariable Long requestId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        Long userId = requireMemberByRequest(sessionId, requestId);
         ddService.deleteRequest(requestId, userId);
         return ResponseEntity.ok().build();
     }
@@ -171,8 +192,7 @@ public class DdController {
     public DdRequest copyRequest(
             @PathVariable Long requestId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        Long userId = requireMemberByRequest(sessionId, requestId);
         return ddService.copyRequest(requestId, userId);
     }
 
