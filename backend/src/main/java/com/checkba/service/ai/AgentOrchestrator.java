@@ -315,16 +315,11 @@ public class AgentOrchestrator {
             
             dev.langchain4j.data.message.AiMessage aiMessage = response.content();
             messages.add(aiMessage);
-            
-            // 更新已生成内容（用于取消时保存）
+
+            // 注意：本轮生成内容已由 onToken 回调逐 token 累加进 activeStreamContent，
+            // 此处不可再 append aiMessage.text()，否则取消/断线恢复的快照内容会翻倍。
             String aiContent = aiMessage.text();
-            if (aiContent != null) {
-                StringBuilder contentBuilder = activeStreamContent.get(conversationId);
-                if (contentBuilder != null) {
-                    contentBuilder.append(aiContent);
-                }
-            }
-            
+
             // 1. Check for Native Tool Requests (Priority 1)
             if (aiMessage.hasToolExecutionRequests()) {
                 log.info("Detected Native Tool Requests: {}", aiMessage.toolExecutionRequests());
@@ -549,9 +544,20 @@ public class AgentOrchestrator {
             sseEmitterService.close(conversationId);
             clearCancelledState(conversationId);
             activeStreamContent.remove(conversationId); // CLEANUP
+          } finally {
+            // 流式回调运行在可复用线程池线程上，用完清理 ThreadLocal，防止会话串号
+            editorBridgeService.clearCurrentConversationId();
           }
         });
-        
+
+        // 流式出错时的清理：关闭 emitter + 复位状态，避免 SSE 连接挂到超时、前端永久加载
+        handler.setOnError(err -> {
+            editorBridgeService.setStreamingMode(conversationId, false);
+            sseEmitterService.close(conversationId);
+            clearCancelledState(conversationId);
+            editorBridgeService.clearCurrentConversationId();
+        });
+
         // Execute Generation with Tools
         // Ask 模式：不传递工具，禁止工具调用
         if (agentMode == AgentMode.ASK) {

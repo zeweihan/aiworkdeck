@@ -65,6 +65,15 @@ public class EditorBridgeService {
         return currentConversationId.get();
     }
 
+    /**
+     * 清除当前会话 ID。
+     * 流式回调运行在可复用的线程池线程上，用完必须清理，否则残留的 conversationId
+     * 会在该线程被复用于其它会话时被读到，导致编辑器指令发往错误的会话。
+     */
+    public void clearCurrentConversationId() {
+        currentConversationId.remove();
+    }
+
     public void setStreamingMode(String conversationId, boolean enabled) {
         if (enabled) {
             streamingModes.put(conversationId, true);

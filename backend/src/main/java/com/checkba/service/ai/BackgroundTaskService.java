@@ -9,12 +9,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
+import jakarta.annotation.PreDestroy;
+
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -42,8 +47,24 @@ public class BackgroundTaskService {
      */
     private final Map<Long, List<String>> userTasks = new ConcurrentHashMap<>();
     
+    /**
+     * 共享的守护线程调度器，用于延迟清理已完成任务。
+     * 取代原先逐任务 new Thread() 的做法（非守护线程会拖慢 JVM 关闭，且大量休眠线程堆积）。
+     */
+    private final ScheduledExecutorService cleanupScheduler =
+            Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "bg-task-cleanup");
+                t.setDaemon(true);
+                return t;
+            });
+
     public BackgroundTaskService(SseEmitterService sseEmitterService) {
         this.sseEmitterService = sseEmitterService;
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        cleanupScheduler.shutdownNow();
     }
     
     /**
@@ -60,8 +81,10 @@ public class BackgroundTaskService {
         TaskInfo taskInfo = TaskInfo.create(taskId, conversationId, userId, taskType, estimatedDurationSec);
         
         activeTasks.put(taskId, taskInfo);
-        conversationTasks.computeIfAbsent(conversationId, k -> new ArrayList<>()).add(taskId);
-        userTasks.computeIfAbsent(userId, k -> new ArrayList<>()).add(taskId);
+        // 内层用 CopyOnWriteArrayList：注册线程、清理线程、查询线程并发 add/remove/遍历，
+        // 普通 ArrayList 会抛 ConcurrentModificationException 或脏读（ConcurrentHashMap 只保护外层 map）。
+        conversationTasks.computeIfAbsent(conversationId, k -> new CopyOnWriteArrayList<>()).add(taskId);
+        userTasks.computeIfAbsent(userId, k -> new CopyOnWriteArrayList<>()).add(taskId);
         
         // Send background_task_start event
         BackgroundTaskEvent event = BackgroundTaskEvent.started(taskId, taskType.name(), conversationId, estimatedDurationSec);
@@ -278,20 +301,14 @@ public class BackgroundTaskService {
     }
     
     private void scheduleCleanup(String taskId, long delayMs) {
-        // Simple cleanup after delay - in production, use a proper scheduler
-        new Thread(() -> {
-            try {
-                Thread.sleep(delayMs);
-                TaskInfo task = activeTasks.get(taskId);
-                if (task != null && !task.isActive()) {
-                    activeTasks.remove(taskId);
-                    cleanupTaskReferences(taskId, task);
-                    log.debug("Cleaned up completed task: {}", taskId);
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
+        cleanupScheduler.schedule(() -> {
+            TaskInfo task = activeTasks.get(taskId);
+            if (task != null && !task.isActive()) {
+                activeTasks.remove(taskId);
+                cleanupTaskReferences(taskId, task);
+                log.debug("Cleaned up completed task: {}", taskId);
             }
-        }).start();
+        }, delayMs, TimeUnit.MILLISECONDS);
     }
     
     private void cleanupTaskReferences(String taskId, TaskInfo task) {
