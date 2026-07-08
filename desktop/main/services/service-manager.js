@@ -59,6 +59,8 @@ class ServiceManager {
     this.ports = this.ctx.ports
     this.descriptors = new Map()
     this.procs = new Map()
+    this.starting = new Map() // name -> in-flight start promise（并发去重，防重复 spawn）
+    this.logStreams = new Map() // name -> 日志写入流（跟踪以便关闭，防 fd 泄漏）
   }
 
   register(descriptor) {
@@ -80,6 +82,15 @@ class ServiceManager {
   }
 
   async start(name) {
+    // 并发去重：同名服务的并发 start 复用同一 in-flight promise，防止重复 spawn 产生孤儿进程、抢同一端口
+    const inflight = this.starting.get(name)
+    if (inflight) return inflight
+    const p = this._start(name).finally(() => this.starting.delete(name))
+    this.starting.set(name, p)
+    return p
+  }
+
+  async _start(name) {
     const d = this.descriptors.get(name)
     if (!d) throw new Error(`unknown service: ${name}`)
     if (d.enabled && !d.enabled(this.ctx)) return { ok: false, disabled: true }
@@ -93,7 +104,11 @@ class ServiceManager {
     if (this.procs.get(name)) await this.stop(name)
 
     const timeoutMs = d.startTimeoutMs(this.ctx)
+    // 关闭上一次 start 遗留的日志流，避免每次重启/崩溃-重启累积文件描述符泄漏
+    const prevStream = this.logStreams.get(name)
+    if (prevStream) { try { prevStream.end() } catch (e) { /* ignore */ } this.logStreams.delete(name) }
     const logStream = this.logStreamFor(d)
+    if (logStream) this.logStreams.set(name, logStream)
     const candidates = [...d.commands(this.ctx)]
     let triedFallback = false
 
@@ -197,6 +212,9 @@ class ServiceManager {
       // eslint-disable-next-line no-await-in-loop
       await this.stop(name)
     }
+    // 退出/全停时关闭所有日志流，释放 fd
+    for (const [, s] of this.logStreams) { try { s.end() } catch (e) { /* ignore */ } }
+    this.logStreams.clear()
     return { ok: true }
   }
 
