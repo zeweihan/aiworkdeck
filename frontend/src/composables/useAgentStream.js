@@ -247,12 +247,16 @@ export function useAgentStream() {
                 } : null
             }
 
-            await fetch(`${getApiBaseUrl()}/api/agent/chat`, {
+            const chatResp = await fetch(`${getApiBaseUrl()}/api/agent/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'X-Session-Id': getSessionId() || '' },
                 body: JSON.stringify(payload),
                 signal: messageAbortController.signal
             })
+            // fetch 对 4xx/5xx 不 reject，需显式校验，否则会话过期/后端错误时加载态永久卡死
+            if (!chatResp.ok) {
+                throw new Error(`对话请求失败: HTTP ${chatResp.status}`)
+            }
 
         } catch (err) {
             if (err.name !== 'AbortError') {
@@ -363,8 +367,13 @@ export function useAgentStream() {
                 console.error('Failed to parse subtask_progress', e)
             }
         } else if (evt === 'artifact') {
-            const d = JSON.parse(dataStr)
-            handleArtifactEvent(d)
+            try {
+                const d = JSON.parse(dataStr)
+                handleArtifactEvent(d)
+            } catch (e) {
+                // 单个 artifact 事件解析失败不应打断整条 SSE 流（否则气泡卡加载、后续事件全丢）
+                console.error('Failed to parse artifact event', e)
+            }
         } else if (evt === 'client_action') {
             try {
                 const d = JSON.parse(dataStr)

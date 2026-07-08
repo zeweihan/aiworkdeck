@@ -183,13 +183,13 @@ export default {
           wordWrap: 'on'
         })
         
-        // 设置模型
-        const originalModel = monaco.editor.createModel(this.sourceText, 'plaintext')
-        const modifiedModel = monaco.editor.createModel(this.targetText, 'plaintext')
-        
+        // 设置模型（存到 this 以便 dispose，否则反复开合对比会累积泄漏 Monaco text model）
+        this._originalModel = monaco.editor.createModel(this.sourceText, 'plaintext')
+        this._modifiedModel = monaco.editor.createModel(this.targetText, 'plaintext')
+
         this.diffEditor.setModel({
-          original: originalModel,
-          modified: modifiedModel
+          original: this._originalModel,
+          modified: this._modifiedModel
         })
         
         // 计算差异数量
@@ -280,6 +280,8 @@ export default {
         this.diffEditor.dispose()
         this.diffEditor = null
       }
+      if (this._originalModel) { this._originalModel.dispose(); this._originalModel = null }
+      if (this._modifiedModel) { this._modifiedModel.dispose(); this._modifiedModel = null }
     },
     // #endif
     

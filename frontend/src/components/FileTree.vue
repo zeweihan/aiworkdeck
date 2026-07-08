@@ -1150,12 +1150,16 @@ export default {
     this.refreshProjectTags() // Tag Management
 
     // Listen for global drag events to show/hide root drop zone
-    uni.$on('file-drag-start', () => { this.isAnyDragging = true })
-    uni.$on('file-drag-end', () => { this.isAnyDragging = false })
+    // 具名 handler + Vue3 的 beforeUnmount（beforeDestroy 在 Vue3 不触发，导致监听泄漏）；
+    // $off 必须带 handler，否则会连带移除其它 FileTree 实例（FileStagingArea 内嵌）的同名监听。
+    this._onDragStart = () => { this.isAnyDragging = true }
+    this._onDragEnd = () => { this.isAnyDragging = false }
+    uni.$on('file-drag-start', this._onDragStart)
+    uni.$on('file-drag-end', this._onDragEnd)
   },
-  beforeDestroy() {
-    uni.$off('file-drag-start')
-    uni.$off('file-drag-end')
+  beforeUnmount() {
+    uni.$off('file-drag-start', this._onDragStart)
+    uni.$off('file-drag-end', this._onDragEnd)
   },
   methods: {
     // 让文件树容器可聚焦，接收键盘事件（H5）
@@ -2037,26 +2041,6 @@ export default {
         console.error('批量操作失败:', e)
         uni.showToast({ title: e.message || '批量操作失败', icon: 'none' })
       }
-    },
-    restoreFile(item) {
-      const itemsToRestore = []
-      if (item.isFolder) {
-         // Find descendants in recycle bin
-         const descendantIds = this.getDescendantIds(item.id, true)
-         this.recycleBin.forEach(f => {
-            if (descendantIds.includes(f.id)) {
-               itemsToRestore.push(f.id)
-            }
-         })
-      } else {
-         itemsToRestore.push(item.id)
-      }
-
-      // Filter out restored items
-      const restoreSet = new Set(itemsToRestore)
-      this.recycleBin = this.recycleBin.filter(f => !restoreSet.has(f.id))
-
-      uni.showToast({ title: '已恢复', icon: 'success' })
     },
     handleDownload(item) {
         if (!item || item.isFolder) return

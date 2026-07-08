@@ -6256,6 +6256,8 @@ export default {
                 projectId: this.projectId,
                 conversationId: chat.conversationId
             })
+            // 竞态防护：快速切换会话时，丢弃已不是当前选中会话的旧响应，避免旧数据覆盖新会话
+            if (this.currentConversationId !== chat.conversationId) return
             // Pass conversationId and messages to ChatInterface via $refs
             if (this.$refs.chatInterface && typeof this.$refs.chatInterface.loadMessages === 'function') {
                 this.$refs.chatInterface.loadMessages(chat.conversationId, msgs)
