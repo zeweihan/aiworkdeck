@@ -70,8 +70,10 @@ public class ProjectService {
 
         project.setName(name);
         project.setProjectType(request.getProjectType());
-        project.setListedCompanyName(request.getListedCompanyName());
-        project.setTargetCompanyName(request.getTargetCompanyName());
+        // 公司名列为 NOT NULL：空白项目（或未提供公司名）时请求里可能为 null，默认空串避免插入抛
+        // DataIntegrityViolation 导致创建接口 500（前端目前发空串，此处兜底更健壮）。
+        project.setListedCompanyName(request.getListedCompanyName() != null ? request.getListedCompanyName() : "");
+        project.setTargetCompanyName(request.getTargetCompanyName() != null ? request.getTargetCompanyName() : "");
         project.setUserId(userId);
 
         if (request.getListedCompanyInfo() != null) {
