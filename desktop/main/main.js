@@ -945,14 +945,29 @@ ipcMain.handle('checkba:fs-read-file', async (_evt, payload) => {
   const p = payload && payload.path ? String(payload.path) : ''
   if (!p) return { ok: false, message: 'path empty' }
   const fs = require('fs')
+  const os = require('os')
   try {
-    // Safety check: only allow reading if user explicitly copied it? 
-    // In this context, it's triggered by clipboard event which contains the path.
-    // For local desktop app, reading local file is acceptable if triggered by user action.
-    const buf = await fs.promises.readFile(p)
-    // Return key info + base64 (since we can't pass Buffer easily over bridge without setup)
-    // Actually Electron handles Buffer in invoke? Yes it does serialize.
-    // But to be safe and easy for frontend Blob creation:
+    // 该接口用于"用户拖入的文件"读取，路径本身由用户操作产生，需要任意位置。
+    // 但 webSecurity 关闭下，被注入的渲染脚本也可能调用它，故做纵深防御：
+    // 1) 拦截明显的敏感路径（凭证/密钥/系统配置），防止读走 ~/.ssh 等；
+    // 2) 大小上限，避免被诱导读超大文件撑爆内存。
+    const resolved = path.resolve(p)
+    const home = os.homedir()
+    const sensitiveHomeDirs = ['.ssh', '.aws', '.gnupg', '.docker', '.kube', '.config']
+    const sensitiveFiles = ['.netrc', '.npmrc', '.pgpass', '.git-credentials']
+    const isSensitive =
+      resolved.startsWith('/etc/') || resolved.startsWith('/private/etc/') ||
+      sensitiveHomeDirs.some((d) => resolved.startsWith(path.join(home, d) + path.sep)) ||
+      sensitiveFiles.some((f) => resolved === path.join(home, f))
+    if (isSensitive) {
+      console.warn('[checkba:fs-read-file] 拒绝读取敏感路径:', resolved)
+      return { ok: false, message: 'access denied: sensitive path' }
+    }
+    const st = await fs.promises.stat(resolved)
+    if (!st.isFile()) return { ok: false, message: 'not a file' }
+    if (st.size > 200 * 1024 * 1024) return { ok: false, message: 'file too large (>200MB)' }
+
+    const buf = await fs.promises.readFile(resolved)
     return { ok: true, data: buf }
   } catch (e) {
     return { ok: false, message: String(e.message) }

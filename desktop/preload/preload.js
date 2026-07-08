@@ -113,8 +113,9 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     readFile: (path) => ipcRenderer.invoke('checkba:fs-read-file', { path })
   },
   fs: {
-    readFile: (path) => ipcRenderer.invoke('fs:readFile', path),
-    writeFile: (path, data) => ipcRenderer.invoke('fs:writeFile', { filePath: path, data }),
+    // 注：readFile/writeFile 曾暴露任意路径读/写（渲染进程零调用，属死暴露，其中任意写可覆盖
+    // ~/.zshrc 等实现代码执行），已移除以缩小攻击面。唯一在用的文件读取走 utils.readFile
+    // （checkba:fs-read-file，已加敏感路径拦截与大小上限）。
     showOpenDialog: (options) => ipcRenderer.invoke('fs:showOpenDialog', options)
   },
   // Epic #43: embedded LibreOffice editor <webview> wiring. getEditor() returns
