@@ -3,6 +3,7 @@ package com.checkba.service;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
@@ -14,6 +15,19 @@ import java.util.Optional;
 public class UserService {
 
     private final UserRepository userRepository;
+
+    /** BCrypt 无状态、线程安全，可静态复用。 */
+    private static final BCryptPasswordEncoder PW_ENCODER = new BCryptPasswordEncoder();
+
+    /** 判断存储的口令是否已是 BCrypt 哈希（$2a/$2b/$2y 前缀）。 */
+    private static boolean isBcryptHash(String stored) {
+        return stored != null && stored.startsWith("$2");
+    }
+
+    /** 供 DataInitializer 等复用的 BCrypt 加密入口。 */
+    public static String encodePassword(String raw) {
+        return PW_ENCODER.encode(raw);
+    }
 
     /**
      * 用户注册
@@ -36,9 +50,7 @@ public class UserService {
 
         User user = new User();
         user.setUsername(username);
-        // 简单密码存储（实际生产环境应使用 BCrypt 加密）
-        // TODO: 后续接入 Spring Security 后使用 BCryptPasswordEncoder
-        user.setPassword(password); // 临时存储明文，后续改为加密
+        user.setPassword(PW_ENCODER.encode(password));
         user.setDisplayName(StringUtils.hasText(displayName) ? displayName : username);
         user.setCreatedAt(LocalDateTime.now());
         user.setUpdatedAt(LocalDateTime.now());
@@ -63,9 +75,19 @@ public class UserService {
         }
 
         User user = userOpt.get();
-        // 简单密码验证（实际生产环境应使用 BCrypt 验证）
-        // TODO: 后续接入 Spring Security 后使用 BCryptPasswordEncoder.matches()
-        if (!password.equals(user.getPassword())) {
+        String stored = user.getPassword();
+        boolean ok;
+        if (isBcryptHash(stored)) {
+            ok = PW_ENCODER.matches(password, stored);
+        } else {
+            // 兼容历史明文口令：比对成功后就地升级为 BCrypt（无需一次性数据迁移）
+            ok = password.equals(stored);
+            if (ok) {
+                user.setPassword(PW_ENCODER.encode(password));
+                userRepository.save(user);
+            }
+        }
+        if (!ok) {
             throw new IllegalArgumentException("用户名或密码错误");
         }
 

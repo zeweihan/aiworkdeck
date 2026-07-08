@@ -29,7 +29,7 @@ public class DataInitializer implements CommandLineRunner {
                 .orElseGet(() -> {
                     User user = new User();
                     user.setUsername("admin");
-                    user.setPassword("123"); // 默认密码
+                    user.setPassword(com.checkba.service.UserService.encodePassword("123")); // 默认密码（BCrypt）
                     user.setDisplayName("管理员");
                     user.setCreatedAt(LocalDateTime.now());
                     user.setUpdatedAt(LocalDateTime.now());

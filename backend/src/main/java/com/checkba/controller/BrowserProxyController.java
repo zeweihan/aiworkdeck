@@ -52,6 +52,9 @@ public class BrowserProxyController {
 
         try {
             URI uri = URI.create(u);
+            if (isBlockedTarget(uri)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body("目标地址不被允许（已禁止本地/内网地址）");
+            }
             HttpRequest req = HttpRequest.newBuilder(uri)
                     .GET()
                     .timeout(Duration.ofSeconds(20))
@@ -154,6 +157,26 @@ public class BrowserProxyController {
                 .replace("\"", "&quot;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;");
+    }
+
+    /**
+     * SSRF 防护：拒绝解析到本地/内网地址的目标，阻止代理被用来打内网服务或云元数据端点
+     * （如 169.254.169.254）。注意 followRedirects=NORMAL 下重定向到内网仍是残余风险，此处仅校验初始目标。
+     */
+    private boolean isBlockedTarget(URI uri) {
+        String host = uri.getHost();
+        if (host == null || host.isBlank()) return true;
+        try {
+            for (java.net.InetAddress addr : java.net.InetAddress.getAllByName(host)) {
+                if (addr.isLoopbackAddress() || addr.isAnyLocalAddress()
+                        || addr.isSiteLocalAddress() || addr.isLinkLocalAddress()) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            return true; // 解析失败按不安全处理
+        }
+        return false;
     }
 }
 
