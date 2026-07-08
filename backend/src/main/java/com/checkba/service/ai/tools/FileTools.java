@@ -349,10 +349,17 @@ public class FileTools implements AgentToolComponent {
     // --- Helpers ---
 
     private Path resolvePath(String fileName) {
-        if (Paths.get(fileName).isAbsolute()) {
-            return Paths.get(fileName);
+        Path root = getProjectRoot().normalize();
+        Path resolved = Paths.get(fileName).isAbsolute()
+                ? Paths.get(fileName).normalize()
+                : root.resolve(fileName).normalize();
+        // 安全围栏：AI 完全可控该路径，normalize 后必须仍在项目根内，
+        // 否则 read/write/move_file 可用绝对路径或 "../" 逃出根读写任意系统文件。
+        // 与同类 list_files/write_docx 已有的 startsWith 校验保持一致。
+        if (!resolved.startsWith(root)) {
+            throw new SecurityException("Access denied: path escapes project root: " + fileName);
         }
-        return getProjectRoot().resolve(fileName);
+        return resolved;
     }
     
     private String getFileType(String fileName) {
