@@ -3,6 +3,7 @@ package com.checkba.controller;
 import com.checkba.model.dto.ProjectCardDTO;
 import com.checkba.model.dto.ProjectCreateRequest;
 import com.checkba.model.entity.Project;
+import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ProjectService;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,9 +17,11 @@ import java.util.Map;
 public class ProjectController {
 
     private final ProjectService projectService;
+    private final ProjectMemberService projectMemberService;
 
-    public ProjectController(ProjectService projectService) {
+    public ProjectController(ProjectService projectService, ProjectMemberService projectMemberService) {
         this.projectService = projectService;
+        this.projectMemberService = projectMemberService;
     }
 
     @PostMapping
@@ -33,7 +36,17 @@ public class ProjectController {
     }
 
     @GetMapping("/{id}")
-    public Project getProject(@PathVariable Long id) {
+    public Project getProject(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        // 越权校验：此前无鉴权，可枚举任意项目元数据
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new IllegalArgumentException("请先登录");
+        }
+        if (!projectMemberService.hasReadPermission(id, userId)) {
+            throw new IllegalArgumentException("无权访问此项目");
+        }
         return projectService.getProject(id);
     }
 
