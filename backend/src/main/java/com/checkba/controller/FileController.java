@@ -2,6 +2,7 @@ package com.checkba.controller;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ai.AutoTaggingService;
 import com.checkba.service.ai.ProjectRagService;
 import com.checkba.storage.StorageException;
@@ -52,15 +53,35 @@ public class FileController {
     @Autowired
     private AutoTaggingService autoTaggingService;
 
+    @Autowired
+    private ProjectMemberService projectMemberService;
+
     private StorageService getStorageService() {
         return storageServiceFactory.getStorageService();
+    }
+
+    /**
+     * 校验调用者是否有权访问该文件所属项目。
+     * 浏览器 &lt;a&gt; 下载无法设请求头，只能用 ?token=&lt;sessionId&gt;；fetch/XHR 走 X-Session-Id 头。
+     * 两者取其一解析出 userId 后校验项目成员资格。此前这些接口完全无鉴权，可按数字 id 遍历下载他人文件。
+     */
+    private boolean isAuthorizedForProject(String token, String sessionHeader, Long projectId) {
+        if (projectId == null) {
+            return false;
+        }
+        String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
+        Long userId = AuthController.getUserIdFromSession(sid);
+        return userId != null && projectMemberService.hasReadPermission(projectId, userId);
     }
 
     /**
      * 实际下载接口
      */
     @GetMapping("/{fileId}/download")
-    public ResponseEntity<Resource> downloadFile(@PathVariable("fileId") String fileId) {
+    public ResponseEntity<Resource> downloadFile(
+            @PathVariable("fileId") String fileId,
+            @RequestParam(value = "token", required = false) String token,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionHeader) {
         log.info("[FileDownload] ===== 开始处理下载请求 =====");
         log.info("[FileDownload] 收到下载请求: fileId={}", fileId);
         
@@ -89,7 +110,12 @@ public class FileController {
 
             if (projectFileOpt.isPresent()) {
                 ProjectFile pf = projectFileOpt.get();
-                log.info("[FileDownload] 找到文件记录: id={}, name={}, filePath={}, wpsFileId={}", 
+                // 鉴权：只有该文件所属项目的成员可下载（浏览器下载用 ?token=，其它用 X-Session-Id 头）
+                if (!isAuthorizedForProject(token, sessionHeader, pf.getProjectId())) {
+                    log.warn("[FileDownload] 拒绝越权下载: fileId={}, projectId={}", fileId, pf.getProjectId());
+                    return ResponseEntity.status(403).build();
+                }
+                log.info("[FileDownload] 找到文件记录: id={}, name={}, filePath={}, wpsFileId={}",
                     pf.getId(), pf.getName(), pf.getFilePath(), pf.getWpsFileId());
                 
                 // 如果数据库中有 filePath，优先使用
@@ -109,7 +135,9 @@ public class FileController {
                     }
                 }
             } else {
-                log.warn("[FileDownload] 数据库中未找到文件记录，使用fileId作为路径: {}", path);
+                // 找不到 DB 记录无法确定文件归属，拒绝下载（此前会按裸 fileId 路径直接返回文件，是越权面）
+                log.warn("[FileDownload] 未找到文件记录，拒绝下载: {}", fileId);
+                return ResponseEntity.status(404).build();
             }
 
             log.info("[FileDownload] 准备从存储加载文件: path={}", path);
@@ -212,6 +240,8 @@ public class FileController {
             @PathVariable("fileId") String fileId,
             @RequestPart(value = "file", required = false) MultipartFile multipartFile,
             @RequestHeader(value = "X-File-Offset", required = false) Long offset,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionHeader,
+            @RequestParam(value = "token", required = false) String token,
             HttpServletRequest request) {
 
         InputStream inputStream = null;
@@ -220,9 +250,19 @@ public class FileController {
             Optional<ProjectFile> projectFileOpt = projectFileRepository.findByWpsFileId(fileId).stream().findFirst();
             if (projectFileOpt.isPresent()) {
                 Long projectId = projectFileOpt.get().getProjectId();
+                // 鉴权：只有目标文件所属项目的成员可上传
+                if (!isAuthorizedForProject(token, sessionHeader, projectId)) {
+                    return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权上传到该文件"));
+                }
                 Long totalSize = projectFileRepository.sumSizeByProjectId(projectId); // Need to add this method to repo
                 if (totalSize != null && totalSize > 20L * 1024 * 1024 * 1024) {
                      return ResponseEntity.status(400).body(Map.of("code", -1, "message", "项目文件总大小超过20GB限制"));
+                }
+            } else {
+                // 找不到目标文件记录时，至少要求已登录用户，拒绝匿名上传
+                String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
+                if (AuthController.getUserIdFromSession(sid) == null) {
+                    return ResponseEntity.status(401).body(Map.of("code", -1, "message", "请先登录"));
                 }
             }
 
@@ -354,13 +394,19 @@ public class FileController {
      * GET /api/files/{fileId}/text
      */
     @GetMapping("/{fileId}/text")
-    public ResponseEntity<Map<String, Object>> getFileText(@PathVariable("fileId") Long fileId) {
+    public ResponseEntity<Map<String, Object>> getFileText(
+            @PathVariable("fileId") Long fileId,
+            @RequestParam(value = "token", required = false) String token,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionHeader) {
         try {
             Optional<ProjectFile> fileOpt = projectFileRepository.findById(fileId);
             if (fileOpt.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of("code", -1, "message", "文件不存在"));
             }
-            
+            if (!isAuthorizedForProject(token, sessionHeader, fileOpt.get().getProjectId())) {
+                return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权访问该文件"));
+            }
+
             String text = extractDocumentText(fileOpt.get());
             
             return ResponseEntity.ok(Map.of("code", 0, "data", text));
@@ -379,8 +425,10 @@ public class FileController {
     @GetMapping("/compare")
     public ResponseEntity<Map<String, Object>> compareDocuments(
             @RequestParam("sourceId") Long sourceId,
-            @RequestParam("targetId") Long targetId) {
-        
+            @RequestParam("targetId") Long targetId,
+            @RequestParam(value = "token", required = false) String token,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionHeader) {
+
         try {
             log.info("文档比较请求: sourceId={}, targetId={}", sourceId, targetId);
             
@@ -404,7 +452,13 @@ public class FileController {
             
             ProjectFile sourceFile = sourceOpt.get();
             ProjectFile targetFile = targetOpt.get();
-            
+
+            // 鉴权：两个文档所属项目都需当前用户有权访问
+            if (!isAuthorizedForProject(token, sessionHeader, sourceFile.getProjectId())
+                    || !isAuthorizedForProject(token, sessionHeader, targetFile.getProjectId())) {
+                return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权访问该文件"));
+            }
+
             // 3. 检查文件类型（只支持 doc/docx）
             List<String> supportedTypes = List.of("doc", "docx");
             String sourceType = sourceFile.getFileType() != null ? sourceFile.getFileType().toLowerCase() : "";
