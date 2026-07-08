@@ -111,6 +111,14 @@ public class ProjectAiMessageService {
         return repository.findByConversationIdOrderByCreatedAtAsc(conversationId);
     }
 
+    /** 校验会话是否属于该用户（用于回滚等破坏性操作的越权防护），据首条消息的 userId 判定。 */
+    public boolean isConversationOwnedBy(String conversationId, Long userId) {
+        if (userId == null) return false;
+        return repository.findFirstByConversationId(conversationId)
+                .map(m -> userId.equals(m.getUserId()))
+                .orElse(false);
+    }
+
     public List<java.util.Map<String, Object>> listConversations(Long projectId, Long userId) {
         List<Object[]> results = repository.findConversationSummaries(projectId, userId);
         return results.stream()

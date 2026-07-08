@@ -112,7 +112,11 @@ public class FileContextLoader {
                 try {
                     byte[] fileBytes = projectFileService.getFileBytes(file.getId());
                     if (fileBytes != null && fileBytes.length > 0) {
-                        tempP = Files.createTempFile("folder_scan_" + file.getId(), ".tmp");
+                        // 保留真实扩展名：extractText 依据扩展名判断是否文本文件，
+                        // 用死的 ".tmp" 会让文件夹内所有 .txt/.md/.docx 正文被判为非文本而丢弃。
+                        String nm = file.getName();
+                        String ext = (nm != null && nm.contains(".")) ? nm.substring(nm.lastIndexOf('.')) : ".txt";
+                        tempP = Files.createTempFile("folder_scan_" + file.getId(), ext);
                         Files.write(tempP, fileBytes);
                         String extracted = fileContentExtractorService.extractText(tempP.toFile());
 

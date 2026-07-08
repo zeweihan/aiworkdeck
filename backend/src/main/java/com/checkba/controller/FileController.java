@@ -386,6 +386,11 @@ public class FileController {
         } catch (Exception e) {
             log.error("上传失败", e);
             return ResponseEntity.status(500).body(Map.of("code", -1, "message", e.getMessage()));
+        } finally {
+            // 关闭上传输入流：此前无 finally，multipart/大文件上传每次泄漏一个句柄
+            if (inputStream != null) {
+                try { inputStream.close(); } catch (IOException ignored) {}
+            }
         }
     }
 

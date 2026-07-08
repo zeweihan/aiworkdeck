@@ -58,7 +58,16 @@ public class FileContentExtractorService {
         String fileName = file.getName();
         try {
             if (isTextFile(fileName)) {
-                return Files.readString(file.toPath());
+                byte[] bytes = Files.readAllBytes(file.toPath());
+                try {
+                    return java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+                            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                            .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+                } catch (java.nio.charset.CharacterCodingException ce) {
+                    // 非 UTF-8（常见 GBK/GB18030 中文 txt/csv）回退，避免整篇内容丢失
+                    return new String(bytes, java.nio.charset.Charset.forName("GBK"));
+                }
             } else {
                 // Non-text files: skip or hint to use OCR
                 return "";

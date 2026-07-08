@@ -138,6 +138,9 @@ public class WebTools implements AgentToolComponent {
     @Tool("Browse a specific URL and extract its main content.")
     public String browse_url(String url) {
         log.info("Tool: browse_url called for url='{}'", url);
+        if (url == null || url.isBlank()) {
+            return "Error: url is required.";
+        }
         // Ensure URL has protocol
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             url = "https://" + url;
