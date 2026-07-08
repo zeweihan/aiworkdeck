@@ -13,7 +13,6 @@ import java.util.Map;
 @RequestMapping("/api/sensitive")
 @RequiredArgsConstructor
 @Slf4j
-@CrossOrigin(origins = "*", maxAge = 3600)
 public class SensitiveController {
 
     private final SensitiveService sensitiveService;

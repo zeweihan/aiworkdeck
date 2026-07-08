@@ -20,7 +20,6 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/ocr")
-@CrossOrigin(origins = "*")
 @RequiredArgsConstructor
 public class OcrController {
 

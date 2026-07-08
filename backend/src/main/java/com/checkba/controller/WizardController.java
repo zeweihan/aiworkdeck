@@ -24,7 +24,6 @@ import java.util.Map;
  */
 @RestController
 @RequestMapping("/api/admin/wizard")
-@CrossOrigin(origins = "*")
 public class WizardController {
 
     static final String KEY_WIZARD_COMPLETED = "system.wizard.completed";

@@ -41,7 +41,16 @@ public class ProjectRagService {
     private final StorageProperties storageProperties;
     private final EmbeddingModel embeddingModel;
 
-    private final Map<String, ContentRetriever> retrieverCache = new ConcurrentHashMap<>();
+    // 有界 LRU（access-order）：每个 retriever 持有整个项目的向量库，无界缓存会随项目数持续增长占堆。
+    // 超过上限时淘汰最久未访问的项目（下次访问按需重建）。
+    private static final int MAX_CACHED_PROJECTS = 32;
+    private final Map<String, ContentRetriever> retrieverCache = java.util.Collections.synchronizedMap(
+            new java.util.LinkedHashMap<String, ContentRetriever>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, ContentRetriever> eldest) {
+                    return size() > MAX_CACHED_PROJECTS;
+                }
+            });
 
     public ContentRetriever getRetrieverForProject(String projectId) {
         return retrieverCache.computeIfAbsent(projectId, this::buildRetriever);

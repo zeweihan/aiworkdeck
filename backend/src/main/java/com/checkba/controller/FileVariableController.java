@@ -15,7 +15,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/file-variables")
 @RequiredArgsConstructor
-@CrossOrigin(origins = "*")
 public class FileVariableController {
 
     private final FileVariableService fileVariableService;

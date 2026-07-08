@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 
 import java.time.LocalDateTime;
 
@@ -19,10 +20,12 @@ import java.time.LocalDateTime;
     @UniqueConstraint(columnNames = {"fileId", "tagId"})
 })
 @Data
+@EqualsAndHashCode(onlyExplicitlyIncluded = true) // 仅用 id：join 实体最易被放进 Set 去重，字段型 hashCode 在 save 前后会变
 public class FileTag {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     /**

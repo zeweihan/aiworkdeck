@@ -36,6 +36,17 @@ public class GeminiChatLanguageModel implements ChatLanguageModel {
     }
 
     @Override
+    public Response<AiMessage> generate(List<ChatMessage> messages,
+                                        List<dev.langchain4j.agent.tool.ToolSpecification> toolSpecifications) {
+        // Gemini function-calling 尚未在本实现中支持：忽略工具规格、退化为纯文本生成，
+        // 避免 langchain4j 默认实现直接抛 "Tools are not supported" 让 Gemini 子代理崩溃。
+        if (toolSpecifications != null && !toolSpecifications.isEmpty()) {
+            log.warn("GeminiChatLanguageModel 暂不支持工具调用，已忽略 {} 个工具规格，退化为纯文本生成", toolSpecifications.size());
+        }
+        return generate(messages);
+    }
+
+    @Override
     public Response<AiMessage> generate(List<ChatMessage> messages) {
         if (apiKey == null || apiKey.isEmpty()) {
             throw new IllegalStateException("Gemini API key is not configured (ai.model.gemini.api-key)");

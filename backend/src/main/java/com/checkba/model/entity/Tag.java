@@ -6,7 +6,9 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 
 import java.time.LocalDateTime;
 
@@ -14,12 +16,18 @@ import java.time.LocalDateTime;
  * 项目标签实体
  */
 @Entity
-@Table(name = "project_tag")
+@Table(name = "project_tag", uniqueConstraints = {
+    // 同项目内标签名唯一：应用层 existsByProjectIdAndName 是"先查后插"，并发下仍可能重复；
+    // DB 唯一约束兜底，避免重复标签导致 findByProjectIdAndName 抛 NonUniqueResultException。
+    @UniqueConstraint(columnNames = {"projectId", "name"})
+})
 @Data
+@EqualsAndHashCode(onlyExplicitlyIncluded = true) // 仅用 id，与仓库其余实体一致，避免可变字段/未持久化时的 hashCode 陷阱
 public class Tag {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @EqualsAndHashCode.Include
     private Long id;
 
     /**

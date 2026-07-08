@@ -16,7 +16,6 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/external")
-@CrossOrigin(origins = "*") // 允许跨域
 public class ExternalController {
 
     @Autowired
