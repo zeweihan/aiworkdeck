@@ -280,25 +280,16 @@ public class ContentSearchService {
                     int start = matcher.start();
                     int end = matcher.end();
 
-                    // 提取上下文
-                    String context = extractContext(line, start, end);
-
-                    // 计算在 context 中的相对位置
-                    int contextStart = Math.max(0, start - MAX_CONTEXT_CHARS / 2);
-                    int relativeStart = start - contextStart;
-                    int relativeEnd = relativeStart + (end - start);
-
-                    // 如果 context 有前缀 "..."，需要调整偏移
-                    if (contextStart > 0) {
-                        relativeStart += 3; // "..." 的长度
-                        relativeEnd += 3;
-                    }
+                    // 提取上下文并同步得到匹配在其中的相对位置：
+                    // 此前调用方自行按 (start-50 + "...") 推算偏移，与 extractContext 实际的 trim/短行整行/省略号
+                    // 处理不一致，短行或行首有缩进时高亮错位。改由 extractContext 一并返回对齐后的偏移。
+                    MatchContext ctx = extractContext(line, start, end);
 
                     matches.add(MatchInfo.builder()
                         .lineNumber(lineNumber)
-                        .content(context)
-                        .startIndex(relativeStart)
-                        .endIndex(relativeEnd)
+                        .content(ctx.content())
+                        .startIndex(ctx.start())
+                        .endIndex(ctx.end())
                         .build());
 
                     if (matches.size() >= MAX_MATCHES_PER_FILE * 2) {
@@ -354,27 +345,47 @@ public class ContentSearchService {
         public String toString() { return inner.toString(); }
     }
 
+    /** 上下文片段 + 匹配在该片段中的相对起止（已对齐 trim/省略号）。 */
+    private record MatchContext(String content, int start, int end) {}
+
     /**
-     * 提取匹配上下文
+     * 提取匹配上下文，并返回匹配在上下文中的相对起止位置（供前端高亮，与 content 严格对齐）。
      */
-    private String extractContext(String line, int matchStart, int matchEnd) {
+    private MatchContext extractContext(String line, int matchStart, int matchEnd) {
         if (line.length() <= MAX_CONTEXT_CHARS) {
-            return line.trim();
+            // 整行返回，但 trim 会移除前导空白，匹配位置需相应左移
+            int leading = line.length() - line.stripLeading().length();
+            String content = line.trim();
+            int s = clamp(matchStart - leading, 0, content.length());
+            int e = clamp(matchEnd - leading, s, content.length());
+            return new MatchContext(content, s, e);
         }
-        
+
         int contextStart = Math.max(0, matchStart - MAX_CONTEXT_CHARS / 2);
         int contextEnd = Math.min(line.length(), matchEnd + MAX_CONTEXT_CHARS / 2);
-        
-        String context = line.substring(contextStart, contextEnd).trim();
-        
+        String raw = line.substring(contextStart, contextEnd);
+
+        int relStart = matchStart - contextStart;
+        int relEnd = matchEnd - contextStart;
+        // 处理左侧 trim（stripLeading）造成的偏移
+        int leadingTrim = raw.length() - raw.stripLeading().length();
+        String content = raw.trim();
+        relStart = clamp(relStart - leadingTrim, 0, content.length());
+        relEnd = clamp(relEnd - leadingTrim, relStart, content.length());
+
+        int prefixLen = 0;
         if (contextStart > 0) {
-            context = "..." + context;
+            content = "..." + content;
+            prefixLen = 3;
         }
         if (contextEnd < line.length()) {
-            context = context + "...";
+            content = content + "...";
         }
-        
-        return context;
+        return new MatchContext(content, relStart + prefixLen, relEnd + prefixLen);
+    }
+
+    private static int clamp(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 
     /**

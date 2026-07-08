@@ -209,7 +209,11 @@ public class ConversationSummarizer {
      */
     private String extractText(ChatMessage msg) {
         if (msg instanceof UserMessage um) {
-            return um.singleText();
+            // 安全提取：多模态消息 singleText() 会抛异常
+            return um.contents().stream()
+                    .filter(dev.langchain4j.data.message.TextContent.class::isInstance)
+                    .map(c -> ((dev.langchain4j.data.message.TextContent) c).text())
+                    .collect(java.util.stream.Collectors.joining(" "));
         } else if (msg instanceof AiMessage am) {
             return am.text();
         }

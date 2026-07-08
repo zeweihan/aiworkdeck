@@ -70,6 +70,8 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     /**
      * 删除过期的记忆
      */
+    @org.springframework.transaction.annotation.Transactional
+    @org.springframework.data.jpa.repository.Modifying
     @Query("DELETE FROM MemoryEntry m WHERE m.expiresAt IS NOT NULL AND m.expiresAt < :now AND m.isProtected = false")
     void deleteExpiredMemories(@Param("now") LocalDateTime now);
 

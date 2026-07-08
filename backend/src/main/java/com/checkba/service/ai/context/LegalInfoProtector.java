@@ -226,7 +226,15 @@ public class LegalInfoProtector {
      */
     public CompressedResult safeCompress(String content, int targetLength) {
         List<ProtectedSegment> protectedSegments = markProtectedInfo(content);
-        
+
+        // 无受保护片段时：直接按长度处理。否则下方分段循环不会产生任何内容 → 返回空串丢失整段。
+        if (protectedSegments.isEmpty()) {
+            if (content.length() <= targetLength) {
+                return new CompressedResult(content, protectedSegments, false);
+            }
+            return new CompressedResult(content.substring(0, Math.max(0, targetLength)) + "...", protectedSegments, true);
+        }
+
         // 计算受保护内容的总长度
         int protectedLength = protectedSegments.stream()
                 .mapToInt(s -> s.getContent().length())

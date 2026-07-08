@@ -205,10 +205,11 @@ public class ContextCompressor {
      * 标准化文本用于比较
      */
     private String normalizeForComparison(String text) {
-        return text.replaceAll("\\s+", " ")
+        // 先归一化再截断：substring 上界必须用归一化后的长度，用原串长度会在归一化变短时越界 StringIndexOutOfBounds
+        String normalized = text.replaceAll("\\s+", " ")
                 .replaceAll("<[^>]+>", "")
-                .toLowerCase()
-                .substring(0, Math.min(200, text.length()));
+                .toLowerCase();
+        return normalized.substring(0, Math.min(200, normalized.length()));
     }
 
     /**

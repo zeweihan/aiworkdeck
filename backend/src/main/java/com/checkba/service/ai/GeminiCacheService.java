@@ -26,8 +26,13 @@ public class GeminiCacheService {
 
     private final AiModelProperties aiModelProperties;
 
-    // Cache for Gemini Cache IDs: Map<ContentHash, CacheName>
-    private final Map<String, String> activeGeminiCaches = new ConcurrentHashMap<>();
+    // Cache for Gemini Cache IDs: Map<ContentHash, (CacheName, createdAt)>
+    private final Map<String, CachedEntry> activeGeminiCaches = new ConcurrentHashMap<>();
+
+    // Gemini cachedContent 默认 1 小时过期，留 5 分钟余量后即视为失效重建，避免返回已过期的 cacheName 导致下游 404
+    private static final long CACHE_TTL_MS = 55 * 60 * 1000L;
+
+    private record CachedEntry(String cacheName, long createdAt) {}
 
     public GeminiCacheService(AiModelProperties aiModelProperties) {
         this.aiModelProperties = aiModelProperties;
@@ -36,9 +41,9 @@ public class GeminiCacheService {
     public String getOrCreateGeminiCache(String content) {
         // Simple hash content to key
         String hash = cn.hutool.crypto.digest.DigestUtil.md5Hex(content);
-        if (activeGeminiCaches.containsKey(hash)) {
-            // Validate validity? For now assume valid until TTL (default 1h). We can store timestamp.
-            return activeGeminiCaches.get(hash);
+        CachedEntry cached = activeGeminiCaches.get(hash);
+        if (cached != null && (System.currentTimeMillis() - cached.createdAt()) < CACHE_TTL_MS) {
+            return cached.cacheName();
         }
 
         // Create Cache via REST
@@ -69,7 +74,7 @@ public class GeminiCacheService {
         JSONObject json = cn.hutool.json.JSONUtil.parseObj(resp);
         if (json.containsKey("name")) {
             String cacheName = json.getStr("name");
-            activeGeminiCaches.put(hash, cacheName);
+            activeGeminiCaches.put(hash, new CachedEntry(cacheName, System.currentTimeMillis()));
             return cacheName;
         } else {
             throw new RuntimeException("Failed to create cache: " + resp);

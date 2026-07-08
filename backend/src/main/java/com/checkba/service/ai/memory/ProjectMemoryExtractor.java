@@ -49,7 +49,11 @@ public class ProjectMemoryExtractor {
         StringBuilder allContent = new StringBuilder();
         for (ChatMessage msg : messages) {
             if (msg instanceof UserMessage um) {
-                allContent.append(um.singleText()).append("\n");
+                // 安全提取文本：多模态 UserMessage（含图片）调 singleText() 会抛异常导致整轮抽取失败
+                allContent.append(um.contents().stream()
+                        .filter(dev.langchain4j.data.message.TextContent.class::isInstance)
+                        .map(c -> ((dev.langchain4j.data.message.TextContent) c).text())
+                        .collect(java.util.stream.Collectors.joining(" "))).append("\n");
             } else if (msg instanceof AiMessage am) {
                 allContent.append(am.text()).append("\n");
             }

@@ -222,7 +222,10 @@ public class OssStorageService implements StorageService {
         if (prefix != null && !prefix.isEmpty() && !prefix.endsWith("/")) {
             prefix = prefix + "/";
         }
-        return (prefix != null ? prefix : "") + fileId + ".docx";
+        // 与本地存储一致：含路径分隔符的 fileId 原样作为 key（如 avatars/x.png、ocr/tmp/x、clipboard/1/uuid），
+        // 只对无分隔符的旧式裸 id 兼容补 .docx——此前无条件补 .docx 会把头像/OCR/剪贴板文件的 key 写坏
+        String key = (fileId.contains("/") || fileId.contains("\\")) ? fileId : fileId + ".docx";
+        return (prefix != null ? prefix : "") + key;
     }
 
     // ========== 阿里云OSS实现 ==========

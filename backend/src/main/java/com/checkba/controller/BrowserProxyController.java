@@ -34,7 +34,8 @@ public class BrowserProxyController {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(BrowserProxyController.class);
 
     private static final HttpClient CLIENT = HttpClient.newBuilder()
-            .followRedirects(HttpClient.Redirect.NORMAL)
+            // NEVER：不自动跟随重定向，改为手动逐跳做 SSRF 校验，防止允许的外站 302 到内网/元数据端点
+            .followRedirects(HttpClient.Redirect.NEVER)
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
@@ -52,15 +53,34 @@ public class BrowserProxyController {
 
         try {
             URI uri = URI.create(u);
-            if (isBlockedTarget(uri)) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).body("目标地址不被允许（已禁止本地/内网地址）");
+            HttpResponse<byte[]> resp = null;
+            // 手动跟随重定向，每一跳都重新做 scheme 白名单 + SSRF 校验，避免自动跳转绕过 isBlockedTarget
+            for (int hop = 0; hop < 5; hop++) {
+                String scheme = uri.getScheme();
+                if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body("仅支持 http/https");
+                }
+                if (isBlockedTarget(uri)) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body("目标地址不被允许（已禁止本地/内网地址）");
+                }
+                HttpRequest req = HttpRequest.newBuilder(uri)
+                        .GET()
+                        .timeout(Duration.ofSeconds(20))
+                        .header("User-Agent", "checkba-browser/1.0")
+                        .build();
+                resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofByteArray());
+                int sc = resp.statusCode();
+                if (sc >= 300 && sc < 400) {
+                    String loc = resp.headers().firstValue("location").orElse(null);
+                    if (loc == null || loc.isBlank()) break;
+                    uri = uri.resolve(loc); // 支持相对 Location，下一轮重新校验
+                    continue;
+                }
+                break;
             }
-            HttpRequest req = HttpRequest.newBuilder(uri)
-                    .GET()
-                    .timeout(Duration.ofSeconds(20))
-                    .header("User-Agent", "checkba-browser/1.0")
-                    .build();
-            HttpResponse<byte[]> resp = CLIENT.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            if (resp == null) {
+                return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("代理失败: 无响应");
+            }
 
             String contentType = resp.headers().firstValue("content-type").orElse("application/octet-stream");
             // 只对 HTML 注入脚本，其它资源原样返回（图片/CSS/JS 等）
