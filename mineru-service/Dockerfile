@@ -34,8 +34,9 @@ RUN mkdir -p /app/uploads /app/outputs
 # Install MinerU with core dependencies (official method)
 # Using mineru[core] which includes the API server
 # Note: PIP_NO_CACHE_DIR=1 is set, so no cache purge needed
+# MinerU 3.x 升级：合并前请在真机跑 compat_smoke_test.sh 验证（见 README）
 RUN pip install --upgrade pip && \
-    pip install -U "mineru[core]>=2.7.0" -i https://mirrors.aliyun.com/pypi/simple
+    pip install -U "mineru[core]>=3.4,<4" -i https://mirrors.aliyun.com/pypi/simple
 
 # Download models for pipeline backend (required for offline use)
 # This will download models from modelscope (faster for China users)
