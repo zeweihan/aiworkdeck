@@ -40,7 +40,10 @@ async function openZetaOfficeVerifyWindow() {
   })
   verifyWin.on('closed', () => { verifyWin = null })
   // Standalone verify panel drives the booted executor directly (no host).
-  verifyWin.loadURL(editorUrl(origin, { verify: true }))
+  // 捕获 loadURL 失败，避免成为未处理 rejection
+  verifyWin.loadURL(editorUrl(origin, { verify: true })).catch((e) => {
+    console.error('[zetaoffice-verify] loadURL failed', e && e.message ? e.message : e)
+  })
   verifyWin.webContents.openDevTools({ mode: 'detach' })
   return verifyWin
 }

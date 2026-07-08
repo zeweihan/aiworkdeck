@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, desktopCapturer } = require('electron')
+const { contextBridge, ipcRenderer } = require('electron')
 
 contextBridge.exposeInMainWorld('checkbaDesktop', {
   app: {
@@ -72,20 +72,10 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
       } catch (e) {
         const msg = String(e && e.message ? e.message : e)
         // eslint-disable-next-line no-console
-        console.warn('[checkbaDesktop] ocr capture via main failed, fallback', msg)
-        try {
-          const sources = await desktopCapturer.getSources({
-            types: ['screen'],
-            thumbnailSize: { width: 1920, height: 1080 }
-          })
-          const src = sources && sources.length ? sources[0] : null
-          if (!src || !src.thumbnail) {
-            return { ok: false, message: msg }
-          }
-          return { ok: true, dataUrl: src.thumbnail.toDataURL() }
-        } catch (e2) {
-          return { ok: false, message: msg }
-        }
+        console.warn('[checkbaDesktop] ocr capture via main failed', msg)
+        // 注：desktopCapturer 是主进程模块，在（sandbox 的）preload 中为 undefined，直接调用只会抛
+        // TypeError 掩盖真实错误。截图统一走上面的主进程 IPC，这里如实返回失败。
+        return { ok: false, message: msg }
       }
     }
   },
