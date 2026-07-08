@@ -7,11 +7,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.graphics.image.LosslessFactory;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
+import org.apache.pdfbox.rendering.ImageType;
+import org.apache.pdfbox.rendering.PDFRenderer;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.apache.pdfbox.text.TextPosition;
 import org.apache.poi.xwpf.usermodel.*;
 import org.springframework.stereotype.Service;
 
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -91,24 +97,30 @@ public class SensitiveService {
     }
 
     private void replaceInParagraph(XWPFParagraph p, List<String> strategies) {
-        // Simple approach: combine runs, replace, set runs. 
-        // Complex approach (Preserve formatting): iterate runs.
-        // Given constraint "Format must not change", iterating runs is safer but splitting text across runs (e.g. bold '13', normal '8000') makes regex fail.
-        // We will try per-run replacement first.
-        
         List<XWPFRun> runs = p.getRuns();
-        if (runs != null) {
-            for (XWPFRun r : runs) {
-                String text = r.getText(0);
-                if (text != null && !text.isEmpty()) {
-                    String replaced = text;
-                    for (String strategy : strategies) {
-                        replaced = replaceSensitiveData(replaced, strategy);
-                    }
-                    if (!replaced.equals(text)) {
-                        r.setText(replaced, 0);
-                    }
-                }
+        if (runs == null || runs.isEmpty()) return;
+
+        // 拼接整段文本再匹配：敏感串常因排版被拆到多个 run（如加粗 "138" + 普通 "00001111"），
+        // 逐 run 匹配会漏掉跨 run 的敏感数据。
+        StringBuilder sb = new StringBuilder();
+        for (XWPFRun r : runs) {
+            String t = r.getText(0);
+            if (t != null) sb.append(t);
+        }
+        String original = sb.toString();
+        if (original.isEmpty()) return;
+
+        String replaced = original;
+        for (String strategy : strategies) {
+            replaced = replaceSensitiveData(replaced, strategy);
+        }
+
+        if (!replaced.equals(original)) {
+            // 命中敏感串：整段文本写回首个 run、清空其余 run。
+            // 仅对"含敏感数据"的段落折叠排版（丢失非首 run 的格式），正确性优先于排版保留。
+            runs.get(0).setText(replaced, 0);
+            for (int i = 1; i < runs.size(); i++) {
+                runs.get(i).setText("", 0);
             }
         }
     }
@@ -159,7 +171,23 @@ public class SensitiveService {
                 }
             }
             
-            document.save(dest);
+            // 3. 真删文字层：把已画黑框的每一页栅格化为图片并重建 PDF，移除底层可提取的文字对象。
+            //    此前仅在文字上叠加黑框，接收方复制/文本提取仍可还原原文——脱敏形同虚设。
+            //    权衡：输出为图片型 PDF（体积更大、正文不可再选中），换取"敏感文字不可提取"的安全保证。
+            PDFRenderer renderer = new PDFRenderer(document);
+            try (PDDocument flattened = new PDDocument()) {
+                for (int i = 0; i < document.getNumberOfPages(); i++) {
+                    PDRectangle mediaBox = document.getPage(i).getMediaBox();
+                    BufferedImage image = renderer.renderImageWithDPI(i, 150, ImageType.RGB);
+                    PDPage newPage = new PDPage(mediaBox);
+                    flattened.addPage(newPage);
+                    PDImageXObject xImage = LosslessFactory.createFromImage(flattened, image);
+                    try (PDPageContentStream cs = new PDPageContentStream(flattened, newPage)) {
+                        cs.drawImage(xImage, 0, 0, mediaBox.getWidth(), mediaBox.getHeight());
+                    }
+                }
+                flattened.save(dest);
+            }
         }
     }
 
