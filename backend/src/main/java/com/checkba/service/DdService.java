@@ -379,27 +379,29 @@ public class DdService {
     public void deleteItem(Long itemId, Long userId) {
         DdItem item = ddItemRepository.findById(itemId).orElse(null);
         if (item == null) return;
-        
-        // Handle Children first (Recursion)
-        List<DdItem> children = ddItemRepository.findByDdRequestIdOrderBySortOrderAsc(item.getDdRequestId())
-                .stream().filter(i -> itemId.equals(i.getParentId())).collect(Collectors.toList());
-        for (DdItem child : children) {
-            deleteItem(child.getId(), userId);
+        // 一次性载入该请求全部项，构建 parentId→children 映射，避免逐节点全表查询（此前 O(N²)）
+        java.util.Map<Long, List<DdItem>> childrenByParent = ddItemRepository
+                .findByDdRequestIdOrderBySortOrderAsc(item.getDdRequestId())
+                .stream().filter(i -> i.getParentId() != null)
+                .collect(Collectors.groupingBy(DdItem::getParentId));
+        deleteItemCascade(item, childrenByParent, userId);
+    }
+
+    private void deleteItemCascade(DdItem item, java.util.Map<Long, List<DdItem>> childrenByParent, Long userId) {
+        // 先递归删子项
+        for (DdItem child : childrenByParent.getOrDefault(item.getId(), java.util.List.of())) {
+            deleteItemCascade(child, childrenByParent, userId);
         }
-        
-        // Handle File linked to this item
+        // 关联文件
         if (item.getUploadedFileId() != null) {
             verifyAndSafeDeleteFile(item, userId);
         }
-        
-        // Handle the Folder for this item
+        // 该项对应的文件夹
         verifyAndSafeDeleteFolder(item, userId);
-
-        // Delete Comments
-        List<DdComment> comments = ddCommentRepository.findByDdItemIdOrderByCreatedAtAsc(itemId);
+        // 评论
+        List<DdComment> comments = ddCommentRepository.findByDdItemIdOrderByCreatedAtAsc(item.getId());
         ddCommentRepository.deleteAll(comments);
-
-        // Delete Item
+        // DB 记录
         ddItemRepository.delete(item);
     }
     

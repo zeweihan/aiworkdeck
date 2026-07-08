@@ -61,7 +61,7 @@ public class TagController {
             @RequestBody UpdateTagRequest request,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireMember(sessionId, projectId);
-        return tagService.updateTag(tagId, request.getName(), request.getColor(), request.getDescription());
+        return tagService.updateTag(projectId, tagId, request.getName(), request.getColor(), request.getDescription());
     }
 
     /**
@@ -73,7 +73,7 @@ public class TagController {
             @PathVariable Long tagId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireMember(sessionId, projectId);
-        tagService.deleteTag(tagId);
+        tagService.deleteTag(projectId, tagId);
     }
 
     @Data

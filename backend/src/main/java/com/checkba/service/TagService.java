@@ -66,10 +66,14 @@ public class TagService {
      * 更新标签
      */
     @Transactional
-    public Tag updateTag(Long tagId, String name, String color, String description) {
+    public Tag updateTag(Long projectId, Long tagId, String name, String color, String description) {
         Tag tag = tagRepository.findById(tagId)
                 .orElseThrow(() -> new IllegalArgumentException("Tag not found"));
-        
+        // 归属校验：tagId 必须属于该 projectId，防止本项目成员改动其它项目的标签
+        if (!tag.getProjectId().equals(projectId)) {
+            throw new IllegalArgumentException("标签不属于该项目");
+        }
+
         // check duplicate name if name changed
         if (!tag.getName().equals(name)) {
              if (tagRepository.existsByProjectIdAndName(tag.getProjectId(), name)) {
@@ -89,7 +93,12 @@ public class TagService {
      * 删除标签
      */
     @Transactional
-    public void deleteTag(Long tagId) {
+    public void deleteTag(Long projectId, Long tagId) {
+        Tag tag = tagRepository.findById(tagId).orElse(null);
+        if (tag == null) return;
+        if (!tag.getProjectId().equals(projectId)) {
+            throw new IllegalArgumentException("标签不属于该项目");
+        }
         tagRepository.deleteById(tagId);
         // Note: Foreign key constraints in FileTag/DB should handle cascade or we should delete manually in FileTagService
         // Ideally we should delete relations in FileTagRepository first? 
