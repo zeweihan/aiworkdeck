@@ -19,6 +19,7 @@ public class SensitiveController {
     private final SensitiveService sensitiveService;
     private final com.checkba.storage.StorageServiceFactory storageServiceFactory;
     private final com.checkba.service.ProjectFileService projectFileService;
+    private final com.checkba.service.ProjectMemberService projectMemberService;
 
     @GetMapping("/options")
     public ResponseEntity<List<Map<String, String>>> getSensitiveOptions() {
@@ -63,6 +64,10 @@ public class SensitiveController {
 
             // 1. Get Original File Info
             com.checkba.model.entity.ProjectFile originalFile = projectFileService.getFile(fileId);
+            // 越权校验：此前仅校验登录，可对他人项目文件脱敏（读取+复制内容）
+            if (!projectMemberService.hasReadPermission(originalFile.getProjectId(), userId)) {
+                return ResponseEntity.status(403).body(Map.of("error", "无权访问该文件"));
+            }
             String originalFilePath = originalFile.getFilePath();
             
             // 2. Resolve absolute path (for processing)

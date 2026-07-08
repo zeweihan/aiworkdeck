@@ -27,6 +27,12 @@ public class ProjectMemberController {
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         
+        // 越权校验：此前无成员校验，可枚举任意项目的成员名单/用户名
+        Long callerId = AuthController.getUserIdFromSession(sessionId);
+        if (callerId == null || !projectMemberService.hasReadPermission(projectId, callerId)) {
+            throw new IllegalArgumentException("无权访问该项目成员");
+        }
+
         // Fetch project owner (implicitly an ADMIN member)
         com.checkba.model.entity.User owner = projectMemberService.getProjectOwner(projectId);
         

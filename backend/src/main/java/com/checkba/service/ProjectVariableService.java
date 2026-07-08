@@ -17,6 +17,11 @@ public class ProjectVariableService {
         return repository.findByProjectId(projectId);
     }
 
+    /** 返回变量所属项目 id（用于越权校验），不存在返回 null。 */
+    public Long getProjectIdById(Long id) {
+        return repository.findById(id).map(ProjectVariable::getProjectId).orElse(null);
+    }
+
     public ProjectVariable createOrUpdateVariable(ProjectVariable variable) {
         ProjectVariable existing = repository.findByProjectIdAndName(variable.getProjectId(), variable.getName())
                 .orElse(null);

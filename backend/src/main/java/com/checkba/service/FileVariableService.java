@@ -32,4 +32,9 @@ public class FileVariableService {
     public void deleteVariable(Long id) {
         fileVariableRepository.deleteById(id);
     }
+
+    /** 返回文件变量绑定的 fileId（用于越权校验：fileId→projectId），不存在返回 null。 */
+    public Long getFileIdById(Long id) {
+        return fileVariableRepository.findById(id).map(FileVariable::getFileId).orElse(null);
+    }
 }
