@@ -14,7 +14,6 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
-import java.util.stream.Collectors;
 
 /**
  * Python Tools for the Agent (Dockerized).
@@ -186,7 +185,14 @@ default_api = _ToolAPI()
             log.info("Executing Docker command: {}", String.join(" ", command));
             
             process = pb.start();
-            
+
+            // 并发排空 stdout/stderr：子进程输出超过 OS 管道缓冲区(~64KB)时会阻塞在 write，
+            // 若主线程等进程退出后才读，进程将永不退出 → 假超时。必须边跑边读。
+            final StringBuilder stdoutBuf = new StringBuilder();
+            final StringBuilder stderrBuf = new StringBuilder();
+            Thread outPump = pumpStream(process.getInputStream(), stdoutBuf);
+            Thread errPump = pumpStream(process.getErrorStream(), stderrBuf);
+
             // 3. Monitor for tool call requests (IPC loop)
             Path requestReadyPath = tempDir.resolve("_request_ready");
             Path requestPath = tempDir.resolve("_tool_request.json");
@@ -247,11 +253,13 @@ default_api = _ToolAPI()
                 Thread.sleep(100);
             }
             
-            // 4. Capture Output
-            String stdout = new BufferedReader(new InputStreamReader(process.getInputStream()))
-                            .lines().collect(Collectors.joining("\n"));
-            String stderr = new BufferedReader(new InputStreamReader(process.getErrorStream()))
-                            .lines().collect(Collectors.joining("\n"));
+            // 4. Capture Output（等排空线程收齐后再读缓冲）
+            outPump.join(5000);
+            errPump.join(5000);
+            String stdout;
+            String stderr;
+            synchronized (stdoutBuf) { stdout = stdoutBuf.toString().trim(); }
+            synchronized (stderrBuf) { stderr = stderrBuf.toString().trim(); }
             
             // 5. Return
             if (process.exitValue() != 0) {
@@ -280,6 +288,26 @@ default_api = _ToolAPI()
         }
     }
     
+    /**
+     * 后台守护线程持续读取进程输出流到缓冲，防止管道写阻塞导致子进程挂死。
+     */
+    private Thread pumpStream(java.io.InputStream in, StringBuilder sink) {
+        Thread t = new Thread(() -> {
+            try (BufferedReader r = new BufferedReader(
+                    new InputStreamReader(in, java.nio.charset.StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = r.readLine()) != null) {
+                    synchronized (sink) { sink.append(line).append('\n'); }
+                }
+            } catch (java.io.IOException ignored) {
+                // 进程结束/流关闭时正常退出
+            }
+        });
+        t.setDaemon(true);
+        t.start();
+        return t;
+    }
+
     /**
      * Execute a tool requested by Python code.
      */

@@ -271,40 +271,87 @@ public class ContentSearchService {
         int lineNumber = 0;
         for (String line : lines) {
             lineNumber++;
-            Matcher matcher = pattern.matcher(line);
-            
-            while (matcher.find()) {
-                int start = matcher.start();
-                int end = matcher.end();
-                
-                // 提取上下文
-                String context = extractContext(line, start, end);
-                
-                // 计算在 context 中的相对位置
-                int contextStart = Math.max(0, start - MAX_CONTEXT_CHARS / 2);
-                int relativeStart = start - contextStart;
-                int relativeEnd = relativeStart + (end - start);
-                
-                // 如果 context 有前缀 "..."，需要调整偏移
-                if (contextStart > 0) {
-                    relativeStart += 3; // "..." 的长度
-                    relativeEnd += 3;
+            try {
+                // 用超时感知的 CharSequence 包装，防止用户提供的正则触发灾难性回溯挂死搜索线程
+                Matcher matcher = pattern.matcher(
+                        new TimeLimitedCharSequence(line, System.currentTimeMillis() + REGEX_TIMEOUT_MS));
+
+                while (matcher.find()) {
+                    int start = matcher.start();
+                    int end = matcher.end();
+
+                    // 提取上下文
+                    String context = extractContext(line, start, end);
+
+                    // 计算在 context 中的相对位置
+                    int contextStart = Math.max(0, start - MAX_CONTEXT_CHARS / 2);
+                    int relativeStart = start - contextStart;
+                    int relativeEnd = relativeStart + (end - start);
+
+                    // 如果 context 有前缀 "..."，需要调整偏移
+                    if (contextStart > 0) {
+                        relativeStart += 3; // "..." 的长度
+                        relativeEnd += 3;
+                    }
+
+                    matches.add(MatchInfo.builder()
+                        .lineNumber(lineNumber)
+                        .content(context)
+                        .startIndex(relativeStart)
+                        .endIndex(relativeEnd)
+                        .build());
+
+                    if (matches.size() >= MAX_MATCHES_PER_FILE * 2) {
+                        return matches;
+                    }
                 }
-                
-                matches.add(MatchInfo.builder()
-                    .lineNumber(lineNumber)
-                    .content(context)
-                    .startIndex(relativeStart)
-                    .endIndex(relativeEnd)
-                    .build());
-                
-                if (matches.size() >= MAX_MATCHES_PER_FILE * 2) {
-                    return matches;
-                }
+            } catch (RegexTimeoutException e) {
+                log.warn("正则匹配超时（可能 ReDoS），放弃该文件剩余匹配（行 {}）", lineNumber);
+                return matches;
             }
         }
-        
+
         return matches;
+    }
+
+    private static final long REGEX_TIMEOUT_MS = 2000;
+
+    /** 正则匹配超时（用于中断灾难性回溯）。无堆栈以降低开销。 */
+    private static final class RegexTimeoutException extends RuntimeException {
+        RegexTimeoutException() { super(null, null, false, false); }
+    }
+
+    /**
+     * 包装 CharSequence，在正则回溯大量访问字符时检测超时，
+     * 阻止 catastrophic backtracking（如 (a+)+）挂死搜索线程。
+     */
+    private static final class TimeLimitedCharSequence implements CharSequence {
+        private final CharSequence inner;
+        private final long deadline;
+
+        TimeLimitedCharSequence(CharSequence inner, long deadline) {
+            this.inner = inner;
+            this.deadline = deadline;
+        }
+
+        @Override
+        public char charAt(int index) {
+            if (System.currentTimeMillis() > deadline) {
+                throw new RegexTimeoutException();
+            }
+            return inner.charAt(index);
+        }
+
+        @Override
+        public int length() { return inner.length(); }
+
+        @Override
+        public CharSequence subSequence(int start, int end) {
+            return new TimeLimitedCharSequence(inner.subSequence(start, end), deadline);
+        }
+
+        @Override
+        public String toString() { return inner.toString(); }
     }
 
     /**

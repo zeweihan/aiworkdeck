@@ -20,7 +20,9 @@ public class AuthController {
     private final ClientInvitationService clientInvitationService;
 
     // 简单的 session 存储（内存中，实际生产环境应使用 Redis 或 JWT）
-    private static final Map<String, Long> SESSION_STORE = new HashMap<>();
+    // 并发安全：登录写入与每请求读取/移除高频并发，普通 HashMap 扩容会损坏桶结构
+    // （丢 session 导致误判未登录，甚至 CPU 空转死循环）。
+    private static final Map<String, Long> SESSION_STORE = new java.util.concurrent.ConcurrentHashMap<>();
 
     private static UserService staticUserService;
 
