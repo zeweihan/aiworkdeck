@@ -49,11 +49,37 @@ public class TtsService {
     @Value("${external.tts.local-base-url:}")
     private String defaultLocalBaseUrl;
 
-    private final RestTemplate restTemplate = new RestTemplate();
+    private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static RestTemplate buildRestTemplate() {
+        // 显式超时：此前无 connect/read timeout，ElevenLabs 或本地 Kokoro 网络卡死会无限期
+        // 挂起并占满请求线程。TTS 合成可能较慢，read 超时给宽松值。
+        org.springframework.http.client.SimpleClientHttpRequestFactory factory =
+                new org.springframework.http.client.SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(10_000);
+        factory.setReadTimeout(60_000);
+        return new RestTemplate(factory);
+    }
 
     public TtsService() {
         new File(TEMP_AUDIO_DIR).mkdirs();
+    }
+
+    /**
+     * 定时清理临时音频目录：合成的 mp3/wav 写入 TEMP_AUDIO_DIR 后返回 File，此前无任何清理，
+     * 长期运行会撑满系统临时目录。每小时清理超过 1 小时未修改的文件（保留最近文件供下载/播放）。
+     */
+    @org.springframework.scheduling.annotation.Scheduled(fixedRate = 60 * 60 * 1000)
+    public void cleanupOldAudioFiles() {
+        File[] files = new File(TEMP_AUDIO_DIR).listFiles();
+        if (files == null) return;
+        long cutoff = System.currentTimeMillis() - 60 * 60 * 1000;
+        for (File f : files) {
+            if (f.isFile() && f.lastModified() < cutoff && !f.delete()) {
+                logger.warn("Failed to delete stale TTS audio: {}", f.getName());
+            }
+        }
     }
 
     /**
