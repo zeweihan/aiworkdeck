@@ -230,6 +230,8 @@ export default {
       // Allow search if query is non-empty OR if tags are selected
       this.loading = true
       this.hasSearched = true
+      // 竞态防护：快速连点标签/选项会并发多次搜索，只让最新一次的结果落地
+      const seq = (this._searchSeq = (this._searchSeq || 0) + 1)
 
       try {
         const response = await searchProjectContent(this.projectId, {
@@ -238,6 +240,8 @@ export default {
           tagIds: this.selectedTagIds,
           fileTypes: ['docx', 'pdf', 'pptx', 'xlsx', 'txt', 'md'] // Explicitly support these types
         })
+
+        if (seq !== this._searchSeq) return // 已有更新的搜索发起，丢弃本次陈旧结果
 
         this.results = response
 
@@ -250,7 +254,7 @@ export default {
         console.error('Search failed:', e)
         uni.showToast({ title: 'Search failed', icon: 'none' })
       } finally {
-        this.loading = false
+        if (seq === this._searchSeq) this.loading = false
       }
     },
     refreshSearch() {

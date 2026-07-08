@@ -156,8 +156,10 @@ export default {
     },
     async refresh() {
       const now = Date.now()
-      if (this._lastRefreshAt && now - this._lastRefreshAt < 1200) return
+      // query 变化时绕过时间节流（否则搜索框改了结果却不刷新、停留在旧关键字）；仅对相同 query 的高频刷新节流
+      if (this._lastRefreshAt && now - this._lastRefreshAt < 1200 && this.query === this._lastRefreshQuery) return
       this._lastRefreshAt = now
+      this._lastRefreshQuery = this.query
       this.loading = true
       try {
         const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId

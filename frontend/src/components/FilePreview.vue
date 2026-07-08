@@ -250,8 +250,10 @@ export default {
         if (!this.file || !this.fileUrl) return
 
         this.loading = true
+        // 竞态防护：记录本次请求序号，onload 时若已切到别的文件则丢弃陈旧响应，避免显示错文件
+        const reqId = (this._mediaReqId = (this._mediaReqId || 0) + 1)
         console.log('loadMediaResource: 开始加载', this.fileUrl)
-        
+
         const headers = getAuthHeaders() || {}
         console.log('loadMediaResource: 使用认证头', headers)
         const mimeType = this.getMimeType(this.file.fileType)
@@ -268,6 +270,7 @@ export default {
         })
         
         xhr.onload = function() {
+          if (self._mediaReqId !== reqId) return // 已切换到别的文件，丢弃陈旧响应
           if (xhr.status === 200) {
             const blob = xhr.response
             console.log('loadMediaResource: 获取到数据', blob.size, 'bytes, MIME:', mimeType || blob.type)
