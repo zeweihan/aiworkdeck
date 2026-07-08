@@ -147,12 +147,13 @@ public class AiAgentController {
     @PostMapping("/history/rollback")
     public ResponseEntity<?> rollbackHistory(@RequestBody RollbackRequest request,
                                              @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = null;
-        if (sessionId != null) {
-            userId = AuthController.getUserIdFromSession(sessionId);
+        Long userId = (sessionId != null) ? AuthController.getUserIdFromSession(sessionId) : null;
+        // 归属校验：此前 userId 为 null 也会执行截断（破坏性），且不校验会话归属
+        if (userId == null || !messageService.isConversationOwnedBy(request.getConversationId(), userId)) {
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
         }
         log.info("Rollback request: conv={}, msgId={}, user={}", request.getConversationId(), request.getMessageId(), userId);
-        
+
         try {
             messageService.truncateHistory(request.getConversationId(), request.getMessageId());
             return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"History rolled back\"}");

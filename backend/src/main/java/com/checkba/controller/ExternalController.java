@@ -69,6 +69,13 @@ public class ExternalController {
             if (dto == null) {
                 dto = qichachaService.searchCompany(searchKey, request.getRole());
             }
+            // 二次判空：searchCompany 可能返回 null，后续解引用会 NPE→500
+            if (dto == null) {
+                Map<String, String> error = new HashMap<>();
+                error.put("error", "未找到相关企业信息，请检查公司名称是否正确");
+                error.put("message", "查询无结果: " + searchKey);
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
+            }
 
             // 如果是股票代码查询且企查查/Tushare返回的 stockCode 为空，则用用户输入的代码兜底
             if (original.matches("\\d{6}") && !StringUtils.hasText(dto.getStockCode())) {

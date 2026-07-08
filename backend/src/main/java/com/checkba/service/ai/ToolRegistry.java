@@ -306,6 +306,9 @@ public class ToolRegistry {
             return new ToolResult("Error executing tool: " + e.getMessage(), tool, true);
         } finally {
             ToolContextHolder.clear();
+            // 同时清理 ProjectContextHolder：装填时设置了它（见上），此前只清 ToolContextHolder，
+            // 池化回调线程复用会残留上个会话的 projectId/userId，导致记忆作用域串号。
+            ProjectContextHolder.clear();
         }
     }
 

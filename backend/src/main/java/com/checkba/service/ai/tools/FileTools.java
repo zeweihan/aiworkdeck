@@ -61,6 +61,9 @@ public class FileTools implements AgentToolComponent {
             @P("Optional: Sub-directory to search in (e.g. 'backend/src'). Default is root.") String dirPath
     ) {
         log.info("Tool: search_project_files called pattern='{}', dir='{}'", fileNamePattern, dirPath);
+        if (fileNamePattern == null || fileNamePattern.isBlank()) {
+            return "Error: fileNamePattern is required.";
+        }
         List<String> matches = new ArrayList<>();
         
         Path root = getProjectRoot();
@@ -217,6 +220,9 @@ public class FileTools implements AgentToolComponent {
             @P("项目ID") Long projectId
     ) {
         log.info("Tool: write_docx called for {}", fileName);
+        if (fileName == null || fileName.isBlank()) {
+            return "Error: fileName is required.";
+        }
         if (!fileName.endsWith(".docx")) fileName += ".docx";
         
         // Block suspicious filenames that suggest revision
