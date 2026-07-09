@@ -1,0 +1,59 @@
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.svg
+*.webp
+*.ico
+*.tiff
+*.tif
+*.heic
+*.heif
+*.avif
+
+!frontend/public/**/*.png
+!frontend/public/**/*.jpg
+!frontend/public/**/*.jpeg
+!frontend/public/**/*.gif
+!frontend/public/**/*.bmp
+!frontend/public/**/*.svg
+!frontend/public/**/*.webp
+!frontend/public/**/*.ico
+!frontend/public/**/*.tiff
+!frontend/public/**/*.tif
+!frontend/public/**/*.heic
+!frontend/public/**/*.heif
+!frontend/public/**/*.avif
+
+# 保留测试fixtures
+!e2e/fixtures/*.png
+
+# 保留项目模板图片
+!template*.png
+
+# 忽略临时文档，但保留项目文档
+*.md
+!README.md
+# !docs/**/*.md
+!.github/**/*.md
+*.pyc
+.env
+
+# GCP 服务账户文件（包含敏感私钥）
+gcp-service-account.json
+*.ppt
+*.pptx
+generate-example.py
+*.mdc
+*.pdf
+.cursor/worktrees.json
+uploads/
+!assets/*
+
+# 镜像源配置脚本的备份文件
+*.orig
+# 本地备份目录（保存测试文件等）
+_local_backup/
+!CLA.md 
+!CONTRIBUTING.md

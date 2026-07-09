@@ -19,7 +19,10 @@ from services.task_manager import (
     generate_descriptions_task,
     generate_images_task
 )
-from utils import success_response, error_response, not_found, bad_request
+from utils import (
+    success_response, error_response, not_found, bad_request,
+    parse_page_ids_from_body, get_filtered_pages
+)
 
 logger = logging.getLogger(__name__)
 
@@ -264,7 +267,15 @@ def update_project(project_id):
         # Update idea_prompt if provided
         if 'idea_prompt' in data:
             project.idea_prompt = data['idea_prompt']
-        
+
+        # Update outline_text if provided
+        if 'outline_text' in data:
+            project.outline_text = data['outline_text']
+
+        # Update description_text if provided
+        if 'description_text' in data:
+            project.description_text = data['description_text']
+
         # Update extra_requirements if provided
         if 'extra_requirements' in data:
             project.extra_requirements = data['extra_requirements']
@@ -272,6 +283,12 @@ def update_project(project_id):
         # Update template_style if provided
         if 'template_style' in data:
             project.template_style = data['template_style']
+        
+        # Update export settings if provided
+        if 'export_extractor_method' in data:
+            project.export_extractor_method = data['export_extractor_method']
+        if 'export_inpaint_method' in data:
+            project.export_inpaint_method = data['export_inpaint_method']
         
         # Update page order if provided
         if 'pages_order' in data:
@@ -333,10 +350,11 @@ def delete_project(project_id):
 def generate_outline(project_id):
     """
     POST /api/projects/{project_id}/generate/outline - Generate outline
-    
+
     For 'idea' type: Generate outline from idea_prompt
     For 'outline' type: Parse outline_text into structured format
-    
+    For 'descriptions' type: Extract outline structure from description_text
+
     Request body (optional):
     {
         "idea_prompt": "...",  # for idea type
@@ -349,15 +367,12 @@ def generate_outline(project_id):
         if not project:
             return not_found('Project')
         
-        # Get request data and parameters
+        # Get singleton AI service instance
+        ai_service = get_ai_service()
+        
+        # Get request data and language parameter
         data = request.get_json() or {}
         language = data.get('language', current_app.config.get('OUTPUT_LANGUAGE', 'zh'))
-        
-        # Extract model_config if provided by main backend
-        model_config = data.get('model_config')
-        
-        # Get AI service instance (with dynamic config if provided)
-        ai_service = get_ai_service(model_config=model_config)
         
         # Get reference files content and create project context
         reference_files_content = _get_project_reference_files_content(project_id)
@@ -378,8 +393,12 @@ def generate_outline(project_id):
             project_context = ProjectContext(project, reference_files_content)
             outline = ai_service.parse_outline_text(project_context, language=language)
         elif project.creation_type == 'descriptions':
-            # 从描述生成：这个类型应该使用专门的端点
-            return bad_request("Use /generate/from-description endpoint for descriptions type")
+            # 从描述生成：从 description_text 提取大纲结构（仅大纲，不含页面描述）
+            if not project.description_text:
+                return bad_request("description_text is required for descriptions type project")
+
+            project_context = ProjectContext(project, reference_files_content)
+            outline = ai_service.parse_description_to_outline(project_context, language=language)
         else:
             # 一句话生成：从idea生成大纲
             idea_prompt = data.get('idea_prompt') or project.idea_prompt
@@ -589,15 +608,8 @@ def generate_descriptions(project_id):
         
         data = request.get_json() or {}
         # 从配置中读取默认并发数，如果请求中提供了则使用请求的值
-        # 使用配置中的最大并发数，避免触发免费 API 速率限制
-        max_workers = data.get('max_workers', current_app.config.get('MAX_DESCRIPTION_WORKERS', 8))
+        max_workers = data.get('max_workers', current_app.config.get('MAX_DESCRIPTION_WORKERS', 5))
         language = data.get('language', current_app.config.get('OUTPUT_LANGUAGE', 'zh'))
-        
-        # Extract model_config if provided by main backend
-        model_config = data.get('model_config')
-        # #region agent log
-        logger.info(f"[DEBUG] generate_descriptions received model_config: {model_config}")
-        # #endregion
         
         # Create task
         task = Task(
@@ -614,8 +626,8 @@ def generate_descriptions(project_id):
         db.session.add(task)
         db.session.commit()
         
-        # Get AI service instance (with dynamic config if provided)
-        ai_service = get_ai_service(model_config=model_config)
+        # Get singleton AI service instance
+        ai_service = get_ai_service()
         
         # Get reference files content and create project context
         reference_files_content = _get_project_reference_files_content(project_id)
@@ -662,7 +674,8 @@ def generate_images(project_id):
     {
         "max_workers": 8,
         "use_template": true,
-        "language": "zh"  # output language: zh, en, ja, auto
+        "language": "zh",  # output language: zh, en, ja, auto
+        "page_ids": ["id1", "id2"]  # optional: specific page IDs to generate (if not provided, generates all)
     }
     """
     try:
@@ -677,27 +690,33 @@ def generate_images(project_id):
         # IMPORTANT: Expire cached objects to ensure fresh data
         db.session.expire_all()
         
-        # Get pages
-        pages = Page.query.filter_by(project_id=project_id).order_by(Page.order_index).all()
+        data = request.get_json() or {}
+        
+        # Get page_ids from request body and fetch filtered pages
+        selected_page_ids = parse_page_ids_from_body(data)
+        pages = get_filtered_pages(project_id, selected_page_ids if selected_page_ids else None)
         
         if not pages:
             return bad_request("No pages found for project")
         
+        # 检查是否有模板图片或风格描述
+        from services import FileService
+        file_service = FileService(current_app.config['UPLOAD_FOLDER'])
+        use_template = data.get('use_template', True)
+        ref_image_path = None
+        if use_template:
+            ref_image_path = file_service.get_template_path(project_id)
+        
+        if not ref_image_path and not project.template_style:
+            return bad_request("请先上传模板图片或添加风格描述。")
+        
         # Reconstruct outline from pages with part structure
         outline = _reconstruct_outline_from_pages(pages)
         
-        data = request.get_json() or {}
         # 从配置中读取默认并发数，如果请求中提供了则使用请求的值
-        # 使用配置中的最大并发数，避免触发免费 API 速率限制
         max_workers = data.get('max_workers', current_app.config.get('MAX_IMAGE_WORKERS', 8))
         use_template = data.get('use_template', True)
         language = data.get('language', current_app.config.get('OUTPUT_LANGUAGE', 'zh'))
-        
-        # Extract model_config if provided by main backend
-        model_config = data.get('model_config')
-        # #region agent log
-        logger.info(f"[DEBUG] generate_images received model_config: {model_config}")
-        # #endregion
         
         # Create task
         task = Task(
@@ -714,11 +733,8 @@ def generate_images(project_id):
         db.session.add(task)
         db.session.commit()
         
-        # Get AI service instance (with dynamic config if provided)
-        ai_service = get_ai_service(model_config=model_config)
-        
-        from services import FileService
-        file_service = FileService(current_app.config['UPLOAD_FOLDER'])
+        # Get singleton AI service instance
+        ai_service = get_ai_service()
         
         # 合并额外要求和风格描述
         combined_requirements = project.extra_requirements or ""
@@ -743,7 +759,8 @@ def generate_images(project_id):
             current_app.config['DEFAULT_RESOLUTION'],
             app,
             combined_requirements if combined_requirements.strip() else None,
-            language
+            language,
+            selected_page_ids if selected_page_ids else None
         )
         
         # Update project status

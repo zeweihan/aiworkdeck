@@ -16,14 +16,17 @@ from markitdown import MarkItDown
 
 logger = logging.getLogger(__name__)
 
+
+# [checkba] 本地 MinerU 优先逻辑辅助函数 —— re-vendor 升级时需保留（见 UPGRADE_CHECKBA.md）
 def _truthy(value: str) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
 
+
 def _should_force_cloud() -> bool:
     """
-    是否强制走云端 MinerU。
+    [checkba] 是否强制走云端 MinerU。
     优先级：Flask app.config（可被设置页/数据库覆盖） > 环境变量
     """
     try:
@@ -36,6 +39,23 @@ def _should_force_cloud() -> bool:
         # Not in Flask application context
         pass
     return _truthy(os.getenv("MINERU_FORCE_CLOUD", "0"))
+
+
+def _get_local_mineru_url() -> str:
+    """
+    [checkba] 本地 MinerU 服务 URL。
+    优先级：Flask app.config > 环境变量 > 空（不启用本地服务）
+    """
+    try:
+        from flask import current_app
+        if current_app and hasattr(current_app, "config"):
+            v = current_app.config.get("MINERU_LOCAL_URL")
+            if v is not None:
+                return str(v)
+    except RuntimeError:
+        pass
+    return os.getenv("MINERU_LOCAL_URL", "")
+
 
 def _get_ai_provider_format(provider_format: str = None) -> str:
     """Get the configured AI provider format
@@ -70,36 +90,40 @@ def _get_ai_provider_format(provider_format: str = None) -> str:
 class FileParserService:
     """Service for parsing files using MinerU and enhancing with image captions"""
     
-    def __init__(self, mineru_token: str = "", mineru_api_base: str = "https://mineru.net",
-                 mineru_local_url: str = "",
+    def __init__(self, mineru_token: str, mineru_api_base: str = "https://mineru.net",
                  google_api_key: str = "", google_api_base: str = "",
                  openai_api_key: str = "", openai_api_base: str = "",
                  image_caption_model: str = "gemini-3-flash-preview",
-                 provider_format: str = None):
+                 provider_format: str = None,
+                 mineru_model_version: str = "vlm",
+                 mineru_local_url: str = None):
         """
         Initialize the file parser service
-        
+
         Args:
-            mineru_token: MinerU cloud API token (optional if using local service)
-            mineru_api_base: MinerU cloud API base URL
-            mineru_local_url: Local MinerU service URL (e.g., http://mineru-service:8000)
+            mineru_token: MinerU API token (optional if using local service)
+            mineru_api_base: MinerU API base URL
             google_api_key: Google Gemini API key for image captioning (used when AI_PROVIDER_FORMAT=gemini)
             google_api_base: Google Gemini API base URL
             openai_api_key: OpenAI API key for image captioning (used when AI_PROVIDER_FORMAT=openai)
             openai_api_base: OpenAI API base URL
             image_caption_model: Model to use for image captioning
             provider_format: AI provider format ('gemini' or 'openai'). If not provided, reads from environment variable.
+            mineru_model_version: MinerU model version ('vlm' or 'pipeline'). Default is 'vlm'.
+            mineru_local_url: [checkba] Local MinerU service URL (e.g., http://mineru-service:8000).
+                If None, reads from Flask config / MINERU_LOCAL_URL env.
         """
         self.mineru_token = mineru_token
         self.mineru_api_base = mineru_api_base
-        self.mineru_local_url = mineru_local_url
+        self.mineru_model_version = mineru_model_version
         self.get_upload_url_api = f"{mineru_api_base}/api/v4/file-urls/batch"
         self.get_result_api_template = f"{mineru_api_base}/api/v4/extract-results/batch/{{}}"
-        
-        # Check if local MinerU service is available
+
+        # [checkba] Local MinerU service (preferred when reachable, no token required)
+        self.mineru_local_url = mineru_local_url if mineru_local_url is not None else _get_local_mineru_url()
         self._use_local_service = False
         self._local_service_checked = False
-        
+
         # Store config for lazy initialization
         self._google_api_key = google_api_key
         self._google_api_base = google_api_base
@@ -139,19 +163,19 @@ class FileParserService:
             return bool(self._openai_api_key)
         else:
             return bool(self._google_api_key)
-    
+
     def _check_local_service(self) -> bool:
-        """Check if local MinerU service is available (official mineru-api)"""
+        """[checkba] Check if local MinerU service is available (official mineru-api)"""
         if self._local_service_checked:
             return self._use_local_service
-        
+
         self._local_service_checked = True
-        
+
         if not self.mineru_local_url:
             logger.info("No local MinerU service URL configured")
             self._use_local_service = False
             return False
-        
+
         try:
             # Official mineru-api has /docs endpoint
             response = requests.get(
@@ -164,24 +188,24 @@ class FileParserService:
                 return True
         except requests.exceptions.RequestException as e:
             logger.warning(f"Local MinerU service not available: {e}")
-        
+
         self._use_local_service = False
         return False
-    
+
     def _parse_with_local_service(self, file_path: str, filename: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], int]:
         """
-        Parse file using local MinerU service (official mineru-api)
-        
+        [checkba] Parse file using local MinerU service (official mineru-api)
+
         The official mineru-api exposes POST /file_parse endpoint that:
         - Accepts file upload
         - Returns markdown content directly (synchronous)
-        
+
         Returns:
             Tuple of (batch_id, markdown_content, extract_id, error_message, failed_image_count)
         """
         try:
             logger.info(f"Uploading file to local MinerU service (mineru-api): {filename}")
-            
+
             # Official mineru-api uses /file_parse endpoint with multipart form data
             with open(file_path, 'rb') as f:
                 files = {'files': (filename, f)}
@@ -191,7 +215,7 @@ class FileParserService:
                     'return_md': 'true',  # Return markdown in response
                     'return_content_list': 'true',  # Return content list for PPTX generation
                 }
-                
+
                 # Official mineru-api is synchronous and may take a long time
                 response = requests.post(
                     f"{self.mineru_local_url}/file_parse",
@@ -199,25 +223,26 @@ class FileParserService:
                     data=data,
                     timeout=600  # 10 minutes timeout for large PDFs
                 )
-            
+
             if response.status_code != 200:
                 error_msg = f"Failed to parse file with local MinerU: {response.text}"
                 logger.error(error_msg)
                 return None, None, None, error_msg, 0
-            
+
             result = response.json()
-            
+
             # Check for error in response
-            if 'error' in result:
+            # MinerU 3.x 成功响应也带 "error": null —— 只有真值才算错误
+            if result.get('error'):
                 error_msg = f"Local MinerU parsing error: {result['error']}"
                 logger.error(error_msg)
                 return None, None, None, error_msg, 0
-            
+
             # Extract markdown content from response
             # Official MinerU API format: {"backend": "...", "version": "...", "results": {filename: {...}}}
             markdown_content = None
             content_list = []
-            
+
             if 'results' in result and isinstance(result['results'], dict):
                 # New format: {"results": {filename: {"md_content": "...", "content_list": "..."}}}
                 results = result['results']
@@ -226,7 +251,7 @@ class FileParserService:
                     first_file = list(results.values())[0]
                     markdown_content = first_file.get('md_content', '')
                     content_list_raw = first_file.get('content_list')
-                    
+
                     # content_list may be a JSON string, need to parse
                     if isinstance(content_list_raw, str):
                         import json as json_module
@@ -239,37 +264,37 @@ class FileParserService:
                         content_list = content_list_raw
                     else:
                         content_list = []
-                    
+
                     logger.info(f"Parsed MinerU response: backend={result.get('backend')}, version={result.get('version')}")
             elif isinstance(result, list) and len(result) > 0:
                 # Legacy format fallback: [{"md_content": "...", "content_list": [...]}]
                 first_result = result[0]
                 markdown_content = first_result.get('md_content', '')
                 content_list = first_result.get('content_list', [])
-            
+
             if not markdown_content:
                 error_msg = "No markdown content in local MinerU response"
                 logger.error(error_msg)
                 return None, None, None, error_msg, 0
-            
+
             # Generate a unique extract_id for this result
             import uuid
             extract_id = str(uuid.uuid4())[:8]
-            
+
             # Save content_list to local storage for PPTX generation
             if content_list:
                 self._save_local_mineru_result(extract_id, content_list)
-            
+
             logger.info(f"Local MinerU parsing completed, markdown length: {len(markdown_content)}, content_list items: {len(content_list)}")
-            
+
             # Enhance markdown with image captions
             if markdown_content and self._can_generate_captions():
                 logger.info("Enhancing markdown with image captions...")
                 enhanced_content, failed_count = self._enhance_markdown_with_captions(markdown_content)
                 return extract_id, enhanced_content, extract_id, None, failed_count
-            
+
             return extract_id, markdown_content, extract_id, None, 0
-            
+
         except requests.exceptions.Timeout:
             error_msg = "Local MinerU parsing timeout (10 minutes)"
             logger.error(error_msg)
@@ -278,31 +303,31 @@ class FileParserService:
             error_msg = f"Error parsing with local MinerU service: {str(e)}"
             logger.error(error_msg, exc_info=True)
             return None, None, None, error_msg, 0
-    
+
     def _save_local_mineru_result(self, extract_id: str, content_list: list):
-        """Save content_list to local storage for PPTX generation"""
+        """[checkba] Save content_list to local storage for PPTX generation"""
         import json
         from pathlib import Path
-        
+
         try:
             # Navigate to project root
             current_file = Path(__file__).resolve()
             backend_dir = current_file.parent.parent
             project_root = backend_dir.parent
-            
+
             # Create directory for mineru results
             mineru_storage = project_root / 'uploads' / 'mineru_files' / extract_id
             mineru_storage.mkdir(parents=True, exist_ok=True)
-            
+
             # Save content_list as JSON
             content_list_file = mineru_storage / f'{extract_id}_content_list.json'
             with open(content_list_file, 'w', encoding='utf-8') as f:
                 json.dump(content_list, f, ensure_ascii=False, indent=2)
-            
+
             logger.info(f"Saved MinerU content_list to: {content_list_file}")
         except Exception as e:
             logger.warning(f"Failed to save MinerU content_list: {e}")
-    
+
     def parse_file(self, file_path: str, filename: str) -> tuple[Optional[str], Optional[str], Optional[str], Optional[str], int]:
         """
         Parse a file using MinerU service and enhance with image captions
@@ -334,8 +359,8 @@ class FileParserService:
             
             # For other file types, use MinerU service
             logger.info(f"File {filename} requires MinerU parsing...")
-            
-            # Try local MinerU service first (no token required)
+
+            # [checkba] Try local MinerU service first (no token required)
             if _should_force_cloud():
                 logger.info("MINERU_FORCE_CLOUD enabled, skipping local MinerU and using cloud service...")
             elif self._check_local_service():
@@ -345,16 +370,16 @@ class FileParserService:
                     return result
                 else:
                     logger.warning(f"Local MinerU failed: {result[3]}, falling back to cloud service...")
-            
-            # Check if cloud service token is available
+
+            # [checkba] Check if cloud service token is available
             if not self.mineru_token:
                 error_msg = "MinerU token not configured and local service not available"
                 logger.error(error_msg)
                 return None, None, None, error_msg, 0
-            
+
             # Use cloud service
             logger.info("Using MinerU cloud service...")
-            
+
             # Step 1: Get upload URL
             logger.info(f"Step 1/4: Requesting upload URL for {filename}...")
             batch_id, upload_url, error = self._get_upload_url(filename)
@@ -491,7 +516,7 @@ class FileParserService:
         
         upload_data = {
             "files": [{"name": filename}],
-            "model_version": "vlm"  # or "pipeline"
+            "model_version": self.mineru_model_version  # "vlm" or "pipeline"
         }
         
         try:

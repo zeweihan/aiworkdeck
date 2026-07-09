@@ -2,7 +2,10 @@ import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
+import remarkMath from 'remark-math';
 import rehypeRaw from 'rehype-raw';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 
 interface MarkdownProps {
   children: string;
@@ -13,8 +16,8 @@ export const Markdown: React.FC<MarkdownProps> = ({ children, className = '' }) 
   return (
     <div className={`markdown-content ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[rehypeRaw]}
+        remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+        rehypePlugins={[rehypeRaw, rehypeKatex]}
         components={{
         // 自定义渲染规则
         p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
@@ -27,9 +30,9 @@ export const Markdown: React.FC<MarkdownProps> = ({ children, className = '' }) 
           </a>
         ),
         img: ({ src, alt }) => (
-          <img 
-            src={src} 
-            alt={alt || ''} 
+          <img
+            src={src}
+            alt={alt || ''}
             className="max-w-full h-auto rounded-lg my-2"
             loading="lazy"
           />
@@ -40,9 +43,9 @@ export const Markdown: React.FC<MarkdownProps> = ({ children, className = '' }) 
         code: ({ className, children }) => {
           const isInline = !className;
           return isInline ? (
-            <code className="bg-gray-100 px-1 py-0.5 rounded text-sm font-mono">{children}</code>
+            <code className="bg-gray-100 dark:bg-background-secondary px-1 py-0.5 rounded text-sm font-mono">{children}</code>
           ) : (
-            <code className={`${className} block bg-gray-100 p-2 rounded text-sm font-mono overflow-x-auto`}>
+            <code className={`${className} block bg-gray-100 dark:bg-background-secondary p-2 rounded text-sm font-mono overflow-x-auto`}>
               {children}
             </code>
           );
@@ -52,21 +55,21 @@ export const Markdown: React.FC<MarkdownProps> = ({ children, className = '' }) 
         br: () => <br />,
         table: ({ children }) => (
           <div className="overflow-x-auto my-4">
-            <table className="min-w-full border-collapse border border-gray-300">
+            <table className="min-w-full border-collapse border border-gray-300 dark:border-border-primary">
               {children}
             </table>
           </div>
         ),
-        thead: ({ children }) => <thead className="bg-gray-100">{children}</thead>,
+        thead: ({ children }) => <thead className="bg-gray-100 dark:bg-background-secondary">{children}</thead>,
         tbody: ({ children }) => <tbody>{children}</tbody>,
-        tr: ({ children }) => <tr className="border-b border-gray-300">{children}</tr>,
+        tr: ({ children }) => <tr className="border-b border-gray-300 dark:border-border-primary">{children}</tr>,
         th: ({ children }) => (
-          <th className="border border-gray-300 px-4 py-2 text-left font-semibold">
+          <th className="border border-gray-300 dark:border-border-primary px-4 py-2 text-left font-semibold">
             {children}
           </th>
         ),
         td: ({ children }) => (
-          <td className="border border-gray-300 px-4 py-2">
+          <td className="border border-gray-300 dark:border-border-primary px-4 py-2">
             {children}
           </td>
         ),
@@ -77,4 +80,3 @@ export const Markdown: React.FC<MarkdownProps> = ({ children, className = '' }) 
     </div>
   );
 };
-

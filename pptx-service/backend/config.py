@@ -63,30 +63,24 @@ class Config:
     OPENAI_MAX_RETRIES = int(os.getenv('OPENAI_MAX_RETRIES', '2'))  # 减少重试次数，避免过多重试导致累积超时
     
     # AI 模型配置
-    # 注意：模型名称必须是 Gemini API 支持的有效名称
-    TEXT_MODEL = os.getenv('TEXT_MODEL', 'gemini-2.0-flash-exp')
-    IMAGE_MODEL = os.getenv('IMAGE_MODEL', 'gemini-2.0-flash-exp')
+    TEXT_MODEL = os.getenv('TEXT_MODEL', 'gemini-3-flash-preview')
+    IMAGE_MODEL = os.getenv('IMAGE_MODEL', 'gemini-3-pro-image-preview')
 
     # MinerU 文件解析服务配置
-    # 云服务配置（需要 token）
     MINERU_TOKEN = os.getenv('MINERU_TOKEN', '')
     MINERU_API_BASE = os.getenv('MINERU_API_BASE', 'https://mineru.net')
-    # 本地服务配置（优先使用，无需 token）
+    # [checkba] 本地 MinerU 服务配置（优先使用，无需 token）
     MINERU_LOCAL_URL = os.getenv('MINERU_LOCAL_URL', 'http://mineru-service:8000')
-    # 是否强制使用云端 MinerU（跳过本地服务优先逻辑）
+    # [checkba] 是否强制使用云端 MinerU（跳过本地服务优先逻辑）
     # 取值：1/true/yes/on 表示启用
     MINERU_FORCE_CLOUD = os.getenv('MINERU_FORCE_CLOUD', '1')
     
     # 图片识别模型配置
-    IMAGE_CAPTION_MODEL = os.getenv('IMAGE_CAPTION_MODEL', 'gemini-2.0-flash-exp')
+    IMAGE_CAPTION_MODEL = os.getenv('IMAGE_CAPTION_MODEL', 'gemini-3-flash-preview')
     
     # 并发配置
-    # 免费 API 有速率限制（如 OpenRouter 免费模型每分钟 20 次），需要降低并发
-    MAX_DESCRIPTION_WORKERS = int(os.getenv('MAX_DESCRIPTION_WORKERS', '8'))
+    MAX_DESCRIPTION_WORKERS = int(os.getenv('MAX_DESCRIPTION_WORKERS', '5'))
     MAX_IMAGE_WORKERS = int(os.getenv('MAX_IMAGE_WORKERS', '8'))
-    
-    # 请求间隔配置（秒），用于避免触发速率限制
-    API_REQUEST_DELAY = float(os.getenv('API_REQUEST_DELAY', '3.0'))
     
     # 图片生成配置
     DEFAULT_ASPECT_RATIO = "16:9"
@@ -101,6 +95,20 @@ class Config:
     # 输出语言配置
     # 可选值: 'zh' (中文), 'ja' (日本語), 'en' (English), 'auto' (自动)
     OUTPUT_LANGUAGE = os.getenv('OUTPUT_LANGUAGE', 'zh')
+    
+    # 火山引擎配置
+    VOLCENGINE_ACCESS_KEY = os.getenv('VOLCENGINE_ACCESS_KEY', '')
+    VOLCENGINE_SECRET_KEY = os.getenv('VOLCENGINE_SECRET_KEY', '')
+    VOLCENGINE_INPAINTING_TIMEOUT = int(os.getenv('VOLCENGINE_INPAINTING_TIMEOUT', '60'))  # Inpainting 超时时间（秒）
+    VOLCENGINE_INPAINTING_MAX_RETRIES = int(os.getenv('VOLCENGINE_INPAINTING_MAX_RETRIES', '3'))  # 最大重试次数
+
+    # Inpainting Provider 配置（用于 InpaintingService 的单张图片修复）
+    # 可选值: 'volcengine' (火山引擎), 'gemini' (Google Gemini)
+    # 注意: 可编辑PPTX导出功能使用 ImageEditabilityService，其中 HybridInpaintProvider 会结合百度重绘和生成式质量增强
+    INPAINTING_PROVIDER = os.getenv('INPAINTING_PROVIDER', 'gemini')  # 默认使用 Gemini
+
+    # 百度 API 配置（用于 OCR 和图像修复）
+    BAIDU_OCR_API_KEY = os.getenv('BAIDU_OCR_API_KEY', '')
 
 
 class DevelopmentConfig(Config):

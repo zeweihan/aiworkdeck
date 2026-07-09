@@ -83,29 +83,70 @@ def delete_page(project_id, page_id):
     """
     try:
         page = Page.query.get(page_id)
-        
+
         if not page or page.project_id != project_id:
             return not_found('Page')
-        
+
         # Delete page image if exists
         file_service = FileService(current_app.config['UPLOAD_FOLDER'])
         file_service.delete_page_image(project_id, page_id)
-        
+
         # Delete page
         db.session.delete(page)
-        
+
         # Update project
         project = Project.query.get(project_id)
         if project:
             project.updated_at = datetime.utcnow()
-        
+
         db.session.commit()
-        
+
         return success_response(message="Page deleted successfully")
-    
+
     except Exception as e:
         db.session.rollback()
         return error_response('SERVER_ERROR', str(e), 500)
+
+
+@page_bp.route('/<project_id>/pages/<page_id>', methods=['PUT'])
+def update_page(project_id, page_id):
+    """
+    PUT /api/projects/{project_id}/pages/{page_id} - Update page fields
+
+    Request body:
+    {
+        "part": "章节名"
+    }
+    """
+    try:
+        page = Page.query.get(page_id)
+
+        if not page or page.project_id != project_id:
+            return not_found('Page')
+
+        data = request.get_json()
+
+        if not data:
+            return bad_request("Request body is required")
+
+        # Update part field if provided
+        if 'part' in data:
+            page.part = data['part']
+
+        page.updated_at = datetime.utcnow()
+
+        # Update project
+        if page.project:
+            page.project.updated_at = datetime.utcnow()
+
+        db.session.commit()
+
+        return success_response(page.to_dict())
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Failed to update page {page_id}: {e}")
+        return error_response('SERVER_ERROR', 'An internal server error occurred', 500)
 
 
 @page_bp.route('/<project_id>/pages/<page_id>/outline', methods=['PUT'])
@@ -623,127 +664,6 @@ def edit_page_image(project_id, page_id):
 
 
 
-@page_bp.route('/edit-standalone-image', methods=['POST'])
-def edit_standalone_image():
-    """
-    POST /api/projects/edit-standalone-image - Edit a standalone image with AI
-    
-    This API allows editing any image (not tied to a project) using AI.
-    Useful for modifying pages from existing PPT files.
-    
-    Request body (multipart/form-data):
-        - image: The image file to edit (required)
-        - edit_instruction: Natural language edit instruction (required)
-    
-    OR JSON body:
-        - image_url: URL to the image (required)
-        - edit_instruction: Natural language edit instruction (required)
-    
-    Returns:
-        JSON with edited image URL
-    """
-    try:
-        from services.ai_service_manager import get_ai_service
-        import tempfile
-        import os
-        import uuid
-        from PIL import Image as PILImage
-        import requests
-        import io
-        
-        ai_service = get_ai_service()
-        
-        # Parse request
-        if request.is_json:
-            data = request.get_json()
-            image_url = data.get('image_url')
-            edit_instruction = data.get('edit_instruction')
-            
-            if not image_url:
-                return bad_request("image_url is required for JSON request")
-            
-            # Download image from URL
-            response = requests.get(image_url, timeout=30)
-            response.raise_for_status()
-            img = PILImage.open(io.BytesIO(response.content))
-            
-            # Save to temp file
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    img = img.convert('RGB')
-                img.save(tmp, format='PNG')
-                image_path = tmp.name
-        else:
-            # multipart/form-data
-            if 'image' not in request.files:
-                return bad_request("image file is required")
-            
-            image_file = request.files['image']
-            edit_instruction = request.form.get('edit_instruction')
-            
-            # Save uploaded file to temp
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                image_file.save(tmp)
-                image_path = tmp.name
-        
-        if not edit_instruction:
-            return bad_request("edit_instruction is required")
-        
-        logger.info(f"Editing standalone image with instruction: {edit_instruction[:50]}...")
-        
-        # Edit image using AI
-        edited_image = ai_service.edit_image(
-            edit_instruction,
-            image_path,
-            aspect_ratio=current_app.config.get('DEFAULT_ASPECT_RATIO', '16:9'),
-            resolution=current_app.config.get('DEFAULT_RESOLUTION', '2K'),
-            original_description=None,
-            additional_ref_images=None
-        )
-        
-        # Clean up temp input file
-        if os.path.exists(image_path):
-            os.remove(image_path)
-        
-        if not edited_image:
-            return error_response('AI_SERVICE_ERROR', 'Failed to edit image', 503)
-        
-        # Convert Google GenAI Image to PIL Image if needed
-        if not isinstance(edited_image, PILImage.Image):
-            if hasattr(edited_image, '_pil_image'):
-                edited_image = edited_image._pil_image
-            else:
-                return error_response('SERVER_ERROR', f'Unexpected image type: {type(edited_image)}', 500)
-        
-        # Save edited image to uploads folder
-        output_filename = f"standalone_edit_{uuid.uuid4().hex[:8]}.png"
-        output_dir = Path(current_app.config['UPLOAD_FOLDER']) / 'standalone_edits'
-        output_dir.mkdir(parents=True, exist_ok=True)
-        output_path = output_dir / output_filename
-        
-        if edited_image.mode in ('RGBA', 'LA', 'P'):
-            edited_image = edited_image.convert('RGB')
-        edited_image.save(str(output_path), format='PNG')
-        
-        # Build download URL
-        download_path = f"/files/standalone_edits/{output_filename}"
-        base_url = request.url_root.rstrip("/")
-        download_url_absolute = f"{base_url}{download_path}"
-        
-        logger.info(f"Standalone image edited successfully: {output_path}")
-        
-        return success_response({
-            'image_url': download_path,
-            'image_url_absolute': download_url_absolute
-        })
-    
-    except requests.exceptions.RequestException as e:
-        return error_response('NETWORK_ERROR', f'Failed to download image: {str(e)}', 400)
-    except Exception as e:
-        logger.exception("Error editing standalone image")
-        return error_response('SERVER_ERROR', str(e), 500)
-
-
 @page_bp.route('/<project_id>/pages/<page_id>/image-versions', methods=['GET'])
 def get_page_image_versions(project_id, page_id):
     """
@@ -766,120 +686,6 @@ def get_page_image_versions(project_id, page_id):
         return error_response('SERVER_ERROR', str(e), 500)
 
 
-@page_bp.route('/edit-pptx-slide', methods=['POST'])
-def edit_pptx_slide():
-    """
-    POST /api/projects/edit-pptx-slide - Edit a slide in an existing PPTX file
-    
-    This API allows editing a specific slide in a PPTX file using AI.
-    It extracts the slide image, edits it with AI, and replaces it back.
-    
-    Request (multipart/form-data):
-        - pptx_file: The PPTX file (required)
-        - slide_index: Slide index (1-based, required)
-        - edit_instruction: Natural language edit instruction (required)
-        - model_config: AI model configuration JSON (optional, for API key and model settings)
-    
-    Returns:
-        Modified PPTX file as download
-    """
-    try:
-        from services.ai_service_manager import get_ai_service
-        from services.export_service import ExportService
-        import tempfile
-        import os
-        import uuid
-        import json
-        
-        # Parse model_config if provided (for using main backend's AI configuration)
-        model_config_str = request.form.get('model_config')
-        model_config = None
-        if model_config_str:
-            try:
-                model_config = json.loads(model_config_str)
-                logger.info(f"[DEBUG] edit_pptx_slide received model_config: provider={model_config.get('provider')}, image_model={model_config.get('image_model')}")
-            except json.JSONDecodeError as e:
-                logger.warning(f"Failed to parse model_config: {e}")
-        
-        # Get AI service with model config (uses main backend's API key and model)
-        ai_service = get_ai_service(model_config=model_config)
-        
-        # Validate request
-        if 'pptx_file' not in request.files:
-            return bad_request("pptx_file is required")
-        
-        pptx_file = request.files['pptx_file']
-        slide_index_str = request.form.get('slide_index')
-        edit_instruction = request.form.get('edit_instruction')
-        
-        if not slide_index_str:
-            return bad_request("slide_index is required")
-        
-        try:
-            slide_index = int(slide_index_str)
-        except ValueError:
-            return bad_request("slide_index must be an integer")
-        
-        if not edit_instruction:
-            return bad_request("edit_instruction is required")
-        
-        logger.info(f"Editing PPTX slide {slide_index} with instruction: {edit_instruction[:50]}...")
-        
-        # Save uploaded file to temp
-        with tempfile.NamedTemporaryFile(suffix='.pptx', delete=False) as tmp:
-            pptx_file.save(tmp)
-            input_pptx_path = tmp.name
-        
-        # Create output path
-        output_pptx_path = tempfile.mktemp(suffix='.pptx')
-        
-        # Edit the slide
-        success, message, result_path = ExportService.edit_slide_with_ai(
-            pptx_path=input_pptx_path,
-            slide_index=slide_index,
-            edit_instruction=edit_instruction,
-            ai_service=ai_service,
-            output_path=output_pptx_path
-        )
-        
-        # Clean up input file
-        if os.path.exists(input_pptx_path):
-            os.remove(input_pptx_path)
-        
-        if not success:
-            if os.path.exists(output_pptx_path):
-                os.remove(output_pptx_path)
-            return error_response('EDIT_FAILED', message, 400)
-        
-        # Save edited file to uploads folder for download
-        output_filename = f"edited_slide_{uuid.uuid4().hex[:8]}.pptx"
-        output_dir = Path(current_app.config['UPLOAD_FOLDER']) / 'edited_pptx'
-        output_dir.mkdir(parents=True, exist_ok=True)
-        final_output_path = output_dir / output_filename
-        
-        # Move temp file to output dir
-        import shutil
-        shutil.move(output_pptx_path, str(final_output_path))
-        
-        # Build download URL
-        download_path = f"/files/edited_pptx/{output_filename}"
-        base_url = request.url_root.rstrip("/")
-        download_url_absolute = f"{base_url}{download_path}"
-        
-        logger.info(f"PPTX slide edited successfully: {final_output_path}")
-        
-        return success_response({
-            'download_url': download_path,
-            'download_url_absolute': download_url_absolute,
-            'message': message,
-            'slide_index': slide_index
-        })
-    
-    except Exception as e:
-        logger.exception("Error editing PPTX slide")
-        return error_response('SERVER_ERROR', str(e), 500)
-
-
 @page_bp.route('/<project_id>/pages/<page_id>/image-versions/<version_id>/set-current', methods=['POST'])
 def set_current_image_version(project_id, page_id, version_id):
     """
@@ -899,10 +705,20 @@ def set_current_image_version(project_id, page_id, version_id):
         
         # Mark all versions as not current
         PageImageVersion.query.filter_by(page_id=page_id).update({'is_current': False})
-        
+
         # Set this version as current
         version.is_current = True
         page.generated_image_path = version.image_path
+
+        # 更新 cached_image_path，指向该版本的缓存图（如果存在）
+        file_service = FileService(current_app.config['UPLOAD_FOLDER'])
+        cached_relative_path = file_service.get_cached_image_path(project_id, page_id, version.version_number)
+        if file_service.file_exists(cached_relative_path):
+            page.cached_image_path = cached_relative_path
+        else:
+            # 缓存文件不存在，设置为 None，to_dict() 会回退到原图
+            page.cached_image_path = None
+
         page.updated_at = datetime.utcnow()
         
         db.session.commit()

@@ -15,6 +15,27 @@ from config import get_config
 logger = logging.getLogger(__name__)
 
 
+def _log_retry(retry_state):
+    """记录重试信息"""
+    logger.warning(
+        f"GenAI 请求失败，正在重试 ({retry_state.attempt_number}/{get_config().GENAI_MAX_RETRIES + 1})，"
+        f"错误: {retry_state.outcome.exception() if retry_state.outcome else 'unknown'}"
+    )
+
+
+def _validate_response(response):
+    """验证响应是否有效，无效则抛出异常触发重试"""
+    if response.text is None:
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+            if hasattr(candidate, 'finish_reason'):
+                logger.warning(f"Response text is None, finish_reason: {candidate.finish_reason}")
+            if hasattr(candidate, 'safety_ratings'):
+                logger.warning(f"Safety ratings: {candidate.safety_ratings}")
+        raise ValueError("AI model returned empty response (response.text is None)")
+    return response.text
+
+
 class GenAITextProvider(TextProvider):
     """Text generation using Google GenAI SDK (supports both AI Studio and Vertex AI)"""
 
@@ -65,24 +86,67 @@ class GenAITextProvider(TextProvider):
     
     @retry(
         stop=stop_after_attempt(get_config().GENAI_MAX_RETRIES + 1),
-        wait=wait_exponential(multiplier=1, min=2, max=10)
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=True,
+        before_sleep=_log_retry
     )
-    def generate_text(self, prompt: str, thinking_budget: int = 1000) -> str:
+    def generate_text(self, prompt: str, thinking_budget: int = 0) -> str:
         """
         Generate text using Google GenAI SDK
         
         Args:
             prompt: The input prompt
-            thinking_budget: Thinking budget for the model
+            thinking_budget: Thinking budget for the model (0 = disable thinking)
             
         Returns:
             Generated text
         """
+        # 构建配置，只有在 thinking_budget > 0 时才启用推理模式
+        config_params = {}
+        if thinking_budget > 0:
+            config_params['thinking_config'] = types.ThinkingConfig(thinking_budget=thinking_budget)
+        
         response = self.client.models.generate_content(
             model=self.model,
             contents=prompt,
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=thinking_budget),
-            ),
+            config=types.GenerateContentConfig(**config_params) if config_params else None,
         )
-        return response.text
+        return _validate_response(response)
+    
+    @retry(
+        stop=stop_after_attempt(get_config().GENAI_MAX_RETRIES + 1),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        reraise=True,
+        before_sleep=_log_retry
+    )
+    def generate_with_image(self, prompt: str, image_path: str, thinking_budget: int = 0) -> str:
+        """
+        Generate text with image input using Google GenAI SDK (multimodal)
+        
+        Args:
+            prompt: The input prompt
+            image_path: Path to the image file
+            thinking_budget: Thinking budget for the model (0 = disable thinking)
+            
+        Returns:
+            Generated text
+        """
+        from PIL import Image
+        
+        # 加载图片
+        img = Image.open(image_path)
+        
+        # 构建多模态内容
+        contents = [img, prompt]
+        
+        # 构建配置，只有在 thinking_budget > 0 时才启用推理模式
+        config_params = {}
+        if thinking_budget > 0:
+            config_params['thinking_config'] = types.ThinkingConfig(thinking_budget=thinking_budget)
+        
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(**config_params) if config_params else None,
+        )
+        return _validate_response(response)
