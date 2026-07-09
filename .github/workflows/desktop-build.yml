@@ -220,7 +220,7 @@ jobs:
           PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
           export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/pptx-service/lib"
           (cd "$APP" && "$PY" -m alembic -c alembic.ini upgrade head)
-          PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
+          PORT=5099 BACKEND_PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
           PPTX_PID=$!
           for i in $(seq 1 30); do
             sleep 2
@@ -365,7 +365,7 @@ jobs:
           PY="$PWD/desktop/bundled/win-x64/python/python.exe"
           export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/pptx-service/lib"
           (cd "$APP" && "$PY" -m alembic -c alembic.ini upgrade head)
-          PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
+          PORT=5099 BACKEND_PORT=5099 FLASK_ENV=production "$PY" "$APP/app.py" > "$RUNNER_TEMP/pptx-smoke.log" 2>&1 &
           PPTX_PID=$!
           for i in $(seq 1 30); do
             sleep 2
