@@ -55,7 +55,15 @@ exists() {
   local name="$1" m="$2" p="$3" b="${4:-}"
   local c; c="$(code "$m" "$p" "$b")"
   if [ -z "$c" ] || [ "$c" = "000" ]; then bad "$name：连不上 $BASE（服务没起？）"; return; fi
-  if [ "$c" = "404" ]; then bad "$name：$m $p 返回 404——路由已删/改名，PptxServiceClient 需适配"; else ok "$name：$m $p 存在（HTTP $c）"; fi
+  if [ "$c" = "404" ]; then
+    # 区分两种 404：应用级（handler 查无此资源，返回结构化 JSON，路由存在）
+    # vs 路由级（Flask 默认 404 HTML，路由已删/改名）
+    if grep -q '"success"' "$TMP/body" 2>/dev/null; then
+      ok "$name：$m $p 存在（HTTP 404 为应用级『查无此资源』，路由在）"
+    else
+      bad "$name：$m $p 返回路由级 404——路由已删/改名，PptxServiceClient 需适配"
+    fi
+  else ok "$name：$m $p 存在（HTTP $c）"; fi
 }
 
 log "目标服务：$BASE"
