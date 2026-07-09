@@ -232,7 +232,8 @@ class FileParserService:
             result = response.json()
 
             # Check for error in response
-            if 'error' in result:
+            # MinerU 3.x 成功响应也带 "error": null —— 只有真值才算错误
+            if result.get('error'):
                 error_msg = f"Local MinerU parsing error: {result['error']}"
                 logger.error(error_msg)
                 return None, None, None, error_msg, 0
