@@ -26,7 +26,9 @@ function spawnEnv(ctx) {
     ...process.env,
     PYTHONPATH: libDir(ctx),
     PPTX_DATA_DIR: dataDir(ctx),
+    // banana-slides 0.4.0 起监听端口读 BACKEND_PORT（0.1 读 PORT）——两个都传，升降级均可用
     PORT: String(ctx.ports['pptx-service']),
+    BACKEND_PORT: String(ctx.ports['pptx-service']),
     FLASK_ENV: 'production'
   }
   // 本地 MinerU 动态端口 + 云端兜底默认关闭（设计 §2.4 出网收口；可用 env 显式放开）
