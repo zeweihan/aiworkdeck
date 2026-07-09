@@ -41,18 +41,13 @@ class Task(db.Model):
         else:
             self.progress = None
     
-    def update_progress(self, completed=None, failed=None, **kwargs):
+    def update_progress(self, completed=None, failed=None):
         """Update progress incrementally"""
         prog = self.get_progress()
         if completed is not None:
             prog['completed'] = completed
         if failed is not None:
             prog['failed'] = failed
-        
-        # Update with any additional fields (like warnings)
-        for key, value in kwargs.items():
-            prog[key] = value
-            
         self.set_progress(prog)
     
     def to_dict(self):

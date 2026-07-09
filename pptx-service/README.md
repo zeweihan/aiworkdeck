@@ -12,7 +12,7 @@
 [![GitHub Forks](https://img.shields.io/github/forks/Anionex/banana-slides?style=square)](https://github.com/Anionex/banana-slides/network)
 [![GitHub Watchers](https://img.shields.io/github/watchers/Anionex/banana-slides?style=square)](https://github.com/Anionex/banana-slides/watchers)
 
-[![Version](https://img.shields.io/badge/version-v0.1.0-4CAF50.svg)](https://github.com/Anionex/banana-slides)
+[![Version](https://img.shields.io/badge/version-v0.3.0-4CAF50.svg)](https://github.com/Anionex/banana-slides)
 ![Docker](https://img.shields.io/badge/Docker-Build-2496ED?logo=docker&logoColor=white)
 [![GitHub issues](https://img.shields.io/github/issues-raw/Anionex/banana-slides)](https://github.com/Anionex/banana-slides/issues)
 [![GitHub pull requests](https://img.shields.io/github/issues-pr-raw/Anionex/banana-slides)](https://github.com/Anionex/banana-slides/pulls)
@@ -111,16 +111,68 @@
 <img width="1000" alt="image" src="https://github.com/user-attachments/assets/3e54bbba-88be-4f69-90a1-02e875c25420" />
 <img width="1748" height="538" alt="PPT与PDF导出" src="https://github.com/user-attachments/assets/647eb9b1-d0b6-42cb-a898-378ebe06c984" />
 
-### 5. 可编辑组件pptx导出（Beta迭代中）
-- **智能递归进行组件分析提取、文字提取、表格提取，最终得到可手动编辑的pptx**
+### 5. 可自由编辑的pptx导出（Beta迭代中）
+- **导出图像为高还原度、背景干净的、可自由编辑图像和文字的PPT页面**
+- 相关更新见 https://github.com/Anionex/banana-slides/issues/121
+- **若出现可编辑 ppt 效果不佳，如文字重叠、文字无样式等问题，一般为配置问题导致，可参考[可编辑PPTX导出常见问题及排查解决方案](https://github.com/Anionex/banana-slides/issues/121#issuecomment-3708872527) 进行排查**
 <img width="1000"  alt="image" src="https://github.com/user-attachments/assets/a85d2d48-1966-4800-a4bf-73d17f914062" />
+
+<br>
+
+**🌟和notebooklm slide deck功能对比**
+| 功能 | notebooklm | 本项目 | 
+| --- | --- | --- |
+| 页数上限 | 15页 | **无限制** | 
+| 二次编辑 | 不支持 | **框选编辑+口头编辑** |
+| 素材添加 | 生成后无法添加 | **生成后自由添加** |
+| 导出格式 | 仅支持导出为 PDF | **导出为PDF、(可编辑)pptx** |
+| 水印 | 免费版有水印 | **无水印，自由增删元素** |
+
+> 注：随着新功能添加,对比可能过时
+
 
 
 ## 🔥 近期更新
-- 【12-27】: 加入了对无图片模板模式的支持和较高质量的文字预设，现在可以通过纯文字描述的方式来控制ppt页面风格
-- 【12-25】: https://github.com/Anionex/banana-slides/pull/82 支持了基于版面识别、局部重绘和递归分析的可编辑pptx导出方法，开发者可切换至该分支提前尝鲜⛱️
-- 【12-24】: main分支加入了基于nano-banana-pro背景提取的可编辑pptx导出方法（目前Beta）
+- 【2-9】：
+  * 新功能
+    * 支持在首页、大纲、描述卡片里面粘贴图片并立即识别，并提供更好的交互体验
+    * 大纲章节手动编辑：支持手动调整页面所属章节（part）。
+    * Docker 多架构：镜像支持 amd64 / arm64 构建。
+    * 国际化 + 暗黑模式：新增中英文切换；支持亮色/暗色/跟随系统主题；全组件适配暗黑模式。
+  * 修复与体验优化
+    * 修复导出相关 500、参考文件关联时序、outline/page 数据错位、任务轮询错误项目、描述生成无限轮询、图片预览内存泄漏、批量删除部分失败处理。
+    * 优化格式示例提示、HTTP 错误提示文案、Modal 关闭体验、清理旧项目 localStorage、移除首次创建项目冗余提示。
+    * 若干其他优化和修复
 
+- 【1-4】 : v0.3.0发布：可编辑pptx导出全面升级：
+  * 支持最大程度还原图片中文字的字号、颜色、加粗等样式；
+  * 支持了识别表格中的文字内容；
+  * 更精确的文字大小和文字位置还原逻辑
+  * 优化导出工作流，大大减少了导出后背景图残留文字的现象；
+  * 支持页面多选逻辑，灵活选择需要生成和导出的具体页面。
+  * **详细效果和使用方法见 https://github.com/Anionex/banana-slides/issues/121**
+
+- 【12-27】: 加入了对无图片模板模式的支持和较高质量的文字预设，现在可以通过纯文字描述的方式来控制ppt页面风格
+
+
+## **🔧 常见问题**
+
+1. **生成页面文字有乱码，文字不清晰**
+    - 可选择更高分辨率的输出（openai 格式可能不支持调高分辨率，建议使用gemini格式）。根据测试，生成页面前将 1k 分辨率调整至 2k 后，文字渲染质量会显著提升。
+    - 请确保在页面描述中包含具体要渲染的文字内容。
+
+2. **导出可编辑 ppt 效果不佳，如文字重叠、无样式等**
+    - 90% 情况为 API 配置出现问题。可以参考 [issue 121](https://github.com/Anionex/banana-slides/issues/121) 中的排查与解决方案。
+
+3. **支持免费层级的 Gemini API Key 吗？**
+    - 免费层级只支持文本生成，不支持图片生成。
+
+4. **生成内容时提示 503 错误或 Retry Error**
+    - 可以根据 README 中的命令查看 Docker 后端日志，定位 503 问题的详细报错，一般是模型配置不正确导致。
+
+5. **.env 中设置了 API Key 之后，为什么不生效？**
+    - 运行时编辑 `.env` 后需要重启 Docker 容器以应用更改。
+    - 如果曾在网页设置页中配置参数，会覆盖 `.env` 中的参数，可通过“还原默认设置”恢复为 `.env` 设置。
 
 ## 🗺️ 开发计划
 
@@ -133,15 +185,15 @@
 | ✅ 已完成 | 素材模块: 素材生成、上传等 |
 | ✅ 已完成 | 支持多种文件的上传+解析 |
 | ✅ 已完成 | 支持Vibe口头调整大纲和描述 |
-| ✅ 已完成 | 支持初步可编辑版pptx文件导出（mineru） |
-| 🔄 进行中 | 支持已生成图片的元素分割和进一步编辑（segment + inpaint） |
+| ✅ 已完成 | 初步支持可编辑版本pptx文件导出 |
+| 🔄 进行中 | 支持多层次、精确抠图的可编辑pptx导出 |
 | 🔄 进行中 | 网络搜索 |
 | 🔄 进行中 | Agent 模式 |
 | 🧭 规划中 | 优化前端加载速度 |
 | 🧭 规划中 | 在线播放功能 |
 | 🧭 规划中 | 简单的动画和页面切换效果 |
-| 🧭 规划中 | 多语种支持 |
-| 🧭 规划中 | 用户系统 |
+| 🚍 部分支持 | 多语种支持 |
+| 🏢商业版功能 | 用户系统 |
 
 ## 📦 使用方法
 
@@ -171,7 +223,8 @@ cp .env.example .env
 ```
 
 编辑 `.env` 文件，配置必要的环境变量：
-> **项目中大模型接口以AIHubMix平台格式为标准，推荐使用 [AIHubMix](https://aihubmix.com/?aff=17EC) 获取API密钥，减小迁移成本**  
+> **项目中大模型接口以AIHubMix平台格式为标准，推荐使用 [AIHubMix](https://aihubmix.com/?aff=17EC) 获取API密钥，减小迁移成本**<br>
+> **友情提示：谷歌nano banana pro模型接口费用较高，请注意调用成本**
 ```env
 # AI Provider格式配置 (gemini / openai / vertex)
 AI_PROVIDER_FORMAT=gemini
@@ -193,6 +246,9 @@ OPENAI_API_BASE=https://api.openai.com/v1
 # GOOGLE_APPLICATION_CREDENTIALS=./gcp-service-account.json
 ...
 ```
+
+**使用新版可编辑导出配置方法，获得更好的可编辑导出效果**: 需在[百度智能云平台](https://console.bce.baidu.com/iam/#/iam/apikey/list)中获取API KEY，填写在.env文件中的BAIDU_OCR_API_KEY字段（有充足的免费使用额度）。详见https://github.com/Anionex/banana-slides/issues/121 中的说明
+
 
 <details>
   <summary>📒 使用 Vertex AI（GCP 免费额度）</summary>
@@ -221,6 +277,21 @@ OPENAI_API_BASE=https://api.openai.com/v1
 
 2. **启动服务**
 
+**⚡ 使用预构建镜像（推荐）**
+
+项目在 Docker Hub 提供了构建好的前端和后端镜像（同步主分支最新版本），可以跳过本地构建步骤，实现快速部署：
+
+```bash
+# 使用预构建镜像启动（无需从头构建）
+docker compose -f docker-compose.prod.yml up -d
+```
+
+镜像名称：
+- `anoinex/banana-slides-frontend:latest`
+- `anoinex/banana-slides-backend:latest`
+
+**从头构建镜像**
+
 ```bash
 docker compose up -d
 ```
@@ -245,14 +316,14 @@ docker compose up -d
 4. **查看日志**
 
 ```bash
-# 查看后端日志（实时查看最后50行）
-sudo docker compose logs -f --tail 50 backend
+# 查看后端日志（最后 200 行）
+docker logs --tail 200 banana-slides-backend
 
-# 查看所有服务日志
-sudo docker compose logs -f --tail 50
+# 实时查看后端日志（最后 100 行）
+docker logs -f --tail 100 banana-slides-backend
 
-# 查看前端日志
-sudo docker compose logs -f --tail 50 frontend
+# 查看前端日志（最后 100 行）
+docker logs --tail 100 banana-slides-frontend
 ```
 
 5. **停止服务**
@@ -271,6 +342,8 @@ docker compose down
 docker compose build --no-cache
 docker compose up -d
 ```
+
+**注：感谢优秀开发者朋友 [@ShellMonster](https://github.com/ShellMonster/) 提供了[新人部署教程](https://github.com/ShellMonster/banana-slides/blob/docs-deploy-tutorial/docs/NEWBIE_DEPLOYMENT.md)，专为没有任何服务器部署经验的新手设计，可[点击链接](https://github.com/ShellMonster/banana-slides/blob/docs-deploy-tutorial/docs/NEWBIE_DEPLOYMENT.md)查看。**
 
 ### 从源码部署
 
@@ -331,7 +404,8 @@ OPENAI_API_BASE=https://api.openai.com/v1
 # VERTEX_LOCATION=global
 # GOOGLE_APPLICATION_CREDENTIALS=./gcp-service-account.json
 
-PORT=5000
+# 可修改此变量来控制后端服务端口
+BACKEND_PORT=5000
 ...
 ```
 
@@ -497,25 +571,16 @@ banana-slides/
 └── README.md                   # 本文件
 ```
 
+
 ## 交流群
 为了方便大家沟通互助，建此微信交流群.
 
 欢迎提出新功能建议或反馈，本人也会~~佛系~~回答大家问题
 
-<img width="300" alt="image" src="https://github.com/user-attachments/assets/b37b6144-5152-4f30-9b90-0c0678374437" />
+<img width="301" alt="image" src="https://github.com/user-attachments/assets/c6ab4c96-8e89-4ab3-b347-04d50df4989b" />
 
 
-**常见问题**
-1.  **支持免费层级的 Gemini API Key 吗？**
-    *   免费层级只支持文本生成，不支持图片生成。
-2.  **生成内容时提示 503 错误或 Retry Error**
-    *   可以根据 README 中的命令查看 Docker 内部日志，定位 503 问题的详细报错，一般是模型配置不正确导致。
-3.  **.env 中设置了 API Key 之后，为什么不生效？**
-    1.  运行时编辑.env需要重启 Docker 容器以应用更改。
-    2.  如果曾在网页设置页中设置，会覆盖 `.env` 中参数，可通过“还原默认设置”还原到 `.env`。
-4.  **生成页面文字有乱码**
-    *   可以尝试更高分辨率的输出（openai格式可能不支持调高分辨率）
-    *   确保在页面描述中包含具体要渲染的文字内容
+
   
 
 ## 🤝 贡献指南
@@ -558,13 +623,39 @@ banana-slides/
 
 
 <h2>🚀 Sponsor / 赞助 </h2>
-
+<br>
 <div align="center">
 <a href="https://aihubmix.com/?aff=17EC">
   <img src="./assets/logo_aihubmix.png" alt="AIHubMix" style="height:48px;">
 </a>
 <p>感谢AIHubMix对本项目的赞助</p>
 </div>
+
+
+<div align="center">
+
+ <br>
+
+<a href="https://api.chatfire.site/login?inviteCode=A15CD6A0"><img width="200" alt="image" src="https://github.com/user-attachments/assets/d6bd255f-ba2c-4ea3-bd90-fef292fc3397" />
+</a>
+
+
+<details>
+  <summary>感谢<a href="https://api.chatfire.site/login?inviteCode=A15CD6A0">AI火宝</a>对本项目的赞助</summary>
+  “聚合全球多模型API服务商。更低价格享受安全、稳定且72小时链接全球最新模型的服务。”
+</details>
+
+
+<a href="https://www.rainyun.com/anionex_">
+ <img width="150" alt="image" src="https://github.com/user-attachments/assets/9c1ab6d5-2b67-42ad-b4c4-d1c172a0068a" />
+
+</a>
+
+感谢雨云为本项目赞助云服务器，支持项目开发部署~
+ 
+</div>
+
+
 
 ## 致谢
 
@@ -581,8 +672,8 @@ banana-slides/
 <img width="240" alt="image" src="https://github.com/user-attachments/assets/fd7a286d-711b-445e-aecf-43e3fe356473" />
 
 感谢以下朋友对项目的无偿赞助支持：
-> @雅俗共赏、@曹峥、@以年观日、@John、@azazo1、@刘聪NLP、@🍟、@苍何、@biubiu  
-> 如对赞助列表有疑问（如赞赏后没看到您的名字），可<a href="mailto:anionex@qq.com">联系作者</a>
+> @雅俗共赏、@曹峥、@以年观日、@John、@胡yun星Ethan, @azazo1、@刘聪NLP、@🍟、@苍何、@万瑾、@biubiu、@law、@方源、@寒松Falcon
+> 如对赞助列表有疑问，可<a href="mailto:anionex@qq.com">联系作者</a>
  
 ## 📈 项目统计
 

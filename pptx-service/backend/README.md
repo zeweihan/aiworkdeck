@@ -71,6 +71,12 @@ cp .env.example .env
 ```env
 GOOGLE_API_KEY=your-google-api-key
 GOOGLE_API_BASE=https://generativelanguage.googleapis.com
+
+# 火山引擎配置（可选，用于 Inpainting 图像消除功能）
+VOLCENGINE_ACCESS_KEY=your-volcengine-access-key
+VOLCENGINE_SECRET_KEY=your-volcengine-secret-key
+VOLCENGINE_INPAINTING_TIMEOUT=60
+VOLCENGINE_INPAINTING_MAX_RETRIES=3
 ```
 
 ### 3. 初始化 / 升级数据库结构（Alembic 迁移）
@@ -155,7 +161,30 @@ uv run python app.py
 - 生成图片管理
 - 自动清理机制
 
-### 4. 数据持久化
+### 4. Inpainting 图像消除（可选）
+
+基于火山引擎的 Inpainting 服务，支持：
+- 根据边界框（bbox）精确消除图像区域
+- 自动生成掩码图像
+- 重新生成背景（保留前景，消除其他区域）
+- 支持批量处理和重试机制
+
+使用方法：
+```python
+from services.inpainting_service import InpaintingService, remove_regions
+from PIL import Image
+
+# 方式1：使用服务类
+service = InpaintingService()
+image = Image.open('original.png')
+bboxes = [(100, 100, 200, 200), (300, 150, 400, 250)]  # 要消除的区域
+result = service.remove_regions_by_bboxes(image, bboxes)
+
+# 方式2：使用便捷函数
+result = remove_regions(image, bboxes, expand_pixels=5)
+```
+
+### 5. 数据持久化
 
 使用 SQLite + SQLAlchemy：
 - 轻量级，无需额外配置
@@ -294,18 +323,19 @@ A: 从当前版本开始，推荐通过前端“系统设置”页面修改：
 
 这些值会保存到 `settings` 表并覆盖 `.env` 中对应配置，点击“重置为默认值”会回到 `.env` 的默认值。
 
-### Q: 我已经配置了 MinerU 云端 Token，为什么导出可编辑 PPTX 还是在用本地 MinerU？
-A: `FileParserService` 默认是“本地优先，云端兜底”：只要 `MINERU_LOCAL_URL` 指向的服务可用（`/docs` 返回 200），就会优先走本地解析；本地不可用时才会使用 `MINERU_TOKEN` 调用云端 MinerU。
-
-如果你希望**强制使用云端 MinerU**（例如本地解析效果较差），可以在 `.env` 里设置：
-
-- `MINERU_FORCE_CLOUD=1`
-
-注意：如果你在“系统设置”页面保存过 MinerU 配置，数据库中的 `settings` 会覆盖 `.env`；如需回退到 `.env` 的默认值，请在设置页点击“重置为默认值”。
-
 ### Q: 支持哪些图片格式？
 A: PNG, JPG, JPEG, GIF, WEBP。在 `config.py` 中的 `ALLOWED_EXTENSIONS` 配置。
 
+
+## 开源字体说明
+
+本项目包含 **Noto Sans CJK SC**（思源黑体简体中文）字体文件，用于 PPT 导出时的精确文本测量。
+
+- **字体文件**: `fonts/NotoSansSC-Regular.ttf`
+- **来源**: [Google Noto CJK Fonts](https://github.com/googlefonts/noto-cjk)
+- **许可证**: [SIL Open Font License 1.1 (OFL)](https://scripts.sil.org/OFL)
+
+OFL 许可证允许自由使用、修改和分发该字体。
 
 ## 联系方式
 

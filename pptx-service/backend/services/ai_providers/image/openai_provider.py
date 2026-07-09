@@ -1,5 +1,13 @@
 """
 OpenAI SDK implementation for image generation
+
+Supports multiple resolution parameter formats for different OpenAI-compatible providers:
+- Flat style: extra_body.aspect_ratio + extra_body.resolution
+- Nested style: extra_body.generationConfig.imageConfig.aspectRatio + imageSize
+
+Note: Not all providers support 2K/4K resolution in OpenAI format.
+Some may only return 1K regardless of settings.
+Resolution validation is handled at the task_manager level for all providers.
 """
 import logging
 import base64
@@ -16,9 +24,18 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIImageProvider(ImageProvider):
-    """Image generation using OpenAI SDK (compatible with Gemini via proxy)"""
+    """
+    Image generation using OpenAI SDK (compatible with Gemini via proxy)
     
-    def __init__(self, api_key: str, api_base: str = None, model: str = "google/gemini-3-pro-image-preview"):
+    Supports multiple resolution parameter formats for different providers.
+    Resolution support varies by provider:
+    - Some providers support 2K/4K via extra_body parameters
+    - Some providers only support 1K regardless of settings
+    
+    The provider will try multiple parameter formats to maximize compatibility.
+    """
+    
+    def __init__(self, api_key: str, api_base: str = None, model: str = "gemini-3-pro-image-preview"):
         """
         Initialize OpenAI image provider
         
@@ -33,6 +50,7 @@ class OpenAIImageProvider(ImageProvider):
             timeout=get_config().OPENAI_TIMEOUT,  # set timeout from config
             max_retries=get_config().OPENAI_MAX_RETRIES  # set max retries from config
         )
+        self.api_base = api_base or ""
         self.model = model
     
     def _encode_image_to_base64(self, image: Image.Image) -> str:
@@ -52,23 +70,68 @@ class OpenAIImageProvider(ImageProvider):
         image.save(buffered, format="JPEG", quality=95)
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
     
+    def _build_extra_body(self, aspect_ratio: str, resolution: str) -> dict:
+        """
+        Build extra_body parameters for resolution control.
+        
+        Uses multiple format strategies to support different providers:
+        1. Flat style: aspect_ratio + resolution at top level
+        2. Nested style: generationConfig.imageConfig structure
+        
+        Args:
+            aspect_ratio: Image aspect ratio (e.g., "16:9", "9:16")
+            resolution: Image resolution ("1K", "2K", "4K")
+            
+        Returns:
+            Dict with extra_body parameters
+        """
+        # Ensure resolution is uppercase (some providers require "4K" not "4k")
+        resolution_upper = resolution.upper()
+        
+        # Build comprehensive extra_body that works with multiple providers
+        extra_body = {
+            # Flat style parameters
+            "aspect_ratio": aspect_ratio,
+            "resolution": resolution_upper,
+            
+            # Nested style structure (compatible with some providers)
+            "generationConfig": {
+                "imageConfig": {
+                    "aspectRatio": aspect_ratio,
+                    "imageSize": resolution_upper,
+                }
+            }
+        }
+        
+        return extra_body
+
     def generate_image(
         self,
         prompt: str,
         ref_images: Optional[List[Image.Image]] = None,
         aspect_ratio: str = "16:9",
-        resolution: str = "2K"
+        resolution: str = "2K",
+        enable_thinking: bool = False,
+        thinking_budget: int = 0
     ) -> Optional[Image.Image]:
         """
         Generate image using OpenAI SDK
         
-        Note: OpenAI format does NOT support 4K images, defaults to 1K
+        Supports resolution control via extra_body parameters for compatible providers.
+        Note: Not all providers support 2K/4K resolution - some may return 1K regardless.
+        Note: enable_thinking and thinking_budget are ignored (OpenAI format doesn't support thinking mode)
+        
+        The provider will:
+        1. Try to use extra_body parameters (API易/AvalAI style) for resolution control
+        2. Use system message for aspect_ratio as fallback
         
         Args:
             prompt: The image generation prompt
             ref_images: Optional list of reference images
             aspect_ratio: Image aspect ratio
-            resolution: Image resolution (only 1K supported, parameter ignored)
+            resolution: Image resolution ("1K", "2K", "4K") - support depends on provider
+            enable_thinking: Ignored, kept for interface compatibility
+            thinking_budget: Ignored, kept for interface compatibility
             
         Returns:
             Generated PIL Image object, or None if failed
@@ -94,21 +157,19 @@ class OpenAIImageProvider(ImageProvider):
             logger.debug(f"Calling OpenAI API for image generation with {len(ref_images) if ref_images else 0} reference images...")
             logger.debug(f"Config - aspect_ratio: {aspect_ratio}, resolution: {resolution}")
             
-            # 根据 OpenRouter 文档：https://openrouter.ai/docs/guides/overview/multimodal/image-generation
-            # 使用 modalities 和 image_config 参数
+            # Build extra_body with resolution parameters for compatible providers
+            extra_body = self._build_extra_body(aspect_ratio, resolution)
+            logger.debug(f"Using extra_body for resolution control: {extra_body}")
+            
+            # Use both system message (for basic providers) and extra_body (for advanced providers)
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
+                    {"role": "system", "content": f"aspect_ratio={aspect_ratio}, resolution={resolution}"},
                     {"role": "user", "content": content},
                 ],
-                # Use extra_body for OpenRouter-specific parameters
-                extra_body={
-                    "modalities": ["text", "image"],
-                    "image_config": {
-                        "aspect_ratio": aspect_ratio,
-                        "image_size": resolution  # 支持 "1K", "2K", "4K"
-                    }
-                }
+                modalities=["text", "image"],
+                extra_body=extra_body
             )
             
             logger.debug("OpenAI API call completed")
@@ -119,45 +180,7 @@ class OpenAIImageProvider(ImageProvider):
             # Debug: log available attributes
             logger.debug(f"Response message attributes: {dir(message)}")
             
-            # 首先尝试 OpenRouter 格式：message.images[].image_url.url
-            # 参考：https://openrouter.ai/docs/guides/overview/multimodal/image-generation
-            if hasattr(message, 'images') and message.images:
-                logger.debug(f"Found OpenRouter images field with {len(message.images)} images")
-                for img_obj in message.images:
-                    try:
-                        # img_obj 可能是 dict 或对象
-                        if isinstance(img_obj, dict):
-                            image_url = img_obj.get('image_url', {}).get('url', '')
-                        else:
-                            image_url_obj = getattr(img_obj, 'image_url', None)
-                            if image_url_obj:
-                                if isinstance(image_url_obj, dict):
-                                    image_url = image_url_obj.get('url', '')
-                                else:
-                                    image_url = getattr(image_url_obj, 'url', '')
-                            else:
-                                continue
-                        
-                        if image_url and image_url.startswith('data:image'):
-                            # 提取 base64 数据
-                            base64_data = image_url.split(',', 1)[1]
-                            image_data = base64.b64decode(base64_data)
-                            image = Image.open(BytesIO(image_data))
-                            logger.debug(f"Successfully extracted image from OpenRouter format: {image.size}, {image.mode}")
-                            return image
-                        elif image_url and image_url.startswith('http'):
-                            # 下载图片
-                            img_response = requests.get(image_url, timeout=30, stream=True)
-                            img_response.raise_for_status()
-                            image = Image.open(BytesIO(img_response.content))
-                            image.load()
-                            logger.debug(f"Successfully downloaded image from OpenRouter URL: {image.size}, {image.mode}")
-                            return image
-                    except Exception as e:
-                        logger.warning(f"Failed to extract image from OpenRouter format: {e}")
-                        continue
-            
-            # Try multi_mod_content (custom format from some proxies like aihubmix)
+            # Try multi_mod_content first (custom format from some proxies)
             if hasattr(message, 'multi_mod_content') and message.multi_mod_content:
                 parts = message.multi_mod_content
                 for part in parts:

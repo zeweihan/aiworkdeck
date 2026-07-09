@@ -1,0 +1,99 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+env/
+ENV/
+
+# Node
+**/node_modules/
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.npm
+.eslintcache
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Project specific
+instance/*.db
+instance/*.db-journal
+uploads/
+*.log
+server.log
+server_running.log
+
+# Test files
+test_*.py
+*_test.py
+tests/
+
+# Docs and examples
+*.md
+!README.md
+docs/
+demo.py
+gemini_genai.py
+generate-example.py
+!assets/**
+*.png
+*.jpg
+*.jpeg
+*.pptx
+*.pdf
+output/
+res.png
+template*.png
+page*.png
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Others
+*.lock
+uv.lock
+LICENSE
+PRD.md
+*.md
+
+# Windows
+Thumbs.db
+Desktop.ini
+*.lnk
+
+# Build output
+dist/
+build/
+*.pptx
+*.pdf
+
