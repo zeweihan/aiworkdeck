@@ -1,1 +1,3 @@
-mineru[core]>=2.7.0,<3
+# MinerU 3.x 升级：3.x 保留 mineru-api 与 POST /file_parse（向后兼容）、CPU pipeline 后端仍在。
+# 升级前请在有模型的真机跑 mineru-service/compat_smoke_test.sh 验证契约后再合并/发版。
+mineru[core]>=3.4,<4
