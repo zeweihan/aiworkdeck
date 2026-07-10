@@ -530,6 +530,14 @@ export function getWizardStatus() {
   });
 }
 
+// 重置首次运行向导（仅管理员）：completed 置 false，之后可重新走一遍向导
+export function resetWizard() {
+  return request({
+    url: '/api/admin/wizard/reset',
+    method: 'POST',
+  });
+}
+
 // 提交首次运行向导（仅未初始化时可调用，payload 结构同 saveAdminConfig）
 export function submitWizard(payload) {
   return request({
