@@ -1,7 +1,9 @@
 package com.checkba.controller;
 
 import com.checkba.controller.AdminConfigController.AdminConfigUpdateRequest;
+import com.checkba.model.entity.User;
 import com.checkba.repository.SystemSettingRepository;
+import com.checkba.repository.UserRepository;
 import com.checkba.service.SystemSettingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
@@ -13,13 +15,14 @@ import java.util.Map;
 
 /**
  * 首次运行向导接口（Epic #18 T3）：
- * - GET  /api/admin/wizard  查询是否已初始化（供前端决定是否进入向导）
- * - POST /api/admin/wizard  一次性写入初始配置（复用 AdminConfig 的 DTO 与 key 映射）
+ * - GET  /api/admin/wizard        查询是否已初始化（供前端决定是否进入向导）
+ * - POST /api/admin/wizard        一次性写入初始配置（复用 AdminConfig 的 DTO 与 key 映射）
+ * - POST /api/admin/wizard/reset  管理员重置向导（允许再走一遍——存量安装换 Key/换提供商的入口）
  *
- * 安全模型：仅在"未初始化"状态下可匿名调用。未初始化 = 向导未完成且
- * system_setting 表为空（从未通过管理后台或向导保存过任何配置）；
- * 满足任一条件即视为已初始化，POST 返回 409，后续配置修改一律走
- * /api/admin/config（需管理员会话）。
+ * 安全模型：仅在"未初始化"状态下可匿名调用。未初始化判定：
+ * completed 标记显式存在时以它为准（管理员 reset 后 = "false"，向导可重跑）；
+ * 标记不存在的存量部署退回 system_setting 非空兜底，防止向导端点被匿名滥用。
+ * 后续配置修改一律走 /api/admin/config（需管理员会话）。
  * 注意不能用"是否存在用户"判断：DataInitializer 启动时会自动创建默认 admin。
  */
 @RestController
@@ -30,13 +33,16 @@ public class WizardController {
 
     private final SystemSettingService systemSettingService;
     private final SystemSettingRepository systemSettingRepository;
+    private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
 
     public WizardController(SystemSettingService systemSettingService,
                             SystemSettingRepository systemSettingRepository,
+                            UserRepository userRepository,
                             ObjectMapper objectMapper) {
         this.systemSettingService = systemSettingService;
         this.systemSettingRepository = systemSettingRepository;
+        this.userRepository = userRepository;
         this.objectMapper = objectMapper;
     }
 
@@ -77,12 +83,45 @@ public class WizardController {
         return ResponseEntity.ok(ok);
     }
 
-    private boolean isInitialized() {
-        if (Boolean.parseBoolean(systemSettingService.get(KEY_WIZARD_COMPLETED, "false"))) {
-            return true;
+    /**
+     * 管理员重置向导：completed 置 "false"，之后向导页可再走一遍（提交成功
+     * 自动置回 "true"）。这是管理员主动开的窗口，与首次安装等价——期间
+     * POST /api/admin/wizard 恢复匿名可用，可接受。
+     */
+    @PostMapping("/reset")
+    public ResponseEntity<?> reset(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        User admin = requireAdmin(sessionId);
+        if (admin == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(error("仅管理员可重置向导 / Admin only"));
         }
-        // 保存过任何配置的存量部署视为已初始化，防止向导端点被匿名滥用
+        Map<String, String> updates = new HashMap<>();
+        updates.put(KEY_WIZARD_COMPLETED, "false");
+        systemSettingService.setMany(updates);
+
+        Map<String, Object> ok = new HashMap<>();
+        ok.put("code", 0);
+        ok.put("message", "向导已重置，可重新运行 / Wizard reset");
+        return ResponseEntity.ok(ok);
+    }
+
+    private boolean isInitialized() {
+        // completed 标记显式存在时以它为准（reset 后 = "false"，向导重新开放）；
+        // 标记不存在的存量部署退回"保存过任何配置即已初始化"兜底，防匿名滥用
+        String completed = systemSettingService.get(KEY_WIZARD_COMPLETED, null);
+        if (completed != null) {
+            return Boolean.parseBoolean(completed);
+        }
         return systemSettingRepository.count() > 0;
+    }
+
+    private User requireAdmin(String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) return null;
+        return userRepository.findById(userId)
+                .filter(u -> "admin".equalsIgnoreCase(u.getUsername()))
+                .orElse(null);
     }
 
     private Map<String, Object> error(String message) {

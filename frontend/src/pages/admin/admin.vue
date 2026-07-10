@@ -24,6 +24,10 @@
             </view>
             
             <view class="nav-footer">
+                <view class="action-item" @tap="handleRerunWizard">
+                  <text class="action-text">重新运行首次向导</text>
+                  <text class="action-arrow">›</text>
+                </view>
                 <view class="action-item" @tap="goToUserProfile">
                   <text class="action-text">返回个人中心</text>
                   <text class="action-arrow">›</text>
@@ -548,7 +552,7 @@
 </template>
 
 <script>
-import { getAdminConfig, saveAdminConfig, getAdminUsers } from '@/services/api.js'
+import { getAdminConfig, saveAdminConfig, getAdminUsers, resetWizard } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 
 export default {
@@ -719,6 +723,23 @@ export default {
     goToUserProfile() {
       uni.navigateTo({ url: '/pages/userprofile/userprofile' })
     },
+    // 重跑首次向导：重置 completed 标记后跳向导页。已有配置不清空，
+    // 向导提交时按新填内容覆盖对应 key。
+    handleRerunWizard() {
+      uni.showModal({
+        title: '重新运行首次向导',
+        content: '将重新打开首次运行向导（重新选择 AI 提供商并填写 Key）。现有配置不会被清空，向导提交后按新填内容覆盖。是否继续？',
+        success: async (r) => {
+          if (!r.confirm) return
+          try {
+            await resetWizard()
+            uni.reLaunch({ url: '/pages/wizard/wizard' })
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || '重置失败', icon: 'none' })
+          }
+        },
+      })
+    },
     onNavTap(nav) {
       // 带 route 的导航项跳转独立页面（如插件广场），其余切换本页内容区
       if (nav.route) {
@@ -782,7 +803,8 @@ export default {
         }
       } catch (e) {
         console.error('加载后台配置失败', e)
-        uni.showToast({ title: '加载配置失败', icon: 'none' })
+        // 403（非 admin 账号）时把后端原因带给用户：请用 admin 账号登录后配置
+        uni.showToast({ title: (e && e.message) || '加载配置失败', icon: 'none' })
       }
     },
     async loadUsers() {
