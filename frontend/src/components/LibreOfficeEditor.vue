@@ -56,7 +56,7 @@ let seq = 0
 
 export default {
   name: 'LibreOfficeEditor',
-  emits: ['close', 'ready'],
+  emits: ['close', 'ready', 'open-url'],
   props: {
     // 'experimental' = the original ⌘⇧O overlay (dev probe toolbar shown).
     // 'default'      = inline document editor (Track B): toolbar chrome hidden.
@@ -130,6 +130,16 @@ export default {
       wv.style.height = '100%'
       wv.style.border = '0'
       wv.addEventListener('dom-ready', () => this.onDomReady(wv))
+      // (#79) document hyperlink clicks: the editor page forwards LO's
+      // window.open over lo-relay as {type:'open-url'} — surface it to the host
+      // (project-overview routes checkba:// internal links / http(s) tabs).
+      wv.addEventListener('ipc-message', (e) => {
+        if (e.channel !== 'lo-relay') return
+        const msg = e.args && e.args[0]
+        if (msg && msg.__lo === 'lo-relay' && msg.type === 'open-url' && msg.url) {
+          this.$emit('open-url', String(msg.url))
+        }
+      })
       wv.addEventListener('did-fail-load', (e) => this.appendLog('did-fail-load: ' + (e.errorDescription || e.errorCode)))
       wv.addEventListener('console-message', (e) => { if (e.level >= 2) this.appendLog('[webview] ' + e.message) })
       wv.setAttribute('src', info.url)

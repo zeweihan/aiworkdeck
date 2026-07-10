@@ -704,6 +704,7 @@
                       :file="activeFileLeft"
                       @ready="onLibreReady"
                       @close="onLibreClose"
+                      @open-url="onLibreOpenUrl"
                     />
                     <MarkdownPreview
                       v-else-if="isMarkdownTab(activeFileLeft)"
@@ -763,6 +764,7 @@
                       :file="activeFileRight"
                       @ready="onLibreReady"
                       @close="onLibreClose"
+                      @open-url="onLibreOpenUrl"
                     />
                     <MarkdownPreview
                       v-else-if="isMarkdownTab(activeFileRight)"
@@ -803,7 +805,7 @@
                    a real backend AI command can be triggered while it's active.
                    Dormant: only mounts when explicitly opened. -->
               <view v-if="showLibreEmbed" class="libre-embed-overlay">
-                <LibreOfficeEditor @ready="onLibreReady" @close="onLibreClose" />
+                <LibreOfficeEditor @ready="onLibreReady" @close="onLibreClose" @open-url="onLibreOpenUrl" />
               </view>
             </view>
 
@@ -2450,8 +2452,8 @@ export default {
       return `${base}?u=${encodeURIComponent(inner)}`
     },
     // === 文件拖拽到文档选区建立关联（超链接）===
-    // #79：该功能原依赖 WPS 编辑器实例（选区轮询 + setHyperlinkAtRange），WPS 移除后
-    // 暂不可用（下方守卫会友好提示），LibreOffice 等价实现记债。
+    // #79 债已还：原 WPS 实例能力（选区轮询 + setHyperlinkAtRange）现由 LibreOffice
+    // 执行器原语实现（get/set_selection_hyperlink，见 createWpsSelectionFileLink）。
     onFileLinkDragStart(file) {
       if (!file || !file.id) return
       this.fileLinkDrag.active = true
@@ -2495,10 +2497,82 @@ export default {
       this.fileLinkPicker.linkKey = ''
     },
     async createWpsSelectionFileLink(side, file) {
-      // #79：文档选区↔文件关联原依赖 WPS 编辑器实例（选区读取 + setHyperlinkAtRange），
-      // WPS 移除后暂不可用，LibreOffice 等价实现记债（后端 DocFileLink 契约保留）。
-      console.log('createWpsSelectionFileLink (inert, #79):', { side, fileId: file && file.id })
-      uni.showToast({ title: '当前编辑器暂不支持选区关联', icon: 'none' })
+      // #79 债已还：经 LibreOffice 执行器实现（get_selection_hyperlink 复用已有
+      // linkKey + set_selection_hyperlink 写入），后端 DocFileLink 契约不变。
+      console.log('createWpsSelectionFileLink start:', { side, fileId: file && file.id })
+      if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+        uni.showToast({ title: '请先打开一个文档', icon: 'none' })
+        return
+      }
+      const exec = (action, params) => this.libreOfficeExecutor.executeCommand(action, params)
+
+      // 1) 读选区（顺带取选区上已有的超链接，用于复用 linkKey）
+      let selText = ''
+      let existingUrl = ''
+      try {
+        const cur = await exec('get_selection_hyperlink', {})
+        if (cur && cur.success) {
+          selText = String(cur.text || '').trim()
+          existingUrl = cur.url ? String(cur.url) : ''
+        }
+      } catch (e) {
+        console.warn('get_selection_hyperlink failed:', e)
+      }
+      if (!selText) {
+        uni.showToast({ title: '请先在文档中高亮一段文本（蓝色选区）', icon: 'none' })
+        return
+      }
+
+      // 2) 生成/复用 linkKey：选区已带内部链接时从中解析（裸 checkba:// 或包装 https 均兼容）
+      let linkKey = ''
+      try {
+        let raw = existingUrl
+        if (raw && this.WPS_INTERNAL_HTTP_LINK_BASE && raw.startsWith(this.WPS_INTERNAL_HTTP_LINK_BASE)) {
+          const q0 = raw.includes('?') ? raw.split('?')[1] : ''
+          const p0 = new URLSearchParams(q0)
+          raw = p0.get('u') ? decodeURIComponent(String(p0.get('u'))) : ''
+        }
+        if (raw && raw.startsWith(this.INTERNAL_LINK_SCHEMES.fileLink)) {
+          const q = raw.includes('?') ? raw.split('?')[1] : ''
+          linkKey = new URLSearchParams(q).get('k') || ''
+        }
+      } catch (e) {
+        // ignore
+      }
+      if (!linkKey) {
+        linkKey = `lk_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+        // 与 WPS 时代同款“包装后的 https 链接”：点击经编辑器 open-url 事件回宿主解包，
+        // 文档导出到真实 Word 时也仍是合法链接
+        const inner = `${this.INTERNAL_LINK_SCHEMES.fileLink}?k=${encodeURIComponent(linkKey)}&projectId=${encodeURIComponent(String(this.projectId || ''))}`
+        const url = this.wrapWpsInternalLink(inner)
+        const r = await exec('set_selection_hyperlink', { url })
+        if (!r || !r.success) {
+          console.error('设置超链接失败:', r && r.message)
+          uni.showToast({ title: '设置超链接失败', icon: 'none' })
+          return
+        }
+      }
+
+      // 3) 入库：按 fileId 关联（文件移动/重命名不影响打开）
+      try {
+        const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+        const doc = side === 'right' ? this.activeFileRight : this.activeFileLeft
+        const docWpsFileId = doc && this.isEditorOpenableFile(doc) ? (doc.wpsFileId || '') : ''
+        if (!docWpsFileId) throw new Error('文档未就绪')
+        const payload = await createDocFileLink(pid, {
+          linkKey,
+          docWpsFileId,
+          anchorText: selText || '',
+          // LibreOffice 路径没有整数偏移（§0.2 锚点语义）；后端字段可空
+          rangeStart: null,
+          rangeEnd: null,
+          fileIds: [Number(file.id)]
+        })
+        if (payload && payload.linkKey) linkKey = payload.linkKey
+        uni.showToast({ title: '已建立关联', icon: 'success' })
+      } catch (e) {
+        uni.showToast({ title: e.message || '关联失败', icon: 'none' })
+      }
     },
 
     // === Staging Area Methods ===
@@ -3996,8 +4070,20 @@ export default {
            uni.showToast({ title: '插入失败', icon: 'none' })
          }
       } else if (type === 'IMAGE') {
-         // #79：内置 LibreOffice 编辑器暂不支持图片插入（原 WPS 能力，记债）
-         uni.showToast({ title: '当前编辑器暂不支持图片插入', icon: 'none' })
+         // #79 债已还：经执行器 insert_image 在光标处插入（data URL → UNO 图形对象）
+         if (!content) return
+         if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+           uni.showToast({ title: '请先打开一个文档', icon: 'none' })
+           return
+         }
+         try {
+           const r = await this.libreOfficeExecutor.executeCommand('insert_image', { dataUrl: content })
+           if (!r || !r.success) throw new Error((r && r.message) || '插入图片失败')
+           uni.showToast({ title: '已插入图片', icon: 'success' })
+         } catch (e) {
+           console.error(e)
+           uni.showToast({ title: e.message || '插入图片失败', icon: 'none' })
+         }
       }
     },
 
@@ -4181,10 +4267,41 @@ export default {
     },
 
     async handleWebLinkDrop(x, y) {
-      // #79：网核证据插入文档原依赖 WPS 编辑器实例（书签+超链接 API），WPS 移除后
-      // 暂不可用（守卫友好提示），LibreOffice 等价实现记债。
-      this.stopWebLinkDrag()
-      uni.showToast({ title: '当前编辑器暂不支持网核标记插入', icon: 'none' })
+      // #79 债已还：落点命中内置 LibreOffice 编辑器时，经执行器
+      // insert_link_with_bookmark 在光标处插入网核标记（书签+内部超链接）。
+      const hitEditor = () => {
+        if (typeof document === 'undefined') return false
+        const els = document.querySelectorAll('.libre-editor-wrapper')
+        for (const el of els) {
+          const r = el.getBoundingClientRect()
+          if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) return true
+        }
+        return false
+      }
+      try {
+        if (!hitEditor()) {
+          uni.showToast({ title: '请拖拽到文档区域进行关联', icon: 'none' })
+          return
+        }
+        if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
+          uni.showToast({ title: '请先打开一个文档', icon: 'none' })
+          return
+        }
+        const favId = this.webLinkDrag.favoriteId
+        const host = this.webLinkDrag.sourceUrl ? (() => { try { return new URL(this.webLinkDrag.sourceUrl).host } catch (e) { return '网核' } })() : '网核'
+        const ts = new Date().toLocaleString()
+        const text = `【网核证据：${host}｜${ts}】`
+        const bookmarkName = `WEB_EVID_${favId || Date.now()}`
+        const internalUrl = this.wrapWpsInternalLink(`checkba://webfav?id=${encodeURIComponent(String(favId || ''))}&projectId=${encodeURIComponent(String(this.projectId || ''))}`)
+        const r = await this.libreOfficeExecutor.executeCommand('insert_link_with_bookmark', { text, bookmarkName, url: internalUrl })
+        if (!r || !r.success) throw new Error((r && r.message) || '插入失败')
+        uni.showToast({ title: '已插入网核标记', icon: 'success' })
+      } catch (e) {
+        console.error('插入网核标记失败:', e)
+        uni.showToast({ title: e.message || '插入失败', icon: 'none' })
+      } finally {
+        this.stopWebLinkDrag()
+      }
     },
     onFileTreeCheckedChange(ids) {
       this.checkedFileIds = Array.isArray(ids) ? ids : []
@@ -5560,6 +5677,23 @@ export default {
         this.libreOfficeExecutor = executor
         this.libreOfficeActive = true
         console.log('[ProjectOverview] LibreOffice editor ready — agent commands routed to LibreOffice')
+    },
+    // (#79) 文档内超链接点击：编辑器把 LO 的 window.open 经 lo-relay 转发上来。
+    // 内部链接（包装 https 或裸 checkba:）走 __checkbaHandleInternalLink（关联
+    // 文件/网核定位，含解包），普通网页开工作区浏览器 tab。
+    onLibreOpenUrl(url) {
+      const u = String(url || '')
+      if (!u) return
+      const isWrapped = this.WPS_INTERNAL_HTTP_LINK_BASE && u.startsWith(this.WPS_INTERNAL_HTTP_LINK_BASE)
+      if (isWrapped || u.startsWith('checkba:')) {
+        try {
+          if (typeof window !== 'undefined' && window.__checkbaHandleInternalLink) window.__checkbaHandleInternalLink(u)
+        } catch (e) {
+          console.error('内部链接处理失败:', e)
+        }
+        return
+      }
+      if (/^https?:\/\//i.test(u)) this.openBrowserTab(u)
     },
     onLibreClose(executor) {
         // The overlay close button emits no executor; an inline editor unmount

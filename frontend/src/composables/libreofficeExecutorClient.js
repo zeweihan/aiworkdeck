@@ -42,6 +42,11 @@ export const EDITOR_ACTIONS = [
   // (scope, varName) variable; driven by VariablePanel through the getWps adapter
   // in project-overview.vue, not by the AI agent pipeline.
   'var_list', 'var_insert', 'var_update',
+  // [#79 债务清偿] WPS-instance-bound features restored on LibreOffice:
+  // 选区↔文件超链接关联 (get/set_selection_hyperlink)、网核证据标记
+  // (insert_link_with_bookmark)、图片插入 (insert_image)。Host-initiated
+  // (drag-association / evidence-drop / OCR image), not AI-agent commands.
+  'get_selection_hyperlink', 'set_selection_hyperlink', 'insert_link_with_bookmark', 'insert_image',
 ]
 
 /**

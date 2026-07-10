@@ -965,6 +965,107 @@ const EXEC = {
     xText.insertTextContent(cur, bm2, true);
     return { success: true, id: id, text: value, paragraphAfterEdit: (paragraphTextOf(cur) || '').slice(0, 200) };
   },
+  // ---- #79 债务清偿：WPS 实例绑定能力的 LibreOffice 等价原语 ----------------
+  // 选区↔文件超链接关联（拖拽关联）、网核证据标记（书签+超链接）、图片插入。
+  // read the hyperlink URL on the current selection (empty string if none) —
+  // the host uses it to REUSE an existing linkKey instead of stacking a new one.
+  get_selection_hyperlink() {
+    const sel = ctrl.getSelection();
+    let range = null;
+    try {
+      if (sel && typeof sel.getByIndex === 'function' && sel.getCount() > 0) range = sel.getByIndex(0);
+    } catch (e) {}
+    if (!range) return { success: true, url: '', hasSelection: false };
+    let url = '';
+    try {
+      const xText = range.getText();
+      const cur = xText.createTextCursorByRange(range);
+      const v = cur.getPropertyValue('HyperLinkURL');
+      if (typeof v === 'string') url = v;
+    } catch (e) {} // mixed/none over the span → treat as no link
+    return { success: true, url: url, hasSelection: (range.getString() || '').length > 0, text: range.getString() };
+  },
+  // set a hyperlink on the current (visible) selection — the WPS-era
+  // setHyperlinkAtRange, minus integer offsets: the selection IS the range.
+  set_selection_hyperlink(p) {
+    const url = String(p.url || '');
+    if (!url) return { success: false, message: 'set_selection_hyperlink requires {url}' };
+    const sel = ctrl.getSelection();
+    let range = null;
+    try {
+      if (sel && typeof sel.getByIndex === 'function' && sel.getCount() > 0) range = sel.getByIndex(0);
+    } catch (e) {}
+    const text = range ? (range.getString() || '') : '';
+    if (!range || !text.length) return { success: false, message: 'no selection to hyperlink' };
+    const xText = range.getText();
+    const cur = xText.createTextCursorByRange(range);
+    cur.setPropertyValue('HyperLinkURL', url);
+    return { success: true, text: text, url: url };
+  },
+  // insert {text} at the view cursor wrapped in a named bookmark, optionally
+  // hyperlinked — the WPS-era insertEvidenceLink/insertTextWithBookmark (网核
+  // 证据标记). Same insert shape as var_insert (bookmark spans the inserted run).
+  insert_link_with_bookmark(p) {
+    const text = String(p.text || '');
+    if (!text) return { success: false, message: 'insert_link_with_bookmark requires {text}' };
+    const requested = String(p.bookmarkName || 'MARK_' + Date.now()).replace(/[^A-Za-z0-9_]/g, '_');
+    const url = String(p.url || '');
+    const vc = ctrl.getViewCursor();
+    vc.collapseToEnd();
+    const xText = vc.getText();
+    const cur = xText.createTextCursorByRange(vc.getEnd());
+    xText.insertString(cur, text, true); // bAbsorb: cur spans the inserted text
+    if (url) cur.setPropertyValue('HyperLinkURL', url);
+    const bms = xModel.getBookmarks();
+    let name = requested, n = 0;
+    while (bms.hasByName(name)) name = requested + '_' + (++n);
+    const bm = xModel.createInstance('com.sun.star.text.Bookmark');
+    bm.setName(name);
+    xText.insertTextContent(cur, bm, true);
+    try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
+    return Object.assign({ success: true, bookmarkName: name, text: text, url: url }, verifySnapshot());
+  },
+  // insert an image (data URL / raw base64) at the view cursor — the WPS-era
+  // insertImage. Bytes go JS→UNO through SequenceInputStream (same signed-Array
+  // marshalling as load_document), GraphicProvider decodes, TextGraphicObject
+  // anchors AS_CHARACTER at the cursor. Oversized images are scaled to page width.
+  insert_image(p) {
+    const dataUrl = String(p.dataUrl || p.base64 || '');
+    const m = dataUrl.match(/^data:[^,]*;base64,(.*)$/s);
+    const b64 = m ? m[1] : dataUrl;
+    if (!b64) return { success: false, message: 'insert_image requires {dataUrl|base64}' };
+    let bin;
+    try { bin = atob(b64.replace(/\s+/g, '')); } catch (e) { return { success: false, message: 'invalid base64: ' + errStr(e) }; }
+    if (!bin.length) return { success: false, message: 'empty image data' };
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    // signed plain Array — the ONLY shape zeta.js marshals into sequence<byte>
+    const bytes = Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
+    const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
+    const gp = css.graphic.GraphicProvider.create(context);
+    const graphic = gp.queryGraphic([mkProp('InputStream', stream)]);
+    if (!graphic) return { success: false, message: 'GraphicProvider could not decode the image' };
+    const img = xModel.createInstance('com.sun.star.text.TextGraphicObject');
+    img.setPropertyValue('Graphic', graphic);
+    img.setPropertyValue('AnchorType', css.text.TextContentAnchorType.AS_CHARACTER);
+    // natural size (1/100 mm), fall back to pixels @96dpi; cap to ~15cm text width
+    let w = 0, h = 0;
+    try { const sz = graphic.getPropertyValue('Size100thMM'); w = sz.Width || 0; h = sz.Height || 0; } catch (e) {}
+    if (!w || !h) {
+      try { const px = graphic.getPropertyValue('SizePixel'); w = Math.round((px.Width || 0) * 2540 / 96); h = Math.round((px.Height || 0) * 2540 / 96); } catch (e) {}
+    }
+    if (w > 0 && h > 0) {
+      const MAX_W = 15000;
+      if (w > MAX_W) { h = Math.round(h * MAX_W / w); w = MAX_W; }
+      img.setPropertyValue('Width', w);
+      img.setPropertyValue('Height', h);
+    }
+    const vc = ctrl.getViewCursor();
+    vc.collapseToEnd();
+    vc.getText().insertTextContent(vc, img, false);
+    try { vc.collapseToEnd(); } catch (e) {}
+    return { success: true, bytes: u8.length, width: w, height: h };
+  },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
     const bms = xModel.getBookmarks();

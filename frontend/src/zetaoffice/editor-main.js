@@ -142,6 +142,22 @@ function wireVerifyPanel(executor) {
 // One transport instance, reused to both serve the host AND signal readiness.
 const hostTransport = pickTransport()
 
+// (#79) Hyperlink clicks: when LO opens a document hyperlink it lands on the
+// page's window.open. Inside the isolated <webview> a popup can't open anything
+// useful anyway — forward the URL to the HOST over the same lo-relay transport,
+// where project-overview routes it (checkba:// internal links → 关联文件/网核
+// 定位, http(s) → workspace browser tab). Wrapped BEFORE boot so no click races.
+try {
+  const nativeOpen = window.open ? window.open.bind(window) : null
+  window.open = (url, name, feats) => {
+    const u = url ? String(url) : ''
+    if (u) {
+      try { hostTransport.send({ __lo: 'lo-relay', type: 'open-url', url: u }); return null } catch (e) { /* fall through */ }
+    }
+    return nativeOpen ? nativeOpen(url, name, feats) : null
+  }
+} catch (e) { console.error('[zeta-editor] window.open hook failed:', e) }
+
 startEditorEndpoint({
   canvas: document.getElementById('qtcanvas'),
   transport: hostTransport,
