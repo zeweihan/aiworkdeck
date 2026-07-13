@@ -1025,6 +1025,33 @@ const EXEC = {
     try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
     return Object.assign({ success: true, bookmarkName: name, text: text, url: url }, verifySnapshot());
   },
+  // read the hyperlink URL at the (collapsed) view cursor — the click-to-open
+  // seam: LO WASM does NOT surface hyperlink activation (no window.open, real-
+  // machine verified on v0.7.1), so the editor page listens for canvas clicks
+  // and asks the worker what link the cursor landed in. Non-collapsed cursor
+  // (drag-selection / double-click) returns '' on purpose — only a plain
+  // positioning click opens a link.
+  get_hyperlink_at_cursor() {
+    const vc = ctrl.getViewCursor();
+    try { if ((vc.getString() || '').length > 0) return { success: true, url: '' }; } catch (e) {}
+    let url = '';
+    try {
+      const v = vc.getPropertyValue('HyperLinkURL');
+      if (typeof v === 'string') url = v;
+    } catch (e) {}
+    if (!url) {
+      // cursor may sit at the run boundary: peek one char to the right
+      try {
+        const xText = vc.getText();
+        const cur = xText.createTextCursorByRange(vc.getStart());
+        if (cur.goRight(1, true)) {
+          const v2 = cur.getPropertyValue('HyperLinkURL');
+          if (typeof v2 === 'string') url = v2;
+        }
+      } catch (e) {}
+    }
+    return { success: true, url: url };
+  },
   // insert an image (data URL / raw base64) at the view cursor — the WPS-era
   // insertImage. Bytes go JS→UNO through SequenceInputStream (same signed-Array
   // marshalling as load_document), GraphicProvider decodes, TextGraphicObject

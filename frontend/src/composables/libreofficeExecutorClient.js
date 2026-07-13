@@ -47,6 +47,9 @@ export const EDITOR_ACTIONS = [
   // (insert_link_with_bookmark)、图片插入 (insert_image)。Host-initiated
   // (drag-association / evidence-drop / OCR image), not AI-agent commands.
   'get_selection_hyperlink', 'set_selection_hyperlink', 'insert_link_with_bookmark', 'insert_image',
+  // [#79 click-to-open] LO WASM 不触发 window.open（v0.7.1 真机证实）：编辑器页
+  // 监听 canvas 点击后经此原语读取光标处链接再转发宿主。
+  'get_hyperlink_at_cursor',
 ]
 
 /**

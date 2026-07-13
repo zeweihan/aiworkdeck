@@ -618,7 +618,9 @@ export default {
       }
     },
     checkAdminTab() {
-        if (this.userInfo && this.userInfo.username === 'admin') {
+        // isAdmin 由 /api/auth/me 下发（桌面单机=全员管理员；云端=仅 admin 账号）；
+        // username==='admin' 兜底兼容缓存的旧 userInfo（无 isAdmin 字段）
+        if (this.userInfo && (this.userInfo.isAdmin === true || this.userInfo.username === 'admin')) {
             const hasAdminTab = this.tabs.find(t => t.key === 'system_admin')
             if (!hasAdminTab) {
                 // Insert before 'settings' or at the end

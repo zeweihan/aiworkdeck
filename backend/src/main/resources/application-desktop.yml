@@ -20,3 +20,9 @@ spring:
       ddl-auto: update
     show-sql: false
     database-platform: org.hibernate.dialect.H2Dialect
+
+# 桌面/单机：所有登录用户都是管理员（系统管理/向导重置对全员开放）。
+# 云端多人部署不设此项（默认 false，仅 admin 账号）。
+security:
+  admin:
+    allow-all-users: true

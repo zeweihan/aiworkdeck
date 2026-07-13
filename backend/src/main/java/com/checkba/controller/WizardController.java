@@ -34,15 +34,18 @@ public class WizardController {
     private final SystemSettingService systemSettingService;
     private final SystemSettingRepository systemSettingRepository;
     private final UserRepository userRepository;
+    private final com.checkba.service.AdminAccessService adminAccessService;
     private final ObjectMapper objectMapper;
 
     public WizardController(SystemSettingService systemSettingService,
                             SystemSettingRepository systemSettingRepository,
                             UserRepository userRepository,
+                            com.checkba.service.AdminAccessService adminAccessService,
                             ObjectMapper objectMapper) {
         this.systemSettingService = systemSettingService;
         this.systemSettingRepository = systemSettingRepository;
         this.userRepository = userRepository;
+        this.adminAccessService = adminAccessService;
         this.objectMapper = objectMapper;
     }
 
@@ -120,7 +123,7 @@ public class WizardController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) return null;
         return userRepository.findById(userId)
-                .filter(u -> "admin".equalsIgnoreCase(u.getUsername()))
+                .filter(adminAccessService::isAdmin)
                 .orElse(null);
     }
 
