@@ -1,0 +1,69 @@
+# AI Workdeck Web 服务器版 nginx 配置（Phase A2，见 docs/HARMONYOS_PLAN.md）
+#
+# 三个关键点，缺一个编辑器就起不来：
+# 1) 全站 COOP/COEP —— LOWA 需要 SharedArrayBuffer，crossOriginIsolated 只能来自
+#    响应头（zetaOfficeBoot.js 会检查并报错）。副作用：页面里所有跨域子资源
+#    （图片/脚本）必须带 CORS/CORP，因此 LOWA 与字体一律同源部署，不走 CDN。
+# 2) /lowa/ 预压缩 brotli 回放 —— fetch-lowa-assets.js 落盘的 soffice.wasm/.data
+#    是 CDN 原样的 brotli 字节（省 2/3 体积），必须回放 Content-Encoding: br。
+#    自建引擎若是 identity（看 lowa/.encodings.json），删掉对应 location 即可。
+# 3) /api/ 反代 + SSE 不缓冲 —— AI 编排器事件流是 SSE，nginx 默认缓冲会卡流。
+#
+# 部署布局（root 目录下）：
+#   /opt/aiworkdeck/web/            <- frontend/dist/build/h5 的内容
+#   /opt/aiworkdeck/web/zetaoffice/ <- frontend/dist/zetaoffice（含 lowa/ 与 cjk.ttc）
+#   /opt/aiworkdeck/web/probe/      <- deploy/web/probe（鸿蒙浏览器能力探针，可选）
+#
+# nginx 坑：location 里出现任意 add_header 会丢弃上层继承的 add_header，
+# 所以下面每个带 add_header 的 location 都必须重复 COOP/COEP 两行。
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name app.example.com;   # 改成你的域名
+    # ssl_certificate     /etc/nginx/ssl/fullchain.pem;
+    # ssl_certificate_key /etc/nginx/ssl/privkey.pem;
+
+    root /opt/aiworkdeck/web;
+    index index.html;
+
+    # ---- 跨域隔离（SharedArrayBuffer 前提）----
+    add_header Cross-Origin-Opener-Policy   same-origin  always;
+    add_header Cross-Origin-Embedder-Policy require-corp always;
+
+    # ---- 后端 API（Spring Boot :9696，全部路由在 /api/ 下）----
+    location /api/ {
+        proxy_pass http://127.0.0.1:9696;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # SSE（AI 编排器事件流）：关缓冲、放长超时
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        # 大文件上传（文档解析）
+        client_max_body_size 200m;
+    }
+
+    # ---- LOWA 运行时：brotli 预压缩文件按原编码回放 ----
+    # 若 lowa/.encodings.json 里对应文件不是 "br"（自建引擎 identity），删掉该 location。
+    location = /zetaoffice/lowa/soffice.wasm {
+        add_header Cross-Origin-Opener-Policy   same-origin  always;
+        add_header Cross-Origin-Embedder-Policy require-corp always;
+        add_header Content-Encoding br always;
+        types { } default_type application/wasm;
+    }
+    location = /zetaoffice/lowa/soffice.data {
+        add_header Cross-Origin-Opener-Policy   same-origin  always;
+        add_header Cross-Origin-Embedder-Policy require-corp always;
+        add_header Content-Encoding br always;
+        types { } default_type application/octet-stream;
+    }
+
+    # ---- SPA 回退 ----
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
