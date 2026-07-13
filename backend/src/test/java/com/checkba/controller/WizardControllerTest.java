@@ -3,6 +3,7 @@ package com.checkba.controller;
 import com.checkba.model.entity.User;
 import com.checkba.repository.SystemSettingRepository;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.AdminAccessService;
 import com.checkba.service.SystemSettingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -36,10 +37,12 @@ class WizardControllerTest {
     private SystemSettingRepository systemSettingRepository;
     @Mock
     private UserRepository userRepository;
+    @Mock
+    private AdminAccessService adminAccessService;
 
     private WizardController newController() {
         return new WizardController(systemSettingService, systemSettingRepository,
-                userRepository, new ObjectMapper());
+                userRepository, adminAccessService, new ObjectMapper());
     }
 
     @Test
@@ -76,6 +79,7 @@ class WizardControllerTest {
             User normal = new User();
             normal.setUsername("alice");
             when(userRepository.findById(2L)).thenReturn(Optional.of(normal));
+            when(adminAccessService.isAdmin(normal)).thenReturn(false);
 
             ResponseEntity<?> resp = newController().reset("sess-user");
             assertEquals(403, resp.getStatusCode().value());
@@ -90,6 +94,7 @@ class WizardControllerTest {
             User admin = new User();
             admin.setUsername("admin");
             when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+            when(adminAccessService.isAdmin(admin)).thenReturn(true);
 
             ResponseEntity<?> resp = newController().reset("sess-admin");
             assertEquals(200, resp.getStatusCode().value());

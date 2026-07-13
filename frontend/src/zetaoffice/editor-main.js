@@ -176,6 +176,38 @@ startEditorEndpoint({
   onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
 }).then((endpoint) => {
   console.log('[zeta-editor] endpoint ready — serving host over transport')
+  // (#79 click-to-open) LO WASM never calls window.open on hyperlink clicks
+  // (real-machine verified on v0.7.1) — the hook above only covers hypothetical
+  // engine-initiated opens. The working seam: a plain positioning click moves
+  // the LO cursor; ask the worker what link the cursor landed in and forward it.
+  // Guards: primary button only, no drag-selection (>5px move), 800ms cooldown,
+  // and the worker returns '' for non-collapsed cursors (double-click selection).
+  try {
+    const canvas = document.getElementById('qtcanvas')
+    let downAt = null
+    let lastOpen = 0
+    canvas.addEventListener('mousedown', (ev) => {
+      downAt = ev.button === 0 ? { x: ev.clientX, y: ev.clientY } : null
+    }, true)
+    canvas.addEventListener('mouseup', (ev) => {
+      const d = downAt
+      downAt = null
+      if (!d || ev.button !== 0 || ev.shiftKey) return
+      if (Math.abs(ev.clientX - d.x) > 5 || Math.abs(ev.clientY - d.y) > 5) return // drag-selection
+      // let Qt process the click and move the LO cursor first
+      setTimeout(async () => {
+        try {
+          const r = await endpoint.executor.executeCommand('get_hyperlink_at_cursor', {})
+          if (r && r.success && r.url) {
+            const now = Date.now()
+            if (now - lastOpen < 800) return
+            lastOpen = now
+            hostTransport.send({ __lo: 'lo-relay', type: 'open-url', url: String(r.url) })
+          }
+        } catch (e) { /* ignore */ }
+      }, 150)
+    }, true)
+  } catch (e) { console.error('[zeta-editor] link-click seam failed:', e) }
   // Tell the host the office endpoint is booted and serving (serveExecutor is now
   // subscribed). The host (createRelayExecutor onReady) waits for this before
   // pushing load_document — sending it earlier would drop it (no subscriber yet,

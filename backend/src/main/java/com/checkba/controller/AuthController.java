@@ -17,6 +17,7 @@ public class AuthController {
 
     private final UserService userService;
     private final ClientInvitationService clientInvitationService;
+    private final com.checkba.service.AdminAccessService adminAccessService;
 
     // 简单的 session 存储（内存中，实际生产环境应使用 Redis 或 JWT）
     // 并发安全：登录写入与每请求读取/移除高频并发，普通 HashMap 扩容会损坏桶结构
@@ -25,10 +26,12 @@ public class AuthController {
 
     private static UserService staticUserService;
 
-    public AuthController(UserService userService, ClientInvitationService clientInvitationService) {
+    public AuthController(UserService userService, ClientInvitationService clientInvitationService,
+                          com.checkba.service.AdminAccessService adminAccessService) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
-        staticUserService = userService; 
+        this.adminAccessService = adminAccessService;
+        staticUserService = userService;
     }
 
     /**
@@ -176,7 +179,9 @@ public class AuthController {
                 "displayName", user.getDisplayName(),
                 "avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : "",
                 "role", user.getRole(),
-                "subscriptionType", user.getSubscriptionType()
+                "subscriptionType", user.getSubscriptionType(),
+                // 系统管理权限（桌面单机=全员；云端=仅 admin 账号），前端据此显示「系统设置」入口
+                "isAdmin", adminAccessService.isAdmin(user)
         ));
         return result;
     }

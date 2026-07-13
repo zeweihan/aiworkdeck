@@ -35,16 +35,19 @@ public class AdminConfigController {
     private final SystemSettingService systemSettingService;
     private final UserRepository userRepository;
     private final AiModelProperties aiModelProperties;
+    private final com.checkba.service.AdminAccessService adminAccessService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public AdminConfigController(SystemSettingService systemSettingService, 
-                                 UserRepository userRepository, 
-                                 AiModelProperties aiModelProperties, 
+    public AdminConfigController(SystemSettingService systemSettingService,
+                                 UserRepository userRepository,
+                                 AiModelProperties aiModelProperties,
+                                 com.checkba.service.AdminAccessService adminAccessService,
                                  com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
         this.systemSettingService = systemSettingService;
         this.userRepository = userRepository;
         this.aiModelProperties = aiModelProperties;
+        this.adminAccessService = adminAccessService;
         this.objectMapper = objectMapper;
     }
 
@@ -424,7 +427,7 @@ public class AdminConfigController {
             return null;
         }
         return userRepository.findById(userId)
-                .filter(u -> "admin".equalsIgnoreCase(u.getUsername()))
+                .filter(adminAccessService::isAdmin)
                 .orElse(null);
     }
 
