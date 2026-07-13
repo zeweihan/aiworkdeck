@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LOWA 浏览器能力探针 · AI Workdeck</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+  h1 { font-size: 20px; }
+  .item { display: flex; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #eee; }
+  .ok { color: #0a7d32; font-weight: 600; }
+  .fail { color: #c0392b; font-weight: 600; }
+  .verdict { margin-top: 20px; padding: 14px; border-radius: 8px; font-weight: 600; }
+  .verdict.ok { background: #e8f7ee; }
+  .verdict.fail { background: #fdecea; }
+  small { color: #888; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>LOWA（LibreOffice WASM）浏览器能力探针</h1>
+<p>在鸿蒙电脑/平板浏览器打开本页。四项全绿 = 该浏览器能跑 AI Workdeck 的嵌入式编辑器。</p>
+<div id="list"></div>
+<div id="verdict" class="verdict">检测中…</div>
+<p><small id="ua"></small></p>
+<script>
+// COI service worker 兜底：托管方加不了 COOP/COEP 头时，注册 SW 改写响应头后
+// 刷新一次即可获得 crossOriginIsolated。正式部署应直接用 nginx 头（见 ../README.md）。
+(async function () {
+  if (!window.crossOriginIsolated && 'serviceWorker' in navigator && !sessionStorage.getItem('coiReloaded')) {
+    try {
+      const reg = await navigator.serviceWorker.register('coi-sw.js');
+      await navigator.serviceWorker.ready;
+      if (reg.active && !navigator.serviceWorker.controller) {
+        sessionStorage.setItem('coiReloaded', '1');
+        location.reload();
+        return;
+      }
+      if (navigator.serviceWorker.controller) {
+        sessionStorage.setItem('coiReloaded', '1');
+        location.reload();
+        return;
+      }
+    } catch (e) { /* SW 不可用，直接按现状检测 */ }
+  }
+  runChecks();
+})();
+
+function runChecks() {
+  const checks = [];
+  checks.push(['crossOriginIsolated（COOP/COEP 生效）', !!window.crossOriginIsolated]);
+  checks.push(['SharedArrayBuffer 可用', typeof SharedArrayBuffer !== 'undefined']);
+  let sharedMem = false;
+  try { new WebAssembly.Memory({ initial: 1, maximum: 1, shared: true }); sharedMem = true; } catch (e) {}
+  checks.push(['共享 WASM Memory（线程前提）', sharedMem]);
+
+  // Worker 传递 SAB：LOWA 是多 pthread，主线程与 worker 必须能共享内存
+  const workerTest = new Promise((resolve) => {
+    if (typeof SharedArrayBuffer === 'undefined') return resolve(false);
+    try {
+      const blob = new Blob(["onmessage=function(e){postMessage(e.data instanceof SharedArrayBuffer)}"], { type: 'text/javascript' });
+      const w = new Worker(URL.createObjectURL(blob));
+      const t = setTimeout(() => { w.terminate(); resolve(false); }, 3000);
+      w.onmessage = (e) => { clearTimeout(t); w.terminate(); resolve(!!e.data); };
+      w.postMessage(new SharedArrayBuffer(8));
+    } catch (e) { resolve(false); }
+  });
+
+  workerTest.then((workerOk) => {
+    checks.push(['Worker 间传递 SharedArrayBuffer', workerOk]);
+    const list = document.getElementById('list');
+    list.innerHTML = '';
+    let allOk = true;
+    for (const [name, ok] of checks) {
+      allOk = allOk && ok;
+      const div = document.createElement('div');
+      div.className = 'item';
+      div.innerHTML = '<span>' + name + '</span><span class="' + (ok ? 'ok' : 'fail') + '">' + (ok ? '✅ 通过' : '❌ 不支持') + '</span>';
+      list.appendChild(div);
+    }
+    const v = document.getElementById('verdict');
+    v.className = 'verdict ' + (allOk ? 'ok' : 'fail');
+    v.textContent = allOk
+      ? '✅ 结论：该浏览器具备运行 LOWA 编辑器的全部前提。'
+      : '❌ 结论：缺少必要能力，LOWA 编辑器无法在此浏览器运行（其余功能不受影响）。';
+    document.getElementById('ua').textContent = navigator.userAgent;
+  });
+}
+</script>
+</body>
+</html>
