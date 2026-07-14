@@ -896,6 +896,7 @@
                     ref="clipboardPanel"
                     :query="toolsSearchKeyword"
                     @insert="insertPlainTextToWps"
+                    @preview-image="openImagePreview"
                   />
                 </view>
               </view>
@@ -1029,6 +1030,12 @@
             </view>
           </view>
         </view>
+      </view>
+
+      <!-- 图片预览（剪贴板等）：桌面端 BrowserView 盖 DOM，须走 desktopOverlayActive 守卫 -->
+      <view v-if="imagePreviewUrl" class="image-preview-mask" @tap="closeImagePreview">
+        <image class="image-preview-img" :src="imagePreviewUrl" mode="aspectFit"></image>
+        <view class="image-preview-close" @tap.stop="closeImagePreview">✕</view>
       </view>
 
       <!-- Screenshot Save Dialog -->
@@ -1295,6 +1302,7 @@ export default {
       project: {},
       // Screenshot Save Dialog
       showScreenshotSaveDialog: false,
+      imagePreviewUrl: '',
       screenshotSaveName: '',
       screenshotSaveParentId: null,
       screenshotFolderTree: [],
@@ -1537,6 +1545,7 @@ export default {
         this.showCompareDialog ||
         this.showFilePicker ||
         this.showInviteModal ||
+        !!this.imagePreviewUrl ||
         (this.fileLinkPicker && this.fileLinkPicker.visible)
       )
     },
@@ -3911,6 +3920,14 @@ export default {
         this.screenshotSaveDataUrl = ''
     },
 
+    openImagePreview(url) {
+        if (url) this.imagePreviewUrl = url
+    },
+
+    closeImagePreview() {
+        this.imagePreviewUrl = ''
+    },
+
     async confirmSaveScreenshot() {
         if (!this.screenshotSaveDataUrl) return
         let name = (this.screenshotSaveName || '').trim()
@@ -4088,7 +4105,21 @@ export default {
            return
          }
          try {
-           const r = await this.libreOfficeExecutor.executeCommand('insert_image', { dataUrl: content })
+           // 剪贴板/收藏夹面板给的是图片 HTTP URL（/api/...?token=...），
+           // insert_image 只认 data URL/base64，先拉字节转 data URL
+           let dataUrl = content
+           if (!/^data:/i.test(dataUrl)) {
+             const resp = await fetch(dataUrl)
+             if (!resp.ok) throw new Error('图片下载失败')
+             const blob = await resp.blob()
+             dataUrl = await new Promise((resolve, reject) => {
+               const reader = new FileReader()
+               reader.onload = () => resolve(reader.result)
+               reader.onerror = () => reject(new Error('图片读取失败'))
+               reader.readAsDataURL(blob)
+             })
+           }
+           const r = await this.libreOfficeExecutor.executeCommand('insert_image', { dataUrl })
            if (!r || !r.success) throw new Error((r && r.message) || '插入图片失败')
            uni.showToast({ title: '已插入图片', icon: 'success' })
          } catch (e) {
@@ -9051,6 +9082,41 @@ $bg-white: #FFFFFF;
   align-items: center;
   justify-content: center;
   z-index: 1000;
+}
+
+.image-preview-mask {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  cursor: zoom-out;
+}
+
+.image-preview-img {
+  width: 90%;
+  height: 90%;
+}
+
+.image-preview-close {
+  position: absolute;
+  top: 24px;
+  right: 32px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
 }
 
 .ocr-modal {

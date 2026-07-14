@@ -21,7 +21,7 @@
                   <text class="icon">🔗</text>
                 </view>
                 <!-- Insert Button -->
-                <view class="favo-btn" @tap.stop="$emit('insert', fav.content)" title="插入">
+                <view class="favo-btn" @tap.stop="insertFav(fav)" title="插入">
                   <text class="icon">⚡</text>
                 </view>
                 <!-- Delete -->
@@ -107,6 +107,15 @@ export default {
       if (fav.sourceUrl) return 'type-web'
       if (fav.imagePath) return 'type-image'
       return 'type-text'
+    },
+    insertFav(fav) {
+      // 图片收藏（网页摘录截图）content 为空串，按纯文本 emit 会被上层静默丢弃
+      const text = (fav.content || '').trim()
+      if (fav.imagePath && !text) {
+        this.$emit('insert', { type: 'IMAGE', content: getFavoriteImageUrl(fav.id) })
+        return
+      }
+      this.$emit('insert', { type: 'TEXT', content: fav.content })
     },
     openUrl(url) {
       if (!url) return
