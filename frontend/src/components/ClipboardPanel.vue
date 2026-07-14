@@ -219,9 +219,9 @@ export default {
     previewImage(it) {
         const url = this.getImageUrl(it)
         if (url) {
-            uni.previewImage({
-                urls: [url]
-            })
+            // 桌面端 BrowserView 会盖住 uni.previewImage 的 DOM 蒙层，
+            // 交给 project-overview 用统一守卫(desktopOverlayActive)的预览层展示
+            this.$emit('preview-image', url)
         }
     }
   }
