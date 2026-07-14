@@ -91,7 +91,7 @@ public class AiModelProperties {
         /**
          * Default model to use if not specified.
          */
-        private String defaultModel = "anthropic/claude-3.5-sonnet";
+        private String defaultModel = "deepseek/deepseek-v4-flash";
         /**
          * Timeout.
          */

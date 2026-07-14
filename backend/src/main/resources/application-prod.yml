@@ -45,7 +45,7 @@ ai:
     open-router:
       api-key: ${OPENROUTER_API_KEY:}
       base-url: https://openrouter.ai/api/v1
-      default-model: google/gemini-2.0-flash-exp:free
+      default-model: deepseek/deepseek-v4-flash
       timeout: 120s
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}

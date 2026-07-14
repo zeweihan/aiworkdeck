@@ -37,18 +37,21 @@ public class AdminConfigController {
     private final AiModelProperties aiModelProperties;
     private final com.checkba.service.AdminAccessService adminAccessService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AdminConfigController(SystemSettingService systemSettingService,
                                  UserRepository userRepository,
                                  AiModelProperties aiModelProperties,
                                  com.checkba.service.AdminAccessService adminAccessService,
-                                 com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+                                 com.fasterxml.jackson.databind.ObjectMapper objectMapper,
+                                 com.checkba.service.ai.ChatModelFactory chatModelFactory) {
         this.systemSettingService = systemSettingService;
         this.userRepository = userRepository;
         this.aiModelProperties = aiModelProperties;
         this.adminAccessService = adminAccessService;
         this.objectMapper = objectMapper;
+        this.chatModelFactory = chatModelFactory;
     }
 
     // ... (rest of the file remains same until DTOs)
@@ -307,6 +310,8 @@ public class AdminConfigController {
         }
 
         systemSettingService.setMany(updates);
+        // 立即让新的 key/baseUrl/供应商生效，避免旧配置的模型实例缓存到进程重启
+        chatModelFactory.clearCache();
 
         Map<String, Object> ok = new HashMap<>();
         ok.put("code", 0);
