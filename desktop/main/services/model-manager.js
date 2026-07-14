@@ -13,7 +13,26 @@ const { spawn } = require('child_process')
  */
 
 const MARKER = '.aiworkdeck-complete'
-const PROGRESS_THROTTLE_MS = 500
+const PROGRESS_POLL_MS = 1000
+
+// 目标目录累计字节数（含子目录）：整体进度 = 已落盘字节 / estBytes。
+// 下载器的 stdout 百分比是"当前单个文件"的 tqdm（MinerU 十几个模型文件会
+// 反复 0→100%，真机反馈以为下载重跑了），不能当整体进度用。
+function dirSize(root) {
+  let total = 0
+  const stack = [root]
+  while (stack.length) {
+    const cur = stack.pop()
+    let entries
+    try { entries = fs.readdirSync(cur, { withFileTypes: true }) } catch (e) { continue }
+    for (const en of entries) {
+      const fp = path.join(cur, en.name)
+      if (en.isDirectory()) stack.push(fp)
+      else if (en.isFile()) { try { total += fs.statSync(fp).size } catch (e) { /* 下载器可能正在改名/删除 */ } }
+    }
+  }
+  return total
+}
 
 function mineruLib(resourcesPath) {
   return path.join(resourcesPath || '', 'pysvc', 'mineru-service', 'lib')
@@ -31,6 +50,7 @@ const COMPONENTS = [
     id: 'mineru-models',
     name: '文档解析模型（MinerU）',
     sizeHint: '约 3GB',
+    estBytes: 3.0 * 1024 * 1024 * 1024, // 整体进度分母（估计值，进度封顶 99% 直到进程成功退出）
     // 模型根目录（相对 dataDir）
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'mineru'),
     // 官方下载 CLI（前置校证 P1/P2，见 phase2 计划）
@@ -58,6 +78,7 @@ const COMPONENTS = [
     id: 'kokoro-models',
     name: '语音合成模型（Kokoro）',
     sizeHint: '约 300MB',
+    estBytes: 300 * 1024 * 1024,
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'kokoro'),
     // huggingface_hub snapshot（走国内镜像，env 可覆盖）；运行侧 HF_HOME 与此一致
     spawnSpec: (ctx) => {
@@ -72,7 +93,11 @@ const COMPONENTS = [
           ...process.env,
           PYTHONPATH: path.join(ctx.resourcesPath || '', 'pysvc', 'kokoro-service', 'lib'),
           HF_HOME: dir,
-          HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com'
+          HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com',
+          // 打包内带 hf_xet：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS
+          // (cas-server.xethub.hf.co)，镜像签发的凭证在那边必 401——大陆用户
+          // 无梯子即挂。禁用 xet 走镜像的普通 HTTP 下载（真机 401 实证）。
+          HF_HUB_DISABLE_XET: '1'
         },
         cwd: dir
       }
@@ -89,6 +114,7 @@ class ModelManager {
     }
     this.onProgress = opts.onProgress || (() => {})
     this.spawnSpecOverride = opts.spawnSpecOverride || null
+    this.progressPollMs = opts.progressPollMs || PROGRESS_POLL_MS
     this.active = new Map() // id -> child process
     this.errors = new Map() // id -> last error message
   }
@@ -136,21 +162,18 @@ class ModelManager {
     const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ['ignore', 'pipe', 'pipe'] })
     this.active.set(id, child)
 
-    let lastEmit = 0
+    // stdout/stderr 只取"最近一行"当状态文案；百分比不再取自下载器输出——
+    // 那是单个文件的 tqdm，十几个模型文件会反复 0→100%（真机反馈"下载完又
+    // 从 0 开始"）。整体进度 = 已落盘字节 / estBytes，按固定间隔轮询目录。
     let lastLine = ''
-    const onLine = (line) => {
-      lastLine = line
-      const m = line.match(/(\d{1,3})%/)
-      const now = Date.now()
-      if (now - lastEmit < PROGRESS_THROTTLE_MS) return
-      lastEmit = now
-      this.onProgress({
-        id,
-        phase: 'progress',
-        percent: m ? Math.min(100, Number(m[1])) : undefined,
-        message: line.slice(0, 200)
-      })
-    }
+    const onLine = (line) => { lastLine = line }
+    const estBytes = c.estBytes || 0
+    const poller = setInterval(() => {
+      const percent = estBytes > 0
+        ? Math.min(99, Math.round(dirSize(dir) / estBytes * 100)) // 封顶 99，成功退出才是 done
+        : undefined
+      this.onProgress({ id, phase: 'progress', percent, message: lastLine.slice(0, 200) })
+    }, this.progressPollMs)
     const hook = (stream) => {
       let buf = ''
       stream.on('data', (d) => {
@@ -165,6 +188,7 @@ class ModelManager {
     hook(child.stderr)
 
     child.on('exit', (code, signal) => {
+      clearInterval(poller)
       const wasCancelled = child._awdCancelled
       this.active.delete(id)
       if (wasCancelled) {
@@ -181,6 +205,7 @@ class ModelManager {
       }
     })
     child.on('error', (e) => {
+      clearInterval(poller)
       this.active.delete(id)
       const msg = String(e && e.message ? e.message : e)
       this.errors.set(id, msg)
