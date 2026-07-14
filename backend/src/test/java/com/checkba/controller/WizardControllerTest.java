@@ -40,9 +40,12 @@ class WizardControllerTest {
     @Mock
     private AdminAccessService adminAccessService;
 
+    @Mock
+    private com.checkba.service.ai.ChatModelFactory chatModelFactory;
+
     private WizardController newController() {
         return new WizardController(systemSettingService, systemSettingRepository,
-                userRepository, adminAccessService, new ObjectMapper());
+                userRepository, adminAccessService, new ObjectMapper(), chatModelFactory);
     }
 
     @Test

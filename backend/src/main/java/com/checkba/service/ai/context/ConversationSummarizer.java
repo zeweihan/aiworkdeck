@@ -83,7 +83,7 @@ public class ConversationSummarizer {
         String prompt = String.format(SUMMARY_PROMPT, content);
         
         try {
-            ChatLanguageModel model = chatModelFactory.getChatModel("google/gemini-2.0-flash-exp:free");
+            ChatLanguageModel model = chatModelFactory.getChatModel("google/gemini-2.5-flash-lite");
             String summaryText = model.generate(prompt);
             
             // 清理输出
@@ -123,7 +123,7 @@ public class ConversationSummarizer {
         String content = formatMessagesCompact(messages);
         
         try {
-            ChatLanguageModel model = chatModelFactory.getChatModel("google/gemini-2.0-flash-exp:free");
+            ChatLanguageModel model = chatModelFactory.getChatModel("google/gemini-2.5-flash-lite");
             String summary = model.generate(String.format(QUICK_SUMMARY_PROMPT, content));
             summary = cleanSummaryOutput(summary);
             

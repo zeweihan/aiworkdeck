@@ -610,9 +610,11 @@ export default {
 
     // Model Selection
     const showModelDropdown = ref(false)
+    // 模型 ID 必须与后端 AllowedModels 白名单一致，且为 OpenRouter 当前在线模型
     const availableModels = [
-      { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash' },
-      { id: 'google/gemini-3-pro-preview', name: 'Gemini 3 Pro' },
+      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+      { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro' },
+      { id: 'anthropic/claude-sonnet-5', name: 'Claude Sonnet 5' },
       { id: 'openai/gpt-5.2', name: 'GPT-5.2' }
     ]
     const currentModelId = ref(availableModels[0].id)
