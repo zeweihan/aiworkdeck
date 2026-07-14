@@ -59,6 +59,13 @@
                <MarkdownPreview :content="bubble.content" />
             </div>
 
+            <!-- 5b. Message Actions（旧 UI 的插入/替换/导出，ChatInterface 重写时丢失后恢复） -->
+            <div v-if="bubble.content && !bubble.isStreaming" class="message-actions">
+               <span class="msg-act-btn primary" @click="sendAction('insert')">插入当前文档</span>
+               <span class="msg-act-btn" @click="sendAction('replace')">替换选区</span>
+               <span class="msg-act-btn" @click="sendAction('export')">导出为Word</span>
+            </div>
+
             <!-- 6. Walkthrough (Summary) - Temporarily hidden as per user request -->
             <!-- <WalkthroughCard
               v-if="bubble.walkthrough"
@@ -85,7 +92,12 @@ const props = defineProps({
   bubble: { type: Object, required: true }
 })
 
-defineEmits(['open-artifact-tab', 'approve'])
+const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action'])
+
+// 载荷形状对齐 project-overview.handleChatInterfaceAction({ type, msg })，msg 只需 content
+function sendAction(type) {
+  emit('message-action', { type, msg: { content: props.bubble.content } })
+}
 
 const isReady = computed(() => {
     // Show full card if we have a Title OR Processes OR Main Content
@@ -157,6 +169,38 @@ const hasContent = computed(() => {
   font-size: 14px;
   line-height: 1.6;
   color: #2C3338; /* Gray-Dark */
+}
+
+.message-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px 12px;
+  border-top: 1px solid #f1f5f9;
+  margin-top: 6px;
+}
+
+.msg-act-btn {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid #E9ECEF;
+  color: #6C757D;
+  background: #FFFFFF;
+  cursor: pointer;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.msg-act-btn:hover {
+  border-color: #5BD197;
+  color: #1A5336;
+  background: #E6F9F0;
+}
+
+.msg-act-btn.primary {
+  border-color: rgba(91, 209, 151, 0.5);
+  color: #1A5336;
+  background: rgba(91, 209, 151, 0.08);
 }
 
 .main-content:deep(p) {

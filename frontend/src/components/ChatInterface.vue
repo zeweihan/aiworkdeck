@@ -298,6 +298,7 @@
                :bubble="msg"
                @open-artifact-tab="handleArtifactOpenTab"
                @approve="handleArtifactApprove"
+               @message-action="$emit('message-action', $event)"
              />
              <!-- <span v-if="msg.timestamp" class="bubble-timestamp assistant">{{ msg.timestamp }}</span> -->
           </div>

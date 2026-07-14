@@ -879,9 +879,6 @@
                     :project-id="projectId"
                     :get-wps="getLibreVariableBridge"
                     :search-keyword="toolsSearchKeyword"
-                    @insert="handleInsertVariable"
-                    @update-from-selection="handleUpdateVariable"
-                    @sync-document="handleSyncDocument"
                   />
                   <ProjectFavoritesPanel
                     v-else-if="activeToolKey === 'favorites'"
@@ -6353,15 +6350,6 @@ export default {
       this.showHistoryDrawer = false // Close drawer if open
     },
 
-    handleInsertVariable(text) {
-      this.insertPlainTextToWps(text)
-    },
-    handleUpdateVariable() {
-      // Logic handled inside VariablePanel, no extra parent action needed unless event is emitted
-    },
-    handleSyncDocument(e) {
-      // Pass through or log
-    },
     handleOpenCreateVariable() {
       if (this.$refs.variablePanel) this.$refs.variablePanel.openCreateModal()
     },
