@@ -27,10 +27,15 @@ public class SkillProperties {
     /** 启停名单内存缓存 TTL（毫秒），做法同 ai.plugins.disabled-cache-ttl-ms */
     private long disabledCacheTtlMs = 5000;
 
+    /** 在线 Skill 广场注册表地址（官网公共注册表，见 SkillMarketService） */
+    private String registryUrl = "https://www.aiworkdeck.com/api/registry/skills";
+
     public String getDir() { return dir; }
     public void setDir(String dir) { this.dir = dir; }
     public List<String> getBaseTools() { return baseTools; }
     public void setBaseTools(List<String> baseTools) { this.baseTools = baseTools; }
     public long getDisabledCacheTtlMs() { return disabledCacheTtlMs; }
     public void setDisabledCacheTtlMs(long disabledCacheTtlMs) { this.disabledCacheTtlMs = disabledCacheTtlMs; }
+    public String getRegistryUrl() { return registryUrl; }
+    public void setRegistryUrl(String registryUrl) { this.registryUrl = registryUrl; }
 }

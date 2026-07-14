@@ -452,6 +452,38 @@ export function rescanSkills() {
   });
 }
 
+// 在线 Skill 广场：拉取官网注册表列表（登录即可查看）
+export function getSkillMarket() {
+  return request({
+    url: '/api/skills/market/list',
+    method: 'GET'
+  });
+}
+
+// 安装 / 重装在线 Skill（仅管理员，重装即更新）
+export function installMarketSkill(skillId) {
+  return request({
+    url: '/api/skills/market/install',
+    method: 'POST',
+    data: { id: skillId },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 卸载在线安装的 Skill（仅管理员）
+export function uninstallMarketSkill(skillId) {
+  return request({
+    url: '/api/skills/market/uninstall',
+    method: 'POST',
+    data: { id: skillId },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 /**
  * 将一段 AI 文本（markdown）导出为 Word 文档并落地到项目文件树中（后端生成 docx）
  * payload: { projectId, parentId, fileName, markdown | content }

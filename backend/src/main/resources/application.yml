@@ -159,6 +159,8 @@ ai:
     base-tools: [read_document, list_files, query_memory]
     # 启停名单内存缓存 TTL（毫秒）
     disabled-cache-ttl-ms: 5000
+    # 在线 Skill 广场注册表地址（官网公共注册表，见 SkillMarketService）
+    registry-url: https://www.aiworkdeck.com/api/registry/skills
 
 # 文件存储配置
 storage:

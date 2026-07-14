@@ -96,12 +96,52 @@
           </view>
         </view>
       </view>
+
+      <!-- 在线广场区块（官网 Skill 注册表，重装即更新） -->
+      <view class="section-header">
+        <text class="section-title">在线广场</text>
+        <text class="section-subtitle">来自官网的公开 Skill，安装后写入服务端 skills/ 目录</text>
+      </view>
+      <view v-if="marketError" class="empty">
+        <text>在线广场暂不可用（离线或网络受限）</text>
+        <text class="empty-hint">{{ marketError }}</text>
+      </view>
+      <view v-else-if="marketSkills.length === 0" class="empty">
+        <text>{{ marketLoading ? '加载中...' : '暂无在线 Skill' }}</text>
+      </view>
+      <view v-else>
+        <view v-for="m in marketSkills" :key="m.id" class="plugin-card">
+          <view class="card-header">
+            <text class="plugin-icon">{{ m.icon || '🧩' }}</text>
+            <view class="title-block">
+              <view class="name-row">
+                <text class="plugin-name">{{ m.name || m.id }}</text>
+                <text class="plugin-version" v-if="m.version">v{{ m.version }}</text>
+              </view>
+              <text class="plugin-meta">作者：{{ m.authorDisplayName || m.author || '未知' }} · {{ m.downloads || 0 }} 次下载</text>
+            </view>
+            <view class="market-actions">
+              <button class="btn" type="primary" size="mini" :disabled="!!marketBusyId" @tap="installSkill(m)">
+                {{ marketBusyId === m.id ? '处理中...' : (m.installed ? '更新' : '安装') }}
+              </button>
+              <button v-if="m.installed" class="btn" type="warn" size="mini" plain :disabled="!!marketBusyId" @tap="uninstallSkill(m)">卸载</button>
+            </view>
+          </view>
+
+          <text class="plugin-desc">{{ m.description || '暂无描述' }}</text>
+
+          <view class="tag-row">
+            <text v-if="m.installed" class="installed-tag">已安装</text>
+            <text v-for="t in m.triggers" :key="t" class="trigger-tag">{{ t }}</text>
+          </view>
+        </view>
+      </view>
     </scroll-view>
   </view>
 </template>
 
 <script>
-import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillEnabled, rescanSkills } from '@/services/api.js'
+import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillEnabled, rescanSkills, getSkillMarket, installMarketSkill, uninstallMarketSkill } from '@/services/api.js'
 
 const PERMISSION_LABELS = {
   file_read: '读取文件',
@@ -116,6 +156,10 @@ export default {
     return {
       plugins: [],
       skills: [],
+      marketSkills: [],
+      marketLoading: false,
+      marketError: '',
+      marketBusyId: '',
       loading: false,
       switching: false,
       rescanning: false,
@@ -124,6 +168,7 @@ export default {
   onLoad() {
     this.loadPlugins()
     this.loadSkills()
+    this.loadMarket()
   },
   methods: {
     permissionLabel(perm) {
@@ -185,6 +230,49 @@ export default {
         await this.loadSkills()
       } finally {
         this.switching = false
+      }
+    },
+    async loadMarket() {
+      this.marketLoading = true
+      this.marketError = ''
+      try {
+        const res = await getSkillMarket()
+        this.marketSkills = res?.skills || []
+      } catch (e) {
+        // 注册表不可达只在区块内提示，不弹 toast、不影响本地插件 / Skill 区块
+        console.warn('在线广场不可用:', e)
+        this.marketError = e?.message || '网络不可用'
+        this.marketSkills = []
+      } finally {
+        this.marketLoading = false
+      }
+    },
+    async installSkill(skill) {
+      this.marketBusyId = skill.id
+      try {
+        await installMarketSkill(skill.id)
+        uni.showToast({ title: skill.installed ? '已更新' : '已安装', icon: 'none' })
+        await this.loadSkills()
+        await this.loadMarket()
+      } catch (e) {
+        console.error('安装 Skill 失败:', e)
+        uni.showToast({ title: e?.message || '安装失败（需要管理员权限）', icon: 'none' })
+      } finally {
+        this.marketBusyId = ''
+      }
+    },
+    async uninstallSkill(skill) {
+      this.marketBusyId = skill.id
+      try {
+        await uninstallMarketSkill(skill.id)
+        uni.showToast({ title: '已卸载', icon: 'none' })
+        await this.loadSkills()
+        await this.loadMarket()
+      } catch (e) {
+        console.error('卸载 Skill 失败:', e)
+        uni.showToast({ title: e?.message || '卸载失败（需要管理员权限）', icon: 'none' })
+      } finally {
+        this.marketBusyId = ''
       }
     },
     async rescan() {
@@ -404,6 +492,21 @@ export default {
   border-radius: 999rpx;
   background-color: rgba(#67c23a, 0.12);
   color: #4f9a2c;
+}
+
+.market-actions {
+  display: flex;
+  flex-direction: column;
+  row-gap: 8rpx;
+  flex-shrink: 0;
+}
+
+.installed-tag {
+  font-size: 22rpx;
+  padding: 2rpx 12rpx;
+  border-radius: 999rpx;
+  background-color: rgba($uni-color-primary, 0.08);
+  color: $uni-color-primary;
 }
 
 .tool-list {
