@@ -1736,6 +1736,10 @@ export default {
     }
   },
   beforeUnmount() {
+    // 多实例守卫：只清掉指向自己的活跃指针；返回上一个本页实例时由其 onShow 重新接管
+    if (typeof window !== 'undefined' && window.__checkbaActiveOverviewVm === this) {
+      window.__checkbaActiveOverviewVm = null
+    }
     this.teardownResponsiveListener()
     // Epic #43: 解绑 ⌘⇧O 嵌入式编辑器监听
     try { if (this._zetaOpenEmbedUnsub) { this._zetaOpenEmbedUnsub(); this._zetaOpenEmbedUnsub = null } } catch (e) { /* ignore */ }
@@ -1795,12 +1799,15 @@ export default {
     }
     this._wpsInternalMsgHandler = null
     try {
-      if (typeof window !== 'undefined' && window.__checkbaHandleInternalLink) {
+      // 只删除自己安装的处理器：无条件 delete 会把栈下方旧实例还在用的处理器一并删掉
+      // （A→B 再返回后 A 的 WPS 内链失效）；A 的接管在 onShow 里完成
+      if (typeof window !== 'undefined' && this._wpsInternalLinkFn && window.__checkbaHandleInternalLink === this._wpsInternalLinkFn) {
         delete window.__checkbaHandleInternalLink
       }
     } catch (e) {
       // ignore
     }
+    this._wpsInternalLinkFn = null
 
     // Desktop：解绑 OCR 选区结果监听
     try {
@@ -1879,6 +1886,13 @@ export default {
     this.loadDynamicPlugins() // Fetch dynamic plugins
   },
   onShow() {
+    // 多实例守卫：本实例重新可见（如从个人中心返回）时接管全局事件与 WPS 内链处理，
+    // 否则全局指针仍指向已销毁/被覆盖的后进实例
+    if (typeof window !== 'undefined') {
+      window.__checkbaActiveOverviewVm = this
+      if (this._wpsInternalLinkFn) window.__checkbaHandleInternalLink = this._wpsInternalLinkFn
+    }
+
     // Sync UI state
     this.isRecording = activityTracker.getRecordingState()
 
@@ -1928,12 +1942,19 @@ export default {
     }
   },
   mounted() {
+    // 多实例守卫：本页经 navigateTo 反复进入时页面栈里会有多个存活实例，每个都在
+    // mounted 绑定了全局（ipcRenderer/window 级）监听；全局事件只让最近展示的实例
+    // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
+    if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
     this.setupResponsiveListener()
     // Desktop：网页选中“加入网核收藏”（右键菜单触发）
     try {
       if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.onWebMark) {
         if (!this._desktopWebMarkUnsub) {
           this._desktopWebMarkUnsub = window.checkbaDesktop.browser.onWebMark(async (payload) => {
+            // 页面栈里每个实例都订阅了本事件：只让活跃实例入库，否则一次“加入网核收藏”
+            // 会按实例数重复 POST，且旧实例还会把收藏写进它自己的 projectId
+            if (!this.isActiveOverviewInstance()) return
             try {
               const text = payload && payload.text ? String(payload.text).trim() : ''
               const url = payload && payload.url ? String(payload.url).trim() : ''
@@ -1971,6 +1992,7 @@ export default {
       if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.onOpenNewTab) {
         if (!this._desktopRendererOpenUnsub) {
           this._desktopRendererOpenUnsub = window.checkbaDesktop.browser.onOpenNewTab((data) => {
+            if (!this.isActiveOverviewInstance()) return
             try {
               if (!data || data.id !== 'renderer' || !data.url) return
               this.openBrowserTab(String(data.url))
@@ -2007,6 +2029,8 @@ export default {
       if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.zetaoffice && window.checkbaDesktop.zetaoffice.onOpenEmbed) {
         if (!this._zetaOpenEmbedUnsub) {
           this._zetaOpenEmbedUnsub = window.checkbaDesktop.zetaoffice.onOpenEmbed(() => {
+            // 非活跃实例不响应：否则被覆盖的旧实例也置 showLibreEmbed，返回时凭空弹出编辑器
+            if (!this.isActiveOverviewInstance()) return
             if (!this.libreOfficePreferred) this.showLibreEmbed = true
           })
         }
@@ -2020,6 +2044,7 @@ export default {
       if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.app && window.checkbaDesktop.app.onOpenInternal) {
         if (!this._desktopOpenInternalUnsub) {
           this._desktopOpenInternalUnsub = window.checkbaDesktop.app.onOpenInternal((payload) => {
+            if (!this.isActiveOverviewInstance()) return
             try {
               const raw0 = payload && payload.url ? String(payload.url) : ''
               if (!raw0 || !raw0.startsWith('checkba:')) return
@@ -2085,7 +2110,8 @@ export default {
     try {
       // 给 WPS SDK onHyperLinkOpen 直接调用：避免 window.open/postMessage 的不确定性
       if (typeof window !== 'undefined') {
-        window.__checkbaHandleInternalLink = (url) => {
+        // 记住自己的处理器引用：onShow 重新接管 / beforeUnmount 按引用删除都靠它
+        this._wpsInternalLinkFn = (url) => {
           try {
             const raw0 = url ? String(url) : ''
             if (!raw0) return
@@ -2149,6 +2175,7 @@ export default {
             // ignore
           }
         }
+        window.__checkbaHandleInternalLink = this._wpsInternalLinkFn
         window.addEventListener('message', this._wpsInternalMsgHandler)
       }
     } catch (e) {
@@ -2160,6 +2187,8 @@ export default {
       if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.ocr && window.checkbaDesktop.ocr.onSelectionError) {
         if (!this._desktopOcrSelectionErrUnsub) {
           this._desktopOcrSelectionErrUnsub = window.checkbaDesktop.ocr.onSelectionError((data) => {
+            // 只让活跃实例弹一次 toast，避免页面栈里 N 个实例连弹 N 次
+            if (!this.isActiveOverviewInstance()) return
             const msg = data && data.message ? String(data.message) : '截图失败'
             uni.showToast({ title: msg, icon: 'none' })
           })
@@ -2884,6 +2913,13 @@ export default {
           this.triggerClipboardRefresh()
         }
       })
+    },
+    isActiveOverviewInstance() {
+      // 多实例守卫：navigateTo 进入本页不销毁旧实例，页面栈里每个实例都持有一份
+      // 全局监听。全局事件只让“最近展示的实例”处理（onShow/mounted 时登记，
+      // beforeUnmount 注销）。指针缺失时放行，避免误杀单实例场景。
+      if (typeof window === 'undefined') return true
+      return !window.__checkbaActiveOverviewVm || window.__checkbaActiveOverviewVm === this
     },
     setupResponsiveListener() {
       if (typeof window === 'undefined') return
