@@ -610,12 +610,18 @@ export default {
 
     // Model Selection
     const showModelDropdown = ref(false)
-    // 模型 ID 必须与后端 AllowedModels 白名单一致，且为 OpenRouter 当前在线模型
+    // 模型 ID 必须与后端 AllowedModels 白名单一致，且为 OpenRouter 当前在线模型。
+    // 排序：区域无关模型在前（Google/Anthropic/OpenAI 系在国内网络会被
+    // OpenRouter 返回 403 region 错误，仅国际网络可用）
     const availableModels = [
-      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-      { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro' },
-      { id: 'anthropic/claude-sonnet-5', name: 'Claude Sonnet 5' },
-      { id: 'openai/gpt-5.2', name: 'GPT-5.2' }
+      { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
+      { id: 'qwen/qwen3-235b-a22b-2507', name: 'Qwen3 235B' },
+      { id: 'moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
+      { id: 'z-ai/glm-5', name: 'GLM-5' },
+      { id: 'anthropic/claude-sonnet-5', name: 'Claude Sonnet 5 (国际网络)' },
+      { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (国际网络)' },
+      { id: 'openai/gpt-5.2', name: 'GPT-5.2 (国际网络)' }
     ]
     const currentModelId = ref(availableModels[0].id)
     const currentModelName = ref(availableModels[0].name)

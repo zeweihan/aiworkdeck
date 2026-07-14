@@ -91,7 +91,7 @@ public class AiModelProperties {
         /**
          * Default model to use if not specified.
          */
-        private String defaultModel = "google/gemini-2.5-flash-lite";
+        private String defaultModel = "deepseek/deepseek-v4-flash";
         /**
          * Timeout.
          */

@@ -101,6 +101,18 @@ class ChatModelFactoryTest {
     }
 
     @Test
+    @DisplayName("DB 中 baseUrl 为空串（向导只填了 key 的场景）：应回退默认 baseUrl 而非报错")
+    void blankBaseUrlInDbFallsBackToDefault() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        // 向导/后台保存时未填字段会以空串入库（toSettingsUpdates 的 safe()）
+        when(systemSettingService.get(eq("external.openrouter.baseUrl"), any())).thenReturn("");
+        when(systemSettingService.get(eq("external.openrouter.apiKey"), any())).thenReturn("sk-or-db-key");
+
+        // 修复前这里抛 IllegalArgumentException: baseUrl cannot be null or empty
+        assertInstanceOf(OpenAiChatModel.class, factory.getChatModel(null));
+    }
+
+    @Test
     @DisplayName("clearCache：清空缓存后重建实例（保存新 key 后无需重启）")
     void clearCacheRebuildsModels() {
         properties.setProvider(AiModelProperties.Provider.OPENROUTER);
@@ -116,11 +128,14 @@ class ChatModelFactoryTest {
     @Test
     @DisplayName("白名单应包含前端下拉与内部硬编码使用的全部模型（OpenRouter 2026-07 实测在线）")
     void allowedModelsCoverFrontendAndInternalIds() {
-        // 前端 ChatInterface.vue availableModels + 标题/摘要用的轻量模型
+        // 前端 ChatInterface.vue availableModels + 标题/摘要/默认用的轻量模型
         String[] required = {
-                "google/gemini-2.5-flash",
-                "google/gemini-2.5-flash-lite",
-                "google/gemini-2.5-pro",
+                "deepseek/deepseek-v4-flash",
+                "deepseek/deepseek-v4-pro",
+                "qwen/qwen3-235b-a22b-2507",
+                "moonshotai/kimi-k2.6",
+                "z-ai/glm-5",
+                "anthropic/claude-sonnet-5",
                 "google/gemini-3.1-pro-preview",
                 "openai/gpt-5.2",
         };

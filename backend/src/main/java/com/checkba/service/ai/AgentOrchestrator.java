@@ -179,7 +179,7 @@ public class AgentOrchestrator {
                     try {
                         log.info("Generating conversation title for: {}", convId);
                         // Use a lightweight model for title generation
-                        dev.langchain4j.model.chat.ChatLanguageModel titleModel = chatModelFactory.getChatModel("google/gemini-2.5-flash-lite");
+                        dev.langchain4j.model.chat.ChatLanguageModel titleModel = chatModelFactory.getChatModel("deepseek/deepseek-v4-flash");
                         String title = messageService.generateConversationTitle(userMsg, titleModel);
                         messageService.updateConversationTitle(convId, title);
                         log.info("Conversation title generated: {} -> {}", convId, title);

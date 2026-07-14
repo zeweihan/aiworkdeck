@@ -45,6 +45,16 @@ public class ChatModelFactory {
     }
 
     /**
+     * 读取系统设置，DB 里的空白值视为未配置、回退默认值。
+     * 向导/管理后台保存时未填的字段会以空串写入 DB（toSettingsUpdates 的 safe()），
+     * 直接用会把 baseUrl 等必填项置空导致构建模型失败。
+     */
+    private String getSetting(String key, String fallback) {
+        String value = systemSettingService.get(key, null);
+        return (value == null || value.isBlank()) ? fallback : value;
+    }
+
+    /**
      * 清空模型实例缓存。管理后台/向导保存 API key、baseUrl 等配置后必须调用，
      * 否则旧配置构建的实例会一直用到进程重启。
      */
@@ -93,7 +103,7 @@ public class ChatModelFactory {
         // Fallback to configured default provider (Legacy behavior)
         // If the user wants to force specific internal models (Gemini/Ollama) via "default"
         if (provider == AiModelProperties.Provider.GEMINI || (targetModel.toLowerCase().contains("gemini") && !targetModel.contains("/"))) {
-            String defaultModel = systemSettingService.get("external.google.modelName", aiModelProperties.getGemini().getModelName());
+            String defaultModel = getSetting("external.google.modelName", aiModelProperties.getGemini().getModelName());
             return getOrCreateGeminiModel(defaultModel); // fallback to config model name if generic request
         }
 
@@ -107,8 +117,8 @@ public class ChatModelFactory {
             log.info("Creating new OpenRouter ChatModel instance for: {}", modelId);
             AiModelProperties.OpenRouter config = aiModelProperties.getOpenRouter();
             
-            String apiKey = systemSettingService.get("external.openrouter.apiKey", config.getApiKey());
-            String baseUrl = systemSettingService.get("external.openrouter.baseUrl", config.getBaseUrl());
+            String apiKey = getSetting("external.openrouter.apiKey", config.getApiKey());
+            String baseUrl = getSetting("external.openrouter.baseUrl", config.getBaseUrl());
             
             return OpenAiChatModel.builder()
                     .apiKey(apiKey)
@@ -146,8 +156,8 @@ public class ChatModelFactory {
             log.info("Creating new Gemini ChatModel instance for: {}", modelName);
             AiModelProperties.Gemini config = aiModelProperties.getGemini();
             
-            String apiKey = systemSettingService.get("external.google.apiKey", config.getApiKey());
-            String baseUrl = systemSettingService.get("external.google.apiBaseUrl", config.getApiBaseUrl());
+            String apiKey = getSetting("external.google.apiKey", config.getApiKey());
+            String baseUrl = getSetting("external.google.apiBaseUrl", config.getApiBaseUrl());
 
             return new GeminiChatLanguageModel(
                     baseUrl,
@@ -198,8 +208,8 @@ public class ChatModelFactory {
             log.info("Creating new OpenRouter StreamingChatModel for: {}", modelId);
             AiModelProperties.OpenRouter config = aiModelProperties.getOpenRouter();
             
-            String apiKey = systemSettingService.get("external.openrouter.apiKey", config.getApiKey());
-            String baseUrl = systemSettingService.get("external.openrouter.baseUrl", config.getBaseUrl());
+            String apiKey = getSetting("external.openrouter.apiKey", config.getApiKey());
+            String baseUrl = getSetting("external.openrouter.baseUrl", config.getBaseUrl());
             
             return dev.langchain4j.model.openai.OpenAiStreamingChatModel.builder()
                     .apiKey(apiKey)

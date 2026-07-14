@@ -29,7 +29,9 @@ public class TokenUsageService {
             com.checkba.model.entity.TokenUsage entity = new com.checkba.model.entity.TokenUsage();
             entity.setProjectId(projectId);
             entity.setUserId(userId);
-            entity.setModel(modelId);
+            // model 列非空约束：空 modelId（走供应商默认模型的请求）落 "default"，
+            // 否则 save 失败会把整个流式事务标记 rollback-only，对话在收尾时报错
+            entity.setModel((modelId == null || modelId.isBlank()) ? "default" : modelId);
             entity.setConversationId(conversationId);
             
             int promptTokens = usage.inputTokenCount() != null ? usage.inputTokenCount() : 0;
