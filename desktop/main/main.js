@@ -50,6 +50,8 @@ function emitClipboard(text, source) {
   try {
     const t = String(text || '').trim()
     if (!t) return
+    // 同步轮询指纹：copy/cut 键监听推送过的文本，轮询 watcher 不再重复推送
+    lastClipboardFingerprint = 'TXT_' + t
     if (mainWindow) {
       mainWindow.webContents.send('checkba:clipboard-copied', {
         type: 'TEXT',
@@ -107,14 +109,18 @@ function restoreViewsVisibility() {
 
 // 记录上一次剪贴板内容指纹，防止重复推送
 let lastClipboardFingerprint = ''
+// 首个 tick 只记指纹不推送：启动前就躺在剪贴板里的内容（尤其图片）不算“新复制”，
+// 否则每次重启应用都会把同一张图再入库一次
+let clipboardPrimed = false
 
 function startClipboardWatcher() {
   if (clipboardWatchTimer) return
-  // Init fingerprint
-  lastClipboardFingerprint = (clipboard.readText() || '')
+  clipboardPrimed = false
 
   // 系统级：轮询剪贴板内容变化
   clipboardWatchTimer = setInterval(() => {
+    const priming = !clipboardPrimed
+    clipboardPrimed = true
     try {
       const formats = clipboard.availableFormats()
 
@@ -138,6 +144,7 @@ function startClipboardWatcher() {
           const fingerprint = 'IMG_' + size.width + 'x' + size.height + '_' + bitmap.length + '_' + sample
           if (fingerprint !== lastClipboardFingerprint) {
             lastClipboardFingerprint = fingerprint
+            if (priming) return
             const dataUrl = img.toDataURL()
             console.log('[Clipboard] Image detected, size:', dataUrl.length)
             if (mainWindow) {
@@ -169,6 +176,7 @@ function startClipboardWatcher() {
           const fingerprint = 'FILE_' + cleanPath
           if (fingerprint !== lastClipboardFingerprint) {
             lastClipboardFingerprint = fingerprint
+            if (priming) return
             if (mainWindow) {
               mainWindow.webContents.send('checkba:clipboard-copied', {
                 type: 'FILE',
@@ -201,11 +209,13 @@ function startClipboardWatcher() {
       // 3. 文本 (Text)
       if (hasText) {
         const t = clipboard.readText() || ''
-        const tt = String(t || '')
+        // trim 与 emitClipboard 保持一致，否则两处指纹对不上会反复推送
+        const tt = String(t || '').trim()
         if (!tt) return
         const fingerprint = 'TXT_' + tt
         if (fingerprint !== lastClipboardFingerprint) {
           lastClipboardFingerprint = fingerprint
+          if (priming) return
           emitClipboard(tt, 'system') // reuse emitClipboard for text to keep compat
         }
       }
