@@ -135,8 +135,8 @@
                     v-for="tag in (targetFileForTags ? targetFileForTags.tags : [])"
                     :key="tag.id"
                     :tag="tag"
-                    :removable="true"
-                    @remove="handleRemoveTag(tag)"
+                    :closable="true"
+                    @close="handleRemoveTag(tag)"
                   />
               </view>
            </view>
