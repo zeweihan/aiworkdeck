@@ -3079,11 +3079,22 @@ export default {
       if (!user) return
       this._clipboardBound = true
       // 统一的“写库 + 立即更新 UI”入口：避免 copy 事件多次触发导致重复入库
-      this._clipboardLast = this._clipboardLast || { ts: 0, text: '' }
+      // 去重状态挂 window 而非组件实例：本页经 navigateTo 反复进入时页面栈里会存在
+      // 多个实例，每个实例都绑定过监听；实例级去重挡不住“一次复制、多实例各入库一条”
+      if (typeof window !== 'undefined' && !window.__checkbaClipLastText) {
+        window.__checkbaClipLastText = { ts: 0, text: '' }
+      }
       const recordClipboardOnce = async (rawText, source = 'doc') => {
         // 1. Electron Payload Object (IMAGE / FILE)
         if (rawText && typeof rawText === 'object') {
            const payload = rawText
+           // 同一事件（ts 相同）会被页面栈里每个实例的监听器各收到一次，只处理第一次；
+           // 图片/文件没有下方文本那样的内容去重，全靠这里挡住重复入库
+           const evKey = String(payload.type || '') + '_' + String(payload.ts || '')
+           if (typeof window !== 'undefined') {
+             if (window.__checkbaClipLastEventKey === evKey) return null
+             window.__checkbaClipLastEventKey = evKey
+           }
            if (payload.type === 'TEXT') {
              return await recordClipboardOnce(payload.text, source)
            } else if (payload.type === 'IMAGE' && payload.data) {
@@ -3160,10 +3171,13 @@ export default {
 
         const now = Date.now()
         // 仅用于防止同一次用户动作被多路监听重复触发（不是业务去重）
-        if (this._clipboardLast.text === t && now - (this._clipboardLast.ts || 0) < 600) {
+        const lastText = (typeof window !== 'undefined' && window.__checkbaClipLastText) || { ts: 0, text: '' }
+        if (lastText.text === t && now - (lastText.ts || 0) < 600) {
           return null
         }
-        this._clipboardLast = { ts: now, text: t, source }
+        if (typeof window !== 'undefined') {
+          window.__checkbaClipLastText = { ts: now, text: t, source }
+        }
 
         try {
           const res = await saveClipboardText(t)
