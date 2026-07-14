@@ -2,6 +2,7 @@ package com.checkba.controller.ai;
 
 import com.checkba.controller.AuthController;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.AdminAccessService;
 import com.checkba.service.ai.PluginService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -31,6 +32,7 @@ public class PluginController {
 
     private final PluginService pluginService;
     private final UserRepository userRepository;
+    private final AdminAccessService adminAccessService;
 
     @lombok.Data
     public static class PluginView {
@@ -109,14 +111,14 @@ public class PluginController {
         return view;
     }
 
-    /** 与 AdminConfigController 相同的管理员判定：session -> userId -> username == admin */
+    /** 与 AdminConfigController 相同的管理员判定：session -> userId -> AdminAccessService（桌面单机全员管理员的唯一出口） */
     private boolean isAdmin(String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
             return false;
         }
         return userRepository.findById(userId)
-                .map(u -> "admin".equalsIgnoreCase(u.getUsername()))
+                .map(adminAccessService::isAdmin)
                 .orElse(false);
     }
 

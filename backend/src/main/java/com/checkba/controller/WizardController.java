@@ -36,17 +36,20 @@ public class WizardController {
     private final UserRepository userRepository;
     private final com.checkba.service.AdminAccessService adminAccessService;
     private final ObjectMapper objectMapper;
+    private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
 
     public WizardController(SystemSettingService systemSettingService,
                             SystemSettingRepository systemSettingRepository,
                             UserRepository userRepository,
                             com.checkba.service.AdminAccessService adminAccessService,
-                            ObjectMapper objectMapper) {
+                            ObjectMapper objectMapper,
+                            com.checkba.service.ai.ChatModelFactory chatModelFactory) {
         this.systemSettingService = systemSettingService;
         this.systemSettingRepository = systemSettingRepository;
         this.userRepository = userRepository;
         this.adminAccessService = adminAccessService;
         this.objectMapper = objectMapper;
+        this.chatModelFactory = chatModelFactory;
     }
 
     @GetMapping
@@ -79,6 +82,8 @@ public class WizardController {
         }
         updates.put(KEY_WIZARD_COMPLETED, "true");
         systemSettingService.setMany(updates);
+        // 向导保存的 key/供应商立即生效（与管理后台保存行为一致）
+        chatModelFactory.clearCache();
 
         Map<String, Object> ok = new HashMap<>();
         ok.put("code", 0);

@@ -151,7 +151,7 @@ public class SkillController {
         return view;
     }
 
-    /** 管理员判定走 AdminAccessService 唯一出口（桌面单机 allow-all-users 时全员管理员） */
+    /** 与 AdminConfigController 相同的管理员判定：session -> userId -> AdminAccessService（桌面单机全员管理员的唯一出口） */
     private boolean isAdmin(String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
