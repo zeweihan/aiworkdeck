@@ -112,6 +112,11 @@ public final class EvalHarness {
             savedMessages.add(new SavedMessage(inv.getArgument(3), inv.getArgument(4)));
             return null;
         }).when(messageService).saveMessage(any(), any(), any(), any(), any());
+        // ASSISTANT 消息走轮次级 upsert（首次插入返回行 ID，本轮内后续保存更新同一行）
+        when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenAnswer(inv -> {
+            savedMessages.add(new SavedMessage("ASSISTANT", inv.getArgument(4)));
+            return 1L;
+        });
         // 返回 2 条历史消息，跳过「首次对话异步生成标题」分支（评测不关心该路径）
         when(messageService.listByConversationId(any()))
                 .thenReturn(List.of(mock(ProjectAiMessage.class), mock(ProjectAiMessage.class)));

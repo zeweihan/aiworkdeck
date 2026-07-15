@@ -53,9 +53,7 @@ public class ProjectAiMessageService {
     /**
      * Save a single message (user OR assistant) to the database.
      * Used for streaming scenarios where assistant response comes after user message.
-     * 
-     * 对于 ASSISTANT 消息，如果最后一条同角色消息是最近 30 秒内创建的（即同一个对话轮次），
-     * 则更新它而不是创建新的。这样可以避免增量保存和最终保存产生重复消息。
+     * 总是插入新行；同一轮次内 ASSISTANT 消息的增量更新请用 {@link #upsertAssistantMessage}。
      */
     public void saveMessage(String projectIdStr, Long userId, String conversationId, String role, String content) {
         if (projectIdStr == null || role == null) {
@@ -67,25 +65,6 @@ public class ProjectAiMessageService {
         } catch (NumberFormatException e) {
             return;
         }
-        
-        // 对于 ASSISTANT 消息，检查是否需要更新而不是新建
-        if ("ASSISTANT".equalsIgnoreCase(role) && conversationId != null) {
-            java.util.Optional<ProjectAiMessage> lastMsgOpt = repository.findLastByConversationIdAndRole(conversationId, "ASSISTANT");
-            if (lastMsgOpt.isPresent()) {
-                ProjectAiMessage lastMsg = lastMsgOpt.get();
-                // 如果最后一条 ASSISTANT 消息是 30 秒内创建的，认为是同一个对话轮次，更新它
-                java.time.LocalDateTime threshold = java.time.LocalDateTime.now().minusSeconds(30);
-                if (lastMsg.getCreatedAt() != null && lastMsg.getCreatedAt().isAfter(threshold)) {
-                    // 更新已有消息而不是创建新的
-                    lastMsg.setContent(content);
-                    lastMsg.setCreatedAt(java.time.LocalDateTime.now()); // 更新时间戳
-                    repository.save(lastMsg);
-                    return;
-                }
-            }
-        }
-        
-        // 否则创建新消息
         ProjectAiMessage msg = new ProjectAiMessage();
         msg.setProjectId(projectId);
         msg.setUserId(userId);
@@ -94,6 +73,48 @@ public class ProjectAiMessageService {
         msg.setConversationId(conversationId);
         msg.setCreatedAt(java.time.LocalDateTime.now());
         repository.save(msg);
+    }
+
+    /**
+     * 保存或更新本轮 ASSISTANT 消息。
+     * 编排器按对话轮次跟踪消息 ID：同一轮内的增量保存/最终保存更新同一行，
+     * 新的一轮传 null 插入新行。
+     * （修复历史丢消息：旧实现按"会话最后一条 ASSISTANT 距今 30 秒内则更新"判断，
+     * 没有轮次概念，用户两轮提问间隔小于 30 秒时，第二轮回复会覆盖第一轮回复。）
+     *
+     * @param existingMessageId 本轮已保存过的消息 ID；null 表示本轮首次保存
+     * @return 保存后的消息 ID（供本轮后续增量保存复用）；参数非法时返回 null
+     */
+    public Long upsertAssistantMessage(String projectIdStr, Long userId, String conversationId, Long existingMessageId, String content) {
+        if (projectIdStr == null) {
+            return null;
+        }
+        Long projectId;
+        try {
+            projectId = Long.parseLong(projectIdStr);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+
+        if (existingMessageId != null) {
+            java.util.Optional<ProjectAiMessage> existingOpt = repository.findById(existingMessageId);
+            if (existingOpt.isPresent()) {
+                ProjectAiMessage existing = existingOpt.get();
+                existing.setContent(content);
+                repository.save(existing);
+                return existing.getId();
+            }
+        }
+
+        ProjectAiMessage msg = new ProjectAiMessage();
+        msg.setProjectId(projectId);
+        msg.setUserId(userId);
+        msg.setRole("ASSISTANT");
+        msg.setContent(content);
+        msg.setConversationId(conversationId);
+        msg.setCreatedAt(java.time.LocalDateTime.now());
+        repository.save(msg);
+        return msg.getId();
     }
 
     public List<ProjectAiMessage> listByProject(Long projectId) {

@@ -37,6 +37,8 @@ public class AgentOrchestrator {
     private final Set<String> cancelledConversations = ConcurrentHashMap.newKeySet();
     // 存储当前活跃会话的已生成内容（用于取消时保存部分内容）
     private final Map<String, StringBuilder> activeStreamContent = new ConcurrentHashMap<>();
+    // 本轮 ASSISTANT 消息的行 ID：同一轮内的增量保存/最终保存更新同一行，跨轮次互不覆盖
+    private final Map<String, Long> activeAssistantMessageId = new ConcurrentHashMap<>();
 
     private final ChatModelFactory chatModelFactory;
     private final ProjectAiMessageService messageService;
@@ -74,6 +76,19 @@ public class AgentOrchestrator {
     private void clearCancelledState(String conversationId) {
         cancelledConversations.remove(conversationId);
         activeStreamContent.remove(conversationId);
+        activeAssistantMessageId.remove(conversationId);
+    }
+
+    /**
+     * 保存/更新本轮 ASSISTANT 消息：首次保存插入新行并记住行 ID，
+     * 本轮内后续（增量/最终）保存更新同一行，避免重复；新的一轮从新行开始，不会覆盖上一轮回复。
+     */
+    private void saveAssistantMessage(String conversationId, String projectId, Long userId, String content) {
+        Long id = messageService.upsertAssistantMessage(
+                projectId, userId, conversationId, activeAssistantMessageId.get(conversationId), content);
+        if (id != null) {
+            activeAssistantMessageId.put(conversationId, id);
+        }
     }
 
     /**
@@ -89,7 +104,7 @@ public class AgentOrchestrator {
         // 如果有部分内容，保存并标记为已中断
         if (!partialContent.isEmpty()) {
             String contentToSave = partialContent + "\n\n[已中断]";
-            messageService.saveMessage(projectId, userId, conversationId, "ASSISTANT", contentToSave);
+            saveAssistantMessage(conversationId, projectId, userId, contentToSave);
             log.info("Saved partial content ({} chars) for cancelled conversation: {}", partialContent.length(), conversationId);
         }
         
@@ -158,9 +173,10 @@ public class AgentOrchestrator {
         String projectId = String.valueOf(request.getProjectId());
         AgentMode agentMode = request.getAgentMode(); // 获取 Agent 模式
         
-        // 初始化取消状态和内容收集器
+        // 初始化取消状态和内容收集器（新的一轮：清掉上一轮的 ASSISTANT 行 ID，本轮回复必须落新行）
         cancelledConversations.remove(conversationId);
         activeStreamContent.put(conversationId, new StringBuilder());
+        activeAssistantMessageId.remove(conversationId);
         
         try {
             log.info("Agent Loop Started: conv={}, model={}, mode={}, msg={}", conversationId, request.getModel(), agentMode, request.getMessage());
@@ -344,7 +360,7 @@ public class AgentOrchestrator {
                 
                 // 增量保存：在工具执行后立即保存AI消息和工具输出，防止对话中断导致上下文丢失
                 String intermediateContent = (aiContent != null ? aiContent : "") + "\n" + executionLog.toString();
-                messageService.saveMessage(projectId, userId, conversationId, "ASSISTANT", intermediateContent);
+                saveAssistantMessage(conversationId, projectId, userId, intermediateContent);
                 log.info("Intermediate save after native tool execution for conversation: {}", conversationId);
                 
                 runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode);
@@ -411,7 +427,7 @@ public class AgentOrchestrator {
                 if (toolExecuted) {
                      // 增量保存：在XML工具执行后立即保存AI消息和工具输出，防止对话中断导致上下文丢失
                      String intermediateXmlContent = content + "\n" + executionLog.toString();
-                     messageService.saveMessage(projectId, userId, conversationId, "ASSISTANT", intermediateXmlContent);
+                     saveAssistantMessage(conversationId, projectId, userId, intermediateXmlContent);
                      log.info("Intermediate save after XML tool execution for conversation: {}", conversationId);
 
                      // Recurse with executionLog
@@ -486,7 +502,7 @@ public class AgentOrchestrator {
                     log.info("Detected Implementation Plan. STOPPING LOOP for user approval.");
                     // Save assistant message with execution log prepended
                     String fullContent = executionLog.length() > 0 ? executionLog.toString() + content : content;
-                    messageService.saveMessage(projectId, userId, conversationId, "ASSISTANT", fullContent);
+                    saveAssistantMessage(conversationId, projectId, userId, fullContent);
                     // 发送 bubble_end 表示当前响应结束（等待用户审批）
                     sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"awaiting_approval\"}");
                     sseEmitterService.close(conversationId);
@@ -522,7 +538,7 @@ public class AgentOrchestrator {
             if (!content.isEmpty()) {
                 // Prepend execution log for history persistence
                 String fullContent = executionLog.length() > 0 ? executionLog.toString() + content : content;
-                messageService.saveMessage(projectId, userId, conversationId, "ASSISTANT", fullContent);
+                saveAssistantMessage(conversationId, projectId, userId, fullContent);
             }
             // 触发记忆写入管线（异步：对话摘要 / 项目记忆 / MemCell 原子记忆提取）
             try {
@@ -553,6 +569,12 @@ public class AgentOrchestrator {
         // 流式出错时的清理：关闭 emitter + 复位状态，避免 SSE 连接挂到超时、前端永久加载
         handler.setOnError(err -> {
             editorBridgeService.setStreamingMode(conversationId, false);
+            // 保存已生成的部分内容，避免"当时看到了回复、历史里却没有"
+            StringBuilder sb = activeStreamContent.get(conversationId);
+            String partialContent = sb != null ? sb.toString() : "";
+            if (!partialContent.isEmpty()) {
+                saveAssistantMessage(conversationId, projectId, userId, partialContent + "\n\n[生成出错，已中断]");
+            }
             sseEmitterService.close(conversationId);
             clearCancelledState(conversationId);
             editorBridgeService.clearCurrentConversationId();
