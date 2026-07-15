@@ -28,6 +28,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
@@ -273,5 +274,49 @@ class MemoryQualityTest {
 
         assertEquals(101L, result.getId(), "其他项目的相似记忆不应拦截保存");
         verify(memoryEntryRepository).save(candidate);
+    }
+
+    // ==================== 证据账本：更新信号 ====================
+
+    private static MemoryEntry keyedEntry(Long id, String key, LocalDateTime createdAt) {
+        MemoryEntry e = MemoryEntry.builder()
+                .id(id)
+                .projectId(1L)
+                .memoryType("fact")
+                .memoryKey(key)
+                .memoryValue("value-" + id)
+                .createdAt(createdAt)
+                .build();
+        return e;
+    }
+
+    @Test
+    @DisplayName("更新信号：同 key 存在更新记录的条目被标记，最新条目不被标记")
+    void supersededInfoDetectsNewerRecords() {
+        LocalDateTime old = LocalDateTime.of(2026, 4, 1, 10, 0);
+        LocalDateTime newer = LocalDateTime.of(2026, 6, 30, 9, 0);
+        MemoryEntry stale = keyedEntry(1L, "质押情况", old);
+        MemoryEntry unrelated = keyedEntry(2L, "交易结构", LocalDateTime.of(2026, 5, 1, 10, 0));
+
+        when(memoryEntryRepository.findByProjectIdAndMemoryKeyIn(eq(1L), any()))
+                .thenReturn(List.of(stale, keyedEntry(3L, "质押情况", newer), unrelated));
+
+        Map<Long, LocalDateTime> superseded =
+                memoryManager.findSupersededInfo(List.of(stale, unrelated));
+
+        assertEquals(newer, superseded.get(1L), "旧条目应标记为已被更新");
+        assertFalse(superseded.containsKey(2L), "无更新记录的条目不应被标记");
+    }
+
+    @Test
+    @DisplayName("更新信号：查询失败时降级为空结果，不抛异常")
+    void supersededInfoDegradesGracefully() {
+        when(memoryEntryRepository.findByProjectIdAndMemoryKeyIn(eq(1L), any()))
+                .thenThrow(new RuntimeException("db down"));
+
+        Map<Long, LocalDateTime> superseded = memoryManager.findSupersededInfo(
+                List.of(keyedEntry(1L, "质押情况", LocalDateTime.of(2026, 4, 1, 10, 0))));
+
+        assertTrue(superseded.isEmpty());
     }
 }

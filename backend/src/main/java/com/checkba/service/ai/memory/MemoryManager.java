@@ -15,6 +15,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -193,6 +194,49 @@ public class MemoryManager {
                 fetchKeywordCandidates(projectId, query, memoryType, limit * 3), limit);
         touchMemories(ranked);
         return ranked;
+    }
+
+    /**
+     * 检测"已被更新"的条目（证据账本的更新信号）：
+     * 同一项目内存在相同 memoryKey 且 createdAt 更晚的记录时，视为该条目已有更新版本。
+     * 返回 entryId → 最新版本的创建时间；无更新版本的条目不出现在结果中。
+     * 检测失败时返回已算出的部分结果，不影响主流程。
+     */
+    public Map<Long, LocalDateTime> findSupersededInfo(List<MemoryEntry> entries) {
+        Map<Long, LocalDateTime> result = new HashMap<>();
+        Map<Long, List<MemoryEntry>> byProject = entries.stream()
+                .filter(e -> e.getProjectId() != null && e.getMemoryKey() != null && e.getId() != null)
+                .collect(Collectors.groupingBy(MemoryEntry::getProjectId));
+        for (Map.Entry<Long, List<MemoryEntry>> group : byProject.entrySet()) {
+            List<String> keys = group.getValue().stream()
+                    .map(MemoryEntry::getMemoryKey).distinct().collect(Collectors.toList());
+            List<MemoryEntry> sameKeyEntries;
+            try {
+                sameKeyEntries = memoryEntryRepository.findByProjectIdAndMemoryKeyIn(group.getKey(), keys);
+            } catch (Exception e) {
+                log.warn("Superseded check failed for project {}: {}", group.getKey(), e.getMessage());
+                continue;
+            }
+            Map<String, LocalDateTime> latestByKey = new HashMap<>();
+            for (MemoryEntry e : sameKeyEntries) {
+                if (e.getCreatedAt() == null || e.getMemoryKey() == null) continue;
+                latestByKey.merge(e.getMemoryKey(), e.getCreatedAt(), (a, b) -> a.isAfter(b) ? a : b);
+            }
+            for (MemoryEntry e : group.getValue()) {
+                LocalDateTime latest = latestByKey.get(e.getMemoryKey());
+                if (latest != null && e.getCreatedAt() != null && latest.isAfter(e.getCreatedAt())) {
+                    result.put(e.getId(), latest);
+                }
+            }
+        }
+        return result;
+    }
+
+    /**
+     * 将检索结果格式化为证据账本（含记录时间/来源/更新信号），供上下文注入与记忆工具复用。
+     */
+    public String formatAsEvidenceLedger(List<MemoryEntry> entries) {
+        return MemoryEvidenceFormatter.format(entries, findSupersededInfo(entries), LocalDate.now());
     }
 
     /**

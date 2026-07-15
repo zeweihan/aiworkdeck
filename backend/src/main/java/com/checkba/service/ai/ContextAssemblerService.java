@@ -285,14 +285,8 @@ public class ContextAssemblerService {
             List<MemoryEntry> relevantMemories = memoryManager.retrieveMemories(
                     projectIdLong, userPrompt, null, 5);
             if (!relevantMemories.isEmpty()) {
-                systemText.append("\n\n# 相关记忆\n");
-                for (MemoryEntry mem : relevantMemories) {
-                    systemText.append("- [").append(mem.getMemoryType()).append("] ");
-                    if (mem.getMemoryKey() != null) {
-                        systemText.append(mem.getMemoryKey()).append(": ");
-                    }
-                    systemText.append(mem.getMemoryValue()).append("\n");
-                }
+                systemText.append("\n\n# 相关记忆（证据账本）\n");
+                systemText.append(memoryManager.formatAsEvidenceLedger(relevantMemories));
             }
         }
 
