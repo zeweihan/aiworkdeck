@@ -42,6 +42,8 @@ const DEFAULT_SOFFICE_BASE_URL = 'https://cdn.zetaoffice.net/zetaoffice_latest/'
  * @param {string}   [options.zetaJsUrl='./zeta.js'] vendored zetajs bridge URL.
  * @param {string}   [options.workerScriptUrl='./office_thread.js'] office worker URL.
  * @param {string}   [options.fontUrl] optional same-origin CJK font to inject.
+ * @param {string[]} [options.fontUrls] optional same-origin CJK fonts (one per
+ *        typeface category: sans/serif/kai/fangsong); merged with fontUrl.
  * @param {(msg:string)=>void}     [options.onLog] worker 'log' lines + milestones.
  * @param {()=>void}                [options.onReady] fired on worker 'ui_ready'
  *        (document loaded, canvas interactive).
@@ -55,6 +57,7 @@ export function bootZetaOffice(options = {}) {
     zetaJsUrl = './zeta.js',
     workerScriptUrl = './office_thread.js',
     fontUrl,
+    fontUrls,
     // UI language for the LibreOffice chrome (issue #66 follow-up). The engine
     // derives its locale from navigator.languages (emscripten getEnvStrings ->
     // LANG), so the UI silently follows the BROWSER/Electron language — an
@@ -86,58 +89,97 @@ export function bootZetaOffice(options = {}) {
     // overhead.)
     const injections = []
 
-    // --- optional CJK font fetch (injected before fontconfig scan) ---
-    if (fontUrl) {
+    // --- optional CJK fonts fetch (injected before fontconfig scan) ---
+    // fontUrls entries are {url, family, category} (or plain URL strings, which
+    // inject without contributing to the alias map — spike/?font= back-compat;
+    // fontUrl merges in the same way). `family` MUST be the name LibreOffice
+    // registers for the file (list_fonts diagnostic; for zh-localized name
+    // tables that is the CHINESE name, e.g. 霞鹜文楷 — real-machine verified
+    // both zh and en names resolve, but we pin what list_fonts reported).
+    const fontList = [].concat(fontUrls || [], fontUrl ? [fontUrl] : [])
+      .map((f) => (typeof f === 'string' ? { url: f } : f))
+    const availableByCategory = {} // category -> registered family name
+    for (let i = 0; i < fontList.length; i++) {
+      const f = fontList[i]
       try {
-        const r = await fetch(fontUrl)
+        const r = await fetch(f.url)
         if (r.ok) {
-          const cjkBytes = new Uint8Array(await r.arrayBuffer())
-          injections.push({ path: '/instdir/share/fonts/truetype/AAA-CJK.ttc', bytes: cjkBytes })
-          log('CJK font fetched (' + Math.round(cjkBytes.length / 1024) + ' KB), will inject before boot')
+          const bytes = new Uint8Array(await r.arrayBuffer())
+          const base = String(f.url).split('?')[0].split('/').pop() || ('font-' + i)
+          injections.push({ path: '/instdir/share/fonts/truetype/AAA-' + base, bytes })
+          if (f.category && f.family && !availableByCategory[f.category]) availableByCategory[f.category] = f.family
+          log('CJK font fetched: ' + base + ' (' + Math.round(bytes.length / 1024) + ' KB)')
         } else {
-          log('CJK font not found at ' + fontUrl + ' (skipping; CJK will be tofu)')
+          log('CJK font not found at ' + f.url + ' (skipping)')
         }
       } catch (e) {
-        log('CJK font fetch failed: ' + e + ' (skipping)')
+        log('CJK font fetch failed: ' + f.url + ' — ' + e + ' (skipping)')
       }
     }
 
     // --- CJK font-name aliases (fontconfig conf.d) ---
-    // Real-world docx name 宋体/黑体/微软雅黑/…; none ship in the engine image,
-    // and the WASM build does NO glyph fallback — every missing family renders
-    // tofu even though the injected Noto Sans SC has the glyphs (real-machine
-    // verified: the same text renders once CharFontName='Noto Sans SC'). Map the
-    // common Chinese families onto the injected font. `append` + binding="weak"
-    // = fallback-only: if an engine ever bundles the real 黑体, the alias loses.
-    if (injections.length) {
-      const CJK_FAMILIES = [
-        '宋体', 'SimSun', '新宋体', 'NSimSun', '宋体-简', 'Songti SC',
-        '黑体', 'SimHei', '黑体-简', 'Heiti SC',
+    // Real-world docx name 宋体/黑体/微软雅黑/仿宋/楷体/…; those are proprietary
+    // (can't ship) and the WASM build does NO glyph fallback — every missing
+    // family renders tofu even when an injected font has the glyphs (real-
+    // machine verified: the same text renders once CharFontName names an
+    // existing family). Map each proprietary family onto the bundled open font
+    // of the SAME typeface category. Rules are `assign` (hard replace) to the
+    // first category font that ACTUALLY fetched this boot — weak `append`
+    // chains were real-machine tested and LOST to generic matching (every
+    // category rendered sans), so the fallback logic lives HERE, not in
+    // fontconfig scoring.
+    const pickFamily = (...cats) => { for (const c of cats) { if (availableByCategory[c]) return availableByCategory[c] } return null }
+    const CJK_ALIAS_GROUPS = [
+      // 黑体类（无衬线）
+      { target: pickFamily('sans'), families: [
+        '黑体', 'SimHei', '黑体-简', 'Heiti SC', '华文黑体', 'STHeiti', '华文细黑', 'STXihei',
         '微软雅黑', 'Microsoft YaHei', 'Microsoft YaHei UI',
         '等线', 'DengXian', '等线 Light', 'DengXian Light',
-        '仿宋', 'FangSong', '仿宋_GB2312', 'FangSong_GB2312',
+        '思源黑体', 'Source Han Sans SC', 'Source Han Sans CN', 'Noto Sans CJK SC',
+        'MS Gothic', 'Yu Gothic', 'Malgun Gothic',
+      ] },
+      // 宋体类（衬线）
+      { target: pickFamily('serif', 'sans'), families: [
+        '宋体', 'SimSun', '新宋体', 'NSimSun', '宋体-简', 'Songti SC',
+        '华文宋体', 'STSong', '华文中宋', 'STZhongsong',
+        '思源宋体', 'Source Han Serif SC', 'Source Han Serif CN', 'Noto Serif CJK SC',
+        'MS Mincho',
+      ] },
+      // 楷体类
+      { target: pickFamily('kai', 'serif', 'sans'), families: [
         '楷体', 'KaiTi', '楷体_GB2312', 'KaiTi_GB2312', '楷体-简', 'Kaiti SC',
-        '华文宋体', 'STSong', '华文中宋', 'STZhongsong', '华文黑体', 'STHeiti',
-        '华文楷体', 'STKaiti', '华文仿宋', 'STFangsong', '华文细黑', 'STXihei',
-        '思源黑体', 'Source Han Sans SC', 'Source Han Sans CN',
-        '思源宋体', 'Source Han Serif SC', 'Source Han Serif CN',
-        'Noto Sans CJK SC', 'Noto Serif CJK SC', 'Noto Serif SC',
-        'MS Gothic', 'MS Mincho', 'Yu Gothic', 'Malgun Gothic',
-      ]
+        '华文楷体', 'STKaiti', 'LXGW WenKai',
+      ] },
+      // 仿宋类（公文常用）
+      { target: pickFamily('fangsong', 'serif', 'sans'), families: [
+        '仿宋', 'FangSong', '仿宋_GB2312', 'FangSong_GB2312',
+        '华文仿宋', 'STFangsong', 'Zhuque Fangsong',
+      ] },
+    ].filter((g) => g.target)
+    if (CJK_ALIAS_GROUPS.length) {
       const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-      const rules = CJK_FAMILIES.map((fam) =>
-        '  <match target="pattern">\n' +
-        '    <test qual="any" name="family"><string>' + esc(fam) + '</string></test>\n' +
-        '    <edit name="family" mode="append" binding="weak"><string>Noto Sans SC</string></edit>\n' +
-        '  </match>').join('\n')
+      const rules = []
+      let familyCount = 0
+      for (const g of CJK_ALIAS_GROUPS) {
+        for (const fam of g.families) {
+          if (fam === g.target) continue
+          familyCount++
+          rules.push(
+            '  <match target="pattern">\n' +
+            '    <test qual="any" name="family"><string>' + esc(fam) + '</string></test>\n' +
+            '    <edit name="family" mode="assign" binding="same"><string>' + esc(g.target) + '</string></edit>\n' +
+            '  </match>')
+        }
+      }
       const conf = '<?xml version="1.0"?>\n' +
         '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n' +
-        '<fontconfig>\n' + rules + '\n</fontconfig>\n'
+        '<fontconfig>\n' + rules.join('\n') + '\n</fontconfig>\n'
       injections.push({
         path: '/instdir/share/fontconfig/conf.d/69-aiworkdeck-cjk-aliases.conf',
         bytes: new TextEncoder().encode(conf),
       })
-      log('CJK font-name alias conf queued (' + CJK_FAMILIES.length + ' families → Noto Sans SC)')
+      log('CJK font-name alias conf queued (' + familyCount + ' families → ' +
+        CJK_ALIAS_GROUPS.map((g) => g.target).join(' / ') + ')')
     }
 
     // The globals `canvas` and `Module` must exist before soffice.js loads.

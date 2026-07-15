@@ -38,6 +38,9 @@ export const EDITOR_ACTIONS = [
   'export_document',
   // [diagnostic #66] report resolved UI locale (ooLocale) to confirm zh-CN took effect.
   'get_ui_lang',
+  // [diagnostic] registered device font families — ground truth for the CJK
+  // font-injection/alias chain (zetaOfficeBoot.js).
+  'list_fonts',
   // [#104 变量面板] document variable fields — bookmark-marked spans bound to a
   // (scope, varName) variable; driven by VariablePanel through the getWps adapter
   // in project-overview.vue, not by the AI agent pipeline.

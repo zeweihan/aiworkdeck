@@ -782,6 +782,20 @@ const EXEC = {
   // [diagnostic #66] report the resolved UI locale (ooLocale) so the host/verify
   // panel can confirm whether the injected zh-CN langpack took effect.
   get_ui_lang() { return Object.assign({ success: true }, readConfigLocale()); },
+  // [diagnostic] the font families the engine actually registered (device font
+  // list). Ground truth for the CJK font-injection/alias chain — a family
+  // missing here can only ever render via an alias to one that is present.
+  list_fonts() {
+    try {
+      const toolkit = css.awt.Toolkit.create(context);
+      const dev = toolkit.createScreenCompatibleDevice(0, 0);
+      const fds = dev.getFontDescriptors();
+      const names = {};
+      for (let i = 0; i < fds.length; i++) { names[fds[i].Name] = true; }
+      const families = Object.keys(names).sort();
+      return { success: true, count: families.length, families: families };
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
   // ==================== 拟人式原语（感知 / 定位 / 格式 / 撤销） ====================
   // [感知] read the document as numbered paragraphs — the AI's "eyes". Windowed
   // (startParagraph + maxParagraphs, plus a char budget) so a 200-page contract

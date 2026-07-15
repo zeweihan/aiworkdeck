@@ -164,9 +164,20 @@ startEditorEndpoint({
   sofficeBaseUrl: q.get('lowa') || 'https://cdn.zetaoffice.net/zetaoffice_latest/',
   zetaJsUrl: q.get('zeta') || './zeta.js',
   workerScriptUrl: q.get('worker') || './office_thread.js',
-  // Default to a CJK font served next to the page (the verify build drops one
-  // here); bootZetaOffice skips cleanly if it 404s (Chinese would be tofu then).
-  fontUrl: q.get('font') || './cjk.ttc',
+  // Default to the CJK fonts served next to the page — one per Chinese typeface
+  // category (黑体类 sans / 宋体类 serif / 楷体 / 仿宋), baked by
+  // desktop/scripts/fetch-lowa-assets.js. bootZetaOffice skips any that 404
+  // (its fontconfig alias chains then fall through to the next category font).
+  // ?font= overrides/adds a single extra font (kept for the spike harness).
+  fontUrl: q.get('font') || undefined,
+  // family = the name LibreOffice registers (list_fonts diagnostic) — the
+  // boot's fontconfig alias rules point 宋体/黑体/楷体/仿宋/… at these.
+  fontUrls: [
+    { url: './cjk.ttc', family: 'Noto Sans SC', category: 'sans' },
+    { url: './cjk-serif.otf', family: 'Noto Serif SC', category: 'serif' },
+    { url: './cjk-kai.ttf', family: '霞鹜文楷', category: 'kai' },
+    { url: './cjk-fangsong.ttf', family: '朱雀仿宋（预览测试版）', category: 'fangsong' },
+  ],
   // Deterministic Chinese UI regardless of the browser/Electron language (the
   // engine follows navigator.languages otherwise — v0.3.1 shipped English on an
   // en-GB system). ?uilang=env follows the environment; ?uilang=xx-YY overrides.
