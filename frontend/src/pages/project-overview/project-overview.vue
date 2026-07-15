@@ -695,7 +695,28 @@
                   }"
                   @tap="focusPane('left')"
                 >
-                  <view v-if="activeFileLeft" class="pane-content">
+                  <!-- Epic #43 Track B / #79: embedded LibreOffice is THE editor
+                       for Office docs when available (desktop). Web/h5 falls
+                       through to FilePreview (docx 本地只读渲染).
+                       Keep-alive pool: one instance per open Office doc (active +
+                       LRU 保活，见 leftLibreFiles) hidden via v-show — switching
+                       tabs must NOT re-boot the LOWA WASM engine. -->
+                  <view
+                    v-for="file in leftLibreFiles"
+                    :key="'libre-left-' + file.id"
+                    v-show="activeFileLeft && activeFileLeft.id === file.id"
+                    class="pane-content"
+                  >
+                    <LibreOfficeEditor
+                      :ref="el => setLibreRef('left', file.id, el)"
+                      variant="default"
+                      :file="file"
+                      @ready="onLibreReady($event, 'left', file.id)"
+                      @close="onLibreClose"
+                      @open-url="onLibreOpenUrl"
+                    />
+                  </view>
+                  <view v-if="activeFileLeft && !useLibreEditor(activeFileLeft)" class="pane-content">
                     <BrowserPane
                       v-if="isBrowserTab(activeFileLeft)"
                       :key="activeFileLeft.id"
@@ -704,18 +725,6 @@
                       @url-change="onBrowserUrlChange('left', $event)"
                       @title-change="onBrowserTitleChange('left', $event)"
                       @open-new-tab="openBrowserTab($event)"
-                    />
-                    <!-- Epic #43 Track B / #79: embedded LibreOffice is THE editor
-                         for Office docs when available (desktop). Web/h5 falls
-                         through to FilePreview (docx 本地只读渲染). -->
-                    <LibreOfficeEditor
-                      v-else-if="useLibreEditor(activeFileLeft)"
-                      :key="'libre-left-' + activeFileLeft.id"
-                      variant="default"
-                      :file="activeFileLeft"
-                      @ready="onLibreReady"
-                      @close="onLibreClose"
-                      @open-url="onLibreOpenUrl"
                     />
                     <MarkdownPreview
                       v-else-if="isMarkdownTab(activeFileLeft)"
@@ -744,7 +753,7 @@
                       :show-edit-btn="false"
                     />
                   </view>
-                  <view v-else class="pane-empty">
+                  <view v-else-if="!activeFileLeft" class="pane-empty">
                     <image src="/static/iconmark.png" class="empty-state-img" mode="aspectFit" />
                     <text class="empty-text">左侧空闲</text>
                   </view>
@@ -757,7 +766,24 @@
                   :class="{ focused: focusedPane === 'right' }"
                   @tap="focusPane('right')"
                 >
-                  <view v-if="activeFileRight" class="pane-content">
+                  <!-- Epic #43 Track B / #79: embedded LibreOffice keep-alive pool
+                       (see left pane). -->
+                  <view
+                    v-for="file in rightLibreFiles"
+                    :key="'libre-right-' + file.id"
+                    v-show="activeFileRight && activeFileRight.id === file.id"
+                    class="pane-content"
+                  >
+                    <LibreOfficeEditor
+                      :ref="el => setLibreRef('right', file.id, el)"
+                      variant="default"
+                      :file="file"
+                      @ready="onLibreReady($event, 'right', file.id)"
+                      @close="onLibreClose"
+                      @open-url="onLibreOpenUrl"
+                    />
+                  </view>
+                  <view v-if="activeFileRight && !useLibreEditor(activeFileRight)" class="pane-content">
                     <BrowserPane
                       v-if="isBrowserTab(activeFileRight)"
                       :key="activeFileRight.id"
@@ -766,16 +792,6 @@
                       @url-change="onBrowserUrlChange('right', $event)"
                       @title-change="onBrowserTitleChange('right', $event)"
                       @open-new-tab="openBrowserTab($event)"
-                    />
-                    <!-- Epic #43 Track B / #79: embedded LibreOffice (see left pane). -->
-                    <LibreOfficeEditor
-                      v-else-if="useLibreEditor(activeFileRight)"
-                      :key="'libre-right-' + activeFileRight.id"
-                      variant="default"
-                      :file="activeFileRight"
-                      @ready="onLibreReady"
-                      @close="onLibreClose"
-                      @open-url="onLibreOpenUrl"
                     />
                     <MarkdownPreview
                       v-else-if="isMarkdownTab(activeFileRight)"
@@ -804,7 +820,7 @@
                       :show-edit-btn="false"
                     />
                   </view>
-                  <view v-else class="pane-empty">
+                  <view v-else-if="!activeFileRight" class="pane-empty">
                     <image src="/static/iconmark.png" class="empty-state-img" mode="aspectFit" />
                     <text class="empty-text">右侧空闲</text>
                   </view>
@@ -1268,6 +1284,9 @@ import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
 
+// 内嵌 LibreOffice 实例保活上限（每个 LOWA 实例数百 MB 内存）。超过后按
+// LRU 淘汰最久未激活的实例——淘汰前自动保存（见 evictLibreInstance）。
+const LIBRE_KEEPALIVE_MAX = 3
 
 export default {
   components: {
@@ -1469,6 +1488,9 @@ export default {
       showLibreEmbed: false,
       libreOfficeActive: false,
       libreOfficeExecutor: null,
+      // 内嵌编辑器保活 LRU：'pane:fileId'（left:123），最近激活在前。在池中的
+      // Office 标签切走时实例不销毁（v-show 隐藏），切回免重 boot/重载。
+      libreLruKeys: [],
       // 后端 wps_stream_data 流式写入的本地缓冲（#79：LibreOffice 消费端）
       _docStreamBuffer: '',
       _docStreamTimer: null,
@@ -1622,6 +1644,17 @@ export default {
       const file = this.rightFiles.find(f => f.id === this.activeFileIdRight)
       if (file && !this.isTabVisible(file)) return null
       return file
+    },
+    // 内嵌 LibreOffice 保活池（每 pane 一组常驻实例）：当前激活的 Office 文件
+    // 必进池（即使 LRU 记账未跟上），其余按 libreLruKeys 保活。文件关闭
+    // （出 leftFiles/rightFiles）时自然出池 → 组件卸载走现有 close 流程。
+    leftLibreFiles() {
+      return this.leftFiles.filter(f => this.useLibreEditor(f) &&
+        (f.id === this.activeFileIdLeft || this.libreLruKeys.includes('left:' + f.id)))
+    },
+    rightLibreFiles() {
+      return this.rightFiles.filter(f => this.useLibreEditor(f) &&
+        (f.id === this.activeFileIdRight || this.libreLruKeys.includes('right:' + f.id)))
     },
     // NEW: Current active tab for AI context (prioritizes focused pane)
     currentActiveTab() {
@@ -2213,7 +2246,14 @@ export default {
       } catch (e) {
         // ignore
       }
-    }
+    },
+    // 内嵌 LibreOffice 多实例保活：激活的 Office 标签记入 LRU（超上限触发
+    // 淘汰），并把 AI 指令路由指针同步到当前活动实例（活跃实例指针，同
+    // PR#151 WPS 编辑器模式）。
+    activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f) },
+    activeFileRight(f) { this.onActiveOfficeFileChanged('right', f) },
+    focusedPane() { this.syncLibreExecutor() },
+    showLibreEmbed() { this.syncLibreExecutor() }
   },
   methods: {
     // EasyVoice Integration
@@ -5715,6 +5755,16 @@ export default {
                 updated = true
             }
 
+            // 保活池实例不再"切回即重挂载"：后台常驻实例里还是旧内容。把该
+            // 文件的非活动保活实例逐出 LRU（卸载），下次激活时重挂载并拉取
+            // 新 wpsFileId 的字节。当前正显示的实例保持改前行为（不强刷）。
+            if (updated) {
+                this.libreLruKeys = this.libreLruKeys.filter(k => {
+                    if (!k.endsWith(':' + file.id)) return true
+                    return k === 'left:' + this.activeFileIdLeft || k === 'right:' + this.activeFileIdRight
+                })
+            }
+
             // 如果文件不在任何窗格中打开，则打开它
             if (!updated) {
                 console.log('[ProjectOverview] File not open, opening:', file.name)
@@ -5764,11 +5814,73 @@ export default {
 
     // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
     // commands route to it (see handleEditorCommand). Used by both the inline
-    // default editor (Track B) and the legacy ⌘⇧O overlay.
-    onLibreReady(executor) {
-        this.libreOfficeExecutor = executor
-        this.libreOfficeActive = true
-        console.log('[ProjectOverview] LibreOffice editor ready — agent commands routed to LibreOffice')
+    // keep-alive pool (Track B) and the legacy ⌘⇧O overlay.
+    // pane/fileId 由保活池模板内联传入；overlay 不带（落到 'overlay' 键）。
+    onLibreReady(executor, pane, fileId) {
+        const key = pane ? pane + ':' + fileId : 'overlay'
+        this.getLibreExecutorMap()[key] = executor
+        this.syncLibreExecutor()
+        console.log('[ProjectOverview] LibreOffice editor ready (' + key + ') — agent commands routed to LibreOffice')
+    },
+    // 实例注册表（非响应式）：executor 按 'pane:fileId' 存，供活跃实例指针
+    // 同步；组件实例经函数 ref 存 _libreRefs，供 LRU 淘汰前自动保存。
+    getLibreExecutorMap() {
+        return this._libreExecMap || (this._libreExecMap = {})
+    },
+    setLibreRef(pane, fileId, el) {
+        const refs = this._libreRefs || (this._libreRefs = {})
+        const key = pane + ':' + fileId
+        if (el) refs[key] = el
+        else delete refs[key]
+    },
+    // 活跃实例指针（同 PR#151 WPS 编辑器模式）：AI 指令路由到焦点 pane 的
+    // 活动 Office 编辑器；焦点 pane 不是 Office 文档时回退另一 pane（保持
+    // 旧的"唯一打开的文档也能收指令"行为）；legacy overlay 打开时优先。
+    // 活动编辑器尚未 ready（boot 中）时指针为 null，handleEditorCommand
+    // 照旧回"编辑器未就绪"。
+    syncLibreExecutor() {
+        const map = this.getLibreExecutorMap()
+        const pick = (pane) => {
+            const f = pane === 'right' ? this.activeFileRight : this.activeFileLeft
+            return (f && this.useLibreEditor(f)) ? (map[pane + ':' + f.id] || null) : null
+        }
+        let exec = this.showLibreEmbed ? (map['overlay'] || null) : null
+        if (!exec) exec = this.focusedPane === 'right' ? (pick('right') || pick('left')) : (pick('left') || pick('right'))
+        this.libreOfficeExecutor = exec || null
+        this.libreOfficeActive = !!exec
+    },
+    // 激活的标签变化：Office 文档记入保活 LRU（超上限触发淘汰），并同步指针。
+    onActiveOfficeFileChanged(pane, file) {
+        if (file && this.useLibreEditor(file)) this.touchLibreLru(pane, file.id)
+        this.syncLibreExecutor()
+    },
+    touchLibreLru(pane, fileId) {
+        const key = pane + ':' + fileId
+        // 触达置顶，顺带清掉已关闭文件的残留记账
+        const keys = [key].concat(this.libreLruKeys.filter(k => k !== key && this.isLibreKeyOpen(k)))
+        this.libreLruKeys = keys
+        keys.slice(LIBRE_KEEPALIVE_MAX).forEach(k => { this.evictLibreInstance(k) })
+    },
+    isLibreKeyOpen(key) {
+        const sep = key.indexOf(':')
+        const pane = key.slice(0, sep)
+        const fileId = key.slice(sep + 1)
+        const list = pane === 'right' ? this.rightFiles : this.leftFiles
+        return list.some(f => String(f.id) === fileId && this.useLibreEditor(f))
+    },
+    // LRU 淘汰：先自动保存再出池（出池即卸载，走组件自身的 dispose 流程）。
+    async evictLibreInstance(key) {
+        const inst = (this._libreRefs || {})[key]
+        // 未就绪/加载失败的实例跳过保存——画布上是空白原型，保存会覆盖真文件。
+        if (inst && inst.ready && !inst.isError && inst.file && !inst.saving) {
+            try { await inst.saveDocument() } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e) }
+        }
+        // 保存耗时期间可能又被激活/关闭：仍在上限内或已是活动文件则不淘汰
+        const idx = this.libreLruKeys.indexOf(key)
+        if (idx === -1 || idx < LIBRE_KEEPALIVE_MAX) return
+        if (key === 'left:' + this.activeFileIdLeft || key === 'right:' + this.activeFileIdRight) return
+        this.libreLruKeys = this.libreLruKeys.filter(k => k !== key)
+        console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)
     },
     // (#79) 文档内超链接点击：编辑器把 LO 的 window.open 经 lo-relay 转发上来。
     // 内部链接（包装 https 或裸 checkba:）走 __checkbaHandleInternalLink（关联
@@ -5788,15 +5900,24 @@ export default {
       if (/^https?:\/\//i.test(u)) this.openBrowserTab(u)
     },
     onLibreClose(executor) {
-        // The overlay close button emits no executor; an inline editor unmount
-        // (tab close/switch) emits its own. Only tear down routing if the editor
-        // going away owns the currently-active executor — so a fast switch
-        // between two Office docs can't clobber the newly-ready one.
-        if (executor && executor !== this.libreOfficeExecutor) return
-        this.showLibreEmbed = false
-        this.libreOfficeActive = false
-        this.libreOfficeExecutor = null
-        console.log('[ProjectOverview] LibreOffice editor closed — agent commands unavailable until reopened')
+        // The overlay close button emits no executor: collapse the overlay; the
+        // unmount that follows re-enters here WITH the executor for real cleanup.
+        // An inline pool editor unmount (tab close / LRU evict) emits its own —
+        // drop it from the registry by identity and re-sync the active pointer,
+        // so closing a background instance can't clobber the active one.
+        const map = this.getLibreExecutorMap()
+        if (executor) {
+            for (const k of Object.keys(map)) {
+                if (map[k] === executor) {
+                    delete map[k]
+                    if (k === 'overlay') this.showLibreEmbed = false
+                }
+            }
+        } else {
+            this.showLibreEmbed = false
+        }
+        this.syncLibreExecutor()
+        if (!this.libreOfficeActive) console.log('[ProjectOverview] LibreOffice editor closed — agent commands unavailable until reopened')
     },
 
     // #104: WPS-era getWps() adapter for VariablePanel — the five document-field
