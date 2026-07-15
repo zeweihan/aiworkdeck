@@ -1,26 +1,31 @@
 <template>
   <view class="libre-editor-wrapper">
-    <view class="libre-toolbar">
-      <!-- Engine name / debug status are dev-probe chrome: in the 'default'
-           (product) variant the tab already names the file, and a quiet editor
-           shows NO status — only booting/loading/saving/failure speak up. -->
-      <text v-if="variant !== 'default'" class="libre-title">LibreOffice 编辑器（嵌入式 webview · 实验）</text>
+    <!-- Product ('default') variant: NO full-width bar — it read as alien chrome
+         on top of the document (user feedback). Status + save float over the
+         editor's top-right corner instead; the status pill only appears while
+         something is happening (booting/loading/saving/failure) and vanishes
+         when ready. -->
+    <view v-if="variant === 'default'" class="libre-float">
+      <view v-if="displayStatus" class="libre-pill" :class="{ error: isError }">
+        <view v-if="!isError && !ready" class="libre-spin"></view>
+        <text>{{ displayStatus }}</text>
+      </view>
+      <!-- Save is REAL product UI (Track E): without it edits die with the tab. -->
+      <button v-if="file" class="libre-save" :disabled="!ready || saving" @click="saveDocument">
+        {{ saving ? '保存中…' : '保存' }}
+      </button>
+    </view>
+    <!-- Experimental (⌘⇧O overlay) variant keeps the dev-probe toolbar. -->
+    <view v-else class="libre-toolbar">
+      <text class="libre-title">LibreOffice 编辑器（嵌入式 webview · 实验）</text>
       <text v-if="displayStatus" class="libre-status" :class="{ ready, error: isError }">{{ displayStatus }}</text>
-      <!-- Save is REAL product UI (Track E): shown in every variant whenever the
-           editor is bound to a backend file — without it edits die with the tab. -->
       <button v-if="file" class="libre-btn" :disabled="!ready || saving" @click="saveDocument">
         {{ saving ? '保存中…' : '保存' }}
       </button>
-      <!-- The dev probe buttons + close are the ⌘⇧O experimental overlay's
-           controls. In the inline 'default' variant (Track B: embedded editor is
-           the document's default editor) they are hidden — the document tab's ×
-           closes it and the AI agent drives commands. -->
-      <template v-if="variant !== 'default'">
-        <button class="libre-btn" :disabled="!ready" @click="runInsert">插入示例</button>
-        <button class="libre-btn" :disabled="!ready" @click="runReplace">查找替换(redline)</button>
-        <button class="libre-btn" :disabled="!ready" @click="runSelection">读选区</button>
-        <button class="libre-btn libre-close" @click="$emit('close')">关闭</button>
-      </template>
+      <button class="libre-btn" :disabled="!ready" @click="runInsert">插入示例</button>
+      <button class="libre-btn" :disabled="!ready" @click="runReplace">查找替换(redline)</button>
+      <button class="libre-btn" :disabled="!ready" @click="runSelection">读选区</button>
+      <button class="libre-btn libre-close" @click="$emit('close')">关闭</button>
     </view>
     <!-- The Electron <webview> is created imperatively (uni-app's template
          compiler does not know the <webview> tag); it mounts into this host. -->
@@ -95,6 +100,11 @@ export default {
         this.statusText = '仅桌面版可用'
         return
       }
+      // Prefetch the document bytes IN PARALLEL with the LOWA boot — the fetch
+      // (backend download) and the engine boot are independent, so serializing
+      // them (the old flow: boot → endpoint ready → fetch → load) just added the
+      // whole download to the perceived open time.
+      if (this.file) this.prefetchBytes()
       const info = await api.getEditor() // { url, preload, partition }
       this.mountWebview(info)
     } catch (e) {
@@ -181,12 +191,25 @@ export default {
       if (this.statusText.indexOf('失败') === -1) this.statusText = '就绪'
       this.$emit('ready', this.executor)
     },
+    // Kick off the (authed) document download without waiting for the engine.
+    // loadDocument() awaits this promise; on failure it falls back to a fresh
+    // fetch there so a transient prefetch error can't kill the load path.
+    prefetchBytes() {
+      const f = this.file
+      const fileId = f && (f.wpsFileId || f.id)
+      if (!fileId) return
+      const t0 = Date.now()
+      this._bytesPromise = this.fetchArrayBuffer(getFileDownloadUrl(fileId))
+        .then((buf) => { this.appendLog('文档字节预取完成 / prefetched ' + (buf ? buf.byteLength : 0) + ' bytes in ' + (Date.now() - t0) + 'ms'); return buf })
+        .catch((e) => { this.appendLog('预取失败（加载时重试）/ prefetch failed: ' + (e && e.message ? e.message : e)); return null })
+    },
     async loadDocument() {
       const f = this.file
       const fileId = f.wpsFileId || f.id
       if (!fileId) throw new Error('file has no id/wpsFileId')
       const url = getFileDownloadUrl(fileId)
-      const buf = await this.fetchArrayBuffer(url)
+      let buf = this._bytesPromise ? await this._bytesPromise : null
+      if (!buf) buf = await this.fetchArrayBuffer(url)
       const bytes = new Uint8Array(buf || new ArrayBuffer(0))
       const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
       // Empty body = a brand-new / unsaved document — the backend streams HTTP
@@ -198,8 +221,9 @@ export default {
         return
       }
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
+      const t0 = Date.now()
       const res = await this.executor.executeCommand('load_document', { bytes, name })
-      this.appendLog('  ← ' + JSON.stringify(res))
+      this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
@@ -291,7 +315,20 @@ export default {
 </script>
 
 <style scoped>
-.libre-editor-wrapper { display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
+.libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
+/* Product variant: floating status pill + save, pinned over the editor's
+   top-right corner (LO's own menubar leaves that region empty). No layout
+   height is reserved — the document canvas gets the full pane. */
+.libre-float { position: absolute; top: 6px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 8px; }
+.libre-pill { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
+  background: rgba(31, 41, 55, 0.78); color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
+.libre-pill.error { background: rgba(153, 27, 27, 0.9); color: #fecaca; }
+.libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: #e5e7eb;
+  border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
+@keyframes libre-rot { to { transform: rotate(360deg); } }
+.libre-save { font-size: 12px; line-height: 1; padding: 5px 12px; border: 0; border-radius: 999px;
+  background: #059669; color: #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); }
+.libre-save[disabled] { background: #9ca3af; cursor: not-allowed; }
 .libre-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; background: #1F2937; color: #fff; }
 .libre-title { font-size: 13px; font-weight: 600; }
 .libre-status { font-size: 12px; color: #d1d5db; }

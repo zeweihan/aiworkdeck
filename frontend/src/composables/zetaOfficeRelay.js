@@ -83,13 +83,19 @@ export function createRelayExecutor({ send, subscribe, timeoutMs = 30000, onRead
 
   function executeCommand(action, params = {}) {
     const reqId = 'rly_' + Date.now() + '_' + (++seq)
+    // Whole-document transfers (load/export can be tens of MB and the worker
+    // marshals every byte into UNO) get a longer deadline than interactive
+    // commands — a 18MB docx on a slow disk must not surface as "加载失败" just
+    // because the default 30s ran out mid-import.
+    const budget = (action === 'load_document' || action === 'export_document')
+      ? Math.max(timeoutMs, 180000) : timeoutMs
     return new Promise((resolve) => {
       const timer = setTimeout(() => {
         if (pending.has(reqId)) {
           pending.delete(reqId)
           resolve({ success: false, message: 'LibreOffice relay timeout: ' + action })
         }
-      }, timeoutMs)
+      }, budget)
       pending.set(reqId, { resolve, timer })
       send({ __lo: TAG, type: 'exec', reqId, action, params })
     })

@@ -102,6 +102,44 @@ export function bootZetaOffice(options = {}) {
       }
     }
 
+    // --- CJK font-name aliases (fontconfig conf.d) ---
+    // Real-world docx name 宋体/黑体/微软雅黑/…; none ship in the engine image,
+    // and the WASM build does NO glyph fallback — every missing family renders
+    // tofu even though the injected Noto Sans SC has the glyphs (real-machine
+    // verified: the same text renders once CharFontName='Noto Sans SC'). Map the
+    // common Chinese families onto the injected font. `append` + binding="weak"
+    // = fallback-only: if an engine ever bundles the real 黑体, the alias loses.
+    if (injections.length) {
+      const CJK_FAMILIES = [
+        '宋体', 'SimSun', '新宋体', 'NSimSun', '宋体-简', 'Songti SC',
+        '黑体', 'SimHei', '黑体-简', 'Heiti SC',
+        '微软雅黑', 'Microsoft YaHei', 'Microsoft YaHei UI',
+        '等线', 'DengXian', '等线 Light', 'DengXian Light',
+        '仿宋', 'FangSong', '仿宋_GB2312', 'FangSong_GB2312',
+        '楷体', 'KaiTi', '楷体_GB2312', 'KaiTi_GB2312', '楷体-简', 'Kaiti SC',
+        '华文宋体', 'STSong', '华文中宋', 'STZhongsong', '华文黑体', 'STHeiti',
+        '华文楷体', 'STKaiti', '华文仿宋', 'STFangsong', '华文细黑', 'STXihei',
+        '思源黑体', 'Source Han Sans SC', 'Source Han Sans CN',
+        '思源宋体', 'Source Han Serif SC', 'Source Han Serif CN',
+        'Noto Sans CJK SC', 'Noto Serif CJK SC', 'Noto Serif SC',
+        'MS Gothic', 'MS Mincho', 'Yu Gothic', 'Malgun Gothic',
+      ]
+      const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      const rules = CJK_FAMILIES.map((fam) =>
+        '  <match target="pattern">\n' +
+        '    <test qual="any" name="family"><string>' + esc(fam) + '</string></test>\n' +
+        '    <edit name="family" mode="append" binding="weak"><string>Noto Sans SC</string></edit>\n' +
+        '  </match>').join('\n')
+      const conf = '<?xml version="1.0"?>\n' +
+        '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">\n' +
+        '<fontconfig>\n' + rules + '\n</fontconfig>\n'
+      injections.push({
+        path: '/instdir/share/fontconfig/conf.d/69-aiworkdeck-cjk-aliases.conf',
+        bytes: new TextEncoder().encode(conf),
+      })
+      log('CJK font-name alias conf queued (' + CJK_FAMILIES.length + ' families → Noto Sans SC)')
+    }
+
     // The globals `canvas` and `Module` must exist before soffice.js loads.
     const Module = {
       canvas,
@@ -138,7 +176,7 @@ export function bootZetaOffice(options = {}) {
             n++
           } catch (e) { log('FS write failed for ' + f.path + ': ' + e) }
         }
-        log('MEMFS injected ' + n + '/' + injections.length + ' file(s) (CJK font) before main()')
+        log('MEMFS injected ' + n + '/' + injections.length + ' file(s) (CJK font + alias conf) before main()')
       },
     }
     // Force the engine's locale (LANG) by shimming navigator.languages BEFORE
