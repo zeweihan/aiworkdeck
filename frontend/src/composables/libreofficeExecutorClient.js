@@ -98,10 +98,14 @@ export function createLibreOfficeExecutor(opts = {}) {
   function request(action, params) {
     if (!workerPort) return Promise.reject(new Error('LibreOffice office worker not connected'))
     const reqId = 'lo_' + Date.now() + '_' + (++reqSeq)
+    // Whole-document transfers get a longer deadline (mirror of the host-side
+    // relay budget in zetaOfficeRelay.js — see the comment there).
+    const budget = (action === 'load_document' || action === 'export_document')
+      ? Math.max(timeoutMs, 180000) : timeoutMs
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (pending.has(reqId)) { pending.delete(reqId); reject(new Error('LibreOffice command timeout: ' + action)) }
-      }, timeoutMs)
+      }, budget)
       pending.set(reqId, { resolve, reject, timer })
       workerPort.postMessage({ cmd: 'exec', reqId, action, params: params || {} })
     })
