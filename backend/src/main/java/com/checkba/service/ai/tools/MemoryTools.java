@@ -180,20 +180,8 @@ public class MemoryTools implements AgentToolComponent {
             }
             
             StringBuilder sb = new StringBuilder("找到 ").append(memories.size()).append(" 条相关记忆:\n\n");
-            int index = 1;
-            for (MemoryEntry mem : memories) {
-                sb.append(index++).append(". ");
-                sb.append("[").append(mem.getMemoryType().toUpperCase()).append("] ");
-                if (mem.getMemoryKey() != null) {
-                    sb.append("**").append(mem.getMemoryKey()).append("**\n");
-                }
-                sb.append("   ").append(mem.getMemoryValue()).append("\n");
-                if (Boolean.TRUE.equals(mem.getIsProtected())) {
-                    sb.append("   🔒 受保护\n");
-                }
-                sb.append("\n");
-            }
-            
+            sb.append(memoryManager.formatAsEvidenceLedger(memories));
+
             return sb.toString();
         } catch (Exception e) {
             log.error("Failed to query memory: {}", e.getMessage(), e);

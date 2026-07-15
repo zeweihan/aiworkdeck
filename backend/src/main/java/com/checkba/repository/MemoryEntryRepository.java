@@ -115,6 +115,11 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     List<MemoryEntry> findBySourceFileIdOrderByImportanceScoreDesc(Long sourceFileId);
 
     /**
+     * 按项目与一组 memoryKey 查找记忆（证据账本的"已被更新"信号检测用）
+     */
+    List<MemoryEntry> findByProjectIdAndMemoryKeyIn(Long projectId, java.util.Collection<String> memoryKeys);
+
+    /**
      * 统计项目的记忆数量
      */
     long countByProjectId(Long projectId);
