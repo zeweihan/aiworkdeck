@@ -214,10 +214,43 @@ public class FileController {
         return pathBuilder.toString();
     }
 
+    /**
+     * 解析上传目标的存储路径：优先用 DB 记录的 filePath；没有则按项目逻辑路径
+     * 生成并回写 DB。首块(save)、追加块(append)、断点查询(getSize) 三处必须用
+     * 同一路径，否则分片会写散。
+     */
+    private String resolveUploadStoragePath(String fileId, Optional<ProjectFile> projectFileOpt) {
+        String storagePath = fileId;
+        if (projectFileOpt.isPresent()) {
+            ProjectFile pf = projectFileOpt.get();
+            if (StringUtils.hasText(pf.getFilePath())) {
+                storagePath = pf.getFilePath();
+            } else {
+                String safeName = StringUtils.hasText(pf.getName()) ? pf.getName() : fileId;
+                if (pf.getFileType() != null && !safeName.endsWith("." + pf.getFileType())) {
+                    safeName += "." + pf.getFileType();
+                }
+                String logicalPath = buildLogicalPath(pf);
+                String basePath = String.format("projects/%d", pf.getProjectId());
+                storagePath = StringUtils.hasText(logicalPath) ?
+                    String.format("%s/%s/%s", basePath, logicalPath, safeName) :
+                    String.format("%s/%s", basePath, safeName);
+
+                pf.setFilePath(storagePath);
+                projectFileRepository.save(pf);
+            }
+        }
+        return storagePath;
+    }
+
     @GetMapping("/{fileId}/upload-status")
     public ResponseEntity<Map<String, Object>> getUploadStatus(@PathVariable("fileId") String fileId) {
         try {
-            long size = getStorageService().getSize(fileId);
+            // 与上传同一套路径解析——此前直接 getSize(裸 fileId) 读的是孤儿路径，
+            // 断点续传的 offset 永远对不上真实文件
+            Optional<ProjectFile> pfOpt = projectFileRepository.findByWpsFileId(fileId).stream().findFirst();
+            String path = pfOpt.map(ProjectFile::getFilePath).filter(StringUtils::hasText).orElse(fileId);
+            long size = getStorageService().getSize(path);
             Map<String, Object> data = new HashMap<>();
             data.put("uploadedSize", size);
             
@@ -291,37 +324,17 @@ public class FileController {
             // Wait, replace_file_content replaces a block. I should probably use multi_replace to be precise or rewrite the whole method carefully.
             // I will rewrite the logic to use `append` if offset > 0.
 
+            // 1. 确定存储路径（首块与追加块必须解析到同一路径：此前追加块直接用
+            // 裸 wpsFileId 作路径，>5MB 文件的第 2+ 块被追加到存储根的孤儿文件里，
+            // 正式路径上只剩首块 5MB —— 下载得到截断的 zip，文档加载失败）
+            String storagePath = resolveUploadStoragePath(fileId, projectFileOpt);
+
             String savedPath;
             if (offset != null && offset > 0) {
                  // 追加模式
-                 savedPath = getStorageService().append(fileId, inputStream);
+                 savedPath = getStorageService().append(storagePath, inputStream);
             } else {
                  // 覆盖/新传模式
-                 // ... Path Resolution Logic ...
-                 String storagePath = fileId;
-                 Long projectId = null;
-                 
-                 if (projectFileOpt.isPresent()) {
-                    ProjectFile pf = projectFileOpt.get();
-                    projectId = pf.getProjectId();
-                    if (StringUtils.hasText(pf.getFilePath())) {
-                        storagePath = pf.getFilePath();
-                    } else {
-                         String safeName = StringUtils.hasText(pf.getName()) ? pf.getName() : fileId;
-                          if (pf.getFileType() != null && !safeName.endsWith("." + pf.getFileType())) {
-                               safeName += "." + pf.getFileType();
-                          }
-                          // Removed forced .docx default - rely on fileType or original name
-                          String logicalPath = buildLogicalPath(pf);
-                         String basePath = String.format("projects/%d", pf.getProjectId());
-                         storagePath = StringUtils.hasText(logicalPath) ? 
-                             String.format("%s/%s/%s", basePath, logicalPath, safeName) : 
-                             String.format("%s/%s", basePath, safeName);
-                         
-                         pf.setFilePath(storagePath);
-                         projectFileRepository.save(pf);
-                    }
-                 }
                  savedPath = getStorageService().save(storagePath, inputStream);
             }
 
