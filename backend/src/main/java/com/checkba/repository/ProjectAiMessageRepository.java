@@ -33,15 +33,6 @@ public interface ProjectAiMessageRepository extends JpaRepository<ProjectAiMessa
      */
     @org.springframework.data.jpa.repository.Query("SELECT m FROM ProjectAiMessage m WHERE m.conversationId = :conversationId ORDER BY m.createdAt ASC LIMIT 1")
     java.util.Optional<ProjectAiMessage> findFirstByConversationId(@org.springframework.data.repository.query.Param("conversationId") String conversationId);
-    
-    /**
-     * 根据 conversationId 和 role 查找最后一条消息
-     * 用于增量保存时检查是否需要更新已有消息
-     */
-    @org.springframework.data.jpa.repository.Query("SELECT m FROM ProjectAiMessage m WHERE m.conversationId = :conversationId AND m.role = :role ORDER BY m.createdAt DESC LIMIT 1")
-    java.util.Optional<ProjectAiMessage> findLastByConversationIdAndRole(
-        @org.springframework.data.repository.query.Param("conversationId") String conversationId,
-        @org.springframework.data.repository.query.Param("role") String role);
 }
 
 
