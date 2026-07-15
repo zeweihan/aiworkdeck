@@ -42,9 +42,12 @@
 //   dist/zetaoffice/lowa/soffice.data                (brotli)
 //   dist/zetaoffice/lowa/soffice.data.js.metadata
 //   dist/zetaoffice/lowa/.encodings.json             (sidecar: { file: encoding })
-//   dist/zetaoffice/cjk.ttc   (Noto Sans SC Regular, OFL — content is OTF; the
-//                               .ttc name matches editor-main.js's fontUrl default
-//                               and fontconfig sniffs by content, not extension)
+//   dist/zetaoffice/cjk.ttc          (Noto Sans SC Regular, OFL — content is OTF;
+//                                      the .ttc name matches editor-main.js's font
+//                                      default and fontconfig sniffs by content)
+//   dist/zetaoffice/cjk-serif.otf    (Noto Serif SC Regular, OFL — 宋体类映射目标)
+//   dist/zetaoffice/cjk-kai.ttf      (LXGW WenKai / 霞鹜文楷 Regular, OFL — 楷体类)
+//   dist/zetaoffice/cjk-fangsong.ttf (Zhuque Fangsong / 朱雀仿宋 Regular, OFL — 仿宋类)
 //
 // Usage:  node desktop/scripts/fetch-lowa-assets.js   (idempotent; keeps a file
 //         that already validates). Runs in CI before electron-builder, and
@@ -73,11 +76,17 @@ function withTrailingSlash(s) { return s.endsWith('/') ? s : s + '/'; }
 // the sidecar). Anything else trips the build rather than shipping bytes the
 // server can't serve correctly. null = identity (raw bytes).
 const ALLOWED_ENCODINGS = new Set([null, 'br', 'gzip']);
-// Noto Sans SC Regular (OFL-1.1), pinned release tag, served via jsDelivr which
-// resolves the repo's Git-LFS blob to the real font bytes. SubsetOTF/SC = the
-// Simplified-Chinese subset (full SC coverage, ~8 MB) rather than the all-CJK
-// OTF (~16 MB). License: googlefonts/noto-cjk LICENSE (OFL-1.1).
-const FONT_URL = 'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@Sans2.004/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf';
+// CJK fonts (all OFL-1.1), pinned versions. 宋体/黑体/微软雅黑/仿宋/楷体 are
+// proprietary and CANNOT ship; instead we bundle one open font per Chinese
+// typeface CATEGORY and zetaOfficeBoot.js's fontconfig aliases map the
+// proprietary names onto them (黑体类→Noto Sans SC, 宋体类→Noto Serif SC,
+// 楷体类→LXGW WenKai, 仿宋类→Zhuque Fangsong). SubsetOTF/SC = the
+// Simplified-Chinese subset rather than the all-CJK OTF.
+const FONT_SANS_URL = 'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@Sans2.004/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf';
+const FONT_SERIF_URL = 'https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@Serif2.002/Serif/SubsetOTF/SC/NotoSerifSC-Regular.otf';
+const FONT_KAI_URL = 'https://github.com/lxgw/LxgwWenKai/releases/download/v1.520/LXGWWenKai-Regular.ttf';
+// Zhuque only publishes a zip; zipEntry extracts the single ttf inside.
+const FONT_FANGSONG_URL = 'https://github.com/TrionesType/zhuque/releases/download/v0.212/ZhuqueFangsong-v0.212.zip';
 
 const distRoot = path.join(__dirname, '../../frontend/dist/zetaoffice');
 
@@ -94,8 +103,46 @@ const ASSETS = [
   { url: LOWA_BASE + 'soffice.wasm',             dest: 'lowa/soffice.wasm',             serve: 'lowa',   encoding: 'br', magic: 'wasm' },
   { url: LOWA_BASE + 'soffice.data',             dest: 'lowa/soffice.data',             serve: 'lowa',   encoding: 'br', magic: 'blob' },
   { url: LOWA_BASE + 'soffice.data.js.metadata', dest: 'lowa/soffice.data.js.metadata', serve: 'lowa',   encoding: null, magic: 'json' },
-  { url: FONT_URL,                               dest: 'cjk.ttc',                       serve: 'static', encoding: null, magic: 'font' },
+  { url: FONT_SANS_URL,                          dest: 'cjk.ttc',                       serve: 'static', encoding: null, magic: 'font' },
+  { url: FONT_SERIF_URL,                         dest: 'cjk-serif.otf',                 serve: 'static', encoding: null, magic: 'font' },
+  { url: FONT_KAI_URL,                           dest: 'cjk-kai.ttf',                   serve: 'static', encoding: null, magic: 'font' },
+  { url: FONT_FANGSONG_URL,                      dest: 'cjk-fangsong.ttf',              serve: 'static', encoding: null, magic: 'font',
+    zipEntry: 'ZhuqueFangsong-Regular.ttf' },
 ];
+
+// Minimal single-entry zip extraction (Zhuque ships a zip with one ttf inside;
+// no unzip dependency in the build scripts). Parses the End-of-Central-Directory
+// record, walks the central directory to the named entry, and inflates it.
+function unzipEntry(buf, entryName) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 65536); i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('zip: EOCD not found');
+  const count = buf.readUInt16LE(eocd + 10);
+  let off = buf.readUInt32LE(eocd + 16);
+  for (let i = 0; i < count; i++) {
+    if (buf.readUInt32LE(off) !== 0x02014b50) throw new Error('zip: bad central directory entry');
+    const method = buf.readUInt16LE(off + 10);
+    const compSize = buf.readUInt32LE(off + 20);
+    const nameLen = buf.readUInt16LE(off + 28);
+    const extraLen = buf.readUInt16LE(off + 30);
+    const commentLen = buf.readUInt16LE(off + 32);
+    const localOff = buf.readUInt32LE(off + 42);
+    const name = buf.toString('utf8', off + 46, off + 46 + nameLen);
+    if (name === entryName) {
+      const lNameLen = buf.readUInt16LE(localOff + 26);
+      const lExtraLen = buf.readUInt16LE(localOff + 28);
+      const dataStart = localOff + 30 + lNameLen + lExtraLen;
+      const data = buf.subarray(dataStart, dataStart + compSize);
+      if (method === 0) return Buffer.from(data);
+      if (method === 8) return zlib.inflateRawSync(data);
+      throw new Error('zip: unsupported compression method ' + method);
+    }
+    off += 46 + nameLen + extraLen + commentLen;
+  }
+  throw new Error('zip: entry not found: ' + entryName);
+}
 
 // Fetch a URL (http(s) or file://); resolves {encoding, body:Buffer}. file://
 // has no content-encoding, so it's always identity (null) — a self-built engine
@@ -216,12 +263,15 @@ async function fetchAsset(a) {
   if (a.serve === 'static' && enc !== null) {
     throw new Error(a.dest + ': static asset must be identity but source sent ' + JSON.stringify(enc));
   }
-  checkMagic(decode(body, enc), a.magic, a.dest);
+  // Zip-packaged asset: store the extracted entry, not the archive.
+  let out = body;
+  if (a.zipEntry) out = unzipEntry(decode(body, enc), a.zipEntry);
+  checkMagic(decode(out, a.zipEntry ? null : enc), a.magic, a.dest);
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
-  fs.writeFileSync(destPath + '.part', body);
+  fs.writeFileSync(destPath + '.part', out);
   fs.renameSync(destPath + '.part', destPath);
-  console.log(' ' + (body.length / 1048576).toFixed(1) + ' MB' + (enc ? ' (' + enc + ')' : ''));
-  return { size: body.length, enc };
+  console.log(' ' + (out.length / 1048576).toFixed(1) + ' MB' + (enc ? ' (' + enc + ')' : ''));
+  return { size: out.length, enc: a.zipEntry ? null : enc };
 }
 
 async function main() {
