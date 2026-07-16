@@ -20,7 +20,8 @@
       </div>
       <div class="right">
 
-        <div v-if="isFinished" class="status-badge success">成功</div>
+        <div v-if="hasError" class="status-badge error">出错</div>
+        <div v-else-if="isFinished" class="status-badge success">成功</div>
         <div v-else class="status-badge processing">执行中</div>
         <div class="chevron-wrapper" :class="{ 'is-rotated': isExpanded }">
           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -97,7 +98,7 @@
             <span class="step-text">{{ step.text }}</span>
          </div>
       </div>
-      <div style="width: 100%; border-bottom: 1px solid #ddd; margin: 0 auto; margin-top: 18px;"></div>
+      <div style="width: 100%; border-bottom: 1px solid #eee; margin: 0 auto; margin-top: 6px;"></div>
 
 
     </div>
@@ -128,10 +129,16 @@ const processTitle = computed(() => {
 })
 
 const isFinished = computed(() => {
-    // Check if any item is still doing or if the process itself marks completion
-    // Given the request, we'll assume it's finished if there are items and none are 'doing'
+    // 有任何条目仍在进行中（步骤 doing / 工具 loading / 思考 thinking）都算未完成
     if (!props.process.items || props.process.items.length === 0) return false
-    return !props.process.items.some(item => item.status === 'doing')
+    return !props.process.items.some(item =>
+        item.status === 'doing' || item.status === 'loading' || item.status === 'thinking'
+    )
+})
+
+const hasError = computed(() => {
+    if (!props.process.items) return false
+    return props.process.items.some(item => item.status === 'error')
 })
 
 const userHasToggled = ref(false)
@@ -196,7 +203,7 @@ const isSecondaryContent = (text) => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 7px 12px;
   cursor: pointer;
   background: #ffffff;
   transition: background 0.15s;
@@ -209,7 +216,7 @@ const isSecondaryContent = (text) => {
 .left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
 .header-icon-wrapper {
@@ -220,7 +227,7 @@ const isSecondaryContent = (text) => {
 }
 
 .title {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   color: #1A5336; /* Forest Green */
 }
@@ -228,13 +235,13 @@ const isSecondaryContent = (text) => {
 .right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 
 .status-badge {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
-  padding: 2px 8px;
+  padding: 1px 7px;
   border-radius: 99px;
 }
 
@@ -248,6 +255,11 @@ const isSecondaryContent = (text) => {
   color: #6C757D; /* Gray-Medium */
 }
 
+.status-badge.error {
+  background: #FDEDEC;
+  color: #C0392B;
+}
+
 .chevron-wrapper {
   color: #ADB5BD;
   transition: transform 0.2s ease;
@@ -258,11 +270,11 @@ const isSecondaryContent = (text) => {
 }
 
 .process-body {
-  padding: 8px 16px 6px 16px;
+  padding: 4px 12px 4px 12px;
 }
 
 .process-item {
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 
 /* Step Styling */
@@ -273,16 +285,16 @@ const isSecondaryContent = (text) => {
 .step-row {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding-left: 4px;
+  gap: 8px;
+  padding-left: 2px;
 }
 
 .step-dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: #E9ECEF;
-  margin-top: 7px;
+  margin-top: 6px;
   flex-shrink: 0;
 }
 
@@ -291,14 +303,14 @@ const isSecondaryContent = (text) => {
 }
 
 .step-text {
-  font-size: 13px;
+  font-size: 12px;
   color: #2C3338; /* Gray-Dark */
-  line-height: 1.5;
+  line-height: 1.45;
 }
 
 .step-text.is-meta {
     color: #6C757D; /* Gray-Medium */
-    font-size: 12px;
+    font-size: 11px;
 }
 
 /* File Attachment Card */
@@ -308,9 +320,9 @@ const isSecondaryContent = (text) => {
     background: #F8F9FA; /* Gray-Pale */
     border: 1px solid #E9ECEF; /* Gray-Light */
     border-radius: 8px;
-    padding: 10px 14px;
-    gap: 12px;
-    margin: 4px 0 8px 0;
+    padding: 7px 10px;
+    gap: 10px;
+    margin: 3px 0 5px 0;
 }
 
 .file-icon-area {
@@ -364,35 +376,41 @@ const isSecondaryContent = (text) => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 3px 8px;
   background: #F8F9FA;
-  border-radius: 6px;
+  border-radius: 5px;
   margin-left: 0;
 }
 
 .tool-content {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    min-width: 0;
 }
 
 .tool-label {
-    font-size: 11px;
+    font-size: 10px;
     color: #6C757D;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+    flex-shrink: 0;
 }
 
 .tool-name {
     font-family: ui-monospace, SFMono-Regular, monospace;
-    font-size: 12px;
+    font-size: 11px;
     color: #1A5336;
     font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .tool-status {
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 500;
+    flex-shrink: 0;
 }
 
 .status-loading { color: #6C757D; }
@@ -401,6 +419,6 @@ const isSecondaryContent = (text) => {
 
 /* Thinking Row */
 .thinking-row {
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 </style>

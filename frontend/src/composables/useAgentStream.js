@@ -293,12 +293,10 @@ export function useAgentStream() {
         isStreaming.value = false
         if (currentAssistantBubble.value) {
             currentAssistantBubble.value.isStreaming = false
-            // 添加已停止标记
-            if (currentAssistantBubble.value.content) {
-                currentAssistantBubble.value.content += '\n\n*[已停止]*'
-            } else if (currentAssistantBubble.value.walkthrough) {
-                currentAssistantBubble.value.walkthrough += '\n\n*[已停止]*'
-            }
+            // 终态收敛：停止后不允许卡片停留在"执行中"
+            finalizeProcesses('error')
+            // 添加已停止标记（必须写 content，walkthrough 当前未渲染）
+            currentAssistantBubble.value.content += '\n\n*[已停止]*'
         }
     }
 
@@ -427,6 +425,7 @@ export function useAgentStream() {
                     thinking.duration = (Date.now() - thinking.startTime) / 1000
                 }
             }
+            finalizeProcesses('error')
             // 不需要在这里添加 [已停止] 标记，因为 abort 函数已经添加了
             isStreaming.value = false
         } else if (evt === 'bubble_end' || evt === 'error') {
@@ -441,22 +440,13 @@ export function useAgentStream() {
                     thinking.duration = (Date.now() - thinking.startTime) / 1000
                 }
             }
+            // 终态收敛：流结束后不允许任何卡片停留在"执行中/加载中"
+            finalizeProcesses(evt === 'error' ? 'error' : 'success')
             // Ensure error is visible
+            // 注意：错误必须写入 content（walkthrough 卡片当前未渲染，写那里用户永远看不到）
             if (evt === 'error') {
                 const errMsg = dataStr || "Unknown Error"
-                currentAssistantBubble.value.walkthrough += `\n\n> [!CAUTION]\n> **Error**: ${errMsg}\n`
-
-                // FORCE UPDATE: Mark active tool as error if any
-                if (activeProcessId) {
-                    const proc = currentAssistantBubble.value.processes.find(p => p.id === activeProcessId)
-                    if (proc && proc.items.length > 0) {
-                        const lastItem = proc.items[proc.items.length - 1]
-                        if (lastItem.type === 'tool' && lastItem.status === 'loading') {
-                            lastItem.status = 'error'
-                            lastItem.output += `\n[System Error: ${errMsg}]`
-                        }
-                    }
-                }
+                currentAssistantBubble.value.content += `\n\n> ⚠️ **执行中断**：${errMsg}\n`
             }
         }
         if (evt === 'bubble_end' || evt === 'cancelled') isStreaming.value = false
@@ -642,6 +632,30 @@ export function useAgentStream() {
     }
 
     // --- PARSER HELPERS ---
+
+    /**
+     * 终态收敛：流结束（正常/出错/取消）时，把所有仍处于进行中的条目落到终态。
+     * finalToolStatus: 'success'（正常结束）| 'error'（出错/取消）
+     */
+    const finalizeProcesses = (finalToolStatus) => {
+        const bubble = currentAssistantBubble.value
+        if (!bubble || !bubble.processes) return
+        bubble.processes.forEach(proc => {
+            const items = proc.items || []
+            items.forEach(item => {
+                if (item.type === 'step' && item.status === 'doing') {
+                    item.status = 'done'
+                } else if (item.type === 'tool' && item.status === 'loading') {
+                    item.status = finalToolStatus
+                } else if (item.type === 'thinking' && item.status === 'thinking') {
+                    item.status = 'done'
+                    if (item.startTime && !item.duration) {
+                        item.duration = (Date.now() - item.startTime) / 1000
+                    }
+                }
+            })
+        })
+    }
 
     // Flush any remaining content in parserBuffer (called when stream ends)
     const flushRemainingBuffer = () => {
@@ -847,10 +861,22 @@ export function useAgentStream() {
                 // 后端在 process 关闭后才发送 <tool_output status="...">
                 // tool_output handler 会正确更新状态
 
+                // 但 step（文字步骤）到 process 关闭即算完成，否则卡片徽标永远停在"执行中"
+                const closingProc = bubble.processes.find(p => p.id === activeProcessId)
+                if (closingProc) {
+                    closingProc.items.forEach(item => {
+                        if (item.type === 'step' && item.status === 'doing') item.status = 'done'
+                    })
+                }
+
                 activeTag = null
                 activeProcessId = null
             } else {
                 const pid = `proc-${Date.now()}`
+                // 新任务开始 = 之前所有任务的文字步骤都已结束（兜底收敛，防止历史卡片停留"执行中"）
+                bubble.processes.forEach(p => p.items?.forEach(item => {
+                    if (item.type === 'step' && item.status === 'doing') item.status = 'done'
+                }))
                 // Only collapse others if this is a NEW top-level process?
                 // For now keep behavior: collapse others
                 bubble.processes.forEach(p => p.isExpanded = false)
@@ -896,7 +922,17 @@ export function useAgentStream() {
             }
         } else if (tagName === 'tool_output') {
             if (isClose) {
-                activeTag = 'process'
+                // 关键修复：tool_output 通常在 </process> 之后才由后端补发，此时 process 已关闭。
+                // 这里必须回到"无标签"状态（而不是 'process'），否则后续所有普通文本都会被
+                // flushContent 的 process 分支静默丢弃 —— 表现为工具执行后正文再也不更新（面板假死）。
+                activeTag = null
+                const borrowedProc = bubble.processes.find(p => p.id === activeProcessId)
+                if (borrowedProc) {
+                    borrowedProc.items.forEach(item => {
+                        if (item.type === 'step' && item.status === 'doing') item.status = 'done'
+                    })
+                }
+                activeProcessId = null
                 // Check if tool output contains file creation success JSON (legacy check, keep for now)
                 // Search in activeProcessId first, then fallback to all processes
                 let toolItem = null

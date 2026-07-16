@@ -134,7 +134,7 @@ const hasContent = computed(() => {
 .ghost-thinking-wrapper {
     margin-left: 0;
     padding: 0;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
 }
 
 .root-bubble-container {
@@ -150,7 +150,7 @@ const hasContent = computed(() => {
   box-sizing: border-box;
   word-wrap: break-word;
   overflow-wrap: break-word;
-  margin-bottom: 32px; /* Breathable spacing between bubbles */
+  margin-bottom: 14px; /* Compact spacing between bubbles */
   user-select: text;
   -webkit-user-select: text;
 }
@@ -165,9 +165,9 @@ const hasContent = computed(() => {
 }
 
 .main-content {
-  padding: 6px 16px; /* Increased padding */
-  font-size: 14px;
-  line-height: 1.6;
+  padding: 6px 12px;
+  font-size: 13px;
+  line-height: 1.55;
   color: #2C3338; /* Gray-Dark */
 }
 
@@ -204,7 +204,7 @@ const hasContent = computed(() => {
 }
 
 .main-content:deep(p) {
-  margin: 0 0 12px 0;
+  margin: 0 0 8px 0;
 }
 
 .main-content:deep(p:last-child) {
@@ -254,8 +254,8 @@ const hasContent = computed(() => {
 }
 
 .main-content :deep(.markdown-body) {
-  font-size: 14px;
-  line-height: 1.6;
+  font-size: 13px;
+  line-height: 1.55;
   margin: 0;
   padding: 0;
   color: #2C3338;
@@ -265,8 +265,8 @@ const hasContent = computed(() => {
 .main-content :deep(.markdown-body h1),
 .main-content :deep(.markdown-body h2),
 .main-content :deep(.markdown-body h3) {
-  margin-top: 20px !important;
-  margin-bottom: 10px !important;
+  margin-top: 14px !important;
+  margin-bottom: 8px !important;
   font-weight: 600;
   color: #1A5336; /* Forest Green for headings */
 }

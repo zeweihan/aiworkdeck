@@ -1930,7 +1930,7 @@ export default {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden; /* Prevent horizontal overflow */
-  padding: 16px;
+  padding: 12px;
   min-width: 0; /* Allow flex shrinking */
   width: 100%;
   box-sizing: border-box;
@@ -1946,7 +1946,7 @@ export default {
 }
 
 .message-row {
-  margin-bottom: 26px;
+  margin-bottom: 14px;
   display: flex;
   flex-direction: column;
   width: 100%;
