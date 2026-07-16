@@ -908,11 +908,243 @@ public class ProjectFileService {
                     rename(folder.getId(), newTitle, userId); // Re-use standard rename logic
                 } catch (Exception e) {
                     log.error("Failed to rename conversation folder {} to {}", conversationId, newTitle, e);
-                    // Fallback: force update DB Name if physical rename fails? 
+                    // Fallback: force update DB Name if physical rename fails?
                     // rename() already handles DB update even if physical fails (partially)
                 }
             }
         }
+    }
+
+    // ===== 压缩包（zip/7z/rar）预览与解压 =====================================
+    // zip/7z 走 commons-compress（zip 用 GBK 兜底解码 Windows 中文名，UTF-8 标志位
+    // 的条目仍按 UTF-8）；rar 走 junrar（仅 RAR4，RAR5/加密包报友好错误）。
+
+    public static final java.util.Set<String> ARCHIVE_TYPES = java.util.Set.of("zip", "7z", "rar");
+    private static final long MAX_ARCHIVE_BYTES = 1024L * 1024 * 1024;      // 整包载入内存，1GB 上限
+    private static final long MAX_EXTRACT_TOTAL = 8L * 1024 * 1024 * 1024;  // 解压后总量上限（防 zip bomb）
+    private static final int MAX_ARCHIVE_ENTRIES = 5000;
+
+    /** 条目访问器：list 与 extract 共用同一套格式遍历逻辑。content 仅文件条目非 null。 */
+    private interface ArchiveVisitor {
+        void visit(String path, boolean dir, long size, java.util.concurrent.Callable<java.io.InputStream> content) throws Exception;
+    }
+
+    /** 压缩包条目列表（预览用）。 */
+    public List<java.util.Map<String, Object>> listArchiveEntries(Long fileId) {
+        ProjectFile pf = getFile(fileId);
+        byte[] bytes = loadArchiveBytes(pf);
+        List<java.util.Map<String, Object>> entries = new ArrayList<>();
+        try {
+            walkArchive(archiveType(pf), bytes, (path, dir, size, content) -> {
+                String norm = normalizeEntryPath(path);
+                if (norm == null) return; // 系统噪音（__MACOSX/.DS_Store）或空路径
+                if (entries.size() >= MAX_ARCHIVE_ENTRIES) throw new IllegalArgumentException("压缩包条目过多（上限 " + MAX_ARCHIVE_ENTRIES + "）");
+                java.util.Map<String, Object> e = new java.util.LinkedHashMap<>();
+                e.put("path", norm);
+                e.put("name", norm.substring(norm.lastIndexOf('/') + 1));
+                e.put("dir", dir);
+                e.put("size", dir ? 0L : Math.max(0L, size));
+                entries.add(e);
+            });
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(archiveErrorMessage(e), e);
+        }
+        return entries;
+    }
+
+    /**
+     * 解压到压缩包所在目录下的新文件夹（重名自动加 " (n)"），逐条目建文件夹/文件
+     * 记录并写入字节。返回新建的根文件夹。
+     */
+    @Transactional
+    public ProjectFile extractArchive(Long projectId, Long fileId, Long userId) {
+        ProjectFile pf = getFile(fileId);
+        if (!projectId.equals(pf.getProjectId())) throw new IllegalArgumentException("文件不属于该项目");
+        byte[] bytes = loadArchiveBytes(pf);
+
+        String baseName = pf.getName();
+        int dot = baseName.lastIndexOf('.');
+        if (dot > 0) baseName = baseName.substring(0, dot);
+        String folderName = resolveUniqueName(projectId, pf.getParentId(), baseName);
+        ProjectFile root = createFolder(projectId, pf.getParentId(), folderName, userId);
+
+        // 条目路径 -> 已建文件夹 id 缓存；计数与总量护栏
+        java.util.Map<String, Long> folderIds = new java.util.HashMap<>();
+        long[] totals = { 0L, 0L, 0L }; // files, folders, bytes
+        try {
+            walkArchive(archiveType(pf), bytes, (path, dir, size, content) -> {
+                String norm = normalizeEntryPath(path);
+                if (norm == null) return;
+                if (totals[0] + totals[1] >= MAX_ARCHIVE_ENTRIES) throw new IllegalArgumentException("压缩包条目过多（上限 " + MAX_ARCHIVE_ENTRIES + "）");
+                String[] segs = norm.split("/");
+                // 逐级确保父文件夹存在（目录条目建到最后一级，文件条目建到倒数第二级）
+                Long parentId = root.getId();
+                int folderDepth = dir ? segs.length : segs.length - 1;
+                StringBuilder prefix = new StringBuilder();
+                for (int i = 0; i < folderDepth; i++) {
+                    prefix.append(segs[i]).append('/');
+                    String key = prefix.toString();
+                    Long cached = folderIds.get(key);
+                    if (cached == null) {
+                        ProjectFile f = ensureFolder(projectId, parentId, segs[i], userId);
+                        cached = f.getId();
+                        folderIds.put(key, cached);
+                        totals[1]++;
+                    }
+                    parentId = cached;
+                }
+                if (dir || content == null) return;
+
+                byte[] data;
+                try (java.io.InputStream in = content.call()) {
+                    data = in.readAllBytes();
+                }
+                totals[2] += data.length;
+                if (totals[2] > MAX_EXTRACT_TOTAL) throw new IllegalArgumentException("解压后总量超过上限");
+                String fileName = resolveUniqueName(projectId, parentId, segs[segs.length - 1]);
+                String ext = "";
+                int d2 = fileName.lastIndexOf('.');
+                if (d2 > 0 && d2 < fileName.length() - 1) ext = fileName.substring(d2 + 1).toLowerCase();
+                if (ext.length() > 32) ext = ext.substring(0, 32);
+                ProjectFile rec = createFile(projectId, parentId, fileName, ext, (long) data.length,
+                        null, generateWpsFileId(projectId), userId);
+                storageServiceFactory.getStorageService().save(rec.getFilePath(), new java.io.ByteArrayInputStream(data));
+                totals[0]++;
+            });
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException(archiveErrorMessage(e), e);
+        }
+        log.info("解压完成: {} -> 文件夹「{}」({} 文件 / {} 文件夹, {} bytes)", pf.getName(), folderName, totals[0], totals[1], totals[2]);
+        return root;
+    }
+
+    private String archiveType(ProjectFile pf) {
+        String t = pf.getFileType() == null ? "" : pf.getFileType().toLowerCase();
+        if (!ARCHIVE_TYPES.contains(t)) throw new IllegalArgumentException("不支持的压缩包类型: " + t);
+        return t;
+    }
+
+    private byte[] loadArchiveBytes(ProjectFile pf) {
+        if (pf.getFileSize() != null && pf.getFileSize() > MAX_ARCHIVE_BYTES) {
+            throw new IllegalArgumentException("压缩包过大（上限 1GB）");
+        }
+        try {
+            byte[] bytes = getFileBytes(pf.getId());
+            if (bytes == null || bytes.length == 0) throw new IllegalArgumentException("压缩包为空或不存在");
+            if (bytes.length > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException("压缩包过大（上限 1GB）");
+            return bytes;
+        } catch (java.io.IOException e) {
+            throw new IllegalArgumentException("读取压缩包失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 规范化条目路径：统一分隔符、去空段；含 ".." 的直接拒绝（zip-slip）；
+     * 返回 null 表示应跳过（__MACOSX / .DS_Store / 空路径）。
+     */
+    private String normalizeEntryPath(String raw) {
+        if (raw == null) return null;
+        String p = raw.replace('\\', '/');
+        List<String> segs = new ArrayList<>();
+        for (String s : p.split("/")) {
+            String seg = s.trim();
+            if (seg.isEmpty() || ".".equals(seg)) continue;
+            if ("..".equals(seg)) throw new IllegalArgumentException("压缩包含非法路径: " + raw);
+            segs.add(seg);
+        }
+        if (segs.isEmpty()) return null;
+        if ("__MACOSX".equals(segs.get(0)) || ".DS_Store".equals(segs.get(segs.size() - 1))) return null;
+        return String.join("/", segs);
+    }
+
+    private void walkArchive(String type, byte[] bytes, ArchiveVisitor visitor) throws Exception {
+        switch (type) {
+            case "zip": {
+                try (org.apache.commons.compress.archivers.zip.ZipFile zf = openZip(bytes)) {
+                    var en = zf.getEntries();
+                    while (en.hasMoreElements()) {
+                        var e = en.nextElement();
+                        visitor.visit(zipEntryName(e), e.isDirectory(), e.getSize(), () -> zf.getInputStream(e));
+                    }
+                }
+                return;
+            }
+            case "7z": {
+                try (org.apache.commons.compress.archivers.sevenz.SevenZFile sz =
+                             org.apache.commons.compress.archivers.sevenz.SevenZFile.builder()
+                                     .setSeekableByteChannel(new org.apache.commons.compress.utils.SeekableInMemoryByteChannel(bytes))
+                                     .get()) {
+                    org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry e;
+                    while ((e = sz.getNextEntry()) != null) {
+                        final var entry = e;
+                        visitor.visit(e.getName(), e.isDirectory(), e.getSize(), () -> sz.getInputStream(entry));
+                    }
+                }
+                return;
+            }
+            case "rar": {
+                try (com.github.junrar.Archive ar = new com.github.junrar.Archive(new java.io.ByteArrayInputStream(bytes))) {
+                    for (com.github.junrar.rarfile.FileHeader h : ar.getFileHeaders()) {
+                        if (h.isEncrypted()) throw new IllegalArgumentException("加密压缩包暂不支持");
+                        visitor.visit(h.getFileName(), h.isDirectory(), h.getFullUnpackSize(), () -> ar.getInputStream(h));
+                    }
+                }
+                return;
+            }
+            default:
+                throw new IllegalArgumentException("不支持的压缩包类型: " + type);
+        }
+    }
+
+    /**
+     * 打开 zip：按 UTF-8 打开（commons-compress 对 UTF-8 用替换字符宽松解码，
+     * 任何包都能打开）；无 EFS 标志位的条目名再经 zipEntryName 按原始字节
+     * 启发式修正。
+     */
+    private org.apache.commons.compress.archivers.zip.ZipFile openZip(byte[] bytes) throws java.io.IOException {
+        return org.apache.commons.compress.archivers.zip.ZipFile.builder()
+                .setSeekableByteChannel(new org.apache.commons.compress.utils.SeekableInMemoryByteChannel(bytes))
+                .setCharset(java.nio.charset.StandardCharsets.UTF_8)
+                .get();
+    }
+
+    /**
+     * 条目名解码：带 UTF-8(EFS) 标志位的直接用；否则取原始字节做严格 UTF-8 →
+     * 严格 GBK 的启发式（macOS zip 写 UTF-8 名不设标志位；旧版 Windows 写 GBK 名）。
+     * 都失败就保留宽松解码结果，至少不炸整个包。
+     */
+    private String zipEntryName(org.apache.commons.compress.archivers.zip.ZipArchiveEntry e) {
+        byte[] raw = e.getRawName();
+        if (raw == null || (e.getGeneralPurposeBit() != null && e.getGeneralPurposeBit().usesUTF8ForNames())) {
+            return e.getName();
+        }
+        for (java.nio.charset.Charset cs : new java.nio.charset.Charset[]{
+                java.nio.charset.StandardCharsets.UTF_8, java.nio.charset.Charset.forName("GBK")}) {
+            try {
+                return cs.newDecoder()
+                        .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                        .decode(java.nio.ByteBuffer.wrap(raw)).toString();
+            } catch (java.nio.charset.CharacterCodingException ignored) { /* 下一个编码 */ }
+        }
+        return e.getName();
+    }
+
+    private String archiveErrorMessage(Exception e) {
+        String name = e.getClass().getSimpleName();
+        String msg = e.getMessage() == null ? "" : e.getMessage();
+        if (name.contains("UnsupportedRarV5") || msg.contains("rar 5")) {
+            return "RAR5 格式暂不支持，请转存为 zip 或 RAR4 后重试";
+        }
+        if (name.contains("PasswordRequired") || msg.toLowerCase().contains("password") || msg.contains("加密")) {
+            return "加密压缩包暂不支持";
+        }
+        log.warn("压缩包解析失败", e);
+        return "压缩包解析失败：文件可能已损坏或格式不受支持";
     }
 }
 

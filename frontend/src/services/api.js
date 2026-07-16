@@ -768,6 +768,25 @@ export function createFolder(projectId, parentId, name) {
   });
 }
 
+// 压缩包（zip/7z/rar）条目列表（预览）
+export function getArchiveEntries(projectId, fileId) {
+  return request({
+    url: `/api/projects/${projectId}/files/${fileId}/archive/entries`,
+    method: 'GET',
+  });
+}
+
+// 解压压缩包到其所在目录下的新文件夹，返回新建的根文件夹记录
+export function extractArchive(projectId, fileId) {
+  return request({
+    url: `/api/projects/${projectId}/files/${fileId}/archive/extract`,
+    method: 'POST',
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 创建文件
 export function createFile(projectId, parentId, name, fileType, fileSize, filePath, wpsFileId) {
   return request({

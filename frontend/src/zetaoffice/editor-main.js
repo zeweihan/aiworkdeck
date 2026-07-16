@@ -158,9 +158,22 @@ try {
   }
 } catch (e) { console.error('[zeta-editor] window.open hook failed:', e) }
 
+// (autosave) The worker posts one 'modified' per document change (typed / IME /
+// AI command — see installModifyListener in office_thread.js). The host only
+// needs an edge to debounce-save on, so throttle the relay to 1/500ms.
+let lastModifiedRelay = 0
+function relayModified(d) {
+  if (!d || d.cmd !== 'modified') return
+  const now = Date.now()
+  if (now - lastModifiedRelay < 500) return
+  lastModifiedRelay = now
+  try { hostTransport.send({ __lo: 'lo-relay', type: 'modified' }) } catch (e) { /* ignore */ }
+}
+
 startEditorEndpoint({
   canvas: document.getElementById('qtcanvas'),
   transport: hostTransport,
+  onWorkerMessage: relayModified,
   sofficeBaseUrl: q.get('lowa') || 'https://cdn.zetaoffice.net/zetaoffice_latest/',
   zetaJsUrl: q.get('zeta') || './zeta.js',
   workerScriptUrl: q.get('worker') || './office_thread.js',
