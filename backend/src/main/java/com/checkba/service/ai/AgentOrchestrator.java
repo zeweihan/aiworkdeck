@@ -48,6 +48,8 @@ public class AgentOrchestrator {
         String lastCallSignature;
         int repeatCount;
         int consecutiveFailures;
+        // 当前活跃文档 ID（来自 activeContext 或 doc_open_file），用于修改前自动创建检查点
+        Long activeFileId;
     }
 
     // 取消状态管理：存储被取消的会话ID
@@ -69,6 +71,8 @@ public class AgentOrchestrator {
     private final com.checkba.service.ProjectFileService projectFileService;
     private final EditorBridgeService editorBridgeService;
     private final ConversationFileChangeService conversationFileChangeService;
+    private final TodoListService todoListService;
+    private final DocumentCheckpointService documentCheckpointService;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -149,14 +153,33 @@ public class AgentOrchestrator {
 
     /**
      * 分发一次工具调用并处理声明式副作用（文件变更通知、文件树刷新）。
+     * 修改类工具（fileEffect=MODIFIED）执行前自动为活跃文档创建本轮检查点。
      */
     private ToolRegistry.ToolResult dispatchTool(String toolName, String argsJson,
                                                  Long projectId, String conversationId,
-                                                 Long userId, String modelId) {
+                                                 Long userId, String modelId, RunGuard guard) {
+        // 检查点：第一个修改类工具执行前快照活跃文档（恢复类工具自身除外）
+        if (guard != null && !"doc_restore_checkpoint".equals(toolName)) {
+            boolean modifies = toolRegistry.resolve(toolName)
+                    .map(t -> t.meta() != null && "MODIFIED".equals(t.meta().fileEffect()))
+                    .orElse(false);
+            if (modifies && guard.activeFileId != null) {
+                documentCheckpointService.ensureCheckpoint(conversationId, guard.activeFileId);
+            }
+        }
+
         com.checkba.service.ai.tools.ToolContext ctx =
                 new com.checkba.service.ai.tools.ToolContext(projectId, conversationId, userId, modelId);
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
         applyToolSideEffects(result, argsJson, conversationId);
+
+        // 跟踪活跃文档：模型中途打开新文档时，后续检查点跟着切换
+        if (guard != null && "doc_open_file".equals(toolName)) {
+            try {
+                String fid = extractArg(argsJson, "fileId");
+                if (fid != null && !fid.isEmpty()) guard.activeFileId = Long.parseLong(fid.trim());
+            } catch (Exception ignore) { /* fileId 非数字时保持原值 */ }
+        }
         return result;
     }
 
@@ -265,7 +288,15 @@ public class AgentOrchestrator {
             log.info("Starting runLoop for conversation: {}, mode: {}", conversationId, agentMode);
             // Track tool executions for history persistence
             StringBuilder executionLog = new StringBuilder();
-            runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, new RunGuard());
+            RunGuard guard = new RunGuard();
+            // 记录活跃文档 ID（修改前自动检查点的目标）；每轮一个独立检查点
+            documentCheckpointService.clearForNewRun(conversationId);
+            if (request.getActiveContext() != null && request.getActiveContext().getId() != null) {
+                try {
+                    guard.activeFileId = Long.parseLong(request.getActiveContext().getId().trim());
+                } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
+            }
+            runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, guard);
             
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
@@ -383,7 +414,7 @@ public class AgentOrchestrator {
                         success = false;
                     } else {
                         ToolRegistry.ToolResult toolResult = dispatchTool(req.name(), req.arguments(),
-                                Long.parseLong(projectId), conversationId, userId, modelId);
+                                Long.parseLong(projectId), conversationId, userId, modelId, guard);
                         result = toolResult.output();
                         success = toolResult.success();
                     }
@@ -398,6 +429,17 @@ public class AgentOrchestrator {
                     // Log for history persistence (include status attribute)
                     executionLog.append(String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
                         displayName.replace("\"", "'"), req.name(), req.arguments(), nativeToolStatus, result));
+                }
+
+                // 防走神注入（Claude Code system-reminder 模式）：每次工具执行后带上任务清单状态，
+                // 防止长任务中模型忘记目标。刚更新过清单的轮次不注入（避免重复唠叨）。
+                boolean justWroteTodo = aiMessage.toolExecutionRequests().stream()
+                        .anyMatch(r -> "todo_write".equals(r.name()));
+                if (!justWroteTodo) {
+                    String reminder = todoListService.reminder(conversationId);
+                    if (reminder != null) {
+                        messages.add(dev.langchain4j.data.message.UserMessage.from("[系统提醒] " + reminder));
+                    }
                 }
 
                 // 增量保存：在工具执行后立即保存AI消息和工具输出，防止对话中断导致上下文丢失
@@ -438,7 +480,7 @@ public class AgentOrchestrator {
                         xmlToolSuccess = false;
                     } else {
                         toolResult = dispatchTool(call.toolName(), call.argsJson(),
-                                Long.parseLong(projectId), conversationId, userId, modelId);
+                                Long.parseLong(projectId), conversationId, userId, modelId, guard);
                         result = toolResult.found()
                                 ? toolResult.output()
                                 : "Unknown tool in custom parser: " + code;
@@ -458,6 +500,14 @@ public class AgentOrchestrator {
                     // Explicitly tell the model to EVALUATE - with strict anti-over-execution instructions
                     String feedbackMsg = String.format("[System Tool Execution Log]\nTool: %s\nStatus: %s\nOutput: %s\n\n(CRITICAL INSTRUCTION: The tool executed successfully. Now compare with the ORIGINAL user request. If the SPECIFIC task the user asked for is complete, output `<final>` IMMEDIATELY. DO NOT perform additional operations unless the user EXPLICITLY requested them. For example, if user asked to 'delete the 3rd z' and you deleted it, you are DONE - do not delete other z's.)",
                         code, statusPrefix, result);
+
+                    // 防走神注入：任务清单状态随工具反馈一起带回（刚更新清单的轮次不注入）
+                    if (!"todo_write".equals(call.toolName())) {
+                        String reminder = todoListService.reminder(conversationId);
+                        if (reminder != null) {
+                            feedbackMsg += "\n\n[系统提醒] " + reminder;
+                        }
+                    }
 
                     messages.add(dev.langchain4j.data.message.UserMessage.from(feedbackMsg));
 

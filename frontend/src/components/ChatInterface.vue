@@ -406,6 +406,8 @@
 
     <!-- 4. Regular Bottom Input -->
     <view v-else class="input-area-wrapper">
+       <!-- Agent 任务清单常驻进度卡（todo_write 驱动，plan_update 事件更新） -->
+       <TodoProgressCard :todos="planTodos" />
        <!-- NEW: File Changes & Token Usage Bar (Always visible) -->
        <view class="status-bar-row">
            <!-- Left: File Changes -->
@@ -532,6 +534,7 @@
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
+import TodoProgressCard from './AgentMessage/TodoProgressCard.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration } from '@/services/api.js'
@@ -539,7 +542,7 @@ import { getAuthHeaders } from '@/utils/auth.js'
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, BackgroundTaskIndicator },
+  components: { RootBubble, BackgroundTaskIndicator, TodoProgressCard },
   props: {
     projectId: String,
     projectName: String,
@@ -576,6 +579,7 @@ export default {
       lastHeartbeat,
       tokenUsage,
       fileChanges,
+      planTodos,
       rollbackToMessage,
       currentConversationId,
       loadConversationMetadata
@@ -1815,6 +1819,8 @@ export default {
        confirmPptGeneration,
        // File Changes Status
        fileChanges,
+       // Agent 任务清单进度卡
+       planTodos,
        modifiedFiles,
        createdFiles,
        showModifiedPopup,

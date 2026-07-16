@@ -177,6 +177,31 @@ function insertTextAtCursor(vc, text) {
   }
 }
 
+// Fire a Writer UI command (.uno:*) on the current frame — the engine-native
+// path for key-equivalent actions (Backspace/Delete), so revision-mode (redline)
+// semantics are the engine's own. zetajs marshalling: create() takes context as
+// first arg; the args sequence must be a plain Array (PR#107 rules).
+function dispatchUno(url) {
+  css.frame.DispatchHelper.create(context).executeDispatch(ctrl.getFrame(), url, '', 0, []);
+}
+
+// Desktop-keyboard parity set for the IME overlay's ui_command action — an
+// ALLOWLIST map (name -> .uno: slot), deliberately NOT a raw dispatch
+// passthrough. Toggles (bold/italic/underline) are the engine's own, so
+// collapsed-cursor and mixed-selection semantics match the desktop app.
+const UI_COMMANDS = {
+  select_all: '.uno:SelectAll',
+  bold: '.uno:Bold', italic: '.uno:Italic', underline: '.uno:Underline',
+  line_start: '.uno:GoToStartOfLine', line_end: '.uno:GoToEndOfLine',
+  // (2nd sweep) the rest of the desktop key surface — all engine-verified:
+  line_break: '.uno:InsertLinebreak',                     // Shift+Enter 软回车
+  word_left: '.uno:GoToPrevWord', word_right: '.uno:GoToNextWord',
+  word_left_sel: '.uno:WordLeftSel', word_right_sel: '.uno:WordRightSel',
+  line_start_sel: '.uno:StartOfLineSel', line_end_sel: '.uno:EndOfLineSel',
+  escape: '.uno:Escape',                                  // 取消选区
+  page_up: '.uno:PageUp', page_down: '.uno:PageDown',
+};
+
 // Shared verification snapshot returned by mutating commands: where the cursor
 // is now + the paragraph as it reads AFTER the edit ("改完看一眼").
 function verifySnapshot() {
@@ -572,16 +597,28 @@ const EXEC = {
     }
     return { success: true, dir: dir, extend: ex };
   },
-  // [spike] delete one char before the cursor (Backspace in the IME overlay). If
-  // text is selected, delete the selection; else extend one char left and clear.
-  // Inherits the current RecordChanges state (tracked if tracking is on).
+  // Backspace / Delete (IME overlay control keys) — routed through Writer's OWN
+  // key dispatch (.uno:SwBackspace / .uno:Delete), NOT hand-rolled goLeft+
+  // setString. WHY: RecordChanges is ON since boot, and setString('') on
+  // pre-existing (non-own-insert) text only MARKS it as a delete redline — the
+  // view cursor never advances past the marked char, so every further Backspace
+  // re-selected the SAME char and deletion jammed after one press (headless-
+  // verified). The engine dispatch owns revision semantics: mark + step past for
+  // original text, hard-delete for own unaccepted inserts, selection-aware.
   delete_backward() {
-    const vc = ctrl.getViewCursor();
-    if ((vc.getString() || '').length === 0) vc.goLeft(1, true); // select char to the left
-    const had = (vc.getString() || '').length;
-    if (had === 0) return { success: true, deleted: 0 };          // at doc start: nothing to delete
-    vc.setString('');
-    return { success: true, deleted: had };
+    dispatchUno('.uno:SwBackspace');
+    return { success: true };
+  },
+  delete_forward() {
+    dispatchUno('.uno:Delete');
+    return { success: true };
+  },
+  // Overlay shortcut keys (Cmd/Ctrl+A/B/I/U, Home/End) — see UI_COMMANDS.
+  ui_command(p) {
+    const url = UI_COMMANDS[String(p.name || '')];
+    if (!url) return { success: false, message: 'ui_command not allowed: ' + (p.name || '') };
+    dispatchUno(url);
+    return { success: true, name: String(p.name) };
   },
   // [spike] Phase B: raw measurements for mapping the view cursor to canvas
   // pixels. We DELIBERATELY return primitives (not a final px rect) so the
