@@ -37,7 +37,8 @@
     "build:quickapp-webview-huawei": "uni build -p quickapp-webview-huawei",
     "build:quickapp-webview-union": "uni build -p quickapp-webview-union",
     "test:lowa-e2e": "node tests/lowa-e2e/run.mjs",
-    "test:app-e2e": "node tests/app-e2e/run.mjs"
+    "test:app-e2e": "node tests/app-e2e/run.mjs",
+    "test:desktop-e2e": "node tests/desktop-e2e/run.mjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4080420251103001",

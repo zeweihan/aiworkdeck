@@ -201,6 +201,25 @@ try {
   }
   await shot('j6-rails')
 
+  // ============ J6.5 AI 对话（真 UI 打字发送；默认模型 deepseek-v4-flash，
+  // $0.09/M tokens，一条消息成本可忽略；AI_E2E=0 跳过） ============
+  if (process.env.AI_E2E !== '0') {
+    console.log('== J6.5 AI 对话 ==')
+    await step('AI 面板发送并收到流式回复', async () => {
+      if (!(await page.$('.chat-input-rich'))) await mouseClickSel('[title="AI 助手"]')
+      await page.waitForSelector('.chat-input-rich', { timeout: 10000 })
+      await mouseClickSel('.chat-input-rich')
+      await page.keyboard.type('这是自动化测试。请只回复四个字：测试通过', { delay: 10 })
+      await mouseClickSel('.send-btn')
+      await waitText('测试通过', 90000) // 流式回复落进气泡
+    })
+    await step('对话历史落库（#153 轮次回归）', async () => {
+      const r = await fetch(BACKEND + '/api/ai/history?projectId=' + QA.projectId, { headers: { 'X-Session-Id': QA.sid } })
+      const body = await r.text()
+      if (!body.includes('测试通过')) throw new Error('历史中未见 AI 回复内容: ' + body.slice(0, 150))
+    })
+  }
+
   // ============ J7 独立页面 ============
   console.log('== J7 独立页面 ==')
   for (const [name, route, expectText] of [
