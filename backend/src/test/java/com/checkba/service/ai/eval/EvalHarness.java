@@ -156,9 +156,13 @@ public final class EvalHarness {
 
         ConversationFileChangeService fileChange = mock(ConversationFileChangeService.class);
 
+        com.checkba.service.ai.TodoListService todoListService = mock(com.checkba.service.ai.TodoListService.class);
+        com.checkba.service.ai.DocumentCheckpointService checkpointService = mock(com.checkba.service.ai.DocumentCheckpointService.class);
+
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
-                registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange);
+                registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange,
+                todoListService, checkpointService);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);
