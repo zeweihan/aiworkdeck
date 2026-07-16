@@ -28,19 +28,22 @@ public class AiAgentController {
     private final com.checkba.service.ai.BackgroundTaskService backgroundTaskService;
 
     private final com.checkba.service.ai.tools.PptxTools pptxTools;
+    private final com.checkba.service.ai.TodoListService todoListService;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public AiAgentController(SseEmitterService sseEmitterService, 
-                            AgentOrchestrator agentOrchestrator, 
+    public AiAgentController(SseEmitterService sseEmitterService,
+                            AgentOrchestrator agentOrchestrator,
                             com.checkba.service.ProjectAiMessageService messageService,
                             com.checkba.service.ai.BackgroundTaskService backgroundTaskService,
-                            com.checkba.service.ai.tools.PptxTools pptxTools) {
+                            com.checkba.service.ai.tools.PptxTools pptxTools,
+                            com.checkba.service.ai.TodoListService todoListService) {
         this.sseEmitterService = sseEmitterService;
         this.agentOrchestrator = agentOrchestrator;
         this.messageService = messageService;
         this.backgroundTaskService = backgroundTaskService;
         this.pptxTools = pptxTools;
-    } 
+        this.todoListService = todoListService;
+    }
 
     /**
      * 建立 SSE 连接。
@@ -71,11 +74,14 @@ public class AiAgentController {
             // Use a small delay or ensure SseEmitterService sends it properly
             // SseEmitterService.createConnection sends initial "connected" event.
             // We can send this right after.
-            sseEmitterService.send(conversationId, "state_recovery", "{\"content\":\"" + 
-                snapshot.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") + 
+            sseEmitterService.send(conversationId, "state_recovery", "{\"content\":\"" +
+                snapshot.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r") +
                 "\"}");
         }
-        
+
+        // 重连后把当前任务清单重推给前端（常驻进度卡恢复）
+        todoListService.resendToFrontend(conversationId);
+
         return emitter;
     }
 

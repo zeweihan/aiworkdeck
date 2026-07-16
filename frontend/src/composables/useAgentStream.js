@@ -20,6 +20,9 @@ export function useAgentStream() {
     const backgroundTasks = ref({}) // taskId -> { type, progress, message, stage, startedAt, estimatedDuration }
     const lastHeartbeat = ref(null) // { source, conversationId, timestamp }
 
+    // STATE: Agent 任务清单（todo_write 驱动的常驻进度卡），plan_update 事件整表覆写
+    const planTodos = ref([]) // Array of { content, activeForm, status }
+
     // POINTER: The current bubble we are writing to (Assistant)
     const currentAssistantBubble = ref(null)
 
@@ -90,6 +93,8 @@ export function useAgentStream() {
         // Reset Token Usage (start fresh for new chat context? Or keep per session? Usually per chat.)
         // Ideally we keep it during the chat session. resetSSE is called when switching conversations.
         tokenUsage.value = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
+        // 切换会话时清空任务清单进度卡（重连后由后端 plan_update 恢复）
+        planTodos.value = []
         // Clear bubble pointer (will be set fresh on next send)
         currentAssistantBubble.value = null
     }
@@ -323,6 +328,17 @@ export function useAgentStream() {
     const handleEvent = (evt, dataStr) => {
         // 调试日志：显示事件处理
         console.log('[SSE] handleEvent:', evt, 'dataLen:', dataStr?.length || 0, 'time:', new Date().toISOString())
+
+        // 任务清单更新：不依赖活跃气泡（重连恢复时也要能收到），放在气泡守卫之前
+        if (evt === 'plan_update') {
+            try {
+                const d = JSON.parse(dataStr)
+                planTodos.value = Array.isArray(d.todos) ? d.todos : []
+            } catch (e) {
+                console.error('Failed to parse plan_update', e)
+            }
+            return
+        }
 
         if (!currentAssistantBubble.value) return
 
@@ -1111,6 +1127,7 @@ export function useAgentStream() {
         fileChanges,
         backgroundTasks,
         lastHeartbeat,
+        planTodos,
         // Load metadata for historical conversations
         loadConversationMetadata: async (conversationId) => {
             if (!conversationId) return
