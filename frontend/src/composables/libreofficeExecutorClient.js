@@ -30,6 +30,9 @@ export const EDITOR_ACTIONS = [
   // [spike/IME] implemented by the worker since Phase B but never whitelisted
   // (found by the primitive self-test: "Unknown action: move_cursor").
   'move_cursor', 'delete_backward', 'delete_forward', 'insert_paragraph', 'get_cursor_rect',
+  // [overlay 快捷键] desktop-parity keys (Cmd/Ctrl+A/B/I/U, Home/End) — the
+  // worker holds the .uno: allowlist (UI_COMMANDS in office_thread.js).
+  'ui_command',
   // [Track D] load the user's real document into the editor (host-initiated, not
   // an AI-agent command): {bytes, name} -> MEMFS + loadComponentFromURL + retarget.
   'load_document',

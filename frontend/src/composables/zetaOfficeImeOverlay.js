@@ -42,8 +42,10 @@
 //
 // Control keys (Phase B, when sendCommand is supplied): Enter inserts a paragraph
 // break via onEnter; Backspace/Delete delete around the cursor; arrow keys move
-// the LO view cursor — all forwarded to UNO, not applied to the empty <input>.
-// Without sendCommand these keys fall through to the (harmless, empty) input.
+// the LO view cursor; desktop shortcuts (Cmd/Ctrl+Z/Y undo-redo, +A select all,
+// +C/X/V clipboard, +B/I/U format toggles, Home/End & Cmd+arrows line/doc nav)
+// — all forwarded to UNO, not applied to the empty <input>. Without sendCommand
+// these keys fall through to the (harmless, empty) input.
 
 // The STABLE half of the mapping. offset is derived live per click (see above).
 // nudgeX/nudgeY are a small constant px correction for the residual between the
@@ -109,7 +111,8 @@ export function cursorRectToPixels(raw, offset) {
  * @param {(action:string,params:object)=>Promise<any>} [options.sendCommand]
  *        OPTIONAL. A raw UI-command channel to the worker (e.g. (a,p) =>
  *        workerRequest(a,p)). Enables control-key forwarding: Backspace ->
- *        delete_backward, Delete -> delete_forward, arrow keys -> move_cursor.
+ *        delete_backward, Delete -> delete_forward, arrow keys -> move_cursor,
+ *        plus desktop shortcuts (undo/redo/select-all/clipboard/format/line-nav).
  *        Without it, those keys fall through to the (empty) input and the
  *        document is unaffected.
  * @param {(msg:string)=>void} [options.onLog] optional progress/diagnostic log.
@@ -238,6 +241,33 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   }
   const ARROW_DIR = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }
 
+  // Clipboard: the document selection lives in LO (not the DOM), so native
+  // copy/cut/paste can't see it — bridge through navigator.clipboard + the
+  // worker's selection primitives instead. Paste replaces the selection (same
+  // as desktop); multi-line text becomes real paragraph breaks downstream.
+  const copySelection = (cut) => {
+    log('IME 覆盖层 → ' + (cut ? 'Cmd+X 剪切 / cut' : 'Cmd+C 复制 / copy'))
+    Promise.resolve(sendCommand('get_selection', {}))
+      .then((r) => {
+        const text = r && r.text
+        if (!text) return
+        return navigator.clipboard.writeText(text).then(() => {
+          // selection-aware tracked delete — same engine path as Backspace
+          if (cut) return Promise.resolve(sendCommand('delete_backward', {})).then(reposition)
+        })
+      })
+      .catch((err) => log('overlay clipboard error: ' + (err && err.message || err)))
+  }
+  const pasteClipboard = () => {
+    navigator.clipboard.readText()
+      .then((t) => {
+        if (!t) return
+        log('IME 覆盖层 → Cmd+V 粘贴 / paste「' + (t.length > 20 ? t.slice(0, 20) + '…' : t) + '」')
+        return Promise.resolve(sendCommand('replace_selection', { text: t })).then(reposition)
+      })
+      .catch((err) => log('overlay paste error: ' + (err && err.message || err)))
+  }
+
   // Control keys -> UNO (NOT into the single-line input). Only when NOT composing:
   // during composition these keys drive the IME candidate window. Enter routes to
   // onEnter; Backspace/arrows route through sendCommand (skipped if not supplied,
@@ -253,6 +283,45 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       return
     }
     if (typeof sendCommand !== 'function') return
+    // Desktop shortcuts (Cmd on mac / Ctrl on win). Unmatched mod-combos fall
+    // through UNPREVENTED so host-level accelerators (e.g. save) keep working.
+    if (e.metaKey || e.ctrlKey) {
+      const k = String(e.key).toLowerCase()
+      if (k === 'z') {
+        e.preventDefault()
+        forward(e.shiftKey ? 'redo' : 'undo', {}, e.shiftKey ? '重做 / redo' : '撤销 / undo')
+      } else if (k === 'y') {
+        e.preventDefault()
+        forward('redo', {}, '重做 / redo')
+      } else if (k === 'a') {
+        e.preventDefault()
+        forward('ui_command', { name: 'select_all' }, '全选 / select all')
+      } else if (k === 'b' || k === 'i' || k === 'u') {
+        e.preventDefault()
+        const name = k === 'b' ? 'bold' : k === 'i' ? 'italic' : 'underline'
+        forward('ui_command', { name }, '格式 ' + name)
+      } else if (k === 'c') {
+        e.preventDefault(); copySelection(false)
+      } else if (k === 'x') {
+        e.preventDefault(); copySelection(true)
+      } else if (k === 'v') {
+        e.preventDefault(); pasteClipboard()
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        // mac 惯用 Cmd+←/→ = 行首/行尾
+        e.preventDefault()
+        forward('ui_command', { name: e.key === 'ArrowLeft' ? 'line_start' : 'line_end' }, e.key === 'ArrowLeft' ? '行首 / line start' : '行尾 / line end')
+      } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+        // mac 惯用 Cmd+↑/↓ = 文首/文尾
+        e.preventDefault()
+        forward('goto', { type: e.key === 'ArrowUp' ? 'start' : 'end' }, e.key === 'ArrowUp' ? '文首 / doc start' : '文尾 / doc end')
+      }
+      return
+    }
+    if (e.key === 'Home' || e.key === 'End') {
+      e.preventDefault()
+      forward('ui_command', { name: e.key === 'Home' ? 'line_start' : 'line_end' }, e.key === 'Home' ? 'Home 行首' : 'End 行尾')
+      return
+    }
     if (e.key === 'Backspace') {
       e.preventDefault()
       forward('delete_backward', {}, 'Backspace 删除 / delete')
