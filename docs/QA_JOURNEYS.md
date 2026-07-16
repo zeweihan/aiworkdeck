@@ -6,7 +6,7 @@
 >
 > 套件：`A` = `npm run test:app-e2e`（浏览器目标，真实鼠标/键盘走 uni-app UI）
 > `L` = `npm run test:lowa-e2e`（真实 LOWA 引擎 + CDP 键盘/IME，编辑器键盘链路）
-> `E` = Electron/CDP 宿主链路（配方见 memory：dev Electron `--remote-debugging-port`）
+> `E` = `npm run test:desktop-e2e`（dev Electron+CDP 宿主链路，会在屏幕弹窗）
 > `真机` = 需 computer-use / 人工（真实输入法、系统菜单、多显示器等）
 
 ## 账号与导航
@@ -27,7 +27,7 @@
 | 上传小文件（UI 文件选择器） | A ✅ | |
 | 上传 >5MB（分片路径，#156 回归） | A ✅ | |
 | 打开文本文件预览 | A ✅ | |
-| 新建文件夹 / 新建 Word | ❌ | Word 打开进编辑器需 E |
+| 新建 Word 并打开编辑器 | E ✅ | desktop-e2e 覆盖；新建文件夹 ❌ |
 | 文件标签增删 | ❌ | 真机配方在 memory（TagChip prop 坑） |
 | 右键菜单全项 | ❌ | H5 冒泡不稳，用 Vue 实例法 |
 | 回收站还原/清空 | ❌ | |
@@ -41,7 +41,7 @@
 | 打字/IME 上屏/退格删除（含修订模式原文，#164） | L ✅ 22 断言 | |
 | Delete/undo/redo/全选/剪贴板/加粗/行词文导航/Tab/软回车/Esc/翻页（#166/167） | L ✅ | |
 | 真实 macOS 输入法候选窗交互 | 真机 | CDP 模拟已很接近，候选窗本身模拟不到 |
-| 文档加载（真实 docx）/保存/自动保存（PR#165） | E | 宿主 IPC 链路，浏览器目标不可达 |
+| 新建 Word→编辑→点保存→docx 落盘（保存链路） | E ✅ | `npm run test:desktop-e2e`（dev Electron+CDP，会弹窗口）；自动保存（PR#165）未单独断言 |
 | 鼠标拖选/双击选词/滚动渲染 | E/真机 | |
 | 变量面板 var_* 域、图片插入、链接点击 | E | 真机配方在 memory |
 
@@ -66,8 +66,8 @@
 
 | 旅程 | 覆盖 | 备注 |
 |---|---|---|
-| 对话发送/流式/任务清单卡（PR#162） | ❌ | 真发消息走真实 provider 花钱——需 mock provider 或专用低价模型配置 |
-| 历史会话加载/轮次不丢（PR#153） | ❌ | 有 H2 直连验证配方 |
+| 对话发送/流式回复 | A ✅ | 真 UI 打字发送，走默认 deepseek-v4-flash（$0.09/M，可 AI_E2E=0 跳过）；任务清单卡未断言 |
+| 历史会话轮次落库（PR#153 回归） | A ✅ | 发送后查 /api/ai/history 断言 AI 回复在库 |
 | 文档检查点/回滚 | ❌ | |
 
 ## 独立页面与系统
@@ -80,6 +80,13 @@
 | 网页 tab（打开/关闭/导航） | ❌(A 可补) | 桌面版是 BrowserView，验证要读 leftFiles/rightFiles 状态非 DOM |
 | API 烟测（9 个只读端点） | A ✅ | |
 | 桌面打包版首启向导/组件下载 | 真机 | PR#142 领域 |
+
+## 每日定时 QA
+
+`scripts/qa-nightly.sh`（经 `~/aiworkdeck-qa/run.sh` 引导，专用克隆，用户 crontab
+每日 12:45 调起）：跑 lowa-e2e（必跑）+ app-e2e（9696 在跑时），报告写
+`~/aiworkdeck-qa/reports/YYYY-MM-DD.md`，有失败自动开 GitHub issue。
+desktop-e2e 会弹窗，不进每日，改动编辑器/宿主代码时按需跑。
 
 ## 运行环境备忘
 
