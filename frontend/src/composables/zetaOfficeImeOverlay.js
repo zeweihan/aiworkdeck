@@ -43,9 +43,10 @@
 // Control keys (Phase B, when sendCommand is supplied): Enter inserts a paragraph
 // break via onEnter; Backspace/Delete delete around the cursor; arrow keys move
 // the LO view cursor; desktop shortcuts (Cmd/Ctrl+Z/Y undo-redo, +A select all,
-// +C/X/V clipboard, +B/I/U format toggles, Home/End & Cmd+arrows line/doc nav)
-// — all forwarded to UNO, not applied to the empty <input>. Without sendCommand
-// these keys fall through to the (harmless, empty) input.
+// +C/X/V clipboard, +B/I/U format toggles, Home/End(+Shift sel), Cmd/Option/Ctrl
+// +arrows line-word-doc nav, Tab, Shift+Enter soft break, Esc deselect, PageUp/
+// Down) — all forwarded to UNO, not applied to the empty <input>. Without
+// sendCommand these keys fall through to the (harmless, empty) input.
 
 // The STABLE half of the mapping. offset is derived live per click (see above).
 // nudgeX/nudgeY are a small constant px correction for the residual between the
@@ -240,6 +241,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     catch (err) { log('overlay ' + action + ' error: ' + (err && err.message || err)) }
   }
   const ARROW_DIR = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' }
+  const isMac = /Mac/i.test((navigator && navigator.platform) || '')
 
   // Clipboard: the document selection lives in LO (not the DOM), so native
   // copy/cut/paste can't see it — bridge through navigator.clipboard + the
@@ -276,6 +278,11 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     if (composing || e.isComposing) return
     if (e.key === 'Enter') {
       e.preventDefault()
+      // Shift+Enter = soft line break (same paragraph), like the desktop app.
+      if (e.shiftKey && typeof sendCommand === 'function') {
+        forward('ui_command', { name: 'line_break' }, 'Shift+Enter 软回车 / line break')
+        return
+      }
       if (typeof onEnter !== 'function') return
       log('IME 覆盖层 → 回车换行 / paragraph break')
       try { Promise.resolve(onEnter()).then(reposition).catch((err) => log('overlay enter error: ' + (err && err.message || err))) }
@@ -307,9 +314,13 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       } else if (k === 'v') {
         e.preventDefault(); pasteClipboard()
       } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
-        // mac 惯用 Cmd+←/→ = 行首/行尾
+        // mac：Cmd+←/→ = 行首/行尾；Windows：Ctrl+←/→ = 上一词/下一词。
+        // Shift 叠加 = 同方向选择。
         e.preventDefault()
-        forward('ui_command', { name: e.key === 'ArrowLeft' ? 'line_start' : 'line_end' }, e.key === 'ArrowLeft' ? '行首 / line start' : '行尾 / line end')
+        const left = e.key === 'ArrowLeft'
+        const base = isMac ? (left ? 'line_start' : 'line_end') : (left ? 'word_left' : 'word_right')
+        const name = e.shiftKey ? base + '_sel' : base
+        forward('ui_command', { name }, name)
       } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
         // mac 惯用 Cmd+↑/↓ = 文首/文尾
         e.preventDefault()
@@ -317,9 +328,35 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       }
       return
     }
+    // Option/Alt+←/→ = 上一词/下一词（mac 惯用；Shift 叠加选择）
+    if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      e.preventDefault()
+      const base = e.key === 'ArrowLeft' ? 'word_left' : 'word_right'
+      const name = e.shiftKey ? base + '_sel' : base
+      forward('ui_command', { name }, name)
+      return
+    }
     if (e.key === 'Home' || e.key === 'End') {
       e.preventDefault()
-      forward('ui_command', { name: e.key === 'Home' ? 'line_start' : 'line_end' }, e.key === 'Home' ? 'Home 行首' : 'End 行尾')
+      const base = e.key === 'Home' ? 'line_start' : 'line_end'
+      const name = e.shiftKey ? base + '_sel' : base
+      forward('ui_command', { name }, e.key + (e.shiftKey ? '+Shift 选择' : ''))
+      return
+    }
+    if (e.key === 'PageUp' || e.key === 'PageDown') {
+      e.preventDefault()
+      forward('ui_command', { name: e.key === 'PageUp' ? 'page_up' : 'page_down' }, e.key)
+      return
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      forward('ui_command', { name: 'escape' }, 'Esc 取消选区 / deselect')
+      return
+    }
+    if (e.key === 'Tab') {
+      // 制表符入文档（浏览器默认的焦点切换在画布上无意义）
+      e.preventDefault()
+      forward('insert_at_cursor', { text: '\t' }, 'Tab 制表符 / tab')
       return
     }
     if (e.key === 'Backspace') {
