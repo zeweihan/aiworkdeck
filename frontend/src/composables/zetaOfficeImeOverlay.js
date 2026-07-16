@@ -41,7 +41,7 @@
 //     and the candidate box sits top-left until the first click.
 //
 // Control keys (Phase B, when sendCommand is supplied): Enter inserts a paragraph
-// break via onEnter; Backspace deletes the char before the cursor; arrow keys move
+// break via onEnter; Backspace/Delete delete around the cursor; arrow keys move
 // the LO view cursor — all forwarded to UNO, not applied to the empty <input>.
 // Without sendCommand these keys fall through to the (harmless, empty) input.
 
@@ -109,8 +109,9 @@ export function cursorRectToPixels(raw, offset) {
  * @param {(action:string,params:object)=>Promise<any>} [options.sendCommand]
  *        OPTIONAL. A raw UI-command channel to the worker (e.g. (a,p) =>
  *        workerRequest(a,p)). Enables control-key forwarding: Backspace ->
- *        delete_backward, arrow keys -> move_cursor. Without it, those keys fall
- *        through to the (empty) input and the document is unaffected.
+ *        delete_backward, Delete -> delete_forward, arrow keys -> move_cursor.
+ *        Without it, those keys fall through to the (empty) input and the
+ *        document is unaffected.
  * @param {(msg:string)=>void} [options.onLog] optional progress/diagnostic log.
  * @returns {{element, focus, reposition, computeRect, destroy}}
  */
@@ -255,6 +256,9 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     if (e.key === 'Backspace') {
       e.preventDefault()
       forward('delete_backward', {}, 'Backspace 删除 / delete')
+    } else if (e.key === 'Delete') {
+      e.preventDefault()
+      forward('delete_forward', {}, 'Delete 前删 / forward delete')
     } else if (ARROW_DIR[e.key]) {
       e.preventDefault()
       forward('move_cursor', { dir: ARROW_DIR[e.key], extend: e.shiftKey }, '方向键 ' + ARROW_DIR[e.key] + (e.shiftKey ? '+选择' : ''))

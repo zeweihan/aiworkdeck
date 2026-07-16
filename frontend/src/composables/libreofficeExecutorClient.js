@@ -29,7 +29,7 @@ export const EDITOR_ACTIONS = [
   'delete_selection', 'format_selection', 'set_paragraph_format', 'undo', 'redo',
   // [spike/IME] implemented by the worker since Phase B but never whitelisted
   // (found by the primitive self-test: "Unknown action: move_cursor").
-  'move_cursor', 'delete_backward', 'insert_paragraph', 'get_cursor_rect',
+  'move_cursor', 'delete_backward', 'delete_forward', 'insert_paragraph', 'get_cursor_rect',
   // [Track D] load the user's real document into the editor (host-initiated, not
   // an AI-agent command): {bytes, name} -> MEMFS + loadComponentFromURL + retarget.
   'load_document',
