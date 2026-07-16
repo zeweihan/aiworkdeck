@@ -226,6 +226,7 @@ function bootDoc() {
   try { xModel.setPropertyValue('RecordChanges', true); } catch {}
 
   installKeyHandler();
+  try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
   post('ui_ready');
   log('空白文档就绪 swriter / blank doc ready');
   try { const loc = readConfigLocale(); log('UI locale 诊断 / config: ' + JSON.stringify(loc)); } catch (e) { log('UI locale 诊断失败: ' + errStr(e)); }
@@ -243,6 +244,21 @@ function installKeyHandler() {
   });
   ctrl.addKeyHandler(handler);  // VERIFY: addKeyHandler (NOT addKeyListener)
   log('XKeyHandler 已装 / installed — 打中文看 key 日志（IME 合成可能绕过 XKeyHandler，这正是要验证的）');
+}
+
+// ---- autosave: forward document modify events to the editor page ---------
+// XModifyBroadcaster fires `modified` on every document change regardless of
+// origin (canvas typing, IME overlay commit, AI agent command) — the one seam
+// that sees them all. The editor page throttles and relays the signal to the
+// host, which debounce-saves (LibreOfficeEditor.autoSave). isModified() filters
+// out the broadcast a later setModified(false) would emit.
+function installModifyListener(model) {
+  const listener = zetajs.unoObject([css.util.XModifyListener], {
+    modified() { try { if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
+    disposing() {},
+  });
+  model.addModifyListener(listener);
+  log('XModifyListener 已装 / installed — 文档修改将上报宿主触发自动保存');
 }
 
 // ---- probe 2: selection via UNO (model-native, NO text offset) -----------
@@ -691,6 +707,8 @@ const EXEC = {
       ctrl = loaded.getCurrentController();
       try { ctrl.getFrame().getContainerWindow().FullScreen = true; } catch (e) {}
       try { installKeyHandler(); } catch (e) {}
+      // The listener is per-model — the freshly-loaded component needs its own.
+      try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
       // Revisions default ON for the real document too (same as bootDoc).
       try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
     };
@@ -782,6 +800,20 @@ const EXEC = {
   // [diagnostic #66] report the resolved UI locale (ooLocale) so the host/verify
   // panel can confirm whether the injected zh-CN langpack took effect.
   get_ui_lang() { return Object.assign({ success: true }, readConfigLocale()); },
+  // [diagnostic] which application modules the engine build actually contains —
+  // private:factory/<module> returns null when that module was compiled out.
+  // Ground truth for "can this engine open pptx/xlsx at all".
+  probe_modules() {
+    const out = {};
+    for (const m of ['swriter', 'scalc', 'simpress', 'sdraw']) {
+      try {
+        const c = desktop.loadComponentFromURL('private:factory/' + m, '_blank', 0, [mkProp('Hidden', true)]);
+        out[m] = !!c;
+        try { if (c) c.close(false); } catch (e) { try { c.dispose(); } catch (e2) {} }
+      } catch (e) { out[m] = 'error: ' + errStr(e); }
+    }
+    return Object.assign({ success: true }, out);
+  },
   // [diagnostic] the font families the engine actually registered (device font
   // list). Ground truth for the CJK font-injection/alias chain — a family
   // missing here can only ever render via an alias to one that is present.

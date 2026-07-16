@@ -32,8 +32,15 @@
           <view ref="docxContainer" class="docx-host"></view>
         </view>
 
-        <!-- 其余 Office 文件（xls/ppt，或 docx 渲染失败/非 H5）：暂不支持在线预览（#79，
-             WPS 预览回退已移除；xls/ppt 走 LOWA Calc/Impress 是后续候选） -->
+        <!-- PPTX 零配置只读渲染：pptx-preview 本地解析（自建 LOWA 引擎无 Impress
+             模块，演示文稿由前端渲染承接） -->
+        <view v-else-if="isPptx && usePptxPreview && !pptxRenderFailed" class="preview-pptx">
+          <view v-if="pptxLoading" class="docx-loading"><text>正在渲染演示文稿…</text></view>
+          <view ref="pptxContainer" class="pptx-host"></view>
+        </view>
+
+        <!-- 其余 Office 文件（ppt 二进制等，或渲染失败/非 H5）：暂不支持在线预览（#79，
+             WPS 预览回退已移除） -->
         <view v-else-if="isOffice" class="preview-unsupported">
           <text>该文件暂不支持在线预览</text>
           <text class="preview-hint">文件类型: {{ file.fileType || '未知' }}，可下载后在本地打开</text>
@@ -57,21 +64,22 @@
           <image :src="blobUrl" mode="aspectFit" class="preview-img" @error="handleImageError" />
         </view>
 
-        <!-- 视频预览 -->
+        <!-- 视频预览：与图片/音频一致走带鉴权的 blob——直链 <video src> 不带
+             X-Session-Id，后端 401，表现为 MEDIA_ERR_SRC_NOT_SUPPORTED（真机证实） -->
         <view v-else-if="isVideo" class="preview-video">
-          <!-- 优先使用直接 URL 播放（支持流式传输，无需等待下载完成） -->
           <video
+            v-if="blobUrl"
             ref="videoPlayer"
-            :src="fileUrl"
+            :src="blobUrl"
             controls
             autoplay
             class="preview-video-player"
             @error="handleVideoError"
             @loadeddata="onVideoLoaded"
           >
-            <source :src="fileUrl" type="video/mp4">
             您的浏览器不支持视频播放
           </video>
+          <view v-else class="loading-video"><text>视频加载中…</text></view>
         </view>
 
         <!-- 音频预览 -->
@@ -86,6 +94,25 @@
         <!-- 文本预览 -->
         <view v-else-if="isText" class="preview-text">
           <text class="text-content">{{ textContent }}</text>
+        </view>
+
+        <!-- 压缩包预览：条目列表 + 解压到当前目录 -->
+        <view v-else-if="isArchive" class="preview-archive">
+          <view class="archive-toolbar">
+            <text class="archive-count">{{ archiveLoading || archiveError ? '' : archiveEntries.length + ' 个条目' }}</text>
+            <button class="btn-extract" size="mini" :disabled="archiveLoading || extracting || !!archiveError" @tap="handleExtract">
+              {{ extracting ? '解压中…' : '解压' }}
+            </button>
+          </view>
+          <view v-if="archiveLoading" class="archive-status"><text>正在读取压缩包…</text></view>
+          <view v-else-if="archiveError" class="archive-status archive-error"><text>{{ archiveError }}</text></view>
+          <scroll-view v-else scroll-y class="archive-list">
+            <view v-for="(entry, i) in archiveEntries" :key="i" class="archive-entry">
+              <text class="entry-icon">{{ entry.dir ? '📁' : '📄' }}</text>
+              <text class="entry-path">{{ entry.path }}</text>
+              <text class="entry-size" v-if="!entry.dir">{{ formatFileSize(entry.size) }}</text>
+            </view>
+          </scroll-view>
         </view>
 
         <!-- 不支持预览的文件类型 -->
@@ -103,7 +130,7 @@
 </template>
 
 <script>
-import { getFileDownloadUrl } from '@/services/api.js'
+import { getFileDownloadUrl, getArchiveEntries, extractArchive } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
 
 // docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台落 Office 占位分支
@@ -134,7 +161,15 @@ export default {
       docxLoading: false,
       docxRenderFailed: false,
       // docx-preview 仅在 H5/桌面（Chromium）渲染；非 H5 落 Office 占位分支
-      useDocxPreview: IS_H5
+      useDocxPreview: IS_H5,
+      pptxLoading: false,
+      pptxRenderFailed: false,
+      usePptxPreview: IS_H5,
+      // 压缩包预览状态
+      archiveEntries: [],
+      archiveLoading: false,
+      archiveError: '',
+      extracting: false
     }
   },
   computed: {
@@ -162,6 +197,11 @@ export default {
       if (!this.file || !this.file.fileType) return false
       return ['doc', 'docx'].includes(this.file.fileType.toLowerCase())
     },
+    isPptx() {
+      // 仅 pptx（OOXML）；ppt 97 二进制前端渲染库不支持，落占位下载分支
+      if (!this.file || !this.file.fileType) return false
+      return this.file.fileType.toLowerCase() === 'pptx'
+    },
     isImage() {
       if (!this.file || !this.file.fileType) return false
       const type = this.file.fileType.toLowerCase()
@@ -187,6 +227,10 @@ export default {
       const type = this.file.fileType.toLowerCase()
       return ['txt', 'md', 'json', 'xml', 'html', 'css', 'js', 'java', 'py', 'sh', 'sql', 'log'].includes(type)
     },
+    isArchive() {
+      if (!this.file || !this.file.fileType) return false
+      return ['zip', 'rar', '7z'].includes(this.file.fileType.toLowerCase())
+    },
     canEdit() {
       // Office 文件且有 wpsFileId 可以编辑
       if (!this.file || !this.file.fileType) return false
@@ -206,6 +250,7 @@ export default {
         }
 
         this.docxRenderFailed = false
+        this.pptxRenderFailed = false
 
         if (!newFile) return
 
@@ -213,8 +258,12 @@ export default {
           this.loadTextContent()
         } else if (this.isWord && this.useDocxPreview) {
           this.renderDocx()
+        } else if (this.isPptx && this.usePptxPreview) {
+          this.renderPptx()
         } else if (this.isImage || this.isVideo || this.isAudio || this.isPdf) {
            this.loadMediaResource()
+        } else if (this.isArchive) {
+          this.loadArchiveEntries()
         }
       }
     }
@@ -352,6 +401,29 @@ export default {
         this.docxLoading = false
       }
     },
+    // PPTX 零配置只读渲染：pptx-preview 在本地（Chromium）解析 .pptx
+    async renderPptx() {
+      this.pptxLoading = true
+      this.pptxRenderFailed = false
+      try {
+        const blob = await this.fetchAuthedBlob()
+        const buf = await blob.arrayBuffer()
+        await this.$nextTick()
+        const ref = this.$refs.pptxContainer
+        const container = ref && (ref.$el || ref)
+        if (!container) throw new Error('渲染容器未就绪')
+        container.innerHTML = ''
+        const { init } = await import('pptx-preview')
+        const width = Math.max(320, (container.clientWidth || 960) - 32)
+        const previewer = init(container, { width, height: Math.round(width * 9 / 16) })
+        await previewer.preview(buf)
+      } catch (error) {
+        console.error('pptx 本地渲染失败，落 Office 占位分支:', error)
+        this.pptxRenderFailed = true
+      } finally {
+        this.pptxLoading = false
+      }
+    },
     getMimeType(fileType) {
         if (!fileType) return ''
         const type = fileType.toLowerCase()
@@ -381,6 +453,34 @@ export default {
     handleEdit() {
       if (this.canEdit) {
         this.$emit('edit', this.file)
+      }
+    },
+    // 压缩包条目列表（后端解析，zip/7z/rar）
+    async loadArchiveEntries() {
+      this.archiveLoading = true
+      this.archiveError = ''
+      this.archiveEntries = []
+      try {
+        const res = await getArchiveEntries(this.file.projectId, this.file.id)
+        this.archiveEntries = (res && res.entries) || []
+      } catch (e) {
+        this.archiveError = (e && e.message) || '压缩包读取失败'
+      } finally {
+        this.archiveLoading = false
+      }
+    },
+    // 解压到压缩包所在目录下的新文件夹；成功后通知宿主刷新资源管理器
+    async handleExtract() {
+      if (this.extracting) return
+      this.extracting = true
+      try {
+        const folder = await extractArchive(this.file.projectId, this.file.id)
+        uni.showToast({ title: '已解压到「' + ((folder && folder.name) || '') + '」', icon: 'success' })
+        this.$emit('extracted', folder)
+      } catch (e) {
+        uni.showModal({ title: '解压失败', content: (e && e.message) || '解压失败', showCancel: false })
+      } finally {
+        this.extracting = false
       }
     },
     onVideoLoaded(e) {
@@ -559,6 +659,20 @@ export default {
   background-color: #f3f4f6;
 }
 
+/* PPTX 零配置只读渲染容器（pptx-preview） */
+.preview-pptx {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: #f3f4f6;
+}
+
+.pptx-host {
+  display: block;
+  width: 100%;
+  padding: 16rpx;
+}
+
 .docx-host {
   display: block;
   width: 100%;
@@ -682,6 +796,68 @@ export default {
 
 .btn-download {
   margin-top: 16rpx;
+}
+
+/* 压缩包预览 */
+.preview-archive {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.archive-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16rpx 24rpx;
+  border-bottom: 1rpx solid #e5e7eb;
+}
+
+.archive-count {
+  font-size: 24rpx;
+  color: #6b7280;
+}
+
+.archive-status {
+  padding: 32rpx;
+  text-align: center;
+  color: #6b7280;
+  font-size: 28rpx;
+}
+
+.archive-error {
+  color: #b91c1c;
+}
+
+.archive-list {
+  flex: 1;
+  min-height: 0;
+}
+
+.archive-entry {
+  display: flex;
+  align-items: center;
+  gap: 12rpx;
+  padding: 12rpx 24rpx;
+  border-bottom: 1rpx solid #f3f4f6;
+}
+
+.entry-icon {
+  font-size: 26rpx;
+}
+
+.entry-path {
+  flex: 1;
+  font-size: 26rpx;
+  color: #1f2430;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.entry-size {
+  font-size: 24rpx;
+  color: #9ca3af;
 }
 </style>
 

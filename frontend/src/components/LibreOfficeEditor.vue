@@ -6,14 +6,13 @@
          something is happening (booting/loading/saving/failure) and vanishes
          when ready. -->
     <view v-if="variant === 'default'" class="libre-float">
+      <!-- No manual save button: edits auto-save (modify listener → debounced
+           saveDocument). The pill doubles as the autosave indicator
+           (保存中… / 已保存 / 保存失败). -->
       <view v-if="displayStatus" class="libre-pill" :class="{ error: isError }">
         <view v-if="!isError && !ready" class="libre-spin"></view>
         <text>{{ displayStatus }}</text>
       </view>
-      <!-- Save is REAL product UI (Track E): without it edits die with the tab. -->
-      <button v-if="file" class="libre-save" :disabled="!ready || saving" @click="saveDocument">
-        {{ saving ? '保存中…' : '保存' }}
-      </button>
     </view>
     <!-- Experimental (⌘⇧O overlay) variant keeps the dev-probe toolbar. -->
     <view v-else class="libre-toolbar">
@@ -81,6 +80,9 @@ export default {
       webviewEl: null,
       executor: null,
       saving: false,
+      // Autosave: set by the worker's modify signal, cleared when a save starts;
+      // read by the host (closeFile / evict) to know if a flush is needed.
+      dirty: false,
     }
   },
   computed: {
@@ -113,6 +115,10 @@ export default {
     }
   },
   beforeUnmount() {
+    // Autosave timers die with the instance. Any still-dirty edits were flushed
+    // by the closer (closeFile / evictLibreInstance await flushSave first) —
+    // export needs the live webview, so saving from here is already too late.
+    clearTimeout(this._saveTimer)
     // Tell the host this editor (and its executor) is going away — so it can
     // stop routing AI commands to a disposed executor when the document tab is
     // closed or switched. The executor ref lets the host ignore stale closes.
@@ -146,8 +152,12 @@ export default {
       wv.addEventListener('ipc-message', (e) => {
         if (e.channel !== 'lo-relay') return
         const msg = e.args && e.args[0]
-        if (msg && msg.__lo === 'lo-relay' && msg.type === 'open-url' && msg.url) {
+        if (!msg || msg.__lo !== 'lo-relay') return
+        if (msg.type === 'open-url' && msg.url) {
           this.$emit('open-url', String(msg.url))
+        } else if (msg.type === 'modified') {
+          // Worker modify signal (throttled in editor-main.js) → autosave.
+          this.onDocModified()
         }
       })
       wv.addEventListener('did-fail-load', (e) => this.appendLog('did-fail-load: ' + (e.errorDescription || e.errorCode)))
@@ -240,15 +250,57 @@ export default {
         xhr.send()
       })
     },
+    // Autosave: the worker's modify listener reports every document change
+    // (typed / IME / AI command) — debounce-save on it so the user never has to
+    // press anything. Idle window 2.5s; continuous typing still hits the backend
+    // at least every 15s (max-wait), so a crash can't eat a long burst.
+    onDocModified() {
+      if (!this.ready || !this.file) return
+      this.dirty = true
+      if (!this._dirtySince) this._dirtySince = Date.now()
+      this.scheduleAutoSave()
+    },
+    scheduleAutoSave() {
+      clearTimeout(this._saveTimer)
+      const elapsed = Date.now() - this._dirtySince
+      const delay = Math.max(200, Math.min(2500, 15000 - elapsed))
+      this._saveTimer = setTimeout(() => this.autoSave(), delay)
+    },
+    async autoSave() {
+      if (this.saving) { this.scheduleAutoSave(); return } // a save is in flight — retry after it
+      this.dirty = false
+      this._dirtySince = 0
+      const ok = await this.saveDocument()
+      if (this.dirty) { this.scheduleAutoSave(); return } // edits arrived mid-save
+      if (!ok) {
+        // Transient failure (offline / backend hiccup): the edits are still
+        // unsaved — keep them marked dirty and retry on a slow cadence.
+        this.dirty = true
+        this._dirtySince = Date.now()
+        clearTimeout(this._saveTimer)
+        this._saveTimer = setTimeout(() => this.autoSave(), 15000)
+      }
+    },
+    // Flush before unmount (tab close / LRU evict): export needs the live
+    // webview, so the closer awaits this BEFORE removing the instance.
+    async flushSave() {
+      clearTimeout(this._saveTimer)
+      while (this.saving) await new Promise((r) => setTimeout(r, 100))
+      if (this.dirty) {
+        this.dirty = false
+        this._dirtySince = 0
+        await this.saveDocument()
+      }
+    },
     // Track E: save — export the edited document from the worker (storeToURL →
     // bytes) and persist via the backend upload endpoint (same fileId contract
-    // as the download the document was loaded from). Without this, edits die
-    // with the tab — the last functional gap vs. the WPS editor.
+    // as the download the document was loaded from). Autosave calls this;
+    // returns true on success so autoSave can schedule failure retries.
     async saveDocument() {
       const f = this.file
-      if (!f || !this.executor || this.saving) return
+      if (!f || !this.executor || this.saving) return false
       const fileId = f.wpsFileId || f.id
-      if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return }
+      if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return false }
       this.saving = true
       const prevStatus = this.statusText
       this.statusText = '保存中…'
@@ -271,9 +323,11 @@ export default {
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
         this.statusText = '已保存'
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
+        return true
       } catch (e) {
         this.statusText = '保存失败'
         this.appendLog('save failed: ' + (e && e.message ? e.message : e))
+        return false
       } finally {
         this.saving = false
         // Let the badge linger, then settle back to ready (unless a failure is showing).

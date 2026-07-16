@@ -38,6 +38,8 @@ export const EDITOR_ACTIONS = [
   'export_document',
   // [diagnostic #66] report resolved UI locale (ooLocale) to confirm zh-CN took effect.
   'get_ui_lang',
+  // [diagnostic] which app modules (swriter/scalc/simpress/sdraw) the engine build contains.
+  'probe_modules',
   // [diagnostic] registered device font families — ground truth for the CJK
   // font-injection/alias chain (zetaOfficeBoot.js).
   'list_fonts',

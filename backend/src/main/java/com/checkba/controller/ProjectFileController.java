@@ -104,6 +104,50 @@ public class ProjectFileController {
     }
 
     /**
+     * 压缩包条目列表（预览）
+     * GET /api/projects/{projectId}/files/{fileId}/archive/entries
+     */
+    @GetMapping("/{fileId}/archive/entries")
+    public Map<String, Object> listArchiveEntries(
+            @PathVariable Long projectId,
+            @PathVariable Long fileId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
+        List<Map<String, Object>> entries = projectFileService.listArchiveEntries(fileId);
+        Map<String, Object> resp = new HashMap<>();
+        resp.put("entries", entries);
+        resp.put("total", entries.size());
+        return resp;
+    }
+
+    /**
+     * 解压压缩包到其所在目录下的新文件夹
+     * POST /api/projects/{projectId}/files/{fileId}/archive/extract
+     */
+    @PostMapping("/{fileId}/archive/extract")
+    public ProjectFile extractArchive(
+            @PathVariable Long projectId,
+            @PathVariable Long fileId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        checkFileTreeAccess(projectId, userId);
+        checkFileInProject(fileId, projectId);
+        // 解压会写入项目资源，要求写权限（读权限成员只能浏览条目）
+        if (!projectMemberService.hasWritePermission(projectId, userId)) {
+            throw new IllegalArgumentException("无权在该项目中解压文件");
+        }
+        return projectFileService.extractArchive(projectId, fileId, userId);
+    }
+
+    /**
      * 创建文件
      * POST /api/projects/{projectId}/files/file
      */

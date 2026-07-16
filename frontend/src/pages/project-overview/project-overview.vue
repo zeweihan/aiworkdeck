@@ -751,6 +751,7 @@
                       v-else
                       :file="activeFileLeft"
                       :show-edit-btn="false"
+                      @extracted="onArchiveExtracted"
                     />
                   </view>
                   <view v-else-if="!activeFileLeft" class="pane-empty">
@@ -818,6 +819,7 @@
                       v-else
                       :file="activeFileRight"
                       :show-edit-btn="false"
+                      @extracted="onArchiveExtracted"
                     />
                   </view>
                   <view v-else-if="!activeFileRight" class="pane-empty">
@@ -5032,15 +5034,28 @@ export default {
       }
     },
 
-    closeFile(fileId, pane) {
+    async closeFile(fileId, pane) {
       const list = pane === 'left' ? this.leftFiles : this.rightFiles
       const idProp = pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
-      const activeId = this[idProp]
 
-      const idx = list.findIndex(f => f.id === fileId)
+      let idx = list.findIndex(f => f.id === fileId)
       if (idx === -1) return
 
       const file = list[idx]
+
+      // (autosave) Office 文档出池即卸载，卸载后 webview 没了就没法导出——
+      // 有未保存修改（或保存在途）的实例先落盘再关。加载失败的实例跳过
+      // （画布是空白原型，保存会覆盖真文件，同 evictLibreInstance）。
+      if (file && this.useLibreEditor(file)) {
+        const inst = (this._libreRefs || {})[pane + ':' + fileId]
+        if (inst && inst.ready && !inst.isError && inst.file && (inst.dirty || inst.saving)) {
+          try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] close flush-save failed:', e) }
+        }
+        // 落盘期间列表可能已变（并发关闭）——重新定位，已被移除则到此为止
+        idx = list.findIndex(f => f.id === fileId)
+        if (idx === -1) return
+      }
+      const activeId = this[idProp]
 
       // If closing the active file/tab, the activityTracker.trackActivePage in activateTab or openFile will handle the switch.
       // But if we close the *currently active* file and no other file becomes active (e.g. empty list), we should stop session?
@@ -5091,6 +5106,8 @@ export default {
         'mp3', 'wav', 'm4a', 'flac', 'aac',
         // 文本文件
         'txt', 'md', 'markdown', 'json', 'xml', 'html', 'css', 'js', 'java', 'py', 'sh', 'sql', 'log',
+        // 压缩包（FilePreview 条目预览 + 解压）
+        'zip', 'rar', '7z',
         // 尽调清单
         'dd'
       ]
@@ -5117,16 +5134,16 @@ export default {
       // 2. 排除 Markdown 文件，使用专门的 Markdown 预览组件
       if (type === 'md' || type === 'markdown') return false
 
-      // 3. Office 文档格式（沿用原 WPS 支持面）
+      // 3. Office 文档格式 —— 仅限自建 LOWA 引擎真正编入的模块（probe_modules
+      // 实测：仅 Writer + Calc；Impress/Draw 已裁）。
+      // - Presentation 一律走 FilePreview（pptx = pptx-preview 前端渲染）；
+      // - PDF 走 FilePreview 的 Chromium 原生渲染——LOWA 无 Draw 时 Writer 会把
+      //   PDF 二进制当文本导入，满屏乱码（2026-07 真机截图证实）。
       const wpsFormats = [
           // Writer
           'wps', 'wpt', 'doc', 'dot', 'docx', 'dotx', 'docm', 'dotm', 'rtf', 'odt',
           // Spreadsheet
-          'et', 'ett', 'ets', 'xls', 'xlsx', 'xlt', 'xltx', 'xlsm', 'xltm', 'xlsb', 'csv',
-          // Presentation
-          'dps', 'dpt', 'dpss', 'ppt', 'pot', 'pps', 'pptx', 'potx', 'ppsx', 'pptm', 'potm', 'ppsm',
-          // PDF
-          'pdf'
+          'et', 'ett', 'ets', 'xls', 'xlsx', 'xlt', 'xltx', 'xlsm', 'xltm', 'xlsb', 'csv'
       ]
 
       // Office 类型或带文件 ID（非媒体/markdown）即视为文档编辑器可打开
@@ -5872,8 +5889,9 @@ export default {
     async evictLibreInstance(key) {
         const inst = (this._libreRefs || {})[key]
         // 未就绪/加载失败的实例跳过保存——画布上是空白原型，保存会覆盖真文件。
-        if (inst && inst.ready && !inst.isError && inst.file && !inst.saving) {
-            try { await inst.saveDocument() } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e) }
+        // flushSave：等在途自动保存结束，仍有脏改动才再存（没改动就不空传）。
+        if (inst && inst.ready && !inst.isError && inst.file) {
+            try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e) }
         }
         // 保存耗时期间可能又被激活/关闭：仍在上限内或已是活动文件则不淘汰
         const idx = this.libreLruKeys.indexOf(key)
@@ -5881,6 +5899,12 @@ export default {
         if (key === 'left:' + this.activeFileIdLeft || key === 'right:' + this.activeFileIdRight) return
         this.libreLruKeys = this.libreLruKeys.filter(k => k !== key)
         console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)
+    },
+    // 压缩包解压完成：刷新资源管理器，让新文件夹立即可见。
+    onArchiveExtracted() {
+      if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
+        this.$refs.fileTree.loadFiles()
+      }
     },
     // (#79) 文档内超链接点击：编辑器把 LO 的 window.open 经 lo-relay 转发上来。
     // 内部链接（包装 https 或裸 checkba:）走 __checkbaHandleInternalLink（关联
