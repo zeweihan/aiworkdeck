@@ -185,6 +185,16 @@ function dispatchUno(url) {
   css.frame.DispatchHelper.create(context).executeDispatch(ctrl.getFrame(), url, '', 0, []);
 }
 
+// Desktop-keyboard parity set for the IME overlay's ui_command action — an
+// ALLOWLIST map (name -> .uno: slot), deliberately NOT a raw dispatch
+// passthrough. Toggles (bold/italic/underline) are the engine's own, so
+// collapsed-cursor and mixed-selection semantics match the desktop app.
+const UI_COMMANDS = {
+  select_all: '.uno:SelectAll',
+  bold: '.uno:Bold', italic: '.uno:Italic', underline: '.uno:Underline',
+  line_start: '.uno:GoToStartOfLine', line_end: '.uno:GoToEndOfLine',
+};
+
 // Shared verification snapshot returned by mutating commands: where the cursor
 // is now + the paragraph as it reads AFTER the edit ("改完看一眼").
 function verifySnapshot() {
@@ -579,6 +589,13 @@ const EXEC = {
   delete_forward() {
     dispatchUno('.uno:Delete');
     return { success: true };
+  },
+  // Overlay shortcut keys (Cmd/Ctrl+A/B/I/U, Home/End) — see UI_COMMANDS.
+  ui_command(p) {
+    const url = UI_COMMANDS[String(p.name || '')];
+    if (!url) return { success: false, message: 'ui_command not allowed: ' + (p.name || '') };
+    dispatchUno(url);
+    return { success: true, name: String(p.name) };
   },
   // [spike] Phase B: raw measurements for mapping the view cursor to canvas
   // pixels. We DELIBERATELY return primitives (not a final px rect) so the
