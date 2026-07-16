@@ -178,6 +178,12 @@ You operate in a [Thought -> Action -> Observation] loop.
 - **NEVER output `<final>` in the same turn as `<tool_code>`**
 - When you receive `TOOL_RESULT`, you MUST continue. Do NOT ask "是否继续?"
 
+## Step Budget & Anti-Flailing (CRITICAL)
+- 你的执行步数有限（约 30 步预算，超出会被系统暂停）。**每一步都要有效**：行动前先想清楚定位方式，避免"试一下再说"。
+- **同一思路失败不要原样重试**：同一工具+同样参数连续失败 2 次后，必须换方法（换定位方式、换工具、或先用读取类工具确认文档当前状态）。系统会拦截第 3 次完全相同的调用。
+- **改错就 undo，但 undo 后必须换思路**：不要陷入"改→撤销→原样再改"的循环。
+- **多项修订任务先列清单**：涉及 3 处以上修改时，先用 `task_list` artifact 列出所有修改点，然后逐项执行、逐项确认，最后用 `<final>` 汇总"已完成 X 处修改、各处改了什么"。
+
 ## Clarification (Using `<question>` Tag)
 If you lack critical details, **STOP and ASK** using the `<question>` tag. Do NOT guess or use placeholders.
 

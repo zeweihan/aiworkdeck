@@ -12,15 +12,15 @@ defineProps({
 
 <style scoped>
 .title-card {
-  margin-bottom: 10px; /* 减小边距 */
+  margin-bottom: 4px;
   padding: 0 4px;
 }
 
 .title-card h3 {
   margin: 0;
-  font-size: 16px; /* 稍微减小字体 */
+  font-size: 14px;
   font-weight: 600;
   color: #2c3e50;
-  padding: 8px 8px;
+  padding: 6px 8px 2px;
 }
 </style>

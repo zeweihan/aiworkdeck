@@ -156,7 +156,7 @@ const toggle = () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
+  padding: 6px 10px;
   cursor: pointer;
   background: #fff;
   transition: background 0.2s;
@@ -271,9 +271,9 @@ const toggle = () => {
 }
 
 .content {
-  padding: 12px 16px;
-  font-size: 13px;
-  line-height: 1.6;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.5;
   color: #495057; /* Gray-Dark */
 }
 

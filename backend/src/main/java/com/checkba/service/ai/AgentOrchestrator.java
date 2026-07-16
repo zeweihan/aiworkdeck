@@ -33,6 +33,23 @@ public class AgentOrchestrator {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentOrchestrator.class);
 
+    // 循环步数预算：达到上限时优雅收尾（保存进度 + 告知用户可继续），而不是静默中断
+    private static final int MAX_LOOP_DEPTH = 30;
+    // 同一工具+同参数连续重复调用达到该次数后，拒绝执行并要求模型换思路
+    private static final int MAX_IDENTICAL_TOOL_CALLS = 3;
+    // 工具连续失败达到该次数后，向模型注入强提示要求收敛
+    private static final int CONSECUTIVE_FAILURE_NUDGE = 3;
+
+    /**
+     * 单次 Agent 运行的循环守卫状态（随递归传递）：
+     * 重复调用检测 + 连续失败计数，防止模型原地打转耗尽步数预算。
+     */
+    private static class RunGuard {
+        String lastCallSignature;
+        int repeatCount;
+        int consecutiveFailures;
+    }
+
     // 取消状态管理：存储被取消的会话ID
     private final Set<String> cancelledConversations = ConcurrentHashMap.newKeySet();
     // 存储当前活跃会话的已生成内容（用于取消时保存部分内容）
@@ -248,7 +265,7 @@ public class AgentOrchestrator {
             log.info("Starting runLoop for conversation: {}, mode: {}", conversationId, agentMode);
             // Track tool executions for history persistence
             StringBuilder executionLog = new StringBuilder();
-            runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode);
+            runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, new RunGuard());
             
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
@@ -257,20 +274,26 @@ public class AgentOrchestrator {
         }
     }
 
-    private void runLoop(StreamingChatLanguageModel model, 
-                         java.util.List<dev.langchain4j.data.message.ChatMessage> messages, 
+    private void runLoop(StreamingChatLanguageModel model,
+                         java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
                          String conversationId, String projectId, Long userId, String modelId, int depth,
-                         StringBuilder executionLog, AgentMode agentMode) {
-        
+                         StringBuilder executionLog, AgentMode agentMode, RunGuard guard) {
+
         // 检查是否被取消
         if (isCancelled(conversationId)) {
             log.info("Conversation {} was cancelled, stopping loop at depth {}", conversationId, depth);
             handleCancellation(conversationId, projectId, userId);
             return;
         }
-        
-        if (depth > 10) {
-            sseEmitterService.send(conversationId, "error", "Max recursion depth reached");
+
+        if (depth > MAX_LOOP_DEPTH) {
+            // 步数预算耗尽：不是报错，而是"存档 + 请示"——保存进度、明确告知用户、干净收尾。
+            log.warn("Agent loop reached max depth {} for conversation {}, stopping gracefully", MAX_LOOP_DEPTH, conversationId);
+            String notice = "\n\n> ⚠️ 本轮已达最大执行步数（" + MAX_LOOP_DEPTH + " 步），先暂停。已完成的修改均已生效，回复\"继续\"可接着执行剩余任务。";
+            sendTextDelta(conversationId, notice);
+            String persisted = (executionLog.length() > 0 ? executionLog.toString() : "") + notice;
+            saveAssistantMessage(conversationId, projectId, userId, persisted);
+            sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"finished\"}");
             sseEmitterService.close(conversationId);
             clearCancelledState(conversationId);
             return;
@@ -339,33 +362,52 @@ public class AgentOrchestrator {
             // 1. Check for Native Tool Requests (Priority 1)
             if (aiMessage.hasToolExecutionRequests()) {
                 log.info("Detected Native Tool Requests: {}", aiMessage.toolExecutionRequests());
-                sseEmitterService.send(conversationId, "step_update", "{\"status\":\"loading\", \"message\":\"Executing tools...\"}");
 
                 // Execute Native Tools (统一分发，无需感知具体工具)
                 for (dev.langchain4j.agent.tool.ToolExecutionRequest req : aiMessage.toolExecutionRequests()) {
-                    ToolRegistry.ToolResult toolResult = dispatchTool(req.name(), req.arguments(),
-                            Long.parseLong(projectId), conversationId, userId, modelId);
-                    String result = toolResult.output();
+                    // 面板可见性：原生工具调用复用 <process> XML 协议推送给前端，
+                    // 与模型自发的 XML tool_code 走同一套任务卡渲染管线（修复：原生轮次面板无任何输出，看似卡死）
+                    String displayName = toolRegistry.resolve(req.name())
+                            .map(ToolRegistry.RegisteredTool::displayName)
+                            .orElse(req.name());
+                    sendTextDelta(conversationId, String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code></process>",
+                            displayName.replace("\"", "'"), req.name(), truncate(req.arguments(), 200)));
+
+                    String result;
+                    boolean success;
+                    String guardVerdict = checkRepeatedCall(guard, req.name(), req.arguments());
+                    if (guardVerdict != null) {
+                        // 重复调用熔断：不执行，直接把守卫反馈作为工具结果回给模型
+                        log.warn("Loop guard tripped for {}: tool={} repeated {} times", conversationId, req.name(), guard.repeatCount);
+                        result = guardVerdict;
+                        success = false;
+                    } else {
+                        ToolRegistry.ToolResult toolResult = dispatchTool(req.name(), req.arguments(),
+                                Long.parseLong(projectId), conversationId, userId, modelId);
+                        result = toolResult.output();
+                        success = toolResult.success();
+                    }
+                    result = appendFailureNudge(guard, result, success);
                     messages.add(dev.langchain4j.data.message.ToolExecutionResultMessage.from(req, result));
 
                     // Determine status for history and display
-                    String nativeToolStatus = toolResult.success() ? "SUCCESS" : "FAILURE";
+                    String nativeToolStatus = success ? "SUCCESS" : "FAILURE";
+                    sendTextDelta(conversationId, String.format("<tool_output status=\"%s\">%s</tool_output>",
+                            nativeToolStatus, truncate(result, 4000)));
 
                     // Log for history persistence (include status attribute)
                     executionLog.append(String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
-                        req.name(), req.name(), req.arguments(), nativeToolStatus, result));
+                        displayName.replace("\"", "'"), req.name(), req.arguments(), nativeToolStatus, result));
                 }
 
-                sseEmitterService.send(conversationId, "step_update", "{\"status\":\"done\", \"message\":\"Tools executed.\"}");
-                
                 // 增量保存：在工具执行后立即保存AI消息和工具输出，防止对话中断导致上下文丢失
                 String intermediateContent = (aiContent != null ? aiContent : "") + "\n" + executionLog.toString();
                 saveAssistantMessage(conversationId, projectId, userId, intermediateContent);
                 log.info("Intermediate save after native tool execution for conversation: {}", conversationId);
-                
-                runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode);
+
+                runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode, guard);
                 return;
-            } 
+            }
             
             String content = aiMessage.text();
             if (content == null) content = "";
@@ -385,14 +427,27 @@ public class AgentOrchestrator {
                     String code = call.rawCode();
                     log.info("Parsed Tool Code: {}", code);
 
-                    ToolRegistry.ToolResult toolResult = dispatchTool(call.toolName(), call.argsJson(),
-                            Long.parseLong(projectId), conversationId, userId, modelId);
-                    String result = toolResult.found()
-                            ? toolResult.output()
-                            : "Unknown tool in custom parser: " + code;
+                    String result;
+                    boolean xmlToolSuccess;
+                    ToolRegistry.ToolResult toolResult = null;
+                    String guardVerdict = checkRepeatedCall(guard, call.toolName(), call.argsJson());
+                    if (guardVerdict != null) {
+                        // 重复调用熔断：不执行，直接把守卫反馈作为工具结果回给模型
+                        log.warn("Loop guard tripped for {}: tool={} repeated {} times", conversationId, call.toolName(), guard.repeatCount);
+                        result = guardVerdict;
+                        xmlToolSuccess = false;
+                    } else {
+                        toolResult = dispatchTool(call.toolName(), call.argsJson(),
+                                Long.parseLong(projectId), conversationId, userId, modelId);
+                        result = toolResult.found()
+                                ? toolResult.output()
+                                : "Unknown tool in custom parser: " + code;
+                        xmlToolSuccess = toolResult.found() && toolResult.success();
+                    }
+                    result = appendFailureNudge(guard, result, xmlToolSuccess);
 
                     // Add Result to History
-                    String statusPrefix = (toolResult.found() && toolResult.success()) ? "SUCCESS" : "FAILURE";
+                    String statusPrefix = xmlToolSuccess ? "SUCCESS" : "FAILURE";
 
                     // Enhancement for Write Tools: Append explicit success for file creation/modification
                     // The model often sees JSON IDs (wps_file_id) and thinks it failed or needs to do more.
@@ -410,7 +465,7 @@ public class AgentOrchestrator {
                     // 优先使用LLM选择的process name，否则用工具元数据里的中文显示名
                     String processNameForLog = (llmProcessName != null && !llmProcessName.isEmpty())
                         ? llmProcessName
-                        : (toolResult.tool() != null ? toolResult.tool().displayName() : "工具执行");
+                        : (toolResult != null && toolResult.tool() != null ? toolResult.tool().displayName() : "工具执行");
                     executionLog.append(String.format("<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
                         processNameForLog, code, statusPrefix, result));
 
@@ -431,7 +486,7 @@ public class AgentOrchestrator {
                      log.info("Intermediate save after XML tool execution for conversation: {}", conversationId);
 
                      // Recurse with executionLog
-                     runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode);
+                     runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode, guard);
                      return;
                 }
             }
@@ -591,6 +646,61 @@ public class AgentOrchestrator {
             List<ToolSpecification> allTools = skillRouter.visibleTools(conversationId, toolRegistry.getAllSpecifications());
             model.generate(messages, allTools, handler);
         }
+    }
+
+    // =================================================================================
+    // Loop guard & SSE helpers
+    // =================================================================================
+
+    /**
+     * 通过 text_delta 事件向前端推送一段内容（与流式 token 走同一渲染管线）。
+     */
+    private void sendTextDelta(String conversationId, String content) {
+        String esc = content.replace("\\", "\\\\").replace("\"", "\\\"")
+                .replace("\n", "\\n").replace("\r", "\\r");
+        sseEmitterService.send(conversationId, "text_delta", "{\"content\":\"" + esc + "\"}");
+    }
+
+    private String truncate(String s, int max) {
+        if (s == null) return "";
+        return s.length() <= max ? s : s.substring(0, max) + "...(截断)";
+    }
+
+    /**
+     * 重复调用检测：同一工具+同参数连续调用达到上限时返回守卫反馈（调用方应跳过执行），否则返回 null。
+     */
+    private String checkRepeatedCall(RunGuard guard, String toolName, String args) {
+        String signature = toolName + "|" + (args == null ? "" : args);
+        if (signature.equals(guard.lastCallSignature)) {
+            guard.repeatCount++;
+        } else {
+            guard.lastCallSignature = signature;
+            guard.repeatCount = 1;
+        }
+        if (guard.repeatCount >= MAX_IDENTICAL_TOOL_CALLS) {
+            return String.format("Error: 检测到你已连续 %d 次以完全相同的参数调用 %s，本次调用已被系统拦截。" +
+                    "请不要原样重试：换一种方法（其他工具、调整参数或先读取文档确认状态）；" +
+                    "如果任务已无法继续，请输出 <final> 向用户说明目前进展和遇到的问题。",
+                    guard.repeatCount, toolName);
+        }
+        return null;
+    }
+
+    /**
+     * 连续失败计数：失败累计到阈值时在工具结果后追加收敛提示，成功则清零。
+     */
+    private String appendFailureNudge(RunGuard guard, String result, boolean success) {
+        if (success) {
+            guard.consecutiveFailures = 0;
+            return result;
+        }
+        guard.consecutiveFailures++;
+        if (guard.consecutiveFailures >= CONSECUTIVE_FAILURE_NUDGE) {
+            return result + String.format("\n\n(System Note: 已连续 %d 次工具执行失败。请停止当前思路，" +
+                    "先用读取类工具确认文档当前状态，或输出 <final> 向用户说明遇到的问题，不要继续盲目重试。)",
+                    guard.consecutiveFailures);
+        }
+        return result;
     }
 
     // =================================================================================
