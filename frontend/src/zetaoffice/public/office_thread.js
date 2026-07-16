@@ -193,6 +193,13 @@ const UI_COMMANDS = {
   select_all: '.uno:SelectAll',
   bold: '.uno:Bold', italic: '.uno:Italic', underline: '.uno:Underline',
   line_start: '.uno:GoToStartOfLine', line_end: '.uno:GoToEndOfLine',
+  // (2nd sweep) the rest of the desktop key surface — all engine-verified:
+  line_break: '.uno:InsertLinebreak',                     // Shift+Enter 软回车
+  word_left: '.uno:GoToPrevWord', word_right: '.uno:GoToNextWord',
+  word_left_sel: '.uno:WordLeftSel', word_right_sel: '.uno:WordRightSel',
+  line_start_sel: '.uno:StartOfLineSel', line_end_sel: '.uno:EndOfLineSel',
+  escape: '.uno:Escape',                                  // 取消选区
+  page_up: '.uno:PageUp', page_down: '.uno:PageDown',
 };
 
 // Shared verification snapshot returned by mutating commands: where the cursor
