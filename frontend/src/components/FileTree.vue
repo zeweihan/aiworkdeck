@@ -4,13 +4,13 @@
     <!-- AI Workdeck Style Modals System -->
 
     <!-- 1. Delete Confirmation Modal -->
-    <view v-if="showDeleteDialog" class="king-dialog-mask" @tap="showDeleteDialog = false">
-      <view class="king-dialog" @tap.stop>
-        <view class="king-dialog-header">
-          <text class="king-dialog-title">{{ deleteMode === 'hard' ? '彻底删除' : '移入回收站' }}</text>
+    <view v-if="showDeleteDialog" class="awd-dialog-mask" @tap="showDeleteDialog = false">
+      <view class="awd-dialog" @tap.stop>
+        <view class="awd-dialog-header">
+          <text class="awd-dialog-title">{{ deleteMode === 'hard' ? '彻底删除' : '移入回收站' }}</text>
         </view>
-        <view class="king-dialog-body">
-          <text class="king-dialog-text">
+        <view class="awd-dialog-body">
+          <text class="awd-dialog-text">
             <template v-if="!deleteIsBatch && deleteTargetItem">
               确定要将选中的 {{ deleteTargetItem.isFolder ? '文件夹' : '文件' }} "{{ deleteTargetItem.name }}" {{ deleteMode === 'hard' ? '彻底删除' : '移入回收站' }}吗？
               {{ deleteTargetItem.isFolder && deleteMode !== 'hard' ? '文件夹内的所有文件也会被移入回收站。' : '' }}
@@ -22,49 +22,49 @@
             </template>
           </text>
         </view>
-        <view class="king-dialog-footer">
-           <view class="king-btn king-btn-secondary" @tap="showDeleteDialog = false">取消</view>
+        <view class="awd-dialog-footer">
+           <view class="awd-btn awd-btn-secondary" @tap="showDeleteDialog = false">取消</view>
            <!-- Use Danger (Red) for Delete Actions -->
-           <view class="king-btn king-btn-danger" @tap="confirmDelete">确定删除</view>
+           <view class="awd-btn awd-btn-danger" @tap="confirmDelete">确定删除</view>
         </view>
       </view>
     </view>
 
     <!-- 2. New Folder Modal -->
-    <view v-if="showCreateDialog" class="king-dialog-mask" @tap="showCreateDialog = false">
-      <view class="king-dialog" @tap.stop>
-        <view class="king-dialog-header">
-          <text class="king-dialog-title">新建文件夹</text>
+    <view v-if="showCreateDialog" class="awd-dialog-mask" @tap="showCreateDialog = false">
+      <view class="awd-dialog" @tap.stop>
+        <view class="awd-dialog-header">
+          <text class="awd-dialog-title">新建文件夹</text>
         </view>
-        <view class="king-dialog-body">
+        <view class="awd-dialog-body">
           <input
             v-model="newFolderName"
-            class="king-input"
+            class="awd-input"
             placeholder="请输入文件夹名称"
             @confirm="handleCreateFolder"
             :focus="true"
           />
         </view>
-        <view class="king-dialog-footer">
-          <view class="king-btn king-btn-secondary" @tap="showCreateDialog = false">取消</view>
-          <view class="king-btn king-btn-primary" @tap="handleCreateFolder">确定</view>
+        <view class="awd-dialog-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="showCreateDialog = false">取消</view>
+          <view class="awd-btn awd-btn-primary" @tap="handleCreateFolder">确定</view>
         </view>
       </view>
     </view>
 
     <!-- 3. Upload File Modal -->
-    <view v-if="showUploadDialog" class="king-dialog-mask" @tap="showUploadDialog = false">
-      <view class="king-dialog king-dialog-large" @tap.stop>
-        <view class="king-dialog-header">
+    <view v-if="showUploadDialog" class="awd-dialog-mask" @tap="showUploadDialog = false">
+      <view class="awd-dialog awd-dialog-large" @tap.stop>
+        <view class="awd-dialog-header">
           <view class="header-row">
-            <text class="king-dialog-title">上传文件</text>
-            <text class="king-dialog-subtitle">选择目标位置并选择要上传的文档</text>
+            <text class="awd-dialog-title">上传文件</text>
+            <text class="awd-dialog-subtitle">选择目标位置并选择要上传的文档</text>
           </view>
         </view>
-        <view class="king-dialog-body">
+        <view class="awd-dialog-body">
           <view class="form-group">
             <text class="form-label">上传位置</text>
-            <view class="king-field clickable" @tap="showFolderSelector = true">
+            <view class="awd-field clickable" @tap="showFolderSelector = true">
               <image src="/static/folder-closed.png" class="field-icon-img" mode="aspectFit" />
               <text class="field-value">
                 {{ selectedUploadParent ? getFolderPath(selectedUploadParent) : '根目录' }}
@@ -76,7 +76,7 @@
           <!-- #ifdef H5 -->
           <view class="form-group">
             <text class="form-label">上传文件夹</text>
-            <view class="king-field clickable" @tap="triggerFolderUpload">
+            <view class="awd-field clickable" @tap="triggerFolderUpload">
                <view v-if="isFolderUpload && selectedFiles.length > 0" class="field-content-row">
                   <text class="field-value">已选择 {{ selectedFiles.length }} 个文件</text>
                   <text class="field-desc">({{ selectedFiles[0].relativePath ? selectedFiles[0].relativePath.split('/')[0] : '文件夹' }})</text>
@@ -90,7 +90,7 @@
 
           <view class="form-group">
             <text class="form-label">上传文件</text>
-            <view class="king-field clickable" @tap="selectFiles">
+            <view class="awd-field clickable" @tap="selectFiles">
               <view v-if="selectedFiles.length === 0 || isFolderUpload">
                 <text class="field-placeholder">选择文件（支持多选）</text>
               </view>
@@ -102,10 +102,10 @@
             </view>
           </view>
         </view>
-        <view class="king-dialog-footer">
-          <view class="king-btn king-btn-secondary" @tap="cancelUpload">取消</view>
+        <view class="awd-dialog-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">取消</view>
           <view
-            class="king-btn king-btn-primary"
+            class="awd-btn awd-btn-primary"
             :class="{ disabled: !selectedFiles.length }"
             @tap="selectedFiles.length ? confirmUpload() : null"
           >
@@ -116,15 +116,15 @@
     </view>
 
     <!-- 4. Manage Tags Modal -->
-    <view v-if="showTagEditDialog" class="king-dialog-mask" @tap="showTagEditDialog = false">
-      <view class="king-dialog" @tap.stop>
-        <view class="king-dialog-header">
+    <view v-if="showTagEditDialog" class="awd-dialog-mask" @tap="showTagEditDialog = false">
+      <view class="awd-dialog" @tap.stop>
+        <view class="awd-dialog-header">
           <view class="header-row">
-            <text class="king-dialog-title">管理标签</text>
-            <text class="king-dialog-subtitle">{{ targetFileForTags ? targetFileForTags.name : '' }}</text>
+            <text class="awd-dialog-title">管理标签</text>
+            <text class="awd-dialog-subtitle">{{ targetFileForTags ? targetFileForTags.name : '' }}</text>
           </view>
         </view>
-        <view class="king-dialog-body" style="min-height: 200px;">
+        <view class="awd-dialog-body" style="min-height: 200px;">
            <view class="form-group">
               <text class="form-label">当前标签</text>
               <view class="tags-container" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; min-height: 32px;">
@@ -153,32 +153,32 @@
               />
            </view>
         </view>
-        <view class="king-dialog-footer">
-          <view class="king-btn king-btn-primary" @tap="showTagEditDialog = false">完成</view>
+        <view class="awd-dialog-footer">
+          <view class="awd-btn awd-btn-primary" @tap="showTagEditDialog = false">完成</view>
         </view>
       </view>
     </view>
 
     <!-- 5. Tag Manager (Global) -->
-    <view v-if="showTagManager" class="king-dialog-mask" style="z-index: 3100;" @tap="showTagManager = false">
+    <view v-if="showTagManager" class="awd-dialog-mask" style="z-index: 3100;" @tap="showTagManager = false">
        <view @tap.stop>
           <TagManager :project-id="projectId" @close="showTagManager = false" />
        </view>
     </view>
 
     <!-- 6. Folder Selector Popup (Nested) -->
-    <view v-if="showFolderSelector" class="king-dialog-mask" style="z-index: 3000;" @tap="showFolderSelector = false">
-      <view class="king-dialog" @tap.stop>
-        <view class="king-dialog-header">
+    <view v-if="showFolderSelector" class="awd-dialog-mask" style="z-index: 3000;" @tap="showFolderSelector = false">
+      <view class="awd-dialog" @tap.stop>
+        <view class="awd-dialog-header">
           <view class="header-row">
-            <text class="king-dialog-title">选择文件夹</text>
+            <text class="awd-dialog-title">选择文件夹</text>
             <view class="new-folder-btn" @tap="handleSelectorCreateFolder">
               <text class="btn-plus">+</text>
               <text>新建文件夹</text>
             </view>
           </view>
         </view>
-        <view class="king-dialog-body scrollable-body">
+        <view class="awd-dialog-body scrollable-body">
           <view
             class="folder-tree-item root"
             :class="{ active: tempSelectedParent === null }"
@@ -236,9 +236,9 @@
           </view>
           <view v-if="folderTree.length === 0" class="empty-tip">暂无其他文件夹</view>
         </view>
-        <view class="king-dialog-footer">
-          <view class="king-btn king-btn-secondary" @tap="showFolderSelector = false">取消</view>
-          <view class="king-btn king-btn-primary" @tap="confirmFolderSelection">确定</view>
+        <view class="awd-dialog-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="showFolderSelector = false">取消</view>
+          <view class="awd-btn awd-btn-primary" @tap="confirmFolderSelection">确定</view>
         </view>
       </view>
     </view>
@@ -4880,7 +4880,7 @@ $bg-grey: $uni-bg-color-grey;
 }
 
 /* AI WORKDECK Dialog Styles */
-.king-dialog-mask {
+.awd-dialog-mask {
   position: fixed;
   top: 0;
   left: 0;
@@ -4894,28 +4894,28 @@ $bg-grey: $uni-bg-color-grey;
   z-index: 2000;
 }
 
-.king-dialog {
+.awd-dialog {
   width: 618px; /* Golden Ratio-ish Width */
   max-width: 90vw;
   background-color: #ffffff;
   border-radius: 12px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   overflow: hidden;
-  animation: king-dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: awd-dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
 }
 
-.king-dialog * {
+.awd-dialog * {
   box-sizing: border-box;
 }
 
-.king-dialog-large {
+.awd-dialog-large {
   width: 750px; /* Wider for Upload */
 }
 
-@keyframes king-dialog-in {
+@keyframes awd-dialog-in {
   from {
     opacity: 0;
     transform: scale(0.96) translateY(10px);
@@ -4926,12 +4926,12 @@ $bg-grey: $uni-bg-color-grey;
   }
 }
 
-.king-dialog-header {
+.awd-dialog-header {
   padding: 24px 24px 16px;
   flex-shrink: 0;
 }
 
-.king-dialog-title {
+.awd-dialog-title {
   font-size: 20px;
   font-weight: 600;
   color: #1A5336; /* Forest Green */
@@ -4939,7 +4939,7 @@ $bg-grey: $uni-bg-color-grey;
   display: block;
 }
 
-.king-dialog-subtitle {
+.awd-dialog-subtitle {
   margin-top: 6px;
   font-size: 13px;
   color: #6C757D; /* Gray Medium */
@@ -4947,7 +4947,7 @@ $bg-grey: $uni-bg-color-grey;
   display: block;
 }
 
-.king-dialog-body {
+.awd-dialog-body {
   padding: 0 24px 24px;
   flex: 1;
   min-height: 0; /* Allow scrolling */
@@ -4958,13 +4958,13 @@ $bg-grey: $uni-bg-color-grey;
   overflow-y: auto;
 }
 
-.king-dialog-text {
+.awd-dialog-text {
   font-size: 15px;
   color: #2C3338;
   line-height: 1.6;
 }
 
-.king-input {
+.awd-input {
   width: 100%;
   height: 48px;
   padding: 0 16px;
@@ -4975,12 +4975,12 @@ $bg-grey: $uni-bg-color-grey;
   transition: all 0.2s;
 }
 
-.king-input:focus {
+.awd-input:focus {
   border-color: #5BD197; /* Mint Green */
   box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.15);
 }
 
-.king-dialog-footer {
+.awd-dialog-footer {
   display: flex;
   align-items: center;
   justify-content: center; /* Centered as requested */
@@ -4990,8 +4990,8 @@ $bg-grey: $uni-bg-color-grey;
   flex-shrink: 0;
 }
 
-/* King Buttons */
-.king-btn {
+/* AI Workdeck Buttons */
+.awd-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -5005,47 +5005,47 @@ $bg-grey: $uni-bg-color-grey;
   min-width: 100px;
 }
 
-.king-btn:active {
+.awd-btn:active {
   transform: translateY(1px);
 }
 
 /* Primary is now Forest Green to match AI Workdeck */
-.king-btn-primary {
+.awd-btn-primary {
   background-color: #1A5336; /* Forest Green */
   color: #ffffff;
   border: 1px solid transparent;
 }
-.king-btn-primary:active {
+.awd-btn-primary:active {
   background-color: #123A26;
 }
 
 /* Forest variant (redundant now but kept for compatibility) */
-.king-btn-forest {
+.awd-btn-forest {
   background-color: #1A5336;
   color: #ffffff;
 }
 
 /* New Danger Button for Delete */
-.king-btn-danger {
+.awd-btn-danger {
   background-color: #DC3545;
   color: #ffffff;
   border: 1px solid transparent;
 }
-.king-btn-danger:active {
+.awd-btn-danger:active {
   background-color: #BB2D3B;
 }
 
-.king-btn-secondary {
+.awd-btn-secondary {
   background-color: #ffffff;
   color: #2C3338;
   border: 1px solid #E9ECEF;
 }
-.king-btn-secondary:active, .king-btn-secondary:hover {
+.awd-btn-secondary:active, .awd-btn-secondary:hover {
   background-color: #F8F9FA;
   border-color: #DDE2E5;
 }
 
-.king-btn.disabled {
+.awd-btn.disabled {
   opacity: 0.5;
   pointer-events: none;
 }
@@ -5066,7 +5066,7 @@ $bg-grey: $uni-bg-color-grey;
   margin-bottom: 8px;
 }
 
-.king-field {
+.awd-field {
   background-color: #F8F9FA;
   border: 1px solid #E9ECEF;
   border-radius: 8px;
@@ -5075,10 +5075,10 @@ $bg-grey: $uni-bg-color-grey;
   align-items: center;
   min-height: 48px;
 }
-.king-field.clickable {
+.awd-field.clickable {
   cursor: pointer;
 }
-.king-field.clickable:hover {
+.awd-field.clickable:hover {
   background-color: #E6F9F0; /* Mint tint */
   border-color: #5BD197;
 }
@@ -5141,7 +5141,7 @@ $bg-grey: $uni-bg-color-grey;
   background-color: #E6F9F0;
   color: #1A5336;
 }
-.king-dialog .tree-expand-icon-wrapper {
+.awd-dialog .tree-expand-icon-wrapper {
   width: 24px;
   height: 24px;
   display: flex;
@@ -5149,11 +5149,11 @@ $bg-grey: $uni-bg-color-grey;
   justify-content: center;
   cursor: pointer;
 }
-.king-dialog .tree-expand-icon-img {
+.awd-dialog .tree-expand-icon-img {
   width: 10px;
   height: 10px;
 }
-.king-dialog .tree-expand-placeholder {
+.awd-dialog .tree-expand-placeholder {
   width: 24px;
 }
 .folder-icon-img {
