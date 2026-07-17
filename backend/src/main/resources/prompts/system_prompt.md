@@ -409,7 +409,7 @@ for file_id in file_ids:
 2. **禁止重写 (No Re-creation)**: 禁止通过 `write_docx` 创建一个名为 "xxx(修订版).docx" 的新文件来替代修改。必须打开原文件进行修订。
 3. **修订模式默认开启**: 你的所有改动都以修订痕迹（redline）呈现，用户可逐条接受或拒绝。放心修改，不会破坏原文。
 4. **拟人式工作循环（必须遵守）**: **看 → 找 → 选 → 改 → 验**。
-   - **看**：先用 `doc_get_document_text` / `doc_get_outline` 了解文档，别盲改；
+   - **看**：先用 `doc_get_document_text` / `doc_get_outline` 了解文档，别盲改；处理合同/协议时**先用 `doc_get_clauses` 拿条款结构**——段落号≠条款号，一条条款往往横跨多个段落，禁止把段落数/行数当条款数；
    - **找**：用 `doc_find_text` 定位，**根据每个匹配的上下文（contextBefore/contextAfter/paragraph）确认哪一个才是目标**；
    - **选**：用 anchorId 选中目标（`doc_select_anchor`），用户看得见你选了哪里；
    - **改**：替换/删除/插入/格式化；
@@ -425,7 +425,8 @@ for file_id in file_ids:
 | `doc_open_file(fileId)` | 打开指定文档进行编辑 |
 | `doc_search_related_docs(keyword, projectId)` | 搜索项目中可能需要修改的相关文档 |
 | `doc_get_document_text(startParagraph, maxParagraphs)` | **首选**：分段读取全文（带段落编号和标题级别），长文档分页读 |
-| `doc_get_outline()` | 获取文档大纲结构 |
+| `doc_get_clauses()` | **合同/协议必用**：按「第X条/第X章/一、」编号识别条款结构，返回每条条款的段落范围；数条款、按条款修订都以它为准 |
+| `doc_get_outline()` | 获取文档大纲结构（只认标题样式，合同条款请用 `doc_get_clauses`） |
 | `doc_get_selection()` | 获取用户当前选中的文本 |
 | `doc_get_cursor_context()` | 查看光标周围的文本（前后文、所在段落） |
 | `doc_get_paragraph(paragraphIndex)` | 获取指定段落的内容（0 开始） |

@@ -320,11 +320,12 @@ public class AgentOrchestrator {
         if (depth > MAX_LOOP_DEPTH) {
             // 步数预算耗尽：不是报错，而是"存档 + 请示"——保存进度、明确告知用户、干净收尾。
             log.warn("Agent loop reached max depth {} for conversation {}, stopping gracefully", MAX_LOOP_DEPTH, conversationId);
-            String notice = "\n\n> ⚠️ 本轮已达最大执行步数（" + MAX_LOOP_DEPTH + " 步），先暂停。已完成的修改均已生效，回复\"继续\"可接着执行剩余任务。";
+            String notice = "\n\n> ⚠️ 本轮已达最大执行步数（" + MAX_LOOP_DEPTH + " 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。";
             sendTextDelta(conversationId, notice);
             String persisted = (executionLog.length() > 0 ? executionLog.toString() : "") + notice;
             saveAssistantMessage(conversationId, projectId, userId, persisted);
-            sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"finished\"}");
+            // status=paused 让前端渲染一键「继续」按钮（区别于 finished 的正常收尾）
+            sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_depth\"}");
             sseEmitterService.close(conversationId);
             clearCancelledState(conversationId);
             return;

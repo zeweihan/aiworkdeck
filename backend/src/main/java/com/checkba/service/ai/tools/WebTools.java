@@ -37,6 +37,11 @@ public class WebTools implements AgentToolComponent {
     @Value("${bocha.api.key:}")
     private String bochaApiKey;
 
+    // 桌面打包版不注入 BOCHA_API_KEY，环境变量默认为空；管理员可在设置页
+    // （external.bocha.apiKey）填 key，DB 值优先于环境变量/配置文件。
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.service.SystemSettingService systemSettingService;
+
     private final OkHttpClient httpClient = new OkHttpClient.Builder()
             .connectTimeout(30, TimeUnit.SECONDS)
             .readTimeout(30, TimeUnit.SECONDS)
@@ -49,8 +54,10 @@ public class WebTools implements AgentToolComponent {
     @Tool("Search the web using Bocha AI. Useful for finding latest news, regulations, or legal cases. Returns a summary of search results.")
     public String search_web(String query) {
         log.info("Tool: search_web called for query='{}'", query);
-        if (bochaApiKey == null || bochaApiKey.isBlank()) {
-            return "Error searching web: Bocha API key is not configured. Set BOCHA_API_KEY in your environment.";
+        String apiKey = systemSettingService.get("external.bocha.apiKey", bochaApiKey);
+        if (apiKey == null || apiKey.isBlank()) {
+            return "网络搜索未配置：缺少博查（Bocha AI）搜索的 API Key。请管理员在「设置 → 外部服务」中填写博查 API Key"
+                    + "（可在 bochaai.com 申请），保存后重试。本次已跳过网络搜索，请基于已有信息继续完成任务。";
         }
         try {
             // Build request body
@@ -66,7 +73,7 @@ public class WebTools implements AgentToolComponent {
             Request request = new Request.Builder()
                     .url(BOCHA_API_URL)
                     .post(RequestBody.create(requestBody, MediaType.parse("application/json")))
-                    .addHeader("Authorization", "Bearer " + bochaApiKey)
+                    .addHeader("Authorization", "Bearer " + apiKey)
                     .addHeader("Content-Type", "application/json")
                     .build();
 

@@ -140,18 +140,22 @@ try {
     await focus()
   }
 
+  // NOTE: ShowChangesInMargin (tdf#34355) is ON since the margin-redlines change —
+  // tracked DELETIONS leave the inline text (they render in the page margin), so
+  // the cursor context no longer contains the struck-through originals. The old
+  // expectations (deleted chars still inline) date from inline-strikethrough mode.
   console.log('== 1) Backspace over pre-existing text (revision-mode jam regression #164) ==')
   await reset('合同条款abc') // inserted with rc OFF -> "original" text; rc back ON
   for (let i = 0; i < 3; i++) await key('Backspace', 'Backspace', 8)
   let c = await cursor()
-  check('3×Backspace 光标逐字越过原文', c.b === '合同条款' && c.a === 'abc', JSON.stringify(c))
+  check('3×Backspace 删除移入页边（正文不留）', c.b === '合同条款' && c.a === '', JSON.stringify(c))
 
   console.log('== 2) Delete key forward-deletes ==')
   await reset('合同条款abc')
   for (let i = 0; i < 3; i++) await key('ArrowLeft', 'ArrowLeft', 37)
   for (let i = 0; i < 2; i++) await key('Delete', 'Delete', 46)
   c = await cursor()
-  check('2×Delete 前删越过原文', c.b === '合同条款ab' && c.a === 'c', JSON.stringify(c))
+  check('2×Delete 前删移入页边（正文不留）', c.b === '合同条款' && c.a === 'c', JSON.stringify(c))
 
   console.log('== 3) IME CJK commit + Backspace hard-deletes own insert ==')
   await reset('')
@@ -230,6 +234,14 @@ try {
   const pu = await exec('ui_command', { name: 'page_up' })
   const pd = await exec('ui_command', { name: 'page_down' })
   check('PageUp/PageDown 命令可用', pu.success && pd.success)
+
+  console.log('== 9) get_clauses 条款识别（条款≠段落，一条横跨多段） ==')
+  await reset('技术服务合同\n第一条 服务内容\n乙方提供服务。\n具体范围双方另行约定。\n第二条 服务费用\n费用总计人民币10万元。\n第三条 违约责任\n任何一方违约应赔偿。', false)
+  const cl = await exec('get_clauses')
+  check('识别出 3 条条款（8 个段落）', cl.success && cl.clauseCount === 3 && cl.totalParagraphs === 8, JSON.stringify(cl))
+  check('第一条横跨 3 段', cl.clauses && cl.clauses[0] && cl.clauses[0].no === '第一条' && cl.clauses[0].paragraphCount === 3,
+    JSON.stringify(cl.clauses && cl.clauses[0]))
+  check('首部段落不计入条款', cl.preambleParagraphs === 1, JSON.stringify(cl.preambleParagraphs))
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
