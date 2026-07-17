@@ -49,6 +49,9 @@ node desktop/scripts/prepare-python-service.js \
 node desktop/scripts/prepare-python-service.js \
   --service kokoro-service --src kokoro-service \
   --requirements kokoro-service/requirements.lock --out desktop/bundled/mac-arm64
+# 7. pysvc 打成单个 tar.gz（上万个小文件不直接进 .app——逐文件 codesign 的 Apple
+#    时间戳请求会抖动；首次启动由主进程解压到用户数据目录，见 main/services/pysvc-runtime.js）
+node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/mac-arm64
 # 出包（本地不签名）
 cd desktop && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never
 ```

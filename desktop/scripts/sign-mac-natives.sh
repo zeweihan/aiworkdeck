@@ -33,7 +33,18 @@ sign_file() {
   if file -b "$f" | grep -q 'executable'; then
     args+=(--entitlements "$ENTITLEMENTS")
   fi
-  codesign "${args[@]}" "$f"
+  # Apple 时间戳服务在大批量签名下会抖动（"The timestamp service is not
+  # available"，run 29552522258），单次失败直接挂整个 release 构建——退避重试
+  local attempt
+  for attempt in 1 2 3; do
+    if codesign "${args[@]}" "$f" 2>/dev/null; then
+      echo "  signed: $f"
+      return 0
+    fi
+    echo "  codesign failed (attempt $attempt), retrying: $f" >&2
+    sleep $((attempt * 10))
+  done
+  codesign "${args[@]}" "$f" # 最后一次不吞 stderr，把真实错误暴露给构建日志
   echo "  signed: $f"
 }
 
