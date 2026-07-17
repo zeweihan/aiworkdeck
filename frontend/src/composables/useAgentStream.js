@@ -26,6 +26,10 @@ export function useAgentStream() {
     // STATE: 步数超限暂停（bubble_end status=paused）——前端据此渲染一键「继续」按钮
     const agentPaused = ref(null) // null | { reason }
 
+    // STATE: 当前会话的后端运行状态（run_state/bubble_end 驱动）
+    // 'RUNNING' | 'PAUSED' | 'AWAITING_APPROVAL' | 'FINISHED' | 'ERROR' | 'CANCELLED' | null(无任务)
+    const agentRunStatus = ref(null)
+
     // POINTER: The current bubble we are writing to (Assistant)
     const currentAssistantBubble = ref(null)
 
@@ -99,6 +103,7 @@ export function useAgentStream() {
         // 切换会话时清空任务清单进度卡（重连后由后端 plan_update 恢复）
         planTodos.value = []
         agentPaused.value = null
+        agentRunStatus.value = null
         // Clear bubble pointer (will be set fresh on next send)
         currentAssistantBubble.value = null
     }
@@ -211,6 +216,7 @@ export function useAgentStream() {
         fileChanges.value = []
         // 新一轮开始即清除暂停态（无论是点「继续」还是发新消息）
         agentPaused.value = null
+        agentRunStatus.value = 'RUNNING'
 
         // 1. Add User Message with images and context files for display
         bubbles.value.push(createUserBubble(prompt, _userImages, _userContextFiles, contentHtml))
@@ -346,6 +352,30 @@ export function useAgentStream() {
             return
         }
 
+        // 会话运行状态（connect 时后端必发）：切回后台运行中的会话时，靠它恢复
+        // 「运行中/已暂停」的 UI 态。必须在气泡守卫之前——重连时气泡指针为 null。
+        if (evt === 'run_state') {
+            try {
+                const d = JSON.parse(dataStr)
+                agentRunStatus.value = d.status || null
+                if (d.status === 'RUNNING') {
+                    isStreaming.value = true // 后台在跑：封发送框，等续流
+                } else if (d.status === 'PAUSED') {
+                    agentPaused.value = { reason: 'max_depth' } // 切回后恢复「继续」按钮
+                }
+            } catch (e) {
+                console.error('Failed to parse run_state', e)
+            }
+            return
+        }
+
+        // 状态恢复（重连续流）：同样必须在气泡守卫之前——切回会话时
+        // currentAssistantBubble 为 null，处理器会自建/复用末尾 ASSISTANT 气泡。
+        if (evt === 'state_recovery') {
+            handleStateRecovery(dataStr)
+            return
+        }
+
         if (!currentAssistantBubble.value) return
 
         if (evt === 'text_delta') {
@@ -469,7 +499,11 @@ export function useAgentStream() {
                 try {
                     const d = JSON.parse(dataStr || '{}')
                     agentPaused.value = d.status === 'paused' ? { reason: d.reason || '' } : null
-                } catch (e) { agentPaused.value = null }
+                    agentRunStatus.value = d.status === 'paused' ? 'PAUSED'
+                        : d.status === 'awaiting_approval' ? 'AWAITING_APPROVAL' : 'FINISHED'
+                } catch (e) { agentPaused.value = null; agentRunStatus.value = 'FINISHED' }
+            } else {
+                agentRunStatus.value = 'ERROR'
             }
             // Ensure error is visible
             // 注意：错误必须写入 content（walkthrough 卡片当前未渲染，写那里用户永远看不到）
@@ -560,8 +594,26 @@ export function useAgentStream() {
             }
         }
 
-        // Handle state recovery (reconnection)
-        if (evt === 'state_recovery') {
+        // Handle File Changes (Added/Modified)
+        if (evt === 'file_change') {
+            try {
+                const d = JSON.parse(dataStr)
+                // d: { fileName: "...", changeType: "ADDED" | "MODIFIED" }
+                // Avoid duplicates?
+                const exists = fileChanges.value.some(f => f.fileName === d.fileName && f.changeType === d.changeType)
+                if (!exists) {
+                    fileChanges.value.push(d)
+                }
+                console.log('[AgentStream] File Change:', d)
+            } catch (e) {
+                console.error('Failed to parse file_change', e)
+            }
+        }
+    }
+
+    // 状态恢复（重连续流）：后端把本轮已生成的全量文本快照重放给前端。
+    // 从 handleEvent 内联块提出来，因为它必须在气泡守卫之前被调用（切回会话场景）。
+    const handleStateRecovery = (dataStr) => {
             try {
                 const d = JSON.parse(dataStr)
                 console.log('[SSE] State Recovery:', d.content.length, 'chars')
@@ -605,23 +657,6 @@ export function useAgentStream() {
             } catch (e) {
                 console.error('Failed to parse state_recovery', e)
             }
-        }
-
-        // Handle File Changes (Added/Modified)
-        if (evt === 'file_change') {
-            try {
-                const d = JSON.parse(dataStr)
-                // d: { fileName: "...", changeType: "ADDED" | "MODIFIED" }
-                // Avoid duplicates?
-                const exists = fileChanges.value.some(f => f.fileName === d.fileName && f.changeType === d.changeType)
-                if (!exists) {
-                    fileChanges.value.push(d)
-                }
-                console.log('[AgentStream] File Change:', d)
-            } catch (e) {
-                console.error('Failed to parse file_change', e)
-            }
-        }
     }
 
     const handleStepUpdate = (data) => {
@@ -1149,6 +1184,12 @@ export function useAgentStream() {
         lastHeartbeat,
         planTodos,
         agentPaused,
+        agentRunStatus,
+        // 切回会话时重连 SSE：后端 connect 会推 run_state（运行中还会推 state_recovery 续流）。
+        reattachSSE: async (conversationId) => {
+            if (!conversationId) return
+            try { await connectSSE(conversationId) } catch (e) { console.warn('[AgentStream] reattach failed', e) }
+        },
         // Load metadata for historical conversations
         loadConversationMetadata: async (conversationId) => {
             if (!conversationId) return

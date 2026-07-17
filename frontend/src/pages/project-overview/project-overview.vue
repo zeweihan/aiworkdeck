@@ -938,6 +938,7 @@
               :project-id="String(projectId)"
               :project-name="project.name"
               :recent-history="chatHistoryList.slice(0, 3)"
+              :history-badge="historyBadge"
               :assistants="assistants"
               v-model:current-assistant-id="currentAssistantId"
               :active-tab="currentActiveTab"
@@ -972,11 +973,15 @@
                     <view v-if="loadingHistory" class="menu-item" style="color:#999;">加载中...</view>
                     <view v-else-if="chatHistoryList.length === 0" class="menu-item" style="color:#999;">暂无历史记录</view>
                     <view v-else v-for="chat in chatHistoryList" :key="chat.id" class="menu-item" @tap="loadHistoryChat(chat)">
+                        <view v-if="convDotClass(chat)" class="conv-dot" :class="convDotClass(chat)"></view>
                         <view style="flex:1; overflow:hidden;">
                             <text class="item-title" style="display:block; font-size:13px; color:#333; margin-bottom:2px;">{{ chat.title || '未命名对话' }}</text>
                             <text class="item-preview" style="display:block; font-size:11px; color:#999; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
                         </view>
-                        <text class="item-time" style="font-size:10px; color:#ccc; margin-left:8px;">{{ formatTime(chat.updatedAt) }}</text>
+                        <view style="display:flex; flex-direction:column; align-items:flex-end; margin-left:8px; flex-shrink:0;">
+                            <text class="item-time" style="font-size:10px; color:#ccc;">{{ formatTime(chat.updatedAt) }}</text>
+                            <text v-if="convStatusLabel(chat)" class="conv-status-label" :class="convDotClass(chat)">{{ convStatusLabel(chat) }}</text>
+                        </view>
                     </view>
                 </scroll-view>
             </view>
@@ -1400,6 +1405,10 @@ export default {
       loadingHistory: false,
       chatHistoryList: [],
       currentConversationId: null, // Added for tracking current session
+      // 后台任务状态点：上次轮询的 {conversationId: runStatus} 快照 + 跑完未读集合
+      convStatusSnapshot: {},
+      unreadConversations: [],
+      convStatusPollTimer: null,
       showAssistantMenu: false,
       currentAssistantId: 'default',
       showAssistantConfigDialog: false,
@@ -1556,6 +1565,14 @@ export default {
     }
   },
   computed: {
+    // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
+    historyBadge() {
+      const list = this.chatHistoryList || []
+      if (list.some(c => c.runStatus === 'PAUSED' || c.runStatus === 'AWAITING_APPROVAL')) return 'dot-attention'
+      if (list.some(c => c.runStatus === 'RUNNING' && c.conversationId !== this.currentConversationId)) return 'dot-running'
+      if (list.some(c => c.unread)) return 'dot-unread'
+      return ''
+    },
     // 桌面端：任一全屏蒙层/弹窗打开时为 true。BrowserView 是原生层，永远盖在
     // HTML 之上，所以弹窗期间必须隐藏 BrowserView，否则弹窗会被网页挡住"点了没反应"。
     desktopOverlayActive() {
@@ -1776,6 +1793,8 @@ export default {
     if (typeof window !== 'undefined' && window.__checkbaActiveOverviewVm === this) {
       window.__checkbaActiveOverviewVm = null
     }
+    // 后台任务状态轮询清理
+    if (this.convStatusPollTimer) { clearInterval(this.convStatusPollTimer); this.convStatusPollTimer = null }
     this.teardownResponsiveListener()
     // Epic #43: 解绑 ⌘⇧O 嵌入式编辑器监听
     try { if (this._zetaOpenEmbedUnsub) { this._zetaOpenEmbedUnsub(); this._zetaOpenEmbedUnsub = null } } catch (e) { /* ignore */ }
@@ -1983,6 +2002,13 @@ export default {
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
     this.setupResponsiveListener()
+    // 后台任务状态轮询：AI 面板打开时每 15s 刷一次会话状态（驱动历史列表状态点
+    // 与入口角标；quiet 模式不弹错误 toast、不动 loading 态）
+    this.convStatusPollTimer = setInterval(() => {
+      if (this.showAiPanel && this.projectId && this.isActiveOverviewInstance()) {
+        this.fetchChatHistory(true)
+      }
+    }, 15000)
     // Desktop：网页选中“加入网核收藏”（右键菜单触发）
     try {
       if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.onWebMark) {
@@ -6580,34 +6606,51 @@ export default {
       }
     },
 
-    async fetchChatHistory() {
+    async fetchChatHistory(quiet = false) {
       if (!this.projectId) return
-      this.loadingHistory = true
+      if (!quiet) this.loadingHistory = true
       // Note: Do NOT set showHistoryDrawer = true here
       // The drawer should only open when user clicks the toggle button (toggleHistoryDrawer)
       try {
           const res = await getAiConversations(this.projectId)
+          // 后台任务「跑完未读」检测：上次快照 RUNNING → 本次终态，且不是当前正看的
+          // 会话 → 记为未读（蓝点），点开该会话时清除
+          const prevStatuses = this.convStatusSnapshot || {}
+          for (const item of (res || [])) {
+              const cid = item.conversationId
+              if (!cid) continue
+              if (prevStatuses[cid] === 'RUNNING' && item.runStatus && item.runStatus !== 'RUNNING'
+                      && cid !== this.currentConversationId && !this.unreadConversations.includes(cid)) {
+                  this.unreadConversations.push(cid)
+              }
+          }
+          this.convStatusSnapshot = Object.fromEntries((res || []).filter(i => i.conversationId).map(i => [i.conversationId, i.runStatus]))
           // Map to display format
-          // Backend returns: [{conversationId, updatedAt, lastMessage}, ...]
+          // Backend returns: [{conversationId, updatedAt, lastMessage, runStatus}, ...]
           // We map to: { id, title, date }
           this.chatHistoryList = (res || []).map(item => ({
               id: item.conversationId,
               title: item.title ? item.title.replace(/<[^>]+>/g, '').trim() : (item.lastMessage ? (item.lastMessage.substring(0, 20) + (item.lastMessage.length > 20 ? '...' : '')) : '新对话'),
               updatedAt: item.updatedAt,
               lastMessage: item.lastMessage ? item.lastMessage.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').substring(0, 60) + (item.lastMessage.length > 60 ? '...' : '') : '',
-              conversationId: item.conversationId
+              conversationId: item.conversationId,
+              runStatus: item.runStatus || null,
+              unread: this.unreadConversations.includes(item.conversationId)
           }))
       } catch (e) {
         console.error('Fetch history failed', e)
-        uni.showToast({ title: '加载历史失败', icon: 'none' })
+        if (!quiet) uni.showToast({ title: '加载历史失败', icon: 'none' })
       } finally {
-        this.loadingHistory = false
+        if (!quiet) this.loadingHistory = false
       }
     },
 
     async loadHistoryChat(chat) {
         if (!chat || !chat.conversationId) return
         this.currentConversationId = chat.conversationId
+        // 点开即视为已读：清掉「后台跑完未读」蓝点
+        const unreadIdx = this.unreadConversations.indexOf(chat.conversationId)
+        if (unreadIdx >= 0) this.unreadConversations.splice(unreadIdx, 1)
         this.loadingHistory = true // Reuse loading state or local
         try {
             const msgs = await getAiHistory({
@@ -6638,6 +6681,25 @@ export default {
         } finally {
             this.loadingHistory = false
         }
+    },
+    // 会话状态 → 状态点样式类。黄=等用户（暂停/待审批）、蓝=后台跑完未读、
+    // 动画绿=运行中、红=出错；无任务/已读完成不打点。
+    convDotClass(chat) {
+        if (!chat) return ''
+        if (chat.runStatus === 'RUNNING') return 'dot-running'
+        if (chat.runStatus === 'PAUSED' || chat.runStatus === 'AWAITING_APPROVAL') return 'dot-attention'
+        if (chat.runStatus === 'ERROR') return 'dot-error'
+        if (chat.unread) return 'dot-unread'
+        return ''
+    },
+    convStatusLabel(chat) {
+        if (!chat) return ''
+        if (chat.runStatus === 'RUNNING') return '运行中'
+        if (chat.runStatus === 'PAUSED') return '待继续'
+        if (chat.runStatus === 'AWAITING_APPROVAL') return '待审批'
+        if (chat.runStatus === 'ERROR') return '出错'
+        if (chat.unread) return '已完成'
+        return ''
     },
     toggleAssistantMenu() {
         this.showAssistantMenu = !this.showAssistantMenu
@@ -7796,6 +7858,27 @@ $bg-white: #FFFFFF;
 .drawer-list {
     flex: 1;
     overflow-y: auto;
+}
+/* 会话后台任务状态点：动画绿=运行中、黄=等用户、蓝=跑完未读、红=出错 */
+.conv-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-right: 8px;
+}
+.conv-dot.dot-running { background: #5BD197; animation: conv-dot-pulse 1.2s ease-in-out infinite; }
+.conv-dot.dot-attention { background: #F5B60D; }
+.conv-dot.dot-unread { background: #3B82F6; }
+.conv-dot.dot-error { background: #E74C3C; }
+.conv-status-label { font-size: 10px; margin-top: 2px; }
+.conv-status-label.dot-running { color: #1A5336; background: transparent; animation: none; }
+.conv-status-label.dot-attention { color: #8A6D1D; background: transparent; }
+.conv-status-label.dot-unread { color: #3B82F6; background: transparent; }
+.conv-status-label.dot-error { color: #E74C3C; background: transparent; }
+@keyframes conv-dot-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.8); }
 }
 .drawer-item {
     padding: 12px;

@@ -33,6 +33,7 @@ public class AiChatController {
     private final SystemSettingService systemSettingService;
     private final com.checkba.service.ai.ConversationFileChangeService conversationFileChangeService;
     private final com.checkba.repository.TokenUsageRepository tokenUsageRepository;
+    private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
 
     public AiChatController(
             AiChatService aiChatService,
@@ -42,7 +43,8 @@ public class AiChatController {
             AiModelProperties aiModelProperties,
             SystemSettingService systemSettingService,
             com.checkba.service.ai.ConversationFileChangeService conversationFileChangeService,
-            com.checkba.repository.TokenUsageRepository tokenUsageRepository) {
+            com.checkba.repository.TokenUsageRepository tokenUsageRepository,
+            com.checkba.service.ai.AgentRunStateService agentRunStateService) {
         this.aiChatService = aiChatService;
         this.aiAssistantService = aiAssistantService;
         this.projectAiMessageService = projectAiMessageService;
@@ -51,6 +53,7 @@ public class AiChatController {
         this.systemSettingService = systemSettingService;
         this.conversationFileChangeService = conversationFileChangeService;
         this.tokenUsageRepository = tokenUsageRepository;
+        this.agentRunStateService = agentRunStateService;
     }
 
     @PostMapping("/chat")
@@ -94,7 +97,14 @@ public class AiChatController {
         if (sessionId != null) {
             userId = AuthController.getUserIdFromSession(sessionId);
         }
-        return projectAiMessageService.listConversations(projectId, userId);
+        java.util.List<Map<String, Object>> conversations = projectAiMessageService.listConversations(projectId, userId);
+        // 合并 Agent 运行状态（RUNNING/PAUSED/AWAITING_APPROVAL/…，null=本进程内没跑过），
+        // 历史列表的状态提示点靠它；在控制层合并，持久层不感知 AI 运行时。
+        for (Map<String, Object> conv : conversations) {
+            Object cid = conv.get("conversationId");
+            conv.put("runStatus", cid == null ? null : agentRunStateService.statusName(cid.toString()));
+        }
+        return conversations;
     }
 
     /**

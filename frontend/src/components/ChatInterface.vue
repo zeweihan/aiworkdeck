@@ -220,6 +220,7 @@
           <view class="icon-btn" @tap="$emit('toggle-history')" title="History">
              <image class="btn-icon default" src="/static/history.png" />
              <image class="btn-icon hover" src="/static/history_hover.png" />
+             <view v-if="historyBadge" class="conv-dot header-dot" :class="historyBadge"></view>
           </view>
           <view class="icon-btn" @tap="startNewChat" title="New Chat">
              <image class="btn-icon default" src="/static/plus.png" />
@@ -393,6 +394,7 @@
           <view class="recent-history-header">近期对话</view>
           <view class="recent-history" v-if="recentHistory && recentHistory.length > 0">
              <view v-for="h in recentHistory" :key="h.id" class="history-item" @tap="$emit('load-history', h)">
+                <view v-if="recentDotClass(h)" class="conv-dot" :class="recentDotClass(h)"></view>
                 <text class="history-title">{{ cleanTitle(h.title) }}</text>
                 <text class="history-time">{{ formatRelativeTime(h.updatedAt) }}</text>
              </view>
@@ -555,6 +557,11 @@ export default {
       type: Array,
       default: () => []
     },
+    // 历史入口聚合状态点：'' | 'dot-attention' | 'dot-running' | 'dot-unread'（宿主计算）
+    historyBadge: {
+      type: String,
+      default: ''
+    },
     assistants: {
         type: Array,
         default: () => []
@@ -586,6 +593,8 @@ export default {
       fileChanges,
       planTodos,
       agentPaused,
+      agentRunStatus,
+      reattachSSE,
       rollbackToMessage,
       currentConversationId,
       loadConversationMetadata
@@ -1208,7 +1217,22 @@ export default {
           }
        })
 
+       // 后台续跑关键一步：切回会话时重连 SSE。后端 connect 会推 run_state
+       // （运行中还会推 state_recovery 全量续流 + plan_update 恢复任务清单），
+       // 已结束的会话则只是挂一条静默连接，不影响静态历史展示。
+       reattachSSE(conversationId)
+
        scrollToBottom()
+    }
+
+    // 近期对话列表的状态点（数据字段由宿主 fetchChatHistory 映射）
+    const recentDotClass = (h) => {
+       if (!h) return ''
+       if (h.runStatus === 'RUNNING') return 'dot-running'
+       if (h.runStatus === 'PAUSED' || h.runStatus === 'AWAITING_APPROVAL') return 'dot-attention'
+       if (h.runStatus === 'ERROR') return 'dot-error'
+       if (h.unread) return 'dot-unread'
+       return ''
     }
 
     const formatTime = (ts) => {
@@ -1757,6 +1781,8 @@ export default {
        formatTime,
        formatRelativeTime,
        cleanTitle,
+       recentDotClass,
+       agentRunStatus,
        addFile,
        removeContextFile,
        removePastedImage,
@@ -2103,6 +2129,33 @@ export default {
   border-radius: 4px; /* 减小圆角 */
   overflow: hidden;
   background: #fff;
+}
+
+/* 会话后台任务状态点（与宿主抽屉同一套视觉）：
+   动画绿=运行中、黄=等用户（暂停/待审批）、蓝=后台跑完未读、红=出错 */
+.conv-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+.conv-dot.dot-running { background: #5BD197; animation: conv-dot-pulse 1.2s ease-in-out infinite; }
+.conv-dot.dot-attention { background: #F5B60D; }
+.conv-dot.dot-unread { background: #3B82F6; }
+.conv-dot.dot-error { background: #E74C3C; }
+.conv-dot.header-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  margin: 0;
+  border: 1px solid #ffffff;
+}
+@keyframes conv-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
 }
 
 .history-item {

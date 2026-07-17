@@ -73,6 +73,7 @@ public class AgentOrchestrator {
     private final ConversationFileChangeService conversationFileChangeService;
     private final TodoListService todoListService;
     private final DocumentCheckpointService documentCheckpointService;
+    private final AgentRunStateService agentRunStateService;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -129,6 +130,7 @@ public class AgentOrchestrator {
             log.info("Saved partial content ({} chars) for cancelled conversation: {}", partialContent.length(), conversationId);
         }
         
+        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.CANCELLED);
         // 发送取消事件
         sseEmitterService.send(conversationId, "cancelled", "{\"message\":\"用户已停止生成\"}");
         sseEmitterService.close(conversationId);
@@ -217,6 +219,8 @@ public class AgentOrchestrator {
         cancelledConversations.remove(conversationId);
         activeStreamContent.put(conversationId, new StringBuilder());
         activeAssistantMessageId.remove(conversationId);
+        // 状态登记：循环开跑（会话列表状态点/切回续流判断都依赖它）
+        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.RUNNING);
         
         try {
             log.info("Agent Loop Started: conv={}, model={}, mode={}, msg={}", conversationId, request.getModel(), agentMode, request.getMessage());
@@ -300,6 +304,7 @@ public class AgentOrchestrator {
             
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
+            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
             sseEmitterService.send(conversationId, "error", "Internal Error: " + e.getMessage());
             sseEmitterService.close(conversationId);
         }
@@ -324,6 +329,7 @@ public class AgentOrchestrator {
             sendTextDelta(conversationId, notice);
             String persisted = (executionLog.length() > 0 ? executionLog.toString() : "") + notice;
             saveAssistantMessage(conversationId, projectId, userId, persisted);
+            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
             // status=paused 让前端渲染一键「继续」按钮（区别于 finished 的正常收尾）
             sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_depth\"}");
             sseEmitterService.close(conversationId);
@@ -334,6 +340,7 @@ public class AgentOrchestrator {
         // Ask 模式限制递归深度为 1（不允许工具调用后的循环）
         if (agentMode == AgentMode.ASK && depth > 0) {
             log.info("Ask mode: stopping loop at depth {}", depth);
+            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.FINISHED);
             sseEmitterService.send(conversationId, "bubble_end", "{}");
             sseEmitterService.close(conversationId);
             clearCancelledState(conversationId);
@@ -609,6 +616,7 @@ public class AgentOrchestrator {
                     // Save assistant message with execution log prepended
                     String fullContent = executionLog.length() > 0 ? executionLog.toString() + content : content;
                     saveAssistantMessage(conversationId, projectId, userId, fullContent);
+                    agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.AWAITING_APPROVAL);
                     // 发送 bubble_end 表示当前响应结束（等待用户审批）
                     sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"awaiting_approval\"}");
                     sseEmitterService.close(conversationId);
@@ -653,6 +661,7 @@ public class AgentOrchestrator {
             } catch (Exception memEx) {
                 log.warn("Failed to trigger memory pipeline for {}", conversationId, memEx);
             }
+            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.FINISHED);
             // 发送 bubble_end 表示整个循环真正结束
             sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"finished\"}");
             sseEmitterService.close(conversationId);
@@ -662,6 +671,7 @@ public class AgentOrchestrator {
           } catch (Exception e) {
             // 确保异常时也能正确结束 bubble，避免前端一直显示加载状态
             log.error("Error in onComplete callback for conversation: " + conversationId, e);
+            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
             sseEmitterService.send(conversationId, "error", "Callback Error: " + e.getMessage());
             sseEmitterService.close(conversationId);
             clearCancelledState(conversationId);
@@ -674,6 +684,7 @@ public class AgentOrchestrator {
 
         // 流式出错时的清理：关闭 emitter + 复位状态，避免 SSE 连接挂到超时、前端永久加载
         handler.setOnError(err -> {
+            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
             editorBridgeService.setStreamingMode(conversationId, false);
             // 保存已生成的部分内容，避免"当时看到了回复、历史里却没有"
             StringBuilder sb = activeStreamContent.get(conversationId);

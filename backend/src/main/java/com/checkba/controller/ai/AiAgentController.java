@@ -29,6 +29,7 @@ public class AiAgentController {
 
     private final com.checkba.service.ai.tools.PptxTools pptxTools;
     private final com.checkba.service.ai.TodoListService todoListService;
+    private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AiAgentController(SseEmitterService sseEmitterService,
@@ -36,13 +37,15 @@ public class AiAgentController {
                             com.checkba.service.ProjectAiMessageService messageService,
                             com.checkba.service.ai.BackgroundTaskService backgroundTaskService,
                             com.checkba.service.ai.tools.PptxTools pptxTools,
-                            com.checkba.service.ai.TodoListService todoListService) {
+                            com.checkba.service.ai.TodoListService todoListService,
+                            com.checkba.service.ai.AgentRunStateService agentRunStateService) {
         this.sseEmitterService = sseEmitterService;
         this.agentOrchestrator = agentOrchestrator;
         this.messageService = messageService;
         this.backgroundTaskService = backgroundTaskService;
         this.pptxTools = pptxTools;
         this.todoListService = todoListService;
+        this.agentRunStateService = agentRunStateService;
     }
 
     /**
@@ -81,6 +84,13 @@ public class AiAgentController {
 
         // 重连后把当前任务清单重推给前端（常驻进度卡恢复）
         todoListService.resendToFrontend(conversationId);
+
+        // 告知前端此会话的运行状态（RUNNING=续流中 / PAUSED=渲染继续按钮 /
+        // AWAITING_APPROVAL=等审批 / null=本进程内没跑过）——切回会话重连时，
+        // 前端靠它决定展示「运行中」还是纯静态历史。
+        String runStatus = agentRunStateService.statusName(conversationId);
+        sseEmitterService.send(conversationId, "run_state",
+                "{\"status\":" + (runStatus == null ? "null" : "\"" + runStatus + "\"") + "}");
 
         return emitter;
     }
