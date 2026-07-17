@@ -130,7 +130,7 @@ public class ChatModelFactory {
                     // Custom Headers for OpenRouter
                     // .defaultRequestProperties(Map.of(
                     //         "HTTP-Referer", "https://checkba.com", // Replace with actual URL
-                    //         "X-Title", "Checkba King IDE"
+                    //         "X-Title", "Checkba AI Workdeck"
                     // ))
                     .build();
         });
@@ -220,7 +220,7 @@ public class ChatModelFactory {
                     .logResponses(true)
                     // .defaultRequestProperties(Map.of(
                     //         "HTTP-Referer", "https://checkba.com",
-                    //         "X-Title", "Checkba King IDE"
+                    //         "X-Title", "Checkba AI Workdeck"
                     // ))
                     .build();
         });

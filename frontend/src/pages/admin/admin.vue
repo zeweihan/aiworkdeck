@@ -4,7 +4,7 @@
       <!-- Sidebar -->
       <view class="admin-sidebar">
         <view class="sidebar-logo-area">
-            <image src="/static/logo_full.png" class="sidebar-logo" mode="heightFix" />
+            <image src="/static/logo_full_v2.png" class="sidebar-logo" mode="heightFix" />
         </view>
 
         <view class="nav-card">

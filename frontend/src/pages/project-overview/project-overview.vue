@@ -678,7 +678,7 @@
               <!-- 初始空状态 (仅当左侧也没有文件时) -->
               <view v-if="leftFiles.length === 0 && !splitMode" class="empty-workspace">
                 <view class="empty-content">
-                  <image src="/static/iconmark.png" class="empty-state-img" mode="aspectFit" />
+                  <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
                   <text class="empty-text">选择文件开始工作</text>
                 </view>
               </view>
@@ -755,7 +755,7 @@
                     />
                   </view>
                   <view v-else-if="!activeFileLeft" class="pane-empty">
-                    <image src="/static/iconmark.png" class="empty-state-img" mode="aspectFit" />
+                    <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
                     <text class="empty-text">左侧空闲</text>
                   </view>
                 </view>
@@ -823,7 +823,7 @@
                     />
                   </view>
                   <view v-else-if="!activeFileRight" class="pane-empty">
-                    <image src="/static/iconmark.png" class="empty-state-img" mode="aspectFit" />
+                    <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
                     <text class="empty-text">右侧空闲</text>
                   </view>
                 </view>
@@ -844,7 +844,7 @@
               <view class="panel-header panel-header-tools">
                 <!-- Group: Tabs + Specific Actions -->
                 <view class="header-content-left">
-                  <view class="panel-tabs king-style">
+                  <view class="panel-tabs awd-style">
                     <view
                       v-for="t in toolsList"
                       :key="t.key"
@@ -9939,7 +9939,7 @@ $bg-white: #FFFFFF;
 }
 .upload-label {
   font-size: 26rpx;
-  color: #12344D; /* King Dark Blue/Gray */
+  color: #12344D; /* AI Workdeck Dark Blue/Gray */
   font-weight: 600;
   margin-bottom: 12rpx;
   display: block;
@@ -10198,7 +10198,7 @@ $bg-white: #FFFFFF;
 }
 
 /* AI Workdeck Dialog System (Copied for project-overview.vue usage) */
-.king-dialog-mask {
+.awd-dialog-mask {
   position: fixed;
   top: 0;
   left: 0;
@@ -10212,7 +10212,7 @@ $bg-white: #FFFFFF;
   backdrop-filter: blur(2px);
 }
 
-.king-dialog {
+.awd-dialog {
   width: 618px; /* Golden Ratio approx */
   background: #ffffff;
   border-radius: 12px;
@@ -10223,47 +10223,47 @@ $bg-white: #FFFFFF;
   box-sizing: border-box;
 }
 
-.king-dialog * {
+.awd-dialog * {
   box-sizing: border-box;
 }
 
-.king-dialog-large {
+.awd-dialog-large {
   width: 750px;
 }
 
-.king-dialog-header {
+.awd-dialog-header {
   padding: 24px 32px 16px;
   border-bottom: 1px solid #f1f5f9;
 }
 
-.king-dialog-title {
+.awd-dialog-title {
   font-size: 20px;
   font-weight: 600;
   color: #0f172a;
   display: block;
 }
 
-.king-dialog-subtitle {
+.awd-dialog-subtitle {
   font-size: 14px;
   color: #64748b;
   margin-top: 6px;
   display: block;
 }
 
-.king-dialog-body {
+.awd-dialog-body {
   padding: 24px 32px;
   color: #334155;
   font-size: 15px;
   line-height: 1.6;
 }
 
-.king-dialog-text {
+.awd-dialog-text {
   font-size: 15px;
   color: #334155;
   line-height: 1.6;
 }
 
-.king-dialog-footer {
+.awd-dialog-footer {
   padding: 20px 32px 24px;
   background: #f8f9fa;
   display: flex;
@@ -10272,7 +10272,7 @@ $bg-white: #FFFFFF;
   border-top: 1px solid #f1f5f9;
 }
 
-.king-btn {
+.awd-btn {
   height: 44px;
   padding: 0 32px;
   border-radius: 8px;
@@ -10285,40 +10285,40 @@ $bg-white: #FFFFFF;
   transition: all 0.2s;
 }
 
-.king-btn-primary {
+.awd-btn-primary {
   background: #1A5336; /* Forest Green */
   color: #ffffff;
   border: 1px solid transparent;
 }
 
-.king-btn-primary:hover {
+.awd-btn-primary:hover {
   background: #14422b;
   box-shadow: 0 4px 6px -1px rgba(26, 83, 54, 0.2);
 }
 
-.king-btn-secondary {
+.awd-btn-secondary {
   background: #ffffff;
   color: #475569;
   border: 1px solid #cbd5e1;
 }
 
-.king-btn-secondary:hover {
+.awd-btn-secondary:hover {
   background: #f1f5f9;
   border-color: #94a3b8;
   color: #1e293b;
 }
 
-.king-btn-danger {
+.awd-btn-danger {
   background: #dc2626; /* Red */
   color: #ffffff;
   border: 1px solid transparent;
 }
 
-.king-btn-danger:hover {
+.awd-btn-danger:hover {
   background: #b91c1c;
 }
 
-.king-input {
+.awd-input {
   width: 100%;
   height: 48px;
   padding: 0 16px;
@@ -10329,13 +10329,13 @@ $bg-white: #FFFFFF;
   transition: all 0.2s;
 }
 
-.king-input:focus {
+.awd-input:focus {
   border-color: #1A5336;
   outline: none;
   box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
 }
 
-.king-field {
+.awd-field {
   display: flex;
   align-items: center;
   padding: 12px 16px;
@@ -10480,14 +10480,14 @@ $bg-white: #FFFFFF;
   flex: 1; /* Allow taking space left of search */
 }
 
-/* King Style Tabs */
-.panel-tabs.king-style {
+/* AI Workdeck Style Tabs */
+.panel-tabs.awd-style {
   background: transparent;
   padding: 0;
   gap: 24px;
 }
 
-.panel-tabs.king-style .panel-tab {
+.panel-tabs.awd-style .panel-tab {
   background: transparent;
   padding: 0 4px;
   height: 100%;
@@ -10499,7 +10499,7 @@ $bg-white: #FFFFFF;
   transition: all 0.2s;
 }
 
-.panel-tabs.king-style .panel-tab.active {
+.panel-tabs.awd-style .panel-tab.active {
   background: transparent;
   color: #2C3338;
   font-weight: 600;

@@ -2,18 +2,18 @@
   <view class="chat-interface" :class="{ 'is-empty': bubbles.length === 0 && !isStreaming }">
 
     <!-- Upload File Modal (reused from FileTree pattern) -->
-    <view v-if="showUploadDialog" class="king-dialog-mask" @tap="cancelUpload">
-      <view class="king-dialog king-dialog-large" @tap.stop>
-        <view class="king-dialog-header">
+    <view v-if="showUploadDialog" class="awd-dialog-mask" @tap="cancelUpload">
+      <view class="awd-dialog awd-dialog-large" @tap.stop>
+        <view class="awd-dialog-header">
           <view class="header-row">
-            <text class="king-dialog-title">上传文件</text>
-            <text class="king-dialog-subtitle">选择目标位置并选择要上传的文档</text>
+            <text class="awd-dialog-title">上传文件</text>
+            <text class="awd-dialog-subtitle">选择目标位置并选择要上传的文档</text>
           </view>
         </view>
-        <view class="king-dialog-body">
+        <view class="awd-dialog-body">
           <view class="form-group">
             <text class="form-label">上传位置</text>
-            <view class="king-field clickable" @tap="openFolderSelector">
+            <view class="awd-field clickable" @tap="openFolderSelector">
               <image src="/static/folder-closed.png" class="field-icon-img" mode="aspectFit" />
               <text class="field-value">
                 {{ selectedUploadParent ? getFolderPath(selectedUploadParent) : '根目录' }}
@@ -25,7 +25,7 @@
           <!-- #ifdef H5 -->
           <view class="form-group">
             <text class="form-label">上传文件夹</text>
-            <view class="king-field clickable" @tap="triggerFolderUploadInput">
+            <view class="awd-field clickable" @tap="triggerFolderUploadInput">
                <view v-if="isFolderUpload && uploadSelectedFiles.length > 0" class="field-content-row">
                   <text class="field-value">已选择 {{ uploadSelectedFiles.length }} 个文件</text>
                </view>
@@ -38,7 +38,7 @@
 
           <view class="form-group">
             <text class="form-label">上传文件</text>
-            <view class="king-field clickable" @tap="selectFilesForUpload">
+            <view class="awd-field clickable" @tap="selectFilesForUpload">
               <view v-if="uploadSelectedFiles.length === 0 || isFolderUpload">
                 <text class="field-placeholder">选择文件（支持多选）</text>
               </view>
@@ -50,10 +50,10 @@
             </view>
           </view>
         </view>
-        <view class="king-dialog-footer">
-          <view class="king-btn king-btn-secondary" @tap="cancelUpload">取消</view>
+        <view class="awd-dialog-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">取消</view>
           <view
-            class="king-btn king-btn-primary"
+            class="awd-btn awd-btn-primary"
             :class="{ disabled: !uploadSelectedFiles.length }"
             @tap="uploadSelectedFiles.length ? confirmUploadAndAddContext() : null"
           >
@@ -64,18 +64,18 @@
     </view>
 
     <!-- Folder Selector Popup (Nested) - Matching FileTree design -->
-    <view v-if="showFolderSelector" class="king-dialog-mask" style="z-index: 3000;" @tap="showFolderSelector = false">
-      <view class="king-dialog" @tap.stop>
-        <view class="king-dialog-header">
+    <view v-if="showFolderSelector" class="awd-dialog-mask" style="z-index: 3000;" @tap="showFolderSelector = false">
+      <view class="awd-dialog" @tap.stop>
+        <view class="awd-dialog-header">
           <view class="header-row folder-selector-header">
-            <text class="king-dialog-title">选择文件夹</text>
+            <text class="awd-dialog-title">选择文件夹</text>
             <view class="new-folder-btn" @tap="handleSelectorCreateFolder">
               <text class="btn-plus">+</text>
               <text>新建文件夹</text>
             </view>
           </view>
         </view>
-        <view class="king-dialog-body scrollable-body">
+        <view class="awd-dialog-body scrollable-body">
           <view
             class="folder-tree-item root"
             :class="{ active: tempSelectedParent === null }"
@@ -123,20 +123,20 @@
           </view>
           <view v-if="folderTree.length === 0" class="empty-tip">暂无其他文件夹</view>
         </view>
-        <view class="king-dialog-footer">
-          <view class="king-btn king-btn-secondary" @tap="showFolderSelector = false">取消</view>
-          <view class="king-btn king-btn-primary" @tap="confirmFolderSelection">确定</view>
+        <view class="awd-dialog-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="showFolderSelector = false">取消</view>
+          <view class="awd-btn awd-btn-primary" @tap="confirmFolderSelection">确定</view>
         </view>
       </view>
     </view>
 
     <!-- Rollback Confirmation Dialog -->
-    <view v-if="showRollbackDialog" class="king-dialog-mask" style="z-index: 3100;" @tap="cancelRollback">
-      <view class="king-dialog" @tap.stop>
-        <view class="king-dialog-header warning-header">
-          <text class="king-dialog-title warning-title">⚠️ 确认回退</text>
+    <view v-if="showRollbackDialog" class="awd-dialog-mask" style="z-index: 3100;" @tap="cancelRollback">
+      <view class="awd-dialog" @tap.stop>
+        <view class="awd-dialog-header warning-header">
+          <text class="awd-dialog-title warning-title">⚠️ 确认回退</text>
         </view>
-        <view class="king-dialog-body">
+        <view class="awd-dialog-body">
           <view class="rollback-warning-content">
             <text class="warning-text">此操作将删除该消息以及之后的所有对话记录，且无法恢复。</text>
             <view class="wps-tip-box">
@@ -152,20 +152,20 @@
             </view>
           </view>
         </view>
-        <view class="king-dialog-footer">
-          <view class="king-btn king-btn-secondary" @tap="cancelRollback">取消</view>
-          <view class="king-btn king-btn-danger" @tap="confirmRollback">确认回退</view>
+        <view class="awd-dialog-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="cancelRollback">取消</view>
+          <view class="awd-btn awd-btn-danger" @tap="confirmRollback">确认回退</view>
         </view>
       </view>
     </view>
 
     <!-- PPT Config Dialog -->
-    <view v-if="showPptConfigDialog" class="king-dialog-mask" style="z-index: 3200;" @tap="cancelPptConfig">
-      <view class="king-dialog" @tap.stop>
-        <view class="king-dialog-header">
-           <text class="king-dialog-title">PPT 生成选项</text>
+    <view v-if="showPptConfigDialog" class="awd-dialog-mask" style="z-index: 3200;" @tap="cancelPptConfig">
+      <view class="awd-dialog" @tap.stop>
+        <view class="awd-dialog-header">
+           <text class="awd-dialog-title">PPT 生成选项</text>
         </view>
-        <view class="king-dialog-body">
+        <view class="awd-dialog-body">
            <view class="ppt-config-section">
               <text class="section-title">请选择导出格式</text>
 
@@ -200,9 +200,9 @@
               </view>
            </view>
         </view>
-        <view class="king-dialog-footer">
-           <view class="king-btn king-btn-secondary" @tap="cancelPptConfig">取消</view>
-           <view class="king-btn king-btn-primary" @tap="confirmPptGeneration">开始生成</view>
+        <view class="awd-dialog-footer">
+           <view class="awd-btn awd-btn-secondary" @tap="cancelPptConfig">取消</view>
+           <view class="awd-btn awd-btn-primary" @tap="confirmPptGeneration">开始生成</view>
         </view>
       </view>
     </view>
@@ -2015,7 +2015,7 @@ export default {
 }
 
 .user-bubble {
-  background: #E8F3ED; /* KingIDE品牌色 Lightest */
+  background: #E8F3ED; /* AI Workdeck品牌色 Lightest */
   padding: 8px 12px;
   border-radius: 6px 6px 0 6px;
   max-width: 80%;
@@ -2870,7 +2870,7 @@ export default {
 /* =============================================
    AI Workdeck Style - Upload Dialog Styles
    ============================================= */
-.king-dialog-mask {
+.awd-dialog-mask {
   position: fixed;
   top: 0;
   left: 0;
@@ -2884,28 +2884,28 @@ export default {
   z-index: 2000;
 }
 
-.king-dialog {
+.awd-dialog {
   width: 618px; /* Golden Ratio-ish Width */
   max-width: 90vw;
   background-color: #ffffff;
   border-radius: 12px;
   box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   overflow: hidden;
-  animation: king-dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: awd-dialog-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
 }
 
-.king-dialog * {
+.awd-dialog * {
   box-sizing: border-box;
 }
 
-.king-dialog-large {
+.awd-dialog-large {
   width: 750px; /* Wider for Upload */
 }
 
-@keyframes king-dialog-in {
+@keyframes awd-dialog-in {
   from {
     opacity: 0;
     transform: scale(0.96) translateY(10px);
@@ -2916,13 +2916,13 @@ export default {
   }
 }
 
-.king-dialog-header {
+.awd-dialog-header {
   padding: 24px 24px 16px;
   flex-shrink: 0;
   border-bottom: 1px solid #f0f0f0;
 }
 
-.king-dialog-header .header-row {
+.awd-dialog-header .header-row {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2957,7 +2957,7 @@ export default {
   line-height: 1;
 }
 
-.king-dialog-title {
+.awd-dialog-title {
   font-size: 20px;
   font-weight: 600;
   color: #1A5336; /* Forest Green */
@@ -2965,7 +2965,7 @@ export default {
   display: block;
 }
 
-.king-dialog-subtitle {
+.awd-dialog-subtitle {
   margin-top: 6px;
   font-size: 13px;
   color: #6C757D;
@@ -2973,7 +2973,7 @@ export default {
   display: block;
 }
 
-.king-dialog-body {
+.awd-dialog-body {
   padding: 0 24px 24px;
   flex: 1;
   min-height: 0;
@@ -2981,13 +2981,13 @@ export default {
   padding-top: 20px;
 }
 
-.king-dialog-body.scrollable-body {
+.awd-dialog-body.scrollable-body {
   max-height: 400px;
   overflow-y: auto;
   padding-top: 0; /* Remove top padding for list */
 }
 
-.king-dialog-footer {
+.awd-dialog-footer {
   display: flex;
   align-items: center;
   justify-content: center; /* Centered as requested */
@@ -2998,7 +2998,7 @@ export default {
   border-top: 1px solid #f0f0f0;
 }
 
-.king-btn {
+.awd-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -3013,30 +3013,30 @@ export default {
   border: none;
 }
 
-.king-btn:active {
+.awd-btn:active {
   transform: translateY(1px);
 }
 
-.king-btn-primary {
+.awd-btn-primary {
   background-color: #1A5336; /* Forest Green */
   color: #ffffff;
 }
-.king-btn-primary:hover {
+.awd-btn-primary:hover {
   background-color: #16452d;
 }
 
-.king-btn-primary.disabled {
+.awd-btn-primary.disabled {
   opacity: 0.5;
   pointer-events: none;
   background-color: #1A5336; /* Maintain color but transparent */
 }
 
-.king-btn-secondary {
+.awd-btn-secondary {
   background-color: #ffffff;
   color: #2C3338;
   border: 1px solid #E9ECEF;
 }
-.king-btn-secondary:hover {
+.awd-btn-secondary:hover {
   background-color: #F8F9FA;
   border-color: #DDE2E5;
 }
@@ -3056,7 +3056,7 @@ export default {
   margin-bottom: 8px;
 }
 
-.king-field {
+.awd-field {
   background-color: #F8F9FA;
   border: 1px solid #E9ECEF;
   border-radius: 8px;
@@ -3068,27 +3068,27 @@ export default {
   gap: 12px;
 }
 
-.king-field.clickable {
+.awd-field.clickable {
   cursor: pointer;
 }
 
-.king-field.clickable:hover {
+.awd-field.clickable:hover {
   background-color: #E6F9F0;
   border-color: #5BD197;
 }
 
-.king-field .field-icon-img {
+.awd-field .field-icon-img {
   width: 20px;
   height: 20px;
   flex-shrink: 0;
 }
 
-.king-field .field-value {
+.awd-field .field-value {
   font-size: 14px;
   color: #111827;
 }
 
-.king-field .field-placeholder {
+.awd-field .field-placeholder {
   font-size: 14px;
   color: #9CA3AF;
 }
@@ -3525,13 +3525,13 @@ export default {
   font-style: italic;
 }
 
-.king-btn-danger {
+.awd-btn-danger {
   background-color: #dc2626;
   color: white;
   border: none;
 }
 
-.king-btn-danger:hover {
+.awd-btn-danger:hover {
   background-color: #b91c1c;
 }
 /* PPT Config Styles */
@@ -3612,12 +3612,12 @@ export default {
   margin-top: 4px;
 }
 
-.king-btn-secondary {
+.awd-btn-secondary {
     background-color: #f5f5f5;
     color: #333;
     border: 1px solid #ddd;
 }
-.king-btn-secondary:hover {
+.awd-btn-secondary:hover {
     background-color: #e0e0e0;
 }
 

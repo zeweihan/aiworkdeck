@@ -5,7 +5,7 @@
       <view class="user-sidebar">
         <!-- Logo Area -->
         <view class="sidebar-logo-area">
-            <image src="/static/logo_full.png" class="sidebar-logo" mode="heightFix" />
+            <image src="/static/logo_full_v2.png" class="sidebar-logo" mode="heightFix" />
             <!-- Text removed as requested -->
         </view>
 

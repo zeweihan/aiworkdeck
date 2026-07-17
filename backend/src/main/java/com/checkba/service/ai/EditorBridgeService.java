@@ -105,7 +105,7 @@ public class EditorBridgeService {
                     "fileType", file.getFileType(),
                     "wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "",
                     "trackRevisions", true,
-                    "userName", "King IDE"
+                    "userName", "AI Workdeck"
             ));
             
             sseEmitterService.send(conversationId, "client_action", payload);
