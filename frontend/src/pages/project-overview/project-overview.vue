@@ -1272,6 +1272,7 @@ import {
   promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
 import { getCurrentUser, getSessionId } from '@/utils/auth.js'
+import { markdownToPlainText } from '@/utils/markdownPlain.js'
 import { FILE_BATCH_ACTIONS, FILE_TREE_QUICK_ACTIONS } from '@/config/fileActions.js'
 import { WORKBENCH_TOOLS } from '@/config/tools.js'
 import { OCR_ACTION_LABELS, INTERNAL_LINK_SCHEMES, WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
@@ -5992,7 +5993,8 @@ export default {
 
     insertAiMessageToDoc(message) {
       if (!message || !message.content) return
-      this.insertPlainTextToWps(message.content)
+      // AI 回复是 Markdown，纯文本原语会把 **、# 原样落字——先剥离标记
+      this.insertPlainTextToWps(markdownToPlainText(message.content))
     },
     async applyAiMessageToSelection(message) {
       if (!message || !message.content) return
@@ -6006,7 +6008,7 @@ export default {
           uni.showToast({ title: '请先在文档中选择要替换的内容', icon: 'none' })
           return
         }
-        await this.libreOfficeExecutor.executeCommand('replace_selection', { text: message.content })
+        await this.libreOfficeExecutor.executeCommand('replace_selection', { text: markdownToPlainText(message.content) })
         uni.showToast({ title: '已替换选区', icon: 'success' })
         return
       } catch (e) {

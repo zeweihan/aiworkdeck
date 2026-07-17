@@ -523,6 +523,21 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "识别合同条款", category = "document")
+    @Tool("【看】识别合同/协议的条款结构。按「第X条 / 第X章 / 一、二、」等编号文本把段落归并成条款，" +
+          "返回每条条款的编号、标题和段落范围（startParagraph~endParagraph）。" +
+          "统计条款数、按条款定位或修订时必须先用本工具，禁止把段落数/行数当条款数。" +
+          "拿到段落范围后可用 doc_get_document_text(startParagraph) 精读某条条款。")
+    public String doc_get_clauses() {
+        log.info("Tool: doc_get_clauses called");
+        try {
+            return editorBridgeService.executeEditorCommand("get_clauses", null);
+        } catch (Exception e) {
+            log.error("Failed to get clauses", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
     @Tool("【看】查看当前光标/选区周围的文本（选中内容、前后文、所在段落）。在插入或格式化之前先确认光标位置。")
     public String doc_get_cursor_context() {
         log.info("Tool: doc_get_cursor_context called");

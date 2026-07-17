@@ -25,7 +25,7 @@ export const EDITOR_ACTIONS = [
   // perceive (get_document_text/get_cursor_context), position visibly
   // (select_paragraph/collapse_selection), edit (delete_selection), format
   // (format_selection/set_paragraph_format), recover (undo/redo).
-  'get_document_text', 'get_cursor_context', 'select_paragraph', 'collapse_selection',
+  'get_document_text', 'get_cursor_context', 'get_clauses', 'select_paragraph', 'collapse_selection',
   'delete_selection', 'format_selection', 'set_paragraph_format', 'undo', 'redo',
   // [spike/IME] implemented by the worker since Phase B but never whitelisted
   // (found by the primitive self-test: "Unknown action: move_cursor").

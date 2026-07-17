@@ -29,13 +29,37 @@
             <!-- 2. Title -->
             <TitleCard v-if="bubble.title" :title="bubble.title" />
 
-            <!-- 3. Process Stream -->
+            <!-- 3. Process Stream（工具执行按 plan 步骤分组：最新步骤展开，旧步骤收起，
+                 避免整个面板被工具卡片刷满；无步骤归属的保持平铺） -->
             <div class="process-stream">
-               <ProcessCard
-                 v-for="proc in bubble.processes"
-                 :key="proc.id"
-                 :process="proc"
-               />
+               <template v-for="(group, gi) in processGroups" :key="group.key + '-' + gi">
+                  <div v-if="group.title" class="step-group">
+                     <div class="step-group-header" @click="toggleGroup(group.key, gi)">
+                        <span class="step-group-marker" :class="{ done: isGroupDone(group), error: groupHasError(group) }"></span>
+                        <span class="step-group-title">{{ group.title }}</span>
+                        <span class="step-group-count">{{ group.procs.length }}</span>
+                        <div class="step-chevron" :class="{ 'is-rotated': isGroupExpanded(group.key, gi) }">
+                           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <polyline points="6 9 12 15 18 9"></polyline>
+                           </svg>
+                        </div>
+                     </div>
+                     <div v-show="isGroupExpanded(group.key, gi)" class="step-group-body">
+                        <ProcessCard
+                          v-for="proc in group.procs"
+                          :key="proc.id"
+                          :process="proc"
+                        />
+                     </div>
+                  </div>
+                  <template v-else>
+                     <ProcessCard
+                       v-for="proc in group.procs"
+                       :key="proc.id"
+                       :process="proc"
+                     />
+                  </template>
+               </template>
             </div>
 
             <!-- 4. Artifacts -->
@@ -59,11 +83,23 @@
                <MarkdownPreview :content="bubble.content" />
             </div>
 
-            <!-- 5b. Message Actions（旧 UI 的插入/替换/导出，ChatInterface 重写时丢失后恢复） -->
+            <!-- 5b. Message Actions：插入/替换/导出收进一个图标，点开再选（用户反馈三个
+                 平铺按钮太占地方）。菜单向上弹，透明遮罩点外即收。 -->
             <div v-if="bubble.content && !bubble.isStreaming" class="message-actions">
-               <span class="msg-act-btn primary" @click="sendAction('insert')">插入当前文档</span>
-               <span class="msg-act-btn" @click="sendAction('replace')">替换选区</span>
-               <span class="msg-act-btn" @click="sendAction('export')">导出为Word</span>
+               <div class="msg-act-trigger" :class="{ active: showActions }" @click.stop="showActions = !showActions">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                     <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"></path>
+                     <polyline points="14 2 14 8 20 8"></polyline>
+                     <line x1="9" y1="15" x2="15" y2="15"></line>
+                  </svg>
+                  <span>用到文档</span>
+               </div>
+               <div v-if="showActions" class="msg-act-menu">
+                  <div class="msg-act-item" @click="pickAction('insert')">插入当前文档</div>
+                  <div class="msg-act-item" @click="pickAction('replace')">替换选区</div>
+                  <div class="msg-act-item" @click="pickAction('export')">导出为Word</div>
+               </div>
+               <div v-if="showActions" class="msg-act-mask" @click.stop="showActions = false"></div>
             </div>
 
             <!-- 6. Walkthrough (Summary) - Temporarily hidden as per user request -->
@@ -80,7 +116,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import ThinkingCard from './ThinkingCard.vue'
 import TitleCard from './TitleCard.vue'
 import ProcessCard from './ProcessCard.vue'
@@ -98,6 +134,45 @@ const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action'])
 function sendAction(type) {
   emit('message-action', { type, msg: { content: props.bubble.content } })
 }
+
+const showActions = ref(false)
+function pickAction(type) {
+  showActions.value = false
+  sendAction(type)
+}
+
+// ---- 工具执行按 plan 步骤分组 ----
+// process 在创建时被 useAgentStream 打上 stepIndex/stepTitle（当时 in_progress 的
+// plan 项）。这里把相邻同步骤的 process 收进一个可折叠组；历史消息没有该标记，
+// 落入 key='' 的平铺组，渲染不变。
+const processGroups = computed(() => {
+  const groups = []
+  let cur = null
+  for (const p of props.bubble.processes) {
+    const grouped = typeof p.stepIndex === 'number' && p.stepIndex >= 0
+    const key = grouped ? `s${p.stepIndex}` : ''
+    if (!cur || cur.key !== key) {
+      cur = { key, title: grouped ? (p.stepTitle || `步骤 ${p.stepIndex + 1}`) : '', procs: [] }
+      groups.push(cur)
+    }
+    cur.procs.push(p)
+  }
+  return groups
+})
+
+// 默认只展开最新一组（正在进行的步骤）；用户手动开合后以用户为准
+const groupToggles = ref({})
+const isGroupExpanded = (key, gi) => {
+  if (key in groupToggles.value) return groupToggles.value[key]
+  return gi === processGroups.value.length - 1
+}
+const toggleGroup = (key, gi) => {
+  groupToggles.value = { ...groupToggles.value, [key]: !isGroupExpanded(key, gi) }
+}
+const isGroupDone = (g) => g.procs.every(p =>
+  !(p.items || []).some(it => it.status === 'doing' || it.status === 'loading' || it.status === 'thinking')
+)
+const groupHasError = (g) => g.procs.some(p => (p.items || []).some(it => it.status === 'error'))
 
 const isReady = computed(() => {
     // Show full card if we have a Title OR Processes OR Main Content
@@ -172,14 +247,17 @@ const hasContent = computed(() => {
 }
 
 .message-actions {
+  position: relative;
   display: flex;
-  gap: 8px;
   padding: 8px 16px 12px;
   border-top: 1px solid #f1f5f9;
   margin-top: 6px;
 }
 
-.msg-act-btn {
+.msg-act-trigger {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 12px;
   padding: 3px 10px;
   border-radius: 5px;
@@ -191,16 +269,114 @@ const hasContent = computed(() => {
   user-select: none;
 }
 
-.msg-act-btn:hover {
+.msg-act-trigger:hover, .msg-act-trigger.active {
   border-color: #5BD197;
   color: #1A5336;
   background: #E6F9F0;
 }
 
-.msg-act-btn.primary {
-  border-color: rgba(91, 209, 151, 0.5);
+.msg-act-menu {
+  position: absolute;
+  left: 16px;
+  bottom: calc(100% - 2px);
+  background: #FFFFFF;
+  border: 1px solid #E9ECEF;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.10);
+  padding: 4px;
+  z-index: 99;
+  min-width: 140px;
+}
+
+.msg-act-item {
+  font-size: 12px;
+  color: #2C3338;
+  padding: 6px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.msg-act-item:hover {
+  background: #E6F9F0;
   color: #1A5336;
-  background: rgba(91, 209, 151, 0.08);
+}
+
+.msg-act-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 98;
+  background: transparent;
+}
+
+/* ---- plan 步骤分组 ---- */
+.step-group {
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.step-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.step-group-header:hover {
+  background: #F8F9FA;
+}
+
+.step-group-marker {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ADB5BD;
+  flex-shrink: 0;
+}
+
+.step-group-marker.done {
+  background: #5BD197;
+}
+
+.step-group-marker.error {
+  background: #E74C3C;
+}
+
+.step-group-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2C3338;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.step-group-count {
+  font-size: 10px;
+  color: #6C757D;
+  background: #F1F3F5;
+  border-radius: 99px;
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+
+.step-chevron {
+  color: #ADB5BD;
+  transition: transform 0.2s ease;
+  display: flex;
+  align-items: center;
+}
+
+.step-chevron.is-rotated {
+  transform: rotate(180deg);
+}
+
+.step-group-body {
+  padding-left: 10px;
+  border-left: 2px solid #E6F9F0;
+  margin-left: 14px;
 }
 
 .main-content:deep(p) {

@@ -233,6 +233,16 @@ function setCharProp(ps, base, value) {
   }
 }
 
+// LO 7.1+ (tdf#34355): tracked DELETIONS render in the page margin next to the
+// changed-line mark instead of inline strikethrough — the body stays readable
+// (original text + colored insertions only). This is a VIEW setting on the
+// controller, not the model, so it must be re-applied whenever the controller
+// changes (boot AND load_document retarget).
+function showDeletionsInMargin() {
+  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', true); }
+  catch (e) { log('ShowChangesInMargin 设置失败 / failed: ' + errStr(e)); }
+}
+
 // ---- boot: open a fresh BLANK Writer doc ----------------------------------
 // Production: a brand-new / empty document must show a clean blank page (the
 // host loads real bytes via load_document when the file has content). We do NOT
@@ -249,6 +259,7 @@ function bootDoc() {
   // change the lawyer can accept/reject. Set once here (and on retarget) instead
   // of per-command, so no edit path can slip through untracked.
   try { xModel.setPropertyValue('RecordChanges', true); } catch {}
+  showDeletionsInMargin();
 
   installKeyHandler();
   try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
@@ -536,6 +547,56 @@ const EXEC = {
     }
     return { success: true, count: outline.length, outline: outline };
   },
+  // [感知] contract clause map — group paragraphs into legal clauses by their
+  // NUMBERING TEXT (第X条 / 第X章 / 一、), NOT by Word heading styles: contracts
+  // rarely use heading styles, which is why get_outline sees nothing there and
+  // the model degraded to counting paragraphs/lines as "clauses".
+  get_clauses() {
+    const RE_TIAO  = /^\s*第[一二三四五六七八九十百千零〇0-9１-９]+\s*条/;       // 第X条 — the clause proper
+    const RE_ZHANG = /^\s*第[一二三四五六七八九十百千零〇0-9１-９]+\s*[章节编]/;  // 第X章/节/编 — section above clauses
+    const RE_ENUM  = /^\s*[一二三四五六七八九十]{1,3}\s*、/;                      // 一、 二、 — top-level enum many contracts use
+    const marks = []; let total = 0;
+    eachParagraph(function (el, i) {
+      total = i + 1;
+      const t = el.getString() || '';
+      let type = null;
+      if (RE_TIAO.test(t)) type = 'tiao';
+      else if (RE_ZHANG.test(t)) type = 'zhang';
+      else if (RE_ENUM.test(t)) type = 'enum';
+      if (type) marks.push({ index: i, type: type, text: t });
+      return false;
+    });
+    // Granularity: 第X条 wins when present (一、 then is usually a sub-item);
+    // otherwise fall back to the 一、 enum as the clause level. 章/节 always kept.
+    const hasTiao = marks.some(function (m) { return m.type === 'tiao'; });
+    const boundaries = marks.filter(function (m) {
+      return m.type === 'zhang' || m.type === (hasTiao ? 'tiao' : 'enum');
+    });
+    const clauses = [];
+    for (let k = 0; k < boundaries.length && clauses.length < 300; k++) {
+      const b = boundaries[k];
+      const end = (k + 1 < boundaries.length) ? boundaries[k + 1].index - 1 : total - 1;
+      const line = b.text.trim();
+      const re = b.type === 'tiao' ? RE_TIAO : (b.type === 'zhang' ? RE_ZHANG : RE_ENUM);
+      const m = line.match(re);
+      clauses.push({
+        no: (m ? m[0] : line.slice(0, 8)).trim(),
+        type: b.type,
+        title: line.slice(0, 60),
+        startParagraph: b.index,
+        endParagraph: end,
+        paragraphCount: end - b.index + 1,
+      });
+    }
+    const firstBoundary = boundaries.length ? boundaries[0].index : total;
+    return {
+      success: true, totalParagraphs: total, clauseCount: clauses.length,
+      granularity: hasTiao ? '第X条' : (boundaries.length ? '一、二、…' : 'none'),
+      // 0..preambleParagraphs-1 = 首部（合同名称/当事人信息），不属于任何条款
+      preambleParagraphs: firstBoundary,
+      clauses: clauses,
+    };
+  },
   // [verified-extend] move the view cursor to doc start/end (line/para/bookmark nav = TODO anchor).
   goto(p) {
     const vc = ctrl.getViewCursor();
@@ -748,6 +809,7 @@ const EXEC = {
       try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
       // Revisions default ON for the real document too (same as bootDoc).
       try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
+      showDeletionsInMargin();
     };
 
     const errs = [];

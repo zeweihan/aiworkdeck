@@ -408,6 +408,11 @@
     <view v-else class="input-area-wrapper">
        <!-- Agent 任务清单常驻进度卡（todo_write 驱动，plan_update 事件更新） -->
        <TodoProgressCard :todos="planTodos" />
+       <!-- 步数超限暂停：一键继续，免得用户手动输入「继续」 -->
+       <view v-if="agentPaused && !isStreaming" class="continue-bar">
+          <text class="continue-hint">已达单轮执行步数上限，任务已暂停</text>
+          <view class="continue-btn" @tap="handleContinue">继续执行</view>
+       </view>
        <!-- NEW: File Changes & Token Usage Bar (Always visible) -->
        <view class="status-bar-row">
            <!-- Left: File Changes -->
@@ -580,6 +585,7 @@ export default {
       tokenUsage,
       fileChanges,
       planTodos,
+      agentPaused,
       rollbackToMessage,
       currentConversationId,
       loadConversationMetadata
@@ -1024,6 +1030,20 @@ export default {
         _userContextFiles: contextFilesToShow
       })
 
+      scrollToBottom()
+    }
+
+    // 步数超限后的一键续跑：等价于用户输入「继续」（后端 depth 归零重新起循环），
+    // 复用 sendMessage 的会话/模型/助手上下文。
+    const handleContinue = async () => {
+      if (isStreaming.value) return
+      await sendMessage({
+        prompt: '继续',
+        projectId: props.projectId,
+        modelId: currentModelId.value,
+        mode: currentModeId.value,
+        assistantId: props.currentAssistantId
+      })
       scrollToBottom()
     }
 
@@ -1821,6 +1841,9 @@ export default {
        fileChanges,
        // Agent 任务清单进度卡
        planTodos,
+       // 步数超限一键继续
+       agentPaused,
+       handleContinue,
        modifiedFiles,
        createdFiles,
        showModifiedPopup,
@@ -3133,6 +3156,40 @@ export default {
   color: #6C757D;
 }
 
+
+/* 步数超限一键继续条 */
+.continue-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0 12px 6px;
+  padding: 6px 12px;
+  background: #FFF9E8;
+  border: 1px solid #F5DFA6;
+  border-radius: 8px;
+}
+
+.continue-hint {
+  font-size: 11px;
+  color: #8A6D1D;
+}
+
+.continue-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #FFFFFF;
+  background: #1A5336;
+  border-radius: 6px;
+  padding: 4px 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.continue-btn:hover {
+  background: #14402A;
+}
 
 /* Status Bar Row (File Changes + Tokens) */
 .status-bar-row {

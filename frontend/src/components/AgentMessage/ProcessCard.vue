@@ -75,10 +75,9 @@
                 />
             </div>
 
-            <!-- CASE 3: Tool Execution -->
-            <div v-else-if="item.type === 'tool'" class="tool-row">
+            <!-- CASE 3: Tool Execution（单行：人性化名称 + 状态；原始代号收进 title 提示） -->
+            <div v-else-if="item.type === 'tool'" class="tool-row" :title="rawToolName(item.code)">
                 <div class="tool-content">
-                     <span class="tool-label">执行工具</span>
                      <span class="tool-name">{{ formatToolName(item.code) }}</span>
                 </div>
                 <div class="tool-status">
@@ -109,6 +108,7 @@
 import { computed, ref, watch } from 'vue'
 import ThinkingCard from './ThinkingCard.vue'
 import FileTypeIcon from '../FileTypeIcon.vue'
+import { toolDisplayName, toolRawName } from '@/utils/toolDisplayNames.js'
 
 const props = defineProps({
   process: { type: Object, required: true }
@@ -125,7 +125,14 @@ const isHeadless = computed(() => {
 })
 
 const processTitle = computed(() => {
-    return props.process.title || 'Processing...'
+    const t = props.process.title || 'Processing...'
+    // 模型偶尔把 process 命名成笼统的「工具执行」——与内部的「执行工具 xxx」行
+    // 冗余（用户反馈）。此时直接用第一个工具的人性化名称当标题。
+    if (t === '工具执行' || t === 'Processing...' || t === 'Tool Execution') {
+        const firstTool = (props.process.items || []).find(it => it.type === 'tool' && it.code)
+        if (firstTool) return toolDisplayName(firstTool.code)
+    }
+    return t
 })
 
 const isFinished = computed(() => {
@@ -156,13 +163,11 @@ watch(() => props.process.items?.length, (newLen, oldLen) => {
 
 const formatToolName = (code) => {
     if (!code) return 'Tool Call'
-    if (code.includes('read_document')) return '读取文档'
-    if (code.includes('write_docx')) return '撰写文档'
-    if (code.includes('pptx_generate')) return '生成幻灯片'
-
-    const match = code.match(/^([\w_.]+)\(/)
-    return match ? match[1] : (code.length > 40 ? code.substring(0, 37) + '...' : code)
+    const name = toolDisplayName(code)
+    return name.length > 40 ? name.substring(0, 37) + '...' : name
 }
+
+const rawToolName = (code) => toolRawName(code)
 
 const detectFile = (text) => {
     if (!text) return null
@@ -389,17 +394,8 @@ const isSecondaryContent = (text) => {
     min-width: 0;
 }
 
-.tool-label {
-    font-size: 10px;
-    color: #6C757D;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    flex-shrink: 0;
-}
-
 .tool-name {
-    font-family: ui-monospace, SFMono-Regular, monospace;
-    font-size: 11px;
+    font-size: 12px;
     color: #1A5336;
     font-weight: 500;
     white-space: nowrap;

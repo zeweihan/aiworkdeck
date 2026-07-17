@@ -225,6 +225,21 @@
                 </view>
               </view>
 
+              <!-- 博查搜索（AI 网络搜索工具） -->
+              <view class="provider-card">
+                <view class="provider-header">
+                  <text class="provider-name">博查搜索 (Bocha AI)</text>
+                </view>
+                <view class="form-row">
+                  <text class="form-label">API Key</text>
+                  <input
+                    v-model="form.external.bocha.apiKey"
+                    class="form-input"
+                    placeholder="AI 助手「网络搜索」所需，bochaai.com 申请"
+                  />
+                </view>
+              </view>
+
               <!-- ElevenLabs -->
               <view class="provider-card">
                 <view class="provider-header">
@@ -578,6 +593,7 @@ export default {
           tushare: { baseUrl: '', token: '' },
           aliyunOcr: { accessKeyId: '', accessKeySecret: '', endpoint: '', regionId: '', publicBaseUrl: '' },
           pkulaw: { token: '' },
+          bocha: { apiKey: '' },
           elevenLabs: { apiKey: '', baseUrl: '', modelId: '', defaultVoiceId: '' },
         },
         ai: {
@@ -780,6 +796,9 @@ export default {
             },
             pkulaw: {
               token: data.external.pkulaw?.token || '',
+            },
+            bocha: {
+              apiKey: data.external.bocha?.apiKey || '',
             },
             elevenLabs: {
               apiKey: data.external.elevenLabs?.apiKey || '',

@@ -99,6 +99,10 @@ public class AdminConfigController {
     @Value("${external.pkulaw.token:}")
     private String defaultPkulawToken;
 
+    // 博查搜索默认值（search_web 工具使用；与 WebTools 的 bocha.api.key 同源）
+    @Value("${bocha.api.key:}")
+    private String defaultBochaApiKey;
+
     // ElevenLabs 默认值
     @Value("${external.elevenlabs.api-key:}")
     private String defaultElevenLabsApiKey;
@@ -146,6 +150,9 @@ public class AdminConfigController {
 
     // PKULaw
     private static final String KEY_PKULAW_TOKEN = "external.pkulaw.token";
+
+    // 博查搜索（Bocha AI）
+    private static final String KEY_BOCHA_API_KEY = "external.bocha.apiKey";
 
     // ElevenLabs
     private static final String KEY_ELEVENLABS_API_KEY = "external.elevenlabs.apiKey";
@@ -197,6 +204,9 @@ public class AdminConfigController {
 
         // PKULaw
         defaults.put(KEY_PKULAW_TOKEN, defaultPkulawToken);
+
+        // 博查搜索
+        defaults.put(KEY_BOCHA_API_KEY, defaultBochaApiKey);
 
         // ElevenLabs
         defaults.put(KEY_ELEVENLABS_API_KEY, defaultElevenLabsApiKey);
@@ -253,6 +263,9 @@ public class AdminConfigController {
         ));
         external.setPkulaw(new PkulawConfig(
                 all.get(KEY_PKULAW_TOKEN)
+        ));
+        external.setBocha(new BochaConfig(
+                all.get(KEY_BOCHA_API_KEY)
         ));
         external.setElevenLabs(new ElevenLabsConfig(
                 all.get(KEY_ELEVENLABS_API_KEY),
@@ -394,6 +407,9 @@ public class AdminConfigController {
             if (ext.getPkulaw() != null) {
                 updates.put(KEY_PKULAW_TOKEN, safe(ext.getPkulaw().getToken()));
             }
+            if (ext.getBocha() != null) {
+                updates.put(KEY_BOCHA_API_KEY, safe(ext.getBocha().getApiKey()));
+            }
             if (ext.getElevenLabs() != null) {
                 updates.put(KEY_ELEVENLABS_API_KEY, safe(ext.getElevenLabs().getApiKey()));
                 updates.put(KEY_ELEVENLABS_BASE_URL, safe(ext.getElevenLabs().getBaseUrl()));
@@ -477,6 +493,7 @@ public class AdminConfigController {
         private TushareConfig tushare;
         private AliyunOcrConfig aliyunOcr;
         private PkulawConfig pkulaw;
+        private BochaConfig bocha;
         private ElevenLabsConfig elevenLabs;
 
         public GoogleConfig getGoogle() { return google; }
@@ -491,6 +508,8 @@ public class AdminConfigController {
         public void setAliyunOcr(AliyunOcrConfig aliyunOcr) { this.aliyunOcr = aliyunOcr; }
         public PkulawConfig getPkulaw() { return pkulaw; }
         public void setPkulaw(PkulawConfig pkulaw) { this.pkulaw = pkulaw; }
+        public BochaConfig getBocha() { return bocha; }
+        public void setBocha(BochaConfig bocha) { this.bocha = bocha; }
         public ElevenLabsConfig getElevenLabs() { return elevenLabs; }
         public void setElevenLabs(ElevenLabsConfig elevenLabs) { this.elevenLabs = elevenLabs; }
     }
@@ -589,6 +608,14 @@ public class AdminConfigController {
         public PkulawConfig(String token) { this.token = token; }
         public String getToken() { return token; }
         public void setToken(String token) { this.token = token; }
+    }
+
+    public static class BochaConfig {
+        private String apiKey;
+        public BochaConfig() {}
+        public BochaConfig(String apiKey) { this.apiKey = apiKey; }
+        public String getApiKey() { return apiKey; }
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
     }
 
     public static class ElevenLabsConfig {

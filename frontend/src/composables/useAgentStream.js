@@ -23,6 +23,9 @@ export function useAgentStream() {
     // STATE: Agent 任务清单（todo_write 驱动的常驻进度卡），plan_update 事件整表覆写
     const planTodos = ref([]) // Array of { content, activeForm, status }
 
+    // STATE: 步数超限暂停（bubble_end status=paused）——前端据此渲染一键「继续」按钮
+    const agentPaused = ref(null) // null | { reason }
+
     // POINTER: The current bubble we are writing to (Assistant)
     const currentAssistantBubble = ref(null)
 
@@ -95,6 +98,7 @@ export function useAgentStream() {
         tokenUsage.value = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
         // 切换会话时清空任务清单进度卡（重连后由后端 plan_update 恢复）
         planTodos.value = []
+        agentPaused.value = null
         // Clear bubble pointer (will be set fresh on next send)
         currentAssistantBubble.value = null
     }
@@ -205,6 +209,8 @@ export function useAgentStream() {
         }
         // Clear file changes for new turn
         fileChanges.value = []
+        // 新一轮开始即清除暂停态（无论是点「继续」还是发新消息）
+        agentPaused.value = null
 
         // 1. Add User Message with images and context files for display
         bubbles.value.push(createUserBubble(prompt, _userImages, _userContextFiles, contentHtml))
@@ -458,6 +464,13 @@ export function useAgentStream() {
             }
             // 终态收敛：流结束后不允许任何卡片停留在"执行中/加载中"
             finalizeProcesses(evt === 'error' ? 'error' : 'success')
+            // 步数超限暂停（后端 status=paused）：置位供 UI 渲染「继续」按钮
+            if (evt === 'bubble_end') {
+                try {
+                    const d = JSON.parse(dataStr || '{}')
+                    agentPaused.value = d.status === 'paused' ? { reason: d.reason || '' } : null
+                } catch (e) { agentPaused.value = null }
+            }
             // Ensure error is visible
             // 注意：错误必须写入 content（walkthrough 卡片当前未渲染，写那里用户永远看不到）
             if (evt === 'error') {
@@ -899,12 +912,19 @@ export function useAgentStream() {
 
                 const processTitle = attributes['name'] || 'Processing...'
 
+                // 归组到 plan 步骤：plan_update 与文本流在同一 SSE 流里按序到达，
+                // 新 process 打开那一刻的 in_progress 项就是它所属的步骤。
+                // （todo_write 自己所在的 process 会归到上一步/未分组，可接受。）
+                const stepIdx = planTodos.value.findIndex(t => t.status === 'in_progress')
+
                 bubble.processes.push({
                     id: pid,
                     title: processTitle,
                     isExpanded: true,
                     items: [], // CHANGED: from steps -> items
-                    content: ''
+                    content: '',
+                    stepIndex: stepIdx,
+                    stepTitle: stepIdx >= 0 ? (planTodos.value[stepIdx].content || '') : ''
                 })
                 activeProcessId = pid
                 activeTag = 'process'
@@ -1128,6 +1148,7 @@ export function useAgentStream() {
         backgroundTasks,
         lastHeartbeat,
         planTodos,
+        agentPaused,
         // Load metadata for historical conversations
         loadConversationMetadata: async (conversationId) => {
             if (!conversationId) return
