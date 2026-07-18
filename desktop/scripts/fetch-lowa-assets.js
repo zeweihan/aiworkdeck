@@ -154,6 +154,24 @@ function fetchUrl(url, headers) {
   return get(url, headers);
 }
 
+// Transient CDN failures (mid-handshake TLS disconnects, 5xx) can strike several
+// times in a row during a release; retry each download with backoff before
+// failing the build. Deterministic failures (encoding mismatch, magic check on a
+// complete body) happen after this layer and are NOT retried.
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function fetchUrlWithRetry(url, headers, attempts = 3) {
+  for (let i = 1; ; i++) {
+    try { return await fetchUrl(url, headers); }
+    catch (e) {
+      if (i >= attempts) throw e;
+      const delay = 2000 * i;
+      console.warn('\n  ! ' + url + ' failed (attempt ' + i + '/' + attempts + '): ' +
+        (e.message || e) + '; retrying in ' + (delay / 1000) + 's');
+      await sleep(delay);
+    }
+  }
+}
+
 // GET with up to 5 redirects; resolves {encoding, body:Buffer}.
 function get(url, headers, redirects = 0) {
   const mod = url.startsWith('http://') ? http : https;
@@ -246,7 +264,7 @@ async function fetchAsset(a) {
   process.stdout.write('  ↓ ' + a.dest + ' …');
   // 'static' assets are served without encoding replay, so insist on identity.
   const reqHeaders = a.serve === 'static' ? { 'Accept-Encoding': 'identity' } : {};
-  const { encoding, body } = await fetchUrl(a.url, reqHeaders);
+  const { encoding, body } = await fetchUrlWithRetry(a.url, reqHeaders);
   const enc = encoding || null;
   // Default CDN: assert the encoding we expect, so a CDN change trips the build.
   // Custom LOWA_BASE_URL: the encoding is unknown, so accept whatever the source
