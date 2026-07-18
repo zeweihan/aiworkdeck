@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src="https://www.aiworkdeck.com/images/hero-dashboard.png" alt="AI Workdeck dashboard" width="900">
+    <img src="https://www.aiworkdeck.com/images/workspace-ai.png" alt="AI Workdeck — project workspace with document preview and AI agent panel (real product screenshot)" width="900">
   </a>
 </p>
 
@@ -68,6 +68,17 @@ Double-click to install. On first launch, a setup wizard lets you pick one AI pr
 | Website | [aiworkdeck.com](https://www.aiworkdeck.com) |
 | Product walkthrough | [Intro video](https://www.aiworkdeck.com/videos/intro.mp4) |
 | Feature showcase | [AI Workdeck Showcase](https://www.aiworkdeck.com/zh/showcase) |
+
+## Screenshots
+
+The workspace above is a real product screenshot (demo project with fictitious data). Below: the plugin & skill marketplace, and a design preview of where the document workbench is heading.
+
+<p align="center">
+  <img src="https://www.aiworkdeck.com/images/plugin-marketplace.png" alt="Plugin and skill marketplace (design preview)" width="900">
+</p>
+<p align="center">
+  <img src="https://www.aiworkdeck.com/images/workdeck-vision.png" alt="Document workbench with AI redlines (design preview)" width="900">
+</p>
 
 ## Core Capabilities
 
