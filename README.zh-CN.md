@@ -306,7 +306,7 @@ AI Workdeck 社区版基于 GNU Affero General Public License v3.0 发布。
 
 <p align="center">
   <a href="https://github.com/zeweihan/aiworkdeck/stargazers">
-    <img src=".github/assets/star-history.svg" alt="Star 历史曲线" width="760">
+    <img src="https://raw.githubusercontent.com/zeweihan/aiworkdeck/star-history/star-history.svg" alt="Star 历史曲线" width="760">
   </a>
 </p>
 <p align="center">

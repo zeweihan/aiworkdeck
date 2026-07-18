@@ -309,7 +309,7 @@ Read [WHY.md](WHY.md) for the product thesis and founder story.
 
 <p align="center">
   <a href="https://github.com/zeweihan/aiworkdeck/stargazers">
-    <img src=".github/assets/star-history.svg" alt="Star history chart" width="760">
+    <img src="https://raw.githubusercontent.com/zeweihan/aiworkdeck/star-history/star-history.svg" alt="Star history chart" width="760">
   </a>
 </p>
 <p align="center">

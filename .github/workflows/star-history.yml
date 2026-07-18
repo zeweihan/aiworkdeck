@@ -25,14 +25,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           STAR_TOKEN: ${{ secrets.STAR_TOKEN }}
         run: node scripts/star-history.mjs
-      - name: Commit if changed
+      - name: Publish to star-history branch
+        # master 有分支保护推不动；图表发布到专用非保护分支，README 引用其 raw URL
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if ! git diff --quiet -- .github/assets/star-history.svg; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add .github/assets/star-history.svg
-            git commit -m "chore: refresh star history chart [skip ci]"
-            git push
-          else
-            echo "chart unchanged"
-          fi
+          mkdir /tmp/pub
+          cp .github/assets/star-history.svg /tmp/pub/
+          cd /tmp/pub
+          git init -b star-history
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add star-history.svg
+          git commit -m "chore: refresh star history chart"
+          git push --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" star-history
