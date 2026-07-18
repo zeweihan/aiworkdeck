@@ -1,28 +1,33 @@
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src="https://www.aiworkdeck.com/images/workspace-ai.png" alt="AI Workdeck — project workspace with document preview and AI agent panel (real product screenshot)" width="900">
+    <img src="https://www.aiworkdeck.com/icon.png" width="88" alt="AI Workdeck logo">
   </a>
 </p>
 
 <h1 align="center">AI Workdeck</h1>
 
 <p align="center">
-  <strong>The AI-native workspace for legal and document-heavy work.</strong>
+  <strong>The AI-native workspace for legal and document-heavy work.</strong><br>
+  <sub>让法律人聚焦专业判断 — 面向法律与文档密集型团队的 AI 原生工作台</sub>
 </p>
 
 <p align="center">
   <a href="https://github.com/zeweihan/aiworkdeck/stargazers"><img src="https://img.shields.io/github/stars/zeweihan/aiworkdeck?style=social" alt="Stars"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/network/members"><img src="https://img.shields.io/github/forks/zeweihan/aiworkdeck?style=social" alt="Forks"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck" alt="Release"></a>
+  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/github/v/release/zeweihan/aiworkdeck?color=1A5336" alt="Release"></a>
+  <a href="https://github.com/zeweihan/aiworkdeck/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-1A5336" alt="Platform"></a>
   <a href="legal/LICENSE"><img src="https://img.shields.io/badge/license-AGPLv3-blue.svg" alt="License: AGPLv3"></a>
-  <a href="legal/COMMERCIAL-LICENSE.md"><img src="https://img.shields.io/badge/commercial%20license-available-0b5f3a.svg" alt="Commercial license"></a>
-  <a href="https://www.aiworkdeck.com"><img src="https://img.shields.io/badge/website-aiworkdeck.com-0b5f3a.svg" alt="Website"></a>
-  <a href="https://github.com/zeweihan/aiworkdeck/issues"><img src="https://img.shields.io/github/issues/zeweihan/aiworkdeck" alt="Issues"></a>
-  <a href="https://star-history.com/#zeweihan/aiworkdeck&Date"><img src="https://img.shields.io/github/stars/zeweihan/aiworkdeck?style=social&label=Star%20History" alt="Star History"></a>
+  <a href="legal/COMMERCIAL-LICENSE.md"><img src="https://img.shields.io/badge/commercial%20license-available-1A5336.svg" alt="Commercial license"></a>
+  <a href="https://www.aiworkdeck.com"><img src="https://img.shields.io/badge/website-aiworkdeck.com-1A5336.svg" alt="Website"></a>
 </p>
 
 <p align="center">
-  English | <a href="https://www.aiworkdeck.com/zh">中文</a>
+  <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a>
+</p>
+
+<p align="center">
+  <a href="https://www.aiworkdeck.com">
+    <img src="https://www.aiworkdeck.com/images/workspace-ai.png" alt="AI Workdeck — project workspace with document preview and AI agent panel (real product screenshot)" width="900">
+  </a>
 </p>
 
 ---
@@ -302,7 +307,9 @@ Read [WHY.md](WHY.md) for the product thesis and founder story.
 
 ## ⭐ Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=zeweihan/aiworkdeck&type=Date)](https://star-history.com/#zeweihan/aiworkdeck&Date)
+<p align="center">
+  <a href="https://star-history.com/#zeweihan/aiworkdeck&Date">View the star history chart →</a>
+</p>
 
 <p align="center">
   If this direction matters to you, please <a href="https://github.com/zeweihan/aiworkdeck/stargazers">⭐ star the repo</a> and share it with someone building legal AI, document AI, or professional-service infrastructure.
