@@ -1,6 +1,7 @@
 const path = require('path')
 const fs = require('fs')
 const { findFreePort } = require('./service-manager')
+const { pysvcPath } = require('./pysvc-runtime')
 
 function pyBin(ctx) {
   return process.platform === 'win32'
@@ -9,7 +10,7 @@ function pyBin(ctx) {
 }
 
 function libDir(ctx) {
-  return path.join(ctx.resourcesPath, 'pysvc', 'mineru-service', 'lib')
+  return pysvcPath(ctx, 'mineru-service', 'lib')
 }
 
 function modelsDir(ctx) {

@@ -2,6 +2,7 @@ const path = require('path')
 const fs = require('fs')
 const { spawnSync } = require('child_process')
 const { findFreePort } = require('./service-manager')
+const { pysvcPath } = require('./pysvc-runtime')
 
 function pyBin(ctx) {
   return process.platform === 'win32'
@@ -10,11 +11,11 @@ function pyBin(ctx) {
 }
 
 function appDir(ctx) {
-  return path.join(ctx.resourcesPath, 'pysvc', 'pptx-service', 'app')
+  return pysvcPath(ctx, 'pptx-service', 'app')
 }
 
 function libDir(ctx) {
-  return path.join(ctx.resourcesPath, 'pysvc', 'pptx-service', 'lib')
+  return pysvcPath(ctx, 'pptx-service', 'lib')
 }
 
 function dataDir(ctx) {

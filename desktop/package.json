@@ -10,7 +10,7 @@
     "dev": "cross-env AIWORKDECK_DESKTOP_DEV=1 electron .",
     "start": "electron .",
     "build": "electron-builder",
-    "test": "node --test tests/service-manager.test.js tests/model-manager.test.js"
+    "test": "node --test tests/service-manager.test.js tests/model-manager.test.js tests/pysvc-runtime.test.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
@@ -52,8 +52,12 @@
         "to": "python"
       },
       {
-        "from": "bundled/${os}-${arch}/pysvc",
-        "to": "pysvc"
+        "from": "bundled/${os}-${arch}/pysvc.tar.gz",
+        "to": "pysvc.tar.gz"
+      },
+      {
+        "from": "bundled/${os}-${arch}/pysvc.meta.json",
+        "to": "pysvc.meta.json"
       }
     ],
     "mac": {

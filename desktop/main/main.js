@@ -1215,13 +1215,87 @@ const COMPONENT_SERVICE = {
   'kokoro-models': 'kokoro-service'
 }
 
+// 打包态 pysvc 不再随 .app 携带目录，而是 Resources/pysvc.tar.gz 首启解压到
+// 用户数据目录（见 services/pysvc-runtime.js 顶部说明）。返回解压产物里的
+// pysvc 根目录；dev 态或旧布局（无 tar 包，pysvc 目录直接在 Resources）返回 null，
+// 服务代码经 pysvcPath() 回退到 resourcesPath/pysvc。
+function resolvePysvcRoot() {
+  if (!app.isPackaged) return null
+  const fs = require('fs')
+  if (!fs.existsSync(path.join(process.resourcesPath, 'pysvc.tar.gz'))) return null
+  return path.join(app.getPath('userData'), 'pysvc-' + app.getVersion(), 'pysvc')
+}
+
+// 首启/升级后的 pysvc 解压（幂等）。带一个极简进度窗——mineru lib 解压要数十秒，
+// 无提示会被当成"点了没反应"。失败不阻塞主流程：弹框告知后照常开窗，
+// 相关 Python 服务会各自启动失败并落日志。
+async function ensurePysvcReady() {
+  const root = resolvePysvcRoot()
+  if (!root) return
+  const { ensurePysvcExtracted, MARKER } = require('./services/pysvc-runtime')
+  const fs = require('fs')
+  const versionDir = path.dirname(root)
+  if (fs.existsSync(path.join(versionDir, MARKER))) return // 常规启动零开销快路径
+
+  let splash = null
+  const setProgress = (percent) => {
+    if (!splash || splash.isDestroyed()) return
+    const p = typeof percent === 'number' ? percent : -1
+    splash.webContents.executeJavaScript(`window.__setP && window.__setP(${p})`).catch(() => {})
+  }
+  try {
+    splash = new BrowserWindow({
+      width: 420,
+      height: 160,
+      frame: false,
+      resizable: false,
+      show: false,
+      webPreferences: { nodeIntegration: false, contextIsolation: true }
+    })
+    const html = `<!doctype html><meta charset="utf-8">
+      <body style="margin:0;font:14px -apple-system,'Segoe UI',sans-serif;background:#1e1f24;color:#e8e8ea;display:flex;align-items:center;justify-content:center;height:100vh;user-select:none">
+        <div style="width:320px;text-align:center">
+          <div style="margin-bottom:6px">正在准备本地组件…</div>
+          <div style="font-size:12px;color:#9a9aa2;margin-bottom:14px">首次启动或版本更新后需解压，约一分钟</div>
+          <div style="background:#33343c;border-radius:4px;height:8px;overflow:hidden">
+            <div id="bar" style="background:#4f8cff;height:100%;width:0%;transition:width .4s"></div>
+          </div>
+          <div id="pct" style="font-size:12px;color:#9a9aa2;margin-top:8px">&nbsp;</div>
+        </div>
+        <script>window.__setP=function(p){if(p>=0){document.getElementById('bar').style.width=p+'%';document.getElementById('pct').textContent=p+'%'}}</script>
+      </body>`
+    splash.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
+    splash.once('ready-to-show', () => { try { splash.show() } catch (e) { /* ignore */ } })
+  } catch (e) {
+    splash = null // 无窗口也照样解压
+  }
+
+  const result = await ensurePysvcExtracted({
+    archive: path.join(process.resourcesPath, 'pysvc.tar.gz'),
+    metaFile: path.join(process.resourcesPath, 'pysvc.meta.json'),
+    versionDir,
+    onProgress: ({ percent }) => setProgress(percent)
+  })
+  try { if (splash && !splash.isDestroyed()) splash.destroy() } catch (e) { /* ignore */ }
+  if (!result.ok) {
+    console.error('[pysvc] extract failed:', result.message)
+    try {
+      const { dialog } = require('electron')
+      dialog.showErrorBox('本地组件解压失败', `部分本地功能（文档解析/PPT/语音）将不可用：\n${result.message || ''}`)
+    } catch (e) { /* ignore */ }
+  }
+}
+
 function createServices() {
-  // 打包模式下 jar/JRE/python 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck
+  // 打包模式下 jar/JRE/python 从 resourcesPath 解析（Epic #18 T2），数据落 ~/.aiworkdeck；
+  // pysvc 落用户数据目录（首启解压，见 ensurePysvcReady）
   const dataDir = path.join(app.getPath('home'), '.aiworkdeck')
+  const pysvcRoot = resolvePysvcRoot()
   if (!modelManager) {
     modelManager = createModelManager({
       dataDir,
       resourcesPath: process.resourcesPath,
+      pysvcRoot,
       packaged: app.isPackaged,
       onProgress: (evt) => {
         try {
@@ -1239,6 +1313,7 @@ function createServices() {
     projectRoot: path.join(__dirname, '..', '..'),
     packaged: app.isPackaged,
     resourcesPath: process.resourcesPath,
+    pysvcRoot,
     dataDir
   })
   mgr.register(createBackendDescriptor())
@@ -1325,10 +1400,14 @@ app.whenReady().then(() => {
       try { if (mainWindow) mainWindow.webContents.send('checkba:zetaoffice-open-embed') } catch (e) { /* ignore */ }
     })
   } catch (e) { /* ignore */ }
-  // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 打包态的 pptx-service）
-  services = createServices()
-  services
-    .allocatePorts()
+  // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 打包态的 pptx-service）；
+  // 打包态先确保 pysvc 已解压（首启/升级后带进度窗，常规启动是零开销快路径）
+  ensurePysvcReady()
+    .catch((e) => console.error('[pysvc]', e))
+    .then(() => {
+      services = createServices()
+      return services.allocatePorts()
+    })
     .then(() => services.startEager())
     .then((results) => {
       createMainWindow()

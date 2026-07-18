@@ -34,9 +34,7 @@ function dirSize(root) {
   return total
 }
 
-function mineruLib(resourcesPath) {
-  return path.join(resourcesPath || '', 'pysvc', 'mineru-service', 'lib')
-}
+const { pysvcPath } = require('./pysvc-runtime')
 
 function pyBin(resourcesPath) {
   return process.platform === 'win32'
@@ -64,7 +62,7 @@ const COMPONENTS = [
         ],
         env: {
           ...process.env,
-          PYTHONPATH: mineruLib(ctx.resourcesPath),
+          PYTHONPATH: pysvcPath(ctx, 'mineru-service', 'lib'),
           MINERU_MODEL_SOURCE: 'modelscope',
           MODELSCOPE_CACHE: dir,
           HF_HOME: path.join(dir, 'hf'),
@@ -91,7 +89,7 @@ const COMPONENTS = [
         ],
         env: {
           ...process.env,
-          PYTHONPATH: path.join(ctx.resourcesPath || '', 'pysvc', 'kokoro-service', 'lib'),
+          PYTHONPATH: pysvcPath(ctx, 'kokoro-service', 'lib'),
           HF_HOME: dir,
           HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com',
           // 打包内带 hf_xet：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS
@@ -110,6 +108,7 @@ class ModelManager {
     this.ctx = {
       dataDir: opts.dataDir,
       resourcesPath: opts.resourcesPath,
+      pysvcRoot: opts.pysvcRoot || null,
       packaged: !!opts.packaged
     }
     this.onProgress = opts.onProgress || (() => {})

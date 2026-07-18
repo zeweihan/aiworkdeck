@@ -282,6 +282,14 @@ jobs:
           tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
           kill $KOKORO_PID 2>/dev/null || true
           exit 1
+      - name: Pack pysvc archive (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # 上万个 Python 小文件不再直接进 .app：签名（sign-mac-natives.sh 已给
+          # 每个 Mach-O 打 Developer ID + 时间戳——公证会扫嵌套压缩包，未签名照拒）
+          # 与冒烟测试之后整体打成单个 pysvc.tar.gz，electron-builder 的签名/公证
+          # 阶段从上万文件降到一个文件，消除时间戳服务抖动。首启由主进程解压。
+          node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/mac-arm64
       - name: Package installers (macOS, signed & notarized)
         if: runner.os == 'macOS'
         working-directory: desktop
@@ -427,6 +435,12 @@ jobs:
           tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
           kill $KOKORO_PID 2>/dev/null || true
           exit 1
+      - name: Pack pysvc archive (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # 与 macOS 同构：安装包只带一个 pysvc.tar.gz（文件数大降、安装更快），首启解压
+          node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/win-x64
       - name: Package installers (Windows, unsigned)
         if: runner.os == 'Windows'
         working-directory: desktop
