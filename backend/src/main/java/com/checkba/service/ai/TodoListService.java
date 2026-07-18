@@ -109,7 +109,7 @@ public class TodoListService {
             if (pending.size() > 3) sb.append(" 等 ").append(pending.size()).append(" 项");
             sb.append("。");
         }
-        sb.append("（完成一项立即用 todo_write 整表更新状态，不要攒批；全部完成后输出 <final> 汇总。）");
+        sb.append("（有进展就用 todo_write 整表更新；同一轮完成多项可合并为一次更新；全部完成后输出 <final> 汇总。）");
         return sb.toString();
     }
 

@@ -41,6 +41,10 @@ export function useAgentStream() {
     let parserBuffer = ''
     let activeTag = null
     let activeProcessId = null
+    // 当前 <tool_output> 归属的 tool 条目：一轮多工具时后端按调用顺序补发多个
+    // tool_output，必须 FIFO 归属到「第一个仍在 loading 的 tool」——按"最后一个
+    // tool"归属会把所有结果都错挂到最后一个调用上。
+    let activeToolItem = null
     // Event parser state
     let currentEventName = null
     let currentEventData = ''
@@ -76,6 +80,7 @@ export function useAgentStream() {
         parserBuffer = ''
         activeTag = null
         activeProcessId = null
+        activeToolItem = null
     }
 
     // --- RESET SSE CONNECTION STATE ---
@@ -818,22 +823,22 @@ export function useAgentStream() {
                 }
             }
         } else if (activeTag === 'tool_output') {
-            const p = bubble.processes.find(x => x.id === activeProcessId)
-            if (p) {
-                // Attach output to the LAST tool item
-                // Use reverse search
-                const toolItem = [...p.items].reverse().find(i => i.type === 'tool')
-                if (toolItem) {
-                    toolItem.output += text
-                    // ONLY use heuristic if status wasn't set by backend (i.e., still 'loading')
-                    // If backend already set status via <tool_output status="..."> attribute, do NOT override
-                    if (toolItem.status === 'loading') {
-                        // Fallback heuristic for legacy backends without status attribute
-                        if (toolItem.output.includes('Error') || toolItem.output.includes('Exception')) {
-                            toolItem.status = 'error'
-                        }
-                        // Do NOT set to 'success' here - wait for tag close or explicit status
+            // FIFO 归属：tool_output 打开时已锁定目标条目（activeToolItem）
+            let toolItem = activeToolItem
+            if (!toolItem) {
+                const p = bubble.processes.find(x => x.id === activeProcessId)
+                if (p) toolItem = [...p.items].reverse().find(i => i.type === 'tool')
+            }
+            if (toolItem) {
+                toolItem.output += text
+                // ONLY use heuristic if status wasn't set by backend (i.e., still 'loading')
+                // If backend already set status via <tool_output status="..."> attribute, do NOT override
+                if (toolItem.status === 'loading') {
+                    // Fallback heuristic for legacy backends without status attribute
+                    if (toolItem.output.includes('Error') || toolItem.output.includes('Exception')) {
+                        toolItem.status = 'error'
                     }
+                    // Do NOT set to 'success' here - wait for tag close or explicit status
                 }
             }
         } else if (activeTag === 'walkthrough') {
@@ -1039,50 +1044,31 @@ export function useAgentStream() {
                 }
                 activeProcessId = null
                 // Check if tool output contains file creation success JSON (legacy check, keep for now)
-                // Search in activeProcessId first, then fallback to all processes
-                let toolItem = null
-                const p = bubble.processes.find(x => x.id === activeProcessId)
-                if (p) {
-                    toolItem = [...p.items].reverse().find(i => i.type === 'tool')
-                }
-                // Fallback: search all processes for the last tool
-                if (!toolItem) {
-                    for (let i = bubble.processes.length - 1; i >= 0; i--) {
-                        const lastTool = [...bubble.processes[i].items].reverse().find(item => item.type === 'tool')
-                        if (lastTool) {
-                            toolItem = lastTool
-                            break
-                        }
-                    }
-                }
-                if (toolItem && toolItem.output) {
-                    if (toolItem.output.includes('"wps_file_id":') && toolItem.output.includes('"status":"success"')) {
+                const closedItem = activeToolItem
+                if (closedItem && closedItem.output) {
+                    if (closedItem.output.includes('"wps_file_id":') && closedItem.output.includes('"status":"success"')) {
                         console.log('[AgentStream] Detected file creation')
                         if (clientActionHandler.value) clientActionHandler.value({ action: 'refresh_files' })
                     }
                 }
+                activeToolItem = null
             } else {
                 // Open Tag: Parse Status Attribute
                 const statusAttr = attributes['status'] // Expect "SUCCESS" or "FAILURE"
 
-                // Find the tool item to update - first try activeProcessId, then search all
+                // FIFO 归属：一轮多工具时后端按调用顺序补发多个 tool_output，
+                // 目标是「文档序最早、仍在 loading」的 tool 条目；没有 loading 的
+                // 再退回「最后一个 tool」（兼容旧的单工具流）。
                 let toolItem = null
-                const p = bubble.processes.find(x => x.id === activeProcessId)
-                if (p) {
-                    toolItem = [...p.items].reverse().find(i => i.type === 'tool')
+                outer:
+                for (const proc of bubble.processes) {
+                    for (const item of proc.items) {
+                        if (item.type === 'tool' && item.status === 'loading') { toolItem = item; break outer }
+                    }
                 }
-                // Fallback: search all processes for the most recent tool
-                // 工具可能还是 'loading' 或已被更新
                 if (!toolItem) {
-                    for (let i = bubble.processes.length - 1; i >= 0; i--) {
-                        const recentTool = [...bubble.processes[i].items].reverse().find(
-                            item => item.type === 'tool'
-                        )
-                        if (recentTool) {
-                            toolItem = recentTool
-                            activeProcessId = bubble.processes[i].id // Update activeProcessId for subsequent content
-                            break
-                        }
+                    for (let i = bubble.processes.length - 1; i >= 0 && !toolItem; i--) {
+                        toolItem = [...bubble.processes[i].items].reverse().find(item => item.type === 'tool') || null
                     }
                 }
 
@@ -1094,6 +1080,7 @@ export function useAgentStream() {
                     }
                     // If no status attribute, keep current status (loading) for heuristics/fallback
                 }
+                activeToolItem = toolItem
                 activeTag = 'tool_output'
             }
         } else if (tagName === 'walkthrough') {
