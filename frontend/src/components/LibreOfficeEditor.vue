@@ -253,6 +253,18 @@ export default {
         // pre-boot. The dev-probe toolbar in the experimental variant stays
         // disabled until then (ready=false).
         this.executor = createWebviewEditorExecutor(wv, { onReady: () => this.onEndpointReady() })
+        // 命令繁忙跟踪：AI 命令与用户输入都走这同一个 executor。autoSave 据此
+        // 避开活跃期（export_document 会冻结 office 线程上的 Qt 事件循环）。
+        this._cmdBusy = 0
+        this._lastCmdAt = 0
+        const innerExec = this.executor.executeCommand.bind(this.executor)
+        this.executor.executeCommand = async (action, params) => {
+          if (action === 'export_document') return innerExec(action, params) // 保存自身不算「活跃编辑」
+          this._cmdBusy++
+          this._lastCmdAt = Date.now()
+          try { return await innerExec(action, params) }
+          finally { this._cmdBusy--; this._lastCmdAt = Date.now() }
+        }
         this.statusText = this.file ? '加载文档中…' : '启动中…'
         this.appendLog('webview dom-ready — executor wired, awaiting office endpoint')
       } catch (e) {
@@ -361,6 +373,18 @@ export default {
     },
     async autoSave() {
       if (this.saving) { this.scheduleAutoSave(); return } // a save is in flight — retry after it
+      // 假死根因修复：export_document 是全文档同步序列化，跑在 office 线程上会把
+      // Qt 事件循环（滚动/输入/重绘）整段冻住。AI 修订风暴期间 modify 不断，旧的
+      // 15s max-wait 会把导出硬塞进风暴中间 → 用户「完全无法滚动的假死」。
+      // 改为：命令在飞或刚结束（<1.5s）时让路、等空闲窗口再导出；只有脏数据
+      // 超过 60s 才强制保存（崩溃丢失上限从 15s 放宽到 60s，换取修订期不冻结）。
+      const dirtyAge = this._dirtySince ? Date.now() - this._dirtySince : 0
+      const sinceCmd = Date.now() - (this._lastCmdAt || 0)
+      if ((this._cmdBusy > 0 || sinceCmd < 1500) && dirtyAge < 60000) {
+        clearTimeout(this._saveTimer)
+        this._saveTimer = setTimeout(() => this.autoSave(), 2000)
+        return
+      }
       this.dirty = false
       this._dirtySince = 0
       const ok = await this.saveDocument()
@@ -400,7 +424,9 @@ export default {
       try {
         const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
         this.appendLog('▶ export_document「' + name + '」…')
+        const tExp = Date.now()
         const res = await this.executor.executeCommand('export_document', { name })
+        this.appendLog('  ← export ' + (Date.now() - tExp) + 'ms')
         if (!res || !res.success) throw new Error((res && res.message) || 'export_document returned no success')
         // Structured clone across the relay hops may surface bytes as
         // Uint8Array / ArrayBuffer / plain array — normalize (mirror of the

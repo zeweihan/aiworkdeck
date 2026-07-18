@@ -467,9 +467,13 @@ const EXEC = {
     const sd = xModel.createSearchDescriptor();
     sd.setSearchString(String(p.keyword || ''));
     try { sd.setPropertyValue('SearchCaseSensitive', !!p.matchCase); } catch (e) {}
+    // 上限 50（原 200）：每个匹配要插一个书签 + 6 次光标遍历，全在 office 线程上
+    // 同步执行，200 个匹配足以把 Qt 事件循环冻住好几秒（修订期假死的贡献因素）。
+    // 消歧一个目标用不到 50 个候选；批量替换走 find_replace。
     const ranges = [];
     let hit = xModel.findFirst(sd);
-    while (hit !== null && ranges.length < 200) { ranges.push(hit); hit = xModel.findNext(hit, sd); }
+    while (hit !== null && ranges.length < 50) { ranges.push(hit); hit = xModel.findNext(hit, sd); }
+    const truncated = hit !== null;
     // Each match carries DISAMBIGUATION CONTEXT (chars before/after + enclosing
     // paragraph), so the AI can tell identical hits apart BEFORE editing — the
     // WPS-era "replaced the wrong one" class of bug dies here.
@@ -483,7 +487,9 @@ const EXEC = {
         paragraph: (paragraphTextOf(r) || '').slice(0, 160),
       };
     });
-    return { success: true, count: matches.length, matches: matches };
+    const res = { success: true, count: matches.length, matches: matches };
+    if (truncated) { res.truncated = true; res.note = '匹配超过 50 个，仅返回前 50——请用更长的关键词缩小范围，或用 find_replace 批量处理'; }
+    return res;
   },
   // [verified-extend] replace the Nth (0-based) match under RecordChanges.
   replace_nth_match(p) {

@@ -257,7 +257,8 @@ public class DocumentEditTools implements AgentToolComponent {
     // ==================== 查找和替换 ====================
 
     @Tool("【找】在文档中查找文本。每个匹配返回：anchorId（稳定锚点，编辑后依然有效）、前后文 contextBefore/contextAfter、所在段落 paragraph。" +
-          "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 配合 doc_select_anchor（选中查看）或 doc_replace_at_anchor（精准替换）操作。")
+          "有多个匹配时先根据上下文确认哪一个才是目标，再用 anchorId 直接 doc_replace_at_anchor（精准替换，会自动滚动定位并返回改后段落）。" +
+          "多处独立修改：拿到各自 anchorId 后在同一轮连续输出多个替换调用。目标文本全文唯一时不必先找，直接 doc_find_replace。")
     public String doc_find_text(
             @P("要查找的文本") String keyword,
             @P("是否区分大小写，默认 false") Boolean matchCase
@@ -592,8 +593,8 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @Tool("【改】把某个锚点（anchorId）处的文本替换为新文本，以修订模式进行。返回改动后所在段落的实际文本，务必核对确认改对了。" +
-          "这是最精准的替换方式：先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换。")
+    @Tool("【改】把某个锚点（anchorId）处的文本替换为新文本，以修订模式进行。会自动把编辑器视图滚动到该处；返回改动后所在段落的实际文本，核对该返回值即完成验证——不需要先 doc_select_anchor，也不需要改后再读文档。" +
+          "先 doc_find_text 拿到带上下文的匹配列表，选定目标的 anchorId 后用本工具替换；多处独立替换在同一轮连续输出多个调用。")
     public String doc_replace_at_anchor(
             @P("doc_find_text 返回的 anchorId") String anchorId,
             @P("新文本") String newText
