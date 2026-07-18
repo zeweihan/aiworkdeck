@@ -1,0 +1,38 @@
+# 每周重画自托管 Star History 曲线（README 内嵌 .github/assets/star-history.svg）。
+# 背景：GitHub 已限制 stargazer 明细仅仓库管理员可读，star-history.com 图床失效。
+# GITHUB_TOKEN 属于仓库自身，可读本仓库 stargazer；若未来权限再收紧，
+# 在仓库 Secrets 里加 STAR_TOKEN（fine-grained，Metadata read-only）即可接管。
+name: star-history
+
+on:
+  schedule:
+    - cron: '17 2 * * 1' # 每周一 02:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Generate chart
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STAR_TOKEN: ${{ secrets.STAR_TOKEN }}
+        run: node scripts/star-history.mjs
+      - name: Commit if changed
+        run: |
+          if ! git diff --quiet -- .github/assets/star-history.svg; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .github/assets/star-history.svg
+            git commit -m "chore: refresh star history chart [skip ci]"
+            git push
+          else
+            echo "chart unchanged"
+          fi

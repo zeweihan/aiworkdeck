@@ -305,7 +305,12 @@ AI Workdeck 社区版基于 GNU Affero General Public License v3.0 发布。
 ## ⭐ Star 趋势
 
 <p align="center">
-  <a href="https://star-history.com/#zeweihan/aiworkdeck&Date">查看 Star 历史曲线 →</a>
+  <a href="https://github.com/zeweihan/aiworkdeck/stargazers">
+    <img src=".github/assets/star-history.svg" alt="Star 历史曲线" width="760">
+  </a>
+</p>
+<p align="center">
+  <sub>自托管曲线图，由<a href=".github/workflows/star-history.yml">定时工作流</a>每周自动刷新。</sub>
 </p>
 
 <p align="center">

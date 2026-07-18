@@ -308,7 +308,12 @@ Read [WHY.md](WHY.md) for the product thesis and founder story.
 ## ⭐ Star History
 
 <p align="center">
-  <a href="https://star-history.com/#zeweihan/aiworkdeck&Date">View the star history chart →</a>
+  <a href="https://github.com/zeweihan/aiworkdeck/stargazers">
+    <img src=".github/assets/star-history.svg" alt="Star history chart" width="760">
+  </a>
+</p>
+<p align="center">
+  <sub>Self-hosted chart, refreshed weekly by <a href=".github/workflows/star-history.yml">a scheduled workflow</a>.</sub>
 </p>
 
 <p align="center">
