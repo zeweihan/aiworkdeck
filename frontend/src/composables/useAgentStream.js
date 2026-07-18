@@ -52,6 +52,9 @@ export function useAgentStream() {
         thinking: { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0 },
         title: '',
         processes: [],
+        // 本轮的任务清单快照（plan_update 时写入）：计划卡随消息流内联展示，
+        // 历史消息也能保留自己那轮的计划（planTodos 全局值只代表最新一轮）。
+        planTodos: [],
         artifacts: [],
         walkthrough: '',
         content: '', // Main Answer (from <final> tag)
@@ -224,6 +227,10 @@ export function useAgentStream() {
         // 2. Prepare Assistant Bubble
         const newBubble = createAssistantBubble()
         newBubble.isStreaming = true
+        // 思考计时从「发送」那一刻起算（用户感知的等待包含网络/排队），而不是
+        // 等 <thinking> 标签到达才起算——否则经常显示 0 秒且卡顿期间不读秒。
+        newBubble.thinking.status = 'thinking'
+        newBubble.thinking.startTime = Date.now()
         bubbles.value.push(newBubble)
         currentAssistantBubble.value = newBubble
 
@@ -279,7 +286,7 @@ export function useAgentStream() {
             if (err.name !== 'AbortError') {
                 error.value = err.message
                 if (currentAssistantBubble.value) {
-                    currentAssistantBubble.value.content += `\n**Error**: ${err.message}`
+                    currentAssistantBubble.value.content += `\n**错误**: ${err.message}`
                     currentAssistantBubble.value.isStreaming = false
                 }
                 isStreaming.value = false
@@ -346,6 +353,14 @@ export function useAgentStream() {
             try {
                 const d = JSON.parse(dataStr)
                 planTodos.value = Array.isArray(d.todos) ? d.todos : []
+                // 同步快照到当前气泡：计划卡在消息流里按时序内联展示（线性结构）。
+                // 重连/切回历史会话时气泡指针为空，兜底挂到最后一个助手气泡。
+                let target = currentAssistantBubble.value
+                if (!target) {
+                    const last = bubbles.value[bubbles.value.length - 1]
+                    if (last && last.role === 'ASSISTANT') target = last
+                }
+                if (target) target.planTodos = [...planTodos.value]
             } catch (e) {
                 console.error('Failed to parse plan_update', e)
             }
@@ -454,7 +469,7 @@ export function useAgentStream() {
                     currentAssistantBubble.value.isEditorStreaming = true
                     // Add a placeholder message if content is empty
                     if (!currentAssistantBubble.value.content) {
-                        currentAssistantBubble.value.content = '*(Streaming content to document...)*'
+                        currentAssistantBubble.value.content = '*（正在向文档流式写入内容…）*'
                     }
                 }
 
@@ -639,6 +654,8 @@ export function useAgentStream() {
                     bubble.artifacts = []
                     bubble.walkthrough = ''
                 }
+                // 重连恢复：把已收到的任务清单快照挂回本轮气泡（plan_update 可能先到）
+                bubble.planTodos = Array.isArray(planTodos.value) ? [...planTodos.value] : []
 
                 currentAssistantBubble.value = bubble
                 currentAssistantBubble.value.isStreaming = true
@@ -672,7 +689,7 @@ export function useAgentStream() {
             const pid = `proc-sys-${Date.now()}`
             proc = {
                 id: pid,
-                title: 'System Actions',
+                title: '系统操作',
                 isExpanded: true,
                 steps: [],
                 content: ''
@@ -738,7 +755,7 @@ export function useAgentStream() {
                 type: evt.type,
                 status: evt.status,
                 data: evt.data,
-                fileName: evt.name ? evt.name : (evt.type === 'task_list' ? 'Task List' : 'Plan')
+                fileName: evt.name ? evt.name : (evt.type === 'task_list' ? '任务清单' : '计划')
             })
         }
     }
@@ -836,12 +853,26 @@ export function useAgentStream() {
             // Untagged text -> Main Content
             if (!bubble.content && !text.trim()) return
 
+            // 可见正文开始流出 = 思考阶段结束（无 <final> 标签的旧格式也要收敛读秒）
+            settleRootThinking(bubble)
+
             // [Modified] If we are streaming to the document editor, suppress untagged content from chat bubble
             if (bubble.isEditorStreaming) {
                 return
             }
 
             bubble.content += text
+        }
+    }
+
+    // 根级思考收敛：首个可见产出（标题/过程/正文）出现时，思考阶段自然结束。
+    // 计时从发送起算，所以这里的 duration = 用户真实等待的「思考+排队」时长。
+    const settleRootThinking = (bubble) => {
+        const th = bubble && bubble.thinking
+        if (th && th.status === 'thinking') {
+            th.status = 'done'
+            th.endTime = Date.now()
+            th.duration = th.startTime ? (th.endTime - th.startTime) / 1000 : 0
         }
     }
 
@@ -909,13 +940,15 @@ export function useAgentStream() {
                 } else {
                     // Only root thinking if NO processes exist yet
                     bubble.thinking.status = 'thinking'
-                    bubble.thinking.startTime = Date.now()
+                    // 发送时已打过 startTime（读秒从发送起算），这里只兜底补齐
+                    if (!bubble.thinking.startTime) bubble.thinking.startTime = Date.now()
                     activeTag = 'thinking'
                 }
             }
         } else if (tagName === 'title') {
             if (isClose) activeTag = null
             else {
+                settleRootThinking(bubble)
                 activeTag = 'title'
                 bubble.title = ''
             }
@@ -936,6 +969,7 @@ export function useAgentStream() {
                 activeTag = null
                 activeProcessId = null
             } else {
+                settleRootThinking(bubble)
                 const pid = `proc-${Date.now()}`
                 // 新任务开始 = 之前所有任务的文字步骤都已结束（兜底收敛，防止历史卡片停留"执行中"）
                 bubble.processes.forEach(p => p.items?.forEach(item => {
@@ -1067,10 +1101,10 @@ export function useAgentStream() {
             else activeTag = 'walkthrough'
         } else if (tagName === 'final') {
             if (isClose) activeTag = null
-            else activeTag = 'final'
+            else { settleRootThinking(bubble); activeTag = 'final' }
         } else if (tagName === 'question') {
             if (isClose) activeTag = null
-            else activeTag = 'question'
+            else { settleRootThinking(bubble); activeTag = 'question' }
         } else if (tagName === 'artifact') {
             if (!isClose) {
                 const typeMatch = (attrs || '').match(/type="([^"]+)"/)

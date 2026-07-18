@@ -5846,7 +5846,10 @@ export default {
         }
 
         try {
-            const result = await this.libreOfficeExecutor.executeCommand(commandAction, params)
+            // __agent 标记：worker 据此把这条命令产生的修订署名为 AI Workdeck
+            //（用户本人的 IME 输入等不带标记，署用户名），修订面板里可区分来源。
+            const result = await this.libreOfficeExecutor.executeCommand(
+                commandAction, Object.assign({}, params, { __agent: true }))
             const successFlag = result && result.success !== false
             await sendEditorResult(conversationId, requestId, successFlag, result, (result && result.error) || null)
         } catch (e) {
