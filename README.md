@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src="https://www.aiworkdeck.com/icon.png" width="88" alt="AI Workdeck logo">
+    <img src=".github/assets/icon.png" width="88" alt="AI Workdeck logo">
   </a>
 </p>
 
@@ -26,7 +26,7 @@
 
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src="https://www.aiworkdeck.com/images/workspace-ai.png" alt="AI Workdeck — project workspace with document preview and AI agent panel (real product screenshot)" width="900">
+    <img src=".github/assets/workspace-ai.png" alt="AI Workdeck — project workspace with document preview and AI agent panel (real product screenshot)" width="900">
   </a>
 </p>
 
@@ -79,10 +79,10 @@ Double-click to install. On first launch, a setup wizard lets you pick one AI pr
 The workspace above is a real product screenshot (demo project with fictitious data). Below: the plugin & skill marketplace, and a design preview of where the document workbench is heading.
 
 <p align="center">
-  <img src="https://www.aiworkdeck.com/images/plugin-marketplace.png" alt="Plugin and skill marketplace (design preview)" width="900">
+  <img src=".github/assets/plugin-marketplace.png" alt="Plugin and skill marketplace (design preview)" width="900">
 </p>
 <p align="center">
-  <img src="https://www.aiworkdeck.com/images/workdeck-vision.png" alt="Document workbench with AI redlines (design preview)" width="900">
+  <img src=".github/assets/workdeck-vision.png" alt="Document workbench with AI redlines (design preview)" width="900">
 </p>
 
 ## Core Capabilities
@@ -308,7 +308,12 @@ Read [WHY.md](WHY.md) for the product thesis and founder story.
 ## ⭐ Star History
 
 <p align="center">
-  <a href="https://star-history.com/#zeweihan/aiworkdeck&Date">View the star history chart →</a>
+  <a href="https://github.com/zeweihan/aiworkdeck/stargazers">
+    <img src=".github/assets/star-history.svg" alt="Star history chart" width="760">
+  </a>
+</p>
+<p align="center">
+  <sub>Self-hosted chart, refreshed weekly by <a href=".github/workflows/star-history.yml">a scheduled workflow</a>.</sub>
 </p>
 
 <p align="center">
