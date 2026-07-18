@@ -408,8 +408,8 @@
 
     <!-- 4. Regular Bottom Input -->
     <view v-else class="input-area-wrapper">
-       <!-- Agent 任务清单常驻进度卡（todo_write 驱动，plan_update 事件更新） -->
-       <TodoProgressCard :todos="planTodos" />
+       <!-- 任务清单进度卡已随消息流内联展示（RootBubble），不再常驻输入框上方，
+            避免与气泡内的步骤分组重复（用户反馈：线性时序结构） -->
        <!-- 步数超限暂停：一键继续，免得用户手动输入「继续」 -->
        <view v-if="agentPaused && !isStreaming" class="continue-bar">
           <text class="continue-hint">已达单轮执行步数上限，任务已暂停</text>
@@ -541,7 +541,6 @@
 <script>
 import RootBubble from './AgentMessage/RootBubble.vue'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
-import TodoProgressCard from './AgentMessage/TodoProgressCard.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration } from '@/services/api.js'
@@ -549,7 +548,7 @@ import { getAuthHeaders } from '@/utils/auth.js'
 
 export default {
   name: 'ChatInterface',
-  components: { RootBubble, BackgroundTaskIndicator, TodoProgressCard },
+  components: { RootBubble, BackgroundTaskIndicator },
   props: {
     projectId: String,
     projectName: String,
@@ -591,7 +590,6 @@ export default {
       lastHeartbeat,
       tokenUsage,
       fileChanges,
-      planTodos,
       agentPaused,
       agentRunStatus,
       reattachSSE,
@@ -1865,8 +1863,6 @@ export default {
        confirmPptGeneration,
        // File Changes Status
        fileChanges,
-       // Agent 任务清单进度卡
-       planTodos,
        // 步数超限一键继续
        agentPaused,
        handleContinue,

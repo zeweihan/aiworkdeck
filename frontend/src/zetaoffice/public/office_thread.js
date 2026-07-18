@@ -53,6 +53,28 @@ function readConfigLocale() {
   } catch (e) { return { err: errStr(e) }; }
 }
 
+// ---- 修订作者署名 ----------------------------------------------------------
+// 修订（redline）的作者名取自 UserProfile 配置（givenname+sn）。AI 发起的编辑
+// 统一署名 AI_AUTHOR，用户本人的操作（IME 输入、快捷键）署用户名——同一引擎里
+// 两种来源的修订在修订面板中可区分（用户需求）。execCommand 按 __agent 标记
+// 在每条命令前切换；setRedlineAuthor 有同值短路，切换才真正写配置。
+const AI_AUTHOR = 'AI Workdeck';
+let humanAuthor = '';        // load_document 时由宿主传入（当前登录用户名）
+let currentRedlineAuthor = null;
+function setRedlineAuthor(name) {
+  const n = String(name == null ? '' : name);
+  if (currentRedlineAuthor === n) return;
+  const provider = context.getServiceManager().createInstanceWithContext(
+    'com.sun.star.configuration.ConfigurationProvider', context);
+  const access = provider.createInstanceWithArguments(
+    'com.sun.star.configuration.ConfigurationUpdateAccess',
+    [mkProp('nodepath', '/org.openoffice.UserProfile/Data')]);
+  access.replaceByName('givenname', n);
+  access.replaceByName('sn', '');
+  access.commitChanges();
+  currentRedlineAuthor = n;
+}
+
 // LibreOffice import filter names by extension — used only for the stream-load
 // fallback (private:stream has no URL extension to auto-detect a filter from).
 const IMPORT_FILTERS = {
@@ -417,6 +439,7 @@ const EXEC = {
     const all = p.replaceAll !== false;
     let hit = xModel.findFirst(sd), n = 0;
     while (hit !== null) {
+      selectVisibly(hit); // 拟人：视图滚到正在修订的位置，用户看得见改在哪
       hit.setString(String(p.replaceText || ''));
       n++;
       if (!all) break;
@@ -470,7 +493,11 @@ const EXEC = {
     const idx = Number(p.matchIndex) || 0;
     let hit = xModel.findFirst(sd), i = 0;
     while (hit !== null) {
-      if (i === idx) { hit.setString(String(p.replaceText || '')); return { success: true, replacedIndex: idx }; }
+      if (i === idx) {
+        selectVisibly(hit); // 拟人：先滚到目标位置再动手
+        hit.setString(String(p.replaceText || ''));
+        return { success: true, replacedIndex: idx };
+      }
       hit = xModel.findNext(hit, sd); i++;
     }
     return { success: false, message: 'match index out of range: ' + idx + ' (found ' + i + ')' };
@@ -483,7 +510,11 @@ const EXEC = {
     const idx = Number(p.matchIndex) || 0;
     let hit = xModel.findFirst(sd), i = 0;
     while (hit !== null) {
-      if (i === idx) { hit.setString(''); return { success: true, deletedIndex: idx }; }
+      if (i === idx) {
+        selectVisibly(hit); // 拟人：先滚到目标位置再删
+        hit.setString('');
+        return { success: true, deletedIndex: idx };
+      }
       hit = xModel.findNext(hit, sd); i++;
     }
     return { success: false, message: 'match index out of range: ' + idx };
@@ -495,7 +526,13 @@ const EXEC = {
     sd.setSearchString(String(p.text || ''));
     const all = p.deleteAll !== false;
     let hit = xModel.findFirst(sd), n = 0;
-    while (hit !== null) { hit.setString(''); n++; if (!all) break; hit = xModel.findNext(hit, sd); }
+    while (hit !== null) {
+      selectVisibly(hit); // 拟人：视图滚到正在删除的位置
+      hit.setString('');
+      n++;
+      if (!all) break;
+      hit = xModel.findNext(hit, sd);
+    }
     return { success: true, deleted: n };
   },
   // [verified-extend] read the Nth (0-based) paragraph's text.
@@ -776,6 +813,8 @@ const EXEC = {
   // document. Two independent load strategies (MEMFS file, then private:stream)
   // so a single UNO-API quirk on a device can't blank the user's content.
   load_document(p) {
+    // 宿主随文档带来当前登录用户名：用户本人编辑的修订署名（AI 的署 AI Workdeck）
+    if (p && p.authorName != null) humanAuthor = String(p.authorName);
     const name = String(p && p.name || 'document.docx');
     const m = name.match(/\.([A-Za-z0-9]+)$/);
     const ext = (m ? m[1] : 'docx').toLowerCase();
@@ -1238,6 +1277,25 @@ const EXEC = {
     try { vc.collapseToEnd(); } catch (e) {}
     return { success: true, bytes: u8.length, width: w, height: h };
   },
+  // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
+  // 一直派发 debug_revisions，worker 此前未实现（一律返回 not implemented）；
+  // 补上后同时作为修订署名（AI Workdeck / 用户名）的验证探针。
+  debug_revisions() {
+    const out = [];
+    try {
+      const en = xModel.getRedlines().createEnumeration();
+      while (en.hasMoreElements() && out.length < 200) {
+        const r = en.nextElement();
+        const item = {};
+        try { item.type = r.getPropertyValue('RedlineType'); } catch (e) {}
+        try { item.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
+        try { item.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
+        try { if (typeof r.getString === 'function') item.text = String(r.getString() || '').slice(0, 80); } catch (e) {}
+        out.push(item);
+      }
+    } catch (e) { return { success: false, message: errStr(e) }; }
+    return { success: true, count: out.length, redlines: out };
+  },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
     const bms = xModel.getBookmarks();
@@ -1256,8 +1314,13 @@ const EXEC = {
 function execCommand(reqId, action, params) {
   let result;
   try {
+    const p = params || {};
+    // 修订署名切换：AI 命令（宿主打 __agent 标记）→ AI Workdeck；其余（IME 输入
+    // 等用户本人操作）→ 用户名。失败不阻断命令本身（降级为引擎默认作者）。
+    try { setRedlineAuthor(p.__agent ? AI_AUTHOR : humanAuthor); }
+    catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }
     const fn = EXEC[action];
-    result = fn ? fn(params || {}) : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
+    result = fn ? fn(p) : { success: false, message: 'not implemented in LibreOffice worker yet: ' + action };
   } catch (e) {
     result = { success: false, message: errStr(e) };
   }

@@ -197,7 +197,13 @@ startEditorEndpoint({
   uiLang: q.get('uilang') === 'env' ? '' : (q.get('uilang') || 'zh-CN'),
   // (#79) The #66 runtime zh-CN langpack injection was removed: the self-built
   // engine ships zh-CN baked in, so injecting 38 files was pure boot overhead.
-  onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
+  onLog: (m) => {
+    console.log('[zeta-editor]', m)
+    if (VERIFY) vlog(m)
+    // 启动里程碑同步给宿主：LibreOfficeEditor 的加载进度面板据此推进阶段
+    // （引擎下载/字体/线程/文档就绪）。宿主在 dom-ready 前就订阅了 lo-relay。
+    try { hostTransport.send({ __lo: 'lo-relay', type: 'boot-log', msg: String(m) }) } catch (e) { /* ignore */ }
+  },
 }).then((endpoint) => {
   console.log('[zeta-editor] endpoint ready — serving host over transport')
   // (#79 click-to-open) LO WASM never calls window.open on hyperlink clicks

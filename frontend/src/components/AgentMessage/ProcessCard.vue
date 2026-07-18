@@ -60,7 +60,7 @@
                 </template>
                 <div v-else class="step-row">
                     <span class="step-dot" :class="{ 'done': item.status !== 'doing' }"></span>
-                    <span class="step-text" :class="{ 'is-meta': isSecondaryContent(item.text) }">{{ item.text || 'Working...' }}</span>
+                    <span class="step-text" :class="{ 'is-meta': isSecondaryContent(item.text) }">{{ item.text || '处理中…' }}</span>
                 </div>
             </div>
 
@@ -117,7 +117,8 @@ const props = defineProps({
 const isExpanded = ref(false)
 
 const isSystemActions = computed(() => {
-  return props.process.title === 'System Actions'
+  // '系统操作' 是现名；'System Actions' 兼容历史数据
+  return props.process.title === '系统操作' || props.process.title === 'System Actions'
 })
 
 const isHeadless = computed(() => {
@@ -162,7 +163,7 @@ watch(() => props.process.items?.length, (newLen, oldLen) => {
 }, { immediate: true })
 
 const formatToolName = (code) => {
-    if (!code) return 'Tool Call'
+    if (!code) return '工具调用'
     const name = toolDisplayName(code)
     return name.length > 40 ? name.substring(0, 37) + '...' : name
 }

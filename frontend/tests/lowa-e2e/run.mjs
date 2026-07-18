@@ -243,6 +243,19 @@ try {
     JSON.stringify(cl.clauses && cl.clauses[0]))
   check('首部段落不计入条款', cl.preambleParagraphs === 1, JSON.stringify(cl.preambleParagraphs))
 
+  console.log('== 10) 修订作者署名（AI Workdeck vs 用户名） ==')
+  await reset('署名测试。', true) // rc ON：以下插入都会落成修订
+  // AI 命令：宿主 handleEditorCommand 会打 __agent 标记 → 署名 AI Workdeck
+  await exec('insert_at_cursor', { text: 'AI改动', __agent: true })
+  // 用户操作（IME 提交等）不带标记 → 署当前用户名。load_document 空字节调用
+  // 只用来注入 authorName（与宿主 loadDocument 的传参路径一致）。
+  await exec('load_document', { authorName: '测试用户' })
+  await exec('insert_at_cursor', { text: '用户改动' })
+  const rv = await exec('debug_revisions')
+  const authors = (rv.redlines || []).map((r) => r.author)
+  check('AI 修订署名 AI Workdeck', rv.success && authors.includes('AI Workdeck'), JSON.stringify(rv))
+  check('用户修订署用户名', authors.includes('测试用户'), JSON.stringify(authors))
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

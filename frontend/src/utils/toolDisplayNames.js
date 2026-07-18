@@ -94,23 +94,16 @@ const NAMES = {
   pptx_export_editable: { zh: '导出可编辑PPT', en: 'Export editable slides' },
 }
 
-function appLocale() {
-  try {
-    if (typeof uni !== 'undefined' && uni.getLocale) return uni.getLocale() || 'zh-CN'
-  } catch (e) { /* uni 不可用时退回浏览器语言 */ }
-  return (typeof navigator !== 'undefined' && navigator.language) || 'zh-CN'
-}
-
 // code 可以是纯工具名，也可以是 <tool_code> 里的 `tool_name({...})` 完整调用串。
+// 产品是中文优先：显示名一律取 zh（此前按 uni.getLocale() 取语言，Electron 常
+// 返回 en-*，导致面板里中英文混杂——用户反馈统一为中文）。en 列保留给未来 i18n。
 export function toolDisplayName(code) {
   if (!code) return ''
   const m = String(code).match(/^\s*([\w.]+)\s*\(/)
   let name = m ? m[1] : String(code).trim()
   if (name.startsWith('wps_')) name = 'doc_' + name.slice(4) // 灰度别名归一
   const entry = NAMES[name]
-  if (entry) {
-    return appLocale().toLowerCase().startsWith('zh') ? entry.zh : entry.en
-  }
+  if (entry) return entry.zh
   // 兜底：未收录的代号按 snake_case 分词，至少可读
   return name.replace(/_/g, ' ')
 }

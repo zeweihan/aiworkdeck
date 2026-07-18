@@ -46,6 +46,9 @@ export const EDITOR_ACTIONS = [
   // [diagnostic] registered device font families — ground truth for the CJK
   // font-injection/alias chain (zetaOfficeBoot.js).
   'list_fonts',
+  // [diagnostic] 修订记录清单（类型/作者/文本）。后端 doc_debug_revisions 的
+  // worker 端实现——此前 worker 未实现且未入白名单，一直返回 Unknown action。
+  'debug_revisions',
   // [#104 变量面板] document variable fields — bookmark-marked spans bound to a
   // (scope, varName) variable; driven by VariablePanel through the getWps adapter
   // in project-overview.vue, not by the AI agent pipeline.

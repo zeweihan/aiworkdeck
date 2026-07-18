@@ -29,6 +29,13 @@
             <!-- 2. Title -->
             <TitleCard v-if="bubble.title" :title="bubble.title" />
 
+            <!-- 2b. 计划卡（线性时序结构）：思考结束、制定计划后先展示计划框，
+                 下方才是各步骤的执行进展；每步内部再嵌工具调用记录。
+                 快照挂在气泡上（plan_update 时写入），历史消息各自保留当轮计划。 -->
+            <div v-if="bubble.planTodos && bubble.planTodos.length" class="inline-plan">
+               <TodoProgressCard :todos="bubble.planTodos" />
+            </div>
+
             <!-- 3. Process Stream（工具执行按 plan 步骤分组：最新步骤展开，旧步骤收起，
                  避免整个面板被工具卡片刷满；无步骤归属的保持平铺） -->
             <div class="process-stream">
@@ -119,6 +126,7 @@
 import { computed, ref } from 'vue'
 import ThinkingCard from './ThinkingCard.vue'
 import TitleCard from './TitleCard.vue'
+import TodoProgressCard from './TodoProgressCard.vue'
 import ProcessCard from './ProcessCard.vue'
 import WalkthroughCard from './WalkthroughCard.vue'
 import ArtifactCard from '../ArtifactCard.vue'
@@ -174,16 +182,19 @@ const isGroupDone = (g) => g.procs.every(p =>
 )
 const groupHasError = (g) => g.procs.some(p => (p.items || []).some(it => it.status === 'error'))
 
+const hasPlan = computed(() => !!(props.bubble.planTodos && props.bubble.planTodos.length > 0))
+
 const isReady = computed(() => {
-    // Show full card if we have a Title OR Processes OR Main Content
+    // Show full card if we have a Title OR Plan OR Processes OR Main Content
     // If only "Thinking", remain in Ghost state (unless it's done thinking and has no other content? No, unlikely)
-    return !!(props.bubble.title || props.bubble.processes.length > 0 || props.bubble.content)
+    return !!(props.bubble.title || hasPlan.value || props.bubble.processes.length > 0 || props.bubble.content)
 })
 
 const hasContent = computed(() => {
     // Check if the bubble has any content to display
     return !!(
         props.bubble.title ||
+        hasPlan.value ||
         props.bubble.processes.length > 0 ||
         props.bubble.artifacts.length > 0 ||
         props.bubble.content
@@ -307,6 +318,15 @@ const hasContent = computed(() => {
   inset: 0;
   z-index: 98;
   background: transparent;
+}
+
+/* 内联计划卡：卡片容器内左右留边，与步骤分组视觉对齐 */
+.inline-plan {
+  padding: 8px 10px 2px;
+}
+
+.inline-plan :deep(.todo-progress-card) {
+  margin: 0;
 }
 
 /* ---- plan 步骤分组 ---- */

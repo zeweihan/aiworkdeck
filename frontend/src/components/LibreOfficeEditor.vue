@@ -8,10 +8,35 @@
     <view v-if="variant === 'default'" class="libre-float">
       <!-- No manual save button: edits auto-save (modify listener → debounced
            saveDocument). The pill doubles as the autosave indicator
-           (保存中… / 已保存 / 保存失败). -->
-      <view v-if="displayStatus" class="libre-pill" :class="{ error: isError }">
+           (保存中… / 已保存 / 保存失败). Boot/load 阶段由下方进度面板展示，
+           pill 只负责就绪后的保存状态。 -->
+      <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
         <view v-if="!isError && !ready" class="libre-spin"></view>
         <text>{{ displayStatus }}</text>
+      </view>
+    </view>
+    <!-- 加载进度面板：引擎启动 + 文档下载/打开是感知最慢的一段（尤其大文档），
+         把过程阶段化展示出来（用户反馈：不能更快，也要看得见进展）。 -->
+    <view v-if="loadingOverlayVisible" class="libre-loading">
+      <view class="libre-loading-card">
+        <view class="libre-doc-icon">
+          <view class="doc-fold"></view>
+          <view class="doc-line l1"></view>
+          <view class="doc-line l2"></view>
+          <view class="doc-line l3"></view>
+        </view>
+        <text class="libre-loading-name">{{ loadingTitle }}</text>
+        <view class="libre-progress-track">
+          <view class="libre-progress-fill" :style="{ width: bootPct + '%' }">
+            <view class="libre-progress-shimmer"></view>
+          </view>
+        </view>
+        <view class="libre-loading-meta">
+          <text class="libre-loading-stage">{{ bootStage }}</text>
+          <text class="libre-loading-pct">{{ Math.round(bootPct) }}%</text>
+        </view>
+        <text v-if="dlText" class="libre-loading-dl">{{ dlText }}</text>
+        <text class="libre-loading-hint">首次打开需初始化文档引擎，大文档会稍慢，请稍候</text>
       </view>
     </view>
     <!-- Experimental (⌘⇧O overlay) variant keeps the dev-probe toolbar. -->
@@ -54,7 +79,7 @@
 
 import { createWebviewEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
 import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
-import { getAuthHeaders } from '@/utils/auth.js'
+import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 
 let seq = 0
 
@@ -83,6 +108,13 @@ export default {
       // Autosave: set by the worker's modify signal, cleared when a save starts;
       // read by the host (closeFile / evict) to know if a flush is needed.
       dirty: false,
+      // 加载进度面板状态：bootPct 按里程碑推进（其间缓慢滴答，避免看起来卡死），
+      // bootCap 是当前阶段允许滴到的上限；dl* 是文档字节下载进度。
+      bootPct: 3,
+      bootCap: 12,
+      bootStage: '正在启动文档引擎',
+      dlLoaded: 0,
+      dlTotal: 0,
     }
   },
   computed: {
@@ -93,6 +125,20 @@ export default {
     displayStatus() {
       if (this.variant !== 'default') return this.statusText
       return this.statusText === '就绪' ? '' : this.statusText
+    },
+    loadingOverlayVisible() {
+      // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板
+      return this.variant === 'default' && !this.ready && !this.isError && this.statusText !== '仅桌面版可用'
+    },
+    loadingTitle() {
+      return (this.file && this.file.name) ? this.file.name : '正在准备编辑器'
+    },
+    dlText() {
+      if (!this.dlLoaded) return ''
+      const fmt = (n) => n > 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'
+      return this.dlTotal > 0
+        ? `文档内容 ${fmt(this.dlLoaded)} / ${fmt(this.dlTotal)}`
+        : `已下载文档内容 ${fmt(this.dlLoaded)}`
     },
   },
   async mounted() {
@@ -107,6 +153,7 @@ export default {
       // them (the old flow: boot → endpoint ready → fetch → load) just added the
       // whole download to the perceived open time.
       if (this.file) this.prefetchBytes()
+      this.startBootTrickle()
       const info = await api.getEditor() // { url, preload, partition }
       this.mountWebview(info)
     } catch (e) {
@@ -119,6 +166,7 @@ export default {
     // by the closer (closeFile / evictLibreInstance await flushSave first) —
     // export needs the live webview, so saving from here is already too late.
     clearTimeout(this._saveTimer)
+    clearInterval(this._bootTimer)
     // Tell the host this editor (and its executor) is going away — so it can
     // stop routing AI commands to a disposed executor when the document tab is
     // closed or switched. The executor ref lets the host ignore stale closes.
@@ -129,6 +177,33 @@ export default {
     this.executor = null
   },
   methods: {
+    // ---- 加载进度面板 ----
+    // 里程碑之间用慢速滴答填充（封顶 bootCap），避免长阶段（WASM 编译/大文档
+    // 排版）看起来像卡死；真正的阶段跳变由 boot-log 里程碑驱动。
+    startBootTrickle() {
+      clearInterval(this._bootTimer)
+      this._bootTimer = setInterval(() => {
+        if (this.ready || this.isError) { clearInterval(this._bootTimer); return }
+        if (this.bootPct < this.bootCap) this.bootPct = Math.min(this.bootCap, this.bootPct + 0.6)
+      }, 400)
+    },
+    bootMilestone(base, cap, stage) {
+      if (this.ready) return
+      this.bootPct = Math.max(this.bootPct, base)
+      this.bootCap = Math.max(this.bootCap, cap)
+      if (stage) this.bootStage = stage
+    },
+    onBootLog(m) {
+      if (!m) return
+      if (m.indexOf('CJK font fetched') !== -1) this.bootMilestone(15, 30, '正在加载中文字体')
+      else if (m.indexOf('soffice.js loaded') !== -1) this.bootMilestone(32, 55, '正在初始化排版引擎')
+      else if (m.indexOf('thread port ready') !== -1) this.bootMilestone(58, 70, '正在启动文档服务')
+      else if (m.indexOf('空白文档就绪') !== -1 || m.indexOf('UI ready') !== -1) {
+        this.bootMilestone(72, 85, this.file ? '正在打开文档' : '即将就绪')
+      } else if (m.indexOf('load_document: 已加载真实文档') !== -1) {
+        this.bootMilestone(96, 99, '正在渲染文档')
+      }
+    },
     appendLog(m) {
       // Mirror to devtools so the product variant (overlay hidden) stays diagnosable.
       console.log('[libre-editor]', m)
@@ -158,6 +233,9 @@ export default {
         } else if (msg.type === 'modified') {
           // Worker modify signal (throttled in editor-main.js) → autosave.
           this.onDocModified()
+        } else if (msg.type === 'boot-log') {
+          // 引擎启动里程碑 → 加载进度面板推进阶段
+          this.onBootLog(String(msg.msg || ''))
         }
       })
       wv.addEventListener('did-fail-load', (e) => this.appendLog('did-fail-load: ' + (e.errorDescription || e.errorCode)))
@@ -197,6 +275,8 @@ export default {
           this.appendLog('load_document failed: ' + (e && e.message ? e.message : e))
         }
       }
+      this.bootPct = 100
+      clearInterval(this._bootTimer)
       this.ready = true
       if (this.statusText.indexOf('失败') === -1) this.statusText = '就绪'
       this.$emit('ready', this.executor)
@@ -209,7 +289,10 @@ export default {
       const fileId = f && (f.wpsFileId || f.id)
       if (!fileId) return
       const t0 = Date.now()
-      this._bytesPromise = this.fetchArrayBuffer(getFileDownloadUrl(fileId))
+      this._bytesPromise = this.fetchArrayBuffer(getFileDownloadUrl(fileId), (loaded, total) => {
+        this.dlLoaded = loaded
+        this.dlTotal = total
+      })
         .then((buf) => { this.appendLog('文档字节预取完成 / prefetched ' + (buf ? buf.byteLength : 0) + ' bytes in ' + (Date.now() - t0) + 'ms'); return buf })
         .catch((e) => { this.appendLog('预取失败（加载时重试）/ prefetch failed: ' + (e && e.message ? e.message : e)); return null })
     },
@@ -231,20 +314,30 @@ export default {
         return
       }
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
+      this.bootMilestone(86, 95, '正在打开文档')
+      // 当前登录用户名随文档传给 worker：用户本人编辑的修订以用户名署名，
+      // AI 命令产生的修订署名 AI Workdeck（worker execCommand 按 __agent 切换）。
+      const u = getCurrentUser() || {}
+      const authorName = String(u.name || u.nickname || u.username || '')
       const t0 = Date.now()
-      const res = await this.executor.executeCommand('load_document', { bytes, name })
+      const res = await this.executor.executeCommand('load_document', { bytes, name, authorName })
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
     // but ArrayBuffer (the bytes we relay into the worker).
-    fetchArrayBuffer(url) {
+    fetchArrayBuffer(url, onProgress) {
       return new Promise((resolve, reject) => {
         const headers = getAuthHeaders() || {}
         const xhr = new XMLHttpRequest()
         xhr.open('GET', url, true)
         xhr.responseType = 'arraybuffer'
         Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]))
+        if (onProgress) {
+          xhr.onprogress = (ev) => {
+            try { onProgress(ev.loaded || 0, ev.lengthComputable ? ev.total : 0) } catch (e) { /* ignore */ }
+          }
+        }
         xhr.onload = () => (xhr.status === 200 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
         xhr.onerror = () => reject(new Error('网络错误 / network error'))
         xhr.send()
@@ -392,6 +485,34 @@ export default {
 .libre-btn[disabled] { background: #6b7280; cursor: not-allowed; }
 .libre-close { background: #4b5563; margin-left: auto; }
 .libre-host { flex: 1; min-height: 0; width: 100%; }
+/* ---- 加载进度面板 ---- */
+.libre-loading { position: absolute; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center;
+  background: #F8F9FA; }
+.libre-loading-card { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 320px; max-width: 80%; }
+.libre-doc-icon { position: relative; width: 44px; height: 56px; background: #fff; border: 1.5px solid #DEE2E6;
+  border-radius: 5px; margin-bottom: 4px; overflow: hidden; }
+.doc-fold { position: absolute; top: -1px; right: -1px; width: 14px; height: 14px;
+  background: #F8F9FA; border-left: 1.5px solid #DEE2E6; border-bottom: 1.5px solid #DEE2E6; border-radius: 0 0 0 5px; }
+.doc-line { position: absolute; left: 8px; height: 4px; border-radius: 2px; background: #E6F9F0;
+  animation: doc-line-pulse 1.6s ease-in-out infinite; }
+.doc-line.l1 { top: 20px; width: 26px; animation-delay: 0s; }
+.doc-line.l2 { top: 30px; width: 20px; animation-delay: 0.25s; }
+.doc-line.l3 { top: 40px; width: 24px; animation-delay: 0.5s; }
+@keyframes doc-line-pulse { 0%, 100% { background: #E9ECEF; } 50% { background: #5BD197; } }
+.libre-loading-name { font-size: 14px; font-weight: 600; color: #2C3338; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.libre-progress-track { width: 100%; height: 6px; background: #E9ECEF; border-radius: 999px; overflow: hidden; }
+.libre-progress-fill { position: relative; height: 100%; background: #5BD197; border-radius: 999px;
+  transition: width 0.5s ease; overflow: hidden; }
+.libre-progress-shimmer { position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  animation: libre-shimmer 1.4s linear infinite; }
+@keyframes libre-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+.libre-loading-meta { display: flex; justify-content: space-between; width: 100%; }
+.libre-loading-stage { font-size: 12px; color: #495057; }
+.libre-loading-pct { font-size: 12px; color: #1A5336; font-weight: 600; }
+.libre-loading-dl { font-size: 11px; color: #868E96; }
+.libre-loading-hint { font-size: 11px; color: #ADB5BD; margin-top: 6px; }
 .libre-log { position: absolute; right: 8px; bottom: 8px; width: 380px; max-height: 38vh; margin: 0;
   padding: 8px; background: #0b1220; color: #d1fae5; font: 11px/1.45 ui-monospace, monospace;
   overflow: auto; white-space: pre-wrap; word-break: break-all; border-radius: 6px; z-index: 10; }
