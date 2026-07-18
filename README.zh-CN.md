@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src="https://www.aiworkdeck.com/icon.png" width="88" alt="AI Workdeck logo">
+    <img src=".github/assets/icon.png" width="88" alt="AI Workdeck logo">
   </a>
 </p>
 
@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src="https://www.aiworkdeck.com/images/workspace-ai.png" alt="AI Workdeck — 项目工作区：文件树 + 文档预览 + AI 智能体面板（真实产品截图）" width="900">
+    <img src=".github/assets/workspace-ai.png" alt="AI Workdeck — 项目工作区：文件树 + 文档预览 + AI 智能体面板（真实产品截图）" width="900">
   </a>
 </p>
 
@@ -78,10 +78,10 @@ AI Workdeck 社区版是 AI Workdeck 的开源内核，不等于完整的商业 
 顶部工作区为**真实产品截图**（演示项目，数据为虚构）。下面两张分别是插件 / Skill 广场，以及文档工作台的设计预览稿（后续版本的方向）。
 
 <p align="center">
-  <img src="https://www.aiworkdeck.com/images/plugin-marketplace.png" alt="插件与 Skill 广场（设计预览）" width="900">
+  <img src=".github/assets/plugin-marketplace.png" alt="插件与 Skill 广场（设计预览）" width="900">
 </p>
 <p align="center">
-  <img src="https://www.aiworkdeck.com/images/workdeck-vision.png" alt="带 AI 修订的文档工作台（设计预览）" width="900">
+  <img src=".github/assets/workdeck-vision.png" alt="带 AI 修订的文档工作台（设计预览）" width="900">
 </p>
 
 ## 核心能力
