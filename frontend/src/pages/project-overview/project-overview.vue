@@ -709,7 +709,6 @@
                   >
                     <LibreOfficeEditor
                       :ref="el => setLibreRef('left', file.id, el)"
-                      variant="default"
                       :file="file"
                       @ready="onLibreReady($event, 'left', file.id)"
                       @close="onLibreClose"
@@ -777,7 +776,6 @@
                   >
                     <LibreOfficeEditor
                       :ref="el => setLibreRef('right', file.id, el)"
-                      variant="default"
                       :file="file"
                       @ready="onLibreReady($event, 'right', file.id)"
                       @close="onLibreClose"
@@ -829,13 +827,6 @@
                 </view>
               </view>
 
-              <!-- Epic #43: embedded LibreOffice editor overlay (legacy ⌘⇧O).
-                   Scoped to the document area so the AI chat panel stays usable —
-                   a real backend AI command can be triggered while it's active.
-                   Dormant: only mounts when explicitly opened. -->
-              <view v-if="showLibreEmbed" class="libre-embed-overlay">
-                <LibreOfficeEditor @ready="onLibreReady" @close="onLibreClose" @open-url="onLibreOpenUrl" />
-              </view>
             </view>
 
             <!-- 底部常用工具面板（仅占中间工作区宽度；右侧 AI 面板优先完整显示） -->
@@ -1497,7 +1488,6 @@ export default {
 
       // Epic #43: embedded LibreOffice editor. When active, backend AI commands
       // route to it (handleEditorCommand).
-      showLibreEmbed: false,
       libreOfficeActive: false,
       libreOfficeExecutor: null,
       // 内嵌编辑器保活 LRU：'pane:fileId'（left:123），最近激活在前。在池中的
@@ -1797,7 +1787,6 @@ export default {
     if (this.convStatusPollTimer) { clearInterval(this.convStatusPollTimer); this.convStatusPollTimer = null }
     this.teardownResponsiveListener()
     // Epic #43: 解绑 ⌘⇧O 嵌入式编辑器监听
-    try { if (this._zetaOpenEmbedUnsub) { this._zetaOpenEmbedUnsub(); this._zetaOpenEmbedUnsub = null } } catch (e) { /* ignore */ }
     // 清理轮询定时器
     if (this.fileInfoPollingIntervals) {
       Object.values(this.fileInfoPollingIntervals).forEach(intervalId => {
@@ -2084,22 +2073,8 @@ export default {
       this.libreOfficePreferred = false
     }
 
-    // Epic #43: ⌘⇧O 打开嵌入式 LibreOffice 编辑器覆盖层（实验）。当嵌入式编辑器已是
-    // 文档的默认内联编辑器时（libreOfficePreferred），文档区已经承载它，⌘⇧O 变为
-    // 空操作以避免双重挂载（两个 webview/executor）；仅在未启用内联默认时回退到覆盖层。
-    try {
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.zetaoffice && window.checkbaDesktop.zetaoffice.onOpenEmbed) {
-        if (!this._zetaOpenEmbedUnsub) {
-          this._zetaOpenEmbedUnsub = window.checkbaDesktop.zetaoffice.onOpenEmbed(() => {
-            // 非活跃实例不响应：否则被覆盖的旧实例也置 showLibreEmbed，返回时凭空弹出编辑器
-            if (!this.isActiveOverviewInstance()) return
-            if (!this.libreOfficePreferred) this.showLibreEmbed = true
-          })
-        }
-      }
-    } catch (e) {
-      // ignore
-    }
+    // （⌘⇧O 实验覆盖层已移除：内联编辑器就是产品默认，覆盖层只会在文档上
+    // 凭空盖一条开发工具栏——用户报告。）
 
     // Desktop：拦截 WPS 中点击 “checkba://...” 的内部链接
     try {
@@ -2282,7 +2257,6 @@ export default {
     activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f) },
     activeFileRight(f) { this.onActiveOfficeFileChanged('right', f) },
     focusedPane() { this.syncLibreExecutor() },
-    showLibreEmbed() { this.syncLibreExecutor() }
   },
   methods: {
     // EasyVoice Integration
@@ -5860,11 +5834,10 @@ export default {
     },
 
     // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
-    // commands route to it (see handleEditorCommand). Used by both the inline
-    // keep-alive pool (Track B) and the legacy ⌘⇧O overlay.
-    // pane/fileId 由保活池模板内联传入；overlay 不带（落到 'overlay' 键）。
+    // commands route to it (see handleEditorCommand). Used by the inline
+    // keep-alive pool (Track B)；pane/fileId 由保活池模板内联传入。
     onLibreReady(executor, pane, fileId) {
-        const key = pane ? pane + ':' + fileId : 'overlay'
+        const key = pane + ':' + fileId
         this.getLibreExecutorMap()[key] = executor
         this.syncLibreExecutor()
         console.log('[ProjectOverview] LibreOffice editor ready (' + key + ') — agent commands routed to LibreOffice')
@@ -5882,7 +5855,7 @@ export default {
     },
     // 活跃实例指针（同 PR#151 WPS 编辑器模式）：AI 指令路由到焦点 pane 的
     // 活动 Office 编辑器；焦点 pane 不是 Office 文档时回退另一 pane（保持
-    // 旧的"唯一打开的文档也能收指令"行为）；legacy overlay 打开时优先。
+    // 旧的"唯一打开的文档也能收指令"行为）。
     // 活动编辑器尚未 ready（boot 中）时指针为 null，handleEditorCommand
     // 照旧回"编辑器未就绪"。
     syncLibreExecutor() {
@@ -5891,8 +5864,7 @@ export default {
             const f = pane === 'right' ? this.activeFileRight : this.activeFileLeft
             return (f && this.useLibreEditor(f)) ? (map[pane + ':' + f.id] || null) : null
         }
-        let exec = this.showLibreEmbed ? (map['overlay'] || null) : null
-        if (!exec) exec = this.focusedPane === 'right' ? (pick('right') || pick('left')) : (pick('left') || pick('right'))
+        const exec = this.focusedPane === 'right' ? (pick('right') || pick('left')) : (pick('left') || pick('right'))
         this.libreOfficeExecutor = exec || null
         this.libreOfficeActive = !!exec
     },
@@ -5954,21 +5926,15 @@ export default {
       if (/^https?:\/\//i.test(u)) this.openBrowserTab(u)
     },
     onLibreClose(executor) {
-        // The overlay close button emits no executor: collapse the overlay; the
-        // unmount that follows re-enters here WITH the executor for real cleanup.
-        // An inline pool editor unmount (tab close / LRU evict) emits its own —
-        // drop it from the registry by identity and re-sync the active pointer,
-        // so closing a background instance can't clobber the active one.
+        // An inline pool editor unmount (tab close / LRU evict) emits its
+        // executor — drop it from the registry by identity and re-sync the
+        // active pointer, so closing a background instance can't clobber the
+        // active one.
         const map = this.getLibreExecutorMap()
         if (executor) {
             for (const k of Object.keys(map)) {
-                if (map[k] === executor) {
-                    delete map[k]
-                    if (k === 'overlay') this.showLibreEmbed = false
-                }
+                if (map[k] === executor) delete map[k]
             }
-        } else {
-            this.showLibreEmbed = false
         }
         this.syncLibreExecutor()
         if (!this.libreOfficeActive) console.log('[ProjectOverview] LibreOffice editor closed — agent commands unavailable until reopened')
@@ -10659,16 +10625,4 @@ $bg-white: #FFFFFF;
   opacity: 1;
 }
 
-/* Epic #43: embedded LibreOffice editor (experimental, ⌘⇧O).
-   Absolute within .editors-container (position:relative) so it covers the
-   document area only — the AI chat panel stays usable. */
-.libre-embed-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 50;
-  background: #fff;
-}
 </style>

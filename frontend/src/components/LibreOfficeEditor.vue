@@ -1,11 +1,10 @@
 <template>
   <view class="libre-editor-wrapper">
-    <!-- Product ('default') variant: NO full-width bar — it read as alien chrome
-         on top of the document (user feedback). Status + save float over the
-         editor's top-right corner instead; the status pill only appears while
-         something is happening (booting/loading/saving/failure) and vanishes
-         when ready. -->
-    <view v-if="variant === 'default'" class="libre-float">
+    <!-- NO full-width bar — it read as alien chrome on top of the document
+         (user feedback). Status floats over the editor's top-right corner;
+         the pill only appears while something is happening (saving/failure)
+         and vanishes when ready. -->
+    <view class="libre-float">
       <!-- No manual save button: edits auto-save (modify listener → debounced
            saveDocument). The pill doubles as the autosave indicator
            (保存中… / 已保存 / 保存失败). Boot/load 阶段由下方进度面板展示，
@@ -39,24 +38,9 @@
         <text class="libre-loading-hint">首次打开需初始化文档引擎，大文档会稍慢，请稍候</text>
       </view>
     </view>
-    <!-- Experimental (⌘⇧O overlay) variant keeps the dev-probe toolbar. -->
-    <view v-else class="libre-toolbar">
-      <text class="libre-title">LibreOffice 编辑器（嵌入式 webview · 实验）</text>
-      <text v-if="displayStatus" class="libre-status" :class="{ ready, error: isError }">{{ displayStatus }}</text>
-      <button v-if="file" class="libre-btn" :disabled="!ready || saving" @click="saveDocument">
-        {{ saving ? '保存中…' : '保存' }}
-      </button>
-      <button class="libre-btn" :disabled="!ready" @click="runInsert">插入示例</button>
-      <button class="libre-btn" :disabled="!ready" @click="runReplace">查找替换(redline)</button>
-      <button class="libre-btn" :disabled="!ready" @click="runSelection">读选区</button>
-      <button class="libre-btn libre-close" @click="$emit('close')">关闭</button>
-    </view>
     <!-- The Electron <webview> is created imperatively (uni-app's template
          compiler does not know the <webview> tag); it mounts into this host. -->
     <view :id="hostId" class="libre-host"></view>
-    <!-- Log overlay is dev-probe UI only; product builds get the same lines via
-         devtools console (appendLog mirrors there). -->
-    <pre v-if="log && variant !== 'default'" class="libre-log">{{ log }}</pre>
   </view>
 </template>
 
@@ -65,17 +49,12 @@
 // Electron <webview partition="persist:zetaoffice"> inside the MAIN renderer.
 // Epic #43.
 //
-// This is the activation of the dormant foundation: the webview loads
-// dist/zetaoffice/editor.html over the shared same-origin server, gets COOP/COEP
-// isolation from desktop/main/zetaoffice-session.js (so LOWA's SharedArrayBuffer
-// works), and is wrapped by createWebviewEditorExecutor (#52) into the standard
-// executeCommand(action, params) contract. The toolbar buttons drive that
-// executor directly — proving the host -> webview IPC -> office worker -> UNO ->
-// real LibreOffice round-trip on the device (the last unverified link before the
-// backend agent stream is routed through useEditorBridge).
-//
-// Self-contained / dormant: nothing renders this unless explicitly mounted
-// (⌘⇧O overlay), so the WPS document flow is byte-for-byte unaffected.
+// The webview loads dist/zetaoffice/editor.html over the shared same-origin
+// server, gets COOP/COEP isolation from desktop/main/zetaoffice-session.js (so
+// LOWA's SharedArrayBuffer works), and is wrapped by createWebviewEditorExecutor
+// (#52) into the standard executeCommand(action, params) contract. Mounted only
+// by the project-overview keep-alive pool as the product inline document editor
+// （原 ⌘⇧O 实验覆盖层与探针工具栏已移除）.
 
 import { createWebviewEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
 import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
@@ -87,13 +66,10 @@ export default {
   name: 'LibreOfficeEditor',
   emits: ['close', 'ready', 'open-url'],
   props: {
-    // 'experimental' = the original ⌘⇧O overlay (dev probe toolbar shown).
-    // 'default'      = inline document editor (Track B): toolbar chrome hidden.
-    variant: { type: String, default: 'experimental' },
     // Track D: the Office file to load into the editor ({ id, name, fileType,
     // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
-    // REAL document once the office endpoint is ready. null (⌘⇧O overlay) keeps
-    // the seeded prototype.
+    // REAL document once the office endpoint is ready.
+    // （原 'experimental' ⌘⇧O 探针工具栏变体已移除：产品只有内联编辑器一种形态。）
     file: { type: Object, default: null },
   },
   data() {
@@ -121,14 +97,13 @@ export default {
     isError() {
       return this.statusText.indexOf('失败') !== -1
     },
-    // Product variant stays quiet once ready — no permanent "就绪" badge.
+    // Stays quiet once ready — no permanent "就绪" badge.
     displayStatus() {
-      if (this.variant !== 'default') return this.statusText
       return this.statusText === '就绪' ? '' : this.statusText
     },
     loadingOverlayVisible() {
       // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板
-      return this.variant === 'default' && !this.ready && !this.isError && this.statusText !== '仅桌面版可用'
+      return !this.ready && !this.isError && this.statusText !== '仅桌面版可用'
     },
     loadingTitle() {
       return (this.file && this.file.name) ? this.file.name : '正在准备编辑器'
@@ -250,8 +225,7 @@ export default {
         // dom-ready means the webview's renderer is up — NOT that the office is
         // booted. We wait for the endpoint-ready handshake (onReady) before
         // marking ready / pushing the document, so load_document can't be dropped
-        // pre-boot. The dev-probe toolbar in the experimental variant stays
-        // disabled until then (ready=false).
+        // pre-boot.
         this.executor = createWebviewEditorExecutor(wv, { onReady: () => this.onEndpointReady() })
         // 命令繁忙跟踪：AI 命令与用户输入都走这同一个 executor。autoSave 据此
         // 避开活跃期（export_document 会冻结 office 线程上的 Qt 事件循环）。
@@ -468,30 +442,15 @@ export default {
         xhr.send(form)
       })
     },
-    async run(label, action, params) {
-      if (!this.executor) return
-      this.appendLog('▶ ' + label + ' …')
-      try { this.appendLog('  ← ' + JSON.stringify(await this.executor.executeCommand(action, params))) }
-      catch (e) { this.appendLog('  ✗ ' + (e && e.message ? e.message : e)) }
-    },
-    runInsert() {
-      this.run('插入示例', 'insert_at_cursor',
-        { text: '本协议由甲方与乙方于本日签订；协议自双方签署之日起生效。' })
-    },
-    runReplace() {
-      this.run('查找替换 协议→合同 (redline)', 'find_replace',
-        { findText: '协议', replaceText: '合同', replaceAll: true })
-    },
-    runSelection() { this.run('读选区', 'get_selection', {}) },
   },
 }
 </script>
 
 <style scoped>
 .libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
-/* Product variant: floating status pill + save, pinned over the editor's
-   top-right corner (LO's own menubar leaves that region empty). No layout
-   height is reserved — the document canvas gets the full pane. */
+/* Floating status pill, pinned over the editor's top-right corner (LO's own
+   menubar leaves that region empty). No layout height is reserved — the
+   document canvas gets the full pane. */
 .libre-float { position: absolute; top: 6px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 8px; }
 .libre-pill { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
   background: rgba(31, 41, 55, 0.78); color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
@@ -499,17 +458,6 @@ export default {
 .libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: #e5e7eb;
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
-.libre-save { font-size: 12px; line-height: 1; padding: 5px 12px; border: 0; border-radius: 999px;
-  background: #059669; color: #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); }
-.libre-save[disabled] { background: #9ca3af; cursor: not-allowed; }
-.libre-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 6px 10px; background: #1F2937; color: #fff; }
-.libre-title { font-size: 13px; font-weight: 600; }
-.libre-status { font-size: 12px; color: #d1d5db; }
-.libre-status.ready { color: #86efac; }
-.libre-status.error { color: #fca5a5; }
-.libre-btn { font-size: 12px; padding: 4px 10px; border: 0; border-radius: 4px; background: #059669; color: #fff; cursor: pointer; }
-.libre-btn[disabled] { background: #6b7280; cursor: not-allowed; }
-.libre-close { background: #4b5563; margin-left: auto; }
 .libre-host { flex: 1; min-height: 0; width: 100%; }
 /* ---- 加载进度面板 ---- */
 .libre-loading { position: absolute; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center;
@@ -539,7 +487,4 @@ export default {
 .libre-loading-pct { font-size: 12px; color: #1A5336; font-weight: 600; }
 .libre-loading-dl { font-size: 11px; color: #868E96; }
 .libre-loading-hint { font-size: 11px; color: #ADB5BD; margin-top: 6px; }
-.libre-log { position: absolute; right: 8px; bottom: 8px; width: 380px; max-height: 38vh; margin: 0;
-  padding: 8px; background: #0b1220; color: #d1fae5; font: 11px/1.45 ui-monospace, monospace;
-  overflow: auto; white-space: pre-wrap; word-break: break-all; border-radius: 6px; z-index: 10; }
 </style>
