@@ -119,15 +119,10 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     showOpenDialog: (options) => ipcRenderer.invoke('fs:showOpenDialog', options)
   },
   // Epic #43: embedded LibreOffice editor <webview> wiring. getEditor() returns
-  // { url, preload, partition } for the host to mount the webview; onOpenEmbed
-  // fires when the ⌘⇧O global shortcut requests the editor overlay.
+  // { url, preload, partition } for the host to mount the webview.
+  // （onOpenEmbed / ⌘⇧O 覆盖层已移除：内联编辑器就是产品默认。）
   zetaoffice: {
-    getEditor: () => ipcRenderer.invoke('checkba:zetaoffice-editor'),
-    onOpenEmbed: (handler) => {
-      const listener = () => handler && handler()
-      ipcRenderer.on('checkba:zetaoffice-open-embed', listener)
-      return () => ipcRenderer.removeListener('checkba:zetaoffice-open-embed', listener)
-    }
+    getEditor: () => ipcRenderer.invoke('checkba:zetaoffice-editor')
   }
 })
 

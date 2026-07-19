@@ -1393,12 +1393,8 @@ app.whenReady().then(() => {
         .openZetaOfficeVerifyWindow()
         .catch((e) => console.error('[zeta-verify]', e))
     })
-    // Epic #43: ⌘⇧O opens the embedded LibreOffice editor (a <webview> inside the
-    // MAIN renderer — the real-flow topology, vs ⌘⇧L's standalone window). Tells
-    // the renderer to mount the overlay; dormant until pressed.
-    globalShortcut.register('CommandOrControl+Shift+O', () => {
-      try { if (mainWindow) mainWindow.webContents.send('checkba:zetaoffice-open-embed') } catch (e) { /* ignore */ }
-    })
+    // （已移除）⌘⇧O 实验覆盖层：嵌入式编辑器已是产品默认内联编辑器，覆盖层
+    // 只会在文档上凭空盖一条开发工具栏（用户报告）。独立验证窗 ⌘⇧L 保留。
   } catch (e) { /* ignore */ }
   // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 打包态的 pptx-service）；
   // 打包态先确保 pysvc 已解压（首启/升级后带进度窗，常规启动是零开销快路径）
