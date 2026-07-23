@@ -35,6 +35,7 @@ const NAMES = {
   // 记忆
   save_memory: { zh: '保存记忆', en: 'Save memory' },
   query_memory: { zh: '检索记忆', en: 'Query memory' },
+  retrieve_evidence: { zh: '检索证据', en: 'Retrieve evidence' },
   get_user_profile: { zh: '获取用户画像', en: 'Get user profile' },
   // 子任务 / Python
   dispatch_subtask: { zh: '委派子任务', en: 'Delegate subtask' },

@@ -65,6 +65,7 @@ output: |
 | `prompt` | string | 否 | prompt 模板文件名（相对 skill 目录），默认 `prompt.md`。文件缺失则整个 skill 跳过。 |
 | `allowed_tools` | string[] | 否 | 工具白名单（真实注册的工具名，见 `ToolRegistry`）。命中后本轮 LLM 可见工具 = `allowed_tools ∪ ai.skills.base-tools`；白名单与已注册工具零交集时回退为不裁剪（误配置保护）。缺省 `[]` = 只剩基础工具集。 |
 | `output` | string | 否 | 输出结构约定（自然语言），随 prompt 模板一起注入系统消息。 |
+| `requires` | string[] | 否 | 声明依赖的能力契约（如 `evidence.retrieve.v1`，见 `docs/EVIDENCE_CONTRACT.md`）。v1 仅声明不阻断加载：Skill 描述"需要什么能力"，插件/内置实现负责提供，实现缺失时相关工具自然不可见。 |
 
 未知字段被忽略（向前兼容）。
 

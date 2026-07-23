@@ -195,6 +195,7 @@ public class SkillRegistry {
         skill.setTriggers(asStringList(raw.get("triggers")));
         skill.setAllowedTools(asStringList(raw.get("allowed_tools")));
         skill.setOutput(asString(raw.get("output")));
+        skill.setRequires(asStringList(raw.get("requires")));
         String promptFile = asString(raw.get("prompt"));
         if (promptFile != null && !promptFile.isBlank()) {
             skill.setPromptFile(promptFile);

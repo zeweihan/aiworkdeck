@@ -2,6 +2,7 @@ package com.checkba.service.ai.eval;
 
 import com.checkba.service.ai.tools.AgentToolComponent;
 import com.checkba.service.ai.tools.DocumentEditTools;
+import com.checkba.service.ai.tools.EvidenceTools;
 import com.checkba.service.ai.tools.FileTools;
 import com.checkba.service.ai.tools.LegalTools;
 import com.checkba.service.ai.tools.MemoryTools;
@@ -35,6 +36,7 @@ final class RealToolBeans {
     static List<AgentToolComponent> instantiateAll() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
                 DocumentEditTools.class,
+                EvidenceTools.class,
                 FileTools.class,
                 LegalTools.class,
                 MemoryTools.class,
