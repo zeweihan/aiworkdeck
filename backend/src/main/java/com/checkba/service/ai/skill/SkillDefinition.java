@@ -35,6 +35,9 @@ public class SkillDefinition {
     /** 输出结构约定（自然语言描述，随 prompt 一起注入） */
     private String output;
 
+    /** 声明依赖的能力契约（如 evidence.retrieve.v1），由插件/内置实现提供；仅声明，不阻断加载 */
+    private List<String> requires = new ArrayList<>();
+
     /** 来源插件 id（插件携带的 skill）；内置 skill 为 null */
     private String sourcePluginId;
 
@@ -54,6 +57,8 @@ public class SkillDefinition {
     public void setAllowedTools(List<String> allowedTools) { this.allowedTools = allowedTools; }
     public String getOutput() { return output; }
     public void setOutput(String output) { this.output = output; }
+    public List<String> getRequires() { return requires; }
+    public void setRequires(List<String> requires) { this.requires = requires; }
     public String getSourcePluginId() { return sourcePluginId; }
     public void setSourcePluginId(String sourcePluginId) { this.sourcePluginId = sourcePluginId; }
 }
