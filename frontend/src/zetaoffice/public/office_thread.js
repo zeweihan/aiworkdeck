@@ -1216,7 +1216,7 @@ const EXEC = {
     }
     return Object.assign({ success: done > 0, redone: done }, done > 0 ? verifySnapshot() : { message: 'nothing to redo' });
   },
-  // ---- #104 文档变量域原语（VariablePanel via the getWps adapter) ------------
+  // ---- #104 文档变量域原语（VariablePanel via the getEditor adapter) ------------
   // list every variable field in the document: {fields: [{id, scope, varName, text}]}
   var_list() {
     const bms = xModel.getBookmarks();

@@ -58,20 +58,30 @@ LLM 面的 30 个文档编辑工具 `wps_*` 更名为 `doc_*`（宿主类 `WpsTo
   （系统提示中只有 `doc_*` 名），无静默失败。
 - 数据库历史消息中的旧工具名只影响展示（displayName 兜底"工具执行"），不做数据迁移。
 
-### 编辑器前后端契约（Phase 2.5 保持旧名）
+### 编辑器前后端契约（双轨迁移期）
 
-以下 `wps_*` 字符串是前后端契约（事件字典见 `docs/ai_agent_dev.md` §2.2），受不变式 4 约束，
-Phase 2.5 未改动，命名迁移列入 Phase 3：
+以下字符串是前后端契约（事件字典见 `docs/ai_agent_dev.md` §2.2），受不变式 4 约束。
+命名迁移已进入**双轨期**：后端对每条指令按"**新名在前、旧名在后**"各发一份（SSE 单连接
+有序），前端凭"先见新名"判定新后端并丢弃旧名事件去重（`project-overview.vue`
+`handleClientAction` 闩锁）；旧前端不认识新名、只执行旧名——两个方向各恰好执行一次。
+兼容一个发布周期后摘旧名：
+
+| 契约 | 新名（主） | 旧名（双轨别名） |
+|-----|-----------|----------------|
+| SSE 流式写入事件 | `doc_stream_data` | `wps_stream_data` |
+| SSE client_action 命令载荷 | `tool: "editor_command"`（内含 action 字典）| `tool: "wps_command"` |
+| SSE client_action 打开/刷新 | `action: "doc_open_file"` / `"doc_reload_file"` | `wps_open_file` / `wps_reload_file` |
+| 同步打开命令 | `doc_open_file_sync` | `wps_open_file_sync` |
+| 结果回调路由 | `POST /api/ai/agent/editor-result` | `/wps-result`（路由别名，新前端已改发新路由）|
+
+以下为**存量数据契约**，不在本次迁移范围（需另立数据迁移方案）：
 
 | 契约 | 现名 |
 |-----|------|
-| SSE 流式写入事件 | `wps_stream_data` |
-| SSE client_action 命令载荷 | `tool: "wps_command"`（内含 action 字典）|
-| SSE client_action 打开/刷新 | `action: "wps_open_file"` / `"wps_reload_file"` |
-| 同步打开命令 | `wps_open_file_sync` |
-| 结果回调路由 | `POST /api/ai/agent/wps-result` |
 | write_docx 输出 JSON 键 | `wps_file_id`（前端有字符串匹配逻辑）|
-| 文件实体字段 | `ProjectFile.wpsFileId` |
+| 文件实体字段 | `ProjectFile.wpsFileId`（含数据库列与 API JSON 字段）|
+| 存储路径前缀 | `wps-files/`（application.yml / application-prod.yml）|
+| 功能未配置标识 | `FeatureNotConfiguredException` 的 `"wps"` |
 
 ### Skill 体系（Phase 3B）
 
@@ -171,15 +181,17 @@ AgentOrchestrator 仅 3 行挂载点（字段 + activateForTurn + visibleTools �
         docs/SKILL_SPEC.md）；插件可携带 Skill（PLUGIN_SPEC v2.1）；
         内置 listing-pathway；前端插件广场 Skill 区块。
 
-  **Phase 3 剩余项（仅此两项）**：
-  - [ ] **SSE 事件名双轨迁移**：`wps_stream_data` → `doc_stream_data`、
+  **Phase 3 剩余项**：
+  - [x] **SSE 事件名双轨迁移（双轨已落地）**：`wps_stream_data` → `doc_stream_data`、
         `client_action.tool: wps_command` → `editor_command`、
         `wps_open_file(_sync)` / `wps_reload_file` → `doc_*`、路由 `/wps-result` →
-        `/editor-result`。方案：后端双发（新旧事件并行）、前端双听，观察一个发布周期后
-        摘旧名；**合并前必须在 Electron 桌面端真机实测文档打开、查找替换、流式写入三条链路**。
-        随迁移一并清理：前端零散 WPS 遗留（`VariablePanel.getWps` prop、
-        `ChatInterface.vue` `wps-tip-*` CSS 类、`ProjectFile.wpsFileId` 字段语义梳理）；
-        `wps_*` 工具名别名已按门槛于 0.7.9 后移除（PR#189，见 §3「工具命名与别名」）。
+        `/editor-result`。已落地：后端双发（新名在前、旧名在后）、前端双听 + 旧名去重闩锁
+        （见 §3「编辑器前后端契约」）；随迁移已清理前端零散 WPS 遗留
+        （`VariablePanel.getWps` → `getEditor` prop、`ChatInterface.vue` `wps-tip-*` →
+        `doc-tip-*` CSS 类）；`wps_*` 工具名别名已按门槛于 0.7.9 后移除（PR#189）。
+  - [ ] **双轨摘旧名**：兼容一个发布周期后，摘除后端旧名双发、前端旧名分支与
+        `/wps-result` 路由别名；`ProjectFile.wpsFileId` / `wps_file_id` / `wps-files/`
+        前缀等存量数据契约需另立数据迁移方案。
   - [ ] **插件进程级运行时沙箱**：v2 权限校验是分发层的诚实声明模型，插件代码仍与宿主同进程；
         真正强制 file/network 隔离需进程级沙箱（独立进程 + IPC 或 SecurityManager 替代方案）。
 

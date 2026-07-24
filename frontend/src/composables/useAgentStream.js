@@ -464,10 +464,11 @@ export function useAgentStream() {
             } catch (e) {
                 console.error('Failed to parse title_update', e)
             }
-        } else if (evt === 'wps_stream_data') {
-            // Live document streaming (backend event name kept for contract
-            // stability, #79). Routed up the same client_action seam so the page
-            // can feed the embedded LibreOffice editor (buffered insert).
+        } else if (evt === 'doc_stream_data' || evt === 'wps_stream_data') {
+            // Live document streaming. Dual-track migration (AI_ARCHITECTURE.md
+            // Phase 3): new backends emit doc_stream_data first then the legacy
+            // wps_stream_data with the same content; both are routed up the
+            // client_action seam and deduped there by the "new-name-first" latch.
             try {
                 // Mark current bubble as doc-streaming to suppress chat duplication
                 if (currentAssistantBubble.value && !currentAssistantBubble.value.isEditorStreaming) {
@@ -480,10 +481,10 @@ export function useAgentStream() {
 
                 const d = JSON.parse(dataStr)
                 if (clientActionHandler.value) {
-                    clientActionHandler.value({ action: 'wps_stream_data', content: d.content || '' })
+                    clientActionHandler.value({ action: evt, content: d.content || '' })
                 }
             } catch (e) {
-                console.error('Failed to handle wps_stream_data', e)
+                console.error('Failed to handle ' + evt, e)
             }
         } else if (evt === 'cancelled') {
             // 处理取消事件

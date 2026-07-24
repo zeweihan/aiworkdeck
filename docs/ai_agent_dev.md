@@ -17,8 +17,15 @@ v1.8 新增 **"文件化产物生命周期 (File-based Artifact Lifecycle)"**：
 | `text_delta` | `{ content }` | Markdown 增量内容 |
 | `step_update` | `{ bubbleId, stepId, status: "loading|done" }` | 更新步骤进度 |
 | `artifact` | `{ operation: "create|update|resolve", id, type, status?, data?, meta? }` | 产物操作 |
-| `client_action` | `{ tool: "wps_write", action, content, options?: { track_changes: boolean } }` | WPS 本地写入指令 |
+| `client_action`（命令） | `{ tool: "editor_command", action, params, requestId, conversationId }` | 编辑器命令（前端执行后 POST `/api/ai/agent/editor-result` 回传结果）；同步打开为 `action: "doc_open_file_sync"` |
+| `client_action`（打开/刷新） | `{ action: "doc_open_file" \| "doc_reload_file", fileId, fileName, fileType, wpsFileId, ... }` | 单向打开/刷新编辑器文档 |
+| `doc_stream_data` | `{ content }` | 编辑器实时流式写入增量（doc_start_stream 激活后） |
 | `bubble_end` | `{ bubbleId, status: "finished" }` | 气泡结束 |
+
+> **双轨迁移期（AI_ARCHITECTURE.md Phase 3）**：以上编辑器契约的旧名
+> `wps_stream_data` / `tool: "wps_command"` / `wps_open_file(_sync)` / `wps_reload_file` /
+> 路由 `/wps-result` 仍由后端按"新名在前、旧名在后"双发（路由为别名保留），前端凭
+> "先见新名"丢弃旧名去重；兼容一个发布周期后摘旧名。
 
 ### 2.3 事件扩充说明
 - **`artifact` - 命名与存储规则**:

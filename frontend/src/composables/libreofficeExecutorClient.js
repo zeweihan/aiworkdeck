@@ -50,7 +50,7 @@ export const EDITOR_ACTIONS = [
   // worker 端实现——此前 worker 未实现且未入白名单，一直返回 Unknown action。
   'debug_revisions',
   // [#104 变量面板] document variable fields — bookmark-marked spans bound to a
-  // (scope, varName) variable; driven by VariablePanel through the getWps adapter
+  // (scope, varName) variable; driven by VariablePanel through the getEditor adapter
   // in project-overview.vue, not by the AI agent pipeline.
   'var_list', 'var_insert', 'var_update',
   // [#79 债务清偿] WPS-instance-bound features restored on LibreOffice:

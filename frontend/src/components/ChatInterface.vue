@@ -139,11 +139,11 @@
         <view class="awd-dialog-body">
           <view class="rollback-warning-content">
             <text class="warning-text">此操作将删除该消息以及之后的所有对话记录，且无法恢复。</text>
-            <view class="wps-tip-box">
-              <text class="wps-tip-icon">💡</text>
-              <view class="wps-tip-text">
+            <view class="doc-tip-box">
+              <text class="doc-tip-icon">💡</text>
+              <view class="doc-tip-text">
                 <text>如果助手在后续对话中修改了文档（Word/PPT），文件内容不会自动回退。</text>
-                <text class="wps-link-text">AI 的文档修改以修订痕迹记录，可在编辑器中「拒绝修订」恢复原文。</text>
+                <text class="doc-link-text">AI 的文档修改以修订痕迹记录，可在编辑器中「拒绝修订」恢复原文。</text>
               </view>
             </view>
             <view class="rollback-preview">
@@ -3475,7 +3475,7 @@ export default {
   display: block;
 }
 
-.wps-tip-box {
+.doc-tip-box {
   background-color: #f0f9ff;
   border: 1px solid #bae6fd;
   border-radius: 6px;
@@ -3485,19 +3485,19 @@ export default {
   margin-bottom: 16px;
 }
 
-.wps-tip-icon {
+.doc-tip-icon {
   font-size: 18px;
   margin-right: 10px;
 }
 
-.wps-tip-text {
+.doc-tip-text {
   font-size: 13px;
   color: #0369a1;
   display: flex;
   flex-direction: column;
 }
 
-.wps-link-text {
+.doc-link-text {
   font-weight: 500;
   margin-top: 2px;
 }

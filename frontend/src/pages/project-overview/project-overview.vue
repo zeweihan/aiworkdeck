@@ -886,7 +886,7 @@
                     v-if="activeToolKey === 'variables'"
                     ref="variablePanel"
                     :project-id="projectId"
-                    :get-wps="getLibreVariableBridge"
+                    :get-editor="getLibreVariableBridge"
                     :search-keyword="toolsSearchKeyword"
                   />
                   <ProjectFavoritesPanel
@@ -1263,7 +1263,7 @@ import {
   getAiConfig,
   getAssistants, // Added
   getPlugins, // Added
-  sendEditorResult, // 编辑器命令结果回调（POST /wps-result，路由名为前后端契约）
+  sendEditorResult, // 编辑器命令结果回调（POST /editor-result，双轨迁移见 docs/AI_ARCHITECTURE.md Phase 3）
   getFileText,
   promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
@@ -1493,7 +1493,7 @@ export default {
       // 内嵌编辑器保活 LRU：'pane:fileId'（left:123），最近激活在前。在池中的
       // Office 标签切走时实例不销毁（v-show 隐藏），切回免重 boot/重载。
       libreLruKeys: [],
-      // 后端 wps_stream_data 流式写入的本地缓冲（#79：LibreOffice 消费端）
+      // 后端 doc_stream_data（旧名 wps_stream_data）流式写入的本地缓冲（#79：LibreOffice 消费端）
       _docStreamBuffer: '',
       _docStreamTimer: null,
       _docStreamBusy: false,
@@ -5546,6 +5546,16 @@ export default {
     handleClientAction(action) {
         console.log('[ProjectOverview] Client Action:', action)
 
+        // 双轨迁移（docs/AI_ARCHITECTURE.md Phase 3）：新后端对每条指令按"新名在前、旧名在后"
+        // 各发一份。一旦见到任一新名即判定为新后端（SSE 单连接有序），此后丢弃所有旧名事件，
+        // 保证新旧后端搭配下每条指令都恰好执行一次。
+        const isNewName = action.tool === 'editor_command' ||
+            ['doc_open_file', 'doc_reload_file', 'doc_stream_data'].includes(action.action)
+        const isLegacyName = action.tool === 'wps_command' ||
+            ['wps_open_file', 'wps_reload_file', 'wps_stream_data'].includes(action.action)
+        if (isNewName) this._editorContractV2 = true
+        if (isLegacyName && this._editorContractV2) return
+
         if (action.action === 'refresh_files') {
             if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
                 console.log('[ProjectOverview] Refreshing File Tree...')
@@ -5554,24 +5564,24 @@ export default {
             }
         }
         // AI Agent 请求打开文件
-        else if (action.action === 'wps_open_file') {
+        else if (action.action === 'doc_open_file' || action.action === 'wps_open_file') {
             this.handleEditorOpenFile(action)
         }
-        // AI Agent 请求重新加载文件（用于后端修改文件后刷新 WPS）
-        else if (action.action === 'wps_reload_file') {
+        // AI Agent 请求重新加载文件（用于后端修改文件后刷新编辑器）
+        else if (action.action === 'doc_reload_file' || action.action === 'wps_reload_file') {
             this.handleEditorReloadFile(action)
         }
-        // AI Agent 请求执行编辑器命令（事件名沿用 wps_command，前后端契约；双轨迁移见 docs/AI_ARCHITECTURE.md Phase 3）
-        else if (action.tool === 'wps_command') {
-            // 特殊处理 wps_open_file_sync 命令（新建文件流式写入）
-            if (action.action === 'wps_open_file_sync') {
+        // AI Agent 请求执行编辑器命令
+        else if (action.tool === 'editor_command' || action.tool === 'wps_command') {
+            // 特殊处理同步打开命令（新建文件流式写入）
+            if (action.action === 'doc_open_file_sync' || action.action === 'wps_open_file_sync') {
                 this.handleEditorOpenFileSync(action)
             } else {
                 this.handleEditorCommand(action)
             }
         }
-        // 后端流式写入数据（wps_start_stream 工具）：缓冲后经 LibreOffice 执行器落字
-        else if (action.action === 'wps_stream_data') {
+        // 后端流式写入数据（doc_start_stream 工具）：缓冲后经 LibreOffice 执行器落字
+        else if (action.action === 'doc_stream_data' || action.action === 'wps_stream_data') {
             this.handleDocStreamData(action.content || '')
         }
     },
@@ -5619,7 +5629,7 @@ export default {
 
         try {
             if (!params || !params.fileId) {
-                console.error('[ProjectOverview] No fileId in wps_open_file_sync')
+                console.error('[ProjectOverview] No fileId in doc_open_file_sync')
                 await sendEditorResult(conversationId, requestId, false, null, '缺少文件ID')
                 return
             }
@@ -5689,7 +5699,7 @@ export default {
         try {
             const fileId = action.fileId
             if (!fileId) {
-                console.warn('[ProjectOverview] No fileId in wps_open_file action')
+                console.warn('[ProjectOverview] No fileId in doc_open_file action')
                 return
             }
 
@@ -5727,7 +5737,7 @@ export default {
         try {
             const fileId = action.fileId
             if (!fileId) {
-                console.warn('[ProjectOverview] No fileId in wps_reload_file action')
+                console.warn('[ProjectOverview] No fileId in doc_reload_file action')
                 return
             }
 
@@ -5804,7 +5814,7 @@ export default {
 
     /**
      * 处理 AI Agent 的编辑器命令请求（#79：LibreOffice 是唯一执行器；
-     * 结果经 sendEditorResult 回传后端，路由 /wps-result 为前后端契约）
+     * 结果经 sendEditorResult 回传后端，路由 /editor-result，双轨迁移见 Phase 3）
      */
     async handleEditorCommand(action) {
         console.log('[ProjectOverview] ========== Editor Command Start ==========')
@@ -5940,7 +5950,7 @@ export default {
         if (!this.libreOfficeActive) console.log('[ProjectOverview] LibreOffice editor closed — agent commands unavailable until reopened')
     },
 
-    // #104: WPS-era getWps() adapter for VariablePanel — the five document-field
+    // #104: getEditor() adapter for VariablePanel — the five document-field
     // methods it expects, implemented over the LibreOffice executor's var_*
     // commands. Returns null while no editor is active so the panel keeps its
     // own “请先点击激活一个编辑窗口” fallback.

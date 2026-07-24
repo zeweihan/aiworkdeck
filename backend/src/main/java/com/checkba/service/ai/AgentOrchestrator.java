@@ -368,9 +368,11 @@ public class AgentOrchestrator {
             }
         });
 
-        // 编辑器实时流式写入拦截（事件名沿用 wps_stream_data，前后端契约）
+        // 编辑器实时流式写入拦截（双轨迁移：新名 doc_stream_data 必须先于旧名 wps_stream_data 发出，
+        // 前端以"先见新名"判定新后端并丢弃旧名去重；一个发布周期后摘旧名，见 docs/AI_ARCHITECTURE.md Phase 3）
         handler.setOnEditorStream(token -> {
             if (editorBridgeService.isStreamingMode(conversationId)) {
+                sseEmitterService.send(conversationId, "doc_stream_data", java.util.Map.of("content", token));
                 sseEmitterService.send(conversationId, "wps_stream_data", java.util.Map.of("content", token));
             }
         });

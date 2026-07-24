@@ -3,7 +3,7 @@
 // Epic #43 (LibreOffice migration), WPS removal #79. The agent command pipeline is:
 //   backend SSE `client_action` -> useAgentStream -> ChatInterface emits
 //   -> project-overview.vue handleEditorCommand -> executor.executeCommand(action, params)
-//   -> POST /api/ai/agent/wps-result
+//   -> POST /api/ai/agent/editor-result (legacy alias /wps-result, dual-track Phase 3)
 //
 // RFC v2's thesis (docs/LIBREOFFICE_MIGRATION_PLAN.md) was that the backend agent
 // contract is editor-agnostic and ONLY the frontend executor changes. With WPS
