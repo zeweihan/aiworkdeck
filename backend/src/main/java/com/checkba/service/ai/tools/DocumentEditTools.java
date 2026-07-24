@@ -700,6 +700,26 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "添加批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【批注】在指定锚点处的文本上添加 Word 批注（comment）。修订文档时，解释、说明、修改理由等不属于正文的内容" +
+          "**必须**用本工具以批注呈现，禁止写入正文。先 doc_find_text 拿到目标文本的 anchorId，再对它加批注；" +
+          "批注署名 AI Workdeck，附着在目标文本上，保存为 docx 后可在 Word 中查看。")
+    public String doc_add_comment(
+            @P("doc_find_text 返回的 anchorId（批注附着的目标文本）") String anchorId,
+            @P("批注内容（解释/说明/修改理由）") String comment
+    ) {
+        log.info("Tool: doc_add_comment called anchor={}, comment length={}", anchorId, comment != null ? comment.length() : 0);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("anchor", anchorId != null ? anchorId : "");
+            params.put("comment", comment != null ? comment : "");
+            return editorBridgeService.executeEditorCommand("add_comment", params);
+        } catch (Exception e) {
+            log.error("Failed to add comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
     // ==================== 调试工具 ====================
 
     @Tool("调试工具：获取文档中所有修订记录的详细信息，包括修订类型、位置、内容等。用于分析和诊断修订模式下的文本操作问题。")

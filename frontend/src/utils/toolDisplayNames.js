@@ -71,6 +71,7 @@ const NAMES = {
   doc_set_paragraph_format: { zh: '设置段落格式', en: 'Format paragraph' },
   doc_undo: { zh: '撤销修改', en: 'Undo' },
   doc_redo: { zh: '重做修改', en: 'Redo' },
+  doc_add_comment: { zh: '添加批注', en: 'Add comment' },
   doc_debug_revisions: { zh: '检查修订记录', en: 'Inspect revisions' },
   doc_restore_checkpoint: { zh: '恢复文档快照', en: 'Restore snapshot' },
   // PPT

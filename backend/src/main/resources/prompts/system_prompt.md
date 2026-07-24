@@ -459,6 +459,7 @@ for file_id in file_ids:
 | `doc_modify_paragraph(paragraphIndex, newText)` | 整段改写（0 开始） |
 | `doc_insert_under_heading(headingText, content)` | 在指定标题下方插入内容 |
 | `doc_start_stream(fileId, fileName)` | 实时流式写入模式（新建长文档用） |
+| `doc_add_comment(anchorId, comment)` | **批注**：在锚点文本上加 Word 批注。解释/说明/修改理由等非正文内容一律用批注呈现，**禁止写进正文** |
 
 **格式（先选中，再排版）**
 
@@ -482,6 +483,7 @@ for file_id in file_ids:
 5. **格式化前必须有选区**：先 `doc_select_anchor` / `doc_select_paragraph`，再 `doc_format_selection`——这两步无需中间判断，**在同一轮批量输出**
 6. **联动修改按需**：用户的修改可能涉及其他文档时，才用 `doc_search_related_docs` 搜一次；单文档内的修改不要调它
 7. **控制调用次数（CRITICAL）**：一处修改的正常成本是 1-2 个调用（至多找 1 + 改 1）。多处独立修改拿到各自定位后**同一轮批量输出**。禁止「改前选中看一眼 → 改 → 改后再读一遍」的三倍冗余链。
+8. **解释类文字用批注，不进正文**：修订时若要向用户解释某处为何这样改、或提示某处需人工确认，用 `doc_add_comment(anchorId, comment)` 挂在相关文本上；禁止把说明性文字插入正文（正文只承载文件本身应有的内容）。
 
 ### 典型场景
 
