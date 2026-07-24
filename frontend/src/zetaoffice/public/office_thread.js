@@ -1397,6 +1397,35 @@ const EXEC = {
     try { vc.collapseToEnd(); } catch (e) {}
     return { success: true, bytes: u8.length, width: w, height: h };
   },
+  // [批注] add a Word comment (annotation) on the text at an anchorId — the
+  // channel for explanatory notes: 解释/说明类文字不进正文，挂批注。Engine-
+  // native path (same precedent as the PR#164 delete keys): select the anchor
+  // range, then dispatch .uno:InsertAnnotation with Text/Author args. The
+  // API alternative (createInstance Annotation + insertTextContent bAbsorb)
+  // was probe-tested on this build: it throws a spurious RuntimeException from
+  // the post-attach view code AND exports only a point commentReference; the
+  // dispatch is clean and exports a true RANGE comment (commentRangeStart/End
+  // spanning the target text), which is what Word shows attached to the run.
+  // Date is stamped by the engine; author comes from the dispatch arg.
+  add_comment(p) {
+    const anchorId = String(p.anchor || '');
+    const comment = String(p.comment || '');
+    if (!anchorId) return { success: false, message: 'add_comment requires {anchor} (anchorId from find_text_locations)' };
+    if (!comment) return { success: false, message: 'add_comment requires {comment}' };
+    const range = anchorRange(anchorId);
+    if (!range) return { success: false, message: 'anchor not found: ' + anchorId };
+    const annotatedText = (range.getString() || '').slice(0, 120);
+    // 拟人：选中并滚动到被批注的位置——选区同时就是批注的附着区间
+    if (!selectVisibly(range)) return { success: false, message: 'could not select anchor: ' + anchorId };
+    css.frame.DispatchHelper.create(context).executeDispatch(
+      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+      [mkProp('Text', comment), mkProp('Author', AI_AUTHOR)]);
+    return {
+      success: true, anchor: anchorId, author: AI_AUTHOR, comment: comment,
+      annotatedText: annotatedText,
+      paragraph: (paragraphTextOf(range) || '').slice(0, 200),
+    };
+  },
   // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
   // 一直派发 debug_revisions，worker 此前未实现（一律返回 not implemented）；
   // 补上后同时作为修订署名（AI Workdeck / 用户名）的验证探针。

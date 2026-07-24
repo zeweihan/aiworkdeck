@@ -56,6 +56,20 @@ const DEBUG_ACTIONS = `
     const vc = ctrl.getViewCursor();
     return { success: true, value: vc.getPropertyValue(String(p.prop)), selected: (vc.getString() || '').slice(0, 40) };
   },
+  debug_list_comments() {
+    const out = [];
+    const en = xModel.getTextFields().createEnumeration();
+    while (en.hasMoreElements()) {
+      const f = en.nextElement();
+      if (f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation')) {
+        const item = {};
+        try { item.author = f.getPropertyValue('Author'); } catch (e) {}
+        try { item.content = f.getPropertyValue('Content'); } catch (e) {}
+        out.push(item);
+      }
+    }
+    return { success: true, count: out.length, comments: out };
+  },
 `
 function patchServed(urlPath, content) {
   if (urlPath === '/office_thread.js') {
@@ -66,8 +80,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments"'),
       'utf8')
   }
   return content
@@ -276,6 +290,19 @@ try {
     rv11.success && delTexts(rv11).includes('三') && delTexts(rv11).every((t2) => (t2 || '').length === 1), JSON.stringify(rv11))
   check('两处插入各自成修订（六 / 全部）', mine(rv11).filter((r) => r.type === 'Insert').length === 2, JSON.stringify(mine(rv11)))
   check('改后段落实文正确', (await doc()) === '甲方应于六十日内向乙方支付全部服务费。', await doc())
+
+  console.log('== 12) add_comment 批注：解释文字挂批注、不进正文 ==')
+  await reset('本合同自签署之日起生效。', true)
+  const ft = await exec('find_text_locations', { keyword: '签署之日' })
+  check('find_text 拿到锚点', ft.success && ft.count === 1 && !!ft.matches[0].anchorId, JSON.stringify(ft))
+  const cm = await exec('add_comment', { anchor: ft.matches[0].anchorId, comment: '建议明确签署日期的认定方式', __agent: true })
+  check('add_comment 成功且附着目标文本', cm.success && cm.annotatedText === '签署之日', JSON.stringify(cm))
+  const lc = await exec('debug_list_comments')
+  check('批注可读回、署名 AI Workdeck、内容完整',
+    lc.success && lc.count === 1 && lc.comments[0].author === 'AI Workdeck' && lc.comments[0].content === '建议明确签署日期的认定方式',
+    JSON.stringify(lc))
+  check('批注文字不进正文', await doc() === '本合同自签署之日起生效。', await doc())
+  check('缺锚点被拒绝', !(await exec('add_comment', { comment: '孤儿批注' })).success)
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {

@@ -61,6 +61,9 @@ export const EDITOR_ACTIONS = [
   // [#79 click-to-open] LO WASM 不触发 window.open（v0.7.1 真机证实）：编辑器页
   // 监听 canvas 点击后经此原语读取光标处链接再转发宿主。
   'get_hyperlink_at_cursor',
+  // [批注] Word comment on an anchored range — 解释/说明类文字不进正文的通道
+  // （backend doc_add_comment）。
+  'add_comment',
 ]
 
 /**
