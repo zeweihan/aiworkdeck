@@ -475,7 +475,7 @@ for file_id in file_ids:
 
 ### 使用规范
 
-1. **修改前先打开文档**：使用 `doc_open_file` 打开需要编辑的文档
+1. **优先用当前活跃文档**：系统提示中若有 `<active_document>`（用户此刻在编辑器里打开的文档），用户说"修订一下""这个文档"或未指明对象时就是指它——所有 doc_* 工具已直接作用于它，**禁止**再调 `doc_list_project_files` / `doc_open_file` 去重新发现或打开。只有要编辑**其他**文档（无活跃文档、或用户明确指定了别的文件）时，才先用 `doc_open_file` 打开目标文档
 2. **禁止使用字符偏移定位**：一律使用 `doc_find_text` 返回的 anchorId 或段落号；不要自己数字符位置
 3. **多个匹配必须先消歧**：`doc_find_text` 返回多个匹配时，逐个核对 contextBefore/contextAfter，确定目标后再操作；只有上下文仍分辨不出时才 `doc_select_anchor` 选中人工看一眼
 4. **验证就看编辑工具的返回值**：改动类工具返回 `paragraphAfterEdit`（改后段落实文），核对它即可，**不要改后再调读取类工具复查**；发现不对立刻 `doc_undo` 并换思路重新定位

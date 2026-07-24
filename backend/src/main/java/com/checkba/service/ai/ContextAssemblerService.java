@@ -240,21 +240,32 @@ public class ContextAssemblerService {
                      activeContext.getId(), activeContext.getName());
             
             String content = legalTools.read_document(activeContext.getId());
+
+            systemText.append("\n\n# Active Document (当前活跃文档)\n");
+            systemText.append("该文档（id=").append(activeContext.getId())
+                      .append(", name=").append(activeContext.getName())
+                      .append("）**已在编辑器中打开**，就是用户此刻正在看的文档。");
+            systemText.append("用户说\"修订一下\"\"这个文档\"\"当前文档\"或未指明对象时，默认就是指它。\n");
+            systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
+            systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
+            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+
             if (content != null && !content.isEmpty()) {
                 // Truncate if too long
                 int maxCharsPerFile = contextProperties.getFiles().getMaxCharsPerFile();
                 if (content.length() > maxCharsPerFile) {
                     content = content.substring(0, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
                 }
-                
-                systemText.append("\n\n# Active Document (当前活跃文档)\n");
-                systemText.append("The user is currently viewing/editing this document. ");
-                systemText.append("Use this context if the user's instruction refers to \"current document\", \"this file\", ");
-                systemText.append("\"line X\", \"paragraph X\", or similar positional references.\n\n");
+
                 systemText.append("<active_document id=\"").append(activeContext.getId())
                           .append("\" name=\"").append(activeContext.getName()).append("\"><![CDATA[\n");
                 systemText.append(content);
                 systemText.append("\n]]></active_document>\n");
+            } else {
+                // 正文暂时读不到也要保留文档标识，模型仍可用 doc_get_document_text 等工具直接读
+                systemText.append("<active_document id=\"").append(activeContext.getId())
+                          .append("\" name=\"").append(activeContext.getName())
+                          .append("\">[正文暂不可读，可用 doc_get_document_text 直接分段读取]</active_document>\n");
             }
         }
 
