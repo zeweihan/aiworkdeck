@@ -282,6 +282,9 @@ public class DocumentEditTools implements AgentToolComponent {
             @P("是否替换全部匹配项，默认 true") Boolean replaceAll
     ) {
         log.info("Tool: doc_find_replace called find={}, replace={}", findText, replaceText);
+        if (findText == null || findText.isEmpty() || replaceText == null) {
+            return "Error: 缺少必填参数 findText/replaceText。请用命名参数重新调用，例如 doc_find_replace(findText=\"原文\", replaceText=\"新文\", replaceAll=true)。";
+        }
         try {
             return editorBridgeService.executeEditorCommand("find_replace", 
                     java.util.Map.of(

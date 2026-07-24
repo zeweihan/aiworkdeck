@@ -164,6 +164,49 @@ class XmlToolCallParserTest {
     }
 
     @Test
+    @DisplayName("位置参数：doc_find_replace(\"合同\", \"协议\", true) 按签名顺序映射")
+    void parsesPositionalArgs() {
+        XmlToolCallParser.ParsedCall call = single(
+                "<tool_code>doc_find_replace(\"合同\", \"协议\", true)</tool_code>");
+        assertEquals("doc_find_replace", call.toolName());
+        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("合同", args.getStr("findText"));
+        assertEquals("协议", args.getStr("replaceText"));
+        assertEquals("true", args.getStr("replaceAll"));
+    }
+
+    @Test
+    @DisplayName("位置参数：跳过服务端注入参数 projectId 不错位")
+    void positionalArgsSkipServerContextParams() {
+        XmlToolCallParser.ParsedCall call = single(
+                "<tool_code>pptx_generate(\"年度总结\", \"汇报.pptx\")</tool_code>");
+        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("年度总结", args.getStr("topic"));
+        assertEquals("汇报.pptx", args.getStr("fileName"));
+        assertFalse(args.containsKey("projectId"));
+    }
+
+    @Test
+    @DisplayName("混合写法：位置参数与命名参数共存")
+    void parsesMixedPositionalAndNamedArgs() {
+        XmlToolCallParser.ParsedCall call = single(
+                "<tool_code>doc_find_replace(\"甲方\", replaceText=\"乙方\")</tool_code>");
+        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("甲方", args.getStr("findText"));
+        assertEquals("乙方", args.getStr("replaceText"));
+    }
+
+    @Test
+    @DisplayName("位置参数：引号内的逗号与转义不被切分")
+    void positionalArgsKeepQuotedCommas() {
+        XmlToolCallParser.ParsedCall call = single(
+                "<tool_code>doc_find_replace(\"甲方, 乙方\", \"双方\\n各方\")</tool_code>");
+        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
+        assertEquals("甲方, 乙方", args.getStr("findText"));
+        assertEquals("双方\n各方", args.getStr("replaceText"));
+    }
+
+    @Test
     @DisplayName("containsToolCall 判定")
     void detectsToolCallPresence() {
         assertTrue(parser.containsToolCall("<tool_code>x()</tool_code>"));

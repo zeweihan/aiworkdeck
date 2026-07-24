@@ -106,7 +106,8 @@ public class XmlToolCallParser {
         Optional<ToolRegistry.RegisteredTool> tool = toolRegistry.resolve(
                 ToolRegistry.TOOL_NAME_ALIASES.getOrDefault(toolName, toolName));
         if (tool.isPresent()) {
-            for (java.lang.reflect.Parameter p : tool.get().method().getParameters()) {
+            java.lang.reflect.Parameter[] params = tool.get().method().getParameters();
+            for (java.lang.reflect.Parameter p : params) {
                 String paramName = p.getName();
                 String value = extractStringArg(code, paramName);
                 if (value.isEmpty()) {
@@ -120,6 +121,20 @@ public class XmlToolCallParser {
                 if (!value.isEmpty()) {
                     args.set(paramName, value);
                 }
+            }
+            // 5. 位置参数兜底：doc_find_replace("合同", "协议", true) 这类无 key= 写法，
+            //    按签名声明顺序映射到尚未命中的参数（跳过服务端注入参数，避免错位）
+            List<String> positional = extractPositionalArgs(code, toolName);
+            int posIdx = 0;
+            for (java.lang.reflect.Parameter p : params) {
+                if (posIdx >= positional.size()) {
+                    break;
+                }
+                String paramName = p.getName();
+                if (ToolRegistry.isServerContextParam(paramName) || args.containsKey(paramName)) {
+                    continue;
+                }
+                args.set(paramName, positional.get(posIdx++));
             }
         } else {
             // 未注册工具（可能是插件或幻觉调用）：通用 key=value 提取，交由分发层判定
@@ -170,6 +185,116 @@ public class XmlToolCallParser {
         String head = code.substring(0, paren).trim();
         int dot = head.lastIndexOf('.');
         return dot != -1 ? head.substring(dot + 1).trim() : head;
+    }
+
+    private static final Pattern NAMED_ARG_TOKEN_PATTERN = Pattern.compile("^[A-Za-z_]\\w*\\s*=(?!=)");
+
+    /**
+     * 提取调用中的位置参数（不带 key= 的实参），按出现顺序返回还原后的字符串值。
+     * 供 {@link #parseSingle} 在命名参数提取后做签名顺序映射兜底。
+     */
+    private List<String> extractPositionalArgs(String code, String toolName) {
+        List<String> positional = new ArrayList<>();
+        for (String token : splitTopLevelArgs(code, toolName)) {
+            String trimmed = token.trim();
+            if (trimmed.isEmpty() || NAMED_ARG_TOKEN_PATTERN.matcher(trimmed).find()) {
+                continue;
+            }
+            positional.add(unquote(trimmed));
+        }
+        return positional;
+    }
+
+    /**
+     * 把 toolName(...) 括号内的实参按顶层逗号切分（引号内与嵌套括号内的逗号不切）。
+     * 优先定位 toolName( 之后的括号，兼容 print(tool(...)) 包裹写法。
+     */
+    private List<String> splitTopLevelArgs(String code, String toolName) {
+        List<String> tokens = new ArrayList<>();
+        int start = code.indexOf(toolName + "(");
+        if (start != -1) {
+            start += toolName.length() + 1;
+        } else {
+            start = code.indexOf('(');
+            if (start == -1) {
+                return tokens;
+            }
+            start += 1;
+        }
+        int depth = 1;
+        char quote = 0;
+        boolean escaped = false;
+        StringBuilder cur = new StringBuilder();
+        for (int i = start; i < code.length(); i++) {
+            char c = code.charAt(i);
+            if (quote != 0) {
+                cur.append(c);
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == quote) {
+                    quote = 0;
+                }
+                continue;
+            }
+            if (c == '"' || c == '\'') {
+                quote = c;
+                cur.append(c);
+            } else if (c == '(' || c == '[' || c == '{') {
+                depth++;
+                cur.append(c);
+            } else if (c == ')' || c == ']' || c == '}') {
+                depth--;
+                if (depth == 0) {
+                    break;
+                }
+                cur.append(c);
+            } else if (c == ',' && depth == 1) {
+                tokens.add(cur.toString());
+                cur.setLength(0);
+            } else {
+                cur.append(c);
+            }
+        }
+        if (!cur.toString().trim().isEmpty()) {
+            tokens.add(cur.toString());
+        }
+        return tokens;
+    }
+
+    /**
+     * 还原单个实参字面量：三引号原样取内、单/双引号解转义（\n \t \r）、无引号原样返回。
+     */
+    private String unquote(String token) {
+        for (String triple : new String[]{"\"\"\"", "'''"}) {
+            if (token.length() >= 6 && token.startsWith(triple) && token.endsWith(triple)) {
+                return token.substring(3, token.length() - 3);
+            }
+        }
+        if (token.length() >= 2) {
+            char first = token.charAt(0);
+            if ((first == '"' || first == '\'') && token.charAt(token.length() - 1) == first) {
+                StringBuilder sb = new StringBuilder();
+                boolean escaped = false;
+                for (int i = 1; i < token.length() - 1; i++) {
+                    char c = token.charAt(i);
+                    if (escaped) {
+                        if (c == 'n') sb.append('\n');
+                        else if (c == 't') sb.append('\t');
+                        else if (c == 'r') sb.append('\r');
+                        else sb.append(c);
+                        escaped = false;
+                    } else if (c == '\\') {
+                        escaped = true;
+                    } else {
+                        sb.append(c);
+                    }
+                }
+                return sb.toString();
+            }
+        }
+        return token;
     }
 
     /**
