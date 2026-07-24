@@ -84,6 +84,11 @@ export default {
       // Autosave: set by the worker's modify signal, cleared when a save starts;
       // read by the host (closeFile / evict) to know if a flush is needed.
       dirty: false,
+      // 数据安全闸：load_document 失败（或非空文件下载到 0 字节）后置位。此时
+      // worker 里还是空白 boot 文档，任何保存都会用空文档覆盖后端真文件——
+      // autosave/flushSave 一律拒绝。不能复用 isError（'保存失败' 也含'失败'，
+      // 会误杀保存重试）。
+      docLoadFailed: false,
       // 加载进度面板状态：bootPct 按里程碑推进（其间缓慢滴答，避免看起来卡死），
       // bootCap 是当前阶段允许滴到的上限；dl* 是文档字节下载进度。
       bootPct: 3,
@@ -256,7 +261,9 @@ export default {
         } catch (e) {
           // Load failed → the seeded prototype is still showing. Surface it; the
           // editor stays usable (AI/IME act on whatever is shown) but the content
-          // is wrong, so this is loud, not silent.
+          // is wrong, so this is loud, not silent. docLoadFailed 关保存闸——
+          // 空白画布上的任何编辑都不得回传覆盖后端真文件。
+          this.docLoadFailed = true
           this.statusText = '文档加载失败'
           this.appendLog('load_document failed: ' + (e && e.message ? e.message : e))
         }
@@ -296,6 +303,9 @@ export default {
       // editor the worker booted (the user edits + saves into it). Only a real
       // fetch error (non-200, handled in fetchArrayBuffer) surfaces as failed.
       if (bytes.length === 0) {
+        // 元数据说文件非空却下载到 0 字节 = 后端/存储瞬时异常，绝不能当
+        // "新建空白文档"——那会让后续编辑以空文档覆盖真文件。按加载失败走。
+        if (f.fileSize > 0) throw new Error('文件非空（' + f.fileSize + ' bytes）但下载到 0 字节，拒绝按空白文档打开')
         this.appendLog('文档为空（新建/未保存）→ 显示空白文档 / empty doc → blank editor: ' + name)
         return
       }
@@ -334,7 +344,8 @@ export default {
     // press anything. Idle window 2.5s; continuous typing still hits the backend
     // at least every 15s (max-wait), so a crash can't eat a long burst.
     onDocModified() {
-      if (!this.ready || !this.file) return
+      // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件
+      if (!this.ready || !this.file || this.docLoadFailed) return
       this.dirty = true
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
@@ -390,6 +401,9 @@ export default {
     async saveDocument() {
       const f = this.file
       if (!f || !this.executor || this.saving) return false
+      // 最后一道闸（onDocModified 之外的调用方也拦住）：文档没成功加载，
+      // 导出的只会是空白 boot 文档——拒绝覆盖后端真文件。
+      if (this.docLoadFailed) { this.appendLog('save blocked: 文档未成功加载，拒绝用空白文档覆盖后端文件'); return false }
       const fileId = f.wpsFileId || f.id
       if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return false }
       this.saving = true
