@@ -418,4 +418,11 @@ public class ToolRegistry {
     public static List<String> aliasesFor(String paramName) {
         return ARG_ALIASES.getOrDefault(paramName, List.of());
     }
+
+    /**
+     * 是否为服务端注入参数（对 LLM 不可见，XML 解析器做位置参数映射时须跳过）。
+     */
+    public static boolean isServerContextParam(String paramName) {
+        return SERVER_CONTEXT_PARAMS.contains(paramName);
+    }
 }
