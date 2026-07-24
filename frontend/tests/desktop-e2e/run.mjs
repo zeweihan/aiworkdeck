@@ -185,15 +185,18 @@ try {
     if (!r || r.success !== true) throw new Error('insert 失败: ' + JSON.stringify(r).slice(0, 150))
   })
 
-  await step('点保存按钮并等待「已保存」', async () => {
-    await mouseClickSel('.libre-save')
+  await step('等待自动保存「已保存」', async () => {
+    // 手动保存按钮已随 PR#185 实验工具栏移除——插入即触发 modified → 自动
+    // 保存（约 2.5s 防抖）。「已保存」徽标只停 2.5s，也接受 dirty 已清且不在
+    // 保存中（徽标窗口被轮询错过时的等价完成信号）。
     for (let i = 0; i < 60; i++) {
-      const st = await editorEval('return { status: ed.statusText, saving: ed.saving }')
+      const st = await editorEval('return { status: ed.statusText, saving: ed.saving, dirty: ed.dirty }')
       if (/已保存/.test(st.status)) return
+      if (i > 5 && !st.dirty && !st.saving && !/失败/.test(st.status)) return
       if (/失败/.test(st.status)) throw new Error('保存状态: ' + st.status)
       await sleep(1000)
     }
-    throw new Error('保存未确认(超时)')
+    throw new Error('自动保存未确认(超时)')
   })
 
   await step('API 下载 docx 验证内容落盘', async () => {
