@@ -9,7 +9,8 @@ import org.springframework.web.bind.annotation.*;
 /**
  * 编辑器操作结果接收控制器
  * 
- * 接收前端执行编辑器操作后的结果回调（路由 /wps-result 为前后端契约，保持旧名）
+ * 接收前端执行编辑器操作后的结果回调（双轨迁移：新路由 /editor-result，
+ * 旧路由 /wps-result 保留别名供旧前端使用，一个发布周期后摘除）
  */
 @RestController
 @RequestMapping("/api/ai/agent")
@@ -24,7 +25,7 @@ public class EditorResultController {
      * 
      * 前端执行完编辑器操作后，调用此接口返回结果
      */
-    @PostMapping("/wps-result")
+    @PostMapping({"/editor-result", "/wps-result"})
     public EditorResultResponse receiveEditorResult(@RequestBody EditorResultPayload payload) {
         log.info("Received editor result: requestId={}, success={}", payload.getRequestId(), payload.isSuccess());
         

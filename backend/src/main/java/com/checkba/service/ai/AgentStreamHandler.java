@@ -66,7 +66,7 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         }
     }
     
-    // ==================== Editor Stream Filtering Logic（过滤后实时写入编辑器文档；SSE 事件名 wps_stream_data 为前后端契约保留） ====================
+    // ==================== Editor Stream Filtering Logic（过滤后实时写入编辑器文档；SSE 事件名双轨 doc_stream_data/wps_stream_data，见 AgentOrchestrator） ====================
     
     // Buffer for editor stream parser to handle split tags
     private final StringBuilder editorStreamBuffer = new StringBuilder();

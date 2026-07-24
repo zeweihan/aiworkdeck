@@ -189,7 +189,7 @@ public class DocumentEditTools implements AgentToolComponent {
             }
 
             // 2. 同步打开文件 (Wait for Ready)
-            String resultJson = editorBridgeService.executeEditorCommand("wps_open_file_sync", java.util.Map.of(
+            String resultJson = editorBridgeService.executeEditorCommand("doc_open_file_sync", java.util.Map.of(
                     "fileId", file.getId(),
                     "fileName", file.getName(),
                     "fileType", file.getFileType(),

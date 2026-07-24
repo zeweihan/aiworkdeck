@@ -24,12 +24,14 @@ import java.util.concurrent.TimeoutException;
  * 工作流程：
  * 1. Agent 调用文档编辑工具 -> DocumentEditTools 调用 executeEditorCommand
  * 2. EditorBridgeService 生成 requestId，发送 SSE 事件，创建 CompletableFuture
- * 3. 前端执行操作后调用 /api/ai/agent/wps-result 返回结果
+ * 3. 前端执行操作后调用 /api/ai/agent/editor-result 返回结果（旧路由 /wps-result 保留别名）
  * 4. EditorResultController 调用 completeEditorAction 解锁 CompletableFuture
  * 5. executeEditorCommand 获取结果并返回给 DocumentEditTools
  *
  * 历史沿革：原名 WpsActionService（WPS WebOffice 时代）。SSE 事件与路由中的
- * wps_* 字符串是前后端契约（见 docs/ai_agent_dev.md §2.2），保持旧名不变。
+ * wps_* 字符串是前后端契约（见 docs/ai_agent_dev.md §2.2），当前处于双轨迁移期：
+ * 每条指令按"新名在前、旧名在后"各发一份（doc_* 与 editor_command + wps_*），前端凭
+ * "先见新名"判定新后端并丢弃旧名去重；兼容一个发布周期后摘旧名（AI_ARCHITECTURE.md Phase 3）。
  */
 @Service
 @RequiredArgsConstructor
@@ -98,19 +100,17 @@ public class EditorBridgeService {
         }
 
         try {
-            String payload = objectMapper.writeValueAsString(Map.of(
-                    "action", "wps_open_file",
+            Map<String, Object> fields = Map.of(
                     "fileId", file.getId(),
                     "fileName", file.getName(),
                     "fileType", file.getFileType(),
                     "wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "",
                     "trackRevisions", true,
                     "userName", "AI Workdeck"
-            ));
-            
-            sseEmitterService.send(conversationId, "client_action", payload);
-            log.info("Sent wps_open_file action for file: {} (id={})", file.getName(), file.getId());
-            
+            );
+            sendDualNamedAction("doc_open_file", "wps_open_file", conversationId, fields);
+            log.info("Sent doc_open_file action for file: {} (id={})", file.getName(), file.getId());
+
         } catch (Exception e) {
             log.error("Failed to send open file action", e);
         }
@@ -128,20 +128,31 @@ public class EditorBridgeService {
         }
 
         try {
-            String payload = objectMapper.writeValueAsString(Map.of(
-                    "action", "wps_reload_file",
+            Map<String, Object> fields = Map.of(
                     "fileId", file.getId(),
                     "fileName", file.getName(),
                     "fileType", file.getFileType(),
                     "wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : ""
-            ));
-            
-            sseEmitterService.send(conversationId, "client_action", payload);
-            log.info("Sent wps_reload_file action for file: {} (id={})", file.getName(), file.getId());
-            
+            );
+            sendDualNamedAction("doc_reload_file", "wps_reload_file", conversationId, fields);
+            log.info("Sent doc_reload_file action for file: {} (id={})", file.getName(), file.getId());
+
         } catch (Exception e) {
             log.error("Failed to send reload file action", e);
         }
+    }
+
+    /**
+     * 双轨迁移期的单向 client_action 发送：同一份载荷按"新名在前、旧名在后"各发一次。
+     * 顺序是契约的一部分——前端凭"先见新名"判定新后端并丢弃随后的旧名事件去重。
+     */
+    private void sendDualNamedAction(String newAction, String legacyAction,
+                                     String conversationId, Map<String, Object> fields) throws Exception {
+        java.util.Map<String, Object> payloadMap = new java.util.HashMap<>(fields);
+        payloadMap.put("action", newAction);
+        sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
+        payloadMap.put("action", legacyAction);
+        sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
     }
 
     /**
@@ -210,16 +221,20 @@ public class EditorBridgeService {
         pendingRequests.put(requestId, future);
 
         try {
-            // 构建并发送 SSE 事件
-            String payload = objectMapper.writeValueAsString(Map.of(
-                    "tool", "wps_command",
-                    "action", action,
-                    "params", params != null ? params : Map.of(),
-                    "requestId", requestId,
-                    "conversationId", conversationId
-            ));
-            
-            sseEmitterService.send(conversationId, "client_action", payload);
+            // 构建并发送 SSE 事件（双轨：新名 editor_command 在前、旧名 wps_command 在后，
+            // requestId 相同；action 中仅 doc_open_file_sync 有旧名 wps_open_file_sync 需映射）
+            String legacyAction = "doc_open_file_sync".equals(action) ? "wps_open_file_sync" : action;
+            java.util.Map<String, Object> payloadMap = new java.util.HashMap<>();
+            payloadMap.put("action", action);
+            payloadMap.put("params", params != null ? params : Map.of());
+            payloadMap.put("requestId", requestId);
+            payloadMap.put("conversationId", conversationId);
+
+            payloadMap.put("tool", "editor_command");
+            sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
+            payloadMap.put("tool", "wps_command");
+            payloadMap.put("action", legacyAction);
+            sseEmitterService.send(conversationId, "client_action", objectMapper.writeValueAsString(payloadMap));
             log.info("Sent editor command: action={}, requestId={}", action, requestId);
 
             // 等待前端执行结果

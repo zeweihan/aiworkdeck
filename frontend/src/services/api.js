@@ -1325,7 +1325,8 @@ export function copyDdRequest(requestId) {
 // ==================== 编辑器操作结果回调 ====================
 
 /**
- * 发送编辑器操作结果到后端（路由 /wps-result 为前后端契约，保持旧名）
+ * 发送编辑器操作结果到后端（双轨迁移：新路由 /editor-result；后端同版本起
+ * 保留旧路由 /wps-result 别名供旧前端使用，见 docs/AI_ARCHITECTURE.md Phase 3）
  * @param {string} conversationId - 会话 ID
  * @param {string} requestId - 请求 ID
  * @param {boolean} success - 是否成功
@@ -1334,7 +1335,7 @@ export function copyDdRequest(requestId) {
  */
 export function sendEditorResult(conversationId, requestId, success, data, error = null) {
   return request({
-    url: '/api/ai/agent/wps-result',
+    url: '/api/ai/agent/editor-result',
     method: 'POST',
     data: {
       conversationId,

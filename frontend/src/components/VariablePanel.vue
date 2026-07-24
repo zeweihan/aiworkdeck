@@ -92,7 +92,7 @@ export default {
       type: [String, Number],
       required: true
     },
-    getWps: {
+    getEditor: {
       type: Function,
       default: null
     },
@@ -233,13 +233,13 @@ export default {
     },
 
     async fetchDocFields() {
-      const wps = this.getWps ? this.getWps() : null
-      if (!wps || typeof wps.listVariableFields !== 'function') {
+      const editor = this.getEditor ? this.getEditor() : null
+      if (!editor || typeof editor.listVariableFields !== 'function') {
         this.docFields = []
         return
       }
       try {
-        this.docFields = await wps.listVariableFields()
+        this.docFields = await editor.listVariableFields()
       } catch (e) {
         this.docFields = []
       }
@@ -309,12 +309,12 @@ export default {
     },
 
     async confirmCreate() {
-      const wps = this.getWps ? this.getWps() : null
-      if (!wps || typeof wps.getSelectionText !== 'function') {
+      const editor = this.getEditor ? this.getEditor() : null
+      if (!editor || typeof editor.getSelectionText !== 'function') {
         uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
         return
       }
-      const selected = await wps.getSelectionText()
+      const selected = await editor.getSelectionText()
       const text = (selected || '').trim()
       if (!text) {
         uni.showToast({ title: '请先在文档中选择内容', icon: 'none' })
@@ -331,10 +331,10 @@ export default {
           await saveUserVariable({ name, value: text, type: 'TEXT' })
         }
 
-        if (typeof wps.insertTextWithDocumentField !== 'function') {
+        if (typeof editor.insertTextWithDocumentField !== 'function') {
           throw new Error('当前 WPS 组件未提供“域插入”能力')
         }
-        await wps.insertTextWithDocumentField(text, scope, name)
+        await editor.insertTextWithDocumentField(text, scope, name)
 
         this.closeCreateModal()
         await this.refresh()
@@ -345,14 +345,14 @@ export default {
     },
 
     async insertVariable(it) {
-      const wps = this.getWps ? this.getWps() : null
-      if (!wps || typeof wps.insertTextWithDocumentField !== 'function') {
+      const editor = this.getEditor ? this.getEditor() : null
+      if (!editor || typeof editor.insertTextWithDocumentField !== 'function') {
         uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
         return
       }
       try {
         const value = this._resolveValue(it.scope, it.name, it.value)
-        await wps.insertTextWithDocumentField(value, it.scope, it.name)
+        await editor.insertTextWithDocumentField(value, it.scope, it.name)
         uni.showToast({ title: '插入成功', icon: 'success' })
         await this.fetchDocFields()
       } catch (e) {
@@ -361,12 +361,12 @@ export default {
     },
 
     async updateValueFromSelection(it) {
-      const wps = this.getWps ? this.getWps() : null
-      if (!wps || typeof wps.getSelectionText !== 'function') {
+      const editor = this.getEditor ? this.getEditor() : null
+      if (!editor || typeof editor.getSelectionText !== 'function') {
         uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
         return
       }
-      const selected = await wps.getSelectionText()
+      const selected = await editor.getSelectionText()
       const text = (selected || '').trim()
       if (!text) {
         uni.showToast({ title: '请先选择内容', icon: 'none' })
@@ -400,12 +400,12 @@ export default {
     },
 
     async _updateAllFieldInstances(scope, varName, nextText) {
-      const wps = this.getWps ? this.getWps() : null
-      if (!wps || typeof wps.updateDocumentField !== 'function') return
+      const editor = this.getEditor ? this.getEditor() : null
+      if (!editor || typeof editor.updateDocumentField !== 'function') return
       const fields = (this.docFields || []).filter(f => f.scope === scope && f.varName === varName)
       for (const f of fields) {
         try {
-          await wps.updateDocumentField(f.id, nextText)
+          await editor.updateDocumentField(f.id, nextText)
         } catch (e) {
           // ignore
         }
@@ -413,8 +413,8 @@ export default {
     },
 
     async syncDocument() {
-      const wps = this.getWps ? this.getWps() : null
-      if (!wps || typeof wps.syncAllDocumentFields !== 'function') {
+      const editor = this.getEditor ? this.getEditor() : null
+      if (!editor || typeof editor.syncAllDocumentFields !== 'function') {
         uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
         return
       }
@@ -422,7 +422,7 @@ export default {
       try {
         await this.fetchProjectVars()
         await this.fetchUserVars()
-        const res = await wps.syncAllDocumentFields((scope, varName, currentText) => {
+        const res = await editor.syncAllDocumentFields((scope, varName, currentText) => {
           if (scope === 'P' || scope === 'U') return this._resolveValue(scope, varName, currentText) || ''
           return currentText
         })
