@@ -256,6 +256,27 @@ try {
   check('AI 修订署名 AI Workdeck', rv.success && authors.includes('AI Workdeck'), JSON.stringify(rv))
   check('用户修订署用户名', authors.includes('测试用户'), JSON.stringify(authors))
 
+  console.log('== 11) 修订颗粒度：一字之差只标一字，不整段删增 ==')
+  // 口径说明：删除型修订的文本已移入页边、不随 reset 硬清（前面场景的删除记录
+  // 会残留），所以按 author 过滤只看本场景（场景 10 已把作者设为"测试用户"）；
+  // Insert 型修订对象 getString() 拿不到插入文本，插入内容靠正文核对。
+  const mine = (rv2) => (rv2.redlines || []).filter((r) => r.author === '测试用户')
+  const delTexts = (rv2) => mine(rv2).filter((r) => r.type === 'Delete').map((r) => r.text)
+  await reset('我爱你', true)
+  await exec('find_replace', { findText: '我爱你', replaceText: '我恨你', replaceAll: true })
+  let rv11 = await exec('debug_revisions')
+  check('find_replace 我爱你→我恨你 只删"爱"（非整句）',
+    rv11.success && delTexts(rv11).includes('爱') && delTexts(rv11).every((t2) => (t2 || '').length === 1), JSON.stringify(rv11))
+  check('插入也只落一处修订', mine(rv11).filter((r) => r.type === 'Insert').length === 1, JSON.stringify(mine(rv11)))
+  check('正文呈现新句', (await doc()).includes('我恨你'), await doc())
+  await reset('甲方应于三十日内向乙方支付服务费。', true)
+  await exec('modify_paragraph', { index: 0, newText: '甲方应于六十日内向乙方支付全部服务费。' })
+  rv11 = await exec('debug_revisions')
+  check('modify_paragraph 散点小改只删"三"（非整段重写）',
+    rv11.success && delTexts(rv11).includes('三') && delTexts(rv11).every((t2) => (t2 || '').length === 1), JSON.stringify(rv11))
+  check('两处插入各自成修订（六 / 全部）', mine(rv11).filter((r) => r.type === 'Insert').length === 2, JSON.stringify(mine(rv11)))
+  check('改后段落实文正确', (await doc()) === '甲方应于六十日内向乙方支付全部服务费。', await doc())
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

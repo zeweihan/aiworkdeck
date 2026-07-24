@@ -512,6 +512,7 @@ for file_id in file_ids:
 2. **删除操作使用删除专用工具**：`doc_delete_selection` / `doc_delete_match` / `doc_delete_text`，不要用 `doc_find_replace` 替换为空字符串
 3. **索引口径**：`doc_replace_nth_match` / `doc_delete_match` 的 matchIndex 从 **1** 开始；段落号（`doc_get_document_text` / `doc_select_paragraph` / `doc_get_paragraph` / `doc_modify_paragraph`）从 **0** 开始
 4. **修订痕迹**：所有改动带修订痕迹，用户可接受/拒绝；无需也不要尝试关闭修订模式
+5. **修订颗粒度自动最小化**：替换类工具会在引擎侧做字符级 diff，只把真正变化的字标成修订（如"我爱你"→"我恨你"只显示删"爱"加"恨"）。因此改写整段/整句时**直接传完整的新文本即可**，不要为了减小修订痕迹自己把一处改动拆成多次替换
 
 ## 8. PPT 演示文稿操作
 

@@ -199,6 +199,113 @@ function insertTextAtCursor(vc, text) {
   }
 }
 
+// ---- 最小修订颗粒度 (minimal redline granularity) ---------------------------
+// range.setString(newText) under RecordChanges marks the WHOLE range deleted
+// and the WHOLE new text inserted — so a one-char edit in a clause reads as
+// "删整段、加整段". minimalEdits computes a char-level minimal edit script
+// (common prefix/suffix trim + bounded LCS) and applyMinimalRedline applies
+// ONLY the differing runs, so the redline the user reviews is 删"爱"加"恨",
+// not 删"我爱你"加"我恨你".
+// Returns [{start, delLen, insText}] in OLD-string coordinates, ordered
+// RIGHT-TO-LEFT (descending start) so applying them in order never shifts the
+// offsets of the edits still pending.
+function minimalEdits(oldStr, newStr) {
+  const oLen = oldStr.length, nLen = newStr.length;
+  let p = 0;
+  const maxP = Math.min(oLen, nLen);
+  while (p < maxP && oldStr.charCodeAt(p) === newStr.charCodeAt(p)) p++;
+  let s = 0;
+  while (s < maxP - p && oldStr.charCodeAt(oLen - 1 - s) === newStr.charCodeAt(nLen - 1 - s)) s++;
+  const oMid = oldStr.slice(p, oLen - s), nMid = newStr.slice(p, nLen - s);
+  if (!oMid && !nMid) return [];
+  // Pure insert/delete, or a middle too big for the DP (500x500 chars — far
+  // beyond any single clause edit): one contiguous replace of the trimmed
+  // middle is already minimal enough.
+  if (!oMid || !nMid || oMid.length * nMid.length > 250000) {
+    return [{ start: p, delLen: oMid.length, insText: nMid }];
+  }
+  // LCS DP over the trimmed middle (lengths <= 500, so Uint16 lengths are safe).
+  const m = oMid.length, n = nMid.length, W = n + 1;
+  const dp = new Uint16Array((m + 1) * W);
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i * W + j] = oMid.charCodeAt(i - 1) === nMid.charCodeAt(j - 1)
+        ? dp[(i - 1) * W + (j - 1)] + 1
+        : Math.max(dp[(i - 1) * W + j], dp[i * W + (j - 1)]);
+    }
+  }
+  // Backtrack from the end, coalescing adjacent del+ins into single replaces.
+  const edits = [];
+  let i = m, j = n, curDel = 0, curIns = '';
+  const flush = function (atOld) {
+    if (curDel || curIns) { edits.push({ start: p + atOld, delLen: curDel, insText: curIns }); curDel = 0; curIns = ''; }
+  };
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && oMid.charCodeAt(i - 1) === nMid.charCodeAt(j - 1)) {
+      flush(i); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i * W + (j - 1)] >= dp[(i - 1) * W + j])) {
+      curIns = nMid.charAt(j - 1) + curIns; j--;
+    } else {
+      curDel++; i--;
+    }
+  }
+  flush(0);
+  // Cleanup: a SINGLE stray equal char sandwiched between two edits (LCS 在中文
+  // 里常捞到巧合的"的/、"之类) makes choppy, confusing redlines — fold it into
+  // one combined edit. edits is descending; [k+1] is the LEFT neighbor.
+  for (let k = 0; k + 1 < edits.length; ) {
+    const right = edits[k], left = edits[k + 1];
+    const gap = right.start - (left.start + left.delLen);
+    if (gap >= 0 && gap <= 1) {
+      left.insText = left.insText + oldStr.slice(left.start + left.delLen, right.start) + right.insText;
+      left.delLen = left.delLen + gap + right.delLen;
+      edits.splice(k, 1);
+    } else k++;
+  }
+  return edits;
+}
+// Apply newText onto range as char-granular tracked edits. Returns true when
+// handled (caller must NOT also setString), false when the caller should fall
+// back to its existing whole-range path. Callers ensure RecordChanges is on.
+function applyMinimalRedline(range, newText) {
+  let oldText;
+  try { oldText = String(range.getString()); } catch (e) { return false; }
+  const txt = String(newText == null ? '' : newText);
+  // Fallbacks: paragraph breaks (getString/goRight 对段界的计数口径不一) and
+  // surrogate pairs (goRight steps by engine chars, not JS code units).
+  if (/[\r\n\uD800-\uDFFF]/.test(oldText) || /[\r\n\uD800-\uDFFF]/.test(txt)) return false;
+  if (oldText === txt) return true; // 无差异：不留任何修订痕迹
+  if (!oldText.length) return false; // pure insert — caller's path is fine
+  const edits = minimalEdits(oldText, txt);
+  if (edits.length === 1 && edits[0].delLen === oldText.length && edits[0].start === 0) return false; // 全量替换，没有更细的
+  let applied = 0;
+  try {
+    const t = range.getText();
+    // Collapsed at range start; edits run right-to-left, so text left of each
+    // remaining edit — including this position — never moves.
+    const startCur = t.createTextCursorByRange(range.getStart());
+    for (let k = 0; k < edits.length; k++) {
+      const e = edits[k];
+      const cur = t.createTextCursorByRange(startCur.getStart());
+      if (e.start > 0 && !cur.goRight(e.start, false)) throw new Error('goRight(' + e.start + ') failed');
+      if (e.delLen > 0) {
+        if (!cur.goRight(e.delLen, true)) throw new Error('goRight select(' + e.delLen + ') failed');
+        cur.setString(e.insText); // 删差异段 + 插新段，一条替换型修订
+      } else if (e.insText) {
+        t.insertString(cur, e.insText, false);
+      }
+      applied++;
+    }
+    return true;
+  } catch (e) {
+    log('applyMinimalRedline: ' + errStr(e) + ' (applied ' + applied + '/' + edits.length + ')');
+    // Nothing applied yet -> safe to let the caller setString the whole range.
+    // Partially applied -> falling back would DOUBLE-EDIT; report handled and
+    // let the caller's paragraphAfterEdit verification loop catch any residue.
+    return applied > 0;
+  }
+}
+
 // Fire a Writer UI command (.uno:*) on the current frame — the engine-native
 // path for key-equivalent actions (Backspace/Delete), so revision-mode (redline)
 // semantics are the engine's own. zetajs marshalling: create() takes context as
@@ -425,6 +532,13 @@ const EXEC = {
   // text becomes a paragraph break (insertTextAtCursor).
   replace_selection(p) {
     const vc = ctrl.getViewCursor();
+    // 最小修订颗粒度：选区与新文本只差几个字时，只对差异字符落修订。仅在修订
+    // 模式开启时启用——RecordChanges 关闭意味着调用方要的是硬替换（如测试 reset）。
+    let rcOn = false; try { rcOn = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+    if (rcOn && (vc.getString() || '').length > 0 && applyMinimalRedline(vc, p.text || '')) {
+      vc.collapseToEnd();
+      return Object.assign({ success: true, text: String(p.text || '') }, verifySnapshot());
+    }
     if ((vc.getString() || '').length > 0) vc.setString(''); // drop the selection (tracked)
     vc.collapseToEnd();
     insertTextAtCursor(vc, p.text || '');
@@ -440,7 +554,7 @@ const EXEC = {
     let hit = xModel.findFirst(sd), n = 0;
     while (hit !== null) {
       selectVisibly(hit); // 拟人：视图滚到正在修订的位置，用户看得见改在哪
-      hit.setString(String(p.replaceText || ''));
+      if (!applyMinimalRedline(hit, String(p.replaceText || ''))) hit.setString(String(p.replaceText || ''));
       n++;
       if (!all) break;
       hit = xModel.findNext(hit, sd);
@@ -501,7 +615,7 @@ const EXEC = {
     while (hit !== null) {
       if (i === idx) {
         selectVisibly(hit); // 拟人：先滚到目标位置再动手
-        hit.setString(String(p.replaceText || ''));
+        if (!applyMinimalRedline(hit, String(p.replaceText || ''))) hit.setString(String(p.replaceText || ''));
         return { success: true, replacedIndex: idx };
       }
       hit = xModel.findNext(hit, sd); i++;
@@ -566,7 +680,7 @@ const EXEC = {
       if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
         if (i === idx) {
           selectVisibly(el); // 拟人：先跳到目标段落
-          el.setString(String(p.newText || ''));
+          if (!applyMinimalRedline(el, String(p.newText || ''))) el.setString(String(p.newText || ''));
           return { success: true, index: idx, paragraphAfterEdit: el.getString().slice(0, 200) };
         }
         i++;
@@ -667,7 +781,7 @@ const EXEC = {
     const range = anchorRange(String(p.anchor));
     if (!range) return { success: false, message: 'anchor not found: ' + p.anchor };
     selectVisibly(range); // 拟人：先看见目标再动手
-    range.setString(String(p.newText || ''));
+    if (!applyMinimalRedline(range, String(p.newText || ''))) range.setString(String(p.newText || ''));
     // 验证回路：返回改动后所在段落的实际文本，AI 据此确认改对了。
     return Object.assign({ success: true, anchor: p.anchor, newText: String(p.newText || '') },
       { paragraphAfterEdit: (paragraphTextOf(range) || '').slice(0, 200) });
