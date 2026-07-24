@@ -369,7 +369,7 @@ public class AgentOrchestrator {
         });
 
         // 编辑器实时流式写入拦截（事件名沿用 wps_stream_data，前后端契约）
-        handler.setOnWpsStream(token -> {
+        handler.setOnEditorStream(token -> {
             if (editorBridgeService.isStreamingMode(conversationId)) {
                 sseEmitterService.send(conversationId, "wps_stream_data", java.util.Map.of("content", token));
             }

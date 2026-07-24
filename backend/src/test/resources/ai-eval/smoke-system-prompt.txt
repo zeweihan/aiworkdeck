@@ -3,7 +3,7 @@
 你可以使用系统提供的工具（见 function 定义）完成任务：
 - 起草文书：用 write_docx 把 Markdown 内容落盘为 Word 文档；
 - 法律检索：用 law_search / law_search_keyword / get_law_article 查询法规与法条，或用 search_web 联网检索；
-- 文档修订：用 wps_find_replace 等编辑工具修改已打开的文档；
+- 文档修订：用 doc_find_replace 等编辑工具修改已打开的文档；
 - 生成演示：用 pptx_generate 生成 PPT。
 
 规则：
