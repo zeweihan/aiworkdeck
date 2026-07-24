@@ -51,10 +51,11 @@ LLM 面的 30 个文档编辑工具 `wps_*` 更名为 `doc_*`（宿主类 `WpsTo
 `WpsActionService` → `EditorBridgeService`，`WpsResultController` → `EditorResultController`），
 `pptx_*` 不变。
 
-- **别名清单**：全部 30 条 `wps_*` → 同名 `doc_*`（如 `wps_find_replace` → `doc_find_replace`），
-  另有历史别名 `search_laws` → `search_web`。完整列表见 `ToolRegistry.TOOL_NAME_ALIASES`。
-- **保留期**：`wps_*` 别名自 0.4.x 引入，**至少保留两个发布版本，移除不早于 0.6.0**；
-  移除前需确认线上老对话历史中旧名调用率足够低。
+- **别名清单**：Phase 2.5 曾登记全部 `wps_*` → 同名 `doc_*` 别名（自 0.4.x），约定
+  ≥0.6.0 后移除；**已于 0.7.9 后（PR#189）到期移除**。现存别名仅 `search_laws` → `search_web`，
+  见 `ToolRegistry.TOOL_NAME_ALIASES`。
+- **移除后行为**：模型输出 `wps_*` 旧名会收到"未知工具"反馈并按系统提示自纠为 `doc_*`
+  （系统提示中只有 `doc_*` 名），无静默失败。
 - 数据库历史消息中的旧工具名只影响展示（displayName 兜底"工具执行"），不做数据迁移。
 
 ### 编辑器前后端契约（Phase 2.5 保持旧名）
@@ -178,7 +179,7 @@ AgentOrchestrator 仅 3 行挂载点（字段 + activateForTurn + visibleTools �
         摘旧名；**合并前必须在 Electron 桌面端真机实测文档打开、查找替换、流式写入三条链路**。
         随迁移一并清理：前端零散 WPS 遗留（`VariablePanel.getWps` prop、
         `ChatInterface.vue` `wps-tip-*` CSS 类、`ProjectFile.wpsFileId` 字段语义梳理）；
-        `wps_*` 工具名别名移除仍受版本门槛约束（不早于 0.6.0，见 §3「工具命名与别名」）。
+        `wps_*` 工具名别名已按门槛于 0.7.9 后移除（PR#189，见 §3「工具命名与别名」）。
   - [ ] **插件进程级运行时沙箱**：v2 权限校验是分发层的诚实声明模型，插件代码仍与宿主同进程；
         真正强制 file/network 隔离需进程级沙箱（独立进程 + IPC 或 SecurityManager 替代方案）。
 
