@@ -37,7 +37,7 @@ import java.util.stream.Collectors;
  * 技术说明：
  * - 生成功能调用 banana-slides Python 微服务（Docker 容器）
  * - 生成的 PPTX 文件保存到指定目录并注册到数据库
- * - 用户可以通过 WPS 打开和编辑生成的 PPT
+ * - 用户可以通过文档编辑器打开和编辑生成的 PPT
  * - 支持进度流式推送到前端
  */
 @Component
@@ -183,7 +183,7 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
-    @Tool("打开指定的 PPTX 文件进行编辑。文件会在用户的 WPS 编辑器中打开。")
+    @Tool("打开指定的 PPTX 文件进行编辑。文件会在用户的文档编辑器中打开。")
     public String pptx_open_file(
             @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId
     ) {
@@ -433,7 +433,7 @@ public class PptxTools implements AgentToolComponent {
                 
                 if (result.isEditable()) {
                     // 可编辑版本的提示
-                    successMsg.append("**可编辑版本已生成**: 文件中的文字和表格可以直接在 WPS/PowerPoint 中编辑。\n\n");
+                    successMsg.append("**可编辑版本已生成**: 文件中的文字和表格可以直接在文档编辑器或 PowerPoint 中编辑。\n\n");
                 } else {
                     // 纯图片版本的提示（可编辑导出失败回退的情况）
                     successMsg.append("**注意**: 当前生成的是纯图片版 PPT（可编辑导出未成功）。\n");
@@ -572,7 +572,7 @@ public class PptxTools implements AgentToolComponent {
                 return "Error: 该文件不是 PPTX 格式: " + file.getName();
             }
             
-            // 2. 尝试通过 WPS 获取页面内容
+            // 2. 尝试通过编辑器获取页面内容
             String slideContent = editorBridgeService.executeEditorCommand("ppt_get_slide_content", 
                     java.util.Map.of("slideIndex", pageIndex));
             
@@ -583,8 +583,8 @@ public class PptxTools implements AgentToolComponent {
             try {
                 contentJson = cn.hutool.json.JSONUtil.parseObj(slideContent);
                 if (contentJson.containsKey("error")) {
-                    // WPS 返回错误，可能文件未打开或页面不存在
-                    log.warn("WPS get slide content returned error: {}", contentJson.getStr("error"));
+                    // 编辑器返回错误，可能文件未打开或页面不存在
+                    log.warn("Editor get slide content returned error: {}", contentJson.getStr("error"));
                 } else if (contentJson.containsKey("shapes")) {
                     cn.hutool.json.JSONArray shapes = contentJson.getJSONArray("shapes");
                     // 检查是否有可编辑的文本 shape
@@ -603,8 +603,8 @@ public class PptxTools implements AgentToolComponent {
             
             // 4. 根据页面类型选择修改方式
             if (hasEditableShapes) {
-                // 有可编辑组件 - 使用 WPS API 直接修改
-                return modifyWithWpsApi(fileId, pageIndex, modifyInstruction, contentJson);
+                // 有可编辑组件 - 使用编辑器 API 直接修改
+                return modifyWithEditorApi(fileId, pageIndex, modifyInstruction, contentJson);
             } else {
                 // 纯图片或无法获取内容 - 使用 AI 图片编辑（传递 modelId）
                 return modifyWithAiImageEdit(file, pageIndex, modifyInstruction, modelId);
@@ -617,11 +617,11 @@ public class PptxTools implements AgentToolComponent {
     }
 
     /**
-     * 使用 WPS API 直接修改文本
+     * 使用编辑器 API 直接修改文本
      */
-    private String modifyWithWpsApi(Long fileId, Integer pageIndex, String instruction, 
+    private String modifyWithEditorApi(Long fileId, Integer pageIndex, String instruction, 
                                      cn.hutool.json.JSONObject contentJson) {
-        log.info("Modifying with WPS API: fileId={}, pageIndex={}", fileId, pageIndex);
+        log.info("Modifying with editor API: fileId={}, pageIndex={}", fileId, pageIndex);
         
         try {
             // 分析修改指令，找到需要修改的 shape
@@ -640,7 +640,7 @@ public class PptxTools implements AgentToolComponent {
                     // 提取新文本
                     String newText = extractNewTextFromInstruction(text, instruction);
                     
-                    // 调用 WPS 修改
+                    // 调用编辑器修改
                     String result = editorBridgeService.executeEditorCommand("ppt_modify_slide_text", 
                             java.util.Map.of(
                                     "slideIndex", pageIndex,
@@ -649,11 +649,11 @@ public class PptxTools implements AgentToolComponent {
                                     "markAsRevision", true
                             ));
                     
-                    return String.format("已通过 WPS 修改页面内容！\n" +
+                    return String.format("已通过编辑器修改页面内容！\n" +
                             "- 页面: 第 %d 页\n" +
                             "- 原文本: %s\n" +
                             "- 新文本: %s\n\n" +
-                            "修改已标记为修订，请在 WPS 中确认。", 
+                            "修改已标记为修订，请在编辑器中确认。", 
                             pageIndex, text.length() > 50 ? text.substring(0, 50) + "..." : text, newText);
                 }
             }
@@ -669,8 +669,8 @@ public class PptxTools implements AgentToolComponent {
             return sb.toString();
             
         } catch (Exception e) {
-            log.error("WPS API modify failed", e);
-            return "WPS 修改失败: " + e.getMessage();
+            log.error("Editor API modify failed", e);
+            return "编辑器修改失败: " + e.getMessage();
         }
     }
 
@@ -724,13 +724,13 @@ public class PptxTools implements AgentToolComponent {
                 if (errorMsg != null && errorMsg.contains("does not contain an image")) {
                     return String.format("第 %d 页不是纯图片页面，可能包含可编辑的文本元素。\n\n" +
                             "请尝试使用 pptx_modify_slide_text 工具直接修改文本，\n" +
-                            "或在 WPS 编辑器中手动修改。", pageIndex);
+                            "或在文档编辑器中手动修改。", pageIndex);
                 }
                 return "AI 编辑失败: " + errorMsg;
             }
             
-            // 3. 更新文件信息：生成新的 wpsFileId 以强制 WPS 重新下载文件
-            // WPS 通过 fileId 识别文档并缓存，更新 wpsFileId 可以让 WPS 认为是"新文件"从而重新下载
+            // 3. 更新文件信息：生成新的 wpsFileId 以强制编辑器重新下载文件
+            // 编辑器通过 fileId 识别文档并缓存，更新 wpsFileId 可以让编辑器认为是"新文件"从而重新下载
             String newWpsFileId = generateNewWpsFileId(file.getProjectId());
             file.setWpsFileId(newWpsFileId);
             file.setUpdatedAt(LocalDateTime.now());
@@ -749,7 +749,7 @@ public class PptxTools implements AgentToolComponent {
             
             return String.format("✅ 第 %d 页已使用 AI 成功修改！\n\n" +
                     "修改内容：%s\n\n" +
-                    "文件已自动更新，WPS 编辑器将重新加载以显示修改后的内容。",
+                    "文件已自动更新，文档编辑器将重新加载以显示修改后的内容。",
                     pageIndex, instruction);
             
         } catch (Exception e) {
@@ -1147,9 +1147,9 @@ public class PptxTools implements AgentToolComponent {
     }
     
     /**
-     * 生成新的 WPS 文件 ID
-     * 当文件被修改后，需要更新 wpsFileId 以强制 WPS 重新下载文件内容
-     * WPS 通过 fileId 识别和缓存文档，更新 fileId 可以绕过缓存
+     * 生成新的编辑器文件 ID（沿用 wpsFileId 字段名）
+     * 当文件被修改后，需要更新 wpsFileId 以强制编辑器重新下载文件内容
+     * 编辑器通过 fileId 识别和缓存文档，更新 fileId 可以绕过缓存
      * 
      * @param projectId 项目 ID
      * @return 新的 wpsFileId

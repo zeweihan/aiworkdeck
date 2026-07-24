@@ -40,14 +40,14 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
 
     // Callback for each token generated (for real-time tracking)
     private java.util.function.Consumer<String> onToken;
-    private java.util.function.Consumer<String> onWpsStream;
+    private java.util.function.Consumer<String> onEditorStream;
 
     public void setOnToken(java.util.function.Consumer<String> onToken) {
         this.onToken = onToken;
     }
 
-    public void setOnWpsStream(java.util.function.Consumer<String> onWpsStream) {
-        this.onWpsStream = onWpsStream;
+    public void setOnEditorStream(java.util.function.Consumer<String> onEditorStream) {
+        this.onEditorStream = onEditorStream;
     }
 
     @Override
@@ -59,18 +59,18 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
                 onToken.accept(token);
             }
             
-            // Process for WPS filtered stream
-            processWpsStream(token);
+            // Process for editor filtered stream
+            processEditorStream(token);
             
             processBuffer(token);
         }
     }
     
-    // ==================== WPS Stream Filtering Logic ====================
+    // ==================== Editor Stream Filtering Logic（过滤后实时写入编辑器文档；SSE 事件名 wps_stream_data 为前后端契约保留） ====================
     
-    // Buffer for WPS stream parser to handle split tags
-    private final StringBuilder wpsBuffer = new StringBuilder();
-    // Set of tags that should be hidden from WPS (but content might be hidden too?)
+    // Buffer for editor stream parser to handle split tags
+    private final StringBuilder editorStreamBuffer = new StringBuilder();
+    // Set of tags that should be hidden from the editor stream (but content might be hidden too?)
     // Protocol:
     // <thinking>...</thinking> -> Hide ALL
     // <process>...</process> -> Hide ALL
@@ -96,54 +96,54 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         "bubble_type" // Also hide bubble control tags
     );
     
-    private void processWpsStream(String token) {
-        if (onWpsStream == null) return;
+    private void processEditorStream(String token) {
+        if (onEditorStream == null) return;
         
-        wpsBuffer.append(token);
+        editorStreamBuffer.append(token);
         
-        while (wpsBuffer.length() > 0) {
+        while (editorStreamBuffer.length() > 0) {
             // If we are NOT inside a hidden tag, we look for start of ANY tag
             if (!isInsideHiddenTag) {
-                int ltIndex = wpsBuffer.indexOf("<");
+                int ltIndex = editorStreamBuffer.indexOf("<");
                 if (ltIndex == -1) {
                     // No tags in buffer, safe to emit all
-                    String text = wpsBuffer.toString();
-                    emitWpsText(text);
-                    wpsBuffer.setLength(0);
+                    String text = editorStreamBuffer.toString();
+                    emitEditorText(text);
+                    editorStreamBuffer.setLength(0);
                     return;
                 } else {
                     // Valid text before the tag
                     if (ltIndex > 0) {
-                        emitWpsText(wpsBuffer.substring(0, ltIndex));
-                        wpsBuffer.delete(0, ltIndex);
+                        emitEditorText(editorStreamBuffer.substring(0, ltIndex));
+                        editorStreamBuffer.delete(0, ltIndex);
                         // Now buffer starts with '<'
                     }
                     
                     // Check if we have enough chars to identify the tag
                     // Need at least "<x" or "</x"
-                    if (wpsBuffer.length() < 2) {
+                    if (editorStreamBuffer.length() < 2) {
                         return; // Wait for more data
                     }
                     
                     // Determine if it's a start tag or end tag
-                    boolean isEndTag = wpsBuffer.charAt(1) == '/';
+                    boolean isEndTag = editorStreamBuffer.charAt(1) == '/';
                     
                     // Try to find the closing '>'
-                    int gtIndex = wpsBuffer.indexOf(">");
+                    int gtIndex = editorStreamBuffer.indexOf(">");
                     if (gtIndex == -1) {
                         // Tag not fully received yet
                         // Safety cap: if buffer gets too huge without '>', force flush?
-                         if (wpsBuffer.length() > 1000) {
+                         if (editorStreamBuffer.length() > 1000) {
                              // Something wrong, just flush to avoid memory issues, though it might break protocol.
-                             // But for WPS stream, better to show garbage than crash.
-                             emitWpsText(wpsBuffer.toString());
-                             wpsBuffer.setLength(0);
+                             // But for the editor stream, better to show garbage than crash.
+                             emitEditorText(editorStreamBuffer.toString());
+                             editorStreamBuffer.setLength(0);
                          }
                         return; // Wait for more data
                     }
                     
                     // We have a full tag: <...>
-                    String fullTag = wpsBuffer.substring(0, gtIndex + 1);
+                    String fullTag = editorStreamBuffer.substring(0, gtIndex + 1);
                     String tagName = extractTagName(fullTag);
                     
                     if (HIDDEN_CONTENT_TAGS.contains(tagName)) {
@@ -169,12 +169,12 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
                         // Actually, for a .docx, raw HTML tags might appear as text.
                         // Let's pass unknown tags through as text.
                         if (!"final".equals(tagName) && !HIDDEN_CONTENT_TAGS.contains(tagName)) {
-                            emitWpsText(fullTag); 
+                            emitEditorText(fullTag); 
                         }
                     }
                     
                     // Remove the processed tag from buffer
-                    wpsBuffer.delete(0, gtIndex + 1);
+                    editorStreamBuffer.delete(0, gtIndex + 1);
                 }
             } else {
                 // Inside Hidden Tag -> Look for the specific closing tag </tagName>
@@ -182,15 +182,15 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
                 // Assuming standard </name>
                 
                 String closeTag = "</" + currentHiddenTagName + ">";
-                int closeIndex = wpsBuffer.indexOf(closeTag);
+                int closeIndex = editorStreamBuffer.indexOf(closeTag);
                 
                 if (closeIndex == -1) {
                     // Check for self-closing if strictly required? 
                     // <bubble_type ... />
                     if ("bubble_type".equals(currentHiddenTagName)) {
-                         int selfClose = wpsBuffer.indexOf("/>");
+                         int selfClose = editorStreamBuffer.indexOf("/>");
                          if (selfClose != -1) {
-                             wpsBuffer.delete(0, selfClose + 2);
+                             editorStreamBuffer.delete(0, selfClose + 2);
                              isInsideHiddenTag = false;
                              currentHiddenTagName = null;
                              return;
@@ -202,14 +202,14 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
                     // We can safely discard everything UP TO the last '<' to be safe?
                     // Or just keep a small window?
                     // To be safe: discard everything except the last few chars that might start the closing tag.
-                    if (wpsBuffer.length() > closeTag.length() * 2) {
-                        wpsBuffer.delete(0, wpsBuffer.length() - closeTag.length());
+                    if (editorStreamBuffer.length() > closeTag.length() * 2) {
+                        editorStreamBuffer.delete(0, editorStreamBuffer.length() - closeTag.length());
                     }
                     return; // Wait for more data
                 } else {
                     // Found closing tag!
                     // Discard everything up to and including the closing tag
-                    wpsBuffer.delete(0, closeIndex + closeTag.length());
+                    editorStreamBuffer.delete(0, closeIndex + closeTag.length());
                     isInsideHiddenTag = false;
                     currentHiddenTagName = null;
                 }
@@ -230,9 +230,9 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
         return content;
     }
 
-    private void emitWpsText(String text) {
-        if (onWpsStream != null && text != null && !text.isEmpty()) {
-            onWpsStream.accept(text);
+    private void emitEditorText(String text) {
+        if (onEditorStream != null && text != null && !text.isEmpty()) {
+            onEditorStream.accept(text);
         }
     }
     
@@ -412,12 +412,12 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
             emitText(buffer.toString());
         }
         
-        // Flush remaining WPS buffer
-        if (wpsBuffer.length() > 0) {
+        // Flush remaining editor stream buffer
+        if (editorStreamBuffer.length() > 0) {
             // If we are left with something in buffer, it might be incomplete tag or content
             // Emit it if not inside hidden tag
             if (!isInsideHiddenTag) {
-                emitWpsText(wpsBuffer.toString());
+                emitEditorText(editorStreamBuffer.toString());
             }
         }
         

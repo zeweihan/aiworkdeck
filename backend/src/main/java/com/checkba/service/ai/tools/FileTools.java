@@ -28,8 +28,8 @@ import java.io.OutputStream;
  * Includes:
  * 1. Search Files (Global or Scoped)
  * 2. Read Files
- * 3. Write Files (Text) - Registers to DB for WPS
- * 4. Write Docx (MD -> DOCX) - Registers to DB for WPS
+ * 3. Write Files (Text) - Registers to DB for the editor
+ * 4. Write Docx (MD -> DOCX) - Registers to DB for the editor
  */
 @Component
 @Slf4j
@@ -188,7 +188,7 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "写入文件", category = "file", fileEffect = "ADDED", fileArg = "fileName")
-    @Tool("Write content to a text file. Registers the file in the project database for WPS access.")
+    @Tool("Write content to a text file. Registers the file in the project database for editor access.")
     public String write_file(
             @P("Target filename (e.g. 'notes.txt')") String fileName, 
             @P("File content") String content,

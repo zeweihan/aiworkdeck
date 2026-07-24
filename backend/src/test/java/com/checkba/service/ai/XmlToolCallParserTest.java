@@ -137,20 +137,6 @@ class XmlToolCallParserTest {
     }
 
     @Test
-    @DisplayName("灰度更名：旧名 wps_find_replace(...) 经别名解析命中 doc_find_replace")
-    void resolvesLegacyWpsNameViaAlias() {
-        // 老对话历史 / 模型惯性输出的旧名：参数按 doc_find_replace 的签名正确提取
-        XmlToolCallParser.ParsedCall call = single(
-                "<tool_code>wps_find_replace(findText=\"甲方\", replaceText=\"乙方\", replaceAll=true)</tool_code>");
-        assertEquals("wps_find_replace", call.toolName());
-        cn.hutool.json.JSONObject args = cn.hutool.json.JSONUtil.parseObj(call.argsJson());
-        assertEquals("甲方", args.getStr("findText"));
-        assertEquals("乙方", args.getStr("replaceText"));
-        // 分发层按别名表映射到 doc_find_replace
-        assertEquals("doc_find_replace", ToolRegistry.TOOL_NAME_ALIASES.get(call.toolName()));
-    }
-
-    @Test
     @DisplayName("<code> 标签与多个调用")
     void parsesMultipleCallsAndCodeTag() {
         String content = "<code>search_web(query=\"a\")</code>\n中间文本\n<tool_code>search_web(query=\"b\")</tool_code>";

@@ -164,23 +164,13 @@ class ToolRegistryTest {
     }
 
     @Test
-    @DisplayName("灰度更名：旧名 wps_find_replace 经别名命中 doc_find_replace（含遗留默认值）")
-    void dispatchesLegacyWpsNameViaAlias() {
+    @DisplayName("灰度到期：wps_* 旧名已移除，不再分发（0.7.9 后清理）")
+    void legacyWpsNamesNoLongerDispatch() {
         ToolRegistry.ToolResult r = registry.execute("wps_find_replace",
                 "{\"findText\":\"甲\",\"replaceText\":\"乙\"}", ctx);
-        assertTrue(r.found());
-        assertEquals("甲>乙:true", r.output());
-    }
-
-    @Test
-    @DisplayName("灰度更名：全部 wps_* 别名映射到同名 doc_* 工具")
-    void allWpsAliasesTargetDocNames() {
-        ToolRegistry.TOOL_NAME_ALIASES.forEach((alias, target) -> {
-            if (alias.startsWith("wps_")) {
-                assertEquals("doc_" + alias.substring(4), target,
-                        "别名 " + alias + " 应映射到同名 doc_* 工具");
-            }
-        });
+        assertFalse(r.found(), "wps_* 旧名不应再命中任何工具");
+        ToolRegistry.TOOL_NAME_ALIASES.keySet().forEach(alias ->
+                assertFalse(alias.startsWith("wps_"), "别名表不应再含 wps_* 条目：" + alias));
     }
 
     // ==== 插件启停过滤 + 权限校验（Phase 3A） ====
