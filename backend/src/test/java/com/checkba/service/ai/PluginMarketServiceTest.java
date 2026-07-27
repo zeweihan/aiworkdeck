@@ -233,6 +233,47 @@ class PluginMarketServiceTest {
         return o.toString();
     }
 
+    // ==== 生产公钥回归 ====
+
+    /**
+     * application.yml 里配置的生产公钥，与官网服务器 AWD_PLUGIN_SIGNING_KEY 成对。
+     * 上面那些用例用临时密钥对验的是算法与 canonical 形式；这一条钉的是
+     * "线上这把公钥确实能验开线上私钥签出来的名"——配错或轮换失误时直接红。
+     */
+    private static final String PROD_PUBLIC_KEY = """
+            -----BEGIN PUBLIC KEY-----
+            MCowBQYDK2VwAyEAjAbnyl44SiQF/CTyn59/uHAXCeRTEI0h0Bn5HEv7T4Y=
+            -----END PUBLIC KEY-----
+            """;
+
+    /** 由配对私钥用 Node 的 crypto.sign 对下方载荷签出，固化在此做跨语言对拍 */
+    private static final String PROD_SIGNATURE =
+            "XXoQuS5ogi3F/uhnSZtB0gPgiWCAjFmgqAVRSgyr+0GONi825hoo+8d2fPzBl0OSOdqAF2mGzDJhLnOryg3SCg==";
+
+    @Test
+    @DisplayName("生产公钥能验开官网私钥签出的真实签名（跨语言对拍）")
+    void productionKeyVerifiesRealSignature() throws Exception {
+        Map<String, String> files = new TreeMap<>();
+        files.put("manifest.json", "a".repeat(64));
+        files.put("tool.jar", "b".repeat(64));
+
+        PluginMarketService svc = service(PROD_PUBLIC_KEY);
+        assertTrue(
+                svc.verifySignature("demo-plugin", "1.0.0", "2026-07-27T00:00:00.000Z", files, PROD_SIGNATURE),
+                "application.yml 的公钥与官网签名私钥不配对——检查是否漏配或轮换未同步");
+
+        // 同一把公钥必须拒绝被篡改的载荷，排除"恒真"式的假通过
+        assertFalse(svc.verifySignature("evil-plugin", "1.0.0", "2026-07-27T00:00:00.000Z", files, PROD_SIGNATURE));
+    }
+
+    @Test
+    @DisplayName("application.yml 中确实配置了公钥（防止合并时被清空）")
+    void applicationYmlHasPublicKeyConfigured() throws Exception {
+        String yml = Files.readString(Path.of("src/main/resources/application.yml"), StandardCharsets.UTF_8);
+        assertTrue(yml.contains("BEGIN PUBLIC KEY"),
+                "ai.plugins.registry-public-key 为空会让所有在线插件安装被拒绝");
+    }
+
     /** 打桩 HTTP：bundle 返回给定清单，file 按路径返回对应内容 */
     private PluginMarketService stubbed(String pubKey, Map<String, String> files, String sig,
                                         byte[] manifestBytes, byte[] jarBytes) {

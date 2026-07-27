@@ -162,7 +162,14 @@ ai:
     # 平台签名公钥（Ed25519 SPKI PEM）。安装在线插件时用它验签，
     # 留空则拒绝一切在线安装。私钥仅存在于官网服务器的 AWD_PLUGIN_SIGNING_KEY。
     # 换密钥需同步更新此处并随版本发布，见 docs/PLUGIN_DISTRIBUTION.md §5。
-    registry-public-key: ""
+    #
+    # 公钥是公开信息，硬编码在客户端是标准做法（等同 CA 根证书内置）：
+    # 客户端必须在离线、未登录、注册表被劫持的情况下也能独立判断签名真伪，
+    # 所以它不能从网络获取。密钥对生成于 2026-07-27。
+    registry-public-key: |
+      -----BEGIN PUBLIC KEY-----
+      MCowBQYDK2VwAyEAjAbnyl44SiQF/CTyn59/uHAXCeRTEI0h0Bn5HEv7T4Y=
+      -----END PUBLIC KEY-----
 
   # Skill 体系配置（对应 SkillProperties，规范见 docs/SKILL_SPEC.md）
   skills:
