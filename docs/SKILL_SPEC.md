@@ -72,9 +72,11 @@ output: |
 ## 4. 触发与路由语义
 
 - **匹配**：`SkillRouter.match(userInput)` 在所有**可用** skill（自身启用、且所属插件未被禁用）
-  中查找命中关键词的 skill。
+  中查找命中关键词的 skill。生效方式为 `manual` 的 skill 不参与自动匹配（见 §7）。
 - **多命中**：取"最长命中关键词"的 skill（更长的关键词 = 更 specific 的意图）；并列时取先注册的
   （内置 `skills/` 目录按目录名排序优先于插件携带的）。
+- **用户钉选**：对话请求可带 `pinnedSkillId`，**优先于触发词匹配**——用户明确指定的意图不该被
+  关键词猜测覆盖。钉选 id 不存在或不可用时退回自动匹配，避免前端状态过期导致本轮无 skill。
 - **每轮刷新**：每条用户消息重新匹配一次；本轮未命中即清除激活状态，回到无 Skill 行为。
 - **注入位置**：系统消息中模式约束（MODE OVERRIDE）之后、Current Context 之前，
   以 `# Active Skill: <name>` 开头。
@@ -104,20 +106,29 @@ ai:
 对应 `SkillProperties`（前缀 `ai.skills`）。基础工具集保证被裁剪的回合仍具备最基本的
 读取/记忆能力，按部署需要调整，不要写死在代码里。
 
-## 7. 启用 / 禁用
+## 7. 生效方式（三档）
 
-- 默认**启用**；禁用名单持久化在 `system_setting` 表（key = `ai.skills.disabled`，
-  值为 skill id 的 JSON 数组），重启后保持——与 `ai.plugins.disabled` 同一套模式。
-- 启停查询走内存缓存（TTL 配置 `ai.skills.disabled-cache-ttl-ms`，默认 5000ms）。
-- 禁用后该 skill 不再参与触发匹配；重新启用即时恢复。
+| 档位 | 含义 |
+|---|---|
+| `auto` | 默认。命中触发词时自动生效 |
+| `manual` | 不参与自动匹配，只能由用户在对话中钉选生效 |
+| `disabled` | 停用，既不自动匹配也不能被钉选 |
+
+- 存储上是**两个正交名单**：`ai.skills.disabled` 与 `ai.skills.manual`（均为 skill id 的
+  JSON 数组，存 `system_setting` 表），`SkillRegistry.activationMode()` 组合成三档对外呈现，
+  `disabled` 优先。`setActivationMode()` 是三档的唯一写入口。
+- `manual` 的 skill **`isAvailable` 仍为真**——它只是不参与自动匹配，钉选时照常生效。
+- 状态查询走内存缓存（TTL 配置 `ai.skills.disabled-cache-ttl-ms`，默认 5000ms）。
+- 旧的 `setEnabled` / enable / disable 端点保留，只增删 disabled 名单，不影响 manual 标记。
 
 ## 8. HTTP API
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
-| GET | `/api/skills/list` | 登录 | Skill 列表：id/name/description/triggers/allowedTools/sourcePluginId/enabled |
+| GET | `/api/skills/list` | 登录 | Skill 列表：id/name/description/triggers/allowedTools/sourcePluginId/enabled/activationMode |
 | POST | `/api/skills/{id}/enable` | admin | 启用 skill |
 | POST | `/api/skills/{id}/disable` | admin | 禁用 skill |
+| POST | `/api/skills/{id}/activation` | admin | 设置生效方式，body `{"mode":"auto"\|"manual"\|"disabled"}` |
 | POST | `/api/skills/rescan` | admin | 重扫 skills/ 目录与插件携带的 skill，返回 `{ code, skillCount }` |
 
 管理接口鉴权与 PluginController 一致：`X-Session-Id` 请求头 → session 用户名为 `admin`。
