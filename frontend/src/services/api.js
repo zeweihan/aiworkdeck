@@ -420,6 +420,34 @@ export function setPluginEnabled(pluginId, enabled) {
   });
 }
 
+// 在线插件广场：拉取官网注册表列表（仅含已审核签名的插件）
+export function getPluginMarket() {
+  return request({
+    url: '/api/plugins/market/list',
+    method: 'GET'
+  });
+}
+
+// 安装 / 更新在线插件（仅管理员）。后端会验签 + 逐文件校验哈希，装后默认停用。
+export function installMarketPlugin(pluginId) {
+  return request({
+    url: '/api/plugins/market/install',
+    method: 'POST',
+    data: { id: pluginId },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 卸载在线安装的插件（仅管理员）
+export function uninstallMarketPlugin(pluginId) {
+  return request({
+    url: '/api/plugins/market/uninstall',
+    method: 'POST',
+    data: { id: pluginId },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
 // 重新扫描 plugins/ 目录（仅管理员）
 export function rescanPlugins() {
   return request({

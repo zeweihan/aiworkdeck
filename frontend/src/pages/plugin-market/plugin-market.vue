@@ -111,14 +111,64 @@
           </view>
         </template>
 
-        <!-- 插件在线分发属 Phase 2（JAR 签名/沙箱安全模型另议），先给占位与本地安装指引 -->
-        <view v-else class="empty">
-          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <text class="empty-title">插件在线分发即将上线</text>
-          <text class="empty-hint">当前可本地安装：将插件目录（含 manifest.json）放入服务端 plugins/ 目录后，点击"重新扫描"，然后到"已安装"里启用</text>
-        </view>
+        <!-- 在线插件：经平台审核并签名，安装时验签，见 docs/PLUGIN_DISTRIBUTION.md -->
+        <template v-else>
+          <view v-if="marketPluginError" class="empty">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.offline" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <text class="empty-title">在线插件广场暂不可用（离线或网络受限）</text>
+            <text class="empty-hint">{{ marketPluginError }}</text>
+          </view>
+          <view v-else-if="marketPlugins.length === 0" class="empty">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <text class="empty-title">{{ marketPluginLoading ? '加载中...' : '暂无在线插件' }}</text>
+            <text v-if="!marketPluginLoading" class="empty-hint">也可本地安装：把插件目录放入服务端 plugins/ 后点「重新扫描」</text>
+          </view>
+          <view v-else class="card-grid">
+            <view v-for="m in marketPlugins" :key="m.id" class="plugin-card">
+              <view class="card-header">
+                <view class="plugin-icon-wrap">
+                  <svg class="svg-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </view>
+                <view class="title-block">
+                  <view class="name-row">
+                    <text class="plugin-name">{{ m.name || m.id }}</text>
+                    <text class="plugin-version" v-if="m.version">v{{ m.version }}</text>
+                    <text v-if="m.installed" class="installed-tag">已安装</text>
+                  </view>
+                  <text class="plugin-meta">作者：{{ m.authorDisplayName || m.author || '未知' }} · {{ m.downloads || 0 }} 次安装 · {{ formatSize(m.size) }}</text>
+                </view>
+                <view class="market-actions">
+                  <button
+                    v-if="!m.installed || m.updatable"
+                    class="btn-primary btn-mini"
+                    :disabled="!!pluginBusyId"
+                    @tap="installPlugin(m)"
+                  >{{ pluginBusyId === m.id ? '安装中...' : (m.updatable ? '更新' : '安装') }}</button>
+                  <button v-if="m.installed" class="btn-uninstall btn-mini" :disabled="!!pluginBusyId" @tap="uninstallPlugin(m)">卸载</button>
+                </view>
+              </view>
+
+              <text class="plugin-desc">{{ m.description || '暂无描述' }}</text>
+
+              <view class="tag-row">
+                <text v-if="m.tools && m.tools.length" class="tool-count-tag">{{ m.tools.length }} 个工具</text>
+                <text v-for="perm in m.permissions" :key="perm" class="perm-tag">{{ permissionLabel(perm) }}</text>
+                <text v-if="!m.permissions || !m.permissions.length" class="perm-tag-none">未声明敏感能力</text>
+              </view>
+            </view>
+          </view>
+
+          <view class="market-note">
+            插件与本机应用同等权限，安装前请确认来源可信。所有在线插件都经过人工审核与平台签名，
+            桌面端安装时验签；安装后默认处于停用状态，需你在「已安装」里手动启用。
+          </view>
+        </template>
       </scroll-view>
 
       <!-- ============ 已安装 tab ============ -->
@@ -250,7 +300,7 @@
 </template>
 
 <script>
-import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivation, rescanSkills, getSkillMarket, installMarketSkill, uninstallMarketSkill } from '@/services/api.js'
+import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivation, rescanSkills, getSkillMarket, installMarketSkill, uninstallMarketSkill, getPluginMarket, installMarketPlugin, uninstallMarketPlugin } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 
 const PERMISSION_LABELS = {
@@ -291,6 +341,10 @@ export default {
       marketLoading: false,
       marketError: '',
       marketBusyId: '',
+      marketPlugins: [],
+      marketPluginLoading: false,
+      marketPluginError: '',
+      pluginBusyId: '',
       loading: false,
       switching: false,
       rescanning: false,
@@ -324,10 +378,73 @@ export default {
     this.loadPlugins()
     this.loadSkills()
     this.loadMarket()
+    this.loadPluginMarket()
   },
   methods: {
     permissionLabel(perm) {
       return PERMISSION_LABELS[perm] || perm
+    },
+    formatSize(bytes) {
+      if (!bytes) return '未知大小'
+      if (bytes < 1024) return bytes + ' B'
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+      return (bytes / 1024 / 1024).toFixed(2) + ' MB'
+    },
+    async loadPluginMarket() {
+      this.marketPluginLoading = true
+      this.marketPluginError = ''
+      try {
+        const res = await getPluginMarket()
+        this.marketPlugins = res?.plugins || []
+      } catch (e) {
+        // 注册表不可达只在区块内提示，不影响本地插件与 Skill
+        console.warn('在线插件广场不可用:', e)
+        this.marketPluginError = e?.message || '网络不可用'
+        this.marketPlugins = []
+      } finally {
+        this.marketPluginLoading = false
+      }
+    },
+    async installPlugin(plugin) {
+      const perms = (plugin.permissions || []).map(p => this.permissionLabel(p)).join('、') || '未声明敏感能力'
+      const ok = await new Promise(resolve => {
+        uni.showModal({
+          title: '确认安装插件',
+          content: `${plugin.name || plugin.id} v${plugin.version}\n作者：${plugin.authorDisplayName || plugin.author || '未知'}\n声明能力：${perms}\n\n插件与本机应用同等权限，能读写你的文件并访问网络。安装后默认停用，需你手动启用。`,
+          confirmText: '安装',
+          cancelText: '取消',
+          success: r => resolve(r.confirm),
+          fail: () => resolve(false)
+        })
+      })
+      if (!ok) return
+
+      this.pluginBusyId = plugin.id
+      try {
+        await installMarketPlugin(plugin.id)
+        uni.showToast({ title: '已安装，请在「已安装」中启用', icon: 'none' })
+        await this.loadPlugins()
+        await this.loadPluginMarket()
+      } catch (e) {
+        console.error('安装插件失败:', e)
+        uni.showToast({ title: e?.message || '安装失败（需要管理员权限）', icon: 'none' })
+      } finally {
+        this.pluginBusyId = ''
+      }
+    },
+    async uninstallPlugin(plugin) {
+      this.pluginBusyId = plugin.id
+      try {
+        await uninstallMarketPlugin(plugin.id)
+        uni.showToast({ title: '已卸载', icon: 'none' })
+        await this.loadPlugins()
+        await this.loadPluginMarket()
+      } catch (e) {
+        console.error('卸载插件失败:', e)
+        uni.showToast({ title: e?.message || '卸载失败（需要管理员权限）', icon: 'none' })
+      } finally {
+        this.pluginBusyId = ''
+      }
     },
     categoryLabel(id) {
       const c = SKILL_CATEGORIES.find(c => c.id === (id || 'other'))
@@ -460,6 +577,7 @@ export default {
         })
         await this.loadPlugins()
         await this.loadSkills()
+        await this.loadPluginMarket()
       } catch (e) {
         console.error('重新扫描失败:', e)
         uni.showToast({ title: e?.message || '扫描失败（需要管理员权限）', icon: 'none' })
@@ -982,6 +1100,26 @@ $border-color: #E9ECEF;
   border-radius: 999px;
   background: rgba(230, 162, 60, 0.12);
   color: #B47D2B;
+}
+
+.perm-tag-none {
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #F1F3F5;
+  color: $text-secondary;
+}
+
+/* 在线插件区块底部的信任提示：插件与本机应用同权限，这句不能省 */
+.market-note {
+  font-size: 12px;
+  line-height: 1.7;
+  color: $text-secondary;
+  background: rgba(230, 162, 60, 0.08);
+  border: 1px solid rgba(230, 162, 60, 0.25);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin: 0 4px 32px;
 }
 
 .trigger-tag {
