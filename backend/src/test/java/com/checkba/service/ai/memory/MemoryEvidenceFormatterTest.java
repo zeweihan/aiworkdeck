@@ -41,7 +41,7 @@ class MemoryEvidenceFormatterTest {
         assertTrue(ledger.contains("今天是 2026-07-15"));
         assertTrue(ledger.contains("1. [decision] 交易结构: 采用协议收购"));
         assertTrue(ledger.contains("记录于2026-05-02"));
-        assertFalse(ledger.contains("· ⚠️已被更新"), "无更新记录时不应有条目级更新注记");
+        assertFalse(ledger.contains("· 已被更新"), "无更新记录时不应有条目级更新注记");
     }
 
     @Test
@@ -53,7 +53,7 @@ class MemoryEvidenceFormatterTest {
         protectedFileMem.setScope(MemoryEntry.MemoryScope.FILE);
 
         String ledger = MemoryEvidenceFormatter.format(List.of(protectedFileMem), Map.of(), TODAY);
-        assertTrue(ledger.contains("🔒受保护"));
+        assertTrue(ledger.contains("受保护"));
         assertTrue(ledger.contains("来源文件#42"));
         assertTrue(ledger.contains("作用域:file"));
 
@@ -71,7 +71,7 @@ class MemoryEvidenceFormatterTest {
                 Map.of(4L, LocalDateTime.of(2026, 6, 30, 9, 0)),
                 TODAY);
 
-        assertTrue(ledger.contains("⚠️已被更新，最新记录于2026-06-30"));
+        assertTrue(ledger.contains("已被更新，最新记录于2026-06-30"));
     }
 
     @Test

@@ -18,11 +18,13 @@
              </view>
              <view class="header-right">
                 <view v-if="fav.sourceUrl" class="favo-btn" @tap.stop="openUrl(fav.sourceUrl)" title="新标签页打开">
-                  <text class="icon">🔗</text>
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path v-for="(d, gi) in ICONS.link" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
                 </view>
                 <!-- Insert Button -->
                 <view class="favo-btn" @tap.stop="insertFav(fav)" title="插入">
-                  <text class="icon">⚡</text>
+                  <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
                 </view>
                 <!-- Delete -->
                 <view class="del-wrapper" style="position: relative;">
@@ -63,8 +65,15 @@
 
 <script>
 import { getProjectFavorites, deleteFavorite, getFavoriteImageUrl } from '@/services/api.js'
+import { ICONS } from '@/config/icons.js'
 
 export default {
+
+  computed: {
+
+    ICONS() { return ICONS }
+
+  },
   name: 'ProjectFavoritesPanel',
   props: {
     projectId: {
@@ -379,7 +388,10 @@ $bg-white: #FFFFFF;
   transition: all 0.2s;
   
   .icon {
-    font-size: 13px;
+
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
   }
 
   &:hover {

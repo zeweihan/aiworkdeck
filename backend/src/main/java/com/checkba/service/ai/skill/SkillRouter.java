@@ -43,6 +43,8 @@ public class SkillRouter {
     /**
      * 触发匹配（无状态）：在所有可用 skill 中找命中关键词的；
      * 多命中时取最长命中关键词的 skill（并列时取先注册的）。
+     *
+     * 生效方式为"仅手动"的 skill 不参与自动匹配——它只能由用户钉选生效。
      */
     public Optional<SkillDefinition> match(String userInput) {
         if (userInput == null || userInput.isBlank()) {
@@ -52,7 +54,7 @@ public class SkillRouter {
         SkillDefinition best = null;
         int bestLen = 0;
         for (SkillDefinition skill : skillRegistry.getSkills()) {
-            if (!skillRegistry.isAvailable(skill)) {
+            if (!skillRegistry.isAvailable(skill) || skillRegistry.isManual(skill.getId())) {
                 continue;
             }
             for (String trigger : skill.getTriggers()) {
@@ -73,6 +75,28 @@ public class SkillRouter {
      * 未命中时清除该会话的旧记录，保证行为回到"与现状完全一致"。
      */
     public void activateForTurn(String conversationId, String userInput) {
+        activateForTurn(conversationId, userInput, null);
+    }
+
+    /**
+     * 同上，但用户可钉选一个 skill 强制本轮生效。
+     *
+     * 钉选优先于触发词匹配：用户明确指定的意图不该被关键词猜测覆盖。
+     * 钉选 id 不存在或不可用（已停用 / 所属插件已停用）时退回自动匹配，
+     * 避免前端状态过期把本轮变成"无 skill 也无提示"。
+     */
+    public void activateForTurn(String conversationId, String userInput, String pinnedSkillId) {
+        if (pinnedSkillId != null && !pinnedSkillId.isBlank()) {
+            Optional<SkillDefinition> pinned = skillRegistry.getSkill(pinnedSkillId)
+                    .filter(skillRegistry::isAvailable);
+            if (pinned.isPresent()) {
+                activeSkillByConversation.put(conversationId, pinned.get().getId());
+                log.info("Skill '{}' activated for conversation {} (pinned by user)",
+                        pinned.get().getId(), conversationId);
+                return;
+            }
+            log.warn("Pinned skill '{}' not found or unavailable, fall back to trigger matching", pinnedSkillId);
+        }
         Optional<SkillDefinition> matched = match(userInput);
         if (matched.isPresent()) {
             activeSkillByConversation.put(conversationId, matched.get().getId());

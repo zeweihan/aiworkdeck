@@ -27,7 +27,9 @@
     <!-- Contrast Button (Visible when exactly 2 DOC/DOCX files are selected) -->
     <view v-if="canCompare" class="compare-btn-wrapper">
        <button class="btn-compare" @tap.stop="handleCompare">
-         <text class="compare-icon">📊</text>
+         <svg class="compare-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+           <path v-for="(d, gi) in ICONS.compare" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+         </svg>
          <text>对比选中文件</text>
        </button>
     </view>
@@ -90,6 +92,7 @@
 </template>
 
 <script>
+import { ICONS } from '@/config/icons.js'
 export default {
   name: 'FileStagingArea',
   props: {
@@ -112,6 +115,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     canCompare() {
       if (this.selectedIds.length !== 2) return false
       const selectedFiles = this.files.filter(f => this.selectedIds.includes(f.id))
@@ -522,5 +526,11 @@ export default {
     border: 1px solid #3b82f6;
     pointer-events: none;
     z-index: 1000;
+}
+
+.compare-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 </style>

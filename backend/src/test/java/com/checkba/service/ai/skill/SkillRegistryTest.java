@@ -148,6 +148,47 @@ class SkillRegistryTest {
     }
 
     @Test
+    @DisplayName("生效方式三档：默认 auto；manual 不影响 available；disabled 优先于 manual")
+    void activationModeThreeStates() throws IOException {
+        writeSkill(tempDir.resolve("test-skill"), "test-skill", null);
+        SkillRegistry registry = newRegistry(tempDir, new PluginService());
+        SkillDefinition skill = registry.getSkill("test-skill").orElseThrow();
+
+        assertEquals(SkillRegistry.ActivationMode.AUTO, registry.activationMode("test-skill"));
+        assertFalse(registry.isManual("test-skill"));
+
+        // manual 只挡自动匹配，skill 本身仍可用（供钉选）
+        registry.setActivationMode("test-skill", SkillRegistry.ActivationMode.MANUAL);
+        assertEquals(SkillRegistry.ActivationMode.MANUAL, registry.activationMode("test-skill"));
+        assertTrue(registry.isManual("test-skill"));
+        assertTrue(registry.isAvailable(skill));
+
+        // disabled 优先呈现，且清掉 manual 标记
+        registry.setActivationMode("test-skill", SkillRegistry.ActivationMode.DISABLED);
+        assertEquals(SkillRegistry.ActivationMode.DISABLED, registry.activationMode("test-skill"));
+        assertFalse(registry.isManual("test-skill"));
+        assertFalse(registry.isAvailable(skill));
+
+        registry.setActivationMode("test-skill", SkillRegistry.ActivationMode.AUTO);
+        assertEquals(SkillRegistry.ActivationMode.AUTO, registry.activationMode("test-skill"));
+        assertTrue(registry.isAvailable(skill));
+
+        assertThrows(IllegalArgumentException.class,
+                () -> registry.setActivationMode("nope", SkillRegistry.ActivationMode.MANUAL));
+    }
+
+    @Test
+    @DisplayName("ActivationMode.parse 容错：大小写不敏感，非法值返回 empty")
+    void activationModeParse() {
+        assertEquals(Optional.of(SkillRegistry.ActivationMode.MANUAL),
+                SkillRegistry.ActivationMode.parse("manual"));
+        assertEquals(Optional.of(SkillRegistry.ActivationMode.AUTO),
+                SkillRegistry.ActivationMode.parse(" Auto "));
+        assertEquals(Optional.empty(), SkillRegistry.ActivationMode.parse("bogus"));
+        assertEquals(Optional.empty(), SkillRegistry.ActivationMode.parse(null));
+    }
+
+    @Test
     @DisplayName("skills 目录不存在时正常启动（0 个 skill）")
     void missingSkillsDirIsFine() {
         SkillRegistry registry = newRegistry(tempDir.resolve("does-not-exist"), new PluginService());

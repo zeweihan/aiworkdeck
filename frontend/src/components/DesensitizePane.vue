@@ -8,10 +8,10 @@
          </view>
          <view class="actions-row">
             <view class="mini-btn" @tap="importFromActiveTab" title="从当前打开文件导入">
-               <text>📄 导入当前</text>
+               <text>导入当前</text>
             </view>
             <view class="mini-btn" @tap="triggerFileSelect" title="从项目浏览">
-               <text>📂 浏览</text>
+               <text>浏览</text>
             </view>
          </view>
       </view>

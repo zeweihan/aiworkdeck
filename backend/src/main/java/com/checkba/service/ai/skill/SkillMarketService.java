@@ -55,6 +55,8 @@ public class SkillMarketService {
         private String authorDisplayName;
         private List<String> triggers = new ArrayList<>();
         private List<String> allowedTools = new ArrayList<>();
+        /** 官网 SKILL_CATEGORIES 分类 id；旧注册表可能缺失，前端按"其他"兜底 */
+        private String category;
         private Integer downloads;
         private String updatedAt;
         private String homepage;

@@ -15,11 +15,14 @@
         />
     </svg>
     <!-- Fallback for unknown types -->
-    <text v-else class="fallback-icon">📄</text>
+    <svg class="fallback-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
   </view>
 </template>
 
 <script>
+import { ICONS } from '@/config/icons.js'
 export default {
   name: 'FileTypeIcon',
   props: {
@@ -33,6 +36,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     // Colors
     colors() {
         return {
@@ -164,6 +168,9 @@ export default {
     height: 100%;
 }
 .fallback-icon {
-    font-size: 16px;
+
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 </style>

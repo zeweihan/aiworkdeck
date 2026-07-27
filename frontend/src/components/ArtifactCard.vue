@@ -71,10 +71,10 @@ export default {
   computed: {
     typeLabel() {
       const labels = {
-        'task_list': '任务清单', // Removed 📋
-        'plan': '执行方案',     // Removed 📝
-        'implementation_plan': '实施计划', // Removed 📝
-        'walkthrough': '详细说明' // Removed 📘
+        'task_list': '任务清单',
+        'plan': '执行方案',
+        'implementation_plan': '实施计划',
+        'walkthrough': '详细说明'
       }
       return labels[this.type] || this.type
     },
@@ -94,7 +94,7 @@ export default {
   },
   methods: {
     handleOpenTab() {
-      console.log('[ArtifactCard] 📄 Opening artifact in tab:', this.id)
+      console.log('[ArtifactCard] Opening artifact in tab:', this.id)
       this.$emit('open-tab', {
         id: this.id,
         type: this.type,
@@ -104,7 +104,7 @@ export default {
       })
     },
     handleApprove() {
-      console.log('[ArtifactCard] ✓ Approving artifact:', this.id)
+      console.log('[ArtifactCard] Approving artifact:', this.id)
       this.$emit('approve', {
         id: this.id,
         type: this.type,

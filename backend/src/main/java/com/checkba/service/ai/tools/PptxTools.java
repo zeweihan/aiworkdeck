@@ -415,12 +415,12 @@ public class PptxTools implements AgentToolComponent {
                         "- PPTX服务项目ID: %s\n" +
                         "- 版本类型: %s\n",
                         finalFileName, result.getPagesCount(), pf.getId(), locationInfo, result.getProjectId(),
-                        result.isEditable() ? "✅ 可编辑版（文字/表格可直接修改）" : "纯图片版"
+                        result.isEditable() ? "可编辑版（文字/表格可直接修改）" : "纯图片版"
                 ));
                 
                 // 添加警告信息（如有）
                 if (result.getWarnings() != null && !result.getWarnings().isEmpty()) {
-                    successMsg.append("\n⚠️ **注意**:\n");
+                    successMsg.append("\n**注意**:\n");
                     for (String w : result.getWarnings()) {
                          successMsg.append("- ").append(w).append("\n");
                     }
@@ -747,7 +747,7 @@ public class PptxTools implements AgentToolComponent {
             log.info("Notifying frontend to reload file: {}", file.getId());
             editorBridgeService.sendReloadFileAction(file);
             
-            return String.format("✅ 第 %d 页已使用 AI 成功修改！\n\n" +
+            return String.format("第 %d 页已使用 AI 成功修改！\n\n" +
                     "修改内容：%s\n\n" +
                     "文件已自动更新，文档编辑器将重新加载以显示修改后的内容。",
                     pageIndex, instruction);

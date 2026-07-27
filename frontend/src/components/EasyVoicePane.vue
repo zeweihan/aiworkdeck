@@ -6,10 +6,10 @@
         <text class="section-title">文本内容</text>
         <view class="section-actions">
            <view class="mini-btn" @tap="importFromDoc" title="从当前文档导入">
-             <text>📄 导入</text>
+             <text>导入</text>
            </view>
            <view class="mini-btn" @tap="text = ''" title="清空">
-             <text>🗑️</text>
+             <svg class="btn-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
            </view>
         </view>
       </view>
@@ -143,7 +143,7 @@
     <view v-if="audioUrl" class="section no-border result-area">
       <view class="result-header">
          <text class="result-title">生成结果</text>
-         <text class="download-link" @tap="downloadAudio">⬇️ 下载</text>
+         <text class="download-link" @tap="downloadAudio">下载</text>
       </view>
       
       <!-- Custom Audio Player -->
@@ -162,6 +162,7 @@
 
 <script>
 import { getTtsVoices, generateTtsAudio, promptFeatureNotConfigured } from '@/services/api.js'
+import { ICONS } from '@/config/icons.js'
 
 export default {
   name: 'EasyVoicePane',
@@ -188,6 +189,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     selectedVoiceLabel() {
         const v = this.voices.find(v => v.voiceId === this.selectedVoiceId)
         return v ? `${v.name} (${v.gender || 'voice'})` : ''
@@ -766,5 +768,11 @@ export default {
 .player-status {
     font-size: 13px;
     color: #374151;
+}
+
+.btn-glyph {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 </style>

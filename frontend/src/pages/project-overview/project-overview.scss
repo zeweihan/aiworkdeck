@@ -428,7 +428,9 @@ $bg-white: #FFFFFF;
 
 .tab-icon {
   margin-right: 6px;
-  font-size: 14px;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
   opacity: 0.8;
 }
 
@@ -2923,7 +2925,10 @@ $bg-white: #FFFFFF;
 
 .folder-icon {
   margin-right: 8px;
-  font-size: 18px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #64748b;
 }
 
 .folder-indent {

@@ -70,7 +70,9 @@
     
     <!-- 错误状态 -->
     <view v-if="error" class="error-overlay">
-      <text class="error-icon">⚠️</text>
+      <svg class="error-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path v-for="(d, gi) in ICONS.warning" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
       <text class="error-text">{{ error }}</text>
       <button class="retry-btn" @tap="loadDocuments">重试</button>
     </view>
@@ -79,8 +81,15 @@
 
 <script>
 import api from '@/services/api.js'
+import { ICONS } from '@/config/icons.js'
 
 export default {
+
+  computed: {
+
+    ICONS() { return ICONS }
+
+  },
   name: 'DocDiffViewer',
   props: {
     sourceId: {
@@ -549,7 +558,10 @@ export default {
 }
 
 .error-icon {
-  font-size: 48px;
+
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
   margin-bottom: 12px;
 }
 

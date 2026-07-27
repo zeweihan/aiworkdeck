@@ -219,6 +219,18 @@
           />
         </view>
 
+        <!-- 插件广场：IDE 扩展市场式直达入口（浏览/安装不该藏在系统设置两跳之下） -->
+        <view class="rail-btn" title="插件广场" @tap="goToPluginMarket">
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 4h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+              <path d="M4 13h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+              <path d="M13 13h7v7h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+              <path d="M14.5 2.5h7v7h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
+        </view>
+
         <!-- 系统设置：AI 提供商 / API Key 等随时可改（不再只藏在首次向导里）。
              页面与接口仅管理员可用（后端 requireAdmin），入口对所有人可见便于发现。 -->
         <view class="rail-btn" title="系统设置（AI 提供商 / API Key）" @tap="goToSystemSettings">
@@ -341,7 +353,7 @@
                <view class="form-item">
                   <text class="label">用户自定义 Prompt</text>
                   <textarea class="textarea" v-model="editingAssistant.userPrompt" placeholder="输入自定义指令..."></textarea>
-                  <text class="hint">⚠️ 注意：如果设置了自定义 Prompt，预设 Prompt 将被忽略（User Prompt Prevails）。</text>
+                  <text class="hint">注意：如果设置了自定义 Prompt，预设 Prompt 将被忽略（User Prompt Prevails）。</text>
                </view>
             </view>
             <view class="dialog-footer">
@@ -624,7 +636,9 @@
                       @drop.prevent="onTabDropOnItem($event, file, 'left')"
                       @dragend="onTabDragEnd"
                     >
-                      <text class="tab-icon">{{ file.tabType === 'web' ? '🌐' : getFileIcon(file.fileType) }}</text>
+                      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path v-for="(d, gi) in getFileIconPaths(file.fileType, file.tabType)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
                       <text class="tab-name">{{ file.name }}</text>
                       <text class="tab-close" @tap.stop="closeFile(file.id, 'left')">×</text>
                     </view>
@@ -660,7 +674,9 @@
                       @drop.prevent="onTabDropOnItem($event, file, 'right')"
                       @dragend="onTabDragEnd"
                     >
-                      <text class="tab-icon">{{ file.tabType === 'web' ? '🌐' : getFileIcon(file.fileType) }}</text>
+                      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path v-for="(d, gi) in getFileIconPaths(file.fileType, file.tabType)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
                       <text class="tab-name">{{ file.name }}</text>
                       <text class="tab-close" @tap.stop="closeFile(file.id, 'right')">×</text>
                     </view>
@@ -1006,7 +1022,9 @@
                 :class="{ active: exportTargetParentId === null }"
                 @tap="selectExportFolder(null)"
               >
-                <text class="folder-icon">📁</text>
+                <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.folder" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
                 <text class="folder-name">根目录</text>
               </view>
               <view
@@ -1020,7 +1038,9 @@
                   class="folder-indent"
                   :style="{ width: (folder.level * 24) + 'rpx' }"
                 ></view>
-                <text class="folder-icon">📂</text>
+                <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.folderOpen" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
                 <text class="folder-name">{{ folder.name }}</text>
               </view>
               <view v-if="!exportFolderTree.length" class="empty-tip">
@@ -1073,7 +1093,9 @@
                 :class="{ active: screenshotSaveParentId === null }"
                 @tap="selectScreenshotFolder(null)"
               >
-                <text class="folder-icon">📂</text>
+                <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.folderOpen" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
                 <text class="folder-name">根目录</text>
                 <view v-if="!screenshotSaveParentId" class="check-icon">✓</view>
               </view>
@@ -1097,7 +1119,9 @@
                         <text :class="folder.expanded ? 'arrow-down' : 'arrow-right'">▶</text>
                     </view>
 
-                    <text class="folder-icon">📁</text>
+                    <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path v-for="(d, gi) in GLYPHS.folder" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
                     <text class="folder-name">{{ folder.name }}</text>
                     <view v-if="screenshotSaveParentId === folder.id" class="check-icon">✓</view>
                   </view>
@@ -1182,7 +1206,9 @@
               class="folder-item"
               @tap="openFileLinkTarget(f.id)"
             >
-              <text class="folder-icon">{{ f.isFolder ? '📁' : '📄' }}</text>
+              <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in (f.isFolder ? GLYPHS.folder : GLYPHS.doc)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
               <text class="folder-name">{{ f.name }}</text>
             </view>
             <view v-if="!fileLinkPicker.files || fileLinkPicker.files.length === 0" class="empty-tip">
@@ -1279,6 +1305,8 @@ import {
 } from '@/config/leftSidebarPlugins.js'
 
 import { activityTracker } from '@/utils/activityTracker.js'
+
+import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
@@ -1555,6 +1583,9 @@ export default {
     }
   },
   computed: {
+    GLYPHS() {
+      return GLYPHS
+    },
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
       const list = this.chatHistoryList || []
@@ -4498,6 +4529,9 @@ export default {
     goToSystemSettings() {
       uni.navigateTo({ url: '/pages/admin/admin' })
     },
+    goToPluginMarket() {
+      uni.navigateTo({ url: '/pages/plugin-market/plugin-market' })
+    },
     formatTime(timeStr) {
   if (!timeStr) return '-'
 
@@ -5082,12 +5116,9 @@ export default {
       }
     },
 
-    getFileIcon(type) {
-      if (!type) return '📄'
-      const t = type.toLowerCase()
-      if (['doc','docx'].includes(t)) return '📝'
-      if (['pdf'].includes(t)) return '📕'
-      return '📄'
+    /** 标签页图标的 SVG path 集合（界面禁用 emoji，图标一律 stroke 线性 SVG） */
+    getFileIconPaths(type, tabType) {
+      return tabType === 'web' ? GLYPHS.web : fileGlyph(type)
     },
     isFileTypeSupported(file) {
       if (!file || file.isFolder) return true
@@ -5513,7 +5544,7 @@ export default {
     // Handle artifact open-tab event from ChatInterface
     // Creates a virtual .md tab in the left pane with typewriter effect
     handleArtifactOpenTab(artifactInfo) {
-      console.log('[ProjectOverview] 📄 Opening artifact in tab:', artifactInfo)
+      console.log('[ProjectOverview] Opening artifact in tab:', artifactInfo)
 
       // Check if tab already exists
       const existingTab = this.leftFiles.find(f => f.artifactId === artifactInfo.id)
@@ -5540,7 +5571,7 @@ export default {
       this.activeFileIdLeft = virtualFile.id
 
       // TODO: Persist to backend /项目根目录/AI助手工作计划/ if needed
-      console.log('[ProjectOverview] ✓ Created markdown tab:', virtualFile.name)
+      console.log('[ProjectOverview] Created markdown tab:', virtualFile.name)
     },
 
     handleClientAction(action) {

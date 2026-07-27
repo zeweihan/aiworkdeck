@@ -345,7 +345,7 @@ public class MemoryTools implements AgentToolComponent {
                 }
                 sb.append(value);
                 if (Boolean.TRUE.equals(mem.getIsProtected())) {
-                    sb.append(" 🔒");
+                    sb.append(" [受保护]");
                 }
                 sb.append("\n\n");
             }

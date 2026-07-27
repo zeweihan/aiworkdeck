@@ -251,8 +251,8 @@ public class AgentOrchestrator {
                 });
             }
             
-            // 1.2 Skill 触发匹配（Phase 3B）：命中记录本轮激活的 skill，未命中行为与现状一致
-            skillRouter.activateForTurn(conversationId, request.getMessage());
+            // 1.2 Skill 激活（Phase 3B）：用户钉选优先，否则触发词匹配；都未命中时行为与现状一致
+            skillRouter.activateForTurn(conversationId, request.getMessage(), request.getPinnedSkillId());
 
             // 2. Build Context & History Message Stack (Spec v1.8)
             log.info("Assembling full message context for conversation: {}", conversationId);
@@ -325,7 +325,7 @@ public class AgentOrchestrator {
         if (depth > MAX_LOOP_DEPTH) {
             // 步数预算耗尽：不是报错，而是"存档 + 请示"——保存进度、明确告知用户、干净收尾。
             log.warn("Agent loop reached max depth {} for conversation {}, stopping gracefully", MAX_LOOP_DEPTH, conversationId);
-            String notice = "\n\n> ⚠️ 本轮已达最大执行步数（" + MAX_LOOP_DEPTH + " 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。";
+            String notice = "\n\n> 本轮已达最大执行步数（" + MAX_LOOP_DEPTH + " 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。";
             sendTextDelta(conversationId, notice);
             String persisted = (executionLog.length() > 0 ? executionLog.toString() : "") + notice;
             saveAssistantMessage(conversationId, projectId, userId, persisted);

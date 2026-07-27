@@ -307,7 +307,10 @@
     <view class="tree-content" @mousedown="onMarqueeStart" @mousemove="onMarqueeMove" @mouseup="onMarqueeEnd" @tap="closeContextMenu">
       <!-- Recycle Bin Header -->
       <view v-if="viewMode === 'recycle'" class="tree-toolbar" style="background: #E8F3ED; border-bottom: 1px solid #E9ECEF; justify-content: space-between;">
-         <text style="font-size: 12px; color: #1A5336; display: flex; align-items: center; font-weight: 500;">🗑️ 回收站 ({{ recycleBin.length }})</text>
+         <svg class="recycle-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+           <path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+         </svg>
+         <text style="font-size: 12px; color: #1A5336; display: flex; align-items: center; font-weight: 500;">回收站 ({{ recycleBin.length }})</text>
          <text class="action-btn recycle-back-btn" @tap="exitRecycleBin">返回</text>
       </view>
 
@@ -731,7 +734,9 @@
       <view class="compare-bar-content">
         <text class="compare-bar-text">已选择 2 个文档</text>
         <button class="btn-compare" @tap="startDocumentCompare">
-          <text class="compare-icon">📊</text>
+          <svg class="compare-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path v-for="(d, gi) in ICONS.compare" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
           <text>对比文档</text>
         </button>
       </view>
@@ -809,6 +814,7 @@ import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
 import TagSelector from '@/components/TagSelector.vue'
 import TagManager from '@/components/TagManager.vue'
+import { ICONS } from '@/config/icons.js'
 import {
   getProjectTags,
   addTagToFile,
@@ -953,6 +959,7 @@ export default {
 
   },
   computed: {
+    ICONS() { return ICONS },
     sortLabel() {
       const map = { name: '名称', date: '修改时间', type: '类型' }
       return map[this.sortMode] || '排序'
@@ -1621,15 +1628,6 @@ export default {
         }
     },
 
-    getFileIcon(fileType) {
-      if (!fileType) return '📄'
-      const type = fileType.toLowerCase()
-      if (type === 'doc' || type === 'docx') return '📝'
-      if (type === 'pdf') return '📕'
-      if (type === 'xls' || type === 'xlsx') return '📊'
-      if (type === 'ppt' || type === 'pptx') return '📽️'
-      return '📄'
-    },
     // 构建树形视图
     buildTreeView(allFiles, parentId) {
       const result = []
@@ -3908,7 +3906,10 @@ $bg-grey: $uni-bg-color-grey;
 }
 
 .compare-icon {
-  font-size: 14px;
+
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .tree-checkbox {
@@ -5191,5 +5192,12 @@ $bg-grey: $uni-bg-color-grey;
 }
 
 
+
+.recycle-glyph {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: #1A5336;
+}
 </style>
 

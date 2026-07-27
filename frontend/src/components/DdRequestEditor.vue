@@ -100,7 +100,9 @@
           <!-- Upload -->
           <view class="col-upload">
             <view v-if="item.uploadedFileId" class="uploaded-info" @tap.stop="viewFile(item.uploadedFileId)">
-               <text class="file-icon">📄</text>
+               <svg class="file-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                 <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+               </svg>
                <text class="file-name">已上传</text>
             </view>
              <button
@@ -161,6 +163,7 @@
 <script>
 import api, { getApiBaseUrl } from '@/services/api'
 import { getSessionId } from '@/utils/auth'
+import { ICONS } from '@/config/icons.js'
 
 export default {
   name: 'DdRequestEditor',
@@ -188,6 +191,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     completedCount() {
       return this.items.filter(i => i.status === 'APPROVED' || i.status === 'UPLOADED').length
     },
@@ -679,7 +683,10 @@ $white: #FFFFFF;
          cursor: pointer;
          max-width: 90px;
 
-         .file-icon { font-size: 12px; }
+         .file-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0; }
          .file-name { font-size: 11px; color: $brand-forest; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       }
 
