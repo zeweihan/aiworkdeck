@@ -12,7 +12,9 @@
         <view class="doc-selection">
           <view class="doc-item">
             <view class="doc-label">
-              <text class="label-icon">📄</text>
+              <svg class="label-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
               <text class="label-text">源文档（基准）</text>
             </view>
             <view class="doc-options">
@@ -37,7 +39,9 @@
           
           <view class="doc-item">
             <view class="doc-label">
-              <text class="label-icon">📝</text>
+              <svg class="label-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in ICONS.docText" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
               <text class="label-text">新文档（比较对象）</text>
             </view>
             <view class="doc-options">
@@ -71,6 +75,7 @@
 </template>
 
 <script>
+import { ICONS } from '@/config/icons.js'
 export default {
   name: 'CompareDocDialog',
   props: {
@@ -90,6 +95,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     canConfirm() {
       return this.documents.length === 2 && 
              this.sourceIndex !== this.targetIndex &&
@@ -221,7 +227,10 @@ export default {
 }
 
 .label-icon {
-  font-size: 16px;
+
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 
 .label-text {

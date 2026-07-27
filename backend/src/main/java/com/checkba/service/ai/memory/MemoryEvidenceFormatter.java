@@ -34,7 +34,7 @@ public final class MemoryEvidenceFormatter {
         StringBuilder sb = new StringBuilder();
         sb.append("今天是 ").append(today.format(DATE))
           .append("。以下记忆按检索相关度排序，每条附记录时间与来源；")
-          .append("标注「⚠️已被更新」的条目是旧状态，请以更新时间较新的记录为准。\n");
+          .append("标注「已被更新」的条目是旧状态，请以更新时间较新的记录为准。\n");
         int index = 1;
         for (MemoryEntry mem : entries) {
             sb.append(index++).append(". [").append(mem.getMemoryType()).append("] ");
@@ -58,11 +58,11 @@ public final class MemoryEvidenceFormatter {
             sb.append(" · 来源文件#").append(mem.getSourceFileId());
         }
         if (Boolean.TRUE.equals(mem.getIsProtected())) {
-            sb.append(" · 🔒受保护");
+            sb.append(" · 受保护");
         }
         LocalDateTime newer = supersededAt == null ? null : supersededAt.get(mem.getId());
         if (newer != null) {
-            sb.append(" · ⚠️已被更新，最新记录于").append(newer.format(DATE));
+            sb.append(" · 已被更新，最新记录于").append(newer.format(DATE));
         }
         return sb.toString();
     }

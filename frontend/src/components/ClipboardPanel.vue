@@ -22,11 +22,11 @@
                </view>
                <!-- Text Insert -->
                <view v-if="it.type === 'TEXT'" class="cli-btn" @tap.stop="$emit('insert', { type: 'TEXT', content: it.text })" title="插入">
-                 <text class="icon">⚡</text>
+                 <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
                </view>
                <!-- Image Insert -->
                <view v-if="it.type === 'IMAGE'" class="cli-btn" @tap.stop="$emit('insert', { type: 'IMAGE', content: getImageUrl(it) })" title="插入">
-                 <text class="icon">⚡</text>
+                 <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
                </view>
                <view class="del-wrapper" style="position: relative;">
                  <view class="cli-btn danger" @tap.stop="requestDelete(it.id)" title="删除">
@@ -50,7 +50,9 @@
             <text v-if="it.type === 'TEXT'" class="content-text">{{ it.text }}</text>
             <image v-else-if="it.type === 'IMAGE'" class="content-image" :src="getImageUrl(it)" mode="aspectFill" @click.stop="previewImage(it)"></image>
             <view v-else class="content-file">
-               <text class="file-icon">📄</text>
+               <svg class="file-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                 <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+               </svg>
                <text class="file-name">{{ it.fileName || '未知文件' }}</text>
             </view>
           </view>
@@ -65,8 +67,15 @@
 import { listClipboard, deleteClipboardItem, getApiBaseUrl } from '@/services/api.js'
 import { getClipboardTypeMeta } from '@/config/clipboard.js'
 import { getSessionId } from '@/utils/auth.js'
+import { ICONS } from '@/config/icons.js'
 
 export default {
+
+  computed: {
+
+    ICONS() { return ICONS }
+
+  },
   name: 'ClipboardPanel',
   /* ... props/data/methods same ... */
   props: {
@@ -356,7 +365,10 @@ $bg-white: #FFFFFF;
   padding: 0;
   
   .icon {
-    font-size: 13px;
+
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
     color: $color-text-light;
   }
 
@@ -415,7 +427,10 @@ $bg-white: #FFFFFF;
 }
 
 .file-icon {
-  font-size: 24px;
+
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
   flex-shrink: 0;
 }
 /* Inline Delete Popover */

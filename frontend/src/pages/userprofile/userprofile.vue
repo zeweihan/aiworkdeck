@@ -114,7 +114,7 @@
                     </view>
                     <!-- Role Badge moved to title area -->
                     <view class="card-actions">
-                         <view class="action-btn-icon danger" @tap.stop="handleDeleteProject(project.id)" title="删除">🗑️</view>
+                         <view class="action-btn-icon danger" @tap.stop="handleDeleteProject(project.id)" title="删除"><svg class="act-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
                     </view>
                 </view>
 
@@ -161,7 +161,7 @@
                         <view class="manager-avatar-wrapper" v-if="project.managerId" :title="'项目负责人: ' + (project.managerName || '未知')">
                              <image v-if="project.managerAvatarUrl" :src="project.managerAvatarUrl" class="manager-avatar-img" />
                              <view v-else class="manager-avatar-placeholder">{{ project.managerName?.charAt(0) || 'M' }}</view>
-                             <view class="manager-badge-icon">👑</view>
+                             <view class="manager-badge-icon"><svg class="badge-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.crown" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
                         </view>
                         <view class="members-divider" v-if="project.managerId && getInternalMembers(project).length > 0"></view>
                         
@@ -247,7 +247,7 @@
             </view>
             <view v-else-if="favorites.length === 0" class="empty-state">
               <view class="empty-icon-circle">
-                <text class="empty-icon">⭐</text>
+                <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.star" :key="gi" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </view>
               <text class="empty-title">我的收藏</text>
               <text class="empty-desc">暂无收藏内容</text>
@@ -278,7 +278,7 @@
           <view v-else-if="activeTab === 'todos'" class="panel-placeholder">
             <view class="empty-state">
               <view class="empty-icon-circle">
-                <text class="empty-icon">📝</text>
+                <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.docText" :key="gi" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </view>
               <text class="empty-title">我的代办</text>
               <text class="empty-desc">暂无待办事项</text>
@@ -335,8 +335,15 @@ import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurre
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
+import { ICONS } from '@/config/icons.js'
 
 export default {
+
+  computed: {
+
+    ICONS() { return ICONS }
+
+  },
   name: 'UserProfile',
   components: {
     InviteMemberDialog
@@ -2155,4 +2162,23 @@ $danger-color: #E74C3C;
     border-color: #ffadd2;
 }
 
+
+.act-glyph {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.badge-glyph {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.empty-icon {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  color: #C9D4CE;
+}
 </style>

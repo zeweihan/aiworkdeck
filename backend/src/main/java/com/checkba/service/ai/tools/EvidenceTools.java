@@ -80,7 +80,7 @@ public class EvidenceTools implements AgentToolComponent {
                 }
                 sb.append(" · 哈希: ").append(shortHash(item.contentHash()));
                 if (item.supersededAt() != null) {
-                    sb.append(" · ⚠️已有更新版本（").append(item.supersededAt().toLocalDate()).append("）");
+                    sb.append(" · 已有更新版本（").append(item.supersededAt().toLocalDate()).append("）");
                 }
                 sb.append("\n");
             }

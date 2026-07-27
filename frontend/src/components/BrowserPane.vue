@@ -26,7 +26,7 @@
       </view>
 
       <view class="browser-btn" :class="{ primary: isMobileMode }" @tap="toggleMobileMode" :title="isMobileMode ? '切换回桌面版' : '切换移动版 (解决网页过宽)'">
-        <text class="btn-icon" style="font-size: 16px;">{{ isMobileMode ? '📱' : '💻' }}</text>
+        <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in (isMobileMode ? ICONS.phone : ICONS.desktop)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
       </view>
     </view>
 
@@ -58,6 +58,7 @@
 
 <script>
 import { getApiBaseUrl } from '@/services/api.js'
+import { ICONS } from '@/config/icons.js'
 
 export default {
   name: 'BrowserPane',
@@ -86,6 +87,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     canGoBack() {
       return this.index > 0
     },
@@ -440,6 +442,12 @@ export default {
 .browser-fallback {
   padding: 16px;
   color: #666666;
+}
+
+.btn-icon-svg {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
 }
 </style>
 

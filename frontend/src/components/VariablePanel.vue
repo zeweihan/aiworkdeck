@@ -20,7 +20,7 @@
                   </div>
                   <div class="var-actions-top">
                     <!-- Vertical Stack -->
-                    <button class="var-act-btn" @click.stop="insertVariable(it)" title="插入">⚡</button>
+                    <button class="var-act-btn" @click.stop="insertVariable(it)" title="插入"><svg class="var-act-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
                     <button class="var-act-btn" @click.stop="updateValueFromSelection(it)" title="更新值">↻</button>
                     <div class="del-wrapper" style="position: relative;">
                       <button v-if="it.canDelete" class="var-act-btn danger" @click.stop="requestDelete(it)" title="删除">×</button>
@@ -77,6 +77,7 @@
 </template>
 
 <script>
+import { ICONS } from '@/config/icons.js'
 import {
   getProjectVariables,
   saveProjectVariable,
@@ -115,6 +116,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     displayItems() {
       if (this.activeScope === 'doc') {
         const groups = new Map()
@@ -908,6 +910,12 @@ $bg-white: #FFFFFF;
     opacity: 0.6;
     cursor: not-allowed;
   }
+}
+
+.var-act-icon {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
 }
 </style>
 

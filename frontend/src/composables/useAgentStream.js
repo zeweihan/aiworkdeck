@@ -532,7 +532,7 @@ export function useAgentStream() {
             // 注意：错误必须写入 content（walkthrough 卡片当前未渲染，写那里用户永远看不到）
             if (evt === 'error') {
                 const errMsg = dataStr || "Unknown Error"
-                currentAssistantBubble.value.content += `\n\n> ⚠️ **执行中断**：${errMsg}\n`
+                currentAssistantBubble.value.content += `\n\n> **执行中断**：${errMsg}\n`
             }
         }
         if (evt === 'bubble_end' || evt === 'cancelled') isStreaming.value = false

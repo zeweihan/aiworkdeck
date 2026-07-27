@@ -251,6 +251,7 @@
 
 <script>
 import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivation, rescanSkills, getSkillMarket, installMarketSkill, uninstallMarketSkill } from '@/services/api.js'
+import { ICONS } from '@/config/icons.js'
 
 const PERMISSION_LABELS = {
   file_read: '读取文件',
@@ -275,38 +276,6 @@ const SKILL_CATEGORIES = [
 const ACTIVATION_MODES = ['auto', 'manual', 'disabled']
 const ACTIVATION_LABELS = ['自动触发', '仅手动', '停用']
 
-// 线性图标（stroke currentColor，与左栏 Railway 图标同一套写法）。全站禁用 emoji。
-const ICONS = {
-  // 三块拼装的积木：插件/扩展
-  blocks: [
-    'M4 4h7v7H4z',
-    'M4 13h7v7H4z',
-    'M13 13h7v7h-7z',
-    'M14.5 2.5h7v7h-7z'
-  ],
-  // 带书签的文稿：Skill（提示词能力）
-  skill: [
-    'M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z',
-    'M14 3v5h5',
-    'M9 13h6',
-    'M9 17h4'
-  ],
-  // 断开的信号：注册表不可达
-  offline: [
-    'M2 2l20 20',
-    'M8.5 16.5a5 5 0 0 1 7 0',
-    'M5 12.9a10 10 0 0 1 4-2.6',
-    'M15 10.3a10 10 0 0 1 4 2.6',
-    'M2 8.8a15 15 0 0 1 4.7-3',
-    'M17.3 5.8A15 15 0 0 1 22 8.8',
-    'M12 20h.01'
-  ],
-  // 放大镜：搜索无结果
-  search: [
-    'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z',
-    'M21 21l-4.35-4.35'
-  ]
-}
 
 export default {
   name: 'PluginMarketPage',

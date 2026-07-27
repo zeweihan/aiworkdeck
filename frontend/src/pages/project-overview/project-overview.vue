@@ -353,7 +353,7 @@
                <view class="form-item">
                   <text class="label">用户自定义 Prompt</text>
                   <textarea class="textarea" v-model="editingAssistant.userPrompt" placeholder="输入自定义指令..."></textarea>
-                  <text class="hint">⚠️ 注意：如果设置了自定义 Prompt，预设 Prompt 将被忽略（User Prompt Prevails）。</text>
+                  <text class="hint">注意：如果设置了自定义 Prompt，预设 Prompt 将被忽略（User Prompt Prevails）。</text>
                </view>
             </view>
             <view class="dialog-footer">
@@ -1306,16 +1306,7 @@ import {
 
 import { activityTracker } from '@/utils/activityTracker.js'
 
-// 线性图标 path（全站禁用 emoji，图标一律 stroke SVG，写法同左栏 Railway 图标）
-const GLYPHS = {
-  doc: ['M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z', 'M14 3v5h5'],
-  docText: ['M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z', 'M14 3v5h5', 'M9 13h6', 'M9 17h4'],
-  docPdf: ['M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z', 'M14 3v5h5', 'M8.5 16.5h2a1.5 1.5 0 0 0 0-3h-2v5'],
-  web: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z', 'M3.6 9h16.8', 'M3.6 15h16.8', 'M12 3a14 14 0 0 1 0 18', 'M12 3a14 14 0 0 0 0 18'],
-  folder: ['M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z'],
-  folderOpen: ['M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v1H3V7Z', 'M3 10h18l-2 8a1 1 0 0 1-1 .8H5.6A1 1 0 0 1 4.6 18L3 10Z']
-}
-
+import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
@@ -5125,13 +5116,9 @@ export default {
       }
     },
 
-    /** 标签页图标的 SVG path 集合（全站禁用 emoji，图标一律 stroke 线性 SVG） */
+    /** 标签页图标的 SVG path 集合（界面禁用 emoji，图标一律 stroke 线性 SVG） */
     getFileIconPaths(type, tabType) {
-      if (tabType === 'web') return GLYPHS.web
-      const t = (type || '').toLowerCase()
-      if (['doc', 'docx'].includes(t)) return GLYPHS.docText
-      if (t === 'pdf') return GLYPHS.docPdf
-      return GLYPHS.doc
+      return tabType === 'web' ? GLYPHS.web : fileGlyph(type)
     },
     isFileTypeSupported(file) {
       if (!file || file.isFolder) return true
@@ -5584,7 +5571,7 @@ export default {
       this.activeFileIdLeft = virtualFile.id
 
       // TODO: Persist to backend /项目根目录/AI助手工作计划/ if needed
-      console.log('[ProjectOverview] ✓ Created markdown tab:', virtualFile.name)
+      console.log('[ProjectOverview] Created markdown tab:', virtualFile.name)
     },
 
     handleClientAction(action) {

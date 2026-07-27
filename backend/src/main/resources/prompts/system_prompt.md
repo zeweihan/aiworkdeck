@@ -292,7 +292,7 @@ If you lack critical details, **STOP and ASK** using the `<question>` tag. Do NO
 - **CAN call backend tools** via `default_api` object
 - Available libraries: pandas, tushare, requests, matplotlib, hashlib
 
-> **⚠️ IMPORTANT: External API Best Practice**
+> **IMPORTANT: External API Best Practice**
 > Before writing Python code to call any external API (Qichacha, Tushare, or others):
 > 1. **FIRST** use `browse_url` to check the official API documentation
 > 2. **THEN** write code following the exact authentication and request format from the docs

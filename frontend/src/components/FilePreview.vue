@@ -85,7 +85,9 @@
         <!-- 音频预览 -->
         <view v-else-if="isAudio" class="preview-audio">
            <view class="audio-wrapper">
-            <view class="audio-icon">🎵</view>
+            <svg class="audio-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in ICONS.audio" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
             <text class="audio-name">{{ file.name }}</text>
             <view class="preview-audio-player" v-html="audioPlayerHtml"></view>
            </view>
@@ -108,7 +110,7 @@
           <view v-else-if="archiveError" class="archive-status archive-error"><text>{{ archiveError }}</text></view>
           <scroll-view v-else scroll-y class="archive-list">
             <view v-for="(entry, i) in archiveEntries" :key="i" class="archive-entry">
-              <text class="entry-icon">{{ entry.dir ? '📁' : '📄' }}</text>
+              <svg class="entry-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in (entry.dir ? ICONS.folder : ICONS.doc)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
               <text class="entry-path">{{ entry.path }}</text>
               <text class="entry-size" v-if="!entry.dir">{{ formatFileSize(entry.size) }}</text>
             </view>
@@ -132,6 +134,7 @@
 <script>
 import { getFileDownloadUrl, getArchiveEntries, extractArchive } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
+import { ICONS } from '@/config/icons.js'
 
 // docx-preview 依赖 Chromium DOM，仅 H5/桌面构建启用；其它平台落 Office 占位分支
 // #ifdef H5
@@ -173,6 +176,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     fileUrl() {
       if (!this.file) {
         console.log('FilePreview: file 为空')
@@ -780,7 +784,10 @@ export default {
 }
 
 .audio-icon {
-  font-size: 80rpx;
+
+  width: 72rpx;
+  height: 72rpx;
+  flex-shrink: 0;
 }
 
 .audio-name {
@@ -843,7 +850,10 @@ export default {
 }
 
 .entry-icon {
-  font-size: 26rpx;
+
+  width: 28rpx;
+  height: 28rpx;
+  flex-shrink: 0;
 }
 
 .entry-path {
