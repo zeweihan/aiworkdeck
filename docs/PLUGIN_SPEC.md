@@ -111,7 +111,7 @@ Java 侧没有进程内沙箱可用（`SecurityManager` 已于 JEP 411 废弃、
 
 **安装一个 JAR 插件 = 信任它等同于信任一个本机应用程序。** 这一点对本地手放的插件
 无法通过技术手段缓解，只能靠分发链路（签名、审核、封禁）把不可信来源挡在外面——
-见 §8 与 docs/PLUGIN_DISTRIBUTION.md。
+见 [docs/PLUGIN_DISTRIBUTION.md](PLUGIN_DISTRIBUTION.md)。
 
 ## 4. 后端工具（backendJars）约定
 
@@ -183,7 +183,11 @@ plugins/
 - **v1（0.4.x）**：声明式 manifest + 启停持久化 + 插件广场展示。
 - **v2（Phase 3A）**：ToolRegistry 按启停过滤三处消费点 + `tools[].permissions`
   分发前权限校验（诚实声明模型）+ 启停缓存 TTL。
-- **v2.1（当前，Phase 3B）**：manifest 新增 `skills` 字段，插件可携带 Skill（见 §7 与
+- **v2.1（Phase 3B）**：manifest 新增 `skills` 字段，插件可携带 Skill（见 §7 与
   docs/SKILL_SPEC.md）。
-- 规划中（见 AI_ARCHITECTURE.md Phase 3 TODO）：进程级运行时沙箱（真正强制 file/network 隔离）、
-  frontendEntry 动态加载、插件签名与来源校验。
+- **v2.2（当前）**：加载期收口——禁用即不加载 JAR（§5）、`backendJars` 路径逃逸校验（§4）；
+  在线分发落地：平台 Ed25519 签名 + 人工审核 + 客户端验签 + 远程封禁，见
+  [docs/PLUGIN_DISTRIBUTION.md](PLUGIN_DISTRIBUTION.md)。
+- 规划中：进程外插件形态（MCP server）为不需要独立 UI 的插件提供真正的隔离边界；
+  frontendEntry 动态加载。**进程内沙箱不在规划中**——Java 侧无此能力（§3），
+  不要再把它列为待办。
