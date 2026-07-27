@@ -636,7 +636,9 @@
                       @drop.prevent="onTabDropOnItem($event, file, 'left')"
                       @dragend="onTabDragEnd"
                     >
-                      <text class="tab-icon">{{ file.tabType === 'web' ? '🌐' : getFileIcon(file.fileType) }}</text>
+                      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path v-for="(d, gi) in getFileIconPaths(file.fileType, file.tabType)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
                       <text class="tab-name">{{ file.name }}</text>
                       <text class="tab-close" @tap.stop="closeFile(file.id, 'left')">×</text>
                     </view>
@@ -672,7 +674,9 @@
                       @drop.prevent="onTabDropOnItem($event, file, 'right')"
                       @dragend="onTabDragEnd"
                     >
-                      <text class="tab-icon">{{ file.tabType === 'web' ? '🌐' : getFileIcon(file.fileType) }}</text>
+                      <svg class="tab-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path v-for="(d, gi) in getFileIconPaths(file.fileType, file.tabType)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
                       <text class="tab-name">{{ file.name }}</text>
                       <text class="tab-close" @tap.stop="closeFile(file.id, 'right')">×</text>
                     </view>
@@ -1018,7 +1022,9 @@
                 :class="{ active: exportTargetParentId === null }"
                 @tap="selectExportFolder(null)"
               >
-                <text class="folder-icon">📁</text>
+                <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.folder" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
                 <text class="folder-name">根目录</text>
               </view>
               <view
@@ -1032,7 +1038,9 @@
                   class="folder-indent"
                   :style="{ width: (folder.level * 24) + 'rpx' }"
                 ></view>
-                <text class="folder-icon">📂</text>
+                <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.folderOpen" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
                 <text class="folder-name">{{ folder.name }}</text>
               </view>
               <view v-if="!exportFolderTree.length" class="empty-tip">
@@ -1085,7 +1093,9 @@
                 :class="{ active: screenshotSaveParentId === null }"
                 @tap="selectScreenshotFolder(null)"
               >
-                <text class="folder-icon">📂</text>
+                <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.folderOpen" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
                 <text class="folder-name">根目录</text>
                 <view v-if="!screenshotSaveParentId" class="check-icon">✓</view>
               </view>
@@ -1109,7 +1119,9 @@
                         <text :class="folder.expanded ? 'arrow-down' : 'arrow-right'">▶</text>
                     </view>
 
-                    <text class="folder-icon">📁</text>
+                    <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path v-for="(d, gi) in GLYPHS.folder" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
                     <text class="folder-name">{{ folder.name }}</text>
                     <view v-if="screenshotSaveParentId === folder.id" class="check-icon">✓</view>
                   </view>
@@ -1194,7 +1206,9 @@
               class="folder-item"
               @tap="openFileLinkTarget(f.id)"
             >
-              <text class="folder-icon">{{ f.isFolder ? '📁' : '📄' }}</text>
+              <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in (f.isFolder ? GLYPHS.folder : GLYPHS.doc)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
               <text class="folder-name">{{ f.name }}</text>
             </view>
             <view v-if="!fileLinkPicker.files || fileLinkPicker.files.length === 0" class="empty-tip">
@@ -1291,6 +1305,17 @@ import {
 } from '@/config/leftSidebarPlugins.js'
 
 import { activityTracker } from '@/utils/activityTracker.js'
+
+// 线性图标 path（全站禁用 emoji，图标一律 stroke SVG，写法同左栏 Railway 图标）
+const GLYPHS = {
+  doc: ['M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z', 'M14 3v5h5'],
+  docText: ['M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z', 'M14 3v5h5', 'M9 13h6', 'M9 17h4'],
+  docPdf: ['M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z', 'M14 3v5h5', 'M8.5 16.5h2a1.5 1.5 0 0 0 0-3h-2v5'],
+  web: ['M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z', 'M3.6 9h16.8', 'M3.6 15h16.8', 'M12 3a14 14 0 0 1 0 18', 'M12 3a14 14 0 0 0 0 18'],
+  folder: ['M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7Z'],
+  folderOpen: ['M3 7a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v1H3V7Z', 'M3 10h18l-2 8a1 1 0 0 1-1 .8H5.6A1 1 0 0 1 4.6 18L3 10Z']
+}
+
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
@@ -1567,6 +1592,9 @@ export default {
     }
   },
   computed: {
+    GLYPHS() {
+      return GLYPHS
+    },
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
       const list = this.chatHistoryList || []
@@ -5097,12 +5125,13 @@ export default {
       }
     },
 
-    getFileIcon(type) {
-      if (!type) return '📄'
-      const t = type.toLowerCase()
-      if (['doc','docx'].includes(t)) return '📝'
-      if (['pdf'].includes(t)) return '📕'
-      return '📄'
+    /** 标签页图标的 SVG path 集合（全站禁用 emoji，图标一律 stroke 线性 SVG） */
+    getFileIconPaths(type, tabType) {
+      if (tabType === 'web') return GLYPHS.web
+      const t = (type || '').toLowerCase()
+      if (['doc', 'docx'].includes(t)) return GLYPHS.docText
+      if (t === 'pdf') return GLYPHS.docPdf
+      return GLYPHS.doc
     },
     isFileTypeSupported(file) {
       if (!file || file.isFolder) return true
@@ -5528,7 +5557,7 @@ export default {
     // Handle artifact open-tab event from ChatInterface
     // Creates a virtual .md tab in the left pane with typewriter effect
     handleArtifactOpenTab(artifactInfo) {
-      console.log('[ProjectOverview] 📄 Opening artifact in tab:', artifactInfo)
+      console.log('[ProjectOverview] Opening artifact in tab:', artifactInfo)
 
       // Check if tab already exists
       const existingTab = this.leftFiles.find(f => f.artifactId === artifactInfo.id)
@@ -7174,7 +7203,9 @@ $bg-white: #FFFFFF;
 
 .tab-icon {
   margin-right: 6px;
-  font-size: 14px;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
   opacity: 0.8;
 }
 
@@ -9669,7 +9700,10 @@ $bg-white: #FFFFFF;
 
 .folder-icon {
   margin-right: 8px;
-  font-size: 18px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #64748b;
 }
 
 .folder-indent {

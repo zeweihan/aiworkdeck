@@ -48,9 +48,7 @@ export function getLeftSidebarPlugin(key) {
 
 export function getPluginsForUser(role) {
   if (role === 'CLIENT') {
-    return [
-      { key: 'dd-files', label: '尽调文件', icon: '📋' }
-    ]
+    return [getLeftSidebarPlugin('dd-files')]
   }
   return LEFT_SIDEBAR_PLUGINS
 }

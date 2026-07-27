@@ -4,7 +4,11 @@
       <!-- 顶部 -->
       <view class="header-card">
         <view class="header-left">
-          <view class="header-icon">🧩</view>
+          <view class="header-icon">
+            <svg class="svg-icon lg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </view>
           <view class="title-row">
             <text class="page-title">插件广场</text>
             <text class="page-subtitle">浏览在线广场，管理已安装的插件与 Skill</text>
@@ -60,12 +64,16 @@
           </view>
 
           <view v-if="marketError" class="empty">
-            <text class="empty-icon">📡</text>
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.offline" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
             <text class="empty-title">在线广场暂不可用（离线或网络受限）</text>
             <text class="empty-hint">{{ marketError }}</text>
           </view>
           <view v-else-if="filteredMarketSkills.length === 0" class="empty">
-            <text class="empty-icon">🛍️</text>
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.search" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
             <text class="empty-title">{{ marketLoading ? '加载中...' : (marketSkills.length ? '没有匹配的 Skill' : '暂无在线 Skill') }}</text>
             <text v-if="!marketLoading" class="empty-hint">{{ marketSkills.length ? '换个关键词或分类试试' : '去官网 Skill 广场提交你的第一个 Skill 吧' }}</text>
           </view>
@@ -73,7 +81,9 @@
             <view v-for="m in filteredMarketSkills" :key="m.id" class="plugin-card">
               <view class="card-header">
                 <view class="plugin-icon-wrap">
-                  <text class="plugin-icon">{{ m.icon || '🧩' }}</text>
+                  <svg class="svg-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path v-for="(d, i) in ICONS.skill" :key="i" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
                 </view>
                 <view class="title-block">
                   <view class="name-row">
@@ -103,7 +113,9 @@
 
         <!-- 插件在线分发属 Phase 2（JAR 签名/沙箱安全模型另议），先给占位与本地安装指引 -->
         <view v-else class="empty">
-          <text class="empty-icon">🧩</text>
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
           <text class="empty-title">插件在线分发即将上线</text>
           <text class="empty-hint">当前可本地安装：将插件目录（含 manifest.json）放入服务端 plugins/ 目录后，点击"重新扫描"，然后到"已安装"里启用</text>
         </view>
@@ -118,11 +130,12 @@
         </view>
 
         <view v-if="loading" class="empty">
-          <text class="empty-icon">⏳</text>
           <text class="empty-title">加载中...</text>
         </view>
         <view v-else-if="plugins.length === 0" class="empty">
-          <text class="empty-icon">🧩</text>
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
           <text class="empty-title">暂无插件</text>
           <text class="empty-hint">将插件目录（含 manifest.json）放入服务端 plugins/ 目录后，点击"重新扫描"</text>
         </view>
@@ -131,7 +144,9 @@
             <view class="card-header">
               <view class="plugin-icon-wrap">
                 <image v-if="isImageIcon(p.icon)" :src="p.icon" class="plugin-icon-img" mode="aspectFit" />
-                <text v-else class="plugin-icon">{{ p.icon || '🧩' }}</text>
+                <svg v-else class="svg-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
               </view>
               <view class="title-block">
                 <view class="name-row">
@@ -176,7 +191,9 @@
           <text class="section-subtitle">提示词能力：在对话中生效，可设置生效方式</text>
         </view>
         <view v-if="skills.length === 0" class="empty">
-          <text class="empty-icon">🎯</text>
+          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path v-for="(d, i) in ICONS.skill" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
           <text class="empty-title">暂无 Skill</text>
           <text class="empty-hint">将 Skill 目录（含 skill.yml）放入服务端 skills/ 目录后，点击"重新扫描"</text>
         </view>
@@ -184,7 +201,9 @@
           <view v-for="s in skills" :key="s.id" class="plugin-card" :class="{ disabled: !s.enabled }">
             <view class="card-header">
               <view class="plugin-icon-wrap">
-                <text class="plugin-icon">🎯</text>
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, i) in ICONS.skill" :key="i" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
               </view>
               <view class="title-block">
                 <view class="name-row">
@@ -256,6 +275,39 @@ const SKILL_CATEGORIES = [
 const ACTIVATION_MODES = ['auto', 'manual', 'disabled']
 const ACTIVATION_LABELS = ['自动触发', '仅手动', '停用']
 
+// 线性图标（stroke currentColor，与左栏 Railway 图标同一套写法）。全站禁用 emoji。
+const ICONS = {
+  // 三块拼装的积木：插件/扩展
+  blocks: [
+    'M4 4h7v7H4z',
+    'M4 13h7v7H4z',
+    'M13 13h7v7h-7z',
+    'M14.5 2.5h7v7h-7z'
+  ],
+  // 带书签的文稿：Skill（提示词能力）
+  skill: [
+    'M6 3h9l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Z',
+    'M14 3v5h5',
+    'M9 13h6',
+    'M9 17h4'
+  ],
+  // 断开的信号：注册表不可达
+  offline: [
+    'M2 2l20 20',
+    'M8.5 16.5a5 5 0 0 1 7 0',
+    'M5 12.9a10 10 0 0 1 4-2.6',
+    'M15 10.3a10 10 0 0 1 4 2.6',
+    'M2 8.8a15 15 0 0 1 4.7-3',
+    'M17.3 5.8A15 15 0 0 1 22 8.8',
+    'M12 20h.01'
+  ],
+  // 放大镜：搜索无结果
+  search: [
+    'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z',
+    'M21 21l-4.35-4.35'
+  ]
+}
+
 export default {
   name: 'PluginMarketPage',
   data() {
@@ -281,6 +333,9 @@ export default {
     },
     ACTIVATION_LABELS() {
       return ACTIVATION_LABELS
+    },
+    ICONS() {
+      return ICONS
     },
     installedCount() {
       return this.plugins.length + this.skills.length
@@ -513,8 +568,19 @@ $border-color: #E9ECEF;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 26px;
   flex-shrink: 0;
+  color: $brand-primary;
+}
+
+/* 线性图标：全站禁用 emoji，图标一律 stroke SVG */
+.svg-icon {
+  width: 22px;
+  height: 22px;
+
+  &.lg {
+    width: 26px;
+    height: 26px;
+  }
 }
 
 .title-row {
@@ -768,9 +834,9 @@ $border-color: #E9ECEF;
 }
 
 .empty-icon {
-  font-size: 36px;
-  line-height: 1;
-  opacity: 0.5;
+  width: 34px;
+  height: 34px;
+  color: #9AAFA3;
   margin-bottom: 4px;
 }
 
@@ -837,11 +903,7 @@ $border-color: #E9ECEF;
   justify-content: center;
   flex-shrink: 0;
   overflow: hidden;
-}
-
-.plugin-icon {
-  font-size: 24px;
-  line-height: 1;
+  color: $brand-primary;
 }
 
 .plugin-icon-img {

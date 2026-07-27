@@ -134,13 +134,16 @@
     <view v-if="showRollbackDialog" class="awd-dialog-mask" style="z-index: 3100;" @tap="cancelRollback">
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header warning-header">
-          <text class="awd-dialog-title warning-title">⚠️ 确认回退</text>
+          <text class="awd-dialog-title warning-title">确认回退</text>
         </view>
         <view class="awd-dialog-body">
           <view class="rollback-warning-content">
             <text class="warning-text">此操作将删除该消息以及之后的所有对话记录，且无法恢复。</text>
             <view class="doc-tip-box">
-              <text class="doc-tip-icon">💡</text>
+              <svg class="doc-tip-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M12 3a6 6 0 0 0-3.5 10.9V17h7v-3.1A6 6 0 0 0 12 3Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                <path d="M10 20h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+              </svg>
               <view class="doc-tip-text">
                 <text>如果助手在后续对话中修改了文档（Word/PPT），文件内容不会自动回退。</text>
                 <text class="doc-link-text">AI 的文档修改以修订痕迹记录，可在编辑器中「拒绝修订」恢复原文。</text>
@@ -174,13 +177,16 @@
                    :class="{ active: pptExportEditable === true }"
                    @tap="pptExportEditable = true">
                  <view class="option-header">
-                    <text class="option-icon">✏️</text>
+                    <svg class="option-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                       <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                       <path d="M14.5 5.5 18.5 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+                    </svg>
                     <text class="option-name">可编辑版 (Beta)</text>
                     <text v-if="pptExportEditable === true" class="check-mark">✔</text>
                  </view>
                  <view class="option-desc">
                     生成原生 PPTX 文本和表格。
-                    <text class="warning-text">⚠️ 实验性功能，复杂排版可能不稳定。</text>
+                    <text class="warning-text">实验性功能，复杂排版可能不稳定。</text>
                  </view>
               </view>
 
@@ -189,7 +195,11 @@
                    :class="{ active: pptExportEditable === false }"
                    @tap="pptExportEditable = false">
                  <view class="option-header">
-                    <text class="option-icon">🖼️</text>
+                    <svg class="option-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                       <path d="M4 5h16v14H4z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" />
+                       <path d="m4 16 4.5-4.5 3 3L15 11l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                       <path d="M9 9.5h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+                    </svg>
                     <text class="option-name">高清图片版 (推荐)</text>
                     <text v-if="pptExportEditable === false" class="check-mark">✔</text>
                  </view>
@@ -3704,8 +3714,11 @@ export default {
 }
 
 .doc-tip-icon {
-  font-size: 18px;
+  width: 18px;
+  height: 18px;
   margin-right: 10px;
+  flex-shrink: 0;
+  color: #B8860B;
 }
 
 .doc-tip-text {
@@ -3788,8 +3801,11 @@ export default {
 }
 
 .option-icon {
-  font-size: 20px;
+  width: 20px;
+  height: 20px;
   margin-right: 12px;
+  flex-shrink: 0;
+  color: #1A5336;
 }
 
 .option-name {
