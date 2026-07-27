@@ -276,4 +276,51 @@ class PluginServiceTest {
         assertFalse(service.isEnabled("second"), "rescan 应重读禁用名单");
         assertTrue(service.isEnabled("hello-plugin"));
     }
+
+    // ==== backendJars 路径校验 ====
+
+    @Test
+    @DisplayName("backendJars 指向插件目录外时拒绝加载（路径逃逸防护）")
+    void backendJarOutsidePluginDirIsRejected() throws IOException {
+        Path pluginDir = pluginsDir.resolve("evil-plugin");
+        Files.createDirectories(pluginDir);
+        // 在 plugins/ 根下放一个"外部" JAR，插件试图用 ../ 指到它
+        Files.write(pluginsDir.resolve("outside.jar"), new byte[]{0x50, 0x4B, 0x03, 0x04});
+
+        assertNull(service.resolveBackendJar(pluginDir.toFile(), "../outside.jar", "evil-plugin"),
+                "../ 逃出插件目录必须被拒绝");
+        assertNull(service.resolveBackendJar(pluginDir.toFile(), "../../../etc/passwd", "evil-plugin"));
+        assertNull(service.resolveBackendJar(pluginDir.toFile(), null, "evil-plugin"));
+        assertNull(service.resolveBackendJar(pluginDir.toFile(), "  ", "evil-plugin"));
+    }
+
+    @Test
+    @DisplayName("backendJars 指向插件目录内的真实文件时放行")
+    void backendJarInsidePluginDirIsAccepted() throws IOException {
+        Path pluginDir = pluginsDir.resolve("ok-plugin");
+        Files.createDirectories(pluginDir.resolve("lib"));
+        Files.write(pluginDir.resolve("tool.jar"), new byte[]{0x50, 0x4B, 0x03, 0x04});
+        Files.write(pluginDir.resolve("lib").resolve("nested.jar"), new byte[]{0x50, 0x4B, 0x03, 0x04});
+
+        assertNotNull(service.resolveBackendJar(pluginDir.toFile(), "tool.jar", "ok-plugin"));
+        assertNotNull(service.resolveBackendJar(pluginDir.toFile(), "lib/nested.jar", "ok-plugin"),
+                "子目录内的 JAR 应放行");
+        assertNull(service.resolveBackendJar(pluginDir.toFile(), "missing.jar", "ok-plugin"),
+                "声明了但文件不存在时返回 null");
+    }
+
+    // ==== 禁用插件不加载 ====
+
+    @Test
+    @DisplayName("启动时被禁用的插件仍登记元数据，但不加载其 JAR")
+    void disabledPluginIsRegisteredButJarNotLoaded() throws IOException {
+        writeManifest("hello-plugin", FULL_MANIFEST);
+        settingStore.put(PluginService.DISABLED_KEY, "[\"hello-plugin\"]");
+
+        service.init();
+
+        assertEquals(1, service.getPlugins().size(), "禁用插件仍要在管理页可见");
+        assertFalse(service.isEnabled("hello-plugin"));
+        assertTrue(service.getPluginTools().isEmpty(), "禁用插件的工具不应被注册");
+    }
 }

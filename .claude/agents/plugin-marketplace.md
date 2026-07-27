@@ -10,16 +10,36 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 ## 关键文件
 
 **前端**
-- `frontend/src/pages/plugin-market/plugin-market.vue` — 插件广场单页，三个区块：插件（:23-78）、Skill（:80-119）、在线广场（:121-165）。脚本区 :171-333（loadPlugins/onToggle 失败回滚/loadMarket/installSkill/uninstallSkill/rescan）。
+- `frontend/src/pages/plugin-market/plugin-market.vue` — 插件广场单页，「广场 / 已安装」两 tab；广场 tab 内再分 Skill / 插件两个分区（seg-row 切换）。Skill 分区带搜索与七分类 chips；插件分区接在线注册表，安装前弹权限确认。已安装 tab 分插件区与 Skill 区，Skill 行是生效方式三档下拉。
 - `frontend/src/services/api.js` :407-485 — plugins、skills、skills/market 三组 HTTP 封装。
 - 入口：`frontend/src/pages/admin/admin.vue` :584 系统管理侧边栏项 `{key:'plugins', label:'插件广场', route:'/pages/plugin-market/plugin-market'}`。**leftSidebarPlugins.js 不含市场入口**（那是 IDE 左栏业务插件位）。
 
 **后端**
 - `backend/src/main/java/com/checkba/controller/ai/SkillController.java` — /api/skills：list、{id}/enable|disable、rescan、market/list|install|uninstall。
-- `backend/src/main/java/com/checkba/controller/ai/PluginController.java` — /api/plugins：list、启停、rescan。
+- `backend/src/main/java/com/checkba/controller/ai/PluginController.java` — /api/plugins：list、启停、rescan、market/list|install|uninstall、market/sync-revoked。
+- `backend/src/main/java/com/checkba/service/ai/PluginMarketService.java` — **在线插件安装与验签**（Ed25519 公钥内置，逐文件 SHA-256 校验，临时目录+原子移动，装后默认禁用）。
+- `backend/src/main/java/com/checkba/service/ai/PluginRevocationService.java` — 平台封禁列表同步（启动时 + 每 24h），命中强制禁用且不可重新启用。
 - `backend/src/main/java/com/checkba/service/ai/skill/SkillMarketService.java` — 在线广场客户端（**市场契约的权威定义在此类 Javadoc**，SKILL_SPEC.md §8 未含 market 端点）。
 - `backend/src/main/java/com/checkba/service/ai/skill/SkillRegistry.java` — 本地扫描/启停/rescan。
 - `backend/src/main/java/com/checkba/service/ai/skill/SkillProperties.java` — ai.skills.*（dir/base-tools/registry-url/ttl）；registry-url 默认 `https://www.aiworkdeck.com/api/registry/skills`（application.yml ~:163）。
+
+## 插件在线分发（JAR）
+
+**规范：`docs/PLUGIN_DISTRIBUTION.md`（跨仓库契约的权威定义）。改这条链路先读它。**
+
+与 Skill 分发的根本区别：插件是可执行代码、与宿主同 JVM 同权限，因此
+**必须人工审核 + 平台签名 + 客户端验签**，且没有自动通过路径。Skill 是纯文本，
+登录即发布，两套流程不要混用。
+
+- 状态机 pending → approved（签名上架）/ rejected，已上架可 revoke 封禁。
+- 签名 Ed25519，覆盖包内每个文件的 SHA-256；canonical JSON 两端必须逐字节一致
+  （键序 files < id < publishedAt < version），改任一侧都要重跑
+  `CrossLanguageSignatureTest` 对拍。
+- 公钥配 `ai.plugins.registry-public-key`，**默认留空即拒绝一切在线安装**。
+- 安装后插件默认禁用，配合「禁用即不加载 JAR」，用户确认前不执行任何插件代码。
+- 官网侧实现在 aiworkdeckweb：`lib/plugins-store.ts`（受理检查）、
+  `lib/plugin-signing.ts`（签名）、`lib/plugin-scan.ts`（常量池扫描 + permissions 交叉验证）、
+  `app/[lang]/plugins/submit`（提交页）、`app/[lang]/admin/PluginReview.tsx`（审核台）。
 
 ## 官网 registry 契约
 

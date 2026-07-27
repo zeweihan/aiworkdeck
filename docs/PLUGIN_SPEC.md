@@ -15,6 +15,17 @@ plugins/
     └── hello-plugin-1.0.0.jar # 可选，后端工具 JAR（manifest.backendJars 声明）
 ```
 
+`ai.plugins.dir` 默认是相对路径 `plugins`，**实际落点由后端进程的工作目录决定**：
+
+| 形态 | 工作目录 | 插件目录 |
+|---|---|---|
+| 本地开发 | `<repo>/backend` | `backend/plugins/` |
+| 打包桌面版 | `~/.aiworkdeck` | `~/.aiworkdeck/plugins/` |
+
+桌面版这个位置在**用户家目录下且可写**——任何以该用户身份运行的本地进程都能往里丢
+插件，下次启动即被加载。这是威胁模型里必须记住的一条：`plugins/` 目录的写权限
+等价于在宿主 JVM 里执行任意代码。
+
 启动时自动扫描；也可在插件广场点击「重新扫描」或调用 `POST /api/plugins/rescan` 热发现新插件（注意：重扫只能发现新插件/新元数据，已加载进 JVM 的旧类不会被卸载，替换 JAR 需重启后端）。
 
 ## 2. manifest.json 字段
@@ -47,7 +58,7 @@ plugins/
 | `icon` | string | 否 | emoji（如 `🔌`）或图片 URL/绝对路径；缺省时前端显示 `🧩`。 |
 | `author` | string | 否 | 作者 / 组织名。 |
 | `homepage` | string | 否 | 主页或仓库 URL。 |
-| `permissions` | string[] | 否 | 声明插件**被授予**的能力，见 §3。缺省视为不需要任何敏感能力。 |
+| `permissions` | string[] | 否 | 插件**自行声明**会用到的能力，见 §3。缺省视为不需要任何敏感能力。注意这是作者的自述，不是运行时授权。 |
 | `tools` | object[] | 否 | 工具清单（`name` + 中文 `description` + 可选 `permissions`），用于插件广场展示、人工审查与 v2 权限校验。`name` 应与 JAR 中 `@Tool` 方法名一致；`permissions` 声明**该工具运行所需**的能力（v2 新增，见 §3）。 |
 | `frontendEntry` | string | 否 | 前端入口（预留，v1 不加载）。 |
 | `backendJars` | string[] | 否 | 相对插件目录的 JAR 文件名列表，启动/重扫时加载其中带 `@Tool` 注解的类。 |
@@ -55,7 +66,7 @@ plugins/
 
 未知字段被忽略（向前兼容）；`permissions` 中出现 v1 未定义的值仅记录 WARN，不拒绝加载。
 
-## 3. permissions 权限模型（v2）
+## 3. permissions 自述与一致性校验（v2）
 
 | 值 | 含义 |
 |---|---|
@@ -64,27 +75,52 @@ plugins/
 | `network` | 访问外部网络（HTTP 等出站请求） |
 | `editor` | 操作文档编辑器（LOWA/LibreOffice 相关原语） |
 
-### v2 执行语义（分发前校验）
+> **先读这一段，否则会高估它的作用。**
+>
+> 这不是权限模型，是 manifest 内部的一致性 lint。校验比较的两个集合——「工具所需」
+> 与「插件声明」——**都来自插件作者自己写的同一个 manifest.json**，作者改任意一边
+> 即可让校验恒过（顶层写满四个权限，或干脆不写 `tools[].permissions`）。
+>
+> 更重要的是，**声明与实际行为完全不挂钩**：声明了空权限的工具，方法体里照样可以
+> 读写任意文件、发任意网络请求。这四个字符串在后端只用于日志、上述集合比较和前端
+> 标签展示，没有任何 FileService / HTTP 客户端 / EditorBridge 会去查它们。
+>
+> 它的真实价值：帮**诚实的**作者暴露"忘了声明"的疏漏，以及给人工审查提供一份可读的
+> 能力自述。对恶意插件零防御力。
 
 两级声明 + 分发时校验（实现在 `PluginService.missingPermissionsForTool()` +
 `ToolRegistry.execute()`）：
 
-- **插件级 `permissions`**：插件被授予的能力全集，管理员在插件广场审查的对象。
-- **工具级 `tools[].permissions`**：单个工具运行所需的能力。
+- **插件级 `permissions`**：插件自述会用到的能力全集，人工审查的对象。
+- **工具级 `tools[].permissions`**：单个工具自述运行所需的能力。
 - **校验规则**：分发插件工具前检查「工具所需 ⊆ 插件声明」；有所需权限未在插件级
   `permissions` 声明时**拒绝执行**，返回
   `Error: permission denied — tool 'x' requires permission(s) [...] not declared in the plugin manifest "permissions"`。
 - **v1 兼容**：工具未列入 `tools[]` 或未写 `permissions` 视为无敏感能力需求，直接放行；
   内置工具（不属于任何插件）不参与校验。
 
-> 边界：v2 校验发生在分发层（诚实声明模型），插件代码本身仍与宿主同进程运行，
-> **进程级沙箱（真正阻止未声明的文件/网络访问）是后续项**，见 docs/AI_ARCHITECTURE.md Phase 3 TODO。
+### 真实的信任边界在哪里
+
+插件 JAR 与宿主**同一个 JVM、同一个 Spring 容器、同一份权限**。`URLClassLoader` 的
+父加载器就是宿主自己，所以插件可以直接 `import com.checkba.*` 拿到 `DataSource`、
+`SystemSettingService`（**AI 供应商 API Key 存在这里**）等任意 Bean，也能读写用户
+home 下的任意文件、起子进程、改 JVM 全局状态。
+
+Java 侧没有进程内沙箱可用（`SecurityManager` 已于 JEP 411 废弃、JEP 486 在 JDK 24
+永久禁用，OpenJDK 官方给出的替代方案就是进程外隔离）。因此：
+
+**安装一个 JAR 插件 = 信任它等同于信任一个本机应用程序。** 这一点对本地手放的插件
+无法通过技术手段缓解，只能靠分发链路（签名、审核、封禁）把不可信来源挡在外面——
+见 [docs/PLUGIN_DISTRIBUTION.md](PLUGIN_DISTRIBUTION.md)。
 
 ## 4. 后端工具（backendJars）约定
 
 - 工具类需有**无参构造函数**，工具方法用 langchain4j 的 `dev.langchain4j.agent.tool.@Tool` 注解（当前宿主版本 **0.36.0**，编译时以 `provided` 作用域依赖 `langchain4j-core`，运行时由宿主提供）。
 - 工具名 = 方法名，全局唯一；与内置工具或其他插件重名时后注册的覆盖先注册的（避免与内置工具重名）。
-- JAR 由独立 `URLClassLoader` 加载（父加载器为应用 ClassLoader），依赖冲突自行规避；无法解析的类会被跳过。
+- 每个 JAR 一个 `URLClassLoader` 实例，**父加载器是宿主的应用 ClassLoader**——这是标准双亲委派，
+  不是隔离：插件能看见宿主的全部类（Spring、项目自己的 `com.checkba.*` service/repository）。
+  依赖冲突自行规避；无法解析的类会被跳过。
+- `backendJars` 的路径必须落在插件目录内（含子目录），`../` 逃逸会被拒绝并记 ERROR。
 
 ## 5. 启用 / 禁用
 
@@ -93,6 +129,22 @@ plugins/
 - **v2 起 ToolRegistry 按启停过滤**（Phase 3A）：禁用插件后其工具在三处消费点全部不可见——
   LLM 拿不到工具规格（`getAllSpecifications`）、XML 协议解析不识别（`toolNamesLongestFirst`）、
   分发返回 not found（`resolve`）；重新启用即时恢复，内置工具不受影响。
+
+### 禁用到底停掉了什么
+
+| 时机 | 行为 |
+|---|---|
+| 启动 / rescan 时已处于禁用 | **JAR 不加载**：静态初始化块与构造器都不会执行，元数据仍登记以便管理页展示与启停 |
+| 运行中禁用一个已加载的插件 | 工具立即不可见、不可分发，但**类已在 JVM 中无法卸载**——若插件在构造器里起了线程或注册了全局钩子，这些不会因禁用而消失，**需重启后端才能彻底停掉** |
+| 运行中启用一个启动时被禁的插件 | 自动补加载其 JAR（`loadJarsIfAbsent`），工具随即可用 |
+
+> 结论：禁用可以阻止**尚未加载**的插件运行，但不能撤销**已加载**插件造成的影响。
+> 处置可疑插件的正确顺序是：禁用 → 重启后端 → 从 `plugins/` 目录移除。
+
+### rescan 的限制
+
+`rescan()` 清空元数据与工具映射后全量重扫，用于**发现新装插件**。已由旧 ClassLoader
+加载的类不会卸载；替换同名 JAR 的新版本必须重启后端才能生效，否则运行的仍是旧类。
 - 启停查询走内存缓存，TTL（配置 `ai.plugins.disabled-cache-ttl-ms`，默认 5000ms）过期后从
   `system_setting` 重读：同 JVM 内启停即时生效，外部直接改库在 TTL 内收敛，工具调用高频路径不打库。
 
@@ -131,7 +183,11 @@ plugins/
 - **v1（0.4.x）**：声明式 manifest + 启停持久化 + 插件广场展示。
 - **v2（Phase 3A）**：ToolRegistry 按启停过滤三处消费点 + `tools[].permissions`
   分发前权限校验（诚实声明模型）+ 启停缓存 TTL。
-- **v2.1（当前，Phase 3B）**：manifest 新增 `skills` 字段，插件可携带 Skill（见 §7 与
+- **v2.1（Phase 3B）**：manifest 新增 `skills` 字段，插件可携带 Skill（见 §7 与
   docs/SKILL_SPEC.md）。
-- 规划中（见 AI_ARCHITECTURE.md Phase 3 TODO）：进程级运行时沙箱（真正强制 file/network 隔离）、
-  frontendEntry 动态加载、插件签名与来源校验。
+- **v2.2（当前）**：加载期收口——禁用即不加载 JAR（§5）、`backendJars` 路径逃逸校验（§4）；
+  在线分发落地：平台 Ed25519 签名 + 人工审核 + 客户端验签 + 远程封禁，见
+  [docs/PLUGIN_DISTRIBUTION.md](PLUGIN_DISTRIBUTION.md)。
+- 规划中：进程外插件形态（MCP server）为不需要独立 UI 的插件提供真正的隔离边界；
+  frontendEntry 动态加载。**进程内沙箱不在规划中**——Java 侧无此能力（§3），
+  不要再把它列为待办。

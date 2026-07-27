@@ -51,6 +51,15 @@ public class PluginService {
     /** toolName -> pluginId，供将来 ToolRegistry 按插件启停过滤工具 */
     private final Map<String, String> toolToPluginId = new ConcurrentHashMap<>();
 
+    /** pluginId -> 插件目录：禁用状态下不加载 JAR，之后启用时据此补加载 */
+    private final Map<String, File> pluginDirById = new ConcurrentHashMap<>();
+
+    /**
+     * 被平台封禁的插件 id -> 原因（由 PluginRevocationService 从注册表同步）。
+     * 命中者强制禁用且不允许用户重新启用，见 docs/PLUGIN_DISTRIBUTION.md §8。
+     */
+    private final Map<String, String> revokedPluginIds = new ConcurrentHashMap<>();
+
     /** 被禁用插件 id 集合（内存缓存，与 system_setting 同步） */
     private final Set<String> disabledPluginIds = ConcurrentHashMap.newKeySet();
 
@@ -102,9 +111,9 @@ public class PluginService {
     public record PluginSkillDir(File dir, String pluginId) {
     }
 
-    /** 扫描时收集到的插件 skill 目录，SkillRegistry 启动/重扫时拉取 */
+    /** 扫描时收集到的插件 skill 目录，SkillRegistry 启动/重扫时拉取（同上：rescan 会 clear+重填） */
     @Getter
-    private final List<PluginSkillDir> pluginSkillDirs = new ArrayList<>();
+    private final List<PluginSkillDir> pluginSkillDirs = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     @lombok.Data
     public static class PluginToolInfo {
@@ -130,6 +139,7 @@ public class PluginService {
         toolSpecifications.clear();
         toolToPluginId.clear();
         pluginSkillDirs.clear();
+        pluginDirById.clear();
         loadDisabledState();
         loadPlugins();
         log.info("Plugin rescan done: {} plugins, {} tools", plugins.size(), pluginTools.size());
@@ -199,6 +209,11 @@ public class PluginService {
         if (!known) {
             throw new IllegalArgumentException("Unknown plugin: " + pluginId);
         }
+        // 平台封禁是强制的：用户可以卸载，但不能把被封禁的插件重新启用
+        if (enabled && revokedPluginIds.containsKey(pluginId)) {
+            throw new IllegalStateException(
+                    "该插件已被平台下架：" + revokedPluginIds.get(pluginId) + "，无法启用，建议卸载");
+        }
         if (enabled) {
             disabledPluginIds.remove(pluginId);
         } else {
@@ -208,7 +223,83 @@ public class PluginService {
             systemSettingService.set(DISABLED_KEY,
                     cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(disabledPluginIds)));
         }
+        // 启用时补加载 JAR：启动阶段被禁用的插件跳过了加载，否则重新启用后工具永远不出现。
+        // 反向不成立——JVM 无法卸载已加载的类，禁用只能让工具不可见，要彻底停掉需重启。
+        if (enabled) {
+            loadJarsIfAbsent(pluginId);
+        }
         log.info("Plugin {} {}", pluginId, enabled ? "enabled" : "disabled");
+    }
+
+    /**
+     * 在插件被扫描到之前先写入禁用名单——供在线安装使用。
+     *
+     * 与 setEnabled(false) 的区别：后者要求插件已注册（否则抛异常），而新装插件
+     * 尚未 rescan。这里直接落名单，使随后的 loadPlugins() 跳过其 JAR，
+     * 保证用户在广场点「启用」之前，插件代码一行都不会执行。
+     */
+    /**
+     * 应用平台封禁列表：命中的已安装插件强制写入禁用名单。
+     * 不删除文件——留给用户处置，避免误封导致数据丢失；但禁用不可撤销（见 setEnabled）。
+     *
+     * @param revoked pluginId -> 封禁原因
+     * @return 本次新增被禁用的插件 id
+     */
+    public synchronized List<String> applyRevocations(Map<String, String> revoked) {
+        revokedPluginIds.clear();
+        revokedPluginIds.putAll(revoked);
+        List<String> newlyDisabled = new ArrayList<>();
+        for (Map.Entry<String, String> e : revoked.entrySet()) {
+            boolean installed = plugins.stream().anyMatch(p -> Objects.equals(p.getId(), e.getKey()));
+            if (installed && disabledPluginIds.add(e.getKey())) {
+                newlyDisabled.add(e.getKey());
+                log.warn("Plugin {} revoked by registry ({}), forced to disabled", e.getKey(), e.getValue());
+            }
+        }
+        if (!newlyDisabled.isEmpty() && systemSettingService != null) {
+            systemSettingService.set(DISABLED_KEY,
+                    cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(disabledPluginIds)));
+        }
+        return newlyDisabled;
+    }
+
+    /** 该插件是否被平台封禁；返回原因，未封禁返回 null（供管理页标红提示） */
+    public String revokedReason(String pluginId) {
+        return revokedPluginIds.get(pluginId);
+    }
+
+    public synchronized void markDisabledBeforeLoad(String pluginId) {
+        disabledPluginIds.add(pluginId);
+        if (systemSettingService != null) {
+            systemSettingService.set(DISABLED_KEY,
+                    cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(disabledPluginIds)));
+        }
+    }
+
+    /** 该插件的工具尚未注册时，按 manifest 补加载其 JAR（启用一个此前被禁用的插件时调用） */
+    private void loadJarsIfAbsent(String pluginId) {
+        boolean alreadyLoaded = toolToPluginId.containsValue(pluginId);
+        if (alreadyLoaded) {
+            return;
+        }
+        File pluginDir = pluginDirById.get(pluginId);
+        PluginMetadata meta = plugins.stream()
+                .filter(p -> Objects.equals(p.getId(), pluginId)).findFirst().orElse(null);
+        if (pluginDir == null || meta == null || meta.getBackendJars() == null) {
+            return;
+        }
+        for (String jarName : meta.getBackendJars()) {
+            File jarFile = resolveBackendJar(pluginDir, jarName, pluginId);
+            if (jarFile == null) {
+                continue;
+            }
+            try {
+                loadJar(jarFile, pluginId);
+            } catch (Exception e) {
+                log.error("Failed to load JAR {} for newly enabled plugin {}: {}",
+                        jarName, pluginId, e.getMessage());
+            }
+        }
     }
 
     /** 工具所属的插件 id（内置工具不在此映射中，返回 null） */
@@ -265,6 +356,7 @@ public class PluginService {
                     continue;
                 }
                 plugins.add(meta);
+                pluginDirById.put(meta.getId(), pluginDir);
 
                 // 收集插件携带的 skill 目录（规范 v2.1）：交给 SkillRegistry 注册，本服务不解析 skill.yml
                 if (meta.getSkills() != null) {
@@ -279,11 +371,22 @@ public class PluginService {
                     }
                 }
 
+                // 被禁用的插件不加载其 JAR。
+                //
+                // 这一条是安全边界而不只是优化：JAR 一旦被 loadClass，静态初始化块与
+                // 无参构造器就已经在宿主 JVM 里跑过了，此后再"禁用"只是把工具从 LLM
+                // 可见列表里摘掉，代码早已执行。管理员点"禁用"的预期是"别运行它"，
+                // 必须在加载前就拦住。（插件元数据仍然登记，管理页照常展示与启停。）
+                if (!isEnabled(meta.getId())) {
+                    log.info("Plugin {} is disabled, skip loading its JARs", meta.getId());
+                    continue;
+                }
+
                 // Load associated JARs if any
                 if (meta.getBackendJars() != null) {
                     for (String jarName : meta.getBackendJars()) {
-                        File jarFile = new File(pluginDir, jarName);
-                        if (jarFile.exists()) {
+                        File jarFile = resolveBackendJar(pluginDir, jarName, meta.getId());
+                        if (jarFile != null) {
                             loadJar(jarFile, meta.getId());
                         }
                     }
@@ -291,6 +394,34 @@ public class PluginService {
             } catch (Exception e) {
                 log.error("Failed to load plugin: " + pluginDir.getName(), e);
             }
+        }
+    }
+
+    /**
+     * 解析 backendJars 条目为插件目录内的真实 JAR 文件。
+     *
+     * manifest 由插件作者提供，`"backendJars": ["../../evil.jar"]` 能指到插件目录之外——
+     * 本地手放插件时危害有限，但在线分发一旦落地就是现成的路径逃逸口，故在此收口：
+     * 用 canonical path 校验目标必须位于插件目录正下方（同时挡掉符号链接绕行）。
+     *
+     * @return 校验通过且存在的 JAR；非法或不存在时返回 null（记日志跳过，不中断其余插件）
+     */
+    File resolveBackendJar(File pluginDir, String jarName, String pluginId) {
+        if (jarName == null || jarName.isBlank()) {
+            return null;
+        }
+        try {
+            File jarFile = new File(pluginDir, jarName);
+            String base = pluginDir.getCanonicalPath() + File.separator;
+            if (!jarFile.getCanonicalPath().startsWith(base)) {
+                log.error("Plugin {} declares backendJar '{}' outside its own directory, refuse to load",
+                        pluginId, jarName);
+                return null;
+            }
+            return jarFile.isFile() ? jarFile : null;
+        } catch (IOException e) {
+            log.error("Plugin {} backendJar '{}' path check failed: {}", pluginId, jarName, e.getMessage());
+            return null;
         }
     }
 

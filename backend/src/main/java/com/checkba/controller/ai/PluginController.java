@@ -24,6 +24,12 @@ import java.util.Map;
  * - POST /{id}/enable   启用插件（仅 admin）
  * - POST /{id}/disable  禁用插件（仅 admin）
  * - POST /rescan        重新扫描 plugins/ 目录（仅 admin）
+ * - GET  /market/list          在线插件广场列表，登录即可查看
+ * - POST /market/install {id}  验签安装（仅 admin，装后默认禁用待确认）
+ * - POST /market/uninstall{id} 卸载（仅 admin）
+ * - POST /market/sync-revoked  手动同步平台封禁列表（仅 admin）
+ *
+ * 在线安装的安全模型见 docs/PLUGIN_DISTRIBUTION.md。
  */
 @RestController
 @RequestMapping("/api/plugins")
@@ -31,6 +37,8 @@ import java.util.Map;
 public class PluginController {
 
     private final PluginService pluginService;
+    private final com.checkba.service.ai.PluginMarketService pluginMarketService;
+    private final com.checkba.service.ai.PluginRevocationService revocationService;
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
 
@@ -48,6 +56,8 @@ public class PluginController {
         private List<PluginService.PluginToolInfo> tools;
         private int toolCount;
         private boolean enabled;
+        /** 被平台封禁时的原因；非空表示该插件已下架，界面应标红并禁止启用 */
+        private String revokedReason;
     }
 
     @GetMapping("/list")
@@ -82,6 +92,64 @@ public class PluginController {
         return ResponseEntity.ok(result);
     }
 
+    /** 在线广场列表；注册表不可达返回 {code:1, message}，不影响本地插件区块 */
+    @GetMapping("/market/list")
+    public ResponseEntity<Map<String, Object>> listMarket() {
+        try {
+            Map<String, Object> result = ok();
+            result.put("plugins", pluginMarketService.listMarket());
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
+    /** 验签安装；成功后插件处于禁用状态，需用户在广场确认启用 */
+    @PostMapping("/market/install")
+    public ResponseEntity<Map<String, Object>> installMarketPlugin(
+            @org.springframework.web.bind.annotation.RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+        }
+        try {
+            String id = pluginMarketService.install(body == null ? null : body.get("id"));
+            Map<String, Object> result = ok();
+            result.put("id", id);
+            result.put("pendingEnable", true);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
+    @PostMapping("/market/uninstall")
+    public ResponseEntity<Map<String, Object>> uninstallMarketPlugin(
+            @org.springframework.web.bind.annotation.RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+        }
+        try {
+            pluginMarketService.uninstall(body == null ? null : body.get("id"));
+            return ResponseEntity.ok(ok());
+        } catch (Exception e) {
+            return ResponseEntity.ok(error(e.getMessage()));
+        }
+    }
+
+    /** 手动同步平台封禁列表（自动同步为启动时 + 每 24 小时） */
+    @PostMapping("/market/sync-revoked")
+    public ResponseEntity<Map<String, Object>> syncRevoked(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+        }
+        Map<String, Object> result = ok();
+        result.put("disabled", revocationService.sync());
+        return ResponseEntity.ok(result);
+    }
+
     private ResponseEntity<Map<String, Object>> setEnabled(String pluginId, boolean enabled, String sessionId) {
         if (!isAdmin(sessionId)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
@@ -90,6 +158,9 @@ public class PluginController {
             pluginService.setEnabled(pluginId, enabled);
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error("插件不存在: " + pluginId));
+        } catch (IllegalStateException e) {
+            // 被平台封禁的插件不允许重新启用
+            return ResponseEntity.ok(error(e.getMessage()));
         }
         return ResponseEntity.ok(ok());
     }
@@ -108,6 +179,7 @@ public class PluginController {
         view.setTools(meta.getTools() == null ? List.of() : meta.getTools());
         view.setToolCount(view.getTools().size());
         view.setEnabled(pluginService.isEnabled(meta.getId()));
+        view.setRevokedReason(pluginService.revokedReason(meta.getId()));
         return view;
     }
 

@@ -192,7 +192,13 @@ AgentOrchestrator 仅 3 行挂载点（字段 + activateForTurn + visibleTools �
   - [ ] **双轨摘旧名**：兼容一个发布周期后，摘除后端旧名双发、前端旧名分支与
         `/wps-result` 路由别名；`ProjectFile.wpsFileId` / `wps_file_id` / `wps-files/`
         前缀等存量数据契约需另立数据迁移方案。
-  - [ ] **插件进程级运行时沙箱**：v2 权限校验是分发层的诚实声明模型，插件代码仍与宿主同进程；
-        真正强制 file/network 隔离需进程级沙箱（独立进程 + IPC 或 SecurityManager 替代方案）。
+  - [x] **插件分发链路安全**（2026-07-27）：平台 Ed25519 签名 + 人工审核 + 静态扫描与
+        permissions 交叉验证 + 客户端验签 + 远程封禁；加载期收口（禁用即不加载 JAR、
+        backendJars 路径逃逸校验）。见 docs/PLUGIN_DISTRIBUTION.md。
+  - [ ] **进程外插件形态（MCP server）**：为不需要独立 UI 的插件提供真正的隔离边界。
+        注意**进程内沙箱不可行、已从待办中移除**——Java 的 SecurityManager 已于
+        JEP 486 在 JDK 24 永久禁用，OpenJDK 官方给出的替代方案就是进程外隔离；
+        VS Code 与 JetBrains 同样不做运行时沙箱。JAR 插件的安全依赖分发链路，
+        不要再把「同进程沙箱」列为目标。
 
   后续展望（Phase 4 候选，不在 Phase 3 范围）：多智能体协作后续阶段（子任务规划器、跨子任务共享记忆）。
