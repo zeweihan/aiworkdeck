@@ -130,8 +130,25 @@ ai:
 | POST | `/api/skills/{id}/disable` | admin | 禁用 skill |
 | POST | `/api/skills/{id}/activation` | admin | 设置生效方式，body `{"mode":"auto"\|"manual"\|"disabled"}` |
 | POST | `/api/skills/rescan` | admin | 重扫 skills/ 目录与插件携带的 skill，返回 `{ code, skillCount }` |
+| GET | `/api/skills/market/list` | 登录 | 在线 Skill 广场列表（官网 registry + 本地 `installed` 标记）；registry 不可达返回 `{code:1, message}` |
+| POST | `/api/skills/market/install` | admin | body `{id}`。下载 bundle 落盘 `skills/<id>/` 后 rescan，重装即更新 |
+| POST | `/api/skills/market/uninstall` | admin | body `{id}`。仅可卸载 `ai.skills.dir` 直属目录；插件携带的 skill 拒绝 |
 
-管理接口鉴权与 PluginController 一致：`X-Session-Id` 请求头 → session 用户名为 `admin`。
+管理接口鉴权与 PluginController 一致：`X-Session-Id` 请求头 → `AdminAccessService.isAdmin`
+（云端=用户名 admin；桌面单机 `security.admin.allow-all-users=true` 时全员管理员。
+PR#146 起 SkillController 走此唯一出口，PluginController 待对齐）。
+
+## 8.1 在线 Skill 广场（官网 registry，PR#146）
+
+官网（仓库 `zeweihan/aiworkdeck_website`）提供公开注册表，桌面端 `SkillMarketService` 消费，
+配置键 `ai.skills.registry-url`（默认 `https://www.aiworkdeck.com/api/registry/skills`）：
+
+- `GET {registry-url}`：数组，元素含 `id/name/description/icon/version/author/authorDisplayName/triggers/allowedTools/downloads/updatedAt/homepage`；
+- `GET {registry-url}/{id}/bundle`：`{ id, version, files: { "skill.yml": "...", "prompt.md": "..." } }`，
+  下载即计数。安装=两文件落盘 `skills/<id>/` + rescan；skill.yml 标量为 JSON 编码（YAML 1.2 子集，SnakeYAML 兼容）。
+
+安全：skill id 校验 `^[a-z0-9][a-z0-9-]{1,49}$`；bundle 只落盘 `skill.yml`/`prompt.md` 两个白名单文件名；
+卸载走 canonical path 守卫。官网侧用户体系与提交流程见该仓库 `lib/skills-store.ts`、`app/api/registry/`。
 
 ## 9. 内置 Skill
 

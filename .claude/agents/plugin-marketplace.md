@@ -21,7 +21,7 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 - `backend/src/main/java/com/checkba/controller/ai/PluginController.java` — /api/plugins：list、启停、rescan、market/list|install|uninstall、market/sync-revoked。
 - `backend/src/main/java/com/checkba/service/ai/PluginMarketService.java` — **在线插件安装与验签**（Ed25519 公钥内置，逐文件 SHA-256 校验，临时目录+原子移动，装后默认禁用）。
 - `backend/src/main/java/com/checkba/service/ai/PluginRevocationService.java` — 平台封禁列表同步（启动时 + 每 24h），命中强制禁用且不可重新启用。
-- `backend/src/main/java/com/checkba/service/ai/skill/SkillMarketService.java` — 在线广场客户端（**市场契约的权威定义在此类 Javadoc**，SKILL_SPEC.md §8 未含 market 端点）。
+- `backend/src/main/java/com/checkba/service/ai/skill/SkillMarketService.java` — 在线广场客户端。市场契约见 `docs/SKILL_SPEC.md` §8 / §8.1（端点表、registry 与 bundle 的字段契约、id 正则与卸载守卫），实现细节以此类 Javadoc 为准。
 - `backend/src/main/java/com/checkba/service/ai/skill/SkillRegistry.java` — 本地扫描/启停/rescan。
 - `backend/src/main/java/com/checkba/service/ai/skill/SkillProperties.java` — ai.skills.*（dir/base-tools/registry-url/ttl）；registry-url 默认 `https://www.aiworkdeck.com/api/registry/skills`（application.yml ~:163）。
 
