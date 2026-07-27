@@ -1,0 +1,128 @@
+<!--
+  macOS DMG 安装窗口的背景图源文件。改完这里，在本目录下重新生成两张 PNG：
+
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
+    --hide-scrollbars --force-device-scale-factor=1 --window-size=660,420 \
+    --screenshot="$PWD/background.png" "file://$PWD/dmg-background.html"
+
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
+    --hide-scrollbars --force-device-scale-factor=2 --window-size=660,420 \
+    --screenshot="$PWD/background@2x.png" "file://$PWD/dmg-background.html"
+
+  electron-builder 会自动把 background.png 与 background@2x.png 合成 hidpi TIFF（tiffutil）。
+  DMG 窗口尺寸取自 1x 图的像素尺寸（660x420）；图标落位见 package.json 的 build.dmg.contents，
+  两者必须一起改：图标中心为 (170, 238) 与 (490, 238)，iconSize 128。
+-->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 660px; height: 420px; overflow: hidden; }
+
+  body {
+    position: relative;
+    background:
+      radial-gradient(600px 360px at 10% 120%, rgba(91, 209, 151, 0.26) 0%, rgba(91, 209, 151, 0) 64%),
+      radial-gradient(640px 400px at 102% 58%, rgba(26, 83, 54, 0.14) 0%, rgba(26, 83, 54, 0) 62%),
+      linear-gradient(180deg, #FAFCFB 0%, #F0F6F2 58%, #E6F0EA 100%);
+    font-family: -apple-system, "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* 顶部品牌带 */
+  .band {
+    position: absolute; top: 0; left: 0;
+    width: 660px; height: 104px;
+    overflow: hidden;
+    background:
+      radial-gradient(420px 220px at 88% -24%, rgba(91, 209, 151, 0.36) 0%, rgba(91, 209, 151, 0) 68%),
+      linear-gradient(112deg, #0E3320 0%, #174C31 54%, #1D6440 100%);
+  }
+  .band-rule {
+    position: absolute; top: 102px; left: 0;
+    width: 660px; height: 2px;
+    background: linear-gradient(90deg,
+      rgba(91,209,151,0) 0%, #5BD197 24%, #A6EFCA 50%, #5BD197 76%, rgba(91,209,151,0) 100%);
+  }
+  /* 电路走线，呼应 logo 底座；中间留白避开文字 */
+  .band-traces {
+    position: absolute; left: 0; top: 4px;
+    -webkit-mask-image: linear-gradient(90deg, #000 0%, #000 14%, transparent 32%, transparent 68%, #000 86%, #000 100%);
+  }
+
+  .wordmark {
+    position: absolute; top: 30px; left: 0; width: 100%;
+    text-align: center;
+    font-size: 25px; font-weight: 600; letter-spacing: 0.005em;
+    color: #FFFFFF;
+  }
+  .tagline {
+    position: absolute; top: 68px; left: 0; width: 100%;
+    text-align: center;
+    font-size: 11.5px; font-weight: 400; letter-spacing: 0.16em;
+    color: rgba(220, 248, 234, 0.78);
+  }
+
+  /* 图标落位光晕：把图标从底色上托起来 */
+  .halo {
+    position: absolute; top: 126px;
+    width: 224px; height: 224px; border-radius: 50%;
+    background: radial-gradient(circle,
+      rgba(255,255,255,0.98) 0%, rgba(255,255,255,0.80) 40%, rgba(255,255,255,0) 70%);
+  }
+  .halo.app  { left: 58px; }
+  .halo.apps { left: 378px; }
+
+  /* 拖拽指向，中心与图标中心同高 */
+  .arrow { position: absolute; top: 226px; left: 274px; }
+
+  .caption {
+    position: absolute; top: 352px; left: 0; width: 100%;
+    text-align: center;
+    font-size: 12.5px; letter-spacing: 0.04em;
+    color: rgba(15, 46, 30, 0.5);
+  }
+</style>
+</head>
+<body>
+  <div class="band">
+    <svg class="band-traces" width="660" height="96" viewBox="0 0 660 96" fill="none"
+         stroke="rgba(255,255,255,0.15)" stroke-width="1" stroke-linecap="round">
+      <path d="M-10 22 H70 L84 36 H176"/>
+      <path d="M-10 58 H36 L50 44 H144"/>
+      <path d="M-10 86 H108 L122 72 H186"/>
+      <path d="M670 28 H592 L578 42 H486"/>
+      <path d="M670 64 H626 L612 50 H516"/>
+      <path d="M670 88 H556 L542 74 H474"/>
+      <g fill="rgba(166,239,202,0.42)" stroke="none">
+        <circle cx="176" cy="36" r="2"/>
+        <circle cx="144" cy="44" r="2"/>
+        <circle cx="486" cy="42" r="2"/>
+        <circle cx="474" cy="74" r="2"/>
+      </g>
+    </svg>
+    <div class="wordmark">AI Workdeck</div>
+    <div class="tagline">面向法律与文档密集型团队的 AI 原生工作台</div>
+  </div>
+  <div class="band-rule"></div>
+
+  <div class="halo app"></div>
+  <div class="halo apps"></div>
+
+  <svg class="arrow" width="112" height="24" viewBox="0 0 112 24" fill="none">
+    <defs>
+      <linearGradient id="stem" x1="0" y1="0" x2="112" y2="0" gradientUnits="userSpaceOnUse">
+        <stop offset="0" stop-color="#5BD197" stop-opacity="0"/>
+        <stop offset="0.36" stop-color="#4CBF89" stop-opacity="0.92"/>
+        <stop offset="1" stop-color="#1A5336"/>
+      </linearGradient>
+    </defs>
+    <path d="M2 12 H88" stroke="url(#stem)" stroke-width="3" stroke-linecap="round"/>
+    <path d="M85 3 L110 12 L85 21 L92 12 Z" fill="#1A5336"/>
+  </svg>
+
+  <div class="caption">将 AI Workdeck 拖入右侧 Applications 文件夹即可完成安装</div>
+</body>
+</html>

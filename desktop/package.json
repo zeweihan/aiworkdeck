@@ -76,6 +76,24 @@
         "teamId": "X9B97KVA84"
       }
     },
+    "dmg": {
+      "title": "AI Workdeck ${version}",
+      "background": "build/background.png",
+      "iconSize": 128,
+      "iconTextSize": 13,
+      "contents": [
+        {
+          "x": 170,
+          "y": 238
+        },
+        {
+          "x": 490,
+          "y": 238,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
     "win": {
       "target": [
         {
