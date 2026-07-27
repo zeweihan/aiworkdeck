@@ -10,7 +10,9 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 ## 关键文件
 
 **前端**
-- `frontend/src/pages/plugin-market/plugin-market.vue` — 插件广场单页，「广场 / 已安装」两 tab；广场 tab 内再分 Skill / 插件两个分区（seg-row 切换）。Skill 分区带搜索与七分类 chips；插件分区接在线注册表，安装前弹权限确认。已安装 tab 分插件区与 Skill 区，Skill 行是生效方式三档下拉。
+- `frontend/src/pages/plugin-market/plugin-market.vue` — 插件广场单页，扁平三 tab：「Skill 广场 / 插件广场 / 已安装」（原先的「广场 / 已安装」两级 + seg-row 已在 UI 对齐时拍平）。Skill 广场带七分类下划线导航（带计数、空分类不占位）与搜索；插件广场接在线注册表，安装前弹权限确认；已安装分插件区与 Skill 区，Skill 卡右上是生效方式三档下拉。
+  **视觉规范以官网 `aiworkdeckweb/DESIGN.md` 为准**（深绿 hero + 眉标 + 衬线展示字 + 编辑式下划线页签 + 「引号」触发词 + 毛玻璃卡片），改这页先读那份，不要在本页自创风格。
+- `frontend/src/config/icons.js` — `catContract/catLitigation/catCompliance/catResearch/catCorporate/catOffice/catOther` 七枚分类图标，**与官网 `components/skills/CategoryIcon.tsx` 的映射一一对应**，改一边必须同步另一边，否则同一个 Skill 在官网与桌面端长相不同。
 - `frontend/src/services/api.js` :407-485 — plugins、skills、skills/market 三组 HTTP 封装。
 - 入口：`frontend/src/pages/admin/admin.vue` :584 系统管理侧边栏项 `{key:'plugins', label:'插件广场', route:'/pages/plugin-market/plugin-market'}`。**leftSidebarPlugins.js 不含市场入口**（那是 IDE 左栏业务插件位）。
 
@@ -65,6 +67,8 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 ## 已知地雷
 
 - 官网侧 Skill 广场在独立仓库（website/，不在本仓库），改契约要两边同步（参考 skill-marketplace 双仓 PR 惯例）；官网提交表单曾因 invalid_id 挡掉投稿，id 校验规则两侧必须一致。
+- **registry 的 `icon` 字段是 emoji（如 "◆" "🚀"），前端一律不渲染它**——图标从 category 推导。渲染 `icon` 就等于把 emoji 放回界面，触全站红线。
+- 分类筛选依赖后端 `MarketSkillView.category`，该字段 #198 才加。**跑在旧后端（≤ v0.8.0）上时分类会全归「其他」，这是后端版本旧，不是前端 bug**；排查前先 `curl /api/skills/market/list` 看响应里有没有 category。
 - 桌面端 9696 是真实后端端口，测试市场功能别 mock 错对象。
 - bundle files 白名单意味着官网新增文件类型（如图标文件）需要同时改 BUNDLE_FILES 和官网打包端。
 
