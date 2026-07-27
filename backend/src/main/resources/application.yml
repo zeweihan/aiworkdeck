@@ -151,6 +151,19 @@ ai:
     chars-per-token: 2.0
     # 子 Agent 模型 ID；留空则继承主会话所选模型
     model: ""
+  # 插件体系配置（规范见 docs/PLUGIN_SPEC.md，在线分发见 docs/PLUGIN_DISTRIBUTION.md）
+  plugins:
+    # 插件扫描目录（相对服务端工作目录；打包桌面版落在 ~/.aiworkdeck/plugins/）
+    dir: plugins
+    # 启停名单内存缓存 TTL（毫秒）
+    disabled-cache-ttl-ms: 5000
+    # 在线插件广场注册表地址
+    registry-url: https://www.aiworkdeck.com/api/registry/plugins
+    # 平台签名公钥（Ed25519 SPKI PEM）。安装在线插件时用它验签，
+    # 留空则拒绝一切在线安装。私钥仅存在于官网服务器的 AWD_PLUGIN_SIGNING_KEY。
+    # 换密钥需同步更新此处并随版本发布，见 docs/PLUGIN_DISTRIBUTION.md §5。
+    registry-public-key: ""
+
   # Skill 体系配置（对应 SkillProperties，规范见 docs/SKILL_SPEC.md）
   skills:
     # skill 扫描目录（相对服务端工作目录，做法同 ai.plugins.dir）

@@ -54,6 +54,12 @@ public class PluginService {
     /** pluginId -> 插件目录：禁用状态下不加载 JAR，之后启用时据此补加载 */
     private final Map<String, File> pluginDirById = new ConcurrentHashMap<>();
 
+    /**
+     * 被平台封禁的插件 id -> 原因（由 PluginRevocationService 从注册表同步）。
+     * 命中者强制禁用且不允许用户重新启用，见 docs/PLUGIN_DISTRIBUTION.md §8。
+     */
+    private final Map<String, String> revokedPluginIds = new ConcurrentHashMap<>();
+
     /** 被禁用插件 id 集合（内存缓存，与 system_setting 同步） */
     private final Set<String> disabledPluginIds = ConcurrentHashMap.newKeySet();
 
@@ -203,6 +209,11 @@ public class PluginService {
         if (!known) {
             throw new IllegalArgumentException("Unknown plugin: " + pluginId);
         }
+        // 平台封禁是强制的：用户可以卸载，但不能把被封禁的插件重新启用
+        if (enabled && revokedPluginIds.containsKey(pluginId)) {
+            throw new IllegalStateException(
+                    "该插件已被平台下架：" + revokedPluginIds.get(pluginId) + "，无法启用，建议卸载");
+        }
         if (enabled) {
             disabledPluginIds.remove(pluginId);
         } else {
@@ -218,6 +229,51 @@ public class PluginService {
             loadJarsIfAbsent(pluginId);
         }
         log.info("Plugin {} {}", pluginId, enabled ? "enabled" : "disabled");
+    }
+
+    /**
+     * 在插件被扫描到之前先写入禁用名单——供在线安装使用。
+     *
+     * 与 setEnabled(false) 的区别：后者要求插件已注册（否则抛异常），而新装插件
+     * 尚未 rescan。这里直接落名单，使随后的 loadPlugins() 跳过其 JAR，
+     * 保证用户在广场点「启用」之前，插件代码一行都不会执行。
+     */
+    /**
+     * 应用平台封禁列表：命中的已安装插件强制写入禁用名单。
+     * 不删除文件——留给用户处置，避免误封导致数据丢失；但禁用不可撤销（见 setEnabled）。
+     *
+     * @param revoked pluginId -> 封禁原因
+     * @return 本次新增被禁用的插件 id
+     */
+    public synchronized List<String> applyRevocations(Map<String, String> revoked) {
+        revokedPluginIds.clear();
+        revokedPluginIds.putAll(revoked);
+        List<String> newlyDisabled = new ArrayList<>();
+        for (Map.Entry<String, String> e : revoked.entrySet()) {
+            boolean installed = plugins.stream().anyMatch(p -> Objects.equals(p.getId(), e.getKey()));
+            if (installed && disabledPluginIds.add(e.getKey())) {
+                newlyDisabled.add(e.getKey());
+                log.warn("Plugin {} revoked by registry ({}), forced to disabled", e.getKey(), e.getValue());
+            }
+        }
+        if (!newlyDisabled.isEmpty() && systemSettingService != null) {
+            systemSettingService.set(DISABLED_KEY,
+                    cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(disabledPluginIds)));
+        }
+        return newlyDisabled;
+    }
+
+    /** 该插件是否被平台封禁；返回原因，未封禁返回 null（供管理页标红提示） */
+    public String revokedReason(String pluginId) {
+        return revokedPluginIds.get(pluginId);
+    }
+
+    public synchronized void markDisabledBeforeLoad(String pluginId) {
+        disabledPluginIds.add(pluginId);
+        if (systemSettingService != null) {
+            systemSettingService.set(DISABLED_KEY,
+                    cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(disabledPluginIds)));
+        }
     }
 
     /** 该插件的工具尚未注册时，按 manifest 补加载其 JAR（启用一个此前被禁用的插件时调用） */
