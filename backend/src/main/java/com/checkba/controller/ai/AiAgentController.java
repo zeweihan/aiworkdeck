@@ -249,6 +249,7 @@ public class AiAgentController {
         private java.util.List<String> fileIds; // Legacy: Context files to inject 
         private java.util.List<ContextItem> contextItems; // New: Full context metadata
         private ContextItem activeContext; // NEW: Auto-detected active tab (current document)
+        private String pinnedSkillId; // 用户在对话中钉选的 Skill；为空则走触发词自动匹配
 
         public Long getProjectId() { return projectId; }
         public void setProjectId(Long projectId) { this.projectId = projectId; }
@@ -271,6 +272,8 @@ public class AiAgentController {
         public void setContextItems(java.util.List<ContextItem> contextItems) { this.contextItems = contextItems; }
         public ContextItem getActiveContext() { return activeContext; }
         public void setActiveContext(ContextItem activeContext) { this.activeContext = activeContext; }
+        public String getPinnedSkillId() { return pinnedSkillId; }
+        public void setPinnedSkillId(String pinnedSkillId) { this.pinnedSkillId = pinnedSkillId; }
     }
     
     /**

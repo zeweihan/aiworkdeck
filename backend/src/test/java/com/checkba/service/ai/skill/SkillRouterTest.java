@@ -145,4 +145,40 @@ class SkillRouterTest {
         assertTrue(block.contains("模板正文ABC"));
         assertTrue(block.contains("输出一张比较表"));
     }
+
+    @Test
+    @DisplayName("仅手动的 skill 不参与自动匹配，但仍可被钉选生效")
+    void manualSkillSkippedByAutoMatchButPinnable() {
+        registry.setActivationMode("skill-a", SkillRegistry.ActivationMode.MANUAL);
+
+        // 触发词命中也不自动激活；此处输入只含 skill-a 的触发词
+        assertEquals(Optional.empty(), router.match("公司考虑IPO"));
+        router.activateForTurn("conv-m", "公司考虑IPO");
+        assertEquals(Optional.empty(), router.activeSkill("conv-m"));
+
+        // 钉选后照常生效
+        router.activateForTurn("conv-m", "随便问点别的", "skill-a");
+        assertEquals("skill-a", router.activeSkill("conv-m").orElseThrow().getId());
+    }
+
+    @Test
+    @DisplayName("钉选优先于触发词匹配")
+    void pinnedBeatsTriggerMatch() {
+        router.activateForTurn("conv-p", "帮我分析上市路径", "skill-a");
+        assertEquals("skill-a", router.activeSkill("conv-p").orElseThrow().getId());
+        // 不钉选时同一句话命中的是触发词更长的 skill-b
+        router.activateForTurn("conv-p", "帮我分析上市路径");
+        assertEquals("skill-b", router.activeSkill("conv-p").orElseThrow().getId());
+    }
+
+    @Test
+    @DisplayName("钉选 id 不存在或已停用时退回自动匹配")
+    void invalidPinFallsBackToAutoMatch() {
+        router.activateForTurn("conv-x", "帮我分析上市路径", "no-such-skill");
+        assertEquals("skill-b", router.activeSkill("conv-x").orElseThrow().getId());
+
+        registry.setActivationMode("skill-b", SkillRegistry.ActivationMode.DISABLED);
+        router.activateForTurn("conv-y", "公司考虑IPO", "skill-b");
+        assertEquals("skill-a", router.activeSkill("conv-y").orElseThrow().getId());
+    }
 }

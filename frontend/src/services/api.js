@@ -444,6 +444,18 @@ export function setSkillEnabled(skillId, enabled) {
   });
 }
 
+// 设置 Skill 生效方式（仅管理员）：mode = 'auto' | 'manual' | 'disabled'
+export function setSkillActivation(skillId, mode) {
+  return request({
+    url: `/api/skills/${encodeURIComponent(skillId)}/activation`,
+    method: 'POST',
+    data: { mode },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 重新扫描 skills/ 目录（仅管理员）
 export function rescanSkills() {
   return request({

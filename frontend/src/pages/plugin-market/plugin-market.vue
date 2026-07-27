@@ -173,7 +173,7 @@
         <view class="section-header">
           <text class="section-title">Skill</text>
           <text v-if="skills.length" class="section-count">{{ skills.length }}</text>
-          <text class="section-subtitle">命中触发词时自动注入提示模板并裁剪可用工具</text>
+          <text class="section-subtitle">提示词能力：在对话中生效，可设置生效方式</text>
         </view>
         <view v-if="skills.length === 0" class="empty">
           <text class="empty-icon">🎯</text>
@@ -191,14 +191,29 @@
                   <text class="plugin-name">{{ s.name || s.id }}</text>
                   <text class="plugin-version" v-if="s.sourcePluginId">来自插件 {{ s.sourcePluginId }}</text>
                 </view>
-                <text class="plugin-meta">触发方式：关键词匹配</text>
+                <text class="plugin-meta">{{ activationHint(s) }}</text>
               </view>
+              <!-- 插件携带的 Skill 跟随插件启停，不单独设生效方式 -->
+              <picker
+                v-if="!s.sourcePluginId"
+                class="mode-picker"
+                mode="selector"
+                :range="ACTIVATION_LABELS"
+                :value="activationIndex(s)"
+                :disabled="switching"
+                @change="onActivationChange(s, $event)"
+              >
+                <view class="mode-value">
+                  <text>{{ ACTIVATION_LABELS[activationIndex(s)] }}</text>
+                  <text class="mode-caret">▾</text>
+                </view>
+              </picker>
               <switch
+                v-else
                 class="plugin-switch"
                 color="#1A5336"
                 :checked="s.enabled"
-                :disabled="switching"
-                @change="onToggleSkill(s, $event)"
+                disabled
               />
             </view>
 
@@ -216,7 +231,7 @@
 </template>
 
 <script>
-import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillEnabled, rescanSkills, getSkillMarket, installMarketSkill, uninstallMarketSkill } from '@/services/api.js'
+import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivation, rescanSkills, getSkillMarket, installMarketSkill, uninstallMarketSkill } from '@/services/api.js'
 
 const PERMISSION_LABELS = {
   file_read: '读取文件',
@@ -236,6 +251,10 @@ const SKILL_CATEGORIES = [
   { id: 'office', label: '办公效率' },
   { id: 'other', label: '其他' },
 ]
+
+// Skill 生效方式三档，顺序与 picker 下标一一对应
+const ACTIVATION_MODES = ['auto', 'manual', 'disabled']
+const ACTIVATION_LABELS = ['自动触发', '仅手动', '停用']
 
 export default {
   name: 'PluginMarketPage',
@@ -259,6 +278,9 @@ export default {
   computed: {
     CATEGORIES() {
       return SKILL_CATEGORIES
+    },
+    ACTIVATION_LABELS() {
+      return ACTIVATION_LABELS
     },
     installedCount() {
       return this.plugins.length + this.skills.length
@@ -328,17 +350,32 @@ export default {
         uni.showToast({ title: '加载 Skill 列表失败', icon: 'none' })
       }
     },
-    async onToggleSkill(skill, event) {
-      const enabled = !!(event?.detail?.value)
+    activationIndex(skill) {
+      const mode = skill.activationMode || (skill.enabled ? 'auto' : 'disabled')
+      const idx = ACTIVATION_MODES.indexOf(mode)
+      return idx >= 0 ? idx : 0
+    },
+    activationHint(skill) {
+      if (skill.sourcePluginId) return '随插件启停，不可单独设置'
+      const mode = ACTIVATION_MODES[this.activationIndex(skill)]
+      if (mode === 'manual') return '仅在对话中手动选用时生效'
+      if (mode === 'disabled') return '已停用'
+      return '命中触发词时自动生效'
+    },
+    async onActivationChange(skill, event) {
+      const idx = Number(event?.detail?.value)
+      const mode = ACTIVATION_MODES[idx]
+      if (!mode || mode === ACTIVATION_MODES[this.activationIndex(skill)]) return
+      const previous = skill.activationMode
       this.switching = true
       try {
-        await setSkillEnabled(skill.id, enabled)
-        skill.enabled = enabled
-        uni.showToast({ title: enabled ? '已启用' : '已禁用', icon: 'none' })
+        await setSkillActivation(skill.id, mode)
+        skill.activationMode = mode
+        skill.enabled = mode !== 'disabled'
+        uni.showToast({ title: `已设为「${ACTIVATION_LABELS[idx]}」`, icon: 'none' })
       } catch (e) {
-        console.error('切换 Skill 状态失败:', e)
-        // 回滚开关显示
-        skill.enabled = !enabled
+        console.error('设置 Skill 生效方式失败:', e)
+        skill.activationMode = previous
         uni.showToast({ title: e?.message || '操作失败（需要管理员权限）', icon: 'none' })
         await this.loadSkills()
       } finally {
@@ -849,6 +886,36 @@ $border-color: #E9ECEF;
 .plugin-switch {
   transform: scale(0.8);
   flex-shrink: 0;
+}
+
+/* Skill 生效方式下拉 */
+.mode-picker {
+  flex-shrink: 0;
+}
+
+.mode-value {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  column-gap: 6px;
+  font-size: 12px;
+  color: #475569;
+  background: #fff;
+  border: 1px solid $border-color;
+  border-radius: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    color: $brand-primary;
+    border-color: $brand-mint;
+  }
+}
+
+.mode-caret {
+  font-size: 10px;
+  color: #94a3b8;
 }
 
 .plugin-desc {

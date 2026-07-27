@@ -251,8 +251,8 @@ public class AgentOrchestrator {
                 });
             }
             
-            // 1.2 Skill 触发匹配（Phase 3B）：命中记录本轮激活的 skill，未命中行为与现状一致
-            skillRouter.activateForTurn(conversationId, request.getMessage());
+            // 1.2 Skill 激活（Phase 3B）：用户钉选优先，否则触发词匹配；都未命中时行为与现状一致
+            skillRouter.activateForTurn(conversationId, request.getMessage(), request.getPinnedSkillId());
 
             // 2. Build Context & History Message Stack (Spec v1.8)
             log.info("Assembling full message context for conversation: {}", conversationId);

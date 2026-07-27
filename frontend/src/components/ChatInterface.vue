@@ -376,6 +376,30 @@
                           </view>
                        </view>
                     </view>
+                    <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
+                    <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? ('已固定使用 Skill：' + skillChipLabel) : 'Skill（默认自动匹配触发词）'" @tap="toggleSkillDropdown">
+                       <text class="skill-glyph">◲</text>
+                       <view v-if="showSkillDropdown" class="skill-dropdown down">
+                          <view class="skill-option" :class="{ active: !pinnedSkillId }" @tap.stop="selectSkill('')">
+                             <view class="skill-option-text">
+                                <text class="skill-option-name">自动匹配</text>
+                                <text class="skill-option-desc">命中触发词时自动生效</text>
+                             </view>
+                          </view>
+                          <view v-if="availableSkills.length" class="skill-divider"></view>
+                          <view v-for="s in availableSkills" :key="s.id"
+                                class="skill-option"
+                                :class="{ active: pinnedSkillId === s.id }"
+                                @tap.stop="selectSkill(s.id)">
+                             <view class="skill-option-text">
+                                <text class="skill-option-name">{{ s.name || s.id }}</text>
+                                <text class="skill-option-desc">{{ s.activationMode === 'manual' ? '仅手动' : (s.triggers || []).join(' / ') || '无触发词' }}</text>
+                             </view>
+                          </view>
+                          <view class="skill-divider"></view>
+                          <view class="skill-manage" @tap.stop="goToSkillManagement">管理已安装 Skill</view>
+                       </view>
+                    </view>
                  </view>
                  <view
                     class="send-btn"
@@ -386,7 +410,7 @@
                  </view>
               </view>
           </view>
-          <view v-if="showModelDropdown || showModeDropdown" class="dropdown-mask model-mask" @tap="showModelDropdown = false; showModeDropdown = false"></view>
+          <view v-if="showModelDropdown || showModeDropdown || showSkillDropdown" class="dropdown-mask model-mask" @tap="showModelDropdown = false; showModeDropdown = false; showSkillDropdown = false"></view>
        </view>
 
        <!-- Bottom: History (pushed to bottom with flexbox) -->
@@ -516,6 +540,30 @@
                       </view>
                    </view>
                 </view>
+                <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
+                <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? ('已固定使用 Skill：' + skillChipLabel) : 'Skill（默认自动匹配触发词）'" @tap="toggleSkillDropdown">
+                   <text class="skill-glyph">◲</text>
+                   <view v-if="showSkillDropdown" class="skill-dropdown up">
+                      <view class="skill-option" :class="{ active: !pinnedSkillId }" @tap.stop="selectSkill('')">
+                         <view class="skill-option-text">
+                            <text class="skill-option-name">自动匹配</text>
+                            <text class="skill-option-desc">命中触发词时自动生效</text>
+                         </view>
+                      </view>
+                      <view v-if="availableSkills.length" class="skill-divider"></view>
+                      <view v-for="s in availableSkills" :key="s.id"
+                            class="skill-option"
+                            :class="{ active: pinnedSkillId === s.id }"
+                            @tap.stop="selectSkill(s.id)">
+                         <view class="skill-option-text">
+                            <text class="skill-option-name">{{ s.name || s.id }}</text>
+                            <text class="skill-option-desc">{{ s.activationMode === 'manual' ? '仅手动' : (s.triggers || []).join(' / ') || '无触发词' }}</text>
+                         </view>
+                      </view>
+                      <view class="skill-divider"></view>
+                      <view class="skill-manage" @tap.stop="goToSkillManagement">管理已安装 Skill</view>
+                   </view>
+                </view>
              </view>
              <view
                 class="send-btn"
@@ -525,7 +573,7 @@
                 <text class="send-icon">{{ isStreaming ? '■' : '↑' }}</text>
              </view>
           </view>
-          <view v-if="showModelDropdown || showModeDropdown" class="dropdown-mask" @tap="showModelDropdown = false; showModeDropdown = false"></view>
+          <view v-if="showModelDropdown || showModeDropdown || showSkillDropdown" class="dropdown-mask" @tap="showModelDropdown = false; showModeDropdown = false; showSkillDropdown = false"></view>
        </view>
     </view>
 
@@ -543,7 +591,7 @@ import RootBubble from './AgentMessage/RootBubble.vue'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration } from '@/services/api.js'
+import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 
 export default {
@@ -676,7 +724,52 @@ export default {
       // 关闭其他下拉菜单
       if (showModeDropdown.value) {
         showModelDropdown.value = false
+        showSkillDropdown.value = false
       }
+    }
+
+    // Skill 选择（默认自动匹配触发词；钉选后本会话固定使用该 Skill）
+    const showSkillDropdown = ref(false)
+    const availableSkills = ref([])
+    const pinnedSkillId = ref('')
+
+    const pinnedSkill = computed(() =>
+      availableSkills.value.find(s => s.id === pinnedSkillId.value) || null
+    )
+    // 未钉选时只显示 "Skill"：AI 面板窄，默认态不该占掉模型选择器的位置
+    const skillChipLabel = computed(() => pinnedSkill.value ? pinnedSkill.value.name : 'Skill')
+
+    // 已安装 Skill 为 0 时不显示选择器，避免输入区堆无用控件
+    const loadAvailableSkills = async () => {
+      try {
+        const res = await getSkills()
+        const list = Array.isArray(res) ? res : (res?.data || [])
+        availableSkills.value = list.filter(s => s.activationMode !== 'disabled' && s.enabled !== false)
+      } catch (e) {
+        // Skill 列表拉取失败不该影响对话，静默降级为"无可选 Skill"
+        console.warn('[ChatInterface] 加载 Skill 列表失败:', e)
+        availableSkills.value = []
+      }
+    }
+
+    const selectSkill = (skillId) => {
+      // 钉选状态跟随会话，切换 Skill 后下一条消息即生效
+      pinnedSkillId.value = pinnedSkillId.value === skillId ? '' : skillId
+      showSkillDropdown.value = false
+    }
+
+    const toggleSkillDropdown = () => {
+      showSkillDropdown.value = !showSkillDropdown.value
+      if (showSkillDropdown.value) {
+        showModelDropdown.value = false
+        showModeDropdown.value = false
+        loadAvailableSkills()
+      }
+    }
+
+    const goToSkillManagement = () => {
+      showSkillDropdown.value = false
+      uni.navigateTo({ url: '/pages/plugin-market/plugin-market' })
     }
 
     // Rollback Dialog State
@@ -1032,6 +1125,7 @@ export default {
         mode: currentModeId.value, // Agent 模式: ASK, PLAN, AGENT
         assistantId: props.currentAssistantId,
         activeContext, // NEW: Auto-detected active tab context
+        pinnedSkillId: pinnedSkillId.value,
         // Pass for user bubble display
         _userImages: imagesToShow,
         _userContextFiles: contextFilesToShow
@@ -1814,6 +1908,14 @@ export default {
        selectMode,
        showModeDropdown,
        availableModes,
+       // Skill 选择
+       showSkillDropdown,
+       availableSkills,
+       pinnedSkillId,
+       skillChipLabel,
+       toggleSkillDropdown,
+       selectSkill,
+       goToSkillManagement,
        // Artifact
        handleArtifactOpenTab: (art) => emit('artifact-open-tab', art),
        handleArtifactApprove: async (art) => {
@@ -2239,6 +2341,8 @@ export default {
   display: flex;
   gap: 12px;
   align-items: center;
+  /* 允许整条工具栏收缩，避免钉选长名 Skill 时把发送按钮挤出面板 */
+  min-width: 0;
 }
 
 .model-selector {
@@ -2575,6 +2679,7 @@ export default {
   justify-content: center;
   cursor: pointer;
   transition: background 0.15s ease;
+  flex-shrink: 0;
 }
 .send-btn:hover {
   background: #2D7A52;
@@ -2850,6 +2955,119 @@ export default {
   overflow-wrap: break-word;
   font-size: 13px;
   white-space: pre-wrap; /* Preserve newlines and spaces */
+}
+
+/* =============================================
+   Skill Selector（对话内钉选，默认自动匹配触发词）
+   ============================================= */
+/* AI 面板窄，工具条已有模式/模型两个文字选择器，故 Skill 用定宽图标按钮，
+   当前钉选的 Skill 名靠高亮 + title + 下拉勾选表达，不占横向空间 */
+.skill-selector {
+  cursor: pointer;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+  flex-shrink: 0;
+}
+.skill-selector:hover {
+  background: rgba(0, 0, 0, 0.05);
+}
+
+/* 钉选态：绿色实心底，让"本轮固定用了某个 Skill"一眼可见 */
+.skill-selector.pinned {
+  background: rgba(91, 209, 151, 0.18);
+}
+.skill-selector.pinned .skill-glyph {
+  color: #1A5336;
+}
+
+.skill-glyph {
+  font-size: 14px;
+  color: #999;
+  line-height: 1;
+}
+.skill-selector:hover .skill-glyph {
+  color: #666;
+}
+
+.skill-dropdown {
+  position: absolute;
+  /* 选择器位于工具条最右，向右展开会溢出 AI 面板，故右对齐 */
+  right: 0;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  z-index: 1001;
+  min-width: 230px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.skill-dropdown.down {
+  top: calc(100% + 4px);
+}
+.skill-dropdown.up {
+  bottom: calc(100% + 4px);
+}
+
+.skill-option {
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.skill-option:hover {
+  background: #f5f5f5;
+}
+.skill-option.active {
+  background: rgba(91, 209, 151, 0.12);
+}
+
+.skill-option-text {
+  display: flex;
+  flex-direction: column;
+  row-gap: 2px;
+}
+
+.skill-option-name {
+  font-size: 13px;
+  color: #2C3338;
+}
+.skill-option.active .skill-option-name {
+  color: #1A5336;
+  font-weight: 500;
+}
+
+.skill-option-desc {
+  font-size: 11px;
+  color: #999;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.skill-divider {
+  height: 1px;
+  background: #f0f0f0;
+  margin: 4px 0;
+}
+
+.skill-manage {
+  padding: 7px 12px;
+  font-size: 12px;
+  color: #666;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.skill-manage:hover {
+  background: #f5f5f5;
+  color: #1A5336;
 }
 
 /* Model dropdown mask overlay */

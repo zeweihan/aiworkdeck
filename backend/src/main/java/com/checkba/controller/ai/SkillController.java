@@ -23,9 +23,10 @@ import java.util.Map;
 
 /**
  * Skill 管理接口（规范见 docs/SKILL_SPEC.md，鉴权模式与 PluginController 一致）：
- * - GET  /list                    Skill 列表（含触发词、工具白名单、启用状态），登录即可查看
+ * - GET  /list                    Skill 列表（含触发词、工具白名单、生效方式），登录即可查看
  * - POST /{id}/enable             启用 skill（仅 admin）
  * - POST /{id}/disable            禁用 skill（仅 admin）
+ * - POST /{id}/activation {mode}  设置生效方式 auto/manual/disabled（仅 admin）
  * - POST /rescan                  重新扫描 skills/ 目录与插件携带的 skill（仅 admin）
  * - GET  /market/list             在线 Skill 广场列表，登录即可查看
  * - POST /market/install {id}     安装/重装在线 skill（仅 admin，重装即更新）
@@ -50,6 +51,8 @@ public class SkillController {
         private List<String> allowedTools;
         private String sourcePluginId;
         private boolean enabled;
+        /** 生效方式：auto（命中触发词自动生效）/ manual（只能钉选）/ disabled */
+        private String activationMode;
     }
 
     @GetMapping("/list")
@@ -69,6 +72,28 @@ public class SkillController {
             @PathVariable("id") String skillId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         return setEnabled(skillId, false, sessionId);
+    }
+
+    /** 设置生效方式（三档）：body {"mode": "auto"|"manual"|"disabled"} */
+    @PostMapping("/{id}/activation")
+    public ResponseEntity<Map<String, Object>> setActivation(
+            @PathVariable("id") String skillId,
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (!isAdmin(sessionId)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+        }
+        String raw = body == null ? null : body.get("mode");
+        SkillRegistry.ActivationMode mode = SkillRegistry.ActivationMode.parse(raw).orElse(null);
+        if (mode == null) {
+            return ResponseEntity.badRequest().body(error("生效方式无效: " + raw));
+        }
+        try {
+            skillRegistry.setActivationMode(skillId, mode);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error("Skill 不存在: " + skillId));
+        }
+        return ResponseEntity.ok(ok());
     }
 
     @PostMapping("/rescan")
@@ -148,6 +173,7 @@ public class SkillController {
         view.setAllowedTools(skill.getAllowedTools());
         view.setSourcePluginId(skill.getSourcePluginId());
         view.setEnabled(skillRegistry.isEnabled(skill.getId()));
+        view.setActivationMode(skillRegistry.activationMode(skill.getId()).name().toLowerCase());
         return view;
     }
 

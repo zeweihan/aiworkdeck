@@ -214,7 +214,7 @@ export function useAgentStream() {
         })
     }
 
-    const sendMessage = async ({ prompt, contentHtml = '', fileList = [], projectId, modelId = 'default', assistantId, mode = 'AGENT', activeContext = null, _userImages = [], _userContextFiles = [] }) => {
+    const sendMessage = async ({ prompt, contentHtml = '', fileList = [], projectId, modelId = 'default', assistantId, mode = 'AGENT', activeContext = null, pinnedSkillId = '', _userImages = [], _userContextFiles = [] }) => {
         // 防重入：流式进行中再触发发送（回车/连点）会产生重复气泡和并发请求
         if (isStreaming.value) {
             console.warn('[AgentStream] sendMessage ignored: already streaming')
@@ -273,7 +273,9 @@ export function useAgentStream() {
                     name: activeContext.name || 'Unknown',
                     fileType: activeContext.fileType || '',
                     wpsFileId: activeContext.wpsFileId || null
-                } : null
+                } : null,
+                // 用户钉选的 Skill；为空则后端走触发词自动匹配
+                pinnedSkillId: pinnedSkillId || null
             }
 
             const chatResp = await fetch(`${getApiBaseUrl()}/api/agent/chat`, {

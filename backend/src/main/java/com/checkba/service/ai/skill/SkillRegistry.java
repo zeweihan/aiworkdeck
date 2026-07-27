@@ -40,6 +40,9 @@ public class SkillRegistry {
     /** system_setting 中存放被禁用 skill id 列表（JSON 数组）的 key */
     public static final String DISABLED_KEY = "ai.skills.disabled";
 
+    /** system_setting 中存放"仅手动"skill id 列表（JSON 数组）的 key */
+    public static final String MANUAL_KEY = "ai.skills.manual";
+
     private final SkillProperties properties;
     private final SystemSettingService systemSettingService;
     private final PluginService pluginService;
@@ -49,6 +52,9 @@ public class SkillRegistry {
 
     /** 被禁用 skill id 集合（内存缓存，与 system_setting 同步） */
     private final Set<String> disabledSkillIds = ConcurrentHashMap.newKeySet();
+
+    /** "仅手动"skill id 集合：不参与触发词自动匹配，只能由用户在对话中钉选生效 */
+    private final Set<String> manualSkillIds = ConcurrentHashMap.newKeySet();
 
     private volatile long disabledStateRefreshedAt = 0L;
 
@@ -87,14 +93,79 @@ public class SkillRegistry {
     }
 
     /**
-     * Skill 是否可用于触发匹配：
+     * Skill 是否可用（可被钉选或自动匹配）：
      * 自身未被禁用，且（若来自插件）所属插件也处于启用状态。
+     *
+     * 注意"仅手动"的 skill 依然 available——它只是不参与自动匹配，
+     * 用户钉选时仍要能生效。自动匹配的额外过滤见 {@link SkillRouter#match}。
      */
     public boolean isAvailable(SkillDefinition skill) {
         if (!isEnabled(skill.getId())) {
             return false;
         }
         return skill.getSourcePluginId() == null || pluginService.isEnabled(skill.getSourcePluginId());
+    }
+
+    /** skill 是否为"仅手动"（不参与触发词自动匹配） */
+    public boolean isManual(String skillId) {
+        maybeRefreshDisabledState();
+        return manualSkillIds.contains(skillId);
+    }
+
+    /**
+     * 生效方式三档（对外呈现用；内部由 disabled / manual 两个正交名单组合得出）。
+     * disabled 优先：被禁用的 skill 无论是否在 manual 名单里都报 DISABLED。
+     */
+    public ActivationMode activationMode(String skillId) {
+        if (!isEnabled(skillId)) {
+            return ActivationMode.DISABLED;
+        }
+        return isManual(skillId) ? ActivationMode.MANUAL : ActivationMode.AUTO;
+    }
+
+    /**
+     * 设置生效方式（三档的唯一写入口）。
+     * @throws IllegalArgumentException skillId 不在已注册列表中
+     */
+    public synchronized void setActivationMode(String skillId, ActivationMode mode) {
+        if (!skills.containsKey(skillId)) {
+            throw new IllegalArgumentException("Unknown skill: " + skillId);
+        }
+        if (mode == ActivationMode.DISABLED) {
+            disabledSkillIds.add(skillId);
+        } else {
+            disabledSkillIds.remove(skillId);
+        }
+        if (mode == ActivationMode.MANUAL) {
+            manualSkillIds.add(skillId);
+        } else {
+            manualSkillIds.remove(skillId);
+        }
+        persist(DISABLED_KEY, disabledSkillIds);
+        persist(MANUAL_KEY, manualSkillIds);
+        log.info("Skill {} activation mode -> {}", skillId, mode);
+    }
+
+    /** Skill 生效方式 */
+    public enum ActivationMode {
+        /** 命中触发词时自动生效（默认） */
+        AUTO,
+        /** 只能由用户在对话中钉选生效，不参与自动匹配 */
+        MANUAL,
+        /** 停用 */
+        DISABLED;
+
+        /** 解析前端传来的字符串，无法识别时返回 empty */
+        public static Optional<ActivationMode> parse(String raw) {
+            if (raw == null) {
+                return Optional.empty();
+            }
+            try {
+                return Optional.of(valueOf(raw.trim().toUpperCase()));
+            } catch (IllegalArgumentException e) {
+                return Optional.empty();
+            }
+        }
     }
 
     /** skill 是否启用（默认启用，禁用名单持久化在 system_setting，带 TTL 缓存） */
@@ -116,11 +187,14 @@ public class SkillRegistry {
         } else {
             disabledSkillIds.add(skillId);
         }
-        if (systemSettingService != null) {
-            systemSettingService.set(DISABLED_KEY,
-                    cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(disabledSkillIds)));
-        }
+        persist(DISABLED_KEY, disabledSkillIds);
         log.info("Skill {} {}", skillId, enabled ? "enabled" : "disabled");
+    }
+
+    private void persist(String key, Set<String> ids) {
+        if (systemSettingService != null) {
+            systemSettingService.set(key, cn.hutool.json.JSONUtil.toJsonStr(new TreeSet<>(ids)));
+        }
     }
 
     // ==================== 扫描与解析 ====================
@@ -255,19 +329,23 @@ public class SkillRegistry {
 
     private void loadDisabledState() {
         disabledSkillIds.clear();
+        manualSkillIds.clear();
         if (systemSettingService == null) {
             return;
         }
         try {
-            String json = systemSettingService.get(DISABLED_KEY, "[]");
-            List<String> ids = cn.hutool.json.JSONUtil.toList(json, String.class);
-            if (ids != null) {
-                disabledSkillIds.addAll(ids.stream().filter(Objects::nonNull).toList());
-            }
+            disabledSkillIds.addAll(readIdSet(DISABLED_KEY));
+            manualSkillIds.addAll(readIdSet(MANUAL_KEY));
         } catch (Exception e) {
-            log.error("Failed to load skill disabled state, default to all enabled", e);
+            log.error("Failed to load skill activation state, default to all auto", e);
         } finally {
             disabledStateRefreshedAt = System.currentTimeMillis();
         }
+    }
+
+    private List<String> readIdSet(String key) {
+        String json = systemSettingService.get(key, "[]");
+        List<String> ids = cn.hutool.json.JSONUtil.toList(json, String.class);
+        return ids == null ? List.of() : ids.stream().filter(Objects::nonNull).toList();
     }
 }
