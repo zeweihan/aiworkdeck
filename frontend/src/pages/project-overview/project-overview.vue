@@ -1289,7 +1289,6 @@ import {
   getAiConfig,
   getAssistants, // Added
   getPlugins, // Added
-  sendEditorResult, // 编辑器命令结果回调（POST /editor-result，双轨迁移见 docs/AI_ARCHITECTURE.md Phase 3）
   getFileText,
   promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
@@ -1310,10 +1309,10 @@ import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
+import { panelSwitchingMethods } from './panelSwitching.js'
+import { agentClientActionMethods } from './agentClientActions.js'
+import { librePoolMethods } from './librePool.js'
 
-// 内嵌 LibreOffice 实例保活上限（每个 LOWA 实例数百 MB 内存）。超过后按
-// LRU 淘汰最久未激活的实例——淘汰前自动保存（见 evictLibreInstance）。
-const LIBRE_KEEPALIVE_MAX = 3
 
 export default {
   components: {
@@ -2290,6 +2289,10 @@ export default {
     focusedPane() { this.syncLibreExecutor() },
   },
   methods: {
+    // Phase 1 外置的方法组（纯搬移，this 即页面实例）
+    ...panelSwitchingMethods,
+    ...agentClientActionMethods,
+    ...librePoolMethods,
     // EasyVoice Integration
     async handleEasyVoiceDocRequest(callback) {
       console.log('[EasyVoice] Requesting doc text...')
@@ -3016,88 +3019,7 @@ export default {
       this.isCompactLayout = compact
       // 按 Cursor 体验：不在窄屏时强行限制面板宽度（遮挡就遮挡），只切换样式密度
     },
-    toggleLeftPane(key) {
-      if (key === 'staging') {
-        // Toggle staging visibility
-        if (this.showStagingArea) {
-          // Currently showing, collapse it
-          this.stagingPinned = false
-          this.stagingManuallyCollapsed = true
-        } else {
-          // Currently hidden, expand it
-          this.stagingPinned = true
-          this.stagingManuallyCollapsed = false
-          this.sidebarCollapsed = false
-        }
-        return
-      }
-
-      // 记录当前活跃 tab 到当前模式
-      const oldKey = this.leftPaneKey
-      if (oldKey) {
-        this.lastActiveIdsByMode.left[oldKey] = this.activeFileIdLeft
-        this.lastActiveIdsByMode.right[oldKey] = this.activeFileIdRight
-      }
-
-      if (this.leftPaneKey === key) {
-        this.sidebarCollapsed = !this.sidebarCollapsed
-      } else {
-        this.leftPaneKey = key
-        this.sidebarCollapsed = false
-
-        // Check if it's a dynamic plugin and open its tab
-        const plugin = this.dynamicPlugins.find(p => p.key === key)
-        if (plugin) {
-          this.openFile({
-            id: plugin.key,
-            name: plugin.label,
-            fileType: 'plugin',
-            frontendEntry: plugin.frontendEntry
-          })
-        }
-
-        // 恢复新模式下的活跃 tab
-        const savedLeft = this.lastActiveIdsByMode.left[key]
-        const savedRight = this.lastActiveIdsByMode.right[key]
-
-        if (savedLeft) {
-          this.activeFileIdLeft = savedLeft
-        } else {
-          // 如果新模式没有记录，且当前 active 的 tab 在新模式下不可见，则设为 null
-          const curLeft = this.leftFiles.find(f => f.id === this.activeFileIdLeft)
-          if (curLeft && !this.isTabVisible(curLeft)) {
-            // 尝试找一个在新模式下可见的 tab
-            const firstVisible = this.leftFiles.find(f => this.isTabVisible(f))
-            this.activeFileIdLeft = firstVisible ? firstVisible.id : null
-          }
-        }
-
-        if (savedRight) {
-          this.activeFileIdRight = savedRight
-        } else {
-          const curRight = this.rightFiles.find(f => f.id === this.activeFileIdRight)
-          if (curRight && !this.isTabVisible(curRight)) {
-            const firstVisible = this.rightFiles.find(f => this.isTabVisible(f))
-            this.activeFileIdRight = firstVisible ? firstVisible.id : null
-          }
-        }
-      }
-
-      // Persistence
-      if (this.projectId) {
-        uni.setStorageSync(`project_${this.projectId}_leftPaneKey`, key)
-        this.saveActiveIdsByMode()
-      }
-    },
-    saveActiveIdsByMode() {
-      if (this.projectId) {
-        uni.setStorageSync(`project_${this.projectId}_activeTabsByMode`, this.lastActiveIdsByMode)
-      }
-    },
-    onLeftPluginClick(key) {
-      // 兼容旧调用（若仍有地方使用）
-      this.toggleLeftPane(key)
-    },
+    // 左栏面板切换方法组已外置 → ./panelSwitching.js（Phase 1）
     getOcrPoint(e) {
       const te = e && (e.touches && e.touches[0])
       const ce = e && (e.changedTouches && e.changedTouches[0])
@@ -5573,412 +5495,13 @@ export default {
       // TODO: Persist to backend /项目根目录/AI助手工作计划/ if needed
       console.log('[ProjectOverview] Created markdown tab:', virtualFile.name)
     },
+    // AI 指令路由方法组已外置 → ./agentClientActions.js（Phase 1）
 
-    handleClientAction(action) {
-        console.log('[ProjectOverview] Client Action:', action)
-
-        // 双轨迁移（docs/AI_ARCHITECTURE.md Phase 3）：新后端对每条指令按"新名在前、旧名在后"
-        // 各发一份。一旦见到任一新名即判定为新后端（SSE 单连接有序），此后丢弃所有旧名事件，
-        // 保证新旧后端搭配下每条指令都恰好执行一次。
-        const isNewName = action.tool === 'editor_command' ||
-            ['doc_open_file', 'doc_reload_file', 'doc_stream_data'].includes(action.action)
-        const isLegacyName = action.tool === 'wps_command' ||
-            ['wps_open_file', 'wps_reload_file', 'wps_stream_data'].includes(action.action)
-        if (isNewName) this._editorContractV2 = true
-        if (isLegacyName && this._editorContractV2) return
-
-        if (action.action === 'refresh_files') {
-            if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
-                console.log('[ProjectOverview] Refreshing File Tree...')
-                this.$refs.fileTree.loadFiles()
-                uni.showToast({ title: '文件已更新', icon: 'none' })
-            }
-        }
-        // AI Agent 请求打开文件
-        else if (action.action === 'doc_open_file' || action.action === 'wps_open_file') {
-            this.handleEditorOpenFile(action)
-        }
-        // AI Agent 请求重新加载文件（用于后端修改文件后刷新编辑器）
-        else if (action.action === 'doc_reload_file' || action.action === 'wps_reload_file') {
-            this.handleEditorReloadFile(action)
-        }
-        // AI Agent 请求执行编辑器命令
-        else if (action.tool === 'editor_command' || action.tool === 'wps_command') {
-            // 特殊处理同步打开命令（新建文件流式写入）
-            if (action.action === 'doc_open_file_sync' || action.action === 'wps_open_file_sync') {
-                this.handleEditorOpenFileSync(action)
-            } else {
-                this.handleEditorCommand(action)
-            }
-        }
-        // 后端流式写入数据（doc_start_stream 工具）：缓冲后经 LibreOffice 执行器落字
-        else if (action.action === 'doc_stream_data' || action.action === 'wps_stream_data') {
-            this.handleDocStreamData(action.content || '')
-        }
-    },
-
-    // --- 流式写入（#79：LibreOffice 消费端，替代原 useWpsBridge.handleWpsStreamData）---
-    // 与原 WPS 实现同构：本地缓冲 + 定时批量 flush，减少 worker 往返。
-    handleDocStreamData(content) {
-        if (!content) return
-        this._docStreamBuffer = (this._docStreamBuffer || '') + content
-        if (!this._docStreamTimer) {
-            this._docStreamTimer = setTimeout(() => {
-                this._docStreamTimer = null
-                this.flushDocStreamBuffer()
-            }, 150)
-        }
-    },
-    async flushDocStreamBuffer() {
-        if (!this._docStreamBuffer || this._docStreamBusy) return
-        if (!this.libreOfficeActive || !this.libreOfficeExecutor) return
-        this._docStreamBusy = true
-        const text = this._docStreamBuffer
-        this._docStreamBuffer = ''
-        try {
-            await this.libreOfficeExecutor.executeCommand('insert_at_cursor', { text })
-        } catch (e) {
-            console.error('[ProjectOverview] doc stream insert error:', e)
-        } finally {
-            this._docStreamBusy = false
-            if (this._docStreamBuffer && !this._docStreamTimer) {
-                this._docStreamTimer = setTimeout(() => {
-                    this._docStreamTimer = null
-                    this.flushDocStreamBuffer()
-                }, 150)
-            }
-        }
-    },
-
-    /**
-     * 处理 AI Agent 的同步打开文件请求 (用于流式写入)
-     * 打开文件，等待内置 LibreOffice 编辑器就绪后返回结果给后端（#79）
-     */
-    async handleEditorOpenFileSync(action) {
-        console.log('[ProjectOverview] Open File Sync:', action)
-        const { params, requestId, conversationId } = action
-
-        try {
-            if (!params || !params.fileId) {
-                console.error('[ProjectOverview] No fileId in doc_open_file_sync')
-                await sendEditorResult(conversationId, requestId, false, null, '缺少文件ID')
-                return
-            }
-
-            // 1. 刷新文件列表以获取最新文件
-            if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
-                await this.$refs.fileTree.loadFiles()
-            }
-
-            // 2. 获取文件详情
-            const file = await getFileDetail(this.projectId, params.fileId)
-            if (!file) {
-                console.error('[ProjectOverview] File not found:', params.fileId)
-                await sendEditorResult(conversationId, requestId, false, null, '文件不存在')
-                return
-            }
-
-            console.log('[ProjectOverview] Opening file for streaming:', file.name)
-
-            // 3. 打开文件（挂载/激活内置 LibreOffice 编辑器）
-            await this.openFile(file)
-
-            // 4. 等待编辑器就绪（onLibreReady 置位，最多等待 90 秒——LOWA 首次 boot 较慢）
-            let editorReady = false
-            for (let i = 0; i < 180; i++) {
-                await new Promise(resolve => setTimeout(resolve, 500))
-                if (this.libreOfficeActive && this.libreOfficeExecutor) {
-                    editorReady = true
-                    console.log('[ProjectOverview] LibreOffice editor ready after', (i + 1) * 500, 'ms')
-                    break
-                }
-            }
-
-            if (!editorReady) {
-                console.error('[ProjectOverview] LibreOffice editor not ready after timeout')
-                await sendEditorResult(conversationId, requestId, false, null, '编辑器未就绪')
-                return
-            }
-
-            // 5. 重置流式缓冲，准备接收新的流式数据
-            this._docStreamBuffer = ''
-            if (this._docStreamTimer) { clearTimeout(this._docStreamTimer); this._docStreamTimer = null }
-            this._docStreamBusy = false
-            console.log('[ProjectOverview] Stream state reset, ready for streaming')
-
-            // 6. 返回成功给后端
-            console.log('[ProjectOverview] Open File Sync success')
-            await sendEditorResult(conversationId, requestId, true, {
-                fileId: file.id,
-                fileName: file.name,
-                status: 'ready'
-            }, null)
-
-            uni.showToast({ title: `已打开: ${file.name}`, icon: 'none' })
-
-        } catch (e) {
-            console.error('[ProjectOverview] handleEditorOpenFileSync error:', e)
-            await sendEditorResult(conversationId, requestId, false, null, e.message)
-        }
-    },
-
-    /**
-     * 处理 AI Agent 的打开文件请求
-     */
-    async handleEditorOpenFile(action) {
-        console.log('[ProjectOverview] WPS Open File:', action)
-        try {
-            const fileId = action.fileId
-            if (!fileId) {
-                console.warn('[ProjectOverview] No fileId in doc_open_file action')
-                return
-            }
-
-            // 获取文件详情
-            const file = await getFileDetail(this.projectId, fileId)
-            if (!file) {
-                console.error('[ProjectOverview] File not found:', fileId)
-                uni.showToast({ title: '文件不存在', icon: 'none' })
-                return
-            }
-
-            // 打开文件
-            this.openFile(file)
-
-            // 提示用户
-            uni.showToast({ title: `已打开: ${file.name}`, icon: 'none' })
-
-        } catch (e) {
-            console.error('[ProjectOverview] handleEditorOpenFile error:', e)
-            uni.showToast({ title: '打开文件失败', icon: 'none' })
-        }
-    },
-
-    /**
-     * 处理 AI Agent 的重新加载文件请求
-     * 当后端修改了文件后，需要通知前端刷新编辑器以显示最新内容
-     *
-     * 工作原理：
-     * 1. 后端修改文件后会更新 wpsFileId（通用文件 ID，添加版本时间戳）
-     * 2. 前端获取最新文件信息，更新 leftFiles/rightFiles 中的 wpsFileId
-     * 3. LibreOfficeEditor 以文件为 key/prop，检测到变化后重新加载
-     */
-    async handleEditorReloadFile(action) {
-        console.log('[ProjectOverview] WPS Reload File:', action)
-        try {
-            const fileId = action.fileId
-            if (!fileId) {
-                console.warn('[ProjectOverview] No fileId in doc_reload_file action')
-                return
-            }
-
-            // 获取文件详情（确保获取最新信息，包括新的 wpsFileId）
-            const file = await getFileDetail(this.projectId, fileId)
-            if (!file) {
-                console.error('[ProjectOverview] File not found:', fileId)
-                uni.showToast({ title: '文件不存在', icon: 'none' })
-                return
-            }
-
-            console.log('[ProjectOverview] Got updated file info:', {
-                id: file.id,
-                name: file.name,
-                wpsFileId: file.wpsFileId
-            })
-
-            // 同时更新 leftFiles 和 rightFiles 中的文件信息
-            // 这样可以确保所有打开的相同文件都能获得新的 wpsFileId
-            let updated = false
-
-            // 更新左侧窗格
-            const existingLeft = this.leftFiles.find(f => f.id === file.id)
-            if (existingLeft) {
-                const oldWpsFileId = existingLeft.wpsFileId
-                Object.assign(existingLeft, file)
-                console.log('[ProjectOverview] Updated leftFiles:', {
-                    oldWpsFileId,
-                    newWpsFileId: file.wpsFileId
-                })
-                updated = true
-            }
-
-            // 更新右侧窗格
-            const existingRight = this.rightFiles.find(f => f.id === file.id)
-            if (existingRight) {
-                const oldWpsFileId = existingRight.wpsFileId
-                Object.assign(existingRight, file)
-                console.log('[ProjectOverview] Updated rightFiles:', {
-                    oldWpsFileId,
-                    newWpsFileId: file.wpsFileId
-                })
-                updated = true
-            }
-
-            // 保活池实例不再"切回即重挂载"：后台常驻实例里还是旧内容。把该
-            // 文件的非活动保活实例逐出 LRU（卸载），下次激活时重挂载并拉取
-            // 新 wpsFileId 的字节。当前正显示的实例保持改前行为（不强刷）。
-            if (updated) {
-                this.libreLruKeys = this.libreLruKeys.filter(k => {
-                    if (!k.endsWith(':' + file.id)) return true
-                    return k === 'left:' + this.activeFileIdLeft || k === 'right:' + this.activeFileIdRight
-                })
-            }
-
-            // 如果文件不在任何窗格中打开，则打开它
-            if (!updated) {
-                console.log('[ProjectOverview] File not open, opening:', file.name)
-                this.openFile(file)
-            }
-
-            uni.showToast({ title: `文件已更新: ${file.name}`, icon: 'success' })
-
-            // 刷新文件树以更新文件信息
-            if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
-                this.$refs.fileTree.loadFiles()
-            }
-
-        } catch (e) {
-            console.error('[ProjectOverview] handleEditorReloadFile error:', e)
-            uni.showToast({ title: '刷新文件失败', icon: 'none' })
-        }
-    },
-
-    /**
-     * 处理 AI Agent 的编辑器命令请求（#79：LibreOffice 是唯一执行器；
-     * 结果经 sendEditorResult 回传后端，路由 /editor-result，双轨迁移见 Phase 3）
-     */
-    async handleEditorCommand(action) {
-        console.log('[ProjectOverview] ========== Editor Command Start ==========')
-        console.log('[ProjectOverview] Editor Command:', JSON.stringify(action))
-
-        const { action: commandAction, params, requestId, conversationId } = action
-        console.log('[ProjectOverview] commandAction:', commandAction, 'requestId:', requestId)
-
-        if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
-            console.error('[ProjectOverview] No embedded editor available')
-            await sendEditorResult(conversationId, requestId, false, null, '编辑器未就绪，请先打开一个文档')
-            return
-        }
-
-        try {
-            // __agent 标记：worker 据此把这条命令产生的修订署名为 AI Workdeck
-            //（用户本人的 IME 输入等不带标记，署用户名），修订面板里可区分来源。
-            const result = await this.libreOfficeExecutor.executeCommand(
-                commandAction, Object.assign({}, params, { __agent: true }))
-            const successFlag = result && result.success !== false
-            await sendEditorResult(conversationId, requestId, successFlag, result, (result && result.error) || null)
-        } catch (e) {
-            console.error('[ProjectOverview] LibreOffice command error:', e)
-            await sendEditorResult(conversationId, requestId, false, null, e.message)
-        }
-        console.log('[ProjectOverview] ========== Editor Command End ==========')
-    },
-
-    // Epic #43: embedded LibreOffice editor lifecycle. While ready, backend AI
-    // commands route to it (see handleEditorCommand). Used by the inline
-    // keep-alive pool (Track B)；pane/fileId 由保活池模板内联传入。
-    onLibreReady(executor, pane, fileId) {
-        const key = pane + ':' + fileId
-        this.getLibreExecutorMap()[key] = executor
-        this.syncLibreExecutor()
-        console.log('[ProjectOverview] LibreOffice editor ready (' + key + ') — agent commands routed to LibreOffice')
-    },
-    // 实例注册表（非响应式）：executor 按 'pane:fileId' 存，供活跃实例指针
-    // 同步；组件实例经函数 ref 存 _libreRefs，供 LRU 淘汰前自动保存。
-    getLibreExecutorMap() {
-        return this._libreExecMap || (this._libreExecMap = {})
-    },
-    setLibreRef(pane, fileId, el) {
-        const refs = this._libreRefs || (this._libreRefs = {})
-        const key = pane + ':' + fileId
-        if (el) refs[key] = el
-        else delete refs[key]
-    },
-    // 活跃实例指针（同 PR#151 WPS 编辑器模式）：AI 指令路由到焦点 pane 的
-    // 活动 Office 编辑器；焦点 pane 不是 Office 文档时回退另一 pane（保持
-    // 旧的"唯一打开的文档也能收指令"行为）。
-    // 活动编辑器尚未 ready（boot 中）时指针为 null，handleEditorCommand
-    // 照旧回"编辑器未就绪"。
-    syncLibreExecutor() {
-        const map = this.getLibreExecutorMap()
-        const pick = (pane) => {
-            const f = pane === 'right' ? this.activeFileRight : this.activeFileLeft
-            return (f && this.useLibreEditor(f)) ? (map[pane + ':' + f.id] || null) : null
-        }
-        const exec = this.focusedPane === 'right' ? (pick('right') || pick('left')) : (pick('left') || pick('right'))
-        this.libreOfficeExecutor = exec || null
-        this.libreOfficeActive = !!exec
-    },
-    // 激活的标签变化：Office 文档记入保活 LRU（超上限触发淘汰），并同步指针。
-    onActiveOfficeFileChanged(pane, file) {
-        if (file && this.useLibreEditor(file)) this.touchLibreLru(pane, file.id)
-        this.syncLibreExecutor()
-    },
-    touchLibreLru(pane, fileId) {
-        const key = pane + ':' + fileId
-        // 触达置顶，顺带清掉已关闭文件的残留记账
-        const keys = [key].concat(this.libreLruKeys.filter(k => k !== key && this.isLibreKeyOpen(k)))
-        this.libreLruKeys = keys
-        keys.slice(LIBRE_KEEPALIVE_MAX).forEach(k => { this.evictLibreInstance(k) })
-    },
-    isLibreKeyOpen(key) {
-        const sep = key.indexOf(':')
-        const pane = key.slice(0, sep)
-        const fileId = key.slice(sep + 1)
-        const list = pane === 'right' ? this.rightFiles : this.leftFiles
-        return list.some(f => String(f.id) === fileId && this.useLibreEditor(f))
-    },
-    // LRU 淘汰：先自动保存再出池（出池即卸载，走组件自身的 dispose 流程）。
-    async evictLibreInstance(key) {
-        const inst = (this._libreRefs || {})[key]
-        // 未就绪/加载失败的实例跳过保存——画布上是空白原型，保存会覆盖真文件。
-        // flushSave：等在途自动保存结束，仍有脏改动才再存（没改动就不空传）。
-        if (inst && inst.ready && !inst.isError && inst.file) {
-            try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] evict auto-save failed:', e) }
-        }
-        // 保存耗时期间可能又被激活/关闭：仍在上限内或已是活动文件则不淘汰
-        const idx = this.libreLruKeys.indexOf(key)
-        if (idx === -1 || idx < LIBRE_KEEPALIVE_MAX) return
-        if (key === 'left:' + this.activeFileIdLeft || key === 'right:' + this.activeFileIdRight) return
-        this.libreLruKeys = this.libreLruKeys.filter(k => k !== key)
-        console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)
-    },
     // 压缩包解压完成：刷新资源管理器，让新文件夹立即可见。
     onArchiveExtracted() {
       if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
         this.$refs.fileTree.loadFiles()
       }
-    },
-    // (#79) 文档内超链接点击：编辑器把 LO 的 window.open 经 lo-relay 转发上来。
-    // 内部链接（包装 https 或裸 checkba:）走 __checkbaHandleInternalLink（关联
-    // 文件/网核定位，含解包），普通网页开工作区浏览器 tab。
-    onLibreOpenUrl(url) {
-      const u = String(url || '')
-      if (!u) return
-      const isWrapped = this.WPS_INTERNAL_HTTP_LINK_BASE && u.startsWith(this.WPS_INTERNAL_HTTP_LINK_BASE)
-      if (isWrapped || u.startsWith('checkba:')) {
-        try {
-          if (typeof window !== 'undefined' && window.__checkbaHandleInternalLink) window.__checkbaHandleInternalLink(u)
-        } catch (e) {
-          console.error('内部链接处理失败:', e)
-        }
-        return
-      }
-      if (/^https?:\/\//i.test(u)) this.openBrowserTab(u)
-    },
-    onLibreClose(executor) {
-        // An inline pool editor unmount (tab close / LRU evict) emits its
-        // executor — drop it from the registry by identity and re-sync the
-        // active pointer, so closing a background instance can't clobber the
-        // active one.
-        const map = this.getLibreExecutorMap()
-        if (executor) {
-            for (const k of Object.keys(map)) {
-                if (map[k] === executor) delete map[k]
-            }
-        }
-        this.syncLibreExecutor()
-        if (!this.libreOfficeActive) console.log('[ProjectOverview] LibreOffice editor closed — agent commands unavailable until reopened')
     },
 
     // #104: getEditor() adapter for VariablePanel — the five document-field
@@ -6759,4 +6282,5 @@ export default {
 }
 </script>
 
+<!-- 样式单一来源：./project-overview.scss（Phase 0 外置）。新增样式写进该文件，不要在此处内联。 -->
 <style lang="scss" scoped src="./project-overview.scss"></style>
