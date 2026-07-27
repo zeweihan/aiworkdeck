@@ -1,301 +1,326 @@
 <template>
   <view class="page-plugin-market">
-    <view class="market-container">
-      <!-- 顶部 -->
-      <view class="header-card">
-        <view class="header-left">
-          <view class="header-icon">
-            <svg class="svg-icon lg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
+    <!-- Hero：深林绿编辑排版，与官网 /skills 同一套语言（见 aiworkdeckweb/DESIGN.md） -->
+    <view class="hero">
+      <view class="hero-grain"></view>
+      <text class="hero-watermark">技</text>
+      <view class="hero-inner">
+        <view class="hero-main">
+          <view class="eyebrow">
+            <text class="eyebrow-line"></text>
+            <text class="eyebrow-text">EXTENSIONS · 能力扩展</text>
           </view>
-          <view class="title-row">
-            <text class="page-title">插件广场</text>
-            <text class="page-subtitle">浏览在线广场，管理已安装的插件与 Skill</text>
-          </view>
-        </view>
-        <view class="toolbar">
-          <button class="btn-secondary" @tap="goBack">返回</button>
-          <button class="btn-primary" :disabled="rescanning" @tap="rescan">
-            {{ rescanning ? '扫描中...' : '重新扫描' }}
-          </button>
-        </view>
-      </view>
-
-      <!-- 广场 / 已安装 两个 tab（IDE 扩展市场式布局） -->
-      <view class="tab-row">
-        <view class="tab-item" :class="{ active: activeTab === 'market' }" @tap="activeTab = 'market'">
-          <text>广场</text>
-        </view>
-        <view class="tab-item" :class="{ active: activeTab === 'installed' }" @tap="activeTab = 'installed'">
-          <text>已安装</text>
-          <text v-if="installedCount" class="tab-count">{{ installedCount }}</text>
-        </view>
-      </view>
-
-      <!-- ============ 广场 tab ============ -->
-      <scroll-view v-if="activeTab === 'market'" class="plugin-list" scroll-y="true">
-        <!-- 类型分区：Skill / 插件 -->
-        <view class="seg-row">
-          <view class="seg-item" :class="{ active: marketType === 'skill' }" @tap="marketType = 'skill'">Skill</view>
-          <view class="seg-item" :class="{ active: marketType === 'plugin' }" @tap="marketType = 'plugin'">插件</view>
-        </view>
-
-        <template v-if="marketType === 'skill'">
-          <!-- 搜索 + 分类筛选（分类沿用官网 Skill 广场七类） -->
-          <view class="filter-bar">
-            <view class="search-box">
-              <input
-                class="search-input"
-                v-model="searchText"
-                placeholder="搜索 Skill：名称、描述、触发词"
-                confirm-type="search"
-              />
+          <text class="hero-title">插件广场</text>
+          <text class="hero-sub">官网广场的公开 Skill 与经人工审核、平台签名的插件，一键装到本机</text>
+          <view class="hero-stats">
+            <view class="stat">
+              <text class="stat-num">{{ marketSkills.length }}</text>
+              <text class="stat-label">在线 Skill</text>
             </view>
-            <view class="chip-row">
+            <text class="stat-sep"></text>
+            <view class="stat">
+              <text class="stat-num">{{ marketPlugins.length }}</text>
+              <text class="stat-label">在线插件</text>
+            </view>
+            <text class="stat-sep"></text>
+            <view class="stat">
+              <text class="stat-num">{{ installedCount }}</text>
+              <text class="stat-label">本机已安装</text>
+            </view>
+          </view>
+        </view>
+        <view class="hero-actions">
+          <view class="btn-ghost" @tap="goBack">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.arrowLeft" :key="i" :d="d" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <text>返回</text>
+          </view>
+          <view class="btn-light" :class="{ 'is-busy': rescanning }" @tap="rescan">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.refresh" :key="i" :d="d" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <text>{{ rescanning ? '扫描中' : '重新扫描' }}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 主页签：编辑式下划线，不用胶囊 -->
+    <view class="tab-bar">
+      <view class="tab-inner">
+        <view
+          v-for="t in TABS"
+          :key="t.key"
+          class="tab-item"
+          :class="{ active: activeTab === t.key }"
+          @tap="activeTab = t.key"
+        >
+          <text>{{ t.label }}</text>
+          <text class="tab-count">{{ tabCount(t.key) }}</text>
+        </view>
+      </view>
+    </view>
+
+    <scroll-view class="content" scroll-y="true">
+      <view class="content-inner">
+
+        <!-- ============ Skill 广场 ============ -->
+        <template v-if="activeTab === 'skill'">
+          <view class="filter-bar">
+            <view class="cat-nav">
               <view
-                v-for="c in CATEGORIES"
+                v-for="c in visibleCategories"
                 :key="c.id"
-                class="cat-chip"
+                class="cat-item"
                 :class="{ active: activeCategory === c.id }"
                 @tap="activeCategory = c.id"
-              >{{ c.label }}</view>
+              >
+                <text>{{ c.label }}</text>
+                <text class="cat-num">{{ c.count }}</text>
+              </view>
+            </view>
+            <view class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, i) in ICONS.search" :key="i" :d="d" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <input class="search-input" v-model="searchText" placeholder="搜索名称、描述或触发词" confirm-type="search" />
             </view>
           </view>
 
           <view v-if="marketError" class="empty">
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, i) in ICONS.offline" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              <path v-for="(d, i) in ICONS.offline" :key="i" :d="d" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <text class="empty-title">在线广场暂不可用（离线或网络受限）</text>
-            <text class="empty-hint">{{ marketError }}</text>
+            <text class="empty-title">在线广场暂不可用</text>
+            <text class="empty-hint">{{ marketError }}——本机已安装的 Skill 与插件不受影响</text>
           </view>
           <view v-else-if="filteredMarketSkills.length === 0" class="empty">
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, i) in ICONS.search" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              <path v-for="(d, i) in ICONS.search" :key="i" :d="d" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <text class="empty-title">{{ marketLoading ? '加载中...' : (marketSkills.length ? '没有匹配的 Skill' : '暂无在线 Skill') }}</text>
-            <text v-if="!marketLoading" class="empty-hint">{{ marketSkills.length ? '换个关键词或分类试试' : '去官网 Skill 广场提交你的第一个 Skill 吧' }}</text>
+            <text class="empty-title">{{ marketLoading ? '正在载入广场' : (marketSkills.length ? '没有匹配的 Skill' : '广场暂时空着') }}</text>
+            <text v-if="!marketLoading" class="empty-hint">{{ marketSkills.length ? '换个关键词或分类试试' : '去官网 Skill 广场提交你的第一个 Skill' }}</text>
           </view>
+
           <view v-else class="card-grid">
-            <view v-for="m in filteredMarketSkills" :key="m.id" class="plugin-card">
-              <view class="card-header">
-                <view class="plugin-icon-wrap">
-                  <svg class="svg-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, i) in ICONS.skill" :key="i" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </view>
-                <view class="title-block">
-                  <view class="name-row">
-                    <text class="plugin-name">{{ m.name || m.id }}</text>
-                    <text class="plugin-version" v-if="m.version">v{{ m.version }}</text>
-                    <text class="cat-tag">{{ categoryLabel(m.category) }}</text>
+            <view v-for="m in filteredMarketSkills" :key="m.id" class="ed-card">
+              <view class="card-head">
+                <view class="head-text">
+                  <view class="kicker">
+                    <svg class="kicker-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path v-for="(d, i) in categoryGlyph(m.category)" :key="i" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <text>{{ categoryLabel(m.category) }}</text>
+                    <template v-if="m.installed">
+                      <text class="kicker-sep"></text>
+                      <text class="kicker-on">已安装</text>
+                    </template>
                   </view>
-                  <text class="plugin-meta">作者：{{ m.authorDisplayName || m.author || '未知' }} · {{ m.downloads || 0 }} 次安装</text>
+                  <text class="card-title">{{ m.name || m.id }}</text>
+                  <text class="card-id">{{ m.id }} · v{{ m.version || '1.0.0' }}</text>
                 </view>
-                <view class="market-actions">
-                  <button class="btn-primary btn-mini" :disabled="!!marketBusyId" @tap="installSkill(m)">
-                    {{ marketBusyId === m.id ? '处理中...' : (m.installed ? '更新' : '安装') }}
-                  </button>
-                  <button v-if="m.installed" class="btn-uninstall btn-mini" :disabled="!!marketBusyId" @tap="uninstallSkill(m)">卸载</button>
+                <view class="card-actions">
+                  <view class="act-primary" :class="{ 'is-busy': !!marketBusyId }" @tap="installSkill(m)">
+                    {{ marketBusyId === m.id ? '处理中' : (m.installed ? '更新' : '安装') }}
+                  </view>
+                  <view v-if="m.installed" class="act-remove" @tap="uninstallSkill(m)">卸载</view>
                 </view>
               </view>
 
-              <text class="plugin-desc">{{ m.description || '暂无描述' }}</text>
+              <text class="card-desc">{{ m.description || '暂无描述' }}</text>
+              <text v-if="triggerLine(m.triggers)" class="card-triggers">{{ triggerLine(m.triggers) }}</text>
 
-              <view class="tag-row">
-                <text v-if="m.installed" class="installed-tag">已安装</text>
-                <text v-for="t in m.triggers" :key="t" class="trigger-tag">{{ t }}</text>
+              <view class="card-foot">
+                <text class="foot-author">{{ m.authorDisplayName || m.author || '匿名作者' }}</text>
+                <view class="foot-meta">
+                  <svg class="foot-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path v-for="(d, i) in ICONS.download" :key="i" :d="d" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                  <text>{{ m.downloads || 0 }}</text>
+                </view>
               </view>
             </view>
           </view>
         </template>
 
-        <!-- 在线插件：经平台审核并签名，安装时验签，见 docs/PLUGIN_DISTRIBUTION.md -->
-        <template v-else>
+        <!-- ============ 插件广场：经平台审核并签名，安装时验签，见 docs/PLUGIN_DISTRIBUTION.md ============ -->
+        <template v-else-if="activeTab === 'plugin'">
           <view v-if="marketPluginError" class="empty">
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, i) in ICONS.offline" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              <path v-for="(d, i) in ICONS.offline" :key="i" :d="d" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <text class="empty-title">在线插件广场暂不可用（离线或网络受限）</text>
-            <text class="empty-hint">{{ marketPluginError }}</text>
+            <text class="empty-title">在线插件广场暂不可用</text>
+            <text class="empty-hint">{{ marketPluginError }}——本机已安装的插件不受影响</text>
           </view>
           <view v-else-if="marketPlugins.length === 0" class="empty">
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
-            <text class="empty-title">{{ marketPluginLoading ? '加载中...' : '暂无在线插件' }}</text>
-            <text v-if="!marketPluginLoading" class="empty-hint">也可本地安装：把插件目录放入服务端 plugins/ 后点「重新扫描」</text>
+            <text class="empty-title">{{ marketPluginLoading ? '正在载入广场' : '还没有上架的插件' }}</text>
+            <text v-if="!marketPluginLoading" class="empty-hint">也可本地安装：把插件目录放进服务端 plugins/ 后点「重新扫描」</text>
           </view>
+
           <view v-else class="card-grid">
-            <view v-for="m in marketPlugins" :key="m.id" class="plugin-card">
-              <view class="card-header">
-                <view class="plugin-icon-wrap">
-                  <svg class="svg-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
-                </view>
-                <view class="title-block">
-                  <view class="name-row">
-                    <text class="plugin-name">{{ m.name || m.id }}</text>
-                    <text class="plugin-version" v-if="m.version">v{{ m.version }}</text>
-                    <text v-if="m.installed" class="installed-tag">已安装</text>
+            <view v-for="m in marketPlugins" :key="m.id" class="ed-card">
+              <view class="card-head">
+                <view class="head-text">
+                  <view class="kicker">
+                    <svg class="kicker-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <text>插件</text>
+                    <template v-if="m.installed">
+                      <text class="kicker-sep"></text>
+                      <text class="kicker-on">已安装</text>
+                    </template>
                   </view>
-                  <text class="plugin-meta">作者：{{ m.authorDisplayName || m.author || '未知' }} · {{ m.downloads || 0 }} 次安装 · {{ formatSize(m.size) }}</text>
+                  <text class="card-title">{{ m.name || m.id }}</text>
+                  <text class="card-id">{{ m.id }} · v{{ m.version || '1.0.0' }} · {{ formatSize(m.size) }}</text>
                 </view>
-                <view class="market-actions">
-                  <button
+                <view class="card-actions">
+                  <view
                     v-if="!m.installed || m.updatable"
-                    class="btn-primary btn-mini"
-                    :disabled="!!pluginBusyId"
+                    class="act-primary"
+                    :class="{ 'is-busy': !!pluginBusyId }"
                     @tap="installPlugin(m)"
-                  >{{ pluginBusyId === m.id ? '安装中...' : (m.updatable ? '更新' : '安装') }}</button>
-                  <button v-if="m.installed" class="btn-uninstall btn-mini" :disabled="!!pluginBusyId" @tap="uninstallPlugin(m)">卸载</button>
+                  >{{ pluginBusyId === m.id ? '安装中' : (m.updatable ? '更新' : '安装') }}</view>
+                  <view v-if="m.installed" class="act-remove" @tap="uninstallPlugin(m)">卸载</view>
                 </view>
               </view>
 
-              <text class="plugin-desc">{{ m.description || '暂无描述' }}</text>
+              <text class="card-desc">{{ m.description || '暂无描述' }}</text>
+              <text class="card-caps">{{ capabilityLine(m) }}</text>
 
-              <view class="tag-row">
-                <text v-if="m.tools && m.tools.length" class="tool-count-tag">{{ m.tools.length }} 个工具</text>
-                <text v-for="perm in m.permissions" :key="perm" class="perm-tag">{{ permissionLabel(perm) }}</text>
-                <text v-if="!m.permissions || !m.permissions.length" class="perm-tag-none">未声明敏感能力</text>
+              <view class="card-foot">
+                <text class="foot-author">{{ m.authorDisplayName || m.author || '匿名作者' }}</text>
+                <view class="foot-meta">
+                  <svg class="foot-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path v-for="(d, i) in ICONS.download" :key="i" :d="d" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                  <text>{{ m.downloads || 0 }}</text>
+                </view>
               </view>
             </view>
           </view>
 
-          <view class="market-note">
-            插件与本机应用同等权限，安装前请确认来源可信。所有在线插件都经过人工审核与平台签名，
-            桌面端安装时验签；安装后默认处于停用状态，需你在「已安装」里手动启用。
+          <!-- 插件与本机应用同权限，这句不能省 -->
+          <view v-if="marketPlugins.length" class="market-note">
+            <svg class="note-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.warning" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <text class="note-text">插件与本机应用同等权限，安装前请确认来源可信。所有在线插件都经过人工审核与平台签名，桌面端安装时验签；安装后默认停用，需你在「已安装」里手动启用。</text>
           </view>
         </template>
-      </scroll-view>
 
-      <!-- ============ 已安装 tab ============ -->
-      <scroll-view v-else class="plugin-list" scroll-y="true">
-        <view class="section-header">
-          <text class="section-title">插件</text>
-          <text v-if="plugins.length" class="section-count">{{ plugins.length }}</text>
-          <text class="section-subtitle">独立能力：自带工具与界面，启用后显示在左栏</text>
-        </view>
+        <!-- ============ 已安装 ============ -->
+        <template v-else>
+          <view class="section-head">
+            <text class="section-title">插件</text>
+            <text class="section-sub">独立能力：自带工具与界面，启用后显示在左栏</text>
+          </view>
 
-        <view v-if="loading" class="empty">
-          <text class="empty-title">加载中...</text>
-        </view>
-        <view v-else-if="plugins.length === 0" class="empty">
-          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <text class="empty-title">暂无插件</text>
-          <text class="empty-hint">将插件目录（含 manifest.json）放入服务端 plugins/ 目录后，点击"重新扫描"</text>
-        </view>
-        <view v-else class="card-grid">
-          <view v-for="p in plugins" :key="p.id" class="plugin-card" :class="{ disabled: !p.enabled }">
-            <view class="card-header">
-              <view class="plugin-icon-wrap">
-                <image v-if="isImageIcon(p.icon)" :src="p.icon" class="plugin-icon-img" mode="aspectFit" />
-                <svg v-else class="svg-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </view>
-              <view class="title-block">
-                <view class="name-row">
-                  <text class="plugin-name">{{ p.name || p.id }}</text>
-                  <text class="plugin-version" v-if="p.version">v{{ p.version }}</text>
+          <view v-if="loading" class="empty">
+            <text class="empty-title">正在读取本机插件</text>
+          </view>
+          <view v-else-if="plugins.length === 0" class="empty">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <text class="empty-title">本机还没有插件</text>
+            <text class="empty-hint">把插件目录（含 manifest.json）放进服务端 plugins/ 后点「重新扫描」</text>
+          </view>
+          <view v-else class="card-grid">
+            <view v-for="p in plugins" :key="p.id" class="ed-card" :class="{ off: !p.enabled }">
+              <view class="card-head">
+                <view class="head-text">
+                  <view class="kicker">
+                    <svg class="kicker-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <text>插件</text>
+                    <text class="kicker-sep"></text>
+                    <text :class="p.enabled ? 'kicker-on' : 'kicker-off'">{{ p.enabled ? '已启用' : '已停用' }}</text>
+                  </view>
+                  <text class="card-title">{{ p.name || p.id }}</text>
+                  <text class="card-id">{{ p.id }}<template v-if="p.version"> · v{{ p.version }}</template><template v-if="p.author"> · {{ p.author }}</template></text>
                 </view>
-                <text class="plugin-meta" v-if="p.author">作者：{{ p.author }}</text>
+                <switch
+                  class="plugin-switch"
+                  color="#1A5336"
+                  :checked="p.enabled"
+                  :disabled="switching"
+                  @change="onToggle(p, $event)"
+                />
               </view>
-              <switch
-                class="plugin-switch"
-                color="#1A5336"
-                :checked="p.enabled"
-                :disabled="switching"
-                @change="onToggle(p, $event)"
-              />
-            </view>
 
-            <text class="plugin-desc">{{ p.description || '暂无描述' }}</text>
+              <text class="card-desc">{{ p.description || '暂无描述' }}</text>
+              <text class="card-caps">{{ capabilityLine(p) }}</text>
 
-            <view class="tag-row">
-              <text class="tool-count-tag">{{ p.toolCount }} 个工具</text>
-              <text
-                v-for="perm in p.permissions"
-                :key="perm"
-                class="perm-tag"
-              >{{ permissionLabel(perm) }}</text>
-            </view>
-
-            <view class="tool-list" v-if="p.tools && p.tools.length">
-              <view v-for="t in p.tools" :key="t.name" class="tool-item">
-                <text class="tool-name">{{ t.name }}</text>
-                <text class="tool-desc">{{ t.description }}</text>
+              <view class="tool-list" v-if="p.tools && p.tools.length">
+                <view v-for="t in p.tools" :key="t.name" class="tool-item">
+                  <text class="tool-name">{{ t.name }}</text>
+                  <text class="tool-desc">{{ t.description }}</text>
+                </view>
               </view>
             </view>
           </view>
-        </view>
 
-        <!-- Skill 区块（规范见 docs/SKILL_SPEC.md） -->
-        <view class="section-header">
-          <text class="section-title">Skill</text>
-          <text v-if="skills.length" class="section-count">{{ skills.length }}</text>
-          <text class="section-subtitle">提示词能力：在对话中生效，可设置生效方式</text>
-        </view>
-        <view v-if="skills.length === 0" class="empty">
-          <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path v-for="(d, i) in ICONS.skill" :key="i" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <text class="empty-title">暂无 Skill</text>
-          <text class="empty-hint">将 Skill 目录（含 skill.yml）放入服务端 skills/ 目录后，点击"重新扫描"</text>
-        </view>
-        <view v-else class="card-grid">
-          <view v-for="s in skills" :key="s.id" class="plugin-card" :class="{ disabled: !s.enabled }">
-            <view class="card-header">
-              <view class="plugin-icon-wrap">
-                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                  <path v-for="(d, i) in ICONS.skill" :key="i" :d="d" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-                </svg>
-              </view>
-              <view class="title-block">
-                <view class="name-row">
-                  <text class="plugin-name">{{ s.name || s.id }}</text>
-                  <text class="plugin-version" v-if="s.sourcePluginId">来自插件 {{ s.sourcePluginId }}</text>
+          <!-- Skill 区块（规范见 docs/SKILL_SPEC.md） -->
+          <view class="section-head">
+            <text class="section-title">Skill</text>
+            <text class="section-sub">提示词能力：在对话中生效，可设置生效方式</text>
+          </view>
+          <view v-if="skills.length === 0" class="empty">
+            <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, i) in ICONS.skill" :key="i" :d="d" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            <text class="empty-title">本机还没有 Skill</text>
+            <text class="empty-hint">去「Skill 广场」装一个，或把 Skill 目录（含 skill.yml）放进服务端 skills/ 后点「重新扫描」</text>
+          </view>
+          <view v-else class="card-grid">
+            <view v-for="s in skills" :key="s.id" class="ed-card" :class="{ off: !s.enabled }">
+              <view class="card-head">
+                <view class="head-text">
+                  <view class="kicker">
+                    <svg class="kicker-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path v-for="(d, i) in categoryGlyph(s.category)" :key="i" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <text>{{ categoryLabel(s.category) }}</text>
+                    <template v-if="s.sourcePluginId">
+                      <text class="kicker-sep"></text>
+                      <text>来自插件 {{ s.sourcePluginId }}</text>
+                    </template>
+                  </view>
+                  <text class="card-title">{{ s.name || s.id }}</text>
+                  <text class="card-note">{{ activationHint(s) }}</text>
                 </view>
-                <text class="plugin-meta">{{ activationHint(s) }}</text>
+                <!-- 插件携带的 Skill 跟随插件启停，不单独设生效方式 -->
+                <picker
+                  v-if="!s.sourcePluginId"
+                  class="mode-picker"
+                  mode="selector"
+                  :range="ACTIVATION_LABELS"
+                  :value="activationIndex(s)"
+                  :disabled="switching"
+                  @change="onActivationChange(s, $event)"
+                >
+                  <view class="mode-value">
+                    <text>{{ ACTIVATION_LABELS[activationIndex(s)] }}</text>
+                    <text class="mode-caret">▾</text>
+                  </view>
+                </picker>
+                <switch v-else class="plugin-switch" color="#1A5336" :checked="s.enabled" disabled />
               </view>
-              <!-- 插件携带的 Skill 跟随插件启停，不单独设生效方式 -->
-              <picker
-                v-if="!s.sourcePluginId"
-                class="mode-picker"
-                mode="selector"
-                :range="ACTIVATION_LABELS"
-                :value="activationIndex(s)"
-                :disabled="switching"
-                @change="onActivationChange(s, $event)"
-              >
-                <view class="mode-value">
-                  <text>{{ ACTIVATION_LABELS[activationIndex(s)] }}</text>
-                  <text class="mode-caret">▾</text>
-                </view>
-              </picker>
-              <switch
-                v-else
-                class="plugin-switch"
-                color="#1A5336"
-                :checked="s.enabled"
-                disabled
-              />
-            </view>
 
-            <text class="plugin-desc">{{ s.description || '暂无描述' }}</text>
-
-            <view class="tag-row">
-              <text v-for="t in s.triggers" :key="t" class="trigger-tag">{{ t }}</text>
+              <text class="card-desc">{{ s.description || '暂无描述' }}</text>
+              <text v-if="triggerLine(s.triggers)" class="card-triggers">{{ triggerLine(s.triggers) }}</text>
             </view>
           </view>
-        </view>
+        </template>
 
-      </scroll-view>
-    </view>
+      </view>
+    </scroll-view>
   </view>
 </template>
 
@@ -322,17 +347,35 @@ const SKILL_CATEGORIES = [
   { id: 'other', label: '其他' },
 ]
 
+// 分类 → 线性图标，与官网 CategoryIcon.tsx 同一套映射
+const CATEGORY_GLYPHS = {
+  contract: ICONS.catContract,
+  litigation: ICONS.catLitigation,
+  compliance: ICONS.catCompliance,
+  research: ICONS.catResearch,
+  corporate: ICONS.catCorporate,
+  office: ICONS.catOffice,
+  other: ICONS.catOther,
+}
+
+const TABS = [
+  { key: 'skill', label: 'Skill 广场' },
+  { key: 'plugin', label: '插件广场' },
+  { key: 'installed', label: '已安装' },
+]
+
 // Skill 生效方式三档，顺序与 picker 下标一一对应
 const ACTIVATION_MODES = ['auto', 'manual', 'disabled']
 const ACTIVATION_LABELS = ['自动触发', '仅手动', '停用']
 
+// 卡片上最多平铺 3 个触发词，其余折成 +N
+const TRIGGER_PREVIEW = 3
 
 export default {
   name: 'PluginMarketPage',
   data() {
     return {
-      activeTab: 'market',
-      marketType: 'skill',
+      activeTab: 'skill',
       searchText: '',
       activeCategory: 'all',
       plugins: [],
@@ -351,8 +394,8 @@ export default {
     }
   },
   computed: {
-    CATEGORIES() {
-      return SKILL_CATEGORIES
+    TABS() {
+      return TABS
     },
     ACTIVATION_LABELS() {
       return ACTIVATION_LABELS
@@ -362,6 +405,17 @@ export default {
     },
     installedCount() {
       return this.plugins.length + this.skills.length
+    },
+    /** 分类导航带计数，空分类不占位（与官网 catCount 过滤一致） */
+    visibleCategories() {
+      return SKILL_CATEGORIES
+        .map(c => ({
+          ...c,
+          count: c.id === 'all'
+            ? this.marketSkills.length
+            : this.marketSkills.filter(m => (m.category || 'other') === c.id).length,
+        }))
+        .filter(c => c.id === 'all' || c.count > 0)
     },
     filteredMarketSkills() {
       const kw = this.searchText.trim().toLowerCase()
@@ -381,8 +435,32 @@ export default {
     this.loadPluginMarket()
   },
   methods: {
+    tabCount(key) {
+      if (key === 'skill') return this.marketSkills.length
+      if (key === 'plugin') return this.marketPlugins.length
+      return this.installedCount
+    },
     permissionLabel(perm) {
       return PERMISSION_LABELS[perm] || perm
+    },
+    /** 工具数 + 声明能力合成一行正文，替代原来一排橙色胶囊 */
+    capabilityLine(item) {
+      const parts = []
+      const toolCount = item.toolCount != null ? item.toolCount : (item.tools || []).length
+      if (toolCount) parts.push(`${toolCount} 个工具`)
+      const perms = (item.permissions || []).map(p => this.permissionLabel(p))
+      parts.push(perms.length ? `需要 ${perms.join('、')}` : '未声明敏感能力')
+      return parts.join(' · ')
+    },
+    /** 触发词按官网排版收成一行「引号」，超出折为 +N */
+    triggerLine(triggers) {
+      const list = triggers || []
+      if (!list.length) return ''
+      const head = list.slice(0, TRIGGER_PREVIEW).map(t => `「${t}」`).join(' ')
+      return list.length > TRIGGER_PREVIEW ? `${head} +${list.length - TRIGGER_PREVIEW}` : head
+    },
+    categoryGlyph(id) {
+      return CATEGORY_GLYPHS[id] || CATEGORY_GLYPHS.other
     },
     formatSize(bytes) {
       if (!bytes) return '未知大小'
@@ -406,6 +484,7 @@ export default {
       }
     },
     async installPlugin(plugin) {
+      if (this.pluginBusyId) return
       const perms = (plugin.permissions || []).map(p => this.permissionLabel(p)).join('、') || '未声明敏感能力'
       const ok = await new Promise(resolve => {
         uni.showModal({
@@ -433,6 +512,7 @@ export default {
       }
     },
     async uninstallPlugin(plugin) {
+      if (this.pluginBusyId) return
       this.pluginBusyId = plugin.id
       try {
         await uninstallMarketPlugin(plugin.id)
@@ -449,9 +529,6 @@ export default {
     categoryLabel(id) {
       const c = SKILL_CATEGORIES.find(c => c.id === (id || 'other'))
       return c ? c.label : '其他'
-    },
-    isImageIcon(icon) {
-      return typeof icon === 'string' && (icon.startsWith('http') || icon.startsWith('/'))
     },
     async loadPlugins() {
       this.loading = true
@@ -539,6 +616,7 @@ export default {
       }
     },
     async installSkill(skill) {
+      if (this.marketBusyId) return
       this.marketBusyId = skill.id
       try {
         await installMarketSkill(skill.id)
@@ -553,6 +631,7 @@ export default {
       }
     },
     async uninstallSkill(skill) {
+      if (this.marketBusyId) return
       this.marketBusyId = skill.id
       try {
         await uninstallMarketSkill(skill.id)
@@ -567,6 +646,7 @@ export default {
       }
     },
     async rescan() {
+      if (this.rescanning) return
       this.rescanning = true
       try {
         const res = await rescanPlugins()
@@ -597,447 +677,642 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* AI Workdeck Color System（与 admin 页保持一致） */
-$brand-forest: #1A5336;
-$brand-mint: #5BD197;
-$brand-mint-light: #E6F9F0;
-$brand-forest-dark: #123A26;
+/* 视觉规范：aiworkdeckweb/DESIGN.md（法律刊物式编辑排版）。
+   色值与官网 globals.css 的 CSS 变量一一对应，改这里先去改官网。 */
+$forest: #1A5336;
+$forest-darker: #123A26;
+$forest-lightest: #E8F3ED;
+$mint: #5BD197;
 
-$brand-primary: $brand-forest;
-$brand-white: #FFFFFF;
-$text-main: #2C3338;
-$text-secondary: #6C757D;
-$border-color: #E9ECEF;
+$dark-bg: #212629;
+$gray-dark: #2C3338;
+$gray-medium: #6C757D;
+$gray-light: #E9ECEF;
+$gray-pale: #F8F9FA;
+
+/* 展示级衬线：大标题 / 区块题名 / 卡片题名 / 统计数字。
+   桌面端不打包 Noto Serif SC，回落到系统宋体栈（与官网 .font-display 同一条链） */
+@mixin display-serif {
+  font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
+}
+
+@mixin mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
 
 .page-plugin-market {
-  min-height: 100vh;
-  background: linear-gradient(135deg, #F8F9FA 0%, #E8F3ED 100%);
-  padding: 40px 24px;
-  box-sizing: border-box;
-}
-
-.market-container {
-  max-width: 1080px;
-  margin: 0 auto;
-  width: 100%;
-}
-
-/* 顶部 */
-.header-card {
-  background: $brand-white;
-  border-radius: 16px;
-  border: 1px solid rgba(0, 0, 0, 0.02);
-  box-shadow: 0 4px 16px rgba(18, 52, 77, 0.05);
-  padding: 24px 28px;
-  box-sizing: border-box;
-  margin-bottom: 24px;
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.header-left {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 16px;
-  min-width: 0;
-}
-
-.header-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: $brand-mint-light;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  color: $brand-primary;
-}
-
-/* 线性图标：全站禁用 emoji，图标一律 stroke SVG */
-.svg-icon {
-  width: 22px;
-  height: 22px;
-
-  &.lg {
-    width: 26px;
-    height: 26px;
-  }
-}
-
-.title-row {
+  height: 100vh;
+  background: $gray-pale;
   display: flex;
   flex-direction: column;
-  row-gap: 4px;
+  box-sizing: border-box;
+}
+
+/* ---------- Hero ---------- */
+.hero {
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, $forest-darker 0%, #16452D 55%, $forest-darker 100%);
+}
+
+/* 细颗粒噪点，压住大面积色块的塑料感 */
+.hero-grain {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+
+/* 巨型衬线字水印，做非对称构图 */
+.hero-watermark {
+  @include display-serif;
+  position: absolute;
+  right: 24px;
+  bottom: -56px;
+  font-size: 220px;
+  font-weight: 900;
+  line-height: 1;
+  color: rgba(255, 255, 255, 0.035);
+  pointer-events: none;
+  user-select: none;
+}
+
+.hero-inner {
+  position: relative;
+  max-width: 1140px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 38px 32px 30px;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.hero-main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
-.page-title {
-  font-size: 20px;
-  font-weight: 600;
-  color: $text-main;
-}
-
-.page-subtitle {
-  font-size: 13px;
-  color: $text-secondary;
-}
-
-.toolbar {
+/* 眉标：细线 + 全大写字距 */
+.eyebrow {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: 12px;
-  flex-shrink: 0;
+  margin-bottom: 14px;
 }
 
-.btn-primary {
-  font-size: 13px;
-  font-weight: 500;
-  background: $brand-primary;
+.eyebrow-line {
+  width: 32px;
+  height: 1px;
+  background: rgba(91, 209, 151, 0.5);
+}
+
+.eyebrow-text {
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(91, 209, 151, 0.8);
+}
+
+.hero-title {
+  @include display-serif;
+  font-size: 38px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
   color: #fff;
-  border: none;
-  padding: 8px 20px;
-  border-radius: 6px;
-  line-height: 1.5;
-  cursor: pointer;
-  box-shadow: 0 2px 4px rgba(26, 83, 54, 0.2);
-  transition: background 0.2s;
-
-  &:after { border: none; }
-
-  &:hover { background: $brand-forest-dark; }
-
-  &[disabled] {
-    background: #A9C5B6;
-    box-shadow: none;
-    color: #fff;
-  }
+  margin-bottom: 10px;
 }
 
-.btn-secondary {
-  font-size: 13px;
-  font-weight: 500;
-  background: #fff;
-  color: $text-secondary;
-  border: 1px solid $border-color;
-  padding: 8px 20px;
-  border-radius: 6px;
-  line-height: 1.5;
-  cursor: pointer;
-  transition: all 0.2s;
-
-  &:after { border: none; }
-
-  &:hover {
-    color: $brand-primary;
-    border-color: $brand-primary;
-    background: $brand-mint-light;
-  }
+.hero-sub {
+  font-size: 14px;
+  line-height: 1.7;
+  color: rgba(255, 255, 255, 0.6);
+  max-width: 560px;
 }
 
-.plugin-list {
-  max-height: calc(100vh - 250px);
-}
-
-/* 广场 / 已安装 tab */
-.tab-row {
+.hero-stats {
   display: flex;
   flex-direction: row;
   align-items: center;
-  gap: 24px;
-  border-bottom: 1px solid $border-color;
-  margin-bottom: 18px;
-  padding: 0 4px;
+  gap: 22px;
+  margin-top: 26px;
+}
+
+.stat {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.stat-num {
+  @include display-serif;
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.stat-sep {
+  width: 1px;
+  height: 18px;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.hero-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.btn-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* 深色底上：主按钮白底深绿字，次按钮描边幽灵（DESIGN.md 七） */
+.btn-ghost,
+.btn-light {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-ghost {
+  color: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+
+  &:hover {
+    color: #fff;
+    border-color: rgba(255, 255, 255, 0.45);
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+.btn-light {
+  color: $forest-darker;
+  background: #fff;
+  border: 1px solid #fff;
+  font-weight: 600;
+
+  &:hover { background: #F1F5F2; }
+
+  &.is-busy {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+}
+
+/* ---------- 主页签：编辑式下划线 ---------- */
+.tab-bar {
+  flex-shrink: 0;
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(20px);
+  border-bottom: 1px solid rgba(233, 236, 239, 0.8);
+}
+
+.tab-inner {
+  max-width: 1140px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 32px;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 28px;
 }
 
 .tab-item {
   display: flex;
   flex-direction: row;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
-  font-size: 15px;
-  color: $text-secondary;
-  padding: 8px 2px 10px;
-  cursor: pointer;
+  font-size: 14px;
+  color: $gray-medium;
+  padding: 14px 0;
+  margin-bottom: -1px;
   border-bottom: 2px solid transparent;
-  transition: all 0.2s;
+  cursor: pointer;
+  transition: color 0.2s;
+  white-space: nowrap;
 
-  &:hover { color: $brand-primary; }
+  &:hover { color: $dark-bg; }
 
   &.active {
-    color: $brand-primary;
+    color: $forest;
     font-weight: 600;
-    border-bottom-color: $brand-primary;
+    border-bottom-color: $forest;
   }
 }
 
 .tab-count {
-  font-size: 12px;
-  font-weight: 600;
-  color: $brand-primary;
-  background: $brand-mint-light;
-  padding: 0 8px;
-  border-radius: 999px;
+  @include mono;
+  font-size: 10px;
+  opacity: 0.6;
 }
 
-/* 广场内 Skill / 插件 分段控件 */
-.seg-row {
-  display: inline-flex;
+/* ---------- 内容区 ---------- */
+.content {
+  flex: 1;
+  min-height: 0;
+}
+
+.content-inner {
+  max-width: 1140px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 26px 32px 48px;
+}
+
+/* 分类导航（下划线）+ 搜索 */
+.filter-bar {
+  display: flex;
   flex-direction: row;
-  background: rgba(255, 255, 255, 0.7);
-  border: 1px solid $border-color;
-  border-radius: 8px;
-  padding: 3px;
-  margin: 0 4px 14px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid rgba(233, 236, 239, 0.9);
 }
 
-.seg-item {
+.cat-nav {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.cat-item {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 5px;
   font-size: 13px;
-  font-weight: 500;
-  color: $text-secondary;
-  padding: 5px 22px;
-  border-radius: 6px;
+  color: $gray-medium;
+  padding: 8px 0 11px;
+  margin-bottom: -1px;
+  border-bottom: 2px solid transparent;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: color 0.2s;
+  white-space: nowrap;
+
+  &:hover { color: $dark-bg; }
 
   &.active {
-    background: $brand-primary;
-    color: #fff;
+    color: $forest;
+    font-weight: 600;
+    border-bottom-color: $forest;
   }
 }
 
-/* 搜索 + 分类筛选 */
-.filter-bar {
-  margin: 0 4px 16px;
-  display: flex;
-  flex-direction: column;
-  row-gap: 10px;
+.cat-num {
+  @include mono;
+  font-size: 10px;
+  opacity: 0.6;
 }
 
 .search-box {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  width: 240px;
   background: #fff;
-  border: 1px solid $border-color;
-  border-radius: 8px;
-  padding: 9px 14px;
-  max-width: 520px;
-  transition: border-color 0.2s;
+  border: 1px solid $gray-light;
+  border-radius: 6px;
+  padding: 7px 12px;
+  margin-bottom: 8px;
+  transition: border-color 0.2s, box-shadow 0.2s;
 
-  &:hover, &:focus-within { border-color: $brand-mint; }
+  &:hover { border-color: #D3DAD8; }
+
+  &:focus-within {
+    border-color: $mint;
+    box-shadow: 0 0 0 3px rgba(91, 209, 151, 0.15);
+  }
+}
+
+.search-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: $gray-medium;
 }
 
 .search-input {
   font-size: 13px;
-  color: $text-main;
-  width: 100%;
+  color: $gray-dark;
+  flex: 1;
+  min-width: 0;
 }
 
-.chip-row {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.cat-chip {
-  font-size: 12px;
-  color: $text-secondary;
-  background: #fff;
-  border: 1px solid $border-color;
-  padding: 4px 14px;
-  border-radius: 999px;
-  cursor: pointer;
-  transition: all 0.2s;
-
-  &:hover {
-    color: $brand-primary;
-    border-color: $brand-mint;
-  }
-
-  &.active {
-    background: $brand-primary;
-    border-color: $brand-primary;
-    color: #fff;
-  }
-}
-
-/* 卡片上的分类标签 */
-.cat-tag {
-  font-size: 12px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  background: rgba(64, 128, 255, 0.10);
-  color: #3568B8;
-}
-
-/* 区块标题 */
-.section-header {
+/* 区块标题（已安装 tab） */
+.section-head {
   display: flex;
   flex-direction: row;
   align-items: baseline;
-  gap: 10px;
-  margin: 8px 4px 14px;
+  gap: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid rgba(233, 236, 239, 0.9);
 
-  &:first-child { margin-top: 0; }
+  &:not(:first-child) { margin-top: 36px; }
 }
 
 .section-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: $text-main;
+  @include display-serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: $dark-bg;
 }
 
-.section-count {
-  font-size: 12px;
-  font-weight: 600;
-  color: $brand-primary;
-  background: $brand-mint-light;
-  padding: 1px 10px;
-  border-radius: 999px;
-}
-
-.section-subtitle {
+.section-sub {
   font-size: 13px;
-  color: $text-secondary;
+  color: $gray-medium;
 }
 
-/* 空状态 */
-.empty {
-  background: rgba(255, 255, 255, 0.6);
-  border: 1.5px dashed #C9DED2;
-  border-radius: 12px;
-  padding: 48px 24px;
-  margin-bottom: 32px;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  row-gap: 8px;
-}
-
-.empty-icon {
-  width: 34px;
-  height: 34px;
-  color: #9AAFA3;
-  margin-bottom: 4px;
-}
-
-.empty-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: $text-main;
-}
-
-.empty-hint {
-  font-size: 13px;
-  color: $text-secondary;
-}
-
-/* 卡片网格 */
+/* ---------- 卡片 ---------- */
 .card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
-  gap: 16px;
-  margin-bottom: 32px;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 20px;
 }
 
-.plugin-card {
-  background: $brand-white;
-  border: 1px solid $border-color;
-  border-radius: 12px;
-  padding: 20px;
+.ed-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   box-sizing: border-box;
-  transition: all 0.2s ease;
+  padding: 22px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.65);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(233, 236, 239, 0.9);
+  transition: transform 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 
-  &:hover {
-    border-color: $brand-mint;
-    box-shadow: 0 8px 24px rgba(26, 83, 54, 0.08);
-    transform: translateY(-2px);
+  /* hover 时顶部浮起一条品牌色细线 */
+  &::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(26, 83, 54, 0.6), transparent);
+    opacity: 0;
+    transition: opacity 0.3s ease;
   }
 
-  &.disabled {
-    opacity: 0.6;
-    background: #FCFCFC;
+  &:hover {
+    transform: translateY(-4px);
+    border-color: rgba(26, 83, 54, 0.25);
+    box-shadow: 0 18px 40px -18px rgba(18, 58, 38, 0.25);
+
+    &::before { opacity: 1; }
+  }
+
+  &.off {
+    opacity: 0.55;
 
     &:hover {
       transform: none;
       box-shadow: none;
-      border-color: $border-color;
+      border-color: rgba(233, 236, 239, 0.9);
+
+      &::before { opacity: 0; }
     }
   }
 }
 
-.card-header {
+.card-head {
   display: flex;
   flex-direction: row;
-  align-items: center;
-  column-gap: 12px;
-  margin-bottom: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
 }
 
-.plugin-icon-wrap {
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  background: $brand-mint-light;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  overflow: hidden;
-  color: $brand-primary;
-}
-
-.plugin-icon-img {
-  width: 32px;
-  height: 32px;
-}
-
-.title-block {
-  flex: 1;
-  min-width: 0;
+.head-text {
   display: flex;
   flex-direction: column;
-  row-gap: 2px;
+  min-width: 0;
+  flex: 1;
 }
 
-.name-row {
+/* 分类眉标：小图标 + 分类名，替代原来的彩色胶囊 */
+.kicker {
   display: flex;
   flex-direction: row;
   align-items: center;
-  column-gap: 8px;
+  gap: 6px;
+  margin-bottom: 8px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: $gray-medium;
 }
 
-.plugin-name {
-  font-size: 15px;
-  font-weight: 600;
-  color: $text-main;
-}
-
-.plugin-version {
-  font-size: 12px;
-  color: $text-secondary;
-  background: #F1F3F5;
-  padding: 1px 8px;
-  border-radius: 999px;
-}
-
-.plugin-meta {
-  font-size: 12px;
-  color: $text-secondary;
-}
-
-.plugin-switch {
-  transform: scale(0.8);
+.kicker-icon {
+  width: 13px;
+  height: 13px;
+  color: rgba(26, 83, 54, 0.7);
   flex-shrink: 0;
 }
 
-/* Skill 生效方式下拉 */
+.kicker-sep {
+  width: 1px;
+  height: 11px;
+  background: $gray-light;
+}
+
+.kicker-on {
+  color: $forest;
+  font-weight: 600;
+}
+
+.kicker-off {
+  color: #A0A8AD;
+}
+
+.card-title {
+  @include display-serif;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1.35;
+  color: $dark-bg;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-id {
+  @include mono;
+  font-size: 11px;
+  color: rgba(108, 117, 125, 0.8);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 中文说明句：与 card-id 同位同色，但不用等宽 */
+.card-note {
+  font-size: 12px;
+  color: rgba(108, 117, 125, 0.9);
+  margin-top: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.card-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.act-primary {
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  color: #fff;
+  background: $forest;
+  border: 1px solid $forest;
+  border-radius: 6px;
+  padding: 5px 16px;
+  cursor: pointer;
+  transition: background 0.2s;
+
+  &:hover { background: $forest-darker; }
+
+  &.is-busy {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
+.act-remove {
+  font-size: 12px;
+  text-align: center;
+  color: $gray-medium;
+  border: 1px solid $gray-light;
+  border-radius: 6px;
+  padding: 5px 16px;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  &:hover {
+    color: #C0392B;
+    border-color: rgba(192, 57, 43, 0.4);
+  }
+}
+
+.card-desc {
+  font-size: 13px;
+  line-height: 1.7;
+  color: $gray-medium;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+
+/* 触发词：中文「引号」排版，不用满屏 pill */
+.card-triggers {
+  font-size: 13px;
+  line-height: 1.7;
+  color: rgba(26, 83, 54, 0.8);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+/* 工具数与声明能力：一行正文，敏感能力靠文案而非配色喊话 */
+.card-caps {
+  font-size: 12px;
+  line-height: 1.6;
+  color: rgba(108, 117, 125, 0.9);
+  margin-bottom: 18px;
+}
+
+.card-foot {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+  padding-top: 14px;
+  border-top: 1px solid rgba(233, 236, 239, 0.7);
+  font-size: 12px;
+  color: $gray-medium;
+}
+
+.foot-author {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.foot-meta {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.foot-icon {
+  width: 13px;
+  height: 13px;
+}
+
+/* 已安装卡片上的控件 */
+.plugin-switch {
+  transform: scale(0.78);
+  transform-origin: right center;
+  flex-shrink: 0;
+}
+
 .mode-picker {
   flex-shrink: 0;
 }
@@ -1046,170 +1321,140 @@ $border-color: #E9ECEF;
   display: flex;
   flex-direction: row;
   align-items: center;
-  column-gap: 6px;
+  gap: 6px;
   font-size: 12px;
-  color: #475569;
+  color: $gray-dark;
   background: #fff;
-  border: 1px solid $border-color;
+  border: 1px solid $gray-light;
   border-radius: 6px;
   padding: 5px 10px;
   cursor: pointer;
   transition: all 0.2s;
+  white-space: nowrap;
 
   &:hover {
-    color: $brand-primary;
-    border-color: $brand-mint;
+    color: $forest;
+    border-color: $mint;
   }
 }
 
 .mode-caret {
   font-size: 10px;
-  color: #94a3b8;
-}
-
-.plugin-desc {
-  font-size: 13px;
-  line-height: 1.6;
-  color: $text-secondary;
-  display: block;
-  margin-bottom: 12px;
-}
-
-.tag-row {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
-
-  &:last-child { margin-bottom: 0; }
-}
-
-.tool-count-tag {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: $brand-mint-light;
-  color: $brand-primary;
-}
-
-.perm-tag {
-  font-size: 12px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: rgba(230, 162, 60, 0.12);
-  color: #B47D2B;
-}
-
-.perm-tag-none {
-  font-size: 12px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: #F1F3F5;
-  color: $text-secondary;
-}
-
-/* 在线插件区块底部的信任提示：插件与本机应用同权限，这句不能省 */
-.market-note {
-  font-size: 12px;
-  line-height: 1.7;
-  color: $text-secondary;
-  background: rgba(230, 162, 60, 0.08);
-  border: 1px solid rgba(230, 162, 60, 0.25);
-  border-radius: 10px;
-  padding: 12px 16px;
-  margin: 0 4px 32px;
-}
-
-.trigger-tag {
-  font-size: 12px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: rgba(103, 194, 58, 0.12);
-  color: #4F9A2C;
-}
-
-.installed-tag {
-  font-size: 12px;
-  font-weight: 500;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: $brand-mint-light;
-  color: $brand-primary;
-}
-
-/* 在线广场卡片右侧操作列 */
-.market-actions {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  row-gap: 6px;
-  flex-shrink: 0;
-}
-
-.btn-mini {
-  padding: 4px 14px;
-  font-size: 12px;
-}
-
-.btn-uninstall {
-  font-size: 12px;
-  font-weight: 500;
-  background: #fff;
-  color: #C0392B;
-  border: 1px solid rgba(192, 57, 43, 0.35);
-  border-radius: 6px;
-  line-height: 1.5;
-  cursor: pointer;
-  transition: all 0.2s;
-
-  &:after { border: none; }
-
-  &:hover {
-    background: rgba(192, 57, 43, 0.06);
-    border-color: #C0392B;
-  }
-
-  &[disabled] {
-    color: #D9A7A0;
-    border-color: #EED4D0;
-  }
+  color: #94A3B8;
 }
 
 /* 工具清单 */
 .tool-list {
-  background: #FAFAFA;
-  border: 1px solid $border-color;
-  border-radius: 8px;
-  padding: 12px 14px;
+  border-top: 1px solid rgba(233, 236, 239, 0.7);
+  padding-top: 12px;
+  margin-top: auto;
   display: flex;
   flex-direction: column;
-  row-gap: 6px;
+  gap: 6px;
 }
 
 .tool-item {
   display: flex;
   flex-direction: row;
   align-items: baseline;
-  column-gap: 12px;
+  gap: 10px;
 }
 
 .tool-name {
-  font-size: 12px;
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
-  color: $brand-primary;
-  font-weight: 500;
+  @include mono;
+  font-size: 11px;
+  color: $forest;
   flex-shrink: 0;
 }
 
 .tool-desc {
   font-size: 12px;
-  color: $text-secondary;
+  color: $gray-medium;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* 窄窗口回退为单列 */
-@media (max-width: 920px) {
+/* ---------- 空状态：留白 + 衬线题名，不用虚线框 ---------- */
+.empty {
+  padding: 44px 24px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.empty-icon {
+  width: 38px;
+  height: 38px;
+  color: rgba(108, 117, 125, 0.45);
+  margin-bottom: 10px;
+}
+
+.empty-title {
+  @include display-serif;
+  font-size: 17px;
+  font-weight: 700;
+  color: $dark-bg;
+}
+
+.empty-hint {
+  font-size: 13px;
+  line-height: 1.7;
+  color: $gray-medium;
+  max-width: 460px;
+}
+
+/* 在线插件区块底部的信任提示：插件与本机应用同权限，这句不能省 */
+.market-note {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 28px;
+  padding-top: 18px;
+  border-top: 1px solid rgba(233, 236, 239, 0.9);
+}
+
+.note-icon {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: #B47D2B;
+}
+
+.note-text {
+  font-size: 12px;
+  line-height: 1.8;
+  color: $gray-medium;
+  max-width: 760px;
+}
+
+/* 窄窗口 */
+@media (max-width: 900px) {
+  .hero-inner,
+  .tab-inner,
+  .content-inner {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+  .hero-inner {
+    flex-direction: column;
+  }
+
+  .hero-title { font-size: 30px; }
+  .hero-watermark { display: none; }
+
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .search-box { width: auto; }
+
   .card-grid {
     grid-template-columns: 1fr;
   }
