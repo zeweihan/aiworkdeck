@@ -219,6 +219,18 @@
           />
         </view>
 
+        <!-- 插件广场：IDE 扩展市场式直达入口（浏览/安装不该藏在系统设置两跳之下） -->
+        <view class="rail-btn" title="插件广场" @tap="goToPluginMarket">
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M4 4h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+              <path d="M4 13h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+              <path d="M13 13h7v7h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+              <path d="M14.5 2.5h7v7h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
+        </view>
+
         <!-- 系统设置：AI 提供商 / API Key 等随时可改（不再只藏在首次向导里）。
              页面与接口仅管理员可用（后端 requireAdmin），入口对所有人可见便于发现。 -->
         <view class="rail-btn" title="系统设置（AI 提供商 / API Key）" @tap="goToSystemSettings">
@@ -4497,6 +4509,9 @@ export default {
     },
     goToSystemSettings() {
       uni.navigateTo({ url: '/pages/admin/admin' })
+    },
+    goToPluginMarket() {
+      uni.navigateTo({ url: '/pages/plugin-market/plugin-market' })
     },
     formatTime(timeStr) {
   if (!timeStr) return '-'
