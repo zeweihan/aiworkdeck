@@ -375,6 +375,11 @@ public class ContextAssemblerService {
         return messages;
     }
     
+    /** 活跃文档展示名：名字缺失时回退为通称，避免给模型看到「《null》」。 */
+    private static String activeDocDisplayName(String name) {
+        return (name == null || name.isBlank()) ? "当前文档" : "《" + name + "》";
+    }
+
     /**
      * 活跃文档的末位提醒（拼在用户消息尾部）。无活跃文档时返回空串。
      */
@@ -382,7 +387,7 @@ public class ContextAssemblerService {
         if (activeContext == null || activeContext.getId() == null || activeContext.getId().isEmpty()) {
             return "";
         }
-        return "\n\n[系统提醒] 编辑器中当前已打开文档《" + activeContext.getName() + "》（id="
+        return "\n\n[系统提醒] 编辑器中当前已打开文档" + activeDocDisplayName(activeContext.getName()) + "（id="
                 + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
                 + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
                 + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
