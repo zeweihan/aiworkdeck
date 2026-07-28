@@ -6,6 +6,7 @@ import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.diff.DiffEntry;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
+import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
@@ -180,19 +181,21 @@ public class ProjectRepoService {
 
             CanonicalTreeParser fromTree = new CanonicalTreeParser();
             CanonicalTreeParser toTree = new CanonicalTreeParser();
-            fromTree.reset(repo.newObjectReader(), walk.parseCommit(from).getTree());
-            toTree.reset(repo.newObjectReader(), walk.parseCommit(to).getTree());
+            try (ObjectReader reader = repo.newObjectReader()) {
+                fromTree.reset(reader, walk.parseCommit(from).getTree());
+                toTree.reset(reader, walk.parseCommit(to).getTree());
 
-            for (DiffEntry d : git.diff().setOldTree(fromTree).setNewTree(toTree).call()) {
-                out.add(new FileChange(
-                        d.getChangeType() == DiffEntry.ChangeType.DELETE
-                                ? d.getOldPath() : d.getNewPath(),
-                        switch (d.getChangeType()) {
-                            case ADD, COPY -> FileChange.Type.ADD;
-                            case DELETE -> FileChange.Type.DELETE;
-                            case RENAME -> FileChange.Type.RENAME;
-                            default -> FileChange.Type.MODIFY;
-                        }));
+                for (DiffEntry d : git.diff().setOldTree(fromTree).setNewTree(toTree).call()) {
+                    out.add(new FileChange(
+                            d.getChangeType() == DiffEntry.ChangeType.DELETE
+                                    ? d.getOldPath() : d.getNewPath(),
+                            switch (d.getChangeType()) {
+                                case ADD, COPY -> FileChange.Type.ADD;
+                                case DELETE -> FileChange.Type.DELETE;
+                                case RENAME -> FileChange.Type.RENAME;
+                                default -> FileChange.Type.MODIFY;
+                            }));
+                }
             }
             return out;
         } catch (Exception e) {
