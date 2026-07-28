@@ -86,7 +86,7 @@ public class WorkSessionService {
         lock.lock();
         try {
             WorkSession s = activeSession(projectId)
-                    .orElseThrow(() -> new VersionException("当前没有未结束的工作"));
+                    .orElseThrow(() -> VersionException.userFacing("当前没有未结束的工作"));
             repoService.checkoutBranch(projectId, s.getBranchName());
         } finally {
             lock.unlock();
@@ -169,7 +169,7 @@ public class WorkSessionService {
         lock.lock();
         try {
             WorkSession s = activeSession(projectId)
-                    .orElseThrow(() -> new VersionException("当前没有进行中的工作"));
+                    .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
 
             cancelPending(projectId);
             commitNow(projectId, userId, userName, null);
@@ -184,7 +184,7 @@ public class WorkSessionService {
             if (!outcome.success()) {
                 // 合并没成，把用户放回他的工作段，改动一个都不能丢
                 repoService.checkoutBranch(projectId, s.getBranchName());
-                throw new VersionException("本次工作还没能收尾，你的改动都还在");
+                throw VersionException.userFacing("本次工作还没能收尾，你的改动都还在");
             }
 
             s.setStatus(WorkSession.Status.MERGED);
@@ -205,7 +205,7 @@ public class WorkSessionService {
         lock.lock();
         try {
             WorkSession s = activeSession(projectId)
-                    .orElseThrow(() -> new VersionException("当前没有进行中的工作"));
+                    .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
 
             cancelPending(projectId);
             repoService.checkoutBranch(projectId, repoService.mainBranch());

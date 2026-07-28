@@ -130,10 +130,16 @@ public class VersionController {
         return ok(Map.of("sha", sha == null ? "" : sha));
     }
 
+    /**
+     * message 可能带 Git 术语/内部分支名（见 ProjectRepoService），一律不得原样回显给律师。
+     * 只有标记为 userFacing 的业务性异常（见 WorkSessionService）才展示其 message，
+     * 其余一律用通用措辞；技术细节只进日志。对齐房规：HTTP 一律 200，用 code 区分成败。
+     */
     @ExceptionHandler(VersionException.class)
     public ResponseEntity<Map<String, Object>> onVersionError(VersionException e) {
         log.warn("版本记录操作失败", e);
-        return ResponseEntity.status(500).body(Map.of("code", -1, "message", e.getMessage()));
+        String message = e.isUserFacing() ? e.getMessage() : "版本记录操作失败，请重试";
+        return ResponseEntity.ok(Map.of("code", 1, "message", message));
     }
 
     /** 校验并返回当前用户 id。非成员或 CLIENT 一律拒绝。 */
