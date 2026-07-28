@@ -55,4 +55,47 @@ class TreeManifestCaptureTest {
                 Files.readString(onDisk), TreeManifest.class);
         assertEquals(m, back, "序列化→反序列化必须恒等");
     }
+
+    @Test
+    void readAtRefRoundTripsManifestCommittedViaCommitAll(@TempDir Path root) throws Exception {
+        ProjectFileRepository repo = mock(ProjectFileRepository.class);
+        when(repo.findByProjectId(7L)).thenReturn(List.of(
+                file(1L, null, "重要协议", true, null, false),
+                file(2L, 1L, "股权转让协议.docx", false, "projects/7/重要协议/股权转让协议.docx", false)
+        ));
+
+        StorageProperties props = new StorageProperties();
+        props.getLocal().setRootPath(root.toAbsolutePath().toString());
+        ProjectRepoService repoSvc = new ProjectRepoService(props);
+        ProjectTreeManifestService svc =
+                new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper());
+
+        repoSvc.init(7L, "韩泽伟", "hzw@example.com");
+
+        TreeManifest m = svc.capture(7L);
+        svc.writeToWorkTree(7L, m);
+        String sha = repoSvc.commitAll(7L, "记录文件树", "session", null,
+                "韩泽伟", "hzw@example.com");
+        assertNotNull(sha, "写入了清单文件，提交不应为空提交");
+
+        TreeManifest back = svc.readAtRef(7L, "HEAD");
+        assertEquals(m, back, "readAtRef 读回的清单必须与采集时相等");
+    }
+
+    @Test
+    void readAtRefReturnsNullWhenCommitHasNoManifest(@TempDir Path root) throws Exception {
+        ProjectFileRepository repo = mock(ProjectFileRepository.class);
+
+        StorageProperties props = new StorageProperties();
+        props.getLocal().setRootPath(root.toAbsolutePath().toString());
+        ProjectRepoService repoSvc = new ProjectRepoService(props);
+        ProjectTreeManifestService svc =
+                new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper());
+
+        // init() 落一笔初始版本，此时工作区里还没有 .awd/tree.json
+        repoSvc.init(7L, "韩泽伟", "hzw@example.com");
+
+        TreeManifest back = svc.readAtRef(7L, "HEAD");
+        assertNull(back, "该版没有清单时必须返回 null，而不是抛异常或空对象");
+    }
 }

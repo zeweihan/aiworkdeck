@@ -34,20 +34,24 @@ public class ProjectTreeManifestService {
 
     /** 从数据库采集当前文件树。软删除的节点也要收进来，否则回退无法还原回收站状态。 */
     public TreeManifest capture(long projectId) {
-        List<TreeManifest.Node> nodes = projectFileRepository.findByProjectId(projectId)
-                .stream()
-                .sorted(Comparator.comparing(ProjectFile::getId))
-                .map(f -> new TreeManifest.Node(
-                        f.getId(),
-                        f.getParentId(),
-                        f.getName(),
-                        Boolean.TRUE.equals(f.getIsFolder()),
-                        f.getFileType(),
-                        f.getSortOrder(),
-                        f.getFilePath(),
-                        Boolean.TRUE.equals(f.getIsDeleted())))
-                .toList();
-        return new TreeManifest(TreeManifest.CURRENT_VERSION, nodes);
+        try {
+            List<TreeManifest.Node> nodes = projectFileRepository.findByProjectId(projectId)
+                    .stream()
+                    .sorted(Comparator.comparing(ProjectFile::getId))
+                    .map(f -> new TreeManifest.Node(
+                            f.getId(),
+                            f.getParentId(),
+                            f.getName(),
+                            Boolean.TRUE.equals(f.getIsFolder()),
+                            f.getFileType(),
+                            f.getSortOrder(),
+                            f.getFilePath(),
+                            Boolean.TRUE.equals(f.getIsDeleted())))
+                    .toList();
+            return new TreeManifest(TreeManifest.CURRENT_VERSION, nodes);
+        } catch (Exception e) {
+            throw new VersionException("采集文件树清单失败: project=" + projectId, e);
+        }
     }
 
     public void writeToWorkTree(long projectId, TreeManifest manifest) {
