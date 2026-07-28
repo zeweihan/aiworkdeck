@@ -19,6 +19,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -60,11 +61,20 @@ class ContextAssemblerServiceTest {
                 new AiContextProperties(), skillRouter, memoryManager, contextCompressor);
     }
 
-    private String assembleSystemText(AiAgentController.ContextItem activeContext) {
-        List<ChatMessage> messages = assembler.assemble(
+    private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
+        return assembler.assemble(
                 "conv-1", "帮我修订一下", null, activeContext,
                 null, null, "88", AgentMode.AGENT, 1L, null);
-        return ((SystemMessage) messages.get(0)).text();
+    }
+
+    private String assembleSystemText(AiAgentController.ContextItem activeContext) {
+        return ((SystemMessage) assembleMessages(activeContext).get(0)).text();
+    }
+
+    /** 末位消息（用户消息）的文本——注意力最高的位置。 */
+    private String assembleLastUserText(AiAgentController.ContextItem activeContext) {
+        List<ChatMessage> messages = assembleMessages(activeContext);
+        return ((dev.langchain4j.data.message.UserMessage) messages.get(messages.size() - 1)).singleText();
     }
 
     private static AiAgentController.ContextItem activeDoc() {
@@ -108,5 +118,39 @@ class ContextAssemblerServiceTest {
 
         assertFalse(systemText.contains("<active_document id="), "无活跃文档不应出现注入段");
         assertFalse(systemText.contains("# Active Document"), "无活跃文档不应出现注入段标题");
+    }
+
+    // ==== 末位提醒 ====
+    // 真机日志实证：system prompt 里的活跃文档声明（连正文一起注入）会被弱模型稳定无视，
+    // 注入后 6 秒仍调 doc_list_project_files 重新发现文档。末位消息是注意力最高的位置。
+
+    @Test
+    @DisplayName("活跃文档提醒挂在用户消息尾部，且点名禁用 list/open 两个工具")
+    void activeDocumentReminderRidesOnLastUserMessage() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+
+        String lastUser = assembleLastUserText(activeDoc());
+
+        assertTrue(lastUser.startsWith("帮我修订一下"), "用户原话必须在前，提醒只作为尾部追加");
+        assertTrue(lastUser.contains("[系统提醒]"), "应沿用既有系统提醒惯例");
+        assertTrue(lastUser.contains("合作框架协议.docx"), "提醒里应点名当前文档");
+        assertTrue(lastUser.contains("doc_list_project_files"), "应点名禁用 doc_list_project_files");
+        assertTrue(lastUser.contains("doc_open_file"), "应点名禁用 doc_open_file");
+    }
+
+    @Test
+    @DisplayName("正文读取失败也要挂末位提醒——模型至少知道该操作哪个文档")
+    void reminderPresentEvenWhenContentUnreadable() {
+        when(legalTools.read_document("123")).thenReturn(null);
+
+        String lastUser = assembleLastUserText(activeDoc());
+
+        assertTrue(lastUser.contains("合作框架协议.docx"), "正文读不到也应保留提醒");
+    }
+
+    @Test
+    @DisplayName("无活跃文档时用户消息保持原样，不夹带提醒")
+    void noReminderWhenNoActiveContext() {
+        assertEquals("帮我修订一下", assembleLastUserText(null), "无活跃文档时用户消息不应被改写");
     }
 }

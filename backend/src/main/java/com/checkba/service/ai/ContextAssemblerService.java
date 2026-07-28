@@ -366,11 +366,28 @@ public class ContextAssemblerService {
         messages.addAll(historyMessages);
 
         // 4. Add Current User Prompt
-        messages.add(dev.langchain4j.data.message.UserMessage.from(userPrompt));
+        // 活跃文档提醒挂在**用户消息尾部**而非只留在 system prompt：system prompt 里的同类
+        // 声明被弱模型（如 DeepSeek Flash）稳定无视——实测注入了正文仍先调 doc_list_project_files
+        // 重新发现文档。末位消息是注意力最高的位置，这里再说一次才真正生效。
+        messages.add(dev.langchain4j.data.message.UserMessage.from(
+                userPrompt + activeDocumentReminder(activeContext)));
 
         return messages;
     }
     
+    /**
+     * 活跃文档的末位提醒（拼在用户消息尾部）。无活跃文档时返回空串。
+     */
+    private String activeDocumentReminder(com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+        if (activeContext == null || activeContext.getId() == null || activeContext.getId().isEmpty()) {
+            return "";
+        }
+        return "\n\n[系统提醒] 编辑器中当前已打开文档《" + activeContext.getName() + "》（id="
+                + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
+                + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
+                + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+    }
+
     /**
      * Determines the current phase based on plan and task list state.
      * - CHAT: No plan, no task list (simple conversation)
