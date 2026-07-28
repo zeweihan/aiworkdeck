@@ -201,10 +201,29 @@ public class AgentOrchestrator {
         if (guard != null && "doc_open_file".equals(toolName)) {
             try {
                 String fid = extractArg(argsJson, "fileId");
-                if (fid != null && !fid.isEmpty()) guard.activeFileId = Long.parseLong(fid.trim());
+                if (fid != null && !fid.isEmpty()) {
+                    Long opened = Long.parseLong(fid.trim());
+                    guard.activeFileName = activeDocNameAfterOpen(guard.activeFileId, guard.activeFileName, opened);
+                    guard.activeFileId = opened;
+                }
             } catch (Exception ignore) { /* fileId 非数字时保持原值 */ }
         }
         return result;
+    }
+
+    /**
+     * 模型中途 doc_open_file 后，活跃文档名该保留还是作废。
+     *
+     * <p>切到别的文档时必须作废：否则后续短路反馈/列表加钉会拿**旧名配新 id**，等于主动喂给
+     * 模型一条错误信息。这一层拿不到新文档名，置 null 即回退为通称「当前文档」。
+     */
+    static String activeDocNameAfterOpen(Long previousId, String previousName, Long openedId) {
+        return openedId != null && openedId.equals(previousId) ? previousName : null;
+    }
+
+    /** 活跃文档的展示名：名字缺失（含模型中途切文档后作废的情况）时回退为通称，避免出现「《null》」。 */
+    private static String activeDocDisplayName(String activeFileName) {
+        return (activeFileName == null || activeFileName.isBlank()) ? "当前文档" : "《" + activeFileName + "》";
     }
 
     /**
@@ -224,10 +243,11 @@ public class AgentOrchestrator {
         } catch (NumberFormatException e) {
             return null;
         }
-        String name = (activeFileName == null || activeFileName.isBlank()) ? "该文档" : "《" + activeFileName + "》";
-        return "{\"status\":\"success\",\"alreadyOpen\":true,\"message\":\"" + name
-                + "（id=" + activeFileId + "）本来就在编辑器中打开着，无需打开。"
-                + "请直接调用 doc_* 工具对它操作，不要再调 doc_open_file 或 doc_list_project_files。\"}";
+        // 返回纯文本而非手拼 JSON：doc_open_file 本身返回的就是纯文本，格式保持一致；
+        // 手拼 JSON 遇到文件名里的引号/反斜杠（macOS 合法字符）会产出坏 JSON。
+        return activeDocDisplayName(activeFileName) + "（id=" + activeFileId
+                + "）本来就在编辑器中打开着，无需打开，可直接进行后续操作。"
+                + "请直接调用 doc_* 工具对它操作，不要再调 doc_open_file 或 doc_list_project_files。";
     }
 
     /**
@@ -237,9 +257,9 @@ public class AgentOrchestrator {
         if (activeFileId == null) {
             return listOutput;
         }
-        String name = (activeFileName == null || activeFileName.isBlank()) ? "当前文档" : "《" + activeFileName + "》";
         return (listOutput == null ? "" : listOutput)
-                + "\n\n[系统提醒] 用户此刻打开的是 " + name + "（id=" + activeFileId + "）。"
+                + "\n\n[系统提醒] 用户此刻打开的是 " + activeDocDisplayName(activeFileName)
+                + "（id=" + activeFileId + "）。"
                 + "若本次任务针对的就是它，直接用 doc_* 工具操作即可，不要再调 doc_open_file。";
     }
 

@@ -25,8 +25,19 @@ class AgentOrchestratorActiveDocTest {
 
         assertNotNull(msg, "打自己应短路");
         assertTrue(msg.contains("合作框架协议.docx"), "反馈里应点名文档");
-        assertTrue(msg.contains("alreadyOpen"), "应给出结构化标记供模型识别");
+        assertTrue(msg.contains("本来就在编辑器中打开着"), "应说明无需打开");
         assertTrue(msg.contains("doc_list_project_files"), "应顺带堵住再去列文件的退路");
+    }
+
+    @Test
+    @DisplayName("文件名含引号/反斜杠也不产出坏结构——短路走纯文本，与工具自身返回格式一致")
+    void shortCircuitSurvivesQuotesInFileName() {
+        String msg = AgentOrchestrator.activeDocOpenShortCircuit(
+                123L, "他说\"你好\"\\备份.docx", "123");
+
+        assertNotNull(msg);
+        assertTrue(msg.contains("他说\"你好\"\\备份.docx"), "文件名应原样呈现，不被转义破坏");
+        assertTrue(!msg.trim().startsWith("{"), "不应手拼 JSON——doc_open_file 本身返回纯文本");
     }
 
     @Test
@@ -51,13 +62,15 @@ class AgentOrchestratorActiveDocTest {
     }
 
     @Test
-    @DisplayName("文档名缺失时短路反馈仍可用，不出现空书名号")
+    @DisplayName("文档名缺失时短路反馈仍可用，不出现《null》或空书名号")
     void shortCircuitToleratesMissingName() {
-        String msg = AgentOrchestrator.activeDocOpenShortCircuit(123L, null, "123");
+        for (String noName : new String[]{null, "", "  "}) {
+            String msg = AgentOrchestrator.activeDocOpenShortCircuit(123L, noName, "123");
 
-        assertNotNull(msg);
-        assertTrue(msg.contains("该文档"), "无名时应回退为通称");
-        assertTrue(!msg.contains("《》"), "不应出现空书名号");
+            assertNotNull(msg);
+            assertTrue(msg.contains("当前文档"), "无名时应回退为通称");
+            assertTrue(!msg.contains("《》") && !msg.contains("null"), "不应漏出 null 或空书名号");
+        }
     }
 
     // ==== doc_list_project_files 结果加钉 ====
@@ -80,5 +93,36 @@ class AgentOrchestratorActiveDocTest {
         String raw = "[{\"id\":1}]";
         org.junit.jupiter.api.Assertions.assertEquals(
                 raw, AgentOrchestrator.appendActiveDocNotice(raw, null, "x.docx"));
+    }
+
+    @Test
+    @DisplayName("列表加钉在文档名缺失时回退通称，不漏出 null")
+    void listNoticeToleratesMissingName() {
+        String out = AgentOrchestrator.appendActiveDocNotice("[]", 123L, null);
+
+        assertTrue(out.contains("当前文档"), "无名时应回退为通称");
+        assertTrue(!out.contains("null"), "不应把 null 漏给模型");
+    }
+
+    // ==== 模型中途切文档后的文档名归属 ====
+
+    @Test
+    @DisplayName("模型打开别的文档 → 旧文档名必须作废，不能拿旧名配新 id")
+    void invalidatesNameWhenModelOpensDifferentDocument() {
+        assertNull(AgentOrchestrator.activeDocNameAfterOpen(123L, "合作框架协议.docx", 456L),
+                "切文档后旧名必须作废，否则会喂给模型错误信息");
+    }
+
+    @Test
+    @DisplayName("模型重复打开同一文档 → 文档名保留")
+    void keepsNameWhenReopeningSameDocument() {
+        org.junit.jupiter.api.Assertions.assertEquals("合作框架协议.docx",
+                AgentOrchestrator.activeDocNameAfterOpen(123L, "合作框架协议.docx", 123L));
+    }
+
+    @Test
+    @DisplayName("此前无活跃文档时打开任意文档 → 名字仍未知")
+    void nameStaysUnknownWhenThereWasNoActiveDoc() {
+        assertNull(AgentOrchestrator.activeDocNameAfterOpen(null, null, 456L));
     }
 }
