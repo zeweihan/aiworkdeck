@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * 一次工作的生命周期（spec 5.2）。
@@ -43,7 +44,19 @@ public class WorkSessionService {
     private final Map<Long, ScheduledFuture<?>> pending = new ConcurrentHashMap<>();
     private final Map<Long, PendingActor> actors = new ConcurrentHashMap<>();
 
+    /**
+     * 按项目维度的可重入互斥，包住所有会改仓库状态的路径（切分支/提交/合并/删分支）。
+     * 必须可重入：endSession/revertTo 内部都会再调 commitNow，同一线程二次进入
+     * 同一把锁不能死锁。ReentrantLock 而非 synchronized(projectId) ——
+     * 装箱的 Long 相同数值不保证是同一对象，拿它当锁语义不可靠。
+     */
+    private final Map<Long, ReentrantLock> repoLocks = new ConcurrentHashMap<>();
+
     private record PendingActor(Long userId, String userName) {}
+
+    private ReentrantLock repoLock(long projectId) {
+        return repoLocks.computeIfAbsent(projectId, id -> new ReentrantLock());
+    }
 
     public WorkSessionService(ProjectRepoService repoService,
                               ProjectTreeManifestService manifestService,
@@ -68,7 +81,14 @@ public class WorkSessionService {
      */
     public void onChangeSignal(long projectId, Long userId, String userName) {
         if (!repoService.isInitialized(projectId)) return;
-        ensureSession(projectId, userId);
+
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            ensureSession(projectId, userId);
+        } finally {
+            lock.unlock();
+        }
         actors.put(projectId, new PendingActor(userId, userName));
 
         ScheduledFuture<?> prev = pending.remove(projectId);
@@ -110,10 +130,16 @@ public class WorkSessionService {
     /** 立即落一笔自动存档。无变更时返回 null。 */
     public String commitNow(long projectId, Long userId, String userName, String message) {
         if (!repoService.isInitialized(projectId)) return null;
-        ensureSession(projectId, userId);
-        manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-        String msg = message != null ? message : describePendingChanges(projectId);
-        return repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            ensureSession(projectId, userId);
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            String msg = message != null ? message : describePendingChanges(projectId);
+            return repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -121,48 +147,60 @@ public class WorkSessionService {
      * 单人场景下主线在工作期间不会变，合并总是快进。
      */
     public String endSession(long projectId, Long userId, String userName, String title) {
-        WorkSession s = activeSession(projectId)
-                .orElseThrow(() -> new VersionException("当前没有进行中的工作"));
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            WorkSession s = activeSession(projectId)
+                    .orElseThrow(() -> new VersionException("当前没有进行中的工作"));
 
-        cancelPending(projectId);
-        commitNow(projectId, userId, userName, null);
+            cancelPending(projectId);
+            commitNow(projectId, userId, userName, null);
 
-        String finalTitle = (title == null || title.isBlank())
-                ? defaultTitle(s.getStartedAt()) : title.trim();
+            String finalTitle = (title == null || title.isBlank())
+                    ? defaultTitle(s.getStartedAt()) : title.trim();
 
-        repoService.checkoutBranch(projectId, repoService.mainBranch());
-        MergeOutcome outcome = repoService.merge(
-                projectId, s.getBranchName(), finalTitle, userName, email(userName));
+            repoService.checkoutBranch(projectId, repoService.mainBranch());
+            MergeOutcome outcome = repoService.merge(
+                    projectId, s.getBranchName(), finalTitle, userName, email(userName));
 
-        if (!outcome.success()) {
-            // 合并没成，把用户放回他的工作段，改动一个都不能丢
-            repoService.checkoutBranch(projectId, s.getBranchName());
-            throw new VersionException("本次工作还没能收尾，你的改动都还在");
+            if (!outcome.success()) {
+                // 合并没成，把用户放回他的工作段，改动一个都不能丢
+                repoService.checkoutBranch(projectId, s.getBranchName());
+                throw new VersionException("本次工作还没能收尾，你的改动都还在");
+            }
+
+            s.setStatus(WorkSession.Status.MERGED);
+            s.setEndedAt(LocalDateTime.now());
+            s.setTitle(finalTitle);
+            sessionRepository.save(s);
+            log.info("结束一段工作: project={}, branch={}, title={}",
+                    projectId, s.getBranchName(), finalTitle);
+            return outcome.mergeSha();
+        } finally {
+            lock.unlock();
         }
-
-        s.setStatus(WorkSession.Status.MERGED);
-        s.setEndedAt(LocalDateTime.now());
-        s.setTitle(finalTitle);
-        sessionRepository.save(s);
-        log.info("结束一段工作: project={}, branch={}, title={}",
-                projectId, s.getBranchName(), finalTitle);
-        return outcome.mergeSha();
     }
 
     /** 丢弃整段工作：删分支，工作区回到主线状态，数据库文件树跟着回去。 */
     public void discardSession(long projectId, Long userId) {
-        WorkSession s = activeSession(projectId)
-                .orElseThrow(() -> new VersionException("当前没有进行中的工作"));
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            WorkSession s = activeSession(projectId)
+                    .orElseThrow(() -> new VersionException("当前没有进行中的工作"));
 
-        cancelPending(projectId);
-        repoService.checkoutBranch(projectId, repoService.mainBranch());
-        repoService.deleteBranch(projectId, s.getBranchName(), true);
-        syncManifestFromRef(projectId, "HEAD");
+            cancelPending(projectId);
+            repoService.checkoutBranch(projectId, repoService.mainBranch());
+            repoService.deleteBranch(projectId, s.getBranchName(), true);
+            syncManifestFromRef(projectId, "HEAD");
 
-        s.setStatus(WorkSession.Status.DISCARDED);
-        s.setEndedAt(LocalDateTime.now());
-        sessionRepository.save(s);
-        log.info("丢弃一段工作: project={}, branch={}", projectId, s.getBranchName());
+            s.setStatus(WorkSession.Status.DISCARDED);
+            s.setEndedAt(LocalDateTime.now());
+            sessionRepository.save(s);
+            log.info("丢弃一段工作: project={}, branch={}", projectId, s.getBranchName());
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -170,17 +208,25 @@ public class WorkSessionService {
      * 再作为一个新版本提交。时间线只会往前长。
      */
     public String revertTo(long projectId, String ref, Long userId, String userName) {
-        // 先给当前状态留一笔，保证「退回」这个动作本身可撤销
-        commitNow(projectId, userId, userName, null);
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            cancelPending(projectId);
 
-        restoreWorkTreeFrom(projectId, ref);
-        syncManifestFromRef(projectId, ref);
-        manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            // 先给当前状态留一笔，保证「退回」这个动作本身可撤销
+            commitNow(projectId, userId, userName, null);
 
-        String sha = repoService.commitAll(projectId,
-                "退回到早先的版本", "session", null, userName, email(userName));
-        log.info("退回: project={}, ref={}, newSha={}", projectId, ref, sha);
-        return sha;
+            restoreWorkTreeFrom(projectId, ref);
+            syncManifestFromRef(projectId, ref);
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+
+            String sha = repoService.commitAll(projectId,
+                    "退回到早先的版本", "session", null, userName, email(userName));
+            log.info("退回: project={}, ref={}, newSha={}", projectId, ref, sha);
+            return sha;
+        } finally {
+            lock.unlock();
+        }
     }
 
     // ---- helpers ----------------------------------------------------------

@@ -8,13 +8,18 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -27,6 +32,11 @@ class WorkSessionServiceTest {
     private WorkSessionService svc;
     private Map<Long, WorkSession> sessions;
     private long nextSessionId;
+    // 并发测试要另起一个指向同一份仓库/会话状态的 WorkSessionService（换成 spy 过的
+    // ProjectRepoService），所以这三个协作者需要留在字段上，供测试方法复用。
+    private ProjectTreeManifestService manifestSvc;
+    private WorkSessionRepository sessionRepo;
+    private ThreadPoolTaskScheduler scheduler;
 
     @BeforeEach
     void setUp(@TempDir Path tmp) throws Exception {
@@ -41,12 +51,11 @@ class WorkSessionServiceTest {
 
         ProjectFileRepository fileRepo = mock(ProjectFileRepository.class);
         when(fileRepo.findByProjectId(7L)).thenReturn(new ArrayList<>());
-        ProjectTreeManifestService manifestSvc =
-                new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
+        manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
 
         sessions = new HashMap<>();
         nextSessionId = 1L;
-        WorkSessionRepository sessionRepo = mock(WorkSessionRepository.class);
+        sessionRepo = mock(WorkSessionRepository.class);
         when(sessionRepo.save(any(WorkSession.class))).thenAnswer(i -> {
             WorkSession s = i.getArgument(0);
             if (s.getId() == null) s.setId(nextSessionId++);
@@ -59,7 +68,7 @@ class WorkSessionServiceTest {
                                 && s.getStatus() == i.getArgument(1))
                         .findFirst());
 
-        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
 
         svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler);
@@ -148,5 +157,114 @@ class WorkSessionServiceTest {
         assertNotNull(revertSha);
         assertTrue(after > before, "退回必须新增版本，不得删除历史");
         assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")));
+    }
+
+    /**
+     * 回归测试：revertTo 必须像 endSession/discardSession 一样取消掉武装中的防抖
+     * 定时器，否则定时器可能在 revertTo 还原工作区的过程中触发，把半还原的工作区
+     * 提交上去，或者和 revertTo 自己的 commitAll 抢同一个 git 锁。
+     *
+     * 这里不去让调度器真的触发（那是靠 sleep 赌时机的脆弱写法），而是同步地断言
+     * revertTo 调用之后 pending 里该项目的定时器已经被清掉——这是修复本身的直接、
+     * 确定性的证据。
+     */
+    @Test
+    void revertToCancelsThePendingAutoSaveTimer() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        assertTrue(pendingContains(svc, 7L),
+                "onChangeSignal 之后应该已经武装了防抖定时器，这是本测试的前提");
+
+        svc.revertTo(7L, "HEAD", 1L, "韩泽伟");
+
+        assertFalse(pendingContains(svc, 7L),
+                "revertTo 必须像 endSession/discardSession 一样调用 cancelPending，"
+                        + "否则防抖定时器会在还原工作区期间仍处于武装状态");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean pendingContains(WorkSessionService target, long projectId) throws Exception {
+        Field f = WorkSessionService.class.getDeclaredField("pending");
+        f.setAccessible(true);
+        Map<Long, ?> pending = (Map<Long, ?>) f.get(target);
+        return pending.containsKey(projectId);
+    }
+
+    /**
+     * 回归测试：证明按项目维度的可重入锁确实生效——两个线程对同一 projectId
+     * 并发调用 commitNow（会经过 endSession/revertTo 同样的临界区）时不能同时
+     * 跑到 repoService.commitAll 里面。
+     *
+     * 不用 sleep 赌真实调度器和终结操作会不会撞上（那样测试要么难以稳定复现，
+     * 要么会变成偶发失败）。改用受控的两阶段闩门：让线程 A 先卡在 commitAll
+     * 内部（模拟"已经开始执行、cancel(false) 拦不住"的场景），给线程 B 一个
+     * 有界但充裕的窗口去尝试抢入同一临界区，断言窗口期内 commitAll 的调用次数
+     * 仍然是 1——这就是锁确实被持有的确定性证据。窗口结束后放行 A，再确认两个
+     * 线程都能顺利收尾、互不干扰。
+     */
+    @Test
+    void repoMutatingCallsForSameProjectAreMutuallyExclusive() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "线程 A 的改动");
+
+        ProjectRepoService spyRepo = spy(repoSvc);
+        AtomicInteger commitAllCalls = new AtomicInteger();
+        CountDownLatch aEntered = new CountDownLatch(1);
+        CountDownLatch releaseA = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            int n = commitAllCalls.incrementAndGet();
+            if (n == 1) {
+                aEntered.countDown();
+                assertTrue(releaseA.await(5, TimeUnit.SECONDS),
+                        "测试主线程没有按预期放行，测试环境本身有问题");
+            }
+            return invocation.callRealMethod();
+        }).when(spyRepo).commitAll(anyLong(), any(), any(), any(), any(), any());
+
+        // 复用同一份会话状态（sessionRepo/manifestSvc 都指向同一个内存 Map 和同一个
+        // 磁盘仓库），但改走 spy 过的 repoService，这样才能在 commitAll 内部插入闩门。
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler);
+        lockedSvc.setDebounceMillis(60_000);
+
+        List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
+
+        Thread a = new Thread(() -> {
+            try {
+                lockedSvc.commitNow(7L, 1L, "韩泽伟", "A 的自动存档");
+            } catch (Throwable t) {
+                errors.add(t);
+            }
+        }, "worksession-test-a");
+        a.start();
+
+        assertTrue(aEntered.await(5, TimeUnit.SECONDS),
+                "线程 A 应该已经进入临界区并卡在 commitAll 里");
+
+        Thread b = new Thread(() -> {
+            try {
+                lockedSvc.commitNow(7L, 1L, "韩泽伟", "B 的自动存档");
+            } catch (Throwable t) {
+                errors.add(t);
+            }
+        }, "worksession-test-b");
+        b.start();
+
+        // 给 B 一个有界但充裕的窗口去尝试抢入临界区；锁生效的话它进不去，
+        // commitAllCalls 应该在这段时间内一直停在 1。
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (System.nanoTime() < deadline && commitAllCalls.get() < 2) {
+            Thread.sleep(10);
+        }
+        assertEquals(1, commitAllCalls.get(),
+                "锁没生效的话 B 会在 A 还没放行时就抢先跑进 commitAll，这里应该还卡着没进去");
+
+        releaseA.countDown();
+        a.join(5_000);
+        b.join(5_000);
+
+        assertFalse(a.isAlive(), "线程 A 应该已经结束");
+        assertFalse(b.isAlive(), "线程 B 应该已经结束");
+        assertTrue(errors.isEmpty(), "两个线程都不应该抛异常: " + errors);
+        assertEquals(2, commitAllCalls.get(), "两次 commitNow 最终都应该各自跑到 commitAll，只是不能同时跑");
     }
 }
