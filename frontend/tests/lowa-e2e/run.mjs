@@ -70,6 +70,43 @@ const DEBUG_ACTIONS = `
     }
     return { success: true, count: out.length, comments: out };
   },
+  debug_fresh_document() {
+    // 组 13 探针专用：跳过前面各组累积的残留（批注字段等会让 select_all +
+    // replace_selection 在其上抛 RuntimeException），换一份全新空白文档再准备
+    // 新旧版本文本，和既有 probe_modules() 用同一条 private:factory 路径。
+    try {
+      const loaded = desktop.loadComponentFromURL('private:factory/swriter', '_blank', 0, [mkProp('Hidden', true)]);
+      if (!loaded) return { success: false, message: 'loadComponentFromURL returned null' };
+      xModel = loaded;
+      ctrl = loaded.getCurrentController();
+      try { xModel.setPropertyValue('RecordChanges', false); } catch (e) {}
+      return { success: true };
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
+  debug_compare_document(p) {
+    // 把"旧版本"字节写进 MEMFS，再让当前文档与它比较。
+    // 当前文档 = 新版本（由测试先 load_document 载入）。
+    const raw = p && p.baseBytes;
+    let u8 = null;
+    if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
+    else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength);
+    else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
+    if (!u8 || u8.length === 0) return { success: false, message: 'baseBytes empty' };
+    const bytes = Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
+    const url = 'file:///tmp/awd_base_cmp.docx';
+    try {
+      const sfa = css.ucb.SimpleFileAccess.create(context);
+      try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
+      const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
+      sfa.writeFile(url, stream);
+      try { stream.closeInput(); } catch (e) {}
+    } catch (e) { return { success: false, stage: 'memfs', message: errStr(e) }; }
+    try {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:CompareDocuments', '', 0, [mkProp('URL', url)]);
+    } catch (e) { return { success: false, stage: 'dispatch', message: errStr(e) }; }
+    return { success: true, url: url };
+  },
 `
 function patchServed(urlPath, content) {
   if (urlPath === '/office_thread.js') {
@@ -80,8 +117,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_compare_document'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_compare_document"'),
       'utf8')
   }
   return content
@@ -303,6 +340,53 @@ try {
     JSON.stringify(lc))
   check('批注文字不进正文', await doc() === '本合同自签署之日起生效。', await doc())
   check('缺锚点被拒绝', !(await exec('add_comment', { comment: '孤儿批注' })).success)
+
+  // ---------- 组 13：CompareDocuments 探针（版本记录第 0 期）----------
+  console.log('\n[13] CompareDocuments 探针')
+  {
+    // 组 12 在文档里留了一处批注（字段）；select_all 选区跨过该字段时
+    // replace_selection 的 vc.setString('') 会抛 RuntimeException（探针专用
+    // 发现，与 CompareDocuments 本身无关）。探针不依赖前面各组的残留状态，
+    // 换一份全新空白文档来准备新旧版本文本，和既有 probe_modules() 同一手法。
+    const fresh = await exec('debug_fresh_document')
+    check('探针换新文档成功', fresh && fresh.success === true, JSON.stringify(fresh))
+
+    const setText = async (t) => {
+      await exec('debug_set_record_changes', { on: false })
+      await exec('ui_command', { name: 'select_all' })
+      await exec('replace_selection', { text: t })
+    }
+    // page.evaluate()'s return-value serialization (CDP, effectively JSON) turns
+    // a Uint8Array into a keyless/lengthless plain object — export_document's
+    // `bytes` silently arrives empty in Node. Convert to a plain Array INSIDE
+    // the page before it crosses that boundary so it survives round-trip.
+    const exportBytes = () => page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', {})
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+
+    await setText('甲方应于三十日内支付合同价款。')
+    const oldBytes = await exportBytes()
+
+    await setText('甲方应于六十日内支付合同价款。')
+    const newBytes = await exportBytes()
+
+    check('导出两版字节非空', !!oldBytes && !!newBytes && oldBytes.length > 0 && newBytes.length > 0)
+
+    // 当前文档载入"新版本"，再与"旧版本"比较
+    await exec('load_document', { bytes: newBytes, name: 'v2.docx', authorName: '测试用户' })
+    const cmp = await exec('debug_compare_document', { baseBytes: oldBytes })
+    check('CompareDocuments 派发成功', cmp && cmp.success === true,
+      cmp && (cmp.stage + ':' + cmp.message))
+
+    const rev = await exec('debug_revisions')
+    check('比较后产生修订标记', rev && rev.success === true && rev.count > 0,
+      'count=' + (rev && rev.count))
+
+    // 记录方向：把修订内容打出来，供人工确认哪一版是"插入"哪一版是"删除"
+    console.log('  [方向] redlines=' + JSON.stringify(rev && rev.redlines))
+    console.log('  [方向] 当前正文（应为新版可读文本）=' + JSON.stringify(await doc()))
+  }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
