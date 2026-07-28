@@ -8,6 +8,7 @@ import com.checkba.service.ai.ProjectRagService;
 import com.checkba.storage.StorageException;
 import com.checkba.storage.StorageService;
 import com.checkba.storage.StorageServiceFactory;
+import com.checkba.version.WorkSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,6 +57,9 @@ public class FileController {
     @Autowired
     private ProjectMemberService projectMemberService;
 
+    @Autowired
+    private WorkSessionService workSessionService;
+
     private StorageService getStorageService() {
         return storageServiceFactory.getStorageService();
     }
@@ -72,6 +76,19 @@ public class FileController {
         String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
         Long userId = AuthController.getUserIdFromSession(sid);
         return userId != null && projectMemberService.hasReadPermission(projectId, userId);
+    }
+
+    /**
+     * 通知版本记录：项目文件发生了变更（上传场景）。
+     * 版本记录是保险不是主流程——任何异常只记日志，绝不阻断上传本身。
+     */
+    private void signalChange(Long projectId, Long userId, String userName) {
+        if (projectId == null) return;
+        try {
+            workSessionService.onChangeSignal(projectId, userId, userName);
+        } catch (Exception e) {
+            log.warn("发送版本变更信号失败: project={}", projectId, e);
+        }
     }
 
     /**
@@ -390,6 +407,11 @@ public class FileController {
                          }
                      });
                 }
+            }
+
+            if (projectFileOpt.isPresent()) {
+                String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
+                signalChange(projectFileOpt.get().getProjectId(), AuthController.getUserIdFromSession(sid), AuthController.getUsernameFromSession(sid));
             }
 
             Map<String, Object> result = new HashMap<>();
