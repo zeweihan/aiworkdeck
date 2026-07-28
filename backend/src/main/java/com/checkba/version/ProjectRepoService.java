@@ -282,6 +282,17 @@ public class ProjectRepoService {
      * 把 branchName 合并进当前分支。
      * 冲突时把工作区硬重置回合并前的 HEAD——spec 第七节要求合并失败后两份稿件都还在，
      * 稿件分支本身未被触碰，所以只需还原当前分支的工作区。
+     *
+     * JGit 的 MergeCommand 没有 setAuthor/setCommitter，真正产生新提交的三方合并
+     * 如果让 setCommit(true) 自动建提交，作者会退化成 new PersonIdent(repo)——
+     * 读不到 git config 时再退化成 JVM user.name，署名就不是操作者本人了。
+     * 这里改用 setCommit(false)：JGit 只把合并结果准备到工作区/索引，MERGE_HEAD
+     * 仍留在磁盘上；随后手工调用 git.commit() 并显式 setAuthor，JGit 的
+     * CommitCommand 会从 MERGE_HEAD 读出另一父提交、连同当前 HEAD 一起写成
+     * 双亲的合并提交，提交后自动清理 MERGE_HEAD/MERGE_MSG。
+     * 快进（FAST_FORWARD）与「已是最新」（ALREADY_UP_TO_DATE）两种情况不受
+     * setCommit(false) 影响——JGit 内部这两条路径完全绕开 commit 标志，
+     * 不产生新提交，此处直接沿用 JGit 给出的结果，不必也不应手工再建提交。
      */
     public MergeOutcome merge(long projectId, String branchName, String message,
                               String authorName, String authorEmail) {
@@ -289,18 +300,27 @@ public class ProjectRepoService {
             ObjectId target = repo.resolve(branchName);
             if (target == null) throw new VersionException("分支不存在: " + branchName);
 
+            String fullMessage = message + "\n\n" + KIND_TRAILER + "session";
             MergeResult r = git.merge()
                     .include(target)
-                    .setMessage(message + "\n\n" + KIND_TRAILER + "session")
-                    .setCommit(true)
+                    .setMessage(fullMessage)
+                    .setCommit(false)
                     .call();
 
             MergeResult.MergeStatus st = r.getMergeStatus();
             if (st.isSuccessful()) {
-                return new MergeOutcome(true,
-                        st == MergeResult.MergeStatus.FAST_FORWARD,
-                        Collections.emptyList(),
-                        r.getNewHead() == null ? null : r.getNewHead().getName());
+                boolean fastForward = st == MergeResult.MergeStatus.FAST_FORWARD;
+                String mergeSha;
+                if (fastForward || st == MergeResult.MergeStatus.ALREADY_UP_TO_DATE) {
+                    mergeSha = r.getNewHead() == null ? null : r.getNewHead().getName();
+                } else {
+                    RevCommit mergeCommit = git.commit()
+                            .setMessage(fullMessage)
+                            .setAuthor(authorName, authorEmail)
+                            .call();
+                    mergeSha = mergeCommit.getName();
+                }
+                return new MergeOutcome(true, fastForward, Collections.emptyList(), mergeSha);
             }
 
             List<String> conflicts = r.getConflicts() == null
