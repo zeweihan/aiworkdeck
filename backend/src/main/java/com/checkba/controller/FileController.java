@@ -356,15 +356,21 @@ public class FileController {
             }
 
             // 检查是否完成上传并触发RAG (Async)
+            // uploadComplete 同时复用为版本变更信号的完成判定：分片上传时，"上传成功"
+            // 指整个文件传完，而不是某一片落盘，避免几百个分片各发一次信号。
+            // 无 X-File-Total-Size 头的普通（非分片）上传路径不受影响，视为一次性完成。
+            boolean uploadComplete = true;
             String totalSizeStr = request.getHeader("X-File-Total-Size");
             if (StringUtils.hasText(totalSizeStr)) {
+                uploadComplete = false;
                 try {
                     long totalSize = Long.parseLong(totalSizeStr);
                     long currentSize = getStorageService().getSize(savedPath); // Need to ensure savedPath works for getSize, usually it takes key?
                     // LocalFileStorageService.getSize implementation takes key (filePath).
                     // Wait, getStorageService().save returns the key (path). so savedPath is the key.
-                    
-                    if (currentSize >= totalSize) {
+
+                    uploadComplete = currentSize >= totalSize;
+                    if (uploadComplete) {
                          if (projectFileOpt.isPresent()) {
                              Long pid = projectFileOpt.get().getProjectId();
                              // Async execution to prevent blocking 408 Timeout
@@ -409,7 +415,7 @@ public class FileController {
                 }
             }
 
-            if (projectFileOpt.isPresent()) {
+            if (uploadComplete && projectFileOpt.isPresent()) {
                 String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
                 signalChange(projectFileOpt.get().getProjectId(), AuthController.getUserIdFromSession(sid), AuthController.getUsernameFromSession(sid));
             }

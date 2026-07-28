@@ -7,6 +7,7 @@ import com.checkba.service.ai.AutoTaggingService;
 import com.checkba.service.ai.ProjectRagService;
 import com.checkba.storage.StorageService;
 import com.checkba.storage.StorageServiceFactory;
+import com.checkba.version.WorkSessionService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -22,6 +23,7 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -46,6 +48,8 @@ class FileControllerChunkedUploadTest {
     private AutoTaggingService autoTaggingService;
     @Mock
     private StorageService storageService;
+    @Mock
+    private WorkSessionService workSessionService;
 
     @InjectMocks
     private FileController controller;
@@ -103,5 +107,67 @@ class FileControllerChunkedUploadTest {
         assertEquals(5242880L, data.get("uploadedSize"));
         verify(storageService).getSize(FILE_PATH);
         verify(storageService, never()).getSize(WPS_FILE_ID);
+    }
+
+    /**
+     * 版本变更信号必须收窄到"整个文件上传完成"才发一次，而不是每个分片都发。
+     * 复用了 uploadFile 里已有的 currentSize >= totalSize 完成判定（原本只用于触发 RAG）。
+     * 中间分片（currentSize < totalSize）：不应发信号。
+     */
+    @Test
+    void intermediateChunkDoesNotEmitChangeSignal() throws Exception {
+        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
+        when(storageServiceFactory.getStorageService()).thenReturn(storageService);
+        when(storageService.append(any(), any())).thenReturn(FILE_PATH);
+        // 文件总大小 10MB，本次追加后落盘 5MB —— 还没传完
+        when(storageService.getSize(FILE_PATH)).thenReturn(5242880L);
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setContentType("application/octet-stream");
+        request.setContent(new byte[]{1, 2, 3});
+        request.addHeader("X-File-Total-Size", "10485760");
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
+            when(projectMemberService.hasReadPermission(4L, 7L)).thenReturn(true);
+
+            ResponseEntity<Map<String, Object>> resp =
+                controller.uploadFile(WPS_FILE_ID, null, 5242880L, "sess", null, request);
+
+            assertEquals(200, resp.getStatusCode().value());
+        }
+
+        verify(workSessionService, never()).onChangeSignal(anyLong(), any(), any());
+    }
+
+    /**
+     * 末块（currentSize >= totalSize，整文件传完）：应发一次信号。
+     */
+    @Test
+    void finalChunkEmitsChangeSignalExactlyOnce() throws Exception {
+        when(projectFileRepository.findByWpsFileId(WPS_FILE_ID)).thenReturn(List.of(projectFile()));
+        when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
+        when(storageServiceFactory.getStorageService()).thenReturn(storageService);
+        when(storageService.append(any(), any())).thenReturn(FILE_PATH);
+        // 落盘大小已达到声明的总大小 —— 整个文件传完
+        when(storageService.getSize(FILE_PATH)).thenReturn(10485760L);
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setContentType("application/octet-stream");
+        request.setContent(new byte[]{1, 2, 3});
+        request.addHeader("X-File-Total-Size", "10485760");
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
+            when(projectMemberService.hasReadPermission(4L, 7L)).thenReturn(true);
+
+            ResponseEntity<Map<String, Object>> resp =
+                controller.uploadFile(WPS_FILE_ID, null, 5242880L, "sess", null, request);
+
+            assertEquals(200, resp.getStatusCode().value());
+        }
+
+        verify(workSessionService, times(1)).onChangeSignal(eq(4L), any(), any());
     }
 }

@@ -539,7 +539,7 @@ public class ProjectFileService {
                 throw e;
             }
         }
-        signalChange(projectId, userId);
+        // 信号已由循环内 delete(id, userId) 各自发出，这里不再重复发送
     }
 
     /**
@@ -560,7 +560,7 @@ public class ProjectFileService {
             }
             result.add(move(id, request.getTargetParentId(), null, userId));
         }
-        signalChange(projectId, userId);
+        // 信号已由循环内 move(...) 各自发出，这里不再重复发送
         return result;
     }
 
