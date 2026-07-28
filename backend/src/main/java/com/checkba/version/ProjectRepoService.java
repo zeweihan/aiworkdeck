@@ -1,12 +1,16 @@
 package com.checkba.version;
 
 import com.checkba.storage.StorageProperties;
+import org.eclipse.jgit.api.CreateBranchCommand;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.MergeResult;
+import org.eclipse.jgit.api.ResetCommand;
 import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.diff.DiffEntry;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.ObjectReader;
+import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
@@ -22,6 +26,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -218,6 +223,95 @@ public class ProjectRepoService {
             }
         } catch (Exception e) {
             throw new VersionException("读取历史文件失败: project=" + projectId, e);
+        }
+    }
+
+    private static final String MAIN_BRANCH = "master";
+
+    public String mainBranch() { return MAIN_BRANCH; }
+
+    public void createBranch(long projectId, String name, String startPointRef) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            git.branchCreate()
+               .setName(name)
+               .setStartPoint(startPointRef)
+               .setUpstreamMode(CreateBranchCommand.SetupUpstreamMode.NOTRACK)
+               .call();
+        } catch (Exception e) {
+            throw new VersionException("创建分支失败: " + name, e);
+        }
+    }
+
+    public void checkoutBranch(long projectId, String name) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            git.checkout().setName(name).call();
+        } catch (Exception e) {
+            throw new VersionException("切换分支失败: " + name, e);
+        }
+    }
+
+    public String currentBranch(long projectId) {
+        try (Repository repo = open(projectId)) {
+            return repo.getBranch();
+        } catch (Exception e) {
+            throw new VersionException("读取当前分支失败: project=" + projectId, e);
+        }
+    }
+
+    public List<String> listBranches(long projectId) {
+        List<String> out = new ArrayList<>();
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            for (Ref r : git.branchList().call()) {
+                out.add(Repository.shortenRefName(r.getName()));
+            }
+            return out;
+        } catch (Exception e) {
+            throw new VersionException("读取分支列表失败: project=" + projectId, e);
+        }
+    }
+
+    public void deleteBranch(long projectId, String name, boolean force) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            git.branchDelete().setBranchNames(name).setForce(force).call();
+        } catch (Exception e) {
+            throw new VersionException("删除分支失败: " + name, e);
+        }
+    }
+
+    /**
+     * 把 branchName 合并进当前分支。
+     * 冲突时把工作区硬重置回合并前的 HEAD——spec 第七节要求合并失败后两份稿件都还在，
+     * 稿件分支本身未被触碰，所以只需还原当前分支的工作区。
+     */
+    public MergeOutcome merge(long projectId, String branchName, String message,
+                              String authorName, String authorEmail) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            ObjectId target = repo.resolve(branchName);
+            if (target == null) throw new VersionException("分支不存在: " + branchName);
+
+            MergeResult r = git.merge()
+                    .include(target)
+                    .setMessage(message + "\n\n" + KIND_TRAILER + "session")
+                    .setCommit(true)
+                    .call();
+
+            MergeResult.MergeStatus st = r.getMergeStatus();
+            if (st.isSuccessful()) {
+                return new MergeOutcome(true,
+                        st == MergeResult.MergeStatus.FAST_FORWARD,
+                        Collections.emptyList(),
+                        r.getNewHead() == null ? null : r.getNewHead().getName());
+            }
+
+            List<String> conflicts = r.getConflicts() == null
+                    ? Collections.emptyList()
+                    : new ArrayList<>(r.getConflicts().keySet());
+            git.reset().setMode(ResetCommand.ResetType.HARD).setRef("HEAD").call();
+            return new MergeOutcome(false, false, conflicts, null);
+        } catch (VersionException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new VersionException("合并失败: " + branchName, e);
         }
     }
 }
