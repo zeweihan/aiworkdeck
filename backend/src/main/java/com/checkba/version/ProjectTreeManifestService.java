@@ -4,6 +4,7 @@ import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -54,7 +55,8 @@ public class ProjectTreeManifestService {
                             f.getFileType(),
                             f.getSortOrder(),
                             f.getFilePath(),
-                            Boolean.TRUE.equals(f.getIsDeleted())))
+                            Boolean.TRUE.equals(f.getIsDeleted()),
+                            f.getUserId()))
                     .toList();
             return new TreeManifest(TreeManifest.CURRENT_VERSION, nodes);
         } catch (Exception e) {
@@ -92,6 +94,7 @@ public class ProjectTreeManifestService {
      * 把清单描述的文件树同步进数据库。差异同步，不是删表重建——
      * 保证回退不会丢掉当前状态里的任何东西，且回退本身可以再回退。
      */
+    @Transactional
     public SyncReport applyToDatabase(long projectId, TreeManifest manifest) {
         try {
             Map<Long, ProjectFile> current = new HashMap<>();
@@ -121,10 +124,19 @@ public class ProjectTreeManifestService {
                     continue;
                 }
 
+                // 创建者优先取清单自带的 userId；清单也没有时才回退到数据库里同 id 的旧记录。
+                // 两边都没有就宁可让它是 null（下面会抛异常），也不能静默把节点判给别人。
+                Long userId = node.userId() != null
+                        ? node.userId() : (existing != null ? existing.getUserId() : null);
+                if (userId == null) {
+                    throw new VersionException(
+                            "清单缺少创建者信息，无法新建节点: project=" + projectId + " nodeId=" + node.id());
+                }
+
                 ProjectFile fresh = new ProjectFile();
                 if (existing == null) fresh.setId(node.id());
                 fresh.setProjectId(projectId);
-                fresh.setUserId(existing != null ? existing.getUserId() : 1L);
+                fresh.setUserId(userId);
                 fresh.setCreatedAt(LocalDateTime.now());
                 applyAttributes(fresh, node, targetParentId);
                 ProjectFile saved = projectFileRepository.save(fresh);

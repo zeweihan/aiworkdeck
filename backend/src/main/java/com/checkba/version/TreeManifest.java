@@ -20,6 +20,7 @@ public record TreeManifest(int version, List<Node> nodes) {
             String fileType,
             Integer sortOrder,
             String filePath,
-            boolean isDeleted
+            boolean isDeleted,
+            Long userId
     ) {}
 }

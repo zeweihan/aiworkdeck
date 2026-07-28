@@ -38,8 +38,13 @@ class TreeManifestSyncTest {
 
     private TreeManifest.Node n(Long id, Long parentId, String name, boolean folder,
                                 String path, boolean deleted, int sortOrder) {
+        return n(id, parentId, name, folder, path, deleted, sortOrder, 1L);
+    }
+
+    private TreeManifest.Node n(Long id, Long parentId, String name, boolean folder,
+                                String path, boolean deleted, int sortOrder, Long userId) {
         return new TreeManifest.Node(id, parentId, name, folder,
-                folder ? null : "docx", sortOrder, path, deleted);
+                folder ? null : "docx", sortOrder, path, deleted, userId);
     }
 
     @BeforeEach
@@ -71,6 +76,17 @@ class TreeManifestSyncTest {
 
         assertEquals(1, r.created());
         assertEquals("合同.docx", db.get(1L).getName());
+    }
+
+    @Test
+    void createsMissingNodeWithUserIdFromManifest() {
+        // 新建节点的创建者必须取自清单，不能悄悄落到硬编码的 1L 或任何别的默认值。
+        TreeManifest m = new TreeManifest(1, List.of(
+                n(1L, null, "合同.docx", false, "projects/7/合同.docx", false, 0, 42L)));
+
+        svc.applyToDatabase(7L, m);
+
+        assertEquals(42L, db.get(1L).getUserId(), "新建节点的 userId 必须采用清单里的值");
     }
 
     @Test
