@@ -50,6 +50,8 @@ public class AgentOrchestrator {
         int consecutiveFailures;
         // 当前活跃文档 ID（来自 activeContext 或 doc_open_file），用于修改前自动创建检查点
         Long activeFileId;
+        // 活跃文档名（仅用于给模型的反馈文案）
+        String activeFileName;
     }
 
     // 取消状态管理：存储被取消的会话ID
@@ -170,10 +172,30 @@ public class AgentOrchestrator {
             }
         }
 
+        // 活跃文档确定性兜底：提示词层面的约束对弱模型不可靠（system prompt 声明与末位提醒
+        // 都被无视过），这里在分发层直接拦截，不再指望模型自觉。
+        if (guard != null && guard.activeFileId != null && "doc_open_file".equals(toolName)) {
+            String shortCircuit = activeDocOpenShortCircuit(
+                    guard.activeFileId, guard.activeFileName, extractArg(argsJson, "fileId"));
+            if (shortCircuit != null) {
+                log.info("[ActiveDoc] 短路 doc_open_file：目标就是已打开的活跃文档 id={}", guard.activeFileId);
+                return new ToolRegistry.ToolResult(
+                        shortCircuit, toolRegistry.resolve(toolName).orElse(null), true);
+            }
+        }
+
         com.checkba.service.ai.tools.ToolContext ctx =
                 new com.checkba.service.ai.tools.ToolContext(projectId, conversationId, userId, modelId);
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
         applyToolSideEffects(result, argsJson, conversationId);
+
+        // 模型仍去列文件时，把活跃文档钉在结果里，让它下一轮自己纠回来（不阻断跨文档场景）
+        if (guard != null && guard.activeFileId != null
+                && "doc_list_project_files".equals(toolName) && result.success()) {
+            result = new ToolRegistry.ToolResult(
+                    appendActiveDocNotice(result.output(), guard.activeFileId, guard.activeFileName),
+                    result.tool(), result.found());
+        }
 
         // 跟踪活跃文档：模型中途打开新文档时，后续检查点跟着切换
         if (guard != null && "doc_open_file".equals(toolName)) {
@@ -183,6 +205,42 @@ public class AgentOrchestrator {
             } catch (Exception ignore) { /* fileId 非数字时保持原值 */ }
         }
         return result;
+    }
+
+    /**
+     * doc_open_file 打的就是当前已打开的活跃文档时，返回给模型的短路反馈；否则返回 null（正常执行）。
+     *
+     * <p>省掉一整轮「SSE 下发打开指令 → 等前端回执」的往返。跨文档场景（requestedFileId 指向别的
+     * 文档）不受影响，照常执行。
+     */
+    static String activeDocOpenShortCircuit(Long activeFileId, String activeFileName, String requestedFileId) {
+        if (activeFileId == null || requestedFileId == null || requestedFileId.isBlank()) {
+            return null;
+        }
+        try {
+            if (!activeFileId.equals(Long.parseLong(requestedFileId.trim()))) {
+                return null;
+            }
+        } catch (NumberFormatException e) {
+            return null;
+        }
+        String name = (activeFileName == null || activeFileName.isBlank()) ? "该文档" : "《" + activeFileName + "》";
+        return "{\"status\":\"success\",\"alreadyOpen\":true,\"message\":\"" + name
+                + "（id=" + activeFileId + "）本来就在编辑器中打开着，无需打开。"
+                + "请直接调用 doc_* 工具对它操作，不要再调 doc_open_file 或 doc_list_project_files。\"}";
+    }
+
+    /**
+     * doc_list_project_files 的结果尾部钉上活跃文档提示，让走神的模型下一轮自己纠回来。
+     */
+    static String appendActiveDocNotice(String listOutput, Long activeFileId, String activeFileName) {
+        if (activeFileId == null) {
+            return listOutput;
+        }
+        String name = (activeFileName == null || activeFileName.isBlank()) ? "当前文档" : "《" + activeFileName + "》";
+        return (listOutput == null ? "" : listOutput)
+                + "\n\n[系统提醒] 用户此刻打开的是 " + name + "（id=" + activeFileId + "）。"
+                + "若本次任务针对的就是它，直接用 doc_* 工具操作即可，不要再调 doc_open_file。";
     }
 
     /**
@@ -298,6 +356,7 @@ public class AgentOrchestrator {
             if (request.getActiveContext() != null && request.getActiveContext().getId() != null) {
                 try {
                     guard.activeFileId = Long.parseLong(request.getActiveContext().getId().trim());
+                    guard.activeFileName = request.getActiveContext().getName();
                 } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
             }
             runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, guard);

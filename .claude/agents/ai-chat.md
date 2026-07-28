@@ -61,7 +61,10 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 - **只写进 system prompt 的行为约束会被弱模型稳定无视**：活跃文档声明（连正文一起注入）曾放在
   system prompt，真机日志实证注入后 6 秒模型照样调 doc_list_project_files 重新发现文档（PR#187 加强
   措辞无效）。现改为在**用户消息尾部**追加 `[系统提醒]`（ContextAssemblerService.activeDocumentReminder，
-  PR#208）——末位是注意力最高的位置。**新增"必须/禁止"类约束一律挂末位，不要只写 system prompt。**
+  PR#209）——末位是注意力最高的位置。**新增"必须/禁止"类约束一律挂末位，不要只写 system prompt。**
+  末位提醒仍是概率性的，确定性兜底在分发层：`dispatchTool` 短路"打开活跃文档本身"的 doc_open_file、
+  给 doc_list_project_files 结果钉活跃文档提示（`activeDocOpenShortCircuit` / `appendActiveDocNotice`，
+  PR#210）。**跨文档场景不拦截**——改这两个 helper 前先确认别把"对比另一份合同"之类的正常流程堵死。
 - 排障需要后端日志时注意：桌面端复用已在跑的后端进程时不会重建日志管道，`~/.aiworkdeck/logs/backend.log`
   会停止更新（表现为日志停在几天前）。要拿新日志先彻底退出 app 让后端随之重启。
 - 防走神注入/todo_write 进度卡/文档检查点机制见 PR#161/162。
