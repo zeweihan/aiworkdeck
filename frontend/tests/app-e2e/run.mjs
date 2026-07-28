@@ -201,6 +201,26 @@ try {
   }
   await shot('j6-rails')
 
+  // ============ J6.6 剪贴板面板 ============
+  // 剪贴板簇长期没有端到端覆盖，而它重度依赖 document/window 全局监听
+  // （copy/paste/keydown 三路兜底）——正是"搬进 .js 模块后静态检查发现不了"的失效面。
+  //
+  // 注意：截图(OCR)簇**无法在浏览器目标里驱动**。浏览器路径走
+  // navigator.mediaDevices.getDisplayMedia（见 project-overview.vue 的
+  // startOcrCapture），headless Chrome 点下去直接 Target closed；桌面路径又依赖
+  // 主进程 OverlayWindow。同 LOWA 引擎，属于本套件的目标能力边界，
+  // 不要再往这里加 OCR 步骤（加了会整套崩，不是"抖动"）。
+  console.log('== J6.6 剪贴板面板 ==')
+  await step('剪贴板面板可打开', async () => {
+    await mouseClickSel('[title="常用工具"]')
+    await mouseClickText('剪贴板')
+    await page.waitForFunction(
+      () => [...document.querySelectorAll('.tab-indicator')].length > 0,
+      { timeout: 10000 }
+    )
+  })
+  await shot('j6.6-clipboard')
+
   // ============ J6.5 AI 对话（真 UI 打字发送；默认模型 deepseek-v4-flash，
   // $0.09/M tokens，一条消息成本可忽略；AI_E2E=0 跳过） ============
   if (process.env.AI_E2E !== '0') {
