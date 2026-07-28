@@ -350,4 +350,17 @@ public class ProjectRepoService {
             throw new VersionException("合并失败: " + branchName, e);
         }
     }
+
+    /**
+     * 重打包并清理不可达对象。
+     * 只动不可达对象（失败的合并、已丢弃工作段的悬空提交）——
+     * 可达历史一个不动，这是「历史永不重写」的一部分。
+     */
+    public void gc(long projectId) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            git.gc().call();
+        } catch (Exception e) {
+            log.warn("仓库维护失败: project={}", projectId, e);
+        }
+    }
 }

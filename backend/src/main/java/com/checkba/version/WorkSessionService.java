@@ -75,6 +75,24 @@ public class WorkSessionService {
                 projectId, WorkSession.Status.ACTIVE);
     }
 
+    /** 上次没正常结束的工作段（崩溃或强杀留下的）。 */
+    public Optional<WorkSession> pendingRecovery(long projectId) {
+        return activeSession(projectId);
+    }
+
+    /** 继续上次没结束的工作：切回该分支。 */
+    public void resumeSession(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            WorkSession s = activeSession(projectId)
+                    .orElseThrow(() -> new VersionException("当前没有未结束的工作"));
+            repoService.checkoutBranch(projectId, s.getBranchName());
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /**
      * 收到一个变更信号：文件保存成功、文件树增删改移。
      * 没有进行中的工作段就隐式开一个，然后重排防抖提交。
