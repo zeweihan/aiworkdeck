@@ -176,6 +176,22 @@ public class ProjectRepoService {
         return null;
     }
 
+    /** 工作区相对 HEAD 的未提交变更。只读——add 到暂存区但不提交。 */
+    public List<FileChange> pendingChanges(long projectId) {
+        List<FileChange> out = new ArrayList<>();
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            git.add().addFilepattern(".").call();
+            git.add().addFilepattern(".").setUpdate(true).call();
+            Status st = git.status().call();
+            for (String p : st.getAdded()) out.add(new FileChange(p, FileChange.Type.ADD));
+            for (String p : st.getChanged()) out.add(new FileChange(p, FileChange.Type.MODIFY));
+            for (String p : st.getRemoved()) out.add(new FileChange(p, FileChange.Type.DELETE));
+            return out;
+        } catch (Exception e) {
+            throw new VersionException("读取未提交变更失败: project=" + projectId, e);
+        }
+    }
+
     public List<FileChange> diffNameStatus(long projectId, String fromRef, String toRef) {
         List<FileChange> out = new ArrayList<>();
         try (Repository repo = open(projectId); Git git = new Git(repo);

@@ -262,8 +262,34 @@ public class WorkSessionService {
         if (m != null) manifestService.applyToDatabase(projectId, m);
     }
 
+    /**
+     * 生成律师在时间线上看到的那句话。清单文件是内部机制，不出现在描述里。
+     */
+    static String describeChanges(List<FileChange> changes) {
+        List<String> names = changes.stream()
+                .map(FileChange::path)
+                .filter(p -> !p.startsWith(".awd/"))
+                .map(WorkSessionService::displayName)
+                .toList();
+        if (names.isEmpty()) return "整理了文件结构";
+        if (names.size() == 1) return "修改了《" + names.get(0) + "》";
+        return "修改了《" + names.get(0) + "》等 " + names.size() + " 份文件";
+    }
+
+    /** 取文件名并去掉扩展名——律师习惯说《股权转让协议》，不说 .docx。 */
+    private static String displayName(String path) {
+        String name = path.substring(path.lastIndexOf('/') + 1);
+        int dot = name.lastIndexOf('.');
+        return dot > 0 ? name.substring(0, dot) : name;
+    }
+
     private String describePendingChanges(long projectId) {
-        return "修改了项目文件";
+        try {
+            return describeChanges(repoService.pendingChanges(projectId));
+        } catch (Exception e) {
+            log.warn("生成变更描述失败: project={}", projectId, e);
+            return "修改了项目文件";
+        }
     }
 
     private String defaultTitle(LocalDateTime startedAt) {
