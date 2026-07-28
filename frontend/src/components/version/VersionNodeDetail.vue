@@ -1,0 +1,102 @@
+<template>
+  <view class="awd-mask" @tap.self="$emit('close')">
+    <view class="awd-dialog">
+      <view class="awd-header">
+        <text class="awd-title">{{ version.note || version.message }}</text>
+      </view>
+      <view class="awd-body">
+        <view class="detail-meta">{{ version.authorName }} · {{ when }}</view>
+        <view v-if="!changes.length" class="detail-empty">这一版没有文件改动</view>
+        <view v-for="c in changes" :key="c.path" class="detail-change">
+          <text class="change-type" :class="'type-' + c.type">{{ typeLabel(c.type) }}</text>
+          <text class="change-path">{{ c.path }}</text>
+        </view>
+      </view>
+      <view class="awd-footer">
+        <view class="awd-btn awd-btn-secondary" @tap="$emit('close')">关闭</view>
+        <view class="awd-btn awd-btn-primary" @tap="confirmRevert">退回到这一版</view>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script>
+import { getVersionChanges, revertToVersion } from '@/services/api.js'
+
+export default {
+  name: 'VersionNodeDetail',
+  props: {
+    projectId: { type: [String, Number], required: true },
+    version: { type: Object, required: true },
+  },
+  emits: ['close', 'reverted'],
+  data() {
+    return { changes: [] }
+  },
+  computed: {
+    when() {
+      const d = new Date(this.version.when)
+      const pad = (n) => String(n).padStart(2, '0')
+      return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
+    },
+  },
+  mounted() {
+    this.load()
+  },
+  methods: {
+    async load() {
+      try {
+        const res = await getVersionChanges(this.projectId, this.version.sha)
+        this.changes = ((res && res.data && res.data.changes) || [])
+      } catch (e) {
+        console.warn('[Version] 读取变更失败', e)
+      }
+    },
+    typeLabel(t) {
+      return { ADD: '新增', MODIFY: '修改', DELETE: '删除', RENAME: '改名' }[t] || t
+    },
+    confirmRevert() {
+      uni.showModal({
+        title: '退回到这一版',
+        content: '项目会回到这一版的样子。这次退回本身也会记进时间线，随时可以再退回来。',
+        success: async (r) => {
+          if (!r.confirm) return
+          try {
+            await revertToVersion(this.projectId, this.version.sha)
+            this.$emit('reverted')
+          } catch (e) {
+            uni.showToast({ title: '退回失败，请稍后重试', icon: 'none' })
+          }
+        },
+      })
+    },
+  },
+}
+</script>
+
+<style lang="scss" scoped>
+.awd-mask {
+  position: fixed; inset: 0; background: rgba(0,0,0,.4);
+  display: flex; align-items: center; justify-content: center; z-index: 999;
+}
+.awd-dialog { width: 640rpx; max-height: 70vh; background: #fff; border-radius: 12rpx; display: flex; flex-direction: column; }
+.awd-header { padding: 24rpx; border-bottom: 1px solid #eee; }
+.awd-title { font-size: 30rpx; font-weight: 600; }
+.awd-body { padding: 24rpx; overflow-y: auto; flex: 1; }
+.detail-meta { font-size: 24rpx; color: #999; margin-bottom: 16rpx; }
+.detail-empty { font-size: 26rpx; color: #999; }
+.detail-change { display: flex; gap: 12rpx; padding: 8rpx 0; }
+.change-type { font-size: 23rpx; flex-shrink: 0; }
+.type-ADD { color: #2a7; }
+.type-MODIFY { color: #C8A45D; }
+.type-DELETE { color: #b23; }
+.type-RENAME { color: #666; }
+.change-path { font-size: 25rpx; color: #333; word-break: break-all; }
+.awd-footer {
+  display: flex; justify-content: flex-end; gap: 16rpx;
+  padding: 20rpx 24rpx; border-top: 1px solid #eee;
+}
+.awd-btn { padding: 12rpx 24rpx; border-radius: 6rpx; font-size: 25rpx; }
+.awd-btn-primary { background: #12344D; color: #fff; }
+.awd-btn-secondary { background: #f0f0f0; color: #333; }
+</style>

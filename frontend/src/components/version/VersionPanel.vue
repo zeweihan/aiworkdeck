@@ -33,6 +33,9 @@ export default {
   props: {
     projectId: { type: [String, Number], required: true },
   },
+  provide() {
+    return { projectId: this.projectId }
+  },
   data() {
     return {
       loading: true,
