@@ -212,12 +212,12 @@ try {
   // 不要再往这里加 OCR 步骤（加了会整套崩，不是"抖动"）。
   console.log('== J6.6 剪贴板面板 ==')
   await step('剪贴板面板可打开', async () => {
-    await mouseClickSel('[title="常用工具"]')
+    // 「常用工具」是开关：面板已开时再点会把它关掉——先探测再决定是否点击
+    if (!(await page.$('.bottom-panel'))) await mouseClickSel('[title="常用工具"]')
+    await page.waitForSelector('.bottom-panel', { timeout: 10000 })
     await mouseClickText('剪贴板')
-    await page.waitForFunction(
-      () => [...document.querySelectorAll('.tab-indicator')].length > 0,
-      { timeout: 10000 }
-    )
+    // 断言 ClipboardPanel 组件真的挂载了（.tab-indicator 只说明有 tab 激活，面板挂载失败也存在）
+    await page.waitForSelector('.clip-panel', { timeout: 10000 })
   })
   await shot('j6.6-clipboard')
 
