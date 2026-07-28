@@ -1569,3 +1569,64 @@ export default {
   searchProjectContent
 }
 
+// ==================== 版本记录 ====================
+// 术语对齐 spec 第四节：对外只说「版本 / 本次工作」，不说 commit / branch。
+
+export function getVersionStatus(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/status`,
+    method: 'GET'
+  });
+}
+
+export function enableVersionControl(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/enable`,
+    method: 'POST'
+  });
+}
+
+export function getVersionTimeline(projectId, limit = 50) {
+  return request({
+    url: `/api/projects/${projectId}/version/timeline?limit=${limit}`,
+    method: 'GET'
+  });
+}
+
+export function getVersionChanges(projectId, sha) {
+  return request({
+    url: `/api/projects/${projectId}/version/versions/${encodeURIComponent(sha)}/changes`,
+    method: 'GET'
+  });
+}
+
+export function endWorkSession(projectId, title) {
+  return request({
+    url: `/api/projects/${projectId}/version/session/end`,
+    method: 'POST',
+    data: { title: title || '' }
+  });
+}
+
+export function discardWorkSession(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/session/discard`,
+    method: 'POST'
+  });
+}
+
+export function resumeWorkSession(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/session/resume`,
+    method: 'POST'
+  });
+}
+
+export function revertToVersion(projectId, ref) {
+  return request({
+    url: `/api/projects/${projectId}/version/revert`,
+    method: 'POST',
+    data: { ref }
+  });
+}
+
