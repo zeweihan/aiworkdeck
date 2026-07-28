@@ -3,6 +3,7 @@ package com.checkba.version;
 import com.checkba.storage.StorageProperties;
 import org.eclipse.jgit.api.CreateBranchCommand;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.MergeCommand;
 import org.eclipse.jgit.api.MergeResult;
 import org.eclipse.jgit.api.ResetCommand;
 import org.eclipse.jgit.api.Status;
@@ -299,6 +300,12 @@ public class ProjectRepoService {
      * 冲突时把工作区硬重置回合并前的 HEAD——spec 第七节要求合并失败后两份稿件都还在，
      * 稿件分支本身未被触碰，所以只需还原当前分支的工作区。
      *
+     * 强制禁用快进（setFastForward(NO_FF)）：单人场景下主线在工作期间几乎不变，
+     * 合并默认就是可快进的——而快进只挪 ref，不产生提交，调用方传入的 message
+     * （标题 + kind=session 尾注）会无处可去，时间线上就出不来这个工作段的命名
+     * 节点。禁用快进后，任何真实的合并都会走「产生合并提交」这条路径，工作段
+     * 永远有自己的节点。这正是 git --no-ff 的用途。
+     *
      * JGit 的 MergeCommand 没有 setAuthor/setCommitter，真正产生新提交的三方合并
      * 如果让 setCommit(true) 自动建提交，作者会退化成 new PersonIdent(repo)——
      * 读不到 git config 时再退化成 JVM user.name，署名就不是操作者本人了。
@@ -306,8 +313,8 @@ public class ProjectRepoService {
      * 仍留在磁盘上；随后手工调用 git.commit() 并显式 setAuthor，JGit 的
      * CommitCommand 会从 MERGE_HEAD 读出另一父提交、连同当前 HEAD 一起写成
      * 双亲的合并提交，提交后自动清理 MERGE_HEAD/MERGE_MSG。
-     * 快进（FAST_FORWARD）与「已是最新」（ALREADY_UP_TO_DATE）两种情况不受
-     * setCommit(false) 影响——JGit 内部这两条路径完全绕开 commit 标志，
+     * 「已是最新」（ALREADY_UP_TO_DATE，工作段期间主线和分支都没有任何新提交）
+     * 不受 setCommit(false) 影响——JGit 内部这条路径完全绕开 commit 标志，
      * 不产生新提交，此处直接沿用 JGit 给出的结果，不必也不应手工再建提交。
      */
     public MergeOutcome merge(long projectId, String branchName, String message,
@@ -320,14 +327,14 @@ public class ProjectRepoService {
             MergeResult r = git.merge()
                     .include(target)
                     .setMessage(fullMessage)
+                    .setFastForward(MergeCommand.FastForwardMode.NO_FF)
                     .setCommit(false)
                     .call();
 
             MergeResult.MergeStatus st = r.getMergeStatus();
             if (st.isSuccessful()) {
-                boolean fastForward = st == MergeResult.MergeStatus.FAST_FORWARD;
                 String mergeSha;
-                if (fastForward || st == MergeResult.MergeStatus.ALREADY_UP_TO_DATE) {
+                if (st == MergeResult.MergeStatus.ALREADY_UP_TO_DATE) {
                     mergeSha = r.getNewHead() == null ? null : r.getNewHead().getName();
                 } else {
                     RevCommit mergeCommit = git.commit()
@@ -336,7 +343,7 @@ public class ProjectRepoService {
                             .call();
                     mergeSha = mergeCommit.getName();
                 }
-                return new MergeOutcome(true, fastForward, Collections.emptyList(), mergeSha);
+                return new MergeOutcome(true, false, Collections.emptyList(), mergeSha);
             }
 
             List<String> conflicts = r.getConflicts() == null

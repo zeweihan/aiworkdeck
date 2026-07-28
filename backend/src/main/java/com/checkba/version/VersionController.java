@@ -65,7 +65,7 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireMember(projectId, sessionId);
-        repoService.init(projectId, userName(userId), email(userId));
+        sessionService.enableVersionRecording(projectId, userName(userId), email(userId));
         return ok(Map.of("enabled", true));
     }
 

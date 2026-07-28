@@ -34,6 +34,13 @@ class ProjectRepoBranchTest {
         assertTrue(s.listBranches(7L).contains("work/1001"));
     }
 
+    /**
+     * 单人场景下这是最常见的合并形态：工作期间主线完全没动，本可以快进。
+     * 但快进只挪 ref、不产生提交，会把调用方传入的标题和 kind=session 尾注
+     * 丢在半路——时间线上就出不来这个工作段的命名节点（这正是 task-15 发现的
+     * Bug A）。合并必须显式禁用快进，永远产生一个带标题、kind=session、
+     * 双亲提交的合并提交，工作段才有自己的节点。
+     */
     @Test
     void mergeIsFastForwardWhenMainUntouched(@TempDir Path root) throws Exception {
         ProjectRepoService s = seeded(root);
@@ -48,9 +55,18 @@ class ProjectRepoBranchTest {
                 "韩泽伟", "hzw@example.com");
 
         assertTrue(r.success());
-        assertTrue(r.fastForward());
+        assertFalse(r.fastForward(), "即使可以快进也必须被禁用，否则工作段的命名节点会丢失");
         assertTrue(r.conflictingPaths().isEmpty());
         assertEquals("二稿", Files.readString(root.resolve("projects/7/合同.txt")));
+
+        List<VersionEntry> log = s.log(7L, s.mainBranch(), 1);
+        assertEquals(1, log.size());
+        VersionEntry head = log.get(0);
+        assertEquals(r.mergeSha(), head.sha());
+        assertEquals("7 月 28 日下午的工作", head.message(),
+                "禁用快进后，合并提交的 message 必须是调用方传入的标题");
+        assertEquals("session", head.kind(), "工作段合并提交的 kind 必须是 session");
+        assertEquals(2, head.parents().size(), "工作段合并提交必须有两个父提交");
     }
 
     @Test

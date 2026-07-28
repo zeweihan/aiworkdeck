@@ -70,6 +70,19 @@ public class WorkSessionService {
 
     public void setDebounceMillis(long millis) { this.debounceMillis = millis; }
 
+    /**
+     * 开启版本记录。ProjectRepoService 只认识 Git，不认识文件树清单，
+     * 所以清单要在这里、调用 repoService.init 之前先写进工作区——
+     * 这样「初始版本」那一笔提交天然带上 .awd/tree.json，退回到它时
+     * syncManifestFromRef 才有清单可读，不会静默变成空操作。
+     * 只此一笔提交，repoService.init 本身不认识清单也不需要改。
+     */
+    public void enableVersionRecording(long projectId, String authorName, String authorEmail) {
+        if (repoService.isInitialized(projectId)) return;
+        manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+        repoService.init(projectId, authorName, authorEmail);
+    }
+
     public Optional<WorkSession> activeSession(long projectId) {
         return sessionRepository.findFirstByProjectIdAndStatus(
                 projectId, WorkSession.Status.ACTIVE);
