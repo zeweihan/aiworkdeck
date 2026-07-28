@@ -67,6 +67,36 @@ class ProjectRepoHistoryTest {
     }
 
     @Test
+    void pendingChangesReturnsEmptyWhenWorkingTreeClean(@TempDir Path root) throws Exception {
+        ProjectRepoService s = seeded(root);
+        assertTrue(s.pendingChanges(7L).isEmpty());
+    }
+
+    @Test
+    void pendingChangesReportsAddModifyAndDelete(@TempDir Path root) throws Exception {
+        ProjectRepoService s = seeded(root);
+        // 补一个已提交文件，专门用来被磁盘删除——seeded() 只落了 合同.txt。
+        Files.writeString(root.resolve("projects/7/待删除.txt"), "占位");
+        assertNotNull(s.commitAll(7L, "补一个待删除文件", "auto", null, "韩泽伟", "hzw@example.com"));
+
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿"); // MODIFY
+        Files.writeString(root.resolve("projects/7/新增.txt"), "新文件"); // ADD
+        Files.delete(root.resolve("projects/7/待删除.txt")); // DELETE：只从磁盘删，不 git rm
+
+        List<FileChange> changes = s.pendingChanges(7L);
+
+        assertTrue(changes.stream().anyMatch(
+                c -> c.path().equals("合同.txt") && c.type() == FileChange.Type.MODIFY));
+        assertTrue(changes.stream().anyMatch(
+                c -> c.path().equals("新增.txt") && c.type() == FileChange.Type.ADD));
+        assertTrue(changes.stream().anyMatch(
+                c -> c.path().equals("待删除.txt") && c.type() == FileChange.Type.DELETE),
+                "磁盘删除但未 git rm 的文件也应被报告为 DELETE——JGit 的 getRemoved()/getMissing() 语义不同，"
+                        + "getMissing() 才是「工作区缺失但索引仍有」的那批");
+        assertEquals(3, changes.size());
+    }
+
+    @Test
     void readBlobAtCommitReturnsHistoricBytes(@TempDir Path root) throws Exception {
         ProjectRepoService s = seeded(root);
         String first = s.log(7L, "HEAD", 1).get(0).sha();
