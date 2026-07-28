@@ -48,3 +48,14 @@ cp manifest.json target/hello-plugin-1.0.0.jar <后端工作目录>/plugins/hell
 2. 在 `permissions` 中如实声明需要的能力（`file_read` / `file_write` / `network` / `editor`）；
 3. 修改/新增带 `@Tool` 注解的工具类（无参构造、方法名唯一）；
 4. `pom.xml` 的 `artifactId/version` 与 `manifest.json` 的 `backendJars` 文件名保持一致。
+
+## 发布到插件广场
+
+本示例是仓库内的最小参考。要把插件发到线上供他人安装，走官网的提交与审核流程：
+
+- 开发指南（含打包、审核标准、驳回情形）：<https://www.aiworkdeck.com/zh/plugins/develop>
+- 模板工程下载：<https://www.aiworkdeck.com/api/plugins/template>
+- 提交入口：<https://www.aiworkdeck.com/zh/plugins/submit>
+
+官网那份模板与本目录同源，内容有出入时以 `aiworkdeckweb/lib/plugin-template.ts` 为准
+（外部开发者拿不到本私有仓库，只能看到官网那份）。

@@ -3,13 +3,20 @@
   "name": "Hello 示例插件",
   "version": "1.0.0",
   "description": "演示插件规范 v1 的最小示例：提供文本回显与字数统计两个 AI 工具。",
-  "icon": "🔌",
   "author": "AI Workdeck",
   "homepage": "https://github.com/zeweihan/checkba_cloud",
   "permissions": [],
   "tools": [
-    { "name": "helloEcho", "description": "原样回显输入文本，用于验证插件链路" },
-    { "name": "helloWordCount", "description": "统计输入文本的字符数与词数" }
+    {
+      "name": "helloEcho",
+      "description": "原样回显输入文本，用于验证插件链路"
+    },
+    {
+      "name": "helloWordCount",
+      "description": "统计输入文本的字符数与词数"
+    }
   ],
-  "backendJars": ["hello-plugin-1.0.0.jar"]
+  "backendJars": [
+    "hello-plugin-1.0.0.jar"
+  ]
 }
