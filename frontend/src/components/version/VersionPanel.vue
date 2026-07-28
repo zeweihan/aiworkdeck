@@ -2,6 +2,11 @@
   <view class="version-panel">
     <view v-if="loading" class="version-empty">正在读取版本记录…</view>
 
+    <view v-else-if="loadError" class="version-error">
+      <view class="version-error-desc">版本记录读取失败，请稍后重试。</view>
+      <view class="awd-btn awd-btn-primary" @tap="refresh">重试</view>
+    </view>
+
     <view v-else-if="!enabled" class="version-intro">
       <view class="version-intro-title">本项目还没有开启版本记录</view>
       <view class="version-intro-desc">
@@ -17,7 +22,7 @@
         @ended="refresh"
         @discarded="refresh"
       />
-      <VersionTimeline :project-id="projectId" :key="timelineKey" />
+      <VersionTimeline :project-id="projectId" :key="timelineKey" @reverted="refresh" />
     </template>
   </view>
 </template>
@@ -39,10 +44,12 @@ export default {
   data() {
     return {
       loading: true,
+      loadError: false,
       enabled: false,
       working: false,
       changedCount: 0,
       timelineKey: 0,
+      busy: false,
     }
   },
   mounted() {
@@ -58,18 +65,27 @@ export default {
         this.working = !!d.working
         this.changedCount = d.changedCount || 0
         this.timelineKey += 1
+        this.loadError = false
       } catch (e) {
+        // 读取失败绝不能落到"未开启"引导页——那会让律师误以为从没开过版本记录，
+        // 去重复点开启。宁可显示可区分的错误态，保留 enabled 的上一次已知值。
         console.warn('[Version] 读取状态失败', e)
+        this.loadError = true
+        uni.showToast({ title: '读取失败，请稍后重试', icon: 'none' })
       } finally {
         this.loading = false
       }
     },
     async enable() {
+      if (this.busy) return
+      this.busy = true
       try {
         await enableVersionControl(this.projectId)
         await this.refresh()
       } catch (e) {
         uni.showToast({ title: '开启失败，请稍后重试', icon: 'none' })
+      } finally {
+        this.busy = false
       }
     },
   },
@@ -82,6 +98,8 @@ export default {
 .version-intro { padding: 32rpx 24rpx; }
 .version-intro-title { font-size: 30rpx; font-weight: 600; margin-bottom: 12rpx; }
 .version-intro-desc { font-size: 26rpx; color: #666; line-height: 1.6; margin-bottom: 24rpx; }
+.version-error { padding: 32rpx 24rpx; }
+.version-error-desc { font-size: 26rpx; color: #b23; line-height: 1.6; margin-bottom: 24rpx; }
 
 /* awd-* 没有集中定义，各组件 scoped 内各自定义 */
 .awd-btn {

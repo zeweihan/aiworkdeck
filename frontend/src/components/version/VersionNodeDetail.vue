@@ -6,7 +6,11 @@
       </view>
       <view class="awd-body">
         <view class="detail-meta">{{ version.authorName }} · {{ when }}</view>
-        <view v-if="!changes.length" class="detail-empty">这一版没有文件改动</view>
+        <view v-if="loadError" class="detail-error">
+          <text class="detail-error-desc">这一版的改动读取失败，请稍后重试。</text>
+          <text class="detail-error-retry" @tap="load">重试</text>
+        </view>
+        <view v-else-if="!changes.length" class="detail-empty">这一版没有文件改动</view>
         <view v-for="c in changes" :key="c.path" class="detail-change">
           <text class="change-type" :class="'type-' + c.type">{{ typeLabel(c.type) }}</text>
           <text class="change-path">{{ c.path }}</text>
@@ -31,7 +35,7 @@ export default {
   },
   emits: ['close', 'reverted'],
   data() {
-    return { changes: [] }
+    return { changes: [], loadError: false }
   },
   computed: {
     when() {
@@ -48,8 +52,11 @@ export default {
       try {
         const res = await getVersionChanges(this.projectId, this.version.sha)
         this.changes = ((res && res.data && res.data.changes) || [])
+        this.loadError = false
       } catch (e) {
         console.warn('[Version] 读取变更失败', e)
+        this.loadError = true
+        uni.showToast({ title: '读取失败，请稍后重试', icon: 'none' })
       }
     },
     typeLabel(t) {
@@ -85,6 +92,9 @@ export default {
 .awd-body { padding: 24rpx; overflow-y: auto; flex: 1; }
 .detail-meta { font-size: 24rpx; color: #999; margin-bottom: 16rpx; }
 .detail-empty { font-size: 26rpx; color: #999; }
+.detail-error { display: flex; align-items: center; gap: 16rpx; }
+.detail-error-desc { font-size: 26rpx; color: #b23; }
+.detail-error-retry { font-size: 26rpx; color: #12344D; text-decoration: underline; }
 .detail-change { display: flex; gap: 12rpx; padding: 8rpx 0; }
 .change-type { font-size: 23rpx; flex-shrink: 0; }
 .type-ADD { color: #2a7; }

@@ -1,6 +1,10 @@
 <template>
   <scroll-view class="timeline" scroll-y>
-    <view v-if="!versions.length" class="timeline-empty">还没有任何版本记录</view>
+    <view v-if="loadError" class="timeline-error">
+      <text class="timeline-error-desc">版本记录读取失败，请稍后重试。</text>
+      <text class="timeline-error-retry" @tap="load">重试</text>
+    </view>
+    <view v-else-if="!versions.length" class="timeline-empty">还没有任何版本记录</view>
 
     <view
       v-for="group in grouped"
@@ -56,7 +60,7 @@ export default {
   },
   emits: ['reverted'],
   data() {
-    return { versions: [], expanded: {}, selected: null }
+    return { versions: [], expanded: {}, selected: null, loadError: false }
   },
   computed: {
     // 工作段是主线节点，自动存档折进它下面。
@@ -82,8 +86,11 @@ export default {
       try {
         const res = await getVersionTimeline(this.projectId)
         this.versions = ((res && res.data && res.data.versions) || [])
+        this.loadError = false
       } catch (e) {
         console.warn('[Version] 读取时间线失败', e)
+        this.loadError = true
+        uni.showToast({ title: '读取失败，请稍后重试', icon: 'none' })
       }
     },
     titleOf(v) {
@@ -112,6 +119,9 @@ export default {
 <style lang="scss" scoped>
 .timeline { flex: 1; padding: 12rpx 0; }
 .timeline-empty { padding: 24rpx; color: #999; font-size: 26rpx; }
+.timeline-error { padding: 24rpx; display: flex; align-items: center; gap: 16rpx; }
+.timeline-error-desc { font-size: 26rpx; color: #b23; }
+.timeline-error-retry { font-size: 26rpx; color: #12344D; text-decoration: underline; }
 .timeline-node { position: relative; padding: 16rpx 20rpx 16rpx 40rpx; }
 .node-line {
   position: absolute; left: 20rpx; top: 0; bottom: 0; width: 2rpx; background: #e4e4e4;

@@ -7,7 +7,7 @@
       <view class="awd-btn awd-btn-danger session-btn" @tap="confirmDiscard">丢弃</view>
     </template>
     <template v-else>
-      <text class="session-text session-idle">主线</text>
+      <text class="session-text session-idle">当前没有进行中的工作</text>
     </template>
 
     <view v-if="naming" class="awd-mask" @tap.self="naming = false">
@@ -67,11 +67,15 @@ export default {
         content: '本次工作的所有改动都会被撤销，回到开始工作之前的样子。确定吗？',
         success: async (r) => {
           if (!r.confirm) return
+          if (this.busy) return
+          this.busy = true
           try {
             await discardWorkSession(this.projectId)
             this.$emit('discarded')
           } catch (e) {
             uni.showToast({ title: '丢弃失败，请稍后重试', icon: 'none' })
+          } finally {
+            this.busy = false
           }
         },
       })
