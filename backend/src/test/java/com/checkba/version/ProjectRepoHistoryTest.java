@@ -66,6 +66,24 @@ class ProjectRepoHistoryTest {
                 c -> c.path().equals("新增.txt") && c.type() == FileChange.Type.ADD));
     }
 
+    /**
+     * 回归测试：根提交（初始版本）没有父提交，形如 sha^ 的 fromRef resolve 不出来。
+     * 原实现遇到 resolve 失败就直接返回空列表——但初始版本明明包含文件，
+     * VersionNodeDetail 展开根节点时会显示「这一版没有文件改动」，具有误导性。
+     * 修复后应与空树比较，让根提交自己的文件以 ADD 呈现。
+     */
+    @Test
+    void diffNameStatusOnRootCommitComparesAgainstEmptyTree(@TempDir Path root) throws Exception {
+        ProjectRepoService s = seeded(root);
+        String sha = s.log(7L, "HEAD", 1).get(0).sha();
+
+        List<FileChange> changes = s.diffNameStatus(7L, sha + "^", sha);
+
+        assertEquals(1, changes.size());
+        assertTrue(changes.stream().anyMatch(
+                c -> c.path().equals("合同.txt") && c.type() == FileChange.Type.ADD));
+    }
+
     @Test
     void pendingChangesReturnsEmptyWhenWorkingTreeClean(@TempDir Path root) throws Exception {
         ProjectRepoService s = seeded(root);

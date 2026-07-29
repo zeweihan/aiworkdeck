@@ -16,7 +16,9 @@ import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
+import org.eclipse.jgit.treewalk.AbstractTreeIterator;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
+import org.eclipse.jgit.treewalk.EmptyTreeIterator;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.springframework.stereotype.Service;
 
@@ -199,12 +201,20 @@ public class ProjectRepoService {
              RevWalk walk = new RevWalk(repo)) {
             ObjectId from = repo.resolve(fromRef);
             ObjectId to = repo.resolve(toRef);
-            if (from == null || to == null) return out;
+            if (to == null) return out;
 
-            CanonicalTreeParser fromTree = new CanonicalTreeParser();
+            AbstractTreeIterator fromTree;
             CanonicalTreeParser toTree = new CanonicalTreeParser();
             try (ObjectReader reader = repo.newObjectReader()) {
-                fromTree.reset(reader, walk.parseCommit(from).getTree());
+                if (from == null) {
+                    // 根提交没有父版本，形如 sha^ 的 fromRef resolve 不出来——
+                    // 与空树比较，根提交自己的文件才会以 ADD 呈现，而不是静默返回空列表。
+                    fromTree = new EmptyTreeIterator();
+                } else {
+                    CanonicalTreeParser t = new CanonicalTreeParser();
+                    t.reset(reader, walk.parseCommit(from).getTree());
+                    fromTree = t;
+                }
                 toTree.reset(reader, walk.parseCommit(to).getTree());
 
                 for (DiffEntry d : git.diff().setOldTree(fromTree).setNewTree(toTree).call()) {

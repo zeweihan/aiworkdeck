@@ -140,13 +140,18 @@ public class ProjectRagService {
             return paths
                 .filter(Files::isRegularFile)
                 .filter(path -> {
-                    // Avoid scanning hidden files or temporary files
-                    String name = path.getFileName().toString();
-                    if (name.startsWith(".")) return false;
-                    
+                    // Avoid scanning hidden files or temporary files. .awd/tree.json itself
+                    // doesn't start with a dot, but its parent directory .awd/ does — a
+                    // filename-only check misses it, so walk every path segment relative to
+                    // the scan root (律师不可见的内部清单不能被 RAG 索引到).
+                    Path rel = dir.relativize(path);
+                    for (Path segment : rel) {
+                        if (segment.toString().startsWith(".")) return false;
+                    }
+
                     // If prefix is specified, filter by it
                     if (filenamePrefix != null) {
-                        return name.startsWith(filenamePrefix);
+                        return path.getFileName().toString().startsWith(filenamePrefix);
                     }
                     return true;
                 })

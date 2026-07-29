@@ -41,7 +41,11 @@ public class WorkSessionService {
     /** 防抖静默期。测试里调短或调长以取得确定性。 */
     private long debounceMillis = 2 * 60 * 1000L;
 
+    /** 空闲多久没有变更信号就自动结束工作段（spec 5.2）。测试里调短取得确定性。 */
+    private long idleEndMillis = 30 * 60 * 1000L;
+
     private final Map<Long, ScheduledFuture<?>> pending = new ConcurrentHashMap<>();
+    private final Map<Long, ScheduledFuture<?>> idleTimers = new ConcurrentHashMap<>();
     private final Map<Long, PendingActor> actors = new ConcurrentHashMap<>();
 
     /**
@@ -70,6 +74,8 @@ public class WorkSessionService {
 
     public void setDebounceMillis(long millis) { this.debounceMillis = millis; }
 
+    public void setIdleEndMillis(long millis) { this.idleEndMillis = millis; }
+
     /**
      * 开启版本记录。ProjectRepoService 只认识 Git，不认识文件树清单，
      * 所以清单要在这里、调用 repoService.init 之前先写进工作区——
@@ -78,9 +84,15 @@ public class WorkSessionService {
      * 只此一笔提交，repoService.init 本身不认识清单也不需要改。
      */
     public void enableVersionRecording(long projectId, String authorName, String authorEmail) {
-        if (repoService.isInitialized(projectId)) return;
-        manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-        repoService.init(projectId, authorName, authorEmail);
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (repoService.isInitialized(projectId)) return;
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            repoService.init(projectId, authorName, authorEmail);
+        } finally {
+            lock.unlock();
+        }
     }
 
     public Optional<WorkSession> activeSession(long projectId) {
@@ -138,6 +150,34 @@ public class WorkSessionService {
                 },
                 Instant.now().plusMillis(debounceMillis));
         pending.put(projectId, next);
+
+        // spec 5.2 三个结束触发之一：30 分钟无变更信号自动结束工作段。
+        // 每次信号都重排——只要还有动静就不断推迟，真正空闲满时长才触发。
+        ScheduledFuture<?> prevIdle = idleTimers.remove(projectId);
+        if (prevIdle != null) prevIdle.cancel(false);
+        ScheduledFuture<?> idleFuture = taskScheduler.schedule(
+                () -> autoEndIfIdle(projectId),
+                Instant.now().plusMillis(idleEndMillis));
+        idleTimers.put(projectId, idleFuture);
+    }
+
+    /** 空闲定时器触发：仍在工作中的话自动结束，标题走默认命名。任何异常只记日志。 */
+    private void autoEndIfIdle(long projectId) {
+        idleTimers.remove(projectId);
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (activeSession(projectId).isEmpty()) return;
+            PendingActor a = actors.get(projectId);
+            Long userId = a != null ? a.userId() : null;
+            String userName = a != null ? a.userName() : null;
+            endSession(projectId, userId, userName, null);
+            log.info("空闲超时自动结束一段工作: project={}", projectId);
+        } catch (Exception e) {
+            log.warn("空闲自动结束工作失败: project={}", projectId, e);
+        } finally {
+            lock.unlock();
+        }
     }
 
     private WorkSession ensureSession(long projectId, Long userId) {
@@ -156,6 +196,22 @@ public class WorkSessionService {
         s.setUserId(userId);
         log.info("开始一段工作: project={}, branch={}", projectId, branch);
         return sessionRepository.save(s);
+    }
+
+    /**
+     * 供 /status 只读查询用：repoService.pendingChanges 内部会做两次 git add，
+     * 与防抖定时器的 commitNow 并发时会抢同一把 .git/index.lock，谁输谁炸。
+     * 包一层锁，职责只在这层——pendingChanges 本身不加锁（commitNow 内部会调用它，
+     * 锁虽可重入但保持「谁改仓库状态谁负责加锁」的边界更清楚）。
+     */
+    public List<FileChange> pendingChangesLocked(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            return repoService.pendingChanges(projectId);
+        } finally {
+            lock.unlock();
+        }
     }
 
     /** 立即落一笔自动存档。无变更时返回 null。 */
@@ -221,6 +277,14 @@ public class WorkSessionService {
                     .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
 
             cancelPending(projectId);
+            // 先把一切（含未提交、含 untracked 新文件）收进这条即将被删除的分支——
+            // 不这样做的话：(a) 已存档后又编辑过的文件在工作区里是脏的，checkout 主线
+            // 要删它会被 JGit 拒绝（CheckoutConflictException）；(b) 最后一次自动存档
+            // 之后新建的 untracked 文件 checkout 根本不会碰，会留在磁盘上。这一笔提交
+            // 随分支一起删掉，不影响「历史永不重写」——它从未合并进主线。
+            // WorkSession 只存了 userId、没存 userName，JGit 的 PersonIdent 又不接受
+            // null 作者名，这里用一个占位名——这笔提交的署名不会被任何人看到。
+            commitNow(projectId, userId, "废弃的工作", null);
             repoService.checkoutBranch(projectId, repoService.mainBranch());
             repoService.deleteBranch(projectId, s.getBranchName(), true);
             syncManifestFromRef(projectId, "HEAD");
@@ -265,6 +329,8 @@ public class WorkSessionService {
     private void cancelPending(long projectId) {
         ScheduledFuture<?> f = pending.remove(projectId);
         if (f != null) f.cancel(false);
+        ScheduledFuture<?> idle = idleTimers.remove(projectId);
+        if (idle != null) idle.cancel(false);
         actors.remove(projectId);
     }
 

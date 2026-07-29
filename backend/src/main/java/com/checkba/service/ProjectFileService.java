@@ -30,16 +30,19 @@ public class ProjectFileService {
     private final ProjectRagService projectRagService;
     private final StorageServiceFactory storageServiceFactory;
     private final WorkSessionService workSessionService;
+    private final UserService userService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectFileService(ProjectFileRepository projectFileRepository,
                               ProjectRagService projectRagService,
                               StorageServiceFactory storageServiceFactory,
-                              WorkSessionService workSessionService) {
+                              WorkSessionService workSessionService,
+                              UserService userService) {
         this.projectFileRepository = projectFileRepository;
         this.projectRagService = projectRagService;
         this.storageServiceFactory = storageServiceFactory;
         this.workSessionService = workSessionService;
+        this.userService = userService;
     }
 
     /**
@@ -1178,7 +1181,14 @@ public class ProjectFileService {
     }
 
     private String resolveUserName(Long userId) {
-        return userId == null ? "用户" : ("user-" + userId);
+        if (userId == null) return "用户";
+        try {
+            var u = userService.getUserById(userId);
+            if (u != null && u.getUsername() != null) return u.getUsername();
+        } catch (Exception e) {
+            log.warn("解析用户名失败: userId={}", userId, e);
+        }
+        return "用户";
     }
 }
 

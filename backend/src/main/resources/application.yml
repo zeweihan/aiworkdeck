@@ -4,6 +4,10 @@ server:
 spring:
   application:
     name: checkba-backend
+  task:
+    scheduling:
+      pool:
+        size: 4
   datasource:
     # PostgreSQL with pgvector
     driver-class-name: org.postgresql.Driver

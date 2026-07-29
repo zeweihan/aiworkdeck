@@ -141,6 +141,51 @@ class WorkSessionServiceTest {
                 sessions.values().iterator().next().getStatus());
     }
 
+    /**
+     * 回归测试：discardSession 之前，工作区在最后一次自动存档之后又被编辑过（未提交），
+     * 是脏的。原实现直接 checkoutBranch(master) 会被 JGit 拒绝（CheckoutConflictException），
+     * 律师看到「丢弃失败」且卡在工作段里出不去。修复后 discardSession 会先把一切
+     * （含这份脏改动）收进即将被删除的分支，checkout 时工作区已经干净。
+     */
+    @Test
+    void discardSessionHandlesDirtyEditAfterLastAutoSave() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "已存档的版本");
+        svc.commitNow(7L, 1L, "韩泽伟", "自动存档");
+
+        // 存档之后又编辑了同一文件，但没有再提交——此时工作区是脏的
+        Files.writeString(root.resolve("projects/7/合同.txt"), "存档之后又改了但没保存");
+
+        assertDoesNotThrow(() -> svc.discardSession(7L, 1L),
+                "丢弃不应该因为工作区存在未提交的脏改动而失败");
+
+        assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")),
+                "丢弃后应回到主线内容，脏改动也要被撤销");
+        assertTrue(svc.activeSession(7L).isEmpty());
+    }
+
+    /**
+     * 回归测试：最后一次自动存档之后新建的文件是 untracked，原实现的
+     * checkoutBranch 根本不会碰它，会残留在磁盘上（清单同步把 DB 行软删之后，
+     * 下一段工作的 git add . 又会把它重新捡回来）。修复后 discardSession 会先把
+     * 这个 untracked 文件也提交进即将被删除的分支，删分支即删干净。
+     */
+    @Test
+    void discardSessionRemovesUntrackedFileCreatedAfterLastAutoSave() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "已存档的版本");
+        svc.commitNow(7L, 1L, "韩泽伟", "自动存档");
+
+        Path newFile = root.resolve("projects/7/新建草稿.txt");
+        Files.writeString(newFile, "存档之后新建的文件，从未提交过");
+        assertTrue(Files.exists(newFile), "测试前置条件：新文件应已落到磁盘");
+
+        svc.discardSession(7L, 1L);
+
+        assertFalse(Files.exists(newFile),
+                "丢弃后，存档之后新建的 untracked 文件应该从磁盘上消失");
+    }
+
     @Test
     void revertCreatesNewVersionRatherThanRewritingHistory() throws Exception {
         String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
@@ -187,6 +232,51 @@ class WorkSessionServiceTest {
         f.setAccessible(true);
         Map<Long, ?> pending = (Map<Long, ?>) f.get(target);
         return pending.containsKey(projectId);
+    }
+
+    /**
+     * spec 5.2 规定的三个结束触发之一：30 分钟无变更信号自动结束工作段。
+     * 把阈值调到 200ms 取得确定性，用有界轮询等待触发，而不是裸 sleep 赌时机。
+     */
+    @Test
+    void idleTimeoutAutoEndsSessionWhenNoFurtherActivity() throws Exception {
+        svc.setIdleEndMillis(200);
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline && svc.activeSession(7L).isPresent()) {
+            Thread.sleep(20);
+        }
+
+        assertTrue(svc.activeSession(7L).isEmpty(), "空闲超时后应自动结束工作段");
+        WorkSession s = sessions.values().iterator().next();
+        assertEquals(WorkSession.Status.MERGED, s.getStatus());
+        assertNotNull(s.getTitle());
+        assertFalse(s.getTitle().isBlank(), "空闲自动结束也要走默认命名");
+    }
+
+    /** 回归测试：手动 endSession 必须像 cancelPending 的其他调用点一样取消空闲定时器。 */
+    @Test
+    void manualEndSessionCancelsTheIdleTimer() throws Exception {
+        svc.setIdleEndMillis(60_000);
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        assertTrue(idleTimerArmed(svc, 7L), "onChangeSignal 之后应已武装空闲定时器，这是本测试的前提");
+
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+        svc.endSession(7L, 1L, "韩泽伟", "手动结束");
+
+        assertFalse(idleTimerArmed(svc, 7L), "手动结束后空闲定时器必须被取消，否则之后还会被空跑一次");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static boolean idleTimerArmed(WorkSessionService target, long projectId) throws Exception {
+        Field f = WorkSessionService.class.getDeclaredField("idleTimers");
+        f.setAccessible(true);
+        Map<Long, ?> idleTimers = (Map<Long, ?>) f.get(target);
+        return idleTimers.containsKey(projectId);
     }
 
     /**

@@ -49,7 +49,7 @@ public class VersionController {
             var active = sessionService.activeSession(projectId);
             data.put("working", active.isPresent());
             data.put("sessionTitle", active.map(WorkSession::getTitle).orElse(null));
-            data.put("changedCount", repoService.pendingChanges(projectId).stream()
+            data.put("changedCount", sessionService.pendingChangesLocked(projectId).stream()
                     .filter(c -> !c.path().startsWith(".awd/")).count());
             data.put("pendingRecovery", sessionService.pendingRecovery(projectId).isPresent());
         } else {
