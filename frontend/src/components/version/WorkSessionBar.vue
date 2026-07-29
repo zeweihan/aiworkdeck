@@ -56,7 +56,7 @@ export default {
         this.naming = false
         this.$emit('ended')
       } catch (e) {
-        uni.showToast({ title: '本次工作还没能收尾，你的改动都还在', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || '本次工作还没能收尾，你的改动都还在', icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -73,7 +73,7 @@ export default {
             await discardWorkSession(this.projectId)
             this.$emit('discarded')
           } catch (e) {
-            uni.showToast({ title: '丢弃失败，请稍后重试', icon: 'none' })
+            uni.showToast({ title: (e && e.message) || '丢弃失败，请稍后重试', icon: 'none' })
           } finally {
             this.busy = false
           }

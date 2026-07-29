@@ -72,7 +72,7 @@ export default {
             await revertToVersion(this.projectId, this.version.sha)
             this.$emit('reverted')
           } catch (e) {
-            uni.showToast({ title: '退回失败，请稍后重试', icon: 'none' })
+            uni.showToast({ title: (e && e.message) || '退回失败，请稍后重试', icon: 'none' })
           }
         },
       })

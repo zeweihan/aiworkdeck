@@ -83,7 +83,7 @@ export default {
         await enableVersionControl(this.projectId)
         await this.refresh()
       } catch (e) {
-        uni.showToast({ title: '开启失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || '开启失败，请稍后重试', icon: 'none' })
       } finally {
         this.busy = false
       }
