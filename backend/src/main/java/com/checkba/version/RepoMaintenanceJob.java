@@ -16,11 +16,14 @@ public class RepoMaintenanceJob {
 
     private final ProjectRepository projectRepository;
     private final ProjectRepoService repoService;
+    private final WorkSessionService workSessionService;
 
     public RepoMaintenanceJob(ProjectRepository projectRepository,
-                              ProjectRepoService repoService) {
+                              ProjectRepoService repoService,
+                              WorkSessionService workSessionService) {
         this.projectRepository = projectRepository;
         this.repoService = repoService;
+        this.workSessionService = workSessionService;
     }
 
     @Scheduled(cron = "0 30 3 * * *")
@@ -28,7 +31,10 @@ public class RepoMaintenanceJob {
         projectRepository.findAll().forEach(p -> {
             if (p.getId() == null || !repoService.isInitialized(p.getId())) return;
             try {
-                repoService.gc(p.getId());
+                // 走 WorkSessionService 的按项目锁，不直接调 repoService.gc——
+                // 线程池已从 1 提到 4，gc 不再是唯一的锁外仓库修改者，
+                // 可能跟自动存档/合并并发抢 .git 索引。
+                workSessionService.gcLocked(p.getId());
             } catch (Exception e) {
                 log.warn("仓库维护失败: project={}", p.getId(), e);
             }

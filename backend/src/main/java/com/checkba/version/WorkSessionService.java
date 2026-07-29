@@ -126,9 +126,10 @@ public class WorkSessionService {
         if (!repoService.isInitialized(projectId)) return;
 
         ReentrantLock lock = repoLock(projectId);
+        WorkSession session;
         lock.lock();
         try {
-            ensureSession(projectId, userId);
+            session = ensureSession(projectId, userId, userName);
         } finally {
             lock.unlock();
         }
@@ -153,21 +154,34 @@ public class WorkSessionService {
 
         // spec 5.2 三个结束触发之一：30 分钟无变更信号自动结束工作段。
         // 每次信号都重排——只要还有动静就不断推迟，真正空闲满时长才触发。
+        armIdleTimer(projectId, session.getId());
+    }
+
+    /**
+     * 武装（或重新武装）空闲定时器，绑定当时的 sessionId——触发时如果活跃工作段
+     * 已经不是这个 id，说明是陈旧定时器，直接放弃，不去结束一个它不认识的新工作段。
+     */
+    private void armIdleTimer(long projectId, Long sessionId) {
         ScheduledFuture<?> prevIdle = idleTimers.remove(projectId);
         if (prevIdle != null) prevIdle.cancel(false);
         ScheduledFuture<?> idleFuture = taskScheduler.schedule(
-                () -> autoEndIfIdle(projectId),
+                () -> autoEndIfIdle(projectId, sessionId),
                 Instant.now().plusMillis(idleEndMillis));
         idleTimers.put(projectId, idleFuture);
     }
 
     /** 空闲定时器触发：仍在工作中的话自动结束，标题走默认命名。任何异常只记日志。 */
-    private void autoEndIfIdle(long projectId) {
+    private void autoEndIfIdle(long projectId, Long armedSessionId) {
         idleTimers.remove(projectId);
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
-            if (activeSession(projectId).isEmpty()) return;
+            Optional<WorkSession> current = activeSession(projectId);
+            if (current.isEmpty()) return;
+            if (armedSessionId != null && !armedSessionId.equals(current.get().getId())) {
+                // 陈旧定时器：它武装时对应的工作段已经不是现在这一段，不能错杀新段。
+                return;
+            }
             PendingActor a = actors.get(projectId);
             Long userId = a != null ? a.userId() : null;
             String userName = a != null ? a.userName() : null;
@@ -180,7 +194,15 @@ public class WorkSessionService {
         }
     }
 
-    private WorkSession ensureSession(long projectId, Long userId) {
+    /**
+     * 没有 ACTIVE 工作段则建分支并切过去。**任何隐式开段的入口都会走到这里**——
+     * onChangeSignal / commitNow（进而 endSession/discardSession/revertTo）——
+     * 所以「真正创建新工作段」这个分支必须顺手武装空闲定时器，否则由 commitNow
+     * 间接触发的隐式开段（revertTo 就是这样）永远不会被空闲自动结束覆盖到，
+     * 工作会一直挂着「工作中」。已存在 ACTIVE 段时直接复用，不重新武装——
+     * 那种情况下定时器该不该动由调用方自己的重排逻辑负责（见 onChangeSignal）。
+     */
+    private WorkSession ensureSession(long projectId, Long userId, String userName) {
         Optional<WorkSession> existing = activeSession(projectId);
         if (existing.isPresent()) return existing.get();
 
@@ -194,8 +216,12 @@ public class WorkSessionService {
         s.setStartedAt(LocalDateTime.now());
         s.setStatus(WorkSession.Status.ACTIVE);
         s.setUserId(userId);
+        WorkSession saved = sessionRepository.save(s);
         log.info("开始一段工作: project={}, branch={}", projectId, branch);
-        return sessionRepository.save(s);
+
+        actors.put(projectId, new PendingActor(userId, userName));
+        armIdleTimer(projectId, saved.getId());
+        return saved;
     }
 
     /**
@@ -214,13 +240,27 @@ public class WorkSessionService {
         }
     }
 
+    /**
+     * 供 RepoMaintenanceJob 的每日 GC 用：gc 本身不改可达历史，但线程池不再是 1，
+     * 可能跟自动存档/合并并发抢 .git 索引，同样要过按项目维度的这把锁。
+     */
+    public void gcLocked(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            repoService.gc(projectId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /** 立即落一笔自动存档。无变更时返回 null。 */
     public String commitNow(long projectId, Long userId, String userName, String message) {
         if (!repoService.isInitialized(projectId)) return null;
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
-            ensureSession(projectId, userId);
+            ensureSession(projectId, userId, userName);
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             String msg = message != null ? message : describePendingChanges(projectId);
             return repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
@@ -277,6 +317,16 @@ public class WorkSessionService {
                     .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
 
             cancelPending(projectId);
+
+            // 残局修复：endSession 有一条路径会先 checkout 主线、再让合并异常直接
+            // 逃逸出去——session 还是 ACTIVE，但 HEAD 已经在主线上。这种状态下如果
+            // 直接往下走，commitNow 的预提交会落在当前 HEAD（也就是主线）上，
+            // 一个署名「废弃的工作」的提交就永久污染了主线（历史永不重写，删不掉）。
+            // 所以这里先确认当前分支就是这段工作自己的分支，不是的话切回去再继续。
+            if (!s.getBranchName().equals(repoService.currentBranch(projectId))) {
+                repoService.checkoutBranch(projectId, s.getBranchName());
+            }
+
             // 先把一切（含未提交、含 untracked 新文件）收进这条即将被删除的分支——
             // 不这样做的话：(a) 已存档后又编辑过的文件在工作区里是脏的，checkout 主线
             // 要删它会被 JGit 拒绝（CheckoutConflictException）；(b) 最后一次自动存档

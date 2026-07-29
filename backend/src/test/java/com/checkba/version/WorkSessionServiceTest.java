@@ -9,6 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -356,5 +357,175 @@ class WorkSessionServiceTest {
         assertFalse(b.isAlive(), "线程 B 应该已经结束");
         assertTrue(errors.isEmpty(), "两个线程都不应该抛异常: " + errors);
         assertEquals(2, commitAllCalls.get(), "两次 commitNow 最终都应该各自跑到 commitAll，只是不能同时跑");
+    }
+
+    /**
+     * 修复回归测试：revertTo 先 cancelPending 再靠 commitNow -> ensureSession 隐式开
+     * 一段新工作（典型场景：上一段工作已经 endSession 结束，律师这才点「退回到早先
+     * 的版本」）。原实现里空闲定时器的武装只发生在 onChangeSignal 的尾部，revertTo
+     * 这条隐式开段路径没人重新武装，退回后的新工作段会永远挂着「工作中」。
+     * 修复后 ensureSession 自己在「真正创建新工作段」的分支里武装，任何隐式开段的
+     * 入口（包括 revertTo）都自动被覆盖。
+     */
+    @Test
+    void revertToArmsIdleTimerForImplicitlyOpenedSession() throws Exception {
+        String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+        svc.endSession(7L, 1L, "韩泽伟", "第一次工作");
+
+        assertFalse(idleTimerArmed(svc, 7L),
+                "结束工作后不应该还有武装的空闲定时器，这是本测试的前提");
+
+        svc.revertTo(7L, firstSha, 1L, "韩泽伟");
+
+        assertTrue(idleTimerArmed(svc, 7L),
+                "revertTo 隐式开启的新工作段必须重新武装空闲定时器，否则这段工作永远不会被空闲自动结束覆盖到");
+    }
+
+    /**
+     * 修复回归测试：存在一个可达状态——session 仍 ACTIVE，但 HEAD 已经在 master 上
+     * （endSession checkout 主线之后、merge 抛出异常直接逃逸时会落到这个残局）。
+     * 原实现的 discardSession 不检查当前分支，预提交会直接落在当前 HEAD 也就是
+     * master 上，一个署名「废弃的工作」的提交就永久污染了主线（历史永不重写，
+     * 从此删不掉）。这里直接模拟这个残局状态（不用真的构造 merge 失败），验证
+     * discardSession 之后 master 的提交数不变、丢弃正常收尾。
+     */
+    @Test
+    void discardSessionDoesNotLeakACommitOntoMasterWhenHeadIsAlreadyThere() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "半途改动");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+
+        // 模拟 endSession 在 checkout master 之后、merge 抛异常前退出的残局：
+        // session 仍 ACTIVE，但 HEAD 已经在 master 上。
+        repoSvc.checkoutBranch(7L, repoSvc.mainBranch());
+
+        int masterLogBefore = repoSvc.log(7L, repoSvc.mainBranch(), 100).size();
+
+        assertDoesNotThrow(() -> svc.discardSession(7L, 1L),
+                "discardSession 必须能处理 HEAD 已经在 master 上的残局状态");
+
+        int masterLogAfter = repoSvc.log(7L, repoSvc.mainBranch(), 100).size();
+        assertEquals(masterLogBefore, masterLogAfter,
+                "丢弃的预提交绝不能落到 master 上，master 的提交数不应该有任何变化");
+        assertEquals(repoSvc.mainBranch(), repoSvc.currentBranch(7L));
+        assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")),
+                "丢弃后应回到主线内容");
+        assertTrue(svc.activeSession(7L).isEmpty());
+        assertEquals(WorkSession.Status.DISCARDED,
+                sessions.values().iterator().next().getStatus());
+    }
+
+    /**
+     * 修复回归测试：autoEndIfIdle 只判断「还有没有 ACTIVE 段」，不判断是不是当初
+     * 武装它的那一段——用反射直接调用私有方法、传一个不属于当前活跃段的 sessionId，
+     * 模拟「陈旧定时器 vs 新工作段」的极小窗口场景，断言当前这段真实的工作不会被
+     * 错杀。
+     */
+    @Test
+    void autoEndIfIdleIgnoresATimerArmedForADifferentSession() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        WorkSession real = svc.activeSession(7L).orElseThrow();
+        long staleSessionId = real.getId() + 999L;
+
+        invokeAutoEndIfIdle(svc, 7L, staleSessionId);
+
+        assertTrue(svc.activeSession(7L).isPresent(),
+                "陈旧定时器不应该结束一个不是它当初武装的工作段");
+        assertEquals(WorkSession.Status.ACTIVE,
+                svc.activeSession(7L).orElseThrow().getStatus());
+    }
+
+    private static void invokeAutoEndIfIdle(WorkSessionService target, long projectId, Long sessionId)
+            throws Exception {
+        Method m = WorkSessionService.class.getDeclaredMethod("autoEndIfIdle", long.class, Long.class);
+        m.setAccessible(true);
+        m.invoke(target, projectId, sessionId);
+    }
+
+    /** enableVersionRecording 幂等回归测试：连调两次不抛异常，仓库仍然完好可读。 */
+    @Test
+    void enableVersionRecordingIsIdempotent() throws Exception {
+        Files.createDirectories(root.resolve("projects/8"));
+        Files.writeString(root.resolve("projects/8/合同.txt"), "初稿");
+
+        svc.enableVersionRecording(8L, "韩泽伟", "hzw@example.com");
+        assertDoesNotThrow(() -> svc.enableVersionRecording(8L, "韩泽伟", "hzw@example.com"),
+                "重复开启版本记录不应该抛异常");
+
+        List<VersionEntry> log = repoSvc.log(8L, "HEAD", 100);
+        assertEquals(1, log.size(), "重复调用不应该产生多余的初始提交");
+        assertEquals("初稿", Files.readString(root.resolve("projects/8/合同.txt")),
+                "仓库应保持完好可读");
+    }
+
+    /**
+     * 回归测试：RepoMaintenanceJob 改走 WorkSessionService.gcLocked，验证它确实
+     * 跟其他改仓库状态的路径（commitNow 走的同一把 repoLock）互斥——gc 持锁期间，
+     * 另一个线程的 commitNow 不能抢先跑完。
+     */
+    @Test
+    void gcLockedIsMutuallyExclusiveWithCommitNow() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "线程 A 的改动");
+
+        ProjectRepoService spyRepo = spy(repoSvc);
+        AtomicInteger gcCalls = new AtomicInteger();
+        CountDownLatch gcEntered = new CountDownLatch(1);
+        CountDownLatch releaseGc = new CountDownLatch(1);
+
+        doAnswer(invocation -> {
+            gcCalls.incrementAndGet();
+            gcEntered.countDown();
+            assertTrue(releaseGc.await(5, TimeUnit.SECONDS),
+                    "测试主线程没有按预期放行，测试环境本身有问题");
+            return invocation.callRealMethod();
+        }).when(spyRepo).gc(anyLong());
+
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler);
+        lockedSvc.setDebounceMillis(60_000);
+
+        List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
+
+        Thread gcThread = new Thread(() -> {
+            try {
+                lockedSvc.gcLocked(7L);
+            } catch (Throwable t) {
+                errors.add(t);
+            }
+        }, "worksession-test-gc");
+        gcThread.start();
+
+        assertTrue(gcEntered.await(5, TimeUnit.SECONDS), "gc 线程应该已经进入临界区");
+
+        Thread commitThread = new Thread(() -> {
+            try {
+                lockedSvc.commitNow(7L, 1L, "韩泽伟", "并发提交");
+            } catch (Throwable t) {
+                errors.add(t);
+            }
+        }, "worksession-test-commit");
+        commitThread.start();
+
+        // 给 commit 线程一个有界但充裕的窗口去尝试抢入临界区；锁生效的话它进不去，
+        // 应该在这段时间内一直卡在 gcLocked 的锁外面，线程还活着。
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1);
+        while (System.nanoTime() < deadline && gcCalls.get() < 1) {
+            Thread.sleep(10);
+        }
+        assertTrue(commitThread.isAlive(),
+                "gc 持锁期间 commitNow 不应该能跑完——锁应该把它挡在外面");
+
+        releaseGc.countDown();
+        gcThread.join(5_000);
+        commitThread.join(5_000);
+
+        assertFalse(gcThread.isAlive(), "gc 线程应该已经结束");
+        assertFalse(commitThread.isAlive(), "commit 线程应该已经结束");
+        assertTrue(errors.isEmpty(), "两个线程都不应该抛异常: " + errors);
+        assertEquals(1, gcCalls.get());
     }
 }
