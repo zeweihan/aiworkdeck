@@ -1,6 +1,8 @@
 package com.checkba.version;
 
+import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.service.ai.EditorBridgeService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.checkba.storage.StorageProperties;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +40,8 @@ class WorkSessionServiceTest {
     private ProjectTreeManifestService manifestSvc;
     private WorkSessionRepository sessionRepo;
     private ThreadPoolTaskScheduler scheduler;
+    private ProjectFileRepository fileRepo;
+    private EditorBridgeService editorBridge;
 
     @BeforeEach
     void setUp(@TempDir Path tmp) throws Exception {
@@ -50,7 +54,7 @@ class WorkSessionServiceTest {
         repoSvc = new ProjectRepoService(props);
         repoSvc.init(7L, "韩泽伟", "hzw@example.com");
 
-        ProjectFileRepository fileRepo = mock(ProjectFileRepository.class);
+        fileRepo = mock(ProjectFileRepository.class);
         when(fileRepo.findByProjectId(7L)).thenReturn(new ArrayList<>());
         manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
 
@@ -72,8 +76,17 @@ class WorkSessionServiceTest {
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
 
-        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler);
+        editorBridge = mock(EditorBridgeService.class);
+        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, editorBridge, fileRepo);
         svc.setDebounceMillis(60_000); // 测试里不让防抖自己触发，全部手动 commitNow
+    }
+
+    private static ProjectFile projectFile(long projectId, String filePath, String name) {
+        ProjectFile f = new ProjectFile();
+        f.setProjectId(projectId);
+        f.setFilePath(filePath);
+        f.setName(name);
+        return f;
     }
 
     @Test
@@ -314,7 +327,7 @@ class WorkSessionServiceTest {
 
         // 复用同一份会话状态（sessionRepo/manifestSvc 都指向同一个内存 Map 和同一个
         // 磁盘仓库），但改走 spy 过的 repoService，这样才能在 commitAll 内部插入闩门。
-        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler);
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, editorBridge, fileRepo);
         lockedSvc.setDebounceMillis(60_000);
 
         List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
@@ -485,7 +498,7 @@ class WorkSessionServiceTest {
             return invocation.callRealMethod();
         }).when(spyRepo).gc(anyLong());
 
-        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler);
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, editorBridge, fileRepo);
         lockedSvc.setDebounceMillis(60_000);
 
         List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
@@ -548,5 +561,88 @@ class WorkSessionServiceTest {
         svc.onChangeSignal(7L, 1L, "韩泽伟");
         String first = svc.commitNow(7L, 1L, "韩泽伟", null);
         assertNull(svc.commitAiRound(7L, 1L));
+    }
+
+    /**
+     * 问题 A（数据安全）回归测试：revertTo 改了磁盘文件，但打开中的编辑器还端着
+     * 退回前的内容，下一次 autosave 会把退回冲掉。修复后 revertTo 要通知前端
+     * 编辑器重新加载每一个被退回动过的文件。
+     */
+    @Test
+    void revertNotifiesEditorToReloadChangedFiles() throws Exception {
+        when(fileRepo.findByProjectId(7L)).thenReturn(
+                List.of(projectFile(7L, "projects/7/合同.txt", "合同.txt")));
+
+        String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+        svc.endSession(7L, 1L, "韩泽伟", "第一次工作");
+
+        svc.revertTo(7L, firstSha, 1L, "韩泽伟");
+
+        verify(editorBridge).sendReloadFileAction(argThat(f -> "合同.txt".equals(f.getName())));
+    }
+
+    /**
+     * 回归测试：通知编辑器失败不应该影响退回本身——版本记录是保险，不是主流程。
+     */
+    @Test
+    void revertStillSucceedsWhenEditorNotificationThrows() throws Exception {
+        when(fileRepo.findByProjectId(7L)).thenReturn(
+                List.of(projectFile(7L, "projects/7/合同.txt", "合同.txt")));
+        doThrow(new RuntimeException("SSE 推送失败"))
+                .when(editorBridge).sendReloadFileAction(any());
+
+        String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+        svc.endSession(7L, 1L, "韩泽伟", "第一次工作");
+
+        String revertSha = svc.revertTo(7L, firstSha, 1L, "韩泽伟");
+
+        assertNotNull(revertSha, "通知编辑器失败不应该让退回本身失败");
+        assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")));
+    }
+
+    /**
+     * 问题 B（体验）回归测试：空工作段（开了段但一个文件都没改）点「结束」不应该
+     * 静默成功——原实现里工作分支 tip 跟 master tip 完全相同，合并走
+     * ALREADY_UP_TO_DATE，时间线上什么节点都不会出现，律师起的名字凭空消失。
+     * 修复后应该拒绝并给出明确提示，工作段标记为丢弃，master 历史不受影响。
+     */
+    @Test
+    void endingAnEmptySessionThrowsUserFacingErrorAndDiscardsIt() {
+        // 用一个全新的项目走 enableVersionRecording（而不是 setUp 里对 project 7 用的
+        // repoSvc.init 直接开仓库那条捷径）——否则「初始版本」那笔提交不带
+        // .awd/tree.json，commitNow 里的清单写入会在这段工作里制造一笔真实的
+        // manifest 新增提交，工作分支 tip 就不可能等于 master tip 了，测不出
+        // 「真正零提交」这个场景。
+        long projectId = 9L;
+        when(fileRepo.findByProjectId(projectId)).thenReturn(new ArrayList<>());
+        svc.enableVersionRecording(projectId, "韩泽伟", "hzw@example.com");
+
+        svc.onChangeSignal(projectId, 1L, "韩泽伟");
+        int masterLogBefore = repoSvc.log(projectId, repoSvc.mainBranch(), 100).size();
+
+        VersionException ex = assertThrows(VersionException.class,
+                () -> svc.endSession(projectId, 1L, "韩泽伟", "空工作"));
+
+        assertTrue(ex.isUserFacing(), "必须是可以原样回显给律师的业务性异常");
+        assertTrue(ex.getMessage().contains("没有任何改动"), "消息应说明本次工作没有任何改动: " + ex.getMessage());
+
+        WorkSession s = sessions.values().stream()
+                .filter(x -> x.getProjectId().equals(projectId))
+                .findFirst().orElseThrow();
+        assertEquals(WorkSession.Status.DISCARDED, s.getStatus());
+
+        int masterLogAfter = repoSvc.log(projectId, repoSvc.mainBranch(), 100).size();
+        assertEquals(masterLogBefore, masterLogAfter, "空工作段不应该在 master 上留下任何新提交");
+        assertEquals(repoSvc.mainBranch(), repoSvc.currentBranch(projectId));
+        assertFalse(repoSvc.listBranches(projectId).stream().anyMatch(b -> b.startsWith("work/")),
+                "工作分支必须被删除，不能残留");
     }
 }
