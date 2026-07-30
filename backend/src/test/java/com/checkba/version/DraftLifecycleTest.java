@@ -2,6 +2,8 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.repository.ProjectRepository;
+import com.checkba.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.checkba.storage.StorageProperties;
 import org.junit.jupiter.api.BeforeEach;
@@ -71,7 +73,8 @@ class DraftLifecycleTest {
             db.put(p.getId(), p);
             return p;
         });
-        manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
+        manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper(),
+                mock(UserRepository.class), mock(ProjectRepository.class));
 
         sessions = new HashMap<>();
         nextSessionId = 1L;

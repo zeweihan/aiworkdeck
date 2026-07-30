@@ -1,7 +1,11 @@
 package com.checkba.version;
 
+import com.checkba.model.entity.Project;
 import com.checkba.model.entity.ProjectFile;
+import com.checkba.model.entity.User;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.repository.ProjectRepository;
+import com.checkba.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -19,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 文件树清单：把数据库里的文件树随版本一起存进仓库，
@@ -32,36 +37,57 @@ public class ProjectTreeManifestService {
     private final ProjectFileRepository projectFileRepository;
     private final ProjectRepoService repoService;
     private final ObjectMapper objectMapper;
+    private final UserRepository userRepository;
+    private final ProjectRepository projectRepository;
 
     public ProjectTreeManifestService(ProjectFileRepository projectFileRepository,
                                       ProjectRepoService repoService,
-                                      ObjectMapper objectMapper) {
+                                      ObjectMapper objectMapper,
+                                      UserRepository userRepository,
+                                      ProjectRepository projectRepository) {
         this.projectFileRepository = projectFileRepository;
         this.repoService = repoService;
         this.objectMapper = objectMapper;
+        this.userRepository = userRepository;
+        this.projectRepository = projectRepository;
     }
 
-    /** 从数据库采集当前文件树。软删除的节点也要收进来，否则回退无法还原回收站状态。 */
+    /** 从数据库采集当前文件树（清单 v2）。软删除节点也收；存量行缺 uid 就地回填。 */
+    @Transactional
     public TreeManifest capture(long projectId) {
         try {
-            List<TreeManifest.Node> nodes = projectFileRepository.findByProjectId(projectId)
-                    .stream()
-                    .sorted(Comparator.comparing(ProjectFile::getId))
+            List<ProjectFile> files = projectFileRepository.findByProjectId(projectId)
+                    .stream().sorted(Comparator.comparing(ProjectFile::getId)).toList();
+            for (ProjectFile f : files) {
+                if (f.getUid() == null || f.getUid().isBlank()) {
+                    f.setUid(UUID.randomUUID().toString());
+                    projectFileRepository.save(f);
+                }
+            }
+            Map<Long, String> uidById = new HashMap<>();
+            for (ProjectFile f : files) uidById.put(f.getId(), f.getUid());
+            Map<Long, String> authorCache = new HashMap<>();
+            List<TreeManifest.Node> nodes = files.stream()
                     .map(f -> new TreeManifest.Node(
-                            f.getId(),
-                            f.getParentId(),
-                            f.getName(),
+                            null, null, f.getName(),
                             Boolean.TRUE.equals(f.getIsFolder()),
-                            f.getFileType(),
-                            f.getSortOrder(),
-                            f.getFilePath(),
-                            Boolean.TRUE.equals(f.getIsDeleted()),
-                            f.getUserId()))
+                            f.getFileType(), f.getSortOrder(), null,
+                            Boolean.TRUE.equals(f.getIsDeleted()), null,
+                            f.getUid(),
+                            f.getParentId() == null ? null : uidById.get(f.getParentId()),
+                            repoRelative(projectId, f.getFilePath()),
+                            authorUsername(f.getUserId(), authorCache)))
                     .toList();
             return new TreeManifest(TreeManifest.CURRENT_VERSION, nodes);
         } catch (Exception e) {
             throw new VersionException("采集文件树清单失败: project=" + projectId, e);
         }
+    }
+
+    private String authorUsername(Long userId, Map<Long, String> cache) {
+        if (userId == null) return null;
+        return cache.computeIfAbsent(userId, id ->
+                userRepository.findById(id).map(User::getUsername).orElse(null));
     }
 
     public void writeToWorkTree(long projectId, TreeManifest manifest) {
@@ -132,7 +158,9 @@ public class ProjectTreeManifestService {
             }
 
             // 清单节点按「父先于子」排序，保证建父节点时 parentId 已可解析
-            List<TreeManifest.Node> ordered = topoSort(manifest.nodes());
+            List<TreeManifest.Node> effective = manifest.version() >= 2
+                    ? normalizeV2(projectId, manifest.nodes()) : manifest.nodes();
+            List<TreeManifest.Node> ordered = topoSort(effective);
 
             Map<Long, Long> remap = new LinkedHashMap<>();
             int created = 0, updated = 0;
@@ -244,6 +272,46 @@ public class ProjectTreeManifestService {
     }
 
     /**
+     * v2 → v1 形状：uid 命中本地行的节点换成该行真实 id；未命中的分配互不相同的
+     * 合成负 id（走「清单有、库无」路径，save 时被 IDENTITY 重新分配 + remap 修
+     * parentId——v1 既有机制）；relPath 加回本机前缀；author 三级回退解析 userId。
+     */
+    private List<TreeManifest.Node> normalizeV2(long projectId, List<TreeManifest.Node> nodes) {
+        Map<String, ProjectFile> byUid = new HashMap<>();
+        for (ProjectFile f : projectFileRepository.findByProjectId(projectId)) {
+            if (f.getUid() != null) byUid.put(f.getUid(), f);
+        }
+        Long ownerId = projectRepository.findById(projectId)
+                .map(Project::getUserId).orElse(null);
+        Map<String, Long> idByUid = new HashMap<>();
+        long synthetic = -1;
+        for (TreeManifest.Node n : nodes) {
+            ProjectFile match = n.uid() == null ? null : byUid.get(n.uid());
+            idByUid.put(n.uid(), match != null ? match.getId() : synthetic--);
+        }
+        Map<String, Long> userIdCache = new HashMap<>();
+        List<TreeManifest.Node> out = new ArrayList<>();
+        for (TreeManifest.Node n : nodes) {
+            ProjectFile match = n.uid() == null ? null : byUid.get(n.uid());
+            Long userId = null;
+            if (n.author() != null) {
+                userId = userIdCache.computeIfAbsent(n.author(), name ->
+                        userRepository.findByUsername(name).map(User::getId).orElse(null));
+            }
+            if (userId == null && match != null) userId = match.getUserId();
+            if (userId == null) userId = ownerId;
+            out.add(new TreeManifest.Node(
+                    idByUid.get(n.uid()),
+                    n.parentUid() == null ? null : idByUid.get(n.parentUid()),
+                    n.name(), n.isFolder(), n.fileType(), n.sortOrder(),
+                    n.relPath() == null ? null : "projects/" + projectId + "/" + n.relPath(),
+                    n.isDeleted(), userId,
+                    n.uid(), n.parentUid(), n.relPath(), n.author()));
+        }
+        return out;
+    }
+
+    /**
      * 返回 true 表示确实改动了字段。{@code maySoftDelete} 为 false 时禁止把一条
      * 「在用」的行改成「回收站」（并集只加不减，见 {@link #unionApply}）。
      * {@code keepLocation} 为 true 时不动 name/filePath/parentId——主线的改名/移动
@@ -260,6 +328,7 @@ public class ProjectTreeManifestService {
             f.setIsFolder(n.isFolder()); changed = true;
         }
         if (!Objects.equals(f.getFileType(), n.fileType())) { f.setFileType(n.fileType()); changed = true; }
+        if (n.uid() != null && !Objects.equals(f.getUid(), n.uid())) { f.setUid(n.uid()); changed = true; }
         if (!Objects.equals(f.getSortOrder(), n.sortOrder())) { f.setSortOrder(n.sortOrder()); changed = true; }
         if (!keepLocation && !Objects.equals(f.getFilePath(), n.filePath())) {
             f.setFilePath(n.filePath()); changed = true;
