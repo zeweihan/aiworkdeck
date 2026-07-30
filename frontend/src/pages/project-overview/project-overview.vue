@@ -757,6 +757,11 @@
                       :source-name="activeFileLeft.diffSource.name"
                       :target-name="activeFileLeft.diffTarget.name"
                     />
+                    <VersionCompareTab
+                      v-else-if="isVersionCompareTab(activeFileLeft)"
+                      :key="activeFileLeft.id"
+                      :compare-spec="activeFileLeft.compareSpec"
+                    />
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileLeft)"
                       :request-id="activeFileLeft.requestId"
@@ -823,6 +828,11 @@
                       :target-id="activeFileRight.diffTarget.id"
                       :source-name="activeFileRight.diffSource.name"
                       :target-name="activeFileRight.diffTarget.name"
+                    />
+                    <VersionCompareTab
+                      v-else-if="isVersionCompareTab(activeFileRight)"
+                      :key="activeFileRight.id"
+                      :compare-spec="activeFileRight.compareSpec"
                     />
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileRight)"
@@ -1260,6 +1270,7 @@ import VersionPanel from '@/components/version/VersionPanel.vue'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
 import DocDiffViewer from '@/components/DocDiffViewer.vue'
+import VersionCompareTab from '@/components/version/VersionCompareTab.vue'
 import MarkdownPreview from '@/components/MarkdownPreview.vue'
 import FilePickerDialog from '@/components/FilePickerDialog.vue'
 
@@ -1339,6 +1350,7 @@ export default {
     PluginPane, // Added
     CompareDocDialog,
     DocDiffViewer,
+    VersionCompareTab,
     EasyVoicePane,
     DesensitizePane,
     FilePickerDialog,
