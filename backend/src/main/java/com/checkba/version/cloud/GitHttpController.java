@@ -31,9 +31,11 @@ public class GitHttpController {
     static final String RECEIVE_PACK = "git-receive-pack";
 
     private final ProjectRepoService repoService;
+    private final GitAccessService access;
 
-    public GitHttpController(ProjectRepoService repoService) {
+    public GitHttpController(ProjectRepoService repoService, GitAccessService access) {
         this.repoService = repoService;
+        this.access = access;
     }
 
     @GetMapping("/{projectId}.git/info/refs")
@@ -45,24 +47,27 @@ public class GitHttpController {
             response.sendError(HttpServletResponse.SC_BAD_REQUEST, "smart protocol only");
             return;
         }
-        if (!repoService.isInitialized(projectId)) {
-            response.sendError(HttpServletResponse.SC_NOT_FOUND);
-            return;
-        }
-        response.setContentType("application/x-" + service + "-advertisement");
-        noCache(response);
-        try (Repository repo = repoService.open(projectId)) {
-            PacketLineOut out = new PacketLineOut(response.getOutputStream());
-            out.writeString("# service=" + service + "\n");
-            out.end();
-            if (UPLOAD_PACK.equals(service)) {
-                UploadPack up = new UploadPack(repo);
-                up.setBiDirectionalPipe(false);
-                up.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
-            } else {
-                ReceivePack rp = new ReceivePack(repo);
-                configureReceivePack(rp, projectId);
-                rp.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
+        try {
+            if (!deny(response, () -> access.authorize(request, projectId, RECEIVE_PACK.equals(service)))) return;
+            if (!repoService.isInitialized(projectId)) {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND);
+                return;
+            }
+            response.setContentType("application/x-" + service + "-advertisement");
+            noCache(response);
+            try (Repository repo = repoService.open(projectId)) {
+                PacketLineOut out = new PacketLineOut(response.getOutputStream());
+                out.writeString("# service=" + service + "\n");
+                out.end();
+                if (UPLOAD_PACK.equals(service)) {
+                    UploadPack up = new UploadPack(repo);
+                    up.setBiDirectionalPipe(false);
+                    up.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
+                } else {
+                    ReceivePack rp = new ReceivePack(repo);
+                    configureReceivePack(rp, projectId);
+                    rp.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
+                }
             }
         } catch (Exception e) {
             // 全局 @ExceptionHandler(Exception.class) 会把异常统一改写成 HTTP 200 + JSON，
@@ -77,16 +82,19 @@ public class GitHttpController {
     public void uploadPack(@PathVariable long projectId,
                            HttpServletRequest request,
                            HttpServletResponse response) throws IOException {
-        if (!repoService.isInitialized(projectId)) {
-            response.sendError(HttpServletResponse.SC_NOT_FOUND);
-            return;
-        }
-        response.setContentType("application/x-git-upload-pack-result");
-        noCache(response);
-        try (Repository repo = repoService.open(projectId)) {
-            UploadPack up = new UploadPack(repo);
-            up.setBiDirectionalPipe(false);
-            up.upload(body(request), response.getOutputStream(), null);
+        try {
+            if (!deny(response, () -> access.authorize(request, projectId, false))) return;
+            if (!repoService.isInitialized(projectId)) {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND);
+                return;
+            }
+            response.setContentType("application/x-git-upload-pack-result");
+            noCache(response);
+            try (Repository repo = repoService.open(projectId)) {
+                UploadPack up = new UploadPack(repo);
+                up.setBiDirectionalPipe(false);
+                up.upload(body(request), response.getOutputStream(), null);
+            }
         } catch (ZipException e) {
             // 请求体不是合法的 gzip 流，是客户端的问题，不是服务端错误
             log.warn("git-upload-pack 请求体 gzip 解压失败: projectId={}", projectId, e);
@@ -101,17 +109,20 @@ public class GitHttpController {
     public void receivePack(@PathVariable long projectId,
                             HttpServletRequest request,
                             HttpServletResponse response) throws IOException {
-        if (!repoService.isInitialized(projectId)) {
-            response.sendError(HttpServletResponse.SC_NOT_FOUND);
-            return;
-        }
-        response.setContentType("application/x-git-receive-pack-result");
-        noCache(response);
-        try (Repository repo = repoService.open(projectId)) {
-            ReceivePack rp = new ReceivePack(repo);
-            rp.setBiDirectionalPipe(false);
-            configureReceivePack(rp, projectId);
-            rp.receive(body(request), response.getOutputStream(), null);
+        try {
+            if (!deny(response, () -> access.authorize(request, projectId, true))) return;
+            if (!repoService.isInitialized(projectId)) {
+                response.sendError(HttpServletResponse.SC_NOT_FOUND);
+                return;
+            }
+            response.setContentType("application/x-git-receive-pack-result");
+            noCache(response);
+            try (Repository repo = repoService.open(projectId)) {
+                ReceivePack rp = new ReceivePack(repo);
+                rp.setBiDirectionalPipe(false);
+                configureReceivePack(rp, projectId);
+                rp.receive(body(request), response.getOutputStream(), null);
+            }
         } catch (ZipException e) {
             // 请求体不是合法的 gzip 流，是客户端的问题，不是服务端错误
             log.warn("git-receive-pack 请求体 gzip 解压失败: projectId={}", projectId, e);
@@ -124,6 +135,25 @@ public class GitHttpController {
 
     /** Task 6 在这里挂 PostReceiveHook（push 落库）。本任务空实现。 */
     private void configureReceivePack(ReceivePack rp, long projectId) {
+    }
+
+    /**
+     * 鉴权失败时写响应并返回 false，让端点方法直接 return——不落入下面通用的
+     * catch(Exception) / failSafely 500 兜底。401 带 WWW-Authenticate，JGit 客户端靠它重试凭据；
+     * 403 直接 sendError。
+     */
+    private boolean deny(HttpServletResponse response, java.util.function.Supplier<Long> auth)
+            throws IOException {
+        try {
+            auth.get();
+            return true;
+        } catch (GitAccessDeniedException e) {
+            if (e.statusCode() == 401) {
+                response.setHeader("WWW-Authenticate", "Basic realm=\"AIWorkdeck Git\"");
+            }
+            response.sendError(e.statusCode());
+            return false;
+        }
     }
 
     private InputStream body(HttpServletRequest request) throws IOException {
