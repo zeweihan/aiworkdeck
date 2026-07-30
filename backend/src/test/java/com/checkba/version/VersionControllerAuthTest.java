@@ -1,6 +1,8 @@
 package com.checkba.version;
 
 import com.checkba.controller.AuthController;
+import com.checkba.model.entity.ProjectFile;
+import com.checkba.service.ProjectFileService;
 import com.checkba.service.ProjectMemberService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -34,6 +36,8 @@ class VersionControllerAuthTest {
     private WorkSessionService sessionService;
     @Mock
     private ProjectMemberService projectMemberService;
+    @Mock
+    private ProjectFileService projectFileService;
 
     @InjectMocks
     private VersionController controller;
@@ -46,7 +50,7 @@ class VersionControllerAuthTest {
             when(projectMemberService.isClient(7L, 1L)).thenReturn(true);
 
             assertThrows(IllegalArgumentException.class,
-                    () -> controller.timeline(7L, 50, "sess"));
+                    () -> controller.timeline(7L, 50, null, "sess"));
             verify(repoService, never()).log(anyLong(), anyString(), anyInt());
         }
     }
@@ -58,7 +62,7 @@ class VersionControllerAuthTest {
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(false);
 
             assertThrows(IllegalArgumentException.class,
-                    () -> controller.timeline(7L, 50, "sess"));
+                    () -> controller.timeline(7L, 50, null, "sess"));
             verify(repoService, never()).log(anyLong(), anyString(), anyInt());
         }
     }
@@ -69,7 +73,7 @@ class VersionControllerAuthTest {
             auth.when(() -> AuthController.getUserIdFromSession(null)).thenReturn(null);
 
             assertThrows(IllegalArgumentException.class,
-                    () -> controller.timeline(7L, 50, null));
+                    () -> controller.timeline(7L, 50, null, null));
             verify(repoService, never()).log(anyLong(), anyString(), anyInt());
         }
     }
@@ -82,9 +86,49 @@ class VersionControllerAuthTest {
             when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
             when(repoService.log(7L, "HEAD", 50)).thenReturn(java.util.List.of());
 
-            controller.timeline(7L, 50, "sess");
+            controller.timeline(7L, 50, null, "sess");
 
             verify(repoService).log(7L, "HEAD", 50);
+        }
+    }
+
+    /**
+     * 单文件历史的越权（IDOR）防护：fileId 属于别的项目必须拒绝，口径照
+     * ProjectFileControllerIdorTest——鉴权通过后，服务端仍要校验 fileId→projectId 归属。
+     */
+    @Test
+    void timelineRejectsFileFromAnotherProject() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
+            when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+            ProjectFile foreign = new ProjectFile();
+            foreign.setId(50L);
+            foreign.setProjectId(999L);
+            when(projectFileService.getFile(50L)).thenReturn(foreign);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.timeline(7L, 50, 50L, "sess"));
+            verify(repoService, never()).logForPath(anyLong(), anyString(), anyString(), anyInt());
+        }
+    }
+
+    @Test
+    void timelineFiltersByFileWithinSameProject() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
+            when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+            ProjectFile own = new ProjectFile();
+            own.setId(50L);
+            own.setProjectId(7L);
+            own.setFilePath("projects/7/合同.txt");
+            when(projectFileService.getFile(50L)).thenReturn(own);
+            when(repoService.logForPath(7L, "HEAD", "合同.txt", 50)).thenReturn(java.util.List.of());
+
+            controller.timeline(7L, 50, 50L, "sess");
+
+            verify(repoService).logForPath(7L, "HEAD", "合同.txt", 50);
         }
     }
 

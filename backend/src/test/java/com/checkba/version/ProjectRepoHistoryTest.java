@@ -115,6 +115,22 @@ class ProjectRepoHistoryTest {
     }
 
     @Test
+    void logForPathReturnsOnlyCommitsTouchingThatFile(@TempDir Path root) throws Exception {
+        ProjectRepoService s = seeded(root);
+        Files.writeString(root.resolve("projects/7/别的.txt"), "x");
+        s.commitAll(7L, "改了别的", "auto", null, "韩泽伟", "hzw@example.com");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        s.commitAll(7L, "改了合同", "auto", null, "韩泽伟", "hzw@example.com");
+
+        List<VersionEntry> all = s.log(7L, "HEAD", 100);
+        List<VersionEntry> only = s.logForPath(7L, "HEAD", "合同.txt", 100);
+
+        assertTrue(only.size() < all.size());
+        assertTrue(only.stream().anyMatch(v -> v.message().contains("合同")));
+        assertTrue(only.stream().noneMatch(v -> v.message().contains("别的")));
+    }
+
+    @Test
     void readBlobAtCommitReturnsHistoricBytes(@TempDir Path root) throws Exception {
         ProjectRepoService s = seeded(root);
         String first = s.log(7L, "HEAD", 1).get(0).sha();

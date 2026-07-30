@@ -539,6 +539,7 @@
             @compare-documents="onCompareDocumentsRequest"
             @files-changed="loadStagingFiles"
             @file-deleted="handleFileDeleted"
+            @file-history="onFileHistory"
           />
           <DdFilesPanel
             v-else-if="leftPaneKey === 'dd-files'"
@@ -567,7 +568,9 @@
           <VersionPanel
             v-else-if="leftPaneKey === 'version'"
             :project-id="projectId"
+            :file-filter="versionFileFilter"
             @compare-file="onVersionCompareFile"
+            @clear-file-filter="versionFileFilter = null"
           />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
@@ -1393,6 +1396,8 @@ export default {
       sidebarCollapsed: false,
       isCompactLayout: false,
       leftPaneKey: null, // Initialize to null to prevent premature loading
+      // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
+      versionFileFilter: null,
       // 文件树批量选择模式（由页面控制开关）
       fileBatchMode: false,
       checkedFileIds: [],
@@ -2327,6 +2332,12 @@ export default {
     ...stagingAreaMethods,
     ...tabDragSplitMethods,
     ...fileOpenTabsMethods,
+    // 右键「这份文件的历史」：切到版本面板并只显示这份文件的版本
+    onFileHistory(file) {
+      this.versionFileFilter = { fileId: file.id, name: file.name }
+      if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+
     // EasyVoice Integration
     async handleEasyVoiceDocRequest(callback) {
       console.log('[EasyVoice] Requesting doc text...')

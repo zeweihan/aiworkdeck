@@ -22,8 +22,13 @@
         @ended="refresh"
         @discarded="refresh"
       />
+      <view v-if="fileFilter" class="version-file-filter">
+        <text class="version-file-filter-text">只看《{{ fileFilter.name }}》的历史</text>
+        <text class="version-file-filter-clear" @tap="$emit('clear-file-filter')">显示全部</text>
+      </view>
       <VersionTimeline
         :project-id="projectId"
+        :file-filter="fileFilter"
         :key="timelineKey"
         @reverted="refresh"
         @compare-file="$emit('compare-file', $event)"
@@ -42,8 +47,9 @@ export default {
   components: { WorkSessionBar, VersionTimeline },
   props: {
     projectId: { type: [String, Number], required: true },
+    fileFilter: { type: Object, default: null },
   },
-  emits: ['compare-file'],
+  emits: ['compare-file', 'clear-file-filter'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -106,6 +112,12 @@ export default {
 .version-intro-desc { font-size: 26rpx; color: #666; line-height: 1.6; margin-bottom: 24rpx; }
 .version-error { padding: 32rpx 24rpx; }
 .version-error-desc { font-size: 26rpx; color: #b23; line-height: 1.6; margin-bottom: 24rpx; }
+.version-file-filter {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12rpx 24rpx; background: #F3F6F5; border-bottom: 1px solid #E9ECEF;
+  font-size: 24rpx; color: #666;
+}
+.version-file-filter-clear { color: #12344D; text-decoration: underline; }
 
 /* awd-* 没有集中定义，各组件 scoped 内各自定义 */
 .awd-btn {

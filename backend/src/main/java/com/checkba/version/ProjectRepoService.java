@@ -160,6 +160,22 @@ public class ProjectRepoService {
         }
     }
 
+    /** 与 {@link #log} 相同，但只保留改动过 relPath 的提交（单文件历史）。 */
+    public List<VersionEntry> logForPath(long projectId, String ref, String relPath, int limit) {
+        List<VersionEntry> out = new ArrayList<>();
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            ObjectId start = repo.resolve(ref);
+            if (start == null) return out;
+            Map<String, String> milestones = milestonesIn(repo);
+            for (RevCommit c : git.log().add(start).addPath(relPath).setMaxCount(limit).call()) {
+                out.add(toEntry(c, milestones));
+            }
+            return out;
+        } catch (Exception e) {
+            throw new VersionException("读取历史失败: project=" + projectId, e);
+        }
+    }
+
     private VersionEntry toEntry(RevCommit c, Map<String, String> milestones) {
         String full = c.getFullMessage();
         String kind = extractTrailer(full, KIND_TRAILER);

@@ -1,6 +1,8 @@
 package com.checkba.version;
 
 import com.checkba.controller.AuthController;
+import com.checkba.model.entity.ProjectFile;
+import com.checkba.service.ProjectFileService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.UserService;
 import org.springframework.http.ResponseEntity;
@@ -26,15 +28,18 @@ public class VersionController {
     private final WorkSessionService sessionService;
     private final ProjectMemberService projectMemberService;
     private final UserService userService;
+    private final ProjectFileService projectFileService;
 
     public VersionController(ProjectRepoService repoService,
                              WorkSessionService sessionService,
                              ProjectMemberService projectMemberService,
-                             UserService userService) {
+                             UserService userService,
+                             ProjectFileService projectFileService) {
         this.repoService = repoService;
         this.sessionService = sessionService;
         this.projectMemberService = projectMemberService;
         this.userService = userService;
+        this.projectFileService = projectFileService;
     }
 
     @GetMapping("/status")
@@ -73,9 +78,20 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> timeline(
             @PathVariable Long projectId,
             @RequestParam(defaultValue = "50") int limit,
+            @RequestParam(required = false) Long fileId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireMember(projectId, sessionId);
-        List<VersionEntry> entries = repoService.log(projectId, "HEAD", limit);
+        List<VersionEntry> entries;
+        if (fileId != null) {
+            ProjectFile f = projectFileService.getFile(fileId); // 文件不存在会抛异常
+            if (!projectId.equals(f.getProjectId())) {
+                throw new IllegalArgumentException("文件不属于该项目: fileId=" + fileId);
+            }
+            String relPath = WorkSessionService.repoRelativePath(f);
+            entries = repoService.logForPath(projectId, "HEAD", relPath, limit);
+        } else {
+            entries = repoService.log(projectId, "HEAD", limit);
+        }
         return ok(Map.of("versions", entries));
     }
 
