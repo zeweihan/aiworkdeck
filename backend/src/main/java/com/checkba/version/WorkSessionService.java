@@ -673,10 +673,25 @@ public class WorkSessionService {
      * commitNow 内部的 ensureSession 会在主线上凭空开一段从未被律师编辑过的空工作，
      * 这段工作会一直挂着「工作中」，还会把之后「切回主线」的目标从 master 错误地
      * 带偏到这段凭空冒出来的分支上。
+     *
+     * 但「有没有段」不是「工作区干不干净」的可靠代理：AI artifact 保存、尽调插件
+     * 上传、分片上传中途、解压时序缺陷等几条路径会弄脏主线工作区却不经过
+     * {@link #onChangeSignal} 发信号（没有信号就不会隐式开段）。这种「脏但无段」的
+     * 状态下如果照旧什么都不做，随后 checkout 目标分支会因为工作区有未提交改动
+     * 而被 JGit 拒绝（CheckoutConflictException），开稿/切线以一句笼统的技术错误
+     * 反复失败。所以这里补一条兜底：脏则落一笔无主的 auto 自动存档——但绝不能
+     * 调用 commitNow，它内部的 ensureSession 会在主线上凭空孵出一段从未被律师
+     * 编辑过的 WORK 工作段，制造出跟上面同一段注释警告的"幽灵段"问题。
+     * pendingChanges 本身不加锁（见 {@link #pendingChangesLocked} 的注释），这里
+     * 调用方已经持有本项目的锁，直接调用即可。
      */
     private void dockCurrentLine(long projectId, Long userId, String userName) {
         if (onDraftBranch(projectId) || activeSession(projectId).isPresent()) {
             commitNow(projectId, userId, userName, null);
+        } else if (!repoService.pendingChanges(projectId).isEmpty()) {
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            String msg = describePendingChanges(projectId);
+            repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
         }
     }
 
@@ -712,9 +727,10 @@ public class WorkSessionService {
     }
 
     /**
-     * 把退回改动过的仓库相对路径，匹配到当前数据库里的 ProjectFile 记录，收集受影响
-     * 文件的 id。只是给前端重载编辑器用的辅助信息，不是主流程——匹配失败绝不能让
-     * 退回本身失败，这里整体包死，出错就退化成空列表。
+     * 把一次改动（退回 / 开稿 / 切线）涉及的仓库相对路径，匹配到当前数据库里的
+     * ProjectFile 记录，收集受影响文件的 id。只是给前端重载编辑器用的辅助信息，
+     * 不是主流程——匹配失败绝不能让调用方的主操作失败，这里整体包死，出错就退化
+     * 成空列表。
      */
     private List<Long> resolveAffectedFileIds(long projectId, List<FileChange> changes) {
         try {

@@ -378,6 +378,60 @@ class DraftLifecycleTest {
         m.invoke(target, projectId, sessionId);
     }
 
+    // ---- P3-T3 审查 Important：脏但无段时开稿不能撞 checkout 冲突 -----------
+
+    /**
+     * dockCurrentLine 曾经只在「有段」（onDraftBranch || activeSession 存在）时才
+     * 停靠，但有几条真实路径会把主线工作区弄脏而不经过 onChangeSignal 发信号
+     * （AI artifact 保存、尽调插件上传、分片上传中途、解压时序缺陷）——这里直接用
+     * Files.writeString 模拟这样一个不发信号的写入者：不开任何段，直接弄脏主线
+     * 工作区，然后开稿。
+     *
+     * 要真正撞到 checkout 冲突，稿的目标版本（{@code ref}）必须和当前 HEAD 的内容
+     * 不同——如果 ref 恰好等于当前 HEAD，JGit 的 checkout 发现目标树跟索引一致，
+     * 根本不需要碰这个文件，也就不会冲突。所以这里先手工推进 HEAD 一笔真实提交
+     * （v1→v2，绕过 svc，模拟"已经存在的历史"），再在 v2 之上弄脏工作区、且开稿
+     * 目标定成 v1——checkout 需要把这个文件从 v2 的内容改写成 v1 的内容，但工作区
+     * 上还有一份既不是 v1 也不是 v2 的脏内容，JGit 必须拒绝（CheckoutConflictException，
+     * 在服务层包成技术档 VersionException）。
+     *
+     * 旧实现在这种「脏且无段」的状态下会跳过停靠，直接走到这一步撞冲突，开稿
+     * 反复失败。这里断言：开稿本身成功；脏内容作为一笔 auto 提交留在了主线历史里
+     * （不是被悄悄丢弃、也不是被塞进一个新孵出的工作段）；没有任何 WORK 工作段被
+     * 孵出来（activeSession 为空、分支列表里没有 work/* 分支）；稿正常建立。
+     */
+    @Test
+    void createDraftAutoDocksDirtyMainlineWithNoSessionInstead() throws Exception {
+        String v1Sha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
+
+        // 推进 HEAD 到 v2：绕过 svc 的一笔真实提交，模拟"已经存在的历史"。
+        Files.writeString(root.resolve("projects/7/合同.txt"), "v2 内容");
+        repoSvc.commitAll(7L, "推进到 v2", "auto", null, "系统", "sys@x");
+
+        // 模拟不经过 onChangeSignal 就弄脏工作区的写入者：不开任何段。
+        Files.writeString(root.resolve("projects/7/合同.txt"), "没发信号就落下的脏内容");
+        assertTrue(svc.activeSession(7L).isEmpty(), "测试前提：此刻没有任何 ACTIVE 工作段");
+
+        // 稿目标定成 v1——跟当前脏工作区、跟当前 HEAD(v2) 都不同，checkout 真的需要
+        // 改写这个文件，这是撞上 CheckoutConflictException 的必要条件。
+        WorkSessionService.DraftCreateResult result =
+                svc.createDraft(7L, v1Sha, "旧版试验稿", 1L, "韩泽伟");
+
+        assertNotNull(result, "开稿应该成功，不应该撞 checkout 冲突");
+        assertTrue(repoSvc.currentBranch(7L).startsWith("draft/"), "稿应该正常建立并切过去");
+
+        List<VersionEntry> mainHistory = repoSvc.log(7L, repoSvc.mainBranch(), 5);
+        assertEquals("auto", mainHistory.get(0).kind(),
+                "脏内容应该作为一笔 auto 自动存档留在主线历史里");
+        assertEquals("没发信号就落下的脏内容",
+                new String(repoSvc.readBlobAtCommit(7L, repoSvc.mainBranch(), "合同.txt")),
+                "主线历史上的这笔提交应该真的带着那份脏内容");
+
+        assertTrue(svc.activeSession(7L).isEmpty(), "不能因为停靠而孵出一个 WORK 工作段");
+        assertTrue(repoSvc.listBranches(7L).stream().noneMatch(b -> b.startsWith("work/")),
+                "仓库里不应该出现任何 work/* 分支");
+    }
+
     // ---- MERGING 态拒绝一切切线/开稿（用 T2 的 repositoryMerging） -----------
 
     /**
