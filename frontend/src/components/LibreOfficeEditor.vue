@@ -17,7 +17,15 @@
     <!-- 加载进度面板：引擎启动 + 文档下载/打开是感知最慢的一段（尤其大文档），
          把过程阶段化展示出来（用户反馈：不能更快，也要看得见进展）。 -->
     <view v-if="loadingOverlayVisible" class="libre-loading">
-      <view class="libre-loading-card">
+      <!-- 只读预览接力：文档字节一到就先用 docx-preview 本地渲出可读内容，
+           引擎继续后台 boot；就绪后 overlay 整体消失、无缝换入可编辑视图。
+           渲染失败/非 Word/空文档保持原进度卡片。 -->
+      <view v-show="previewReady" class="libre-preview-strip">
+        <view class="libre-strip-track"><view class="libre-strip-fill" :style="{ width: bootPct + '%' }"></view></view>
+        <text class="libre-strip-text">{{ bootStage }} {{ Math.round(bootPct) }}% — 已可阅读，编辑器就绪后可直接编辑</text>
+      </view>
+      <view v-show="previewReady" ref="docxPreviewHost" class="libre-preview-host"></view>
+      <view v-if="!previewReady" class="libre-loading-card">
         <view class="libre-doc-icon">
           <view class="doc-fold"></view>
           <view class="doc-line l1"></view>
@@ -96,6 +104,10 @@ export default {
       bootStage: '正在启动文档引擎',
       dlLoaded: 0,
       dlTotal: 0,
+      // 只读预览接力：字节预取完成后 docx-preview 渲染成功置 previewReady，
+      // overlay 从进度卡片切换为可滚动阅读的文档 + 顶部细进度条。
+      previewReady: false,
+      previewFailed: false,
     }
   },
   computed: {
@@ -119,6 +131,24 @@ export default {
       return this.dlTotal > 0
         ? `文档内容 ${fmt(this.dlLoaded)} / ${fmt(this.dlTotal)}`
         : `已下载文档内容 ${fmt(this.dlLoaded)}`
+    },
+  },
+  watch: {
+    // 预热备胎过继（librePool.js）：宿主把 file 从 null 换成真实文档。引擎
+    // 可能已空白就绪（_endpointUp），也可能仍在 boot——后者只预取字节，
+    // onEndpointReady 会照常装载。file→file 换文档不支持（池按实例=文档）。
+    file(newFile, oldFile) {
+      if (!newFile || oldFile) return
+      this.prefetchBytes()
+      if (!this._endpointUp) return
+      this.ready = false
+      this.docLoadFailed = false
+      this.statusText = '加载文档中…'
+      this.bootPct = 75
+      this.bootCap = 95
+      this.bootStage = '正在打开文档'
+      this.startBootTrickle()
+      this.finishDocLoad()
     },
   },
   async mounted() {
@@ -255,6 +285,12 @@ export default {
     // starts routing AI commands to the (now correctly-targeted) editor.
     async onEndpointReady() {
       if (!this.executor) return // unmounted during boot
+      this._endpointUp = true
+      await this.finishDocLoad()
+    },
+    // 装载 + 发布就绪。两个入口：onEndpointReady（常规：mount 时就有 file，或
+    // 备胎空白 boot 完成），以及 file watcher（备胎在引擎就绪后被过继）。
+    async finishDocLoad() {
       if (this.file) {
         try {
           await this.loadDocument()
@@ -288,6 +324,37 @@ export default {
       })
         .then((buf) => { this.appendLog('文档字节预取完成 / prefetched ' + (buf ? buf.byteLength : 0) + ' bytes in ' + (Date.now() - t0) + 'ms'); return buf })
         .catch((e) => { this.appendLog('预取失败（加载时重试）/ prefetch failed: ' + (e && e.message ? e.message : e)); return null })
+      // 只读预览接力：不影响 _bytesPromise 本身（loadDocument 仍 await 它）
+      this._bytesPromise.then((buf) => this.tryDocxPreview(buf))
+    },
+    // 引擎 boot 期间先把预取到的 docx 渲成只读预览（docx-preview 本地解析，
+    // 同 FilePreview.renderDocx 的配置）。失败静默回落进度卡片。
+    async tryDocxPreview(buf) {
+      if (!buf || buf.byteLength === 0 || this.ready || this.previewReady || this.previewFailed) return
+      const t = String((this.file && this.file.fileType) || '').toLowerCase()
+      if (t !== 'docx' && t !== 'doc') return
+      try {
+        const { renderAsync } = await import('docx-preview')
+        await this.$nextTick() // 过继路径上 overlay 可能刚重新显示，等 ref 挂上
+        const ref = this.$refs.docxPreviewHost
+        const container = ref && (ref.$el || ref)
+        if (!container || this.ready) return
+        container.innerHTML = ''
+        await renderAsync(buf, container, null, {
+          className: 'docx',
+          inWrapper: true,
+          ignoreWidth: false,
+          ignoreHeight: false,
+          breakPages: true,
+          experimental: true,
+        })
+        if (this.ready) return
+        this.previewReady = true
+        this.appendLog('只读预览就绪（引擎继续后台启动）')
+      } catch (e) {
+        this.previewFailed = true
+        this.appendLog('docx 预览渲染失败（保留进度面板）: ' + (e && e.message ? e.message : e))
+      }
     },
     async loadDocument() {
       const f = this.file
@@ -501,4 +568,14 @@ export default {
 .libre-loading-pct { font-size: 12px; color: #1A5336; font-weight: 600; }
 .libre-loading-dl { font-size: 11px; color: #868E96; }
 .libre-loading-hint { font-size: 11px; color: #ADB5BD; margin-top: 6px; }
+/* ---- 只读预览接力 ---- */
+.libre-preview-strip { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; flex-direction: column;
+  gap: 4px; padding: 6px 14px 8px; background: rgba(248, 249, 250, 0.95); border-bottom: 1px solid #E9ECEF;
+  backdrop-filter: blur(4px); }
+.libre-strip-track { width: 100%; height: 3px; background: #E9ECEF; border-radius: 999px; overflow: hidden; }
+.libre-strip-fill { height: 100%; background: #5BD197; border-radius: 999px; transition: width 0.5s ease; }
+.libre-strip-text { font-size: 11px; color: #868E96; }
+.libre-preview-host { position: absolute; inset: 0; top: 34px; overflow-y: auto; background: #F1F3F5; }
+/* docx-preview 生成的页面居中呈现（deep：内容是运行时注入的非 scoped DOM） */
+.libre-preview-host :deep(.docx-wrapper) { background: transparent; padding: 16px 0; }
 </style>

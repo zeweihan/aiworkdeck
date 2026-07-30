@@ -136,6 +136,9 @@ try {
   // 宿主侧编辑器组件（executor / statusText / saveDocument 所在）。
   // 注意：keepalive 池（PR#159）用 createElement 命令式建 webview，元素上没有
   // __vueParentComponent —— 必须从 Vue 组件树根 DFS 找 saveDocument 组件。
+  // 且必须要求 file 非空：预热备胎（librePool.js spare）也是同一组件，只是
+  // file=null 的隐藏空白实例——遍历顺序可能先碰到它，打在备胎上的插入/保存
+  // 全部"成功"但真文档纹丝不动（真实路由按活跃文件键控 executor，无此问题）。
   const FIND_EDITOR = `
     function findEditor() {
       let seed = null
@@ -145,7 +148,7 @@ try {
       const q = [root]
       while (q.length) {
         const c = q.shift()
-        if (c.proxy && typeof c.proxy.saveDocument === 'function') return c.proxy
+        if (c.proxy && typeof c.proxy.saveDocument === 'function' && c.proxy.file) return c.proxy
         const stack = [c.subTree]
         while (stack.length) {
           const v = stack.pop()
