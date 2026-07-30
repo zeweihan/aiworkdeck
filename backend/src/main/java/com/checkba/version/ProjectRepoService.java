@@ -14,6 +14,7 @@ import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.lib.RepositoryState;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevObject;
 import org.eclipse.jgit.revwalk.RevTag;
@@ -429,6 +430,118 @@ public class ProjectRepoService {
             throw e;
         } catch (Exception e) {
             throw new VersionException("合并失败: " + branchName, e);
+        }
+    }
+
+    /**
+     * 与 {@link #merge} 同形（NO_FF、setCommit(false)、干净路径手工署名提交），
+     * 唯一区别：冲突时**不** reset——仓库留在 MERGING 态，索引记录冲突路径，
+     * 供上层三选一（{@link #abortMerge} 无损中止 / 手工裁决后 {@link #commitMergeResolution}
+     * 产出双亲裁决提交）。干净路径与 merge() 完全等价，行为不应分叉，因此
+     * 逻辑照抄，仅去掉冲突分支里的 reset --hard 那一行。
+     */
+    public MergeOutcome mergeKeepingConflicts(long projectId, String branchName, String message,
+                                              String authorName, String authorEmail) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            ObjectId target = repo.resolve(branchName);
+            if (target == null) throw new VersionException("分支不存在: " + branchName);
+
+            String fullMessage = message + "\n\n" + KIND_TRAILER + "session";
+            MergeResult r = git.merge()
+                    .include(target)
+                    .setMessage(fullMessage)
+                    .setFastForward(MergeCommand.FastForwardMode.NO_FF)
+                    .setCommit(false)
+                    .call();
+
+            MergeResult.MergeStatus st = r.getMergeStatus();
+            if (st.isSuccessful()) {
+                String mergeSha;
+                if (st == MergeResult.MergeStatus.ALREADY_UP_TO_DATE) {
+                    mergeSha = r.getNewHead() == null ? null : r.getNewHead().getName();
+                } else {
+                    RevCommit mergeCommit = git.commit()
+                            .setMessage(fullMessage)
+                            .setAuthor(authorName, authorEmail)
+                            .call();
+                    mergeSha = mergeCommit.getName();
+                }
+                return new MergeOutcome(true, false, Collections.emptyList(), mergeSha);
+            }
+
+            List<String> conflicts = r.getConflicts() == null
+                    ? Collections.emptyList()
+                    : new ArrayList<>(r.getConflicts().keySet());
+            return new MergeOutcome(false, false, conflicts, null);
+        } catch (VersionException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new VersionException("合并失败: " + branchName, e);
+        }
+    }
+
+    /** 仓库是否处于保留冲突态的合并中（MERGING）或冲突已全部标记解决但尚未提交（MERGING_RESOLVED）。 */
+    public boolean repositoryMerging(long projectId) {
+        try (Repository repo = open(projectId)) {
+            RepositoryState st = repo.getRepositoryState();
+            return st == RepositoryState.MERGING || st == RepositoryState.MERGING_RESOLVED;
+        } catch (Exception e) {
+            throw new VersionException("读取仓库状态失败: project=" + projectId, e);
+        }
+    }
+
+    /** MERGING 态下另一父提交（被合并分支的 tip）的 sha；不在合并中时返回 null。 */
+    public String mergeHeadRef(long projectId) {
+        try (Repository repo = open(projectId)) {
+            ObjectId id = repo.resolve("MERGE_HEAD");
+            return id == null ? null : id.getName();
+        } catch (Exception e) {
+            throw new VersionException("读取合并头失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 无损中止一次保留冲突态的合并：reset --hard HEAD，工作区/索引回到合并前状态，
+     * MERGE_HEAD 随之清除、RepositoryState 回到 SAFE。只 reset 到 HEAD，不碰任何
+     * 提交——历史永不重写。非 MERGING 态调用是无害 no-op（幂等——崩溃恢复路径
+     * 可能盲调，不应因此报错）。
+     */
+    public void abortMerge(long projectId) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            git.reset().setMode(ResetCommand.ResetType.HARD).setRef("HEAD").call();
+        } catch (Exception e) {
+            throw new VersionException("中止合并失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 冲突裁决后提交：MERGING/MERGING_RESOLVED 态下把工作区（律师裁决后的最终内容）
+     * 整体 add（含 update，覆盖被裁决删除的路径）后手工署名提交。MERGE_HEAD 仍在
+     * 磁盘上，JGit 的 CommitCommand 会自动读出它作为第二父提交、连同当前 HEAD 一起
+     * 写成双亲的合并提交（第 1 期 Task 4 修署名时已验证过的机制，见 {@link #merge}）。
+     * 提交后 JGit 自动清理 MERGE_HEAD/MERGE_MSG，RepositoryState 回到 SAFE。
+     * 非 MERGING 态调用是编程错误（没有可裁决的合并），抛技术档异常。
+     */
+    public String commitMergeResolution(long projectId, String message,
+                                        String authorName, String authorEmail) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            RepositoryState st = repo.getRepositoryState();
+            if (st != RepositoryState.MERGING && st != RepositoryState.MERGING_RESOLVED) {
+                throw new VersionException("当前不在合并冲突状态: project=" + projectId);
+            }
+            git.add().addFilepattern(".").call();
+            git.add().addFilepattern(".").setUpdate(true).call();
+
+            String fullMessage = message + "\n\n" + KIND_TRAILER + "session";
+            RevCommit c = git.commit()
+                    .setMessage(fullMessage)
+                    .setAuthor(authorName, authorEmail)
+                    .call();
+            return c.getName();
+        } catch (VersionException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new VersionException("裁决提交失败: project=" + projectId, e);
         }
     }
 
