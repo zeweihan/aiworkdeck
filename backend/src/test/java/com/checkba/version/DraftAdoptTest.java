@@ -336,6 +336,58 @@ class DraftAdoptTest {
                 "落库清单必须以数据库为源，不能是 Git 对两份 JSON 的文本合并");
     }
 
+    // ---- 1b. 从旧版本另起一稿、零改动就采纳：ALREADY_UP_TO_DATE 不能污染数据库 -----
+
+    /**
+     * 损坏向量：律师从旧版本另起一稿（稿 tip 是主线的祖先），一笔都不改就点「采纳」。
+     * JGit 的合并结果是 ALREADY_UP_TO_DATE（SAFE 态、无 MERGE_HEAD）——旧实现仍然把
+     * {@code outcome.success()} 当成「可以走 completeAdopt」的信号，于是
+     * {@code unionApply} 把稿 tip 那份旧版本清单当成"新内容"、按 draft-wins 覆盖进
+     * 当前数据库：文件树被静默改回旧版模样，磁盘和 Git 历史都不动、也不产生任何
+     * 提交，律师在时间线上看不到任何痕迹，DB 与磁盘就此分叉。
+     *
+     * fixture 用排序（{@code sortOrder}）而不是改名让两版清单能区分开——改名会撞上
+     * {@code ProjectTreeManifestService.mainlineLocationWins} 那条「稿的旧路径在磁盘上
+     * 已经不存在时数据库跟随磁盘现实」的现实校验，反而测不出问题；排序不受那条校验
+     * 保护，旧实现会原样被 draft-wins 覆盖，是这个损坏向量的直接判别信号。
+     */
+    @Test
+    void adoptingDraftFromAnAncestorCommitWithNoChangesDoesNotCorruptTheFileTree() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+        write("合同.txt", "起点");
+        mainlineWork("起点");
+        String oldCommit = repoSvc.resolveRef(7L, repoSvc.mainBranch());
+
+        // 主线继续往前走一笔，只改排序——旧版本的清单从此和当前版本不同
+        db.get(501L).setSortOrder(5);
+        mainlineWork("主线调整了排序");
+
+        int commitCountBefore = repoSvc.log(7L, "HEAD", 100).size();
+
+        // 从第一笔（旧版本）另起一稿，一笔都不改
+        WorkSessionService.DraftCreateResult created =
+                svc.createDraft(7L, oldCommit, "旧版本的稿", 1L, "韩泽伟");
+
+        WorkSessionService.AdoptOutcome r =
+                svc.adoptDraft(7L, created.draft().getId(), 1L, "韩泽伟");
+
+        assertTrue(r.success());
+        assertEquals(5, db.get(501L).getSortOrder(),
+                "RED 时会被 unionApply 改回旧排序（0）——这就是损坏的直接证据");
+
+        assertEquals(commitCountBefore, repoSvc.log(7L, "HEAD", 100).size(),
+                "没有任何实质内容，不该产生新提交");
+        assertFalse(repoSvc.repositoryMerging(7L), "必须落回 SAFE 态");
+
+        assertEquals(WorkSession.Status.MERGED, sessions.get(created.draft().getId()).getStatus());
+        assertFalse(repoSvc.listBranches(7L).contains(created.draft().getBranchName()),
+                "稿分支应已删除");
+
+        assertNotNull(r.notice());
+        assertTrue(r.notice().contains("没有任何改动"),
+                "要告诉律师这一稿没有实质内容、没有生成版本");
+    }
+
     // ---- 2. 有 ACTIVE 工作段时拒绝采纳 --------------------------------------
 
     @Test

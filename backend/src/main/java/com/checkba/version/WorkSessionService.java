@@ -682,10 +682,13 @@ public class WorkSessionService {
      * 采纳一稿的结果。{@code success=false} 时 {@code conflictingPaths} 非空、仓库停在
      * 待裁决状态，等 {@link #resolveAdopt} 或 {@link #abortAdopt}；{@code affectedFileIds}
      * 两种情况下都可能非空——冲突时它是「回到主线侧」这一步已经改写过的文件，磁盘已经变了，
-     * 打开中的编辑器该重载就得重载，不能因为采纳没走完就瞒着前端。
+     * 打开中的编辑器该重载就得重载，不能因为采纳没走完就瞒着前端。{@code notice} 非空表示
+     * 「采纳成功，但有一句话要告诉律师」——目前只有一种：稿 tip 是主线的祖先（比如从旧
+     * 版本另起一稿、一笔都没改就采纳），没有任何实质内容可采纳，未生成版本。
      */
     public record AdoptOutcome(boolean success, String sha,
-                               List<String> conflictingPaths, List<Long> affectedFileIds) {}
+                               List<String> conflictingPaths, List<Long> affectedFileIds,
+                               String notice) {}
 
     /** 逐文件三选一：用主线的 / 用这一稿的 / 两份都留。 */
     public enum Resolution { MAIN, DRAFT, BOTH }
@@ -733,10 +736,21 @@ public class WorkSessionService {
                     draft.getBranchName(), adoptMessage(draft), userName, email(userName));
 
             if (outcome.success()) {
-                // mergeSha 非空 = 「已是最新」，JGit 没产生也无从产生新提交；
-                // 为空 = MERGED_NOT_COMMITTED，由 completeAdopt 落成采纳提交。
+                if (outcome.mergeSha() != null) {
+                    // mergeNoCommit 的契约（见其 Javadoc）：干净合并永远不自己提交，
+                    // mergeSha 非空只可能来自 ALREADY_UP_TO_DATE 这一条路——稿 tip
+                    // 已经是主线的祖先，JGit 压根没进入合并流程，没有 MERGE_HEAD，
+                    // 无从「稍后提交」。典型场景：从旧版本另起一稿，一笔都没改就
+                    // 点了采纳。不能落到 completeAdopt：那边的 unionApply 会把稿
+                    // tip（旧版本）的清单当成「新内容」按 draft-wins 覆盖进当前
+                    // 数据库，把文件树静默改回旧版模样——磁盘、Git 历史都不动，
+                    // 纯数据库层面的静默损坏，且没有任何提交可供事后追查。
+                    return finishEmptyAdopt(projectId, draft);
+                }
+                // MERGED_NOT_COMMITTED：合并有实质内容，交给 completeAdopt 补齐
+                // 清单并落成采纳提交。
                 return completeAdopt(projectId, draft, draftTip, mainTipBefore,
-                        outcome.mergeSha(), back.affectedFileIds(), userName);
+                        null, back.affectedFileIds(), userName);
             }
 
             List<String> conflicts = userVisibleConflicts(outcome.conflictingPaths());
@@ -756,7 +770,7 @@ public class WorkSessionService {
             }
             log.info("采纳一稿遇到冲突，停在待裁决: project={}, branch={}, files={}",
                     projectId, draft.getBranchName(), conflicts.size());
-            return new AdoptOutcome(false, null, conflicts, back.affectedFileIds());
+            return new AdoptOutcome(false, null, conflicts, back.affectedFileIds(), null);
         } finally {
             lock.unlock();
         }
@@ -908,7 +922,24 @@ public class WorkSessionService {
 
         log.info("采纳一稿: project={}, branch={}, name={}, sha={}",
                 projectId, draft.getBranchName(), draft.getTitle(), sha);
-        return new AdoptOutcome(true, sha, List.of(), affected);
+        return new AdoptOutcome(true, sha, List.of(), affected, null);
+    }
+
+    /**
+     * 稿没有任何实质内容时的采纳收尾（ALREADY_UP_TO_DATE：稿 tip 已经是主线的祖先）。
+     * 主线本就包含稿的全部内容，没有东西可合并、也没有东西可提交——跳过
+     * {@link #completeAdopt} 整条链路（不读稿的清单、不 unionApply、不写清单、不提交），
+     * 只兑现「收下这稿」的意图：稿标 MERGED、删分支，并告诉律师这一稿没有生成新版本。
+     */
+    private AdoptOutcome finishEmptyAdopt(long projectId, WorkSession draft) {
+        draft.setStatus(WorkSession.Status.MERGED);
+        draft.setEndedAt(LocalDateTime.now());
+        sessionRepository.save(draft);
+        repoService.deleteBranch(projectId, draft.getBranchName(), true);
+        log.info("采纳一稿但没有实质内容，未生成版本: project={}, branch={}, name={}",
+                projectId, draft.getBranchName(), draft.getTitle());
+        return new AdoptOutcome(true, null, List.of(), List.of(),
+                "这一稿没有任何改动，未生成版本");
     }
 
     /**
