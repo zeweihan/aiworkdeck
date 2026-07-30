@@ -98,7 +98,7 @@ class VersionControllerAuthTest {
     private static final long PROJECT_ID = 7L;
     private static final long USER_ID = 1L;
 
-    private enum Endpoint { STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT }
+    private enum Endpoint { STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT }
 
     private void invoke(Endpoint endpoint, String sessionId) {
         switch (endpoint) {
@@ -109,6 +109,8 @@ class VersionControllerAuthTest {
             case SESSION_DISCARD -> controller.discardSession(PROJECT_ID, sessionId);
             case SESSION_RESUME -> controller.resumeSession(PROJECT_ID, sessionId);
             case REVERT -> controller.revert(PROJECT_ID, Map.of("ref", "abc123"), sessionId);
+            case FILE_BYTES -> controller.fileBytesAtRef(PROJECT_ID, "abc123", "a.txt", sessionId);
+            case FILE_TEXT -> controller.fileTextAtRef(PROJECT_ID, "abc123", "a.txt", sessionId);
         }
     }
 
@@ -121,6 +123,8 @@ class VersionControllerAuthTest {
             case SESSION_DISCARD -> verify(sessionService, never()).discardSession(anyLong(), any());
             case SESSION_RESUME -> verify(sessionService, never()).resumeSession(anyLong());
             case REVERT -> verify(sessionService, never()).revertTo(anyLong(), anyString(), any(), anyString());
+            case FILE_BYTES, FILE_TEXT ->
+                    verify(repoService, never()).readBlobAtCommit(anyLong(), anyString(), anyString());
         }
     }
 

@@ -409,6 +409,23 @@ public class WorkSessionService {
         if (m != null) manifestService.applyToDatabase(projectId, m);
     }
 
+    /** 校验外部传入的仓库相对路径。非法即抛（技术档，不回显内容）。 */
+    static String safeRepoPath(String path) {
+        if (path == null || path.isBlank() || path.contains("\\") || path.startsWith("/")) {
+            throw new VersionException("非法路径");
+        }
+        String normalized = path.strip();
+        for (String seg : normalized.split("/")) {
+            if (seg.isEmpty() || seg.equals("..") || seg.equals(".")) {
+                throw new VersionException("非法路径");
+            }
+        }
+        if (normalized.equals(".awd") || normalized.startsWith(".awd/")) {
+            throw new VersionException("非法路径");
+        }
+        return normalized;
+    }
+
     /**
      * 生成律师在时间线上看到的那句话。清单文件是内部机制，不出现在描述里。
      */
