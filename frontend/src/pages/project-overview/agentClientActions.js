@@ -246,12 +246,20 @@ export const agentClientActionMethods = {
 
             // 保活池实例不再"切回即重挂载"：后台常驻实例里还是旧内容。把该
             // 文件的非活动保活实例逐出 LRU（卸载），下次激活时重挂载并拉取
-            // 新 wpsFileId 的字节。当前正显示的实例保持改前行为（不强刷）。
+            // 新字节。
+            let reloadOk = true
             if (updated) {
                 this.libreLruKeys = this.libreLruKeys.filter(k => {
                     if (!k.endsWith(':' + file.id)) return true
                     return k === 'left:' + this.activeFileIdLeft || k === 'right:' + this.activeFileIdRight
                 })
+                // 当前正显示的实例逐不掉（保活池"活动文件必进池"），而它既不
+                // watch file 也不以 wpsFileId 为模板 key——上面 Object.assign 进
+                // pane 列表对它毫无作用，画布上还是改前的内容。律师接着编辑，
+                // autosave 就会把「旧内容 + 新编辑」写回去，把版本退回/检查点
+                // 恢复冲掉。所以显式命令活动实例就地重载（换文档前它自己会取消
+                // 在飞的自动保存并清脏，见 reloadFromBackend）。
+                reloadOk = await this.reloadActiveLibreInstances(file.id)
             }
 
             // 如果文件不在任何窗格中打开，则打开它
@@ -260,7 +268,12 @@ export const agentClientActionMethods = {
                 this.openFile(file)
             }
 
-            uni.showToast({ title: `文件已更新: ${file.name}`, icon: 'success' })
+            if (reloadOk) {
+                uni.showToast({ title: `文件已更新: ${file.name}`, icon: 'success' })
+            } else {
+                // 画布上仍是旧内容（该实例已自己拦下保存），不能报"已更新"。
+                uni.showToast({ title: `${file.name} 重新加载失败，请关闭标签后重新打开`, icon: 'none', duration: 4000 })
+            }
 
             // 刷新文件树以更新文件信息
             if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
