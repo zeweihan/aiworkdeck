@@ -679,6 +679,119 @@ public class ProjectRepoService {
         return out;
     }
 
+    // ==================== 远端（v2 云端协作） ====================
+
+    private static final String ORIGIN = "origin";
+    private static final String ORIGIN_MASTER = "refs/remotes/origin/master";
+    private static final String MILESTONE_SPEC =
+            "+refs/tags/awd/milestone/*:refs/tags/awd/milestone/*";
+
+    /** 建/改 origin。幂等：已存在则改 URL。 */
+    public void setRemoteOrigin(long projectId, String url) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            org.eclipse.jgit.transport.URIish uri = new org.eclipse.jgit.transport.URIish(url);
+            if (repo.getConfig().getSubsections("remote").contains(ORIGIN)) {
+                org.eclipse.jgit.api.RemoteSetUrlCommand cmd = git.remoteSetUrl();
+                cmd.setRemoteName(ORIGIN);
+                cmd.setRemoteUri(uri);
+                cmd.call();
+            } else {
+                org.eclipse.jgit.api.RemoteAddCommand cmd = git.remoteAdd();
+                cmd.setName(ORIGIN);
+                cmd.setUri(uri);
+                cmd.call();
+            }
+        } catch (Exception e) {
+            throw new VersionException("配置云端地址失败: project=" + projectId, e);
+        }
+    }
+
+    /** 读 origin URL；未配置返回 null。 */
+    public String remoteOriginUrl(long projectId) {
+        try (Repository repo = open(projectId)) {
+            String url = repo.getConfig().getString("remote", ORIGIN, "url");
+            return (url == null || url.isBlank()) ? null : url;
+        } catch (Exception e) {
+            throw new VersionException("读取云端地址失败: project=" + projectId, e);
+        }
+    }
+
+    /** 抓 master + 里程碑标签；返回抓完后的 origin/master sha（远端空仓返回 null）。 */
+    public String fetchFromOrigin(long projectId, String username, String token) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            git.fetch()
+                    .setRemote(ORIGIN)
+                    .setCredentialsProvider(
+                            new org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider(
+                                    username == null ? "" : username, token == null ? "" : token))
+                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec(
+                            "+refs/heads/master:" + ORIGIN_MASTER),
+                            new org.eclipse.jgit.transport.RefSpec(MILESTONE_SPEC))
+                    .setTimeout(60)
+                    .call();
+            return originMasterSha(projectId);
+        } catch (Exception e) {
+            throw new VersionException("从云端更新失败: project=" + projectId, e);
+        }
+    }
+
+    /** 本地已知的 origin/master（不联网）；没有返回 null。 */
+    public String originMasterSha(long projectId) {
+        return resolveRef(projectId, ORIGIN_MASTER);
+    }
+
+    public record PushOutcome(boolean pushed, boolean rejected, String message) {}
+
+    /**
+     * 推 master（非强制——被拒即「主线被别人推进」，走返回值不走异常）
+     * + 里程碑标签（强制——重命名即覆盖是 tagMilestone 的既有语义，随行到云端）。
+     */
+    public PushOutcome pushMainlineToOrigin(long projectId, String username, String token) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            Iterable<org.eclipse.jgit.transport.PushResult> results = git.push()
+                    .setRemote(ORIGIN)
+                    .setCredentialsProvider(
+                            new org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider(
+                                    username == null ? "" : username, token == null ? "" : token))
+                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec(
+                            "refs/heads/master:refs/heads/master"),
+                            new org.eclipse.jgit.transport.RefSpec(MILESTONE_SPEC))
+                    .setTimeout(60)
+                    .call();
+            boolean rejected = false;
+            StringBuilder msg = new StringBuilder();
+            for (org.eclipse.jgit.transport.PushResult r : results) {
+                for (org.eclipse.jgit.transport.RemoteRefUpdate u : r.getRemoteUpdates()) {
+                    switch (u.getStatus()) {
+                        case OK, UP_TO_DATE -> { }
+                        case REJECTED_NONFASTFORWARD, REJECTED_OTHER_REASON,
+                             REJECTED_REMOTE_CHANGED -> rejected = true;
+                        default -> {
+                            rejected = true;
+                            msg.append(u.getStatus()).append(' ');
+                        }
+                    }
+                }
+            }
+            return new PushOutcome(!rejected, rejected, msg.toString().trim());
+        } catch (Exception e) {
+            throw new VersionException("上传到云端失败: project=" + projectId, e);
+        }
+    }
+
+    /** ancestorRef 是否在 descendantRef 的历史里（快进判定/主线被推进判定）。 */
+    public boolean isAncestor(long projectId, String ancestorRef, String descendantRef) {
+        try (Repository repo = open(projectId);
+             org.eclipse.jgit.revwalk.RevWalk walk = new org.eclipse.jgit.revwalk.RevWalk(repo)) {
+            var a = repo.resolve(ancestorRef);
+            var d = repo.resolve(descendantRef);
+            if (a == null || d == null) return false;
+            return walk.isMergedInto(walk.parseCommit(a), walk.parseCommit(d));
+        } catch (Exception e) {
+            throw new VersionException("比较版本先后失败: project=" + projectId, e);
+        }
+    }
+
     /**
      * 重打包并清理不可达对象。
      * 只动不可达对象（失败的合并、已丢弃工作段的悬空提交）——
