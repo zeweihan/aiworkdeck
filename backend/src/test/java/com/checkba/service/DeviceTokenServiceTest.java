@@ -6,14 +6,18 @@ import com.checkba.repository.DeviceTokenRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -36,6 +40,26 @@ class DeviceTokenServiceTest {
         });
         when(repo.findByTokenHash(anyString()))
                 .thenAnswer(inv -> Optional.ofNullable(byHash.get(inv.getArgument(0, String.class))));
+        when(repo.findById(anyLong()))
+                .thenAnswer(inv -> {
+                    Long id = inv.getArgument(0, Long.class);
+                    return byHash.values().stream()
+                            .filter(t -> id.equals(t.getId()))
+                            .findFirst();
+                });
+        doAnswer(inv -> {
+            DeviceToken t = inv.getArgument(0);
+            byHash.remove(t.getTokenHash());
+            return null;
+        }).when(repo).delete(any());
+        when(repo.findByUserIdOrderByCreatedAtDesc(anyLong()))
+                .thenAnswer(inv -> {
+                    Long userId = inv.getArgument(0, Long.class);
+                    return byHash.values().stream()
+                            .filter(t -> userId.equals(t.getUserId()))
+                            .sorted(Comparator.comparing(DeviceToken::getCreatedAt).reversed())
+                            .toList();
+                });
         svc = new DeviceTokenService(repo);
     }
 
@@ -60,5 +84,30 @@ class DeviceTokenServiceTest {
         DeviceTokenService.IssuedToken issued = svc.issue(7L, "e2e");
         assertEquals(7L, AuthController.getUserIdFromSession(issued.plaintext()));
         assertNull(AuthController.getUserIdFromSession(null)); // null 守卫，不再 NPE
+    }
+
+    @Test
+    void revokeDeletesOwnToken() {
+        DeviceTokenService.IssuedToken issued = svc.issue(42L, "MacBook");
+        svc.revoke(42L, issued.id());
+        assertNull(svc.resolveUserId(issued.plaintext()));
+    }
+
+    @Test
+    void revokeIgnoresTokensOfOthers() {
+        DeviceTokenService.IssuedToken issuedB = svc.issue(2L, "B's phone");
+        svc.revoke(1L, issuedB.id());
+        assertEquals(2L, svc.resolveUserId(issuedB.plaintext()));
+    }
+
+    @Test
+    void listMineReturnsOnlyOwnTokens() {
+        svc.issue(1L, "A's laptop");
+        DeviceTokenService.IssuedToken issuedB = svc.issue(2L, "B's phone");
+
+        List<DeviceToken> mineOfB = svc.listMine(2L);
+
+        assertEquals(1, mineOfB.size());
+        assertEquals(issuedB.id(), mineOfB.get(0).getId());
     }
 }

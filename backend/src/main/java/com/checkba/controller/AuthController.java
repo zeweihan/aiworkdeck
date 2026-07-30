@@ -266,9 +266,14 @@ public class AuthController {
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) return Map.of("code", 1, "message", "未登录");
         var items = deviceTokenService.listMine(userId).stream()
-                .map(t -> Map.of("id", t.getId(), "name", t.getName(),
-                        "createdAt", String.valueOf(t.getCreatedAt()),
-                        "lastUsedAt", String.valueOf(t.getLastUsedAt())))
+                .map(t -> {
+                    Map<String, Object> item = new HashMap<>();
+                    item.put("id", t.getId());
+                    item.put("name", t.getName());
+                    item.put("createdAt", t.getCreatedAt() == null ? null : String.valueOf(t.getCreatedAt()));
+                    item.put("lastUsedAt", t.getLastUsedAt() == null ? null : String.valueOf(t.getLastUsedAt()));
+                    return item;
+                })
                 .toList();
         return Map.of("code", 0, "data", Map.of("tokens", items));
     }
