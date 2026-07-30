@@ -156,6 +156,23 @@ public class VersionController {
         }
     }
 
+    @PostMapping("/versions/{sha}/milestone")
+    public ResponseEntity<Map<String, Object>> markMilestone(
+            @PathVariable Long projectId, @PathVariable String sha,
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        String name = body == null ? null : body.get("name");
+        if (name == null || name.isBlank()) {
+            throw VersionException.userFacing("请给重要版本起个名字");
+        }
+        if (name.strip().length() > 64) {
+            throw VersionException.userFacing("名字太长了，请控制在 64 字以内");
+        }
+        repoService.tagMilestone(projectId, sha, name.strip());
+        return ok(Map.of("marked", true));
+    }
+
     @PostMapping("/revert")
     public ResponseEntity<Map<String, Object>> revert(
             @PathVariable Long projectId,

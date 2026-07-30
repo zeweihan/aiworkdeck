@@ -14,6 +14,8 @@ import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevObject;
+import org.eclipse.jgit.revwalk.RevTag;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
 import org.eclipse.jgit.treewalk.AbstractTreeIterator;
@@ -30,7 +32,9 @@ import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 每项目一个 Git 仓库的薄封装。只认识 Git 概念，不认识「工作段」——
@@ -146,8 +150,9 @@ public class ProjectRepoService {
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
             ObjectId start = repo.resolve(ref);
             if (start == null) return out;
+            Map<String, String> milestones = milestonesIn(repo);
             for (RevCommit c : git.log().add(start).setMaxCount(limit).call()) {
-                out.add(toEntry(c));
+                out.add(toEntry(c, milestones));
             }
             return out;
         } catch (Exception e) {
@@ -155,7 +160,7 @@ public class ProjectRepoService {
         }
     }
 
-    private VersionEntry toEntry(RevCommit c) {
+    private VersionEntry toEntry(RevCommit c, Map<String, String> milestones) {
         String full = c.getFullMessage();
         String kind = extractTrailer(full, KIND_TRAILER);
         String note = extractTrailer(full, NOTE_TRAILER);
@@ -168,7 +173,8 @@ public class ProjectRepoService {
                 Instant.ofEpochSecond(c.getCommitTime()),
                 kind == null ? "auto" : kind,
                 note,
-                parents);
+                parents,
+                milestones.get(c.getName()));
     }
 
     private String extractTrailer(String fullMessage, String prefix) {
@@ -366,6 +372,52 @@ public class ProjectRepoService {
         } catch (Exception e) {
             throw new VersionException("合并失败: " + branchName, e);
         }
+    }
+
+    private static final String MILESTONE_TAG_PREFIX = "refs/tags/awd/milestone/";
+
+    /** 标记重要版本：附注标签，名字放 tag message。同一版本重打则覆盖旧名。 */
+    public void tagMilestone(long projectId, String sha, String name) {
+        try (Repository repo = open(projectId); Git git = new Git(repo);
+             RevWalk walk = new RevWalk(repo)) {
+            ObjectId id = repo.resolve(sha);
+            if (id == null) throw new VersionException("版本不存在: " + sha);
+            git.tag()
+               .setObjectId(walk.parseCommit(id))
+               .setName("awd/milestone/" + sha.substring(0, Math.min(12, sha.length())))
+               .setMessage(name)
+               .setAnnotated(true)
+               .setForceUpdate(true)
+               .call();
+        } catch (VersionException e) { throw e; }
+        catch (Exception e) { throw new VersionException("标记重要版本失败", e); }
+    }
+
+    /** 全部重要版本：完整 sha → 里程碑名。 */
+    public Map<String, String> listMilestones(long projectId) {
+        try (Repository repo = open(projectId)) {
+            return milestonesIn(repo);
+        } catch (Exception e) {
+            throw new VersionException("读取重要版本失败: project=" + projectId, e);
+        }
+    }
+
+    /** log() 与 listMilestones() 共用的读取逻辑，接收已打开的 Repository，避免重复开仓库。 */
+    private Map<String, String> milestonesIn(Repository repo) throws IOException {
+        Map<String, String> out = new HashMap<>();
+        try (RevWalk walk = new RevWalk(repo)) {
+            for (Ref ref : repo.getRefDatabase().getRefsByPrefix(MILESTONE_TAG_PREFIX)) {
+                try {
+                    RevObject obj = walk.parseAny(ref.getObjectId());
+                    if (obj instanceof RevTag tag) {
+                        out.put(walk.peel(tag).getName(), tag.getFullMessage().strip());
+                    }
+                } catch (Exception e) {
+                    log.warn("解析里程碑失败: {}", ref.getName(), e);
+                }
+            }
+        }
+        return out;
     }
 
     /**
