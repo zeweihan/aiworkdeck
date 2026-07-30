@@ -2,7 +2,6 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
-import com.checkba.service.ai.EditorBridgeService;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -11,6 +10,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -44,7 +44,6 @@ public class WorkSessionService {
     private final ProjectTreeManifestService manifestService;
     private final WorkSessionRepository sessionRepository;
     private final TaskScheduler taskScheduler;
-    private final EditorBridgeService editorBridgeService;
     private final ProjectFileRepository fileRepository;
 
     /** 防抖静默期。测试里调短或调长以取得确定性。 */
@@ -75,13 +74,11 @@ public class WorkSessionService {
                               ProjectTreeManifestService manifestService,
                               WorkSessionRepository sessionRepository,
                               TaskScheduler taskScheduler,
-                              EditorBridgeService editorBridgeService,
                               ProjectFileRepository fileRepository) {
         this.repoService = repoService;
         this.manifestService = manifestService;
         this.sessionRepository = sessionRepository;
         this.taskScheduler = taskScheduler;
-        this.editorBridgeService = editorBridgeService;
         this.fileRepository = fileRepository;
     }
 
@@ -398,11 +395,21 @@ public class WorkSessionService {
         }
     }
 
+    /** 退回结果：新版本的提交号，以及被这次退回改动过、且仍在数据库中的文件 id 列表。 */
+    public record RevertResult(String sha, List<Long> affectedFileIds) {}
+
     /**
      * 退回到某一版。**不是历史重写**：把目标版本的内容还原到工作区，
      * 再作为一个新版本提交。时间线只会往前长。
+     *
+     * 磁盘文件已经被退回改写，但打开中的编辑器还端着退回前的内容——不重载的话
+     * 下一次 autosave 就会把律师刚做的退回冲掉。这里不走 SSE 通知编辑器
+     * （EditorBridgeService 的会话 ThreadLocal 只在 AI 工具调用期间才有值，
+     * revertTo 唯一的调用方是普通 REST 端点 VersionController.revert，线程上永远
+     * 没有会话 id，SSE 通知发不出去——响应驱动：把受影响文件的 id 随返回值带回去，
+     * 前端自己决定重载哪些打开中的标签。
      */
-    public String revertTo(long projectId, String ref, Long userId, String userName) {
+    public RevertResult revertTo(long projectId, String ref, Long userId, String userName) {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
@@ -413,7 +420,7 @@ public class WorkSessionService {
 
             // 变更列表必须在覆盖工作区之前算好——覆盖之后 HEAD 已经变了（下面这笔
             // "退回到早先的版本"提交），再 diff(ref, HEAD) 结果就不对了。这份列表
-            // 之后还要拿来通知编辑器重载，覆盖前留存、不要事后再 diff 一次。
+            // 之后还要拿来匹配受影响文件，覆盖前留存、不要事后再 diff 一次。
             List<FileChange> changes = repoService.diffNameStatus(projectId, ref, "HEAD");
 
             restoreWorkTreeFrom(projectId, ref, changes);
@@ -424,35 +431,38 @@ public class WorkSessionService {
                     "退回到早先的版本", "session", null, userName, email(userName));
             log.info("退回: project={}, ref={}, newSha={}", projectId, ref, sha);
 
-            // 磁盘文件已经被退回改写，但打开中的编辑器还端着退回前的内容——不通知的话
-            // 下一次 autosave 就会把律师刚做的退回冲掉。通知失败不影响退回本身，
-            // 版本记录（这里的编辑器重载提醒也算）是保险，不是主流程。
-            if (sha != null) {
-                try {
-                    notifyEditorsOfRevert(projectId, changes);
-                } catch (Exception e) {
-                    log.warn("退回后通知编辑器重载失败: project={}, ref={}", projectId, ref, e);
-                }
-            }
+            List<Long> affectedFileIds = sha == null
+                    ? List.of() : resolveAffectedFileIds(projectId, changes);
 
-            return sha;
+            return new RevertResult(sha, affectedFileIds);
         } finally {
             lock.unlock();
         }
     }
 
-    /** 通知每一个被本次退回改动过的、当前仍在数据库中的文件，让打开中的编辑器重新加载。 */
-    private void notifyEditorsOfRevert(long projectId, List<FileChange> changes) {
-        List<ProjectFile> files = fileRepository.findByProjectId(projectId);
-        for (FileChange c : changes) {
-            String path = c.path();
-            if (path.startsWith(".awd/")) continue;
-            String targetPath = "projects/" + projectId + "/" + path;
-            for (ProjectFile f : files) {
-                if (targetPath.equals(f.getFilePath())) {
-                    editorBridgeService.sendReloadFileAction(f);
+    /**
+     * 把退回改动过的仓库相对路径，匹配到当前数据库里的 ProjectFile 记录，收集受影响
+     * 文件的 id。只是给前端重载编辑器用的辅助信息，不是主流程——匹配失败绝不能让
+     * 退回本身失败，这里整体包死，出错就退化成空列表。
+     */
+    private List<Long> resolveAffectedFileIds(long projectId, List<FileChange> changes) {
+        try {
+            List<ProjectFile> files = fileRepository.findByProjectId(projectId);
+            List<Long> ids = new ArrayList<>();
+            for (FileChange c : changes) {
+                String path = c.path();
+                if (path.startsWith(".awd/")) continue;
+                String targetPath = "projects/" + projectId + "/" + path;
+                for (ProjectFile f : files) {
+                    if (targetPath.equals(f.getFilePath())) {
+                        ids.add(f.getId());
+                    }
                 }
             }
+            return ids;
+        } catch (Exception e) {
+            log.warn("退回后匹配受影响文件失败: project={}", projectId, e);
+            return List.of();
         }
     }
 

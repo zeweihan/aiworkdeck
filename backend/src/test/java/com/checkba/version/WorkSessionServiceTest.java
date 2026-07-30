@@ -2,7 +2,6 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
-import com.checkba.service.ai.EditorBridgeService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.checkba.storage.StorageProperties;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,7 +40,6 @@ class WorkSessionServiceTest {
     private WorkSessionRepository sessionRepo;
     private ThreadPoolTaskScheduler scheduler;
     private ProjectFileRepository fileRepo;
-    private EditorBridgeService editorBridge;
 
     @BeforeEach
     void setUp(@TempDir Path tmp) throws Exception {
@@ -76,13 +74,17 @@ class WorkSessionServiceTest {
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
 
-        editorBridge = mock(EditorBridgeService.class);
-        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, editorBridge, fileRepo);
+        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo);
         svc.setDebounceMillis(60_000); // 测试里不让防抖自己触发，全部手动 commitNow
     }
 
     private static ProjectFile projectFile(long projectId, String filePath, String name) {
+        return projectFile(projectId, filePath, name, null);
+    }
+
+    private static ProjectFile projectFile(long projectId, String filePath, String name, Long id) {
         ProjectFile f = new ProjectFile();
+        f.setId(id);
         f.setProjectId(projectId);
         f.setFilePath(filePath);
         f.setName(name);
@@ -210,10 +212,10 @@ class WorkSessionServiceTest {
         svc.endSession(7L, 1L, "韩泽伟", "第一次工作");
 
         int before = repoSvc.log(7L, "HEAD", 100).size();
-        String revertSha = svc.revertTo(7L, firstSha, 1L, "韩泽伟");
+        WorkSessionService.RevertResult result = svc.revertTo(7L, firstSha, 1L, "韩泽伟");
         int after = repoSvc.log(7L, "HEAD", 100).size();
 
-        assertNotNull(revertSha);
+        assertNotNull(result.sha());
         assertTrue(after > before, "退回必须新增版本，不得删除历史");
         assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")));
     }
@@ -327,7 +329,7 @@ class WorkSessionServiceTest {
 
         // 复用同一份会话状态（sessionRepo/manifestSvc 都指向同一个内存 Map 和同一个
         // 磁盘仓库），但改走 spy 过的 repoService，这样才能在 commitAll 内部插入闩门。
-        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, editorBridge, fileRepo);
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, fileRepo);
         lockedSvc.setDebounceMillis(60_000);
 
         List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
@@ -498,7 +500,7 @@ class WorkSessionServiceTest {
             return invocation.callRealMethod();
         }).when(spyRepo).gc(anyLong());
 
-        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, editorBridge, fileRepo);
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, fileRepo);
         lockedSvc.setDebounceMillis(60_000);
 
         List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
@@ -565,13 +567,18 @@ class WorkSessionServiceTest {
 
     /**
      * 问题 A（数据安全）回归测试：revertTo 改了磁盘文件，但打开中的编辑器还端着
-     * 退回前的内容，下一次 autosave 会把退回冲掉。修复后 revertTo 要通知前端
-     * 编辑器重新加载每一个被退回动过的文件。
+     * 退回前的内容，下一次 autosave 会把退回冲掉。
+     *
+     * 上一版的修复（EditorBridgeService.sendReloadFileAction）在生产里是惰性代码：
+     * 那条 SSE 通道靠 AgentOrchestrator 在 AI 工具调用期间设置的 ThreadLocal 会话 id，
+     * 而 revertTo 唯一的调用方 VersionController.revert 是普通 REST 端点，线程上永远
+     * 没有会话 id，通知永远发不出去。改为响应驱动：revertTo 直接把受影响文件的 id
+     * 随返回值带回去，前端自己决定重载哪些打开中的标签。
      */
     @Test
-    void revertNotifiesEditorToReloadChangedFiles() throws Exception {
+    void revertReturnsAffectedFileIdsForChangedFiles() throws Exception {
         when(fileRepo.findByProjectId(7L)).thenReturn(
-                List.of(projectFile(7L, "projects/7/合同.txt", "合同.txt")));
+                List.of(projectFile(7L, "projects/7/合同.txt", "合同.txt", 42L)));
 
         String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
 
@@ -580,31 +587,41 @@ class WorkSessionServiceTest {
         svc.commitNow(7L, 1L, "韩泽伟", "改了");
         svc.endSession(7L, 1L, "韩泽伟", "第一次工作");
 
-        svc.revertTo(7L, firstSha, 1L, "韩泽伟");
+        WorkSessionService.RevertResult result = svc.revertTo(7L, firstSha, 1L, "韩泽伟");
 
-        verify(editorBridge).sendReloadFileAction(argThat(f -> "合同.txt".equals(f.getName())));
+        assertNotNull(result.sha());
+        assertEquals(List.of(42L), result.affectedFileIds());
     }
 
     /**
-     * 回归测试：通知编辑器失败不应该影响退回本身——版本记录是保险，不是主流程。
+     * 回归测试：匹配受影响文件失败（例如 fileRepository 查询抛异常）不应该影响退回
+     * 本身——这份 id 列表只是前端重载编辑器的辅助信息，不是主流程。sha 正常返回，
+     * affectedFileIds 退化成空列表。
+     *
+     * manifestService 内部持有的是 setUp 里那个"好" fileRepo（capture/applyToDatabase
+     * 靠它正常同步清单，贯穿 onChangeSignal/commitNow/endSession/revertTo 全程）；
+     * 这里单独构造一个 WorkSessionService，只换掉它自己持有的 fileRepository
+     * （resolveAffectedFileIds 匹配专用），两者互不干扰，才能精确地只让匹配这一步失败。
      */
     @Test
-    void revertStillSucceedsWhenEditorNotificationThrows() throws Exception {
-        when(fileRepo.findByProjectId(7L)).thenReturn(
-                List.of(projectFile(7L, "projects/7/合同.txt", "合同.txt")));
-        doThrow(new RuntimeException("SSE 推送失败"))
-                .when(editorBridge).sendReloadFileAction(any());
+    void revertStillSucceedsWhenAffectedFileLookupThrows() throws Exception {
+        ProjectFileRepository throwingFileRepo = mock(ProjectFileRepository.class);
+        when(throwingFileRepo.findByProjectId(7L)).thenThrow(new RuntimeException("数据库查询失败"));
+        WorkSessionService throwingSvc =
+                new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, throwingFileRepo);
+        throwingSvc.setDebounceMillis(60_000);
 
         String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
 
-        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        throwingSvc.onChangeSignal(7L, 1L, "韩泽伟");
         Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
-        svc.commitNow(7L, 1L, "韩泽伟", "改了");
-        svc.endSession(7L, 1L, "韩泽伟", "第一次工作");
+        throwingSvc.commitNow(7L, 1L, "韩泽伟", "改了");
+        throwingSvc.endSession(7L, 1L, "韩泽伟", "第一次工作");
 
-        String revertSha = svc.revertTo(7L, firstSha, 1L, "韩泽伟");
+        WorkSessionService.RevertResult result = throwingSvc.revertTo(7L, firstSha, 1L, "韩泽伟");
 
-        assertNotNull(revertSha, "通知编辑器失败不应该让退回本身失败");
+        assertNotNull(result.sha(), "匹配受影响文件失败不应该让退回本身失败");
+        assertTrue(result.affectedFileIds().isEmpty());
         assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")));
     }
 

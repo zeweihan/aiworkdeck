@@ -429,4 +429,29 @@ export const fileOpenTabsMethods = {
 
       console.log('[ProjectOverview] 打开文档对比标签:', diffFile.name)
     },
+
+    // 版本退回（问题 A 数据安全修复）：VersionPanel 在 revertToVersion 成功后把受影响
+    // 文件 id 一路冒泡上来（project-overview.vue @reverted-files）。响应驱动，不走 SSE——
+    // 发起退回的就是前端自己，不需要后端另外"通知"。这里对左右两窗格里正打开的、
+    // id 命中的 Office 文档标签，复用既有的编辑器重载例程（agentClientActions.js 的
+    // handleEditorReloadFile，AI 改文档后刷新编辑器走的同一条路，就地重载不 flush 脏
+    // 内容）；没打开的文件什么都不做，不能用 openFile 把它硬拉出来。
+    //
+    // 绝对不能用「关闭标签」实现重载：closeFile 关闭有脏改动的 Office 文档前会先
+    // flushSave 落盘——那恰好会把退回前编辑器里还端着的旧字节写回去，把律师刚做的
+    // 退回冲掉，这正是本次要修的数据安全问题本身。
+    onVersionRevertedFiles(affectedFileIds) {
+      if (!Array.isArray(affectedFileIds) || !affectedFileIds.length) return
+      const idSet = new Set(affectedFileIds)
+      const openIds = new Set()
+      for (const f of this.leftFiles) {
+        if (idSet.has(f.id) && this.useLibreEditor(f)) openIds.add(f.id)
+      }
+      for (const f of this.rightFiles) {
+        if (idSet.has(f.id) && this.useLibreEditor(f)) openIds.add(f.id)
+      }
+      for (const fileId of openIds) {
+        this.handleEditorReloadFile({ fileId })
+      }
+    },
 }

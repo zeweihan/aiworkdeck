@@ -195,9 +195,11 @@ public class VersionController {
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireMember(projectId, sessionId);
-        String sha = sessionService.revertTo(
+        WorkSessionService.RevertResult result = sessionService.revertTo(
                 projectId, body.get("ref"), userId, userName(userId));
-        return ok(Map.of("sha", sha == null ? "" : sha));
+        return ok(Map.of(
+                "sha", result.sha() == null ? "" : result.sha(),
+                "affectedFileIds", result.affectedFileIds()));
     }
 
     /**

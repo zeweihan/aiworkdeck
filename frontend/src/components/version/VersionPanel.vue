@@ -30,7 +30,7 @@
         :project-id="projectId"
         :file-filter="fileFilter"
         :key="timelineKey"
-        @reverted="refresh"
+        @reverted="onReverted"
         @compare-file="$emit('compare-file', $event)"
       />
     </template>
@@ -49,7 +49,7 @@ export default {
     projectId: { type: [String, Number], required: true },
     fileFilter: { type: Object, default: null },
   },
-  emits: ['compare-file', 'clear-file-filter'],
+  emits: ['compare-file', 'clear-file-filter', 'reverted-files'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -87,6 +87,10 @@ export default {
       } finally {
         this.loading = false
       }
+    },
+    onReverted(affectedFileIds) {
+      this.refresh()
+      this.$emit('reverted-files', affectedFileIds || [])
     },
     async enable() {
       if (this.busy) return
