@@ -741,6 +741,24 @@
                       @open-url="onLibreOpenUrl"
                     />
                   </view>
+                  <!-- 预热备胎实例（librePool.js）：file=null 时是后台预 boot 的
+                       空白引擎，首开 Office 文档时过继（file 换成文档）省去整链
+                       冷启动。未激活时用绝对定位 + visibility 隐藏而非 v-show：
+                       display:none 下 boot 引擎画布无尺寸，风险未验证。 -->
+                  <view
+                    v-for="sp in libreSpares"
+                    :key="'libre-spare-' + sp.key"
+                    class="pane-content"
+                    :class="{ 'libre-spare-standby': !(sp.file && activeFileLeft && activeFileLeft.id === sp.file.id) }"
+                  >
+                    <LibreOfficeEditor
+                      :ref="el => setLibreSpareRef(sp, el)"
+                      :file="sp.file"
+                      @ready="onLibreSpareReady(sp, $event)"
+                      @close="onLibreClose"
+                      @open-url="onLibreOpenUrl"
+                    />
+                  </view>
                   <view v-if="activeFileLeft && !useLibreEditor(activeFileLeft)" class="pane-content">
                     <BrowserPane
                       v-if="isBrowserTab(activeFileLeft)"
@@ -1571,6 +1589,9 @@ export default {
       // 内嵌编辑器保活 LRU：'pane:fileId'（left:123），最近激活在前。在池中的
       // Office 标签切走时实例不销毁（v-show 隐藏），切回免重 boot/重载。
       libreLruKeys: [],
+      // 预热备胎实例（librePool.js）：{key, file}。file=null 是后台预 boot 的
+      // 空白备胎；过继后 file 为真实文档、实例转正（渲染仍在此数组）。
+      libreSpares: [],
       // 后端 doc_stream_data（旧名 wps_stream_data）流式写入的本地缓冲（#79：LibreOffice 消费端）
       _docStreamBuffer: '',
       _docStreamTimer: null,
@@ -1741,6 +1762,7 @@ export default {
     // （出 leftFiles/rightFiles）时自然出池 → 组件卸载走现有 close 流程。
     leftLibreFiles() {
       return this.leftFiles.filter(f => this.useLibreEditor(f) &&
+        !this.libreSpares.some(sp => sp.file && sp.file.id === f.id) && // 过继实例渲染自备胎槽
         (f.id === this.activeFileIdLeft || this.libreLruKeys.includes('left:' + f.id)))
     },
     rightLibreFiles() {
@@ -1866,6 +1888,7 @@ export default {
     }
     // 后台任务状态轮询清理
     if (this.convStatusPollTimer) { clearInterval(this.convStatusPollTimer); this.convStatusPollTimer = null }
+    clearTimeout(this._libreSpareTimer)
     this.teardownResponsiveListener()
     // Epic #43: 解绑 ⌘⇧O 嵌入式编辑器监听
     // 清理轮询定时器
@@ -2018,6 +2041,8 @@ export default {
       window.__checkbaActiveOverviewVm = this
       if (this._wpsInternalLinkFn) window.__checkbaHandleInternalLink = this._wpsInternalLinkFn
     }
+    // 重新成为活跃实例后确保有预热备胎（mounted 时可能因非活跃被跳过）
+    this.scheduleLibreSpare()
 
     // Sync UI state
     this.isRecording = activityTracker.getRecordingState()
@@ -2073,6 +2098,8 @@ export default {
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
     this.setupResponsiveListener()
+    // 预热备胎：延迟建（避开项目打开期资源竞争），首开 Office 文档免冷启动
+    this.scheduleLibreSpare()
     // 后台任务状态轮询：AI 面板打开时每 15s 刷一次会话状态（驱动历史列表状态点
     // 与入口角标；quiet 模式不弹错误 toast、不动 loading 态）
     this.convStatusPollTimer = setInterval(() => {
@@ -2339,6 +2366,8 @@ export default {
     activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f) },
     activeFileRight(f) { this.onActiveOfficeFileChanged('right', f) },
     focusedPane() { this.syncLibreExecutor() },
+    // 关闭 tab 后清掉文件已不在左列表的过继备胎条目（closeFile 已 flush）
+    'leftFiles.length'() { this.pruneClosedLibreSpares() },
   },
   methods: {
     // Phase 1 外置的方法组（纯搬移，this 即页面实例）

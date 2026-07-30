@@ -1771,6 +1771,15 @@ $bg-white: #FFFFFF;
   box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.03);
 }
 
+/* 预热备胎实例（librePool.js）：未激活时脱离布局流隐形占位。不能用
+   display:none——引擎要在有尺寸的画布里 boot；visibility 保留布局尺寸。 */
+.pane-content.libre-spare-standby {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .pane-empty, .empty-workspace {
   width: 100%;
   height: 100%;

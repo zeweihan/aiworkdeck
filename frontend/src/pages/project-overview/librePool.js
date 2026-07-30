@@ -43,9 +43,74 @@ export const librePoolMethods = {
         this.libreOfficeActive = !!exec
     },
     // 激活的标签变化：Office 文档记入保活 LRU（超上限触发淘汰），并同步指针。
+    // 池外文档先尝试过继给预热备胎（必须在 touchLibreLru 之前判断——touch 会
+    // 把 key 记入 libreLruKeys，adopt 以"不在 lru 记账"识别无实例）。
     onActiveOfficeFileChanged(pane, file) {
-        if (file && this.useLibreEditor(file)) this.touchLibreLru(pane, file.id)
+        if (file && this.useLibreEditor(file)) {
+            if (pane === 'left') this.maybeAdoptLibreSpare(file)
+            this.touchLibreLru(pane, file.id)
+        }
         this.syncLibreExecutor()
+    },
+
+    // ---- 预热备胎（spare）：首开文档免整链冷启动 ----
+    // 常驻一个后台 boot 到空白就绪的隐藏实例（借鉴 OnlyOffice"服务常驻热着"）。
+    // 激活一个池外 Office 文档时把文档过继给它（组件 watch file 触发装载），
+    // 省去 webview 创建 + 引擎 WASM 启动整段。过继后转正进常规记账（executor/
+    // ref 均按 'left:fileId' 键，LRU 淘汰与 closeFile flush 走既有链路）。
+    // 只在左窗格设备胎（webview 不能跨容器移动）；右窗格分屏冷开保持原状。
+    // 代价：常驻多一个空白实例的内存（数百 MB），换首开从整链 boot 降为仅
+    // load_document。
+    scheduleLibreSpare() {
+        // 延迟建胎：避开项目打开期（文件树/面板初始化）的资源竞争。
+        clearTimeout(this._libreSpareTimer)
+        this._libreSpareTimer = setTimeout(() => this.initLibreSpare(), 4000)
+    },
+    initLibreSpare() {
+        // 页面栈多实例守卫：只有活跃 overview 实例建备胎（PR#148/#151 模式）。
+        if (typeof this.isActiveOverviewInstance === 'function' && !this.isActiveOverviewInstance()) return
+        const api = typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.zetaoffice
+        if (!api) return // 非桌面版没有 LOWA
+        if (this.libreSpares.some(sp => !sp.file)) return // 已有空闲备胎
+        this._libreSpareSeq = (this._libreSpareSeq || 0) + 1
+        this.libreSpares.push({ key: this._libreSpareSeq, file: null })
+        console.log('[ProjectOverview] LibreOffice spare booting (#' + this._libreSpareSeq + ')')
+    },
+    maybeAdoptLibreSpare(file) {
+        if (!file || !this.useLibreEditor(file)) return
+        const id = String(file.id)
+        if (this.libreSpares.some(sp => sp.file && String(sp.file.id) === id)) return // 已是过继实例
+        if (this.libreLruKeys.includes('left:' + file.id)) return // 常规池里已有活实例
+        const spare = this.libreSpares.find(sp => !sp.file)
+        if (!spare) return
+        spare.file = file
+        console.log('[ProjectOverview] LibreOffice spare adopted → left:' + id)
+        // 新备胎等这次过继 ready 后再补（onLibreSpareReady），避免两个引擎
+        // 同时抢 CPU 拖慢文档装载。
+    },
+    setLibreSpareRef(sp, el) {
+        // 过继后按常规键注册，closeFile/evict 的 flushSave 走同一注册表；
+        // 空白备胎无人引用，不注册。
+        if (sp.file) this.setLibreRef('left', sp.file.id, el)
+    },
+    onLibreSpareReady(sp, executor) {
+        if (sp.file) {
+            this.onLibreReady(executor, 'left', sp.file.id)
+            this.scheduleLibreSpare() // 过继完成、引擎空闲——补一个新备胎
+        } else {
+            console.log('[ProjectOverview] LibreOffice spare warm (blank ready)')
+        }
+    },
+    // 过继实例渲染自 libreSpares，出池必须同步删条目组件才会卸载。
+    // key 形如 'left:fileId'（右窗格无备胎，非 left 键直接返回）。
+    pruneLibreSpare(key) {
+        if (!key.startsWith('left:')) return
+        const id = key.slice(5)
+        this.libreSpares = this.libreSpares.filter(sp => !(sp.file && String(sp.file.id) === id))
+    },
+    // 关闭 tab（closeFile 已 flush 过）后清掉文件已不在左列表的过继条目。
+    pruneClosedLibreSpares() {
+        this.libreSpares = this.libreSpares.filter(sp => !sp.file || this.isLibreKeyOpen('left:' + sp.file.id))
     },
     touchLibreLru(pane, fileId) {
         const key = pane + ':' + fileId
@@ -74,6 +139,7 @@ export const librePoolMethods = {
         if (idx === -1 || idx < LIBRE_KEEPALIVE_MAX) return
         if (key === 'left:' + this.activeFileIdLeft || key === 'right:' + this.activeFileIdRight) return
         this.libreLruKeys = this.libreLruKeys.filter(k => k !== key)
+        this.pruneLibreSpare(key)
         console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)
     },
 
@@ -92,6 +158,11 @@ export const librePoolMethods = {
             if (String(activeId) !== String(fileId)) continue
             const inst = refs[pane + ':' + fileId]
             if (!inst || typeof inst.reloadFromBackend !== 'function') continue
+            // 只刷「正在显示且确实绑着这份文件」的实例。预热备胎（PR#220）是同一个
+            // LibreOfficeEditor 组件：空白备胎 file=null，setLibreSpareRef 压根不注册，
+            // 正常到不了这里；这条是硬判据，防止将来备胎/接力体换了记账方式后
+            // 把重载打在没绑文件的实例上（那会"成功"，真文档纹丝不动）。
+            if (!inst.file || String(inst.file.id) !== String(fileId)) continue
             try {
                 const ok = await inst.reloadFromBackend()
                 if (!ok) allOk = false
