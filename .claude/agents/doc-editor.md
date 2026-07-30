@@ -15,7 +15,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `desktop/scripts/lowa-selfhost.md` — 自托管流程文档。
 
 **桌面壳服务**
-- `desktop/main/zetaoffice-server.js` — 同源本地 HTTP 服务（editor.html + /lowa/* 本地优先、CDN 兜底）；memoized `startEditorServer()`。
+- `desktop/main/zetaoffice-server.js` — 同源本地 HTTP 服务（editor.html + /lowa/* 本地优先、CDN 兜底）；memoized `startEditorServer()`。**固定端口 47613**（占用回退随机）+ /lowa/* ETag/304 复验（PR#220）：origin 稳定才能让 Chromium 跨启动复用 HTTP 缓存与 V8 WASM 代码缓存（150MB soffice.wasm 免重编译）；引擎 URL 跨版本不变所以是 no-cache 复验而非 immutable，别改成长缓存。
 - `desktop/main/zetaoffice-session.js` — persist:zetaoffice 分区注入 COOP/COEP/CORP（webview 跨源隔离，SharedArrayBuffer 可用，不污染主窗口）。
 - `desktop/main/zetaoffice-verify.js` — ⌘⇧L 验证窗口（?verify=1，零副作用验证引擎/中文/AI 命令）。
 - IPC：`checkba:zetaoffice-editor`（main.js ~:1373，返回 {url, preload, partition}）；`desktop/preload/zetaoffice-webview-preload.js` 暴露 `window.zetaHostBridge`（通道 lo-relay）。
@@ -27,8 +27,8 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `frontend/vite.zetaoffice.config.js` — editor 页专用 Vite 构建（脱离 uni-app），产出 dist/zetaoffice/。
 
 **宿主 UI（保活/实例管理/自动保存）**
-- `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave。
-- `frontend/src/pages/project-overview/project-overview.vue` — 保活池宿主：leftLibreFiles/rightLibreFiles（v-show 常驻，~:1661）、libreLruKeys/touchLibreLru/evictLibreInstance（~:5886-5906）、syncLibreExecutor 活跃指针（~:5871）、`_libreRefs`/`_libreExecMap` 非响应式注册表；`LIBRE_KEEPALIVE_MAX = 3`（~:1286）。
+- `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave。支持**备胎过继**（watch file 仅 null→文档；引擎已就绪走 finishDocLoad，未就绪由 onEndpointReady 接手）与**只读预览接力**（字节预取完成即 docx-preview 本地渲染，previewReady 后 overlay 变成可滚动阅读 + 顶部细进度条，ready 后整体消失）。
+- `frontend/src/pages/project-overview/librePool.js` — 保活池方法组（Phase 1 外置）：libreLruKeys/touchLibreLru/evictLibreInstance、syncLibreExecutor 活跃指针、`_libreRefs`/`_libreExecMap` 非响应式注册表、`LIBRE_KEEPALIVE_MAX = 3`；**预热备胎**（PR#220）：libreSpares（{key, file}，file=null 是后台预 boot 的空白隐藏实例），onActiveOfficeFileChanged 里 maybeAdoptLibreSpare（须在 touchLibreLru 之前，靠"不在 lru 记账"识别无实例）过继给池外首开文档，过继后按 'left:fileId' 常规记账；补胎在过继 ready 后（scheduleLibreSpare，4s 延迟）。仅左窗格设备胎（webview 不能跨容器移动）；h5 无 checkbaDesktop 不建胎；常驻多一个空白实例内存（数百 MB）。
 
 ## 启动链路（打开 docx → 可编辑）
 
@@ -57,6 +57,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `npm run build:zetaoffice` 会清空 dist 并删掉已 fetch 的引擎——本地反复跑 e2e 用 `LOWA_ENGINE_DIR` 规避，或从兄弟 worktree 复制引擎（CDN 挂时的配方）。
 - 修订作者：params 带 `__agent:true` → 署名 "AI Workdeck"。
 - webview/uni 存储格式坑与宿主侧 e2e 配方见 lowa-keepalive 记录（PR#159）。
+- **预热备胎是同一个 LibreOfficeEditor 组件（file=null）**：任何在组件树/DOM 里"找编辑器实例"的探针（如 desktop-e2e FIND_EDITOR）必须过滤 `file` 非空，否则命令打在隐藏空白备胎上、样样"成功"但真文档纹丝不动。备胎未激活用 visibility 隐藏（绝对定位占位），不能改 display:none——引擎要在有尺寸画布里 boot。
 
 ## 验证
 
