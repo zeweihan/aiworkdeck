@@ -119,6 +119,43 @@ public class VersionController {
         return ok(Map.of("resumed", true));
     }
 
+    @GetMapping("/versions/{ref}/file-bytes")
+    public ResponseEntity<byte[]> fileBytesAtRef(
+            @PathVariable Long projectId, @PathVariable String ref,
+            @RequestParam("path") String path,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        String rel = WorkSessionService.safeRepoPath(path);
+        byte[] bytes = repoService.readBlobAtCommit(projectId, ref, rel);
+        if (bytes == null) {
+            throw VersionException.userFacing("这一版里没有这份文件");
+        }
+        return ResponseEntity.ok()
+                .header("Content-Type", "application/octet-stream")
+                .body(bytes);
+    }
+
+    @GetMapping("/versions/{ref}/file-text")
+    public ResponseEntity<Map<String, Object>> fileTextAtRef(
+            @PathVariable Long projectId, @PathVariable String ref,
+            @RequestParam("path") String path,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        String rel = WorkSessionService.safeRepoPath(path);
+        byte[] bytes = repoService.readBlobAtCommit(projectId, ref, rel);
+        if (bytes == null) {
+            throw VersionException.userFacing("这一版里没有这份文件");
+        }
+        try (java.io.InputStream in = new java.io.ByteArrayInputStream(bytes)) {
+            org.apache.tika.Tika tika = new org.apache.tika.Tika();
+            String text = tika.parseToString(in);
+            return ok(Map.of("text", text == null ? "" : text));
+        } catch (Exception e) {
+            log.warn("版本文本抽取失败: project={}, ref={}", projectId, ref, e);
+            throw new VersionException("文本抽取失败", e);
+        }
+    }
+
     @PostMapping("/revert")
     public ResponseEntity<Map<String, Object>> revert(
             @PathVariable Long projectId,
