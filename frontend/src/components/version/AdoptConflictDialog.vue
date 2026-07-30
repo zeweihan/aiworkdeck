@@ -96,15 +96,16 @@ export default {
     // 弹窗的 .awd-mask 是全屏遮罩，和「对比」打开的编辑区标签页没法同屏共存；
     // 先收起弹窗（不销毁，已选的三选一保留在内存里），对比看完点「继续处理」再展开——
     // 采纳态本身留在后端（/status 的 adoptConflict），收起不会丢任何东西。
+    // 当前文档=稿侧=新版，修订呈现主线→稿的变化。
     compare(row) {
       this.collapsed = true
       this.$emit('compare-file', {
         path: row.path,
         name: row.name,
-        newRef: this.mainlineTip,
-        oldRef: this.draftTip,
-        newLabel: '主线这一份',
-        oldLabel: '这一稿这一份',
+        newRef: this.draftTip,
+        oldRef: this.mainlineTip,
+        newLabel: '这一稿的',
+        oldLabel: '主线上的',
       })
     },
     async confirm() {
