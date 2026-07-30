@@ -467,6 +467,21 @@ public class ProjectRepoService {
         }
     }
 
+    /**
+     * 索引里仍带着冲突标记的路径，排序后返回；不在合并中时是空列表。
+     *
+     * 与 {@code MergeOutcome.conflictingPaths()} 的区别是它可以在任何时候重新读出来——
+     * 合并冲突留在磁盘上（MERGING 态），进程重启、律师关掉页面再回来，都要能重新问出
+     * 「还有哪些文件等着做选择」。只读：这里用 status 而不是 pendingChanges，不做任何 add。
+     */
+    public List<String> conflictingPaths(long projectId) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            return git.status().call().getConflicting().stream().sorted().toList();
+        } catch (Exception e) {
+            throw new VersionException("读取冲突文件失败: project=" + projectId, e);
+        }
+    }
+
     /** MERGING 态下另一父提交（被合并分支的 tip）的 sha；不在合并中时返回 null。 */
     public String mergeHeadRef(long projectId) {
         try (Repository repo = open(projectId)) {

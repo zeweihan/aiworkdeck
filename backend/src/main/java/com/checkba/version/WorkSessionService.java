@@ -137,6 +137,23 @@ public class WorkSessionService {
         }
     }
 
+    /**
+     * 裁决现场守卫：采纳遇到冲突后，仓库停在待裁决状态，工作区里是带冲突标记的半成品，
+     * 律师正对着三选一的弹窗。这期间任何自动存档都绝不能落地——MERGE_HEAD 还在磁盘上，
+     * JGit 会把这一笔写成双亲提交、顺手清掉合并状态，等于一次后台自动保存悄悄"完成"了
+     * 一场没人裁决过的采纳，还把冲突标记永久写进主线。
+     *
+     * 查询失败按「不在裁决中」处理，口径同 {@link #onDraftBranch}：版本记录是保险，
+     * 不能因为守卫自己查询失败反而阻断保存。
+     */
+    private boolean awaitingAdoptResolution(long projectId) {
+        try {
+            return repoService.repositoryMerging(projectId);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** 上次没正常结束的工作段（崩溃或强杀留下的）。 */
     public Optional<WorkSession> pendingRecovery(long projectId) {
         return activeSession(projectId);
@@ -165,6 +182,8 @@ public class WorkSessionService {
      */
     public void onChangeSignal(long projectId, Long userId, String userName) {
         if (!repoService.isInitialized(projectId)) return;
+        // 采纳裁决期间连信号都不接：既不开段，也不排自动存档（见 awaitingAdoptResolution）。
+        if (awaitingAdoptResolution(projectId)) return;
 
         boolean draft = onDraftBranch(projectId);
         Long sessionId = null;
@@ -335,6 +354,10 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            if (awaitingAdoptResolution(projectId)) {
+                log.info("采纳裁决进行中，跳过这次自动存档: project={}", projectId);
+                return null;
+            }
             if (!onDraftBranch(projectId)) {
                 ensureSession(projectId, userId, userName);
             }
@@ -359,6 +382,10 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            if (awaitingAdoptResolution(projectId)) {
+                log.info("采纳裁决进行中，跳过这次 AI 轮次落版: project={}", projectId);
+                return null;
+            }
             if (!onDraftBranch(projectId)) {
                 ensureSession(projectId, userId, AI_AUTHOR_NAME);
             }
@@ -641,6 +668,321 @@ public class WorkSessionService {
         } finally {
             lock.unlock();
         }
+    }
+
+    // ---- 稿：采纳 / 裁决 / 中止 / 放弃（spec 第 3 期 Task 4） -----------------
+
+    /**
+     * 采纳一稿的结果。{@code success=false} 时 {@code conflictingPaths} 非空、仓库停在
+     * 待裁决状态，等 {@link #resolveAdopt} 或 {@link #abortAdopt}；{@code affectedFileIds}
+     * 两种情况下都可能非空——冲突时它是「回到主线侧」这一步已经改写过的文件，磁盘已经变了，
+     * 打开中的编辑器该重载就得重载，不能因为采纳没走完就瞒着前端。
+     */
+    public record AdoptOutcome(boolean success, String sha,
+                               List<String> conflictingPaths, List<Long> affectedFileIds) {}
+
+    /** 逐文件三选一：用主线的 / 用这一稿的 / 两份都留。 */
+    public enum Resolution { MAIN, DRAFT, BOTH }
+
+    /**
+     * 中止采纳后要告诉律师的那句话（spec 第七节原句）。
+     * {@link #abortAdopt} 本身不抛异常也不返回它——中止是成功路径，
+     * 由控制器把这个常量放进响应的 message 字段。
+     */
+    public static final String ADOPT_ABORTED_NOTICE = "这次采纳没有完成，你的两份稿件都还在";
+
+    /**
+     * 采纳一稿：把稿合并回主线，稿从此结束。
+     *
+     * 前置三条：没有进行中的工作（一段活着的工作段自己还没收尾，把稿并进来会让两件事
+     * 缠在一起——先让律师收尾或丢弃）、目标是本项目 ACTIVE 的稿、仓库不在待裁决状态。
+     *
+     * 锁内先无条件走一次 {@link #switchToMainline}：律师按下「采纳这一稿」时通常正站在
+     * 稿上，必须先停靠稿、回到主线侧才能合并；已经在主线上时这次切换只做停靠（工作区
+     * 不干净的话 JGit 会拒绝合并）。切换本身也会改写磁盘（稿的内容换回主线的内容），
+     * 这些文件同样要进最终的重载列表。
+     *
+     * 冲突时仓库留在待裁决状态（{@link ProjectRepoService#mergeKeepingConflicts}），
+     * 稿的行与分支一个都不动——中止一次采纳必须能让两边分毫无损。
+     */
+    public AdoptOutcome adoptDraft(long projectId, long draftId, Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            requireNotMerging(projectId);
+            if (activeSession(projectId).isPresent()) {
+                throw VersionException.userFacing("请先结束或丢弃当前工作，再采纳这一稿");
+            }
+            WorkSession draft = requireActiveDraft(projectId, draftId);
+
+            LineSwitchResult back = switchToMainline(projectId, userId, userName);
+
+            // 合并还没提交，HEAD 就是合并前的主线 tip；稿 tip 要在停靠之后才准。
+            String mainTipBefore = repoService.resolveRef(projectId, "HEAD");
+            String draftTip = repoService.resolveRef(projectId, draft.getBranchName());
+
+            MergeOutcome outcome = repoService.mergeKeepingConflicts(projectId,
+                    draft.getBranchName(), adoptMessage(draft), userName, email(userName));
+
+            if (outcome.success()) {
+                return completeAdopt(projectId, draft, draftTip, mainTipBefore,
+                        outcome.mergeSha(), back.affectedFileIds(), userName);
+            }
+
+            List<String> conflicts = userVisibleConflicts(outcome.conflictingPaths());
+            if (conflicts.isEmpty()) {
+                // 只有内部的文件树清单冲突。律师不认识这个文件、也无从选择，
+                // 而清单并集本来就要按并集规则重写它——自己裁决掉，别去打扰他。
+                return completeAdopt(projectId, draft, draftTip, mainTipBefore,
+                        null, back.affectedFileIds(), userName);
+            }
+            log.info("采纳一稿遇到冲突，停在待裁决: project={}, branch={}, files={}",
+                    projectId, draft.getBranchName(), conflicts.size());
+            return new AdoptOutcome(false, null, conflicts, back.affectedFileIds());
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 逐文件裁决后完成采纳。{@code resolutions} 必须覆盖全部待选择的文件。
+     *
+     * 「主线那一份」的字节取自 {@code HEAD}：合并尚未提交，HEAD 仍然停在合并前的主线
+     * tip（{@link ProjectRepoService#commitMergeResolution} 才会推进它）。「这一稿那一份」
+     * 取自 {@code MERGE_HEAD}，也就是稿的 tip。
+     */
+    public AdoptOutcome resolveAdopt(long projectId, long draftId,
+                                     Map<String, Resolution> resolutions,
+                                     Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            WorkSession draft = requireActiveDraft(projectId, draftId);
+            if (!repoService.repositoryMerging(projectId)) {
+                throw VersionException.userFacing("现在没有等着做选择的采纳");
+            }
+            String draftTip = repoService.mergeHeadRef(projectId);
+            if (draftTip == null
+                    || !draftTip.equals(repoService.resolveRef(projectId, draft.getBranchName()))) {
+                throw VersionException.userFacing("正在处理的是另一稿，请先把它处理完");
+            }
+            String mainTipBefore = repoService.resolveRef(projectId, "HEAD");
+
+            List<String> conflicts = userVisibleConflicts(repoService.conflictingPaths(projectId));
+            Map<String, Resolution> choices = resolutions == null ? Map.of() : resolutions;
+            for (String path : conflicts) {
+                if (choices.get(path) == null) {
+                    throw VersionException.userFacing("还有文件没有做出选择");
+                }
+            }
+
+            for (String path : conflicts) {
+                applyResolution(projectId, path, choices.get(path),
+                        mainTipBefore, draftTip, draft.getTitle());
+            }
+
+            return completeAdopt(projectId, draft, draftTip, mainTipBefore,
+                    null, List.of(), userName);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 中止这次采纳：工作区回到合并前，主线与稿都分毫无损（历史一笔不动）。
+     * 稿保持 ACTIVE 原样，律师可以继续在上面改、或改天再采纳。
+     * 不在待裁决状态时是真正的 no-op（守卫在 {@link ProjectRepoService#abortMerge} 里）。
+     */
+    public void abortAdopt(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            repoService.abortMerge(projectId);
+            log.info("中止一次采纳: project={}", projectId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 放弃这一稿：稿上的改动整条丢掉（分支 force 删除），稿标 DISCARDED。
+     * 站在这一稿上时先切回主线侧（复用 {@link #switchToMainline}——不先离开就不能删
+     * 当前分支，而且稿上未提交的改动要先停靠进这条即将消失的分支，否则 checkout
+     * 会被 JGit 拒绝）；不在这一稿上时当前这条线一动不动，受影响文件为空。
+     */
+    public LineSwitchResult abandonDraft(long projectId, long draftId, Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            requireNotMerging(projectId);
+            WorkSession draft = requireActiveDraft(projectId, draftId);
+
+            LineSwitchResult result;
+            if (draft.getBranchName().equals(repoService.currentBranch(projectId))) {
+                result = switchToMainline(projectId, userId, userName);
+            } else {
+                result = new LineSwitchResult(repoService.currentBranch(projectId), List.of());
+            }
+
+            repoService.deleteBranch(projectId, draft.getBranchName(), true);
+            draft.setStatus(WorkSession.Status.DISCARDED);
+            draft.setEndedAt(LocalDateTime.now());
+            sessionRepository.save(draft);
+            log.info("放弃一稿: project={}, branch={}, name={}",
+                    projectId, draft.getBranchName(), draft.getTitle());
+            return result;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 时间线上这个采纳节点的名字。裁决路径与干净路径必须用同一句，否则同一动作两种叫法。 */
+    private static String adoptMessage(WorkSession draft) {
+        return "采纳：" + draft.getTitle();
+    }
+
+    /**
+     * 采纳收尾：清单并集 → （尚未提交时）重写清单并落裁决提交 → 稿标 MERGED → 删稿分支
+     * → 汇总受影响文件。
+     *
+     * {@code committedSha} 非空表示合并已经自己提交过了（干净合并），此时不能也不必再
+     * 提交一次；为空表示仓库还停在待裁决状态，工作区里是裁决后的最终内容，由
+     * {@link ProjectRepoService#commitMergeResolution} 落成双亲提交。
+     *
+     * 清单读的是**稿 tip 那一版**，而不是合并后的 HEAD：合并后的清单是 Git 对两份 JSON
+     * 做的文本合并，冲突时更是带着冲突标记的半成品，都不能当数据源。
+     */
+    private AdoptOutcome completeAdopt(long projectId, WorkSession draft, String draftTip,
+                                       String mainTipBefore, String committedSha,
+                                       List<Long> extraAffected, String userName) {
+        TreeManifest draftManifest = manifestService.readAtRef(projectId, draftTip);
+        if (draftManifest != null) manifestService.unionApply(projectId, draftManifest);
+
+        String sha = committedSha;
+        if (sha == null) {
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            sha = repoService.commitMergeResolution(projectId, adoptMessage(draft),
+                    userName, email(userName));
+        }
+
+        draft.setStatus(WorkSession.Status.MERGED);
+        draft.setEndedAt(LocalDateTime.now());
+        sessionRepository.save(draft);
+        repoService.deleteBranch(projectId, draft.getBranchName(), true);
+
+        List<Long> affected = new ArrayList<>(extraAffected);
+        for (Long id : resolveAffectedFileIds(projectId,
+                repoService.diffNameStatus(projectId, mainTipBefore, "HEAD"))) {
+            if (!affected.contains(id)) affected.add(id);
+        }
+
+        log.info("采纳一稿: project={}, branch={}, name={}, sha={}",
+                projectId, draft.getBranchName(), draft.getTitle(), sha);
+        return new AdoptOutcome(true, sha, List.of(), affected);
+    }
+
+    /**
+     * 内部的文件树清单（{@code .awd/tree.json}）永远不出现在律师的选择清单里：他不认识
+     * 这个文件，而它的正确内容由清单并集算出来、由 {@link #completeAdopt} 重写。
+     * 排序只为了让前端拿到的顺序稳定。
+     */
+    private static List<String> userVisibleConflicts(List<String> paths) {
+        return paths.stream().filter(p -> !p.startsWith(".awd/")).sorted().toList();
+    }
+
+    /**
+     * 一个文件的裁决落地到工作区。索引里的冲突标记不用手工清——
+     * {@link ProjectRepoService#commitMergeResolution} 的两次 add（含 update）会把
+     * 工作区的最终状态整体收进去，包括「裁决结果是这个文件不存在」这种情况。
+     */
+    private void applyResolution(long projectId, String path, Resolution choice,
+                                 String mainTip, String draftTip, String draftName) {
+        String rel = safeRepoPath(path);
+        Path work = repoService.workTree(projectId);
+        byte[] mainBytes = repoService.readBlobAtCommit(projectId, mainTip, rel);
+        byte[] draftBytes = repoService.readBlobAtCommit(projectId, draftTip, rel);
+
+        switch (choice) {
+            case MAIN -> writeOrDelete(work.resolve(rel), mainBytes);
+            case DRAFT -> writeOrDelete(work.resolve(rel), draftBytes);
+            case BOTH -> {
+                writeOrDelete(work.resolve(rel), mainBytes);
+                // 稿把这个文件删掉了的话，「两份都留」里稿的那一份根本不存在，
+                // 留主线那一份就是全部。
+                if (draftBytes != null) {
+                    String copyRel = sideBySideRelPath(projectId, rel, draftName);
+                    writeOrDelete(work.resolve(copyRel), draftBytes);
+                    createSideBySideRow(projectId, rel, copyRel, draftBytes.length);
+                }
+            }
+        }
+    }
+
+    private void writeOrDelete(Path target, byte[] bytes) {
+        try {
+            if (bytes == null) {
+                Files.deleteIfExists(target);
+                return;
+            }
+            Files.createDirectories(target.getParent());
+            Files.write(target, bytes);
+        } catch (Exception e) {
+            throw new VersionException("写入裁决结果失败: " + target, e);
+        }
+    }
+
+    /**
+     * 「两份都留」时稿那一份的落脚路径：同目录、原名后面缀上《（来自：{稿名}）》，
+     * 扩展名保持不变（律师双击还是要能打开）。撞名了就在后面追加序号。
+     */
+    private String sideBySideRelPath(long projectId, String rel, String draftName) {
+        int slash = rel.lastIndexOf('/');
+        String dir = slash < 0 ? "" : rel.substring(0, slash + 1);
+        String fileName = rel.substring(slash + 1);
+        int dot = fileName.lastIndexOf('.');
+        String base = dot > 0 ? fileName.substring(0, dot) : fileName;
+        String ext = dot > 0 ? fileName.substring(dot) : "";
+        String suffix = "（来自：" + draftName + "）";
+
+        Path work = repoService.workTree(projectId);
+        String candidate = dir + base + suffix + ext;
+        for (int n = 2; Files.exists(work.resolve(candidate)); n++) {
+            candidate = dir + base + suffix + n + ext;
+        }
+        return candidate;
+    }
+
+    /**
+     * 「两份都留」另存出来的那份文件也要在文件树里露出来，否则律师只在磁盘上有它、
+     * 界面里根本看不见。复制原行的父目录、类型与创建者，排序紧跟在原行后面。
+     * 原行在数据库里找不到（例如这份文件从来没进过文件树）时不建行——文件本身已经
+     * 写在磁盘上，不能因为这个让整次采纳失败。
+     */
+    private void createSideBySideRow(long projectId, String originalRel, String copyRel, long size) {
+        String originalFilePath = "projects/" + projectId + "/" + originalRel;
+        ProjectFile origin = fileRepository.findByProjectId(projectId).stream()
+                .filter(f -> originalFilePath.equals(f.getFilePath()))
+                .findFirst()
+                .orElse(null);
+        if (origin == null) {
+            log.warn("两份都留：原文件不在文件树里，跳过建行: project={}, path={}",
+                    projectId, originalRel);
+            return;
+        }
+
+        ProjectFile copy = new ProjectFile();
+        copy.setProjectId(projectId);
+        copy.setParentId(origin.getParentId());
+        copy.setUserId(origin.getUserId());
+        copy.setFileType(origin.getFileType());
+        copy.setIsFolder(false);
+        copy.setIsDeleted(false);
+        copy.setName(copyRel.substring(copyRel.lastIndexOf('/') + 1));
+        copy.setFilePath("projects/" + projectId + "/" + copyRel);
+        copy.setFileSize(size);
+        copy.setSortOrder(origin.getSortOrder() == null ? 0 : origin.getSortOrder() + 1);
+        copy.setCreatedAt(LocalDateTime.now());
+        fileRepository.save(copy);
     }
 
     /**
