@@ -2,6 +2,7 @@ package com.checkba.version;
 
 import com.checkba.storage.StorageProperties;
 import org.eclipse.jgit.api.CreateBranchCommand;
+import org.eclipse.jgit.api.DiffCommand;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.MergeCommand;
 import org.eclipse.jgit.api.MergeResult;
@@ -22,6 +23,8 @@ import org.eclipse.jgit.treewalk.AbstractTreeIterator;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import org.eclipse.jgit.treewalk.EmptyTreeIterator;
 import org.eclipse.jgit.treewalk.TreeWalk;
+import org.eclipse.jgit.treewalk.filter.PathFilter;
+import org.eclipse.jgit.treewalk.filter.TreeFilter;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayOutputStream;
@@ -160,15 +163,32 @@ public class ProjectRepoService {
         }
     }
 
-    /** 与 {@link #log} 相同，但只保留改动过 relPath 的提交（单文件历史）。 */
+    /**
+     * 与 {@link #log} 相同，但只保留改动过 relPath 的提交（单文件历史）。
+     *
+     * <p>刻意不用 JGit 的 {@code addPath}（也就是 git 的默认历史简化）：那条路径会把
+     * 「相对第一父提交 TREESAME」的合并提交整条剪掉，而「结束本次工作」的合并恰恰是
+     * NO_FF 合并、对工作分支这一父天然 TREESAME——律师命名的工作段节点会在单文件
+     * 历史里全部消失，只剩自动存档。这里改为自己走全量历史，逐条按「相对第一父提交
+     * 的 diff」判断是否触及该文件；对合并节点来说这份 diff 正是这段工作对该文件的
+     * 净变化，也正是律师想看的那一条。单项目仓库很小、limit 上限 100，开销可接受。
+     */
     public List<VersionEntry> logForPath(long projectId, String ref, String relPath, int limit) {
         List<VersionEntry> out = new ArrayList<>();
-        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+        try (Repository repo = open(projectId); Git git = new Git(repo);
+             RevWalk walk = new RevWalk(repo)) {
             ObjectId start = repo.resolve(ref);
             if (start == null) return out;
             Map<String, String> milestones = milestonesIn(repo);
-            for (RevCommit c : git.log().add(start).addPath(relPath).setMaxCount(limit).call()) {
-                out.add(toEntry(c, milestones));
+            TreeFilter pathFilter = PathFilter.create(relPath);
+            for (RevCommit c : git.log().add(start).setMaxCount(limit).call()) {
+                RevCommit commit = walk.parseCommit(c.getId());
+                // 根提交没有父版本 → 与空树比较，它自己带进来的文件也算「触及」。
+                ObjectId firstParent = commit.getParentCount() == 0
+                        ? null : commit.getParent(0).getId();
+                if (!diffEntries(repo, git, walk, firstParent, commit.getId(), pathFilter).isEmpty()) {
+                    out.add(toEntry(c, milestones));
+                }
             }
             return out;
         } catch (Exception e) {
@@ -218,43 +238,55 @@ public class ProjectRepoService {
     }
 
     public List<FileChange> diffNameStatus(long projectId, String fromRef, String toRef) {
-        List<FileChange> out = new ArrayList<>();
         try (Repository repo = open(projectId); Git git = new Git(repo);
              RevWalk walk = new RevWalk(repo)) {
             ObjectId from = repo.resolve(fromRef);
             ObjectId to = repo.resolve(toRef);
-            if (to == null) return out;
-
-            AbstractTreeIterator fromTree;
-            CanonicalTreeParser toTree = new CanonicalTreeParser();
-            try (ObjectReader reader = repo.newObjectReader()) {
-                if (from == null) {
-                    // 根提交没有父版本，形如 sha^ 的 fromRef resolve 不出来——
-                    // 与空树比较，根提交自己的文件才会以 ADD 呈现，而不是静默返回空列表。
-                    fromTree = new EmptyTreeIterator();
-                } else {
-                    CanonicalTreeParser t = new CanonicalTreeParser();
-                    t.reset(reader, walk.parseCommit(from).getTree());
-                    fromTree = t;
-                }
-                toTree.reset(reader, walk.parseCommit(to).getTree());
-
-                for (DiffEntry d : git.diff().setOldTree(fromTree).setNewTree(toTree).call()) {
-                    out.add(new FileChange(
-                            d.getChangeType() == DiffEntry.ChangeType.DELETE
-                                    ? d.getOldPath() : d.getNewPath(),
-                            switch (d.getChangeType()) {
-                                case ADD, COPY -> FileChange.Type.ADD;
-                                case DELETE -> FileChange.Type.DELETE;
-                                case RENAME -> FileChange.Type.RENAME;
-                                default -> FileChange.Type.MODIFY;
-                            }));
-                }
-            }
-            return out;
+            return diffEntries(repo, git, walk, from, to, null);
         } catch (Exception e) {
             throw new VersionException("读取变更清单失败: project=" + projectId, e);
         }
+    }
+
+    /**
+     * 两个提交之间的 name-status 变更清单。{@code from} 为 null 时与空树比较——
+     * 根提交没有父版本（形如 sha^ 的 ref resolve 不出来），必须让它自己的文件以
+     * ADD 呈现，而不是静默返回空列表。{@code pathFilter} 为 null 表示不过滤。
+     * 调用方负责仓库/walk 的生命周期（logForPath 会在一次打开里调很多轮）。
+     */
+    private List<FileChange> diffEntries(Repository repo, Git git, RevWalk walk,
+                                         ObjectId from, ObjectId to, TreeFilter pathFilter)
+            throws Exception {
+        List<FileChange> out = new ArrayList<>();
+        if (to == null) return out;
+
+        AbstractTreeIterator fromTree;
+        CanonicalTreeParser toTree = new CanonicalTreeParser();
+        try (ObjectReader reader = repo.newObjectReader()) {
+            if (from == null) {
+                fromTree = new EmptyTreeIterator();
+            } else {
+                CanonicalTreeParser t = new CanonicalTreeParser();
+                t.reset(reader, walk.parseCommit(from).getTree());
+                fromTree = t;
+            }
+            toTree.reset(reader, walk.parseCommit(to).getTree());
+
+            DiffCommand diff = git.diff().setOldTree(fromTree).setNewTree(toTree);
+            if (pathFilter != null) diff.setPathFilter(pathFilter);
+            for (DiffEntry d : diff.call()) {
+                out.add(new FileChange(
+                        d.getChangeType() == DiffEntry.ChangeType.DELETE
+                                ? d.getOldPath() : d.getNewPath(),
+                        switch (d.getChangeType()) {
+                            case ADD, COPY -> FileChange.Type.ADD;
+                            case DELETE -> FileChange.Type.DELETE;
+                            case RENAME -> FileChange.Type.RENAME;
+                            default -> FileChange.Type.MODIFY;
+                        }));
+            }
+        }
+        return out;
     }
 
     /** 取某一版里某个相对路径的完整字节；该版中不存在该文件时返回 null。 */
@@ -407,7 +439,9 @@ public class ProjectRepoService {
         try (Repository repo = open(projectId); Git git = new Git(repo);
              RevWalk walk = new RevWalk(repo)) {
             ObjectId id = repo.resolve(sha);
-            if (id == null) throw new VersionException("版本不存在: " + sha);
+            // 律师点的是时间线上的节点，正常不会不存在；真出现（并发 GC/脏客户端）
+            // 时这句话对他有意义、也不含任何内部标识，走 userFacing 直接回显。
+            if (id == null) throw VersionException.userFacing("这一版已经不存在了");
             git.tag()
                .setObjectId(walk.parseCommit(id))
                .setName("awd/milestone/" + sha.substring(0, Math.min(12, sha.length())))
