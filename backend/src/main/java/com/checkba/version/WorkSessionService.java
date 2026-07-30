@@ -415,7 +415,7 @@ public class WorkSessionService {
             throw new VersionException("非法路径");
         }
         String normalized = path.strip();
-        for (String seg : normalized.split("/")) {
+        for (String seg : normalized.split("/", -1)) {
             if (seg.isEmpty() || seg.equals("..") || seg.equals(".")) {
                 throw new VersionException("非法路径");
             }
