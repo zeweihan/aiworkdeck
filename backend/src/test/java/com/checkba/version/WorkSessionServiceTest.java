@@ -70,6 +70,12 @@ class WorkSessionServiceTest {
                         .filter(s -> s.getProjectId().equals(i.getArgument(0))
                                 && s.getStatus() == i.getArgument(1))
                         .findFirst());
+        when(sessionRepo.findFirstByProjectIdAndStatusAndSessionType(any(), any(), any())).thenAnswer(i ->
+                sessions.values().stream()
+                        .filter(s -> s.getProjectId().equals(i.getArgument(0))
+                                && s.getStatus() == i.getArgument(1)
+                                && s.getSessionType() == i.getArgument(2))
+                        .findFirst());
 
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();

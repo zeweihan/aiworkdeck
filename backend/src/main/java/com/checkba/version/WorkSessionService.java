@@ -106,8 +106,35 @@ public class WorkSessionService {
     }
 
     public Optional<WorkSession> activeSession(long projectId) {
-        return sessionRepository.findFirstByProjectIdAndStatus(
-                projectId, WorkSession.Status.ACTIVE);
+        return sessionRepository.findFirstByProjectIdAndStatusAndSessionType(
+                projectId, WorkSession.Status.ACTIVE, WorkSession.SessionType.WORK);
+    }
+
+    /**
+     * 当前分支是稿（{@code draft/*}）时，返回该稿对应的 ACTIVE DRAFT 行；否则 empty。
+     * 稿分支与工作段互不相干——不能用 {@link #activeSession} 查到。
+     */
+    public Optional<WorkSession> activeDraftOnBranch(long projectId) {
+        if (!onDraftBranch(projectId)) return Optional.empty();
+        String branch = repoService.currentBranch(projectId);
+        return sessionRepository.findByProjectIdAndStatusAndSessionTypeOrderByStartedAtDesc(
+                        projectId, WorkSession.Status.ACTIVE, WorkSession.SessionType.DRAFT)
+                .stream()
+                .filter(s -> branch.equals(s.getBranchName()))
+                .findFirst();
+    }
+
+    /**
+     * 稿分支守卫：当前分支是否是 {@code draft/*}。查询分支失败按主线处理（返回 false）——
+     * 版本记录是保险，不是主流程，绝不能因为守卫本身查询失败而阻断改动信号/自动存档。
+     */
+    private boolean onDraftBranch(long projectId) {
+        try {
+            String branch = repoService.currentBranch(projectId);
+            return branch != null && branch.startsWith("draft/");
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /** 上次没正常结束的工作段（崩溃或强杀留下的）。 */
@@ -131,20 +158,37 @@ public class WorkSessionService {
     /**
      * 收到一个变更信号：文件保存成功、文件树增删改移。
      * 没有进行中的工作段就隐式开一个，然后重排防抖提交。
+     *
+     * 稿分支（{@code draft/*}）例外：稿不受工作段管辖——不隐式开工作段（改动信号
+     * 不能把稿悄悄拖进工作段体系），也不武装空闲定时器（稿绝不因为空着 30 分钟就被
+     * 自动结束）。防抖自动存档仍然照排，稿上的改动也需要落盘存档。
      */
     public void onChangeSignal(long projectId, Long userId, String userName) {
         if (!repoService.isInitialized(projectId)) return;
 
-        ReentrantLock lock = repoLock(projectId);
-        WorkSession session;
-        lock.lock();
-        try {
-            session = ensureSession(projectId, userId, userName);
-        } finally {
-            lock.unlock();
+        boolean draft = onDraftBranch(projectId);
+        Long sessionId = null;
+        if (!draft) {
+            ReentrantLock lock = repoLock(projectId);
+            lock.lock();
+            try {
+                sessionId = ensureSession(projectId, userId, userName).getId();
+            } finally {
+                lock.unlock();
+            }
         }
         actors.put(projectId, new PendingActor(userId, userName));
+        scheduleDebounceCommit(projectId);
 
+        if (!draft) {
+            // spec 5.2 三个结束触发之一：30 分钟无变更信号自动结束工作段。
+            // 每次信号都重排——只要还有动静就不断推迟，真正空闲满时长才触发。
+            armIdleTimer(projectId, sessionId);
+        }
+    }
+
+    /** 重排（取消旧的、排一个新的）防抖自动存档。 */
+    private void scheduleDebounceCommit(long projectId) {
         ScheduledFuture<?> prev = pending.remove(projectId);
         if (prev != null) prev.cancel(false);
 
@@ -161,10 +205,6 @@ public class WorkSessionService {
                 },
                 Instant.now().plusMillis(debounceMillis));
         pending.put(projectId, next);
-
-        // spec 5.2 三个结束触发之一：30 分钟无变更信号自动结束工作段。
-        // 每次信号都重排——只要还有动静就不断推迟，真正空闲满时长才触发。
-        armIdleTimer(projectId, session.getId());
     }
 
     /**
@@ -264,13 +304,19 @@ public class WorkSessionService {
         }
     }
 
-    /** 立即落一笔自动存档。无变更时返回 null。 */
+    /**
+     * 立即落一笔自动存档。无变更时返回 null。
+     * 稿分支（{@code draft/*}）上跳过 {@link #ensureSession}——稿不隐式开工作段，
+     * 但清单写入与提交照旧，稿上的防抖自动存档必须正常工作。
+     */
     public String commitNow(long projectId, Long userId, String userName, String message) {
         if (!repoService.isInitialized(projectId)) return null;
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
-            ensureSession(projectId, userId, userName);
+            if (!onDraftBranch(projectId)) {
+                ensureSession(projectId, userId, userName);
+            }
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             String msg = message != null ? message : describePendingChanges(projectId);
             return repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
