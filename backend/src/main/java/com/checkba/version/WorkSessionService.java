@@ -33,6 +33,10 @@ public class WorkSessionService {
     private static final DateTimeFormatter TITLE_FMT =
             DateTimeFormatter.ofPattern("M 月 d 日");
 
+    /** AI 轮次自动存档的固定署名，让律师在时间线上分辨哪些改动是 AI 做的。 */
+    private static final String AI_AUTHOR_NAME = "AI Workdeck";
+    private static final String AI_AUTHOR_EMAIL = "ai@aiworkdeck.local";
+
     private final ProjectRepoService repoService;
     private final ProjectTreeManifestService manifestService;
     private final WorkSessionRepository sessionRepository;
@@ -264,6 +268,27 @@ public class WorkSessionService {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             String msg = message != null ? message : describePendingChanges(projectId);
             return repoService.commitAll(projectId, msg, "auto", null, userName, email(userName));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * AI 轮次结束的落版：以 AI 身份（AI Workdeck &lt;ai@aiworkdeck.local&gt;）落一笔自动存档，
+     * 让时间线能看出「哪些改动是 AI 做的」。无变更返回 null。
+     * 已知局限（与文档检查点同源）：编辑器自动保存是异步的，轮次结束时未 flush 的
+     * 改动不在本笔里，会随后续保存进入普通存档。
+     */
+    public String commitAiRound(long projectId, Long userId) {
+        if (!repoService.isInitialized(projectId)) return null;
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            ensureSession(projectId, userId, AI_AUTHOR_NAME);
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            String msg = describePendingChanges(projectId);
+            return repoService.commitAll(projectId, msg, "auto", null,
+                    AI_AUTHOR_NAME, AI_AUTHOR_EMAIL);
         } finally {
             lock.unlock();
         }

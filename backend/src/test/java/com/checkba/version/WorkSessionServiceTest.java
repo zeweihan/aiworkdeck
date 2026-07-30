@@ -528,4 +528,25 @@ class WorkSessionServiceTest {
         assertTrue(errors.isEmpty(), "两个线程都不应该抛异常: " + errors);
         assertEquals(1, gcCalls.get());
     }
+
+    /** AI 轮次结束落版：署名必须是 AI Workdeck，kind 是 auto。 */
+    @Test
+    void commitAiRoundAttributesToAiWorkdeck() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "AI 改的");
+        String sha = svc.commitAiRound(7L, 1L);
+
+        assertNotNull(sha);
+        VersionEntry head = repoSvc.log(7L, "HEAD", 1).get(0);
+        assertEquals("AI Workdeck", head.authorName());
+        assertEquals("auto", head.kind());
+    }
+
+    /** 没有变更时 commitAiRound 不应该产生空提交。 */
+    @Test
+    void commitAiRoundWithNoChangesReturnsNull() {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        String first = svc.commitNow(7L, 1L, "韩泽伟", null);
+        assertNull(svc.commitAiRound(7L, 1L));
+    }
 }
