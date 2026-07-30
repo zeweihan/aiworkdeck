@@ -76,6 +76,7 @@ public class AgentOrchestrator {
     private final TodoListService todoListService;
     private final DocumentCheckpointService documentCheckpointService;
     private final AgentRunStateService agentRunStateService;
+    private final com.checkba.version.WorkSessionService workSessionService;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -380,7 +381,14 @@ public class AgentOrchestrator {
                 } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
             }
             runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, guard);
-            
+
+            // 版本记录：AI 轮次结束落一笔 AI 署名的存档（失败绝不阻断，保险不是主流程）
+            try {
+                workSessionService.commitAiRound(Long.parseLong(projectId), userId);
+            } catch (Exception e) {
+                log.warn("AI 轮次版本落档失败: project={}", projectId, e);
+            }
+
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
