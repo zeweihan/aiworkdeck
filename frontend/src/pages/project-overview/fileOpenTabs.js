@@ -323,6 +323,31 @@ export const fileOpenTabsMethods = {
       return file && file.tabType === 'diff'
     },
 
+    isVersionCompareTab(file) {
+      return file && file.tabType === 'version-compare'
+    },
+
+    // 版本对比标签：{projectId, path, name, newRef, oldRef}
+    openVersionCompareTab(spec) {
+      const id = `vcmp-${spec.newRef.slice(0, 8)}-${Date.now()}`
+      const tab = {
+        id,
+        name: `${spec.name} 版本对比`,
+        tabType: 'version-compare',
+        fileType: 'version-compare',
+        compareSpec: {
+          projectId: spec.projectId, path: spec.path,
+          newRef: spec.newRef, oldRef: spec.oldRef,
+        },
+        createdAt: Date.now(),
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const targetList = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      const targetIdProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+      targetList.push(tab)
+      this[targetIdProp] = tab.id
+    },
+
     // --- 文档对比逻辑 ---
     onCompareDocumentsRequest(docs) {
       // FileTree 发起的文档对比请求

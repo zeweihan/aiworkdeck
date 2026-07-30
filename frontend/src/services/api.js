@@ -1630,3 +1630,21 @@ export function revertToVersion(projectId, ref) {
   });
 }
 
+// 版本对比：取某一版某文件的原始字节（octet-stream）。返回 Uint8Array。
+// 走裸 fetch 而非上面的 request()——后端这个接口成功时是二进制流，出错时才是
+// {code,message} JSON（HTTP 恒 200，见 VersionController.onVersionError），
+// request() 的 uni.request 封装是围绕统一 {code,data} JSON 设计的，二进制走裸
+// fetch 更直接（MarkdownPreview.vue 已有同样的 fetch+getAuthHeaders 先例）。
+export async function fetchVersionFileBytes(projectId, ref, path) {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl.replace(/\/$/, '')}/api/projects/${projectId}/version/versions/${encodeURIComponent(ref)}/file-bytes?path=${encodeURIComponent(path)}`;
+  const resp = await fetch(url, { headers: getAuthHeaders() });
+  const ct = resp.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    const j = await resp.json();
+    throw new Error((j && j.message) || '读取版本文件失败');
+  }
+  if (!resp.ok) throw new Error('读取版本文件失败');
+  return new Uint8Array(await resp.arrayBuffer());
+}
+
