@@ -220,7 +220,16 @@ public class WorkSessionService {
         idleTimers.put(projectId, idleFuture);
     }
 
-    /** 空闲定时器触发：仍在工作中的话自动结束，标题走默认命名。任何异常只记日志。 */
+    /**
+     * 空闲定时器触发：仍在工作中的话自动结束，标题走默认命名。任何异常只记日志。
+     *
+     * 第二层防御（P3-T3 台账）：稿的双向切线会把用户从一段 ACTIVE 工作段的分支切到
+     * 稿上，同时取消该工作段的空闲定时器（见 {@link #dockAndSwitchTo}）——但定时器
+     * 取消与触发之间总有极小的竞态窗口，万一陈旧定时器还是跑到了这里，即便
+     * sessionId 对得上，只要当前 checkout 已经不是这段工作自己的分支，就绝不能把
+     * 它当"空闲"结束：那会把用户从稿上硬切回主线。查询分支本身失败也按不结束处理——
+     * 版本记录是保险，不能因为自己查询失败反而制造事故。
+     */
     private void autoEndIfIdle(long projectId, Long armedSessionId) {
         idleTimers.remove(projectId);
         ReentrantLock lock = repoLock(projectId);
@@ -230,6 +239,18 @@ public class WorkSessionService {
             if (current.isEmpty()) return;
             if (armedSessionId != null && !armedSessionId.equals(current.get().getId())) {
                 // 陈旧定时器：它武装时对应的工作段已经不是现在这一段，不能错杀新段。
+                return;
+            }
+            String currentBranch;
+            try {
+                currentBranch = repoService.currentBranch(projectId);
+            } catch (Exception e) {
+                log.warn("空闲结束前读取当前分支失败，放弃本次自动结束: project={}", projectId, e);
+                return;
+            }
+            if (!current.get().getBranchName().equals(currentBranch)) {
+                log.info("空闲定时器触发时用户已不在这段工作的分支上（很可能切去了稿上），跳过自动结束: project={}",
+                        projectId);
                 return;
             }
             PendingActor a = actors.get(projectId);
@@ -509,6 +530,185 @@ public class WorkSessionService {
         } finally {
             lock.unlock();
         }
+    }
+
+    // ---- 稿：创建与双向切线（spec 第 3 期 Task 3） -------------------------
+
+    /** 一次切线（切去某一线）的结果：切到的分支，以及这次切换改动过的文件 id。 */
+    public record LineSwitchResult(String branch, List<Long> affectedFileIds) {}
+
+    /** 另起一稿的结果：新建的 DRAFT 行，以及这次开稿本身也是一次切线的切线结果。 */
+    public record DraftCreateResult(WorkSession draft, LineSwitchResult lineSwitch) {}
+
+    /**
+     * 另起一稿：从某个版本（{@code ref} 空则取当前 HEAD）拉一条长命分支并命名，
+     * 独立于工作段体系存在——不自动合并、不受空闲结束管辖
+     * （见 {@link WorkSession.SessionType#DRAFT}）。
+     *
+     * MERGING 态（正在进行的采纳裁决）拒绝开新稿：那期间工作区被冲突标记占用，
+     * 开稿要做的 checkout 会把裁决现场冲掉。
+     *
+     * 受影响文件按「停靠后的 HEAD」与 {@code ref} 之间的差异计算——这份差异也正是
+     * checkout 到 {@code ref} 之后工作区实际会变化的那些文件，语义与
+     * {@link #dockAndSwitchTo} 一致，只是这里的目标分支是新建的，创建/checkout
+     * 的顺序不同，未直接复用该方法。
+     */
+    public DraftCreateResult createDraft(long projectId, String ref, String name,
+                                         Long userId, String userName) {
+        String draftName = validateDraftName(name);
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            requireNotMerging(projectId);
+            String effectiveRef = (ref == null || ref.isBlank()) ? "HEAD" : ref;
+
+            cancelPending(projectId);
+            dockCurrentLine(projectId, userId, userName);
+            String beforeHead = repoService.resolveRef(projectId, "HEAD");
+            List<FileChange> changes = repoService.diffNameStatus(projectId, beforeHead, effectiveRef);
+
+            String branch = "draft/" + System.currentTimeMillis();
+            repoService.createBranch(projectId, branch, effectiveRef);
+            repoService.checkoutBranch(projectId, branch);
+            syncManifestFromRef(projectId, "HEAD");
+            List<Long> affected = resolveAffectedFileIds(projectId, changes);
+
+            WorkSession s = new WorkSession();
+            s.setProjectId(projectId);
+            s.setBranchName(branch);
+            s.setStartedAt(LocalDateTime.now());
+            s.setStatus(WorkSession.Status.ACTIVE);
+            s.setSessionType(WorkSession.SessionType.DRAFT);
+            s.setTitle(draftName);
+            s.setUserId(userId);
+            WorkSession saved = sessionRepository.save(s);
+            log.info("另起一稿: project={}, branch={}, name={}", projectId, branch, draftName);
+
+            return new DraftCreateResult(saved, new LineSwitchResult(branch, affected));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 本项目所有还在进行中的稿，按建立时间倒序——律师最近开的稿排在最前面。 */
+    public List<WorkSession> listDrafts(long projectId) {
+        return sessionRepository.findByProjectIdAndStatusAndSessionTypeOrderByStartedAtDesc(
+                projectId, WorkSession.Status.ACTIVE, WorkSession.SessionType.DRAFT);
+    }
+
+    /**
+     * 切到某一稿。已经在这一稿上是幂等操作——{@link #dockAndSwitchTo} 停靠后计算的
+     * 差异天然为空，不需要额外的分支判断。
+     */
+    public LineSwitchResult switchToDraft(long projectId, long draftId, Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            requireNotMerging(projectId);
+            WorkSession draft = requireActiveDraft(projectId, draftId);
+            return dockAndSwitchTo(projectId, draft.getBranchName(), userId, userName);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 切回主线：目标分支优先取 ACTIVE 工作段自己的分支（律师之前手上那段工作还在，
+     * 不是 master），没有 ACTIVE 工作段时才是 master。
+     *
+     * 切回后如果确实存在 ACTIVE 工作段，必须重新武装它的空闲定时器——
+     * 这段工作在切去稿上的这段时间里，空闲定时器已经被 {@link #cancelPending}
+     * 拆掉了（{@link #dockAndSwitchTo} 内部调用），不重新武装的话这段工作从此
+     * 不会再被「30 分钟无动静自动结束」覆盖到，会永远挂着「工作中」。
+     */
+    public LineSwitchResult switchToMainline(long projectId, Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            requireNotMerging(projectId);
+            Optional<WorkSession> activeWork = activeSession(projectId);
+            String target = activeWork.map(WorkSession::getBranchName)
+                    .orElseGet(repoService::mainBranch);
+
+            LineSwitchResult result = dockAndSwitchTo(projectId, target, userId, userName);
+
+            activeWork.ifPresent(s -> {
+                actors.put(projectId, new PendingActor(userId, userName));
+                armIdleTimer(projectId, s.getId());
+            });
+
+            return result;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 切线共用内核：停靠当前线（{@link #commitNow}，同时把陈旧的防抖/空闲定时器一并
+     * 清掉）→ 记下停靠后的 HEAD → 算好目标分支相对它的变更清单（必须在 checkout 之前
+     * 算，checkout 之后 HEAD 已经变了）→ checkout 目标分支（这是真正切到另一条已存在
+     * 的历史线，JGit 的 checkout 本身会把工作区文件改写成目标分支的内容——跟
+     * {@link #revertTo} 手工 restoreWorkTreeFrom 不同，那边是在同一条线上新造一笔
+     * 提交，绝不切分支）→ 清单同步回数据库（机制同 revertTo：读目标分支当前 HEAD 的
+     * 清单，applyToDatabase）→ 受影响文件 id。
+     */
+    private LineSwitchResult dockAndSwitchTo(long projectId, String targetBranch,
+                                             Long userId, String userName) {
+        cancelPending(projectId);
+        dockCurrentLine(projectId, userId, userName);
+        String beforeHead = repoService.resolveRef(projectId, "HEAD");
+        List<FileChange> changes = repoService.diffNameStatus(projectId, beforeHead, targetBranch);
+        repoService.checkoutBranch(projectId, targetBranch);
+        syncManifestFromRef(projectId, "HEAD");
+        List<Long> affected = resolveAffectedFileIds(projectId, changes);
+        return new LineSwitchResult(targetBranch, affected);
+    }
+
+    /**
+     * 只在「确实站在一条需要停靠的线上」时才调用 {@link #commitNow}：当前在稿分支上
+     * （commitNow 的守卫会跳过 ensureSession，只管落盘，必须总是执行），或者已经存在
+     * ACTIVE 工作段（commitNow 里的 ensureSession 只是复用，不会新建分支）。
+     *
+     * 干净的主线、且没有任何 ACTIVE 工作段时，什么都不用停靠——什么都不做。否则
+     * commitNow 内部的 ensureSession 会在主线上凭空开一段从未被律师编辑过的空工作，
+     * 这段工作会一直挂着「工作中」，还会把之后「切回主线」的目标从 master 错误地
+     * 带偏到这段凭空冒出来的分支上。
+     */
+    private void dockCurrentLine(long projectId, Long userId, String userName) {
+        if (onDraftBranch(projectId) || activeSession(projectId).isPresent()) {
+            commitNow(projectId, userId, userName, null);
+        }
+    }
+
+    /** 仓库处于保留冲突态的合并中时，拒绝一切切线/开稿——那期间工作区是裁决现场。 */
+    private void requireNotMerging(long projectId) {
+        if (repoService.repositoryMerging(projectId)) {
+            throw VersionException.userFacing("请先处理正在进行的采纳");
+        }
+    }
+
+    /** 目标必须是本项目里 ACTIVE 的 DRAFT，否则给一句律师能懂的话，不暴露内部状态。 */
+    private WorkSession requireActiveDraft(long projectId, long draftId) {
+        WorkSession draft = sessionRepository.findById(draftId).orElse(null);
+        if (draft == null
+                || !draft.getProjectId().equals(projectId)
+                || draft.getStatus() != WorkSession.Status.ACTIVE
+                || draft.getSessionType() != WorkSession.SessionType.DRAFT) {
+            throw VersionException.userFacing("这一稿不存在或已处理");
+        }
+        return draft;
+    }
+
+    /** 稿名口径照里程碑命名（VersionController.markMilestone）：必填，最多 64 字。 */
+    private static String validateDraftName(String name) {
+        if (name == null || name.isBlank()) {
+            throw VersionException.userFacing("请给这一稿起个名字");
+        }
+        String trimmed = name.strip();
+        if (trimmed.length() > 64) {
+            throw VersionException.userFacing("名字太长了，请控制在 64 字以内");
+        }
+        return trimmed;
     }
 
     /**
