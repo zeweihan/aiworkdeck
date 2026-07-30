@@ -98,7 +98,7 @@ class VersionControllerAuthTest {
     private static final long PROJECT_ID = 7L;
     private static final long USER_ID = 1L;
 
-    private enum Endpoint { STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT }
+    private enum Endpoint { STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT, MILESTONE }
 
     private void invoke(Endpoint endpoint, String sessionId) {
         switch (endpoint) {
@@ -111,6 +111,7 @@ class VersionControllerAuthTest {
             case REVERT -> controller.revert(PROJECT_ID, Map.of("ref", "abc123"), sessionId);
             case FILE_BYTES -> controller.fileBytesAtRef(PROJECT_ID, "abc123", "a.txt", sessionId);
             case FILE_TEXT -> controller.fileTextAtRef(PROJECT_ID, "abc123", "a.txt", sessionId);
+            case MILESTONE -> controller.markMilestone(PROJECT_ID, "abc123", Map.of("name", "发客户第一稿"), sessionId);
         }
     }
 
@@ -125,6 +126,7 @@ class VersionControllerAuthTest {
             case REVERT -> verify(sessionService, never()).revertTo(anyLong(), anyString(), any(), anyString());
             case FILE_BYTES, FILE_TEXT ->
                     verify(repoService, never()).readBlobAtCommit(anyLong(), anyString(), anyString());
+            case MILESTONE -> verify(repoService, never()).tagMilestone(anyLong(), anyString(), anyString());
         }
     }
 
