@@ -52,6 +52,7 @@
       @reverted="onReverted"
       @compare-file="$emit('compare-file', $event)"
       @milestoned="onMilestoned"
+      @draft-created="onDraftCreated"
     />
   </scroll-view>
 </template>
@@ -67,7 +68,7 @@ export default {
     projectId: { type: [String, Number], required: true },
     fileFilter: { type: Object, default: null },
   },
-  emits: ['reverted', 'compare-file'],
+  emits: ['reverted', 'compare-file', 'draft-created'],
   data() {
     return { versions: [], expanded: {}, selected: null, loadError: false }
   },
@@ -135,6 +136,13 @@ export default {
       this.selected = null
       this.load()
       this.$emit('reverted', affectedFileIds || [])
+    },
+    // 从某个历史版本另起一稿：HEAD 切到了新稿分支，本页时间线（按 HEAD 取历史）
+    // 要重新拉取，否则还停在切线前那条线的历史上。
+    onDraftCreated(affectedFileIds) {
+      this.selected = null
+      this.load()
+      this.$emit('draft-created', affectedFileIds || [])
     },
   },
 }

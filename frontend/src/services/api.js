@@ -1667,3 +1667,65 @@ export async function fetchVersionFileBytes(projectId, ref, path) {
   return new Uint8Array(await resp.arrayBuffer());
 }
 
+// ---- 稿：创建、双向切线、采纳/裁决/中止/放弃（第 3 期） -----------------
+
+// 另起一稿。ref 为空取当前版本。
+export function createDraft(projectId, ref, name) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft`,
+    method: 'POST',
+    data: { ref: ref || '', name }
+  });
+}
+
+export function listDrafts(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/drafts`,
+    method: 'GET'
+  });
+}
+
+export function switchToDraft(projectId, draftId) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/switch`,
+    method: 'POST'
+  });
+}
+
+export function switchToMainline(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/switch-mainline`,
+    method: 'POST'
+  });
+}
+
+export function adoptDraft(projectId, draftId) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/adopt`,
+    method: 'POST'
+  });
+}
+
+// resolutions: { [path]: 'MAIN' | 'DRAFT' | 'BOTH' }
+export function resolveAdopt(projectId, draftId, resolutions) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/resolve`,
+    method: 'POST',
+    data: { resolutions }
+  });
+}
+
+export function abortAdopt(projectId, draftId) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/abort-adopt`,
+    method: 'POST'
+  });
+}
+
+export function abandonDraft(projectId, draftId) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/abandon`,
+    method: 'POST'
+  });
+}
+

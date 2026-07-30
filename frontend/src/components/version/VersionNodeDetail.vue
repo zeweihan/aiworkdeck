@@ -24,6 +24,7 @@
       <view class="awd-footer">
         <view class="awd-btn awd-btn-secondary" @tap="$emit('close')">关闭</view>
         <view class="awd-btn awd-btn-secondary" @tap="openMilestoneNaming">{{ version.milestone ? '重新命名重要版本' : '标为重要版本' }}</view>
+        <view class="awd-btn awd-btn-secondary" @tap="openDraftNaming">从这一版另起一稿</view>
         <view class="awd-btn awd-btn-primary" @tap="confirmRevert">退回到这一版</view>
       </view>
     </view>
@@ -44,11 +45,28 @@
         </view>
       </view>
     </view>
+
+    <view v-if="draftNaming" class="awd-mask" @tap.self="draftNaming = false">
+      <view class="awd-dialog">
+        <view class="awd-header"><text class="awd-title">给这份稿起个名字</text></view>
+        <view class="awd-body">
+          <input
+            v-model="draftName"
+            class="awd-input"
+            placeholder="例如：客户方案 B"
+          />
+        </view>
+        <view class="awd-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="draftNaming = false">取消</view>
+          <view class="awd-btn awd-btn-primary" @tap="submitDraftCreate">开始</view>
+        </view>
+      </view>
+    </view>
   </view>
 </template>
 
 <script>
-import { getVersionChanges, revertToVersion, markVersionMilestone } from '@/services/api.js'
+import { getVersionChanges, revertToVersion, markVersionMilestone, createDraft } from '@/services/api.js'
 
 export default {
   name: 'VersionNodeDetail',
@@ -56,9 +74,14 @@ export default {
     projectId: { type: [String, Number], required: true },
     version: { type: Object, required: true },
   },
-  emits: ['close', 'reverted', 'compare-file', 'milestoned'],
+  emits: ['close', 'reverted', 'compare-file', 'milestoned', 'draft-created'],
   data() {
-    return { changes: [], loadError: false, milestoneNaming: false, milestoneName: '', busy: false }
+    return {
+      changes: [], loadError: false,
+      milestoneNaming: false, milestoneName: '',
+      draftNaming: false, draftName: '',
+      busy: false,
+    }
   },
   computed: {
     when() {
@@ -126,6 +149,30 @@ export default {
         this.$emit('milestoned')
       } catch (e) {
         uni.showToast({ title: (e && e.message) || '标记失败，请稍后重试', icon: 'none' })
+      } finally {
+        this.busy = false
+      }
+    },
+    openDraftNaming() {
+      this.draftName = ''
+      this.draftNaming = true
+    },
+    async submitDraftCreate() {
+      if (this.busy) return
+      const name = (this.draftName || '').trim()
+      if (!name) {
+        uni.showToast({ title: '请给这一稿起个名字', icon: 'none' })
+        return
+      }
+      this.busy = true
+      try {
+        const res = await createDraft(this.projectId, this.version.sha, name)
+        const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
+        this.draftNaming = false
+        uni.showToast({ title: `已建立稿《${name}》，正在切换`, icon: 'none' })
+        this.$emit('draft-created', affectedFileIds)
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '开稿失败，请稍后重试', icon: 'none' })
       } finally {
         this.busy = false
       }

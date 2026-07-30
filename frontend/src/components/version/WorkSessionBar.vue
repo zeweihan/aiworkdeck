@@ -1,6 +1,13 @@
 <template>
   <view class="session-bar">
-    <template v-if="working">
+    <template v-if="onDraft">
+      <view class="session-dot draft-dot" />
+      <text class="session-text">正在稿《{{ onDraft.name }}》上修改</text>
+      <view class="awd-btn awd-btn-secondary session-btn" @tap="returnToMainline">回到主线工作</view>
+      <view class="awd-btn awd-btn-primary session-btn" @tap="adopt">采纳这一稿</view>
+      <view class="awd-btn awd-btn-danger session-btn" @tap="confirmAbandon">放弃这一稿</view>
+    </template>
+    <template v-else-if="working">
       <view class="session-dot" />
       <text class="session-text">工作中{{ changedCount ? `（已改 ${changedCount} 份文件）` : '' }}</text>
       <view class="awd-btn awd-btn-primary session-btn" @tap="openNaming">结束本次工作</view>
@@ -30,15 +37,19 @@
 </template>
 
 <script>
-import { endWorkSession, discardWorkSession } from '@/services/api.js'
+import {
+  endWorkSession, discardWorkSession,
+  switchToMainline, adoptDraft, abandonDraft,
+} from '@/services/api.js'
 
 export default {
   name: 'WorkSessionBar',
   props: {
     working: { type: Boolean, default: false },
     changedCount: { type: Number, default: 0 },
+    onDraft: { type: Object, default: null },
   },
-  emits: ['ended', 'discarded'],
+  emits: ['ended', 'discarded', 'mainline-resumed', 'draft-adopted', 'draft-abandoned'],
   data() {
     return { naming: false, title: '', busy: false }
   },
@@ -47,6 +58,58 @@ export default {
     openNaming() {
       this.title = ''
       this.naming = true
+    },
+    async returnToMainline() {
+      if (this.busy) return
+      this.busy = true
+      try {
+        const res = await switchToMainline(this.projectId)
+        const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
+        this.$emit('mainline-resumed', affectedFileIds)
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '回到主线工作失败，请稍后重试', icon: 'none' })
+      } finally {
+        this.busy = false
+      }
+    },
+    // 成功但没生成版本（稿 tip 是主线祖先，没有实质内容可采纳）时后端带 notice，
+    // 冲突（success=false）时不算失败——仓库进入待裁决态，交给三选一弹窗接手，
+    // 这里只把已经变化的 affectedFileIds 转发出去（见 AdoptOutcome 注释）。
+    async adopt() {
+      if (this.busy) return
+      this.busy = true
+      try {
+        const res = await adoptDraft(this.projectId, this.onDraft.id)
+        const data = (res && res.data) || {}
+        if (data.success && data.notice) {
+          uni.showToast({ title: data.notice, icon: 'none' })
+        }
+        this.$emit('draft-adopted', data.affectedFileIds || [])
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '采纳失败，请稍后重试', icon: 'none' })
+      } finally {
+        this.busy = false
+      }
+    },
+    confirmAbandon() {
+      uni.showModal({
+        title: '放弃这一稿',
+        content: '这一稿的所有改动都会被丢掉，确定吗？',
+        success: async (r) => {
+          if (!r.confirm) return
+          if (this.busy) return
+          this.busy = true
+          try {
+            const res = await abandonDraft(this.projectId, this.onDraft.id)
+            const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
+            this.$emit('draft-abandoned', affectedFileIds)
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || '放弃失败，请稍后重试', icon: 'none' })
+          } finally {
+            this.busy = false
+          }
+        },
+      })
     },
     async end() {
       if (this.busy) return
@@ -97,6 +160,7 @@ export default {
 .session-dot {
   width: 14rpx; height: 14rpx; border-radius: 50%; background: #C8A45D;
 }
+.draft-dot { background: #7A5FC0; }
 .session-text { font-size: 26rpx; color: #333; flex: 1; }
 .session-idle { color: #999; }
 .session-btn { flex-shrink: 0; }

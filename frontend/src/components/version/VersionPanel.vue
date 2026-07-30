@@ -19,32 +19,58 @@
       <WorkSessionBar
         :working="working"
         :changed-count="changedCount"
+        :on-draft="onDraft"
         @ended="refresh"
         @discarded="refresh"
+        @mainline-resumed="onDraftLineChanged"
+        @draft-adopted="onDraftLineChanged"
+        @draft-abandoned="onDraftLineChanged"
       />
       <view v-if="fileFilter" class="version-file-filter">
         <text class="version-file-filter-text">只看《{{ fileFilter.name }}》的历史</text>
         <text class="version-file-filter-clear" @tap="$emit('clear-file-filter')">显示全部</text>
       </view>
+      <DraftList
+        v-if="drafts.length"
+        :project-id="projectId"
+        :drafts="drafts"
+        @created="onDraftLineChanged"
+        @switched="onDraftLineChanged"
+      />
       <VersionTimeline
         :project-id="projectId"
         :file-filter="fileFilter"
         :key="timelineKey"
         @reverted="onReverted"
         @compare-file="$emit('compare-file', $event)"
+        @draft-created="onDraftLineChanged"
+      />
+      <!-- 采纳冲突三选一弹窗：本任务只落挂载点与状态搬运，弹窗本体是 T7 的
+           AdoptConflictDialog（frontend/src/components/version/AdoptConflictDialog.vue，
+           尚未创建）——build:h5 在 T7 落地前会因这一处 import 报红，属预期缺口。 -->
+      <AdoptConflictDialog
+        v-if="adoptConflict"
+        :project-id="projectId"
+        :draft-id="adoptConflict.draftId"
+        :draft-name="adoptConflict.draftName"
+        :conflicting-paths="adoptConflict.conflictingPaths"
+        @resolved="onDraftLineChanged"
+        @aborted="onDraftLineChanged"
       />
     </template>
   </view>
 </template>
 
 <script>
-import { getVersionStatus, enableVersionControl } from '@/services/api.js'
+import { getVersionStatus, enableVersionControl, listDrafts } from '@/services/api.js'
 import WorkSessionBar from './WorkSessionBar.vue'
 import VersionTimeline from './VersionTimeline.vue'
+import DraftList from './DraftList.vue'
+import AdoptConflictDialog from './AdoptConflictDialog.vue'
 
 export default {
   name: 'VersionPanel',
-  components: { WorkSessionBar, VersionTimeline },
+  components: { WorkSessionBar, VersionTimeline, DraftList, AdoptConflictDialog },
   props: {
     projectId: { type: [String, Number], required: true },
     fileFilter: { type: Object, default: null },
@@ -60,6 +86,9 @@ export default {
       enabled: false,
       working: false,
       changedCount: 0,
+      onDraft: null,
+      drafts: [],
+      adoptConflict: null,
       timelineKey: 0,
       busy: false,
     }
@@ -76,8 +105,12 @@ export default {
         this.enabled = !!d.enabled
         this.working = !!d.working
         this.changedCount = d.changedCount || 0
+        this.onDraft = d.onDraft || null
+        this.adoptConflict = d.adoptConflict || null
         this.timelineKey += 1
         this.loadError = false
+        if (this.enabled) await this.fetchDrafts()
+        else this.drafts = []
       } catch (e) {
         // 读取失败绝不能落到"未开启"引导页——那会让律师误以为从没开过版本记录，
         // 去重复点开启。宁可显示可区分的错误态，保留 enabled 的上一次已知值。
@@ -88,7 +121,23 @@ export default {
         this.loading = false
       }
     },
+    async fetchDrafts() {
+      try {
+        const res = await listDrafts(this.projectId)
+        this.drafts = (res && res.data && res.data.drafts) || []
+      } catch (e) {
+        console.warn('[Version] 读取稿列表失败', e)
+        this.drafts = []
+      }
+    },
     onReverted(affectedFileIds) {
+      this.refresh()
+      this.$emit('reverted-files', affectedFileIds || [])
+    },
+    // 开稿/切线/采纳/放弃：都可能改变磁盘上打开中的文件，走跟退回同一条重载链
+    // （见 fileOpenTabs.js 的 onVersionRevertedFiles）；也都要重拉一次状态，
+    // 稿态/稿列表/采纳冲突态全部以 /status 为准。
+    onDraftLineChanged(affectedFileIds) {
       this.refresh()
       this.$emit('reverted-files', affectedFileIds || [])
     },
