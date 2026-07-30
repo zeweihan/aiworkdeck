@@ -1630,6 +1630,14 @@ export function revertToVersion(projectId, ref) {
   });
 }
 
+// 版本对比降级：取某一版某文件抽取出的纯文本。
+export function getVersionFileText(projectId, ref, path) {
+  return request({
+    url: `/api/projects/${projectId}/version/versions/${encodeURIComponent(ref)}/file-text?path=${encodeURIComponent(path)}`,
+    method: 'GET'
+  });
+}
+
 // 版本对比：取某一版某文件的原始字节（octet-stream）。返回 Uint8Array。
 // 走裸 fetch 而非上面的 request()——后端这个接口成功时是二进制流，出错时才是
 // {code,message} JSON（HTTP 恒 200，见 VersionController.onVersionError），

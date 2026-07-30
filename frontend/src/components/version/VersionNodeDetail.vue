@@ -14,6 +14,11 @@
         <view v-for="c in changes" :key="c.path" class="detail-change">
           <text class="change-type" :class="'type-' + c.type">{{ typeLabel(c.type) }}</text>
           <text class="change-path">{{ c.path }}</text>
+          <view
+            v-if="c.type === 'MODIFY' && version.parents && version.parents.length > 0"
+            class="awd-btn awd-btn-secondary change-compare-btn"
+            @tap="$emit('compare-file', { path: c.path, sha: version.sha })"
+          >和上一版对比</view>
         </view>
       </view>
       <view class="awd-footer">
@@ -33,7 +38,7 @@ export default {
     projectId: { type: [String, Number], required: true },
     version: { type: Object, required: true },
   },
-  emits: ['close', 'reverted'],
+  emits: ['close', 'reverted', 'compare-file'],
   data() {
     return { changes: [], loadError: false }
   },
@@ -102,6 +107,7 @@ export default {
 .type-DELETE { color: #b23; }
 .type-RENAME { color: #666; }
 .change-path { font-size: 25rpx; color: #333; word-break: break-all; }
+.change-compare-btn { flex-shrink: 0; padding: 6rpx 14rpx; font-size: 22rpx; }
 .awd-footer {
   display: flex; justify-content: flex-end; gap: 16rpx;
   padding: 20rpx 24rpx; border-top: 1px solid #eee;

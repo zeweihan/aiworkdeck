@@ -348,6 +348,41 @@ export const fileOpenTabsMethods = {
       this[targetIdProp] = tab.id
     },
 
+    // 「和上一版对比」入口：VersionNodeDetail 一路冒泡上来的 {path, sha}。
+    // 桌面 + docx/doc 走修订稿对比标签（LOWA 渲染）；其余走文本对比标签（DocDiffViewer 降级）。
+    onVersionCompareFile({ path, sha }) {
+      const name = path.split('/').pop() || path
+      const oldRef = sha + '^'
+      const isDocx = /\.(docx?|DOCX?)$/.test(name)
+      if (this.libreOfficePreferred && isDocx) {
+        this.openVersionCompareTab({ projectId: this.projectId, path, name, newRef: sha, oldRef })
+      } else {
+        this.openVersionTextDiffTab({ projectId: this.projectId, path, name, newRef: sha, oldRef })
+      }
+    },
+
+    isVersionTextDiffTab(file) {
+      return file && file.tabType === 'version-text-diff'
+    },
+
+    // 版本文本对比标签（DocDiffViewer versionSpec 模式）：{projectId, path, name, newRef, oldRef}
+    openVersionTextDiffTab(spec) {
+      const id = `vtd-${spec.newRef.slice(0, 8)}-${Date.now()}`
+      const tab = {
+        id, name: `${spec.name} 版本对比`, tabType: 'version-text-diff', fileType: 'version-text-diff',
+        versionSpec: {
+          projectId: spec.projectId, path: spec.path, oldRef: spec.oldRef, newRef: spec.newRef,
+          oldLabel: '上一版', newLabel: '这一版',
+        },
+        createdAt: Date.now(),
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const targetList = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      const targetIdProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+      targetList.push(tab)
+      this[targetIdProp] = tab.id
+    },
+
     // --- 文档对比逻辑 ---
     onCompareDocumentsRequest(docs) {
       // FileTree 发起的文档对比请求

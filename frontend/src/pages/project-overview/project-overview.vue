@@ -567,6 +567,7 @@
           <VersionPanel
             v-else-if="leftPaneKey === 'version'"
             :project-id="projectId"
+            @compare-file="onVersionCompareFile"
           />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
@@ -762,6 +763,11 @@
                       :key="activeFileLeft.id"
                       :compare-spec="activeFileLeft.compareSpec"
                     />
+                    <DocDiffViewer
+                      v-else-if="isVersionTextDiffTab(activeFileLeft)"
+                      :key="activeFileLeft.id"
+                      :version-spec="activeFileLeft.versionSpec"
+                    />
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileLeft)"
                       :request-id="activeFileLeft.requestId"
@@ -833,6 +839,11 @@
                       v-else-if="isVersionCompareTab(activeFileRight)"
                       :key="activeFileRight.id"
                       :compare-spec="activeFileRight.compareSpec"
+                    />
+                    <DocDiffViewer
+                      v-else-if="isVersionTextDiffTab(activeFileRight)"
+                      :key="activeFileRight.id"
+                      :version-spec="activeFileRight.versionSpec"
                     />
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileRight)"
