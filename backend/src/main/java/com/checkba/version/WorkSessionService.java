@@ -328,6 +328,8 @@ public class WorkSessionService {
     /**
      * AI 轮次结束的落版：以 AI 身份（AI Workdeck &lt;ai@aiworkdeck.local&gt;）落一笔自动存档，
      * 让时间线能看出「哪些改动是 AI 做的」。无变更返回 null。
+     * 稿分支（{@code draft/*}）上跳过 {@link #ensureSession}——稿不隐式开工作段，
+     * 但清单写入与提交照旧，稿上的 AI 轮次也必须正常落版。
      * 已知局限（与文档检查点同源）：编辑器自动保存是异步的，轮次结束时未 flush 的
      * 改动不在本笔里，会随后续保存进入普通存档。
      */
@@ -336,7 +338,9 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
-            ensureSession(projectId, userId, AI_AUTHOR_NAME);
+            if (!onDraftBranch(projectId)) {
+                ensureSession(projectId, userId, AI_AUTHOR_NAME);
+            }
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             String msg = describePendingChanges(projectId);
             return repoService.commitAll(projectId, msg, "auto", null,
