@@ -64,6 +64,8 @@ export const EDITOR_ACTIONS = [
   // [批注] Word comment on an anchored range — 解释/说明类文字不进正文的通道
   // （backend doc_add_comment）。
   'add_comment',
+  // [第 2 期 版本对比] host-initiated：当前文档与旧版字节比较产出修订，随后切只读。
+  'compare_document',
 ]
 
 /**

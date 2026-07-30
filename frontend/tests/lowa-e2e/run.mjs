@@ -83,30 +83,6 @@ const DEBUG_ACTIONS = `
       return { success: true };
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
-  debug_compare_document(p) {
-    // 把"旧版本"字节写进 MEMFS，再让当前文档与它比较。
-    // 当前文档 = 新版本（由测试先 load_document 载入）。
-    const raw = p && p.baseBytes;
-    let u8 = null;
-    if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
-    else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength);
-    else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
-    if (!u8 || u8.length === 0) return { success: false, message: 'baseBytes empty' };
-    const bytes = Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
-    const url = 'file:///tmp/awd_base_cmp.docx';
-    try {
-      const sfa = css.ucb.SimpleFileAccess.create(context);
-      try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
-      const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
-      sfa.writeFile(url, stream);
-      try { stream.closeInput(); } catch (e) {}
-    } catch (e) { return { success: false, stage: 'memfs', message: errStr(e) }; }
-    try {
-      css.frame.DispatchHelper.create(context).executeDispatch(
-        ctrl.getFrame(), '.uno:CompareDocuments', '', 0, [mkProp('URL', url)]);
-    } catch (e) { return { success: false, stage: 'dispatch', message: errStr(e) }; }
-    return { success: true, url: url };
-  },
 `
 function patchServed(urlPath, content) {
   if (urlPath === '/office_thread.js') {
@@ -117,8 +93,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_compare_document'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_compare_document"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document"'),
       'utf8')
   }
   return content
@@ -341,15 +317,15 @@ try {
   check('批注文字不进正文', await doc() === '本合同自签署之日起生效。', await doc())
   check('缺锚点被拒绝', !(await exec('add_comment', { comment: '孤儿批注' })).success)
 
-  // ---------- 组 13：CompareDocuments 探针（版本记录第 0 期）----------
-  console.log('\n[13] CompareDocuments 探针')
+  // ---------- 组 13：compare_document 生产 action（版本记录第 2 期）----------
+  console.log('\n[13] compare_document 生产 action')
   {
     // 组 12 在文档里留了一处批注（字段）；select_all 选区跨过该字段时
-    // replace_selection 的 vc.setString('') 会抛 RuntimeException（探针专用
-    // 发现，与 CompareDocuments 本身无关）。探针不依赖前面各组的残留状态，
-    // 换一份全新空白文档来准备新旧版本文本，和既有 probe_modules() 同一手法。
+    // replace_selection 的 vc.setString('') 会抛 RuntimeException（与
+    // CompareDocuments 本身无关）。测试不依赖前面各组的残留状态，换一份全新
+    // 空白文档来准备新旧版本文本，和既有 probe_modules() 同一手法。
     const fresh = await exec('debug_fresh_document')
-    check('探针换新文档成功', fresh && fresh.success === true, JSON.stringify(fresh))
+    check('换新文档成功', fresh && fresh.success === true, JSON.stringify(fresh))
 
     const setText = async (t) => {
       await exec('debug_set_record_changes', { on: false })
@@ -375,17 +351,17 @@ try {
 
     // 当前文档载入"新版本"，再与"旧版本"比较
     await exec('load_document', { bytes: newBytes, name: 'v2.docx', authorName: '测试用户' })
-    const cmp = await exec('debug_compare_document', { baseBytes: oldBytes })
-    check('CompareDocuments 派发成功', cmp && cmp.success === true,
-      cmp && (cmp.stage + ':' + cmp.message))
+    const cmp = await exec('compare_document', { baseBytes: oldBytes })
+    check('compare_document 成功且产出修订', cmp && cmp.success === true && cmp.redlineCount > 0,
+      JSON.stringify(cmp))
 
     const rev = await exec('debug_revisions')
-    check('比较后产生修订标记', rev && rev.success === true && rev.count > 0,
-      'count=' + (rev && rev.count))
-
-    // 记录方向：把修订内容打出来，供人工确认哪一版是"插入"哪一版是"删除"
-    console.log('  [方向] redlines=' + JSON.stringify(rev && rev.redlines))
-    console.log('  [方向] 当前正文（应为新版可读文本）=' + JSON.stringify(await doc()))
+    const cmpRedlines = (rev.redlines || []).filter((r) => r.author === '版本对比')
+    check('修订署名统一为"版本对比"', rev && rev.success === true && cmpRedlines.length === rev.count, JSON.stringify(rev))
+    // 方向断言：探针（第 0 期）已实证产出「旧→新」的删/插修订——删除侧应含"三"
+    check('方向正确：redlines 含 Delete「三」',
+      cmpRedlines.filter((r) => r.type === 'Delete').map((r) => r.text).includes('三'), JSON.stringify(cmpRedlines))
+    check('正文停在新版可读文本', (await doc()).includes('六十日'), await doc())
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
