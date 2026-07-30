@@ -336,11 +336,19 @@ public class WorkSessionService {
     /**
      * 供 RepoMaintenanceJob 的每日 GC 用：gc 本身不改可达历史，但线程池不再是 1，
      * 可能跟自动存档/合并并发抢 .git 索引，同样要过按项目维度的这把锁。
+     *
+     * 待裁决窗口整段跳过（保守化）：那期间工作区/索引是律师还没做完选择的裁决现场，
+     * 而 GC 会重打包并清理不可达对象。稿分支本身可达、裁决不会丢，但没有任何理由
+     * 在这个窗口里动仓库——每日维护晚跑一天毫无代价。
      */
     public void gcLocked(long projectId) {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            if (awaitingAdoptResolution(projectId)) {
+                log.info("采纳裁决进行中，跳过这次仓库维护: project={}", projectId);
+                return;
+            }
             repoService.gc(projectId);
         } finally {
             lock.unlock();
@@ -468,8 +476,14 @@ public class WorkSessionService {
         }
     }
 
-    /** 丢弃整段工作：删分支，工作区回到主线状态，数据库文件树跟着回去。 */
-    public void discardSession(long projectId, Long userId) {
+    /**
+     * 丢弃整段工作：删分支，工作区回到主线状态，数据库文件树跟着回去。
+     *
+     * 返回被这次丢弃改写过、且仍在数据库里的文件 id——机制与理由同 {@link #revertTo}：
+     * 磁盘已经被 checkout 改写，而打开中的编辑器还端着被丢弃分支的内容，不重载的话
+     * 下一次 autosave 会把刚被丢弃的工作原样写回去。
+     */
+    public List<Long> discardSession(long projectId, Long userId) {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
@@ -496,14 +510,22 @@ public class WorkSessionService {
             // WorkSession 只存了 userId、没存 userName，JGit 的 PersonIdent 又不接受
             // null 作者名，这里用一个占位名——这笔提交的署名不会被任何人看到。
             commitNow(projectId, userId, "废弃的工作", null);
+
+            // 变更清单必须在 checkout 之前算好（口径同 revertTo/dockAndSwitchTo）：
+            // checkout 之后 HEAD 已经是主线，再 diff 就什么都看不到了。
+            List<FileChange> changes = repoService.diffNameStatus(
+                    projectId, "HEAD", repoService.mainBranch());
+
             repoService.checkoutBranch(projectId, repoService.mainBranch());
             repoService.deleteBranch(projectId, s.getBranchName(), true);
             syncManifestFromRef(projectId, "HEAD");
+            List<Long> affected = resolveAffectedFileIds(projectId, changes);
 
             s.setStatus(WorkSession.Status.DISCARDED);
             s.setEndedAt(LocalDateTime.now());
             sessionRepository.save(s);
             log.info("丢弃一段工作: project={}, branch={}", projectId, s.getBranchName());
+            return affected;
         } finally {
             lock.unlock();
         }
@@ -554,10 +576,17 @@ public class WorkSessionService {
             // 在一段已经活着的工作里退回，等于把这段工作的空闲自动结束永久拆掉，
             // 律师之后不点「结束本次工作」就一直挂着「工作中」。这里显式补武装，
             // 执行者按发起退回的人记（后续自动结束的合并要用他署名）。
-            activeSession(projectId).ifPresent(s -> {
-                actors.put(projectId, new PendingActor(userId, userName));
-                armIdleTimer(projectId, s.getId());
-            });
+            //
+            // 稿分支上例外：稿不受空闲结束管辖（口径同 onChangeSignal），而这时的
+            // activeSession 查到的是主线那边挂着的另一段工作——给它武装定时器，
+            // 30 分钟后会在律师还站在稿上时触发一次自动结束（autoEndIfIdle 的分支
+            // 校验会兜住，但没必要一开始就制造这个陈旧定时器）。
+            if (!onDraftBranch(projectId)) {
+                activeSession(projectId).ifPresent(s -> {
+                    actors.put(projectId, new PendingActor(userId, userName));
+                    armIdleTimer(projectId, s.getId());
+                });
+            }
 
             return new RevertResult(sha, affectedFileIds);
         } finally {
@@ -770,7 +799,13 @@ public class WorkSessionService {
             }
             log.info("采纳一稿遇到冲突，停在待裁决: project={}, branch={}, files={}",
                     projectId, draft.getBranchName(), conflicts.size());
-            return new AdoptOutcome(false, null, conflicts, back.affectedFileIds(), null);
+            // 冲突合并同样会把**非冲突**的稿侧改动检出到工作区，这些文件的磁盘字节已经变了。
+            // 只带「回到主线侧」那一步的差异是不够的——律师本来就站在主线上按采纳时那一步
+            // 是空的，打开中的编辑器端着旧字节，一次 autosave 就把稿的改动写回去，随后
+            // commitMergeResolution 的 git add . 把它收进采纳提交，稿的改动无声丢失。
+            return new AdoptOutcome(false, null, conflicts,
+                    mergeAffected(projectId, back.affectedFileIds(), mainTipBefore, draftTip),
+                    null);
         } finally {
             lock.unlock();
         }
@@ -914,11 +949,7 @@ public class WorkSessionService {
         sessionRepository.save(draft);
         repoService.deleteBranch(projectId, draft.getBranchName(), true);
 
-        List<Long> affected = new ArrayList<>(extraAffected);
-        for (Long id : resolveAffectedFileIds(projectId,
-                repoService.diffNameStatus(projectId, mainTipBefore, "HEAD"))) {
-            if (!affected.contains(id)) affected.add(id);
-        }
+        List<Long> affected = mergeAffected(projectId, extraAffected, mainTipBefore, "HEAD");
 
         log.info("采纳一稿: project={}, branch={}, name={}, sha={}",
                 projectId, draft.getBranchName(), draft.getTitle(), sha);
@@ -1154,6 +1185,21 @@ public class WorkSessionService {
             log.warn("退回后匹配受影响文件失败: project={}", projectId, e);
             return List.of();
         }
+    }
+
+    /**
+     * 把 {@code fromRef→toRef} 之间改动过的文件并进一份已有的重载列表（去重、保序）。
+     * 采纳的两条返回路径共用：冲突路径带的是「合并已经改写的文件」，收尾路径带的是
+     * 「采纳提交相对合并前主线 tip 改写的文件」。
+     */
+    private List<Long> mergeAffected(long projectId, List<Long> already,
+                                     String fromRef, String toRef) {
+        List<Long> out = new ArrayList<>(already);
+        for (Long id : resolveAffectedFileIds(projectId,
+                repoService.diffNameStatus(projectId, fromRef, toRef))) {
+            if (!out.contains(id)) out.add(id);
+        }
+        return out;
     }
 
     // ---- helpers ----------------------------------------------------------

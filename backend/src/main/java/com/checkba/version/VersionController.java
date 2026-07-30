@@ -172,8 +172,9 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireMember(projectId, sessionId);
-        sessionService.discardSession(projectId, userId);
-        return ok(Map.of("discarded", true));
+        // affectedFileIds：丢弃改写了磁盘，打开中的编辑器要走同一条重载链（同 revert）。
+        List<Long> affectedFileIds = sessionService.discardSession(projectId, userId);
+        return ok(Map.of("discarded", true, "affectedFileIds", affectedFileIds));
     }
 
     @PostMapping("/session/resume")

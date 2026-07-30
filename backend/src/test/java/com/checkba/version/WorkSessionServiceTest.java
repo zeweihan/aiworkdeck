@@ -188,6 +188,28 @@ class WorkSessionServiceTest {
     }
 
     /**
+     * P3 终审 I3：丢弃本次工作会改写工作区（checkout 主线），但旧实现什么都不返回——
+     * 打开中的编辑器还端着被丢弃分支的内容，下一次 autosave 就把刚被丢弃的工作原样
+     * 写回磁盘。形制照 revertTo：把这次改写触及、且仍在文件树里的文件 id 带回去，
+     * 前端据此走同一条重载链。
+     */
+    @Test
+    void discardSessionReportsFilesItRewroteForEditorReload() throws Exception {
+        when(fileRepo.findByProjectId(7L)).thenReturn(
+                List.of(projectFile(7L, "projects/7/合同.txt", "合同.txt", 42L)));
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "不要的改动");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+
+        List<Long> affected = svc.discardSession(7L, 1L);
+
+        assertEquals(List.of(42L), affected,
+                "被丢弃分支改过、且仍在文件树里的文件要进重载列表");
+        assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")));
+    }
+
+    /**
      * 回归测试：最后一次自动存档之后新建的文件是 untracked，原实现的
      * checkoutBranch 根本不会碰它，会残留在磁盘上（清单同步把 DB 行软删之后，
      * 下一段工作的 git add . 又会把它重新捡回来）。修复后 discardSession 会先把

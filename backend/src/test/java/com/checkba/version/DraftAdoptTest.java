@@ -615,6 +615,96 @@ class DraftAdoptTest {
         assertEquals("这次采纳没有完成，你的两份稿件都还在", WorkSessionService.ADOPT_ABORTED_NOTICE);
     }
 
+    /**
+     * P3 终审 C1：中止采纳绝不能销毁「这次合并之外」的未提交编辑。
+     *
+     * 现场：冲突窗口里版本捕获整体关闭（{@code onChangeSignal} 直接返回，自动存档不落地），
+     * 而律师可能在这期间继续编辑别的文件几个小时——那些改动只在磁盘上、一笔都没进历史。
+     * 旧实现的中止是 {@code reset --hard HEAD}，会把工作区里**所有**跟踪文件回滚到 HEAD，
+     * 窗口期的编辑全部消失且无从恢复，而按钮旁边的提示还写着「你的两份稿件都还在」。
+     *
+     * 修复后中止只还原「这次合并触及的路径」（冲突路径 ∪ HEAD↔MERGE_HEAD 的差异），
+     * 窗口外的文件分毫不动。
+     */
+    @Test
+    void abortAdoptKeepsUncommittedEditsOutsideTheMergeWindow() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+        db.put(503L, file(503L, "无关.txt"));
+        // 与这次合并完全无关的一份文件：两条线都没碰过它，中止不该动它一个字节。
+        write("无关.txt", "主线上的原样");
+
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+        String draftBranch = scene.draftBranch();
+        String draftTip = repoSvc.resolveRef(7L, draftBranch);
+        String mainTip = repoSvc.resolveRef(7L, "HEAD");
+        assertEquals("主线上的原样", read("无关.txt"), "前置：无关文件此刻还是主线那一版");
+
+        // 律师在裁决窗口里干了几个小时的活：改无关文件（版本捕获全关，一笔都没提交），
+        // 也在冲突文件的半成品上动过手。
+        write("无关.txt", "窗口期改了几个小时的内容");
+        write("合同.txt", "冲突半成品上乱动过");
+
+        svc.abortAdopt(7L);
+
+        assertEquals("窗口期改了几个小时的内容", read("无关.txt"),
+                "RED：全树 reset --hard 会把窗口期的未提交编辑连根销毁");
+        assertEquals("主线：合同.txt", read("合同.txt"), "冲突文件回到主线那一版");
+        assertFalse(Files.exists(root.resolve("projects/7/稿新增.txt")),
+                "合并检出的稿独有文件要随中止一起撤走");
+
+        assertFalse(repoSvc.repositoryMerging(7L), "待裁决状态应被清掉");
+        assertNull(repoSvc.mergeHeadRef(7L), "MERGE_HEAD 要被清掉");
+        assertEquals(mainTip, repoSvc.resolveRef(7L, "HEAD"), "历史永不重写：HEAD 一步不动");
+        assertEquals(draftTip, repoSvc.resolveRef(7L, draftBranch), "稿 tip 完好");
+        assertEquals(WorkSession.Status.ACTIVE, sessions.get(scene.draftId()).getStatus());
+
+        // 中止之后仓库必须是健康的：窗口期的编辑能正常落进后续版本。
+        String sha = svc.commitNow(7L, 1L, "韩泽伟", "窗口期的编辑");
+        assertNotNull(sha, "中止后仓库要能正常提交，索引不能留着冲突残渣");
+        assertEquals("窗口期改了几个小时的内容",
+                new String(repoSvc.readBlobAtCommit(7L, sha, "无关.txt"),
+                        java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /**
+     * P3 终审 I2：冲突采纳返回的重载列表漏了「合并已经改写、但没冲突」的文件。
+     *
+     * JGit 的冲突合并仍然会把非冲突的稿侧改动检出到工作区；旧实现的 affectedFileIds
+     * 只有「切回主线侧」那一步的差异，律师站在主线上按采纳时那一步是空的——打开中的
+     * 编辑器端着旧字节，一次 autosave 就把稿的改动写回去，随后
+     * {@code commitMergeResolution} 的 {@code git add .} 把它收进采纳提交，改动无声丢失。
+     */
+    @Test
+    void conflictingAdoptFromMainlineReportsFilesRewrittenByTheMerge() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+        db.put(503L, file(503L, "稿改的.txt"));
+        write("合同.txt", "起点");
+        write("稿改的.txt", "起点");
+        mainlineWork("起点");
+
+        WorkSessionService.DraftCreateResult created =
+                svc.createDraft(7L, null, "试验稿", 1L, "韩泽伟");
+        write("合同.txt", "稿：合同");
+        write("稿改的.txt", "只有稿改过的内容");
+        svc.commitNow(7L, 1L, "韩泽伟", "稿上存档");
+
+        // 回主线并只改冲突文件——《稿改的.txt》主线一动不动，合并时是干净检出。
+        svc.switchToMainline(7L, 1L, "韩泽伟");
+        write("合同.txt", "主线：合同");
+        mainlineWork("主线的工作");
+
+        // 律师就站在主线上按「采纳这一稿」：内部那次停靠不产生任何差异。
+        WorkSessionService.AdoptOutcome r =
+                svc.adoptDraft(7L, created.draft().getId(), 1L, "韩泽伟");
+
+        assertFalse(r.success(), "前置：这一步应该造出一个采纳冲突");
+        assertEquals(List.of("合同.txt"), r.conflictingPaths());
+        assertEquals("只有稿改过的内容", read("稿改的.txt"),
+                "前置：合并已经把稿的非冲突改动检出到工作区");
+        assertTrue(r.affectedFileIds().contains(503L),
+                "RED：合并改写过的非冲突文件必须进重载列表，否则 autosave 会把它写回旧字节");
+    }
+
     // ---- 裁决期间的自动存档绝不能落地 ---------------------------------------
 
     /**

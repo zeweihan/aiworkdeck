@@ -9,6 +9,7 @@ import org.eclipse.jgit.api.MergeResult;
 import org.eclipse.jgit.api.ResetCommand;
 import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.diff.DiffEntry;
+import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.ObjectReader;
@@ -37,6 +38,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 
@@ -311,17 +313,23 @@ public class ProjectRepoService {
     public byte[] readBlobAtCommit(long projectId, String ref, String relPath) {
         try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
             ObjectId commitId = repo.resolve(ref);
-            if (commitId == null) return null;
-            RevCommit commit = walk.parseCommit(commitId);
-            try (TreeWalk tw = TreeWalk.forPath(repo, relPath, commit.getTree())) {
-                if (tw == null) return null;
-                ObjectLoader loader = repo.open(tw.getObjectId(0));
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                loader.copyTo(bos);
-                return bos.toByteArray();
-            }
+            return blobAt(repo, walk, commitId, relPath);
         } catch (Exception e) {
             throw new VersionException("读取历史文件失败: project=" + projectId, e);
+        }
+    }
+
+    /** readBlobAtCommit 的内核，接收已打开的 Repository/RevWalk（abortMerge 会逐路径调很多轮）。 */
+    private byte[] blobAt(Repository repo, RevWalk walk, ObjectId commitId, String relPath)
+            throws IOException {
+        if (commitId == null) return null;
+        RevCommit commit = walk.parseCommit(commitId);
+        try (TreeWalk tw = TreeWalk.forPath(repo, relPath, commit.getTree())) {
+            if (tw == null) return null;
+            ObjectLoader loader = repo.open(tw.getObjectId(0));
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            loader.copyTo(bos);
+            return bos.toByteArray();
         }
     }
 
@@ -536,18 +544,57 @@ public class ProjectRepoService {
     }
 
     /**
-     * 无损中止一次保留冲突态的合并：reset --hard HEAD，工作区/索引回到合并前状态，
-     * MERGE_HEAD 随之清除、RepositoryState 回到 SAFE。只 reset 到 HEAD，不碰任何
-     * 提交——历史永不重写。非 MERGING/MERGING_RESOLVED 态调用是真正的 no-op（先查
-     * RepositoryState 直接 return）——SAFE 态下 reset --hard 会把 autosave 防抖窗口里
-     * 尚未提交的工作区改动一并销毁，崩溃恢复路径可能在任意状态下盲调此方法，绝不能
-     * 借口「幂等」而真的执行一次破坏性 reset。
+     * 无损中止一次保留冲突态的合并：把**这次合并触及的那些路径**还原成 HEAD 的样子，
+     * 然后清掉合并态（MERGE_HEAD/MERGE_MSG），RepositoryState 回到 SAFE。只还原文件，
+     * 不碰任何提交——历史永不重写。
+     *
+     * 刻意**不用** {@code reset --hard HEAD}：裁决窗口期版本捕获整体关闭（见
+     * {@link WorkSessionService#onChangeSignal} 的 MERGING 守卫），律师在这期间对**别的**
+     * 文件做的编辑只在磁盘上、一笔都没进历史；全树 reset 会把它们连根销毁，而按钮旁边
+     * 的提示还写着「你的两份稿件都还在」。这里只处理「冲突路径 ∪ HEAD↔MERGE_HEAD 的
+     * 差异」——正是合并自己写进工作区的那些文件，窗口外的编辑分毫不动。
+     *
+     * 三步：索引按这些路径重置回 HEAD（清掉冲突暂存记录）→ 逐路径把 HEAD 的字节写回
+     * 工作区（HEAD 里没有的、也就是稿独有的新增文件，从磁盘删掉）→ 清 MERGE_HEAD/
+     * MERGE_MSG。非 MERGING/MERGING_RESOLVED 态调用是真正的 no-op（先查 RepositoryState
+     * 直接 return）——崩溃恢复路径可能在任意状态下盲调此方法。
      */
     public void abortMerge(long projectId) {
-        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+        try (Repository repo = open(projectId); Git git = new Git(repo);
+             RevWalk walk = new RevWalk(repo)) {
             RepositoryState st = repo.getRepositoryState();
             if (st != RepositoryState.MERGING && st != RepositoryState.MERGING_RESOLVED) return;
-            git.reset().setMode(ResetCommand.ResetType.HARD).setRef("HEAD").call();
+
+            ObjectId head = repo.resolve(Constants.HEAD);
+            ObjectId mergeHead = repo.resolve(Constants.MERGE_HEAD);
+
+            LinkedHashSet<String> paths = new LinkedHashSet<>(git.status().call().getConflicting());
+            if (mergeHead != null) {
+                for (FileChange c : diffEntries(repo, git, walk, head, mergeHead, null)) {
+                    paths.add(c.path());
+                }
+            }
+
+            if (!paths.isEmpty()) {
+                ResetCommand reset = git.reset().setRef(Constants.HEAD);
+                for (String p : paths) reset.addPath(p);
+                reset.call();
+
+                Path work = workTree(projectId);
+                for (String p : paths) {
+                    Path target = work.resolve(p);
+                    byte[] bytes = blobAt(repo, walk, head, p);
+                    if (bytes == null) {
+                        Files.deleteIfExists(target);
+                    } else {
+                        Files.createDirectories(target.getParent());
+                        Files.write(target, bytes);
+                    }
+                }
+            }
+
+            repo.writeMergeCommitMsg(null);
+            repo.writeMergeHeads(null);
         } catch (Exception e) {
             throw new VersionException("中止合并失败: project=" + projectId, e);
         }
