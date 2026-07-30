@@ -19,7 +19,8 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 - `WorkSessionService.java` —— 工作段生命周期业务逻辑，唯一认识「工作段」的类。
   - `onChangeSignal()`（:113）：外部改动信号入口，隐式开工作段 + 防抖（默认 2 分钟，`setDebounceMillis` 测试用）调度自动存档。
   - `ensureSession()`（:143）：没有 ACTIVE 工作段则建分支 `work/{currentTimeMillis}` 并切过去。
-  - `endSession()`（:180）/`discardSession()`（:216）/`revertTo()`（:241）：见下方状态机与契约。
+  - `endSession()`（:180）/`discardSession()`（:216）/`revertTo()`（:241）：见下方状态机与契约。`endSession` 返回 `SessionEndResult(sha, notice)`——空工作段（分支 tip == master tip）**不抛异常**，返回 `sha=null` + `notice="本次工作没有任何改动，未生成版本"`。理由：那条路径已经改完状态（删分支、标 DISCARDED），抛异常会让前端只 toast、不关命名弹窗、不刷状态条，界面停在「工作中」而后台已结束。凡是「改了状态还要报信」的路径都用返回值，不用异常。
+  - `revertTo` 收尾时对仍 ACTIVE 的工作段**显式重新武装空闲定时器**：`cancelPending` 把空闲定时器连 actors 一起清了，而 `ensureSession` 只在真正新建分支时武装——活动段内退回等于永久拆掉这段工作的空闲自动结束。护栏 `WorkSessionServiceTest.revertInsideAnActiveSessionRearmsTheIdleTimer`。
   - 按 projectId 的 `ReentrantLock`（:53，`repoLock()`）包住所有改仓库状态的路径；必须可重入，`endSession`/`revertTo` 内部会再调 `commitNow`。
   - `describeChanges()`（:299）：生成时间线文案，过滤 `.awd/` 前缀、去扩展名——律师看到的是「修改了《股权转让协议》」。
   - `safeRepoPath()`（:508）/`repoRelativePath()`（:525）：所有外部传入路径（`file-bytes`/`file-text` 的 `path` 查询参数、`timeline?fileId` 解出的 `ProjectFile.filePath`）唯一的合法性校验入口——拒绝 `..`/绝对路径/`.awd/` 前缀；`repoRelativePath` 额外校验 `filePath` 前缀真的属于本项目（`projects/{id}/`），归属不符直接抛技术档异常。新增任何吃路径的接口都要过这一关，不要自己重新拼校验逻辑。
@@ -39,7 +40,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 **前端集成点**
 
 - `frontend/src/services/api.js`（:1575-1660 附近）具名导出：`getVersionStatus`、`enableVersionControl`、`getVersionTimeline`（第 2 期加了 `fileId` 参数）、`getVersionChanges`、`endWorkSession`、`discardWorkSession`、`resumeWorkSession`、`revertToVersion`，第 2 期新增 `markVersionMilestone`、`fetchVersionFileBytes`（桌面 docx 对比取字节）、`getVersionFileText`（文本对比降级取纯文本）。一一对应 `VersionController` 的接口。
-- `frontend/src/pages/project-overview/fileOpenTabs.js` 的 `onVersionCompareFile({path, sha})`：`VersionNodeDetail` 一路冒泡上来的「和上一版对比」入口，`桌面 + docx/doc` 走 `openVersionCompareTab`（`VersionCompareTab.vue`，LOWA 修订稿），其余（浏览器目标、或非 docx 文件）走 `openVersionTextDiffTab`（`DocDiffViewer.vue` 的 `versionSpec` 模式，Monaco 红绿文本对比降级）——两个标签都是 `leftFiles`/`rightFiles` 里的普通标签页，跟侧栏 `version` 面板互不影响。
+- `frontend/src/pages/project-overview/fileOpenTabs.js` 的 `onVersionCompareFile({path, sha})`：`VersionNodeDetail` 一路冒泡上来的「和上一版对比」入口，`桌面 + docx/doc` 走 `openVersionCompareTab`（`VersionCompareTab.vue`，LOWA 修订稿），其余（浏览器目标、或非 docx 文件）走 `openVersionTextDiffTab`（`DocDiffViewer.vue` 的 `versionSpec` 模式，Monaco 红绿文本对比降级）。两个标签都是 `leftFiles`/`rightFiles` 里的普通标签页，但**跟侧栏面板键并非互不影响**：`project-overview.vue` 的 `isTabVisible()`（:2520）按 `leftPaneKey` 决定标签可见性，`activeFileLeft/Right` 计算属性对不可见标签直接返回 null——所以这两种标签必须在 `isTabVisible` 里显式放行 `version`（唯一入口所在的面板）与 `files`，否则从版本面板点开的对比标签会被整块藏死、编辑区显示空闲态（第 2 期终审 C1 实证）。
 - `frontend/src/components/FileTree.vue` 右键菜单「这份文件的历史」（`@tap="$emit('file-history', contextMenu.targetItem); closeContextMenu()"`）→ `project-overview.vue` 的 `onFileHistory(file)`：设置 `versionFileFilter = {fileId, name}` 并把左栏切到 `version` 面板。右键菜单本身绑定的是原生 `@contextmenu.prevent`（不是 uni `@tap`），真实鼠标右键能直接触发（见下方「验证」一节的 e2e 配方）。
 - `frontend/src/config/leftSidebarPlugins.js`（:43-50）：固定入口 `version`（图标为时钟 SVG path，非图片资源），已在 `LEFT_SIDEBAR_PLUGINS` 数组里，`getPluginsForUser('CLIENT')` 不返回它（CLIENT 只见 `dd-files`，与后端权限口径一致）。
 - 后端触发点：`ProjectFileService.signalChange()`（:1171）与 `FileController.signalChange()`（:85）两处调用 `workSessionService.onChangeSignal(...)`，都用 try/catch 包死、绝不阻断文件操作/上传。
@@ -80,7 +81,11 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 11. **`revertTo` 不改 `wpsFileId`，所以任何「靠键变化触发重挂载」的重载都不会发生**——`LibreOfficeEditor` 既不 `watch` `file`，模板 key 也只含 `file.id`（`project-overview.vue` `:key="'libre-left-' + file.id"`），所以「后端 bump 一个 id 前端就会重新加载」这个流传下来的假设本来就不成立（`DocumentCheckpointService.restore` 同样只 `storage.save` 不 bump，同一条链路同源潜伏）。重载活动实例只有一条路：显式调 `LibreOfficeEditor.reloadFromBackend()` 就地换文档。真机反证跑过：不调它时编辑器里仍是「退回前内容 + 新编辑」，25 秒后后端文件被 autosave 覆盖成旧内容。
 12. **对比宿主（`VersionCompareTab.vue`）绝不能接自动保存/保活池**——它展示的是历史版本的字节，一旦被 autosave/保活复用逻辑当成普通编辑器实例对待，就会把「历史稿」当成「当前稿」的一次编辑写回真实文件路径，等于用旧版本覆盖当前工作——比 revert 的静默失败更糟（那是数据事故，不是体验问题）。所以它不订阅 `lo-relay` 的 `modified` 信号、不注册 `_libreRefs`/LRU，销毁即销毁，没有任何「保留实例下次复用」的优化空间，改这个组件时**不要**为了性能顺手把它接进 `librePool.js` 的保活体系。
 13. **`compare_document` 每个引擎实例只能调一次**——命令末尾会派发 `.uno:CompareDocuments` 生成修订后再派发 `.uno:EditDoc` 切只读，而 `.uno:EditDoc` 是**开关（toggle）语义**，不是幂等的「设为只读」；同一个实例上第二次调用 `compare_document`（比如失败重试）会把已经切到只读的文档重新打回可编辑。失败重试的唯一正确做法是让宿主换一个新 `key` 整体重建 `VersionCompareTab` 实例（新引擎/新 webview），组件内部不做、也不应该做重试。
-14. **改 `AgentOrchestrator` 的构造依赖必须同步更新 `EvalHarness.java:163` 附近手写的 `new AgentOrchestrator(...)` 调用**——这是本条目第三次被记进地雷（AI 编排器 Phase 3、面板五连修都踩过一次），`EvalHarness` 不走 Spring 容器注入、是手工拼构造参数跑回放评测，编排器构造器每加一个新依赖，这里就要跟着补一个参数，否则编译直接失败或（更隐蔽地）参数错位——这次是版本记录接入 `WorkSessionService.commitAiRound` 时又踩了一次。改编排器构造器前先跑一遍 `grep -rn "new AgentOrchestrator" backend/src/test`，别等编译报错才发现。
+14. **单文件历史不能用 JGit 的 `addPath`**——那是 git 的默认历史简化，会把「相对第一父提交 TREESAME」的合并提交整条剪掉；而结束工作用的正是 NO_FF 合并、主线在工作期间不动时合并提交对工作分支这一父天然 TREESAME，结果是律师命名的工作段节点在单文件视图里**全部消失**，只剩自动存档。`logForPath()` 现在自己走全量 `log()`，逐条按「相对第一父提交的 diff」（根提交对空树）判断是否触及该 path——对合并节点来说这份 diff 正是这段工作对该文件的净变化。护栏 `ProjectRepoHistoryTest.logForPathKeepsNamedWorkSessionMergeNodes`（造真实 NO_FF 合并段，断言合并节点在过滤结果里）。
+15. **`VersionCompareTab` 的 `<webview>` 宿主容器必须始终渲染**（状态卡片是 `position:absolute` 的覆盖层，`v-show="!ready"`）。曾经写成宿主 `v-show="ready"`：整个 boot 期间宿主是 `display:none`，Electron 的 `<webview>` 在隐藏子树里常常压根不 attach，`dom-ready` 永不到达，律师只能等到 150 秒超时。同一条经验在 `LibreOfficeEditor` 里已经是 overlay 模式，新写编辑器宿主直接照抄它。
+16. **`handleEditorReloadFile(action, opts)` 的 `forceActive` 分两条语义**——退回路径传 `{forceActive:true}`（律师亲手要求回到过去，丢弃在途未保存输入是语义本身）；AI 改文件 / 检查点恢复走默认 `false`（律师可能正在这份文档里打字，静默强刷等于替他丢内容还弹「文件已更新」），只逐非活动保活实例。别为了「统一」把两条路径合成一条。
+17. **`LibreOfficeEditor.reloadFromBackend` 期间有 `_reloading` 闸**：清脏 + 等 `saving` 都拦不住「已经启动、正在 export/upload 路上」的那一笔（它读的是换文档前的 worker 内容，upload 完成就把退回结果覆盖回旧字节）。`_reloading` 置位期间 `onDocModified` 不标脏、`saveDocument` 在 upload 前直接放弃。改自动保存链路时别把这个闸绕掉。
+18. **改 `AgentOrchestrator` 的构造依赖必须同步更新 `EvalHarness.java:163` 附近手写的 `new AgentOrchestrator(...)` 调用**——这是本条目第三次被记进地雷（AI 编排器 Phase 3、面板五连修都踩过一次），`EvalHarness` 不走 Spring 容器注入、是手工拼构造参数跑回放评测，编排器构造器每加一个新依赖，这里就要跟着补一个参数，否则编译直接失败或（更隐蔽地）参数错位——这次是版本记录接入 `WorkSessionService.commitAiRound` 时又踩了一次。改编排器构造器前先跑一遍 `grep -rn "new AgentOrchestrator" backend/src/test`，别等编译报错才发现。
 
 ## 验证
 

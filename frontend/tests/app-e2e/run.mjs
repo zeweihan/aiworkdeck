@@ -469,11 +469,23 @@ try {
 
   await step('点击对比按钮打开文本对比标签', async () => {
     await mouseClickText('和上一版对比')
-    await waitText('上一版')
-    await waitText('这一版')
+    // 断言标签**真的渲染出来了**，而不是只躺在 leftFiles 里被 isTabVisible 藏死。
+    // 只 waitText('上一版')/('这一版') 是假阳性：还开着的详情弹窗里那颗按钮的
+    // 文字本身就含「上一版」——第 2 期终审 C1（版本面板下对比标签永远不可见）
+    // 就是被这个假阳性放过去的。改成认 DocDiffViewer 自己的根类名 + 工具栏副标题
+    // （`{{ displaySourceName }} vs {{ displayTargetName }}`，取值是 fileOpenTabs.js
+    // 写死的「上一版」「这一版」），并要求元素有真实布局盒（被 display:none
+    // 祖先藏起来时 getClientRects() 为空）。
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.doc-diff-viewer')
+      if (!el || el.getClientRects().length === 0) return false
+      const sub = el.querySelector('.toolbar-subtitle')
+      return !!sub && sub.innerText.includes('上一版') && sub.innerText.includes('这一版')
+    }, { timeout: 20000 })
+    // 详情弹窗应当已自行关闭：它既挡住刚打开的对比结果，又是上面那种假阳性的来源。
+    const dialogStillOpen = await page.evaluate(() => !!document.querySelector('.detail-meta'))
+    if (dialogStillOpen) throw new Error('点击「和上一版对比」后节点详情弹窗仍开着')
   })
-
-  await step('关闭节点详情', () => mouseClickText('关闭'))
 
   // ============ J9 追加 3/3：单文件历史 ============
   // project-overview.vue 的 onFileHistory 会自动把左栏切到「版本」面板并设置
@@ -485,6 +497,19 @@ try {
     await mouseRightClickText('qa-版本测试.txt')
     await mouseClickText('这份文件的历史')
     await waitText('只看《qa-版本测试.txt》的历史')
+  })
+
+  await step('单文件历史保留律师命名的工作段节点', async () => {
+    // 守终审 I3：JGit 的 addPath（git 默认历史简化）会把「相对第一父提交 TREESAME」
+    // 的合并提交整条剪掉，而结束工作用的正是 NO_FF 合并——过滤视图里会只剩自动
+    // 存档，律师命名的版本全部消失。这里认 timeline 节点标题本身，不用 waitText
+    // （页面别处也可能出现同名文本）。「端到端测试稿四」这一段就是覆盖上传
+    // qa-版本测试.txt 产生 MODIFY 的那段工作，必须在过滤结果里。
+    await page.waitForFunction(() => {
+      const titles = [...document.querySelectorAll('.timeline-node .node-title')]
+        .map((e) => e.innerText || '')
+      return titles.some((t) => t.includes('端到端测试稿四'))
+    }, { timeout: 15000 })
   })
 
   await step('显示全部恢复时间线过滤', async () => {
