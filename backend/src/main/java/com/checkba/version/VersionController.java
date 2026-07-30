@@ -57,12 +57,50 @@ public class VersionController {
             data.put("changedCount", sessionService.pendingChangesLocked(projectId).stream()
                     .filter(c -> !c.path().startsWith(".awd/")).count());
             data.put("pendingRecovery", sessionService.pendingRecovery(projectId).isPresent());
+            data.put("onDraft", sessionService.activeDraftOnBranch(projectId)
+                    .map(this::draftRef).orElse(null));
+            data.put("adoptConflict", adoptConflictStatus(projectId));
         } else {
             data.put("working", false);
             data.put("changedCount", 0);
             data.put("pendingRecovery", false);
+            data.put("onDraft", null);
+            data.put("adoptConflict", null);
         }
         return ok(data);
+    }
+
+    /** {id, name} 形状——onDraft 与 drafts 列表共用。 */
+    private Map<String, Object> draftRef(WorkSession draft) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("id", draft.getId());
+        m.put("name", draft.getTitle());
+        return m;
+    }
+
+    /**
+     * 冲突态（MERGING）反查：仓库不在合并中时返回 null。在合并中时反查
+     * {@code MERGE_HEAD} 对应哪一稿——正常路径下一定能找到（只有 ACTIVE 的稿能进入
+     * 采纳流程）；查不到时是异常残局（比如稿在裁决过程中被并发放弃/数据被改动），
+     * 仍然要给出 adoptConflict（draftId/draftName 为 null），前端据此至少能提供
+     * 「先不采纳」这道逃生门，不能因为反查失败就对律师隐瞒"仓库停在合并中"这件事。
+     * conflictingPaths 一律过滤 {@code .awd/}——律师不可见铁律。
+     */
+    private Map<String, Object> adoptConflictStatus(long projectId) {
+        if (!repoService.repositoryMerging(projectId)) return null;
+        String mergeHeadSha = repoService.mergeHeadRef(projectId);
+        WorkSession matched = mergeHeadSha == null ? null : sessionService.listDrafts(projectId).stream()
+                .filter(d -> mergeHeadSha.equals(repoService.resolveRef(projectId, d.getBranchName())))
+                .findFirst()
+                .orElse(null);
+        List<String> conflicts = repoService.conflictingPaths(projectId).stream()
+                .filter(p -> !p.startsWith(".awd/"))
+                .toList();
+        Map<String, Object> m = new HashMap<>();
+        m.put("draftId", matched == null ? null : matched.getId());
+        m.put("draftName", matched == null ? null : matched.getTitle());
+        m.put("conflictingPaths", conflicts);
+        return m;
     }
 
     @PostMapping("/enable")
@@ -208,6 +246,131 @@ public class VersionController {
                 "affectedFileIds", result.affectedFileIds()));
     }
 
+    // ---- 稿：创建、双向切线、采纳/裁决/中止/放弃（spec 第 3 期 Task 5） --------
+
+    @PostMapping("/draft")
+    public ResponseEntity<Map<String, Object>> createDraft(
+            @PathVariable Long projectId,
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        String ref = body == null ? null : body.get("ref");
+        String name = body == null ? null : body.get("name");
+        WorkSessionService.DraftCreateResult result =
+                sessionService.createDraft(projectId, ref, name, userId, userName(userId));
+        return ok(Map.of(
+                "draftId", result.draft().getId(),
+                "branch", result.lineSwitch().branch(),
+                "affectedFileIds", result.lineSwitch().affectedFileIds()));
+    }
+
+    @GetMapping("/drafts")
+    public ResponseEntity<Map<String, Object>> listDrafts(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        List<Map<String, Object>> drafts = sessionService.listDrafts(projectId).stream()
+                .map(d -> {
+                    Map<String, Object> m = draftRef(d);
+                    m.put("startedAt", d.getStartedAt());
+                    return m;
+                })
+                .toList();
+        return ok(Map.of("drafts", drafts));
+    }
+
+    @PostMapping("/draft/{id}/switch")
+    public ResponseEntity<Map<String, Object>> switchToDraft(
+            @PathVariable Long projectId, @PathVariable("id") Long draftId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        WorkSessionService.LineSwitchResult result =
+                sessionService.switchToDraft(projectId, draftId, userId, userName(userId));
+        return ok(Map.of("affectedFileIds", result.affectedFileIds()));
+    }
+
+    @PostMapping("/switch-mainline")
+    public ResponseEntity<Map<String, Object>> switchToMainline(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        WorkSessionService.LineSwitchResult result =
+                sessionService.switchToMainline(projectId, userId, userName(userId));
+        return ok(Map.of("affectedFileIds", result.affectedFileIds()));
+    }
+
+    @PostMapping("/draft/{id}/adopt")
+    public ResponseEntity<Map<String, Object>> adoptDraft(
+            @PathVariable Long projectId, @PathVariable("id") Long draftId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        WorkSessionService.AdoptOutcome outcome =
+                sessionService.adoptDraft(projectId, draftId, userId, userName(userId));
+        return ok(adoptOutcomeData(outcome));
+    }
+
+    @PostMapping("/draft/{id}/resolve")
+    public ResponseEntity<Map<String, Object>> resolveAdopt(
+            @PathVariable Long projectId, @PathVariable("id") Long draftId,
+            @RequestBody(required = false) Map<String, Map<String, String>> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        Map<String, WorkSessionService.Resolution> resolutions = parseResolutions(body);
+        WorkSessionService.AdoptOutcome outcome =
+                sessionService.resolveAdopt(projectId, draftId, resolutions, userId, userName(userId));
+        return ok(adoptOutcomeData(outcome));
+    }
+
+    @PostMapping("/draft/{id}/abort-adopt")
+    public ResponseEntity<Map<String, Object>> abortAdopt(
+            @PathVariable Long projectId, @PathVariable("id") Long draftId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        sessionService.abortAdopt(projectId);
+        return okWithMessage(Map.of("aborted", true), WorkSessionService.ADOPT_ABORTED_NOTICE);
+    }
+
+    @PostMapping("/draft/{id}/abandon")
+    public ResponseEntity<Map<String, Object>> abandonDraft(
+            @PathVariable Long projectId, @PathVariable("id") Long draftId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        WorkSessionService.LineSwitchResult result =
+                sessionService.abandonDraft(projectId, draftId, userId, userName(userId));
+        return ok(Map.of("affectedFileIds", result.affectedFileIds()));
+    }
+
+    /**
+     * 请求体里的字符串三选一解析成枚举。非法值（枚举名之外的任何字符串，含大小写不符）
+     * 一律 userFacing「无效的选择」——不把 IllegalArgumentException 的枚举名列表带给前端。
+     */
+    private Map<String, WorkSessionService.Resolution> parseResolutions(Map<String, Map<String, String>> body) {
+        Map<String, String> raw = body == null ? null : body.get("resolutions");
+        if (raw == null || raw.isEmpty()) return Map.of();
+        Map<String, WorkSessionService.Resolution> out = new HashMap<>();
+        for (Map.Entry<String, String> e : raw.entrySet()) {
+            try {
+                out.put(e.getKey(), WorkSessionService.Resolution.valueOf(e.getValue()));
+            } catch (Exception ex) {
+                throw VersionException.userFacing("无效的选择");
+            }
+        }
+        return out;
+    }
+
+    /** adopt/resolve 共用的响应形状；notice 非空时才放进 data（见 AdoptOutcome 注释）。 */
+    private Map<String, Object> adoptOutcomeData(WorkSessionService.AdoptOutcome outcome) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("success", outcome.success());
+        data.put("sha", outcome.sha() == null ? "" : outcome.sha());
+        data.put("conflictingPaths", outcome.conflictingPaths() == null ? List.of() : outcome.conflictingPaths());
+        data.put("affectedFileIds", outcome.affectedFileIds() == null ? List.of() : outcome.affectedFileIds());
+        if (outcome.notice() != null && !outcome.notice().isBlank()) {
+            data.put("notice", outcome.notice());
+        }
+        return data;
+    }
+
     /**
      * message 可能带 Git 术语/内部分支名（见 ProjectRepoService），一律不得原样回显给律师。
      * 只有标记为 userFacing 的业务性异常（见 WorkSessionService）才展示其 message，
@@ -249,5 +412,10 @@ public class VersionController {
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {
         return ResponseEntity.ok(Map.of("code", 0, "data", data));
+    }
+
+    /** 成功响应附一句展示给律师的话（目前只有 abort-adopt 用得到，见 ADOPT_ABORTED_NOTICE）。 */
+    private ResponseEntity<Map<String, Object>> okWithMessage(Map<String, Object> data, String message) {
+        return ResponseEntity.ok(Map.of("code", 0, "data", data, "message", message));
     }
 }

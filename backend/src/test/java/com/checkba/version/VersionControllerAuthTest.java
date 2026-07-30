@@ -142,7 +142,10 @@ class VersionControllerAuthTest {
     private static final long PROJECT_ID = 7L;
     private static final long USER_ID = 1L;
 
-    private enum Endpoint { STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT, MILESTONE }
+    private enum Endpoint {
+        STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT, MILESTONE,
+        DRAFT_CREATE, DRAFT_LIST, DRAFT_SWITCH, SWITCH_MAINLINE, DRAFT_ADOPT, DRAFT_RESOLVE, DRAFT_ABORT_ADOPT, DRAFT_ABANDON
+    }
 
     private void invoke(Endpoint endpoint, String sessionId) {
         switch (endpoint) {
@@ -156,6 +159,14 @@ class VersionControllerAuthTest {
             case FILE_BYTES -> controller.fileBytesAtRef(PROJECT_ID, "abc123", "a.txt", sessionId);
             case FILE_TEXT -> controller.fileTextAtRef(PROJECT_ID, "abc123", "a.txt", sessionId);
             case MILESTONE -> controller.markMilestone(PROJECT_ID, "abc123", Map.of("name", "发客户第一稿"), sessionId);
+            case DRAFT_CREATE -> controller.createDraft(PROJECT_ID, Map.of("name", "试验稿"), sessionId);
+            case DRAFT_LIST -> controller.listDrafts(PROJECT_ID, sessionId);
+            case DRAFT_SWITCH -> controller.switchToDraft(PROJECT_ID, 3L, sessionId);
+            case SWITCH_MAINLINE -> controller.switchToMainline(PROJECT_ID, sessionId);
+            case DRAFT_ADOPT -> controller.adoptDraft(PROJECT_ID, 3L, sessionId);
+            case DRAFT_RESOLVE -> controller.resolveAdopt(PROJECT_ID, 3L, Map.of("resolutions", Map.of("a.txt", "MAIN")), sessionId);
+            case DRAFT_ABORT_ADOPT -> controller.abortAdopt(PROJECT_ID, 3L, sessionId);
+            case DRAFT_ABANDON -> controller.abandonDraft(PROJECT_ID, 3L, sessionId);
         }
     }
 
@@ -171,6 +182,20 @@ class VersionControllerAuthTest {
             case FILE_BYTES, FILE_TEXT ->
                     verify(repoService, never()).readBlobAtCommit(anyLong(), anyString(), anyString());
             case MILESTONE -> verify(repoService, never()).tagMilestone(anyLong(), anyString(), anyString());
+            case DRAFT_CREATE -> verify(sessionService, never())
+                    .createDraft(anyLong(), any(), anyString(), any(), anyString());
+            case DRAFT_LIST -> verify(sessionService, never()).listDrafts(anyLong());
+            case DRAFT_SWITCH -> verify(sessionService, never())
+                    .switchToDraft(anyLong(), anyLong(), any(), anyString());
+            case SWITCH_MAINLINE -> verify(sessionService, never())
+                    .switchToMainline(anyLong(), any(), anyString());
+            case DRAFT_ADOPT -> verify(sessionService, never())
+                    .adoptDraft(anyLong(), anyLong(), any(), anyString());
+            case DRAFT_RESOLVE -> verify(sessionService, never())
+                    .resolveAdopt(anyLong(), anyLong(), any(), any(), anyString());
+            case DRAFT_ABORT_ADOPT -> verify(sessionService, never()).abortAdopt(anyLong());
+            case DRAFT_ABANDON -> verify(sessionService, never())
+                    .abandonDraft(anyLong(), anyLong(), any(), anyString());
         }
     }
 
