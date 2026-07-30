@@ -22,7 +22,12 @@
         @ended="refresh"
         @discarded="refresh"
       />
-      <VersionTimeline :project-id="projectId" :key="timelineKey" @reverted="refresh" />
+      <VersionTimeline
+        :project-id="projectId"
+        :key="timelineKey"
+        @reverted="refresh"
+        @compare-file="$emit('compare-file', $event)"
+      />
     </template>
   </view>
 </template>
@@ -38,6 +43,7 @@ export default {
   props: {
     projectId: { type: [String, Number], required: true },
   },
+  emits: ['compare-file'],
   provide() {
     return { projectId: this.projectId }
   },

@@ -44,6 +44,7 @@
       :version="selected"
       @close="selected = null"
       @reverted="onReverted"
+      @compare-file="$emit('compare-file', $event)"
     />
   </scroll-view>
 </template>
@@ -58,7 +59,7 @@ export default {
   props: {
     projectId: { type: [String, Number], required: true },
   },
-  emits: ['reverted'],
+  emits: ['reverted', 'compare-file'],
   data() {
     return { versions: [], expanded: {}, selected: null, loadError: false }
   },
