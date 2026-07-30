@@ -103,6 +103,7 @@ class VersionControllerDraftStatusTest {
         WorkSession d = draft(3L, "试验稿", "draft/1000");
         when(sessionService.listDrafts(PROJECT_ID)).thenReturn(List.of(d));
         when(repoService.resolveRef(PROJECT_ID, "draft/1000")).thenReturn("sha-draft-tip");
+        when(repoService.resolveRef(PROJECT_ID, "HEAD")).thenReturn("sha-main-tip");
         when(repoService.conflictingPaths(PROJECT_ID))
                 .thenReturn(List.of(".awd/tree.json", "合同.txt"));
 
@@ -113,6 +114,8 @@ class VersionControllerDraftStatusTest {
         assertEquals(3L, conflict.get("draftId"));
         assertEquals("试验稿", conflict.get("draftName"));
         assertEquals(List.of("合同.txt"), conflict.get("conflictingPaths"), "内部清单文件不得透出给律师");
+        assertEquals("sha-main-tip", conflict.get("mainlineTip"));
+        assertEquals("sha-draft-tip", conflict.get("draftTip"));
     }
 
     /**
@@ -127,6 +130,7 @@ class VersionControllerDraftStatusTest {
         when(repoService.mergeHeadRef(PROJECT_ID)).thenReturn("sha-orphan");
         when(sessionService.listDrafts(PROJECT_ID)).thenReturn(List.of());
         when(repoService.conflictingPaths(PROJECT_ID)).thenReturn(List.of("合同.txt"));
+        when(repoService.resolveRef(PROJECT_ID, "HEAD")).thenReturn("sha-main-tip");
 
         Map<String, Object> data = callStatus();
 
@@ -135,5 +139,8 @@ class VersionControllerDraftStatusTest {
         assertNull(conflict.get("draftId"));
         assertNull(conflict.get("draftName"));
         assertEquals(List.of("合同.txt"), conflict.get("conflictingPaths"));
+        // 反查落空也不能少给「对比」按钮需要的两个 tip——即使 draftId 为空。
+        assertEquals("sha-main-tip", conflict.get("mainlineTip"));
+        assertEquals("sha-orphan", conflict.get("draftTip"));
     }
 }

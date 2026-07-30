@@ -85,6 +85,10 @@ public class VersionController {
      * 仍然要给出 adoptConflict（draftId/draftName 为 null），前端据此至少能提供
      * 「先不采纳」这道逃生门，不能因为反查失败就对律师隐瞒"仓库停在合并中"这件事。
      * conflictingPaths 一律过滤 {@code .awd/}——律师不可见铁律。
+     *
+     * mainlineTip/draftTip：给前端「对比」按钮用的两个 ref（Task 7 配套）——合并未提交时
+     * HEAD 仍停在合并前的主线 tip，MERGE_HEAD 就是稿的 tip，两者都已经在本方法里查过，
+     * 顺手带出即可，不必再多查一次。
      */
     private Map<String, Object> adoptConflictStatus(long projectId) {
         if (!repoService.repositoryMerging(projectId)) return null;
@@ -100,6 +104,8 @@ public class VersionController {
         m.put("draftId", matched == null ? null : matched.getId());
         m.put("draftName", matched == null ? null : matched.getTitle());
         m.put("conflictingPaths", conflicts);
+        m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
+        m.put("draftTip", mergeHeadSha);
         return m;
     }
 

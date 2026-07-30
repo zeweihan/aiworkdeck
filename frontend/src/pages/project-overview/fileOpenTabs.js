@@ -348,16 +348,22 @@ export const fileOpenTabsMethods = {
       this[targetIdProp] = tab.id
     },
 
-    // 「和上一版对比」入口：VersionNodeDetail 一路冒泡上来的 {path, sha}。
+    // 「对比」入口，两种来源共用：
+    // 1) VersionNodeDetail 的「和上一版对比」冒泡上来 {path, sha}——newRef=这一版，
+    //    oldRef=它的直接父提交（sha + '^'），标签沿用默认的「上一版/这一版」。
+    // 2) AdoptConflictDialog 的「对比」冒泡上来 {path, newRef, oldRef, oldLabel, newLabel}——
+    //    newRef/oldRef 已经是主线侧 / 稿侧两个具体 ref，不需要再推导；「上一版/这一版」
+    //    在这个场景里说不通（两边不是先后关系），改用调用方传入的标签。
     // 桌面 + docx/doc 走修订稿对比标签（LOWA 渲染）；其余走文本对比标签（DocDiffViewer 降级）。
-    onVersionCompareFile({ path, sha }) {
-      const name = path.split('/').pop() || path
-      const oldRef = sha + '^'
+    onVersionCompareFile({ path, sha, newRef, oldRef, name: givenName, oldLabel, newLabel }) {
+      const name = givenName || path.split('/').pop() || path
+      const resolvedNewRef = sha || newRef
+      const resolvedOldRef = sha ? sha + '^' : oldRef
       const isDocx = /\.docx?$/i.test(name)
       if (this.libreOfficePreferred && isDocx) {
-        this.openVersionCompareTab({ projectId: this.projectId, path, name, newRef: sha, oldRef })
+        this.openVersionCompareTab({ projectId: this.projectId, path, name, newRef: resolvedNewRef, oldRef: resolvedOldRef })
       } else {
-        this.openVersionTextDiffTab({ projectId: this.projectId, path, name, newRef: sha, oldRef })
+        this.openVersionTextDiffTab({ projectId: this.projectId, path, name, newRef: resolvedNewRef, oldRef: resolvedOldRef, oldLabel, newLabel })
       }
     },
 
@@ -365,14 +371,15 @@ export const fileOpenTabsMethods = {
       return file && file.tabType === 'version-text-diff'
     },
 
-    // 版本文本对比标签（DocDiffViewer versionSpec 模式）：{projectId, path, name, newRef, oldRef}
+    // 版本文本对比标签（DocDiffViewer versionSpec 模式）：{projectId, path, name, newRef, oldRef,
+    // oldLabel?, newLabel?}——默认「上一版/这一版」，采纳冲突场景传入更贴切的标签。
     openVersionTextDiffTab(spec) {
       const id = `vtd-${spec.newRef.slice(0, 8)}-${Date.now()}`
       const tab = {
         id, name: `${spec.name} 版本对比`, tabType: 'version-text-diff', fileType: 'version-text-diff',
         versionSpec: {
           projectId: spec.projectId, path: spec.path, oldRef: spec.oldRef, newRef: spec.newRef,
-          oldLabel: '上一版', newLabel: '这一版',
+          oldLabel: spec.oldLabel || '上一版', newLabel: spec.newLabel || '这一版',
         },
         createdAt: Date.now(),
       }
@@ -430,17 +437,18 @@ export const fileOpenTabsMethods = {
       console.log('[ProjectOverview] 打开文档对比标签:', diffFile.name)
     },
 
-    // 版本退回（问题 A 数据安全修复）：VersionPanel 在 revertToVersion 成功后把受影响
-    // 文件 id 一路冒泡上来（project-overview.vue @reverted-files）。响应驱动，不走 SSE——
-    // 发起退回的就是前端自己，不需要后端另外"通知"。这里对左右两窗格里正打开的、
-    // id 命中的 Office 文档标签，复用既有的编辑器重载例程（agentClientActions.js 的
-    // handleEditorReloadFile，AI 改文档后刷新编辑器走的同一条路，就地重载不 flush 脏
-    // 内容）；没打开的文件什么都不做，不能用 openFile 把它硬拉出来。
+    // 版本操作改磁盘的通用重载链（问题 A 数据安全修复的推广）：退回/开稿/切线/采纳/
+    // 放弃成功后，VersionPanel 把受影响文件 id 一路冒泡上来（project-overview.vue
+    // @reload-files）。响应驱动，不走 SSE——发起动作的就是前端自己，不需要后端另外
+    // "通知"。这里对左右两窗格里正打开的、id 命中的 Office 文档标签，复用既有的编辑器
+    // 重载例程（agentClientActions.js 的 handleEditorReloadFile，AI 改文档后刷新编辑器
+    // 走的同一条路，就地重载不 flush 脏内容）；没打开的文件什么都不做，不能用 openFile
+    // 把它硬拉出来。
     //
     // 绝对不能用「关闭标签」实现重载：closeFile 关闭有脏改动的 Office 文档前会先
-    // flushSave 落盘——那恰好会把退回前编辑器里还端着的旧字节写回去，把律师刚做的
-    // 退回冲掉，这正是本次要修的数据安全问题本身。
-    onVersionRevertedFiles(affectedFileIds) {
+    // flushSave 落盘——那恰好会把版本操作前编辑器里还端着的旧字节写回去，把律师刚做的
+    // 操作冲掉，这正是本次要修的数据安全问题本身。
+    onVersionReloadFiles(affectedFileIds) {
       if (!Array.isArray(affectedFileIds) || !affectedFileIds.length) return
       const idSet = new Set(affectedFileIds)
       const openIds = new Set()
@@ -451,9 +459,9 @@ export const fileOpenTabsMethods = {
         if (idSet.has(f.id) && this.useLibreEditor(f)) openIds.add(f.id)
       }
       for (const fileId of openIds) {
-        // forceActive：退回是律师亲手点的「回到这一版」，正在显示的那个实例也必须
-        // 就地换文档——不然下一次 autosave 会把退回冲掉。AI 改文件走的是默认
-        // （不强刷）分支，见 handleEditorReloadFile 的注释。
+        // forceActive：这条链上的每一种动作（退回/开稿/切线/采纳/放弃）都是律师亲手
+        // 点出来的，正在显示的那个实例也必须就地换文档——不然下一次 autosave 会把
+        // 操作结果冲掉。AI 改文件走的是默认（不强刷）分支，见 handleEditorReloadFile 的注释。
         this.handleEditorReloadFile({ fileId }, { forceActive: true })
       }
     },

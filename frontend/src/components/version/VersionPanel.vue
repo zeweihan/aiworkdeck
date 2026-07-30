@@ -22,9 +22,9 @@
         :on-draft="onDraft"
         @ended="refresh"
         @discarded="refresh"
-        @mainline-resumed="onDraftLineChanged"
-        @draft-adopted="onDraftLineChanged"
-        @draft-abandoned="onDraftLineChanged"
+        @mainline-resumed="onReload"
+        @draft-adopted="onReload"
+        @draft-abandoned="onReload"
       />
       <view v-if="fileFilter" class="version-file-filter">
         <text class="version-file-filter-text">只看《{{ fileFilter.name }}》的历史</text>
@@ -34,28 +34,29 @@
         v-if="drafts.length"
         :project-id="projectId"
         :drafts="drafts"
-        @created="onDraftLineChanged"
-        @switched="onDraftLineChanged"
+        @created="onReload"
+        @switched="onReload"
       />
       <VersionTimeline
         :project-id="projectId"
         :file-filter="fileFilter"
         :key="timelineKey"
-        @reverted="onReverted"
+        @reload-files="onReload"
         @compare-file="$emit('compare-file', $event)"
-        @draft-created="onDraftLineChanged"
+        @draft-created="onReload"
       />
-      <!-- 采纳冲突三选一弹窗：本任务只落挂载点与状态搬运，弹窗本体是 T7 的
-           AdoptConflictDialog（frontend/src/components/version/AdoptConflictDialog.vue，
-           尚未创建）——build:h5 在 T7 落地前会因这一处 import 报红，属预期缺口。 -->
+      <!-- 采纳冲突三选一弹窗：/status 带 adoptConflict 时自动弹出，含崩溃后重开面板的场景。 -->
       <AdoptConflictDialog
         v-if="adoptConflict"
         :project-id="projectId"
         :draft-id="adoptConflict.draftId"
         :draft-name="adoptConflict.draftName"
         :conflicting-paths="adoptConflict.conflictingPaths"
-        @resolved="onDraftLineChanged"
-        @aborted="onDraftLineChanged"
+        :mainline-tip="adoptConflict.mainlineTip"
+        :draft-tip="adoptConflict.draftTip"
+        @resolved="onReload"
+        @aborted="onReload"
+        @compare-file="$emit('compare-file', $event)"
       />
     </template>
   </view>
@@ -75,7 +76,7 @@ export default {
     projectId: { type: [String, Number], required: true },
     fileFilter: { type: Object, default: null },
   },
-  emits: ['compare-file', 'clear-file-filter', 'reverted-files'],
+  emits: ['compare-file', 'clear-file-filter', 'reload-files'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -130,16 +131,12 @@ export default {
         this.drafts = []
       }
     },
-    onReverted(affectedFileIds) {
+    // 退回/开稿/切线/采纳/放弃：都可能改变磁盘上打开中的文件，统一走这一条重载链
+    // （见 fileOpenTabs.js 的 onVersionReloadFiles）；也都要重拉一次状态，
+    // 工作段/稿态/稿列表/采纳冲突态全部以 /status 为准。
+    onReload(affectedFileIds) {
       this.refresh()
-      this.$emit('reverted-files', affectedFileIds || [])
-    },
-    // 开稿/切线/采纳/放弃：都可能改变磁盘上打开中的文件，走跟退回同一条重载链
-    // （见 fileOpenTabs.js 的 onVersionRevertedFiles）；也都要重拉一次状态，
-    // 稿态/稿列表/采纳冲突态全部以 /status 为准。
-    onDraftLineChanged(affectedFileIds) {
-      this.refresh()
-      this.$emit('reverted-files', affectedFileIds || [])
+      this.$emit('reload-files', affectedFileIds || [])
     },
     async enable() {
       if (this.busy) return

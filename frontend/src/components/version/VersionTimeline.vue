@@ -49,7 +49,7 @@
       :project-id="projectId"
       :version="selected"
       @close="selected = null"
-      @reverted="onReverted"
+      @reload-files="onReload"
       @compare-file="$emit('compare-file', $event)"
       @milestoned="onMilestoned"
       @draft-created="onDraftCreated"
@@ -68,7 +68,7 @@ export default {
     projectId: { type: [String, Number], required: true },
     fileFilter: { type: Object, default: null },
   },
-  emits: ['reverted', 'compare-file', 'draft-created'],
+  emits: ['reload-files', 'compare-file', 'draft-created'],
   data() {
     return { versions: [], expanded: {}, selected: null, loadError: false }
   },
@@ -132,10 +132,10 @@ export default {
       const fresh = this.versions.find(v => v.sha === sha)
       if (fresh) this.selected = fresh
     },
-    onReverted(affectedFileIds) {
+    onReload(affectedFileIds) {
       this.selected = null
       this.load()
-      this.$emit('reverted', affectedFileIds || [])
+      this.$emit('reload-files', affectedFileIds || [])
     },
     // 从某个历史版本另起一稿：HEAD 切到了新稿分支，本页时间线（按 HEAD 取历史）
     // 要重新拉取，否则还停在切线前那条线的历史上。

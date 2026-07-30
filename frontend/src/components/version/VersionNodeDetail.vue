@@ -74,7 +74,7 @@ export default {
     projectId: { type: [String, Number], required: true },
     version: { type: Object, required: true },
   },
-  emits: ['close', 'reverted', 'compare-file', 'milestoned', 'draft-created'],
+  emits: ['close', 'reload-files', 'compare-file', 'milestoned', 'draft-created'],
   data() {
     return {
       changes: [], loadError: false,
@@ -123,7 +123,7 @@ export default {
           try {
             const res = await revertToVersion(this.projectId, this.version.sha)
             const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
-            this.$emit('reverted', affectedFileIds)
+            this.$emit('reload-files', affectedFileIds)
           } catch (e) {
             uni.showToast({ title: (e && e.message) || '退回失败，请稍后重试', icon: 'none' })
           }
