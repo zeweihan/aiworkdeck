@@ -1,0 +1,64 @@
+package com.checkba.service;
+
+import com.checkba.controller.AuthController;
+import com.checkba.model.entity.DeviceToken;
+import com.checkba.repository.DeviceTokenRepository;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicLong;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+class DeviceTokenServiceTest {
+
+    private DeviceTokenRepository repo;
+    private DeviceTokenService svc;
+    private final Map<String, DeviceToken> byHash = new HashMap<>();
+    private final AtomicLong seq = new AtomicLong(1);
+
+    @BeforeEach
+    void setUp() {
+        byHash.clear();
+        repo = mock(DeviceTokenRepository.class);
+        when(repo.save(any())).thenAnswer(inv -> {
+            DeviceToken t = inv.getArgument(0);
+            if (t.getId() == null) t.setId(seq.getAndIncrement());
+            byHash.put(t.getTokenHash(), t);
+            return t;
+        });
+        when(repo.findByTokenHash(anyString()))
+                .thenAnswer(inv -> Optional.ofNullable(byHash.get(inv.getArgument(0, String.class))));
+        svc = new DeviceTokenService(repo);
+    }
+
+    @Test
+    void issuedTokenResolvesBackToUser() {
+        DeviceTokenService.IssuedToken issued = svc.issue(42L, "MacBook");
+        assertTrue(issued.plaintext().startsWith(DeviceTokenService.TOKEN_PREFIX));
+        assertEquals(42L, svc.resolveUserId(issued.plaintext()));
+    }
+
+    @Test
+    void plaintextIsNeverStored() {
+        DeviceTokenService.IssuedToken issued = svc.issue(42L, "MacBook");
+        assertTrue(byHash.values().stream()
+                .noneMatch(t -> issued.plaintext().equals(t.getTokenHash())));
+        assertNull(svc.resolveUserId(DeviceTokenService.TOKEN_PREFIX + "wrong"));
+    }
+
+    @Test
+    void staticAuthEntryRecognisesTokens() {
+        // DeviceTokenService 构造器把自己注册进 AuthController 静态入口
+        DeviceTokenService.IssuedToken issued = svc.issue(7L, "e2e");
+        assertEquals(7L, AuthController.getUserIdFromSession(issued.plaintext()));
+        assertNull(AuthController.getUserIdFromSession(null)); // null 守卫，不再 NPE
+    }
+}
