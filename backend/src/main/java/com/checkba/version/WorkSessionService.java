@@ -1,5 +1,8 @@
 package com.checkba.version;
 
+import com.checkba.model.entity.ProjectFile;
+import com.checkba.repository.ProjectFileRepository;
+import com.checkba.service.ai.EditorBridgeService;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -41,6 +44,8 @@ public class WorkSessionService {
     private final ProjectTreeManifestService manifestService;
     private final WorkSessionRepository sessionRepository;
     private final TaskScheduler taskScheduler;
+    private final EditorBridgeService editorBridgeService;
+    private final ProjectFileRepository fileRepository;
 
     /** 防抖静默期。测试里调短或调长以取得确定性。 */
     private long debounceMillis = 2 * 60 * 1000L;
@@ -69,11 +74,15 @@ public class WorkSessionService {
     public WorkSessionService(ProjectRepoService repoService,
                               ProjectTreeManifestService manifestService,
                               WorkSessionRepository sessionRepository,
-                              TaskScheduler taskScheduler) {
+                              TaskScheduler taskScheduler,
+                              EditorBridgeService editorBridgeService,
+                              ProjectFileRepository fileRepository) {
         this.repoService = repoService;
         this.manifestService = manifestService;
         this.sessionRepository = sessionRepository;
         this.taskScheduler = taskScheduler;
+        this.editorBridgeService = editorBridgeService;
+        this.fileRepository = fileRepository;
     }
 
     public void setDebounceMillis(long millis) { this.debounceMillis = millis; }
@@ -308,6 +317,22 @@ public class WorkSessionService {
             cancelPending(projectId);
             commitNow(projectId, userId, userName, null);
 
+            // 空工作段：整段工作分支 tip 跟 master tip 完全相同（一次提交都没有）。
+            // 走下去合并会是 ALREADY_UP_TO_DATE，静默"成功"却不会在时间线上留下
+            // 任何节点——律师起的名字凭空消失。这里必须在 checkout master 之前判断，
+            // 因为判断依据是"工作分支自己的 tip"，checkout 之后当前分支就变了。
+            String branchTip = repoService.resolveRef(projectId, s.getBranchName());
+            String mainTip = repoService.resolveRef(projectId, repoService.mainBranch());
+            if (branchTip != null && branchTip.equals(mainTip)) {
+                repoService.checkoutBranch(projectId, repoService.mainBranch());
+                repoService.deleteBranch(projectId, s.getBranchName(), true);
+                s.setStatus(WorkSession.Status.DISCARDED);
+                s.setEndedAt(LocalDateTime.now());
+                sessionRepository.save(s);
+                log.info("空工作段结束，未产生版本: project={}, branch={}", projectId, s.getBranchName());
+                throw VersionException.userFacing("本次工作没有任何改动，未生成版本");
+            }
+
             String finalTitle = (title == null || title.isBlank())
                     ? defaultTitle(s.getStartedAt()) : title.trim();
 
@@ -386,16 +411,48 @@ public class WorkSessionService {
             // 先给当前状态留一笔，保证「退回」这个动作本身可撤销
             commitNow(projectId, userId, userName, null);
 
-            restoreWorkTreeFrom(projectId, ref);
+            // 变更列表必须在覆盖工作区之前算好——覆盖之后 HEAD 已经变了（下面这笔
+            // "退回到早先的版本"提交），再 diff(ref, HEAD) 结果就不对了。这份列表
+            // 之后还要拿来通知编辑器重载，覆盖前留存、不要事后再 diff 一次。
+            List<FileChange> changes = repoService.diffNameStatus(projectId, ref, "HEAD");
+
+            restoreWorkTreeFrom(projectId, ref, changes);
             syncManifestFromRef(projectId, ref);
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
 
             String sha = repoService.commitAll(projectId,
                     "退回到早先的版本", "session", null, userName, email(userName));
             log.info("退回: project={}, ref={}, newSha={}", projectId, ref, sha);
+
+            // 磁盘文件已经被退回改写，但打开中的编辑器还端着退回前的内容——不通知的话
+            // 下一次 autosave 就会把律师刚做的退回冲掉。通知失败不影响退回本身，
+            // 版本记录（这里的编辑器重载提醒也算）是保险，不是主流程。
+            if (sha != null) {
+                try {
+                    notifyEditorsOfRevert(projectId, changes);
+                } catch (Exception e) {
+                    log.warn("退回后通知编辑器重载失败: project={}, ref={}", projectId, ref, e);
+                }
+            }
+
             return sha;
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** 通知每一个被本次退回改动过的、当前仍在数据库中的文件，让打开中的编辑器重新加载。 */
+    private void notifyEditorsOfRevert(long projectId, List<FileChange> changes) {
+        List<ProjectFile> files = fileRepository.findByProjectId(projectId);
+        for (FileChange c : changes) {
+            String path = c.path();
+            if (path.startsWith(".awd/")) continue;
+            String targetPath = "projects/" + projectId + "/" + path;
+            for (ProjectFile f : files) {
+                if (targetPath.equals(f.getFilePath())) {
+                    editorBridgeService.sendReloadFileAction(f);
+                }
+            }
         }
     }
 
@@ -409,11 +466,14 @@ public class WorkSessionService {
         actors.remove(projectId);
     }
 
-    /** 把目标版本的所有文件覆盖回工作区；目标版本没有的文件删掉。 */
-    private void restoreWorkTreeFrom(long projectId, String ref) {
+    /**
+     * 把目标版本的所有文件覆盖回工作区；目标版本没有的文件删掉。
+     * changes 由调用方在覆盖工作区之前算好传入——覆盖发生后 HEAD 已经变了，
+     * 这里不能自己再重新 diff 一次。
+     */
+    private void restoreWorkTreeFrom(long projectId, String ref, List<FileChange> changes) {
         Path work = repoService.workTree(projectId);
         try {
-            List<FileChange> changes = repoService.diffNameStatus(projectId, ref, "HEAD");
             for (FileChange c : changes) {
                 Path target = work.resolve(c.path());
                 byte[] bytes = repoService.readBlobAtCommit(projectId, ref, c.path());

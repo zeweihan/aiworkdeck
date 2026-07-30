@@ -279,6 +279,16 @@ public class ProjectRepoService {
 
     public String mainBranch() { return MAIN_BRANCH; }
 
+    /** 解析 ref 为完整 sha；不存在返回 null（不抛异常，调用方自己判断）。 */
+    public String resolveRef(long projectId, String ref) {
+        try (Repository repo = open(projectId)) {
+            ObjectId id = repo.resolve(ref);
+            return id == null ? null : id.getName();
+        } catch (Exception e) {
+            throw new VersionException("解析版本失败: project=" + projectId + " ref=" + ref, e);
+        }
+    }
+
     public void createBranch(long projectId, String name, String startPointRef) {
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
             git.branchCreate()
