@@ -121,10 +121,10 @@ export default {
     select(v) {
       this.selected = v
     },
-    onReverted() {
+    onReverted(affectedFileIds) {
       this.selected = null
       this.load()
-      this.$emit('reverted')
+      this.$emit('reverted', affectedFileIds || [])
     },
   },
 }

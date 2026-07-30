@@ -571,6 +571,7 @@
             :file-filter="versionFileFilter"
             @compare-file="onVersionCompareFile"
             @clear-file-filter="versionFileFilter = null"
+            @reverted-files="onVersionRevertedFiles"
           />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"

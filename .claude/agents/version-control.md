@@ -39,6 +39,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 - `frontend/src/services/api.js`（:1575-1630）具名导出：`getVersionStatus`、`enableVersionControl`、`getVersionTimeline`、`getVersionChanges`、`endWorkSession`、`discardWorkSession`、`resumeWorkSession`、`revertToVersion`。一一对应 `VersionController` 的接口。
 - `frontend/src/config/leftSidebarPlugins.js`（:43-50）：固定入口 `version`（图标为时钟 SVG path，非图片资源），已在 `LEFT_SIDEBAR_PLUGINS` 数组里，`getPluginsForUser('CLIENT')` 不返回它（CLIENT 只见 `dd-files`，与后端权限口径一致）。
 - 后端触发点：`ProjectFileService.signalChange()`（:1171）与 `FileController.signalChange()`（:85）两处调用 `workSessionService.onChangeSignal(...)`，都用 try/catch 包死、绝不阻断文件操作/上传。
+- **退回后重载打开中的编辑器（响应驱动，不走 SSE）**：`VersionNodeDetail.confirmRevert` 拿到 `revertToVersion` 响应里的 `affectedFileIds` 随 `reverted` 事件上抛 → `VersionTimeline.onReverted` → `VersionPanel.onReverted`（`refresh()` + `$emit('reverted-files', ids)`）→ `project-overview.vue` 的 `@reverted-files="onVersionRevertedFiles"` → `fileOpenTabs.js` 的 `onVersionRevertedFiles()`：只对左右两窗格里当前打开、id 命中、`useLibreEditor` 为真的标签，复用 `agentClientActions.js` 的 `handleEditorReloadFile`（AI 改文档后刷新编辑器走的同一条路）。**绝不能用 `closeFile` 实现重载**——它会先 `flushSave`，把退回前的旧字节写回覆盖退回结果。
 
 ## 核心契约
 
@@ -50,7 +51,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 
 **文件树清单 `.awd/tree.json`**：`ProjectTreeManifestService.MANIFEST_PATH`。存在理由——数据库才是文件树真源（软删除不动磁盘文件，改名失败时数据库仍可能已改名），单靠磁盘文件跟踪不出一个版本的完整目录结构/排序/回收站状态。`TreeManifest.CURRENT_VERSION = 1`。每次 `commitNow`/`revertTo` 都会重新 `capture()` + `writeToWorkTree()`，保证清单跟随每一笔提交。
 
-**退回 = 新建版本**：`revertTo()`（:241）先给当前状态落一笔（保证退回本身可撤销）→ 用 `diffNameStatus(ref, HEAD)` 算出要改的文件 → 逐文件覆盖/删除工作区 → 同步清单到数据库 → 再提交一笔 `kind=session` 的「退回到早先的版本」。**历史只增不减**，且退回会隐式开启一段新工作（因为 `commitNow` 内部调用 `ensureSession`）。
+**退回 = 新建版本**：`revertTo()` 先给当前状态落一笔（保证退回本身可撤销）→ 用 `diffNameStatus(ref, HEAD)` 算出要改的文件 → 逐文件覆盖/删除工作区 → 同步清单到数据库 → 再提交一笔 `kind=session` 的「退回到早先的版本」。**历史只增不减**，且退回会隐式开启一段新工作（因为 `commitNow` 内部调用 `ensureSession`）。返回类型是 `WorkSessionService.RevertResult(String sha, List<Long> affectedFileIds)`——提交成功后把变更路径（滤 `.awd/`）匹配到 `ProjectFileRepository.findByProjectId` 的记录收集 fileId，整段包 try/catch，失败只影响 `affectedFileIds`（退化为空列表），不影响 `sha`。`VersionController.revert` 把 `affectedFileIds` 一并放进响应 `data`，前端凭它决定重载哪些打开中的编辑器标签（见上方「前端集成点」）。
 
 ## 已知地雷
 
@@ -63,6 +64,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 7. **`.awd/tree.json` 对律师不可见**——任何面向用户的文件列表/变更列表都要过滤掉它。`VersionController.changes()`（:88-89）和 `status()`（:52-53）都手工 `filter(c -> !c.path().startsWith(".awd/"))`；`WorkSessionService.describeChanges()`（:299-304）同样过滤。新增任何返回文件列表的接口都要记得加这行过滤。
 8. **不要在 `src/test/resources` 放 classpath 根的 `schema.sql`/`application-test.yml`**——会全局影响所有嵌入式数据库测试。测试配置用类级 `@TestPropertySource` 就地指定（`WorkSessionRepositoryTest.java` :19-23），H2 保留字冲突用连接串 `NON_KEYWORDS=VALUE`（`MODE=PostgreSQL;NON_KEYWORDS=VALUE;DB_CLOSE_DELAY=-1`，与既有 `IdorAuthIntegrationTest`/`DesktopContextSmokeTest` 同一约定）。
 9. **`MergeOutcome.fastForward` 字段目前恒为 `false`**——`merge()` 里没有真正判断是否发生过快进，直接写死 `false` 构造 `MergeOutcome`（:346）。测试名字里出现的 `mergeIsFastForwardWhenMainUntouched` 测的是「即使可以快进，行为上也被强制变成非快进」，不是这个字段的取值真实性——不要被字段名和测试名误导去做「按字段值分支」的新功能。
+10. **`revertTo` 绝不能靠 `EditorBridgeService` 的 SSE 通知打开中的编辑器重载**——踩过一次真实的生产惰性代码：`EditorBridgeService.sendReloadFileAction` 开头 `if (currentConversationId == null) return`，那个 ThreadLocal 只有 `AgentOrchestrator` 在 AI 工具调用期间设置；`revertTo` 唯一的调用方 `VersionController.revert` 是普通 REST 端点（律师从时间线点按钮），线程上永远没有会话 id，通知永远发不出去，单测却因为 mock 了 `EditorBridgeService` 全绿，问题只有真机才暴露。修复后 `WorkSessionService` 不再注入 `EditorBridgeService`，改走响应驱动：`revertTo` 把 `affectedFileIds` 随返回值带回去，前端自己决定重载谁（见上方「前端集成点」）。以后任何「后端主动推给前端」的新功能，先确认对应的通知通道在目标调用路径上到底有没有值，不要被单测的 mock 掩盖过去。
 
 ## 验证
 

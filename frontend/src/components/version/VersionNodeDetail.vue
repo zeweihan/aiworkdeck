@@ -92,8 +92,9 @@ export default {
         success: async (r) => {
           if (!r.confirm) return
           try {
-            await revertToVersion(this.projectId, this.version.sha)
-            this.$emit('reverted')
+            const res = await revertToVersion(this.projectId, this.version.sha)
+            const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
+            this.$emit('reverted', affectedFileIds)
           } catch (e) {
             uni.showToast({ title: (e && e.message) || '退回失败，请稍后重试', icon: 'none' })
           }
