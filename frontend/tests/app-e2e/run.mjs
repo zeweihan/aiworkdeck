@@ -60,11 +60,15 @@ async function api(ep, opts = {}) {
 // ---------- test fixtures ----------
 const smallFile = path.join(OUT, 'qa-small.txt')
 const bigFile = path.join(OUT, 'qa-big.txt')
+const versionFileA = path.join(OUT, 'qa-版本测试A.txt')
+const versionFileB = path.join(OUT, 'qa-版本测试B.txt')
 fs.writeFileSync(smallFile, 'QA 测试文档 第一行\n第二行 sample\n')
 if (!fs.existsSync(bigFile) || fs.statSync(bigFile).size < 6_000_000) {
   const line = '大文件分片上传回归 chunked upload regression padding line\n'
   fs.writeFileSync(bigFile, line.repeat(Math.ceil(6_500_000 / line.length)))
 }
+fs.writeFileSync(versionFileA, 'QA 版本记录旅程测试文件 A\n')
+fs.writeFileSync(versionFileB, 'QA 版本记录旅程测试文件 B\n')
 
 // ---------- issue collection ----------
 const issues = []
@@ -266,6 +270,103 @@ try {
       if (r.status >= 400) throw new Error('HTTP ' + r.status)
     })
   }
+
+  // ============ J9 版本记录 ============
+  // 注：本 harness 跑浏览器目标，不驱动 LOWA 引擎，工作段不能靠"改文档"触发，
+  // 改用真实 UI 上传文件（走既有 uploadOne，与 J4 同一条链路，真正落盘到项目
+  // 工作区目录，git diff 才看得见）。上传前后要切回/切出资源管理器面板，
+  // 因为版本面板与文件树共用同一个侧栏挂载点（project-overview.vue 的
+  // sidebar-content 按 leftPaneKey 互斥渲染），版本面板打开时文件树（含
+  // "上传文件"按钮）不在 DOM 里。
+  //
+  // 旅程结构（task-15 报告定案后的修正版，需要两段工作）：
+  // brief 原设计的"退回"点的是刚结束的那个工作段自己——单工作段场景下，退回
+  // 目标恒等于当前 HEAD，天然是自我退回、天然不会增长历史，测不出"历史只增
+  // 不减"这件事。这里改成两段工作，退回到第一段（非当前 HEAD、也不是初始提
+  // 交）——这是 task-15 报告里第三组 API 验证过确实健全的路径。
+  console.log('== J9 版本记录 ==')
+  await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+    { waitUntil: 'networkidle2', timeout: 30000 })
+  await sleep(1500)
+
+  await step('打开版本面板并看到未开启引导', async () => {
+    await mouseClickSel('[title="版本"]')
+    await waitText('本项目还没有开启版本记录')
+  })
+
+  await step('开启版本记录后回到空闲态', async () => {
+    // brief 原断言是 waitText('主线')；实际 WorkSessionBar.vue 空闲态文案是
+    // "当前没有进行中的工作"，全仓没有"主线"这个用户可见文案（唯一命中是
+    // VersionTimeline.vue 里一行代码注释）。以实际组件模板为准改断言，不改产品文案。
+    await mouseClickText('开启版本记录')
+    await waitText('当前没有进行中的工作')
+  })
+
+  // 一段完整工作：上传一个文件、进入工作中、结束并命名、回到空闲态。
+  const runWorkSession = async (file, uploadLabel, title) => {
+    await mouseClickSel('[title="资源管理器"]')
+    await uploadOne(file, uploadLabel)
+    await waitText(uploadLabel, 20000)
+    await mouseClickSel('[title="版本"]')
+    await waitText('工作中')
+
+    await mouseClickText('结束本次工作')
+    // 注意：brief 原写法选 .awd-input（模板里 <input> 标签自带的 class），
+    // 但那是 uni-app <input> 组件编译到 H5 后的外层包装元素的 class，
+    // 真正可编辑的原生 <input> 在其内部另有 .uni-input-input（顶部注释
+    // 已点名的陷阱）。用 .awd-input 定位+type 会打字打空，导致命名没生效、
+    // 后端按空标题回退成自动生成的"修改了《X》"文案——本地实测过一次，
+    // 时间线里出现的确实是自动文案而非命名标题，故在此改用真实输入框。
+    await page.waitForSelector('.awd-dialog .uni-input-input', { timeout: 10000 })
+    const input = await page.$('.awd-dialog .uni-input-input')
+    await input.click(); await input.type(title, { delay: 15 })
+    // uni-app 编译出的 input 把 DOM 值同步回 v-model 的 title 有一拍去抖延迟——
+    // 键入最后一个字符后 DOM .value 已经是全量文本，但若立刻点击"完成"，
+    // Vue 数据层的 title 仍是去抖前的值，提交的标题会丢最后一个字。
+    // 实测过 300ms 足够让同步落定（真实网络请求里标题不再缺字）。
+    await sleep(300)
+    await mouseClickText('完成')
+    // brief 原断言是 waitText('主线')；实际空闲态文案是"当前没有进行中的工作"
+    // （见上一步同样的改动理由），以实际组件模板为准。
+    await waitText('当前没有进行中的工作')
+  }
+
+  await step('第一段工作：上传文件并命名结束', () =>
+    runWorkSession(versionFileA, 'qa-版本测试A', '端到端测试稿一'))
+
+  await step('时间线出现第一个工作段的命名节点', async () => {
+    await waitText('端到端测试稿一')
+  })
+
+  await step('第二段工作：上传另一文件并命名结束', () =>
+    runWorkSession(versionFileB, 'qa-版本测试B', '端到端测试稿二'))
+
+  await step('时间线同时保留两个工作段的命名节点', async () => {
+    await waitText('端到端测试稿二')
+    await waitText('端到端测试稿一')
+  })
+
+  let beforeCount = 0
+  await step('第一个工作段的节点详情列出被改文件', async () => {
+    beforeCount = await page.evaluate(() =>
+      document.querySelectorAll('.timeline-node').length)
+    await mouseClickText('端到端测试稿一')
+    await waitText('qa-版本测试A')
+  })
+
+  await step('退回到非当前 HEAD 的早先节点后历史只增不减', async () => {
+    await mouseClickText('退回到这一版')
+    // uni.showModal 的确认按钮：浏览器目标（无 zh-CN 定位配置）下 uni-app 用的是
+    // 内置英文默认文案"OK"，不是"确定"（本地实测截图确认，brief 对文案的假设
+    // 是按 Electron 壳的本地化推断的，H5 裸浏览器环境下不成立）——两个都试。
+    try { await mouseClickText('确定') } catch { await mouseClickText('OK') }
+    await sleep(2000)
+    const afterCount = await page.evaluate(() =>
+      document.querySelectorAll('.timeline-node').length)
+    if (afterCount <= beforeCount) {
+      throw new Error('退回后版本数没有增加：' + beforeCount + ' -> ' + afterCount)
+    }
+  })
 } finally {
   await browser.close()
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）

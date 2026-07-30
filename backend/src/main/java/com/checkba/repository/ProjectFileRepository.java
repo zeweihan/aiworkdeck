@@ -8,6 +8,11 @@ import java.util.Optional;
 
 public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> {
     /**
+     * 根据项目 ID 查询所有文件（包含已删除），用于文件树清单采集
+     */
+    List<ProjectFile> findByProjectId(Long projectId);
+
+    /**
      * 根据项目 ID 和父文件夹 ID 查询文件列表（按排序序号排序，排除已删除）
      */
     List<ProjectFile> findByProjectIdAndParentIdAndIsDeletedFalseOrderBySortOrderAsc(Long projectId, Long parentId);

@@ -4,6 +4,7 @@ import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.ai.ProjectRagService;
 import com.checkba.storage.StorageServiceFactory;
+import com.checkba.version.WorkSessionService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -28,14 +29,20 @@ public class ProjectFileService {
     private final ProjectFileRepository projectFileRepository;
     private final ProjectRagService projectRagService;
     private final StorageServiceFactory storageServiceFactory;
+    private final WorkSessionService workSessionService;
+    private final UserService userService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectFileService(ProjectFileRepository projectFileRepository,
                               ProjectRagService projectRagService,
-                              StorageServiceFactory storageServiceFactory) {
+                              StorageServiceFactory storageServiceFactory,
+                              WorkSessionService workSessionService,
+                              UserService userService) {
         this.projectFileRepository = projectFileRepository;
         this.projectRagService = projectRagService;
         this.storageServiceFactory = storageServiceFactory;
+        this.workSessionService = workSessionService;
+        this.userService = userService;
     }
 
     /**
@@ -96,7 +103,9 @@ public class ProjectFileService {
         folder.setCreatedAt(LocalDateTime.now());
         folder.setUpdatedAt(LocalDateTime.now());
 
-        return projectFileRepository.save(folder);
+        ProjectFile savedFolder = projectFileRepository.save(folder);
+        signalChange(projectId, userId);
+        return savedFolder;
     }
 
     /**
@@ -232,7 +241,8 @@ public class ProjectFileService {
         } catch (Exception e) {
             log.warn("物理文件创建可能失败 (如果是第一次访问会自动创建): {}", filePath, e);
         }
-        
+
+        signalChange(projectId, userId);
         return savedFile;
     }
 
@@ -306,7 +316,9 @@ public class ProjectFileService {
             }
         }
 
-        return projectFileRepository.save(file);
+        ProjectFile renamed = projectFileRepository.save(file);
+        signalChange(renamed.getProjectId(), userId);
+        return renamed;
     }
 
     /**
@@ -325,6 +337,7 @@ public class ProjectFileService {
 
         // 递归软删除
         softDeleteRecursive(file);
+        signalChange(file.getProjectId(), userId);
     }
 
     private void softDeleteRecursive(ProjectFile file) {
@@ -410,8 +423,9 @@ public class ProjectFileService {
                 .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
          
          // 权限检查已移至 Controller 层，这里不再检查创建者身份
-         
+
          restoreRecursive(file);
+         signalChange(file.getProjectId(), userId);
     }
     
     private void restoreRecursive(ProjectFile file) {
@@ -483,7 +497,9 @@ public class ProjectFileService {
 
         // 如果是文件（非文件夹），需要更新 filePath 并移动物理文件
         if (!file.getIsFolder()) {
-            return moveSingleFileWithPhysical(file, oldFilePath, oldParentId);
+            ProjectFile movedFile = moveSingleFileWithPhysical(file, oldFilePath, oldParentId);
+            signalChange(movedFile.getProjectId(), userId);
+            return movedFile;
         }
 
         // 文件夹移动：需要同步更新子文件的 filePath，并移动所有子文件的物理文件
@@ -493,6 +509,7 @@ public class ProjectFileService {
         } catch (Exception e) {
             log.warn("文件夹移动：同步移动子文件物理文件失败（数据库已更新 parentId）: folderId={}", savedFolder.getId(), e);
         }
+        signalChange(savedFolder.getProjectId(), userId);
         return savedFolder;
     }
 
@@ -525,6 +542,7 @@ public class ProjectFileService {
                 throw e;
             }
         }
+        // 信号已由循环内 delete(id, userId) 各自发出，这里不再重复发送
     }
 
     /**
@@ -545,6 +563,7 @@ public class ProjectFileService {
             }
             result.add(move(id, request.getTargetParentId(), null, userId));
         }
+        // 信号已由循环内 move(...) 各自发出，这里不再重复发送
         return result;
     }
 
@@ -570,6 +589,7 @@ public class ProjectFileService {
             }
             createdRoots.add(copyRecursive(projectId, source, request.getTargetParentId(), userId));
         }
+        signalChange(projectId, userId);
         return createdRoots;
     }
 
@@ -1145,6 +1165,30 @@ public class ProjectFileService {
         }
         log.warn("压缩包解析失败", e);
         return "压缩包解析失败：文件可能已损坏或格式不受支持";
+    }
+
+    /**
+     * 通知版本记录：项目文件发生了变更。
+     * 版本记录是保险不是主流程——任何异常只记日志，绝不阻断文件操作。
+     */
+    private void signalChange(Long projectId, Long userId) {
+        if (projectId == null) return;
+        try {
+            workSessionService.onChangeSignal(projectId, userId, resolveUserName(userId));
+        } catch (Exception e) {
+            log.warn("发送版本变更信号失败: project={}", projectId, e);
+        }
+    }
+
+    private String resolveUserName(Long userId) {
+        if (userId == null) return "用户";
+        try {
+            var u = userService.getUserById(userId);
+            if (u != null && u.getUsername() != null) return u.getUsername();
+        } catch (Exception e) {
+            log.warn("解析用户名失败: userId={}", userId, e);
+        }
+        return "用户";
     }
 }
 

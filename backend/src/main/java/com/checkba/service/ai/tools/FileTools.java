@@ -166,7 +166,8 @@ public class FileTools implements AgentToolComponent {
             
             // Stream and sort: Directories first, then files
             try (var stream = Files.list(dir)) {
-                stream.sorted((p1, p2) -> {
+                stream.filter(p -> !p.getFileName().toString().startsWith(".")) // ignore hidden, incl. .awd/
+                        .sorted((p1, p2) -> {
                     boolean d1 = Files.isDirectory(p1);
                     boolean d2 = Files.isDirectory(p2);
                     if (d1 && !d2) return -1;

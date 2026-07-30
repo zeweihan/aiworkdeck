@@ -564,6 +564,10 @@
             :project-id="projectId"
             @open-file="handleSearchOpenFile"
           />
+          <VersionPanel
+            v-else-if="leftPaneKey === 'version'"
+            :project-id="projectId"
+          />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
             :url="dynamicPlugins.find(p => p.key === leftPaneKey)?.frontendEntry"
@@ -1252,6 +1256,7 @@ import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
+import VersionPanel from '@/components/version/VersionPanel.vue'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
 import DocDiffViewer from '@/components/DocDiffViewer.vue'
@@ -1336,7 +1341,8 @@ export default {
     EasyVoicePane,
     DesensitizePane,
     FilePickerDialog,
-    SearchPanel
+    SearchPanel,
+    VersionPanel
   },
   data() {
     return {

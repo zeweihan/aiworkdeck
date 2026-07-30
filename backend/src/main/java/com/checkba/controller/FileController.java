@@ -8,6 +8,7 @@ import com.checkba.service.ai.ProjectRagService;
 import com.checkba.storage.StorageException;
 import com.checkba.storage.StorageService;
 import com.checkba.storage.StorageServiceFactory;
+import com.checkba.version.WorkSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -56,6 +57,9 @@ public class FileController {
     @Autowired
     private ProjectMemberService projectMemberService;
 
+    @Autowired
+    private WorkSessionService workSessionService;
+
     private StorageService getStorageService() {
         return storageServiceFactory.getStorageService();
     }
@@ -72,6 +76,19 @@ public class FileController {
         String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
         Long userId = AuthController.getUserIdFromSession(sid);
         return userId != null && projectMemberService.hasReadPermission(projectId, userId);
+    }
+
+    /**
+     * 通知版本记录：项目文件发生了变更（上传场景）。
+     * 版本记录是保险不是主流程——任何异常只记日志，绝不阻断上传本身。
+     */
+    private void signalChange(Long projectId, Long userId, String userName) {
+        if (projectId == null) return;
+        try {
+            workSessionService.onChangeSignal(projectId, userId, userName);
+        } catch (Exception e) {
+            log.warn("发送版本变更信号失败: project={}", projectId, e);
+        }
     }
 
     /**
@@ -339,15 +356,21 @@ public class FileController {
             }
 
             // 检查是否完成上传并触发RAG (Async)
+            // uploadComplete 同时复用为版本变更信号的完成判定：分片上传时，"上传成功"
+            // 指整个文件传完，而不是某一片落盘，避免几百个分片各发一次信号。
+            // 无 X-File-Total-Size 头的普通（非分片）上传路径不受影响，视为一次性完成。
+            boolean uploadComplete = true;
             String totalSizeStr = request.getHeader("X-File-Total-Size");
             if (StringUtils.hasText(totalSizeStr)) {
+                uploadComplete = false;
                 try {
                     long totalSize = Long.parseLong(totalSizeStr);
                     long currentSize = getStorageService().getSize(savedPath); // Need to ensure savedPath works for getSize, usually it takes key?
                     // LocalFileStorageService.getSize implementation takes key (filePath).
                     // Wait, getStorageService().save returns the key (path). so savedPath is the key.
-                    
-                    if (currentSize >= totalSize) {
+
+                    uploadComplete = currentSize >= totalSize;
+                    if (uploadComplete) {
                          if (projectFileOpt.isPresent()) {
                              Long pid = projectFileOpt.get().getProjectId();
                              // Async execution to prevent blocking 408 Timeout
@@ -390,6 +413,11 @@ public class FileController {
                          }
                      });
                 }
+            }
+
+            if (uploadComplete && projectFileOpt.isPresent()) {
+                String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
+                signalChange(projectFileOpt.get().getProjectId(), AuthController.getUserIdFromSession(sid), AuthController.getUsernameFromSession(sid));
             }
 
             Map<String, Object> result = new HashMap<>();
