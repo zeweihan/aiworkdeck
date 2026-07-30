@@ -394,54 +394,28 @@ public class ProjectRepoService {
      */
     public MergeOutcome merge(long projectId, String branchName, String message,
                               String authorName, String authorEmail) {
-        try (Repository repo = open(projectId); Git git = new Git(repo)) {
-            ObjectId target = repo.resolve(branchName);
-            if (target == null) throw new VersionException("分支不存在: " + branchName);
-
-            String fullMessage = message + "\n\n" + KIND_TRAILER + "session";
-            MergeResult r = git.merge()
-                    .include(target)
-                    .setMessage(fullMessage)
-                    .setFastForward(MergeCommand.FastForwardMode.NO_FF)
-                    .setCommit(false)
-                    .call();
-
-            MergeResult.MergeStatus st = r.getMergeStatus();
-            if (st.isSuccessful()) {
-                String mergeSha;
-                if (st == MergeResult.MergeStatus.ALREADY_UP_TO_DATE) {
-                    mergeSha = r.getNewHead() == null ? null : r.getNewHead().getName();
-                } else {
-                    RevCommit mergeCommit = git.commit()
-                            .setMessage(fullMessage)
-                            .setAuthor(authorName, authorEmail)
-                            .call();
-                    mergeSha = mergeCommit.getName();
-                }
-                return new MergeOutcome(true, false, Collections.emptyList(), mergeSha);
-            }
-
-            List<String> conflicts = r.getConflicts() == null
-                    ? Collections.emptyList()
-                    : new ArrayList<>(r.getConflicts().keySet());
-            git.reset().setMode(ResetCommand.ResetType.HARD).setRef("HEAD").call();
-            return new MergeOutcome(false, false, conflicts, null);
-        } catch (VersionException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new VersionException("合并失败: " + branchName, e);
-        }
+        return mergeCore(projectId, branchName, message, authorName, authorEmail, true);
     }
 
     /**
      * 与 {@link #merge} 同形（NO_FF、setCommit(false)、干净路径手工署名提交），
      * 唯一区别：冲突时**不** reset——仓库留在 MERGING 态，索引记录冲突路径，
      * 供上层三选一（{@link #abortMerge} 无损中止 / 手工裁决后 {@link #commitMergeResolution}
-     * 产出双亲裁决提交）。干净路径与 merge() 完全等价，行为不应分叉，因此
-     * 逻辑照抄，仅去掉冲突分支里的 reset --hard 那一行。
+     * 产出双亲裁决提交）。干净路径与 merge() 完全等价，行为不应分叉，两者共用
+     * {@link #mergeCore}，仅冲突时是否 reset --hard 这一个开关不同。
      */
     public MergeOutcome mergeKeepingConflicts(long projectId, String branchName, String message,
                                               String authorName, String authorEmail) {
+        return mergeCore(projectId, branchName, message, authorName, authorEmail, false);
+    }
+
+    /**
+     * merge()/mergeKeepingConflicts() 共用的核心逻辑，唯一差异是冲突时要不要
+     * reset --hard 回到合并前状态——resetOnConflict 为 true 对应 merge() 的
+     * 「失败即还原」，为 false 对应 mergeKeepingConflicts() 的「留在 MERGING 态待裁决」。
+     */
+    private MergeOutcome mergeCore(long projectId, String branchName, String message,
+                                   String authorName, String authorEmail, boolean resetOnConflict) {
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
             ObjectId target = repo.resolve(branchName);
             if (target == null) throw new VersionException("分支不存在: " + branchName);
@@ -472,6 +446,9 @@ public class ProjectRepoService {
             List<String> conflicts = r.getConflicts() == null
                     ? Collections.emptyList()
                     : new ArrayList<>(r.getConflicts().keySet());
+            if (resetOnConflict) {
+                git.reset().setMode(ResetCommand.ResetType.HARD).setRef("HEAD").call();
+            }
             return new MergeOutcome(false, false, conflicts, null);
         } catch (VersionException e) {
             throw e;
@@ -503,11 +480,15 @@ public class ProjectRepoService {
     /**
      * 无损中止一次保留冲突态的合并：reset --hard HEAD，工作区/索引回到合并前状态，
      * MERGE_HEAD 随之清除、RepositoryState 回到 SAFE。只 reset 到 HEAD，不碰任何
-     * 提交——历史永不重写。非 MERGING 态调用是无害 no-op（幂等——崩溃恢复路径
-     * 可能盲调，不应因此报错）。
+     * 提交——历史永不重写。非 MERGING/MERGING_RESOLVED 态调用是真正的 no-op（先查
+     * RepositoryState 直接 return）——SAFE 态下 reset --hard 会把 autosave 防抖窗口里
+     * 尚未提交的工作区改动一并销毁，崩溃恢复路径可能在任意状态下盲调此方法，绝不能
+     * 借口「幂等」而真的执行一次破坏性 reset。
      */
     public void abortMerge(long projectId) {
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            RepositoryState st = repo.getRepositoryState();
+            if (st != RepositoryState.MERGING && st != RepositoryState.MERGING_RESOLVED) return;
             git.reset().setMode(ResetCommand.ResetType.HARD).setRef("HEAD").call();
         } catch (Exception e) {
             throw new VersionException("中止合并失败: project=" + projectId, e);

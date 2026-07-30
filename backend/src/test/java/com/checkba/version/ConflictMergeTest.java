@@ -90,6 +90,28 @@ class ConflictMergeTest {
     }
 
     /**
+     * P3-T2 审查 C1：SAFE 态（未处于任何合并）下调用 abortMerge 必须是真正的
+     * no-op，不能销毁工作区里尚未提交的改动——autosave 防抖窗口里就是这种状态。
+     * 旧实现没有状态守卫、盲调 reset --hard HEAD，会把这份未提交改动連同其他
+     * 工作区内容一起冲掉；本测试在未处于合并的仓库上直接改一个文件（不提交），
+     * 调用 abortMerge 后断言文件内容原样保留。
+     */
+    @Test
+    void abortMergeInSafeStateIsNoOpAndPreservesUncommittedWork(@TempDir Path root) throws Exception {
+        ProjectRepoService s = seeded(root);
+        assertFalse(s.repositoryMerging(7L), "初始态不应处于合并中");
+
+        Files.writeString(root.resolve("projects/7/合同.txt"), "未提交的草稿改动");
+
+        s.abortMerge(7L);
+
+        assertFalse(s.repositoryMerging(7L));
+        assertEquals("未提交的草稿改动",
+                Files.readString(root.resolve("projects/7/合同.txt")),
+                "SAFE 态下 abortMerge 必须是无害 no-op，不能销毁未提交的工作区改动");
+    }
+
+    /**
      * 无冲突的干净路径：与既有 merge() 完全等价（success、双亲、署名），
      * 断言口径照 {@code ProjectRepoBranchTest.mergeOfTrueThreeWayCreatesMergeCommitWithGivenAuthor}。
      */
