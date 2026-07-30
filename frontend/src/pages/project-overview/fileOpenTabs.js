@@ -353,7 +353,7 @@ export const fileOpenTabsMethods = {
     onVersionCompareFile({ path, sha }) {
       const name = path.split('/').pop() || path
       const oldRef = sha + '^'
-      const isDocx = /\.(docx?|DOCX?)$/.test(name)
+      const isDocx = /\.docx?$/i.test(name)
       if (this.libreOfficePreferred && isDocx) {
         this.openVersionCompareTab({ projectId: this.projectId, path, name, newRef: sha, oldRef })
       } else {
@@ -451,7 +451,10 @@ export const fileOpenTabsMethods = {
         if (idSet.has(f.id) && this.useLibreEditor(f)) openIds.add(f.id)
       }
       for (const fileId of openIds) {
-        this.handleEditorReloadFile({ fileId })
+        // forceActive：退回是律师亲手点的「回到这一版」，正在显示的那个实例也必须
+        // 就地换文档——不然下一次 autosave 会把退回冲掉。AI 改文件走的是默认
+        // （不强刷）分支，见 handleEditorReloadFile 的注释。
+        this.handleEditorReloadFile({ fileId }, { forceActive: true })
       }
     },
 }

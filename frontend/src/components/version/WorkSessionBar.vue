@@ -52,7 +52,12 @@ export default {
       if (this.busy) return
       this.busy = true
       try {
-        await endWorkSession(this.projectId, this.title)
+        const res = await endWorkSession(this.projectId, this.title)
+        // notice = 结束成功但没生成版本（整段工作一个改动都没有）。后端刻意用返回值
+        // 而不是异常表达：它已经把工作段收尾了，走 catch 分支会让弹窗卡开、状态条
+        // 停在「工作中」，而后台其实早就结束了。
+        const notice = (res && res.data && res.data.notice) || ''
+        if (notice) uni.showToast({ title: notice, icon: 'none' })
         this.naming = false
         this.$emit('ended')
       } catch (e) {

@@ -338,6 +338,13 @@ export default {
         this.appendLog('reload skipped: 编辑器未就绪')
         return false
       }
+      // 清脏 + 等在途保存都拦不住「已经启动、正在 export/upload 路上」的那一笔：
+      // 它读的是换文档之前的 worker 内容，等它 upload 完成就把退回结果覆盖回旧字节。
+      // saving 标志只在 saveDocument 内部为真，await 它结束之后新的 modified 又能
+      // 再排一次 autosave。所以整个重载窗口期立一个闸：置位期间 onDocModified 不标脏、
+      // saveDocument 在 upload 前直接放弃。重载语义本来就是丢弃编辑器里的本地改动
+      // （后端内容是权威），丢掉这一笔是语义本身，不是数据损失。
+      this._reloading = true
       const cancelAutoSave = () => {
         clearTimeout(this._saveTimer)
         this._saveTimer = null
@@ -372,6 +379,8 @@ export default {
         this.statusText = '重新加载失败，内容已过期'
         this.appendLog('reload failed: ' + (e && e.message ? e.message : e))
         return false
+      } finally {
+        this._reloading = false
       }
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
@@ -400,6 +409,9 @@ export default {
     onDocModified() {
       // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件
       if (!this.ready || !this.file || this.docLoadFailed) return
+      // 重载窗口期（版本退回 / 检查点恢复正在换文档）里的 modified 一律丢弃：
+      // 它描述的是即将被替换掉的旧文档，标脏只会让 autosave 把旧内容传回去。
+      if (this._reloading) return
       this.dirty = true
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
@@ -458,6 +470,9 @@ export default {
       // 最后一道闸（onDocModified 之外的调用方也拦住）：文档没成功加载，
       // 导出的只会是空白 boot 文档——拒绝覆盖后端真文件。
       if (this.docLoadFailed) { this.appendLog('save blocked: 文档未成功加载，拒绝用空白文档覆盖后端文件'); return false }
+      // 重载窗口期一笔都别起：这时候导出的是即将被替换掉的旧文档，而且 export 会
+      // 把 office 线程占住、拖慢紧跟着的 load_document。
+      if (this._reloading) { this.appendLog('save blocked: 正在重载后端最新内容'); return false }
       const fileId = f.wpsFileId || f.id
       if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return false }
       this.saving = true
@@ -480,6 +495,13 @@ export default {
         else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength)
         else if (Array.isArray(raw)) u8 = new Uint8Array(raw)
         if (!u8 || u8.length === 0) throw new Error('export produced no bytes')
+        // 重载闸（版本退回 / 检查点恢复）：export 是在换文档之前启动的，导出的这份
+        // 字节就是「后端已被改写掉的那个旧版本 + 用户的在途编辑」。上传出去就等于
+        // 把律师刚做的退回覆盖回去——这是数据事故，不是体验问题。丢弃这一笔。
+        if (this._reloading) {
+          this.appendLog('save aborted: 正在重载后端最新内容，丢弃这一笔在途导出')
+          return false
+        }
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
         this.statusText = '已保存'

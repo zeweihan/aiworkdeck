@@ -2535,6 +2535,13 @@ export default {
       if (isPlugin) {
         return this.leftPaneKey === file.id // Assuming plugin ID is its key
       }
+      // 版本对比标签（修订稿 / 文本降级两种）：唯一入口是版本面板里的「和上一版
+      // 对比」，所以必须在 version 面板下可见——否则点开的标签被 v-show 藏死，
+      // 编辑区显示空闲态，功能等于不存在。同时也在资源管理器面板下保持可见：
+      // 它展示的是项目文档的衍生视图，律师切回文件树不该让对比凭空消失。
+      if (file.tabType === 'version-compare' || file.tabType === 'version-text-diff') {
+        return this.leftPaneKey === 'version' || this.leftPaneKey === 'files'
+      }
       // 普通文件在资源管理器、搜索或EasyVoice模式下都可见
       return this.leftPaneKey === 'files' || this.leftPaneKey === 'search' || this.leftPaneKey === 'easyvoice'
     },

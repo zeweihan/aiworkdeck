@@ -17,7 +17,7 @@
           <view
             v-if="c.type === 'MODIFY' && version.parents && version.parents.length > 0"
             class="awd-btn awd-btn-secondary change-compare-btn"
-            @tap="$emit('compare-file', { path: c.path, sha: version.sha })"
+            @tap="compareFile(c.path)"
           >和上一版对比</view>
         </view>
       </view>
@@ -84,6 +84,12 @@ export default {
     },
     typeLabel(t) {
       return { ADD: '新增', MODIFY: '修改', DELETE: '删除', RENAME: '改名' }[t] || t
+    },
+    // 对比结果开在编辑区的标签页里，弹窗留着只会挡住它（也让「弹窗上的按钮文字」
+    // 被误当成对比结果渲染出来了）——上抛之后立刻关掉自己。
+    compareFile(path) {
+      this.$emit('compare-file', { path, sha: this.version.sha })
+      this.$emit('close')
     },
     confirmRevert() {
       uni.showModal({

@@ -192,8 +192,17 @@ export const agentClientActionMethods = {
      * 1. 后端修改文件后会更新 wpsFileId（通用文件 ID，添加版本时间戳）
      * 2. 前端获取最新文件信息，更新 leftFiles/rightFiles 中的 wpsFileId
      * 3. LibreOfficeEditor 以文件为 key/prop，检测到变化后重新加载
+     *
+     * opts.forceActive —— 两条调用路径语义不同，不能一视同仁：
+     * - **版本退回**（true）：律师刚亲手点了「退回到这一版」，他要的就是回到过去。
+     *   正在显示的那个实例必须就地换文档，在途的未保存输入被丢弃是语义本身；
+     *   不换的话下一次 autosave 会把「旧内容 + 新编辑」写回，把退回冲掉（真机复现过）。
+     * - **AI 改文件 / 检查点恢复**（默认 false）：律师此刻可能正在这份文档里打字，
+     *   静默强刷等于替他丢弃未保存内容还弹一句「文件已更新」。只逐非活动的保活
+     *   实例（下次激活自然重挂载拉新字节），当前画面不动。
      */
-    async handleEditorReloadFile(action) {
+    async handleEditorReloadFile(action, opts = {}) {
+        const forceActive = !!opts.forceActive
         console.log('[ProjectOverview] WPS Reload File:', action)
         try {
             const fileId = action.fileId
@@ -256,10 +265,13 @@ export const agentClientActionMethods = {
                 // 当前正显示的实例逐不掉（保活池"活动文件必进池"），而它既不
                 // watch file 也不以 wpsFileId 为模板 key——上面 Object.assign 进
                 // pane 列表对它毫无作用，画布上还是改前的内容。律师接着编辑，
-                // autosave 就会把「旧内容 + 新编辑」写回去，把版本退回/检查点
-                // 恢复冲掉。所以显式命令活动实例就地重载（换文档前它自己会取消
-                // 在飞的自动保存并清脏，见 reloadFromBackend）。
-                reloadOk = await this.reloadActiveLibreInstances(file.id)
+                // autosave 就会把「旧内容 + 新编辑」写回去，把版本退回冲掉。所以
+                // 退回路径显式命令活动实例就地重载（换文档前它自己会取消在飞的
+                // 自动保存并清脏，见 reloadFromBackend）。AI/检查点路径不做这件事，
+                // 理由见方法头 opts.forceActive 的注释。
+                if (forceActive) {
+                    reloadOk = await this.reloadActiveLibreInstances(file.id)
+                }
             }
 
             // 如果文件不在任何窗格中打开，则打开它

@@ -10,13 +10,18 @@
   流程：并行下载新旧两版字节 + 启动引擎 → load_document 新版 → compare_document
   一次性生成修订并自动切只读（.uno:EditDoc 是 toggle 语义，同一实例只能调一次，
   失败重试交给父级换 key 整体重建，本组件内部不做 retry）。
+
+  布局照 LibreOfficeEditor 的 overlay 模式：<webview> 宿主容器**始终**渲染，状态
+  卡片盖在它上面。绝不能把宿主放在 v-show="ready" 里——那样整个 boot 期间宿主是
+  display:none，Electron 的 <webview> 在隐藏子树里常常压根不 attach，dom-ready
+  永远不来，律师只会等到 150 秒超时。
 -->
 <template>
   <view class="vcmp-root">
-    <view v-if="!ready" class="vcmp-status">
+    <view :id="hostId" class="vcmp-host"></view>
+    <view v-show="!ready" class="vcmp-status">
       <text>{{ statusText }}</text>
     </view>
-    <view v-show="ready" :id="hostId" class="vcmp-host"></view>
     <view v-if="ready" class="vcmp-banner">
       <text>版本对比（只读）：左删右增的修订即两版差异，共 {{ redlineCount }} 处</text>
     </view>
@@ -54,13 +59,23 @@ export default {
       }
       const spec = this.compareSpec
       // 字节下载与引擎启动并行——两者互不依赖，串行只会白白拉长等待。
+      // catch 必须在 await 引擎之前就挂上：下载先失败（典型是后端回「这一版里
+      // 没有这份文件」）时，这个 promise 还没人 await，会变成 unhandledrejection，
+      // 而律师看到的是 150 秒后的引擎超时文案——真实原因被埋在后面。先把错误
+      // 暂存下来，等下面顺序走到取字节时再抛。
+      let bytesError = null
       const bytesPromise = Promise.all([
         fetchVersionFileBytes(spec.projectId, spec.newRef, spec.path),
         fetchVersionFileBytes(spec.projectId, spec.oldRef, spec.path),
-      ])
+      ]).catch((e) => { bytesError = e || new Error('读取版本内容失败'); return null })
       const info = await api.getEditor() // { url, preload, partition }
       await this.mountWebview(info) // resolves once 引擎端点就绪（onReady 握手），此前不发命令
-      const [newBytes, oldBytes] = await bytesPromise
+      const bytes = await bytesPromise
+      if (bytesError) throw bytesError
+      const [newBytes, oldBytes] = bytes || []
+      // 空的新版字节进 load_document 只会得到一个空白文档，再 compare 出满篇「删除」
+      // 修订——那是假的对比结果，比报错更糟。直接失败。
+      if (!newBytes || !newBytes.length) throw new Error('这一版里没有这份文件的内容')
       this.statusText = '正在生成对比…'
       const name = spec.path.split('/').pop() || 'compare.docx'
       const loaded = await this.executor.executeCommand('load_document', {
@@ -135,8 +150,14 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-.vcmp-root { display: flex; flex-direction: column; height: 100%; }
-.vcmp-status { flex: 1; display: flex; align-items: center; justify-content: center; color: #888; font-size: 26rpx; }
+.vcmp-root { position: relative; display: flex; flex-direction: column; height: 100%; }
+// 状态卡片是叠在宿主上的覆盖层，不是它的兄弟占位块——宿主必须一直有真实尺寸，
+// 否则隐藏子树里的 <webview> 不 attach（见模板顶部注释）。
+.vcmp-status {
+  position: absolute; inset: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center;
+  background: #fff; color: #888; font-size: 26rpx;
+}
 .vcmp-host { flex: 1; min-height: 0; }
 .vcmp-banner {
   padding: 10rpx 20rpx; background: #F7F5F0; border-top: 1px solid #eee;
