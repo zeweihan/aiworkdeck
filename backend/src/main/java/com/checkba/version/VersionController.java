@@ -85,7 +85,8 @@ public class VersionController {
         if (fileId != null) {
             ProjectFile f = projectFileService.getFile(fileId); // 文件不存在会抛异常
             if (!projectId.equals(f.getProjectId())) {
-                throw new IllegalArgumentException("文件不属于该项目: fileId=" + fileId);
+                // 拒绝消息不带 fileId：越权探测者不该从错误文案里拿到内部 id 的存在性回执。
+                throw new IllegalArgumentException("无权访问该文件");
             }
             String relPath = WorkSessionService.repoRelativePath(f);
             entries = repoService.logForPath(projectId, "HEAD", relPath, limit);
@@ -113,8 +114,13 @@ public class VersionController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireMember(projectId, sessionId);
         String title = body == null ? null : body.get("title");
-        String sha = sessionService.endSession(projectId, userId, userName(userId), title);
-        return ok(Map.of("sha", sha == null ? "" : sha));
+        WorkSessionService.SessionEndResult r =
+                sessionService.endSession(projectId, userId, userName(userId), title);
+        // notice 非空 = 结束成功但没生成版本（空工作段）。仍然是成功（code=0），
+        // 前端凭它决定要不要多 toast 一句，不能走异常分支——见 SessionEndResult 注释。
+        return ok(Map.of(
+                "sha", r.sha() == null ? "" : r.sha(),
+                "notice", r.notice() == null ? "" : r.notice()));
     }
 
     @PostMapping("/session/discard")

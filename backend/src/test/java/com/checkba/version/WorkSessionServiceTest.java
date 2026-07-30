@@ -118,9 +118,10 @@ class WorkSessionServiceTest {
         Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
         svc.commitNow(7L, 1L, "韩泽伟", "改了");
 
-        String sha = svc.endSession(7L, 1L, "韩泽伟", "发客户第一稿");
+        WorkSessionService.SessionEndResult r = svc.endSession(7L, 1L, "韩泽伟", "发客户第一稿");
 
-        assertNotNull(sha);
+        assertNotNull(r.sha());
+        assertNull(r.notice(), "正常结束不带附加提示");
         assertEquals(repoSvc.mainBranch(), repoSvc.currentBranch(7L));
         assertEquals("二稿", Files.readString(root.resolve("projects/7/合同.txt")));
         assertTrue(svc.activeSession(7L).isEmpty());
@@ -285,6 +286,30 @@ class WorkSessionServiceTest {
         svc.endSession(7L, 1L, "韩泽伟", "手动结束");
 
         assertFalse(idleTimerArmed(svc, 7L), "手动结束后空闲定时器必须被取消，否则之后还会被空跑一次");
+    }
+
+    /**
+     * 回归测试：在一段**已经活着**的工作里退回，退回结束后空闲定时器必须重新武装。
+     * revertTo 开头的 cancelPending 会把空闲定时器一并清掉（它本来是给防抖存档用的），
+     * 而 commitNow 里的 ensureSession 只在真正**新建**分支时才武装定时器——活动段内
+     * 退回等于把这段工作的「30 分钟空闲自动结束」永久拆掉，律师不手动点结束就一直
+     * 挂着「工作中」。
+     */
+    @Test
+    void revertInsideAnActiveSessionRearmsTheIdleTimer() throws Exception {
+        svc.setIdleEndMillis(60_000);
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        assertTrue(idleTimerArmed(svc, 7L), "前提：onChangeSignal 之后空闲定时器已武装");
+        String branch = svc.activeSession(7L).orElseThrow().getBranchName();
+
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+        svc.revertTo(7L, "HEAD^", 1L, "韩泽伟");
+
+        assertEquals(branch, svc.activeSession(7L).orElseThrow().getBranchName(),
+                "退回不该结束当前这段工作");
+        assertTrue(idleTimerArmed(svc, 7L),
+                "活动段内退回之后空闲定时器必须重新武装，否则这段工作再也不会被自动结束");
     }
 
     @SuppressWarnings("unchecked")
@@ -629,10 +654,14 @@ class WorkSessionServiceTest {
      * 问题 B（体验）回归测试：空工作段（开了段但一个文件都没改）点「结束」不应该
      * 静默成功——原实现里工作分支 tip 跟 master tip 完全相同，合并走
      * ALREADY_UP_TO_DATE，时间线上什么节点都不会出现，律师起的名字凭空消失。
-     * 修复后应该拒绝并给出明确提示，工作段标记为丢弃，master 历史不受影响。
+     * 修复后应该给出明确提示，工作段标记为丢弃，master 历史不受影响。
+     *
+     * 提示走**返回值**而不是异常：这条路径已经把状态改完了（删分支、标 DISCARDED），
+     * 再抛异常会让前端的 catch 分支只 toast、不关命名弹窗、不刷状态条——后台已结束、
+     * 界面还停在「工作中」。「改了状态再抛异常」的混合语义一律用返回值表达。
      */
     @Test
-    void endingAnEmptySessionThrowsUserFacingErrorAndDiscardsIt() {
+    void endingAnEmptySessionReturnsNoticeAndDiscardsIt() {
         // 用一个全新的项目走 enableVersionRecording（而不是 setUp 里对 project 7 用的
         // repoSvc.init 直接开仓库那条捷径）——否则「初始版本」那笔提交不带
         // .awd/tree.json，commitNow 里的清单写入会在这段工作里制造一笔真实的
@@ -645,11 +674,12 @@ class WorkSessionServiceTest {
         svc.onChangeSignal(projectId, 1L, "韩泽伟");
         int masterLogBefore = repoSvc.log(projectId, repoSvc.mainBranch(), 100).size();
 
-        VersionException ex = assertThrows(VersionException.class,
-                () -> svc.endSession(projectId, 1L, "韩泽伟", "空工作"));
+        WorkSessionService.SessionEndResult r =
+                svc.endSession(projectId, 1L, "韩泽伟", "空工作");
 
-        assertTrue(ex.isUserFacing(), "必须是可以原样回显给律师的业务性异常");
-        assertTrue(ex.getMessage().contains("没有任何改动"), "消息应说明本次工作没有任何改动: " + ex.getMessage());
+        assertNull(r.sha(), "空工作段没有生成任何版本");
+        assertNotNull(r.notice(), "必须带一句给律师的说明，而不是抛异常");
+        assertTrue(r.notice().contains("没有任何改动"), "消息应说明本次工作没有任何改动: " + r.notice());
 
         WorkSession s = sessions.values().stream()
                 .filter(x -> x.getProjectId().equals(projectId))

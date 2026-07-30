@@ -301,10 +301,21 @@ public class WorkSessionService {
     }
 
     /**
+     * 结束工作的结果。{@code notice} 非空表示「结束成功，但有一句话要告诉律师」——
+     * 目前只有一种：整段工作没有任何改动、没生成版本。
+     *
+     * 这条路径刻意**不抛异常**：抛异常前它已经把状态改完了（删了分支、工作段标
+     * DISCARDED），而前端的 catch 分支只负责 toast，不会关命名弹窗、也不会刷新
+     * 状态条——律师看到的是「工作中」和一个卡住的弹窗，而后台其实已经结束了。
+     * 「改了状态再抛异常」这种混合语义一律用返回值表达。
+     */
+    public record SessionEndResult(String sha, String notice) {}
+
+    /**
      * 结束本次工作：收尾提交 → 切回主线 → 合并 → 关闭工作段。
      * 单人场景下主线在工作期间不会变，合并总是快进。
      */
-    public String endSession(long projectId, Long userId, String userName, String title) {
+    public SessionEndResult endSession(long projectId, Long userId, String userName, String title) {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
@@ -327,7 +338,7 @@ public class WorkSessionService {
                 s.setEndedAt(LocalDateTime.now());
                 sessionRepository.save(s);
                 log.info("空工作段结束，未产生版本: project={}, branch={}", projectId, s.getBranchName());
-                throw VersionException.userFacing("本次工作没有任何改动，未生成版本");
+                return new SessionEndResult(null, "本次工作没有任何改动，未生成版本");
             }
 
             String finalTitle = (title == null || title.isBlank())
@@ -349,7 +360,7 @@ public class WorkSessionService {
             sessionRepository.save(s);
             log.info("结束一段工作: project={}, branch={}, title={}",
                     projectId, s.getBranchName(), finalTitle);
-            return outcome.mergeSha();
+            return new SessionEndResult(outcome.mergeSha(), null);
         } finally {
             lock.unlock();
         }
@@ -433,6 +444,16 @@ public class WorkSessionService {
 
             List<Long> affectedFileIds = sha == null
                     ? List.of() : resolveAffectedFileIds(projectId, changes);
+
+            // cancelPending 上面把空闲定时器连 actors 一起清了（它本来是给防抖存档
+            // 用的），而 commitNow 里的 ensureSession 只在**新建**分支时武装定时器——
+            // 在一段已经活着的工作里退回，等于把这段工作的空闲自动结束永久拆掉，
+            // 律师之后不点「结束本次工作」就一直挂着「工作中」。这里显式补武装，
+            // 执行者按发起退回的人记（后续自动结束的合并要用他署名）。
+            activeSession(projectId).ifPresent(s -> {
+                actors.put(projectId, new PendingActor(userId, userName));
+                armIdleTimer(projectId, s.getId());
+            });
 
             return new RevertResult(sha, affectedFileIds);
         } finally {
