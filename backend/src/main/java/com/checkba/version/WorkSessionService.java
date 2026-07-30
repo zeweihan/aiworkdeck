@@ -164,6 +164,9 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            // 待裁决期间工作区是裁决现场，切分支会被 JGit 拒绝或毁掉现场，
+            // 口径与 endSession/discardSession/revertTo/切线/开稿一致。
+            requireNotMerging(projectId);
             WorkSession s = activeSession(projectId)
                     .orElseThrow(() -> VersionException.userFacing("当前没有未结束的工作"));
             repoService.checkoutBranch(projectId, s.getBranchName());
@@ -724,15 +727,27 @@ public class WorkSessionService {
             String mainTipBefore = repoService.resolveRef(projectId, "HEAD");
             String draftTip = repoService.resolveRef(projectId, draft.getBranchName());
 
-            MergeOutcome outcome = repoService.mergeKeepingConflicts(projectId,
+            // 干净路径也不让 JGit 自己提交（mergeNoCommit）：两条路都要以数据库为源
+            // 写清单、清单必须进同一个采纳提交，见 completeAdopt。
+            MergeOutcome outcome = repoService.mergeNoCommit(projectId,
                     draft.getBranchName(), adoptMessage(draft), userName, email(userName));
 
             if (outcome.success()) {
+                // mergeSha 非空 = 「已是最新」，JGit 没产生也无从产生新提交；
+                // 为空 = MERGED_NOT_COMMITTED，由 completeAdopt 落成采纳提交。
                 return completeAdopt(projectId, draft, draftTip, mainTipBefore,
                         outcome.mergeSha(), back.affectedFileIds(), userName);
             }
 
             List<String> conflicts = userVisibleConflicts(outcome.conflictingPaths());
+            if (!repoService.repositoryMerging(projectId)) {
+                // 合并没成、也没留下待裁决现场（FAILED / CHECKOUT_CONFLICT / ABORTED）。
+                // 这不是「有冲突等着律师三选一」——既没有 MERGE_HEAD 也没有冲突索引，
+                // 后面的自裁/裁决路径一步都走不通，必须显式失败，不能误当自裁路径。
+                log.warn("采纳没能开始: project={}, branch={}, conflicts={}",
+                        projectId, draft.getBranchName(), outcome.conflictingPaths());
+                throw VersionException.userFacing("这次采纳没能开始，请稍后重试");
+            }
             if (conflicts.isEmpty()) {
                 // 只有内部的文件树清单冲突。律师不认识这个文件、也无从选择，
                 // 而清单并集本来就要按并集规则重写它——自己裁决掉，别去打扰他。
@@ -771,7 +786,19 @@ public class WorkSessionService {
             }
             String mainTipBefore = repoService.resolveRef(projectId, "HEAD");
 
-            List<String> conflicts = userVisibleConflicts(repoService.conflictingPaths(projectId));
+            // 保险带：仓库还在合并中、却一条冲突记录都没有，等价于 MERGING_RESOLVED——
+            // 索引里的冲突被什么东西 add 掉了。此时下面的「覆盖全部冲突」校验会空转、
+            // 逐文件裁决一次都不执行，带 <<<<<<< 标记的半成品会被当成裁决结果提交进
+            // 主线、稿分支还会被删，不可逆。修掉 pendingChanges 的冲突窗口守卫后这
+            // 一步不该再发生，发生即 bug——技术档异常，不给 userFacing 粉饰。
+            List<String> rawConflicts = repoService.conflictingPaths(projectId);
+            if (rawConflicts.isEmpty()) {
+                throw new VersionException(
+                        "冲突记录已丢失，无法安全完成采纳: project=" + projectId
+                                + " draft=" + draft.getBranchName());
+            }
+
+            List<String> conflicts = userVisibleConflicts(rawConflicts);
             Map<String, Resolution> choices = resolutions == null ? Map.of() : resolutions;
             for (String path : conflicts) {
                 if (choices.get(path) == null) {

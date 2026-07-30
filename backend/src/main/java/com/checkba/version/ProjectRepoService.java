@@ -222,10 +222,27 @@ public class ProjectRepoService {
         return null;
     }
 
-    /** 工作区相对 HEAD 的未提交变更。只读——add 到暂存区但不提交。 */
+    /**
+     * 工作区相对 HEAD 的未提交变更。只读——add 到暂存区但不提交。
+     *
+     * 合并窗口（MERGING/MERGING_RESOLVED）里**一次 add 都不做**：git add 对一条冲突
+     * 路径的语义是「这个冲突我解决了」，它会把索引里的冲突记录抹掉、仓库从 MERGING
+     * 变 MERGING_RESOLVED（JGit 探针实证）。而版本面板每次挂载都会拉一次 /status、
+     * /status 的 changedCount 正是走这里——律师在三选一弹窗前刷新一下面板，就会让
+     * 随后的裁决校验空转、带 {@code <<<<<<<} 标记的半成品被提交进主线且稿分支被删，
+     * 不可逆。这一档下返回的是「还等着裁决的文件」，changedCount 在冲突窗口里的
+     * 语义就是待裁决文件数，对律师同样说得通。
+     */
     public List<FileChange> pendingChanges(long projectId) {
         List<FileChange> out = new ArrayList<>();
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            RepositoryState state = repo.getRepositoryState();
+            if (state == RepositoryState.MERGING || state == RepositoryState.MERGING_RESOLVED) {
+                for (String p : git.status().call().getConflicting().stream().sorted().toList()) {
+                    out.add(new FileChange(p, FileChange.Type.MODIFY));
+                }
+                return out;
+            }
             git.add().addFilepattern(".").call();
             git.add().addFilepattern(".").setUpdate(true).call();
             Status st = git.status().call();
@@ -394,7 +411,7 @@ public class ProjectRepoService {
      */
     public MergeOutcome merge(long projectId, String branchName, String message,
                               String authorName, String authorEmail) {
-        return mergeCore(projectId, branchName, message, authorName, authorEmail, true);
+        return mergeCore(projectId, branchName, message, authorName, authorEmail, true, true);
     }
 
     /**
@@ -406,16 +423,40 @@ public class ProjectRepoService {
      */
     public MergeOutcome mergeKeepingConflicts(long projectId, String branchName, String message,
                                               String authorName, String authorEmail) {
-        return mergeCore(projectId, branchName, message, authorName, authorEmail, false);
+        return mergeCore(projectId, branchName, message, authorName, authorEmail, false, true);
     }
 
     /**
-     * merge()/mergeKeepingConflicts() 共用的核心逻辑，唯一差异是冲突时要不要
-     * reset --hard 回到合并前状态——resetOnConflict 为 true 对应 merge() 的
-     * 「失败即还原」，为 false 对应 mergeKeepingConflicts() 的「留在 MERGING 态待裁决」。
+     * 与 {@link #mergeKeepingConflicts} 同形（NO_FF、冲突时不 reset），唯一区别：
+     * **干净合并也不提交**，仓库停在 MERGED_NOT_COMMITTED（JGit 探针实证：对应的
+     * {@code RepositoryState} 是 {@code MERGING_RESOLVED}，{@link #repositoryMerging}
+     * 覆盖得到，MERGE_HEAD 仍在磁盘上），{@code mergeSha} 返回 null，由调用方在
+     * 补齐工作区内容后用 {@link #commitMergeResolution} 落成同一个双亲提交。
+     *
+     * 存在的理由：采纳一稿的干净路径与冲突路径必须以同一种方式提交。让干净路径
+     * 自动提交，落库的 {@code .awd/tree.json} 就是 Git 对两份 JSON 做的文本合并，
+     * 而数据库随后才被清单并集改写——已提交的清单与数据库当场分叉，而且分叉不会
+     * 有任何提交去弥合。不提交，就能让「先按数据库算出清单、再连同裁决结果一起
+     * 收进采纳提交」这一条路同时服务两种情况。
+     *
+     * 「已是最新」（ALREADY_UP_TO_DATE）例外：JGit 这条路径根本不进入合并流程，
+     * 不留 MERGE_HEAD、状态是 SAFE（探针实证），无从「稍后提交」——照旧返回它给出的
+     * newHead 作为 mergeSha，调用方据此知道这里没有待提交的合并。
+     */
+    public MergeOutcome mergeNoCommit(long projectId, String branchName, String message,
+                                      String authorName, String authorEmail) {
+        return mergeCore(projectId, branchName, message, authorName, authorEmail, false, false);
+    }
+
+    /**
+     * merge()/mergeKeepingConflicts()/mergeNoCommit() 共用的核心逻辑，两个开关：
+     * resetOnConflict 为 true 对应 merge() 的「失败即还原」，为 false 对应保留
+     * MERGING 态待裁决；commitOnClean 为 true 表示干净合并当场手工署名提交，
+     * 为 false 表示留在 MERGED_NOT_COMMITTED 交给调用方（见 {@link #mergeNoCommit}）。
      */
     private MergeOutcome mergeCore(long projectId, String branchName, String message,
-                                   String authorName, String authorEmail, boolean resetOnConflict) {
+                                   String authorName, String authorEmail,
+                                   boolean resetOnConflict, boolean commitOnClean) {
         try (Repository repo = open(projectId); Git git = new Git(repo)) {
             ObjectId target = repo.resolve(branchName);
             if (target == null) throw new VersionException("分支不存在: " + branchName);
@@ -433,12 +474,14 @@ public class ProjectRepoService {
                 String mergeSha;
                 if (st == MergeResult.MergeStatus.ALREADY_UP_TO_DATE) {
                     mergeSha = r.getNewHead() == null ? null : r.getNewHead().getName();
-                } else {
+                } else if (commitOnClean) {
                     RevCommit mergeCommit = git.commit()
                             .setMessage(fullMessage)
                             .setAuthor(authorName, authorEmail)
                             .call();
                     mergeSha = mergeCommit.getName();
+                } else {
+                    mergeSha = null; // MERGED_NOT_COMMITTED，等调用方提交
                 }
                 return new MergeOutcome(true, false, Collections.emptyList(), mergeSha);
             }

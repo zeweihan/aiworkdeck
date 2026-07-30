@@ -32,6 +32,7 @@ class DraftAdoptTest {
 
     private Path root;
     private ProjectRepoService repoSvc;
+    private ProjectTreeManifestService manifestSvc;
     private WorkSessionService svc;
     private Map<Long, WorkSession> sessions;
     private long nextSessionId;
@@ -64,8 +65,7 @@ class DraftAdoptTest {
             db.put(p.getId(), p);
             return p;
         });
-        ProjectTreeManifestService manifestSvc =
-                new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
+        manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
 
         sessions = new HashMap<>();
         nextSessionId = 1L;
@@ -228,6 +228,114 @@ class DraftAdoptTest {
                 "从稿上采纳时主线侧文件在磁盘上也变过，同样要进重载列表");
     }
 
+    /**
+     * P3-T4 审查 I1：干净路径与冲突路径必须以同一种方式提交。旧实现里干净合并由 JGit
+     * 自己提交，落库的 {@code .awd/tree.json} 是 Git 对两份 JSON 做的文本合并，而数据库
+     * 随后才被清单并集改写——已提交的清单与数据库当场分叉，且分叉不会有任何提交去弥合。
+     * 现在两条路都是「先按数据库算清单、再连同内容一起收进同一个采纳提交」。
+     *
+     * fixture 是单边改动：主线一动不动，稿改一份文件的内容、再把另一份删进回收站——
+     * 这是最朴素的一次采纳，也是这条干净路径唯一被真实走通的证据（既有用例里主线都
+     * 动过）。那一次软删除让判别力落到实处：Git 对清单做文本合并会照单收下「回收站」，
+     * 而并集只加不减、数据库里那一行仍在用——旧实现提交的正是前者。
+     */
+    @Test
+    void cleanAdoptCommitsManifestBuiltFromDatabaseInTheSameNode() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+        db.put(502L, file(502L, "附件.txt"));
+        write("合同.txt", "主线起点");
+        write("附件.txt", "主线起点");
+        mainlineWork("起点");
+
+        WorkSessionService.DraftCreateResult created =
+                svc.createDraft(7L, null, "试验稿", 1L, "韩泽伟");
+        long draftId = created.draft().getId();
+        write("合同.txt", "稿上改动");
+        db.get(502L).setIsDeleted(true);   // 稿上把《附件》删进回收站（软删除不动磁盘）
+        svc.commitNow(7L, 1L, "韩泽伟", "稿上存档");
+
+        WorkSessionService.AdoptOutcome r = svc.adoptDraft(7L, draftId, 1L, "韩泽伟");
+
+        assertTrue(r.success(), "单边改动必须一次干净采纳成功");
+        assertTrue(r.conflictingPaths().isEmpty());
+        assertNotNull(r.sha());
+        assertFalse(repoSvc.repositoryMerging(7L), "干净采纳不能留下任何合并残局");
+        assertEquals(repoSvc.mainBranch(), repoSvc.currentBranch(7L));
+        assertEquals("稿上改动", read("合同.txt"));
+
+        VersionEntry head = repoSvc.log(7L, "HEAD", 1).get(0);
+        assertEquals(r.sha(), head.sha());
+        assertEquals(2, head.parents().size(), "采纳必须是双亲合并节点");
+        assertEquals("采纳：试验稿", head.message());
+        assertEquals("session", head.kind());
+
+        assertFalse(db.get(502L).getIsDeleted(),
+                "前置：并集只加不减，稿上那次删除不会随采纳带过来");
+
+        byte[] blob = repoSvc.readBlobAtCommit(7L, r.sha(), ProjectTreeManifestService.MANIFEST_PATH);
+        assertNotNull(blob, "文件树清单必须进这一个采纳提交，不能留在它之外");
+        TreeManifest committed = new ObjectMapper()
+                .readValue(new String(blob, java.nio.charset.StandardCharsets.UTF_8),
+                        TreeManifest.class);
+        assertEquals(manifestSvc.capture(7L), committed,
+                "采纳提交里的清单必须就是采纳后数据库的样子，不能是 Git 的文本合并结果");
+    }
+
+    /**
+     * P3-T4 审查 I2：并集旧实现无条件用稿侧的 name/filePath/parentId 覆盖数据库。
+     * 主线在稿开出去之后改了名时，git 的三方合并已经按主线那一侧落了盘（磁盘上只有
+     * 新名字），数据库却被改回稿记得的旧路径——文件树里多出一行指向不存在的文件，
+     * 律师双击就是打不开。数据库要跟随磁盘现实。
+     */
+    @Test
+    void adoptKeepsMainlineRenameInsteadOfResurrectingTheDraftPath() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+        db.put(502L, file(502L, "附件.txt"));
+        write("合同.txt", "起点");
+        write("附件.txt", "起点");
+        mainlineWork("起点");
+
+        WorkSessionService.DraftCreateResult created =
+                svc.createDraft(7L, null, "试验稿", 1L, "韩泽伟");
+        long draftId = created.draft().getId();
+        write("附件.txt", "稿改了附件");   // 稿只动另一份文件，不碰改名的那份
+        svc.commitNow(7L, 1L, "韩泽伟", "稿上存档");
+
+        // 主线把《合同》改名，磁盘与数据库一起改
+        svc.switchToMainline(7L, 1L, "韩泽伟");
+        Files.move(root.resolve("projects/7/合同.txt"),
+                root.resolve("projects/7/合同（终稿）.txt"));
+        db.get(501L).setName("合同（终稿）.txt");
+        db.get(501L).setFilePath("projects/7/合同（终稿）.txt");
+        mainlineWork("主线改了名");
+
+        WorkSessionService.AdoptOutcome r = svc.adoptDraft(7L, draftId, 1L, "韩泽伟");
+
+        assertTrue(r.success());
+        assertTrue(Files.exists(root.resolve("projects/7/合同（终稿）.txt")),
+                "前置：合并后磁盘上是主线的新名字");
+        assertFalse(Files.exists(root.resolve("projects/7/合同.txt")),
+                "前置：旧名字在磁盘上已经不存在");
+
+        assertEquals("合同（终稿）.txt", db.get(501L).getName(),
+                "数据库要跟随磁盘现实，不能被稿的旧清单改回去");
+        assertEquals("projects/7/合同（终稿）.txt", db.get(501L).getFilePath());
+        assertTrue(db.values().stream()
+                        .noneMatch(f -> "projects/7/合同.txt".equals(f.getFilePath())),
+                "文件树里不能留下指向不存在文件的幽灵行");
+        assertEquals("稿改了附件", read("附件.txt"), "稿自己的改动照旧进主线");
+
+        // I1 在这个 fixture 里才有判别力：两边都改过清单，Git 对两份 JSON 做的文本合并
+        // 与并集后的数据库必然不同——旧实现提交的是前者，数据库是后者，当场分叉。
+        byte[] blob = repoSvc.readBlobAtCommit(7L, r.sha(), ProjectTreeManifestService.MANIFEST_PATH);
+        assertNotNull(blob, "文件树清单必须进这一个采纳提交");
+        TreeManifest committed = new ObjectMapper()
+                .readValue(new String(blob, java.nio.charset.StandardCharsets.UTF_8),
+                        TreeManifest.class);
+        assertEquals(manifestSvc.capture(7L), committed,
+                "落库清单必须以数据库为源，不能是 Git 对两份 JSON 的文本合并");
+    }
+
     // ---- 2. 有 ACTIVE 工作段时拒绝采纳 --------------------------------------
 
     @Test
@@ -347,6 +455,65 @@ class DraftAdoptTest {
         assertEquals("只有稿有", read("稿新增.txt"));
     }
 
+    /**
+     * 「两份都留」撞名：同目录里已经有一份《……（来自：试验稿）.txt》（上一次采纳留下的，
+     * 或者律师自己起的这个名字）。绝不能覆盖它，要追加序号另存。
+     */
+    @Test
+    void bothChoiceAppendsSequenceNumberWhenSideBySideNameIsTaken() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+        write("合同（来自：试验稿）.txt", "早先另存过的一份");
+
+        WorkSessionService.AdoptOutcome r = svc.resolveAdopt(7L, scene.draftId(),
+                Map.of("合同.txt", WorkSessionService.Resolution.BOTH), 1L, "韩泽伟");
+
+        assertTrue(r.success());
+        assertEquals("早先另存过的一份", read("合同（来自：试验稿）.txt"),
+                "已经存在的同名文件绝不能被另存覆盖");
+        assertEquals("稿：合同.txt", read("合同（来自：试验稿）2.txt"),
+                "撞名时在后面追加序号另存");
+
+        ProjectFile copy = db.values().stream()
+                .filter(f -> "合同（来自：试验稿）2.txt".equals(f.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("追加序号的那一份也要在文件树里建行"));
+        assertEquals("projects/7/合同（来自：试验稿）2.txt", copy.getFilePath());
+    }
+
+    /**
+     * C1 的保险带：万一冲突记录还是在裁决之前被谁抹掉了（仓库停在 MERGING_RESOLVED、
+     * 索引里一条冲突都不剩），resolveAdopt 必须显式失败，绝不能让「覆盖全部冲突」的
+     * 校验空转、把带冲突标记的半成品当裁决结果提交进主线。技术档异常——修好
+     * pendingChanges 之后这一步不该再发生，发生即 bug，不给 userFacing 粉饰。
+     */
+    @Test
+    void resolveAdoptRefusesWhenConflictRecordWasWipedOut() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+
+        // 模拟「有人把冲突 add 掉了」：git add 对冲突路径的语义就是「我解决了」
+        try (org.eclipse.jgit.lib.Repository repo = repoSvc.open(7L);
+             org.eclipse.jgit.api.Git git = new org.eclipse.jgit.api.Git(repo)) {
+            git.add().addFilepattern(".").call();
+        }
+        assertTrue(repoSvc.conflictingPaths(7L).isEmpty(), "前置：冲突记录已被抹掉");
+        assertTrue(repoSvc.repositoryMerging(7L), "前置：仓库仍停在合并中");
+
+        VersionException e = assertThrows(VersionException.class,
+                () -> svc.resolveAdopt(7L, scene.draftId(),
+                        Map.of("合同.txt", WorkSessionService.Resolution.MAIN), 1L, "韩泽伟"));
+
+        assertFalse(e.isUserFacing(), "这是内部不变式被破坏，不该粉饰成业务提示");
+        assertTrue(e.getMessage().contains("冲突记录已丢失"));
+        assertEquals(scene.mainTipBeforeAdopt(), repoSvc.resolveRef(7L, "HEAD"),
+                "绝不能落下任何提交");
+        assertEquals(WorkSession.Status.ACTIVE, sessions.get(scene.draftId()).getStatus(),
+                "稿不能被标处理");
+        assertTrue(repoSvc.listBranches(7L).contains(scene.draftBranch()), "稿分支不能被删");
+    }
+
     // ---- 6. 裁决提交的形制 -------------------------------------------------
 
     @Test
@@ -422,6 +589,49 @@ class DraftAdoptTest {
                 Map.of("合同.txt", WorkSessionService.Resolution.MAIN), 1L, "韩泽伟");
         assertTrue(r.success());
         assertEquals("主线：合同.txt", read("合同.txt"));
+    }
+
+    // ---- 冲突窗口里刷新 /status 绝不能抹掉冲突记录 ---------------------------
+
+    /**
+     * P3-T4 审查 C1：版本面板每次挂载都会拉一次 {@code /status}，而 {@code /status} 的
+     * changedCount 走 {@link WorkSessionService#pendingChangesLocked}。旧实现里那条路径
+     * 无条件做两次 {@code git add}，在冲突窗口里等于把索引里的冲突标记全部「解决」掉：
+     * 仓库从 MERGING 变 MERGING_RESOLVED、{@code getConflicting()} 清空（JGit 探针实证），
+     * 随后 {@link WorkSessionService#resolveAdopt} 的「覆盖全部冲突」校验空转、逐文件裁决
+     * 一次都不执行，带 {@code <<<<<<<} 标记的半成品被当成裁决结果提交进主线、稿分支还被
+     * 删掉——不可逆的数据事故，而触发它的只是律师刷新了一下面板。
+     */
+    @Test
+    void statusRefreshInConflictWindowKeepsConflictsAndNeverPollutesMainline() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+
+        List<FileChange> pending = svc.pendingChangesLocked(7L);
+
+        assertTrue(repoSvc.repositoryMerging(7L), "/status 刷新不能改变待裁决状态");
+        assertEquals(List.of(".awd/tree.json", "合同.txt"), repoSvc.conflictingPaths(7L),
+                "/status 刷新绝不能抹掉索引里的冲突记录");
+        assertEquals(List.of(".awd/tree.json", "合同.txt"),
+                pending.stream().map(FileChange::path).sorted().toList(),
+                "冲突窗口里 changedCount 的语义就是「还等着裁决的文件数」");
+        assertEquals(scene.mainTipBeforeAdopt(), repoSvc.resolveRef(7L, "HEAD"),
+                "只读刷新不能推进 HEAD");
+
+        // 刷新之后三选一仍然真实生效
+        WorkSessionService.AdoptOutcome r = svc.resolveAdopt(7L, scene.draftId(),
+                Map.of("合同.txt", WorkSessionService.Resolution.MAIN), 1L, "韩泽伟");
+
+        assertTrue(r.success());
+        assertEquals("主线：合同.txt", read("合同.txt"), "裁决必须真的执行，不能空转");
+        for (String path : List.of("合同.txt", ProjectTreeManifestService.MANIFEST_PATH)) {
+            String bytes = new String(repoSvc.readBlobAtCommit(7L, "HEAD", path),
+                    java.nio.charset.StandardCharsets.UTF_8);
+            assertFalse(bytes.contains("<<<<<<<"),
+                    "主线里绝不能出现冲突标记: " + path);
+            assertFalse(bytes.contains(">>>>>>>"),
+                    "主线里绝不能出现冲突标记: " + path);
+        }
     }
 
     // ---- 8. 放弃这一稿 -----------------------------------------------------
@@ -510,6 +720,23 @@ class DraftAdoptTest {
         assertTrue(repoSvc.repositoryMerging(7L), "守卫后仍在待裁决状态");
         assertEquals(WorkSession.Status.ACTIVE, sessions.get(scene.draftId()).getStatus(),
                 "稿仍为 ACTIVE");
+    }
+
+    @Test
+    void resumeSessionRejectsWhileMerging() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+        assertTrue(repoSvc.repositoryMerging(7L), "前置：应该停在待裁决状态");
+
+        VersionException e = assertThrows(VersionException.class, () -> svc.resumeSession(7L));
+
+        assertTrue(e.isUserFacing());
+        assertEquals("请先处理正在进行的采纳", e.getMessage());
+        assertTrue(repoSvc.repositoryMerging(7L), "守卫后仍在待裁决状态");
+        assertEquals(repoSvc.mainBranch(), repoSvc.currentBranch(7L),
+                "裁决现场所在的分支不能被切走");
+        assertEquals(WorkSession.Status.ACTIVE, sessions.get(scene.draftId()).getStatus());
     }
 
     @Test
