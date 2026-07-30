@@ -80,6 +80,7 @@ export default {
   beforeUnmount() {
     // 只销毁，绝无保存路径——这是与 LibreOfficeEditor 的本质区别。不进保活池，
     // 不注册 _libreRefs/LRU，销毁即销毁。
+    if (this._bootTimeout) clearTimeout(this._bootTimeout)
     try { if (this.executor && typeof this.executor.dispose === 'function') this.executor.dispose() } catch (e) { /* ignore */ }
     try { if (this.webviewEl && this.webviewEl.remove) this.webviewEl.remove() } catch (e) { /* ignore */ }
     this.webviewEl = null
@@ -95,6 +96,11 @@ export default {
       return new Promise((resolve, reject) => {
         const host = document.getElementById(this.hostId)
         if (!host) { reject(new Error('host missing')); return }
+        // 引擎启动超时：150秒（WASM 编译 + 排版引擎约 90秒，留余量）。
+        // onReady / did-fail-load 先到时清除，防止引擎挂死时 Promise 永不 settle。
+        this._bootTimeout = setTimeout(() => {
+          reject(new Error('对比准备超时，请关闭后重试'))
+        }, 150000)
         const wv = document.createElement('webview')
         wv.setAttribute('partition', info.partition)
         if (info.preload) wv.setAttribute('preload', info.preload)
@@ -104,10 +110,19 @@ export default {
           if (this.executor) return // dom-ready 可能因页内导航重复触发
           try {
             // 只读宿主：不订阅 lo-relay 的 modified 信号（没有自动保存这回事）。
-            this.executor = createWebviewEditorExecutor(wv, { onReady: () => resolve() })
-          } catch (e) { reject(e) }
+            this.executor = createWebviewEditorExecutor(wv, {
+              onReady: () => {
+                clearTimeout(this._bootTimeout)
+                resolve()
+              }
+            })
+          } catch (e) {
+            clearTimeout(this._bootTimeout)
+            reject(e)
+          }
         })
         wv.addEventListener('did-fail-load', (e) => {
+          clearTimeout(this._bootTimeout)
           reject(new Error('did-fail-load: ' + (e.errorDescription || e.errorCode)))
         })
         wv.src = info.url
