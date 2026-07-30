@@ -27,7 +27,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `frontend/vite.zetaoffice.config.js` — editor 页专用 Vite 构建（脱离 uni-app），产出 dist/zetaoffice/。
 
 **宿主 UI（保活/实例管理/自动保存）**
-- `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave。
+- `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave、reloadFromBackend。
 - `frontend/src/pages/project-overview/project-overview.vue` — 保活池宿主：leftLibreFiles/rightLibreFiles（v-show 常驻，~:1661）、libreLruKeys/touchLibreLru/evictLibreInstance（~:5886-5906）、syncLibreExecutor 活跃指针（~:5871）、`_libreRefs`/`_libreExecMap` 非响应式注册表；`LIBRE_KEEPALIVE_MAX = 3`（~:1286）。
 
 ## 启动链路（打开 docx → 可编辑）
@@ -45,6 +45,8 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 ## 自动保存（LibreOfficeEditor.vue）
 
 触发链：worker modified → 节流 → onDocModified 置 dirty → scheduleAutoSave（延迟 max(200, min(2500, 15000-脏龄))）→ autoSave：**命令在飞（_cmdBusy>0）或距上次命令<1.5s 且脏龄<60s 时让路 2s 重试**（防 export 冻结 Qt 事件循环，PR#182）→ saveDocument → export_document → 整文件 multipart POST /api/files/{id}/upload。失败保持 dirty、15s 慢速重试。flushSave 在 tab 关闭（~:5051）与 LRU 淘汰前 await。
+
+**后端就地改了文件后重载活动实例**：`reloadFromBackend()`（版本退回 / 检查点恢复 / AI 直接改文件都该走它）。组件**不 watch `file`**，模板 key 也只含 `file.id`——改 `wpsFileId` 不会让正在显示的实例重新加载，必须显式调这个方法。它按序：取消 `_saveTimer` + 清 `dirty` → 等在途 `saving` 结束 → 清 `_bytesPromise`（预取的是旧字节）→ `loadDocument()` 就地 `load_document` 换文档 → 再清一次脏（retarget 里设 `RecordChanges` 会触发一次 modified）。失败则置 `docLoadFailed`（画布上还是旧内容，保存闸必须落下）。`loadDocument()` 返回 `true`=真换了文档、`false`=后端 0 字节（新建文件，保留空白 boot 文档）。宿主侧入口 `librePool.js` 的 `reloadActiveLibreInstances(fileId)`。**不能用 `closeFile`/淘汰活动实例代替**——那会 `flushSave` 把旧字节写回。
 
 守卫（防空文档覆盖，PR#194）：`docLoadFailed` 闸——load 失败或"元数据非空却下载 0 字节"（fileSize>0 而 bytes 空）时置位，此后 onDocModified 与 saveDocument 一律拒绝；fileSize==0 才当新建空白。**该编辑器存/取走整文件 XHR，不含分片上传**。
 

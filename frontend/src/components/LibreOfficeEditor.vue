@@ -289,6 +289,9 @@ export default {
         .then((buf) => { this.appendLog('文档字节预取完成 / prefetched ' + (buf ? buf.byteLength : 0) + ' bytes in ' + (Date.now() - t0) + 'ms'); return buf })
         .catch((e) => { this.appendLog('预取失败（加载时重试）/ prefetch failed: ' + (e && e.message ? e.message : e)); return null })
     },
+    // 返回 true 表示 worker 里的文档已被换成后端字节；false 表示后端是空内容
+    // （新建/未保存文件），保留 boot 出来的空白文档。reloadFromBackend 靠这个
+    // 区分「换成功了」和「什么都没换」——后者在重载语境下必须当失败处理。
     async loadDocument() {
       const f = this.file
       const fileId = f.wpsFileId || f.id
@@ -307,7 +310,7 @@ export default {
         // "新建空白文档"——那会让后续编辑以空文档覆盖真文件。按加载失败走。
         if (f.fileSize > 0) throw new Error('文件非空（' + f.fileSize + ' bytes）但下载到 0 字节，拒绝按空白文档打开')
         this.appendLog('文档为空（新建/未保存）→ 显示空白文档 / empty doc → blank editor: ' + name)
-        return
+        return false
       }
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
       this.bootMilestone(86, 95, '正在打开文档')
@@ -319,6 +322,57 @@ export default {
       const res = await this.executor.executeCommand('load_document', { bytes, name, authorName })
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
+      return true
+    },
+    // 后端就地覆盖了本文件的内容（版本退回 / 检查点恢复 / AI 直接改文件），而
+    // worker 里端着的还是改前的文档：律师继续编辑，autosave 就会把「旧内容 +
+    // 新编辑」写回去，把后端的改动冲掉。这里就地换文档——不重挂载（不重启
+    // WASM 引擎，也不动保活池状态机），更不经 closeFile（那会先 flushSave 把
+    // 旧字节落盘，正是要防的事故本身）。
+    //
+    // 换文档前必须先停掉自动保存：取消定时器 + 清脏 + 等在途保存结束。否则旧
+    // 内容的 export 还排在队里，换完文档照样把旧字节传上去。重载语义就是丢弃
+    // 编辑器内的本地改动（后端内容是权威），所以清脏不需要征询。
+    async reloadFromBackend() {
+      if (!this.file || !this.executor || !this.ready) {
+        this.appendLog('reload skipped: 编辑器未就绪')
+        return false
+      }
+      const cancelAutoSave = () => {
+        clearTimeout(this._saveTimer)
+        this._saveTimer = null
+        this.dirty = false
+        this._dirtySince = 0
+      }
+      cancelAutoSave()
+      // 在途 export/upload 期间不能换文档（export 读的是 worker 当前文档）——
+      // 等它结束，其间新来的 modify 同样丢弃。
+      while (this.saving) await new Promise((r) => setTimeout(r, 100))
+      cancelAutoSave()
+      // 预取到的是改前的字节，必须重新下载。
+      this._bytesPromise = null
+      this.dlLoaded = 0
+      this.dlTotal = 0
+      const prevStatus = this.statusText
+      this.statusText = '重新加载中…'
+      try {
+        const loaded = await this.loadDocument()
+        if (!loaded) throw new Error('后端返回 0 字节，未替换编辑器内文档')
+        // load_document 的 retarget 重装了 modify listener 并重置 RecordChanges，
+        // 换完再清一次脏（retarget 里设 RecordChanges 会触发一次 modified）。
+        this.docLoadFailed = false
+        cancelAutoSave()
+        this.statusText = prevStatus.indexOf('失败') === -1 ? prevStatus : '就绪'
+        this.appendLog('reload: 已就地换成后端最新内容')
+        return true
+      } catch (e) {
+        // 换文档失败 = 画布上仍是改前内容。保存闸必须落下，否则下一次 autosave
+        // 会用旧内容覆盖后端刚改好的文件。
+        this.docLoadFailed = true
+        this.statusText = '重新加载失败，内容已过期'
+        this.appendLog('reload failed: ' + (e && e.message ? e.message : e))
+        return false
+      }
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
     // but ArrayBuffer (the bytes we relay into the worker).

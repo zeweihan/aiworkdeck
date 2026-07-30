@@ -40,7 +40,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 - `frontend/src/config/leftSidebarPlugins.js`（:43-50）：固定入口 `version`（图标为时钟 SVG path，非图片资源），已在 `LEFT_SIDEBAR_PLUGINS` 数组里，`getPluginsForUser('CLIENT')` 不返回它（CLIENT 只见 `dd-files`，与后端权限口径一致）。
 - 后端触发点：`ProjectFileService.signalChange()`（:1171）与 `FileController.signalChange()`（:85）两处调用 `workSessionService.onChangeSignal(...)`，都用 try/catch 包死、绝不阻断文件操作/上传。
 - **退回后重载打开中的编辑器（响应驱动，不走 SSE）**：`VersionNodeDetail.confirmRevert` 拿到 `revertToVersion` 响应里的 `affectedFileIds` 随 `reverted` 事件上抛 → `VersionTimeline.onReverted` → `VersionPanel.onReverted`（`refresh()` + `$emit('reverted-files', ids)`）→ `project-overview.vue` 的 `@reverted-files="onVersionRevertedFiles"` → `fileOpenTabs.js` 的 `onVersionRevertedFiles()`：只对左右两窗格里当前打开、id 命中、`useLibreEditor` 为真的标签，复用 `agentClientActions.js` 的 `handleEditorReloadFile`（AI 改文档后刷新编辑器走的同一条路）。**绝不能用 `closeFile` 实现重载**——它会先 `flushSave`，把退回前的旧字节写回覆盖退回结果。
-
+  - `handleEditorReloadFile` 分两半处理：**非活动**保活实例摘出 `libreLruKeys` 卸载（下次激活重挂载）；**当前正显示**的实例摘不掉（活动文件必进池），走 `librePool.js` 的 `reloadActiveLibreInstances(fileId)` → `LibreOfficeEditor.reloadFromBackend()` 就地 `load_document` 换文档。缺了后半段就是律师看着的那份不刷新，autosave 把「旧内容 + 新编辑」写回、退回被冲掉（真机复现过，见「已知地雷」第 11 条）。
 ## 核心契约
 
 **工作段状态机**：`ACTIVE → MERGED | DISCARDED`（`WorkSession.Status`，无回头路）。同一项目同一时刻至多一个 ACTIVE（`findFirstByProjectIdAndStatus`）。`resumeSession()` 用于崩溃/强杀后回到未结束的工作段分支，不改变状态。
@@ -65,6 +65,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 8. **不要在 `src/test/resources` 放 classpath 根的 `schema.sql`/`application-test.yml`**——会全局影响所有嵌入式数据库测试。测试配置用类级 `@TestPropertySource` 就地指定（`WorkSessionRepositoryTest.java` :19-23），H2 保留字冲突用连接串 `NON_KEYWORDS=VALUE`（`MODE=PostgreSQL;NON_KEYWORDS=VALUE;DB_CLOSE_DELAY=-1`，与既有 `IdorAuthIntegrationTest`/`DesktopContextSmokeTest` 同一约定）。
 9. **`MergeOutcome.fastForward` 字段目前恒为 `false`**——`merge()` 里没有真正判断是否发生过快进，直接写死 `false` 构造 `MergeOutcome`（:346）。测试名字里出现的 `mergeIsFastForwardWhenMainUntouched` 测的是「即使可以快进，行为上也被强制变成非快进」，不是这个字段的取值真实性——不要被字段名和测试名误导去做「按字段值分支」的新功能。
 10. **`revertTo` 绝不能靠 `EditorBridgeService` 的 SSE 通知打开中的编辑器重载**——踩过一次真实的生产惰性代码：`EditorBridgeService.sendReloadFileAction` 开头 `if (currentConversationId == null) return`，那个 ThreadLocal 只有 `AgentOrchestrator` 在 AI 工具调用期间设置；`revertTo` 唯一的调用方 `VersionController.revert` 是普通 REST 端点（律师从时间线点按钮），线程上永远没有会话 id，通知永远发不出去，单测却因为 mock 了 `EditorBridgeService` 全绿，问题只有真机才暴露。修复后 `WorkSessionService` 不再注入 `EditorBridgeService`，改走响应驱动：`revertTo` 把 `affectedFileIds` 随返回值带回去，前端自己决定重载谁（见上方「前端集成点」）。以后任何「后端主动推给前端」的新功能，先确认对应的通知通道在目标调用路径上到底有没有值，不要被单测的 mock 掩盖过去。
+11. **`revertTo` 不改 `wpsFileId`，所以任何「靠键变化触发重挂载」的重载都不会发生**——`LibreOfficeEditor` 既不 `watch` `file`，模板 key 也只含 `file.id`（`project-overview.vue` `:key="'libre-left-' + file.id"`），所以「后端 bump 一个 id 前端就会重新加载」这个流传下来的假设本来就不成立（`DocumentCheckpointService.restore` 同样只 `storage.save` 不 bump，同一条链路同源潜伏）。重载活动实例只有一条路：显式调 `LibreOfficeEditor.reloadFromBackend()` 就地换文档。真机反证跑过：不调它时编辑器里仍是「退回前内容 + 新编辑」，25 秒后后端文件被 autosave 覆盖成旧内容。
 
 ## 验证
 
