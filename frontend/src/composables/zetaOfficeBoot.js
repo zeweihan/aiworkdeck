@@ -99,22 +99,26 @@ export function bootZetaOffice(options = {}) {
     const fontList = [].concat(fontUrls || [], fontUrl ? [fontUrl] : [])
       .map((f) => (typeof f === 'string' ? { url: f } : f))
     const availableByCategory = {} // category -> registered family name
-    for (let i = 0; i < fontList.length; i++) {
-      const f = fontList[i]
+    // Fetch in parallel (serial awaits added the fonts' download times up into
+    // boot); process results in fontList order so injections and the
+    // availableByCategory first-hit-wins semantics stay deterministic.
+    const fontFetches = await Promise.all(fontList.map(async (f, i) => {
       try {
         const r = await fetch(f.url)
-        if (r.ok) {
-          const bytes = new Uint8Array(await r.arrayBuffer())
-          const base = String(f.url).split('?')[0].split('/').pop() || ('font-' + i)
-          injections.push({ path: '/instdir/share/fonts/truetype/AAA-' + base, bytes })
-          if (f.category && f.family && !availableByCategory[f.category]) availableByCategory[f.category] = f.family
-          log('CJK font fetched: ' + base + ' (' + Math.round(bytes.length / 1024) + ' KB)')
-        } else {
-          log('CJK font not found at ' + f.url + ' (skipping)')
-        }
+        if (!r.ok) { log('CJK font not found at ' + f.url + ' (skipping)'); return null }
+        const bytes = new Uint8Array(await r.arrayBuffer())
+        const base = String(f.url).split('?')[0].split('/').pop() || ('font-' + i)
+        return { f, base, bytes }
       } catch (e) {
         log('CJK font fetch failed: ' + f.url + ' — ' + e + ' (skipping)')
+        return null
       }
+    }))
+    for (const hit of fontFetches) {
+      if (!hit) continue
+      injections.push({ path: '/instdir/share/fonts/truetype/AAA-' + hit.base, bytes: hit.bytes })
+      if (hit.f.category && hit.f.family && !availableByCategory[hit.f.category]) availableByCategory[hit.f.category] = hit.f.family
+      log('CJK font fetched: ' + hit.base + ' (' + Math.round(hit.bytes.length / 1024) + ' KB)')
     }
 
     // --- CJK font-name aliases (fontconfig conf.d) ---
