@@ -475,4 +475,58 @@ class DraftAdoptTest {
                 () -> svc.abandonDraft(7L, 99999L, 1L, "韩泽伟"));
         assertTrue(e.isUserFacing());
     }
+
+    // ---- 9. 三个方法在 MERGING 态时被守卫拒绝 ------
+
+    @Test
+    void endSessionRejectsWhileMerging() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+        assertTrue(repoSvc.repositoryMerging(7L), "前置：应该停在待裁决状态");
+
+        VersionException e = assertThrows(VersionException.class,
+                () -> svc.endSession(7L, 1L, "韩泽伟", "应该被拒绝"));
+
+        assertTrue(e.isUserFacing());
+        assertEquals("请先处理正在进行的采纳", e.getMessage());
+        assertTrue(repoSvc.repositoryMerging(7L), "守卫后仍在待裁决状态");
+        assertEquals(WorkSession.Status.ACTIVE, sessions.get(scene.draftId()).getStatus(),
+                "稿仍为 ACTIVE");
+    }
+
+    @Test
+    void discardSessionRejectsWhileMerging() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+        assertTrue(repoSvc.repositoryMerging(7L), "前置：应该停在待裁决状态");
+
+        VersionException e = assertThrows(VersionException.class,
+                () -> svc.discardSession(7L, 1L));
+
+        assertTrue(e.isUserFacing());
+        assertEquals("请先处理正在进行的采纳", e.getMessage());
+        assertTrue(repoSvc.repositoryMerging(7L), "守卫后仍在待裁决状态");
+        assertEquals(WorkSession.Status.ACTIVE, sessions.get(scene.draftId()).getStatus(),
+                "稿仍为 ACTIVE");
+    }
+
+    @Test
+    void revertToRejectsWhileMerging() throws Exception {
+        db.put(501L, file(501L, "合同.txt"));
+
+        ConflictScene scene = stageAdoptConflict("合同.txt");
+        String mainTipBefore = repoSvc.resolveRef(7L, repoSvc.mainBranch());
+        assertTrue(repoSvc.repositoryMerging(7L), "前置：应该停在待裁决状态");
+
+        VersionException e = assertThrows(VersionException.class,
+                () -> svc.revertTo(7L, mainTipBefore, 1L, "韩泽伟"));
+
+        assertTrue(e.isUserFacing());
+        assertEquals("请先处理正在进行的采纳", e.getMessage());
+        assertTrue(repoSvc.repositoryMerging(7L), "守卫后仍在待裁决状态");
+        assertEquals(WorkSession.Status.ACTIVE, sessions.get(scene.draftId()).getStatus(),
+                "稿仍为 ACTIVE");
+    }
 }

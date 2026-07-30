@@ -417,6 +417,7 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            requireNotMerging(projectId);
             WorkSession s = activeSession(projectId)
                     .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
 
@@ -469,6 +470,7 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            requireNotMerging(projectId);
             WorkSession s = activeSession(projectId)
                     .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
 
@@ -522,6 +524,7 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            requireNotMerging(projectId);
             cancelPending(projectId);
 
             // 先给当前状态留一笔，保证「退回」这个动作本身可撤销
