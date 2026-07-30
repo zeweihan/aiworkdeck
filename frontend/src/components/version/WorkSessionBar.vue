@@ -154,14 +154,22 @@ export default {
 
 <style lang="scss" scoped>
 .session-bar {
-  display: flex; align-items: center; gap: 12rpx;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12rpx;
   padding: 16rpx 20rpx; border-bottom: 1px solid #eee;
 }
 .session-dot {
   width: 14rpx; height: 14rpx; border-radius: 50%; background: #C8A45D;
 }
 .draft-dot { background: #7A5FC0; }
-.session-text { font-size: 26rpx; color: #333; flex: 1; }
+/* 稿态一行有 3 个操作按钮（回到主线工作/采纳这一稿/放弃这一稿），加上这段文字，
+   窄侧栏下自然宽度之和远超容器宽度。flex 默认不换行时，session-text（flex:1，
+   会被按钮的 flex-shrink:0 挤到只剩几像素）与溢出的按钮一起被侧栏容器的
+   overflow 裁切掉——按钮仍在 DOM 里、也仍"可见"（不是 display:none），但视觉
+   上被别的内容盖住，真实点击落在盖住它的那块内容上，跟"稿态选择器存在"这条
+   断言无关，是另一种假阳性（e2e 实测：elementFromPoint 在按钮几何坐标处命中的
+   是编辑区内容，不是按钮本身）。min-width 防止文字被挤到只剩几像素竖排；
+   wrap 让按钮在窄侧栏下换行，而不是被裁切成不可点。 */
+.session-text { font-size: 26rpx; color: #333; flex: 1; min-width: 200rpx; }
 .session-idle { color: #999; }
 .session-btn { flex-shrink: 0; }
 

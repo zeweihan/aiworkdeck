@@ -539,6 +539,237 @@ try {
       { timeout: 10000 },
     )
   })
+
+  // ============ J10 另起一稿 / 双向切线 / 采纳（冲突三选一）/ 放弃 ============
+  // 第 3 期新增：从任意版本另起一稿并命名、主线与稿之间双向切换（两线内容与文件树
+  // 完全隔离）、采纳一稿（冲突时逐文件三选一）、放弃一稿。计划 Task 8 节七步旅程。
+  // 断言认三个新组件各自独有的选择器（WorkSessionBar 的 .draft-dot 稿态标记 /
+  // DraftList 的 .draft-list / AdoptConflictDialog 的 .adopt-dialog、.adopt-row-name），
+  // 不用 body innerText 包含——第 2 期终审 C1（对比标签假阳性）的直接教训。
+  //
+  // 与 brief 转述有一处出入，读过 WorkSessionBar.vue/DraftList.vue 实际模板后按代码
+  // 改正：brief 第 5 步字面写了两次"回主线"，第二次夹在"稿上也改文件 A"与"采纳这
+  // 一稿"之间——但"采纳这一稿"按钮只存在于 WorkSessionBar 的稿态模板里
+  // （v-if="onDraft"，DraftList 没有采纳入口），必须仍站在稿上才点得到它；
+  // WorkSessionService.adoptDraft 自己"锁内先无条件走一次 switchToMainline"（方法
+  // 注释原话："律师按下「采纳这一稿」时通常正站在稿上，必须先停靠稿、回到主线侧
+  // 才能合并"）。第二次"回主线"描述的是这个后端内部的停靠动作，不是一次手工点
+  // 击——测试按实际 UI 走，直接在稿态下点「采纳这一稿」。
+  console.log('== J10 另起一稿与采纳 ==')
+
+  const j10Base = path.join(OUT, 'qa-J10冲突文件.txt')
+  const j10DraftOnly = path.join(OUT, 'qa-J10稿专属文件.txt')
+  fs.writeFileSync(j10Base, 'QA J10 垫底文件内容\n')
+  fs.writeFileSync(j10DraftOnly, 'QA J10 稿专属文件（只应在稿上看到）\n')
+
+  // 裸 REST 覆盖同一 wpsFileId 的字节——与 J9 造 MODIFY 同一手段，这里用来在两条线
+  // 上分别改同一个文件、制造一次真实的三方合并冲突（同一段文本两边改成不同内容）。
+  const restOverwrite = async (fileName, content) => {
+    const list = await api('/api/projects/' + QA.projectId + '/files')
+    const f = (Array.isArray(list) ? list : []).find((x) => x.name === fileName)
+    if (!f || !f.wpsFileId) throw new Error('找不到 ' + fileName + ' 或其 wpsFileId: ' + JSON.stringify(list).slice(0, 200))
+    const form = new FormData()
+    form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
+    const r = await fetch(BACKEND + '/api/files/' + f.wpsFileId + '/upload', {
+      method: 'POST',
+      headers: { 'X-Session-Id': QA.sid },
+      body: form,
+    })
+    const j = await r.json()
+    if (!j || j.code !== 0) throw new Error('REST 直传失败: ' + JSON.stringify(j))
+    return f.wpsFileId
+  }
+
+  // ---- 1. 开启版本记录（J9 已开）→ 一段命名工作垫底，给后面的另起一稿一个基点 ----
+  await step('J10 垫底：上传冲突测试文件并命名结束', () =>
+    runWorkSession(j10Base, 'qa-J10冲突文件', 'J10 垫底工作'))
+
+  // ---- 2. 节点详情「从这一版另起一稿」→ 命名「试验稿」→ 断言状态条进入稿态 ----
+  await step('打开垫底节点详情', async () => {
+    await mouseClickText('J10 垫底工作')
+    await waitText('从这一版另起一稿')
+  })
+
+  await step('从这一版另起一稿并命名「试验稿」', async () => {
+    await mouseClickText('从这一版另起一稿')
+    await page.waitForSelector('.awd-dialog .uni-input-input', { timeout: 10000 })
+    const input = await page.$('.awd-dialog .uni-input-input')
+    await input.click(); await input.type('试验稿', { delay: 15 })
+    await sleep(300) // 同款 v-model 去抖定居延迟，见前面命名弹窗的注释
+    await mouseClickText('开始')
+  })
+
+  await step('状态条进入稿态（认 WorkSessionBar 的 draft-dot，不用 body innerText 包含）', async () => {
+    await page.waitForFunction(() => {
+      const dot = document.querySelector('.session-bar .draft-dot')
+      const text = document.querySelector('.session-bar .session-text')
+      return !!dot && !!text && text.innerText.includes('试验稿')
+    }, { timeout: 10000 })
+  })
+
+  // ---- 3. 稿上上传一个新文件 → 「回到主线工作」→ 断言稿态消失、该文件从文件树消失
+  //         （稿的改动不漏到主线） ----
+  await step('稿上上传专属文件', async () => {
+    await mouseClickSel('[title="资源管理器"]')
+    await uploadOne(j10DraftOnly, 'qa-J10稿专属文件')
+    await waitText('qa-J10稿专属文件', 20000)
+  })
+
+  await step('回到主线工作后稿态消失', async () => {
+    await mouseClickSel('[title="版本"]')
+    await mouseClickText('回到主线工作')
+    await page.waitForFunction(
+      () => !!document.querySelector('.session-bar .session-idle'),
+      { timeout: 10000 },
+    )
+  })
+
+  await step('主线上看不到稿专属文件', async () => {
+    await mouseClickSel('[title="资源管理器"]')
+    await page.waitForFunction(() => {
+      const t = document.querySelector('.file-tree')
+      return !!t && !t.innerText.includes('qa-J10稿专属文件')
+    }, { timeout: 10000 })
+  })
+
+  // ---- 4. 「切到这一稿」→ 断言文件回来（两线内容隔离的正反双证） ----
+  await step('切到这一稿', async () => {
+    await mouseClickSel('[title="版本"]')
+    await waitText('进行中的稿')
+    await mouseClickText('切到这一稿')
+    await page.waitForFunction(
+      () => !!document.querySelector('.session-bar .draft-dot'),
+      { timeout: 10000 },
+    )
+  })
+
+  await step('稿专属文件确实回来了', async () => {
+    await mouseClickSel('[title="资源管理器"]')
+    await page.waitForFunction(() => {
+      const t = document.querySelector('.file-tree')
+      return !!t && t.innerText.includes('qa-J10稿专属文件')
+    }, { timeout: 15000 })
+  })
+
+  // ---- 5. 回主线 → 主线上裸 REST 改文件 → 稿上也裸 REST 改同一文件 → 「采纳这一稿」
+  //         → 断言三选一弹窗出现且列出该文件（认 AdoptConflictDialog 选择器） ----
+  await step('回到主线工作', async () => {
+    await mouseClickSel('[title="版本"]')
+    await mouseClickText('回到主线工作')
+    await page.waitForFunction(
+      () => !!document.querySelector('.session-bar .session-idle'),
+      { timeout: 10000 },
+    )
+  })
+
+  await step('主线上裸 REST 改冲突测试文件', () =>
+    restOverwrite('qa-J10冲突文件.txt', 'QA J10 主线修改内容（用于制造冲突）\n'))
+
+  await step('结束主线上这段隐式打开的工作（采纳前置：不能带着 ACTIVE 工作段采纳）', async () => {
+    // REST 直传会隐式在主线上开一段工作段（onChangeSignal 对非稿分支的口径），
+    // adoptDraft 要求"没有进行中的工作"，必须先收尾，理由见领域文档核心契约。
+    await mouseClickSel('[title="资源管理器"]')
+    await mouseClickSel('[title="版本"]')
+    await waitText('工作中')
+    await mouseClickText('结束本次工作')
+    await page.waitForSelector('.awd-dialog .uni-input-input', { timeout: 10000 })
+    const input = await page.$('.awd-dialog .uni-input-input')
+    await input.click(); await input.type('J10 主线追加修改', { delay: 15 })
+    await sleep(300)
+    await mouseClickText('完成')
+    await page.waitForFunction(
+      () => !!document.querySelector('.session-bar .session-idle'),
+      { timeout: 10000 },
+    )
+  })
+
+  await step('切回稿上，裸 REST 改同一文件（制造真实冲突）', async () => {
+    await mouseClickText('切到这一稿')
+    await page.waitForFunction(() => !!document.querySelector('.session-bar .draft-dot'), { timeout: 10000 })
+    await restOverwrite('qa-J10冲突文件.txt', 'QA J10 稿修改内容（用于制造冲突）\n')
+  })
+
+  await step('点击「采纳这一稿」，三选一弹窗出现且列出冲突文件', async () => {
+    // 直接在稿态下点，不手工切回主线——adoptDraft 内部自己会先停靠（见本节头部注释）。
+    await mouseClickText('采纳这一稿')
+    await page.waitForFunction(() => {
+      const dlg = document.querySelector('.adopt-dialog')
+      if (!dlg || dlg.getClientRects().length === 0) return false
+      const row = dlg.querySelector('.adopt-row-name')
+      return !!row && row.innerText.includes('qa-J10冲突文件.txt')
+    }, { timeout: 15000 })
+  })
+
+  // ---- 6. 选「两份都留」→ 确认采纳 → 断言文件树同时出现《A》与《A（来自：试验稿）》、
+  //         时间线出现「采纳：试验稿」节点、稿列表清空 ----
+  await step('选「两份都留」并确认采纳', async () => {
+    await mouseClickText('两份都留')
+    await mouseClickText('确认采纳')
+    await page.waitForFunction(
+      () => !document.querySelector('.adopt-dialog') && !document.querySelector('.adopt-collapsed-bar'),
+      { timeout: 15000 },
+    )
+  })
+
+  await step('文件树同时出现两份文件', async () => {
+    await mouseClickSel('[title="资源管理器"]')
+    await page.waitForFunction(() => {
+      const t = document.querySelector('.file-tree')
+      return !!t
+        && t.innerText.includes('qa-J10冲突文件.txt')
+        && t.innerText.includes('qa-J10冲突文件（来自：试验稿）.txt')
+    }, { timeout: 15000 })
+  })
+
+  await step('时间线出现「采纳：试验稿」节点', async () => {
+    await mouseClickSel('[title="版本"]')
+    await page.waitForFunction(() => {
+      const titles = [...document.querySelectorAll('.timeline-node .node-title')].map((e) => e.innerText || '')
+      return titles.some((t) => t.includes('采纳：试验稿'))
+    }, { timeout: 15000 })
+  })
+
+  await step('稿列表清空', async () => {
+    await page.waitForFunction(() => !document.querySelector('.draft-list'), { timeout: 10000 })
+  })
+
+  // ---- 7. 再开一稿 → 「放弃这一稿」→ 确认 → 断言回主线、稿列表空、时间线无采纳节点 ----
+  // 稿列表刚清空（DraftList 整体 v-if="drafts.length"），「另起一稿」按钮此刻不在
+  // DOM 里，只能仍走节点详情的「从这一版另起一稿」入口——从刚采纳完的这个节点开。
+  await step('从「采纳：试验稿」节点再开一稿', async () => {
+    await mouseClickText('采纳：试验稿')
+    await waitText('从这一版另起一稿')
+    await mouseClickText('从这一版另起一稿')
+    await page.waitForSelector('.awd-dialog .uni-input-input', { timeout: 10000 })
+    const input = await page.$('.awd-dialog .uni-input-input')
+    await input.click(); await input.type('作废稿', { delay: 15 })
+    await sleep(300)
+    await mouseClickText('开始')
+    await page.waitForFunction(() => {
+      const dot = document.querySelector('.session-bar .draft-dot')
+      const text = document.querySelector('.session-bar .session-text')
+      return !!dot && !!text && text.innerText.includes('作废稿')
+    }, { timeout: 10000 })
+  })
+
+  await step('放弃这一稿并确认', async () => {
+    await mouseClickText('放弃这一稿')
+    // confirmAbandon 走 uni.showModal，浏览器目标下确认按钮默认英文文案，同款双试。
+    try { await mouseClickText('确定') } catch { await mouseClickText('OK') }
+    await page.waitForFunction(
+      () => !!document.querySelector('.session-bar .session-idle'),
+      { timeout: 10000 },
+    )
+  })
+
+  await step('稿列表空、时间线没有这一稿的采纳节点', async () => {
+    const noDraftList = await page.evaluate(() => !document.querySelector('.draft-list'))
+    if (!noDraftList) throw new Error('放弃后稿列表仍非空')
+    const hasBogusAdopt = await page.evaluate(() =>
+      [...document.querySelectorAll('.timeline-node .node-title')]
+        .some((e) => (e.innerText || '').includes('作废稿')))
+    if (hasBogusAdopt) throw new Error('放弃后时间线出现了不该有的采纳节点')
+  })
 } finally {
   await browser.close()
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）
