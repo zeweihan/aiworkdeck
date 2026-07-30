@@ -572,6 +572,7 @@
             @compare-file="onVersionCompareFile"
             @clear-file-filter="versionFileFilter = null"
             @reload-files="onVersionReloadFiles"
+            @adopt-conflict="adoptConflictPending = $event"
           />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
@@ -1263,6 +1264,17 @@
 
       <!-- OCR 结果不再使用弹窗：改为框选后的快捷命令条 -->
 
+      <!-- 采纳等待处理：AdoptConflictDialog 只活在版本面板里，律师一切去别的面板
+           （资源管理器、AI……）就什么提示都没有了，而这期间后端停在待裁决状态、
+           版本捕获整体关闭。这条固定条是面板之外唯一的提示与入口。 -->
+      <view
+        v-if="adoptConflictPending && leftPaneKey !== 'version'"
+        class="adopt-pending-bar"
+      >
+        <text class="adopt-pending-text">有一次采纳等待处理</text>
+        <text class="adopt-pending-go" @tap="goHandleAdoptConflict">去处理</text>
+      </view>
+
     </view>
   </view>
 </template>
@@ -1315,6 +1327,7 @@ import {
   getAssistants, // Added
   getPlugins, // Added
   getFileText,
+  getVersionStatus, // 版本面板之外也要知道「有没有采纳等待处理」
   promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
@@ -1398,6 +1411,9 @@ export default {
       leftPaneKey: null, // Initialize to null to prevent premature loading
       // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
       versionFileFilter: null,
+      // 有一次采纳停在待裁决状态（/status 的 adoptConflict）。版本面板之外也要提示，
+      // 见模板里的 .adopt-pending-bar。版本面板打开时由它的 /status 拉取实时同步。
+      adoptConflictPending: false,
       // 文件树批量选择模式（由页面控制开关）
       fileBatchMode: false,
       checkedFileIds: [],
@@ -1950,6 +1966,7 @@ export default {
       this.projectId = Number(query.id)
       this.loadProjectInfo()
       this.loadProjectMembers()
+      this.checkAdoptConflict()
 
       // Initialize Staging Area (Persistent)
       // We don't await here to avoid blocking page load, but ensuring folder exists is critical
@@ -2342,6 +2359,23 @@ export default {
     onFileHistory(file) {
       this.versionFileFilter = { fileId: file.id, name: file.name }
       if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+    // 「有一次采纳等待处理」固定条的入口：切到版本面板，AdoptConflictDialog 会随
+    // 面板的 /status 自动弹出（它本来就是这么起来的，含崩溃后重开的场景）。
+    goHandleAdoptConflict() {
+      if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+    // 进页面时问一次「有没有停在待裁决的采纳」：版本面板可能整个会话都没被打开过
+    // （比如上次崩在裁决窗口里、这次进来直接停在资源管理器），那样就没有任何东西
+    // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管。
+    async checkAdoptConflict() {
+      if (!this.projectId) return
+      try {
+        const res = await getVersionStatus(this.projectId)
+        this.adoptConflictPending = !!(res && res.data && res.data.adoptConflict)
+      } catch (e) {
+        console.warn('[Version] 读取采纳状态失败', e)
+      }
     },
 
     // EasyVoice Integration

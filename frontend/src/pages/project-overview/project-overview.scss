@@ -3909,3 +3909,28 @@ $bg-white: #FFFFFF;
   opacity: 1;
 }
 
+
+/* 采纳等待处理：版本面板之外的固定提示条（见 project-overview.vue 的 .adopt-pending-bar）。
+   形制与 AdoptConflictDialog 的收起条一致，位置错开（top 而不是 bottom），避免和它叠在一起。 */
+.adopt-pending-bar {
+  position: fixed;
+  left: 50%;
+  top: 20px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  background: #12344D;
+  color: #fff;
+  font-size: 13px;
+  z-index: 9999;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.adopt-pending-go {
+  text-decoration: underline;
+  cursor: pointer;
+  flex-shrink: 0;
+}

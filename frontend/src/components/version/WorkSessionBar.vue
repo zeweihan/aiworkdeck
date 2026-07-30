@@ -138,8 +138,11 @@ export default {
           if (this.busy) return
           this.busy = true
           try {
-            await discardWorkSession(this.projectId)
-            this.$emit('discarded')
+            // 丢弃改写了磁盘（切回主线内容），打开中的编辑器必须跟着重载，
+            // 否则下一次 autosave 会把刚被丢弃的工作原样写回去（同退回/切线）。
+            const res = await discardWorkSession(this.projectId)
+            const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
+            this.$emit('discarded', affectedFileIds)
           } catch (e) {
             uni.showToast({ title: (e && e.message) || '丢弃失败，请稍后重试', icon: 'none' })
           } finally {

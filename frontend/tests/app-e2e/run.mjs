@@ -700,6 +700,29 @@ try {
     }, { timeout: 15000 })
   })
 
+  // ---- 5.5 裁决窗口期切去别的面板：三选一弹窗随版本面板卸载消失，页面级固定条必须
+  //          接住（P3 终审 C1 第 3 层）。这期间后端停在待裁决、版本捕获整体关闭，没有
+  //          这条提示律师会以为采纳早就结束了。认 .adopt-pending-bar 真渲染 + 几何可见，
+  //          不用 body innerText 包含（第 2 期终审 C1 的教训）。 ----
+  //          走的是真实路径：弹窗展开时 .awd-mask 是全屏遮罩，点侧栏图标只会落在遮罩上
+  //          （实测过），律师要先点「对比」把弹窗收起（AdoptConflictDialog 自己的收起条），
+  //          这时才切得走面板——而那条收起条也随面板一起消失，正是本固定条要接住的空档。
+  await step('切去资源管理器后仍有采纳待处理提示条，点「去处理」能回到裁决现场', async () => {
+    await mouseClickSel('.adopt-row-compare')
+    await page.waitForFunction(
+      () => !!document.querySelector('.adopt-collapsed-bar'), { timeout: 10000 })
+    await mouseClickSel('[title="资源管理器"]')
+    await page.waitForFunction(() => {
+      const bar = document.querySelector('.adopt-pending-bar')
+      return !!bar && bar.getClientRects().length > 0
+    }, { timeout: 10000 })
+    await mouseClickText('去处理')
+    await page.waitForFunction(() => {
+      const dlg = document.querySelector('.adopt-dialog')
+      return !!dlg && dlg.getClientRects().length > 0
+    }, { timeout: 10000 })
+  })
+
   // ---- 6. 选「两份都留」→ 确认采纳 → 断言文件树同时出现《A》与《A（来自：试验稿）》、
   //         时间线出现「采纳：试验稿」节点、稿列表清空 ----
   await step('选「两份都留」并确认采纳', async () => {

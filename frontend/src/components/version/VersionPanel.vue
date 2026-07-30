@@ -21,7 +21,7 @@
         :changed-count="changedCount"
         :on-draft="onDraft"
         @ended="refresh"
-        @discarded="refresh"
+        @discarded="onReload"
         @mainline-resumed="onReload"
         @draft-adopted="onReload"
         @draft-abandoned="onReload"
@@ -76,7 +76,10 @@ export default {
     projectId: { type: [String, Number], required: true },
     fileFilter: { type: Object, default: null },
   },
-  emits: ['compare-file', 'clear-file-filter', 'reload-files'],
+  // adopt-conflict：把「有没有采纳等待处理」同步给页面。本面板一关（切去资源管理器
+  // 等），三选一弹窗随组件卸载消失，而后端仍停在待裁决状态、版本捕获整体关闭——
+  // 页面据此在面板之外挂一条固定提示条（project-overview.vue 的 .adopt-pending-bar）。
+  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -108,6 +111,7 @@ export default {
         this.changedCount = d.changedCount || 0
         this.onDraft = d.onDraft || null
         this.adoptConflict = d.adoptConflict || null
+        this.$emit('adopt-conflict', !!this.adoptConflict)
         this.timelineKey += 1
         this.loadError = false
         if (this.enabled) await this.fetchDrafts()

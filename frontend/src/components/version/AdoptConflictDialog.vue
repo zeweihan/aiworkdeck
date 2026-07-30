@@ -30,8 +30,10 @@
             </view>
           </view>
         </template>
+        <!-- 文案要跟下面那个按钮的字对上：这里唯一可点的出口就是「先不采纳」，
+             说「撤销」会让律师在界面上找不到对应的按钮。 -->
         <view v-else class="adopt-orphan-hint">
-          这次采纳的信息不完整，请先撤销后重试。
+          这次采纳的信息不完整，请点「先不采纳」撤销后重试
         </view>
       </view>
       <view class="awd-footer">

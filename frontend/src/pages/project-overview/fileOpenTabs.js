@@ -448,7 +448,10 @@ export const fileOpenTabsMethods = {
     // 绝对不能用「关闭标签」实现重载：closeFile 关闭有脏改动的 Office 文档前会先
     // flushSave 落盘——那恰好会把版本操作前编辑器里还端着的旧字节写回去，把律师刚做的
     // 操作冲掉，这正是本次要修的数据安全问题本身。
-    onVersionReloadFiles(affectedFileIds) {
+    // 一次版本操作可能同时改写好几份打开中的文件；逐份 toast「文件已更新: X」会互相
+    // 顶掉，律师只看得见最后一条、还以为只更新了一份。多文件时改为静音逐份重载、
+    // 最后聚合成一句。单文件语义一个字不改（仍是原来的逐文件 toast）。
+    async onVersionReloadFiles(affectedFileIds) {
       if (!Array.isArray(affectedFileIds) || !affectedFileIds.length) return
       const idSet = new Set(affectedFileIds)
       const openIds = new Set()
@@ -458,11 +461,19 @@ export const fileOpenTabsMethods = {
       for (const f of this.rightFiles) {
         if (idSet.has(f.id) && this.useLibreEditor(f)) openIds.add(f.id)
       }
+      const many = openIds.size > 1
+      let ok = 0
       for (const fileId of openIds) {
-        // forceActive：这条链上的每一种动作（退回/开稿/切线/采纳/放弃）都是律师亲手
-        // 点出来的，正在显示的那个实例也必须就地换文档——不然下一次 autosave 会把
+        // forceActive：这条链上的每一种动作（退回/开稿/切线/采纳/放弃/丢弃）都是律师
+        // 亲手点出来的，正在显示的那个实例也必须就地换文档——不然下一次 autosave 会把
         // 操作结果冲掉。AI 改文件走的是默认（不强刷）分支，见 handleEditorReloadFile 的注释。
-        this.handleEditorReloadFile({ fileId }, { forceActive: true })
+        const r = await this.handleEditorReloadFile(
+          { fileId }, { forceActive: true, silentSuccessToast: many })
+        if (r) ok++
+      }
+      // 失败的那几份各自已经报过（静音只吞成功提示），这里只汇报成功的份数。
+      if (many && ok) {
+        uni.showToast({ title: `已更新 ${ok} 份打开中的文件`, icon: 'success' })
       }
     },
 }
