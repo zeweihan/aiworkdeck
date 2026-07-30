@@ -96,6 +96,35 @@ public class ProjectTreeManifestService {
      */
     @Transactional
     public SyncReport applyToDatabase(long projectId, TreeManifest manifest) {
+        return apply(projectId, manifest, true);
+    }
+
+    /**
+     * 清单**并集**：把稿的清单叠加到当前数据库上，用于采纳一稿（spec 第 3 期）。
+     *
+     * 与 {@link #applyToDatabase} 共用同一个节点新建/更新内核，只差两条规则：
+     * <ul>
+     *   <li>数据库里有、稿的清单里没有的行**绝不动**——那是主线独有的文件，
+     *       采纳一稿不该让它们消失。这正是「并集」与「同步」的分水岭。</li>
+     *   <li>并集只加不减：已有的行不会被稿的清单从「在用」改成「回收站」。
+     *       理由是切线协议本身会污染稿的清单——切到稿上时，主线独有的行会被
+     *       {@link #applyToDatabase} 判成回收站状态，稿上随后的任何一次自动存档
+     *       都会把这个状态写进稿的清单。照单执行就会在采纳后把主线自己的文件
+     *       从文件树里抹掉。代价是稿上"删进回收站"这个动作不会随采纳带过来
+     *       （软删除不动磁盘文件，律师再删一次即可），比起丢文件这是划算的一边。</li>
+     * </ul>
+     */
+    @Transactional
+    public SyncReport unionApply(long projectId, TreeManifest manifest) {
+        return apply(projectId, manifest, false);
+    }
+
+    /**
+     * applyToDatabase / unionApply 共用的内核。{@code syncDeletions} 为 true 是同步语义
+     * （清单里没有的行进回收站，已有的行也照清单可增可减），为 false 是并集语义
+     * （这两种「减」都不做）。
+     */
+    private SyncReport apply(long projectId, TreeManifest manifest, boolean syncDeletions) {
         try {
             Map<Long, ProjectFile> current = new HashMap<>();
             for (ProjectFile f : projectFileRepository.findByProjectId(projectId)) {
@@ -116,7 +145,11 @@ public class ProjectTreeManifestService {
                 boolean idTakenByOther = existing != null && !sameNode(existing, node);
 
                 if (existing != null && !idTakenByOther) {
-                    if (applyAttributes(existing, node, targetParentId)) {
+                    boolean keepDbLocation =
+                            !syncDeletions && mainlineLocationWins(projectId, existing, node);
+                    if (applyAttributes(existing, node,
+                            keepDbLocation ? existing.getParentId() : targetParentId,
+                            syncDeletions, keepDbLocation)) {
                         projectFileRepository.save(existing);
                         updated++;
                     }
@@ -138,7 +171,9 @@ public class ProjectTreeManifestService {
                 fresh.setProjectId(projectId);
                 fresh.setUserId(userId);
                 fresh.setCreatedAt(LocalDateTime.now());
-                applyAttributes(fresh, node, targetParentId);
+                // 新建的行本来就不存在，照清单原样落地（含回收站状态），
+                // 「并集只加不减」只约束已经存在的行。
+                applyAttributes(fresh, node, targetParentId, true, false);
                 ProjectFile saved = projectFileRepository.save(fresh);
                 if (!Objects.equals(saved.getId(), node.id())) {
                     remap.put(node.id(), saved.getId());
@@ -148,12 +183,14 @@ public class ProjectTreeManifestService {
             }
 
             int softDeleted = 0;
-            for (ProjectFile leftover : current.values()) {
-                if (Boolean.TRUE.equals(leftover.getIsDeleted())) continue;
-                leftover.setIsDeleted(true);
-                leftover.setDeletedAt(LocalDateTime.now());
-                projectFileRepository.save(leftover);
-                softDeleted++;
+            if (syncDeletions) {
+                for (ProjectFile leftover : current.values()) {
+                    if (Boolean.TRUE.equals(leftover.getIsDeleted())) continue;
+                    leftover.setIsDeleted(true);
+                    leftover.setDeletedAt(LocalDateTime.now());
+                    projectFileRepository.save(leftover);
+                    softDeleted++;
+                }
             }
 
             return new SyncReport(created, updated, softDeleted);
@@ -174,20 +211,66 @@ public class ProjectTreeManifestService {
         return Boolean.TRUE.equals(f.getIsFolder()) == n.isFolder();
     }
 
-    /** 返回 true 表示确实改动了字段。 */
-    private boolean applyAttributes(ProjectFile f, TreeManifest.Node n, Long parentId) {
+    /**
+     * 并集语义下的现实校验：稿的清单说这份文件在 A，但合并后的工作区里 A 根本不存在、
+     * 数据库现有的 B 却真实存在——说明主线在稿开出去之后把这份文件改名/移了位，
+     * git 的三方合并已经按主线那一侧落了盘。这时数据库要跟随磁盘现实保留 B，不能照抄
+     * 稿的旧位置，否则文件树里会留下一行指向不存在路径的幽灵，律师双击就是打不开。
+     * 其余情况仍然是 draft-wins（spec 的缺省）。
+     *
+     * 判断本身失败（路径不在本项目前缀下、文件系统异常）一律返回 false 退回缺省：
+     * 清单同步是保险，不能因为多出来的这层校验反而改变原有行为。
+     */
+    private boolean mainlineLocationWins(long projectId, ProjectFile existing, TreeManifest.Node n) {
+        try {
+            String draftRel = repoRelative(projectId, n.filePath());
+            String dbRel = repoRelative(projectId, existing.getFilePath());
+            if (draftRel == null || dbRel == null || draftRel.equals(dbRel)) return false;
+            Path work = repoService.workTree(projectId);
+            return !Files.exists(work.resolve(draftRel)) && Files.exists(work.resolve(dbRel));
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** {@code projects/{id}/xxx} → {@code xxx}；不在本项目前缀下（含文件夹的 null）返回 null。 */
+    private String repoRelative(long projectId, String filePath) {
+        String prefix = "projects/" + projectId + "/";
+        if (filePath == null || !filePath.startsWith(prefix)
+                || filePath.length() <= prefix.length()) {
+            return null;
+        }
+        return filePath.substring(prefix.length());
+    }
+
+    /**
+     * 返回 true 表示确实改动了字段。{@code maySoftDelete} 为 false 时禁止把一条
+     * 「在用」的行改成「回收站」（并集只加不减，见 {@link #unionApply}）。
+     * {@code keepLocation} 为 true 时不动 name/filePath/parentId——主线的改名/移动
+     * 胜出，见 {@link #mainlineLocationWins}。
+     */
+    private boolean applyAttributes(ProjectFile f, TreeManifest.Node n, Long parentId,
+                                    boolean maySoftDelete, boolean keepLocation) {
         boolean changed = false;
-        if (!Objects.equals(f.getParentId(), parentId)) { f.setParentId(parentId); changed = true; }
-        if (!Objects.equals(f.getName(), n.name())) { f.setName(n.name()); changed = true; }
+        if (!keepLocation) {
+            if (!Objects.equals(f.getParentId(), parentId)) { f.setParentId(parentId); changed = true; }
+            if (!Objects.equals(f.getName(), n.name())) { f.setName(n.name()); changed = true; }
+        }
         if (!Objects.equals(Boolean.TRUE.equals(f.getIsFolder()), n.isFolder())) {
             f.setIsFolder(n.isFolder()); changed = true;
         }
         if (!Objects.equals(f.getFileType(), n.fileType())) { f.setFileType(n.fileType()); changed = true; }
         if (!Objects.equals(f.getSortOrder(), n.sortOrder())) { f.setSortOrder(n.sortOrder()); changed = true; }
-        if (!Objects.equals(f.getFilePath(), n.filePath())) { f.setFilePath(n.filePath()); changed = true; }
-        if (Boolean.TRUE.equals(f.getIsDeleted()) != n.isDeleted()) {
-            f.setIsDeleted(n.isDeleted());
-            f.setDeletedAt(n.isDeleted() ? LocalDateTime.now() : null);
+        if (!keepLocation && !Objects.equals(f.getFilePath(), n.filePath())) {
+            f.setFilePath(n.filePath()); changed = true;
+        }
+        boolean targetDeleted = n.isDeleted();
+        if (!maySoftDelete && targetDeleted && !Boolean.TRUE.equals(f.getIsDeleted())) {
+            targetDeleted = false;
+        }
+        if (Boolean.TRUE.equals(f.getIsDeleted()) != targetDeleted) {
+            f.setIsDeleted(targetDeleted);
+            f.setDeletedAt(targetDeleted ? LocalDateTime.now() : null);
             changed = true;
         }
         if (changed) f.setUpdatedAt(LocalDateTime.now());

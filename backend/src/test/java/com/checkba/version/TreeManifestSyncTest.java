@@ -153,4 +153,49 @@ class TreeManifestSyncTest {
         assertNotEquals(1L, folder.getId(), "被占用的 id 应改为新建");
         assertEquals(folder.getId(), child.getParentId(), "子节点 parentId 必须跟着重映射");
     }
+
+    // ---- 清单并集（采纳一稿时用；与上面的同步语义刻意不同） -------------------
+
+    @Test
+    void unionApplyKeepsRowsAbsentFromManifest() {
+        // 并集与同步的分水岭：清单里没有的行是「主线独有的文件」，绝不能进回收站。
+        db.put(1L, f(1L, null, "合同.docx", false, "projects/7/合同.docx", false, 0));
+        db.put(2L, f(2L, null, "主线独有.docx", false, "projects/7/主线独有.docx", false, 1));
+
+        var r = svc.unionApply(7L, new TreeManifest(1, List.of(
+                n(1L, null, "合同.docx", false, "projects/7/合同.docx", false, 0))));
+
+        assertEquals(0, r.softDeleted());
+        assertFalse(db.get(2L).getIsDeleted(), "清单里没有的行必须原样保留");
+    }
+
+    @Test
+    void unionApplyCreatesAndUpdatesFromManifest() {
+        db.put(1L, f(1L, null, "旧名.docx", false, "projects/7/旧名.docx", false, 0));
+
+        var r = svc.unionApply(7L, new TreeManifest(1, List.of(
+                n(1L, null, "新名.docx", false, "projects/7/新名.docx", false, 0),
+                n(9L, null, "稿新增.docx", false, "projects/7/稿新增.docx", false, 1))));
+
+        assertEquals(1, r.updated());
+        assertEquals(1, r.created());
+        assertEquals("新名.docx", db.get(1L).getName(), "稿侧属性应覆盖同一行");
+        assertEquals("稿新增.docx", db.get(9L).getName(), "稿独有的行应新建");
+    }
+
+    @Test
+    void unionApplyRestoresFromRecycleBinButNeverSendsAnActiveRowThere() {
+        // 稿上新建的文件在切回主线时被同步判成回收站状态，采纳时必须靠并集恢复。
+        db.put(1L, f(1L, null, "稿新增.docx", false, "projects/7/稿新增.docx", true, 0));
+        // 反向：主线独有的行在稿的清单里天然带着"已删除"的印子（切到稿上时被同步标掉，
+        // 随后稿上的自动存档又把这个状态写进了稿的清单）——并集只加不减，绝不能照单执行。
+        db.put(2L, f(2L, null, "主线独有.docx", false, "projects/7/主线独有.docx", false, 1));
+
+        svc.unionApply(7L, new TreeManifest(1, List.of(
+                n(1L, null, "稿新增.docx", false, "projects/7/稿新增.docx", false, 0),
+                n(2L, null, "主线独有.docx", false, "projects/7/主线独有.docx", true, 1))));
+
+        assertFalse(db.get(1L).getIsDeleted(), "稿侧标为在用的行应从回收站恢复");
+        assertFalse(db.get(2L).getIsDeleted(), "并集只加不减：在用的行不能被稿的清单送进回收站");
+    }
 }

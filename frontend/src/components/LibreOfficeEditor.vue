@@ -309,6 +309,12 @@ export default {
       this.ready = true
       if (this.statusText.indexOf('失败') === -1) this.statusText = '就绪'
       this.$emit('ready', this.executor)
+      // 装载期间后端把这份文件改掉了（版本退回 / 检查点恢复），刚装进来的是
+      // 预取到的旧字节——不 await，让宿主先拿到 ready 再补一次真重载。
+      if (this._reloadPending) {
+        this._reloadPending = false
+        this.reloadFromBackend()
+      }
     },
     // Kick off the (authed) document download without waiting for the engine.
     // loadDocument() awaits this promise; on failure it falls back to a fresh
@@ -356,6 +362,9 @@ export default {
         this.appendLog('docx 预览渲染失败（保留进度面板）: ' + (e && e.message ? e.message : e))
       }
     },
+    // 返回 true 表示 worker 里的文档已被换成后端字节；false 表示后端是空内容
+    // （新建/未保存文件），保留 boot 出来的空白文档。reloadFromBackend 靠这个
+    // 区分「换成功了」和「什么都没换」——后者在重载语境下必须当失败处理。
     async loadDocument() {
       const f = this.file
       const fileId = f.wpsFileId || f.id
@@ -374,7 +383,7 @@ export default {
         // "新建空白文档"——那会让后续编辑以空文档覆盖真文件。按加载失败走。
         if (f.fileSize > 0) throw new Error('文件非空（' + f.fileSize + ' bytes）但下载到 0 字节，拒绝按空白文档打开')
         this.appendLog('文档为空（新建/未保存）→ 显示空白文档 / empty doc → blank editor: ' + name)
-        return
+        return false
       }
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
       this.bootMilestone(86, 95, '正在打开文档')
@@ -386,6 +395,76 @@ export default {
       const res = await this.executor.executeCommand('load_document', { bytes, name, authorName })
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
+      return true
+    },
+    // 后端就地覆盖了本文件的内容（版本退回 / 检查点恢复 / AI 直接改文件），而
+    // worker 里端着的还是改前的文档：律师继续编辑，autosave 就会把「旧内容 +
+    // 新编辑」写回去，把后端的改动冲掉。这里就地换文档——不重挂载（不重启
+    // WASM 引擎，也不动保活池状态机），更不经 closeFile（那会先 flushSave 把
+    // 旧字节落盘，正是要防的事故本身）。
+    //
+    // 换文档前必须先停掉自动保存：取消定时器 + 清脏 + 等在途保存结束。否则旧
+    // 内容的 export 还排在队里，换完文档照样把旧字节传上去。重载语义就是丢弃
+    // 编辑器内的本地改动（后端内容是权威），所以清脏不需要征询。
+    async reloadFromBackend() {
+      if (!this.file || !this.executor || !this.ready) {
+        // 引擎还在启动（含备胎刚过继、只读预览接力正显示着 docx-preview 的那段）：
+        // worker 里根本还没有文档可换，但 _bytesPromise 里预取的正是退回前的旧字节，
+        // finishDocLoad 到点就会把它装进引擎，随后 autosave 把旧内容写回后端——
+        // 退回被悄悄撤销。所以挂个待办，装载完成后立刻真重载一次。
+        // 只读预览本身无害（它没有保存路径），有害的是它背后那份陈字节。
+        if (this.file && this.loadingOverlayVisible) {
+          this._reloadPending = true
+          this.appendLog('reload deferred: 引擎仍在启动，就绪后立即重载')
+          return true
+        }
+        this.appendLog('reload skipped: 编辑器未就绪')
+        return false
+      }
+      // 清脏 + 等在途保存都拦不住「已经启动、正在 export/upload 路上」的那一笔：
+      // 它读的是换文档之前的 worker 内容，等它 upload 完成就把退回结果覆盖回旧字节。
+      // saving 标志只在 saveDocument 内部为真，await 它结束之后新的 modified 又能
+      // 再排一次 autosave。所以整个重载窗口期立一个闸：置位期间 onDocModified 不标脏、
+      // saveDocument 在 upload 前直接放弃。重载语义本来就是丢弃编辑器里的本地改动
+      // （后端内容是权威），丢掉这一笔是语义本身，不是数据损失。
+      this._reloading = true
+      const cancelAutoSave = () => {
+        clearTimeout(this._saveTimer)
+        this._saveTimer = null
+        this.dirty = false
+        this._dirtySince = 0
+      }
+      cancelAutoSave()
+      // 在途 export/upload 期间不能换文档（export 读的是 worker 当前文档）——
+      // 等它结束，其间新来的 modify 同样丢弃。
+      while (this.saving) await new Promise((r) => setTimeout(r, 100))
+      cancelAutoSave()
+      // 预取到的是改前的字节，必须重新下载。
+      this._bytesPromise = null
+      this.dlLoaded = 0
+      this.dlTotal = 0
+      const prevStatus = this.statusText
+      this.statusText = '重新加载中…'
+      try {
+        const loaded = await this.loadDocument()
+        if (!loaded) throw new Error('后端返回 0 字节，未替换编辑器内文档')
+        // load_document 的 retarget 重装了 modify listener 并重置 RecordChanges，
+        // 换完再清一次脏（retarget 里设 RecordChanges 会触发一次 modified）。
+        this.docLoadFailed = false
+        cancelAutoSave()
+        this.statusText = prevStatus.indexOf('失败') === -1 ? prevStatus : '就绪'
+        this.appendLog('reload: 已就地换成后端最新内容')
+        return true
+      } catch (e) {
+        // 换文档失败 = 画布上仍是改前内容。保存闸必须落下，否则下一次 autosave
+        // 会用旧内容覆盖后端刚改好的文件。
+        this.docLoadFailed = true
+        this.statusText = '重新加载失败，内容已过期'
+        this.appendLog('reload failed: ' + (e && e.message ? e.message : e))
+        return false
+      } finally {
+        this._reloading = false
+      }
     },
     // Authed binary fetch — same XHR auth pattern as FilePreview.fetchAuthedBlob,
     // but ArrayBuffer (the bytes we relay into the worker).
@@ -413,6 +492,9 @@ export default {
     onDocModified() {
       // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件
       if (!this.ready || !this.file || this.docLoadFailed) return
+      // 重载窗口期（版本退回 / 检查点恢复正在换文档）里的 modified 一律丢弃：
+      // 它描述的是即将被替换掉的旧文档，标脏只会让 autosave 把旧内容传回去。
+      if (this._reloading) return
       this.dirty = true
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
@@ -471,6 +553,9 @@ export default {
       // 最后一道闸（onDocModified 之外的调用方也拦住）：文档没成功加载，
       // 导出的只会是空白 boot 文档——拒绝覆盖后端真文件。
       if (this.docLoadFailed) { this.appendLog('save blocked: 文档未成功加载，拒绝用空白文档覆盖后端文件'); return false }
+      // 重载窗口期一笔都别起：这时候导出的是即将被替换掉的旧文档，而且 export 会
+      // 把 office 线程占住、拖慢紧跟着的 load_document。
+      if (this._reloading) { this.appendLog('save blocked: 正在重载后端最新内容'); return false }
       const fileId = f.wpsFileId || f.id
       if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return false }
       this.saving = true
@@ -493,6 +578,13 @@ export default {
         else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength)
         else if (Array.isArray(raw)) u8 = new Uint8Array(raw)
         if (!u8 || u8.length === 0) throw new Error('export produced no bytes')
+        // 重载闸（版本退回 / 检查点恢复）：export 是在换文档之前启动的，导出的这份
+        // 字节就是「后端已被改写掉的那个旧版本 + 用户的在途编辑」。上传出去就等于
+        // 把律师刚做的退回覆盖回去——这是数据事故，不是体验问题。丢弃这一笔。
+        if (this._reloading) {
+          this.appendLog('save aborted: 正在重载后端最新内容，丢弃这一笔在途导出')
+          return false
+        }
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
         this.statusText = '已保存'

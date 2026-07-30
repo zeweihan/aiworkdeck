@@ -192,14 +192,29 @@ export const agentClientActionMethods = {
      * 1. 后端修改文件后会更新 wpsFileId（通用文件 ID，添加版本时间戳）
      * 2. 前端获取最新文件信息，更新 leftFiles/rightFiles 中的 wpsFileId
      * 3. LibreOfficeEditor 以文件为 key/prop，检测到变化后重新加载
+     *
+     * opts.forceActive —— 两条调用路径语义不同，不能一视同仁：
+     * - **版本退回**（true）：律师刚亲手点了「退回到这一版」，他要的就是回到过去。
+     *   正在显示的那个实例必须就地换文档，在途的未保存输入被丢弃是语义本身；
+     *   不换的话下一次 autosave 会把「旧内容 + 新编辑」写回，把退回冲掉（真机复现过）。
+     * - **AI 改文件 / 检查点恢复**（默认 false）：律师此刻可能正在这份文档里打字，
+     *   静默强刷等于替他丢弃未保存内容还弹一句「文件已更新」。只逐非活动的保活
+     *   实例（下次激活自然重挂载拉新字节），当前画面不动。
+     *
+     * opts.silentSuccessToast —— 只吞「文件已更新」这一句成功提示，由调用方聚合成
+     * 一句（见 fileOpenTabs.js 的 onVersionReloadFiles，一次版本操作可能改写好几份
+     * 打开中的文件）。失败提示照旧逐份弹出，绝不静音。返回值 = 这一份是否重载成功，
+     * 供聚合层统计；早先的调用方不看返回值，语义不变。
      */
-    async handleEditorReloadFile(action) {
+    async handleEditorReloadFile(action, opts = {}) {
+        const forceActive = !!opts.forceActive
+        const silentSuccessToast = !!opts.silentSuccessToast
         console.log('[ProjectOverview] WPS Reload File:', action)
         try {
             const fileId = action.fileId
             if (!fileId) {
                 console.warn('[ProjectOverview] No fileId in doc_reload_file action')
-                return
+                return false
             }
 
             // 获取文件详情（确保获取最新信息，包括新的 wpsFileId）
@@ -207,7 +222,7 @@ export const agentClientActionMethods = {
             if (!file) {
                 console.error('[ProjectOverview] File not found:', fileId)
                 uni.showToast({ title: '文件不存在', icon: 'none' })
-                return
+                return false
             }
 
             console.log('[ProjectOverview] Got updated file info:', {
@@ -246,12 +261,23 @@ export const agentClientActionMethods = {
 
             // 保活池实例不再"切回即重挂载"：后台常驻实例里还是旧内容。把该
             // 文件的非活动保活实例逐出 LRU（卸载），下次激活时重挂载并拉取
-            // 新 wpsFileId 的字节。当前正显示的实例保持改前行为（不强刷）。
+            // 新字节。
+            let reloadOk = true
             if (updated) {
                 this.libreLruKeys = this.libreLruKeys.filter(k => {
                     if (!k.endsWith(':' + file.id)) return true
                     return k === 'left:' + this.activeFileIdLeft || k === 'right:' + this.activeFileIdRight
                 })
+                // 当前正显示的实例逐不掉（保活池"活动文件必进池"），而它既不
+                // watch file 也不以 wpsFileId 为模板 key——上面 Object.assign 进
+                // pane 列表对它毫无作用，画布上还是改前的内容。律师接着编辑，
+                // autosave 就会把「旧内容 + 新编辑」写回去，把版本退回冲掉。所以
+                // 退回路径显式命令活动实例就地重载（换文档前它自己会取消在飞的
+                // 自动保存并清脏，见 reloadFromBackend）。AI/检查点路径不做这件事，
+                // 理由见方法头 opts.forceActive 的注释。
+                if (forceActive) {
+                    reloadOk = await this.reloadActiveLibreInstances(file.id)
+                }
             }
 
             // 如果文件不在任何窗格中打开，则打开它
@@ -260,16 +286,25 @@ export const agentClientActionMethods = {
                 this.openFile(file)
             }
 
-            uni.showToast({ title: `文件已更新: ${file.name}`, icon: 'success' })
+            if (reloadOk) {
+                if (!silentSuccessToast) {
+                    uni.showToast({ title: `文件已更新: ${file.name}`, icon: 'success' })
+                }
+            } else {
+                // 画布上仍是旧内容（该实例已自己拦下保存），不能报"已更新"。
+                uni.showToast({ title: `${file.name} 重新加载失败，请关闭标签后重新打开`, icon: 'none', duration: 4000 })
+            }
 
             // 刷新文件树以更新文件信息
             if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
                 this.$refs.fileTree.loadFiles()
             }
 
+            return reloadOk
         } catch (e) {
             console.error('[ProjectOverview] handleEditorReloadFile error:', e)
             uni.showToast({ title: '刷新文件失败', icon: 'none' })
+            return false
         }
     },
 

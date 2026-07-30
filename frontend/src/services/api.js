@@ -1586,9 +1586,11 @@ export function enableVersionControl(projectId) {
   });
 }
 
-export function getVersionTimeline(projectId, limit = 50) {
+export function getVersionTimeline(projectId, limit = 50, fileId) {
+  let url = `/api/projects/${projectId}/version/timeline?limit=${limit}`
+  if (fileId) url += `&fileId=${fileId}`
   return request({
-    url: `/api/projects/${projectId}/version/timeline?limit=${limit}`,
+    url,
     method: 'GET'
   });
 }
@@ -1627,6 +1629,103 @@ export function revertToVersion(projectId, ref) {
     url: `/api/projects/${projectId}/version/revert`,
     method: 'POST',
     data: { ref }
+  });
+}
+
+// 标记重要版本（需命名，如「发客户第一稿」）。
+export function markVersionMilestone(projectId, sha, name) {
+  return request({
+    url: `/api/projects/${projectId}/version/versions/${encodeURIComponent(sha)}/milestone`,
+    method: 'POST',
+    data: { name }
+  });
+}
+
+// 版本对比降级：取某一版某文件抽取出的纯文本。
+export function getVersionFileText(projectId, ref, path) {
+  return request({
+    url: `/api/projects/${projectId}/version/versions/${encodeURIComponent(ref)}/file-text?path=${encodeURIComponent(path)}`,
+    method: 'GET'
+  });
+}
+
+// 版本对比：取某一版某文件的原始字节（octet-stream）。返回 Uint8Array。
+// 走裸 fetch 而非上面的 request()——后端这个接口成功时是二进制流，出错时才是
+// {code,message} JSON（HTTP 恒 200，见 VersionController.onVersionError），
+// request() 的 uni.request 封装是围绕统一 {code,data} JSON 设计的，二进制走裸
+// fetch 更直接（MarkdownPreview.vue 已有同样的 fetch+getAuthHeaders 先例）。
+export async function fetchVersionFileBytes(projectId, ref, path) {
+  const baseUrl = getApiBaseUrl();
+  const url = `${baseUrl.replace(/\/$/, '')}/api/projects/${projectId}/version/versions/${encodeURIComponent(ref)}/file-bytes?path=${encodeURIComponent(path)}`;
+  const resp = await fetch(url, { headers: getAuthHeaders() });
+  const ct = resp.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    const j = await resp.json();
+    throw new Error((j && j.message) || '读取版本文件失败');
+  }
+  if (!resp.ok) throw new Error('读取版本文件失败');
+  return new Uint8Array(await resp.arrayBuffer());
+}
+
+// ---- 稿：创建、双向切线、采纳/裁决/中止/放弃（第 3 期） -----------------
+
+// 另起一稿。ref 为空取当前版本。
+export function createDraft(projectId, ref, name) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft`,
+    method: 'POST',
+    data: { ref: ref || '', name }
+  });
+}
+
+export function listDrafts(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/drafts`,
+    method: 'GET'
+  });
+}
+
+export function switchToDraft(projectId, draftId) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/switch`,
+    method: 'POST'
+  });
+}
+
+export function switchToMainline(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/version/switch-mainline`,
+    method: 'POST'
+  });
+}
+
+export function adoptDraft(projectId, draftId) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/adopt`,
+    method: 'POST'
+  });
+}
+
+// resolutions: { [path]: 'MAIN' | 'DRAFT' | 'BOTH' }
+export function resolveAdopt(projectId, draftId, resolutions) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/resolve`,
+    method: 'POST',
+    data: { resolutions }
+  });
+}
+
+export function abortAdopt(projectId, draftId) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/abort-adopt`,
+    method: 'POST'
+  });
+}
+
+export function abandonDraft(projectId, draftId) {
+  return request({
+    url: `/api/projects/${projectId}/version/draft/${draftId}/abandon`,
+    method: 'POST'
   });
 }
 

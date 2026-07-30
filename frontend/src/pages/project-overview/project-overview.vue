@@ -539,6 +539,7 @@
             @compare-documents="onCompareDocumentsRequest"
             @files-changed="loadStagingFiles"
             @file-deleted="handleFileDeleted"
+            @file-history="onFileHistory"
           />
           <DdFilesPanel
             v-else-if="leftPaneKey === 'dd-files'"
@@ -567,6 +568,11 @@
           <VersionPanel
             v-else-if="leftPaneKey === 'version'"
             :project-id="projectId"
+            :file-filter="versionFileFilter"
+            @compare-file="onVersionCompareFile"
+            @clear-file-filter="versionFileFilter = null"
+            @reload-files="onVersionReloadFiles"
+            @adopt-conflict="adoptConflictPending = $event"
           />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
@@ -775,6 +781,16 @@
                       :source-name="activeFileLeft.diffSource.name"
                       :target-name="activeFileLeft.diffTarget.name"
                     />
+                    <VersionCompareTab
+                      v-else-if="isVersionCompareTab(activeFileLeft)"
+                      :key="activeFileLeft.id"
+                      :compare-spec="activeFileLeft.compareSpec"
+                    />
+                    <DocDiffViewer
+                      v-else-if="isVersionTextDiffTab(activeFileLeft)"
+                      :key="activeFileLeft.id"
+                      :version-spec="activeFileLeft.versionSpec"
+                    />
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileLeft)"
                       :request-id="activeFileLeft.requestId"
@@ -841,6 +857,16 @@
                       :target-id="activeFileRight.diffTarget.id"
                       :source-name="activeFileRight.diffSource.name"
                       :target-name="activeFileRight.diffTarget.name"
+                    />
+                    <VersionCompareTab
+                      v-else-if="isVersionCompareTab(activeFileRight)"
+                      :key="activeFileRight.id"
+                      :compare-spec="activeFileRight.compareSpec"
+                    />
+                    <DocDiffViewer
+                      v-else-if="isVersionTextDiffTab(activeFileRight)"
+                      :key="activeFileRight.id"
+                      :version-spec="activeFileRight.versionSpec"
                     />
                     <DdRequestEditor
                       v-else-if="isDdRequest(activeFileRight)"
@@ -1256,6 +1282,17 @@
 
       <!-- OCR 结果不再使用弹窗：改为框选后的快捷命令条 -->
 
+      <!-- 采纳等待处理：AdoptConflictDialog 只活在版本面板里，律师一切去别的面板
+           （资源管理器、AI……）就什么提示都没有了，而这期间后端停在待裁决状态、
+           版本捕获整体关闭。这条固定条是面板之外唯一的提示与入口。 -->
+      <view
+        v-if="adoptConflictPending && leftPaneKey !== 'version'"
+        class="adopt-pending-bar"
+      >
+        <text class="adopt-pending-text">有一次采纳等待处理</text>
+        <text class="adopt-pending-go" @tap="goHandleAdoptConflict">去处理</text>
+      </view>
+
     </view>
   </view>
 </template>
@@ -1278,6 +1315,7 @@ import VersionPanel from '@/components/version/VersionPanel.vue'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
 import DocDiffViewer from '@/components/DocDiffViewer.vue'
+import VersionCompareTab from '@/components/version/VersionCompareTab.vue'
 import MarkdownPreview from '@/components/MarkdownPreview.vue'
 import FilePickerDialog from '@/components/FilePickerDialog.vue'
 
@@ -1307,6 +1345,7 @@ import {
   getAssistants, // Added
   getPlugins, // Added
   getFileText,
+  getVersionStatus, // 版本面板之外也要知道「有没有采纳等待处理」
   promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
@@ -1356,6 +1395,7 @@ export default {
     PluginPane, // Added
     CompareDocDialog,
     DocDiffViewer,
+    VersionCompareTab,
     EasyVoicePane,
     DesensitizePane,
     FilePickerDialog,
@@ -1387,6 +1427,11 @@ export default {
       sidebarCollapsed: false,
       isCompactLayout: false,
       leftPaneKey: null, // Initialize to null to prevent premature loading
+      // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
+      versionFileFilter: null,
+      // 有一次采纳停在待裁决状态（/status 的 adoptConflict）。版本面板之外也要提示，
+      // 见模板里的 .adopt-pending-bar。版本面板打开时由它的 /status 拉取实时同步。
+      adoptConflictPending: false,
       // 文件树批量选择模式（由页面控制开关）
       fileBatchMode: false,
       checkedFileIds: [],
@@ -1944,6 +1989,7 @@ export default {
       this.projectId = Number(query.id)
       this.loadProjectInfo()
       this.loadProjectMembers()
+      this.checkAdoptConflict()
 
       // Initialize Staging Area (Persistent)
       // We don't await here to avoid blocking page load, but ensuring folder exists is critical
@@ -2338,6 +2384,29 @@ export default {
     ...ocrActionMethods,
     // Phase 3c 外置的方法组
     ...ocrCaptureMethods,
+    // 右键「这份文件的历史」：切到版本面板并只显示这份文件的版本
+    onFileHistory(file) {
+      this.versionFileFilter = { fileId: file.id, name: file.name }
+      if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+    // 「有一次采纳等待处理」固定条的入口：切到版本面板，AdoptConflictDialog 会随
+    // 面板的 /status 自动弹出（它本来就是这么起来的，含崩溃后重开的场景）。
+    goHandleAdoptConflict() {
+      if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+    // 进页面时问一次「有没有停在待裁决的采纳」：版本面板可能整个会话都没被打开过
+    // （比如上次崩在裁决窗口里、这次进来直接停在资源管理器），那样就没有任何东西
+    // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管。
+    async checkAdoptConflict() {
+      if (!this.projectId) return
+      try {
+        const res = await getVersionStatus(this.projectId)
+        this.adoptConflictPending = !!(res && res.data && res.data.adoptConflict)
+      } catch (e) {
+        console.warn('[Version] 读取采纳状态失败', e)
+      }
+    },
+
     // EasyVoice Integration
     async handleEasyVoiceDocRequest(callback) {
       console.log('[EasyVoice] Requesting doc text...')
@@ -2528,6 +2597,13 @@ export default {
       const isPlugin = file.fileType === 'plugin'
       if (isPlugin) {
         return this.leftPaneKey === file.id // Assuming plugin ID is its key
+      }
+      // 版本对比标签（修订稿 / 文本降级两种）：唯一入口是版本面板里的「和上一版
+      // 对比」，所以必须在 version 面板下可见——否则点开的标签被 v-show 藏死，
+      // 编辑区显示空闲态，功能等于不存在。同时也在资源管理器面板下保持可见：
+      // 它展示的是项目文档的衍生视图，律师切回文件树不该让对比凭空消失。
+      if (file.tabType === 'version-compare' || file.tabType === 'version-text-diff') {
+        return this.leftPaneKey === 'version' || this.leftPaneKey === 'files'
       }
       // 普通文件在资源管理器、搜索或EasyVoice模式下都可见
       return this.leftPaneKey === 'files' || this.leftPaneKey === 'search' || this.leftPaneKey === 'easyvoice'

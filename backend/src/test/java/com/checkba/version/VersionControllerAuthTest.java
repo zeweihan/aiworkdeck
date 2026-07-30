@@ -1,6 +1,8 @@
 package com.checkba.version;
 
 import com.checkba.controller.AuthController;
+import com.checkba.model.entity.ProjectFile;
+import com.checkba.service.ProjectFileService;
 import com.checkba.service.ProjectMemberService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -34,6 +36,8 @@ class VersionControllerAuthTest {
     private WorkSessionService sessionService;
     @Mock
     private ProjectMemberService projectMemberService;
+    @Mock
+    private ProjectFileService projectFileService;
 
     @InjectMocks
     private VersionController controller;
@@ -46,7 +50,7 @@ class VersionControllerAuthTest {
             when(projectMemberService.isClient(7L, 1L)).thenReturn(true);
 
             assertThrows(IllegalArgumentException.class,
-                    () -> controller.timeline(7L, 50, "sess"));
+                    () -> controller.timeline(7L, 50, null, "sess"));
             verify(repoService, never()).log(anyLong(), anyString(), anyInt());
         }
     }
@@ -58,7 +62,7 @@ class VersionControllerAuthTest {
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(false);
 
             assertThrows(IllegalArgumentException.class,
-                    () -> controller.timeline(7L, 50, "sess"));
+                    () -> controller.timeline(7L, 50, null, "sess"));
             verify(repoService, never()).log(anyLong(), anyString(), anyInt());
         }
     }
@@ -69,7 +73,7 @@ class VersionControllerAuthTest {
             auth.when(() -> AuthController.getUserIdFromSession(null)).thenReturn(null);
 
             assertThrows(IllegalArgumentException.class,
-                    () -> controller.timeline(7L, 50, null));
+                    () -> controller.timeline(7L, 50, null, null));
             verify(repoService, never()).log(anyLong(), anyString(), anyInt());
         }
     }
@@ -82,9 +86,49 @@ class VersionControllerAuthTest {
             when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
             when(repoService.log(7L, "HEAD", 50)).thenReturn(java.util.List.of());
 
-            controller.timeline(7L, 50, "sess");
+            controller.timeline(7L, 50, null, "sess");
 
             verify(repoService).log(7L, "HEAD", 50);
+        }
+    }
+
+    /**
+     * 单文件历史的越权（IDOR）防护：fileId 属于别的项目必须拒绝，口径照
+     * ProjectFileControllerIdorTest——鉴权通过后，服务端仍要校验 fileId→projectId 归属。
+     */
+    @Test
+    void timelineRejectsFileFromAnotherProject() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
+            when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+            ProjectFile foreign = new ProjectFile();
+            foreign.setId(50L);
+            foreign.setProjectId(999L);
+            when(projectFileService.getFile(50L)).thenReturn(foreign);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.timeline(7L, 50, 50L, "sess"));
+            verify(repoService, never()).logForPath(anyLong(), anyString(), anyString(), anyInt());
+        }
+    }
+
+    @Test
+    void timelineFiltersByFileWithinSameProject() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
+            when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+            ProjectFile own = new ProjectFile();
+            own.setId(50L);
+            own.setProjectId(7L);
+            own.setFilePath("projects/7/合同.txt");
+            when(projectFileService.getFile(50L)).thenReturn(own);
+            when(repoService.logForPath(7L, "HEAD", "合同.txt", 50)).thenReturn(java.util.List.of());
+
+            controller.timeline(7L, 50, 50L, "sess");
+
+            verify(repoService).logForPath(7L, "HEAD", "合同.txt", 50);
         }
     }
 
@@ -98,7 +142,10 @@ class VersionControllerAuthTest {
     private static final long PROJECT_ID = 7L;
     private static final long USER_ID = 1L;
 
-    private enum Endpoint { STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT }
+    private enum Endpoint {
+        STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT, MILESTONE,
+        DRAFT_CREATE, DRAFT_LIST, DRAFT_SWITCH, SWITCH_MAINLINE, DRAFT_ADOPT, DRAFT_RESOLVE, DRAFT_ABORT_ADOPT, DRAFT_ABANDON
+    }
 
     private void invoke(Endpoint endpoint, String sessionId) {
         switch (endpoint) {
@@ -109,6 +156,17 @@ class VersionControllerAuthTest {
             case SESSION_DISCARD -> controller.discardSession(PROJECT_ID, sessionId);
             case SESSION_RESUME -> controller.resumeSession(PROJECT_ID, sessionId);
             case REVERT -> controller.revert(PROJECT_ID, Map.of("ref", "abc123"), sessionId);
+            case FILE_BYTES -> controller.fileBytesAtRef(PROJECT_ID, "abc123", "a.txt", sessionId);
+            case FILE_TEXT -> controller.fileTextAtRef(PROJECT_ID, "abc123", "a.txt", sessionId);
+            case MILESTONE -> controller.markMilestone(PROJECT_ID, "abc123", Map.of("name", "发客户第一稿"), sessionId);
+            case DRAFT_CREATE -> controller.createDraft(PROJECT_ID, Map.of("name", "试验稿"), sessionId);
+            case DRAFT_LIST -> controller.listDrafts(PROJECT_ID, sessionId);
+            case DRAFT_SWITCH -> controller.switchToDraft(PROJECT_ID, 3L, sessionId);
+            case SWITCH_MAINLINE -> controller.switchToMainline(PROJECT_ID, sessionId);
+            case DRAFT_ADOPT -> controller.adoptDraft(PROJECT_ID, 3L, sessionId);
+            case DRAFT_RESOLVE -> controller.resolveAdopt(PROJECT_ID, 3L, Map.of("resolutions", Map.of("a.txt", "MAIN")), sessionId);
+            case DRAFT_ABORT_ADOPT -> controller.abortAdopt(PROJECT_ID, 3L, sessionId);
+            case DRAFT_ABANDON -> controller.abandonDraft(PROJECT_ID, 3L, sessionId);
         }
     }
 
@@ -121,6 +179,23 @@ class VersionControllerAuthTest {
             case SESSION_DISCARD -> verify(sessionService, never()).discardSession(anyLong(), any());
             case SESSION_RESUME -> verify(sessionService, never()).resumeSession(anyLong());
             case REVERT -> verify(sessionService, never()).revertTo(anyLong(), anyString(), any(), anyString());
+            case FILE_BYTES, FILE_TEXT ->
+                    verify(repoService, never()).readBlobAtCommit(anyLong(), anyString(), anyString());
+            case MILESTONE -> verify(repoService, never()).tagMilestone(anyLong(), anyString(), anyString());
+            case DRAFT_CREATE -> verify(sessionService, never())
+                    .createDraft(anyLong(), any(), anyString(), any(), anyString());
+            case DRAFT_LIST -> verify(sessionService, never()).listDrafts(anyLong());
+            case DRAFT_SWITCH -> verify(sessionService, never())
+                    .switchToDraft(anyLong(), anyLong(), any(), anyString());
+            case SWITCH_MAINLINE -> verify(sessionService, never())
+                    .switchToMainline(anyLong(), any(), anyString());
+            case DRAFT_ADOPT -> verify(sessionService, never())
+                    .adoptDraft(anyLong(), anyLong(), any(), anyString());
+            case DRAFT_RESOLVE -> verify(sessionService, never())
+                    .resolveAdopt(anyLong(), anyLong(), any(), any(), anyString());
+            case DRAFT_ABORT_ADOPT -> verify(sessionService, never()).abortAdopt(anyLong());
+            case DRAFT_ABANDON -> verify(sessionService, never())
+                    .abandonDraft(anyLong(), anyLong(), any(), anyString());
         }
     }
 

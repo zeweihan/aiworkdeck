@@ -115,6 +115,52 @@ class ProjectRepoHistoryTest {
     }
 
     @Test
+    void logForPathReturnsOnlyCommitsTouchingThatFile(@TempDir Path root) throws Exception {
+        ProjectRepoService s = seeded(root);
+        Files.writeString(root.resolve("projects/7/别的.txt"), "x");
+        s.commitAll(7L, "改了别的", "auto", null, "韩泽伟", "hzw@example.com");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        s.commitAll(7L, "改了合同", "auto", null, "韩泽伟", "hzw@example.com");
+
+        List<VersionEntry> all = s.log(7L, "HEAD", 100);
+        List<VersionEntry> only = s.logForPath(7L, "HEAD", "合同.txt", 100);
+
+        assertTrue(only.size() < all.size());
+        assertTrue(only.stream().anyMatch(v -> v.message().contains("合同")));
+        assertTrue(only.stream().noneMatch(v -> v.message().contains("别的")));
+    }
+
+    /**
+     * 回归测试：单文件历史必须保留命名的工作段节点。
+     *
+     * JGit 的 addPath（git 默认历史简化）会把「相对第一父提交 TREESAME」的合并提交
+     * 整条剪掉——而「结束本次工作」用的正是 NO_FF 合并，主线在工作期间不动时，合并
+     * 提交的树跟工作分支那一父完全相同，天然 TREESAME。结果是律师命名的工作段节点
+     * 在单文件视图里全部消失，只剩自动存档。这里造一个真实的 NO_FF 合并段来守。
+     */
+    @Test
+    void logForPathKeepsNamedWorkSessionMergeNodes(@TempDir Path root) throws Exception {
+        ProjectRepoService s = seeded(root);
+
+        s.createBranch(7L, "work/1", "HEAD");
+        s.checkoutBranch(7L, "work/1");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        assertNotNull(s.commitAll(7L, "修改了《合同》", "auto", null, "韩泽伟", "hzw@example.com"));
+        s.checkoutBranch(7L, s.mainBranch());
+        MergeOutcome outcome = s.merge(7L, "work/1", "发客户第一稿", "韩泽伟", "hzw@example.com");
+        assertTrue(outcome.success());
+        assertNotNull(outcome.mergeSha(), "前提：NO_FF 合并必须产生一个真实的合并提交");
+
+        List<VersionEntry> only = s.logForPath(7L, "HEAD", "合同.txt", 100);
+
+        assertTrue(only.stream().anyMatch(v -> outcome.mergeSha().equals(v.sha())),
+                "命名的工作段合并节点必须出现在单文件历史里，实际拿到: "
+                        + only.stream().map(VersionEntry::message).toList());
+        assertTrue(only.stream().anyMatch(v -> "session".equals(v.kind())),
+                "单文件历史里应该还有 kind=session 的工作段节点");
+    }
+
+    @Test
     void readBlobAtCommitReturnsHistoricBytes(@TempDir Path root) throws Exception {
         ProjectRepoService s = seeded(root);
         String first = s.log(7L, "HEAD", 1).get(0).sha();

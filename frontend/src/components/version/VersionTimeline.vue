@@ -14,7 +14,10 @@
     >
       <view class="node-line" />
       <view class="node-main" @tap="select(group.head)">
-        <view class="node-title">{{ titleOf(group.head) }}</view>
+        <view class="node-title" :class="{ 'has-milestone': group.head.milestone }">
+          <text v-if="group.head.milestone" class="milestone-flag">重要版本</text>
+          {{ group.head.milestone || titleOf(group.head) }}
+        </view>
         <view class="node-meta">{{ group.head.authorName }} · {{ timeOf(group.head) }}</view>
       </view>
 
@@ -33,7 +36,10 @@
           @tap="select(a)"
         >
           <text class="auto-time">{{ timeOf(a) }}</text>
-          <text class="auto-msg">{{ a.message }}</text>
+          <text class="auto-msg" :class="{ 'has-milestone': a.milestone }">
+            <text v-if="a.milestone" class="milestone-flag">重要版本</text>
+            {{ a.milestone || a.message }}
+          </text>
         </view>
       </view>
     </view>
@@ -43,7 +49,10 @@
       :project-id="projectId"
       :version="selected"
       @close="selected = null"
-      @reverted="onReverted"
+      @reload-files="onReload"
+      @compare-file="$emit('compare-file', $event)"
+      @milestoned="onMilestoned"
+      @draft-created="onDraftCreated"
     />
   </scroll-view>
 </template>
@@ -57,10 +66,16 @@ export default {
   components: { VersionNodeDetail },
   props: {
     projectId: { type: [String, Number], required: true },
+    fileFilter: { type: Object, default: null },
   },
-  emits: ['reverted'],
+  emits: ['reload-files', 'compare-file', 'draft-created'],
   data() {
     return { versions: [], expanded: {}, selected: null, loadError: false }
+  },
+  watch: {
+    fileFilter() {
+      this.load()
+    },
   },
   computed: {
     // 工作段是主线节点，自动存档折进它下面。
@@ -84,7 +99,7 @@ export default {
   methods: {
     async load() {
       try {
-        const res = await getVersionTimeline(this.projectId)
+        const res = await getVersionTimeline(this.projectId, 50, this.fileFilter && this.fileFilter.fileId)
         this.versions = ((res && res.data && res.data.versions) || [])
         this.loadError = false
       } catch (e) {
@@ -107,10 +122,27 @@ export default {
     select(v) {
       this.selected = v
     },
-    onReverted() {
+    // 标记重要版本之后：load() 会把 versions 整个换成新对象，而 selected 还指着
+    // 旧对象——弹窗上的按钮仍写着「标为重要版本」，看起来像没生效。重拉之后把
+    // selected 重新指到同一个 sha 的新条目上（拿到的 milestone 字段是服务端权威值）。
+    async onMilestoned() {
+      const sha = this.selected && this.selected.sha
+      await this.load()
+      if (!sha) return
+      const fresh = this.versions.find(v => v.sha === sha)
+      if (fresh) this.selected = fresh
+    },
+    onReload(affectedFileIds) {
       this.selected = null
       this.load()
-      this.$emit('reverted')
+      this.$emit('reload-files', affectedFileIds || [])
+    },
+    // 从某个历史版本另起一稿：HEAD 切到了新稿分支，本页时间线（按 HEAD 取历史）
+    // 要重新拉取，否则还停在切线前那条线的历史上。
+    onDraftCreated(affectedFileIds) {
+      this.selected = null
+      this.load()
+      this.$emit('draft-created', affectedFileIds || [])
     },
   },
 }
@@ -134,4 +166,6 @@ export default {
 .node-auto { display: flex; gap: 12rpx; padding: 8rpx 0; }
 .auto-time { font-size: 23rpx; color: #aaa; flex-shrink: 0; }
 .auto-msg { font-size: 23rpx; color: #666; }
+.milestone-flag { font-size: 20rpx; color: #C8A45D; border: 1px solid #C8A45D; border-radius: 4rpx; padding: 2rpx 8rpx; margin-right: 8rpx; }
+.has-milestone { font-weight: 600; }
 </style>

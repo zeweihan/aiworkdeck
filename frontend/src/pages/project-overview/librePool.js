@@ -143,6 +143,38 @@ export const librePoolMethods = {
         console.log('[ProjectOverview] LibreOffice keep-alive evicted (LRU):', key)
     },
 
+    // 后端就地改了某文件的内容（版本退回 / 检查点恢复），而该文件正显示在某个
+    // 窗格里：这个实例逐不出保活池（活动文件必进池），也不会因文件信息变化重
+    // 挂载，必须显式命令它就地重载。非活动实例由调用方摘出 LRU 卸载即可。
+    // 绝不能走 closeFile：它在关闭脏文档前 flushSave，会把编辑器里还端着的
+    // 改前字节写回后端，正好冲掉刚做的退回/恢复。
+    // 返回 false 表示有活动实例没能换成新内容（画布上还是旧的，该实例已自己
+    // 落下保存闸），调用方据此把提示改成告警而不是"已更新"。
+    async reloadActiveLibreInstances(fileId) {
+        const refs = this._libreRefs || {}
+        let allOk = true
+        for (const pane of ['left', 'right']) {
+            const activeId = pane === 'left' ? this.activeFileIdLeft : this.activeFileIdRight
+            if (String(activeId) !== String(fileId)) continue
+            const inst = refs[pane + ':' + fileId]
+            if (!inst || typeof inst.reloadFromBackend !== 'function') continue
+            // 只刷「正在显示且确实绑着这份文件」的实例。预热备胎（PR#220）是同一个
+            // LibreOfficeEditor 组件：空白备胎 file=null，setLibreSpareRef 压根不注册，
+            // 正常到不了这里；这条是硬判据，防止将来备胎/接力体换了记账方式后
+            // 把重载打在没绑文件的实例上（那会"成功"，真文档纹丝不动）。
+            if (!inst.file || String(inst.file.id) !== String(fileId)) continue
+            try {
+                const ok = await inst.reloadFromBackend()
+                if (!ok) allOk = false
+                console.log('[ProjectOverview] LibreOffice 活动实例就地重载(' + pane + ':' + fileId + '):', ok)
+            } catch (e) {
+                allOk = false
+                console.warn('[ProjectOverview] LibreOffice 活动实例重载失败:', e)
+            }
+        }
+        return allOk
+    },
+
     // (#79) 文档内超链接点击：编辑器把 LO 的 window.open 经 lo-relay 转发上来。
     // 内部链接（包装 https 或裸 checkba:）走 __checkbaHandleInternalLink（关联
     // 文件/网核定位，含解包），普通网页开工作区浏览器 tab。

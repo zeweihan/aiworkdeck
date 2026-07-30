@@ -158,11 +158,13 @@ public final class EvalHarness {
 
         com.checkba.service.ai.TodoListService todoListService = mock(com.checkba.service.ai.TodoListService.class);
         com.checkba.service.ai.DocumentCheckpointService checkpointService = mock(com.checkba.service.ai.DocumentCheckpointService.class);
+        com.checkba.version.WorkSessionService workSessionService = mock(com.checkba.version.WorkSessionService.class);
 
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
                 registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange,
-                todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService());
+                todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService(),
+                workSessionService);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);

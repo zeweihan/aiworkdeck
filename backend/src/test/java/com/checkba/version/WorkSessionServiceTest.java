@@ -1,5 +1,6 @@
 package com.checkba.version;
 
+import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.checkba.storage.StorageProperties;
@@ -38,6 +39,7 @@ class WorkSessionServiceTest {
     private ProjectTreeManifestService manifestSvc;
     private WorkSessionRepository sessionRepo;
     private ThreadPoolTaskScheduler scheduler;
+    private ProjectFileRepository fileRepo;
 
     @BeforeEach
     void setUp(@TempDir Path tmp) throws Exception {
@@ -50,7 +52,7 @@ class WorkSessionServiceTest {
         repoSvc = new ProjectRepoService(props);
         repoSvc.init(7L, "韩泽伟", "hzw@example.com");
 
-        ProjectFileRepository fileRepo = mock(ProjectFileRepository.class);
+        fileRepo = mock(ProjectFileRepository.class);
         when(fileRepo.findByProjectId(7L)).thenReturn(new ArrayList<>());
         manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
 
@@ -68,12 +70,31 @@ class WorkSessionServiceTest {
                         .filter(s -> s.getProjectId().equals(i.getArgument(0))
                                 && s.getStatus() == i.getArgument(1))
                         .findFirst());
+        when(sessionRepo.findFirstByProjectIdAndStatusAndSessionType(any(), any(), any())).thenAnswer(i ->
+                sessions.values().stream()
+                        .filter(s -> s.getProjectId().equals(i.getArgument(0))
+                                && s.getStatus() == i.getArgument(1)
+                                && s.getSessionType() == i.getArgument(2))
+                        .findFirst());
 
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
 
-        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler);
+        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo);
         svc.setDebounceMillis(60_000); // 测试里不让防抖自己触发，全部手动 commitNow
+    }
+
+    private static ProjectFile projectFile(long projectId, String filePath, String name) {
+        return projectFile(projectId, filePath, name, null);
+    }
+
+    private static ProjectFile projectFile(long projectId, String filePath, String name, Long id) {
+        ProjectFile f = new ProjectFile();
+        f.setId(id);
+        f.setProjectId(projectId);
+        f.setFilePath(filePath);
+        f.setName(name);
+        return f;
     }
 
     @Test
@@ -103,9 +124,10 @@ class WorkSessionServiceTest {
         Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
         svc.commitNow(7L, 1L, "韩泽伟", "改了");
 
-        String sha = svc.endSession(7L, 1L, "韩泽伟", "发客户第一稿");
+        WorkSessionService.SessionEndResult r = svc.endSession(7L, 1L, "韩泽伟", "发客户第一稿");
 
-        assertNotNull(sha);
+        assertNotNull(r.sha());
+        assertNull(r.notice(), "正常结束不带附加提示");
         assertEquals(repoSvc.mainBranch(), repoSvc.currentBranch(7L));
         assertEquals("二稿", Files.readString(root.resolve("projects/7/合同.txt")));
         assertTrue(svc.activeSession(7L).isEmpty());
@@ -166,6 +188,28 @@ class WorkSessionServiceTest {
     }
 
     /**
+     * P3 终审 I3：丢弃本次工作会改写工作区（checkout 主线），但旧实现什么都不返回——
+     * 打开中的编辑器还端着被丢弃分支的内容，下一次 autosave 就把刚被丢弃的工作原样
+     * 写回磁盘。形制照 revertTo：把这次改写触及、且仍在文件树里的文件 id 带回去，
+     * 前端据此走同一条重载链。
+     */
+    @Test
+    void discardSessionReportsFilesItRewroteForEditorReload() throws Exception {
+        when(fileRepo.findByProjectId(7L)).thenReturn(
+                List.of(projectFile(7L, "projects/7/合同.txt", "合同.txt", 42L)));
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "不要的改动");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+
+        List<Long> affected = svc.discardSession(7L, 1L);
+
+        assertEquals(List.of(42L), affected,
+                "被丢弃分支改过、且仍在文件树里的文件要进重载列表");
+        assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")));
+    }
+
+    /**
      * 回归测试：最后一次自动存档之后新建的文件是 untracked，原实现的
      * checkoutBranch 根本不会碰它，会残留在磁盘上（清单同步把 DB 行软删之后，
      * 下一段工作的 git add . 又会把它重新捡回来）。修复后 discardSession 会先把
@@ -197,10 +241,10 @@ class WorkSessionServiceTest {
         svc.endSession(7L, 1L, "韩泽伟", "第一次工作");
 
         int before = repoSvc.log(7L, "HEAD", 100).size();
-        String revertSha = svc.revertTo(7L, firstSha, 1L, "韩泽伟");
+        WorkSessionService.RevertResult result = svc.revertTo(7L, firstSha, 1L, "韩泽伟");
         int after = repoSvc.log(7L, "HEAD", 100).size();
 
-        assertNotNull(revertSha);
+        assertNotNull(result.sha());
         assertTrue(after > before, "退回必须新增版本，不得删除历史");
         assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")));
     }
@@ -272,6 +316,30 @@ class WorkSessionServiceTest {
         assertFalse(idleTimerArmed(svc, 7L), "手动结束后空闲定时器必须被取消，否则之后还会被空跑一次");
     }
 
+    /**
+     * 回归测试：在一段**已经活着**的工作里退回，退回结束后空闲定时器必须重新武装。
+     * revertTo 开头的 cancelPending 会把空闲定时器一并清掉（它本来是给防抖存档用的），
+     * 而 commitNow 里的 ensureSession 只在真正**新建**分支时才武装定时器——活动段内
+     * 退回等于把这段工作的「30 分钟空闲自动结束」永久拆掉，律师不手动点结束就一直
+     * 挂着「工作中」。
+     */
+    @Test
+    void revertInsideAnActiveSessionRearmsTheIdleTimer() throws Exception {
+        svc.setIdleEndMillis(60_000);
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        assertTrue(idleTimerArmed(svc, 7L), "前提：onChangeSignal 之后空闲定时器已武装");
+        String branch = svc.activeSession(7L).orElseThrow().getBranchName();
+
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+        svc.revertTo(7L, "HEAD^", 1L, "韩泽伟");
+
+        assertEquals(branch, svc.activeSession(7L).orElseThrow().getBranchName(),
+                "退回不该结束当前这段工作");
+        assertTrue(idleTimerArmed(svc, 7L),
+                "活动段内退回之后空闲定时器必须重新武装，否则这段工作再也不会被自动结束");
+    }
+
     @SuppressWarnings("unchecked")
     private static boolean idleTimerArmed(WorkSessionService target, long projectId) throws Exception {
         Field f = WorkSessionService.class.getDeclaredField("idleTimers");
@@ -314,7 +382,7 @@ class WorkSessionServiceTest {
 
         // 复用同一份会话状态（sessionRepo/manifestSvc 都指向同一个内存 Map 和同一个
         // 磁盘仓库），但改走 spy 过的 repoService，这样才能在 commitAll 内部插入闩门。
-        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler);
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, fileRepo);
         lockedSvc.setDebounceMillis(60_000);
 
         List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
@@ -485,7 +553,7 @@ class WorkSessionServiceTest {
             return invocation.callRealMethod();
         }).when(spyRepo).gc(anyLong());
 
-        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler);
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, fileRepo);
         lockedSvc.setDebounceMillis(60_000);
 
         List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
@@ -527,5 +595,129 @@ class WorkSessionServiceTest {
         assertFalse(commitThread.isAlive(), "commit 线程应该已经结束");
         assertTrue(errors.isEmpty(), "两个线程都不应该抛异常: " + errors);
         assertEquals(1, gcCalls.get());
+    }
+
+    /** AI 轮次结束落版：署名必须是 AI Workdeck，kind 是 auto。 */
+    @Test
+    void commitAiRoundAttributesToAiWorkdeck() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "AI 改的");
+        String sha = svc.commitAiRound(7L, 1L);
+
+        assertNotNull(sha);
+        VersionEntry head = repoSvc.log(7L, "HEAD", 1).get(0);
+        assertEquals("AI Workdeck", head.authorName());
+        assertEquals("auto", head.kind());
+    }
+
+    /** 没有变更时 commitAiRound 不应该产生空提交。 */
+    @Test
+    void commitAiRoundWithNoChangesReturnsNull() {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        String first = svc.commitNow(7L, 1L, "韩泽伟", null);
+        assertNull(svc.commitAiRound(7L, 1L));
+    }
+
+    /**
+     * 问题 A（数据安全）回归测试：revertTo 改了磁盘文件，但打开中的编辑器还端着
+     * 退回前的内容，下一次 autosave 会把退回冲掉。
+     *
+     * 上一版的修复（EditorBridgeService.sendReloadFileAction）在生产里是惰性代码：
+     * 那条 SSE 通道靠 AgentOrchestrator 在 AI 工具调用期间设置的 ThreadLocal 会话 id，
+     * 而 revertTo 唯一的调用方 VersionController.revert 是普通 REST 端点，线程上永远
+     * 没有会话 id，通知永远发不出去。改为响应驱动：revertTo 直接把受影响文件的 id
+     * 随返回值带回去，前端自己决定重载哪些打开中的标签。
+     */
+    @Test
+    void revertReturnsAffectedFileIdsForChangedFiles() throws Exception {
+        when(fileRepo.findByProjectId(7L)).thenReturn(
+                List.of(projectFile(7L, "projects/7/合同.txt", "合同.txt", 42L)));
+
+        String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        svc.commitNow(7L, 1L, "韩泽伟", "改了");
+        svc.endSession(7L, 1L, "韩泽伟", "第一次工作");
+
+        WorkSessionService.RevertResult result = svc.revertTo(7L, firstSha, 1L, "韩泽伟");
+
+        assertNotNull(result.sha());
+        assertEquals(List.of(42L), result.affectedFileIds());
+    }
+
+    /**
+     * 回归测试：匹配受影响文件失败（例如 fileRepository 查询抛异常）不应该影响退回
+     * 本身——这份 id 列表只是前端重载编辑器的辅助信息，不是主流程。sha 正常返回，
+     * affectedFileIds 退化成空列表。
+     *
+     * manifestService 内部持有的是 setUp 里那个"好" fileRepo（capture/applyToDatabase
+     * 靠它正常同步清单，贯穿 onChangeSignal/commitNow/endSession/revertTo 全程）；
+     * 这里单独构造一个 WorkSessionService，只换掉它自己持有的 fileRepository
+     * （resolveAffectedFileIds 匹配专用），两者互不干扰，才能精确地只让匹配这一步失败。
+     */
+    @Test
+    void revertStillSucceedsWhenAffectedFileLookupThrows() throws Exception {
+        ProjectFileRepository throwingFileRepo = mock(ProjectFileRepository.class);
+        when(throwingFileRepo.findByProjectId(7L)).thenThrow(new RuntimeException("数据库查询失败"));
+        WorkSessionService throwingSvc =
+                new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, throwingFileRepo);
+        throwingSvc.setDebounceMillis(60_000);
+
+        String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();
+
+        throwingSvc.onChangeSignal(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "二稿");
+        throwingSvc.commitNow(7L, 1L, "韩泽伟", "改了");
+        throwingSvc.endSession(7L, 1L, "韩泽伟", "第一次工作");
+
+        WorkSessionService.RevertResult result = throwingSvc.revertTo(7L, firstSha, 1L, "韩泽伟");
+
+        assertNotNull(result.sha(), "匹配受影响文件失败不应该让退回本身失败");
+        assertTrue(result.affectedFileIds().isEmpty());
+        assertEquals("初稿", Files.readString(root.resolve("projects/7/合同.txt")));
+    }
+
+    /**
+     * 问题 B（体验）回归测试：空工作段（开了段但一个文件都没改）点「结束」不应该
+     * 静默成功——原实现里工作分支 tip 跟 master tip 完全相同，合并走
+     * ALREADY_UP_TO_DATE，时间线上什么节点都不会出现，律师起的名字凭空消失。
+     * 修复后应该给出明确提示，工作段标记为丢弃，master 历史不受影响。
+     *
+     * 提示走**返回值**而不是异常：这条路径已经把状态改完了（删分支、标 DISCARDED），
+     * 再抛异常会让前端的 catch 分支只 toast、不关命名弹窗、不刷状态条——后台已结束、
+     * 界面还停在「工作中」。「改了状态再抛异常」的混合语义一律用返回值表达。
+     */
+    @Test
+    void endingAnEmptySessionReturnsNoticeAndDiscardsIt() {
+        // 用一个全新的项目走 enableVersionRecording（而不是 setUp 里对 project 7 用的
+        // repoSvc.init 直接开仓库那条捷径）——否则「初始版本」那笔提交不带
+        // .awd/tree.json，commitNow 里的清单写入会在这段工作里制造一笔真实的
+        // manifest 新增提交，工作分支 tip 就不可能等于 master tip 了，测不出
+        // 「真正零提交」这个场景。
+        long projectId = 9L;
+        when(fileRepo.findByProjectId(projectId)).thenReturn(new ArrayList<>());
+        svc.enableVersionRecording(projectId, "韩泽伟", "hzw@example.com");
+
+        svc.onChangeSignal(projectId, 1L, "韩泽伟");
+        int masterLogBefore = repoSvc.log(projectId, repoSvc.mainBranch(), 100).size();
+
+        WorkSessionService.SessionEndResult r =
+                svc.endSession(projectId, 1L, "韩泽伟", "空工作");
+
+        assertNull(r.sha(), "空工作段没有生成任何版本");
+        assertNotNull(r.notice(), "必须带一句给律师的说明，而不是抛异常");
+        assertTrue(r.notice().contains("没有任何改动"), "消息应说明本次工作没有任何改动: " + r.notice());
+
+        WorkSession s = sessions.values().stream()
+                .filter(x -> x.getProjectId().equals(projectId))
+                .findFirst().orElseThrow();
+        assertEquals(WorkSession.Status.DISCARDED, s.getStatus());
+
+        int masterLogAfter = repoSvc.log(projectId, repoSvc.mainBranch(), 100).size();
+        assertEquals(masterLogBefore, masterLogAfter, "空工作段不应该在 master 上留下任何新提交");
+        assertEquals(repoSvc.mainBranch(), repoSvc.currentBranch(projectId));
+        assertFalse(repoSvc.listBranches(projectId).stream().anyMatch(b -> b.startsWith("work/")),
+                "工作分支必须被删除，不能残留");
     }
 }

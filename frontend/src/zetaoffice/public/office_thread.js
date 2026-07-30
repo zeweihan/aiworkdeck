@@ -1445,6 +1445,43 @@ const EXEC = {
     } catch (e) { return { success: false, message: errStr(e) }; }
     return { success: true, count: out.length, redlines: out };
   },
+  // [第 2 期 版本对比] 当前文档（新版）与 baseBytes（旧版）比较，产出修订标记。
+  // 探针（lowa-e2e 组 13）已实证方向：产出「旧到新」的删/插修订，正文停在新版。
+  // 比较产生的修订署名统一为「版本对比」，与人工/AI 修订区分开。
+  // 比较完成后把文档切只读（.uno:EditDoc 关编辑模式）——这是展示用文档，
+  // 宿主（VersionCompareTab）没有任何保存路径，只读是第二道保险。
+  compare_document(p) {
+    const raw = p && p.baseBytes;
+    let u8 = null;
+    if (raw instanceof ArrayBuffer) u8 = new Uint8Array(raw);
+    else if (raw && raw.buffer instanceof ArrayBuffer) u8 = new Uint8Array(raw.buffer, raw.byteOffset || 0, raw.byteLength);
+    else if (Array.isArray(raw)) u8 = new Uint8Array(raw);
+    if (!u8 || u8.length === 0) return { success: false, stage: 'input', message: 'baseBytes empty' };
+    const bytes = Array.from(new Int8Array(u8.buffer, u8.byteOffset, u8.byteLength));
+    const url = 'file:///tmp/awd_base_cmp.docx';
+    try {
+      const sfa = css.ucb.SimpleFileAccess.create(context);
+      try { if (sfa.exists(url)) sfa.kill(url); } catch (e) {}
+      const stream = css.io.SequenceInputStream.createStreamFromSequence(context, bytes);
+      sfa.writeFile(url, stream);
+      try { stream.closeInput(); } catch (e) {}
+    } catch (e) { return { success: false, stage: 'memfs', message: errStr(e) }; }
+    try { setRedlineAuthor('版本对比'); } catch (e) {}
+    try {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:CompareDocuments', '', 0, [mkProp('URL', url)]);
+    } catch (e) { return { success: false, stage: 'dispatch', message: errStr(e) }; }
+    let count = 0;
+    try {
+      const en = xModel.getRedlines().createEnumeration();
+      while (en.hasMoreElements() && count < 10000) { en.nextElement(); count++; }
+    } catch (e) {}
+    try {
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:EditDoc', '', 0, []);
+    } catch (e) {}
+    return { success: true, redlineCount: count };
+  },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {
     const bms = xModel.getBookmarks();

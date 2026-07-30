@@ -4,7 +4,7 @@
     <view class="diff-toolbar">
       <view class="toolbar-left">
         <text class="toolbar-title">文档对比</text>
-        <text class="toolbar-subtitle">{{ sourceName }} vs {{ targetName }}</text>
+        <text class="toolbar-subtitle">{{ displaySourceName }} vs {{ displayTargetName }}</text>
       </view>
       <view class="toolbar-right">
         <view class="diff-nav">
@@ -50,8 +50,8 @@
       <scroll-view scroll-y class="fallback-scroll">
         <view class="fallback-content">
           <view class="fallback-header">
-            <text class="fallback-label source-label">源文档: {{ sourceName }}</text>
-            <text class="fallback-label target-label">新文档: {{ targetName }}</text>
+            <text class="fallback-label source-label">源文档: {{ displaySourceName }}</text>
+            <text class="fallback-label target-label">新文档: {{ displayTargetName }}</text>
           </view>
           <view v-for="(line, idx) in diffLines" :key="idx" class="diff-line" :class="line.type">
             <text class="line-prefix">{{ line.prefix }}</text>
@@ -80,25 +80,34 @@
 </template>
 
 <script>
-import api from '@/services/api.js'
+import { markRaw } from 'vue'
+import api, { getVersionFileText } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 
 export default {
 
   computed: {
 
-    ICONS() { return ICONS }
+    ICONS() { return ICONS },
+
+    // versionSpec 模式下标题用「上一版/这一版」这类批准用语，忽略 sourceName/targetName
+    displaySourceName() {
+      return this.versionSpec ? (this.versionSpec.oldLabel || '上一版') : this.sourceName
+    },
+    displayTargetName() {
+      return this.versionSpec ? (this.versionSpec.newLabel || '这一版') : this.targetName
+    }
 
   },
   name: 'DocDiffViewer',
   props: {
     sourceId: {
       type: [Number, String],
-      required: true
+      required: false
     },
     targetId: {
       type: [Number, String],
-      required: true
+      required: false
     },
     sourceName: {
       type: String,
@@ -107,6 +116,11 @@ export default {
     targetName: {
       type: String,
       default: '新文档'
+    },
+    // 版本对比降级模式：设了它就走版本文本源（file-text 端点），忽略 sourceId/targetId
+    versionSpec: {
+      type: Object,
+      default: null
     }
   },
   data() {
@@ -140,15 +154,31 @@ export default {
       this.error = null
       
       try {
-        const res = await api.compareDocuments(this.sourceId, this.targetId)
-        
-        if (res.code !== 0) {
-          throw new Error(res.message || '获取文档内容失败')
+        if (this.versionSpec) {
+          // 版本对比降级：并行取上一版/这一版的抽取文本，不走 compareDocuments
+          const { projectId, path, oldRef, newRef } = this.versionSpec
+          const [oldRes, newRes] = await Promise.all([
+            getVersionFileText(projectId, oldRef, path),
+            getVersionFileText(projectId, newRef, path)
+          ])
+
+          if (oldRes.code !== 0 || newRes.code !== 0) {
+            throw new Error(oldRes.message || newRes.message || '获取版本文件内容失败')
+          }
+
+          this.sourceText = (oldRes.data && oldRes.data.text) || ''
+          this.targetText = (newRes.data && newRes.data.text) || ''
+        } else {
+          const res = await api.compareDocuments(this.sourceId, this.targetId)
+
+          if (res.code !== 0) {
+            throw new Error(res.message || '获取文档内容失败')
+          }
+
+          this.sourceText = res.data.source.text || ''
+          this.targetText = res.data.target.text || ''
         }
-        
-        this.sourceText = res.data.source.text || ''
-        this.targetText = res.data.target.text || ''
-        
+
         // #ifdef H5
         await this.initMonacoDiffEditor()
         // #endif
@@ -176,8 +206,11 @@ export default {
           throw new Error('找不到编辑器容器')
         }
         
-        // 创建 Diff Editor
-        this.diffEditor = monaco.editor.createDiffEditor(container, {
+        // 创建 Diff Editor。markRaw 不能省：diffEditor 是 data 字段，直接赋值会让
+        // Vue 把整个 Monaco 编辑器对象图递归包成 reactive proxy，Monaco 内部再去
+        // 遍历自己的结构就爆 "Maximum call stack size exceeded"（真机 app-e2e 里
+        // 抓到过 4 条 pageerror）。编辑器实例不需要响应式——模板一次都没用到它。
+        this.diffEditor = markRaw(monaco.editor.createDiffEditor(container, {
           automaticLayout: true,
           readOnly: true,
           renderSideBySide: this.viewMode === 'side',
@@ -190,8 +223,8 @@ export default {
           fontSize: 13,
           fontFamily: '"PingFang SC", "Microsoft YaHei", monospace',
           wordWrap: 'on'
-        })
-        
+        }))
+
         // 设置模型（存到 this 以便 dispose，否则反复开合对比会累积泄漏 Monaco text model）
         this._originalModel = monaco.editor.createModel(this.sourceText, 'plaintext')
         this._modifiedModel = monaco.editor.createModel(this.targetText, 'plaintext')

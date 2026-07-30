@@ -76,6 +76,7 @@ public class AgentOrchestrator {
     private final TodoListService todoListService;
     private final DocumentCheckpointService documentCheckpointService;
     private final AgentRunStateService agentRunStateService;
+    private final com.checkba.version.WorkSessionService workSessionService;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -380,7 +381,7 @@ public class AgentOrchestrator {
                 } catch (NumberFormatException ignore) { /* 非数字 ID（如临时文件）不做检查点 */ }
             }
             runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, guard);
-            
+
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
@@ -741,6 +742,12 @@ public class AgentOrchestrator {
                         conversationId, projectId, userId, new java.util.ArrayList<>(messages));
             } catch (Exception memEx) {
                 log.warn("Failed to trigger memory pipeline for {}", conversationId, memEx);
+            }
+            // 版本记录：AI 轮次真正结束后落一笔 AI 署名存档（失败绝不阻断）
+            try {
+                workSessionService.commitAiRound(Long.parseLong(projectId), userId);
+            } catch (Exception vEx) {
+                log.warn("AI 轮次版本落档失败: project={}", projectId, vEx);
             }
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.FINISHED);
             // 发送 bubble_end 表示整个循环真正结束
