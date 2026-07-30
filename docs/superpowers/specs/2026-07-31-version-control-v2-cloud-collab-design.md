@@ -7,14 +7,14 @@
 ## 〇、已确认的产品决策（brainstorming 记录）
 
 1. **云端归属：两者都支持**——协议与客户端按律所自托管设计；官方在自有 ECS 上运营一个托管实例作为默认选项（同一套后端，无特殊分支逻辑）。曾评估用 Gitee 等成熟仓库替代官方托管以降运维成本，结论是协议可行但「自动开账号」只能半自动（gitee.com 无代开账号 API、注册需手机实名）、且失去「真项目」特性、保密叙事对法律客户不利，**用户裁定弃用，官方自己运营托管实例**。
-2. **服务端形态：现有后端内嵌 GitServlet**——JGit `org.eclipse.jgit.http.server` 挂进 Spring Boot（web 部署形态），Git smart HTTP。认证复用 User/ProjectMember，不引入第二服务，不用 SSH。
+2. **服务端形态：现有后端内嵌 Git smart HTTP 端点**——认证复用 User/ProjectMember，不引入第二服务，不用 SSH。实现载体（计划期核验后修正）：后端是 Spring Boot 3.2.4（jakarta.servlet），而 JGit 6.9 的 `org.eclipse.jgit.http.server`（GitServlet）仍是 javax.servlet 系、无法直接挂载；改用 JGit 核心包内 servlet 无关的 `UploadPack`/`ReceivePack` 在普通 Spring Controller 里直写 smart HTTP 协议（info/refs 广告 + 两个 POST 端点，零新依赖），协议对外完全等价。
 3. **同步时机：结束工作自动上传 + 手动入口**——「结束本次工作」后自动上传主线（失败静默记待传）；打开项目时检查云端更新并提示；另有手动「立即上传」「从云端更新」。工作中的段绝不自动上传（半成品不出本机）。
 4. **一期范围：一次做完多人协作**——含账号、共享、接入、双向同步、并发冲突三选一、成员权限。
 5. **云端项目形态：真项目**——push 后服务端把工作区与数据库同步到新主线，网页瘦客户端直接看到最新文件，云端时间线/对比可用。
 
 ## 一、拓扑
 
-- **团队服务器** = 现有后端以 web 形态部署（`deploy/web`，prod/默认 profile，MySQL/PG），新增 GitServlet 暴露 `/git/{projectId}.git`。律所自托管与官方托管是同一份部署物。
+- **团队服务器** = 现有后端以 web 形态部署（`deploy/web`，prod/默认 profile，MySQL/PG），新增 Git smart HTTP 端点暴露 `/git/{projectId}.git`（UploadPack/ReceivePack 直写，见决策 2）。律所自托管与官方托管是同一份部署物。
 - **桌面端** = 现有单机形态（desktop profile，H2）不变，后端进程内新增云端同步能力（JGit 网络操作全部发生在本地后端，前端只调 REST）。
 - **协作模型** = 每人本地完整仓库 + 云端 origin。个人的工作段在本地合并进本地主线，主线推到云端共享；`work/*`、`draft/*` 分支是个人的，永不上传。
 - 一个本地项目至多关联一个云端项目；官方托管实例只是「团队服务器地址默认填官方域名」，无多租户新概念——项目级成员隔离就是租户隔离，v2 不建租户/计费/配额层。
@@ -54,7 +54,7 @@ v1 的 `.awd/tree.json`（version=1）携带本机 H2 自增 id（id/parentId/us
 
 ## 五、服务端落库与服务端状态机
 
-- **push 落库**：GitServlet 注册 `PostReceiveHook`——master 前进后，在该项目 `repoLock` 内执行「checkout master 到工作区 + `syncManifestFromRef("HEAD")` 全量同步落库」（复用切线协议③④步）。前置：服务器 HEAD 在 master 且无 MERGING 且无 ACTIVE 工作段；不满足则置「待同步」标记，由下次 `/status`、下次 push 或空闲结束后补做。receive-pack 本身只动 ref，永不碰工作区。
+- **push 落库**：`ReceivePack` 注册 `PostReceiveHook`——master 前进后，在该项目 `repoLock` 内执行「checkout master 到工作区 + `syncManifestFromRef("HEAD")` 全量同步落库」（复用切线协议③④步）。前置：服务器 HEAD 在 master 且无 MERGING 且无 ACTIVE 工作段；不满足则置「待同步」标记，由下次 `/status`、下次 push 或空闲结束后补做。receive-pack 本身只动 ref，永不碰工作区。
 - **服务端 `endSession` 冲突化（v2 唯一的状态机改动）**：v1 有「单人合并、结束工作前从不会有人抢先修改主线」的不变式，`merge()` 冲突即技术档异常。v2 里 push 会在网页端用户工作期间推进服务器 master，该不变式在服务端失效。改法：服务端 `endSession` 的合并冲突不再异常，转入与桌面端相同的云端冲突窗口（`mergeKeepingConflicts` + 三选一，文案「同事的 / 我这边的 / 两份都留」），裁决后完成合并、工作段正常收尾。这让 `mergeKeepingConflicts`（v1 的可测试拆分产物，无业务调用方）获得第一个真实调用方。桌面端 `endSession` 不变。
 - **并发 push**：git ref 更新原子，晚到者收 non-FF 拒绝走客户端自动合并流程；落库钩子在 repoLock 内串行。
 - **里程碑标签**：随推拉双向同步；同一版本被两人先后命名时后推者覆盖（`setForceUpdate(true)` 既有语义），可接受。
