@@ -1586,9 +1586,11 @@ export function enableVersionControl(projectId) {
   });
 }
 
-export function getVersionTimeline(projectId, limit = 50) {
+export function getVersionTimeline(projectId, limit = 50, fileId) {
+  let url = `/api/projects/${projectId}/version/timeline?limit=${limit}`
+  if (fileId) url += `&fileId=${fileId}`
   return request({
-    url: `/api/projects/${projectId}/version/timeline?limit=${limit}`,
+    url,
     method: 'GET'
   });
 }

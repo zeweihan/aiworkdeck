@@ -1,6 +1,7 @@
 package com.checkba.version;
 
 import com.checkba.controller.AuthController;
+import com.checkba.service.ProjectFileService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.UserService;
 import org.junit.jupiter.api.Test;
@@ -43,6 +44,37 @@ class VersionFileAccessTest {
         assertThrows(VersionException.class, () -> WorkSessionService.safeRepoPath("合同.docx/"));
     }
 
+    @Test
+    void repoRelativePathStripsProjectPrefix() {
+        com.checkba.model.entity.ProjectFile f = new com.checkba.model.entity.ProjectFile();
+        f.setId(1L);
+        f.setProjectId(7L);
+        f.setFilePath("projects/7/重要协议/x.docx");
+
+        assertEquals("重要协议/x.docx", WorkSessionService.repoRelativePath(f));
+    }
+
+    @Test
+    void repoRelativePathRejectsMismatchedProjectPrefix() {
+        com.checkba.model.entity.ProjectFile f = new com.checkba.model.entity.ProjectFile();
+        f.setId(1L);
+        f.setProjectId(7L);
+        f.setFilePath("projects/8/重要协议/x.docx");
+
+        assertThrows(VersionException.class, () -> WorkSessionService.repoRelativePath(f));
+    }
+
+    @Test
+    void repoRelativePathRejectsNullFileOrPath() {
+        assertThrows(VersionException.class, () -> WorkSessionService.repoRelativePath(null));
+
+        com.checkba.model.entity.ProjectFile f = new com.checkba.model.entity.ProjectFile();
+        f.setId(1L);
+        f.setProjectId(7L);
+        f.setFilePath(null);
+        assertThrows(VersionException.class, () -> WorkSessionService.repoRelativePath(f));
+    }
+
     // ---- 控制器行为：鉴权通过后，file-bytes/file-text 的实际取值逻辑 ----------
 
     @Mock
@@ -53,9 +85,11 @@ class VersionFileAccessTest {
     private ProjectMemberService projectMemberService;
     @Mock
     private UserService userService;
+    @Mock
+    private ProjectFileService projectFileService;
 
     private VersionController newController() {
-        return new VersionController(repoService, sessionService, projectMemberService, userService);
+        return new VersionController(repoService, sessionService, projectMemberService, userService, projectFileService);
     }
 
     private static final long PROJECT_ID = 7L;

@@ -292,6 +292,15 @@
           </view>
           <text class="context-menu-text">管理标签</text>
         </view>
+        <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item"
+          @tap="$emit('file-history', contextMenu.targetItem); closeContextMenu()">
+          <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/>
+            </svg>
+          </view>
+          <text class="context-menu-text">这份文件的历史</text>
+        </view>
         <view v-if="contextMenu.targetItem" class="context-menu-item context-menu-item-danger" @tap="handleDelete(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

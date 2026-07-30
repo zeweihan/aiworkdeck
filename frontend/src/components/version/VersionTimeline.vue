@@ -65,10 +65,16 @@ export default {
   components: { VersionNodeDetail },
   props: {
     projectId: { type: [String, Number], required: true },
+    fileFilter: { type: Object, default: null },
   },
   emits: ['reverted', 'compare-file'],
   data() {
     return { versions: [], expanded: {}, selected: null, loadError: false }
+  },
+  watch: {
+    fileFilter() {
+      this.load()
+    },
   },
   computed: {
     // 工作段是主线节点，自动存档折进它下面。
@@ -92,7 +98,7 @@ export default {
   methods: {
     async load() {
       try {
-        const res = await getVersionTimeline(this.projectId)
+        const res = await getVersionTimeline(this.projectId, 50, this.fileFilter && this.fileFilter.fileId)
         this.versions = ((res && res.data && res.data.versions) || [])
         this.loadError = false
       } catch (e) {

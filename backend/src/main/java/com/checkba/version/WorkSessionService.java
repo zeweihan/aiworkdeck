@@ -451,6 +451,17 @@ public class WorkSessionService {
         return normalized;
     }
 
+    /** ProjectFile.filePath（projects/{id}/...）→ 仓库相对路径。归属不符即拒。 */
+    static String repoRelativePath(com.checkba.model.entity.ProjectFile f) {
+        String fp = f == null ? null : f.getFilePath();
+        if (f == null || fp == null) throw new VersionException("文件没有物理路径");
+        String prefix = "projects/" + f.getProjectId() + "/";
+        if (!fp.startsWith(prefix) || fp.length() <= prefix.length()) {
+            throw new VersionException("文件路径不在本项目内: fileId=" + f.getId());
+        }
+        return safeRepoPath(fp.substring(prefix.length()));
+    }
+
     /**
      * 生成律师在时间线上看到的那句话。清单文件是内部机制，不出现在描述里。
      */
