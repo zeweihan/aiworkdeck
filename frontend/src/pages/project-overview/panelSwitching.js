@@ -31,6 +31,10 @@ export const panelSwitchingMethods = {
         this.leftPaneKey = key
         this.sidebarCollapsed = false
 
+        // 「只看《某份文件》的历史」是版本面板的临时过滤态。切到别的面板就清掉，
+        // 否则律师下次回到版本面板，还端着上一次右键那份文件的过滤条。
+        if (key !== 'version') this.versionFileFilter = null
+
         // Check if it's a dynamic plugin and open its tab
         const plugin = this.dynamicPlugins.find(p => p.key === key)
         if (plugin) {
@@ -42,9 +46,16 @@ export const panelSwitchingMethods = {
           })
         }
 
-        // 恢复新模式下的活跃 tab
-        const savedLeft = this.lastActiveIdsByMode.left[key]
-        const savedRight = this.lastActiveIdsByMode.right[key]
+        // 恢复新模式下的活跃 tab。记忆里的 id 可能已经关掉、也可能在新面板下
+        // 根本不可见（版本对比标签只在 version/files 下可见），直接照抄会把律师
+        // strand 在一个空白编辑区上——所以先验证「还在且可见」，否则退回下面
+        // 「挑第一个可见标签」的兜底逻辑。
+        const savedLeftId = this.lastActiveIdsByMode.left[key]
+        const savedRightId = this.lastActiveIdsByMode.right[key]
+        const savedLeftTab = savedLeftId ? this.leftFiles.find(f => f.id === savedLeftId) : null
+        const savedRightTab = savedRightId ? this.rightFiles.find(f => f.id === savedRightId) : null
+        const savedLeft = savedLeftTab && this.isTabVisible(savedLeftTab) ? savedLeftId : null
+        const savedRight = savedRightTab && this.isTabVisible(savedRightTab) ? savedRightId : null
 
         if (savedLeft) {
           this.activeFileIdLeft = savedLeft

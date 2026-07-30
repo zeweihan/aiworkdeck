@@ -51,7 +51,7 @@
       @close="selected = null"
       @reverted="onReverted"
       @compare-file="$emit('compare-file', $event)"
-      @milestoned="load"
+      @milestoned="onMilestoned"
     />
   </scroll-view>
 </template>
@@ -120,6 +120,16 @@ export default {
     },
     select(v) {
       this.selected = v
+    },
+    // 标记重要版本之后：load() 会把 versions 整个换成新对象，而 selected 还指着
+    // 旧对象——弹窗上的按钮仍写着「标为重要版本」，看起来像没生效。重拉之后把
+    // selected 重新指到同一个 sha 的新条目上（拿到的 milestone 字段是服务端权威值）。
+    async onMilestoned() {
+      const sha = this.selected && this.selected.sha
+      await this.load()
+      if (!sha) return
+      const fresh = this.versions.find(v => v.sha === sha)
+      if (fresh) this.selected = fresh
     },
     onReverted(affectedFileIds) {
       this.selected = null

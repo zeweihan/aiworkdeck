@@ -80,6 +80,7 @@
 </template>
 
 <script>
+import { markRaw } from 'vue'
 import api, { getVersionFileText } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 
@@ -205,8 +206,11 @@ export default {
           throw new Error('找不到编辑器容器')
         }
         
-        // 创建 Diff Editor
-        this.diffEditor = monaco.editor.createDiffEditor(container, {
+        // 创建 Diff Editor。markRaw 不能省：diffEditor 是 data 字段，直接赋值会让
+        // Vue 把整个 Monaco 编辑器对象图递归包成 reactive proxy，Monaco 内部再去
+        // 遍历自己的结构就爆 "Maximum call stack size exceeded"（真机 app-e2e 里
+        // 抓到过 4 条 pageerror）。编辑器实例不需要响应式——模板一次都没用到它。
+        this.diffEditor = markRaw(monaco.editor.createDiffEditor(container, {
           automaticLayout: true,
           readOnly: true,
           renderSideBySide: this.viewMode === 'side',
@@ -219,8 +223,8 @@ export default {
           fontSize: 13,
           fontFamily: '"PingFang SC", "Microsoft YaHei", monospace',
           wordWrap: 'on'
-        })
-        
+        }))
+
         // 设置模型（存到 this 以便 dispose，否则反复开合对比会累积泄漏 Monaco text model）
         this._originalModel = monaco.editor.createModel(this.sourceText, 'plaintext')
         this._modifiedModel = monaco.editor.createModel(this.targetText, 'plaintext')
