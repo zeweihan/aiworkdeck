@@ -28,6 +28,15 @@ const { app } = require('electron')
 
 const LOWA_CDN = 'https://cdn.zetaoffice.net/zetaoffice_latest/'
 
+// Chromium keys both the HTTP disk cache and the V8 WASM code cache on
+// origin+URL. A random port (listen(0)) changes the origin every app launch,
+// so the 150MB soffice.wasm was re-downloaded from disk AND recompiled on
+// every cold start. A fixed port keeps the origin stable across launches;
+// if it's taken (second app instance, dev + packaged side by side) we fall
+// back to a random port — everything still works, just without cross-launch
+// cache reuse.
+const FIXED_PORT = 47613
+
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -107,9 +116,21 @@ function startEditorServer() {
             try {
               const st = await stat(localPath)
               if (st.isFile()) {
+                // ETag + no-cache (NOT immutable: /lowa/soffice.wasm keeps the
+                // same URL across engine upgrades, so the browser must
+                // revalidate — a localhost 304 costs ~1ms and still lets
+                // Chromium reuse the cached body plus its WASM code cache).
+                const etag = '"' + st.size + '-' + Math.round(st.mtimeMs) + '"'
+                const cacheHeaders = { ETag: etag, 'Cache-Control': 'public, no-cache' }
+                if (req.headers['if-none-match'] === etag) {
+                  res.writeHead(304, cacheHeaders)
+                  res.end()
+                  return
+                }
                 const headers = {
                   'Content-Type': TYPES[path.extname(localPath)] || 'application/octet-stream',
                   'Content-Length': st.size,
+                  ...cacheHeaders,
                 }
                 // Replay the brotli encoding for files the CDN pre-compressed.
                 const enc = lowaEncodings[path.basename(localPath)]
@@ -133,11 +154,21 @@ function startEditorServer() {
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found')
       }
     })
-    s.on('error', (e) => { serverPromise = null; reject(e) })
-    s.listen(0, '127.0.0.1', () => {
+    let fellBack = false
+    s.on('listening', () => {
       const port = s.address().port
       resolve({ port, origin: 'http://127.0.0.1:' + port })
     })
+    s.on('error', (e) => {
+      if (!fellBack && e && e.code === 'EADDRINUSE') {
+        fellBack = true
+        s.listen(0, '127.0.0.1')
+        return
+      }
+      serverPromise = null
+      reject(e)
+    })
+    s.listen(FIXED_PORT, '127.0.0.1')
   })
   return serverPromise
 }
