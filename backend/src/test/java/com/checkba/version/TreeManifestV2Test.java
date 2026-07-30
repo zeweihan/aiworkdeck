@@ -193,6 +193,26 @@ class TreeManifestV2Test {
         assertEquals(2L, row.getUserId()); // 项目 9 的 owner
     }
 
+    /** 手改 .awd/tree.json 丢了 uid：宁可显式失败，不能让节点静默不落库。见 PR 审查修复。 */
+    @Test
+    void v2NodeWithoutUidIsRejectedLoudly() throws Exception {
+        String v2Json = """
+                {"version":2,"nodes":[
+                {"name":"外来1.md","isFolder":false,"sortOrder":0,
+                "isDeleted":false,"uid":null,"relPath":"外来1.md","author":"stranger"},
+                {"name":"外来2.md","isFolder":false,"sortOrder":1,
+                "isDeleted":false,"uid":null,"relPath":"外来2.md","author":"stranger"}
+                ]}
+                """;
+        TreeManifest m = new ObjectMapper().readValue(v2Json, TreeManifest.class);
+
+        VersionException ex = assertThrows(VersionException.class,
+                () -> manifestSvc.applyToDatabase(9L, m));
+
+        assertTrue(ex.getMessage().contains("uid"));
+        assertTrue(db.values().stream().noneMatch(f -> f.getProjectId().equals(9L))); // 一行都没落库
+    }
+
     @Test
     void v1ManifestStillAppliesById() throws Exception {
         ProjectFile old = seedRow(9L, null, "旧文件.md", false, "projects/9/旧文件.md");

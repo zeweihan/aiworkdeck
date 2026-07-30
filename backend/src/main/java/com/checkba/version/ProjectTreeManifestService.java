@@ -286,7 +286,15 @@ public class ProjectTreeManifestService {
         Map<String, Long> idByUid = new HashMap<>();
         long synthetic = -1;
         for (TreeManifest.Node n : nodes) {
-            ProjectFile match = n.uid() == null ? null : byUid.get(n.uid());
+            if (n.uid() == null || n.uid().isBlank()) {
+                // v2 契约要求每个节点必有 uid——多个 null/blank 键会在 idByUid 里互相
+                // 覆盖，让 topoSort 的去重把后来者当重复静默丢弃（节点不落库、无异常无
+                // 日志）。capture 自产的清单必回填 uid 不会触发；.awd/tree.json 是仓库里
+                // 外部可编辑的文件，宁可显式失败，不能静默丢数据。
+                throw new VersionException(
+                        "清单 v2 节点缺少身份标识(uid): project=" + projectId + " name=" + n.name());
+            }
+            ProjectFile match = byUid.get(n.uid());
             idByUid.put(n.uid(), match != null ? match.getId() : synthetic--);
         }
         Map<String, Long> userIdCache = new HashMap<>();
