@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.*;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.zip.GZIPInputStream;
+import java.util.zip.ZipException;
 
 /**
  * Git smart HTTP 协议端点（团队服务器侧）。
@@ -22,6 +23,9 @@ import java.util.zip.GZIPInputStream;
 @RestController
 @RequestMapping("/git")
 public class GitHttpController {
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(GitHttpController.class);
 
     static final String UPLOAD_PACK = "git-upload-pack";
     static final String RECEIVE_PACK = "git-receive-pack";
@@ -60,6 +64,12 @@ public class GitHttpController {
                 configureReceivePack(rp, projectId);
                 rp.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
             }
+        } catch (Exception e) {
+            // 全局 @ExceptionHandler(Exception.class) 会把异常统一改写成 HTTP 200 + JSON，
+            // 把这段本该是 git 协议响应的输出污染成客户端读不懂的 "invalid advertisement"，
+            // 所以这里要在协议层自己兜底。
+            log.warn("git info/refs 处理失败: projectId={}, service={}", projectId, service, e);
+            failSafely(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -77,6 +87,13 @@ public class GitHttpController {
             UploadPack up = new UploadPack(repo);
             up.setBiDirectionalPipe(false);
             up.upload(body(request), response.getOutputStream(), null);
+        } catch (ZipException e) {
+            // 请求体不是合法的 gzip 流，是客户端的问题，不是服务端错误
+            log.warn("git-upload-pack 请求体 gzip 解压失败: projectId={}", projectId, e);
+            failSafely(response, HttpServletResponse.SC_BAD_REQUEST);
+        } catch (Exception e) {
+            log.warn("git-upload-pack 处理失败: projectId={}", projectId, e);
+            failSafely(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -95,6 +112,13 @@ public class GitHttpController {
             rp.setBiDirectionalPipe(false);
             configureReceivePack(rp, projectId);
             rp.receive(body(request), response.getOutputStream(), null);
+        } catch (ZipException e) {
+            // 请求体不是合法的 gzip 流，是客户端的问题，不是服务端错误
+            log.warn("git-receive-pack 请求体 gzip 解压失败: projectId={}", projectId, e);
+            failSafely(response, HttpServletResponse.SC_BAD_REQUEST);
+        } catch (Exception e) {
+            log.warn("git-receive-pack 处理失败: projectId={}", projectId, e);
+            failSafely(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
     }
 
@@ -113,5 +137,17 @@ public class GitHttpController {
     private void noCache(HttpServletResponse response) {
         response.setHeader("Cache-Control", "no-cache, max-age=0, must-revalidate");
         response.setHeader("Pragma", "no-cache");
+    }
+
+    /**
+     * git 协议出错时的兜底：还没往客户端写字节就能改状态码；
+     * 字节已经流出去（response 已 committed）就只能靠上面的 log.warn 留痕，
+     * 状态码换不了了——这是 HTTP 协议本身的限制，不是这里能绕开的。
+     */
+    private void failSafely(HttpServletResponse response, int status) throws IOException {
+        if (!response.isCommitted()) {
+            response.reset();
+            response.sendError(status);
+        }
     }
 }
