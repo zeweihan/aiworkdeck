@@ -64,12 +64,24 @@ class ProjectRepoRemoteTest {
         ProjectRepoService.PushOutcome out = s.pushMainlineToOrigin(7L, "u", "t");
         assertFalse(out.pushed());
         assertTrue(out.rejected());
+        assertFalse(out.message().isBlank());
 
         // fetch 后 isAncestor 能判「主线被别人推进」
         String remoteSha = s.fetchFromOrigin(7L, "u", "t");
         assertNotNull(remoteSha);
         assertFalse(s.isAncestor(7L, remoteSha, "master"));
         assertTrue(s.isAncestor(7L, "master^", "master"));
+    }
+
+    @Test
+    void fetchFromEmptyRemoteReturnsNull(@TempDir Path root, @TempDir Path remote) throws Exception {
+        ProjectRepoService s = seeded(root);
+        s.setRemoteOrigin(7L, bareRemote(remote)); // 从未有人推过的空裸仓
+
+        String sha = s.fetchFromOrigin(7L, "u", "t");
+
+        assertNull(sha);
+        assertNull(s.originMasterSha(7L));
     }
 
     @Test

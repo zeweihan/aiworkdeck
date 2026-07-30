@@ -730,9 +730,32 @@ public class ProjectRepoService {
                     .setTimeout(60)
                     .call();
             return originMasterSha(projectId);
+        } catch (org.eclipse.jgit.api.errors.TransportException e) {
+            if (isEmptyRemoteFetchFailure(e)) {
+                return null;
+            }
+            throw new VersionException("从云端更新失败: project=" + projectId, e);
         } catch (Exception e) {
             throw new VersionException("从云端更新失败: project=" + projectId, e);
         }
+    }
+
+    /**
+     * 判别「远端裸仓从未有人推过、连 refs/heads/master 都不存在」这一 fetch 失败形态。
+     * JGit 对显式 refspec fetch 空仓库固定抛
+     * "Remote does not have refs/heads/master available for fetch."
+     * （FetchProcess.expandSingle 经 JGitText.remoteDoesNotHaveSpec 生成，消息原样透传到
+     * FetchCommand 包装后的 org.eclipse.jgit.api.errors.TransportException），
+     * 与认证失败、网络不通等其它 TransportException 区分开——只有这一种返回 null，其余仍抛异常。
+     */
+    private boolean isEmptyRemoteFetchFailure(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            String msg = t.getMessage();
+            if (msg != null && msg.contains("does not have") && msg.contains("available for fetch")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** 本地已知的 origin/master（不联网）；没有返回 null。 */
@@ -764,11 +787,9 @@ public class ProjectRepoService {
                 for (org.eclipse.jgit.transport.RemoteRefUpdate u : r.getRemoteUpdates()) {
                     switch (u.getStatus()) {
                         case OK, UP_TO_DATE -> { }
-                        case REJECTED_NONFASTFORWARD, REJECTED_OTHER_REASON,
-                             REJECTED_REMOTE_CHANGED -> rejected = true;
                         default -> {
                             rejected = true;
-                            msg.append(u.getStatus()).append(' ');
+                            msg.append(u.getRemoteName()).append(':').append(u.getStatus()).append(' ');
                         }
                     }
                 }
