@@ -23,14 +23,32 @@
       </view>
       <view class="awd-footer">
         <view class="awd-btn awd-btn-secondary" @tap="$emit('close')">关闭</view>
+        <view class="awd-btn awd-btn-secondary" @tap="openMilestoneNaming">{{ version.milestone ? '重新命名重要版本' : '标为重要版本' }}</view>
         <view class="awd-btn awd-btn-primary" @tap="confirmRevert">退回到这一版</view>
+      </view>
+    </view>
+
+    <view v-if="milestoneNaming" class="awd-mask" @tap.self="milestoneNaming = false">
+      <view class="awd-dialog">
+        <view class="awd-header"><text class="awd-title">给这个重要版本起个名字</text></view>
+        <view class="awd-body">
+          <input
+            v-model="milestoneName"
+            class="awd-input"
+            placeholder="例如：发客户第一稿"
+          />
+        </view>
+        <view class="awd-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="milestoneNaming = false">取消</view>
+          <view class="awd-btn awd-btn-primary" @tap="submitMilestone">确定</view>
+        </view>
       </view>
     </view>
   </view>
 </template>
 
 <script>
-import { getVersionChanges, revertToVersion } from '@/services/api.js'
+import { getVersionChanges, revertToVersion, markVersionMilestone } from '@/services/api.js'
 
 export default {
   name: 'VersionNodeDetail',
@@ -38,9 +56,9 @@ export default {
     projectId: { type: [String, Number], required: true },
     version: { type: Object, required: true },
   },
-  emits: ['close', 'reverted', 'compare-file'],
+  emits: ['close', 'reverted', 'compare-file', 'milestoned'],
   data() {
-    return { changes: [], loadError: false }
+    return { changes: [], loadError: false, milestoneNaming: false, milestoneName: '', busy: false }
   },
   computed: {
     when() {
@@ -81,6 +99,29 @@ export default {
           }
         },
       })
+    },
+    openMilestoneNaming() {
+      this.milestoneName = this.version.milestone || ''
+      this.milestoneNaming = true
+    },
+    async submitMilestone() {
+      if (this.busy) return
+      const name = (this.milestoneName || '').trim()
+      if (!name) {
+        uni.showToast({ title: '请给这个重要版本起个名字', icon: 'none' })
+        return
+      }
+      this.busy = true
+      try {
+        await markVersionMilestone(this.projectId, this.version.sha, name)
+        this.milestoneNaming = false
+        uni.showToast({ title: '已标为重要版本', icon: 'none' })
+        this.$emit('milestoned')
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '标记失败，请稍后重试', icon: 'none' })
+      } finally {
+        this.busy = false
+      }
     },
   },
 }

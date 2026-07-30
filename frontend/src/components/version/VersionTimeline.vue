@@ -14,7 +14,10 @@
     >
       <view class="node-line" />
       <view class="node-main" @tap="select(group.head)">
-        <view class="node-title">{{ titleOf(group.head) }}</view>
+        <view class="node-title" :class="{ 'has-milestone': group.head.milestone }">
+          <text v-if="group.head.milestone" class="milestone-flag">重要版本</text>
+          {{ group.head.milestone || titleOf(group.head) }}
+        </view>
         <view class="node-meta">{{ group.head.authorName }} · {{ timeOf(group.head) }}</view>
       </view>
 
@@ -33,7 +36,10 @@
           @tap="select(a)"
         >
           <text class="auto-time">{{ timeOf(a) }}</text>
-          <text class="auto-msg">{{ a.message }}</text>
+          <text class="auto-msg" :class="{ 'has-milestone': a.milestone }">
+            <text v-if="a.milestone" class="milestone-flag">重要版本</text>
+            {{ a.milestone || a.message }}
+          </text>
         </view>
       </view>
     </view>
@@ -45,6 +51,7 @@
       @close="selected = null"
       @reverted="onReverted"
       @compare-file="$emit('compare-file', $event)"
+      @milestoned="load"
     />
   </scroll-view>
 </template>
@@ -135,4 +142,6 @@ export default {
 .node-auto { display: flex; gap: 12rpx; padding: 8rpx 0; }
 .auto-time { font-size: 23rpx; color: #aaa; flex-shrink: 0; }
 .auto-msg { font-size: 23rpx; color: #666; }
+.milestone-flag { font-size: 20rpx; color: #C8A45D; border: 1px solid #C8A45D; border-radius: 4rpx; padding: 2rpx 8rpx; margin-right: 8rpx; }
+.has-milestone { font-weight: 600; }
 </style>

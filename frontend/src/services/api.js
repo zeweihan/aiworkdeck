@@ -1630,6 +1630,15 @@ export function revertToVersion(projectId, ref) {
   });
 }
 
+// 标记重要版本（需命名，如「发客户第一稿」）。
+export function markVersionMilestone(projectId, sha, name) {
+  return request({
+    url: `/api/projects/${projectId}/version/versions/${encodeURIComponent(sha)}/milestone`,
+    method: 'POST',
+    data: { name }
+  });
+}
+
 // 版本对比降级：取某一版某文件抽取出的纯文本。
 export function getVersionFileText(projectId, ref, path) {
   return request({
