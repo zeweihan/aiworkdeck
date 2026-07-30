@@ -38,6 +38,9 @@ class VersionFileAccessTest {
         assertThrows(VersionException.class, () -> WorkSessionService.safeRepoPath("/abs"));
         assertThrows(VersionException.class, () -> WorkSessionService.safeRepoPath("a\\b"));
         assertThrows(VersionException.class, () -> WorkSessionService.safeRepoPath("  "));
+        assertThrows(VersionException.class, () -> WorkSessionService.safeRepoPath("a/./b"));
+        assertThrows(VersionException.class, () -> WorkSessionService.safeRepoPath("a//b"));
+        assertThrows(VersionException.class, () -> WorkSessionService.safeRepoPath("合同.docx/"));
     }
 
     // ---- 控制器行为：鉴权通过后，file-bytes/file-text 的实际取值逻辑 ----------
@@ -76,6 +79,8 @@ class VersionFileAccessTest {
             var response = controller.fileBytesAtRef(PROJECT_ID, REF, "a.txt", "sess");
 
             assertArrayEquals(content, response.getBody());
+            assertEquals(org.springframework.http.MediaType.APPLICATION_OCTET_STREAM,
+                    response.getHeaders().getContentType());
         }
     }
 
