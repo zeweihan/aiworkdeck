@@ -88,6 +88,7 @@ export default {
   },
   methods: {
     async onShare() {
+      if (this.busy) return
       this.busy = true
       try {
         const conns = await listCloudConnections()
@@ -100,18 +101,19 @@ export default {
       finally { this.busy = false }
     },
     async onUpload() {
+      if (this.busy) return
       this.busy = true
       try {
         const res = await uploadToCloud(this.projectId)
         const st = res.data && res.data.status
         if (st === 'UPLOADED') uni.showToast({ title: '已上传到云端', icon: 'none' })
-        else if (st === 'CONFLICT') this.$emit('shared') // 让面板 refresh 弹冲突弹窗
-        else uni.showToast({ title: (res.data && res.data.message) || '暂时没能上传', icon: 'none' })
-        this.$emit('shared')
+        else if (st !== 'CONFLICT') uni.showToast({ title: (res.data && res.data.message) || '暂时没能上传', icon: 'none' })
+        this.$emit('shared') // CONFLICT 时让面板 refresh 弹冲突弹窗，其余情况一并刷新状态
       } catch (e) { uni.showToast({ title: e.message || '上传失败', icon: 'none' }) }
       finally { this.busy = false }
     },
     async onUpdate() {
+      if (this.busy) return
       this.busy = true
       try {
         const res = await updateFromCloud(this.projectId)
@@ -157,7 +159,10 @@ export default {
     },
     roleLabel(role) {
       if (role === 'OWNER') return '负责人'
+      if (role === 'ADMIN') return '管理员'
       if (role === 'PARTICIPANT') return '参与者'
+      if (role === 'READ_ONLY') return '只读成员'
+      if (role === 'CLIENT' || role === 'CLIENT_NAMED' || role === 'CLIENT_GENERIC') return '客户'
       return role || ''
     },
   },
