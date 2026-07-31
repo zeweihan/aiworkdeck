@@ -1289,7 +1289,7 @@
         v-if="adoptConflictPending && leftPaneKey !== 'version'"
         class="adopt-pending-bar"
       >
-        <text class="adopt-pending-text">有一次合并等待处理</text>
+        <text class="adopt-pending-text">有文件等着你做选择</text>
         <text class="adopt-pending-go" @tap="goHandleAdoptConflict">去处理</text>
       </view>
 
