@@ -111,9 +111,8 @@ public class VersionController {
                 .filter(d -> mergeHeadSha.equals(repoService.resolveRef(projectId, d.getBranchName())))
                 .findFirst()
                 .orElse(null);
-        List<String> conflicts = repoService.conflictingPaths(projectId).stream()
-                .filter(p -> !p.startsWith(".awd/"))
-                .toList();
+        List<String> conflicts = WorkSessionService.userVisibleConflicts(
+                repoService.conflictingPaths(projectId));
         Map<String, Object> m = new HashMap<>();
         m.put("draftId", matched == null ? null : matched.getId());
         m.put("draftName", matched == null ? null : matched.getTitle());
@@ -148,30 +147,34 @@ public class VersionController {
         }
         return sessionEndConflictData(new WorkSessionService.SessionEndConflict(
                 active.get().getId(), active.get().getTitle(),
-                repoService.conflictingPaths(projectId).stream()
-                        .filter(p -> !p.startsWith(".awd/")).toList(),
+                WorkSessionService.userVisibleConflicts(repoService.conflictingPaths(projectId)),
                 repoService.resolveRef(projectId, "HEAD"), mergeHead));
     }
 
     /**
-     * 云端更新冲突态（Task 9）反查：MERGE_HEAD 指向 origin/master 当前 tip 即为
+     * 云端更新冲突态（Task 9）反查：MERGE_HEAD 等于 origin/master 当前 tip、**或是它的
+     * 祖先**（v2 终审 I3：窗口开着期间同事又推了一版、随后本地 fetch 过，origin/master
+     * 前移不该把窗口孤儿化——窗口语境以开窗时刻的 MERGE_HEAD 为准），即为
      * CloudSyncService.updateFromCloud/uploadToCloud 的自动整合开出的合并冲突窗口。
+     * cloudTip 带回的是 MERGE_HEAD（裁决按开窗时刻的云端 tip 落地，不是 fetch 后的新 tip）。
      * 口径同 {@link #sessionEndConflictStatus}/{@link #adoptConflictStatus}——都靠
      * MERGE_HEAD 反查、不依赖任何应用层状态字段，崩溃恢复天然可用。/status 判定链里
-     * 排在 sessionEndConflict 之后、adoptConflict 之前，命中时后者强制 null。
+     * 排在 sessionEndConflict 之后、adoptConflict 之前（祖先判定放在活动段 tip 精确相等
+     * 之后，顺序不能颠倒），命中时后者强制 null。
      */
     private Map<String, Object> cloudConflictStatus(long projectId) {
         if (!repoService.repositoryMerging(projectId)) return null;
         String mergeHead = repoService.mergeHeadRef(projectId);
-        String cloudTip = repoService.originMasterSha(projectId);
-        if (mergeHead == null || cloudTip == null || !mergeHead.equals(cloudTip)) return null;
-        List<String> conflicts = repoService.conflictingPaths(projectId).stream()
-                .filter(p -> !p.startsWith(".awd/"))
-                .toList();
+        String originSha = repoService.originMasterSha(projectId);
+        if (mergeHead == null || originSha == null) return null;
+        boolean cloudWindow = mergeHead.equals(originSha)
+                || repoService.isAncestor(projectId, mergeHead, "refs/remotes/origin/master");
+        if (!cloudWindow) return null;
         Map<String, Object> m = new HashMap<>();
-        m.put("conflictingPaths", conflicts);
+        m.put("conflictingPaths", WorkSessionService.userVisibleConflicts(
+                repoService.conflictingPaths(projectId)));
         m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
-        m.put("cloudTip", cloudTip);
+        m.put("cloudTip", mergeHead);
         return m;
     }
 
@@ -189,7 +192,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> enable(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         sessionService.enableVersionRecording(projectId, userName(userId), email(userId));
         return ok(Map.of("enabled", true));
     }
@@ -203,10 +206,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> prepareRemote(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
-        if (!projectMemberService.hasWritePermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权共享该项目");
-        }
+        Long userId = requireWriteMember(projectId, sessionId);
         if (!repoService.isInitialized(projectId)) {
             repoService.initEmptyForReceive(projectId);
             return ok(Map.of("prepared", true, "fresh", true));
@@ -266,7 +266,7 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         String title = body == null ? null : body.get("title");
         WorkSessionService.SessionEndResult r =
                 sessionService.endSession(projectId, userId, userName(userId), title);
@@ -286,7 +286,7 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         Object rawSessionId = body.get("sessionId");
         if (!(rawSessionId instanceof Number)) {
             throw VersionException.userFacing("无效的请求");
@@ -303,7 +303,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> abortSessionEnd(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         String notice = sessionService.abortSessionEnd(projectId);
         return okWithMessage(Map.of(), notice);
     }
@@ -312,7 +312,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> discardSession(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         // affectedFileIds：丢弃改写了磁盘，打开中的编辑器要走同一条重载链（同 revert）。
         List<Long> affectedFileIds = sessionService.discardSession(projectId, userId);
         return ok(Map.of("discarded", true, "affectedFileIds", affectedFileIds));
@@ -322,7 +322,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> resumeSession(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         sessionService.resumeSession(projectId);
         return ok(Map.of("resumed", true));
     }
@@ -369,7 +369,7 @@ public class VersionController {
             @PathVariable Long projectId, @PathVariable String sha,
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         String name = body == null ? null : body.get("name");
         if (name == null || name.isBlank()) {
             throw VersionException.userFacing("请给重要版本起个名字");
@@ -386,7 +386,7 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.RevertResult result = sessionService.revertTo(
                 projectId, body.get("ref"), userId, userName(userId));
         return ok(Map.of(
@@ -401,7 +401,7 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         String ref = body == null ? null : body.get("ref");
         String name = body == null ? null : body.get("name");
         WorkSessionService.DraftCreateResult result =
@@ -431,7 +431,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> switchToDraft(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.LineSwitchResult result =
                 sessionService.switchToDraft(projectId, draftId, userId, userName(userId));
         return ok(Map.of("affectedFileIds", result.affectedFileIds()));
@@ -441,7 +441,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> switchToMainline(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.LineSwitchResult result =
                 sessionService.switchToMainline(projectId, userId, userName(userId));
         return ok(Map.of("affectedFileIds", result.affectedFileIds()));
@@ -451,7 +451,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> adoptDraft(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.AdoptOutcome outcome =
                 sessionService.adoptDraft(projectId, draftId, userId, userName(userId));
         return ok(adoptOutcomeData(outcome));
@@ -462,7 +462,7 @@ public class VersionController {
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestBody(required = false) Map<String, Map<String, String>> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         Map<String, WorkSessionService.Resolution> resolutions = parseResolutions(body);
         WorkSessionService.AdoptOutcome outcome =
                 sessionService.resolveAdopt(projectId, draftId, resolutions, userId, userName(userId));
@@ -473,7 +473,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> abortAdopt(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         sessionService.abortAdopt(projectId);
         return okWithMessage(Map.of("aborted", true), WorkSessionService.ADOPT_ABORTED_NOTICE);
     }
@@ -482,7 +482,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> abandonDraft(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.LineSwitchResult result =
                 sessionService.abandonDraft(projectId, draftId, userId, userName(userId));
         return ok(Map.of("affectedFileIds", result.affectedFileIds()));
@@ -546,6 +546,20 @@ public class VersionController {
         }
         if (projectMemberService.isClient(projectId, userId)) {
             throw new IllegalArgumentException("无权访问该项目");
+        }
+        return userId;
+    }
+
+    /**
+     * 改写仓库状态的端点在 requireMember 之上追加写权限（v2 终审 I4）：READ_ONLY 成员
+     * 能看时间线/对比，但结束工作、退回、采纳、里程碑等都会改写仓库与文件树，必须
+     * hasWritePermission——与 Git 写路径（GitAccessService push 侧）同口径。
+     * 注意参数序 (projectId, userId)，两参数同为 Long，写反了能编译（地雷 #3 同款）。
+     */
+    private Long requireWriteMember(Long projectId, String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        if (!projectMemberService.hasWritePermission(projectId, userId)) {
+            throw new IllegalArgumentException("无权修改该项目");
         }
         return userId;
     }

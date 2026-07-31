@@ -145,16 +145,36 @@ class VersionControllerAuthTest {
     private static final long USER_ID = 1L;
 
     private enum Endpoint {
-        STATUS, ENABLE, CHANGES, SESSION_END, SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT, MILESTONE,
+        STATUS, ENABLE, PREPARE_REMOTE, CHANGES, SESSION_END, SESSION_RESOLVE_END, SESSION_ABORT_END,
+        SESSION_DISCARD, SESSION_RESUME, REVERT, FILE_BYTES, FILE_TEXT, MILESTONE,
         DRAFT_CREATE, DRAFT_LIST, DRAFT_SWITCH, SWITCH_MAINLINE, DRAFT_ADOPT, DRAFT_RESOLVE, DRAFT_ABORT_ADOPT, DRAFT_ABANDON
+    }
+
+    /**
+     * 写端点集合（v2 终审 I4）：requireMember 之上追加 hasWritePermission 的那批——
+     * READ_ONLY 成员读通过、写拒绝的分界线。新增改写仓库状态的端点要同步加进来。
+     */
+    private static final java.util.EnumSet<Endpoint> WRITE_ENDPOINTS = java.util.EnumSet.of(
+            Endpoint.ENABLE, Endpoint.PREPARE_REMOTE, Endpoint.SESSION_END, Endpoint.SESSION_RESOLVE_END,
+            Endpoint.SESSION_ABORT_END, Endpoint.SESSION_DISCARD, Endpoint.SESSION_RESUME,
+            Endpoint.REVERT, Endpoint.MILESTONE, Endpoint.DRAFT_CREATE, Endpoint.DRAFT_SWITCH,
+            Endpoint.SWITCH_MAINLINE, Endpoint.DRAFT_ADOPT, Endpoint.DRAFT_RESOLVE,
+            Endpoint.DRAFT_ABORT_ADOPT, Endpoint.DRAFT_ABANDON);
+
+    static java.util.Set<Endpoint> writeEndpoints() {
+        return WRITE_ENDPOINTS;
     }
 
     private void invoke(Endpoint endpoint, String sessionId) {
         switch (endpoint) {
             case STATUS -> controller.status(PROJECT_ID, sessionId);
             case ENABLE -> controller.enable(PROJECT_ID, sessionId);
+            case PREPARE_REMOTE -> controller.prepareRemote(PROJECT_ID, sessionId);
             case CHANGES -> controller.changes(PROJECT_ID, "abc123", sessionId);
             case SESSION_END -> controller.endSession(PROJECT_ID, null, sessionId);
+            case SESSION_RESOLVE_END -> controller.resolveSessionEnd(PROJECT_ID,
+                    Map.of("sessionId", 3, "resolutions", Map.of("a.txt", "MAIN")), sessionId);
+            case SESSION_ABORT_END -> controller.abortSessionEnd(PROJECT_ID, sessionId);
             case SESSION_DISCARD -> controller.discardSession(PROJECT_ID, sessionId);
             case SESSION_RESUME -> controller.resumeSession(PROJECT_ID, sessionId);
             case REVERT -> controller.revert(PROJECT_ID, Map.of("ref", "abc123"), sessionId);
@@ -176,8 +196,12 @@ class VersionControllerAuthTest {
         switch (endpoint) {
             case STATUS -> verify(repoService, never()).isInitialized(anyLong());
             case ENABLE -> verify(repoService, never()).init(anyLong(), anyString(), anyString());
+            case PREPARE_REMOTE -> verify(repoService, never()).initEmptyForReceive(anyLong());
             case CHANGES -> verify(repoService, never()).diffNameStatus(anyLong(), anyString(), anyString());
             case SESSION_END -> verify(sessionService, never()).endSession(anyLong(), any(), anyString(), any());
+            case SESSION_RESOLVE_END -> verify(sessionService, never())
+                    .resolveSessionEnd(anyLong(), anyLong(), any(), any(), anyString());
+            case SESSION_ABORT_END -> verify(sessionService, never()).abortSessionEnd(anyLong());
             case SESSION_DISCARD -> verify(sessionService, never()).discardSession(anyLong(), any());
             case SESSION_RESUME -> verify(sessionService, never()).resumeSession(anyLong());
             case REVERT -> verify(sessionService, never()).revertTo(anyLong(), anyString(), any(), anyString());
@@ -234,6 +258,46 @@ class VersionControllerAuthTest {
 
             assertThrows(IllegalArgumentException.class, () -> invoke(endpoint, null));
             verifyNeverCalled(endpoint);
+        }
+    }
+
+    // ---- READ_ONLY 成员（v2 终审 I4）：读通过、写拒绝 ------------------------
+
+    /**
+     * READ_ONLY 成员对写端点一律拒绝——hasReadPermission=true、isClient=false、
+     * hasWritePermission=false 正是 READ_ONLY 角色在 ProjectMemberService 里的真实取值组合。
+     * 对应服务方法必须一次都没被调到（拒绝要发生在副作用之前）。
+     */
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.MethodSource("writeEndpoints")
+    void readOnlyMemberCannotWrite(Endpoint endpoint) {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(false);
+
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> invoke(endpoint, "sess"));
+            assertEquals("无权修改该项目", e.getMessage());
+            verifyNeverCalled(endpoint);
+        }
+    }
+
+    /** READ_ONLY 成员对只读端点照常放行，且只读路径根本不查写权限。 */
+    @ParameterizedTest
+    @EnumSource(value = Endpoint.class, names = {"STATUS", "CHANGES", "DRAFT_LIST"})
+    void readOnlyMemberCanStillRead(Endpoint endpoint) {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            lenient().when(repoService.diffNameStatus(anyLong(), anyString(), anyString()))
+                    .thenReturn(java.util.List.of());
+            lenient().when(sessionService.listDrafts(anyLong())).thenReturn(java.util.List.of());
+
+            org.junit.jupiter.api.Assertions.assertDoesNotThrow(() -> invoke(endpoint, "sess"));
+            verify(projectMemberService, never()).hasWritePermission(anyLong(), anyLong());
         }
     }
 

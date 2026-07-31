@@ -231,6 +231,24 @@ class CloudSyncUpdateTest {
         return db.values().stream().filter(f -> f.getProjectId().equals(projectId)).toList();
     }
 
+    private ProjectRemote remoteRowOf(long projectId) {
+        return remotes.values().stream()
+                .filter(r -> r.getProjectId().equals(projectId))
+                .findFirst().orElseThrow();
+    }
+
+    /** 造一个真实内容冲突窗口：peer 改写合同.txt 推上去，本地也改同一文件，更新撞 CONFLICT。 */
+    private void openConflictWindow() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        advancePeerRewriting("合同.txt", "云端的第二稿");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "我的第二稿");
+        repoSvc.commitAll(7L, "我的修改", "auto", null, "韩泽伟", "hzw@example.com");
+        CloudSyncService.UpdateResult r = cloud.updateFromCloud(7L, 1L, "韩泽伟");
+        assertEquals(CloudSyncService.UpdateStatus.CONFLICT, r.status());
+        assertTrue(repoSvc.repositoryMerging(7L));
+    }
+
     /**
      * 「同事」克隆云端裸仓、新增一个文件 + 在 v2 清单里添一个节点、提交、推回去。
      * 清单从零开始起（本仓库开启版本记录之前没有 .awd/tree.json 这份历史），
@@ -327,6 +345,66 @@ class CloudSyncUpdateTest {
         assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare()); // 裁决后重推
     }
 
+    /**
+     * v2 终审 I1：裁决窗口开着期间同事又推了一版，收尾（completeCloudMerge）的重推被拒
+     * ——被拒是 PushOutcome 返回值不是异常，不接住就会绿灯假同步（pendingUpload=false、
+     * lastSyncSha=本地 sha，界面「已与云端同步」而云端根本没有这份裁决结果）。
+     */
+    @Test
+    void resolveWithFurtherRemoteAdvanceMarksPendingInsteadOfFakeSync() throws Exception {
+        openConflictWindow();
+        advancePeerRewriting("合同.txt", "云端的第三稿"); // 窗口期间同事再推一版
+        String lastSyncBefore = remoteRowOf(7L).getLastSyncSha();
+
+        CloudSyncService.UpdateResult done = cloud.resolveCloudMerge(7L,
+                Map.of("合同.txt", WorkSessionService.Resolution.MAIN), 1L, "韩泽伟");
+
+        assertEquals(CloudSyncService.UpdateStatus.UPDATED, done.status()); // 合并本身落地了
+        assertNotEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare(),
+                "前置确认：重推确实被拒（远端已被同事推进）");
+        assertTrue(remoteRowOf(7L).getPendingUpload(), "重推被拒必须转入待上传，不能绿灯假同步");
+        assertEquals(lastSyncBefore, remoteRowOf(7L).getLastSyncSha(), "lastSyncSha 不得前移");
+    }
+
+    /**
+     * v2 终审 I3：冲突窗口开着期间 origin/master 前移（同事推进 + 本地 fetch 过一次），
+     * 不该把窗口孤儿化——窗口语境以开窗时刻的 MERGE_HEAD 为准，判定从「相等」放宽为
+     * 「相等或祖先」，resolveCloudMerge 照常工作，且裁决按开窗时刻的云端 tip 落地。
+     */
+    @Test
+    void fetchDuringConflictWindowDoesNotOrphanIt() throws Exception {
+        openConflictWindow();
+        advancePeerRewriting("合同.txt", "云端的第三稿");
+        repoSvc.fetchFromOrigin(7L, "韩泽伟", "awdt_test"); // origin/master 前移
+        assertNotEquals(repoSvc.originMasterSha(7L), repoSvc.mergeHeadRef(7L),
+                "前置：fetch 后 MERGE_HEAD 与 origin/master 已不相等");
+
+        CloudSyncService.UpdateResult done = cloud.resolveCloudMerge(7L,
+                Map.of("合同.txt", WorkSessionService.Resolution.DRAFT), 1L, "韩泽伟");
+
+        assertEquals(CloudSyncService.UpdateStatus.UPDATED, done.status());
+        assertFalse(repoSvc.repositoryMerging(7L));
+        assertEquals("云端的第二稿", Files.readString(root.resolve("projects/7/合同.txt")),
+                "裁决按开窗时刻的云端 tip（第二稿）落地，不是 fetch 后的新 tip");
+    }
+
+    /**
+     * v2 终审 I3 配套：合并窗口期间 checkCloud 不得 fetch（fetch 正是把窗口孤儿化的
+     * 元凶之一），只回本地快照并带 merging:true。
+     */
+    @Test
+    void checkCloudDuringMergeWindowSkipsFetchAndReportsMerging() throws Exception {
+        openConflictWindow();
+        advancePeerRewriting("合同.txt", "云端的第三稿");
+        String originBefore = repoSvc.originMasterSha(7L);
+
+        Map<String, Object> st = cloud.checkCloud(7L);
+
+        assertEquals(Boolean.TRUE, st.get("merging"));
+        assertEquals(originBefore, repoSvc.originMasterSha(7L),
+                "合并窗口内 checkCloud 不得 fetch 推进 origin/master");
+    }
+
     @Test
     void abortCloudMergeLeavesBothSidesIntact() throws Exception {
         linkToBareRemote(7L);
@@ -364,6 +442,9 @@ class CloudSyncUpdateTest {
         CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, false);
         assertEquals(CloudSyncService.UploadStatus.UPLOADED, r.status()); // 合并后重推成功
         assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare());
+        // v2 终审 I2：前台整合改写了磁盘（同事的.txt 被物化），受影响文件 id 必须随
+        // UploadResult 带回，前端凭它走 reload-files 重载链。
+        assertFalse(r.affectedFileIds().isEmpty(), "前台整合的受影响文件要带回给重载链");
     }
 
     /**

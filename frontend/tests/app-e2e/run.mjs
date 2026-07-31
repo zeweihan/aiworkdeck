@@ -857,10 +857,11 @@ try {
   // 拓扑：A = 既有 9696 桌面后端（本文件全程 UI 驱动的那一台），S = 团队服务器
   // （spawnBackend 9701），B = 同事桌面（spawnBackend 9702）。前端只有一个（连 A）——
   // B 的所有动作走裸 REST，这是拓扑决定的（没有第二个浏览器/Electron 实例），不是偷懒。
-  // 冲突判定链：结束工作 → 后台自动上传被拒 → 能自动整合就自动整合 → 整合遇到真实内容
-  // 冲突 → CONFLICT，这是 CloudSyncService.uploadToCloud 的 mode='cloud' 语境（标签
-  // 「用我这边的/用云端的」），不是 endSession 自身的 sessionEndConflict 语境（那需要
-  // 本机 git 收到过一次 receive-pack，这里 A/S/B 三个后端物理隔离，走不到那条路）。
+  // 冲突判定链（v2 终审 I2 后语义）：结束工作 → 后台自动上传被拒 → 后台不自动整合，
+  // 只置待上传（remoteAhead 灯亮）→ 律师在 CloudSyncBar 点「立即上传」→ 前台自动整合
+  // 遇到真实内容冲突 → CONFLICT，这是 CloudSyncService.uploadToCloud 的 mode='cloud'
+  // 语境（标签「用我这边的/用云端的」），不是 endSession 自身的 sessionEndConflict 语境
+  // （那需要本机 git 收到过一次 receive-pack，这里 A/S/B 三个后端物理隔离，走不到那条路）。
   if (!J11_JAR) {
     note('skip', 'J11 需要 APP_E2E_JAR（backend/target/*.jar 绝对路径）未提供，已跳过多人协作旅程')
   } else {
@@ -1149,18 +1150,31 @@ try {
       await waitText('当前没有进行中的工作')
     })
 
-    await step('A：结束工作触发后台自动上传，撞上云端冲突弹窗且标签正确', async () => {
+    await step('A：结束工作后台上传被拒只亮「待上传」灯（不自动整合）', async () => {
+      // v2 终审 I2：后台路径（结束工作的自动上传）被拒时不做自动整合——后台没有通道
+      // 通知打开中的编辑器重载，后台整合撞冲突还会开出律师不知情的 MERGING 窗口。
+      // 这里断言的正是新语义：灯亮（有改动待上传），但没有冲突弹窗、没有合并窗口。
       const ok = await pollUntil(async () => {
         await mouseClickSel('[title="资源管理器"]')
         await mouseClickSel('[title="版本"]')
-        return page.evaluate(() => {
-          const dlg = document.querySelector('.adopt-dialog')
-          if (!dlg || dlg.getClientRects().length === 0) return false
-          const row = dlg.querySelector('.adopt-row-name')
-          return !!row && row.innerText.includes('qa-J11协作文件.txt')
-        })
+        return page.evaluate(() => document.body.innerText.includes('有改动待上传'))
       }, 40000, 2000)
-      if (!ok) throw new Error('等待超时：A 结束工作后没有出现云端冲突弹窗')
+      if (!ok) throw new Error('等待超时：结束工作后云端状态没有进入「有改动待上传」')
+      const dialogOpen = await page.evaluate(() => {
+        const dlg = document.querySelector('.adopt-dialog')
+        return !!dlg && dlg.getClientRects().length > 0
+      })
+      if (dialogOpen) throw new Error('后台上传不该自动整合出冲突弹窗（I2 新语义被破坏）')
+    })
+
+    await step('A：点「立即上传」前台整合撞上云端冲突弹窗且标签正确', async () => {
+      await mouseClickText('立即上传')
+      await page.waitForFunction(() => {
+        const dlg = document.querySelector('.adopt-dialog')
+        if (!dlg || dlg.getClientRects().length === 0) return false
+        const row = dlg.querySelector('.adopt-row-name')
+        return !!row && row.innerText.includes('qa-J11协作文件.txt')
+      }, { timeout: 30000 })
       const labels = await page.evaluate(() =>
         [...document.querySelectorAll('.adopt-dialog .radio-label')].map((e) => e.innerText))
       if (!labels.includes('用我这边的') || !labels.includes('用云端的')) {

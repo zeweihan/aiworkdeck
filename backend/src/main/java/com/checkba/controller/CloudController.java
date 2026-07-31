@@ -19,7 +19,8 @@ import java.util.Map;
  *
  * 鉴权分两档：连接级端点（连接/断开/连接列表/远端项目列表/接入）只要求登录——
  * 云端连接是账号级资源，不挂在某个项目下；项目级端点（共享/状态/上传/更新/裁决/成员代理）
- * 走 requireMemberNonClient 三连，同版本记录接口一样拒绝 CLIENT 角色。
+ * 走 requireMemberNonClient 三连，同版本记录接口一样拒绝 CLIENT 角色；其中改写仓库或
+ * 云端成员的写端点再追加 hasWritePermission（requireWriteMember，拒 READ_ONLY）。
  */
 @RestController
 @RequestMapping("/api/cloud")
@@ -111,7 +112,7 @@ public class CloudController {
             @PathVariable Long projectId,
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMemberNonClient(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         long connectionId = ((Number) body.get("connectionId")).longValue();
         return ok(cloudSyncService.shareToCloud(projectId, connectionId, userId));
     }
@@ -136,18 +137,19 @@ public class CloudController {
     public ResponseEntity<Map<String, Object>> upload(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberNonClient(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         CloudSyncService.UploadResult r = cloudSyncService.uploadToCloud(projectId, false);
         return ok(Map.of(
                 "status", r.status().name(),
-                "message", r.message() == null ? "" : r.message()));
+                "message", r.message() == null ? "" : r.message(),
+                "affectedFileIds", r.affectedFileIds() == null ? List.of() : r.affectedFileIds()));
     }
 
     @PostMapping("/projects/{projectId}/update")
     public ResponseEntity<Map<String, Object>> update(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMemberNonClient(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         CloudSyncService.UpdateResult r =
                 cloudSyncService.updateFromCloud(projectId, userId, userName(userId));
         return ok(updateResultData(r));
@@ -158,7 +160,7 @@ public class CloudController {
             @PathVariable Long projectId,
             @RequestBody(required = false) Map<String, Map<String, String>> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMemberNonClient(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         Map<String, WorkSessionService.Resolution> resolutions = parseResolutions(body);
         CloudSyncService.UpdateResult r =
                 cloudSyncService.resolveCloudMerge(projectId, resolutions, userId, userName(userId));
@@ -169,7 +171,7 @@ public class CloudController {
     public ResponseEntity<Map<String, Object>> abort(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberNonClient(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         String notice = cloudSyncService.abortCloudMerge(projectId);
         return okWithMessage(Map.of(), notice);
     }
@@ -187,7 +189,7 @@ public class CloudController {
             @PathVariable Long projectId,
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMemberNonClient(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         String role = body == null || body.get("role") == null ? "PARTICIPANT" : body.get("role");
         cloudSyncService.proxyMembers(projectId, body == null ? null : body.get("username"), role);
         return ok(Map.of());
@@ -244,6 +246,19 @@ public class CloudController {
         }
         if (projectMemberService.isClient(projectId, userId)) {
             throw new IllegalArgumentException("无权访问该项目");
+        }
+        return userId;
+    }
+
+    /**
+     * 项目级写端点（共享/上传/更新/裁决/中止/加成员）在成员校验之上追加写权限
+     * （v2 终审 I4）：READ_ONLY 成员可看云端状态，但不得改写仓库或云端成员。
+     * 口径同 VersionController.requireWriteMember；参数序 (projectId, userId)（地雷 #3）。
+     */
+    private Long requireWriteMember(Long projectId, String sessionId) {
+        Long userId = requireMemberNonClient(projectId, sessionId);
+        if (!projectMemberService.hasWritePermission(projectId, userId)) {
+            throw new IllegalArgumentException("无权修改该项目");
         }
         return userId;
     }

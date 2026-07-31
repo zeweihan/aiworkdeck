@@ -270,6 +270,31 @@ class CloudSyncUploadTest {
         assertTrue(remoteRowOf(7L).getPendingUpload());
     }
 
+    /**
+     * v2 终审 I2：后台路径（结束工作的 onMainlineMerged 自动上传）被拒时**不做自动整合**，
+     * 只置 pendingUpload——后台没有通道通知打开中的编辑器重载（v1 地雷 #11 的 autosave
+     * 覆盖形态），后台整合撞冲突还会开出律师不知情的 MERGING 窗口。与上一条前台用例
+     * 同一份分叉 fixture，只有 background 参数不同，两条语义各有护栏。
+     */
+    @Test
+    void rejectedBackgroundUploadOnlyMarksPendingWithoutIntegrating() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        advanceBareRemoteFromPeer("同事的第二稿");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "我的第二稿");
+        repoSvc.commitAll(7L, "我的修改", "auto", null, "韩泽伟", "hzw@example.com");
+        String masterBefore = repoSvc.resolveRef(7L, "master");
+
+        CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, true);
+
+        assertEquals(CloudSyncService.UploadStatus.REMOTE_AHEAD, r.status());
+        assertTrue(remoteRowOf(7L).getPendingUpload());
+        assertFalse(repoSvc.repositoryMerging(7L), "后台被拒不得开出合并窗口");
+        assertEquals(masterBefore, repoSvc.resolveRef(7L, "master"), "后台被拒不得改写本地主线");
+        assertEquals("我的第二稿", Files.readString(root.resolve("projects/7/合同.txt")),
+                "后台被拒不得改写磁盘（打开中的编辑器无从得知）");
+    }
+
     @Test
     void offlineBackgroundUploadSwallowsAndMarksPending() {
         linkToUnreachableRemote(7L);

@@ -67,7 +67,12 @@ public class CloudSyncService {
     /** CONFLICT（Task 9）：被拒后自动合并遇到冲突，仓库停在 MERGING 等裁决（同云端更新的冲突窗口）。 */
     public enum UploadStatus { UPLOADED, REMOTE_AHEAD, OFFLINE_PENDING, NOT_LINKED, CONFLICT }
 
-    public record UploadResult(UploadStatus status, String message) {}
+    /** affectedFileIds：前台上传触发自动整合时，整合改写的文件 id（重载链用）；其余路径恒空列表。 */
+    public record UploadResult(UploadStatus status, String message, List<Long> affectedFileIds) {
+        public UploadResult(UploadStatus status, String message) {
+            this(status, message, List.of());
+        }
+    }
 
     public enum UpdateStatus { UP_TO_DATE, UPDATED, CONFLICT, OFFLINE, NOT_LINKED }
 
@@ -144,7 +149,7 @@ public class CloudSyncService {
                 throw VersionException.userFacing("请先开启版本记录，再共享到云端");
             }
             if (repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("请先处理正在进行的合并");
+                throw VersionException.userFacing("请先处理等着你做选择的文件");
             }
             CloudConnection conn = connectionRepository.findById(connectionId)
                     .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
@@ -332,13 +337,20 @@ public class CloudSyncService {
 
     /**
      * 推主线（含里程碑标签）到云端。被拒（PushOutcome.rejected）曾经统一按 REMOTE_AHEAD
-     * 归类置黄灯（Task 8），Task 9 升级：守卫允许时（无 ACTIVE 工作段、不在稿上——仓库
-     * 是否在合并中已经在上面单独判过）自动走 {@link #integrateFromCloud} 同一条内核，
-     * 干净合并/快进后重推成功才算 UPLOADED，遇到真实内容冲突则新增 UploadStatus.CONFLICT
-     * 让仓库停在裁决窗口；守卫不允许（有未收尾的工作/站在稿上）仍然维持旧行为：
-     * 只置 pendingUpload，等律师自己处理完再手动上传或从云端更新。
+     * 归类置黄灯（Task 8），Task 9 升级：**前台**（background=false）且守卫允许时（无
+     * ACTIVE 工作段、不在稿上——仓库是否在合并中已经在上面单独判过）自动走
+     * {@link #integrateFromCloud} 同一条内核，干净合并/快进后重推成功才算 UPLOADED
+     * （整合改写的文件 id 随 affectedFileIds 带回，重载链用），遇到真实内容冲突则
+     * UploadStatus.CONFLICT 让仓库停在裁决窗口；守卫不允许（有未收尾的工作/站在稿上）
+     * 维持旧行为：只置 pendingUpload，等律师自己处理完再手动上传或从云端更新。
      *
-     * background（结束工作后台自动上传）没有真实用户上下文，自动合并需要的提交作者身份
+     * **后台路径（background=true，含结束工作的 onMainlineMerged 自动上传）被拒时一律
+     * 不自动整合**，只置 pendingUpload（remoteAhead 灯自然亮起，等律师前台点「立即上传」）。
+     * 两条理由（v2 终审 I2）：① 后台整合会改写磁盘，却没有任何通道通知打开中的编辑器
+     * 重载（v1 地雷 #11 的 autosave 覆盖形态——编辑器把整合前的旧字节写回，整合结果被
+     * 静默冲掉）；② 后台整合撞上冲突会开出一个律师不知情的 MERGING 裁决窗口。
+     *
+     * background 没有真实用户上下文，前台自动合并需要的提交作者身份
      * 用当前云端连接的账号名兜底（conn 在这条路径上总是在场——远端已绑定才走得到这里）。
      */
     public UploadResult uploadToCloud(long projectId, boolean background) {
@@ -352,7 +364,7 @@ public class CloudSyncService {
             ProjectRemote remote = remoteOpt.get();
             CloudConnection conn = connectionOf(remote);
             if (repoService.repositoryMerging(projectId)) {
-                return new UploadResult(UploadStatus.REMOTE_AHEAD, "请先处理正在进行的合并");
+                return new UploadResult(UploadStatus.REMOTE_AHEAD, "请先处理等着你做选择的文件");
             }
             try {
                 ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
@@ -363,12 +375,13 @@ public class CloudSyncService {
                     remoteRepository.save(remote);
                     return new UploadResult(UploadStatus.UPLOADED, null);
                 }
-                if (canAutoIntegrate(projectId)) {
+                if (!background && canAutoIntegrate(projectId)) {
                     String authorName = conn.getDisplayName() != null ? conn.getDisplayName() : conn.getUsername();
                     UpdateResult integrated = integrateFromCloud(projectId, conn, null, authorName);
                     if (integrated.status() == UpdateStatus.UPDATED
                             || integrated.status() == UpdateStatus.UP_TO_DATE) {
-                        return new UploadResult(UploadStatus.UPLOADED, null);
+                        return new UploadResult(UploadStatus.UPLOADED, null,
+                                integrated.affectedFileIds());
                     }
                     if (integrated.status() == UpdateStatus.CONFLICT) {
                         remote.setPendingUpload(true);
@@ -435,6 +448,15 @@ public class CloudSyncService {
         ReentrantLock lock = sessionService.repoLock(projectId);
         lock.lock();
         try {
+            // 合并窗口期间不 fetch（v2 终审 I3）：fetch 会推进 origin/master，而窗口判定
+            // 靠「MERGE_HEAD 等于/是 origin/master 的祖先」反查——旧的相等判定下 fetch 一次
+            // 就把开着的冲突窗口孤儿化（三语境都对不上号，弹窗消失、裁决端点全拒）。
+            // 状态照常给本地快照，多带 merging:true。
+            if (repoService.repositoryMerging(projectId)) {
+                Map<String, Object> m = new HashMap<>(cloudStatus(projectId));
+                m.put("merging", true);
+                return m;
+            }
             CloudConnection conn = connectionOf(remoteOpt.get());
             try {
                 repoService.fetchFromOrigin(projectId, conn.getUsername(), conn.getDeviceToken());
@@ -589,9 +611,7 @@ public class CloudSyncService {
                 throw VersionException.userFacing("现在没有等着做选择的更新");
             }
             String cloudTip = repoService.mergeHeadRef(projectId);
-            if (cloudTip == null || !cloudTip.equals(repoService.originMasterSha(projectId))) {
-                throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
-            }
+            requireCloudMergeWindow(projectId, cloudTip);
             List<String> rawConflicts = repoService.conflictingPaths(projectId);
             if (rawConflicts.isEmpty()) {
                 throw new VersionException("冲突记录已丢失，无法安全完成更新: project=" + projectId);
@@ -627,10 +647,7 @@ public class CloudSyncService {
             if (!repoService.repositoryMerging(projectId)) {
                 throw VersionException.userFacing("现在没有等着做选择的更新");
             }
-            String cloudTip = repoService.mergeHeadRef(projectId);
-            if (cloudTip == null || !cloudTip.equals(repoService.originMasterSha(projectId))) {
-                throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
-            }
+            requireCloudMergeWindow(projectId, repoService.mergeHeadRef(projectId));
             repoService.abortMerge(projectId);
             return "这次更新没有完成，你的内容分毫未动";
         } finally {
@@ -651,10 +668,20 @@ public class CloudSyncService {
         repoService.commitMergeResolution(projectId, CLOUD_MERGE_TITLE,
                 userName, authorEmail(userId, userName));
         try {
-            repoService.pushMainlineToOrigin(projectId, conn.getUsername(), conn.getDeviceToken());
+            // 重推被拒是返回值不是异常（裁决窗口期间远端又被同事推进了一版）：不接住的话
+            // 会绿灯假同步——pendingUpload=false + lastSyncSha=本地 sha，界面显示「已与云端
+            // 同步」而云端根本没有这份裁决结果（v2 终审 I1）。
+            ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
+                    projectId, conn.getUsername(), conn.getDeviceToken());
             remoteRepository.findByProjectId(projectId).ifPresent(remote -> {
-                remote.setPendingUpload(false);
-                remote.setLastSyncSha(repoService.resolveRef(projectId, repoService.mainBranch()));
+                if (out.pushed()) {
+                    remote.setPendingUpload(false);
+                    remote.setLastSyncSha(repoService.resolveRef(projectId, repoService.mainBranch()));
+                } else {
+                    log.warn("云端更新合并已落地，重推被拒，转入待上传: project={}, {}",
+                            projectId, out.message());
+                    remote.setPendingUpload(true);
+                }
                 remoteRepository.save(remote);
             });
         } catch (Exception e) {
@@ -678,10 +705,36 @@ public class CloudSyncService {
         }
     }
 
+    /**
+     * 云端合并窗口判定（v2 终审 I3）：窗口语境以**开窗时刻**的 MERGE_HEAD 为准——窗口期间
+     * 远端被同事推进、origin/master 前移，不该把开着的窗口孤儿化，所以判定从「MERGE_HEAD
+     * 等于 origin/master」放宽为「相等或是 origin/master 的祖先」。判定顺序与 /status 的
+     * 三语境链一致：先排除结束工作撞车（活动段 tip 精确相等优先），再做云端侧的祖先判定；
+     * 稿采纳窗口的 MERGE_HEAD（稿 tip 带着从未推送的提交）天然不在 origin 历史里，落不进
+     * 祖先判定。守卫失败即「正在处理的是另一件事」——不能无条件放行，误放会把别的语境的
+     * 合并窗口当云端更新收尾/销毁。
+     */
+    private void requireCloudMergeWindow(long projectId, String mergeHead) {
+        if (mergeHead == null) {
+            throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
+        }
+        var active = sessionService.activeSession(projectId);
+        if (active.isPresent() && mergeHead.equals(
+                repoService.resolveRef(projectId, active.get().getBranchName()))) {
+            throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
+        }
+        String originSha = repoService.originMasterSha(projectId);
+        boolean cloudWindow = mergeHead.equals(originSha)
+                || (originSha != null && repoService.isAncestor(projectId, mergeHead, ORIGIN_MASTER));
+        if (!cloudWindow) {
+            throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
+        }
+    }
+
     /** updateFromCloud 的前置守卫：没有进行中的合并/工作/稿，理由同采纳前置（避免几件事缠在一起）。 */
     private void requireCleanForCloudOps(long projectId) {
         if (repoService.repositoryMerging(projectId)) {
-            throw VersionException.userFacing("请先处理正在进行的合并");
+            throw VersionException.userFacing("请先处理等着你做选择的文件");
         }
         if (sessionService.activeSession(projectId).isPresent()) {
             throw VersionException.userFacing("请先结束或丢弃当前工作，再从云端更新");

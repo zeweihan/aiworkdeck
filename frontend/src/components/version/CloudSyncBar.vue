@@ -106,8 +106,15 @@ export default {
       try {
         const res = await uploadToCloud(this.projectId)
         const st = res.data && res.data.status
-        if (st === 'UPLOADED') uni.showToast({ title: '已上传到云端', icon: 'none' })
-        else if (st !== 'CONFLICT') uni.showToast({ title: (res.data && res.data.message) || '暂时没能上传', icon: 'none' })
+        if (st === 'UPLOADED') {
+          uni.showToast({ title: '已上传到云端', icon: 'none' })
+          // 前台上传被拒后自动整合改写了磁盘：受影响文件走 reload-files 通用链，
+          // 否则打开中的编辑器会把整合前的旧字节 autosave 写回（v1 地雷 #11 形态）。
+          const ids = (res.data && res.data.affectedFileIds) || []
+          if (ids.length) this.$emit('reload-files', ids)
+        } else if (st !== 'CONFLICT') {
+          uni.showToast({ title: (res.data && res.data.message) || '暂时没能上传', icon: 'none' })
+        }
         this.$emit('shared') // CONFLICT 时让面板 refresh 弹冲突弹窗，其余情况一并刷新状态
       } catch (e) { uni.showToast({ title: e.message || '上传失败', icon: 'none' }) }
       finally { this.busy = false }

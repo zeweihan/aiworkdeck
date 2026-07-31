@@ -105,6 +105,45 @@ class CloudControllerTest {
         }
     }
 
+    /**
+     * v2 终审 I4：READ_ONLY 成员（有读权、无写权、非 CLIENT）对项目级写端点一律拒绝，
+     * 服务方法一次都不被调到；读端点（status/check/members GET）照常放行。
+     * 口径同 VersionControllerAuthTest.readOnlyMemberCannotWrite。
+     */
+    @Test
+    void readOnlyMemberCannotWriteButCanRead() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
+            when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
+            when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(false);
+
+            List<org.junit.jupiter.api.function.Executable> writes = List.of(
+                    () -> controller.share(PROJECT_ID, Map.of("connectionId", 3), "sess"),
+                    () -> controller.upload(PROJECT_ID, "sess"),
+                    () -> controller.update(PROJECT_ID, "sess"),
+                    () -> controller.resolve(PROJECT_ID,
+                            Map.of("resolutions", Map.of("a.txt", "MAIN")), "sess"),
+                    () -> controller.abort(PROJECT_ID, "sess"),
+                    () -> controller.addMember(PROJECT_ID, Map.of("username", "赵六"), "sess"));
+            for (var w : writes) {
+                IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, w);
+                assertEquals("无权修改该项目", ex.getMessage());
+            }
+            verify(cloudSyncService, never()).shareToCloud(anyLong(), anyLong(), any());
+            verify(cloudSyncService, never()).uploadToCloud(anyLong(), anyBoolean());
+            verify(cloudSyncService, never()).updateFromCloud(anyLong(), any(), any());
+            verify(cloudSyncService, never()).resolveCloudMerge(anyLong(), any(), any(), any());
+            verify(cloudSyncService, never()).abortCloudMerge(anyLong());
+            verify(cloudSyncService, never()).proxyMembers(anyLong(), any(), any());
+
+            when(cloudSyncService.cloudStatus(PROJECT_ID)).thenReturn(Map.of("linked", false));
+            when(cloudSyncService.proxyMembers(PROJECT_ID)).thenReturn(List.of());
+            assertEquals(0, controller.status(PROJECT_ID, "sess").getBody().get("code"));
+            assertEquals(0, controller.members(PROJECT_ID, "sess").getBody().get("code"));
+        }
+    }
+
     // ---- connect 透传 ---------------------------------------------------------
 
     @Test
@@ -170,6 +209,7 @@ class CloudControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
             when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(cloudSyncService.uploadToCloud(PROJECT_ID, false))
                     .thenReturn(new CloudSyncService.UploadResult(CloudSyncService.UploadStatus.UPLOADED, null));
 
@@ -188,6 +228,7 @@ class CloudControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
             when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
             var user = new com.checkba.model.entity.User();
             user.setUsername("李四");
             when(userService.getUserById(USER_ID)).thenReturn(user);
@@ -213,6 +254,7 @@ class CloudControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
             when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
 
             VersionException ex = assertThrows(VersionException.class, () -> controller.resolve(
                     PROJECT_ID, Map.of("resolutions", Map.of("a.txt", "NOT_A_REAL_CHOICE")), "sess"));
@@ -229,6 +271,7 @@ class CloudControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
             when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
             var user = new com.checkba.model.entity.User();
             user.setUsername("王五");
             when(userService.getUserById(USER_ID)).thenReturn(user);
@@ -269,6 +312,7 @@ class CloudControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
             when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
 
             controller.addMember(PROJECT_ID, Map.of("username", "赵六"), "sess");
 
@@ -282,6 +326,7 @@ class CloudControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
             when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
 
             controller.addMember(PROJECT_ID, Map.of("username", "赵六", "role", "ADMIN"), "sess");
 
@@ -297,6 +342,7 @@ class CloudControllerTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(USER_ID);
             when(projectMemberService.hasReadPermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(projectMemberService.isClient(PROJECT_ID, USER_ID)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(PROJECT_ID, USER_ID)).thenReturn(true);
             when(cloudSyncService.abortCloudMerge(PROJECT_ID)).thenReturn("这次更新没有完成，你的内容分毫未动");
 
             var resp = controller.abort(PROJECT_ID, "sess");
