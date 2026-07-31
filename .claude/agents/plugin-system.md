@@ -19,7 +19,7 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDFBox PDFTextStripper 定位涂黑）+ OcrService 辅助。无 skill。
 
-**股东大会**：目前**只是侧栏占位入口**（leftSidebarPlugins.js 里 key `shareholder-meeting`），project-overview.vue 面板区无对应分支，点击落入"加载中..."占位符。前端组件/后端服务/skill 三层均未实现。
+**股东大会核查**：面板 + AI 编排混合型（三层齐备）。前端 `frontend/src/components/ShareholderMeetingPanel.vue`（会话列表/五组材料槽位/巨潮拉取/开始核查，选文件用 FilePickerDialog 的 accept 过滤）；后端 `controller/ShareholderMeetingController.java`（/api/shareholder-meeting）+ `service/ShareholderMeetingService.java`（底稿夹 `股东大会核查/<公司>_<届次>/01..05` 五子目录、材料复制幂等、kick-off prompt 组装）+ `service/CninfoAnnouncementService.java`（巨潮拉取，挑选启发式移植自内核 skill 且有单测锁定）；skill `backend/skills/shareholder-meeting-verification/`。执行链路：面板 start 接口返回 prompt（以触发词「股东大会核查」开头）→ project-overview 经 `ChatInterface.sendExternalPrompt`（expose）以 AGENT 模式发送 → skill 注入 → AI 用 extract_file_text/run_python/write_docx（带 parentFolderId）产出核查底稿表与法律意见书到 04/05 子目录。**地雷**：pinnedSkillId 只裁剪工具不注入 prompt，触发词必须在 prompt 文本里；ASK 模式跳过注入。
 
 **上市路径选择（Skill 型）**：`backend/skills/listing-pathway/`（skill.yml + prompt.md），仓库内唯一内置 skill。无独立面板，对话触发。
 
@@ -56,7 +56,7 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 
 ## 已知地雷
 
-- 新增面板型插件三步缺一不可：leftSidebarPlugins.js 注册 + project-overview.vue 面板区加 v-else-if 分支 + 组件本身；漏第二步就是"股东大会式"占位符。
+- 新增面板型插件三步缺一不可：leftSidebarPlugins.js 注册 + project-overview.vue 面板区加 v-else-if 分支 + 组件本身；漏第二步就是"加载中..."占位符（股东大会曾长期如此，现已实现）。
 - skill 的 allowed_tools 写错工具名不会报错，只是白名单零命中回退不裁剪——排查工具可见性问题时先核对 ToolRegistry 真名。
 - 插件启停语义只影响可见性，不拦截历史工具调用回放。
 - 改 AgentOrchestrator 构造器（如注入新服务）必须同步 EvalHarness（踩过两次）。

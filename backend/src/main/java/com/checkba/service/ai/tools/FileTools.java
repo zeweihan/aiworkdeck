@@ -43,6 +43,8 @@ public class FileTools implements AgentToolComponent {
     private final com.checkba.service.ai.EditorBridgeService editorBridgeService;
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    private final com.checkba.service.DocumentTextService documentTextService;
+    private final com.checkba.service.ai.AiDocxExportService aiDocxExportService;
     private static final Long AGENT_USER_ID = 10001L;
 
     // We need to resolve the project root physically.
@@ -189,6 +191,40 @@ public class FileTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "提取文档全文", category = "file")
+    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Returns extracted text (may be truncated for very large files).")
+    public String extract_file_text(
+            @P("Project file database ID (from doc_list_project_files / material list)") Long fileId
+    ) {
+        log.info("Tool: extract_file_text called for fileId={}", fileId);
+        if (fileId == null) {
+            return "Error: fileId is required.";
+        }
+        Optional<ProjectFile> fileOpt = projectFileRepository.findById(fileId);
+        if (fileOpt.isEmpty()) {
+            return "Error: File not found in database: " + fileId;
+        }
+        ProjectFile pf = fileOpt.get();
+        if ("folder".equalsIgnoreCase(pf.getFileType())) {
+            return "Error: File is a folder: " + pf.getName();
+        }
+        try {
+            String text = documentTextService.extractText(pf);
+            if (text == null || text.isBlank()) {
+                return "Warning: No text extracted from '" + pf.getName() + "'. The file may be a scanned image; try read_file with OCR for image PDFs.";
+            }
+            final int maxChars = 80_000;
+            if (text.length() > maxChars) {
+                return "[文件 " + pf.getName() + "，全文 " + text.length() + " 字符，已截断至前 " + maxChars + " 字符]\n"
+                        + text.substring(0, maxChars);
+            }
+            return "[文件 " + pf.getName() + "]\n" + text;
+        } catch (Exception e) {
+            log.warn("extract_file_text failed for fileId={}", fileId, e);
+            return "Error extracting text: " + e.getMessage();
+        }
+    }
+
     @ToolMeta(displayName = "写入文件", category = "file", fileEffect = "ADDED", fileArg = "fileName")
     @Tool("Write content to a text file. Registers the file in the project database for editor access.")
     public String write_file(
@@ -217,10 +253,34 @@ public class FileTools implements AgentToolComponent {
     @ToolMeta(displayName = "生成Word文档", category = "file", fileEffect = "ADDED", fileArg = "fileName", refreshFiles = true)
     @Tool("【STRICTLY NEW FILES ONLY】Create a NEW .docx from Markdown. FORBIDDEN for 'revise', 'update', or 'modify' tasks. If a similar file exists, you MUST use doc_open_file to edit it. DO NOT create 'Revised_Version.docx'.")
     public String write_docx(
-            @P("新文件名 (如 '报告.docx')") String fileName, 
+            @P("新文件名 (如 '报告.docx')") String fileName,
             @P("Markdown 内容") String markdownContent,
-            @P("项目ID") Long projectId
+            @P("项目ID") Long projectId,
+            @P(value = "目标文件夹ID（可选，不填则放项目根目录）", required = false) Long parentFolderId
     ) {
+        if (parentFolderId != null) {
+            // 指定目标文件夹时走 AiDocxExportService（正确的路径构建 + StorageService 落盘 + RAG 刷新）
+            log.info("Tool: write_docx (folder={}) called for {}", parentFolderId, fileName);
+            if (fileName == null || fileName.isBlank()) return "Error: fileName is required.";
+            if (!fileName.endsWith(".docx")) fileName += ".docx";
+            if (fileName.matches(".*(revise|revision|update|modify|change|修改|修订|更新|变动).*")) {
+                return "Error: Creation of files with 'revise/update/modify' in the name is FORBIDDEN. Use doc_open_file to edit the original instead.";
+            }
+            try {
+                ProjectFile pf = aiDocxExportService.exportMarkdownToDocx(
+                        projectId, parentFolderId, AGENT_USER_ID, fileName, markdownContent);
+                editorBridgeService.sendRefreshFilesAction();
+                return String.format("{\"status\":\"success\", \"db_id\":%d, \"file_path\":\"%s\"}",
+                        pf.getId(), String.valueOf(pf.getFilePath()).replace("\\", "\\\\"));
+            } catch (Exception e) {
+                log.error("write_docx to folder failed", e);
+                return "Error creating DOCX in folder " + parentFolderId + ": " + e.getMessage();
+            }
+        }
+        return writeDocxAtRoot(fileName, markdownContent, projectId);
+    }
+
+    private String writeDocxAtRoot(String fileName, String markdownContent, Long projectId) {
         log.info("Tool: write_docx called for {}", fileName);
         if (fileName == null || fileName.isBlank()) {
             return "Error: fileName is required.";

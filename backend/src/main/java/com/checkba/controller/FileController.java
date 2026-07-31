@@ -21,7 +21,6 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
 
-import org.apache.tika.Tika;
 import org.apache.tika.exception.TikaException;
 
 import java.io.IOException;
@@ -62,6 +61,9 @@ public class FileController {
 
     @Autowired
     private com.checkba.storage.ProjectStorageResolver storageResolver;
+
+    @Autowired
+    private com.checkba.service.DocumentTextService documentTextService;
 
     /**
      * 文件的物理磁盘路径（「在 Finder 中显示」用）。
@@ -609,27 +611,9 @@ public class FileController {
     }
     
     /**
-     * 使用 Apache Tika 提取文档文本内容
+     * 使用 Apache Tika 提取文档文本内容（委托 DocumentTextService）
      */
     private String extractDocumentText(ProjectFile file) throws IOException, TikaException {
-        String filePath = file.getFilePath();
-        if (!StringUtils.hasText(filePath)) {
-            // 尝试使用 wpsFileId 作为路径
-            filePath = file.getWpsFileId();
-        }
-        
-        if (!StringUtils.hasText(filePath)) {
-            throw new IOException("文件路径为空: " + file.getId());
-        }
-        
-        try {
-            Resource resource = getStorageService().load(filePath);
-            try (InputStream is = resource.getInputStream()) {
-                Tika tika = new Tika();
-                return tika.parseToString(is);
-            }
-        } catch (StorageException e) {
-            throw new IOException("加载文件失败: " + filePath, e);
-        }
+        return documentTextService.extractText(file);
     }
 }

@@ -1,0 +1,32 @@
+# 股东大会核查 Skill（打包格式见 docs/SKILL_SPEC.md）
+id: shareholder-meeting-verification
+name: 股东大会核查
+description: 上市公司/挂牌公司股东会法律见证：对照股东大会通知、董事会决议公告与投票结果做逐字段交叉核对与表决复算，撰写（或按本所初稿填充）法律意见书，并生成可溯源的交叉核对底稿表。
+
+# 触发条件：用户输入包含任一关键词即命中（面板 kick-off prompt 以「股东大会核查」开头）
+triggers:
+  - 股东大会核查
+  - 股东会核查
+  - 股东大会见证
+  - 股东会见证
+  - 见证法律意见书
+
+# prompt 模板文件名（相对本目录）
+prompt: prompt.md
+
+# 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）
+allowed_tools:
+  - extract_file_text
+  - read_file
+  - list_files
+  - search_project_files
+  - write_docx
+  - run_python
+  - todo_write
+
+# 输出结构约定（随 prompt 注入）
+output: |
+  两份 Word 交付物，均用 write_docx 写入 kick-off prompt 指定的 parentFolderId：
+  1.「核查底稿_公司_届次.docx」——交叉核对底稿表（逐字段三源对照 + 议案三标签 + 表决复算，每项结论注明出处）
+  2.「法律意见书_公司_届次.docx」——完整法律意见书
+  <final> 中简述核查结论（一致项数量、发现的问题清单、【核实】事项），不要复述全文。

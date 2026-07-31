@@ -1859,8 +1859,28 @@ export default {
       })
     }
 
+    // 外部面板（如股东大会核查）注入预设 prompt：强制 AGENT 模式发送
+    // （skill 注入依赖 prompt 文本内的触发词；ASK 模式会跳过注入）。
+    // 返回本次会话 ID，供调用方把业务对象绑定到该会话。
+    const sendExternalPrompt = async (prompt) => {
+      if (!prompt) return null
+      if (isStreaming.value) {
+        uni.showToast({ title: 'AI 正在执行其他任务，请稍后再试', icon: 'none' })
+        return null
+      }
+      await sendMessage({
+        prompt,
+        projectId: props.projectId,
+        modelId: currentModelId.value,
+        mode: 'AGENT',
+        assistantId: props.currentAssistantId
+      })
+      scrollToBottom()
+      return currentConversationId.value
+    }
+
     // Expose methods for parent ref access
-    expose({ addFile, loadMessages, loadConversationMetadata })
+    expose({ addFile, loadMessages, loadConversationMetadata, sendExternalPrompt })
 
     return {
        bubbles,
