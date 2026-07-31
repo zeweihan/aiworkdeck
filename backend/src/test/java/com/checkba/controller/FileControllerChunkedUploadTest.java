@@ -170,4 +170,76 @@ class FileControllerChunkedUploadTest {
 
         verify(workSessionService, times(1)).onChangeSignal(eq(4L), any(), any());
     }
+
+    /**
+     * resolveProjectFileForUpload 的数字 id 回退：wpsFileId 为 null 的行（克隆/退回/
+     * 切线等场景新建的节点，manifest v2 只带 uid/relPath）必须能靠数字 id 命中数据库
+     * 记录，字节写到该记录的 filePath，而不是把裸 id 字符串当孤儿路径存起来。
+     */
+    @Test
+    void uploadFileResolvesNumericIdWhenWpsFileIdIsNull() throws Exception {
+        ProjectFile pf = projectFile();
+        pf.setWpsFileId(null);
+        String numericId = String.valueOf(pf.getId());
+
+        when(projectFileRepository.findById(pf.getId())).thenReturn(java.util.Optional.of(pf));
+        when(projectFileRepository.sumSizeByProjectId(4L)).thenReturn(0L);
+        when(storageServiceFactory.getStorageService()).thenReturn(storageService);
+        when(storageService.save(any(), any())).thenReturn(FILE_PATH);
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setContentType("application/octet-stream");
+        request.setContent(new byte[]{1, 2, 3});
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
+            when(projectMemberService.hasReadPermission(4L, 7L)).thenReturn(true);
+
+            ResponseEntity<Map<String, Object>> resp =
+                controller.uploadFile(numericId, null, null, "sess", null, request);
+
+            assertEquals(200, resp.getStatusCode().value());
+            assertEquals(0, resp.getBody().get("code"));
+        }
+
+        // 字节必须落到该文件记录已有的 filePath，不能落到裸数字 id 拼出来的孤儿路径
+        verify(storageService).save(eq(FILE_PATH), any(InputStream.class));
+        verify(storageService, never()).save(eq(numericId), any(InputStream.class));
+    }
+
+    /**
+     * 鉴权不能因为走了数字 id 回退就跳过：数字 id 指向的文件若属于调用者无权限的
+     * 项目，必须照样拒绝（IDOR 面）——不能因为找到了记录就默认放行。
+     */
+    @Test
+    void uploadFileNumericIdStillEnforcesProjectAuthorization() throws Exception {
+        ProjectFile foreign = new ProjectFile();
+        foreign.setId(99L);
+        foreign.setProjectId(5L);
+        foreign.setName("other.docx");
+        foreign.setFileType("docx");
+        foreign.setFilePath("projects/5/other.docx");
+        foreign.setWpsFileId(null);
+
+        when(projectFileRepository.findById(99L)).thenReturn(java.util.Optional.of(foreign));
+
+        MockHttpServletRequest request = new MockHttpServletRequest();
+        request.setContentType("application/octet-stream");
+        request.setContent(new byte[]{1, 2, 3});
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            // 已登录，但不是该文件所属项目（5）的成员
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
+            when(projectMemberService.hasReadPermission(5L, 7L)).thenReturn(false);
+
+            ResponseEntity<Map<String, Object>> resp =
+                controller.uploadFile("99", null, null, "sess", null, request);
+
+            assertEquals(403, resp.getStatusCode().value());
+        }
+
+        verifyNoInteractions(storageServiceFactory);
+        verify(storageService, never()).save(any(), any());
+        verify(storageService, never()).append(any(), any());
+    }
 }
