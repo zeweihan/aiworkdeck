@@ -319,16 +319,7 @@ public class FileController {
         InputStream inputStream = null;
         try {
             // 0. 检查项目总大小限制 (20GB)
-            // 先按数据库 ID 查，查不到再退回 wpsFileId——与 downloadFile（:111-124）同一套
-            // 双查顺序。缺这一步时，任何 wpsFileId 为 null 的文件（凡是走清单同步创建的
-            // ProjectFile 行都是这样：跨机器 git clone/从云端接一个项目/退回·切线·采纳
-            // 等场景新建的节点，manifest v2 只带 uid/relPath，不带 wpsFileId）在编辑器里
-            // 保存都会静默失败——LibreOfficeEditor.vue 的 `f.wpsFileId || f.id` 会把数字
-            // id 当 fileId 传过来，这里如果只认 wpsFileId 就查不到，projectFileOpt 落空，
-            // resolveUploadStoragePath 拿裸 id 字符串当存储路径，字节写进一个跟真实文件
-            // 毫不相干的孤儿路径，且 signalChange 因 projectFileOpt 为空而不触发——律师
-            // 看到保存成功提示，实际编辑内容对应的真文件在磁盘上纹丝没动。J11 e2e 里
-            // 同事在 B 机器上编辑一个从云端接入的文件时现场踩中，不是假设性风险。
+            // 数字 id / wpsFileId 双查见 resolveProjectFileForUpload 的方法注释。
             final Optional<ProjectFile> projectFileOpt = resolveProjectFileForUpload(fileId);
             if (projectFileOpt.isPresent()) {
                 Long projectId = projectFileOpt.get().getProjectId();
