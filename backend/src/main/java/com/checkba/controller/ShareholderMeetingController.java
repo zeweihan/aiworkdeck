@@ -98,6 +98,15 @@ public class ShareholderMeetingController {
         return meetingService.detachMaterial(checkId, slot, fileId);
     }
 
+    @PostMapping("/{checkId}/fetch-cninfo")
+    public java.util.Map<String, Object> fetchCninfo(
+            @PathVariable Long checkId,
+            @RequestParam(required = false) String market,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMemberByCheck(sessionId, checkId);
+        return meetingService.fetchFromCninfo(checkId, market, userId);
+    }
+
     @PutMapping("/{checkId}/conversation")
     public ShareholderMeetingCheck bindConversation(
             @PathVariable Long checkId,
