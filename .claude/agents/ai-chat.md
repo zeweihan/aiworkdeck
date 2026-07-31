@@ -21,7 +21,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 **工具注册与执行**
 - `service/ai/ToolRegistry.java`（428 行）— @PostConstruct 扫 AgentToolComponent 的 @Tool；getAllSpecifications / execute（反射+服务端强注入 projectId/conversationId/userId+容错类型转换）/ resolve；别名表 TOOL_NAME_ALIASES/ARG_ALIASES/LEGACY_DEFAULTS。**插件启停过滤也在这三处消费点**。
 - `service/ai/XmlToolCallParser.java` — XML <tool_code> 协议兜底（位置参数按签名映射为命名参数，PR#193）。
-- tools/：FileTools(8)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(1)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13)、PptxEditTools(7)。
+- tools/：FileTools(9，含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(1)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13)、PptxEditTools(7)。
 
 **记忆/证据/MCP/子 Agent**
 - memory/：MemoryPipelineService（轮次结束异步触发写侧管线）、MemoryManager（检索）、AgenticRetriever、MemCellExtractor、ProjectMemoryExtractor、MemoryEvidenceFormatter（证据账本：时间锚点/来源/更新信号，PR#155）。记忆五作用域 + 拟人化排序（重要性×衰减×随机）。
