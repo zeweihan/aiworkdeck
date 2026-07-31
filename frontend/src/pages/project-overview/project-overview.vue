@@ -540,6 +540,7 @@
             @files-changed="loadStagingFiles"
             @file-deleted="handleFileDeleted"
             @file-history="onFileHistory"
+            @reveal-file="onRevealFile"
           />
           <DdFilesPanel
             v-else-if="leftPaneKey === 'dd-files'"
@@ -1346,7 +1347,9 @@ import {
   getPlugins, // Added
   getFileText,
   getVersionStatus, // 版本面板之外也要知道「有没有采纳等待处理」
-  promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
+  promptFeatureNotConfigured, // 功能未配置统一引导（#18 T7）
+  getProjectLocalPath, // 在访达中显示（IDE 化）
+  getFileLocalPath
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
@@ -1991,6 +1994,12 @@ export default {
       this.loadProjectMembers()
       this.checkAdoptConflict()
 
+      // IDE 化「打开文件」过渡版：稍等页面挂载完成后打开指定文件
+      if (query.openFileId) {
+        const pendingId = Number(query.openFileId)
+        setTimeout(() => this.openPendingLocalFile(pendingId), 600)
+      }
+
       // Initialize Staging Area (Persistent)
       // We don't await here to avoid blocking page load, but ensuring folder exists is critical
       this.ensureStagingFolder().then(() => {
@@ -2388,6 +2397,31 @@ export default {
     onFileHistory(file) {
       this.versionFileFilter = { fileId: file.id, name: file.name }
       if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+    // 文件树右键「在访达中显示」：后端解析物理路径（localRoot 感知），桌面壳高亮
+    async onRevealFile(file) {
+      if (!file) return
+      const shellApi = typeof window !== 'undefined' && window.checkbaDesktop
+        && window.checkbaDesktop.fs && window.checkbaDesktop.fs.showItemInFolder
+      if (!shellApi) return
+      try {
+        let path = null
+        if (file.isFolder) {
+          // 文件夹没有独立物理路径记录：用项目根 + 无法精确时退回项目根
+          const r = await getProjectLocalPath(this.projectId)
+          path = r && r.data && r.data.path
+        } else {
+          const r = await getFileLocalPath(file.id)
+          path = r && r.data && r.data.path
+          if (!(r && r.data && r.data.exists)) {
+            uni.showToast({ title: '磁盘上没有这份文件', icon: 'none' })
+            return
+          }
+        }
+        if (path) await window.checkbaDesktop.fs.showItemInFolder(path)
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '无法在访达中显示', icon: 'none' })
+      }
     },
     // 「有一次采纳等待处理」固定条的入口：切到版本面板，AdoptConflictDialog 会随
     // 面板的 /status 自动弹出（它本来就是这么起来的，含崩溃后重开的场景）。

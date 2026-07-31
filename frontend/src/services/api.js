@@ -635,6 +635,36 @@ export function createProject(payload) {
   });
 }
 
+// IDE 化本地文件夹项目：打开/新建本地文件夹作为项目
+// payload: { localRoot, createFolder, name, openFileName }
+// 返回 { code: 0, data: { projectId, name, reused, openFileId, importedCount, truncated } }
+export function openLocalProject(payload) {
+  return request({
+    url: '/api/projects/open-local',
+    method: 'POST',
+    data: payload,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 项目物理根目录（「在 Finder 中显示」）
+export function getProjectLocalPath(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/local-path`,
+    method: 'GET',
+  });
+}
+
+// 文件物理路径（「在 Finder 中显示」）
+export function getFileLocalPath(fileId) {
+  return request({
+    url: `/api/files/${fileId}/local-path`,
+    method: 'GET',
+  });
+}
+
 // ===================== 用户认证相关 API =====================
 
 // 用户注册
@@ -1454,6 +1484,9 @@ export default {
   exportAiDocx,
   fetchCompanyBasicInfo,
   createProject,
+  openLocalProject,
+  getProjectLocalPath,
+  getFileLocalPath,
   register,
   login,
   clientLogin,

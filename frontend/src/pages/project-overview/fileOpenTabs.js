@@ -25,6 +25,23 @@ export const fileOpenTabsMethods = {
       })
     },
 
+    // IDE 化「打开文件」过渡版：进入项目后按 id 打开指定文件（newproject 页带 openFileId 查询参数进来）
+    async openPendingLocalFile(fileId) {
+      if (!fileId) return
+      try {
+        const resp = await getProjectFiles(this.projectId)
+        const files = Array.isArray(resp) ? resp : (resp?.data || [])
+        const target = files.find(f => f.id === fileId && !f.isFolder)
+        if (target) {
+          this.openFile(target)
+        } else {
+          console.warn('[project-overview] openPendingLocalFile: file not found', fileId)
+        }
+      } catch (e) {
+        console.warn('[project-overview] openPendingLocalFile failed', e)
+      }
+    },
+
     // Handle file open request from ChatInterface (file changes popup)
     async handleOpenFileFromChat({ name }) {
       if (!name) return

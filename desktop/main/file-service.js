@@ -1,4 +1,4 @@
-const { ipcMain, dialog } = require('electron');
+const { ipcMain, dialog, shell } = require('electron');
 
 /**
  * Initialize local file service handlers.
@@ -13,6 +13,13 @@ function initLocalFileService() {
     // Handler: Open File Dialog（仅弹系统选择框，安全）
     ipcMain.handle('fs:showOpenDialog', async (event, options) => {
         return await dialog.showOpenDialog(options);
+    });
+
+    // Handler: 在 Finder/资源管理器中显示（仅高亮已有路径，不读写内容，安全）
+    ipcMain.handle('fs:showItemInFolder', async (event, { path } = {}) => {
+        if (typeof path !== 'string' || !path) return { ok: false };
+        shell.showItemInFolder(path);
+        return { ok: true };
     });
 }
 

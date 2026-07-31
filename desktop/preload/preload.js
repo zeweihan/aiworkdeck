@@ -116,7 +116,9 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     // 注：readFile/writeFile 曾暴露任意路径读/写（渲染进程零调用，属死暴露，其中任意写可覆盖
     // ~/.zshrc 等实现代码执行），已移除以缩小攻击面。唯一在用的文件读取走 utils.readFile
     // （checkba:fs-read-file，已加敏感路径拦截与大小上限）。
-    showOpenDialog: (options) => ipcRenderer.invoke('fs:showOpenDialog', options)
+    showOpenDialog: (options) => ipcRenderer.invoke('fs:showOpenDialog', options),
+    // 在 Finder/资源管理器里高亮一个已有路径（IDE 化项目「在 Finder 中显示」）
+    showItemInFolder: (path) => ipcRenderer.invoke('fs:showItemInFolder', { path })
   },
   // Epic #43: embedded LibreOffice editor <webview> wiring. getEditor() returns
   // { url, preload, partition } for the host to mount the webview.
