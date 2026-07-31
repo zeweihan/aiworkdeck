@@ -121,25 +121,27 @@ public class VersionController {
      * 而不是稿。反查不到（工作段被并发丢弃等异常残局）时返回 null，让调用方回落到
      * {@code adoptConflictStatus}——但正常路径下不会发生：结束工作撞车时工作段仍是
      * ACTIVE，不会被别的路径动。
+     *
+     * 不 catch 异常：这条 null 路径只该在「确实没查到结束工作撞车现场」时走，不能借它
+     * 吞掉真正的查询异常。之前这里裹了一层 blanket catch，真在 MERGING 时反查失败会把
+     * sessionEndConflict 悄悄判成 null，/status 转而落到 adoptConflictStatus 的
+     * draftId=null 逃生门——前端把「结束工作撞车」误当成「采纳撞车」，弹出错的裁决弹窗。
+     * 查询失败必须让异常走 {@link #onVersionError} 显式报错，不能静默降级成错误的语境。
      */
     private Map<String, Object> sessionEndConflictStatus(long projectId) {
-        try {
-            if (!repoService.repositoryMerging(projectId)) return null;
-            String mergeHead = repoService.mergeHeadRef(projectId);
-            if (mergeHead == null) return null;
-            var active = sessionService.activeSession(projectId);
-            if (active.isEmpty() || !mergeHead.equals(
-                    repoService.resolveRef(projectId, active.get().getBranchName()))) {
-                return null;
-            }
-            return sessionEndConflictData(new WorkSessionService.SessionEndConflict(
-                    active.get().getId(), active.get().getTitle(),
-                    repoService.conflictingPaths(projectId).stream()
-                            .filter(p -> !p.startsWith(".awd/")).toList(),
-                    repoService.resolveRef(projectId, "HEAD"), mergeHead));
-        } catch (Exception e) {
+        if (!repoService.repositoryMerging(projectId)) return null;
+        String mergeHead = repoService.mergeHeadRef(projectId);
+        if (mergeHead == null) return null;
+        var active = sessionService.activeSession(projectId);
+        if (active.isEmpty() || !mergeHead.equals(
+                repoService.resolveRef(projectId, active.get().getBranchName()))) {
             return null;
         }
+        return sessionEndConflictData(new WorkSessionService.SessionEndConflict(
+                active.get().getId(), active.get().getTitle(),
+                repoService.conflictingPaths(projectId).stream()
+                        .filter(p -> !p.startsWith(".awd/")).toList(),
+                repoService.resolveRef(projectId, "HEAD"), mergeHead));
     }
 
     private Map<String, Object> sessionEndConflictData(WorkSessionService.SessionEndConflict c) {
@@ -220,7 +222,11 @@ public class VersionController {
             @RequestBody Map<String, Object> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireMember(projectId, sessionId);
-        long targetSession = ((Number) body.get("sessionId")).longValue();
+        Object rawSessionId = body.get("sessionId");
+        if (!(rawSessionId instanceof Number)) {
+            throw VersionException.userFacing("无效的请求");
+        }
+        long targetSession = ((Number) rawSessionId).longValue();
         @SuppressWarnings("unchecked")
         Map<String, String> raw = (Map<String, String>) body.get("resolutions");
         WorkSessionService.SessionEndResult r = sessionService.resolveSessionEnd(
