@@ -58,6 +58,12 @@
             <artifactId>langchain4j-pgvector</artifactId>
             <version>0.36.0</version>
         </dependency>
+        <!-- IDE 化本地文件夹项目：文件系统监听（macOS 走原生 FSEvents，JDK 自带 WatchService 在 mac 上是轮询） -->
+        <dependency>
+            <groupId>io.methvin</groupId>
+            <artifactId>directory-watcher</artifactId>
+            <version>0.18.0</version>
+        </dependency>
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>

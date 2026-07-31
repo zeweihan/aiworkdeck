@@ -1891,6 +1891,11 @@ export default {
     }
     // 后台任务状态轮询清理
     if (this.convStatusPollTimer) { clearInterval(this.convStatusPollTimer); this.convStatusPollTimer = null }
+    // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
+    if (typeof window !== 'undefined' && this._localFocusRefresh) {
+      window.removeEventListener('focus', this._localFocusRefresh)
+      this._localFocusRefresh = null
+    }
     clearTimeout(this._libreSpareTimer)
     this.teardownResponsiveListener()
     // Epic #43: 解绑 ⌘⇧O 嵌入式编辑器监听
@@ -2107,6 +2112,18 @@ export default {
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
     this.setupResponsiveListener()
+    // IDE 化：窗口重新聚焦时刷新文件树——外部改动（Finder 增删改）都发生在
+    // 用户切出去的时候，后端 watcher 已把数据库对齐，聚焦拉一次即可见。
+    // 多实例守卫：只让活跃实例刷新（页面栈多实例地雷，PR#148/#151 模式）
+    if (typeof window !== 'undefined') {
+      this._localFocusRefresh = () => {
+        if (!this.isActiveOverviewInstance()) return
+        if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
+          this.$refs.fileTree.loadFiles()
+        }
+      }
+      window.addEventListener('focus', this._localFocusRefresh)
+    }
     // 预热备胎：延迟建（避开项目打开期资源竞争），首开 Office 文档免冷启动
     this.scheduleLibreSpare()
     // 后台任务状态轮询：AI 面板打开时每 15s 刷一次会话状态（驱动历史列表状态点

@@ -46,6 +46,7 @@ class LocalProjectServiceTest {
     @Autowired private ProjectFileRepository projectFileRepository;
 
     private LocalProjectService svc;
+    private ProjectFileService projectFileService;
     private Path globalRoot;
 
     @BeforeEach
@@ -59,7 +60,7 @@ class LocalProjectServiceTest {
         com.checkba.storage.StorageServiceFactory storageFactory = mock(com.checkba.storage.StorageServiceFactory.class);
         com.checkba.storage.StorageService storageService = mock(com.checkba.storage.StorageService.class);
         when(storageFactory.getStorageService()).thenReturn(storageService);
-        ProjectFileService projectFileService = new ProjectFileService(
+        projectFileService = new ProjectFileService(
                 projectFileRepository,
                 mock(com.checkba.service.ai.ProjectRagService.class),
                 storageFactory,
@@ -70,7 +71,8 @@ class LocalProjectServiceTest {
         when(memberService.hasReadPermission(anyLong(), anyLong())).thenReturn(true);
 
         svc = new LocalProjectService(projectRepository, projectMemberRepository,
-                projectFileRepository, projectFileService, memberService, resolver);
+                projectFileRepository, projectFileService, memberService, resolver,
+                mock(org.springframework.context.ApplicationEventPublisher.class));
     }
 
     private Path userFolder(@TempDir Path tmp) {
@@ -146,6 +148,109 @@ class LocalProjectServiceTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> svc.openLocalFolder(folder.resolve("outer/inner").toString(), false, null, null, 1L));
         assertTrue(e.getMessage().contains("嵌套"));
+    }
+
+    // ---- 对账（watcher 触发的 reconcileProject）----
+
+    @Test
+    void reconcileImportsNewAndSoftDeletesVanished(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("a.txt"), "1");
+        Files.createDirectories(folder.resolve("sub"));
+        Files.writeString(folder.resolve("sub/b.txt"), "2");
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        // Finder 里：删掉 sub 整个目录，新增 c.txt
+        Files.delete(folder.resolve("sub/b.txt"));
+        Files.delete(folder.resolve("sub"));
+        Files.writeString(folder.resolve("c.txt"), "3");
+
+        LocalProjectService.ReconcileResult r = svc.reconcileProject(projectId);
+        assertTrue(r.changed() > 0);
+        assertFalse(r.rootMissing());
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(projectId);
+        ProjectFile a = rows.stream().filter(f -> f.getName().equals("a.txt")).findFirst().orElseThrow();
+        assertFalse(Boolean.TRUE.equals(a.getIsDeleted()));
+        ProjectFile c = rows.stream().filter(f -> f.getName().equals("c.txt")).findFirst().orElseThrow();
+        assertFalse(Boolean.TRUE.equals(c.getIsDeleted()));
+        ProjectFile sub = rows.stream().filter(f -> f.getName().equals("sub")).findFirst().orElseThrow();
+        assertTrue(Boolean.TRUE.equals(sub.getIsDeleted()), "磁盘上消失的文件夹应进回收站");
+        ProjectFile b = rows.stream().filter(f -> f.getName().equals("b.txt")).findFirst().orElseThrow();
+        assertTrue(Boolean.TRUE.equals(b.getIsDeleted()));
+    }
+
+    @Test
+    void reconcileDoesNotResurrectRecycledRows(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("a.txt"), "1");
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        ProjectFile a = projectFileRepository.findByProjectId(projectId).get(0);
+
+        // 律师在应用里删除（回收站，磁盘文件保留）——对账不得把它当新文件复活
+        projectFileService.delete(a.getId(), 1L);
+        svc.reconcileProject(projectId);
+
+        List<ProjectFile> rows = projectFileRepository.findByProjectId(projectId);
+        assertEquals(1, rows.size(), "不得因磁盘文件仍在而新建重复行");
+        assertTrue(Boolean.TRUE.equals(rows.get(0).getIsDeleted()));
+    }
+
+    @Test
+    void reconcileIsNoOpWhenNothingChanged(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("a.txt"), "1");
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+        java.time.LocalDateTime before = projectFileRepository.findByProjectId(projectId).get(0).getUpdatedAt();
+
+        LocalProjectService.ReconcileResult r = svc.reconcileProject(projectId);
+        assertEquals(0, r.changed());
+        assertEquals(before, projectFileRepository.findByProjectId(projectId).get(0).getUpdatedAt(),
+                "无变化的对账不得翻搅数据库行（版本记录噪声与修改时间失真）");
+    }
+
+    @Test
+    void reconcileAbortsWhenRootUnreachable(@TempDir Path tmp) throws Exception {
+        Path folder = tmp.resolve("proj");
+        Files.createDirectories(folder);
+        Files.writeString(folder.resolve("a.txt"), "1");
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        // 整个文件夹被移走（外置盘拔出）：绝不能把「暂时看不见」当「全删了」
+        Files.delete(folder.resolve("a.txt"));
+        Files.delete(folder);
+        LocalProjectService.ReconcileResult r = svc.reconcileProject(projectId);
+        assertTrue(r.rootMissing());
+        ProjectFile a = projectFileRepository.findByProjectId(projectId).get(0);
+        assertFalse(Boolean.TRUE.equals(a.getIsDeleted()), "根目录不可达时不得软删除任何行");
+    }
+
+    /**
+     * 全链路冒烟：文件系统事件 → 防抖 → reconcileProject → 落库。
+     * NOT_SUPPORTED：默认测试事务不提交，watcher 线程的新事务看不见项目行，链路必假。
+     */
+    @Test
+    @org.springframework.transaction.annotation.Transactional(
+            propagation = org.springframework.transaction.annotation.Propagation.NOT_SUPPORTED)
+    void watcherPicksUpExternalChanges(@TempDir Path folder) throws Exception {
+        Files.writeString(folder.resolve("a.txt"), "1");
+        Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
+
+        LocalRootWatchService watch = new LocalRootWatchService(projectRepository, svc);
+        try {
+            watch.ensureWatch(projectId, folder.normalize().toString());
+            Thread.sleep(800); // 等 watcher 挂载完成
+            Files.writeString(folder.resolve("b.txt"), "2");
+
+            long deadline = System.currentTimeMillis() + 15000;
+            boolean found = false;
+            while (System.currentTimeMillis() < deadline) {
+                found = projectFileRepository.findByProjectId(projectId).stream()
+                        .anyMatch(f -> "b.txt".equals(f.getName()) && !Boolean.TRUE.equals(f.getIsDeleted()));
+                if (found) break;
+                Thread.sleep(200);
+            }
+            assertTrue(found, "watcher 应在外部新增文件后自动把它导入数据库");
+        } finally {
+            watch.shutdown();
+        }
     }
 
     @Test
