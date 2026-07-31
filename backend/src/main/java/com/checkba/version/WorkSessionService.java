@@ -624,11 +624,19 @@ public class WorkSessionService {
         }
     }
 
-    /** 干净或裁决后的真合并统一收尾：同事清单并集 → 按数据库重算清单 → 单一双亲提交。 */
+    /**
+     * 干净或裁决后的真合并统一收尾：同事清单并集（带三方基线，见
+     * {@link ProjectTreeManifestService#unionApply(long, TreeManifest, TreeManifest)}——
+     * 基线是合并前主线 tip 与这段工作分支 tip 的合并基线，只有同事那一侧相对基线真的
+     * 做过复活动作才会复活本方在这段工作里亲手软删的文件）→ 按数据库重算清单 →
+     * 单一双亲提交。
+     */
     private SessionEndResult completeSessionMerge(long projectId, WorkSession s,
                                                    String mainTipBefore, String userName) {
         TreeManifest theirs = manifestService.readAtRef(projectId, mainTipBefore);
-        if (theirs != null) manifestService.unionApply(projectId, theirs);
+        String baseSha = repoService.mergeBase(projectId, mainTipBefore, s.getBranchName());
+        TreeManifest base = baseSha == null ? null : manifestService.readAtRef(projectId, baseSha);
+        if (theirs != null) manifestService.unionApply(projectId, theirs, base);
         manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
         String sha = repoService.commitMergeResolution(projectId, s.getTitle(),
                 userName, email(userName));
@@ -1176,12 +1184,19 @@ public class WorkSessionService {
      *
      * 清单读的是**稿 tip 那一版**，而不是合并后的 HEAD：合并后的清单是 Git 对两份 JSON
      * 做的文本合并，冲突时更是带着冲突标记的半成品，都不能当数据源。
+     *
+     * 清单并集带三方基线（{@link ProjectTreeManifestService#unionApply(long, TreeManifest, TreeManifest)}），
+     * 基线是合并前主线 tip 与稿 tip 的合并基线——只有稿相对基线真的做过复活动作才会
+     * 复活本方在主线这一侧亲手软删的文件；基线里没有的节点（稿上新建、切回主线时被
+     * 机械软删的那种）照旧放行，v1 关键行为不受影响。
      */
     private AdoptOutcome completeAdopt(long projectId, WorkSession draft, String draftTip,
                                        String mainTipBefore, String committedSha,
                                        List<Long> extraAffected, String userName) {
         TreeManifest draftManifest = manifestService.readAtRef(projectId, draftTip);
-        if (draftManifest != null) manifestService.unionApply(projectId, draftManifest);
+        String baseSha = repoService.mergeBase(projectId, mainTipBefore, draftTip);
+        TreeManifest base = baseSha == null ? null : manifestService.readAtRef(projectId, baseSha);
+        if (draftManifest != null) manifestService.unionApply(projectId, draftManifest, base);
 
         String sha = committedSha;
         if (sha == null) {
