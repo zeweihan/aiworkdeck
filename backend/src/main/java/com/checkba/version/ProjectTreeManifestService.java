@@ -294,6 +294,13 @@ public class ProjectTreeManifestService {
                 throw new VersionException(
                         "清单 v2 节点缺少身份标识(uid): project=" + projectId + " name=" + n.name());
             }
+            // .awd/tree.json 是仓库里外部可编辑（且随 push 跨机器传播）的文件，relPath 不可信：
+            // 恶意成员写 "../{别的项目 id}/x.docx"，落库的 filePath 会指向别人项目的文件，
+            // 下载端点按行上的 projectId 放行即打穿项目隔离（IDOR）。null 放行 = 文件夹节点。
+            if (n.relPath() != null && !WorkSessionService.isSafeRepoRelativePath(n.relPath())) {
+                throw new VersionException(
+                        "清单 v2 节点路径不合法: project=" + projectId + " relPath=" + n.relPath());
+            }
             ProjectFile match = byUid.get(n.uid());
             idByUid.put(n.uid(), match != null ? match.getId() : synthetic--);
         }

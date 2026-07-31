@@ -1470,6 +1470,13 @@ public class WorkSessionService {
         Path work = repoService.workTree(projectId);
         try {
             for (FileChange c : changes) {
+                // push 上来的提交不可信（ingestPushedMainline 的 diff 直接吃远端内容）：
+                // 带 ../ 等穿越段的路径会把字节写出 workTree 之外。不合法路径跳过并留痕，
+                // 不炸整个 ingest——其余合法文件照常物化。
+                if (!isSafeRepoRelativePath(c.path())) {
+                    log.warn("还原文件时跳过不合法路径: project={}, path={}", projectId, c.path());
+                    continue;
+                }
                 Path target = work.resolve(c.path());
                 byte[] bytes = repoService.readBlobAtCommit(projectId, ref, c.path());
                 if (bytes == null) {
@@ -1487,6 +1494,24 @@ public class WorkSessionService {
     private void syncManifestFromRef(long projectId, String ref) {
         TreeManifest m = manifestService.readAtRef(projectId, ref);
         if (m != null) manifestService.applyToDatabase(projectId, m);
+    }
+
+    /**
+     * 仓库相对路径的结构合法性：拒绝 null/空、反斜杠、绝对路径、空段、{@code ..}/{@code .}
+     * 穿越段。与 {@link #safeRepoPath} 的区别只有一条——放行 {@code .awd/} 前缀（清单文件
+     * 也要能物化），因为这里校验的是「写进 workTree 是否安全」，不是「是否允许律师访问」。
+     * push 内容三层校验之一（另两层：ReceivePack 的 ObjectChecker、normalizeV2 的 relPath 校验）。
+     */
+    static boolean isSafeRepoRelativePath(String path) {
+        if (path == null || path.isBlank() || path.contains("\\") || path.startsWith("/")) {
+            return false;
+        }
+        for (String seg : path.split("/", -1)) {
+            if (seg.isEmpty() || seg.equals("..") || seg.equals(".")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 校验外部传入的仓库相对路径。非法即抛（技术档，不回显内容）。 */

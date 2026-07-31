@@ -213,6 +213,27 @@ class TreeManifestV2Test {
         assertTrue(db.values().stream().noneMatch(f -> f.getProjectId().equals(9L))); // 一行都没落库
     }
 
+    /**
+     * v2 终审 C2（跨项目 IDOR）：.awd/tree.json 随 push 跨机器传播、外部可编辑，恶意成员
+     * 手改 relPath 写 "../{别的项目}/x.docx"，落库的 filePath 会指向别人项目的文件，
+     * 下载端点按行上的 projectId 放行即打穿隔离。normalizeV2 必须显式拒绝、零落库。
+     */
+    @Test
+    void v2NodeWithTraversalRelPathIsRejectedWithNothingPersisted() throws Exception {
+        String v2Json = """
+                {"version":2,"nodes":[{"name":"evil.docx","isFolder":false,"sortOrder":0,
+                "isDeleted":false,"uid":"u-evil","relPath":"../9/evil.docx","author":"stranger"}]}
+                """;
+        TreeManifest m = new ObjectMapper().readValue(v2Json, TreeManifest.class);
+
+        VersionException ex = assertThrows(VersionException.class,
+                () -> manifestSvc.applyToDatabase(7L, m));
+
+        assertTrue(ex.getMessage().contains("路径不合法"));
+        assertTrue(db.values().stream().noneMatch(f -> f.getProjectId().equals(7L)),
+                "不合法清单必须整体拒绝，一行都不落库");
+    }
+
     @Test
     void v1ManifestStillAppliesById() throws Exception {
         ProjectFile old = seedRow(9L, null, "旧文件.md", false, "projects/9/旧文件.md");

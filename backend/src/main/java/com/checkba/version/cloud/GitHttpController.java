@@ -4,6 +4,7 @@ import com.checkba.version.ProjectRepoService;
 import com.checkba.version.WorkSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.eclipse.jgit.lib.ObjectChecker;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.transport.PacketLineOut;
 import org.eclipse.jgit.transport.ReceiveCommand;
@@ -145,13 +146,26 @@ public class GitHttpController {
     }
 
     /**
-     * pre-receive 停靠主线脏区（这次 push 的 old-sha 因此对不上、被 git 原生拒绝）；
-     * post-receive 在 master 真正前进后做路径级落库（见 WorkSessionService 的
-     * dockDirtyMainlineForReceive/ingestPushedMainline，核心风险见该类头注释）。
+     * pre-receive 分两步：① 服务器仓库停在合并窗口（MERGING，网页端律师正在做冲突三选一）
+     * 时拒收整个 push——窗口期间放进来的 push 会让 master 前进，随后的裁决提交以新 master
+     * 为第一父落地，同事刚推上来的内容被静默回退；② 正常态先停靠主线脏区（这次 push 的
+     * old-sha 因此对不上、被 git 原生拒绝）。post-receive 在 master 真正前进后做路径级落库
+     * （见 WorkSessionService 的 dockDirtyMainlineForReceive/ingestPushedMainline）。
+     * setObjectChecker：push 上来的对象不可信（任何有写权限的成员都能手工构造 pack），
+     * 开 JGit 的对象格式校验，畸形对象在入库前就被拒。
      */
     private void configureReceivePack(ReceivePack rp, long projectId) {
-        rp.setPreReceiveHook((pack, commands) ->
-                sessionService.dockDirtyMainlineForReceive(projectId));
+        rp.setObjectChecker(new ObjectChecker());
+        rp.setPreReceiveHook((pack, commands) -> {
+            if (repositoryMergingOrUnknown(projectId)) {
+                for (ReceiveCommand cmd : commands) {
+                    cmd.setResult(ReceiveCommand.Result.REJECTED_OTHER_REASON,
+                            "project is resolving a merge, retry later");
+                }
+                return;
+            }
+            sessionService.dockDirtyMainlineForReceive(projectId);
+        });
         rp.setPostReceiveHook((pack, commands) -> {
             for (ReceiveCommand cmd : commands) {
                 if ("refs/heads/master".equals(cmd.getRefName())
@@ -161,6 +175,22 @@ public class GitHttpController {
                 }
             }
         });
+    }
+
+    /**
+     * 合并窗口判定，查询失败**按合并中处理（拒收）**——与「版本记录不阻断主流程」的
+     * 常规纪律相反，是有意的：这里放行的代价不是少记一笔版本，而是可能把同事的 push
+     * 收进一个正在裁决的仓库、裁决提交把它静默回退；拒收的代价只是客户端稍后重试。
+     * 宁可让客户端重试，不冒静默回退内容的风险。
+     */
+    private boolean repositoryMergingOrUnknown(long projectId) {
+        try {
+            return repoService.repositoryMerging(projectId);
+        } catch (Exception e) {
+            log.warn("pre-receive 合并态查询失败，按合并中处理（拒收这次 push）: projectId={}",
+                    projectId, e);
+            return true;
+        }
     }
 
     /**

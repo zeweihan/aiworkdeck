@@ -57,6 +57,9 @@ class GitHttpIngestTest {
     WorkSessionService sessionService;
 
     @Autowired
+    com.checkba.version.ProjectRepoService repoService;
+
+    @Autowired
     ProjectFileRepository fileRepository;
 
     @Autowired
@@ -177,6 +180,52 @@ class GitHttpIngestTest {
             // 丢弃工作段 → 补做同步
             sessionService.discardSession(22L, seededUserId);
             assertEquals("第二稿", Files.readString(root.resolve("projects/22/合同.txt")));
+        }
+    }
+
+    /**
+     * v2 终审 C1：服务器仓库停在合并窗口（网页端律师正在做冲突三选一）期间收到的 push
+     * 必须整体拒收——窗口期放进来的 push 让 master 前进，随后的裁决提交会以新 master
+     * 为第一父落地，同事刚推上来的内容被静默回退。时序安排：先造好窗口之外的服务端
+     * 历史、再 clone（客户端拿到的是当前 master），窗口只由 mergeNoCommit 开出、不再
+     * 推进 master——这样客户端这笔 push 本来是能快进成功的，被拒只能是 C1 钩子的作用，
+     * 不是 old-sha 对不上被 git 原生拒绝。
+     */
+    @Test
+    void pushIsRejectedWhileServerRepositoryIsMerging(@TempDir Path clientDir) throws Exception {
+        String token = seedRecordedProject(24L);
+        // 服务端先造分叉历史（稿分支与主线各改同一文件），此时还不开窗口
+        repoService.createBranch(24L, "draft/qa", "master");
+        repoService.checkoutBranch(24L, "draft/qa");
+        Files.writeString(root.resolve("projects/24/合同.txt"), "稿：内容");
+        repoService.commitAll(24L, "稿上修改", "auto", null, "网页端", "w@example.com");
+        repoService.checkoutBranch(24L, "master");
+        Files.writeString(root.resolve("projects/24/合同.txt"), "主线：内容");
+        repoService.commitAll(24L, "主线修改", "auto", null, "网页端", "w@example.com");
+
+        try (Git client = clone(24L, clientDir, token)) {
+            // 客户端在当前 master 之上备好一笔本来能快进的提交
+            Files.writeString(clientDir.resolve("合同.txt"), "同事的修改");
+            client.add().addFilepattern(".").call();
+            client.commit().setMessage("同事修改").setAuthor("同事", "p@example.com").call();
+
+            // 服务端开出真实冲突的合并窗口（MERGING，master ref 不动）
+            var outcome = repoService.mergeNoCommit(24L, "draft/qa", "采纳", "网页端", "w@example.com");
+            assertFalse(outcome.success(), "前置：这一步应该造出真实冲突");
+            assertTrue(repoService.repositoryMerging(24L), "前置：仓库应停在合并窗口");
+            String masterAtWindow = repoService.resolveRef(24L, "master");
+
+            var results = push(client, token);
+            boolean rejected = false;
+            for (var r : results)
+                for (var u : r.getRemoteUpdates())
+                    if (u.getStatus() != RemoteRefUpdate.Status.OK
+                            && u.getStatus() != RemoteRefUpdate.Status.UP_TO_DATE)
+                        rejected = true;
+            assertTrue(rejected, "MERGING 窗口内的 push 必须被拒收");
+            assertEquals(masterAtWindow, repoService.resolveRef(24L, "master"),
+                    "被拒的 push 不得让 master 前进");
+            assertTrue(repoService.repositoryMerging(24L), "合并窗口不得被 push 破坏");
         }
     }
 
