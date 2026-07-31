@@ -30,6 +30,10 @@ public class CloudConnection {
     @Column(nullable = false, length = 128)
     private String deviceToken;
 
+    /** 服务端设备令牌行的 id（用于 disconnect 撤销），旧行可能为空。 */
+    @Column
+    private Long tokenId;
+
     @Column(nullable = false)
     private LocalDateTime createdAt;
 }

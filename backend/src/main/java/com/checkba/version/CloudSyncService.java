@@ -73,6 +73,7 @@ public class CloudSyncService {
         conn.setUsername(data.getStr("username"));
         conn.setDisplayName(data.getStr("displayName"));
         conn.setDeviceToken(data.getStr("token"));
+        conn.setTokenId(data.getLong("tokenId", null));
         conn.setCreatedAt(LocalDateTime.now());
         return connectionRepository.save(conn);
     }
@@ -80,10 +81,18 @@ public class CloudSyncService {
     /** 断开一个云端连接：尽力撤远端令牌 + 删本地连接与所有关联的项目绑定。 */
     public void disconnect(long connectionId) {
         connectionRepository.findById(connectionId).ifPresent(conn -> {
-            try {
-                httpPost(conn.getServerUrl() + "/api/auth/device-token/0/revoke", "{}");
-            } catch (Exception ignored) {
-                // 尽力撤销，失败不阻断本地断开
+            if (conn.getTokenId() != null) {
+                try {
+                    JSONObject resp = JSONUtil.parseObj(httpPost(
+                            conn.getServerUrl() + "/api/auth/device-token/" + conn.getTokenId() + "/revoke",
+                            "{}", conn.getDeviceToken()));
+                    if (resp.getInt("code", 1) != 0) {
+                        log.warn("远端撤销设备令牌未成功: connection={}, message={}",
+                                connectionId, resp.getStr("message"));
+                    }
+                } catch (Exception e) {
+                    log.warn("远端撤销设备令牌失败，仅做本地断开: connection={}", connectionId, e);
+                }
             }
             remoteRepository.findByConnectionId(connectionId).forEach(remoteRepository::delete);
             connectionRepository.delete(conn);
@@ -172,14 +181,22 @@ public class CloudSyncService {
         }
     }
 
-    /** 单测覆写此 seam 打桩（PluginMarketService.httpGet 同款约定）。 */
+    /** 无需认证头的调用，委托三参版本。 */
     protected String httpPost(String url, String jsonBody) {
-        try (HttpResponse resp = HttpRequest.post(url)
+        return httpPost(url, jsonBody, null);
+    }
+
+    /** 单测覆写此 seam 打桩（PluginMarketService.httpGet 同款约定）。sessionToken 非空时带 X-Session-Id 头。 */
+    protected String httpPost(String url, String jsonBody, String sessionToken) {
+        HttpRequest req = HttpRequest.post(url)
                 .header("Content-Type", "application/json")
                 .body(jsonBody)
                 .setConnectionTimeout(5000)
-                .setReadTimeout(15000)
-                .execute()) {
+                .setReadTimeout(15000);
+        if (sessionToken != null) {
+            req.header("X-Session-Id", sessionToken);
+        }
+        try (HttpResponse resp = req.execute()) {
             if (resp.getStatus() != 200) {
                 throw new IllegalStateException("云端请求失败 (HTTP " + resp.getStatus() + ")");
             }

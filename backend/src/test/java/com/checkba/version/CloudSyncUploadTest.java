@@ -54,6 +54,7 @@ class CloudSyncUploadTest {
     private long nextRemoteId;
 
     private String lastHttpUrl;
+    private String lastHttpHeaderToken;
     private String cannedResponse;
 
     private CloudConnectionRepository cloudConnRepo;
@@ -126,6 +127,11 @@ class CloudSyncUploadTest {
             return c;
         });
         when(cloudConnRepo.findById(any())).thenAnswer(i -> Optional.ofNullable(connections.get(i.getArgument(0))));
+        doAnswer(i -> {
+            CloudConnection c = i.getArgument(0);
+            connections.remove(c.getId());
+            return null;
+        }).when(cloudConnRepo).delete(any(CloudConnection.class));
 
         remotes = new HashMap<>();
         nextRemoteId = 1L;
@@ -142,11 +148,17 @@ class CloudSyncUploadTest {
         when(projectRemoteRepo.findByConnectionId(any())).thenAnswer(i -> remotes.values().stream()
                 .filter(r -> r.getConnectionId().equals(i.getArgument(0)))
                 .toList());
+        doAnswer(i -> {
+            ProjectRemote r = i.getArgument(0);
+            remotes.remove(r.getId());
+            return null;
+        }).when(projectRemoteRepo).delete(any(ProjectRemote.class));
 
         cloud = new CloudSyncService(repoSvc, svc, manifestSvc, fileRepo, cloudConnRepo, projectRemoteRepo) {
             @Override
-            protected String httpPost(String url, String body) {
+            protected String httpPost(String url, String body, String sessionToken) {
                 lastHttpUrl = url;
+                lastHttpHeaderToken = sessionToken;
                 return cannedResponse;
             }
         };
@@ -258,6 +270,58 @@ class CloudSyncUploadTest {
             assertEquals(CloudSyncService.UploadStatus.OFFLINE_PENDING, r.status());
         });
         assertTrue(remoteRowOf(7L).getPendingUpload());
+    }
+
+    @Test
+    void disconnectRevokesRemoteTokenWithRealIdAndAuthHeader() {
+        cannedResponse = """
+                {"code":0,"data":{"tokenId":42,"token":"awdt_xyz","userId":5,
+                "username":"hanzewei","displayName":"韩泽伟"}}
+                """;
+        CloudConnection conn = cloud.connect("http://server:9696", "hanzewei", "pw", "MacBook");
+
+        ProjectRemote remote = new ProjectRemote();
+        remote.setProjectId(7L);
+        remote.setConnectionId(conn.getId());
+        remote.setPendingUpload(false);
+        remote.setCreatedAt(LocalDateTime.now());
+        projectRemoteRepo.save(remote);
+
+        cannedResponse = """
+                {"code":0,"message":"已撤销"}
+                """;
+        cloud.disconnect(conn.getId());
+
+        assertTrue(lastHttpUrl.endsWith("/device-token/42/revoke"));
+        assertEquals("awdt_xyz", lastHttpHeaderToken);
+        assertFalse(connections.containsKey(conn.getId()));
+        assertTrue(remotes.isEmpty());
+    }
+
+    @Test
+    void disconnectWithoutTokenIdSkipsRemoteRevokeButDeletesLocally() {
+        CloudConnection conn = new CloudConnection();
+        conn.setServerUrl("http://server:9696");
+        conn.setUsername("韩泽伟");
+        conn.setDisplayName("韩泽伟");
+        conn.setDeviceToken("awdt_notoken");
+        conn.setTokenId(null);
+        conn.setCreatedAt(LocalDateTime.now());
+        conn = cloudConnRepo.save(conn);
+
+        ProjectRemote remote = new ProjectRemote();
+        remote.setProjectId(7L);
+        remote.setConnectionId(conn.getId());
+        remote.setPendingUpload(false);
+        remote.setCreatedAt(LocalDateTime.now());
+        projectRemoteRepo.save(remote);
+
+        lastHttpUrl = null;
+        cloud.disconnect(conn.getId());
+
+        assertNull(lastHttpUrl);
+        assertFalse(connections.containsKey(conn.getId()));
+        assertTrue(remotes.isEmpty());
     }
 
     @Test
