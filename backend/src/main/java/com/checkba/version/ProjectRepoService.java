@@ -838,6 +838,27 @@ public class ProjectRepoService {
     }
 
     /**
+     * 两个 ref 的合并基线提交（两条历史分叉前最近的共同祖先）；任一 ref 解析不出、
+     * 或两者根本没有公共祖先（不相关历史），返回 null——与 {@link #resolveRef} 同口径，
+     * 不可得是正常情况，调用方自己决定怎么退化，不抛异常。
+     */
+    public String mergeBase(long projectId, String refA, String refB) {
+        try (Repository repo = open(projectId);
+             org.eclipse.jgit.revwalk.RevWalk walk = new org.eclipse.jgit.revwalk.RevWalk(repo)) {
+            ObjectId a = repo.resolve(refA);
+            ObjectId b = repo.resolve(refB);
+            if (a == null || b == null) return null;
+            walk.setRevFilter(org.eclipse.jgit.revwalk.filter.RevFilter.MERGE_BASE);
+            walk.markStart(walk.parseCommit(a));
+            walk.markStart(walk.parseCommit(b));
+            RevCommit base = walk.next();
+            return base == null ? null : base.getName();
+        } catch (Exception e) {
+            throw new VersionException("计算合并基线失败: project=" + projectId, e);
+        }
+    }
+
+    /**
      * 只建仓不落提交：等着接收共享方的首推。共享方的首推要带完整历史进来，服务端
      * 先落初始提交会造出两条无关历史（unrelated histories），永远合不上，所以这里
      * 只建仓、把 HEAD 指到 master，不调用 commit。已初始化则 no-op（幂等）。

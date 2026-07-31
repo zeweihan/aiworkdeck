@@ -657,13 +657,18 @@ public class CloudSyncService {
 
     /**
      * 干净合并或裁决后的云端合并统一收尾：清单并集（并集语义同采纳，地雷 #21——干净路径
-     * 与冲突裁决路径必须以同一种方式提交，清单与内容进同一个双亲提交）→ 提交 → 自动重推。
+     * 与冲突裁决路径必须以同一种方式提交，清单与内容进同一个双亲提交；带三方基线，见
+     * {@link ProjectTreeManifestService#unionApply(long, TreeManifest, TreeManifest)}——
+     * 基线是合并前本地 tip 与云端 tip 的合并基线，只有云端那一侧相对基线真的做过复活
+     * 动作才会复活本方亲手软删的文件）→ 提交 → 自动重推。
      * 重推失败（网络问题）不回滚——合并已经落地，只是回传没成，转入待上传，绝不丢改动。
      */
     private UpdateResult completeCloudMerge(long projectId, String tipBefore, String cloudTip,
                                             CloudConnection conn, Long userId, String userName) {
         var cloudManifest = manifestService.readAtRef(projectId, cloudTip);
-        if (cloudManifest != null) manifestService.unionApply(projectId, cloudManifest);
+        String baseSha = repoService.mergeBase(projectId, tipBefore, cloudTip);
+        TreeManifest base = baseSha == null ? null : manifestService.readAtRef(projectId, baseSha);
+        if (cloudManifest != null) manifestService.unionApply(projectId, cloudManifest, base);
         manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
         repoService.commitMergeResolution(projectId, CLOUD_MERGE_TITLE,
                 userName, authorEmail(userId, userName));

@@ -122,11 +122,13 @@ public class ProjectTreeManifestService {
      */
     @Transactional
     public SyncReport applyToDatabase(long projectId, TreeManifest manifest) {
-        return apply(projectId, manifest, true);
+        return apply(projectId, manifest, true, null);
     }
 
     /**
      * 清单**并集**：把稿的清单叠加到当前数据库上，用于采纳一稿（spec 第 3 期）。
+     * 无基线的两参版本——v1 语义原样不动，见 {@link #unionApply(long, TreeManifest, TreeManifest)}
+     * 三参版本的三方基线判定。委托三参版本、base 传 null。
      *
      * 与 {@link #applyToDatabase} 共用同一个节点新建/更新内核，只差两条规则：
      * <ul>
@@ -142,15 +144,40 @@ public class ProjectTreeManifestService {
      */
     @Transactional
     public SyncReport unionApply(long projectId, TreeManifest manifest) {
-        return apply(projectId, manifest, false);
+        return apply(projectId, manifest, false, null);
+    }
+
+    /**
+     * 清单并集 + 三方基线：DB 行已在回收站、清单节点显示 active 时（「复活」），
+     * 只有当**对方相对合并基线真的做过复活动作**才放行，否则保留 DB 现有的回收站状态。
+     * 判定矩阵（uid 匹配）：
+     * <ul>
+     *   <li>基线里该节点是 deleted、清单是 active——对方真复活了，放行。</li>
+     *   <li>基线里没有这个节点——对方新增（比如稿上新建的文件，切回主线时被
+     *       {@link #applyToDatabase} 机械软删），基线自然不认识它，放行——这是
+     *       v1 就有的关键场景，不能因为加了基线判定反而堵死。</li>
+     *   <li>基线里该节点也是 active（对方没动过删除状态）——不放行，DB 现有的
+     *       回收站状态保持不变。这正是本条判定要堵住的口子：本方在这段工作/这一稿
+     *       里亲手把文件软删掉，对方那一侧只是清单陈旧地显示 active，并集不该把
+     *       这次亲手删除误判成"需要复活"。</li>
+     * </ul>
+     * {@code base} 为 null 或 {@code version() < 2}（旧历史分叉点，跨不出 uid 身份）
+     * 时判定不可用，整体退回两参版本的 v1 行为（放行）——保守兼容，升级期不炸。
+     * 「active → deleted 绝不发生」的既有并集守卫（见 {@link #applyAttributes}）
+     * 一字不动，这里只收紧「deleted → active」这一半。
+     */
+    @Transactional
+    public SyncReport unionApply(long projectId, TreeManifest manifest, TreeManifest base) {
+        return apply(projectId, manifest, false, base);
     }
 
     /**
      * applyToDatabase / unionApply 共用的内核。{@code syncDeletions} 为 true 是同步语义
      * （清单里没有的行进回收站，已有的行也照清单可增可减），为 false 是并集语义
-     * （这两种「减」都不做）。
+     * （这两种「减」都不做）。{@code base} 只在并集语义下起作用，见
+     * {@link #unionApply(long, TreeManifest, TreeManifest)} 的判定矩阵。
      */
-    private SyncReport apply(long projectId, TreeManifest manifest, boolean syncDeletions) {
+    private SyncReport apply(long projectId, TreeManifest manifest, boolean syncDeletions, TreeManifest base) {
         try {
             Map<Long, ProjectFile> current = new HashMap<>();
             for (ProjectFile f : projectFileRepository.findByProjectId(projectId)) {
@@ -161,6 +188,9 @@ public class ProjectTreeManifestService {
             List<TreeManifest.Node> effective = manifest.version() >= 2
                     ? normalizeV2(projectId, manifest.nodes()) : manifest.nodes();
             List<TreeManifest.Node> ordered = topoSort(effective);
+
+            Map<String, TreeManifest.Node> baseByUid = (base != null && base.version() >= 2)
+                    ? baseByUid(base) : null;
 
             Map<Long, Long> remap = new LinkedHashMap<>();
             int created = 0, updated = 0;
@@ -175,9 +205,10 @@ public class ProjectTreeManifestService {
                 if (existing != null && !idTakenByOther) {
                     boolean keepDbLocation =
                             !syncDeletions && mainlineLocationWins(projectId, existing, node);
+                    boolean mayRevive = syncDeletions || reviveAllowed(baseByUid, node);
                     if (applyAttributes(existing, node,
                             keepDbLocation ? existing.getParentId() : targetParentId,
-                            syncDeletions, keepDbLocation)) {
+                            syncDeletions, keepDbLocation, mayRevive)) {
                         projectFileRepository.save(existing);
                         updated++;
                     }
@@ -200,8 +231,8 @@ public class ProjectTreeManifestService {
                 fresh.setUserId(userId);
                 fresh.setCreatedAt(LocalDateTime.now());
                 // 新建的行本来就不存在，照清单原样落地（含回收站状态），
-                // 「并集只加不减」只约束已经存在的行。
-                applyAttributes(fresh, node, targetParentId, true, false);
+                // 「并集只加不减」只约束已经存在的行，复活守卫同理不适用。
+                applyAttributes(fresh, node, targetParentId, true, false, true);
                 ProjectFile saved = projectFileRepository.save(fresh);
                 if (!Objects.equals(saved.getId(), node.id())) {
                     remap.put(node.id(), saved.getId());
@@ -227,6 +258,26 @@ public class ProjectTreeManifestService {
         } catch (Exception e) {
             throw new VersionException("同步文件树清单回数据库失败: project=" + projectId, e);
         }
+    }
+
+    private Map<String, TreeManifest.Node> baseByUid(TreeManifest base) {
+        Map<String, TreeManifest.Node> out = new HashMap<>();
+        for (TreeManifest.Node n : base.nodes()) {
+            if (n.uid() != null) out.put(n.uid(), n);
+        }
+        return out;
+    }
+
+    /**
+     * 三方基线判定矩阵的核心：{@code baseByUid} 为 null 表示基线不可得，整体放行
+     * （回退 v1 行为）。节点没有 uid（v1 清单）同样无法定位基线节点，放行。
+     * 其余见 {@link #unionApply(long, TreeManifest, TreeManifest)} 的判定矩阵。
+     */
+    private boolean reviveAllowed(Map<String, TreeManifest.Node> baseByUid, TreeManifest.Node node) {
+        if (baseByUid == null || node.uid() == null) return true;
+        TreeManifest.Node baseNode = baseByUid.get(node.uid());
+        if (baseNode == null) return true; // 基线没有这个节点：对方新增，允许
+        return baseNode.isDeleted(); // 基线里也是 deleted，对方才是真的复活了它
     }
 
     /**
@@ -329,11 +380,14 @@ public class ProjectTreeManifestService {
     /**
      * 返回 true 表示确实改动了字段。{@code maySoftDelete} 为 false 时禁止把一条
      * 「在用」的行改成「回收站」（并集只加不减，见 {@link #unionApply}）。
-     * {@code keepLocation} 为 true 时不动 name/filePath/parentId——主线的改名/移动
-     * 胜出，见 {@link #mainlineLocationWins}。
+     * {@code mayRevive} 为 false 时反过来禁止把一条「回收站」的行改成「在用」——
+     * 三方基线判定认定这不是对方真的复活，见 {@link #unionApply(long, TreeManifest, TreeManifest)}。
+     * 两个方向互不影响，分别对应「active → deleted 绝不发生」与「deleted → active
+     * 需要基线证据」两条独立的守卫。{@code keepLocation} 为 true 时不动
+     * name/filePath/parentId——主线的改名/移动胜出，见 {@link #mainlineLocationWins}。
      */
     private boolean applyAttributes(ProjectFile f, TreeManifest.Node n, Long parentId,
-                                    boolean maySoftDelete, boolean keepLocation) {
+                                    boolean maySoftDelete, boolean keepLocation, boolean mayRevive) {
         boolean changed = false;
         if (!keepLocation) {
             if (!Objects.equals(f.getParentId(), parentId)) { f.setParentId(parentId); changed = true; }
@@ -351,6 +405,9 @@ public class ProjectTreeManifestService {
         boolean targetDeleted = n.isDeleted();
         if (!maySoftDelete && targetDeleted && !Boolean.TRUE.equals(f.getIsDeleted())) {
             targetDeleted = false;
+        }
+        if (!mayRevive && !targetDeleted && Boolean.TRUE.equals(f.getIsDeleted())) {
+            targetDeleted = true;
         }
         if (Boolean.TRUE.equals(f.getIsDeleted()) != targetDeleted) {
             f.setIsDeleted(targetDeleted);
