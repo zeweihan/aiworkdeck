@@ -1,10 +1,12 @@
 package com.checkba.version.cloud;
 
 import com.checkba.version.ProjectRepoService;
+import com.checkba.version.WorkSessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.transport.PacketLineOut;
+import org.eclipse.jgit.transport.ReceiveCommand;
 import org.eclipse.jgit.transport.ReceivePack;
 import org.eclipse.jgit.transport.RefAdvertiser;
 import org.eclipse.jgit.transport.UploadPack;
@@ -32,10 +34,13 @@ public class GitHttpController {
 
     private final ProjectRepoService repoService;
     private final GitAccessService access;
+    private final WorkSessionService sessionService;
 
-    public GitHttpController(ProjectRepoService repoService, GitAccessService access) {
+    public GitHttpController(ProjectRepoService repoService, GitAccessService access,
+                             WorkSessionService sessionService) {
         this.repoService = repoService;
         this.access = access;
+        this.sessionService = sessionService;
     }
 
     @GetMapping("/{projectId}.git/info/refs")
@@ -121,7 +126,13 @@ public class GitHttpController {
                 ReceivePack rp = new ReceivePack(repo);
                 rp.setBiDirectionalPipe(false);
                 configureReceivePack(rp, projectId);
-                rp.receive(body(request), response.getOutputStream(), null);
+                sessionService.runLocked(projectId, () -> {
+                    try {
+                        rp.receive(body(request), response.getOutputStream(), null);
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                });
             }
         } catch (ZipException e) {
             // 请求体不是合法的 gzip 流，是客户端的问题，不是服务端错误
@@ -133,8 +144,23 @@ public class GitHttpController {
         }
     }
 
-    /** Task 6 在这里挂 PostReceiveHook（push 落库）。本任务空实现。 */
+    /**
+     * pre-receive 停靠主线脏区（这次 push 的 old-sha 因此对不上、被 git 原生拒绝）；
+     * post-receive 在 master 真正前进后做路径级落库（见 WorkSessionService 的
+     * dockDirtyMainlineForReceive/ingestPushedMainline，核心风险见该类头注释）。
+     */
     private void configureReceivePack(ReceivePack rp, long projectId) {
+        rp.setPreReceiveHook((pack, commands) ->
+                sessionService.dockDirtyMainlineForReceive(projectId));
+        rp.setPostReceiveHook((pack, commands) -> {
+            for (ReceiveCommand cmd : commands) {
+                if ("refs/heads/master".equals(cmd.getRefName())
+                        && cmd.getResult() == ReceiveCommand.Result.OK) {
+                    sessionService.ingestPushedMainline(projectId,
+                            cmd.getOldId().name(), cmd.getNewId().name());
+                }
+            }
+        });
     }
 
     /**

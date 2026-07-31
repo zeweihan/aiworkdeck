@@ -332,7 +332,7 @@ public class ProjectTreeManifestService {
             if (!Objects.equals(f.getParentId(), parentId)) { f.setParentId(parentId); changed = true; }
             if (!Objects.equals(f.getName(), n.name())) { f.setName(n.name()); changed = true; }
         }
-        if (!Objects.equals(Boolean.TRUE.equals(f.getIsFolder()), n.isFolder())) {
+        if (f.getIsFolder() == null || f.getIsFolder() != n.isFolder()) {
             f.setIsFolder(n.isFolder()); changed = true;
         }
         if (!Objects.equals(f.getFileType(), n.fileType())) { f.setFileType(n.fileType()); changed = true; }

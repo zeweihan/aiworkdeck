@@ -64,6 +64,12 @@ public class WorkSessionService {
      */
     private final Map<Long, ReentrantLock> repoLocks = new ConcurrentHashMap<>();
 
+    /**
+     * push 落库延后的项目 → 最早的基线 sha（Task 6）。内存态，服务端重启即丢失——
+     * 下一次 push 的 PostReceiveHook 或工作段/裁决收尾会自愈（补做一次全量物化）。
+     */
+    private final Map<Long, String> pendingIngestBase = new ConcurrentHashMap<>();
+
     private record PendingActor(Long userId, String userName) {}
 
     private ReentrantLock repoLock(long projectId) {
@@ -327,6 +333,7 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            retryPendingIngest(projectId);
             return repoService.pendingChanges(projectId);
         } finally {
             lock.unlock();
@@ -353,6 +360,81 @@ public class WorkSessionService {
         } finally {
             lock.unlock();
         }
+    }
+
+    /** 让 Git 接收端整个跑在本项目的可重入锁内，与一切本地提交路径互斥。 */
+    public void runLocked(long projectId, Runnable body) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            body.run();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * pre-receive 停靠：HEAD 在主线、工作区脏、又没有工作段兜着（「脏但无段」）时，
+     * 先落一笔无主 auto 存档。master 因此前进，这次 push 的 old-sha 对不上会被
+     * git 原生拒绝——客户端走「被拒 → 从云端更新 → 重推」的正常循环，
+     * 网页端未存档的编辑分毫不丢。失败吞掉（版本记录不阻断主流程）。
+     */
+    public void dockDirtyMainlineForReceive(long projectId) {
+        try {
+            if (awaitingAdoptResolution(projectId)) return;
+            if (onDraftBranch(projectId)) return;
+            if (activeSession(projectId).isPresent()) return;
+            if (!repoService.mainBranch().equals(repoService.currentBranch(projectId))) return;
+            if (repoService.pendingChanges(projectId).isEmpty()) return;
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            repoService.commitAll(projectId, "自动存档", "auto", null,
+                    "AI Workdeck", "system@aiworkdeck.local");
+            log.info("push 前停靠了主线脏区: project={}", projectId);
+        } catch (Exception e) {
+            log.warn("push 前停靠失败（不阻断接收）: project={}", projectId, e);
+        }
+    }
+
+    /**
+     * push 使 master 前进后的落库：路径级物化工作区 + 清单同步数据库。
+     * 守卫不满足时记 pending 延后（保留最早的基线 sha），由
+     * {@link #retryPendingIngest} 补做。调用方已持锁（runLocked 内），锁可重入。
+     */
+    public void ingestPushedMainline(long projectId, String oldSha, String newSha) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (awaitingAdoptResolution(projectId)
+                    || activeSession(projectId).isPresent()
+                    || onDraftBranch(projectId)
+                    || !repoService.mainBranch().equals(repoService.currentBranch(projectId))) {
+                pendingIngestBase.putIfAbsent(projectId, oldSha);
+                log.info("push 落库延后: project={}, base={}", projectId, oldSha);
+                return;
+            }
+            // 口径同 revertTo：diffNameStatus(目标, 现状) + restoreWorkTreeFrom(目标)。
+            // 现状 = 工作区还端着的 oldSha 内容，目标 = 新 master。
+            List<FileChange> changes = repoService.diffNameStatus(projectId, newSha, oldSha);
+            restoreWorkTreeFrom(projectId, newSha, changes);
+            syncManifestFromRef(projectId, "HEAD");
+            pendingIngestBase.remove(projectId);
+            log.info("push 落库完成: project={}, {} 个文件", projectId, changes.size());
+        } catch (Exception e) {
+            pendingIngestBase.putIfAbsent(projectId, oldSha);
+            log.warn("push 落库失败，转入待同步: project={}", projectId, e);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 有延后的落库且守卫已清空时补做。挂在 pendingChangesLocked 与工作段收尾处。 */
+    public void retryPendingIngest(long projectId) {
+        String base = pendingIngestBase.get(projectId);
+        if (base == null) return;
+        String head = repoService.resolveRef(projectId, repoService.mainBranch());
+        if (head == null) return;
+        pendingIngestBase.remove(projectId);
+        ingestPushedMainline(projectId, base, head);
     }
 
     /**
@@ -448,6 +530,7 @@ public class WorkSessionService {
                 s.setEndedAt(LocalDateTime.now());
                 sessionRepository.save(s);
                 log.info("空工作段结束，未产生版本: project={}, branch={}", projectId, s.getBranchName());
+                retryPendingIngest(projectId);
                 return new SessionEndResult(null, "本次工作没有任何改动，未生成版本");
             }
 
@@ -470,6 +553,7 @@ public class WorkSessionService {
             sessionRepository.save(s);
             log.info("结束一段工作: project={}, branch={}, title={}",
                     projectId, s.getBranchName(), finalTitle);
+            retryPendingIngest(projectId);
             return new SessionEndResult(outcome.mergeSha(), null);
         } finally {
             lock.unlock();
@@ -525,6 +609,7 @@ public class WorkSessionService {
             s.setEndedAt(LocalDateTime.now());
             sessionRepository.save(s);
             log.info("丢弃一段工作: project={}, branch={}", projectId, s.getBranchName());
+            retryPendingIngest(projectId);
             return affected;
         } finally {
             lock.unlock();
