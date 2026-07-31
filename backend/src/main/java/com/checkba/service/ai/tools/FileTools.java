@@ -43,6 +43,7 @@ public class FileTools implements AgentToolComponent {
     private final com.checkba.service.ai.EditorBridgeService editorBridgeService;
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    private final com.checkba.service.DocumentTextService documentTextService;
     private static final Long AGENT_USER_ID = 10001L;
 
     // We need to resolve the project root physically.
@@ -186,6 +187,40 @@ public class FileTools implements AgentToolComponent {
         } catch (IOException e) {
             log.error("Failed to list files", e);
             return "Error listing files: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "提取文档全文", category = "file")
+    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Returns extracted text (may be truncated for very large files).")
+    public String extract_file_text(
+            @P("Project file database ID (from doc_list_project_files / material list)") Long fileId
+    ) {
+        log.info("Tool: extract_file_text called for fileId={}", fileId);
+        if (fileId == null) {
+            return "Error: fileId is required.";
+        }
+        Optional<ProjectFile> fileOpt = projectFileRepository.findById(fileId);
+        if (fileOpt.isEmpty()) {
+            return "Error: File not found in database: " + fileId;
+        }
+        ProjectFile pf = fileOpt.get();
+        if ("folder".equalsIgnoreCase(pf.getFileType())) {
+            return "Error: File is a folder: " + pf.getName();
+        }
+        try {
+            String text = documentTextService.extractText(pf);
+            if (text == null || text.isBlank()) {
+                return "Warning: No text extracted from '" + pf.getName() + "'. The file may be a scanned image; try read_file with OCR for image PDFs.";
+            }
+            final int maxChars = 80_000;
+            if (text.length() > maxChars) {
+                return "[文件 " + pf.getName() + "，全文 " + text.length() + " 字符，已截断至前 " + maxChars + " 字符]\n"
+                        + text.substring(0, maxChars);
+            }
+            return "[文件 " + pf.getName() + "]\n" + text;
+        } catch (Exception e) {
+            log.warn("extract_file_text failed for fileId={}", fileId, e);
+            return "Error extracting text: " + e.getMessage();
         }
     }
 

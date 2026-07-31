@@ -26,6 +26,7 @@ const NAMES = {
   read_document: { zh: '读取文档', en: 'Read document' },
   search_project_files: { zh: '搜索项目文件', en: 'Search files' },
   read_file: { zh: '读取文件', en: 'Read file' },
+  extract_file_text: { zh: '提取文档全文', en: 'Extract document text' },
   list_files: { zh: '列出文件', en: 'List files' },
   write_file: { zh: '写入文件', en: 'Write file' },
   write_docx: { zh: '生成Word文档', en: 'Create Word doc' },
