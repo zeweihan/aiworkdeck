@@ -51,7 +51,7 @@ class WorkSessionServiceTest {
 
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        repoSvc = new ProjectRepoService(props);
+        repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         repoSvc.init(7L, "韩泽伟", "hzw@example.com");
 
         fileRepo = mock(ProjectFileRepository.class);

@@ -123,7 +123,7 @@ class ShareCloneRoundTripTest {
 
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        s.repoSvc = new ProjectRepoService(props);
+        s.repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
 
         Map<Long, ProjectFile> fileDb = new HashMap<>();
         long[] nextFileId = {100L};

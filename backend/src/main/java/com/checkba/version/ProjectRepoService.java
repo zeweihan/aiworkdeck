@@ -1,6 +1,6 @@
 package com.checkba.version;
 
-import com.checkba.storage.StorageProperties;
+import com.checkba.storage.ProjectStorageResolver;
 import org.eclipse.jgit.api.CreateBranchCommand;
 import org.eclipse.jgit.api.DiffCommand;
 import org.eclipse.jgit.api.Git;
@@ -33,7 +33,6 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -47,9 +46,11 @@ import java.util.Map;
  * 业务语义在 WorkSessionService。
  *
  * 仓库目录与工作区分离：
- *   gitDir   = {root}/repos/project-{id}.git
- *   workTree = {root}/projects/{id}
- * 这样 .git 不会出现在 data/projects/ 下被 RAG 扫描、压缩包导出、搜索误伤。
+ *   gitDir   = {globalRoot}/repos/project-{id}.git（恒在全局 data 根下）
+ *   workTree = ProjectStorageResolver.projectRoot(id)（托管项目 = {globalRoot}/projects/{id}；
+ *              IDE 化本地文件夹项目 = 用户自选的 localRoot）
+ * 这样 .git 不会出现在项目文件夹下被 RAG 扫描、压缩包导出、搜索误伤，
+ * 用户自己的文件夹里也永远不会多出我们的 .git。
  */
 @Service
 public class ProjectRepoService {
@@ -57,26 +58,18 @@ public class ProjectRepoService {
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(ProjectRepoService.class);
 
-    private final Path storageRoot;
+    private final ProjectStorageResolver storageResolver;
 
-    public ProjectRepoService(StorageProperties storageProperties) {
-        String rootPath = storageProperties.getLocal().getRootPath();
-        Path root = Paths.get(rootPath);
-        if (!root.isAbsolute()) {
-            String userDir = System.getProperty("user.dir");
-            Path base = Paths.get(userDir);
-            if (userDir.endsWith("backend")) base = base.getParent();
-            root = base.resolve(rootPath);
-        }
-        this.storageRoot = root;
+    public ProjectRepoService(ProjectStorageResolver storageResolver) {
+        this.storageResolver = storageResolver;
     }
 
     public Path gitDir(long projectId) {
-        return storageRoot.resolve("repos").resolve("project-" + projectId + ".git");
+        return storageResolver.globalRoot().resolve("repos").resolve("project-" + projectId + ".git");
     }
 
     public Path workTree(long projectId) {
-        return storageRoot.resolve("projects").resolve(String.valueOf(projectId));
+        return storageResolver.projectRoot(projectId);
     }
 
     public boolean isInitialized(long projectId) {

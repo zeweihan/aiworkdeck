@@ -17,7 +17,7 @@ class ProjectRepoBranchTest {
         Files.writeString(root.resolve("projects/7/合同.txt"), "初稿");
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        ProjectRepoService s = new ProjectRepoService(props);
+        ProjectRepoService s = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         s.init(7L, "韩泽伟", "hzw@example.com");
         return s;
     }

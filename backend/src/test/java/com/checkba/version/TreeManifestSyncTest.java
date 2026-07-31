@@ -67,7 +67,7 @@ class TreeManifestSyncTest {
 
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        svc = new ProjectTreeManifestService(repo, new ProjectRepoService(props), new ObjectMapper(),
+        svc = new ProjectTreeManifestService(repo, new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null)), new ObjectMapper(),
                 mock(UserRepository.class), mock(ProjectRepository.class));
     }
 

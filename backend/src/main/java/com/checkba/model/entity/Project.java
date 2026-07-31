@@ -69,6 +69,13 @@ public class Project {
     private Long userId;
 
     /**
+     * IDE 化本地文件夹项目的物理根目录（绝对路径）。
+     * 为空 = 存量托管项目，文件在 {globalRoot}/projects/{id} 下（见 ProjectStorageResolver）。
+     */
+    @Column(columnDefinition = "TEXT")
+    private String localRoot;
+
+    /**
      * 创建时间
      */
     private LocalDateTime createdAt;
@@ -116,6 +123,14 @@ public class Project {
 
     public void setTargetCompanyName(String targetCompanyName) {
         this.targetCompanyName = targetCompanyName;
+    }
+
+    public String getLocalRoot() {
+        return localRoot;
+    }
+
+    public void setLocalRoot(String localRoot) {
+        this.localRoot = localRoot;
     }
 
     public String getListedCompanyInfoJson() {

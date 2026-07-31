@@ -70,7 +70,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 
 **提交消息尾注**：`X-AWD-Kind: auto | session`，可选一行 `X-AWD-Note: ...`。`auto` = 工作段内自动存档；`session` = 工作段本身的合并节点（也用于 `enableVersionRecording` 的初始提交、`revertTo` 的退回提交）。解析见 `ProjectRepoService.extractTrailer()`（:172），按行 `trim()` 后判前缀，容忍消息里混有其他内容。
 
-**仓库位置**：`gitDir = data/repos/project-{id}.git`，`workTree = data/projects/{id}`（`ProjectRepoService.gitDir()`/`workTree()`，:62-68）。两者分离是为了 `.git` 目录不出现在 `data/projects/` 下被 RAG 扫描、压缩包导出、搜索误伤。
+**仓库位置**：`gitDir = {globalRoot}/repos/project-{id}.git`（恒在全局 data 根下），`workTree = ProjectStorageResolver.projectRoot(id)`——托管项目是 `data/projects/{id}`，IDE 化本地文件夹项目（`Project.localRoot` 非空）是用户自选文件夹（`ProjectRepoService.gitDir()`/`workTree()`）。两者分离是为了 `.git` 目录不出现在项目文件夹下被 RAG 扫描、压缩包导出、搜索误伤，用户自己的文件夹里也永不出现我们的 `.git`。「逻辑路径（`projects/{id}/...`）→ 物理路径」的唯一映射点是 `com.checkba.storage.ProjectStorageResolver`（IDE 化重构 PR，2026-07-31），git 工作树与文件存储同源是契约保证。
 
 **文件树清单 `.awd/tree.json`**：`ProjectTreeManifestService.MANIFEST_PATH`。存在理由——数据库才是文件树真源（软删除不动磁盘文件，改名失败时数据库仍可能已改名），单靠磁盘文件跟踪不出一个版本的完整目录结构/排序/回收站状态。`TreeManifest.CURRENT_VERSION`（v2 起为 `2`，`capture()` 恒产出当前版本，见下方「清单 v2 归一化策略」）。每次 `commitNow`/`revertTo` 都会重新 `capture()` + `writeToWorkTree()`，保证清单跟随每一笔提交。
 

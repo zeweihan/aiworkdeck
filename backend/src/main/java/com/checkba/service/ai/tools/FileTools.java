@@ -42,6 +42,7 @@ public class FileTools implements AgentToolComponent {
     private final ProjectFileRepository projectFileRepository;
     private final com.checkba.service.ai.EditorBridgeService editorBridgeService;
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
+    private final com.checkba.storage.ProjectStorageResolver storageResolver;
     private static final Long AGENT_USER_ID = 10001L;
 
     // We need to resolve the project root physically.
@@ -142,8 +143,8 @@ public class FileTools implements AgentToolComponent {
     ) {
         log.info("Tool: list_files called for projectId={}, subPath={}", projectId, subPath);
         try {
-            // 限制在项目数据目录内
-            Path projectDataDir = getProjectRoot().resolve("data/projects/" + projectId);
+            // 限制在项目数据目录内（localRoot 感知）
+            Path projectDataDir = storageResolver.projectRoot(projectId);
             if (!Files.exists(projectDataDir)) {
                 return "Error: Project data directory not found: " + projectDataDir;
             }
@@ -232,7 +233,7 @@ public class FileTools implements AgentToolComponent {
         }
         
         try {
-            Path projectDataDir = getProjectRoot().resolve("data/projects/" + projectId);
+            Path projectDataDir = storageResolver.projectRoot(projectId);
             if (!Files.exists(projectDataDir)) Files.createDirectories(projectDataDir);
             Path targetPath = projectDataDir.resolve(fileName);
             
@@ -283,7 +284,7 @@ public class FileTools implements AgentToolComponent {
         @P("Project ID") Long projectId
     ) {
         try {
-            Path projectRoot = getProjectRoot().resolve("data/projects/" + projectId);
+            Path projectRoot = storageResolver.projectRoot(projectId);
             if (!Files.exists(projectRoot)) return "Project directory not found: " + projectRoot;
 
             StringBuilder report = new StringBuilder("Scan Report:\n");

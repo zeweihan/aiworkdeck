@@ -19,7 +19,7 @@ class RepoMaintenanceTest {
 
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        ProjectRepoService s = new ProjectRepoService(props);
+        ProjectRepoService s = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         s.init(7L, "韩泽伟", "hzw@example.com");
 
         for (int i = 1; i <= 5; i++) {

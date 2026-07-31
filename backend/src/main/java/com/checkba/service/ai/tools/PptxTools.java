@@ -53,19 +53,8 @@ public class PptxTools implements AgentToolComponent {
     private final AiModelProperties aiModelProperties;
     private final BackgroundTaskService backgroundTaskService;
 
+    private final com.checkba.storage.ProjectStorageResolver storageResolver;
     private static final Long AGENT_USER_ID = 10001L;
-
-    /**
-     * 获取项目数据目录
-     */
-    private Path getProjectRoot() {
-        String userDir = System.getProperty("user.dir");
-        Path backendPath = Paths.get(userDir);
-        if (backendPath.endsWith("backend")) {
-            return backendPath.getParent();
-        }
-        return backendPath;
-    }
 
     // ==================== 文件管理工具 ====================
 
@@ -335,7 +324,7 @@ public class PptxTools implements AgentToolComponent {
             
             // 构建物理存储路径
             String storagePath = buildPhysicalPath(projectId, parentId, finalFileName);
-            Path localPath = getProjectRoot().resolve("data").resolve(storagePath);
+            Path localPath = storageResolver.resolve(storagePath);
             
             // 确保目录存在
             if (!Files.exists(localPath.getParent())) {
@@ -695,7 +684,7 @@ public class PptxTools implements AgentToolComponent {
         try {
             // 1. 获取本地 PPTX 文件路径
             String filePath = file.getFilePath();
-            Path localPath = getProjectRoot().resolve("data").resolve(filePath);
+            Path localPath = storageResolver.resolve(filePath);
             
             if (!Files.exists(localPath)) {
                 return String.format("错误：PPTX 文件不存在于本地磁盘: %s\n\n" +
@@ -915,7 +904,7 @@ public class PptxTools implements AgentToolComponent {
             
             // 获取文件的物理路径
             String filePath = file.getFilePath();
-            Path localPath = getProjectRoot().resolve("data").resolve(filePath);
+            Path localPath = storageResolver.resolve(filePath);
             
             if (!Files.exists(localPath)) {
                 return "Error: 文件不存在于磁盘: " + localPath;

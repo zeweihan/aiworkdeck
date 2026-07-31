@@ -31,7 +31,8 @@ class FileContextLoaderTest {
         projectFileService = mock(ProjectFileService.class);
         extractor = mock(FileContentExtractorService.class);
         props = new AiContextProperties();
-        loader = new FileContextLoader(projectFileService, extractor, props);
+        loader = new FileContextLoader(projectFileService, extractor, props,
+                new com.checkba.storage.ProjectStorageResolver(new com.checkba.storage.StorageProperties(), null));
     }
 
     private static ProjectFile file(Long id, String name, boolean isFolder) {
