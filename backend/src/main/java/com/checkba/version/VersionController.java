@@ -59,13 +59,18 @@ public class VersionController {
             data.put("pendingRecovery", sessionService.pendingRecovery(projectId).isPresent());
             data.put("onDraft", sessionService.activeDraftOnBranch(projectId)
                     .map(this::draftRef).orElse(null));
-            data.put("adoptConflict", adoptConflictStatus(projectId));
+            Map<String, Object> sessionEndConflict = sessionEndConflictStatus(projectId);
+            data.put("sessionEndConflict", sessionEndConflict);
+            // 两者都由 MERGE_HEAD 反查；sessionEndConflict 优先——工作段命中时
+            // adoptConflict 必须为 null，防止前端同时弹出两种裁决弹窗。
+            data.put("adoptConflict", sessionEndConflict != null ? null : adoptConflictStatus(projectId));
         } else {
             data.put("working", false);
             data.put("changedCount", 0);
             data.put("pendingRecovery", false);
             data.put("onDraft", null);
             data.put("adoptConflict", null);
+            data.put("sessionEndConflict", null);
         }
         return ok(data);
     }
@@ -106,6 +111,44 @@ public class VersionController {
         m.put("conflictingPaths", conflicts);
         m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
         m.put("draftTip", mergeHeadSha);
+        return m;
+    }
+
+    /**
+     * 结束工作撞车（Task 7）的反查：{@code MERGE_HEAD} 指向当前 ACTIVE 工作段自己分支的
+     * tip，即「结束工作撞上被推进的主线」这个窗口——口径同 {@link #adoptConflictStatus}
+     * （都靠 MERGE_HEAD 反查、都不依赖任何应用层状态字段），区别只在于反查目标是工作段
+     * 而不是稿。反查不到（工作段被并发丢弃等异常残局）时返回 null，让调用方回落到
+     * {@code adoptConflictStatus}——但正常路径下不会发生：结束工作撞车时工作段仍是
+     * ACTIVE，不会被别的路径动。
+     */
+    private Map<String, Object> sessionEndConflictStatus(long projectId) {
+        try {
+            if (!repoService.repositoryMerging(projectId)) return null;
+            String mergeHead = repoService.mergeHeadRef(projectId);
+            if (mergeHead == null) return null;
+            var active = sessionService.activeSession(projectId);
+            if (active.isEmpty() || !mergeHead.equals(
+                    repoService.resolveRef(projectId, active.get().getBranchName()))) {
+                return null;
+            }
+            return sessionEndConflictData(new WorkSessionService.SessionEndConflict(
+                    active.get().getId(), active.get().getTitle(),
+                    repoService.conflictingPaths(projectId).stream()
+                            .filter(p -> !p.startsWith(".awd/")).toList(),
+                    repoService.resolveRef(projectId, "HEAD"), mergeHead));
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private Map<String, Object> sessionEndConflictData(WorkSessionService.SessionEndConflict c) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("sessionId", c.sessionId());
+        m.put("title", c.title());
+        m.put("conflictingPaths", c.conflictingPaths());
+        m.put("mainlineTip", c.mainlineTip());
+        m.put("sessionTip", c.sessionTip());
         return m;
     }
 
@@ -162,9 +205,36 @@ public class VersionController {
                 sessionService.endSession(projectId, userId, userName(userId), title);
         // notice 非空 = 结束成功但没生成版本（空工作段）。仍然是成功（code=0），
         // 前端凭它决定要不要多 toast 一句，不能走异常分支——见 SessionEndResult 注释。
-        return ok(Map.of(
-                "sha", r.sha() == null ? "" : r.sha(),
-                "notice", r.notice() == null ? "" : r.notice()));
+        // conflict 非空 = 主线被同事推进、撞了车，等着三选一（Task 7）——只在这种情况
+        // 下才放进响应，sha/notice 两个都留空字符串（三者互斥，见 SessionEndResult 注释）。
+        Map<String, Object> data = new HashMap<>();
+        data.put("sha", r.sha() == null ? "" : r.sha());
+        data.put("notice", r.notice() == null ? "" : r.notice());
+        if (r.conflict() != null) data.put("conflict", sessionEndConflictData(r.conflict()));
+        return ok(data);
+    }
+
+    @PostMapping("/session/resolve-end")
+    public ResponseEntity<Map<String, Object>> resolveSessionEnd(
+            @PathVariable Long projectId,
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        long targetSession = ((Number) body.get("sessionId")).longValue();
+        @SuppressWarnings("unchecked")
+        Map<String, String> raw = (Map<String, String>) body.get("resolutions");
+        WorkSessionService.SessionEndResult r = sessionService.resolveSessionEnd(
+                projectId, targetSession, resolutionsFromRaw(raw), userId, userName(userId));
+        return ok(Map.of("sha", r.sha() == null ? "" : r.sha()));
+    }
+
+    @PostMapping("/session/abort-end")
+    public ResponseEntity<Map<String, Object>> abortSessionEnd(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        String notice = sessionService.abortSessionEnd(projectId);
+        return okWithMessage(Map.of(), notice);
     }
 
     @PostMapping("/session/discard")
@@ -347,12 +417,18 @@ public class VersionController {
         return ok(Map.of("affectedFileIds", result.affectedFileIds()));
     }
 
+    /** 采纳裁决（{@code /draft/{id}/resolve}）的请求体形状：整个 body 就是 resolutions 的外壳。 */
+    private Map<String, WorkSessionService.Resolution> parseResolutions(Map<String, Map<String, String>> body) {
+        return resolutionsFromRaw(body == null ? null : body.get("resolutions"));
+    }
+
     /**
      * 请求体里的字符串三选一解析成枚举。非法值（枚举名之外的任何字符串，含大小写不符）
      * 一律 userFacing「无效的选择」——不把 IllegalArgumentException 的枚举名列表带给前端。
+     * 采纳裁决与结束工作裁决（Task 7）共用这一份解析逻辑，只是外层 body 的形状不同
+     * （前者整个 body 就是 resolutions，后者 resolutions 是 {sessionId, resolutions} 的一个字段）。
      */
-    private Map<String, WorkSessionService.Resolution> parseResolutions(Map<String, Map<String, String>> body) {
-        Map<String, String> raw = body == null ? null : body.get("resolutions");
+    private Map<String, WorkSessionService.Resolution> resolutionsFromRaw(Map<String, String> raw) {
         if (raw == null || raw.isEmpty()) return Map.of();
         Map<String, WorkSessionService.Resolution> out = new HashMap<>();
         for (Map.Entry<String, String> e : raw.entrySet()) {

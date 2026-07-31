@@ -493,18 +493,37 @@ public class WorkSessionService {
 
     /**
      * 结束工作的结果。{@code notice} 非空表示「结束成功，但有一句话要告诉律师」——
-     * 目前只有一种：整段工作没有任何改动、没生成版本。
+     * 目前只有一种：整段工作没有任何改动、没生成版本。{@code conflict} 非空表示
+     * 「结束没能一次做完，主线在这期间被同事推进、又跟这段工作撞了车，等着三选一」——
+     * 见 {@link #resolveSessionEnd}/{@link #abortSessionEnd}。三者互斥：正常收尾时
+     * 只有 sha 非空，空工作段时只有 notice 非空，撞车时只有 conflict 非空。
      *
      * 这条路径刻意**不抛异常**：抛异常前它已经把状态改完了（删了分支、工作段标
      * DISCARDED），而前端的 catch 分支只负责 toast，不会关命名弹窗、也不会刷新
      * 状态条——律师看到的是「工作中」和一个卡住的弹窗，而后台其实已经结束了。
      * 「改了状态再抛异常」这种混合语义一律用返回值表达。
      */
-    public record SessionEndResult(String sha, String notice) {}
+    public record SessionEndResult(String sha, String notice, SessionEndConflict conflict) {}
+
+    /**
+     * 结束工作撞上了被推进的主线，等着三选一。语义方向务必钉死：结束工作时合并方向是
+     * 「工作段并入主线」——{@code mainlineTip} 是同事那一侧（对应
+     * {@link Resolution#MAIN}），{@code sessionTip} 是我这边工作段那一侧（对应
+     * {@link Resolution#DRAFT}）。{@code title} 是这段工作最终确定的标题，裁决时
+     * {@link Resolution#BOTH} 另存的那一份文件名会带上它。
+     */
+    public record SessionEndConflict(long sessionId, String title,
+                                     List<String> conflictingPaths,
+                                     String mainlineTip, String sessionTip) {}
 
     /**
      * 结束本次工作：收尾提交 → 切回主线 → 合并 → 关闭工作段。
-     * 单人场景下主线在工作期间不会变，合并总是快进。
+     *
+     * 单人场景下主线在工作期间不会变，合并走 {@link ProjectRepoService#merge} 的
+     * v1 原路径，语义与桌面端零回归。主线被同事（云端 push，Task 6）推进过时，
+     * 合并从快进降级为真三方合并——干净也不自动提交（清单要按数据库重算后与内容
+     * 进同一个双亲提交，口径同采纳，见 {@link #completeSessionMerge}），冲突则
+     * 停在待裁决状态返回给前端三选一，不抛异常（工作段状态未变，仍是可恢复的中间态）。
      */
     public SessionEndResult endSession(long projectId, Long userId, String userName, String title) {
         ReentrantLock lock = repoLock(projectId);
@@ -531,30 +550,144 @@ public class WorkSessionService {
                 sessionRepository.save(s);
                 log.info("空工作段结束，未产生版本: project={}, branch={}", projectId, s.getBranchName());
                 retryPendingIngest(projectId);
-                return new SessionEndResult(null, "本次工作没有任何改动，未生成版本");
+                return new SessionEndResult(null, "本次工作没有任何改动，未生成版本", null);
             }
 
             String finalTitle = (title == null || title.isBlank())
                     ? defaultTitle(s.getStartedAt()) : title.trim();
 
             repoService.checkoutBranch(projectId, repoService.mainBranch());
-            MergeOutcome outcome = repoService.merge(
-                    projectId, s.getBranchName(), finalTitle, userName, email(userName));
+            String mainTipNow = repoService.resolveRef(projectId, repoService.mainBranch());
+            boolean mainAdvanced = !repoService.isAncestor(
+                    projectId, repoService.mainBranch(), s.getBranchName());
 
-            if (!outcome.success()) {
-                // 合并没成，把用户放回他的工作段，改动一个都不能丢
-                repoService.checkoutBranch(projectId, s.getBranchName());
-                throw VersionException.userFacing("本次工作还没能收尾，你的改动都还在");
+            if (!mainAdvanced) {
+                // v1 原路径一字不改：单人场景主线没动过，merge() 的 NO_FF 语义与
+                // 既有护栏（ProjectRepoBranchTest）全部照旧。
+                MergeOutcome outcome = repoService.merge(
+                        projectId, s.getBranchName(), finalTitle, userName, email(userName));
+                if (!outcome.success()) {
+                    // 合并没成，把用户放回他的工作段，改动一个都不能丢
+                    repoService.checkoutBranch(projectId, s.getBranchName());
+                    throw VersionException.userFacing("本次工作还没能收尾，你的改动都还在");
+                }
+                s.setStatus(WorkSession.Status.MERGED);
+                s.setEndedAt(LocalDateTime.now());
+                s.setTitle(finalTitle);
+                sessionRepository.save(s);
+                log.info("结束一段工作: project={}, branch={}, title={}",
+                        projectId, s.getBranchName(), finalTitle);
+                retryPendingIngest(projectId);
+                return new SessionEndResult(outcome.mergeSha(), null, null);
             }
 
-            s.setStatus(WorkSession.Status.MERGED);
-            s.setEndedAt(LocalDateTime.now());
+            // v2 路径：主线被同事推进（push），合并从快进降级为真合并。
+            // 干净也不自动提交——清单要按数据库重算后与内容进同一个双亲提交（地雷 #21）。
             s.setTitle(finalTitle);
             sessionRepository.save(s);
-            log.info("结束一段工作: project={}, branch={}, title={}",
-                    projectId, s.getBranchName(), finalTitle);
-            retryPendingIngest(projectId);
-            return new SessionEndResult(outcome.mergeSha(), null);
+            MergeOutcome outcome = repoService.mergeNoCommit(
+                    projectId, s.getBranchName(), finalTitle, userName, email(userName));
+            if (outcome.mergeSha() != null) {
+                // ALREADY_UP_TO_DATE：理论不可达（空段已在上面筛掉），防御性收尾
+                return closeMergedSession(projectId, s, outcome.mergeSha());
+            }
+            if (!outcome.success()) {
+                // 冲突：仓库停在 MERGING，工作段保持 ACTIVE，HEAD 在主线。
+                // 凡是「改了状态还要报信」的路径都用返回值，不用异常（v1 契约）。
+                log.info("结束工作撞上云端新版本: project={}, session={}", projectId, s.getId());
+                return new SessionEndResult(null, null, new SessionEndConflict(
+                        s.getId(), finalTitle,
+                        userVisibleConflicts(repoService.conflictingPaths(projectId)),
+                        mainTipNow, branchTip));
+            }
+            return completeSessionMerge(projectId, s, mainTipNow, userName);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 干净或裁决后的真合并统一收尾：同事清单并集 → 按数据库重算清单 → 单一双亲提交。 */
+    private SessionEndResult completeSessionMerge(long projectId, WorkSession s,
+                                                   String mainTipBefore, String userName) {
+        TreeManifest theirs = manifestService.readAtRef(projectId, mainTipBefore);
+        if (theirs != null) manifestService.unionApply(projectId, theirs);
+        manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+        String sha = repoService.commitMergeResolution(projectId, s.getTitle(),
+                userName, email(userName));
+        return closeMergedSession(projectId, s, sha);
+    }
+
+    private SessionEndResult closeMergedSession(long projectId, WorkSession s, String sha) {
+        s.setStatus(WorkSession.Status.MERGED);
+        s.setEndedAt(LocalDateTime.now());
+        sessionRepository.save(s);
+        repoService.deleteBranch(projectId, s.getBranchName(), true);
+        retryPendingIngest(projectId);
+        log.info("结束一段工作（真合并）: project={}, title={}", projectId, s.getTitle());
+        return new SessionEndResult(sha, null, null);
+    }
+
+    /**
+     * 结束工作撞车后逐文件三选一：{@link Resolution#MAIN}=用同事的（主线侧）、
+     * {@link Resolution#DRAFT}=用我这边的（工作段侧）、{@link Resolution#BOTH}=两份都留
+     * （工作段那一份另存，文件名带工作段标题）——方向与 {@link #resolveAdopt} 相反的地方
+     * 只在于「谁是 main、谁是 draft」：这里 main 恒为同事（主线），draft 恒为我这边
+     * （工作段），不随裁决者是谁而变。{@code resolutions} 必须覆盖全部待选择的文件。
+     */
+    public SessionEndResult resolveSessionEnd(long projectId, long sessionId,
+                                              Map<String, Resolution> resolutions,
+                                              Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            WorkSession s = sessionRepository.findById(sessionId)
+                    .filter(x -> x.getProjectId().equals(projectId))
+                    .filter(x -> x.getStatus() == WorkSession.Status.ACTIVE)
+                    .orElseThrow(() -> VersionException.userFacing("这段工作不存在或已收尾"));
+            if (!repoService.repositoryMerging(projectId)) {
+                throw VersionException.userFacing("现在没有等着做选择的收尾");
+            }
+            String sessionTip = repoService.mergeHeadRef(projectId);
+            if (sessionTip == null || !sessionTip.equals(
+                    repoService.resolveRef(projectId, s.getBranchName()))) {
+                throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
+            }
+            String mainTip = repoService.resolveRef(projectId, "HEAD");
+            List<String> rawConflicts = repoService.conflictingPaths(projectId);
+            if (rawConflicts.isEmpty()) {
+                throw new VersionException("冲突记录已丢失，无法安全收尾: project=" + projectId);
+            }
+            List<String> conflicts = userVisibleConflicts(rawConflicts);
+            Map<String, Resolution> choices = resolutions == null ? Map.of() : resolutions;
+            for (String path : conflicts) {
+                if (choices.get(path) == null) {
+                    throw VersionException.userFacing("还有文件没有做出选择");
+                }
+            }
+            for (String path : conflicts) {
+                applyResolution(projectId, path, choices.get(path),
+                        mainTip, sessionTip, s.getTitle());
+            }
+            return completeSessionMerge(projectId, s, mainTip, userName);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 中止收尾：合并窗口按路径还原，回到工作段分支继续工作，空闲定时器重新武装。 */
+    public String abortSessionEnd(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            WorkSession s = activeSession(projectId)
+                    .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
+            repoService.abortMerge(projectId);
+            if (!s.getBranchName().equals(repoService.currentBranch(projectId))) {
+                repoService.checkoutBranch(projectId, s.getBranchName());
+            }
+            armIdleTimer(projectId, s.getId());
+            log.info("中止一次工作收尾: project={}, session={}", projectId, s.getId());
+            return "本次工作还没能收尾，你的改动都还在";
         } finally {
             lock.unlock();
         }
