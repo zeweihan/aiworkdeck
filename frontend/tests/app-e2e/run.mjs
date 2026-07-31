@@ -337,7 +337,7 @@ try {
     ['插件广场', '/pages/plugin-market/plugin-market', '插件广场'],
     ['变量库', '/pages/variable-library/variable-library', '新增变量'],
     ['管理页(只读)', '/pages/admin/admin', '系统配置'],
-    ['新建项目页', '/pages/newproject/index', '项目创建向导'],
+    ['新建项目页', '/pages/newproject/index', '新建或打开项目'],
   ]) {
     await step(name, async () => {
       await page.goto(BASE + '/#' + route, { waitUntil: 'networkidle2', timeout: 20000 })
