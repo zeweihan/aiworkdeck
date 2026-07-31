@@ -2,7 +2,7 @@
   <view v-if="visible" class="file-picker-mask" @tap="handleCancel">
     <view class="file-picker-dialog" @tap.stop>
       <view class="dialog-header">
-        <text class="dialog-title">选择要导入的文档</text>
+        <text class="dialog-title">{{ title }}</text>
         <text class="dialog-close" @tap="handleCancel">×</text>
       </view>
       
@@ -56,6 +56,16 @@ export default {
     projectId: {
       type: [String, Number],
       required: true
+    },
+    // 对话框标题（不同调用方复用）
+    title: {
+      type: String,
+      default: '选择要导入的文档'
+    },
+    // 允许选择的扩展名（小写、不带点，如 ['pdf', 'docx']）；空数组不过滤
+    accept: {
+      type: Array,
+      default: () => []
     }
   },
   data() {
@@ -73,9 +83,15 @@ export default {
   methods: {
     handleFileSelect(file) {
       // Only allow selecting files, not folders (though FileTree usually handles this)
-      if (file.fileType !== 'folder') {
-        this.selectedFile = file
+      if (file.fileType === 'folder') return
+      if (this.accept.length > 0) {
+        const ext = (file.name || '').split('.').pop().toLowerCase()
+        if (!this.accept.includes(ext)) {
+          uni.showToast({ title: `仅支持 ${this.accept.join('/')} 文件`, icon: 'none' })
+          return
+        }
       }
+      this.selectedFile = file
     },
     handleCancel() {
       this.$emit('update:visible', false)

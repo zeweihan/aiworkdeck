@@ -1392,6 +1392,79 @@ export function copyDdRequest(requestId) {
   })
 }
 
+// ===================== 股东大会核查 (Shareholder Meeting) =====================
+export function getShareholderMeetingChecks(projectId) {
+  return request({
+    url: `/api/shareholder-meeting/projects/${projectId}`,
+    method: 'GET'
+  })
+}
+
+export function createShareholderMeetingCheck(projectId, payload) {
+  return request({
+    url: `/api/shareholder-meeting/projects/${projectId}`,
+    method: 'POST',
+    data: payload,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function updateShareholderMeetingCheck(checkId, payload) {
+  return request({
+    url: `/api/shareholder-meeting/${checkId}`,
+    method: 'PUT',
+    data: payload,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function deleteShareholderMeetingCheck(checkId) {
+  return request({
+    url: `/api/shareholder-meeting/${checkId}`,
+    method: 'DELETE'
+  })
+}
+
+export function attachShareholderMeetingMaterial(checkId, slot, fileId) {
+  return request({
+    url: `/api/shareholder-meeting/${checkId}/materials`,
+    method: 'POST',
+    data: { slot, fileId },
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function detachShareholderMeetingMaterial(checkId, slot, fileId) {
+  return request({
+    url: `/api/shareholder-meeting/${checkId}/materials?slot=${encodeURIComponent(slot)}&fileId=${fileId}`,
+    method: 'DELETE'
+  })
+}
+
+export function fetchShareholderMeetingCninfo(checkId, market) {
+  const suffix = market ? `?market=${encodeURIComponent(market)}` : ''
+  return request({
+    url: `/api/shareholder-meeting/${checkId}/fetch-cninfo${suffix}`,
+    method: 'POST'
+  })
+}
+
+export function startShareholderMeetingCheck(checkId) {
+  return request({
+    url: `/api/shareholder-meeting/${checkId}/start`,
+    method: 'POST'
+  })
+}
+
+export function bindShareholderMeetingConversation(checkId, conversationId, status) {
+  return request({
+    url: `/api/shareholder-meeting/${checkId}/conversation`,
+    method: 'PUT',
+    data: { conversationId, status },
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
 // ==================== 编辑器操作结果回调 ====================
 
 /**
@@ -1542,6 +1615,15 @@ export default {
   deleteDdItem,
   deleteDdRequest,
   copyDdRequest,
+  getShareholderMeetingChecks,
+  createShareholderMeetingCheck,
+  updateShareholderMeetingCheck,
+  deleteShareholderMeetingCheck,
+  attachShareholderMeetingMaterial,
+  detachShareholderMeetingMaterial,
+  fetchShareholderMeetingCninfo,
+  startShareholderMeetingCheck,
+  bindShareholderMeetingConversation,
   // Desensitization
   getSensitiveOptions,
   desensitizeFile,
