@@ -421,8 +421,17 @@ public class WorkSessionService {
                 return;
             }
             // 口径同 revertTo：diffNameStatus(目标, 现状) + restoreWorkTreeFrom(目标)。
-            // 现状 = 工作区还端着的 oldSha 内容，目标 = 新 master。
-            List<FileChange> changes = repoService.diffNameStatus(projectId, newSha, oldSha);
+            // 现状 = 工作区还端着的 oldSha 内容，目标 = 新 master。oldSha 为全零
+            // （ObjectId.zeroId()，分支新建）时没有"现状"可 diff——这是首推物化
+            // （initEmptyForReceive 建的空仓，还没有任何提交），改用 listPaths 把新版
+            // 全部文件当 ADD 处理。
+            List<FileChange> changes;
+            if (org.eclipse.jgit.lib.ObjectId.zeroId().name().equals(oldSha)) {
+                changes = repoService.listPaths(projectId, newSha).stream()
+                        .map(p -> new FileChange(p, FileChange.Type.ADD)).toList();
+            } else {
+                changes = repoService.diffNameStatus(projectId, newSha, oldSha);
+            }
             restoreWorkTreeFrom(projectId, newSha, changes);
             syncManifestFromRef(projectId, "HEAD");
             pendingIngestBase.remove(projectId);

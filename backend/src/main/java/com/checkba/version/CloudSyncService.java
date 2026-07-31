@@ -5,10 +5,12 @@ import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.checkba.model.entity.CloudConnection;
+import com.checkba.model.entity.Project;
 import com.checkba.model.entity.ProjectRemote;
 import com.checkba.repository.CloudConnectionRepository;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.repository.ProjectRemoteRepository;
+import com.checkba.repository.ProjectRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.event.EventListener;
@@ -16,6 +18,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -39,19 +42,22 @@ public class CloudSyncService {
     private final ProjectFileRepository fileRepository;
     private final CloudConnectionRepository connectionRepository;
     private final ProjectRemoteRepository remoteRepository;
+    private final ProjectRepository projectRepository;
 
     public CloudSyncService(ProjectRepoService repoService,
                              WorkSessionService sessionService,
                              ProjectTreeManifestService manifestService,
                              ProjectFileRepository fileRepository,
                              CloudConnectionRepository connectionRepository,
-                             ProjectRemoteRepository remoteRepository) {
+                             ProjectRemoteRepository remoteRepository,
+                             ProjectRepository projectRepository) {
         this.repoService = repoService;
         this.sessionService = sessionService;
         this.manifestService = manifestService;
         this.fileRepository = fileRepository;
         this.connectionRepository = connectionRepository;
         this.remoteRepository = remoteRepository;
+        this.projectRepository = projectRepository;
     }
 
     /** CONFLICT（Task 9）：被拒后自动合并遇到冲突，仓库停在 MERGING 等裁决（同云端更新的冲突窗口）。 */
@@ -112,6 +118,148 @@ public class CloudSyncService {
 
     public java.util.List<CloudConnection> listConnections() {
         return connectionRepository.findAll();
+    }
+
+    // ==================== 共享上云 / 从云端接入（Task 10） ====================
+
+    /**
+     * 把一个还没共享过的本地项目上云：服务端建一个新项目 → prepare-remote（建空仓等首推）→
+     * 本地配好 origin → 首推整段历史（不同于日常上传，这里 master 在服务端是分支新建，
+     * WorkSessionService.ingestPushedMainline 走 zeroId 全量物化分支）。
+     * 守卫：项目未共享过；本地已开版本记录（否则律师看不懂"共享"是什么意思）；
+     * 仓库不在合并窗口中（同上传/更新的既有纪律）。
+     */
+    public Map<String, Object> shareToCloud(long projectId, long connectionId, Long userId) {
+        if (remoteRepository.findByProjectId(projectId).isPresent()) {
+            throw VersionException.userFacing("这个项目已经共享到云端了");
+        }
+        if (!repoService.isInitialized(projectId)) {
+            throw VersionException.userFacing("请先开启版本记录，再共享到云端");
+        }
+        ReentrantLock lock = sessionService.repoLock(projectId);
+        lock.lock();
+        try {
+            if (repoService.repositoryMerging(projectId)) {
+                throw VersionException.userFacing("请先处理正在进行的合并");
+            }
+            CloudConnection conn = connectionRepository.findById(connectionId)
+                    .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
+            String localName = projectRepository.findById(projectId)
+                    .map(Project::getName).orElse("未命名项目");
+
+            String createBody = JSONUtil.toJsonStr(Map.of("projectType", "BLANK", "name", localName));
+            JSONObject created = JSONUtil.parseObj(
+                    httpPost(conn.getServerUrl() + "/api/projects", createBody, conn.getDeviceToken()));
+            long remoteProjectId = created.getLong("id");
+
+            JSONObject prep = JSONUtil.parseObj(httpPost(
+                    conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
+                    "{}", conn.getDeviceToken()));
+            if (prep.getInt("code", 1) != 0) {
+                throw VersionException.userFacing("共享到云端失败：" + prep.getStr("message", "请重试"));
+            }
+
+            repoService.setRemoteOrigin(projectId, conn.getServerUrl() + "/git/" + remoteProjectId + ".git");
+            ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
+                    projectId, conn.getUsername(), conn.getDeviceToken());
+            if (!out.pushed()) {
+                throw new VersionException("首推云端失败: project=" + projectId + " " + out.message());
+            }
+
+            ProjectRemote remote = new ProjectRemote();
+            remote.setProjectId(projectId);
+            remote.setConnectionId(connectionId);
+            remote.setRemoteProjectId(String.valueOf(remoteProjectId));
+            remote.setPendingUpload(false);
+            remote.setLastSyncSha(repoService.resolveRef(projectId, repoService.mainBranch()));
+            remote.setCreatedAt(LocalDateTime.now());
+            remoteRepository.save(remote);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("remoteProjectId", remoteProjectId);
+            return result;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * 从云端接入一个项目：prepare-remote（若云端还是 v1 清单，服务端顺带落一笔升级提交）→
+     * 本地建一个新项目行 → 整仓克隆 → 读 HEAD 清单落库。清单必须是 v2——v1 清单里的节点
+     * 没有跨机器一致的 uid，v2 是本机制的立身之本，旧格式一律拒绝、指引律师先在云端更新一次。
+     */
+    public Map<String, Object> cloneFromCloud(long connectionId, long remoteProjectId, Long localUserId) {
+        CloudConnection conn = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
+
+        JSONObject prep = JSONUtil.parseObj(httpPost(
+                conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
+                "{}", conn.getDeviceToken()));
+        if (prep.getInt("code", 1) != 0) {
+            throw VersionException.userFacing("接入云端项目失败：" + prep.getStr("message", "请重试"));
+        }
+
+        String remoteName = listRemoteProjects(connectionId).stream()
+                .filter(m -> remoteProjectId == ((Number) m.get("id")).longValue())
+                .map(m -> (String) m.get("name"))
+                .findFirst()
+                .orElse("云端项目");
+
+        Project project = new Project();
+        project.setName(remoteName);
+        project.setProjectType("BLANK");
+        project.setListedCompanyName("");
+        project.setTargetCompanyName("");
+        project.setUserId(localUserId);
+        project.setCreatedAt(LocalDateTime.now());
+        project = projectRepository.save(project);
+        long localProjectId = project.getId();
+
+        ReentrantLock lock = sessionService.repoLock(localProjectId);
+        lock.lock();
+        try {
+            repoService.cloneFromRemote(localProjectId,
+                    conn.getServerUrl() + "/git/" + remoteProjectId + ".git",
+                    conn.getUsername(), conn.getDeviceToken());
+
+            TreeManifest manifest = manifestService.readAtRef(localProjectId, "HEAD");
+            if (manifest == null || manifest.version() < 2) {
+                throw VersionException.userFacing("云端项目还是旧版本格式，请在云端更新一次后再接入");
+            }
+            manifestService.applyToDatabase(localProjectId, manifest);
+
+            ProjectRemote remote = new ProjectRemote();
+            remote.setProjectId(localProjectId);
+            remote.setConnectionId(connectionId);
+            remote.setRemoteProjectId(String.valueOf(remoteProjectId));
+            remote.setPendingUpload(false);
+            remote.setLastSyncSha(repoService.resolveRef(localProjectId, repoService.mainBranch()));
+            remote.setCreatedAt(LocalDateTime.now());
+            remoteRepository.save(remote);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("localProjectId", localProjectId);
+            return result;
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 某个云端连接下、本账号能看到的全部项目——{id, name, projectType} 透传，供"从云端接项目"选择列表用。 */
+    public List<Map<String, Object>> listRemoteProjects(long connectionId) {
+        CloudConnection conn = connectionRepository.findById(connectionId)
+                .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
+        String body = httpGet(conn.getServerUrl() + "/api/projects/my", conn.getDeviceToken());
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object o : JSONUtil.parseArray(body)) {
+            JSONObject j = (JSONObject) o;
+            Map<String, Object> m = new HashMap<>();
+            m.put("id", j.getLong("id"));
+            m.put("name", j.getStr("name"));
+            m.put("projectType", j.getStr("projectType"));
+            out.add(m);
+        }
+        return out;
     }
 
     /**
@@ -441,6 +589,26 @@ public class CloudSyncService {
         HttpRequest req = HttpRequest.post(url)
                 .header("Content-Type", "application/json")
                 .body(jsonBody)
+                .setConnectionTimeout(5000)
+                .setReadTimeout(15000);
+        if (sessionToken != null) {
+            req.header("X-Session-Id", sessionToken);
+        }
+        try (HttpResponse resp = req.execute()) {
+            if (resp.getStatus() != 200) {
+                throw new IllegalStateException("云端请求失败 (HTTP " + resp.getStatus() + ")");
+            }
+            return resp.body();
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("云端不可达: " + e.getMessage(), e);
+        }
+    }
+
+    /** 单测覆写此 seam 打桩，形状同 httpPost 的三参版本。sessionToken 非空时带 X-Session-Id 头。 */
+    protected String httpGet(String url, String sessionToken) {
+        HttpRequest req = HttpRequest.get(url)
                 .setConnectionTimeout(5000)
                 .setReadTimeout(15000);
         if (sessionToken != null) {

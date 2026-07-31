@@ -87,9 +87,12 @@ class VersionFileAccessTest {
     private UserService userService;
     @Mock
     private ProjectFileService projectFileService;
+    @Mock
+    private ProjectTreeManifestService manifestService;
 
     private VersionController newController() {
-        return new VersionController(repoService, sessionService, projectMemberService, userService, projectFileService);
+        return new VersionController(repoService, sessionService, projectMemberService, userService,
+                projectFileService, manifestService);
     }
 
     private static final long PROJECT_ID = 7L;

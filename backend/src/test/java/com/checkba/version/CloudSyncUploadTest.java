@@ -87,8 +87,9 @@ class CloudSyncUploadTest {
             db.put(p.getId(), p);
             return p;
         });
+        ProjectRepository projectRepo = mock(ProjectRepository.class);
         manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper(),
-                mock(UserRepository.class), mock(ProjectRepository.class));
+                mock(UserRepository.class), projectRepo);
 
         sessions = new HashMap<>();
         nextSessionId = 1L;
@@ -154,7 +155,7 @@ class CloudSyncUploadTest {
             return null;
         }).when(projectRemoteRepo).delete(any(ProjectRemote.class));
 
-        cloud = new CloudSyncService(repoSvc, svc, manifestSvc, fileRepo, cloudConnRepo, projectRemoteRepo) {
+        cloud = new CloudSyncService(repoSvc, svc, manifestSvc, fileRepo, cloudConnRepo, projectRemoteRepo, projectRepo) {
             @Override
             protected String httpPost(String url, String body, String sessionToken) {
                 lastHttpUrl = url;

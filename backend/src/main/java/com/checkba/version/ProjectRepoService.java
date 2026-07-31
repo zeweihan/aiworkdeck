@@ -838,6 +838,67 @@ public class ProjectRepoService {
     }
 
     /**
+     * 只建仓不落提交：等着接收共享方的首推。共享方的首推要带完整历史进来，服务端
+     * 先落初始提交会造出两条无关历史（unrelated histories），永远合不上，所以这里
+     * 只建仓、把 HEAD 指到 master，不调用 commit。已初始化则 no-op（幂等）。
+     */
+    public void initEmptyForReceive(long projectId) {
+        if (isInitialized(projectId)) return;
+        try {
+            Files.createDirectories(workTree(projectId));
+            Files.createDirectories(gitDir(projectId).getParent());
+            Repository repo = new FileRepositoryBuilder()
+                    .setGitDir(gitDir(projectId).toFile())
+                    .setWorkTree(workTree(projectId).toFile())
+                    .build();
+            repo.create();
+            org.eclipse.jgit.lib.RefUpdate head = repo.updateRef(Constants.HEAD);
+            head.link("refs/heads/" + MAIN_BRANCH);
+            repo.close();
+        } catch (Exception e) {
+            throw new VersionException("初始化云端仓库失败: project=" + projectId, e);
+        }
+    }
+
+    /** 从云端整仓克隆（gitDir/workTree 分离布局与 init 一致）。 */
+    public void cloneFromRemote(long projectId, String url, String username, String token) {
+        try {
+            Files.createDirectories(workTree(projectId));
+            Git.cloneRepository()
+                    .setURI(url)
+                    .setGitDir(gitDir(projectId).toFile())
+                    .setDirectory(workTree(projectId).toFile())
+                    .setBranch(MAIN_BRANCH)
+                    .setCredentialsProvider(
+                            new org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider(
+                                    username == null ? "" : username, token == null ? "" : token))
+                    .setTimeout(120)
+                    .call()
+                    .close();
+        } catch (Exception e) {
+            throw new VersionException("从云端接入项目失败: project=" + projectId, e);
+        }
+    }
+
+    /** 该版全部文件路径（首推物化用）。 */
+    public List<String> listPaths(long projectId, String ref) {
+        try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
+            ObjectId id = repo.resolve(ref);
+            if (id == null) return List.of();
+            RevCommit commit = walk.parseCommit(id);
+            List<String> out = new ArrayList<>();
+            try (TreeWalk tw = new TreeWalk(repo)) {
+                tw.addTree(commit.getTree());
+                tw.setRecursive(true);
+                while (tw.next()) out.add(tw.getPathString());
+            }
+            return out;
+        } catch (Exception e) {
+            throw new VersionException("读取版本文件列表失败: project=" + projectId, e);
+        }
+    }
+
+    /**
      * 重打包并清理不可达对象。
      * 只动不可达对象（失败的合并、已丢弃工作段的悬空提交）——
      * 可达历史一个不动，这是「历史永不重写」的一部分。

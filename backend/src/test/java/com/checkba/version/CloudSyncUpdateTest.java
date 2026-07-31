@@ -150,7 +150,7 @@ class CloudSyncUpdateTest {
                 .filter(r -> r.getConnectionId().equals(i.getArgument(0)))
                 .toList());
 
-        cloud = new CloudSyncService(repoSvc, svc, manifestSvc, fileRepo, cloudConnRepo, projectRemoteRepo) {
+        cloud = new CloudSyncService(repoSvc, svc, manifestSvc, fileRepo, cloudConnRepo, projectRemoteRepo, projectRepo) {
             @Override
             protected String httpPost(String url, String body, String sessionToken) {
                 throw new UnsupportedOperationException("本测试不需要真实 HTTP 调用");
