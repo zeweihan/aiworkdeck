@@ -72,7 +72,7 @@ class DraftSessionGuardTest {
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
 
-        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo);
+        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo, event -> {});
         svc.setDebounceMillis(60_000); // 测试里不让防抖自己触发，全部手动 commitNow
     }
 

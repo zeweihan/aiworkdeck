@@ -2,6 +2,7 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -45,6 +46,7 @@ public class WorkSessionService {
     private final WorkSessionRepository sessionRepository;
     private final TaskScheduler taskScheduler;
     private final ProjectFileRepository fileRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     /** 防抖静默期。测试里调短或调长以取得确定性。 */
     private long debounceMillis = 2 * 60 * 1000L;
@@ -72,7 +74,10 @@ public class WorkSessionService {
 
     private record PendingActor(Long userId, String userName) {}
 
-    private ReentrantLock repoLock(long projectId) {
+    /** 结束工作把工作段并回主线成功后发布，供 CloudSyncService（同包）监听触发自动上传。 */
+    public record MainlineMergedEvent(long projectId) {}
+
+    ReentrantLock repoLock(long projectId) {
         return repoLocks.computeIfAbsent(projectId, id -> new ReentrantLock());
     }
 
@@ -80,12 +85,14 @@ public class WorkSessionService {
                               ProjectTreeManifestService manifestService,
                               WorkSessionRepository sessionRepository,
                               TaskScheduler taskScheduler,
-                              ProjectFileRepository fileRepository) {
+                              ProjectFileRepository fileRepository,
+                              ApplicationEventPublisher eventPublisher) {
         this.repoService = repoService;
         this.manifestService = manifestService;
         this.sessionRepository = sessionRepository;
         this.taskScheduler = taskScheduler;
         this.fileRepository = fileRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     public void setDebounceMillis(long millis) { this.debounceMillis = millis; }
@@ -578,6 +585,7 @@ public class WorkSessionService {
                 log.info("结束一段工作: project={}, branch={}, title={}",
                         projectId, s.getBranchName(), finalTitle);
                 retryPendingIngest(projectId);
+                publishMainlineMerged(projectId);
                 return new SessionEndResult(outcome.mergeSha(), null, null);
             }
 
@@ -624,7 +632,17 @@ public class WorkSessionService {
         repoService.deleteBranch(projectId, s.getBranchName(), true);
         retryPendingIngest(projectId);
         log.info("结束一段工作（真合并）: project={}, title={}", projectId, s.getTitle());
+        publishMainlineMerged(projectId);
         return new SessionEndResult(sha, null, null);
+    }
+
+    /** 发布失败不阻断结束工作——版本记录是保险，不是主流程（同一条纪律见类注释）。 */
+    private void publishMainlineMerged(long projectId) {
+        try {
+            eventPublisher.publishEvent(new MainlineMergedEvent(projectId));
+        } catch (Exception e) {
+            log.warn("发布合并事件失败（不阻断）", e);
+        }
     }
 
     /**
@@ -1337,7 +1355,7 @@ public class WorkSessionService {
      * pendingChanges 本身不加锁（见 {@link #pendingChangesLocked} 的注释），这里
      * 调用方已经持有本项目的锁，直接调用即可。
      */
-    private void dockCurrentLine(long projectId, Long userId, String userName) {
+    void dockCurrentLine(long projectId, Long userId, String userName) {
         if (onDraftBranch(projectId) || activeSession(projectId).isPresent()) {
             commitNow(projectId, userId, userName, null);
         } else if (!repoService.pendingChanges(projectId).isEmpty()) {
@@ -1384,7 +1402,7 @@ public class WorkSessionService {
      * 不是主流程——匹配失败绝不能让调用方的主操作失败，这里整体包死，出错就退化
      * 成空列表。
      */
-    private List<Long> resolveAffectedFileIds(long projectId, List<FileChange> changes) {
+    List<Long> resolveAffectedFileIds(long projectId, List<FileChange> changes) {
         try {
             List<ProjectFile> files = fileRepository.findByProjectId(projectId);
             List<Long> ids = new ArrayList<>();
