@@ -261,6 +261,127 @@ public class ShareholderMeetingService {
         return info;
     }
 
+    // ==================== 开始核查 ====================
+
+    /**
+     * 「开始核查」：底稿夹就绪、材料复制进对应子目录（自包含）、组装 kick-off prompt。
+     * prompt 由前端交给 AI 聊天面板以 AGENT 模式发送（触发词命中 skill 注入）。
+     */
+    public Map<String, Object> start(Long checkId, Long userId) {
+        ShareholderMeetingCheck check = get(checkId);
+        Map<String, Long> folders = ensureWorkpaperFolders(check, userId);
+
+        Map<String, List<ProjectFile>> materials = new LinkedHashMap<>();
+        materials.put("股东大会通知", copyIntoFolder(check, singletonList(check.getNoticeFileId()),
+                folders.get(FOLDER_NOTICE), userId));
+        materials.put("董事会决议公告", copyIntoFolder(check, singletonList(check.getResolutionFileId()),
+                folders.get(FOLDER_RESOLUTION), userId));
+        materials.put("投票结果", copyIntoFolder(check, parseIds(check.getVoteResultFileIds()),
+                folders.get(FOLDER_VOTE), userId));
+        // 模板/初稿与其他材料不强制归入底稿夹子目录，原位引用
+        materials.put("意见书模板或会前初稿", findFiles(singletonList(check.getTemplateFileId())));
+        materials.put("其他材料", findFiles(parseIds(check.getOtherFileIds())));
+
+        String prompt = buildKickoffPrompt(
+                check.getCompanyName(), check.getStockCode(), check.getMeetingName(), check.getMeetingDate(),
+                materials, folders.get(FOLDER_WORKPAPER), folders.get(FOLDER_OPINION));
+
+        check = get(checkId);
+        check.setStatus("READY");
+        checkRepository.save(check);
+
+        Map<String, Object> result = new HashMap<>();
+        result.put("prompt", prompt);
+        result.put("workpaperFolderId", check.getWorkpaperFolderId());
+        result.put("check", check);
+        return result;
+    }
+
+    private List<Long> singletonList(Long id) {
+        return id == null ? List.of() : List.of(id);
+    }
+
+    private List<ProjectFile> findFiles(List<Long> ids) {
+        List<ProjectFile> files = new ArrayList<>();
+        for (Long id : ids) {
+            projectFileRepository.findById(id).ifPresent(files::add);
+        }
+        return files;
+    }
+
+    /**
+     * 把材料复制进底稿夹子目录（已在目录内的跳过），返回底稿夹内的有效文件列表。
+     */
+    private List<ProjectFile> copyIntoFolder(ShareholderMeetingCheck check, List<Long> fileIds,
+                                             Long targetFolderId, Long userId) {
+        List<ProjectFile> effective = new ArrayList<>();
+        List<Long> toCopy = new ArrayList<>();
+        for (ProjectFile f : findFiles(fileIds)) {
+            if (targetFolderId.equals(f.getParentId())) {
+                effective.add(f);
+            } else {
+                // 目标目录下已有同名文件（往期已复制过）则直接复用，避免重复副本
+                Optional<ProjectFile> existing = projectFileRepository
+                        .findByProjectIdAndParentIdAndNameAndIsDeletedFalse(
+                                check.getProjectId(), targetFolderId, f.getName());
+                if (existing.isPresent()) {
+                    effective.add(existing.get());
+                } else {
+                    toCopy.add(f.getId());
+                }
+            }
+        }
+        if (!toCopy.isEmpty()) {
+            com.checkba.model.dto.ProjectFileBatchRequest req = new com.checkba.model.dto.ProjectFileBatchRequest();
+            req.setFileIds(toCopy);
+            req.setTargetParentId(targetFolderId);
+            effective.addAll(projectFileService.batchCopy(check.getProjectId(), req, userId));
+        }
+        return effective;
+    }
+
+    /**
+     * kick-off prompt（纯函数，可单测）。开头必须带 skill 触发词「股东大会核查」。
+     */
+    static String buildKickoffPrompt(String companyName, String stockCode, String meetingName,
+                                     LocalDate meetingDate, Map<String, List<ProjectFile>> materials,
+                                     Long workpaperFolderId, Long opinionFolderId) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("股东大会核查：请对下列股东会执行完整核查，撰写法律意见书并生成核查底稿。\n\n");
+        sb.append("【会议信息】\n");
+        sb.append("- 公司：").append(companyName);
+        if (StringUtils.hasText(stockCode)) sb.append("（股票代码 ").append(stockCode).append("）");
+        sb.append("\n- 届次：").append(meetingName).append("\n");
+        if (meetingDate != null) sb.append("- 召开日期：").append(meetingDate).append("\n");
+
+        sb.append("\n【材料清单】（用 extract_file_text 按 fileId 读取全文）\n");
+        List<String> missing = new ArrayList<>();
+        for (Map.Entry<String, List<ProjectFile>> entry : materials.entrySet()) {
+            if (entry.getValue().isEmpty()) {
+                if (!"其他材料".equals(entry.getKey()) && !"意见书模板或会前初稿".equals(entry.getKey())) {
+                    missing.add(entry.getKey());
+                }
+                continue;
+            }
+            for (ProjectFile f : entry.getValue()) {
+                sb.append("- ").append(entry.getKey()).append("：fileId=").append(f.getId())
+                        .append("《").append(f.getName()).append("》\n");
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            sb.append("\n【缺失材料】").append(String.join("、", missing))
+                    .append("——相应交叉核对无法进行，法律意见书与核查底稿中必须显式声明该部分未经交叉核对，请项目组自行核查。\n");
+        }
+
+        sb.append("\n【产出要求】\n");
+        sb.append("- 交叉核对底稿表：用 write_docx 写入 parentFolderId=").append(workpaperFolderId)
+                .append("，文件名「核查底稿_").append(companyName).append("_").append(meetingName).append(".docx」\n");
+        sb.append("- 法律意见书：用 write_docx 写入 parentFolderId=").append(opinionFolderId)
+                .append("，文件名「法律意见书_").append(companyName).append("_").append(meetingName).append(".docx」\n");
+        return sb.toString();
+    }
+
     // ==================== JSON id 列表 ====================
 
     public List<Long> parseIds(String json) {
