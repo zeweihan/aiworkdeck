@@ -112,6 +112,7 @@ $bg-white: #FFFFFF;
   display: flex;
   align-items: center;
   gap: 8px;
+  position: relative; /* 最近项目切换器下拉的定位基准 */
 }
 
 .project-name {
@@ -123,6 +124,126 @@ $bg-white: #FFFFFF;
 
   &:hover {
     color: $color-primary-light;
+  }
+}
+
+/* IDE 化：顶栏常驻工作状态点 */
+.work-status-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(200, 164, 93, 0.12);
+  border: 1px solid rgba(200, 164, 93, 0.3);
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(200, 164, 93, 0.2);
+  }
+}
+
+.work-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #c8a45d;
+}
+
+.work-status-text {
+  font-size: 12px;
+  color: #8a6d3b;
+  white-space: nowrap;
+}
+
+/* IDE 化：最近项目切换器 */
+.project-switcher {
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+
+  &:hover {
+    background: rgba(26, 83, 54, 0.08);
+  }
+}
+
+.switcher-arrow {
+  font-size: 11px;
+  color: $color-primary;
+  transition: transform 0.15s;
+
+  &.is-open {
+    transform: rotate(180deg);
+  }
+}
+
+.switcher-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1999;
+}
+
+.switcher-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 240px;
+  max-width: 360px;
+  background: #fff;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+  z-index: 2000;
+  padding: 6px 0;
+}
+
+.switcher-title {
+  padding: 4px 14px 6px;
+  font-size: 11px;
+  color: #adb5bd;
+}
+
+.switcher-item {
+  padding: 8px 14px;
+  cursor: pointer;
+  display: flex;
+
+  &:hover {
+    background: rgba(91, 209, 151, 0.1);
+  }
+}
+
+.switcher-item-name {
+  font-size: 13px;
+  color: #2c3338;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.switcher-empty {
+  cursor: default;
+
+  text {
+    color: #adb5bd;
+    font-size: 12px;
+  }
+
+  &:hover {
+    background: transparent;
+  }
+}
+
+.switcher-all {
+  border-top: 1px solid #f1f3f5;
+  margin-top: 4px;
+  padding-top: 10px;
+
+  text {
+    color: $color-primary;
+    font-size: 13px;
   }
 }
 

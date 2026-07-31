@@ -118,7 +118,24 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     // （checkba:fs-read-file，已加敏感路径拦截与大小上限）。
     showOpenDialog: (options) => ipcRenderer.invoke('fs:showOpenDialog', options),
     // 在 Finder/资源管理器里高亮一个已有路径（IDE 化项目「在 Finder 中显示」）
-    showItemInFolder: (path) => ipcRenderer.invoke('fs:showItemInFolder', { path })
+    showItemInFolder: (path) => ipcRenderer.invoke('fs:showItemInFolder', { path }),
+    // 拖放的 File 对象 → 绝对路径（Electron 32 起 File.path 移除，webUtils 是正途）
+    getPathForFile: (file) => {
+      try {
+        const { webUtils } = require('electron')
+        if (webUtils && webUtils.getPathForFile) return webUtils.getPathForFile(file)
+      } catch (e) { /* fall through */ }
+      return (file && file.path) || ''
+    }
+  },
+  // IDE 化应用菜单：动作订阅（文件菜单点击/最近打开）与「最近打开」子菜单数据推送
+  menu: {
+    onAction: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:menu-action', listener)
+      return () => ipcRenderer.removeListener('checkba:menu-action', listener)
+    },
+    setRecentProjects: (list) => ipcRenderer.send('checkba:recent-projects', list)
   },
   // Epic #43: embedded LibreOffice editor <webview> wiring. getEditor() returns
   // { url, preload, partition } for the host to mount the webview.

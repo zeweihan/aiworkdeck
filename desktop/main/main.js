@@ -1382,8 +1382,36 @@ ipcMain.handle('checkba:zetaoffice-editor', async () => {
   }
 })
 
+// IDE 化：Finder「打开方式」/ 拖到 Dock 图标进来的路径（macOS open-file 事件，
+// 可能早于窗口创建，先存后发；目录/文件在主进程判好再交渲染层走 open-path 流程）
+let pendingOpenPath = null
+function dispatchOpenPath(p) {
+  if (!p) return
+  let isDirectory = false
+  try {
+    isDirectory = require('fs').statSync(p).isDirectory()
+  } catch (e) {
+    return
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('checkba:menu-action', { action: 'open-path', path: p, isDirectory })
+  } else {
+    pendingOpenPath = p
+  }
+}
+app.on('open-file', (event, p) => {
+  event.preventDefault()
+  dispatchOpenPath(p)
+})
+
 app.whenReady().then(() => {
   initLocalFileService()
+  // IDE 化应用菜单（File 全套 + 最近打开；动作发回渲染层处理）
+  try {
+    require('./app-menu').initAppMenu(() => mainWindow)
+  } catch (e) {
+    console.error('[app-menu]', e)
+  }
   // Epic #43: experimental "LibreOffice 验证" window — dedicated, isolated, does
   // NOT touch the document flow. Global shortcut is the only entry; the module is
   // require()'d lazily on press, so it stays dormant until used.
@@ -1407,6 +1435,14 @@ app.whenReady().then(() => {
     .then(() => services.startEager())
     .then((results) => {
       createMainWindow()
+      // 启动前就收到的 open-file 路径：等渲染层就绪（App.onLaunch 注册好处理器）再补发
+      if (pendingOpenPath && mainWindow) {
+        const queued = pendingOpenPath
+        pendingOpenPath = null
+        mainWindow.webContents.once('did-finish-load', () => {
+          setTimeout(() => dispatchOpenPath(queued), 1500)
+        })
+      }
       const b = results.backend
       if (b && !b.ok) {
         // 后端失败也允许打开 UI（方便你调试），但会提示错误

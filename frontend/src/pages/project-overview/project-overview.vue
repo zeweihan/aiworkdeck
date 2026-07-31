@@ -17,8 +17,39 @@
               />
             </view>
             <text v-else class="project-name" @tap="startRenameProject" title="点击重命名">{{ project.name || '未命名项目' }}</text>
+            <!-- IDE 化：最近项目切换器（VS Code 的 Open Recent 语义） -->
+            <view class="project-switcher" @tap.stop="toggleProjectSwitcher" title="切换到最近项目">
+              <text class="switcher-arrow" :class="{ 'is-open': projectSwitcherOpen }">▾</text>
+            </view>
+            <view v-if="projectSwitcherOpen" class="switcher-mask" @tap.stop="projectSwitcherOpen = false"></view>
+            <view v-if="projectSwitcherOpen" class="switcher-menu" @tap.stop>
+              <view class="switcher-title"><text>最近项目</text></view>
+              <view
+                v-for="p in switcherProjects"
+                :key="p.id"
+                class="switcher-item"
+                @tap="switchToProject(p)"
+              >
+                <text class="switcher-item-name">{{ p.name }}</text>
+              </view>
+              <view v-if="!switcherProjects.length" class="switcher-item switcher-empty">
+                <text>没有其他最近项目</text>
+              </view>
+              <view class="switcher-item switcher-all" @tap="goAllProjects">
+                <text>全部项目…</text>
+              </view>
+            </view>
             <view class="project-status-badge">
               <text class="status-text">进行中</text>
+            </view>
+            <!-- IDE 化：常驻工作状态点（版本记录开着且有未收尾工作/稿时可见，点击直达版本面板） -->
+            <view
+              v-if="versionWorkStatus.enabled && (versionWorkStatus.working || versionWorkStatus.onDraft)"
+              class="work-status-chip"
+              @tap.stop="goHandleAdoptConflict"
+            >
+              <view class="work-status-dot"></view>
+              <text class="work-status-text">{{ versionWorkStatusLabel }}</text>
             </view>
           </view>
           <view class="project-meta">
@@ -1294,6 +1325,14 @@
         <text class="adopt-pending-go" @tap="goHandleAdoptConflict">去处理</text>
       </view>
 
+      <!-- IDE 化 Cmd+P 快速打开 -->
+      <QuickOpenPanel
+        v-if="quickOpenVisible"
+        :project-id="projectId"
+        @open="onQuickOpenFile"
+        @close="quickOpenVisible = false"
+      />
+
     </view>
   </view>
 </template>
@@ -1302,6 +1341,7 @@
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import BrowserPane from '@/components/BrowserPane.vue'
 import FileTree from '@/components/FileTree.vue'
+import QuickOpenPanel from '@/components/QuickOpenPanel.vue'
 import FilePreview from '@/components/FilePreview.vue'
 import VariablePanel from '@/components/VariablePanel.vue'
 import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
@@ -1349,9 +1389,11 @@ import {
   getVersionStatus, // 版本面板之外也要知道「有没有采纳等待处理」
   promptFeatureNotConfigured, // 功能未配置统一引导（#18 T7）
   getProjectLocalPath, // 在访达中显示（IDE 化）
-  getFileLocalPath
+  getFileLocalPath,
+  getMyProjects // 最近项目切换器
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
 import { FILE_BATCH_ACTIONS, FILE_TREE_QUICK_ACTIONS } from '@/config/fileActions.js'
 import { WORKBENCH_TOOLS } from '@/config/tools.js'
@@ -1383,6 +1425,7 @@ export default {
   components: {
     LibreOfficeEditor,
     BrowserPane,
+    QuickOpenPanel,
     FileTree,
     FilePreview,
     VariablePanel,
@@ -1569,6 +1612,10 @@ export default {
       stagingFiles: [], // 文件暂存区列表
       stagingOriginalParents: {}, // 记录文件进入暂存区前的原始 parentId: { fileId: originalParentId }
       splitMode: false,
+      quickOpenVisible: false, // IDE 化 Cmd+P 快速打开
+      projectSwitcherOpen: false, // IDE 化最近项目切换器
+      switcherProjects: [],
+      versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 顶栏工作状态点
       focusedPane: 'left', // 'left' | 'right'
 
       // 文件状态 - 分两组管理
@@ -1711,6 +1758,13 @@ export default {
       return FILE_BATCH_ACTIONS
     },
     // 是否为“仅尽调”视图（客户）
+    // IDE 化顶栏工作状态点文案
+    versionWorkStatusLabel() {
+      const s = this.versionWorkStatus
+      if (s.onDraft && s.onDraft.name) return `正在稿《${s.onDraft.name}》上修改`
+      if (s.working) return s.changedCount ? `工作中 · 已改 ${s.changedCount} 份` : '工作中'
+      return ''
+    },
     isClientView() {
       const user = getCurrentUser()
       return user && user.role === 'CLIENT'
@@ -1896,6 +1950,10 @@ export default {
       window.removeEventListener('focus', this._localFocusRefresh)
       this._localFocusRefresh = null
     }
+    if (typeof window !== 'undefined' && this._ideKeymapHandler) {
+      window.removeEventListener('keydown', this._ideKeymapHandler, true)
+      this._ideKeymapHandler = null
+    }
     clearTimeout(this._libreSpareTimer)
     this.teardownResponsiveListener()
     // Epic #43: 解绑 ⌘⇧O 嵌入式编辑器监听
@@ -1995,6 +2053,8 @@ export default {
     this.pageEnterTime = Date.now()
     if (query && query.id) {
       this.projectId = Number(query.id)
+      recordProjectVisit(this.projectId) // IDE 化：启动直达/最近项目切换器的数据源
+      syncRecentToMenuFetching() // 应用菜单「最近打开」随之更新（静默）
       this.loadProjectInfo()
       this.loadProjectMembers()
       this.checkAdoptConflict()
@@ -2121,8 +2181,32 @@ export default {
         if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
           this.$refs.fileTree.loadFiles()
         }
+        this.checkAdoptConflict() // 顺带刷新顶栏工作状态点（同一次 /status）
       }
       window.addEventListener('focus', this._localFocusRefresh)
+      // IDE 化键位：Cmd+P 快速打开 / Cmd+W 关闭当前标签（活跃实例守卫；
+      // 焦点在 LOWA webview 内时按键被 webview 吞掉收不到，属已知边界）
+      this._ideKeymapHandler = (e) => {
+        if (!this.isActiveOverviewInstance()) return
+        if (!(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey) return
+        const k = (e.key || '').toLowerCase()
+        if (k === 'p') {
+          e.preventDefault()
+          e.stopPropagation()
+          this.quickOpenVisible = !this.quickOpenVisible
+        } else if (k === 'w') {
+          e.preventDefault()
+          e.stopPropagation()
+          if (this.quickOpenVisible) {
+            this.quickOpenVisible = false
+          } else if (this.activeFileIdLeft) {
+            this.closeFile(this.activeFileIdLeft, 'left')
+          } else if (this.splitMode && this.activeFileIdRight) {
+            this.closeFile(this.activeFileIdRight, 'right')
+          }
+        }
+      }
+      window.addEventListener('keydown', this._ideKeymapHandler, true)
     }
     // 预热备胎：延迟建（避开项目打开期资源竞争），首开 Office 文档免冷启动
     this.scheduleLibreSpare()
@@ -2371,6 +2455,9 @@ export default {
     }
   },
   watch: {
+    // IDE 化窗口标题：「文件名 — 项目名 — AI Workdeck」（Electron 窗口标题跟随 document.title）
+    'project.name'() { this.updateWindowTitle() },
+    activeFileIdLeft() { this.updateWindowTitle() },
     // 桌面端统一守卫：弹窗/蒙层打开 → 隐藏 BrowserView；全部关闭 → 恢复并重同步 bounds
     desktopOverlayActive(open) {
       if (!this.isDesktopApp) return
@@ -2415,6 +2502,50 @@ export default {
       this.versionFileFilter = { fileId: file.id, name: file.name }
       if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
     },
+    // IDE 化窗口标题
+    updateWindowTitle() {
+      if (typeof document === 'undefined') return
+      try {
+        const active = (this.leftFiles || []).find((f) => f.id === this.activeFileIdLeft)
+        const parts = []
+        if (active && active.name) parts.push(active.name)
+        if (this.project && this.project.name) parts.push(this.project.name)
+        parts.push('AI Workdeck')
+        document.title = parts.join(' — ')
+      } catch (e) { /* 标题失败不影响功能 */ }
+    },
+    // 最近项目切换器：展开时按本地最近顺序解析项目名（排除当前项目）
+    async toggleProjectSwitcher() {
+      this.projectSwitcherOpen = !this.projectSwitcherOpen
+      if (!this.projectSwitcherOpen) return
+      try {
+        const projects = await getMyProjects()
+        const list = Array.isArray(projects) ? projects : (projects && projects.data) || []
+        const byId = new Map(list.map((p) => [Number(p.id), p]))
+        this.switcherProjects = getRecentProjectIds()
+          .filter((id) => id !== Number(this.projectId))
+          .map((id) => byId.get(id))
+          .filter(Boolean)
+          .slice(0, 8)
+      } catch (e) {
+        this.switcherProjects = []
+      }
+    },
+    switchToProject(p) {
+      this.projectSwitcherOpen = false
+      if (!p || Number(p.id) === Number(this.projectId)) return
+      // reLaunch：切项目不叠页面栈（多实例地雷）
+      uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${p.id}` })
+    },
+    goAllProjects() {
+      this.projectSwitcherOpen = false
+      uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+    },
+    // Cmd+P 快速打开面板选中文件
+    onQuickOpenFile(file) {
+      this.quickOpenVisible = false
+      if (file) this.openFile(file)
+    },
     // 文件树右键「在访达中显示」：后端解析物理路径（localRoot 感知），桌面壳高亮
     async onRevealFile(file) {
       if (!file) return
@@ -2454,6 +2585,13 @@ export default {
         const res = await getVersionStatus(this.projectId)
         const d = (res && res.data) || {}
         this.adoptConflictPending = !!(d.adoptConflict || d.cloudConflict || d.sessionEndConflict)
+        // IDE 化顶栏工作状态点（同一次 /status，不多打接口）
+        this.versionWorkStatus = {
+          enabled: !!d.enabled,
+          working: !!d.working,
+          changedCount: Number(d.changedCount || 0),
+          onDraft: d.onDraft || null,
+        }
       } catch (e) {
         console.warn('[Version] 读取采纳状态失败', e)
       }
