@@ -130,15 +130,15 @@ public class CloudSyncService {
      * 仓库不在合并窗口中（同上传/更新的既有纪律）。
      */
     public Map<String, Object> shareToCloud(long projectId, long connectionId, Long userId) {
-        if (remoteRepository.findByProjectId(projectId).isPresent()) {
-            throw VersionException.userFacing("这个项目已经共享到云端了");
-        }
-        if (!repoService.isInitialized(projectId)) {
-            throw VersionException.userFacing("请先开启版本记录，再共享到云端");
-        }
         ReentrantLock lock = sessionService.repoLock(projectId);
         lock.lock();
         try {
+            if (remoteRepository.findByProjectId(projectId).isPresent()) {
+                throw VersionException.userFacing("这个项目已经共享到云端了");
+            }
+            if (!repoService.isInitialized(projectId)) {
+                throw VersionException.userFacing("请先开启版本记录，再共享到云端");
+            }
             if (repoService.repositoryMerging(projectId)) {
                 throw VersionException.userFacing("请先处理正在进行的合并");
             }
