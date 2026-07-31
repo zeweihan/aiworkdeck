@@ -579,6 +579,12 @@
             :current-user="currentUser"
             @open-request="handleOpenDdRequest"
           />
+          <ShareholderMeetingPanel
+            v-else-if="leftPaneKey === 'shareholder-meeting'"
+            :project-id="projectId"
+            :current-user="currentUser"
+            @start-verification="handleShareholderMeetingStart"
+          />
           <EasyVoicePane
              v-else-if="leftPaneKey === 'easyvoice'"
              @request-doc-text="handleEasyVoiceDocRequest"
@@ -1390,7 +1396,8 @@ import {
   promptFeatureNotConfigured, // 功能未配置统一引导（#18 T7）
   getProjectLocalPath, // 在访达中显示（IDE 化）
   getFileLocalPath,
-  getMyProjects // 最近项目切换器
+  getMyProjects, // 最近项目切换器
+  bindShareholderMeetingConversation // 股东大会核查：会话绑定
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
@@ -1408,6 +1415,7 @@ import { activityTracker } from '@/utils/activityTracker.js'
 
 import { ICONS as GLYPHS } from '@/config/icons.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
+import ShareholderMeetingPanel from '@/components/ShareholderMeetingPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
 import { panelSwitchingMethods } from './panelSwitching.js'
@@ -1434,6 +1442,7 @@ export default {
     FileStagingArea,
     ClipboardPanel,
     DdFilesPanel,
+    ShareholderMeetingPanel,
     DdRequestEditor,
     InviteMemberDialog,
     ChatInterface,
@@ -2774,6 +2783,23 @@ export default {
         isFolder: false
       }
       this.openFile(file)
+    },
+    // 股东大会核查「开始核查」：把 kick-off prompt 交给 AI 面板以 AGENT 模式发送，
+    // 并把返回的会话 ID 绑定回核查会话（面板据此展示 RUNNING 状态）
+    async handleShareholderMeetingStart({ check, prompt }) {
+      const chat = this.$refs.chatInterface
+      if (!chat || !chat.sendExternalPrompt) {
+        uni.showToast({ title: 'AI 面板未就绪，请稍后重试', icon: 'none' })
+        return
+      }
+      const conversationId = await chat.sendExternalPrompt(prompt)
+      if (conversationId && check && check.id) {
+        try {
+          await bindShareholderMeetingConversation(check.id, conversationId, 'RUNNING')
+        } catch (e) {
+          console.error('绑定核查会话失败', e)
+        }
+      }
     },
     isTabVisible(file) {
       if (!file) return false
