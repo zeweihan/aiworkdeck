@@ -169,11 +169,11 @@ public class CloudSyncService {
             } catch (VersionException e) {
                 remote.setPendingUpload(true);
                 remoteRepository.save(remote);
+                log.warn("上传/整合失败: project={}", projectId, e);
                 if (background) {
-                    log.warn("后台上传失败，转入待上传: project={}", projectId, e);
                     return new UploadResult(UploadStatus.OFFLINE_PENDING, null);
                 }
-                throw VersionException.userFacing("云端暂时连不上，改动已记为待上传");
+                throw VersionException.userFacing("上传没能完成，改动已记为待上传");
             }
         } finally {
             lock.unlock();
@@ -283,6 +283,14 @@ public class CloudSyncService {
             return new UpdateResult(UpdateStatus.UP_TO_DATE, List.of(), null);
         }
         if (!outcome.success()) {
+            List<String> conflicts = WorkSessionService.userVisibleConflicts(outcome.conflictingPaths());
+            if (conflicts.isEmpty()) {
+                // 只有内部的文件树清单冲突（两边都改了 .awd/tree.json 的文本，真实文件
+                // 互不相干）。律师不认识这个文件、也无从选择，清单并集本来就要按并集
+                // 规则重写它——自己裁决掉，别弹窗打扰他（同 WorkSessionService.adoptDraft
+                // 的同款自愈，理由见地雷 #21）。
+                return completeCloudMerge(projectId, tipBefore, remoteSha, conn, userId, userName);
+            }
             return new UpdateResult(UpdateStatus.CONFLICT, List.of(), cloudConflictPayload(projectId));
         }
         return completeCloudMerge(projectId, tipBefore, remoteSha, conn, userId, userName);
@@ -325,11 +333,22 @@ public class CloudSyncService {
         }
     }
 
-    /** 无损中止一次云端更新的合并窗口：两边都不动，等律师改天再更新。 */
+    /**
+     * 无损中止一次云端更新的合并窗口：两边都不动，等律师改天再更新。
+     * 守卫同 {@link #resolveCloudMerge}：不能无条件 abortMerge——误调会把进行中的
+     * 别的合并窗口（例如稿采纳/结束工作冲突）静默销毁，还告诉律师「分毫未动」。
+     */
     public String abortCloudMerge(long projectId) {
         ReentrantLock lock = sessionService.repoLock(projectId);
         lock.lock();
         try {
+            if (!repoService.repositoryMerging(projectId)) {
+                throw VersionException.userFacing("现在没有等着做选择的更新");
+            }
+            String cloudTip = repoService.mergeHeadRef(projectId);
+            if (cloudTip == null || !cloudTip.equals(repoService.originMasterSha(projectId))) {
+                throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
+            }
             repoService.abortMerge(projectId);
             return "这次更新没有完成，你的内容分毫未动";
         } finally {

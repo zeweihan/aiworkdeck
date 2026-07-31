@@ -334,4 +334,80 @@ class CloudSyncUpdateTest {
         assertEquals(CloudSyncService.UploadStatus.UPLOADED, r.status()); // 合并后重推成功
         assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare());
     }
+
+    /**
+     * 审查修复 Important 1：真实文件互不相干、只有 .awd/tree.json 这份内部清单撞了车
+     * （两边都往同一处追加节点）——律师不认识这个文件，也无从选择，理应像
+     * WorkSessionService.adoptDraft 一样自愈：completeCloudMerge 会按数据库重算清单，
+     * 正好覆盖 JGit 对 tree.json 做的文本合并残局（地雷 #21）。
+     */
+    @Test
+    void manifestOnlyConflictSelfResolvesWithoutWindow() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        advancePeerWithNewFile("同事的.txt", "同事内容");
+        Files.writeString(root.resolve("projects/7/我的.txt"), "我的内容");
+        appendPeerManifestNode(root.resolve("projects/7"), "我的.txt");
+        repoSvc.commitAll(7L, "我的修改", "auto", null, "韩泽伟", "hzw@example.com");
+
+        CloudSyncService.UpdateResult r = cloud.updateFromCloud(7L, 1L, "韩泽伟");
+        assertEquals(CloudSyncService.UpdateStatus.UPDATED, r.status());
+        assertFalse(repoSvc.repositoryMerging(7L), "只有内部清单冲突，不该停在待裁决窗口");
+        assertEquals("同事内容", Files.readString(root.resolve("projects/7/同事的.txt")));
+        assertEquals("我的内容", Files.readString(root.resolve("projects/7/我的.txt")));
+    }
+
+    /**
+     * 审查修复 Minor：REMOTE_AHEAD 回退分支——本地开着 ACTIVE 工作段时 canAutoIntegrate
+     * 守卫拦住自动整合，被拒的推送只能落回旧行为（置黄灯，不 integrate、不 CONFLICT）。
+     */
+    @Test
+    void rejectedUploadStaysRemoteAheadWhenSessionBlocksIntegrate() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        advancePeerWithNewFile("同事的.txt", "同事内容");
+        Files.writeString(root.resolve("projects/7/我的.txt"), "我的内容");
+        repoSvc.commitAll(7L, "我的修改", "auto", null, "韩泽伟", "hzw@example.com"); // 本地 master 分叉
+
+        svc.onChangeSignal(7L, 1L, "韩泽伟"); // 开一段 ACTIVE 工作段，拦住 canAutoIntegrate
+
+        CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, false);
+        assertEquals(CloudSyncService.UploadStatus.REMOTE_AHEAD, r.status());
+        assertTrue(remotes.values().stream()
+                .filter(x -> x.getProjectId().equals(7L)).findFirst().orElseThrow().getPendingUpload());
+    }
+
+    /**
+     * 审查修复 Important 3：abortCloudMerge 不能无条件 abortMerge——这里造一个稿采纳
+     * 冲突窗口（与云端更新无关），mergeHeadRef 指向稿 tip 而非 origin/master，
+     * abortCloudMerge 必须拒绝，且这个窗口分毫未动。
+     */
+    @Test
+    void abortCloudMergeRefusesForeignMergeWindow() throws Exception {
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        svc.endSession(7L, 1L, "韩泽伟", "起点");
+
+        WorkSessionService.DraftCreateResult created =
+                svc.createDraft(7L, null, "试验稿", 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "稿：合同");
+        svc.commitNow(7L, 1L, "韩泽伟", "稿上存档");
+
+        svc.switchToMainline(7L, 1L, "韩泽伟");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "主线：合同");
+        svc.onChangeSignal(7L, 1L, "韩泽伟");
+        svc.endSession(7L, 1L, "韩泽伟", "主线的工作");
+
+        svc.switchToDraft(7L, created.draft().getId(), 1L, "韩泽伟");
+        WorkSessionService.AdoptOutcome outcome =
+                svc.adoptDraft(7L, created.draft().getId(), 1L, "韩泽伟");
+        assertFalse(outcome.success(), "前置：这一步应该造出一个采纳冲突窗口");
+        assertTrue(repoSvc.repositoryMerging(7L), "前置：应该停在待裁决状态");
+        String mergeHeadBefore = repoSvc.mergeHeadRef(7L);
+        assertNotEquals(repoSvc.originMasterSha(7L), mergeHeadBefore, "前置：这窗口跟云端无关");
+
+        VersionException e = assertThrows(VersionException.class, () -> cloud.abortCloudMerge(7L));
+        assertTrue(e.isUserFacing());
+        assertTrue(repoSvc.repositoryMerging(7L), "别家的合并窗口不能被 abortCloudMerge 销毁");
+        assertEquals(mergeHeadBefore, repoSvc.mergeHeadRef(7L));
+    }
 }
