@@ -169,8 +169,9 @@
 </template>
 
 <script>
-import { login, register, clientLogin, getWizardStatus } from '@/services/api.js'
-import { saveSession, getSessionId } from '@/utils/auth.js'
+import { login, register, clientLogin, getWizardStatus, getMyProjects } from '@/services/api.js'
+import { saveSession, getSessionId, getCurrentUser } from '@/utils/auth.js'
+import { syncRecentToMenu } from '@/utils/recentProjects.js'
 
 export default {
   name: 'Login',
@@ -181,6 +182,9 @@ export default {
       .then((res) => {
         if (res && res.initialized === false) {
           uni.reLaunch({ url: '/pages/wizard/wizard' })
+        } else {
+          // IDE 化启动直达：存储会话仍有效则跳过登录，直接回到上次的工作现场
+          this.tryAutoResume()
         }
       })
       .catch((e) => {
@@ -240,6 +244,30 @@ export default {
     }
   },
   methods: {
+    // IDE 化启动直达：会话有效 → 直进上次项目（像 VS Code 打开即回到上个工作区）；
+    // 会话失效/网络异常 → 静默停留登录页。CLIENT 账号视图受限，只回个人中心。
+    async tryAutoResume() {
+      const sid = getSessionId()
+      const user = getCurrentUser()
+      if (!sid || !user) return
+      try {
+        const projects = await getMyProjects() // 顺带校验会话有效性
+        if (user.role === 'CLIENT') {
+          uni.reLaunch({ url: '/pages/userprofile/userprofile' })
+          return
+        }
+        const list = Array.isArray(projects) ? projects : (projects && projects.data) || []
+        syncRecentToMenu(list) // 应用菜单「最近打开」子菜单
+        const lastId = Number(uni.getStorageSync('checkba_last_project_id') || 0)
+        if (lastId && list.some((p) => Number(p.id) === lastId)) {
+          uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${lastId}` })
+        } else {
+          uni.reLaunch({ url: '/pages/userprofile/userprofile' })
+        }
+      } catch (e) {
+        console.warn('会话恢复失败，停留登录页:', e && e.message)
+      }
+    },
     handleMouseMove(e) {
       // #ifdef H5
       // On H5 we can track mouse. On App/Mobile touch might be different, but request is Desktop-like

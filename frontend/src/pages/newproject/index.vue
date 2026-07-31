@@ -130,8 +130,9 @@
 </template>
 
 <script>
-import { openLocalProject, createProject } from '@/services/api.js'
+import { createProject } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { openFolderFlow, openFileFlow, createFolderFlow } from '@/utils/ideOpen.js'
 
 export default {
   data() {
@@ -147,12 +148,16 @@ export default {
       namingName: '',
     }
   },
-  onLoad() {
+  onLoad(query) {
     const user = getCurrentUser()
     if (user) {
       this.userDisplayName = user.displayName || user.username || '用户'
       this.username = user.username
       this.userAvatarUrl = user.avatarUrl
+    }
+    // 应用菜单「新建项目文件夹…」跳入时自动拉起流程
+    if (query && query.auto === 'create-folder') {
+      setTimeout(() => { if (this.isDesktop) this.onCreateFolder() }, 300)
     }
   },
   computed: {
@@ -174,13 +179,7 @@ export default {
 
     async onOpenFolder() {
       if (this.busy) return
-      const res = await window.checkbaDesktop.fs.showOpenDialog({
-        title: '打开文件夹',
-        buttonLabel: '打开',
-        properties: ['openDirectory', 'createDirectory'],
-      })
-      if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
-      await this.openLocal({ localRoot: res.filePaths[0] }, '正在打开文件夹…')
+      await this.withBusy('正在打开文件夹…', () => openFolderFlow())
     },
 
     async onCreateFolder() {
@@ -198,46 +197,22 @@ export default {
 
     async confirmCreateFolder() {
       if (!this.namingNameValid || this.busy) return
-      const sep = this.namingParentDir.includes('\\') && !this.namingParentDir.includes('/') ? '\\' : '/'
-      const localRoot = this.namingParentDir.replace(/[\\/]+$/, '') + sep + this.namingName.trim()
+      const parentDir = this.namingParentDir
+      const name = this.namingName.trim()
       this.namingVisible = false
-      await this.openLocal({ localRoot, createFolder: true, name: this.namingName.trim() }, '正在创建项目…')
+      await this.withBusy('正在创建项目…', () => createFolderFlow(parentDir, name))
     },
 
     async onOpenFile() {
       if (this.busy) return
-      const res = await window.checkbaDesktop.fs.showOpenDialog({
-        title: '打开文件',
-        buttonLabel: '打开',
-        properties: ['openFile'],
-      })
-      if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
-      const filePath = res.filePaths[0]
-      const idx = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
-      if (idx <= 0) {
-        uni.showToast({ title: '无法识别该文件的所在文件夹', icon: 'none' })
-        return
-      }
-      const parentDir = filePath.slice(0, idx)
-      const openFileName = filePath.slice(idx + 1)
-      await this.openLocal({ localRoot: parentDir, openFileName }, '正在打开文件…')
+      await this.withBusy('正在打开文件…', () => openFileFlow())
     },
 
-    async openLocal(payload, busyText) {
+    async withBusy(busyText, flow) {
       this.busy = true
       this.busyText = busyText || '正在打开项目…'
       try {
-        const r = await openLocalProject(payload)
-        const d = (r && r.data) || {}
-        if (!d.projectId) {
-          throw new Error('打开项目失败，请稍后重试')
-        }
-        if (d.truncated) {
-          uni.showToast({ title: '文件夹内容过多，仅导入了前 3000 项', icon: 'none' })
-        }
-        const query = `id=${d.projectId}` + (d.openFileId ? `&openFileId=${d.openFileId}` : '')
-        // reLaunch：避免页面栈里堆叠多个 project-overview 实例（全局监听多实例地雷）
-        uni.reLaunch({ url: `/pages/project-overview/project-overview?${query}` })
+        await flow()
       } catch (err) {
         uni.showToast({ title: (err && err.message) || '打开项目失败，请稍后重试', icon: 'none' })
       } finally {
