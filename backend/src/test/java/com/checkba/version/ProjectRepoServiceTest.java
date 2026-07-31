@@ -15,7 +15,7 @@ class ProjectRepoServiceTest {
     private ProjectRepoService svc(Path root) {
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        return new ProjectRepoService(props);
+        return new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
     }
 
     @Test

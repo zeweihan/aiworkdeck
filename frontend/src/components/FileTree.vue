@@ -301,6 +301,15 @@
           </view>
           <text class="context-menu-text">这份文件的历史</text>
         </view>
+        <view v-if="contextMenu.targetItem && isDesktopShell" class="context-menu-item"
+          @tap="$emit('reveal-file', contextMenu.targetItem); closeContextMenu()">
+          <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </view>
+          <text class="context-menu-text">在访达中显示</text>
+        </view>
         <view v-if="contextMenu.targetItem" class="context-menu-item context-menu-item-danger" @tap="handleDelete(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -969,6 +978,10 @@ export default {
   },
   computed: {
     ICONS() { return ICONS },
+    isDesktopShell() {
+      return typeof window !== 'undefined' && !!(window.checkbaDesktop && window.checkbaDesktop.fs
+        && window.checkbaDesktop.fs.showItemInFolder)
+    },
     sortLabel() {
       const map = { name: '名称', date: '修改时间', type: '类型' }
       return map[this.sortMode] || '排序'

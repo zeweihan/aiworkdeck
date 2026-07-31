@@ -540,6 +540,7 @@
             @files-changed="loadStagingFiles"
             @file-deleted="handleFileDeleted"
             @file-history="onFileHistory"
+            @reveal-file="onRevealFile"
           />
           <DdFilesPanel
             v-else-if="leftPaneKey === 'dd-files'"
@@ -1346,7 +1347,9 @@ import {
   getPlugins, // Added
   getFileText,
   getVersionStatus, // 版本面板之外也要知道「有没有采纳等待处理」
-  promptFeatureNotConfigured // 功能未配置统一引导（#18 T7）
+  promptFeatureNotConfigured, // 功能未配置统一引导（#18 T7）
+  getProjectLocalPath, // 在访达中显示（IDE 化）
+  getFileLocalPath
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
@@ -1888,6 +1891,11 @@ export default {
     }
     // 后台任务状态轮询清理
     if (this.convStatusPollTimer) { clearInterval(this.convStatusPollTimer); this.convStatusPollTimer = null }
+    // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
+    if (typeof window !== 'undefined' && this._localFocusRefresh) {
+      window.removeEventListener('focus', this._localFocusRefresh)
+      this._localFocusRefresh = null
+    }
     clearTimeout(this._libreSpareTimer)
     this.teardownResponsiveListener()
     // Epic #43: 解绑 ⌘⇧O 嵌入式编辑器监听
@@ -1990,6 +1998,12 @@ export default {
       this.loadProjectInfo()
       this.loadProjectMembers()
       this.checkAdoptConflict()
+
+      // IDE 化「打开文件」过渡版：稍等页面挂载完成后打开指定文件
+      if (query.openFileId) {
+        const pendingId = Number(query.openFileId)
+        setTimeout(() => this.openPendingLocalFile(pendingId), 600)
+      }
 
       // Initialize Staging Area (Persistent)
       // We don't await here to avoid blocking page load, but ensuring folder exists is critical
@@ -2098,6 +2112,18 @@ export default {
     // 处理，否则一次事件触发 N 份副作用（与 PR#148 剪贴板重复入库同源）
     if (typeof window !== 'undefined') window.__checkbaActiveOverviewVm = this
     this.setupResponsiveListener()
+    // IDE 化：窗口重新聚焦时刷新文件树——外部改动（Finder 增删改）都发生在
+    // 用户切出去的时候，后端 watcher 已把数据库对齐，聚焦拉一次即可见。
+    // 多实例守卫：只让活跃实例刷新（页面栈多实例地雷，PR#148/#151 模式）
+    if (typeof window !== 'undefined') {
+      this._localFocusRefresh = () => {
+        if (!this.isActiveOverviewInstance()) return
+        if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
+          this.$refs.fileTree.loadFiles()
+        }
+      }
+      window.addEventListener('focus', this._localFocusRefresh)
+    }
     // 预热备胎：延迟建（避开项目打开期资源竞争），首开 Office 文档免冷启动
     this.scheduleLibreSpare()
     // 后台任务状态轮询：AI 面板打开时每 15s 刷一次会话状态（驱动历史列表状态点
@@ -2388,6 +2414,31 @@ export default {
     onFileHistory(file) {
       this.versionFileFilter = { fileId: file.id, name: file.name }
       if (this.leftPaneKey !== 'version') this.toggleLeftPane('version')
+    },
+    // 文件树右键「在访达中显示」：后端解析物理路径（localRoot 感知），桌面壳高亮
+    async onRevealFile(file) {
+      if (!file) return
+      const shellApi = typeof window !== 'undefined' && window.checkbaDesktop
+        && window.checkbaDesktop.fs && window.checkbaDesktop.fs.showItemInFolder
+      if (!shellApi) return
+      try {
+        let path = null
+        if (file.isFolder) {
+          // 文件夹没有独立物理路径记录：用项目根 + 无法精确时退回项目根
+          const r = await getProjectLocalPath(this.projectId)
+          path = r && r.data && r.data.path
+        } else {
+          const r = await getFileLocalPath(file.id)
+          path = r && r.data && r.data.path
+          if (!(r && r.data && r.data.exists)) {
+            uni.showToast({ title: '磁盘上没有这份文件', icon: 'none' })
+            return
+          }
+        }
+        if (path) await window.checkbaDesktop.fs.showItemInFolder(path)
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '无法在访达中显示', icon: 'none' })
+      }
     },
     // 「有一次采纳等待处理」固定条的入口：切到版本面板，AdoptConflictDialog 会随
     // 面板的 /status 自动弹出（它本来就是这么起来的，含崩溃后重开的场景）。

@@ -37,13 +37,16 @@ public class FileContextLoader {
     private final ProjectFileService projectFileService;
     private final FileContentExtractorService fileContentExtractorService;
     private final AiContextProperties contextProperties;
+    private final com.checkba.storage.ProjectStorageResolver storageResolver;
 
     public FileContextLoader(ProjectFileService projectFileService,
                              FileContentExtractorService fileContentExtractorService,
-                             AiContextProperties contextProperties) {
+                             AiContextProperties contextProperties,
+                             com.checkba.storage.ProjectStorageResolver storageResolver) {
         this.projectFileService = projectFileService;
         this.fileContentExtractorService = fileContentExtractorService;
         this.contextProperties = contextProperties;
+        this.storageResolver = storageResolver;
     }
 
     /**
@@ -173,7 +176,9 @@ public class FileContextLoader {
                 if (Boolean.TRUE.equals(f.getIsFolder())) continue;
 
                 try {
-                    java.io.File physicalFile = new java.io.File(f.getFilePath());
+                    // 旧实现 new File(相对filePath) 按 CWD 解析，几乎必然 exists()==false 静默跳过；
+                    // 改走 resolver 才真正读到文件（localRoot 感知）
+                    java.io.File physicalFile = storageResolver.resolve(f.getFilePath()).toFile();
                     if (physicalFile.exists() && physicalFile.length() < maxFileSize) {
                         String text = fileContentExtractorService.extractText(physicalFile);
                         if (text != null && !text.isEmpty()) {

@@ -28,7 +28,7 @@
               <text class="role-text">标准用户</text>
             </view>
           </view>
-          
+
           <view class="user-actions">
             <view class="action-item" @tap="goToUserProfile">
               <text class="action-text">返回个人中心</text>
@@ -41,72 +41,88 @@
       <!-- 右侧主内容区 -->
       <view class="main-content">
         <view class="content-header">
-           <text class="content-title">项目创建向导</text>
-           <text class="content-subtitle">请选择项目类型并录入相关信息，系统将为您初始化项目环境。</text>
+           <text class="content-title">新建或打开项目</text>
+           <text class="content-subtitle">项目就是您电脑上的一个文件夹：文件保存在原位，随时可在访达（Finder）中查看和管理。</text>
         </view>
 
         <view class="card project-form-card">
+          <template v-if="isDesktop">
+            <view class="ide-action" :class="{ 'is-busy': busy }" @tap="onOpenFolder">
+              <view class="ide-action-text">
+                <text class="ide-action-title">打开文件夹…</text>
+                <text class="ide-action-desc">把电脑上已有的文件夹作为项目打开，里面的文件自动进入文件树</text>
+              </view>
+              <text class="ide-action-arrow">›</text>
+            </view>
+            <view class="ide-action" :class="{ 'is-busy': busy }" @tap="onCreateFolder">
+              <view class="ide-action-text">
+                <text class="ide-action-title">新建项目文件夹…</text>
+                <text class="ide-action-desc">选择存放位置并新建一个文件夹，从空白开始工作</text>
+              </view>
+              <text class="ide-action-arrow">›</text>
+            </view>
+            <view class="ide-action" :class="{ 'is-busy': busy }" @tap="onOpenFile">
+              <view class="ide-action-text">
+                <text class="ide-action-title">打开文件…</text>
+                <text class="ide-action-desc">打开单个文件，自动以它所在的文件夹作为项目</text>
+              </view>
+              <text class="ide-action-arrow">›</text>
+            </view>
+            <view v-if="busy" class="ide-busy-hint">
+              <text>{{ busyText }}</text>
+            </view>
+          </template>
+
+          <template v-else>
+            <!-- 非桌面环境（浏览器）没有系统文件夹对话框，降级为托管空白项目 -->
             <view class="form-grid">
-            <view class="form-row">
-              <view class="form-label">
-                <text>项目类型</text>
-                <text class="required-mark">*</text>
-              </view>
-              <view class="form-field relative-field">
-                <!-- Custom Dropdown Trigger -->
-                <view 
-                  class="selector-display" 
-                  :class="{ 'is-open': projectTypeDropdownOpen }"
-                  @tap.stop="toggleProjectTypeDropdown"
-                >
-                  <text class="selector-text">{{ currentProjectType.label }}</text>
-                  <text class="selector-arrow">▼</text>
+              <view class="form-row">
+                <view class="form-label">
+                  <text>项目名称</text>
+                  <text class="required-mark">*</text>
                 </view>
-
-                <!-- Custom Dropdown Menu -->
-                <view v-if="projectTypeDropdownOpen" class="custom-dropdown-menu">
-                   <view 
-                     v-for="(type, index) in projectTypes" 
-                     :key="type.value" 
-                     class="dropdown-item"
-                     :class="{ 'item-selected': index === projectTypeIndex }"
-                     @tap.stop="selectProjectType(index)"
-                   >
-                     <text>{{ type.label }}</text>
-                     <text v-if="index === projectTypeIndex" class="check-mark">✓</text>
-                   </view>
+                <view class="form-field">
+                  <input
+                    class="input"
+                    type="text"
+                    placeholder="请输入项目名称"
+                    :value="blankName"
+                    @input="e => { blankName = e.detail && e.detail.value }"
+                  />
                 </view>
               </view>
             </view>
-
-            <!-- 动态表单字段 -->
-            <view
-              v-for="field in currentProjectType.formFields"
-              :key="field.field"
-              class="form-row"
-            >
-              <view class="form-label">
-                <text>{{ field.label }}</text>
-                <text v-if="field.required" class="required-mark">*</text>
-              </view>
-              <view class="form-field">
-                <input
-                  class="input"
-                  type="text"
-                  :placeholder="field.placeholder"
-                  :value="formModel[field.field]"
-                  @input="onInput(field.field, $event)"
-                />
-              </view>
+            <view class="form-actions">
+               <button class="btn btn-cancel" @tap="goToUserProfile">取消</button>
+               <button class="btn btn-create" :loading="busy" :disabled="!blankName || busy" @tap="onCreateBlank">
+                  {{ busy ? '创建中...' : '创建项目' }}
+               </button>
             </view>
-          </view>
+            <view class="ide-web-hint">
+              <text>提示：在桌面版中，新建项目可直接打开本地文件夹，与 IDE 体验一致。</text>
+            </view>
+          </template>
+        </view>
+      </view>
+    </view>
 
-          <view class="form-actions">
-             <button class="btn btn-cancel" @tap="goToUserProfile">取消</button>
-             <button class="btn btn-create" :loading="creating" :disabled="!canCreate" @tap="onCreateProject">
-                {{ creating ? '创建中...' : '立即创建' }}
-             </button>
-          </view>
+    <!-- 新建项目文件夹：命名弹窗 -->
+    <view v-if="namingVisible" class="naming-mask" @tap.self="namingVisible = false">
+      <view class="naming-dialog">
+        <text class="naming-title">新建项目文件夹</text>
+        <text class="naming-location">位置：{{ namingParentDir }}</text>
+        <input
+          class="input naming-input"
+          type="text"
+          placeholder="文件夹名称"
+          :value="namingName"
+          :focus="namingVisible"
+          @input="e => { namingName = e.detail && e.detail.value }"
+          @confirm="confirmCreateFolder"
+        />
+        <view class="naming-actions">
+          <button class="btn btn-cancel" @tap="namingVisible = false">取消</button>
+          <button class="btn btn-create" :disabled="!namingNameValid || busy" @tap="confirmCreateFolder">创建</button>
         </view>
       </view>
     </view>
@@ -114,9 +130,7 @@
 </template>
 
 <script>
-import { PROJECT_TYPES } from '@/config/projectTypes.js'
-import { COMPANY_ROLES } from '@/config/projectTypes.js'
-import { fetchCompanyBasicInfo, createProject } from '@/services/api.js'
+import { openLocalProject, createProject } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 
 export default {
@@ -124,17 +138,13 @@ export default {
     return {
       userDisplayName: '用户',
       username: '',
-      userAvatarUrl: '', // Added to support avatar display
-      projectTypes: PROJECT_TYPES,
-      projectTypeIndex: 0,
-      formModel: {
-        projectType: PROJECT_TYPES[0]?.value || '',
-        listedCompanyName: '',
-        targetCompanyName: '',
-        name: '', // For blank project
-      },
-      creating: false,
-      projectTypeDropdownOpen: false
+      userAvatarUrl: '',
+      busy: false,
+      busyText: '正在打开项目…',
+      blankName: '',
+      namingVisible: false,
+      namingParentDir: '',
+      namingName: '',
     }
   },
   onLoad() {
@@ -146,115 +156,111 @@ export default {
     }
   },
   computed: {
-    currentProjectType() {
-      return this.projectTypes[this.projectTypeIndex] || this.projectTypes[0]
+    isDesktop() {
+      return typeof window !== 'undefined' && !!(window.checkbaDesktop && window.checkbaDesktop.fs
+        && window.checkbaDesktop.fs.showOpenDialog)
     },
-    canCreate() {
-      // 动态检查必填字段
-      const requiredFields = this.currentProjectType.formFields.filter(f => f.required)
-      return requiredFields.every(f => !!this.formModel[f.field])
+    namingNameValid() {
+      const n = (this.namingName || '').trim()
+      return !!n && !n.includes('/') && !n.includes('\\') && n !== '.' && n !== '..'
     },
-    isBlankProject() {
-        return this.currentProjectType.value === 'BLANK'
-    }
   },
   methods: {
     goToUserProfile() {
       uni.navigateTo({ url: '/pages/userprofile/userprofile' })
     },
-    toggleProjectTypeDropdown() {
-      this.projectTypeDropdownOpen = !this.projectTypeDropdownOpen
+
+    // ---- IDE 化入口（桌面） ----
+
+    async onOpenFolder() {
+      if (this.busy) return
+      const res = await window.checkbaDesktop.fs.showOpenDialog({
+        title: '打开文件夹',
+        buttonLabel: '打开',
+        properties: ['openDirectory', 'createDirectory'],
+      })
+      if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
+      await this.openLocal({ localRoot: res.filePaths[0] }, '正在打开文件夹…')
     },
-    selectProjectType(index) {
-      this.projectTypeIndex = index
-      const type = this.projectTypes[index]
-      this.formModel.projectType = type ? type.value : ''
-      // 清空字段值
-      this.formModel.listedCompanyName = ''
-      this.formModel.targetCompanyName = ''
-      this.formModel.name = ''
-      this.projectTypeDropdownOpen = false
+
+    async onCreateFolder() {
+      if (this.busy) return
+      const res = await window.checkbaDesktop.fs.showOpenDialog({
+        title: '选择存放位置',
+        buttonLabel: '选择此处',
+        properties: ['openDirectory', 'createDirectory'],
+      })
+      if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
+      this.namingParentDir = res.filePaths[0]
+      this.namingName = ''
+      this.namingVisible = true
     },
-    onInput(field, event) {
-      const value = event.detail && event.detail.value
-      this.formModel[field] = value
+
+    async confirmCreateFolder() {
+      if (!this.namingNameValid || this.busy) return
+      const sep = this.namingParentDir.includes('\\') && !this.namingParentDir.includes('/') ? '\\' : '/'
+      const localRoot = this.namingParentDir.replace(/[\\/]+$/, '') + sep + this.namingName.trim()
+      this.namingVisible = false
+      await this.openLocal({ localRoot, createFolder: true, name: this.namingName.trim() }, '正在创建项目…')
     },
-    async onCreateProject() {
-      if (!this.canCreate) {
-        uni.showToast({
-          title: '请先补全必填信息',
-          icon: 'none',
-        })
+
+    async onOpenFile() {
+      if (this.busy) return
+      const res = await window.checkbaDesktop.fs.showOpenDialog({
+        title: '打开文件',
+        buttonLabel: '打开',
+        properties: ['openFile'],
+      })
+      if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
+      const filePath = res.filePaths[0]
+      const idx = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
+      if (idx <= 0) {
+        uni.showToast({ title: '无法识别该文件的所在文件夹', icon: 'none' })
         return
       }
+      const parentDir = filePath.slice(0, idx)
+      const openFileName = filePath.slice(idx + 1)
+      await this.openLocal({ localRoot: parentDir, openFileName }, '正在打开文件…')
+    },
 
-      this.creating = true
-      let listedInfo = null
-      let targetInfo = null
-
+    async openLocal(payload, busyText) {
+      this.busy = true
+      this.busyText = busyText || '正在打开项目…'
       try {
-        // 非空白项目才尝试拉取公司信息
-        if (!this.isBlankProject) {
-            // 1. 尝试拉取上市公司信息（如果有）
-            if (this.formModel.listedCompanyName) {
-            try {
-                listedInfo = await fetchCompanyBasicInfo({
-                projectType: this.formModel.projectType,
-                role: COMPANY_ROLES.LISTED,
-                name: this.formModel.listedCompanyName
-                })
-            } catch (e) {
-                console.warn('拉取上市公司信息失败，将使用空信息创建', e)
-            }
-            }
-
-            // 2. 尝试拉取标的公司信息（如果有）
-            if (this.formModel.targetCompanyName) {
-            try {
-                targetInfo = await fetchCompanyBasicInfo({
-                projectType: this.formModel.projectType,
-                role: COMPANY_ROLES.TARGET,
-                name: this.formModel.targetCompanyName
-                })
-            } catch (e) {
-                console.warn('拉取标的公司信息失败，将使用空信息创建', e)
-            }
-            }
+        const r = await openLocalProject(payload)
+        const d = (r && r.data) || {}
+        if (!d.projectId) {
+          throw new Error('打开项目失败，请稍后重试')
         }
-
-        // 3. 创建项目
-        const payload = {
-          projectType: this.formModel.projectType,
-          listedCompanyName: this.formModel.listedCompanyName,
-          targetCompanyName: this.formModel.targetCompanyName,
-          name: this.formModel.name, // 只有空白项目会有这个值，或者如果后端支持自定义名称也可以传
-          listedCompanyInfo: listedInfo,
-          targetCompanyInfo: targetInfo,
+        if (d.truncated) {
+          uni.showToast({ title: '文件夹内容过多，仅导入了前 3000 项', icon: 'none' })
         }
-        
-        const res = await createProject(payload)
-        
-        uni.showToast({
-          title: '项目创建成功',
-          icon: 'success',
-        })
-
-        // 4. 跳转到项目概览页
-        const projectId = res && res.id
-        
-        setTimeout(() => {
-           uni.navigateTo({
-             url: `/pages/project-overview/project-overview?id=${projectId}`,
-           })
-        }, 500)
-
+        const query = `id=${d.projectId}` + (d.openFileId ? `&openFileId=${d.openFileId}` : '')
+        // reLaunch：避免页面栈里堆叠多个 project-overview 实例（全局监听多实例地雷）
+        uni.reLaunch({ url: `/pages/project-overview/project-overview?${query}` })
       } catch (err) {
-        uni.showToast({
-          title: (err && err.message) || '创建项目失败，请稍后重试',
-          icon: 'none',
-        })
+        uni.showToast({ title: (err && err.message) || '打开项目失败，请稍后重试', icon: 'none' })
       } finally {
-        this.creating = false
+        this.busy = false
+      }
+    },
+
+    // ---- 浏览器降级：托管空白项目 ----
+
+    async onCreateBlank() {
+      if (!this.blankName || this.busy) return
+      this.busy = true
+      try {
+        const res = await createProject({ projectType: 'BLANK', name: this.blankName })
+        const projectId = res && res.id
+        uni.showToast({ title: '项目创建成功', icon: 'success' })
+        setTimeout(() => {
+          uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${projectId}` })
+        }, 500)
+      } catch (err) {
+        uni.showToast({ title: (err && err.message) || '创建项目失败，请稍后重试', icon: 'none' })
+      } finally {
+        this.busy = false
       }
     },
   },
@@ -319,7 +325,6 @@ $danger-color: #E74C3C;
   overflow: hidden;
   position: relative;
   padding-bottom: 24px;
-  /* Add border to match userprofile */
   border: 1px solid rgba(0,0,0,0.02);
 }
 
@@ -404,7 +409,7 @@ $danger-color: #E74C3C;
   padding: 12px 24px;
   cursor: pointer;
   transition: background 0.2s;
-  
+
   &:hover {
     background-color: #F8F9FA;
   }
@@ -449,10 +454,77 @@ $danger-color: #E74C3C;
 .project-form-card {
   background: $brand-white;
   border-radius: 16px;
-  padding: 40px;
+  padding: 24px;
   box-shadow: 0 4px 20px rgba(18, 52, 77, 0.04);
 }
 
+/* IDE 化动作行 */
+.ide-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px;
+  border: 1px solid $border-color;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+
+  & + .ide-action {
+    margin-top: 12px;
+  }
+
+  &:hover {
+    border-color: $brand-primary;
+    background: rgba(91, 209, 151, 0.05);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(26, 83, 54, 0.08);
+  }
+
+  &.is-busy {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
+.ide-action-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ide-action-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: $text-main;
+}
+
+.ide-action-desc {
+  font-size: 13px;
+  color: $text-secondary;
+}
+
+.ide-action-arrow {
+  font-size: 22px;
+  color: $text-light;
+  font-family: monospace;
+  margin-left: 16px;
+}
+
+.ide-busy-hint {
+  margin-top: 16px;
+  text-align: center;
+  font-size: 13px;
+  color: $text-secondary;
+}
+
+.ide-web-hint {
+  margin-top: 16px;
+  font-size: 12px;
+  color: $text-light;
+}
+
+/* 浏览器降级表单 */
 .form-grid {
   display: flex;
   flex-direction: column;
@@ -485,15 +557,9 @@ $danger-color: #E74C3C;
   flex-direction: column;
 }
 
-.relative-field {
-    position: relative;
-    z-index: 100; /* Ensure dropdown is on top */
-}
-
-/* 统一输入框与下拉框样式 */
-.selector-display, .input {
+.input {
   height: 48px;
-  background-color: #fff; 
+  background-color: #fff;
   border: 1px solid $border-color;
   border-radius: 8px;
   padding: 0 16px;
@@ -501,87 +567,17 @@ $danger-color: #E74C3C;
   color: $text-main;
   transition: all 0.2s;
   box-sizing: border-box;
-}
-
-.selector-display {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  cursor: pointer;
-}
-
-.input {
   width: 100%;
 }
 
-.selector-display:hover, .input:hover {
+.input:hover {
   border-color: #bbb;
 }
 
-.selector-display:active, .input:focus {
+.input:focus {
   border-color: $brand-primary;
   box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
   outline: none;
-}
-
-.selector-text {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.selector-arrow {
-  font-size: 10px;
-  color: $text-secondary;
-  margin-left: 8px;
-  transition: transform 0.2s;
-}
-
-.selector-display.is-open .selector-arrow {
-    transform: rotate(180deg);
-}
-
-.custom-dropdown-menu {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    width: 100%;
-    margin-top: 8px;
-    background: #fff;
-    border: 1px solid $border-color;
-    border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.08); /* Premium Shadow */
-    z-index: 1000;
-    overflow: hidden;
-    padding: 8px 0;
-}
-
-.dropdown-item {
-    padding: 12px 16px;
-    font-size: 14px;
-    color: $text-main;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    cursor: pointer;
-    transition: all 0.2s;
-    
-    &:hover {
-        background-color: rgba(91, 209, 151, 0.08); /* Mint Light */
-        color: $brand-primary;
-    }
-}
-
-.item-selected {
-    color: $brand-primary;
-    font-weight: 500;
-    background-color: rgba(91, 209, 151, 0.08);
-}
-
-.check-mark {
-    font-size: 12px;
-    color: $brand-primary;
 }
 
 .form-actions {
@@ -604,13 +600,14 @@ $danger-color: #E74C3C;
   cursor: pointer;
   border: none;
   transition: all 0.2s;
+  padding: 0 24px;
 }
 
 .btn-cancel {
     background: #f5f5f5;
     color: $text-secondary;
     flex: 1;
-    
+
     &:hover {
         background: #e0e0e0;
     }
@@ -621,13 +618,13 @@ $danger-color: #E74C3C;
   color: #fff;
   flex: 2;
   box-shadow: 0 4px 12px rgba(26, 83, 54, 0.2);
-  
+
   &:hover {
     background-color: lighten($brand-primary, 5%);
     box-shadow: 0 6px 16px rgba(26, 83, 54, 0.3);
     transform: translateY(-1px);
   }
-  
+
   &:active {
     transform: translateY(1px);
   }
@@ -641,19 +638,64 @@ $danger-color: #E74C3C;
   transform: none;
 }
 
+/* 新建文件夹命名弹窗 */
+.naming-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.naming-dialog {
+  width: 420px;
+  max-width: calc(100vw - 48px);
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  display: flex;
+  flex-direction: column;
+}
+
+.naming-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: $text-main;
+  margin-bottom: 8px;
+}
+
+.naming-location {
+  font-size: 12px;
+  color: $text-secondary;
+  margin-bottom: 16px;
+  word-break: break-all;
+}
+
+.naming-input {
+  margin-bottom: 20px;
+}
+
+.naming-actions {
+  display: flex;
+  gap: 12px;
+}
+
 @media screen and (max-width: 768px) {
   .workbench-container {
     flex-direction: column;
   }
-  
+
   .user-sidebar {
     width: 100%;
   }
-  
+
   .form-actions {
       max-width: 100%;
   }
-  
+
   .form-grid {
       max-width: 100%;
   }

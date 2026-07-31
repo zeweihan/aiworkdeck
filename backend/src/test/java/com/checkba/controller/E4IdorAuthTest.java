@@ -22,7 +22,9 @@ class E4IdorAuthTest {
     void projectGetRejectsNonMember() {
         ProjectService ps = mock(ProjectService.class);
         ProjectMemberService pms = mock(ProjectMemberService.class);
-        ProjectController c = new ProjectController(ps, pms);
+        ProjectController c = new ProjectController(ps, pms,
+                mock(com.checkba.service.LocalProjectService.class),
+                mock(com.checkba.storage.ProjectStorageResolver.class));
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("s")).thenReturn(7L);
             when(pms.hasReadPermission(42L, 7L)).thenReturn(false);

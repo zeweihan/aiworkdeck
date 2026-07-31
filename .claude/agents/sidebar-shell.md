@@ -40,6 +40,7 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 
 login（**启动页**）/ newproject / project-overview / variable-library / userprofile / admin / plugin-market / wizard。
 导航流：login reLaunch→wizard|project-overview|userprofile；overview navigateTo userprofile/admin；admin→plugin-market；newproject reLaunch→overview；退出 reLaunch login。
+**newproject 已 IDE 化（2026-07-31）**：桌面态三动作「打开文件夹/新建项目文件夹/打开文件」走 `window.checkbaDesktop.fs.showOpenDialog` + `POST /api/projects/open-local`（同一 localRoot 重复打开复用项目并幂等重扫导入，见 `LocalProjectService`）；浏览器降级为托管空白项目（BLANK）；成功后 reLaunch 进 overview，单文件过渡版带 `openFileId` 查询参数（`fileOpenTabs.js` 的 `openPendingLocalFile`）。项目类型选择表单已删除（`config/projectTypes.js` 仅剩 `getProjectTypeLabel` 供存量项目卡片显示）。FileTree 右键新增「在访达中显示」（`reveal-file` → overview `onRevealFile` → `/local-path` 端点 + `fs.showItemInFolder` IPC）。
 
 **页面栈地雷（本领域核心机制）**：navigateTo 反复进入 project-overview 不销毁旧实例——页面栈多实例并存，每个都持有全局监听。守卫模式：活跃实例指针 `window.__checkbaActiveOverviewVm` + isActiveOverviewInstance() 判活跃、去重状态挂 window 不挂实例、只清/接管指向自己的指针（beforeUnmount/onShow/mounted 三处配合）。切换项目用 reLaunch 避免堆叠。**外壳里新增任何全局订阅必须套用此模式**（PR#148/#151）。
 

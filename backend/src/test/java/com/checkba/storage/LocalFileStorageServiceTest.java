@@ -23,7 +23,7 @@ class LocalFileStorageServiceTest {
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(tempDir.toAbsolutePath().toString());
         props.getLocal().setTemplatePath(tempDir.resolve("no-template.docx").toAbsolutePath().toString());
-        storage = new LocalFileStorageService(props);
+        storage = new LocalFileStorageService(new ProjectStorageResolver(props, null));
     }
 
     private ByteArrayInputStream bytes(String s) {

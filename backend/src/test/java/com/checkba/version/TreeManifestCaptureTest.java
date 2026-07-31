@@ -38,7 +38,7 @@ class TreeManifestCaptureTest {
 
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        ProjectRepoService repoSvc = new ProjectRepoService(props);
+        ProjectRepoService repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         ProjectTreeManifestService svc =
                 new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper(),
                         mock(UserRepository.class), mock(ProjectRepository.class));
@@ -69,7 +69,7 @@ class TreeManifestCaptureTest {
 
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        ProjectRepoService repoSvc = new ProjectRepoService(props);
+        ProjectRepoService repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         ProjectTreeManifestService svc =
                 new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper(),
                         mock(UserRepository.class), mock(ProjectRepository.class));
@@ -92,7 +92,7 @@ class TreeManifestCaptureTest {
 
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        ProjectRepoService repoSvc = new ProjectRepoService(props);
+        ProjectRepoService repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
         ProjectTreeManifestService svc =
                 new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper(),
                         mock(UserRepository.class), mock(ProjectRepository.class));

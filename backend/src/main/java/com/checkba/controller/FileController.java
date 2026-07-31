@@ -60,6 +60,33 @@ public class FileController {
     @Autowired
     private WorkSessionService workSessionService;
 
+    @Autowired
+    private com.checkba.storage.ProjectStorageResolver storageResolver;
+
+    /**
+     * 文件的物理磁盘路径（「在 Finder 中显示」用）。
+     */
+    @GetMapping("/{fileId}/local-path")
+    public ResponseEntity<Map<String, Object>> getLocalPath(
+            @PathVariable("fileId") Long fileId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionHeader) {
+        Optional<ProjectFile> pfOpt = projectFileRepository.findById(fileId);
+        if (pfOpt.isEmpty()) {
+            return ResponseEntity.ok(Map.of("code", 1, "message", "文件不存在"));
+        }
+        ProjectFile pf = pfOpt.get();
+        if (!isAuthorizedForProject(null, sessionHeader, pf.getProjectId())) {
+            return ResponseEntity.status(403).body(Map.of("code", 1, "message", "无权访问该文件"));
+        }
+        if (!org.springframework.util.StringUtils.hasText(pf.getFilePath())) {
+            return ResponseEntity.ok(Map.of("code", 1, "message", "该文件没有物理路径"));
+        }
+        java.nio.file.Path p = storageResolver.resolve(pf.getFilePath());
+        return ResponseEntity.ok(Map.of("code", 0, "data", Map.of(
+                "path", p.toString(),
+                "exists", java.nio.file.Files.exists(p))));
+    }
+
     private StorageService getStorageService() {
         return storageServiceFactory.getStorageService();
     }

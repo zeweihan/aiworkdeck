@@ -37,6 +37,7 @@ public class DocumentEditTools implements AgentToolComponent {
     private final ProjectFileService projectFileService;
     private final ProjectFileRepository projectFileRepository;
     private final EditorBridgeService editorBridgeService;
+    private final com.checkba.storage.ProjectStorageResolver storageResolver;
 
     // ==================== 文件管理工具 ====================
 
@@ -134,9 +135,9 @@ public class DocumentEditTools implements AgentToolComponent {
                     fileName = fileName + ".docx";
                 }
 
-                // 创建空白 docx 文件
-                java.nio.file.Path projectDataDir = java.nio.file.Paths.get(System.getProperty("user.dir"))
-                        .getParent().resolve("data/projects/" + projectId);
+                // 创建空白 docx 文件（localRoot 感知；旧实现无条件 getParent() 在打包态
+                // cwd=~/.aiworkdeck 下会错误解析到 ~/data/projects/）
+                java.nio.file.Path projectDataDir = storageResolver.projectRoot(projectId);
                 if (!java.nio.file.Files.exists(projectDataDir)) {
                     java.nio.file.Files.createDirectories(projectDataDir);
                 }

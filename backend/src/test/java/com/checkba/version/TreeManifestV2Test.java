@@ -40,7 +40,7 @@ class TreeManifestV2Test {
         Files.createDirectories(root.resolve("projects/9"));
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        repoSvc = new ProjectRepoService(props);
+        repoSvc = new ProjectRepoService(new com.checkba.storage.ProjectStorageResolver(props, null));
 
         ProjectFileRepository fileRepo = mock(ProjectFileRepository.class);
         // 模拟 IDENTITY 语义：id 为 null 或库里不存在（含归一化的合成负 id）都视为

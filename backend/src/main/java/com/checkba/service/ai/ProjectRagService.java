@@ -1,6 +1,6 @@
 package com.checkba.service.ai;
 
-import com.checkba.storage.StorageProperties;
+import com.checkba.storage.ProjectStorageResolver;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentParser;
 import dev.langchain4j.data.document.loader.FileSystemDocumentLoader;
@@ -20,7 +20,6 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -38,7 +37,7 @@ public class ProjectRagService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ProjectRagService.class);
 
-    private final StorageProperties storageProperties;
+    private final ProjectStorageResolver storageResolver;
     private final EmbeddingModel embeddingModel;
 
     // 有界 LRU（access-order）：每个 retriever 持有整个项目的向量库，无界缓存会随项目数持续增长占堆。
@@ -81,17 +80,17 @@ public class ProjectRagService {
         log.info("Building knowledge base for project: {}", projectId);
         EmbeddingStore<TextSegment> embeddingStore = new InMemoryEmbeddingStore<>();
 
-        Path storageRoot = getStorageRoot();
-        if (storageRoot == null || !Files.exists(storageRoot)) {
-            log.warn("Storage root does not exist: {}", storageRoot);
-            return createEmptyRetriever(embeddingStore);
-        }
-
         DocumentParser parser = new ApacheTikaDocumentParser();
         List<Document> allDocuments = new ArrayList<>();
 
-        // Strategy 1: Scan new directory structure: data/projects/{projectId}
-        Path projectDir = storageRoot.resolve("projects").resolve(projectId);
+        // Strategy 1: Scan project directory (localRoot-aware via ProjectStorageResolver)
+        Path projectDir;
+        try {
+            projectDir = storageResolver.projectRoot(Long.parseLong(projectId));
+        } catch (NumberFormatException e) {
+            log.warn("Invalid projectId for RAG: {}", projectId);
+            return createEmptyRetriever(embeddingStore);
+        }
         if (Files.exists(projectDir)) {
             log.info("Scanning project directory: {}", projectDir);
             allDocuments.addAll(scanDirectory(projectDir, parser, null));
@@ -179,19 +178,4 @@ public class ProjectRagService {
                 .build();
     }
 
-    private Path getStorageRoot() {
-        String rootPath = storageProperties.getLocal().getRootPath();
-        if (rootPath == null) rootPath = "data/wps-files";
-        
-        if (Paths.get(rootPath).isAbsolute()) {
-            return Paths.get(rootPath);
-        } else {
-            String userDir = System.getProperty("user.dir");
-            Path projectRoot = Paths.get(userDir);
-            if (userDir.endsWith("backend")) {
-                projectRoot = projectRoot.getParent();
-            }
-            return projectRoot.resolve(rootPath);
-        }
-    }
 }
