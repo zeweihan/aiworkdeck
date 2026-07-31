@@ -1729,3 +1729,68 @@ export function abandonDraft(projectId, draftId) {
   });
 }
 
+// ==================== 云端协作（v2）====================
+// 术语：push=上传到云端 pull=从云端更新 clone=从云端接一个项目。界面零 Git 术语。
+
+export function cloudConnect(serverUrl, username, password, deviceName) {
+  return request({ url: '/api/cloud/connect', method: 'POST',
+    data: { serverUrl, username, password, deviceName } })
+}
+
+export function listCloudConnections() {
+  return request({ url: '/api/cloud/connections', method: 'GET' })
+}
+
+export function disconnectCloudConnection(connectionId) {
+  return request({ url: `/api/cloud/connections/${connectionId}/disconnect`, method: 'POST' })
+}
+
+export function listRemoteProjects(connectionId) {
+  return request({ url: `/api/cloud/connections/${connectionId}/remote-projects`, method: 'GET' })
+}
+
+export function shareProjectToCloud(projectId, connectionId) {
+  return request({ url: `/api/cloud/projects/${projectId}/share`, method: 'POST',
+    data: { connectionId } })
+}
+
+export function acceptCloudProject(connectionId, remoteProjectId) {
+  return request({ url: '/api/cloud/accept', method: 'POST',
+    data: { connectionId, remoteProjectId } })
+}
+
+export function getCloudStatus(projectId) {
+  return request({ url: `/api/cloud/projects/${projectId}/status`, method: 'GET' })
+}
+
+export function checkCloud(projectId) {
+  return request({ url: `/api/cloud/projects/${projectId}/check`, method: 'POST' })
+}
+
+export function uploadToCloud(projectId) {
+  return request({ url: `/api/cloud/projects/${projectId}/upload`, method: 'POST' })
+}
+
+export function updateFromCloud(projectId) {
+  return request({ url: `/api/cloud/projects/${projectId}/update`, method: 'POST' })
+}
+
+// resolutions: { [path]: 'MAIN' | 'DRAFT' | 'BOTH' }（语境映射见 AdoptConflictDialog）
+export function resolveCloudMerge(projectId, resolutions) {
+  return request({ url: `/api/cloud/projects/${projectId}/resolve`, method: 'POST',
+    data: { resolutions } })
+}
+
+export function abortCloudMerge(projectId) {
+  return request({ url: `/api/cloud/projects/${projectId}/abort`, method: 'POST' })
+}
+
+export function resolveSessionEnd(projectId, sessionId, resolutions) {
+  return request({ url: `/api/projects/${projectId}/version/session/resolve-end`, method: 'POST',
+    data: { sessionId, resolutions } })
+}
+
+export function abortSessionEnd(projectId) {
+  return request({ url: `/api/projects/${projectId}/version/session/abort-end`, method: 'POST' })
+}
+
