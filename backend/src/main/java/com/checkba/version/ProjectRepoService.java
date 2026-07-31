@@ -800,6 +800,30 @@ public class ProjectRepoService {
         }
     }
 
+    /**
+     * 快进 master 到 targetRef（含工作区）——云端更新（Task 9）判定「本地未分叉」后走这条路。
+     * 非快进（历史已分叉）或工作区有冲突一律抛技术档异常：调用方（CloudSyncService）已经
+     * 用 {@code isAncestor} 判过快进条件、且已 dockCurrentLine 保证工作区干净，真出现即
+     * 编程错误，不给 userFacing 粉饰。
+     */
+    public void fastForwardMainline(long projectId, String targetRef) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            var target = repo.resolve(targetRef);
+            if (target == null) throw new VersionException("目标版本不存在: " + targetRef);
+            var result = git.merge()
+                    .include(target)
+                    .setFastForward(MergeCommand.FastForwardMode.FF_ONLY)
+                    .call();
+            if (!result.getMergeStatus().isSuccessful()) {
+                throw new VersionException("快进失败: " + result.getMergeStatus());
+            }
+        } catch (VersionException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new VersionException("快进主线失败: project=" + projectId, e);
+        }
+    }
+
     /** ancestorRef 是否在 descendantRef 的历史里（快进判定/主线被推进判定）。 */
     public boolean isAncestor(long projectId, String ancestorRef, String descendantRef) {
         try (Repository repo = open(projectId);

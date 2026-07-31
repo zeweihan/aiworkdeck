@@ -140,8 +140,9 @@ public class WorkSessionService {
     /**
      * 稿分支守卫：当前分支是否是 {@code draft/*}。查询分支失败按主线处理（返回 false）——
      * 版本记录是保险，不是主流程，绝不能因为守卫本身查询失败而阻断改动信号/自动存档。
+     * 包内可见（Task 9）：CloudSyncService 的云端更新前置守卫复用同一份判断，不重写逻辑。
      */
-    private boolean onDraftBranch(long projectId) {
+    boolean onDraftBranch(long projectId) {
         try {
             String branch = repoService.currentBranch(projectId);
             return branch != null && branch.startsWith("draft/");
@@ -1213,8 +1214,9 @@ public class WorkSessionService {
      * 内部的文件树清单（{@code .awd/tree.json}）永远不出现在律师的选择清单里：他不认识
      * 这个文件，而它的正确内容由清单并集算出来、由 {@link #completeAdopt} 重写。
      * 排序只为了让前端拿到的顺序稳定。
+     * 包内可见（Task 9）：CloudSyncService 的云端合并冲突裁决复用同一份过滤规则。
      */
-    private static List<String> userVisibleConflicts(List<String> paths) {
+    static List<String> userVisibleConflicts(List<String> paths) {
         return paths.stream().filter(p -> !p.startsWith(".awd/")).sorted().toList();
     }
 
@@ -1222,8 +1224,10 @@ public class WorkSessionService {
      * 一个文件的裁决落地到工作区。索引里的冲突标记不用手工清——
      * {@link ProjectRepoService#commitMergeResolution} 的两次 add（含 update）会把
      * 工作区的最终状态整体收进去，包括「裁决结果是这个文件不存在」这种情况。
+     * 包内可见（Task 9）：CloudSyncService 的云端更新冲突裁决（ours=本地/theirs=云端）
+     * 直接复用这份落地逻辑，只是 draftTip/draftName 传的是云端侧的 tip 与「云端」标签。
      */
-    private void applyResolution(long projectId, String path, Resolution choice,
+    void applyResolution(long projectId, String path, Resolution choice,
                                  String mainTip, String draftTip, String draftName) {
         String rel = safeRepoPath(path);
         Path work = repoService.workTree(projectId);

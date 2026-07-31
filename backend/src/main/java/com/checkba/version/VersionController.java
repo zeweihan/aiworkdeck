@@ -60,10 +60,15 @@ public class VersionController {
             data.put("onDraft", sessionService.activeDraftOnBranch(projectId)
                     .map(this::draftRef).orElse(null));
             Map<String, Object> sessionEndConflict = sessionEndConflictStatus(projectId);
+            Map<String, Object> cloudConflict = sessionEndConflict != null
+                    ? null : cloudConflictStatus(projectId);
             data.put("sessionEndConflict", sessionEndConflict);
-            // 两者都由 MERGE_HEAD 反查；sessionEndConflict 优先——工作段命中时
-            // adoptConflict 必须为 null，防止前端同时弹出两种裁决弹窗。
-            data.put("adoptConflict", sessionEndConflict != null ? null : adoptConflictStatus(projectId));
+            data.put("cloudConflict", cloudConflict);
+            // 三者都由 MERGE_HEAD 反查，先到先得：sessionEndConflict → cloudConflict →
+            // adoptConflict。命中前两者中任一个时 adoptConflict 必须为 null，防止前端
+            // 同时弹出多种裁决弹窗。
+            data.put("adoptConflict", (sessionEndConflict != null || cloudConflict != null)
+                    ? null : adoptConflictStatus(projectId));
         } else {
             data.put("working", false);
             data.put("changedCount", 0);
@@ -71,6 +76,7 @@ public class VersionController {
             data.put("onDraft", null);
             data.put("adoptConflict", null);
             data.put("sessionEndConflict", null);
+            data.put("cloudConflict", null);
         }
         return ok(data);
     }
@@ -142,6 +148,28 @@ public class VersionController {
                 repoService.conflictingPaths(projectId).stream()
                         .filter(p -> !p.startsWith(".awd/")).toList(),
                 repoService.resolveRef(projectId, "HEAD"), mergeHead));
+    }
+
+    /**
+     * 云端更新冲突态（Task 9）反查：MERGE_HEAD 指向 origin/master 当前 tip 即为
+     * CloudSyncService.updateFromCloud/uploadToCloud 的自动整合开出的合并冲突窗口。
+     * 口径同 {@link #sessionEndConflictStatus}/{@link #adoptConflictStatus}——都靠
+     * MERGE_HEAD 反查、不依赖任何应用层状态字段，崩溃恢复天然可用。/status 判定链里
+     * 排在 sessionEndConflict 之后、adoptConflict 之前，命中时后者强制 null。
+     */
+    private Map<String, Object> cloudConflictStatus(long projectId) {
+        if (!repoService.repositoryMerging(projectId)) return null;
+        String mergeHead = repoService.mergeHeadRef(projectId);
+        String cloudTip = repoService.originMasterSha(projectId);
+        if (mergeHead == null || cloudTip == null || !mergeHead.equals(cloudTip)) return null;
+        List<String> conflicts = repoService.conflictingPaths(projectId).stream()
+                .filter(p -> !p.startsWith(".awd/"))
+                .toList();
+        Map<String, Object> m = new HashMap<>();
+        m.put("conflictingPaths", conflicts);
+        m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
+        m.put("cloudTip", cloudTip);
+        return m;
     }
 
     private Map<String, Object> sessionEndConflictData(WorkSessionService.SessionEndConflict c) {

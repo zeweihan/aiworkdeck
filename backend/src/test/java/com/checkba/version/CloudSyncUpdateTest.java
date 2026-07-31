@@ -1,6 +1,7 @@
 package com.checkba.version;
 
 import com.checkba.model.entity.CloudConnection;
+import com.checkba.model.entity.Project;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.model.entity.ProjectRemote;
 import com.checkba.repository.CloudConnectionRepository;
@@ -30,19 +31,21 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
- * Task 8：CloudConnection/ProjectRemote 接入 + CloudSyncService 连接与上传 + 结束工作自动上传。
+ * Task 9：从云端更新（快进/真合并/冲突三选一/裁决重推）+ 上传被拒自动整合重推。
  *
- * 双仓 fixture：root 下的仓库是「桌面」，一个 file:// 裸仓当「云端」（凭据全用占位值，
- * file:// 传输本来就不校验）。connect() 的 HTTP 调用走匿名子类覆写 {@code httpPost} seam
- * 打桩，其余仓库操作全部落在真实的 JGit 仓库上。
+ * 骨架同 CloudSyncUploadTest（Task 8）：双仓 fixture，root 下是「桌面」，一个 file://
+ * 裸仓当「云端」；「同事」用 peer 克隆裸仓、手工维护 v2 tree.json（JSON 手作法照
+ * GitHttpIngestTest）、提交、推回去，制造分叉。
+ *
+ * 方向钉死：这里的合并是 origin/master 并入本地 master——ours=本地=我这边的，
+ * theirs=云端=云端的，与 Task 7 结束工作撞车（那边 MAIN=同事的）方向相反。
  */
-class CloudSyncUploadTest {
+class CloudSyncUpdateTest {
 
     private Path root;
     private ProjectRepoService repoSvc;
     private ProjectTreeManifestService manifestSvc;
     private WorkSessionService svc;
-    private List<Object> publishedEvents;
 
     private Map<Long, ProjectFile> db;
     private long nextFileId;
@@ -52,10 +55,6 @@ class CloudSyncUploadTest {
     private long nextConnId;
     private Map<Long, ProjectRemote> remotes;
     private long nextRemoteId;
-
-    private String lastHttpUrl;
-    private String lastHttpHeaderToken;
-    private String cannedResponse;
 
     private CloudConnectionRepository cloudConnRepo;
     private ProjectRemoteRepository projectRemoteRepo;
@@ -87,8 +86,17 @@ class CloudSyncUploadTest {
             db.put(p.getId(), p);
             return p;
         });
+
+        // 清单 v2 归一化里 author 解析不到就回退到项目 owner——测试用 mock 的
+        // UserRepository/ProjectRepository 都不认识"同事"这个用户名，靠 owner 兜底
+        // 才能让 peer 手工写的 v2 节点新建成功（否则清单缺创建者信息会抛异常）。
+        ProjectRepository projectRepo = mock(ProjectRepository.class);
+        Project owner = new Project();
+        owner.setId(7L);
+        owner.setUserId(1L);
+        when(projectRepo.findById(any())).thenReturn(Optional.of(owner));
         manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper(),
-                mock(UserRepository.class), mock(ProjectRepository.class));
+                mock(UserRepository.class), projectRepo);
 
         sessions = new HashMap<>();
         nextSessionId = 1L;
@@ -112,9 +120,7 @@ class CloudSyncUploadTest {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
 
-        publishedEvents = new ArrayList<>();
-        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo,
-                publishedEvents::add);
+        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo, event -> { });
         svc.setDebounceMillis(60_000);
 
         connections = new HashMap<>();
@@ -127,11 +133,6 @@ class CloudSyncUploadTest {
             return c;
         });
         when(cloudConnRepo.findById(any())).thenAnswer(i -> Optional.ofNullable(connections.get(i.getArgument(0))));
-        doAnswer(i -> {
-            CloudConnection c = i.getArgument(0);
-            connections.remove(c.getId());
-            return null;
-        }).when(cloudConnRepo).delete(any(CloudConnection.class));
 
         remotes = new HashMap<>();
         nextRemoteId = 1L;
@@ -148,18 +149,11 @@ class CloudSyncUploadTest {
         when(projectRemoteRepo.findByConnectionId(any())).thenAnswer(i -> remotes.values().stream()
                 .filter(r -> r.getConnectionId().equals(i.getArgument(0)))
                 .toList());
-        doAnswer(i -> {
-            ProjectRemote r = i.getArgument(0);
-            remotes.remove(r.getId());
-            return null;
-        }).when(projectRemoteRepo).delete(any(ProjectRemote.class));
 
         cloud = new CloudSyncService(repoSvc, svc, manifestSvc, fileRepo, cloudConnRepo, projectRemoteRepo) {
             @Override
             protected String httpPost(String url, String body, String sessionToken) {
-                lastHttpUrl = url;
-                lastHttpHeaderToken = sessionToken;
-                return cannedResponse;
+                throw new UnsupportedOperationException("本测试不需要真实 HTTP 调用");
             }
         };
     }
@@ -176,16 +170,8 @@ class CloudSyncUploadTest {
     private void linkToBareRemote(long projectId) throws Exception {
         Path remoteDir = Files.createTempDirectory("cloud-remote");
         String url = bareRemote(remoteDir);
-        link(projectId, url);
-    }
-
-    /** 建一个不可达地址的连接（模拟离线）。*/
-    private void linkToUnreachableRemote(long projectId) {
-        link(projectId, "http://127.0.0.1:1/x.git");
-    }
-
-    private void link(long projectId, String url) {
         repoSvc.setRemoteOrigin(projectId, url);
+
         CloudConnection conn = new CloudConnection();
         conn.setServerUrl("http://server:9696");
         conn.setUsername("韩泽伟");
@@ -202,12 +188,6 @@ class CloudSyncUploadTest {
         projectRemoteRepo.save(remote);
     }
 
-    private ProjectRemote remoteRowOf(long projectId) {
-        return remotes.values().stream()
-                .filter(r -> r.getProjectId().equals(projectId))
-                .findFirst().orElseThrow();
-    }
-
     /** 云端裸仓当前 master 的 sha（直接开裸仓读，不经过本地 fetch）。 */
     private String remoteMasterShaOfBare() throws Exception {
         String url = repoSvc.remoteOriginUrl(7L);
@@ -216,129 +196,142 @@ class CloudSyncUploadTest {
         }
     }
 
-    /** 另一个「同事」克隆云端裸仓、提交、推回去，制造分叉。 */
-    private void advanceBareRemoteFromPeer(String message) throws Exception {
+    private List<ProjectFile> dbRowsOf(long projectId) {
+        return db.values().stream().filter(f -> f.getProjectId().equals(projectId)).toList();
+    }
+
+    /**
+     * 「同事」克隆云端裸仓、新增一个文件 + 在 v2 清单里添一个节点、提交、推回去。
+     * 清单从零开始起（本仓库开启版本记录之前没有 .awd/tree.json 这份历史），
+     * 已存在时接着追加，两种起点都要能用。
+     */
+    private void advancePeerWithNewFile(String fileName, String content) throws Exception {
         Path peerDir = Files.createTempDirectory("cloud-peer");
         String url = repoSvc.remoteOriginUrl(7L);
         try (Git peer = Git.cloneRepository().setURI(url).setDirectory(peerDir.toFile()).call()) {
-            Files.writeString(peerDir.resolve("合同.txt"), "同事的第二稿");
+            Files.writeString(peerDir.resolve(fileName), content);
+            appendPeerManifestNode(peerDir, fileName);
             peer.add().addFilepattern(".").call();
-            peer.commit().setMessage(message).setAuthor("同事", "p@example.com").call();
+            peer.commit().setMessage("同事新增\n\nX-AWD-Kind: session")
+                    .setAuthor("同事", "p@example.com").call();
             peer.push().call();
         }
+    }
+
+    /** 「同事」克隆云端裸仓、改写既有文件内容、提交、推回去（不碰清单，制造真实内容冲突用）。 */
+    private void advancePeerRewriting(String fileName, String content) throws Exception {
+        Path peerDir = Files.createTempDirectory("cloud-peer");
+        String url = repoSvc.remoteOriginUrl(7L);
+        try (Git peer = Git.cloneRepository().setURI(url).setDirectory(peerDir.toFile()).call()) {
+            Files.writeString(peerDir.resolve(fileName), content);
+            peer.add().addFilepattern(".").call();
+            peer.commit().setMessage("同事修改\n\nX-AWD-Kind: session")
+                    .setAuthor("同事", "p@example.com").call();
+            peer.push().call();
+        }
+    }
+
+    private void appendPeerManifestNode(Path peerDir, String fileName) throws Exception {
+        var om = new ObjectMapper();
+        Path manifestPath = peerDir.resolve(".awd/tree.json");
+        List<TreeManifest.Node> nodes = new ArrayList<>();
+        if (Files.exists(manifestPath)) {
+            nodes.addAll(om.readValue(manifestPath.toFile(), TreeManifest.class).nodes());
+        }
+        nodes.add(new TreeManifest.Node(
+                null, null, fileName, false, "txt", nodes.size(), null, false, null,
+                "uid-" + fileName + "-" + System.nanoTime(), null, fileName, "同事"));
+        Files.createDirectories(manifestPath.getParent());
+        Files.writeString(manifestPath,
+                om.writerWithDefaultPrettyPrinter().writeValueAsString(new TreeManifest(2, nodes)));
     }
 
     // ---- tests ----------------------------------------------------------
 
     @Test
-    void connectStoresTokenFromServerResponse() {
-        cannedResponse = """
-                {"code":0,"data":{"tokenId":1,"token":"awdt_abc","userId":5,
-                "username":"hanzewei","displayName":"韩泽伟"}}
-                """;
-        CloudConnection conn = cloud.connect("http://server:9696", "hanzewei", "pw", "MacBook");
-        assertEquals("awdt_abc", conn.getDeviceToken());
-        assertTrue(lastHttpUrl.endsWith("/api/auth/device-token"));
+    void fastForwardUpdateMaterialisesFilesAndDatabase() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        advancePeerWithNewFile("同事新增.txt", "内容");
+        CloudSyncService.UpdateResult r = cloud.updateFromCloud(7L, 1L, "韩泽伟");
+        assertEquals(CloudSyncService.UpdateStatus.UPDATED, r.status());
+        assertEquals("内容", Files.readString(root.resolve("projects/7/同事新增.txt")));
+        assertTrue(dbRowsOf(7L).stream().anyMatch(f -> "同事新增.txt".equals(f.getName())));
+        assertFalse(r.affectedFileIds().isEmpty());
     }
 
     @Test
-    void uploadPushesMainlineAndClearsPending() throws Exception {
+    void divergedCleanUpdateMergesAndPushesBack() throws Exception {
         linkToBareRemote(7L);
-        CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, false);
-        assertEquals(CloudSyncService.UploadStatus.UPLOADED, r.status());
-        assertFalse(remoteRowOf(7L).getPendingUpload());
+        cloud.uploadToCloud(7L, false);
+        advancePeerWithNewFile("同事的.txt", "同事内容");
+        Files.writeString(root.resolve("projects/7/我的.txt"), "我的内容");
+        repoSvc.commitAll(7L, "我的修改", "auto", null, "韩泽伟", "hzw@example.com");
+        CloudSyncService.UpdateResult r = cloud.updateFromCloud(7L, 1L, "韩泽伟");
+        assertEquals(CloudSyncService.UpdateStatus.UPDATED, r.status());
+        // 双亲合并 + 两侧都在 + 已自动重推（远端 tip == 本地 tip）
+        assertEquals(2, repoSvc.log(7L, "master", 5).get(0).parents().size());
+        assertEquals("同事内容", Files.readString(root.resolve("projects/7/同事的.txt")));
         assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare());
     }
 
-    /**
-     * Task 8 时这条路径只置黄灯（REMOTE_AHEAD）。Task 9 升级：没有未收尾工作/没站在稿上
-     * 时被拒后会自动整合——这里两边真改了同一处（合同.txt 的内容），整合遇到真实冲突，
-     * 状态从 REMOTE_AHEAD 变成新增的 CONFLICT，仓库停在合并窗口等裁决（同 CloudSyncUpdateTest
-     * 的冲突用例），不再是简单的"下次再试"。
-     */
     @Test
-    void rejectedUploadWithRealConflictOpensConflictWindow() throws Exception {
+    void conflictingUpdateOpensWindowAndBothResolutionKeepsCloudCopy() throws Exception {
         linkToBareRemote(7L);
         cloud.uploadToCloud(7L, false);
-        advanceBareRemoteFromPeer("同事的第二稿");
+        advancePeerRewriting("合同.txt", "云端的第二稿");
         Files.writeString(root.resolve("projects/7/合同.txt"), "我的第二稿");
         repoSvc.commitAll(7L, "我的修改", "auto", null, "韩泽伟", "hzw@example.com");
-        CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, false);
-        assertEquals(CloudSyncService.UploadStatus.CONFLICT, r.status());
+        CloudSyncService.UpdateResult r = cloud.updateFromCloud(7L, 1L, "韩泽伟");
+        assertEquals(CloudSyncService.UpdateStatus.CONFLICT, r.status());
         assertTrue(repoSvc.repositoryMerging(7L));
-        assertTrue(remoteRowOf(7L).getPendingUpload());
+
+        CloudSyncService.UpdateResult done = cloud.resolveCloudMerge(7L,
+                Map.of("合同.txt", WorkSessionService.Resolution.BOTH), 1L, "韩泽伟");
+        assertEquals(CloudSyncService.UpdateStatus.UPDATED, done.status());
+        assertFalse(repoSvc.repositoryMerging(7L));
+        assertEquals("我的第二稿", Files.readString(root.resolve("projects/7/合同.txt"))); // MAIN=ours 缺省内容
+        assertTrue(Files.list(root.resolve("projects/7")).map(p -> p.getFileName().toString())
+                .anyMatch(n -> n.contains("来自：云端")));
+        assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare()); // 裁决后重推
     }
 
     @Test
-    void offlineBackgroundUploadSwallowsAndMarksPending() {
-        linkToUnreachableRemote(7L);
-        assertDoesNotThrow(() -> {
-            CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, true);
-            assertEquals(CloudSyncService.UploadStatus.OFFLINE_PENDING, r.status());
-        });
-        assertTrue(remoteRowOf(7L).getPendingUpload());
+    void abortCloudMergeLeavesBothSidesIntact() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        advancePeerRewriting("合同.txt", "云端的第二稿");
+        Files.writeString(root.resolve("projects/7/合同.txt"), "我的第二稿");
+        repoSvc.commitAll(7L, "我的修改", "auto", null, "韩泽伟", "hzw@example.com");
+        cloud.updateFromCloud(7L, 1L, "韩泽伟");
+        assertTrue(repoSvc.repositoryMerging(7L));
+
+        String notice = cloud.abortCloudMerge(7L);
+        assertNotNull(notice);
+        assertFalse(repoSvc.repositoryMerging(7L));
+        // 无损中止：工作区回到冲突窗口之前——本地那份稿件原样还在。
+        assertEquals("我的第二稿", Files.readString(root.resolve("projects/7/合同.txt")));
     }
 
     @Test
-    void disconnectRevokesRemoteTokenWithRealIdAndAuthHeader() {
-        cannedResponse = """
-                {"code":0,"data":{"tokenId":42,"token":"awdt_xyz","userId":5,
-                "username":"hanzewei","displayName":"韩泽伟"}}
-                """;
-        CloudConnection conn = cloud.connect("http://server:9696", "hanzewei", "pw", "MacBook");
-
-        ProjectRemote remote = new ProjectRemote();
-        remote.setProjectId(7L);
-        remote.setConnectionId(conn.getId());
-        remote.setPendingUpload(false);
-        remote.setCreatedAt(LocalDateTime.now());
-        projectRemoteRepo.save(remote);
-
-        cannedResponse = """
-                {"code":0,"message":"已撤销"}
-                """;
-        cloud.disconnect(conn.getId());
-
-        assertTrue(lastHttpUrl.endsWith("/device-token/42/revoke"));
-        assertEquals("awdt_xyz", lastHttpHeaderToken);
-        assertFalse(connections.containsKey(conn.getId()));
-        assertTrue(remotes.isEmpty());
-    }
-
-    @Test
-    void disconnectWithoutTokenIdSkipsRemoteRevokeButDeletesLocally() {
-        CloudConnection conn = new CloudConnection();
-        conn.setServerUrl("http://server:9696");
-        conn.setUsername("韩泽伟");
-        conn.setDisplayName("韩泽伟");
-        conn.setDeviceToken("awdt_notoken");
-        conn.setTokenId(null);
-        conn.setCreatedAt(LocalDateTime.now());
-        conn = cloudConnRepo.save(conn);
-
-        ProjectRemote remote = new ProjectRemote();
-        remote.setProjectId(7L);
-        remote.setConnectionId(conn.getId());
-        remote.setPendingUpload(false);
-        remote.setCreatedAt(LocalDateTime.now());
-        projectRemoteRepo.save(remote);
-
-        lastHttpUrl = null;
-        cloud.disconnect(conn.getId());
-
-        assertNull(lastHttpUrl);
-        assertFalse(connections.containsKey(conn.getId()));
-        assertTrue(remotes.isEmpty());
-    }
-
-    @Test
-    void endSessionPublishesMainlineMergedEvent() throws Exception {
-        svc.enableVersionRecording(7L, "韩泽伟", "hzw@example.com");
+    void updateIsRefusedDuringActiveSession() throws Exception {
+        linkToBareRemote(7L);
         svc.onChangeSignal(7L, 1L, "韩泽伟");
-        Files.writeString(root.resolve("projects/7/合同.txt"), "改一笔");
         svc.commitNow(7L, 1L, "韩泽伟", null);
-        svc.endSession(7L, 1L, "韩泽伟", "一段工作");
-        assertTrue(publishedEvents.stream().anyMatch(e ->
-                e instanceof WorkSessionService.MainlineMergedEvent m && m.projectId() == 7L));
+        VersionException e = assertThrows(VersionException.class,
+                () -> cloud.updateFromCloud(7L, 1L, "韩泽伟"));
+        assertTrue(e.isUserFacing());
+    }
+
+    @Test
+    void rejectedUploadNowAutoIntegratesWhenClean() throws Exception {
+        linkToBareRemote(7L);
+        cloud.uploadToCloud(7L, false);
+        advancePeerWithNewFile("同事的.txt", "同事内容");
+        Files.writeString(root.resolve("projects/7/我的.txt"), "我的内容");
+        repoSvc.commitAll(7L, "我的修改", "auto", null, "韩泽伟", "hzw@example.com");
+        CloudSyncService.UploadResult r = cloud.uploadToCloud(7L, false);
+        assertEquals(CloudSyncService.UploadStatus.UPLOADED, r.status()); // 合并后重推成功
+        assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare());
     }
 }
