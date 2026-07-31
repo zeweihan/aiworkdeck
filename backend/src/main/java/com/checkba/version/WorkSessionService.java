@@ -2,6 +2,7 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
 
@@ -45,6 +46,7 @@ public class WorkSessionService {
     private final WorkSessionRepository sessionRepository;
     private final TaskScheduler taskScheduler;
     private final ProjectFileRepository fileRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     /** 防抖静默期。测试里调短或调长以取得确定性。 */
     private long debounceMillis = 2 * 60 * 1000L;
@@ -64,9 +66,18 @@ public class WorkSessionService {
      */
     private final Map<Long, ReentrantLock> repoLocks = new ConcurrentHashMap<>();
 
+    /**
+     * push 落库延后的项目 → 最早的基线 sha（Task 6）。内存态，服务端重启即丢失——
+     * 下一次 push 的 PostReceiveHook 或工作段/裁决收尾会自愈（补做一次全量物化）。
+     */
+    private final Map<Long, String> pendingIngestBase = new ConcurrentHashMap<>();
+
     private record PendingActor(Long userId, String userName) {}
 
-    private ReentrantLock repoLock(long projectId) {
+    /** 结束工作把工作段并回主线成功后发布，供 CloudSyncService（同包）监听触发自动上传。 */
+    public record MainlineMergedEvent(long projectId) {}
+
+    ReentrantLock repoLock(long projectId) {
         return repoLocks.computeIfAbsent(projectId, id -> new ReentrantLock());
     }
 
@@ -74,12 +85,14 @@ public class WorkSessionService {
                               ProjectTreeManifestService manifestService,
                               WorkSessionRepository sessionRepository,
                               TaskScheduler taskScheduler,
-                              ProjectFileRepository fileRepository) {
+                              ProjectFileRepository fileRepository,
+                              ApplicationEventPublisher eventPublisher) {
         this.repoService = repoService;
         this.manifestService = manifestService;
         this.sessionRepository = sessionRepository;
         this.taskScheduler = taskScheduler;
         this.fileRepository = fileRepository;
+        this.eventPublisher = eventPublisher;
     }
 
     public void setDebounceMillis(long millis) { this.debounceMillis = millis; }
@@ -127,8 +140,9 @@ public class WorkSessionService {
     /**
      * 稿分支守卫：当前分支是否是 {@code draft/*}。查询分支失败按主线处理（返回 false）——
      * 版本记录是保险，不是主流程，绝不能因为守卫本身查询失败而阻断改动信号/自动存档。
+     * 包内可见（Task 9）：CloudSyncService 的云端更新前置守卫复用同一份判断，不重写逻辑。
      */
-    private boolean onDraftBranch(long projectId) {
+    boolean onDraftBranch(long projectId) {
         try {
             String branch = repoService.currentBranch(projectId);
             return branch != null && branch.startsWith("draft/");
@@ -327,6 +341,7 @@ public class WorkSessionService {
         ReentrantLock lock = repoLock(projectId);
         lock.lock();
         try {
+            retryPendingIngest(projectId);
             return repoService.pendingChanges(projectId);
         } finally {
             lock.unlock();
@@ -353,6 +368,90 @@ public class WorkSessionService {
         } finally {
             lock.unlock();
         }
+    }
+
+    /** 让 Git 接收端整个跑在本项目的可重入锁内，与一切本地提交路径互斥。 */
+    public void runLocked(long projectId, Runnable body) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            body.run();
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /**
+     * pre-receive 停靠：HEAD 在主线、工作区脏、又没有工作段兜着（「脏但无段」）时，
+     * 先落一笔无主 auto 存档。master 因此前进，这次 push 的 old-sha 对不上会被
+     * git 原生拒绝——客户端走「被拒 → 从云端更新 → 重推」的正常循环，
+     * 网页端未存档的编辑分毫不丢。失败吞掉（版本记录不阻断主流程）。
+     */
+    public void dockDirtyMainlineForReceive(long projectId) {
+        try {
+            if (awaitingAdoptResolution(projectId)) return;
+            if (onDraftBranch(projectId)) return;
+            if (activeSession(projectId).isPresent()) return;
+            if (!repoService.mainBranch().equals(repoService.currentBranch(projectId))) return;
+            if (repoService.pendingChanges(projectId).isEmpty()) return;
+            manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+            repoService.commitAll(projectId, "自动存档", "auto", null,
+                    "AI Workdeck", "system@aiworkdeck.local");
+            log.info("push 前停靠了主线脏区: project={}", projectId);
+        } catch (Exception e) {
+            log.warn("push 前停靠失败（不阻断接收）: project={}", projectId, e);
+        }
+    }
+
+    /**
+     * push 使 master 前进后的落库：路径级物化工作区 + 清单同步数据库。
+     * 守卫不满足时记 pending 延后（保留最早的基线 sha），由
+     * {@link #retryPendingIngest} 补做。调用方已持锁（runLocked 内），锁可重入。
+     */
+    public void ingestPushedMainline(long projectId, String oldSha, String newSha) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            if (awaitingAdoptResolution(projectId)
+                    || activeSession(projectId).isPresent()
+                    || onDraftBranch(projectId)
+                    || !repoService.mainBranch().equals(repoService.currentBranch(projectId))) {
+                pendingIngestBase.putIfAbsent(projectId, oldSha);
+                log.info("push 落库延后: project={}, base={}", projectId, oldSha);
+                return;
+            }
+            // 口径同 revertTo：diffNameStatus(目标, 现状) + restoreWorkTreeFrom(目标)。
+            // 现状 = 工作区还端着的 oldSha 内容，目标 = 新 master。oldSha 为全零
+            // （ObjectId.zeroId()，分支新建）时没有"现状"可 diff——这是首推物化
+            // （initEmptyForReceive 建的空仓，还没有任何提交），改用 listPaths 把新版
+            // 全部文件当 ADD 处理。
+            List<FileChange> changes;
+            if (org.eclipse.jgit.lib.ObjectId.zeroId().name().equals(oldSha)) {
+                changes = repoService.listPaths(projectId, newSha).stream()
+                        .map(p -> new FileChange(p, FileChange.Type.ADD)).toList();
+            } else {
+                changes = repoService.diffNameStatus(projectId, newSha, oldSha);
+            }
+            restoreWorkTreeFrom(projectId, newSha, changes);
+            syncManifestFromRef(projectId, "HEAD");
+            pendingIngestBase.remove(projectId);
+            log.info("push 落库完成: project={}, {} 个文件", projectId, changes.size());
+        } catch (Exception e) {
+            pendingIngestBase.putIfAbsent(projectId, oldSha);
+            log.warn("push 落库失败，转入待同步: project={}", projectId, e);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 有延后的落库且守卫已清空时补做。挂在 pendingChangesLocked 与工作段收尾处。 */
+    public void retryPendingIngest(long projectId) {
+        String base = pendingIngestBase.get(projectId);
+        if (base == null) return;
+        String head = repoService.resolveRef(projectId, repoService.mainBranch());
+        if (head == null) return;
+        pendingIngestBase.remove(projectId);
+        ingestPushedMainline(projectId, base, head);
     }
 
     /**
@@ -411,18 +510,37 @@ public class WorkSessionService {
 
     /**
      * 结束工作的结果。{@code notice} 非空表示「结束成功，但有一句话要告诉律师」——
-     * 目前只有一种：整段工作没有任何改动、没生成版本。
+     * 目前只有一种：整段工作没有任何改动、没生成版本。{@code conflict} 非空表示
+     * 「结束没能一次做完，主线在这期间被同事推进、又跟这段工作撞了车，等着三选一」——
+     * 见 {@link #resolveSessionEnd}/{@link #abortSessionEnd}。三者互斥：正常收尾时
+     * 只有 sha 非空，空工作段时只有 notice 非空，撞车时只有 conflict 非空。
      *
      * 这条路径刻意**不抛异常**：抛异常前它已经把状态改完了（删了分支、工作段标
      * DISCARDED），而前端的 catch 分支只负责 toast，不会关命名弹窗、也不会刷新
      * 状态条——律师看到的是「工作中」和一个卡住的弹窗，而后台其实已经结束了。
      * 「改了状态再抛异常」这种混合语义一律用返回值表达。
      */
-    public record SessionEndResult(String sha, String notice) {}
+    public record SessionEndResult(String sha, String notice, SessionEndConflict conflict) {}
+
+    /**
+     * 结束工作撞上了被推进的主线，等着三选一。语义方向务必钉死：结束工作时合并方向是
+     * 「工作段并入主线」——{@code mainlineTip} 是同事那一侧（对应
+     * {@link Resolution#MAIN}），{@code sessionTip} 是我这边工作段那一侧（对应
+     * {@link Resolution#DRAFT}）。{@code title} 是这段工作最终确定的标题，裁决时
+     * {@link Resolution#BOTH} 另存的那一份文件名会带上它。
+     */
+    public record SessionEndConflict(long sessionId, String title,
+                                     List<String> conflictingPaths,
+                                     String mainlineTip, String sessionTip) {}
 
     /**
      * 结束本次工作：收尾提交 → 切回主线 → 合并 → 关闭工作段。
-     * 单人场景下主线在工作期间不会变，合并总是快进。
+     *
+     * 单人场景下主线在工作期间不会变，合并走 {@link ProjectRepoService#merge} 的
+     * v1 原路径，语义与桌面端零回归。主线被同事（云端 push，Task 6）推进过时，
+     * 合并从快进降级为真三方合并——干净也不自动提交（清单要按数据库重算后与内容
+     * 进同一个双亲提交，口径同采纳，见 {@link #completeSessionMerge}），冲突则
+     * 停在待裁决状态返回给前端三选一，不抛异常（工作段状态未变，仍是可恢复的中间态）。
      */
     public SessionEndResult endSession(long projectId, Long userId, String userName, String title) {
         ReentrantLock lock = repoLock(projectId);
@@ -448,29 +566,156 @@ public class WorkSessionService {
                 s.setEndedAt(LocalDateTime.now());
                 sessionRepository.save(s);
                 log.info("空工作段结束，未产生版本: project={}, branch={}", projectId, s.getBranchName());
-                return new SessionEndResult(null, "本次工作没有任何改动，未生成版本");
+                retryPendingIngest(projectId);
+                return new SessionEndResult(null, "本次工作没有任何改动，未生成版本", null);
             }
 
             String finalTitle = (title == null || title.isBlank())
                     ? defaultTitle(s.getStartedAt()) : title.trim();
 
             repoService.checkoutBranch(projectId, repoService.mainBranch());
-            MergeOutcome outcome = repoService.merge(
-                    projectId, s.getBranchName(), finalTitle, userName, email(userName));
+            String mainTipNow = repoService.resolveRef(projectId, repoService.mainBranch());
+            boolean mainAdvanced = !repoService.isAncestor(
+                    projectId, repoService.mainBranch(), s.getBranchName());
 
-            if (!outcome.success()) {
-                // 合并没成，把用户放回他的工作段，改动一个都不能丢
-                repoService.checkoutBranch(projectId, s.getBranchName());
-                throw VersionException.userFacing("本次工作还没能收尾，你的改动都还在");
+            if (!mainAdvanced) {
+                // v1 原路径一字不改：单人场景主线没动过，merge() 的 NO_FF 语义与
+                // 既有护栏（ProjectRepoBranchTest）全部照旧。
+                MergeOutcome outcome = repoService.merge(
+                        projectId, s.getBranchName(), finalTitle, userName, email(userName));
+                if (!outcome.success()) {
+                    // 合并没成，把用户放回他的工作段，改动一个都不能丢
+                    repoService.checkoutBranch(projectId, s.getBranchName());
+                    throw VersionException.userFacing("本次工作还没能收尾，你的改动都还在");
+                }
+                s.setStatus(WorkSession.Status.MERGED);
+                s.setEndedAt(LocalDateTime.now());
+                s.setTitle(finalTitle);
+                sessionRepository.save(s);
+                log.info("结束一段工作: project={}, branch={}, title={}",
+                        projectId, s.getBranchName(), finalTitle);
+                retryPendingIngest(projectId);
+                publishMainlineMerged(projectId);
+                return new SessionEndResult(outcome.mergeSha(), null, null);
             }
 
-            s.setStatus(WorkSession.Status.MERGED);
-            s.setEndedAt(LocalDateTime.now());
+            // v2 路径：主线被同事推进（push），合并从快进降级为真合并。
+            // 干净也不自动提交——清单要按数据库重算后与内容进同一个双亲提交（地雷 #21）。
             s.setTitle(finalTitle);
             sessionRepository.save(s);
-            log.info("结束一段工作: project={}, branch={}, title={}",
-                    projectId, s.getBranchName(), finalTitle);
-            return new SessionEndResult(outcome.mergeSha(), null);
+            MergeOutcome outcome = repoService.mergeNoCommit(
+                    projectId, s.getBranchName(), finalTitle, userName, email(userName));
+            if (outcome.mergeSha() != null) {
+                // ALREADY_UP_TO_DATE：理论不可达（空段已在上面筛掉），防御性收尾
+                return closeMergedSession(projectId, s, outcome.mergeSha());
+            }
+            if (!outcome.success()) {
+                // 冲突：仓库停在 MERGING，工作段保持 ACTIVE，HEAD 在主线。
+                // 凡是「改了状态还要报信」的路径都用返回值，不用异常（v1 契约）。
+                log.info("结束工作撞上云端新版本: project={}, session={}", projectId, s.getId());
+                return new SessionEndResult(null, null, new SessionEndConflict(
+                        s.getId(), finalTitle,
+                        userVisibleConflicts(repoService.conflictingPaths(projectId)),
+                        mainTipNow, branchTip));
+            }
+            return completeSessionMerge(projectId, s, mainTipNow, userName);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 干净或裁决后的真合并统一收尾：同事清单并集 → 按数据库重算清单 → 单一双亲提交。 */
+    private SessionEndResult completeSessionMerge(long projectId, WorkSession s,
+                                                   String mainTipBefore, String userName) {
+        TreeManifest theirs = manifestService.readAtRef(projectId, mainTipBefore);
+        if (theirs != null) manifestService.unionApply(projectId, theirs);
+        manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
+        String sha = repoService.commitMergeResolution(projectId, s.getTitle(),
+                userName, email(userName));
+        return closeMergedSession(projectId, s, sha);
+    }
+
+    private SessionEndResult closeMergedSession(long projectId, WorkSession s, String sha) {
+        s.setStatus(WorkSession.Status.MERGED);
+        s.setEndedAt(LocalDateTime.now());
+        sessionRepository.save(s);
+        repoService.deleteBranch(projectId, s.getBranchName(), true);
+        retryPendingIngest(projectId);
+        log.info("结束一段工作（真合并）: project={}, title={}", projectId, s.getTitle());
+        publishMainlineMerged(projectId);
+        return new SessionEndResult(sha, null, null);
+    }
+
+    /** 发布失败不阻断结束工作——版本记录是保险，不是主流程（同一条纪律见类注释）。 */
+    private void publishMainlineMerged(long projectId) {
+        try {
+            eventPublisher.publishEvent(new MainlineMergedEvent(projectId));
+        } catch (Exception e) {
+            log.warn("发布合并事件失败（不阻断）", e);
+        }
+    }
+
+    /**
+     * 结束工作撞车后逐文件三选一：{@link Resolution#MAIN}=用同事的（主线侧）、
+     * {@link Resolution#DRAFT}=用我这边的（工作段侧）、{@link Resolution#BOTH}=两份都留
+     * （工作段那一份另存，文件名带工作段标题）——方向与 {@link #resolveAdopt} 相反的地方
+     * 只在于「谁是 main、谁是 draft」：这里 main 恒为同事（主线），draft 恒为我这边
+     * （工作段），不随裁决者是谁而变。{@code resolutions} 必须覆盖全部待选择的文件。
+     */
+    public SessionEndResult resolveSessionEnd(long projectId, long sessionId,
+                                              Map<String, Resolution> resolutions,
+                                              Long userId, String userName) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            WorkSession s = sessionRepository.findById(sessionId)
+                    .filter(x -> x.getProjectId().equals(projectId))
+                    .filter(x -> x.getStatus() == WorkSession.Status.ACTIVE)
+                    .orElseThrow(() -> VersionException.userFacing("这段工作不存在或已收尾"));
+            if (!repoService.repositoryMerging(projectId)) {
+                throw VersionException.userFacing("现在没有等着做选择的收尾");
+            }
+            String sessionTip = repoService.mergeHeadRef(projectId);
+            if (sessionTip == null || !sessionTip.equals(
+                    repoService.resolveRef(projectId, s.getBranchName()))) {
+                throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
+            }
+            String mainTip = repoService.resolveRef(projectId, "HEAD");
+            List<String> rawConflicts = repoService.conflictingPaths(projectId);
+            if (rawConflicts.isEmpty()) {
+                throw new VersionException("冲突记录已丢失，无法安全收尾: project=" + projectId);
+            }
+            List<String> conflicts = userVisibleConflicts(rawConflicts);
+            Map<String, Resolution> choices = resolutions == null ? Map.of() : resolutions;
+            for (String path : conflicts) {
+                if (choices.get(path) == null) {
+                    throw VersionException.userFacing("还有文件没有做出选择");
+                }
+            }
+            for (String path : conflicts) {
+                applyResolution(projectId, path, choices.get(path),
+                        mainTip, sessionTip, s.getTitle());
+            }
+            return completeSessionMerge(projectId, s, mainTip, userName);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** 中止收尾：合并窗口按路径还原，回到工作段分支继续工作，空闲定时器重新武装。 */
+    public String abortSessionEnd(long projectId) {
+        ReentrantLock lock = repoLock(projectId);
+        lock.lock();
+        try {
+            WorkSession s = activeSession(projectId)
+                    .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
+            repoService.abortMerge(projectId);
+            if (!s.getBranchName().equals(repoService.currentBranch(projectId))) {
+                repoService.checkoutBranch(projectId, s.getBranchName());
+            }
+            armIdleTimer(projectId, s.getId());
+            log.info("中止一次工作收尾: project={}, session={}", projectId, s.getId());
+            return "本次工作还没能收尾，你的改动都还在";
         } finally {
             lock.unlock();
         }
@@ -525,6 +770,7 @@ public class WorkSessionService {
             s.setEndedAt(LocalDateTime.now());
             sessionRepository.save(s);
             log.info("丢弃一段工作: project={}, branch={}", projectId, s.getBranchName());
+            retryPendingIngest(projectId);
             return affected;
         } finally {
             lock.unlock();
@@ -977,8 +1223,9 @@ public class WorkSessionService {
      * 内部的文件树清单（{@code .awd/tree.json}）永远不出现在律师的选择清单里：他不认识
      * 这个文件，而它的正确内容由清单并集算出来、由 {@link #completeAdopt} 重写。
      * 排序只为了让前端拿到的顺序稳定。
+     * 包内可见（Task 9）：CloudSyncService 的云端合并冲突裁决复用同一份过滤规则。
      */
-    private static List<String> userVisibleConflicts(List<String> paths) {
+    static List<String> userVisibleConflicts(List<String> paths) {
         return paths.stream().filter(p -> !p.startsWith(".awd/")).sorted().toList();
     }
 
@@ -986,8 +1233,10 @@ public class WorkSessionService {
      * 一个文件的裁决落地到工作区。索引里的冲突标记不用手工清——
      * {@link ProjectRepoService#commitMergeResolution} 的两次 add（含 update）会把
      * 工作区的最终状态整体收进去，包括「裁决结果是这个文件不存在」这种情况。
+     * 包内可见（Task 9）：CloudSyncService 的云端更新冲突裁决（ours=本地/theirs=云端）
+     * 直接复用这份落地逻辑，只是 draftTip/draftName 传的是云端侧的 tip 与「云端」标签。
      */
-    private void applyResolution(long projectId, String path, Resolution choice,
+    void applyResolution(long projectId, String path, Resolution choice,
                                  String mainTip, String draftTip, String draftName) {
         String rel = safeRepoPath(path);
         Path work = repoService.workTree(projectId);
@@ -1119,7 +1368,7 @@ public class WorkSessionService {
      * pendingChanges 本身不加锁（见 {@link #pendingChangesLocked} 的注释），这里
      * 调用方已经持有本项目的锁，直接调用即可。
      */
-    private void dockCurrentLine(long projectId, Long userId, String userName) {
+    void dockCurrentLine(long projectId, Long userId, String userName) {
         if (onDraftBranch(projectId) || activeSession(projectId).isPresent()) {
             commitNow(projectId, userId, userName, null);
         } else if (!repoService.pendingChanges(projectId).isEmpty()) {
@@ -1166,7 +1415,7 @@ public class WorkSessionService {
      * 不是主流程——匹配失败绝不能让调用方的主操作失败，这里整体包死，出错就退化
      * 成空列表。
      */
-    private List<Long> resolveAffectedFileIds(long projectId, List<FileChange> changes) {
+    List<Long> resolveAffectedFileIds(long projectId, List<FileChange> changes) {
         try {
             List<ProjectFile> files = fileRepository.findByProjectId(projectId);
             List<Long> ids = new ArrayList<>();
@@ -1221,6 +1470,13 @@ public class WorkSessionService {
         Path work = repoService.workTree(projectId);
         try {
             for (FileChange c : changes) {
+                // push 上来的提交不可信（ingestPushedMainline 的 diff 直接吃远端内容）：
+                // 带 ../ 等穿越段的路径会把字节写出 workTree 之外。不合法路径跳过并留痕，
+                // 不炸整个 ingest——其余合法文件照常物化。
+                if (!isSafeRepoRelativePath(c.path())) {
+                    log.warn("还原文件时跳过不合法路径: project={}, path={}", projectId, c.path());
+                    continue;
+                }
                 Path target = work.resolve(c.path());
                 byte[] bytes = repoService.readBlobAtCommit(projectId, ref, c.path());
                 if (bytes == null) {
@@ -1238,6 +1494,24 @@ public class WorkSessionService {
     private void syncManifestFromRef(long projectId, String ref) {
         TreeManifest m = manifestService.readAtRef(projectId, ref);
         if (m != null) manifestService.applyToDatabase(projectId, m);
+    }
+
+    /**
+     * 仓库相对路径的结构合法性：拒绝 null/空、反斜杠、绝对路径、空段、{@code ..}/{@code .}
+     * 穿越段。与 {@link #safeRepoPath} 的区别只有一条——放行 {@code .awd/} 前缀（清单文件
+     * 也要能物化），因为这里校验的是「写进 workTree 是否安全」，不是「是否允许律师访问」。
+     * push 内容三层校验之一（另两层：ReceivePack 的 ObjectChecker、normalizeV2 的 relPath 校验）。
+     */
+    static boolean isSafeRepoRelativePath(String path) {
+        if (path == null || path.isBlank() || path.contains("\\") || path.startsWith("/")) {
+            return false;
+        }
+        for (String seg : path.split("/", -1)) {
+            if (seg.isEmpty() || seg.equals("..") || seg.equals(".")) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** 校验外部传入的仓库相对路径。非法即抛（技术档，不回显内容）。 */

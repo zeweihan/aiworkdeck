@@ -2,6 +2,8 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.repository.ProjectRepository;
+import com.checkba.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.checkba.storage.StorageProperties;
 import org.junit.jupiter.api.Test;
@@ -38,12 +40,13 @@ class TreeManifestCaptureTest {
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
         ProjectRepoService repoSvc = new ProjectRepoService(props);
         ProjectTreeManifestService svc =
-                new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper());
+                new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper(),
+                        mock(UserRepository.class), mock(ProjectRepository.class));
 
         TreeManifest m = svc.capture(7L);
         assertEquals(TreeManifest.CURRENT_VERSION, m.version());
         assertEquals(3, m.nodes().size(), "软删除的节点也必须在清单里");
-        assertTrue(m.nodes().stream().anyMatch(n -> n.id() == 3L && n.isDeleted()));
+        assertTrue(m.nodes().stream().anyMatch(n -> "废弃.docx".equals(n.relPath()) && n.isDeleted()));
 
         Files.createDirectories(root.resolve("projects/7"));
         svc.writeToWorkTree(7L, m);
@@ -68,7 +71,8 @@ class TreeManifestCaptureTest {
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
         ProjectRepoService repoSvc = new ProjectRepoService(props);
         ProjectTreeManifestService svc =
-                new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper());
+                new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper(),
+                        mock(UserRepository.class), mock(ProjectRepository.class));
 
         repoSvc.init(7L, "韩泽伟", "hzw@example.com");
 
@@ -90,7 +94,8 @@ class TreeManifestCaptureTest {
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
         ProjectRepoService repoSvc = new ProjectRepoService(props);
         ProjectTreeManifestService svc =
-                new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper());
+                new ProjectTreeManifestService(repo, repoSvc, new ObjectMapper(),
+                        mock(UserRepository.class), mock(ProjectRepository.class));
 
         // init() 落一笔初始版本，此时工作区里还没有 .awd/tree.json
         repoSvc.init(7L, "韩泽伟", "hzw@example.com");

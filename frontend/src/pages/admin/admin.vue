@@ -472,6 +472,76 @@
           </view>
         </scroll-view>
 
+        <!-- 云端协作（仅桌面端：连接团队服务器、管理连接） -->
+        <scroll-view
+          v-else-if="activeNav === 'cloud'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">云端协作</text>
+              <text class="section-subtitle">
+                连接团队服务器后，项目可以共享给同事、多人同步修改
+              </text>
+            </view>
+            <view class="section-body">
+              <view
+                v-for="conn in cloudConnections"
+                :key="conn.id"
+                class="provider-card"
+              >
+                <view class="provider-header cloud-conn-header">
+                  <view class="cloud-conn-info">
+                    <text class="provider-name">{{ conn.serverUrl }}</text>
+                    <text class="cloud-conn-user">{{ conn.displayName || conn.username }}</text>
+                  </view>
+                  <button class="comp-btn danger" @tap="onDisconnectCloud(conn)">断开连接</button>
+                </view>
+              </view>
+
+              <view class="provider-card">
+                <view class="provider-header">
+                  <text class="provider-name">连接新的团队服务器</text>
+                </view>
+                <view class="form-row">
+                  <text class="form-label">服务器地址</text>
+                  <input
+                    v-model="cloudForm.serverUrl"
+                    class="form-input"
+                    placeholder="https://team.example.com"
+                  />
+                </view>
+                <text v-if="cloudServerUrlIsHttp" class="cloud-http-warn">
+                  未加密地址仅建议在律所内网使用
+                </text>
+                <view class="form-row">
+                  <text class="form-label">账号</text>
+                  <input
+                    v-model="cloudForm.username"
+                    class="form-input"
+                    placeholder="登录账号"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">密码</text>
+                  <input
+                    v-model="cloudForm.password"
+                    class="form-input"
+                    placeholder="登录密码"
+                    password
+                  />
+                </view>
+                <view class="cloud-connect-actions">
+                  <button class="btn-primary" :disabled="cloudBusy" @tap="onConnectCloud">
+                    {{ cloudBusy ? '连接中...' : '连接' }}
+                  </button>
+                </view>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
+
         <!-- 用户管理 -->
         <scroll-view
           v-else
@@ -567,7 +637,10 @@
 </template>
 
 <script>
-import { getAdminConfig, saveAdminConfig, getAdminUsers, resetWizard } from '@/services/api.js'
+import {
+  getAdminConfig, saveAdminConfig, getAdminUsers, resetWizard,
+  cloudConnect, listCloudConnections, disconnectCloudConnection,
+} from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 
 export default {
@@ -581,6 +654,7 @@ export default {
         { key: 'config', label: '系统配置' },
         { key: 'ai', label: 'AI 功能设置' },
         { key: 'components', label: '组件管理', desktopOnly: true },
+        { key: 'cloud', label: '云端协作', desktopOnly: true },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
         { key: 'users', label: '用户管理' },
       ],
@@ -628,6 +702,9 @@ export default {
       saving: false,
       usersLoading: false,
       users: [],
+      cloudConnections: [],
+      cloudForm: { serverUrl: '', username: '', password: '' },
+      cloudBusy: false,
     }
   },
   computed: {
@@ -636,6 +713,10 @@ export default {
     },
     visibleNavItems() {
       return this.navItems.filter((n) => !n.desktopOnly || this.isDesktop)
+    },
+    // 未加密地址提醒：仅按前缀判断，不做完整 URL 校验（连接失败自会有报错）。
+    cloudServerUrlIsHttp() {
+      return /^http:\/\//i.test((this.cloudForm.serverUrl || '').trim())
     },
   },
   onLoad() {
@@ -763,6 +844,48 @@ export default {
         return
       }
       this.activeNav = nav.key
+      if (nav.key === 'cloud') {
+        this.loadCloudConnections()
+      }
+    },
+    async loadCloudConnections() {
+      try {
+        const res = await listCloudConnections()
+        this.cloudConnections = (res.data && res.data.connections) || []
+      } catch (e) {
+        this.cloudConnections = []
+      }
+    },
+    async onConnectCloud() {
+      if (!this.cloudForm.serverUrl || !this.cloudForm.username) return
+      this.cloudBusy = true
+      try {
+        await cloudConnect(
+          this.cloudForm.serverUrl.trim(), this.cloudForm.username.trim(),
+          this.cloudForm.password, '桌面端'
+        )
+        this.cloudForm = { serverUrl: '', username: '', password: '' }
+        await this.loadCloudConnections()
+        uni.showToast({ title: '已连接', icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: e.message || '连接失败', icon: 'none' })
+      } finally {
+        this.cloudBusy = false
+      }
+    },
+    async onDisconnectCloud(conn) {
+      const ok = await new Promise((r) => uni.showModal({
+        title: '断开云端连接',
+        content: '断开后本机不再与该服务器同步，已关联项目要重新连接后才能继续上传。',
+        success: (res) => r(res.confirm),
+      }))
+      if (!ok) return
+      try {
+        await disconnectCloudConnection(conn.id)
+        await this.loadCloudConnections()
+      } catch (e) {
+        uni.showToast({ title: e.message || '操作失败', icon: 'none' })
+      }
     },
     async loadConfig() {
       try {
@@ -1644,5 +1767,42 @@ $border-color: #E9ECEF; // Gray-Light
 .comp-btn.danger {
   background: #fef0f0;
   color: #d03050;
+}
+
+/* 云端协作 */
+.cloud-conn-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0;
+}
+
+.cloud-conn-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cloud-conn-user {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.cloud-http-warn {
+  display: block;
+  margin: -8px 0 16px;
+  font-size: 12px;
+  color: #b45309;
+}
+
+.cloud-connect-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

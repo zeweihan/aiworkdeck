@@ -2,6 +2,8 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.repository.ProjectRepository;
+import com.checkba.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.checkba.storage.StorageProperties;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,7 +56,8 @@ class WorkSessionServiceTest {
 
         fileRepo = mock(ProjectFileRepository.class);
         when(fileRepo.findByProjectId(7L)).thenReturn(new ArrayList<>());
-        manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
+        manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper(),
+                mock(UserRepository.class), mock(ProjectRepository.class));
 
         sessions = new HashMap<>();
         nextSessionId = 1L;
@@ -80,7 +83,7 @@ class WorkSessionServiceTest {
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
 
-        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo);
+        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo, event -> {});
         svc.setDebounceMillis(60_000); // 测试里不让防抖自己触发，全部手动 commitNow
     }
 
@@ -382,7 +385,7 @@ class WorkSessionServiceTest {
 
         // 复用同一份会话状态（sessionRepo/manifestSvc 都指向同一个内存 Map 和同一个
         // 磁盘仓库），但改走 spy 过的 repoService，这样才能在 commitAll 内部插入闩门。
-        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, fileRepo);
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, fileRepo, event -> {});
         lockedSvc.setDebounceMillis(60_000);
 
         List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
@@ -553,7 +556,7 @@ class WorkSessionServiceTest {
             return invocation.callRealMethod();
         }).when(spyRepo).gc(anyLong());
 
-        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, fileRepo);
+        WorkSessionService lockedSvc = new WorkSessionService(spyRepo, manifestSvc, sessionRepo, scheduler, fileRepo, event -> {});
         lockedSvc.setDebounceMillis(60_000);
 
         List<Throwable> errors = Collections.synchronizedList(new ArrayList<>());
@@ -661,7 +664,7 @@ class WorkSessionServiceTest {
         ProjectFileRepository throwingFileRepo = mock(ProjectFileRepository.class);
         when(throwingFileRepo.findByProjectId(7L)).thenThrow(new RuntimeException("数据库查询失败"));
         WorkSessionService throwingSvc =
-                new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, throwingFileRepo);
+                new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, throwingFileRepo, event -> {});
         throwingSvc.setDebounceMillis(60_000);
 
         String firstSha = repoSvc.log(7L, "HEAD", 1).get(0).sha();

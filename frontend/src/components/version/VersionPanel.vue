@@ -26,6 +26,12 @@
         @draft-adopted="onReload"
         @draft-abandoned="onReload"
       />
+      <CloudSyncBar
+        :cloud="cloud"
+        :has-connection="hasConnection"
+        @shared="refresh"
+        @reload-files="onReload"
+      />
       <view v-if="fileFilter" class="version-file-filter">
         <text class="version-file-filter-text">只看《{{ fileFilter.name }}》的历史</text>
         <text class="version-file-filter-clear" @tap="$emit('clear-file-filter')">显示全部</text>
@@ -45,9 +51,35 @@
         @compare-file="$emit('compare-file', $event)"
         @draft-created="onReload"
       />
-      <!-- 采纳冲突三选一弹窗：/status 带 adoptConflict 时自动弹出，含崩溃后重开面板的场景。 -->
+      <!-- 三语境冲突弹窗：/status 判定链 sessionEndConflict > cloudConflict > adoptConflict，
+           互斥挂载（后端保证命中前两者中任一个时第三个必为 null，前端按同序取。含崩溃后
+           重开面板的场景。 -->
       <AdoptConflictDialog
-        v-if="adoptConflict"
+        v-if="sessionEndConflict"
+        mode="session-end"
+        :project-id="projectId"
+        :session-id="sessionEndConflict.sessionId"
+        :draft-name="sessionEndConflict.title"
+        :conflicting-paths="sessionEndConflict.conflictingPaths"
+        :mainline-tip="sessionEndConflict.mainlineTip"
+        :draft-tip="sessionEndConflict.sessionTip"
+        @resolved="onReload"
+        @aborted="refresh"
+        @compare-file="$emit('compare-file', $event)"
+      />
+      <AdoptConflictDialog
+        v-else-if="cloudConflict"
+        mode="cloud"
+        :project-id="projectId"
+        :conflicting-paths="cloudConflict.conflictingPaths"
+        :mainline-tip="cloudConflict.mainlineTip"
+        :draft-tip="cloudConflict.cloudTip"
+        @resolved="onReload"
+        @aborted="refresh"
+        @compare-file="$emit('compare-file', $event)"
+      />
+      <AdoptConflictDialog
+        v-else-if="adoptConflict"
         :project-id="projectId"
         :draft-id="adoptConflict.draftId"
         :draft-name="adoptConflict.draftName"
@@ -63,15 +95,19 @@
 </template>
 
 <script>
-import { getVersionStatus, enableVersionControl, listDrafts } from '@/services/api.js'
+import {
+  getVersionStatus, enableVersionControl, listDrafts,
+  getCloudStatus, checkCloud, listCloudConnections,
+} from '@/services/api.js'
 import WorkSessionBar from './WorkSessionBar.vue'
 import VersionTimeline from './VersionTimeline.vue'
 import DraftList from './DraftList.vue'
 import AdoptConflictDialog from './AdoptConflictDialog.vue'
+import CloudSyncBar from './CloudSyncBar.vue'
 
 export default {
   name: 'VersionPanel',
-  components: { WorkSessionBar, VersionTimeline, DraftList, AdoptConflictDialog },
+  components: { WorkSessionBar, VersionTimeline, DraftList, AdoptConflictDialog, CloudSyncBar },
   props: {
     projectId: { type: [String, Number], required: true },
     fileFilter: { type: Object, default: null },
@@ -93,12 +129,21 @@ export default {
       onDraft: null,
       drafts: [],
       adoptConflict: null,
+      cloudConflict: null,
+      sessionEndConflict: null,
+      cloud: null,
+      hasConnection: false,
       timelineKey: 0,
       busy: false,
     }
   },
   mounted() {
     this.refresh()
+    // 静默探活一次云端连通性（会真的 fetch 远端，不同于 refresh() 里 getCloudStatus
+    // 读的本地缓存状态）；失败不打断——三态里的「云端暂时连不上」已经覆盖了这种情况。
+    checkCloud(this.projectId).then((res) => {
+      this.cloud = (res && res.data) || null
+    }).catch(() => {})
   },
   methods: {
     async refresh() {
@@ -111,11 +156,19 @@ export default {
         this.changedCount = d.changedCount || 0
         this.onDraft = d.onDraft || null
         this.adoptConflict = d.adoptConflict || null
-        this.$emit('adopt-conflict', !!this.adoptConflict)
+        this.cloudConflict = d.cloudConflict || null
+        this.sessionEndConflict = d.sessionEndConflict || null
+        this.$emit('adopt-conflict', !!(this.adoptConflict || this.cloudConflict || this.sessionEndConflict))
         this.timelineKey += 1
         this.loadError = false
-        if (this.enabled) await this.fetchDrafts()
-        else this.drafts = []
+        if (this.enabled) {
+          await this.fetchDrafts()
+          await this.fetchCloudState()
+        } else {
+          this.drafts = []
+          this.cloud = null
+          this.hasConnection = false
+        }
       } catch (e) {
         // 读取失败绝不能落到"未开启"引导页——那会让律师误以为从没开过版本记录，
         // 去重复点开启。宁可显示可区分的错误态，保留 enabled 的上一次已知值。
@@ -133,6 +186,26 @@ export default {
       } catch (e) {
         console.warn('[Version] 读取稿列表失败', e)
         this.drafts = []
+      }
+    },
+    // 云端状态条要用的两样东西：linked/pendingUpload/remoteAhead（本地缓存，不联网）
+    // 与「设不设得出共享按钮」。两者互相独立失败，各自吞错误置默认，不拖累 refresh()
+    // 主流程（离线时版本记录本地功能照常可用）。
+    async fetchCloudState() {
+      try {
+        const res = await getCloudStatus(this.projectId)
+        this.cloud = (res && res.data) || null
+      } catch (e) {
+        console.warn('[Version] 读取云端状态失败', e)
+        this.cloud = null
+      }
+      try {
+        const res = await listCloudConnections()
+        const list = (res && res.data && res.data.connections) || []
+        this.hasConnection = list.length > 0
+      } catch (e) {
+        console.warn('[Version] 读取云端连接失败', e)
+        this.hasConnection = false
       }
     },
     // 退回/开稿/切线/采纳/放弃：都可能改变磁盘上打开中的文件，统一走这一条重载链

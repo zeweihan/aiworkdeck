@@ -103,6 +103,13 @@ public class ProjectFile {
     @Column(nullable = false, columnDefinition = "boolean default false")
     private Boolean isDeleted = false;
 
+    /** 跨机器稳定身份（清单 v2）。本机新建行由 capture 回填，克隆行来自云端清单。 */
+    @Column(length = 36)
+    private String uid;
+
+    public String getUid() { return uid; }
+    public void setUid(String uid) { this.uid = uid; }
+
     /**
      * 删除时间
      */

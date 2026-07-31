@@ -18,6 +18,7 @@ public class AuthController {
     private final UserService userService;
     private final ClientInvitationService clientInvitationService;
     private final com.checkba.service.AdminAccessService adminAccessService;
+    private final com.checkba.service.DeviceTokenService deviceTokenService;
 
     // 简单的 session 存储（内存中，实际生产环境应使用 Redis 或 JWT）
     // 并发安全：登录写入与每请求读取/移除高频并发，普通 HashMap 扩容会损坏桶结构
@@ -25,12 +26,20 @@ public class AuthController {
     private static final Map<String, Long> SESSION_STORE = new java.util.concurrent.ConcurrentHashMap<>();
 
     private static UserService staticUserService;
+    private static com.checkba.service.DeviceTokenService staticDeviceTokenService;
+
+    /** DeviceTokenService 构造时反向注册，静态鉴权入口由此识别设备令牌。 */
+    public static void registerDeviceTokenService(com.checkba.service.DeviceTokenService svc) {
+        staticDeviceTokenService = svc;
+    }
 
     public AuthController(UserService userService, ClientInvitationService clientInvitationService,
-                          com.checkba.service.AdminAccessService adminAccessService) {
+                          com.checkba.service.AdminAccessService adminAccessService,
+                          com.checkba.service.DeviceTokenService deviceTokenService) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
+        this.deviceTokenService = deviceTokenService;
         staticUserService = userService;
     }
 
@@ -204,6 +213,11 @@ public class AuthController {
      * 根据 sessionId 获取用户 ID（供其他 Controller 使用）
      */
     public static Long getUserIdFromSession(String sessionId) {
+        if (sessionId == null) return null;
+        if (sessionId.startsWith(com.checkba.service.DeviceTokenService.TOKEN_PREFIX)
+                && staticDeviceTokenService != null) {
+            return staticDeviceTokenService.resolveUserId(sessionId);
+        }
         return SESSION_STORE.get(sessionId);
     }
 
@@ -223,6 +237,55 @@ public class AuthController {
             }
         }
         return null;
+    }
+
+    /** 用账号密码换长期设备令牌（桌面端连接团队服务器用）。明文只在这里出现一次。 */
+    @PostMapping("/device-token")
+    public Map<String, Object> issueDeviceToken(@RequestBody Map<String, String> body) {
+        Map<String, Object> result = new HashMap<>();
+        try {
+            User user = userService.login(body.get("username"), body.get("password"));
+            var issued = deviceTokenService.issue(user.getId(), body.get("name"));
+            result.put("code", 0);
+            result.put("data", Map.of(
+                    "tokenId", issued.id(),
+                    "token", issued.plaintext(),
+                    "userId", user.getId(),
+                    "username", user.getUsername(),
+                    "displayName", user.getDisplayName() == null ? user.getUsername() : user.getDisplayName()));
+        } catch (Exception e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    @GetMapping("/device-tokens")
+    public Map<String, Object> listDeviceTokens(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) return Map.of("code", 1, "message", "未登录");
+        var items = deviceTokenService.listMine(userId).stream()
+                .map(t -> {
+                    Map<String, Object> item = new HashMap<>();
+                    item.put("id", t.getId());
+                    item.put("name", t.getName());
+                    item.put("createdAt", t.getCreatedAt() == null ? null : String.valueOf(t.getCreatedAt()));
+                    item.put("lastUsedAt", t.getLastUsedAt() == null ? null : String.valueOf(t.getLastUsedAt()));
+                    return item;
+                })
+                .toList();
+        return Map.of("code", 0, "data", Map.of("tokens", items));
+    }
+
+    @PostMapping("/device-token/{id}/revoke")
+    public Map<String, Object> revokeDeviceToken(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) return Map.of("code", 1, "message", "未登录");
+        deviceTokenService.revoke(userId, id);
+        return Map.of("code", 0, "message", "已撤销");
     }
 
     static class RegisterRequest {

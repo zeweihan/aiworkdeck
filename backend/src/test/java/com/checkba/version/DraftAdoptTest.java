@@ -2,6 +2,8 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.repository.ProjectRepository;
+import com.checkba.repository.UserRepository;
 import com.checkba.storage.StorageProperties;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
@@ -65,7 +67,8 @@ class DraftAdoptTest {
             db.put(p.getId(), p);
             return p;
         });
-        manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper());
+        manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper(),
+                mock(UserRepository.class), mock(ProjectRepository.class));
 
         sessions = new HashMap<>();
         nextSessionId = 1L;
@@ -94,7 +97,7 @@ class DraftAdoptTest {
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
         scheduler.initialize();
 
-        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo);
+        svc = new WorkSessionService(repoSvc, manifestSvc, sessionRepo, scheduler, fileRepo, event -> {});
         svc.setDebounceMillis(60_000); // 测试里不让防抖自己触发，全部手动落版
     }
 

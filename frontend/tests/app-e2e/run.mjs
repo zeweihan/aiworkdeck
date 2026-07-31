@@ -24,12 +24,72 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
 
 const BASE = process.env.APP_E2E_BASE || 'http://127.0.0.1:5174'
 const BACKEND = process.env.APP_E2E_BACKEND || 'http://127.0.0.1:9696'
 const CHROME = process.env.PUPPETEER_EXECUTABLE_PATH || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
 const OUT = path.join(os.tmpdir(), 'app-e2e-out')
 fs.mkdirSync(OUT, { recursive: true })
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+// ============ J11 基建：起两个额外后端（团队服务器 S / 同事桌面 B） ============
+// 三个隔离旋钮（核验实证，见 ProjectRepoService 构造器与 application-desktop.yml）：
+// SERVER_PORT（Spring relaxed binding）、SPRING_DATASOURCE_URL（desktop profile 默认的
+// H2 带 AUTO_SERVER=TRUE，同路径会附着而非隔离——这里连 AUTO_SERVER 一起去掉，反正一个
+// 文件只有一个 JVM 用）、cwd（storage root-path 默认相对路径 "data"，
+// ProjectRepoService 构造器对 user.dir 做「结尾是 backend 则剥离」的 hack，随便一个不以
+// backend 结尾的 cwd 就能让 data 落在 cwd/data 下，天然与主实例、彼此隔离）。
+// J11_JAR 缺失时整段 J11 在真正跑到时会显式 note('skip', ...)，不静默假绿。
+const J11_JAR = process.env.APP_E2E_JAR // 由跑法提供：ls backend/target/*.jar
+const spawned = []
+// A（长驻真实桌面后端）上建的 CloudConnection id，跑完在 finally 里断开——声明在这个
+// 模块顶层作用域（不是 try 块内部）是必须的，`try { let x } finally { ... x ... }`
+// 里 x 对 finally 不可见（try 与 finally 是兄弟块，不是嵌套块，这条本身在写 :1204
+// 附近的清理逻辑时现场踩过一次 ReferenceError）。
+let aConnectionId = null
+async function spawnBackend(tag, port) {
+  // home 带 ts（本次运行的时间戳，:87 附近的 QA.user 同一个）：OUT 是固定的系统临时目录，
+  // 不带 ts 的话连续两次跑会复用同一份 H2 文件库，第二次跑会撞上第一次跑注册过的
+  // lawyer_a/lawyer_b/b_local 账号名（现场调试实证：第二轮直接「用户名已存在」）。
+  const home = path.join(OUT, 'j11-' + tag + '-' + ts)
+  fs.mkdirSync(path.join(home, 'cwd'), { recursive: true })
+  const child = spawn(process.env.JAVA_HOME + '/bin/java', ['-jar', J11_JAR], {
+    cwd: path.join(home, 'cwd'),
+    env: {
+      ...process.env,
+      SPRING_PROFILES_ACTIVE: 'desktop',
+      SERVER_PORT: String(port),
+      SPRING_DATASOURCE_URL: `jdbc:h2:file:${home}/db;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE`,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  })
+  const logFile = fs.createWriteStream(path.join(home, 'stdout.log'))
+  child.stdout.pipe(logFile); child.stderr.pipe(logFile)
+  spawned.push(child)
+  const base = `http://127.0.0.1:${port}`
+  for (let i = 0; i < 120; i++) { // 最多等 120s
+    try { const r = await fetch(base + '/api/auth/me'); if (r.status === 200) return base }
+    catch (e) { /* 未就绪 */ }
+    await sleep(1000)
+  }
+  throw new Error(`backend ${tag}:${port} 未在 120s 内就绪，日志见 ${home}/stdout.log`)
+}
+// 复刻下方 :41 附近的 api()：base 可变（构造时传入）、sid 独立（每个实例自己的可写
+// 属性），供 J11 里 S（团队服务器）/B（同事桌面）两套裸 REST 身份各自维护登录态、互不干扰。
+function mkApi(base) {
+  const call = async (ep, opts = {}) => {
+    const r = await fetch(base + ep, {
+      method: opts.method || 'GET',
+      headers: { 'Content-Type': 'application/json', ...(call.sid ? { 'X-Session-Id': call.sid } : {}) },
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    })
+    return r.json().catch(() => null)
+  }
+  call.sid = null
+  call.base = base
+  return call
+}
 
 let puppeteer
 try { puppeteer = (await import('puppeteer-core')).default }
@@ -76,7 +136,6 @@ fs.writeFileSync(versionFileC, 'QA 版本记录旅程测试文件（单文件历
 const issues = []
 let stepFails = 0, passed = 0
 const note = (sev, what) => { issues.push({ sev, what }); console.log('  [' + sev + '] ' + what) }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: 'new', args: ['--no-sandbox'], defaultViewport: { width: 1440, height: 900 } })
 try {
@@ -793,10 +852,410 @@ try {
         .some((e) => (e.innerText || '').includes('作废稿')))
     if (hasBogusAdopt) throw new Error('放弃后时间线出现了不该有的采纳节点')
   })
+
+  // ============ J11 云端协作：共享/接入/双向同步/冲突三选一 ============
+  // 拓扑：A = 既有 9696 桌面后端（本文件全程 UI 驱动的那一台），S = 团队服务器
+  // （spawnBackend 9701），B = 同事桌面（spawnBackend 9702）。前端只有一个（连 A）——
+  // B 的所有动作走裸 REST，这是拓扑决定的（没有第二个浏览器/Electron 实例），不是偷懒。
+  // 冲突判定链（v2 终审 I2 后语义）：结束工作 → 后台自动上传被拒 → 后台不自动整合，
+  // 只置待上传（remoteAhead 灯亮）→ 律师在 CloudSyncBar 点「立即上传」→ 前台自动整合
+  // 遇到真实内容冲突 → CONFLICT，这是 CloudSyncService.uploadToCloud 的 mode='cloud'
+  // 语境（标签「用我这边的/用云端的」），不是 endSession 自身的 sessionEndConflict 语境
+  // （那需要本机 git 收到过一次 receive-pack，这里 A/S/B 三个后端物理隔离，走不到那条路）。
+  if (!J11_JAR) {
+    note('skip', 'J11 需要 APP_E2E_JAR（backend/target/*.jar 绝对路径）未提供，已跳过多人协作旅程')
+  } else {
+    console.log('== J11 云端协作 ==')
+    const S = await spawnBackend('server', 9701)
+    const B = await spawnBackend('desktopB', 9702)
+    const sApi = mkApi(S)
+    const bApi = mkApi(B)
+
+    const restOverwriteAt = async (apiFn, projectId, fileName, content) => {
+      const list = await apiFn('/api/projects/' + projectId + '/files')
+      const f = (Array.isArray(list) ? list : []).find((x) => x.name === fileName)
+      if (!f) throw new Error('找不到 ' + fileName + ': ' + JSON.stringify(list).slice(0, 200))
+      // 认 f.id（数据库主键，永远非空），不认 f.wpsFileId——跟 J9/J10 既有的
+      // restOverwrite 不同，这里的文件是清单同步（git clone）落库的，v2 清单只带
+      // uid/relPath，不携带 wpsFileId，走清单同步新建的行 wpsFileId 天然是 null。
+      // 现场调试实证：FileController.uploadFile 原来只认 wpsFileId，缺了数字 id 兜底，
+      // 撞上这类文件会把字节写进跟真文件不相干的孤儿路径且不触发版本信号——已经在
+      // FileController.resolveProjectFileForUpload 里补了跟 downloadFile 同款的双查
+      // 顺序（先按数据库 id 查，查不到再退回 wpsFileId），这里直接用 f.id 是对齐
+      // LibreOfficeEditor.vue 保存时 `f.wpsFileId || f.id` 的同一条兜底路径。
+      const form = new FormData()
+      form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
+      const r = await fetch(apiFn.base + '/api/files/' + f.id + '/upload', {
+        method: 'POST',
+        headers: { 'X-Session-Id': apiFn.sid },
+        body: form,
+      })
+      const j = await r.json()
+      if (!j || j.code !== 0) throw new Error('REST 直传失败: ' + JSON.stringify(j))
+    }
+    const endSessionAt = async (apiFn, projectId, title) => {
+      const r = await apiFn('/api/projects/' + projectId + '/version/session/end', { method: 'POST', body: { title } })
+      if (!r || r.code !== 0) throw new Error('结束工作失败: ' + JSON.stringify(r).slice(0, 200))
+      return r.data
+    }
+    const pollUntil = async (fn, timeoutMs, intervalMs = 1000) => {
+      const start = Date.now()
+      for (;;) {
+        if (await fn()) return true
+        if (Date.now() - start >= timeoutMs) return false
+        await sleep(intervalMs)
+      }
+    }
+
+    const j11Base = path.join(OUT, 'qa-J11协作文件.txt')
+    fs.writeFileSync(j11Base, 'QA J11 云端协作基线文件\n')
+
+    let remoteProjectId = null
+    await step('J11-服务器注册两个账号', async () => {
+      const regA = await sApi('/api/auth/register', { method: 'POST', body: { username: 'lawyer_a', password: 'PwLawyerA123', displayName: '律师甲' } })
+      if (!regA || regA.code !== 0) throw new Error('注册 lawyer_a 失败: ' + JSON.stringify(regA).slice(0, 200))
+      sApi.sid = regA.data.sessionId // 全程以 lawyer_a 身份留在 S 上（加成员/服务器侧断言都用它）
+      const regB = await sApi('/api/auth/register', { method: 'POST', body: { username: 'lawyer_b', password: 'PwLawyerB123', displayName: '律师乙' } })
+      if (!regB || regB.code !== 0) throw new Error('注册 lawyer_b 失败: ' + JSON.stringify(regB).slice(0, 200))
+    })
+
+    await step('A：上传协作文件并结束一段命名工作（云端协作基线）', () =>
+      runWorkSession(j11Base, 'qa-J11协作文件', 'J11 垫底工作'))
+
+    await step('A：设置页连接团队服务器 S（admin cloud 分区表单）', async () => {
+      // admin.vue 的「云端协作」nav item 是 desktopOnly（isDesktop 计算属性认
+      // window.checkbaDesktop.model 是否存在），浏览器目标不是 Electron，天然拿不到。
+      // 注入一个最小桩，只满足 mounted() 里 loadComponents()/onProgress 两处调用不抛异常
+      // （读过 admin.vue :711-743 确认过这两处是唯一用到 window.checkbaDesktop.model 的地方），
+      // 不影响其余断言——J11 是全套旅程最后一段，这个桩留到会话结束也无副作用。
+      // 两个坑都是现场调试实证抓到的，缺一步都进不去：
+      // ① evaluateOnNewDocument 只在「真的产生新 document」时才重放，project-overview
+      //   跳到 admin 走的是 uni-app 的 hash 路由，同一份 document 没重新加载，
+      //   单独注册不会生效；page.evaluate 直接对当前已加载的 document 写 window
+      //   属性能带过去，两处都注入才稳。
+      // ② uni-app 的 H5 页面栈是常驻的——J7 更早已经只读访问过一次 admin 页（那次还
+      //   没有这个桩），isDesktop 是没有响应式依赖的计算属性，那次挂载算出 false 后
+      //   就一直缓存，之后再怎么切 hash 回来都不会重算（单独跑这一步能过，接在 J7
+      //   后面跑就再也不出现「云端协作」）。唯一可靠办法是这里强制来一次真实整页
+      //   reload，把 uni-app 页面栈里那个旧 admin.vue 实例连着一起清空重来——reload
+      //   时 evaluateOnNewDocument 注册的桩会在新文档最早的脚本执行前就位，这次挂载
+      //   从第一次求值起就是 true。
+      const stubDesktop = () => {
+        window.checkbaDesktop = {
+          model: {
+            status: async () => ({ components: [] }),
+            onProgress: () => () => {},
+          },
+        }
+      }
+      await page.evaluateOnNewDocument(stubDesktop)
+      await page.evaluate(stubDesktop)
+      await page.goto(BASE + '/#/pages/admin/admin', { waitUntil: 'networkidle2', timeout: 20000 })
+      await page.reload({ waitUntil: 'networkidle2', timeout: 20000 })
+      await waitText('云端协作')
+      await mouseClickText('云端协作')
+      await waitText('连接新的团队服务器')
+      await page.waitForSelector('.form-input .uni-input-input', { timeout: 8000 })
+      const inputs = await page.$$('.form-input .uni-input-input')
+      if (inputs.length < 3) throw new Error('云端协作表单输入框数量不对: ' + inputs.length)
+      await inputs[0].click({ clickCount: 3 }); await inputs[0].type(S, { delay: 10 })
+      await inputs[1].click({ clickCount: 3 }); await inputs[1].type('lawyer_a', { delay: 10 })
+      await inputs[2].click({ clickCount: 3 }); await inputs[2].type('PwLawyerA123', { delay: 10 })
+      await sleep(300) // 同款 v-model 去抖定居延迟，见本文件其余命名弹窗的注释
+      await mouseClickText('连接')
+      await page.waitForSelector('.cloud-conn-header', { timeout: 15000 })
+      // 记下这次连接的 id，finally 里断开——A 的桌面后端是长驻真实数据（不像 S/B 是
+      // 跑完就扔的临时进程），CloudConnection 不清理会跨多次 e2e 运行累积。这不只是
+      // 测试卫生问题：CloudSyncBar.onShare() 直接拿 listCloudConnections() 的
+      // list[0]，累积的旧连接（服务器早已不在、设备令牌早已失效）一旦排在最前面，
+      // 「共享到云端」就会拿着死令牌去连一个死后端，POST /api/projects 应答里没有
+      // "id"，服务端侧 shareToCloud 对着空结果取 .getLong("id") 直接 NPE——现场调试
+      // 真踩过这个坑（连续跑几轮不清理，第二轮起必现），不是假设性风险。
+      const connList = await api('/api/cloud/connections')
+      const conns = (connList && connList.data && connList.data.connections) || []
+      aConnectionId = conns.length ? conns[conns.length - 1].id : null
+    })
+
+    await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+      { waitUntil: 'networkidle2', timeout: 30000 })
+    await sleep(1500)
+
+    await step('A：共享到云端并取得云端项目 id', async () => {
+      // 先切一次「资源管理器」再切「版本」，不要在整页 goto 落地后只点一次「版本」——
+      // 现场调试实证：goto 回 project-overview 后单点一次「版本」栏目，面板经常整个
+      // 不出现（.version-panel 15s 内都不挂载，非文案没等到，是组件压根没渲染），
+      // 换成先点别的栏目、再切回「版本」就稳定能挂载。跟本文件其余「裸 REST 改动后
+      // 靠切出/切回侧栏挂载点强制重新挂载」是同一条既有纪律（J9/J10 到处这么用），
+      // 这里只是补上「整页 goto 之后第一次开面板」这一种也需要它的场景。
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      // CloudSyncBar 的内容要等 VersionPanel.refresh()→fetchCloudState() 两次串行网络
+      // 请求都落地才出现；这个项目此时已经带着 J9/J10 攒下的一整段真实历史，读取比
+      // 早期空项目慢，mouseClickSel 自带的 700ms 不够稳（现场调试实证：直接
+      // mouseClickText('共享到云端') 偶发「找不到文本」，面板其实还没渲染完）。
+      // 用 .cloud-bar 选择器等面板真挂载（两态都会渲染这个容器）比等具体文案更稳。
+      await page.waitForSelector('.cloud-bar', { timeout: 15000 })
+      await mouseClickText('共享到云端')
+      await page.waitForSelector('.cloud-dot', { timeout: 20000 })
+      const cs = await api('/api/cloud/projects/' + QA.projectId + '/status')
+      if (!cs || !cs.data || !cs.data.linked || !cs.data.remoteProjectId) {
+        throw new Error('共享后本地云端状态不对: ' + JSON.stringify(cs).slice(0, 200))
+      }
+      remoteProjectId = cs.data.remoteProjectId
+    })
+
+    await step('服务器侧：项目已出现、版本记录已开启、文件已同步', async () => {
+      const list = await sApi('/api/projects/my')
+      const proj = (Array.isArray(list) ? list : []).find((p) => String(p.id) === String(remoteProjectId))
+      if (!proj) throw new Error('S 上未见到共享的项目: ' + JSON.stringify(list).slice(0, 200))
+      if (proj.name !== QA.project) throw new Error('S 上项目名不对: ' + proj.name)
+      const st = await sApi('/api/projects/' + remoteProjectId + '/version/status')
+      if (!st || !st.data || !st.data.enabled) throw new Error('S 上版本记录未开启: ' + JSON.stringify(st).slice(0, 200))
+      const files = await sApi('/api/projects/' + remoteProjectId + '/files')
+      const hasBase = (Array.isArray(files) ? files : []).some((f) => f.name === 'qa-J11协作文件.txt')
+      if (!hasBase) throw new Error('S 上未见到基线文件: ' + JSON.stringify(files).slice(0, 200))
+    })
+
+    await step('服务器：lawyer_a 把 lawyer_b 加为项目参与者', async () => {
+      const r = await sApi('/api/projects/' + remoteProjectId + '/members', {
+        method: 'POST', body: { username: 'lawyer_b', role: 'PARTICIPANT' },
+      })
+      if (!r || r.code !== 0) throw new Error('加成员失败: ' + JSON.stringify(r).slice(0, 200))
+    })
+
+    await step('B：自己的后端注册本地账号', async () => {
+      const reg = await bApi('/api/auth/register', { method: 'POST', body: { username: 'b_local', password: 'BLocal123456', displayName: 'B机器人' } })
+      if (!reg || reg.code !== 0) throw new Error('B 本地注册失败: ' + JSON.stringify(reg).slice(0, 200))
+      bApi.sid = reg.data.sessionId
+    })
+
+    let bConnectionId = null
+    await step('B：连接团队服务器 S（裸 REST，lawyer_b 账号）', async () => {
+      const r = await bApi('/api/cloud/connect', { method: 'POST', body: { serverUrl: S, username: 'lawyer_b', password: 'PwLawyerB123', deviceName: '同事的电脑' } })
+      if (!r || r.code !== 0) throw new Error('B 连接云端失败: ' + JSON.stringify(r).slice(0, 200))
+      bConnectionId = r.data.connectionId
+    })
+
+    let bProjectId = null
+    await step('B：列出并接入云端项目', async () => {
+      const remotes = await bApi('/api/cloud/connections/' + bConnectionId + '/remote-projects')
+      const list = (remotes && remotes.data && remotes.data.projects) || []
+      const proj = list.find((p) => p.name === QA.project)
+      if (!proj) throw new Error('B 在远端项目列表里没看到共享的项目: ' + JSON.stringify(list).slice(0, 200))
+      const acc = await bApi('/api/cloud/accept', { method: 'POST', body: { connectionId: bConnectionId, remoteProjectId: proj.id } })
+      if (!acc || acc.code !== 0) throw new Error('B 接入失败: ' + JSON.stringify(acc).slice(0, 200))
+      bProjectId = acc.data.localProjectId
+    })
+
+    await step('B：本地项目出现且文件内容与 A 一致', async () => {
+      const mine = await bApi('/api/projects/my')
+      const hasProj = (Array.isArray(mine) ? mine : []).some((p) => String(p.id) === String(bProjectId))
+      if (!hasProj) throw new Error('B 本地项目列表里没有接入的项目')
+      const filesB = await bApi('/api/projects/' + bProjectId + '/files')
+      const fB = (Array.isArray(filesB) ? filesB : []).find((x) => x.name === 'qa-J11协作文件.txt')
+      if (!fB) throw new Error('B 本地没有基线文件: ' + JSON.stringify(filesB).slice(0, 200))
+      const filesA = await api('/api/projects/' + QA.projectId + '/files')
+      const fA = (Array.isArray(filesA) ? filesA : []).find((x) => x.name === 'qa-J11协作文件.txt')
+      if (!fA) throw new Error('A 本地反而没有基线文件了，不应该发生')
+      // 比字节（/download 原始流），不用 /text（Tika 抽取纯文本）判断内容是否同步
+      // 对了——现场调试实证：uploadOne 走的真实浏览器文件选择上传路径会把 .txt
+      // 转存成 .docx（跟 J11、跟云端同步都无关的既有行为），Tika 抽刚转换出的这类
+      // 文档偶发只剩一个换行；A 自己刚上传完、云端还没介入时 /text 就已经是这样，
+      // 拿它判断"克隆内容对不对"会被这个无关噪音坑（曾经因此误判成 B 没收到文件）。
+      // /download 是原始字节流，不经过 Tika，也是对"clone 到底带没带对内容"更直接
+      // 的证据——两台机器上同一个文件字节完全一致，才真正说明 git clone 没出错。
+      const dlA = await fetch(BACKEND + '/api/files/' + fA.id + '/download', { headers: { 'X-Session-Id': QA.sid } })
+      const dlB = await fetch(B + '/api/files/' + fB.id + '/download', { headers: { 'X-Session-Id': bApi.sid } })
+      if (dlA.status !== 200 || dlB.status !== 200) throw new Error('下载失败: A=' + dlA.status + ' B=' + dlB.status)
+      const bufA = Buffer.from(await dlA.arrayBuffer())
+      const bufB = Buffer.from(await dlB.arrayBuffer())
+      if (!bufA.equals(bufB)) {
+        throw new Error('B 本地文件字节与 A 不一致: A=' + bufA.length + '字节, B=' + bufB.length + '字节')
+      }
+    })
+
+    await step('B：修改协作文件并结束工作（触发后台自动上传）', async () => {
+      await restOverwriteAt(bApi, bProjectId, 'qa-J11协作文件.txt', 'QA J11 来自 B 的第一次修改\n')
+      await endSessionAt(bApi, bProjectId, 'B 第一次修改')
+    })
+
+    await step('轮询 S 的主线前进：出现 B 第一次修改的节点', async () => {
+      const ok = await pollUntil(async () => {
+        const tl = await sApi('/api/projects/' + remoteProjectId + '/version/timeline?limit=30')
+        const versions = (tl && tl.data && tl.data.versions) || []
+        return versions.some((v) => (v.note || v.message || '').includes('B 第一次修改'))
+      }, 40000, 1500)
+      if (!ok) throw new Error('等待超时：S 的时间线始终没有出现 B 第一次修改的节点')
+    })
+
+    await step('A：点击「从云端更新」', async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      // 同上一步的教训：等 .cloud-dot 出现（已关联态才有的选择器）比等 700ms 定式稳，
+      // 面板这时候要重新拉 /status+/drafts+/cloud/status 三串请求才会渲染出这颗按钮。
+      await page.waitForSelector('.cloud-dot', { timeout: 15000 })
+      await mouseClickText('从云端更新')
+      await sleep(2000)
+    })
+
+    await step('A：本地文件内容已同步 B 的修改', async () => {
+      const ok = await pollUntil(async () => {
+        const files = await api('/api/projects/' + QA.projectId + '/files')
+        const f = (Array.isArray(files) ? files : []).find((x) => x.name === 'qa-J11协作文件.txt')
+        if (!f) return false
+        // /text 只认数字 id（见「B：本地项目出现且文件内容与 A 一致」步骤同款注释），
+        // 这里即使 A 自己的文件本来就有 wpsFileId，也一律用 f.id。
+        const text = await api('/api/files/' + f.id + '/text')
+        return !!(text && text.data && text.data.includes('来自 B 的第一次修改'))
+      }, 15000, 1000)
+      if (!ok) throw new Error('从云端更新后 A 本地文件内容仍不是 B 的版本')
+    })
+
+    await step('A：版本时间线出现 B 的工作段节点', async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      await page.waitForFunction(() => {
+        const titles = [...document.querySelectorAll('.timeline-node .node-title')].map((e) => e.innerText || '')
+        return titles.some((t) => t.includes('B 第一次修改'))
+      }, { timeout: 15000 })
+    })
+
+    await step('B：再次修改同一文件并结束工作（推上去，为制造冲突垫底）', async () => {
+      await restOverwriteAt(bApi, bProjectId, 'qa-J11协作文件.txt', 'QA J11 来自 B 的第二次修改（制造冲突用）\n')
+      await endSessionAt(bApi, bProjectId, 'B 第二次修改（制造冲突用）')
+    })
+
+    await step('轮询 S 的主线再次前进：出现 B 第二次修改的节点', async () => {
+      const ok = await pollUntil(async () => {
+        const tl = await sApi('/api/projects/' + remoteProjectId + '/version/timeline?limit=30')
+        const versions = (tl && tl.data && tl.data.versions) || []
+        return versions.some((v) => (v.note || v.message || '').includes('B 第二次修改'))
+      }, 40000, 1500)
+      if (!ok) throw new Error('等待超时：S 的时间线始终没有出现 B 第二次修改的节点')
+    })
+
+    await step('A：本地也修改同一文件（裸 REST 覆盖，制造真实冲突）', () =>
+      restOverwrite('qa-J11协作文件.txt', 'QA J11 来自 A 的本地修改（甲的撞车工作）\n'))
+
+    await step('A：结束这段隐式打开的工作（标题「甲的撞车工作」）', async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      await waitText('工作中')
+      await mouseClickText('结束本次工作')
+      await page.waitForSelector('.awd-dialog .uni-input-input', { timeout: 10000 })
+      const input = await page.$('.awd-dialog .uni-input-input')
+      await input.click(); await input.type('甲的撞车工作', { delay: 15 })
+      await sleep(300)
+      await mouseClickText('完成')
+      await waitText('当前没有进行中的工作')
+    })
+
+    await step('A：结束工作后台上传被拒只亮「待上传」灯（不自动整合）', async () => {
+      // v2 终审 I2：后台路径（结束工作的自动上传）被拒时不做自动整合——后台没有通道
+      // 通知打开中的编辑器重载，后台整合撞冲突还会开出律师不知情的 MERGING 窗口。
+      // 这里断言的正是新语义：灯亮（有改动待上传），但没有冲突弹窗、没有合并窗口。
+      const ok = await pollUntil(async () => {
+        await mouseClickSel('[title="资源管理器"]')
+        await mouseClickSel('[title="版本"]')
+        return page.evaluate(() => document.body.innerText.includes('有改动待上传'))
+      }, 40000, 2000)
+      if (!ok) throw new Error('等待超时：结束工作后云端状态没有进入「有改动待上传」')
+      const dialogOpen = await page.evaluate(() => {
+        const dlg = document.querySelector('.adopt-dialog')
+        return !!dlg && dlg.getClientRects().length > 0
+      })
+      if (dialogOpen) throw new Error('后台上传不该自动整合出冲突弹窗（I2 新语义被破坏）')
+    })
+
+    await step('A：点「立即上传」前台整合撞上云端冲突弹窗且标签正确', async () => {
+      await mouseClickText('立即上传')
+      await page.waitForFunction(() => {
+        const dlg = document.querySelector('.adopt-dialog')
+        if (!dlg || dlg.getClientRects().length === 0) return false
+        const row = dlg.querySelector('.adopt-row-name')
+        return !!row && row.innerText.includes('qa-J11协作文件.txt')
+      }, { timeout: 30000 })
+      const labels = await page.evaluate(() =>
+        [...document.querySelectorAll('.adopt-dialog .radio-label')].map((e) => e.innerText))
+      if (!labels.includes('用我这边的') || !labels.includes('用云端的')) {
+        throw new Error('冲突弹窗标签不对，可能弹的是另一种语境: ' + JSON.stringify(labels))
+      }
+    })
+
+    await step('先点「对比」验证收起条出现', async () => {
+      await mouseClickSel('.adopt-row-compare')
+      await page.waitForFunction(() => !!document.querySelector('.adopt-collapsed-bar'), { timeout: 10000 })
+    })
+
+    await step('切去资源管理器后仍有待处理提示条，点「去处理」能回到裁决现场', async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await page.waitForFunction(() => {
+        const bar = document.querySelector('.adopt-pending-bar')
+        return !!bar && bar.getClientRects().length > 0
+      }, { timeout: 10000 })
+      await mouseClickText('去处理')
+      await page.waitForFunction(() => {
+        const dlg = document.querySelector('.adopt-dialog')
+        return !!dlg && dlg.getClientRects().length > 0
+      }, { timeout: 10000 })
+    })
+
+    await step('选「两份都留」并确认更新', async () => {
+      await mouseClickText('两份都留')
+      await mouseClickText('确认更新')
+      await page.waitForFunction(
+        () => !document.querySelector('.adopt-dialog') && !document.querySelector('.adopt-collapsed-bar'),
+        { timeout: 20000 },
+      )
+    })
+
+    await step('文件树同时出现原文件与「（来自：云端）」副本', async () => {
+      await mouseClickSel('[title="资源管理器"]')
+      await page.waitForFunction(() => {
+        const t = document.querySelector('.file-tree')
+        return !!t
+          && t.innerText.includes('qa-J11协作文件.txt')
+          && t.innerText.includes('qa-J11协作文件（来自：云端）.txt')
+      }, { timeout: 15000 })
+    })
+
+    await step('时间线出现「云端更新」节点', async () => {
+      await mouseClickSel('[title="版本"]')
+      await page.waitForFunction(() => {
+        const titles = [...document.querySelectorAll('.timeline-node .node-title')].map((e) => e.innerText || '')
+        return titles.some((t) => t.includes('云端更新'))
+      }, { timeout: 15000 })
+    })
+
+    await step('S 的主线与 A 一致（裁决已重推）', async () => {
+      const ok = await pollUntil(async () => {
+        const tl = await sApi('/api/projects/' + remoteProjectId + '/version/timeline?limit=30')
+        const versions = (tl && tl.data && tl.data.versions) || []
+        return versions.some((v) => (v.note || v.message || '').includes('云端更新'))
+      }, 20000, 1500)
+      if (!ok) throw new Error('等待超时：S 的时间线没有出现裁决后的「云端更新」节点')
+      const files = await sApi('/api/projects/' + remoteProjectId + '/files')
+      const names = (Array.isArray(files) ? files : []).map((f) => f.name)
+      if (!names.includes('qa-J11协作文件.txt') || !names.includes('qa-J11协作文件（来自：云端）.txt')) {
+        throw new Error('S 上文件列表没有同步裁决结果: ' + JSON.stringify(names))
+      }
+    })
+  }
 } finally {
   await browser.close()
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）
   try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch {}
+  // J11 在 A（长驻真实桌面后端，不像 S/B 是跑完就扔的进程）上建的 CloudConnection 同样
+  // 要清掉——不清理会跨多次运行累积死连接，CloudSyncBar.onShare() 拿 list[0] 时可能
+  // 捞到早就失效的旧连接，下次「共享到云端」直接在服务端炸 NPE（现场调试踩过，见
+  // aConnectionId 赋值处的注释）。aConnectionId 为 null（J11 被跳过或连接步骤没走到）
+  // 时这里是无操作的空转。
+  if (aConnectionId) {
+    try { await api('/api/cloud/connections/' + aConnectionId + '/disconnect', { method: 'POST' }) } catch {}
+  }
+  // J11 起的团队服务器 S / 同事桌面 B 是本次运行专属的长驻进程，跑完必须杀掉；
+  // J11 被跳过（缺 APP_E2E_JAR）时 spawned 是空数组，这里是无操作的空转。
+  spawned.forEach((c) => { try { c.kill('SIGTERM') } catch (e) {} })
 }
 
 // ---------- report ----------

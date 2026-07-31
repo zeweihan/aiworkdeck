@@ -35,6 +35,8 @@ class VersionControllerDraftStatusTest {
     private ProjectMemberService projectMemberService;
     @Mock
     private ProjectFileService projectFileService;
+    @Mock
+    private ProjectTreeManifestService manifestService;
 
     @InjectMocks
     private VersionController controller;

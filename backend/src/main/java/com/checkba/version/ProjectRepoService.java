@@ -679,6 +679,225 @@ public class ProjectRepoService {
         return out;
     }
 
+    // ==================== 远端（v2 云端协作） ====================
+
+    private static final String ORIGIN = "origin";
+    private static final String ORIGIN_MASTER = "refs/remotes/origin/master";
+    private static final String MILESTONE_SPEC =
+            "+refs/tags/awd/milestone/*:refs/tags/awd/milestone/*";
+
+    /** 建/改 origin。幂等：已存在则改 URL。 */
+    public void setRemoteOrigin(long projectId, String url) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            org.eclipse.jgit.transport.URIish uri = new org.eclipse.jgit.transport.URIish(url);
+            if (repo.getConfig().getSubsections("remote").contains(ORIGIN)) {
+                org.eclipse.jgit.api.RemoteSetUrlCommand cmd = git.remoteSetUrl();
+                cmd.setRemoteName(ORIGIN);
+                cmd.setRemoteUri(uri);
+                cmd.call();
+            } else {
+                org.eclipse.jgit.api.RemoteAddCommand cmd = git.remoteAdd();
+                cmd.setName(ORIGIN);
+                cmd.setUri(uri);
+                cmd.call();
+            }
+        } catch (Exception e) {
+            throw new VersionException("配置云端地址失败: project=" + projectId, e);
+        }
+    }
+
+    /** 读 origin URL；未配置返回 null。 */
+    public String remoteOriginUrl(long projectId) {
+        try (Repository repo = open(projectId)) {
+            String url = repo.getConfig().getString("remote", ORIGIN, "url");
+            return (url == null || url.isBlank()) ? null : url;
+        } catch (Exception e) {
+            throw new VersionException("读取云端地址失败: project=" + projectId, e);
+        }
+    }
+
+    /** 抓 master + 里程碑标签；返回抓完后的 origin/master sha（远端空仓返回 null）。 */
+    public String fetchFromOrigin(long projectId, String username, String token) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            git.fetch()
+                    .setRemote(ORIGIN)
+                    .setCredentialsProvider(
+                            new org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider(
+                                    username == null ? "" : username, token == null ? "" : token))
+                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec(
+                            "+refs/heads/master:" + ORIGIN_MASTER),
+                            new org.eclipse.jgit.transport.RefSpec(MILESTONE_SPEC))
+                    .setTimeout(60)
+                    .call();
+            return originMasterSha(projectId);
+        } catch (org.eclipse.jgit.api.errors.TransportException e) {
+            if (isEmptyRemoteFetchFailure(e)) {
+                return null;
+            }
+            throw new VersionException("从云端更新失败: project=" + projectId, e);
+        } catch (Exception e) {
+            throw new VersionException("从云端更新失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 判别「远端裸仓从未有人推过、连 refs/heads/master 都不存在」这一 fetch 失败形态。
+     * JGit 对显式 refspec fetch 空仓库固定抛
+     * "Remote does not have refs/heads/master available for fetch."
+     * （FetchProcess.expandSingle 经 JGitText.remoteDoesNotHaveSpec 生成，消息原样透传到
+     * FetchCommand 包装后的 org.eclipse.jgit.api.errors.TransportException），
+     * 与认证失败、网络不通等其它 TransportException 区分开——只有这一种返回 null，其余仍抛异常。
+     */
+    private boolean isEmptyRemoteFetchFailure(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            String msg = t.getMessage();
+            if (msg != null && msg.contains("does not have") && msg.contains("available for fetch")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 本地已知的 origin/master（不联网）；没有返回 null。 */
+    public String originMasterSha(long projectId) {
+        return resolveRef(projectId, ORIGIN_MASTER);
+    }
+
+    public record PushOutcome(boolean pushed, boolean rejected, String message) {}
+
+    /**
+     * 推 master（非强制——被拒即「主线被别人推进」，走返回值不走异常）
+     * + 里程碑标签（强制——重命名即覆盖是 tagMilestone 的既有语义，随行到云端）。
+     */
+    public PushOutcome pushMainlineToOrigin(long projectId, String username, String token) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            Iterable<org.eclipse.jgit.transport.PushResult> results = git.push()
+                    .setRemote(ORIGIN)
+                    .setCredentialsProvider(
+                            new org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider(
+                                    username == null ? "" : username, token == null ? "" : token))
+                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec(
+                            "refs/heads/master:refs/heads/master"),
+                            new org.eclipse.jgit.transport.RefSpec(MILESTONE_SPEC))
+                    .setTimeout(60)
+                    .call();
+            boolean rejected = false;
+            StringBuilder msg = new StringBuilder();
+            for (org.eclipse.jgit.transport.PushResult r : results) {
+                for (org.eclipse.jgit.transport.RemoteRefUpdate u : r.getRemoteUpdates()) {
+                    switch (u.getStatus()) {
+                        case OK, UP_TO_DATE -> { }
+                        default -> {
+                            rejected = true;
+                            msg.append(u.getRemoteName()).append(':').append(u.getStatus()).append(' ');
+                        }
+                    }
+                }
+            }
+            return new PushOutcome(!rejected, rejected, msg.toString().trim());
+        } catch (Exception e) {
+            throw new VersionException("上传到云端失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 快进 master 到 targetRef（含工作区）——云端更新（Task 9）判定「本地未分叉」后走这条路。
+     * 非快进（历史已分叉）或工作区有冲突一律抛技术档异常：调用方（CloudSyncService）已经
+     * 用 {@code isAncestor} 判过快进条件、且已 dockCurrentLine 保证工作区干净，真出现即
+     * 编程错误，不给 userFacing 粉饰。
+     */
+    public void fastForwardMainline(long projectId, String targetRef) {
+        try (Repository repo = open(projectId); Git git = new Git(repo)) {
+            var target = repo.resolve(targetRef);
+            if (target == null) throw new VersionException("目标版本不存在: " + targetRef);
+            var result = git.merge()
+                    .include(target)
+                    .setFastForward(MergeCommand.FastForwardMode.FF_ONLY)
+                    .call();
+            if (!result.getMergeStatus().isSuccessful()) {
+                throw new VersionException("快进失败: " + result.getMergeStatus());
+            }
+        } catch (VersionException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new VersionException("快进主线失败: project=" + projectId, e);
+        }
+    }
+
+    /** ancestorRef 是否在 descendantRef 的历史里（快进判定/主线被推进判定）。 */
+    public boolean isAncestor(long projectId, String ancestorRef, String descendantRef) {
+        try (Repository repo = open(projectId);
+             org.eclipse.jgit.revwalk.RevWalk walk = new org.eclipse.jgit.revwalk.RevWalk(repo)) {
+            var a = repo.resolve(ancestorRef);
+            var d = repo.resolve(descendantRef);
+            if (a == null || d == null) return false;
+            return walk.isMergedInto(walk.parseCommit(a), walk.parseCommit(d));
+        } catch (Exception e) {
+            throw new VersionException("比较版本先后失败: project=" + projectId, e);
+        }
+    }
+
+    /**
+     * 只建仓不落提交：等着接收共享方的首推。共享方的首推要带完整历史进来，服务端
+     * 先落初始提交会造出两条无关历史（unrelated histories），永远合不上，所以这里
+     * 只建仓、把 HEAD 指到 master，不调用 commit。已初始化则 no-op（幂等）。
+     */
+    public void initEmptyForReceive(long projectId) {
+        if (isInitialized(projectId)) return;
+        try {
+            Files.createDirectories(workTree(projectId));
+            Files.createDirectories(gitDir(projectId).getParent());
+            Repository repo = new FileRepositoryBuilder()
+                    .setGitDir(gitDir(projectId).toFile())
+                    .setWorkTree(workTree(projectId).toFile())
+                    .build();
+            repo.create();
+            org.eclipse.jgit.lib.RefUpdate head = repo.updateRef(Constants.HEAD);
+            head.link("refs/heads/" + MAIN_BRANCH);
+            repo.close();
+        } catch (Exception e) {
+            throw new VersionException("初始化云端仓库失败: project=" + projectId, e);
+        }
+    }
+
+    /** 从云端整仓克隆（gitDir/workTree 分离布局与 init 一致）。 */
+    public void cloneFromRemote(long projectId, String url, String username, String token) {
+        try {
+            Files.createDirectories(workTree(projectId));
+            Git.cloneRepository()
+                    .setURI(url)
+                    .setGitDir(gitDir(projectId).toFile())
+                    .setDirectory(workTree(projectId).toFile())
+                    .setBranch(MAIN_BRANCH)
+                    .setCredentialsProvider(
+                            new org.eclipse.jgit.transport.UsernamePasswordCredentialsProvider(
+                                    username == null ? "" : username, token == null ? "" : token))
+                    .setTimeout(120)
+                    .call()
+                    .close();
+        } catch (Exception e) {
+            throw new VersionException("从云端接入项目失败: project=" + projectId, e);
+        }
+    }
+
+    /** 该版全部文件路径（首推物化用）。 */
+    public List<String> listPaths(long projectId, String ref) {
+        try (Repository repo = open(projectId); RevWalk walk = new RevWalk(repo)) {
+            ObjectId id = repo.resolve(ref);
+            if (id == null) return List.of();
+            RevCommit commit = walk.parseCommit(id);
+            List<String> out = new ArrayList<>();
+            try (TreeWalk tw = new TreeWalk(repo)) {
+                tw.addTree(commit.getTree());
+                tw.setRecursive(true);
+                while (tw.next()) out.add(tw.getPathString());
+            }
+            return out;
+        } catch (Exception e) {
+            throw new VersionException("读取版本文件列表失败: project=" + projectId, e);
+        }
+    }
+
     /**
      * 重打包并清理不可达对象。
      * 只动不可达对象（失败的合并、已丢弃工作段的悬空提交）——

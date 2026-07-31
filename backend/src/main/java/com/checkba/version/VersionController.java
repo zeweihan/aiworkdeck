@@ -29,17 +29,20 @@ public class VersionController {
     private final ProjectMemberService projectMemberService;
     private final UserService userService;
     private final ProjectFileService projectFileService;
+    private final ProjectTreeManifestService manifestService;
 
     public VersionController(ProjectRepoService repoService,
                              WorkSessionService sessionService,
                              ProjectMemberService projectMemberService,
                              UserService userService,
-                             ProjectFileService projectFileService) {
+                             ProjectFileService projectFileService,
+                             ProjectTreeManifestService manifestService) {
         this.repoService = repoService;
         this.sessionService = sessionService;
         this.projectMemberService = projectMemberService;
         this.userService = userService;
         this.projectFileService = projectFileService;
+        this.manifestService = manifestService;
     }
 
     @GetMapping("/status")
@@ -59,13 +62,24 @@ public class VersionController {
             data.put("pendingRecovery", sessionService.pendingRecovery(projectId).isPresent());
             data.put("onDraft", sessionService.activeDraftOnBranch(projectId)
                     .map(this::draftRef).orElse(null));
-            data.put("adoptConflict", adoptConflictStatus(projectId));
+            Map<String, Object> sessionEndConflict = sessionEndConflictStatus(projectId);
+            Map<String, Object> cloudConflict = sessionEndConflict != null
+                    ? null : cloudConflictStatus(projectId);
+            data.put("sessionEndConflict", sessionEndConflict);
+            data.put("cloudConflict", cloudConflict);
+            // 三者都由 MERGE_HEAD 反查，先到先得：sessionEndConflict → cloudConflict →
+            // adoptConflict。命中前两者中任一个时 adoptConflict 必须为 null，防止前端
+            // 同时弹出多种裁决弹窗。
+            data.put("adoptConflict", (sessionEndConflict != null || cloudConflict != null)
+                    ? null : adoptConflictStatus(projectId));
         } else {
             data.put("working", false);
             data.put("changedCount", 0);
             data.put("pendingRecovery", false);
             data.put("onDraft", null);
             data.put("adoptConflict", null);
+            data.put("sessionEndConflict", null);
+            data.put("cloudConflict", null);
         }
         return ok(data);
     }
@@ -97,9 +111,8 @@ public class VersionController {
                 .filter(d -> mergeHeadSha.equals(repoService.resolveRef(projectId, d.getBranchName())))
                 .findFirst()
                 .orElse(null);
-        List<String> conflicts = repoService.conflictingPaths(projectId).stream()
-                .filter(p -> !p.startsWith(".awd/"))
-                .toList();
+        List<String> conflicts = WorkSessionService.userVisibleConflicts(
+                repoService.conflictingPaths(projectId));
         Map<String, Object> m = new HashMap<>();
         m.put("draftId", matched == null ? null : matched.getId());
         m.put("draftName", matched == null ? null : matched.getTitle());
@@ -109,13 +122,110 @@ public class VersionController {
         return m;
     }
 
+    /**
+     * 结束工作撞车（Task 7）的反查：{@code MERGE_HEAD} 指向当前 ACTIVE 工作段自己分支的
+     * tip，即「结束工作撞上被推进的主线」这个窗口——口径同 {@link #adoptConflictStatus}
+     * （都靠 MERGE_HEAD 反查、都不依赖任何应用层状态字段），区别只在于反查目标是工作段
+     * 而不是稿。反查不到（工作段被并发丢弃等异常残局）时返回 null，让调用方回落到
+     * {@code adoptConflictStatus}——但正常路径下不会发生：结束工作撞车时工作段仍是
+     * ACTIVE，不会被别的路径动。
+     *
+     * 不 catch 异常：这条 null 路径只该在「确实没查到结束工作撞车现场」时走，不能借它
+     * 吞掉真正的查询异常。之前这里裹了一层 blanket catch，真在 MERGING 时反查失败会把
+     * sessionEndConflict 悄悄判成 null，/status 转而落到 adoptConflictStatus 的
+     * draftId=null 逃生门——前端把「结束工作撞车」误当成「采纳撞车」，弹出错的裁决弹窗。
+     * 查询失败必须让异常走 {@link #onVersionError} 显式报错，不能静默降级成错误的语境。
+     */
+    private Map<String, Object> sessionEndConflictStatus(long projectId) {
+        if (!repoService.repositoryMerging(projectId)) return null;
+        String mergeHead = repoService.mergeHeadRef(projectId);
+        if (mergeHead == null) return null;
+        var active = sessionService.activeSession(projectId);
+        if (active.isEmpty() || !mergeHead.equals(
+                repoService.resolveRef(projectId, active.get().getBranchName()))) {
+            return null;
+        }
+        return sessionEndConflictData(new WorkSessionService.SessionEndConflict(
+                active.get().getId(), active.get().getTitle(),
+                WorkSessionService.userVisibleConflicts(repoService.conflictingPaths(projectId)),
+                repoService.resolveRef(projectId, "HEAD"), mergeHead));
+    }
+
+    /**
+     * 云端更新冲突态（Task 9）反查：MERGE_HEAD 等于 origin/master 当前 tip、**或是它的
+     * 祖先**（v2 终审 I3：窗口开着期间同事又推了一版、随后本地 fetch 过，origin/master
+     * 前移不该把窗口孤儿化——窗口语境以开窗时刻的 MERGE_HEAD 为准），即为
+     * CloudSyncService.updateFromCloud/uploadToCloud 的自动整合开出的合并冲突窗口。
+     * cloudTip 带回的是 MERGE_HEAD（裁决按开窗时刻的云端 tip 落地，不是 fetch 后的新 tip）。
+     * 口径同 {@link #sessionEndConflictStatus}/{@link #adoptConflictStatus}——都靠
+     * MERGE_HEAD 反查、不依赖任何应用层状态字段，崩溃恢复天然可用。/status 判定链里
+     * 排在 sessionEndConflict 之后、adoptConflict 之前（祖先判定放在活动段 tip 精确相等
+     * 之后，顺序不能颠倒），命中时后者强制 null。
+     */
+    private Map<String, Object> cloudConflictStatus(long projectId) {
+        if (!repoService.repositoryMerging(projectId)) return null;
+        String mergeHead = repoService.mergeHeadRef(projectId);
+        String originSha = repoService.originMasterSha(projectId);
+        if (mergeHead == null || originSha == null) return null;
+        boolean cloudWindow = mergeHead.equals(originSha)
+                || repoService.isAncestor(projectId, mergeHead, "refs/remotes/origin/master");
+        if (!cloudWindow) return null;
+        Map<String, Object> m = new HashMap<>();
+        m.put("conflictingPaths", WorkSessionService.userVisibleConflicts(
+                repoService.conflictingPaths(projectId)));
+        m.put("mainlineTip", repoService.resolveRef(projectId, "HEAD"));
+        m.put("cloudTip", mergeHead);
+        return m;
+    }
+
+    private Map<String, Object> sessionEndConflictData(WorkSessionService.SessionEndConflict c) {
+        Map<String, Object> m = new HashMap<>();
+        m.put("sessionId", c.sessionId());
+        m.put("title", c.title());
+        m.put("conflictingPaths", c.conflictingPaths());
+        m.put("mainlineTip", c.mainlineTip());
+        m.put("sessionTip", c.sessionTip());
+        return m;
+    }
+
     @PostMapping("/enable")
     public ResponseEntity<Map<String, Object>> enable(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         sessionService.enableVersionRecording(projectId, userName(userId), email(userId));
         return ok(Map.of("enabled", true));
+    }
+
+    /**
+     * 让本项目可作为云端仓库：未初始化则建空仓等首推（共享方带完整历史进来）；
+     * 已初始化但清单还是 v1（老项目补开的云端协作）则落一笔升级提交——capture
+     * 出来的清单已经是 v2，任一次提交都会把 HEAD 清单升到 v2。
+     */
+    @PostMapping("/prepare-remote")
+    public ResponseEntity<Map<String, Object>> prepareRemote(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireWriteMember(projectId, sessionId);
+        if (!repoService.isInitialized(projectId)) {
+            repoService.initEmptyForReceive(projectId);
+            return ok(Map.of("prepared", true, "fresh", true));
+        }
+        TreeManifest head = manifestServiceReadHeadSafely(projectId);
+        if (head != null && head.version() < 2) {
+            sessionService.commitNow(projectId, userId, userName(userId), "升级版本记录格式");
+        }
+        return ok(Map.of("prepared", true, "fresh", false));
+    }
+
+    /** readAtRef(HEAD) 的容错包装：异常回 null，不让一次读取失败挡住 prepare-remote 的整体成功。 */
+    private TreeManifest manifestServiceReadHeadSafely(long projectId) {
+        try {
+            return manifestService.readAtRef(projectId, "HEAD");
+        } catch (Exception e) {
+            log.warn("读取云端准备前的清单失败: project={}", projectId, e);
+            return null;
+        }
     }
 
     @GetMapping("/timeline")
@@ -156,22 +266,53 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         String title = body == null ? null : body.get("title");
         WorkSessionService.SessionEndResult r =
                 sessionService.endSession(projectId, userId, userName(userId), title);
         // notice 非空 = 结束成功但没生成版本（空工作段）。仍然是成功（code=0），
         // 前端凭它决定要不要多 toast 一句，不能走异常分支——见 SessionEndResult 注释。
-        return ok(Map.of(
-                "sha", r.sha() == null ? "" : r.sha(),
-                "notice", r.notice() == null ? "" : r.notice()));
+        // conflict 非空 = 主线被同事推进、撞了车，等着三选一（Task 7）——只在这种情况
+        // 下才放进响应，sha/notice 两个都留空字符串（三者互斥，见 SessionEndResult 注释）。
+        Map<String, Object> data = new HashMap<>();
+        data.put("sha", r.sha() == null ? "" : r.sha());
+        data.put("notice", r.notice() == null ? "" : r.notice());
+        if (r.conflict() != null) data.put("conflict", sessionEndConflictData(r.conflict()));
+        return ok(data);
+    }
+
+    @PostMapping("/session/resolve-end")
+    public ResponseEntity<Map<String, Object>> resolveSessionEnd(
+            @PathVariable Long projectId,
+            @RequestBody Map<String, Object> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = requireWriteMember(projectId, sessionId);
+        Object rawSessionId = body.get("sessionId");
+        if (!(rawSessionId instanceof Number)) {
+            throw VersionException.userFacing("无效的请求");
+        }
+        long targetSession = ((Number) rawSessionId).longValue();
+        @SuppressWarnings("unchecked")
+        Map<String, String> raw = (Map<String, String>) body.get("resolutions");
+        WorkSessionService.SessionEndResult r = sessionService.resolveSessionEnd(
+                projectId, targetSession, resolutionsFromRaw(raw), userId, userName(userId));
+        return ok(Map.of("sha", r.sha() == null ? "" : r.sha()));
+    }
+
+    @PostMapping("/session/abort-end")
+    public ResponseEntity<Map<String, Object>> abortSessionEnd(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireWriteMember(projectId, sessionId);
+        String notice = sessionService.abortSessionEnd(projectId);
+        return okWithMessage(Map.of(), notice);
     }
 
     @PostMapping("/session/discard")
     public ResponseEntity<Map<String, Object>> discardSession(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         // affectedFileIds：丢弃改写了磁盘，打开中的编辑器要走同一条重载链（同 revert）。
         List<Long> affectedFileIds = sessionService.discardSession(projectId, userId);
         return ok(Map.of("discarded", true, "affectedFileIds", affectedFileIds));
@@ -181,7 +322,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> resumeSession(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         sessionService.resumeSession(projectId);
         return ok(Map.of("resumed", true));
     }
@@ -228,7 +369,7 @@ public class VersionController {
             @PathVariable Long projectId, @PathVariable String sha,
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         String name = body == null ? null : body.get("name");
         if (name == null || name.isBlank()) {
             throw VersionException.userFacing("请给重要版本起个名字");
@@ -245,7 +386,7 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.RevertResult result = sessionService.revertTo(
                 projectId, body.get("ref"), userId, userName(userId));
         return ok(Map.of(
@@ -260,7 +401,7 @@ public class VersionController {
             @PathVariable Long projectId,
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         String ref = body == null ? null : body.get("ref");
         String name = body == null ? null : body.get("name");
         WorkSessionService.DraftCreateResult result =
@@ -290,7 +431,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> switchToDraft(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.LineSwitchResult result =
                 sessionService.switchToDraft(projectId, draftId, userId, userName(userId));
         return ok(Map.of("affectedFileIds", result.affectedFileIds()));
@@ -300,7 +441,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> switchToMainline(
             @PathVariable Long projectId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.LineSwitchResult result =
                 sessionService.switchToMainline(projectId, userId, userName(userId));
         return ok(Map.of("affectedFileIds", result.affectedFileIds()));
@@ -310,7 +451,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> adoptDraft(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.AdoptOutcome outcome =
                 sessionService.adoptDraft(projectId, draftId, userId, userName(userId));
         return ok(adoptOutcomeData(outcome));
@@ -321,7 +462,7 @@ public class VersionController {
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestBody(required = false) Map<String, Map<String, String>> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         Map<String, WorkSessionService.Resolution> resolutions = parseResolutions(body);
         WorkSessionService.AdoptOutcome outcome =
                 sessionService.resolveAdopt(projectId, draftId, resolutions, userId, userName(userId));
@@ -332,7 +473,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> abortAdopt(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireMember(projectId, sessionId);
+        requireWriteMember(projectId, sessionId);
         sessionService.abortAdopt(projectId);
         return okWithMessage(Map.of("aborted", true), WorkSessionService.ADOPT_ABORTED_NOTICE);
     }
@@ -341,18 +482,24 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> abandonDraft(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = requireMember(projectId, sessionId);
+        Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.LineSwitchResult result =
                 sessionService.abandonDraft(projectId, draftId, userId, userName(userId));
         return ok(Map.of("affectedFileIds", result.affectedFileIds()));
     }
 
+    /** 采纳裁决（{@code /draft/{id}/resolve}）的请求体形状：整个 body 就是 resolutions 的外壳。 */
+    private Map<String, WorkSessionService.Resolution> parseResolutions(Map<String, Map<String, String>> body) {
+        return resolutionsFromRaw(body == null ? null : body.get("resolutions"));
+    }
+
     /**
      * 请求体里的字符串三选一解析成枚举。非法值（枚举名之外的任何字符串，含大小写不符）
      * 一律 userFacing「无效的选择」——不把 IllegalArgumentException 的枚举名列表带给前端。
+     * 采纳裁决与结束工作裁决（Task 7）共用这一份解析逻辑，只是外层 body 的形状不同
+     * （前者整个 body 就是 resolutions，后者 resolutions 是 {sessionId, resolutions} 的一个字段）。
      */
-    private Map<String, WorkSessionService.Resolution> parseResolutions(Map<String, Map<String, String>> body) {
-        Map<String, String> raw = body == null ? null : body.get("resolutions");
+    private Map<String, WorkSessionService.Resolution> resolutionsFromRaw(Map<String, String> raw) {
         if (raw == null || raw.isEmpty()) return Map.of();
         Map<String, WorkSessionService.Resolution> out = new HashMap<>();
         for (Map.Entry<String, String> e : raw.entrySet()) {
@@ -399,6 +546,20 @@ public class VersionController {
         }
         if (projectMemberService.isClient(projectId, userId)) {
             throw new IllegalArgumentException("无权访问该项目");
+        }
+        return userId;
+    }
+
+    /**
+     * 改写仓库状态的端点在 requireMember 之上追加写权限（v2 终审 I4）：READ_ONLY 成员
+     * 能看时间线/对比，但结束工作、退回、采纳、里程碑等都会改写仓库与文件树，必须
+     * hasWritePermission——与 Git 写路径（GitAccessService push 侧）同口径。
+     * 注意参数序 (projectId, userId)，两参数同为 Long，写反了能编译（地雷 #3 同款）。
+     */
+    private Long requireWriteMember(Long projectId, String sessionId) {
+        Long userId = requireMember(projectId, sessionId);
+        if (!projectMemberService.hasWritePermission(projectId, userId)) {
+            throw new IllegalArgumentException("无权修改该项目");
         }
         return userId;
     }

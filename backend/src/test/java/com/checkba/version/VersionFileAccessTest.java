@@ -44,6 +44,31 @@ class VersionFileAccessTest {
         assertThrows(VersionException.class, () -> WorkSessionService.safeRepoPath("合同.docx/"));
     }
 
+    /**
+     * v2 终审 C2：push 内容不可信，restoreWorkTreeFrom 逐路径过这道结构校验——
+     * 与 safeRepoPath 的唯一差别是放行 .awd/ 前缀（清单文件也要能物化），
+     * 校验的是「写进 workTree 是否安全」，不是「是否允许律师访问」。
+     */
+    @Test
+    void isSafeRepoRelativePathAllowsNormalAndAwdPaths() {
+        assertTrue(WorkSessionService.isSafeRepoRelativePath("重要协议/股权转让协议.docx"));
+        assertTrue(WorkSessionService.isSafeRepoRelativePath("合同.txt"));
+        assertTrue(WorkSessionService.isSafeRepoRelativePath(".awd/tree.json"));
+    }
+
+    @Test
+    void isSafeRepoRelativePathRejectsTraversalAbsoluteAndMalformed() {
+        assertFalse(WorkSessionService.isSafeRepoRelativePath("../9/evil.docx"));
+        assertFalse(WorkSessionService.isSafeRepoRelativePath("a/../../b"));
+        assertFalse(WorkSessionService.isSafeRepoRelativePath("a/./b"));
+        assertFalse(WorkSessionService.isSafeRepoRelativePath("/etc/passwd"));
+        assertFalse(WorkSessionService.isSafeRepoRelativePath("a\\b"));
+        assertFalse(WorkSessionService.isSafeRepoRelativePath("a//b"));
+        assertFalse(WorkSessionService.isSafeRepoRelativePath("合同.docx/"));
+        assertFalse(WorkSessionService.isSafeRepoRelativePath("  "));
+        assertFalse(WorkSessionService.isSafeRepoRelativePath(null));
+    }
+
     @Test
     void repoRelativePathStripsProjectPrefix() {
         com.checkba.model.entity.ProjectFile f = new com.checkba.model.entity.ProjectFile();
@@ -87,9 +112,12 @@ class VersionFileAccessTest {
     private UserService userService;
     @Mock
     private ProjectFileService projectFileService;
+    @Mock
+    private ProjectTreeManifestService manifestService;
 
     private VersionController newController() {
-        return new VersionController(repoService, sessionService, projectMemberService, userService, projectFileService);
+        return new VersionController(repoService, sessionService, projectMemberService, userService,
+                projectFileService, manifestService);
     }
 
     private static final long PROJECT_ID = 7L;

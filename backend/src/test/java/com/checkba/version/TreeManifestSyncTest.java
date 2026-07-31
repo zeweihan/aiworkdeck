@@ -2,6 +2,8 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.repository.ProjectRepository;
+import com.checkba.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.checkba.storage.StorageProperties;
 import org.junit.jupiter.api.BeforeEach;
@@ -44,7 +46,8 @@ class TreeManifestSyncTest {
     private TreeManifest.Node n(Long id, Long parentId, String name, boolean folder,
                                 String path, boolean deleted, int sortOrder, Long userId) {
         return new TreeManifest.Node(id, parentId, name, folder,
-                folder ? null : "docx", sortOrder, path, deleted, userId);
+                folder ? null : "docx", sortOrder, path, deleted, userId,
+                null, null, null, null);
     }
 
     @BeforeEach
@@ -64,7 +67,8 @@ class TreeManifestSyncTest {
 
         StorageProperties props = new StorageProperties();
         props.getLocal().setRootPath(root.toAbsolutePath().toString());
-        svc = new ProjectTreeManifestService(repo, new ProjectRepoService(props), new ObjectMapper());
+        svc = new ProjectTreeManifestService(repo, new ProjectRepoService(props), new ObjectMapper(),
+                mock(UserRepository.class), mock(ProjectRepository.class));
     }
 
     @Test
