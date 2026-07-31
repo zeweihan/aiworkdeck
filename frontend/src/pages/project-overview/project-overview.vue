@@ -1289,7 +1289,7 @@
         v-if="adoptConflictPending && leftPaneKey !== 'version'"
         class="adopt-pending-bar"
       >
-        <text class="adopt-pending-text">有一次采纳等待处理</text>
+        <text class="adopt-pending-text">有一次合并等待处理</text>
         <text class="adopt-pending-go" @tap="goHandleAdoptConflict">去处理</text>
       </view>
 
@@ -2401,7 +2401,8 @@ export default {
       if (!this.projectId) return
       try {
         const res = await getVersionStatus(this.projectId)
-        this.adoptConflictPending = !!(res && res.data && res.data.adoptConflict)
+        const d = (res && res.data) || {}
+        this.adoptConflictPending = !!(d.adoptConflict || d.cloudConflict || d.sessionEndConflict)
       } catch (e) {
         console.warn('[Version] 读取采纳状态失败', e)
       }

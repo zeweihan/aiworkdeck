@@ -1794,3 +1794,13 @@ export function abortSessionEnd(projectId) {
   return request({ url: `/api/projects/${projectId}/version/session/abort-end`, method: 'POST' })
 }
 
+// 成员代理：转发到云端项目实际的成员列表/邀请（不是本地项目成员）。
+export function getCloudMembers(projectId) {
+  return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'GET' })
+}
+
+export function addCloudMember(projectId, username, role) {
+  return request({ url: `/api/cloud/projects/${projectId}/members`, method: 'POST',
+    data: { username, role } })
+}
+

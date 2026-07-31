@@ -59,7 +59,10 @@
         <!-- 顶部 Header (Title + Action) -->
         <view class="content-header">
            <text class="header-title">{{ getActiveTabLabel() }}</text>
-           <button v-if="activeTab === 'projects' && projects.length > 0" class="btn-primary-small" @tap="goToNewProject">+ 新建项目</button>
+           <view v-if="activeTab === 'projects' && projects.length > 0" class="header-actions">
+             <button class="btn-secondary-small" @tap="openCloudAccept">从云端接一个项目</button>
+             <button class="btn-primary-small" @tap="goToNewProject">+ 新建项目</button>
+           </view>
         </view>
 
         <!-- Tab 内容区 -->
@@ -89,11 +92,16 @@
               <text class="loading-text">加载中...</text>
             </view>
 
-            <view v-else-if="projects.length === 0" class="empty-state-dashed" @tap="goToNewProject">
-               <view class="dashed-content">
-                  <text class="dashed-icon">+</text>
-                  <text class="dashed-text">新建项目</text>
-               </view>
+            <view v-else-if="projects.length === 0">
+              <view class="empty-state-dashed" @tap="goToNewProject">
+                 <view class="dashed-content">
+                    <text class="dashed-icon">+</text>
+                    <text class="dashed-text">新建项目</text>
+                 </view>
+              </view>
+              <view class="cloud-accept-entry" @tap="openCloudAccept">
+                <text class="cloud-accept-entry-text">从云端接一个项目</text>
+              </view>
             </view>
 
             <view v-else class="project-grid">
@@ -327,6 +335,12 @@
         @success="loadProjects"
         @close="closeInviteModal"
     />
+
+    <!-- 从云端接一个项目 -->
+    <CloudAcceptDialog
+        v-model:visible="showCloudAccept"
+        @accepted="onCloudAccepted"
+    />
   </view>
 </template>
 
@@ -335,6 +349,7 @@ import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurre
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
+import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 import { ICONS } from '@/config/icons.js'
 
 export default {
@@ -346,7 +361,8 @@ export default {
   },
   name: 'UserProfile',
   components: {
-    InviteMemberDialog
+    InviteMemberDialog,
+    CloudAcceptDialog
   },
   data() {
     return {
@@ -374,6 +390,7 @@ export default {
       
       showInviteModal: false,
       currentInviteProjectId: null,
+      showCloudAccept: false,
 
       // Activity Logs
       activityLogs: [],
@@ -800,6 +817,13 @@ export default {
         url: `/pages/project-overview/project-overview?id=${projectId}`,
       })
     },
+    openCloudAccept() {
+      this.showCloudAccept = true
+    },
+    onCloudAccepted(localProjectId) {
+      this.loadProjects()
+      if (localProjectId) this.goToProject(localProjectId)
+    },
     async handleDeleteProject(projectId) {
       uni.showModal({
         title: '确认删除',
@@ -1111,6 +1135,13 @@ $danger-color: #E74C3C;
     flex: 0 0 auto;
 }
 
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+}
+
 .btn-primary-small {
     background: rgba(26, 83, 54, 0.08); /* Soft Green Background */
     color: $brand-primary;
@@ -1121,14 +1152,47 @@ $danger-color: #E74C3C;
     border: 1px solid rgba(26, 83, 54, 0.1);
     cursor: pointer;
     line-height: 1.5;
-    margin-left: 20px;
     transition: all 0.2s;
-    
+
     &:hover {
         background: $brand-primary;
         color: white;
         border-color: $brand-primary;
     }
+}
+
+.btn-secondary-small {
+    background: #fff;
+    color: $text-light;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid $border-color;
+    cursor: pointer;
+    line-height: 1.5;
+    transition: all 0.2s;
+
+    &:hover {
+        border-color: $brand-primary;
+        color: $brand-primary;
+    }
+}
+
+.cloud-accept-entry {
+    margin-top: 16px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.cloud-accept-entry-text {
+    font-size: 13px;
+    color: $text-light;
+    text-decoration: underline;
+}
+
+.cloud-accept-entry:hover .cloud-accept-entry-text {
+    color: $brand-primary;
 }
 
 /* 概览统计 */
