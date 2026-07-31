@@ -422,6 +422,72 @@ public class CloudSyncService {
         return m;
     }
 
+    /**
+     * 联网检查一次云端状态：fetch 最新 origin/master → 回 cloudStatus（remoteAhead 会反映
+     * fetch 后的结果）。云端不可达是正常场景（黄灯态本就允许离线）——绝不抛，只在结果里
+     * 多带一个 offline:true，cloudStatus 原有字段照常给（沿用 fetch 之前已知的状态）。
+     */
+    public Map<String, Object> checkCloud(long projectId) {
+        var remoteOpt = remoteRepository.findByProjectId(projectId);
+        if (remoteOpt.isEmpty()) {
+            return Map.of("linked", false);
+        }
+        ReentrantLock lock = sessionService.repoLock(projectId);
+        lock.lock();
+        try {
+            CloudConnection conn = connectionOf(remoteOpt.get());
+            try {
+                repoService.fetchFromOrigin(projectId, conn.getUsername(), conn.getDeviceToken());
+            } catch (Exception e) {
+                log.warn("云端状态检查 fetch 失败，仅回退为离线态: project={}", projectId, e);
+                Map<String, Object> m = new HashMap<>(cloudStatus(projectId));
+                m.put("offline", true);
+                return m;
+            }
+            return cloudStatus(projectId);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    // ==================== 成员桌面代理（spec 第六节） ====================
+
+    /** 未关联云端时两个代理端点共用的守卫：引导律师先共享。 */
+    private ProjectRemote requireRemoteBinding(long projectId) {
+        return remoteRepository.findByProjectId(projectId)
+                .orElseThrow(() -> VersionException.userFacing("请先共享到云端"));
+    }
+
+    /** 透传服务端 {@code GET /api/projects/{rid}/members}——{id, userId, role, joinedAt, username, displayName, avatarUrl} 原样带回。 */
+    public List<Map<String, Object>> proxyMembers(long projectId) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        JSONObject resp = JSONUtil.parseObj(httpGet(
+                conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members",
+                conn.getDeviceToken()));
+        if (resp.getInt("code", 1) != 0) {
+            throw VersionException.userFacing("获取成员列表失败：" + resp.getStr("message", "请重试"));
+        }
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Object o : resp.getJSONArray("data")) {
+            out.add((JSONObject) o);
+        }
+        return out;
+    }
+
+    /** 透传服务端加成员端点，role 缺省 PARTICIPANT（由调用方决定，这里只透传）。 */
+    public void proxyMembers(long projectId, String username, String role) {
+        ProjectRemote remote = requireRemoteBinding(projectId);
+        CloudConnection conn = connectionOf(remote);
+        String body = JSONUtil.toJsonStr(Map.of("username", username, "role", role));
+        JSONObject resp = JSONUtil.parseObj(httpPost(
+                conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members",
+                body, conn.getDeviceToken()));
+        if (resp.getInt("code", 1) != 0) {
+            throw VersionException.userFacing("添加成员失败：" + resp.getStr("message", "请重试"));
+        }
+    }
+
     /** 结束工作 → 后台自动上传（spec 决策 3）。绝不能让上传异常反向影响已经结束的工作段。 */
     @EventListener
     @Async("taskExecutor")
