@@ -17,8 +17,12 @@ import org.springframework.context.event.EventListener;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -152,34 +156,55 @@ public class CloudSyncService {
                     httpPost(conn.getServerUrl() + "/api/projects", createBody, conn.getDeviceToken()));
             long remoteProjectId = created.getLong("id");
 
-            JSONObject prep = JSONUtil.parseObj(httpPost(
-                    conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
-                    "{}", conn.getDeviceToken()));
-            if (prep.getInt("code", 1) != 0) {
-                throw VersionException.userFacing("共享到云端失败：" + prep.getStr("message", "请重试"));
+            // 服务端项目已经建好：往后任何一步失败都会留下云端孤儿项目，整段包
+            // try/catch 补偿删除（尽力而为，删除失败只 log.warn），再原样重抛。
+            try {
+                JSONObject prep = JSONUtil.parseObj(httpPost(
+                        conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
+                        "{}", conn.getDeviceToken()));
+                if (prep.getInt("code", 1) != 0) {
+                    throw VersionException.userFacing("共享到云端失败：" + prep.getStr("message", "请重试"));
+                }
+
+                repoService.setRemoteOrigin(projectId, conn.getServerUrl() + "/git/" + remoteProjectId + ".git");
+                ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
+                        projectId, conn.getUsername(), conn.getDeviceToken());
+                if (!out.pushed()) {
+                    throw new VersionException("首推云端失败: project=" + projectId + " " + out.message());
+                }
+
+                ProjectRemote remote = new ProjectRemote();
+                remote.setProjectId(projectId);
+                remote.setConnectionId(connectionId);
+                remote.setRemoteProjectId(String.valueOf(remoteProjectId));
+                remote.setPendingUpload(false);
+                remote.setLastSyncSha(repoService.resolveRef(projectId, repoService.mainBranch()));
+                remote.setCreatedAt(LocalDateTime.now());
+                remoteRepository.save(remote);
+
+                Map<String, Object> result = new HashMap<>();
+                result.put("remoteProjectId", remoteProjectId);
+                return result;
+            } catch (RuntimeException e) {
+                deleteRemoteProjectBestEffort(conn, remoteProjectId);
+                throw e;
             }
-
-            repoService.setRemoteOrigin(projectId, conn.getServerUrl() + "/git/" + remoteProjectId + ".git");
-            ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
-                    projectId, conn.getUsername(), conn.getDeviceToken());
-            if (!out.pushed()) {
-                throw new VersionException("首推云端失败: project=" + projectId + " " + out.message());
-            }
-
-            ProjectRemote remote = new ProjectRemote();
-            remote.setProjectId(projectId);
-            remote.setConnectionId(connectionId);
-            remote.setRemoteProjectId(String.valueOf(remoteProjectId));
-            remote.setPendingUpload(false);
-            remote.setLastSyncSha(repoService.resolveRef(projectId, repoService.mainBranch()));
-            remote.setCreatedAt(LocalDateTime.now());
-            remoteRepository.save(remote);
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("remoteProjectId", remoteProjectId);
-            return result;
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** 共享上云半途失败的补偿：尽力删掉刚建好的云端孤儿项目，删除失败只 log.warn，不掩盖原异常。 */
+    private void deleteRemoteProjectBestEffort(CloudConnection conn, long remoteProjectId) {
+        try {
+            JSONObject resp = JSONUtil.parseObj(httpDelete(
+                    conn.getServerUrl() + "/api/projects/" + remoteProjectId, conn.getDeviceToken()));
+            if (resp.getInt("code", 1) != 0) {
+                log.warn("补偿删除云端孤儿项目未成功: remoteProjectId={}, message={}",
+                        remoteProjectId, resp.getStr("message"));
+            }
+        } catch (Exception e) {
+            log.warn("补偿删除云端孤儿项目失败: remoteProjectId={}", remoteProjectId, e);
         }
     }
 
@@ -200,6 +225,7 @@ public class CloudSyncService {
         }
 
         String remoteName = listRemoteProjects(connectionId).stream()
+                .filter(m -> m.get("id") != null)
                 .filter(m -> remoteProjectId == ((Number) m.get("id")).longValue())
                 .map(m -> (String) m.get("name"))
                 .findFirst()
@@ -218,30 +244,63 @@ public class CloudSyncService {
         ReentrantLock lock = sessionService.repoLock(localProjectId);
         lock.lock();
         try {
-            repoService.cloneFromRemote(localProjectId,
-                    conn.getServerUrl() + "/git/" + remoteProjectId + ".git",
-                    conn.getUsername(), conn.getDeviceToken());
+            // 本地 Project 行已经落库：往后任何一步失败都会留下打不开的幽灵项目
+            // （DB 行 + 磁盘目录），整段包 try/catch 补偿清理，再原样重抛。
+            try {
+                repoService.cloneFromRemote(localProjectId,
+                        conn.getServerUrl() + "/git/" + remoteProjectId + ".git",
+                        conn.getUsername(), conn.getDeviceToken());
 
-            TreeManifest manifest = manifestService.readAtRef(localProjectId, "HEAD");
-            if (manifest == null || manifest.version() < 2) {
-                throw VersionException.userFacing("云端项目还是旧版本格式，请在云端更新一次后再接入");
+                TreeManifest manifest = manifestService.readAtRef(localProjectId, "HEAD");
+                if (manifest == null || manifest.version() < 2) {
+                    throw VersionException.userFacing("云端项目还是旧版本格式，请在云端更新一次后再接入");
+                }
+                manifestService.applyToDatabase(localProjectId, manifest);
+
+                ProjectRemote remote = new ProjectRemote();
+                remote.setProjectId(localProjectId);
+                remote.setConnectionId(connectionId);
+                remote.setRemoteProjectId(String.valueOf(remoteProjectId));
+                remote.setPendingUpload(false);
+                remote.setLastSyncSha(repoService.resolveRef(localProjectId, repoService.mainBranch()));
+                remote.setCreatedAt(LocalDateTime.now());
+                remoteRepository.save(remote);
+
+                Map<String, Object> result = new HashMap<>();
+                result.put("localProjectId", localProjectId);
+                return result;
+            } catch (RuntimeException e) {
+                cleanupFailedClone(localProjectId, project);
+                throw e;
             }
-            manifestService.applyToDatabase(localProjectId, manifest);
-
-            ProjectRemote remote = new ProjectRemote();
-            remote.setProjectId(localProjectId);
-            remote.setConnectionId(connectionId);
-            remote.setRemoteProjectId(String.valueOf(remoteProjectId));
-            remote.setPendingUpload(false);
-            remote.setLastSyncSha(repoService.resolveRef(localProjectId, repoService.mainBranch()));
-            remote.setCreatedAt(LocalDateTime.now());
-            remoteRepository.save(remote);
-
-            Map<String, Object> result = new HashMap<>();
-            result.put("localProjectId", localProjectId);
-            return result;
         } finally {
             lock.unlock();
+        }
+    }
+
+    /** 接入失败留下的本地半成品：删本地 Project 行 + 递归删 gitDir/workTree，清理失败只 log.warn，不掩盖原异常。 */
+    private void cleanupFailedClone(long localProjectId, Project project) {
+        try {
+            projectRepository.delete(project);
+        } catch (Exception e) {
+            log.warn("接入失败清理本地项目行失败: project={}", localProjectId, e);
+        }
+        deleteDirectoryQuietly(localProjectId, repoService.gitDir(localProjectId));
+        deleteDirectoryQuietly(localProjectId, repoService.workTree(localProjectId));
+    }
+
+    private void deleteDirectoryQuietly(long projectId, Path dir) {
+        if (!Files.exists(dir)) return;
+        try (var walk = Files.walk(dir)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    Files.delete(p);
+                } catch (IOException e) {
+                    log.warn("接入失败清理目录失败: project={}, path={}", projectId, p, e);
+                }
+            });
+        } catch (Exception e) {
+            log.warn("接入失败清理目录失败: project={}, dir={}", projectId, dir, e);
         }
     }
 
@@ -251,13 +310,22 @@ public class CloudSyncService {
                 .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
         String body = httpGet(conn.getServerUrl() + "/api/projects/my", conn.getDeviceToken());
         List<Map<String, Object>> out = new ArrayList<>();
+        int skipped = 0;
         for (Object o : JSONUtil.parseArray(body)) {
             JSONObject j = (JSONObject) o;
+            Long id = j.getLong("id");
+            if (id == null) {
+                skipped++;
+                continue;
+            }
             Map<String, Object> m = new HashMap<>();
-            m.put("id", j.getLong("id"));
+            m.put("id", id);
             m.put("name", j.getStr("name"));
             m.put("projectType", j.getStr("projectType"));
             out.add(m);
+        }
+        if (skipped > 0) {
+            log.warn("云端项目列表中有 {} 条缺少 id 的脏数据，已跳过: connection={}", skipped, connectionId);
         }
         return out;
     }
@@ -609,6 +677,26 @@ public class CloudSyncService {
     /** 单测覆写此 seam 打桩，形状同 httpPost 的三参版本。sessionToken 非空时带 X-Session-Id 头。 */
     protected String httpGet(String url, String sessionToken) {
         HttpRequest req = HttpRequest.get(url)
+                .setConnectionTimeout(5000)
+                .setReadTimeout(15000);
+        if (sessionToken != null) {
+            req.header("X-Session-Id", sessionToken);
+        }
+        try (HttpResponse resp = req.execute()) {
+            if (resp.getStatus() != 200) {
+                throw new IllegalStateException("云端请求失败 (HTTP " + resp.getStatus() + ")");
+            }
+            return resp.body();
+        } catch (IllegalStateException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("云端不可达: " + e.getMessage(), e);
+        }
+    }
+
+    /** 单测覆写此 seam 打桩，形状同 httpPost 的三参版本。sessionToken 非空时带 X-Session-Id 头。 */
+    protected String httpDelete(String url, String sessionToken) {
+        HttpRequest req = HttpRequest.delete(url)
                 .setConnectionTimeout(5000)
                 .setReadTimeout(15000);
         if (sessionToken != null) {

@@ -55,10 +55,17 @@ class CloudSyncUpdateTest {
     private long nextConnId;
     private Map<Long, ProjectRemote> remotes;
     private long nextRemoteId;
+    private Map<Long, Project> projectDb;
+    private long nextProjectId;
 
     private CloudConnectionRepository cloudConnRepo;
     private ProjectRemoteRepository projectRemoteRepo;
+    private ProjectRepository projectRepo;
     private CloudSyncService cloud;
+
+    /** 审查修复 Important 1/2：cloneFromCloud 打桩用，httpPost/httpGet 缺省仍抛异常（其余用例不需要真实 HTTP）。 */
+    private String cannedHttpPostResponse;
+    private String cannedHttpGetResponse;
 
     @BeforeEach
     void setUp(@TempDir Path tmp) throws Exception {
@@ -90,11 +97,24 @@ class CloudSyncUpdateTest {
         // 清单 v2 归一化里 author 解析不到就回退到项目 owner——测试用 mock 的
         // UserRepository/ProjectRepository 都不认识"同事"这个用户名，靠 owner 兜底
         // 才能让 peer 手工写的 v2 节点新建成功（否则清单缺创建者信息会抛异常）。
-        ProjectRepository projectRepo = mock(ProjectRepository.class);
+        projectRepo = mock(ProjectRepository.class);
         Project owner = new Project();
         owner.setId(7L);
         owner.setUserId(1L);
         when(projectRepo.findById(any())).thenReturn(Optional.of(owner));
+        projectDb = new HashMap<>();
+        nextProjectId = 9000L;
+        when(projectRepo.save(any(Project.class))).thenAnswer(i -> {
+            Project p = i.getArgument(0);
+            if (p.getId() == null) p.setId(nextProjectId++);
+            projectDb.put(p.getId(), p);
+            return p;
+        });
+        doAnswer(i -> {
+            Project p = i.getArgument(0);
+            projectDb.remove(p.getId());
+            return null;
+        }).when(projectRepo).delete(any(Project.class));
         manifestSvc = new ProjectTreeManifestService(fileRepo, repoSvc, new ObjectMapper(),
                 mock(UserRepository.class), projectRepo);
 
@@ -153,7 +173,18 @@ class CloudSyncUpdateTest {
         cloud = new CloudSyncService(repoSvc, svc, manifestSvc, fileRepo, cloudConnRepo, projectRemoteRepo, projectRepo) {
             @Override
             protected String httpPost(String url, String body, String sessionToken) {
-                throw new UnsupportedOperationException("本测试不需要真实 HTTP 调用");
+                if (cannedHttpPostResponse == null) {
+                    throw new UnsupportedOperationException("本测试不需要真实 HTTP 调用");
+                }
+                return cannedHttpPostResponse;
+            }
+
+            @Override
+            protected String httpGet(String url, String sessionToken) {
+                if (cannedHttpGetResponse == null) {
+                    throw new UnsupportedOperationException("本测试不需要真实 HTTP 调用");
+                }
+                return cannedHttpGetResponse;
             }
         };
     }
@@ -409,5 +440,112 @@ class CloudSyncUpdateTest {
         assertTrue(e.isUserFacing());
         assertTrue(repoSvc.repositoryMerging(7L), "别家的合并窗口不能被 abortCloudMerge 销毁");
         assertEquals(mergeHeadBefore, repoSvc.mergeHeadRef(7L));
+    }
+
+    // ---- Task 10 审查修复：cloneFromCloud 幽灵项目 + listRemoteProjects 脏数据 ----
+
+    /**
+     * 建一个「云端」裸仓，服务端 URL 拼成 {@code serverUrl}/git/{remoteProjectId}.git 的形状
+     * 与 cloneFromCloud 内部拼接口径一致（把裸仓摆在 {@code <cloudRoot>/git/<id>.git}，
+     * serverUrl 就是 {@code file://<cloudRoot 绝对路径>}）；httpPost/httpGet 全靠 canned* 字段
+     * 打桩，不碰这个裸仓——prepare-remote 只返回一个 code:0，不做真的服务端升级。
+     */
+    private Path bareCloudRemote(long remoteProjectId, Path cloudRoot) throws Exception {
+        Path bareRepoDir = cloudRoot.resolve("git").resolve(remoteProjectId + ".git");
+        Files.createDirectories(bareRepoDir.getParent());
+        Git.init().setBare(true).setDirectory(bareRepoDir.toFile()).setInitialBranch("master").call().close();
+        return bareRepoDir;
+    }
+
+    /**
+     * 审查修复 Important 1：clone 前置的 prepare-remote/listRemoteProjects 都过关、本地
+     * Project 行也落库了，但 HEAD 清单是 v1（老格式，没有跨机器一致的 uid）——cloneFromCloud
+     * 必须抛 userFacing，同时不能留下打不开的幽灵项目：本地 Project 行、gitDir、workTree
+     * 都要清干净。
+     */
+    @Test
+    void cloneFailureLeavesNoGhostProject() throws Exception {
+        long remoteProjectId = 777L;
+        Path cloudRoot = Files.createTempDirectory("cloud-server-root-v1");
+        Path bareRepoDir = bareCloudRemote(remoteProjectId, cloudRoot);
+
+        Path peerDir = Files.createTempDirectory("cloud-peer-v1");
+        try (Git peer = Git.cloneRepository().setURI(bareRepoDir.toUri().toString())
+                .setDirectory(peerDir.toFile()).call()) {
+            Files.writeString(peerDir.resolve("合同.txt"), "云端初稿");
+            Files.createDirectories(peerDir.resolve(".awd"));
+            var om = new ObjectMapper();
+            Files.writeString(peerDir.resolve(".awd/tree.json"),
+                    om.writerWithDefaultPrettyPrinter().writeValueAsString(new TreeManifest(1, List.of())));
+            peer.add().addFilepattern(".").call();
+            peer.commit().setMessage("初始版本\n\nX-AWD-Kind: session")
+                    .setAuthor("云端", "cloud@example.com").call();
+            peer.push().call();
+        }
+
+        CloudConnection conn = new CloudConnection();
+        conn.setServerUrl("file://" + cloudRoot.toAbsolutePath());
+        conn.setUsername("韩泽伟");
+        conn.setDisplayName("韩泽伟");
+        conn.setDeviceToken("awdt_test");
+        conn.setCreatedAt(LocalDateTime.now());
+        conn = cloudConnRepo.save(conn);
+
+        cannedHttpPostResponse = "{\"code\":0}";
+        cannedHttpGetResponse = "[{\"id\":" + remoteProjectId + ",\"name\":\"旧版云端项目\",\"projectType\":\"BLANK\"}]";
+
+        long localIdBefore = nextProjectId; // 落库前记下将要分配的本地项目 id
+        long connId = conn.getId();
+        VersionException e = assertThrows(VersionException.class,
+                () -> cloud.cloneFromCloud(connId, remoteProjectId, 1L));
+        assertTrue(e.isUserFacing());
+
+        assertTrue(projectDb.isEmpty(), "补偿清理必须删掉半途落库的本地 Project 行");
+        assertFalse(Files.exists(repoSvc.gitDir(localIdBefore)), "补偿清理必须删掉残留的 gitDir");
+        assertFalse(Files.exists(repoSvc.workTree(localIdBefore)), "补偿清理必须删掉残留的 workTree");
+    }
+
+    /**
+     * 审查修复 Important 2：云端项目列表里混进一条缺 id 的脏数据——listRemoteProjects
+     * 不能被这一条崩掉，得跳过它只回正常条目；cloneFromCloud 接的是列表里另一条正常项目，
+     * 不受脏数据影响、照常成功。
+     */
+    @Test
+    void listRemoteProjectsSkipsDirtyEntryAndCloneStillWorks() throws Exception {
+        long remoteProjectId = 555L;
+        Path cloudRoot = Files.createTempDirectory("cloud-server-root-v2");
+        Path bareRepoDir = bareCloudRemote(remoteProjectId, cloudRoot);
+
+        Path peerDir = Files.createTempDirectory("cloud-peer-v2");
+        try (Git peer = Git.cloneRepository().setURI(bareRepoDir.toUri().toString())
+                .setDirectory(peerDir.toFile()).call()) {
+            Files.writeString(peerDir.resolve("合同.txt"), "云端内容");
+            appendPeerManifestNode(peerDir, "合同.txt");
+            peer.add().addFilepattern(".").call();
+            peer.commit().setMessage("初始版本\n\nX-AWD-Kind: session")
+                    .setAuthor("云端", "cloud@example.com").call();
+            peer.push().call();
+        }
+
+        CloudConnection conn = new CloudConnection();
+        conn.setServerUrl("file://" + cloudRoot.toAbsolutePath());
+        conn.setUsername("韩泽伟");
+        conn.setDisplayName("韩泽伟");
+        conn.setDeviceToken("awdt_test");
+        conn.setCreatedAt(LocalDateTime.now());
+        conn = cloudConnRepo.save(conn);
+
+        cannedHttpPostResponse = "{\"code\":0}";
+        cannedHttpGetResponse = "[{\"name\":\"脏数据（缺 id）\",\"projectType\":\"BLANK\"},"
+                + "{\"id\":" + remoteProjectId + ",\"name\":\"客户材料尽调\",\"projectType\":\"BLANK\"}]";
+
+        List<Map<String, Object>> list = cloud.listRemoteProjects(conn.getId());
+        assertEquals(1, list.size(), "缺 id 的脏条目必须被跳过");
+        assertEquals(remoteProjectId, ((Number) list.get(0).get("id")).longValue());
+        assertEquals("客户材料尽调", list.get(0).get("name"));
+
+        Map<String, Object> accepted = cloud.cloneFromCloud(conn.getId(), remoteProjectId, 1L);
+        long localId = ((Number) accepted.get("localProjectId")).longValue();
+        assertEquals("云端内容", Files.readString(repoSvc.workTree(localId).resolve("合同.txt")));
     }
 }
