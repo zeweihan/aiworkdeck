@@ -461,7 +461,13 @@ public class AgentOrchestrator {
         handler.setOnComplete(response -> {
           try {
             // Unconditionally turn off streaming mode when generation ends
+            boolean wasStreaming = editorBridgeService.isStreamingMode(conversationId);
             editorBridgeService.setStreamingMode(conversationId, false);
+            // 通知前端流式写入结束：消费端冲掉缓冲后命令 worker 收尾
+            //（写掉未换行的尾行/未闭合的尾表并复位 markdown 转换状态机）
+            if (wasStreaming) {
+                sseEmitterService.send(conversationId, "doc_stream_end", java.util.Map.of("status", "finished"));
+            }
 
             // 检查是否被取消
             if (isCancelled(conversationId)) {
@@ -773,7 +779,12 @@ public class AgentOrchestrator {
         // 流式出错时的清理：关闭 emitter + 复位状态，避免 SSE 连接挂到超时、前端永久加载
         handler.setOnError(err -> {
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
+            boolean wasStreamingOnError = editorBridgeService.isStreamingMode(conversationId);
             editorBridgeService.setStreamingMode(conversationId, false);
+            // 出错也要让 worker 收尾（否则 markdown 状态机残留半行/半张表），须在 close 之前发
+            if (wasStreamingOnError) {
+                sseEmitterService.send(conversationId, "doc_stream_end", java.util.Map.of("status", "error"));
+            }
             // 保存已生成的部分内容，避免"当时看到了回复、历史里却没有"
             StringBuilder sb = activeStreamContent.get(conversationId);
             String partialContent = sb != null ? sb.toString() : "";

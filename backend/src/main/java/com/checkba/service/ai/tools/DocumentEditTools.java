@@ -205,7 +205,11 @@ public class DocumentEditTools implements AgentToolComponent {
             // 3. 开启流式模式
             editorBridgeService.setStreamingMode(conversationId, true);
 
-            return "文档流式写入模式已激活，文件: " + file.getName() + "。请立即开始生成文档内容。**务必使用 Markdown 格式 (H1=#, H2=##) 输出内容。**";
+            return "文档流式写入模式已激活，文件: " + file.getName() + "。请立即开始生成文档内容。" +
+                    "**务必使用严格的 Markdown 格式输出**（主标题=#、小标题=##/###、表格用 | 语法、列表用 - 或 1.、加粗用 **）。" +
+                    "Markdown 标记不会原样落入文档：编辑器会实时把它转换成律所标准格式" +
+                    "（楷体_GB2312/Arial、主标题 16 号加粗居中、正文 12 号两端对齐、表格 Grid 边框等），" +
+                    "所以不要为了排版手动加空行或符号装饰。";
         } catch (Exception e) {
             log.error("Failed to start doc stream", e);
             return "Error: " + e.getMessage();
@@ -656,20 +660,151 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @Tool("【格式】设置当前选区所在段落的段落格式：对齐方式和/或标题级别。" +
-          "headingLevel: 1-9 设为对应级别标题，0 恢复正文。alignment: left/right/center/justify。")
+    @Tool("【格式】设置当前选区所在段落的段落格式：对齐、标题级别、行距、段前段后间距、缩进。只传需要改的参数。" +
+          "headingLevel: 1-9 设为对应级别标题，0 恢复正文。alignment: left/right/center/justify。" +
+          "行距 lineSpacingMode: single/1.5/double 直接传；proportional 配 lineSpacingValue=百分比（如 120）；" +
+          "atLeast（最小值）/exactly（固定值）配 lineSpacingValue=磅数。" +
+          "缩进：firstLineIndentChars 首行缩进 N 字符（中文文档惯例，如 2）；也可用 firstLineIndentPt/leftIndentPt/rightIndentPt 按磅设。")
     public String doc_set_paragraph_format(
             @P("对齐：left/right/center/justify，不改则不传") String alignment,
-            @P("标题级别：1-9 为标题，0 恢复正文，不改则不传") Integer headingLevel
+            @P("标题级别：1-9 为标题，0 恢复正文，不改则不传") Integer headingLevel,
+            @P("行距模式：single/1.5/double/proportional/atLeast/exactly，不改则不传") String lineSpacingMode,
+            @P("行距值：proportional 时为百分比，atLeast/exactly 时为磅数") Double lineSpacingValue,
+            @P("段前间距（磅），不改则不传") Double spaceBeforePt,
+            @P("段后间距（磅），不改则不传") Double spaceAfterPt,
+            @P("首行缩进（字符数，如 2），不改则不传") Double firstLineIndentChars,
+            @P("左缩进（磅），不改则不传") Double leftIndentPt,
+            @P("右缩进（磅），不改则不传") Double rightIndentPt
     ) {
-        log.info("Tool: doc_set_paragraph_format called alignment={}, headingLevel={}", alignment, headingLevel);
+        log.info("Tool: doc_set_paragraph_format called alignment={}, headingLevel={}, lineSpacing={}/{}", alignment, headingLevel, lineSpacingMode, lineSpacingValue);
         try {
             java.util.Map<String, Object> params = new java.util.HashMap<>();
             if (alignment != null && !alignment.isEmpty()) params.put("alignment", alignment);
             if (headingLevel != null) params.put("headingLevel", headingLevel);
+            if (lineSpacingMode != null && !lineSpacingMode.isEmpty()) params.put("lineSpacingMode", lineSpacingMode);
+            if (lineSpacingValue != null) params.put("lineSpacingValue", lineSpacingValue);
+            if (spaceBeforePt != null) params.put("spaceBeforePt", spaceBeforePt);
+            if (spaceAfterPt != null) params.put("spaceAfterPt", spaceAfterPt);
+            if (firstLineIndentChars != null) params.put("firstLineIndentChars", firstLineIndentChars);
+            if (leftIndentPt != null) params.put("leftIndentPt", leftIndentPt);
+            if (rightIndentPt != null) params.put("rightIndentPt", rightIndentPt);
             return editorBridgeService.executeEditorCommand("set_paragraph_format", params);
         } catch (Exception e) {
             log.error("Failed to set paragraph format", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置编号", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】给当前选区所在段落设置自动编号或项目符号（先选中段落，可跨多段）。" +
+          "preset: bullet(•)/decimal(1. 2. 3.)/chinese(一、二、)/multilevel(多级编号 1. → 1.1 → 1.1.1)/none(去掉编号)。" +
+          "level: 编号层级 1-9，默认 1；multilevel 配合不同 level 形成 1.1、1.1.1 结构。")
+    public String doc_set_numbering(
+            @P("编号类型：bullet/decimal/chinese/multilevel/none") String preset,
+            @P("编号层级 1-9，默认 1") Integer level
+    ) {
+        log.info("Tool: doc_set_numbering called preset={}, level={}", preset, level);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (preset != null && !preset.isEmpty()) params.put("preset", preset);
+            if (level != null) params.put("level", level);
+            return editorBridgeService.executeEditorCommand("set_numbering", params);
+        } catch (Exception e) {
+            log.error("Failed to set numbering", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置表格格式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】设置光标所在表格的格式（先把光标点进表格，或传 tableIndex 指定第 N 张表，0 开始）。" +
+          "applyStandard=true 一键套标准表格式（Grid 实线 1.5 磅边框、10 号字、首行加粗居中、单元格垂直居中、数字居右）。" +
+          "也可单独设：borderWidthPt 边框磅数、fontSizePt 表格字号、firstRowBold 首行加粗、" +
+          "cellVerticalAlign(top/center/bottom) 单元格垂直对齐、columnWidthsPercent 列宽百分比（逗号分隔，如 '20,50,30'，个数=列数）、" +
+          "rowHeightPt 行高磅数（rowHeightRule: min=最小值默认/exact=固定值）。")
+    public String doc_format_table(
+            @P("一键套标准表格式 true/false") Boolean applyStandard,
+            @P("边框线宽（磅，如 1.5），不改则不传") Double borderWidthPt,
+            @P("表格字号（磅），不改则不传") Double fontSizePt,
+            @P("首行加粗 true/false，不改则不传") Boolean firstRowBold,
+            @P("单元格垂直对齐：top/center/bottom，不改则不传") String cellVerticalAlign,
+            @P("列宽百分比，逗号分隔如 '20,50,30'，不改则不传") String columnWidthsPercent,
+            @P("行高（磅），不改则不传") Double rowHeightPt,
+            @P("行高规则：min(最小值,默认)/exact(固定值)") String rowHeightRule,
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex
+    ) {
+        log.info("Tool: doc_format_table called standard={}, border={}, tableIndex={}", applyStandard, borderWidthPt, tableIndex);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (applyStandard != null) params.put("applyStandard", applyStandard);
+            if (borderWidthPt != null) params.put("borderWidthPt", borderWidthPt);
+            if (fontSizePt != null) params.put("fontSizePt", fontSizePt);
+            if (firstRowBold != null) params.put("firstRowBold", firstRowBold);
+            if (cellVerticalAlign != null && !cellVerticalAlign.isEmpty()) params.put("cellVerticalAlign", cellVerticalAlign);
+            if (columnWidthsPercent != null && !columnWidthsPercent.isEmpty()) params.put("columnWidthsPercent", columnWidthsPercent);
+            if (rowHeightPt != null) params.put("rowHeightPt", rowHeightPt);
+            if (rowHeightRule != null && !rowHeightRule.isEmpty()) params.put("rowHeightRule", rowHeightRule);
+            if (tableIndex != null) params.put("tableIndex", tableIndex);
+            return editorBridgeService.executeEditorCommand("format_table", params);
+        } catch (Exception e) {
+            log.error("Failed to format table", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入表格", category = "document", fileEffect = "MODIFIED")
+    @Tool("【插入】在光标处插入一张表格，自动套标准表格式（Grid 1.5 磅边框、10 号字、首行加粗居中、数字居右）。" +
+          "rowsJson 是 JSON 二维数组，如 [[\"项目\",\"金额\"],[\"咨询费\",\"10000\"]]，第一行默认为表头。")
+    public String doc_insert_table(
+            @P("表格内容，JSON 二维字符串数组，第一行为表头") String rowsJson,
+            @P("第一行是否表头，默认 true") Boolean headerRow
+    ) {
+        log.info("Tool: doc_insert_table called, json length={}", rowsJson != null ? rowsJson.length() : 0);
+        if (rowsJson == null || rowsJson.isBlank()) {
+            return "Error: 缺少 rowsJson 参数（JSON 二维数组）";
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            java.util.List<java.util.List<String>> rows = mapper.readValue(
+                    rowsJson, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.List<String>>>() {});
+            if (rows.isEmpty() || rows.get(0).isEmpty()) {
+                return "Error: rowsJson 不能为空表";
+            }
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("rows", rows);
+            params.put("headerRow", headerRow == null || headerRow);
+            return editorBridgeService.executeEditorCommand("insert_table", params);
+        } catch (com.fasterxml.jackson.core.JacksonException je) {
+            return "Error: rowsJson 不是合法的 JSON 二维数组: " + je.getOriginalMessage();
+        } catch (Exception e) {
+            log.error("Failed to insert table", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【看/格式】读取当前光标或选区处的完整格式信息：字体（中西文）、字号、加粗/斜体/下划线/删除线、" +
+          "颜色、高亮、段落样式、对齐、行距、段前段后、缩进、编号状态、所在表格（表名/行列数/单元格）。" +
+          "改格式前先用本工具看清现状。")
+    public String doc_get_formatting() {
+        log.info("Tool: doc_get_formatting called");
+        try {
+            return editorBridgeService.executeEditorCommand("get_formatting", null);
+        } catch (Exception e) {
+            log.error("Failed to get formatting", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "应用标准格式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】对整篇文档应用律所标准格式：正文楷体_GB2312/西文 Arial 12 号黑色、两端对齐、段前 0 段后 18 磅、" +
+          "行距最小值 16 磅、首行缩进 2 字符；首段短文本视为主标题（16 号加粗居中）；标题段整段加粗；" +
+          "表格套 Grid 1.5 磅边框、10 号字、首行加粗居中、数字居右；表格后首段段前 18 磅。" +
+          "用户要求'规范格式/按标准排版'时用本工具，正文中既有的加粗强调不会被抹掉。")
+    public String doc_apply_standard_format() {
+        log.info("Tool: doc_apply_standard_format called");
+        try {
+            return editorBridgeService.executeEditorCommand("apply_house_style", null);
+        } catch (Exception e) {
+            log.error("Failed to apply standard format", e);
             return "Error: " + e.getMessage();
         }
     }

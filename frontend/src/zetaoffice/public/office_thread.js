@@ -362,6 +362,379 @@ function setCharProp(ps, base, value) {
   }
 }
 
+// ---- 标准格式（house style）与 markdown 剥离写入 -----------------------------
+// 用户规范：正文中文楷体_GB2312 / 西文 Arial、段前 0 磅段后 18 磅、行距最小值
+// 16 磅、首行缩进 2 字符、全文两端对齐、黑色；主标题 16 磅加粗居中；其余标题与
+// 正文同款但加粗；表格 Grid 实线 1.5 磅、10 号字、单元格段前后 0.2 行、行距最小
+// 值 12 磅、首行加粗且水平垂直居中、其余行垂直居中水平居左（纯数字居右）；紧跟
+// 表格的第一个段落段前 18 磅。写入文档一律剥离 markdown 标记（#、**、|、- 等），
+// 转成真实格式。引擎是 LO 24.2.8（26.2 才有 MD4C 原生 markdown 导入，搬不动），
+// 所以在 worker 内做行级转换；后端 write_docx 走 flexmark（DocxStyleHelper 对齐
+// 同一套规范），两条生成路径规范一致。
+function ptToMm100(pt) { return Math.round(Number(pt) * 2540 / 72); }
+// UNO 枚举值读回归一化：LO 对部分枚举型属性（ParaAdjust 等）getPropertyValue 返回
+// 裸 short 数字，而 css.* 枚举成员是 embind 枚举对象（带 .value）——恒等比较必须
+// 先归一到数字，否则 set 成功也"读回不等"（e2e 组 14 实锤）。
+function unoEnumVal(v) {
+  if (v != null && typeof v === 'object' && typeof v.value === 'number') return v.value;
+  return v;
+}
+function enumEq(a, b) { return unoEnumVal(a) === unoEnumVal(b); }
+// short 型属性（VertOrient/OutlineLevel 等）必须传带类型的 Any：裸 JS number 会被
+// 编组成 long，严格的 UNO setter（>>= sal_Int16）直接拒绝且被 try 吞掉。
+function shortAny(n) { return new zetajs.Any(zetajs.type.short, Number(n)); }
+const HOUSE = {
+  fontWestern: 'Arial', fontAsian: '楷体_GB2312',
+  bodyPt: 12, titlePt: 16,
+  spaceAfterMm: ptToMm100(18),       // 段后 18 磅
+  lineMinMm: ptToMm100(16),          // 行距最小值 16 磅
+  indentChars: 2,                    // 首行缩进 2 字符（按正文字号折算）
+  tablePt: 10,
+  tableParaSpaceMm: ptToMm100(2.4),  // 单元格段前后 0.2 行 ≈ 2.4 磅
+  tableLineMinMm: ptToMm100(12),     // 单元格行距最小值 12 磅
+  tableBorderMm: 53,                 // 1.5 磅 ≈ 0.53mm（BorderLine2.LineWidth 单位 1/100mm）
+  afterTableBeforeMm: ptToMm100(18), // 表格后首段段前 18 磅
+};
+// 把标准字符属性设到一个 property set（视图光标/文本光标/段落/单元格文本）上。
+// 只动传入 opts 声明的维度；weight 每次都设（run 级粗体开关需要确定性）。
+function applyHouseChar(ps, opts) {
+  const o = opts || {};
+  try { ps.setPropertyValue('CharFontName', HOUSE.fontWestern); } catch (e) {}
+  try { ps.setPropertyValue('CharFontNameAsian', HOUSE.fontAsian); } catch (e) {}
+  try { ps.setPropertyValue('CharFontNameComplex', HOUSE.fontWestern); } catch (e) {}
+  try { setCharProp(ps, 'CharHeight', o.sizePt || HOUSE.bodyPt); } catch (e) {}
+  if (!o.keepWeight) {
+    try { setCharProp(ps, 'CharWeight', o.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL); } catch (e) {}
+  }
+  try { ps.setPropertyValue('CharColor', 0x000000); } catch (e) {}
+}
+// 标准段落属性。kind: 'title' | 'body' | 'heading' | 'list' | 'tableCell'。
+// heading 与 body 同款（规范：小标题与正文一样但加粗），title/list/tableCell 不缩进。
+function applyHousePara(ps, kind, opts) {
+  const o = opts || {};
+  const isTitle = kind === 'title';
+  const isCell = kind === 'tableCell';
+  try { ps.setPropertyValue('ParaAdjust', isTitle ? css.style.ParagraphAdjust.CENTER : css.style.ParagraphAdjust.BLOCK); } catch (e) {}
+  try { ps.setPropertyValue('ParaTopMargin', isCell ? HOUSE.tableParaSpaceMm : (o.afterTable ? HOUSE.afterTableBeforeMm : 0)); } catch (e) {}
+  try { ps.setPropertyValue('ParaBottomMargin', isCell ? HOUSE.tableParaSpaceMm : HOUSE.spaceAfterMm); } catch (e) {}
+  try {
+    ps.setPropertyValue('ParaLineSpacing', new css.style.LineSpacing({
+      Mode: css.style.LineSpacingMode.MINIMUM,
+      Height: isCell ? HOUSE.tableLineMinMm : HOUSE.lineMinMm,
+    }));
+  } catch (e) {}
+  const indent = (isTitle || isCell || kind === 'list') ? 0 : ptToMm100(HOUSE.indentChars * HOUSE.bodyPt);
+  try { ps.setPropertyValue('ParaFirstLineIndent', indent); } catch (e) {}
+  if (!isCell) {
+    try { ps.setPropertyValue('ParaLeftMargin', 0); ps.setPropertyValue('ParaRightMargin', 0); } catch (e) {}
+  }
+}
+// markdown 行内标记 → 带样式 run 列表：**粗体**、*斜体*、`代码`（剥壳）、[文字](url)。
+// 下划线变体（_、__）在法律文本里误伤率高，故意不识别。
+const INLINE_MD_RE = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\))/g;
+function parseInlineRuns(s) {
+  const runs = [];
+  const parts = String(s).split(INLINE_MD_RE);
+  for (let i = 0; i < parts.length; i++) {
+    const t = parts[i];
+    if (!t) continue;
+    let m;
+    if ((m = t.match(/^\*\*([^*\n]+)\*\*$/))) runs.push({ text: m[1], bold: true });
+    else if ((m = t.match(/^\*([^*\n]+)\*$/))) runs.push({ text: m[1], italic: true });
+    else if ((m = t.match(/^`([^`\n]+)`$/))) runs.push({ text: m[1] });
+    else if ((m = t.match(/^\[([^\]\n]+)\]\(([^)\s]+)\)$/))) runs.push({ text: m[1], url: m[2] });
+    else runs.push({ text: t });
+  }
+  return runs;
+}
+function stripInlineMd(s) {
+  return parseInlineRuns(s).map(function (r) { return r.text; }).join('');
+}
+// 在视图光标处写入一串带样式 run（打字模型：用临时文本光标 bAbsorb 插入后对
+// 选中区间设属性，确定性优于依赖 automatic char props）。
+function writeStyledRuns(vc, runs, kindOpts) {
+  const xText = vc.getText();
+  const o = kindOpts || {};
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i];
+    if (!run.text) continue;
+    const cur = xText.createTextCursorByRange(vc.getEnd());
+    xText.insertString(cur, run.text, true); // bAbsorb: cur 跨住刚插入的文本
+    applyHouseChar(cur, { sizePt: o.sizePt, bold: o.bold || !!run.bold });
+    try { setCharProp(cur, 'CharPosture', run.italic ? css.awt.FontSlant.ITALIC : css.awt.FontSlant.NONE); } catch (e) {}
+    if (run.url) { try { cur.setPropertyValue('HyperLinkURL', run.url); } catch (e) {} }
+    try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
+  }
+}
+// 行内模式插入：剥离 markdown 标记（行首 #/>、行内 **/*/`/链接），粗体斜体转成
+// 真格式，但**不动**字体/字号/颜色——往已有文档里插内容要沿用现场格式，不能把
+// house 字体强加进人家的文档。多行按段落分隔符处理。
+function writeInlineRuns(vc, runs) {
+  const xText = vc.getText();
+  for (let i = 0; i < runs.length; i++) {
+    const run = runs[i];
+    if (!run.text) continue;
+    const cur = xText.createTextCursorByRange(vc.getEnd());
+    xText.insertString(cur, run.text, true);
+    if (run.bold) { try { setCharProp(cur, 'CharWeight', css.awt.FontWeight.BOLD); } catch (e) {} }
+    if (run.italic) { try { setCharProp(cur, 'CharPosture', css.awt.FontSlant.ITALIC); } catch (e) {} }
+    if (run.url) { try { cur.setPropertyValue('HyperLinkURL', run.url); } catch (e) {} }
+    try { vc.gotoRange(cur.getEnd(), false); } catch (e) {}
+  }
+}
+function insertInlineStyled(vc, text) {
+  const xText = vc.getText();
+  const lines = String(text).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (i > 0) xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+    const isHeading = /^\s*#{1,6}\s+/.test(lines[i]);
+    const line = lines[i].replace(/^\s*#{1,6}\s+/, '').replace(/^\s*>\s?/, '');
+    if (!line) continue;
+    const runs = parseInlineRuns(line);
+    // 原 # 标题行降级为"整行加粗"（规范：小标题与正文一样但加粗）
+    if (isHeading) for (let k = 0; k < runs.length; k++) runs[k].bold = true;
+    writeInlineRuns(vc, runs);
+  }
+}
+// 文本里是否带 markdown 标记（插入路径按此决定走剥离转换还是原样插入）
+const MD_MARKER_RE = /(\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|^\s*#{1,6}\s|^\s*>\s)/m;
+
+// 编号规则预设。preset: 'bullet' | 'decimal' | 'chinese' | 'multilevel'。
+// replaceByIndex 收 sequence<PropertyValue>（zetajs 编组：纯 Array of PropertyValue）。
+function makeNumberingRules(preset) {
+  // 常量组带数值兜底：zetajs 常量组个别项缺失时 undefined 进 PropertyValue 会编组失败
+  const NT = css.style.NumberingType || {};
+  const ARABIC = NT.ARABIC != null ? NT.ARABIC : 4;
+  const CHAR_SPECIAL = NT.CHAR_SPECIAL != null ? NT.CHAR_SPECIAL : 6;
+  const NUMBER_LOWER_ZH = NT.NUMBER_LOWER_ZH != null ? NT.NUMBER_LOWER_ZH : 15;
+  const rules = xModel.createInstance('com.sun.star.text.NumberingRules');
+  const count = Math.min(rules.getCount(), 9);
+  for (let lvl = 0; lvl < count; lvl++) {
+    const props = [];
+    if (preset === 'bullet') {
+      props.push(mkProp('NumberingType', CHAR_SPECIAL));
+      props.push(mkProp('BulletChar', '•'));
+    } else if (preset === 'chinese') {
+      props.push(mkProp('NumberingType', NUMBER_LOWER_ZH));
+      props.push(mkProp('Suffix', '、')); // 一、二、
+    } else if (preset === 'multilevel') {
+      props.push(mkProp('NumberingType', ARABIC));
+      props.push(mkProp('Suffix', '.'));
+      if (lvl > 0) props.push(mkProp('ParentNumbering', lvl + 1)); // 1.1 / 1.1.1
+    } else { // decimal
+      props.push(mkProp('NumberingType', ARABIC));
+      props.push(mkProp('Suffix', '.'));
+    }
+    props.push(mkProp('LeftMargin', ptToMm100(18) * (lvl + 1)));
+    props.push(mkProp('FirstLineOffset', -ptToMm100(18)));
+    rules.replaceByIndex(lvl, props);
+  }
+  return rules;
+}
+// 定位光标/选区所在表格（或按 tableIndex 取第 N 张）。不在表格内返回 null。
+function currentTextTable(p) {
+  if (p && p.tableIndex != null) {
+    const ts = xModel.getTextTables();
+    const i = Number(p.tableIndex);
+    if (i >= 0 && i < ts.getCount()) return ts.getByIndex(i);
+    return null;
+  }
+  try {
+    const t = ctrl.getViewCursor().getPropertyValue('TextTable');
+    if (t) return t;
+  } catch (e) {}
+  return null;
+}
+// 单元格名工具（A1..Z9、AA1..）：markdown 表格列数很小，两位字母够用。
+function cellName(col, row) {
+  let name = '';
+  if (col >= 26) { name += String.fromCharCode(65 + Math.floor(col / 26) - 1); col = col % 26; }
+  name += String.fromCharCode(65 + col);
+  return name + (row + 1);
+}
+const NUMERIC_CELL_RE = /^[-+（(]?[\d][\d,.，%．]*[%）)]?$/;
+// 给一张表设标准边框（Grid 实线，全部内外框线同宽）。widthMm 单位 1/100mm。
+function applyTableBorders(table, widthMm, color) {
+  const solid = (css.table.BorderLineStyle && css.table.BorderLineStyle.SOLID != null)
+    ? css.table.BorderLineStyle.SOLID : 0;
+  const bl = new css.table.BorderLine2({
+    Color: color == null ? 0x000000 : color,
+    InnerLineWidth: 0, OuterLineWidth: 0, LineDistance: 0,
+    LineStyle: solid,
+    LineWidth: widthMm,
+  });
+  const tb = new css.table.TableBorder2({
+    TopLine: bl, BottomLine: bl, LeftLine: bl, RightLine: bl,
+    HorizontalLine: bl, VerticalLine: bl,
+    IsTopLineValid: true, IsBottomLineValid: true, IsLeftLineValid: true,
+    IsRightLineValid: true, IsHorizontalLineValid: true, IsVerticalLineValid: true,
+    Distance: 0, IsDistanceValid: false,
+  });
+  table.setPropertyValue('TableBorder2', tb);
+}
+// 按标准格式刷一张已存在的表：字号/段距/行距/垂直居中/首行加粗居中/数字居右/边框。
+// keepWeight: 非首行不动原有粗体（apply_house_style 走这里，避免抹掉当事人加粗）。
+function styleTableStandard(table, opts) {
+  const o = opts || {};
+  const headerRows = o.headerRows != null ? o.headerRows : 1;
+  try { applyTableBorders(table, HOUSE.tableBorderMm, 0x000000); } catch (e) { log('表格边框设置失败 / borders: ' + errStr(e)); }
+  const names = table.getCellNames();
+  for (let i = 0; i < names.length; i++) {
+    const cell = table.getCellByName(names[i]);
+    const rowIdx = parseInt(String(names[i]).replace(/^[A-Z]+/, ''), 10) - 1;
+    const isHeader = rowIdx < headerRows;
+    try { cell.setPropertyValue('VertOrient', shortAny(css.text.VertOrientation.CENTER)); } catch (e) {}
+    try {
+      const ct = cell.createTextCursor();
+      ct.gotoStart(false);
+      ct.gotoEnd(true);
+      applyHousePara(ct, 'tableCell');
+      applyHouseChar(ct, { sizePt: HOUSE.tablePt, bold: isHeader, keepWeight: !isHeader && o.keepWeight });
+      const text = (cell.getString() || '').trim();
+      const adjust = isHeader ? css.style.ParagraphAdjust.CENTER
+        : (NUMERIC_CELL_RE.test(text) ? css.style.ParagraphAdjust.RIGHT : css.style.ParagraphAdjust.LEFT);
+      ct.setPropertyValue('ParaAdjust', adjust);
+    } catch (e) {}
+  }
+}
+// 在视图光标处插入一张按标准格式排好的表。rows: string[][]。返回表对象。
+function insertStyledTable(rows, headerRows) {
+  const nRows = rows.length;
+  let nCols = 1;
+  for (let i = 0; i < nRows; i++) nCols = Math.max(nCols, rows[i].length);
+  const vc = ctrl.getViewCursor();
+  vc.collapseToEnd();
+  const table = xModel.createInstance('com.sun.star.text.TextTable');
+  table.initialize(nRows, nCols);
+  vc.getText().insertTextContent(vc, table, false);
+  for (let r = 0; r < nRows; r++) {
+    for (let c = 0; c < nCols; c++) {
+      const raw = rows[r][c] != null ? String(rows[r][c]) : '';
+      try { table.getCellByName(cellName(c, r)).setString(stripInlineMd(raw)); } catch (e) {}
+    }
+  }
+  styleTableStandard(table, { headerRows: headerRows });
+  // 光标移到表后第一个段落。不能用 table.getAnchor().getEnd()——真机实证它落进
+  // A1 单元格，后续段落全写进表格里（e2e 组 15 抓到的 bug）。改为按表名在正文
+  // 枚举里找到该表，跳到它后面的第一个段落（在光标所在空段插表时 Writer 会把
+  // 该空段留在表后，所以段落必然存在）。
+  cursorToParagraphAfterTable(table);
+  return table;
+}
+function cursorToParagraphAfterTable(table) {
+  let name = '';
+  try { name = table.getName(); } catch (e) {}
+  const vc = ctrl.getViewCursor();
+  let found = false, placed = false;
+  try {
+    const en = xModel.getText().createEnumeration();
+    while (en.hasMoreElements()) {
+      const el = en.nextElement();
+      if (found && el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
+        vc.gotoRange(el.getStart(), false);
+        placed = true;
+        break;
+      }
+      if (!found && el.supportsService && el.supportsService('com.sun.star.text.TextTable')) {
+        try { if (el.getName() === name) found = true; } catch (e) {}
+      }
+    }
+  } catch (e) {}
+  if (!placed) { try { vc.gotoEnd(false); } catch (e) {} }
+}
+
+// ---- 流式写入状态机：markdown 行级解析 → 标准格式落字 ------------------------
+// stream_insert 攒字节、按完整行消费；stream_flush 收尾（写掉尾行/尾表、复位）。
+// 状态在 worker 内（宿主只透传 token），文档换人/换流由宿主在 open_sync 时
+// stream_flush({discard:true}) 硬复位。
+const STREAM = { active: false, buf: '', table: null, afterTable: false, allowTitle: false, wroteTitle: false, listRules: null, listPreset: null };
+function streamReset(discard) {
+  STREAM.active = false; STREAM.buf = ''; STREAM.table = null; STREAM.afterTable = false;
+  STREAM.allowTitle = false; STREAM.wroteTitle = false; STREAM.listRules = null; STREAM.listPreset = null;
+  if (!discard) { /* 占位：正常收尾无额外动作 */ }
+}
+function streamEnsureActive() {
+  if (STREAM.active) return;
+  streamReset(true);
+  STREAM.active = true;
+  // 文档近乎空白才允许把第一个 # 当主标题；往已有文档续写时所有标题一律小标题样式
+  let len = 0;
+  try { len = (xModel.getText().getString() || '').trim().length; } catch (e) {}
+  STREAM.allowTitle = len < 5;
+}
+function streamTableFlush() {
+  const t = STREAM.table;
+  STREAM.table = null;
+  if (!t || !t.rows.length) return;
+  try { insertStyledTable(t.rows, t.sawSep ? 1 : 0); STREAM.afterTable = true; }
+  catch (e) { log('流式建表失败 / stream table: ' + errStr(e)); }
+}
+function streamParagraph(runs, kind, headingLevel) {
+  const vc = ctrl.getViewCursor();
+  vc.collapseToEnd();
+  const xText = vc.getText();
+  applyHousePara(vc, kind, { afterTable: STREAM.afterTable });
+  STREAM.afterTable = false;
+  if (headingLevel != null) { try { vc.setPropertyValue('OutlineLevel', shortAny(headingLevel)); } catch (e) {} }
+  const sizePt = kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt;
+  writeStyledRuns(vc, runs, { sizePt: sizePt, bold: kind === 'title' || kind === 'heading' });
+  xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+  vc.collapseToEnd();
+  return vc;
+}
+function streamListItem(text, ordered, level) {
+  const preset = ordered ? 'decimal' : 'bullet';
+  if (!STREAM.listRules || STREAM.listPreset !== preset) {
+    try { STREAM.listRules = makeNumberingRules(preset); STREAM.listPreset = preset; }
+    catch (e) { STREAM.listRules = null; STREAM.listPreset = null; }
+  }
+  const vc = streamParagraph(parseInlineRuns(text), 'list', null);
+  // 段落分隔符已插入，编号属性要落在"刚写完的那一段"——退回一段再设
+  if (STREAM.listRules) {
+    try {
+      const cur = vc.getText().createTextCursorByRange(vc.getStart());
+      cur.gotoPreviousParagraph(false);
+      cur.setPropertyValue('NumberingRules', STREAM.listRules);
+      cur.setPropertyValue('NumberingLevel', Math.max(0, Math.min(Number(level) || 0, 8)));
+    } catch (e) {}
+  }
+}
+function streamWriteLine(line) {
+  const isTableRow = /^\s*\|.*\|\s*$/.test(line);
+  if (isTableRow) {
+    if (!STREAM.table) STREAM.table = { rows: [], sawSep: false };
+    const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (s) { return s.trim(); });
+    const isSep = cells.length > 0 && cells.every(function (c) { return /^:?-+:?$/.test(c); });
+    if (isSep) STREAM.table.sawSep = true;
+    else STREAM.table.rows.push(cells);
+    return;
+  }
+  if (STREAM.table) streamTableFlush();
+  const trimmed = line.trim();
+  if (!trimmed) { STREAM.listRules = null; STREAM.listPreset = null; return; } // 规范：没有额外空行
+  if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) return; // 水平分隔线丢弃
+  let m;
+  if ((m = trimmed.match(/^(#{1,6})\s+(.*)$/))) {
+    STREAM.listRules = null; STREAM.listPreset = null;
+    const level = m[1].length;
+    const text = m[2].replace(/\s*#+\s*$/, '');
+    if (level === 1 && STREAM.allowTitle && !STREAM.wroteTitle) {
+      STREAM.wroteTitle = true;
+      streamParagraph(parseInlineRuns(text), 'title', null);
+    } else {
+      streamParagraph(parseInlineRuns(text), 'heading', Math.min(level, 9));
+    }
+    return;
+  }
+  const indentM = line.match(/^(\s*)/);
+  const level = Math.min(Math.floor((indentM ? indentM[1].length : 0) / 2), 8);
+  if ((m = trimmed.match(/^[-*+]\s+(.*)$/))) { streamListItem(m[1], false, level); return; }
+  if ((m = trimmed.match(/^\d+[.)]\s+(.*)$/))) { streamListItem(m[1], true, level); return; }
+  STREAM.listRules = null; STREAM.listPreset = null;
+  if ((m = trimmed.match(/^>\s?(.*)$/))) { streamParagraph(parseInlineRuns(m[1]), 'body', null); return; }
+  streamParagraph(parseInlineRuns(trimmed), 'body', null);
+}
+
 // Tracked DELETIONS display inline with strikethrough (Word "All Markup").
 // ShowChangesInMargin (tdf#34355) is deliberately OFF: the engine paints the
 // margin text to the LEFT of the anchor's frame — for text inside a table cell
@@ -524,12 +897,16 @@ function testInsertText(text) {
 // ==========================================================================
 const EXEC = {
   // [verified] insert at the view cursor (append, not select) — see testInsertText.
+  // 带 markdown 标记的文本走剥离转换（**→真粗体、行首 # 剥掉），字体沿用现场格式；
+  // 纯文本走原路径不动。
   insert_at_cursor(p) {
     const vc = ctrl.getViewCursor();
     vc.collapseToEnd();
-    insertTextAtCursor(vc, p.text || '');
+    const text = String(p.text || '');
+    if (MD_MARKER_RE.test(text)) insertInlineStyled(vc, text);
+    else insertTextAtCursor(vc, text);
     vc.collapseToEnd();
-    return Object.assign({ success: true, inserted: String(p.text || '') }, verifySnapshot());
+    return Object.assign({ success: true, inserted: text }, verifySnapshot());
   },
   // [verified] replace selection if any, else insert at cursor. '\n' in the new
   // text becomes a paragraph break (insertTextAtCursor).
@@ -1178,9 +1555,10 @@ const EXEC = {
     if (Object.keys(applied).length === 0) return { success: false, message: 'no format params given' };
     return { success: true, applied: applied, selectedText: vc.getString().slice(0, 100) };
   },
-  // [格式] paragraph-level formatting on the selection's paragraph(s): alignment
-  // and/or paragraph style. headingLevel 1-9 maps to the programmatic style name
-  // ('Heading N', valid regardless of UI language); 0 = back to body ('Standard').
+  // [格式] paragraph-level formatting on the selection's paragraph(s): alignment,
+  // paragraph style, line spacing, space before/after, indents. headingLevel 1-9
+  // maps to the programmatic style name ('Heading N', valid regardless of UI
+  // language); 0 = back to body ('Standard').
   set_paragraph_format(p) {
     const vc = ctrl.getViewCursor();
     const applied = {};
@@ -1196,8 +1574,286 @@ const EXEC = {
       styleName = lvl >= 1 && lvl <= 9 ? 'Heading ' + lvl : 'Standard';
     }
     if (styleName != null) { vc.setPropertyValue('ParaStyleName', styleName); applied.styleName = styleName; }
+    // 行距：single / 1.5 / double（固定倍数），proportional（百分比），
+    // atLeast（最小值，磅），exactly（固定值，磅）
+    if (p.lineSpacingMode != null) {
+      const mode = String(p.lineSpacingMode);
+      const v = Number(p.lineSpacingValue) || 0;
+      const M = css.style.LineSpacingMode;
+      let ls = null;
+      if (mode === 'single') ls = { Mode: M.PROP, Height: 100 };
+      else if (mode === '1.5' || mode === 'oneHalf') ls = { Mode: M.PROP, Height: 150 };
+      else if (mode === 'double') ls = { Mode: M.PROP, Height: 200 };
+      else if (mode === 'proportional') { if (v <= 0) return { success: false, message: 'proportional 行距需要 lineSpacingValue（百分比，如 120）' }; ls = { Mode: M.PROP, Height: Math.round(v) }; }
+      else if (mode === 'atLeast') { if (v <= 0) return { success: false, message: 'atLeast 行距需要 lineSpacingValue（磅）' }; ls = { Mode: M.MINIMUM, Height: ptToMm100(v) }; }
+      else if (mode === 'exactly') { if (v <= 0) return { success: false, message: 'exactly 行距需要 lineSpacingValue（磅）' }; ls = { Mode: M.FIX, Height: ptToMm100(v) }; }
+      else return { success: false, message: 'bad lineSpacingMode: ' + mode + ' (single/1.5/double/proportional/atLeast/exactly)' };
+      vc.setPropertyValue('ParaLineSpacing', new css.style.LineSpacing(ls));
+      applied.lineSpacing = mode + (v > 0 ? ':' + v : '');
+    }
+    if (p.spaceBeforePt != null) { vc.setPropertyValue('ParaTopMargin', ptToMm100(p.spaceBeforePt)); applied.spaceBeforePt = Number(p.spaceBeforePt); }
+    if (p.spaceAfterPt != null) { vc.setPropertyValue('ParaBottomMargin', ptToMm100(p.spaceAfterPt)); applied.spaceAfterPt = Number(p.spaceAfterPt); }
+    // 首行缩进按"字符"数折算：以光标处字号为一个字符宽（CJK 方块字口径）
+    if (p.firstLineIndentChars != null) {
+      let chPt = HOUSE.bodyPt;
+      try { const h = vc.getPropertyValue('CharHeight'); if (h > 0) chPt = h; } catch (e) {}
+      vc.setPropertyValue('ParaFirstLineIndent', ptToMm100(Number(p.firstLineIndentChars) * chPt));
+      applied.firstLineIndentChars = Number(p.firstLineIndentChars);
+    } else if (p.firstLineIndentPt != null) {
+      vc.setPropertyValue('ParaFirstLineIndent', ptToMm100(p.firstLineIndentPt));
+      applied.firstLineIndentPt = Number(p.firstLineIndentPt);
+    }
+    if (p.leftIndentPt != null) { vc.setPropertyValue('ParaLeftMargin', ptToMm100(p.leftIndentPt)); applied.leftIndentPt = Number(p.leftIndentPt); }
+    if (p.rightIndentPt != null) { vc.setPropertyValue('ParaRightMargin', ptToMm100(p.rightIndentPt)); applied.rightIndentPt = Number(p.rightIndentPt); }
     if (Object.keys(applied).length === 0) return { success: false, message: 'no paragraph format params given' };
     return Object.assign({ success: true, applied: applied }, verifySnapshot());
+  },
+  // [格式] 给选区所在段落设置编号/项目符号。preset: bullet（•）/ decimal（1. 2.）/
+  // chinese（一、二、）/ multilevel（1. → 1.1 → 1.1.1）/ none（去掉编号）。
+  set_numbering(p) {
+    const preset = String(p.preset || 'decimal');
+    if (preset === 'none') { dispatchUno('.uno:RemoveBullets'); return Object.assign({ success: true, preset: 'none' }, verifySnapshot()); }
+    const lvl = Math.max(1, Math.min(Number(p.level) || 1, 9)) - 1;
+    let rules = null;
+    try { rules = makeNumberingRules(preset); } catch (e) {
+      // NumberingRules 编组兜底：bullet/decimal 退回引擎默认列表命令
+      if (preset === 'bullet') { dispatchUno('.uno:DefaultBullet'); return Object.assign({ success: true, preset: preset, via: 'uno-default' }, verifySnapshot()); }
+      if (preset === 'decimal') { dispatchUno('.uno:DefaultNumbering'); return Object.assign({ success: true, preset: preset, via: 'uno-default' }, verifySnapshot()); }
+      return { success: false, message: 'set_numbering failed: ' + errStr(e) };
+    }
+    const vc = ctrl.getViewCursor();
+    vc.setPropertyValue('NumberingRules', rules);
+    vc.setPropertyValue('NumberingLevel', lvl);
+    return Object.assign({ success: true, preset: preset, level: lvl + 1 }, verifySnapshot());
+  },
+  // [格式] 表格格式：边框/字号/首行加粗居中/单元格垂直对齐/数字居右/列宽/行高。
+  // 不传 tableIndex 时作用于光标所在表格。applyStandard=true 一键套标准表格式
+  //（Grid 1.5 磅、10 号、段前后 0.2 行、首行加粗居中、垂直居中、数字居右）。
+  format_table(p) {
+    const table = currentTextTable(p);
+    if (!table) return { success: false, message: '光标不在表格内，且未指定有效 tableIndex（0 开始）' };
+    const applied = {};
+    if (p.applyStandard) {
+      styleTableStandard(table, { headerRows: p.firstRowBold === false ? 0 : 1 });
+      applied.standard = true;
+    }
+    if (p.borderWidthPt != null) {
+      const color = p.borderColor != null ? parseColor(p.borderColor, { black: 0 }) : 0;
+      try { applyTableBorders(table, ptToMm100(p.borderWidthPt), color == null ? 0 : color); applied.borderWidthPt = Number(p.borderWidthPt); }
+      catch (e) { return { success: false, message: '边框设置失败: ' + errStr(e) }; }
+    }
+    const names = table.getCellNames();
+    if (p.fontSizePt != null || p.cellVerticalAlign != null || p.firstRowBold != null) {
+      const vmap = { top: css.text.VertOrientation.TOP, center: css.text.VertOrientation.CENTER, bottom: css.text.VertOrientation.BOTTOM };
+      for (let i = 0; i < names.length; i++) {
+        const cell = table.getCellByName(names[i]);
+        const rowIdx = parseInt(String(names[i]).replace(/^[A-Z]+/, ''), 10) - 1;
+        if (p.cellVerticalAlign != null) {
+          const v = vmap[String(p.cellVerticalAlign).toLowerCase()];
+          if (v == null) return { success: false, message: 'bad cellVerticalAlign: ' + p.cellVerticalAlign + ' (top/center/bottom)' };
+          try { cell.setPropertyValue('VertOrient', shortAny(v)); } catch (e) {}
+        }
+        try {
+          const ct = cell.createTextCursor();
+          ct.gotoStart(false); ct.gotoEnd(true);
+          if (p.fontSizePt != null) setCharProp(ct, 'CharHeight', Number(p.fontSizePt));
+          if (p.firstRowBold != null && rowIdx === 0) setCharProp(ct, 'CharWeight', p.firstRowBold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL);
+        } catch (e) {}
+      }
+      if (p.fontSizePt != null) applied.fontSizePt = Number(p.fontSizePt);
+      if (p.cellVerticalAlign != null) applied.cellVerticalAlign = String(p.cellVerticalAlign);
+      if (p.firstRowBold != null) applied.firstRowBold = !!p.firstRowBold;
+    }
+    // 列宽（百分比数组，如 [20,50,30]，个数必须等于列数）
+    if (p.columnWidthsPercent != null) {
+      try {
+        const pct = Array.isArray(p.columnWidthsPercent) ? p.columnWidthsPercent.map(Number) : String(p.columnWidthsPercent).split(/[,，\s]+/).filter(Boolean).map(Number);
+        const seps = table.getPropertyValue('TableColumnSeparators');
+        const nCols = (seps ? seps.length : 0) + 1;
+        if (pct.length !== nCols) return { success: false, message: '列宽个数(' + pct.length + ')与表格列数(' + nCols + ')不符' };
+        const relSum = table.getPropertyValue('TableColumnRelativeSum');
+        const out = [];
+        let acc = 0;
+        const total = pct.reduce(function (a, b) { return a + b; }, 0);
+        for (let i = 0; i < pct.length - 1; i++) {
+          acc += pct[i];
+          out.push(new css.text.TableColumnSeparator({ Position: Math.round(relSum * acc / total), IsVisible: true }));
+        }
+        table.setPropertyValue('TableColumnSeparators', out);
+        applied.columnWidthsPercent = pct;
+      } catch (e) { return { success: false, message: '列宽设置失败: ' + errStr(e) }; }
+    }
+    // 行高（磅）。rowHeightRule: 'min'（最小值，默认）| 'exact'（固定值）
+    if (p.rowHeightPt != null) {
+      try {
+        const rows = table.getRows();
+        const h = ptToMm100(p.rowHeightPt);
+        const exact = String(p.rowHeightRule || 'min') === 'exact';
+        for (let i = 0; i < rows.getCount(); i++) {
+          const row = rows.getByIndex(i);
+          row.setPropertyValue('IsAutoHeight', !exact);
+          row.setPropertyValue('Height', h);
+        }
+        applied.rowHeightPt = Number(p.rowHeightPt);
+      } catch (e) { return { success: false, message: '行高设置失败: ' + errStr(e) }; }
+    }
+    if (Object.keys(applied).length === 0) return { success: false, message: 'no table format params given' };
+    let tname = ''; try { tname = table.getName(); } catch (e) {}
+    return { success: true, table: tname, applied: applied };
+  },
+  // [插入] 在光标处插入一张按标准格式排好的表。rows: string[][]（第一行默认表头）。
+  insert_table(p) {
+    const rows = p.rows;
+    if (!Array.isArray(rows) || !rows.length || !Array.isArray(rows[0])) {
+      return { success: false, message: 'insert_table requires {rows: string[][]}' };
+    }
+    if (rows.length > 200 || rows[0].length > 20) return { success: false, message: '表格过大（上限 200 行 × 20 列）' };
+    const headerRows = p.headerRow === false ? 0 : 1;
+    let table;
+    try { table = insertStyledTable(rows, headerRows); }
+    catch (e) { return { success: false, message: 'insert_table failed: ' + errStr(e) }; }
+    let tname = ''; try { tname = table.getName(); } catch (e) {}
+    return Object.assign({ success: true, table: tname, rows: rows.length, cols: rows[0].length }, verifySnapshot());
+  },
+  // [感知] 读取光标/选区处的字符+段落+表格格式——"先看清现状再动手"的眼睛。
+  get_formatting() {
+    const vc = ctrl.getViewCursor();
+    const out = { success: true };
+    const ch = {};
+    try { ch.fontWestern = vc.getPropertyValue('CharFontName'); } catch (e) {}
+    try { ch.fontAsian = vc.getPropertyValue('CharFontNameAsian'); } catch (e) {}
+    try { ch.sizePt = vc.getPropertyValue('CharHeight'); } catch (e) {}
+    try { ch.bold = vc.getPropertyValue('CharWeight') > 100; } catch (e) {}
+    try { ch.italic = !enumEq(vc.getPropertyValue('CharPosture'), css.awt.FontSlant.NONE); } catch (e) {}
+    try { ch.underline = !enumEq(vc.getPropertyValue('CharUnderline'), css.awt.FontUnderline.NONE); } catch (e) {}
+    try { ch.strikeout = !enumEq(vc.getPropertyValue('CharStrikeout'), css.awt.FontStrikeout.NONE); } catch (e) {}
+    try { const c = vc.getPropertyValue('CharColor'); ch.color = c === -1 ? 'auto' : '#' + ('000000' + (c >>> 0).toString(16)).slice(-6); } catch (e) {}
+    try { const h = vc.getPropertyValue('CharHighlight'); ch.highlight = h === -1 ? 'none' : '#' + ('000000' + (h >>> 0).toString(16)).slice(-6); } catch (e) {}
+    out.character = ch;
+    const pa = {};
+    try { pa.styleName = vc.getPropertyValue('ParaStyleName'); } catch (e) {}
+    try {
+      const a = vc.getPropertyValue('ParaAdjust');
+      const A = css.style.ParagraphAdjust;
+      pa.alignment = enumEq(a, A.CENTER) ? 'center' : enumEq(a, A.RIGHT) ? 'right'
+        : (enumEq(a, A.BLOCK) || enumEq(a, A.STRETCH)) ? 'justify' : 'left';
+    } catch (e) {}
+    try {
+      const ls = vc.getPropertyValue('ParaLineSpacing');
+      if (ls) {
+        const M = css.style.LineSpacingMode;
+        if (enumEq(ls.Mode, M.PROP)) pa.lineSpacing = { mode: 'proportional', percent: ls.Height };
+        else if (enumEq(ls.Mode, M.MINIMUM)) pa.lineSpacing = { mode: 'atLeast', valuePt: Math.round(ls.Height * 72 / 2540 * 10) / 10 };
+        else if (enumEq(ls.Mode, M.FIX)) pa.lineSpacing = { mode: 'exactly', valuePt: Math.round(ls.Height * 72 / 2540 * 10) / 10 };
+        else pa.lineSpacing = { mode: 'leading', valuePt: Math.round(ls.Height * 72 / 2540 * 10) / 10 };
+      }
+    } catch (e) {}
+    try { pa.spaceBeforePt = Math.round(vc.getPropertyValue('ParaTopMargin') * 72 / 2540 * 10) / 10; } catch (e) {}
+    try { pa.spaceAfterPt = Math.round(vc.getPropertyValue('ParaBottomMargin') * 72 / 2540 * 10) / 10; } catch (e) {}
+    try { pa.firstLineIndentPt = Math.round(vc.getPropertyValue('ParaFirstLineIndent') * 72 / 2540 * 10) / 10; } catch (e) {}
+    try { pa.leftIndentPt = Math.round(vc.getPropertyValue('ParaLeftMargin') * 72 / 2540 * 10) / 10; } catch (e) {}
+    try { pa.rightIndentPt = Math.round(vc.getPropertyValue('ParaRightMargin') * 72 / 2540 * 10) / 10; } catch (e) {}
+    try { pa.outlineLevel = vc.getPropertyValue('OutlineLevel') || 0; } catch (e) {}
+    try { pa.isNumbered = !!vc.getPropertyValue('NumberingIsNumber'); } catch (e) {}
+    out.paragraph = pa;
+    try {
+      const table = currentTextTable(null);
+      if (table) {
+        const t = { name: table.getName() };
+        try { t.rows = table.getRows().getCount(); } catch (e) {}
+        try { t.cols = table.getColumns().getCount(); } catch (e) {}
+        try { const cell = vc.getPropertyValue('Cell'); if (cell) t.cell = cell.getPropertyValue('CellName'); } catch (e) {}
+        out.table = t;
+      }
+    } catch (e) {}
+    try { out.selectedText = (vc.getString() || '').slice(0, 80); } catch (e) {}
+    return out;
+  },
+  // [格式] 全文应用标准格式（用户规范见 HOUSE 注释）：字体/字号/颜色/两端对齐/
+  // 段距/行距/首行缩进；首段短文本视为主标题（16 磅粗居中）；标题段（OutlineLevel
+  // 或 Heading 样式）整段加粗；表格套标准表格式；表格后首段段前 18 磅。
+  // 正文段落不动既有加粗/斜体（当事人名称等手工强调不能被抹掉）。
+  apply_house_style() {
+    const en = xModel.getText().createEnumeration();
+    let idx = 0, paras = 0, tables = 0, titled = false, prevWasTable = false;
+    while (en.hasMoreElements() && idx < 5000) {
+      const el = en.nextElement();
+      if (el.supportsService && el.supportsService('com.sun.star.text.Paragraph')) {
+        const text = (el.getString() || '').trim();
+        let kind = 'body';
+        if (!titled && text) {
+          titled = true;
+          if (idx === 0 && text.length <= 60) kind = 'title';
+        }
+        if (kind !== 'title') {
+          try {
+            const lvl = el.getPropertyValue('OutlineLevel') || 0;
+            const style = el.getPropertyValue('ParaStyleName') || '';
+            if (lvl > 0 || /^(Heading|标题)/.test(style)) kind = 'heading';
+          } catch (e) {}
+        }
+        applyHousePara(el, kind, { afterTable: prevWasTable });
+        applyHouseChar(el, {
+          sizePt: kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt,
+          bold: kind === 'title' || kind === 'heading',
+          keepWeight: kind === 'body',
+        });
+        prevWasTable = false;
+        paras++;
+      } else if (el.supportsService && el.supportsService('com.sun.star.text.TextTable')) {
+        try { styleTableStandard(el, { headerRows: 1, keepWeight: true }); tables++; } catch (e) {}
+        prevWasTable = true;
+      }
+      idx++;
+    }
+    return Object.assign({ success: true, paragraphs: paras, tables: tables }, verifySnapshot());
+  },
+  // [流式] markdown 剥离 + 标准格式落字（doc_start_stream 管线的落字端）。
+  // 攒到完整行才消费；尾部残行等 stream_flush。
+  stream_insert(p) {
+    streamEnsureActive();
+    STREAM.buf += String(p.text || '');
+    const nl = STREAM.buf.lastIndexOf('\n');
+    if (nl === -1) return { success: true, buffered: STREAM.buf.length };
+    const lines = STREAM.buf.slice(0, nl).split('\n');
+    STREAM.buf = STREAM.buf.slice(nl + 1);
+    for (let i = 0; i < lines.length; i++) streamWriteLine(lines[i]);
+    return { success: true, lines: lines.length, buffered: STREAM.buf.length };
+  },
+  // [流式] 收尾：写掉尾行/尾表并复位。{discard:true} = 只复位不落字（换文档前硬清）。
+  stream_flush(p) {
+    if (p && p.discard) { streamReset(true); return { success: true, discarded: true }; }
+    if (!STREAM.active) return { success: true, idle: true };
+    const tail = STREAM.buf;
+    STREAM.buf = '';
+    if (tail.trim() || STREAM.table) streamWriteLine(tail);
+    if (STREAM.table) streamTableFlush();
+    streamReset(false);
+    return Object.assign({ success: true }, verifySnapshot());
+  },
+  // [插入] 在指定标题段落下方插入内容（后端 doc_insert_under_heading 一直派发此
+  // action，此前 worker 未实现、白名单未收录，静默失败——本次补齐）。内容走
+  // 行内 markdown 剥离（保留粗体/斜体语义），字体字号沿用插入点现场格式。
+  insert_under_heading(p) {
+    const headingText = String(p.headingText || '').trim();
+    if (!headingText) return { success: false, message: 'insert_under_heading requires {headingText}' };
+    let target = null;
+    eachParagraph(function (el) {
+      const t = (el.getString() || '').trim();
+      if (t && (t === headingText || t.indexOf(headingText) !== -1)) { target = el; return true; }
+      return false;
+    });
+    if (!target) return { success: false, message: '未找到标题: ' + headingText };
+    if (!selectVisibly(target)) return { success: false, message: '无法定位标题段落' };
+    const vc = ctrl.getViewCursor();
+    vc.collapseToEnd();
+    const xText = vc.getText();
+    xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+    // 新段落不继承标题的大纲级别/样式
+    try { vc.setPropertyValue('ParaStyleName', 'Standard'); } catch (e) {}
+    try { vc.setPropertyValue('OutlineLevel', 0); } catch (e) {}
+    insertInlineStyled(vc, String(p.content || ''));
+    return Object.assign({ success: true, heading: headingText }, verifySnapshot());
   },
   // [撤销] the human safety net — back out the last step(s) when a verify shows
   // the edit landed wrong. Steps clamp at 20.

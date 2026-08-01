@@ -488,6 +488,11 @@ export function useAgentStream() {
             } catch (e) {
                 console.error('Failed to handle ' + evt, e)
             }
+        } else if (evt === 'doc_stream_end') {
+            // 流式写入结束信号：让消费端冲缓冲并命令 worker 收尾（写尾行/建尾表/复位）
+            if (clientActionHandler.value) {
+                clientActionHandler.value({ action: 'doc_stream_end' })
+            }
         } else if (evt === 'cancelled') {
             // 处理取消事件
             console.log('[SSE] Received cancelled event')

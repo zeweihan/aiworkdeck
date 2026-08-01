@@ -312,6 +312,8 @@ public class FileTools implements AgentToolComponent {
             org.docx4j.openpackaging.packages.WordprocessingMLPackage wordDoc = org.docx4j.openpackaging.packages.WordprocessingMLPackage.createPackage();
             com.checkba.util.DocxStyleHelper.addMissingStyles(wordDoc);
             renderer.render(document, wordDoc);
+            // 律所标准格式：楷体_GB2312/Arial、段后 18 磅、首行缩进 2 字符、表格 Grid 1.5 磅等
+            com.checkba.util.DocxStyleHelper.applyStandardFormat(wordDoc);
             wordDoc.save(file);
             
             // Register with AGENT_USER_ID
