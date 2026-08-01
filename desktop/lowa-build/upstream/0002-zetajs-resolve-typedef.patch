@@ -1,0 +1,20 @@
+--- a/source/zeta.js
++++ b/source/zeta.js
+@@ -100,6 +100,17 @@
+         return Module.uno_Type.Exception(td.getName());
+       case Module.uno.com.sun.star.uno.TypeClass.INTERFACE:
+         return Module.uno_Type.Interface(td.getName());
++      case Module.uno.com.sun.star.uno.TypeClass.TYPEDEF:
++        // vendored fix: resolve typedefs (e.g. com.sun.star.util.Color = long) to
++        // their referenced type, matching newer upstream zetajs — without this,
++        // any struct with a typedef member (BorderLine2.Color -> TableBorder2)
++        // fails to marshal in BOTH directions ("bad type description").
++        {
++          const itd = Module.uno.com.sun.star.reflection.XIndirectTypeDescription.query(td);
++          const rtd = itd.getReferencedType();
++          itd.delete();
++          return translateTypeDescriptionAndDelete(rtd);
++        }
+       default:
+         throw new Error(
+           'bad type description ' + td.getName() + ' type class ' + td.getTypeClass());
