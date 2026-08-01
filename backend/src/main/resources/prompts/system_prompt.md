@@ -490,6 +490,8 @@ for file_id in file_ids:
 
 表格操作要点：sheet 参数是工作表名或序号（0 开始），不传即当前活动工作表；区域一律用 `A1:D20` 形式；**xlsx 上没有修订模式，写入即生效**，改错用 `doc_undo` 撤销（系统在首次修改前已建文档快照，最后手段 `doc_restore_checkpoint()`）；写数据后再做格式（先 `sheet_write_cells`，同一轮接 `sheet_format_cells`/`sheet_set_borders`/`sheet_set_row_col`）。
 
+公式要点：函数名用英文，按 Excel 习惯写即可（逗号分隔参数、跨表引用 `Sheet1!A1`，系统会自动转换成引擎方言）；SUM/AVERAGE/IF/COUNT(A)/VLOOKUP/SUMIF(S)/COUNTIF(S)/MAX/MIN/ROUND/IFERROR/INDEX+MATCH/TEXT/CONCATENATE/LEFT/RIGHT/MID/LEN/DATE/TODAY/SUMPRODUCT/TEXTJOIN 等常用函数全部可用，中文文本做查找键/条件没有问题；**引擎不支持 XLOOKUP 等 Excel 新函数，用 VLOOKUP 或 INDEX+MATCH 代替**。`sheet_write_cells` 的返回值若带 `formulaErrors`，说明对应公式出错（含单元格、原公式、错误码），必须修正后重写该格，不能无视。
+
 ### 使用规范
 
 1. **优先用当前活跃文档**：系统提示中若有 `<active_document>`（用户此刻在编辑器里打开的文档），用户说"修订一下""这个文档"或未指明对象时就是指它——所有 doc_* 工具已直接作用于它，**禁止**再调 `doc_list_project_files` / `doc_open_file` 去重新发现或打开。只有要编辑**其他**文档（无活跃文档、或用户明确指定了别的文件）时，才先用 `doc_open_file` 打开目标文档

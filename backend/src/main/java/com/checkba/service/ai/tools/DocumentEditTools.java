@@ -898,7 +898,11 @@ public class DocumentEditTools implements AgentToolComponent {
     @ToolMeta(displayName = "写入单元格", category = "document", fileEffect = "MODIFIED")
     @Tool("【表格·写】从起始单元格开始按二维数组批量写入。rowsJson 是 JSON 二维数组，如 " +
           "[[\"项目\",\"金额\"],[\"咨询费\",10000],[\"合计\",\"=SUM(B2:B2)\"]]：数字与数字样式字符串写为数值，" +
-          "'=' 开头写为公式，其余写为文本；null 跳过不动该格。写入即生效（无修订痕迹），返回实际写入区域和首行回读值供核对。")
+          "'=' 开头写为公式，其余写为文本；null 跳过不动该格。写入即生效（无修订痕迹），返回实际写入区域和首行回读值供核对。" +
+          "公式用英文函数名，按 Excel 习惯写即可（逗号分隔、跨表 Sheet!A1 会自动归一为引擎方言）；" +
+          "SUM/AVERAGE/IF/COUNT/VLOOKUP/SUMIF/COUNTIF/INDEX+MATCH/IFERROR/TEXT/日期函数等均可用，" +
+          "但引擎是 LibreOffice 24.2，**不支持 XLOOKUP 等新函数**（用 VLOOKUP 或 INDEX+MATCH 代替）。" +
+          "任何公式出错都会在返回值 formulaErrors 里列出（单元格/公式/错误码），看到后必须修正并重写该格。")
     public String sheet_write_cells(
             @P("起始单元格，如 'A1'") String startCell,
             @P("写入内容，JSON 二维数组") String rowsJson,
