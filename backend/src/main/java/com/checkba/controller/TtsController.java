@@ -19,13 +19,27 @@ public class TtsController {
     @Autowired
     private TtsService ttsService;
 
+    /**
+     * 合成走的是账号配置里的 ElevenLabs 付费 key，匿名可调等于把它借给任何人烧额度；
+     * 口径与 OcrController/ClipboardController 一致，只要求登录，不涉及项目归属。
+     */
+    private static void requireLogin(String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            throw new com.checkba.exception.UnauthorizedException("请先登录");
+        }
+    }
+
     @GetMapping("/voices")
-    public List<TtsService.VoiceOption> getVoices() {
+    public List<TtsService.VoiceOption> getVoices(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireLogin(sessionId);
         return ttsService.getVoices();
     }
 
     @PostMapping("/generate")
-    public ResponseEntity<Resource> generate(@RequestBody GenerateRequest request) {
+    public ResponseEntity<Resource> generate(@RequestBody GenerateRequest request,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireLogin(sessionId);
         File audioFile = ttsService.generateAudio(
                 request.getText(),
                 request.getVoice(),

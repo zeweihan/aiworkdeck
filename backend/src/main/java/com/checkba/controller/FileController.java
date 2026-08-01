@@ -325,11 +325,21 @@ public class FileController {
     }
 
     @GetMapping("/{fileId}/upload-status")
-    public ResponseEntity<Map<String, Object>> getUploadStatus(@PathVariable("fileId") String fileId) {
+    public ResponseEntity<Map<String, Object>> getUploadStatus(@PathVariable("fileId") String fileId,
+            @RequestParam(value = "token", required = false) String token,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionHeader) {
         try {
             // 与上传同一套路径解析——此前直接 getSize(裸 fileId) 读的是孤儿路径，
             // 断点续传的 offset 永远对不上真实文件
             Optional<ProjectFile> pfOpt = projectFileRepository.findByWpsFileId(fileId).stream().findFirst();
+            // 鉴权与同类接口对齐：此前完全匿名，可按 fileId 枚举文件是否存在及其大小；
+            // 找不到记录时不再回落到裸 fileId 当存储路径探测
+            if (pfOpt.isEmpty()) {
+                return ResponseEntity.status(404).body(Map.of("code", -1, "message", "文件不存在"));
+            }
+            if (!isAuthorizedForProject(token, sessionHeader, pfOpt.get().getProjectId())) {
+                return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权访问该文件"));
+            }
             String path = pfOpt.map(ProjectFile::getFilePath).filter(StringUtils::hasText).orElse(fileId);
             long size = getStorageService().getSize(path);
             Map<String, Object> data = new HashMap<>();
