@@ -20,6 +20,15 @@ public class DataInitializer implements CommandLineRunner {
 
     private final UserRepository userRepository;
 
+    /**
+     * 首启 admin 初始口令。桌面 profile 在 application-desktop.yml 里显式设为 "123"
+     * （单机本地、且全员皆管理员，弱口令不构成额外风险，向导页也是这么写的）。
+     * 云端/团队部署不设此项：此时随机生成一次性强口令并打印到启动日志，
+     * 由部署者取用后立刻改密——服务器上绝不能出现众所周知的默认口令。
+     */
+    @org.springframework.beans.factory.annotation.Value("${security.admin.initial-password:}")
+    private String initialPassword;
+
     @Override
     public void run(String... args) {
         // 创建默认用户 admin（若不存在）。不再打印明文口令到日志。
@@ -27,15 +36,28 @@ public class DataInitializer implements CommandLineRunner {
                 .orElseGet(() -> {
                     User user = new User();
                     user.setUsername("admin");
-                    user.setPassword(com.checkba.service.UserService.encodePassword("123")); // 默认密码（BCrypt）
+                    boolean generated = initialPassword == null || initialPassword.isBlank();
+                    String password = generated ? generateInitialPassword() : initialPassword;
+                    user.setPassword(com.checkba.service.UserService.encodePassword(password));
                     user.setDisplayName("管理员");
                     user.setCreatedAt(LocalDateTime.now());
                     user.setUpdatedAt(LocalDateTime.now());
-                    log.info("已创建默认用户 admin（请尽快修改默认密码）");
+                    if (generated) {
+                        log.warn("已创建默认用户 admin，随机初始口令为：{}", password);
+                        log.warn("该口令仅在本次启动日志中出现一次，请立即登录修改，并清理日志。");
+                    } else {
+                        log.info("已创建默认用户 admin（请尽快修改默认密码）");
+                    }
                     return userRepository.save(user);
                 });
         // 注意：此前每次启动会把所有项目强行归到 admin 名下——在多用户场景会"抢走"其他用户的项目，
         // 与 ProjectMemberService 等多用户能力冲突，已移除该逻辑。
+    }
+
+    private static String generateInitialPassword() {
+        byte[] bytes = new byte[18];
+        new java.security.SecureRandom().nextBytes(bytes);
+        return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 }
 

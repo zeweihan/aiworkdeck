@@ -205,6 +205,8 @@ public class FileTools implements AgentToolComponent {
             return "Error: File not found in database: " + fileId;
         }
         ProjectFile pf = fileOpt.get();
+        String denied = ToolFileGuard.rejectIfOutsideProject(pf);
+        if (denied != null) return denied;
         if ("folder".equalsIgnoreCase(pf.getFileType())) {
             return "Error: File is a folder: " + pf.getName();
         }

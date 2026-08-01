@@ -26,3 +26,6 @@ spring:
 security:
   admin:
     allow-all-users: true
+    # 单机本地默认口令，与向导页提示一致。云端 profile 不设此项：
+    # DataInitializer 届时随机生成一次性强口令，避免服务器出现众所周知的默认口令。
+    initial-password: "123"

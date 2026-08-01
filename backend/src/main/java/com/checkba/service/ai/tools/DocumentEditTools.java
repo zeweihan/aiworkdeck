@@ -82,7 +82,9 @@ public class DocumentEditTools implements AgentToolComponent {
             if (file == null) {
                 return "Error: 文件不存在，ID=" + fileId;
             }
-            
+            String denied = ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) return denied;
+
             if (!isEditableDocument(file.getName())) {
                 return "Error: 该文件不是可编辑的文档格式: " + file.getName();
             }
@@ -187,6 +189,8 @@ public class DocumentEditTools implements AgentToolComponent {
                 if (file == null) {
                     return "Error: 文件不存在，ID=" + fileId;
                 }
+                String denied = ToolFileGuard.rejectIfOutsideProject(file);
+                if (denied != null) return denied;
             }
 
             // 2. 同步打开文件 (Wait for Ready)

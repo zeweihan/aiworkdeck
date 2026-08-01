@@ -221,8 +221,17 @@ public class AuthController {
         return SESSION_STORE.get(sessionId);
     }
 
+    /**
+     * 会话 ID 必须不可预测：它是全站唯一的持有者凭证。
+     * Math.random() 背后是 48 位 LCG，攻击者用自己登录拿到的一个样本即可反解种子、
+     * 推算出其他人的会话 ID（时间戳部分本就可猜），因此只能用 CSPRNG。
+     */
+    private static final java.security.SecureRandom SECURE_RANDOM = new java.security.SecureRandom();
+
     private String generateSessionId() {
-        return "session_" + System.currentTimeMillis() + "_" + String.valueOf(Math.random()).substring(2, 15);
+        byte[] bytes = new byte[32];
+        SECURE_RANDOM.nextBytes(bytes);
+        return "session_" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
     }
 
     public static String getUsernameFromSession(String sessionId) {
