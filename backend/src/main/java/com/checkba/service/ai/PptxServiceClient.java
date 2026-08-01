@@ -970,6 +970,63 @@ public class PptxServiceClient {
         public void setEditable(boolean editable) { this.editable = editable; }
     }
 
+    /**
+     * 版式级 PDF→Word 转换（checkba 自有端点 POST /api/pdf/to-docx，pdf2docx 实现）
+     *
+     * 段落/表格/图片/分栏尽量保留原排版。仅适用于有文本层的未加密 PDF；
+     * 扫描件请走 {@link #ocrPdfToMarkdown(String)}。
+     *
+     * @param pdfFilePath 本地 PDF 路径
+     * @param outputDocxPath 输出 docx 路径（服务直接写盘）
+     * @return data 对象：{output_path, pages}
+     */
+    public JSONObject convertPdfToDocx(String pdfFilePath, String outputDocxPath) {
+        log.info("Converting PDF to docx (layout-level): {} -> {}", pdfFilePath, outputDocxPath);
+
+        JSONObject body = new JSONObject();
+        body.set("pdf_path", pdfFilePath);
+        body.set("output_path", outputDocxPath);
+
+        HttpResponse resp = HttpRequest.post(baseUrl + "/api/pdf/to-docx")
+                .header("Content-Type", "application/json")
+                .body(body.toString())
+                .timeout(timeoutSeconds * 3 * 1000)
+                .execute();
+
+        if (resp.getStatus() != 200) {
+            throw new RuntimeException("Failed to convert PDF to docx: " + resp.body());
+        }
+
+        return JSONUtil.parseObj(resp.body()).getJSONObject("data");
+    }
+
+    /**
+     * 扫描件 OCR：MinerU 解析出 markdown（checkba 自有端点 POST /api/pdf/ocr-markdown）。
+     * 服务侧本地 mineru-service 优先、云端 MinerU token 兜底，不经第三方云 OCR。
+     * 解析可能耗时较长（本地 CPU pipeline）。
+     *
+     * @param pdfFilePath 本地 PDF 路径
+     * @return markdown 文本
+     */
+    public String ocrPdfToMarkdown(String pdfFilePath) {
+        log.info("OCR PDF via MinerU: {}", pdfFilePath);
+
+        JSONObject body = new JSONObject();
+        body.set("pdf_path", pdfFilePath);
+
+        HttpResponse resp = HttpRequest.post(baseUrl + "/api/pdf/ocr-markdown")
+                .header("Content-Type", "application/json")
+                .body(body.toString())
+                .timeout(600 * 1000) // 本地 CPU OCR 大文件可达数分钟
+                .execute();
+
+        if (resp.getStatus() != 200) {
+            throw new RuntimeException("Failed to OCR PDF: " + resp.body());
+        }
+
+        return JSONUtil.parseObj(resp.body()).getJSONObject("data").getStr("markdown");
+    }
+
     // 注：曾有 getPageScreenshot / editStandaloneImage / editPptxSlide 三个方法，调用的
     // /api/files/screenshot、/api/projects/edit-standalone-image、/api/projects/edit-pptx-slide
     // 在 0.4.0 re-vendor 后服务侧已不存在（2026-08-01 实测），已随对应死路径工具一并下线。

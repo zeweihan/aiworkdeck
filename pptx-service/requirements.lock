@@ -74,6 +74,8 @@ et-xmlfile==2.0.0
     # via openpyxl
 exceptiongroup==1.3.1 ; python_full_version < '3.11'
     # via anyio
+fire==0.7.1
+    # via pdf2docx
 flask==3.1.2
     # via
     #   banana-slides
@@ -90,6 +92,8 @@ flask-sqlalchemy==3.1.1
     #   flask-migrate
 flatbuffers==25.9.23
     # via onnxruntime
+fonttools==4.63.0
+    # via pdf2docx
 google-auth==2.43.0
     # via google-genai
 google-genai==1.52.0
@@ -125,6 +129,7 @@ lxml==6.0.2
     # via
     #   markitdown
     #   pikepdf
+    #   python-docx
     #   python-pptx
 magika==0.6.3
     # via markitdown
@@ -154,12 +159,16 @@ numpy==2.2.6 ; python_full_version < '3.11'
     # via
     #   magika
     #   onnxruntime
+    #   opencv-python-headless
     #   pandas
+    #   pdf2docx
 numpy==2.3.5 ; python_full_version >= '3.11'
     # via
     #   magika
     #   onnxruntime
+    #   opencv-python-headless
     #   pandas
+    #   pdf2docx
 olefile==0.47
     # via markitdown
 onnxruntime==1.20.1
@@ -168,6 +177,8 @@ onnxruntime==1.20.1
     #   markitdown
 openai==2.9.0
     # via banana-slides
+opencv-python-headless==5.0.0.93
+    # via pdf2docx
 openpyxl==3.1.5
     # via markitdown
 packaging==25.0
@@ -176,6 +187,8 @@ packaging==25.0
     #   pikepdf
 pandas==2.3.3
     # via markitdown
+pdf2docx==0.5.13
+    # via banana-slides
 pdfminer-six==20251107
     # via markitdown
 pikepdf==10.1.0
@@ -208,10 +221,14 @@ pydub==0.25.1
     # via markitdown
 pyjwt==2.10.1
     # via msal
+pymupdf==1.28.0
+    # via pdf2docx
 pyreadline3==3.5.4 ; sys_platform == 'win32'
     # via humanfriendly
 python-dateutil==2.9.0.post0
     # via pandas
+python-docx==1.2.0
+    # via pdf2docx
 python-dotenv==1.2.1
     # via
     #   banana-slides
@@ -257,6 +274,8 @@ tenacity==9.1.2
     # via
     #   banana-slides
     #   google-genai
+termcolor==3.3.0
+    # via fire
 tomli==2.3.0 ; python_full_version < '3.11'
     # via alembic
 tqdm==4.67.1
@@ -275,6 +294,7 @@ typing-extensions==4.15.0
     #   openai
     #   pydantic
     #   pydantic-core
+    #   python-docx
     #   python-pptx
     #   speechrecognition
     #   sqlalchemy

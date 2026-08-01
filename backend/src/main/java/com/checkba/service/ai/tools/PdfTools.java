@@ -41,6 +41,7 @@ public class PdfTools implements AgentToolComponent {
     private final ProjectFileRepository projectFileRepository;
     private final EditorBridgeService editorBridgeService;
     private final AiDocxExportService aiDocxExportService;
+    private final com.checkba.service.ai.PptxServiceClient pptxServiceClient;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
 
     private static final Long AGENT_USER_ID = 10001L;
@@ -79,7 +80,8 @@ public class PdfTools implements AgentToolComponent {
     @ToolMeta(displayName = "读取PDF内容", category = "pdf")
     @Tool("读取 PDF 文件的逐页文本与基本信息（页数、每页是否有文本层）。页码从 0 开始。" +
           "对 PDF 做高亮/批注/脱敏/替换前必须先调用本工具核对原文的准确写法——后续操作全部靠引用原文文本定位。" +
-          "如果页面 has_text_layer 为 false，说明是扫描件，无法做文本定位类操作（可建议用户走 OCR）。")
+          "如果页面 has_text_layer 为 false，说明是扫描件：无法做文本定位类操作（高亮/脱敏/替换），" +
+          "但 pdf_to_word 可以直接对它做本地 MinerU OCR 转成可编辑 Word。")
     public String pdf_inspect(
             @P("文件 ID（从 pdf_list_files 获取）") Long fileId,
             @P("页码（从 0 开始，可选）。指定后只返回该页；传 null 返回全部页") Integer pageIndex
@@ -209,10 +211,13 @@ public class PdfTools implements AgentToolComponent {
     // ==================== 转 Word ====================
 
     @ToolMeta(displayName = "PDF转Word", category = "pdf", fileEffect = "ADDED", refreshFiles = true)
-    @Tool("把文本型 PDF 转换为可编辑的 Word 文档（内容级转换：保留文字与段落结构，不保留原版式排版）。" +
+    @Tool("把 PDF 转换为可编辑的 Word 文档，自动选择最佳路径：" +
+          "1) 文本型 PDF 优先版式级转换（pdf2docx：段落/表格/图片/分栏尽量保留原排版），转换服务不可用时" +
+          "自动回退为结构级转换（保留文字与段落，不保版式）；" +
+          "2) 扫描件（无文本层）自动走本地 MinerU OCR 识别出内容再转（内容级，文档不出本机）。" +
           "这是对 PDF 做大范围修改的正确路径：转出 docx 后用 doc_* 工具编辑（带修订痕迹）。" +
-          "转换是机械提取，不消耗模型步数重新生成内容。扫描件（无文本层）无法转换。" +
-          "转换完成后新 docx 会自动在编辑器中打开。")
+          "转换是机械流程，不消耗模型步数重新生成内容；完成后新 docx 自动在编辑器中打开，" +
+          "返回信息会注明实际使用的转换路径，向用户如实转述。")
     public String pdf_to_word(
             @P("PDF 文件 ID") Long fileId,
             @P("目标文件夹 ID（可选，传 null 放项目根目录）") Long parentId
@@ -221,22 +226,69 @@ public class PdfTools implements AgentToolComponent {
         try {
             ProjectFile file = getPdfFile(fileId);
             Path localPath = resolveExisting(file);
+            String docxName = file.getName().replaceAll("(?i)\\.pdf$", "") + ".docx";
 
             String markdown = pdfEditService.extractMarkdown(localPath);
+
             if (markdown == null) {
-                return "Error: 该 PDF 没有可提取的文本层（应为扫描件）。无法直接转换，请建议用户先对文档做 OCR。";
+                // 扫描件：本地 MinerU OCR（pptx-service 路由本地优先/云端兜底）
+                String ocrMarkdown;
+                try {
+                    ocrMarkdown = pptxServiceClient.ocrPdfToMarkdown(localPath.toString());
+                } catch (Exception e) {
+                    log.warn("MinerU OCR failed for scanned PDF", e);
+                    return "Error: 该 PDF 是扫描件（无文本层），已尝试本地 MinerU OCR 但失败：" + e.getMessage() +
+                            "\n请确认桌面端 MinerU 组件已下载并启动（设置-组件管理），或稍后重试。";
+                }
+                ProjectFile docx = aiDocxExportService.exportMarkdownToDocx(
+                        file.getProjectId(), parentId, AGENT_USER_ID, docxName, ocrMarkdown);
+                editorBridgeService.sendRefreshFilesAction();
+                editorBridgeService.sendOpenFileAction(docx);
+                return String.format("已将扫描件『%s』经本地 MinerU OCR 识别并转换为 Word 文档『%s』（文件 ID: %d），已在编辑器中打开。\n" +
+                        "说明：这是 OCR 内容级转换（识别文字并保留段落结构，不保留原版式；识别结果建议人工核对）。\n" +
+                        "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹）。",
+                        file.getName(), docx.getName(), docx.getId());
             }
 
-            String docxName = file.getName().replaceAll("(?i)\\.pdf$", "") + ".docx";
+            // 文本型：版式级优先（pdf2docx），失败回退结构级
+            try {
+                Path projectRoot = storageResolver.projectRoot(file.getProjectId());
+                Files.createDirectories(projectRoot);
+                Path tempOut = projectRoot.resolve(".pdf2docx-" + System.currentTimeMillis() + ".docx");
+                try {
+                    pptxServiceClient.convertPdfToDocx(localPath.toString(), tempOut.toString());
+
+                    ProjectFile docx = projectFileService.createFile(
+                            file.getProjectId(), parentId, docxName, "docx",
+                            Files.size(tempOut), null,
+                            "project_" + file.getProjectId() + "_ai_" + System.currentTimeMillis(),
+                            AGENT_USER_ID);
+                    Path target = storageResolver.resolve(docx.getFilePath());
+                    Files.createDirectories(target.getParent());
+                    Files.move(tempOut, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                    docx.setFileSize(Files.size(target));
+                    projectFileRepository.save(docx);
+
+                    editorBridgeService.sendRefreshFilesAction();
+                    editorBridgeService.sendOpenFileAction(docx);
+                    return String.format("已将『%s』版式级转换为 Word 文档『%s』（文件 ID: %d），已在编辑器中打开。\n" +
+                            "说明：版式级转换（pdf2docx），段落/表格/图片/分栏尽量保留原排版。\n" +
+                            "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹，用户可逐条接受/拒绝）。",
+                            file.getName(), docx.getName(), docx.getId());
+                } finally {
+                    Files.deleteIfExists(tempOut);
+                }
+            } catch (Exception e) {
+                log.warn("Layout-level pdf2docx conversion failed, falling back to structural extraction", e);
+            }
+
             ProjectFile docx = aiDocxExportService.exportMarkdownToDocx(
                     file.getProjectId(), parentId, AGENT_USER_ID, docxName, markdown);
-
             editorBridgeService.sendRefreshFilesAction();
             editorBridgeService.sendOpenFileAction(docx);
-
-            return String.format("已将『%s』转换为 Word 文档『%s』（文件 ID: %d）并在编辑器中打开。\n" +
-                    "说明：这是内容级转换，保留文字与段落、不保留原 PDF 版式。\n" +
-                    "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹，用户可逐条接受/拒绝）。",
+            return String.format("已将『%s』转换为 Word 文档『%s』（文件 ID: %d），已在编辑器中打开。\n" +
+                    "说明：版式级转换服务当前不可用，本次为结构级转换（保留文字与段落、不保留原版式）。\n" +
+                    "接下来可用 doc_* 编辑工具修改该 docx（修改带修订痕迹）。",
                     file.getName(), docx.getName(), docx.getId());
         } catch (Exception e) {
             return errorOf("PDF 转 Word 失败", e);
