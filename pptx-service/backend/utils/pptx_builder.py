@@ -14,6 +14,10 @@ from pptx.dml.color import RGBColor
 from PIL import Image, ImageFont, ImageDraw
 from html.parser import HTMLParser
 
+# [checkba] markdown 治理 + run/段落格式工具（HOUSE 字体、bullet、删除线、高亮）
+from utils.text_sanitizer import parse_lines, parse_inline, strip_markdown
+from utils import pptx_format_utils as fmt_utils
+
 logger = logging.getLogger(__name__)
 
 
@@ -163,7 +167,7 @@ class PPTXBuilder:
             core.last_modified_by = "banana-slides"
             core.created = now
             core.modified = now
-            core.last_printed = None
+            # [checkba] 不再写 last_printed=None：python-pptx 要求 datetime，传 None 必抛
         except Exception as e:
             logger.warning(f"Failed to set core properties: {e}")
     
@@ -409,21 +413,11 @@ class PPTXBuilder:
         text_frame.margin_top = Inches(0)
         text_frame.margin_bottom = Inches(0)
         
-        def replace_some_chars(text: str) -> str:
-            # replace logic
-            # replace · to • if starts with ·
-            text = text.replace('·', '•', 1) if text.lstrip().startswith('·') else text
-            return text
-        actual_text = replace_some_chars(actual_text)
-        
-        # Calculate font size
-        font_size = self.calculate_font_size(bbox, actual_text, text_level, dpi)
-        
         # Determine effective alignment - text_style优先，否则使用参数
         effective_align = align
         if text_style and hasattr(text_style, 'text_alignment') and text_style.text_alignment:
             effective_align = text_style.text_alignment
-        
+
         # Get style attributes
         is_bold = False
         is_italic = False
@@ -432,67 +426,95 @@ class PPTXBuilder:
             is_bold = getattr(text_style, 'is_bold', False)
             is_italic = getattr(text_style, 'is_italic', False)
             is_underline = getattr(text_style, 'is_underline', False)
-        
+
         # Make title text bold (legacy behavior)
         if text_level == 1 or text_level == 'title':
             is_bold = True
-        
-        # Render text with colors
+
+        # [checkba] 落字前的 markdown 治理：行内标记转真格式，列表前缀转真项目符号。
+        # 字号测量用消毒后的纯文本（标记符不再占宽度）。
+        def _run_spec(inline_run, color_hex=None):
+            """由 InlineRun + 基础样式合成 apply_run_format 规格"""
+            spec = {
+                'bold': is_bold or inline_run.bold,
+                'italic': is_italic or inline_run.italic,
+                'underline': is_underline,
+                'size_pt': font_size,
+                'font_name': fmt_utils.HOUSE_LATIN_FONT,
+                'ea_font': fmt_utils.HOUSE_EA_FONT,
+            }
+            if inline_run.strike:
+                spec['strike'] = True
+            if inline_run.highlight:
+                spec['highlight'] = '#FFFF00'
+            if inline_run.code:
+                spec['code'] = True
+            if color_hex:
+                spec['color'] = color_hex
+            return spec
+
         if has_colored_segments:
-            # Multi-color text: use runs for each segment
-            paragraph = text_frame.paragraphs[0]
-            paragraph.clear()
-            
+            # Multi-color text: use runs for each segment（保持单段落，段内多 run）
+            seg_runs = []
             latex_count = 0
             for seg in text_style.colored_segments:
-                run = paragraph.add_run()
-                run.text = replace_some_chars(seg.text)
-                run.font.size = Pt(font_size)
-                run.font.bold = is_bold
-                run.font.underline = is_underline
-                # Set segment-specific color
-                r, g, b = seg.color_rgb
-                run.font.color.rgb = RGBColor(r, g, b)
-                
-                # Handle LaTeX formula segments
-                if hasattr(seg, 'is_latex') and seg.is_latex:
-                    # For LaTeX formulas, use italic style as visual hint
-                    # TODO: In future, could render as actual equation using OMML
-                    run.font.italic = True
+                is_latex = bool(getattr(seg, 'is_latex', False))
+                if is_latex:
+                    # LaTeX 公式原样保留（不做 markdown 解析），斜体作视觉提示
                     latex_count += 1
-                    logger.debug(f"  LaTeX formula detected: '{seg.text}'")
+                    seg_runs.append((seg, [type('IR', (), {
+                        'text': seg.text, 'bold': False, 'italic': True,
+                        'strike': False, 'code': False, 'highlight': False})()]))
                 else:
-                    run.font.italic = is_italic
-            
+                    seg_runs.append((seg, parse_inline(seg.text)))
+
+            plain_text = ''.join(ir.text for _, irs in seg_runs for ir in irs)
+            font_size = self.calculate_font_size(bbox, plain_text, text_level, dpi)
+
+            paragraph = text_frame.paragraphs[0]
+            paragraph.clear()
+            for seg, inline_runs in seg_runs:
+                r, g, b = seg.color_rgb
+                color_hex = f'#{r:02X}{g:02X}{b:02X}'
+                for ir in inline_runs:
+                    run = paragraph.add_run()
+                    run.text = ir.text
+                    fmt_utils.apply_run_format(run, _run_spec(ir, color_hex))
+
+            fmt_utils.apply_paragraph_format(paragraph, {'align': effective_align})
             latex_info = f", {latex_count} latex" if latex_count > 0 else ""
             style_info = f" | multi-color: {len(text_style.colored_segments)} segments{latex_info}"
+            actual_text = plain_text
         else:
-            # Single color text: use simple text assignment
-            text_frame.text = actual_text
-            # IMPORTANT: Re-get paragraph after setting text_frame.text
-            # because setting text_frame.text creates a new paragraph object
-            paragraph = text_frame.paragraphs[0]
-            paragraph.font.size = Pt(font_size)
-            paragraph.font.bold = is_bold
-            paragraph.font.italic = is_italic
-            paragraph.font.underline = is_underline
-            
-            # Apply single font color if provided
+            # 单色文本：逐行成段（修复原实现只有首段吃到样式的缺陷），
+            # 列表行写真实 buChar/buAutoNum，标题行加粗。
+            line_specs = parse_lines(actual_text)
+            plain_text = '\n'.join(s.text for s in line_specs)
+            font_size = self.calculate_font_size(bbox, plain_text, text_level, dpi)
+
+            color_hex = None
             if text_style and hasattr(text_style, 'font_color_rgb') and text_style.font_color_rgb:
                 r, g, b = text_style.font_color_rgb
-                paragraph.font.color.rgb = RGBColor(r, g, b)
-            
+                color_hex = f'#{r:02X}{g:02X}{b:02X}'
+
+            for idx, spec_line in enumerate(line_specs):
+                paragraph = text_frame.paragraphs[0] if idx == 0 else text_frame.add_paragraph()
+                para_fmt = {'align': effective_align}
+                if spec_line.bullet:
+                    para_fmt['bullet'] = spec_line.bullet
+                    if spec_line.number:
+                        para_fmt['number_start'] = spec_line.number
+                fmt_utils.apply_paragraph_format(paragraph, para_fmt)
+                for ir in spec_line.runs:
+                    run = paragraph.add_run()
+                    run.text = ir.text
+                    run_fmt = _run_spec(ir, color_hex)
+                    if spec_line.heading_level:
+                        run_fmt['bold'] = True
+                    fmt_utils.apply_run_format(run, run_fmt)
+
             style_info = f" | color={text_style.font_color_rgb if text_style else 'default'}"
-        
-        # Apply alignment after paragraph is finalized
-        if effective_align == 'center':
-            paragraph.alignment = PP_ALIGN.CENTER
-        elif effective_align == 'right':
-            paragraph.alignment = PP_ALIGN.RIGHT
-        elif effective_align == 'justify':
-            paragraph.alignment = PP_ALIGN.JUSTIFY
-        else:
-            paragraph.alignment = PP_ALIGN.LEFT
+            actual_text = plain_text
         
         # Calculate bbox dimensions for logging
         bbox_width = bbox[2] - bbox[0]
@@ -620,27 +642,34 @@ class PPTXBuilder:
                 for col_idx, cell_text in enumerate(row_data):
                     if col_idx < cols:  # Safety check
                         cell = table.cell(row_idx, col_idx)
-                        cell.text = cell_text
-                        
+                        # [checkba] 单元格落字去 markdown
+                        cell.text = strip_markdown(cell_text)
+
                         # Style the cell
                         text_frame = cell.text_frame
                         text_frame.word_wrap = True
-                        
+
                         # Calculate font size for table cell
                         # Use a conservative size to fit in cell
                         cell_height_px = (bbox[3] - bbox[1]) / rows
                         cell_width_px = (bbox[2] - bbox[0]) / cols
-                        
+
                         # Estimate font size (smaller for tables)
                         font_size = min(18, max(8, cell_height_px * 0.3))
-                        
+
                         for paragraph in text_frame.paragraphs:
                             paragraph.font.size = Pt(font_size)
                             paragraph.alignment = PP_ALIGN.CENTER
-                            
+
                             # Header row (first row) should be bold
                             if row_idx == 0:
                                 paragraph.font.bold = True
+                            # [checkba] HOUSE 字体（西文/中文分设）
+                            for run in paragraph.runs:
+                                fmt_utils.apply_run_format(run, {
+                                    'font_name': fmt_utils.HOUSE_LATIN_FONT,
+                                    'ea_font': fmt_utils.HOUSE_EA_FONT,
+                                })
             
             logger.info(f"Added editable table: {rows}x{cols} at bbox {bbox}")
             

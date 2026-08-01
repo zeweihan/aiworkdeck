@@ -148,6 +148,7 @@ You can organize the content in two ways:
 
 Choose the format that best fits the content. Use parts when the PPT has clear major sections.
 Unless otherwise specified, the first page should be kept simplest, containing only the title, subtitle, and presenter information.
+Do NOT use markdown formatting symbols (such as **, *, `, #, - list prefixes) inside titles or points; write plain text only.
 
 The user's request: {idea_prompt}. Now generate the outline, don't include any other text.
 {get_language_instruction(language)}
