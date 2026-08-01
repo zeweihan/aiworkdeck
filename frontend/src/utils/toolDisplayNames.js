@@ -101,6 +101,14 @@ const NAMES = {
   pptx_export_editable: { zh: '导出可编辑PPT', en: 'Export editable slides' },
   pptx_inspect_format: { zh: '读取PPT格式', en: 'Inspect slide formatting' },
   pptx_apply_format: { zh: '设置PPT格式', en: 'Format slides' },
+  // PDF
+  pdf_list_files: { zh: '列出PDF文件', en: 'List PDF files' },
+  pdf_inspect: { zh: '读取PDF内容', en: 'Inspect PDF' },
+  pdf_highlight: { zh: '高亮PDF文本', en: 'Highlight PDF text' },
+  pdf_annotate: { zh: '添加PDF批注', en: 'Annotate PDF' },
+  pdf_redact: { zh: 'PDF脱敏', en: 'Redact PDF' },
+  pdf_replace_text: { zh: '替换PDF文本', en: 'Replace PDF text' },
+  pdf_to_word: { zh: 'PDF转Word', en: 'Convert PDF to Word' },
 }
 
 // code 可以是纯工具名，也可以是 <tool_code> 里的 `tool_name({...})` 完整调用串。
