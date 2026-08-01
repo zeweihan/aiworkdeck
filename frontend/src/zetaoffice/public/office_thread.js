@@ -704,6 +704,9 @@ function readCellOut(cell) {
   if (enumEq(t, T.EMPTY)) return '';
   if (enumEq(t, T.VALUE)) return cell.getValue();
   if (enumEq(t, T.FORMULA)) {
+    // 出错的公式格 getValue() 返回 0、结果类型也可能标 VALUE——先查错误码，
+    // 否则解析失败的公式在读回里伪装成 0，AI 无从发现（组 17 抽查实证）。
+    try { const err = cell.getError(); if (err) return cell.getString() || ('Err:' + err); } catch (e) {}
     try {
       const FR_VALUE = (css.sheet && css.sheet.FormulaResult && css.sheet.FormulaResult.VALUE != null) ? css.sheet.FormulaResult.VALUE : 1;
       if (unoEnumVal(cell.getPropertyValue('FormulaResultType')) === unoEnumVal(FR_VALUE)) return cell.getValue();
@@ -714,6 +717,24 @@ function readCellOut(cell) {
 // 写入时把"长得像数字"的字符串落成数值（同 NUMERIC_CELL_RE 的 house 口径，但
 // 更严格：前导 0 的编号（如 '001'）保持文本，避免证照号/编号被吞前导零）。
 const SHEET_NUMERIC_RE = /^-?(0|[1-9]\d*)(\.\d+)?$/;
+// Excel 习惯公式 → setFormula 的 API 文法（真机实证：组 17 抽查）：参数分隔符
+// 必须是分号（逗号 Err:508），跨表引用必须是 Sheet.A1（Sheet!A1 报 #NAME?
+// Err:525）。AI 与用户都按 Excel 习惯写逗号和 '!'，在此归一化——只动双引号
+// 字符串字面量之外的字符（Calc 转义引号是成对 ""，相邻翻转两次天然兼容）。
+// 代价：Excel 数组字面量的逗号列分隔与 Calc 交集操作符 '!' 会被误转，两者在
+// AI 生成的公式里出现率趋近于零，换取最高频的多参数函数全部可用。
+function normalizeFormula(f) {
+  let out = '';
+  let inStr = false;
+  for (let i = 0; i < f.length; i++) {
+    const ch = f.charAt(i);
+    if (ch === '"') { inStr = !inStr; out += ch; continue; }
+    if (!inStr && ch === ',') { out += ';'; continue; }
+    if (!inStr && ch === '!') { out += '.'; continue; }
+    out += ch;
+  }
+  return out;
+}
 
 // ---- 流式写入状态机：markdown 行级解析 → 标准格式落字 ------------------------
 // stream_insert 攒字节、按完整行消费；stream_flush 收尾（写掉尾行/尾表、复位）。
@@ -2310,6 +2331,7 @@ const EXEC = {
     for (let i = 0; i < rows.length; i++) if (Array.isArray(rows[i])) nCols = Math.max(nCols, rows[i].length);
     if (nCols > 100) return { success: false, message: '一次最多写 100 列，请分批写入' };
     let written = 0;
+    const formulaCells = []; // 写完统一验错：解析失败/求值出错的公式要报给 AI 自纠
     for (let r = 0; r < rows.length; r++) {
       const line = Array.isArray(rows[r]) ? rows[r] : [rows[r]];
       for (let c = 0; c < line.length; c++) {
@@ -2320,12 +2342,22 @@ const EXEC = {
         else if (typeof v === 'boolean') cell.setValue(v ? 1 : 0);
         else {
           const s = String(v);
-          if (s.charAt(0) === '=') cell.setFormula(s);
+          if (s.charAt(0) === '=') {
+            cell.setFormula(normalizeFormula(s));
+            formulaCells.push({ cell: cell, name: colLetterOf(a0.StartColumn + c) + (a0.StartRow + r + 1), input: s });
+          }
           else if (SHEET_NUMERIC_RE.test(s.trim())) cell.setValue(Number(s.trim()));
           else cell.setString(s);
         }
         written++;
       }
+    }
+    const formulaErrors = [];
+    for (let i = 0; i < formulaCells.length && formulaErrors.length < 20; i++) {
+      try {
+        const err = formulaCells[i].cell.getError();
+        if (err) formulaErrors.push({ cell: formulaCells[i].name, formula: formulaCells[i].input, errorCode: err, display: formulaCells[i].cell.getString() });
+      } catch (e) {}
     }
     const wrote = sheetRangeName({
       StartColumn: a0.StartColumn, StartRow: a0.StartRow,
@@ -2337,7 +2369,12 @@ const EXEC = {
       const vr = sheet.getCellRangeByName(wrote);
       for (let c = 0; c < Math.min(nCols, 10); c++) firstRowAfterWrite.push(readCellOut(vr.getCellByPosition(c, 0)));
     } catch (e) {}
-    return { success: true, sheet: sheet.getName(), range: wrote, cellsWritten: written, firstRowAfterWrite: firstRowAfterWrite };
+    const res = { success: true, sheet: sheet.getName(), range: wrote, cellsWritten: written, firstRowAfterWrite: firstRowAfterWrite };
+    if (formulaErrors.length) {
+      res.formulaErrors = formulaErrors;
+      res.note = formulaErrors.length + ' 个公式出错（引擎为 LibreOffice 24.2：不支持 XLOOKUP 等新函数，用 VLOOKUP 或 INDEX+MATCH 改写；函数名必须是英文）。请修正后用 sheet_write_cells 重写这些单元格。';
+    }
+    return res;
   },
   // [表格·选] 选中一个区域（视图滚过去、选区亮出来——用户看得见 AI 在操作哪里）。
   sheet_select_range(p) {

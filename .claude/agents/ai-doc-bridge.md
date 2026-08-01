@@ -50,7 +50,7 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_* 编辑原语、E
 
 EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发的 load_document/export_document/insert_image/var_*/*_hyperlink 与诊断类 get_ui_lang/probe_modules/list_fonts/debug_revisions）。`ui_command` 是其中一个 action，worker 端再经 UI_COMMANDS 二级白名单映射 `.uno:` 槽（IME 快捷键用，非 AI 管线）。
 
-**电子表格（Calc / xlsx）sheet_\* 原语**：doc_\* 是 Writer 专属（`xModel.getText()` 在 Calc 文档上必然失败），xlsx 走 sheet_\* 七件：`sheet_get_overview / sheet_read_range / sheet_write_cells / sheet_select_range / sheet_format_cells / sheet_set_borders / sheet_set_row_col`（工具名=action 名，不做映射）。worker 端 `resolveSheet` 统一守卫文档类型（非 Calc 返回明确错误）并把命中的工作表切为活动表。Calc 没有 redline，写入即生效——安全网是 doc_undo 与文档检查点（写类工具都打了 `fileEffect="MODIFIED"`）。地雷：`VertJustify` 声明 long、个别引擎按 short 校验（失败退 shortAny）；写入时数字样式字符串落数值但**前导 0 的编号保持文本**；数字格式经 `getNumberFormats().queryKey/addNew`（非法格式码会抛）。
+**电子表格（Calc / xlsx）sheet_\* 原语**：doc_\* 是 Writer 专属（`xModel.getText()` 在 Calc 文档上必然失败），xlsx 走 sheet_\* 七件：`sheet_get_overview / sheet_read_range / sheet_write_cells / sheet_select_range / sheet_format_cells / sheet_set_borders / sheet_set_row_col`（工具名=action 名，不做映射）。worker 端 `resolveSheet` 统一守卫文档类型（非 Calc 返回明确错误）并把命中的工作表切为活动表。Calc 没有 redline，写入即生效——安全网是 doc_undo 与文档检查点（写类工具都打了 `fileEffect="MODIFIED"`）。地雷：`VertJustify` 声明 long、个别引擎按 short 校验（失败退 shortAny）；写入时数字样式字符串落数值但**前导 0 的编号保持文本**；数字格式经 `getNumberFormats().queryKey/addNew`（非法格式码会抛）；**setFormula 走 API 文法**——参数分隔符必须分号（逗号 Err:508）、跨表引用必须 `Sheet.A1`（`Sheet!A1` 报 #NAME?），worker 的 `normalizeFormula` 在字符串字面量外做 `,`→`;`、`!`→`.` 归一（Excel 数组字面量与 Calc 交集操作符 `!` 被牺牲，AI 公式里趋近于零）；引擎 LO 24.2 **无 XLOOKUP**（24.8 才有），出错公式经 `sheet_write_cells` 返回值 `formulaErrors` 报给 AI 自纠，读回侧 `readCellOut` 先查 `getError()`（否则错误格伪装成 0）。
 
 ## 命名双轨现状（PR#192，下个发布周期摘旧名）
 
