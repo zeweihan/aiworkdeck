@@ -25,6 +25,8 @@ from controllers.material_controller import material_bp, material_global_bp
 from controllers.reference_file_controller import reference_file_bp
 from controllers.settings_controller import settings_bp
 from controllers import project_bp, page_bp, template_bp, user_template_bp, export_bp, file_bp
+# [checkba] 存量 pptx 格式识别与操作端点
+from controllers import pptx_edit_bp
 
 
 # Enable SQLite WAL mode for all connections
@@ -111,6 +113,8 @@ def create_app():
     app.register_blueprint(material_global_bp)
     app.register_blueprint(reference_file_bp, url_prefix='/api/reference-files')
     app.register_blueprint(settings_bp)
+    # [checkba] 存量 pptx 格式识别与操作
+    app.register_blueprint(pptx_edit_bp)
 
     with app.app_context():
         # Load settings from database and sync to app.config
