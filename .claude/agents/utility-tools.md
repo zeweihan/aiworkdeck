@@ -23,7 +23,7 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 
 **语音 TTS**：`EasyVoicePane.vue`（api：getTtsVoices/generateTtsAudio）；desktop 本地 Kokoro 由 `desktop/main/services/kokoro-service.js` 管理；后端 `controller/TtsController.java`（/api/tts/voices、/generate）+ `service/TtsService.java`——`external.tts.provider`：elevenlabs（云端默认）| local（桌面捆绑 Kokoro，OpenAI 兼容 /v1，base-url=`external.tts.local-base-url`）。easyvoice Docker 段已停用。
 
-**文件预览/插入**：`FilePreview.vue`（docx/pdf/pptx/压缩包分流见 project-overview ~:5110-5157）、`FilePickerDialog.vue`、`FileLinkDropZone.vue`、`FileStagingArea.vue`；图片插入走 `libreofficeExecutorClient.js` insertImage → office_thread.js；desktop `file-service.js` + IPC `checkba:fs-read-file`（含敏感路径拦截+大小上限）；后端 `FileController.java`（download/upload/upload-status/text/compare）、`ProjectFileController.java`（列表/folder/archive/批量/回收站/tags）、`DocFileLinkController.java`（doc-links）。
+**文件预览/插入**：`FilePreview.vue`（docx/pdf/pptx/压缩包分流见 project-overview ~:5110-5157；PDF 走 Chromium 原生引擎渲染，标准 annotation 可见；watch `file.wpsFileId` 在 AI 改完 PDF 后自动重拉字节——reload_file 是 Object.assign 原地更新，file 对象引用不变，别删这个 watch）、`FilePickerDialog.vue`、`FileLinkDropZone.vue`、`FileStagingArea.vue`；图片插入走 `libreofficeExecutorClient.js` insertImage → office_thread.js；desktop `file-service.js` + IPC `checkba:fs-read-file`（含敏感路径拦截+大小上限）；后端 `FileController.java`（download/upload/upload-status/text/compare）、`ProjectFileController.java`（列表/folder/archive/批量/回收站/tags）、`DocFileLinkController.java`（doc-links）。
 
 **OCR**：desktop 框选与抓屏（见截图）；后端 `controller/OcrController.java`（POST /api/ocr/recognize、GET /temp/{fileName}）+ `service/OcrService.java` + `service/ocr/AliyunOcrClient*`——**后端 OCR 实际链路是阿里云**；MinerU 只在 desktop 服务栈（mineru-service.js）与 PPTX 工具链出现，OCR 后端未直接对接 MinerU。
 

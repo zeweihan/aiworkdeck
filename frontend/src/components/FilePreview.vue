@@ -247,28 +247,16 @@ export default {
       immediate: true,
       handler(newFile) {
         console.log('FilePreview file 变化:', newFile)
-        // 清理旧的 blobUrl
-        if (this.blobUrl) {
-          URL.revokeObjectURL(this.blobUrl)
-          this.blobUrl = ''
-        }
-
-        this.docxRenderFailed = false
-        this.pptxRenderFailed = false
-
-        if (!newFile) return
-
-        if (this.isText) {
-          this.loadTextContent()
-        } else if (this.isWord && this.useDocxPreview) {
-          this.renderDocx()
-        } else if (this.isPptx && this.usePptxPreview) {
-          this.renderPptx()
-        } else if (this.isImage || this.isVideo || this.isAudio || this.isPdf) {
-           this.loadMediaResource()
-        } else if (this.isArchive) {
-          this.loadArchiveEntries()
-        }
+        this.reloadPreview(newFile)
+      }
+    },
+    // AI 修改文件后（pdf_highlight/pdf_redact 等）后端会更新 wpsFileId 并发 reload_file，
+    // reload 处理是对既有 file 对象 Object.assign 原地更新——对象引用不变，上面的
+    // file watch 不会触发。监听 wpsFileId 让预览重新拉取最新字节（编辑器同款语义）。
+    'file.wpsFileId'(newVal, oldVal) {
+      if (newVal && newVal !== oldVal) {
+        console.log('FilePreview wpsFileId 变化，重新加载预览:', newVal)
+        this.reloadPreview(this.file)
       }
     }
   },
@@ -281,6 +269,31 @@ export default {
     console.log('FilePreview mounted, file:', this.file, 'fileUrl:', this.fileUrl)
   },
   methods: {
+    // file watch 与 wpsFileId watch 共用的加载分发（原 file watch handler 逻辑原样抽出）
+    reloadPreview(newFile) {
+      // 清理旧的 blobUrl
+      if (this.blobUrl) {
+        URL.revokeObjectURL(this.blobUrl)
+        this.blobUrl = ''
+      }
+
+      this.docxRenderFailed = false
+      this.pptxRenderFailed = false
+
+      if (!newFile) return
+
+      if (this.isText) {
+        this.loadTextContent()
+      } else if (this.isWord && this.useDocxPreview) {
+        this.renderDocx()
+      } else if (this.isPptx && this.usePptxPreview) {
+        this.renderPptx()
+      } else if (this.isImage || this.isVideo || this.isAudio || this.isPdf) {
+        this.loadMediaResource()
+      } else if (this.isArchive) {
+        this.loadArchiveEntries()
+      }
+    },
     async loadTextContent() {
       if (!this.file || !this.fileUrl) return
 
