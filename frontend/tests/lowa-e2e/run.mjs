@@ -110,6 +110,41 @@ const DEBUG_ACTIONS = `
     } catch (e) { out.b2Err = errStr(e); }
     return out;
   },
+  debug_fresh_calc() {
+    // 组 16 探针：换一份全新空白 Calc 文档（sheet_* 原语在真 Calc 模型上验证），
+    // 与 debug_fresh_document 同一条 private:factory 路径。
+    try {
+      const loaded = desktop.loadComponentFromURL('private:factory/scalc', '_blank', 0, [mkProp('Hidden', true)]);
+      if (!loaded) return { success: false, message: 'loadComponentFromURL returned null' };
+      xModel = loaded;
+      ctrl = loaded.getCurrentController();
+      return { success: true };
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
+  debug_sheet_cell_info(p) {
+    // 组 16 探针：读单元格格式落点。枚举比较在 worker 侧做完返回布尔（enumEq，
+    // LO 对枚举属性可能读回裸 short）；VertJustify 是 long 常量组直接比数值。
+    try {
+      const sheet = ctrl.getActiveSheet();
+      const range = sheet.getCellRangeByName(String(p.cell || 'A1'));
+      const cell = range.getCellByPosition(0, 0);
+      const out = { success: true, text: cell.getString(), value: cell.getValue() };
+      try { out.bold = cell.getPropertyValue('CharWeight') > 100; } catch (e) {}
+      try { out.sizePt = cell.getPropertyValue('CharHeight'); } catch (e) {}
+      try { out.hCenter = enumEq(cell.getPropertyValue('HoriJustify'), css.table.CellHoriJustify.CENTER); } catch (e) {}
+      try { out.hRight = enumEq(cell.getPropertyValue('HoriJustify'), css.table.CellHoriJustify.RIGHT); } catch (e) {}
+      try { out.vCenter = unoEnumVal(cell.getPropertyValue('VertJustify')) === 2; } catch (e) {}
+      try { out.bg = cell.getPropertyValue('CellBackColor'); } catch (e) {}
+      try {
+        const key = cell.getPropertyValue('NumberFormat');
+        out.numberFormat = xModel.getNumberFormats().getByKey(key).getPropertyValue('FormatString');
+      } catch (e) {}
+      try { out.borderTopWidth = cell.getPropertyValue('TopBorder2').LineWidth; } catch (e) {}
+      try { out.rowHeightMm = range.getRows().getByIndex(0).getPropertyValue('Height'); } catch (e) {}
+      try { out.colWidthMm = range.getColumns().getByIndex(0).getPropertyValue('Width'); } catch (e) {}
+      return out;
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
 `
 function patchServed(urlPath, content) {
   if (urlPath === '/office_thread.js') {
@@ -120,8 +155,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info"'),
       'utf8')
   }
   return content
@@ -491,6 +526,66 @@ try {
       const fm2 = await exec('get_formatting')
       check('小标题=正文字号但加粗', fm2.character.bold === true && Math.abs(fm2.character.sizePt - 12) < 0.2, JSON.stringify(fm2.character))
     }
+  }
+
+  // ---------- 组 16：Calc 电子表格原语（sheet_*）----------
+  console.log('\n[16] Calc sheet_* 原语：读写 / 选区 / 格式 / 边框 / 行高列宽')
+  {
+    // 文档类型守卫：Writer 文档上 sheet_* 应报"不是电子表格"，而不是抛 UNO 异常
+    const guard = await exec('sheet_get_overview')
+    check('Writer 文档上 sheet_* 被明确拒绝', guard.success === false && /电子表格/.test(guard.message || ''), JSON.stringify(guard))
+
+    const fresh = await exec('debug_fresh_calc')
+    check('换新 Calc 文档成功', fresh && fresh.success === true, JSON.stringify(fresh))
+
+    const ov = await exec('sheet_get_overview')
+    check('sheet_get_overview 列出工作表', ov.success === true && ov.sheetCount >= 1 && !!ov.activeSheet, JSON.stringify(ov))
+
+    const wr = await exec('sheet_write_cells', {
+      startCell: 'A1',
+      rows: [['项目', '金额'], ['咨询费', 10000], ['律师费', '2500.5'], ['合计', '=SUM(B2:B3)'], ['编号', '001']],
+    })
+    check('sheet_write_cells 写入 5×2', wr.success === true && wr.range === 'A1:B5' && wr.cellsWritten === 10, JSON.stringify(wr))
+    check('写入验证回路返回首行', Array.isArray(wr.firstRowAfterWrite) && wr.firstRowAfterWrite[0] === '项目', JSON.stringify(wr.firstRowAfterWrite))
+
+    const rd = await exec('sheet_read_range', { range: 'A1:B5' })
+    check('读回：文本/数值/数字串转数值/公式结果', rd.success === true
+      && rd.rows[0][0] === '项目' && rd.rows[1][1] === 10000 && rd.rows[2][1] === 2500.5 && rd.rows[3][1] === 12500.5,
+      JSON.stringify(rd.rows))
+    check('前导 0 编号保持文本', rd.rows[4][1] === '001', JSON.stringify(rd.rows[4]))
+    check('公式串可见', (rd.formulas || []).some((f) => f.cell === 'B4' && /SUM/i.test(f.formula)), JSON.stringify(rd.formulas))
+
+    const rdAll = await exec('sheet_read_range', {})
+    check('缺省读已用区域', rdAll.success === true && rdAll.range === 'A1:B5', JSON.stringify(rdAll.range))
+
+    const sel = await exec('sheet_select_range', { range: 'A1:B5' })
+    check('sheet_select_range 成功', sel.success === true && sel.range === 'A1:B5' && sel.topLeftText === '项目', JSON.stringify(sel))
+
+    const fc = await exec('sheet_format_cells', { range: 'A1:B1', bold: true, fontSize: 12, hAlign: 'center', vAlign: 'center', background: '#EEEEEE' })
+    check('表头格式设置成功', fc.success === true, JSON.stringify(fc))
+    const nf = await exec('sheet_format_cells', { range: 'B2:B4', numberFormat: '#,##0.00', hAlign: 'right' })
+    check('数字格式+右对齐设置成功', nf.success === true, JSON.stringify(nf))
+    let ci = await exec('debug_sheet_cell_info', { cell: 'A1' })
+    check('A1 加粗/水平垂直居中/12 号/底色', ci.bold === true && ci.hCenter === true && ci.vCenter === true
+      && Math.abs(ci.sizePt - 12) < 0.2 && ci.bg === 0xEEEEEE, JSON.stringify(ci))
+    ci = await exec('debug_sheet_cell_info', { cell: 'B2' })
+    check('B2 数字格式 #,##0.00 且右对齐', ci.numberFormat === '#,##0.00' && ci.hRight === true, JSON.stringify(ci))
+
+    const bd = await exec('sheet_set_borders', { range: 'A1:B5', preset: 'all', widthPt: 1.5 })
+    check('边框设置成功', bd.success === true, JSON.stringify(bd))
+    ci = await exec('debug_sheet_cell_info', { cell: 'A1' })
+    check('A1 上边框 1.5 磅（53/100mm）', Math.abs((ci.borderTopWidth || 0) - 53) <= 1, JSON.stringify(ci.borderTopWidth))
+
+    const rc = await exec('sheet_set_row_col', { range: 'A1:B1', rowHeightPt: 24, colWidthPt: 90 })
+    check('行高列宽设置成功', rc.success === true, JSON.stringify(rc))
+    ci = await exec('debug_sheet_cell_info', { cell: 'A1' })
+    check('行高 24 磅（≈847/100mm）', Math.abs((ci.rowHeightMm || 0) - 847) <= 5, JSON.stringify(ci.rowHeightMm))
+    check('列宽 90 磅（≈3175/100mm）', Math.abs((ci.colWidthMm || 0) - 3175) <= 10, JSON.stringify(ci.colWidthMm))
+
+    const bad = await exec('sheet_read_range', { range: 'not-a-range' })
+    check('非法区域被拒绝', bad.success === false, JSON.stringify(bad))
+    const badSheet = await exec('sheet_read_range', { sheet: '不存在的表' })
+    check('不存在的工作表被拒绝', badSheet.success === false && /工作表不存在/.test(badSheet.message || ''), JSON.stringify(badSheet))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

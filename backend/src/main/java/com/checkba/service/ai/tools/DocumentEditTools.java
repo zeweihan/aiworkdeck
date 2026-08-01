@@ -859,6 +859,190 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    // ==================== 电子表格（Calc / xlsx）sheet_* 原语 ====================
+    // 打开的 xlsx 由同一 LibreOffice 引擎的 Calc 模块承载；doc_* 的 Writer 原语
+    // （getText 一族）在表格文档上必然失败，表格操作一律走本节 sheet_* 工具。
+    // Calc 没有修订（redline）机制，写入即生效；纠错用 doc_undo，
+    // 首次修改前的文档检查点（fileEffect=MODIFIED）仍是最后防线。
+
+    @Tool("【表格·看】查看当前打开的电子表格（xlsx）的工作表结构：每张工作表的名称、序号、已用区域和行列数。" +
+          "打开 xlsx 后先用本工具了解结构，再决定读哪个区域。Word 文档请用 doc_* 工具，本工具仅对表格文档有效。")
+    public String sheet_get_overview() {
+        log.info("Tool: sheet_get_overview called");
+        try {
+            return editorBridgeService.executeEditorCommand("sheet_get_overview", null);
+        } catch (Exception e) {
+            log.error("Failed to get sheet overview", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【表格·看】读取电子表格指定区域的单元格内容。返回二维数组 rows（文本为字符串、数值/公式结果为数字，日期是序列数）" +
+          "和公式清单 formulas。range 不传则读整个已用区域；区域过大会截断并提示分块读取。")
+    public String sheet_read_range(
+            @P("区域，如 'A1:D20' 或单个单元格 'B3'；不传则读整个已用区域") String range,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_read_range called range={}, sheet={}", range, sheet);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (range != null && !range.isBlank()) params.put("range", range);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_read_range", params);
+        } catch (Exception e) {
+            log.error("Failed to read sheet range", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "写入单元格", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·写】从起始单元格开始按二维数组批量写入。rowsJson 是 JSON 二维数组，如 " +
+          "[[\"项目\",\"金额\"],[\"咨询费\",10000],[\"合计\",\"=SUM(B2:B2)\"]]：数字与数字样式字符串写为数值，" +
+          "'=' 开头写为公式，其余写为文本；null 跳过不动该格。写入即生效（无修订痕迹），返回实际写入区域和首行回读值供核对。")
+    public String sheet_write_cells(
+            @P("起始单元格，如 'A1'") String startCell,
+            @P("写入内容，JSON 二维数组") String rowsJson,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_write_cells called startCell={}, json length={}", startCell, rowsJson != null ? rowsJson.length() : 0);
+        if (startCell == null || startCell.isBlank()) {
+            return "Error: 缺少 startCell 参数（如 'A1'）";
+        }
+        if (rowsJson == null || rowsJson.isBlank()) {
+            return "Error: 缺少 rowsJson 参数（JSON 二维数组）";
+        }
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            java.util.List<java.util.List<Object>> rows = mapper.readValue(
+                    rowsJson, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.List<Object>>>() {});
+            if (rows.isEmpty()) {
+                return "Error: rowsJson 不能为空";
+            }
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("startCell", startCell);
+            params.put("rows", rows);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_write_cells", params);
+        } catch (com.fasterxml.jackson.core.JacksonException je) {
+            return "Error: rowsJson 不是合法的 JSON 二维数组: " + je.getOriginalMessage();
+        } catch (Exception e) {
+            log.error("Failed to write sheet cells", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【表格·选】选中电子表格的一个区域（视图滚动到该处并高亮，用户能看到 AI 正在操作哪里）。" +
+          "选中后可接 sheet_format_cells / sheet_set_borders 等格式操作。")
+    public String sheet_select_range(
+            @P("区域，如 'A1:D20' 或单个单元格 'B3'") String range,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_select_range called range={}, sheet={}", range, sheet);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range != null ? range : "");
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_select_range", params);
+        } catch (Exception e) {
+            log.error("Failed to select sheet range", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置单元格格式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·格式】设置电子表格区域的格式，只传需要改的参数：加粗/斜体/下划线、字号、字体、字色、底色、" +
+          "水平对齐 hAlign(left/center/right/standard)、垂直对齐 vAlign(top/center/bottom/standard)、自动换行 wrap、" +
+          "数字格式 numberFormat（LibreOffice 格式码，如 '#,##0.00'、'0.00%'、'yyyy-mm-dd'、'@'=文本）。")
+    public String sheet_format_cells(
+            @P("区域，如 'A1:D1'") String range,
+            @P("加粗 true/false，不改则不传") Boolean bold,
+            @P("斜体 true/false，不改则不传") Boolean italic,
+            @P("下划线 true/false，不改则不传") Boolean underline,
+            @P("字号（磅），不改则不传") Double fontSize,
+            @P("字体名，不改则不传") String fontName,
+            @P("文字颜色：#RRGGBB 或 auto，不改则不传") String color,
+            @P("单元格底色：#RRGGBB 或 none，不改则不传") String background,
+            @P("水平对齐：left/center/right/standard，不改则不传") String hAlign,
+            @P("垂直对齐：top/center/bottom/standard，不改则不传") String vAlign,
+            @P("自动换行 true/false，不改则不传") Boolean wrap,
+            @P("数字格式码，如 '#,##0.00'、'0.00%'、'yyyy-mm-dd'，不改则不传") String numberFormat,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_format_cells called range={}", range);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range != null ? range : "");
+            if (bold != null) params.put("bold", bold);
+            if (italic != null) params.put("italic", italic);
+            if (underline != null) params.put("underline", underline);
+            if (fontSize != null) params.put("fontSize", fontSize);
+            if (fontName != null && !fontName.isBlank()) params.put("fontName", fontName);
+            if (color != null && !color.isBlank()) params.put("color", color);
+            if (background != null && !background.isBlank()) params.put("background", background);
+            if (hAlign != null && !hAlign.isBlank()) params.put("hAlign", hAlign);
+            if (vAlign != null && !vAlign.isBlank()) params.put("vAlign", vAlign);
+            if (wrap != null) params.put("wrap", wrap);
+            if (numberFormat != null && !numberFormat.isBlank()) params.put("numberFormat", numberFormat);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_format_cells", params);
+        } catch (Exception e) {
+            log.error("Failed to format sheet cells", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置单元格边框", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·格式】给电子表格区域设置边框。preset: all=内外全部框线 / outer=仅外框（内线清除）/ none=清除全部。" +
+          "widthPt 线宽磅数（默认 0.75），color 边框颜色（默认黑色）。")
+    public String sheet_set_borders(
+            @P("区域，如 'A1:D20'") String range,
+            @P("边框样式：all/outer/none，默认 all") String preset,
+            @P("线宽（磅，如 0.75、1.5），默认 0.75") Double widthPt,
+            @P("边框颜色 #RRGGBB，默认黑色") String color,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_set_borders called range={}, preset={}", range, preset);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range != null ? range : "");
+            if (preset != null && !preset.isBlank()) params.put("preset", preset);
+            if (widthPt != null) params.put("widthPt", widthPt);
+            if (color != null && !color.isBlank()) params.put("color", color);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_set_borders", params);
+        } catch (Exception e) {
+            log.error("Failed to set sheet borders", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置行高列宽", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·格式】设置电子表格的行高列宽，作用于 range 覆盖到的整行/整列。" +
+          "rowHeightPt/colWidthPt 按磅设定值；autoFitRows/autoFitCols=true 按内容自动适应（优先于定值）。只传需要改的参数。")
+    public String sheet_set_row_col(
+            @P("区域，如 'A1:D1'（其覆盖的整行/整列生效）") String range,
+            @P("行高（磅），不改则不传") Double rowHeightPt,
+            @P("列宽（磅），不改则不传") Double colWidthPt,
+            @P("行高自动适应内容 true，不改则不传") Boolean autoFitRows,
+            @P("列宽自动适应内容 true，不改则不传") Boolean autoFitCols,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_set_row_col called range={}", range);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range != null ? range : "");
+            if (rowHeightPt != null) params.put("rowHeightPt", rowHeightPt);
+            if (colWidthPt != null) params.put("colWidthPt", colWidthPt);
+            if (autoFitRows != null) params.put("autoFitRows", autoFitRows);
+            if (autoFitCols != null) params.put("autoFitCols", autoFitCols);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_set_row_col", params);
+        } catch (Exception e) {
+            log.error("Failed to set sheet row/col size", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
     // ==================== 调试工具 ====================
 
     @Tool("调试工具：获取文档中所有修订记录的详细信息，包括修订类型、位置、内容等。用于分析和诊断修订模式下的文本操作问题。")
