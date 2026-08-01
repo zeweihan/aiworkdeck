@@ -139,6 +139,8 @@ const DEBUG_ACTIONS = `
         const key = cell.getPropertyValue('NumberFormat');
         out.numberFormat = xModel.getNumberFormats().getByKey(key).getPropertyValue('FormatString');
       } catch (e) {}
+      try { out.error = cell.getError(); } catch (e) {}
+      try { out.formula = cell.getFormula(); } catch (e) {}
       try { out.borderTopWidth = cell.getPropertyValue('TopBorder2').LineWidth; } catch (e) {}
       try { out.rowHeightMm = range.getRows().getByIndex(0).getPropertyValue('Height'); } catch (e) {}
       try { out.colWidthMm = range.getColumns().getByIndex(0).getPropertyValue('Width'); } catch (e) {}
@@ -586,6 +588,84 @@ try {
     check('非法区域被拒绝', bad.success === false, JSON.stringify(bad))
     const badSheet = await exec('sheet_read_range', { sheet: '不存在的表' })
     check('不存在的工作表被拒绝', badSheet.success === false && /工作表不存在/.test(badSheet.message || ''), JSON.stringify(badSheet))
+  }
+
+  // ---------- 组 17：Calc 常用公式抽查（按使用频率排序）----------
+  console.log('\n[17] Calc 公式抽查：高频函数 / 中文参数 / 分隔符与跨表写法')
+  {
+    await exec('debug_fresh_calc')
+    const ov17 = await exec('sheet_get_overview')
+    const SHEET = ov17.activeSheet
+    // 数据区 A1:C5
+    await exec('sheet_write_cells', {
+      startCell: 'A1',
+      rows: [
+        ['项目', '金额', '类别'],
+        ['咨询费', 10000, '服务'],
+        ['律师费', 2500.5, '服务'],
+        ['差旅费', 800, '报销'],
+        ['印花税', 120, '税费'],
+      ],
+    })
+    // 公式区 E1:E22 —— 按常用频率排序的抽查清单（Excel 习惯写法：逗号分隔）
+    const FORMULAS = [
+      ['SUM', '=SUM(B2:B5)', 13420.5],
+      ['AVERAGE', '=AVERAGE(B2:B5)', 3355.125],
+      ['IF+中文+逗号', '=IF(B2>5000,"高","低")', '高'],
+      ['COUNT', '=COUNT(B2:B5)', 4],
+      ['COUNTA', '=COUNTA(A2:A5)', 4],
+      ['VLOOKUP+中文键', '=VLOOKUP("律师费",A2:B5,2,0)', 2500.5],
+      ['SUMIF+中文条件', '=SUMIF(C2:C5,"服务",B2:B5)', 12500.5],
+      ['COUNTIF+中文条件', '=COUNTIF(C2:C5,"服务")', 2],
+      ['MAX', '=MAX(B2:B5)', 10000],
+      ['MIN', '=MIN(B2:B5)', 120],
+      ['ROUND', '=ROUND(3.14159,2)', 3.14],
+      ['IFERROR', '=IFERROR(VLOOKUP("不存在",A2:B5,2,0),"未找到")', '未找到'],
+      ['INDEX+MATCH', '=INDEX(A2:A5,MATCH(120,B2:B5,0))', '印花税'],
+      ['TEXT 数字格式', '=TEXT(B2,"#,##0.00")', '10,000.00'],
+      ['& 拼接', '="共"&COUNT(B2:B5)&"项"', '共4项'],
+      ['CONCATENATE', '=CONCATENATE(A2,"-",C2)', '咨询费-服务'],
+      ['LEFT 取中文', '=LEFT(A2,2)', '咨询'],
+      ['LEN 中文计数', '=LEN(A2)', 3],
+      ['DATE/YEAR', '=YEAR(DATE(2026,8,1))', 2026],
+      ['TODAY 比较', '=IF(TODAY()>DATE(2026,1,1),"ok","bad")', 'ok'],
+      ['SUMPRODUCT', '=SUMPRODUCT(B2:B3,B2:B3)', 106252500.25],
+      ['TEXTJOIN', '=TEXTJOIN("、",1,A2:A4)', '咨询费、律师费、差旅费'],
+    ]
+    const wr17 = await exec('sheet_write_cells', { startCell: 'E1', rows: FORMULAS.map((f) => [f[1]]) })
+    check('公式批量写入成功', wr17.success === true && wr17.cellsWritten === FORMULAS.length, JSON.stringify(wr17))
+    const rd17 = await exec('sheet_read_range', { range: 'E1:E' + FORMULAS.length })
+    for (let i = 0; i < FORMULAS.length; i++) {
+      const got = rd17.rows[i][0]
+      const wantVal = FORMULAS[i][2]
+      const ok = typeof wantVal === 'number' ? Math.abs(Number(got) - wantVal) < 1e-9 : got === wantVal
+      check('公式 ' + FORMULAS[i][0] + ' = ' + JSON.stringify(wantVal), ok, FORMULAS[i][1] + ' -> ' + JSON.stringify(got))
+    }
+    // 公式方言归一契约（真机实证：API 文法要分号与 Sheet.A1；worker 把 Excel
+    // 习惯写法归一化，字符串字面量内不动）
+    const DIALECT = [
+      ['分号写法原样可用', '=IF(B2>5000;"高";"低")', '高'],
+      ['跨表 Excel 感叹号归一为点号', '=' + SHEET + '!B2', 10000],
+      ['跨表 Calc 点号原样可用', '=' + SHEET + '.B2', 10000],
+      ['字符串内逗号不受归一影响', '=IF(B2>5000,"高,优","低")', '高,优'],
+      ['字符串内中文标点不受归一影响', '=SUBSTITUTE("甲、乙","、","/")', '甲/乙'],
+    ]
+    const wrD = await exec('sheet_write_cells', { startCell: 'G1', rows: DIALECT.map((f) => [f[1]]) })
+    check('方言公式写入无报错', wrD.success === true && !wrD.formulaErrors, JSON.stringify(wrD))
+    const rdD = await exec('sheet_read_range', { range: 'G1:G' + DIALECT.length })
+    for (let i = 0; i < DIALECT.length; i++) {
+      const got = rdD.rows[i][0]
+      const want = DIALECT[i][2]
+      const ok = typeof want === 'number' ? Math.abs(Number(got) - want) < 1e-9 : got === want
+      check(DIALECT[i][0], ok, DIALECT[i][1] + ' -> ' + JSON.stringify(got))
+    }
+    // 不支持的新函数（引擎 LO 24.2 无 XLOOKUP）：写入结果必须把错误报给 AI 自纠
+    const wrX = await exec('sheet_write_cells', { startCell: 'H1', rows: [['=XLOOKUP("律师费",A2:A5,B2:B5)']] })
+    check('XLOOKUP 出错被上报（formulaErrors+note）',
+      wrX.success === true && Array.isArray(wrX.formulaErrors) && wrX.formulaErrors[0].cell === 'H1' && /XLOOKUP/i.test(wrX.note || ''),
+      JSON.stringify(wrX))
+    const rdX = await exec('sheet_read_range', { range: 'H1' })
+    check('出错公式读回不伪装成 0', rdX.rows[0][0] !== 0 && rdX.rows[0][0] !== '' && String(rdX.rows[0][0]).length > 0, JSON.stringify(rdX.rows))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
