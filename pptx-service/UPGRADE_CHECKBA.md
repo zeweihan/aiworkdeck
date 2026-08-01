@@ -17,6 +17,7 @@
 | `backend/utils/pptx_format_utils.py` | **checkba 新增**：run/段落格式读写（东亚字体 `<a:ea>`、删除线、高亮、buChar/buAutoNum 的 oxml 补齐；HOUSE 字体常量 楷体_GB2312/Arial，env `PPTX_HOUSE_EA_FONT`/`PPTX_HOUSE_LATIN_FONT` 可覆盖） |
 | `backend/utils/pptx_builder.py` | **checkba 改造**：`add_text_element`/`add_table_element` 落字走 sanitizer（markdown → 真格式）、写 HOUSE 字体、多行文本逐行成段修复只有首段吃到样式的缺陷、列表行写真实项目符号；`_set_core_properties` 去掉必抛的 `last_printed=None` |
 | `backend/services/pptx_format_service.py` + `backend/controllers/pptx_edit_controller.py` | **checkba 新增**：存量 pptx 格式识别与操作端点 `POST /api/pptx/inspect`、`POST /api/pptx/format`（六种 op：run 格式/段落格式/替换文本/整框重写/单元格文本/单元格格式），注册见 `app.py`、`controllers/__init__.py` 的 `[checkba]` 标记 |
+| `backend/services/pdf_convert_service.py` + `backend/controllers/pdf_convert_controller.py` | **checkba 新增**：PDF 转换端点 `POST /api/pdf/to-docx`（pdf2docx 版式级转 Word，限文本型）、`POST /api/pdf/ocr-markdown`（扫描件经 FileParserService 走本地 MinerU 优先/云端兜底出 markdown，不引入第三方云 OCR）。依赖 `pdf2docx`（连带 pymupdf/opencv-headless，desktop 包体积 +~130MB）已进 pyproject 与 requirements.lock |
 | `backend/services/prompts.py` | **checkba 改动**：大纲生成 prompt 增加禁 markdown 指令（`Do NOT use markdown formatting symbols ...`） |
 | `backend/tests/unit/test_text_sanitizer.py` / `test_pptx_formatting.py` | **checkba 新增**：上述能力的回归测试（re-vendor 后跑它们即可验证定制是否套全） |
 
@@ -74,3 +75,5 @@
 > |---|---|---|
 > | POST | /api/pptx/inspect | 存量 pptx 结构化格式全览（字体/字号/粗斜删下/高亮/颜色/对齐/行距/项目符号/表格） |
 > | POST | /api/pptx/format | 批量格式操作（set_run_format / set_paragraph_format / replace_text / set_shape_text / set_cell_text / set_cell_format），落字自动去 markdown |
+> | POST | /api/pdf/to-docx | 版式级 PDF→Word（pdf2docx；文本型未加密 PDF） |
+> | POST | /api/pdf/ocr-markdown | 扫描件 MinerU OCR 出 markdown（本地 mineru-service 优先，云端 token 兜底） |

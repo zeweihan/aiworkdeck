@@ -8,6 +8,8 @@ from .material_controller import material_bp
 from .settings_controller import settings_bp
 # [checkba] 存量 pptx 格式识别与操作端点
 from .pptx_edit_controller import pptx_edit_bp
+# [checkba] PDF 转换端点（版式级转 docx / 扫描件 MinerU OCR）
+from .pdf_convert_controller import pdf_convert_bp
 
-__all__ = ['project_bp', 'page_bp', 'template_bp', 'user_template_bp', 'export_bp', 'file_bp', 'material_bp', 'settings_bp', 'pptx_edit_bp']
+__all__ = ['project_bp', 'page_bp', 'template_bp', 'user_template_bp', 'export_bp', 'file_bp', 'material_bp', 'settings_bp', 'pptx_edit_bp', 'pdf_convert_bp']
 

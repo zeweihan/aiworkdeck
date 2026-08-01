@@ -27,6 +27,7 @@ from controllers.settings_controller import settings_bp
 from controllers import project_bp, page_bp, template_bp, user_template_bp, export_bp, file_bp
 # [checkba] 存量 pptx 格式识别与操作端点
 from controllers import pptx_edit_bp
+from controllers import pdf_convert_bp  # [checkba]
 
 
 # Enable SQLite WAL mode for all connections
@@ -115,6 +116,7 @@ def create_app():
     app.register_blueprint(settings_bp)
     # [checkba] 存量 pptx 格式识别与操作
     app.register_blueprint(pptx_edit_bp)
+    app.register_blueprint(pdf_convert_bp)  # [checkba]
 
     with app.app_context():
         # Load settings from database and sync to app.config

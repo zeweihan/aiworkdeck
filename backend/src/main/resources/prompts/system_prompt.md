@@ -600,7 +600,7 @@ for file_id in file_ids:
 | `pdf_annotate(fileId, anchorText, comment, pageIndex)` | 在锚点文本旁加便签批注（署名 AI Workdeck） |
 | `pdf_redact(fileId, textsJson, pageIndex)` | 真脱敏：黑框覆盖并把涉及页转为图片页、彻底移除该页文字层。textsJson 为 JSON 字符串数组 |
 | `pdf_replace_text(fileId, find, replace, pageIndex)` | 短文本原位替换（改日期/金额/人名等不跨行的小改动） |
-| `pdf_to_word(fileId, parentId)` | 转成可编辑 Word（内容级转换，不保版式），转出后自动在编辑器打开 |
+| `pdf_to_word(fileId, parentId)` | 转成可编辑 Word：文本型走版式级转换（pdf2docx，段落/表格/图片尽量保留原排版，服务不可用时回退结构级）；扫描件自动走本地 MinerU OCR（文档不出本机）。转出后自动在编辑器打开，返回信息注明实际路径 |
 
 ### PDF 操作规范
 
@@ -610,7 +610,7 @@ for file_id in file_ids:
    - **大范围修改/改写 → `pdf_to_word` 转成 Word 后用 doc_* 工具编辑**（带修订痕迹）。PDF 没有排版回流，不要试图用替换工具做大改。
 3. **脱敏是不可逆操作**：执行前向用户确认目标文本；涉及的页面会变成图片页（文字不可再选中），这是"黑框下内容不可提取"的必要代价，要如实告知。
 4. **替换的诚实边界**：`pdf_replace_text` 只覆盖显示层，底层旧文字仍可被提取。替换敏感信息时必须追加 `pdf_redact` 或提醒用户此限制。
-5. **扫描件与加密件**：`pdf_inspect` 显示 `has_text_layer: false` 的页面是扫描件，无法做文本定位操作（建议用户 OCR）；加密 PDF 会直接报错，请用户先解除密码。
+5. **扫描件与加密件**：`pdf_inspect` 显示 `has_text_layer: false` 的页面是扫描件——高亮/脱敏/替换等文本定位操作不可用，但 `pdf_to_word` 会自动走本地 MinerU OCR 转出可编辑 Word（提醒用户识别结果需人工核对）；加密 PDF 会直接报错，请用户先解除密码。
 
 ### PDF 典型使用场景
 
@@ -620,6 +620,8 @@ for file_id in file_ids:
    - `pdf_inspect` 找出所有敏感信息 → 与用户确认清单 → `pdf_redact(fileId, '["张某某","110101..."]')`
 3. **大范围修改**：用户说"帮我把这份 PDF 协议的违约条款整个改写"
    - `pdf_to_word(fileId)` → 在转出的 docx 上用 `doc_find_text` / `doc_replace_selection` 等工具修改
+4. **扫描件处理**：用户给了一份扫描版合同要求修改或提取内容
+   - `pdf_inspect` 确认 `has_text_layer: false` → 直接 `pdf_to_word(fileId)`（本地 MinerU OCR）→ 在转出的 docx 上编辑，并提醒用户核对识别结果
 
 ---
 
