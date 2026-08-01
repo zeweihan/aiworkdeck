@@ -120,6 +120,19 @@ public class ProjectFileService {
     }
 
     /**
+     * 存储键必须落在本项目自己的子树内。此前调用方传什么就原样存什么（HTTP 请求体
+     * 的 filePath 也直通到这里），可以指向别的项目或全局命名空间（repos/、clipboard/ 等），
+     * 再借文件记录所属项目的读写权限下载/覆盖他人租户的文件。
+     */
+    private String requireProjectScopedPath(Long projectId, String filePath) {
+        String key = filePath.replace('\\', '/');
+        if (!key.startsWith("projects/" + projectId + "/") || ("/" + key + "/").contains("/../")) {
+            throw new IllegalArgumentException("非法文件路径: " + filePath);
+        }
+        return key;
+    }
+
+    /**
      * 构建文件的物理存储路径
      * 格式: projects/{projectId}/{logical_path}/{fileName}
      */
@@ -176,7 +189,7 @@ public class ProjectFileService {
             }
             // Ensure path is consistent if changed?
             if (StringUtils.hasText(filePath)) {
-                f.setFilePath(filePath);
+                f.setFilePath(requireProjectScopedPath(projectId, filePath));
             }
             log.info("Updating existing file in DB: {}", name);
             return projectFileRepository.save(f);
@@ -217,6 +230,7 @@ public class ProjectFileService {
         if (!StringUtils.hasText(filePath)) {
             filePath = buildPhysicalPath(projectId, parentId, name);
         }
+        filePath = requireProjectScopedPath(projectId, filePath);
 
         ProjectFile file = new ProjectFile();
         file.setProjectId(projectId);

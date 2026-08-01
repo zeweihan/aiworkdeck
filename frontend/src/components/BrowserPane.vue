@@ -36,13 +36,15 @@
 
       <!-- H5: 使用 iframe 做最小可用网页展示 -->
       <!-- #ifdef H5 -->
+      <!-- 代理把第三方 HTML 以本应用同源的形式返回，sandbox 绝不能带 allow-same-origin：
+           它与 allow-scripts 同时出现时沙箱失效，被访问站点即可读取本应用 origin 下的会话凭证 -->
       <iframe
         v-if="!isDesktopBrowser"
         class="browser-iframe"
         :src="iframeSrc"
         @load="onIframeLoad"
         referrerpolicy="no-referrer"
-        sandbox="allow-forms allow-scripts allow-same-origin allow-top-navigation-by-user-activation"
+        sandbox="allow-forms allow-scripts allow-top-navigation-by-user-activation"
       ></iframe>
       <!-- #endif -->
 

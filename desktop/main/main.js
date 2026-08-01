@@ -41,6 +41,21 @@ let viewsVisibleDesired = true
 let clipboardWatchTimer = null
 let lastClipboardText = ''
 
+// checkba:fs-read-file 的读取授权表。渲染层可能被注入脚本控制（markdown v-html 等），
+// 路径黑名单挡不住 ~/.aiworkdeck/local.mv.db、~/Library、~/Documents 这些真正要害的位置，
+// 因此改为只读主进程登记过的路径——登记只发生在用户自己复制文件时，渲染层无法凭空构造。
+/** @type {Set<string>} */
+const grantedReadPaths = new Set()
+
+// 登记 realpath：读取时同样按 realpath 比对，符号链接指向别处也不会因为字符串不同而绕过。
+function grantReadPath(p) {
+  try {
+    grantedReadPaths.add(require('fs').realpathSync(p))
+  } catch (e) {
+    // 路径不存在/不可达，不登记
+  }
+}
+
 /** @type {BrowserWindow | null} */
 let ocrSelectWin = null
 let ocrSelectWinBound = false
@@ -177,6 +192,7 @@ function startClipboardWatcher() {
           if (fingerprint !== lastClipboardFingerprint) {
             lastClipboardFingerprint = fingerprint
             if (priming) return
+            grantReadPath(cleanPath)
             if (mainWindow) {
               mainWindow.webContents.send('checkba:clipboard-copied', {
                 type: 'FILE',
@@ -955,29 +971,26 @@ ipcMain.handle('checkba:fs-read-file', async (_evt, payload) => {
   const p = payload && payload.path ? String(payload.path) : ''
   if (!p) return { ok: false, message: 'path empty' }
   const fs = require('fs')
-  const os = require('os')
   try {
-    // 该接口用于"用户拖入的文件"读取，路径本身由用户操作产生，需要任意位置。
-    // 但 webSecurity 关闭下，被注入的渲染脚本也可能调用它，故做纵深防御：
-    // 1) 拦截明显的敏感路径（凭证/密钥/系统配置），防止读走 ~/.ssh 等；
-    // 2) 大小上限，避免被诱导读超大文件撑爆内存。
-    const resolved = path.resolve(p)
-    const home = os.homedir()
-    const sensitiveHomeDirs = ['.ssh', '.aws', '.gnupg', '.docker', '.kube', '.config']
-    const sensitiveFiles = ['.netrc', '.npmrc', '.pgpass', '.git-credentials']
-    const isSensitive =
-      resolved.startsWith('/etc/') || resolved.startsWith('/private/etc/') ||
-      sensitiveHomeDirs.some((d) => resolved.startsWith(path.join(home, d) + path.sep)) ||
-      sensitiveFiles.some((f) => resolved === path.join(home, f))
-    if (isSensitive) {
-      console.warn('[checkba:fs-read-file] 拒绝读取敏感路径:', resolved)
-      return { ok: false, message: 'access denied: sensitive path' }
+    // 该接口只服务"用户复制的文件"这一条流程，路径由主进程在剪贴板事件里登记
+    // （grantReadPath）。此前是敏感路径黑名单，但黑名单挡不住 ~/.aiworkdeck、
+    // ~/Library、~/Documents，被注入的渲染脚本可据此读走本机任意文件，故改为白名单。
+    // 大小上限继续保留，避免被诱导读超大文件撑爆内存。
+    let real
+    try {
+      real = await fs.promises.realpath(p)
+    } catch (e) {
+      return { ok: false, message: 'not found' }
     }
-    const st = await fs.promises.stat(resolved)
+    if (!grantedReadPaths.has(real)) {
+      console.warn('[checkba:fs-read-file] 拒绝未授权路径:', real)
+      return { ok: false, message: 'access denied: path not granted' }
+    }
+    const st = await fs.promises.stat(real)
     if (!st.isFile()) return { ok: false, message: 'not a file' }
     if (st.size > 200 * 1024 * 1024) return { ok: false, message: 'file too large (>200MB)' }
 
-    const buf = await fs.promises.readFile(resolved)
+    const buf = await fs.promises.readFile(real)
     return { ok: true, data: buf }
   } catch (e) {
     return { ok: false, message: String(e.message) }

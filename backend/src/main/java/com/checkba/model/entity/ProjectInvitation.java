@@ -40,6 +40,13 @@ public class ProjectInvitation {
     @Column(nullable = false)
     private Long relatedUserId;
 
+    /**
+     * 作废时间。访问码本身没有有效期，客户被移出项目后若不作废，
+     * 他拿旧码再登一次就能重新把自己加回项目里。
+     */
+    @Column
+    private LocalDateTime revokedAt;
+
     @CreationTimestamp
     @Column(updatable = false)
     private LocalDateTime createdAt;
@@ -88,6 +95,14 @@ public class ProjectInvitation {
 
     public void setRelatedUserId(Long relatedUserId) {
         this.relatedUserId = relatedUserId;
+    }
+
+    public LocalDateTime getRevokedAt() {
+        return revokedAt;
+    }
+
+    public void setRevokedAt(LocalDateTime revokedAt) {
+        this.revokedAt = revokedAt;
     }
 
     public LocalDateTime getCreatedAt() {

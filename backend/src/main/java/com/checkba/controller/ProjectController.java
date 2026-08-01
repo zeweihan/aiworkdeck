@@ -6,6 +6,7 @@ import com.checkba.model.entity.Project;
 import com.checkba.service.LocalProjectService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ProjectService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -20,6 +21,15 @@ public class ProjectController {
     private final ProjectMemberService projectMemberService;
     private final com.checkba.service.LocalProjectService localProjectService;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+
+    /**
+     * 「把本机文件夹挂成项目」只在单机桌面版成立——那里的「服务器」就是用户自己的电脑，
+     * 读自己的磁盘正是这个功能的意义。共享/云端部署里它等于把任意绝对路径交给任意租户当项目根
+     * （/etc、别家事务所的数据目录、应用自身的配置与 plugins 目录），故默认关闭，
+     * 仅 desktop profile 打开（security.admin.allow-all-users 的同类开关）。
+     */
+    @Value("${security.local-folder-projects.enabled:false}")
+    private boolean localFolderProjectsEnabled;
 
     public ProjectController(ProjectService projectService, ProjectMemberService projectMemberService,
                              com.checkba.service.LocalProjectService localProjectService,
@@ -53,6 +63,9 @@ public class ProjectController {
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) {
             throw new IllegalArgumentException("请先登录");
+        }
+        if (!localFolderProjectsEnabled) {
+            throw new IllegalArgumentException("当前部署未开放「打开本机文件夹」功能");
         }
         LocalProjectService.OpenLocalResult r = localProjectService.openLocalFolder(
                 (String) body.get("localRoot"),

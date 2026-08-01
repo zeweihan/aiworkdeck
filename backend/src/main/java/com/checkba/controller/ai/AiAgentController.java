@@ -30,6 +30,7 @@ public class AiAgentController {
     private final com.checkba.service.ai.tools.PptxTools pptxTools;
     private final com.checkba.service.ai.TodoListService todoListService;
     private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
+    private final com.checkba.service.ProjectMemberService projectMemberService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AiAgentController(SseEmitterService sseEmitterService,
@@ -38,7 +39,8 @@ public class AiAgentController {
                             com.checkba.service.ai.BackgroundTaskService backgroundTaskService,
                             com.checkba.service.ai.tools.PptxTools pptxTools,
                             com.checkba.service.ai.TodoListService todoListService,
-                            com.checkba.service.ai.AgentRunStateService agentRunStateService) {
+                            com.checkba.service.ai.AgentRunStateService agentRunStateService,
+                            com.checkba.service.ProjectMemberService projectMemberService) {
         this.sseEmitterService = sseEmitterService;
         this.agentOrchestrator = agentOrchestrator;
         this.messageService = messageService;
@@ -46,6 +48,21 @@ public class AiAgentController {
         this.pptxTools = pptxTools;
         this.todoListService = todoListService;
         this.agentRunStateService = agentRunStateService;
+        this.projectMemberService = projectMemberService;
+    }
+
+    /**
+     * 会话可用性校验：会话尚无消息时视为新会话，任何已登录用户都可占用；
+     * 一旦有了历史，只有首条消息的作者可以再连接/续写。
+     * conversationId 由前端按 conv-<毫秒时间戳> 生成、并非机密，若不校验归属，
+     * 猜到即可接管他人的 SSE 输出流（含文档正文与 editor 指令的 requestId）。
+     */
+    private boolean canUseConversation(String conversationId, Long userId) {
+        if (userId == null || conversationId == null) {
+            return false;
+        }
+        return messageService.isConversationOwnedBy(conversationId, userId)
+                || messageService.listByConversationId(conversationId).isEmpty();
     }
 
     /**
@@ -53,19 +70,23 @@ public class AiAgentController {
      * 前端应在进入聊天界面时调用此接口。
      */
     @GetMapping(value = "/connect/{conversationId}", produces = "text/event-stream")
-    public SseEmitter connect(@PathVariable String conversationId, 
+    public ResponseEntity<SseEmitter> connect(@PathVariable String conversationId,
                               @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
                               HttpServletResponse response) {
+        // 归属校验：emitter 表只按 conversationId 索引且新连接直接覆盖旧连接，
+        // 此前 userId 仅用于打日志，任何人猜到会话 ID 即可劫持他人的整条输出流
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).build();
+        }
+
         // 添加响应头禁用缓冲，确保流式响应实时到达客户端
         response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
         response.setHeader("X-Accel-Buffering", "no");  // 禁用 Nginx 代理缓冲
         response.setHeader("Connection", "keep-alive");
         response.setHeader("Pragma", "no-cache");
         response.setHeader("Expires", "0");
-        
-        // Validate user if needed
-        Long userId = AuthController.getUserIdFromSession(sessionId); // Optional validation
-        
+
         log.info("Client connecting to SSE: conversationId={}, userId={}", conversationId, userId);
         SseEmitter emitter = sseEmitterService.createConnection(conversationId);
         
@@ -92,7 +113,7 @@ public class AiAgentController {
         sseEmitterService.send(conversationId, "run_state",
                 "{\"status\":" + (runStatus == null ? "null" : "\"" + runStatus + "\"") + "}");
 
-        return emitter;
+        return ResponseEntity.ok(emitter);
     }
 
     /**
@@ -102,11 +123,20 @@ public class AiAgentController {
     @PostMapping("/chat")
     public ResponseEntity<?> startSession(@RequestBody AgentChatRequest request,
                                           @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = null;
-        if (sessionId != null) {
-            userId = AuthController.getUserIdFromSession(sessionId);
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        // 越权校验：此前未登录也会起循环，且 projectId 完全由请求体给定——
+        // ToolRegistry 把 projectId 强制注入工具参数只挡得住 LLM，挡不住 HTTP 调用方，
+        // 于是「按项目隔离」的工具反而成了跨租户读写别家文档的入口
+        if (userId == null) {
+            return ResponseEntity.status(401).body("{\"status\":\"error\", \"message\":\"请先登录\"}");
         }
-        
+        if (request.getProjectId() == null || !projectMemberService.hasReadPermission(request.getProjectId(), userId)) {
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权访问该项目\"}");
+        }
+        if (!canUseConversation(request.getConversationId(), userId)) {
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+        }
+
         log.info("Received Agent Chat Request: project={}, conversation={}, mode={}, msg={}", 
                 request.getProjectId(), request.getConversationId(), request.getAgentMode(), request.getMessage());
 
@@ -122,11 +152,12 @@ public class AiAgentController {
     @PostMapping("/cancel/{conversationId}")
     public ResponseEntity<?> cancelGeneration(@PathVariable String conversationId,
                                               @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = null;
-        if (sessionId != null) {
-            userId = AuthController.getUserIdFromSession(sessionId);
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        // 归属校验：否则任何人猜到会话 ID 就能掐断别人正在跑的生成
+        if (!canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
         }
-        
+
         log.info("Cancel request received: conv={}, user={}", conversationId, userId);
         
         try {
@@ -143,7 +174,13 @@ public class AiAgentController {
      * 用于前端断线重连后恢复进度条显示。
      */
     @GetMapping("/tasks/active")
-    public ResponseEntity<?> getActiveTasks(@RequestParam String conversationId) {
+    public ResponseEntity<?> getActiveTasks(@RequestParam String conversationId,
+                                            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        // 归属校验：任务信息带文件名与进度描述，不能按会话 ID 裸查
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!canUseConversation(conversationId, userId)) {
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+        }
         try {
             // Get active tasks from BackgroundTaskService
             java.util.List<com.checkba.model.ai.TaskInfo> tasks = 
@@ -187,15 +224,19 @@ public class AiAgentController {
     @PostMapping("/ppt/generate")
     public ResponseEntity<?> performPptGeneration(@RequestBody PptGenerationRequest request,
                                                @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = null;
-        if (sessionId != null) {
-            userId = AuthController.getUserIdFromSession(sessionId);
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        // 越权校验：此前未登录会顶着写死的 10001 号用户往请求体给定的项目里写文件
+        if (userId == null) {
+            return ResponseEntity.status(401).body("{\"status\":\"error\", \"message\":\"请先登录\"}");
         }
-        
+        if (request.getProjectId() == null || !projectMemberService.hasWritePermission(request.getProjectId(), userId)) {
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权写入该项目\"}");
+        }
+
         log.info("Received PPT Generation Request: topic={}, editable={}", request.getTopic(), request.isExportEditable());
         
         // Create final variable for lambda capture
-        final Long effectiveUserId = userId != null ? userId : 10001L;
+        final Long effectiveUserId = userId;
         
         // Asynchronous execution via PptxTools (which handles background task creation internally)
         java.util.concurrent.CompletableFuture.runAsync(() -> {

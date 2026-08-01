@@ -47,21 +47,28 @@ public class FileTools implements AgentToolComponent {
     private final com.checkba.service.ai.AiDocxExportService aiDocxExportService;
     private static final Long AGENT_USER_ID = 10001L;
 
-    // We need to resolve the project root physically.
-    private Path getProjectRoot() {
-        String userDir = System.getProperty("user.dir");
-        Path backendPath = Paths.get(userDir);
-        if (backendPath.endsWith("backend")) {
-            return backendPath.getParent();
+    /**
+     * 路径类工具的唯一围栏基准：当前会话所属项目的物理目录。
+     *
+     * 不能用服务端安装根（user.dir）：所有租户的 data/projects/{id} 与 skills/、plugins/
+     * 扫描目录都并排在它下面——前者意味着跨租户读写他人卷宗，后者写进去的文本会在下次
+     * 扫描后进入所有用户的 SYSTEM 提示词，是持久化的跨租户污染。
+     * projectId 取自 ToolRegistry 强制注入的服务端上下文，LLM 伪造不了；
+     * 没有项目上下文时一律拒绝（fail closed），口径与 ToolFileGuard 一致。
+     */
+    private Path currentProjectRoot() {
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        if (projectId == null) {
+            throw new SecurityException("Access denied: no project context for this request.");
         }
-        return backendPath;
+        return storageResolver.projectRoot(projectId).normalize();
     }
 
     @ToolMeta(displayName = "搜索项目文件", category = "file")
     @Tool("Search for files in the project. Can specify a sub-directory.")
     public String search_project_files(
             @P("Filename pattern (e.g. '*Controller.java' or 'User*.java')") String fileNamePattern,
-            @P("Optional: Sub-directory to search in (e.g. 'backend/src'). Default is root.") String dirPath
+            @P("Optional: Sub-directory to search in, relative to the project folder. Default is the project root.") String dirPath
     ) {
         log.info("Tool: search_project_files called pattern='{}', dir='{}'", fileNamePattern, dirPath);
         if (fileNamePattern == null || fileNamePattern.isBlank()) {
@@ -69,10 +76,13 @@ public class FileTools implements AgentToolComponent {
         }
         List<String> matches = new ArrayList<>();
         
-        Path root = getProjectRoot();
+        Path root = currentProjectRoot();
         Path startDir = root;
         if (StringUtils.hasText(dirPath)) {
-            startDir = root.resolve(dirPath);
+            startDir = root.resolve(dirPath).normalize();
+            if (!startDir.startsWith(root)) {
+                return "Error: Access denied. Path escapes project directory.";
+            }
             if (!Files.exists(startDir)) return "Error: Directory not found: " + dirPath;
         }
 
@@ -295,10 +305,14 @@ public class FileTools implements AgentToolComponent {
         }
         
         try {
-            Path projectDataDir = storageResolver.projectRoot(projectId);
+            Path projectDataDir = storageResolver.projectRoot(projectId).normalize();
             if (!Files.exists(projectDataDir)) Files.createDirectories(projectDataDir);
-            Path targetPath = projectDataDir.resolve(fileName);
-            
+            Path targetPath = projectDataDir.resolve(fileName).normalize();
+            // fileName 由 LLM 自由填写，"../42/协议.docx" 会把伪造文书落进别的租户目录
+            if (!targetPath.startsWith(projectDataDir)) {
+                return "Error: Access denied. Path escapes project directory.";
+            }
+
             if (Files.exists(targetPath)) {
                 return "Error: File '" + fileName + "' already exists. Please use 'doc_open_file' and editing tools to modify the existing document instead of overwriting it.";
             }
@@ -421,15 +435,16 @@ public class FileTools implements AgentToolComponent {
     // --- Helpers ---
 
     private Path resolvePath(String fileName) {
-        Path root = getProjectRoot().normalize();
+        Path root = currentProjectRoot();
         Path resolved = Paths.get(fileName).isAbsolute()
                 ? Paths.get(fileName).normalize()
                 : root.resolve(fileName).normalize();
-        // 安全围栏：AI 完全可控该路径，normalize 后必须仍在项目根内，
-        // 否则 read/write/move_file 可用绝对路径或 "../" 逃出根读写任意系统文件。
-        // 与同类 list_files/write_docx 已有的 startsWith 校验保持一致。
+        // 安全围栏：AI 完全可控该路径，normalize 后必须仍在本项目目录内，
+        // 否则 read/write/move_file 可用绝对路径或 "../" 读写别的租户的卷宗、
+        // 或写进 skills/、plugins/ 扫描目录污染所有人的系统提示词。
+        // 与同类 list_files 已有的 startsWith 校验保持一致。
         if (!resolved.startsWith(root)) {
-            throw new SecurityException("Access denied: path escapes project root: " + fileName);
+            throw new SecurityException("Access denied: path escapes project directory: " + fileName);
         }
         return resolved;
     }

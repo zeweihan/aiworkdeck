@@ -253,7 +253,7 @@ class ShareCloneRoundTripTest {
 
         a.sessionSvc.enableVersionRecording(7L, "韩泽伟", "hzw@example.com");
 
-        CloudConnection conn = a.cloud.connect(serverUrl(), "userA", "pw123456", "测试机");
+        CloudConnection conn = a.cloud.connect(serverUrl(), "userA", "pw123456", "测试机", 1L);
         Map<String, Object> shared = a.cloud.shareToCloud(7L, conn.getId(), 1L);
         long rid = ((Number) shared.get("remoteProjectId")).longValue();
 
@@ -264,7 +264,7 @@ class ShareCloneRoundTripTest {
 
         // 第二台桌面（root3 手工栈）接入：文件与 DB 都长出来，且 uid 与共享方一致
         DesktopStack b = desktopStackOn(desktopB);
-        CloudConnection connB = b.cloud.connect(serverUrl(), "userA", "pw123456", "另一台设备");
+        CloudConnection connB = b.cloud.connect(serverUrl(), "userA", "pw123456", "另一台设备", 9L);
         Map<String, Object> accepted = b.cloud.cloneFromCloud(connB.getId(), rid, 9L);
         long localId = ((Number) accepted.get("localProjectId")).longValue();
 

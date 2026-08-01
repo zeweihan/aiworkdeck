@@ -19,9 +19,10 @@ import java.util.Map;
  * - POST /api/admin/wizard        一次性写入初始配置（复用 AdminConfig 的 DTO 与 key 映射）
  * - POST /api/admin/wizard/reset  管理员重置向导（允许再走一遍——存量安装换 Key/换提供商的入口）
  *
- * 安全模型：仅在"未初始化"状态下可匿名调用。未初始化判定：
- * completed 标记显式存在时以它为准（管理员 reset 后 = "false"，向导可重跑）；
- * 标记不存在的存量部署退回 system_setting 非空兜底，防止向导端点被匿名滥用。
+ * 安全模型：仅"全新安装"（completed 标记从未写过且 system_setting 为空）可匿名调用一次；
+ * 标记一旦写过（含管理员 reset 置 "false" 重开的窗口）就必须带管理员会话，
+ * 否则任何能连到本机的人都能在窗口期改写 AI baseUrl 与系统提示词，
+ * 把全体用户的模型流量与文档上下文导向攻击者的服务端。
  * 后续配置修改一律走 /api/admin/config（需管理员会话）。
  * 注意不能用"是否存在用户"判断：DataInitializer 启动时会自动创建默认 admin。
  */
@@ -61,11 +62,22 @@ public class WizardController {
     }
 
     @PostMapping
-    public synchronized ResponseEntity<?> initialize(@RequestBody AdminConfigUpdateRequest request) {
+    public synchronized ResponseEntity<?> initialize(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestBody AdminConfigUpdateRequest request) {
         // synchronized：串行化初始化，堵住两个并发匿名 POST 同时通过 isInitialized()==false 的 TOCTOU 竞态
         if (isInitialized()) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
                     .body(error("系统已初始化，请通过管理后台修改配置 / Already initialized; use the admin console instead"));
+        }
+        // completed 标记存在即说明本机已被初始化过一次（当前为管理员 reset 重开的窗口）：
+        // 该窗口由管理员主动打开，重新提交必须携带管理员会话，否则就是一个可被
+        // 匿名利用的改写 AI baseUrl / 系统提示词的入口。全新安装（标记从未写过）
+        // 此时还没有任何人登录过，仍按向导本职放行匿名提交一次。
+        if (systemSettingService.get(KEY_WIZARD_COMPLETED, null) != null
+                && requireAdmin(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(error("仅管理员可重新运行向导 / Admin only"));
         }
         if (request == null || request.getAi() == null
                 || request.getAi().getActiveProvider() == null
@@ -93,8 +105,8 @@ public class WizardController {
 
     /**
      * 管理员重置向导：completed 置 "false"，之后向导页可再走一遍（提交成功
-     * 自动置回 "true"）。这是管理员主动开的窗口，与首次安装等价——期间
-     * POST /api/admin/wizard 恢复匿名可用，可接受。
+     * 自动置回 "true"）。窗口期内 POST /api/admin/wizard 仍要求管理员会话——
+     * 重置由管理员在已登录状态下发起，reLaunch 到向导页会话仍在，不影响该流程。
      */
     @PostMapping("/reset")
     public ResponseEntity<?> reset(

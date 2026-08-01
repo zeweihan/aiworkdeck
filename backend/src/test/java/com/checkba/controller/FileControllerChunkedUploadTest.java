@@ -81,7 +81,7 @@ class FileControllerChunkedUploadTest {
 
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
-            when(projectMemberService.hasReadPermission(4L, 7L)).thenReturn(true);
+            when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
                 controller.uploadFile(WPS_FILE_ID, null, 5242880L, "sess", null, request);
@@ -130,7 +130,7 @@ class FileControllerChunkedUploadTest {
 
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
-            when(projectMemberService.hasReadPermission(4L, 7L)).thenReturn(true);
+            when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
                 controller.uploadFile(WPS_FILE_ID, null, 5242880L, "sess", null, request);
@@ -160,7 +160,7 @@ class FileControllerChunkedUploadTest {
 
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
-            when(projectMemberService.hasReadPermission(4L, 7L)).thenReturn(true);
+            when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
                 controller.uploadFile(WPS_FILE_ID, null, 5242880L, "sess", null, request);
@@ -193,7 +193,7 @@ class FileControllerChunkedUploadTest {
 
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
-            when(projectMemberService.hasReadPermission(4L, 7L)).thenReturn(true);
+            when(projectMemberService.hasWritePermission(4L, 7L)).thenReturn(true);
 
             ResponseEntity<Map<String, Object>> resp =
                 controller.uploadFile(numericId, null, null, "sess", null, request);
@@ -230,7 +230,7 @@ class FileControllerChunkedUploadTest {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             // 已登录，但不是该文件所属项目（5）的成员
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
-            when(projectMemberService.hasReadPermission(5L, 7L)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(5L, 7L)).thenReturn(false);
 
             ResponseEntity<Map<String, Object>> resp =
                 controller.uploadFile("99", null, null, "sess", null, request);

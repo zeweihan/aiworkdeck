@@ -3,6 +3,7 @@ package com.checkba.service;
 import com.checkba.model.entity.Project;
 import com.checkba.model.entity.ProjectMember;
 import com.checkba.model.entity.User;
+import com.checkba.repository.ProjectInvitationRepository;
 import com.checkba.repository.ProjectMemberRepository;
 import com.checkba.repository.ProjectRepository;
 import com.checkba.repository.UserRepository;
@@ -10,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -21,6 +23,7 @@ public class ProjectMemberService {
     private final ProjectMemberRepository projectMemberRepository;
     private final UserRepository userRepository;
     private final ProjectRepository projectRepository;
+    private final ProjectInvitationRepository invitationRepository;
 
     public List<ProjectMember> getProjectMembers(Long projectId) {
         return projectMemberRepository.findByProjectId(projectId);
@@ -102,6 +105,16 @@ public class ProjectMemberService {
                 .orElseThrow(() -> new IllegalArgumentException("成员不存在"));
 
         projectMemberRepository.delete(member);
+
+        // 移出客户只删成员行不算收回权限：访问码没有有效期，持码人再登一次
+        // 就会被重新加成 CLIENT 成员，所以同时把他名下的访问码作废掉。
+        if (targetRole != null && targetRole.startsWith("CLIENT")) {
+            invitationRepository.findByProjectIdAndRelatedUserId(projectId, userIdToRemove)
+                    .ifPresent(invitation -> {
+                        invitation.setRevokedAt(LocalDateTime.now());
+                        invitationRepository.save(invitation);
+                    });
+        }
     }
 
     private String getMemberRole(Long projectId, Long userId) {

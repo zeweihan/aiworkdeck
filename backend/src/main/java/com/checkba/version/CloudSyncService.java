@@ -85,7 +85,7 @@ public class CloudSyncService {
 
     /** 用账号密码换一个长期设备令牌，本地存下来（服务端 `/api/auth/device-token`）。 */
     public CloudConnection connect(String serverUrl, String username,
-                                    String password, String deviceName) {
+                                    String password, String deviceName, Long userId) {
         String base = serverUrl.replaceAll("/+$", "");
         String body = JSONUtil.toJsonStr(Map.of(
                 "username", username, "password", password, "name", deviceName));
@@ -95,6 +95,7 @@ public class CloudSyncService {
         }
         JSONObject data = resp.getJSONObject("data");
         CloudConnection conn = new CloudConnection();
+        conn.setUserId(userId);
         conn.setServerUrl(base);
         conn.setUsername(data.getStr("username"));
         conn.setDisplayName(data.getStr("displayName"));
@@ -105,8 +106,8 @@ public class CloudSyncService {
     }
 
     /** 断开一个云端连接：尽力撤远端令牌 + 删本地连接与所有关联的项目绑定。 */
-    public void disconnect(long connectionId) {
-        connectionRepository.findById(connectionId).ifPresent(conn -> {
+    public void disconnect(long connectionId, Long userId) {
+        connectionRepository.findById(connectionId).filter(c -> ownedBy(c, userId)).ifPresent(conn -> {
             if (conn.getTokenId() != null) {
                 try {
                     JSONObject resp = JSONUtil.parseObj(httpPost(
@@ -125,8 +126,24 @@ public class CloudSyncService {
         });
     }
 
-    public java.util.List<CloudConnection> listConnections() {
-        return connectionRepository.findAll();
+    public java.util.List<CloudConnection> listConnections(Long userId) {
+        return connectionRepository.findByUserId(userId);
+    }
+
+    /**
+     * 连接里存着长期设备令牌，等同于归属人在云端的身份：多人共用一个后端时，
+     * 只要能引用别人的 connectionId 就能借他的令牌列/克隆对方的云端项目。
+     * 归属为空的旧行（本列上线前建的）一律当作不可用，重新连接一次即可。
+     */
+    private boolean ownedBy(CloudConnection conn, Long userId) {
+        return userId != null && userId.equals(conn.getUserId());
+    }
+
+    /** 找不到与不归属一律用同一句话，避免成为连接是否存在的探测口。 */
+    private CloudConnection ownedConnection(long connectionId, Long userId) {
+        return connectionRepository.findById(connectionId)
+                .filter(c -> ownedBy(c, userId))
+                .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
     }
 
     // ==================== 共享上云 / 从云端接入（Task 10） ====================
@@ -151,8 +168,7 @@ public class CloudSyncService {
             if (repoService.repositoryMerging(projectId)) {
                 throw VersionException.userFacing("请先处理等着你做选择的文件");
             }
-            CloudConnection conn = connectionRepository.findById(connectionId)
-                    .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
+            CloudConnection conn = ownedConnection(connectionId, userId);
             String localName = projectRepository.findById(projectId)
                     .map(Project::getName).orElse("未命名项目");
 
@@ -219,8 +235,7 @@ public class CloudSyncService {
      * 没有跨机器一致的 uid，v2 是本机制的立身之本，旧格式一律拒绝、指引律师先在云端更新一次。
      */
     public Map<String, Object> cloneFromCloud(long connectionId, long remoteProjectId, Long localUserId) {
-        CloudConnection conn = connectionRepository.findById(connectionId)
-                .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
+        CloudConnection conn = ownedConnection(connectionId, localUserId);
 
         JSONObject prep = JSONUtil.parseObj(httpPost(
                 conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
@@ -229,7 +244,7 @@ public class CloudSyncService {
             throw VersionException.userFacing("接入云端项目失败：" + prep.getStr("message", "请重试"));
         }
 
-        String remoteName = listRemoteProjects(connectionId).stream()
+        String remoteName = listRemoteProjects(connectionId, localUserId).stream()
                 .filter(m -> m.get("id") != null)
                 .filter(m -> remoteProjectId == ((Number) m.get("id")).longValue())
                 .map(m -> (String) m.get("name"))
@@ -310,9 +325,8 @@ public class CloudSyncService {
     }
 
     /** 某个云端连接下、本账号能看到的全部项目——{id, name, projectType} 透传，供"从云端接项目"选择列表用。 */
-    public List<Map<String, Object>> listRemoteProjects(long connectionId) {
-        CloudConnection conn = connectionRepository.findById(connectionId)
-                .orElseThrow(() -> new VersionException("云端连接不存在: " + connectionId));
+    public List<Map<String, Object>> listRemoteProjects(long connectionId, Long userId) {
+        CloudConnection conn = ownedConnection(connectionId, userId);
         String body = httpGet(conn.getServerUrl() + "/api/projects/my", conn.getDeviceToken());
         List<Map<String, Object>> out = new ArrayList<>();
         int skipped = 0;

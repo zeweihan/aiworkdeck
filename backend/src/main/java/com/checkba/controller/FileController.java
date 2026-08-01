@@ -108,6 +108,19 @@ public class FileController {
     }
 
     /**
+     * 写权限校验：只有 owner/ADMIN/PARTICIPANT 可改写项目文件字节，
+     * READ_ONLY 成员与客户虽然读得到（isAuthorizedForProject 为真）但不得覆盖。
+     */
+    private boolean isAuthorizedForWrite(String token, String sessionHeader, Long projectId) {
+        if (projectId == null) {
+            return false;
+        }
+        String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
+        Long userId = AuthController.getUserIdFromSession(sid);
+        return userId != null && projectMemberService.hasWritePermission(projectId, userId);
+    }
+
+    /**
      * 通知版本记录：项目文件发生了变更（上传场景）。
      * 版本记录是保险不是主流程——任何异常只记日志，绝不阻断上传本身。
      */
@@ -352,8 +365,9 @@ public class FileController {
             final Optional<ProjectFile> projectFileOpt = resolveProjectFileForUpload(fileId);
             if (projectFileOpt.isPresent()) {
                 Long projectId = projectFileOpt.get().getProjectId();
-                // 鉴权：只有目标文件所属项目的成员可上传
-                if (!isAuthorizedForProject(token, sessionHeader, projectId)) {
+                // 鉴权：上传是就地覆盖文件字节，必须要写权限——此前只校验读权限，
+                // READ_ONLY 成员与客户可以静默改写已签署合同等文档
+                if (!isAuthorizedForWrite(token, sessionHeader, projectId)) {
                     return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权上传到该文件"));
                 }
                 Long totalSize = projectFileRepository.sumSizeByProjectId(projectId); // Need to add this method to repo
@@ -361,11 +375,9 @@ public class FileController {
                      return ResponseEntity.status(400).body(Map.of("code", -1, "message", "项目文件总大小超过20GB限制"));
                 }
             } else {
-                // 找不到目标文件记录时，至少要求已登录用户，拒绝匿名上传
-                String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
-                if (AuthController.getUserIdFromSession(sid) == null) {
-                    return ResponseEntity.status(401).body(Map.of("code", -1, "message", "请先登录"));
-                }
+                // 找不到文件记录就无从判断归属：此前只要求登录，resolveUploadStoragePath
+                // 会把裸 fileId 当存储键，任何登录用户都能凭它往存储根写字节
+                return ResponseEntity.status(404).body(Map.of("code", -1, "message", "文件不存在"));
             }
 
             String contentType = request.getContentType();

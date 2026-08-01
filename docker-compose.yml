@@ -48,6 +48,8 @@ services:
     environment:
       # 容器内必须监听 0.0.0.0 端口映射才生效；对外的暴露面由上面的 127.0.0.1 发布地址控制
       - PPTX_BIND_HOST=0.0.0.0
+      # 固定生产模式，不依赖 .env 里有没有配；漏配不能退化成开调试器
+      - FLASK_ENV=production
     env_file:
       - ./pptx-service/.env
     volumes:

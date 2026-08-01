@@ -253,7 +253,9 @@ if __name__ == '__main__':
         port = 5000  # Docker 容器内部固定使用 5000 端口
     else:
         port = int(os.getenv('BACKEND_PORT', 5000))
-    debug = os.getenv('FLASK_ENV', 'development') == 'development'
+    # debug 必须是显式开启项：默认值给 'development' 等于漏配 FLASK_ENV 就开着
+    # Werkzeug 调试器，未捕获异常处会暴露交互式控制台与源码
+    debug = os.getenv('FLASK_ENV') == 'development'
     
     logging.info(
         "\n"
