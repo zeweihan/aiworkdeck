@@ -194,22 +194,23 @@ try {
     await focus()
   }
 
-  // NOTE: ShowChangesInMargin (tdf#34355) is ON since the margin-redlines change —
-  // tracked DELETIONS leave the inline text (they render in the page margin), so
-  // the cursor context no longer contains the struck-through originals. The old
-  // expectations (deleted chars still inline) date from inline-strikethrough mode.
+  // NOTE: ShowChangesInMargin (tdf#34355) is OFF again — the engine paints
+  // margin deletions over the neighboring TABLE CELL's content (法律文书大量
+  // 用表格，重叠不可读), so deletions are back to inline strikethrough. The
+  // struck-through originals therefore stay in the cursor context and the
+  // cursor steps OVER them.
   console.log('== 1) Backspace over pre-existing text (revision-mode jam regression #164) ==')
   await reset('合同条款abc') // inserted with rc OFF -> "original" text; rc back ON
   for (let i = 0; i < 3; i++) await key('Backspace', 'Backspace', 8)
   let c = await cursor()
-  check('3×Backspace 删除移入页边（正文不留）', c.b === '合同条款' && c.a === '', JSON.stringify(c))
+  check('3×Backspace 光标逐字越过原文（划线留正文）', c.b === '合同条款' && c.a === 'abc', JSON.stringify(c))
 
   console.log('== 2) Delete key forward-deletes ==')
   await reset('合同条款abc')
   for (let i = 0; i < 3; i++) await key('ArrowLeft', 'ArrowLeft', 37)
   for (let i = 0; i < 2; i++) await key('Delete', 'Delete', 46)
   c = await cursor()
-  check('2×Delete 前删移入页边（正文不留）', c.b === '合同条款' && c.a === 'c', JSON.stringify(c))
+  check('2×Delete 前删越过原文（划线留正文）', c.b === '合同条款ab' && c.a === 'c', JSON.stringify(c))
 
   console.log('== 3) IME CJK commit + Backspace hard-deletes own insert ==')
   await reset('')
@@ -311,9 +312,10 @@ try {
   check('用户修订署用户名', authors.includes('测试用户'), JSON.stringify(authors))
 
   console.log('== 11) 修订颗粒度：一字之差只标一字，不整段删增 ==')
-  // 口径说明：删除型修订的文本已移入页边、不随 reset 硬清（前面场景的删除记录
-  // 会残留），所以按 author 过滤只看本场景（场景 10 已把作者设为"测试用户"）；
-  // Insert 型修订对象 getString() 拿不到插入文本，插入内容靠正文核对。
+  // 口径说明：按 author 过滤只看本场景的修订（场景 10 已把作者设为"测试用户"），
+  // 防前面场景跨 reset 残留的删除记录混入。行内显示（ShowChangesInMargin=false）
+  // 下删除文本留在正文流：正文断言按「插入在前、划删原文在后」的行内形态核对，
+  // 这个形态本身就证明了颗粒度（整段删增会让整句成对出现）。
   const mine = (rv2) => (rv2.redlines || []).filter((r) => r.author === '测试用户')
   const delTexts = (rv2) => mine(rv2).filter((r) => r.type === 'Delete').map((r) => r.text)
   await reset('我爱你', true)
@@ -322,14 +324,14 @@ try {
   check('find_replace 我爱你→我恨你 只删"爱"（非整句）',
     rv11.success && delTexts(rv11).includes('爱') && delTexts(rv11).every((t2) => (t2 || '').length === 1), JSON.stringify(rv11))
   check('插入也只落一处修订', mine(rv11).filter((r) => r.type === 'Insert').length === 1, JSON.stringify(mine(rv11)))
-  check('正文呈现新句', (await doc()).includes('我恨你'), await doc())
+  check('正文呈现插删并存（恨插入、爱划删留正文）', (await doc()) === '我恨爱你', await doc())
   await reset('甲方应于三十日内向乙方支付服务费。', true)
   await exec('modify_paragraph', { index: 0, newText: '甲方应于六十日内向乙方支付全部服务费。' })
   rv11 = await exec('debug_revisions')
   check('modify_paragraph 散点小改只删"三"（非整段重写）',
     rv11.success && delTexts(rv11).includes('三') && delTexts(rv11).every((t2) => (t2 || '').length === 1), JSON.stringify(rv11))
   check('两处插入各自成修订（六 / 全部）', mine(rv11).filter((r) => r.type === 'Insert').length === 2, JSON.stringify(mine(rv11)))
-  check('改后段落实文正确', (await doc()) === '甲方应于六十日内向乙方支付全部服务费。', await doc())
+  check('改后段落实文正确（划删"三"留正文）', (await doc()) === '甲方应于六三十日内向乙方支付全部服务费。', await doc())
 
   console.log('== 12) add_comment 批注：解释文字挂批注、不进正文 ==')
   await reset('本合同自签署之日起生效。', true)
@@ -388,7 +390,7 @@ try {
     // 方向断言：探针（第 0 期）已实证产出「旧→新」的删/插修订——删除侧应含"三"
     check('方向正确：redlines 含 Delete「三」',
       cmpRedlines.filter((r) => r.type === 'Delete').map((r) => r.text).includes('三'), JSON.stringify(cmpRedlines))
-    check('正文停在新版可读文本', (await doc()).includes('六十日'), await doc())
+    check('正文停在新版+行内划删原文', (await doc()) === '甲方应于六三十日内支付合同价款。', await doc())
   }
 
   // ---------- 组 14：富格式原语（行距/段距/缩进/编号/建表/格式读取）----------

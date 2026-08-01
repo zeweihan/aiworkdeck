@@ -735,13 +735,16 @@ function streamWriteLine(line) {
   streamParagraph(parseInlineRuns(trimmed), 'body', null);
 }
 
-// LO 7.1+ (tdf#34355): tracked DELETIONS render in the page margin next to the
-// changed-line mark instead of inline strikethrough — the body stays readable
-// (original text + colored insertions only). This is a VIEW setting on the
-// controller, not the model, so it must be re-applied whenever the controller
-// changes (boot AND load_document retarget).
-function showDeletionsInMargin() {
-  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', true); }
+// Tracked DELETIONS display inline with strikethrough (Word "All Markup").
+// ShowChangesInMargin (tdf#34355) is deliberately OFF: the engine paints the
+// margin text to the LEFT of the anchor's frame — for text inside a table cell
+// that frame is the CELL, so deleted text lands on top of the neighboring
+// cell's content (法律文书大量用表格，重叠不可读；无 JS 手段矫正绘制位置).
+// Comments are unaffected — they keep their own sidebar right of the page.
+// This is a VIEW setting on the controller, not the model, so it must be
+// re-applied whenever the controller changes (boot AND load_document retarget).
+function showDeletionsInline() {
+  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', false); }
   catch (e) { log('ShowChangesInMargin 设置失败 / failed: ' + errStr(e)); }
 }
 
@@ -761,7 +764,7 @@ function bootDoc() {
   // change the lawyer can accept/reject. Set once here (and on retarget) instead
   // of per-command, so no edit path can slip through untracked.
   try { xModel.setPropertyValue('RecordChanges', true); } catch {}
-  showDeletionsInMargin();
+  showDeletionsInline();
 
   installKeyHandler();
   try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
@@ -1345,7 +1348,7 @@ const EXEC = {
       try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
       // Revisions default ON for the real document too (same as bootDoc).
       try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
-      showDeletionsInMargin();
+      showDeletionsInline();
     };
 
     const errs = [];
@@ -2096,6 +2099,19 @@ const EXEC = {
         try { item.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
         try { item.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
         try { if (typeof r.getString === 'function') item.text = String(r.getString() || '').slice(0, 80); } catch (e) {}
+        // 行内显示（ShowChangesInMargin=false）下删除文本留在正文流里，redline
+        // 自身 getString() 抛 RuntimeException（页边模式才把文本收进 redline）——
+        // 回退用 RedlineStart/End 区间从正文取；Insert 型两种模式都走这条。
+        if (item.text == null) {
+          try {
+            const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
+            if (rs && re) {
+              const rcur = rs.getText().createTextCursorByRange(rs);
+              rcur.gotoRange(re, true);
+              item.text = String(rcur.getString() || '').slice(0, 80);
+            }
+          } catch (e) {}
+        }
         out.push(item);
       }
     } catch (e) { return { success: false, message: errStr(e) }; }
