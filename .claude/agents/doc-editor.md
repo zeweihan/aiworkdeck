@@ -41,6 +41,10 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - sequence<byte> 有符号且只收 Array：load_document 字节要 `Array.from(new Int8Array(...))`；省略 `_default` 目标帧会让 zetajs 把字节序列当 context。
 - export 走 XOutputStream.writeBytes 取回（Int8Array 视图）；**不能** storeToURL 到 MEMFS 再 FS.readFile（pthread 代理 ENOENT）。
 - worker 内 `Module.zetajs` 才是 UNO 桥；主线程 resolve 的是 thread port。
+- **typedef 成员的 struct**（BorderLine2.Color=util.Color 等）依赖 vendored zeta.js 里补的 TYPEDEF 解析分支（对齐上游语义）；升级 zeta.js 时确认该分支仍在，否则 TableBorder2 双向编组回退到 "bad type description"。
+- **枚举型属性读回可能是裸 short**（ParaAdjust 实锤）：与 css.* 枚举成员比较必须走 `enumEq`/`unoEnumVal`（office_thread.js），恒等比较会"set 成功读回不等"。
+- **short 型属性（VertOrient/OutlineLevel）set 必须传 `shortAny()`**（带类型 Any）：裸 number 编组成 long，严格 setter（>>= sal_Int16）拒绝且常被 try 吞掉。
+- **表后定位不能用 `table.getAnchor().getEnd()`**——会落进 A1 单元格（后续内容写进表格里）；用 `cursorToParagraphAfterTable()`（按表名在正文枚举定位）。
 
 ## 自动保存（LibreOfficeEditor.vue）
 

@@ -66,6 +66,13 @@ export const EDITOR_ACTIONS = [
   'add_comment',
   // [第 2 期 版本对比] host-initiated：当前文档与旧版字节比较产出修订，随后切只读。
   'compare_document',
+  // [格式增强] 富格式原语：编号/表格/格式读取/全文标准格式化；insert_under_heading
+  // 是后端一直在派发但从未接通的原语（本次补齐 worker 实现）。
+  'set_numbering', 'format_table', 'insert_table', 'get_formatting', 'apply_house_style',
+  'insert_under_heading',
+  // [流式标准格式] doc_start_stream 的落字端：markdown 剥离 + 标准格式写入。
+  // stream_insert 攒行消费，stream_flush 收尾/复位（{discard:true} 换文档硬清）。
+  'stream_insert', 'stream_flush',
 ]
 
 /**

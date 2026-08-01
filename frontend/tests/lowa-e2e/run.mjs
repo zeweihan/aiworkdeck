@@ -83,6 +83,33 @@ const DEBUG_ACTIONS = `
       return { success: true };
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
+  debug_table_info(p) {
+    // 组 14/15 探针：读第 N 张表的结构与标准格式落点（边框宽/表头加粗居中/数字
+    // 居右/垂直居中）。枚举值比较在 worker 侧做完、返回布尔，避免跨界序列化歧义；
+    // 比较走 enumEq（LO 对枚举型属性可能读回裸 short）。
+    const ts = xModel.getTextTables();
+    if (!ts.getCount()) return { success: false, message: 'no tables' };
+    const t = ts.getByIndex(Number(p && p.index) || 0);
+    const out = { success: true, count: ts.getCount() };
+    try { out.rows = t.getRows().getCount(); out.cols = t.getColumns().getCount(); } catch (e) {}
+    try { out.borderWidth = t.getPropertyValue('TableBorder2').TopLine.LineWidth; } catch (e) { out.borderErr = errStr(e); }
+    try {
+      const a1 = t.getCellByName('A1');
+      out.a1Text = a1.getString();
+      const c1 = a1.createTextCursor(); c1.gotoStart(false); c1.gotoEnd(true);
+      out.a1Bold = c1.getPropertyValue('CharWeight') > 100;
+      out.a1SizePt = c1.getPropertyValue('CharHeight');
+      out.a1Centered = enumEq(c1.getPropertyValue('ParaAdjust'), css.style.ParagraphAdjust.CENTER);
+      out.a1VCenter = enumEq(a1.getPropertyValue('VertOrient'), css.text.VertOrientation.CENTER);
+    } catch (e) { out.a1Err = errStr(e); }
+    try {
+      const b2 = t.getCellByName('B2');
+      out.b2Text = b2.getString();
+      const c2 = b2.createTextCursor(); c2.gotoStart(false); c2.gotoEnd(true);
+      out.b2AlignRight = enumEq(c2.getPropertyValue('ParaAdjust'), css.style.ParagraphAdjust.RIGHT);
+    } catch (e) { out.b2Err = errStr(e); }
+    return out;
+  },
 `
 function patchServed(urlPath, content) {
   if (urlPath === '/office_thread.js') {
@@ -93,8 +120,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info"'),
       'utf8')
   }
   return content
@@ -362,6 +389,106 @@ try {
     check('方向正确：redlines 含 Delete「三」',
       cmpRedlines.filter((r) => r.type === 'Delete').map((r) => r.text).includes('三'), JSON.stringify(cmpRedlines))
     check('正文停在新版可读文本', (await doc()).includes('六十日'), await doc())
+  }
+
+  // ---------- 组 14：富格式原语（行距/段距/缩进/编号/建表/格式读取）----------
+  console.log('\n[14] 富格式原语：段落格式 / 编号 / 插表 / 格式读取')
+  {
+    await exec('debug_fresh_document')
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '本段用于段落格式测试。' })
+    await exec('select_paragraph', { index: 0 })
+    // 先定字号：firstLineIndentChars 按光标处字号折算（2 字符 × 12 磅 = 24 磅）
+    await exec('format_selection', { fontSize: 12 })
+    const pf = await exec('set_paragraph_format', {
+      alignment: 'justify', lineSpacingMode: 'atLeast', lineSpacingValue: 16,
+      spaceBeforePt: 0, spaceAfterPt: 18, firstLineIndentChars: 2,
+    })
+    check('set_paragraph_format 扩展参数成功', pf.success === true, JSON.stringify(pf))
+    let fm = await exec('get_formatting')
+    check('读回：两端对齐', fm.success && fm.paragraph.alignment === 'justify', JSON.stringify(fm.paragraph))
+    check('读回：行距最小值 16 磅', fm.paragraph.lineSpacing && fm.paragraph.lineSpacing.mode === 'atLeast' && Math.abs(fm.paragraph.lineSpacing.valuePt - 16) < 0.2, JSON.stringify(fm.paragraph.lineSpacing))
+    check('读回：段前 0 段后 18 磅', Math.abs(fm.paragraph.spaceBeforePt) < 0.2 && Math.abs(fm.paragraph.spaceAfterPt - 18) < 0.2, JSON.stringify(fm.paragraph))
+    check('读回：首行缩进 2 字符（≈24 磅）', Math.abs(fm.paragraph.firstLineIndentPt - 24) < 1, JSON.stringify(fm.paragraph.firstLineIndentPt))
+
+    const num = await exec('set_numbering', { preset: 'decimal', level: 1 })
+    check('set_numbering decimal 成功', num.success === true, JSON.stringify(num))
+    fm = await exec('get_formatting')
+    check('读回：段落带编号', fm.paragraph.isNumbered === true, JSON.stringify(fm.paragraph))
+    const numOff = await exec('set_numbering', { preset: 'none' })
+    fm = await exec('get_formatting')
+    check('set_numbering none 去编号', numOff.success === true && fm.paragraph.isNumbered !== true, JSON.stringify(fm.paragraph))
+
+    await exec('goto', { type: 'end' })
+    const it = await exec('insert_table', { rows: [['项目', '金额'], ['咨询费', '10000']], headerRow: true })
+    check('insert_table 成功', it.success === true, JSON.stringify(it))
+    const ti = await exec('debug_table_info', {})
+    check('表结构 2×2', ti.success && ti.rows === 2 && ti.cols === 2, JSON.stringify(ti))
+    check('Grid 边框 1.5 磅（53/100mm）', Math.abs((ti.borderWidth || 0) - 53) <= 1, JSON.stringify(ti.borderWidth))
+    check('表头加粗居中 + 垂直居中 + 10 号', ti.a1Bold === true && ti.a1Centered === true && ti.a1VCenter === true && Math.abs(ti.a1SizePt - 10) < 0.2, JSON.stringify(ti))
+    check('数字单元格居右', ti.b2Text === '10000' && ti.b2AlignRight === true, JSON.stringify(ti))
+    const ft14 = await exec('format_table', { fontSizePt: 9, cellVerticalAlign: 'center' })
+    check('format_table 光标外要求 tableIndex', ft14.success === false, JSON.stringify(ft14))
+    const ft14b = await exec('format_table', { tableIndex: 0, fontSizePt: 9 })
+    check('format_table 按 tableIndex 改字号', ft14b.success === true, JSON.stringify(ft14b))
+  }
+
+  // ---------- 组 15：流式写入去 markdown 化（标准格式落字）----------
+  console.log('\n[15] 流式写入：markdown 剥离 + 标准格式')
+  {
+    await exec('debug_fresh_document')
+    // 模拟 SSE token 到达：故意在行中、标记中、表格分隔行中间切块
+    await exec('stream_insert', { text: '# 合同审' })
+    await exec('stream_insert', { text: '查报告\n\n本报告**重' })
+    await exec('stream_insert', { text: '点**关注下列问题：\n\n| 项目 | 金额 |\n| --- | ---' })
+    await exec('stream_insert', { text: ' |\n| 咨询费 | 10000 |\n结论：整体**通过**。' })
+    const sf = await exec('stream_flush', {})
+    check('stream_flush 成功', sf.success === true, JSON.stringify(sf))
+    const t15 = await exec('get_document_text')
+    const paras15 = t15.paragraphs.map((x) => x.text)
+    const text15 = paras15.join('\n')
+    check('正文无 markdown 标记（#/**/|）', paras15.every((s) => !/[#|]|\*\*/.test(s)), JSON.stringify(paras15))
+    check('标题与正文文本落地', text15.includes('合同审查报告') && text15.includes('本报告重点关注下列问题：') && text15.includes('结论：整体通过。'), JSON.stringify(paras15))
+    // 尾段是写入器留下的光标停靠空段（Word 文档天然以段落标记收尾），中间不允许空段
+    check('无额外空行段落', paras15.slice(0, -1).every((s) => s.trim() !== ''), JSON.stringify(paras15))
+    const ti = await exec('debug_table_info', {})
+    check('markdown 表转真表（2×2、Grid 1.5 磅）', ti.success && ti.rows === 2 && ti.cols === 2 && Math.abs((ti.borderWidth || 0) - 53) <= 1, JSON.stringify(ti))
+    check('表头「项目」加粗居中', ti.a1Text === '项目' && ti.a1Bold === true && ti.a1Centered === true, JSON.stringify(ti))
+    check('数字「10000」居右', ti.b2Text === '10000' && ti.b2AlignRight === true, JSON.stringify(ti))
+    // 主标题：16 磅加粗居中；正文：12 磅两端对齐、首行缩进 2 字符、段后 18 磅
+    await exec('select_paragraph', { index: 0 })
+    let fm = await exec('get_formatting')
+    check('主标题 16 磅加粗居中', fm.character.bold === true && Math.abs(fm.character.sizePt - 16) < 0.2 && fm.paragraph.alignment === 'center', JSON.stringify({ c: fm.character, p: fm.paragraph.alignment }))
+    check('标准字体（楷体_GB2312 / Arial）', fm.character.fontAsian === '楷体_GB2312' && fm.character.fontWestern === 'Arial', JSON.stringify(fm.character))
+    await exec('select_paragraph', { index: 1 })
+    fm = await exec('get_formatting')
+    check('正文 12 磅两端对齐缩进 2 字符段后 18 磅',
+      Math.abs(fm.character.sizePt - 12) < 0.2 && fm.paragraph.alignment === 'justify'
+      && Math.abs(fm.paragraph.firstLineIndentPt - 24) < 1 && Math.abs(fm.paragraph.spaceAfterPt - 18) < 0.2,
+      JSON.stringify({ c: fm.character.sizePt, p: fm.paragraph }))
+    // 表格后首段段前 18 磅（规范：其余段落段前 0）
+    await exec('select_paragraph', { index: 2 })
+    fm = await exec('get_formatting')
+    check('表后首段段前 18 磅', Math.abs(fm.paragraph.spaceBeforePt - 18) < 0.2, JSON.stringify(fm.paragraph.spaceBeforePt))
+    // 行内加粗落成真格式：选中「重点」应为粗体
+    const ftx = await exec('find_text_locations', { keyword: '重点' })
+    if (ftx.success && ftx.count > 0) {
+      await exec('set_selection', { anchor: ftx.matches[0].anchorId })
+      const w15 = await exec('debug_char_prop', { prop: 'CharWeight' })
+      check('**重点** 转真粗体', w15.value === 150, JSON.stringify(w15.value))
+    } else {
+      check('**重点** 转真粗体', false, 'find_text_locations 未命中: ' + JSON.stringify(ftx))
+    }
+    // 二次流式（往非空文档续写）：# 不再当主标题，而是小标题（正文款加粗）
+    await exec('stream_insert', { text: '# 补充说明\n补充正文。\n' })
+    await exec('stream_flush', {})
+    const ft2 = await exec('find_text_locations', { keyword: '补充说明' })
+    check('续写场景 # 落为小标题文本', ft2.success && ft2.count === 1, JSON.stringify(ft2.count))
+    if (ft2.success && ft2.count > 0) {
+      await exec('set_selection', { anchor: ft2.matches[0].anchorId })
+      const fm2 = await exec('get_formatting')
+      check('小标题=正文字号但加粗', fm2.character.bold === true && Math.abs(fm2.character.sizePt - 12) < 0.2, JSON.stringify(fm2.character))
+    }
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

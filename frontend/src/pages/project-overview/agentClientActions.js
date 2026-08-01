@@ -45,6 +45,10 @@ export const agentClientActionMethods = {
         else if (action.action === 'doc_stream_data' || action.action === 'wps_stream_data') {
             this.handleDocStreamData(action.content || '')
         }
+        // 后端流式写入结束：冲掉本地缓冲后让 worker 收尾（写掉尾行/尾表并复位状态机）
+        else if (action.action === 'doc_stream_end') {
+            this.handleDocStreamEnd()
+        }
     },
 
     // --- 流式写入（#79：LibreOffice 消费端，替代原 useWpsBridge.handleWpsStreamData）---
@@ -66,7 +70,9 @@ export const agentClientActionMethods = {
         const text = this._docStreamBuffer
         this._docStreamBuffer = ''
         try {
-            await this.libreOfficeExecutor.executeCommand('insert_at_cursor', { text })
+            // stream_insert：worker 端按行剥离 markdown 标记并按标准格式落字
+            //（楷体_GB2312/Arial、段后 18 磅、首行缩进 2 字符、表格 Grid 1.5 磅等）
+            await this.libreOfficeExecutor.executeCommand('stream_insert', { text })
         } catch (e) {
             console.error('[ProjectOverview] doc stream insert error:', e)
         } finally {
@@ -76,6 +82,26 @@ export const agentClientActionMethods = {
                     this._docStreamTimer = null
                     this.flushDocStreamBuffer()
                 }, 150)
+            }
+        }
+    },
+
+    // 流式结束：等在飞的 flush 落地、补冲残余缓冲，再让 worker stream_flush 收尾
+    //（写掉未换行的尾行、未闭合的尾表，并复位 markdown 状态机）。
+    async handleDocStreamEnd() {
+        if (this._docStreamTimer) { clearTimeout(this._docStreamTimer); this._docStreamTimer = null }
+        for (let i = 0; i < 100 && this._docStreamBusy; i++) {
+            await new Promise(resolve => setTimeout(resolve, 50))
+        }
+        await this.flushDocStreamBuffer()
+        for (let i = 0; i < 100 && this._docStreamBusy; i++) {
+            await new Promise(resolve => setTimeout(resolve, 50))
+        }
+        if (this.libreOfficeActive && this.libreOfficeExecutor) {
+            try {
+                await this.libreOfficeExecutor.executeCommand('stream_flush', {})
+            } catch (e) {
+                console.error('[ProjectOverview] doc stream flush error:', e)
             }
         }
     },
@@ -134,6 +160,8 @@ export const agentClientActionMethods = {
             this._docStreamBuffer = ''
             if (this._docStreamTimer) { clearTimeout(this._docStreamTimer); this._docStreamTimer = null }
             this._docStreamBusy = false
+            // worker 端 markdown 状态机也要硬清（上一条流若异常中断会留下半张表/半行）
+            try { await this.libreOfficeExecutor.executeCommand('stream_flush', { discard: true }) } catch (e) {}
             console.log('[ProjectOverview] Stream state reset, ready for streaming')
 
             // 6. 返回成功给后端

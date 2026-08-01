@@ -10,7 +10,8 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_* 编辑原语、E
 ## 关键文件
 
 **后端工具原语**
-- `backend/src/main/java/com/checkba/service/ai/tools/DocumentEditTools.java` — doc_* 工具原语全集（38 个 @Tool 方法），翻译成 `editorBridgeService.executeEditorCommand(action, params)`。曾名 WpsTools。
+- `backend/src/main/java/com/checkba/service/ai/tools/DocumentEditTools.java` — doc_* 工具原语全集（43 个 @Tool 方法），翻译成 `editorBridgeService.executeEditorCommand(action, params)`。曾名 WpsTools。格式面：doc_format_selection（字符）、doc_set_paragraph_format（对齐/标题级别/行距/段距/缩进）、doc_set_numbering（bullet/decimal/chinese/multilevel）、doc_format_table、doc_insert_table、doc_get_formatting（读格式）、doc_apply_standard_format（全文标准格式化）。
+- `backend/src/main/java/com/checkba/util/DocxStyleHelper.java` — write_docx/AiDocxExportService 两条 flexmark 生成路径的样式：`applyStandardFormat()` 在 render 后、save 前调用，与 worker 端 HOUSE 常量同一套律所标准格式规范。
 - `backend/src/main/java/com/checkba/service/ai/tools/CheckpointTools.java` — `doc_restore_checkpoint`。
 - `backend/src/main/java/com/checkba/service/ai/tools/ToolMeta.java` — `@ToolMeta(displayName/category/fileEffect)`；`fileEffect="MODIFIED"` 是检查点触发依据。
 
@@ -43,7 +44,9 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_* 编辑原语、E
 
 ## doc_* 原语速查（工具名 ≠ 下发 action 名）
 
-全集见 DocumentEditTools.java。易混对照：`doc_find_text`→`find_text_locations`、`doc_select_anchor`→`set_selection`、`doc_replace_at_anchor`→`replace_at_position`、`doc_collapse_cursor`→`collapse_selection`、`doc_start_stream`→`doc_open_file_sync`+setStreamingMode。批注 `doc_add_comment`→`add_comment`。
+全集见 DocumentEditTools.java。易混对照：`doc_find_text`→`find_text_locations`、`doc_select_anchor`→`set_selection`、`doc_replace_at_anchor`→`replace_at_position`、`doc_collapse_cursor`→`collapse_selection`、`doc_start_stream`→`doc_open_file_sync`+setStreamingMode。批注 `doc_add_comment`→`add_comment`。格式面：`doc_apply_standard_format`→`apply_house_style`、`doc_set_numbering`→`set_numbering`、`doc_format_table`→`format_table`、`doc_insert_table`→`insert_table`（rowsJson 后端解析成 rows 数组下发）、`doc_get_formatting`→`get_formatting`。
+
+**流式写入去 markdown 化**：doc_stream_data 的消费端不再 `insert_at_cursor` 原样落字，改走 worker 的 `stream_insert`（按行增量剥离 markdown 标记，按律所标准格式落字：楷体_GB2312/Arial、主标题 16 磅粗居中、正文 12 磅两端对齐段后 18 磅首行缩进 2 字符、markdown 表格转真 TextTable 套 Grid 1.5 磅）。流结束时编排器发 SSE `doc_stream_end`（onComplete 与 onError 两处），前端冲缓冲后调 `stream_flush` 收尾（写尾行/建尾表/复位状态机）；`stream_flush {discard:true}` 是换文档前的硬复位（open_sync 步骤 5）。标准格式常量在 office_thread.js 的 `HOUSE`。
 
 EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发的 load_document/export_document/insert_image/var_*/*_hyperlink 与诊断类 get_ui_lang/probe_modules/list_fonts/debug_revisions）。`ui_command` 是其中一个 action，worker 端再经 UI_COMMANDS 二级白名单映射 `.uno:` 槽（IME 快捷键用，非 AI 管线）。
 
@@ -62,6 +65,9 @@ EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发�
 - **删除修订跨 reset 会残留**，相关测试口径见 PR#188 记录。
 - 修订模式下手工删除卡死曾因覆盖层吞键，用 `.uno:` 调度修复（PR#164/166），别退回 DOM 键盘事件路线。
 - 改 AgentOrchestrator 构造器必须同步 EvalHarness（踩过两次）。
+- **`insert_at_cursor` 对带 markdown 标记的文本走剥离转换**（`MD_MARKER_RE` 判定，**→真粗体、行首 # 剥掉），纯文本原样插入；改插入路径要想到这两条分支。`insert_under_heading` 曾经后端一直派发但 worker 没实现+白名单没收录（静默失败年久失修），已补齐。
+- **改标准格式规范要改两处**：worker `HOUSE`（office_thread.js）+ 后端 `DocxStyleHelper`（编辑器流式 与 write_docx 两条路径各一份，规范必须一致）。
+- 流式中断（onError）也会发 doc_stream_end——新增流式相关终止分支时别忘了这个收尾信号，否则 worker 状态机残留半张表。
 
 ## 验证
 

@@ -85,6 +85,8 @@ public class AiDocxExportService {
             // 添加缺失的样式（BodyText, Quotations），避免 docx4j PropertyResolver 报错
             com.checkba.util.DocxStyleHelper.addMissingStyles(wordMLPackage);
             renderer.render(mdDocument, wordMLPackage);
+            // 律所标准格式：楷体_GB2312/Arial、段后 18 磅、首行缩进 2 字符、表格 Grid 1.5 磅等
+            com.checkba.util.DocxStyleHelper.applyStandardFormat(wordMLPackage);
 
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
             wordMLPackage.save(bos);
