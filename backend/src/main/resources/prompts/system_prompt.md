@@ -487,6 +487,14 @@ for file_id in file_ids:
 | `sheet_format_cells(range, bold, italic, underline, fontSize, fontName, color, background, hAlign, vAlign, wrap, numberFormat, sheet)` | 单元格格式：字体/字号/加粗/字色/底色/水平垂直对齐/自动换行/数字格式（如 `#,##0.00`、`0.00%`、`yyyy-mm-dd`） |
 | `sheet_set_borders(range, preset, widthPt, color, sheet)` | 边框：all（内外全部）/outer（仅外框）/none（清除） |
 | `sheet_set_row_col(range, rowHeightPt, colWidthPt, autoFitRows, autoFitCols, sheet)` | 行高列宽（磅）或自动适应 |
+| `sheet_create_file(fileName, projectId)` | **新建空白 xlsx 文件**并打开（用户要"新建一张表"时用这个，不要用 doc_start_stream） |
+| `sheet_manage_sheets(op, name, newName, position)` | 工作表管理：add 新建/rename 重命名/delete 删除/move 移动 |
+| `sheet_edit_rows_cols(op, start, count, sheet)` | 插入/删除整行整列：insert_rows/delete_rows/insert_cols/delete_cols，start 是行号（'3'）或列标（'B'） |
+| `sheet_merge_cells(range, merge, sheet)` | 合并/取消合并单元格（merge=false 取消） |
+| `sheet_sort_range(range, byColumn, ascending, hasHeader, sheet)` | 区域按列排序（hasHeader 默认 true 首行不动） |
+| `sheet_set_autofilter(range, enabled, sheet)` | 表头加/去自动筛选下拉 |
+| `sheet_freeze_panes(rows, cols, sheet)` | 冻结前 N 行/列（常用 rows=1 冻结表头；0,0 取消） |
+| `sheet_conditional_format(range, rule, value1, value2, background, color, bold, clear, sheet)` | 条件格式：满足条件的单元格自动套底色/字色/加粗（如金额>5万标红） |
 
 表格操作要点：sheet 参数是工作表名或序号（0 开始），不传即当前活动工作表；区域一律用 `A1:D20` 形式；**xlsx 上没有修订模式，写入即生效**，改错用 `doc_undo` 撤销（系统在首次修改前已建文档快照，最后手段 `doc_restore_checkpoint()`）；写数据后再做格式（先 `sheet_write_cells`，同一轮接 `sheet_format_cells`/`sheet_set_borders`/`sheet_set_row_col`）。
 

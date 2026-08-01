@@ -116,11 +116,14 @@ const DEBUG_ACTIONS = `
     } catch (e) { out.b2Err = errStr(e); }
     return out;
   },
-  debug_fresh_calc() {
+  debug_fresh_calc(p) {
     // 组 16 探针：换一份全新空白 Calc 文档（sheet_* 原语在真 Calc 模型上验证），
     // 与 debug_fresh_document 同一条 private:factory 路径。
+    // p.visible：冻结窗格是视图级操作（XViewFreezable），Hidden 文档没有真实
+    // 视图导致 freezeAtPosition 静默无效——组 19 要一份可见文档。
     try {
-      const loaded = desktop.loadComponentFromURL('private:factory/scalc', '_blank', 0, [mkProp('Hidden', true)]);
+      const loaded = desktop.loadComponentFromURL('private:factory/scalc', '_blank', 0,
+        (p && p.visible) ? [] : [mkProp('Hidden', true)]);
       if (!loaded) return { success: false, message: 'loadComponentFromURL returned null' };
       xModel = loaded;
       ctrl = loaded.getCurrentController();
@@ -150,6 +153,29 @@ const DEBUG_ACTIONS = `
       try { out.borderTopWidth = cell.getPropertyValue('TopBorder2').LineWidth; } catch (e) {}
       try { out.rowHeightMm = range.getRows().getByIndex(0).getPropertyValue('Height'); } catch (e) {}
       try { out.colWidthMm = range.getColumns().getByIndex(0).getPropertyValue('Width'); } catch (e) {}
+      try { out.isMerged = !!range.getIsMerged(); } catch (e) {} // XMergeable 方法（'IsMerged' 属性不存在）
+      return out;
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
+  debug_sheet_doc_info() {
+    // 组 19 探针：文档级状态——工作表名清单、自动筛选数据库区域、条件格式条数。
+    try {
+      const out = { success: true };
+      const sheets = xModel.getSheets();
+      const names = [];
+      for (let i = 0; i < sheets.getCount(); i++) names.push(sheets.getByIndex(i).getName());
+      out.sheets = names;
+      try {
+        const dbs = xModel.getPropertyValue('DatabaseRanges');
+        const dbNames = (dbs.getElementNames && dbs.getElementNames()) || [];
+        out.dbRanges = [];
+        for (let i = 0; i < dbNames.length; i++) {
+          let af = null;
+          try { af = !!dbs.getByName(dbNames[i]).getPropertyValue('AutoFilter'); } catch (e) {}
+          out.dbRanges.push({ name: dbNames[i], autoFilter: af });
+        }
+      } catch (e) { out.dbErr = errStr(e); }
+      try { out.hasFrozenPanes = ctrl.hasFrozenPanes(); } catch (e) {}
       return out;
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
@@ -163,8 +189,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info"'),
       'utf8')
   }
   return content
@@ -742,6 +768,85 @@ try {
     check('delete_comment 不假成功（真删或诚实报错）',
       (del.success === true && left === 0) || (del.success === false && left === 1),
       JSON.stringify(del) + ' left=' + left)
+  }
+
+  // ---------- 组 19：Calc 结构操作（工作表/行列/合并/排序/筛选/冻结/条件格式）----------
+  console.log('\n[19] Calc 结构操作：工作表管理 / 插删行列 / 合并 / 排序 / 筛选 / 冻结 / 条件格式')
+  {
+    await exec('debug_fresh_calc', { visible: true }) // 冻结窗格需要真实视图
+    await new Promise((r) => setTimeout(r, 800))
+    // 工作表管理：add / rename / move / delete
+    const add = await exec('sheet_manage_sheets', { op: 'add', name: '汇总' })
+    check('add 新建工作表', add.success === true && add.sheets.includes('汇总'), JSON.stringify(add))
+    const ren = await exec('sheet_manage_sheets', { op: 'rename', name: '汇总', newName: '费用汇总' })
+    check('rename 重命名', ren.success === true && ren.sheets.includes('费用汇总') && !ren.sheets.includes('汇总'), JSON.stringify(ren))
+    const mv = await exec('sheet_manage_sheets', { op: 'move', name: '费用汇总', position: 0 })
+    check('move 移到首位', mv.success === true && mv.sheets[0] === '费用汇总', JSON.stringify(mv))
+    const del = await exec('sheet_manage_sheets', { op: 'delete', name: '费用汇总' })
+    check('delete 删除', del.success === true && !del.sheets.includes('费用汇总'), JSON.stringify(del))
+    const delLast = await exec('sheet_manage_sheets', { op: 'delete', name: del.sheets[0] })
+    check('拒绝删除最后一张表', delLast.success === false && /最后一张/.test(delLast.message || ''), JSON.stringify(delLast))
+
+    // 插入/删除行列
+    await exec('sheet_write_cells', { startCell: 'A1', rows: [['表头', '数'], ['甲', 3], ['乙', 1], ['丙', 2]] })
+    const ir = await exec('sheet_edit_rows_cols', { op: 'insert_rows', start: '2', count: 1 })
+    check('第 2 行前插一行', ir.success === true, JSON.stringify(ir))
+    let rd = await exec('sheet_read_range', { range: 'A1:A3' })
+    check('插行后内容后移（A2 空、A3=甲）', rd.rows[1][0] === '' && rd.rows[2][0] === '甲', JSON.stringify(rd.rows))
+    const dr = await exec('sheet_edit_rows_cols', { op: 'delete_rows', start: '2', count: 1 })
+    check('删除该行还原', dr.success === true, JSON.stringify(dr))
+    const ic = await exec('sheet_edit_rows_cols', { op: 'insert_cols', start: 'B', count: 1 })
+    rd = await exec('sheet_read_range', { range: 'A1:C1' })
+    check('B 列前插一列（原 B 移到 C）', ic.success === true && rd.rows[0][1] === '' && rd.rows[0][2] === '数', JSON.stringify(rd.rows))
+    await exec('sheet_edit_rows_cols', { op: 'delete_cols', start: 'B', count: 1 })
+    const badOp = await exec('sheet_edit_rows_cols', { op: 'insert_rows', start: 'x' })
+    check('非法行号被拒绝', badOp.success === false, JSON.stringify(badOp))
+
+    // 排序（hasHeader=true 表头不动）：数 3/1/2 → 1/2/3
+    const st = await exec('sheet_sort_range', { range: 'A1:B4', byColumn: 'B', ascending: true, hasHeader: true })
+    check('sheet_sort_range 成功', st.success === true, JSON.stringify(st))
+    rd = await exec('sheet_read_range', { range: 'A1:B4' })
+    check('按 B 列升序（表头不动）', rd.rows[0][0] === '表头' && rd.rows[1][1] === 1 && rd.rows[2][1] === 2 && rd.rows[3][1] === 3, JSON.stringify(rd.rows))
+    check('行随排序整体移动（乙=1 在前）', rd.rows[1][0] === '乙' && rd.rows[3][0] === '甲', JSON.stringify(rd.rows))
+    const stDesc = await exec('sheet_sort_range', { range: 'A1:B4', byColumn: 'B', ascending: false, hasHeader: true })
+    const rdDesc = await exec('sheet_read_range', { range: 'B2:B4' })
+    check('降序排序', stDesc.success === true && rdDesc.rows[0][0] === 3 && rdDesc.rows[2][0] === 1, JSON.stringify(rdDesc.rows))
+    const stBad = await exec('sheet_sort_range', { range: 'A1:B4', byColumn: 'Z' })
+    check('区域外排序列被拒绝', stBad.success === false, JSON.stringify(stBad))
+
+    // 合并单元格
+    const mg = await exec('sheet_merge_cells', { range: 'A6:C6', merge: true })
+    check('合并 A6:C6', mg.success === true && mg.merged === true, JSON.stringify(mg))
+    let ci = await exec('debug_sheet_cell_info', { cell: 'A6:C6' })
+    check('IsMerged 读回 true', ci.isMerged === true, JSON.stringify(ci.isMerged))
+    const un = await exec('sheet_merge_cells', { range: 'A6:C6', merge: false })
+    ci = await exec('debug_sheet_cell_info', { cell: 'A6:C6' })
+    check('取消合并后 IsMerged=false', un.success === true && ci.isMerged === false, JSON.stringify(ci.isMerged))
+
+    // 自动筛选（命名数据库区域，set 语义）
+    const af = await exec('sheet_set_autofilter', { range: 'A1:B4', enabled: true })
+    check('开启自动筛选', af.success === true && af.autoFilter === true, JSON.stringify(af))
+    let di = await exec('debug_sheet_doc_info')
+    check('筛选数据库区域已建且 AutoFilter=true', (di.dbRanges || []).some((d) => d.autoFilter === true), JSON.stringify(di.dbRanges))
+    const afOff = await exec('sheet_set_autofilter', { range: 'A1:B4', enabled: false })
+    di = await exec('debug_sheet_doc_info')
+    check('关闭后数据库区域移除', afOff.success === true && !(di.dbRanges || []).some((d) => /__awd_af_/.test(d.name)), JSON.stringify(di.dbRanges))
+
+    // 冻结窗格
+    const fz = await exec('sheet_freeze_panes', { rows: 1, cols: 0 })
+    check('冻结首行', fz.success === true && fz.hasFrozenPanes === true, JSON.stringify(fz))
+    const unfz = await exec('sheet_freeze_panes', { rows: 0, cols: 0 })
+    check('取消冻结', unfz.success === true && unfz.hasFrozenPanes === false, JSON.stringify(unfz))
+
+    // 条件格式：B 列 >2 标红底
+    const cf = await exec('sheet_conditional_format', { range: 'B2:B4', rule: 'greater', value1: '2', background: '#FF0000' })
+    check('条件格式设置成功（1 条规则）', cf.success === true && cf.entries === 1 && /__awd_cf_/.test(cf.styleName || ''), JSON.stringify(cf))
+    const cf2 = await exec('sheet_conditional_format', { range: 'B2:B4', rule: 'between', value1: '1', value2: '2', background: '#00FF00' })
+    check('再设替换而非叠加（仍 1 条）', cf2.success === true && cf2.entries === 1, JSON.stringify(cf2))
+    const cfClear = await exec('sheet_conditional_format', { range: 'B2:B4', clear: true })
+    check('清除条件格式', cfClear.success === true && cfClear.cleared === true, JSON.stringify(cfClear))
+    const cfBad = await exec('sheet_conditional_format', { range: 'B2:B4', rule: 'greater', value1: '2' })
+    check('缺外观参数被拒绝', cfBad.success === false && /外观/.test(cfBad.message || ''), JSON.stringify(cfBad))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
