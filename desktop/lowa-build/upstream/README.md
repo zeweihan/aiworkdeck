@@ -17,12 +17,11 @@
 - **修复**：锚点改取 `FindTabFrame()` 的整表左缘，与同文件里「改动竖线」`m_nRedX`
   在构造器里的既有做法一致。约 6 行。
 - **上游状态**（2026-08-02 核对）：master 未修；bugzilla 未搜到对应报告。
-- **提交前要做**：
-  1. 先在 https://bugs.documentfoundation.org 提 bug（Writer 组件，附表格文档复现步骤
-     与截图；本仓 `desktop/lowa-build/RECIPE.md` r3 节有背景），拿到 tdf 编号
-  2. 把编号补进补丁注释首行（`tdf#NNNNNN: ...`），提交信息首行同样带编号
-  3. 走 gerrit：`https://gerrit.libreoffice.org`（需 TDF 账号 + 首次提交签 LICENSE 声明）
-  4. 合入后，下次跟随上游升引擎时即可从 `patches/apply-source-patches.py` 里摘掉第 4 条
+- **提交材料已备好**：见 `BUGREPORT-0001.md`——bugzilla 的 Summary/Description 全文
+  可直接粘贴，附件两个（`repro-margin-table.docx` 最小复现文档、`screenshot-overlap.png`
+  未修复引擎上的实拍证据：正文删除正确进左页边、表格删除被画进左邻单元格），
+  gerrit 提交命令与 commit message 也一并写好。只剩「登录 + 粘贴 + 点提交」。
+- 合入后，下次跟随上游升引擎时即可从 `patches/apply-source-patches.py` 里摘掉第 4 条。
 
 ## 0002 — zetajs：typedef 类型不解析导致结构体编组失败
 
