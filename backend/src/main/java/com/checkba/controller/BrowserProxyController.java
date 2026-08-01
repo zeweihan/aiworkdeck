@@ -110,7 +110,9 @@ public class BrowserProxyController {
 
     private String inject(String html, String baseUrl, String token) {
         String safeBase = escapeHtmlAttr(baseUrl);
-        String safeToken = token == null ? "" : token.replace("'", "\\'");
+        // 反斜杠必须先转义：只替换单引号的话，token 末尾带 \ 会把我们补的转义符本身
+        // 变成被转义的反斜杠，随后的单引号照样闭合字符串，等于在注入脚本里执行任意 JS
+        String safeToken = token == null ? "" : token.replace("\\", "\\\\").replace("'", "\\'");
 
         // 1) base：让相对路径资源能回到原站点加载
         String baseTag = "<base href=\"" + safeBase + "\">";

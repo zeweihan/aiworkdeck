@@ -143,7 +143,12 @@ public class DocumentEditTools implements AgentToolComponent {
                 if (!java.nio.file.Files.exists(projectDataDir)) {
                     java.nio.file.Files.createDirectories(projectDataDir);
                 }
-                java.nio.file.Path targetPath = projectDataDir.resolve(fileName);
+                // fileName 由 LLM 填写：不做归一化围栏的话，"../42/补充协议.docx"
+                // 会把伪造文档直接落进别家项目的目录
+                java.nio.file.Path targetPath = projectDataDir.resolve(fileName).normalize();
+                if (!targetPath.startsWith(projectDataDir.normalize())) {
+                    return "Error: 非法文件名，路径越出项目目录";
+                }
 
                 // 检查文件是否已存在，如果存在则自动重命名
                 String originalFileName = fileName;
