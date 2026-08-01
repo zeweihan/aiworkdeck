@@ -70,16 +70,22 @@ const DEBUG_ACTIONS = `
     }
     return { success: true, count: out.length, comments: out };
   },
-  debug_fresh_document() {
+  debug_fresh_document(p) {
     // 组 13 探针专用：跳过前面各组累积的残留（批注字段等会让 select_all +
     // replace_selection 在其上抛 RuntimeException），换一份全新空白文档再准备
     // 新旧版本文本，和既有 probe_modules() 用同一条 private:factory 路径。
     try {
-      const loaded = desktop.loadComponentFromURL('private:factory/swriter', '_blank', 0, [mkProp('Hidden', true)]);
+      // p.visible：批注删除要走引擎的注释窗口（.uno:DeleteComment 按 Id 找的是
+      // 活动批注窗口），Hidden 文档里根本没有——组 18 因此要一份可见文档。
+      const loaded = desktop.loadComponentFromURL('private:factory/swriter', '_blank', 0,
+        (p && p.visible) ? [] : [mkProp('Hidden', true)]);
       if (!loaded) return { success: false, message: 'loadComponentFromURL returned null' };
       xModel = loaded;
       ctrl = loaded.getCurrentController();
       try { xModel.setPropertyValue('RecordChanges', false); } catch (e) {}
+      // 生产的 retarget（load_document）会重置这个视图设置——探针换文档也要跟着
+      // 做，否则后续断言跑在行内显示语义下，与真实产品形态不符。
+      showDeletionsInMargin();
       return { success: true };
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
@@ -665,6 +671,77 @@ try {
       JSON.stringify(wrX))
     const rdX = await exec('sheet_read_range', { range: 'H1' })
     check('出错公式读回不伪装成 0', rdX.rows[0][0] !== 0 && rdX.rows[0][0] !== '' && String(rdX.rows[0][0]).length > 0, JSON.stringify(rdX.rows))
+  }
+
+  // ---------- 组 18：审阅面板原语（修订/批注清单·定位·逐条处置）----------
+  console.log('\n[18] 审阅面板：list/goto/resolve 修订与批注')
+  {
+    // 组 16/17 把模型换成了 Calc——审阅原语是 Writer 专属，先换回全新 Writer
+    // 可见文档：批注删除依赖引擎的注释窗口，Hidden 文档里不存在
+    check('换回 Writer 文档', (await exec('debug_fresh_document', { visible: true })).success === true)
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方应于三十日内向乙方支付服务费。' })
+    await exec('load_document', { authorName: '审阅测试' })   // 只注入作者名
+    await exec('debug_set_record_changes', { on: true })
+    // 两处修订：替换产生「删三 + 插六」
+    await exec('find_replace', { findText: '三十日', replaceText: '六十日', replaceAll: true })
+    let lr = await exec('list_revisions')
+    check('list_revisions 列出修订（含类型/作者/段落上下文）',
+      lr.success && lr.count >= 2 && lr.revisions.every((r) => !!r.type && !!r.author) &&
+      lr.revisions.some((r) => (r.paragraph || '').includes('乙方')), JSON.stringify(lr).slice(0, 300))
+    check('删除型修订带回文本「三」', lr.revisions.some((r) => r.type === 'Delete' && r.text === '三'), JSON.stringify(lr.revisions))
+    check('插入型修订带回文本「六」', lr.revisions.some((r) => r.type === 'Insert' && r.text === '六'), JSON.stringify(lr.revisions))
+
+    const insIdx = lr.revisions.findIndex((r) => r.type === 'Insert')
+    check('goto_revision 定位插入型（选中新增文本）',
+      (await exec('goto_revision', { index: insIdx })).selected === '六', JSON.stringify(await exec('goto_revision', { index: insIdx })))
+
+    // 逐条接受：插入型被接受后该条消失，正文保留新字
+    const n0 = lr.count
+    const acc = await exec('resolve_revision', { index: insIdx, action: 'accept' })
+    check('resolve_revision 接受插入型（条数真的减少）', acc.success === true && acc.remaining === n0 - 1, JSON.stringify(acc))
+    check('接受后正文保留「六十日」', (await doc()).includes('六十日'), await doc())
+
+    // 逐条拒绝：删除型被拒绝后原字回到正文
+    lr = await exec('list_revisions')
+    const delIdx = lr.revisions.findIndex((r) => r.type === 'Delete')
+    const rej = await exec('resolve_revision', { index: delIdx, action: 'reject' })
+    check('resolve_revision 拒绝删除型（条数真的减少）', rej.success === true && rej.remaining === lr.count - 1, JSON.stringify(rej))
+    check('拒绝删除后原字「三」回到正文', (await doc()).includes('三'), await doc())
+
+    // 越界索引必须失败而不是静默成功
+    check('越界索引被拒绝', (await exec('resolve_revision', { index: 99, action: 'accept' })).success === false)
+
+    // 批量：再造两处修订后全部拒绝，回到原文
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '乙方应在验收后付款。' })
+    await exec('debug_set_record_changes', { on: true })
+    await exec('find_replace', { findText: '验收后', replaceText: '验收合格后', replaceAll: true })
+    const beforeAll = (await exec('list_revisions')).count
+    const all = await exec('resolve_all_revisions', { action: 'reject' })
+    check('resolve_all_revisions 全部拒绝', all.success === true && all.remaining === 0 && all.resolved === beforeAll, JSON.stringify(all))
+    check('全部拒绝后回到原文', (await doc()) === '乙方应在验收后付款。', await doc())
+
+    // 批注：清单/定位/已解决/删除
+    const ftc = await exec('find_text_locations', { keyword: '验收' })
+    await exec('add_comment', { anchor: ftc.matches[0].anchorId, comment: '需确认验收标准', __agent: true })
+    let lc2 = await exec('list_comments')
+    check('list_comments 带作者/内容/锚定文本',
+      lc2.success && lc2.count === 1 && lc2.comments[0].author === 'AI Workdeck' &&
+      lc2.comments[0].content === '需确认验收标准' && lc2.comments[0].anchorText === '验收', JSON.stringify(lc2))
+    check('goto_comment 成功', (await exec('goto_comment', { index: 0 })).success === true)
+    check('set_comment_resolved 标记已解决', (await exec('set_comment_resolved', { index: 0, resolved: true })).resolved === true)
+    check('已解决状态可读回', (await exec('list_comments')).comments[0].resolved === true)
+    // delete_comment 在宿主加载出来的文档上下文里删不掉（引擎按活动批注窗口找
+    // Id）——面板因此不放删除按钮。这里锁的是**不许假成功**：要么真删掉、要么
+    // 明确报失败，绝不返回 success 却留着批注。
+    const del = await exec('delete_comment', { index: 0 })
+    const left = (await exec('list_comments')).count
+    check('delete_comment 不假成功（真删或诚实报错）',
+      (del.success === true && left === 0) || (del.success === false && left === 1),
+      JSON.stringify(del) + ' left=' + left)
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

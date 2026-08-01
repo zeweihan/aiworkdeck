@@ -27,6 +27,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `frontend/vite.zetaoffice.config.js` — editor 页专用 Vite 构建（脱离 uni-app），产出 dist/zetaoffice/。
 
 **宿主 UI（保活/实例管理/自动保存）**
+- `frontend/src/components/ReviewPanel.vue` — 审阅面板（编辑器右栏）：修订/批注两栏清单，点击定位、逐条接受/拒绝、全部接受/拒绝、批注标记解决/删除。数据全走 worker 原语（list_revisions/goto_revision/resolve_revision/resolve_all_revisions、list_comments/goto_comment/set_comment_resolved/delete_comment），executor 由 LibreOfficeEditor 注入；处置后 emit changed → 走自动保存链路。**面板是修订的权威视图**（页边小字读不到作者/时间，且同行多格删除会在页边互叠）。
 - `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave、reloadFromBackend。支持**备胎过继**（watch file 仅 null→文档；引擎已就绪走 finishDocLoad，未就绪由 onEndpointReady 接手）与**只读预览接力**（字节预取完成即 docx-preview 本地渲染，previewReady 后 overlay 变成可滚动阅读 + 顶部细进度条，ready 后整体消失）。
 - `frontend/src/pages/project-overview/librePool.js` — 保活池方法组（Phase 1 外置）：libreLruKeys/touchLibreLru/evictLibreInstance、syncLibreExecutor 活跃指针、`_libreRefs`/`_libreExecMap` 非响应式注册表、`LIBRE_KEEPALIVE_MAX = 3`、reloadActiveLibreInstances（版本退回/检查点恢复后就地重载）；**预热备胎**（PR#220）：libreSpares（{key, file}，file=null 是后台预 boot 的空白隐藏实例），onActiveOfficeFileChanged 里 maybeAdoptLibreSpare（须在 touchLibreLru 之前，靠"不在 lru 记账"识别无实例）过继给池外首开文档，过继后按 'left:fileId' 常规记账；补胎在过继 ready 后（scheduleLibreSpare，4s 延迟）。仅左窗格设备胎（webview 不能跨容器移动）；h5 无 checkbaDesktop 不建胎；常驻多一个空白实例内存（数百 MB）。
 
@@ -65,6 +66,9 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `npm run build:zetaoffice` 会清空 dist 并删掉已 fetch 的引擎——本地反复跑 e2e 用 `LOWA_ENGINE_DIR` 规避，或从兄弟 worktree 复制引擎（CDN 挂时的配方）。
 - 修订作者：params 带 `__agent:true` → 署名 "AI Workdeck"。
 - **ShowChangesInMargin 依赖自建引擎 ≥24.2.8-zhcn-r3**：原生 LO 把页边删除文本画在锚点所在 frame 左侧，表格内 frame=单元格会叠画左邻格正文；r3 焙入 frmpaint.cxx 表格锚点补丁（`desktop/lowa-build/patches`，锚 FindTabFrame 整表左缘）后才能开。页边模式非纯视图设置：开=删除文本移入 redline 对象（getString 可取、正文不含），关=留正文流且 redline getString 抛异常——debug_revisions 已带 RedlineText/区间双路取回，两种模式都能读。已知残留局限：同一表格行多格删除会在页边同 Y 相互叠（上游按行画、无跨格协调）。批注侧栏与此设置无关。
+- **审阅面板原语的光标摆位是硬约束**（`resolve_revision`，真机逐个试出来）：插入型修订必须**跨选**整个 redline 区间才被 `.uno:AcceptTrackedChange` 命中；删除型（页边模式下文本不在正文流）必须**塌陷**到区间起点，跨选反而打空。摆错不报错——dispatch 静默失效甚至凭空多一条空插入修订，所以处置一律用 redline 条数变化复核，别信 dispatch 的返回。
+- **批注删除三个前提**（`delete_comment`）：`.uno:DeleteComment` 必须带 `Id`（批注的 `Name` 属性）；文档必须**可见**（Hidden 打开的文档没有批注窗口，按 Id 找不到）；已解决（Resolved）的批注要先取消解决态。API 路线 `dispose()` / `removeTextContent()` 在有些上下文里是「不抛异常也不生效」的假成功，不能据其返回值报成功。
+- e2e 探针换文档（`debug_fresh_document`）要跟着生产 retarget 做 `showDeletionsInMargin()`，否则后续断言跑在行内语义下；组 18 还需 `{visible:true}`（批注删除依赖注释窗口）。
 - webview/uni 存储格式坑与宿主侧 e2e 配方见 lowa-keepalive 记录（PR#159）。
 - **预热备胎是同一个 LibreOfficeEditor 组件（file=null）**：任何在组件树/DOM 里"找编辑器实例"的探针（如 desktop-e2e FIND_EDITOR）必须过滤 `file` 非空，否则命令打在隐藏空白备胎上、样样"成功"但真文档纹丝不动。备胎未激活用 visibility 隐藏（绝对定位占位），不能改 display:none——引擎要在有尺寸画布里 boot。
 

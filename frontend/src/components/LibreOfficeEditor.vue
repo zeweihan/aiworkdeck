@@ -13,6 +13,9 @@
         <view v-if="!isError && !ready" class="libre-spin"></view>
         <text>{{ displayStatus }}</text>
       </view>
+      <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图 -->
+      <text v-if="ready && !loadingOverlayVisible" class="libre-review-btn" :class="{ on: reviewOpen }"
+            @tap="reviewOpen = !reviewOpen">审阅</text>
     </view>
     <!-- 加载进度面板：引擎启动 + 文档下载/打开是感知最慢的一段（尤其大文档），
          把过程阶段化展示出来（用户反馈：不能更快，也要看得见进展）。 -->
@@ -47,8 +50,19 @@
       </view>
     </view>
     <!-- The Electron <webview> is created imperatively (uni-app's template
-         compiler does not know the <webview> tag); it mounts into this host. -->
-    <view :id="hostId" class="libre-host"></view>
+         compiler does not know the <webview> tag); it mounts into this host.
+         审阅面板与画布并排（挤宽而非浮层）——webview 是独立合成层，浮层压在
+         上面的行为不可靠。 -->
+    <view class="libre-body">
+      <view :id="hostId" class="libre-host"></view>
+      <ReviewPanel
+        v-if="reviewOpen && ready"
+        :executor="executor"
+        :refresh-key="reviewRefreshKey"
+        @close="reviewOpen = false"
+        @changed="onReviewChanged"
+      />
+    </view>
   </view>
 </template>
 
@@ -65,6 +79,7 @@
 // （原 ⌘⇧O 实验覆盖层与探针工具栏已移除）.
 
 import { createWebviewEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
+import ReviewPanel from '@/components/ReviewPanel.vue'
 import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 
@@ -72,6 +87,7 @@ let seq = 0
 
 export default {
   name: 'LibreOfficeEditor',
+  components: { ReviewPanel },
   emits: ['close', 'ready', 'open-url'],
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
@@ -84,6 +100,9 @@ export default {
     return {
       hostId: 'libre-host-' + (++seq),
       ready: false,
+      // 审阅面板（修订/批注）开关与刷新信号
+      reviewOpen: false,
+      reviewRefreshKey: 0,
       statusText: '启动中…',
       log: '',
       webviewEl: null,
@@ -489,6 +508,10 @@ export default {
     // (typed / IME / AI command) — debounce-save on it so the user never has to
     // press anything. Idle window 2.5s; continuous typing still hits the backend
     // at least every 15s (max-wait), so a crash can't eat a long burst.
+    // 面板处置了修订/批注：文档确实改了，走与打字同一条自动保存链路
+    onReviewChanged() {
+      this.onDocModified()
+    },
     onDocModified() {
       // docLoadFailed：画布上是空白 boot 文档，标脏会引发空文档覆盖真文件
       if (!this.ready || !this.file || this.docLoadFailed) return
@@ -498,6 +521,8 @@ export default {
       this.dirty = true
       if (!this._dirtySince) this._dirtySince = Date.now()
       this.scheduleAutoSave()
+      // 文档变了（打字 / AI 改动）——面板开着就刷新，别让它显示过期清单
+      if (this.reviewOpen) this.reviewRefreshKey++
     },
     scheduleAutoSave() {
       clearTimeout(this._saveTimer)
@@ -631,7 +656,11 @@ export default {
 .libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: #e5e7eb;
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
-.libre-host { flex: 1; min-height: 0; width: 100%; }
+.libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
+.libre-host { flex: 1; min-width: 0; min-height: 0; height: 100%; }
+.libre-review-btn { padding: 3px 10px; border-radius: 999px; background: rgba(31, 41, 55, 0.78);
+  color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
+.libre-review-btn.on { background: #E6F9F0; color: #1A5336; }
 /* ---- 加载进度面板 ---- */
 .libre-loading { position: absolute; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center;
   background: #F8F9FA; }

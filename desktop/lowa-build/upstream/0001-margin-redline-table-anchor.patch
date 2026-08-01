@@ -1,0 +1,15 @@
+--- a/sw/source/core/text/frmpaint.cxx
++++ b/sw/source/core/text/frmpaint.cxx
+@@ -245,6 +245,12 @@
+     if ( pRedlineText )
+     {
+         Size aSize = pTmpFnt->GetTextSize_( aDrawInf );
++        // m_nX is the text frame's left edge, which inside a table is the
++        // CELL's left edge -- right-aligning the margin text there paints it
++        // over the neighbouring cell's content. Anchor at the table frame
++        // instead, like the "changed line" mark does (m_nRedX, see the ctor).
++        if ( const SwFrame* pTabFrame = m_pTextFrame->FindTabFrame() )
++            aTmpPos.setX( pTabFrame->getFrameArea().Left() );
+         aTmpPos.AdjustX( -(aSize.Width()) - 200 );
+     }
+     bool bPaint = true;

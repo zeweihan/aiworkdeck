@@ -186,6 +186,69 @@ function selectVisibly(range) {
   try { ctrl.getViewCursor().gotoRange(range, false); return true; }
   catch (e) { try { ctrl.select(range); return true; } catch (e2) { return false; } }
 }
+function pad2(n) { return (n < 10 ? '0' : '') + n; }
+// ---- 审阅面板（修订/批注）的取址助手 ---------------------------------------
+// redline 枚举没有按索引取的接口，面板的 index 就是枚举顺序（每次操作后宿主
+// 会重新拉清单，处置一条后索引会前移——这是刻意的：面板即时刷新即可）。
+function redlineAt(index) {
+  const want = Number(index);
+  if (!(want >= 0)) return null;
+  try {
+    const en = xModel.getRedlines().createEnumeration();
+    let i = 0;
+    while (en.hasMoreElements()) { const r = en.nextElement(); if (i++ === want) return r; }
+  } catch (e) {}
+  return null;
+}
+function countRedlines() {
+  let n = 0;
+  try { const en = xModel.getRedlines().createEnumeration(); while (en.hasMoreElements()) { en.nextElement(); n++; } } catch (e) {}
+  return n;
+}
+// 把视图光标摆到 .uno:Accept/RejectTrackedChange 能命中的位置。**两种修订
+// 类型要求相反的摆法**（真机探针逐一试出来的，别凭直觉改）：
+//   - 插入型：文本在正文流里，光标必须**跨选**整个区间才命中；
+//   - 删除型：页边模式下删除文本不在正文流，必须**塌陷**到区间起点；跨选
+//     反而落进那段隐藏文本、dispatch 打空。
+// 摆错不会报错——dispatch 静默不生效，甚至凭空多出一条空插入修订，所以调用
+// 方（resolve_revision）一律用条数变化复核。
+function selectRedlineRange(r, forDispatch) {
+  try {
+    const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
+    if (!rs || !re) return false;
+    let isDelete = false;
+    try { isDelete = String(r.getPropertyValue('RedlineType')) === 'Delete'; } catch (e) {}
+    const vc = ctrl.getViewCursor();
+    vc.gotoRange(rs, false);
+    if (!(forDispatch && isDelete)) vc.gotoRange(re, true);
+    return true;
+  } catch (e) { return false; }
+}
+function countComments() {
+  let n = 0;
+  try {
+    const en = xModel.getTextFields().createEnumeration();
+    while (en.hasMoreElements()) {
+      const f = en.nextElement();
+      if (f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation')) n++;
+    }
+  } catch (e) {}
+  return n;
+}
+function commentAt(index) {
+  const want = Number(index);
+  if (!(want >= 0)) return null;
+  try {
+    const en = xModel.getTextFields().createEnumeration();
+    let i = 0;
+    while (en.hasMoreElements()) {
+      const f = en.nextElement();
+      if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+      if (i++ === want) return f;
+    }
+  } catch (e) {}
+  return null;
+}
 // Insert text at the view cursor, honoring '\n' as a PARAGRAPH BREAK.
 // XText.insertString does NOT split paragraphs on '\n' (verified against the
 // real engine: a multi-line insert landed as ONE paragraph), so multi-paragraph
@@ -2178,6 +2241,153 @@ const EXEC = {
       annotatedText: annotatedText,
       paragraph: (paragraphTextOf(range) || '').slice(0, 200),
     };
+  },
+  // ---- [审阅面板] 修订与批注的清单 / 定位 / 逐条处置 --------------------
+  // 页边显示解决了「删除文本压正文」，但同一表格行多格删除仍会在页边同高互叠，
+  // 且页边小字读不到作者/时间。审阅面板（宿主右栏）用下面这组原语驱动：列出、
+  // 点击定位、逐条接受/拒绝——修订的权威视图从页边挪进面板。
+  list_revisions(p) {
+    const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
+    const out = [];
+    try {
+      const en = xModel.getRedlines().createEnumeration();
+      while (en.hasMoreElements() && out.length < limit) {
+        const r = en.nextElement();
+        const it = { index: out.length };
+        try { it.type = r.getPropertyValue('RedlineType'); } catch (e) {}
+        try { it.author = r.getPropertyValue('RedlineAuthor'); } catch (e) {}
+        try { it.comment = r.getPropertyValue('RedlineComment'); } catch (e) {}
+        try {
+          const d = r.getPropertyValue('RedlineDateTime');
+          if (d) it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes);
+        } catch (e) {}
+        // 删除型在页边模式下文本收进 redline 对象（getString 可取）；插入型的
+        // 文本只在正文流里，要靠 RedlineStart/End 区间取。两路都试。
+        try { if (typeof r.getString === 'function') it.text = String(r.getString() || ''); } catch (e) {}
+        try {
+          const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
+          if (rs && re) {
+            if (!it.text) {
+              const rc = rs.getText().createTextCursorByRange(rs);
+              rc.gotoRange(re, true);
+              it.text = String(rc.getString() || '');
+            }
+            const pc = rs.getText().createTextCursorByRange(rs);
+            try { pc.gotoStartOfParagraph(false); pc.gotoEndOfParagraph(true); it.paragraph = String(pc.getString() || '').slice(0, 120); } catch (e) {}
+            // 表格内的修订：面板要标出来（页边互叠的正是这一类）
+            try { it.inTable = !!rs.getPropertyValue('Cell'); } catch (e) { it.inTable = false; }
+          }
+        } catch (e) {}
+        it.text = String(it.text || '').slice(0, 120);
+        out.push(it);
+      }
+    } catch (e) { return { success: false, message: errStr(e) }; }
+    return { success: true, count: out.length, revisions: out };
+  },
+  goto_revision(p) {
+    const r = redlineAt(p && p.index);
+    if (!r) return { success: false, message: 'no revision at index ' + (p && p.index) };
+    return selectRedlineRange(r)
+      ? { success: true, index: Number(p.index), selected: String(ctrl.getViewCursor().getString() || '') }
+      : { success: false, message: 'could not select revision range' };
+  },
+  // 逐条处置。**光标摆放是硬要求**（真机探针实证）：视图光标必须跨过 redline
+  // 区间——插入型这样才选中正文里的新增文本，删除型（页边模式下正文流里是
+  // 零宽）退化成定位到起点，两者都能被 dispatch 命中。摆错位置（collapse 到
+  // 起点再右移、或用 selectVisibly 传区间游标）会让 dispatch 打空，甚至凭空
+  // 多出一条空插入修订。
+  resolve_revision(p) {
+    const action = String((p && p.action) || 'accept').toLowerCase();
+    if (action !== 'accept' && action !== 'reject') return { success: false, message: "action must be accept|reject" };
+    const r = redlineAt(p && p.index);
+    if (!r) return { success: false, message: 'no revision at index ' + (p && p.index) };
+    if (!selectRedlineRange(r, true)) return { success: false, message: 'could not select revision range' };
+    const before = countRedlines();
+    css.frame.DispatchHelper.create(context).executeDispatch(
+      ctrl.getFrame(), action === 'accept' ? '.uno:AcceptTrackedChange' : '.uno:RejectTrackedChange', '', 0, []);
+    const after = countRedlines();
+    // dispatch 不报错也可能没命中——用条数变化确认，别对用户谎报成功
+    return after < before
+      ? { success: true, index: Number(p.index), action: action, remaining: after }
+      : { success: false, message: '修订未被处置（引擎未命中该条）', remaining: after };
+  },
+  resolve_all_revisions(p) {
+    const action = String((p && p.action) || 'accept').toLowerCase();
+    if (action !== 'accept' && action !== 'reject') return { success: false, message: "action must be accept|reject" };
+    const before = countRedlines();
+    css.frame.DispatchHelper.create(context).executeDispatch(
+      ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
+    return { success: true, action: action, resolved: before - countRedlines(), remaining: countRedlines() };
+  },
+  list_comments(p) {
+    const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
+    const out = [];
+    try {
+      const en = xModel.getTextFields().createEnumeration();
+      while (en.hasMoreElements() && out.length < limit) {
+        const f = en.nextElement();
+        if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+        const it = { index: out.length };
+        try { it.author = f.getPropertyValue('Author'); } catch (e) {}
+        try { it.content = String(f.getPropertyValue('Content') || '').slice(0, 500); } catch (e) {}
+        try {
+          const d = f.getPropertyValue('DateTimeValue');
+          if (d) it.date = d.Year + '-' + pad2(d.Month) + '-' + pad2(d.Day) + ' ' + pad2(d.Hours) + ':' + pad2(d.Minutes);
+        } catch (e) {}
+        try { it.resolved = !!f.getPropertyValue('Resolved'); } catch (e) { it.resolved = false; }
+        try {
+          const a = f.getAnchor();
+          it.anchorText = String(a.getString() || '').slice(0, 80);
+          it.paragraph = (paragraphTextOf(a) || '').slice(0, 120);
+        } catch (e) {}
+        out.push(it);
+      }
+    } catch (e) { return { success: false, message: errStr(e) }; }
+    return { success: true, count: out.length, comments: out };
+  },
+  goto_comment(p) {
+    const f = commentAt(p && p.index);
+    if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
+    try { return selectVisibly(f.getAnchor()) ? { success: true, index: Number(p.index) } : { success: false, message: 'could not select anchor' }; }
+    catch (e) { return { success: false, message: errStr(e) }; }
+  },
+  set_comment_resolved(p) {
+    const f = commentAt(p && p.index);
+    if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
+    try {
+      f.setPropertyValue('Resolved', !!(p && p.resolved));
+      return { success: true, index: Number(p.index), resolved: !!f.getPropertyValue('Resolved') };
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
+  // 删除批注：removeTextContent 是正路。**dispose() 不能信**——它在本引擎上
+  // 既不抛异常也不真的移除批注字段（真机实证），照着它的返回值报成功就是骗
+  // 用户。两条路都跑完还要用条数复核。
+  delete_comment(p) {
+    const f = commentAt(p && p.index);
+    if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
+    const before = countComments();
+    const errs = [];
+    // 主路：定位到批注锚点后派发 .uno:DeleteComment，**Id 参数（批注的 Name）
+    // 必传**——真机实证不带 Id 会静默打空（引擎按 Id 找批注，不认光标位置）。
+    // 与 add_comment 走 .uno:InsertAnnotation 同一先例。
+    // 前提：文档必须是可见的（.uno:DeleteComment 找的是引擎里的活动批注窗口，
+    // Hidden 打开的文档没有这些窗口，删除会静默失败——e2e 因此专门用可见文档）。
+    // 已解决的批注同理不再是活动窗口，先取消解决态再删。
+    try { if (f.getPropertyValue('Resolved')) f.setPropertyValue('Resolved', false); } catch (e) {}
+    try { selectVisibly(f.getAnchor()); } catch (e) { errs.push(errStr(e)); }
+    try {
+      let name = '';
+      try { name = String(f.getPropertyValue('Name') || ''); } catch (e) { errs.push(errStr(e)); }
+      css.frame.DispatchHelper.create(context).executeDispatch(
+        ctrl.getFrame(), '.uno:DeleteComment', '', 0, [mkProp('Id', name)]);
+    } catch (e) { errs.push(errStr(e)); }
+    if (countComments() === before) {
+      try { f.getAnchor().getText().removeTextContent(f); } catch (e) { errs.push(errStr(e)); }
+    }
+    const after = countComments();
+    return after < before
+      ? { success: true, index: Number(p.index), remaining: after }
+      : { success: false, message: '批注未被删除' + (errs.length ? '：' + errs.join(' | ') : ''), remaining: after };
   },
   // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
   // 一直派发 debug_revisions，worker 此前未实现（一律返回 not implemented）；

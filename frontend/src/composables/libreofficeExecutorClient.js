@@ -78,6 +78,10 @@ export const EDITOR_ACTIONS = [
   // worker 侧 resolveSheet 对非 Calc 文档返回明确错误。
   'sheet_get_overview', 'sheet_read_range', 'sheet_write_cells', 'sheet_select_range',
   'sheet_format_cells', 'sheet_set_borders', 'sheet_set_row_col',
+  // [审阅面板] 修订/批注的清单·定位·逐条处置。Host-initiated（ReviewPanel.vue），
+  // 页边小字读不到作者/时间、表格同行多格删除还会互叠——面板是修订的权威视图。
+  'list_revisions', 'goto_revision', 'resolve_revision', 'resolve_all_revisions',
+  'list_comments', 'goto_comment', 'set_comment_resolved', 'delete_comment',
 ]
 
 /**
