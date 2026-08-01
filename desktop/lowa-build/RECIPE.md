@@ -1,10 +1,31 @@
 # zh-CN LOWA engine rebuild recipe (with tooltip-CJK fix) — issue #66
 
+## r3 (2026-08-02) — margin-redline table anchor fix
+
+Built on mainland VM 8.156.75.91 (8C/30GB + 48G swap, Ubuntu 22.04) with the SAME
+recipe below plus **source patch 4** (sw/source/core/text/frmpaint.cxx — anchor
+ShowChangesInMargin deleted text at the TABLE frame's left edge via FindTabFrame,
+so in-table deletions render in the true page margin instead of over the
+neighboring cell). soffice.js + metadata sha are byte-identical to r2 — the only
+behavioral delta is the wasm.
+Mainland network note: emsdk's storage.googleapis.com downloads crawl — pre-seed
+`emsdk/downloads/` (node via npmmirror; wasm-binaries relayed from an unrestricted
+network). git clones via GitHub mirror are fine. 8C timings: qt5 ~6 min,
+LO make ~5.8 h (swap carried the final link on 30G RAM).
+
+### r3 artifact sha256
+- soffice.js   ea337a9f4d9d2c74a8b0df9c8bf0c4b9c64f5fda770cd09e631dedd770e882e1  (== r2)
+- soffice.wasm 792b9cb03ddd3d0f0ee4191c7d2ad5401405d33256681346c307bb1879a837b1
+- soffice.data c4841c254079c686cf22a943cc911d5672d0e3b7f2a6049e7cf659abb0d95ddf
+- soffice.data.js.metadata 7c5d27a650d5f0a0b4f08b9c096fa03c51c3233ea6fe4d179d530efdbf383fa2  (== r2)
+
+## r2 (2026-06-26)
+
 Built 2026-06-26 on Singapore VM 47.84.13.121 (32C/123GB RAM, Ubuntu 22.04), from
 scratch. Reproduces the engine with: native zh-CN UI (--with-lang) + ooLocale=zh-CN
 default + **the QToolTip CJK fix** (this round's new change).
 
-## Artifact sha256 (this build)
+## Artifact sha256 (r2 build)
 - soffice.js   ea337a9f4d9d2c74a8b0df9c8bf0c4b9c64f5fda770cd09e631dedd770e882e1
 - soffice.wasm a186dd5082eb69ef58fb57d256294d07817c4acfb06e63fc5901e77d07612954
 - soffice.data e85af877e964f75f14b21b97f0a7103d104aea308ec8c687519412ace48deeb5
