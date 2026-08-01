@@ -643,6 +643,78 @@ function cursorToParagraphAfterTable(table) {
   if (!placed) { try { vc.gotoEnd(false); } catch (e) {} }
 }
 
+// ---- Calc（电子表格 sheet_*）原语 helpers ------------------------------------
+// 引擎含 Calc 模块（probe_modules 实锤），xlsx 经 load_document 正常打开，但
+// doc_* 一族全走 xModel.getText()（Writer 专属），在 Calc 文档上必然失败——
+// sheet_* 是 Calc 文档的对等原语集。文档类型守卫集中在 resolveSheet。
+function isCalcDoc() {
+  try { return !!(xModel && xModel.supportsService && xModel.supportsService('com.sun.star.sheet.SpreadsheetDocument')); }
+  catch (e) { return false; }
+}
+const NOT_SPREADSHEET_MSG = '当前打开的不是电子表格文档：sheet_* 原语仅对 xlsx/xls 生效。Word 文档请用 doc_* 原语；要操作表格文件请先用 doc_open_file 打开它。';
+// 解析 sheet 参数（工作表名或 0 开始的序号；缺省 = 当前活动工作表）。
+// 返回 {sheet} 或 {error}。命中非活动工作表时切为活动（拟人：用户看得见操作在哪张表）。
+function resolveSheet(p) {
+  if (!isCalcDoc()) return { error: NOT_SPREADSHEET_MSG };
+  const sheets = xModel.getSheets();
+  let sheet = null;
+  const want = p && p.sheet != null && String(p.sheet).trim() !== '' ? String(p.sheet).trim() : null;
+  if (want == null) {
+    try { sheet = ctrl.getActiveSheet(); } catch (e) {}
+    if (!sheet) sheet = sheets.getByIndex(0);
+  } else if (/^\d+$/.test(want)) {
+    const i = Number(want);
+    if (i >= sheets.getCount()) return { error: '工作表序号越界: ' + i + '（共 ' + sheets.getCount() + ' 张，0 开始）' };
+    sheet = sheets.getByIndex(i);
+  } else {
+    if (!sheets.hasByName(want)) return { error: '工作表不存在: ' + want };
+    sheet = sheets.getByName(want);
+  }
+  try {
+    const active = ctrl.getActiveSheet();
+    if (!active || active.getName() !== sheet.getName()) ctrl.setActiveSheet(sheet);
+  } catch (e) {}
+  return { sheet: sheet };
+}
+function sheetRange(sheet, rangeStr) {
+  try { return sheet.getCellRangeByName(String(rangeStr)); } catch (e) { return null; }
+}
+function colLetterOf(n) { // 0 -> A, 25 -> Z, 26 -> AA
+  let s = '';
+  n = Number(n);
+  do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; } while (n >= 0);
+  return s;
+}
+function sheetRangeName(addr) {
+  const a = colLetterOf(addr.StartColumn) + (addr.StartRow + 1);
+  const b = colLetterOf(addr.EndColumn) + (addr.EndRow + 1);
+  return a === b ? a : a + ':' + b;
+}
+function usedRangeAddress(sheet) {
+  const cur = sheet.createCursor();
+  cur.gotoStartOfUsedArea(false);
+  cur.gotoEndOfUsedArea(true);
+  return cur.getRangeAddress();
+}
+// 单元格读值归一：空→''，数值→number，公式→数值结果给 number、文本结果给 string。
+// FormulaResultType 是 long 常量组（FormulaResult.VALUE=1），走 unoEnumVal 兜底。
+function readCellOut(cell) {
+  const T = css.table.CellContentType;
+  const t = cell.getType();
+  if (enumEq(t, T.EMPTY)) return '';
+  if (enumEq(t, T.VALUE)) return cell.getValue();
+  if (enumEq(t, T.FORMULA)) {
+    try {
+      const FR_VALUE = (css.sheet && css.sheet.FormulaResult && css.sheet.FormulaResult.VALUE != null) ? css.sheet.FormulaResult.VALUE : 1;
+      if (unoEnumVal(cell.getPropertyValue('FormulaResultType')) === unoEnumVal(FR_VALUE)) return cell.getValue();
+    } catch (e) {}
+  }
+  return cell.getString();
+}
+// 写入时把"长得像数字"的字符串落成数值（同 NUMERIC_CELL_RE 的 house 口径，但
+// 更严格：前导 0 的编号（如 '001'）保持文本，避免证照号/编号被吞前导零）。
+const SHEET_NUMERIC_RE = /^-?(0|[1-9]\d*)(\.\d+)?$/;
+
 // ---- 流式写入状态机：markdown 行级解析 → 标准格式落字 ------------------------
 // stream_insert 攒字节、按完整行消费；stream_flush 收尾（写掉尾行/尾表、复位）。
 // 状态在 worker 内（宿主只透传 token），文档换人/换流由宿主在 open_sync 时
@@ -2153,6 +2225,253 @@ const EXEC = {
         ctrl.getFrame(), '.uno:EditDoc', '', 0, []);
     } catch (e) {}
     return { success: true, redlineCount: count };
+  },
+  // ==================== Calc 电子表格原语（sheet_*） ====================
+  // 与 doc_* 平行的 xlsx 操作面。Calc 没有 Writer 的修订（redline）机制，写入
+  // 即生效；安全网是 undo（Calc 的 UndoManager 同样可用）与后端文档检查点。
+  // [表格·看] 工作表清单 + 每张表的已用区域。打开 xlsx 后的第一步。
+  sheet_get_overview() {
+    if (!isCalcDoc()) return { success: false, message: NOT_SPREADSHEET_MSG };
+    const sheets = xModel.getSheets();
+    let activeName = '';
+    try { activeName = ctrl.getActiveSheet().getName(); } catch (e) {}
+    const out = [];
+    const n = Math.min(sheets.getCount(), 50);
+    for (let i = 0; i < n; i++) {
+      const s = sheets.getByIndex(i);
+      const item = { index: i, name: s.getName(), active: s.getName() === activeName };
+      try {
+        const addr = usedRangeAddress(s);
+        item.usedRange = sheetRangeName(addr);
+        item.rows = addr.EndRow - addr.StartRow + 1;
+        item.cols = addr.EndColumn - addr.StartColumn + 1;
+      } catch (e) { item.usedRangeErr = errStr(e); }
+      out.push(item);
+    }
+    return { success: true, sheetCount: sheets.getCount(), activeSheet: activeName, sheets: out };
+  },
+  // [表格·看] 读取区域单元格值。数值/公式结果返回 number（日期是序列数），公式串
+  // 另列在 formulas。range 缺省 = 该表已用区域。超上限窗口化返回，提示分块读。
+  sheet_read_range(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const sheet = r0.sheet;
+    let range;
+    if (p && p.range) {
+      range = sheetRange(sheet, p.range);
+      if (!range) return { success: false, message: '无效的区域: ' + p.range + '（应为 A1 或 A1:D20 形式）' };
+    } else {
+      try { range = sheet.getCellRangeByName(sheetRangeName(usedRangeAddress(sheet))); }
+      catch (e) { return { success: false, message: '读取已用区域失败: ' + errStr(e) }; }
+    }
+    const addr = range.getRangeAddress();
+    const nRows = addr.EndRow - addr.StartRow + 1;
+    const nCols = addr.EndColumn - addr.StartColumn + 1;
+    const MAX_CELLS = 2000;
+    const colCap = Math.min(nCols, 100);
+    const rowCap = Math.min(nRows, Math.max(1, Math.floor(MAX_CELLS / colCap)));
+    const rows = [];
+    const formulas = [];
+    for (let r = 0; r < rowCap; r++) {
+      const row = [];
+      for (let c = 0; c < colCap; c++) {
+        const cell = range.getCellByPosition(c, r);
+        row.push(readCellOut(cell));
+        try {
+          if (enumEq(cell.getType(), css.table.CellContentType.FORMULA) && formulas.length < 100) {
+            formulas.push({ cell: colLetterOf(addr.StartColumn + c) + (addr.StartRow + r + 1), formula: cell.getFormula() });
+          }
+        } catch (e) {}
+      }
+      rows.push(row);
+    }
+    const res = { success: true, sheet: sheet.getName(), range: sheetRangeName(addr), rows: rows };
+    if (formulas.length) res.formulas = formulas;
+    if (rowCap < nRows || colCap < nCols) {
+      res.truncated = true;
+      res.note = '区域超过上限（' + MAX_CELLS + ' 格），只返回前 ' + rowCap + ' 行 × ' + colCap + ' 列，请缩小 range 分块读取';
+    }
+    return res;
+  },
+  // [表格·写] 从 startCell 起按二维数组批量写入。number/数字样式字符串落数值，
+  // '=' 开头落公式，其余落文本；null 跳过不动，'' 清空该格。写完选中写过的区域
+  // 并回读首行做验证回路。
+  sheet_write_cells(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const sheet = r0.sheet;
+    const rows = p && p.rows;
+    if (!Array.isArray(rows) || !rows.length) return { success: false, message: 'sheet_write_cells requires {rows: any[][]}' };
+    if (rows.length > 500) return { success: false, message: '一次最多写 500 行，请分批写入' };
+    const anchor = sheetRange(sheet, String(p.startCell || 'A1'));
+    if (!anchor) return { success: false, message: '无效的起始单元格: ' + p.startCell };
+    const a0 = anchor.getRangeAddress();
+    let nCols = 1;
+    for (let i = 0; i < rows.length; i++) if (Array.isArray(rows[i])) nCols = Math.max(nCols, rows[i].length);
+    if (nCols > 100) return { success: false, message: '一次最多写 100 列，请分批写入' };
+    let written = 0;
+    for (let r = 0; r < rows.length; r++) {
+      const line = Array.isArray(rows[r]) ? rows[r] : [rows[r]];
+      for (let c = 0; c < line.length; c++) {
+        const v = line[c];
+        if (v == null) continue;
+        const cell = sheet.getCellByPosition(a0.StartColumn + c, a0.StartRow + r);
+        if (typeof v === 'number') cell.setValue(v);
+        else if (typeof v === 'boolean') cell.setValue(v ? 1 : 0);
+        else {
+          const s = String(v);
+          if (s.charAt(0) === '=') cell.setFormula(s);
+          else if (SHEET_NUMERIC_RE.test(s.trim())) cell.setValue(Number(s.trim()));
+          else cell.setString(s);
+        }
+        written++;
+      }
+    }
+    const wrote = sheetRangeName({
+      StartColumn: a0.StartColumn, StartRow: a0.StartRow,
+      EndColumn: a0.StartColumn + nCols - 1, EndRow: a0.StartRow + rows.length - 1,
+    });
+    try { ctrl.select(sheet.getCellRangeByName(wrote)); } catch (e) {} // 拟人：用户看到写入落点
+    const firstRowAfterWrite = [];
+    try {
+      const vr = sheet.getCellRangeByName(wrote);
+      for (let c = 0; c < Math.min(nCols, 10); c++) firstRowAfterWrite.push(readCellOut(vr.getCellByPosition(c, 0)));
+    } catch (e) {}
+    return { success: true, sheet: sheet.getName(), range: wrote, cellsWritten: written, firstRowAfterWrite: firstRowAfterWrite };
+  },
+  // [表格·选] 选中一个区域（视图滚过去、选区亮出来——用户看得见 AI 在操作哪里）。
+  sheet_select_range(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return { success: false, message: '无效的区域: ' + (p.range || '(空)') };
+    try { ctrl.select(range); } catch (e) { return { success: false, message: '选中失败: ' + errStr(e) }; }
+    const addr = range.getRangeAddress();
+    return {
+      success: true, sheet: r0.sheet.getName(), range: sheetRangeName(addr),
+      topLeftText: String(range.getCellByPosition(0, 0).getString() || ''),
+    };
+  },
+  // [表格·格式] 区域格式：字体/字号/加粗/斜体/下划线/字色/底色/水平垂直对齐/
+  // 自动换行/数字格式。CJK 走 Asian/Complex 姊妹属性（setCharProp）。
+  sheet_format_cells(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return { success: false, message: '无效的区域: ' + (p.range || '(空)') };
+    const applied = {};
+    if (p.bold != null) { setCharProp(range, 'CharWeight', p.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL); applied.bold = !!p.bold; }
+    if (p.italic != null) { setCharProp(range, 'CharPosture', p.italic ? css.awt.FontSlant.ITALIC : css.awt.FontSlant.NONE); applied.italic = !!p.italic; }
+    if (p.underline != null) { range.setPropertyValue('CharUnderline', p.underline ? css.awt.FontUnderline.SINGLE : css.awt.FontUnderline.NONE); applied.underline = !!p.underline; }
+    if (p.fontSize != null) { setCharProp(range, 'CharHeight', Number(p.fontSize)); applied.fontSize = Number(p.fontSize); }
+    if (p.fontName != null && String(p.fontName) !== '') { setCharProp(range, 'CharFontName', String(p.fontName)); applied.fontName = String(p.fontName); }
+    if (p.color != null) {
+      const c = parseColor(p.color, { auto: -1 });
+      if (c == null) return { success: false, message: 'bad color: ' + p.color + ' (use #RRGGBB or auto)' };
+      range.setPropertyValue('CharColor', c); applied.color = String(p.color);
+    }
+    if (p.background != null) {
+      const c = parseColor(p.background, { none: -1 });
+      if (c == null) return { success: false, message: 'bad background: ' + p.background + ' (use #RRGGBB or none)' };
+      range.setPropertyValue('CellBackColor', c); applied.background = String(p.background);
+    }
+    if (p.hAlign != null) {
+      const m = { left: css.table.CellHoriJustify.LEFT, center: css.table.CellHoriJustify.CENTER, right: css.table.CellHoriJustify.RIGHT, standard: css.table.CellHoriJustify.STANDARD };
+      const v = m[String(p.hAlign).toLowerCase()];
+      if (v == null) return { success: false, message: 'bad hAlign: ' + p.hAlign + ' (left/center/right/standard)' };
+      range.setPropertyValue('HoriJustify', v); applied.hAlign = String(p.hAlign);
+    }
+    if (p.vAlign != null) {
+      // VertJustify 声明为 long（CellVertJustify2 常量 0..3）；个别引擎仍按
+      // short 校验，失败退 shortAny（PR#107 的 short 型属性教训）。
+      const m = { standard: 0, top: 1, center: 2, bottom: 3 };
+      const v = m[String(p.vAlign).toLowerCase()];
+      if (v == null) return { success: false, message: 'bad vAlign: ' + p.vAlign + ' (top/center/bottom/standard)' };
+      try { range.setPropertyValue('VertJustify', v); }
+      catch (e) { range.setPropertyValue('VertJustify', shortAny(v)); }
+      applied.vAlign = String(p.vAlign);
+    }
+    if (p.wrap != null) { range.setPropertyValue('IsTextWrapped', !!p.wrap); applied.wrap = !!p.wrap; }
+    if (p.numberFormat != null && String(p.numberFormat) !== '') {
+      const fmt = String(p.numberFormat);
+      try {
+        const formats = xModel.getNumberFormats();
+        const loc = new css.lang.Locale({ Language: '', Country: '', Variant: '' });
+        let key = formats.queryKey(fmt, loc, false);
+        if (key === -1) key = formats.addNew(fmt, loc);
+        range.setPropertyValue('NumberFormat', key);
+        applied.numberFormat = fmt;
+      } catch (e) { return { success: false, message: '数字格式无效: ' + fmt + ' — ' + errStr(e) }; }
+    }
+    if (Object.keys(applied).length === 0) return { success: false, message: 'no format params given' };
+    try { ctrl.select(range); } catch (e) {} // 拟人：让用户看到被格式化的区域
+    return { success: true, sheet: r0.sheet.getName(), range: sheetRangeName(range.getRangeAddress()), applied: applied };
+  },
+  // [表格·格式] 区域边框。preset: all（内外全部）/ outer（仅外框，内线清除）/
+  // none（全部清除）。同 Writer 表格走 TableBorder2（typedef 编组依赖 vendored
+  // zeta.js 的 TYPEDEF 分支，见 zetajs 编组硬规则）。
+  sheet_set_borders(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return { success: false, message: '无效的区域: ' + (p.range || '(空)') };
+    const preset = String(p.preset || 'all').toLowerCase();
+    if (['all', 'outer', 'none'].indexOf(preset) === -1) return { success: false, message: 'bad preset: ' + preset + ' (all/outer/none)' };
+    const widthPt = Number(p.widthPt) || 0.75;
+    const widthMm = ptToMm100(widthPt);
+    const color = p.color != null ? parseColor(p.color, { black: 0 }) : 0;
+    if (color == null) return { success: false, message: 'bad color: ' + p.color + ' (use #RRGGBB)' };
+    const solid = (css.table.BorderLineStyle && css.table.BorderLineStyle.SOLID != null) ? css.table.BorderLineStyle.SOLID : 0;
+    const mk = function (on) {
+      return new css.table.BorderLine2({
+        Color: color, InnerLineWidth: 0, OuterLineWidth: 0, LineDistance: 0,
+        LineStyle: solid, LineWidth: on ? widthMm : 0,
+      });
+    };
+    const outer = mk(preset !== 'none');
+    const inner = mk(preset === 'all');
+    const tb = new css.table.TableBorder2({
+      TopLine: outer, BottomLine: outer, LeftLine: outer, RightLine: outer,
+      HorizontalLine: inner, VerticalLine: inner,
+      IsTopLineValid: true, IsBottomLineValid: true, IsLeftLineValid: true,
+      IsRightLineValid: true, IsHorizontalLineValid: true, IsVerticalLineValid: true,
+      Distance: 0, IsDistanceValid: false,
+    });
+    try { range.setPropertyValue('TableBorder2', tb); } catch (e) { return { success: false, message: '边框设置失败: ' + errStr(e) }; }
+    return {
+      success: true, sheet: r0.sheet.getName(), range: sheetRangeName(range.getRangeAddress()),
+      preset: preset, widthPt: preset === 'none' ? 0 : widthPt,
+    };
+  },
+  // [表格·格式] 行高列宽：作用于 range 覆盖到的整行/整列。autoFit* 优先于定值。
+  sheet_set_row_col(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return { success: false, message: '无效的区域: ' + (p.range || '(空)') };
+    const applied = {};
+    try {
+      if (p.autoFitRows || p.rowHeightPt != null) {
+        const rows = range.getRows();
+        for (let i = 0; i < rows.getCount(); i++) {
+          const row = rows.getByIndex(i);
+          if (p.autoFitRows) row.setPropertyValue('OptimalHeight', true);
+          else { row.setPropertyValue('OptimalHeight', false); row.setPropertyValue('Height', ptToMm100(p.rowHeightPt)); }
+        }
+        if (p.autoFitRows) applied.autoFitRows = true; else applied.rowHeightPt = Number(p.rowHeightPt);
+      }
+      if (p.autoFitCols || p.colWidthPt != null) {
+        const cols = range.getColumns();
+        for (let i = 0; i < cols.getCount(); i++) {
+          const col = cols.getByIndex(i);
+          if (p.autoFitCols) col.setPropertyValue('OptimalWidth', true);
+          else col.setPropertyValue('Width', ptToMm100(p.colWidthPt));
+        }
+        if (p.autoFitCols) applied.autoFitCols = true; else applied.colWidthPt = Number(p.colWidthPt);
+      }
+    } catch (e) { return { success: false, message: '行高列宽设置失败: ' + errStr(e) }; }
+    if (Object.keys(applied).length === 0) return { success: false, message: 'no params given (rowHeightPt/colWidthPt/autoFitRows/autoFitCols)' };
+    return { success: true, sheet: r0.sheet.getName(), range: sheetRangeName(range.getRangeAddress()), applied: applied };
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {

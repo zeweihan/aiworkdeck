@@ -73,6 +73,11 @@ export const EDITOR_ACTIONS = [
   // [流式标准格式] doc_start_stream 的落字端：markdown 剥离 + 标准格式写入。
   // stream_insert 攒行消费，stream_flush 收尾/复位（{discard:true} 换文档硬清）。
   'stream_insert', 'stream_flush',
+  // [Calc 电子表格] sheet_* 原语集：xlsx 的读写/选区/格式/边框/行高列宽。
+  // doc_* 是 Writer 专属（getText 一族在 Calc 上必然失败），表格操作走这组；
+  // worker 侧 resolveSheet 对非 Calc 文档返回明确错误。
+  'sheet_get_overview', 'sheet_read_range', 'sheet_write_cells', 'sheet_select_range',
+  'sheet_format_cells', 'sheet_set_borders', 'sheet_set_row_col',
 ]
 
 /**

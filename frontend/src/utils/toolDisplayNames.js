@@ -80,6 +80,14 @@ const NAMES = {
   doc_add_comment: { zh: '添加批注', en: 'Add comment' },
   doc_debug_revisions: { zh: '检查修订记录', en: 'Inspect revisions' },
   doc_restore_checkpoint: { zh: '恢复文档快照', en: 'Restore snapshot' },
+  // 电子表格（Calc / xlsx）sheet_* 原语
+  sheet_get_overview: { zh: '查看工作表结构', en: 'Sheet overview' },
+  sheet_read_range: { zh: '读取单元格区域', en: 'Read cells' },
+  sheet_write_cells: { zh: '写入单元格', en: 'Write cells' },
+  sheet_select_range: { zh: '选中单元格区域', en: 'Select cells' },
+  sheet_format_cells: { zh: '设置单元格格式', en: 'Format cells' },
+  sheet_set_borders: { zh: '设置单元格边框', en: 'Set cell borders' },
+  sheet_set_row_col: { zh: '设置行高列宽', en: 'Set row/column size' },
   // PPT
   pptx_check_service: { zh: '检查PPT服务', en: 'Check PPT service' },
   pptx_generate: { zh: '生成PPT演示文稿', en: 'Generate slides' },

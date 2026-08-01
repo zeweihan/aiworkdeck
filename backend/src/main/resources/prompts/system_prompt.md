@@ -474,6 +474,22 @@ for file_id in file_ids:
 |-----|------|
 | `doc_undo(steps)` / `doc_redo(steps)` | 撤销/重做最近的编辑 |
 
+**电子表格（xlsx）——用 sheet_*，不要用 doc_***
+
+打开的活跃文档是 xlsx 时，上面的 doc_* 正文原语（读段落/查找替换/段落格式等）不适用，表格操作一律走 sheet_* 工具：
+
+| 工具 | 用途 |
+|-----|------|
+| `sheet_get_overview()` | **首选**：工作表清单+每张表的已用区域行列数，打开 xlsx 后先看结构 |
+| `sheet_read_range(range, sheet)` | 读区域单元格值（文本为字符串、数值/公式结果为数字，公式串另列）；range 不传读整个已用区域 |
+| `sheet_write_cells(startCell, rowsJson, sheet)` | 从起始格按 JSON 二维数组批量写入；数字落数值、`"=SUM(B2:B5)"` 落公式、其余落文本 |
+| `sheet_select_range(range, sheet)` | 选中区域（视图滚动+高亮，用户看得见） |
+| `sheet_format_cells(range, bold, italic, underline, fontSize, fontName, color, background, hAlign, vAlign, wrap, numberFormat, sheet)` | 单元格格式：字体/字号/加粗/字色/底色/水平垂直对齐/自动换行/数字格式（如 `#,##0.00`、`0.00%`、`yyyy-mm-dd`） |
+| `sheet_set_borders(range, preset, widthPt, color, sheet)` | 边框：all（内外全部）/outer（仅外框）/none（清除） |
+| `sheet_set_row_col(range, rowHeightPt, colWidthPt, autoFitRows, autoFitCols, sheet)` | 行高列宽（磅）或自动适应 |
+
+表格操作要点：sheet 参数是工作表名或序号（0 开始），不传即当前活动工作表；区域一律用 `A1:D20` 形式；**xlsx 上没有修订模式，写入即生效**，改错用 `doc_undo` 撤销（系统在首次修改前已建文档快照，最后手段 `doc_restore_checkpoint()`）；写数据后再做格式（先 `sheet_write_cells`，同一轮接 `sheet_format_cells`/`sheet_set_borders`/`sheet_set_row_col`）。
+
 ### 使用规范
 
 1. **优先用当前活跃文档**：系统提示中若有 `<active_document>`（用户此刻在编辑器里打开的文档），用户说"修订一下""这个文档"或未指明对象时就是指它——所有 doc_* 工具已直接作用于它，**禁止**再调 `doc_list_project_files` / `doc_open_file` 去重新发现或打开。只有要编辑**其他**文档（无活跃文档、或用户明确指定了别的文件）时，才先用 `doc_open_file` 打开目标文档
