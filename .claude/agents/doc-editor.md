@@ -60,6 +60,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - 删除键/快捷键必须走 `.uno:` 调度（覆盖层吞键+修订模式手工删卡死教训，PR#164/166）。
 - `npm run build:zetaoffice` 会清空 dist 并删掉已 fetch 的引擎——本地反复跑 e2e 用 `LOWA_ENGINE_DIR` 规避，或从兄弟 worktree 复制引擎（CDN 挂时的配方）。
 - 修订作者：params 带 `__agent:true` → 署名 "AI Workdeck"。
+- **ShowChangesInMargin 禁用勿开**：引擎把页边删除文本画在锚点所在 frame 的左侧，表格内 frame=单元格，删除文本会叠画到左邻单元格正文上（法律文书大量用表格），JS 无法矫正绘制位置。修订删除一律行内删除线（office_thread.js `showDeletionsInline`，boot+retarget 双点设置）；批注侧栏不受影响。
 - webview/uni 存储格式坑与宿主侧 e2e 配方见 lowa-keepalive 记录（PR#159）。
 - **预热备胎是同一个 LibreOfficeEditor 组件（file=null）**：任何在组件树/DOM 里"找编辑器实例"的探针（如 desktop-e2e FIND_EDITOR）必须过滤 `file` 非空，否则命令打在隐藏空白备胎上、样样"成功"但真文档纹丝不动。备胎未激活用 visibility 隐藏（绝对定位占位），不能改 display:none——引擎要在有尺寸画布里 boot。
 
