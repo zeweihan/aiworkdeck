@@ -780,6 +780,16 @@ function readCellOut(cell) {
 // 写入时把"长得像数字"的字符串落成数值（同 NUMERIC_CELL_RE 的 house 口径，但
 // 更严格：前导 0 的编号（如 '001'）保持文本，避免证照号/编号被吞前导零）。
 const SHEET_NUMERIC_RE = /^-?(0|[1-9]\d*)(\.\d+)?$/;
+// 列标解析：'B'→1、'AA'→26；也接受 1 开始的数字串（'2'→1）。返回 0 开始的列号，无效返回 -1。
+function colIndexOf(s) {
+  const t = String(s == null ? '' : s).trim().toUpperCase();
+  if (/^\d+$/.test(t)) { const n = Number(t); return n >= 1 ? n - 1 : -1; }
+  if (!/^[A-Z]{1,3}$/.test(t)) return -1;
+  let n = 0;
+  for (let i = 0; i < t.length; i++) n = n * 26 + (t.charCodeAt(i) - 64);
+  return n - 1;
+}
+let cfStyleSeq = 0; // 条件格式的"命中样式"（CellStyle）命名序号
 // Excel 习惯公式 → setFormula 的 API 文法（真机实证：组 17 抽查）：参数分隔符
 // 必须是分号（逗号 Err:508），跨表引用必须是 Sheet.A1（Sheet!A1 报 #NAME?
 // Err:525）。AI 与用户都按 Excel 习惯写逗号和 '!'，在此归一化——只动双引号
@@ -2720,6 +2730,276 @@ const EXEC = {
     } catch (e) { return { success: false, message: '行高列宽设置失败: ' + errStr(e) }; }
     if (Object.keys(applied).length === 0) return { success: false, message: 'no params given (rowHeightPt/colWidthPt/autoFitRows/autoFitCols)' };
     return { success: true, sheet: r0.sheet.getName(), range: sheetRangeName(range.getRangeAddress()), applied: applied };
+  },
+  // [表格·结构] 工作表管理：add/rename/delete/move。add/move 的 position 是
+  // 0 开始的目标位置；delete 拒绝删除最后一张表。操作后返回最新工作表清单。
+  sheet_manage_sheets(p) {
+    if (!isCalcDoc()) return { success: false, message: NOT_SPREADSHEET_MSG };
+    const sheets = xModel.getSheets();
+    const op = String(p.op || '').toLowerCase();
+    const name = p.name != null ? String(p.name).trim() : '';
+    try {
+      if (op === 'add') {
+        if (!name) return { success: false, message: 'add 需要 {name}（新工作表名）' };
+        if (sheets.hasByName(name)) return { success: false, message: '工作表已存在: ' + name };
+        const pos = p.position != null ? Math.max(0, Math.min(Number(p.position), sheets.getCount())) : sheets.getCount();
+        sheets.insertNewByName(name, pos);
+        try { ctrl.setActiveSheet(sheets.getByName(name)); } catch (e) {}
+      } else if (op === 'rename') {
+        const newName = p.newName != null ? String(p.newName).trim() : '';
+        if (!name || !newName) return { success: false, message: 'rename 需要 {name, newName}' };
+        if (!sheets.hasByName(name)) return { success: false, message: '工作表不存在: ' + name };
+        if (sheets.hasByName(newName)) return { success: false, message: '目标名已存在: ' + newName };
+        sheets.getByName(name).setName(newName);
+      } else if (op === 'delete') {
+        if (!name) return { success: false, message: 'delete 需要 {name}' };
+        if (!sheets.hasByName(name)) return { success: false, message: '工作表不存在: ' + name };
+        if (sheets.getCount() <= 1) return { success: false, message: '不能删除最后一张工作表' };
+        sheets.removeByName(name);
+      } else if (op === 'move') {
+        if (!name) return { success: false, message: 'move 需要 {name}' };
+        if (!sheets.hasByName(name)) return { success: false, message: '工作表不存在: ' + name };
+        if (p.position == null) return { success: false, message: 'move 需要 {position}（0 开始的目标位置）' };
+        sheets.moveByName(name, Math.max(0, Math.min(Number(p.position), sheets.getCount())));
+      } else {
+        return { success: false, message: 'bad op: ' + op + ' (add/rename/delete/move)' };
+      }
+    } catch (e) { return { success: false, message: '工作表操作失败: ' + errStr(e) }; }
+    const list = [];
+    for (let i = 0; i < Math.min(sheets.getCount(), 50); i++) list.push(sheets.getByIndex(i).getName());
+    return { success: true, op: op, sheets: list };
+  },
+  // [表格·结构] 插入/删除整行整列。op: insert_rows/delete_rows/insert_cols/
+  // delete_cols；start 是 1 开始的行号或列标（'3' / 'B'）；count 默认 1。
+  // 插入发生在 start 位置之前（即新行/列占据 start 的位置）。
+  sheet_edit_rows_cols(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const sheet = r0.sheet;
+    const op = String(p.op || '').toLowerCase();
+    const count = Math.max(1, Math.min(Number(p.count) || 1, 100));
+    const isRow = op === 'insert_rows' || op === 'delete_rows';
+    const isCol = op === 'insert_cols' || op === 'delete_cols';
+    if (!isRow && !isCol) return { success: false, message: 'bad op: ' + op + ' (insert_rows/delete_rows/insert_cols/delete_cols)' };
+    let idx;
+    if (isRow) {
+      idx = /^\d+$/.test(String(p.start || '').trim()) ? Number(String(p.start).trim()) - 1 : -1;
+      if (idx < 0) return { success: false, message: '行号无效: ' + p.start + '（1 开始的数字）' };
+    } else {
+      idx = colIndexOf(p.start);
+      if (idx < 0) return { success: false, message: '列标无效: ' + p.start + "（如 'B' 或 1 开始的数字）" };
+    }
+    try {
+      const coll = isRow ? sheet.getRows() : sheet.getColumns();
+      if (op.indexOf('insert') === 0) coll.insertByIndex(idx, count);
+      else coll.removeByIndex(idx, count);
+    } catch (e) { return { success: false, message: '行列操作失败: ' + errStr(e) }; }
+    return { success: true, op: op, start: String(p.start), count: count, sheet: sheet.getName() };
+  },
+  // [表格·结构] 合并/取消合并单元格区域（XMergeable）。合并后内容以左上格为准。
+  sheet_merge_cells(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return { success: false, message: '无效的区域: ' + (p.range || '(空)') };
+    const merge = p.merge !== false;
+    try { range.merge(merge); } catch (e) { return { success: false, message: '合并操作失败: ' + errStr(e) }; }
+    try { ctrl.select(range); } catch (e) {}
+    // 验证回路：XMergeable.getIsMerged() 读回实际状态（'IsMerged' 属性不存在）
+    let isMerged = merge;
+    try { isMerged = !!range.getIsMerged(); } catch (e) {}
+    return { success: true, range: sheetRangeName(range.getRangeAddress()), merged: isMerged };
+  },
+  // [表格·结构] 区域排序。byColumn 是列标（'B'，须在区域内），ascending 默认
+  // true，hasHeader 默认 true（首行不参与排序）。
+  // 为什么不走 XSortable.sort()：SortFields 需要 sequence<TableSortField>，而
+  // 引擎 WASM 没为该类型预编 embind 序列构造器（getEmbindSequenceCtor 直接抛，
+  // 裸 Array 又被猜成 sequence<any> 被 Calc 静默忽略——组 19 真机实证两条路都
+  // 死）。改为 worker 内读值 → JS 排 → 回写：值与公式文本随行整体移动；代价是
+  // 单元格格式不随行移动、公式相对引用不重定位（数值表主流场景无影响）。
+  sheet_sort_range(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return { success: false, message: '无效的区域: ' + (p.range || '(空)') };
+    const addr = range.getRangeAddress();
+    const nRows = addr.EndRow - addr.StartRow + 1;
+    const nCols = addr.EndColumn - addr.StartColumn + 1;
+    if (nRows * nCols > 5000) return { success: false, message: '排序区域过大（上限 5000 格），请缩小范围' };
+    const byCol = p.byColumn != null ? colIndexOf(p.byColumn) : addr.StartColumn;
+    if (byCol < addr.StartColumn || byCol > addr.EndColumn) {
+      return { success: false, message: '排序列 ' + p.byColumn + ' 不在区域 ' + sheetRangeName(addr) + ' 内' };
+    }
+    const asc = p.ascending !== false;
+    const headerOfs = p.hasHeader !== false ? 1 : 0;
+    const keyOfs = byCol - addr.StartColumn;
+    const T = css.table.CellContentType;
+    // 读出待排行（每格记类型，回写时保真：公式回 setFormula、数值回 setValue）
+    const dataRows = [];
+    for (let r = headerOfs; r < nRows; r++) {
+      const line = [];
+      for (let c = 0; c < nCols; c++) {
+        const cell = range.getCellByPosition(c, r);
+        const t = cell.getType();
+        if (enumEq(t, T.EMPTY)) line.push({ k: 'e' });
+        else if (enumEq(t, T.FORMULA)) line.push({ k: 'f', f: cell.getFormula(), sort: readCellOut(cell) });
+        else if (enumEq(t, T.VALUE)) line.push({ k: 'v', v: cell.getValue() });
+        else line.push({ k: 's', s: cell.getString() });
+      }
+      dataRows.push(line);
+    }
+    const keyOf = function (line) {
+      const it = line[keyOfs];
+      if (!it || it.k === 'e') return null; // 空值恒排最后（Calc 口径）
+      if (it.k === 'v') return it.v;
+      if (it.k === 'f') return it.sort;
+      return it.s;
+    };
+    dataRows.sort(function (a, b) {
+      const ka = keyOf(a), kb = keyOf(b);
+      if (ka === null && kb === null) return 0;
+      if (ka === null) return 1;
+      if (kb === null) return -1;
+      const na = typeof ka === 'number', nb = typeof kb === 'number';
+      let cmp;
+      if (na && nb) cmp = ka - kb;
+      else if (na !== nb) cmp = na ? -1 : 1; // 数值排在文本前（Calc 升序口径）
+      else cmp = String(ka).localeCompare(String(kb), 'zh');
+      return asc ? cmp : -cmp;
+    });
+    try {
+      for (let r = 0; r < dataRows.length; r++) {
+        for (let c = 0; c < nCols; c++) {
+          const cell = range.getCellByPosition(c, headerOfs + r);
+          const it = dataRows[r][c];
+          if (it.k === 'v') cell.setValue(it.v);
+          else if (it.k === 'f') cell.setFormula(it.f);
+          else if (it.k === 's') cell.setString(it.s);
+          else cell.setString('');
+        }
+      }
+    } catch (e) { return { success: false, message: '排序回写失败: ' + errStr(e) }; }
+    try { ctrl.select(range); } catch (e) {}
+    // 验证回路：回读排序列前几个值
+    const sample = [];
+    try {
+      for (let r = headerOfs; r < Math.min(nRows, headerOfs + 5); r++) {
+        sample.push(readCellOut(range.getCellByPosition(keyOfs, r)));
+      }
+    } catch (e) {}
+    return { success: true, range: sheetRangeName(addr), byColumn: colLetterOf(byCol), ascending: asc, sortedSample: sample };
+  },
+  // [表格·结构] 自动筛选开关。经命名数据库区域（DatabaseRanges）实现——确定性
+  // 的 set 语义，比 .uno:DataFilterAutoFilter 的 toggle 可靠。range 缺省 = 已用区域。
+  sheet_set_autofilter(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const sheet = r0.sheet;
+    let addr;
+    if (p.range) {
+      const range = sheetRange(sheet, p.range);
+      if (!range) return { success: false, message: '无效的区域: ' + p.range };
+      addr = range.getRangeAddress();
+    } else {
+      try { addr = usedRangeAddress(sheet); } catch (e) { return { success: false, message: '读取已用区域失败: ' + errStr(e) }; }
+    }
+    const enabled = p.enabled !== false;
+    const dbName = '__awd_af_' + addr.Sheet;
+    try {
+      const dbs = xModel.getPropertyValue('DatabaseRanges');
+      if (dbs.hasByName(dbName)) {
+        try { dbs.getByName(dbName).setPropertyValue('AutoFilter', false); } catch (e) {}
+        dbs.removeByName(dbName);
+      }
+      if (enabled) {
+        dbs.addNewByName(dbName, addr);
+        dbs.getByName(dbName).setPropertyValue('AutoFilter', true);
+      }
+    } catch (e) { return { success: false, message: '筛选设置失败: ' + errStr(e) }; }
+    return { success: true, range: sheetRangeName(addr), autoFilter: enabled };
+  },
+  // [表格·结构] 冻结窗格（XViewFreezable）：冻结前 rows 行 / cols 列；0,0 取消。
+  sheet_freeze_panes(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const rows = Math.max(0, Number(p.rows) || 0);
+    const cols = Math.max(0, Number(p.cols) || 0);
+    try {
+      // 取消必须走 splitAtPosition(0,0)：freezeAtPosition(0,0) 在引擎里仍算
+      // 冻结态（hasFrozenPanes 保持 true，组 19 真机实证）。
+      if (rows === 0 && cols === 0) ctrl.splitAtPosition(0, 0);
+      else ctrl.freezeAtPosition(cols, rows);
+    } catch (e) { return { success: false, message: '冻结窗格失败: ' + errStr(e) }; }
+    let frozen = null;
+    try { frozen = ctrl.hasFrozenPanes(); } catch (e) {}
+    return { success: true, rows: rows, cols: cols, hasFrozenPanes: frozen };
+  },
+  // [表格·结构] 条件格式：满足条件的单元格套指定外观（底色/字色/加粗）。
+  // rule: greater/greaterEqual/less/lessEqual/equal/notEqual/between/notBetween/
+  // formula；clear=true 清除区域的全部条件格式。命中外观落在自建 CellStyle 上
+  //（__awd_cf_N），set 语义：每次调用替换该区域现有条件格式（确定性优先）。
+  sheet_conditional_format(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return { success: false, message: r0.error };
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return { success: false, message: '无效的区域: ' + (p.range || '(空)') };
+    if (p.clear) {
+      try {
+        const cf0 = range.getPropertyValue('ConditionalFormat');
+        cf0.clear();
+        range.setPropertyValue('ConditionalFormat', cf0);
+      } catch (e) { return { success: false, message: '清除条件格式失败: ' + errStr(e) }; }
+      return { success: true, range: sheetRangeName(range.getRangeAddress()), cleared: true };
+    }
+    const OPS = {
+      greater: 'GREATER', greaterequal: 'GREATER_EQUAL', less: 'LESS', lessequal: 'LESS_EQUAL',
+      equal: 'EQUAL', notequal: 'NOT_EQUAL', between: 'BETWEEN', notbetween: 'NOT_BETWEEN', formula: 'FORMULA',
+    };
+    const opKey = OPS[String(p.rule || '').toLowerCase().replace(/[_-]/g, '')];
+    if (!opKey) return { success: false, message: 'bad rule: ' + p.rule + ' (greater/greaterEqual/less/lessEqual/equal/notEqual/between/notBetween/formula)' };
+    if (p.value1 == null || String(p.value1) === '') return { success: false, message: '条件格式需要 value1（数值或公式）' };
+    if ((opKey === 'BETWEEN' || opKey === 'NOT_BETWEEN') && (p.value2 == null || String(p.value2) === '')) {
+      return { success: false, message: 'between/notBetween 需要 value2' };
+    }
+    // 命中外观 = 一个专用 CellStyle（条件格式只认样式名，不收散属性）
+    let styleName;
+    try {
+      const styles = xModel.getStyleFamilies().getByName('CellStyles');
+      do { styleName = '__awd_cf_' + (++cfStyleSeq); } while (styles.hasByName(styleName));
+      const style = xModel.createInstance('com.sun.star.style.CellStyle');
+      styles.insertByName(styleName, style);
+      if (p.background != null) {
+        const c = parseColor(p.background, { none: -1 });
+        if (c == null) return { success: false, message: 'bad background: ' + p.background };
+        style.setPropertyValue('CellBackColor', c);
+      }
+      if (p.color != null) {
+        const c = parseColor(p.color, { auto: -1 });
+        if (c == null) return { success: false, message: 'bad color: ' + p.color };
+        style.setPropertyValue('CharColor', c);
+      }
+      if (p.bold) style.setPropertyValue('CharWeight', css.awt.FontWeight.BOLD);
+      if (p.background == null && p.color == null && !p.bold) {
+        return { success: false, message: '条件格式需要至少一项外观（background/color/bold）' };
+      }
+    } catch (e) { return { success: false, message: '条件格式样式创建失败: ' + errStr(e) }; }
+    try {
+      const cf = range.getPropertyValue('ConditionalFormat');
+      cf.clear();
+      const entry = [
+        mkProp('Operator', css.sheet.ConditionOperator[opKey]),
+        mkProp('Formula1', normalizeFormula(String(p.value1))),
+        mkProp('StyleName', styleName),
+      ];
+      if (p.value2 != null && String(p.value2) !== '') entry.push(mkProp('Formula2', normalizeFormula(String(p.value2))));
+      cf.addNew(entry);
+      range.setPropertyValue('ConditionalFormat', cf);
+      const readBack = range.getPropertyValue('ConditionalFormat');
+      return {
+        success: true, range: sheetRangeName(range.getRangeAddress()),
+        rule: String(p.rule), entries: readBack.getCount(), styleName: styleName,
+      };
+    } catch (e) { return { success: false, message: '条件格式设置失败: ' + errStr(e) }; }
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {

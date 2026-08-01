@@ -1047,6 +1047,230 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "新建表格文件", category = "document", fileEffect = "ADDED")
+    @Tool("【表格·建】在项目中新建一个空白 Excel 表格文件（.xlsx）并在编辑器中打开。" +
+          "创建后用 sheet_write_cells 写入数据、sheet_format_cells 等做格式。重名会自动加序号。")
+    public String sheet_create_file(
+            @P("文件名，如 '费用明细表.xlsx'（.xlsx 后缀可省略）") String fileName,
+            @P("项目ID") Long projectId
+    ) {
+        log.info("Tool: sheet_create_file called fileName={}, projectId={}", fileName, projectId);
+        if (fileName == null || fileName.isBlank()) {
+            return "Error: 缺少 fileName 参数";
+        }
+        if (projectId == null) {
+            return "Error: 缺少 projectId 参数";
+        }
+        try {
+            if (!fileName.toLowerCase().endsWith(".xlsx")) {
+                fileName = fileName + ".xlsx";
+            }
+            java.nio.file.Path projectDataDir = storageResolver.projectRoot(projectId);
+            if (!java.nio.file.Files.exists(projectDataDir)) {
+                java.nio.file.Files.createDirectories(projectDataDir);
+            }
+            // 重名自动加序号（与 doc_start_stream 的新建 docx 同一策略）
+            String baseName = fileName.substring(0, fileName.length() - 5);
+            java.nio.file.Path targetPath = projectDataDir.resolve(fileName);
+            int counter = 1;
+            while (java.nio.file.Files.exists(targetPath)) {
+                fileName = baseName + " (" + counter + ").xlsx";
+                targetPath = projectDataDir.resolve(fileName);
+                counter++;
+            }
+
+            // POI 生成最小空白工作簿（引擎按 .xlsx 扩展名自动选 Calc 过滤器加载）
+            try (org.apache.poi.xssf.usermodel.XSSFWorkbook wb = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+                 java.io.OutputStream os = java.nio.file.Files.newOutputStream(targetPath)) {
+                wb.createSheet("Sheet1");
+                wb.write(os);
+            }
+
+            String wpsId = "sheet_" + System.currentTimeMillis() + "_" + java.util.UUID.randomUUID().toString().substring(0, 8);
+            String storageRelativePath = "projects/" + projectId + "/" + fileName;
+            ProjectFile file = projectFileService.createOrUpdateFile(
+                    projectId, null, fileName, "xlsx", targetPath.toFile().length(),
+                    storageRelativePath, wpsId, AGENT_USER_ID
+            );
+            log.info("Created new xlsx file: id={}, name={}", file.getId(), file.getName());
+
+            editorBridgeService.sendRefreshFilesAction();
+            editorBridgeService.sendOpenFileAction(file);
+            return String.format("已创建空白表格文件并发送打开指令。文件ID: %d, 文件名: %s。" +
+                    "请等待编辑器加载完成后，用 sheet_write_cells 写入内容。", file.getId(), file.getName());
+        } catch (Exception e) {
+            log.error("Failed to create xlsx file", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "管理工作表", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】管理工作表：op=add 新建（name+可选 position）、rename 重命名（name+newName）、" +
+          "delete 删除（name，不能删最后一张）、move 移动（name+position，0 开始）。返回操作后的工作表清单。")
+    public String sheet_manage_sheets(
+            @P("操作：add/rename/delete/move") String op,
+            @P("工作表名（add 时为新表名）") String name,
+            @P("新名称，仅 rename 需要") String newName,
+            @P("目标位置（0 开始），add/move 用；add 不传则加在最后") Integer position
+    ) {
+        log.info("Tool: sheet_manage_sheets called op={}, name={}", op, name);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("op", op != null ? op : "");
+            if (name != null && !name.isBlank()) params.put("name", name);
+            if (newName != null && !newName.isBlank()) params.put("newName", newName);
+            if (position != null) params.put("position", position);
+            return editorBridgeService.executeEditorCommand("sheet_manage_sheets", params);
+        } catch (Exception e) {
+            log.error("Failed to manage sheets", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入删除行列", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】插入或删除整行/整列。op: insert_rows/delete_rows/insert_cols/delete_cols；" +
+          "start 是 1 开始的行号（如 '3'）或列标（如 'B'）；count 默认 1。插入的新行/列占据 start 的位置（原内容后移）。")
+    public String sheet_edit_rows_cols(
+            @P("操作：insert_rows/delete_rows/insert_cols/delete_cols") String op,
+            @P("起始位置：行号（1 开始，如 '3'）或列标（如 'B'）") String start,
+            @P("行/列数，默认 1") Integer count,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_edit_rows_cols called op={}, start={}, count={}", op, start, count);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("op", op != null ? op : "");
+            params.put("start", start != null ? start : "");
+            if (count != null) params.put("count", count);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_edit_rows_cols", params);
+        } catch (Exception e) {
+            log.error("Failed to edit rows/cols", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "合并单元格", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】合并或取消合并单元格区域。merge=true 合并（内容以左上格为准），false 取消合并。")
+    public String sheet_merge_cells(
+            @P("区域，如 'A1:C1'") String range,
+            @P("true=合并（默认），false=取消合并") Boolean merge,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_merge_cells called range={}, merge={}", range, merge);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range != null ? range : "");
+            if (merge != null) params.put("merge", merge);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_merge_cells", params);
+        } catch (Exception e) {
+            log.error("Failed to merge cells", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "区域排序", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】对区域按某列排序。byColumn 是列标（如 'B'，必须在区域内，不传用区域第一列）；" +
+          "ascending 默认 true 升序；hasHeader 默认 true（首行是表头不参与排序）。返回排序后该列的前几个值供核对。" +
+          "注意：值与公式随行整体移动，但单元格格式（底色等）不随行移动——先排序后做格式。")
+    public String sheet_sort_range(
+            @P("区域，如 'A1:D10'") String range,
+            @P("排序依据列的列标（如 'B'），不传用区域第一列") String byColumn,
+            @P("升序 true（默认）/降序 false") Boolean ascending,
+            @P("首行是表头 true（默认）/false") Boolean hasHeader,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_sort_range called range={}, byColumn={}, asc={}", range, byColumn, ascending);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range != null ? range : "");
+            if (byColumn != null && !byColumn.isBlank()) params.put("byColumn", byColumn);
+            if (ascending != null) params.put("ascending", ascending);
+            if (hasHeader != null) params.put("hasHeader", hasHeader);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_sort_range", params);
+        } catch (Exception e) {
+            log.error("Failed to sort range", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置自动筛选", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】给区域加/去自动筛选（表头出现筛选下拉按钮）。enabled 默认 true；range 不传用整个已用区域。")
+    public String sheet_set_autofilter(
+            @P("区域，如 'A1:D10'；不传用整个已用区域") String range,
+            @P("true=开启（默认），false=关闭") Boolean enabled,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_set_autofilter called range={}, enabled={}", range, enabled);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (range != null && !range.isBlank()) params.put("range", range);
+            if (enabled != null) params.put("enabled", enabled);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_set_autofilter", params);
+        } catch (Exception e) {
+            log.error("Failed to set autofilter", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "冻结窗格", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】冻结窗格：冻结前 rows 行和前 cols 列（滚动时保持可见，常用 rows=1 冻结表头）；rows=0 且 cols=0 取消冻结。")
+    public String sheet_freeze_panes(
+            @P("冻结前几行（0=不冻结行）") Integer rows,
+            @P("冻结前几列（0=不冻结列）") Integer cols,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_freeze_panes called rows={}, cols={}", rows, cols);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("rows", rows != null ? rows : 0);
+            params.put("cols", cols != null ? cols : 0);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_freeze_panes", params);
+        } catch (Exception e) {
+            log.error("Failed to freeze panes", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置条件格式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·格式】给区域设条件格式：满足条件的单元格自动套指定外观。" +
+          "rule: greater/greaterEqual/less/lessEqual/equal/notEqual/between/notBetween/formula；" +
+          "value1 是比较值或公式（between 再配 value2）；外观至少传一项：background 底色/color 字色/bold 加粗。" +
+          "每次调用替换该区域已有的条件格式；clear=true 清除区域全部条件格式。")
+    public String sheet_conditional_format(
+            @P("区域，如 'B2:B10'") String range,
+            @P("规则：greater/greaterEqual/less/lessEqual/equal/notEqual/between/notBetween/formula") String rule,
+            @P("比较值 1（数值或公式，如 '5000'）") String value1,
+            @P("比较值 2，仅 between/notBetween 需要") String value2,
+            @P("命中时底色 #RRGGBB，不设则不传") String background,
+            @P("命中时字色 #RRGGBB，不设则不传") String color,
+            @P("命中时加粗 true，不设则不传") Boolean bold,
+            @P("true=清除该区域全部条件格式（忽略其他参数）") Boolean clear,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_conditional_format called range={}, rule={}", range, rule);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range != null ? range : "");
+            if (rule != null && !rule.isBlank()) params.put("rule", rule);
+            if (value1 != null && !value1.isBlank()) params.put("value1", value1);
+            if (value2 != null && !value2.isBlank()) params.put("value2", value2);
+            if (background != null && !background.isBlank()) params.put("background", background);
+            if (color != null && !color.isBlank()) params.put("color", color);
+            if (bold != null) params.put("bold", bold);
+            if (clear != null) params.put("clear", clear);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_conditional_format", params);
+        } catch (Exception e) {
+            log.error("Failed to set conditional format", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
     // ==================== 调试工具 ====================
 
     @Tool("调试工具：获取文档中所有修订记录的详细信息，包括修订类型、位置、内容等。用于分析和诊断修订模式下的文本操作问题。")
