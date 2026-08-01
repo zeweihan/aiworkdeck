@@ -6,7 +6,6 @@ import com.checkba.service.ai.tools.EvidenceTools;
 import com.checkba.service.ai.tools.FileTools;
 import com.checkba.service.ai.tools.LegalTools;
 import com.checkba.service.ai.tools.MemoryTools;
-import com.checkba.service.ai.tools.PptxEditTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.SubAgentTools;
@@ -40,7 +39,6 @@ final class RealToolBeans {
                 FileTools.class,
                 LegalTools.class,
                 MemoryTools.class,
-                PptxEditTools.class,
                 PptxTools.class,
                 PythonTools.class,
                 SubAgentTools.class,

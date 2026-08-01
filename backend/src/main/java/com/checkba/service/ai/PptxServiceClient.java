@@ -794,29 +794,63 @@ public class PptxServiceClient {
     }
 
     /**
-     * 获取页面截图
-     * 
+     * 检查存量 PPTX 的结构化格式全览
+     *
+     * 调用 checkba 自有端点 POST /api/pptx/inspect（本地同机部署，直接传文件路径，
+     * 契约见 pptx-service/UPGRADE_CHECKBA.md）。
+     *
      * @param pptxFilePath 本地 PPTX 文件路径
-     * @param pageIndex 页面索引（从 0 开始）
-     * @return 截图 URL
+     * @return data 对象：{slide_count, slides:[{slide_index, shapes:[...]}]}，索引一律 0 起
      */
-    public String getPageScreenshot(String pptxFilePath, int pageIndex) {
-        log.info("Getting page screenshot: file={}, pageIndex={}", pptxFilePath, pageIndex);
-        
-        // 上传文件并获取截图
-        // 注意：这是一个简化实现，实际可能需要先上传文件到服务
-        HttpResponse resp = HttpRequest.post(baseUrl + "/api/files/screenshot")
-                .form("file", new java.io.File(pptxFilePath))
-                .form("page_index", pageIndex)
+    public JSONObject inspectPptx(String pptxFilePath) {
+        log.info("Inspecting PPTX format: {}", pptxFilePath);
+
+        JSONObject body = new JSONObject();
+        body.set("pptx_path", pptxFilePath);
+
+        HttpResponse resp = HttpRequest.post(baseUrl + "/api/pptx/inspect")
+                .header("Content-Type", "application/json")
+                .body(body.toString())
                 .timeout(timeoutSeconds * 1000)
                 .execute();
-        
+
         if (resp.getStatus() != 200) {
-            throw new RuntimeException("Failed to get screenshot: " + resp.body());
+            throw new RuntimeException("Failed to inspect PPTX: " + resp.body());
         }
-        
-        JSONObject result = JSONUtil.parseObj(resp.body());
-        return result.getJSONObject("data").getStr("screenshot_url");
+
+        return JSONUtil.parseObj(resp.body()).getJSONObject("data");
+    }
+
+    /**
+     * 对存量 PPTX 执行批量格式操作（原地写回）
+     *
+     * 调用 checkba 自有端点 POST /api/pptx/format。六种 op（set_run_format /
+     * set_paragraph_format / replace_text / set_shape_text / set_cell_text /
+     * set_cell_format）见 pptx-service backend/services/pptx_format_service.py；
+     * 定位索引 0 起，与 inspectPptx 输出一致，落字自动去 markdown。
+     *
+     * @param pptxFilePath 本地 PPTX 文件路径（结果直接写回该文件）
+     * @param ops 操作数组，每项含 action 及定位/格式字段
+     * @return data 对象：{output_path, applied, failed, results:[...]}
+     */
+    public JSONObject formatPptx(String pptxFilePath, JSONArray ops) {
+        log.info("Applying {} format op(s) to PPTX: {}", ops == null ? 0 : ops.size(), pptxFilePath);
+
+        JSONObject body = new JSONObject();
+        body.set("pptx_path", pptxFilePath);
+        body.set("ops", ops);
+
+        HttpResponse resp = HttpRequest.post(baseUrl + "/api/pptx/format")
+                .header("Content-Type", "application/json")
+                .body(body.toString())
+                .timeout(timeoutSeconds * 1000)
+                .execute();
+
+        if (resp.getStatus() != 200) {
+            throw new RuntimeException("Failed to format PPTX: " + resp.body());
+        }
+
+        return JSONUtil.parseObj(resp.body()).getJSONObject("data");
     }
 
     /**
@@ -936,188 +970,10 @@ public class PptxServiceClient {
         public void setEditable(boolean editable) { this.editable = editable; }
     }
 
-    /**
-     * 独立图片编辑 - 编辑任意图片（不依赖于项目）
-     * 用于编辑现有 PPT 的纯图片页面
-     * 
-     * @param imageUrl 原始图片 URL
-     * @param editInstruction 编辑指令（自然语言）
-     * @return 编辑结果
-     */
-    public StandaloneImageEditResult editStandaloneImage(String imageUrl, String editInstruction) {
-        log.info("Editing standalone image: instruction={}", 
-                editInstruction.length() > 50 ? editInstruction.substring(0, 50) + "..." : editInstruction);
-        
-        try {
-            JSONObject body = new JSONObject();
-            body.set("image_url", imageUrl);
-            body.set("edit_instruction", editInstruction);
-            
-            HttpResponse resp = HttpRequest.post(baseUrl + "/api/projects/edit-standalone-image")
-                    .header("Content-Type", "application/json")
-                    .body(body.toString())
-                    .timeout(timeoutSeconds * 2 * 1000)
-                    .execute();
-            
-            if (resp.getStatus() != 200) {
-                String errorBody = resp.body();
-                log.error("Standalone image edit failed: status={}, body={}", resp.getStatus(), errorBody);
-                return new StandaloneImageEditResult(false, null, "编辑图片失败: " + errorBody);
-            }
-            
-            JSONObject result = JSONUtil.parseObj(resp.body());
-            
-            if (!result.getBool("success", false)) {
-                return new StandaloneImageEditResult(false, null, result.getStr("message", "Unknown error"));
-            }
-            
-            JSONObject data = result.getJSONObject("data");
-            String editedImageUrl = data.getStr("image_url_absolute", data.getStr("image_url"));
-            
-            return new StandaloneImageEditResult(true, editedImageUrl, null);
-            
-        } catch (Exception e) {
-            log.error("Standalone image edit exception", e);
-            return new StandaloneImageEditResult(false, null, "编辑图片异常: " + e.getMessage());
-        }
-    }
-
-    /**
-     * 独立图片编辑结果
-     */
-    public static class StandaloneImageEditResult {
-        private final boolean success;
-        private final String editedImageUrl;
-        private final String error;
-
-        public StandaloneImageEditResult(boolean success, String editedImageUrl, String error) {
-            this.success = success;
-            this.editedImageUrl = editedImageUrl;
-            this.error = error;
-        }
-
-        public boolean isSuccess() { return success; }
-        public String getEditedImageUrl() { return editedImageUrl; }
-        public String getError() { return error; }
-    }
-
-    /**
-     * 编辑 PPTX 文件中的特定幻灯片
-     * 
-     * 上传 PPTX 文件，使用 AI 编辑指定页面，返回编辑后的文件
-     * 
-     * @param pptxFilePath 本地 PPTX 文件路径
-     * @param slideIndex 页面索引（从 1 开始）
-     * @param editInstruction 编辑指令（自然语言）
-     * @param outputPath 输出文件路径（编辑后的 PPTX 保存位置）
-     * @param modelConfig 模型配置（包含 API Key、模型名等，用于 AI 图片编辑）
-     * @return 编辑结果
-     */
-    public PptxSlideEditResult editPptxSlide(String pptxFilePath, int slideIndex, 
-                                               String editInstruction, String outputPath,
-                                               ModelConfig modelConfig) {
-        log.info("Editing PPTX slide: file={}, slideIndex={}, instruction={}", 
-                pptxFilePath, slideIndex, 
-                editInstruction.length() > 50 ? editInstruction.substring(0, 50) + "..." : editInstruction);
-        if (modelConfig != null) {
-            log.info("Using model config: provider={}, imageModel={}", 
-                    modelConfig.getProvider(), modelConfig.getImageModel());
-        }
-        
-        try {
-            java.io.File pptxFile = new java.io.File(pptxFilePath);
-            if (!pptxFile.exists()) {
-                return new PptxSlideEditResult(false, null, "PPTX 文件不存在: " + pptxFilePath);
-            }
-            
-            // 构建请求（上传文件 + 模型配置）
-            HttpRequest request = HttpRequest.post(baseUrl + "/api/projects/edit-pptx-slide")
-                    .form("pptx_file", pptxFile)
-                    .form("slide_index", String.valueOf(slideIndex))
-                    .form("edit_instruction", editInstruction);
-            
-            // 添加模型配置（如果提供）
-            if (modelConfig != null) {
-                request.form("model_config", modelConfig.toJson().toString());
-            }
-            
-            // 执行请求
-            HttpResponse resp = request
-                    .timeout(timeoutSeconds * 3 * 1000)  // 延长超时时间
-                    .execute();
-            
-            if (resp.getStatus() != 200) {
-                String errorBody = resp.body();
-                log.error("PPTX slide edit failed: status={}, body={}", resp.getStatus(), errorBody);
-                return new PptxSlideEditResult(false, null, "编辑失败: " + errorBody);
-            }
-            
-            JSONObject result = JSONUtil.parseObj(resp.body());
-            
-            if (!result.getBool("success", false)) {
-                String message = result.getStr("message", "Unknown error");
-                return new PptxSlideEditResult(false, null, message);
-            }
-            
-            JSONObject data = result.getJSONObject("data");
-            String downloadUrl = data.getStr("download_url");
-            String downloadUrlAbsolute = data.getStr("download_url_absolute");
-            String message = data.getStr("message", "Success");
-            
-            // 下载编辑后的文件
-            if (downloadUrl != null && outputPath != null) {
-                String fullDownloadUrl = downloadUrlAbsolute != null ? downloadUrlAbsolute : (baseUrl + downloadUrl);
-                log.info("Downloading edited PPTX from: {}", fullDownloadUrl);
-                
-                HttpResponse downloadResp = HttpRequest.get(fullDownloadUrl)
-                        .timeout(timeoutSeconds * 1000)
-                        .execute();
-                
-                if (downloadResp.getStatus() != 200) {
-                    return new PptxSlideEditResult(false, null, "下载编辑后的文件失败: HTTP " + downloadResp.getStatus());
-                }
-                
-                try {
-                    Path path = Paths.get(outputPath);
-                    Files.createDirectories(path.getParent());
-                    
-                    try (FileOutputStream fos = new FileOutputStream(outputPath)) {
-                        fos.write(downloadResp.bodyBytes());
-                    }
-                    
-                    log.info("Edited PPTX saved to: {}", outputPath);
-                    return new PptxSlideEditResult(true, outputPath, message);
-                } catch (Exception e) {
-                    return new PptxSlideEditResult(false, null, "保存文件失败: " + e.getMessage());
-                }
-            }
-            
-            return new PptxSlideEditResult(true, downloadUrlAbsolute != null ? downloadUrlAbsolute : downloadUrl, message);
-            
-        } catch (Exception e) {
-            log.error("PPTX slide edit exception", e);
-            return new PptxSlideEditResult(false, null, "编辑异常: " + e.getMessage());
-        }
-    }
-
-    /**
-     * PPTX 幻灯片编辑结果
-     */
-    public static class PptxSlideEditResult {
-        private final boolean success;
-        private final String outputPath;  // 本地文件路径或下载 URL
-        private final String message;
-
-        public PptxSlideEditResult(boolean success, String outputPath, String message) {
-            this.success = success;
-            this.outputPath = outputPath;
-            this.message = message;
-        }
-
-        public boolean isSuccess() { return success; }
-        public String getOutputPath() { return outputPath; }
-        public String getMessage() { return message; }
-    }
+    // 注：曾有 getPageScreenshot / editStandaloneImage / editPptxSlide 三个方法，调用的
+    // /api/files/screenshot、/api/projects/edit-standalone-image、/api/projects/edit-pptx-slide
+    // 在 0.4.0 re-vendor 后服务侧已不存在（2026-08-01 实测），已随对应死路径工具一并下线。
+    // 存量文件的文本/格式修改改走 inspectPptx / formatPptx（/api/pptx/*）。
 
     /**
      * 模型配置

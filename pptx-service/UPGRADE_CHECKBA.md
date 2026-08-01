@@ -64,9 +64,10 @@
 > `/projects/edit-standalone-image`、`/projects/edit-pptx-slide`）如上游有改动，同样在 PptxServiceClient 里对齐即可。
 >
 > **已知缺口（2026-08-01 实测）**：`/api/files/screenshot`、`/api/projects/edit-standalone-image`、
-> `/api/projects/edit-pptx-slide` 三个端点在 0.4.0 re-vendor 后已不存在（上游删除，checkba 侧未重建），
-> 但 `PptxServiceClient.java` 仍在调用——对应 `pptx_get_page_screenshot`、`pptx_smart_modify`（图片编辑分支）
-> 工具实为死路径，恢复时需在服务侧重建这三个端点或改走新的 `/api/pptx/*` 能力。
+> `/api/projects/edit-pptx-slide` 三个端点在 0.4.0 re-vendor 后已不存在（上游删除，checkba 侧未重建）。
+> Java 侧调用已清理：`PptxServiceClient` 对应方法与 `pptx_get_page_screenshot`、`pptx_smart_modify`
+> 工具已随文本/格式能力切到 `/api/pptx/*`（inspectPptx/formatPptx）一并下线；纯图像页 AI 改图能力
+> 暂无入口，恢复时需在服务侧重建端点后再加回工具。
 >
 > **checkba 自有端点（上游没有，re-vendor 时必须连同上表文件一起保留）**：
 > | 方法 | 路径 | 用途 |

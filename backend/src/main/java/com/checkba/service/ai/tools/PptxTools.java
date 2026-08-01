@@ -190,9 +190,9 @@ public class PptxTools implements AgentToolComponent {
             // 通过 SSE 发送打开文件指令到前端
             editorBridgeService.sendOpenFileAction(file);
             
-            return String.format("已发送打开文件指令。文件名: %s。请等待 PPT 加载完成后再进行编辑操作。\n" +
-                    "加载完成后，可以使用 pptx_get_presentation_info 获取 PPT 信息，" +
-                    "使用 pptx_get_slide_content 获取幻灯片内容。", 
+            return String.format("已发送打开文件指令。文件名: %s。\n" +
+                    "查看内容与格式可用 pptx_inspect_format（无需等待加载），" +
+                    "修改文本与格式可用 pptx_apply_format（修改后编辑器自动重载）。",
                     file.getName());
             
         } catch (Exception e) {
@@ -432,7 +432,8 @@ public class PptxTools implements AgentToolComponent {
                 successMsg.append("**页面修改**: 可以使用以下工具进行修改：\n");
                 successMsg.append("- pptx_get_project_pages: 查看所有页面\n");
                 successMsg.append("- pptx_edit_page: 用自然语言修改页面（如'把标题改成红色'）\n");
-                successMsg.append("- pptx_refine_outline: 修改大纲结构（增删页面）");
+                successMsg.append("- pptx_refine_outline: 修改大纲结构（增删页面）\n");
+                successMsg.append("- pptx_inspect_format + pptx_apply_format: 直接修改文件中的文本与格式（可编辑版适用）");
                 
                 // 标记后台任务完成
                 if (taskId != null) {
@@ -529,282 +530,137 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
-    // ==================== 智能 PPT 修改工具 ====================
+    // ==================== 存量 PPTX 格式识别与操作（/api/pptx/*） ====================
+    // 注：曾有 pptx_smart_modify（编辑器桥 ppt_* 命令分支 + /edit-pptx-slide AI 改图分支），
+    // 两条路径均已失效（前端明确拒绝 ppt_*、服务端点不存在），随本组工具上线一并下线。
+    // 纯图像页的 AI 改图能力本期不恢复。
 
-    @ToolMeta(displayName = "智能修改PPT", category = "pptx", fileEffect = "MODIFIED")
-    @Tool("智能修改 PPT 页面。会自动判断页面类型：如果是可编辑组件则直接修改文本，如果是纯图片则使用 AI 重新生成。这是修改 PPT 的首选工具。")
-    public String pptx_smart_modify(
+    @ToolMeta(displayName = "读取PPT格式", category = "pptx")
+    @Tool("读取 PPTX 文件的结构化内容与格式全览（直接读文件，无需在编辑器中打开）。" +
+          "返回每页每个形状（shape）的段落/run 文本及其格式：字体、中文字体、字号、粗体/斜体/下划线/删除线、" +
+          "高亮、颜色、对齐、行距、段距、项目符号，以及表格的行列与单元格内容。" +
+          "所有定位索引（slide/shape/paragraph/run/row/col）从 0 开始。" +
+          "修改 PPT 文本或格式前必须先调用本工具获取定位索引，再用 pptx_apply_format 执行修改。")
+    public String pptx_inspect_format(
             @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId,
-            @P("页面索引（从 1 开始）") Integer pageIndex,
-            @P("修改要求，用自然语言描述，如：'把汇报人改成韩泽伟'、'标题改成红色'、'删除第三个要点'") String modifyInstruction
+            @P("页码（从 0 开始，可选）。指定后只返回该页（推荐，输出更精简）；传 null 返回全部页") Integer slideIndex
     ) {
-        // 模型 ID 由 ToolRegistry 通过线程上下文透传
-        return pptx_smart_modify(fileId, pageIndex, modifyInstruction, ToolContextHolder.currentModelId());
-    }
-
-    /**
-     * 带 modelId 参数的 pptx_smart_modify 内部版本
-     * 用于从 AgentOrchestrator 调用时传递用户选择的模型（用于纯图片页面的 AI 编辑）
-     */
-    public String pptx_smart_modify(Long fileId, Integer pageIndex, String modifyInstruction, String modelId) {
-        log.info("Tool: pptx_smart_modify called, fileId={}, pageIndex={}, instruction={}, modelId={}", 
-                fileId, pageIndex, modifyInstruction, modelId);
-        
+        log.info("Tool: pptx_inspect_format called, fileId={}, slideIndex={}", fileId, slideIndex);
         try {
-            // 1. 获取文件信息
             ProjectFile file = projectFileService.getFile(fileId);
             if (file == null) {
                 return "Error: 文件不存在，ID=" + fileId;
             }
-            
             if (!isPptxFile(file.getName())) {
                 return "Error: 该文件不是 PPTX 格式: " + file.getName();
             }
-            
-            // 2. 尝试通过编辑器获取页面内容
-            String slideContent = editorBridgeService.executeEditorCommand("ppt_get_slide_content", 
-                    java.util.Map.of("slideIndex", pageIndex));
-            
-            // 3. 分析返回结果，判断是否可编辑
-            cn.hutool.json.JSONObject contentJson = null;
-            boolean hasEditableShapes = false;
-            
-            try {
-                contentJson = cn.hutool.json.JSONUtil.parseObj(slideContent);
-                if (contentJson.containsKey("error")) {
-                    // 编辑器返回错误，可能文件未打开或页面不存在
-                    log.warn("Editor get slide content returned error: {}", contentJson.getStr("error"));
-                } else if (contentJson.containsKey("shapes")) {
-                    cn.hutool.json.JSONArray shapes = contentJson.getJSONArray("shapes");
-                    // 检查是否有可编辑的文本 shape
-                    for (int i = 0; i < shapes.size(); i++) {
-                        cn.hutool.json.JSONObject shape = shapes.getJSONObject(i);
-                        String shapeType = shape.getStr("type");
-                        if ("text".equals(shapeType) || "textBox".equals(shapeType)) {
-                            hasEditableShapes = true;
-                            break;
-                        }
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("Failed to parse slide content: {}", e.getMessage());
-            }
-            
-            // 4. 根据页面类型选择修改方式
-            if (hasEditableShapes) {
-                // 有可编辑组件 - 使用编辑器 API 直接修改
-                return modifyWithEditorApi(fileId, pageIndex, modifyInstruction, contentJson);
-            } else {
-                // 纯图片或无法获取内容 - 使用 AI 图片编辑（传递 modelId）
-                return modifyWithAiImageEdit(file, pageIndex, modifyInstruction, modelId);
-            }
-            
-        } catch (Exception e) {
-            log.error("Smart modify failed", e);
-            return "智能修改失败: " + e.getMessage();
-        }
-    }
-
-    /**
-     * 使用编辑器 API 直接修改文本
-     */
-    private String modifyWithEditorApi(Long fileId, Integer pageIndex, String instruction, 
-                                     cn.hutool.json.JSONObject contentJson) {
-        log.info("Modifying with editor API: fileId={}, pageIndex={}", fileId, pageIndex);
-        
-        try {
-            // 分析修改指令，找到需要修改的 shape
-            cn.hutool.json.JSONArray shapes = contentJson.getJSONArray("shapes");
-            
-            // 简单的关键词匹配来找到目标 shape
-            String lowerInstruction = instruction.toLowerCase();
-            
-            for (int i = 0; i < shapes.size(); i++) {
-                cn.hutool.json.JSONObject shape = shapes.getJSONObject(i);
-                String text = shape.getStr("text", "");
-                int shapeIndex = shape.getInt("index", i + 1);
-                
-                // 检查指令中是否提到这个 shape 的内容
-                if (shouldModifyShape(text, lowerInstruction)) {
-                    // 提取新文本
-                    String newText = extractNewTextFromInstruction(text, instruction);
-                    
-                    // 调用编辑器修改
-                    String result = editorBridgeService.executeEditorCommand("ppt_modify_slide_text", 
-                            java.util.Map.of(
-                                    "slideIndex", pageIndex,
-                                    "shapeIndex", shapeIndex,
-                                    "newText", newText,
-                                    "markAsRevision", true
-                            ));
-                    
-                    return String.format("已通过编辑器修改页面内容！\n" +
-                            "- 页面: 第 %d 页\n" +
-                            "- 原文本: %s\n" +
-                            "- 新文本: %s\n\n" +
-                            "修改已标记为修订，请在编辑器中确认。", 
-                            pageIndex, text.length() > 50 ? text.substring(0, 50) + "..." : text, newText);
-                }
-            }
-            
-            // 没有找到匹配的 shape，返回提示
-            StringBuilder sb = new StringBuilder("未找到匹配的文本区域。页面包含以下可编辑内容：\n");
-            for (int i = 0; i < shapes.size(); i++) {
-                cn.hutool.json.JSONObject shape = shapes.getJSONObject(i);
-                sb.append(String.format("- Shape %d: %s\n", i + 1, 
-                        shape.getStr("text", "").substring(0, Math.min(50, shape.getStr("text", "").length()))));
-            }
-            sb.append("\n请更具体地描述要修改哪个内容。");
-            return sb.toString();
-            
-        } catch (Exception e) {
-            log.error("Editor API modify failed", e);
-            return "编辑器修改失败: " + e.getMessage();
-        }
-    }
-
-    /**
-     * 使用 AI 图片编辑修改纯图片页面
-     * 
-     * 完整流程：
-     * 1. 获取本地 PPTX 文件路径
-     * 2. 构建模型配置（使用用户选择的模型，包含 API Key 和正确的图片模型映射）
-     * 3. 调用 pptx-service 的 /edit-pptx-slide API（提取页面图片 → AI 编辑 → 替换回 PPTX）
-     * 4. 用编辑后的文件覆盖原文件
-     * 5. 通知前端重新加载文件
-     * 
-     * @param file 要修改的 PPTX 文件
-     * @param pageIndex 页面索引
-     * @param instruction 修改指令
-     * @param modelId 用户选择的模型 ID（如 google/gemini-3-pro-preview），用于正确映射到图片模型
-     */
-    private String modifyWithAiImageEdit(ProjectFile file, Integer pageIndex, String instruction, String modelId) {
-        log.info("Modifying with AI image edit: file={}, pageIndex={}, modelId={}", file.getName(), pageIndex, modelId);
-        
-        try {
-            // 1. 获取本地 PPTX 文件路径
-            String filePath = file.getFilePath();
-            Path localPath = storageResolver.resolve(filePath);
-            
+            Path localPath = storageResolver.resolve(file.getFilePath());
             if (!Files.exists(localPath)) {
-                return String.format("错误：PPTX 文件不存在于本地磁盘: %s\n\n" +
-                        "请确保文件已正确上传到服务器。", localPath);
+                return "Error: 文件不存在于本地磁盘: " + localPath;
             }
-            
-            log.info("PPTX file found at: {}", localPath);
-            
-            // 2. 构建模型配置（使用用户选择的模型，会自动映射到对应的图片生成模型）
-            PptxServiceClient.ModelConfig modelConfig = buildModelConfig(modelId);
-            
-            // 3. 调用 pptx-service 编辑 API（提取 → AI 编辑 → 替换）
-            log.info("Calling pptx-service to edit slide {} with instruction: {}", pageIndex, instruction);
-            
-            PptxServiceClient.PptxSlideEditResult editResult = pptxServiceClient.editPptxSlide(
-                    localPath.toString(),
-                    pageIndex,
-                    instruction,
-                    localPath.toString(),  // 直接覆盖原文件
-                    modelConfig            // 传递模型配置
-            );
-            
-            if (!editResult.isSuccess()) {
-                // 如果是因为没有图片，给出友好提示
-                String errorMsg = editResult.getMessage();
-                if (errorMsg != null && errorMsg.contains("does not contain an image")) {
-                    return String.format("第 %d 页不是纯图片页面，可能包含可编辑的文本元素。\n\n" +
-                            "请尝试使用 pptx_modify_slide_text 工具直接修改文本，\n" +
-                            "或在文档编辑器中手动修改。", pageIndex);
+            cn.hutool.json.JSONObject data = pptxServiceClient.inspectPptx(localPath.toString());
+
+            if (slideIndex != null) {
+                int slideCount = data.getInt("slide_count", 0);
+                if (slideIndex < 0 || slideIndex >= slideCount) {
+                    return String.format("Error: 页码越界 slideIndex=%d（共 %d 页，从 0 开始）", slideIndex, slideCount);
                 }
-                return "AI 编辑失败: " + errorMsg;
+                cn.hutool.json.JSONArray slides = data.getJSONArray("slides");
+                cn.hutool.json.JSONObject filtered = new cn.hutool.json.JSONObject();
+                filtered.set("slide_count", slideCount);
+                filtered.set("slides", new cn.hutool.json.JSONArray().set(slides.getJSONObject(slideIndex)));
+                return filtered.toString();
             }
-            
-            // 3. 更新文件信息：生成新的 wpsFileId 以强制编辑器重新下载文件
-            // 编辑器通过 fileId 识别文档并缓存，更新 wpsFileId 可以让编辑器认为是"新文件"从而重新下载
+            return data.toString();
+
+        } catch (Exception e) {
+            log.error("Failed to inspect PPTX format", e);
+            return "读取 PPT 格式失败: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置PPT格式", category = "pptx", fileEffect = "MODIFIED")
+    @Tool("对 PPTX 文件批量执行文本与格式修改（直接改文件；完成后编辑器自动重载显示结果）。" +
+          "使用顺序：先 pptx_inspect_format 获取 0 起的定位索引，再调用本工具。opsJson 是 JSON 数组，每项一个操作，六种 action：\n" +
+          "1. {\"action\":\"set_run_format\",\"slide\":0,\"shape\":1,\"paragraph\":0,\"run\":0,\"format\":{…}}（省略 run 作用于该段全部 run，省略 paragraph 作用于全部段落）\n" +
+          "2. {\"action\":\"set_paragraph_format\",\"slide\":0,\"shape\":1,\"paragraph\":0,\"format\":{…}}（省略 paragraph 作用于全部段落）\n" +
+          "3. {\"action\":\"replace_text\",\"slide\":0,\"shape\":1,\"find\":\"旧文本\",\"replace\":\"新文本\"}（run 级匹配替换）\n" +
+          "4. {\"action\":\"set_shape_text\",\"slide\":0,\"shape\":1,\"text\":\"整框重写的多行文本\"}\n" +
+          "5. {\"action\":\"set_cell_text\",\"slide\":0,\"shape\":2,\"row\":0,\"col\":1,\"text\":\"单元格文本\"}\n" +
+          "6. {\"action\":\"set_cell_format\",\"slide\":0,\"shape\":2,\"row\":0,\"col\":1,\"format\":{…}}\n" +
+          "format 可用键——run 级：bold/italic/underline/strike(删除线)/highlight(高亮色如'#FFFF00')/color(文字色如'#FF0000')/" +
+          "font_name(西文字体)/ea_font(中文字体如'楷体')/size_pt(字号磅值)；" +
+          "段落级：align(left|center|right|justify)/line_spacing(行距倍数如1.5)/space_before_pt/space_after_pt/bullet(true|false)/number_start(编号起始值)。" +
+          "落字文本自动清除 markdown 标记并转为真实格式。本工具只能改文本与格式，不能编辑图片内容（AI 改图能力当前不可用）。")
+    public String pptx_apply_format(
+            @P("文件 ID（从 pptx_list_files 或 pptx_search_files 获取）") Long fileId,
+            @P("操作数组的 JSON 字符串，见工具描述中的六种 action 示例") String opsJson
+    ) {
+        log.info("Tool: pptx_apply_format called, fileId={}, opsJson length={}",
+                fileId, opsJson != null ? opsJson.length() : 0);
+        try {
+            if (!StringUtils.hasText(opsJson)) {
+                return "Error: 缺少 opsJson 参数（JSON 操作数组）";
+            }
+            cn.hutool.json.JSONArray ops;
+            try {
+                ops = cn.hutool.json.JSONUtil.parseArray(opsJson);
+            } catch (Exception e) {
+                return "Error: opsJson 不是合法的 JSON 数组: " + e.getMessage();
+            }
+            if (ops.isEmpty()) {
+                return "Error: opsJson 不能为空数组";
+            }
+
+            ProjectFile file = projectFileService.getFile(fileId);
+            if (file == null) {
+                return "Error: 文件不存在，ID=" + fileId;
+            }
+            if (!isPptxFile(file.getName())) {
+                return "Error: 该文件不是 PPTX 格式: " + file.getName();
+            }
+            Path localPath = storageResolver.resolve(file.getFilePath());
+            if (!Files.exists(localPath)) {
+                return "Error: 文件不存在于本地磁盘: " + localPath;
+            }
+
+            cn.hutool.json.JSONObject data = pptxServiceClient.formatPptx(localPath.toString(), ops);
+            int applied = data.getInt("applied", 0);
+            int failed = data.getInt("failed", 0);
+
+            // 收尾三步：更新 wpsFileId 强制编辑器绕过缓存重新下载 → 存库 → 通知前端重载
             String newWpsFileId = generateNewWpsFileId(file.getProjectId());
             file.setWpsFileId(newWpsFileId);
             file.setUpdatedAt(LocalDateTime.now());
-            // 更新文件大小
             try {
                 file.setFileSize(Files.size(localPath));
             } catch (Exception e) {
                 log.warn("Failed to update file size: {}", e.getMessage());
             }
             projectFileRepository.save(file);
-            log.info("Updated file wpsFileId: {} -> {}", file.getId(), newWpsFileId);
-            
-            // 4. 通知前端重新加载文件（携带新的 wpsFileId）
-            log.info("Notifying frontend to reload file: {}", file.getId());
             editorBridgeService.sendReloadFileAction(file);
-            
-            return String.format("第 %d 页已使用 AI 成功修改！\n\n" +
-                    "修改内容：%s\n\n" +
-                    "文件已自动更新，文档编辑器将重新加载以显示修改后的内容。",
-                    pageIndex, instruction);
-            
-        } catch (Exception e) {
-            log.error("AI image edit failed", e);
-            return "AI 图片编辑失败: " + e.getMessage();
-        }
-    }
 
-    /**
-     * 判断是否应该修改这个 shape
-     */
-    private boolean shouldModifyShape(String shapeText, String instruction) {
-        if (shapeText == null || shapeText.isEmpty()) return false;
-        
-        String lowerText = shapeText.toLowerCase();
-        
-        // 检查指令中是否包含 shape 中的关键词
-        // 例如：指令"把汇报人改成韩泽伟"，检查 shape 是否包含"汇报人"或现有的人名
-        String[] keywords = {"汇报人", "报告人", "演讲人", "作者", "presenter", "author"};
-        for (String keyword : keywords) {
-            if (instruction.contains(keyword) && lowerText.contains(keyword.toLowerCase())) {
-                return true;
-            }
-        }
-        
-        // 检查"把 X 改成 Y"的模式
-        if (instruction.contains("改成") || instruction.contains("改为") || instruction.contains("换成")) {
-            // 提取要替换的原文
-            String[] patterns = {"把", "将"};
-            for (String pattern : patterns) {
-                int patternIdx = instruction.indexOf(pattern);
-                int changeIdx = instruction.indexOf("改");
-                if (patternIdx >= 0 && changeIdx > patternIdx) {
-                    String originalText = instruction.substring(patternIdx + pattern.length(), changeIdx).trim();
-                    if (!originalText.isEmpty() && lowerText.contains(originalText.toLowerCase())) {
-                        return true;
+            StringBuilder sb = new StringBuilder();
+            sb.append(String.format("PPT 格式操作完成：成功 %d 项，失败 %d 项。\n", applied, failed));
+            if (failed > 0) {
+                cn.hutool.json.JSONArray results = data.getJSONArray("results");
+                sb.append("失败明细：\n");
+                for (int i = 0; i < results.size(); i++) {
+                    cn.hutool.json.JSONObject r = results.getJSONObject(i);
+                    if (!r.getBool("ok", true)) {
+                        sb.append(String.format("- op #%d (%s): %s\n",
+                                r.getInt("index", i), r.getStr("action"), r.getStr("error")));
                     }
                 }
+                sb.append("可用 pptx_inspect_format 重新核对定位索引后重试失败项。\n");
             }
-        }
-        
-        return false;
-    }
+            sb.append("文件已更新，文档编辑器将自动重新加载显示修改结果。");
+            return sb.toString();
 
-    /**
-     * 从指令中提取新文本
-     */
-    private String extractNewTextFromInstruction(String originalText, String instruction) {
-        // 尝试提取"改成 X"中的 X
-        String[] patterns = {"改成", "改为", "换成", "替换为", "修改为"};
-        for (String pattern : patterns) {
-            int idx = instruction.indexOf(pattern);
-            if (idx >= 0) {
-                String newText = instruction.substring(idx + pattern.length()).trim();
-                // 移除可能的引号
-                newText = newText.replaceAll("[\"'「」『』]", "");
-                // 移除可能的句末标点
-                newText = newText.replaceAll("[。，！？]$", "");
-                if (!newText.isEmpty()) {
-                    return newText;
-                }
-            }
+        } catch (Exception e) {
+            log.error("Failed to apply PPTX format ops", e);
+            return "PPT 格式操作失败: " + e.getMessage();
         }
-        
-        // 如果无法提取，返回原文
-        return originalText;
     }
 
     // ==================== PPTX 编辑工具 ====================
@@ -882,47 +738,6 @@ public class PptxTools implements AgentToolComponent {
         } catch (Exception e) {
             log.error("Failed to get project pages", e);
             return "获取项目页面失败: " + e.getMessage();
-        }
-    }
-
-    @Tool("获取 PPT 文件中指定页面的截图。用于查看页面内容后再进行编辑。")
-    public String pptx_get_page_screenshot(
-            @P("文件 ID（数据库中的项目文件 ID）") Long fileId,
-            @P("页面索引（从 0 开始）") int pageIndex
-    ) {
-        log.info("Tool: pptx_get_page_screenshot called, fileId={}, pageIndex={}", fileId, pageIndex);
-        
-        try {
-            ProjectFile file = projectFileService.getFile(fileId);
-            if (file == null) {
-                return "Error: 文件不存在，ID=" + fileId;
-            }
-            
-            if (!isPptxFile(file.getName())) {
-                return "Error: 该文件不是 PPTX 格式: " + file.getName();
-            }
-            
-            // 获取文件的物理路径
-            String filePath = file.getFilePath();
-            Path localPath = storageResolver.resolve(filePath);
-            
-            if (!Files.exists(localPath)) {
-                return "Error: 文件不存在于磁盘: " + localPath;
-            }
-            
-            // 调用 PPTX 服务获取页面截图
-            String screenshotUrl = pptxServiceClient.getPageScreenshot(localPath.toString(), pageIndex);
-            
-            return String.format("页面截图已生成！\n" +
-                    "- 文件: %s\n" +
-                    "- 页面: 第 %d 页\n" +
-                    "- 截图 URL: %s\n\n" +
-                    "你可以查看此截图了解页面内容，然后使用 pptx_edit_page 进行修改。",
-                    file.getName(), pageIndex + 1, screenshotUrl);
-            
-        } catch (Exception e) {
-            log.error("Failed to get page screenshot", e);
-            return "获取页面截图失败: " + e.getMessage();
         }
     }
 
