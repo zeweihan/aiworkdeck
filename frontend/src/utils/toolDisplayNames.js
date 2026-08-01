@@ -93,21 +93,14 @@ const NAMES = {
   pptx_generate: { zh: '生成PPT演示文稿', en: 'Generate slides' },
   pptx_generate_outline: { zh: '生成PPT大纲', en: 'Outline slides' },
   pptx_refine_outline: { zh: '优化PPT大纲', en: 'Refine outline' },
-  pptx_smart_modify: { zh: '智能修改PPT', en: 'Modify slides' },
   pptx_open_file: { zh: '打开PPT', en: 'Open slides' },
-  pptx_save: { zh: '保存PPT', en: 'Save slides' },
   pptx_list_files: { zh: '列出PPT文件', en: 'List slide files' },
   pptx_search_files: { zh: '搜索PPT文件', en: 'Search slide files' },
-  pptx_get_presentation_info: { zh: '读取PPT信息', en: 'Get slides info' },
   pptx_get_project_pages: { zh: '读取PPT页面', en: 'Get slide pages' },
-  pptx_get_slide_content: { zh: '读取幻灯片内容', en: 'Read slide' },
-  pptx_get_page_screenshot: { zh: '截取幻灯片', en: 'Screenshot slide' },
-  pptx_get_selection: { zh: '读取PPT选区', en: 'Read slide selection' },
   pptx_edit_page: { zh: '编辑幻灯片', en: 'Edit slide' },
-  pptx_insert_text: { zh: '插入PPT文本', en: 'Insert slide text' },
-  pptx_modify_slide_text: { zh: '修改幻灯片文本', en: 'Edit slide text' },
-  pptx_mark_delete_text: { zh: '标记删除文本', en: 'Mark text deletion' },
   pptx_export_editable: { zh: '导出可编辑PPT', en: 'Export editable slides' },
+  pptx_inspect_format: { zh: '读取PPT格式', en: 'Inspect slide formatting' },
+  pptx_apply_format: { zh: '设置PPT格式', en: 'Format slides' },
 }
 
 // code 可以是纯工具名，也可以是 <tool_code> 里的 `tool_name({...})` 完整调用串。

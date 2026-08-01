@@ -549,39 +549,40 @@ for file_id in file_ids:
 | `pptx_generate_outline(topic, language)` | 仅生成 PPT 大纲供审阅 |
 | `pptx_check_service()` | 检查 PPT 生成服务是否可用 |
 
-### PPT 编辑工具
+### PPT 编辑工具（直接改文件，改完编辑器自动重载）
 
 | 工具 | 用途 |
 |-----|------|
-| `pptx_get_presentation_info()` | 获取当前打开 PPT 的信息（页数等） |
-| `pptx_get_slide_content(slideIndex)` | 获取指定页的所有文本内容 |
-| `pptx_get_selection()` | 获取当前选区信息 |
-| `pptx_modify_slide_text(slideIndex, shapeIndex, newText)` | 修改幻灯片文本（会添加【】标记） |
-| `pptx_insert_text(slideIndex, shapeIndex, text, position)` | 插入文本（会添加【】标记） |
-| `pptx_mark_delete_text(slideIndex, shapeIndex, textToDelete)` | 标记删除文本（显示为【删除：xxx】） |
-| `pptx_save()` | 保存 PPT 文件 |
+| `pptx_inspect_format(fileId, slideIndex)` | 读取 PPTX 结构化内容与格式全览：每页每个形状的段落/run 文本、字体、中文字体、字号、粗斜下划线、删除线、高亮、颜色、对齐、行距、项目符号、表格单元格。slideIndex 可选（0 起），指定后只返回该页 |
+| `pptx_apply_format(fileId, opsJson)` | 批量执行文本与格式修改（六种 op），完成后编辑器自动重载 |
 
-### PPT 修订标记规范
+### PPT 编辑规范
 
-**重要**：PPT 不支持原生修订模式，使用视觉标记替代：
-- **新增内容**：用【】括起来，如 `【新增的内容】`
-- **删除内容**：标记为 `【删除：要删除的内容】`
-
-用户看到这些标记后可以手动确认是否接受修改。
+1. **使用顺序**：先 `pptx_inspect_format` 获取定位索引，再 `pptx_apply_format` 执行修改。
+2. **索引口径**：slide/shape/paragraph/run/row/col 全部从 **0** 开始（与 inspect 输出一致）。
+3. **六种 op**（opsJson 为 JSON 数组，每项一个操作）：
+   - `set_run_format`：{slide, shape, [paragraph], [run], format}，省略 run/paragraph 表示作用于全部
+   - `set_paragraph_format`：{slide, shape, [paragraph], format}
+   - `replace_text`：{slide, shape, find, replace}（run 级匹配替换）
+   - `set_shape_text`：{slide, shape, text}（整框重写）
+   - `set_cell_text` / `set_cell_format`：{slide, shape, row, col, …}（表格单元格）
+4. **format 键名**——run 级：`bold` / `italic` / `underline` / `strike`(删除线) / `highlight`(高亮色如 `#FFFF00`) / `color`(文字色) / `font_name`(西文字体) / `ea_font`(中文字体如 `楷体`) / `size_pt`(字号磅值)；段落级：`align` / `line_spacing`(如 1.5) / `space_before_pt` / `space_after_pt` / `bullet` / `number_start`。
+5. **落字自动去 markdown**：写入文本中的 markdown 标记会被转成真实格式，不要依赖 `**` 等符号呈现样式。
+6. **能力边界**：只能修改文本与格式；页面中的图片内容无法编辑（AI 改图能力当前不可用），如实告知用户。
 
 ### PPT 典型使用场景
 
 1. **搜索并编辑现有 PPT**：
    - 用户说"帮我把年度总结 PPT 第三页的标题改成'2025年展望'"
-   - 流程：`pptx_search_files("年度总结")` → `pptx_open_file(fileId)` → `pptx_get_slide_content(3)` → `pptx_modify_slide_text(3, 标题shapeIndex, "2025年展望")` → `pptx_save()`
+   - 流程：`pptx_search_files("年度总结")` → `pptx_inspect_format(fileId, 2)`（第三页=索引 2）→ `pptx_apply_format(fileId, '[{"action":"replace_text","slide":2,"shape":0,"find":"原标题","replace":"2025年展望"}]')`
 
 2. **生成 PPT 到指定文件夹**：
    - 用户说"帮我生成一个AI法律的PPT，放到'汇报材料'文件夹"
    - 流程：先用 `doc_list_project_files` 找到"汇报材料"文件夹的 ID，然后 `pptx_generate(topic="AI法律", parentId=文件夹ID)`
 
-3. **修改 PPT 内容**：
-   - 先用 `pptx_get_slide_content(页码)` 查看内容
-   - 根据返回的 shapeIndex 使用 `pptx_modify_slide_text` 修改
+3. **调整格式**：
+   - 用户说"把第 2 页第一个文本框加删除线和黄色高亮，改成楷体，行距 1.5"
+   - 流程：`pptx_inspect_format(fileId, 1)` → `pptx_apply_format(fileId, '[{"action":"set_run_format","slide":1,"shape":0,"format":{"strike":true,"highlight":"#FFFF00","ea_font":"楷体"}},{"action":"set_paragraph_format","slide":1,"shape":0,"format":{"line_spacing":1.5}}]')`
 
 ---
 
