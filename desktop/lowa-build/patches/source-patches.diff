@@ -95,3 +95,22 @@ index 8ac9d2bda..2bcba8b6c 100644
  }
  
  void QtInstance::localeChanged()
+
+--- a/sw/source/core/text/frmpaint.cxx
++++ b/sw/source/core/text/frmpaint.cxx
+@@ SwExtraPainter::PaintExtra @@
+     Point aTmpPos( m_nX, nY );
+     aTmpPos.AdjustY(nAsc );
+     if ( pRedlineText )
+     {
+         Size aSize = pTmpFnt->GetTextSize_( aDrawInf );
++        // AI Workdeck: inside a table m_nX is the CELL's left edge —
++        // right-aligning the deleted text there paints it over the
++        // neighboring cell's content. Anchor at the table frame's left
++        // edge instead (the change bar m_nRedX already does this via
++        // FindTabFrame in the SwExtraPainter ctor).
++        const SwFrame* pTabAnchor = m_pTextFrame->FindTabFrame();
++        if ( pTabAnchor )
++            aTmpPos.setX( pTabAnchor->getFrameArea().Left() );
+         aTmpPos.AdjustX( -(aSize.Width()) - 200 );
+     }

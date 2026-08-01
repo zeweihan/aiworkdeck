@@ -828,16 +828,17 @@ function streamWriteLine(line) {
   streamParagraph(parseInlineRuns(trimmed), 'body', null);
 }
 
-// Tracked DELETIONS display inline with strikethrough (Word "All Markup").
-// ShowChangesInMargin (tdf#34355) is deliberately OFF: the engine paints the
-// margin text to the LEFT of the anchor's frame — for text inside a table cell
-// that frame is the CELL, so deleted text lands on top of the neighboring
-// cell's content (法律文书大量用表格，重叠不可读；无 JS 手段矫正绘制位置).
-// Comments are unaffected — they keep their own sidebar right of the page.
-// This is a VIEW setting on the controller, not the model, so it must be
-// re-applied whenever the controller changes (boot AND load_document retarget).
-function showDeletionsInline() {
-  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', false); }
+// LO 7.1+ (tdf#34355): tracked DELETIONS render in the page margin next to the
+// changed-line mark instead of inline strikethrough — the body stays readable
+// (original text + colored insertions only). REQUIRES engine >= 24.2.8-zhcn-r3:
+// stock LO paints the margin text left of the anchor's frame, which inside a
+// table is the CELL — deleted text landed on the neighboring cell's content.
+// r3 carries our frmpaint.cxx patch anchoring at the table frame's left edge
+// (desktop/lowa-build/patches). This is a VIEW setting on the controller, not
+// the model, so it must be re-applied whenever the controller changes (boot
+// AND load_document retarget).
+function showDeletionsInMargin() {
+  try { ctrl.getViewSettings().setPropertyValue('ShowChangesInMargin', true); }
   catch (e) { log('ShowChangesInMargin 设置失败 / failed: ' + errStr(e)); }
 }
 
@@ -857,7 +858,7 @@ function bootDoc() {
   // change the lawyer can accept/reject. Set once here (and on retarget) instead
   // of per-command, so no edit path can slip through untracked.
   try { xModel.setPropertyValue('RecordChanges', true); } catch {}
-  showDeletionsInline();
+  showDeletionsInMargin();
 
   installKeyHandler();
   try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
@@ -1441,7 +1442,7 @@ const EXEC = {
       try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
       // Revisions default ON for the real document too (same as bootDoc).
       try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
-      showDeletionsInline();
+      showDeletionsInMargin();
     };
 
     const errs = [];

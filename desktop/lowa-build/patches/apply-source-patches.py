@@ -86,4 +86,37 @@ patch(
     ': Qt::LeftToRight);\n' + cjk_block + '}\n',
     'QtInstance AfterAppInit CJK block',
 )
+
+# ---- Patch 3: margin-redline anchor inside tables (tdf#34355 follow-up) ------
+# ShowChangesInMargin paints the deleted text right-aligned at m_nX (the text
+# frame's left edge). Inside a table that frame is the CELL, so the deleted
+# text lands on top of the NEIGHBORING cell's content. The change bar (m_nRedX)
+# already anchors at the table frame via FindTabFrame() — do the same here so
+# in-table deletions render in the true page margin, left of the whole table.
+patch(
+    f'{CORE}/sw/source/core/text/frmpaint.cxx',
+    ('    Point aTmpPos( m_nX, nY );\n'
+     '    aTmpPos.AdjustY(nAsc );\n'
+     '    if ( pRedlineText )\n'
+     '    {\n'
+     '        Size aSize = pTmpFnt->GetTextSize_( aDrawInf );\n'
+     '        aTmpPos.AdjustX( -(aSize.Width()) - 200 );\n'
+     '    }\n'),
+    ('    Point aTmpPos( m_nX, nY );\n'
+     '    aTmpPos.AdjustY(nAsc );\n'
+     '    if ( pRedlineText )\n'
+     '    {\n'
+     '        Size aSize = pTmpFnt->GetTextSize_( aDrawInf );\n'
+     '        // AI Workdeck: inside a table m_nX is the CELL\'s left edge —\n'
+     '        // right-aligning the deleted text there paints it over the\n'
+     '        // neighboring cell\'s content. Anchor at the table frame\'s left\n'
+     '        // edge instead (the change bar m_nRedX already does this via\n'
+     '        // FindTabFrame in the SwExtraPainter ctor).\n'
+     '        const SwFrame* pTabAnchor = m_pTextFrame->FindTabFrame();\n'
+     '        if ( pTabAnchor )\n'
+     '            aTmpPos.setX( pTabAnchor->getFrameArea().Left() );\n'
+     '        aTmpPos.AdjustX( -(aSize.Width()) - 200 );\n'
+     '    }\n'),
+    'frmpaint margin-redline table anchor',
+)
 print('ALL_PATCHES_OK')
