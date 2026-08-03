@@ -39,6 +39,8 @@ public class LegalTools implements AgentToolComponent {
             Long fId = Long.parseLong(fileId);
             ProjectFile file = projectFileService.getFile(fId);
             if (file == null) return "Error: File not found.";
+            String denied = ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) return denied;
 
             byte[] bytes = projectFileService.getFileBytes(fId);
             if (bytes == null || bytes.length == 0) return "File is empty.";

@@ -82,7 +82,9 @@ public class DocumentEditTools implements AgentToolComponent {
             if (file == null) {
                 return "Error: 文件不存在，ID=" + fileId;
             }
-            
+            String denied = ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) return denied;
+
             if (!isEditableDocument(file.getName())) {
                 return "Error: 该文件不是可编辑的文档格式: " + file.getName();
             }
@@ -141,7 +143,12 @@ public class DocumentEditTools implements AgentToolComponent {
                 if (!java.nio.file.Files.exists(projectDataDir)) {
                     java.nio.file.Files.createDirectories(projectDataDir);
                 }
-                java.nio.file.Path targetPath = projectDataDir.resolve(fileName);
+                // fileName 由 LLM 填写：不做归一化围栏的话，"../42/补充协议.docx"
+                // 会把伪造文档直接落进别家项目的目录
+                java.nio.file.Path targetPath = projectDataDir.resolve(fileName).normalize();
+                if (!targetPath.startsWith(projectDataDir.normalize())) {
+                    return "Error: 非法文件名，路径越出项目目录";
+                }
 
                 // 检查文件是否已存在，如果存在则自动重命名
                 String originalFileName = fileName;
@@ -187,6 +194,8 @@ public class DocumentEditTools implements AgentToolComponent {
                 if (file == null) {
                     return "Error: 文件不存在，ID=" + fileId;
                 }
+                String denied = ToolFileGuard.rejectIfOutsideProject(file);
+                if (denied != null) return denied;
             }
 
             // 2. 同步打开文件 (Wait for Ready)

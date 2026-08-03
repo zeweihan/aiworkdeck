@@ -1,6 +1,8 @@
 """Settings Controller - handles application settings endpoints"""
 
+import hmac
 import logging
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -22,6 +24,28 @@ logger = logging.getLogger(__name__)
 settings_bp = Blueprint(
     "settings", __name__, url_prefix="/api/settings"
 )
+
+
+def _reject_without_settings_token():
+    """
+    写设置（含 api_base_url / ai_provider_format）等于改写全局 LLM 出网目的地，
+    本机任意进程都能借此把真实 API key 和文档正文送到攻击者服务器，
+    所以改设置必须持共享口令；未配置口令时直接关闭写入面，而不是默认放开。
+
+    Returns:
+        None 表示放行，否则返回可直接 return 的错误响应
+    """
+    expected = os.getenv("PPTX_SETTINGS_TOKEN") or ""
+    if not expected:
+        return error_response(
+            "SETTINGS_TOKEN_NOT_CONFIGURED",
+            "未配置 PPTX_SETTINGS_TOKEN，设置写入接口已禁用",
+            403,
+        )
+    provided = request.headers.get("X-Settings-Token") or ""
+    if not hmac.compare_digest(provided, expected):
+        return error_response("SETTINGS_TOKEN_INVALID", "设置口令无效", 403)
+    return None
 
 
 @contextmanager
@@ -145,6 +169,10 @@ def update_settings():
             "image_aspect_ratio": "16:9"
         }
     """
+    denied = _reject_without_settings_token()
+    if denied:
+        return denied
+
     try:
         data = request.get_json()
         if not data:
@@ -272,6 +300,10 @@ def reset_settings():
     """
     POST /api/settings/reset - Reset settings to default values
     """
+    denied = _reject_without_settings_token()
+    if denied:
+        return denied
+
     try:
         settings = Settings.get_settings()
 
@@ -801,6 +833,12 @@ def run_settings_test(test_name: str):
             }
         }
     """
+    # 测试接口能用请求体里的 api_base_url 覆盖出网地址、同时沿用已存的真实 api_key，
+    # 等价于一次不落库的凭据外泄，因此与写设置同级把关
+    denied = _reject_without_settings_token()
+    if denied:
+        return denied
+
     try:
         # 获取请求体中的测试设置覆盖（如果有）
         test_settings = request.get_json() or {}

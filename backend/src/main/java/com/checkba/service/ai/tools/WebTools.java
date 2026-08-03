@@ -152,7 +152,13 @@ public class WebTools implements AgentToolComponent {
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
             url = "https://" + url;
         }
-        
+        // URL 由 LLM 填写，属不可信输入：先挡掉内网/回环/云元数据目标
+        String blocked = com.checkba.util.SsrfGuard.rejectIfBlocked(url);
+        if (blocked != null) {
+            log.warn("browse_url blocked by SSRF guard: url='{}'", url);
+            return blocked;
+        }
+
         try (com.microsoft.playwright.Playwright playwright = com.microsoft.playwright.Playwright.create()) {
             com.microsoft.playwright.Browser browser = playwright.chromium().launch(new com.microsoft.playwright.BrowserType.LaunchOptions()
                     .setHeadless(true)
@@ -162,7 +168,17 @@ public class WebTools implements AgentToolComponent {
             
             // Set User Agent
             page.setExtraHTTPHeaders(java.util.Collections.singletonMap("User-Agent", USER_AGENT));
-            
+
+            // 每个请求都复校一次：首次检查挡不住 302 跳内网，也挡不住页面自己发的子请求
+            page.route("**/*", route -> {
+                if (com.checkba.util.SsrfGuard.rejectIfBlocked(route.request().url()) != null) {
+                    log.warn("browse_url aborted a request to a blocked target: {}", route.request().url());
+                    route.abort();
+                } else {
+                    route.resume();
+                }
+            });
+
             try {
                 page.navigate(url);
                 // Wait for network to be idle or dom content loaded. 'networkidle' is good for SPAs.

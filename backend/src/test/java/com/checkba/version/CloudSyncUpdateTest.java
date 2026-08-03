@@ -565,6 +565,7 @@ class CloudSyncUpdateTest {
         }
 
         CloudConnection conn = new CloudConnection();
+        conn.setUserId(1L);
         conn.setServerUrl("file://" + cloudRoot.toAbsolutePath());
         conn.setUsername("韩泽伟");
         conn.setDisplayName("韩泽伟");
@@ -609,6 +610,7 @@ class CloudSyncUpdateTest {
         }
 
         CloudConnection conn = new CloudConnection();
+        conn.setUserId(1L);
         conn.setServerUrl("file://" + cloudRoot.toAbsolutePath());
         conn.setUsername("韩泽伟");
         conn.setDisplayName("韩泽伟");
@@ -620,7 +622,7 @@ class CloudSyncUpdateTest {
         cannedHttpGetResponse = "[{\"name\":\"脏数据（缺 id）\",\"projectType\":\"BLANK\"},"
                 + "{\"id\":" + remoteProjectId + ",\"name\":\"客户材料尽调\",\"projectType\":\"BLANK\"}]";
 
-        List<Map<String, Object>> list = cloud.listRemoteProjects(conn.getId());
+        List<Map<String, Object>> list = cloud.listRemoteProjects(conn.getId(), 1L);
         assertEquals(1, list.size(), "缺 id 的脏条目必须被跳过");
         assertEquals(remoteProjectId, ((Number) list.get(0).get("id")).longValue());
         assertEquals("客户材料尽调", list.get(0).get("name"));

@@ -53,13 +53,15 @@ public class BrowserProxyController {
         try {
             URI uri = URI.create(u);
             HttpResponse<byte[]> resp = null;
-            // 手动跟随重定向，每一跳都重新做 scheme 白名单 + SSRF 校验，避免自动跳转绕过 isBlockedTarget
+            // 手动跟随重定向，每一跳都重新做 scheme 白名单 + SSRF 校验，避免自动跳转绕过 SsrfGuard
             for (int hop = 0; hop < 5; hop++) {
                 String scheme = uri.getScheme();
                 if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
                     return ResponseEntity.status(HttpStatus.FORBIDDEN).body("仅支持 http/https");
                 }
-                if (isBlockedTarget(uri)) {
+                // 网段清单统一由 SsrfGuard 维护：本控制器原先自己判断，漏了 100.64.0.0/10
+                // （阿里云实例元数据 100.100.100.200 就在其中，能换取实例 RAM 凭证）与 IPv6 ULA
+                if (com.checkba.util.SsrfGuard.rejectIfBlocked(uri.toString()) != null) {
                     return ResponseEntity.status(HttpStatus.FORBIDDEN).body("目标地址不被允许（已禁止本地/内网地址）");
                 }
                 HttpRequest req = HttpRequest.newBuilder(uri)
@@ -108,7 +110,9 @@ public class BrowserProxyController {
 
     private String inject(String html, String baseUrl, String token) {
         String safeBase = escapeHtmlAttr(baseUrl);
-        String safeToken = token == null ? "" : token.replace("'", "\\'");
+        // 反斜杠必须先转义：只替换单引号的话，token 末尾带 \ 会把我们补的转义符本身
+        // 变成被转义的反斜杠，随后的单引号照样闭合字符串，等于在注入脚本里执行任意 JS
+        String safeToken = token == null ? "" : token.replace("\\", "\\\\").replace("'", "\\'");
 
         // 1) base：让相对路径资源能回到原站点加载
         String baseTag = "<base href=\"" + safeBase + "\">";
@@ -176,26 +180,6 @@ public class BrowserProxyController {
                 .replace("\"", "&quot;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;");
-    }
-
-    /**
-     * SSRF 防护：拒绝解析到本地/内网地址的目标，阻止代理被用来打内网服务或云元数据端点
-     * （如 169.254.169.254）。注意 followRedirects=NORMAL 下重定向到内网仍是残余风险，此处仅校验初始目标。
-     */
-    private boolean isBlockedTarget(URI uri) {
-        String host = uri.getHost();
-        if (host == null || host.isBlank()) return true;
-        try {
-            for (java.net.InetAddress addr : java.net.InetAddress.getAllByName(host)) {
-                if (addr.isLoopbackAddress() || addr.isAnyLocalAddress()
-                        || addr.isSiteLocalAddress() || addr.isLinkLocalAddress()) {
-                    return true;
-                }
-            }
-        } catch (Exception e) {
-            return true; // 解析失败按不安全处理
-        }
-        return false;
     }
 }
 

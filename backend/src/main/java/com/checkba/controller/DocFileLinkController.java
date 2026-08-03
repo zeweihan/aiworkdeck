@@ -1,6 +1,7 @@
 package com.checkba.controller;
 
 import com.checkba.service.DocFileLinkService;
+import com.checkba.service.ProjectMemberService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -13,6 +14,7 @@ import java.util.List;
 public class DocFileLinkController {
 
     private final DocFileLinkService docFileLinkService;
+    private final ProjectMemberService projectMemberService;
 
     @PostMapping
     public DocFileLinkService.DocFileLinkResult createOrAppend(
@@ -22,6 +24,7 @@ public class DocFileLinkController {
     ) {
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("请先登录");
+        requireProjectMember(projectId, userId);
 
         return docFileLinkService.createOrAppend(
                 userId,
@@ -43,11 +46,22 @@ public class DocFileLinkController {
     ) {
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("请先登录");
+        requireProjectMember(projectId, userId);
         return docFileLinkService.getByKey(userId, projectId, linkKey);
     }
 
     private Long getUserIdFromSession(String sessionId) {
         return AuthController.getUserIdFromSession(sessionId);
+    }
+
+    /**
+     * 只登录不够：返回体里带的是该项目的 ProjectFile 实体（文件名/存储路径/wpsFileId），
+     * 不校成员就等于让任何账号按 id 枚举别家项目的文件清单。
+     */
+    private void requireProjectMember(Long projectId, Long userId) {
+        if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
+            throw new IllegalArgumentException("无权限访问该项目");
+        }
     }
 
     public static class CreateOrAppendRequest {

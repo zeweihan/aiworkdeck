@@ -182,7 +182,9 @@ public class PptxTools implements AgentToolComponent {
             if (file == null) {
                 return "Error: 文件不存在，ID=" + fileId;
             }
-            
+            String denied = ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) return denied;
+
             if (!isPptxFile(file.getName())) {
                 return "Error: 该文件不是 PPTX 格式: " + file.getName();
             }
@@ -306,6 +308,8 @@ public class PptxTools implements AgentToolComponent {
                     if (parentFolder == null || !Boolean.TRUE.equals(parentFolder.getIsFolder())) {
                         return "错误：指定的父文件夹不存在或不是文件夹，ID=" + parentId;
                     }
+                    String denied = ToolFileGuard.rejectIfOutsideProject(parentFolder);
+                    if (denied != null) return denied;
                     folderPath = getFileFolderPath(parentId, 
                             projectFileRepository.findByProjectIdOrderBySortOrderAsc(projectId));
                 } catch (Exception e) {
@@ -551,6 +555,8 @@ public class PptxTools implements AgentToolComponent {
             if (file == null) {
                 return "Error: 文件不存在，ID=" + fileId;
             }
+            String denied = ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) return denied;
             if (!isPptxFile(file.getName())) {
                 return "Error: 该文件不是 PPTX 格式: " + file.getName();
             }
@@ -616,6 +622,8 @@ public class PptxTools implements AgentToolComponent {
             if (file == null) {
                 return "Error: 文件不存在，ID=" + fileId;
             }
+            String denied = ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) return denied;
             if (!isPptxFile(file.getName())) {
                 return "Error: 该文件不是 PPTX 格式: " + file.getName();
             }

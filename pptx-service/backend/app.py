@@ -255,7 +255,9 @@ if __name__ == '__main__':
         port = 5000  # Docker 容器内部固定使用 5000 端口
     else:
         port = int(os.getenv('BACKEND_PORT', 5000))
-    debug = os.getenv('FLASK_ENV', 'development') == 'development'
+    # debug 必须是显式开启项：默认值给 'development' 等于漏配 FLASK_ENV 就开着
+    # Werkzeug 调试器，未捕获异常处会暴露交互式控制台与源码
+    debug = os.getenv('FLASK_ENV') == 'development'
     
     logging.info(
         "\n"
@@ -272,4 +274,9 @@ if __name__ == '__main__':
     )
     
     # Using absolute paths for database, so WSL path issues should not occur
-    app.run(host='0.0.0.0', port=port, debug=debug, use_reloader=False)
+    # [checkba] 默认只监听回环：本服务的端点不做鉴权，桌面版随 app 起在用户机器上，
+    # 绑 0.0.0.0 等于把「按路径读写文件」的能力开放给同一局域网。
+    # 容器内需要 0.0.0.0 才能被端口映射到宿主，由 compose 显式设 PPTX_BIND_HOST=0.0.0.0，
+    # 同时把发布地址限制成 127.0.0.1，不对外网暴露。
+    bind_host = os.getenv('PPTX_BIND_HOST', '127.0.0.1')
+    app.run(host=bind_host, port=port, debug=debug, use_reloader=False)

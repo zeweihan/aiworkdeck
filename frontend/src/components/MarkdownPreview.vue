@@ -29,7 +29,9 @@ export default {
   data() {
     return {
       md: new MarkdownIt({
-        html: true,
+        // 渲染结果直接进 v-html，而内容来自他人上传的 .md 与模型输出，
+        // 放行原始 HTML 等于存储型 XSS，故禁用
+        html: false,
         linkify: true,
         typographer: true
       }),

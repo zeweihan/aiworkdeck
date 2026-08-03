@@ -18,6 +18,14 @@ public class CloudConnection {
     @EqualsAndHashCode.Include
     private Long id;
 
+    /**
+     * 连接归属人。设备令牌是长期凭证，多人共用一个后端时必须按人隔离，
+     * 否则任何登录用户都能拿别人的令牌列/克隆对方的云端项目。
+     * 本列是后加的，升级前建的旧行为空——旧行一律拒用，请重新连接一次。
+     */
+    @Column
+    private Long userId;
+
     @Column(nullable = false, length = 255)
     private String serverUrl;
 

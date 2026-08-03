@@ -9,8 +9,10 @@ services:
       context: ./mineru-service
       dockerfile: Dockerfile
     container_name: checkba-mineru-service
+    # 只发布到宿主回环：本服务不做鉴权，"8001:8000" 会绑到 0.0.0.0 对整个网络开放。
+    # 主后端与它同机通过 localhost 调用，限制回环不影响功能。
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
     environment:
       # CPU 模式配置
       - MINERU_DEVICE_MODE=cpu
@@ -40,8 +42,14 @@ services:
       context: ./pptx-service
       dockerfile: backend/Dockerfile
     container_name: checkba-pptx-service
+    # 同 mineru：不做鉴权的服务只发布到宿主回环
     ports:
-      - "5001:5000"
+      - "127.0.0.1:5001:5000"
+    environment:
+      # 容器内必须监听 0.0.0.0 端口映射才生效；对外的暴露面由上面的 127.0.0.1 发布地址控制
+      - PPTX_BIND_HOST=0.0.0.0
+      # 固定生产模式，不依赖 .env 里有没有配；漏配不能退化成开调试器
+      - FLASK_ENV=production
     env_file:
       - ./pptx-service/.env
     volumes:
@@ -67,10 +75,12 @@ services:
       context: ./easyvoice
       dockerfile: Dockerfile
     container_name: checkba-easyvoice
+    # 同上：不做鉴权的服务只发布到宿主回环
     ports:
-      - "9549:3000"
+      - "127.0.0.1:9549:3000"
     environment:
-      - DEBUG=true
+      # DEBUG 会把内部错误细节回给调用方，生产不开
+      - DEBUG=false
       # Add OPENAI_BASE_URL if you want to support LLM based TTS, otherwise optional
       # - OPENAI_BASE_URL=https://openrouter.ai/api/v1/
     volumes:

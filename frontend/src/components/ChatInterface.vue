@@ -1515,12 +1515,15 @@ export default {
 
       const icon = file.isDir ? '/static/folder-closed.png' : '/static/document.png'
       const displayName = truncateName(file.name)
+      // 文件名由项目成员自由命名（后端只挡路径分隔符），这段字符串会直接进 DOM，必须转义
+      const safeName = escapeHtml(file.name)
+      const safeDisplayName = escapeHtml(displayName)
 
       const tagHtml = `
-        <span class="context-tag-inline" contenteditable="false" data-file-id="${file.id}" data-is-dir="${file.isDir ? 'true' : 'false'}" title="${file.name}">
+        <span class="context-tag-inline" contenteditable="false" data-file-id="${file.id}" data-is-dir="${file.isDir ? 'true' : 'false'}" title="${safeName}">
           <img src="${icon}" class="tag-icon"/>
           <span class="tag-at">@</span>
-          <span class="tag-name">${displayName}</span>
+          <span class="tag-name">${safeDisplayName}</span>
           <span class="tag-close">×</span>
         </span>&nbsp;`.replace(/\s+/g, ' ').trim()
 

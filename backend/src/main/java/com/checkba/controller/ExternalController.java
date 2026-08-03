@@ -31,7 +31,15 @@ public class ExternalController {
     private StockCodeService stockCodeService;
 
     @PostMapping("/company/basic")
-    public ResponseEntity<?> getCompanyBasicInfo(@RequestBody CompanySearchRequest request) {
+    public ResponseEntity<?> getCompanyBasicInfo(@RequestBody CompanySearchRequest request,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        // 这条接口花的是账号配置里的企查查/Tushare 付费额度，并把结果写进全账号共用的
+        // 公司镜像表；匿名可调既能烧额度，也能往别人的尽调标的列表里塞条目
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            Map<String, String> error = new HashMap<>();
+            error.put("error", "请先登录");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);
+        }
         if (request.getName() == null || request.getName().isEmpty()) {
             Map<String, String> error = new HashMap<>();
             error.put("error", "Company name is required");

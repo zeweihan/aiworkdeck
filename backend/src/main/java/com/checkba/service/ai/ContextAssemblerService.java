@@ -224,8 +224,8 @@ public class ContextAssemblerService {
                         content = content.substring(0, maxCharsPerFile) + "\n... [TRUNCATED - File too long]";
                     }
                     systemText.append("<file id=\"").append(item.getId())
-                              .append("\" name=\"").append(item.getName()).append("\"><![CDATA[\n");
-                    systemText.append(content != null ? content : "[Empty or unreadable file]");
+                              .append("\" name=\"").append(attrSafe(item.getName())).append("\"><![CDATA[\n");
+                    systemText.append(content != null ? fenceSafe(content) : "[Empty or unreadable file]");
                     systemText.append("\n]]></file>\n");
                     totalFileCount++;
                 }
@@ -258,13 +258,13 @@ public class ContextAssemblerService {
                 }
 
                 systemText.append("<active_document id=\"").append(activeContext.getId())
-                          .append("\" name=\"").append(activeContext.getName()).append("\"><![CDATA[\n");
-                systemText.append(content);
+                          .append("\" name=\"").append(attrSafe(activeContext.getName())).append("\"><![CDATA[\n");
+                systemText.append(fenceSafe(content));
                 systemText.append("\n]]></active_document>\n");
             } else {
                 // 正文暂时读不到也要保留文档标识，模型仍可用 doc_get_document_text 等工具直接读
                 systemText.append("<active_document id=\"").append(activeContext.getId())
-                          .append("\" name=\"").append(activeContext.getName())
+                          .append("\" name=\"").append(attrSafe(activeContext.getName()))
                           .append("\">[正文暂不可读，可用 doc_get_document_text 直接分段读取]</active_document>\n");
             }
         }
@@ -375,6 +375,22 @@ public class ContextAssemblerService {
         return messages;
     }
     
+    /**
+     * 嵌进 system message 的文档正文是不可信输入（对方律师产出的 docx、共享目录里的来件）。
+     * 正文里出现 "]]>" 会提前闭合自己的 CDATA，其后的文字在模型看来与本服务自己拼的
+     * 「# SYSTEM ENFORCEMENT」块同属 system 角色——等于让一份文档以最高信任位下指令。
+     */
+    private static String fenceSafe(String content) {
+        return content == null ? "" : content.replace("]]>", "]]&gt;");
+    }
+
+    /**
+     * 文件名同样不可信：双引号能撑破 name="..." 属性，接着伪造出新的标签闭合与容器。
+     */
+    private static String attrSafe(String name) {
+        return name == null ? "" : name.replace("\"", "&quot;").replace("<", "&lt;").replace(">", "&gt;");
+    }
+
     /** 活跃文档展示名：名字缺失时回退为通称，避免给模型看到「《null》」。 */
     private static String activeDocDisplayName(String name) {
         return (name == null || name.isBlank()) ? "当前文档" : "《" + name + "》";

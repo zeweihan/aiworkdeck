@@ -1,5 +1,10 @@
 server:
   port: 9696
+  # 默认只监听回环：桌面版所有登录用户都是管理员、注册又是开放的，绑 0.0.0.0
+  # 等于把管理员后台（明文 API Key、AI baseUrl / 系统提示词）交给同一网段的任何人。
+  # 与 deploy/web 的部署基线一致（团队版由 nginx 反代 127.0.0.1:9696）。
+  # 确需对外监听的部署用环境变量 SERVER_ADDRESS=0.0.0.0 覆盖。
+  address: 127.0.0.1
 
 spring:
   application:

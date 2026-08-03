@@ -102,6 +102,12 @@ public class ClientInvitationService {
     }
 
     private String ensureLongCode(ProjectInvitation invitation) {
+        // 复用的是同一行邀请：律师重新发起邀请就是明示要它再次生效，
+        // 否则曾被作废过的项目再邀请客户只会拿到一个不能用的码。
+        if (invitation.getRevokedAt() != null) {
+            invitation.setRevokedAt(null);
+            invitationRepository.save(invitation);
+        }
         String existingCode = invitation.getAccessCode();
         if (existingCode.length() < 10) {
             String newCode = generateUniqueCode();
@@ -154,7 +160,13 @@ public class ClientInvitationService {
     }
 
     public ProjectInvitation validateCode(String code) {
-        return invitationRepository.findByAccessCode(code)
+        ProjectInvitation invitation = invitationRepository.findByAccessCode(code)
                 .orElseThrow(() -> new IllegalArgumentException("访问码无效"));
+        // 已作废的码必须在这里挡住：过了这一关 createClientUser 会无条件把持码人
+        // 重新加成 CLIENT 成员，被移出的客户就自己回到项目里了。
+        if (invitation.getRevokedAt() != null) {
+            throw new IllegalArgumentException("访问码已失效");
+        }
+        return invitation;
     }
 }

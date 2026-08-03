@@ -17,8 +17,9 @@ import java.util.Map;
  * 云端协作接口。纯转发层——业务语义全在 CloudSyncService，这里只做鉴权+参数搬运+响应封装。
  * 响应封装/异常处理照 VersionController 抄一份：HTTP 一律 200，用 code 区分成败。
  *
- * 鉴权分两档：连接级端点（连接/断开/连接列表/远端项目列表/接入）只要求登录——
- * 云端连接是账号级资源，不挂在某个项目下；项目级端点（共享/状态/上传/更新/裁决/成员代理）
+ * 鉴权分两档：连接级端点（连接/断开/连接列表/远端项目列表/接入）要求登录，并且
+ * 只能操作自己名下的连接——连接里存着长期设备令牌，多人共用一个后端时不按人隔离，
+ * 任何账号都能借别人的令牌列/克隆对方的云端项目；项目级端点（共享/状态/上传/更新/裁决/成员代理）
  * 走 requireMemberNonClient 三连，同版本记录接口一样拒绝 CLIENT 角色；其中改写仓库或
  * 云端成员的写端点再追加 hasWritePermission（requireWriteMember，拒 READ_ONLY）。
  */
@@ -47,9 +48,9 @@ public class CloudController {
     public ResponseEntity<Map<String, Object>> connect(
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireLogin(sessionId);
+        Long userId = requireLogin(sessionId);
         CloudConnection conn = cloudSyncService.connect(
-                body.get("serverUrl"), body.get("username"), body.get("password"), body.get("deviceName"));
+                body.get("serverUrl"), body.get("username"), body.get("password"), body.get("deviceName"), userId);
         Map<String, Object> data = new HashMap<>();
         data.put("connectionId", conn.getId());
         data.put("username", conn.getUsername());
@@ -61,8 +62,8 @@ public class CloudController {
     @GetMapping("/connections")
     public ResponseEntity<Map<String, Object>> connections(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireLogin(sessionId);
-        List<Map<String, Object>> list = cloudSyncService.listConnections().stream()
+        Long userId = requireLogin(sessionId);
+        List<Map<String, Object>> list = cloudSyncService.listConnections(userId).stream()
                 .map(this::connectionListItem)
                 .toList();
         return ok(Map.of("connections", list));
@@ -72,8 +73,8 @@ public class CloudController {
     public ResponseEntity<Map<String, Object>> disconnect(
             @PathVariable Long id,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireLogin(sessionId);
-        cloudSyncService.disconnect(id);
+        Long userId = requireLogin(sessionId);
+        cloudSyncService.disconnect(id, userId);
         return ok(Map.of());
     }
 
@@ -81,8 +82,8 @@ public class CloudController {
     public ResponseEntity<Map<String, Object>> remoteProjects(
             @PathVariable Long id,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireLogin(sessionId);
-        return ok(Map.of("projects", cloudSyncService.listRemoteProjects(id)));
+        Long userId = requireLogin(sessionId);
+        return ok(Map.of("projects", cloudSyncService.listRemoteProjects(id, userId)));
     }
 
     @PostMapping("/accept")

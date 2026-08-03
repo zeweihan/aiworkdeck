@@ -237,7 +237,7 @@ class CloudSyncUploadTest {
                 {"code":0,"data":{"tokenId":1,"token":"awdt_abc","userId":5,
                 "username":"hanzewei","displayName":"韩泽伟"}}
                 """;
-        CloudConnection conn = cloud.connect("http://server:9696", "hanzewei", "pw", "MacBook");
+        CloudConnection conn = cloud.connect("http://server:9696", "hanzewei", "pw", "MacBook", 1L);
         assertEquals("awdt_abc", conn.getDeviceToken());
         assertTrue(lastHttpUrl.endsWith("/api/auth/device-token"));
     }
@@ -311,7 +311,7 @@ class CloudSyncUploadTest {
                 {"code":0,"data":{"tokenId":42,"token":"awdt_xyz","userId":5,
                 "username":"hanzewei","displayName":"韩泽伟"}}
                 """;
-        CloudConnection conn = cloud.connect("http://server:9696", "hanzewei", "pw", "MacBook");
+        CloudConnection conn = cloud.connect("http://server:9696", "hanzewei", "pw", "MacBook", 1L);
 
         ProjectRemote remote = new ProjectRemote();
         remote.setProjectId(7L);
@@ -323,7 +323,7 @@ class CloudSyncUploadTest {
         cannedResponse = """
                 {"code":0,"message":"已撤销"}
                 """;
-        cloud.disconnect(conn.getId());
+        cloud.disconnect(conn.getId(), 1L);
 
         assertTrue(lastHttpUrl.endsWith("/device-token/42/revoke"));
         assertEquals("awdt_xyz", lastHttpHeaderToken);
@@ -337,6 +337,7 @@ class CloudSyncUploadTest {
         conn.setServerUrl("http://server:9696");
         conn.setUsername("韩泽伟");
         conn.setDisplayName("韩泽伟");
+        conn.setUserId(1L);
         conn.setDeviceToken("awdt_notoken");
         conn.setTokenId(null);
         conn.setCreatedAt(LocalDateTime.now());
@@ -350,7 +351,7 @@ class CloudSyncUploadTest {
         projectRemoteRepo.save(remote);
 
         lastHttpUrl = null;
-        cloud.disconnect(conn.getId());
+        cloud.disconnect(conn.getId(), 1L);
 
         assertNull(lastHttpUrl);
         assertFalse(connections.containsKey(conn.getId()));

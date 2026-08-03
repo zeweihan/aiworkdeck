@@ -25,6 +25,25 @@ class PptxFormatError(Exception):
     """格式操作错误（带上下文信息，控制器直接回给调用方）"""
 
 
+def _resolve_output_path(pptx_path: str, output_path: Optional[str]) -> str:
+    """
+    [checkba] output_path 只允许落在源文件所在目录内。
+
+    端点不做鉴权，若放任调用方指定绝对路径，一次请求就能覆写任意文件
+    （容器/桌面机上的配置、脚本、密钥），等同远程改文件。
+    合法用法只有「改完写回原处或写到旁边」，因此按目录锁死即可，无需额外配置。
+    """
+    if not output_path:
+        return pptx_path
+    base_dir = os.path.realpath(os.path.dirname(os.path.abspath(pptx_path)))
+    resolved = os.path.realpath(os.path.abspath(output_path))
+    if os.path.dirname(resolved) != base_dir:
+        raise PptxFormatError('output_path 只能位于源文件所在目录内')
+    if not resolved.lower().endswith('.pptx'):
+        raise PptxFormatError('output_path 仅支持 .pptx 文件')
+    return resolved
+
+
 def _load(pptx_path: str) -> Presentation:
     if not pptx_path or not os.path.exists(pptx_path):
         raise PptxFormatError(f"文件不存在: {pptx_path}")
@@ -105,6 +124,8 @@ def apply_ops(pptx_path: str, ops: List[Dict[str, Any]],
     返回每个 op 的执行结果。
     """
     prs = _load(pptx_path)
+    # 先定 output_path 再干活：越界就直接拒，不要白改一通最后写不出去
+    out = _resolve_output_path(pptx_path, output_path)
     results = []
     for i, op in enumerate(ops or []):
         action = op.get('action')
@@ -120,7 +141,6 @@ def apply_ops(pptx_path: str, ops: List[Dict[str, Any]],
             logger.exception(f"op #{i} ({action}) failed")
             results.append({'index': i, 'action': action, 'ok': False, 'error': str(e)})
 
-    out = output_path or pptx_path
     prs.save(out)
     return {'output_path': out, 'applied': sum(1 for r in results if r['ok']),
             'failed': sum(1 for r in results if not r['ok']), 'results': results}

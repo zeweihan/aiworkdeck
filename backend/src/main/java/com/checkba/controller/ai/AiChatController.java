@@ -34,6 +34,7 @@ public class AiChatController {
     private final com.checkba.service.ai.ConversationFileChangeService conversationFileChangeService;
     private final com.checkba.repository.TokenUsageRepository tokenUsageRepository;
     private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
+    private final com.checkba.service.ProjectMemberService projectMemberService;
 
     public AiChatController(
             AiChatService aiChatService,
@@ -44,7 +45,8 @@ public class AiChatController {
             SystemSettingService systemSettingService,
             com.checkba.service.ai.ConversationFileChangeService conversationFileChangeService,
             com.checkba.repository.TokenUsageRepository tokenUsageRepository,
-            com.checkba.service.ai.AgentRunStateService agentRunStateService) {
+            com.checkba.service.ai.AgentRunStateService agentRunStateService,
+            com.checkba.service.ProjectMemberService projectMemberService) {
         this.aiChatService = aiChatService;
         this.aiAssistantService = aiAssistantService;
         this.projectAiMessageService = projectAiMessageService;
@@ -54,41 +56,62 @@ public class AiChatController {
         this.conversationFileChangeService = conversationFileChangeService;
         this.tokenUsageRepository = tokenUsageRepository;
         this.agentRunStateService = agentRunStateService;
+        this.projectMemberService = projectMemberService;
     }
 
     @PostMapping("/chat")
-    public AiChatResponse chat(@RequestBody AiChatRequest request, @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+    public ResponseEntity<?> chat(@RequestBody AiChatRequest request, @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         log.info("Received AI chat request for project {}: {} (model={})", request.getProjectId(), request.getMessage(), request.getModel());
 
-        Long userId = null;
-        if (sessionId != null) {
-            userId = AuthController.getUserIdFromSession(sessionId);
+        // 越权校验：projectId 由请求体给定，未登录也能跑，检索会命中该项目的向量库
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(401).body("请先登录");
+        }
+        Long projectId = parseProjectId(request.getProjectId());
+        if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
+            return ResponseEntity.status(403).body("无权访问该项目");
         }
 
-        return aiChatService.chat(request, userId);
+        return ResponseEntity.ok(aiChatService.chat(request, userId));
+    }
+
+    private Long parseProjectId(String projectId) {
+        try {
+            return Long.parseLong(projectId);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     @GetMapping("/history")
-    public java.util.List<com.checkba.model.entity.ProjectAiMessage> getChatHistory(
+    public ResponseEntity<?> getChatHistory(
             @RequestParam(required = false) Long projectId,
             @RequestParam(required = false) String conversationId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
 
+        // 越权校验：conversationId 分支此前在读 session 之前就返回了消息，
+        // projectId 分支的 userId=null 又会退化成"整个项目所有人的消息"，
+        // 两条路都能匿名读到别家律所的对话正文与工具输出（含文档原文）
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(401).body("请先登录");
+        }
+
         // If conversationId is provided, return specific messages
         if (StringUtils.hasText(conversationId)) {
-             return projectAiMessageService.listByConversationId(conversationId);
+             if (!projectAiMessageService.isConversationOwnedBy(conversationId, userId)) {
+                 return ResponseEntity.status(403).body("无权查看该会话");
+             }
+             return ResponseEntity.ok(projectAiMessageService.listByConversationId(conversationId));
         }
 
         // Fallback (or deprecated): List all messages for project/user if conversationId is missing
         // This keeps backward compatibility for now, or returns empty list if we want to enforce sessions.
-        Long userId = null;
-        if (sessionId != null) {
-            userId = AuthController.getUserIdFromSession(sessionId);
-        }
         if (projectId != null) {
-             return projectAiMessageService.listByProjectAndUser(projectId, userId);
+             return ResponseEntity.ok(projectAiMessageService.listByProjectAndUser(projectId, userId));
         }
-        return java.util.Collections.emptyList();
+        return ResponseEntity.ok(java.util.Collections.emptyList());
     }
 
     @GetMapping("/conversations")
@@ -111,7 +134,13 @@ public class AiChatController {
      * Get conversation metadata: file changes and token usage for historical display.
      */
     @GetMapping("/conversation/{conversationId}/metadata")
-    public ResponseEntity<?> getConversationMetadata(@PathVariable String conversationId) {
+    public ResponseEntity<?> getConversationMetadata(@PathVariable String conversationId,
+                                                     @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        // 归属校验：文件变动清单会暴露他人项目的文件名，此前此接口连 session 都不读
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null || !projectAiMessageService.isConversationOwnedBy(conversationId, userId)) {
+            return ResponseEntity.status(403).body("无权查看该会话");
+        }
         try {
             // Get file changes
             var fileChanges = conversationFileChangeService.findByConversationId(conversationId);

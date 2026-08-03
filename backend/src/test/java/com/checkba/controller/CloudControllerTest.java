@@ -52,7 +52,7 @@ class CloudControllerTest {
             IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                     () -> controller.connections(null));
             assertEquals("未登录", ex.getMessage());
-            verify(cloudSyncService, never()).listConnections();
+            verify(cloudSyncService, never()).listConnections(anyLong());
         }
     }
 
@@ -63,7 +63,7 @@ class CloudControllerTest {
 
             assertThrows(IllegalArgumentException.class,
                     () -> controller.connect(Map.of("serverUrl", "https://x"), null));
-            verify(cloudSyncService, never()).connect(any(), any(), any(), any());
+            verify(cloudSyncService, never()).connect(any(), any(), any(), any(), any());
         }
     }
 
@@ -157,7 +157,7 @@ class CloudControllerTest {
             conn.setDisplayName("张三");
             conn.setDeviceToken("super-secret-token");
             conn.setCreatedAt(LocalDateTime.now());
-            when(cloudSyncService.connect("https://cloud.example.com", "zhangsan", "pw123", "我的电脑"))
+            when(cloudSyncService.connect("https://cloud.example.com", "zhangsan", "pw123", "我的电脑", USER_ID))
                     .thenReturn(conn);
 
             var resp = controller.connect(Map.of(
@@ -189,7 +189,7 @@ class CloudControllerTest {
             conn.setDisplayName("张三");
             conn.setDeviceToken("super-secret-token-should-never-leak");
             conn.setCreatedAt(LocalDateTime.now());
-            when(cloudSyncService.listConnections()).thenReturn(List.of(conn));
+            when(cloudSyncService.listConnections(USER_ID)).thenReturn(List.of(conn));
 
             var resp = controller.connections("sess");
 

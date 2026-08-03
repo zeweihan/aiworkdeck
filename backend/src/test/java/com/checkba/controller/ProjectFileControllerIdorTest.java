@@ -38,6 +38,7 @@ class ProjectFileControllerIdorTest {
             // 用户是项目 1 的合法成员
             when(projectMemberService.hasReadPermission(1L, 1L)).thenReturn(true);
             when(projectMemberService.isClient(1L, 1L)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(1L, 1L)).thenReturn(true);
             // 但目标文件属于项目 999
             ProjectFile foreign = new ProjectFile();
             foreign.setId(50L);
@@ -60,6 +61,7 @@ class ProjectFileControllerIdorTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
             when(projectMemberService.hasReadPermission(1L, 1L)).thenReturn(true);
             when(projectMemberService.isClient(1L, 1L)).thenReturn(false);
+            when(projectMemberService.hasWritePermission(1L, 1L)).thenReturn(true);
             ProjectFile own = new ProjectFile();
             own.setId(50L);
             own.setProjectId(1L);

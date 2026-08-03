@@ -5,6 +5,12 @@
 # 设计目标：零外部依赖启动——不需要 PostgreSQL，数据落在用户主目录的 H2 文件库。
 # 向量检索由 PgVectorConfig 自动降级为内存存储（PG 不可达时的既有回退路径）。
 
+# 单机模式只服务本机 Electron 壳（渲染层固定连 localhost:9696）。
+# 这里显式钉死回环：本 profile 同时开了 allow-all-users，一旦监听到 0.0.0.0，
+# 同一网段（办公 wifi、酒店、客户现场）的任何人都能注册账号并直接拿到管理员权限。
+server:
+  address: 127.0.0.1
+
 spring:
   datasource:
     driver-class-name: org.h2.Driver
@@ -26,3 +32,10 @@ spring:
 security:
   admin:
     allow-all-users: true
+    # 单机本地默认口令，与向导页提示一致。云端 profile 不设此项：
+    # DataInitializer 届时随机生成一次性强口令，避免服务器出现众所周知的默认口令。
+    initial-password: "123"
+  # IDE 化「打开本机文件夹作为项目」。单机版的「服务器」就是用户自己的电脑，读自己的磁盘正是本意；
+  # 共享部署里同一个接口等于让任意租户挂载任意绝对路径当项目根，故云端 profile 不设此项（默认 false）。
+  local-folder-projects:
+    enabled: true

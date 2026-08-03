@@ -26,7 +26,8 @@ import static org.mockito.Mockito.*;
  * - completed 标记显式存在时以它为准（reset 后 "false" → 向导重新开放，
  *   即使 system_setting 非空）；
  * - 标记不存在的存量部署仍按"保存过任何配置即已初始化"兜底（防匿名滥用）；
- * - /reset 仅 admin 会话可调。
+ * - /reset 仅 admin 会话可调；
+ * - 向导提交只在全新安装时匿名放行，reset 重开的窗口需管理员会话。
  */
 @ExtendWith(MockitoExtension.class)
 class WizardControllerTest {
@@ -73,6 +74,58 @@ class WizardControllerTest {
         Map<String, Object> body = (Map<String, Object>) resp.getBody();
         assertNotNull(body);
         assertEquals(true, body.get("initialized"));
+    }
+
+    private static AdminConfigController.AdminConfigUpdateRequest providerRequest() {
+        AdminConfigController.AiConfig ai = new AdminConfigController.AiConfig();
+        ai.setActiveProvider("OPENROUTER");
+        AdminConfigController.AdminConfigUpdateRequest req =
+                new AdminConfigController.AdminConfigUpdateRequest();
+        req.setAi(ai);
+        return req;
+    }
+
+    @Test
+    void initializeAllowsAnonymousOnFreshInstall() {
+        // 全新安装：标记从未写过且无任何配置 → 向导本职，匿名放行一次
+        when(systemSettingService.get(WizardController.KEY_WIZARD_COMPLETED, null)).thenReturn(null);
+        when(systemSettingRepository.count()).thenReturn(0L);
+
+        ResponseEntity<?> resp = newController().initialize(null, providerRequest());
+        assertEquals(200, resp.getStatusCode().value());
+        verify(systemSettingService).setMany(
+                argThat((Map<String, String> m) ->
+                        "true".equals(m.get(WizardController.KEY_WIZARD_COMPLETED))));
+    }
+
+    @Test
+    void initializeAfterResetRequiresAdminSession() {
+        // reset 打开的窗口不能是匿名写入口：否则任何人都能改写 AI baseUrl / 系统提示词
+        when(systemSettingService.get(WizardController.KEY_WIZARD_COMPLETED, null)).thenReturn("false");
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession(null)).thenReturn(null);
+
+            ResponseEntity<?> resp = newController().initialize(null, providerRequest());
+            assertEquals(403, resp.getStatusCode().value());
+            verify(systemSettingService, never()).setMany(anyMap());
+        }
+    }
+
+    @Test
+    void initializeAfterResetAcceptsAdminSession() {
+        when(systemSettingService.get(WizardController.KEY_WIZARD_COMPLETED, null)).thenReturn("false");
+
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess-admin")).thenReturn(1L);
+            User admin = new User();
+            admin.setUsername("admin");
+            when(userRepository.findById(1L)).thenReturn(Optional.of(admin));
+            when(adminAccessService.isAdmin(admin)).thenReturn(true);
+
+            ResponseEntity<?> resp = newController().initialize("sess-admin", providerRequest());
+            assertEquals(200, resp.getStatusCode().value());
+        }
     }
 
     @Test

@@ -10,4 +10,5 @@ import java.util.Optional;
 public interface ProjectInvitationRepository extends JpaRepository<ProjectInvitation, Long> {
     Optional<ProjectInvitation> findByAccessCode(String accessCode);
     Optional<ProjectInvitation> findByProjectIdAndType(Long projectId, String type);
+    Optional<ProjectInvitation> findByProjectIdAndRelatedUserId(Long projectId, Long relatedUserId);
 }
