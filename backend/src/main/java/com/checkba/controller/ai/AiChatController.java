@@ -100,7 +100,9 @@ public class AiChatController {
 
         // If conversationId is provided, return specific messages
         if (StringUtils.hasText(conversationId)) {
-             if (!projectAiMessageService.isConversationOwnedBy(conversationId, userId)) {
+             // 用「可用」而非「归属」：新会话还没有消息，前端一进项目就会来拉一次，
+             // 拿严格归属判会把每个新会话都挡成 403
+             if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
                  return ResponseEntity.status(403).body("无权查看该会话");
              }
              return ResponseEntity.ok(projectAiMessageService.listByConversationId(conversationId));
@@ -138,7 +140,7 @@ public class AiChatController {
                                                      @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         // 归属校验：文件变动清单会暴露他人项目的文件名，此前此接口连 session 都不读
         Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null || !projectAiMessageService.isConversationOwnedBy(conversationId, userId)) {
+        if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
             return ResponseEntity.status(403).body("无权查看该会话");
         }
         try {

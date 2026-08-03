@@ -140,6 +140,21 @@ public class ProjectAiMessageService {
                 .orElse(false);
     }
 
+    /**
+     * 会话是否可被该用户使用：已归属于他，或还没有任何消息（新会话，尚无主）。
+     *
+     * 前端进入项目就先生成 conversationId 并拉历史/开流，此时一条消息都还没落库，
+     * 用 isConversationOwnedBy 判会得到 false——那是「归属判定」，不是「可用判定」，
+     * 两者混用会把每个新会话都挡成 403（实测：一进项目 AI 面板就报无权）。
+     * 读写类接口一律用本方法；只有明确的破坏性操作（如回滚他人会话）才用严格归属。
+     */
+    public boolean canUseConversation(String conversationId, Long userId) {
+        if (userId == null || conversationId == null) return false;
+        return repository.findFirstByConversationId(conversationId)
+                .map(m -> userId.equals(m.getUserId()))
+                .orElse(true);
+    }
+
     public List<java.util.Map<String, Object>> listConversations(Long projectId, Long userId) {
         List<Object[]> results = repository.findConversationSummaries(projectId, userId);
         return results.stream()

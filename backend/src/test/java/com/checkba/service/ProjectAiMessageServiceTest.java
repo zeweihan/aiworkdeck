@@ -103,4 +103,36 @@ class ProjectAiMessageServiceTest {
         ArgumentCaptor<ProjectAiMessage> captor = ArgumentCaptor.forClass(ProjectAiMessage.class);
         verify(repository, never()).save(captor.capture());
     }
+
+    /**
+     * 回归：安全加固时把「会话可用」误用成「会话归属」，新会话（还没有任何消息）
+     * 被判为无主，用户一进项目、AI 面板拉历史就 403，连带整个页面初始化中断
+     * （app-e2e 表现为版本时间线不刷新，J10 整条链路失败）。
+     * 两个语义必须分开：读写用可用性，破坏性操作用严格归属。
+     */
+    @Test
+    void 新会话尚无消息时可用但不判定归属() {
+        when(repository.findFirstByConversationId("conv-new")).thenReturn(Optional.empty());
+
+        assertTrue(service.canUseConversation("conv-new", 7L), "新会话必须可用，否则每个新会话都被挡成 403");
+        assertFalse(service.isConversationOwnedBy("conv-new", 7L), "无消息的会话没有归属人");
+    }
+
+    @Test
+    void 已有消息的会话只有首条作者可用() {
+        ProjectAiMessage first = new ProjectAiMessage();
+        first.setUserId(7L);
+        when(repository.findFirstByConversationId("conv-owned")).thenReturn(Optional.of(first));
+
+        assertTrue(service.canUseConversation("conv-owned", 7L));
+        assertFalse(service.canUseConversation("conv-owned", 8L), "别人的会话不可用");
+        assertTrue(service.isConversationOwnedBy("conv-owned", 7L));
+        assertFalse(service.isConversationOwnedBy("conv-owned", 8L));
+    }
+
+    @Test
+    void 未登录一律不可用() {
+        assertFalse(service.canUseConversation("conv-new", null));
+        assertFalse(service.canUseConversation(null, 7L));
+    }
 }
