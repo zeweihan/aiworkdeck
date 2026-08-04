@@ -96,29 +96,26 @@ export default {
 
 <style lang="scss" scoped>
 .draft-list {
-  padding: 12rpx 20rpx; border-bottom: 1px solid $awd-chrome-line; background: transparent;
+  padding: 12rpx 20rpx; border-bottom: 1px solid #eee; background: #FBFAF8;
 }
 .draft-list-header {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 8rpx;
 }
-.draft-list-title { font-size: 24rpx; color: $awd-text-on-dark-2; font-weight: 600; }
+.draft-list-title { font-size: 24rpx; color: #666; font-weight: 600; }
 .draft-new-btn { flex-shrink: 0; padding: 8rpx 18rpx; font-size: 22rpx; }
 .draft-row {
   display: flex; align-items: center; justify-content: space-between;
   padding: 10rpx 0;
 }
 .draft-row-main { display: flex; flex-direction: column; gap: 4rpx; min-width: 0; }
-.draft-row-name { font-size: 26rpx; color: $awd-text-on-dark; }
-.draft-row-date { font-size: 22rpx; color: $awd-text-on-dark-3; }
+.draft-row-name { font-size: 26rpx; color: #222; }
+.draft-row-date { font-size: 22rpx; color: #999; }
 .draft-row-btn { flex-shrink: 0; padding: 8rpx 18rpx; font-size: 22rpx; }
 
-/* 深底（面板内）按钮基调；弹窗（浮层白卡）里的按钮在下方覆写回浅色 */
 .awd-btn { padding: 10rpx 20rpx; border-radius: 6rpx; font-size: 24rpx; }
-.awd-btn-primary { background: rgba($awd-mint, 0.12); border: 1px solid $awd-mint; color: $awd-mint; }
-.awd-btn-secondary { background: transparent; border: 1px solid $awd-chrome-active; color: $awd-text-on-dark-2; }
-.awd-dialog .awd-btn-primary { background: #12344D; border: none; color: #fff; }
-.awd-dialog .awd-btn-secondary { background: #f0f0f0; border: none; color: #333; }
+.awd-btn-primary { background: #12344D; color: #fff; }
+.awd-btn-secondary { background: #f0f0f0; color: #333; }
 
 .awd-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.4);

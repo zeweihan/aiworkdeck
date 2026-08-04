@@ -82,9 +82,9 @@
           max="50" 
           show-value 
           block-size="12"
-          activeColor="#5BD197"
-          backgroundColor="#2D5240"
-          block-color="#5BD197"
+          activeColor="#1A5336"
+          backgroundColor="#e5e7eb"
+          block-color="#1A5336"
         />
       </view>
 
@@ -101,9 +101,9 @@
           max="50" 
           show-value 
           block-size="12"
-          activeColor="#5BD197"
-          backgroundColor="#2D5240"
-          block-color="#5BD197"
+          activeColor="#1A5336"
+          backgroundColor="#e5e7eb"
+          block-color="#1A5336"
         />
       </view>
       
@@ -120,9 +120,9 @@
           max="50" 
           show-value 
           block-size="12"
-          activeColor="#5BD197"
-          backgroundColor="#2D5240"
-          block-color="#5BD197"
+          activeColor="#1A5336"
+          backgroundColor="#e5e7eb"
+          block-color="#1A5336"
         />
       </view>
     </view>
@@ -443,25 +443,29 @@ export default {
 }
 </script>
 
-<style scoped lang="scss">
+<style scoped>
 .easy-voice-pane {
   height: 100%;
-  background-color: transparent; /* 继承左栏 $awd-chrome-panel */
+  background-color: #f9fafb;
   padding: 16px;
   box-sizing: border-box;
 }
 
 .section {
   margin-bottom: 24px;
-  background: $awd-chrome-hover;
+  background: #fff; /* Keep background but remove border */
+  padding: 0; /* Remove internal padding if using 'gap' approach, or keep it */
   padding: 12px;
   border-radius: 8px;
+  /* border: 1px solid #e5e7eb; REMOVED border */
 }
 
+/* Optional: Add a subtle shadow instead of border, or just keep it flat as per "compact" request */
 .section.no-border {
     border: none;
-    box-shadow: none;
-    background: $awd-chrome-hover;
+    box-shadow: none; /* Make it very clean */
+    background: transparent; /* Or #fff if we want card style without border */
+    background: #fff;
 }
 
 .section-header {
@@ -474,7 +478,7 @@ export default {
 .section-title {
   font-size: 13px;
   font-weight: 600;
-  color: $awd-text-on-dark-2;
+  color: #374151;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -486,36 +490,34 @@ export default {
 
 .mini-btn {
     padding: 3px 8px;
-    background: transparent;
-    border: 1px solid $awd-chrome-active;
+    background: #fff;
+    border: 1px solid #e5e7eb;
     border-radius: 4px;
     font-size: 11px;
     cursor: pointer;
-    color: $awd-text-on-dark-2;
+    color: #4b5563;
     transition: all 0.2s;
 }
 .mini-btn:hover {
-    background: $awd-chrome-active;
-    border-color: $awd-chrome-active;
-    color: $awd-text-on-dark;
+    background: #f3f4f6;
+    border-color: #d1d5db;
 }
 
 .voice-textarea {
   width: 100%;
   height: 140px;
-  border: 1px solid $awd-chrome-active;
+  border: 1px solid #e5e7eb;
   border-radius: 6px;
   padding: 12px;
   font-size: 14px;
   line-height: 1.6;
   box-sizing: border-box;
-  background: $awd-chrome-hover;
-  color: $awd-text-on-dark;
+  background: #ffffff;
   resize: none;
   transition: border-color 0.2s;
 }
 .voice-textarea:focus {
-    border-color: $awd-mint;
+    border-color: #1A5336;
     outline: none;
 }
 
@@ -528,7 +530,7 @@ export default {
 
 .label {
   font-size: 12px;
-  color: $awd-text-on-dark-3;
+  color: #6b7280;
   margin-bottom: 6px;
   display: block;
   font-weight: 500;
@@ -538,9 +540,9 @@ export default {
 .voice-select-trigger {
     width: 100%;
     height: 40px;
-    border: 1px solid $awd-chrome-active;
+    border: 1px solid #d1d5db;
     border-radius: 6px;
-    background: $awd-chrome-hover;
+    background: #fff;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -550,18 +552,18 @@ export default {
     transition: all 0.2s;
 }
 .voice-select-trigger:active {
-    border-color: $awd-mint;
+    border-color: #1A5336;
 }
 .selected-text {
     font-size: 14px;
-    color: $awd-text-on-dark;
+    color: #111827;
 }
 .selected-text .placeholder {
-    color: $awd-text-on-dark-3;
+    color: #9ca3af;
 }
 .select-arrow {
     font-size: 10px;
-    color: $awd-text-on-dark-3;
+    color: #6b7280;
 }
 
 /* Dropdown Drawer */
@@ -570,10 +572,10 @@ export default {
     top: 100%;
     left: 0;
     width: 100%;
-    background: $awd-chrome-hover;
-    border: 1px solid $awd-chrome-active;
+    background: #fff;
+    border: 1px solid #e5e7eb;
     border-radius: 8px;
-    box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    box-shadow: 0 4px 20px rgba(0,0,0,0.1);
     z-index: 100;
     margin-top: 4px;
     overflow: hidden;
@@ -592,18 +594,17 @@ export default {
 
 .voice-search-box {
     padding: 8px;
-    border-bottom: 1px solid $awd-chrome-line;
+    border-bottom: 1px solid #f3f4f6;
 }
 .voice-search-input {
     width: 100%;
     height: 32px;
-    background: $awd-chrome-panel;
-    border: 1px solid $awd-chrome-active;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
     border-radius: 4px;
     padding: 0 8px;
     font-size: 13px;
     box-sizing: border-box;
-    color: $awd-text-on-dark;
 }
 
 .voice-list-scroll {
@@ -612,7 +613,7 @@ export default {
 
 .voice-option {
     padding: 10px 12px;
-    border-bottom: 1px solid $awd-chrome-line;
+    border-bottom: 1px solid #f9fafb;
     cursor: pointer;
     transition: background 0.15s;
 }
@@ -620,13 +621,13 @@ export default {
     border-bottom: none;
 }
 .voice-option:hover {
-    background: $awd-chrome-active;
+    background: #f3f4f6;
 }
 .voice-option.active {
-    background: rgba($awd-mint, 0.12);
+    background: #effdf6;
 }
 .voice-option.active .voice-name-text {
-    color: $awd-mint;
+    color: #1A5336;
     font-weight: 600;
 }
 
@@ -638,24 +639,24 @@ export default {
 }
 .voice-name-text {
     font-size: 14px;
-    color: $awd-text-on-dark;
+    color: #1f2937;
 }
 .voice-gender-tag {
     font-size: 10px;
-    background: $awd-chrome-active;
+    background: #f3f4f6;
     padding: 1px 4px;
     border-radius: 4px;
-    color: $awd-text-on-dark-2;
+    color: #6b7280;
 }
 .voice-locale-text {
     font-size: 11px;
-    color: $awd-text-on-dark-3;
+    color: #9ca3af;
 }
 .empty-tip {
     padding: 16px;
     text-align: center;
     font-size: 12px;
-    color: $awd-text-on-dark-3;
+    color: #9ca3af;
 }
 
 
@@ -667,7 +668,7 @@ export default {
 }
 .value-text {
     font-size: 12px;
-    color: $awd-mint;
+    color: #1A5336;
     font-weight: 500;
 }
 
@@ -688,24 +689,22 @@ export default {
   cursor: pointer;
   border: none;
   outline: none;
+  box-shadow: 0 2px 4px rgba(26, 83, 54, 0.1);
   transition: all 0.2s;
 }
 
 .workdeck-btn-primary {
-  background-color: rgba($awd-mint, 0.12);
-  border: 1px solid $awd-mint;
-  color: $awd-mint;
+  background-color: #1A5336;
+  color: #fff;
 }
 .workdeck-btn-primary:active {
-  background-color: rgba($awd-mint, 0.2);
+  background-color: #14402a;
   transform: translateY(1px);
 }
 .workdeck-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.6;
     cursor: not-allowed;
-    background-color: $awd-chrome-active;
-    border-color: transparent;
-    color: $awd-text-on-dark-3;
+    background-color: #9ca3af;
 }
 
 .full-width {
@@ -714,8 +713,8 @@ export default {
 
 /* Result Area */
 .result-area {
-    background: rgba($awd-mint, 0.08) !important;
-    border: 1px solid rgba($awd-mint, 0.35) !important;
+    background: #f0fdf4 !important; /* Mint background */
+    border: 1px solid #bbf7d0 !important;
 }
 
 .result-header {
@@ -728,12 +727,12 @@ export default {
 .result-title {
     font-size: 13px;
     font-weight: 600;
-    color: $awd-text-on-dark;
+    color: #14532d;
 }
 
 .download-link {
     font-size: 12px;
-    color: $awd-mint;
+    color: #1A5336;
     cursor: pointer;
     font-weight: 500;
 }
@@ -742,22 +741,20 @@ export default {
     display: flex;
     align-items: center;
     gap: 12px;
-    background: $awd-chrome-hover;
+    background: #fff;
     padding: 10px;
     border-radius: 8px;
-    border: 1px solid $awd-chrome-active;
+    border: 1px solid #d1d5db;
 }
 .play-btn {
     width: 36px;
     height: 36px;
     border-radius: 50%;
-    background: rgba($awd-mint, 0.15);
-    border: 1px solid $awd-mint;
-    box-sizing: border-box;
+    background: #1A5336;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: $awd-mint;
+    color: #fff;
     cursor: pointer;
     transition: transform 0.2s;
     font-size: 14px;
@@ -770,7 +767,7 @@ export default {
 }
 .player-status {
     font-size: 13px;
-    color: $awd-text-on-dark-2;
+    color: #374151;
 }
 
 .btn-glyph {

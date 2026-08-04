@@ -10,7 +10,7 @@ defineProps({
 })
 </script>
 
-<style lang="scss" scoped>
+<style scoped>
 .title-card {
   margin-bottom: 4px;
   padding: 0 4px;
@@ -20,8 +20,7 @@ defineProps({
   margin: 0;
   font-size: 14px;
   font-weight: 600;
-  font-family: $awd-font-serif;
-  color: $awd-text-on-dark;
+  color: #2c3e50;
   padding: 6px 8px 2px;
 }
 </style>

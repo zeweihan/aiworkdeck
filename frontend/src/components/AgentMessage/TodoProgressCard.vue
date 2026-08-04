@@ -41,10 +41,10 @@ const completedCount = computed(() => props.todos.filter(t => t.status === 'comp
 const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progress') || null)
 </script>
 
-<style lang="scss" scoped>
+<style scoped>
 .todo-progress-card {
-  background: $awd-chrome-panel; /* 深色气泡内的内嵌计划卡：再压一档 */
-  border: 1px solid $awd-chrome-line;
+  background: #ffffff;
+  border: 1px solid #E9ECEF;
   border-radius: 8px;
   margin: 0 0 6px 0;
   overflow: hidden;
@@ -56,7 +56,7 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
   align-items: center;
   padding: 5px 10px;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.03);
+  background: #F8F9FA;
 }
 
 .todo-header-left {
@@ -69,14 +69,14 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 .todo-title {
   font-size: 11px;
   font-weight: 600;
-  color: $awd-mint;
+  color: #1A5336; /* Forest Green */
 }
 
 .todo-counter {
   font-size: 10px;
   font-weight: 600;
-  color: $awd-mint;
-  background: rgba(91, 209, 151, 0.15);
+  color: #1A5336;
+  background: #E6F9F0; /* Mint Lightest */
   padding: 0 6px;
   border-radius: 99px;
 }
@@ -90,7 +90,7 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 
 .todo-current-hint {
   font-size: 10px;
-  color: $awd-text-on-dark-3;
+  color: #6C757D;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -98,7 +98,7 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 }
 
 .chevron {
-  color: $awd-text-on-dark-3;
+  color: #ADB5BD;
   display: flex;
   transition: transform 0.2s ease;
 }
@@ -130,14 +130,14 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
   margin-top: 2px;
 }
 
-.todo-row.completed .todo-marker { color: $awd-mint; }
-.todo-row.failed .todo-marker { color: lighten($awd-brick, 22%); }
+.todo-row.completed .todo-marker { color: #5BD197; }
+.todo-row.failed .todo-marker { color: #E74C3C; }
 
 .marker-dot {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: $awd-chrome-active;
+  background: #DEE2E6;
 }
 
 .marker-spinner {
@@ -156,20 +156,20 @@ const currentTodo = computed(() => props.todos.find(t => t.status === 'in_progre
 .todo-text {
   font-size: 11px;
   line-height: 1.45;
-  color: $awd-text-on-dark;
+  color: #2C3338;
 }
 
 .todo-row.completed .todo-text {
-  color: $awd-text-on-dark-3;
+  color: #ADB5BD;
   text-decoration: line-through;
 }
 
 .todo-row.in_progress .todo-text {
-  color: $awd-mint;
+  color: #1A5336;
   font-weight: 500;
 }
 
 .todo-row.failed .todo-text {
-  color: lighten($awd-brick, 28%);
+  color: #C0392B;
 }
 </style>

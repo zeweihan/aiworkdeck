@@ -119,10 +119,12 @@ const toggle = () => {
 }
 </script>
 
-<style lang="scss" scoped>
+<style scoped>
 /* Standard Card Styles */
 .thinking-card {
   margin-bottom: 12px;
+  background: #fff;
+  border: 1px solid #E9ECEF;
   border-radius: 12px;
   overflow: hidden;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -144,9 +146,9 @@ const toggle = () => {
 }
 
 .thinking-card.is-done {
-  border-color: transparent;
+  border-color: #f3f4f6;
   box-shadow: none;
-  background: transparent;
+  background: #f9fafb;
 }
 
 .thinking-card.ghost.is-done {
@@ -160,7 +162,7 @@ const toggle = () => {
   align-items: center;
   padding: 6px 10px;
   cursor: pointer;
-  background: transparent;
+  background: #fff;
   transition: background 0.2s;
 }
 
@@ -197,7 +199,7 @@ const toggle = () => {
 }
 
 .header:hover {
-  background-color: rgba(255, 255, 255, 0.04);
+  background-color: #F8F9FA;
 }
 
 .thinking-card.ghost .header:hover {
@@ -243,33 +245,20 @@ const toggle = () => {
 .title {
   font-size: 11px; /* Slightly easier to read */
   font-weight: 500;
-  color: $awd-text-on-dark-3;
-  font-family: $awd-font-mono;
-}
-
-/* thinking 进行态：mint 描边小胶囊（对齐原型 .thinking） */
-.thinking-card:not(.is-done) .title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(91, 209, 151, 0.06);
-  border: 1px solid rgba(91, 209, 151, 0.2);
-  color: $awd-mint;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 10px;
+  color: #6C757D; /* Gray-Medium */
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
 }
 
 .thinking-card.is-done .title {
-  color: $awd-text-on-dark-3;
+  color: #ADB5BD; /* Lighter gray when done */
   font-weight: 500;
 }
 
 .chevron-icon {
   width: 6px;
   height: 6px;
-  border-right: 1.5px solid $awd-text-on-dark-3;
-  border-bottom: 1.5px solid $awd-text-on-dark-3;
+  border-right: 1.5px solid #ADB5BD;
+  border-bottom: 1.5px solid #ADB5BD;
   transform: rotate(45deg);
   transition: transform 0.3s;
   display: block;
@@ -281,20 +270,20 @@ const toggle = () => {
 }
 
 .body {
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  background: transparent;
+  border-top: 1px solid #E9ECEF;
+  background: #fff;
 }
 
 .content {
   padding: 8px 12px;
   font-size: 12px;
   line-height: 1.5;
-  color: $awd-text-on-dark-2;
+  color: #495057; /* Gray-Dark */
 }
 
 .thinking-card.ghost .content {
     padding: 0; /* 无边距 */
-    color: $awd-text-on-dark-2;
+    color: #6C757D; /* Lighter text for ghost */
     margin: 0;
     background: transparent !important;
     text-align: left; /* 左对齐 */
@@ -323,7 +312,7 @@ const toggle = () => {
     padding: 0;
     font-size: 13px;
     line-height: 1.5;
-    color: $awd-text-on-dark-2;
+    color: #6C757D;
 }
 
 .thinking-card.ghost :deep(.markdown-body p) {
@@ -344,8 +333,8 @@ const toggle = () => {
 .thinking-card.ghost :deep(.markdown-body blockquote) {
     margin: 2px 0 !important;
     padding-left: 8px !important;
-    color: $awd-text-on-dark-3;
-    border-left: 2px solid $awd-chrome-active !important;
+    color: #ADB5BD;
+    border-left: 2px solid #E9ECEF !important;
 }
 
 .thinking-card.ghost :deep(.markdown-body h1),
@@ -354,16 +343,15 @@ const toggle = () => {
     margin-top: 6px !important;
     margin-bottom: 2px !important;
     font-size: 13px !important;
-    color: $awd-text-on-dark-2;
+    color: #495057;
 }
 
 .thinking-card.ghost :deep(.markdown-body pre) {
     margin: 4px 0 !important;
     padding: 8px !important;
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: #F8F9FA;
+    border: 1px solid #E9ECEF;
     border-radius: 4px;
-    color: $awd-text-on-dark-2;
 }
 
 .thinking-card.ghost :deep(.markdown-body table) {
@@ -378,7 +366,7 @@ const toggle = () => {
 /* Inline Variant Styles */
 .thinking-inline {
     font-size: 12px;
-    color: $awd-text-on-dark-2;
+    color: #6C757D;
     margin: 4px 0;
     background: transparent; /* Fix white background issue */
 }
@@ -390,7 +378,7 @@ const toggle = () => {
     user-select: none;
 }
 .h-wrap:hover {
-    color: $awd-text-on-dark;
+    color: #495057;
 }
 .h-wrap .icon {
     font-size: 12px;
@@ -435,7 +423,7 @@ const toggle = () => {
 .thinking-inline :deep(.markdown-body) {
     font-size: 12px;
     line-height: 1.45;
-    color: $awd-text-on-dark-2;
+    color: #495057;
     margin: 0;
     padding: 0;
 }
@@ -459,8 +447,7 @@ const toggle = () => {
     margin: 2px 0 !important;
     padding-left: 8px !important;
     border-left-width: 2px !important;
-    border-left-color: $awd-chrome-active !important;
-    color: $awd-text-on-dark-3;
+    color: #ADB5BD;
 }
 
 .thinking-inline :deep(.markdown-body h1),
@@ -476,9 +463,8 @@ const toggle = () => {
     margin: 2px 0 !important;
     padding: 6px !important;
     font-size: 11px;
-    background: rgba(0, 0, 0, 0.25);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    color: $awd-text-on-dark-2;
+    background: #F8F9FA;
+    border: 1px solid #E9ECEF;
 }
 
 .thinking-inline :deep(.markdown-body table) {

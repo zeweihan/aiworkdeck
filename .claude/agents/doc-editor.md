@@ -35,11 +35,10 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 激活文档 → 渲染 LibreOfficeEditor → getEditor() IPC（装隔离+起服务）→ 建 webview（persist:zetaoffice）+ 并行 prefetch 文档字节 → editor.html/editor-main.js 选传输 → bootZetaOffice（校验 crossOriginIsolated、fetch CJK 字体、fontconfig conf、加载 soffice.js、uno_main resolve worker port）→ office_thread.js boot（Desktop.create → 空白 swriter、RecordChanges=true、installModifyListener → ui_ready）→ executor 握手 ready → loadDocument：`load_document {bytes}` 写 MEMFS + loadComponentFromURL 重定位 xModel → ready → onLibreReady 注册 executor + syncLibreExecutor。
 
-## 画布配色（2026-08 UI 深色化）
+## 画布配色（知识存档：深色化已否决回退，勿再启用）
 
-- 「深绿画布 #1D3A29 上漂浮浅纸页 #FCFBF8」**不重烧引擎**：office_thread.js `applyAppColorScheme()`（bootDoc 首帧前调用）用 ConfigurationUpdateAccess 写 `/org.openoffice.Office.UI/ColorScheme` 的 AppBackground/DocColor（同 setRedlineAuthor 机制），失败静默降级为引擎默认白底。
-- 宿主侧同色消闪白：editor.html body、LibreOfficeEditor.vue 的 wrapper/加载面板/只读预览接力层均为深绿系；ReviewPanel 本体保持浅色，仅边界线用 #2D5240。
-- 工具栏/菜单栏 chrome 的精确配色（ivory）在 LO 24.2 无注册表口，需要 QPalette 补丁重烧（r4 候选，未做）。改画布色要两处同步：office_thread.js 常量 + editor.html/LibreOfficeEditor.vue 的 CSS。
+- PR#243 曾做「深绿画布上浮纸页」并已随配色回退撤销（维护者否决深色）。**引擎画布保持默认浅色**。
+- 存档结论（将来若需改画布色可复用，不重烧引擎）：LO 应用配色在 `/org.openoffice.Office.UI/ColorScheme`（AppBackground/DocColor），可在 bootDoc 用 ConfigurationUpdateAccess（同 setRedlineAuthor 机制）运行时写入；工具栏 chrome 精确配色 LO 24.2 无注册表口，须 QPalette 补丁重烧。
 
 ## zetajs 编组硬规则（office_thread.js，PR#107）
 

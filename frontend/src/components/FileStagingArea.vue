@@ -288,30 +288,30 @@ export default {
 }
 </script>
 
-<style scoped lang="scss">
+<style scoped>
 .drop-zone-container {
   /* Adapted from FileLinkDropZone but resident */
   position: relative; /* Changed from absolute to flow in flex container */
   /* Remove Left/Right/Bottom/Z-index if relative, or strictly control z-index if needed */
   z-index: 50;
-
+  
   min-height: 100px;
   max-height: 250px;
   flex-shrink: 0; /* Prevent shrinking */
-
+  
   padding: 0;
   display: flex;
   flex-direction: column;
-
-  background: transparent; /* 继承左栏 $awd-chrome-panel */
-  border-top: 1px solid $awd-chrome-line;
-  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.2);
+  
+  background: #f8fafc;
+  border-top: 1px solid #e2e8f0;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.05);
   transition: all 0.2s ease;
 }
 
 .drop-zone-container.is-dragging {
-    background: rgba($awd-mint, 0.08);
-    border-color: $awd-mint;
+    background: #eff6ff;
+    border-color: #3b82f6;
 }
 
 .staging-header {
@@ -320,8 +320,8 @@ export default {
     align-items: center;
     justify-content: space-between;
     padding: 0 8px 0 12px;
-    background: $awd-chrome-hover;
-    border-bottom: 1px solid $awd-chrome-line;
+    background: #f1f5f9;
+    border-bottom: 1px solid #e2e8f0;
 }
 
 .header-left {
@@ -333,7 +333,7 @@ export default {
 .staging-title {
     font-size: 12px;
     font-weight: 600;
-    color: $awd-text-on-dark-2;
+    color: #475569;
 }
 
 .collapse-btn {
@@ -343,13 +343,13 @@ export default {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: $awd-text-on-dark-3;
+    color: #94a3b8;
     border-radius: 4px;
 }
 
 .collapse-btn:hover {
-    background: $awd-chrome-active;
-    color: $awd-text-on-dark;
+    background: #e2e8f0;
+    color: #64748b;
 }
 
 .collapse-icon {
@@ -360,11 +360,11 @@ export default {
 
 .clear-btn {
     font-size: 11px;
-    color: $awd-text-on-dark-3;
+    color: #94a3b8;
     cursor: pointer;
 }
 .clear-btn:hover {
-    color: $awd-brick-on-dark;
+    color: #ef4444;
 }
 
 .staging-empty {
@@ -372,9 +372,9 @@ export default {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: $awd-text-on-dark-3;
+    color: #94a3b8;
     font-size: 12px;
-    border: 2px dashed $awd-chrome-active;
+    border: 2px dashed #e2e8f0;
     margin: 8px;
     border-radius: 6px;
 }
@@ -401,7 +401,7 @@ export default {
     border-radius: 4px;
     cursor: pointer;
     margin-bottom: 2px;
-    background: transparent;
+    background: white;
     border: 1px solid transparent;
     user-select: none; /* Prevent text selection */
 }
@@ -415,33 +415,33 @@ export default {
 .custom-checkbox {
     width: 14px;
     height: 14px;
-    border: 1px solid $awd-chrome-active;
+    border: 1px solid #cbd5e1;
     border-radius: 3px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: $awd-chrome-hover;
+    background: #fff;
     transition: all 0.2s;
 }
 
 .custom-checkbox.checked {
-    background: $awd-mint;
-    border-color: $awd-mint;
+    background: #3b82f6;
+    border-color: #3b82f6;
 }
 
 .check-mark {
-    color: $awd-chrome-panel;
+    color: #fff;
     font-size: 10px;
     font-weight: bold;
     line-height: 1;
 }
 
 .staging-item:hover {
-    background: $awd-chrome-hover;
+    background: #f1f5f9;
 }
 .staging-item.selected {
-    background: rgba($awd-mint, 0.12);
-    border-color: $awd-mint;
+    background: #e0f2fe;
+    border-color: #bae6fd;
 }
 
 .file-icon {
@@ -453,7 +453,7 @@ export default {
 
 .file-name {
     font-size: 12px;
-    color: $awd-text-on-dark;
+    color: #334155;
     flex: 1;
     white-space: nowrap;
     overflow: hidden;
@@ -462,28 +462,28 @@ export default {
 
 .remove-btn {
     margin-left: 8px;
-    color: $awd-text-on-dark-3;
+    color: #94a3b8;
     cursor: pointer;
     font-size: 16px;
     line-height: 1;
     padding: 4px;
 }
 .remove-btn:hover {
-    color: $awd-brick-on-dark;
+    color: #ef4444;
 }
 
 .compare-btn-wrapper {
     padding: 8px;
-    background: transparent;
-    border-bottom: 1px solid $awd-chrome-line;
+    background: #fff;
+    border-bottom: 1px solid #e2e8f0;
     display: flex;
     justify-content: center;
 }
 
 .btn-compare {
-    background: rgba($awd-mint, 0.12);
-    color: $awd-mint;
-    border: 1px solid $awd-mint;
+    background: #3b82f6;
+    color: white;
+    border: none;
     border-radius: 4px;
     padding: 4px 12px;
     font-size: 12px;
@@ -494,7 +494,7 @@ export default {
     line-height: 1.5;
 }
 .btn-compare:hover {
-    background: rgba($awd-mint, 0.2);
+    background: #2563eb;
 }
 
 .drop-overlay {
@@ -503,12 +503,12 @@ export default {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba($awd-mint, 0.1);
-    border: 2px dashed $awd-mint;
+    background: rgba(59, 130, 246, 0.1);
+    border: 2px dashed #3b82f6;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: $awd-mint;
+    color: #2563eb;
     font-weight: 600;
     pointer-events: none; /* Let drag events pass through to layer below if needed, but here overlay is top */
     z-index: 101;
@@ -522,8 +522,8 @@ export default {
 
 .marquee-box {
     position: absolute;
-    background: rgba($awd-mint, 0.2);
-    border: 1px solid $awd-mint;
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid #3b82f6;
     pointer-events: none;
     z-index: 1000;
 }
