@@ -3,7 +3,7 @@
     <view class="mdp-inner">
       <!-- 头部：图标 + 名称 + 元信息 + 动作（VS Code 扩展详情页结构） -->
       <view class="mdp-head">
-        <view class="mdp-glyph">
+        <view class="mdp-glyph" :class="{ 'is-plugin': spec.kind === 'plugin' }">
           <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path v-for="(d, gi) in headGlyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
@@ -20,6 +20,8 @@
             <text v-if="display.downloads" class="mdp-byline-item">{{ display.downloads }} 下载</text>
             <text v-if="display.categoryLabel" class="mdp-byline-item">{{ display.categoryLabel }}</text>
           </view>
+          <!-- 性质说明：Skill 与插件是两种东西，用户不该靠猜 -->
+          <text class="mdp-kind-note">{{ kindNote }}</text>
           <text v-if="display.description" class="mdp-summary">{{ display.description }}</text>
 
           <!-- 动作区 -->
@@ -98,26 +100,32 @@
       </view>
 
       <template v-else>
-        <!-- 触发词（Skill） -->
+        <!-- 适用场景（Skill）：把触发词翻译成「什么时候找它」，工具清单不在这里刷存在感 -->
         <view v-if="spec.kind === 'skill' && triggerList.length" class="mdp-section">
-          <text class="mdp-sec-title">触发词</text>
-          <view class="mdp-triggers">
-            <text v-for="(t, i) in triggerList" :key="i" class="mdp-trigger">「{{ t }}」</text>
+          <text class="mdp-sec-title">什么时候用</text>
+          <view class="mdp-scenario">
+            <text class="mdp-scenario-lead">在对话里说出类似这些诉求时，它会自动接管：</text>
+            <view class="mdp-triggers">
+              <text v-for="(t, i) in triggerList" :key="i" class="mdp-trigger">「{{ t }}」</text>
+            </view>
+            <text class="mdp-sec-note">也可以在输入框用 / 手动选用；生效方式可随时在本页调整。</text>
           </view>
-          <text class="mdp-sec-note">对话命中触发词时自动生效；也可在输入框用 / 手动选用。</text>
         </view>
 
-        <!-- 能力与权限 -->
-        <view class="mdp-section">
-          <text class="mdp-sec-title">{{ spec.kind === 'plugin' ? '声明能力' : '能力' }}</text>
-          <text class="mdp-sec-body">{{ capabilityText }}</text>
-          <text v-if="spec.kind === 'plugin'" class="mdp-sec-note">插件与本机应用同等权限。平台已人工审核并签名，安装后默认停用，启用前不会执行任何插件代码。</text>
+        <!-- 声明能力（插件）：安全相关，保持显眼 -->
+        <view v-if="spec.kind === 'plugin'" class="mdp-section">
+          <text class="mdp-sec-title">声明能力</text>
+          <text class="mdp-sec-body">{{ pluginPermissionText }}</text>
+          <text class="mdp-sec-note">插件与本机应用同等权限。平台已人工审核并签名，安装后默认停用，启用前不会执行任何插件代码。</text>
         </view>
 
-        <!-- 详细信息 -->
+        <!-- 详细信息：工具权限压缩为一行人话摘要，不再枚举内部工具名 -->
         <view class="mdp-section">
           <text class="mdp-sec-title">详细信息</text>
           <view class="mdp-kv">
+            <view v-if="spec.kind === 'skill' && toolSummary" class="mdp-kv-row">
+              <text class="mdp-k">工具权限</text><text class="mdp-v">{{ toolSummary }}</text>
+            </view>
             <view class="mdp-kv-row"><text class="mdp-k">标识</text><text class="mdp-v mono">{{ spec.id }}</text></view>
             <view v-if="display.version" class="mdp-kv-row"><text class="mdp-k">版本</text><text class="mdp-v">v{{ display.version }}</text></view>
             <view v-if="display.author" class="mdp-kv-row"><text class="mdp-k">作者</text><text class="mdp-v">{{ display.author }}</text></view>
@@ -217,14 +225,37 @@ export default {
     triggerList() {
       return this.marketInfo?.triggers || this.installedInfo?.triggers || []
     },
-    capabilityText() {
+    /** Skill 与插件是两种东西：一句话讲清性质，别让用户靠徽章猜 */
+    kindNote() {
+      if (this.spec.kind === 'plugin') {
+        return '插件是可执行扩展：为工作台增加新功能，与本机应用同等权限，经平台人工审核并签名分发。'
+      }
+      return 'Skill 是提示词工作流：教 AI 助手按一套业务方法做事，纯文本、不含可执行代码。'
+    },
+    /** 工具名是给机器看的；给用户压缩成能力域的人话摘要 */
+    toolSummary() {
+      const item = this.marketInfo || this.installedInfo || {}
+      const tools = item.allowedTools || []
+      if (!tools.length) return ''
+      const domains = []
+      const has = (re) => tools.some(t => re.test(t))
+      if (has(/^doc_|^read_document|^write_docx|_docx$/)) domains.push('文档读写')
+      if (has(/^sheet_/)) domains.push('电子表格')
+      if (has(/^pptx_/)) domains.push('幻灯片')
+      if (has(/^pdf_/)) domains.push('PDF 处理')
+      if (has(/^law_|^get_law_/)) domains.push('法律检索')
+      if (has(/search_web|browse_url|deep_search/)) domains.push('联网检索')
+      if (has(/^read_file$|^write_file$|^list_files$|project_files|extract_file_text/)) domains.push('项目文件')
+      if (has(/memory/)) domains.push('工作记忆')
+      if (has(/evidence/)) domains.push('证据核查')
+      const head = domains.length ? domains.join('、') : '通用对话'
+      return `${head} 等 ${tools.length} 项（限定范围，仅在本 Skill 生效时可用）`
+    },
+    pluginPermissionText() {
       const item = this.marketInfo || this.installedInfo || {}
       const parts = []
       const toolCount = item.toolCount != null ? item.toolCount : (item.tools || []).length
-      if (toolCount) parts.push(`${toolCount} 个工具`)
-      if (this.spec.kind === 'skill' && (item.allowedTools || []).length) {
-        parts.push(`可用工具：${item.allowedTools.join('、')}`)
-      }
+      if (toolCount) parts.push(`提供 ${toolCount} 个工具`)
       const perms = (item.permissions || []).map(p => PERMISSION_LABELS[p] || p)
       parts.push(perms.length ? `需要 ${perms.join('、')}` : '未声明敏感能力')
       return parts.join(' · ')
@@ -423,6 +454,12 @@ export default {
     width: 34px;
     height: 34px;
   }
+
+  /* 插件 = 可执行扩展：深底，与 Skill（浅底）一眼区分（同左栏列表约定） */
+  &.is-plugin {
+    background: #123A26;
+    color: #fff;
+  }
 }
 
 .mdp-head-main {
@@ -487,12 +524,31 @@ export default {
   font-weight: 600;
 }
 
+.mdp-kind-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #868E96;
+}
+
 .mdp-summary {
   display: block;
   margin-top: 8px;
   font-size: 13px;
   line-height: 20px;
   color: #2C3338;
+}
+
+.mdp-scenario {
+  margin-top: 10px;
+}
+
+.mdp-scenario-lead {
+  display: block;
+  font-size: 12px;
+  color: #6C757D;
+  margin-bottom: 6px;
 }
 
 .mdp-actions {
