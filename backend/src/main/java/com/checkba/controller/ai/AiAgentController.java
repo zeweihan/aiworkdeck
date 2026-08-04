@@ -58,11 +58,9 @@ public class AiAgentController {
      * 猜到即可接管他人的 SSE 输出流（含文档正文与 editor 指令的 requestId）。
      */
     private boolean canUseConversation(String conversationId, Long userId) {
-        if (userId == null || conversationId == null) {
-            return false;
-        }
-        return messageService.isConversationOwnedBy(conversationId, userId)
-                || messageService.listByConversationId(conversationId).isEmpty();
+        // 口径收敛到 ProjectAiMessageService：此前这条规则只在本控制器有，
+        // AiChatController 取历史用的是严格归属，导致新会话一进项目就 403
+        return messageService.canUseConversation(conversationId, userId);
     }
 
     /**

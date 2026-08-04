@@ -32,7 +32,9 @@ public class EditorResultController {
         // 归属校验：结果会以工具输出的身份进入模型上下文并驱动后续改文档动作，
         // 此前既不认人也不认会话，拿到 requestId 就能往别人的 Agent 循环里塞伪造内容
         Long userId = com.checkba.controller.AuthController.getUserIdFromSession(sessionId);
-        if (userId == null || !messageService.isConversationOwnedBy(payload.getConversationId(), userId)) {
+        // 用「可用」而非「归属」：工具结果可能早于首条消息落库，严格归属会误杀；
+        // 拦住「回传到别人的会话」这一点两者一致
+        if (!messageService.canUseConversation(payload.getConversationId(), userId)) {
             log.warn("Rejected editor result: requestId={}, conversationId={}", payload.getRequestId(), payload.getConversationId());
             return new EditorResultResponse(false, "无权回传该会话的结果");
         }
