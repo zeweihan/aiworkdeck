@@ -32,7 +32,7 @@
           class="msb-row"
           @tap="openDetail(row)"
         >
-          <view class="msb-row-glyph">
+          <view class="msb-row-glyph" :class="{ 'is-plugin': row.kind === 'plugin' }">
             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
@@ -110,7 +110,7 @@
           class="msb-row"
           @tap="openDetail(row)"
         >
-          <view class="msb-row-glyph">
+          <view class="msb-row-glyph is-plugin">
             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
@@ -583,6 +583,12 @@ export default {
   svg {
     width: 14px;
     height: 14px;
+  }
+
+  /* 插件 = 可执行扩展：深底图标与 Skill（浅底）一眼区分 */
+  &.is-plugin {
+    background: #123A26;
+    color: #fff;
   }
 }
 
