@@ -223,7 +223,12 @@
         </view>
 
         <!-- 插件广场：IDE 扩展市场式直达入口（浏览/安装不该藏在系统设置两跳之下） -->
-        <view class="rail-btn" title="插件广场" @tap="goToPluginMarket">
+        <view
+          class="rail-btn"
+          :class="{ active: leftPaneKey === 'market' && !sidebarCollapsed }"
+          title="插件广场"
+          @tap="goToPluginMarket"
+        >
           <view class="rail-icon-wrapper">
             <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M4 4h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
@@ -541,6 +546,10 @@
             @reload-files="onVersionReloadFiles"
             @adopt-conflict="adoptConflictPending = $event"
           />
+          <MarketSidebarPanel
+            v-else-if="leftPaneKey === 'market'"
+            @open-detail="openMarketDetail"
+          />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
             :url="dynamicPlugins.find(p => p.key === leftPaneKey)?.frontendEntry"
@@ -762,9 +771,11 @@
                       v-else-if="isDdRequest(activeFileLeft)"
                       :request-id="activeFileLeft.requestId"
                     />
-                    <MarketPane
-                      v-else-if="activeFileLeft.tabType === 'market'"
+                    <MarketDetailPane
+                      v-else-if="activeFileLeft.tabType === 'market-detail'"
                       :key="activeFileLeft.id"
+                      :spec="activeFileLeft.marketSpec"
+                      @open-url="openBrowserTab($event)"
                     />
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
@@ -843,9 +854,11 @@
                       v-else-if="isDdRequest(activeFileRight)"
                       :request-id="activeFileRight.requestId"
                     />
-                    <MarketPane
-                      v-else-if="activeFileRight.tabType === 'market'"
+                    <MarketDetailPane
+                      v-else-if="activeFileRight.tabType === 'market-detail'"
                       :key="activeFileRight.id"
+                      :spec="activeFileRight.marketSpec"
+                      @open-url="openBrowserTab($event)"
                     />
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"
@@ -1325,7 +1338,9 @@ import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
 import FileLinkDropZone from '@/components/FileLinkDropZone.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
-import MarketPane from '@/components/MarketPane.vue' // 插件广场 workbench 内嵌 tab
+// 插件广场 VS Code 形态：左栏列表面板 + 中栏详情 tab（整页 MarketPane 仅存于 admin 独立页）
+import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
+import MarketDetailPane from '@/components/MarketDetailPane.vue'
 import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
@@ -1420,7 +1435,8 @@ export default {
     ChatInterface,
     MarkdownPreview,
     PluginPane, // Added
-    MarketPane,
+    MarketSidebarPanel,
+    MarketDetailPane,
     CompareDocDialog,
     DocDiffViewer,
     VersionCompareTab,
@@ -1739,6 +1755,7 @@ export default {
       return user && user.role !== 'CLIENT'
     },
     leftPaneTitle() {
+      if (this.leftPaneKey === 'market') return '插件广场'
       try {
         return getLeftSidebarPlugin(this.leftPaneKey)?.label || '文件树'
       } catch (e) {
@@ -2775,8 +2792,8 @@ export default {
       if (file.tabType === 'version-compare' || file.tabType === 'version-text-diff') {
         return this.leftPaneKey === 'version' || this.leftPaneKey === 'files'
       }
-      // 插件广场 tab：与左栏模式无关，常显（VS Code 扩展页语义）
-      if (file.tabType === 'market') {
+      // 插件广场详情 tab：与左栏模式无关，常显（VS Code 扩展详情页语义）
+      if (file.tabType === 'market-detail') {
         return true
       }
       // 普通文件在资源管理器、搜索或EasyVoice模式下都可见
@@ -3464,15 +3481,16 @@ export default {
       uni.navigateTo({ url: '/pages/admin/admin' })
     },
     goToPluginMarket() {
-      // VS Code 式：插件广场在 workbench 里以 tab 打开，保留左栏与标签页，
-      // 不再整页跳转（独立页面路由仍保留给 admin 入口与直链兜底）。
-      this.openMarketTab()
+      // VS Code 扩展栏形态：rail 按钮开左栏列表面板（保留标签页与编辑区），
+      // 点列表项再在中栏开详情 tab。独立页面路由仍保留给 admin 入口与直链兜底。
+      this.toggleLeftPane('market')
     },
-    openMarketTab() {
-      // 单例 tab：任一窗格已开则激活之
+    // 左栏列表点行 → 中栏开该项详情 tab（同 id 单例，任一窗格已开则激活）
+    openMarketDetail(spec) {
+      const tabId = `market-detail_${spec.kind}_${spec.id}`
       for (const pane of ['left', 'right']) {
         const list = pane === 'left' ? this.leftFiles : this.rightFiles
-        const existing = list.find(f => f.tabType === 'market')
+        const existing = list.find(f => f.id === tabId)
         if (existing) {
           const idProp = pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
           this[idProp] = existing.id
@@ -3484,13 +3502,13 @@ export default {
       const targetPane = this.splitMode ? this.focusedPane : 'left'
       const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
       const idProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
-      const id = `market_${Date.now()}`
       list.push({
-        id,
-        tabType: 'market',
-        name: '插件广场'
+        id: tabId,
+        tabType: 'market-detail',
+        name: spec.name || spec.id,
+        marketSpec: spec
       })
-      this[idProp] = id
+      this[idProp] = tabId
       this.focusedPane = targetPane
       this.$nextTick(() => this.triggerWorkbenchResize())
     },
