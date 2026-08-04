@@ -169,26 +169,26 @@ export default {
 }
 </script>
 
-<style scoped>
+<style scoped lang="scss">
 .desensitize-pane {
   height: 100%;
-  background-color: #f9fafb;
+  background-color: transparent; /* 继承左栏 $awd-chrome-panel */
   padding: 16px;
   box-sizing: border-box;
 }
 
 .section {
   margin-bottom: 24px;
-  background: #fff;
+  background: $awd-chrome-hover;
   padding: 16px;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid $awd-chrome-line;
 }
 
 .section-title {
   font-size: 13px;
   font-weight: 600;
-  color: #374151;
+  color: $awd-text-on-dark-2;
   margin-bottom: 12px;
 }
 
@@ -200,11 +200,11 @@ export default {
 
 .path-display {
     padding: 10px;
-    background: #f3f4f6;
-    border: 1px dashed #d1d5db;
+    background: $awd-chrome-panel;
+    border: 1px dashed $awd-chrome-active;
     border-radius: 6px;
     font-size: 12px;
-    color: #374151;
+    color: $awd-text-on-dark;
     word-break: break-all;
     min-height: 40px;
     display: flex;
@@ -212,7 +212,7 @@ export default {
     cursor: pointer;
 }
 .path-display.empty {
-    color: #9ca3af;
+    color: $awd-text-on-dark-3;
     justify-content: center;
 }
 
@@ -225,17 +225,18 @@ export default {
     flex: 1;
     padding: 6px 0;
     text-align: center;
-    background: #fff;
-    border: 1px solid #e5e7eb;
+    background: transparent;
+    border: 1px solid $awd-chrome-active;
     border-radius: 4px;
     font-size: 12px;
-    color: #4b5563;
+    color: $awd-text-on-dark-2;
     cursor: pointer;
     transition: all 0.2s;
 }
 .mini-btn:hover {
-    background: #f9fafb;
-    border-color: #d1d5db;
+    background: $awd-chrome-active;
+    border-color: $awd-chrome-active;
+    color: $awd-text-on-dark;
 }
 
 .strategies-list {
@@ -254,7 +255,7 @@ export default {
 .checkbox {
     width: 16px;
     height: 16px;
-    border: 1px solid #d1d5db;
+    border: 1px solid $awd-chrome-active;
     border-radius: 4px;
     margin-right: 8px;
     display: flex;
@@ -263,17 +264,17 @@ export default {
     transition: all 0.2s;
 }
 .checkbox.checked {
-    background-color: #1A5336;
-    border-color: #1A5336;
+    background-color: $awd-mint;
+    border-color: $awd-mint;
 }
 .check-mark {
-    color: #fff;
+    color: $awd-chrome-panel;
     font-size: 10px;
 }
 
 .strategy-label {
     font-size: 13px;
-    color: #1f2937;
+    color: $awd-text-on-dark;
 }
 
 .action-area {
@@ -289,20 +290,20 @@ export default {
   font-size: 14px;
   font-weight: 600;
   cursor: pointer;
-  border: none;
-  background-color: #1A5336;
-  color: #fff;
+  border: 1px solid $awd-mint;
+  background-color: rgba($awd-mint, 0.12);
+  color: $awd-mint;
   transition: opacity 0.2s;
 }
 .workdeck-btn:disabled {
-    opacity: 0.6;
+    opacity: 0.5;
     cursor: not-allowed;
 }
 
 .info-tip {
     margin-top: 12px;
     font-size: 11px;
-    color: #6b7280;
+    color: $awd-text-on-dark-3;
     text-align: center;
 }
 </style>

@@ -8,7 +8,7 @@
       <view class="input-wrapper">
         <view class="input-box" :class="{ focused: isSearchFocused }">
           <view class="search-icon">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6C757D" stroke-width="2">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="11" cy="11" r="8"></circle>
               <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
             </svg>
@@ -23,7 +23,7 @@
             @input="onSearchInput"
           />
           <view v-if="searchQuery" class="clear-icon" @tap="searchQuery = ''; performSearch()">
-             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2">
+             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
                 <line x1="6" y1="6" x2="18" y2="18"></line>
              </svg>
@@ -100,7 +100,7 @@
     <!-- Empty State -->
     <view class="empty-state" v-if="!hasSearched && !loading">
        <view class="empty-icon">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#E9ECEF" stroke-width="1.5">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
              <circle cx="11" cy="11" r="8"></circle>
              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
@@ -183,9 +183,9 @@ export default {
             };
         } else {
             return {
-                backgroundColor: '#FFFFFF',
-                borderColor: '#E9ECEF', // Neutral border
-                color: '#6C757D' // Neutral text
+                backgroundColor: 'transparent',
+                borderColor: '#2D5240', // 深底强分隔（$awd-chrome-active）
+                color: '#A8BDB2' // 深底次级文字（$awd-text-on-dark-2）
             };
         }
     },
@@ -320,36 +320,24 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* Brands Colors from color.md */
-$brand-forest: #1A5336;
-$brand-mint: #5BD197;
-$brand-mint-light: #5BD197; /* Keeping same for now */
-$brand-mint-lightest: #E6F9F0;
-$gray-pale: #F8F9FA;
-$gray-light: #E9ECEF;
-$gray-medium: #6C757D;
-$gray-dark: #2C3338;
-$white: #FFFFFF;
-$border-color: #E9ECEF;
-
 .search-panel {
   display: flex;
   flex-direction: column;
   height: 100%;
-  background-color: $gray-pale;
+  background-color: transparent; /* 继承左栏 $awd-chrome-panel */
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
 .search-header {
     padding: 16px 12px 12px;
-    background-color: $gray-pale;
+    background-color: transparent;
     border-bottom: 1px solid transparent; /* Prepare for sticky behavior if needed */
 }
 
 .panel-title {
     font-size: 11px;
     font-weight: 600;
-    color: $gray-medium;
+    color: $awd-text-on-dark-3;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     margin-bottom: 12px;
@@ -363,28 +351,28 @@ $border-color: #E9ECEF;
   .input-box {
     display: flex;
     align-items: center;
-    background: $white;
-    border: 1px solid #CECECE;
+    background: $awd-chrome-hover;
+    border: 1px solid $awd-chrome-active;
     border-radius: 6px;
     padding: 6px 10px;
     transition: all 0.2s ease;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 
     &.focused {
-      border-color: $brand-mint;
-      box-shadow: 0 0 0 3px rgba($brand-mint, 0.15);
+      border-color: $awd-mint;
+      box-shadow: 0 0 0 3px rgba($awd-mint, 0.15);
     }
 
     .search-icon {
         margin-right: 8px;
         display: flex;
         align-items: center;
+        color: $awd-text-on-dark-3;
     }
 
     .search-input {
       flex: 1;
       font-size: 13px;
-      color: $gray-dark;
+      color: $awd-text-on-dark;
       border: none;
       outline: none;
       background: transparent;
@@ -392,7 +380,7 @@ $border-color: #E9ECEF;
       min-width: 0;
 
       &::placeholder {
-          color: #adb5bd;
+          color: $awd-text-on-dark-3;
       }
     }
 
@@ -401,7 +389,8 @@ $border-color: #E9ECEF;
         cursor: pointer;
         display: flex;
         align-items: center;
-        opacity: 0.6;
+        color: $awd-text-on-dark-3;
+        opacity: 0.7;
         &:hover { opacity: 1; }
     }
   }
@@ -409,7 +398,7 @@ $border-color: #E9ECEF;
 
 .section-label {
     font-size: 11px;
-    color: $gray-medium;
+    color: $awd-text-on-dark-3;
     margin-bottom: 8px;
     font-weight: 500;
 }
@@ -446,13 +435,13 @@ $border-color: #E9ECEF;
 
 .search-stats {
   font-size: 11px;
-  color: $gray-medium;
+  color: $awd-text-on-dark-2;
   display: flex;
   align-items: center;
   gap: 4px;
 
   .highlight {
-      color: $brand-forest;
+      color: $awd-mint;
       font-weight: 600;
   }
 }
@@ -465,16 +454,16 @@ $border-color: #E9ECEF;
 }
 
 .file-group {
-    background: $white;
+    background: transparent;
     margin-bottom: 8px;
     border-top: 1px solid transparent;
     border-bottom: 1px solid transparent;
 
     &:first-child {
-        border-top: 1px solid $border-color;
+        border-top: 1px solid $awd-chrome-line;
     }
     &:last-child {
-        border-bottom: 1px solid $border-color;
+        border-bottom: 1px solid $awd-chrome-line;
     }
 }
 
@@ -486,14 +475,14 @@ $border-color: #E9ECEF;
   transition: background-color 0.1s;
 
   &:hover {
-    background-color: $gray-pale;
+    background-color: $awd-chrome-hover;
   }
 
   .arrow-icon {
     display: flex;
     align-items: center;
     justify-content: center;
-    color: $gray-medium;
+    color: $awd-text-on-dark-3;
     margin-right: 8px;
     width: 16px;
     height: 16px;
@@ -523,21 +512,21 @@ $border-color: #E9ECEF;
       .file-name {
           font-size: 13px;
           font-weight: 500;
-          color: $gray-dark;
+          color: $awd-text-on-dark;
           margin-bottom: 2px;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
 
           &:hover {
-              color: $brand-forest;
+              color: $awd-mint;
               text-decoration: underline;
           }
       }
 
       .file-path {
           font-size: 10px;
-          color: #999;
+          color: $awd-text-on-dark-3;
           white-space: nowrap;
           overflow: hidden;
           text-overflow: ellipsis;
@@ -545,8 +534,8 @@ $border-color: #E9ECEF;
   }
 
   .badge {
-    background-color: $gray-light;
-    color: $gray-medium;
+    background-color: $awd-chrome-active;
+    color: $awd-text-on-dark-2;
     font-size: 10px;
     font-weight: 600;
     padding: 2px 6px;
@@ -569,9 +558,9 @@ $border-color: #E9ECEF;
   font-family: "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
 
   &:hover {
-    background-color: rgba($brand-mint, 0.05);
+    background-color: rgba($awd-mint, 0.08);
     .match-highlight {
-        background-color: rgba($brand-mint, 0.3);
+        background-color: rgba($awd-mint, 0.3);
     }
   }
 
@@ -581,12 +570,12 @@ $border-color: #E9ECEF;
       top: 0;
       bottom: 0;
       width: 1px;
-      background-color: $border-color;
+      background-color: $awd-chrome-line;
   }
 
   .line-number {
       font-size: 10px;
-      color: #adb5bd;
+      color: $awd-text-on-dark-3;
       width: 10px;
       text-align: right;
       margin-right: 12px;
@@ -596,14 +585,14 @@ $border-color: #E9ECEF;
   .match-content {
      font-size: 11px;
      line-height: 1.5;
-     color: $gray-medium;
+     color: $awd-text-on-dark-2;
      white-space: pre;
      overflow: hidden;
      text-overflow: ellipsis;
 
      .match-highlight {
-         background-color: rgba($brand-mint, 0.15);
-         color: $brand-forest;
+         background-color: rgba($awd-mint, 0.18);
+         color: $awd-mint;
          border-radius: 2px;
          padding: 0 1px;
          font-weight: 500;
@@ -620,11 +609,11 @@ $border-color: #E9ECEF;
 
    .empty-icon {
        margin-bottom: 16px;
-       color: $gray-light;
+       color: $awd-chrome-active;
    }
 
    .empty-text {
-      color: #adb5bd;
+      color: $awd-text-on-dark-3;
       font-size: 13px;
    }
 }

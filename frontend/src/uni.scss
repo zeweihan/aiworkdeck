@@ -90,3 +90,60 @@ $uni-color-subtitle: #555; // 二级标题颜色
 $uni-font-size-subtitle: 18px;
 $uni-color-paragraph: #3f536e; // 文章段落颜色
 $uni-font-size-paragraph: 15px;
+
+/* ============================================================
+ * AI Workdeck 绿系设计令牌（2026-08 UI 升级，对齐官网 DESIGN.md v1
+ * 与 prototype_awd/assets/aiworkdeck.css）。
+ * 约定：深色 chrome 表面（顶栏/rail/左栏/右栏/状态条）用 $awd-chrome-*，
+ * 浅色内容表面（编辑区/抽屉/弹窗）用 $awd-ivory 系中性色。
+ * ============================================================ */
+
+/* chrome 深绿阶（深→浅） */
+$awd-chrome-base: #0E2117;   // 最深底（画布外壳）
+$awd-chrome-top: #0F2A1C;    // 顶栏 / 底部状态条
+$awd-chrome-panel: #0D241A;  // 左右侧栏面板
+$awd-chrome-line: #1D3A29;   // chrome 内分隔线 / 画布深底
+$awd-chrome-hover: #16452D;  // 深底 hover 面
+$awd-chrome-active: #2D5240; // 深底激活边 / 强分隔
+
+/* 品牌色 */
+$awd-forest: #1A5336;        // king-forest，主品牌绿
+$awd-forest-dark: #123A26;   // king-forest-darker
+$awd-mint: #5BD197;          // king-mint，点缀专用（不做大面积底色）
+$awd-mint-deep: #2D7A52;     // 白底上的 mint 替代（保证对比度）
+$awd-mint-pale: #E6F9F0;
+$awd-brass: #3E8E63;         // 次级强调绿
+
+/* 浅色中性阶（暖白系，替代冷灰 #F8F9FA 系） */
+$awd-ivory: #FAF8F4;
+$awd-bone: #F1ECE3;
+$awd-stone: #E2DBCE;
+$awd-stone-md: #C5BBA8;
+$awd-slate: #6B6E73;
+$awd-charcoal: #2B2C30;
+
+/* 深底文字阶（绿灰，禁用蓝灰） */
+$awd-text-on-dark: #ECF2EE;
+$awd-text-on-dark-2: #A8BDB2;
+$awd-text-on-dark-3: #7FA08F;
+
+/* 编辑画布 */
+$awd-canvas: #1D3A29;        // 纸页周围深底（与引擎 AppBackground 一致）
+$awd-paper: #FCFBF8;         // 纸页
+
+/* 语义色（-on-dark 变体供深底文字用，保证对比度 ≥ 4.5:1） */
+$awd-amber: #C58A2E;
+$awd-amber-on-dark: #E2B268;
+$awd-brick: #A03B2C;
+$awd-brick-on-dark: #E07A6A;
+$awd-sage: #5E8061;
+
+/* 字体三轨：衬线只用于展示位，正文无衬线，元信息/状态用等宽 */
+$awd-font-serif: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif;
+$awd-font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+$awd-font-mono: 'JetBrains Mono', 'SF Mono', SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+
+/* 圆角与阴影（chrome 表面一律小圆角，浅色卡片沿用 brand-card-*） */
+$awd-radius-sm: 6px;
+$awd-radius-md: 10px;
+$awd-shadow-paper: 0 4px 24px rgba(0, 0, 0, 0.35);
