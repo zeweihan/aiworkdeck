@@ -116,15 +116,15 @@ export default {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
 .artifact-card {
-  background: #ffffff;
+  background: transparent; /* 悬浮在深色气泡卡片内 */
   padding: 12px 16px;
   transition: background 0.15s;
 }
 
 .artifact-card:hover {
-  background: #F8F9FA; /* Gray-Pale */
+  background: rgba(255, 255, 255, 0.04);
 }
 
 /* Row 1 */
@@ -156,13 +156,13 @@ export default {
 .card-title {
   font-size: 13px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: $awd-mint;
 }
 
 .status-badge.resolved {
   font-size: 9px;
-  background: #E6F9F0; /* Mint Lightest */
-  color: #1A5336; /* Forest Green */
+  background: rgba(91, 209, 151, 0.15);
+  color: $awd-mint;
   padding: 2px 6px;
   border-radius: 4px;
   font-weight: 600;
@@ -174,8 +174,8 @@ export default {
 }
 
 .btn-approve {
-  background: #1A5336; /* Forest Green */
-  color: #fff;
+  background: $awd-mint;
+  color: $awd-chrome-panel;
   font-size: 11px;
   padding: 4px 12px;
   border-radius: 6px;
@@ -183,18 +183,18 @@ export default {
   font-weight: 600;
   transition: background 0.15s;
 }
-.btn-approve:hover { background: #123A26; } /* Forest Green Darker */
+.btn-approve:hover { background: lighten($awd-mint, 8%); }
 
 .btn-view {
   background: transparent;
-  color: #6C757D; /* Gray-Medium */
+  color: $awd-text-on-dark-2;
   font-size: 11px;
   padding: 4px 6px;
   cursor: pointer;
   text-decoration: none;
   font-weight: 500;
 }
-.btn-view:hover { color: #1A5336; text-decoration: underline; }
+.btn-view:hover { color: $awd-mint; text-decoration: underline; }
 
 /* Row 2 */
 .card-row-bottom {
@@ -202,8 +202,8 @@ export default {
 }
 
 .file-info-block {
-  background: #F8F9FA; /* Gray-Pale */
-  border: 1px solid #E9ECEF; /* Gray-Light */
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   padding: 8px 12px;
   display: flex;
@@ -214,13 +214,13 @@ export default {
 .file-label {
   font-size: 9px;
   font-weight: 700;
-  color: #ADB5BD;
+  color: $awd-text-on-dark-3;
   letter-spacing: 0.8px;
 }
 
 .file-name-text {
   font-size: 12px;
-  color: #2C3338; /* Gray-Dark */
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: $awd-text-on-dark;
+  font-family: $awd-font-mono;
 }
 </style>

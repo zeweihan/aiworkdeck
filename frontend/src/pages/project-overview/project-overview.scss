@@ -29,50 +29,85 @@ $bg-white: #FFFFFF;
   display: flex;
   flex-direction: column;
   height: 100vh;
-  background-color: $bg-pale;
+  background-color: $awd-chrome-base;
   color: $color-text-main;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: $awd-font-sans;
   overflow: hidden;
 
   &.compact-mode {
     .project-header {
-      height: 48px;
-      padding: 0 16px;
+      height: 44px;
+      padding: 0 12px;
     }
   }
 }
 
-/* ================= Header ================= */
+/* ================= Header（IDE 深色 chrome，对齐原型 ide-top） ================= */
 .project-header {
-  height: 42px;
-  background-color: $bg-white;
-  border-bottom: 1px solid $color-border;
+  height: 40px;
+  background-color: $awd-chrome-top;
+  border-bottom: 1px solid $awd-chrome-line;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 18px;
-  position: relative; // For absolute centering
+  padding: 0 14px;
+  position: relative;
   flex-shrink: 0;
   z-index: 200;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.02); // Subtle shadow
+  box-shadow: none;
   transition: all 0.3s ease;
 }
 
 .header-left {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+  min-width: 0;
 }
 
-.header-center {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
+/* 品牌位：CSS 绘制小方标（森林绿渐变 + mint 箭头）+ 衬线字标 */
+.brand-block {
   display: flex;
   align-items: center;
-  justify-content: center;
-  pointer-events: none; // Let clicks pass through if needed, though logo usually isn't interactive here
+  gap: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+
+  &:hover .brand-word {
+    color: $awd-mint;
+  }
+}
+
+.brand-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, $awd-brass, $awd-forest);
+  @include flex-center;
+  color: $awd-chrome-top;
+}
+
+.brand-mark-icon {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+
+.brand-word {
+  font-family: $awd-font-serif;
+  font-weight: 600;
+  font-size: 14px;
+  color: $awd-text-on-dark;
+  letter-spacing: -0.005em;
+  white-space: nowrap;
+  transition: color 0.15s ease;
+}
+
+.brand-sep {
+  width: 1px;
+  height: 18px;
+  background: $awd-chrome-active;
+  flex-shrink: 0;
 }
 
 .back-btn {
@@ -95,13 +130,6 @@ $bg-white: #FFFFFF;
   font-weight: 500;
 }
 
-.project-logo {
-  height: 20px;
-  width: 100px; /* approximiate aspect ratio for heightFix */
-  margin-right: 0;
-  display: block;
-}
-
 .project-info {
   display: flex;
   flex-direction: column;
@@ -116,30 +144,31 @@ $bg-white: #FFFFFF;
 }
 
 .project-name {
-  font-size: 16px;
+  font-family: $awd-font-serif;
+  font-size: 14px;
   font-weight: 600;
-  color: $color-primary; // Forest Green for title
-  letter-spacing: -0.2px;
+  color: $awd-text-on-dark;
+  letter-spacing: -0.005em;
   cursor: pointer;
 
   &:hover {
-    color: $color-primary-light;
+    color: $awd-mint;
   }
 }
 
-/* IDE 化：顶栏常驻工作状态点 */
+/* IDE 化：顶栏常驻工作状态点（深底琥珀信号） */
 .work-status-chip {
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 2px 10px;
   border-radius: 999px;
-  background: rgba(200, 164, 93, 0.12);
-  border: 1px solid rgba(200, 164, 93, 0.3);
+  background: rgba(197, 138, 46, 0.14);
+  border: 1px solid rgba(197, 138, 46, 0.35);
   cursor: pointer;
 
   &:hover {
-    background: rgba(200, 164, 93, 0.2);
+    background: rgba(197, 138, 46, 0.24);
   }
 }
 
@@ -147,12 +176,12 @@ $bg-white: #FFFFFF;
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #c8a45d;
+  background: $awd-amber;
 }
 
 .work-status-text {
   font-size: 12px;
-  color: #8a6d3b;
+  color: #E2B268;
   white-space: nowrap;
 }
 
@@ -165,13 +194,13 @@ $bg-white: #FFFFFF;
   border-radius: 4px;
 
   &:hover {
-    background: rgba(26, 83, 54, 0.08);
+    background: rgba(255, 255, 255, 0.06);
   }
 }
 
 .switcher-arrow {
   font-size: 11px;
-  color: $color-primary;
+  color: $awd-text-on-dark-3;
   transition: transform 0.15s;
 
   &.is-open {
@@ -248,26 +277,26 @@ $bg-white: #FFFFFF;
 }
 
 .rename-input {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
-  color: $color-text-main;
-  border: 1px solid $color-accent;
+  color: $awd-text-on-dark;
+  border: 1px solid $awd-mint;
   border-radius: 4px;
   padding: 0 4px;
   width: 200px;
-  background: $bg-white;
+  background: $awd-chrome-hover;
 }
 
 .project-status-badge {
-  background-color: $color-accent-pale;
-  border: 1px solid transparent; // Cleaner look
+  background-color: rgba(91, 209, 151, 0.12);
+  border: 1px solid rgba(91, 209, 151, 0.25);
   border-radius: 4px;
   padding: 1px 6px;
 
   .status-text {
     font-size: 10px;
     font-weight: 500;
-    color: $color-primary; // Dark green text on light green bg
+    color: $awd-mint;
   }
 }
 
@@ -275,13 +304,13 @@ $bg-white: #FFFFFF;
   display: flex;
   align-items: center;
   font-size: 11px;
-  color: $color-text-light;
-  margin-top: 2px;
+  color: $awd-text-on-dark-3;
+  margin-top: 1px;
   gap: 6px;
 }
 
 .meta-divider {
-  color: #dee2e6;
+  color: $awd-chrome-active;
   font-size: 10px;
 }
 
@@ -301,31 +330,41 @@ $bg-white: #FFFFFF;
 }
 
 .top-bar-btn {
-  width: 19.2px; /* Resized to 4/5 of 24px */
-  height: 19.2px;
-  display: flex; /* mixin replacement */
+  width: 26px;
+  height: 26px;
+  display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 4px; /* Adjusted radius */
+  border-radius: 6px;
   cursor: pointer;
-  color: #374151; /* Cool Gray 700 - explicitly dark gray */
+  color: $awd-text-on-dark-2;
   background-color: transparent;
-  border: 1px solid transparent; /* Explicitly transparent to kill default borders */
+  border: 1px solid transparent;
   transition: all 0.2s ease;
 
   &:hover {
-    background-color: #f3f4f6; /* Cool Gray 100 - very neutral */
-    color: #111827; /* Gray 900 */
+    background-color: rgba(255, 255, 255, 0.06);
+    color: $awd-text-on-dark;
   }
 
   &.active {
-    background-color: #e5e7eb; /* Cool Gray 200 */
-    color: #111827;
+    background-color: $awd-chrome-hover;
+    color: $awd-mint;
+  }
+
+  &.recording {
+    color: #E07A6A;
   }
 
   .tool-icon {
     font-size: 16px;
   }
+}
+
+.tool-icon-svg {
+  width: 15px;
+  height: 15px;
+  display: block;
 }
 
 .tool-icon-img {
@@ -383,17 +422,17 @@ $bg-white: #FFFFFF;
   position: relative;
 }
 
-/* Left Rail (Activity Bar) - Match Doc Dark BG */
+/* Left Rail (Activity Bar) - IDE 深色 chrome */
 .left-rail {
   width: 50px;
-  background-color: #F8F9FA; // AI Workdeck Gray-Pale (Light Mode)
+  background-color: $awd-chrome-panel;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 12px 0;
   z-index: 150;
   flex-shrink: 0;
-  border-right: 1px solid #E9ECEF; // Gray-Light
+  border-right: 1px solid $awd-chrome-line;
 }
 
 .rail-btn {
@@ -403,20 +442,19 @@ $bg-white: #FFFFFF;
   margin-bottom: 8px;
   border-radius: 8px;
   cursor: pointer;
-  color: #64748b; // Slate-500 (Gray-Medium equivalent)
+  color: $awd-text-on-dark-3;
   transition: all 0.2s;
 
   &:hover {
-    color: #1A5336; // Forest Green
-    background-color: #f1f5f9; // Slate-100
+    color: $awd-text-on-dark;
+    background-color: $awd-chrome-hover;
   }
 
   &.active {
-    background-color: rgba(91, 209, 151, 0.1); // Mint with opacity
-    // Use pseudo-element for border to avoid layout shift
+    background-color: rgba(91, 209, 151, 0.1);
+    color: $awd-mint;
     position: relative;
-    border-radius: 0; // Remove radius for active state to match square-ish look or keep? Original had left radius removed.
-    // Actually, original had: border-top-left-radius: 0; border-bottom-left-radius: 0;
+    border-radius: 0;
 
     &::before {
         content: '';
@@ -425,7 +463,7 @@ $bg-white: #FFFFFF;
         top: 0;
         bottom: 0;
         width: 3px;
-        background-color: #1A5336; // Forest Green (Accent)
+        background-color: $awd-mint;
         border-top-right-radius: 2px;
         border-bottom-right-radius: 2px;
     }
@@ -849,7 +887,7 @@ $bg-white: #FFFFFF;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: #ffffff;
+  background: $awd-chrome-base;
   border: none;
   border-radius: 0;
   box-shadow: none;
@@ -877,9 +915,9 @@ $bg-white: #FFFFFF;
   flex-shrink: 0;
   min-height: 0;
   min-width: 0; /* Allow flex shrinking */
-  background: #ffffff;
+  background: $awd-chrome-panel;
   border: none;
-  border-left: 1px solid rgba(18, 52, 77, 0.08);
+  border-left: 1px solid $awd-chrome-line;
   border-radius: 0;
   box-shadow: none;
   display: flex;
@@ -977,7 +1015,7 @@ $bg-white: #FFFFFF;
 }
 
 .panel-tab.active {
-  color: #0f172a;
+  color: $color-primary;
   font-weight: 600;
 }
 
@@ -988,7 +1026,7 @@ $bg-white: #FFFFFF;
   left: 0;
   right: 0;
   height: 2px;
-  background: #0f172a; /* 黑色下划线，更专业 */
+  background: $color-primary; /* 编辑式下划线（官网 DESIGN.md 页签语言） */
 }
 
 .tools-search {
@@ -1017,8 +1055,8 @@ $bg-white: #FFFFFF;
 
 .tools-search-input:focus {
   background: #fff;
-  border-color: #3b82f6; /* 聚焦蓝框 */
-  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
+  border-color: $awd-mint;
+  box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.15);
 }
 .tools-search-clear {
   position: absolute;
@@ -1086,8 +1124,8 @@ $bg-white: #FFFFFF;
     cursor: default;
 }
 .menu-item.active {
-    background: #eff6ff;
-    color: #2563eb;
+    background: #E6F9F0;
+    color: #1A5336;
     font-weight: 500;
 }
 .menu-divider {
@@ -1293,12 +1331,12 @@ $bg-white: #FFFFFF;
   overflow: hidden;
 }
 
-/* 左侧 Sidebar */
+/* 左侧 Sidebar（IDE 深色面板） */
 .sidebar-left {
   width: 260px;
-  background: #fbfcfe;
+  background: $awd-chrome-panel;
   border: none;
-  border-right: 1px solid rgba(18, 52, 77, 0.08);
+  border-right: 1px solid $awd-chrome-line;
   border-radius: 0;
   box-shadow: none;
   display: flex;
@@ -1329,8 +1367,8 @@ $bg-white: #FFFFFF;
   justify-content: space-between;
   padding: 0 12px;
   height: 36px; /* Align with tabs-bar height */
-  border-bottom: 1px solid $color-border;
-  background: $bg-white;
+  border-bottom: 1px solid $awd-chrome-line;
+  background: transparent;
   flex-shrink: 0;
   gap: 8px;
 }
@@ -1362,7 +1400,7 @@ $bg-white: #FFFFFF;
 .sidebar-actions-divider {
   width: 1px;
   height: 14px;
-  background: rgba(18, 52, 77, 0.12);
+  background: $awd-chrome-active;
   margin: 0 4px;
   flex-shrink: 0;
 }
@@ -1438,15 +1476,21 @@ $bg-white: #FFFFFF;
   box-shadow: none !important;
 }
 
+.icon-btn.mini {
+  color: $awd-text-on-dark-3;
+}
+
 .icon-btn.mini:hover {
-  background-color: #E8F3ED; /* Mint Green Lightest */
+  background-color: $awd-chrome-hover;
+  color: $awd-text-on-dark;
   border: none !important;
   outline: none !important;
 }
 
 .icon-btn.mini.active {
-  background: rgba(91, 209, 151, 0.2) !important;
-  border: 1px solid rgba(26, 83, 54, 0.2) !important;
+  background: rgba(91, 209, 151, 0.18) !important;
+  color: $awd-mint;
+  border: 1px solid rgba(91, 209, 151, 0.3) !important;
   box-shadow: none !important;
   outline: none !important;
 }
@@ -1460,7 +1504,7 @@ $bg-white: #FFFFFF;
 .icon-btn.mini .tool-icon {
   font-size: 14px;
   font-weight: 400;
-  color: #666;
+  color: inherit;
 }
 
 .icon-btn.mini .tool-icon-img {
@@ -1469,20 +1513,26 @@ $bg-white: #FFFFFF;
   display: block;
 }
 
+.icon-btn.mini .mini-icon-svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+}
+
 .sidebar-title {
-  font-size: 13px;
+  font-family: $awd-font-mono;
+  font-size: 10px;
   font-weight: 600;
-  color: $color-text-light; /* Lighter color */
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: $awd-text-on-dark-3;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex: 1;
   min-width: 0;
-  transform: scale(0.95);
-  transform-origin: left center;
 }
 
-/* 左侧收起态：Cursor 风格插件栏 */
 /* 左侧收起态：Cursor 风格插件栏 */
 .sidebar-collapsed-bar {
   flex: 1;
@@ -1491,7 +1541,7 @@ $bg-white: #FFFFFF;
   align-items: center;
   padding: 10px 0;
   gap: 10px;
-  background: $bg-white;
+  background: $awd-chrome-panel;
 }
 
 .sidebar-title-row {
@@ -1559,7 +1609,7 @@ $bg-white: #FFFFFF;
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: $color-text-main;
+  color: $awd-text-on-dark;
 }
 
 .placeholder-desc {
@@ -1567,7 +1617,7 @@ $bg-white: #FFFFFF;
   margin-top: 6px;
   font-size: 12px;
   line-height: 1.5;
-  color: $color-text-light;
+  color: $awd-text-on-dark-3;
 }
 
 .sidebar-content {
@@ -1584,12 +1634,12 @@ $bg-white: #FFFFFF;
   }
 
   &::-webkit-scrollbar-thumb {
-    background: #CBD5E1;
+    background: $awd-chrome-active;
     border-radius: 3px;
     transition: background 0.15s ease;
 
     &:hover {
-      background: #64748B;
+      background: $awd-text-on-dark-3;
     }
   }
 }
@@ -1607,7 +1657,123 @@ $bg-white: #FFFFFF;
 .resize-handle:hover,
 .side-resize-handle:hover,
 .bottom-resize-handle:hover {
-  background-color: rgba(18, 52, 77, 0.06);
+  background-color: rgba(91, 209, 151, 0.25);
+}
+
+/* ================= 底部状态条（IDE 化，对齐原型 util-bar） ================= */
+.status-bar {
+  height: 26px;
+  flex-shrink: 0;
+  background: $awd-chrome-top;
+  border-top: 1px solid $awd-chrome-line;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  gap: 2px;
+  color: $awd-text-on-dark-3;
+  font-family: $awd-font-mono;
+  font-size: 11px;
+  z-index: 150;
+}
+
+.status-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: $awd-text-on-dark-2;
+  transition: all 0.15s ease;
+
+  &:hover {
+    background: $awd-chrome-hover;
+    color: $awd-text-on-dark;
+  }
+
+  &.active {
+    background: rgba(91, 209, 151, 0.14);
+    color: $awd-mint;
+  }
+}
+
+.status-tool-label {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.status-sep {
+  width: 1px;
+  height: 12px;
+  background: $awd-chrome-active;
+  margin: 0 6px;
+  flex-shrink: 0;
+}
+
+.status-spacer {
+  flex: 1;
+}
+
+.status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: $awd-text-on-dark-3;
+  white-space: nowrap;
+
+  &.status-clickable {
+    cursor: pointer;
+    border-radius: 4px;
+    height: 20px;
+
+    &:hover {
+      background: $awd-chrome-hover;
+      color: $awd-text-on-dark;
+    }
+  }
+
+  &.status-file {
+    max-width: 260px;
+    overflow: hidden;
+
+    text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+  }
+
+  &.status-brand {
+    color: $awd-text-on-dark-2;
+  }
+}
+
+.status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  flex-shrink: 0;
+
+  &.mint {
+    background: $awd-mint;
+    box-shadow: 0 0 6px rgba(91, 209, 151, 0.7);
+  }
+
+  &.amber {
+    background: $awd-amber;
+  }
+
+  &.recording {
+    background: #E07A6A;
+    animation: status-dot-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes status-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 /* 中间内容区 */
@@ -1616,18 +1782,18 @@ $bg-white: #FFFFFF;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: #ffffff;
+  background: $awd-canvas;
   border: none;
   border-radius: 0;
   box-shadow: none;
   overflow: hidden;
 }
 
-/* 标签栏 Tabs */
+/* 标签栏 Tabs（IDE 深色，对齐原型 tab-strip） */
 .tabs-bar {
-  height: 36px;
-  background: #f8f9fa;
-  border-bottom: 1px solid rgba(18, 52, 77, 0.08);
+  height: 34px;
+  background: $awd-chrome-panel;
+  border-bottom: 1px solid $awd-chrome-line;
   backdrop-filter: none;
   display: flex;
   align-items: center;
@@ -1644,19 +1810,19 @@ $bg-white: #FFFFFF;
   &.half-width {
     flex: 0 0 50%; /* 强制占50% */
     max-width: 50%;
-    border-right-color: $color-border;
+    border-right-color: $awd-chrome-line;
   }
 }
 
 .tabs-plus {
   flex: 0 0 auto;
-  width: 28px;
-  height: 28px;
-  margin: 0 8px 0 0;
+  width: 26px;
+  height: 26px;
+  margin: 0 8px 0 4px;
   align-self: center;
-  border-radius: 10px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(15, 23, 42, 0.02);
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1664,15 +1830,18 @@ $bg-white: #FFFFFF;
 }
 
 .tabs-plus:hover {
-  background-color: rgba(255, 255, 255, 0.8);
-  border-color: rgba(200, 164, 93, 0.4);
+  background-color: $awd-chrome-hover;
 }
 
 .tabs-plus-icon {
-  font-size: 16px;
-  font-weight: 800;
-  color: $color-primary;
+  font-size: 15px;
+  font-weight: 600;
+  color: $awd-text-on-dark-3;
   line-height: 1;
+}
+
+.tabs-plus:hover .tabs-plus-icon {
+  color: $awd-text-on-dark;
 }
 
 .tabs-scroll {
@@ -1713,63 +1882,61 @@ $bg-white: #FFFFFF;
 
 .tab-item {
   position: relative;
-  height: 28px;
-  padding: 0 10px;
+  height: 34px; /* 与 tabs-bar 同高（scroll-view 内部包装层不传递百分比高度） */
+  padding: 0 12px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: rgba(15, 23, 42, 0.02);
-  border-radius: 10px;
-  margin-right: 6px;
+  gap: 7px;
+  background: transparent;
+  border-radius: 0;
+  margin-right: 0;
   cursor: pointer;
-  min-width: 100px;
-  max-width: 180px;
+  min-width: 110px;
+  max-width: 190px;
   user-select: none;
-  border: 1px solid rgba(15, 23, 42, 0.06);
-  transition: background-color 0.18s ease, border-color 0.18s ease;
+  border: none;
+  border-right: 1px solid $awd-chrome-line;
+  transition: background-color 0.15s ease, color 0.15s ease;
 
   &:hover {
-    border-color: rgba(200, 164, 93, 0.55);
-    background: rgba(200, 164, 93, 0.06);
+    background: $awd-chrome-hover;
   }
 
   .tab-name {
     flex: 1;
-    font-size: 13px;
-    color: $color-text-light;
+    font-size: 12.5px;
+    color: $awd-text-on-dark-2;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
   .tab-close {
-    font-size: 16px;
-    color: #999;
+    font-size: 15px;
+    color: $awd-text-on-dark-3;
     width: 16px;
     height: 16px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
+    border-radius: 4px;
 
     &:hover {
-      background: rgba(0,0,0,0.1);
-      color: #333;
+      background: rgba(255, 255, 255, 0.1);
+      color: $awd-text-on-dark;
     }
   }
 
   &.active {
-    background: rgba(18, 52, 77, 0.06);
-    border-color: rgba(18, 52, 77, 0.18);
-    box-shadow: inset 0 -2px 0 rgba($color-accent, 0.8);
+    background: $awd-chrome-line;
+    box-shadow: inset 0 -2px 0 $awd-mint;
 
-    .tab-name { color: $color-text-main; font-weight: 600; }
+    .tab-name { color: $awd-text-on-dark; font-weight: 600; }
   }
 }
 
 .tab-item.tab-drag-over {
-  border-color: rgba(200, 164, 93, 0.55);
-  background: rgba(200, 164, 93, 0.08);
+  background: rgba(91, 209, 151, 0.12);
 }
 
 .tab-item.tab-dual-open {
@@ -1784,12 +1951,21 @@ $bg-white: #FFFFFF;
   width: 6px;
   height: 6px;
   border-radius: 999px;
-  background: rgba(37, 99, 235, 0.75);
+  background: rgba(91, 209, 151, 0.8);
 }
 
 .page-project-overview.compact-mode .tab-item {
   min-width: 88px;
   padding: 0 10px;
+}
+
+/* tab 内文件类型图标随主题着色（svg stroke=currentColor） */
+.tab-item .tab-icon {
+  color: $awd-text-on-dark-3;
+}
+
+.tab-item.active .tab-icon {
+  color: $awd-mint;
 }
 
 .tabs-tools {
@@ -1804,24 +1980,22 @@ $bg-white: #FFFFFF;
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 6px;
+  border: 1px solid transparent;
   cursor: pointer;
   color: $color-text-light;
-  background: rgba(15, 23, 42, 0.02);
+  background: transparent;
   transition: all 0.18s ease;
 
   &:hover {
-    background-color: rgba(255, 255, 255, 0.8);
-    border-color: rgba(200, 164, 93, 0.4);
+    background-color: rgba(26, 83, 54, 0.06);
     color: $color-primary;
   }
 
   &.active {
-    background: linear-gradient(120deg, rgba(255,255,255,0.95), rgba(248, 241, 228, 0.9));
+    background: $awd-mint-pale;
     color: $color-primary;
-    border-color: rgba(200, 164, 93, 0.6);
-    box-shadow: 0 4px 10px rgba(200, 164, 93, 0.16);
+    border-color: rgba(91, 209, 151, 0.4);
   }
 
   .tool-icon {
@@ -1853,14 +2027,14 @@ $bg-white: #FFFFFF;
   min-width: 0; /* 防止内容撑大 */
   transition: all 0.2s ease-in-out; /* 更好的过渡 */
   overflow: hidden;
-  border-radius: 18px;
-  border: 1px solid rgba(15, 23, 42, 0.05);
-  background: rgba(249, 250, 255, 0.82);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+  border-radius: 0;
+  border: none;
+  background: $awd-canvas;
+  box-shadow: none;
 
   &.focused {
     /* 聚焦时的高亮提示 */
-    box-shadow: inset 0 0 0 2px rgba(18, 52, 77, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(91, 209, 151, 0.35);
     z-index: 1;
   }
 
@@ -1875,7 +2049,7 @@ $bg-white: #FFFFFF;
     width: 50%;
     flex: 0 0 50%;
     max-width: 50%;
-    border-right: 1px solid $color-border;
+    border-right: 1px solid $awd-chrome-active;
 
     &:last-child {
       border-right: none;
@@ -1887,9 +2061,9 @@ $bg-white: #FFFFFF;
   width: 100%;
   height: 100%;
   overflow: hidden; /* 确保内部组件不溢出 */
-  border-radius: 16px;
+  border-radius: 0;
   background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.03);
+  box-shadow: none;
 }
 
 /* 预热备胎实例（librePool.js）：未激活时脱离布局流隐形占位。不能用
@@ -1905,10 +2079,12 @@ $bg-white: #FFFFFF;
   width: 100%;
   height: 100%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: #fcfcfc;
-  color: #ccc;
+  gap: 12px;
+  background: $awd-canvas;
+  color: $awd-text-on-dark-3;
   font-size: 14px;
 }
 
@@ -1916,12 +2092,23 @@ $bg-white: #FFFFFF;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+}
+
+/* 深底衬线水印（官网 hero 巨型衬线字水印语言） */
+.empty-watermark {
+  font-family: $awd-font-serif;
+  font-size: 44px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: rgba(250, 248, 244, 0.06);
+  user-select: none;
+  line-height: 1;
 }
 
 .empty-icon {
   font-size: 48px;
-  color: #eee;
+  color: rgba(250, 248, 244, 0.12);
 }
 
 /* 右侧吸附抽屉 */
@@ -2301,7 +2488,7 @@ $bg-white: #FFFFFF;
 
 .menu-item:hover, .model-option:hover { background: #f1f5f9; }
 .menu-item.header { font-size: 11px; color: #94a3b8; pointer-events: none; padding-bottom: 4px; }
-.menu-item.active, .model-option.active { color: #3b82f6; background: #eff6ff; font-weight: 500; }
+.menu-item.active, .model-option.active { color: #1A5336; background: #E6F9F0; font-weight: 500; }
 .menu-divider { height: 1px; background: #f1f5f9; margin: 4px 0; }
 
 .dropdown-fixed-mask {
@@ -2364,7 +2551,7 @@ $bg-white: #FFFFFF;
 }
 
 .model-option:hover { background: #f1f5f9; }
-.model-option.active { color: #3b82f6; background: #eff6ff; }
+.model-option.active { color: #1A5336; background: #E6F9F0; }
 
 /* ... existing styles ... */
 
@@ -2429,7 +2616,7 @@ $bg-white: #FFFFFF;
 }
 
 .ai-export-btn.primary {
-  color: #3b82f6;
+  color: #1A5336;
   font-weight: 500;
 }
 
@@ -2586,7 +2773,7 @@ $bg-white: #FFFFFF;
 .ai-send-round-btn {
   width: 26px; height: 26px;
   border-radius: 999px;
-  background: #0f172a;
+  background: #1A5336;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2831,7 +3018,7 @@ $bg-white: #FFFFFF;
 .ocr-overlay-title {
   font-size: 13px;
   font-weight: 700;
-  color: #12344D;
+  color: #1A5336;
 }
 
 .ocr-overlay-hint {
@@ -2857,7 +3044,7 @@ $bg-white: #FFFFFF;
   border: 1px solid rgba(148, 163, 184, 0.35);
   background: #fff;
   font-size: 12px;
-  color: #12344D;
+  color: #1A5336;
 }
 
 .ocr-selection {
@@ -2877,7 +3064,7 @@ $bg-white: #FFFFFF;
   border: 1px solid rgba(224, 224, 224, 0.7);
   border-radius: 10px;
   font-size: 12px;
-  color: #12344D;
+  color: #1A5336;
   z-index: 10000;
   pointer-events: none;
 }
@@ -2995,7 +3182,7 @@ $bg-white: #FFFFFF;
 .upload-title {
   font-size: 32rpx;
   font-weight: 600;
-  color: #12344D;
+  color: #1A5336;
 }
 
 .upload-subtitle {
@@ -3322,7 +3509,7 @@ $bg-white: #FFFFFF;
 }
 .upload-label {
   font-size: 26rpx;
-  color: #12344D; /* AI Workdeck Dark Blue/Gray */
+  color: #1A5336; /* AI Workdeck Dark Blue/Gray */
   font-weight: 600;
   margin-bottom: 12rpx;
   display: block;
@@ -3842,7 +4029,7 @@ $bg-white: #FFFFFF;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: #0f172a;
+  background: linear-gradient(135deg, #1A5336, #2D5240);
   color: white;
   font-size: 14px;
 }
@@ -4052,7 +4239,7 @@ $bg-white: #FFFFFF;
   gap: 12px;
   padding: 8px 16px;
   border-radius: 999px;
-  background: #12344D;
+  background: #123A26;
   color: #fff;
   font-size: 13px;
   z-index: 9999;

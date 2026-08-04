@@ -10,8 +10,9 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 ## 关键文件
 
 **前端**
-- `frontend/src/pages/plugin-market/plugin-market.vue` — 插件广场单页，扁平三 tab：「Skill 广场 / 插件广场 / 已安装」（原先的「广场 / 已安装」两级 + seg-row 已在 UI 对齐时拍平）。Skill 广场带七分类下划线导航（带计数、空分类不占位）与搜索；插件广场接在线注册表，安装前弹权限确认；已安装分插件区与 Skill 区，Skill 卡右上是生效方式三档下拉。
+- `frontend/src/components/MarketPane.vue` — 插件广场**组件本体**（2026-08 从整页抽出）：扁平三 tab「Skill 广场 / 插件广场 / 已安装」。Skill 广场带七分类下划线导航（带计数、空分类不占位）与搜索；插件广场接在线注册表，安装前弹权限确认；已安装分插件区与 Skill 区，Skill 卡右上是生效方式三档下拉。prop `standalone`（默认 false）控制返回按钮渲染；根 `.market-pane` height:100% 内滚。**主入口是 workbench 内 tab**（rail 广场按钮 → openMarketTab()，`tabType:'market'`，见 sidebar-shell.md）。
   **视觉规范以官网 `aiworkdeckweb/DESIGN.md` 为准**（深绿 hero + 眉标 + 衬线展示字 + 编辑式下划线页签 + 「引号」触发词 + 毛玻璃卡片），改这页先读那份，不要在本页自创风格。
+- `frontend/src/pages/plugin-market/plugin-market.vue` — 薄壳页（22 行）：`<MarketPane :standalone="true">`，保留给 admin 页跳转与直链。onLoad 语义已移入组件 mounted；tab 每次重挂会重拉四组数据（两个打在线 registry）。
 - `frontend/src/config/icons.js` — `catContract/catLitigation/catCompliance/catResearch/catCorporate/catOffice/catOther` 七枚分类图标，**与官网 `components/skills/CategoryIcon.tsx` 的映射一一对应**，改一边必须同步另一边，否则同一个 Skill 在官网与桌面端长相不同。
 - `frontend/src/services/api.js` :407-485 — plugins、skills、skills/market 三组 HTTP 封装。
 - 入口：`frontend/src/pages/admin/admin.vue` :584 系统管理侧边栏项 `{key:'plugins', label:'插件广场', route:'/pages/plugin-market/plugin-market'}`。**leftSidebarPlugins.js 不含市场入口**（那是 IDE 左栏业务插件位）。

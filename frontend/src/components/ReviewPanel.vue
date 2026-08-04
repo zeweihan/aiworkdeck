@@ -131,8 +131,9 @@ export default {
 </script>
 
 <style scoped>
+/* 面板本体保持浅色（内容面）；仅与深绿画布的边界线取协调色 */
 .rp { display: flex; flex-direction: column; width: 288px; height: 100%; background: #FBFCFD;
-  border-left: 1px solid #E9ECEF; }
+  border-left: 1px solid #2D5240; }
 .rp-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 10px;
   border-bottom: 1px solid #E9ECEF; }
 .rp-tabs { display: flex; gap: 4px; }

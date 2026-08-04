@@ -3,6 +3,16 @@
     <!-- 顶部固定项目信息 -->
     <view class="project-header">
       <view class="header-left">
+        <!-- 品牌位：深色 chrome 上 logo 图片不可用，改 CSS 绘制小方标 + 衬线字标 -->
+        <view class="brand-block" @tap="goAllProjects" title="全部项目">
+          <view class="brand-mark">
+            <svg class="brand-mark-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.arrowUpRight" :key="gi" :d="d" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </view>
+          <text class="brand-word">AI Workdeck</text>
+        </view>
+        <view class="brand-sep"></view>
 
         <view class="project-info">
           <!-- Logo moved to center -->
@@ -68,11 +78,6 @@
         </view>
       </view>
 
-      <!-- Center Logo -->
-      <view class="header-center">
-         <image src="/static/logo_full_v2.png" mode="heightFix" class="project-logo" />
-      </view>
-
       <view class="header-right">
         <!-- 顶部工具区（IDE 风格）：分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
@@ -82,14 +87,10 @@
             :class="{ active: !sidebarCollapsed }"
             @tap="toggleSidebar"
             :title="sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'"
-            @mouseenter="hoverLeft = true"
-            @mouseleave="hoverLeft = false"
           >
-            <image
-              :src="(!sidebarCollapsed || hoverLeft) ? '/static/left-bar_selected.png' : '/static/left-bar.png'"
-              class="tool-icon-img"
-              mode="aspectFit"
-            />
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.panelLeft" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </view>
 
           <!-- 2. Bottom Sidebar (Tools Panel) -->
@@ -98,14 +99,10 @@
             :class="{ active: showToolsPanel }"
             @tap="toggleToolsPanel"
             title="常用工具"
-            @mouseenter="hoverBottom = true"
-            @mouseleave="hoverBottom = false"
           >
-            <image
-              :src="(showToolsPanel || hoverBottom) ? '/static/bottom-bar_selected.png' : '/static/bottom-bar.png'"
-              class="tool-icon-img"
-              mode="aspectFit"
-            />
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.panelBottom" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </view>
 
           <!-- 3. Right Sidebar (AI Panel) -->
@@ -114,14 +111,10 @@
             :class="{ active: showAiPanel }"
             @tap="toggleAiPanel"
             title="AI 助手"
-            @mouseenter="hoverRight = true"
-            @mouseleave="hoverRight = false"
           >
-            <image
-              :src="(showAiPanel || hoverRight) ? '/static/right-bar_selected.png' : '/static/right-bar.png'"
-              class="tool-icon-img"
-              mode="aspectFit"
-            />
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.panelRight" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </view>
 
           <!-- 4. Split View -->
@@ -130,14 +123,10 @@
             :class="{ active: splitMode }"
             @tap="toggleSplitMode"
             :title="splitMode ? '关闭分屏' : '开启分屏'"
-            @mouseenter="hoverSplit = true"
-            @mouseleave="hoverSplit = false"
           >
-             <image
-              :src="(splitMode || hoverSplit) ? '/static/square_selected.png' : '/static/square_split_2x1.png'"
-              class="tool-icon-img"
-              mode="aspectFit"
-            />
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.splitCols" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </view>
 
           <!-- 5. Screenshot (OCR) -->
@@ -145,14 +134,10 @@
             class="top-bar-btn"
             @tap="startOcrCapture"
             title="截图摘录（OCR）"
-            @mouseenter="hoverCapture = true"
-            @mouseleave="hoverCapture = false"
           >
-             <image
-              :src="hoverCapture ? '/static/screenshop_selected.png' : '/static/screenshop.png'"
-              class="tool-icon-img"
-              mode="aspectFit"
-            />
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.camera" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </view>
 
           <!-- 6. Browser (New Web) -->
@@ -160,30 +145,22 @@
             class="top-bar-btn"
             @tap="openBrowserTab()"
             title="浏览器"
-            @mouseenter="hoverWeb = true"
-            @mouseleave="hoverWeb = false"
           >
-             <image
-              :src="hoverWeb ? '/static/new-web_selected.png' : '/static/new-web.png'"
-              class="tool-icon-img"
-              mode="aspectFit"
-            />
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.web" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </view>
 
           <!-- Activity Record Toggle -->
           <view
             class="top-bar-btn"
-            :class="{ active: isRecording }"
+            :class="{ active: isRecording, recording: isRecording }"
             @tap="toggleRecording"
             title="录制活动"
-            @mouseenter="hoverRecord = true"
-            @mouseleave="hoverRecord = false"
           >
-            <image
-              :src="(isRecording || hoverRecord) ? '/static/record-rec_selected.png' : '/static/record-rec.png'"
-              class="tool-icon-img"
-              mode="aspectFit"
-            />
+            <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.record" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
           </view>
         </view>
         <view v-else>
@@ -243,11 +220,11 @@
           title="文件暂存区"
           @tap="toggleLeftPane('staging')"
         >
-          <image
-            :src="((leftPaneKey === 'staging' && !sidebarCollapsed) || stagingPinned) ? '/static/temporary_selected.png' : '/static/temporary.png'"
-            class="rail-icon-img"
-            mode="aspectFit"
-          />
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.inbox" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
         </view>
 
         <!-- 插件广场：IDE 扩展市场式直达入口（浏览/安装不该藏在系统设置两跳之下） -->
@@ -413,144 +390,101 @@
           <view v-if="leftPaneKey === 'files'" class="sidebar-actions-row">
             <view class="sidebar-actions">
               <!-- 1. 新建文件 (普通模式) -->
-      <view
-        v-if="!fileBatchMode"
-        class="icon-btn mini"
-        @tap="onFileTreeQuickAction('newFile')"
-        title="新建文档"
-        @mouseenter="hoverNewFile = true"
-        @mouseleave="hoverNewFile = false"
-      >
-        <image
-          :src="hoverNewFile ? '/static/new-document.png' : '/static/new-document_unselected.png'"
-          class="tool-icon-img"
-          mode="contain"
+              <view
+                v-if="!fileBatchMode"
+                class="icon-btn mini"
+                @tap="onFileTreeQuickAction('newFile')"
+                title="新建文档"
+              >
+                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.filePlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
 
-        />
-      </view>
+              <!-- 2. 新建文件夹 (普通模式) -->
+              <view
+                v-if="!fileBatchMode"
+                class="icon-btn mini"
+                @tap="onFileTreeQuickAction('newFolder')"
+                title="新建文件夹"
+              >
+                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.folderPlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
 
-      <!-- 2. 新建文件夹 (普通模式) -->
-      <view
-        v-if="!fileBatchMode"
-        class="icon-btn mini"
-        @tap="onFileTreeQuickAction('newFolder')"
-        title="新建文件夹"
-        @mouseenter="hoverNewFolder = true"
-        @mouseleave="hoverNewFolder = false"
-      >
-        <image
-          :src="hoverNewFolder ? '/static/icon_new_folder.png' : '/static/icon_new_folder_unselected.png'"
-          class="tool-icon-img"
-          mode="contain"
+              <!-- 3. 批量选择开关 (始终显示) -->
+              <view
+                class="icon-btn mini"
+                :class="{ active: fileBatchMode }"
+                @tap="toggleFileBatchMode"
+                title="批量选择"
+              >
+                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.checkSquare" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
 
-        />
-      </view>
+              <!-- 4. 上传 (普通模式) -->
+              <view
+                v-if="!fileBatchMode"
+                class="icon-btn mini"
+                @tap="onFileTreeQuickAction('upload')"
+                title="上传文件"
+              >
+                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.upload" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
 
-      <!-- 3. 批量选择开关 (始终显示) -->
-      <view
-        class="icon-btn mini"
-        :class="{ active: fileBatchMode }"
-        @tap="toggleFileBatchMode"
-        title="批量选择"
-        @mouseenter="hoverBatchSelect = true"
-        @mouseleave="hoverBatchSelect = false"
-      >
-        <image
-          :src="fileBatchMode || hoverBatchSelect ? '/static/batch_select.png' : '/static/batch_select_unselected.png'"
-          class="tool-icon-img"
-          mode="contain"
+              <!-- 5. 下载 (批量模式) -->
+              <view
+                v-if="fileBatchMode"
+                class="icon-btn mini"
+                @tap="onFileTreeQuickAction('download')"
+                title="批量下载"
+                :class="{ disabled: checkedFileCount <= 0 }"
+              >
+                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.download" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
 
-        />
-      </view>
+              <!-- 6. 排序 (普通模式) -->
+              <view
+                v-if="!fileBatchMode"
+                class="icon-btn mini"
+                @tap="onFileTreeQuickAction('sort')"
+                title="排序"
+              >
+                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.sort" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
 
-      <!-- 4. 上传 (普通模式) -->
-      <view
-        v-if="!fileBatchMode"
-        class="icon-btn mini"
-        @tap="onFileTreeQuickAction('upload')"
-        title="上传文件"
-        @mouseenter="hoverUpload = true"
-        @mouseleave="hoverUpload = false"
-      >
-        <image
-          :src="hoverUpload ? '/static/upload.png' : '/static/upload_unselected.png'"
-          class="tool-icon-img"
-          mode="contain"
+              <!-- 7. 复制 (批量模式) -->
+              <view
+                v-if="fileBatchMode"
+                class="icon-btn mini"
+                @tap="onFileTreeQuickAction('copy')"
+                title="批量复制"
+                :class="{ disabled: checkedFileCount <= 0 }"
+              >
+                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.copyDoc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
 
-        />
-      </view>
-
-      <!-- 5. 下载 (批量模式) -->
-      <view
-        v-if="fileBatchMode"
-        class="icon-btn mini"
-        @tap="onFileTreeQuickAction('download')"
-        title="批量下载"
-        :class="{ disabled: checkedFileCount <= 0 }"
-        @mouseenter="hoverDownload = true"
-        @mouseleave="hoverDownload = false"
-      >
-        <image
-          :src="hoverDownload ? '/static/download_selected.png' : '/static/download.png'"
-          class="tool-icon-img"
-          mode="contain"
-
-        />
-      </view>
-
-      <!-- 6. 排序 (普通模式) -->
-      <view
-        v-if="!fileBatchMode"
-        class="icon-btn mini"
-        @tap="onFileTreeQuickAction('sort')"
-        title="排序"
-        @mouseenter="hoverSort = true"
-        @mouseleave="hoverSort = false"
-      >
-        <image
-          :src="hoverSort ? '/static/sort.png' : '/static/sort_unselected.png'"
-          class="tool-icon-img"
-          mode="contain"
-
-        />
-      </view>
-
-      <!-- 7. 复制 (批量模式) -->
-      <view
-        v-if="fileBatchMode"
-        class="icon-btn mini"
-        @tap="onFileTreeQuickAction('copy')"
-        title="批量复制"
-        :class="{ disabled: checkedFileCount <= 0 }"
-        @mouseenter="hoverCopy = true"
-        @mouseleave="hoverCopy = false"
-      >
-        <image
-          :src="hoverCopy ? '/static/copy_selected.png' : '/static/copy.png'"
-          class="tool-icon-img"
-          mode="contain"
-
-        />
-      </view>
-
-      <!-- 8. 回收站 / 删除 (始终显示，功能不同) -->
-      <view
-        class="icon-btn mini"
-        @tap="onFileTreeQuickAction('recycleBin')"
-        :title="fileBatchMode ? '删除选中' : '回收站'"
-        @mouseenter="hoverRecycleBin = true"
-        @mouseleave="hoverRecycleBin = false"
-      >
-        <image
-          :src="hoverRecycleBin ? '/static/recycle-bin.png' : '/static/recycle-bin_unselected.png'"
-          class="tool-icon-img"
-          mode="contain"
-
-        />
-      </view>
-
-
-
+              <!-- 8. 回收站 / 删除 (始终显示，功能不同) -->
+              <view
+                class="icon-btn mini"
+                @tap="onFileTreeQuickAction('recycleBin')"
+                :title="fileBatchMode ? '删除选中' : '回收站'"
+              >
+                <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in GLYPHS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
             </view>
           </view>
         </view>
@@ -742,7 +676,7 @@
               <!-- 初始空状态 (仅当左侧也没有文件时) -->
               <view v-if="leftFiles.length === 0 && !splitMode" class="empty-workspace">
                 <view class="empty-content">
-                  <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
+                  <text class="empty-watermark">AI Workdeck</text>
                   <text class="empty-text">选择文件开始工作</text>
                 </view>
               </view>
@@ -833,6 +767,10 @@
                       v-else-if="isDdRequest(activeFileLeft)"
                       :request-id="activeFileLeft.requestId"
                     />
+                    <MarketPane
+                      v-else-if="activeFileLeft.tabType === 'market'"
+                      :key="activeFileLeft.id"
+                    />
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
                       :url="activeFileLeft.frontendEntry"
@@ -846,7 +784,7 @@
                     />
                   </view>
                   <view v-else-if="!activeFileLeft" class="pane-empty">
-                    <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
+                    <text class="empty-watermark">AI Workdeck</text>
                     <text class="empty-text">左侧空闲</text>
                   </view>
                 </view>
@@ -910,6 +848,10 @@
                       v-else-if="isDdRequest(activeFileRight)"
                       :request-id="activeFileRight.requestId"
                     />
+                    <MarketPane
+                      v-else-if="activeFileRight.tabType === 'market'"
+                      :key="activeFileRight.id"
+                    />
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"
                       :url="activeFileRight.frontendEntry"
@@ -923,7 +865,7 @@
                     />
                   </view>
                   <view v-else-if="!activeFileRight" class="pane-empty">
-                    <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
+                    <text class="empty-watermark">AI Workdeck</text>
                     <text class="empty-text">右侧空闲</text>
                   </view>
                 </view>
@@ -1340,6 +1282,40 @@
       />
 
     </view>
+
+    <!-- 底部状态条（IDE 化：常驻工具入口 + 真实状态信号，等宽字体） -->
+    <view class="status-bar" v-if="!isClientView">
+      <view
+        v-for="t in toolsList"
+        :key="'sb-' + t.key"
+        class="status-tool"
+        :class="{ active: showToolsPanel && activeToolKey === t.key }"
+        @tap="openToolFromStatusBar(t.key)"
+      >
+        <text class="status-tool-label">{{ t.label }}</text>
+      </view>
+      <view class="status-sep"></view>
+      <view v-if="isRecording" class="status-item status-recording">
+        <view class="status-dot recording"></view>
+        <text>活动录制中</text>
+      </view>
+      <view v-if="versionWorkStatus.enabled && (versionWorkStatus.working || versionWorkStatus.onDraft)" class="status-item status-clickable" @tap="goHandleAdoptConflict">
+        <view class="status-dot amber"></view>
+        <text>{{ versionWorkStatusLabel }}</text>
+      </view>
+      <view class="status-spacer"></view>
+      <view v-if="activeFileLeft" class="status-item status-file">
+        <text>{{ activeFileLeft.name }}</text>
+      </view>
+      <view v-if="splitMode" class="status-item">
+        <text>分屏</text>
+      </view>
+      <view class="status-sep"></view>
+      <view class="status-item status-brand">
+        <view class="status-dot mint"></view>
+        <text>AI Workdeck</text>
+      </view>
+    </view>
   </view>
 </template>
 
@@ -1354,6 +1330,7 @@ import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
 import FileLinkDropZone from '@/components/FileLinkDropZone.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
+import MarketPane from '@/components/MarketPane.vue' // 插件广场 workbench 内嵌 tab
 import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
@@ -1448,6 +1425,7 @@ export default {
     ChatInterface,
     MarkdownPreview,
     PluginPane, // Added
+    MarketPane,
     CompareDocDialog,
     DocDiffViewer,
     VersionCompareTab,
@@ -1673,28 +1651,9 @@ export default {
 
       // Hover States for File Tree Icons
       hoverActionKey: null,
-      hoverBatchSelect: false,
-      hoverRecycleBin: false,
 
       // Activity Recording State
       isRecording: false,
-
-      // Toolbar Hover States
-      hoverLeft: false,
-      hoverBottom: false,
-      hoverRight: false,
-      hoverSplit: false,
-      hoverCapture: false,
-      hoverWeb: false,
-      hoverRecord: false,
-
-      // Sidebar Action Hovers
-      hoverNewFile: false,
-      hoverNewFolder: false,
-      hoverUpload: false,
-      hoverSort: false,
-      hoverDownload: false,
-      hoverCopy: false,
 
       // Recording Toast
       showRecordingToast: false,
@@ -2821,6 +2780,10 @@ export default {
       if (file.tabType === 'version-compare' || file.tabType === 'version-text-diff') {
         return this.leftPaneKey === 'version' || this.leftPaneKey === 'files'
       }
+      // 插件广场 tab：与左栏模式无关，常显（VS Code 扩展页语义）
+      if (file.tabType === 'market') {
+        return true
+      }
       // 普通文件在资源管理器、搜索或EasyVoice模式下都可见
       return this.leftPaneKey === 'files' || this.leftPaneKey === 'search' || this.leftPaneKey === 'easyvoice'
     },
@@ -3506,7 +3469,35 @@ export default {
       uni.navigateTo({ url: '/pages/admin/admin' })
     },
     goToPluginMarket() {
-      uni.navigateTo({ url: '/pages/plugin-market/plugin-market' })
+      // VS Code 式：插件广场在 workbench 里以 tab 打开，保留左栏与标签页，
+      // 不再整页跳转（独立页面路由仍保留给 admin 入口与直链兜底）。
+      this.openMarketTab()
+    },
+    openMarketTab() {
+      // 单例 tab：任一窗格已开则激活之
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find(f => f.tabType === 'market')
+        if (existing) {
+          const idProp = pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+          this[idProp] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      const idProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
+      const id = `market_${Date.now()}`
+      list.push({
+        id,
+        tabType: 'market',
+        name: '插件广场'
+      })
+      this[idProp] = id
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
     },
     formatTime(timeStr) {
   if (!timeStr) return '-'
@@ -3554,6 +3545,18 @@ export default {
     toggleToolsPanel() {
       this.showToolsPanel = !this.showToolsPanel
       this.$nextTick(() => this.triggerWorkbenchResize())
+    },
+
+    // 底部状态条工具入口：点当前已打开的 tab 则收起抽屉，否则切换/打开到该 tab
+    openToolFromStatusBar(key) {
+      if (this.showToolsPanel && this.activeToolKey === key) {
+        this.toggleToolsPanel()
+        return
+      }
+      this.switchToolTab(key)
+      if (!this.showToolsPanel) {
+        this.toggleToolsPanel()
+      }
     },
 
     triggerWorkbenchResize() {

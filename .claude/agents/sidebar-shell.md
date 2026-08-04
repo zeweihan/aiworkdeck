@@ -35,6 +35,7 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 ## 左栏入口（frontend/src/config/leftSidebarPlugins.js，57 行）
 
 固定入口：files(资源管理器→FileTree)、dd-files(尽调文件)、shareholder-meeting(股东大会，**面板区无分支=占位**)、search、easyvoice、desensitize、version(版本记录→VersionPanel，见 `.claude/agents/version-control.md`)。辅助函数 getLeftSidebarPlugin(key)（找不到回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。rail 齿轮对所有人可见，admin 页/接口后端 requireAdmin（用户名 admin）。
+**插件广场入口（2026-08 起 VS Code 式）**：rail 广场按钮 goToPluginMarket → `openMarketTab()` 在 workbench 开单例 tab（`tabType:'market'`，isTabVisible 常显不随左栏模式隐藏，直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported 白名单——与浏览器 tab 同法），渲染 `components/MarketPane.vue`；独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。
 
 ## 页面路由（frontend/src/pages.json，全部 navigationStyle: custom）
 
@@ -47,7 +48,8 @@ login（**启动页**）/ newproject / project-overview / variable-library / use
 
 ## CSS 体系
 
-- 主题变量：`frontend/src/uni.scss`（SCSS 变量非 CSS 自定义属性）：$brand-color-primary #12344D、$brand-color-gold #C8A45D、$brand-bg-warm #F7F5F0，映射 $uni-* 系列。无 :root/--var 令牌。
+- **设计令牌（2026-08 UI 升级后的单一来源）**：`frontend/src/uni.scss` 尾部 `$awd-*` 全集（对齐官网 DESIGN.md v1 + prototype_awd）——chrome 深绿五阶（$awd-chrome-base/top/panel/line/hover/active）、品牌（$awd-forest/#1A5336、$awd-mint/#5BD197、$awd-brass）、深底文字三阶（$awd-text-on-dark/-2/-3，绿灰系禁蓝灰）、画布（$awd-canvas #1D3A29 / $awd-paper）、字体三轨（$awd-font-serif 衬线展示位 / -sans / -mono 元信息状态）。uni.scss 全局注入，所有组件 SCSS 直接可用，**新样式禁止硬编码色值**。旧 $brand-color-primary #12344D/$brand-color-gold 仅存量页面兼容，外壳已不再使用。
+- **外壳形态（2026-08 IDE 深色化）**：顶栏 40px 深色 chrome（品牌位 .brand-block CSS 绘制小方标+衬线字标，替代了原中央 logo 图）+ rail/sidebar-left/tabs-bar/ai-panel 容器全深绿面板 + 编辑画布深底浮纸（引擎侧配色见 doc-editor.md）+ 新增 26px 底部状态条 `.status-bar`（等宽字体；左=variables/favorites/clipboard 工具入口 openToolFromStatusBar()，与底部抽屉联动；右=活跃文件/分屏/录制/版本工作状态真实信号）。底部抽屉与浮层弹窗保持浅色（内容面）。外壳图标已全面 SVG 化（config/icons.js ICONS + leftSidebarPlugins svgPaths），双态 PNG 不再新增。
 - 全局覆盖：`frontend/src/App.vue`（:15-65 只覆盖 uni-modal/uni-toast）。
 - **awd-\* 类名约定**（King IDE 品牌清零后的通用弹窗/按钮样式，PR#171）：awd-dialog/-mask/-header/-title/-body/-footer、awd-btn/-primary/-secondary/-danger、awd-field/awd-input。**没有集中定义**——在 project-overview.vue（~:10180-10300）、ChatInterface.vue（~:2869 起）、FileTree.vue 各自 scoped 重复定义；改样式要多处同步。
 - 外壳布局类：.header-tools:6904、.rail-btn:7009、.sidebar-left:7403/7905、.workbench:7455、.bottom-panel:7283/7510、.compact-mode:7478、.is-resizing:7927。

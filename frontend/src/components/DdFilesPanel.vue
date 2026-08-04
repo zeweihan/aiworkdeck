@@ -21,16 +21,9 @@
       @mouseleave="hoveredId = null"
     >
       <view class="dd-req-icon">
-        <image
-          v-if="hoveredId === req.id || req.id === activeRequestId"
-          src="/static/checklist_selected.png"
-          class="dd-icon-img"
-        />
-        <image
-          v-else
-          src="/static/checklist_unselected.png"
-          class="dd-icon-img"
-        />
+        <svg class="dd-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path v-for="(d, gi) in ICONS.listChecks" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
       </view>
       <view class="dd-req-info">
         <!-- Edit Mode -->
@@ -57,24 +50,27 @@
             @tap.stop="copyRequest(req)"
             title="复制"
         >
-            <image src="/static/copy.png" class="dd-action-img default" />
-            <image src="/static/copy_selected.png" class="dd-action-img hover" />
+            <svg class="dd-action-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in ICONS.copyDoc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
         </view>
         <view
             class="dd-action-btn"
             @tap.stop="startRename(req)"
             title="重命名"
         >
-            <image src="/static/rename.png" class="dd-action-img default" />
-            <image src="/static/rename_selected.png" class="dd-action-img hover" />
+            <svg class="dd-action-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in ICONS.pencil" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
         </view>
         <view
             class="dd-action-btn"
             @tap.stop="confirmDelete(req)"
             title="删除"
         >
-            <image src="/static/delete.png" class="dd-action-img default" />
-            <image src="/static/delete_selected.png" class="dd-action-img hover" />
+            <svg class="dd-action-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
         </view>
       </view>
     </view>
@@ -103,6 +99,7 @@
 
 <script>
 import api from '@/services/api'
+import { ICONS } from '@/config/icons.js'
 
 export default {
   name: 'DdFilesPanel',
@@ -129,6 +126,7 @@ export default {
     }
   },
   computed: {
+    ICONS() { return ICONS },
     canCreateRequest() {
       if (!this.currentUser) return false
       return this.currentUser.role !== 'CLIENT'
@@ -230,15 +228,15 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #e0e0e0;
-  background-color: #fff;
+  border-bottom: 1px solid $awd-chrome-line;
+  background-color: transparent;
   box-sizing: border-box;
   flex-shrink: 0;
 
   .dd-panel-title {
     font-size: 11px;
     font-weight: 600;
-    color: #999;
+    color: $awd-text-on-dark-3;
     transform: scale(0.95);
     transform-origin: left center;
   }
@@ -250,17 +248,17 @@ export default {
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    color: #666;
+    color: $awd-text-on-dark-2;
     border-radius: 4px;
     border: 1px solid transparent;
     transition: all 0.2s;
-    
+
     &:hover {
-      background-color: rgba(0,0,0,0.05);
+      background-color: $awd-chrome-hover;
       border-color: transparent;
-      color: #333;
+      color: $awd-text-on-dark;
     }
-    
+
     .dd-add-icon {
         font-size: 14px;
         line-height: 1;
@@ -276,7 +274,7 @@ export default {
   flex-direction: column;
   align-items: stretch;
   box-sizing: border-box;
-  background-color: #f8f9fa;
+  background-color: transparent;
   overflow-y: auto;
   min-height: 0;
 }
@@ -285,7 +283,7 @@ export default {
   display: flex;
   align-items: center;
   padding: 10px 12px;
-  background-color: #fff;
+  background-color: $awd-chrome-hover;
   border-radius: 6px;
   margin: 0 4px 8px 4px;
   cursor: pointer;
@@ -296,17 +294,16 @@ export default {
   flex-shrink: 0;
 
   &:hover {
-    background-color: #f5f7f6; 
+    background-color: $awd-chrome-active;
   }
 
   &.active {
-    border-color: #1A5336;
-    background-color: #E6F9F0;
-    box-shadow: 0 2px 8px rgba(26, 83, 54, 0.1);
+    border-color: $awd-mint;
+    background-color: rgba($awd-mint, 0.12);
   }
 
   &.active:hover {
-    background-color: #E6F9F0;
+    background-color: rgba($awd-mint, 0.12);
   }
 
   .dd-req-icon {
@@ -316,11 +313,17 @@ export default {
     display: flex;
     align-items: center;
     justify-content: center;
+    color: $awd-text-on-dark-3;
 
-    .dd-icon-img {
+    .dd-icon-svg {
       width: 100%;
       height: 100%;
     }
+  }
+
+  &:hover .dd-req-icon,
+  &.active .dd-req-icon {
+    color: $awd-mint;
   }
 
   .dd-req-info {
@@ -332,7 +335,7 @@ export default {
 
     .dd-req-name {
       font-size: 13px;
-      color: #333;
+      color: $awd-text-on-dark;
       margin-bottom: 2px;
       white-space: nowrap;
       overflow: hidden;
@@ -342,22 +345,23 @@ export default {
 
     .dd-req-status {
       font-size: 11px;
-      color: #999;
-      
-      &.published { color: #28a745; }
-      &.completed { color: #666; }
+      color: $awd-text-on-dark-3;
+
+      &.published { color: $awd-mint; }
+      &.completed { color: $awd-text-on-dark-2; }
     }
-    
+
     .dd-rename-input {
         font-size: 13px;
-        border: 1px solid #4a90e2;
-        background: #fff;
+        border: 1px solid $awd-mint;
+        background: $awd-chrome-hover;
+        color: $awd-text-on-dark;
         border-radius: 4px;
         padding: 2px 4px;
         width: 100%;
     }
   }
-  
+
   .dd-item-actions {
     display: flex;
     align-items: center;
@@ -375,25 +379,16 @@ export default {
       justify-content: center;
       cursor: pointer;
       position: relative;
+      color: $awd-text-on-dark-3;
+      transition: color 0.2s;
 
-      .dd-action-img {
+      .dd-action-svg {
         width: 14px;
         height: 14px;
-        position: absolute;
-        transition: opacity 0.2s;
-
-        &.hover {
-          opacity: 0;
-        }
       }
 
       &:hover {
-        .dd-action-img.default {
-          opacity: 0;
-        }
-        .dd-action-img.hover {
-          opacity: 1;
-        }
+        color: $awd-mint;
       }
     }
   }
@@ -485,7 +480,7 @@ export default {
 .dd-empty-state {
   padding: 20px;
   text-align: center;
-  color: #999;
+  color: $awd-text-on-dark-3;
   font-size: 12px;
 }
 </style>

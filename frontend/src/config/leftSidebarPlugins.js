@@ -4,20 +4,36 @@ export const LEFT_SIDEBAR_PLUGINS = [
   {
     key: 'files',
     label: '资源管理器',
-    icon: '/static/documents_unselected.png',
-    activeIcon: '/static/documents_selected.png'
+    svgPaths: [
+      { d: 'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7l-5-5Z' },
+      { d: 'M15 2v5h5' },
+      { d: 'M9 13h6' },
+      { d: 'M9 17h6' }
+    ]
   },
   {
     key: 'dd-files',
     label: '尽调文件',
-    icon: '/static/checklist_unselected.png',
-    activeIcon: '/static/checklist_selected.png'
+    svgPaths: [
+      { d: 'M3 5l1.5 1.5L7 4' },
+      { d: 'M3 12l1.5 1.5L7 10.5' },
+      { d: 'M3 19l1.5 1.5L7 17.5' },
+      { d: 'M11 6h10' },
+      { d: 'M11 12h10' },
+      { d: 'M11 18h10' }
+    ]
   },
   {
     key: 'shareholder-meeting',
     label: '股东大会',
-    icon: '/static/meeting_unselected.png',
-    activeIcon: '/static/meeting_selected.png'
+    svgPaths: [
+      { d: 'M3 22h18' },
+      { d: 'M6 18v-7' },
+      { d: 'M10 18v-7' },
+      { d: 'M14 18v-7' },
+      { d: 'M18 18v-7' },
+      { d: 'M11.1 2.2a2 2 0 0 1 1.8 0l7.9 3.85c.47.23.3.95-.23.95H3.43c-.53 0-.7-.72-.22-.95L11.1 2.2Z' }
+    ]
   },
   {
     key: 'search',
@@ -30,8 +46,14 @@ export const LEFT_SIDEBAR_PLUGINS = [
   {
     key: 'easyvoice',
     label: 'EasyVoice',
-    icon: '/static/MPIS-TTS.png',
-    activeIcon: '/static/MPIS-TTS_selected.png'
+    svgPaths: [
+      { d: 'M2 10v4' },
+      { d: 'M6 6v12' },
+      { d: 'M10 3v18' },
+      { d: 'M14 8v8' },
+      { d: 'M18 5v14' },
+      { d: 'M22 10v4' }
+    ]
   },
   {
     key: 'desensitize',

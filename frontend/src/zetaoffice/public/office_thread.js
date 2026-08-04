@@ -75,6 +75,42 @@ function setRedlineAuthor(name) {
   currentRedlineAuthor = n;
 }
 
+// ---- 应用配色：深绿画布上漂浮浅色纸页（产品 UI 深色化） ---------------------
+// 纸页周围背景（AppBackground）与纸色（DocColor）是 LO 应用程序颜色，存在
+// /org.openoffice.Office.UI/ColorScheme 注册表里，用与 setRedlineAuthor 相同的
+// ConfigurationUpdateAccess 机制运行时写入——不重烧引擎，工具栏保留引擎默认浅色。
+// 应用级配置，boot 写一次即可（load_document retarget 换的是文档模型，不影响）。
+// 失败静默降级：引擎保持默认白底，宿主侧深色壳依然成立，不阻塞 boot。
+const APP_BACKGROUND_COLOR = 0x1D3A29; // 画布深绿（对齐官网原型）
+const DOC_PAPER_COLOR = 0xFCFBF8;      // 纸页暖白
+function applyAppColorScheme() {
+  try {
+    const provider = context.getServiceManager().createInstanceWithContext(
+      'com.sun.star.configuration.ConfigurationProvider', context);
+    const access = provider.createInstanceWithArguments(
+      'com.sun.star.configuration.ConfigurationUpdateAccess',
+      [mkProp('nodepath', '/org.openoffice.Office.UI/ColorScheme')]);
+    // 层级：ColorScheme/CurrentColorScheme（字符串）指向 ColorScheme/ColorSchemes
+    // 集合里的方案节点；方案节点下每个 UI 元素（AppBackground/DocColor/…）是一个
+    // 组节点，含 int 属性 Color。默认注册表里方案节点可能不存在（惰性创建），
+    // 缺则经集合节点的 XSingleServiceFactory 建一个再写。
+    let cur = '';
+    try { cur = String(access.getByName('CurrentColorScheme') || ''); } catch (e) {}
+    if (!cur) cur = 'LibreOffice';
+    const schemes = access.getByName('ColorSchemes');
+    if (!schemes.hasByName(cur)) schemes.insertByName(cur, schemes.createInstance());
+    const scheme = schemes.getByName(cur);
+    scheme.getByName('AppBackground').replaceByName('Color', APP_BACKGROUND_COLOR);
+    scheme.getByName('DocColor').replaceByName('Color', DOC_PAPER_COLOR);
+    try { access.replaceByName('CurrentColorScheme', cur); } catch (e) {}
+    access.commitChanges();
+    log('应用配色已写入 / app color scheme applied (' + cur + '): AppBackground=#1D3A29 DocColor=#FCFBF8');
+  } catch (e) {
+    console.warn('[office_thread] 应用配色写入失败，保持引擎默认浅色 / color scheme write failed: ' + errStr(e));
+    log('应用配色写入失败（降级为默认浅色）/ color scheme failed: ' + errStr(e));
+  }
+}
+
 // LibreOffice import filter names by extension — used only for the stream-load
 // fallback (private:stream has no URL extension to auto-detect a filter from).
 const IMPORT_FILTERS = {
@@ -923,6 +959,7 @@ function showDeletionsInMargin() {
 // loaded the wrong content.
 function bootDoc() {
   context = zetajs.getUnoComponentContext();
+  applyAppColorScheme(); // 首帧前写入，避免白底闪一下再变深
   desktop = css.frame.Desktop.create(context);
   xModel = desktop.loadComponentFromURL('private:factory/swriter', '_default', 0, []);
   ctrl = xModel.getCurrentController();

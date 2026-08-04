@@ -97,7 +97,7 @@
             <span class="step-text">{{ step.text }}</span>
          </div>
       </div>
-      <div style="width: 100%; border-bottom: 1px solid #eee; margin: 0 auto; margin-top: 6px;"></div>
+      <div style="width: 100%; border-bottom: 1px solid rgba(255,255,255,0.08); margin: 0 auto; margin-top: 6px;"></div>
 
 
     </div>
@@ -188,9 +188,9 @@ const isSecondaryContent = (text) => {
 }
 </script>
 
-<style scoped>
+<style lang="scss" scoped>
 .process-card {
-  background: #ffffff;
+  background: transparent; /* 悬浮在深色气泡卡片内 */
   border-radius: 12px 12px 0 0;
   /* border-bottom: 1px solid #1A5336; */
   /* box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.1); */
@@ -211,12 +211,12 @@ const isSecondaryContent = (text) => {
   align-items: center;
   padding: 7px 12px;
   cursor: pointer;
-  background: #ffffff;
+  background: transparent;
   transition: background 0.15s;
 }
 
 .process-header:hover {
-  background: #F8F9FA; /* Gray-Pale */
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .left {
@@ -226,7 +226,7 @@ const isSecondaryContent = (text) => {
 }
 
 .header-icon-wrapper {
-  color: #1A5336; /* Forest Green */
+  color: $awd-mint;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -235,7 +235,7 @@ const isSecondaryContent = (text) => {
 .title {
   font-size: 13px;
   font-weight: 600;
-  color: #1A5336; /* Forest Green */
+  color: $awd-mint;
 }
 
 .right {
@@ -252,22 +252,22 @@ const isSecondaryContent = (text) => {
 }
 
 .status-badge.success {
-  background: #E6F9F0; /* Mint Lightest */
-  color: #1A5336; /* Forest Green */
+  background: rgba(91, 209, 151, 0.15);
+  color: $awd-mint;
 }
 
 .status-badge.processing {
-  background: #E9ECEF; /* Gray-Light */
-  color: #6C757D; /* Gray-Medium */
+  background: rgba(255, 255, 255, 0.08);
+  color: $awd-text-on-dark-2;
 }
 
 .status-badge.error {
-  background: #FDEDEC;
-  color: #C0392B;
+  background: rgba(160, 59, 44, 0.25);
+  color: lighten($awd-brick, 28%);
 }
 
 .chevron-wrapper {
-  color: #ADB5BD;
+  color: $awd-text-on-dark-3;
   transition: transform 0.2s ease;
 }
 
@@ -299,23 +299,23 @@ const isSecondaryContent = (text) => {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #E9ECEF;
+  background: $awd-chrome-active;
   margin-top: 6px;
   flex-shrink: 0;
 }
 
 .step-dot.done {
-    background: #5BD197; /* Mint Green */
+    background: $awd-mint;
 }
 
 .step-text {
   font-size: 12px;
-  color: #2C3338; /* Gray-Dark */
+  color: $awd-text-on-dark;
   line-height: 1.45;
 }
 
 .step-text.is-meta {
-    color: #6C757D; /* Gray-Medium */
+    color: $awd-text-on-dark-3;
     font-size: 11px;
 }
 
@@ -323,8 +323,8 @@ const isSecondaryContent = (text) => {
 .file-attachment-card {
     display: flex;
     align-items: center;
-    background: #F8F9FA; /* Gray-Pale */
-    border: 1px solid #E9ECEF; /* Gray-Light */
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 8px;
     padding: 7px 10px;
     gap: 10px;
@@ -343,7 +343,7 @@ const isSecondaryContent = (text) => {
 .file-name {
     font-size: 13px;
     font-weight: 600;
-    color: #2C3338;
+    color: $awd-text-on-dark;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -351,7 +351,7 @@ const isSecondaryContent = (text) => {
 
 .file-meta {
     font-size: 11px;
-    color: #6C757D;
+    color: $awd-text-on-dark-3;
     margin-top: 1px;
 }
 
@@ -367,14 +367,14 @@ const isSecondaryContent = (text) => {
     align-items: center;
     justify-content: center;
     border-radius: 6px;
-    color: #6C757D;
+    color: $awd-text-on-dark-2;
     cursor: pointer;
     transition: all 0.2s;
 }
 
 .action-btn:hover {
-    background: #E9ECEF;
-    color: #1A5336;
+    background: rgba(255, 255, 255, 0.08);
+    color: $awd-mint;
 }
 
 /* Tool Row */
@@ -383,7 +383,7 @@ const isSecondaryContent = (text) => {
   align-items: center;
   justify-content: space-between;
   padding: 3px 8px;
-  background: #F8F9FA;
+  background: rgba(0, 0, 0, 0.18);
   border-radius: 5px;
   margin-left: 0;
 }
@@ -397,7 +397,7 @@ const isSecondaryContent = (text) => {
 
 .tool-name {
     font-size: 12px;
-    color: #1A5336;
+    color: $awd-mint;
     font-weight: 500;
     white-space: nowrap;
     overflow: hidden;
@@ -410,9 +410,9 @@ const isSecondaryContent = (text) => {
     flex-shrink: 0;
 }
 
-.status-loading { color: #6C757D; }
-.status-success { color: #5BD197; }
-.status-error { color: #E74C3C; }
+.status-loading { color: $awd-text-on-dark-3; }
+.status-success { color: $awd-mint; }
+.status-error { color: lighten($awd-brick, 28%); }
 
 /* Thinking Row */
 .thinking-row {

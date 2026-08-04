@@ -36,11 +36,11 @@ export default {
 }
 </script>
 
-<style scoped>
+<style scoped lang="scss">
 .plugin-pane {
   width: 100%;
   height: 100%;
-  background-color: #fff;
+  background-color: $awd-chrome-panel; /* iframe 加载前的底色保持深色，避免白闪 */
   display: flex;
   flex-direction: column;
 }
@@ -55,6 +55,6 @@ export default {
 .plugin-error {
   padding: 40px;
   text-align: center;
-  color: #999;
+  color: $awd-text-on-dark-3;
 }
 </style>
