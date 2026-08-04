@@ -184,14 +184,14 @@ export default {
    给 min-width 防止被压缩到只剩几像素。 */
 .cloud-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 12rpx;
-  padding: 16rpx 20rpx; border-bottom: 1px solid $awd-chrome-line;
+  padding: 16rpx 20rpx; border-bottom: 1px solid #eee;
 }
-.cloud-text { font-size: 26rpx; color: $awd-text-on-dark; flex: 1; min-width: 200rpx; }
-.cloud-unlinked { color: $awd-text-on-dark-2; }
-.cloud-hint { font-size: 23rpx; color: $awd-text-on-dark-3; }
+.cloud-text { font-size: 26rpx; color: #333; flex: 1; min-width: 200rpx; }
+.cloud-unlinked { color: #666; }
+.cloud-hint { font-size: 23rpx; color: #999; }
 .cloud-btn { flex-shrink: 0; }
 .cloud-members-link {
-  font-size: 23rpx; color: $awd-mint; text-decoration: underline; flex-shrink: 0;
+  font-size: 23rpx; color: #12344D; text-decoration: underline; flex-shrink: 0;
 }
 
 .cloud-dot {
@@ -201,13 +201,10 @@ export default {
 .cloud-dot-blue { background: #3E7CB1; }
 .cloud-dot-green { background: #4C9A6A; }
 
-/* 深底（面板内）按钮基调；弹窗（浮层白卡）里的按钮在下方覆写回浅色 */
 .awd-btn { padding: 10rpx 20rpx; border-radius: 6rpx; font-size: 24rpx; }
-.awd-btn-primary { background: rgba($awd-mint, 0.12); border: 1px solid $awd-mint; color: $awd-mint; }
-.awd-btn-secondary { background: transparent; border: 1px solid $awd-chrome-active; color: $awd-text-on-dark-2; }
+.awd-btn-primary { background: #12344D; color: #fff; }
+.awd-btn-secondary { background: #f0f0f0; color: #333; }
 .awd-btn-disabled { opacity: .4; pointer-events: none; }
-.awd-dialog .awd-btn-primary { background: #12344D; border: none; color: #fff; }
-.awd-dialog .awd-btn-secondary { background: #f0f0f0; border: none; color: #333; }
 
 .awd-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.4);

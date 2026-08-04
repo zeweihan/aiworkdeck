@@ -202,7 +202,7 @@ const hasContent = computed(() => {
 })
 </script>
 
-<style lang="scss" scoped>
+<style scoped>
 .root-bubble-wrapper {
     width: 100%;
 }
@@ -226,11 +226,11 @@ const hasContent = computed(() => {
 .root-bubble-container {
   display: flex;
   flex-direction: column;
-  background: $awd-chrome-hover; /* AI 深色卡片（对齐原型 msg .bub） */
-  border: 1px solid $awd-chrome-line;
+  background: #ffffff;
+  border: 1px solid rgba(233, 236, 239, 0.8); /* Very subtle border */
   border-radius: 12px; /* rounded-xl */
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 1px 2px rgba(0, 0, 0, 0.08); /* shadow-sm plus */
   max-width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -243,7 +243,7 @@ const hasContent = computed(() => {
 
 /* Connect artifacts visually */
 .artifact-wrapper {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .artifact-wrapper:last-child {
@@ -254,14 +254,14 @@ const hasContent = computed(() => {
   padding: 6px 12px;
   font-size: 13px;
   line-height: 1.55;
-  color: $awd-text-on-dark;
+  color: #2C3338; /* Gray-Dark */
 }
 
 .message-actions {
   position: relative;
   display: flex;
   padding: 8px 16px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-top: 1px solid #f1f5f9;
   margin-top: 6px;
 }
 
@@ -272,18 +272,18 @@ const hasContent = computed(() => {
   font-size: 12px;
   padding: 3px 10px;
   border-radius: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  color: $awd-text-on-dark-2;
-  background: transparent;
+  border: 1px solid #E9ECEF;
+  color: #6C757D;
+  background: #FFFFFF;
   cursor: pointer;
   transition: all 0.2s;
   user-select: none;
 }
 
 .msg-act-trigger:hover, .msg-act-trigger.active {
-  border-color: rgba(91, 209, 151, 0.5);
-  color: $awd-mint;
-  background: rgba(91, 209, 151, 0.10);
+  border-color: #5BD197;
+  color: #1A5336;
+  background: #E6F9F0;
 }
 
 .msg-act-menu {
@@ -331,7 +331,7 @@ const hasContent = computed(() => {
 
 /* ---- plan 步骤分组 ---- */
 .step-group {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .step-group-header {
@@ -344,30 +344,30 @@ const hasContent = computed(() => {
 }
 
 .step-group-header:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: #F8F9FA;
 }
 
 .step-group-marker {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: $awd-chrome-active;
+  background: #ADB5BD;
   flex-shrink: 0;
 }
 
 .step-group-marker.done {
-  background: $awd-mint;
+  background: #5BD197;
 }
 
 .step-group-marker.error {
-  background: lighten($awd-brick, 18%);
+  background: #E74C3C;
 }
 
 .step-group-title {
   flex: 1;
   font-size: 12px;
   font-weight: 600;
-  color: $awd-text-on-dark;
+  color: #2C3338;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -375,15 +375,15 @@ const hasContent = computed(() => {
 
 .step-group-count {
   font-size: 10px;
-  color: $awd-text-on-dark-2;
-  background: rgba(255, 255, 255, 0.08);
+  color: #6C757D;
+  background: #F1F3F5;
   border-radius: 99px;
   padding: 0 6px;
   flex-shrink: 0;
 }
 
 .step-chevron {
-  color: $awd-text-on-dark-3;
+  color: #ADB5BD;
   transition: transform 0.2s ease;
   display: flex;
   align-items: center;
@@ -395,7 +395,7 @@ const hasContent = computed(() => {
 
 .step-group-body {
   padding-left: 10px;
-  border-left: 2px solid rgba(91, 209, 151, 0.25);
+  border-left: 2px solid #E6F9F0;
   margin-left: 14px;
 }
 
@@ -414,59 +414,29 @@ const hasContent = computed(() => {
 
 /* Inline Code Style - Mint Green Tint */
 .main-content:deep(code) {
-  background: rgba(91, 209, 151, 0.12); /* Subtle Mint Green Tint */
+  background: rgba(91, 209, 151, 0.1); /* Subtle Mint Green Tint */
   padding: 2px 5px;
   border-radius: 4px;
   font-size: 85%;
-  color: $awd-mint;
-  font-family: $awd-font-mono;
+  color: #1A5336; /* Forest Green */
+  font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
 }
 
-/* Block Code Style（深底代码块） */
+/* Block Code Style */
 .main-content:deep(pre) {
-  background: rgba(0, 0, 0, 0.28);
+  background: #F8F9FA; /* Gray-Pale */
   padding: 16px;
   border-radius: 8px;
   overflow-x: auto;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid #E9ECEF;
   font-size: 13px;
   margin: 12px 0;
-  color: $awd-text-on-dark;
 }
 
 .main-content:deep(pre code) {
   background: transparent;
   color: inherit;
   padding: 0;
-}
-
-/* 深底下 markdown 的链接 / 表格 / 引用 / 分隔可读配色 */
-.main-content :deep(.markdown-body a) {
-  color: $awd-mint;
-}
-
-.main-content :deep(.markdown-body blockquote) {
-  border-left-color: $awd-mint-deep;
-  color: $awd-text-on-dark-2;
-}
-
-.main-content :deep(.markdown-body th),
-.main-content :deep(.markdown-body td) {
-  border-color: $awd-chrome-active;
-}
-
-.main-content :deep(.markdown-body th) {
-  background: rgba(91, 209, 151, 0.08);
-  color: $awd-mint;
-}
-
-.main-content :deep(.markdown-body h1) {
-  border-bottom-color: $awd-chrome-active;
-}
-
-.main-content :deep(.markdown-body hr) {
-  border-color: rgba(255, 255, 255, 0.1);
-  background: rgba(255, 255, 255, 0.1);
 }
 
 /* Override MarkdownPreview default padding in main-content */
@@ -484,7 +454,7 @@ const hasContent = computed(() => {
   line-height: 1.55;
   margin: 0;
   padding: 0;
-  color: $awd-text-on-dark;
+  color: #2C3338;
 }
 
 /* Headings */
@@ -494,6 +464,6 @@ const hasContent = computed(() => {
   margin-top: 14px !important;
   margin-bottom: 8px !important;
   font-weight: 600;
-  color: $awd-text-on-dark; /* 深底标题用象牙白，避免暗绿沉底 */
+  color: #1A5336; /* Forest Green for headings */
 }
 </style>

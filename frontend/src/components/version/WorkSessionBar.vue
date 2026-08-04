@@ -158,7 +158,7 @@ export default {
 <style lang="scss" scoped>
 .session-bar {
   display: flex; align-items: center; flex-wrap: wrap; gap: 12rpx;
-  padding: 16rpx 20rpx; border-bottom: 1px solid $awd-chrome-line;
+  padding: 16rpx 20rpx; border-bottom: 1px solid #eee;
 }
 .session-dot {
   width: 14rpx; height: 14rpx; border-radius: 50%; background: #C8A45D;
@@ -172,17 +172,14 @@ export default {
    断言无关，是另一种假阳性（e2e 实测：elementFromPoint 在按钮几何坐标处命中的
    是编辑区内容，不是按钮本身）。min-width 防止文字被挤到只剩几像素竖排；
    wrap 让按钮在窄侧栏下换行，而不是被裁切成不可点。 */
-.session-text { font-size: 26rpx; color: $awd-text-on-dark; flex: 1; min-width: 200rpx; }
-.session-idle { color: $awd-text-on-dark-3; }
+.session-text { font-size: 26rpx; color: #333; flex: 1; min-width: 200rpx; }
+.session-idle { color: #999; }
 .session-btn { flex-shrink: 0; }
 
-/* 深底（面板内）按钮基调；弹窗（浮层白卡）里的按钮在下方覆写回浅色 */
 .awd-btn { padding: 10rpx 20rpx; border-radius: 6rpx; font-size: 24rpx; }
-.awd-btn-primary { background: rgba($awd-mint, 0.12); border: 1px solid $awd-mint; color: $awd-mint; }
-.awd-btn-secondary { background: transparent; border: 1px solid $awd-chrome-active; color: $awd-text-on-dark-2; }
-.awd-btn-danger { background: transparent; color: $awd-brick-on-dark; border: 1px solid rgba($awd-brick, 0.6); }
-.awd-dialog .awd-btn-primary { background: #12344D; border: none; color: #fff; }
-.awd-dialog .awd-btn-secondary { background: #f0f0f0; border: none; color: #333; }
+.awd-btn-primary { background: #12344D; color: #fff; }
+.awd-btn-secondary { background: #f0f0f0; color: #333; }
+.awd-btn-danger { background: #fff; color: #b23; border: 1px solid #e0c0c0; }
 
 .awd-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.4);

@@ -3,16 +3,6 @@
     <!-- 顶部固定项目信息 -->
     <view class="project-header">
       <view class="header-left">
-        <!-- 品牌位：深色 chrome 上 logo 图片不可用，改 CSS 绘制小方标 + 衬线字标 -->
-        <view class="brand-block" @tap="goAllProjects" title="全部项目">
-          <view class="brand-mark">
-            <svg class="brand-mark-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in GLYPHS.arrowUpRight" :key="gi" :d="d" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </view>
-          <text class="brand-word">AI Workdeck</text>
-        </view>
-        <view class="brand-sep"></view>
 
         <view class="project-info">
           <!-- Logo moved to center -->
@@ -76,6 +66,11 @@
             </block>
           </view>
         </view>
+      </view>
+
+      <!-- Center Logo -->
+      <view class="header-center">
+         <image src="/static/logo_full_v2.png" mode="heightFix" class="project-logo" />
       </view>
 
       <view class="header-right">
@@ -676,7 +671,7 @@
               <!-- 初始空状态 (仅当左侧也没有文件时) -->
               <view v-if="leftFiles.length === 0 && !splitMode" class="empty-workspace">
                 <view class="empty-content">
-                  <text class="empty-watermark">AI Workdeck</text>
+                  <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
                   <text class="empty-text">选择文件开始工作</text>
                 </view>
               </view>
@@ -784,7 +779,7 @@
                     />
                   </view>
                   <view v-else-if="!activeFileLeft" class="pane-empty">
-                    <text class="empty-watermark">AI Workdeck</text>
+                    <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
                     <text class="empty-text">左侧空闲</text>
                   </view>
                 </view>
@@ -865,7 +860,7 @@
                     />
                   </view>
                   <view v-else-if="!activeFileRight" class="pane-empty">
-                    <text class="empty-watermark">AI Workdeck</text>
+                    <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
                     <text class="empty-text">右侧空闲</text>
                   </view>
                 </view>

@@ -419,22 +419,23 @@
               ></view>
             </view>
             <view v-if="item.isFolder && showTree" class="tree-expand-icon-wrapper" @tap.stop="toggleFolder(item.id)">
-              <svg class="tree-chevron" :class="{ 'is-open': expandedFolders.has(item.id) }" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
+              <image
+                :src="expandedFolders.has(item.id) ? '/static/down.png' : '/static/right.png'"
+                class="tree-expand-icon-img"
+                mode="aspectFit"
+              />
             </view>
             <view v-else class="tree-expand-placeholder"></view>
 
             <!-- Icon Logic: Folder uses CSS, Files use SVG Component -->
-            <svg
+            <image
               v-if="item.isFolder"
-              class="tree-folder-glyph"
+              class="tree-item-icon-img"
               :class="{ 'is-opened': expandedFolders.has(item.id) }"
-              viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
-            >
-              <path v-for="(d, gi) in (expandedFolders.has(item.id) ? ICONS.folderOpen : ICONS.folder)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-            <view v-else class="tree-item-icon-wrapper" :class="getFileIconClass(item)">
+              :src="expandedFolders.has(item.id) ? '/static/folder-opened.png' : '/static/folder-closed.png'"
+              mode="aspectFit"
+            />
+            <view v-else class="tree-item-icon-wrapper">
                <FileTypeIcon :type="item.fileType" :active="selectedFileId === item.id" />
             </view>
             <view v-if="renamingId === item.id" class="rename-input-wrapper" @tap.stop @mousedown.stop>
@@ -456,24 +457,16 @@
             <view class="tree-item-actions" @tap.stop>
               <template v-if="viewMode === 'files' && renamingId !== item.id">
                 <view class="action-btn icon-btn" title="下载" @tap="handleDownload(item)">
-                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                     <path v-for="(d, gi) in ICONS.download" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                   </svg>
+                   <image src="/static/download.png" class="action-icon" mode="aspectFit" />
                 </view>
                 <view class="action-btn icon-btn" title="复制" @tap="handleCopy(item)">
-                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                     <path v-for="(d, gi) in ICONS.copyDoc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                   </svg>
+                   <image src="/static/copy.png" class="action-icon" mode="aspectFit" />
                 </view>
                 <view class="action-btn icon-btn" title="重命名" @tap="handleRename(item)">
-                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                     <path v-for="(d, gi) in ICONS.pencil" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                   </svg>
+                   <image src="/static/rename.png" class="action-icon" mode="aspectFit" />
                 </view>
                 <view class="action-btn icon-btn" title="删除" @tap="handleDelete(item)">
-                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                     <path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                   </svg>
+                   <image src="/static/delete.png" class="action-icon" mode="aspectFit" />
                 </view>
               </template>
               <template v-else-if="viewMode === 'recycle'">
@@ -484,9 +477,11 @@
                   @mouseenter="hoverRestore = { ...hoverRestore, [item.id]: true }"
                   @mouseleave="hoverRestore = { ...hoverRestore, [item.id]: false }"
                 >
-                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, gi) in ICONS.refresh" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
+                  <image
+                    :src="hoverRestore[item.id] ? '/static/restore.png' : '/static/restore_unselected.png'"
+                    class="action-icon"
+                    mode="aspectFit"
+                  />
                 </view>
                 <view
                   class="action-btn icon-btn"
@@ -495,9 +490,11 @@
                   @mouseenter="hoverPermDelete = { ...hoverPermDelete, [item.id]: true }"
                   @mouseleave="hoverPermDelete = { ...hoverPermDelete, [item.id]: false }"
                 >
-                  <svg class="action-icon is-danger" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
+                  <image
+                    :src="hoverPermDelete[item.id] ? '/static/permnently_delete.png' : '/static/permnently_delete_unselected.png'"
+                    class="action-icon"
+                    mode="aspectFit"
+                  />
                 </view>
               </template>
 
@@ -559,22 +556,23 @@
               ></view>
             </view>
             <view v-if="item.isFolder && showTree" class="tree-expand-icon-wrapper" @tap.stop="toggleFolder(item.id)">
-              <svg class="tree-chevron" :class="{ 'is-open': expandedFolders.has(item.id) }" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
+              <image
+                :src="expandedFolders.has(item.id) ? '/static/down.png' : '/static/right.png'"
+                class="tree-expand-icon-img"
+                mode="aspectFit"
+              />
             </view>
             <view v-else class="tree-expand-placeholder"></view>
 
              <!-- Icon Logic: Folder uses CSS, Files use SVG Component -->
-            <svg
+            <image
               v-if="item.isFolder"
-              class="tree-folder-glyph"
+              class="tree-item-icon-img"
               :class="{ 'is-opened': expandedFolders.has(item.id) }"
-              viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"
-            >
-              <path v-for="(d, gi) in (expandedFolders.has(item.id) ? ICONS.folderOpen : ICONS.folder)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-            <view v-else class="tree-item-icon-wrapper" :class="getFileIconClass(item)">
+              :src="expandedFolders.has(item.id) ? '/static/folder-opened.png' : '/static/folder-closed.png'"
+              mode="aspectFit"
+            />
+            <view v-else class="tree-item-icon-wrapper">
                <FileTypeIcon :type="item.fileType" :active="selectedFileId === item.id" />
             </view>
             <view v-if="renamingId === item.id" class="rename-input-wrapper" @tap.stop @mousedown.stop>
@@ -596,24 +594,16 @@
             <view class="tree-item-actions" @tap.stop>
               <template v-if="viewMode === 'files' && renamingId !== item.id">
                 <view class="action-btn icon-btn" title="下载" @tap="handleDownload(item)">
-                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                     <path v-for="(d, gi) in ICONS.download" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                   </svg>
+                   <image src="/static/download.png" class="action-icon" mode="aspectFit" />
                 </view>
                 <view class="action-btn icon-btn" title="复制" @tap="handleCopy(item)">
-                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                     <path v-for="(d, gi) in ICONS.copyDoc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                   </svg>
+                   <image src="/static/copy.png" class="action-icon" mode="aspectFit" />
                 </view>
                 <view class="action-btn icon-btn" title="重命名" @tap="handleRename(item)">
-                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                     <path v-for="(d, gi) in ICONS.pencil" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                   </svg>
+                   <image src="/static/rename.png" class="action-icon" mode="aspectFit" />
                 </view>
                 <view class="action-btn icon-btn" title="删除" @tap="handleDelete(item)">
-                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                     <path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                   </svg>
+                   <image src="/static/delete.png" class="action-icon" mode="aspectFit" />
                 </view>
               </template>
               <template v-else-if="viewMode === 'recycle'">
@@ -624,9 +614,11 @@
                   @mouseenter="hoverRestore = { ...hoverRestore, [item.id]: true }"
                   @mouseleave="hoverRestore = { ...hoverRestore, [item.id]: false }"
                 >
-                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, gi) in ICONS.refresh" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
+                  <image
+                    :src="hoverRestore[item.id] ? '/static/restore.png' : '/static/restore_unselected.png'"
+                    class="action-icon"
+                    mode="aspectFit"
+                  />
                 </view>
                 <view
                   class="action-btn icon-btn"
@@ -635,9 +627,11 @@
                   @mouseenter="hoverPermDelete = { ...hoverPermDelete, [item.id]: true }"
                   @mouseleave="hoverPermDelete = { ...hoverPermDelete, [item.id]: false }"
                 >
-                  <svg class="action-icon is-danger" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-                  </svg>
+                  <image
+                    :src="hoverPermDelete[item.id] ? '/static/permnently_delete.png' : '/static/permnently_delete_unselected.png'"
+                    class="action-icon"
+                    mode="aspectFit"
+                  />
                 </view>
               </template>
 
@@ -3654,18 +3648,15 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* 选中行 rgba($awd-mint, 0.12) 叠在面板底上的等效实色（右侧操作区渐变遮罩用） */
-$awd-row-selected-solid: mix($awd-mint, $awd-chrome-panel, 12%);
-/* 悬停行等效实色 */
-$awd-row-hover-solid: $awd-chrome-hover;
+$brand-primary: $brand-color-primary;
+$brand-border: $brand-border-light;
+$bg: $uni-bg-color;
+$bg-grey: $uni-bg-color-grey;
 
-/* 深色 IDE 面板：根背景透明，继承父级 $awd-chrome-panel */
 .file-tree {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background-color: transparent;
-  color: $awd-text-on-dark;
 }
 
 .file-tree,
@@ -3676,17 +3667,12 @@ $awd-row-hover-solid: $awd-chrome-hover;
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
 }
 
-/* !important：回收站头部模板里带浅色 inline style，这里统一压成深色 */
 .tree-toolbar {
   padding: 12rpx 16rpx;
-  border-bottom: 1rpx solid $awd-chrome-line !important;
+  border-bottom: 1rpx solid #e5e7eb;
   display: flex;
   gap: 8rpx;
-  background-color: $awd-chrome-panel !important;
-}
-
-.tree-toolbar text {
-  color: $awd-mint !important;
+  background-color: #ffffff;
 }
 
 .btn-new-folder,
@@ -3715,22 +3701,22 @@ $awd-row-hover-solid: $awd-chrome-hover;
 }
 
 .btn-new-folder {
-  background-color: transparent;
-  border-color: $awd-chrome-active;
-  color: $awd-text-on-dark-2;
+  background-color: $bg;
+  border-color: $brand-primary;
+  color: $brand-primary;
 }
 
 .btn-new-folder:active {
-  background-color: $awd-chrome-hover;
+  background-color: rgba($brand-primary, 0.06);
 }
 
 .btn-new-word {
-  background-color: $awd-chrome-active;
-  color: $awd-text-on-dark;
+  background-color: $brand-primary;
+  color: $uni-text-color-inverse;
 }
 
 .btn-new-word:active {
-  background-color: $awd-chrome-hover;
+  background-color: rgba($brand-primary, 0.92);
 }
 
 .tree-content {
@@ -3750,11 +3736,11 @@ $awd-row-hover-solid: $awd-chrome-hover;
   }
 
   &:hover::-webkit-scrollbar-thumb {
-    background-color: rgba($awd-text-on-dark-3, 0.35);
+    background-color: rgba(148, 163, 184, 0.3);
   }
 
   &::-webkit-scrollbar-thumb:hover {
-    background-color: rgba($awd-text-on-dark-3, 0.55);
+    background-color: rgba(148, 163, 184, 0.5);
   }
 }
 
@@ -3776,15 +3762,15 @@ $awd-row-hover-solid: $awd-chrome-hover;
 .root-drop-zone-empty {
   margin: 12rpx 16rpx;
   padding: 24rpx;
-  border: 1rpx dashed $awd-chrome-active;
+  border: 1rpx dashed #e2e8f0;
   border-radius: 8rpx;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: $awd-text-on-dark-3;
+  color: #94a3b8;
   font-size: 22rpx;
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  background-color: rgba($awd-mint, 0.04);
+  background-color: #f8fafc;
   opacity: 0.8;
   animation: fadeIn 0.3s ease-out;
 
@@ -3793,13 +3779,13 @@ $awd-row-hover-solid: $awd-chrome-hover;
   }
 
   &.drop-active {
-    background-color: rgba($awd-mint, 0.12);
-    border-color: $awd-mint;
-    color: $awd-mint;
+    background-color: #eff6ff;
+    border-color: #3b82f6;
+    color: #3b82f6;
     border-style: solid;
     transform: scale(1.005);
     opacity: 1;
-    box-shadow: 0 2rpx 8rpx rgba($awd-mint, 0.12);
+    box-shadow: 0 2rpx 8rpx rgba(59, 130, 246, 0.08);
   }
 }
 
@@ -3827,7 +3813,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
      display: flex;
      justify-content: center;
      padding: 40rpx 0;
-     color: $awd-text-on-dark-3;
+     color: #94a3b8;
      font-size: 28rpx;
   }
 }
@@ -3835,8 +3821,8 @@ $awd-row-hover-solid: $awd-chrome-hover;
 .marquee {
   position: fixed;
   z-index: 999;
-  border: 1px solid rgba($awd-mint, 0.55);
-  background: rgba($awd-mint, 0.10);
+  border: 1px solid rgba(37, 99, 235, 0.55);
+  background: rgba(37, 99, 235, 0.10);
   pointer-events: none;
   border-radius: 6px;
 }
@@ -3898,9 +3884,9 @@ $awd-row-hover-solid: $awd-chrome-hover;
 /* 文档对比按钮栏 */
 .compare-bar {
   padding: 8px 12px;
-  background: $awd-chrome-hover;
-  border-top: 1px solid $awd-chrome-active;
-  border-bottom: 1px solid $awd-chrome-active;
+  background: linear-gradient(135deg, #e0f2fe 0%, #dbeafe 100%);
+  border-top: 1px solid #bae6fd;
+  border-bottom: 1px solid #bae6fd;
 }
 
 .compare-bar-content {
@@ -3911,7 +3897,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 
 .compare-bar-text {
   font-size: 12px;
-  color: $awd-text-on-dark;
+  color: #0369a1;
   font-weight: 500;
 }
 
@@ -3920,7 +3906,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
   align-items: center;
   gap: 6px;
   padding: 6px 14px;
-  background: $awd-mint-deep;
+  background: linear-gradient(135deg, #0ea5e9 0%, #2563eb 100%);
   color: #fff;
   border: none;
   border-radius: 6px;
@@ -3928,13 +3914,13 @@ $awd-row-hover-solid: $awd-chrome-hover;
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
-  box-shadow: 0 2px 4px rgba($awd-mint, 0.15);
+  box-shadow: 0 2px 4px rgba(37, 99, 235, 0.2);
 }
 
 .btn-compare:hover {
-  background: $awd-brass;
+  background: linear-gradient(135deg, #0284c7 0%, #1d4ed8 100%);
   transform: translateY(-1px);
-  box-shadow: 0 3px 8px rgba($awd-mint, 0.25);
+  box-shadow: 0 3px 8px rgba(37, 99, 235, 0.3);
 }
 
 .btn-compare:active {
@@ -3959,14 +3945,14 @@ $awd-row-hover-solid: $awd-chrome-hover;
   width: 14px;
   height: 14px;
   border-radius: 4px;
-  border: 1px solid rgba($awd-text-on-dark-3, 0.9);
-  background: transparent;
+  border: 1px solid rgba(148, 163, 184, 0.9);
+  background: #ffffff;
   box-sizing: border-box;
 }
 
 .checkbox-box.checked {
-  border-color: $awd-mint;
-  background: $awd-mint;
+  border-color: $brand-primary;
+  background: $brand-primary;
   position: relative;
 }
 
@@ -3977,14 +3963,14 @@ $awd-row-hover-solid: $awd-chrome-hover;
   top: 1px;
   width: 4px;
   height: 8px;
-  border: solid $awd-chrome-panel;
+  border: solid #fff;
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
 
 .checkbox-box.indeterminate {
-  border-color: $awd-mint;
-  background: rgba($awd-mint, 0.10);
+  border-color: $brand-primary;
+  background: rgba($brand-primary, 0.10);
   position: relative;
 }
 
@@ -3995,14 +3981,14 @@ $awd-row-hover-solid: $awd-chrome-hover;
   top: 6px;
   width: 8px;
   height: 2px;
-  background: $awd-mint;
+  background: $brand-primary;
   border-radius: 2px;
 }
 
 .batch-bar {
   padding: 10rpx 12rpx;
-  border-top: 1rpx solid $awd-chrome-line;
-  background-color: transparent;
+  border-top: 1rpx solid #e5e7eb;
+  background-color: #ffffff;
   display: flex;
   flex-direction: column;
   gap: 8rpx;
@@ -4010,7 +3996,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 
 .batch-info {
   font-size: 22rpx;
-  color: $awd-text-on-dark-3;
+  color: #64748b;
 }
 
 .batch-actions {
@@ -4026,33 +4012,33 @@ $awd-row-hover-solid: $awd-chrome-hover;
   padding: 0 14rpx;
   font-size: 24rpx;
   border-radius: 10rpx;
-  border: 1px solid $awd-chrome-active;
-  background: transparent;
-  color: $awd-text-on-dark-2;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #12344D;
 }
 
 .batch-btn:active {
-  background: $awd-chrome-hover;
+  background: #f8f9fa;
 }
 
 .batch-btn-danger {
-  border-color: rgba($uni-color-error, 0.4);
-  color: $uni-color-error;
+  border-color: rgba(220, 38, 38, 0.25);
+  color: #dc2626;
 }
 
 .batch-btn-danger:active {
-  background: rgba($uni-color-error, 0.10);
+  background: rgba(220, 38, 38, 0.06);
 }
 
 .batch-btn-ghost {
   border-color: transparent;
-  color: $awd-text-on-dark-3;
+  color: #64748b;
 }
 
 .tree-footer {
   padding: 10rpx 12rpx;
-  border-top: 1rpx solid $awd-chrome-line;
-  background-color: transparent;
+  border-top: 1rpx solid rgba($brand-border, 0.9);
+  background-color: $bg;
   display: flex;
   flex-direction: column;
   gap: 8rpx;
@@ -4099,12 +4085,12 @@ $awd-row-hover-solid: $awd-chrome-hover;
   border-radius: 10rpx;
   border: 1px solid transparent;
   transition: all 0.2s;
-  background-color: $awd-chrome-active;
-  color: $awd-text-on-dark;
+  background-color: $brand-primary;
+  color: $uni-text-color-inverse;
 }
 
 .btn-upload:active {
-  background-color: $awd-chrome-hover;
+  background-color: rgba($brand-primary, 0.92);
 }
 
 .btn-recycle-bin {
@@ -4114,7 +4100,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: $awd-chrome-hover;
+  background-color: #f1f5f9;
   border-radius: 10rpx;
   cursor: pointer;
   font-size: 28rpx;
@@ -4122,7 +4108,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 }
 
 .btn-recycle-bin:hover {
-  background-color: $awd-chrome-active;
+  background-color: #e2e8f0;
 }
 
 @media (max-width: 420px) {
@@ -4154,7 +4140,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
     width: 20px;
   }
   .tree-item-content {
-    height: 26px;
+    height: 32px;
     gap: 6px;
     padding-right: 68px;
   }
@@ -4311,7 +4297,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 .tree-empty {
   padding: 40rpx;
   text-align: center;
-  color: $awd-text-on-dark-3;
+  color: #9ca3af;
 }
 
 .tree-list {
@@ -4320,7 +4306,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 
 .tree-item {
   position: relative;
-  padding: 2rpx 6rpx; /* 紧凑行：内容 48rpx + 上下 2rpx ≈ 26px */
+  padding: 4rpx 6rpx;
   border-radius: 8rpx;
   margin-bottom: 0;
   transition: background-color 0.18s ease, box-shadow 0.18s ease;
@@ -4339,7 +4325,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 
 /* Finder 风格：奇偶行浅色差（尽量克制） */
 .tree-list .tree-item:nth-child(odd) {
-  background-color: rgba($awd-text-on-dark, 0.02);
+  background-color: rgba(26, 83, 54, 0.02); /* Using Brand Color Tint */
 }
 
 .tree-list .tree-item:nth-child(even) {
@@ -4347,37 +4333,27 @@ $awd-row-hover-solid: $awd-chrome-hover;
 }
 
 .tree-item:hover {
-  background-color: $awd-chrome-hover;
+  background-color: rgba(26, 83, 54, 0.05);
 }
 
 .tree-item:active {
-  background-color: $awd-chrome-active;
+  background-color: rgba(26, 83, 54, 0.08);
 }
 
-/* 选中/多选：mint 淡底 + 左侧 2px mint 竖条（对齐外壳 .rail-btn.active::before） */
 /* Increase specificity to override zebra striping (.tree-list .tree-item:nth-child) */
-.tree-list .tree-item.tree-item-selected,
-.tree-list .tree-item.tree-item-multi-selected {
-  background-color: rgba($awd-mint, 0.12) !important;
+.tree-list .tree-item.tree-item-selected {
+  background-color: #D1E7DD !important; /* Forest Green Lighter Tint - darkened for visibility */
 }
 
-.tree-list .tree-item.tree-item-selected::before,
-.tree-list .tree-item.tree-item-multi-selected::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 4rpx;
-  bottom: 4rpx;
-  width: 2px;
-  border-radius: 1px;
-  background-color: $awd-mint;
-  z-index: 2;
+/* Cmd/Ctrl 多选样式 */
+.tree-list .tree-item.tree-item-multi-selected {
+  background-color: #D1E7DD !important;
 }
 
 /* Removed vertical bar indicators to avoid conflict with Tag Strip */
 .tree-item-multi-selected .tree-item-actions {
   opacity: 1;
-  background: linear-gradient(to right, transparent 0%, $awd-row-selected-solid 30%, $awd-row-selected-solid 100%);
+  background: linear-gradient(to right, transparent 0%, #E8F3ED 30%, #E8F3ED 100%);
 }
 
 .tree-item-dragging {
@@ -4392,12 +4368,12 @@ $awd-row-hover-solid: $awd-chrome-hover;
 
 /* 拖拽目标高亮 */
 .tree-item-drop-target {
-  outline: 2rpx dashed $awd-mint;
-  background-color: rgba($awd-mint, 0.08);
+  outline: 2rpx dashed #2563eb;
+  background-color: #eff6ff;
 }
 
 .tree-item[draggable="true"]:hover {
-  background-color: $awd-chrome-hover;
+  background-color: #f0f0f0;
 }
 
 .tree-item-content {
@@ -4406,7 +4382,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
   display: flex;
   align-items: center;
   gap: 10rpx;
-  height: 48rpx; /* 紧凑行高（约 24px），接近 IDE 文件树 */
+  height: 52rpx; /* 紧凑行高，接近 Finder */
   padding-right: 84rpx; /* 预留右侧操作按钮空间，避免把文件名挤没 */
 }
 
@@ -4417,7 +4393,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
   bottom: 0;
   width: 1px;
   background-color: transparent;
-  border-left: 1px dashed $awd-chrome-line;
+  border-left: 1px dashed #e5e7eb;
   pointer-events: none;
 }
 
@@ -4427,7 +4403,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
   left: 0;
   top: 0;
   bottom: 0;
-  background-color: rgba($awd-mint, 0.12);
+  background-color: rgba(64, 158, 255, 0.2);
   transition: width 0.3s ease;
   z-index: 0;
 }
@@ -4438,13 +4414,13 @@ $awd-row-hover-solid: $awd-chrome-hover;
   left: 0;
   bottom: 0;
   height: 2px;
-  background-color: $awd-mint;
+  background-color: #2563eb;
   opacity: 0.8;
   z-index: 1;
   transition: width 0.3s ease;
 }
 .text-muted {
-  color: $awd-text-on-dark-3 !important;
+  color: #999 !important;
   opacity: 0.8;
 }
 
@@ -4467,50 +4443,17 @@ $awd-row-hover-solid: $awd-chrome-hover;
   height: 32rpx;
 }
 
-/* 展开箭头：stroke SVG，展开时旋转 90 度 */
-.tree-chevron {
-  width: 12px;
-  height: 12px;
-  flex-shrink: 0;
-  color: $awd-text-on-dark-3;
-  transition: transform 0.15s ease;
-}
-
-.tree-chevron.is-open {
-  transform: rotate(90deg);
-}
-
-/* 文件夹图标：stroke SVG，brass 着色 */
-.tree-folder-glyph {
-  width: 16px;
-  height: 16px;
+.tree-item-icon-img {
+  width: 32rpx;
+  height: 32rpx;
   margin-right: 8rpx;
-  flex-shrink: 0;
-  color: $awd-brass;
+  transition: transform 0.2s;
 }
 
-/* 文件类型图标着色（对齐原型；色值为原型给定） */
-.tree-item-icon-wrapper {
-  color: $awd-text-on-dark-3; /* fallback 图标走 currentColor */
+.tree-item-icon-img.is-opened {
+  transform: scale(1.2);
 }
 
-.tree-item-icon-wrapper :deep(.file-icon-svg path) {
-  fill: $awd-text-on-dark-3;
-}
-
-.tree-item-icon-wrapper.icon-word :deep(.file-icon-svg path) {
-  fill: #4A8DDB;
-}
-
-.tree-item-icon-wrapper.icon-pdf :deep(.file-icon-svg path) {
-  fill: #D7785F;
-}
-
-.tree-item-icon-wrapper.icon-excel :deep(.file-icon-svg path) {
-  fill: #5E9F71;
-}
-
-/* 上传状态条：保留浅色浮层（模板内联样式为浅色），仅去掉蓝色描边/阴影 */
 .upload-status-footer-fixed{
   position: absolute;
   bottom: 0;
@@ -4519,9 +4462,9 @@ $awd-row-hover-solid: $awd-chrome-hover;
   width: 100%;
   box-sizing: border-box;
   padding: 12px 16px;
-  border-top: 2px solid $awd-chrome-line;
+  border-top: 2px solid #2563eb;
   background: linear-gradient(to bottom, #f8fafc, #ffffff);
-  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 -2px 8px rgba(37, 99, 235, 0.1);
   background-color: #fff;
 }
 
@@ -4531,7 +4474,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 .tree-item-name {
   flex: 1;
   font-size: 26rpx;
-  color: $awd-text-on-dark;
+  color: $uni-text-color;
   letter-spacing: 0.2px;
   display: block;
   min-width: 0;
@@ -4550,10 +4493,9 @@ $awd-row-hover-solid: $awd-chrome-hover;
   height: 44rpx;
   font-size: 26rpx;
   padding: 0 8rpx;
-  background: $awd-chrome-hover;
-  border: 1px solid $awd-mint;
+  background: #ffffff;
+  border: 1px solid #2563eb;
   border-radius: 4rpx;
-  color: $awd-text-on-dark;
 }
 
 .tree-item-actions {
@@ -4576,22 +4518,24 @@ $awd-row-hover-solid: $awd-chrome-hover;
 
 .tree-item:hover .tree-item-actions {
   opacity: 1;
-  background: linear-gradient(to right, transparent 0%, $awd-row-hover-solid 30%, $awd-row-hover-solid 100%);
+  /* Hover Background: matches rgba(18, 52, 77, 0.05) on white -> #F5F7FA */
+  background: linear-gradient(to right, transparent 0%, #F5F7FA 30%, #F5F7FA 100%);
 }
 
 .tree-item-selected .tree-item-actions {
   opacity: 1;
-  background: linear-gradient(to right, transparent 0%, $awd-row-selected-solid 30%, $awd-row-selected-solid 100%);
+  /* Selected Background: matches rgba(18, 52, 77, 0.08) on white -> #EFF4F8 */
+  background: linear-gradient(to right, transparent 0%, #EFF4F8 30%, #EFF4F8 100%);
 }
 
 .action-btn {
   font-size: 22rpx;
-  color: $awd-text-on-dark-2;
+  color: #64748b;
   padding: 0 4rpx;
 }
 
 .recycle-back-btn {
-  color: $awd-mint !important;
+  color: #3498DB !important;
   font-size: 12px;
   cursor: pointer;
   padding: 0 12rpx;
@@ -4600,7 +4544,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 }
 
 .recycle-back-btn:hover {
-  color: $awd-mint !important;
+  color: #2980B9 !important;
   text-decoration: underline;
 }
 
@@ -4622,7 +4566,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
 
 .action-btn.icon-btn:hover {
   background-color: transparent;
-  color: $awd-text-on-dark;
+  color: #111827;
   opacity: 0.8;
 }
 
@@ -4630,10 +4574,6 @@ $awd-row-hover-solid: $awd-chrome-hover;
   width: 24rpx;
   height: 24rpx;
   display: block;
-}
-
-.action-btn.icon-btn:hover .action-icon.is-danger {
-  color: $uni-color-error;
 }
 
 /* 行内上传进度条 */
@@ -4652,15 +4592,15 @@ $awd-row-hover-solid: $awd-chrome-hover;
 /* 全局上传进度条 */
 .global-upload {
   padding: 8rpx 16rpx;
-  border-top: 1rpx solid $awd-chrome-line;
-  background-color: transparent;
+  border-top: 1rpx solid #e5e7eb;
+  background-color: #f9fafb;
 }
 
 .global-upload-bar-wrapper {
   position: relative;
   height: 8rpx;
   border-radius: 999px;
-  background-color: $awd-chrome-line;
+  background-color: #e5e7eb;
   overflow: hidden;
 }
 
@@ -4669,14 +4609,14 @@ $awd-row-hover-solid: $awd-chrome-hover;
   left: 0;
   top: 0;
   bottom: 0;
-  background: linear-gradient(90deg, $awd-mint-deep, $awd-mint);
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
   transition: width 0.2s ease-out;
 }
 
 .global-upload-text {
   margin-top: 4rpx;
   font-size: 20rpx;
-  color: $awd-text-on-dark-3;
+  color: #6b7280;
 }
 
 /* 上传对话框重构样式 */
@@ -4928,7 +4868,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
   background-color: #f3f4f6;
 }
 .sort-item.active {
-  color: $awd-mint-deep;
+  color: #2563eb;
   font-weight: 500;
 }
 
@@ -5265,7 +5205,6 @@ $awd-row-hover-solid: $awd-chrome-hover;
   border-radius: 4px;
   background-color: #ffffff;
   font-size: 14px;
-  color: #111827; /* 浮层白卡内恢复深色文字（树内 .rename-input 已改浅字） */
 }
 .empty-tip {
   padding: 16px;
@@ -5280,7 +5219,7 @@ $awd-row-hover-solid: $awd-chrome-hover;
   width: 13px;
   height: 13px;
   flex-shrink: 0;
-  color: $awd-mint;
+  color: #1A5336;
 }
 </style>
 

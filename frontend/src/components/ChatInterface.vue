@@ -220,7 +220,6 @@
     <!-- 1. Header Actions -->
     <view class="chat-header">
        <view class="header-left">
-          <view class="assistant-avatar">AI</view>
           <text class="project-name-display">{{ projectName }}</text>
        </view>
        <view class="header-actions">
@@ -2014,14 +2013,14 @@ export default {
 }
 </script>
 
-<style lang="scss" scoped>
+<style scoped>
 .chat-interface {
   display: flex;
   flex-direction: column;
   height: 100%;
   width: 100%;
   max-width: 100%;
-  background: $awd-chrome-panel;
+  background: #f8f9fa;
   position: relative;
   overflow: hidden; /* Prevent children from overflowing */
   box-sizing: border-box;
@@ -2029,47 +2028,18 @@ export default {
 
 .chat-header {
   height: 36px;
-  border-bottom: 1px solid $awd-chrome-line;
+  border-bottom: 1px solid #e0e0e0;
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 0 16px;
-  background: $awd-chrome-panel;
-  flex-shrink: 0;
-}
-
-.header-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-/* 助手身份：渐变头像小方块 + 衬线名（对齐原型 bu-head） */
-.assistant-avatar {
-  width: 22px;
-  height: 22px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #2D7A52, #5BD197);
-  color: $awd-text-on-dark;
-  font-family: $awd-font-serif;
-  font-weight: 600;
-  font-size: 11px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  background: #f8f9fa;
   flex-shrink: 0;
 }
 
 .header-left .project-name-display {
   font-weight: 600;
-  font-family: $awd-font-serif;
-  font-size: 13px;
-  color: $awd-text-on-dark;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: #333;
 }
 
 .header-actions {
@@ -2089,46 +2059,41 @@ export default {
   cursor: pointer;
   padding: 6px;
   border-radius: 6px;
-  color: $awd-text-on-dark-2;
+  color: #666;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
   transition: background 0.15s ease;
 }
-/* 深底下 PNG 图标（深灰描线）不可见：统一翻白；
-   hover/active 不再切绿色 hover 变体（同样看不清），改为提亮 + 深底 hover 面 */
 .icon-btn .btn-icon {
   width: 15px;
   height: 15px;
   display: block;
   object-fit: contain;
-  filter: grayscale(1) brightness(0) invert(0.72);
 }
 .icon-btn .btn-icon.hover {
   display: none;
 }
 .icon-btn:hover {
-  background: $awd-chrome-hover;
+  background: rgba(26, 83, 54, 0.08);
 }
 .icon-btn:hover .btn-icon.default {
-  display: block;
-  filter: grayscale(1) brightness(0) invert(0.95);
+  display: none;
 }
 .icon-btn:hover .btn-icon.hover {
-  display: none;
+  display: block;
 }
 /* Prevent layout shift when active */
 .icon-btn.active {
-  background: rgba(91, 209, 151, 0.15);
+  background: rgba(26, 83, 54, 0.12);
   border-radius: 6px;
 }
 .icon-btn.active .btn-icon.default {
-  display: block;
-  filter: grayscale(1) brightness(0) invert(0.95);
+  display: none;
 }
 .icon-btn.active .btn-icon.hover {
-  display: none;
+  display: block;
 }
 .icon-btn.mini {
   padding: 4px;
@@ -2139,12 +2104,12 @@ export default {
 }
 /* File add button with border */
 .icon-btn.file-add-btn {
-  border: 1px solid $awd-chrome-active;
+  border: 1px solid #ddd;
   border-radius: 4px;
   padding: 3px;
 }
 .icon-btn.file-add-btn:hover {
-  border-color: rgba(91, 209, 151, 0.5);
+  border-color: rgba(26, 83, 54, 0.4);
 }
 
 .message-list {
@@ -2155,14 +2120,6 @@ export default {
   min-width: 0; /* Allow flex shrinking */
   width: 100%;
   box-sizing: border-box;
-}
-
-.message-list::-webkit-scrollbar {
-  width: 6px;
-}
-.message-list::-webkit-scrollbar-thumb {
-  background: $awd-chrome-line;
-  border-radius: 3px;
 }
 
 .message-list-content {
@@ -2189,15 +2146,15 @@ export default {
 }
 
 .user-bubble {
-  background: rgba(62, 142, 99, 0.15); /* 深底用户消息：绿 rgba 底（对齐原型 msg.me） */
+  background: #E8F3ED; /* AI Workdeck品牌色 Lightest */
   padding: 8px 12px;
   border-radius: 6px 6px 0 6px;
   max-width: 80%;
-  color: $awd-text-on-dark;
+  color: #2C3338; /* Gray-Dark for text */
   font-size: 13px;
   line-height: 1.5;
   box-shadow: none;
-  border: 1px solid rgba(62, 142, 99, 0.3);
+  border: 1px solid #d4e5dc;
   word-wrap: break-word;
   overflow-wrap: break-word;
   box-sizing: border-box;
@@ -2217,9 +2174,8 @@ export default {
 }
 
 .bubble-timestamp {
-  font-size: 10px;
-  color: $awd-text-on-dark-3;
-  font-family: $awd-font-mono;
+  font-size: 11px;
+  color: #999;
   /* margin-top: 4px; */
 }
 .user-bubble .bubble-timestamp { text-align: right; }
@@ -2263,8 +2219,7 @@ export default {
 .welcome-text {
   font-size: 24px;
   font-weight: 600;
-  font-family: $awd-font-serif;
-  color: $awd-text-on-dark;
+  color: #333;
   margin-bottom: 8px;
   display: block;
 }
@@ -2272,18 +2227,18 @@ export default {
 .welcome-subtitle {
   font-size: 15px;
   font-weight: 400;
-  color: $awd-text-on-dark-2;
+  color: #666;
   display: block;
 }
 
 .input-card {
-  background: $awd-chrome-hover;
-  border: 1px solid $awd-chrome-active;
-  border-radius: 8px;
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  border-radius: 0px;
   padding: 16px;
   width: 100%;
   box-sizing: border-box;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.05);
   position: relative;
 }
 
@@ -2291,7 +2246,7 @@ export default {
 .recent-history-header {
   font-size: 12px;
   font-weight: 500;
-  color: $awd-text-on-dark-3;
+  color: #888;
   margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -2301,10 +2256,10 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 0; /* 无间距 */
-  border: 1px solid $awd-chrome-line;
+  border: 1px solid #e5e7eb;
   border-radius: 4px; /* 减小圆角 */
   overflow: hidden;
-  background: transparent;
+  background: #fff;
 }
 
 /* 会话后台任务状态点（与宿主抽屉同一套视觉）：
@@ -2327,7 +2282,7 @@ export default {
   width: 7px;
   height: 7px;
   margin: 0;
-  border: 1px solid $awd-chrome-panel;
+  border: 1px solid #ffffff;
 }
 @keyframes conv-dot-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -2339,8 +2294,8 @@ export default {
   justify-content: space-between;
   align-items: center;
   padding: 10px 14px;
-  background: transparent;
-  border-bottom: 1px solid $awd-chrome-line;
+  background: #ffffff;
+  border-bottom: 1px solid #f0f0f0;
   border-radius: 0; /* 无圆角 */
   cursor: pointer;
   transition: background 0.15s ease;
@@ -2352,12 +2307,12 @@ export default {
 }
 
 .history-item:hover {
-  background: $awd-chrome-hover;
+  background: #f8faf9;
 }
 
 .history-title {
   font-size: 13px;
-  color: $awd-text-on-dark;
+  color: #2c3e50;
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2368,8 +2323,7 @@ export default {
 
 .history-time {
   font-size: 11px;
-  color: $awd-text-on-dark-3;
-  font-family: $awd-font-mono;
+  color: #999;
   margin-left: 12px;
   flex-shrink: 0;
   text-align: right;
@@ -2378,18 +2332,18 @@ export default {
 
 .history-empty-placeholder {
   font-size: 13px;
-  color: $awd-text-on-dark-3;
+  color: #999;
   text-align: center;
   padding: 24px 0;
 }
 
 .history-disclaimer {
   font-size: 12px;
-  color: $awd-text-on-dark-3;
+  color: #aaa;
   text-align: center;
   padding: 16px 0 0;
   margin-top: 12px;
-  border-top: 1px solid $awd-chrome-line;
+  border-top: 1px solid #f0f0f0;
 }
 
 .chat-input-rich {
@@ -2399,12 +2353,12 @@ export default {
   outline: none;
   font-size: 15px;
   line-height: 1.5;
-  color: $awd-text-on-dark;
+  color: #333;
 }
 
 .chat-input-rich:empty:before {
   content: attr(data-placeholder);
-  color: $awd-text-on-dark-3;
+  color: #aaa;
 }
 
 .input-footer {
@@ -2413,7 +2367,7 @@ export default {
   align-items: center;
   margin-top: 12px;
   padding-top: 12px;
-  border-top: 1px solid $awd-chrome-line;
+  border-top: 1px solid #f0f0f0;
 }
 
 .action-bar-left {
@@ -2426,7 +2380,7 @@ export default {
 
 .model-selector {
   font-size: 13px;
-  color: $awd-text-on-dark-2;
+  color: #666;
   cursor: pointer;
   position: relative;
   display: flex;
@@ -2438,16 +2392,16 @@ export default {
   white-space: nowrap;
 }
 .model-selector:hover {
-  background: $awd-chrome-line;
+  background: rgba(0, 0, 0, 0.05);
 }
 
 .dropdown-arrow {
   font-size: 8px;
-  color: $awd-text-on-dark-3;
+  color: #999;
   transition: color 0.15s ease;
 }
 .model-selector:hover .dropdown-arrow {
-  color: $awd-text-on-dark-2;
+  color: #666;
 }
 
 .model-dropdown {
@@ -2475,10 +2429,9 @@ export default {
 }
 
 /* ============= Mode Selector (Agent/Ask/Plan) ============= */
-/* 深底下弃用蓝色系，统一 mint 点缀（对齐原型 skill 胶囊配色） */
 .mode-selector {
   font-size: 13px;
-  color: $awd-text-on-dark-2;
+  color: #666;
   cursor: pointer;
   position: relative;
   display: flex;
@@ -2486,13 +2439,13 @@ export default {
   gap: 4px;
   padding: 2px 8px;
   border-radius: 2px;
-  background: rgba(91, 209, 151, 0.10);
-  border: 1px solid rgba(91, 209, 151, 0.25);
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
   transition: all 0.15s ease;
 }
 .mode-selector:hover {
-  background: rgba(91, 209, 151, 0.18);
-  border-color: rgba(91, 209, 151, 0.35);
+  background: rgba(59, 130, 246, 0.15);
+  border-color: rgba(59, 130, 246, 0.3);
 }
 
 .mode-icon {
@@ -2501,7 +2454,7 @@ export default {
 
 .mode-name {
   font-weight: 500;
-  color: $awd-mint;
+  color: #3b82f6;
 }
 
 .mode-dropdown {
@@ -2748,10 +2701,9 @@ export default {
   background: rgba(26, 83, 54, 0.04);
 }
 
-/* 发送钮：mint 实心 + 深色箭头（对齐原型 chat-input .send） */
 .send-btn {
-  background: $awd-mint;
-  color: $awd-chrome-panel;
+  background: #1A5336;
+  color: #fff;
   width: 32px;
   height: 32px;
   border-radius: 50%;
@@ -2763,22 +2715,21 @@ export default {
   flex-shrink: 0;
 }
 .send-btn:hover {
-  background: lighten($awd-mint, 8%);
+  background: #2D7A52;
 }
 .send-btn.disabled {
-  background: $awd-chrome-active;
-  color: $awd-text-on-dark-3;
+  background: #eee;
+  color: #aaa;
   cursor: not-allowed;
 }
 .send-btn.disabled:hover {
-  background: $awd-chrome-active;
+  background: #eee;
 }
 .send-btn.stopping {
-  background: $awd-brick;
-  color: $awd-text-on-dark;
+  background: #C53030;
 }
 .send-btn.stopping:hover {
-  background: darken($awd-brick, 8%);
+  background: #9B2C2C;
 }
 .send-icon {
   font-size: 16px;
@@ -2788,8 +2739,8 @@ export default {
 
 .input-area-wrapper {
   padding: 16px 24px;
-  background: $awd-chrome-panel;
-  border-top: 1px solid $awd-chrome-line;
+  background: #fff;
+  border-top: 1px solid #eee;
   display: flex;
   flex-direction: column;  /* Fix: Stack children vertically */
   align-items: stretch;    /* Fix: Make children full width */
@@ -2900,7 +2851,7 @@ export default {
    align-items: center;
    gap: 3px;
    background: transparent;
-   color: $awd-mint;
+   color: #1A5336;
    padding: 3px 8px;
    border-radius: 4px;
    margin: 0 4px 2px 0;
@@ -2909,14 +2860,14 @@ export default {
    vertical-align: middle;
    user-select: none;
    max-width: 160px;
-   border: 1px solid rgba(91, 209, 151, 0.4);
+   border: 1px solid rgba(26, 83, 54, 0.4);
    transition: all 0.15s ease;
    position: relative;
  }
 
  :deep(.context-tag-inline:hover) {
-   background: rgba(91, 209, 151, 0.10);
-   border-color: rgba(91, 209, 151, 0.6);
+   background: rgba(26, 83, 54, 0.08);
+   border-color: rgba(26, 83, 54, 0.6);
    padding-right: 22px; /* Make room for close button */
  }
 
@@ -2925,11 +2876,11 @@ export default {
    height: 14px;
    flex-shrink: 0;
    border-radius: 2px;
-   filter: grayscale(1) brightness(0) invert(0.85);
+   filter: brightness(0.3);
  }
 
  :deep(.tag-at) {
-   color: $awd-mint;
+   color: #1A5336;
    font-weight: 600;
  }
 
@@ -2938,7 +2889,7 @@ export default {
    overflow: hidden;
    text-overflow: ellipsis;
    max-width: 100px;
-   color: $awd-mint;
+   color: #1A5336;
  }
 
  :deep(.tag-close) {
@@ -2949,8 +2900,8 @@ export default {
    transform: translateY(-50%);
    width: 14px;
    height: 14px;
-   background: rgba(91, 209, 151, 0.2);
-   color: $awd-mint;
+   background: rgba(26, 83, 54, 0.2);
+   color: #1A5336;
    border-radius: 50%;
    align-items: center;
    justify-content: center;
@@ -2964,8 +2915,8 @@ export default {
  }
 
  :deep(.tag-close:hover) {
-   background: rgba(91, 209, 151, 0.5);
-   color: $awd-chrome-panel;
+   background: rgba(26, 83, 54, 0.4);
+   color: #fff;
  }
 
  /* =============================================
@@ -2977,7 +2928,7 @@ export default {
   align-items: center;
   gap: 3px;
   background: transparent;
-  color: $awd-mint;
+  color: #1A5336;
   padding: 3px 8px;
   border-radius: 4px;
   margin: 0 4px 2px 0;
@@ -2986,7 +2937,7 @@ export default {
   vertical-align: middle;
   user-select: none;
   max-width: 160px;
-  border: 1px solid rgba(91, 209, 151, 0.4);
+  border: 1px solid rgba(26, 83, 54, 0.4);
   transition: all 0.15s ease;
 }
 
@@ -2995,12 +2946,12 @@ export default {
   height: 14px;
   flex-shrink: 0;
   border-radius: 2px;
-  /* Ensure icon is visible on dark background */
-  filter: grayscale(1) brightness(0) invert(0.85);
+  /* Ensure icon is visible on light background */
+  filter: brightness(0.2);
 }
 
 .user-bubble .tag-at {
-  color: $awd-mint;
+  color: #1A5336;
   font-weight: 600;
 }
 
@@ -3009,7 +2960,7 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100px;
-  color: $awd-mint;
+  color: #1A5336;
 }
 
 /* =============================================
@@ -3057,24 +3008,24 @@ export default {
   flex-shrink: 0;
 }
 .skill-selector:hover {
-  background: $awd-chrome-line;
+  background: rgba(0, 0, 0, 0.05);
 }
 
-/* 钉选态：mint 微底 + mint 字形，让"本轮固定用了某个 Skill"一眼可见 */
+/* 钉选态：绿色实心底，让"本轮固定用了某个 Skill"一眼可见 */
 .skill-selector.pinned {
   background: rgba(91, 209, 151, 0.18);
 }
 .skill-selector.pinned .skill-glyph {
-  color: $awd-mint;
+  color: #1A5336;
 }
 
 .skill-glyph {
   font-size: 14px;
-  color: $awd-text-on-dark-3;
+  color: #999;
   line-height: 1;
 }
 .skill-selector:hover .skill-glyph {
-  color: $awd-text-on-dark-2;
+  color: #666;
 }
 
 .skill-dropdown {
@@ -3506,7 +3457,7 @@ export default {
 }
 
 
-/* 步数超限一键继续条（深底 amber 变体） */
+/* 步数超限一键继续条 */
 .continue-bar {
   display: flex;
   align-items: center;
@@ -3514,22 +3465,22 @@ export default {
   gap: 8px;
   margin: 0 12px 6px;
   padding: 6px 12px;
-  background: rgba(197, 138, 46, 0.12);
-  border: 1px solid rgba(197, 138, 46, 0.35);
+  background: #FFF9E8;
+  border: 1px solid #F5DFA6;
   border-radius: 8px;
 }
 
 .continue-hint {
   font-size: 11px;
-  color: lighten($awd-amber, 22%);
+  color: #8A6D1D;
 }
 
 .continue-btn {
   flex-shrink: 0;
   font-size: 12px;
   font-weight: 600;
-  color: $awd-chrome-panel;
-  background: $awd-mint;
+  color: #FFFFFF;
+  background: #1A5336;
   border-radius: 6px;
   padding: 4px 14px;
   cursor: pointer;
@@ -3537,7 +3488,7 @@ export default {
 }
 
 .continue-btn:hover {
-  background: lighten($awd-mint, 8%);
+  background: #14402A;
 }
 
 /* Status Bar Row (File Changes + Tokens) */
@@ -3580,12 +3531,12 @@ export default {
   align-items: center;
   padding: 4px 12px;
   border-radius: 6px;
-  background-color: transparent;
+  background-color: #ffffff;
   cursor: pointer;
   font-size: 11px;
   font-weight: 600;
-  color: $awd-text-on-dark-2;
-  border: 1px solid $awd-chrome-active;
+  color: #6C757D; /* Gray-Medium */
+  border: 1px solid #E9ECEF; /* Gray-Light */
   transition: all 0.2s ease;
 }
 
@@ -3600,24 +3551,28 @@ export default {
 }
 
 .status-btn.modified {
-  border-color: rgba(91, 209, 151, 0.25);
-  color: $awd-mint;
-  background-color: rgba(91, 209, 151, 0.08);
+  border-color: rgba(26, 83, 54, 0.2);
+  color: #1A5336; /* Forest Green */
+  background-color: #E6F9F0; /* Mint Lightest */
 }
 
 .status-btn.modified:hover {
-  background-color: rgba(91, 209, 151, 0.2);
+  /* background-color: #5BD197; Mint Green */
+  background-color: #5BD197;
+  /* color: #ffffff; */
+  /* border-color: #1A5336; */
 }
 
 .status-btn.created {
-  border-color: rgba(91, 209, 151, 0.25);
-  color: $awd-mint;
-  background-color: rgba(91, 209, 151, 0.08);
+  border-color: rgba(91, 209, 151, 0.3);
+  color: #1A5336;
+  background-color: #E6F9F0;
 }
 
 .status-btn.created:hover {
-  background-color: rgba(91, 209, 151, 0.2);
-  border-color: rgba(91, 209, 151, 0.45);
+  background-color: #5BD197;
+  /* color: #ffffff; */
+  border-color: #1A5336;
 }
 
 /* Status Popup */
@@ -3737,7 +3692,7 @@ export default {
   align-items: center;
   justify-content: center;
   margin-right: 4px;
-  color: $awd-text-on-dark-2;
+  color: #1A5336; /* Forest Green */
 }
 
 /* .rollback-btn:hover .rollback-icon-svg,
@@ -3747,13 +3702,8 @@ export default {
 
 .rollback-text {
   font-size: 11px;
-  color: $awd-text-on-dark-2;
+  color: #1A5336;
   font-weight: 600;
-}
-
-.rollback-btn:hover .rollback-icon-svg,
-.rollback-btn:hover .rollback-text {
-  color: $awd-mint;
 }
 
 /* Warning Dialog */

@@ -150,22 +150,22 @@ export default {
 
 <style lang="scss" scoped>
 .timeline { flex: 1; padding: 12rpx 0; }
-.timeline-empty { padding: 24rpx; color: $awd-text-on-dark-3; font-size: 26rpx; }
+.timeline-empty { padding: 24rpx; color: #999; font-size: 26rpx; }
 .timeline-error { padding: 24rpx; display: flex; align-items: center; gap: 16rpx; }
-.timeline-error-desc { font-size: 26rpx; color: $awd-brick-on-dark; }
-.timeline-error-retry { font-size: 26rpx; color: $awd-mint; text-decoration: underline; }
+.timeline-error-desc { font-size: 26rpx; color: #b23; }
+.timeline-error-retry { font-size: 26rpx; color: #12344D; text-decoration: underline; }
 .timeline-node { position: relative; padding: 16rpx 20rpx 16rpx 40rpx; }
 .node-line {
-  position: absolute; left: 20rpx; top: 0; bottom: 0; width: 2rpx; background: $awd-chrome-active;
+  position: absolute; left: 20rpx; top: 0; bottom: 0; width: 2rpx; background: #e4e4e4;
 }
 .timeline-node.is-session .node-title { font-weight: 600; }
-.node-title { font-size: 27rpx; color: $awd-text-on-dark; }
-.node-meta { font-size: 23rpx; color: $awd-text-on-dark-3; margin-top: 6rpx; }
-.node-autos-toggle { font-size: 23rpx; color: $awd-mint; margin-top: 10rpx; }
-.node-autos { margin-top: 10rpx; padding-left: 12rpx; border-left: 2rpx dashed $awd-chrome-active; }
+.node-title { font-size: 27rpx; color: #222; }
+.node-meta { font-size: 23rpx; color: #999; margin-top: 6rpx; }
+.node-autos-toggle { font-size: 23rpx; color: #12344D; margin-top: 10rpx; }
+.node-autos { margin-top: 10rpx; padding-left: 12rpx; border-left: 2rpx dashed #ddd; }
 .node-auto { display: flex; gap: 12rpx; padding: 8rpx 0; }
-.auto-time { font-size: 23rpx; color: $awd-text-on-dark-3; flex-shrink: 0; }
-.auto-msg { font-size: 23rpx; color: $awd-text-on-dark-2; }
+.auto-time { font-size: 23rpx; color: #aaa; flex-shrink: 0; }
+.auto-msg { font-size: 23rpx; color: #666; }
 .milestone-flag { font-size: 20rpx; color: #C8A45D; border: 1px solid #C8A45D; border-radius: 4rpx; padding: 2rpx 8rpx; margin-right: 8rpx; }
 .has-milestone { font-weight: 600; }
 </style>

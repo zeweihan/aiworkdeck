@@ -335,7 +335,7 @@ export default {
 .sm-panel-title {
   font-size: 13px;
   font-weight: 600;
-  color: $awd-text-on-dark;
+  color: #333;
 }
 
 .sm-add-btn {
@@ -347,12 +347,12 @@ export default {
   border-radius: 4px;
   cursor: pointer;
 
-  &:hover { background: $awd-chrome-hover; }
+  &:hover { background: #e8e8e8; }
 }
 
 .sm-add-icon {
   font-size: 15px;
-  color: $awd-text-on-dark-2;
+  color: #555;
 }
 
 .sm-create-form {
@@ -360,18 +360,15 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-bottom: 1px solid $awd-chrome-line;
+  border-bottom: 1px solid #ececec;
 }
 
 .sm-input {
-  border: 1px solid $awd-chrome-active;
+  border: 1px solid #d9d9d9;
   border-radius: 5px;
   padding: 6px 8px;
   font-size: 12px;
-  background: $awd-chrome-hover;
-  color: $awd-text-on-dark;
-
-  &:focus { border-color: $awd-mint; }
+  background: #fff;
 }
 
 .sm-form-actions {
@@ -389,16 +386,15 @@ export default {
   text-align: center;
 
   &.primary {
-    background: rgba($awd-mint, 0.12);
-    border: 1px solid $awd-mint;
-    color: $awd-mint;
-    &:hover { background: rgba($awd-mint, 0.2); }
+    background: #1A5336;
+    color: #fff;
+    &:hover { opacity: 0.9; }
   }
   &.secondary {
-    background: transparent;
-    border: 1px solid $awd-chrome-active;
-    color: $awd-text-on-dark-2;
-    &:hover { background: $awd-chrome-hover; }
+    background: #fff;
+    border: 1px solid #d1d5db;
+    color: #374151;
+    &:hover { background: #f5f5f5; }
   }
   &.disabled {
     opacity: 0.5;
@@ -412,7 +408,7 @@ export default {
 }
 
 .sm-check-item {
-  border-bottom: 1px solid $awd-chrome-line;
+  border-bottom: 1px solid #f0f0f0;
 }
 
 .sm-check-head {
@@ -422,7 +418,7 @@ export default {
   padding: 9px 14px;
   cursor: pointer;
 
-  &:hover { background: $awd-chrome-hover; }
+  &:hover { background: #f5f5f5; }
 }
 
 .sm-check-info {
@@ -435,7 +431,7 @@ export default {
 .sm-check-name {
   font-size: 13px;
   font-weight: 500;
-  color: $awd-text-on-dark;
+  color: #333;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -443,7 +439,7 @@ export default {
 
 .sm-check-meeting {
   font-size: 11px;
-  color: $awd-text-on-dark-3;
+  color: #888;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -460,31 +456,31 @@ export default {
   font-size: 11px;
   padding: 1px 7px;
   border-radius: 8px;
-  background: $awd-chrome-active;
-  color: $awd-text-on-dark-2;
+  background: #f0f0f0;
+  color: #888;
 
-  &.ready { background: rgba($awd-mint, 0.12); color: $awd-mint; }
-  &.running { background: rgba($awd-amber, 0.18); color: $awd-amber; }
-  &.done { background: rgba($awd-mint, 0.12); color: $awd-mint; }
+  &.ready { background: #e6f0eb; color: #1A5336; }
+  &.running { background: #fff4e0; color: #b26a00; }
+  &.done { background: #e6f0eb; color: #1A5336; }
 }
 
 .sm-del-btn {
   font-size: 11px;
-  color: $awd-text-on-dark-3;
+  color: #bbb;
   cursor: pointer;
   padding: 2px 4px;
 
-  &:hover { color: $awd-brick-on-dark; }
+  &:hover { color: #c0392b; }
 }
 
 .sm-check-detail {
   padding: 4px 14px 12px;
-  background: $awd-chrome-hover;
+  background: #fafafa;
 }
 
 .sm-meta-line {
   font-size: 11px;
-  color: $awd-text-on-dark-3;
+  color: #999;
   padding: 2px 0 6px;
 }
 
@@ -500,13 +496,13 @@ export default {
 
 .sm-slot-label {
   font-size: 12px;
-  color: $awd-text-on-dark-2;
+  color: #555;
   font-weight: 500;
 }
 
 .sm-slot-link {
   font-size: 11px;
-  color: $awd-mint;
+  color: #1A5336;
   cursor: pointer;
 
   &:hover { text-decoration: underline; }
@@ -525,7 +521,7 @@ export default {
 
 .sm-file-name {
   font-size: 11px;
-  color: $awd-text-on-dark;
+  color: #333;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -534,17 +530,17 @@ export default {
 
 .sm-file-remove {
   font-size: 13px;
-  color: $awd-text-on-dark-3;
+  color: #bbb;
   cursor: pointer;
   padding: 0 4px;
   flex-shrink: 0;
 
-  &:hover { color: $awd-brick-on-dark; }
+  &:hover { color: #c0392b; }
 }
 
 .sm-slot-empty {
   font-size: 11px;
-  color: $awd-text-on-dark-3;
+  color: #bbb;
 }
 
 .sm-actions {
@@ -557,7 +553,7 @@ export default {
 .sm-hint {
   margin-top: 6px;
   font-size: 11px;
-  color: $awd-text-on-dark-2;
+  color: #888;
   line-height: 1.5;
 }
 
@@ -565,7 +561,7 @@ export default {
   padding: 30px 14px;
   text-align: center;
   font-size: 12px;
-  color: $awd-text-on-dark-3;
+  color: #aaa;
 }
 
 .sm-dialog-mask {

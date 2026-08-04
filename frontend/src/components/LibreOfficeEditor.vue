@@ -645,42 +645,39 @@ export default {
 </script>
 
 <style scoped>
-/* 深绿画布（对齐官网原型）：wrapper/加载面板/预览接力全走深绿系，
-   引擎侧由 office_thread.js applyAppColorScheme 写同色 AppBackground。 */
-.libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: #1D3A29; }
+.libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
 /* Floating status pill, pinned over the editor's top-right corner (LO's own
    menubar leaves that region empty). No layout height is reserved — the
    document canvas gets the full pane. */
 .libre-float { position: absolute; top: 6px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 8px; }
 .libre-pill { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
-  background: rgba(13, 36, 26, 0.85); color: #ECF2EE; font-size: 12px; backdrop-filter: blur(4px);
-  border: 1px solid rgba(168, 189, 178, 0.25); }
-.libre-pill.error { background: rgba(153, 27, 27, 0.9); color: #fecaca; border-color: transparent; }
-.libre-spin { width: 10px; height: 10px; border: 2px solid rgba(236, 242, 238, 0.35); border-top-color: #ECF2EE;
+  background: rgba(31, 41, 55, 0.78); color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
+.libre-pill.error { background: rgba(153, 27, 27, 0.9); color: #fecaca; }
+.libre-spin { width: 10px; height: 10px; border: 2px solid rgba(229, 231, 235, 0.35); border-top-color: #e5e7eb;
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
 .libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
 .libre-host { flex: 1; min-width: 0; min-height: 0; height: 100%; }
-.libre-review-btn { padding: 3px 10px; border-radius: 999px; background: rgba(13, 36, 26, 0.85);
-  color: #ECF2EE; font-size: 12px; backdrop-filter: blur(4px); border: 1px solid rgba(168, 189, 178, 0.25); }
+.libre-review-btn { padding: 3px 10px; border-radius: 999px; background: rgba(31, 41, 55, 0.78);
+  color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
 .libre-review-btn.on { background: #E6F9F0; color: #1A5336; }
-/* ---- 加载进度面板（深绿系：面板底 #0D241A，文字 #A8BDB2/#ECF2EE，进度条保持 mint） ---- */
+/* ---- 加载进度面板 ---- */
 .libre-loading { position: absolute; inset: 0; z-index: 15; display: flex; align-items: center; justify-content: center;
-  background: #0D241A; }
+  background: #F8F9FA; }
 .libre-loading-card { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 320px; max-width: 80%; }
-.libre-doc-icon { position: relative; width: 44px; height: 56px; background: #FCFBF8; border: 1.5px solid #2D5240;
+.libre-doc-icon { position: relative; width: 44px; height: 56px; background: #fff; border: 1.5px solid #DEE2E6;
   border-radius: 5px; margin-bottom: 4px; overflow: hidden; }
 .doc-fold { position: absolute; top: -1px; right: -1px; width: 14px; height: 14px;
-  background: #0D241A; border-left: 1.5px solid #2D5240; border-bottom: 1.5px solid #2D5240; border-radius: 0 0 0 5px; }
+  background: #F8F9FA; border-left: 1.5px solid #DEE2E6; border-bottom: 1.5px solid #DEE2E6; border-radius: 0 0 0 5px; }
 .doc-line { position: absolute; left: 8px; height: 4px; border-radius: 2px; background: #E6F9F0;
   animation: doc-line-pulse 1.6s ease-in-out infinite; }
 .doc-line.l1 { top: 20px; width: 26px; animation-delay: 0s; }
 .doc-line.l2 { top: 30px; width: 20px; animation-delay: 0.25s; }
 .doc-line.l3 { top: 40px; width: 24px; animation-delay: 0.5s; }
 @keyframes doc-line-pulse { 0%, 100% { background: #E9ECEF; } 50% { background: #5BD197; } }
-.libre-loading-name { font-size: 14px; font-weight: 600; color: #ECF2EE; max-width: 100%;
+.libre-loading-name { font-size: 14px; font-weight: 600; color: #2C3338; max-width: 100%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.libre-progress-track { width: 100%; height: 6px; background: #2D5240; border-radius: 999px; overflow: hidden; }
+.libre-progress-track { width: 100%; height: 6px; background: #E9ECEF; border-radius: 999px; overflow: hidden; }
 .libre-progress-fill { position: relative; height: 100%; background: #5BD197; border-radius: 999px;
   transition: width 0.5s ease; overflow: hidden; }
 .libre-progress-shimmer { position: absolute; inset: 0;
@@ -688,18 +685,18 @@ export default {
   animation: libre-shimmer 1.4s linear infinite; }
 @keyframes libre-shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
 .libre-loading-meta { display: flex; justify-content: space-between; width: 100%; }
-.libre-loading-stage { font-size: 12px; color: #A8BDB2; }
-.libre-loading-pct { font-size: 12px; color: #5BD197; font-weight: 600; }
-.libre-loading-dl { font-size: 11px; color: #A8BDB2; }
-.libre-loading-hint { font-size: 11px; color: rgba(168, 189, 178, 0.7); margin-top: 6px; }
-/* ---- 只读预览接力（深绿画布上漂浮 docx-preview 白页） ---- */
+.libre-loading-stage { font-size: 12px; color: #495057; }
+.libre-loading-pct { font-size: 12px; color: #1A5336; font-weight: 600; }
+.libre-loading-dl { font-size: 11px; color: #868E96; }
+.libre-loading-hint { font-size: 11px; color: #ADB5BD; margin-top: 6px; }
+/* ---- 只读预览接力 ---- */
 .libre-preview-strip { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; flex-direction: column;
-  gap: 4px; padding: 6px 14px 8px; background: rgba(13, 36, 26, 0.92); border-bottom: 1px solid #2D5240;
+  gap: 4px; padding: 6px 14px 8px; background: rgba(248, 249, 250, 0.95); border-bottom: 1px solid #E9ECEF;
   backdrop-filter: blur(4px); }
-.libre-strip-track { width: 100%; height: 3px; background: #2D5240; border-radius: 999px; overflow: hidden; }
+.libre-strip-track { width: 100%; height: 3px; background: #E9ECEF; border-radius: 999px; overflow: hidden; }
 .libre-strip-fill { height: 100%; background: #5BD197; border-radius: 999px; transition: width 0.5s ease; }
-.libre-strip-text { font-size: 11px; color: #A8BDB2; }
-.libre-preview-host { position: absolute; inset: 0; top: 34px; overflow-y: auto; background: #1D3A29; }
+.libre-strip-text { font-size: 11px; color: #868E96; }
+.libre-preview-host { position: absolute; inset: 0; top: 34px; overflow-y: auto; background: #F1F3F5; }
 /* docx-preview 生成的页面居中呈现（deep：内容是运行时注入的非 scoped DOM） */
 .libre-preview-host :deep(.docx-wrapper) { background: transparent; padding: 16px 0; }
 </style>
