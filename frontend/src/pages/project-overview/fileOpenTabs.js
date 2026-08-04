@@ -255,7 +255,7 @@ export const fileOpenTabsMethods = {
     /** 标签页图标的 SVG path 集合（界面禁用 emoji，图标一律 stroke 线性 SVG） */
     getFileIconPaths(type, tabType) {
       if (tabType === 'web') return GLYPHS.web
-      if (tabType === 'market') return GLYPHS.blocks
+      if (tabType === 'market-detail') return GLYPHS.blocks
       return fileGlyph(type)
     },
     isFileTypeSupported(file) {
