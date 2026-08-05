@@ -5,7 +5,7 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 
 # 辅助小工具 领域地图
 
-职责边界：工作台各辅助面板与桌面能力（浏览器/截图/剪贴板/收藏/搜索/语音/预览插入/OCR）。不含编辑器（doc-editor）、不含左栏布局本身（sidebar-shell）。
+职责边界：工作台各辅助面板与桌面能力（浏览器/截图/剪贴板/收藏/搜索/语音/预览插入/OCR）。不含编辑器（doc-editor）、不含左栏布局本身（sidebar-shell）。剪贴板与文件缓存区的**免费额度**在本文档里讲执行方式，权益判定、entitlement 命名与账户连接见 `.claude/agents/licensing-billing.md`。
 
 ## 分组清单（前端组件 / desktop 宿主 / 后端 API 三层）
 

@@ -66,6 +66,22 @@ Double-click to install. On first launch, a setup wizard lets you pick one AI pr
 
 > The desktop build is the fastest way to evaluate AI Workdeck. To self-host the full stack or contribute code, see [Quick Start](#quick-start) below.
 
+## Access & Unlock
+
+The desktop app asks for an unlock code on first launch. There is no account to create and no sign-in: the code is entered once, on this machine, and the workspace opens directly from then on.
+
+**Public trial code** — copy the whole string, hyphens included:
+
+```
+AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ-ZQSZ-YY6K-N2H4-6WGB-SDOG-2LM7-JO62-PJDO-ASKY-NYR2-TLGR-YKUE-HYIK
+```
+
+The trial code is verified offline against a public key built into the application, so unlocking works without network access and without sending anything about your machine anywhere. Every feature is available in the trial; the workspace simply carries a discreet "trial" marker in the title bar.
+
+**Full version.** Create an account at [aiworkdeck.com](https://www.aiworkdeck.com), generate an account key (prefix `awdk_`) on the account page, and paste it into the same unlock field. The key is verified online, removes the trial marker, and at the same time connects the desktop app to your account — synchronising anything you have purchased and enabling the hosted AI channel. You can disconnect at any time from the settings page, section 「账户与用量」 (Account & usage).
+
+Two notes for firms evaluating deployment: unlocking is per machine and is stored locally at `~/.aiworkdeck/`; a self-hosted team deployment (browser access to a shared server) has no unlock gate at all.
+
 ## Demo
 
 | | |
