@@ -76,7 +76,7 @@ The desktop app asks for an unlock code on first launch. There is no account to 
 AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ-ZQSZ-YY6K-N2H4-6WGB-SDOG-2LM7-JO62-PJDO-ASKY-NYR2-TLGR-YKUE-HYIK
 ```
 
-The trial code is verified offline against a public key built into the application, so unlocking works without network access and without sending anything about your machine anywhere. Every feature is available in the trial; the workspace simply carries a discreet "trial" marker in the title bar.
+The trial code is verified offline against a public key built into the application, so unlocking works without network access and without sending anything about your machine anywhere. Every feature is available in the trial; the workspace simply carries a discreet "trial" marker in the top bar.
 
 **Full version.** Create an account at [aiworkdeck.com](https://www.aiworkdeck.com), generate an account key (prefix `awdk_`) on the account page, and paste it into the same unlock field. The key is verified online, removes the trial marker, and at the same time connects the desktop app to your account — synchronising anything you have purchased and enabling the hosted AI channel. You can disconnect at any time from the settings page, section 「账户与用量」 (Account & usage).
 
