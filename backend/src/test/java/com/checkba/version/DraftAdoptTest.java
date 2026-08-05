@@ -462,7 +462,7 @@ class DraftAdoptTest {
                         Map.of("甲.txt", WorkSessionService.Resolution.MAIN), 1L, "韩泽伟"));
 
         assertTrue(e.isUserFacing());
-        assertEquals("还有文件没有做出选择", e.getMessage());
+        assertEquals("还有文件没选留哪一份", e.getMessage());
         assertTrue(repoSvc.repositoryMerging(7L), "拒绝之后仍要停在待裁决状态");
         assertEquals(WorkSession.Status.ACTIVE, sessions.get(scene.draftId()).getStatus());
         assertEquals(scene.mainTipBeforeAdopt(), repoSvc.resolveRef(7L, "HEAD"),

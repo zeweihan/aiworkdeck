@@ -341,7 +341,7 @@ class CloudSyncUpdateTest {
         assertFalse(repoSvc.repositoryMerging(7L));
         assertEquals("我的第二稿", Files.readString(root.resolve("projects/7/合同.txt"))); // MAIN=ours 缺省内容
         assertTrue(Files.list(root.resolve("projects/7")).map(p -> p.getFileName().toString())
-                .anyMatch(n -> n.contains("来自：云端")));
+                .anyMatch(n -> n.contains("来自：团队案件库")));
         assertEquals(repoSvc.resolveRef(7L, "master"), remoteMasterShaOfBare()); // 裁决后重推
     }
 

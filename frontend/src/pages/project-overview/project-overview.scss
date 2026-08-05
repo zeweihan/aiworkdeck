@@ -156,6 +156,51 @@ $bg-white: #FFFFFF;
   white-space: nowrap;
 }
 
+/* 协作状态 chip（顶栏，与工作状态点并列；只在案卷已放进团队案件库时渲染） */
+.collab-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  border: 1px solid transparent;
+
+  &.collab-chip-green {
+    background: rgba(76, 154, 106, 0.10);
+    border-color: rgba(76, 154, 106, 0.28);
+    .collab-chip-dot { background: #4C9A6A; }
+    .collab-chip-text { color: #2F6B48; }
+  }
+
+  &.collab-chip-blue {
+    background: rgba(62, 124, 177, 0.10);
+    border-color: rgba(62, 124, 177, 0.28);
+    .collab-chip-dot { background: #3E7CB1; }
+    .collab-chip-text { color: #2C5A80; }
+  }
+
+  &.collab-chip-amber {
+    background: rgba(200, 164, 93, 0.12);
+    border-color: rgba(200, 164, 93, 0.3);
+    .collab-chip-dot { background: #C8A45D; }
+    .collab-chip-text { color: #8a6d3b; }
+  }
+
+  &:hover { filter: brightness(0.97); }
+}
+
+.collab-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.collab-chip-text {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* IDE 化：最近项目切换器 */
 .project-switcher {
   display: flex;
@@ -4231,6 +4276,14 @@ $bg-white: #FFFFFF;
 
   &.amber {
     background: #C58A2E;
+  }
+
+  &.blue {
+    background: #3E7CB1;
+  }
+
+  &.green {
+    background: #4C9A6A;
   }
 
   &.recording {

@@ -153,10 +153,10 @@
           <!-- Client Form -->
           <view v-else class="form-body swing-in">
             <view class="input-group">
-              <text class="label">项目访问码</text>
-              <input class="glass-input" type="text" v-model="clientForm.accessCode" @confirm="handleClientLogin" placeholder="请输入律师提供的访问码" placeholder-class="placeholder-style" />
+              <text class="label">案卷访问码</text>
+              <input class="glass-input" type="text" v-model="clientForm.accessCode" @confirm="handleClientLogin" placeholder="请输入律师发给你的访问码" placeholder-class="placeholder-style" />
             </view>
-            <button class="action-btn" :loading="clientLoginLoading" @tap="handleClientLogin">进入项目</button>
+            <button class="action-btn" :loading="clientLoginLoading" @tap="handleClientLogin">进入案卷</button>
           </view>
           
           <view class="card-footer">
@@ -284,7 +284,7 @@ export default {
     },
     async handleClientLogin() {
       if (!this.clientForm.accessCode) {
-        uni.showToast({ title: '请输入访问码', icon: 'none' });
+        uni.showToast({ title: '请输入律师发给你的访问码', icon: 'none' });
         return;
       }
       this.clientLoginLoading = true;
