@@ -48,9 +48,35 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 
 ## 官网 registry 契约
 
-- **列表**：`GET {registryUrl}` → skill 元数据 JSON 数组，字段对应 MarketSkillView：id/name/description/icon/version/author/authorDisplayName/triggers[]/allowedTools[]/downloads/updatedAt/homepage（`installed` 由本地判定）。
+- **列表**：`GET {registryUrl}` → skill 元数据 JSON 数组，字段对应 MarketSkillView：id/name/description/icon/version/author/authorDisplayName/triggers[]/allowedTools[]/downloads/updatedAt/homepage/**priceCents/pricingModel**（`installed`、`purchased` 由本地判定）。
 - **下载**：`GET {registryUrl}/{id}/bundle` → `{id, version, files:{"skill.yml":"…","prompt.md":"…"}}`；只认白名单键 skill.yml/prompt.md（BUNDLE_FILES），值必须字符串，缺任一安装失败。
-- HTTP：hutool，连接 5s/读 10s 超时；非 200 抛 IllegalStateException；`httpGet` 是可覆写测试 seam。
+- HTTP：hutool，连接 5s/读 10s 超时；`httpGet(url, bearer)` 是可覆写测试 seam，返回 `RegistryReply(status, bytes)`（状态码交调用方判，402 不在 seam 里抛）；无鉴权的 `httpGet(url)` 是它的薄包装。
+
+## 付费项（PR-D，2026-08）
+
+- **契约**：registry 列表含 `priceCents`（分，0=免费）与 `pricingModel`（当前只有 `once`）；付费项的
+  `bundle` / `file` 端点要求 `Authorization: Bearer awdk_` 且已购，否则 402
+  `{code:"payment_required", priceCents, itemName}`。已购清单来自官网 `GET /api/account/entitlements`。
+- **单一判定出口**：`backend/src/main/java/com/checkba/service/market/MarketPurchaseGate.java`。
+  Skill 与插件两条链路共用它做「免费判定 / 未连接账户拦截 / 402 翻译 / 分转元」四件事，
+  不要在各自 service 里再写一套文案。
+- **feature 命名空间**：`skill:<id>` / `plugin:<id>`，与本地 SKU 键（`clipboard.unlimited` 等
+  FeatureCatalog 常量）在同一个 entitlements 列表里但语义不同。只用
+  `MarketPurchaseGate.skillFeature/pluginFeature` 构造，**绝不拿条目 id 直接当 feature 查**。
+- **降级三条**（都有单测钉住）：
+  1. registry 缺 `priceCents` → 归一为 0 = 免费（官网旧格式/旧 registry 上不能把免费项锁住）；
+  2. 安装前查元数据拿价格失败（列表不可达）→ 按免费继续，真付费项由官网 402 兜底；
+  3. 免费项**不带** Authorization、不多一次判定——免费流程一字不变是硬要求。
+- **价格必须服务端自查**：`install()` 先拉一次 registry 列表定价，不信前端传来的 priceCents，
+  否则等于让客户端决定付费闸门何时生效。
+- **前端**：`frontend/src/utils/marketPricing.js` 是价格展示与状态判定的唯一出口
+  （`priceLabel` / `paidState` / `canInstall` / `purchaseUrl`），MarketSidebarPanel、MarketDetailPane、
+  MarketPane 三处共用。四态：免费 / 已购（直接装）/ 未购已连账户（「购买」外链）/ 未连账户（「需连接账户」跳设置）。
+- **购买外链地雷**：官网**没有** `/zh/plugins/{id}` 路由（只有 `/zh/plugins` 列表页带购买按钮），
+  registry 里插件 `homepage` 默认值指向的路径并不存在，拿它当购买入口会 404。
+  购买链接一律用 `purchaseUrl(kind, id)`，且走 `openExternalUrl`（系统浏览器）——
+  支付要用用户已登录的浏览器会话，内嵌 tab 里付不了。
+- 广场列表响应额外带 `accountConnected`，省得前端为一个布尔再打一次 `/api/account/status`。
 
 ## 安装/卸载链路
 

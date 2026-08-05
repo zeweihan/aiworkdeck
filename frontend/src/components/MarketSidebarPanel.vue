@@ -78,15 +78,21 @@
             <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
             <text class="msb-row-meta">{{ row.meta }}</text>
           </view>
+          <view v-if="row.installed" class="msb-row-state ok"><text>已装</text></view>
           <view
-            v-if="!row.installed"
+            v-else-if="row.canInstall"
             class="msb-row-install"
             :class="{ busy: marketBusyId === row.id }"
             @tap.stop="installSkillRow(row)"
           >
             <text>{{ marketBusyId === row.id ? '…' : '安装' }}</text>
           </view>
-          <view v-else class="msb-row-state ok"><text>已装</text></view>
+          <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
+            <text>购买</text>
+          </view>
+          <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
+            <text>需连接账户</text>
+          </view>
         </view>
       </view>
 
@@ -120,15 +126,21 @@
             <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
             <text class="msb-row-meta">{{ row.meta }}</text>
           </view>
+          <view v-if="row.installed" class="msb-row-state ok"><text>已装</text></view>
           <view
-            v-if="!row.installed"
+            v-else-if="row.canInstall"
             class="msb-row-install"
             :class="{ busy: pluginBusyId === row.id }"
             @tap.stop="installPluginRow(row)"
           >
             <text>{{ pluginBusyId === row.id ? '…' : '安装' }}</text>
           </view>
-          <view v-else class="msb-row-state ok"><text>已装</text></view>
+          <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
+            <text>购买</text>
+          </view>
+          <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
+            <text>需连接账户</text>
+          </view>
         </view>
       </view>
     </scroll-view>
@@ -141,6 +153,8 @@
 // 数据与安装链路复用 MarketPane 同一组 services/api.js 封装。
 import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, installMarketPlugin, rescanPlugins, rescanSkills } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
+import { canInstall, paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
 
 const CATEGORY_GLYPHS = {
   contract: ICONS.catContract,
@@ -193,6 +207,8 @@ export default {
       marketBusyId: '',
       pluginBusyId: '',
       rescanning: false,
+      // 是否已连接官网账户；随广场列表响应一起下发（付费未购项据此显示「购买」还是「需连接账户」）
+      accountConnected: false,
     }
   },
   computed: {
@@ -240,6 +256,8 @@ export default {
         const dl = fmtDownloads(m.downloads)
         if (dl) metaParts.push(dl + ' 下载')
         metaParts.push(CATEGORY_LABELS[cat] || '其他')
+        metaParts.push(priceLabel(m))
+        const state = paidState(m, this.accountConnected)
         return {
           kind: 'skill',
           id: m.id,
@@ -248,6 +266,8 @@ export default {
           glyph: CATEGORY_GLYPHS[cat] || CATEGORY_GLYPHS.other,
           meta: metaParts.join(' · '),
           installed: !!m.installed,
+          paidState: state,
+          canInstall: canInstall(state),
           raw: m,
         }
       })
@@ -266,6 +286,8 @@ export default {
         if (m.version) metaParts.push('v' + m.version)
         const author = m.authorDisplayName || m.author
         if (author) metaParts.push(author)
+        metaParts.push(priceLabel(m))
+        const state = paidState(m, this.accountConnected)
         return {
           kind: 'plugin',
           id: m.id,
@@ -274,6 +296,8 @@ export default {
           glyph: ICONS.blocks,
           meta: metaParts.join(' · ') || '插件',
           installed: installedIds.has(m.id) || !!m.installed,
+          paidState: state,
+          canInstall: canInstall(state),
           raw: m,
         }
       })
@@ -295,6 +319,14 @@ export default {
     openDetail(row) {
       this.$emit('open-detail', { kind: row.kind, id: row.id, name: row.name })
     },
+    // 购买走系统浏览器：支付要用用户已登录的浏览器会话，内嵌 tab 里付不了
+    openPurchase(row) {
+      openExternalUrl(purchaseUrl(row.kind, row.id))
+      uni.showToast({ title: '已在浏览器打开商品页，购买后回到详情页点「我已购买，刷新」', icon: 'none' })
+    },
+    goToAccountSettings() {
+      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
+    },
     async reloadAll() {
       this.loadInstalled()
       this.loadMarketSkills()
@@ -315,6 +347,7 @@ export default {
       try {
         const res = await getSkillMarket()
         this.marketSkills = res?.skills || []
+        if (typeof res?.accountConnected === 'boolean') this.accountConnected = res.accountConnected
       } catch (e) {
         console.warn('在线 Skill 广场不可用:', e)
         this.marketError = e?.message || '网络不可用'
@@ -329,6 +362,7 @@ export default {
       try {
         const res = await getPluginMarket()
         this.marketPlugins = res?.plugins || []
+        if (typeof res?.accountConnected === 'boolean') this.accountConnected = res.accountConnected
       } catch (e) {
         console.warn('在线插件广场不可用:', e)
         this.marketPluginError = e?.message || '网络不可用'
@@ -651,6 +685,20 @@ export default {
     opacity: 0.6;
     pointer-events: none;
   }
+
+  /* 付费未购：描边而非实心，与「安装」区分开——点它去的是官网，不是本机动作 */
+  &.buy {
+    background: #fff;
+    border-color: #1A5336;
+
+    text {
+      color: #1A5336;
+    }
+
+    &:hover {
+      background: #E8F3ED;
+    }
+  }
 }
 
 .msb-row-state {
@@ -675,6 +723,21 @@ export default {
     text {
       color: #868E96;
       font-size: 10px;
+    }
+  }
+
+  /* 未连接账户：与顶栏「试用版」chip 同一族暖色，是引导不是报错 */
+  &.need {
+    background: #FDF7EC;
+    cursor: pointer;
+
+    text {
+      color: #8A6D2F;
+      font-size: 10px;
+    }
+
+    &:hover {
+      background: #F7EBD5;
     }
   }
 }

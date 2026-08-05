@@ -5,6 +5,8 @@ import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.checkba.service.market.MarketPurchaseGate;
+import com.checkba.service.market.RegistryReply;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -36,6 +38,12 @@ import java.util.regex.Pattern;
  *
  * 安装后插件默认处于禁用状态，需用户在广场手动启用。配合
  * PluginService「禁用即不加载 JAR」，这意味着用户确认之前插件代码一行都不会执行。
+ *
+ * <h3>付费项（PR-D）</h3>
+ * bundle 与 file 两个端点对 {@code priceCents > 0} 的插件都要求 {@code Authorization: Bearer awdk_}
+ * 且已购，否则 402。判定与文案统一在 {@link MarketPurchaseGate}；
+ * <b>付费与否不改变验签链路</b>——签名、逐文件 SHA-256 比对一步不少。
+ * 免费项（含官网旧格式缺 priceCents 字段）链路一字不变。
  */
 @Service
 @Slf4j
@@ -50,16 +58,19 @@ public class PluginMarketService {
     private final String publicKeyPem;
     private final String pluginsDir;
     private final PluginService pluginService;
+    private final MarketPurchaseGate purchaseGate;
 
     public PluginMarketService(
             @Value("${ai.plugins.registry-url:https://www.aiworkdeck.com/api/registry/plugins}") String registryUrl,
             @Value("${ai.plugins.registry-public-key:}") String publicKeyPem,
             @Value("${ai.plugins.dir:plugins}") String pluginsDir,
-            PluginService pluginService) {
+            PluginService pluginService,
+            MarketPurchaseGate purchaseGate) {
         this.registryUrl = registryUrl;
         this.publicKeyPem = publicKeyPem;
         this.pluginsDir = pluginsDir;
         this.pluginService = pluginService;
+        this.purchaseGate = purchaseGate;
     }
 
     /** 广场条目：注册表元数据 + 本地是否已安装 */
@@ -78,13 +89,22 @@ public class PluginMarketService {
         private Integer downloads;
         private String publishedAt;
         private String homepage;
+        /**
+         * 售价（分），0 = 免费。**官网旧格式没有这个字段 → 反序列化得 null → 归一为 0（免费）**，
+         * 绝不能因为字段缺失把免费项锁住。
+         */
+        private Integer priceCents;
+        /** 计价方式，当前只有 "once"（一次性买断）；缺失同样按 once 处理 */
+        private String pricingModel;
         private boolean installed;
         /** 已安装且本地版本低于注册表版本 */
         private boolean updatable;
+        /** 付费项且账户权益里有 plugin:{id}（免费项恒 false，前端按 priceCents 判免费） */
+        private boolean purchased;
     }
 
     /**
-     * 拉取在线插件列表并标注安装状态。
+     * 拉取在线插件列表并标注安装 / 已购状态。
      * @throws IllegalStateException 注册表不可达或返回无法解析（调用方转 {code:1}，不阻断本地功能）
      */
     public List<MarketPluginView> listMarket() {
@@ -96,6 +116,12 @@ public class PluginMarketService {
             throw new IllegalStateException("注册表返回内容无法解析: " + e.getMessage());
         }
         for (MarketPluginView view : list) {
+            view.setPriceCents(normalizePrice(view.getPriceCents()));
+            if (view.getPricingModel() == null || view.getPricingModel().isBlank()) {
+                view.setPricingModel("once");
+            }
+            view.setPurchased(view.getPriceCents() > 0 && view.getId() != null
+                    && purchaseGate.purchased(MarketPurchaseGate.pluginFeature(view.getId())));
             pluginService.getPlugins().stream()
                     .filter(p -> p.getId() != null && p.getId().equals(view.getId()))
                     .findFirst()
@@ -107,6 +133,16 @@ public class PluginMarketService {
         return list;
     }
 
+    /** 广场列表响应带回的账户连接状态：未连接时前端把付费项显示为「需连接账户」。 */
+    public boolean accountConnected() {
+        return purchaseGate.accountConnected();
+    }
+
+    /** 旧格式缺字段、负数、非法值一律按免费。 */
+    private static int normalizePrice(Integer raw) {
+        return raw == null || raw < 0 ? 0 : raw;
+    }
+
     /**
      * 安装（或更新）一个在线插件。
      *
@@ -115,7 +151,7 @@ public class PluginMarketService {
      *
      * @return 安装的插件 id
      * @throws IllegalArgumentException id 非法
-     * @throws IllegalStateException 未配置公钥 / 注册表不可达 / 验签失败 / 哈希不匹配 / 落盘失败
+     * @throws IllegalStateException 未配置公钥 / 注册表不可达 / 付费项未连接账户或未购买 / 验签失败 / 哈希不匹配 / 落盘失败
      */
     public synchronized String install(String id) {
         requireValidId(id);
@@ -123,9 +159,15 @@ public class PluginMarketService {
             throw new IllegalStateException("未配置插件注册表公钥（ai.plugins.registry-public-key），拒绝安装");
         }
 
+        MarketPluginView listing = findRegistryEntry(id);
+        int priceCents = listing == null ? 0 : normalizePrice(listing.getPriceCents());
+        String itemName = listing == null || listing.getName() == null ? id : listing.getName();
+        // 免费项 bearer 为 null：不带鉴权头，与改造前逐字节一致
+        String bearer = purchaseGate.bearerFor(priceCents, itemName);
+
         JSONObject bundle;
         try {
-            bundle = JSONUtil.parseObj(httpGet(registryUrl + "/" + id + "/bundle"));
+            bundle = JSONUtil.parseObj(readText(registryUrl + "/" + id + "/bundle", bearer, itemName, priceCents));
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
@@ -163,7 +205,8 @@ public class PluginMarketService {
                 if (!isSafeRelPath(relPath)) {
                     throw new IllegalStateException("清单包含非法路径: " + relPath);
                 }
-                byte[] data = httpGetBytes(registryUrl + "/" + id + "/file?path=" + urlEncode(relPath));
+                byte[] data = readBinary(registryUrl + "/" + id + "/file?path=" + urlEncode(relPath),
+                        bearer, itemName, priceCents);
                 String actual = sha256Hex(data);
                 if (!actual.equalsIgnoreCase(entry.getValue())) {
                     throw new IllegalStateException("文件校验失败: " + relPath + "（内容与签名清单不符）");
@@ -333,32 +376,48 @@ public class PluginMarketService {
         return java.net.URLEncoder.encode(s, java.nio.charset.StandardCharsets.UTF_8).replace("+", "%20");
     }
 
-    /** HTTP GET 文本（单测覆写此 seam 打桩） */
-    protected String httpGet(String url) {
-        HttpResponse resp;
+    /**
+     * 安装前查一次注册表元数据拿价格。
+     *
+     * 价格必须由服务端自己确认——前端传来的 priceCents 只是显示值，拿它决定「要不要带 Bearer」
+     * 就等于让客户端决定付费闸门什么时候生效。
+     *
+     * 列表不可达 / 条目已下架时返回 null，按免费继续尝试：真付费项官网仍会 402 兜底，
+     * 而在这里直接失败会把一次网络抖动变成免费项也装不上。
+     */
+    private MarketPluginView findRegistryEntry(String id) {
         try {
-            resp = HttpRequest.get(url).setConnectionTimeout(5000).setReadTimeout(15000).execute();
+            return listMarket().stream()
+                    .filter(v -> id.equals(v.getId()))
+                    .findFirst().orElse(null);
         } catch (Exception e) {
-            throw new IllegalStateException("注册表不可达: " + e.getMessage());
+            log.debug("安装前拉取注册表元数据失败，按免费项继续: {}", e.getMessage());
+            return null;
         }
-        if (resp.getStatus() != 200) {
-            throw new IllegalStateException("注册表请求失败 (HTTP " + resp.getStatus() + ")");
-        }
-        return resp.body();
     }
 
-    /** HTTP GET 二进制（单测覆写此 seam 打桩） */
-    protected byte[] httpGetBytes(String url) {
-        HttpResponse resp;
-        try {
-            resp = HttpRequest.get(url).setConnectionTimeout(5000).setReadTimeout(60000).execute();
-        } catch (Exception e) {
-            throw new IllegalStateException("下载失败: " + e.getMessage());
+    /** 带付费闸门的文本读取：402 翻成明确中文，其余非 200 沿用原有措辞。 */
+    private String readText(String url, String bearer, String itemName, int priceCents) {
+        RegistryReply reply = httpGet(url, bearer);
+        if (reply.status() == 402) {
+            throw purchaseGate.paymentRequired(reply.body(), itemName, priceCents);
         }
-        if (resp.getStatus() != 200) {
-            throw new IllegalStateException("下载失败 (HTTP " + resp.getStatus() + ")");
+        if (reply.status() != 200) {
+            throw new IllegalStateException("注册表请求失败 (HTTP " + reply.status() + ")");
         }
-        byte[] data = resp.bodyBytes();
+        return reply.body();
+    }
+
+    /** 带付费闸门的二进制读取（含 50 MB 上限，防恶意注册表打爆内存）。 */
+    private byte[] readBinary(String url, String bearer, String itemName, int priceCents) {
+        RegistryReply reply = httpGetBytes(url, bearer);
+        if (reply.status() == 402) {
+            throw purchaseGate.paymentRequired(reply.body(), itemName, priceCents);
+        }
+        if (reply.status() != 200) {
+            throw new IllegalStateException("下载失败 (HTTP " + reply.status() + ")");
+        }
+        byte[] data = reply.data();
         if (data == null) {
             throw new IllegalStateException("下载内容为空");
         }
@@ -366,5 +425,50 @@ public class PluginMarketService {
             throw new IllegalStateException("文件超过 50 MB 上限");
         }
         return data;
+    }
+
+    /** 无鉴权 HTTP GET 文本；非 200 直接抛（listMarket / fetchRevoked 用） */
+    protected String httpGet(String url) {
+        RegistryReply reply = httpGet(url, null);
+        if (reply.status() != 200) {
+            throw new IllegalStateException("注册表请求失败 (HTTP " + reply.status() + ")");
+        }
+        return reply.body();
+    }
+
+    /**
+     * HTTP GET 文本 seam（单测覆写此方法打桩）。
+     * @param bearer 非空时带 {@code Authorization: Bearer}；付费项 bundle 端点需要
+     */
+    protected RegistryReply httpGet(String url, String bearer) {
+        HttpResponse resp;
+        try {
+            HttpRequest req = HttpRequest.get(url).setConnectionTimeout(5000).setReadTimeout(15000);
+            if (bearer != null && !bearer.isBlank()) {
+                req.header("Authorization", "Bearer " + bearer);
+            }
+            resp = req.execute();
+        } catch (Exception e) {
+            throw new IllegalStateException("注册表不可达: " + e.getMessage());
+        }
+        return new RegistryReply(resp.getStatus(), resp.bodyBytes());
+    }
+
+    /**
+     * HTTP GET 二进制 seam（单测覆写此方法打桩）。
+     * @param bearer 非空时带 {@code Authorization: Bearer}；付费项 file 端点需要
+     */
+    protected RegistryReply httpGetBytes(String url, String bearer) {
+        HttpResponse resp;
+        try {
+            HttpRequest req = HttpRequest.get(url).setConnectionTimeout(5000).setReadTimeout(60000);
+            if (bearer != null && !bearer.isBlank()) {
+                req.header("Authorization", "Bearer " + bearer);
+            }
+            resp = req.execute();
+        } catch (Exception e) {
+            throw new IllegalStateException("下载失败: " + e.getMessage());
+        }
+        return new RegistryReply(resp.getStatus(), resp.bodyBytes());
     }
 }

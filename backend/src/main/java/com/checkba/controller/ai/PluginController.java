@@ -98,6 +98,8 @@ public class PluginController {
         try {
             Map<String, Object> result = ok();
             result.put("plugins", pluginMarketService.listMarket());
+            // 付费项按钮形态取决于账户是否已连接（未连接显示「需连接账户」），随列表一起给
+            result.put("accountConnected", pluginMarketService.accountConnected());
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));

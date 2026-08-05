@@ -1,11 +1,16 @@
 package com.checkba.service.ai.skill;
 
+import com.checkba.service.account.AccountService;
 import com.checkba.service.ai.PluginService;
+import com.checkba.service.entitlement.EntitlementService;
+import com.checkba.service.market.MarketPurchaseGate;
+import com.checkba.service.market.RegistryReply;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -17,10 +22,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * SkillMarketService 单测：注册表列表解析与安装标注、id/文件名安全校验、
- * 安装写盘 + rescan 生效、卸载（含拒绝插件携带 skill）。httpGet seam 打桩，不走真实网络。
+ * 安装写盘 + rescan 生效、卸载（含拒绝插件携带 skill）、付费项闸门（PR-D）。
+ * httpGet seam 打桩，不走真实网络。
  */
 class SkillMarketServiceTest {
 
@@ -29,23 +38,41 @@ class SkillMarketServiceTest {
     @TempDir
     Path tempDir;
 
-    /** httpGet seam 打桩：url -> 响应体；未配置的 url 模拟网络失败 */
+    /**
+     * @param accountKey 账户 Key；null = 未连接
+     * @param ownedFeature 已购的 feature（skill:/plugin: 命名空间），null = 未购
+     */
+    private static MarketPurchaseGate gate(String accountKey, String ownedFeature) {
+        AccountService account = mock(AccountService.class);
+        when(account.currentKeyOrNull()).thenReturn(accountKey);
+        when(account.isConnected()).thenReturn(accountKey != null);
+        EntitlementService entitlements = mock(EntitlementService.class);
+        when(entitlements.isEnabled(anyString()))
+                .thenAnswer(inv -> ownedFeature != null && ownedFeature.equals(inv.getArgument(0)));
+        return new MarketPurchaseGate(account, entitlements);
+    }
+
+    /** httpGet seam 打桩：url -> 响应体；未配置的 url 模拟网络失败。记录每次请求带的 bearer。 */
     private static class StubMarketService extends SkillMarketService {
         final Map<String, String> responses = new HashMap<>();
+        /** url -> 状态码，缺省 200（402 用例在这里登记） */
+        final Map<String, Integer> statuses = new HashMap<>();
         final List<String> requestedUrls = new ArrayList<>();
+        final List<String> sentBearers = new ArrayList<>();
 
-        StubMarketService(SkillProperties properties, SkillRegistry registry) {
-            super(properties, registry);
+        StubMarketService(SkillProperties properties, SkillRegistry registry, MarketPurchaseGate gate) {
+            super(properties, registry, gate);
         }
 
         @Override
-        protected String httpGet(String url) {
+        protected RegistryReply httpGet(String url, String bearer) {
             requestedUrls.add(url);
+            sentBearers.add(String.valueOf(bearer));
             String body = responses.get(url);
             if (body == null) {
                 throw new IllegalStateException("注册表不可达: stub");
             }
-            return body;
+            return new RegistryReply(statuses.getOrDefault(url, 200), body.getBytes(StandardCharsets.UTF_8));
         }
     }
 
@@ -53,12 +80,16 @@ class SkillMarketServiceTest {
     private SkillRegistry registry;
 
     private StubMarketService newService(Path skillsDir, PluginService pluginService) {
+        return newService(skillsDir, pluginService, gate(null, null));
+    }
+
+    private StubMarketService newService(Path skillsDir, PluginService pluginService, MarketPurchaseGate gate) {
         props = new SkillProperties();
         props.setDir(skillsDir.toString());
         props.setRegistryUrl(REGISTRY_URL);
         registry = new SkillRegistry(props, null, pluginService);
         registry.init();
-        return new StubMarketService(props, registry);
+        return new StubMarketService(props, registry, gate);
     }
 
     private void writeLocalSkill(Path dir, String id) throws IOException {
@@ -199,5 +230,111 @@ class SkillMarketServiceTest {
 
         assertThrows(IllegalStateException.class, () -> service.uninstall("plugin-skill"));
         assertTrue(registry.getSkill("plugin-skill").isPresent(), "插件 skill 原样保留");
+    }
+
+    // ==================== 付费项（PR-D） ====================
+
+    /** 注册表列表：一个 ¥19.90 的付费 Skill */
+    private static final String PAID_REGISTRY = """
+            [{ "id": "due-diligence", "name": "尽调助手", "triggers": ["尽调"],
+               "priceCents": 1990, "pricingModel": "once" }]""";
+
+    @Test
+    @DisplayName("listMarket：官网旧格式没有 priceCents 时按免费处理（向后兼容，不能把免费项锁住）")
+    void listTreatsMissingPriceAsFree() {
+        StubMarketService service = newService(tempDir.resolve("skills"), new PluginService());
+        service.responses.put(REGISTRY_URL, """
+                [{ "id": "legacy-skill", "name": "老技能", "triggers": ["老"] }]""");
+
+        SkillMarketService.MarketSkillView view = service.listMarket().get(0);
+        assertEquals(0, view.getPriceCents(), "缺字段 = 免费");
+        assertEquals("once", view.getPricingModel(), "缺字段按一次性买断兜底");
+        assertFalse(view.isPurchased());
+    }
+
+    @Test
+    @DisplayName("listMarket：付费项已购时标 purchased（feature 命名空间 skill:<id>，不与本地功能键混淆）")
+    void listMarksPurchased() {
+        StubMarketService service = newService(tempDir.resolve("skills"), new PluginService(),
+                gate("awdk_live", "skill:due-diligence"));
+        service.responses.put(REGISTRY_URL, PAID_REGISTRY);
+
+        SkillMarketService.MarketSkillView view = service.listMarket().get(0);
+        assertEquals(1990, view.getPriceCents());
+        assertEquals("once", view.getPricingModel());
+        assertTrue(view.isPurchased());
+        assertTrue(service.accountConnected());
+
+        // 同一条目在未购账户下不得标已购
+        StubMarketService unpaid = newService(tempDir.resolve("skills2"), new PluginService(),
+                gate("awdk_live", "clipboard.unlimited"));
+        unpaid.responses.put(REGISTRY_URL, PAID_REGISTRY);
+        assertFalse(unpaid.listMarket().get(0).isPurchased(), "本地 SKU 的权益不能蹭成广场条目的已购");
+    }
+
+    @Test
+    @DisplayName("install：付费项未连接账户时本地拦下并给出连接引导，不发 bundle 请求")
+    void paidInstallWithoutAccountIsBlockedLocally() {
+        StubMarketService service = newService(tempDir.resolve("skills"), new PluginService());
+        service.responses.put(REGISTRY_URL, PAID_REGISTRY);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.install("due-diligence"));
+        assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
+        assertTrue(e.getMessage().contains("¥19.90"), "价格要写进引导文案: " + e.getMessage());
+        assertEquals(List.of(REGISTRY_URL), service.requestedUrls, "只查了元数据，不该再打 bundle 端点");
+    }
+
+    @Test
+    @DisplayName("install：官网 402 被翻成明确中文（含条目名与价格），不吞成通用失败")
+    void paidInstallSurfaces402() {
+        Path skillsDir = tempDir.resolve("skills");
+        StubMarketService service = newService(skillsDir, new PluginService(), gate("awdk_live", null));
+        String bundleUrl = REGISTRY_URL + "/due-diligence/bundle";
+        service.responses.put(REGISTRY_URL, PAID_REGISTRY);
+        service.responses.put(bundleUrl, "{\"code\":\"payment_required\",\"priceCents\":1990,\"itemName\":\"尽调助手\"}");
+        service.statuses.put(bundleUrl, 402);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.install("due-diligence"));
+        assertTrue(e.getMessage().contains("尽调助手"), e.getMessage());
+        assertTrue(e.getMessage().contains("需购买后安装"), e.getMessage());
+        assertTrue(e.getMessage().contains("¥19.90"), e.getMessage());
+        assertEquals("awdk_live", service.sentBearers.get(1), "付费项 bundle 请求必须带账户 Bearer");
+        assertFalse(Files.exists(skillsDir.resolve("due-diligence")), "402 不得留下半成品");
+    }
+
+    @Test
+    @DisplayName("install：已购付费项带 Bearer 正常安装；免费项即使已连接账户也不带鉴权头")
+    void paidPurchasedInstallsAndFreeStaysAnonymous() {
+        Path skillsDir = tempDir.resolve("skills");
+        StubMarketService paid = newService(skillsDir, new PluginService(),
+                gate("awdk_live", "skill:due-diligence"));
+        paid.responses.put(REGISTRY_URL, PAID_REGISTRY);
+        paid.responses.put(REGISTRY_URL + "/due-diligence/bundle", bundleJson("due-diligence"));
+
+        assertEquals("due-diligence", paid.install("due-diligence"));
+        assertEquals("awdk_live", paid.sentBearers.get(1));
+
+        StubMarketService free = newService(tempDir.resolve("free"), new PluginService(),
+                gate("awdk_live", null));
+        free.responses.put(REGISTRY_URL, """
+                [{ "id": "contract-review", "name": "合同审查", "triggers": ["合同"], "priceCents": 0 }]""");
+        free.responses.put(REGISTRY_URL + "/contract-review/bundle", bundleJson("contract-review"));
+
+        assertEquals("contract-review", free.install("contract-review"));
+        assertEquals(List.of("null", "null"), free.sentBearers, "免费项链路一字不变：不带 Authorization");
+    }
+
+    @Test
+    @DisplayName("install：注册表列表不可达时按免费继续（网络抖动不该连免费项都装不上）")
+    void installFallsBackToFreeWhenRegistryListUnavailable() {
+        Path skillsDir = tempDir.resolve("skills");
+        StubMarketService service = newService(skillsDir, new PluginService());
+        // 只登记 bundle，列表 url 缺失 = stub 抛网络失败
+        service.responses.put(REGISTRY_URL + "/contract-review/bundle", bundleJson("contract-review"));
+
+        assertEquals("contract-review", service.install("contract-review"));
+        assertEquals("null", service.sentBearers.get(1), "价格未知按免费，不带鉴权头");
     }
 }

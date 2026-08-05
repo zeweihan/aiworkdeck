@@ -114,6 +114,9 @@ public class SkillController {
         try {
             Map<String, Object> result = ok();
             result.put("skills", skillMarketService.listMarket());
+            // 付费项按钮形态取决于账户是否已连接（未连接显示「需连接账户」），随列表一起给，
+            // 省得前端为一个布尔再打一次 /api/account/status
+            result.put("accountConnected", skillMarketService.accountConnected());
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));

@@ -34,8 +34,9 @@ class CrossLanguageSignatureTest {
         for (String k : filesObj.keySet()) files.put(k, filesObj.getStr(k));
 
         String pubPem = Files.readString(f.getParent().resolve("test-pub.pem"));
+        // 验签不碰付费闸门，gate 传 null 即可（这条用例只对拍 canonical JSON）
         PluginMarketService svc = new PluginMarketService(
-                "http://x", pubPem, f.getParent().toString(), new PluginService());
+                "http://x", pubPem, f.getParent().toString(), new PluginService(), null);
 
         assertTrue(
                 svc.verifySignature(payload.getStr("id"), payload.getStr("version"),
