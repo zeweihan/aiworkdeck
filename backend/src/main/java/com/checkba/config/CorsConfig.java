@@ -36,12 +36,14 @@ public class CorsConfig {
         FilterRegistrationBean<Filter> bean = new FilterRegistrationBean<>();
         bean.setFilter(new CorsPreflightFilter(parseOrigins(allowedOriginsCsv), allowAll));
         bean.addUrlPatterns("/*");
-        bean.setOrder(Ordered.HIGHEST_PRECEDENCE);
+        // LocalModeAccessFilter 抢在 HIGHEST_PRECEDENCE 先跑（跨站/非回环请求应当在
+        // 拿到任何 CORS 响应头之前就被 403 掉），故这里让位一格。
+        bean.setOrder(Ordered.HIGHEST_PRECEDENCE + 10);
         bean.setName("corsPreflightFilter");
         return bean;
     }
 
-    private static Set<String> parseOrigins(String csv) {
+    static Set<String> parseOrigins(String csv) {
         Set<String> set = new HashSet<>();
         if (csv != null) {
             for (String s : csv.split(",")) {
@@ -50,6 +52,27 @@ public class CorsConfig {
             }
         }
         return set;
+    }
+
+    /**
+     * 来源白名单判定（CORS 回显与 {@link LocalModeAccessFilter} 的跨站硬拦截共用同一份口径，
+     * 避免两处白名单漂移后出现「能过拦截却拿不到 CORS 头」之类的割裂）。
+     */
+    static boolean isTrustedOrigin(Set<String> allowedOrigins, boolean allowAll, String origin) {
+        if (allowAll) return true;
+        if (origin == null || origin.isEmpty()) return false;
+        if (allowedOrigins.contains(origin)) return true;
+        // 默认放行本机来源（开发与桌面 Electron 场景）。
+        // 注意：不含字面量 "null"——sandbox iframe / data: 页面的来源就是 "null"，
+        // 放行它等于给任意站点开一条伪造同源的后门。
+        return origin.startsWith("http://localhost:")
+                || origin.startsWith("https://localhost:")
+                || origin.equals("http://localhost")
+                || origin.equals("https://localhost")
+                || origin.startsWith("http://127.0.0.1:")
+                || origin.startsWith("https://127.0.0.1:")
+                || origin.equals("http://127.0.0.1")
+                || origin.equals("https://127.0.0.1");
     }
 
     /**
@@ -97,17 +120,7 @@ public class CorsConfig {
         }
 
         private boolean isAllowed(String origin) {
-            if (allowAll) return true;
-            if (allowedOrigins.contains(origin)) return true;
-            // 默认放行本机来源（开发与桌面 Electron 场景）
-            return origin.startsWith("http://localhost:")
-                    || origin.startsWith("https://localhost:")
-                    || origin.equals("http://localhost")
-                    || origin.equals("https://localhost")
-                    || origin.startsWith("http://127.0.0.1:")
-                    || origin.startsWith("https://127.0.0.1:")
-                    || origin.equals("http://127.0.0.1")
-                    || origin.equals("https://127.0.0.1");
+            return isTrustedOrigin(allowedOrigins, allowAll, origin);
         }
 
         @Override

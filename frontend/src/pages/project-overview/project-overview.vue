@@ -74,6 +74,15 @@
       </view>
 
       <view class="header-right">
+        <!-- 试用版标识（mode=trial 时显示，低调 chip，点击弹说明） -->
+        <view
+          v-if="licenseMode === 'trial'"
+          class="trial-chip"
+          @tap.stop="showTrialInfo = true"
+          title="试用版说明"
+        >
+          <text class="trial-chip-text">试用版</text>
+        </view>
         <!-- 顶部工具区（IDE 风格）：分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
           <!-- 1. Left Sidebar -->
@@ -1289,6 +1298,22 @@
         @close="quickOpenVisible = false"
       />
 
+      <!-- 试用版说明弹窗 -->
+      <view v-if="showTrialInfo" class="awd-dialog-mask" @tap="showTrialInfo = false">
+        <view class="awd-dialog" @tap.stop>
+          <view class="awd-dialog-header">
+            <text class="awd-dialog-title">试用版</text>
+          </view>
+          <view class="awd-dialog-body">
+            <text class="awd-dialog-text">当前为试用版，全部功能均可正常使用。升级正式版可连接 AI Workdeck 账户，同步已购内容并使用平台 AI 通道。</text>
+          </view>
+          <view class="awd-dialog-footer">
+            <button class="awd-btn awd-btn-secondary" @tap="showTrialInfo = false">知道了</button>
+            <button class="awd-btn awd-btn-primary" @tap="openUpgradeSite">了解正式版</button>
+          </view>
+        </view>
+      </view>
+
     </view>
 
     <!-- 底部状态条（IDE 化：常驻工具入口 + 真实状态信号，等宽字体） -->
@@ -1384,8 +1409,10 @@ import {
   getProjectLocalPath, // 在访达中显示（IDE 化）
   getFileLocalPath,
   getMyProjects, // 最近项目切换器
-  bindShareholderMeetingConversation // 股东大会核查：会话绑定
+  bindShareholderMeetingConversation, // 股东大会核查：会话绑定
+  getLicenseStatus // 试用版标识（商业化解锁门）
 } from '@/services/api.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
@@ -1465,6 +1492,10 @@ export default {
       easyVoiceImportCallback: null,
       renameProjectName: '',
       userDisplayName: '用户',
+
+      // 授权状态（试用版标识，商业化解锁门）
+      licenseMode: '',
+      showTrialInfo: false,
 
       // 布局状态
       sidebarWidth: 260, // 侧边栏宽度
@@ -2031,6 +2062,7 @@ export default {
   },
   onLoad(query) {
     this.pageEnterTime = Date.now()
+    this.loadLicenseMode()
     if (query && query.id) {
       this.projectId = Number(query.id)
       recordProjectVisit(this.projectId) // IDE 化：启动直达/最近项目切换器的数据源
@@ -2056,29 +2088,28 @@ export default {
     if (user) {
       this.userDisplayName = user.displayName || user.username
       this.currentUser = user
+    }
 
-      // Try to restore previous state from localStorage
-      const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
+    // 面板初始化不能挂在登录态上：桌面免登（PR-A 去登录）后本地存储里没有
+    // checkba_user，user 为 null——原先整段包在 if (user) 里，进项目左栏永远停在
+    // 占位符（app-e2e J4 抓到：文件树/工具行不渲染，直到手动点一次左栏图标）。
+    // CLIENT 角色默认 dd-files 的分支只对浏览器登录态（客户访问码）有意义，保留。
+    const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
+    if (savedKey) {
+        this.leftPaneKey = savedKey
+    } else if (user && user.role === 'CLIENT') {
+        this.leftPaneKey = 'dd-files'
+    } else {
+        this.leftPaneKey = 'files'
+    }
 
-      if (savedKey) {
-          this.leftPaneKey = savedKey
-      } else {
-          // Set default plugin based on user role
-          if (user.role === 'CLIENT') {
-            this.leftPaneKey = 'dd-files'
-          } else {
-            this.leftPaneKey = 'files'
-          }
-      }
-
-      // Restore active tabs for this project/mode
-      const savedActiveTabs = uni.getStorageSync(`project_${this.projectId}_activeTabsByMode`)
-      if (savedActiveTabs) {
-        this.lastActiveIdsByMode = savedActiveTabs
-        const mode = this.leftPaneKey || 'files'
-        if (savedActiveTabs.left[mode]) this.activeFileIdLeft = savedActiveTabs.left[mode]
-        if (savedActiveTabs.right[mode]) this.activeFileIdRight = savedActiveTabs.right[mode]
-      }
+    // Restore active tabs for this project/mode
+    const savedActiveTabs = uni.getStorageSync(`project_${this.projectId}_activeTabsByMode`)
+    if (savedActiveTabs) {
+      this.lastActiveIdsByMode = savedActiveTabs
+      const mode = this.leftPaneKey || 'files'
+      if (savedActiveTabs.left[mode]) this.activeFileIdLeft = savedActiveTabs.left[mode]
+      if (savedActiveTabs.right[mode]) this.activeFileIdRight = savedActiveTabs.right[mode]
     }
     // 登录态下启用剪贴板记录（仅记录本应用能感知到的 paste / 复制按钮）
     this.bindClipboardListener()
@@ -2463,6 +2494,20 @@ export default {
     'leftFiles.length'() { this.pruneClosedLibreSpares() },
   },
   methods: {
+    // 试用版标识：桌面端查授权模式（mode=trial 显示 chip；account/查询失败不显示）
+    async loadLicenseMode() {
+      if (typeof window === 'undefined' || !window.checkbaDesktop) return
+      try {
+        const status = await getLicenseStatus()
+        this.licenseMode = (status && status.mode) || ''
+      } catch (e) {
+        // 服务器模式/旧后端没有该端点：静默忽略
+      }
+    },
+    openUpgradeSite() {
+      this.showTrialInfo = false
+      openExternalUrl('https://www.aiworkdeck.com')
+    },
     // Phase 1 外置的方法组（纯搬移，this 即页面实例）
     ...panelSwitchingMethods,
     ...agentClientActionMethods,

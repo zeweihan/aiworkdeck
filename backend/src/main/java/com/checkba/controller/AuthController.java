@@ -27,10 +27,16 @@ public class AuthController {
 
     private static UserService staticUserService;
     private static com.checkba.service.DeviceTokenService staticDeviceTokenService;
+    private static com.checkba.service.LocalIdentityService staticLocalIdentityService;
 
     /** DeviceTokenService 构造时反向注册，静态鉴权入口由此识别设备令牌。 */
     public static void registerDeviceTokenService(com.checkba.service.DeviceTokenService svc) {
         staticDeviceTokenService = svc;
+    }
+
+    /** LocalIdentityService 仅在 local-mode 下反向注册（同上模式）；server 模式恒为 null。 */
+    public static void registerLocalIdentityService(com.checkba.service.LocalIdentityService svc) {
+        staticLocalIdentityService = svc;
     }
 
     public AuthController(UserService userService, ClientInvitationService clientInvitationService,
@@ -170,14 +176,18 @@ public class AuthController {
      */
     @GetMapping("/me")
     public Map<String, Object> getCurrentUser(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        if (sessionId == null || !SESSION_STORE.containsKey(sessionId)) {
+        // 经 getUserIdFromSession 解析：local-mode 免登下无 session 也要能拿到
+        // 本机用户（userprofile/侧栏靠它显示身份与 isAdmin 的「系统设置」入口，
+        // 原来直查 SESSION_STORE 恒回「未登录」——app-e2e J2 抓到）。
+        // server 模式行为不变（getUserIdFromSession 落回 SESSION_STORE）。
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
             Map<String, Object> result = new HashMap<>();
             result.put("code", 1);
             result.put("message", "未登录");
             return result;
         }
 
-        Long userId = SESSION_STORE.get(sessionId);
         User user = userService.getUserById(userId);
 
         Map<String, Object> result = new HashMap<>();
@@ -213,11 +223,19 @@ public class AuthController {
      * 根据 sessionId 获取用户 ID（供其他 Controller 使用）
      */
     public static Long getUserIdFromSession(String sessionId) {
-        if (sessionId == null) return null;
-        if (sessionId.startsWith(com.checkba.service.DeviceTokenService.TOKEN_PREFIX)
+        // 设备令牌分支保持原样（团队服务器连接凭据，与本机登录解耦）
+        if (sessionId != null
+                && sessionId.startsWith(com.checkba.service.DeviceTokenService.TOKEN_PREFIX)
                 && staticDeviceTokenService != null) {
             return staticDeviceTokenService.resolveUserId(sessionId);
         }
+        // 单机免登模式：无论 header 是什么（含 null / 过期 session），一律解析为本机用户。
+        // 安全前提由 LocalModeLoopbackGuard 保证（local-mode 必须绑定回环地址）。
+        var localIdentity = staticLocalIdentityService;
+        if (localIdentity != null && localIdentity.isLocalMode()) {
+            return localIdentity.localUserId();
+        }
+        if (sessionId == null) return null;
         return SESSION_STORE.get(sessionId);
     }
 
@@ -235,7 +253,22 @@ public class AuthController {
     }
 
     public static String getUsernameFromSession(String sessionId) {
-        Long userId = SESSION_STORE.get(sessionId);
+        // local-mode 免登：请求可以完全不带 session 头（sessionId == null）。
+        // 此前直接 SESSION_STORE.get(sessionId)，ConcurrentHashMap.get(null) 抛 NPE，
+        // 上传/版本信号整条链 500（app-e2e 抓到）。设备令牌保持原行为（此处历来
+        // 解析不出用户名，署名由 CloudConnection 身份链路负责），只补 local-mode
+        // 与 null 两个分支。
+        Long userId;
+        var localIdentity = staticLocalIdentityService;
+        boolean isDeviceToken = sessionId != null
+                && sessionId.startsWith(com.checkba.service.DeviceTokenService.TOKEN_PREFIX);
+        if (localIdentity != null && localIdentity.isLocalMode() && !isDeviceToken) {
+            userId = localIdentity.localUserId();
+        } else if (sessionId == null) {
+            return null;
+        } else {
+            userId = SESSION_STORE.get(sessionId);
+        }
         if (userId == null) return null;
         if (staticUserService != null) {
             try {

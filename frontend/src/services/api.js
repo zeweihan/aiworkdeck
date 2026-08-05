@@ -4,7 +4,7 @@
 // - 后端基础地址通过环境变量配置，便于本地 / Sealos / 阿里云等环境切换。
 
 // 导入认证工具
-import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
+import { getAuthHeaders, getSessionId, clearSession } from '@/utils/auth.js'
 
 /**
  * 功能未配置时的统一引导（#18 T7）。
@@ -237,30 +237,39 @@ function request(options) {
 
             // 特殊处理：未登录错误（code=1且message包含"登录"关键字）
             if (errorMessage.includes('登录') || errorMessage.includes('未授权') || errorMessage.includes('请先')) {
-              console.warn('检测到未登录状态，准备跳转到登录页');
-              // 清除本地存储的session信息
+              // 清除本地存储的 session 信息（真实 key 是 checkba_session_id / checkba_user，
+              // 统一走 auth.js 的 clearSession，避免再清错 key）
               try {
-                uni.removeStorageSync('sessionId');
-                uni.removeStorageSync('userId');
+                clearSession();
               } catch (e) {
                 console.warn('清除登录信息失败:', e);
               }
 
-              // 跳转到登录页
-              uni.reLaunch({
-                url: '/pages/login/login',
-                success: () => {
-                  console.log('已跳转到登录页');
-                  uni.showToast({
-                    title: '登录已过期，请重新登录',
-                    icon: 'none',
-                    duration: 2000
-                  });
-                },
-                fail: (err) => {
-                  console.error('跳转到登录页失败:', err);
-                }
-              });
+              // 桌面端（local-mode 免登录）没有登录页可去：只提示，不打断当前页面
+              const isDesktop = typeof window !== 'undefined' && !!window.checkbaDesktop;
+              if (isDesktop) {
+                uni.showToast({
+                  title: errorMessage,
+                  icon: 'none',
+                  duration: 2000
+                });
+              } else {
+                console.warn('检测到未登录状态，准备跳转到登录页');
+                uni.reLaunch({
+                  url: '/pages/login/login',
+                  success: () => {
+                    console.log('已跳转到登录页');
+                    uni.showToast({
+                      title: '登录已过期，请重新登录',
+                      icon: 'none',
+                      duration: 2000
+                    });
+                  },
+                  fail: (err) => {
+                    console.error('跳转到登录页失败:', err);
+                  }
+                });
+              }
             }
 
             reject(new Error(errorMessage));
@@ -662,6 +671,37 @@ export function getFileLocalPath(fileId) {
   return request({
     url: `/api/files/${fileId}/local-path`,
     method: 'GET',
+  });
+}
+
+// ===================== 授权（解锁门）相关 API =====================
+
+// 查询本机授权状态：{ unlocked, mode: 'none'|'trial'|'account', plan }
+export function getLicenseStatus() {
+  return request({
+    url: '/api/license/status',
+    method: 'GET',
+  });
+}
+
+// 激活：试用码（离线验签）或账户 Key（在线校验）
+// 成功 200 { unlocked: true, mode }；失败 400 { message }（request 层已转成 reject）
+export function activateLicense(code) {
+  return request({
+    url: '/api/license/activate',
+    method: 'POST',
+    data: { code },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 解除授权：回到未解锁状态
+export function deactivateLicense() {
+  return request({
+    url: '/api/license/deactivate',
+    method: 'POST',
   });
 }
 

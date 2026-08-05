@@ -1,0 +1,186 @@
+<template>
+  <!-- 启动引导页：极简浅色 splash，只做路由分流，不承载任何业务 UI -->
+  <view class="launch-page">
+    <view class="launch-center">
+      <image class="launch-logo" src="/static/logo_full_v2.png" mode="heightFix" />
+      <view v-if="!failed" class="launch-loading">
+        <view class="launch-spinner"></view>
+        <text class="launch-status">{{ statusText }}</text>
+      </view>
+      <view v-else class="launch-error">
+        <text class="launch-error-text">{{ errorText }}</text>
+        <button class="launch-retry-btn" @tap="boot">重试</button>
+      </view>
+    </view>
+  </view>
+</template>
+
+<script>
+import { getLicenseStatus, getWizardStatus, getMyProjects } from '@/services/api.js'
+import { syncRecentToMenu } from '@/utils/recentProjects.js'
+
+export default {
+  name: 'LaunchPage',
+  data() {
+    return {
+      failed: false,
+      statusText: '正在启动',
+      errorText: '无法连接本地服务，请稍后重试',
+    }
+  },
+  onLoad() {
+    this.boot()
+  },
+  methods: {
+    isDesktop() {
+      return typeof window !== 'undefined' && !!window.checkbaDesktop
+    },
+    async boot() {
+      this.failed = false
+      this.statusText = '正在启动'
+
+      // 非桌面环境（浏览器访问团队服务器）：走原登录流程，一字不动
+      if (!this.isDesktop()) {
+        uni.reLaunch({ url: '/pages/login/login' })
+        return
+      }
+
+      // 桌面环境：等待本地服务就绪后查授权状态
+      const status = await this.waitLicenseStatus()
+      if (!status) {
+        this.failed = true
+        return
+      }
+      if (!status.unlocked) {
+        uni.reLaunch({ url: '/pages/unlock/unlock' })
+        return
+      }
+
+      // 已解锁：向导检查 + 直达上次项目（迁移自 login.vue tryAutoResume）
+      try {
+        const wiz = await getWizardStatus()
+        if (wiz && wiz.initialized === false) {
+          uni.reLaunch({ url: '/pages/wizard/wizard' })
+          return
+        }
+      } catch (e) {
+        // 向导状态查询失败不拦路，继续尝试直达
+        console.warn('查询向导状态失败（忽略）:', e && e.message)
+      }
+
+      try {
+        // local-mode 免登录：不需要 session 探活，getMyProjects 探通即视为可用
+        const projects = await getMyProjects()
+        const list = Array.isArray(projects) ? projects : (projects && projects.data) || []
+        syncRecentToMenu(list) // 应用菜单「最近打开」子菜单
+        const lastId = Number(uni.getStorageSync('checkba_last_project_id') || 0)
+        if (lastId && list.some((p) => Number(p.id) === lastId)) {
+          uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${lastId}` })
+        } else {
+          uni.reLaunch({ url: '/pages/userprofile/userprofile' })
+        }
+      } catch (e) {
+        console.warn('启动直达失败:', e && e.message)
+        this.failed = true
+      }
+    },
+    // 打包版后端随应用启动需要几秒，轮询直到可达（上限 90 秒）
+    async waitLicenseStatus() {
+      const deadline = Date.now() + 90000
+      let shownBooting = false
+      while (Date.now() < deadline) {
+        try {
+          return await getLicenseStatus()
+        } catch (e) {
+          if (!shownBooting) {
+            this.statusText = '正在启动本地服务'
+            shownBooting = true
+          }
+          await new Promise((resolve) => setTimeout(resolve, 1500))
+        }
+      }
+      return null
+    },
+  },
+}
+</script>
+
+<style lang="scss" scoped>
+.launch-page {
+  width: 100vw;
+  height: 100vh;
+  background: #f8f9fa;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.launch-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+}
+
+.launch-logo {
+  height: 52px;
+}
+
+.launch-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  min-height: 70px;
+}
+
+.launch-spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #e2e8f0;
+  border-top-color: #1a5336;
+  border-radius: 50%;
+  animation: launch-spin 0.9s linear infinite;
+}
+
+@keyframes launch-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.launch-status {
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+.launch-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  min-height: 70px;
+}
+
+.launch-error-text {
+  font-size: 13px;
+  color: #64748b;
+}
+
+.launch-retry-btn {
+  height: 36px;
+  line-height: 34px;
+  padding: 0 28px;
+  font-size: 13px;
+  color: #1a5336;
+  background: #ffffff;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+
+  &:hover {
+    border-color: #1a5336;
+    background: #f1f5f9;
+  }
+}
+</style>

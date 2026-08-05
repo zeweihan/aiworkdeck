@@ -271,6 +271,29 @@ $bg-white: #FFFFFF;
   }
 }
 
+// 试用版标识（顶部区域右侧，低调 chip，点击弹说明）
+.trial-chip {
+  display: flex;
+  align-items: center;
+  background: #fdf7ec;
+  border: 1px solid #ecdfc3;
+  border-radius: 4px;
+  padding: 2px 8px;
+  margin-right: 10px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+
+  &:hover {
+    border-color: #d8c49a;
+  }
+
+  .trial-chip-text {
+    font-size: 10px;
+    font-weight: 500;
+    color: #8a6d2f;
+  }
+}
+
 .project-meta {
   display: flex;
   align-items: center;

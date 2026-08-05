@@ -54,7 +54,10 @@ import static org.mockito.Mockito.when;
  * 嵌入式服务器 HTTP（价值所在：跨机器 uid 一致性走真链路，不是桩出来的假象）。
  * desktop profile + 独立内存 H2 两条地雷同 GitHttpProtocolTest/GitHttpIngestTest。
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// security.local-mode=false：保持本测试写作时的登录会话语义，并避免 local-mode 的
+// LocalIdentityService 静态注册泄漏到同 JVM 后续测试（desktop profile 现默认开启 local-mode）。
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {"security.local-mode=false"})
 @ActiveProfiles("desktop")
 class ShareCloneRoundTripTest {
 

@@ -1,14 +1,26 @@
 #!/usr/bin/env node
 // 全应用"真人模拟"e2e / whole-app human-simulation e2e (browser target).
 //
-// 从登录页真实打字登录开始，以真实鼠标点击走完核心用户旅程：个人中心四 tab、
-// 进入项目、上传文件（含 >5MB 分片路径回归）、打开文件、左栏功能区、独立页面
-// ——全程收集控制台错误 / 失败 API / 可疑文案，任何断言失败退出码非 0。
+// 从桌面首启解锁门（launch → unlock，试用码真实打字解锁）开始，以真实鼠标点击
+// 走完核心用户旅程：个人中心四 tab、进入项目、上传文件（含 >5MB 分片路径回归）、
+// 打开文件、左栏功能区、独立页面——全程收集控制台错误 / 失败 API / 可疑文案，
+// 任何断言失败退出码非 0。
 //
 // 前置：dev:h5 起在 APP_E2E_BASE（默认 http://127.0.0.1:5174，
-//       `npx uni --port 5174`），桌面后端 9696 在跑（打包版常驻即可）。
-// 自包含：每次运行自注册 qa_bot_<ts> 账号 + 自建 BLANK 项目，不碰真实账号数据；
-//       只读 admin 页面，绝不保存全局配置、绝不触发向导重置。
+//       `npx uni --port 5174`，VITE_API_BASE_URL 指向后端），后端须是
+//       PR-A（商业化改造去登录）之后的 local-mode 桌面后端——默认 9696
+//       （打包版常驻即可）；冷启动联调可用新 jar 在 9797 顶班
+//       （SPRING_PROFILES_ACTIVE=desktop + 隔离 user.home/H2/cwd）。
+// 自包含：local-mode 免登（任何请求都解析为本机用户，qa_bot 注册已随登录一起
+//       消亡），自建 BLANK 项目；只读 admin 页面，绝不保存全局配置、绝不触发
+//       向导重置。注意：J1 需要「未解锁」起点，若后端已解锁会先 deactivate，
+//       跑完停留在试用版状态——对着真实长驻后端跑时若原状态是账户模式，
+//       会在报告里给出无法自动还原的警告。
+//
+// 桌面环境假冒：launch/unlock/userprofile 等页面用 window.checkbaDesktop 存在性
+// 判定桌面（免登）语境，浏览器目标全程注入一个最小桩（shell.openExternal）。
+// 全仓桌面 API 调用点都有子对象守卫（window.checkbaDesktop.xxx && ...），
+// 最小桩不会引爆任何页面（2026-08-05 全量 grep 核实）。
 //
 // 已知驱动陷阱（来自真机 QA 实录，改动需回看 docs/QA_JOURNEYS.md）：
 //  - uni-app 的 @tap 必须用真实鼠标坐标点击（page.mouse.click），DOM el.click() 不触发
@@ -48,13 +60,16 @@ const spawned = []
 // 里 x 对 finally 不可见（try 与 finally 是兄弟块，不是嵌套块，这条本身在写 :1204
 // 附近的清理逻辑时现场踩过一次 ReferenceError）。
 let aConnectionId = null
-async function spawnBackend(tag, port) {
-  // home 带 ts（本次运行的时间戳，:87 附近的 QA.user 同一个）：OUT 是固定的系统临时目录，
+async function spawnBackend(tag, port, extraArgs = []) {
+  // home 带 ts（本次运行的时间戳，QA.project 同一个）：OUT 是固定的系统临时目录，
   // 不带 ts 的话连续两次跑会复用同一份 H2 文件库，第二次跑会撞上第一次跑注册过的
   // lawyer_a/lawyer_b/b_local 账号名（现场调试实证：第二轮直接「用户名已存在」）。
   const home = path.join(OUT, 'j11-' + tag + '-' + ts)
   fs.mkdirSync(path.join(home, 'cwd'), { recursive: true })
-  const child = spawn(process.env.JAVA_HOME + '/bin/java', ['-jar', J11_JAR], {
+  // -Duser.home 隔离：license.json 落在 ${user.home}/.aiworkdeck，不隔离的话
+  // 临时后端会读写真实桌面的授权状态文件。
+  const child = spawn(process.env.JAVA_HOME + '/bin/java',
+    ['-Duser.home=' + home, '-jar', J11_JAR, ...extraArgs], {
     cwd: path.join(home, 'cwd'),
     env: {
       ...process.env,
@@ -95,9 +110,12 @@ let puppeteer
 try { puppeteer = (await import('puppeteer-core')).default }
 catch { console.error('缺少 puppeteer-core：cd frontend && npm i -D puppeteer-core'); process.exit(2) }
 
-// ---------- self-provision: fresh account + project via API ----------
+// ---------- self-provision: local-mode 免登，直接建项目 ----------
+// PR-A 去登录后 desktop profile 开 security.local-mode：任何请求（含无 session
+// 头）一律解析为本机用户，注册/登录接口已不在桌面链路上。QA.sid 恒为 null，
+// api() 的条件头保留是为了 S（团队服务器，非 local-mode）侧 mkApi 的对称性。
 const ts = Date.now()
-const QA = { user: 'qa_bot_' + ts, pass: 'QaBot123456', project: 'QA走查_' + ts }
+const QA = { project: 'QA走查_' + ts, sid: null }
 async function api(ep, opts = {}) {
   const r = await fetch(BACKEND + ep, {
     method: opts.method || 'GET',
@@ -107,15 +125,15 @@ async function api(ep, opts = {}) {
   return r.json().catch(() => null)
 }
 {
-  const reg = await api('/api/auth/register', { method: 'POST', body: { username: QA.user, password: QA.pass, displayName: 'QA机器人' } })
-  if (!reg || reg.code !== 0) { console.error('注册 QA 账号失败: ' + JSON.stringify(reg).slice(0, 200)); process.exit(2) }
-  QA.sid = reg.data.sessionId
-  QA.userObj = reg.data.user
   const proj = await api('/api/projects', { method: 'POST', body: { name: QA.project, projectType: 'BLANK' } })
-  if (!proj || !proj.id) { console.error('建 QA 项目失败: ' + JSON.stringify(proj).slice(0, 200)); process.exit(2) }
+  if (!proj || !proj.id) { console.error('免登建 QA 项目失败: ' + JSON.stringify(proj).slice(0, 200)); process.exit(2) }
   QA.projectId = proj.id
-  console.log('QA 账号 ' + QA.user + ' / 项目 #' + QA.projectId)
+  console.log('本机用户（免登）/ 项目 #' + QA.projectId)
 }
+
+// J1 用的公开通用试用码（GitHub README 公开发布的那枚，Ed25519 离线验签）。
+const TRIAL_CODE = process.env.APP_E2E_TRIAL_CODE
+  || 'AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ-ZQSZ-YY6K-N2H4-6WGB-SDOG-2LM7-JO62-PJDO-ASKY-NYR2-TLGR-YKUE-HYIK'
 
 // ---------- test fixtures ----------
 const smallFile = path.join(OUT, 'qa-small.txt')
@@ -143,12 +161,17 @@ try {
   page.on('console', (m) => {
     if (m.type() !== 'error') return
     const t = m.text()
-    // 资源加载失败由 response 监听按 URL 精确上报（favicon 已滤），这里只收脚本错误
-    if (/favicon|sourcemap|vite|Failed to load resource/i.test(t)) return
+    // 资源加载失败由 response 监听按 URL 精确上报（favicon 已滤），这里只收脚本错误。
+    // api.js 对每个非 2xx 都会 console.error('HTTP 状态码错误')——与 response 监听
+    // 完全重复（后者带 URL 与方法，更精确），且 J1 坏码步骤会故意触发一次，滤掉。
+    if (/favicon|sourcemap|vite|Failed to load resource|HTTP 状态码错误/i.test(t)) return
     note('console', t.slice(0, 280))
   })
   page.on('pageerror', (e) => note('pageerror', String(e).slice(0, 280)))
   page.on('response', (r) => {
+    // J1 故意用坏码打 /api/license/activate 验证 400 内联报错——这个 400 是断言
+    // 目标本身，不是异常信号
+    if (r.status() === 400 && r.url().includes('/api/license/activate')) return
     if (r.status() >= 400 && /\/api\//.test(r.url())) note('http' + r.status(), r.request().method() + ' ' + r.url().slice(0, 150))
     else if (r.status() === 404 && !/favicon|hot-update/.test(r.url())) note('asset404', r.url().slice(0, 150))
   })
@@ -208,23 +231,91 @@ try {
     catch (e) { stepFails++; note('step-fail', name + ': ' + String(e.message || e).slice(0, 180)); await shot('FAIL-' + name.replace(/[^\w一-龥]/g, '_')); return false }
   }
 
-  // ============ J1 登录（真实打字） ============
-  console.log('== J1 登录页真实登录 ==')
-  await page.goto(BASE + '/#/pages/login/login', { waitUntil: 'networkidle2', timeout: 30000 })
-  await page.waitForSelector('.uni-input-input', { timeout: 15000 })
-  await step('输入账号密码并登录', async () => {
-    const inputs = await page.$$('.uni-input-input')
-    await inputs[0].click({ clickCount: 3 }); await inputs[0].type(QA.user, { delay: 15 })
-    await inputs[1].click({ clickCount: 3 }); await inputs[1].type(QA.pass, { delay: 15 })
-    // 与本文件其余命名弹窗输入框同款去抖陷阱（uni-app 编译出的 input 把 DOM 值
-    // 同步回 v-model 有一拍延迟）：负载高时最后一次按键落定前点"登录"，提交的
-    // 密码会截断一个字符，后端按"用户名或密码错误"拒绝——用网络请求体验证过
-    // （曾抓到提交的密码是 QaBot12345，少了最后一位 6）。这正是 issue #200
-    // "J1 登录抖动"的根因之一，之前一直没补这个 300ms 定居延迟，系统负载高时
-    // 会稳定复现而不是偶发。
-    await sleep(300)
-    try { await mouseClickText('登 录') } catch { await mouseClickText('登录') }
-    await page.waitForFunction(() => !location.hash.includes('login'), { timeout: 15000 })
+  // ============ J1 首启解锁 → 直达（商业化改造 PR-A 后的启动链） ============
+  // 旧 J1「登录页真实打字登录」已随桌面去登录整体移除：login.vue 只剩浏览器访问
+  // 团队服务器的场景（不在本套件覆盖面内）。issue #200「J1 登录抖动」（登录输入
+  // 去抖截断密码）失去了存在的土壤，随本次重写一并消亡。
+  //
+  // 桌面判定桩：launch/unlock/userprofile 以 window.checkbaDesktop 存在性判定
+  // 桌面（免登）语境。evaluateOnNewDocument 注册的最小桩对之后每个新文档生效，
+  // 全程保持——这正是新基线（桌面=免登）的浏览器映射。
+  console.log('== J1 首启解锁门 ==')
+  await page.evaluateOnNewDocument(() => {
+    window.checkbaDesktop = { shell: { openExternal: () => Promise.resolve() } }
+  })
+
+  // J1 需要「未解锁」起点。对着已解锁的长驻后端跑时先 deactivate（跑完停在
+  // 试用版）；原状态若是账户模式无法自动还原，如实警告。
+  {
+    const lic0 = await api('/api/license/status')
+    if (lic0 && lic0.unlocked) {
+      if (lic0.mode && lic0.mode !== 'trial') {
+        note('warn', '后端原授权模式为 ' + lic0.mode + '，J1 将 deactivate 且只能还原为 trial，需手工重连账户')
+      }
+      await api('/api/license/deactivate', { method: 'POST' })
+    }
+  }
+
+  await step('launch 未解锁分流到 unlock 页', async () => {
+    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForFunction(() => location.hash.includes('pages/unlock/unlock'), { timeout: 20000 })
+    // uni-app 的 .unlock-input 是 wrapper，真 textarea 在里面
+    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+  })
+
+  await step('坏码走后端 400 内联报错', async () => {
+    await page.type('.unlock-input textarea', 'AWD-T-BAD-CODE')
+    // uni useValueSync 的 triggerInput 是 100ms throttle：快速连打只有首字符进
+    // v-model。停一拍再补敲一个会被前端去空白的空格，让最后一次 input 以完整值
+    // 触发 leading call（真实用户粘贴是单次 input 事件，不受此影响）。
+    await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
+    await mouseClickSel('.unlock-btn')
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.unlock-error')
+      return !!el && el.textContent.includes('格式不正确')
+    }, { timeout: 10000 })
+  })
+
+  await step('真试用码解锁（含粘贴态换行空格去除）', async () => {
+    // 重进拿干净输入框（hash 同页时 goto 不重载文档，补一次 reload）
+    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForFunction(() => location.hash.includes('pages/unlock/unlock'), { timeout: 20000 })
+    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+    // 模拟从邮件/网页复制来的粘贴形态：中间夹换行和空格，验证前端去空白
+    const messy = TRIAL_CODE.slice(0, 30) + '\n ' + TRIAL_CODE.slice(30)
+    await page.type('.unlock-input textarea', messy)
+    await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
+    await mouseClickSel('.unlock-btn')
+    // 解锁成功 → toast → reLaunch 回 launch 分流：向导未初始化去 wizard，
+    // 已初始化直接进应用（长驻后端场景）
+    await page.waitForFunction(() => {
+      const h = location.hash
+      return h.includes('pages/wizard/wizard') || h.includes('pages/userprofile/userprofile')
+        || h.includes('pages/project-overview/project-overview')
+    }, { timeout: 30000 })
+  })
+
+  await step('向导页无 admin/123 口令提示（未初始化时）', async () => {
+    if (!page.url().includes('pages/wizard/wizard')) return // 已初始化后端：此腿天然不出现
+    const t = await textOf()
+    if (t.includes('admin') && t.includes('123')) throw new Error('wizard 页仍含 admin/123 提示')
+    // API 置初始化（与向导 UI 等价的后端出口；向导 UI 自身的交互不在本套件覆盖面）
+    const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'gemini' } } })
+    if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
+  })
+
+  await step('已解锁重启 → 直达上次项目', async () => {
+    // uni h5 getStorageSync 兼容裸字符串
+    await page.evaluate((id) => localStorage.setItem('checkba_last_project_id', String(id)), QA.projectId)
+    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForFunction(() => location.hash.includes('project-overview'), { timeout: 30000 })
+    await waitText('资源管理器', 20000)
+  })
+
+  await step('project-overview 常驻试用版标识', async () => {
+    await page.waitForSelector('.trial-chip', { timeout: 15000 })
   })
 
   // ============ J2 个人中心四 tab ============
@@ -325,7 +416,7 @@ try {
       await waitText('测试通过', 90000) // 流式回复落进气泡
     })
     await step('对话历史落库（#153 轮次回归）', async () => {
-      const r = await fetch(BACKEND + '/api/ai/history?projectId=' + QA.projectId, { headers: { 'X-Session-Id': QA.sid } })
+      const r = await fetch(BACKEND + '/api/ai/history?projectId=' + QA.projectId, { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })
       const body = await r.text()
       if (!body.includes('测试通过')) throw new Error('历史中未见 AI 回复内容: ' + body.slice(0, 150))
     })
@@ -353,7 +444,7 @@ try {
   for (const ep of ['/api/projects/my', '/api/ai/assistants', '/api/ai/config', '/api/skills/list',
     '/api/plugins/list', '/api/sensitive/options', '/api/variables/user', '/api/favorites/my', '/api/auth/me']) {
     await step('GET ' + ep, async () => {
-      const r = await fetch(BACKEND + ep, { headers: { 'X-Session-Id': QA.sid } })
+      const r = await fetch(BACKEND + ep, { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })
       if (r.status >= 400) throw new Error('HTTP ' + r.status)
     })
   }
@@ -503,7 +594,7 @@ try {
     form.append('file', new Blob(['QA 版本记录旅程测试文件（已修改，用于 MODIFY 断言）\n'], { type: 'text/plain' }), 'qa-版本测试.txt')
     const r = await fetch(BACKEND + '/api/files/' + f.wpsFileId + '/upload', {
       method: 'POST',
-      headers: { 'X-Session-Id': QA.sid },
+      headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
       body: form,
     })
     const j = await r.json()
@@ -631,7 +722,7 @@ try {
     form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
     const r = await fetch(BACKEND + '/api/files/' + f.wpsFileId + '/upload', {
       method: 'POST',
-      headers: { 'X-Session-Id': QA.sid },
+      headers: QA.sid ? { 'X-Session-Id': QA.sid } : {},
       body: form,
     })
     const j = await r.json()
@@ -866,7 +957,11 @@ try {
     note('skip', 'J11 需要 APP_E2E_JAR（backend/target/*.jar 绝对路径）未提供，已跳过多人协作旅程')
   } else {
     console.log('== J11 云端协作 ==')
-    const S = await spawnBackend('server', 9701)
+    // S 是团队服务器：要真实多账号鉴权（lawyer_a/lawyer_b 注册登录、成员管理）。
+    // desktop profile 在 PR-A 后默认 security.local-mode=true（一切请求解析为
+    // 本机用户），对 S 必须显式关掉，否则两个律师会被折叠成同一个人。
+    // B 是同事的桌面：保持 local-mode 免登（与真实拓扑一致），裸 REST 即本机用户。
+    const S = await spawnBackend('server', 9701, ['--security.local-mode=false'])
     const B = await spawnBackend('desktopB', 9702)
     const sApi = mkApi(S)
     const bApi = mkApi(B)
@@ -887,7 +982,7 @@ try {
       form.append('file', new Blob([content], { type: 'text/plain' }), fileName)
       const r = await fetch(apiFn.base + '/api/files/' + f.id + '/upload', {
         method: 'POST',
-        headers: { 'X-Session-Id': apiFn.sid },
+        headers: apiFn.sid ? { 'X-Session-Id': apiFn.sid } : {},
         body: form,
       })
       const j = await r.json()
@@ -941,12 +1036,14 @@ try {
       //   时 evaluateOnNewDocument 注册的桩会在新文档最早的脚本执行前就位，这次挂载
       //   从第一次求值起就是 true。
       const stubDesktop = () => {
-        window.checkbaDesktop = {
+        // 合并进全局最小桩（shell.openExternal），不要整体覆盖——userprofile 等
+        // 页面靠 window.checkbaDesktop 存在性判定免登语境，J1 起全程依赖它。
+        window.checkbaDesktop = Object.assign({}, window.checkbaDesktop, {
           model: {
             status: async () => ({ components: [] }),
             onProgress: () => () => {},
           },
-        }
+        })
       }
       await page.evaluateOnNewDocument(stubDesktop)
       await page.evaluate(stubDesktop)
@@ -1023,12 +1120,8 @@ try {
       if (!r || r.code !== 0) throw new Error('加成员失败: ' + JSON.stringify(r).slice(0, 200))
     })
 
-    await step('B：自己的后端注册本地账号', async () => {
-      const reg = await bApi('/api/auth/register', { method: 'POST', body: { username: 'b_local', password: 'BLocal123456', displayName: 'B机器人' } })
-      if (!reg || reg.code !== 0) throw new Error('B 本地注册失败: ' + JSON.stringify(reg).slice(0, 200))
-      bApi.sid = reg.data.sessionId
-    })
-
+    // B 的桌面后端是 local-mode 免登：不再注册本地账号（登录已不存在），
+    // bApi.sid 保持 null，所有裸 REST 天然是 B 的本机用户。
     let bConnectionId = null
     await step('B：连接团队服务器 S（裸 REST，lawyer_b 账号）', async () => {
       const r = await bApi('/api/cloud/connect', { method: 'POST', body: { serverUrl: S, username: 'lawyer_b', password: 'PwLawyerB123', deviceName: '同事的电脑' } })
@@ -1064,8 +1157,8 @@ try {
       // 拿它判断"克隆内容对不对"会被这个无关噪音坑（曾经因此误判成 B 没收到文件）。
       // /download 是原始字节流，不经过 Tika，也是对"clone 到底带没带对内容"更直接
       // 的证据——两台机器上同一个文件字节完全一致，才真正说明 git clone 没出错。
-      const dlA = await fetch(BACKEND + '/api/files/' + fA.id + '/download', { headers: { 'X-Session-Id': QA.sid } })
-      const dlB = await fetch(B + '/api/files/' + fB.id + '/download', { headers: { 'X-Session-Id': bApi.sid } })
+      const dlA = await fetch(BACKEND + '/api/files/' + fA.id + '/download', { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })
+      const dlB = await fetch(B + '/api/files/' + fB.id + '/download', { headers: bApi.sid ? { 'X-Session-Id': bApi.sid } : {} })
       if (dlA.status !== 200 || dlB.status !== 200) throw new Error('下载失败: A=' + dlA.status + ' B=' + dlB.status)
       const bufA = Buffer.from(await dlA.arrayBuffer())
       const bufB = Buffer.from(await dlB.arrayBuffer())

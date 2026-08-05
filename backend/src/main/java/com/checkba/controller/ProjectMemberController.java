@@ -76,11 +76,13 @@ public class ProjectMemberController {
         return result;
     }
 
+    // X-Session-Id 一律 required=false（同 ActivityLogController 注释）：local-mode
+    // 免登请求不带 header，required 会在进 controller 前被 Spring 500 掉。
     @PostMapping("/{projectId}/members")
     public Map<String, Object> addMember(
             @PathVariable Long projectId,
             @RequestBody AddMemberRequest request,
-            @RequestHeader(value = "X-Session-Id") String sessionId) {
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
@@ -105,7 +107,7 @@ public class ProjectMemberController {
     public Map<String, Object> inviteClient(
             @PathVariable Long projectId,
             @RequestBody(required = false) Map<String, String> body,
-            @RequestHeader(value = "X-Session-Id") String sessionId) {
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
@@ -133,7 +135,7 @@ public class ProjectMemberController {
     public Map<String, Object> removeMember(
             @PathVariable Long projectId,
             @PathVariable Long userIdToRemove,
-            @RequestHeader(value = "X-Session-Id") String sessionId) {
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         
         Long requesterId = AuthController.getUserIdFromSession(sessionId);
         if (requesterId == null) {

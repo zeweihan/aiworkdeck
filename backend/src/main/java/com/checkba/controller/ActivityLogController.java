@@ -15,10 +15,13 @@ public class ActivityLogController {
 
     private final UserActivityLogService userActivityLogService;
 
+    // X-Session-Id 一律 required=false：local-mode 免登请求不带 header，required
+    // 会在进 controller 前被 Spring 以 MissingRequestHeaderException 500 掉；
+    // 身份判定统一交给 getUserIdFromSession（server 模式 null header 仍按未登录拒绝）。
     @PostMapping("/log")
     public Map<String, Object> logActivity(
             @RequestBody LogRequest request,
-            @RequestHeader(value = "X-Session-Id") String sessionId) {
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
@@ -42,7 +45,7 @@ public class ActivityLogController {
 
     @GetMapping("/history")
     public Map<String, Object> getActivityHistory(
-            @RequestHeader(value = "X-Session-Id") String sessionId) {
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {

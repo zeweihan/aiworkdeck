@@ -29,9 +29,9 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 | `OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest` | backend/ | 真实 LLM 冒烟（默认跳过） |
 | `npm test` | desktop/ | service-manager / model-manager / pysvc-runtime |
 | `npm run check:emits` | frontend/ | @event 绑定 vs $emit 声明静态护栏（scripts/check-emit-bindings.mjs） |
-| `npm run test:lowa-e2e` | frontend/ | LOWA 真引擎+键盘链路（tests/lowa-e2e/run.mjs，puppeteer-core 无头，基线 38 步） |
-| `npm run test:app-e2e` | frontend/ | 全应用真人模拟（tests/app-e2e/run.mjs；自注册 qa_bot_* 账号；需 dev:h5 **5174** + 后端 9696）。**发版前必跑** |
-| `npm run test:desktop-e2e` | frontend/ | 桌面保存链路（弹 dev Electron 窗口，webview 真 LOWA 插文本→保存→API 下载验内容） |
+| `npm run test:lowa-e2e` | frontend/ | LOWA 真引擎+键盘链路（tests/lowa-e2e/run.mjs，puppeteer-core 无头，基线 19 组 169 断言；不经应用页面，天然无登录前置） |
+| `npm run test:app-e2e` | frontend/ | 全应用真人模拟（tests/app-e2e/run.mjs；PR-A 去登录后 J1=首启解锁门（试用码），其余旅程 local-mode 免登直达，不再注册 qa_bot_*；需 dev:h5 **5174** + local-mode 后端（默认 9696，冷启动可用新 jar 9797 顶班 + 隔离 user.home/H2/cwd，APP_E2E_JAR 供 J11）。**发版前必跑** |
+| `npm run test:desktop-e2e` | frontend/ | 桌面保存链路（弹 dev Electron 窗口，webview 真 LOWA 插文本→保存→API 下载验内容；PR-A 后免登直达，provision 会自动用试用码解锁+置向导） |
 
 每日全量 QA：`scripts/qa-nightly.sh`（crontab，跑在 ~/aiworkdeck-qa/repo 专用克隆，报告 ~/aiworkdeck-qa/reports/，失败 gh 开 issue 标签 qa-nightly，引擎取自已安装 app）。
 

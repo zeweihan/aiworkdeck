@@ -24,10 +24,23 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  */
 @SpringBootTest(properties = {
         // desktop profile 的 H2 文件库换成内存库（去掉 AUTO_SERVER，加 DB_CLOSE_DELAY 保活）
-        "spring.datasource.url=jdbc:h2:mem:ctx-smoke;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE;DB_CLOSE_DELAY=-1"
+        "spring.datasource.url=jdbc:h2:mem:ctx-smoke;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE;DB_CLOSE_DELAY=-1",
+        // 授权状态目录隔离到临时目录，避免测试读到开发机真实的 ~/.aiworkdeck/license.json
+        "security.license.dir=${java.io.tmpdir}/awd-ctx-smoke-license"
 })
 @ActiveProfiles("desktop")
 class DesktopContextSmokeTest {
+
+    /**
+     * desktop profile 现在带 security.local-mode=true，LocalIdentityService 构造时
+     * 会静态注册到 AuthController。surefire 同 JVM 跑全部测试，且 Spring 缓存上下文
+     * 不会在切回其他上下文时重置静态字段——不清理的话，后续鉴权类测试
+     * （IdorAuthIntegrationTest 等）的 getUserIdFromSession 会被本机用户身份劫持。
+     */
+    @org.junit.jupiter.api.AfterAll
+    static void resetLocalIdentityStatic() {
+        com.checkba.controller.AuthController.registerLocalIdentityService(null);
+    }
 
     /** 真 WebTools 的 @PostConstruct 会起线程预热/下载 Playwright 浏览器，测试里挡掉 */
     @MockBean

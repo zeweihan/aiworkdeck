@@ -500,7 +500,10 @@ public class FileController {
 
         } catch (Exception e) {
             log.error("上传失败", e);
-            return ResponseEntity.status(500).body(Map.of("code", -1, "message", e.getMessage()));
+            // e.getMessage() 可能为 null（如 JVM fast-throw 优化后的 NPE），
+            // Map.of 不收 null 值——曾把 500 响应本身炸成第二个 NPE（e2e 实录）。
+            String msg = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            return ResponseEntity.status(500).body(Map.of("code", -1, "message", msg));
         } finally {
             // 关闭上传输入流：此前无 finally，multipart/大文件上传每次泄漏一个句柄
             if (inputStream != null) {

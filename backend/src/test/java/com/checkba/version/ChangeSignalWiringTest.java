@@ -16,7 +16,9 @@ import static org.mockito.Mockito.*;
 // desktop profile = 嵌入式 H2（与 IdorAuthIntegrationTest / DesktopContextSmokeTest 同一约定）。
 // 默认 profile 连 localhost:5432 的 PostgreSQL，本机恰好有库时测试是绿的，CI 上必挂——
 // 全上下文测试一律显式走 desktop profile，不得依赖开发机的外部服务。
-@SpringBootTest
+// security.local-mode=false：保持本测试写作时的登录会话语义，并避免 local-mode 的
+// LocalIdentityService 静态注册泄漏到同 JVM 后续测试（desktop profile 现默认开启 local-mode）。
+@SpringBootTest(properties = {"security.local-mode=false"})
 @ActiveProfiles("desktop")
 class ChangeSignalWiringTest {
 

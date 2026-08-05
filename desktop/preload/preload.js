@@ -112,6 +112,12 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   utils: {
     readFile: (path) => ipcRenderer.invoke('checkba:fs-read-file', { path })
   },
+  // 用系统浏览器打开站外链接（仅 http(s)，主进程侧再校验一次）。
+  // 解锁页等未加载工作区浏览器的场景依赖它——window.open 会被
+  // setWindowOpenHandler 转成无人消费的事件而静默失效。
+  shell: {
+    openExternal: (url) => ipcRenderer.invoke('checkba:shell-open-external', { url })
+  },
   fs: {
     // 注：readFile/writeFile 曾暴露任意路径读/写（渲染进程零调用，属死暴露，其中任意写可覆盖
     // ~/.zshrc 等实现代码执行），已移除以缩小攻击面。唯一在用的文件读取走 utils.readFile
