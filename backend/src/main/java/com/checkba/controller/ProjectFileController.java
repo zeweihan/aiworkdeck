@@ -28,6 +28,29 @@ public class ProjectFileController {
     private final ProjectFileService projectFileService;
     private final ProjectMemberService projectMemberService;
     private final FileTagService fileTagService;
+    private final com.checkba.service.quota.StageQuotaService stageQuotaService;
+
+    /**
+     * 文件缓存区用量（前端顶部用量条的数据源）。
+     * GET /api/projects/{projectId}/files/stage/usage?folderId=xxx
+     *
+     * 上限常量只在后端定义一处，前端不复制——改额度时不会出现两边不一致。
+     */
+    @GetMapping("/stage/usage")
+    public Map<String, Object> stageUsage(
+            @PathVariable Long projectId,
+            @RequestParam(value = "folderId", required = false) Long folderId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new UnauthorizedException("请先登录");
+        }
+        checkFileTreeAccess(projectId, userId);
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 0);
+        result.put("data", stageQuotaService.usage(folderId));
+        return result;
+    }
 
     /**
      * 获取文件列表（指定父文件夹）

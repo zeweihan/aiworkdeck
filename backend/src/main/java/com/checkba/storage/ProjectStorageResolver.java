@@ -34,14 +34,21 @@ public class ProjectStorageResolver {
     private static final Pattern PROJECT_KEY = Pattern.compile("^projects/(\\d+)(?:/(.*))?$");
 
     private final ProjectRepository projectRepository;
-    private final Path globalRoot;
+    /**
+     * 全局存储根。可在运行期被 {@code StorageLocationService} 改写（用户自选存储位置，PR-C），
+     * 故为 volatile：迁移线程写、各业务线程读。
+     */
+    private volatile Path globalRoot;
+    /** 配置文件里写的默认位置，迁移后仍需展示「默认位置」与判断是否已自选。 */
+    private final Path configuredRoot;
     private final Path templateDoc;
     /** projectId → localRoot（Optional.empty = 存量托管项目）。只缓存确实存在的项目行。 */
     private final Map<Long, Optional<Path>> localRootCache = new ConcurrentHashMap<>();
 
     public ProjectStorageResolver(StorageProperties storageProperties, ProjectRepository projectRepository) {
         this.projectRepository = projectRepository;
-        this.globalRoot = resolveConfiguredPath(storageProperties.getLocal().getRootPath());
+        this.configuredRoot = resolveConfiguredPath(storageProperties.getLocal().getRootPath());
+        this.globalRoot = configuredRoot;
         this.templateDoc = resolveConfiguredPath(storageProperties.getLocal().getTemplatePath());
     }
 
@@ -66,6 +73,24 @@ public class ProjectStorageResolver {
     /** 全局存储根（data 根）。全局命名空间与托管项目都在它下面。 */
     public Path globalRoot() {
         return globalRoot;
+    }
+
+    /** 配置文件里的默认存储根（未自选存储位置时与 {@link #globalRoot()} 相同）。 */
+    public Path configuredRoot() {
+        return configuredRoot;
+    }
+
+    /**
+     * 切换全局存储根。**只由 {@code StorageLocationService} 在迁移成功后调用**——
+     * 它负责把数据先复制到位并校验，这里只做指针切换。
+     *
+     * 之所以能安全地热切：数据库里存的是逻辑路径（{@code projects/{id}/...}），
+     * 物理位置全部经本类解析；git 仓库的 gitDir/workTree 也每次现算
+     * （见 ProjectRepoService），没有任何绝对路径被持久化。
+     */
+    public void relocate(Path newRoot) {
+        if (newRoot == null) throw new StorageException("存储位置不能为空");
+        this.globalRoot = newRoot.toAbsolutePath().normalize();
     }
 
     /** 新建文档模板路径。 */

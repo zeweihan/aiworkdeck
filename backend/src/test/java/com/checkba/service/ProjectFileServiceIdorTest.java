@@ -25,6 +25,10 @@ class ProjectFileServiceIdorTest {
     @Mock
     private ProjectFileRepository projectFileRepository;
 
+    /** 额度检查在 batchMove 里先于逐个归属校验执行，不给它一个实例会 NPE 掩盖真正的断言。 */
+    @Mock
+    private com.checkba.service.quota.StageQuotaService stageQuotaService;
+
     @InjectMocks
     private ProjectFileService projectFileService;
 

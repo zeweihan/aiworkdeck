@@ -46,6 +46,26 @@ public class GlobalExceptionHandler {
         return ResponseEntity.ok().body(result);
     }
 
+    /**
+     * 文件缓存区免费额度已满：code=4003 + feature=stage.unlimited，前端据此显示解锁引导。
+     * 与 4001（功能未配置）区分开——这里功能是好的，只是额度到顶了，下一步是解锁而非去设置。
+     */
+    @ExceptionHandler(com.checkba.exception.StageQuotaExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleStageQuota(com.checkba.exception.StageQuotaExceededException e) {
+        log.info("文件缓存区额度已满: {}", e.getMessage());
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 4003);
+        result.put("feature", com.checkba.service.entitlement.FeatureCatalog.STAGE_UNLIMITED);
+        result.put("message", e.getMessage());
+        Map<String, Object> usage = new HashMap<>();
+        usage.put("fileCount", e.getFileCount());
+        usage.put("totalBytes", e.getTotalBytes());
+        usage.put("maxFiles", e.getMaxFiles());
+        usage.put("maxBytes", e.getMaxBytes());
+        result.put("usage", usage);
+        return ResponseEntity.ok().body(result);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("GlobalExceptionHandler caught IllegalArgumentException: {}", e.getMessage());

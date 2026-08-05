@@ -488,6 +488,12 @@
                   <text class="account-note">
                     余额用于充值与购买；AI 额度是从余额分配到平台 AI 通道的部分，在官网账户页分配。
                   </text>
+                  <!-- 购买在官网完成，桌面端拉一次即可看到新解锁的功能 -->
+                  <view class="account-refresh-row">
+                    <button class="comp-btn" :disabled="entitlementBusy" @tap="onRefreshEntitlements">
+                      {{ entitlementBusy ? '刷新中...' : '我已购买，刷新权益' }}
+                    </button>
+                  </view>
                 </view>
               </view>
             </view>
@@ -523,6 +529,40 @@
               </view>
             </view>
           </template>
+
+          <!-- 文件缓存区存储位置：仅在已解锁「文件缓存区无限版」时出现。
+               未解锁时整块入口不显示——没买的功能不该在设置页里当广告位。 -->
+          <view v-if="stageUnlimited" class="section-card">
+            <view class="section-header">
+              <text class="section-title">文件缓存区存储位置</text>
+              <text class="section-subtitle">
+                文件缓存区与项目文件在本机的存放目录。解锁无限版后不再有容量限制，建议放到空间充裕的磁盘
+              </text>
+            </view>
+            <view class="section-body">
+              <view class="provider-card">
+                <view class="form-row">
+                  <text class="form-label">当前位置</text>
+                  <text class="storage-path">{{ storageLocation.path || '读取中...' }}</text>
+                </view>
+                <text v-if="storageLocation.path && !storageLocation.available" class="storage-warn">
+                  该目录当前不可访问（磁盘未连接或已被移动）。文件操作会失败，请接回磁盘或改选其他位置。
+                </text>
+                <text v-else-if="!storageLocation.custom" class="account-note">
+                  当前使用默认位置。
+                </text>
+                <view class="account-connect-actions">
+                  <button class="comp-btn" :disabled="storageBusy" @tap="onChangeStorageLocation">
+                    {{ storageBusy ? '迁移中...' : '更改位置' }}
+                  </button>
+                </view>
+                <text class="account-note">
+                  迁移会把现有文件<text class="storage-emph">复制</text>到新目录并逐一校验，成功后才切换。
+                  原目录会完整保留为备份，确认无误后可自行删除。迁移期间请不要编辑文档。
+                </text>
+              </view>
+            </view>
+          </view>
         </scroll-view>
 
         <!-- 组件管理（仅桌面端：本地模型下载与服务启用） -->
@@ -712,10 +752,11 @@ import {
   getAdminConfig, saveAdminConfig, resetWizard,
   cloudConnect, listCloudConnections, disconnectCloudConnection,
   getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
+  getStorageLocation, moveStorageLocation,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
-import { refreshEntitlements } from '@/composables/useEntitlement.js'
+import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 
 // 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里
 const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
@@ -783,11 +824,20 @@ export default {
       accountUsage: null, // { local: {...}, platform: {...} }，形状见 api.js getAccountUsage
       accountKeyInput: '',
       accountBusy: false,
+      entitlementBusy: false,
+      // 文件缓存区存储位置（PR-C，需 stage.unlimited）
+      // { path, defaultPath, custom, available, movedAt }
+      storageLocation: { path: '', defaultPath: '', custom: false, available: true },
+      storageBusy: false,
     }
   },
   computed: {
     isDesktop() {
       return typeof window !== 'undefined' && !!(window.checkbaDesktop && window.checkbaDesktop.model)
+    },
+    // 自选存储位置是「文件缓存区无限版」的付费能力，未解锁时入口整块不显示
+    stageUnlimited() {
+      return isEnabled(FEATURES.STAGE_UNLIMITED)
     },
     visibleNavItems() {
       return this.navItems.filter((n) => !n.desktopOnly || this.isDesktop)
@@ -989,6 +1039,10 @@ export default {
       }
       if (nav.key === 'account') {
         this.loadAccount()
+        // 权益决定「存储位置」入口是否出现；拉一次缓存即可（模块级共享，不会重复请求）
+        refreshEntitlements().then(() => {
+          if (this.stageUnlimited) this.loadStorageLocation()
+        })
       }
     },
     async loadPlatformAiAvailability() {
@@ -1046,6 +1100,82 @@ export default {
     },
     openAccountSite() {
       openExternalUrl(ACCOUNT_SITE_URL)
+    },
+    // 购买在官网完成。这里强制重取一次权益（refresh=true 会让后端先同步官网），
+    // 让刚买完回到桌面的用户不用重启就看到解锁结果。
+    async onRefreshEntitlements() {
+      this.entitlementBusy = true
+      try {
+        await refreshEntitlements(true)
+        if (this.stageUnlimited) await this.loadStorageLocation()
+        uni.showToast({
+          title: this.stageUnlimited ? '权益已更新' : '已刷新，未发现新的解锁',
+          icon: 'none',
+        })
+      } catch (e) {
+        uni.showToast({ title: '刷新失败，请稍后重试', icon: 'none' })
+      } finally {
+        this.entitlementBusy = false
+      }
+    },
+    // ---------- 文件缓存区存储位置 ----------
+    async loadStorageLocation() {
+      try {
+        const loc = await getStorageLocation()
+        if (loc && typeof loc === 'object') this.storageLocation = loc
+      } catch (e) {
+        // 未解锁 / 旧后端 / 非单机模式：入口本就不显示，静默即可
+      }
+    },
+    async onChangeStorageLocation() {
+      const desktop = typeof window !== 'undefined' ? window.checkbaDesktop : null
+      if (!desktop || !desktop.fs || typeof desktop.fs.showOpenDialog !== 'function') {
+        uni.showToast({ title: '仅桌面版支持选择目录', icon: 'none' })
+        return
+      }
+      let picked
+      try {
+        const res = await desktop.fs.showOpenDialog({
+          title: '选择文件缓存区存储位置',
+          properties: ['openDirectory', 'createDirectory'],
+        })
+        if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
+        picked = res.filePaths[0]
+      } catch (e) {
+        uni.showToast({ title: '打开目录选择器失败', icon: 'none' })
+        return
+      }
+
+      const ok = await new Promise((r) => uni.showModal({
+        title: '迁移到新位置',
+        content: '将把现有文件复制到：\n' + picked
+          + '\n\n复制并校验通过后才会切换，原目录会完整保留为备份。迁移期间请不要编辑文档。',
+        confirmText: '开始迁移',
+        success: (res) => r(res.confirm),
+      }))
+      if (!ok) return
+
+      this.storageBusy = true
+      try {
+        const res = await moveStorageLocation(picked)
+        await this.loadStorageLocation()
+        const data = (res && res.data) || {}
+        uni.showModal({
+          title: '迁移完成',
+          content: '已迁移 ' + (data.movedFiles || 0) + ' 个文件到新位置。\n\n原目录仍保留在：\n'
+            + (data.previousPath || '') + '\n\n确认一切正常后，可自行删除原目录。',
+          showCancel: false,
+        })
+      } catch (e) {
+        // 失败即回滚：存储位置维持原样，用户数据一个字节没动
+        uni.showModal({
+          title: '迁移未完成',
+          content: (e && e.message) || '迁移失败。存储位置维持不变，文件未受影响。',
+          showCancel: false,
+        })
+      } finally {
+        this.storageBusy = false
+      }
     },
     async onConnectAccount() {
       const key = (this.accountKeyInput || '').trim()
@@ -2094,6 +2224,39 @@ $border-color: #E9ECEF; // Gray-Light
   font-size: 12px;
   line-height: 18px;
   color: $text-secondary;
+}
+
+.account-refresh-row {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+/* 存储位置：路径要能整段看清，故等宽字体 + 允许换行 */
+.storage-path {
+  flex: 1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 18px;
+  color: $text-main;
+  word-break: break-all;
+}
+
+.storage-warn {
+  display: block;
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: #fdf7ec;
+  border: 1px solid #ecdfc3;
+  font-size: 12px;
+  line-height: 18px;
+  color: #8a6d2f;
+}
+
+.storage-emph {
+  font-weight: 600;
+  color: $text-main;
 }
 
 .usage-row {

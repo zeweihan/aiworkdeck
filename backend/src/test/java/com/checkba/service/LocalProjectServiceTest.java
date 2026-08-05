@@ -65,7 +65,8 @@ class LocalProjectServiceTest {
                 mock(com.checkba.service.ai.ProjectRagService.class),
                 storageFactory,
                 mock(com.checkba.version.WorkSessionService.class),
-                mock(UserService.class));
+                mock(UserService.class),
+                mock(com.checkba.service.quota.StageQuotaService.class));
 
         ProjectMemberService memberService = mock(ProjectMemberService.class);
         when(memberService.hasReadPermission(anyLong(), anyLong())).thenReturn(true);
