@@ -115,7 +115,7 @@
 
       <!-- Footer -->
       <view class="footer">
-        <text class="footer-hint">完成后使用默认账号 admin / 123 登录（请尽快在「个人中心」修改密码），所有配置可随时在「系统管理」中修改。</text>
+        <text class="footer-hint">所有配置可随时在「系统管理」中修改。</text>
         <button class="submit-btn" :disabled="submitting" :loading="submitting" @tap="handleSubmit">
           {{ submitting ? '正在初始化…' : '完成设置' }}
         </button>
@@ -191,7 +191,7 @@ export default {
       try {
         const res = await getWizardStatus()
         if (res && res.initialized) {
-          uni.reLaunch({ url: '/pages/login/login' })
+          uni.reLaunch({ url: '/pages/launch/launch' })
         }
       } catch (e) {
         // 后端暂不可达时留在向导页，提交时会再次校验
@@ -254,7 +254,7 @@ export default {
         await submitWizard(this.buildPayload())
         uni.showToast({ title: '初始化完成', icon: 'success' })
         setTimeout(() => {
-          uni.reLaunch({ url: '/pages/login/login' })
+          uni.reLaunch({ url: '/pages/launch/launch' })
         }, 600)
       } catch (e) {
         const msg = e && e.message ? e.message : '初始化失败，请重试'
@@ -262,7 +262,7 @@ export default {
         if (msg.indexOf('已初始化') !== -1 || msg.indexOf('Already initialized') !== -1) {
           uni.showToast({ title: '系统已初始化', icon: 'none' })
           setTimeout(() => {
-            uni.reLaunch({ url: '/pages/login/login' })
+            uni.reLaunch({ url: '/pages/launch/launch' })
           }, 800)
         } else {
           uni.showToast({ title: msg, icon: 'none' })

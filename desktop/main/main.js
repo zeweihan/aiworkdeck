@@ -1109,6 +1109,22 @@ ipcMain.handle('checkba:ping', async () => {
   return { ok: true, pid: process.pid }
 })
 
+// 用系统浏览器打开站外链接（解锁页「获取试用码/获取正式版」等场景）。
+// 注意：setWindowOpenHandler 只把 http(s) 转发给工作区浏览器 tab 的消费者，
+// 解锁门等未加载 project-overview 的页面无人消费——必须走这条显式通道。
+ipcMain.handle('checkba:shell-open-external', async (_evt, payload) => {
+  const url = String((payload && payload.url) || '')
+  if (!/^https?:\/\//i.test(url)) {
+    return { ok: false, message: 'only http(s) urls allowed' }
+  }
+  try {
+    await shell.openExternal(url)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, message: String(e && e.message ? e.message : e) }
+  }
+})
+
 // 桌面端：统一的“应用内确认弹窗”（不依赖 uni.showModal，且不会被 BrowserView/iframe 遮挡）
 ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
   if (!mainWindow) return { ok: false, confirmed: false, message: 'window not ready' }

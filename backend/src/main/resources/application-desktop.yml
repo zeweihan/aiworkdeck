@@ -30,6 +30,10 @@ spring:
 # 桌面/单机：所有登录用户都是管理员（系统管理/向导重置对全员开放）。
 # 云端多人部署不设此项（默认 false，仅 admin 账号）。
 security:
+  # 单机免登模式：所有请求一律解析为「本机用户」，不再需要登录。
+  # 安全前提是上方 server.address 钉死回环——LocalModeLoopbackGuard 在启动时强校验，
+  # local-mode=true 且监听地址非 127.0.0.1/localhost 时直接拒绝启动（2026-08 审计不变式）。
+  local-mode: true
   admin:
     allow-all-users: true
     # 单机本地默认口令，与向导页提示一致。云端 profile 不设此项：

@@ -310,15 +310,21 @@
                 </view>
               </view>
               
-              <view class="form-group">
-                <text class="group-title">账号安全</text>
+              <!-- 授权（桌面端）：当前模式 / 激活时间 / 解除授权 -->
+              <view v-if="isDesktop && licenseInfo.unlocked" class="form-group">
+                <text class="group-title">授权</text>
                 <view class="form-row">
-                  <text class="form-label">修改密码</text>
-                  <text class="link-text">点击修改</text>
+                  <text class="form-label">当前模式</text>
+                  <text class="form-value">{{ licenseInfo.mode === 'trial' ? '试用版' : '正式版' }}</text>
                 </view>
+                <view class="form-row">
+                  <text class="form-label">激活时间</text>
+                  <text class="form-value">{{ licenseInfo.activatedAt ? formatTime(licenseInfo.activatedAt) : '—' }}</text>
+                </view>
+                <button class="btn-logout-settings" @tap="handleDeactivate">解除授权</button>
               </view>
 
-              <view class="form-group">
+              <view v-if="!isDesktop" class="form-group">
                   <button class="btn-logout-settings" @tap="handleLogout">退出登录</button>
               </view>
             </view>
@@ -345,7 +351,7 @@
 </template>
 
 <script>
-import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar } from '@/services/api.js'
+import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense } from '@/services/api.js'
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
@@ -356,7 +362,11 @@ export default {
 
   computed: {
 
-    ICONS() { return ICONS }
+    ICONS() { return ICONS },
+
+    isDesktop() {
+      return typeof window !== 'undefined' && !!window.checkbaDesktop
+    }
 
   },
   name: 'UserProfile',
@@ -392,6 +402,9 @@ export default {
       currentInviteProjectId: null,
       showCloudAccept: false,
 
+      // 授权状态（桌面端）：{ unlocked, mode, plan, activatedAt? }
+      licenseInfo: {},
+
       // Activity Logs
       activityLogs: [],
       activityLoading: false,
@@ -411,16 +424,19 @@ export default {
     } catch (e) {
       // ignore
     }
-    // 检查登录状态
-    const sessionId = getSessionId()
-    const user = getCurrentUser()
-    
-    if (!sessionId || !user) {
-      console.warn('未登录，跳转到登录页', { sessionId, user })
-      uni.reLaunch({
-        url: '/pages/login/login',
-      })
-      return
+    // 检查登录状态（桌面端 local-mode 免登录，跳过该检查）
+    const isDesktopEnv = typeof window !== 'undefined' && !!window.checkbaDesktop
+    if (!isDesktopEnv) {
+      const sessionId = getSessionId()
+      const user = getCurrentUser()
+
+      if (!sessionId || !user) {
+        console.warn('未登录，跳转到登录页', { sessionId, user })
+        uni.reLaunch({
+          url: '/pages/login/login',
+        })
+        return
+      }
     }
 
     // 延迟加载，确保页面完全加载后再请求数据
@@ -429,6 +445,10 @@ export default {
       this.loadUserInfo()
       // 加载项目列表
       this.loadProjects()
+      // 桌面端：加载授权状态（设置面板「授权」卡片）
+      if (isDesktopEnv) {
+        this.loadLicenseInfo()
+      }
     })
   },
   methods: {
@@ -461,6 +481,32 @@ export default {
     getActiveTabLabel() {
       const tab = this.tabs.find(t => t.key === this.activeTab)
       return tab ? tab.label : ''
+    },
+    async loadLicenseInfo() {
+      try {
+        const status = await getLicenseStatus()
+        this.licenseInfo = status || {}
+      } catch (e) {
+        // 旧后端没有该端点：静默忽略
+        this.licenseInfo = {}
+      }
+    },
+    handleDeactivate() {
+      uni.showModal({
+        title: '解除授权',
+        content: '解除后应用将回到解锁页，需要重新输入试用码或账户 Key 才能继续使用。确定解除吗？',
+        cancelText: '取消',
+        confirmText: '确认解除',
+        success: async (res) => {
+          if (!res.confirm) return
+          try {
+            await deactivateLicense()
+            uni.reLaunch({ url: '/pages/launch/launch' })
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || '解除授权失败', icon: 'none' })
+          }
+        }
+      })
     },
     handleLogout() {
       uni.showModal({
@@ -684,8 +730,9 @@ export default {
         this.projects = projectsWithMembers
       } catch (error) {
         console.error('加载项目列表失败:', error)
-        // 错误处理逻辑保持不变
-        if (error.message && error.message.includes('登录')) {
+        // 桌面端免登：绝不跳 login（launch 分流已保证桌面不进登录页，这里若跳就是死胡同），
+        // 只提示错误。浏览器端保留原「登录失效回登录页」兜底。
+        if (!this.isDesktop && error.message && error.message.includes('登录')) {
           uni.reLaunch({
             url: '/pages/login/login',
           })

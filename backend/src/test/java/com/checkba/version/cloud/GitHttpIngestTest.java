@@ -34,7 +34,10 @@ import static org.junit.jupiter.api.Assertions.*;
  * 与 GitHttpProtocolTest 共用同一套骨架，但需要额外的 WorkSessionService/ProjectFileRepository
  * 依赖，独立成一个测试类。desktop profile + 独立内存 H2 的两条地雷同 GitHttpProtocolTest。
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// security.local-mode=false：保持本测试写作时的登录会话语义，并避免 local-mode 的
+// LocalIdentityService 静态注册泄漏到同 JVM 后续测试（desktop profile 现默认开启 local-mode）。
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {"security.local-mode=false"})
 @ActiveProfiles("desktop")
 class GitHttpIngestTest {
 

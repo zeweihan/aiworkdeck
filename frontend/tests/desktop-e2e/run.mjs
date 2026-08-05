@@ -6,11 +6,14 @@
 // 内容真的写进了文件。这是"编辑器保存链路"的端到端证明。
 //
 // 跑法（本机）：
-//   1) worktree/主仓库 frontend：`npx uni --port 5174`（dev:h5），且
-//      dist/zetaoffice 里有引擎（build 后从打包版复制，见 lowa-e2e README）
-//   2) 桌面后端 9696 在跑（打包版开着即可；dev Electron 会复用不再起 java）
+//   1) worktree/主仓库 frontend：`npx uni --port 5174`（dev:h5，VITE_API_BASE_URL
+//      指向后端），且 dist/zetaoffice 里有引擎（build 后从打包版复制，见
+//      lowa-e2e README）
+//   2) 桌面后端在跑（须是 PR-A 去登录后的 local-mode 后端；默认 9696 打包版
+//      常驻即可，冷启动联调可用新 jar 在 9797 顶班）
 //   3) cd frontend && npm run test:desktop-e2e
 // 注意：会在屏幕上弹出一个 dev Electron 窗口，跑完自动关闭。
+// PR-A 后无登录：local-mode 免登直达，不再注册 qa_desk 账号、不再注入会话。
 //
 // Env：DESKTOP_E2E_DEVURL（默认 http://localhost:5174）、APP_E2E_BACKEND（默认 9696）
 
@@ -40,8 +43,8 @@ for (const [what, ok] of [
   ['desktop/node_modules', fs.existsSync(path.join(desktopDir, 'node_modules'))],
 ]) { if (!ok) { console.error('前置缺失: ' + what); process.exit(2) } }
 
-// ---- provision ----
-const QA = { user: 'qa_desk_' + Date.now(), pass: 'QaBot123456' }
+// ---- provision（local-mode 免登：任何请求都解析为本机用户） ----
+const QA = { sid: null }
 async function api(ep, opts = {}) {
   const r = await fetch(BACKEND + ep, {
     method: opts.method || 'GET',
@@ -51,11 +54,22 @@ async function api(ep, opts = {}) {
   return r.json().catch(() => null)
 }
 {
-  const reg = await api('/api/auth/register', { method: 'POST', body: { username: QA.user, password: QA.pass, displayName: 'QA桌面' } })
-  QA.sid = reg.data.sessionId; QA.userObj = reg.data.user
+  // 冷启动后端可能还锁着/未过向导：解锁门与向导分流由 app-e2e J1 专门覆盖，
+  // 这里只把状态铺平，让 Electron 启动链不停在 unlock/wizard 页。
+  const lic = await api('/api/license/status')
+  if (lic && !lic.unlocked) {
+    const code = process.env.APP_E2E_TRIAL_CODE
+      || 'AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ-ZQSZ-YY6K-N2H4-6WGB-SDOG-2LM7-JO62-PJDO-ASKY-NYR2-TLGR-YKUE-HYIK'
+    const act = await api('/api/license/activate', { method: 'POST', body: { code } })
+    if (!act || act.unlocked !== true) { console.error('试用码解锁失败: ' + JSON.stringify(act).slice(0, 150)); process.exit(2) }
+  }
+  const wiz = await api('/api/admin/wizard')
+  if (wiz && wiz.initialized === false) {
+    await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'gemini' } } })
+  }
   const proj = await api('/api/projects', { method: 'POST', body: { name: '桌面链路QA_' + Date.now(), projectType: 'BLANK' } })
   QA.projectId = proj.id
-  console.log('QA 账号 ' + QA.user + ' / 项目 #' + QA.projectId)
+  console.log('本机用户（免登）/ 项目 #' + QA.projectId)
 }
 
 // ---- launch dev Electron with CDP ----
@@ -103,11 +117,7 @@ try {
     await sleep(700)
   }
 
-  await step('注入会话并进入项目', async () => {
-    await page.evaluate((sid, user) => {
-      uni.setStorageSync('checkba_session_id', sid)
-      uni.setStorageSync('checkba_user', user)
-    }, QA.sid, QA.userObj)
+  await step('免登直达进入项目（PR-A 去登录：不注会话）', async () => {
     await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId, { waitUntil: 'networkidle2' })
     await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 20000 })
   })
@@ -209,7 +219,7 @@ try {
     const m = flat.match(/"id":(\d+)[^}]*?docx/) || flat.match(/docx[^}]*?"id":(\d+)/)
     if (!m) throw new Error('项目文件列表中找不到 docx: ' + flat.slice(0, 200))
     const fileId = m[1]
-    const buf = Buffer.from(await (await fetch(BACKEND + '/api/files/' + fileId + '/download', { headers: { 'X-Session-Id': QA.sid } })).arrayBuffer())
+    const buf = Buffer.from(await (await fetch(BACKEND + '/api/files/' + fileId + '/download', { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })).arrayBuffer())
     const tmp = path.join(os.tmpdir(), 'desktop-e2e-doc.docx')
     fs.writeFileSync(tmp, buf)
     const text = execSync('unzip -p "' + tmp + '" word/document.xml | sed "s/<[^>]*>//g"').toString()
@@ -223,5 +233,5 @@ try {
   await sleep(1500)
   try { elec.kill('SIGKILL') } catch {}
 }
-console.log(failed ? '\n结果：' + failed + ' 步失败 ❌' : '\n结果：桌面保存链路全通 ✅')
+console.log(failed ? '\n结果：' + failed + ' 步失败' : '\n结果：桌面保存链路全通')
 process.exit(failed ? 1 : 0)

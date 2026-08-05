@@ -29,6 +29,13 @@ public class DataInitializer implements CommandLineRunner {
     @org.springframework.beans.factory.annotation.Value("${security.admin.initial-password:}")
     private String initialPassword;
 
+    /**
+     * 单机免登模式：admin 用户只是本机用户的数据宿主（LocalIdentityService 复用其 userId），
+     * 登录入口已不存在，「默认密码请修改」类提示只会造成困惑，故不再打印。
+     */
+    @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+    private boolean localMode;
+
     @Override
     public void run(String... args) {
         // 创建默认用户 admin（若不存在）。不再打印明文口令到日志。
@@ -42,7 +49,10 @@ public class DataInitializer implements CommandLineRunner {
                     user.setDisplayName("管理员");
                     user.setCreatedAt(LocalDateTime.now());
                     user.setUpdatedAt(LocalDateTime.now());
-                    if (generated) {
+                    if (localMode) {
+                        // 单机免登模式：不打口令类提示（登录已不存在）
+                        log.info("已创建默认用户 admin（单机模式，作为本机用户的数据宿主）");
+                    } else if (generated) {
                         log.warn("已创建默认用户 admin，随机初始口令为：{}", password);
                         log.warn("该口令仅在本次启动日志中出现一次，请立即登录修改，并清理日志。");
                     } else {

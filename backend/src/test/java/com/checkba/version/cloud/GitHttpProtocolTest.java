@@ -31,7 +31,10 @@ import static org.junit.jupiter.api.Assertions.*;
  * 对内嵌 smart HTTP 端点做真实 JGit 客户端克隆/推送。
  * 必须 desktop profile：默认 profile 连本机 Postgres，CI 必挂（v1 已知地雷）。
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// security.local-mode=false：保持本测试写作时的登录会话语义，并避免 local-mode 的
+// LocalIdentityService 静态注册泄漏到同 JVM 后续测试（desktop profile 现默认开启 local-mode）。
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {"security.local-mode=false"})
 @ActiveProfiles("desktop")
 class GitHttpProtocolTest {
 

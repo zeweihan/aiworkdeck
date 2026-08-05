@@ -541,62 +541,6 @@
             </view>
           </view>
         </scroll-view>
-
-        <!-- 用户管理 -->
-        <scroll-view
-          v-else
-          scroll-y
-          class="config-scroll"
-        >
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">用户管理</text>
-              <text class="section-subtitle">
-                当前系统中的注册用户（暂为只读列表）
-              </text>
-            </view>
-            <view class="section-body">
-              <view v-if="usersLoading" class="loading">
-                <text class="loading-text">加载中...</text>
-              </view>
-              <view v-else-if="users.length === 0" class="empty">
-                <text class="empty-text">暂无用户</text>
-              </view>
-              <view v-else class="user-list">
-                <view
-                  v-for="u in users"
-                  :key="u.id"
-                  class="user-row"
-                >
-                  <view class="user-main">
-                    <view class="avatar-mini">
-                      <text class="avatar-char">
-                        {{ (u.displayName || u.username || 'U').charAt(0) }}
-                      </text>
-                    </view>
-                    <view class="user-meta">
-                      <text class="user-name">
-                        {{ u.displayName || u.username }}
-                        <text
-                          v-if="u.username === 'admin'"
-                          class="admin-tag"
-                        >
-                          管理员
-                        </text>
-                      </text>
-                      <text class="user-sub">
-                        @{{ u.username }} · ID: {{ u.id }}
-                      </text>
-                    </view>
-                  </view>
-                  <view class="user-extra">
-                    <text class="user-email">{{ u.email || '—' }}</text>
-                  </view>
-                </view>
-              </view>
-            </view>
-          </view>
-        </scroll-view>
       </view>
     </view>
     
@@ -638,7 +582,7 @@
 
 <script>
 import {
-  getAdminConfig, saveAdminConfig, getAdminUsers, resetWizard,
+  getAdminConfig, saveAdminConfig, resetWizard,
   cloudConnect, listCloudConnections, disconnectCloudConnection,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
@@ -656,7 +600,6 @@ export default {
         { key: 'components', label: '组件管理', desktopOnly: true },
         { key: 'cloud', label: '云端协作', desktopOnly: true },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
-        { key: 'users', label: '用户管理' },
       ],
       components: [],
       form: {
@@ -700,8 +643,6 @@ export default {
       },
       isEditing: false, // true if editing existing, false if adding new
       saving: false,
-      usersLoading: false,
-      users: [],
       cloudConnections: [],
       cloudForm: { serverUrl: '', username: '', password: '' },
       cloudBusy: false,
@@ -725,7 +666,6 @@ export default {
       this.userDisplayName = user.displayName || user.username || '用户'
     }
     this.loadConfig()
-    this.loadUsers()
     if (this.isDesktop) {
       this.loadComponents()
       // 订阅主进程模型下载进度；onUnload 退订
@@ -947,17 +887,6 @@ export default {
         console.error('加载后台配置失败', e)
         // 403（非 admin 账号）时把后端原因带给用户：请用 admin 账号登录后配置
         uni.showToast({ title: (e && e.message) || '加载配置失败', icon: 'none' })
-      }
-    },
-    async loadUsers() {
-      this.usersLoading = true
-      try {
-        const list = await getAdminUsers()
-        this.users = Array.isArray(list) ? list : []
-      } catch (e) {
-        console.error('加载用户列表失败', e)
-      } finally {
-        this.usersLoading = false
       }
     },
     async handleSave() {
@@ -1612,78 +1541,6 @@ $border-color: #E9ECEF; // Gray-Light
   &[loading] {
       opacity: 0.8;
   }
-}
-
-.user-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.user-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 0;
-  border-bottom: 1px solid $border-color;
-  &:last-child {
-      border-bottom: none;
-  }
-}
-
-.user-main {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.avatar-mini {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: $border-color;
-  color: $text-secondary;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.avatar-char {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.user-meta {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.user-name {
-  font-size: 14px;
-  font-weight: 600;
-  color: $text-main;
-}
-
-.user-sub {
-  font-size: 12px;
-  color: $text-secondary;
-}
-
-.admin-tag {
-  display: inline-block;
-  margin-left: 8px;
-  font-size: 11px;
-  padding: 1px 8px;
-  border-radius: 4px;
-  background: $brand-mint-light;
-  color: $brand-primary;
-  font-weight: 500;
-  vertical-align: middle;
-}
-
-.user-extra {
-  font-size: 13px;
-  color: $text-secondary;
 }
 
 .loading,

@@ -31,7 +31,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * 环境同 DesktopContextSmokeTest：内存 H2（MODE=PostgreSQL），零外部依赖。
  */
 @SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:idor-e2e;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE;DB_CLOSE_DELAY=-1"
+        "spring.datasource.url=jdbc:h2:mem:idor-e2e;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE;DB_CLOSE_DELAY=-1",
+        // 本测试验证的是多用户会话下的越权边界（server 模式语义），desktop profile 只是
+        // 借用其零外部依赖的启动环境。desktop profile 自带的 security.local-mode=true 会把
+        // 所有请求解析为同一个本机用户，「跨用户」前提不复存在，故显式关闭；
+        // local-mode 自身的行为由 LocalIdentityServiceTest / DesktopContextSmokeTest 覆盖。
+        "security.local-mode=false"
 })
 @AutoConfigureMockMvc
 @ActiveProfiles("desktop")
