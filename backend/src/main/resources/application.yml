@@ -92,6 +92,10 @@ mcp:
 
 # AI 大模型配置（供应商可切换）
 ai:
+  # 官网账户服务地址（解锁门在线校验、账户连接、平台 AI 通道密钥）。
+  # 必须是 https：这条通道上跑的是明文 awdk_ 账户 Key，配成 http 会被启动期直接拒绝。
+  account:
+    base-url: https://www.aiworkdeck.com
   model:
     # 当前启用的提供商：ollama（本地）或 gemini（Google 云端）
     provider: open-router

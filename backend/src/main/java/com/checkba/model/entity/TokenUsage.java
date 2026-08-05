@@ -45,6 +45,17 @@ public class TokenUsage {
     @Column(precision = 19, scale = 6)
     private BigDecimal cost;
 
+    /**
+     * cost 的口径（Spec §3「本地统计 vs 平台结算」两套数字必须分开标注）：
+     * <ul>
+     *   <li>{@code estimate}：BYOK 通道，按 {@code AllowedModels} 的单价表本地估算，不是真实账单；</li>
+     *   <li>{@code platform}：平台通道，来自 OpenRouter 账户实际扣费，是真花的钱。</li>
+     * </ul>
+     * platform 行在对账完成前 cost 为 null——平台的钱不允许用估算值顶替。
+     */
+    @Column(length = 16)
+    private String costSource;
+
     @Column(nullable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
     
@@ -116,6 +127,14 @@ public class TokenUsage {
 
     public void setCost(BigDecimal cost) {
         this.cost = cost;
+    }
+
+    public String getCostSource() {
+        return costSource;
+    }
+
+    public void setCostSource(String costSource) {
+        this.costSource = costSource;
     }
 
     public LocalDateTime getCreatedAt() {

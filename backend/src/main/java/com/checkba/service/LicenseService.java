@@ -42,7 +42,8 @@ public class LicenseService {
     private final boolean localMode;
     private final String accountBaseUrl;
     private final Path licenseFile;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    // 解析失败的异常 message 不许带原文——license.json 里存着明文 awdk_ 账户 Key
+    private final ObjectMapper objectMapper = com.checkba.service.account.AccountService.stateMapper();
 
     private volatile PublicKey trialPublicKey;
 
@@ -51,25 +52,9 @@ public class LicenseService {
             @Value("${ai.account.base-url:https://www.aiworkdeck.com}") String accountBaseUrl,
             @Value("${security.license.dir:${user.home}/.aiworkdeck}") String licenseDir) {
         this.localMode = localMode;
-        this.accountBaseUrl = requireHttps(accountBaseUrl.endsWith("/")
-                ? accountBaseUrl.substring(0, accountBaseUrl.length() - 1)
-                : accountBaseUrl);
+        // 授权服务器地址的协议校验与 AccountService 共用一份实现（https，回环 http 例外）
+        this.accountBaseUrl = com.checkba.service.account.AccountEndpoint.requireSecure(accountBaseUrl);
         this.licenseFile = Path.of(licenseDir, "license.json");
-    }
-
-    /**
-     * 授权服务器地址必须是 https：这条通道上跑的是明文 awdk_ 账户 Key，
-     * 配成 http 等于把 Key 交给同网段的任何人。默认值本就是 https，
-     * 只有显式覆盖成 http 才会走到这里，属明确的错误配置，直接拒绝启动。
-     */
-    private static String requireHttps(String baseUrl) {
-        if (baseUrl != null && baseUrl.toLowerCase(java.util.Locale.ROOT).startsWith("https://")) {
-            return baseUrl;
-        }
-        String message = "ai.account.base-url 必须是 https 地址（当前：" + baseUrl
-                + "）。账户 Key 是明文凭据，不允许走未加密通道。";
-        log.error(message);
-        throw new IllegalArgumentException(message);
     }
 
     /** 持久化结构：~/.aiworkdeck/license.json */
@@ -79,6 +64,11 @@ public class LicenseService {
         public String code;
         public String activatedAt;
         public String lastVerifiedAt;
+    }
+
+    /** 是否单机模式。解锁门只在单机模式下存在，调用方据此决定要不要做解锁的后续动作。 */
+    public boolean isLocalMode() {
+        return localMode;
     }
 
     /** account 模式启动时机会性复验（后台线程，不阻塞启动，失败静默）。 */

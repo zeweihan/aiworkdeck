@@ -31,6 +31,8 @@ class ChatModelFactoryTest {
     private AiModelProperties properties;
     private SystemSettingService systemSettingService;
     private ChatModelFactory factory;
+    private PlatformAiChannel platformAiChannel;
+    private PlatformUsageAccountant usageAccountant;
 
     @BeforeEach
     void setUp() {
@@ -40,7 +42,9 @@ class ChatModelFactoryTest {
         // 默认：DB 无该配置时返回调用方给的默认值
         when(systemSettingService.get(anyString(), any()))
                 .thenAnswer(inv -> inv.getArgument(1));
-        factory = new ChatModelFactory(properties, systemSettingService);
+        platformAiChannel = mock(PlatformAiChannel.class);
+        usageAccountant = mock(PlatformUsageAccountant.class);
+        factory = new ChatModelFactory(properties, systemSettingService, platformAiChannel, usageAccountant);
     }
 
     private void setDbProvider(String provider) {
@@ -142,5 +146,77 @@ class ChatModelFactoryTest {
         for (String id : required) {
             assertTrue(AllowedModels.isAllowed(id), "白名单缺失: " + id);
         }
+    }
+
+    // ==================== 平台通道「AI Workdeck 云端」（PR-B） ====================
+
+    @Test
+    @DisplayName("AWD_CLOUD：即便是白名单模型也走平台密钥，不能落到 BYOK 的 OpenRouter key")
+    void platformChannelTakesPrecedenceOverAllowlistShortcut() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.isAvailable()).thenReturn(true);
+        when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
+        when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
+
+        assertInstanceOf(OpenAiChatModel.class, factory.getChatModel("openai/gpt-5.2"));
+        assertInstanceOf(OpenAiStreamingChatModel.class, factory.getStreamingChatModel("openai/gpt-5.2"));
+        // 白名单短路分支绝不能先命中——那条路用的是 BYOK 的 key
+        verify(platformAiChannel, atLeastOnce()).apiKey();
+        verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
+    }
+
+    @Test
+    @DisplayName("AWD_CLOUD 但未连接账户：明确报错，不静默回退 BYOK 花用户自己的 key")
+    void platformChannelWithoutAccountFailsLoudly() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.isAvailable()).thenReturn(false);
+
+        var e = assertThrows(com.checkba.service.account.AccountException.class,
+                () -> factory.getChatModel("deepseek/deepseek-v4-flash"));
+        assertEquals(com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, e.getKind());
+        assertTrue(e.getMessage().contains("连接账户"), e.getMessage());
+        verify(platformAiChannel, never()).apiKey();
+    }
+
+    @Test
+    @DisplayName("平台通道用之前先建用量基线：否则重启后第一条消息永远显示「待结算」")
+    void platformChannelEstablishesUsageBaselineBeforeCall() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.isAvailable()).thenReturn(true);
+        when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
+        when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
+
+        factory.getStreamingChatModel("openai/gpt-5.2");
+        verify(usageAccountant, atLeastOnce()).ensureBaselineAsync();
+    }
+
+    @Test
+    @DisplayName("断开账户：activeProvider 从平台通道切到还配着 key 的 OpenRouter")
+    void demoteFallsBackToConfiguredOpenRouter() {
+        setDbProvider("AWD_CLOUD");
+        when(systemSettingService.get(eq("external.openrouter.apiKey"), any())).thenReturn("sk-or-db-key");
+
+        assertEquals("OPENROUTER", factory.demotePlatformProvider());
+        verify(systemSettingService).set("ai.activeProvider", "OPENROUTER");
+    }
+
+    @Test
+    @DisplayName("断开账户且没有任何云端 key：落到本地 Ollama（而不是留在打不通的平台通道）")
+    void demoteFallsBackToOllamaWhenNothingConfigured() {
+        properties.getOpenRouter().setApiKey("");
+        properties.getGemini().setApiKey("");
+        setDbProvider("AWD_CLOUD");
+
+        assertEquals("OLLAMA", factory.demotePlatformProvider());
+        verify(systemSettingService).set("ai.activeProvider", "OLLAMA");
+    }
+
+    @Test
+    @DisplayName("当前供应商不是平台通道：断开账户不动用户的选择")
+    void demoteLeavesOtherProvidersAlone() {
+        setDbProvider("OPENROUTER");
+
+        assertNull(factory.demotePlatformProvider());
+        verify(systemSettingService, never()).set(eq("ai.activeProvider"), anyString());
     }
 }

@@ -74,9 +74,18 @@
       </view>
 
       <view class="header-right">
-        <!-- 试用版标识（mode=trial 时显示，低调 chip，点击弹说明） -->
+        <!-- 授权标识（低调 chip）：已连接账户优先于试用版——
+             试用码解锁后再连账户的用户，此时该看到的是账户状态 -->
         <view
-          v-if="licenseMode === 'trial'"
+          v-if="accountConnected"
+          class="trial-chip account-chip"
+          @tap.stop="goToAccountPanel"
+          title="账户与用量"
+        >
+          <text class="trial-chip-text">已连接账户</text>
+        </view>
+        <view
+          v-else-if="licenseMode === 'trial'"
           class="trial-chip"
           @tap.stop="showTrialInfo = true"
           title="试用版说明"
@@ -1410,7 +1419,8 @@ import {
   getFileLocalPath,
   getMyProjects, // 最近项目切换器
   bindShareholderMeetingConversation, // 股东大会核查：会话绑定
-  getLicenseStatus // 试用版标识（商业化解锁门）
+  getLicenseStatus, // 试用版标识（商业化解锁门）
+  getAccountStatus // 账户连接标识（商业化 PR-B）
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { getCurrentUser } from '@/utils/auth.js'
@@ -1496,6 +1506,8 @@ export default {
       // 授权状态（试用版标识，商业化解锁门）
       licenseMode: '',
       showTrialInfo: false,
+      // 账户连接状态（商业化 PR-B）：已连接时 chip 改显「已连接账户」
+      accountConnected: false,
 
       // 布局状态
       sidebarWidth: 260, // 侧边栏宽度
@@ -2129,6 +2141,9 @@ export default {
     // 重新成为活跃实例后确保有预热备胎（mounted 时可能因非活跃被跳过）
     this.scheduleLibreSpare()
 
+    // 从设置页返回时刷新授权/账户 chip（用户可能刚连接或断开账户）
+    this.loadLicenseMode()
+
     // Sync UI state
     this.isRecording = activityTracker.getRecordingState()
 
@@ -2494,7 +2509,8 @@ export default {
     'leftFiles.length'() { this.pruneClosedLibreSpares() },
   },
   methods: {
-    // 试用版标识：桌面端查授权模式（mode=trial 显示 chip；account/查询失败不显示）
+    // 授权标识：桌面端查授权模式与账户连接状态
+    // （已连接账户 → 「已连接账户」chip；否则 mode=trial → 「试用版」chip）
     async loadLicenseMode() {
       if (typeof window === 'undefined' || !window.checkbaDesktop) return
       try {
@@ -2503,6 +2519,17 @@ export default {
       } catch (e) {
         // 服务器模式/旧后端没有该端点：静默忽略
       }
+      try {
+        const account = await getAccountStatus()
+        this.accountConnected = !!(account && account.connected)
+      } catch (e) {
+        // 同上：查不到就按未连接处理，不影响试用版 chip
+        this.accountConnected = false
+      }
+    },
+    // chip 点击直达设置页「账户与用量」面板
+    goToAccountPanel() {
+      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
     },
     openUpgradeSite() {
       this.showTrialInfo = false

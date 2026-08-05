@@ -24,6 +24,8 @@ public class ChatModelFactory {
 
     private final AiModelProperties aiModelProperties;
     private final com.checkba.service.SystemSettingService systemSettingService;
+    private final PlatformAiChannel platformAiChannel;
+    private final PlatformUsageAccountant usageAccountant;
 
     // 缓存: key = provider + ":" + modelName
     private final Map<String, ChatLanguageModel> modelCache = new ConcurrentHashMap<>();
@@ -32,7 +34,7 @@ public class ChatModelFactory {
      * 解析当前生效的供应商：优先读管理后台/向导写入 system_setting 的 ai.activeProvider，
      * 未配置或值非法时回退 application.yml 的静态配置。
      */
-    private AiModelProperties.Provider resolveProvider() {
+    public AiModelProperties.Provider resolveProvider() {
         String configured = systemSettingService.get("ai.activeProvider", null);
         if (configured != null && !configured.isBlank()) {
             try {
@@ -76,6 +78,12 @@ public class ChatModelFactory {
 
         if (targetModel == null || targetModel.isEmpty()) {
             targetModel = "default";
+        }
+
+        // 平台通道必须先于白名单短路判定：白名单模型走的是 BYOK 的 OpenRouter key，
+        // 而平台通道用的是官网 provision 的 key，两者不能混
+        if (provider == AiModelProperties.Provider.AWD_CLOUD) {
+            return getOrCreatePlatformModel(resolvePlatformModel(targetModel));
         }
 
         // Logic to switch provider based on modelId pattern if Provider is set to OPENROUTER or dynamic
@@ -136,6 +144,105 @@ public class ChatModelFactory {
         });
     }
 
+    // ==================== 平台通道「AI Workdeck 云端」 ====================
+
+    /** 平台通道仍是 OpenRouter 后端，模型口径与 BYOK 一致：非白名单一律回落默认模型。 */
+    private String resolvePlatformModel(String targetModel) {
+        if (AllowedModels.isAllowed(targetModel)) return targetModel;
+        String defaultModel = aiModelProperties.getOpenRouter().getDefaultModel();
+        if (!"default".equals(targetModel)) {
+            log.warn("Model '{}' is not in the allowed list, platform channel falls back to: {}",
+                    targetModel, defaultModel);
+        }
+        return defaultModel;
+    }
+
+    /**
+     * 平台通道密钥由官网 provision，取不到时**不能**静默回退 BYOK：
+     * 那会把用户自己的 key 花掉，也会掩盖「未分配额度」这类需要用户去官网处理的状态。
+     * 这里原样抛出 AccountException（中文文案，如「请先在官网账户页分配 AI 额度」）。
+     */
+    private String platformApiKey() {
+        if (!platformAiChannel.isAvailable()) {
+            throw new com.checkba.service.account.AccountException(
+                    com.checkba.service.account.AccountException.Kind.NOT_CONNECTED,
+                    "「AI Workdeck 云端」需要连接账户，请到设置页粘贴账户 Key");
+        }
+        String key = platformAiChannel.apiKey();
+        // 请求发出前先把用量基线建起来，否则重启后第一条消息只够建基线、cost 永远留空
+        usageAccountant.ensureBaselineAsync();
+        return key;
+    }
+
+    /**
+     * 断开账户后把 activeProvider 从平台通道摘下来，返回切换到的供应商（本来就不是平台通道时返回 null）。
+     *
+     * 不做这一步的话：platformAiChannel 不可用 → 每条消息都在 {@link #platformApiKey()} 抛
+     * NOT_CONNECTED，而设置页仍把「AI Workdeck 云端」渲染成正常选中（不可选标记刻意豁免当前选项），
+     * 用户看不出问题出在哪。落点按「哪个还能用」挑，避免一律摔回本地 Ollama（多数人没装）。
+     */
+    public String demotePlatformProvider() {
+        String active = systemSettingService.get("ai.activeProvider", null);
+        if (active == null
+                || !AiModelProperties.Provider.AWD_CLOUD.name().equalsIgnoreCase(active.trim())) {
+            return null;
+        }
+        String next;
+        if (hasSetting("external.openrouter.apiKey", aiModelProperties.getOpenRouter().getApiKey())) {
+            next = AiModelProperties.Provider.OPENROUTER.name();
+        } else if (hasSetting("external.google.apiKey", aiModelProperties.getGemini().getApiKey())) {
+            next = AiModelProperties.Provider.GEMINI.name();
+        } else {
+            next = AiModelProperties.Provider.OLLAMA.name();
+        }
+        systemSettingService.set("ai.activeProvider", next);
+        clearCache();
+        log.info("账户已断开，AI 供应商由平台通道切换为 {}", next);
+        return next;
+    }
+
+    private boolean hasSetting(String key, String staticFallback) {
+        String value = getSetting(key, staticFallback);
+        return value != null && !value.isBlank();
+    }
+
+    /** 缓存 key 带密钥指纹：官网撤销重发后指纹变化，旧实例自然作废。 */
+    private ChatLanguageModel getOrCreatePlatformModel(String modelId) {
+        String apiKey = platformApiKey();
+        String cacheKey = "awd_cloud:" + platformAiChannel.keyFingerprint() + ":" + modelId;
+        return modelCache.computeIfAbsent(cacheKey, k -> {
+            log.info("Creating new AWD Cloud ChatModel instance for: {}", modelId);
+            AiModelProperties.OpenRouter config = aiModelProperties.getOpenRouter();
+            return OpenAiChatModel.builder()
+                    .apiKey(apiKey)
+                    // 平台通道的 baseUrl 只认 yml 配置，不读 DB：DB 那份是用户 BYOK 的自定义地址，
+                    // 把 provision 出来的 key 发到用户指定的地址等于把平台凭据交出去
+                    .baseUrl(config.getBaseUrl())
+                    .modelName(modelId)
+                    .timeout(config.getTimeout())
+                    .logRequests(true)
+                    .logResponses(true)
+                    .build();
+        });
+    }
+
+    private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreatePlatformStreamingModel(String modelId) {
+        String apiKey = platformApiKey();
+        String cacheKey = "awd_cloud_stream:" + platformAiChannel.keyFingerprint() + ":" + modelId;
+        return streamingModelCache.computeIfAbsent(cacheKey, k -> {
+            log.info("Creating new AWD Cloud StreamingChatModel for: {}", modelId);
+            AiModelProperties.OpenRouter config = aiModelProperties.getOpenRouter();
+            return dev.langchain4j.model.openai.OpenAiStreamingChatModel.builder()
+                    .apiKey(apiKey)
+                    .baseUrl(config.getBaseUrl())
+                    .modelName(modelId)
+                    .timeout(config.getTimeout())
+                    .logRequests(true)
+                    .logResponses(true)
+                    .build();
+        });
+    }
+
     private ChatLanguageModel getOrCreateOllamaModel(String modelName) {
         String cacheKey = "ollama:" + modelName;
         return modelCache.computeIfAbsent(cacheKey, k -> {
@@ -172,13 +279,16 @@ public class ChatModelFactory {
 
     public dev.langchain4j.model.chat.StreamingChatLanguageModel getStreamingChatModel(String modelId) {
         String targetModel = (modelId == null || modelId.isEmpty()) ? "default" : modelId;
+        AiModelProperties.Provider provider = resolveProvider();
+
+        // 同 getChatModel：平台通道先于白名单短路
+        if (provider == AiModelProperties.Provider.AWD_CLOUD) {
+            return getOrCreatePlatformStreamingModel(resolvePlatformModel(targetModel));
+        }
 
         if (AllowedModels.isAllowed(targetModel)) {
             return getOrCreateOpenRouterStreamingModel(targetModel);
         }
-
-        // Fallback or Local
-        AiModelProperties.Provider provider = resolveProvider();
 
         // 同 getChatModel：OPENROUTER 供应商下不回退本地 Ollama
         if (provider == AiModelProperties.Provider.OPENROUTER) {

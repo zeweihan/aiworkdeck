@@ -135,6 +135,10 @@ public class AiChatService {
 
             return new AiChatResponse(response, conversationId);
 
+        } catch (com.checkba.service.account.AccountException e) {
+            // 账户/额度类失败是用户可自行处理的状态，中文文案原样透出（同 AgentOrchestrator）
+            log.info("平台通道不可用 [{}]: {}", e.getKind(), e.getMessage());
+            return new AiChatResponse(e.getMessage(), request.getConversationId());
         } catch (Exception e) {
             log.error("Error during AI chat", e);
             return new AiChatResponse("Sorry, I encountered an error: " + e.getMessage(), request.getConversationId());

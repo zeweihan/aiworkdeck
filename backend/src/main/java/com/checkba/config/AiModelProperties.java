@@ -20,11 +20,14 @@ public class AiModelProperties {
      * - OLLAMA：本地 Ollama 服务
      * - GEMINI：Google Gemini 云端模型
      * - OPENROUTER: OpenRouter (OpenAI 兼容)
+     * - AWD_CLOUD：平台通道「AI Workdeck 云端」——密钥由官网按账户 provision，
+     *   仍走 OpenRouter，但用户不必自备 key（Spec §3）。未连接账户时不可选。
      */
     public enum Provider {
         OLLAMA,
         GEMINI,
-        OPENROUTER
+        OPENROUTER,
+        AWD_CLOUD
     }
 
     /**

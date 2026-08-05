@@ -292,6 +292,20 @@ $bg-white: #FFFFFF;
     font-weight: 500;
     color: #8a6d2f;
   }
+
+  // 已连接账户：同一形状换绿系，与「试用版」的暖色区分开
+  &.account-chip {
+    background: $color-accent-pale;
+    border-color: #c4ead8;
+
+    &:hover {
+      border-color: $color-accent;
+    }
+
+    .trial-chip-text {
+      color: $color-primary;
+    }
+  }
 }
 
 .project-meta {

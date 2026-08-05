@@ -382,6 +382,14 @@ public class AgentOrchestrator {
             }
             runLoop(model, messages, conversationId, projectId, userId, request.getModel(), 0, executionLog, agentMode, guard);
 
+        } catch (com.checkba.service.account.AccountException e) {
+            // 账户/额度类失败不是「内部错误」，而是用户可自行处理的状态
+            // （如「请先在官网账户页分配 AI 额度」）。原样透出中文文案，不加英文前缀，
+            // 也不打 ERROR 级日志——这条路径在未分配额度时每发一条消息都会走到
+            log.info("平台通道不可用 [{}]，会话 {}: {}", e.getKind(), conversationId, e.getMessage());
+            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
+            sseEmitterService.send(conversationId, "error", e.getMessage());
+            sseEmitterService.close(conversationId);
         } catch (Exception e) {
             log.error("Agent Loop Error for conversation: " + conversationId, e);
             agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
