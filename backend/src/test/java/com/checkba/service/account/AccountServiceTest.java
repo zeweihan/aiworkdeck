@@ -199,7 +199,27 @@ class AccountServiceTest {
         transport.enqueue(409, "{\"error\":\"no_allocation\"}");
         AccountException e = assertThrows(AccountException.class, service::fetchAiKey);
         assertEquals(AccountException.Kind.CONFLICT, e.getKind());
-        assertEquals("请先在官网账户页分配 AI 额度", e.getMessage());
+        assertEquals("尚未分配 AI 额度，请到官网账户页从余额分配", e.getMessage());
+    }
+
+    @Test
+    @DisplayName("账户类文案不许命中前端的「未登录」判据，否则会误清会话/跳登录页")
+    void accountMessagesDoNotLookLikeAuthErrors() {
+        // frontend/src/services/api.js 用这三个子串判定未登录（清 session，浏览器端还会 reLaunch 登录页）。
+        // 账户未连接、未分配额度都与登录无关，文案撞上就会把用户踢出去。
+        String[] loginMarkers = {"登录", "未授权", "请先"};
+
+        AccountService notConnected = service();
+        String notConnectedMsg = assertThrows(AccountException.class, notConnected::fetchProfile).getMessage();
+
+        AccountService service = connected();
+        transport.enqueue(409, "{\"error\":\"no_allocation\"}");
+        String noAllocationMsg = assertThrows(AccountException.class, service::fetchAiKey).getMessage();
+
+        for (String marker : loginMarkers) {
+            assertFalse(notConnectedMsg.contains(marker), notConnectedMsg + " 含 " + marker);
+            assertFalse(noAllocationMsg.contains(marker), noAllocationMsg + " 含 " + marker);
+        }
     }
 
     @Test

@@ -49,15 +49,19 @@ export function refreshEntitlements(force = false) {
   }
   const p = (async () => {
     try {
-      const res = await getEntitlements()
+      // force 时让后端先同步一次官网：用户刚连接账户、或刚在官网买完回来，
+      // 只重读后端本地缓存是拿不到新权益的
+      const res = await getEntitlements(force)
       features.value = normalize(res && res.features)
+      // loaded 只在成功时置位。失败也置位会把「后端还没起来」那一次的空结果
+      // 变成整个进程生命周期的「没有任何付费功能」，只有显式 refresh(true) 能救
+      loaded.value = true
     } catch (e) {
       // 未连接账户、旧后端没有该端点、离线：一律视为无附加权益。
       // 这里不弹提示——权益缺失的引导由 UnlockHint 在具体功能处给，
       // 在这里报错会变成打开任意页面都弹窗。
       features.value = []
     } finally {
-      loaded.value = true
       if (inflight === p) inflight = null
     }
     return features.value

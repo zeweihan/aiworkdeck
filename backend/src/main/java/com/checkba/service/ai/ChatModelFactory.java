@@ -25,6 +25,7 @@ public class ChatModelFactory {
     private final AiModelProperties aiModelProperties;
     private final com.checkba.service.SystemSettingService systemSettingService;
     private final PlatformAiChannel platformAiChannel;
+    private final PlatformUsageAccountant usageAccountant;
 
     // 缓存: key = provider + ":" + modelName
     private final Map<String, ChatLanguageModel> modelCache = new ConcurrentHashMap<>();
@@ -165,9 +166,44 @@ public class ChatModelFactory {
         if (!platformAiChannel.isAvailable()) {
             throw new com.checkba.service.account.AccountException(
                     com.checkba.service.account.AccountException.Kind.NOT_CONNECTED,
-                    "「AI Workdeck 云端」需要先连接账户，请到设置页粘贴账户 Key");
+                    "「AI Workdeck 云端」需要连接账户，请到设置页粘贴账户 Key");
         }
-        return platformAiChannel.apiKey();
+        String key = platformAiChannel.apiKey();
+        // 请求发出前先把用量基线建起来，否则重启后第一条消息只够建基线、cost 永远留空
+        usageAccountant.ensureBaselineAsync();
+        return key;
+    }
+
+    /**
+     * 断开账户后把 activeProvider 从平台通道摘下来，返回切换到的供应商（本来就不是平台通道时返回 null）。
+     *
+     * 不做这一步的话：platformAiChannel 不可用 → 每条消息都在 {@link #platformApiKey()} 抛
+     * NOT_CONNECTED，而设置页仍把「AI Workdeck 云端」渲染成正常选中（不可选标记刻意豁免当前选项），
+     * 用户看不出问题出在哪。落点按「哪个还能用」挑，避免一律摔回本地 Ollama（多数人没装）。
+     */
+    public String demotePlatformProvider() {
+        String active = systemSettingService.get("ai.activeProvider", null);
+        if (active == null
+                || !AiModelProperties.Provider.AWD_CLOUD.name().equalsIgnoreCase(active.trim())) {
+            return null;
+        }
+        String next;
+        if (hasSetting("external.openrouter.apiKey", aiModelProperties.getOpenRouter().getApiKey())) {
+            next = AiModelProperties.Provider.OPENROUTER.name();
+        } else if (hasSetting("external.google.apiKey", aiModelProperties.getGemini().getApiKey())) {
+            next = AiModelProperties.Provider.GEMINI.name();
+        } else {
+            next = AiModelProperties.Provider.OLLAMA.name();
+        }
+        systemSettingService.set("ai.activeProvider", next);
+        clearCache();
+        log.info("账户已断开，AI 供应商由平台通道切换为 {}", next);
+        return next;
+    }
+
+    private boolean hasSetting(String key, String staticFallback) {
+        String value = getSetting(key, staticFallback);
+        return value != null && !value.isBlank();
     }
 
     /** 缓存 key 带密钥指纹：官网撤销重发后指纹变化，旧实例自然作废。 */

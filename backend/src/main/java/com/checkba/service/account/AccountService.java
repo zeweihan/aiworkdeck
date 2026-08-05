@@ -36,7 +36,7 @@ public class AccountService {
     private final String baseUrl;
     private final Path accountFile;
     private final AccountTransport transport;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = stateMapper();
 
     public AccountService(
             @Value("${ai.account.base-url:https://www.aiworkdeck.com}") String baseUrl,
@@ -176,7 +176,7 @@ public class AccountService {
             String code = str(parse(reply.body()).get("error"));
             if ("no_allocation".equals(code)) {
                 throw new AccountException(AccountException.Kind.CONFLICT,
-                        "请先在官网账户页分配 AI 额度");
+                        "尚未分配 AI 额度，请到官网账户页从余额分配");
             }
             throw new AccountException(AccountException.Kind.CONFLICT,
                     "官网 AI 额度状态异常（" + (code == null ? "未知" : code) + "），请到官网账户页查看");
@@ -195,12 +195,17 @@ public class AccountService {
 
     // ==================== 内部 ====================
 
-    /** 已连接才有 Key，否则请求根本不该发出去。 */
+    /**
+     * 已连接才有 Key，否则请求根本不该发出去。
+     *
+     * 文案里刻意不写「请先」：前端 api.js 用「登录」「未授权」「请先」三个子串判定未登录，
+     * 命中会清会话（浏览器端还会跳登录页）。账户未连接与未登录是两回事。
+     */
     private String requireKey() {
         State state = loadState();
         if (state.key == null || state.key.isBlank()) {
             throw new AccountException(AccountException.Kind.NOT_CONNECTED,
-                    "尚未连接 AI Workdeck 账户，请先在设置页粘贴账户 Key");
+                    "尚未连接 AI Workdeck 账户，可在设置页「账户与用量」粘贴账户 Key");
         }
         return state.key;
     }
@@ -285,6 +290,21 @@ public class AccountService {
             throw new AccountException(AccountException.Kind.MALFORMED,
                     "账户连接状态写入失败，请检查磁盘权限");
         }
+    }
+
+    /**
+     * 凭据类 JSON 的共用 mapper。
+     *
+     * Jackson 默认开着 {@code INCLUDE_SOURCE_IN_LOCATION}：解析失败时异常 message 里会带上
+     * 原文片段（{@code at [Source: (byte[])"{\"key\":\"awdk_...\""}）。account.json /
+     * license.json / platform-ai-key.json 里存的都是明文密钥，而这些解析失败点普遍
+     * {@code log.warn(..., e.getMessage())}——一次半截写入（崩溃/磁盘满）就足以把 0600 的密钥
+     * 复制进 0644 的日志文件。关掉源文引用后 Jackson 打印 REDACTED，定位信息（行列、原因）不受影响。
+     */
+    public static ObjectMapper stateMapper() {
+        return com.fasterxml.jackson.databind.json.JsonMapper.builder()
+                .disable(com.fasterxml.jackson.core.StreamReadFeature.INCLUDE_SOURCE_IN_LOCATION)
+                .build();
     }
 
     /**

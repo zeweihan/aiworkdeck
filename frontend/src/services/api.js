@@ -770,9 +770,11 @@ export function getAccountUsage() {
 //            accountConnected, syncedAt, stale }
 // features 只含已拥有项——「出现在 features 里 = 已拥有」，catalog 才是带 enabled 的全集。
 // 由 useEntitlement composable 统一消费，业务代码不要直接调这个。
-export function getEntitlements() {
+// refresh=true 让后端先同步一次官网再出快照（连接账户后 / 官网购买后回来时用），
+// 默认走后端本地缓存，避免每个页面打开都打一次官网。
+export function getEntitlements(refresh = false) {
   return request({
-    url: '/api/entitlements',
+    url: refresh ? '/api/entitlements?refresh=true' : '/api/entitlements',
     method: 'GET',
   }).then(unwrapEnvelope);
 }

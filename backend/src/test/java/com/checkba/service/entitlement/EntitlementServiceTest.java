@@ -46,10 +46,18 @@ class EntitlementServiceTest {
         return new EntitlementService(licenseService, accountService, tempDir.toString());
     }
 
+    /** 账户型权益只在账户仍连接时生效，所以写缓存的用例都得先把连接立起来。 */
     private void writeCache(Instant syncedAt, String... features) throws Exception {
+        when(accountService.isConnected()).thenReturn(true);
         String list = String.join(",", java.util.Arrays.stream(features).map(f -> "\"" + f + "\"").toList());
         Files.writeString(tempDir.resolve("entitlements.json"),
                 "{\"syncedAt\":\"" + syncedAt + "\",\"features\":[" + list + "]}", StandardCharsets.UTF_8);
+    }
+
+    /** 缓存陈旧时快照会顺手起一次后台刷新；单测里让它确定性失败，免得干扰断言。 */
+    private void networkDown() {
+        when(accountService.fetchEntitlements())
+                .thenThrow(new AccountException(AccountException.Kind.NETWORK, "无法连接 AI Workdeck 服务器"));
     }
 
     // ==================== 合并 ====================
@@ -101,6 +109,7 @@ class EntitlementServiceTest {
     @DisplayName("29 天未同步：账户型权益仍在宽限内")
     void withinGraceStillOwned() throws Exception {
         writeCache(Instant.now().minus(Duration.ofDays(29)), FeatureCatalog.STAGE_UNLIMITED);
+        networkDown();
         EntitlementService svc = service();
         assertTrue(svc.isEnabled(FeatureCatalog.STAGE_UNLIMITED));
         assertEquals(false, svc.snapshot().get("stale"));
@@ -112,6 +121,7 @@ class EntitlementServiceTest {
         when(licenseService.status()).thenReturn(Map.of("unlocked", true, "mode", "trial"));
         writeCache(Instant.now().minus(Duration.ofDays(31)),
                 FeatureCatalog.STAGE_UNLIMITED, FeatureCatalog.CLIPBOARD_UNLIMITED);
+        networkDown();
 
         EntitlementService svc = service();
         assertFalse(svc.isEnabled(FeatureCatalog.STAGE_UNLIMITED));
@@ -123,6 +133,8 @@ class EntitlementServiceTest {
     @Test
     @DisplayName("缓存文件损坏：按无账户权益处理，不抛异常")
     void corruptCacheTreatedAsEmpty() throws Exception {
+        when(accountService.isConnected()).thenReturn(true);
+        networkDown();
         Files.writeString(tempDir.resolve("entitlements.json"), "{not json", StandardCharsets.UTF_8);
         assertFalse(service().isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED));
     }
@@ -147,13 +159,65 @@ class EntitlementServiceTest {
     @DisplayName("刷新失败（断网）：吞掉异常并保留既有缓存，走宽限")
     void refreshFailureKeepsCache() throws Exception {
         writeCache(Instant.now().minus(Duration.ofDays(2)), FeatureCatalog.STAGE_UNLIMITED);
-        when(accountService.isConnected()).thenReturn(true);
-        when(accountService.fetchEntitlements())
-                .thenThrow(new AccountException(AccountException.Kind.NETWORK, "无法连接 AI Workdeck 服务器"));
+        networkDown();
 
         EntitlementService svc = service();
         assertFalse(svc.refreshQuietly());
         assertTrue(svc.isEnabled(FeatureCatalog.STAGE_UNLIMITED), "断网不该把已购权益吃掉");
+    }
+
+    @Test
+    @DisplayName("官网明确拒绝（Key 已吊销）：立刻清缓存，不吃 30 天宽限")
+    void unauthorizedClearsCacheImmediately() throws Exception {
+        writeCache(Instant.now(), FeatureCatalog.CLIPBOARD_UNLIMITED, "skill:due-diligence");
+        when(accountService.fetchEntitlements()).thenThrow(
+                new AccountException(AccountException.Kind.UNAUTHORIZED, "账户 Key 无效或已被撤销"));
+
+        EntitlementService svc = service();
+        assertTrue(svc.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED), "前提：吊销前是有的");
+        assertFalse(svc.refreshQuietly());
+        assertFalse(svc.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED),
+                "吊销 Key 后付费功能不能再撑 30 天");
+        assertFalse(svc.isEnabled("skill:due-diligence"));
+    }
+
+    @Test
+    @DisplayName("未连接账户：即便本地有一份 entitlements.json 也不生效")
+    void cacheIgnoredWhenAccountNotConnected() throws Exception {
+        writeCache(Instant.now(), FeatureCatalog.CLIPBOARD_UNLIMITED, FeatureCatalog.STAGE_UNLIMITED);
+        when(accountService.isConnected()).thenReturn(false);
+
+        EntitlementService svc = service();
+        assertFalse(svc.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED));
+        assertFalse(svc.isEnabled(FeatureCatalog.STAGE_UNLIMITED));
+    }
+
+    @Test
+    @DisplayName("缓存陈旧：快照顺手起一次后台刷新（长期不重启的实例也能拿到新购权益）")
+    void staleSnapshotTriggersRefresh() throws Exception {
+        writeCache(Instant.now().minus(Duration.ofHours(2)), FeatureCatalog.STAGE_UNLIMITED);
+        when(accountService.fetchEntitlements()).thenReturn(List.of(
+                Map.of("feature", FeatureCatalog.STAGE_UNLIMITED),
+                Map.of("feature", FeatureCatalog.CLIPBOARD_UNLIMITED)));
+
+        EntitlementService svc = service();
+        svc.snapshot();
+        // 刷新是后台线程，给它一点时间落盘
+        for (int i = 0; i < 50 && !svc.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED); i++) {
+            Thread.sleep(20);
+        }
+        assertTrue(svc.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED),
+                "陈旧缓存应触发同步，官网上刚买的功能不该等到重启才生效");
+    }
+
+    @Test
+    @DisplayName("缓存新鲜：快照不发请求（避免设置页每次打开都打一次官网）")
+    void freshSnapshotDoesNotRefresh() throws Exception {
+        writeCache(Instant.now(), FeatureCatalog.STAGE_UNLIMITED);
+
+        service().snapshot();
+        Thread.sleep(50);
+        verify(accountService, never()).fetchEntitlements();
     }
 
     @Test

@@ -6,6 +6,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -62,13 +64,30 @@ public class TokenUsageService {
 
             tokenUsageRepository.save(entity);
             if (platformChannel) {
-                platformUsageAccountant.reconcileAsync(entity.getId());
+                scheduleReconcile(entity.getId());
             }
             log.debug("Recorded usage for model {}: {} tokens, source={}",
                     modelId, totalTokens, entity.getCostSource());
         } catch (Exception e) {
             log.error("Failed to record token usage", e);
         }
+    }
+
+    /**
+     * 对账必须等事务提交后再入队：id 在 flush 时就有了，但对账 worker 是另一条连接，
+     * 提交前 findById 查不到这条记录会静默 no-op，该条的 cost 永久留空。
+     */
+    private void scheduleReconcile(Long tokenUsageId) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            platformUsageAccountant.reconcileAsync(tokenUsageId);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                platformUsageAccountant.reconcileAsync(tokenUsageId);
+            }
+        });
     }
 
     /** 当前是否走平台通道。供应商解析失败按 BYOK 处理——记账问题不该拖垮对话。 */

@@ -33,7 +33,8 @@ public class PlatformAiChannel {
 
     private final AccountService accountService;
     private final Path keyFile;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    // 解析失败的异常 message 不许带原文——这个文件里是 provision 出来的 OpenRouter 明文密钥
+    private final ObjectMapper objectMapper = AccountService.stateMapper();
 
     private volatile Cached memory;
 

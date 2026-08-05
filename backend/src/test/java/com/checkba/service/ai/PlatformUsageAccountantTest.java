@@ -118,4 +118,35 @@ class PlatformUsageAccountantTest {
         assertDoesNotThrow(() -> accountant.reconcile(7L));
         verify(repository, never()).save(any());
     }
+
+    @Test
+    @DisplayName("换账户必须重置基线：否则两把 key 的累计差会整个记到下一条消息头上")
+    void resetBaselineDropsPreviousKeysCumulative() {
+        // 账户 A 的累计是 0.02，账户 B 的累计是 5.00
+        accountant.setBaselineForTest(new BigDecimal("0.02"));
+        accountant.resetBaseline();
+
+        usage(5.00);
+        accountant.reconcile(7L);
+        // 重置后第一次只重新建基线，不会把 4.98 写成这条消息的花费
+        verify(repository, never()).save(any());
+        assertNull(row.getCost());
+
+        usage(5.01);
+        accountant.reconcile(7L);
+        assertEquals(0, new BigDecimal("0.01").compareTo(row.getCost()), "cost=" + row.getCost());
+    }
+
+    @Test
+    @DisplayName("请求前建基线：随后第一条消息就能算出差分，不再永久「待结算」")
+    void ensureBaselineMakesFirstMessageBillable() throws Exception {
+        usage(2.00); // ensureBaseline 采到的
+        accountant.ensureBaselineAsync();
+        // 单线程 worker：等基线任务跑完
+        for (int i = 0; i < 100 && !replies.isEmpty(); i++) Thread.sleep(10);
+
+        usage(2.05); // 这条消息之后的累计
+        accountant.reconcile(7L);
+        assertEquals(0, new BigDecimal("0.05").compareTo(row.getCost()), "cost=" + row.getCost());
+    }
 }

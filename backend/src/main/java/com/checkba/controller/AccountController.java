@@ -4,6 +4,7 @@ import com.checkba.model.entity.TokenUsage;
 import com.checkba.repository.TokenUsageRepository;
 import com.checkba.service.account.AccountException;
 import com.checkba.service.account.AccountService;
+import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.PlatformAiChannel;
 import com.checkba.service.ai.PlatformUsageAccountant;
 import com.checkba.service.entitlement.EntitlementService;
@@ -34,8 +35,14 @@ import java.util.Map;
  *   <li>GET  /api/account/usage      平台结算（官网）+ 本地统计（TokenUsage）两套口径</li>
  * </ul>
  *
- * local-mode 免登：这些端点不要求登录，但 POST 一律落在 PR-A 的
- * {@code LocalModeAccessFilter} 之内（跨站 Origin 硬拦截 + 回环校验 + 反代痕迹拒绝），
+ * 鉴权与全站同一条：先过 {@link AuthController#getUserIdFromSession}。local-mode 下它把
+ * 任何请求解析为本机用户（等于免登），server 模式（团队案件库）下无有效会话即拒绝——
+ * 后者不可省：{@code LocalModeAccessFilter} 在 local-mode=false 时整体短路，
+ * 而 {@code deploy/web/nginx.conf.example} 把 /api/ 整段反代出去，漏检等于把
+ * 账户状态与「断开连接」暴露给匿名请求。
+ *
+ * local-mode 下 POST 另外还落在 PR-A 的 {@code LocalModeAccessFilter} 之内
+ * （跨站 Origin 硬拦截 + 回环校验 + 反代痕迹拒绝），
  * 因此「任意网页悄悄把用户账户断开/换绑」这条路是关死的。
  *
  * 返回沿用全站信封 {@code {code:0,data:...}} / {@code {code:1,message:"中文"}}（HTTP 恒 200），
@@ -49,20 +56,38 @@ public class AccountController {
     private final AccountService accountService;
     private final EntitlementService entitlementService;
     private final PlatformAiChannel platformAiChannel;
+    private final PlatformUsageAccountant platformUsageAccountant;
+    private final ChatModelFactory chatModelFactory;
     private final TokenUsageRepository tokenUsageRepository;
 
     public AccountController(AccountService accountService,
                              EntitlementService entitlementService,
                              PlatformAiChannel platformAiChannel,
+                             PlatformUsageAccountant platformUsageAccountant,
+                             ChatModelFactory chatModelFactory,
                              TokenUsageRepository tokenUsageRepository) {
         this.accountService = accountService;
         this.entitlementService = entitlementService;
         this.platformAiChannel = platformAiChannel;
+        this.platformUsageAccountant = platformUsageAccountant;
+        this.chatModelFactory = chatModelFactory;
         this.tokenUsageRepository = tokenUsageRepository;
     }
 
+    /**
+     * 身份闸：local-mode 恒解析为本机用户（免登），server 模式无有效会话即拒绝。
+     * 「未登录」文案与全站一致，前端 api.js 据此清会话。
+     */
+    private static void requireUser(String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            throw new IllegalArgumentException("未登录");
+        }
+    }
+
     @GetMapping("/status")
-    public Map<String, Object> status() {
+    public Map<String, Object> status(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
         Map<String, Object> data = new LinkedHashMap<>(accountService.status());
         // 平台 AI 通道是否可选（未连接账户时前端不展示该供应商）
         data.put("platformAiAvailable", platformAiChannel.isAvailable());
@@ -70,22 +95,36 @@ public class AccountController {
     }
 
     @PostMapping("/connect")
-    public Map<String, Object> connect(@RequestBody(required = false) Map<String, String> body) {
+    public Map<String, Object> connect(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
         String key = body == null ? null : body.get("key");
         Map<String, Object> status = accountService.connect(key);
-        // 换账户后旧账户的权益与平台密钥必须立刻作废，不能等下一次刷新
+        // 换账户后旧账户的权益、平台密钥与用量基线必须立刻作废，不能等下一次刷新
         entitlementService.clearAccountCache();
         platformAiChannel.clearCache();
+        platformUsageAccountant.resetBaseline();
         entitlementService.refreshAsync();
         return ok(status);
     }
 
     @PostMapping("/disconnect")
-    public Map<String, Object> disconnect() {
+    public Map<String, Object> disconnect(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
         Map<String, Object> status = accountService.disconnect();
         entitlementService.clearAccountCache();
         platformAiChannel.clearCache();
-        return ok(status);
+        platformUsageAccountant.resetBaseline();
+        Map<String, Object> data = new LinkedHashMap<>(status);
+        String fallback = chatModelFactory.demotePlatformProvider();
+        if (fallback != null) {
+            // 前端据此更新设置页的供应商单选并提示用户，避免「界面显示平台通道正常选中、
+            // 实际每条消息都报未连接账户」
+            data.put("aiProviderFallback", fallback);
+        }
+        return ok(data);
     }
 
     /**
@@ -98,6 +137,7 @@ public class AccountController {
     @GetMapping("/usage")
     public Map<String, Object> usage(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
         Long userId = AuthController.getUserIdFromSession(sessionId);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("local", localUsage(userId));

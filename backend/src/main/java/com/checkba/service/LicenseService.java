@@ -42,7 +42,8 @@ public class LicenseService {
     private final boolean localMode;
     private final String accountBaseUrl;
     private final Path licenseFile;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    // 解析失败的异常 message 不许带原文——license.json 里存着明文 awdk_ 账户 Key
+    private final ObjectMapper objectMapper = com.checkba.service.account.AccountService.stateMapper();
 
     private volatile PublicKey trialPublicKey;
 
@@ -63,6 +64,11 @@ public class LicenseService {
         public String code;
         public String activatedAt;
         public String lastVerifiedAt;
+    }
+
+    /** 是否单机模式。解锁门只在单机模式下存在，调用方据此决定要不要做解锁的后续动作。 */
+    public boolean isLocalMode() {
+        return localMode;
     }
 
     /** account 模式启动时机会性复验（后台线程，不阻塞启动，失败静默）。 */

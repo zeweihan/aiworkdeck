@@ -79,10 +79,38 @@ public class PlatformUsageAccountant {
     /** 排队对账某条 token_usage 记录。立即返回，不阻塞调用方。 */
     public void reconcileAsync(Long tokenUsageId) {
         if (tokenUsageId == null) return;
+        submit(() -> reconcile(tokenUsageId), "对账 id=" + tokenUsageId);
+    }
+
+    /**
+     * 在平台通道**发起请求之前**建立基线。
+     *
+     * baseline 是内存字段，进程重启即丢；没有这一步，重启后第一条消息只够建基线，
+     * cost 永远留空、界面上永久显示「待结算」。这里排在同一个单线程 worker 上，
+     * 所以一定先于那条消息随后入队的对账任务跑完。已有基线时是内存判断，不发请求。
+     */
+    public void ensureBaselineAsync() {
+        if (baseline != null) return;
+        submit(() -> {
+            if (baseline != null) return;
+            BigDecimal observed = probeCumulativeUsage();
+            if (observed != null) baseline = observed;
+        }, "建立用量基线");
+    }
+
+    /**
+     * 换账户/断开连接：旧 key 的累计消费与新 key 毫无关系，
+     * 留着会把两把 key 的累计值之差整个记到下一条消息头上。
+     */
+    public void resetBaseline() {
+        baseline = null;
+    }
+
+    private void submit(Runnable task, String what) {
         try {
-            worker.submit(() -> reconcile(tokenUsageId));
+            worker.submit(task);
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            log.debug("平台用量对账已停止，跳过 id={}", tokenUsageId);
+            log.debug("平台用量对账已停止，跳过{}", what);
         }
     }
 

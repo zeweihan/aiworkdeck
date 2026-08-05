@@ -322,7 +322,7 @@
                   >
                     <view class="radio-dot"></view>
                     <text class="radio-label">{{ opt.label }}</text>
-                    <text v-if="opt.unavailable" class="radio-hint">需先连接账户</text>
+                    <text v-if="opt.hint" class="radio-hint">{{ opt.hint }}</text>
                   </view>
                 </view>
               </view>
@@ -796,8 +796,10 @@ export default {
     cloudServerUrlIsHttp() {
       return /^http:\/\//i.test((this.cloudForm.serverUrl || '').trim())
     },
-    // 供应商单选项。「AI Workdeck 云端」是平台计费通道，未连接账户时展示但不可选——
-    // 隐藏它会让用户根本发现不了这个选项，直接可选又会在发消息时才报「未连接账户」
+    // 供应商单选项。「AI Workdeck 云端」是平台计费通道，条件不满足时展示但不可选——
+    // 隐藏它会让用户根本发现不了这个选项，直接可选又会在发消息时才报错。
+    // 两个前置条件都要单独判：连接账户 → 在官网从余额分配 AI 额度。
+    // 缺后者时官网 /api/account/ai-key 返回 409 no_allocation，只在发消息那一刻才炸。
     aiProviderOptions() {
       const options = [
         { value: 'OLLAMA', label: '本地 Ollama' },
@@ -805,11 +807,14 @@ export default {
         { value: 'OPENROUTER', label: 'OpenRouter' },
       ]
       if (this.isDesktop) {
+        let hint = ''
+        if (!this.platformAiAvailable) hint = '需先连接账户'
+        else if (this.accountNeedsAllocation) hint = '需先在官网分配额度'
         options.push({
           value: 'AWD_CLOUD',
           label: 'AI Workdeck 云端',
-          // 已经选中的供应商不标不可选，否则用户会看到一个自相矛盾的界面
-          unavailable: !this.platformAiAvailable && this.form.ai.activeProvider !== 'AWD_CLOUD',
+          hint,
+          unavailable: !!hint,
         })
       }
       return options
@@ -993,11 +998,17 @@ export default {
       } catch (e) {
         this.platformAiAvailable = false
       }
+      // 「已连接但没分配额度」也会让平台通道打不通，判据在用量接口里（accountNeedsAllocation）。
+      // 设置页不是热路径，多这一次请求换来单选项如实标注，好过发消息时才报错。
+      if (this.platformAiAvailable) {
+        await this.loadAccountUsage()
+      }
     },
     // 供应商单选：不可选项给出下一步，而不是静默不响应
     onPickProvider(opt) {
+      if (opt.value === this.form.ai.activeProvider) return
       if (opt.unavailable) {
-        uni.showToast({ title: '请先在「账户与用量」连接账户', icon: 'none' })
+        uni.showToast({ title: opt.hint || '当前不可用', icon: 'none' })
         return
       }
       this.form.ai.activeProvider = opt.value
@@ -1065,10 +1076,23 @@ export default {
       }))
       if (!ok) return
       try {
-        await disconnectAccount()
+        const res = await disconnectAccount()
         await this.loadAccount()
         await refreshEntitlements(true)
-        uni.showToast({ title: '已断开连接', icon: 'none' })
+        // 后端会把 activeProvider 从平台通道摘下来（否则每条消息都报未连接账户，
+        // 而设置页仍显示平台通道正常选中）。这里同步表单并如实告知切到了哪一个。
+        const fallback = res && res.aiProviderFallback
+        if (fallback) {
+          this.form.ai.activeProvider = fallback
+          const label = (this.aiProviderOptions.find((o) => o.value === fallback) || {}).label || fallback
+          uni.showModal({
+            title: '已断开连接',
+            content: 'AI 供应商原本是「AI Workdeck 云端」，断开后已切换为「' + label + '」。可在「AI 服务配置」重新选择。',
+            showCancel: false,
+          })
+        } else {
+          uni.showToast({ title: '已断开连接', icon: 'none' })
+        }
       } catch (e) {
         uni.showToast({ title: (e && e.message) || '操作失败', icon: 'none' })
       }
@@ -1594,7 +1618,8 @@ $border-color: #E9ECEF; // Gray-Light
   background: $brand-mint-light;
 }
 
-// 未连接账户时的「AI Workdeck 云端」：可见但压低，点击给引导而不是静默失败
+// 前置条件未满足（未连接账户 / 未分配额度）的「AI Workdeck 云端」：
+// 可见但压低，点击给出下一步而不是静默失败
 .radio-item.unavailable {
   opacity: 0.55;
 }
