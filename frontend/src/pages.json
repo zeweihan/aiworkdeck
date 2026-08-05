@@ -15,6 +15,13 @@
 			}
 		},
 		{
+			"path": "pages/identity/identity",
+			"style": {
+				"navigationBarTitleText": "选择本机工作区",
+				"navigationStyle": "custom"
+			}
+		},
+		{
 			"path": "pages/login/login",
 			"style": {
 				"navigationBarTitleText": "登录",

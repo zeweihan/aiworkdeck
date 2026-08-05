@@ -38,6 +38,11 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
     List<ProjectFile> findByProjectIdOrderBySortOrderAsc(Long projectId);
 
     /**
+     * 某用户名下未删除的文件数（本机身份候选的「数据量」信号之一，见 LocalIdentityService）
+     */
+    long countByUserIdAndIsDeletedFalse(Long userId);
+
+    /**
      * 根据父文件夹 ID 查询子文件数量（排除已删除）
      */
     long countByParentIdAndIsDeletedFalse(Long parentId);

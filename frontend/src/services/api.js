@@ -715,6 +715,42 @@ export function deactivateLicense() {
   });
 }
 
+// ===================== 本机工作区（免登身份）相关 API =====================
+//
+// 单机免登下所有请求都解析为「本机用户」。老安装的库里往往不止一个账号
+// （admin 是系统播的空壳，真实数据在用户自己注册的账号名下），后端不再靠猜，
+// 多个账号都有数据时返回 needsSelection，由 launch 页分流到选择页。
+// 与解锁门同批，返回裸 JSON。
+
+// { localMode, needsSelection, userId, username, displayName }
+export function getLocalIdentityStatus() {
+  return request({
+    url: '/api/local-identity/status',
+    method: 'GET',
+  });
+}
+
+// { localMode, needsSelection, currentUserId, candidates: [{ userId, username, displayName, projectCount, fileCount }] }
+// 候选按数据量降序；待选定时 currentUserId 为 null（临时落点不算「已选中」）。
+export function getLocalIdentityCandidates() {
+  return request({
+    url: '/api/local-identity/candidates',
+    method: 'GET',
+  });
+}
+
+// 选定本机工作区。成功 200 { userId }；非法 userId 走 400 { message }（request 层转 reject）
+export function selectLocalIdentity(userId) {
+  return request({
+    url: '/api/local-identity/select',
+    method: 'POST',
+    data: { userId },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // ===================== 账户与用量（商业化 PR-B）相关 API =====================
 //
 // 桌面后端把官网账户接口收敛成本机端点，前端一律只跟本机后端说话
