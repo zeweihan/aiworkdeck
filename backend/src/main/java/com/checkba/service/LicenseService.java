@@ -51,10 +51,25 @@ public class LicenseService {
             @Value("${ai.account.base-url:https://www.aiworkdeck.com}") String accountBaseUrl,
             @Value("${security.license.dir:${user.home}/.aiworkdeck}") String licenseDir) {
         this.localMode = localMode;
-        this.accountBaseUrl = accountBaseUrl.endsWith("/")
+        this.accountBaseUrl = requireHttps(accountBaseUrl.endsWith("/")
                 ? accountBaseUrl.substring(0, accountBaseUrl.length() - 1)
-                : accountBaseUrl;
+                : accountBaseUrl);
         this.licenseFile = Path.of(licenseDir, "license.json");
+    }
+
+    /**
+     * 授权服务器地址必须是 https：这条通道上跑的是明文 awdk_ 账户 Key，
+     * 配成 http 等于把 Key 交给同网段的任何人。默认值本就是 https，
+     * 只有显式覆盖成 http 才会走到这里，属明确的错误配置，直接拒绝启动。
+     */
+    private static String requireHttps(String baseUrl) {
+        if (baseUrl != null && baseUrl.toLowerCase(java.util.Locale.ROOT).startsWith("https://")) {
+            return baseUrl;
+        }
+        String message = "ai.account.base-url 必须是 https 地址（当前：" + baseUrl
+                + "）。账户 Key 是明文凭据，不允许走未加密通道。";
+        log.error(message);
+        throw new IllegalArgumentException(message);
     }
 
     /** 持久化结构：~/.aiworkdeck/license.json */
@@ -265,8 +280,24 @@ public class LicenseService {
             Files.createDirectories(licenseFile.getParent());
             Files.write(licenseFile, objectMapper.writerWithDefaultPrettyPrinter()
                     .writeValueAsBytes(state));
+            restrictPermissions(licenseFile);
         } catch (Exception e) {
             throw new IllegalStateException("授权状态写入失败: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * license.json 里存着明文 awdk_ 账户 Key，默认 umask 下会落成 0644
+     * （同机其他用户可读）。收敛为 0600。Windows 无 POSIX 视图，静默跳过。
+     */
+    private static void restrictPermissions(Path file) {
+        try {
+            Files.setPosixFilePermissions(file,
+                    java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+        } catch (UnsupportedOperationException e) {
+            // Windows：文件默认继承用户目录 ACL，无需处理
+        } catch (Exception e) {
+            log.warn("license.json 权限收敛失败（文件仍可用）: {}", e.getMessage());
         }
     }
 

@@ -30,7 +30,7 @@ class LicenseServiceTest {
 
     /** base-url 指向本机必拒端口，account Key 在线校验在测试里恒为「无法连接」。 */
     private LicenseService service(boolean localMode) {
-        return new LicenseService(localMode, "http://127.0.0.1:1", tempDir.toString());
+        return new LicenseService(localMode, "https://127.0.0.1:1", tempDir.toString());
     }
 
     @Test
@@ -123,6 +123,28 @@ class LicenseServiceTest {
         Map<String, Object> status = service(true).status();
         assertEquals(false, status.get("unlocked"));
         assertEquals("none", status.get("mode"));
+    }
+
+    // ==================== 2026-08-05 安全审查 F5 ====================
+
+    @Test
+    void licenseFileIsOwnerOnly() throws Exception {
+        LicenseService svc = service(true);
+        svc.activate(VALID_TRIAL_CODE);
+        Path file = tempDir.resolve("license.json");
+        var view = Files.getFileAttributeView(file, java.nio.file.attribute.PosixFileAttributeView.class);
+        org.junit.jupiter.api.Assumptions.assumeTrue(view != null, "非 POSIX 文件系统跳过");
+        // license.json 存明文 awdk_ 账户 Key，默认 umask 下是 0644
+        assertEquals("rw-------",
+                java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(file)));
+    }
+
+    @Test
+    void httpAccountBaseUrlIsRejected() {
+        // 明文 awdk_ Key 不允许走未加密通道；默认值本就是 https，配成 http 属明确错误配置
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> new LicenseService(true, "http://www.aiworkdeck.com", tempDir.toString()));
+        assertTrue(e.getMessage().contains("https"), e.getMessage());
     }
 
     private void writeState(String mode, Instant lastVerifiedAt) throws Exception {
