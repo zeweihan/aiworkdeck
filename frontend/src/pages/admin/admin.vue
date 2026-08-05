@@ -701,7 +701,8 @@
           </view>
         </scroll-view>
 
-        <!-- 云端协作（仅桌面端：连接团队服务器、管理连接） -->
+        <!-- 团队案件库（仅桌面端：连接案件库、管理已连的库）。项目里的协作抽屉是同一批动作的
+             主入口，这里保留给「一台机器连多个库」与浏览器端的管理场景。 -->
         <scroll-view
           v-else-if="activeNav === 'cloud'"
           scroll-y
@@ -709,9 +710,10 @@
         >
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">云端协作</text>
+              <text class="section-title">团队案件库</text>
               <text class="section-subtitle">
-                连接团队服务器后，项目可以共享给同事、多人同步修改
+                团队案件库是律所自己的一台服务器。连上之后，案卷可以放进去，所里同事各自取一份到本机办，
+                各自改各自的，交稿时再合到一起
               </text>
             </view>
             <view class="section-body">
@@ -725,20 +727,20 @@
                     <text class="provider-name">{{ conn.serverUrl }}</text>
                     <text class="cloud-conn-user">{{ conn.displayName || conn.username }}</text>
                   </view>
-                  <button class="comp-btn danger" @tap="onDisconnectCloud(conn)">断开连接</button>
+                  <button class="comp-btn danger" @tap="onDisconnectCloud(conn)">退出这个案件库</button>
                 </view>
               </view>
 
               <view class="provider-card">
                 <view class="provider-header">
-                  <text class="provider-name">连接新的团队服务器</text>
+                  <text class="provider-name">连接团队案件库</text>
                 </view>
                 <view class="form-row">
-                  <text class="form-label">服务器地址</text>
+                  <text class="form-label">案件库地址</text>
                   <input
                     v-model="cloudForm.serverUrl"
                     class="form-input"
-                    placeholder="https://team.example.com"
+                    placeholder="例如 https://team.example.com"
                   />
                 </view>
                 <text v-if="cloudServerUrlIsHttp" class="cloud-http-warn">
@@ -749,7 +751,7 @@
                   <input
                     v-model="cloudForm.username"
                     class="form-input"
-                    placeholder="登录账号"
+                    placeholder="你在案件库里的账号"
                   />
                 </view>
                 <view class="form-row">
@@ -757,13 +759,13 @@
                   <input
                     v-model="cloudForm.password"
                     class="form-input"
-                    placeholder="登录密码"
+                    placeholder="密码"
                     password
                   />
                 </view>
                 <view class="cloud-connect-actions">
                   <button class="btn-primary" :disabled="cloudBusy" @tap="onConnectCloud">
-                    {{ cloudBusy ? '连接中...' : '连接' }}
+                    {{ cloudBusy ? '连接中…' : '连接' }}
                   </button>
                 </view>
               </view>
@@ -838,7 +840,7 @@ export default {
         { key: 'ai', label: 'AI 功能设置' },
         { key: 'account', label: '账户与用量', desktopOnly: true },
         { key: 'components', label: '组件管理', desktopOnly: true },
-        { key: 'cloud', label: '云端协作', desktopOnly: true },
+        { key: 'cloud', label: '团队案件库', desktopOnly: true },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
       ],
       components: [],
@@ -1435,7 +1437,7 @@ export default {
         )
         this.cloudForm = { serverUrl: '', username: '', password: '' }
         await this.loadCloudConnections()
-        uni.showToast({ title: '已连接', icon: 'none' })
+        uni.showToast({ title: '已连上团队案件库', icon: 'none' })
       } catch (e) {
         uni.showToast({ title: e.message || '连接失败', icon: 'none' })
       } finally {
@@ -1444,8 +1446,8 @@ export default {
     },
     async onDisconnectCloud(conn) {
       const ok = await new Promise((r) => uni.showModal({
-        title: '断开云端连接',
-        content: '断开后本机不再与该服务器同步，已关联项目要重新连接后才能继续上传。',
+        title: '退出这个案件库',
+        content: '退出后本机不再和这个案件库同步；已经放进去的案卷要重新连上才能继续交稿。案件库里的内容不受影响。',
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -2267,7 +2269,7 @@ $border-color: #E9ECEF; // Gray-Light
   color: #d03050;
 }
 
-/* 云端协作 */
+/* 团队案件库 */
 .cloud-conn-header {
   display: flex;
   align-items: center;

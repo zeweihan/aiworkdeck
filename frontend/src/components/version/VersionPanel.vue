@@ -29,8 +29,9 @@
       <CloudSyncBar
         :cloud="cloud"
         :has-connection="hasConnection"
-        @shared="refresh"
-        @reload-files="onReload"
+        :conflict-pending="!!(sessionEndConflict || cloudConflict || adoptConflict)"
+        :working="working"
+        @open-collab="$emit('open-collab', $event)"
       />
       <view v-if="fileFilter" class="version-file-filter">
         <text class="version-file-filter-text">只看《{{ fileFilter.name }}》的历史</text>
@@ -111,11 +112,14 @@ export default {
   props: {
     projectId: { type: [String, Number], required: true },
     fileFilter: { type: Object, default: null },
+    // 页面上的协作抽屉做完动作（交稿/取回/放进案件库/连案件库）后自增一次，
+    // 本面板据此重拉状态——否则侧栏这行状态会停在动作之前的样子。
+    collabRefreshToken: { type: Number, default: 0 },
   },
   // adopt-conflict：把「有没有采纳等待处理」同步给页面。本面板一关（切去资源管理器
   // 等），三选一弹窗随组件卸载消失，而后端仍停在待裁决状态、版本捕获整体关闭——
   // 页面据此在面板之外挂一条固定提示条（project-overview.vue 的 .adopt-pending-bar）。
-  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict'],
+  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -137,10 +141,15 @@ export default {
       busy: false,
     }
   },
+  watch: {
+    collabRefreshToken() {
+      this.refresh()
+    },
+  },
   mounted() {
     this.refresh()
-    // 静默探活一次云端连通性（会真的 fetch 远端，不同于 refresh() 里 getCloudStatus
-    // 读的本地缓存状态）；失败不打断——三态里的「云端暂时连不上」已经覆盖了这种情况。
+    // 静默探活一次案件库连通性（会真的 fetch 远端，不同于 refresh() 里 getCloudStatus
+    // 读的本地快照）；失败不打断——状态行里的「暂时连不上案件库」已经覆盖了这种情况。
     checkCloud(this.projectId).then((res) => {
       this.cloud = (res && res.data) || null
     }).catch(() => {})

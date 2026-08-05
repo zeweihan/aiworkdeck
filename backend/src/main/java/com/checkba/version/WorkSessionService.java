@@ -681,7 +681,7 @@ public class WorkSessionService {
                     .filter(x -> x.getStatus() == WorkSession.Status.ACTIVE)
                     .orElseThrow(() -> VersionException.userFacing("这段工作不存在或已收尾"));
             if (!repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("现在没有等着做选择的收尾");
+                throw VersionException.userFacing("现在没有等你做选择的文件");
             }
             String sessionTip = repoService.mergeHeadRef(projectId);
             if (sessionTip == null || !sessionTip.equals(
@@ -697,7 +697,7 @@ public class WorkSessionService {
             Map<String, Resolution> choices = resolutions == null ? Map.of() : resolutions;
             for (String path : conflicts) {
                 if (choices.get(path) == null) {
-                    throw VersionException.userFacing("还有文件没有做出选择");
+                    throw VersionException.userFacing("还有文件没选留哪一份");
                 }
             }
             for (String path : conflicts) {
@@ -1080,7 +1080,7 @@ public class WorkSessionService {
         try {
             WorkSession draft = requireActiveDraft(projectId, draftId);
             if (!repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("现在没有等着做选择的采纳");
+                throw VersionException.userFacing("现在没有等你做选择的文件");
             }
             String draftTip = repoService.mergeHeadRef(projectId);
             if (draftTip == null
@@ -1105,7 +1105,7 @@ public class WorkSessionService {
             Map<String, Resolution> choices = resolutions == null ? Map.of() : resolutions;
             for (String path : conflicts) {
                 if (choices.get(path) == null) {
-                    throw VersionException.userFacing("还有文件没有做出选择");
+                    throw VersionException.userFacing("还有文件没选留哪一份");
                 }
             }
 

@@ -60,7 +60,7 @@
         <view class="content-header">
            <text class="header-title">{{ getActiveTabLabel() }}</text>
            <view v-if="activeTab === 'projects' && projects.length > 0" class="header-actions">
-             <button class="btn-secondary-small" @tap="openCloudAccept">从云端接一个项目</button>
+             <button class="btn-secondary-small" @tap="openCloudAccept">从团队案件库取一份案卷</button>
              <button class="btn-primary-small" @tap="goToNewProject">+ 新建项目</button>
            </view>
         </view>
@@ -100,7 +100,7 @@
                  </view>
               </view>
               <view class="cloud-accept-entry" @tap="openCloudAccept">
-                <text class="cloud-accept-entry-text">从云端接一个项目</text>
+                <text class="cloud-accept-entry-text">从团队案件库取一份案卷</text>
               </view>
             </view>
 
@@ -342,7 +342,7 @@
         @close="closeInviteModal"
     />
 
-    <!-- 从云端接一个项目 -->
+    <!-- 从团队案件库取一份案卷 -->
     <CloudAcceptDialog
         v-model:visible="showCloudAccept"
         @accepted="onCloudAccepted"

@@ -51,6 +51,19 @@
               <view class="work-status-dot"></view>
               <text class="work-status-text">{{ versionWorkStatusLabel }}</text>
             </view>
+            <!-- 协作状态 chip：只在这份案卷真的放进过团队案件库时才渲染。
+                 没连案件库的律师（绝大多数）在界面上看不到任何协作元素——
+                 「以自己工作为主」的产品定位要求协作 UI 零打扰。 -->
+            <view
+              v-if="collabLinked"
+              class="collab-chip"
+              :class="'collab-chip-' + collabTone"
+              @tap.stop="openCollab('casefile')"
+              title="协作"
+            >
+              <view class="collab-chip-dot"></view>
+              <text class="collab-chip-text">{{ collabStateText }}</text>
+            </view>
           </view>
           <view class="project-meta">
             <text class="meta-item">负责人：{{ project.manager || userDisplayName || '我' }}</text>
@@ -313,7 +326,7 @@
 
                       <!-- Add Member Trigger (Appended to the list visually) -->
                       <view class="add-member-row" style="padding: 0 12px 12px;">
-                          <view class="add-member-btn" @tap.stop="showInviteModal = true" title="添加成员">
+                          <view class="add-member-btn" @tap.stop="showInviteModal = true" title="加人">
                               <text class="add-icon">＋</text>
                           </view>
                       </view>
@@ -345,6 +358,21 @@
         v-model:visible="showInviteModal"
         :project-id="projectId"
         @success="loadProjectMembers"
+      />
+
+      <!-- 协作抽屉：顶栏 chip 与版本面板状态行共用的唯一动作入口 -->
+      <CollabDialog
+        v-model:visible="collabDialogVisible"
+        :project-id="projectId"
+        :project-name="project.name || ''"
+        :cloud="collabCloud"
+        :conflict-pending="adoptConflictPending"
+        :working="!!versionWorkStatus.working"
+        :initial-tab="collabInitialTab"
+        :inviter-name="userDisplayName || (currentUser && currentUser.displayName) || ''"
+        @changed="onCollabChanged"
+        @reload-files="onVersionReloadFiles"
+        @conflict="onCollabConflict"
       />
 
       <!-- 文档比较选择对话框 -->
@@ -559,10 +587,12 @@
             v-else-if="leftPaneKey === 'version'"
             :project-id="projectId"
             :file-filter="versionFileFilter"
+            :collab-refresh-token="collabRefreshToken"
             @compare-file="onVersionCompareFile"
             @clear-file-filter="versionFileFilter = null"
             @reload-files="onVersionReloadFiles"
             @adopt-conflict="adoptConflictPending = $event"
+            @open-collab="openCollab"
           />
           <MarketSidebarPanel
             v-else-if="leftPaneKey === 'market'"
@@ -1296,7 +1326,7 @@
         v-if="adoptConflictPending && leftPaneKey !== 'version'"
         class="adopt-pending-bar"
       >
-        <text class="adopt-pending-text">有文件等着你做选择</text>
+        <text class="adopt-pending-text">有文件等你做选择</text>
         <text class="adopt-pending-go" @tap="goHandleAdoptConflict">去处理</text>
       </view>
 
@@ -1346,6 +1376,10 @@
         <view class="status-dot amber"></view>
         <text>{{ versionWorkStatusLabel }}</text>
       </view>
+      <view v-if="collabLinked" class="status-item status-clickable" @tap="openCollab('casefile')">
+        <view class="status-dot" :class="collabTone"></view>
+        <text>{{ collabStateText }}</text>
+      </view>
       <view class="status-spacer"></view>
       <view v-if="activeFileLeft" class="status-item status-file">
         <text>{{ activeFileLeft.name }}</text>
@@ -1382,6 +1416,8 @@ import ClipboardPanel from '@/components/ClipboardPanel.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import VersionPanel from '@/components/version/VersionPanel.vue'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
+import CollabDialog from '@/components/collab/CollabDialog.vue'
+import { MEMBER_GROUP_LABELS } from '@/config/memberRoles.js'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
 import DocDiffViewer from '@/components/DocDiffViewer.vue'
 import VersionCompareTab from '@/components/version/VersionCompareTab.vue'
@@ -1421,7 +1457,9 @@ import {
   getMyProjects, // 最近项目切换器
   bindShareholderMeetingConversation, // 股东大会核查：会话绑定
   getLicenseStatus, // 试用版标识（商业化解锁门）
-  getAccountStatus // 账户连接标识（商业化 PR-B）
+  getAccountStatus, // 账户连接标识（商业化 PR-B）
+  getCloudStatus, // 协作 chip：这份案卷有没有放进团队案件库、状态如何
+  checkCloud // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { getCurrentUser } from '@/utils/auth.js'
@@ -1470,6 +1508,7 @@ export default {
     ShareholderMeetingPanel,
     DdRequestEditor,
     InviteMemberDialog,
+    CollabDialog,
     ChatInterface,
     MarkdownPreview,
     PluginPane, // Added
@@ -1661,6 +1700,11 @@ export default {
       projectSwitcherOpen: false, // IDE 化最近项目切换器
       switcherProjects: [],
       versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 顶栏工作状态点
+      // 协作（团队案件库）状态：{linked, serverUrl, pendingUpload, remoteAhead, offline}
+      collabCloud: null,
+      collabDialogVisible: false,
+      collabInitialTab: 'casefile',
+      collabRefreshToken: 0, // 自增一次 = 让版本面板重拉自己的那份状态
       focusedPane: 'left', // 'left' | 'right'
 
       // 文件状态 - 分两组管理
@@ -1795,6 +1839,34 @@ export default {
       const user = getCurrentUser()
       return user && user.role === 'CLIENT'
     },
+    // 协作 UI 的总闸：只有这份案卷真的放进过团队案件库才渲染任何协作元素。
+    collabLinked() {
+      return !!(this.collabCloud && this.collabCloud.linked) && !this.isClientView
+    },
+    /*
+     * 协作状态口径（顶栏 chip / 底部状态条 / 版本面板状态行 / 协作抽屉四处同源同序）：
+     *   有文件等你做选择 > 暂时连不上案件库 > 同事交了新稿 > 有改动还没交稿 > 和大家的稿一致
+     *
+     * 「有改动还没交稿」同时吃两条独立信号：cloudStatus.pendingUpload（有一次交稿被拒
+     * 记了待办）与 /version/status 的 working（手头这段活还没收尾）。只看前者的话，
+     * 律师改了半天文件还没结束本次工作时 chip 会显示「和大家的稿一致」——技术上没错
+     * （还没落成版本，确实没什么可交），律师读起来却是假绿灯。
+     */
+    collabStateText() {
+      if (this.adoptConflictPending) return '有文件等你做选择'
+      const c = this.collabCloud || {}
+      if (c.offline) return '暂时连不上案件库'
+      if (c.remoteAhead) return '同事交了新稿'
+      if (c.pendingUpload || this.versionWorkStatus.working) return '有改动还没交稿'
+      return '和大家的稿一致'
+    },
+    collabTone() {
+      if (this.adoptConflictPending) return 'amber'
+      const c = this.collabCloud || {}
+      if (c.offline) return 'amber'
+      if (c.remoteAhead || c.pendingUpload || this.versionWorkStatus.working) return 'blue'
+      return 'green'
+    },
     // 是否有权管理成员
     canManageMembers() {
       const user = getCurrentUser()
@@ -1811,9 +1883,9 @@ export default {
     },
     groupedMembers() {
       const groups = {
-        admin: { label: '项目管理员', list: [] },
-        member: { label: '项目成员', list: [] },
-        client: { label: '客户', list: [] }
+        admin: { label: MEMBER_GROUP_LABELS.admin, list: [] },
+        member: { label: MEMBER_GROUP_LABELS.member, list: [] },
+        client: { label: MEMBER_GROUP_LABELS.client, list: [] }
       }
 
       this.projectMembers.forEach(m => {
@@ -1972,6 +2044,7 @@ export default {
     }
     // 后台任务状态轮询清理
     if (this.convStatusPollTimer) { clearInterval(this.convStatusPollTimer); this.convStatusPollTimer = null }
+    this.stopCollabPolling()
     // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
     if (typeof window !== 'undefined' && this._localFocusRefresh) {
       window.removeEventListener('focus', this._localFocusRefresh)
@@ -2086,6 +2159,12 @@ export default {
       this.loadProjectInfo()
       this.loadProjectMembers()
       this.checkAdoptConflict()
+      // 协作状态：先读本地快照（立刻有结果），再走一次联网检查，之后交给定时器保鲜
+      this.fetchCollabState().then(() => {
+        if (!this.collabLinked) return
+        this.fetchCollabState({ online: true })
+        this.startCollabPolling()
+      })
 
       // IDE 化「打开文件」过渡版：稍等页面挂载完成后打开指定文件
       if (query.openFileId) {
@@ -2212,6 +2291,7 @@ export default {
           this.$refs.fileTree.loadFiles()
         }
         this.checkAdoptConflict() // 顺带刷新顶栏工作状态点（同一次 /status）
+        if (this.collabLinked) this.fetchCollabState({ online: true }) // 切出去期间同事可能交了新稿
       }
       window.addEventListener('focus', this._localFocusRefresh)
       // IDE 化键位：Cmd+P 快速打开 / Cmd+W 关闭当前标签（活跃实例守卫；
@@ -2653,6 +2733,60 @@ export default {
       }
     },
 
+    // ==================== 协作（团队案件库） ====================
+    // cloudStatus 是**不联网**的本地快照：它读的 origin/master 只在有人显式取回后
+    // 才前移。进页面拉一次它（便宜、立刻有结果），随后再走一次联网的 checkCloud，
+    // 之后靠定时器保鲜——不刷新的话，同事交了新稿本机可能几小时都显示「和大家的稿
+    // 一致」，那是比不显示更糟的假绿灯。
+    async fetchCollabState({ online = false } = {}) {
+      if (!this.projectId) return
+      try {
+        const res = online ? await checkCloud(this.projectId) : await getCloudStatus(this.projectId)
+        this.collabCloud = (res && res.data) || null
+      } catch (e) {
+        console.warn('[Collab] 读取协作状态失败', e)
+      }
+    },
+    // 定时保鲜。三道守卫缺一不可：只在活跃实例上跑（页面栈多实例地雷，PR#148/#151）、
+    // 窗口不可见时不打网络、没放进案件库就整个不起定时器。
+    startCollabPolling() {
+      if (this._collabPollTimer) return
+      this._collabPollTimer = setInterval(() => {
+        if (!this.isActiveOverviewInstance()) return
+        if (typeof document !== 'undefined' && document.hidden) return
+        if (!this.collabLinked) return
+        this.fetchCollabState({ online: true })
+      }, 120000)
+    },
+    stopCollabPolling() {
+      if (this._collabPollTimer) { clearInterval(this._collabPollTimer); this._collabPollTimer = null }
+    },
+    openCollab(tab) {
+      this.collabInitialTab = typeof tab === 'string' ? tab : 'casefile'
+      this.collabDialogVisible = true
+    },
+    // 抽屉里做完动作：页面自己的状态、版本面板那份状态、以及「有没有等着做选择的
+    // 文件」三处都要跟着走一遍。
+    //
+    // 补起定时器这一步不能省：onLoad 那次遇到还没放进案件库的案卷会直接 return，
+    // 定时器根本没起过；律师随后在抽屉里点「放进团队案件库」，chip 就此定格在这一刻，
+    // 同事再交多少稿也不会刷新——假绿灯比不显示更糟（口径见 fetchCollabState 的注释）。
+    // startCollabPolling 自带 _collabPollTimer 幂等守卫，每次动作后都调一遍是安全的。
+    onCollabChanged() {
+      this.fetchCollabState().then(() => {
+        if (this.collabLinked) this.startCollabPolling()
+      })
+      this.checkAdoptConflict()
+      this.collabRefreshToken += 1
+    },
+    // 交稿/取回撞上了两边都改过同一处：把人送到裁决现场（版本面板，三选一弹窗随
+    // 面板的 /status 自动弹出）。
+    onCollabConflict() {
+      this.checkAdoptConflict()
+      this.collabRefreshToken += 1
+      this.goHandleAdoptConflict()
+    },
+
     // EasyVoice Integration
     async handleEasyVoiceDocRequest(callback) {
       console.log('[EasyVoice] Requesting doc text...')
@@ -2776,21 +2910,21 @@ export default {
     async removeMember(member) {
       if (!this.projectId) return
       if (!this.canRemoveMember(member)) {
-         uni.showToast({ title: '无权移除该成员', icon: 'none' })
+         uni.showToast({ title: '你没有权限把这个人移出案卷', icon: 'none' })
          return
       }
       uni.showModal({
-        title: '确认移除',
-        content: `确定要将 ${member.displayName} 移出项目吗？`,
+        title: '移出案卷',
+        content: `把 ${member.displayName} 移出这份案卷？移出后他不再能打开和修改这里的文件。`,
         success: async (res) => {
           if (res.confirm) {
             try {
               await removeProjectMember(this.projectId, member.userId)
-              uni.showToast({ title: '已移除', icon: 'success' })
+              uni.showToast({ title: '已移出', icon: 'success' })
               this.loadProjectMembers()
             } catch (e) {
               console.error(e)
-              uni.showToast({ title: e.message || '移除失败', icon: 'none' })
+              uni.showToast({ title: e.message || '没能移出', icon: 'none' })
             }
           }
         }

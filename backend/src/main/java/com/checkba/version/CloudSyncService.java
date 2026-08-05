@@ -80,8 +80,8 @@ public class CloudSyncService {
                                Map<String, Object> conflict) {}
 
     private static final String ORIGIN_MASTER = "refs/remotes/origin/master";
-    private static final String CLOUD_MERGE_TITLE = "云端更新";
-    private static final String CLOUD_SIDE_LABEL = "云端";
+    private static final String CLOUD_MERGE_TITLE = "取回最新稿";
+    private static final String CLOUD_SIDE_LABEL = "团队案件库";
 
     /** 用账号密码换一个长期设备令牌，本地存下来（服务端 `/api/auth/device-token`）。 */
     public CloudConnection connect(String serverUrl, String username,
@@ -91,7 +91,7 @@ public class CloudSyncService {
                 "username", username, "password", password, "name", deviceName));
         JSONObject resp = JSONUtil.parseObj(httpPost(base + "/api/auth/device-token", body));
         if (resp.getInt("code", 1) != 0) {
-            throw VersionException.userFacing("连接云端失败：" + resp.getStr("message", "账号或密码不对"));
+            throw VersionException.userFacing("连不上团队案件库：" + resp.getStr("message", "账号或密码不对"));
         }
         JSONObject data = resp.getJSONObject("data");
         CloudConnection conn = new CloudConnection();
@@ -160,13 +160,13 @@ public class CloudSyncService {
         lock.lock();
         try {
             if (remoteRepository.findByProjectId(projectId).isPresent()) {
-                throw VersionException.userFacing("这个项目已经共享到云端了");
+                throw VersionException.userFacing("这份案卷已经在团队案件库里了");
             }
             if (!repoService.isInitialized(projectId)) {
-                throw VersionException.userFacing("请先开启版本记录，再共享到云端");
+                throw VersionException.userFacing("请先开启版本记录，再放进团队案件库");
             }
             if (repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("请先处理等着你做选择的文件");
+                throw VersionException.userFacing("请先把等你做选择的文件处理完");
             }
             CloudConnection conn = ownedConnection(connectionId, userId);
             String localName = projectRepository.findById(projectId)
@@ -184,7 +184,7 @@ public class CloudSyncService {
                         conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
                         "{}", conn.getDeviceToken()));
                 if (prep.getInt("code", 1) != 0) {
-                    throw VersionException.userFacing("共享到云端失败：" + prep.getStr("message", "请重试"));
+                    throw VersionException.userFacing("没能放进团队案件库：" + prep.getStr("message", "请重试"));
                 }
 
                 repoService.setRemoteOrigin(projectId, conn.getServerUrl() + "/git/" + remoteProjectId + ".git");
@@ -241,7 +241,7 @@ public class CloudSyncService {
                 conn.getServerUrl() + "/api/projects/" + remoteProjectId + "/version/prepare-remote",
                 "{}", conn.getDeviceToken()));
         if (prep.getInt("code", 1) != 0) {
-            throw VersionException.userFacing("接入云端项目失败：" + prep.getStr("message", "请重试"));
+            throw VersionException.userFacing("没能取到本机：" + prep.getStr("message", "请重试"));
         }
 
         String remoteName = listRemoteProjects(connectionId, localUserId).stream()
@@ -249,7 +249,7 @@ public class CloudSyncService {
                 .filter(m -> remoteProjectId == ((Number) m.get("id")).longValue())
                 .map(m -> (String) m.get("name"))
                 .findFirst()
-                .orElse("云端项目");
+                .orElse("案件库里的案卷");
 
         Project project = new Project();
         project.setName(remoteName);
@@ -273,7 +273,7 @@ public class CloudSyncService {
 
                 TreeManifest manifest = manifestService.readAtRef(localProjectId, "HEAD");
                 if (manifest == null || manifest.version() < 2) {
-                    throw VersionException.userFacing("云端项目还是旧版本格式，请在云端更新一次后再接入");
+                    throw VersionException.userFacing("这份案卷在案件库里还是旧格式，请让共享它的人先交一次稿，再来取");
                 }
                 manifestService.applyToDatabase(localProjectId, manifest);
 
@@ -378,7 +378,7 @@ public class CloudSyncService {
             ProjectRemote remote = remoteOpt.get();
             CloudConnection conn = connectionOf(remote);
             if (repoService.repositoryMerging(projectId)) {
-                return new UploadResult(UploadStatus.REMOTE_AHEAD, "请先处理等着你做选择的文件");
+                return new UploadResult(UploadStatus.REMOTE_AHEAD, "请先把等你做选择的文件处理完");
             }
             try {
                 ProjectRepoService.PushOutcome out = repoService.pushMainlineToOrigin(
@@ -400,7 +400,9 @@ public class CloudSyncService {
                     if (integrated.status() == UpdateStatus.CONFLICT) {
                         remote.setPendingUpload(true);
                         remoteRepository.save(remote);
-                        return new UploadResult(UploadStatus.CONFLICT, "云端有同事的新版本，两边都改了同一处，需要选一下留哪份");
+                        // 不说「同一处」：文档类是整份字节比对，两边都动过就整份进裁决清单，
+                        // 说成同一处会让律师低估选错一边的代价（口径同 AdoptConflictDialog.hintText）。
+                        return new UploadResult(UploadStatus.CONFLICT, "有几份文件同事也改过，需要你选一下整份留哪一边");
                     }
                     // 走到这里只剩 OFFLINE（fetch 联不上）：整合本身没能进行，落回
                     // 旧行为。integrateFromCloud 直接复用这里已经解析好的 conn、
@@ -408,7 +410,7 @@ public class CloudSyncService {
                 }
                 remote.setPendingUpload(true);
                 remoteRepository.save(remote);
-                return new UploadResult(UploadStatus.REMOTE_AHEAD, "云端有同事的新版本，结束当前工作后再上传");
+                return new UploadResult(UploadStatus.REMOTE_AHEAD, "同事交了新稿，先结束手头这段工作再交稿");
             } catch (VersionException e) {
                 remote.setPendingUpload(true);
                 remoteRepository.save(remote);
@@ -416,7 +418,7 @@ public class CloudSyncService {
                 if (background) {
                     return new UploadResult(UploadStatus.OFFLINE_PENDING, null);
                 }
-                throw VersionException.userFacing("上传没能完成，改动已记为待上传");
+                throw VersionException.userFacing("这次没能交稿，改动已经记下，稍后还可以再交");
             }
         } finally {
             lock.unlock();
@@ -491,7 +493,7 @@ public class CloudSyncService {
     /** 未关联云端时两个代理端点共用的守卫：引导律师先共享。 */
     private ProjectRemote requireRemoteBinding(long projectId) {
         return remoteRepository.findByProjectId(projectId)
-                .orElseThrow(() -> VersionException.userFacing("请先共享到云端"));
+                .orElseThrow(() -> VersionException.userFacing("请先把这份案卷放进团队案件库"));
     }
 
     /** 透传服务端 {@code GET /api/projects/{rid}/members}——{id, userId, role, joinedAt, username, displayName, avatarUrl} 原样带回。 */
@@ -502,7 +504,7 @@ public class CloudSyncService {
                 conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members",
                 conn.getDeviceToken()));
         if (resp.getInt("code", 1) != 0) {
-            throw VersionException.userFacing("获取成员列表失败：" + resp.getStr("message", "请重试"));
+            throw VersionException.userFacing("读取案件参与人失败：" + resp.getStr("message", "请重试"));
         }
         List<Map<String, Object>> out = new ArrayList<>();
         for (Object o : resp.getJSONArray("data")) {
@@ -520,7 +522,7 @@ public class CloudSyncService {
                 conn.getServerUrl() + "/api/projects/" + remote.getRemoteProjectId() + "/members",
                 body, conn.getDeviceToken()));
         if (resp.getInt("code", 1) != 0) {
-            throw VersionException.userFacing("添加成员失败：" + resp.getStr("message", "请重试"));
+            throw VersionException.userFacing("没能把人加进来：" + resp.getStr("message", "请重试"));
         }
     }
 
@@ -622,7 +624,7 @@ public class CloudSyncService {
         lock.lock();
         try {
             if (!repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("现在没有等着做选择的更新");
+                throw VersionException.userFacing("现在没有等你做选择的文件");
             }
             String cloudTip = repoService.mergeHeadRef(projectId);
             requireCloudMergeWindow(projectId, cloudTip);
@@ -635,7 +637,7 @@ public class CloudSyncService {
             Map<String, WorkSessionService.Resolution> choices =
                     resolutions == null ? Map.of() : resolutions;
             for (String path : conflicts) {
-                if (choices.get(path) == null) throw VersionException.userFacing("还有文件没有做出选择");
+                if (choices.get(path) == null) throw VersionException.userFacing("还有文件没选留哪一份");
             }
             for (String path : conflicts) {
                 sessionService.applyResolution(projectId, path, choices.get(path),
@@ -659,11 +661,11 @@ public class CloudSyncService {
         lock.lock();
         try {
             if (!repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("现在没有等着做选择的更新");
+                throw VersionException.userFacing("现在没有等你做选择的文件");
             }
             requireCloudMergeWindow(projectId, repoService.mergeHeadRef(projectId));
             repoService.abortMerge(projectId);
-            return "这次更新没有完成，你的内容分毫未动";
+            return "这次没有取回，你的内容分毫未动";
         } finally {
             lock.unlock();
         }
@@ -753,13 +755,13 @@ public class CloudSyncService {
     /** updateFromCloud 的前置守卫：没有进行中的合并/工作/稿，理由同采纳前置（避免几件事缠在一起）。 */
     private void requireCleanForCloudOps(long projectId) {
         if (repoService.repositoryMerging(projectId)) {
-            throw VersionException.userFacing("请先处理等着你做选择的文件");
+            throw VersionException.userFacing("请先把等你做选择的文件处理完");
         }
         if (sessionService.activeSession(projectId).isPresent()) {
-            throw VersionException.userFacing("请先结束或丢弃当前工作，再从云端更新");
+            throw VersionException.userFacing("请先结束或丢弃手头这段工作，再取回最新稿");
         }
         if (sessionService.onDraftBranch(projectId)) {
-            throw VersionException.userFacing("请先回到主线工作，再从云端更新");
+            throw VersionException.userFacing("请先回到主线工作，再取回最新稿");
         }
     }
 

@@ -207,6 +207,14 @@ try {
     await page.mouse.click(box.x, box.y)
     await sleep(700)
   }
+  // 协作抽屉（PR-E）：交稿/取回/放进团队案件库三个动作全在这个页面级弹窗里，做完
+  // 必须显式关掉——它是全屏遮罩，不关的话后续点版本面板/rail 的坐标全落在遮罩上，
+  // 且不会报错、只会让后面的断言默默超时（v1 地雷 #24 的同款失败形态）。
+  const closeCollabDialog = async () => {
+    if (!(await page.$('.collab-dialog'))) return
+    await mouseClickSel('.collab-dialog .awd-footer .awd-btn')
+    await page.waitForFunction(() => !document.querySelector('.collab-dialog'), { timeout: 10000 })
+  }
   // 右键版本：FileTree.vue 的右键菜单绑定的是原生 @contextmenu.prevent（不是 uni
   // @tap），真实鼠标右键会在 headless Chrome 里派发一个会冒泡的原生 contextmenu
   // 事件，能直接命中绑定在祖先行元素上的监听器，不需要 page.evaluate 派发合成事件
@@ -873,11 +881,11 @@ try {
     }, { timeout: 10000 })
   })
 
-  // ---- 6. 选「两份都留」→ 确认采纳 → 断言文件树同时出现《A》与《A（来自：试验稿）》、
+  // ---- 6. 选「两份都留着」→ 确认 → 断言文件树同时出现《A》与《A（来自：试验稿）》、
   //         时间线出现「采纳：试验稿」节点、稿列表清空 ----
-  await step('选「两份都留」并确认采纳', async () => {
-    await mouseClickText('两份都留')
-    await mouseClickText('确认采纳')
+  await step('选「两份都留着」并确认采纳', async () => {
+    await mouseClickText('两份都留着')
+    await mouseClickText('就按我选的来')
     await page.waitForFunction(
       () => !document.querySelector('.adopt-dialog') && !document.querySelector('.adopt-collapsed-bar'),
       { timeout: 15000 },
@@ -1049,12 +1057,12 @@ try {
       await page.evaluate(stubDesktop)
       await page.goto(BASE + '/#/pages/admin/admin', { waitUntil: 'networkidle2', timeout: 20000 })
       await page.reload({ waitUntil: 'networkidle2', timeout: 20000 })
-      await waitText('云端协作')
-      await mouseClickText('云端协作')
-      await waitText('连接新的团队服务器')
+      await waitText('团队案件库')
+      await mouseClickText('团队案件库')
+      await waitText('连接团队案件库')
       await page.waitForSelector('.form-input .uni-input-input', { timeout: 8000 })
       const inputs = await page.$$('.form-input .uni-input-input')
-      if (inputs.length < 3) throw new Error('云端协作表单输入框数量不对: ' + inputs.length)
+      if (inputs.length < 3) throw new Error('团队案件库表单输入框数量不对: ' + inputs.length)
       await inputs[0].click({ clickCount: 3 }); await inputs[0].type(S, { delay: 10 })
       await inputs[1].click({ clickCount: 3 }); await inputs[1].type('lawyer_a', { delay: 10 })
       await inputs[2].click({ clickCount: 3 }); await inputs[2].type('PwLawyerA123', { delay: 10 })
@@ -1063,11 +1071,12 @@ try {
       await page.waitForSelector('.cloud-conn-header', { timeout: 15000 })
       // 记下这次连接的 id，finally 里断开——A 的桌面后端是长驻真实数据（不像 S/B 是
       // 跑完就扔的临时进程），CloudConnection 不清理会跨多次 e2e 运行累积。这不只是
-      // 测试卫生问题：CloudSyncBar.onShare() 直接拿 listCloudConnections() 的
-      // list[0]，累积的旧连接（服务器早已不在、设备令牌早已失效）一旦排在最前面，
-      // 「共享到云端」就会拿着死令牌去连一个死后端，POST /api/projects 应答里没有
+      // 测试卫生问题：PR-E 之前 CloudSyncBar.onShare() 直接拿 listCloudConnections()
+      // 的 list[0]，累积的旧连接（服务器早已不在、设备令牌早已失效）一旦排在最前面，
+      // 「放进团队案件库」就会拿着死令牌去连一个死后端，POST /api/projects 应答里没有
       // "id"，服务端侧 shareToCloud 对着空结果取 .getLong("id") 直接 NPE——现场调试
-      // 真踩过这个坑（连续跑几轮不清理，第二轮起必现），不是假设性风险。
+      // 真踩过这个坑（连续跑几轮不清理，第二轮起必现），不是假设性风险。现在协作抽屉
+      // 让律师指名选哪一个案件库（多于一个时才渲染选择器），这条路径已经堵上。
       const connList = await api('/api/cloud/connections')
       const conns = (connList && connList.data && connList.data.connections) || []
       aConnectionId = conns.length ? conns[conns.length - 1].id : null
@@ -1077,7 +1086,7 @@ try {
       { waitUntil: 'networkidle2', timeout: 30000 })
     await sleep(1500)
 
-    await step('A：共享到云端并取得云端项目 id', async () => {
+    await step('A：把案卷放进团队案件库并取得云端项目 id', async () => {
       // 先切一次「资源管理器」再切「版本」，不要在整页 goto 落地后只点一次「版本」——
       // 现场调试实证：goto 回 project-overview 后单点一次「版本」栏目，面板经常整个
       // 不出现（.version-panel 15s 内都不挂载，非文案没等到，是组件压根没渲染），
@@ -1088,11 +1097,19 @@ try {
       await mouseClickSel('[title="版本"]')
       // CloudSyncBar 的内容要等 VersionPanel.refresh()→fetchCloudState() 两次串行网络
       // 请求都落地才出现；这个项目此时已经带着 J9/J10 攒下的一整段真实历史，读取比
-      // 早期空项目慢，mouseClickSel 自带的 700ms 不够稳（现场调试实证：直接
-      // mouseClickText('共享到云端') 偶发「找不到文本」，面板其实还没渲染完）。
-      // 用 .cloud-bar 选择器等面板真挂载（两态都会渲染这个容器）比等具体文案更稳。
+      // 早期空项目慢，mouseClickSel 自带的 700ms 不够稳（现场调试实证：直接点文案
+      // 偶发「找不到文本」，面板其实还没渲染完）。用 .cloud-bar 选择器等面板真挂载
+      // （两态都会渲染这个容器）比等具体文案更稳。
+      //
+      // PR-E 起，交稿/取回/放进案件库这三个动作都收到页面级协作抽屉（.collab-dialog）里，
+      // 版本面板的 .cloud-bar 只剩一行只读状态 + 一个开抽屉的链接。
       await page.waitForSelector('.cloud-bar', { timeout: 15000 })
-      await mouseClickText('共享到云端')
+      await mouseClickText('放进案件库')
+      await page.waitForSelector('.collab-dialog', { timeout: 10000 })
+      await mouseClickText('放进团队案件库')
+      // 放进去之后顶栏协作 chip 才会出现（只在案卷真的进了案件库时渲染，零打扰）
+      await page.waitForSelector('.collab-chip', { timeout: 20000 })
+      await closeCollabDialog()
       await page.waitForSelector('.cloud-dot', { timeout: 20000 })
       const cs = await api('/api/cloud/projects/' + QA.projectId + '/status')
       if (!cs || !cs.data || !cs.data.linked || !cs.data.remoteProjectId) {
@@ -1181,14 +1198,17 @@ try {
       if (!ok) throw new Error('等待超时：S 的时间线始终没有出现 B 第一次修改的节点')
     })
 
-    await step('A：点击「从云端更新」', async () => {
+    await step('A：点「取回最新稿」', async () => {
       await mouseClickSel('[title="资源管理器"]')
       await mouseClickSel('[title="版本"]')
-      // 同上一步的教训：等 .cloud-dot 出现（已关联态才有的选择器）比等 700ms 定式稳，
-      // 面板这时候要重新拉 /status+/drafts+/cloud/status 三串请求才会渲染出这颗按钮。
+      // 同上一步的教训：等 .cloud-dot 出现（已放进案件库才有的选择器）比等 700ms 定式稳，
+      // 面板这时候要重新拉 /status+/drafts+/cloud/status 三串请求才会渲染出这行状态。
       await page.waitForSelector('.cloud-dot', { timeout: 15000 })
-      await mouseClickText('从云端更新')
+      await mouseClickText('打开协作')
+      await page.waitForSelector('.collab-dialog', { timeout: 10000 })
+      await mouseClickText('取回最新稿')
       await sleep(2000)
+      await closeCollabDialog()
     })
 
     await step('A：本地文件内容已同步 B 的修改', async () => {
@@ -1243,16 +1263,22 @@ try {
       await waitText('当前没有进行中的工作')
     })
 
-    await step('A：结束工作后台上传被拒只亮「待上传」灯（不自动整合）', async () => {
+    await step('A：结束工作后台上传被拒只置待交稿标记（不自动整合）', async () => {
       // v2 终审 I2：后台路径（结束工作的自动上传）被拒时不做自动整合——后台没有通道
       // 通知打开中的编辑器重载，后台整合撞冲突还会开出律师不知情的 MERGING 窗口。
-      // 这里断言的正是新语义：灯亮（有改动待上传），但没有冲突弹窗、没有合并窗口。
+      // 直接查 pendingUpload 比查界面文案更贴近 I2 本身：此刻 remoteAhead 也为真
+      // （B 推了两次），而 PR-E 的状态口径把「同事交了新稿」排在「有改动还没交稿」
+      // 前面（remoteAhead 是阻塞条件——不先取回根本交不了稿，先说该做的那件事），
+      // 所以界面上显示的是前者，pendingUpload 这条真实信号只能从接口读。
       const ok = await pollUntil(async () => {
-        await mouseClickSel('[title="资源管理器"]')
-        await mouseClickSel('[title="版本"]')
-        return page.evaluate(() => document.body.innerText.includes('有改动待上传'))
+        const st = await api('/api/cloud/projects/' + QA.projectId + '/status')
+        return !!(st && st.data && st.data.pendingUpload)
       }, 40000, 2000)
-      if (!ok) throw new Error('等待超时：结束工作后云端状态没有进入「有改动待上传」')
+      if (!ok) throw new Error('等待超时：结束工作后 pendingUpload 没有被置上')
+      await mouseClickSel('[title="资源管理器"]')
+      await mouseClickSel('[title="版本"]')
+      const shown = await page.evaluate(() => document.body.innerText.includes('同事交了新稿'))
+      if (!shown) throw new Error('协作状态没有提示「同事交了新稿」')
       const dialogOpen = await page.evaluate(() => {
         const dlg = document.querySelector('.adopt-dialog')
         return !!dlg && dlg.getClientRects().length > 0
@@ -1260,8 +1286,11 @@ try {
       if (dialogOpen) throw new Error('后台上传不该自动整合出冲突弹窗（I2 新语义被破坏）')
     })
 
-    await step('A：点「立即上传」前台整合撞上云端冲突弹窗且标签正确', async () => {
-      await mouseClickText('立即上传')
+    await step('A：点「交稿」前台整合撞上冲突弹窗且标签正确', async () => {
+      await mouseClickText('打开协作')
+      await page.waitForSelector('.collab-dialog', { timeout: 10000 })
+      await mouseClickText('交稿')
+      // 撞冲突时协作抽屉自己关掉、页面把人送到裁决现场（版本面板），不用再手工关
       await page.waitForFunction(() => {
         const dlg = document.querySelector('.adopt-dialog')
         if (!dlg || dlg.getClientRects().length === 0) return false
@@ -1270,12 +1299,12 @@ try {
       }, { timeout: 30000 })
       const labels = await page.evaluate(() =>
         [...document.querySelectorAll('.adopt-dialog .radio-label')].map((e) => e.innerText))
-      if (!labels.includes('用我这边的') || !labels.includes('用云端的')) {
+      if (!labels.includes('留我这份') || !labels.includes('用同事那份')) {
         throw new Error('冲突弹窗标签不对，可能弹的是另一种语境: ' + JSON.stringify(labels))
       }
     })
 
-    await step('先点「对比」验证收起条出现', async () => {
+    await step('先点「看看两边差在哪」验证收起条出现', async () => {
       await mouseClickSel('.adopt-row-compare')
       await page.waitForFunction(() => !!document.querySelector('.adopt-collapsed-bar'), { timeout: 10000 })
     })
@@ -1293,30 +1322,30 @@ try {
       }, { timeout: 10000 })
     })
 
-    await step('选「两份都留」并确认更新', async () => {
-      await mouseClickText('两份都留')
-      await mouseClickText('确认更新')
+    await step('选「两份都留着」并确认', async () => {
+      await mouseClickText('两份都留着')
+      await mouseClickText('就按我选的来')
       await page.waitForFunction(
         () => !document.querySelector('.adopt-dialog') && !document.querySelector('.adopt-collapsed-bar'),
         { timeout: 20000 },
       )
     })
 
-    await step('文件树同时出现原文件与「（来自：云端）」副本', async () => {
+    await step('文件树同时出现原文件与「（来自：团队案件库）」副本', async () => {
       await mouseClickSel('[title="资源管理器"]')
       await page.waitForFunction(() => {
         const t = document.querySelector('.file-tree')
         return !!t
           && t.innerText.includes('qa-J11协作文件.txt')
-          && t.innerText.includes('qa-J11协作文件（来自：云端）.txt')
+          && t.innerText.includes('qa-J11协作文件（来自：团队案件库）.txt')
       }, { timeout: 15000 })
     })
 
-    await step('时间线出现「云端更新」节点', async () => {
+    await step('时间线出现「取回最新稿」节点', async () => {
       await mouseClickSel('[title="版本"]')
       await page.waitForFunction(() => {
         const titles = [...document.querySelectorAll('.timeline-node .node-title')].map((e) => e.innerText || '')
-        return titles.some((t) => t.includes('云端更新'))
+        return titles.some((t) => t.includes('取回最新稿'))
       }, { timeout: 15000 })
     })
 
@@ -1324,12 +1353,12 @@ try {
       const ok = await pollUntil(async () => {
         const tl = await sApi('/api/projects/' + remoteProjectId + '/version/timeline?limit=30')
         const versions = (tl && tl.data && tl.data.versions) || []
-        return versions.some((v) => (v.note || v.message || '').includes('云端更新'))
+        return versions.some((v) => (v.note || v.message || '').includes('取回最新稿'))
       }, 20000, 1500)
-      if (!ok) throw new Error('等待超时：S 的时间线没有出现裁决后的「云端更新」节点')
+      if (!ok) throw new Error('等待超时：S 的时间线没有出现裁决后的「取回最新稿」节点')
       const files = await sApi('/api/projects/' + remoteProjectId + '/files')
       const names = (Array.isArray(files) ? files : []).map((f) => f.name)
-      if (!names.includes('qa-J11协作文件.txt') || !names.includes('qa-J11协作文件（来自：云端）.txt')) {
+      if (!names.includes('qa-J11协作文件.txt') || !names.includes('qa-J11协作文件（来自：团队案件库）.txt')) {
         throw new Error('S 上文件列表没有同步裁决结果: ' + JSON.stringify(names))
       }
     })
@@ -1339,9 +1368,9 @@ try {
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）
   try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch {}
   // J11 在 A（长驻真实桌面后端，不像 S/B 是跑完就扔的进程）上建的 CloudConnection 同样
-  // 要清掉——不清理会跨多次运行累积死连接，CloudSyncBar.onShare() 拿 list[0] 时可能
-  // 捞到早就失效的旧连接，下次「共享到云端」直接在服务端炸 NPE（现场调试踩过，见
-  // aConnectionId 赋值处的注释）。aConnectionId 为 null（J11 被跳过或连接步骤没走到）
+  // 要清掉——不清理会跨多次运行累积死连接。PR-E 起「放进团队案件库」由协作抽屉让律师
+  // 指名选哪一个库（不再拿 list[0]），死连接不会再静默炸 NPE，但累积本身仍是测试卫生
+  // 问题（选择列表会越来越长）。aConnectionId 为 null（J11 被跳过或连接步骤没走到）
   // 时这里是无操作的空转。
   if (aConnectionId) {
     try { await api('/api/cloud/connections/' + aConnectionId + '/disconnect', { method: 'POST' }) } catch {}

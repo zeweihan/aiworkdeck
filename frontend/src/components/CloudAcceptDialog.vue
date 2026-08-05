@@ -1,24 +1,41 @@
 <template>
   <view v-if="visible" class="awd-mask" @tap.self="close">
     <view class="awd-dialog">
-      <view class="awd-header"><text class="awd-title">从云端接一个项目</text></view>
+      <view class="awd-header"><text class="awd-title">从团队案件库取一份案卷</text></view>
       <view class="awd-body">
         <view v-if="loading" class="cloud-accept-hint">正在读取…</view>
         <view v-else-if="noConnection" class="cloud-accept-empty">
-          <text class="cloud-accept-hint">还没有连接团队服务器</text>
-          <text class="cloud-accept-goto-settings" @tap="gotoSettings">去设置连接</text>
+          <text class="cloud-accept-hint">你还没有连过团队案件库</text>
+          <text class="cloud-accept-goto-settings" @tap="gotoSettings">去连一个</text>
         </view>
-        <view v-else-if="!projects.length" class="cloud-accept-hint">云端还没有可接入的项目</view>
-        <view v-else class="cloud-project-list">
-          <view v-for="p in projects" :key="p.id" class="cloud-project-row">
-            <text class="cloud-project-name">{{ p.name }}</text>
+        <template v-else>
+          <!-- 连了多个案件库时必须由律师指名去哪一个取：拿列表第一条会在存量死连接
+               排在前面时对着一个早已不在的服务器发请求。 -->
+          <view v-if="connections.length > 1" class="cloud-accept-picker">
+            <text class="cloud-accept-picker-label">从哪个案件库取</text>
             <view
-              class="awd-btn awd-btn-secondary"
-              :class="{ 'awd-btn-disabled': busy }"
-              @tap="onAccept(p)"
-            >接到本地</view>
+              v-for="c in connections"
+              :key="c.id"
+              class="cloud-accept-picker-item"
+              :class="{ checked: connectionId === c.id }"
+              @tap="selectConnection(c.id)"
+            >
+              <view class="cloud-accept-radio"></view>
+              <text class="cloud-accept-picker-text">{{ c.serverUrl }}</text>
+            </view>
           </view>
-        </view>
+          <view v-if="!projects.length" class="cloud-accept-hint">这个案件库里还没有共享给你的案卷</view>
+          <view v-else class="cloud-project-list">
+            <view v-for="p in projects" :key="p.id" class="cloud-project-row">
+              <text class="cloud-project-name">{{ p.name }}</text>
+              <view
+                class="awd-btn awd-btn-secondary"
+                :class="{ 'awd-btn-disabled': busy }"
+                @tap="onAccept(p)"
+              >取到本机</view>
+            </view>
+          </view>
+        </template>
       </view>
       <view class="awd-footer">
         <view class="awd-btn awd-btn-secondary" @tap="close">关闭</view>
@@ -40,6 +57,7 @@ export default {
     return {
       loading: false,
       noConnection: false,
+      connections: [],
       connectionId: null,
       projects: [],
       busy: false,
@@ -58,12 +76,29 @@ export default {
       try {
         const res = await listCloudConnections()
         const conns = (res && res.data && res.data.connections) || []
+        this.connections = conns
         if (!conns.length) { this.noConnection = true; return }
         this.connectionId = conns[0].id
-        const pres = await listRemoteProjects(this.connectionId)
-        this.projects = (pres && pres.data && pres.data.projects) || []
+        await this.loadProjects()
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '读取云端项目失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || '读取案件库里的案卷失败', icon: 'none' })
+      } finally {
+        this.loading = false
+      }
+    },
+    async loadProjects() {
+      const pres = await listRemoteProjects(this.connectionId)
+      this.projects = (pres && pres.data && pres.data.projects) || []
+    },
+    async selectConnection(id) {
+      if (this.connectionId === id) return
+      this.connectionId = id
+      this.projects = []
+      this.loading = true
+      try {
+        await this.loadProjects()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '读取案件库里的案卷失败', icon: 'none' })
       } finally {
         this.loading = false
       }
@@ -77,7 +112,7 @@ export default {
         this.close()
         this.$emit('accepted', localProjectId)
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '接入失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || '没能取到本机，请稍后重试', icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -114,6 +149,19 @@ export default {
 .cloud-accept-hint { font-size: 26rpx; color: #666; line-height: 1.6; }
 .cloud-accept-empty { display: flex; flex-direction: column; gap: 12rpx; align-items: flex-start; }
 .cloud-accept-goto-settings { font-size: 25rpx; color: #12344D; text-decoration: underline; }
+.cloud-accept-picker { display: flex; flex-direction: column; gap: 8rpx; margin-bottom: 20rpx; }
+.cloud-accept-picker-label { font-size: 24rpx; color: #666; }
+.cloud-accept-picker-item {
+  display: flex; align-items: center; gap: 10rpx;
+  padding: 10rpx 12rpx; border: 1px solid #eee; border-radius: 8rpx;
+}
+.cloud-accept-picker-item.checked { border-color: #12344D; background: #F4F7F9; }
+.cloud-accept-radio {
+  width: 18rpx; height: 18rpx; border-radius: 50%; border: 1px solid #ccc;
+  box-sizing: border-box; flex-shrink: 0;
+}
+.cloud-accept-picker-item.checked .cloud-accept-radio { border-color: #12344D; background: #12344D; }
+.cloud-accept-picker-text { font-size: 24rpx; color: #333; word-break: break-all; }
 .cloud-project-list {}
 .cloud-project-row {
   display: flex; align-items: center; justify-content: space-between;

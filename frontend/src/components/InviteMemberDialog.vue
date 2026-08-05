@@ -2,7 +2,7 @@
   <view v-if="visible" class="workdeck-dialog-mask" @tap="close">
     <view class="workdeck-dialog" @tap.stop>
       <view class="workdeck-dialog-header">
-        <text class="workdeck-dialog-title">邀请成员</text>
+        <text class="workdeck-dialog-title">把人加进这份案卷</text>
         <view class="modal-close" @tap="close">×</view>
       </view>
 
@@ -13,14 +13,14 @@
           :class="{ active: activeTab === 'MEMBER' }"
           @tap="activeTab = 'MEMBER'"
         >
-          内部成员
+          所里同事
         </view>
         <view 
           class="dialog-tab" 
           :class="{ active: activeTab === 'CLIENT' }"
           @tap="activeTab = 'CLIENT'"
         >
-          外部客户
+          客户
         </view>
         <!-- Border bottom line -->
         <view class="tab-line" :style="{ left: activeTab === 'MEMBER' ? '0%' : '50%' }"></view>
@@ -30,68 +30,67 @@
         <!-- Internal Member Form -->
         <view v-if="activeTab === 'MEMBER'">
           <view class="form-group">
-            <text class="form-label">用户名</text>
+            <text class="form-label">账号</text>
             <input 
               class="workdeck-input" 
               v-model="memberForm.username" 
-              placeholder="请输入对方用户名" 
+              placeholder="输入同事的账号" 
               :focus="activeTab === 'MEMBER'"
             />
           </view>
           <view class="form-group">
-            <text class="form-label">角色</text>
+            <text class="form-label">他在这份案卷里能做什么</text>
             <view class="role-options">
-               <view 
-                 class="role-option" 
-                 :class="{ active: memberForm.role === 'ADMIN' }"
-                 @tap="memberForm.role = 'ADMIN'"
+               <view
+                 v-for="r in ASSIGNABLE_ROLES"
+                 :key="r.value"
+                 class="role-option"
+                 :class="{ active: memberForm.role === r.value }"
+                 :title="r.hint"
+                 @tap="memberForm.role = r.value"
                >
                  <view class="role-dot"></view>
-                 <text>管理员</text>
-               </view>
-               <view 
-                 class="role-option" 
-                 :class="{ active: memberForm.role === 'PARTICIPANT' }"
-                 @tap="memberForm.role = 'PARTICIPANT'"
-               >
-                 <view class="role-dot"></view>
-                 <text>参与者</text>
-               </view>
-               <view 
-                 class="role-option" 
-                 :class="{ active: memberForm.role === 'READ_ONLY' }"
-                 @tap="memberForm.role = 'READ_ONLY'"
-               >
-                 <view class="role-dot"></view>
-                 <text>只读</text>
+                 <text>{{ r.label }}</text>
                </view>
             </view>
+            <text class="role-hint">{{ currentRoleHint }}</text>
           </view>
+          <!-- 这里走 addProjectMember（本机这份案卷的参与人表），协作抽屉的「案件参与人」
+               走 addCloudMember（团队案件库那边的表）。两条轨是既有机制，但两处现在共用
+               同一套角色标签，界面上再无区别信号——只在库里加、没在这里加（或反过来）都
+               会让同事白等，所以必须把这句话写在动作旁边。 -->
+          <text class="role-hint">
+            这里加的是这份案卷在本机的参与人。案卷已经放进团队案件库的话，还要在顶栏「协作」
+            的「案件参与人」里再加一次，同事才取得到这份案卷。
+          </text>
         </view>
 
         <!-- External Client Form -->
         <view v-else>
            <view class="invite-desc-box">
-             <text class="invite-desc">生成一个访问码，客户凭此码即可登录并上传尽调文件。</text>
+             <text class="invite-desc">给客户一串访问码。客户在网页上输入它就能进这份案卷，把你要的材料传上来；
+             他只看得到这一份案卷，你和同事的往来记录、底稿、内部意见他都看不到。</text>
            </view>
            
            <view v-if="!clientInviteCode">
                <view class="form-group">
-                 <text class="form-label">客户名称</text>
+                 <text class="form-label">客户称呼</text>
                  <input 
                    class="workdeck-input" 
                    v-model="clientName" 
-                   placeholder="请输入客户名称（可选）" 
+                   placeholder="例如「某某公司 张总」（可不填）" 
                  />
                </view>
            </view>
 
            <view v-else class="code-result-box">
-               <text class="code-label">访问码已生成：</text>
+               <text class="code-label">访问码：</text>
                <view class="code-display-row">
                    <text class="code-text">{{ clientInviteCode }}</text>
                    <text class="copy-link" @tap="copyClientCode">复制</text>
                </view>
+               <text class="code-tip">把这串码发给客户，请他在登录页选「客户」输入即可。
+               这串码等同于进这份案卷的钥匙，只发给本人。</text>
            </view>
         </view>
       </view>
@@ -101,12 +100,12 @@
         
         <block v-if="activeTab === 'MEMBER'">
             <view class="workdeck-btn workdeck-btn-primary" @tap="submitMemberInvite" :class="{ disabled: loading }">
-                {{ loading ? '邀请中...' : '确认邀请' }}
+                {{ loading ? '处理中…' : '加进来' }}
             </view>
         </block>
         <block v-else>
             <view v-if="!clientInviteCode" class="workdeck-btn workdeck-btn-primary" @tap="generateClientCode" :class="{ disabled: loading }">
-                {{ loading ? '生成...' : '生成访问码' }}
+                {{ loading ? '生成中…' : '生成访问码' }}
             </view>
             <view v-else class="workdeck-btn workdeck-btn-primary" @tap="close">完成</view>
         </block>
@@ -117,6 +116,7 @@
 
 <script>
 import { addProjectMember, inviteClient } from '@/services/api.js'
+import { ASSIGNABLE_ROLES } from '@/config/memberRoles.js'
 
 export default {
   name: 'InviteMemberDialog',
@@ -139,7 +139,14 @@ export default {
       },
       clientName: '',
       clientInviteCode: '',
-      loading: false
+      loading: false,
+      ASSIGNABLE_ROLES
+    }
+  },
+  computed: {
+    currentRoleHint() {
+      const r = ASSIGNABLE_ROLES.find((x) => x.value === this.memberForm.role)
+      return r ? r.hint : ''
     }
   },
   watch: {
@@ -161,17 +168,17 @@ export default {
     },
     async submitMemberInvite() {
        if (!this.memberForm.username) {
-         uni.showToast({ title: '请输入用户名', icon: 'none' })
+         uni.showToast({ title: '请输入同事的账号', icon: 'none' })
          return
        }
        this.loading = true
        try {
          await addProjectMember(this.projectId, this.memberForm.username, this.memberForm.role)
-         uni.showToast({ title: '邀请成功', icon: 'success' })
+         uni.showToast({ title: '已加进来', icon: 'success' })
          this.$emit('success')
          this.close()
        } catch (e) {
-         uni.showToast({ title: e.message || '邀请失败', icon: 'none' })
+         uni.showToast({ title: e.message || '没能加进来', icon: 'none' })
        } finally {
          this.loading = false
        }
@@ -196,7 +203,7 @@ export default {
         uni.setClipboardData({
             data: this.clientInviteCode,
             success: () => {
-                uni.showToast({ title: '复制成功', icon: 'success' })
+                uni.showToast({ title: '已复制', icon: 'success' })
             }
         })
     }
@@ -390,7 +397,22 @@ export default {
 .invite-desc {
   font-size: 13px;
   color: #64748b;
-  line-height: 1.5;
+  line-height: 1.6;
+}
+
+.role-hint {
+  display: block;
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 8px;
+}
+
+.code-tip {
+  display: block;
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.6;
+  margin-top: 12px;
 }
 
 .code-result-box {

@@ -377,16 +377,16 @@ class CloudControllerTest {
         var response = controller.onVersionError(e);
 
         assertEquals(1, response.getBody().get("code"));
-        assertEquals("云端协作操作失败，请重试", response.getBody().get("message"));
+        assertEquals("这次协作操作没能完成，请稍后重试", response.getBody().get("message"));
     }
 
     @Test
     void userFacingVersionExceptionIsShownAsIs() {
-        var e = VersionException.userFacing("请先共享到云端");
+        var e = VersionException.userFacing("请先把这份案卷放进团队案件库");
 
         var response = controller.onVersionError(e);
 
         assertEquals(1, response.getBody().get("code"));
-        assertEquals("请先共享到云端", response.getBody().get("message"));
+        assertEquals("请先把这份案卷放进团队案件库", response.getBody().get("message"));
     }
 }

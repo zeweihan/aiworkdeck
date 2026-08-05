@@ -223,11 +223,15 @@ public class CloudController {
     /**
      * message 可能带 Git 术语/内部细节，一律不得原样回显给律师。只有标记为 userFacing 的
      * 业务性异常才展示其 message，其余一律用通用措辞；技术细节只进日志。
+     *
+     * 兜底那句直接弹成 toast（前端每个 catch 都是 showToast(e.message)），所以它也归
+     * PR-E 的术语纪律管：「云端」是已经作废的说法，律师在「交稿/取回」的流程里撞见它
+     * 会一头雾水。日志侧保留原词，那是给工程看的。
      */
     @ExceptionHandler(VersionException.class)
     public ResponseEntity<Map<String, Object>> onVersionError(VersionException e) {
         log.warn("云端协作操作失败", e);
-        String message = e.isUserFacing() ? e.getMessage() : "云端协作操作失败，请重试";
+        String message = e.isUserFacing() ? e.getMessage() : "这次协作操作没能完成，请稍后重试";
         return ResponseEntity.ok(Map.of("code", 1, "message", message));
     }
 
