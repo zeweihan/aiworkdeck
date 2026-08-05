@@ -167,17 +167,16 @@ class StorageLocationServiceTest {
     void verificationFailureRollsBackCopiedFiles() throws IOException {
         Path target = tempDir.resolve("校验会失败");
 
-        // 复制照常发生（真的把 3 个文件写过去了），只是事后校验被做成必定不一致
+        // 复制照常发生（真的把 3 个文件写过去了），只是事后对**目标侧**的统计被做成必定不一致。
+        // 只谎报目标：源侧要照实统计，否则会先撞上「迁移期间原目录发生了变化」那道闸。
+        Path targetReal = target.toAbsolutePath().normalize();
         StorageLocationService svc = new StorageLocationService(resolver, stateDir.toString()) {
-            private boolean firstCall = true;
-
             @Override
             Tally tally(Path root) throws IOException {
-                if (firstCall) {          // 源侧照实统计
-                    firstCall = false;
-                    return super.tally(root);
+                if (root.toAbsolutePath().normalize().equals(targetReal)) {
+                    return new Tally(999, 999);
                 }
-                return new Tally(999, 999); // 目标侧谎报，触发校验失败
+                return super.tally(root);
             }
         };
 
@@ -264,6 +263,139 @@ class StorageLocationServiceTest {
         assertEquals(true, after.get("custom"));
         assertEquals(true, after.get("available"));
         assertNotNull(after.get("movedAt"));
+    }
+
+    @Test
+    @DisplayName("迁移期间源目录被写入：整体放弃，不留下「在树里看得见却打不开」的文件")
+    void concurrentWriteDuringCopyAbortsMigration() throws IOException {
+        Path target = tempDir.resolve("外置硬盘/awd");
+        Path targetReal = target.toAbsolutePath().normalize();
+
+        // 时序模拟：copyTree 走完之后（即对目标那次统计时）往源里落一个新文件，
+        // 模拟迁移期间的自动保存 / 下载 / AI 改动。它没有被复制过去，
+        // 而「复制前的源」与「复制后的目标」两个数字仍然相等——正是旧实现漏掉的那个缝。
+        StorageLocationService svc = new StorageLocationService(resolver, stateDir.toString()) {
+            @Override
+            Tally tally(Path root) throws IOException {
+                Tally t = super.tally(root);
+                if (root.toAbsolutePath().normalize().equals(targetReal)) {
+                    Files.writeString(source.resolve("projects/1/迁移期间自动保存.docx"), "新内容");
+                }
+                return t;
+            }
+        };
+
+        StorageException e = assertThrows(StorageException.class, () -> svc.migrate(target.toString()));
+        assertTrue(e.getMessage().contains("迁移期间"), "文案要说清原因，用户才知道下一步是关掉正在编辑的文档");
+
+        // 指针留在原位，两处数据都在：新写入的文件仍在源目录里，能被正常打开
+        assertEquals(source.toAbsolutePath().normalize(), resolver.globalRoot());
+        assertEquals("新内容", Files.readString(source.resolve("projects/1/迁移期间自动保存.docx")));
+        assertEquals(4L, countFiles(source));
+        assertFalse(Files.exists(stateDir.resolve("storage-location.json")), "放弃的迁移不得落配置");
+    }
+
+    @Test
+    @DisplayName("目标是指向源目录内部的软链：按真实路径判定并拒绝，不污染源数据根")
+    void symlinkTargetPointingIntoSourceRejected() throws IOException {
+        Path link = tempDir.resolve("看起来无关的目录");
+        try {
+            Files.createSymbolicLink(link, source.resolve("projects"));
+        } catch (UnsupportedOperationException | IOException e) {
+            org.junit.jupiter.api.Assumptions.assumeTrue(false, "当前环境不支持创建软链，跳过");
+        }
+
+        StorageException e = assertThrows(StorageException.class, () -> service().migrate(link.toString()));
+        assertTrue(e.getMessage().contains("内部"));
+
+        // 源数据根里不得多出任何东西（旧实现会在这里递归造出几百个垃圾目录）
+        assertEquals(3L, countFiles(source));
+        // source 自身 + projects + projects/1 + clipboard + clipboard/1
+        try (var walk = Files.walk(source)) {
+            assertEquals(5L, walk.filter(Files::isDirectory).count(), "源里的目录数不得变化");
+        }
+        assertEquals(source.toAbsolutePath().normalize(), resolver.globalRoot());
+    }
+
+    @Test
+    @DisplayName("配置写入失败：副本被清理、指针不动、文案不谎称已迁移")
+    void stateWriteFailureRollsBackAndKeepsOldLocation() throws IOException {
+        Path target = tempDir.resolve("新家");
+        StorageLocationService svc = new StorageLocationService(resolver, stateDir.toString()) {
+            @Override
+            void saveState(State state) {
+                throw new StorageException("存储位置配置写入失败，已保持原位置：磁盘只读");
+            }
+        };
+
+        StorageException e = assertThrows(StorageException.class, () -> svc.migrate(target.toString()));
+        assertFalse(e.getMessage().contains("已迁移"), "指针根本没切，不能说已迁移");
+
+        assertEquals(source.toAbsolutePath().normalize(), resolver.globalRoot());
+        assertEquals(3L, countFiles(source));
+        // 副本要清掉：留着的话下次重试会撞上「请选择一个空目录」，用户得先手工删目录
+        assertFalse(Files.exists(target), "失败后目标目录不该留下副本挡住重试");
+    }
+
+    @Test
+    @DisplayName("当前存储目录不可访问时拒绝迁移，不把 0 个文件当成迁移成功")
+    void migrationRefusedWhenSourceMissing() throws IOException {
+        Path target = tempDir.resolve("新家");
+        Path gone = tempDir.resolve("已拔掉的移动硬盘/awd");
+        resolver.relocate(gone); // 模拟外置盘被拔
+
+        StorageException e = assertThrows(StorageException.class, () -> service().migrate(target.toString()));
+        assertTrue(e.getMessage().contains("不可访问"));
+        assertEquals(gone.toAbsolutePath().normalize(), resolver.globalRoot(), "失败不改变指针");
+        assertFalse(Files.exists(target), "不得建出一个假装迁移成功的空目录");
+    }
+
+    @Test
+    @DisplayName("恢复默认位置：只换指针，自选目录里的文件一个都不删")
+    void resetToDefaultKeepsFilesWhereTheyAre() throws IOException {
+        Path target = tempDir.resolve("外置硬盘/awd");
+        StorageLocationService svc = service();
+        svc.migrate(target.toString());
+        assertEquals(target.toAbsolutePath().normalize(), resolver.globalRoot());
+
+        Map<String, Object> res = svc.resetToDefault();
+
+        assertEquals(source.toAbsolutePath().normalize().toString(), res.get("path"));
+        assertEquals(target.toAbsolutePath().normalize().toString(), res.get("previousPath"),
+                "要把原位置告诉用户——文件还在那儿");
+        assertEquals(source.toAbsolutePath().normalize(), resolver.globalRoot());
+        assertEquals(3L, countFiles(target), "自选目录里的文件一个都不许删");
+        assertEquals(3L, countFiles(source));
+
+        // 重启后不再回到自选位置
+        StorageProperties props = new StorageProperties();
+        props.getLocal().setRootPath(source.toAbsolutePath().toString());
+        ProjectStorageResolver fresh = new ProjectStorageResolver(props, null);
+        StorageLocationService restarted = new StorageLocationService(fresh, stateDir.toString());
+        restarted.applyOnStartup();
+        assertEquals(source.toAbsolutePath().normalize(), fresh.globalRoot());
+        assertEquals(false, restarted.current().get("custom"));
+    }
+
+    @Test
+    @DisplayName("自选目录已不可访问时也能恢复默认位置（权益失效 + 拔盘的死局出口）")
+    void resetWorksWhenCustomRootIsGone() throws IOException {
+        Path gone = tempDir.resolve("已拔掉的移动硬盘/awd");
+        resolver.relocate(gone);
+
+        StorageLocationService svc = service();
+        assertEquals(false, svc.current().get("available"));
+
+        assertDoesNotThrow(svc::resetToDefault);
+        assertEquals(source.toAbsolutePath().normalize(), resolver.globalRoot());
+        assertEquals(3L, countFiles(source));
+    }
+
+    @Test
+    @DisplayName("已经在默认位置时恢复默认是明确的错误，不是静默无操作")
+    void resetOnDefaultLocationRejected() {
+        StorageException e = assertThrows(StorageException.class, () -> service().resetToDefault());
+        assertTrue(e.getMessage().contains("默认位置"));
     }
 
     @Test

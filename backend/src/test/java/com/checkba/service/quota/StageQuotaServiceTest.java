@@ -42,7 +42,8 @@ class StageQuotaServiceTest {
         repository = mock(ProjectFileRepository.class);
         entitlementService = mock(EntitlementService.class);
         when(entitlementService.isEnabled(anyString())).thenReturn(false);
-        service = new StageQuotaService(repository, entitlementService);
+        // localMode=true：额度只在桌面单机版执行，团队服务器不限（见 StageQuotaService.limited 注释）
+        service = new StageQuotaService(repository, entitlementService, true);
 
         table.clear();
         put(folder(STAGE_FOLDER, StageQuotaService.STAGING_FOLDER_NAME));
@@ -209,12 +210,113 @@ class StageQuotaServiceTest {
     }
 
     @Test
-    @DisplayName("子文件夹不计入文件数")
+    @DisplayName("空的子文件夹本身不计入文件数")
     void subFoldersNotCounted() {
         fillStage(19, 1024);
         ProjectFile sub = folder(1900L, "子目录");
         sub.setParentId(STAGE_FOLDER);
         put(sub);
         assertDoesNotThrow(() -> service.checkAdmission(STAGE_FOLDER, pending(1, 1024)));
+    }
+
+    // ==================== 文件夹递归（拖文件夹曾能整体绕过额度） ====================
+
+    /** 造一个装了 n 个文件的文件夹，返回文件夹 id。 */
+    private Long folderWith(Long folderId, int n, long size) {
+        ProjectFile dir = folder(folderId, "尽调材料");
+        dir.setParentId(OTHER_FOLDER);
+        put(dir);
+        for (int i = 0; i < n; i++) put(file(folderId + 1 + i, folderId, size));
+        return folderId;
+    }
+
+    @Test
+    @DisplayName("拖入的文件夹按它装的文件数计——不能靠套一层目录绕过条数上限")
+    void incomingFolderCountsItsFiles() {
+        fillStage(15, 1024);
+        Long dir = folderWith(3000L, 10, 1024); // 15 + 10 = 25 > 20
+
+        StageQuotaExceededException e = assertThrows(StageQuotaExceededException.class,
+                () -> service.checkAdmission(STAGE_FOLDER, List.of(dir)));
+        assertTrue(e.getMessage().contains("已有文件不会被删除"));
+        verify(repository, never()).delete(any());
+        verify(repository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("拖入的文件夹按它装的字节数计——不能靠套一层目录绕过 500MB")
+    void incomingFolderCountsItsBytes() {
+        Long dir = folderWith(3000L, 2, StageQuotaService.FREE_MAX_BYTES);
+        assertThrows(StageQuotaExceededException.class,
+                () -> service.checkAdmission(STAGE_FOLDER, List.of(dir)));
+    }
+
+    @Test
+    @DisplayName("多层嵌套的文件夹也要一路数到底")
+    void nestedFoldersCountedRecursively() {
+        Long outer = folderWith(3000L, 5, 1024);
+        ProjectFile inner = folder(4000L, "第二层");
+        inner.setParentId(outer);
+        put(inner);
+        for (int i = 0; i < 16; i++) put(file(4100L + i, 4000L, 1024)); // 5 + 16 = 21 > 20
+
+        assertThrows(StageQuotaExceededException.class,
+                () -> service.checkAdmission(STAGE_FOLDER, List.of(outer)));
+    }
+
+    @Test
+    @DisplayName("同时勾了文件夹和它里面的文件：里面的文件只算一次")
+    void folderAndItsChildSelectedTogetherCountedOnce() {
+        fillStage(10, 1024);
+        Long dir = folderWith(3000L, 10, 1024); // 10 + 10 = 20，正好到上限
+        // 3001 是 dir 里的第一个文件，与 dir 一起选中；重复计数会变成 21 而误拒
+        assertDoesNotThrow(() -> service.checkAdmission(STAGE_FOLDER, List.of(dir, 3001L)));
+    }
+
+    @Test
+    @DisplayName("缓存区子目录里的存量文件计入用量，且不被当作新增重复计一次")
+    void filesInStageSubFolderCountAsExisting() {
+        ProjectFile sub = folder(1900L, "旧批次");
+        sub.setParentId(STAGE_FOLDER);
+        put(sub);
+        for (int i = 0; i < 20; i++) put(file(1910L + i, 1900L, 1024));
+
+        // 用量条要看得见它们（否则显示 0/20 却拒绝新文件，用户无法自证）
+        Map<String, Object> usage = service.usage(STAGE_FOLDER);
+        assertEquals(20, usage.get("fileCount"));
+
+        // 已经在区内的文件重复拖入不算新增
+        assertDoesNotThrow(() -> service.checkAdmission(STAGE_FOLDER, List.of(1910L, 1911L)));
+        // 但真正的新增会被拒
+        assertThrows(StageQuotaExceededException.class,
+                () -> service.checkAdmission(STAGE_FOLDER, pending(1, 1024)));
+    }
+
+    @Test
+    @DisplayName("自己是自己父目录的脏数据不会让递归转不出来")
+    void selfParentedFolderDoesNotHang() {
+        // 历史数据修复留下的自环：缓存区目录的 parentId 指向它自己，
+        // 于是「列出子项」把它自己也列进来。visitedFolders 必须挡住这一跳。
+        table.get(STAGE_FOLDER).setParentId(STAGE_FOLDER);
+        fillStage(3, 1024);
+
+        assertTimeoutPreemptively(java.time.Duration.ofSeconds(5), () -> {
+            Map<String, Object> usage = service.usage(STAGE_FOLDER);
+            assertEquals(3, usage.get("fileCount"));
+        });
+    }
+
+    // ==================== 团队服务器模式 ====================
+
+    @Test
+    @DisplayName("非单机模式（团队案件库服务器）不执行额度：本机权益对服务器成员没有意义")
+    void serverModeIsNeverLimited() {
+        StageQuotaService serverSide = new StageQuotaService(repository, entitlementService, false);
+        fillStage(100, StageQuotaService.FREE_MAX_BYTES);
+
+        assertDoesNotThrow(() -> serverSide.checkAdmission(STAGE_FOLDER, pending(50, 1024)));
+        Map<String, Object> usage = serverSide.usage(STAGE_FOLDER);
+        assertEquals(false, usage.get("limited"));
+        assertNull(usage.get("maxFiles"));
     }
 }

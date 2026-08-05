@@ -27,9 +27,50 @@ class ProjectFileControllerIdorTest {
     private ProjectMemberService projectMemberService;
     @Mock
     private FileTagService fileTagService;
+    @Mock
+    private com.checkba.service.quota.StageQuotaService stageQuotaService;
 
     @InjectMocks
     private ProjectFileController controller;
+
+    /**
+     * 缓存区用量端点吃的是全局 folderId，只验路径上的 projectId 是不够的：
+     * 服务层从文件夹自己那一行反查 projectId 再列子项，路径参数根本不参与约束，
+     * 于是 A 项目的成员能拿自己的 projectId 枚举出 B 项目任意目录的文件数与总字节。
+     */
+    @Test
+    void stageUsageRejectsFolderFromAnotherProject() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasReadPermission(1L, 1L)).thenReturn(true);
+            when(projectMemberService.isClient(1L, 1L)).thenReturn(false);
+            // 目标文件夹属于项目 999
+            ProjectFile foreign = new ProjectFile();
+            foreign.setId(777L);
+            foreign.setProjectId(999L);
+            when(projectFileService.getFile(777L)).thenReturn(foreign);
+
+            assertThrows(IllegalArgumentException.class,
+                    () -> controller.stageUsage(1L, 777L, "sess"));
+            verify(stageQuotaService, never()).usage(anyLong());
+        }
+    }
+
+    @Test
+    void stageUsageAllowsFolderWithinSameProject() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
+            when(projectMemberService.hasReadPermission(1L, 1L)).thenReturn(true);
+            when(projectMemberService.isClient(1L, 1L)).thenReturn(false);
+            ProjectFile own = new ProjectFile();
+            own.setId(100L);
+            own.setProjectId(1L);
+            when(projectFileService.getFile(100L)).thenReturn(own);
+
+            controller.stageUsage(1L, 100L, "sess");
+            verify(stageQuotaService).usage(100L);
+        }
+    }
 
     @Test
     void renameRejectsFileFromAnotherProject() {

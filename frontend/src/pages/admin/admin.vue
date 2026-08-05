@@ -530,9 +530,13 @@
             </view>
           </template>
 
-          <!-- 文件缓存区存储位置：仅在已解锁「文件缓存区无限版」时出现。
-               未解锁时整块入口不显示——没买的功能不该在设置页里当广告位。 -->
-          <view v-if="stageUnlimited" class="section-card">
+          <!-- 文件缓存区存储位置。
+               「当前位置」永远显示，不按权益隐藏：权益可能在自选位置生效之后失效
+               （Key 被吊销、断开账户、离线超宽限），数据仍在自选路径上照常读写。
+               此时若把整块藏起来，用户就看不到自己的文件在哪，也看不到下面那句
+               「该目录当前不可访问」——而那是文件突然打不开时唯一的指路牌。
+               未解锁时藏的是「更改位置」这个付费动作，不是信息本身。 -->
+          <view v-if="storageLocation.path" class="section-card">
             <view class="section-header">
               <text class="section-title">文件缓存区存储位置</text>
               <text class="section-subtitle">
@@ -543,22 +547,42 @@
               <view class="provider-card">
                 <view class="form-row">
                   <text class="form-label">当前位置</text>
-                  <text class="storage-path">{{ storageLocation.path || '读取中...' }}</text>
+                  <text class="storage-path">{{ storageLocation.path }}</text>
                 </view>
-                <text v-if="storageLocation.path && !storageLocation.available" class="storage-warn">
-                  该目录当前不可访问（磁盘未连接或已被移动）。文件操作会失败，请接回磁盘或改选其他位置。
+                <text v-if="!storageLocation.available" class="storage-warn">
+                  该目录当前不可访问（磁盘未连接或已被移动）。文件操作会失败，请接回磁盘，或恢复默认位置。
                 </text>
                 <text v-else-if="!storageLocation.custom" class="account-note">
                   当前使用默认位置。
                 </text>
+                <UnlockHint
+                  v-if="!storageCanMove"
+                  text="更改存储位置属于「文件缓存区无限版」。已有文件不受影响，仍在上面这个目录里。"
+                />
                 <view class="account-connect-actions">
-                  <button class="comp-btn" :disabled="storageBusy" @tap="onChangeStorageLocation">
+                  <button
+                    v-if="storageCanMove"
+                    class="comp-btn"
+                    :disabled="storageBusy"
+                    @tap="onChangeStorageLocation"
+                  >
                     {{ storageBusy ? '迁移中...' : '更改位置' }}
                   </button>
+                  <!-- 恢复默认不设权益闸：这是退回免费版的默认状态，不发放任何付费能力。
+                       锁在付费墙后面会让「权益失效 + 外置盘拔掉」的用户彻底出不来。 -->
+                  <button
+                    v-if="storageLocation.custom"
+                    class="comp-btn"
+                    :disabled="storageBusy"
+                    @tap="onResetStorageLocation"
+                  >
+                    恢复默认位置
+                  </button>
                 </view>
-                <text class="account-note">
+                <text v-if="storageCanMove" class="account-note">
                   迁移会把现有文件<text class="storage-emph">复制</text>到新目录并逐一校验，成功后才切换。
-                  原目录会完整保留为备份，确认无误后可自行删除。迁移期间请不要编辑文档。
+                  原目录会完整保留为备份，确认无误后可自行删除。迁移期间请不要编辑文档，
+                  若期间有文档自动保存，本次迁移会整体放弃并保持原位置。
                 </text>
               </view>
             </view>
@@ -752,17 +776,19 @@ import {
   getAdminConfig, saveAdminConfig, resetWizard,
   cloudConnect, listCloudConnections, disconnectCloudConnection,
   getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
-  getStorageLocation, moveStorageLocation,
+  getStorageLocation, moveStorageLocation, resetStorageLocation,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
+import UnlockHint from '@/components/UnlockHint.vue'
 
 // 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里
 const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
 
 export default {
   name: 'AdminPage',
+  components: { UnlockHint },
   data() {
     return {
       userDisplayName: '用户',
@@ -825,9 +851,10 @@ export default {
       accountKeyInput: '',
       accountBusy: false,
       entitlementBusy: false,
-      // 文件缓存区存储位置（PR-C，需 stage.unlimited）
-      // { path, defaultPath, custom, available, movedAt }
-      storageLocation: { path: '', defaultPath: '', custom: false, available: true },
+      // 文件缓存区存储位置（PR-C）
+      // { path, defaultPath, custom, available, movedAt, entitled }
+      // path 为空 = 后端没给（非单机模式/旧后端），整块不显示
+      storageLocation: { path: '', defaultPath: '', custom: false, available: true, entitled: false },
       storageBusy: false,
     }
   },
@@ -835,9 +862,15 @@ export default {
     isDesktop() {
       return typeof window !== 'undefined' && !!(window.checkbaDesktop && window.checkbaDesktop.model)
     },
-    // 自选存储位置是「文件缓存区无限版」的付费能力，未解锁时入口整块不显示
     stageUnlimited() {
       return isEnabled(FEATURES.STAGE_UNLIMITED)
+    },
+    // 能不能改到自选位置。以后端返回的 entitled 为准（它才是执行者）；
+    // 老后端不返回这个字段时退回本地权益缓存判断。
+    // 注意这只管「更改位置」这个付费动作——查看当前位置与恢复默认位置都不受它约束。
+    storageCanMove() {
+      const entitled = this.storageLocation.entitled
+      return entitled === undefined || entitled === null ? this.stageUnlimited : !!entitled
     },
     visibleNavItems() {
       return this.navItems.filter((n) => !n.desktopOnly || this.isDesktop)
@@ -1039,10 +1072,9 @@ export default {
       }
       if (nav.key === 'account') {
         this.loadAccount()
-        // 权益决定「存储位置」入口是否出现；拉一次缓存即可（模块级共享，不会重复请求）
-        refreshEntitlements().then(() => {
-          if (this.stageUnlimited) this.loadStorageLocation()
-        })
+        // 权益决定「更改位置」按钮出不出现；当前位置本身无论有没有权益都要显示
+        this.loadStorageLocation()
+        refreshEntitlements()
       }
     },
     async loadPlatformAiAvailability() {
@@ -1107,7 +1139,7 @@ export default {
       this.entitlementBusy = true
       try {
         await refreshEntitlements(true)
-        if (this.stageUnlimited) await this.loadStorageLocation()
+        await this.loadStorageLocation()
         uni.showToast({
           title: this.stageUnlimited ? '权益已更新' : '已刷新，未发现新的解锁',
           icon: 'none',
@@ -1124,7 +1156,40 @@ export default {
         const loc = await getStorageLocation()
         if (loc && typeof loc === 'object') this.storageLocation = loc
       } catch (e) {
-        // 未解锁 / 旧后端 / 非单机模式：入口本就不显示，静默即可
+        // 旧后端 / 非单机模式：拿不到 path，整块不显示，静默即可
+      }
+    },
+    // 恢复默认位置：只换指针，不搬也不删文件。自选目录里的东西原样留在那里，
+    // 所以弹窗必须把原路径念给用户听——否则会以为「数据没了」。
+    async onResetStorageLocation() {
+      const previous = this.storageLocation.path
+      const ok = await new Promise((r) => uni.showModal({
+        title: '恢复默认位置',
+        content: '应用将改用默认目录：\n' + (this.storageLocation.defaultPath || '')
+          + '\n\n当前目录中的文件不会被删除，仍完整保留在：\n' + previous
+          + '\n\n恢复后这些文件在应用里将不再出现（数据仍在磁盘上），可稍后自行拷回或重新迁移。',
+        confirmText: '恢复默认',
+        success: (res) => r(res.confirm),
+      }))
+      if (!ok) return
+
+      this.storageBusy = true
+      try {
+        await resetStorageLocation()
+        await this.loadStorageLocation()
+        uni.showModal({
+          title: '已恢复默认位置',
+          content: '原目录中的文件一个都没有删除，仍在：\n' + previous,
+          showCancel: false,
+        })
+      } catch (e) {
+        uni.showModal({
+          title: '恢复未完成',
+          content: (e && e.message) || '恢复失败，存储位置维持不变。',
+          showCancel: false,
+        })
+      } finally {
+        this.storageBusy = false
       }
     },
     async onChangeStorageLocation() {

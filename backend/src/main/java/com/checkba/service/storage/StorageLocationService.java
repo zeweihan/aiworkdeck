@@ -108,6 +108,12 @@ public class StorageLocationService {
      */
     public synchronized Map<String, Object> migrate(String targetPath) {
         Path source = resolver.globalRoot();
+        // 源不可访问时不能往下走：copyTree 见源目录不存在会把它建出来，
+        // 于是「0 个文件迁移成功」，指针切到新的空目录，用户的数据留在拔掉的那块盘上而应用一片空白。
+        if (!Files.isDirectory(source)) {
+            throw new StorageException("当前存储目录不可访问（磁盘未连接或已被移动），无法迁移。"
+                    + "请先接回磁盘再迁移；若不打算继续使用该磁盘，可先恢复默认位置。");
+        }
         Path target = validateTarget(targetPath, source);
 
         boolean createdTargetDir = !Files.exists(target);
@@ -118,6 +124,15 @@ public class StorageLocationService {
             sourceTally = tally(source);
             copyTree(source, target);
             Tally targetTally = tally(target);
+            // 源侧复查：只比「复制前的源」和「复制后的目标」是不够的。复制一棵大树要几分钟，
+            // 期间自动保存/AI 改文档/浏览器下载都会往源里落盘；落在已经被 copyTree 走过的目录里
+            // 的那些文件不会出现在目标里，而两侧数字仍然相等——校验通过、指针切走，
+            // 那个文件在文件树里看得见却打不开。宁可让用户重来一次。
+            Tally sourceAfter = tally(source);
+            if (sourceAfter.files != sourceTally.files || sourceAfter.bytes != sourceTally.bytes) {
+                throw new StorageException("迁移期间原目录发生了变化（可能有文档在自动保存，或有下载/AI 改动在进行），"
+                        + "为确保一个文件都不落下，已放弃本次迁移并保持原位置。请关闭正在编辑的文档后重试。");
+            }
             if (targetTally.files != sourceTally.files || targetTally.bytes != sourceTally.bytes) {
                 throw new StorageException("迁移校验未通过（文件数或大小不一致），已放弃本次迁移");
             }
@@ -135,7 +150,15 @@ public class StorageLocationService {
         State state = new State();
         state.root = target.toString();
         state.movedAt = Instant.now().toString();
-        saveState(state);
+        try {
+            saveState(state);
+        } catch (StorageException e) {
+            // 此时 relocate 还没执行，存储根**没有**切换，目标里躺着一份完整副本。
+            // 留着它下次迁移会撞上「请选择一个空目录」，用户得先手工删目录才能重试——
+            // 所以这里连同副本一起清掉，回到「没点过这个按钮」的状态。源目录全程只读。
+            rollback(target, createdTargetDir);
+            throw e;
+        }
         resolver.relocate(target);
         log.info("存储位置已迁移: {} -> {}（{} 个文件），原目录保留为备份", source, target, sourceTally.files);
 
@@ -147,6 +170,32 @@ public class StorageLocationService {
         return result;
     }
 
+    /**
+     * 恢复到默认位置。<b>只换指针，不搬也不删任何文件</b>——自选目录里的数据原样留在那里。
+     *
+     * <p>为什么它不要求权益（与 {@link #migrate} 不同）：权益可能在自选位置生效之后失效
+     * （Key 被吊销、断开账户、离线超宽限）。此时自选目录若又不可访问（外置盘拔了、被改名），
+     * 用户就被永久困在一个既进不去也换不掉的存储根上，所有文件操作无解释地失败。
+     * 「退回免费版的默认位置」不发放任何付费能力，把它锁在付费墙后面只会制造死局。</p>
+     *
+     * @return 恢复结果：默认位置与被留下的原位置（前端要把原位置显示给用户，文件还在那儿）
+     */
+    public synchronized Map<String, Object> resetToDefault() {
+        Path previous = resolver.globalRoot();
+        Path defaultRoot = resolver.configuredRoot();
+        if (previous.equals(defaultRoot)) {
+            throw new StorageException("当前已经是默认位置");
+        }
+        saveState(new State()); // root=null：下次启动不再应用自选路径
+        resolver.relocate(defaultRoot);
+        log.info("存储位置已恢复默认: {} -> {}（原目录内容一律保留）", previous, defaultRoot);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("path", defaultRoot.toString());
+        result.put("previousPath", previous.toString());
+        return result;
+    }
+
     // ==================== 内部 ====================
 
     private Path validateTarget(String targetPath, Path source) {
@@ -154,14 +203,20 @@ public class StorageLocationService {
             throw new StorageException("请选择一个目录");
         }
         Path target = Path.of(targetPath).toAbsolutePath().normalize();
-        if (target.equals(source)) {
+        // 嵌套判断必须在**解析软链之后**做：normalize() 是纯词法的，
+        // 一个指向源目录内部的软链（/tmp/link -> /data/sub）在词法上与 /data 毫无关系，
+        // 三条围栏全部判 false，随后 copyTree 顺着链把源目录复制进它自己，
+        // 直到路径长度触顶失败，并在用户的数据根里留下几百个垃圾目录。
+        Path realSource = realPathOf(source);
+        Path realTarget = realPathOf(target);
+        if (realTarget.equals(realSource)) {
             throw new StorageException("新位置与当前位置相同");
         }
         // 互相嵌套会让「复制整棵树」变成无限自我复制，或把源埋进目标里
-        if (target.startsWith(source)) {
+        if (realTarget.startsWith(realSource)) {
             throw new StorageException("新位置不能在当前存储目录内部");
         }
-        if (source.startsWith(target)) {
+        if (realSource.startsWith(realTarget)) {
             throw new StorageException("新位置不能是当前存储目录的上级目录");
         }
         if (Files.exists(target) && !Files.isDirectory(target)) {
@@ -179,6 +234,25 @@ public class StorageLocationService {
             }
         }
         return target;
+    }
+
+    /**
+     * 解析软链后的真实路径。路径尚不存在时（用户在选择器里新建的目录），
+     * 取最近的已存在祖先的真实路径，再把剩余的段拼回去。
+     * 解析不了（权限等）就退回词法路径——那只是回到没有本方法时的判定强度，不会更松。
+     */
+    private static Path realPathOf(Path path) {
+        Path existing = path;
+        while (existing != null && !Files.exists(existing)) {
+            existing = existing.getParent();
+        }
+        if (existing == null) return path;
+        try {
+            Path real = existing.toRealPath();
+            return existing.equals(path) ? real : real.resolve(existing.relativize(path));
+        } catch (IOException e) {
+            return path;
+        }
     }
 
     private void assertWritable(Path dir) {
@@ -269,9 +343,9 @@ public class StorageLocationService {
             Files.createDirectories(stateFile.getParent());
             Files.write(stateFile, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(state));
         } catch (Exception e) {
-            // 数据已经搬过去了，只是没记住。抛出去让用户知道要重来一次，
-            // 比默默回到旧位置（新位置留一份孤儿副本）好。
-            throw new StorageException("存储位置已迁移但配置写入失败，请重试：" + e.getMessage());
+            // 抛出去（而不是吞掉）：配置没记住就等于这次操作没发生，调用方据此回滚并保持原位置。
+            // 注意文案不能说「已迁移」——此时 relocate 还没执行，存储根一动没动。
+            throw new StorageException("存储位置配置写入失败，已保持原位置：" + e.getMessage());
         }
     }
 }

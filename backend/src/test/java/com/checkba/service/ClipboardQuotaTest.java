@@ -43,7 +43,8 @@ class ClipboardQuotaTest {
     void setUp() {
         repository = mock(ClipboardItemRepository.class);
         entitlementService = mock(EntitlementService.class);
-        service = new ClipboardService(repository, mock(StorageServiceFactory.class), entitlementService);
+        // localMode=true：额度只在桌面单机版执行，团队服务器不限（见 ClipboardService.list 注释）
+        service = new ClipboardService(repository, mock(StorageServiceFactory.class), entitlementService, true);
         when(entitlementService.isEnabled(anyString())).thenReturn(false);
     }
 
@@ -188,5 +189,20 @@ class ClipboardQuotaTest {
         ClipboardListResult res = service.list(USER, null, 80);
         assertEquals(0, res.items().size());
         assertEquals(0, res.hiddenCount());
+    }
+
+    @Test
+    @DisplayName("非单机模式（团队案件库服务器）不执行额度：本机权益对服务器成员没有意义")
+    void serverModeIsNeverLimited() {
+        ClipboardService serverSide = new ClipboardService(
+                repository, mock(StorageServiceFactory.class), entitlementService, false);
+        List<ClipboardItem> all = items(50, 24); // 大半在 3 天以外
+        stubList(all);
+
+        ClipboardListResult res = serverSide.list(USER, null, 80);
+        assertEquals(50, res.items().size(), "服务器上没有本机权益可言，不能把成员截到 20 条");
+        assertFalse(res.limited());
+        assertEquals(0, res.hiddenCount());
+        verify(entitlementService, never()).isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED);
     }
 }

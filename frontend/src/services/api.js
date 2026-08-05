@@ -1269,7 +1269,8 @@ export function getStageUsage(projectId, folderId) {
   }).then(unwrapEnvelope)
 }
 
-// 本机文件存储位置（需 stage.unlimited）：{ path, defaultPath, custom, available, movedAt }
+// 本机文件存储位置：{ path, defaultPath, custom, available, movedAt, entitled }
+// 只读展示不要求权益——权益失效后用户仍须看得到自己的数据在哪（entitled 告诉前端能不能改）
 export function getStorageLocation() {
   return request({
     url: '/api/storage/location',
@@ -1284,6 +1285,16 @@ export function moveStorageLocation(path) {
     url: '/api/storage/location',
     method: 'POST',
     data: { path },
+    header: { 'Content-Type': 'application/json' },
+  })
+}
+
+// 恢复默认存储位置。只换指针，不搬也不删任何文件——自选目录里的数据原样留在原处。
+// 不要求权益：权益失效 + 自选目录不可访问时，这是用户唯一的出口。
+export function resetStorageLocation() {
+  return request({
+    url: '/api/storage/location/reset',
+    method: 'POST',
     header: { 'Content-Type': 'application/json' },
   })
 }

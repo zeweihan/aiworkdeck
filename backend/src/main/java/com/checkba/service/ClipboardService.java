@@ -5,7 +5,6 @@ import com.checkba.model.entity.ClipboardItem;
 import com.checkba.repository.ClipboardItemRepository;
 import com.checkba.service.entitlement.EntitlementService;
 import com.checkba.service.entitlement.FeatureCatalog;
-import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -17,7 +16,6 @@ import java.util.List;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class ClipboardService {
 
     /** 免费版最多回溯的条数（Spec §5）。 */
@@ -28,6 +26,18 @@ public class ClipboardService {
     private final ClipboardItemRepository repository;
     private final com.checkba.storage.StorageServiceFactory storageServiceFactory;
     private final EntitlementService entitlementService;
+    private final boolean localMode;
+
+    public ClipboardService(ClipboardItemRepository repository,
+                            com.checkba.storage.StorageServiceFactory storageServiceFactory,
+                            EntitlementService entitlementService,
+                            @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+                            boolean localMode) {
+        this.repository = repository;
+        this.storageServiceFactory = storageServiceFactory;
+        this.entitlementService = entitlementService;
+        this.localMode = localMode;
+    }
 
     private com.checkba.storage.StorageService getStorageService() {
         return storageServiceFactory.getStorageService();
@@ -43,12 +53,18 @@ public class ClipboardService {
      * <p>{@code hiddenCount} 只统计**因额度**不可见的条数，不含仅被分页 {@code limit}
      * 挡住的：后者对付费用户同样存在，把它算进去会让提示文案变成谎话。
      * 算法：{@code hidden = 总数 − min(3天内的条数, 20)}。</p>
+     *
+     * <p>非单机模式（团队案件库服务器）不执行额度：{@link EntitlementService} 是按本机的
+     * （无 userId 维度，来源是本机 {@code ~/.aiworkdeck} 状态），服务器上恒为空集，
+     * 真照着执行会把每个接入成员的剪贴板都截到 20 条且永远无法解锁。
+     * 这个 SKU 卖的是单机版的本地能力，与 {@code LicenseController}
+     * 「非 local-mode 恒为已解锁正式版」同口径。</p>
      */
     public ClipboardListResult list(Long userId, String query, int limit) {
         int size = Math.max(1, Math.min(200, limit));
         String q = StringUtils.hasText(query) ? query.trim() : null;
 
-        if (entitlementService.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED)) {
+        if (!localMode || entitlementService.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED)) {
             return ClipboardListResult.unlimited(fetch(userId, q, size));
         }
 

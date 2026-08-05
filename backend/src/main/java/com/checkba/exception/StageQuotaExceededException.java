@@ -4,7 +4,7 @@ package com.checkba.exception;
  * 文件缓存区免费额度已满（PR-C）。
  *
  * <p>语义是**拒绝新增**，不是清理：抛出时缓存区里已有的文件一个都没动。
- * 由 {@code GlobalExceptionHandler} 转成 code=4002 + feature=stage.unlimited，
+ * 由 {@code GlobalExceptionHandler} 转成 code=4003 + feature=stage.unlimited，
  * 前端据此显示解锁引导而非通用报错。</p>
  */
 public class StageQuotaExceededException extends RuntimeException {

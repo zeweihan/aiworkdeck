@@ -35,6 +35,10 @@ public class ProjectFileController {
      * GET /api/projects/{projectId}/files/stage/usage?folderId=xxx
      *
      * 上限常量只在后端定义一处，前端不复制——改额度时不会出现两边不一致。
+     *
+     * folderId 是全局 id，必须校验归属：只验路径上的 projectId 的话，
+     * 项目 A 的成员能拿自己的 projectId 去问项目 B 任意目录的文件数与总字节
+     * （数字主键可枚举）。与本文件其他按 fileId 操作的接口同一道闸。
      */
     @GetMapping("/stage/usage")
     public Map<String, Object> stageUsage(
@@ -46,6 +50,9 @@ public class ProjectFileController {
             throw new UnauthorizedException("请先登录");
         }
         checkFileTreeAccess(projectId, userId);
+        if (folderId != null) {
+            checkFileInProject(folderId, projectId);
+        }
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
         result.put("data", stageQuotaService.usage(folderId));
