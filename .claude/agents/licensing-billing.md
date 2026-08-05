@@ -88,8 +88,8 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 `payload = [0x01 版本, 0x01 类型 trial, iat_u32_BE 签发秒级时间戳]`。
 公钥内置于 backend resources，**离线验签，解锁全程不联网**。
 验签只校验签名与结构，**不校验 iat 过期**——试用码目前是永久有效的公开码（README「获取与解锁」一节公布），
-解锁页「获取试用码」链接直指 `https://github.com/zeweihan/aiworkdeck#readme`，
-所以**改 README 那一节的位置或删掉码，等于弄坏产品里的一个按钮**。
+解锁页「获取试用码」按钮（`unlock.vue` 的 `TRIAL_CODE_URL`）指向 `https://github.com/zeweihan/aiworkdeck#readme`，
+是整篇 README 的锚点而非节锚点：挪动章节位置不影响它，但**删改 README 里的这枚码，等于弄坏产品里的一个按钮**。
 签发脚本在官网仓（PR-W4），改格式必须两仓同步。
 
 ### 账户 Key（awdk_）
@@ -144,9 +144,14 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 | `GET /api/account/me` → `{username, displayName, balanceCents, plan, createdAt}` | Bearer | `connect()` 校验 Key、`fetchProfile()` 取余额 |
 | `GET /api/account/entitlements` → `{entitlements:[{feature, purchasedAt, orderId}]}` | Bearer | `fetchEntitlements()` |
 | `GET /api/account/ledger?limit=50` → `{entries:[...]}` | Bearer | `fetchLedger()`，桌面只挑 `kind=ai_alloc` 显示 |
-| `GET /api/account/ai-usage` → `{configured, hasKey, limitUsd, usageUsd, remainingUsd, keyMasked}` | Bearer | `fetchAiUsage()` |
+| `GET /api/account/ai-usage`(*) → `{configured, hasKey, limitUsd, usageUsd, remainingUsd, keyMasked}` | Bearer | `fetchAiUsage()` |
 | `POST /api/account/ai-key` → `{openrouterKey, limitUsd}`（幂等） | Bearer | `PlatformAiChannel.fetch()`；409 `no_allocation` = 还没分配额度 |
 | `GET /api/registry/{skills,plugins}/{id}/bundle`、`/file` | 付费项要 Bearer 且已购，否则 402 | `SkillMarketService` / `PluginMarketService` |
+
+(*) `ai-usage` 是唯一一条**权威文档也没收录**的端点：官网仓的 `doc/desktop-contract.md` 与
+`scripts/contract-check.mts` 里都搜不到它，实现只在官网仓 `app/api/account/ai-usage/route.ts`
+（那里还多返回 `exchangeRate` / `marginMultiplier` / `disabled` 三个字段，桌面端没用）。
+上表这一行的字段以该 route 为准；官网仓补齐这条端点 + contract-check 之前，改它两侧不会有任何护栏提醒。
 
 三处与总 Spec §9 字面不同、**以实现与官网契约为准**：`verify-key` 的 `plan` 是 `paid|free`（不是 `trial|paid`）；
 `ledger` 返回 `{entries:[...]}`（不是裸数组）；`ai-usage` 这个端点总 Spec 里压根没有。
@@ -188,7 +193,10 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
    - `remoteAddr` 非回环 → 403（只信 `getRemoteAddr()`，不看 `X-Forwarded-For`）。
    - 出现任何反代痕迹头（`X-Forwarded-*` / `X-Real-IP` / `Forwarded`）→ 403。这不是信任这些头，
      而是把它们的出现当作「这台机器被反代了」的信号（团队版基线里 nginx 与后端同机，反代过来的 remoteAddr 恰是 127.0.0.1）。
-   过滤器 order 是 `HIGHEST_PRECEDENCE`，让位于 `CorsConfig` 之前——被拒的请求不该拿到任何 CORS 响应头。
+   过滤器 order 是 `HIGHEST_PRECEDENCE`，排在 `CorsConfig` 之前——被拒的请求不该拿到任何 CORS 响应头。
+   Origin 白名单判据复用 `CorsConfig.isTrustedOrigin`，而它第一行是 `if (allowAll) return true`：
+   `security.cors.allow-all=true` 会把上面第一条闸整体打开。该项目前任何 yml 里都没配（默认 false），
+   属潜伏逃生门——排查「闸门为什么没触发」时先看它。
    `POST /api/license/deactivate`、`POST /api/local-identity/select` 这类匿名 POST 全靠它兜着。
 4. **身份解析在多候选时不猜，交给用户选**。老安装的库里常有多个历史账号，且 `admin` 往往是空壳
    （真机实测：admin 1 项目 0 文件，用户数据 6 项目 21 文件在 `hanzewei` 名下）。回落 admin 会让老用户
@@ -239,8 +247,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   `service/ai/{PluginMarketServiceTest, skill/SkillMarketServiceTest}`、
   `config/LocalModeAccessFilterTest`、`config/LocalModeLoopbackGuardTest`。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
-- 端到端：`npm run test:app-e2e`（**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。
-  `npm run test:desktop-e2e` 的 provision 会自动用试用码解锁并置向导。改解锁门/启动链必跑这两套。
+- 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
+  （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。
+  `cd frontend && npm run test:desktop-e2e` 的 provision 会自动用试用码解锁并置向导。改解锁门/启动链必跑这两套。
 - 手工复验跨站防护（PR-A 安全修复时用过的配方）：`curl` 分别打无 Origin、`http://localhost:5174`、
   恶意 Origin、带 `X-Forwarded-For` 四种形态的 POST，前两者应通过、后两者应 403。
 - 试用码本身可离线复验：base32 解码后应为 70 字节、`payload[0..1] == 0x01 0x01`，
