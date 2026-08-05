@@ -239,6 +239,17 @@ class SkillMarketServiceTest {
             [{ "id": "due-diligence", "name": "尽调助手", "triggers": ["尽调"],
                "priceCents": 1990, "pricingModel": "once" }]""";
 
+    /**
+     * 付费闸门的文案不能撞上前端的掉线启发式：services/api.js 对 {@code code:1} 的消息做子串匹配，
+     * 见到「登录」「未授权」「请先」就清本地会话，浏览器端还会跳登录页。这里是业务错误，不是掉线。
+     */
+    private static void assertNotMistakenForLogout(String message) {
+        for (String needle : List.of("登录", "未授权", "请先")) {
+            assertFalse(message.contains(needle),
+                    "文案含「" + needle + "」会被前端当成掉线清会话: " + message);
+        }
+    }
+
     @Test
     @DisplayName("listMarket：官网旧格式没有 priceCents 时按免费处理（向后兼容，不能把免费项锁住）")
     void listTreatsMissingPriceAsFree() {
@@ -282,6 +293,7 @@ class SkillMarketServiceTest {
                 () -> service.install("due-diligence"));
         assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
         assertTrue(e.getMessage().contains("¥19.90"), "价格要写进引导文案: " + e.getMessage());
+        assertNotMistakenForLogout(e.getMessage());
         assertEquals(List.of(REGISTRY_URL), service.requestedUrls, "只查了元数据，不该再打 bundle 端点");
     }
 
@@ -335,6 +347,50 @@ class SkillMarketServiceTest {
         service.responses.put(REGISTRY_URL + "/contract-review/bundle", bundleJson("contract-review"));
 
         assertEquals("contract-review", service.install("contract-review"));
-        assertEquals("null", service.sentBearers.get(1), "价格未知按免费，不带鉴权头");
+        assertEquals("null", service.sentBearers.get(1), "未连账户就没得带，按免费继续");
+    }
+
+    @Test
+    @DisplayName("install：价格没查到但本机已连账户时照带 Bearer（已购用户不该被 402 反过来指控没付费）")
+    void unknownPriceStillSendsBearerWhenConnected() {
+        Path skillsDir = tempDir.resolve("skills");
+        StubMarketService service = newService(skillsDir, new PluginService(),
+                gate("awdk_live", "skill:due-diligence"));
+        // 列表 url 缺失 = 价格查不到；付费与否无从判断
+        service.responses.put(REGISTRY_URL + "/due-diligence/bundle", bundleJson("due-diligence"));
+
+        assertEquals("due-diligence", service.install("due-diligence"));
+        assertEquals("awdk_live", service.sentBearers.get(1),
+                "价格未知时本机有 Key 就带上——免费项的 bundle 端点不看 Authorization，附上无副作用");
+    }
+
+    @Test
+    @DisplayName("install：价格未知 + 未连账户吃到 402 时说「去连接账户」，不说「去购买」")
+    void unknownPrice402WithoutAccountSuggestsConnecting() {
+        StubMarketService service = newService(tempDir.resolve("skills"), new PluginService());
+        String bundleUrl = REGISTRY_URL + "/due-diligence/bundle";
+        service.responses.put(bundleUrl, "{\"code\":\"payment_required\",\"priceCents\":1990,\"itemName\":\"尽调助手\"}");
+        service.statuses.put(bundleUrl, 402);
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> service.install("due-diligence"));
+        assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
+        assertFalse(e.getMessage().contains("需购买后安装"),
+                "本机没连账户，官网无从查购买记录：402 不等于用户没买过 —— " + e.getMessage());
+        assertNotMistakenForLogout(e.getMessage());
+    }
+
+    @Test
+    @DisplayName("listMarket：priceCents 畸形（负数 / 超上限的截断值）按未知处理，不展示假价格")
+    void listNormalizesMalformedPrice() {
+        StubMarketService service = newService(tempDir.resolve("skills"), new PluginService());
+        // 1215752191 = 官网写了个超 int 范围的值、反序列化时被截断的实测结果（¥12,157,521.91）
+        service.responses.put(REGISTRY_URL, """
+                [{ "id": "neg-price", "name": "负价", "priceCents": -100 },
+                 { "id": "huge-price", "name": "溢出", "priceCents": 1215752191 }]""");
+
+        List<SkillMarketService.MarketSkillView> list = service.listMarket();
+        assertEquals(0, list.get(0).getPriceCents(), "负数按未知");
+        assertEquals(0, list.get(1).getPriceCents(), "超上限只可能是畸形值，不能当真价展示");
     }
 }

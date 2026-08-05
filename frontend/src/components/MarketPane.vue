@@ -452,12 +452,21 @@ export default {
   // 原页面在 onLoad 里拉取（无路由参数依赖）；组件化后等价迁到 mounted，
   // 嵌入态每次挂载（含 :key 变化触发的重挂）都会重新拉取四组数据
   mounted() {
-    this.loadPlugins()
-    this.loadSkills()
-    this.loadMarket()
-    this.loadPluginMarket()
+    this.reloadAll()
+    // 设置页连接/断开账户后广播回来：付费项的按钮形态跟着账户状态变，
+    // 而设置页是 navigateTo 打开的、本页并不销毁，不订阅就会停在旧状态转不出去
+    uni.$on('awd:market-changed', this.reloadAll)
+  },
+  beforeUnmount() {
+    uni.$off('awd:market-changed', this.reloadAll)
   },
   methods: {
+    reloadAll() {
+      this.loadPlugins()
+      this.loadSkills()
+      this.loadMarket()
+      this.loadPluginMarket()
+    },
     tabCount(key) {
       if (key === 'skill') return this.marketSkills.length
       if (key === 'plugin') return this.marketPlugins.length

@@ -7,10 +7,14 @@
 
 const SITE_BASE = 'https://www.aiworkdeck.com'
 
-/** 售价（分）。缺失、非数字、负数一律 0 = 免费。 */
+// 售价上限（分）= ¥100,000，与后端 MarketPurchaseGate.MAX_PRICE_CENTS 同口径。
+// 超上限必是注册表畸形值（如 long 被截成 int），按未知处理——展示一个假价格比展示「免费」更糟。
+const MAX_PRICE_CENTS = 100000 * 100
+
+/** 售价（分）。缺失、非数字、负数、超上限一律 0 = 免费。 */
 export function priceCentsOf(item) {
   const n = Number(item && item.priceCents)
-  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0
+  return Number.isFinite(n) && n > 0 && n <= MAX_PRICE_CENTS ? Math.round(n) : 0
 }
 
 export function isPaid(item) {

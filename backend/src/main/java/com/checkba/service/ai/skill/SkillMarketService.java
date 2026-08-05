@@ -30,7 +30,9 @@ import java.util.regex.Pattern;
  * <h3>付费项（PR-D）</h3>
  * 列表多出 {@code priceCents}（分，0=免费）/{@code pricingModel}，安装时 bundle 端点对付费项要求
  * {@code Authorization: Bearer awdk_} 且已购，否则 402。判定与文案统一在 {@link MarketPurchaseGate}。
- * <b>免费项（含官网旧格式缺 priceCents 字段）的链路一字不变</b>：不查账户、不带鉴权头、不多一次往返。
+ * <b>免费项（含官网旧格式缺 priceCents 字段）不查账户、不带鉴权头</b>，bundle 请求逐字节与改造前一致。
+ * 唯一的增量是 {@link #install} 会先查一次注册表列表拿价格（价格必须服务端自证，见 {@link #findRegistryEntry}），
+ * 免费项也走这一步——不能靠「是不是免费」来决定要不要查，那等于让客户端说了算。
  */
 @Service
 @Slf4j
@@ -96,7 +98,7 @@ public class SkillMarketService {
             throw new IllegalStateException("注册表返回内容无法解析: " + e.getMessage());
         }
         for (MarketSkillView view : list) {
-            view.setPriceCents(normalizePrice(view.getPriceCents()));
+            view.setPriceCents(MarketPurchaseGate.normalizePrice(view.getPriceCents()));
             if (view.getPricingModel() == null || view.getPricingModel().isBlank()) {
                 view.setPricingModel("once");
             }
@@ -112,11 +114,6 @@ public class SkillMarketService {
         return purchaseGate.accountConnected();
     }
 
-    /** 旧格式缺字段、负数、非法值一律按免费。 */
-    private static int normalizePrice(Integer raw) {
-        return raw == null || raw < 0 ? 0 : raw;
-    }
-
     /**
      * 安装（或重装 = 更新）一个在线 skill：下载 bundle 写入 {ai.skills.dir}/{id}/ 并 rescan。
      * @return 安装的 skill id
@@ -126,10 +123,13 @@ public class SkillMarketService {
     public synchronized String install(String id) {
         requireValidId(id);
         MarketSkillView entry = findRegistryEntry(id);
-        int priceCents = entry == null ? 0 : normalizePrice(entry.getPriceCents());
+        int priceCents = entry == null ? 0 : MarketPurchaseGate.normalizePrice(entry.getPriceCents());
         String itemName = entry == null || entry.getName() == null ? id : entry.getName();
-        // 免费项 bearer 为 null：不带鉴权头，与改造前逐字节一致
-        String bearer = purchaseGate.bearerFor(priceCents, itemName);
+        // 免费项 bearer 为 null：不带鉴权头，与改造前逐字节一致。
+        // entry == null 是「价格没查到」而不是「免费」：本机有 Key 就带上，见 bearerForUnknownPrice
+        String bearer = entry == null
+                ? purchaseGate.bearerForUnknownPrice()
+                : purchaseGate.bearerFor(priceCents, itemName);
 
         RegistryReply reply = httpGet(properties.getRegistryUrl() + "/" + id + "/bundle", bearer);
         if (reply.status() == 402) {

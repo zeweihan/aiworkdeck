@@ -43,7 +43,8 @@ import java.util.regex.Pattern;
  * bundle 与 file 两个端点对 {@code priceCents > 0} 的插件都要求 {@code Authorization: Bearer awdk_}
  * 且已购，否则 402。判定与文案统一在 {@link MarketPurchaseGate}；
  * <b>付费与否不改变验签链路</b>——签名、逐文件 SHA-256 比对一步不少。
- * 免费项（含官网旧格式缺 priceCents 字段）链路一字不变。
+ * 免费项（含官网旧格式缺 priceCents 字段）不查账户、不带鉴权头，下载请求逐字节与改造前一致；
+ * 唯一的增量是 {@link #install} 会先查一次注册表列表拿价格（价格必须服务端自证），免费项也走这一步。
  */
 @Service
 @Slf4j
@@ -116,7 +117,7 @@ public class PluginMarketService {
             throw new IllegalStateException("注册表返回内容无法解析: " + e.getMessage());
         }
         for (MarketPluginView view : list) {
-            view.setPriceCents(normalizePrice(view.getPriceCents()));
+            view.setPriceCents(MarketPurchaseGate.normalizePrice(view.getPriceCents()));
             if (view.getPricingModel() == null || view.getPricingModel().isBlank()) {
                 view.setPricingModel("once");
             }
@@ -138,11 +139,6 @@ public class PluginMarketService {
         return purchaseGate.accountConnected();
     }
 
-    /** 旧格式缺字段、负数、非法值一律按免费。 */
-    private static int normalizePrice(Integer raw) {
-        return raw == null || raw < 0 ? 0 : raw;
-    }
-
     /**
      * 安装（或更新）一个在线插件。
      *
@@ -160,10 +156,13 @@ public class PluginMarketService {
         }
 
         MarketPluginView listing = findRegistryEntry(id);
-        int priceCents = listing == null ? 0 : normalizePrice(listing.getPriceCents());
+        int priceCents = listing == null ? 0 : MarketPurchaseGate.normalizePrice(listing.getPriceCents());
         String itemName = listing == null || listing.getName() == null ? id : listing.getName();
-        // 免费项 bearer 为 null：不带鉴权头，与改造前逐字节一致
-        String bearer = purchaseGate.bearerFor(priceCents, itemName);
+        // 免费项 bearer 为 null：不带鉴权头，与改造前逐字节一致。
+        // listing == null 是「价格没查到」而不是「免费」：本机有 Key 就带上，见 bearerForUnknownPrice
+        String bearer = listing == null
+                ? purchaseGate.bearerForUnknownPrice()
+                : purchaseGate.bearerFor(priceCents, itemName);
 
         JSONObject bundle;
         try {

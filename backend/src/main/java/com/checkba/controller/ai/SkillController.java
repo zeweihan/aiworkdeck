@@ -108,9 +108,18 @@ public class SkillController {
         return ResponseEntity.ok(result);
     }
 
-    /** 在线广场列表；注册表不可达返回 {code:1, message}，不影响本地区块 */
+    /**
+     * 在线广场列表；注册表不可达返回 {code:1, message}，不影响本地区块。
+     *
+     * 要求登录：响应里带 purchased / accountConnected，属账户隐私，团队服务器部署下不能匿名可读
+     * （与 EntitlementController 同口径——同一份「买了什么」不能一边设防一边敞开）。
+     */
     @GetMapping("/market/list")
-    public ResponseEntity<Map<String, Object>> listMarket() {
+    public ResponseEntity<Map<String, Object>> listMarket(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("未登录"));
+        }
         try {
             Map<String, Object> result = ok();
             result.put("skills", skillMarketService.listMarket());

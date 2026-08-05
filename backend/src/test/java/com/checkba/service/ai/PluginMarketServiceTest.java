@@ -378,7 +378,19 @@ class PluginMarketServiceTest {
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
         assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
         assertTrue(e.getMessage().contains("¥19.90"), "价格要写进引导文案: " + e.getMessage());
+        assertNotMistakenForLogout(e.getMessage());
         assertEquals(1, urls.size(), "只查了元数据，不该再打 bundle 端点");
+    }
+
+    /**
+     * 付费闸门的文案不能撞上前端的掉线启发式：services/api.js 对 {@code code:1} 的消息做子串匹配，
+     * 见到「登录」「未授权」「请先」就清本地会话，浏览器端还会跳登录页。这里是业务错误，不是掉线。
+     */
+    private static void assertNotMistakenForLogout(String message) {
+        for (String needle : java.util.List.of("登录", "未授权", "请先")) {
+            assertFalse(message.contains(needle),
+                    "文案含「" + needle + "」会被前端当成掉线清会话: " + message);
+        }
     }
 
     @Test
@@ -428,5 +440,71 @@ class PluginMarketServiceTest {
         };
         assertEquals("demo", svc.install("demo"));
         assertEquals(java.util.List.of("null", "null"), bearers, "已连接账户也不该给免费项带鉴权头");
+    }
+
+    @Test
+    @DisplayName("安装：价格没查到但本机已连账户时 bundle 与 file 两个端点都带 Bearer")
+    void unknownPriceStillSendsBearerWhenConnected() throws Exception {
+        byte[] manifestBytes = "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\"}".getBytes(StandardCharsets.UTF_8);
+        Map<String, String> files = new TreeMap<>();
+        files.put("manifest.json", PluginMarketService.sha256Hex(manifestBytes));
+        String sig = sign(canonical("demo", "1.0.0", "2026-07-27T00:00:00Z", files));
+
+        java.util.List<String> bearers = new java.util.ArrayList<>();
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService,
+                gate("awdk_live", "plugin:demo")) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                // 列表端点直接失败 = 价格查不到；付费与否无从判断
+                if (url.endsWith("/plugins")) throw new IllegalStateException("注册表不可达: stub");
+                bearers.add(String.valueOf(bearer));
+                return reply(200, bundleJson("demo", "1.0.0", "2026-07-27T00:00:00Z", files, sig));
+            }
+            @Override
+            protected RegistryReply httpGetBytes(String url, String bearer) {
+                bearers.add(String.valueOf(bearer));
+                return new RegistryReply(200, manifestBytes);
+            }
+        };
+        assertEquals("demo", svc.install("demo"));
+        assertEquals(java.util.List.of("awdk_live", "awdk_live"), bearers,
+                "价格未知时本机有 Key 就带上，免得已购用户被 402 反过来指控没付费");
+    }
+
+    @Test
+    @DisplayName("安装：价格未知 + 未连账户吃到 402 时说「去连接账户」，不说「去购买」")
+    void unknownPrice402WithoutAccountSuggestsConnecting() {
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService, gate) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                if (url.endsWith("/plugins")) throw new IllegalStateException("注册表不可达: stub");
+                return reply(402, "{\"code\":\"payment_required\",\"priceCents\":1990,\"itemName\":\"尽调助手\"}");
+            }
+        };
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
+        assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
+        assertFalse(e.getMessage().contains("需购买后安装"),
+                "本机没连账户，官网无从查购买记录：402 不等于用户没买过 —— " + e.getMessage());
+        assertNotMistakenForLogout(e.getMessage());
+    }
+
+    @Test
+    @DisplayName("列表：priceCents 畸形（负数 / 超上限的截断值）按未知处理，不展示假价格")
+    void listNormalizesMalformedPrice() {
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService, gate) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                // 1215752191 = 官网写了个超 int 范围的值、反序列化被截断的实测结果（¥12,157,521.91）
+                return reply(200, """
+                        [{ "id": "neg", "name": "负价", "priceCents": -100 },
+                         { "id": "huge", "name": "溢出", "priceCents": 1215752191 }]""");
+            }
+        };
+        var list = svc.listMarket();
+        assertEquals(0, list.get(0).getPriceCents(), "负数按未知");
+        assertEquals(0, list.get(1).getPriceCents(), "超上限只可能是畸形值，不能当真价展示");
     }
 }

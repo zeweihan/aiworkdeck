@@ -338,10 +338,14 @@ export default {
     async reload() {
       this.loading = true
       this.loadError = ''
+      // 广场不可达要如实说：本页没有市场数据时按钮区是空的，若再不给原因，
+      // 用户看到的就是「有标题、没价格、没按钮」的哑页面——尤其付费项本来也没有安装按钮
+      let marketError = null
+      const keepMarketError = (e) => { marketError = e; return null }
       try {
         if (this.spec.kind === 'skill') {
           const [mRes, iRes] = await Promise.all([
-            getSkillMarket().catch(() => null),
+            getSkillMarket().catch(keepMarketError),
             getSkills().catch(() => null),
           ])
           const marketList = mRes?.skills || []
@@ -351,7 +355,7 @@ export default {
           this.installedInfo = installedList.find(s => s.id === this.spec.id) || null
         } else {
           const [mRes, iRes] = await Promise.all([
-            getPluginMarket().catch(() => null),
+            getPluginMarket().catch(keepMarketError),
             getPlugins().catch(() => null),
           ])
           const marketList = mRes?.plugins || []
@@ -359,6 +363,10 @@ export default {
           if (typeof mRes?.accountConnected === 'boolean') this.accountConnected = mRes.accountConnected
           this.marketInfo = marketList.find(p => p.id === this.spec.id) || null
           this.installedInfo = installedList.find(p => p.id === this.spec.id) || null
+        }
+        // 本机已装的项即使广场挂了也照常展示（信息来自本地），不必报错打扰
+        if (!this.marketInfo && !this.installedInfo && marketError) {
+          this.loadError = marketError.message || '在线广场不可用'
         }
       } catch (e) {
         console.error('加载详情失败:', e)
