@@ -15,7 +15,9 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - `service/ai/AgentStreamHandler.java`（493 行）— StreamingResponseHandler：token 流→SSE；<bubble_type>/<artifact> 边界解析缓冲、编辑器流过滤、token 用量上报。每次 runLoop 新建实例。
 - `service/ai/AgentRunStateService.java` — 每会话运行状态登记簿（内存）：RUNNING/PAUSED/AWAITING_APPROVAL/FINISHED/ERROR/CANCELLED。**新增终止分支必打状态点**（PR#173 状态机契约）。
 - `service/ai/ContextAssemblerService.java`（507 行）— assemble()：prompts/system_prompt.md + enforcement 段 + 模式约束 + Skill 注入 + 记忆 + 文件上下文 + 历史栈。
-- `service/ai/ChatModelFactory.java` — 供应商路由（OpenRouter/Gemini/Ollama）；provider 优先 DB `ai.activeProvider` 再回退 yml（PR#144）。`AllowedModels.java` 白名单（含单价）。
+- `service/ai/ChatModelFactory.java` — 供应商路由（OpenRouter/Gemini/Ollama/**AWD_CLOUD**）；provider 优先 DB `ai.activeProvider` 再回退 yml（PR#144）。`AllowedModels.java` 白名单（含单价）。
+- **平台通道 AWD_CLOUD「AI Workdeck 云端」（商业化 PR-B）**：key 由官网 provision（`service/ai/PlatformAiChannel.java`，缓存 `~/.aiworkdeck/platform-ai-key.json` 0600），判定**先于白名单短路**，取不到 key **绝不静默回退 BYOK**（会花用户自己的钱）。`service/ai/PlatformUsageAccountant.java` 用 OpenRouter `GET /api/v1/key` 累计消费差分补 `TokenUsage.costSource=platform` 的真实扣费（langchain4j 0.36 拿不到响应里的 `usage.cost`）；BYOK 仍是单价表估算，标 `costSource=estimate`。两套数字**分开标注不得合并**（Spec §3）。账户连接在 `service/account/`，权益在 `service/entitlement/`。
+- **AccountException 不是内部错误**：AgentOrchestrator 与 AiChatService 单独 catch 它，把中文文案（如「请先在官网账户页分配 AI 额度」）原样透出，不加 `Internal Error:` / `Sorry, I encountered an error:` 前缀——这是用户可自行处理的状态，未分配额度时每条消息都会走到。
 - context/ 子包：ContextCompressor、ConversationSummarizer、FileContextLoader、LegalInfoProtector、ProjectContextHolder。
 
 **工具注册与执行**

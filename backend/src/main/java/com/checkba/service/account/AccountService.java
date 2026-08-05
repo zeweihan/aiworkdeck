@@ -12,7 +12,6 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -43,27 +42,10 @@ public class AccountService {
             @Value("${ai.account.base-url:https://www.aiworkdeck.com}") String baseUrl,
             @Value("${security.license.dir:${user.home}/.aiworkdeck}") String accountDir,
             AccountTransport transport) {
-        this.baseUrl = requireHttps(stripTrailingSlash(baseUrl));
+        // 与 PR-A 的 LicenseService 共用同一条红线（https，回环 http 例外），见 AccountEndpoint
+        this.baseUrl = AccountEndpoint.requireSecure(baseUrl);
         this.accountFile = Path.of(accountDir, "account.json");
         this.transport = transport;
-    }
-
-    /**
-     * 与 PR-A 的 LicenseService 同一条红线：这条通道上跑的是明文 awdk_ Key，
-     * 配成 http 等于把 Key 交给同网段的任何人。默认值本就是 https。
-     */
-    private static String requireHttps(String url) {
-        if (url != null && url.toLowerCase(Locale.ROOT).startsWith("https://")) {
-            return url;
-        }
-        String message = "ai.account.base-url 必须是 https 地址（当前：" + url
-                + "）。账户 Key 是明文凭据，不允许走未加密通道。";
-        log.error(message);
-        throw new IllegalArgumentException(message);
-    }
-
-    private static String stripTrailingSlash(String url) {
-        return url != null && url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
     }
 
     /** 持久化结构：~/.aiworkdeck/account.json */
@@ -161,6 +143,21 @@ public class AccountService {
     public List<Map<String, Object>> fetchLedger() {
         Map<String, Object> body = getJson("/api/account/ledger?limit=50", requireKey());
         return listOf(body.get("entries"));
+    }
+
+    /**
+     * GET /api/account/ai-usage —— AI 额度的实时口径
+     * {@code {configured, hasKey, limitUsd, usageUsd, remainingUsd, keyMasked}}。
+     *
+     * <p>注意：这个端点在官网仓 master 上实现了，但**没有写进** {@code doc/desktop-contract.md}，
+     * 属于契约文档的缺口（已回报）。因此这里当成「可能不存在」处理：任何非 2xx 都由
+     * {@link #handle} 抛 AccountException，调用方降级成「额度未知」而不是整块报错。
+     *
+     * <p>不用 OpenRouter 的 {@code GET /api/v1/key} 代替：那条路要求本地已经 provision 过
+     * runtime key（未分配额度的账户根本没有），而这里恰恰要能回答「还没分配」。
+     */
+    public Map<String, Object> fetchAiUsage() {
+        return getJson("/api/account/ai-usage", requireKey());
     }
 
     /**

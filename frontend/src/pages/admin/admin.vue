@@ -317,11 +317,12 @@
                     v-for="opt in aiProviderOptions"
                     :key="opt.value"
                     class="radio-item"
-                    :class="{ checked: form.ai.activeProvider === opt.value }"
-                    @tap="form.ai.activeProvider = opt.value"
+                    :class="{ checked: form.ai.activeProvider === opt.value, unavailable: opt.unavailable }"
+                    @tap="onPickProvider(opt)"
                   >
                     <view class="radio-dot"></view>
                     <text class="radio-label">{{ opt.label }}</text>
+                    <text v-if="opt.unavailable" class="radio-hint">需先连接账户</text>
                   </view>
                 </view>
               </view>
@@ -396,6 +397,132 @@
               保存配置
             </button>
           </view>
+        </scroll-view>
+
+        <!-- 账户与用量（仅桌面端：连接 AI Workdeck 账户、余额与 AI 额度） -->
+        <scroll-view
+          v-else-if="activeNav === 'account'"
+          scroll-y
+          class="config-scroll"
+        >
+          <!-- 未连接：引导去官网取 Key -->
+          <view v-if="!account.connected" class="section-card">
+            <view class="section-header">
+              <text class="section-title">账户与用量</text>
+              <text class="section-subtitle">
+                连接 AI Workdeck 账户后，可以使用平台 AI 通道、查看余额与用量，并同步已购插件与功能解锁
+              </text>
+            </view>
+            <view class="section-body">
+              <view class="provider-card">
+                <text class="account-intro">
+                  桌面端不需要注册登录。在官网账户页生成一枚账户 Key（awdk_ 开头），粘贴到下面即可完成连接；Key 保存在本机，随时可以断开。
+                </text>
+                <view class="account-link-row">
+                  <button class="comp-btn" @tap="openAccountSite">前往官网获取 Key</button>
+                </view>
+                <view class="form-row">
+                  <text class="form-label">账户 Key</text>
+                  <input
+                    v-model="accountKeyInput"
+                    class="form-input"
+                    placeholder="粘贴 awdk_ 开头的账户 Key"
+                  />
+                </view>
+                <view class="account-connect-actions">
+                  <button class="btn-primary" :disabled="accountBusy" @tap="onConnectAccount">
+                    {{ accountBusy ? '连接中...' : '连接账户' }}
+                  </button>
+                </view>
+              </view>
+            </view>
+          </view>
+
+          <!-- 已连接：账户信息 + AI 额度 + 本地用量明细 -->
+          <template v-else>
+            <view class="section-card">
+              <view class="section-header">
+                <text class="section-title">账户</text>
+                <text class="section-subtitle">当前本机已连接的 AI Workdeck 账户</text>
+              </view>
+              <view class="section-body">
+                <view class="provider-card">
+                  <view class="provider-header account-header">
+                    <view class="account-identity">
+                      <text class="provider-name">{{ account.displayName || account.username || '账户' }}</text>
+                      <text class="account-sub">{{ account.username }}<text v-if="accountPlanLabel"> · {{ accountPlanLabel }}</text></text>
+                    </view>
+                    <button class="comp-btn danger" @tap="onDisconnectAccount">断开连接</button>
+                  </view>
+                  <!-- 官网不可达：只降级平台数字，本地统计照常 -->
+                  <text v-if="!accountPlatformReachable" class="account-note">
+                    {{ (accountPlatform && accountPlatform.message) || '暂时无法连接 AI Workdeck 服务器，余额与额度稍后再试。本机连接未受影响。' }}
+                  </text>
+                  <template v-else>
+                    <view class="account-metrics">
+                      <view class="account-metric">
+                        <text class="account-metric-label">钱包余额</text>
+                        <text class="account-metric-value">{{ accountBalanceYuan }} 元</text>
+                      </view>
+                      <view class="account-metric">
+                        <text class="account-metric-label">AI 额度已用</text>
+                        <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.usageUsd) }}</text>
+                      </view>
+                      <view class="account-metric">
+                        <text class="account-metric-label">AI 额度剩余</text>
+                        <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.remainingUsd) }}</text>
+                      </view>
+                      <view class="account-metric">
+                        <text class="account-metric-label">AI 额度上限</text>
+                        <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.limitUsd) }}</text>
+                      </view>
+                    </view>
+                    <!-- 已连账户但没分配过额度：平台 AI 通道此时不可用，给明确的下一步 -->
+                    <text v-if="accountNeedsAllocation" class="account-note">
+                      尚未分配 AI 额度，暂时不能使用「AI Workdeck 云端」通道。请到官网账户页从余额分配额度后再回来。
+                    </text>
+                    <text v-else-if="!accountQuotaAvailable" class="account-note">
+                      AI 额度信息暂时取不到，稍后重试。
+                    </text>
+                  </template>
+                  <text class="account-note">
+                    余额用于充值与购买；AI 额度是从余额分配到平台 AI 通道的部分，在官网账户页分配。
+                  </text>
+                </view>
+              </view>
+            </view>
+
+            <view class="section-card">
+              <view class="section-header">
+                <text class="section-title">最近用量</text>
+                <text class="section-subtitle">
+                  本机记录的调用明细。自带 Key 的通道费用为本地估算，平台通道以实际扣费为准
+                </text>
+              </view>
+              <view class="section-body">
+                <view v-if="!accountUsageRows.length" class="empty">
+                  <text class="empty-text">暂无用量记录</text>
+                </view>
+                <view
+                  v-for="(row, idx) in accountUsageRows"
+                  :key="'usage-' + idx"
+                  class="usage-row"
+                >
+                  <view class="usage-main">
+                    <text class="usage-model">{{ row.model || '未知模型' }}</text>
+                    <text class="usage-time">
+                      {{ formatUsageTime(row.createdAt) }}
+                      <text v-if="usageSourceLabel(row)"> · {{ usageSourceLabel(row) }}</text>
+                    </text>
+                  </view>
+                  <view class="usage-numbers">
+                    <text class="usage-tokens">{{ row.totalTokens || 0 }} tokens</text>
+                    <text class="usage-cost">{{ usageCostText(row) }}</text>
+                  </view>
+                </view>
+              </view>
+            </view>
+          </template>
         </scroll-view>
 
         <!-- 组件管理（仅桌面端：本地模型下载与服务启用） -->
@@ -584,8 +711,14 @@
 import {
   getAdminConfig, saveAdminConfig, resetWizard,
   cloudConnect, listCloudConnections, disconnectCloudConnection,
+  getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
+import { refreshEntitlements } from '@/composables/useEntitlement.js'
+
+// 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里
+const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
 
 export default {
   name: 'AdminPage',
@@ -597,6 +730,7 @@ export default {
       navItems: [
         { key: 'config', label: '系统配置' },
         { key: 'ai', label: 'AI 功能设置' },
+        { key: 'account', label: '账户与用量', desktopOnly: true },
         { key: 'components', label: '组件管理', desktopOnly: true },
         { key: 'cloud', label: '云端协作', desktopOnly: true },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
@@ -620,11 +754,8 @@ export default {
           assistants: [],
         },
       },
-      aiProviderOptions: [
-        { value: 'OLLAMA', label: '本地 Ollama' },
-        { value: 'GEMINI', label: 'Google Gemini' },
-        { value: 'OPENROUTER', label: 'OpenRouter' },
-      ],
+      // 平台 AI 通道是否可选（= 是否已连接账户），来自 /api/account/status
+      platformAiAvailable: false,
       // Helpers
       defaultAssistants: [
         { id: 'default', name: '默认助手', tools: [], systemPrompt: '你是一个专业的助手。', description: 'Generic Assistant' },
@@ -646,6 +777,12 @@ export default {
       cloudConnections: [],
       cloudForm: { serverUrl: '', username: '', password: '' },
       cloudBusy: false,
+      // 账户与用量（商业化 PR-B）
+      // status 是纯本地读盘（不含余额），余额与额度都在 usage 的 platform 段
+      account: { connected: false, username: '', displayName: '', keyMasked: '' },
+      accountUsage: null, // { local: {...}, platform: {...} }，形状见 api.js getAccountUsage
+      accountKeyInput: '',
+      accountBusy: false,
     }
   },
   computed: {
@@ -659,14 +796,72 @@ export default {
     cloudServerUrlIsHttp() {
       return /^http:\/\//i.test((this.cloudForm.serverUrl || '').trim())
     },
+    // 供应商单选项。「AI Workdeck 云端」是平台计费通道，未连接账户时展示但不可选——
+    // 隐藏它会让用户根本发现不了这个选项，直接可选又会在发消息时才报「未连接账户」
+    aiProviderOptions() {
+      const options = [
+        { value: 'OLLAMA', label: '本地 Ollama' },
+        { value: 'GEMINI', label: 'Google Gemini' },
+        { value: 'OPENROUTER', label: 'OpenRouter' },
+      ]
+      if (this.isDesktop) {
+        options.push({
+          value: 'AWD_CLOUD',
+          label: 'AI Workdeck 云端',
+          // 已经选中的供应商不标不可选，否则用户会看到一个自相矛盾的界面
+          unavailable: !this.platformAiAvailable && this.form.ai.activeProvider !== 'AWD_CLOUD',
+        })
+      }
+      return options
+    },
+    // 平台结算段：官网不可达时 available=false，其余字段不可信
+    accountPlatform() {
+      return (this.accountUsage && this.accountUsage.platform) || null
+    },
+    accountPlatformReachable() {
+      return !!(this.accountPlatform && this.accountPlatform.available)
+    },
+    // 余额后端以整数分下发，展示统一转元
+    accountBalanceYuan() {
+      const cents = this.accountPlatform && this.accountPlatform.balanceCents
+      return ((Number(cents) || 0) / 100).toFixed(2)
+    },
+    accountPlanLabel() {
+      const plan = this.accountPlatform && this.accountPlatform.plan
+      if (plan === 'paid') return '付费账户'
+      if (plan === 'free') return '免费账户'
+      return ''
+    },
+    // 额度三个数只在实时口径拿得到时才展示——拿不到时显示「暂不可用」，
+    // 而不是把 0 当成真实剩余额度让用户以为额度用光了
+    accountQuotaAvailable() {
+      return !!(this.accountPlatform && this.accountPlatform.quotaAvailable)
+    },
+    // 已连账户但从未分配过 AI 额度：面板要给出「去官网分配」的引导
+    accountNeedsAllocation() {
+      return this.accountQuotaAvailable && !this.accountPlatform.hasAiQuota
+    },
+    accountUsageRows() {
+      const rows = this.accountUsage && this.accountUsage.local && this.accountUsage.local.recent
+      return Array.isArray(rows) ? rows : []
+    },
   },
-  onLoad() {
+  onLoad(query) {
     const user = getCurrentUser()
     if (user) {
       this.userDisplayName = user.displayName || user.username || '用户'
     }
+    // 深链定位面板（顶栏「已连接账户」chip → ?nav=account）；
+    // 只认当前可见的本页面板，route 型导航项不在此列
+    const nav = query && query.nav
+    if (nav && this.visibleNavItems.some((n) => n.key === nav && !n.route)) {
+      this.onNavTap({ key: nav })
+    }
     this.loadConfig()
     if (this.isDesktop) {
+      // AI 面板的「AI Workdeck 云端」选项是否可选，取决于是否已连接账户。
+      // status 是后端纯本地读盘，不打官网，可以随页面加载
+      this.loadPlatformAiAvailability()
       this.loadComponents()
       // 订阅主进程模型下载进度；onUnload 退订
       this._modelProgressUnsub = window.checkbaDesktop.model.onProgress((evt) => {
@@ -787,6 +982,132 @@ export default {
       if (nav.key === 'cloud') {
         this.loadCloudConnections()
       }
+      if (nav.key === 'account') {
+        this.loadAccount()
+      }
+    },
+    async loadPlatformAiAvailability() {
+      try {
+        const s = await getAccountStatus()
+        this.platformAiAvailable = !!(s && s.platformAiAvailable)
+      } catch (e) {
+        this.platformAiAvailable = false
+      }
+    },
+    // 供应商单选：不可选项给出下一步，而不是静默不响应
+    onPickProvider(opt) {
+      if (opt.unavailable) {
+        uni.showToast({ title: '请先在「账户与用量」连接账户', icon: 'none' })
+        return
+      }
+      this.form.ai.activeProvider = opt.value
+    },
+    // ---------- 账户与用量 ----------
+    // 拉状态；已连接才继续拉用量（未连接时后端没有可查的账户）
+    async loadAccount() {
+      try {
+        const s = await getAccountStatus()
+        this.platformAiAvailable = !!(s && s.platformAiAvailable)
+        this.account = {
+          connected: !!(s && s.connected),
+          username: (s && s.username) || '',
+          displayName: (s && s.displayName) || '',
+          keyMasked: (s && s.keyMasked) || '',
+        }
+      } catch (e) {
+        // 旧后端没有该端点 / 请求失败：按未连接展示引导，不弹错打断
+        this.account = { connected: false, username: '', displayName: '', keyMasked: '' }
+        this.platformAiAvailable = false
+      }
+      if (this.account.connected) {
+        await this.loadAccountUsage()
+      } else {
+        this.accountUsage = null
+      }
+    },
+    async loadAccountUsage() {
+      try {
+        this.accountUsage = await getAccountUsage()
+      } catch (e) {
+        // 账户已连但尚未分配 AI 额度时后端会报错，此处按「无额度」展示
+        this.accountUsage = null
+      }
+    },
+    openAccountSite() {
+      openExternalUrl(ACCOUNT_SITE_URL)
+    },
+    async onConnectAccount() {
+      const key = (this.accountKeyInput || '').trim()
+      if (!key) {
+        uni.showToast({ title: '请先粘贴账户 Key', icon: 'none' })
+        return
+      }
+      this.accountBusy = true
+      try {
+        await connectAccount(key)
+        this.accountKeyInput = ''
+        await this.loadAccount()
+        // 已购功能解锁随账户走，连接后必须让权益缓存失效重取
+        await refreshEntitlements(true)
+        uni.showToast({ title: '已连接账户', icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '连接失败', icon: 'none' })
+      } finally {
+        this.accountBusy = false
+      }
+    },
+    async onDisconnectAccount() {
+      const ok = await new Promise((r) => uni.showModal({
+        title: '断开账户连接',
+        content: '断开后本机将清除账户 Key：不再能使用平台 AI 通道，已购插件与功能解锁也会同步失效。本机数据不受影响，随时可以重新连接。',
+        confirmText: '断开',
+        success: (res) => r(res.confirm),
+      }))
+      if (!ok) return
+      try {
+        await disconnectAccount()
+        await this.loadAccount()
+        await refreshEntitlements(true)
+        uni.showToast({ title: '已断开连接', icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '操作失败', icon: 'none' })
+      }
+    },
+    // 金额一律两位小数，缺值显示 $0.00 而不是 NaN
+    formatUsd(v) {
+      const n = Number(v)
+      return '$' + (Number.isFinite(n) ? n : 0).toFixed(2)
+    },
+    // 额度数字：实时口径拿不到时显示「—」。
+    // 这里不能沿用 formatUsd 的 0 兜底——$0.00 会被读成「额度已用光」
+    quotaText(v) {
+      if (!this.accountQuotaAvailable) return '—'
+      const n = Number(v)
+      return Number.isFinite(n) ? this.formatUsd(n) : '—'
+    },
+    // 费用口径标注（Spec §3：本地估算与平台结算两套数字必须分得开）
+    usageSourceLabel(row) {
+      const src = row && row.costSource
+      if (src === 'platform') return '平台结算'
+      if (src === 'estimate') return '本地估算'
+      return ''
+    },
+    // 平台通道在对账完成前 cost 为 null——显示「待结算」，
+    // 绝不能拿 $0.00 顶替，那会让用户以为这次调用不花钱
+    usageCostText(row) {
+      const cost = row && row.cost
+      if (cost === null || cost === undefined || cost === '') {
+        return row && row.costSource === 'platform' ? '待结算' : '—'
+      }
+      // 估算值加约等号，避免和真实账单混淆
+      const prefix = row && row.costSource === 'estimate' ? '≈' : ''
+      return prefix + this.formatUsd(cost)
+    },
+    // 后端 LocalDateTime 序列化成 "2026-08-05T12:34:56"，只取到分钟。
+    // 刻意不过 Date 解析：无时区后缀的串在不同实现下会被当本地/UTC，反而错位。
+    formatUsageTime(ts) {
+      if (!ts) return ''
+      return String(ts).replace('T', ' ').slice(0, 16)
     },
     async loadCloudConnections() {
       try {
@@ -1273,6 +1594,17 @@ $border-color: #E9ECEF; // Gray-Light
   background: $brand-mint-light;
 }
 
+// 未连接账户时的「AI Workdeck 云端」：可见但压低，点击给引导而不是静默失败
+.radio-item.unavailable {
+  opacity: 0.55;
+}
+
+.radio-hint {
+  margin-left: 8px;
+  font-size: 12px;
+  color: $text-secondary;
+}
+
 .radio-dot {
   width: 14px;
   height: 14px;
@@ -1661,5 +1993,127 @@ $border-color: #E9ECEF; // Gray-Light
 .btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 账户与用量 */
+.account-intro {
+  display: block;
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 21px;
+  color: $text-secondary;
+}
+
+.account-link-row {
+  display: flex;
+  margin-bottom: 16px;
+}
+
+.account-connect-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.account-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.account-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.account-sub {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.account-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.account-metric {
+  flex: 1 1 130px;
+  min-width: 130px;
+  padding: 12px 14px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-radius: 6px;
+  background: $brand-bg;
+}
+
+.account-metric-label {
+  display: block;
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.account-metric-value {
+  display: block;
+  margin-top: 6px;
+  font-size: 18px;
+  font-weight: 600;
+  color: $brand-primary;
+}
+
+.account-note {
+  display: block;
+  margin-top: 14px;
+  font-size: 12px;
+  line-height: 18px;
+  color: $text-secondary;
+}
+
+.usage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.usage-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.usage-model {
+  font-size: 13px;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-time {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.usage-numbers {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  margin-left: 16px;
+  flex-shrink: 0;
+}
+
+.usage-tokens {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.usage-cost {
+  font-size: 13px;
+  font-weight: 600;
 }
 </style>

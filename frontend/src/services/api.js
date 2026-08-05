@@ -705,6 +705,78 @@ export function deactivateLicense() {
   });
 }
 
+// ===================== 账户与用量（商业化 PR-B）相关 API =====================
+//
+// 桌面后端把官网账户接口收敛成本机端点，前端一律只跟本机后端说话
+// （awdk_ Key 与 Bearer 鉴权都留在后端，不进渲染进程）。
+//
+// 信封说明：这批端点与解锁门同批，按 LicenseController 惯例返回裸 JSON；
+// 但本仓另有 { code, data } 信封惯例，这里统一剥一层，两种形状都能用。
+function unwrapEnvelope(res) {
+  if (res && typeof res === 'object' && 'code' in res && 'data' in res) return res.data;
+  return res;
+}
+
+// 账户连接状态：{ connected, username, displayName, connectedAt, lastSyncAt, keyMasked, platformAiAvailable }
+// 未连接时只有 { connected: false, platformAiAvailable: false }。
+// 刻意**不含余额与套餐**：这是纯本地读盘的轻端点（顶栏 chip 每次 onShow 都调），
+// 带上余额就意味着每次都要打一次官网。余额在 getAccountUsage() 的 platform 段。
+export function getAccountStatus() {
+  return request({
+    url: '/api/account/status',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 连接账户：粘贴官网账户页生成的 awdk_ Key
+export function connectAccount(key) {
+  return request({
+    url: '/api/account/connect',
+    method: 'POST',
+    data: { key },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
+// 断开账户连接：清除本机保存的账户 Key
+export function disconnectAccount() {
+  return request({
+    url: '/api/account/disconnect',
+    method: 'POST',
+  }).then(unwrapEnvelope);
+}
+
+// 用量：两套口径分开返回（Spec §3），前端不做合并。
+// {
+//   local:    { records, promptTokens, completionTokens, totalTokens,
+//               platformCostUsd, estimatedCostUsd,
+//               recent: [{ model, createdAt, totalTokens, cost, costSource }] },
+//   platform: { connected, available, message?,
+//               balanceCents, plan, allocations: [...],
+//               quotaAvailable, quotaMessage?, hasAiQuota, limitUsd, usageUsd, remainingUsd }
+// }
+// platform.available=false 表示官网不可达（本地统计仍然有效）；
+// quotaAvailable=false 表示额度实时口径拿不到——此时不要把 0 当成真实剩余额度。
+export function getAccountUsage() {
+  return request({
+    url: '/api/account/usage',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 功能权益：{ features: [...已拥有...], catalog: [...目录全集含 enabled...],
+//            accountConnected, syncedAt, stale }
+// features 只含已拥有项——「出现在 features 里 = 已拥有」，catalog 才是带 enabled 的全集。
+// 由 useEntitlement composable 统一消费，业务代码不要直接调这个。
+export function getEntitlements() {
+  return request({
+    url: '/api/entitlements',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
 // ===================== 用户认证相关 API =====================
 
 // 用户注册

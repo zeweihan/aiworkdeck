@@ -5,6 +5,7 @@ import com.checkba.repository.TokenUsageRepository;
 import com.checkba.service.account.AccountException;
 import com.checkba.service.account.AccountService;
 import com.checkba.service.ai.PlatformAiChannel;
+import com.checkba.service.ai.PlatformUsageAccountant;
 import com.checkba.service.entitlement.EntitlementService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -105,6 +107,9 @@ public class AccountController {
 
     // ==================== 内部 ====================
 
+    /** 明细列表的条数上限：设置页只是「最近用量」，全量导出不是本端点的职责。 */
+    private static final int RECENT_LIMIT = 50;
+
     private Map<String, Object> localUsage(Long userId) {
         List<TokenUsage> records = userId == null ? List.of() : tokenUsageRepository.findByUserId(userId);
         long prompt = 0;
@@ -117,7 +122,7 @@ public class AccountController {
             completion += record.getCompletionTokens() == null ? 0 : record.getCompletionTokens();
             total += record.getTotalTokens() == null ? 0 : record.getTotalTokens();
             if (record.getCost() == null) continue;
-            if ("platform".equals(record.getCostSource())) {
+            if (PlatformUsageAccountant.SOURCE_PLATFORM.equals(record.getCostSource())) {
                 platformCost = platformCost.add(record.getCost());
             } else {
                 estimatedCost = estimatedCost.add(record.getCost());
@@ -132,7 +137,30 @@ public class AccountController {
         local.put("platformCostUsd", platformCost.toPlainString());
         // BYOK 的本地估算（美元），**不是账单**
         local.put("estimatedCostUsd", estimatedCost.toPlainString());
+        local.put("recent", recentRows(records));
         return local;
+    }
+
+    /**
+     * 明细行：只挑设置页要展示的字段，不直接序列化实体
+     * （实体里还有 userId/projectId/conversationId，与「最近用量」无关）。
+     * cost 为 null 原样保留——平台通道对账未完成时前端显示「待结算」，绝不能顶成 0。
+     */
+    private static List<Map<String, Object>> recentRows(List<TokenUsage> records) {
+        return records.stream()
+                .sorted(Comparator.comparing(TokenUsage::getCreatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
+                .limit(RECENT_LIMIT)
+                .map(record -> {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("model", record.getModel());
+                    row.put("createdAt", record.getCreatedAt());
+                    row.put("totalTokens", record.getTotalTokens());
+                    row.put("cost", record.getCost());
+                    row.put("costSource", record.getCostSource());
+                    return row;
+                })
+                .toList();
     }
 
     private Map<String, Object> platformUsage() {
@@ -149,14 +177,37 @@ public class AccountController {
             platform.put("allocations", accountService.fetchLedger().stream()
                     .filter(entry -> "ai_alloc".equals(entry.get("kind")))
                     .toList());
-            platform.put("limitUsd", platformAiChannel.limitUsd());
             platform.put("available", true);
         } catch (AccountException e) {
             // 官网不可达不该让整个用量面板报错——本地统计仍然有价值
             platform.put("available", false);
             platform.put("message", e.getMessage());
+            return platform;
         }
+        putAiQuota(platform);
         return platform;
+    }
+
+    /**
+     * AI 额度三个数（上限/已用/剩余）单独一段，失败只降级这一段：
+     * 余额与账本已经取到了，不该因为额度查询挂掉就一起隐藏。
+     * {@code quotaAvailable=false} 时前端显示「额度信息暂不可用」，不会把 0 当成真实剩余额度。
+     */
+    private void putAiQuota(Map<String, Object> platform) {
+        try {
+            Map<String, Object> quota = accountService.fetchAiUsage();
+            platform.put("quotaAvailable", true);
+            // hasKey=false 表示该账户还没从余额分配过 AI 额度——引导文案的判据
+            platform.put("hasAiQuota", Boolean.TRUE.equals(quota.get("hasKey")));
+            platform.put("limitUsd", quota.get("limitUsd"));
+            platform.put("usageUsd", quota.get("usageUsd"));
+            platform.put("remainingUsd", quota.get("remainingUsd"));
+        } catch (AccountException e) {
+            platform.put("quotaAvailable", false);
+            platform.put("quotaMessage", e.getMessage());
+            // 本地缓存的 limit 是 provision 当时的快照，只在实时口径拿不到时兜底展示
+            platform.put("limitUsd", platformAiChannel.limitUsd());
+        }
     }
 
     private static Map<String, Object> ok(Object data) {

@@ -213,6 +213,28 @@ class AccountServiceTest {
     }
 
     @Test
+    @DisplayName("ai-usage：返回额度三个数，hasKey 区分「未分配额度」")
+    void aiUsageReturnsQuota() {
+        AccountService service = connected();
+        transport.enqueue(200, "{\"configured\":true,\"hasKey\":true,"
+                + "\"limitUsd\":5.0,\"usageUsd\":1.25,\"remainingUsd\":3.75}");
+        Map<String, Object> body = service.fetchAiUsage();
+        assertEquals("GET https://www.aiworkdeck.com/api/account/ai-usage",
+                transport.calls.get(transport.calls.size() - 1));
+        assertEquals(Boolean.TRUE, body.get("hasKey"));
+        assertEquals(3.75, ((Number) body.get("remainingUsd")).doubleValue(), 1e-9);
+    }
+
+    @Test
+    @DisplayName("ai-usage 端点不存在（旧官网）：抛 MALFORMED 由调用方降级，不拖垮整个用量面板")
+    void aiUsageMissingEndpointIsRecoverable() {
+        AccountService service = connected();
+        transport.enqueue(404, "{}");
+        AccountException e = assertThrows(AccountException.class, service::fetchAiUsage);
+        assertEquals(AccountException.Kind.MALFORMED, e.getKind());
+    }
+
+    @Test
     @DisplayName("官网返回非 JSON：分类为 MALFORMED，不当成鉴权失败")
     void malformedBodyIsClassified() {
         AccountService service = connected();
@@ -229,5 +251,20 @@ class AccountServiceTest {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> new AccountService("http://www.aiworkdeck.com", tempDir.toString(), new StubTransport()));
         assertTrue(e.getMessage().contains("https"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("回环 http 放行：本地起官网联调用，流量不出本机网卡")
+    void loopbackHttpAllowed() {
+        assertDoesNotThrow(() -> new AccountService("http://localhost:3000", tempDir.toString(), new StubTransport()));
+        assertDoesNotThrow(() -> new AccountService("http://127.0.0.1:3000", tempDir.toString(), new StubTransport()));
+    }
+
+    @Test
+    @DisplayName("尾部斜杠归一化：不能拼出 //api/account/me")
+    void trailingSlashStripped() {
+        transport = new StubTransport().enqueue(200, "{\"username\":\"u\"}");
+        new AccountService("https://www.aiworkdeck.com/", tempDir.toString(), transport).connect(KEY);
+        assertEquals("GET https://www.aiworkdeck.com/api/account/me", transport.calls.get(0));
     }
 }

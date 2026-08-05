@@ -38,8 +38,9 @@ import java.util.concurrent.Executors;
 @Slf4j
 public class PlatformUsageAccountant {
 
-    static final String SOURCE_PLATFORM = "platform";
-    static final String SOURCE_ESTIMATE = "estimate";
+    /** {@code TokenUsage.costSource} 的两个取值，展示层也要按它分辨口径。 */
+    public static final String SOURCE_PLATFORM = "platform";
+    public static final String SOURCE_ESTIMATE = "estimate";
 
     /** OpenRouter 记账延迟：最多重采样这么多次。 */
     private static final int MAX_POLLS = 4;
