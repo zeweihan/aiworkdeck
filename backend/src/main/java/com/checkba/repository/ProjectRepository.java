@@ -17,6 +17,11 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
     List<Project> findByUserIdIsNull();
 
     /**
+     * 某用户名下的项目数（本机身份候选的「数据量」信号之一，见 LocalIdentityService）
+     */
+    long countByUserId(Long userId);
+
+    /**
      * 按本地文件夹根目录查项目（IDE 化本地文件夹项目，路径存入前已 normalize）
      */
     java.util.Optional<Project> findByLocalRoot(String localRoot);

@@ -16,7 +16,12 @@
 </template>
 
 <script>
-import { getLicenseStatus, getWizardStatus, getMyProjects } from '@/services/api.js'
+import {
+  getLicenseStatus,
+  getLocalIdentityStatus,
+  getWizardStatus,
+  getMyProjects,
+} from '@/services/api.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
 
 export default {
@@ -54,6 +59,19 @@ export default {
       if (!status.unlocked) {
         uni.reLaunch({ url: '/pages/unlock/unlock' })
         return
+      }
+
+      // 本机工作区待选定：老安装的库里可能有多个都带数据的历史账号，后端不猜，
+      // 在这里拦下来让用户自己选，选完才进工作区（选过一次就不会再走这条分支）。
+      try {
+        const identity = await getLocalIdentityStatus()
+        if (identity && identity.needsSelection) {
+          uni.reLaunch({ url: '/pages/identity/identity' })
+          return
+        }
+      } catch (e) {
+        // 查询失败不拦路：后端仍会落在数据量最大的候选上，工作区可用
+        console.warn('查询本机工作区状态失败（忽略）:', e && e.message)
       }
 
       // 已解锁：向导检查 + 直达上次项目（迁移自 login.vue tryAutoResume）

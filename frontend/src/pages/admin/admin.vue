@@ -587,6 +587,44 @@
               </view>
             </view>
           </view>
+
+          <!-- 本机工作区（免登身份）。只在本机确实有一个以上账号时出现——
+               绝大多数安装只有一个，摆一张永远只有一行的卡片是噪音。
+               这里是选错工作区之后的补救入口：老安装的库里常有多个历史账号，
+               启动时的选择页只出现一次。 -->
+          <view v-if="identityCandidates.length > 1" class="section-card">
+            <view class="section-header">
+              <text class="section-title">本机工作区</text>
+              <text class="section-subtitle">
+                本机检测到多个历史账号，当前使用的是其中一个。切换后项目与文件会换成另一个账号名下的内容，数据不会移动
+              </text>
+            </view>
+            <view class="section-body">
+              <view
+                v-for="item in identityCandidates"
+                :key="item.userId"
+                class="comp-row"
+              >
+                <view class="comp-main">
+                  <text class="comp-name">{{ item.displayName || item.username }}</text>
+                  <text class="comp-sub">
+                    {{ item.username }} · {{ item.projectCount }} 个项目 · {{ item.fileCount }} 个文件
+                  </text>
+                </view>
+                <view class="comp-actions">
+                  <text v-if="item.userId === identityCurrentId" class="account-note">当前使用</text>
+                  <button
+                    v-else
+                    class="comp-btn"
+                    :disabled="identityBusy"
+                    @tap="onSwitchIdentity(item)"
+                  >
+                    切换
+                  </button>
+                </view>
+              </view>
+            </view>
+          </view>
         </scroll-view>
 
         <!-- 组件管理（仅桌面端：本地模型下载与服务启用） -->
@@ -777,6 +815,7 @@ import {
   cloudConnect, listCloudConnections, disconnectCloudConnection,
   getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
   getStorageLocation, moveStorageLocation, resetStorageLocation,
+  getLocalIdentityCandidates, selectLocalIdentity,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
@@ -856,6 +895,10 @@ export default {
       // path 为空 = 后端没给（非单机模式/旧后端），整块不显示
       storageLocation: { path: '', defaultPath: '', custom: false, available: true, entitled: false },
       storageBusy: false,
+      // 本机工作区（免登身份）候选。长度 <= 1 时整块卡片不渲染
+      identityCandidates: [],
+      identityCurrentId: null,
+      identityBusy: false,
     }
   },
   computed: {
@@ -1074,7 +1117,40 @@ export default {
         this.loadAccount()
         // 权益决定「更改位置」按钮出不出现；当前位置本身无论有没有权益都要显示
         this.loadStorageLocation()
+        this.loadIdentityCandidates()
         refreshEntitlements()
+      }
+    },
+    async loadIdentityCandidates() {
+      try {
+        const res = await getLocalIdentityCandidates()
+        this.identityCandidates = (res && res.candidates) || []
+        this.identityCurrentId = (res && res.currentUserId) || null
+      } catch (e) {
+        // 团队服务器部署没有本机工作区概念，读不到就整块不显示
+        this.identityCandidates = []
+        this.identityCurrentId = null
+      }
+    },
+    async onSwitchIdentity(item) {
+      const ok = await new Promise((r) => uni.showModal({
+        title: '切换本机工作区',
+        content: `切换到「${item.displayName || item.username}」后，项目与文件会换成该账号名下的内容。`
+          + '当前账号的数据不会被删除或移动，随时可以切回来。切换后应用会重新启动。',
+        confirmText: '切换',
+        success: (res) => r(res.confirm),
+      }))
+      if (!ok) return
+      this.identityBusy = true
+      try {
+        await selectLocalIdentity(item.userId)
+        // 全站几乎每个页面都缓存着上一个身份的数据，就地刷新不干净——回启动链重走一遍
+        uni.removeStorageSync('checkba_last_project_id')
+        uni.reLaunch({ url: '/pages/launch/launch' })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '切换失败', icon: 'none' })
+      } finally {
+        this.identityBusy = false
       }
     },
     async loadPlatformAiAvailability() {
