@@ -24,6 +24,20 @@
       </view>
     </view>
 
+    <!-- 免费额度用量条：平时是一条极淡的细线 + 灰字，只有接近上限才转为暖色。
+         没解锁但用量很低时不该有存在感——这是常驻面板，不是提醒栏。 -->
+    <view v-if="quotaVisible" class="staging-quota" :class="{ 'is-tight': quotaTight }">
+      <view class="quota-bar">
+        <view class="quota-fill" :style="{ width: quotaPercent + '%' }"></view>
+      </view>
+      <text class="quota-text">{{ quotaText }}</text>
+    </view>
+    <UnlockHint
+      v-if="quotaTight"
+      class="staging-unlock-hint"
+      text="缓存区快满了，解锁无限版可不限文件数与容量"
+    />
+
     <!-- Contrast Button (Visible when exactly 2 DOC/DOCX files are selected) -->
     <view v-if="canCompare" class="compare-btn-wrapper">
        <button class="btn-compare" @tap.stop="handleCompare">
@@ -93,8 +107,10 @@
 
 <script>
 import { ICONS } from '@/config/icons.js'
+import UnlockHint from '@/components/UnlockHint.vue'
 export default {
   name: 'FileStagingArea',
+  components: { UnlockHint },
   props: {
     visible: {
       type: Boolean,
@@ -103,6 +119,13 @@ export default {
     files: {
       type: Array,
       default: () => []
+    },
+    // 免费额度用量：{ fileCount, totalBytes, limited, maxFiles, maxBytes }
+    // 由 project-overview 从后端拉取；上限只有后端一处定义。
+    // limited 为 false（已解锁）或对象为空时整条用量条都不出现。
+    usage: {
+      type: Object,
+      default: null
     }
   },
   data() {
@@ -116,6 +139,28 @@ export default {
   },
   computed: {
     ICONS() { return ICONS },
+    // 只有「受免费额度约束且上限已知」时才显示用量条
+    quotaVisible() {
+      const u = this.usage
+      return !!(u && u.limited && u.maxFiles && u.maxBytes)
+    },
+    // 两条额度取更满的那条来画进度——用户关心的是「还能放多少」，而不是两个数字
+    quotaPercent() {
+      if (!this.quotaVisible) return 0
+      const u = this.usage
+      const byCount = (u.fileCount || 0) / u.maxFiles
+      const byBytes = (u.totalBytes || 0) / u.maxBytes
+      return Math.min(100, Math.round(Math.max(byCount, byBytes) * 100))
+    },
+    // 80% 以上才转为醒目色并给出解锁提示，平时保持安静
+    quotaTight() {
+      return this.quotaVisible && this.quotaPercent >= 80
+    },
+    quotaText() {
+      if (!this.quotaVisible) return ''
+      const u = this.usage
+      return `${u.fileCount || 0}/${u.maxFiles} 个文件 · ${this.formatSize(u.totalBytes || 0)}/${this.formatSize(u.maxBytes)}`
+    },
     canCompare() {
       if (this.selectedIds.length !== 2) return false
       const selectedFiles = this.files.filter(f => this.selectedIds.includes(f.id))
@@ -130,6 +175,13 @@ export default {
       // Marquee listeners removed
   },
   methods: {
+    formatSize(bytes) {
+      const n = Number(bytes) || 0
+      if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(1) + 'GB'
+      if (n >= 1024 * 1024) return Math.round(n / 1024 / 1024) + 'MB'
+      if (n >= 1024) return Math.round(n / 1024) + 'KB'
+      return n + 'B'
+    },
     getFileIcon(file) {
       if (!file) return '/static/file.png'
       const name = file.name.toLowerCase()
@@ -365,6 +417,49 @@ export default {
 }
 .clear-btn:hover {
     color: #ef4444;
+}
+
+/* 用量条：常态是灰细线，克制到几乎看不见；接近上限才转暖色 */
+.staging-quota {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: #fff;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.quota-bar {
+    flex: 1;
+    height: 3px;
+    border-radius: 2px;
+    background: #e2e8f0;
+    overflow: hidden;
+}
+
+.quota-fill {
+    height: 100%;
+    background: #cbd5e1;
+    border-radius: 2px;
+    transition: width 0.2s ease, background 0.2s ease;
+}
+
+.quota-text {
+    font-size: 11px;
+    color: #94a3b8;
+    flex-shrink: 0;
+}
+
+.staging-quota.is-tight .quota-fill {
+    background: #d9a441;
+}
+
+.staging-quota.is-tight .quota-text {
+    color: #8a6d2f;
+}
+
+.staging-unlock-hint {
+    margin: 8px 12px 0;
 }
 
 .staging-empty {

@@ -594,6 +594,7 @@
           <FileStagingArea
             :visible="showStagingArea"
             :files="stagingFiles"
+            :usage="stagingUsage"
             @drop="onStagingDrop"
             @clear="handleStagingClear"
             @remove="handleStagingRemove"
@@ -1651,6 +1652,9 @@ export default {
       desensitizeFileSelectCallback: null,
 
       stagingFiles: [], // 文件暂存区列表
+      // 免费额度用量 { fileCount, totalBytes, limited, maxFiles, maxBytes }；
+      // null = 不限制或取不到（旧后端），此时不显示用量条
+      stagingUsage: null,
       stagingOriginalParents: {}, // 记录文件进入暂存区前的原始 parentId: { fileId: originalParentId }
       splitMode: false,
       quickOpenVisible: false, // IDE 化 Cmd+P 快速打开

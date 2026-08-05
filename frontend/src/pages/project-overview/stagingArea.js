@@ -2,9 +2,21 @@
 // （移出按 stagingOriginalParents 回原目录，原目录已删则退回根目录）、清空与折叠。
 // 经展开进组件 methods（纯搬移，Phase 2 外置），`this` 即 project-overview 页面实例。
 
-import { getProjectFiles, createFolder, batchMoveFiles } from '@/services/api.js'
+import { getProjectFiles, createFolder, batchMoveFiles, getStageUsage } from '@/services/api.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
 
 export const stagingAreaMethods = {
+    // 免费额度用量（顶部用量条的数据源）。取不到就当作「不限制」处理——
+    // 旧后端没有该端点，不能因此让用量条显示成一堆 0/0。
+    async loadStagingUsage() {
+      if (!this.stagingFolderId) return
+      try {
+        const usage = await getStageUsage(this.projectId, this.stagingFolderId)
+        this.stagingUsage = usage && typeof usage === 'object' ? usage : null
+      } catch (e) {
+        this.stagingUsage = null
+      }
+    },
     async ensureStagingFolder() {
       if (this.stagingFolderId) return
       try {
@@ -64,6 +76,7 @@ export const stagingAreaMethods = {
         if (files.length > 0) {
           console.log('LoadStaging: Files:', files.map(f => f.name).join(', '))
         }
+        this.loadStagingUsage()
       } catch (e) {
         console.error('Failed to load staging files:', e)
         uni.showToast({ title: '加载暂存区文件失败', icon: 'none' })
@@ -120,6 +133,22 @@ export const stagingAreaMethods = {
         this.stagingPinned = true
         uni.showToast({ title: '已加入暂存区', icon: 'success' })
       } catch (e) {
+        if (e && e.quotaExceeded) {
+          // 免费额度拦截：后端一个文件都没移动，缓存区里的存量原样保留。
+          // 用 modal 而不是 toast——这条提示要说清「已有文件不会被删除」，toast 放不下。
+          this.stagingPinned = true
+          this.loadStagingUsage()
+          uni.showModal({
+            title: '文件缓存区已满',
+            content: e.message,
+            confirmText: '了解详情',
+            cancelText: '知道了',
+            success: (r) => {
+              if (r.confirm) openExternalUrl('https://www.aiworkdeck.com/zh/account')
+            }
+          })
+          return
+        }
         console.error('Failed to move files to staging:', e)
         uni.showToast({ title: '加入暂存区失败', icon: 'none' })
       }

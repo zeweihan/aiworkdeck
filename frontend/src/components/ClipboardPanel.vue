@@ -1,5 +1,11 @@
 <template>
   <view class="clip-panel">
+    <!-- 免费额度提示：只在确实有记录被挡住时出现。没超额时一个字都不显示，不打扰。 -->
+    <UnlockHint
+      v-if="hiddenCount > 0"
+      class="clip-unlock-hint"
+      :text="`另有 ${hiddenCount} 条历史记录，解锁无限版后可查看`"
+    />
     <scroll-view class="clip-body" :scroll-y="false" :scroll-x="true" show-scrollbar="false">
       <view v-if="loading" class="loading">加载中...</view>
       <view v-else-if="items.length === 0" class="empty">暂无记录</view>
@@ -68,9 +74,11 @@ import { listClipboard, deleteClipboardItem, getApiBaseUrl } from '@/services/ap
 import { getClipboardTypeMeta } from '@/config/clipboard.js'
 import { getSessionId } from '@/utils/auth.js'
 import { ICONS } from '@/config/icons.js'
+import UnlockHint from '@/components/UnlockHint.vue'
 
 export default {
 
+  components: { UnlockHint },
   computed: {
 
     ICONS() { return ICONS }
@@ -88,6 +96,8 @@ export default {
     return {
       loading: false,
       items: [],
+      // 免费额度下被隐藏（注意：不是被删除）的历史记录条数。解锁后这些记录会原样回来。
+      hiddenCount: 0,
       confirmDeleteId: null
     }
   },
@@ -109,8 +119,16 @@ export default {
     async refresh() {
       this.loading = true
       try {
-        const list = await listClipboard(this.query, 80)
-        this.items = Array.isArray(list) ? list : (list?.data || [])
+        const res = await listClipboard(this.query, 80)
+        // PR-C 起后端返回 { items, limited, hiddenCount, ... }；
+        // 数组分支保留给旧后端（桌面壳可能连着未升级的 backend），此时按无额度处理。
+        if (Array.isArray(res)) {
+          this.items = res
+          this.hiddenCount = 0
+        } else {
+          this.items = res?.items || res?.data || []
+          this.hiddenCount = res?.limited ? (res.hiddenCount || 0) : 0
+        }
       } catch (e) {
         console.error('加载剪贴板失败:', e)
         uni.showToast({ title: '加载剪贴板失败', icon: 'none' })
@@ -254,6 +272,12 @@ $bg-white: #FFFFFF;
   flex-direction: column;
   min-height: 0;
   background: $bg-pale;
+}
+
+/* 额度提示贴在列表上方，不占据滚动区，避免翻到底才看到 */
+.clip-unlock-hint {
+  margin: 12px 16px 0;
+  flex-shrink: 0;
 }
 
 .clip-body {

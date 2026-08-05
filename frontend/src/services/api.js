@@ -225,6 +225,16 @@ function request(options) {
             err.featureNotConfigured = true;
             err.feature = res.data.feature || '';
             reject(err);
+          } else if (res.data.code === 4003) {
+            // 免费额度已满（PR-C）：功能本身是好的，只是到顶了，下一步是解锁而非去设置。
+            // 打上 quotaExceeded 标记让调用方能显示解锁引导而不是通用报错。
+            // 注意：这条路径**只拒绝新增**，用户已有的数据一条都没动。
+            const msg = res.data.message || '免费额度已满';
+            const err = new Error(msg);
+            err.quotaExceeded = true;
+            err.feature = res.data.feature || '';
+            err.usage = res.data.usage || null;
+            reject(err);
           } else {
             // 业务失败：code=1 或其他非0值
             const errorMessage = res.data.message || '服务异常，请稍后重试'
@@ -1246,6 +1256,46 @@ export function listClipboard(q, limit = 50) {
   return request({
     url: `/api/clipboard${queryString}`,
     method: 'GET',
+  })
+}
+
+// 文件缓存区用量：{ fileCount, totalBytes, limited, maxFiles, maxBytes }
+// 上限常量只在后端定义一处，前端不复制，避免改额度时两边不一致。
+export function getStageUsage(projectId, folderId) {
+  const qs = folderId ? `?folderId=${encodeURIComponent(folderId)}` : ''
+  return request({
+    url: `/api/projects/${projectId}/files/stage/usage${qs}`,
+    method: 'GET',
+  }).then(unwrapEnvelope)
+}
+
+// 本机文件存储位置：{ path, defaultPath, custom, available, movedAt, entitled }
+// 只读展示不要求权益——权益失效后用户仍须看得到自己的数据在哪（entitled 告诉前端能不能改）
+export function getStorageLocation() {
+  return request({
+    url: '/api/storage/location',
+    method: 'GET',
+  }).then(unwrapEnvelope)
+}
+
+// 迁移存储位置。后端先复制再校验再切指针，原目录保留为备份；失败会回滚且保持原位置。
+// 返回整个响应体（含 message），调用方要区分 code=0 与失败文案。
+export function moveStorageLocation(path) {
+  return request({
+    url: '/api/storage/location',
+    method: 'POST',
+    data: { path },
+    header: { 'Content-Type': 'application/json' },
+  })
+}
+
+// 恢复默认存储位置。只换指针，不搬也不删任何文件——自选目录里的数据原样留在原处。
+// 不要求权益：权益失效 + 自选目录不可访问时，这是用户唯一的出口。
+export function resetStorageLocation() {
+  return request({
+    url: '/api/storage/location/reset',
+    method: 'POST',
+    header: { 'Content-Type': 'application/json' },
   })
 }
 

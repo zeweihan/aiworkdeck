@@ -31,18 +31,21 @@ public class ProjectFileService {
     private final StorageServiceFactory storageServiceFactory;
     private final WorkSessionService workSessionService;
     private final UserService userService;
+    private final com.checkba.service.quota.StageQuotaService stageQuotaService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectFileService(ProjectFileRepository projectFileRepository,
                               ProjectRagService projectRagService,
                               StorageServiceFactory storageServiceFactory,
                               WorkSessionService workSessionService,
-                              UserService userService) {
+                              UserService userService,
+                              com.checkba.service.quota.StageQuotaService stageQuotaService) {
         this.projectFileRepository = projectFileRepository;
         this.projectRagService = projectRagService;
         this.storageServiceFactory = storageServiceFactory;
         this.workSessionService = workSessionService;
         this.userService = userService;
+        this.stageQuotaService = stageQuotaService;
     }
 
     /**
@@ -567,6 +570,9 @@ public class ProjectFileService {
         if (request == null || request.getFileIds() == null || request.getFileIds().isEmpty()) {
             throw new IllegalArgumentException("fileIds 不能为空");
         }
+        // 文件缓存区免费额度：目标是缓存区且超额时在这里整体拒绝，一个文件都不移动。
+        // 放在循环之前而非循环内，避免「移了一半才发现超额」的半成品状态。
+        stageQuotaService.checkAdmission(request.getTargetParentId(), request.getFileIds());
         List<ProjectFile> result = new ArrayList<>();
         for (Long id : request.getFileIds()) {
             if (id == null) continue;

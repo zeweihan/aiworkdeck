@@ -1,8 +1,10 @@
 package com.checkba.service;
 
+import com.checkba.model.dto.ClipboardListResult;
 import com.checkba.model.entity.ClipboardItem;
 import com.checkba.repository.ClipboardItemRepository;
-import lombok.RequiredArgsConstructor;
+import com.checkba.service.entitlement.EntitlementService;
+import com.checkba.service.entitlement.FeatureCatalog;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -14,20 +16,77 @@ import java.util.List;
 import java.util.Map;
 
 @Service
-@RequiredArgsConstructor
 public class ClipboardService {
+
+    /** 免费版最多回溯的条数（Spec §5）。 */
+    public static final int FREE_MAX_ITEMS = 20;
+    /** 免费版保留天数（Spec §5）。与条数上限**同时**生效，取更严者。 */
+    public static final int FREE_RETENTION_DAYS = 3;
 
     private final ClipboardItemRepository repository;
     private final com.checkba.storage.StorageServiceFactory storageServiceFactory;
+    private final EntitlementService entitlementService;
+    private final boolean localMode;
+
+    public ClipboardService(ClipboardItemRepository repository,
+                            com.checkba.storage.StorageServiceFactory storageServiceFactory,
+                            EntitlementService entitlementService,
+                            @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+                            boolean localMode) {
+        this.repository = repository;
+        this.storageServiceFactory = storageServiceFactory;
+        this.entitlementService = entitlementService;
+        this.localMode = localMode;
+    }
 
     private com.checkba.storage.StorageService getStorageService() {
         return storageServiceFactory.getStorageService();
     }
 
-    public List<ClipboardItem> list(Long userId, String query, int limit) {
+    /**
+     * 剪贴板列表。
+     *
+     * <p><b>免费额度是查询侧过滤，绝不删除记录。</b>未拥有 {@code clipboard.unlimited} 时
+     * 只返回「最近 20 条」且「3 天内」的记录（两条同时生效，取更严者），
+     * 超出的记录留在库里，用户解锁后原样可见。</p>
+     *
+     * <p>{@code hiddenCount} 只统计**因额度**不可见的条数，不含仅被分页 {@code limit}
+     * 挡住的：后者对付费用户同样存在，把它算进去会让提示文案变成谎话。
+     * 算法：{@code hidden = 总数 − min(3天内的条数, 20)}。</p>
+     *
+     * <p>非单机模式（团队案件库服务器）不执行额度：{@link EntitlementService} 是按本机的
+     * （无 userId 维度，来源是本机 {@code ~/.aiworkdeck} 状态），服务器上恒为空集，
+     * 真照着执行会把每个接入成员的剪贴板都截到 20 条且永远无法解锁。
+     * 这个 SKU 卖的是单机版的本地能力，与 {@code LicenseController}
+     * 「非 local-mode 恒为已解锁正式版」同口径。</p>
+     */
+    public ClipboardListResult list(Long userId, String query, int limit) {
         int size = Math.max(1, Math.min(200, limit));
-        if (StringUtils.hasText(query)) {
-            return repository.search(userId, query.trim(), PageRequest.of(0, size));
+        String q = StringUtils.hasText(query) ? query.trim() : null;
+
+        if (!localMode || entitlementService.isEnabled(FeatureCatalog.CLIPBOARD_UNLIMITED)) {
+            return ClipboardListResult.unlimited(fetch(userId, q, size));
+        }
+
+        LocalDateTime cutoff = LocalDateTime.now().minusDays(FREE_RETENTION_DAYS);
+        // 条数上限先在 SQL 层收紧，再按时间过滤——两者取交集即「更严者」
+        List<ClipboardItem> items = fetch(userId, q, Math.min(size, FREE_MAX_ITEMS)).stream()
+                .filter(it -> it.getCreatedAt() != null && it.getCreatedAt().isAfter(cutoff))
+                .toList();
+
+        long total = q == null ? repository.countByUserId(userId) : repository.countSearch(userId, q);
+        long recent = q == null
+                ? repository.countByUserIdAndCreatedAtAfter(userId, cutoff)
+                : repository.countSearchAfter(userId, q, cutoff);
+        long visibleUnderQuota = Math.min(recent, FREE_MAX_ITEMS);
+        long hidden = Math.max(0L, total - visibleUnderQuota);
+
+        return new ClipboardListResult(items, true, hidden, FREE_MAX_ITEMS, FREE_RETENTION_DAYS);
+    }
+
+    private List<ClipboardItem> fetch(Long userId, String q, int size) {
+        if (q != null) {
+            return repository.search(userId, q, PageRequest.of(0, size));
         }
         return repository.findByUserIdOrderByCreatedAtDesc(userId, PageRequest.of(0, size));
     }
