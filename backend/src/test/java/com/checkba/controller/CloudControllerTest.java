@@ -377,7 +377,7 @@ class CloudControllerTest {
         var response = controller.onVersionError(e);
 
         assertEquals(1, response.getBody().get("code"));
-        assertEquals("云端协作操作失败，请重试", response.getBody().get("message"));
+        assertEquals("这次协作操作没能完成，请稍后重试", response.getBody().get("message"));
     }
 
     @Test

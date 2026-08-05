@@ -55,6 +55,14 @@
             </view>
             <text class="role-hint">{{ currentRoleHint }}</text>
           </view>
+          <!-- 这里走 addProjectMember（本机这份案卷的参与人表），协作抽屉的「案件参与人」
+               走 addCloudMember（团队案件库那边的表）。两条轨是既有机制，但两处现在共用
+               同一套角色标签，界面上再无区别信号——只在库里加、没在这里加（或反过来）都
+               会让同事白等，所以必须把这句话写在动作旁边。 -->
+          <text class="role-hint">
+            这里加的是这份案卷在本机的参与人。案卷已经放进团队案件库的话，还要在顶栏「协作」
+            的「案件参与人」里再加一次，同事才取得到这份案卷。
+          </text>
         </view>
 
         <!-- External Client Form -->

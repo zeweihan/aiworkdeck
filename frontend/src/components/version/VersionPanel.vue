@@ -148,8 +148,8 @@ export default {
   },
   mounted() {
     this.refresh()
-    // 静默探活一次云端连通性（会真的 fetch 远端，不同于 refresh() 里 getCloudStatus
-    // 读的本地缓存状态）；失败不打断——三态里的「云端暂时连不上」已经覆盖了这种情况。
+    // 静默探活一次案件库连通性（会真的 fetch 远端，不同于 refresh() 里 getCloudStatus
+    // 读的本地快照）；失败不打断——状态行里的「暂时连不上案件库」已经覆盖了这种情况。
     checkCloud(this.projectId).then((res) => {
       this.cloud = (res && res.data) || null
     }).catch(() => {})

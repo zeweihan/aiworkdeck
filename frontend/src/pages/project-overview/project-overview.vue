@@ -2767,8 +2767,15 @@ export default {
     },
     // 抽屉里做完动作：页面自己的状态、版本面板那份状态、以及「有没有等着做选择的
     // 文件」三处都要跟着走一遍。
+    //
+    // 补起定时器这一步不能省：onLoad 那次遇到还没放进案件库的案卷会直接 return，
+    // 定时器根本没起过；律师随后在抽屉里点「放进团队案件库」，chip 就此定格在这一刻，
+    // 同事再交多少稿也不会刷新——假绿灯比不显示更糟（口径见 fetchCollabState 的注释）。
+    // startCollabPolling 自带 _collabPollTimer 幂等守卫，每次动作后都调一遍是安全的。
     onCollabChanged() {
-      this.fetchCollabState()
+      this.fetchCollabState().then(() => {
+        if (this.collabLinked) this.startCollabPolling()
+      })
       this.checkAdoptConflict()
       this.collabRefreshToken += 1
     },

@@ -1080,7 +1080,7 @@ public class WorkSessionService {
         try {
             WorkSession draft = requireActiveDraft(projectId, draftId);
             if (!repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("现在没有等着做选择的采纳");
+                throw VersionException.userFacing("现在没有等你做选择的文件");
             }
             String draftTip = repoService.mergeHeadRef(projectId);
             if (draftTip == null

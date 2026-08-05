@@ -400,7 +400,9 @@ public class CloudSyncService {
                     if (integrated.status() == UpdateStatus.CONFLICT) {
                         remote.setPendingUpload(true);
                         remoteRepository.save(remote);
-                        return new UploadResult(UploadStatus.CONFLICT, "同事也改了同一处，需要你选一下留哪一份");
+                        // 不说「同一处」：文档类是整份字节比对，两边都动过就整份进裁决清单，
+                        // 说成同一处会让律师低估选错一边的代价（口径同 AdoptConflictDialog.hintText）。
+                        return new UploadResult(UploadStatus.CONFLICT, "有几份文件同事也改过，需要你选一下整份留哪一边");
                     }
                     // 走到这里只剩 OFFLINE（fetch 联不上）：整合本身没能进行，落回
                     // 旧行为。integrateFromCloud 直接复用这里已经解析好的 conn、

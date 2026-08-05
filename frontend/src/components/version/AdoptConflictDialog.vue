@@ -47,7 +47,7 @@
           class="awd-btn awd-btn-primary"
           :class="{ 'awd-btn-disabled': !allChosen || busy }"
           @tap="confirm"
-        >{{ confirmLabel }}</view>
+        >就按我选的来</view>
       </view>
     </view>
   </view>
@@ -97,12 +97,18 @@ export default {
       return this.mode === 'adopt' ? !!this.draftId : true
     },
     dialogTitle() {
-      if (this.mode === 'cloud') return '同一处，你和同事都改过'
+      if (this.mode === 'cloud') return '这几份文件你和同事都改过'
       if (this.mode === 'session-end') return '收尾时发现同事已经交了新稿'
       return `采纳《${this.draftName || '这一稿'}》`
     },
+    /*
+     * 措辞不能说「改的是同一处」。Word/PDF 这些文档在版本记录里是整份字节，两边只要
+     * 都动过就整份进这张清单，改的是不是同一条条款根本无从判断（JGit 合并器对二进制
+     * blob 直接判冲突）；律师照「同一处」去理解，会以为选「留我这份」只丢那一处重叠，
+     * 实际丢的是对方对这份文档的全部改动。所以只讲事实：两边都改过，整份二选一。
+     */
     hintText() {
-      return '下面这些文件，两边改的是同一处，只能留一份：'
+      return '下面这些文件两边都改过，没法自动合到一起——请逐份选择整份留哪一边：'
     },
     // 三个选项的后果说明必须短到各占一行——弹窗高度受 max-height 限制，说明一长
     // 第三个选项就被挤到可视区外，而它在 DOM 里仍"可见"、点击坐标却落在别处
@@ -125,25 +131,26 @@ export default {
      * 真实行为写：MAIN 用 MAIN 侧字节覆盖这个文件；DRAFT 用 DRAFT 侧字节覆盖；
      * BOTH 是**原文件保留 MAIN 侧内容**，DRAFT 侧另存成同目录下的
      * 《原名（来自：{增量侧名字}）.扩展名》——不是把两边内容拼在一起。
+     * 每条都以「整份」起头：落地口径是整份字节覆盖，不是挑着合，理由见 hintText。
      */
     choiceOptions() {
       if (this.mode === 'cloud') {
         return [
-          { value: 'MAIN', label: '留我这份', desc: '这份保持你的内容，同事的改法不进来' },
-          { value: 'DRAFT', label: '用同事那份', desc: '这份换成同事的内容，你的改动不进最终稿' },
+          { value: 'MAIN', label: '留我这份', desc: '整份用你的内容，同事对它的改动不进来' },
+          { value: 'DRAFT', label: '用同事那份', desc: '整份换成同事的，你对它的改动不进最终稿' },
           { value: 'BOTH', label: '两份都留着', desc: '你的留在原文件，同事那份另存一个副本' },
         ]
       }
       if (this.mode === 'session-end') {
         return [
-          { value: 'MAIN', label: '用同事那份', desc: '这份按同事的内容收尾，你的改动不进最终稿' },
-          { value: 'DRAFT', label: '留我这份', desc: '这份按你的内容收尾，同事那版不进来' },
+          { value: 'MAIN', label: '用同事那份', desc: '整份按同事的收尾，你对它的改动不进最终稿' },
+          { value: 'DRAFT', label: '留我这份', desc: '整份按你的收尾，同事那版不进来' },
           { value: 'BOTH', label: '两份都留着', desc: '同事的留在原文件，你这份另存一个副本' },
         ]
       }
       return [
-        { value: 'MAIN', label: '用原来那份', desc: '这份保持采纳前的内容，这一稿的改动不进来' },
-        { value: 'DRAFT', label: '用这一稿的', desc: '这份换成这一稿的内容，原来那版不再是当前内容' },
+        { value: 'MAIN', label: '用原来那份', desc: '整份保持采纳前的内容，这一稿的改动不进来' },
+        { value: 'DRAFT', label: '用这一稿的', desc: '整份换成这一稿的，原来那版不再是当前内容' },
         { value: 'BOTH', label: '两份都留着', desc: '原来的留在原文件，这一稿那份另存一个副本' },
       ]
     },
@@ -162,11 +169,6 @@ export default {
       if (this.mode === 'cloud') return '先不取回'
       if (this.mode === 'session-end') return '先不收尾'
       return '先不采纳'
-    },
-    confirmLabel() {
-      if (this.mode === 'cloud') return '就按我选的来'
-      if (this.mode === 'session-end') return '就按我选的来'
-      return '就按我选的来'
     },
     rows() {
       return this.conflictingPaths.map((path) => ({
@@ -236,7 +238,9 @@ export default {
           // abort-adopt 的路径参数在后端不参与判断（只按 projectId 找当前合并中的仓库），
           // draftId 反查落空（残局）时也用得到这条逃生门，占位传 0。
           res = await abortAdopt(this.projectId, this.draftId || 0)
-          fallbackNotice = '这次没有采纳，两份稿都还在'
+          // 与后端 WorkSessionService.ADOPT_ABORTED_NOTICE 逐字一致：正常路径显示的
+          // 是后端那句，两处措辞不同的话只有在后端没带 message 时才会露馅，很难被发现。
+          fallbackNotice = '这次采纳没有完成，你的两份稿件都还在'
         }
         uni.showToast({ title: (res && res.message) || fallbackNotice, icon: 'none' })
         this.$emit('aborted')

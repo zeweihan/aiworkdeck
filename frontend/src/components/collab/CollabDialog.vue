@@ -82,7 +82,7 @@
             </view>
             <view class="collab-note">
               交稿 = 把你这边改好的内容送进案件库，同事下次取回就能看到。
-              取回最新稿 = 把同事送进案件库的内容拿到本机。同一处两边都改过时，会让你逐份选择留哪一份。
+              取回最新稿 = 把同事送进案件库的内容拿到本机。同一份文件两边都改过时，会让你逐份选择整份留哪一边。
             </view>
           </template>
         </template>
@@ -257,6 +257,10 @@ export default {
       if (this.cloud.remoteAhead || this.cloud.pendingUpload || this.working) return 'collab-dot-blue'
       return 'collab-dot-green'
     },
+    // 这段话是发给一个此刻手上还没有这份案卷的人的，每一步必须指向他真能看见的入口：
+    // 他打开软件停在项目列表页，那里唯一的协作入口就是「从团队案件库取一份案卷」，
+    // 连案件库也要从这个弹窗里的「去连一个」进。别写「打开设置」——项目列表页的
+    // 「设置」面板里没有团队案件库，照着点会找不着。
     inviteText() {
       const url = (this.cloud && this.cloud.serverUrl) || ''
       const who = this.inviterName ? this.inviterName + '邀你' : '邀你'
@@ -264,9 +268,9 @@ export default {
         `${who}一起办《${this.projectName}》。`,
         '',
         '在 AI Workdeck 里这样加入：',
-        `1. 打开左下角设置，进「团队案件库」，填地址 ${url}，用你的账号密码连上；`,
-        '2. 回到项目列表，点「从团队案件库取一份案卷」；',
-        `3. 在列表里选《${this.projectName}》，点「取到本机」。`,
+        '1. 打开项目列表，点「从团队案件库取一份案卷」；',
+        `2. 第一次用要先连库：点「去连一个」，填地址 ${url}，用你的账号密码连上；`,
+        `3. 回到「从团队案件库取一份案卷」，选《${this.projectName}》，点「取到本机」。`,
         '',
         '之后你改你的、我改我的，各自点「交稿」就能合到一起。',
       ].join('\n')
