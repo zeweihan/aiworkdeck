@@ -54,6 +54,8 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 
 ## 付费项（PR-D，2026-08）
 
+> 账户连接、entitlement 判定、官网 API 契约的全貌在 `.claude/agents/licensing-billing.md`；本节只讲广场这条链路。
+
 - **契约**：registry 列表含 `priceCents`（分，0=免费）与 `pricingModel`（当前只有 `once`）；付费项的
   `bundle` / `file` 端点要求 `Authorization: Bearer awdk_` 且已购，否则 402
   `{code:"payment_required", priceCents, itemName}`。已购清单来自官网 `GET /api/account/entitlements`。
