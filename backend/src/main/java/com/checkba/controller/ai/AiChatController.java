@@ -35,6 +35,7 @@ public class AiChatController {
     private final com.checkba.repository.TokenUsageRepository tokenUsageRepository;
     private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
     private final com.checkba.service.ProjectMemberService projectMemberService;
+    private final com.checkba.service.ai.PlatformAiChannel platformAiChannel;
 
     public AiChatController(
             AiChatService aiChatService,
@@ -46,7 +47,8 @@ public class AiChatController {
             com.checkba.service.ai.ConversationFileChangeService conversationFileChangeService,
             com.checkba.repository.TokenUsageRepository tokenUsageRepository,
             com.checkba.service.ai.AgentRunStateService agentRunStateService,
-            com.checkba.service.ProjectMemberService projectMemberService) {
+            com.checkba.service.ProjectMemberService projectMemberService,
+            com.checkba.service.ai.PlatformAiChannel platformAiChannel) {
         this.aiChatService = aiChatService;
         this.aiAssistantService = aiAssistantService;
         this.projectAiMessageService = projectAiMessageService;
@@ -57,6 +59,7 @@ public class AiChatController {
         this.tokenUsageRepository = tokenUsageRepository;
         this.agentRunStateService = agentRunStateService;
         this.projectMemberService = projectMemberService;
+        this.platformAiChannel = platformAiChannel;
     }
 
     @PostMapping("/chat")
@@ -189,8 +192,10 @@ public class AiChatController {
                 aiModelProperties.getProvider() != null ? aiModelProperties.getProvider().name() : "OLLAMA");
 
         // Return a simple map or DTO
-        Map<String, String> config = new java.util.HashMap<>();
+        Map<String, Object> config = new java.util.HashMap<>();
         config.put("activeProvider", activeProvider);
+        // 平台通道「AI Workdeck 云端」是否可选：未连接官网账户时前端不展示该供应商
+        config.put("platformAiAvailable", platformAiChannel.isAvailable());
         return ResponseEntity.ok(config);
     }
 

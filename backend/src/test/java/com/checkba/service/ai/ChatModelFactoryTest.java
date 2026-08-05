@@ -31,6 +31,7 @@ class ChatModelFactoryTest {
     private AiModelProperties properties;
     private SystemSettingService systemSettingService;
     private ChatModelFactory factory;
+    private PlatformAiChannel platformAiChannel;
 
     @BeforeEach
     void setUp() {
@@ -40,7 +41,8 @@ class ChatModelFactoryTest {
         // 默认：DB 无该配置时返回调用方给的默认值
         when(systemSettingService.get(anyString(), any()))
                 .thenAnswer(inv -> inv.getArgument(1));
-        factory = new ChatModelFactory(properties, systemSettingService);
+        platformAiChannel = mock(PlatformAiChannel.class);
+        factory = new ChatModelFactory(properties, systemSettingService, platformAiChannel);
     }
 
     private void setDbProvider(String provider) {
@@ -142,5 +144,35 @@ class ChatModelFactoryTest {
         for (String id : required) {
             assertTrue(AllowedModels.isAllowed(id), "白名单缺失: " + id);
         }
+    }
+
+    // ==================== 平台通道「AI Workdeck 云端」（PR-B） ====================
+
+    @Test
+    @DisplayName("AWD_CLOUD：即便是白名单模型也走平台密钥，不能落到 BYOK 的 OpenRouter key")
+    void platformChannelTakesPrecedenceOverAllowlistShortcut() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.isAvailable()).thenReturn(true);
+        when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
+        when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
+
+        assertInstanceOf(OpenAiChatModel.class, factory.getChatModel("openai/gpt-5.2"));
+        assertInstanceOf(OpenAiStreamingChatModel.class, factory.getStreamingChatModel("openai/gpt-5.2"));
+        // 白名单短路分支绝不能先命中——那条路用的是 BYOK 的 key
+        verify(platformAiChannel, atLeastOnce()).apiKey();
+        verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
+    }
+
+    @Test
+    @DisplayName("AWD_CLOUD 但未连接账户：明确报错，不静默回退 BYOK 花用户自己的 key")
+    void platformChannelWithoutAccountFailsLoudly() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.isAvailable()).thenReturn(false);
+
+        var e = assertThrows(com.checkba.service.account.AccountException.class,
+                () -> factory.getChatModel("deepseek/deepseek-v4-flash"));
+        assertEquals(com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, e.getKind());
+        assertTrue(e.getMessage().contains("连接账户"), e.getMessage());
+        verify(platformAiChannel, never()).apiKey();
     }
 }

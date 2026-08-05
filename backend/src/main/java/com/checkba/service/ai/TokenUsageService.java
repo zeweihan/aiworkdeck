@@ -17,9 +17,18 @@ public class TokenUsageService {
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TokenUsageService.class);
 
     private final TokenUsageRepository tokenUsageRepository;
+    private final ChatModelFactory chatModelFactory;
+    private final PlatformUsageAccountant platformUsageAccountant;
 
     /**
-     * 记录 Token 使用情况和成本
+     * 记录 Token 使用情况和成本。
+     *
+     * cost 分两套口径（Spec §3）：
+     * <ul>
+     *   <li>BYOK：按单价表本地估算，{@code costSource=estimate}——这是「本地统计」，不是账单；</li>
+     *   <li>平台通道：cost 先留空，由 {@link PlatformUsageAccountant} 异步用 OpenRouter 的
+     *       实际扣费补上，{@code costSource=platform}。平台的钱不允许用估算值顶替。</li>
+     * </ul>
      */
     @Transactional
     public void recordUsage(Long projectId, Long userId, String modelId, dev.langchain4j.model.output.TokenUsage usage, String conversationId) {
@@ -42,14 +51,33 @@ public class TokenUsageService {
             entity.setCompletionTokens(completionTokens);
             entity.setTotalTokens(totalTokens);
 
-            // Calculate Cost
-            BigDecimal cost = calculateCost(modelId, promptTokens, completionTokens);
-            entity.setCost(cost);
+            boolean platformChannel = isPlatformChannel();
+            if (platformChannel) {
+                entity.setCost(null);
+                entity.setCostSource(PlatformUsageAccountant.SOURCE_PLATFORM);
+            } else {
+                entity.setCost(calculateCost(modelId, promptTokens, completionTokens));
+                entity.setCostSource(PlatformUsageAccountant.SOURCE_ESTIMATE);
+            }
 
             tokenUsageRepository.save(entity);
-            log.debug("Recorded usage for model {}: {} tokens, ${}", modelId, totalTokens, cost);
+            if (platformChannel) {
+                platformUsageAccountant.reconcileAsync(entity.getId());
+            }
+            log.debug("Recorded usage for model {}: {} tokens, source={}",
+                    modelId, totalTokens, entity.getCostSource());
         } catch (Exception e) {
             log.error("Failed to record token usage", e);
+        }
+    }
+
+    /** 当前是否走平台通道。供应商解析失败按 BYOK 处理——记账问题不该拖垮对话。 */
+    private boolean isPlatformChannel() {
+        try {
+            return chatModelFactory.resolveProvider()
+                    == com.checkba.config.AiModelProperties.Provider.AWD_CLOUD;
+        } catch (Exception e) {
+            return false;
         }
     }
 

@@ -1,0 +1,182 @@
+package com.checkba.controller;
+
+import com.checkba.model.entity.TokenUsage;
+import com.checkba.repository.TokenUsageRepository;
+import com.checkba.service.account.AccountException;
+import com.checkba.service.account.AccountService;
+import com.checkba.service.ai.PlatformAiChannel;
+import com.checkba.service.entitlement.EntitlementService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * 与官网账户的连接（商业化改造 PR-B）。
+ *
+ * <ul>
+ *   <li>GET  /api/account/status     当前连接状态（不含 Key 明文）</li>
+ *   <li>POST /api/account/connect    {"key":"awdk_..."} 校验并落盘</li>
+ *   <li>POST /api/account/disconnect 断开并清空权益缓存、平台 AI 密钥缓存</li>
+ *   <li>GET  /api/account/usage      平台结算（官网）+ 本地统计（TokenUsage）两套口径</li>
+ * </ul>
+ *
+ * local-mode 免登：这些端点不要求登录，但 POST 一律落在 PR-A 的
+ * {@code LocalModeAccessFilter} 之内（跨站 Origin 硬拦截 + 回环校验 + 反代痕迹拒绝），
+ * 因此「任意网页悄悄把用户账户断开/换绑」这条路是关死的。
+ *
+ * 返回沿用全站信封 {@code {code:0,data:...}} / {@code {code:1,message:"中文"}}（HTTP 恒 200），
+ * 与 frontend/src/services/api.js 的拦截约定一致。
+ */
+@RestController
+@RequestMapping("/api/account")
+@Slf4j
+public class AccountController {
+
+    private final AccountService accountService;
+    private final EntitlementService entitlementService;
+    private final PlatformAiChannel platformAiChannel;
+    private final TokenUsageRepository tokenUsageRepository;
+
+    public AccountController(AccountService accountService,
+                             EntitlementService entitlementService,
+                             PlatformAiChannel platformAiChannel,
+                             TokenUsageRepository tokenUsageRepository) {
+        this.accountService = accountService;
+        this.entitlementService = entitlementService;
+        this.platformAiChannel = platformAiChannel;
+        this.tokenUsageRepository = tokenUsageRepository;
+    }
+
+    @GetMapping("/status")
+    public Map<String, Object> status() {
+        Map<String, Object> data = new LinkedHashMap<>(accountService.status());
+        // 平台 AI 通道是否可选（未连接账户时前端不展示该供应商）
+        data.put("platformAiAvailable", platformAiChannel.isAvailable());
+        return ok(data);
+    }
+
+    @PostMapping("/connect")
+    public Map<String, Object> connect(@RequestBody(required = false) Map<String, String> body) {
+        String key = body == null ? null : body.get("key");
+        Map<String, Object> status = accountService.connect(key);
+        // 换账户后旧账户的权益与平台密钥必须立刻作废，不能等下一次刷新
+        entitlementService.clearAccountCache();
+        platformAiChannel.clearCache();
+        entitlementService.refreshAsync();
+        return ok(status);
+    }
+
+    @PostMapping("/disconnect")
+    public Map<String, Object> disconnect() {
+        Map<String, Object> status = accountService.disconnect();
+        entitlementService.clearAccountCache();
+        platformAiChannel.clearCache();
+        return ok(status);
+    }
+
+    /**
+     * 用量：两套数字**分开标注**，不做合并（Spec §3）。
+     * - local：本机 TokenUsage 汇总，BYOK 部分是按单价表估算的；
+     * - platform：官网账户余额与 AI 额度分配流水，是真实结算口径。
+     *
+     * 官网侧不可达时只降级 platform 段，本地统计照常返回。
+     */
+    @GetMapping("/usage")
+    public Map<String, Object> usage(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("local", localUsage(userId));
+        data.put("platform", platformUsage());
+        return ok(data);
+    }
+
+    // ==================== 内部 ====================
+
+    private Map<String, Object> localUsage(Long userId) {
+        List<TokenUsage> records = userId == null ? List.of() : tokenUsageRepository.findByUserId(userId);
+        long prompt = 0;
+        long completion = 0;
+        long total = 0;
+        BigDecimal platformCost = BigDecimal.ZERO;
+        BigDecimal estimatedCost = BigDecimal.ZERO;
+        for (TokenUsage record : records) {
+            prompt += record.getPromptTokens() == null ? 0 : record.getPromptTokens();
+            completion += record.getCompletionTokens() == null ? 0 : record.getCompletionTokens();
+            total += record.getTotalTokens() == null ? 0 : record.getTotalTokens();
+            if (record.getCost() == null) continue;
+            if ("platform".equals(record.getCostSource())) {
+                platformCost = platformCost.add(record.getCost());
+            } else {
+                estimatedCost = estimatedCost.add(record.getCost());
+            }
+        }
+        Map<String, Object> local = new LinkedHashMap<>();
+        local.put("records", records.size());
+        local.put("promptTokens", prompt);
+        local.put("completionTokens", completion);
+        local.put("totalTokens", total);
+        // 平台通道的实际扣费（美元），已完成对账的部分
+        local.put("platformCostUsd", platformCost.toPlainString());
+        // BYOK 的本地估算（美元），**不是账单**
+        local.put("estimatedCostUsd", estimatedCost.toPlainString());
+        return local;
+    }
+
+    private Map<String, Object> platformUsage() {
+        Map<String, Object> platform = new LinkedHashMap<>();
+        if (!accountService.isConnected()) {
+            platform.put("connected", false);
+            return platform;
+        }
+        platform.put("connected", true);
+        try {
+            Map<String, Object> profile = accountService.fetchProfile();
+            platform.put("balanceCents", profile.get("balanceCents"));
+            platform.put("plan", profile.get("plan"));
+            platform.put("allocations", accountService.fetchLedger().stream()
+                    .filter(entry -> "ai_alloc".equals(entry.get("kind")))
+                    .toList());
+            platform.put("limitUsd", platformAiChannel.limitUsd());
+            platform.put("available", true);
+        } catch (AccountException e) {
+            // 官网不可达不该让整个用量面板报错——本地统计仍然有价值
+            platform.put("available", false);
+            platform.put("message", e.getMessage());
+        }
+        return platform;
+    }
+
+    private static Map<String, Object> ok(Object data) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 0);
+        result.put("data", data);
+        return result;
+    }
+
+    /**
+     * 账户类失败统一转成全站信封。HTTP 恒 200 + code=1，
+     * 前端 api.js 会 reject 并把 message 原样弹给用户（中文，且不含 Key 明文）。
+     */
+    @ExceptionHandler(AccountException.class)
+    public ResponseEntity<Map<String, Object>> handleAccountException(AccountException e) {
+        log.warn("账户操作失败 [{}]: {}", e.getKind(), e.getMessage());
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 1);
+        result.put("kind", e.getKind().name());
+        result.put("message", e.getMessage());
+        return ResponseEntity.ok(result);
+    }
+}
