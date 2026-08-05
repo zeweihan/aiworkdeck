@@ -119,12 +119,19 @@
                     </template>
                   </view>
                   <text class="card-title">{{ m.name || m.id }}</text>
-                  <text class="card-id">{{ m.id }} · v{{ m.version || '1.0.0' }}</text>
+                  <text class="card-id">{{ m.id }} · v{{ m.version || '1.0.0' }} · {{ priceTag(m) }}</text>
                 </view>
                 <view class="card-actions">
-                  <view class="act-primary" :class="{ 'is-busy': !!marketBusyId }" @tap="installSkill(m)">
+                  <view
+                    v-if="marketAction(m) === 'install'"
+                    class="act-primary"
+                    :class="{ 'is-busy': !!marketBusyId }"
+                    @tap="installSkill(m)"
+                  >
                     {{ marketBusyId === m.id ? '处理中' : (m.installed ? '更新' : '安装') }}
                   </view>
+                  <view v-else-if="marketAction(m) === 'buy'" class="act-primary" @tap="openPurchase('skill', m.id)">购买</view>
+                  <view v-else class="act-primary" @tap="goToAccountSettings">需连接账户</view>
                   <view v-if="m.installed" class="act-remove" @tap="uninstallSkill(m)">卸载</view>
                 </view>
               </view>
@@ -177,15 +184,17 @@
                     </template>
                   </view>
                   <text class="card-title">{{ m.name || m.id }}</text>
-                  <text class="card-id">{{ m.id }} · v{{ m.version || '1.0.0' }} · {{ formatSize(m.size) }}</text>
+                  <text class="card-id">{{ m.id }} · v{{ m.version || '1.0.0' }} · {{ formatSize(m.size) }} · {{ priceTag(m) }}</text>
                 </view>
                 <view class="card-actions">
                   <view
-                    v-if="!m.installed || m.updatable"
+                    v-if="marketAction(m) === 'install' && (!m.installed || m.updatable)"
                     class="act-primary"
                     :class="{ 'is-busy': !!pluginBusyId }"
                     @tap="installPlugin(m)"
                   >{{ pluginBusyId === m.id ? '安装中' : (m.updatable ? '更新' : '安装') }}</view>
+                  <view v-else-if="marketAction(m) === 'buy'" class="act-primary" @tap="openPurchase('plugin', m.id)">购买</view>
+                  <view v-else-if="marketAction(m) === 'need-account'" class="act-primary" @tap="goToAccountSettings">需连接账户</view>
                   <view v-if="m.installed" class="act-remove" @tap="uninstallPlugin(m)">卸载</view>
                 </view>
               </view>
@@ -327,6 +336,8 @@
 
 <script>
 import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivation, rescanSkills, getSkillMarket, installMarketSkill, uninstallMarketSkill, getPluginMarket, installMarketPlugin, uninstallMarketPlugin } from '@/services/api.js'
+import { paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
 import { ICONS } from '@/config/icons.js'
 
 const PERMISSION_LABELS = {
@@ -396,6 +407,8 @@ export default {
       marketPluginLoading: false,
       marketPluginError: '',
       pluginBusyId: '',
+      // 是否已连接官网账户；随广场列表响应下发（付费未购项据此在「购买」与「需连接账户」之间选）
+      accountConnected: false,
       loading: false,
       switching: false,
       rescanning: false,
@@ -439,12 +452,21 @@ export default {
   // 原页面在 onLoad 里拉取（无路由参数依赖）；组件化后等价迁到 mounted，
   // 嵌入态每次挂载（含 :key 变化触发的重挂）都会重新拉取四组数据
   mounted() {
-    this.loadPlugins()
-    this.loadSkills()
-    this.loadMarket()
-    this.loadPluginMarket()
+    this.reloadAll()
+    // 设置页连接/断开账户后广播回来：付费项的按钮形态跟着账户状态变，
+    // 而设置页是 navigateTo 打开的、本页并不销毁，不订阅就会停在旧状态转不出去
+    uni.$on('awd:market-changed', this.reloadAll)
+  },
+  beforeUnmount() {
+    uni.$off('awd:market-changed', this.reloadAll)
   },
   methods: {
+    reloadAll() {
+      this.loadPlugins()
+      this.loadSkills()
+      this.loadMarket()
+      this.loadPluginMarket()
+    },
     tabCount(key) {
       if (key === 'skill') return this.marketSkills.length
       if (key === 'plugin') return this.marketPlugins.length
@@ -472,6 +494,26 @@ export default {
     categoryGlyph(id) {
       return CATEGORY_GLYPHS[id] || CATEGORY_GLYPHS.other
     },
+    // 与导入的 priceLabel 重名会让人误以为递归，模板里统一叫 priceTag
+    priceTag(m) {
+      return priceLabel(m)
+    },
+    /**
+     * 卡片主按钮形态：'install'（免费 / 已购 / 已安装，行为不变）｜'buy'｜'need-account'。
+     * 已安装项一律走 install 分支，更新与卸载不受付费状态影响。
+     */
+    marketAction(m) {
+      if (m.installed) return 'install'
+      const state = paidState(m, this.accountConnected)
+      return state === 'buy' || state === 'need-account' ? state : 'install'
+    },
+    // 购买走系统浏览器：支付要用用户已登录的浏览器会话
+    openPurchase(kind, id) {
+      openExternalUrl(purchaseUrl(kind, id))
+    },
+    goToAccountSettings() {
+      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
+    },
     formatSize(bytes) {
       if (!bytes) return '未知大小'
       if (bytes < 1024) return bytes + ' B'
@@ -484,6 +526,7 @@ export default {
       try {
         const res = await getPluginMarket()
         this.marketPlugins = res?.plugins || []
+        if (typeof res?.accountConnected === 'boolean') this.accountConnected = res.accountConnected
       } catch (e) {
         // 注册表不可达只在区块内提示，不影响本地插件与 Skill
         console.warn('在线插件广场不可用:', e)
@@ -616,6 +659,7 @@ export default {
       try {
         const res = await getSkillMarket()
         this.marketSkills = res?.skills || []
+        if (typeof res?.accountConnected === 'boolean') this.accountConnected = res.accountConnected
       } catch (e) {
         // 注册表不可达只在区块内提示，不弹 toast、不影响本地插件 / Skill 区块
         console.warn('在线广场不可用:', e)

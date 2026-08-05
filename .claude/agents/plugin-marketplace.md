@@ -48,9 +48,53 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 
 ## 官网 registry 契约
 
-- **列表**：`GET {registryUrl}` → skill 元数据 JSON 数组，字段对应 MarketSkillView：id/name/description/icon/version/author/authorDisplayName/triggers[]/allowedTools[]/downloads/updatedAt/homepage（`installed` 由本地判定）。
+- **列表**：`GET {registryUrl}` → skill 元数据 JSON 数组，字段对应 MarketSkillView：id/name/description/icon/version/author/authorDisplayName/triggers[]/allowedTools[]/downloads/updatedAt/homepage/**priceCents/pricingModel**（`installed`、`purchased` 由本地判定）。
 - **下载**：`GET {registryUrl}/{id}/bundle` → `{id, version, files:{"skill.yml":"…","prompt.md":"…"}}`；只认白名单键 skill.yml/prompt.md（BUNDLE_FILES），值必须字符串，缺任一安装失败。
-- HTTP：hutool，连接 5s/读 10s 超时；非 200 抛 IllegalStateException；`httpGet` 是可覆写测试 seam。
+- HTTP：hutool，连接 5s/读 10s 超时；`httpGet(url, bearer)` 是可覆写测试 seam，返回 `RegistryReply(status, bytes)`（状态码交调用方判，402 不在 seam 里抛）；无鉴权的 `httpGet(url)` 是它的薄包装。
+
+## 付费项（PR-D，2026-08）
+
+- **契约**：registry 列表含 `priceCents`（分，0=免费）与 `pricingModel`（当前只有 `once`）；付费项的
+  `bundle` / `file` 端点要求 `Authorization: Bearer awdk_` 且已购，否则 402
+  `{code:"payment_required", priceCents, itemName}`。已购清单来自官网 `GET /api/account/entitlements`。
+- **单一判定出口**：`backend/src/main/java/com/checkba/service/market/MarketPurchaseGate.java`。
+  Skill 与插件两条链路共用它做「免费判定 / 未连接账户拦截 / 402 翻译 / 分转元」四件事，
+  不要在各自 service 里再写一套文案。
+- **feature 命名空间**：`skill:<id>` / `plugin:<id>`，与本地 SKU 键（`clipboard.unlimited` 等
+  FeatureCatalog 常量）在同一个 entitlements 列表里但语义不同。只用
+  `MarketPurchaseGate.skillFeature/pluginFeature` 构造，**绝不拿条目 id 直接当 feature 查**。
+- **降级三条**（都有单测钉住）：
+  1. registry 的 `priceCents` 缺失 / 负数 / 超上限（¥100,000，`MarketPurchaseGate.normalizePrice`）
+     → 一律归一为 0 = 免费。旧 registry 上不能把免费项锁住；畸形值也不能展示成假价格，
+     真付费项由官网 402 兜底，不会因此白拿。前端 `marketPricing.priceCentsOf` 同口径再兜一次；
+  2. 安装前查元数据拿价格失败（列表不可达）→ 按免费继续（网络抖动不该连免费项都装不上），
+     但**本机有账户 Key 就照样附上 Bearer**（`bearerForUnknownPrice`）：这一步分不清「真免费」
+     与「付费但价格没查到」，不带 Key 的话后者官网必 402，一个真已购的用户会被反过来指控没付费；
+     免费项的 bundle/file 端点不看 Authorization，附上无副作用；
+  3. 免费项**不带** Authorization、不查账户——bundle/file 请求逐字节与改造前一致。
+     注意这不等于「不多一次往返」：`install()` 会先拉一次 registry 列表拿价格，**免费项也走这一步**。
+- **价格必须服务端自查**：`install()` 先拉一次 registry 列表定价，不信前端传来的 priceCents，
+  否则等于让客户端决定付费闸门何时生效。这也是免费项唯一多出来的一次往返，别为了省它按前端值分流。
+- **错误文案红线**：付费闸门抛的中文里**不能出现「登录」「未授权」「请先」**——
+  `frontend/src/services/api.js` 对 `code:1` 的消息做子串匹配来识别掉线，命中就清本地会话，
+  浏览器端还会跳登录页。这是业务错误不是掉线。两个测试文件里的 `assertNotMistakenForLogout` 钉住了这条。
+- **402 ≠ 用户没买过**：本机未连账户时官网无从查购买记录，`paymentRequired` 在这种情况下
+  说的是「去连接账户」而不是「去购买」。
+- **前端**：`frontend/src/utils/marketPricing.js` 是价格展示与状态判定的唯一出口
+  （`priceLabel` / `paidState` / `canInstall` / `purchaseUrl`），MarketSidebarPanel、MarketDetailPane、
+  MarketPane 三处共用。四态：免费 / 已购（直接装）/ 未购已连账户（「购买」外链）/ 未连账户（「需连接账户」跳设置）。
+- **购买外链地雷**：官网**没有** `/zh/plugins/{id}` 路由（只有 `/zh/plugins` 列表页带购买按钮），
+  registry 里插件 `homepage` 默认值指向的路径并不存在，拿它当购买入口会 404。
+  购买链接一律用 `purchaseUrl(kind, id)`，且走 `openExternalUrl`（系统浏览器）——
+  支付要用用户已登录的浏览器会话，内嵌 tab 里付不了。
+- 广场列表响应额外带 `accountConnected`，省得前端为一个布尔再打一次 `/api/account/status`。
+  代价是 `GET /market/list`（Skill 与插件两个）**要求登录**：`purchased` / `accountConnected`
+  是账户隐私，团队服务器部署下不能匿名可读（与 EntitlementController 同口径）。
+- **账户状态变了要广播**：设置页连接/断开账户后 `admin.vue` 发
+  `awd:market-changed` + `awd:market-changed-from-sidebar` 两个事件（两个订阅方：左栏
+  MarketSidebarPanel / 中栏 MarketDetailPane，整页 MarketPane 也订了前者）。
+  不发的话——设置页是 `navigateTo` 打开的、广场那页并不销毁——用户从「需连接账户」点进设置、
+  连完账户返回，广场还是旧数据，再点又回设置页，转不出去。
 
 ## 安装/卸载链路
 

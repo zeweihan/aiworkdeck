@@ -1331,6 +1331,7 @@ export default {
         await this.loadAccount()
         // 已购功能解锁随账户走，连接后必须让权益缓存失效重取
         await refreshEntitlements(true)
+        this.notifyMarketAccountChanged()
         uni.showToast({ title: '已连接账户', icon: 'none' })
       } catch (e) {
         uni.showToast({ title: (e && e.message) || '连接失败', icon: 'none' })
@@ -1350,6 +1351,7 @@ export default {
         const res = await disconnectAccount()
         await this.loadAccount()
         await refreshEntitlements(true)
+        this.notifyMarketAccountChanged()
         // 后端会把 activeProvider 从平台通道摘下来（否则每条消息都报未连接账户，
         // 而设置页仍显示平台通道正常选中）。这里同步表单并如实告知切到了哪一个。
         const fallback = res && res.aiProviderFallback
@@ -1367,6 +1369,17 @@ export default {
       } catch (e) {
         uni.showToast({ title: (e && e.message) || '操作失败', icon: 'none' })
       }
+    },
+    /**
+     * 账户连接状态变了 → 广场的付费项按钮形态跟着变（「需连接账户」↔「购买」/「安装」）。
+     *
+     * 设置页是 navigateTo 打开的，上一页并不销毁：不广播的话用户从「需连接账户」点进来、
+     * 连完账户返回，广场还是旧数据，再点又回到这里，转不出去。
+     * 两个事件名分属两个订阅方（左栏 MarketSidebarPanel / 中栏 MarketDetailPane），都要发。
+     */
+    notifyMarketAccountChanged() {
+      uni.$emit('awd:market-changed')
+      uni.$emit('awd:market-changed-from-sidebar')
     },
     // 金额一律两位小数，缺值显示 $0.00 而不是 NaN
     formatUsd(v) {

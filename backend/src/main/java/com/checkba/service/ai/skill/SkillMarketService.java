@@ -5,6 +5,8 @@ import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.checkba.service.market.MarketPurchaseGate;
+import com.checkba.service.market.RegistryReply;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -24,6 +26,13 @@ import java.util.regex.Pattern;
  *
  * 安装 = 把 bundle 中的两个已知文件写入 {ai.skills.dir}/{id}/ 后 rescan（重装即更新）；
  * 注册表不可达只影响广场功能本身，不影响本地 skill / 插件体系。
+ *
+ * <h3>付费项（PR-D）</h3>
+ * 列表多出 {@code priceCents}（分，0=免费）/{@code pricingModel}，安装时 bundle 端点对付费项要求
+ * {@code Authorization: Bearer awdk_} 且已购，否则 402。判定与文案统一在 {@link MarketPurchaseGate}。
+ * <b>免费项（含官网旧格式缺 priceCents 字段）不查账户、不带鉴权头</b>，bundle 请求逐字节与改造前一致。
+ * 唯一的增量是 {@link #install} 会先查一次注册表列表拿价格（价格必须服务端自证，见 {@link #findRegistryEntry}），
+ * 免费项也走这一步——不能靠「是不是免费」来决定要不要查，那等于让客户端说了算。
  */
 @Service
 @Slf4j
@@ -37,10 +46,13 @@ public class SkillMarketService {
 
     private final SkillProperties properties;
     private final SkillRegistry skillRegistry;
+    private final MarketPurchaseGate purchaseGate;
 
-    public SkillMarketService(SkillProperties properties, SkillRegistry skillRegistry) {
+    public SkillMarketService(SkillProperties properties, SkillRegistry skillRegistry,
+                              MarketPurchaseGate purchaseGate) {
         this.properties = properties;
         this.skillRegistry = skillRegistry;
+        this.purchaseGate = purchaseGate;
     }
 
     /** 广场 skill 视图：注册表元数据 + 本地是否已安装 */
@@ -60,12 +72,21 @@ public class SkillMarketService {
         private Integer downloads;
         private String updatedAt;
         private String homepage;
+        /**
+         * 售价（分），0 = 免费。**官网旧格式没有这个字段 → 反序列化得 null → 归一为 0（免费）**，
+         * 绝不能因为字段缺失把免费项锁住。
+         */
+        private Integer priceCents;
+        /** 计价方式，当前只有 "once"（一次性买断）；缺失同样按 once 处理 */
+        private String pricingModel;
         /** 本地 SkillRegistry 中已存在同 id skill */
         private boolean installed;
+        /** 付费项且账户权益里有 skill:{id}（免费项恒 false，前端按 priceCents 判免费） */
+        private boolean purchased;
     }
 
     /**
-     * 拉取在线广场列表并标注安装状态。
+     * 拉取在线广场列表并标注安装 / 已购状态。
      * @throws IllegalStateException 注册表不可达或返回内容无法解析（调用方转 {code:1}，不阻断本地功能）
      */
     public List<MarketSkillView> listMarket() {
@@ -77,20 +98,47 @@ public class SkillMarketService {
             throw new IllegalStateException("注册表返回内容无法解析: " + e.getMessage());
         }
         for (MarketSkillView view : list) {
+            view.setPriceCents(MarketPurchaseGate.normalizePrice(view.getPriceCents()));
+            if (view.getPricingModel() == null || view.getPricingModel().isBlank()) {
+                view.setPricingModel("once");
+            }
             view.setInstalled(view.getId() != null && skillRegistry.getSkill(view.getId()).isPresent());
+            view.setPurchased(view.getPriceCents() > 0 && view.getId() != null
+                    && purchaseGate.purchased(MarketPurchaseGate.skillFeature(view.getId())));
         }
         return list;
+    }
+
+    /** 广场列表响应带回的账户连接状态：未连接时前端把付费项显示为「需连接账户」。 */
+    public boolean accountConnected() {
+        return purchaseGate.accountConnected();
     }
 
     /**
      * 安装（或重装 = 更新）一个在线 skill：下载 bundle 写入 {ai.skills.dir}/{id}/ 并 rescan。
      * @return 安装的 skill id
      * @throws IllegalArgumentException id 非法
-     * @throws IllegalStateException 注册表不可达 / bundle 缺必需文件 / 写盘失败
+     * @throws IllegalStateException 注册表不可达 / 付费项未连接账户或未购买 / bundle 缺必需文件 / 写盘失败
      */
     public synchronized String install(String id) {
         requireValidId(id);
-        String body = httpGet(properties.getRegistryUrl() + "/" + id + "/bundle");
+        MarketSkillView entry = findRegistryEntry(id);
+        int priceCents = entry == null ? 0 : MarketPurchaseGate.normalizePrice(entry.getPriceCents());
+        String itemName = entry == null || entry.getName() == null ? id : entry.getName();
+        // 免费项 bearer 为 null：不带鉴权头，与改造前逐字节一致。
+        // entry == null 是「价格没查到」而不是「免费」：本机有 Key 就带上，见 bearerForUnknownPrice
+        String bearer = entry == null
+                ? purchaseGate.bearerForUnknownPrice()
+                : purchaseGate.bearerFor(priceCents, itemName);
+
+        RegistryReply reply = httpGet(properties.getRegistryUrl() + "/" + id + "/bundle", bearer);
+        if (reply.status() == 402) {
+            throw purchaseGate.paymentRequired(reply.body(), itemName, priceCents);
+        }
+        if (reply.status() != 200) {
+            throw new IllegalStateException("注册表请求失败 (HTTP " + reply.status() + ")");
+        }
+        String body = reply.body();
         JSONObject files;
         try {
             files = JSONUtil.parseObj(body).getJSONObject("files");
@@ -151,20 +199,54 @@ public class SkillMarketService {
         }
     }
 
-    /** HTTP GET（单测覆写此 seam 打桩）；非 200 或网络异常抛 IllegalStateException */
+    /**
+     * 安装前查一次注册表元数据拿价格。
+     *
+     * 价格必须由服务端自己确认——前端传来的 priceCents 只是显示值，拿它决定「要不要带 Bearer」
+     * 就等于让客户端决定付费闸门什么时候生效。
+     *
+     * 列表不可达 / 条目已下架时返回 null，按免费继续尝试：真付费项官网仍会 402 兜底，
+     * 而在这里直接失败会把一次网络抖动变成免费项也装不上。
+     */
+    private MarketSkillView findRegistryEntry(String id) {
+        try {
+            return listMarket().stream()
+                    .filter(v -> id.equals(v.getId()))
+                    .findFirst().orElse(null);
+        } catch (Exception e) {
+            log.debug("安装前拉取注册表元数据失败，按免费项继续: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /** 无鉴权 HTTP GET；非 200 或网络异常抛 IllegalStateException */
     protected String httpGet(String url) {
+        RegistryReply reply = httpGet(url, null);
+        if (reply.status() != 200) {
+            throw new IllegalStateException("注册表请求失败 (HTTP " + reply.status() + ")");
+        }
+        return reply.body();
+    }
+
+    /**
+     * HTTP GET seam（单测覆写此方法打桩，无鉴权的 {@link #httpGet(String)} 也走这里）。
+     *
+     * @param bearer 非空时带 {@code Authorization: Bearer}；付费项 bundle 端点需要
+     * @throws IllegalStateException 网络不可达（状态码交由调用方判断，402 不在这里抛）
+     */
+    protected RegistryReply httpGet(String url, String bearer) {
         HttpResponse resp;
         try {
-            resp = HttpRequest.get(url)
+            HttpRequest req = HttpRequest.get(url)
                     .setConnectionTimeout(5000)
-                    .setReadTimeout(10000)
-                    .execute();
+                    .setReadTimeout(10000);
+            if (bearer != null && !bearer.isBlank()) {
+                req.header("Authorization", "Bearer " + bearer);
+            }
+            resp = req.execute();
         } catch (Exception e) {
             throw new IllegalStateException("注册表不可达: " + e.getMessage());
         }
-        if (resp.getStatus() != 200) {
-            throw new IllegalStateException("注册表请求失败 (HTTP " + resp.getStatus() + ")");
-        }
-        return resp.body();
+        return new RegistryReply(resp.getStatus(), resp.bodyBytes());
     }
 }

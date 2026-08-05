@@ -92,12 +92,23 @@ public class PluginController {
         return ResponseEntity.ok(result);
     }
 
-    /** 在线广场列表；注册表不可达返回 {code:1, message}，不影响本地插件区块 */
+    /**
+     * 在线广场列表；注册表不可达返回 {code:1, message}，不影响本地插件区块。
+     *
+     * 要求登录：响应里带 purchased / accountConnected，属账户隐私，团队服务器部署下不能匿名可读
+     * （与 EntitlementController 同口径）。
+     */
     @GetMapping("/market/list")
-    public ResponseEntity<Map<String, Object>> listMarket() {
+    public ResponseEntity<Map<String, Object>> listMarket(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        if (AuthController.getUserIdFromSession(sessionId) == null) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("未登录"));
+        }
         try {
             Map<String, Object> result = ok();
             result.put("plugins", pluginMarketService.listMarket());
+            // 付费项按钮形态取决于账户是否已连接（未连接显示「需连接账户」），随列表一起给
+            result.put("accountConnected", pluginMarketService.accountConnected());
             return ResponseEntity.ok(result);
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));

@@ -1,6 +1,10 @@
 package com.checkba.service.ai;
 
 import com.checkba.service.SystemSettingService;
+import com.checkba.service.account.AccountService;
+import com.checkba.service.entitlement.EntitlementService;
+import com.checkba.service.market.MarketPurchaseGate;
+import com.checkba.service.market.RegistryReply;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,9 +39,26 @@ class PluginMarketServiceTest {
     private String publicKeyPem;
     private final Map<String, String> settingStore = new HashMap<>();
     private PluginService pluginService;
+    /** 默认：未连接账户、无任何已购权益（免费项用例走这条，付费用例各自重建） */
+    private MarketPurchaseGate gate;
+
+    /**
+     * @param accountKey 账户 Key；null = 未连接
+     * @param ownedFeature 已购的 feature（skill:/plugin: 命名空间），null = 未购
+     */
+    private static MarketPurchaseGate gate(String accountKey, String ownedFeature) {
+        AccountService account = mock(AccountService.class);
+        when(account.currentKeyOrNull()).thenReturn(accountKey);
+        when(account.isConnected()).thenReturn(accountKey != null);
+        EntitlementService entitlements = mock(EntitlementService.class);
+        when(entitlements.isEnabled(anyString()))
+                .thenAnswer(inv -> ownedFeature != null && ownedFeature.equals(inv.getArgument(0)));
+        return new MarketPurchaseGate(account, entitlements);
+    }
 
     @BeforeEach
     void setUp() throws Exception {
+        gate = gate(null, null);
         keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
         publicKeyPem = "-----BEGIN PUBLIC KEY-----\n"
                 + Base64.getMimeEncoder(64, "\n".getBytes()).encodeToString(keyPair.getPublic().getEncoded())
@@ -69,7 +90,8 @@ class PluginMarketServiceTest {
     }
 
     private PluginMarketService service(String pubKey) {
-        return new PluginMarketService("http://registry.test/plugins", pubKey, pluginsDir.toString(), pluginService);
+        return new PluginMarketService("http://registry.test/plugins", pubKey, pluginsDir.toString(),
+                pluginService, gate);
     }
 
     @Test
@@ -182,15 +204,17 @@ class PluginMarketServiceTest {
 
         boolean[] downloaded = {false};
         PluginMarketService svc = new PluginMarketService(
-                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService) {
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService, gate) {
             @Override
-            protected String httpGet(String url) {
-                return bundleJson("demo", "1.0.0", "2026-07-27T00:00:00Z", files, badSig);
+            protected RegistryReply httpGet(String url, String bearer) {
+                return reply(200, url.endsWith("/plugins")
+                        ? "[]"
+                        : bundleJson("demo", "1.0.0", "2026-07-27T00:00:00Z", files, badSig));
             }
             @Override
-            protected byte[] httpGetBytes(String url) {
+            protected RegistryReply httpGetBytes(String url, String bearer) {
                 downloaded[0] = true;
-                return new byte[0];
+                return reply(200, "");
             }
         };
         IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
@@ -274,18 +298,213 @@ class PluginMarketServiceTest {
                 "ai.plugins.registry-public-key 为空会让所有在线插件安装被拒绝");
     }
 
-    /** 打桩 HTTP：bundle 返回给定清单，file 按路径返回对应内容 */
+    /** 打桩 HTTP：注册表列表返回空数组（= 免费项），bundle 返回给定清单，file 按路径返回对应内容 */
     private PluginMarketService stubbed(String pubKey, Map<String, String> files, String sig,
                                         byte[] manifestBytes, byte[] jarBytes) {
-        return new PluginMarketService("http://registry.test/plugins", pubKey, pluginsDir.toString(), pluginService) {
+        return new PluginMarketService("http://registry.test/plugins", pubKey, pluginsDir.toString(),
+                pluginService, gate) {
             @Override
-            protected String httpGet(String url) {
-                return bundleJson("demo", "1.0.0", "2026-07-27T00:00:00Z", files, sig);
+            protected RegistryReply httpGet(String url, String bearer) {
+                return reply(200, url.endsWith("/plugins")
+                        ? "[]"
+                        : bundleJson("demo", "1.0.0", "2026-07-27T00:00:00Z", files, sig));
             }
             @Override
-            protected byte[] httpGetBytes(String url) {
-                return url.contains("tool.jar") ? jarBytes : manifestBytes;
+            protected RegistryReply httpGetBytes(String url, String bearer) {
+                return new RegistryReply(200, url.contains("tool.jar") ? jarBytes : manifestBytes);
             }
         };
+    }
+
+    private static RegistryReply reply(int status, String body) {
+        return new RegistryReply(status, body.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // ==================== 付费项（PR-D） ====================
+
+    /** 注册表列表：一个 ¥19.90 的付费插件 */
+    private static String paidRegistryJson() {
+        return """
+                [{ "id": "demo", "name": "尽调助手", "version": "1.0.0",
+                   "priceCents": 1990, "pricingModel": "once" }]""";
+    }
+
+    @Test
+    @DisplayName("列表：官网旧格式没有 priceCents 时按免费处理（向后兼容，不能把免费项锁住）")
+    void listTreatsMissingPriceAsFree() {
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService, gate) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                return reply(200, """
+                        [{ "id": "legacy", "name": "老插件", "version": "1.0.0" }]""");
+            }
+        };
+        PluginMarketService.MarketPluginView view = svc.listMarket().get(0);
+        assertEquals(0, view.getPriceCents(), "缺字段 = 免费");
+        assertEquals("once", view.getPricingModel(), "缺字段按一次性买断兜底");
+        assertFalse(view.isPurchased());
+    }
+
+    @Test
+    @DisplayName("列表：付费项已购时标 purchased（feature 命名空间 plugin:<id>）")
+    void listMarksPurchased() {
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService,
+                gate("awdk_live", "plugin:demo")) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                return reply(200, paidRegistryJson());
+            }
+        };
+        PluginMarketService.MarketPluginView view = svc.listMarket().get(0);
+        assertEquals(1990, view.getPriceCents());
+        assertTrue(view.isPurchased());
+        assertTrue(svc.accountConnected());
+    }
+
+    @Test
+    @DisplayName("安装：付费项未连接账户时本地拦下并给出连接引导，不发 bundle 请求")
+    void paidInstallWithoutAccountIsBlockedLocally() {
+        java.util.List<String> urls = new java.util.ArrayList<>();
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService, gate) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                urls.add(url);
+                return reply(200, paidRegistryJson());
+            }
+        };
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
+        assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
+        assertTrue(e.getMessage().contains("¥19.90"), "价格要写进引导文案: " + e.getMessage());
+        assertNotMistakenForLogout(e.getMessage());
+        assertEquals(1, urls.size(), "只查了元数据，不该再打 bundle 端点");
+    }
+
+    /**
+     * 付费闸门的文案不能撞上前端的掉线启发式：services/api.js 对 {@code code:1} 的消息做子串匹配，
+     * 见到「登录」「未授权」「请先」就清本地会话，浏览器端还会跳登录页。这里是业务错误，不是掉线。
+     */
+    private static void assertNotMistakenForLogout(String message) {
+        for (String needle : java.util.List.of("登录", "未授权", "请先")) {
+            assertFalse(message.contains(needle),
+                    "文案含「" + needle + "」会被前端当成掉线清会话: " + message);
+        }
+    }
+
+    @Test
+    @DisplayName("安装：官网 402 被翻成明确中文（含条目名与价格），不吞成通用失败")
+    void paidInstallSurfaces402() {
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService,
+                gate("awdk_live", null)) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                if (url.endsWith("/plugins")) return reply(200, paidRegistryJson());
+                assertEquals("awdk_live", bearer, "付费项 bundle 请求必须带账户 Bearer");
+                return reply(402, "{\"code\":\"payment_required\",\"priceCents\":1990,\"itemName\":\"尽调助手\"}");
+            }
+        };
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
+        assertTrue(e.getMessage().contains("尽调助手"), e.getMessage());
+        assertTrue(e.getMessage().contains("需购买后安装"), e.getMessage());
+        assertTrue(e.getMessage().contains("¥19.90"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("安装：免费项不带 Authorization（免费流程一字不变）")
+    void freeInstallSendsNoBearer() throws Exception {
+        byte[] manifestBytes = "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\"}".getBytes(StandardCharsets.UTF_8);
+        Map<String, String> files = new TreeMap<>();
+        files.put("manifest.json", PluginMarketService.sha256Hex(manifestBytes));
+        String sig = sign(canonical("demo", "1.0.0", "2026-07-27T00:00:00Z", files));
+
+        java.util.List<String> bearers = new java.util.ArrayList<>();
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService,
+                gate("awdk_live", null)) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                if (url.endsWith("/plugins")) {
+                    return reply(200, "[{\"id\":\"demo\",\"name\":\"演示\",\"priceCents\":0}]");
+                }
+                bearers.add(String.valueOf(bearer));
+                return reply(200, bundleJson("demo", "1.0.0", "2026-07-27T00:00:00Z", files, sig));
+            }
+            @Override
+            protected RegistryReply httpGetBytes(String url, String bearer) {
+                bearers.add(String.valueOf(bearer));
+                return new RegistryReply(200, manifestBytes);
+            }
+        };
+        assertEquals("demo", svc.install("demo"));
+        assertEquals(java.util.List.of("null", "null"), bearers, "已连接账户也不该给免费项带鉴权头");
+    }
+
+    @Test
+    @DisplayName("安装：价格没查到但本机已连账户时 bundle 与 file 两个端点都带 Bearer")
+    void unknownPriceStillSendsBearerWhenConnected() throws Exception {
+        byte[] manifestBytes = "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\"}".getBytes(StandardCharsets.UTF_8);
+        Map<String, String> files = new TreeMap<>();
+        files.put("manifest.json", PluginMarketService.sha256Hex(manifestBytes));
+        String sig = sign(canonical("demo", "1.0.0", "2026-07-27T00:00:00Z", files));
+
+        java.util.List<String> bearers = new java.util.ArrayList<>();
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService,
+                gate("awdk_live", "plugin:demo")) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                // 列表端点直接失败 = 价格查不到；付费与否无从判断
+                if (url.endsWith("/plugins")) throw new IllegalStateException("注册表不可达: stub");
+                bearers.add(String.valueOf(bearer));
+                return reply(200, bundleJson("demo", "1.0.0", "2026-07-27T00:00:00Z", files, sig));
+            }
+            @Override
+            protected RegistryReply httpGetBytes(String url, String bearer) {
+                bearers.add(String.valueOf(bearer));
+                return new RegistryReply(200, manifestBytes);
+            }
+        };
+        assertEquals("demo", svc.install("demo"));
+        assertEquals(java.util.List.of("awdk_live", "awdk_live"), bearers,
+                "价格未知时本机有 Key 就带上，免得已购用户被 402 反过来指控没付费");
+    }
+
+    @Test
+    @DisplayName("安装：价格未知 + 未连账户吃到 402 时说「去连接账户」，不说「去购买」")
+    void unknownPrice402WithoutAccountSuggestsConnecting() {
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService, gate) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                if (url.endsWith("/plugins")) throw new IllegalStateException("注册表不可达: stub");
+                return reply(402, "{\"code\":\"payment_required\",\"priceCents\":1990,\"itemName\":\"尽调助手\"}");
+            }
+        };
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> svc.install("demo"));
+        assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
+        assertFalse(e.getMessage().contains("需购买后安装"),
+                "本机没连账户，官网无从查购买记录：402 不等于用户没买过 —— " + e.getMessage());
+        assertNotMistakenForLogout(e.getMessage());
+    }
+
+    @Test
+    @DisplayName("列表：priceCents 畸形（负数 / 超上限的截断值）按未知处理，不展示假价格")
+    void listNormalizesMalformedPrice() {
+        PluginMarketService svc = new PluginMarketService(
+                "http://registry.test/plugins", publicKeyPem, pluginsDir.toString(), pluginService, gate) {
+            @Override
+            protected RegistryReply httpGet(String url, String bearer) {
+                // 1215752191 = 官网写了个超 int 范围的值、反序列化被截断的实测结果（¥12,157,521.91）
+                return reply(200, """
+                        [{ "id": "neg", "name": "负价", "priceCents": -100 },
+                         { "id": "huge", "name": "溢出", "priceCents": 1215752191 }]""");
+            }
+        };
+        var list = svc.listMarket();
+        assertEquals(0, list.get(0).getPriceCents(), "负数按未知");
+        assertEquals(0, list.get(1).getPriceCents(), "超上限只可能是畸形值，不能当真价展示");
     }
 }

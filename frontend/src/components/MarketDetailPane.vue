@@ -13,6 +13,7 @@
             <text class="mdp-title">{{ display.name }}</text>
             <text class="mdp-kind-badge">{{ spec.kind === 'plugin' ? '插件' : 'Skill' }}</text>
             <text v-if="installedInfo" class="mdp-installed-badge">已安装</text>
+            <text v-if="marketInfo" class="mdp-price-badge" :class="{ paid: isPaidItem }">{{ priceBadge }}</text>
           </view>
           <view class="mdp-byline">
             <text v-if="display.author" class="mdp-byline-item mdp-author">{{ display.author }}</text>
@@ -26,10 +27,23 @@
 
           <!-- 动作区 -->
           <view class="mdp-actions">
+            <!-- 付费未购（Skill 与插件同款）：先去官网买，本机不给安装按钮——点了也只会拿到 402 -->
+            <template v-if="marketInfo && !installedInfo && needsPurchase">
+              <view class="mdp-btn primary" @tap="openPurchase">
+                <text>购买 {{ priceText }}</text>
+              </view>
+              <view v-if="paidStateValue === 'need-account'" class="mdp-btn" @tap="goToAccountSettings">
+                <text>去连接账户</text>
+              </view>
+              <view v-else class="mdp-btn" :class="{ busy }" @tap="onPurchasedRefresh">
+                <text>{{ busy ? '刷新中…' : '我已购买，刷新' }}</text>
+              </view>
+            </template>
+
             <!-- Skill：安装 / 更新 / 卸载 + 生效方式三档 -->
             <template v-if="spec.kind === 'skill'">
               <view
-                v-if="marketInfo && !installedInfo"
+                v-if="marketInfo && !installedInfo && !needsPurchase"
                 class="mdp-btn primary"
                 :class="{ busy }"
                 @tap="doInstallSkill"
@@ -68,7 +82,7 @@
             <!-- 插件：安装（带权限确认）/ 启停 / 卸载 -->
             <template v-else>
               <view
-                v-if="marketInfo && !installedInfo"
+                v-if="marketInfo && !installedInfo && !needsPurchase"
                 class="mdp-btn primary"
                 :class="{ busy }"
                 @tap="doInstallPlugin"
@@ -89,6 +103,8 @@
               </view>
             </template>
           </view>
+
+          <text v-if="purchaseHint" class="mdp-purchase-hint">{{ purchaseHint }}</text>
         </view>
       </view>
 
@@ -126,6 +142,9 @@
             <view v-if="spec.kind === 'skill' && toolSummary" class="mdp-kv-row">
               <text class="mdp-k">工具权限</text><text class="mdp-v">{{ toolSummary }}</text>
             </view>
+            <view v-if="marketInfo" class="mdp-kv-row">
+              <text class="mdp-k">价格</text><text class="mdp-v">{{ priceDetailText }}</text>
+            </view>
             <view class="mdp-kv-row"><text class="mdp-k">标识</text><text class="mdp-v mono">{{ spec.id }}</text></view>
             <view v-if="display.version" class="mdp-kv-row"><text class="mdp-k">版本</text><text class="mdp-v">v{{ display.version }}</text></view>
             <view v-if="display.author" class="mdp-kv-row"><text class="mdp-k">作者</text><text class="mdp-v">{{ display.author }}</text></view>
@@ -148,6 +167,9 @@
 // 装/卸/启停后通过 uni.$emit('awd:market-changed') 通知左栏刷新。
 import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
+import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
+import { refreshEntitlements } from '@/composables/useEntitlement.js'
 
 const CATEGORY_GLYPHS = {
   contract: ICONS.catContract,
@@ -195,11 +217,43 @@ export default {
       marketInfo: null,
       installedInfo: null,
       busy: false,
+      // 是否已连接官网账户；随广场列表响应下发（付费未购项据此在「购买」与「需连接账户」之间选）
+      accountConnected: false,
     }
   },
   computed: {
     ACTIVATION_LABELS() {
       return ACTIVATION_LABELS
+    },
+    isPaidItem() {
+      return isPaid(this.marketInfo)
+    },
+    /** 'free' | 'purchased' | 'buy' | 'need-account'；marketInfo 为空（本机项）按免费 */
+    paidStateValue() {
+      return paidState(this.marketInfo, this.accountConnected)
+    },
+    /** 付费且未购：动作区换成购买引导，不给安装按钮 */
+    needsPurchase() {
+      return this.paidStateValue === 'buy' || this.paidStateValue === 'need-account'
+    },
+    /** 标题行徽章：免费 / ¥xx.xx / 已购买 */
+    priceBadge() {
+      return priceLabel(this.marketInfo)
+    },
+    priceText() {
+      return formatPrice(priceCentsOf(this.marketInfo))
+    },
+    priceDetailText() {
+      if (!this.isPaidItem) return '免费'
+      const base = this.priceText + '（一次性买断）'
+      return this.marketInfo && this.marketInfo.purchased ? base + ' · 已购买' : base
+    },
+    purchaseHint() {
+      if (!this.needsPurchase) return ''
+      if (this.paidStateValue === 'need-account') {
+        return '这是付费项目。请先在设置的「账户与用量」中连接 AI Workdeck 账户，安装时才能校验购买记录。'
+      }
+      return '这是付费项目。购买在官网完成，付款后回到本页点「我已购买，刷新」即可安装。'
     },
     headGlyph() {
       if (this.spec.kind === 'plugin') return ICONS.blocks
@@ -284,25 +338,35 @@ export default {
     async reload() {
       this.loading = true
       this.loadError = ''
+      // 广场不可达要如实说：本页没有市场数据时按钮区是空的，若再不给原因，
+      // 用户看到的就是「有标题、没价格、没按钮」的哑页面——尤其付费项本来也没有安装按钮
+      let marketError = null
+      const keepMarketError = (e) => { marketError = e; return null }
       try {
         if (this.spec.kind === 'skill') {
           const [mRes, iRes] = await Promise.all([
-            getSkillMarket().catch(() => null),
+            getSkillMarket().catch(keepMarketError),
             getSkills().catch(() => null),
           ])
           const marketList = mRes?.skills || []
           const installedList = Array.isArray(iRes) ? iRes : (iRes?.data || [])
+          if (typeof mRes?.accountConnected === 'boolean') this.accountConnected = mRes.accountConnected
           this.marketInfo = marketList.find(s => s.id === this.spec.id) || null
           this.installedInfo = installedList.find(s => s.id === this.spec.id) || null
         } else {
           const [mRes, iRes] = await Promise.all([
-            getPluginMarket().catch(() => null),
+            getPluginMarket().catch(keepMarketError),
             getPlugins().catch(() => null),
           ])
           const marketList = mRes?.plugins || []
           const installedList = Array.isArray(iRes) ? iRes : (iRes?.data || [])
+          if (typeof mRes?.accountConnected === 'boolean') this.accountConnected = mRes.accountConnected
           this.marketInfo = marketList.find(p => p.id === this.spec.id) || null
           this.installedInfo = installedList.find(p => p.id === this.spec.id) || null
+        }
+        // 本机已装的项即使广场挂了也照常展示（信息来自本地），不必报错打扰
+        if (!this.marketInfo && !this.installedInfo && marketError) {
+          this.loadError = marketError.message || '在线广场不可用'
         }
       } catch (e) {
         console.error('加载详情失败:', e)
@@ -313,6 +377,35 @@ export default {
     },
     notifyChanged() {
       uni.$emit('awd:market-changed')
+    },
+    // 购买走系统浏览器：支付要用用户已登录的浏览器会话，内嵌 tab 里付不了
+    openPurchase() {
+      openExternalUrl(purchaseUrl(this.spec.kind, this.spec.id))
+    },
+    goToAccountSettings() {
+      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
+    },
+    /**
+     * 「我已购买，刷新」：先让后端同步一次官网权益（本地缓存不刷新是看不到刚买的东西的），
+     * 再重拉广场；确认已购就顺手把安装接上，省得用户再点一次。
+     */
+    async onPurchasedRefresh() {
+      if (this.busy) return
+      this.busy = true
+      try {
+        await refreshEntitlements(true)
+        await this.reload()
+        this.notifyChanged()
+      } finally {
+        this.busy = false
+      }
+      if (this.needsPurchase) {
+        uni.showToast({ title: '还没查到这一项的购买记录，请确认已在官网完成支付', icon: 'none' })
+        return
+      }
+      if (this.installedInfo) return
+      if (this.spec.kind === 'skill') await this.doInstallSkill()
+      else await this.doInstallPlugin()
     },
     async doInstallSkill() {
       if (this.busy) return
@@ -498,6 +591,29 @@ export default {
   background: #1A5336;
   border-radius: 4px;
   padding: 1px 6px;
+}
+
+/* 价格徽章：免费用中性灰，付费用暖色（与「试用版」chip 同族），不做成促销红 */
+.mdp-price-badge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #868E96;
+  background: #F1F3F5;
+  border-radius: 4px;
+  padding: 1px 6px;
+
+  &.paid {
+    color: #8A6D2F;
+    background: #FDF7EC;
+  }
+}
+
+.mdp-purchase-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  line-height: 17px;
+  color: #8A6D2F;
 }
 
 .mdp-byline {
