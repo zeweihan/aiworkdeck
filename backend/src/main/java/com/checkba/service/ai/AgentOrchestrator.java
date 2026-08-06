@@ -35,15 +35,13 @@ public class AgentOrchestrator {
 
     // 循环步数预算：达到上限时优雅收尾（保存进度 + 告知用户可继续），而不是静默中断
     private static final int MAX_LOOP_DEPTH = 30;
-    // 同一工具+同参数连续重复调用达到该次数后，拒绝执行并要求模型换思路
-    private static final int MAX_IDENTICAL_TOOL_CALLS = 3;
     // 工具连续失败达到该次数后，向模型注入强提示要求收敛
     private static final int CONSECUTIVE_FAILURE_NUDGE = 3;
 
-    // LLM 瞬时错误（429/5xx/超时/断连）自动重试：指数退避 8/16/32s，仅在本轮
-    // 尚未流出任何 token 时重放（对话状态未被污染，重放安全且用户无感知重复内容）
-    private static final int MAX_LLM_RETRIES = 3;
-    private static final int LLM_RETRY_BASE_SECONDS = 8;
+    // LLM 失败自动重试：退避档位与次数上限按错误类型区分（见 LlmErrorClassifier.Kind），
+    // 且仅在本轮尚未流出任何 token 时重放（对话状态未被污染，重放安全且用户无感知重复内容）；
+    // 重试预算耗尽或模型下线时改走故障转移链（ai.failover），仍在同一计费通道内换模型
+
     // 流无活动看门狗：超过该秒数没有任何 token 到达即判定本轮停滞（配合 timeout 调大后的兜底）
     private static final int STREAM_INACTIVITY_TIMEOUT_SECONDS = 180;
     private static final java.util.concurrent.ScheduledExecutorService LLM_RETRY_SCHEDULER =
@@ -55,13 +53,15 @@ public class AgentOrchestrator {
 
     /**
      * 单次 Agent 运行的循环守卫状态（随递归传递）：
-     * 重复调用检测 + 连续失败计数，防止模型原地打转耗尽步数预算。
+     * 打转检测 + 连续失败计数 + 模型故障转移进度，防止模型原地打转耗尽步数预算。
      */
     private static class RunGuard {
-        String lastCallSignature;
-        int repeatCount;
+        // 原地打转检测：滑动窗口，识别 A/A/A 与 A/B/A/B 两种重复模式，先干预后熔断
+        final StuckDetector stuck = new StuckDetector();
+        // 已经试过并失败的模型（含当前模型），故障转移时跳过
+        final Set<String> triedModels = new java.util.LinkedHashSet<>();
         int consecutiveFailures;
-        // 本轮 LLM 调用的瞬时错误重试次数（每个成功完成的轮次清零）
+        // 本轮 LLM 调用的失败重试次数（每个成功完成的轮次、每次切模型后清零）
         int llmRetries;
         // 截断/未闭合 <tool_code> 的纠正轮次数（防纠正本身进入死循环）
         int malformedToolRounds;
@@ -94,6 +94,8 @@ public class AgentOrchestrator {
     private final DocumentCheckpointService documentCheckpointService;
     private final AgentRunStateService agentRunStateService;
     private final com.checkba.version.WorkSessionService workSessionService;
+    private final com.checkba.config.AiFailoverProperties failoverProperties;
+    private final com.checkba.service.ai.context.RunLoopCompactor runLoopCompactor;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -315,8 +317,11 @@ public class AgentOrchestrator {
         cancelledConversations.remove(conversationId);
         activeStreamContent.put(conversationId, new StringBuilder());
         activeAssistantMessageId.remove(conversationId);
-        // 状态登记：循环开跑（会话列表状态点/切回续流判断都依赖它）
-        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.RUNNING);
+        // 状态登记：循环开跑（会话列表状态点/切回续流判断都依赖它）。
+        // 起跑这一次带上 projectId/userId 写进持久化记录——进程被杀后的启动回收靠它归属会话；
+        // 同时把上次遗留的 INTERRUPTED 覆盖掉（用户点「继续」走的就是这条路）。
+        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.RUNNING,
+                request.getProjectId(), userId);
         
         try {
             log.info("Agent Loop Started: conv={}, model={}, mode={}, msg={}", conversationId, request.getModel(), agentMode, request.getMessage());
@@ -517,6 +522,9 @@ public class AgentOrchestrator {
             if (aiMessage.hasToolExecutionRequests()) {
                 log.info("Detected Native Tool Requests: {}", aiMessage.toolExecutionRequests());
 
+                // 打转首次干预的提示语（本轮末位追加一条），null 表示未检出
+                String stuckNudge = null;
+
                 // Execute Native Tools (统一分发，无需感知具体工具)
                 for (dev.langchain4j.agent.tool.ToolExecutionRequest req : aiMessage.toolExecutionRequests()) {
                     // 面板可见性：原生工具调用复用 <process> XML 协议推送给前端，
@@ -529,13 +537,17 @@ public class AgentOrchestrator {
 
                     String result;
                     boolean success;
-                    String guardVerdict = checkRepeatedCall(guard, req.name(), req.arguments());
-                    if (guardVerdict != null) {
-                        // 重复调用熔断：不执行，直接把守卫反馈作为工具结果回给模型
-                        log.warn("Loop guard tripped for {}: tool={} repeated {} times", conversationId, req.name(), guard.repeatCount);
-                        result = guardVerdict;
+                    StuckDetector.Verdict verdict = guard.stuck.record(req.name(), req.arguments());
+                    if (verdict == StuckDetector.Verdict.CIRCUIT_BREAK) {
+                        // 二次检出熔断：不执行，直接把守卫反馈作为工具结果回给模型
+                        log.warn("Stuck detector circuit break for {}: {}", conversationId, guard.stuck.lastPattern());
+                        result = stuckCircuitBreakFeedback(guard.stuck.lastPattern());
                         success = false;
                     } else {
+                        if (verdict == StuckDetector.Verdict.INTERVENE) {
+                            log.warn("Stuck detector intervention for {}: {}", conversationId, guard.stuck.lastPattern());
+                            stuckNudge = guard.stuck.lastPattern();
+                        }
                         ToolRegistry.ToolResult toolResult = dispatchTool(req.name(), req.arguments(),
                                 Long.parseLong(projectId), conversationId, userId, modelId, guard);
                         result = toolResult.output();
@@ -565,6 +577,12 @@ public class AgentOrchestrator {
                     }
                 }
 
+                // 打转干预挂在整栈末位：只写进 system prompt 的行为约束会被弱模型稳定无视，
+                // 末位才是注意力最高的位置（PR#209 实证）
+                if (stuckNudge != null) {
+                    messages.add(dev.langchain4j.data.message.UserMessage.from(stuckInterventionMessage(stuckNudge)));
+                }
+
                 // 增量保存：在工具执行后立即保存AI消息和工具输出，防止对话中断导致上下文丢失
                 String intermediateContent = (aiContent != null ? aiContent : "") + "\n" + executionLog.toString();
                 saveAssistantMessage(conversationId, projectId, userId, intermediateContent);
@@ -587,6 +605,8 @@ public class AgentOrchestrator {
                 String llmProcessName = xmlToolCallParser.extractProcessName(content).orElse(null);
 
                 boolean toolExecuted = false;
+                // 打转首次干预的提示语（本轮末位追加一条），null 表示未检出
+                String stuckNudge = null;
 
                 for (XmlToolCallParser.ParsedCall call : xmlToolCallParser.parse(content)) {
                     String code = call.rawCode();
@@ -595,13 +615,17 @@ public class AgentOrchestrator {
                     String result;
                     boolean xmlToolSuccess;
                     ToolRegistry.ToolResult toolResult = null;
-                    String guardVerdict = checkRepeatedCall(guard, call.toolName(), call.argsJson());
-                    if (guardVerdict != null) {
-                        // 重复调用熔断：不执行，直接把守卫反馈作为工具结果回给模型
-                        log.warn("Loop guard tripped for {}: tool={} repeated {} times", conversationId, call.toolName(), guard.repeatCount);
-                        result = guardVerdict;
+                    StuckDetector.Verdict verdict = guard.stuck.record(call.toolName(), call.argsJson());
+                    if (verdict == StuckDetector.Verdict.CIRCUIT_BREAK) {
+                        // 二次检出熔断：不执行，直接把守卫反馈作为工具结果回给模型
+                        log.warn("Stuck detector circuit break for {}: {}", conversationId, guard.stuck.lastPattern());
+                        result = stuckCircuitBreakFeedback(guard.stuck.lastPattern());
                         xmlToolSuccess = false;
                     } else {
+                        if (verdict == StuckDetector.Verdict.INTERVENE) {
+                            log.warn("Stuck detector intervention for {}: {}", conversationId, guard.stuck.lastPattern());
+                            stuckNudge = guard.stuck.lastPattern();
+                        }
                         toolResult = dispatchTool(call.toolName(), call.argsJson(),
                                 Long.parseLong(projectId), conversationId, userId, modelId, guard);
                         result = toolResult.found()
@@ -653,6 +677,10 @@ public class AgentOrchestrator {
                 }
 
                 if (toolExecuted) {
+                     // 打转干预挂在整栈末位（同原生分支：system prompt 里的约束会被弱模型无视）
+                     if (stuckNudge != null) {
+                         messages.add(dev.langchain4j.data.message.UserMessage.from(stuckInterventionMessage(stuckNudge)));
+                     }
                      // 增量保存：在XML工具执行后立即保存AI消息和工具输出，防止对话中断导致上下文丢失
                      String intermediateXmlContent = content + "\n" + executionLog.toString();
                      saveAssistantMessage(conversationId, projectId, userId, intermediateXmlContent);
@@ -823,21 +851,29 @@ public class AgentOrchestrator {
           }
         });
 
-        // 流式出错处置：瞬时错误且零 token 已流出 → 指数退避自动重试本轮；
-        // 否则终态清理（关 emitter + 复位状态，避免 SSE 挂到超时、前端永久加载）
+        // 流式出错处置（零 token 流出才允许重放，否则用户会看到重复内容）：
+        // 1. 限流/瞬时错误 → 按类型退避重试本轮（限流 30/60s，瞬时 8/16/32s）
+        // 2. 重试预算耗尽或模型下线（404）→ 换备选模型继续，SSE 明说切了哪个
+        // 3. 其余 → 终态清理（关 emitter + 复位状态，避免 SSE 挂到超时、前端永久加载）
         handler.setOnError(err -> {
-            boolean retryable = !handler.hasStreamedTokens()
-                    && guard.llmRetries < MAX_LLM_RETRIES
-                    && isTransientLlmError(err)
-                    && !isCancelled(conversationId);
-            if (retryable) {
+            if (isCancelled(conversationId)) {
+                handleStreamErrorTerminal(conversationId, projectId, userId, err);
+                return;
+            }
+            LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(err);
+            boolean replayable = !handler.hasStreamedTokens();
+
+            if (replayable && kind.retryable() && guard.llmRetries < kind.maxRetries()) {
                 int attempt = ++guard.llmRetries;
-                long delaySec = (long) LLM_RETRY_BASE_SECONDS << (attempt - 1); // 8/16/32s
-                log.warn("Transient LLM error for {} (attempt {}/{}), retrying in {}s: {}",
-                        conversationId, attempt, MAX_LLM_RETRIES, delaySec, String.valueOf(err));
+                long delaySec = kind.retryDelaySeconds(attempt);
+                log.warn("LLM error [{}] for {} (attempt {}/{}), retrying in {}s: {}",
+                        kind, conversationId, attempt, kind.maxRetries(), delaySec, String.valueOf(err));
+                // 限流与故障文案分开：用户看到「服务不可用」而实际是限流排队，会误判成产品坏了
                 sendTextDelta(conversationId, String.format(
-                        "\n\n> 模型服务暂时不可用，%d 秒后自动重试（第 %d/%d 次）…\n\n",
-                        delaySec, attempt, MAX_LLM_RETRIES));
+                        kind == LlmErrorClassifier.Kind.RATE_LIMITED
+                                ? "\n\n> 模型限流等待中，%d 秒后自动继续（第 %d/%d 次）…\n\n"
+                                : "\n\n> 模型服务暂时不可用，%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                        delaySec, attempt, kind.maxRetries()));
                 LLM_RETRY_SCHEDULER.schedule(() -> {
                     try {
                         // 同 depth 重放本轮：messages 只在 onComplete 里被追加，失败轮未污染上下文
@@ -850,11 +886,24 @@ public class AgentOrchestrator {
                 }, delaySec, java.util.concurrent.TimeUnit.SECONDS);
                 return;
             }
+
+            if (replayable && failoverProperties.isEnabled() && kind.failoverable()) {
+                guard.triedModels.add(modelId == null ? "" : modelId.toLowerCase(java.util.Locale.ROOT));
+                String next = nextFailoverModel(failoverProperties.getModels(), modelId, guard.triedModels);
+                if (next != null && switchToFailoverModel(next, kind, err, messages, conversationId,
+                        projectId, userId, modelId, depth, executionLog, agentMode, guard)) {
+                    return;
+                }
+            }
             handleStreamErrorTerminal(conversationId, projectId, userId, err);
         });
 
         // 无活动看门狗：timeout 调大后，"流悄悄停了但不回调"的场景由它兜底终止本轮
         handler.armInactivityWatchdog(STREAM_INACTIVITY_TIMEOUT_SECONDS);
+
+        // 自动 compaction：消息栈在长任务里只增不减，撑破上下文会 400 或质量塌方。
+        // 原地替换（而不是换个列表实例）——递归各层与两处回调共享同一个 messages 引用
+        compactIfNeeded(messages, conversationId, modelId);
 
         // Execute Generation with Tools
         // Ask 模式：不传递工具，禁止工具调用
@@ -868,6 +917,55 @@ public class AgentOrchestrator {
             List<ToolSpecification> allTools = skillRouter.visibleTools(conversationId, toolRegistry.getAllSpecifications(conversationId));
             model.generate(messages, allTools, handler);
         }
+    }
+
+    /**
+     * 切到备选模型重放本轮。返回 true 表示本次错误已被接管（调用方不要再走终态处置）。
+     *
+     * <p>计费红线：这里只换 modelId，通道仍由 ChatModelFactory.resolveProvider() 决定。
+     * 平台通道下拿不到密钥会抛 AccountException，此时直接把中文文案透给用户并终止，
+     * 绝不退回 BYOK——那会拿用户自己的 key 花钱（Spec §3）。
+     */
+    private boolean switchToFailoverModel(String nextModelId, LlmErrorClassifier.Kind kind, Throwable err,
+                                          java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                          String conversationId, String projectId, Long userId,
+                                          String failedModelId, int depth, StringBuilder executionLog,
+                                          AgentMode agentMode, RunGuard guard) {
+        log.warn("Failing over from {} to {} for {} [{}]: {}",
+                failedModelId, nextModelId, conversationId, kind, String.valueOf(err));
+
+        StreamingChatLanguageModel nextModel;
+        try {
+            nextModel = chatModelFactory.getStreamingChatModel(nextModelId);
+        } catch (com.checkba.service.account.AccountException ae) {
+            log.info("故障转移中止，平台通道不可用 [{}]，会话 {}: {}", ae.getKind(), conversationId, ae.getMessage());
+            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
+            sseEmitterService.send(conversationId, "error", ae.getMessage());
+            sseEmitterService.close(conversationId);
+            clearCancelledState(conversationId);
+            return true;
+        } catch (Exception e) {
+            log.error("Failed to create failover model {} for {}", nextModelId, conversationId, e);
+            return false;
+        }
+        if (nextModel == null) {
+            log.error("Failover model {} unavailable for {}", nextModelId, conversationId);
+            return false;
+        }
+
+        // 换模型等于换了一条通道，重试预算重新计
+        guard.llmRetries = 0;
+        sendTextDelta(conversationId, String.format(
+                "\n\n> 模型「%s」%s，已自动切换到备用模型「%s」继续本轮任务。\n\n",
+                failedModelId, kind.userFacingReason(), nextModelId));
+        try {
+            runLoop(nextModel, messages, conversationId, projectId, userId, nextModelId,
+                    depth, executionLog, agentMode, guard);
+        } catch (Exception e) {
+            log.error("Failover runLoop failed for {}", conversationId, e);
+            handleStreamErrorTerminal(conversationId, projectId, userId, e);
+        }
+        return true;
     }
 
     /**
@@ -895,36 +993,26 @@ public class AgentOrchestrator {
     }
 
     /**
-     * 瞬时错误分类（对标 OpenHands RetryMixin）：限流/服务端错误/超时/断连可重试，
-     * 4xx 参数与鉴权类错误不可重试（重放也不会好，且可能重复扣费探测）。
+     * 超阈值时原地折叠中段消息。压缩失败/未触发都原样保留，绝不因此让一轮对话失败。
      */
-    static boolean isTransientLlmError(Throwable err) {
-        for (Throwable t = err; t != null; t = (t.getCause() == t ? null : t.getCause())) {
-            if (t instanceof java.net.SocketTimeoutException
-                    || t instanceof java.util.concurrent.TimeoutException
-                    || t instanceof java.net.ConnectException
-                    || t instanceof java.io.InterruptedIOException
-                    || t instanceof java.io.IOException) {
-                return true;
+    private void compactIfNeeded(java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                 String conversationId, String modelId) {
+        try {
+            java.util.List<dev.langchain4j.data.message.ChatMessage> compacted =
+                    runLoopCompactor.compact(messages, modelId);
+            if (compacted != messages) {
+                log.info("Compacted context for {}: {} -> {} messages",
+                        conversationId, messages.size(), compacted.size());
+                // 先拷贝再清空：压缩结果若含 subList 视图，clear() 会把它一并清空，
+                // 之后 addAll 进去的就是空列表——静默丢掉整个上下文
+                java.util.List<dev.langchain4j.data.message.ChatMessage> snapshot =
+                        new java.util.ArrayList<>(compacted);
+                messages.clear();
+                messages.addAll(snapshot);
             }
-            String msg = t.getMessage();
-            if (msg != null) {
-                String m = msg.toLowerCase(java.util.Locale.ROOT);
-                // 明确不可重试：客户端参数/鉴权错误
-                if (m.contains("status code: 400") || m.contains("status code: 401")
-                        || m.contains("status code: 403") || m.contains("status code: 404")) {
-                    return false;
-                }
-                if (m.contains("status code: 429") || m.contains("status code: 5")
-                        || m.contains("rate limit") || m.contains("overloaded")
-                        || m.contains("timeout") || m.contains("timed out")
-                        || m.contains("connection reset") || m.contains("stream was reset")
-                        || m.contains("unexpected end of stream") || m.contains("canceled")) {
-                    return true;
-                }
-            }
+        } catch (Exception e) {
+            log.warn("Context compaction skipped for {} due to error", conversationId, e);
         }
-        return false;
     }
 
     // =================================================================================
@@ -946,21 +1034,52 @@ public class AgentOrchestrator {
     }
 
     /**
-     * 重复调用检测：同一工具+同参数连续调用达到上限时返回守卫反馈（调用方应跳过执行），否则返回 null。
+     * 打转首次干预的提示语。必须作为独立消息挂在整栈末位——只写进 system prompt 的行为约束
+     * 会被弱模型稳定无视（PR#209 真机实证）。
      */
-    private String checkRepeatedCall(RunGuard guard, String toolName, String args) {
-        String signature = toolName + "|" + (args == null ? "" : args);
-        if (signature.equals(guard.lastCallSignature)) {
-            guard.repeatCount++;
-        } else {
-            guard.lastCallSignature = signature;
-            guard.repeatCount = 1;
+    static String stuckInterventionMessage(String pattern) {
+        return "[系统提醒] 你" + (pattern == null ? "在重复相同的操作序列" : pattern)
+                + "，再这样下去无法推进任务。请换一种思路：改用其他工具、调整参数，"
+                + "或先用读取类工具确认当前真实状态；如果任务其实已经完成，请直接输出最终总结。";
+    }
+
+    /**
+     * 打转二次检出的熔断反馈：本次调用不执行，反馈作为工具结果回给模型。
+     * 保留 Error 前缀——ToolResult.success() 与前端任务卡都按它判定失败。
+     */
+    static String stuckCircuitBreakFeedback(String pattern) {
+        return "Error: 检测到你" + (pattern == null ? "在重复相同的操作序列" : pattern)
+                + "，且系统已提醒过一次，本次调用已被拦截。"
+                + "请不要原样重试：换一种方法（其他工具、调整参数或先读取文档确认状态）；"
+                + "如果任务已无法继续，请输出 <final> 向用户说明目前进展和遇到的问题。";
+    }
+
+    /**
+     * 故障转移候选：按配置顺序挑第一个「不是当前模型、没试过、且在白名单内」的模型。
+     *
+     * <p>必须在白名单内：非白名单模型会被 ChatModelFactory 静默回落到默认模型，切了等于没切。
+     * 只换模型不换通道——通道由 ChatModelFactory.resolveProvider() 决定，与 modelId 无关，
+     * 平台通道（AWD_CLOUD）永远拿平台密钥，不存在被切回 BYOK 花用户自己 key 的路径。
+     */
+    static String nextFailoverModel(List<String> candidates, String currentModel, Set<String> tried) {
+        if (candidates == null) {
+            return null;
         }
-        if (guard.repeatCount >= MAX_IDENTICAL_TOOL_CALLS) {
-            return String.format("Error: 检测到你已连续 %d 次以完全相同的参数调用 %s，本次调用已被系统拦截。" +
-                    "请不要原样重试：换一种方法（其他工具、调整参数或先读取文档确认状态）；" +
-                    "如果任务已无法继续，请输出 <final> 向用户说明目前进展和遇到的问题。",
-                    guard.repeatCount, toolName);
+        for (String candidate : candidates) {
+            if (candidate == null || candidate.isBlank()) {
+                continue;
+            }
+            String model = candidate.trim();
+            if (model.equalsIgnoreCase(currentModel)) {
+                continue;
+            }
+            if (tried != null && tried.contains(model.toLowerCase(java.util.Locale.ROOT))) {
+                continue;
+            }
+            if (!AllowedModels.isAllowed(model)) {
+                continue;
+            }
+            return model;
         }
         return null;
     }

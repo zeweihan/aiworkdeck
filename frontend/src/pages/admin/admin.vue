@@ -842,6 +842,98 @@
             </view>
           </view>
         </scroll-view>
+
+        <!-- 记忆同步（仅桌面端）：AI 记忆经独立 Git 仓库跨机器同步。
+             与案卷的版本记录互不相干——记忆仓库绝不进项目文档仓库主线（领域红线）。 -->
+        <scroll-view
+          v-else-if="activeNav === 'memory'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">记忆同步</text>
+              <text class="section-subtitle">
+                AI 在使用中积累的记忆可以通过 Git 仓库在多台机器之间同步。填一个可推送的仓库地址即可，
+                团队案件库或律所自建的 Git 服务都行；不配置则记忆只留在本机
+              </text>
+            </view>
+            <view class="section-body">
+              <view v-if="memoryLoading && !memoryRepos.length" class="empty">
+                <text class="empty-text">加载中...</text>
+              </view>
+              <view
+                v-for="repo in memoryRepos"
+                :key="repo.repoKey"
+                class="provider-card"
+              >
+                <view class="provider-header memory-repo-header">
+                  <view class="memory-repo-info">
+                    <text class="provider-name">{{ repo.title }}</text>
+                    <text class="memory-repo-sub">{{ repo.subtitle }}</text>
+                  </view>
+                  <text class="memory-status" :class="memoryStatusClass(repo)">
+                    {{ memoryStatusLabel(repo) }}
+                  </text>
+                </view>
+                <view class="form-row">
+                  <text class="form-label">同步地址</text>
+                  <input
+                    v-model="repo.form.url"
+                    class="form-input"
+                    :placeholder="'例如 https://team.example.com/git/' + repo.repoKey + '.git'"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">账号</text>
+                  <input
+                    v-model="repo.form.username"
+                    class="form-input"
+                    placeholder="Git 服务上的账号，没有可留空"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">访问令牌</text>
+                  <input
+                    v-model="repo.form.secret"
+                    class="form-input"
+                    password
+                    :placeholder="memorySecretPlaceholder(repo)"
+                  />
+                </view>
+                <view class="account-connect-actions">
+                  <button
+                    v-if="repo.status && repo.status.configured"
+                    class="comp-btn danger"
+                    :disabled="repo.busy"
+                    @tap="onDisconnectMemory(repo)"
+                  >
+                    断开
+                  </button>
+                  <button
+                    v-if="repo.status && repo.status.configured"
+                    class="comp-btn"
+                    :disabled="repo.busy"
+                    @tap="onSyncMemoryNow(repo)"
+                  >
+                    立即同步
+                  </button>
+                  <button class="btn-primary" :disabled="repo.busy" @tap="onSaveMemoryRemote(repo)">
+                    {{ repo.busy ? '处理中...' : '保存并同步' }}
+                  </button>
+                </view>
+                <text
+                  v-if="repo.feedback"
+                  class="memory-feedback"
+                  :class="{ 'memory-feedback-warn': repo.feedbackError }"
+                >{{ repo.feedback }}</text>
+              </view>
+              <view v-if="!memoryLoading && !memoryRepos.length" class="empty">
+                <text class="empty-text">暂时没有可配置的记忆仓库</text>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
       </view>
     </view>
     
@@ -888,8 +980,11 @@ import {
   getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
+  getMemorySyncStatus, setMemorySyncRemote, removeMemorySyncRemote, syncMemoryNow,
+  getCurrentUser as fetchCurrentUser, getMyProjects,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import UnlockHint from '@/components/UnlockHint.vue'
@@ -912,6 +1007,7 @@ export default {
         { key: 'components', label: '组件管理', desktopOnly: true },
         { key: 'updates', label: '软件更新', desktopOnly: true },
         { key: 'cloud', label: '团队案件库', desktopOnly: true },
+        { key: 'memory', label: '记忆同步', desktopOnly: true },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
       ],
       components: [],
@@ -983,6 +1079,10 @@ export default {
       identityCandidates: [],
       identityCurrentId: null,
       identityBusy: false,
+      // 记忆同步（Phase A 桌面配置 UI）：两张卡——用户记忆仓 + 当前案卷记忆仓。
+      // 每项 { repoKey, title, subtitle, status, form:{url,username,secret}, busy, feedback, feedbackError }
+      memoryRepos: [],
+      memoryLoading: false,
     }
   },
   computed: {
@@ -1254,6 +1354,9 @@ export default {
         this.loadIdentityCandidates()
         refreshEntitlements()
       }
+      if (nav.key === 'memory') {
+        this.loadMemoryRepos()
+      }
     },
     async loadIdentityCandidates() {
       try {
@@ -1285,6 +1388,170 @@ export default {
         uni.showToast({ title: (e && e.message) || '切换失败', icon: 'none' })
       } finally {
         this.identityBusy = false
+      }
+    },
+    // ---------- 记忆同步 ----------
+    // 两张卡都不是硬前提：用户信息拿不到就只显示案卷卡，最近没开过案卷就只显示用户卡。
+    async loadMemoryRepos() {
+      this.memoryLoading = true
+      const repos = []
+      try {
+        const me = await fetchCurrentUser()
+        const uid = me && me.data && me.data.id
+        if (uid) {
+          repos.push(this.newMemoryRepo(
+            `user-${uid}-memory`, '我的记忆',
+            '跟着人走的积累（工作习惯、常用表述等），在任何案卷里都会用到',
+          ))
+        }
+      } catch (e) {
+        // 用户信息读不到就不显示这张卡，不拦整个面板
+      }
+      const projectId = getLastProjectId()
+      if (projectId) {
+        let name = ''
+        try {
+          const res = await getMyProjects()
+          const list = (res && res.data) || []
+          const hit = list.find((p) => Number(p.id) === projectId)
+          if (hit && hit.name) name = hit.name
+        } catch (e) {
+          // 名字取不到就不带名字，不拦路
+        }
+        repos.push(this.newMemoryRepo(
+          `project-${projectId}-memory`,
+          name ? `案卷记忆：${name}` : '当前案卷记忆',
+          '跟着这份案卷走的积累（案情要点、文件脉络等）',
+        ))
+      }
+      this.memoryRepos = repos
+      // 注意用 this.memoryRepos 里的响应式代理逐个刷新，改裸对象不触发渲染
+      await Promise.all(this.memoryRepos.map((r) => this.refreshMemoryStatus(r)))
+      this.memoryLoading = false
+    },
+    newMemoryRepo(repoKey, title, subtitle) {
+      return {
+        repoKey,
+        title,
+        subtitle,
+        status: null,
+        form: { url: '', username: '', secret: '' },
+        busy: false,
+        feedback: '',
+        feedbackError: false,
+      }
+    },
+    async refreshMemoryStatus(repo) {
+      try {
+        const res = await getMemorySyncStatus(repo.repoKey)
+        const d = (res && res.data) || {}
+        repo.status = d
+        repo.form.url = d.url || ''
+        repo.form.username = d.username || ''
+        // 凭据只写不读：令牌永远不回填输入框，占位符提示「已保存，留空沿用」
+        repo.form.secret = ''
+      } catch (e) {
+        repo.status = { configured: false }
+        repo.feedback = (e && e.message) || '状态读取失败，稍后重试'
+        repo.feedbackError = true
+      }
+    },
+    memoryStatusLabel(repo) {
+      const s = repo.status
+      if (!s) return ''
+      if (!s.configured) return '未配置'
+      if (s.pendingUpload) return '已配置 · 有更新待推送'
+      return s.lastSyncAt ? `上次同步 ${this.formatUsageTime(s.lastSyncAt)}` : '已配置'
+    },
+    memoryStatusClass(repo) {
+      const s = repo.status
+      return {
+        'memory-status-on': !!(s && s.configured && !s.pendingUpload),
+        'memory-status-warn': !!(s && s.configured && s.pendingUpload),
+      }
+    },
+    memorySecretPlaceholder(repo) {
+      const masked = repo.status && repo.status.secretMasked
+      return masked
+        ? `已保存（${masked}），留空表示沿用`
+        : '设备令牌或 Git 访问令牌，没有可留空'
+    },
+    async onSaveMemoryRemote(repo) {
+      const url = (repo.form.url || '').trim()
+      if (!url) {
+        repo.feedback = '同步地址不能为空'
+        repo.feedbackError = true
+        return
+      }
+      repo.busy = true
+      repo.feedback = ''
+      try {
+        const res = await setMemorySyncRemote(repo.repoKey, {
+          url,
+          username: (repo.form.username || '').trim(),
+          secret: repo.form.secret || '',
+        })
+        const sync = res && res.data && res.data.sync
+        this.applyMemorySyncResult(repo, sync, '配置已保存')
+        await this.refreshMemoryStatus(repo)
+      } catch (e) {
+        repo.feedback = (e && e.message) || '保存失败，稍后重试'
+        repo.feedbackError = true
+      } finally {
+        repo.busy = false
+      }
+    },
+    async onSyncMemoryNow(repo) {
+      repo.busy = true
+      repo.feedback = ''
+      try {
+        const res = await syncMemoryNow(repo.repoKey)
+        this.applyMemorySyncResult(repo, res && res.data, '同步完成')
+        await this.refreshMemoryStatus(repo)
+      } catch (e) {
+        repo.feedback = (e && e.message) || '同步失败，稍后会自动重试'
+        repo.feedbackError = true
+      } finally {
+        repo.busy = false
+      }
+    },
+    // 同步结果统一转成一句话反馈：离线与推送未成不是致命错误，后台会自动重试
+    applyMemorySyncResult(repo, sync, okText) {
+      if (!sync) {
+        repo.feedback = okText
+        repo.feedbackError = false
+        return
+      }
+      if (sync.offline) {
+        repo.feedback = `${okText}，但暂时连不上同步地址，稍后会自动重试`
+        repo.feedbackError = true
+      } else if (sync.pendingUpload) {
+        repo.feedback = `${okText}，推送暂未成功，稍后会自动重试`
+        repo.feedbackError = true
+      } else {
+        repo.feedback = `${okText}，本机记忆已与远端一致`
+        repo.feedbackError = false
+      }
+    },
+    async onDisconnectMemory(repo) {
+      const ok = await new Promise((r) => uni.showModal({
+        title: '断开记忆同步',
+        content: '断开后本机记忆完整保留，只是不再与远端同步；远端仓库也不会被删除。随时可以重新配置。',
+        confirmText: '断开',
+        success: (res) => r(res.confirm),
+      }))
+      if (!ok) return
+      repo.busy = true
+      try {
+        await removeMemorySyncRemote(repo.repoKey)
+        await this.refreshMemoryStatus(repo)
+        repo.feedback = '已断开，本机记忆不受影响'
+        repo.feedbackError = false
+      } catch (e) {
+        repo.feedback = (e && e.message) || '断开失败，稍后重试'
+        repo.feedbackError = true
+      } finally {
+        repo.busy = false
       }
     },
     async loadPlatformAiAvailability() {
@@ -2431,6 +2698,52 @@ $border-color: #E9ECEF; // Gray-Light
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
+}
+
+/* 记忆同步 */
+.memory-repo-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-repo-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.memory-repo-sub {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.memory-status {
+  font-size: 12px;
+  color: $text-secondary;
+  white-space: nowrap;
+}
+
+.memory-status-on {
+  color: #1a5336;
+}
+
+.memory-status-warn {
+  color: #b45309;
+}
+
+.memory-feedback {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: #1a5336;
+}
+
+.memory-feedback-warn {
+  color: #b45309;
 }
 
 .btn-primary:disabled {

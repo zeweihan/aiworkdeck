@@ -1,61 +1,150 @@
 /**
  * SSE 消费：与主前端 useAgentStream 同一方式——fetch + ReadableStream 手工解析
  * `event:`/`data:` 行（不用 EventSource，因为要携带 X-Session-Id 请求头）。
+ *
+ * 断线自动重连：
+ * - 首次建连失败：ready reject，不重连（保持「后端不可达」的即时报错体验）；
+ * - 首次建连成功后流中断（网络抖动/后端重启/代理掐空闲连接）：指数退避重连
+ *   （1s 起、每次翻倍、上限 30s），重连成功即复位退避；
+ * - 死连接判定：后端每 15s 发一次 heartbeat 事件（SseEmitterService），
+ *   连续两个心跳周期加余量（40s）收不到任何字节即视为死连接，掐掉重连；
+ * - 事件是纯推送（后端不重放历史），重连后不会重复收到已渲染的消息；
+ *   重连期间漏掉的终态事件（bubble_end 等）由调用方消费 run_state 事件兜底。
+ * - onClose 只在 close() 主动关闭时触发；重连状态经 onStatus('reconnecting'|'connected') 通知。
  */
-export function createSseConnection({ baseUrl, token, conversationId, onEvent, onClose }) {
-  const controller = new AbortController()
+const RECONNECT_BASE_MS = 1000
+const RECONNECT_MAX_MS = 30000
+// 心跳周期 15s（后端 HEARTBEAT_INTERVAL_SECONDS）x2 + 余量
+const DEAD_CONNECTION_MS = 40000
+const WATCHDOG_TICK_MS = 5000
 
-  const ready = (async () => {
+export function createSseConnection({ baseUrl, token, conversationId, onEvent, onClose, onStatus }) {
+  let controller = null
+  let closed = false
+  let backoffMs = RECONNECT_BASE_MS
+  let reconnectTimer = null
+  let watchdogTimer = null
+  let lastActivity = Date.now()
+  let reading = false
+
+  const notifyStatus = (status) => {
+    try { if (onStatus) onStatus(status) } catch (e) { /* ignore */ }
+  }
+
+  async function connectOnce() {
+    controller = new AbortController()
     const resp = await fetch(`${baseUrl}/api/agent/connect/${conversationId}`, {
       method: 'GET',
       headers: { 'X-Session-Id': token || '' },
       signal: controller.signal
     })
     if (!resp.ok) throw new Error(`SSE 建连失败（HTTP ${resp.status}）：令牌无效或后端拒绝了请求`)
+    return resp
+  }
 
-    // 建连成功后在后台持续读流；读流的生命周期与 ready 的 resolve 解耦
-    ;(async () => {
-      const reader = resp.body.getReader()
-      const decoder = new TextDecoder('utf-8')
-      let buffer = ''
-      let eventName = null
-      let eventData = ''
-      const flush = () => {
-        if (eventData) {
-          try { onEvent(eventName, eventData) } catch (e) { console.error('[Addin] onEvent 异常', e) }
-        }
-        eventName = null
-        eventData = ''
+  function startWatchdog() {
+    stopWatchdog()
+    lastActivity = Date.now()
+    watchdogTimer = setInterval(() => {
+      if (Date.now() - lastActivity > DEAD_CONNECTION_MS) {
+        console.warn('[Addin] SSE 心跳缺失，判定死连接，主动掐掉重连')
+        // abort 会让读流抛 AbortError，由 readLoop 的收尾逻辑走重连
+        if (controller) controller.abort()
       }
-      try {
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split(/\r?\n/)
-          buffer = lines.pop() // 保留最后一段不完整行
-          for (const line of lines) {
-            if (!line.trim()) { flush(); continue }
-            if (line.startsWith('event:')) {
-              eventName = line.substring(6).trim()
-            } else if (line.startsWith('data:')) {
-              let v = line.substring(5)
-              if (v.startsWith(' ')) v = v.substring(1)
-              eventData += (eventData ? '\n' : '') + v
-            }
+    }, WATCHDOG_TICK_MS)
+  }
+
+  function stopWatchdog() {
+    if (watchdogTimer) { clearInterval(watchdogTimer); watchdogTimer = null }
+  }
+
+  async function readLoop(resp) {
+    reading = true
+    const reader = resp.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    let eventName = null
+    let eventData = ''
+    const flush = () => {
+      if (eventData) {
+        try { onEvent(eventName, eventData) } catch (e) { console.error('[Addin] onEvent 异常', e) }
+      }
+      eventName = null
+      eventData = ''
+    }
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        lastActivity = Date.now()
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split(/\r?\n/)
+        buffer = lines.pop() // 保留最后一段不完整行
+        for (const line of lines) {
+          if (!line.trim()) { flush(); continue }
+          if (line.startsWith('event:')) {
+            eventName = line.substring(6).trim()
+          } else if (line.startsWith('data:')) {
+            let v = line.substring(5)
+            if (v.startsWith(' ')) v = v.substring(1)
+            eventData += (eventData ? '\n' : '') + v
           }
         }
-      } catch (e) {
-        if (e.name !== 'AbortError') console.warn('[Addin] SSE 读流中断', e)
-      } finally {
-        if (onClose) onClose()
       }
-    })()
+    } catch (e) {
+      if (e.name !== 'AbortError' || !closed) console.warn('[Addin] SSE 读流中断', e)
+    } finally {
+      reading = false
+      stopWatchdog()
+      if (closed) {
+        if (onClose) onClose()
+      } else {
+        scheduleReconnect()
+      }
+    }
+  }
+
+  function scheduleReconnect() {
+    if (closed || reconnectTimer) return
+    notifyStatus('reconnecting')
+    const delay = backoffMs
+    backoffMs = Math.min(backoffMs * 2, RECONNECT_MAX_MS)
+    reconnectTimer = setTimeout(async () => {
+      reconnectTimer = null
+      if (closed) return
+      try {
+        const resp = await connectOnce()
+        backoffMs = RECONNECT_BASE_MS
+        notifyStatus('connected')
+        startWatchdog()
+        readLoop(resp)
+      } catch (e) {
+        if (!closed) {
+          console.warn('[Addin] SSE 重连失败，继续退避', e)
+          scheduleReconnect()
+        }
+      }
+    }, delay)
+  }
+
+  const ready = (async () => {
+    // 首连失败直接抛给调用方（不进重连循环）；成功后交给 readLoop 维护
+    const resp = await connectOnce()
+    notifyStatus('connected')
+    startWatchdog()
+    readLoop(resp)
   })()
 
   return {
     ready,
-    close() { controller.abort() }
+    close() {
+      closed = true
+      stopWatchdog()
+      if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
+      if (controller) controller.abort()
+      // 没有活跃读流（重连等待期/首连未成）时不会再有 finally 收尾，这里直接通知关闭
+      if (!reading && onClose) onClose()
+    }
   }
 }
 

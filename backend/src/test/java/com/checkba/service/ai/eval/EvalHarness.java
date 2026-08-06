@@ -63,6 +63,7 @@ public final class EvalHarness {
             List<String> folderRenames,
             List<Boolean> toolsOfferedPerLlmCall,
             List<List<String>> toolNamesOfferedPerLlmCall,
+            List<String> promptTexts,
             int remainingScriptTurns) {
 
         /** 最终保存的 ASSISTANT 消息（含 executionLog 前缀） */
@@ -160,11 +161,22 @@ public final class EvalHarness {
         com.checkba.service.ai.DocumentCheckpointService checkpointService = mock(com.checkba.service.ai.DocumentCheckpointService.class);
         com.checkba.version.WorkSessionService workSessionService = mock(com.checkba.version.WorkSessionService.class);
 
+        // 故障转移与自动 compaction 用真实配置默认值：备选链默认为空（不会在回放里切模型），
+        // compaction 阈值按 10 万 token 预算算，评测用例的几百字符碰不到
+        com.checkba.config.AiFailoverProperties failoverProperties = new com.checkba.config.AiFailoverProperties();
+        com.checkba.config.AiContextProperties contextProperties = new com.checkba.config.AiContextProperties();
+        com.checkba.service.ai.context.ContextCompressor contextCompressor =
+                new com.checkba.service.ai.context.ContextCompressor(null, null, contextProperties);
+        com.checkba.service.ai.context.RunLoopCompactor runLoopCompactor =
+                new com.checkba.service.ai.context.RunLoopCompactor(contextProperties, contextCompressor);
+
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
                 registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange,
-                todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService(),
-                workSessionService);
+                todoListService, checkpointService,
+                new com.checkba.service.ai.AgentRunStateService(
+                        mock(com.checkba.repository.AgentRunRecordRepository.class)),
+                workSessionService, failoverProperties, runLoopCompactor);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);
@@ -177,7 +189,8 @@ public final class EvalHarness {
 
         return new RunResult(c, registry.dispatches(), List.copyOf(sseEvents), List.copyOf(savedMessages),
                 List.copyOf(artifactSaves), List.copyOf(folderRenames),
-                scripted.toolsOfferedPerCall(), scripted.toolNamesOfferedPerCall(), scripted.remainingTurns());
+                scripted.toolsOfferedPerCall(), scripted.toolNamesOfferedPerCall(),
+                scripted.promptTextPerCall(), scripted.remainingTurns());
     }
 
     /** 内置 skills 目录（与 EvalCase.casesDir 同思路：兼容从 backend/ 或仓库根目录跑测试） */

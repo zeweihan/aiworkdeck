@@ -8,12 +8,18 @@
  * 没有客户端实现的远端工具 = 30 秒超时空转（PptxEditTools 死路径教训）。
  * 未知 command 立即回 {ok:false, error:'unsupported command'}，绝不静默吞掉。
  *
- * 修改类命令（replace_text / insert_text）执行前把 document.changeTrackingMode
+ * 宿主细分：Word 面命令要求 Word 宿主、excel_* 命令要求 Excel 宿主、
+ * ppt_* 命令要求 PowerPoint 宿主——宿主不符或版本不支持时立即回
+ * {ok:false, error:'unsupported ...'}（正常情况下后端已按 officeHost 过滤工具，
+ * 这里是最后一道防线）。
+ *
+ * Word 修改类命令（replace_text / insert_text）执行前把 document.changeTrackingMode
  * 设为 TrackAll（Word 原生修订），执行后恢复原值；宿主不支持 WordApi 1.4 时
- * 降级为直接修改并在结果里标注 tracked:false。
+ * 降级为直接修改并在结果里标注 tracked:false。Excel/PowerPoint 没有修订机制，
+ * 写入直接生效。
  */
 
-import { officeAvailable } from './wordDoc.js'
+import { officeAvailable, detectHost } from './wordDoc.js'
 
 // 与后端 ContextAssemblerService.MAX_INLINE_CONTENT_CHARS 一致的截断上限
 const MAX_TEXT_CHARS = 200_000
@@ -173,7 +179,196 @@ const HANDLERS = {
       await context.sync()
       return { commented: true }
     })
+  },
+
+  // ==================== Excel（excel_*，宿主须为 Excel） ====================
+
+  async excel_get_range(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      sheet.load('name')
+      const range = rangeAddress
+        ? sheet.getRange(rangeAddress)
+        : sheet.getUsedRangeOrNullObject(true)
+      range.load('values,address,rowCount,columnCount,isNullObject')
+      await context.sync()
+      if (range.isNullObject) {
+        return { sheet: sheet.name, address: '', rows: 0, cols: 0, values: [], note: '工作表为空' }
+      }
+      let values = range.values
+      let truncated = false
+      if (values.length > MAX_EXCEL_RESULT_ROWS) {
+        values = values.slice(0, MAX_EXCEL_RESULT_ROWS)
+        truncated = true
+      }
+      return {
+        sheet: sheet.name,
+        address: range.address,
+        rows: range.rowCount,
+        cols: range.columnCount,
+        values,
+        truncated
+      }
+    })
+  },
+
+  async excel_set_values(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    const values = args.values
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    if (!Array.isArray(values) || !values.length || !Array.isArray(values[0])) {
+      throw new Error('values 必须是非空二维数组')
+    }
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      let range = sheet.getRange(rangeAddress)
+      range.load('rowCount,columnCount,address')
+      await context.sync()
+      const rows = values.length
+      const cols = values[0].length
+      if (range.rowCount === 1 && range.columnCount === 1 && (rows > 1 || cols > 1)) {
+        // 单元格起点：按 values 尺寸向右下展开
+        range = range.getResizedRange(rows - 1, cols - 1)
+      } else if (range.rowCount !== rows || range.columnCount !== cols) {
+        throw new Error(`区域尺寸（${range.rowCount}x${range.columnCount}）与 values 尺寸（${rows}x${cols}）不一致`)
+      }
+      range.values = values
+      range.load('address')
+      await context.sync()
+      return { written: rows * cols, address: range.address }
+    })
+  },
+
+  async excel_search(args) {
+    const query = String(args.query || '')
+    const sheetName = String(args.sheetName || '')
+    if (!query) throw new Error('查找文本不能为空')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      sheet.load('name')
+      const used = sheet.getUsedRangeOrNullObject(true)
+      used.load('values,rowIndex,columnIndex,isNullObject')
+      await context.sync()
+      if (used.isNullObject) return { sheet: sheet.name, count: 0, matches: [] }
+      const needle = query.toLowerCase()
+      const matches = []
+      let count = 0
+      for (let r = 0; r < used.values.length; r++) {
+        for (let c = 0; c < used.values[r].length; c++) {
+          const cell = used.values[r][c]
+          if (cell == null) continue
+          const text = String(cell)
+          if (text.toLowerCase().includes(needle)) {
+            count++
+            if (matches.length < MAX_SEARCH_HITS) {
+              matches.push({ address: cellAddress(used.rowIndex + r, used.columnIndex + c), value: text.slice(0, 500) })
+            }
+          }
+        }
+      }
+      return { sheet: sheet.name, count, shown: matches.length, matches }
+    })
+  },
+
+  // ==================== PowerPoint（ppt_*，宿主须为 PowerPoint） ====================
+
+  async ppt_get_slides() {
+    requirePptTextApi()
+    return PowerPoint.run(async (context) => {
+      const frames = await loadPptTextFrames(context)
+      const slides = frames.map((slideFrames, i) => ({
+        slide: i + 1,
+        texts: slideFrames
+          .filter((tf) => !tf.isNullObject && tf.hasText)
+          .map((tf) => (tf.textRange.text || '').trim())
+          .filter(Boolean)
+      }))
+      return { slideCount: slides.length, slides }
+    })
+  },
+
+  async ppt_replace_text(args) {
+    const searchText = String(args.searchText || '')
+    const replaceText = args.replaceText == null ? '' : String(args.replaceText)
+    if (!searchText) throw new Error('查找文本不能为空')
+    requirePptTextApi()
+    return PowerPoint.run(async (context) => {
+      const frames = await loadPptTextFrames(context)
+      let replaced = 0
+      const touchedSlides = []
+      frames.forEach((slideFrames, i) => {
+        let slideTouched = false
+        for (const tf of slideFrames) {
+          if (tf.isNullObject || !tf.hasText) continue
+          const text = tf.textRange.text || ''
+          if (!text.includes(searchText)) continue
+          replaced += text.split(searchText).length - 1
+          tf.textRange.text = text.split(searchText).join(replaceText)
+          slideTouched = true
+        }
+        if (slideTouched) touchedSlides.push(i + 1)
+      })
+      if (!replaced) {
+        throw new Error('未找到目标文本，请确认 searchText 与幻灯片文本精确一致（可先用 ppt_get_slides 核对）')
+      }
+      await context.sync()
+      return { replaced, slides: touchedSlides }
+    })
   }
+}
+
+/** excel_get_range 返回值的行数上限（防超长工具输出撑爆模型上下文） */
+const MAX_EXCEL_RESULT_ROWS = 500
+
+/** 按名取工作表；名为空取活动工作表 */
+function resolveSheet(context, sheetName) {
+  return sheetName
+    ? context.workbook.worksheets.getItem(sheetName)
+    : context.workbook.worksheets.getActiveWorksheet()
+}
+
+/** 0 起的行列号转 A1 地址 */
+function cellAddress(rowIndex, colIndex) {
+  let col = ''
+  let n = colIndex + 1
+  while (n > 0) {
+    const rem = (n - 1) % 26
+    col = String.fromCharCode(65 + rem) + col
+    n = Math.floor((n - 1) / 26)
+  }
+  return col + (rowIndex + 1)
+}
+
+/** PPT 文本读写依赖 PowerPointApi 1.4（TextFrame/TextRange），旧版宿主直接报错 */
+function requirePptTextApi() {
+  let supported = false
+  try {
+    supported = Office.context.requirements.isSetSupported('PowerPointApi', '1.4')
+  } catch (e) { /* fallthrough */ }
+  if (!supported) {
+    throw new Error('unsupported: 当前 PowerPoint 版本不支持读写幻灯片文本（需要 PowerPointApi 1.4，Microsoft 365 较新版本）')
+  }
+}
+
+/** 载入全部幻灯片各形状的 TextFrame（含 hasText 与 textRange.text），返回按页分组的数组 */
+async function loadPptTextFrames(context) {
+  const slides = context.presentation.slides
+  slides.load('items')
+  await context.sync()
+  slides.items.forEach((slide) => slide.shapes.load('items'))
+  await context.sync()
+  const frames = slides.items.map((slide) =>
+    slide.shapes.items.map((shape) => {
+      const tf = shape.getTextFrameOrNullObject()
+      tf.load('hasText,isNullObject')
+      tf.textRange.load('text')
+      return tf
+    }))
+  await context.sync()
+  return frames
 }
 
 /** 每个 command 的固定中文名（对话流中的工具活动 chip；与后端 @ToolMeta displayName 对齐） */
@@ -183,8 +378,30 @@ export const COMMAND_DISPLAY_NAMES = {
   search: '查找文本',
   replace_text: '替换文本（修订）',
   insert_text: '插入文本（修订）',
-  add_comment: '插入批注'
+  add_comment: '插入批注',
+  excel_get_range: '读取区域',
+  excel_set_values: '写入区域',
+  excel_search: '查找单元格',
+  ppt_get_slides: '读取幻灯片',
+  ppt_replace_text: '替换幻灯片文本'
 }
+
+/** 每个 command 要求的宿主（与后端按 officeHost 的工具可见性过滤对齐） */
+const COMMAND_HOSTS = {
+  get_text: 'word',
+  get_selection: 'word',
+  search: 'word',
+  replace_text: 'word',
+  insert_text: 'word',
+  add_comment: 'word',
+  excel_get_range: 'excel',
+  excel_set_values: 'excel',
+  excel_search: 'excel',
+  ppt_get_slides: 'powerpoint',
+  ppt_replace_text: 'powerpoint'
+}
+
+const HOST_LABELS = { word: 'Word', excel: 'Excel', powerpoint: 'PowerPoint' }
 
 export function commandDisplayName(command) {
   return COMMAND_DISPLAY_NAMES[command] || `文档操作（${command}）`
@@ -195,11 +412,19 @@ export function commandDisplayName(command) {
  */
 export async function executeOfficeCommand(command, args) {
   if (!officeAvailable()) {
-    return { ok: false, error: 'Word 环境不可用：请在 Word 任务窗格中使用本插件' }
+    return { ok: false, error: 'Office 环境不可用：请在 Office 任务窗格中使用本插件' }
   }
   const handler = HANDLERS[command]
   if (!handler) {
     return { ok: false, error: `unsupported command: ${command}` }
+  }
+  const requiredHost = COMMAND_HOSTS[command]
+  const host = detectHost()
+  if (requiredHost && host !== requiredHost) {
+    return {
+      ok: false,
+      error: `unsupported host: 该命令只在 ${HOST_LABELS[requiredHost]} 中可用（当前宿主：${HOST_LABELS[host] || '未知'}）`
+    }
   }
   try {
     const data = await handler(args || {})

@@ -13,6 +13,7 @@ import java.util.List;
 public class ProjectAiMessageService {
 
     private final ProjectAiMessageRepository repository;
+    private final com.checkba.service.ai.ConversationIssuanceService conversationIssuanceService;
 
     public void saveUserAndAssistantMessage(String projectIdStr, Long userId, String conversationId, String userContent, String assistantContent) {
         if (projectIdStr == null) {
@@ -150,9 +151,16 @@ public class ProjectAiMessageService {
      */
     public boolean canUseConversation(String conversationId, Long userId) {
         if (userId == null || conversationId == null) return false;
+        // 服务端签发登记优先于「空会话任何人可用」：签发给谁就归谁，
+        // 首条消息落库前的抢占窗口由此关闭（2026-08 安全审计遗留项）。
+        Long registeredOwner = conversationIssuanceService.ownerOf(conversationId);
+        if (registeredOwner != null && !registeredOwner.equals(userId)) return false;
         return repository.findFirstByConversationId(conversationId)
                 .map(m -> userId.equals(m.getUserId()))
-                .orElse(true);
+                // 无消息的新会话：已登记（归属相符）放行；未登记时看强制开关——
+                // 官方云（conversation-issuance-required=true 且非 local-mode）必须先签发，
+                // 默认配置/桌面单机维持现状（客户端自造 ID 仍可用）。
+                .orElseGet(() -> registeredOwner != null || !conversationIssuanceService.enforceIssuance());
     }
 
     public List<java.util.Map<String, Object>> listConversations(Long projectId, Long userId) {

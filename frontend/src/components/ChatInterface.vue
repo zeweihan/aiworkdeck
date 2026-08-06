@@ -445,9 +445,9 @@
     <view v-else class="input-area-wrapper">
        <!-- 任务清单进度卡已随消息流内联展示（RootBubble），不再常驻输入框上方，
             避免与气泡内的步骤分组重复（用户反馈：线性时序结构） -->
-       <!-- 步数超限暂停：一键继续，免得用户手动输入「继续」 -->
+       <!-- 步数超限暂停 / 上次进程被杀：一键继续，免得用户手动输入「继续」 -->
        <view v-if="agentPaused && !isStreaming" class="continue-bar">
-          <text class="continue-hint">已达单轮执行步数上限，任务已暂停</text>
+          <text class="continue-hint">{{ continueHint }}</text>
           <view class="continue-btn" @tap="handleContinue">继续执行</view>
        </view>
        <!-- NEW: File Changes & Token Usage Bar (Always visible) -->
@@ -1145,7 +1145,14 @@ export default {
       scrollToBottom()
     }
 
-    // 步数超限后的一键续跑：等价于用户输入「继续」（后端 depth 归零重新起循环），
+    // 续跑提示文案：区分「步数用完」和「上次进程被杀」两种中断来源
+    const continueHint = computed(() => {
+      return agentPaused.value && agentPaused.value.reason === 'process_interrupted'
+        ? '上次任务执行中应用被关闭，任务已中断'
+        : '已达单轮执行步数上限，任务已暂停'
+    })
+
+    // 一键续跑（步数超限暂停 / 进程中断）：等价于用户输入「继续」（后端 depth 归零重新起循环），
     // 复用 sendMessage 的会话/模型/助手上下文。
     const handleContinue = async () => {
       if (isStreaming.value) return
@@ -1332,7 +1339,7 @@ export default {
     const recentDotClass = (h) => {
        if (!h) return ''
        if (h.runStatus === 'RUNNING') return 'dot-running'
-       if (h.runStatus === 'PAUSED' || h.runStatus === 'AWAITING_APPROVAL') return 'dot-attention'
+       if (h.runStatus === 'PAUSED' || h.runStatus === 'AWAITING_APPROVAL' || h.runStatus === 'INTERRUPTED') return 'dot-attention'
        if (h.runStatus === 'ERROR') return 'dot-error'
        if (h.unread) return 'dot-unread'
        return ''
@@ -2003,8 +2010,9 @@ export default {
        confirmPptGeneration,
        // File Changes Status
        fileChanges,
-       // 步数超限一键继续
+       // 步数超限 / 进程中断的一键继续
        agentPaused,
+       continueHint,
        handleContinue,
        modifiedFiles,
        createdFiles,

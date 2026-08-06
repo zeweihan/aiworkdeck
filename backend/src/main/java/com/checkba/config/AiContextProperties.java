@@ -48,6 +48,9 @@ public class AiContextProperties {
     /** 压缩各层的保留条数配置 */
     private Compression compression = new Compression();
 
+    /** 运行中自动 compaction（runLoop 每轮 generate 前的超阈值摘要）配置 */
+    private Compaction compaction = new Compaction();
+
     /** 文件上下文的大小/数量上限配置 */
     private Files files = new Files();
 
@@ -115,6 +118,43 @@ public class AiContextProperties {
         public void setToolOutputTargetChars(int toolOutputTargetChars) { this.toolOutputTargetChars = toolOutputTargetChars; }
     }
 
+    /**
+     * 运行中自动 compaction：长任务的 runLoop 消息栈只增不减，撑破上下文会 400 或质量塌方。
+     * 与 Compression 的区别是触发时机——这一套跑在 runLoop 内、必须保住工具调用与结果的配对。
+     */
+    public static class Compaction {
+        /** 总开关；关掉后 runLoop 不做任何自动压缩（行为与加固前一致） */
+        private boolean enabled = true;
+
+        /** 触发比例：估算 token 超过「历史可用预算 × 该比例」时压缩 */
+        private double triggerRatio = 0.8;
+
+        /** 压缩时保留的最近消息条数（会向前扩展以免拆散工具调用与结果） */
+        private int keepRecent = 8;
+
+        /** 中段消息少于该条数就不压缩：短会话压了没收益，还平白丢上下文 */
+        private int minMiddleMessages = 4;
+
+        /** 中段摘要的字符上限 */
+        private int digestMaxChars = 4000;
+
+        /** 摘要里单条消息保留的字符数 */
+        private int perMessageChars = 240;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public double getTriggerRatio() { return triggerRatio; }
+        public void setTriggerRatio(double triggerRatio) { this.triggerRatio = triggerRatio; }
+        public int getKeepRecent() { return keepRecent; }
+        public void setKeepRecent(int keepRecent) { this.keepRecent = keepRecent; }
+        public int getMinMiddleMessages() { return minMiddleMessages; }
+        public void setMinMiddleMessages(int minMiddleMessages) { this.minMiddleMessages = minMiddleMessages; }
+        public int getDigestMaxChars() { return digestMaxChars; }
+        public void setDigestMaxChars(int digestMaxChars) { this.digestMaxChars = digestMaxChars; }
+        public int getPerMessageChars() { return perMessageChars; }
+        public void setPerMessageChars(int perMessageChars) { this.perMessageChars = perMessageChars; }
+    }
+
     public static class Files {
         /** 单文件大小上限（字节），超过则跳过提取 */
         private long maxFileSizeBytes = 10 * 1024 * 1024;
@@ -167,6 +207,8 @@ public class AiContextProperties {
     public void setModelTokenBudgets(Map<String, Integer> modelTokenBudgets) { this.modelTokenBudgets = modelTokenBudgets; }
     public Compression getCompression() { return compression; }
     public void setCompression(Compression compression) { this.compression = compression; }
+    public Compaction getCompaction() { return compaction; }
+    public void setCompaction(Compaction compaction) { this.compaction = compaction; }
     public Files getFiles() { return files; }
     public void setFiles(Files files) { this.files = files; }
     public List<String> getOcrExtensions() { return ocrExtensions; }

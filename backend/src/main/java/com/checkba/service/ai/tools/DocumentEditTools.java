@@ -41,7 +41,10 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 文件管理工具 ====================
 
-    @Tool("列出项目中的所有可编辑文档文件（docx, doc, xlsx, xls, pptx, ppt）。返回文件ID、名称和类型的列表。")
+    @Tool("文件树里可编辑文档的权威清单，也是文件 ID 的主要来源：doc_open_file、extract_file_text 的 fileId，"
+            + "以及 rename_project_file / move_project_file / create_folder 的 fileId 与 parentFolderId 都从这里取。"
+            + "不含 PDF（用 pdf_list_files）与文件夹（用 list_project_folders）；只要物理路径不要 ID 才用 list_files。"
+            + "列出项目中的所有可编辑文档文件（docx, doc, xlsx, xls, pptx, ppt），返回文件ID、名称和类型的列表。")
     public String doc_list_project_files(
             @P("项目ID") Long projectId
     ) {
@@ -786,6 +789,142 @@ public class DocumentEditTools implements AgentToolComponent {
             return "Error: rowsJson 不是合法的 JSON 二维数组: " + je.getOriginalMessage();
         } catch (Exception e) {
             log.error("Failed to insert table", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "读取表格", category = "document")
+    @Tool("【看/表格】把文档里的一张表读成二维数组（行列数 + 每格文本），改表格前必须先用它看清现状。" +
+          "定位：tableIndex 第几张表（0 开始），或 tableName 表名；都不传则用光标所在表格。" +
+          "返回的 cells 按行给出，行号从 1 开始、列号从 A 开始（左上角是 A1），" +
+          "doc_table_set_cell 的 cell 参数就用这套坐标。表里有合并/拆分单元格时返回 note 说明。")
+    public String doc_table_read(
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
+            @P("表名（如 Table1），一般不用传") String tableName,
+            @P("最多读多少行，默认 200") Integer maxRows,
+            @P("最多读多少列，默认 30") Integer maxCols
+    ) {
+        log.info("Tool: doc_table_read called tableIndex={}, tableName={}", tableIndex, tableName);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (tableIndex != null) params.put("tableIndex", tableIndex);
+            if (tableName != null && !tableName.isEmpty()) params.put("tableName", tableName);
+            if (maxRows != null) params.put("maxRows", maxRows);
+            if (maxCols != null) params.put("maxCols", maxCols);
+            return editorBridgeService.executeEditorCommand("table_read", params);
+        } catch (Exception e) {
+            log.error("Failed to read table", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "修改单元格", category = "document", fileEffect = "MODIFIED")
+    @Tool("【改/表格】改表格里一个单元格的文本（整格替换）。先用 doc_table_read 看清表格坐标再改。" +
+          "cell 用 '列字母+行号'，如 B2 = 第 2 列第 2 行；text 是这一格的新内容（不带公式、不含换行）。" +
+          "修订模式下只有真正变动的字符会落成修订，不是整格删了重打。" +
+          "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
+    public String doc_table_set_cell(
+            @P("单元格坐标，如 B2（列字母 + 行号，行号 1 开始）") String cell,
+            @P("该单元格的新文本") String text,
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
+            @P("表名，一般不用传") String tableName
+    ) {
+        log.info("Tool: doc_table_set_cell called cell={}, tableIndex={}", cell, tableIndex);
+        if (cell == null || cell.isBlank()) {
+            return "Error: 缺少 cell 参数（单元格坐标，如 B2）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("cell", cell);
+            params.put("text", text == null ? "" : text);
+            if (tableIndex != null) params.put("tableIndex", tableIndex);
+            if (tableName != null && !tableName.isEmpty()) params.put("tableName", tableName);
+            return editorBridgeService.executeEditorCommand("table_set_cell", params);
+        } catch (Exception e) {
+            log.error("Failed to set table cell", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入表格行", category = "document", fileEffect = "MODIFIED")
+    @Tool("【改/表格】给表格插入空白行。position 是行号（1 开始），新行插在该行之前；" +
+          "不传 position 则追加到表尾。count 一次插几行（默认 1）。插完用 doc_table_set_cell 逐格填内容。" +
+          "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
+    public String doc_table_add_row(
+            @P("插入位置行号（1 开始，新行插在该行之前），不传则追加到表尾") Integer position,
+            @P("插入几行，默认 1") Integer count,
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
+            @P("表名，一般不用传") String tableName
+    ) {
+        log.info("Tool: doc_table_add_row called position={}, count={}, tableIndex={}", position, count, tableIndex);
+        return dispatchTableStructureCommand("table_add_row", position, count, tableIndex, tableName);
+    }
+
+    @ToolMeta(displayName = "删除表格行", category = "document", fileEffect = "MODIFIED")
+    @Tool("【改/表格】删除表格的整行。position 是要删的行号（1 开始，必填），count 连删几行（默认 1）。" +
+          "注意：删行是**直接删除、不留修订痕迹**（不像改文字那样能在修订里看到），删错只能靠撤销，" +
+          "所以删之前务必先用 doc_table_read 看清要删的是哪一行。表格至少要留一行，删不掉全部行。" +
+          "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
+    public String doc_table_delete_row(
+            @P("要删的行号（1 开始）") Integer position,
+            @P("连删几行，默认 1") Integer count,
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
+            @P("表名，一般不用传") String tableName
+    ) {
+        log.info("Tool: doc_table_delete_row called position={}, count={}, tableIndex={}", position, count, tableIndex);
+        if (position == null) {
+            return "Error: 缺少 position 参数（要删的行号，1 开始）";
+        }
+        return dispatchTableStructureCommand("table_delete_row", position, count, tableIndex, tableName);
+    }
+
+    @ToolMeta(displayName = "插入表格列", category = "document", fileEffect = "MODIFIED")
+    @Tool("【改/表格】给表格插入空白列。position 是列字母（如 B）或列号（1 开始），新列插在该列之前；" +
+          "不传 position 则追加到最右。count 一次插几列（默认 1）。" +
+          "合并过单元格的表格按列插入可能被引擎拒绝，失败会明确报出来。" +
+          "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
+    public String doc_table_add_col(
+            @P("插入位置列字母（如 B）或列号（1 开始），新列插在该列之前；不传则追加到最右") String position,
+            @P("插入几列，默认 1") Integer count,
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
+            @P("表名，一般不用传") String tableName
+    ) {
+        log.info("Tool: doc_table_add_col called position={}, count={}, tableIndex={}", position, count, tableIndex);
+        return dispatchTableStructureCommand("table_add_col", position, count, tableIndex, tableName);
+    }
+
+    @ToolMeta(displayName = "删除表格列", category = "document", fileEffect = "MODIFIED")
+    @Tool("【改/表格】删除表格的整列。position 是列字母（如 B）或列号（1 开始，必填），count 连删几列（默认 1）。" +
+          "与删行一样是**直接删除、不留修订痕迹**，删前先用 doc_table_read 看清。表格至少要留一列。" +
+          "定位：tableIndex 第几张表（0 开始），不传则用光标所在表格。")
+    public String doc_table_delete_col(
+            @P("要删的列字母（如 B）或列号（1 开始）") String position,
+            @P("连删几列，默认 1") Integer count,
+            @P("表格序号（0 开始），不传则用光标所在表格") Integer tableIndex,
+            @P("表名，一般不用传") String tableName
+    ) {
+        log.info("Tool: doc_table_delete_col called position={}, count={}, tableIndex={}", position, count, tableIndex);
+        if (position == null || position.isBlank()) {
+            return "Error: 缺少 position 参数（要删的列字母如 B，或 1 开始的列号）";
+        }
+        return dispatchTableStructureCommand("table_delete_col", position, count, tableIndex, tableName);
+    }
+
+    /**
+     * 表格行/列增删四个原语的共同下发路径（参数形状一致：position/count + 表格定位）。
+     * position 对行是 Integer、对列是列字母或列号字符串，一律原样透传给 worker 解析。
+     */
+    private String dispatchTableStructureCommand(String action, Object position, Integer count,
+                                                 Integer tableIndex, String tableName) {
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (position != null && !String.valueOf(position).isBlank()) params.put("position", position);
+            if (count != null) params.put("count", count);
+            if (tableIndex != null) params.put("tableIndex", tableIndex);
+            if (tableName != null && !tableName.isEmpty()) params.put("tableName", tableName);
+            return editorBridgeService.executeEditorCommand(action, params);
+        } catch (Exception e) {
+            log.error("Failed to execute table structure command: {}", action, e);
             return "Error: " + e.getMessage();
         }
     }
