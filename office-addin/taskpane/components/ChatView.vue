@@ -48,6 +48,7 @@
           <button class="btn reset" title="开始新对话" :disabled="streaming" @click="newConversation">新对话</button>
         </div>
       </div>
+      <p v-if="reconnecting" class="banner conn">连接中断，正在自动重连……</p>
       <p v-if="banner" class="banner">{{ banner }}</p>
     </footer>
   </div>
@@ -55,9 +56,9 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
-import { postChat, postCancel, postOfficeResult } from '../lib/api.js'
+import { postChat, postCancel, postOfficeResult, createConversation } from '../lib/api.js'
 import { createSseConnection, createTagStreamParser } from '../lib/sse.js'
-import { readActiveDocument } from '../lib/wordDoc.js'
+import { readActiveDocument, detectHost } from '../lib/wordDoc.js'
 import { executeOfficeCommand, commandDisplayName } from '../lib/officeExecutor.js'
 
 const props = defineProps({
@@ -74,11 +75,16 @@ const includeDocument = ref(true)
 const banner = ref('')
 const listEl = ref(null)
 
-// conversationId 客户端生成（conv-<毫秒> 格式，与主前端一致）；插件会话独立
-let conversationId = `conv-${Date.now()}`
+// 会话 ID 优先由服务端签发（POST /api/agent/conversations，契约与后端并行分支约定）；
+// 端点不存在或失败时静默回退客户端生成的 conv-<毫秒>（与主前端一致）。插件会话独立。
+let conversationId = null
 let connection = null
 let parser = null
 let currentAssistant = null
+// SSE 是否发生过断线重连：只有重连后的 run_state 才用于兜底解锁
+// （首连的 run_state 在 send 已置 streaming 之后到达，不能当终态看）
+let everReconnected = false
+const reconnecting = ref(false)
 
 const canSend = computed(() =>
   props.configured && props.projectId && input.value.trim().length > 0 && !streaming.value)
@@ -113,6 +119,18 @@ function handleEvent(evt, dataStr) {
     finishStreaming()
   } else if (evt === 'client_action') {
     handleClientAction(dataStr)
+  } else if (evt === 'run_state') {
+    // 建连时后端推送当前运行状态。仅在断线重连后用作兜底：
+    // 断线期间漏掉了 bubble_end/error 等终态事件时，靠它解锁输入框
+    if (everReconnected && streaming.value) {
+      let status = null
+      try { status = JSON.parse(dataStr).status } catch (e) { /* ignore */ }
+      const stillRunning = status === 'RUNNING' || status === 'PAUSED' || status === 'AWAITING_APPROVAL'
+      if (!stillRunning) {
+        if (parser) parser.flush()
+        finishStreaming()
+      }
+    }
   }
   // connected/heartbeat/plan_update 等其余事件：先忽略
 }
@@ -152,9 +170,19 @@ async function ensureConnection() {
     token: props.settings.token,
     conversationId,
     onEvent: handleEvent,
+    onStatus: (status) => {
+      if (connection !== conn) return
+      if (status === 'reconnecting') {
+        everReconnected = true
+        reconnecting.value = true
+      } else if (status === 'connected') {
+        reconnecting.value = false
+      }
+    },
     onClose: () => {
       if (connection === conn) connection = null
-      // 连接断开时不静默卡死输入框
+      reconnecting.value = false
+      // 连接彻底关闭时不静默卡死输入框（断线重连由 sse.js 内部处理，不走这里）
       if (streaming.value) finishStreaming()
     }
   })
@@ -188,13 +216,18 @@ async function send() {
   scrollToBottom()
 
   try {
+    // 首条消息前先请求服务端签发会话 ID；旧后端无该端点时静默回退客户端生成
+    if (!conversationId) {
+      conversationId = (await createConversation(props.settings, parseInt(props.projectId, 10)))
+        || `conv-${Date.now()}`
+    }
     await ensureConnection()
 
-    // 当前文档正文以内联形式随请求上送（activeContext.inlineContent）
+    // 当前文档内容以内联形式随请求上送（activeContext.inlineContent）
     let activeContext = null
     if (includeDocument.value) {
       activeContext = await readActiveDocument()
-      if (!activeContext) banner.value = '未能读取文档正文，本条消息不附带文档内容'
+      if (!activeContext) banner.value = '未能读取文档内容，本条消息不附带文档内容'
     }
 
     await postChat(props.settings, {
@@ -203,8 +236,10 @@ async function send() {
       message: prompt,
       mode: 'AGENT',
       activeContext,
-      // 声明客户端能力（Phase C）：后端据此让本会话只见 office_* 工具、隐藏 doc_*
-      clientCapability: 'office'
+      // 声明客户端能力（Phase C）：后端据此让本会话只见 office_* 工具、隐藏 doc_*；
+      // officeHost 再按宿主细分（word/excel/powerpoint），点名对应工具面
+      clientCapability: 'office',
+      officeHost: detectHost() || 'word'
     })
   } catch (e) {
     assistant.error = e.message || '消息发送失败'
@@ -213,7 +248,7 @@ async function send() {
 }
 
 async function stop() {
-  await postCancel(props.settings, conversationId)
+  if (conversationId) await postCancel(props.settings, conversationId)
   if (connection) { connection.close(); connection = null }
   if (currentAssistant && !currentAssistant.text) currentAssistant.text = '（已停止）'
   finishStreaming()
@@ -221,11 +256,13 @@ async function stop() {
 
 function newConversation() {
   if (connection) { connection.close(); connection = null }
-  conversationId = `conv-${Date.now()}`
+  conversationId = null
   messages.value = []
   currentAssistant = null
   parser = null
   banner.value = ''
+  reconnecting.value = false
+  everReconnected = false
 }
 
 onBeforeUnmount(() => {
@@ -412,4 +449,6 @@ textarea:focus {
   font-size: 12px;
   color: var(--awd-danger);
 }
+
+.banner.conn { color: var(--awd-text-secondary); }
 </style>

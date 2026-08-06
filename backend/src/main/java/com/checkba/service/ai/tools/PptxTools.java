@@ -58,7 +58,9 @@ public class PptxTools implements AgentToolComponent {
 
     // ==================== 文件管理工具 ====================
 
-    @Tool("列出项目中的所有文件夹。返回文件夹 ID、名称和路径。仅当用户明确指定要保存到某个特定文件夹时才需要调用此工具。")
+    @Tool("只列文件夹、不列文件，是 folderId 的来源：write_docx 的 parentFolderId、move_project_file 的 targetFolderId "
+            + "都可从这里取（新建文件夹用 create_folder，文件的 fileId 用 doc_list_project_files）。"
+            + "返回文件夹 ID、名称和路径。仅当用户明确指定要保存到某个特定文件夹时才需要调用此工具。")
     public String list_project_folders(
             @P("项目 ID") Long projectId
     ) {
@@ -94,7 +96,9 @@ public class PptxTools implements AgentToolComponent {
         }
     }
 
-    @Tool("列出项目中的所有 PPTX 演示文稿文件。返回文件 ID、名称和位置信息。")
+    @Tool("PPTX 专用清单，也是 PPTX 文件 ID 的来源：所有 pptx_* 工具的 fileId 从这里或 pptx_search_files 获取"
+            + "（doc_list_project_files 也列 pptx，但 pptx_* 工具请以本清单为准）。"
+            + "列出项目中的所有 PPTX 演示文稿文件，返回文件 ID、名称和位置信息。")
     public String pptx_list_files(
             @P("项目 ID") Long projectId
     ) {

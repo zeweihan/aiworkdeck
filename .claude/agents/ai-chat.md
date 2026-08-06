@@ -11,6 +11,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 
 **编排核心**
 - `controller/ai/AiAgentController.java` — 主入口（/api/agent）：GET /connect/{cid}（建 SSE）、POST /chat（异步 200）、POST /cancel/{cid}、/history/rollback、/tasks/active、/ppt/generate。AiChatController 是已被取代的 v1，非主链路。
+- **conversationId 服务端签发**（安全审计遗留 + Office 插件 Phase D）：`controller/ai/ConversationIssuanceController.java` `POST /api/agent/conversations` body `{projectId}` → `{"conversationId":"conv-<毫秒>-<16位随机base64url>"}`（鉴权 + hasReadPermission）。登记簿 `service/ai/ConversationIssuanceService.java`（内存 Map，惰性 24h 过期）；`ProjectAiMessageService.canUseConversation` 开头先查登记——签发给谁就归谁，关掉「空会话首条消息落库前任何登录用户可抢占」的窗口。开关 `security.conversation-issuance-required`（默认 false）：true（官方云配）时**尚无消息**的未登记会话一律拒绝（已有消息仍按 DB 归属，进程重启丢登记不影响历史）；local-mode 恒不强制，桌面自造 conv-毫秒 ID 流程不变。
 - `service/ai/AgentOrchestrator.java`（862 行）— **编排器**：handleUserMessage（@Async("taskExecutor")）+ runLoop（递归）。RunGuard：重复调用熔断 MAX_IDENTICAL_TOOL_CALLS=3、连续失败提示=3、步数预算 MAX_LOOP_DEPTH=30。工具分发 dispatchTool（~:160）、artifact/<title> 处理、检查点触发。
 - `service/ai/AgentStreamHandler.java`（493 行）— StreamingResponseHandler：token 流→SSE；<bubble_type>/<artifact> 边界解析缓冲、编辑器流过滤、token 用量上报。每次 runLoop 新建实例。
 - `service/ai/AgentRunStateService.java` — 每会话运行状态登记簿：RUNNING/PAUSED/AWAITING_APPROVAL/FINISHED/ERROR/CANCELLED/**INTERRUPTED**。内存 map 是快路径，同时写透 `agent_run_record` 表（entity `model/entity/AgentRunRecord`，ddl-auto 自动建表；DB 写失败只 log 不阻断）。**新增终止分支必打状态点**（PR#173 状态机契约）。
@@ -88,7 +89,7 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 ## 验证
 
-- `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，10 组）+ DesktopContextSmokeTest。
+- `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，12 组）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）与 cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文。
 - 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`。
 - 状态持久化/启动回收：`mvn test -Dtest=AgentRunRecoveryServiceTest`（mark 写透、RUNNING→INTERRUPTED+补标记、幂等、续跑翻回 RUNNING）。
 - 前端：`npm run check:emits`；UI 链路 `npm run test:app-e2e`。
