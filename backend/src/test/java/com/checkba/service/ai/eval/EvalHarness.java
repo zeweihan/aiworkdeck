@@ -160,11 +160,20 @@ public final class EvalHarness {
         com.checkba.service.ai.DocumentCheckpointService checkpointService = mock(com.checkba.service.ai.DocumentCheckpointService.class);
         com.checkba.version.WorkSessionService workSessionService = mock(com.checkba.version.WorkSessionService.class);
 
+        // 故障转移与自动 compaction 用真实配置默认值：备选链默认为空（不会在回放里切模型），
+        // compaction 阈值按 10 万 token 预算算，评测用例的几百字符碰不到
+        com.checkba.config.AiFailoverProperties failoverProperties = new com.checkba.config.AiFailoverProperties();
+        com.checkba.config.AiContextProperties contextProperties = new com.checkba.config.AiContextProperties();
+        com.checkba.service.ai.context.ContextCompressor contextCompressor =
+                new com.checkba.service.ai.context.ContextCompressor(null, null, contextProperties);
+        com.checkba.service.ai.context.RunLoopCompactor runLoopCompactor =
+                new com.checkba.service.ai.context.RunLoopCompactor(contextProperties, contextCompressor);
+
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
                 registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange,
                 todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService(),
-                workSessionService);
+                workSessionService, failoverProperties, runLoopCompactor);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);
