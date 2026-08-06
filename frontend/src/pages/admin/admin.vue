@@ -701,6 +701,76 @@
           </view>
         </scroll-view>
 
+        <!-- 软件更新（仅桌面端）：小版本补丁应用内更新，大版本引导官网下载全量包
+             （docs/INCREMENTAL_UPDATE_DESIGN.md §6/§7） -->
+        <scroll-view
+          v-else-if="activeNav === 'updates'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">软件更新</text>
+              <text class="section-subtitle">
+                小版本更新只下载变化部分（通常不足 10MB），后台完成、重启生效；大版本需下载完整安装包
+              </text>
+            </view>
+            <view class="section-body">
+              <view class="comp-row">
+                <view class="comp-main">
+                  <text class="comp-name">当前版本 {{ update.effectiveVersion || '-' }}</text>
+                  <text class="comp-sub">
+                    <text v-if="update.effectiveVersion !== update.appVersion">安装包 {{ update.appVersion }} + 补丁 {{ update.effectiveVersion }}</text>
+                    <text v-else>完整安装包版本</text>
+                    <text v-if="update.checkedAt"> · 上次检查 {{ formatUpdateTime(update.checkedAt) }}</text>
+                  </text>
+                  <text v-if="update.phase === 'checking'" class="comp-sub">正在检查更新...</text>
+                  <text v-else-if="update.phase === 'downloading'" class="comp-sub">
+                    正在下载补丁 {{ update.progress && update.progress.component ? '（' + update.progress.component + '）' : '' }}
+                  </text>
+                  <text v-else-if="update.phase === 'ready'" class="comp-sub">
+                    新版本 {{ update.available && update.available.version }} 已就绪，重启后生效
+                  </text>
+                  <text v-else-if="update.phase === 'error'" class="comp-error">检查失败：{{ update.error }}</text>
+                  <text v-else-if="update.checkedAt && !update.majorAvailable" class="comp-sub">已是最新版本</text>
+                  <view v-if="update.phase === 'downloading' && update.progress && update.progress.total" class="comp-progress">
+                    <view
+                      class="comp-progress-fill"
+                      :style="{ width: Math.min(100, Math.round(update.progress.received / update.progress.total * 100)) + '%' }"
+                    />
+                  </view>
+                </view>
+                <view class="comp-actions">
+                  <button
+                    v-if="update.phase === 'ready'"
+                    class="comp-btn primary"
+                    @tap="handleUpdateRestart"
+                  >
+                    立即重启生效
+                  </button>
+                  <button
+                    v-else
+                    class="comp-btn"
+                    :disabled="update.phase === 'checking' || update.phase === 'downloading'"
+                    @tap="handleUpdateCheck"
+                  >
+                    检查更新
+                  </button>
+                </view>
+              </view>
+              <view v-if="update.majorAvailable" class="comp-row">
+                <view class="comp-main">
+                  <text class="comp-name">新大版本 {{ update.majorAvailable.major }} 已发布</text>
+                  <text class="comp-sub">涉及核心组件变更，需下载完整安装包覆盖安装；本机数据不受影响</text>
+                </view>
+                <view class="comp-actions">
+                  <button class="comp-btn primary" @tap="handleUpdateOpenDownload">前往下载</button>
+                </view>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
+
         <!-- 团队案件库（仅桌面端：连接案件库、管理已连的库）。项目里的协作抽屉是同一批动作的
              主入口，这里保留给「一台机器连多个库」与浏览器端的管理场景。 -->
         <scroll-view
@@ -768,6 +838,98 @@
                     {{ cloudBusy ? '连接中…' : '连接' }}
                   </button>
                 </view>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
+
+        <!-- 记忆同步（仅桌面端）：AI 记忆经独立 Git 仓库跨机器同步。
+             与案卷的版本记录互不相干——记忆仓库绝不进项目文档仓库主线（领域红线）。 -->
+        <scroll-view
+          v-else-if="activeNav === 'memory'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">记忆同步</text>
+              <text class="section-subtitle">
+                AI 在使用中积累的记忆可以通过 Git 仓库在多台机器之间同步。填一个可推送的仓库地址即可，
+                团队案件库或律所自建的 Git 服务都行；不配置则记忆只留在本机
+              </text>
+            </view>
+            <view class="section-body">
+              <view v-if="memoryLoading && !memoryRepos.length" class="empty">
+                <text class="empty-text">加载中...</text>
+              </view>
+              <view
+                v-for="repo in memoryRepos"
+                :key="repo.repoKey"
+                class="provider-card"
+              >
+                <view class="provider-header memory-repo-header">
+                  <view class="memory-repo-info">
+                    <text class="provider-name">{{ repo.title }}</text>
+                    <text class="memory-repo-sub">{{ repo.subtitle }}</text>
+                  </view>
+                  <text class="memory-status" :class="memoryStatusClass(repo)">
+                    {{ memoryStatusLabel(repo) }}
+                  </text>
+                </view>
+                <view class="form-row">
+                  <text class="form-label">同步地址</text>
+                  <input
+                    v-model="repo.form.url"
+                    class="form-input"
+                    :placeholder="'例如 https://team.example.com/git/' + repo.repoKey + '.git'"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">账号</text>
+                  <input
+                    v-model="repo.form.username"
+                    class="form-input"
+                    placeholder="Git 服务上的账号，没有可留空"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">访问令牌</text>
+                  <input
+                    v-model="repo.form.secret"
+                    class="form-input"
+                    password
+                    :placeholder="memorySecretPlaceholder(repo)"
+                  />
+                </view>
+                <view class="account-connect-actions">
+                  <button
+                    v-if="repo.status && repo.status.configured"
+                    class="comp-btn danger"
+                    :disabled="repo.busy"
+                    @tap="onDisconnectMemory(repo)"
+                  >
+                    断开
+                  </button>
+                  <button
+                    v-if="repo.status && repo.status.configured"
+                    class="comp-btn"
+                    :disabled="repo.busy"
+                    @tap="onSyncMemoryNow(repo)"
+                  >
+                    立即同步
+                  </button>
+                  <button class="btn-primary" :disabled="repo.busy" @tap="onSaveMemoryRemote(repo)">
+                    {{ repo.busy ? '处理中...' : '保存并同步' }}
+                  </button>
+                </view>
+                <text
+                  v-if="repo.feedback"
+                  class="memory-feedback"
+                  :class="{ 'memory-feedback-warn': repo.feedbackError }"
+                >{{ repo.feedback }}</text>
+              </view>
+              <view v-if="!memoryLoading && !memoryRepos.length" class="empty">
+                <text class="empty-text">暂时没有可配置的记忆仓库</text>
               </view>
             </view>
           </view>
@@ -926,9 +1088,12 @@ import {
   getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
+  getMemorySyncStatus, setMemorySyncRemote, removeMemorySyncRemote, syncMemoryNow,
+  getCurrentUser as fetchCurrentUser, getMyProjects,
   getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import UnlockHint from '@/components/UnlockHint.vue'
@@ -949,11 +1114,24 @@ export default {
         { key: 'ai', label: 'AI 功能设置' },
         { key: 'account', label: '账户与用量', desktopOnly: true },
         { key: 'components', label: '组件管理', desktopOnly: true },
+        { key: 'updates', label: '软件更新', desktopOnly: true },
         { key: 'cloud', label: '团队案件库', desktopOnly: true },
+        { key: 'memory', label: '记忆同步', desktopOnly: true },
         { key: 'telemetry', label: '数据统计' },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
       ],
       components: [],
+      // 软件更新状态（主进程 update-service 快照；事件推送增量刷新）
+      update: {
+        phase: 'idle',
+        appVersion: '',
+        effectiveVersion: '',
+        checkedAt: null,
+        available: null,
+        majorAvailable: null,
+        progress: null,
+        error: null,
+      },
       form: {
         external: {
           google: { apiKey: '', modelName: '', apiBaseUrl: '' },
@@ -1016,6 +1194,10 @@ export default {
       identityCandidates: [],
       identityCurrentId: null,
       identityBusy: false,
+      // 记忆同步（Phase A 桌面配置 UI）：两张卡——用户记忆仓 + 当前案卷记忆仓。
+      // 每项 { repoKey, title, subtitle, status, form:{url,username,secret}, busy, feedback, feedbackError }
+      memoryRepos: [],
+      memoryLoading: false,
     }
   },
   computed: {
@@ -1124,12 +1306,23 @@ export default {
           this.loadComponents()
         }
       })
+      // 软件更新：拉初始状态 + 订阅主进程推送（快照全量携带，直接覆盖本地态）
+      this.loadUpdateStatus()
+      if (window.checkbaDesktop.update) {
+        this._updateEventUnsub = window.checkbaDesktop.update.onEvent((evt) => {
+          if (evt && evt.state) this.update = { ...this.update, ...evt.state }
+        })
+      }
     }
   },
   onUnload() {
     if (this._modelProgressUnsub) {
       this._modelProgressUnsub()
       this._modelProgressUnsub = null
+    }
+    if (this._updateEventUnsub) {
+      this._updateEventUnsub()
+      this._updateEventUnsub = null
     }
   },
   methods: {
@@ -1183,6 +1376,45 @@ export default {
         this.loadTelemetry()
       } finally {
         this.telemetryBusy = false
+      }
+    },
+    async loadUpdateStatus() {
+      if (!this.isDesktop || !window.checkbaDesktop.update) return
+      try {
+        const s = await window.checkbaDesktop.update.status()
+        if (s) this.update = { ...this.update, ...s }
+      } catch (e) {
+        console.error('loadUpdateStatus failed', e)
+      }
+    },
+    async handleUpdateCheck() {
+      try {
+        const s = await window.checkbaDesktop.update.check()
+        if (s) this.update = { ...this.update, ...s }
+      } catch (e) {
+        uni.showToast({ title: '检查更新失败', icon: 'none' })
+      }
+    },
+    handleUpdateRestart() {
+      uni.showModal({
+        title: '重启应用',
+        content: `将重启 AI Workdeck 以完成更新到 ${this.update.available ? this.update.available.version : '新版本'}。未保存的编辑会先自动保存。是否继续？`,
+        success: (r) => {
+          if (r.confirm) window.checkbaDesktop.update.restart()
+        },
+      })
+    },
+    handleUpdateOpenDownload() {
+      const page = (this.update.majorAvailable && this.update.majorAvailable.page) || 'https://www.aiworkdeck.com'
+      window.checkbaDesktop.shell.openExternal(page)
+    },
+    formatUpdateTime(iso) {
+      try {
+        const d = new Date(iso)
+        const p = (n) => (n < 10 ? '0' + n : '' + n)
+        return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+      } catch (e) {
+        return ''
       }
     },
     async loadComponents() {
@@ -1290,6 +1522,9 @@ export default {
         this.loadIdentityCandidates()
         refreshEntitlements()
       }
+      if (nav.key === 'memory') {
+        this.loadMemoryRepos()
+      }
     },
     async loadIdentityCandidates() {
       try {
@@ -1321,6 +1556,170 @@ export default {
         uni.showToast({ title: (e && e.message) || '切换失败', icon: 'none' })
       } finally {
         this.identityBusy = false
+      }
+    },
+    // ---------- 记忆同步 ----------
+    // 两张卡都不是硬前提：用户信息拿不到就只显示案卷卡，最近没开过案卷就只显示用户卡。
+    async loadMemoryRepos() {
+      this.memoryLoading = true
+      const repos = []
+      try {
+        const me = await fetchCurrentUser()
+        const uid = me && me.data && me.data.id
+        if (uid) {
+          repos.push(this.newMemoryRepo(
+            `user-${uid}-memory`, '我的记忆',
+            '跟着人走的积累（工作习惯、常用表述等），在任何案卷里都会用到',
+          ))
+        }
+      } catch (e) {
+        // 用户信息读不到就不显示这张卡，不拦整个面板
+      }
+      const projectId = getLastProjectId()
+      if (projectId) {
+        let name = ''
+        try {
+          const res = await getMyProjects()
+          const list = (res && res.data) || []
+          const hit = list.find((p) => Number(p.id) === projectId)
+          if (hit && hit.name) name = hit.name
+        } catch (e) {
+          // 名字取不到就不带名字，不拦路
+        }
+        repos.push(this.newMemoryRepo(
+          `project-${projectId}-memory`,
+          name ? `案卷记忆：${name}` : '当前案卷记忆',
+          '跟着这份案卷走的积累（案情要点、文件脉络等）',
+        ))
+      }
+      this.memoryRepos = repos
+      // 注意用 this.memoryRepos 里的响应式代理逐个刷新，改裸对象不触发渲染
+      await Promise.all(this.memoryRepos.map((r) => this.refreshMemoryStatus(r)))
+      this.memoryLoading = false
+    },
+    newMemoryRepo(repoKey, title, subtitle) {
+      return {
+        repoKey,
+        title,
+        subtitle,
+        status: null,
+        form: { url: '', username: '', secret: '' },
+        busy: false,
+        feedback: '',
+        feedbackError: false,
+      }
+    },
+    async refreshMemoryStatus(repo) {
+      try {
+        const res = await getMemorySyncStatus(repo.repoKey)
+        const d = (res && res.data) || {}
+        repo.status = d
+        repo.form.url = d.url || ''
+        repo.form.username = d.username || ''
+        // 凭据只写不读：令牌永远不回填输入框，占位符提示「已保存，留空沿用」
+        repo.form.secret = ''
+      } catch (e) {
+        repo.status = { configured: false }
+        repo.feedback = (e && e.message) || '状态读取失败，稍后重试'
+        repo.feedbackError = true
+      }
+    },
+    memoryStatusLabel(repo) {
+      const s = repo.status
+      if (!s) return ''
+      if (!s.configured) return '未配置'
+      if (s.pendingUpload) return '已配置 · 有更新待推送'
+      return s.lastSyncAt ? `上次同步 ${this.formatUsageTime(s.lastSyncAt)}` : '已配置'
+    },
+    memoryStatusClass(repo) {
+      const s = repo.status
+      return {
+        'memory-status-on': !!(s && s.configured && !s.pendingUpload),
+        'memory-status-warn': !!(s && s.configured && s.pendingUpload),
+      }
+    },
+    memorySecretPlaceholder(repo) {
+      const masked = repo.status && repo.status.secretMasked
+      return masked
+        ? `已保存（${masked}），留空表示沿用`
+        : '设备令牌或 Git 访问令牌，没有可留空'
+    },
+    async onSaveMemoryRemote(repo) {
+      const url = (repo.form.url || '').trim()
+      if (!url) {
+        repo.feedback = '同步地址不能为空'
+        repo.feedbackError = true
+        return
+      }
+      repo.busy = true
+      repo.feedback = ''
+      try {
+        const res = await setMemorySyncRemote(repo.repoKey, {
+          url,
+          username: (repo.form.username || '').trim(),
+          secret: repo.form.secret || '',
+        })
+        const sync = res && res.data && res.data.sync
+        this.applyMemorySyncResult(repo, sync, '配置已保存')
+        await this.refreshMemoryStatus(repo)
+      } catch (e) {
+        repo.feedback = (e && e.message) || '保存失败，稍后重试'
+        repo.feedbackError = true
+      } finally {
+        repo.busy = false
+      }
+    },
+    async onSyncMemoryNow(repo) {
+      repo.busy = true
+      repo.feedback = ''
+      try {
+        const res = await syncMemoryNow(repo.repoKey)
+        this.applyMemorySyncResult(repo, res && res.data, '同步完成')
+        await this.refreshMemoryStatus(repo)
+      } catch (e) {
+        repo.feedback = (e && e.message) || '同步失败，稍后会自动重试'
+        repo.feedbackError = true
+      } finally {
+        repo.busy = false
+      }
+    },
+    // 同步结果统一转成一句话反馈：离线与推送未成不是致命错误，后台会自动重试
+    applyMemorySyncResult(repo, sync, okText) {
+      if (!sync) {
+        repo.feedback = okText
+        repo.feedbackError = false
+        return
+      }
+      if (sync.offline) {
+        repo.feedback = `${okText}，但暂时连不上同步地址，稍后会自动重试`
+        repo.feedbackError = true
+      } else if (sync.pendingUpload) {
+        repo.feedback = `${okText}，推送暂未成功，稍后会自动重试`
+        repo.feedbackError = true
+      } else {
+        repo.feedback = `${okText}，本机记忆已与远端一致`
+        repo.feedbackError = false
+      }
+    },
+    async onDisconnectMemory(repo) {
+      const ok = await new Promise((r) => uni.showModal({
+        title: '断开记忆同步',
+        content: '断开后本机记忆完整保留，只是不再与远端同步；远端仓库也不会被删除。随时可以重新配置。',
+        confirmText: '断开',
+        success: (res) => r(res.confirm),
+      }))
+      if (!ok) return
+      repo.busy = true
+      try {
+        await removeMemorySyncRemote(repo.repoKey)
+        await this.refreshMemoryStatus(repo)
+        repo.feedback = '已断开，本机记忆不受影响'
+        repo.feedbackError = false
+      } catch (e) {
+        repo.feedback = (e && e.message) || '断开失败，稍后重试'
+        repo.feedbackError = true
+      } finally {
+        repo.busy = false
       }
     },
     async loadPlatformAiAvailability() {
@@ -2467,6 +2866,52 @@ $border-color: #E9ECEF; // Gray-Light
   display: flex;
   justify-content: flex-end;
   margin-top: 8px;
+}
+
+/* 记忆同步 */
+.memory-repo-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory-repo-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.memory-repo-sub {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.memory-status {
+  font-size: 12px;
+  color: $text-secondary;
+  white-space: nowrap;
+}
+
+.memory-status-on {
+  color: #1a5336;
+}
+
+.memory-status-warn {
+  color: #b45309;
+}
+
+.memory-feedback {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 18px;
+  color: #1a5336;
+}
+
+.memory-feedback-warn {
+  color: #b45309;
 }
 
 .btn-primary:disabled {

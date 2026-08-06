@@ -74,10 +74,17 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `service/market/RegistryReply.java` — `httpGet(url, bearer)` 缝的返回值（状态码交调用方判，402 不在缝里抛）。
 - 前端 `frontend/src/utils/marketPricing.js` — 价格展示与状态判定的唯一出口。
 
+**server 模式加固（插件云后端，2026-08-06）**
+- `backend/src/main/java/com/checkba/service/AuthAbuseGuard.java` — 注册闸（`security.registration-mode: open|closed`，默认 open）+ 登录失败锁定（IP+用户名 5 次失败锁 10 分钟）+ 注册按 IP 限频（10/小时）。进程内内存计数，**多实例部署必须前置 nginx limit_req**；local-mode 全部旁路。
+- `backend/src/main/java/com/checkba/service/account/AwdkLoginService.java` — `POST /api/auth/awdk-login`（匿名端点，AuthController）：awdk_ Key 调官网 `/api/account/me` 实时校验 → `account_binding` 映射（键是官网稳定 `accountId`，**官网侧尚未实施该字段**，见本仓 `doc/desktop-contract.md`）→ 首登 `UserService.registerExternal` 建无密码用户（`awd_` 前缀）→ `DeviceTokenService.issue` 签发 awdt_。开关 `security.awdk-login-enabled` 默认 false。
+- `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
+- `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
+
 **配置**
 - `security.local-mode`（`application-desktop.yml:36` 为 true，默认 false = 团队服务器模式）。
 - `ai.account.base-url`（`application.yml:97-98`，默认 `https://www.aiworkdeck.com`；**强制 https**，回环 http 例外供本地联调）。
 - `security.license.dir`（默认 `${user.home}/.aiworkdeck`）——license/account/entitlements/platform-ai-key/storage-location 五个状态文件都落这里。
+- `security.registration-mode`（默认 open）与 `security.awdk-login-enabled`(默认 false)——两者都只影响 server 模式；官方托管的插件云后端应配 closed + true。
 
 ## 核心契约
 
@@ -239,6 +246,14 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     价格没查到时本机有 Key 就照带 Bearer（分不清「真免费」与「付费但价格没查到」，不带的话后者官网必 402，
     真已购用户会被反过来指控没付费）。`normalizePrice` 有 ¥100,000 上限——官网写超 int 范围的值会被截断成
     1215752191，原样展示就是 ¥12,157,521.91 的假价。
+12. **awdk 桥的映射键只认官网稳定 `accountId`**，缺失时 MALFORMED 拒绝，**绝不回落 username**
+    （可改名，改名后会凭空生出第二个 server 用户），也**绝不把官网用户名绑到本服务器已有的
+    同名账号**（等于账户接管）——首登一律新建 `awd_` 前缀用户。桥接建的是无密码账户：
+    口令列存 `UserService.EXTERNAL_ACCOUNT_MARK` 哨兵 + 随机料，`login()` 见前缀直接拒绝；
+    动密码兼容逻辑时别把这个分支删了（删了哨兵检查后还有随机料兜底，但两道都在才算安全）。
+13. **锁定拒绝不计入失败计数**。AuthController 里锁定检查（`checkLoginAttempt`）与凭据校验
+    分属两个 try：锁定期内的轮询若也 `recordLoginFailure` 会把锁无限续期。同理 awdk-login
+    只有官网明确 401/403（UNAUTHORIZED）才计失败，网络不可达不消耗尝试次数。
 
 ## 验证
 
@@ -250,7 +265,10 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   `service/quota/StageQuotaServiceTest`、`service/storage/StorageLocationServiceTest`、
   `service/ClipboardQuotaTest`、`service/ai/PlatformUsageAccountantTest`、`service/ai/ChatModelFactoryTest`、
   `service/ai/{PluginMarketServiceTest, skill/SkillMarketServiceTest}`、
-  `config/LocalModeAccessFilterTest`、`config/LocalModeLoopbackGuardTest`。
+  `config/LocalModeAccessFilterTest`、`config/LocalModeLoopbackGuardTest`；
+  server 模式加固：`service/AuthAbuseGuardTest`、`service/account/AwdkLoginServiceTest`、
+  `service/account/MachineAccountGuardTest`、`controller/AuthControllerHardeningTest`、
+  `controller/AccountControllerMachineScopeTest`、`service/UserServiceTest`（无密码账户分支）。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
   （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。

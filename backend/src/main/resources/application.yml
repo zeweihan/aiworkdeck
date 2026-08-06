@@ -121,6 +121,16 @@ ai:
       # 含完整流式响应体）。120s 会把仍在稳定吐 token 的长轮次拦腰掐断（跑一半断的头号根因），
       # 调大到 600s；"流真停了"的场景由 AgentStreamHandler 的无活动看门狗（180s）兜底。
       timeout: 600s
+  # LLM 故障转移链（对应 AiFailoverProperties）。
+  # 触发条件：重试预算耗尽仍是限流/瞬时错误，或模型下线（404「No endpoints found」，PR#144 的坑）。
+  # 只换模型不换计费通道——通道由 ai.activeProvider 决定，平台通道 AWD_CLOUD 永远拿平台密钥。
+  # 候选必须在 AllowedModels 白名单内，否则会被工厂静默回落默认模型，等于没切。
+  failover:
+    enabled: true
+    models:
+      # 区域无关的常青模型（国内外均实测可用），与默认模型撞车时会自动跳过
+      - deepseek/deepseek-v4-flash
+      - qwen/qwen3-235b-a22b-2507
   # AI 上下文与压缩配置（对应 AiContextProperties，以下均为默认值，可按需覆盖）
   context:
     # 上下文总 token 预算
@@ -143,6 +153,14 @@ ai:
       max-history-messages: 30
       tool-output-max-chars: 2000
       tool-output-target-chars: 1500
+    # 运行中自动 compaction：runLoop 每轮 generate 前估算 token，超阈值把中段折叠成一条摘要
+    compaction:
+      enabled: true
+      trigger-ratio: 0.8
+      keep-recent: 8
+      min-middle-messages: 4
+      digest-max-chars: 4000
+      per-message-chars: 240
     files:
       max-file-size-bytes: 10485760
       max-files-per-context: 10
@@ -239,6 +257,13 @@ storage:
     use-https: true
     # CDN域名（可选，用于加速访问）
     cdn-domain:
+
+security:
+  # conversationId 服务端签发强制开关（公网多租户/官方云置 true）：
+  # 开启后（且非 local-mode），尚无消息的会话必须先经 POST /api/agent/conversations 签发，
+  # 客户端自造的 conv-<毫秒> ID 会被拒绝；已有消息的会话仍按 DB 归属判定。
+  # 默认 false：桌面单机与既有前端自造 ID 流程行为完全不变。
+  conversation-issuance-required: false
 
 # LangChain4j Ollama Configuration
 langchain4j:

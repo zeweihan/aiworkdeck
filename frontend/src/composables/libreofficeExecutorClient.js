@@ -70,6 +70,10 @@ export const EDITOR_ACTIONS = [
   // 是后端一直在派发但从未接通的原语（本次补齐 worker 实现）。
   'set_numbering', 'format_table', 'insert_table', 'get_formatting', 'apply_house_style',
   'insert_under_heading',
+  // [Word 表格单元格级] doc_table_* 原语：读表 / 改一格 / 增删行列。insert_table 与
+  // format_table 是"整张表"粒度，这一组补的是"改既有表里的一格"（issue #261）。
+  'table_read', 'table_set_cell', 'table_add_row', 'table_delete_row',
+  'table_add_col', 'table_delete_col',
   // [流式标准格式] doc_start_stream 的落字端：markdown 剥离 + 标准格式写入。
   // stream_insert 攒行消费，stream_flush 收尾/复位（{discard:true} 换文档硬清）。
   'stream_insert', 'stream_flush',

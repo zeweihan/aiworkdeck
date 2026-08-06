@@ -849,6 +849,93 @@ try {
     check('缺外观参数被拒绝', cfBad.success === false && /外观/.test(cfBad.message || ''), JSON.stringify(cfBad))
   }
 
+  // ---------- 组 20：Word 表格单元格级原语（doc_table_*）----------
+  console.log('\n[20] Word 表格原语：读表 / 改一格 / 增删行列')
+  {
+    // 文档类型守卫：组 19 留下的是 Calc 文档，doc_table_* 是 Writer 专属
+    const guard = await exec('table_read', {})
+    check('Calc 文档上 doc_table_* 被明确拒绝', guard.success === false && /Word 文档/.test(guard.message || ''), JSON.stringify(guard))
+
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    const it = await exec('insert_table', { rows: [['项目', '金额'], ['咨询费', '10000'], ['差旅费', '2000']], headerRow: true })
+    check('准备一张 3×2 表', it.success === true, JSON.stringify(it))
+
+    // 读表
+    const rd0 = await exec('table_read', { tableIndex: 0 })
+    check('table_read 读回 3 行 2 列', rd0.success === true && rd0.rows === 3 && rd0.cols === 2, JSON.stringify({ r: rd0.rows, c: rd0.cols }))
+    check('table_read 二维内容正确',
+      JSON.stringify(rd0.cells) === JSON.stringify([['项目', '金额'], ['咨询费', '10000'], ['差旅费', '2000']]),
+      JSON.stringify(rd0.cells))
+    const rdBad = await exec('table_read', { tableIndex: 5 })
+    check('越界表格序号被拒绝且报出表格张数', rdBad.success === false && /共 1 张表/.test(rdBad.message || ''), JSON.stringify(rdBad))
+    check('失败返回带 error 字段（后端桥据此判失败）', typeof rdBad.error === 'string' && rdBad.error.length > 0, JSON.stringify(Object.keys(rdBad)))
+
+    // 改一格
+    const sc = await exec('table_set_cell', { tableIndex: 0, cell: 'B2', text: '12000' })
+    check('table_set_cell 改 B2（返回旧值）', sc.success === true && sc.oldText === '10000', JSON.stringify(sc))
+    let rd = await exec('table_read', { tableIndex: 0 })
+    check('读回新值 12000', rd.cells[1][1] === '12000', JSON.stringify(rd.cells))
+    const scBadRef = await exec('table_set_cell', { tableIndex: 0, cell: '2B', text: 'x' })
+    check('非法单元格坐标被拒绝', scBadRef.success === false && /B2/.test(scBadRef.message || ''), JSON.stringify(scBadRef))
+    const scOOR = await exec('table_set_cell', { tableIndex: 0, cell: 'Z9', text: 'x' })
+    check('表外单元格被拒绝且报出行列数', scOOR.success === false && /3 行 × 2 列/.test(scOOR.message || ''), JSON.stringify(scOOR))
+    // 改完光标停在该格：后续原语可省略 tableIndex
+    const scCursor = await exec('table_set_cell', { cell: 'A1', text: '费用项目' })
+    check('光标已在表内，可省略 tableIndex', scCursor.success === true && scCursor.oldText === '项目', JSON.stringify(scCursor))
+
+    // 插入行
+    const ar = await exec('table_add_row', { tableIndex: 0, position: 2 })
+    check('第 2 行前插一行', ar.success === true && ar.rows === 4 && ar.insertedAt === 2, JSON.stringify(ar))
+    rd = await exec('table_read', { tableIndex: 0 })
+    check('插行后内容后移（A2 空、A3=咨询费）', rd.cells[1][0] === '' && rd.cells[2][0] === '咨询费', JSON.stringify(rd.cells))
+    const arEnd = await exec('table_add_row', { tableIndex: 0 })
+    check('不传 position 追加到表尾', arEnd.success === true && arEnd.rows === 5 && arEnd.insertedAt === 5, JSON.stringify(arEnd))
+    const arBad = await exec('table_add_row', { tableIndex: 0, position: 99 })
+    check('越界行号被拒绝且报出可用范围', arBad.success === false && /1\.\.6/.test(arBad.message || ''), JSON.stringify(arBad))
+
+    // 插入列
+    const ac = await exec('table_add_col', { tableIndex: 0, position: 'B' })
+    check('B 列前插一列', ac.success === true && ac.cols === 3, JSON.stringify(ac))
+    rd = await exec('table_read', { tableIndex: 0 })
+    check('插列后原 B 列移到 C', rd.cells[0][1] === '' && rd.cells[0][2] === '金额', JSON.stringify(rd.cells[0]))
+    const acBad = await exec('table_add_col', { tableIndex: 0, position: '甲' })
+    check('非法列定位被拒绝', acBad.success === false, JSON.stringify(acBad))
+
+    // 删除行/列（修订关闭 → 真删）
+    const dr = await exec('table_delete_row', { tableIndex: 0, position: 2 })
+    check('删掉刚插的空行', dr.success === true && dr.removedRows === 1 && dr.rows === 4, JSON.stringify(dr))
+    const dc = await exec('table_delete_col', { tableIndex: 0, position: 'B' })
+    check('删掉刚插的空列', dc.success === true && dc.removedCols === 1 && dc.cols === 2, JSON.stringify(dc))
+    rd = await exec('table_read', { tableIndex: 0 })
+    check('删完回到原内容（B1=金额、B2=12000）', rd.cells[0][1] === '金额' && rd.cells[1][1] === '12000', JSON.stringify(rd.cells))
+    const drNoPos = await exec('table_delete_row', { tableIndex: 0 })
+    check('删除行缺 position 被拒绝', drNoPos.success === false && /position/.test(drNoPos.message || ''), JSON.stringify(drNoPos))
+    const drAll = await exec('table_delete_row', { tableIndex: 0, position: 1, count: 9 })
+    check('拒绝删光全部行', drAll.success === false, JSON.stringify(drAll))
+    const dcAll = await exec('table_delete_col', { tableIndex: 0, position: 'A', count: 9 })
+    check('拒绝删光全部列', dcAll.success === false, JSON.stringify(dcAll))
+
+    // 修订模式：改一格只对差异字符落修订（不是整格删了重打）
+    await exec('debug_set_record_changes', { on: true })
+    const rlBefore = (await exec('debug_revisions')).count
+    const scRc = await exec('table_set_cell', { tableIndex: 0, cell: 'B2', text: '13000' })
+    check('修订模式下改格走最小修订', scRc.success === true && scRc.via === 'minimalRedline', JSON.stringify(scRc))
+    const rlAfter = await exec('debug_revisions')
+    check('产生了修订记录', rlAfter.count > rlBefore, JSON.stringify({ before: rlBefore, after: rlAfter.count }))
+    const rlTexts = (rlAfter.redlines || []).map((x) => x.text || '').join('/')
+    check('修订只覆盖差异字符（不含整格旧值 12000）', !/12000/.test(rlTexts), rlTexts)
+    rd = await exec('table_read', { tableIndex: 0 })
+    check('正文读回新值 13000', rd.cells[1][1] === '13000', JSON.stringify(rd.cells))
+
+    // 修订模式下删行：真删或落成删除修订都算生效，返回值要说清是哪种
+    const drRc = await exec('table_delete_row', { tableIndex: 0, position: 3 })
+    check('修订模式下删行生效（真删或删除修订）', drRc.success === true, JSON.stringify(drRc))
+    console.log('    (删行修订口径：removedRows=' + drRc.removedRows + ' redlineDelta=' + drRc.redlineDelta
+      + ' trackedAsRevision=' + drRc.trackedAsRevision + ')')
+    await exec('debug_set_record_changes', { on: false })
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

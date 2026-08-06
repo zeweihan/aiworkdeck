@@ -59,10 +59,45 @@ async function allocateBackendPort(ctx) {
   return findFreePort()
 }
 
+const BACKEND_MAIN_CLASS = 'com.checkba.CheckbaApplication'
+
+/**
+ * 后端布局解析（增量更新设计 §4.1）：
+ * - 打包态新布局：resources/backend/{app.jar, lib/}——业务代码与依赖分离，
+ *   补丁只换 app.jar（overlay 覆盖优先，见 overlay.js）；lib/ 只随大版本走。
+ * - 打包态旧布局（backend.jar fat jar）：兼容保留，-jar 直启。
+ * - dev 态：target 下的 fat jar（不走 overlay）。
+ */
+function backendLayout(ctx) {
+  if (!ctx.packaged) {
+    return { kind: 'fat', jar: path.join(ctx.projectRoot, 'backend', 'target', 'backend-0.0.1-SNAPSHOT.jar') }
+  }
+  const base = path.join(ctx.resourcesPath, 'backend')
+  const builtinApp = path.join(base, 'app.jar')
+  if (fs.existsSync(builtinApp)) {
+    // overlay seam：补丁的 app.jar 覆盖内置（激活/回滚由 update-service 管理）
+    let appJar = builtinApp
+    try {
+      const overlay = require('./overlay')
+      const dir = overlay.componentDir(ctx, 'backend-app')
+      if (dir && fs.existsSync(path.join(dir, 'app.jar'))) appJar = path.join(dir, 'app.jar')
+    } catch (e) { /* overlay 损坏时静默回内置 */ }
+    return { kind: 'split', appJar, libDir: path.join(base, 'lib') }
+  }
+  return { kind: 'fat', jar: path.join(base, 'backend.jar') }
+}
+
 function jarPath(ctx) {
-  return ctx.packaged
-    ? path.join(ctx.resourcesPath, 'backend', 'backend.jar')
-    : path.join(ctx.projectRoot, 'backend', 'target', 'backend-0.0.1-SNAPSHOT.jar')
+  const layout = backendLayout(ctx)
+  return layout.kind === 'split' ? layout.appJar : layout.jar
+}
+
+function javaLaunchArgs(ctx) {
+  const layout = backendLayout(ctx)
+  if (layout.kind === 'fat') return ['-jar', layout.jar]
+  // -cp 通配符由 JVM 展开（spawn 无 shell，不会被 glob）；分隔符按平台
+  const sep = process.platform === 'win32' ? ';' : ':'
+  return ['-cp', layout.appJar + sep + path.join(layout.libDir, '*'), BACKEND_MAIN_CLASS]
 }
 
 function bundledJava(ctx) {
@@ -109,7 +144,7 @@ function spec(ctx, javaCmd) {
   // 打包模式：工作目录必须可写（resources 目录只读）
   const cwd = ctx.packaged ? ctx.dataDir : path.join(ctx.projectRoot, 'backend')
   if (ctx.packaged) fs.mkdirSync(cwd, { recursive: true })
-  return { cmd: javaCmd, args: ['-jar', jarPath(ctx)], env: spawnEnv(ctx), cwd }
+  return { cmd: javaCmd, args: javaLaunchArgs(ctx), env: spawnEnv(ctx), cwd }
 }
 
 // 系统 JDK 回退候选（仅打包态、仅当捆绑 JRE 启动失败时才会被用到）
@@ -156,4 +191,4 @@ function createBackendDescriptor() {
   }
 }
 
-module.exports = { createBackendDescriptor }
+module.exports = { createBackendDescriptor, backendLayout, javaLaunchArgs }

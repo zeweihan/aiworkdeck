@@ -27,7 +27,8 @@ public class RecordingToolRegistry extends ToolRegistry {
     private Map<String, String> stubs = Map.of();
 
     public RecordingToolRegistry(List<AgentToolComponent> components, PluginService pluginService) {
-        super(components, pluginService);
+        // 评测里不声明 clientCapability：默认 LOWA 能力（与存量主前端一致），office_* 不下发
+        super(components, pluginService, new com.checkba.service.ai.ClientCapabilityService());
     }
 
     /** 设置工具桩输出（key = 别名解析后的工具名） */

@@ -19,6 +19,16 @@ public class UserService {
     /** BCrypt 无状态、线程安全，可静态复用。 */
     private static final BCryptPasswordEncoder PW_ENCODER = new BCryptPasswordEncoder();
 
+    /**
+     * 外部账户桥接（awdk-login）建的无密码账号的口令哨兵前缀。
+     * {@link #login} 见到该前缀直接按凭据错误拒绝——这类账号不存在「正确密码」这回事。
+     * 哨兵后面还拼了 32 字节随机料作兜底：即使前缀检查被误删，历史明文兼容分支的
+     * equals 比对也没有任何用户输入能命中它。
+     */
+    public static final String EXTERNAL_ACCOUNT_MARK = "{external-account}";
+
+    private static final java.security.SecureRandom SECURE_RANDOM = new java.security.SecureRandom();
+
     /** 判断存储的口令是否已是 BCrypt 哈希（$2a/$2b/$2y 前缀）。 */
     private static boolean isBcryptHash(String stored) {
         return stored != null && stored.startsWith("$2");
@@ -59,6 +69,29 @@ public class UserService {
     }
 
     /**
+     * 外部账户桥接建号（awdk-login 首登）：无密码账户，只能经桥接换取设备令牌，
+     * 不可用密码登录（见 {@link #EXTERNAL_ACCOUNT_MARK}）。
+     */
+    public User registerExternal(String username, String displayName) {
+        if (!StringUtils.hasText(username)) {
+            throw new IllegalArgumentException("用户名不能为空");
+        }
+        if (userRepository.findByUsername(username).isPresent()) {
+            throw new IllegalArgumentException("用户名已存在");
+        }
+        byte[] raw = new byte[32];
+        SECURE_RANDOM.nextBytes(raw);
+        User user = new User();
+        user.setUsername(username);
+        user.setPassword(EXTERNAL_ACCOUNT_MARK
+                + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(raw));
+        user.setDisplayName(StringUtils.hasText(displayName) ? displayName : username);
+        user.setCreatedAt(LocalDateTime.now());
+        user.setUpdatedAt(LocalDateTime.now());
+        return userRepository.save(user);
+    }
+
+    /**
      * 用户登录
      */
     public User login(String username, String password) {
@@ -76,6 +109,10 @@ public class UserService {
 
         User user = userOpt.get();
         String stored = user.getPassword();
+        // 外部账户桥接建的无密码账号：一律按凭据错误拒绝（文案与普通失败一致，不泄露账号类型）
+        if (stored != null && stored.startsWith(EXTERNAL_ACCOUNT_MARK)) {
+            throw new IllegalArgumentException("用户名或密码错误");
+        }
         boolean ok;
         if (isBcryptHash(stored)) {
             ok = PW_ENCODER.matches(password, stored);

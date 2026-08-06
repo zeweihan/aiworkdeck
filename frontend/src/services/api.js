@@ -2166,3 +2166,24 @@ export function addCloudMember(projectId, username, role) {
     data: { username, role } })
 }
 
+// ==================== 记忆同步（Phase A 桌面配置 UI）====================
+// repoKey：user-{userId}-memory / project-{projectId}-memory。
+// 凭据只写不读：status 只回打码后的 secretMasked；保存时 secret 留空表示沿用已存令牌。
+
+export function getMemorySyncStatus(repoKey) {
+  return request({ url: `/api/memory-sync/${repoKey}/status`, method: 'GET' })
+}
+
+export function setMemorySyncRemote(repoKey, { url, username, secret }) {
+  return request({ url: `/api/memory-sync/${repoKey}/remote`, method: 'POST',
+    data: { url, username, secret } })
+}
+
+export function removeMemorySyncRemote(repoKey) {
+  return request({ url: `/api/memory-sync/${repoKey}/remote`, method: 'DELETE' })
+}
+
+export function syncMemoryNow(repoKey) {
+  return request({ url: `/api/memory-sync/${repoKey}/sync`, method: 'POST' })
+}
+

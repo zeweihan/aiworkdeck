@@ -56,7 +56,7 @@ class XmlToolCallParserTest {
 
     @BeforeEach
     void setUp() {
-        ToolRegistry registry = new ToolRegistry(List.of(new ProtocolFakeTools()), new PluginService());
+        ToolRegistry registry = new ToolRegistry(List.of(new ProtocolFakeTools()), new PluginService(), new ClientCapabilityService());
         registry.init();
         parser = new XmlToolCallParser(registry);
     }

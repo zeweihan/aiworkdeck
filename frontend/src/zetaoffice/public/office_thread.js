@@ -706,6 +706,82 @@ function cursorToParagraphAfterTable(table) {
   if (!placed) { try { vc.gotoEnd(false); } catch (e) {} }
 }
 
+// ---- Writer 表格单元格级原语（doc_table_*）helpers ---------------------------
+// insert_table/format_table 是"整张表"粒度；这一组是"改一格/加一行"粒度，
+// 模型据此把既有合同附表改成想要的样子。定位与校验集中在 resolveWriterTable，
+// 失败一律带上"表格张数/行列数"这类可行动信息（模型据此换参数重试）。
+const NOT_TEXT_DOC_MSG = '当前打开的不是 Word 文档：doc_table_* 原语仅对 doc/docx 生效。电子表格的表格请用 sheet_* 原语。';
+function isWriterDoc() {
+  try { return !!(xModel && xModel.supportsService && xModel.supportsService('com.sun.star.text.TextDocument')); }
+  catch (e) { return false; }
+}
+// 定位一张 Writer 表格：tableName / tableIndex（0 开始）显式指定，缺省用光标所在表。
+// 返回 {table, name, index, count} 或 {error}。
+function resolveWriterTable(p) {
+  if (!isWriterDoc()) return { error: NOT_TEXT_DOC_MSG };
+  let tables;
+  try { tables = xModel.getTextTables(); } catch (e) { return { error: '读取文档表格失败: ' + errStr(e) }; }
+  const count = tables.getCount();
+  const wantName = p && p.tableName != null && String(p.tableName).trim() !== '' ? String(p.tableName).trim() : null;
+  let table = null;
+  if (wantName) {
+    if (!tables.hasByName(wantName)) return { error: '表格不存在: ' + wantName + '（文档共 ' + count + ' 张表，可用 doc_table_read 传 tableIndex 逐张确认）' };
+    table = tables.getByName(wantName);
+  } else if (p && p.tableIndex != null && String(p.tableIndex) !== '') {
+    const i = Number(p.tableIndex);
+    if (!(i >= 0) || i >= count) return { error: '表格序号越界: ' + p.tableIndex + '（文档共 ' + count + ' 张表，序号 0 开始）' };
+    table = tables.getByIndex(i);
+  } else {
+    table = currentTextTable(null); // 光标所在表
+    if (!table) {
+      return { error: count
+        ? '光标不在表格内：请传 tableIndex 指定第几张表（0 开始，文档共 ' + count + ' 张表）'
+        : '文档中没有表格' };
+    }
+  }
+  let name = '';
+  try { name = table.getName(); } catch (e) {}
+  let index = -1;
+  for (let i = 0; i < count; i++) {
+    try { if (tables.getByIndex(i).getName() === name) { index = i; break; } } catch (e) {}
+  }
+  return { table: table, name: name, index: index, count: count };
+}
+// 表格行列数。合并/拆分过的表 getColumns 只报"网格列"，不代表每行都有那么多格。
+function tableDims(table) {
+  try { return { rows: table.getRows().getCount(), cols: table.getColumns().getCount() }; }
+  catch (e) { return { error: '读取表格行列数失败: ' + errStr(e) }; }
+}
+// "B2" -> {col:1, row:1, name:'B2'}（列字母不分大小写，行号 1 开始）。非法返回 null。
+function parseCellRef(ref) {
+  const m = /^([A-Za-z]+)(\d+)$/.exec(String(ref == null ? '' : ref).trim());
+  if (!m) return null;
+  const letters = m[1].toUpperCase();
+  let col = 0;
+  for (let i = 0; i < letters.length; i++) col = col * 26 + (letters.charCodeAt(i) - 64);
+  const row = Number(m[2]);
+  if (col < 1 || row < 1) return null;
+  return { col: col - 1, row: row - 1, name: letters + row };
+}
+// 列定位：字母（A/B/AA，不分大小写）或 1 开始的列号。返回 0 开始的下标，非法返回 null。
+function parseColumnRef(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return null;
+  if (/^\d+$/.test(s)) { const n = Number(s); return n >= 1 ? n - 1 : null; }
+  if (!/^[A-Za-z]+$/.test(s)) return null;
+  const letters = s.toUpperCase();
+  let col = 0;
+  for (let i = 0; i < letters.length; i++) col = col * 26 + (letters.charCodeAt(i) - 64);
+  return col - 1;
+}
+// 统一的失败返回：error 供后端桥（前端 handleEditorCommand 只回传 result.error，
+// 后端据此拼 {"error": ...}，ToolResult.success() 才判得出失败）；message 保持
+// worker 既有约定（e2e 与日志都读它）。两者同文。
+function tableFail(msg) { return { success: false, error: msg, message: msg }; }
+function recordChangesOn() {
+  try { return !!xModel.getPropertyValue('RecordChanges'); } catch (e) { return false; }
+}
+
 // ---- Calc（电子表格 sheet_*）原语 helpers ------------------------------------
 // 引擎含 Calc 模块（probe_modules 实锤），xlsx 经 load_document 正常打开，但
 // doc_* 一族全走 xModel.getText()（Writer 专属），在 Calc 文档上必然失败——
@@ -1881,6 +1957,198 @@ const EXEC = {
     catch (e) { return { success: false, message: 'insert_table failed: ' + errStr(e) }; }
     let tname = ''; try { tname = table.getName(); } catch (e) {}
     return Object.assign({ success: true, table: tname, rows: rows.length, cols: rows[0].length }, verifySnapshot());
+  },
+  // [表格·感知] 读一张表为二维数组——"改一格"的前置：模型得先看见表长什么样。
+  // 定位：tableName / tableIndex（0 开始），缺省用光标所在表。
+  table_read(p) {
+    const r = resolveWriterTable(p);
+    if (r.error) return tableFail(r.error);
+    const dims = tableDims(r.table);
+    if (dims.error) return tableFail(dims.error);
+    const maxRows = Math.min(dims.rows, Math.max(1, Number(p.maxRows) || 200));
+    const maxCols = Math.min(dims.cols, Math.max(1, Number(p.maxCols) || 30));
+    const cells = [];
+    let missing = 0;
+    for (let rw = 0; rw < maxRows; rw++) {
+      const line = [];
+      for (let c = 0; c < maxCols; c++) {
+        let v = null;
+        try { const cell = r.table.getCellByName(cellName(c, rw)); if (cell) v = String(cell.getString()); } catch (e) {}
+        if (v === null) missing++;
+        line.push(v === null ? '' : v);
+      }
+      cells.push(line);
+    }
+    const out = {
+      success: true, table: r.name, tableIndex: r.index, tables: r.count,
+      rows: dims.rows, cols: dims.cols, cells: cells,
+      truncated: maxRows < dims.rows || maxCols < dims.cols,
+    };
+    // 合并/拆分过的单元格不叫 A1 这种名字，按网格取会取空——明说，否则模型会
+    // 以为那些格真是空的，然后 table_set_cell 打在不存在的名字上。
+    if (missing) out.note = '有 ' + missing + ' 个网格位置按 A1 式单元格名取不到（表格存在合并或拆分单元格），这些位置以空串返回；对它们做单元格级修改会失败。';
+    return out;
+  },
+  // [表格·改] 改一格文本。修订模式下走字符级最小修订（同 replace_selection 的口径），
+  // 只有差异字符落修订，而不是整格删了重打。
+  table_set_cell(p) {
+    const r = resolveWriterTable(p);
+    if (r.error) return tableFail(r.error);
+    const ref = parseCellRef(p.cell);
+    if (!ref) return tableFail('单元格定位非法: ' + p.cell + '（应形如 B2：列字母 + 行号，行号 1 开始）');
+    const dims = tableDims(r.table);
+    let cell = null;
+    try { cell = r.table.getCellByName(ref.name); } catch (e) {}
+    if (!cell) {
+      return tableFail('单元格不存在: ' + ref.name + '（表格「' + r.name + '」共 '
+        + (dims.rows || '?') + ' 行 × ' + (dims.cols || '?') + ' 列；合并或拆分过的格子不叫这种名字，先用 doc_table_read 看清）');
+    }
+    const text = String(p.text == null ? '' : p.text);
+    let oldText = '';
+    try { oldText = String(cell.getString()); } catch (e) {}
+    const rcOn = recordChangesOn();
+    let via = 'setString';
+    try {
+      if (rcOn && oldText.length) {
+        const cur = cell.createTextCursor();
+        cur.gotoStart(false);
+        cur.gotoEnd(true);
+        if (applyMinimalRedline(cur, text)) via = 'minimalRedline';
+        else cell.setString(text);
+      } else {
+        cell.setString(text);
+      }
+    } catch (e) { return tableFail('写入单元格失败: ' + errStr(e)); }
+    // 拟人：把视图光标停在刚改的格里，用户看得见改在哪，后续原语也能省掉 tableIndex。
+    try { ctrl.getViewCursor().gotoRange(cell.getStart(), false); } catch (e) {}
+    return {
+      success: true, table: r.name, tableIndex: r.index, cell: ref.name,
+      oldText: oldText, text: text, via: via, recordChanges: rcOn,
+    };
+  },
+  // [表格·改] 插入行。position = 1 开始的行号，新行插在该行之前；缺省追加到表尾。
+  table_add_row(p) {
+    const r = resolveWriterTable(p);
+    if (r.error) return tableFail(r.error);
+    const dims = tableDims(r.table);
+    if (dims.error) return tableFail(dims.error);
+    const count = Math.max(1, Math.min(Number(p.count) || 1, 100));
+    let at = dims.rows;
+    if (p.position != null && String(p.position) !== '') {
+      const n = Number(p.position);
+      if (!(n >= 1) || n > dims.rows + 1 || Math.floor(n) !== n) {
+        return tableFail('行号越界: ' + p.position + '（表格共 ' + dims.rows + ' 行；position 取 1..' + (dims.rows + 1) + '，新行插在该行之前，缺省追加到表尾）');
+      }
+      at = n - 1;
+    }
+    try { r.table.getRows().insertByIndex(at, count); }
+    catch (e) { return tableFail('插入行失败: ' + errStr(e)); }
+    const after = tableDims(r.table);
+    if (after.error || after.rows !== dims.rows + count) {
+      return tableFail('插入行未生效（行数 ' + dims.rows + ' → ' + (after.rows == null ? '?' : after.rows) + '）');
+    }
+    return {
+      success: true, table: r.name, tableIndex: r.index,
+      insertedAt: at + 1, count: count, rows: after.rows, cols: after.cols,
+    };
+  },
+  // [表格·改] 删除行。position = 1 开始的行号，count 连删几行。
+  // 修订口径（真机实测 LO 24.2）：XTableRows.removeByIndex 走 API 路线**直接删除，
+  // 不留删除修订**（RecordChanges 开着也一样，redlineDelta=0）——安全网是 doc_undo
+  // 与文档检查点，不是修订面板。生效判定仍按"行数变化 OR 修订条数变化"双口径，
+  // 以防将来引擎改成落修订；落成修订时 trackedAsRevision=true。
+  table_delete_row(p) {
+    const r = resolveWriterTable(p);
+    if (r.error) return tableFail(r.error);
+    const dims = tableDims(r.table);
+    if (dims.error) return tableFail(dims.error);
+    if (p.position == null || String(p.position) === '') return tableFail('缺少 position（要删的行号，1 开始）');
+    const n = Number(p.position);
+    if (!(n >= 1) || n > dims.rows || Math.floor(n) !== n) {
+      return tableFail('行号越界: ' + p.position + '（表格共 ' + dims.rows + ' 行，行号 1 开始）');
+    }
+    const count = Math.max(1, Number(p.count) || 1);
+    if (n - 1 + count > dims.rows) {
+      return tableFail('要删的行数超出表格范围（从第 ' + n + ' 行起删 ' + count + ' 行，表格只有 ' + dims.rows + ' 行）');
+    }
+    if (count >= dims.rows) return tableFail('不能删掉表格的全部行——表格至少要留一行；要整张表删掉请改用其它方式');
+    const rlBefore = countRedlines();
+    try { r.table.getRows().removeByIndex(n - 1, count); }
+    catch (e) { return tableFail('删除行失败: ' + errStr(e)); }
+    const after = tableDims(r.table);
+    const removed = after.error ? 0 : dims.rows - after.rows;
+    const rlDelta = countRedlines() - rlBefore;
+    if (removed !== count && rlDelta <= 0) {
+      return tableFail('删除行未生效（行数仍为 ' + (after.rows == null ? '?' : after.rows) + '，也没有产生删除修订）');
+    }
+    return {
+      success: true, table: r.name, tableIndex: r.index,
+      deletedAt: n, count: count, removedRows: removed,
+      rows: after.rows, cols: after.cols,
+      recordChanges: recordChangesOn(), redlineDelta: rlDelta,
+      trackedAsRevision: removed !== count && rlDelta > 0,
+    };
+  },
+  // [表格·改] 插入列。position = 列字母（A/B/AA）或 1 开始的列号，新列插在该列之前；
+  // 缺省追加到最右。
+  table_add_col(p) {
+    const r = resolveWriterTable(p);
+    if (r.error) return tableFail(r.error);
+    const dims = tableDims(r.table);
+    if (dims.error) return tableFail(dims.error);
+    const count = Math.max(1, Math.min(Number(p.count) || 1, 20));
+    let at = dims.cols;
+    if (p.position != null && String(p.position) !== '') {
+      const c = parseColumnRef(p.position);
+      if (c == null || c > dims.cols) {
+        return tableFail('列定位非法或越界: ' + p.position + '（表格共 ' + dims.cols + ' 列；position 用列字母如 B 或 1 开始的列号，新列插在该列之前，缺省追加到最右）');
+      }
+      at = c;
+    }
+    try { r.table.getColumns().insertByIndex(at, count); }
+    catch (e) { return tableFail('插入列失败: ' + errStr(e)); }
+    const after = tableDims(r.table);
+    if (after.error || after.cols !== dims.cols + count) {
+      return tableFail('插入列未生效（列数 ' + dims.cols + ' → ' + (after.cols == null ? '?' : after.cols) + '）；合并过单元格的表格按列插入常被引擎拒绝');
+    }
+    return {
+      success: true, table: r.name, tableIndex: r.index,
+      insertedAt: colLetterOf(at), count: count, rows: after.rows, cols: after.cols,
+    };
+  },
+  // [表格·改] 删除列。position = 列字母或 1 开始的列号，count 连删几列。
+  // 与删除行同样的修订口径（API 路线直接删除，不留修订痕迹）。
+  table_delete_col(p) {
+    const r = resolveWriterTable(p);
+    if (r.error) return tableFail(r.error);
+    const dims = tableDims(r.table);
+    if (dims.error) return tableFail(dims.error);
+    if (p.position == null || String(p.position) === '') return tableFail('缺少 position（要删的列，列字母如 B 或 1 开始的列号）');
+    const c = parseColumnRef(p.position);
+    if (c == null || c >= dims.cols) {
+      return tableFail('列定位非法或越界: ' + p.position + '（表格共 ' + dims.cols + ' 列，列字母 A 起 / 列号 1 起）');
+    }
+    const count = Math.max(1, Number(p.count) || 1);
+    if (c + count > dims.cols) {
+      return tableFail('要删的列数超出表格范围（从第 ' + colLetterOf(c) + ' 列起删 ' + count + ' 列，表格只有 ' + dims.cols + ' 列）');
+    }
+    if (count >= dims.cols) return tableFail('不能删掉表格的全部列——表格至少要留一列');
+    const rlBefore = countRedlines();
+    try { r.table.getColumns().removeByIndex(c, count); }
+    catch (e) { return tableFail('删除列失败: ' + errStr(e)); }
+    const after = tableDims(r.table);
+    const removed = after.error ? 0 : dims.cols - after.cols;
+    const rlDelta = countRedlines() - rlBefore;
+    if (removed !== count && rlDelta <= 0) {
+      return tableFail('删除列未生效（列数仍为 ' + (after.cols == null ? '?' : after.cols) + '，也没有产生删除修订）；合并过单元格的表格按列删除常被引擎拒绝');
+    }
+    return {
+      success: true, table: r.name, tableIndex: r.index,
+      deletedAt: colLetterOf(c), count: count, removedCols: removed,
+      rows: after.rows, cols: after.cols,
+      recordChanges: recordChangesOn(), redlineDelta: rlDelta,
+      trackedAsRevision: removed !== count && rlDelta > 0,
+    };
   },
   // [感知] 读取光标/选区处的字符+段落+表格格式——"先看清现状再动手"的眼睛。
   get_formatting() {

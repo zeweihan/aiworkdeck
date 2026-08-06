@@ -30,10 +30,14 @@ class ProjectAiMessageServiceTest {
     /** 模拟 JPA：save 时给新实体分配自增 ID，并记录所有落库实体 */
     private final List<ProjectAiMessage> savedRows = new ArrayList<>();
 
+    private com.checkba.service.ai.ConversationIssuanceService issuanceService;
+
     @BeforeEach
     void setUp() {
         repository = mock(ProjectAiMessageRepository.class);
-        service = new ProjectAiMessageService(repository);
+        // 默认配置：不强制签发、非 local-mode（与 application.yml 默认一致）
+        issuanceService = new com.checkba.service.ai.ConversationIssuanceService(false, false);
+        service = new ProjectAiMessageService(repository, issuanceService);
         savedRows.clear();
         AtomicLong idGen = new AtomicLong(0);
         when(repository.save(any(ProjectAiMessage.class))).thenAnswer(inv -> {
@@ -134,5 +138,55 @@ class ProjectAiMessageServiceTest {
     void 未登录一律不可用() {
         assertFalse(service.canUseConversation("conv-new", null));
         assertFalse(service.canUseConversation(null, 7L));
+    }
+
+    // ===== conversationId 服务端签发登记（2026-08 安全审计遗留：关掉空会话抢占窗口） =====
+
+    @Test
+    void 已签发的空会话只有签发对象可用_登记优先于空会话任何人可用() {
+        String issued = issuanceService.issue(7L, 1L);
+        when(repository.findFirstByConversationId(issued)).thenReturn(Optional.empty());
+
+        assertTrue(service.canUseConversation(issued, 7L), "签发给谁就归谁");
+        assertFalse(service.canUseConversation(issued, 8L),
+                "首条消息落库前，其他登录用户不得再抢占已签发的会话");
+    }
+
+    @Test
+    void 强制签发开启时_未登记的空会话被拒_已签发的可用() {
+        com.checkba.service.ai.ConversationIssuanceService issuance =
+                new com.checkba.service.ai.ConversationIssuanceService(true, false);
+        ProjectAiMessageService enforcing = new ProjectAiMessageService(repository, issuance);
+
+        when(repository.findFirstByConversationId("conv-1754400000000")).thenReturn(Optional.empty());
+        assertFalse(enforcing.canUseConversation("conv-1754400000000", 7L),
+                "官方云配下客户端自造 ID 必须被拒，强制走签发端点");
+
+        String issued = issuance.issue(7L, 1L);
+        when(repository.findFirstByConversationId(issued)).thenReturn(Optional.empty());
+        assertTrue(enforcing.canUseConversation(issued, 7L), "经签发的会话可用");
+    }
+
+    @Test
+    void 强制签发开启时_已有消息的会话仍按DB归属判定_进程重启丢登记不影响历史() {
+        ProjectAiMessageService enforcing = new ProjectAiMessageService(
+                repository, new com.checkba.service.ai.ConversationIssuanceService(true, false));
+        ProjectAiMessage first = new ProjectAiMessage();
+        first.setUserId(7L);
+        when(repository.findFirstByConversationId("conv-old")).thenReturn(Optional.of(first));
+
+        assertTrue(enforcing.canUseConversation("conv-old", 7L),
+                "历史会话（登记已随进程重启丢失）必须仍可被归属者使用");
+        assertFalse(enforcing.canUseConversation("conv-old", 8L));
+    }
+
+    @Test
+    void localMode下恒不强制签发_桌面自造ID流程不变() {
+        ProjectAiMessageService localMode = new ProjectAiMessageService(
+                repository, new com.checkba.service.ai.ConversationIssuanceService(true, true));
+        when(repository.findFirstByConversationId("conv-1754400000000")).thenReturn(Optional.empty());
+
+        assertTrue(localMode.canUseConversation("conv-1754400000000", 7L),
+                "local-mode（单机免登、回环监听）不强制签发，前端自造 ID 照常可用");
     }
 }

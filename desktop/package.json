@@ -10,7 +10,7 @@
     "dev": "cross-env AIWORKDECK_DESKTOP_DEV=1 electron .",
     "start": "electron .",
     "build": "electron-builder",
-    "test": "node --test tests/service-manager.test.js tests/model-manager.test.js tests/pysvc-runtime.test.js"
+    "test": "node --test tests/service-manager.test.js tests/model-manager.test.js tests/pysvc-runtime.test.js tests/overlay.test.js tests/update-service.test.js"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
@@ -40,8 +40,8 @@
         "to": "frontend/dist/zetaoffice"
       },
       {
-        "from": "bundled/${os}-${arch}/backend.jar",
-        "to": "backend/backend.jar"
+        "from": "bundled/${os}-${arch}/backend",
+        "to": "backend"
       },
       {
         "from": "bundled/${os}-${arch}/jre",

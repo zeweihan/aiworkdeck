@@ -1780,7 +1780,7 @@ export default {
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
       const list = this.chatHistoryList || []
-      if (list.some(c => c.runStatus === 'PAUSED' || c.runStatus === 'AWAITING_APPROVAL')) return 'dot-attention'
+      if (list.some(c => c.runStatus === 'PAUSED' || c.runStatus === 'AWAITING_APPROVAL' || c.runStatus === 'INTERRUPTED')) return 'dot-attention'
       if (list.some(c => c.runStatus === 'RUNNING' && c.conversationId !== this.currentConversationId)) return 'dot-running'
       if (list.some(c => c.unread)) return 'dot-unread'
       return ''
@@ -4844,7 +4844,7 @@ export default {
     convDotClass(chat) {
         if (!chat) return ''
         if (chat.runStatus === 'RUNNING') return 'dot-running'
-        if (chat.runStatus === 'PAUSED' || chat.runStatus === 'AWAITING_APPROVAL') return 'dot-attention'
+        if (chat.runStatus === 'PAUSED' || chat.runStatus === 'AWAITING_APPROVAL' || chat.runStatus === 'INTERRUPTED') return 'dot-attention'
         if (chat.runStatus === 'ERROR') return 'dot-error'
         if (chat.unread) return 'dot-unread'
         return ''
@@ -4853,6 +4853,7 @@ export default {
         if (!chat) return ''
         if (chat.runStatus === 'RUNNING') return '运行中'
         if (chat.runStatus === 'PAUSED') return '待继续'
+        if (chat.runStatus === 'INTERRUPTED') return '已中断'
         if (chat.runStatus === 'AWAITING_APPROVAL') return '待审批'
         if (chat.runStatus === 'ERROR') return '出错'
         if (chat.unread) return '已完成'

@@ -184,6 +184,21 @@ class ChatModelFactoryTest {
     }
 
     @Test
+    @DisplayName("故障转移换模型不换通道：平台通道下备选模型仍走平台密钥，不碰 BYOK 的 key")
+    void failoverCandidateStaysOnPlatformChannel() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.isAvailable()).thenReturn(true);
+        when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
+        when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
+
+        // 编排器故障转移就是拿备选 modelId 再调一次工厂——通道由 provider 决定，与 modelId 无关
+        assertInstanceOf(OpenAiStreamingChatModel.class,
+                factory.getStreamingChatModel("qwen/qwen3-235b-a22b-2507"));
+        verify(platformAiChannel, atLeastOnce()).apiKey();
+        verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
+    }
+
+    @Test
     @DisplayName("平台通道用之前先建用量基线：否则重启后第一条消息永远显示「待结算」")
     void platformChannelEstablishesUsageBaselineBeforeCall() {
         setDbProvider("AWD_CLOUD");

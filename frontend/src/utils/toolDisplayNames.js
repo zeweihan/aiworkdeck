@@ -76,6 +76,12 @@ const NAMES = {
   doc_set_numbering: { zh: '设置编号', en: 'Set numbering' },
   doc_format_table: { zh: '设置表格格式', en: 'Format table' },
   doc_insert_table: { zh: '插入表格', en: 'Insert table' },
+  doc_table_read: { zh: '读取表格', en: 'Read table' },
+  doc_table_set_cell: { zh: '修改单元格', en: 'Edit table cell' },
+  doc_table_add_row: { zh: '插入表格行', en: 'Add table row' },
+  doc_table_delete_row: { zh: '删除表格行', en: 'Delete table row' },
+  doc_table_add_col: { zh: '插入表格列', en: 'Add table column' },
+  doc_table_delete_col: { zh: '删除表格列', en: 'Delete table column' },
   doc_get_formatting: { zh: '读取格式', en: 'Read formatting' },
   doc_apply_standard_format: { zh: '应用标准格式', en: 'Apply standard format' },
   doc_undo: { zh: '撤销修改', en: 'Undo' },
@@ -99,6 +105,14 @@ const NAMES = {
   sheet_set_autofilter: { zh: '设置自动筛选', en: 'Set autofilter' },
   sheet_freeze_panes: { zh: '冻结窗格', en: 'Freeze panes' },
   sheet_conditional_format: { zh: '设置条件格式', en: 'Conditional format' },
+  // Office 插件（Word 任务窗格）office_* 工具桥
+  // 正常情况下主前端（lowa 会话）看不到这些工具（会话能力过滤），收录仅作兜底
+  office_get_text: { zh: '读取文档', en: 'Read document' },
+  office_get_selection: { zh: '读取选区', en: 'Read selection' },
+  office_search: { zh: '查找文本', en: 'Find in document' },
+  office_replace_text: { zh: '替换文本（修订）', en: 'Replace text (tracked)' },
+  office_insert_text: { zh: '插入文本（修订）', en: 'Insert text (tracked)' },
+  office_add_comment: { zh: '插入批注', en: 'Add comment' },
   // PPT
   pptx_check_service: { zh: '检查PPT服务', en: 'Check PPT service' },
   pptx_generate: { zh: '生成PPT演示文稿', en: 'Generate slides' },

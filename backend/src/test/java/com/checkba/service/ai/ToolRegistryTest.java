@@ -67,7 +67,7 @@ class ToolRegistryTest {
 
     @BeforeEach
     void setUp() {
-        registry = new ToolRegistry(List.of(new FakeTools()), new PluginService());
+        registry = new ToolRegistry(List.of(new FakeTools()), new PluginService(), new ClientCapabilityService());
         registry.init();
     }
 
@@ -204,7 +204,7 @@ class ToolRegistryTest {
     @DisplayName("启停：禁用插件后规格/名单/分发全部不可见，重新启用即恢复，内置工具不受影响")
     void disabledPluginToolsAreHidden() {
         PluginService ps = pluginServiceWith("my-plugin", List.of("network"), null);
-        ToolRegistry reg = new ToolRegistry(List.of(new FakeTools()), ps);
+        ToolRegistry reg = new ToolRegistry(List.of(new FakeTools()), ps, new ClientCapabilityService());
         reg.init();
 
         // 启用态：插件工具可见可分发
@@ -235,7 +235,7 @@ class ToolRegistryTest {
     @DisplayName("权限：工具所需权限未在 manifest permissions 声明时分发被拒绝")
     void undeclaredPermissionIsRejected() {
         PluginService ps = pluginServiceWith("my-plugin", List.of("file_read"), List.of("network"));
-        ToolRegistry reg = new ToolRegistry(List.of(new FakeTools()), ps);
+        ToolRegistry reg = new ToolRegistry(List.of(new FakeTools()), ps, new ClientCapabilityService());
         reg.init();
 
         ToolRegistry.ToolResult r = reg.execute("plugin_echo", "{\"text\":\"hi\"}", ctx);
@@ -249,12 +249,12 @@ class ToolRegistryTest {
     @DisplayName("权限：所需权限已声明时正常执行；未声明所需权限的工具（v1 兼容）不受影响")
     void declaredPermissionAllowsExecution() {
         PluginService declared = pluginServiceWith("p1", List.of("network"), List.of("network"));
-        ToolRegistry reg1 = new ToolRegistry(List.of(new FakeTools()), declared);
+        ToolRegistry reg1 = new ToolRegistry(List.of(new FakeTools()), declared, new ClientCapabilityService());
         reg1.init();
         assertEquals("plugin:ok", reg1.execute("plugin_echo", "{\"text\":\"ok\"}", ctx).output());
 
         PluginService legacy = pluginServiceWith("p2", null, null);
-        ToolRegistry reg2 = new ToolRegistry(List.of(new FakeTools()), legacy);
+        ToolRegistry reg2 = new ToolRegistry(List.of(new FakeTools()), legacy, new ClientCapabilityService());
         reg2.init();
         assertEquals("plugin:ok", reg2.execute("plugin_echo", "{\"text\":\"ok\"}", ctx).output());
     }
