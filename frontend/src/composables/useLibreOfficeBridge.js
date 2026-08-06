@@ -12,6 +12,7 @@
 
 import { ref } from 'vue'
 import { createLibreOfficeExecutor } from './libreofficeExecutorClient.js'
+import { track } from '@/utils/telemetryClient.js'
 
 export function useLibreOfficeBridge() {
   const isProcessing = ref(false)
@@ -19,6 +20,8 @@ export function useLibreOfficeBridge() {
 
   const client = createLibreOfficeExecutor({
     onError: (m) => { lastError.value = m },
+    // 埋点注入：executor 本体保持 framework-agnostic（zetaoffice 独立 bundle 无 @ 别名）
+    onTelemetry: (attrs) => track('editor.action', attrs),
   })
 
   const executeCommand = async (action, params = {}) => {

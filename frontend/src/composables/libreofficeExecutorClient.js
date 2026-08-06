@@ -98,6 +98,7 @@ export const EDITOR_ACTIONS = [
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs=30000]
  * @param {(msg:string)=>void} [opts.onError] optional error sink
+ * @param {(attrs:object)=>void} [opts.onTelemetry] optional editor.action usage sink (app-side only)
  */
 export function createLibreOfficeExecutor(opts = {}) {
   const timeoutMs = opts.timeoutMs || 30000
@@ -182,19 +183,19 @@ export function createLibreOfficeExecutor(opts = {}) {
 
   // 埋点：AI 与人工的全部编辑器动作总闸（__agent 是 AI 下发的唯一判别标记）；
   // 只发 action 枚举名与成败/耗时，params 内容不采集。
-  // 本模块保持 framework-agnostic（被 spike/e2e 直接驱动），故用惰性动态 import，
-  // 非应用环境下 import 失败即静默跳过
+  // 本模块保持 framework-agnostic（还被 zetaoffice 独立 bundle 与 spike/e2e 打包，
+  // 那些上下文没有 @ 别名也没有 uni），采集经 opts.onTelemetry 注入：
+  // 应用侧 useLibreOfficeBridge 传入，其他宿主不传即零开销
   function trackEditorAction(action, params, success, durationMs, whitelistRejected) {
+    if (!opts.onTelemetry) return
     try {
-      import('../utils/telemetryClient.js')
-        .then(m => m.track('editor.action', {
-          action: String(action || ''),
-          agent: !!(params && params.__agent),
-          success,
-          durationMs,
-          whitelistRejected
-        }))
-        .catch(() => {})
+      opts.onTelemetry({
+        action: String(action || ''),
+        agent: !!(params && params.__agent),
+        success,
+        durationMs,
+        whitelistRejected
+      })
     } catch (e) { /* 静默 */ }
   }
 
