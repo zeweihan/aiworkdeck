@@ -120,6 +120,16 @@ public interface MemoryEntryRepository extends JpaRepository<MemoryEntry, Long> 
     List<MemoryEntry> findByProjectIdAndMemoryKeyIn(Long projectId, java.util.Collection<String> memoryKeys);
 
     /**
+     * Git 记忆同步：项目领域的全部行（project/file/conversation 作用域）
+     */
+    List<MemoryEntry> findByProjectIdAndScopeIn(Long projectId, java.util.Collection<String> scopes);
+
+    /**
+     * Git 记忆同步：用户领域的全部行（user/global 作用域）
+     */
+    List<MemoryEntry> findByUserIdAndScopeIn(Long userId, java.util.Collection<String> scopes);
+
+    /**
      * 统计项目的记忆数量
      */
     long countByProjectId(Long projectId);
