@@ -3,16 +3,17 @@
 # （增量更新设计 §5.2）。在官网 ECS（8.152.169.44）上运行：发版后手动执行，
 # 或挂 cron 每小时一次（幂等，asset 未变时只做 HEAD 级比对开销）。
 #
-#   WEB_ROOT=/var/www/aiworkdeck/update/desktop bash deploy/update-mirror-sync.sh
+#   WEB_ROOT=/www/wwwroot/aiworkdeck-update/desktop bash deploy/update-mirror-sync.sh
 #
-# nginx 需将 https://www.aiworkdeck.com/update/desktop/ 指到 $WEB_ROOT。
+# nginx 需将 https://www.aiworkdeck.com/update/desktop/ 指到 $WEB_ROOT
+# （BT 面板站点 conf 加 location alias，与 /lowa-engine/ 静态托管同款做法）。
 # manifest.json 最后原子替换（先 assets 后 manifest，客户端不会拿到指向
 # 尚未就位 asset 的清单）。
 
 set -euo pipefail
 
 REPO="${REPO:-zeweihan/aiworkdeck}"
-WEB_ROOT="${WEB_ROOT:-/var/www/aiworkdeck/update/desktop}"
+WEB_ROOT="${WEB_ROOT:-/www/wwwroot/aiworkdeck-update/desktop}"
 API="https://api.github.com/repos/${REPO}/releases/latest"
 
 mkdir -p "$WEB_ROOT/assets"
