@@ -26,6 +26,12 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - composables：`zetaOfficeBoot.js`（emscripten Module、注入 CJK 字体+fontconfig 别名 conf、locale shim、resolve office-worker port）、`zetaOfficeEditorEndpoint.js`（boot+executor+serve 三件套）、`zetaOfficeRelay.js`（跨隔离命令中继：serveExecutor/createRelayExecutor/portTransport）、`libreofficeExecutorClient.js`（EDITOR_ACTIONS 白名单+请求应答）、`useLibreOfficeBridge.js`、`useZetaOfficeWebview.js`（webview 包成 executeCommand 契约）、`zetaOfficeImeOverlay.js`（canvas 透明 IME 层，中文输入+控制键转发）。
 - `frontend/vite.zetaoffice.config.js` — editor 页专用 Vite 构建（脱离 uni-app），产出 dist/zetaoffice/。
 
+**宿主能力层与编辑器容器（两种壳，一套 relay）**
+- `frontend/src/services/host.js` — **前端访问壳的唯一出口**。业务代码一律 `import { host } from '@/services/host.js'`，禁止再直接读 `window.checkbaDesktop`（那会把 Electron 焊回业务代码）。惰性 Proxy 解析（与原先逐次读 window 的语义一致，注入时机不影响调用点）；桌面态逐字段透传，Web 态只提供浏览器里真能实现的能力、其余字段缺席（调用点原有的 `if (host.x && ...)` 守卫因此原样成立）。`isDesktopHost()` 是「是不是桌面壳」的判据。
+- `host.zetaoffice.getEditor()` 返回**带 kind 的描述符**：桌面 `{kind:'webview', url, preload, partition}`、Web `{kind:'iframe', url}`。`host.zetaoffice` 在宿主没有这一项时必须缺席（app-e2e 给浏览器目标注入的最小桩只有 shell.openExternal）——无条件包一层会让调用点的 `typeof getEditor === 'function'` 守卫通过后再抛 TypeError。
+- `useZetaOfficeWebview.js` — 两个宿主侧传输适配器：`webviewTransport`（Electron webview IPC）与 `iframeTransport`（同源 postMessage，收发都钉死 `location.origin` 且校验 `e.source`）。差异只在这两个 `{send, subscribe}` 里，relay/executor/worker 一字不改。
+- Web 态部署布局见 `deploy/web/nginx.conf.example`（站点 root 下 `zetaoffice/`，全站 COOP/COEP）；`host.zetaoffice.isAvailable()` 在 Web 态 HEAD 探一次编辑器页，没部署就让宿主退回预览路径，而不是挂一个永远起不来的 iframe。
+
 **宿主 UI（保活/实例管理/自动保存）**
 - `frontend/src/components/ReviewPanel.vue` — 审阅面板（编辑器右栏）：修订/批注两栏清单，点击定位、逐条接受/拒绝、全部接受/拒绝、批注标记解决/删除。数据全走 worker 原语（list_revisions/goto_revision/resolve_revision/resolve_all_revisions、list_comments/goto_comment/set_comment_resolved/delete_comment），executor 由 LibreOfficeEditor 注入；处置后 emit changed → 走自动保存链路。**面板是修订的权威视图**（页边小字读不到作者/时间，且同行多格删除会在页边互叠）。
 - `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave、reloadFromBackend。支持**备胎过继**（watch file 仅 null→文档；引擎已就绪走 finishDocLoad，未就绪由 onEndpointReady 接手）与**只读预览接力**（字节预取完成即 docx-preview 本地渲染，previewReady 后 overlay 变成可滚动阅读 + 顶部细进度条，ready 后整体消失）。
@@ -65,6 +71,9 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 ## 已知地雷
 
 - boot 三地雷勿回退（canvas 必须 id=qtcanvas 且禁 border/padding；COOP/COEP 缺失 SharedArrayBuffer 不可用；locale shim）。
+- **宿主事件订阅必须在建元素时就挂，不能推迟到 dom-ready**（`LibreOfficeEditor.subscribeHostEvents`，与命令通道 `wireExecutor` 分开）：`boot-log` 从引擎启动第一刻就在发，`modified` 是自动保存的唯一触发信号——晚挂一步就丢开头的消息，丢 `modified` 等于用户的编辑不落盘。命令通道则相反，webview 必须等 dom-ready（此前 send 无处可去）。
+- **iframe 容器不能加 sandbox**：沙箱会掐掉 SharedArrayBuffer 与 Worker，引擎起不来；跨源隔离靠站点级 COOP/COEP，不是 iframe 属性。
+- iframe 传输的订阅挂在 `window` 上，不随元素移除消失——`beforeUnmount` 必须显式退订（`_eventUnsub`），否则关一个文档漏一个监听器，且已销毁实例的 `onDocModified` 还会被触发。
 - 引擎仅 Writer+Calc 实锤（PR#165），别承诺 Impress。
 - CJK 字体走类别映射别名（PR#157/158），**不能用 assign 硬替换**；tofu 排查用 list_fonts 诊断 action。
 - 删除键/快捷键必须走 `.uno:` 调度（覆盖层吞键+修订模式手工删卡死教训，PR#164/166）。

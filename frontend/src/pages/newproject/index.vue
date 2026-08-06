@@ -133,6 +133,7 @@
 import { createProject } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { openFolderFlow, openFileFlow, createFolderFlow } from '@/utils/ideOpen.js'
+import { host } from '@/services/host.js'
 
 export default {
   data() {
@@ -162,8 +163,8 @@ export default {
   },
   computed: {
     isDesktop() {
-      return typeof window !== 'undefined' && !!(window.checkbaDesktop && window.checkbaDesktop.fs
-        && window.checkbaDesktop.fs.showOpenDialog)
+      return !!(host.fs
+        && host.fs.showOpenDialog)
     },
     namingNameValid() {
       const n = (this.namingName || '').trim()
@@ -184,7 +185,7 @@ export default {
 
     async onCreateFolder() {
       if (this.busy) return
-      const res = await window.checkbaDesktop.fs.showOpenDialog({
+      const res = await host.fs.showOpenDialog({
         title: '选择存放位置',
         buttonLabel: '选择此处',
         properties: ['openDirectory', 'createDirectory'],

@@ -19,7 +19,11 @@
 // the host as a 'ipc-message' event with {channel, args}. The page side needs a
 // preload exposing ipcRenderer (nodeIntegrationInSubFrames / a preload script).
 //
-// DORMANT until the host renders the <webview> and wires the executor.
+// 两种宿主容器，同一套 relay：
+// - Electron <webview>（桌面壳）：webviewTransport，走 webview IPC；
+// - <iframe>（Web 服务器版 / 鸿蒙浏览器，docs/HARMONYOS_PLAN.md Phase A）：
+//   iframeTransport，走 postMessage。
+// 差异只在这两个 {send, subscribe} 适配器里；relay、executor、worker 一字不改。
 
 import { createRelayExecutor } from './zetaOfficeRelay.js'
 
@@ -53,5 +57,48 @@ export function webviewTransport(webviewEl) {
  */
 export function createWebviewEditorExecutor(webviewEl, opts = {}) {
   const transport = webviewTransport(webviewEl)
+  return createRelayExecutor({ send: transport.send, subscribe: transport.subscribe, timeoutMs: opts.timeoutMs, onReady: opts.onReady })
+}
+
+/**
+ * Build a {send, subscribe} transport over an <iframe> (Web 服务器版).
+ *
+ * 同源部署是硬前提（deploy/web/nginx.conf.example：站点与 /zetaoffice/ 同一 origin，
+ * 全站 COOP/COEP）——所以 targetOrigin 收成 location.origin，收信也只认这个 origin，
+ * 且必须来自这个 iframe 自己的 contentWindow。用 '*' 会把编辑器指令广播给任何
+ * 恰好被嵌进来的第三方文档，同时也会让任何页面能伪造 lo-relay 结果。
+ *
+ * 与 webviewTransport 的差别仅此一处；relay 协议完全相同。
+ *
+ * @param {HTMLIFrameElement} iframeEl
+ */
+export function iframeTransport(iframeEl) {
+  const origin = (typeof window !== 'undefined' && window.location) ? window.location.origin : ''
+  return {
+    send: (m) => {
+      const w = iframeEl.contentWindow
+      if (w) w.postMessage(m, origin)
+    },
+    subscribe: (h) => {
+      const f = (e) => {
+        if (e.source !== iframeEl.contentWindow) return
+        if (e.origin !== origin) return
+        h(e.data)
+      }
+      window.addEventListener('message', f)
+      return () => window.removeEventListener('message', f)
+    },
+  }
+}
+
+/**
+ * Host-side LibreOffice executor driving the editor inside an <iframe>.
+ * 与 createWebviewEditorExecutor 同契约，供 Web 态使用。
+ *
+ * @param {HTMLIFrameElement} iframeEl
+ * @param {{timeoutMs?:number, onReady?:()=>void}} [opts]
+ */
+export function createIframeEditorExecutor(iframeEl, opts = {}) {
+  const transport = iframeTransport(iframeEl)
   return createRelayExecutor({ send: transport.send, subscribe: transport.subscribe, timeoutMs: opts.timeoutMs, onReady: opts.onReady })
 }

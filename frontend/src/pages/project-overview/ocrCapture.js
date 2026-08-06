@@ -5,13 +5,15 @@
 // 经展开进组件 methods（纯搬移，Phase 3c 外置），`this` 即 project-overview 页面实例。
 
 
+import { host } from '@/services/host.js'
+
 export const ocrCaptureMethods = {
     async applyDesktopOcrSelection(payload) {
       if (!payload || !payload.dataUrl || !payload.selection) return
       // 选区完成后再隐藏 BrowserView：此时用户不需要看真实网页了
       try {
-        if (window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.setViewsVisible) {
-          await window.checkbaDesktop.browser.setViewsVisible({ visible: false })
+        if (host.browser && host.browser.setViewsVisible) {
+          await host.browser.setViewsVisible({ visible: false })
         }
       } catch (e) {
         // ignore
@@ -187,18 +189,18 @@ export const ocrCaptureMethods = {
         this.ocrSourceUrl = active && active.tabType === 'web' ? (active.url || '') : ''
 
         // Desktop：直接抓屏做底图，不需要浏览器授权
-        if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.ocr) {
+        if (this.isDesktopApp && host.ocr) {
           // 桌面端（方案 B）：使用主进程 OverlayWindow 进行框选（选区期间不隐藏 BrowserView）
           const activeWebTab = this.getActiveWebTab()
           const viewId = activeWebTab && activeWebTab.id ? String(activeWebTab.id) : ''
-          if (!window.checkbaDesktop.ocr.startSelection) {
+          if (!host.ocr.startSelection) {
             uni.showToast({ title: '桌面端截图能力不可用', icon: 'none' })
             return
           }
           // 全局截图：无网页 tab 时走 window 模式（两边都是文档也能截图）
           const resp = viewId
-            ? await window.checkbaDesktop.ocr.startSelection({ viewId })
-            : await window.checkbaDesktop.ocr.startSelection({ mode: 'window' })
+            ? await host.ocr.startSelection({ viewId })
+            : await host.ocr.startSelection({ mode: 'window' })
           if (!resp || resp.ok !== true) {
             if (resp && resp.cancelled) return
             uni.showToast({ title: (resp && resp.message) ? String(resp.message) : '截图失败', icon: 'none' })

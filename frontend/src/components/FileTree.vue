@@ -827,6 +827,7 @@
 <script>
 import { getProjectFiles, createFolder, createFile, renameFile, deleteFile, deleteFilePerm, restoreFile as restoreFileApi, getRecycleBinFiles, moveFile, batchDeleteFiles, batchMoveFiles, batchCopyFiles, getApiBaseUrl } from '@/services/api.js'
 import { getAuthHeaders, getSessionId } from '@/utils/auth.js'
+import { host } from '@/services/host.js'
 import CircularProgress from '@/components/CircularProgress.vue'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
@@ -979,8 +980,7 @@ export default {
   computed: {
     ICONS() { return ICONS },
     isDesktopShell() {
-      return typeof window !== 'undefined' && !!(window.checkbaDesktop && window.checkbaDesktop.fs
-        && window.checkbaDesktop.fs.showItemInFolder)
+      return !!(host.fs && host.fs.showItemInFolder)
     },
     sortLabel() {
       const map = { name: '名称', date: '修改时间', type: '类型' }

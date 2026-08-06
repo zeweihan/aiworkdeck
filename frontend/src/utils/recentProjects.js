@@ -1,6 +1,8 @@
 // IDE 化：最近项目记录（启动直达 + 顶栏最近项目切换器共用）。
 // 只存 id 与访问时间，名称一律从 getMyProjects 实时解析，避免改名后显示陈旧。
 
+import { host } from '@/services/host.js'
+
 const LAST_KEY = 'checkba_last_project_id'
 const RECENT_KEY = 'checkba_recent_projects'
 const MAX_RECENT = 8
@@ -37,8 +39,7 @@ export function getLastProjectId() {
 
 /** 用项目全量列表把最近 id 解析成 {id, name}（改名不陈旧），推给桌面壳「最近打开」子菜单。 */
 export function syncRecentToMenu(projects) {
-  if (!(typeof window !== 'undefined' && window.checkbaDesktop
-      && window.checkbaDesktop.menu && window.checkbaDesktop.menu.setRecentProjects)) {
+  if (!(host.menu && host.menu.setRecentProjects)) {
     return
   }
   const byId = new Map((projects || []).map((p) => [Number(p.id), p]))
@@ -46,7 +47,7 @@ export function syncRecentToMenu(projects) {
     .map((id) => byId.get(id))
     .filter(Boolean)
     .map((p) => ({ id: Number(p.id), name: p.name }))
-  window.checkbaDesktop.menu.setRecentProjects(list)
+  host.menu.setRecentProjects(list)
 }
 
 /** 自取项目列表版（project-overview 等没有现成列表的调用方用）。静默失败。 */

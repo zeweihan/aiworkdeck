@@ -66,6 +66,7 @@
 <script>
 import { getProjectFavorites, deleteFavorite, getFavoriteImageUrl } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
+import { isDesktopHost } from '@/services/host.js'
 
 export default {
 
@@ -131,7 +132,7 @@ export default {
       // #ifdef H5
       // 桌面端（Electron，同为 H5 构建）：window.open 会被主进程拦截后丢弃，
       // 必须走 emit 让工作区开网页 tab
-      if (typeof window !== 'undefined' && window.checkbaDesktop) {
+      if (isDesktopHost()) {
         this.$emit('open-url', url)
         return
       }

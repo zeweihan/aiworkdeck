@@ -2,6 +2,7 @@
 import { getSessionId } from '@/utils/auth.js'
 import { openFolderFlow, openFileFlow, openLocalRootPath, openLocalFilePath } from '@/utils/ideOpen.js'
 import { track } from '@/utils/telemetryClient.js'
+import { host } from '@/services/host.js'
 
 export default {
   onLaunch: function () {
@@ -22,9 +23,8 @@ export default {
     })
     // IDE 化应用菜单动作（桌面壳菜单栏 文件→打开文件夹/打开文件/新建/最近打开）。
     // App 级注册一次，天然避开 project-overview 的页面栈多实例问题。
-    if (typeof window !== 'undefined' && window.checkbaDesktop
-        && window.checkbaDesktop.menu && window.checkbaDesktop.menu.onAction) {
-      window.checkbaDesktop.menu.onAction(async (data) => {
+    if (host.menu && host.menu.onAction) {
+      host.menu.onAction(async (data) => {
         const action = data && data.action
         if (!action) return
         if (!getSessionId()) {
@@ -52,8 +52,7 @@ export default {
     }
     // IDE 化：拖一个文件夹到窗口任意位置 = 打开为项目（capture 段拦截，
     // 避免文件上传等既有 drop 区把「文件夹」误当文件收走；单个目录才接管）
-    if (typeof window !== 'undefined' && window.checkbaDesktop
-        && window.checkbaDesktop.fs && window.checkbaDesktop.fs.getPathForFile) {
+    if (host.fs && host.fs.getPathForFile) {
       window.addEventListener('dragover', (e) => { e.preventDefault() }, false)
       window.addEventListener('drop', (e) => {
         try {
@@ -63,7 +62,7 @@ export default {
           if (!entry || !entry.isDirectory) return
           e.preventDefault()
           e.stopPropagation()
-          const path = window.checkbaDesktop.fs.getPathForFile(e.dataTransfer.files[0])
+          const path = host.fs.getPathForFile(e.dataTransfer.files[0])
           if (!path) return
           if (!getSessionId()) {
             uni.showToast({ title: '请先登录', icon: 'none' })
