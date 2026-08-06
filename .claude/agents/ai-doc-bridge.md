@@ -56,14 +56,14 @@ EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发�
 
 ## 第二条桥：office_* 工具桥（Word 插件，Phase C）
 
-与 LOWA 桥并存的独立桥，服务 `office-addin/`（Word 任务窗格插件）。**逐字同构但零共享**：不复用 EditorBridgeService、超时常量独立、单名契约（无双轨旧名）。
+与 LOWA 桥并存的独立桥，服务 `office-addin/`（Word/Excel/PowerPoint 任务窗格插件）。**逐字同构但零共享**：不复用 EditorBridgeService、超时常量独立、单名契约（无双轨旧名）。
 
 - `backend/src/main/java/com/checkba/service/ai/OfficeBridgeService.java` — requestId + CompletableFuture + SSE `client_action`（tool 固定 `office_command`，payload `{requestId, command, args, conversationId}`）+ 30s 超时。失败一律 `{"error": ...}`（Jackson 序列化，非手拼），ToolResult.success() 靠该前缀防绿勾空转。
 - `backend/src/main/java/com/checkba/controller/ai/OfficeResultController.java` — `POST /api/agent/office/result`（body `{requestId, ok, data|error}`）。会话归属**不信任请求体**：以桥挂起表按 requestId 登记的 conversationId 为准，再过 canUseConversation。
-- `backend/src/main/java/com/checkba/service/ai/tools/OfficeEditTools.java` — office_* 工具集 v1（工具名 ≠ command 名）：office_get_text→get_text、office_get_selection→get_selection、office_search→search、office_replace_text→replace_text、office_insert_text→insert_text、office_add_comment→add_comment。conversationId 参数由 ToolRegistry 服务端注入（不走 EditorBridgeService 的 ThreadLocal）。
+- `backend/src/main/java/com/checkba/service/ai/tools/OfficeEditTools.java` — office_* 工具集（工具名 ≠ command 名）。Word 面：office_get_text→get_text、office_get_selection→get_selection、office_search→search、office_replace_text→replace_text、office_insert_text→insert_text、office_add_comment→add_comment；Excel 面：office_excel_get_range→excel_get_range、office_excel_set_values→excel_set_values（valuesJson 后端解析成二维数组下发，上限 2000 格）、office_excel_search→excel_search；PPT 面：office_ppt_get_slides→ppt_get_slides、office_ppt_replace_text→ppt_replace_text（PowerPointApi 1.4，Excel/PPT 无修订、写入直接生效）。conversationId 参数由 ToolRegistry 服务端注入（不走 EditorBridgeService 的 ThreadLocal）。
 - `office-addin/taskpane/lib/officeExecutor.js` — 插件端执行器（Office.js 实现全集 + COMMAND_DISPLAY_NAMES 中文名表）；ChatView 消费 client_action(tool=office_command) → 执行 → postOfficeResult 回传。修改类命令执行前置 `changeTrackingMode=TrackAll`（Word 原生修订）、执行后恢复原值；WordApi 1.4 不支持时降级直接修改并标 `tracked:false`。
 
-**会话级客户端能力过滤**：chat 请求可选 `clientCapability`（lowa/office/none，缺省 lowa）→ `ClientCapabilityService`（按 conversationId 内存登记）→ ToolRegistry 三消费点过滤（getAllSpecifications(conversationId)/execute/resolve(name, conversationId)）：office 会话隐藏 doc_* 与 sheet_*，lowa 会话隐藏 office_*，none 全隐藏。判定按工具名前缀（doc_/sheet_=LOWA 专属，office_=插件专属）。末位提醒与 <active_document> 段文案在 ContextAssemblerService 按能力三分支切换。
+**会话级客户端能力过滤**：chat 请求可选 `clientCapability`（lowa/office/none，缺省 lowa）+ `officeHost`（word/excel/powerpoint，缺省 word）→ `ClientCapabilityService`（按 conversationId 内存登记）→ ToolRegistry 三消费点过滤（getAllSpecifications(conversationId)/execute/resolve(name, conversationId)）：office 会话隐藏 doc_* 与 sheet_* 且**按宿主再细分**（word 只见 Word 面 office_*、excel 只见 office_excel_*、ppt 只见 office_ppt_*，`hostOfTool` 最长前缀优先），lowa 会话隐藏 office_*，none 全隐藏。末位提醒与 <active_document> 段文案在 ContextAssemblerService 按能力三分支+office 宿主三分支切换。
 
 ## 命名双轨现状（PR#192，下个发布周期摘旧名）
 
@@ -85,8 +85,8 @@ EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发�
 - **`insert_at_cursor` 对带 markdown 标记的文本走剥离转换**（`MD_MARKER_RE` 判定，**→真粗体、行首 # 剥掉），纯文本原样插入；改插入路径要想到这两条分支。`insert_under_heading` 曾经后端一直派发但 worker 没实现+白名单没收录（静默失败年久失修），已补齐。
 - **改标准格式规范要改两处**：worker `HOUSE`（office_thread.js）+ 后端 `DocxStyleHelper`（编辑器流式 与 write_docx 两条路径各一份，规范必须一致）。
 - 流式中断（onError）也会发 doc_stream_end——新增流式相关终止分支时别忘了这个收尾信号，否则 worker 状态机残留半张表。
-- **新增 office_* 工具三件套**：OfficeEditTools 加 @Tool + officeExecutor.js 加 HANDLERS 实现 + COMMAND_DISPLAY_NAMES 加中文名（主前端 toolDisplayNames.js 兜底同步）。没有客户端实现的远端工具 = 30s 超时空转（与 doc_* 四件套同款地雷）。
-- **能力过滤靠工具名前缀**（doc_/sheet_/office_）：新增 LOWA 专属或插件专属工具必须沿用对应前缀，否则会漏到不该见它的会话里；ToolRegistry 构造器加了 ClientCapabilityService，改它要同步 RecordingToolRegistry（EvalHarness）与各测试构造点。
+- **新增 office_* 工具三件套**：OfficeEditTools 加 @Tool + officeExecutor.js 加 HANDLERS 实现 + COMMAND_DISPLAY_NAMES 加中文名（主前端 toolDisplayNames.js 兜底同步），并在 officeExecutor 的 COMMAND_HOSTS 标宿主。没有客户端实现的远端工具 = 30s 超时空转（与 doc_* 四件套同款地雷）。
+- **能力过滤靠工具名前缀**（doc_/sheet_/office_，office 内再按 office_excel_/office_ppt_ 细分宿主）：新增 LOWA 专属或插件专属工具必须沿用对应前缀，否则会漏到不该见它的会话里（Excel 面起名不带 office_excel_ 前缀 = 漏进 Word 会话的死路径）；ToolRegistry 构造器加了 ClientCapabilityService，改它要同步 RecordingToolRegistry（EvalHarness）与各测试构造点。
 
 ## 验证
 

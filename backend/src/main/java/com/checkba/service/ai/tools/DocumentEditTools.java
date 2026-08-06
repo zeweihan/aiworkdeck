@@ -41,7 +41,10 @@ public class DocumentEditTools implements AgentToolComponent {
 
     // ==================== 文件管理工具 ====================
 
-    @Tool("列出项目中的所有可编辑文档文件（docx, doc, xlsx, xls, pptx, ppt）。返回文件ID、名称和类型的列表。")
+    @Tool("文件树里可编辑文档的权威清单，也是文件 ID 的主要来源：doc_open_file、extract_file_text 的 fileId，"
+            + "以及 rename_project_file / move_project_file / create_folder 的 fileId 与 parentFolderId 都从这里取。"
+            + "不含 PDF（用 pdf_list_files）与文件夹（用 list_project_folders）；只要物理路径不要 ID 才用 list_files。"
+            + "列出项目中的所有可编辑文档文件（docx, doc, xlsx, xls, pptx, ppt），返回文件ID、名称和类型的列表。")
     public String doc_list_project_files(
             @P("项目ID") Long projectId
     ) {

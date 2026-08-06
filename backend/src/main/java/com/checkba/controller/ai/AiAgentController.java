@@ -149,8 +149,10 @@ public class AiAgentController {
         log.info("Received Agent Chat Request: project={}, conversation={}, mode={}, msg={}",
                 request.getProjectId(), request.getConversationId(), request.getAgentMode(), request.getMessage());
 
-        // 会话级客户端能力登记（Phase C）：lowa（默认，主前端）/ office（Word 插件）/ none（纯对话）
-        clientCapabilityService.record(request.getConversationId(), request.getClientCapability());
+        // 会话级客户端能力登记（Phase C）：lowa（默认，主前端）/ office（Office 插件）/ none（纯对话）；
+        // office 会话再按宿主细分（word / excel / powerpoint，缺省 word），工具可见性按宿主过滤
+        clientCapabilityService.record(request.getConversationId(), request.getClientCapability(),
+                request.getOfficeHost());
 
         agentOrchestrator.handleUserMessage(request, userId);
         
@@ -308,6 +310,11 @@ public class AiAgentController {
          * 缺省按 lowa 处理，兼容不发送该字段的存量主前端。
          */
         private String clientCapability;
+        /**
+         * 可选：clientCapability=office 时的宿主细分（word / excel / powerpoint）。
+         * 缺省按 word 处理，兼容不发送该字段的存量 Word 插件。
+         */
+        private String officeHost;
 
         public Long getProjectId() { return projectId; }
         public void setProjectId(Long projectId) { this.projectId = projectId; }
@@ -334,6 +341,8 @@ public class AiAgentController {
         public void setPinnedSkillId(String pinnedSkillId) { this.pinnedSkillId = pinnedSkillId; }
         public String getClientCapability() { return clientCapability; }
         public void setClientCapability(String clientCapability) { this.clientCapability = clientCapability; }
+        public String getOfficeHost() { return officeHost; }
+        public void setOfficeHost(String officeHost) { this.officeHost = officeHost; }
     }
     
     /**

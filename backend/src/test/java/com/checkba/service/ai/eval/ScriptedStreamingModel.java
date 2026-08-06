@@ -31,6 +31,7 @@ public class ScriptedStreamingModel implements StreamingChatLanguageModel {
     private final Deque<EvalCase.Turn> remaining;
     private final List<Boolean> toolsOfferedPerCall = new ArrayList<>();
     private final List<List<String>> toolNamesOfferedPerCall = new ArrayList<>();
+    private final List<String> promptTextPerCall = new ArrayList<>();
 
     public ScriptedStreamingModel(List<EvalCase.Turn> turns) {
         this.remaining = new ArrayDeque<>(turns);
@@ -46,6 +47,11 @@ public class ScriptedStreamingModel implements StreamingChatLanguageModel {
         return List.copyOf(toolNamesOfferedPerCall);
     }
 
+    /** 每次 LLM 调用收到的完整上下文文本（供「回喂了某条提醒」类断言） */
+    public List<String> promptTextPerCall() {
+        return List.copyOf(promptTextPerCall);
+    }
+
     /** 剩余未消费的脚本轮数（用例结束后应为 0） */
     public int remainingTurns() {
         return remaining.size();
@@ -53,20 +59,22 @@ public class ScriptedStreamingModel implements StreamingChatLanguageModel {
 
     @Override
     public void generate(List<ChatMessage> messages, StreamingResponseHandler<AiMessage> handler) {
-        serve(false, List.of(), handler);
+        serve(messages, false, List.of(), handler);
     }
 
     @Override
     public void generate(List<ChatMessage> messages, List<ToolSpecification> toolSpecifications,
                          StreamingResponseHandler<AiMessage> handler) {
-        serve(true, toolSpecifications == null ? List.of()
+        serve(messages, true, toolSpecifications == null ? List.of()
                 : toolSpecifications.stream().map(ToolSpecification::name).toList(), handler);
     }
 
-    private void serve(boolean toolsOffered, List<String> toolNames,
+    private void serve(List<ChatMessage> messages, boolean toolsOffered, List<String> toolNames,
                        StreamingResponseHandler<AiMessage> handler) {
         toolsOfferedPerCall.add(toolsOffered);
         toolNamesOfferedPerCall.add(List.copyOf(toolNames));
+        promptTextPerCall.add(messages == null ? ""
+                : messages.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining("\n")));
         EvalCase.Turn turn = remaining.poll();
         if (turn == null) {
             throw new IllegalStateException(

@@ -1,0 +1,81 @@
+[
+  {
+    "id": "organize-files-into-new-folder-xml",
+    "title": "整理文件到新文件夹（create_folder → move_project_file 链）",
+    "category": "files",
+    "protocol": "xml",
+    "userInput": "帮我把这几个文件整理到一个新文件夹里",
+    "turns": [
+      {
+        "text": "<process name=\"列出项目文档\"><tool_code>doc_list_project_files(projectId=1)</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"新建文件夹\"><tool_code>create_folder(folderName=\"尽调材料\", projectId=1)</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"移动文件\"><tool_code>move_project_file(fileId=101, targetFolderId=77)</tool_code></process>"
+      },
+      {
+        "text": "<process name=\"移动文件\"><tool_code>move_project_file(fileId=102, targetFolderId=77)</tool_code></process>"
+      },
+      {
+        "text": "<final>已新建「尽调材料」文件夹，并把《股权结构说明》《历史沿革说明》两份文件移入其中。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "项目文件列表：\n- ID: 101, 名称: 股权结构说明.docx\n- ID: 102, 名称: 历史沿革说明.docx",
+      "create_folder": "Successfully created folder '尽调材料' (folderId=77).",
+      "move_project_file": "Successfully moved to folder 77."
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "doc_list_project_files" },
+        { "name": "create_folder", "argsContain": { "folderName": "尽调材料" } },
+        { "name": "move_project_file", "argsContain": { "fileId": "101", "targetFolderId": "77" } },
+        { "name": "move_project_file", "argsContain": { "fileId": "102", "targetFolderId": "77" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "rename-project-file-native",
+    "title": "重命名项目文件（fileId 取自 doc_list_project_files）",
+    "category": "files",
+    "protocol": "native",
+    "userInput": "把 会议纪要v3.docx 重命名为 股东会决议.docx",
+    "turns": [
+      {
+        "toolCalls": [
+          {
+            "name": "doc_list_project_files",
+            "arguments": { "projectId": 1 }
+          }
+        ]
+      },
+      {
+        "toolCalls": [
+          {
+            "name": "rename_project_file",
+            "arguments": { "fileId": 101, "newName": "股东会决议.docx" }
+          }
+        ]
+      },
+      {
+        "text": "<final>已把《会议纪要v3.docx》重命名为《股东会决议.docx》。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_list_project_files": "项目文件列表：\n- ID: 101, 名称: 会议纪要v3.docx",
+      "rename_project_file": "Successfully renamed to '股东会决议.docx' (fileId=101)."
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "doc_list_project_files" },
+        { "name": "rename_project_file", "argsContain": { "fileId": "101", "newName": "股东会决议" } }
+      ],
+      "structureContains": ["<process", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]

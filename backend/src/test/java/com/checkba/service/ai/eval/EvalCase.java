@@ -82,6 +82,8 @@ public class EvalCase {
         public List<String> offeredToolsExclude = new ArrayList<>();
         /** 会话文件夹重命名（<title> 协议）应包含的子串（null = 不断言） */
         public String renamedTitleContains;
+        /** 应在某次 LLM 调用的上下文中出现的子串（断言编排器回喂了某条系统提醒；空 = 不断言） */
+        public List<String> promptContains = new ArrayList<>();
     }
 
     /** artifact 落盘断言 */

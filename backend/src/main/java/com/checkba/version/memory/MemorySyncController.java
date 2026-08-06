@@ -51,6 +51,8 @@ public class MemorySyncController {
         if (cfg != null) {
             data.put("url", cfg.getUrl());
             data.put("username", cfg.getUsername());
+            // 凭据只写不读：只回打码后的形态（AccountService.mask 同款口径），明文永不回显
+            data.put("secretMasked", maskSecret(cfg.getSecret()));
             data.put("pendingUpload", Boolean.TRUE.equals(cfg.getPendingUpload()));
             data.put("lastSyncAt", cfg.getLastSyncAt() == null ? null : cfg.getLastSyncAt().toString());
         }
@@ -77,7 +79,12 @@ public class MemorySyncController {
                 });
         cfg.setUrl(url.trim());
         cfg.setUsername(body.get("username"));
-        cfg.setSecret(body.get("secret"));
+        // 凭据只写不读：status 只回打码值，界面上拿不到明文，重存配置时留空
+        // 表示沿用已存令牌而不是清除（想清掉令牌走 DELETE 断开后重新配置）。
+        String secret = body.get("secret");
+        if (secret != null && !secret.isBlank()) {
+            cfg.setSecret(secret);
+        }
         remoteRepository.save(cfg);
         Map<String, Object> sync = syncService.syncNow(realm);
         Map<String, Object> data = new HashMap<>();
@@ -128,6 +135,14 @@ public class MemorySyncController {
             }
         }
         return realm;
+    }
+
+    /** 展示用掩码：只留末 4 位，够用户认出是哪枚令牌，又不泄露。 */
+    static String maskSecret(String secret) {
+        if (secret == null || secret.isBlank()) return null;
+        String s = secret.trim();
+        if (s.length() <= 8) return "****";
+        return "****" + s.substring(s.length() - 4);
     }
 
     @ExceptionHandler(VersionException.class)

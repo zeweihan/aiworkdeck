@@ -41,11 +41,13 @@ export function useAgentStream() {
     // STATE: Agent 任务清单（todo_write 驱动的常驻进度卡），plan_update 事件整表覆写
     const planTodos = ref([]) // Array of { content, activeForm, status }
 
-    // STATE: 步数超限暂停（bubble_end status=paused）——前端据此渲染一键「继续」按钮
-    const agentPaused = ref(null) // null | { reason }
+    // STATE: 任务待续跑——步数超限暂停（bubble_end status=paused）或上次进程被杀
+    // （run_state status=INTERRUPTED）。前端据此渲染一键「继续」按钮
+    const agentPaused = ref(null) // null | { reason: 'max_depth' | 'process_interrupted' | ... }
 
     // STATE: 当前会话的后端运行状态（run_state/bubble_end 驱动）
-    // 'RUNNING' | 'PAUSED' | 'AWAITING_APPROVAL' | 'FINISHED' | 'ERROR' | 'CANCELLED' | null(无任务)
+    // 'RUNNING' | 'PAUSED' | 'AWAITING_APPROVAL' | 'FINISHED' | 'ERROR' | 'CANCELLED'
+    // | 'INTERRUPTED'(上次进程执行中被杀，重启后回收) | null(无任务)
     const agentRunStatus = ref(null)
 
     // POINTER: The current bubble we are writing to (Assistant)
@@ -462,6 +464,10 @@ export function useAgentStream() {
                     isStreaming.value = true // 后台在跑：封发送框，等续流
                 } else if (d.status === 'PAUSED') {
                     agentPaused.value = { reason: 'max_depth' } // 切回后恢复「继续」按钮
+                } else if (d.status === 'INTERRUPTED') {
+                    // 上次进程执行中被杀（关 app/崩溃/断电），启动回收标记出来的：
+                    // 半截回复已带 [进程中断] 说明，这里补上同一条「继续」入口
+                    agentPaused.value = { reason: 'process_interrupted' }
                 }
             } catch (e) {
                 console.error('Failed to parse run_state', e)

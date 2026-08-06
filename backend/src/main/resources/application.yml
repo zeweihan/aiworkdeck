@@ -229,6 +229,13 @@ storage:
     # CDN域名（可选，用于加速访问）
     cdn-domain:
 
+security:
+  # conversationId 服务端签发强制开关（公网多租户/官方云置 true）：
+  # 开启后（且非 local-mode），尚无消息的会话必须先经 POST /api/agent/conversations 签发，
+  # 客户端自造的 conv-<毫秒> ID 会被拒绝；已有消息的会话仍按 DB 归属判定。
+  # 默认 false：桌面单机与既有前端自造 ID 流程行为完全不变。
+  conversation-issuance-required: false
+
 # LangChain4j Ollama Configuration
 langchain4j:
   ollama:
