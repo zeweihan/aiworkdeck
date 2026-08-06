@@ -310,6 +310,34 @@
                 </view>
               </view>
               
+              <!-- 账号安全（server 模式且登录短信验证启用时显示） -->
+              <view v-if="userInfo.smsAuthEnabled" class="form-group">
+                <text class="group-title">账号安全</text>
+                <view class="form-row">
+                  <text class="form-label">手机号</text>
+                  <text class="form-value">{{ userInfo.phoneMasked || '未绑定' }}</text>
+                  <text class="bind-link" @tap="showBindPhone = !showBindPhone">{{ userInfo.phoneMasked ? '更换' : '绑定' }}</text>
+                </view>
+                <view v-if="showBindPhone" class="bind-phone-form">
+                  <view class="form-row">
+                    <text class="form-label">新手机号</text>
+                    <input class="bind-input" type="number" maxlength="11" v-model="bindPhoneInput" placeholder="请输入大陆手机号" />
+                  </view>
+                  <view class="form-row">
+                    <text class="form-label">验证码</text>
+                    <input class="bind-input code" type="number" maxlength="6" v-model="bindCodeInput" placeholder="6 位验证码" />
+                    <button class="btn-send-code" :disabled="bindCountdown > 0" @tap="sendBindPhoneCode">
+                      {{ bindCountdown > 0 ? bindCountdown + 's' : '获取验证码' }}
+                    </button>
+                  </view>
+                  <view class="bind-actions">
+                    <button class="btn-bind-confirm" @tap="confirmBindPhone">确认绑定</button>
+                    <text class="bind-link" @tap="cancelBindPhone">取消</text>
+                  </view>
+                  <text class="bind-tip">绑定后，本账号在网页端与桌面端连接时的密码登录均需短信验证码</text>
+                </view>
+              </view>
+
               <!-- 授权（桌面端）：当前模式 / 激活时间 / 解除授权 -->
               <view v-if="isDesktop && licenseInfo.unlocked" class="form-group">
                 <text class="group-title">授权</text>
@@ -351,7 +379,7 @@
 </template>
 
 <script>
-import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense } from '@/services/api.js'
+import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone } from '@/services/api.js'
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
@@ -404,6 +432,13 @@ export default {
 
       // 授权状态（桌面端）：{ unlocked, mode, plan, activatedAt? }
       licenseInfo: {},
+
+      // 手机号绑定（登录短信验证，仅 server 模式且启用时显示）
+      showBindPhone: false,
+      bindPhoneInput: '',
+      bindCodeInput: '',
+      bindCountdown: 0,
+      bindCountdownTimer: null,
 
       // Activity Logs
       activityLogs: [],
@@ -674,17 +709,66 @@ export default {
       if (user) {
         this.userInfo = user
         this.checkAdminTab()
-      } else {
-        // 如果本地没有，尝试从服务器获取
-        try {
-          const res = await getCurrentUserApi()
-          if (res.code === 0 && res.data) {
-            this.userInfo = res.data
-            this.checkAdminTab()
-          }
-        } catch (error) {
-          console.error('获取用户信息失败:', error)
+      }
+      // 短信绑定状态（smsAuthEnabled/phoneMasked）只在 /api/auth/me 下发，
+      // 缓存的登录响应里没有——有缓存也拉一次合并
+      try {
+        const res = await getCurrentUserApi()
+        if (res.code === 0 && res.data) {
+          this.userInfo = { ...this.userInfo, ...res.data }
+          this.checkAdminTab()
         }
+      } catch (error) {
+        console.error('获取用户信息失败:', error)
+      }
+    },
+    async sendBindPhoneCode() {
+      if (this.bindCountdown > 0) return
+      if (!/^1[3-9]\d{9}$/.test(this.bindPhoneInput)) {
+        uni.showToast({ title: '请输入正确的手机号', icon: 'none' })
+        return
+      }
+      try {
+        await sendSmsCode({ scene: 'bind', phone: this.bindPhoneInput })
+        uni.showToast({ title: '验证码已发送', icon: 'none' })
+        this.bindCountdown = 60
+        if (this.bindCountdownTimer) clearInterval(this.bindCountdownTimer)
+        this.bindCountdownTimer = setInterval(() => {
+          if (this.bindCountdown > 0) {
+            this.bindCountdown--
+          } else {
+            clearInterval(this.bindCountdownTimer)
+            this.bindCountdownTimer = null
+          }
+        }, 1000)
+      } catch (e) {
+        uni.showToast({ title: e.message || '发送失败', icon: 'none' })
+      }
+    },
+    async confirmBindPhone() {
+      if (!this.bindCodeInput || this.bindCodeInput.length < 6) {
+        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' })
+        return
+      }
+      try {
+        const res = await bindPhone(this.bindPhoneInput, this.bindCodeInput)
+        uni.showToast({ title: '绑定成功', icon: 'success' })
+        const phoneMasked = (res.data && res.data.phoneMasked) || ''
+        this.userInfo = { ...this.userInfo, phoneMasked }
+        setSessionUser(this.userInfo)
+        this.cancelBindPhone()
+      } catch (e) {
+        uni.showToast({ title: e.message || '绑定失败', icon: 'none' })
+      }
+    },
+    cancelBindPhone() {
+      this.showBindPhone = false
+      this.bindPhoneInput = ''
+      this.bindCodeInput = ''
+      this.bindCountdown = 0
+      if (this.bindCountdownTimer) {
+        clearInterval(this.bindCountdownTimer)
+        this.bindCountdownTimer = null
       }
     },
     checkAdminTab() {
@@ -1808,6 +1892,66 @@ $danger-color: #E74C3C;
         color: $text-main;
         background: #fafafa;
     }
+}
+
+/* 手机号绑定（登录短信验证） */
+.bind-link {
+    color: $brand-primary;
+    font-size: 13px;
+    margin-left: 12px;
+    cursor: pointer;
+}
+.bind-phone-form {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px dashed $border-color;
+}
+.bind-input {
+    flex: 1;
+    height: 36px;
+    border: 1px solid $border-color;
+    border-radius: 6px;
+    padding: 0 10px;
+    font-size: 13px;
+    background: #fff;
+}
+.btn-send-code {
+    height: 36px;
+    line-height: 34px;
+    margin-left: 8px;
+    padding: 0 12px;
+    border: 1px solid $border-color;
+    border-radius: 6px;
+    background: #fff;
+    color: $text-main;
+    font-size: 13px;
+    cursor: pointer;
+
+    &[disabled] {
+        opacity: 0.5;
+        cursor: default;
+    }
+}
+.bind-actions {
+    display: flex;
+    align-items: center;
+    margin-top: 10px;
+}
+.btn-bind-confirm {
+    height: 36px;
+    line-height: 36px;
+    padding: 0 18px;
+    border-radius: 6px;
+    background: $brand-primary;
+    color: #fff;
+    font-size: 13px;
+    cursor: pointer;
+}
+.bind-tip {
+    display: block;
+    margin-top: 8px;
+    font-size: 12px;
+    color: $text-secondary;
 }
 
 /* Work Log Styles */

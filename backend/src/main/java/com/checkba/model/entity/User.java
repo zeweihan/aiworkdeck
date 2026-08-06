@@ -50,6 +50,12 @@ public class User {
     private String email;
 
     /**
+     * 绑定手机号（可选，登录短信验证用；唯一，未绑定为 null）
+     */
+    @Column(length = 32, unique = true)
+    private String phone;
+
+    /**
      * 用户密码（加密存储）
      * 注意：实际生产环境应使用 BCrypt 等加密算法
      */
@@ -122,6 +128,14 @@ public class User {
 
     public void setEmail(String email) {
         this.email = email;
+    }
+
+    public String getPhone() {
+        return phone;
+    }
+
+    public void setPhone(String phone) {
+        this.phone = phone;
     }
 
     public String getPassword() {

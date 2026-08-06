@@ -21,6 +21,13 @@ public class AuthController {
     private final com.checkba.service.DeviceTokenService deviceTokenService;
     private final com.checkba.service.AuthAbuseGuard authAbuseGuard;
     private final com.checkba.service.account.AwdkLoginService awdkLoginService;
+    private final com.checkba.service.sms.SmsAuthService smsAuthService;
+
+    /**
+     * 密码校验通过但还缺短信验证码时的响应 code（前端 api.js 据此弹验证码输入步骤，
+     * 与 4001 featureNotConfigured / 4003 quotaExceeded 同一族约定）。
+     */
+    static final int CODE_SMS_REQUIRED = 4005;
 
     /**
      * awdk 桥接限速的用户名维度占位：与真实用户名共用一套失败锁定，
@@ -51,13 +58,15 @@ public class AuthController {
                           com.checkba.service.AdminAccessService adminAccessService,
                           com.checkba.service.DeviceTokenService deviceTokenService,
                           com.checkba.service.AuthAbuseGuard authAbuseGuard,
-                          com.checkba.service.account.AwdkLoginService awdkLoginService) {
+                          com.checkba.service.account.AwdkLoginService awdkLoginService,
+                          com.checkba.service.sms.SmsAuthService smsAuthService) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
         this.deviceTokenService = deviceTokenService;
         this.authAbuseGuard = authAbuseGuard;
         this.awdkLoginService = awdkLoginService;
+        this.smsAuthService = smsAuthService;
         staticUserService = userService;
     }
 
@@ -123,6 +132,22 @@ public class AuthController {
         }
         try {
             User user = userService.login(request.getUsername(), request.getPassword());
+
+            // 短信二次验证（仅 server 模式且用户已绑定手机号时要求）：
+            // 缺码 → 4005 让前端进入验证码步骤（不发会话、不动失败计数——密码是对的）；
+            // 错码 → 落入下方 catch 计一次失败（叠加 SmsCodeStore 的单码尝试上限双重兜底）。
+            if (smsAuthService != null && smsAuthService.requiresCode(user)) {
+                if (request.getSmsCode() == null || request.getSmsCode().isBlank()) {
+                    Map<String, Object> result = new HashMap<>();
+                    result.put("code", CODE_SMS_REQUIRED);
+                    result.put("message", "本次操作需要短信验证");
+                    result.put("data", Map.of(
+                            "smsRequired", true,
+                            "phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone())));
+                    return result;
+                }
+                smsAuthService.verifyLoginCode(user, request.getSmsCode());
+            }
             authAbuseGuard.recordLoginSuccess(ip, request.getUsername());
 
             String sessionId = generateSessionId();
@@ -186,6 +211,79 @@ public class AuthController {
             result.put("message", e.getMessage());
         } catch (IllegalArgumentException e) {
             // 开关关闭等业务态
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 发送短信验证码。两个场景：
+     * <ul>
+     *   <li>{@code scene=login}：匿名但必须携带正确的用户名密码（否则该端点就是
+     *       给任意手机号发短信的水龙头 + 免锁定的密码试探口），发往该用户已绑定的手机号。
+     *       失败锁定与 /login 共用同一套计数。</li>
+     *   <li>{@code scene=bind}：需已登录会话，发往待绑定的新手机号。</li>
+     * </ul>
+     * IP 维度限频在 AuthAbuseGuard，手机号维度冷却/日上限在 SmsCodeStore。
+     */
+    @PostMapping("/sms/send-code")
+    public Map<String, Object> sendSmsCode(@RequestBody SmsSendCodeRequest request,
+                                           @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+                                           jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkSmsSendRate(ip);
+            String phoneMasked;
+            if ("bind".equals(request.getScene())) {
+                Long userId = getUserIdFromSession(sessionId);
+                if (userId == null) {
+                    result.put("code", 1);
+                    result.put("message", "未登录");
+                    return result;
+                }
+                phoneMasked = smsAuthService.sendBindCode(userId, request.getPhone());
+            } else {
+                // login 场景：先过锁定闸再校验凭据，语义与 /login 完全一致
+                authAbuseGuard.checkLoginAttempt(ip, request.getUsername());
+                User user;
+                try {
+                    user = userService.login(request.getUsername(), request.getPassword());
+                } catch (IllegalArgumentException e) {
+                    authAbuseGuard.recordLoginFailure(ip, request.getUsername());
+                    throw e;
+                }
+                phoneMasked = smsAuthService.sendLoginCode(user);
+            }
+            authAbuseGuard.recordSmsSend(ip);
+            result.put("code", 0);
+            result.put("message", "验证码已发送");
+            result.put("data", Map.of("phoneMasked", phoneMasked));
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /** 绑定/更换手机号（需已登录；验证码走 scene=bind 的 send-code）。 */
+    @PostMapping("/sms/bind")
+    public Map<String, Object> bindPhone(@RequestBody SmsBindRequest request,
+                                         @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        Map<String, Object> result = new HashMap<>();
+        if (userId == null) {
+            result.put("code", 1);
+            result.put("message", "未登录");
+            return result;
+        }
+        try {
+            String phoneMasked = smsAuthService.confirmBind(userId, request.getPhone(), request.getCode());
+            result.put("code", 0);
+            result.put("message", "绑定成功");
+            result.put("data", Map.of("phoneMasked", phoneMasked));
+        } catch (IllegalArgumentException e) {
             result.put("code", 1);
             result.put("message", e.getMessage());
         }
@@ -270,7 +368,10 @@ public class AuthController {
                 "role", user.getRole(),
                 "subscriptionType", user.getSubscriptionType(),
                 // 系统管理权限（桌面单机=全员；云端=仅 admin 账号），前端据此显示「系统设置」入口
-                "isAdmin", adminAccessService.isAdmin(user)
+                "isAdmin", adminAccessService.isAdmin(user),
+                // 短信验证：绑定入口的显隐与当前绑定状态（Map.of 不收 null，空串=未绑定）
+                "smsAuthEnabled", smsAuthService != null && smsAuthService.active(),
+                "phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone())
         ));
         return result;
     }
@@ -367,6 +468,19 @@ public class AuthController {
         }
         try {
             User user = userService.login(body.get("username"), body.get("password"));
+            // 与 /login 同一道短信闸：换令牌也是一次密码登录，留了旁路等于没设闸
+            if (smsAuthService != null && smsAuthService.requiresCode(user)) {
+                String smsCode = body.get("smsCode");
+                if (smsCode == null || smsCode.isBlank()) {
+                    result.put("code", CODE_SMS_REQUIRED);
+                    result.put("message", "本次操作需要短信验证");
+                    result.put("data", Map.of(
+                            "smsRequired", true,
+                            "phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone())));
+                    return result;
+                }
+                smsAuthService.verifyLoginCode(user, smsCode);
+            }
             authAbuseGuard.recordLoginSuccess(ip, body.get("username"));
             var issued = deviceTokenService.issue(user.getId(), body.get("name"));
             result.put("code", 0);
@@ -428,11 +542,40 @@ public class AuthController {
     static class LoginRequest {
         private String username;
         private String password;
+        private String smsCode;
 
         public String getUsername() { return username; }
         public void setUsername(String username) { this.username = username; }
         public String getPassword() { return password; }
         public void setPassword(String password) { this.password = password; }
+        public String getSmsCode() { return smsCode; }
+        public void setSmsCode(String smsCode) { this.smsCode = smsCode; }
+    }
+
+    static class SmsSendCodeRequest {
+        private String scene;
+        private String username;
+        private String password;
+        private String phone;
+
+        public String getScene() { return scene; }
+        public void setScene(String scene) { this.scene = scene; }
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+        public String getPassword() { return password; }
+        public void setPassword(String password) { this.password = password; }
+        public String getPhone() { return phone; }
+        public void setPhone(String phone) { this.phone = phone; }
+    }
+
+    static class SmsBindRequest {
+        private String phone;
+        private String code;
+
+        public String getPhone() { return phone; }
+        public void setPhone(String phone) { this.phone = phone; }
+        public String getCode() { return code; }
+        public void setCode(String code) { this.code = code; }
     }
 
     static class ClientLoginRequest {

@@ -229,6 +229,13 @@ function request(options) {
           if (res.data.code === 0) {
             // 成功：code=0
             resolve(res.data);
+          } else if (res.data.code === 4005) {
+            // 密码已对但还差短信验证码（登录二次验证）：reject 时带 smsRequired 标记，
+            // 登录页据此切到验证码输入步骤。这不是错误态，不能落进通用报错。
+            const err = new Error(res.data.message || '本次操作需要短信验证');
+            err.smsRequired = true;
+            err.data = res.data.data || {};
+            reject(err);
           } else if (res.data.code === 4001) {
             // 功能未配置（#18 T7）：reject 时带 featureNotConfigured 标记，
             // 由调用方决定如何引导（弹"去设置" / 降级为只读），避免在拦截器
@@ -858,14 +865,40 @@ export function register(username, password, displayName) {
 }
 
 // 用户登录
-export function login(username, password) {
+export function login(username, password, smsCode) {
   return request({
     url: '/api/auth/login',
     method: 'POST',
     data: {
       username,
       password,
+      ...(smsCode ? { smsCode } : {}),
     },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 发送短信验证码。scene='login' 需带 username/password（发往已绑定手机号）；
+// scene='bind' 需已登录，带 phone（发往待绑定的新手机号）。
+export function sendSmsCode(payload) {
+  return request({
+    url: '/api/auth/sms/send-code',
+    method: 'POST',
+    data: payload,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 绑定/更换手机号（验证码走 sendSmsCode 的 bind 场景）
+export function bindPhone(phone, code) {
+  return request({
+    url: '/api/auth/sms/bind',
+    method: 'POST',
+    data: { phone, code },
     header: {
       'Content-Type': 'application/json',
     },
