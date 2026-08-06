@@ -31,8 +31,14 @@ const MIRROR_ASSET_BASE = 'https://www.aiworkdeck.com/update/desktop/assets/'
 const GH_RELEASE_BASE = 'https://github.com/zeweihan/aiworkdeck/releases/download/'
 const DOWNLOAD_PAGE = 'https://www.aiworkdeck.com'
 
-// 壳层组件排除项：LOWA 引擎与 CJK 字体只随大版本走（fetch-lowa-assets 烙入）
-const ZETA_EXCLUDE = new Set(['lowa', 'cjk.ttc'])
+// 壳层组件排除项：LOWA 引擎与全部 CJK 字体只随大版本走（fetch-lowa-assets 烙入）。
+// 字体必须按前缀排，不能只列 cjk.ttc——cjk-kai.ttf(23.6MB)/cjk-serif.otf(11.1MB)/
+// cjk-fangsong.ttf(8.4MB) 曾漏网，让 v0.11.0 的壳层补丁涨到 26.9MB（业务代码仅 0.3MB）。
+const zetaExcluded = (name) => name === 'lowa' || /^cjk[.-]/.test(name)
+
+// pysvc-src 排除项：字节码缓存（客户端 Python 会自行重建）与随服务烙入的字体
+// 资产（app/fonts/NotoSansSC-Regular.ttf 15.7MB）——同理只随大版本走。
+const PYSVC_SRC_EXCLUDE_DIRS = new Set(['__pycache__', 'fonts'])
 
 function parseArgs(argv) {
   const args = {}
@@ -161,7 +167,7 @@ async function main() {
   stage['zetaoffice-wrapper'] = path.join(work, 'zetaoffice-wrapper')
   fs.mkdirSync(stage['zetaoffice-wrapper'], { recursive: true })
   for (const en of fs.readdirSync(args.zeta, { withFileTypes: true })) {
-    if (ZETA_EXCLUDE.has(en.name)) continue
+    if (zetaExcluded(en.name)) continue
     fs.cpSync(path.join(args.zeta, en.name), path.join(stage['zetaoffice-wrapper'], en.name), { recursive: true })
   }
 
@@ -173,7 +179,10 @@ async function main() {
     for (const en of fs.readdirSync(args.pysvc, { withFileTypes: true })) {
       const appDir = path.join(args.pysvc, en.name, 'app')
       if (en.isDirectory() && fs.existsSync(appDir)) {
-        fs.cpSync(appDir, path.join(stage['pysvc-src'], en.name, 'app'), { recursive: true })
+        fs.cpSync(appDir, path.join(stage['pysvc-src'], en.name, 'app'), {
+          recursive: true,
+          filter: (src) => !PYSVC_SRC_EXCLUDE_DIRS.has(path.basename(src))
+        })
       }
     }
   }
@@ -210,6 +219,18 @@ async function main() {
       ]
     })
     console.log(`[build-patch-assets] ${name} -> ${assetName} (${(st.size / 1048576).toFixed(1)}MB)`)
+  }
+
+  // --- 体积自检 --------------------------------------------------------------
+  // 补丁的全部意义就是小。任何一次"大文件漏进排除规则"（v0.11.0 的 CJK 字体与
+  // pysvc 字体）都会静默把补丁涨成几十 MB，用户侧只会表现为"更新有点慢"而不会
+  // 报错——所以在产出时就炸，别等用户发现。
+  const MAX_COMPONENT_MB = 8
+  const oversized = components.filter((c) => c.size > MAX_COMPONENT_MB * 1048576)
+  if (oversized.length && !process.env.ALLOW_LARGE_PATCH) {
+    console.error('[build-patch-assets] 补丁组件体积异常（多半是大文件漏进了排除规则）：')
+    for (const c of oversized) console.error(`  ${c.name}: ${(c.size / 1048576).toFixed(1)}MB > ${MAX_COMPONENT_MB}MB`)
+    fail('确认体积合理后可用 ALLOW_LARGE_PATCH=1 放行')
   }
 
   // --- 生成并签名 manifest ---------------------------------------------------
