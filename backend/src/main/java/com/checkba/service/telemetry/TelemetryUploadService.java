@@ -52,6 +52,7 @@ public class TelemetryUploadService {
         int post(String url, String jsonBody) throws Exception;
     }
 
+    @org.springframework.beans.factory.annotation.Autowired
     public TelemetryUploadService(TelemetryDailyRollupRepository rollupRepository,
                                   TelemetryEventRepository eventRepository,
                                   TelemetryRollupService rollupService,

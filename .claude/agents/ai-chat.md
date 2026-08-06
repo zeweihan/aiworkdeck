@@ -68,7 +68,14 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 ## 已知地雷
 
-- **改 AgentOrchestrator 构造器必须同步 EvalHarness**（已踩两次）。
+- **改 AgentOrchestrator 构造器必须同步 EvalHarness**（已踩三次；现构造器末三参是
+  TelemetryService/TelemetryTurnTracker/MatterClassifierService）。
+- **埋点体系**（`com.checkba.service.telemetry`，设计 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
+  唯一采集入口 TelemetryService.record/recordConv，字段过 TelemetryAttrWhitelist 白名单
+  （新事件/字段要同步白名单 + TelemetryServiceTest + 官网仓 lib/telemetry-store.ts 的 EVENT_WHITELIST）。
+  ai.turn 由 AgentRunStateService.mark 单点合成（新增终止分支走 mark 即自动覆盖）；
+  ai.tool 在 dispatchTool；真实模型分布在 ChatModelFactory 的 getOrCreate* 处（请求 modelId 会被白名单改写，别埋 controller）。
+  隐私红线：消息文本/文件名/原始 conversationId 永不入账本，convKey 用 InstallIdentityService 派生。
 - 新增工具不要改编排器（Phase 1 五条不变式）：实现 AgentToolComponent + @Tool + @ToolMeta 即自动注册；显示名要同步 toolDisplayNames.js。
 - SubAgentTools 注入必须 @Lazy（启动死环）。
 - 30 秒覆盖启发式曾致历史丢回复，现为轮次级 upsert（PR#153）——改历史持久化先读该记录。

@@ -170,6 +170,11 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 
 ## 已知地雷
 
+0. **客户端定期外发通道现有四条**：entitlement 刷新（10 分钟陈旧阈值）、插件吊销名单（24h）、
+   启动 license 复验，以及**匿名使用统计上报**（TelemetryUploadService，启动 + 24h，
+   POST {telemetry.ingest-url}/rollup 与 /events；开关在 system_setting 的
+   telemetry.rollup.enabled 默认开 / telemetry.events.enabled 默认关，设置页「数据统计」可关）。
+   README 隐私口径已随 PR 改为「匿名聚合统计默认开启可关闭」，动上报行为要同步 legal/PRIVACY.md。
 1. **文案里出现「登录」「未授权」「请先」会被前端当成掉线**。`frontend/src/services/api.js:249` 对
    `code:1` 的 message 做子串匹配识别未登录，命中就清本地会话（浏览器端还跳登录页）。
    账户未连接、未分配额度、付费项未购买全是**业务错误不是掉线**，文案必须绕开这三个子串
