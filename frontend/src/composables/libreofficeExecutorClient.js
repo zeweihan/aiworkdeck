@@ -157,17 +157,41 @@ export function createLibreOfficeExecutor(opts = {}) {
       return { success: false, message: m }
     }
     if (!EDITOR_ACTIONS.includes(action)) {
+      // 埋点：白名单外拒绝是「新工具漏配 EDITOR_ACTIONS」的静默失败计数器
+      trackEditorAction(action, params, false, 0, true)
       const m = 'Unknown action: ' + action
       if (opts.onError) opts.onError(m)
       return { success: false, message: m }
     }
+    const startMs = Date.now()
     try {
-      return await request(action, params)
+      const result = await request(action, params)
+      trackEditorAction(action, params, !!(result && result.success), Date.now() - startMs, false)
+      return result
     } catch (e) {
+      trackEditorAction(action, params, false, Date.now() - startMs, false)
       const m = e && e.message ? e.message : String(e)
       if (opts.onError) opts.onError(m)
       return { success: false, message: m }
     }
+  }
+
+  // 埋点：AI 与人工的全部编辑器动作总闸（__agent 是 AI 下发的唯一判别标记）；
+  // 只发 action 枚举名与成败/耗时，params 内容不采集。
+  // 本模块保持 framework-agnostic（被 spike/e2e 直接驱动），故用惰性动态 import，
+  // 非应用环境下 import 失败即静默跳过
+  function trackEditorAction(action, params, success, durationMs, whitelistRejected) {
+    try {
+      import('../utils/telemetryClient.js')
+        .then(m => m.track('editor.action', {
+          action: String(action || ''),
+          agent: !!(params && params.__agent),
+          success,
+          durationMs,
+          whitelistRejected
+        }))
+        .catch(() => {})
+    } catch (e) { /* 静默 */ }
   }
 
   return { connect, isConnected, executeCommand }

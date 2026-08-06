@@ -1527,6 +1527,39 @@ export function getUserActivityHistory() {
   })
 }
 
+// ===================== 产品埋点（匿名使用统计，与活动日志无关） =====================
+export function logTelemetryEvent(eventName, attrs) {
+  return request({
+    url: '/api/telemetry/event',
+    method: 'POST',
+    data: { eventName, attrs },
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function getTelemetrySettings() {
+  return request({
+    url: '/api/telemetry/settings',
+    method: 'GET'
+  })
+}
+
+export function updateTelemetrySettings(payload) {
+  return request({
+    url: '/api/telemetry/settings',
+    method: 'POST',
+    data: payload,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function getTelemetrySummary(days = 30) {
+  return request({
+    url: `/api/telemetry/summary?days=${days}`,
+    method: 'GET'
+  })
+}
+
 // ===================== 尽调清单管理 (Due Diligence) =====================
 export function getDdRequests(projectId) {
   return request({

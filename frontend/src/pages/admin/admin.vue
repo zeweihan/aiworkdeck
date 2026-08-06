@@ -772,9 +772,117 @@
             </view>
           </view>
         </scroll-view>
+
+        <!-- 数据统计（匿名使用统计开关 + 本地使用统计） -->
+        <scroll-view
+          v-else-if="activeNav === 'telemetry'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">数据统计</text>
+              <text class="section-subtitle">
+                产品会在本机记录功能使用情况（仅动作类型与计数，从不记录文档内容、对话文本或文件名），
+                用于下方的使用统计。以下开关控制哪些数据会以匿名形式帮助我们改进产品。
+              </text>
+            </view>
+            <view class="section-body">
+              <view class="provider-card">
+                <view class="provider-header telemetry-switch-row">
+                  <view class="telemetry-switch-info">
+                    <text class="provider-name">分享匿名使用统计</text>
+                    <text class="telemetry-switch-desc">
+                      每日一条聚合计数（功能使用次数、事项类型分布），匿名安装标识，随时可关
+                    </text>
+                  </view>
+                  <switch
+                    :checked="telemetrySettings.rollupEnabled"
+                    color="#1A5336"
+                    :disabled="telemetryBusy"
+                    @change="onToggleTelemetry('rollupEnabled', $event)"
+                  />
+                </view>
+              </view>
+              <view class="provider-card">
+                <view class="provider-header telemetry-switch-row">
+                  <view class="telemetry-switch-info">
+                    <text class="provider-name">分享脱敏使用明细</text>
+                    <text class="telemetry-switch-desc">
+                      在计数之外分享脱敏后的操作明细（动作名与耗时），帮助定位体验问题。默认关闭
+                    </text>
+                  </view>
+                  <switch
+                    :checked="telemetrySettings.eventsEnabled"
+                    color="#1A5336"
+                    :disabled="telemetryBusy"
+                    @change="onToggleTelemetry('eventsEnabled', $event)"
+                  />
+                </view>
+              </view>
+              <view class="telemetry-privacy-note">
+                <text class="telemetry-privacy-title">永远不会离开这台电脑的数据</text>
+                <text class="telemetry-privacy-line">文档与合同内容、AI 对话文本、文件名与文件路径、项目与客户名称、账户信息</text>
+              </view>
+            </view>
+          </view>
+
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">本地使用统计</text>
+              <text class="section-subtitle">数据全部来自本机，与上面的分享开关无关</text>
+              <view class="telemetry-days-row">
+                <text
+                  v-for="d in [7, 30, 90]"
+                  :key="d"
+                  class="telemetry-days-btn"
+                  :class="{ active: telemetryDays === d }"
+                  @tap="setTelemetryDays(d)"
+                >近 {{ d }} 天</text>
+              </view>
+            </view>
+            <view class="section-body" v-if="telemetrySummary">
+              <view class="telemetry-kpi-row">
+                <view class="telemetry-kpi">
+                  <text class="telemetry-kpi-num">{{ telemetrySummary.counters['ai.turn'] || 0 }}</text>
+                  <text class="telemetry-kpi-label">AI 对话轮次</text>
+                </view>
+                <view class="telemetry-kpi">
+                  <text class="telemetry-kpi-num">{{ telemetrySummary.counters['ai.tool'] || 0 }}</text>
+                  <text class="telemetry-kpi-label">工具调用</text>
+                </view>
+                <view class="telemetry-kpi">
+                  <text class="telemetry-kpi-num">{{ telemetrySummary.editorActions.agent || 0 }}</text>
+                  <text class="telemetry-kpi-label">AI 编辑动作</text>
+                </view>
+                <view class="telemetry-kpi">
+                  <text class="telemetry-kpi-num">{{ telemetrySummary.editorActions.human || 0 }}</text>
+                  <text class="telemetry-kpi-label">手动编辑动作</text>
+                </view>
+              </view>
+              <view v-if="telemetrySummary.byMatterCategory.length" class="telemetry-list">
+                <text class="telemetry-list-title">事项类型分布</text>
+                <view v-for="item in telemetrySummary.byMatterCategory" :key="'m-' + item.name" class="telemetry-list-row">
+                  <text class="telemetry-list-name">{{ item.name }}</text>
+                  <text class="telemetry-list-count">{{ item.count }}</text>
+                </view>
+              </view>
+              <view v-if="telemetrySummary.byTool.length" class="telemetry-list">
+                <text class="telemetry-list-title">最常用的 AI 工具</text>
+                <view v-for="item in telemetrySummary.byTool.slice(0, 8)" :key="'t-' + item.name" class="telemetry-list-row">
+                  <text class="telemetry-list-name">{{ item.name }}</text>
+                  <text class="telemetry-list-count">{{ item.count }}</text>
+                </view>
+              </view>
+            </view>
+            <view class="section-body" v-else>
+              <text class="telemetry-empty">暂无统计数据，正常使用后这里会出现你的效率画像</text>
+            </view>
+          </view>
+        </scroll-view>
       </view>
     </view>
-    
+
     <!-- Assistant Edit Modal (Custom Overlay) -->
     <view v-if="showAssistantModal" class="modal-overlay" @tap.stop>
         <view class="modal-content">
@@ -818,6 +926,7 @@ import {
   getAccountStatus, connectAccount, disconnectAccount, getAccountUsage,
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
+  getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
@@ -841,6 +950,7 @@ export default {
         { key: 'account', label: '账户与用量', desktopOnly: true },
         { key: 'components', label: '组件管理', desktopOnly: true },
         { key: 'cloud', label: '团队案件库', desktopOnly: true },
+        { key: 'telemetry', label: '数据统计' },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
       ],
       components: [],
@@ -897,6 +1007,11 @@ export default {
       // path 为空 = 后端没给（非单机模式/旧后端），整块不显示
       storageLocation: { path: '', defaultPath: '', custom: false, available: true, entitled: false },
       storageBusy: false,
+      // 数据统计（匿名使用统计开关 + 本地统计）
+      telemetrySettings: { rollupEnabled: true, eventsEnabled: false },
+      telemetryBusy: false,
+      telemetrySummary: null,
+      telemetryDays: 30,
       // 本机工作区（免登身份）候选。长度 <= 1 时整块卡片不渲染
       identityCandidates: [],
       identityCurrentId: null,
@@ -991,6 +1106,7 @@ export default {
       this.onNavTap({ key: nav })
     }
     this.loadConfig()
+    this.loadTelemetry()
     if (this.isDesktop) {
       // AI 面板的「AI Workdeck 云端」选项是否可选，取决于是否已连接账户。
       // status 是后端纯本地读盘，不打官网，可以随页面加载
@@ -1017,6 +1133,58 @@ export default {
     }
   },
   methods: {
+    // ---------- 数据统计 ----------
+    async loadTelemetry() {
+      try {
+        const s = await getTelemetrySettings()
+        if (s) {
+          this.telemetrySettings.rollupEnabled = !!s.rollupEnabled
+          this.telemetrySettings.eventsEnabled = !!s.eventsEnabled
+        }
+      } catch (e) {
+        console.warn('loadTelemetry settings failed', e)
+      }
+      await this.loadTelemetrySummary()
+    },
+    async loadTelemetrySummary() {
+      try {
+        const r = await getTelemetrySummary(this.telemetryDays)
+        if (r && r.code === 0) {
+          const hasData = r.counters && Object.keys(r.counters).length > 0
+          this.telemetrySummary = hasData ? {
+            counters: r.counters || {},
+            byTool: r.byTool || [],
+            bySkill: r.bySkill || [],
+            byMatterCategory: r.byMatterCategory || [],
+            editorActions: r.editorActions || { agent: 0, human: 0 },
+            tokens: r.tokens || {},
+          } : null
+        }
+      } catch (e) {
+        console.warn('loadTelemetrySummary failed', e)
+      }
+    },
+    setTelemetryDays(d) {
+      this.telemetryDays = d
+      this.loadTelemetrySummary()
+    },
+    async onToggleTelemetry(key, evt) {
+      const value = !!(evt && evt.detail && evt.detail.value)
+      this.telemetryBusy = true
+      try {
+        const r = await updateTelemetrySettings({ [key]: value })
+        if (r) {
+          this.telemetrySettings.rollupEnabled = !!r.rollupEnabled
+          this.telemetrySettings.eventsEnabled = !!r.eventsEnabled
+        }
+      } catch (e) {
+        uni.showToast({ title: '保存失败，请重试', icon: 'none' })
+        // 回读真实状态，避免开关显示与后端不一致
+        this.loadTelemetry()
+      } finally {
+        this.telemetryBusy = false
+      }
+    },
     async loadComponents() {
       if (!this.isDesktop) return
       try {
@@ -2459,5 +2627,134 @@ $border-color: #E9ECEF; // Gray-Light
 .usage-cost {
   font-size: 13px;
   font-weight: 600;
+}
+
+/* 数据统计 */
+.telemetry-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.telemetry-switch-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.telemetry-switch-desc {
+  font-size: 12px;
+  color: $text-secondary;
+  line-height: 1.5;
+}
+
+.telemetry-privacy-note {
+  margin-top: 12px;
+  padding: 12px 14px;
+  background: #F4F7F5;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.telemetry-privacy-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1A5336;
+}
+
+.telemetry-privacy-line {
+  font-size: 12px;
+  color: $text-secondary;
+  line-height: 1.6;
+}
+
+.telemetry-days-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.telemetry-days-btn {
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 14px;
+  border: 1px solid #D8E0DB;
+  color: $text-secondary;
+  cursor: pointer;
+}
+
+.telemetry-days-btn.active {
+  background: #1A5336;
+  border-color: #1A5336;
+  color: #FFFFFF;
+}
+
+.telemetry-kpi-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.telemetry-kpi {
+  flex: 1;
+  min-width: 120px;
+  padding: 14px 16px;
+  background: #F9FAF9;
+  border: 1px solid #E4EAE6;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.telemetry-kpi-num {
+  font-size: 22px;
+  font-weight: 700;
+  color: #1A5336;
+}
+
+.telemetry-kpi-label {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.telemetry-list {
+  margin-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.telemetry-list-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.telemetry-list-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 2px;
+  border-bottom: 1px solid #F0F3F1;
+}
+
+.telemetry-list-name {
+  font-size: 13px;
+}
+
+.telemetry-list-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1A5336;
+}
+
+.telemetry-empty {
+  font-size: 13px;
+  color: $text-secondary;
 }
 </style>
