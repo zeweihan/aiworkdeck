@@ -42,11 +42,36 @@ if ! [ -s "$TMP/assets.tsv" ]; then
   exit 0
 fi
 
+# 大陆机器直连 GitHub 拉几十 MB 常中断：带重试与续传，并对下载结果验字节数。
+# 首次部署 v0.11.0 时 28MB 的壳层补丁就是这么半路断掉的（set -e 让整次同步
+# 前功尽弃，manifest 没落地——所幸客户端有 GitHub 兜底通道，用户无感）。
+fetch_with_retry() {
+  local url="$1" out="$2" want="$3" name="$4"
+  local attempt
+  for attempt in 1 2 3 4; do
+    # -C - 续传（配合 --retry 让长文件能接着上次的字节走）
+    if curl -fL --retry 3 --retry-delay 5 --retry-all-errors \
+            --connect-timeout 20 --speed-limit 1024 --speed-time 60 \
+            -C - -o "$out" "$url" 2>/dev/null || [ -f "$out" ]; then
+      local got
+      got=$(stat -c %s "$out" 2>/dev/null || stat -f %z "$out" 2>/dev/null || echo 0)
+      [ "$got" = "$want" ] && return 0
+      echo "[mirror-sync]   第 $attempt 次不完整（$got/$want），重试" >&2
+    else
+      echo "[mirror-sync]   第 $attempt 次失败，重试" >&2
+    fi
+    sleep $((attempt * 5))
+  done
+  return 1
+}
+
 MANIFEST_READY=0
+FAILED=0
 while IFS=$'\t' read -r name size url; do
   case "$name" in
     manifest.json|manifest.json.sig)
-      curl -sfL "$url" -o "$TMP/$name"
+      # manifest 很小，失败即整次放弃（不能让 assets 换了而清单还是旧的）
+      curl -sfL --retry 3 --retry-delay 3 --retry-all-errors "$url" -o "$TMP/$name" || { FAILED=1; break; }
       MANIFEST_READY=1
       ;;
     *)
@@ -55,12 +80,23 @@ while IFS=$'\t' read -r name size url; do
         echo "[mirror-sync] skip (exists): $name"
       else
         echo "[mirror-sync] download: $name (${size} bytes)"
-        curl -sfL "$url" -o "$TMP/$name"
-        mv "$TMP/$name" "$dest"
+        if fetch_with_retry "$url" "$TMP/$name" "$size" "$name"; then
+          mv "$TMP/$name" "$dest"
+        else
+          echo "[mirror-sync] 放弃: $name（重试耗尽）" >&2
+          FAILED=1
+        fi
       fi
       ;;
   esac
 done < "$TMP/assets.tsv"
+
+# 任一 asset 没就位就绝不换 manifest——否则客户端会拿到指向缺失文件的清单，
+# 每次检查更新都下到一半失败。宁可镜像停在旧版本（客户端自动走 GitHub 兜底）。
+if [ "$FAILED" = "1" ]; then
+  echo "[mirror-sync] 有产物未就位，本次不更新 manifest（客户端继续走 GitHub 兜底）；重跑本脚本可续传补齐" >&2
+  exit 1
+fi
 
 # assets 全部就位后再原子换 manifest（+签名，先 sig 后 manifest 也无妨，
 # 客户端总是成对拉取并验签）
