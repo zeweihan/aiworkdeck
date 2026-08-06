@@ -1,40 +1,142 @@
 /**
- * Office.js 文档访问：读取当前 Word 文档正文，作为 activeContext 内联正文随对话请求上送。
- * 后端上限 200k 字符，客户端先行截断少传流量。
+ * Office.js 文档访问：宿主检测 + 读取当前文档内容，作为 activeContext 内联正文
+ * 随对话请求上送。后端上限 200k 字符，客户端先行截断少传流量。
+ *
+ * 宿主支持：Word（正文纯文本）/ Excel（活动工作表已用区域，TSV 文本）/
+ * PowerPoint（各页形状文本清单，需 PowerPointApi 1.4）。
  */
 const MAX_BODY_CHARS = 200_000
+// Excel 内容读取的单元格上限（超大表只取前若干行，避免卡死任务窗格）
+const MAX_EXCEL_ROWS = 2000
+// PPT 内容读取的页数上限
+const MAX_PPT_SLIDES = 100
 
 export function officeAvailable() {
-  return typeof Office !== 'undefined' && typeof Word !== 'undefined'
+  return typeof Office !== 'undefined' && typeof Office.context !== 'undefined'
+}
+
+/**
+ * 当前宿主：'word' | 'excel' | 'powerpoint' | ''（未知/非 Office 环境）。
+ * 随 chat 请求以 officeHost 字段上送，后端据此细分 office_* 工具可见性。
+ */
+export function detectHost() {
+  try {
+    const host = Office.context.host
+    if (host === Office.HostType.Word) return 'word'
+    if (host === Office.HostType.Excel) return 'excel'
+    if (host === Office.HostType.PowerPoint) return 'powerpoint'
+  } catch (e) { /* office.js 未初始化 */ }
+  // 兜底：按全局对象判断（个别宿主 Office.context.host 取不到）
+  if (typeof Word !== 'undefined') return 'word'
+  if (typeof Excel !== 'undefined') return 'excel'
+  if (typeof PowerPoint !== 'undefined') return 'powerpoint'
+  return ''
+}
+
+function documentDisplayName(fallback) {
+  let name = fallback
+  try {
+    const url = Office.context && Office.context.document && Office.context.document.url
+    if (url) {
+      const seg = String(url).split(/[\\/]/).pop()
+      if (seg) name = seg
+    }
+  } catch (e) { /* 文档未保存时可能拿不到 url，用通称即可 */ }
+  return name
+}
+
+async function readWordBody() {
+  const text = await Word.run(async (context) => {
+    const body = context.document.body
+    body.load('text')
+    await context.sync()
+    return body.text || ''
+  })
+  return { text, name: documentDisplayName('当前 Word 文档'), fileType: 'docx' }
+}
+
+async function readExcelSheet() {
+  const text = await Excel.run(async (context) => {
+    const sheet = context.workbook.worksheets.getActiveWorksheet()
+    sheet.load('name')
+    const used = sheet.getUsedRangeOrNullObject(true)
+    used.load('values,address,isNullObject')
+    await context.sync()
+    if (used.isNullObject) return `工作表「${sheet.name}」为空`
+    const rows = used.values.slice(0, MAX_EXCEL_ROWS)
+    const lines = rows.map((row) => row.map((v) => (v == null ? '' : String(v))).join('\t'))
+    let out = `工作表「${sheet.name}」（区域 ${used.address}）：\n` + lines.join('\n')
+    if (used.values.length > MAX_EXCEL_ROWS) {
+      out += `\n...（共 ${used.values.length} 行，仅附前 ${MAX_EXCEL_ROWS} 行）`
+    }
+    return out
+  })
+  return { text, name: documentDisplayName('当前 Excel 工作簿'), fileType: 'xlsx' }
+}
+
+async function readPptSlides() {
+  const supported = (() => {
+    try { return Office.context.requirements.isSetSupported('PowerPointApi', '1.4') } catch (e) { return false }
+  })()
+  if (!supported) {
+    // 旧版宿主读不到形状文本：不附正文，让调用方按「读不到」处理
+    throw new Error('当前 PowerPoint 版本不支持读取幻灯片文本（需要 PowerPointApi 1.4）')
+  }
+  const text = await PowerPoint.run(async (context) => {
+    const slides = context.presentation.slides
+    slides.load('items')
+    await context.sync()
+    const items = slides.items.slice(0, MAX_PPT_SLIDES)
+    // 先把所有形状的 textFrame 排入加载队列，再一次 sync
+    const perSlide = items.map((slide) => {
+      slide.shapes.load('items')
+      return slide
+    })
+    await context.sync()
+    const frames = perSlide.map((slide) =>
+      slide.shapes.items.map((shape) => {
+        const tf = shape.getTextFrameOrNullObject()
+        tf.load('hasText,isNullObject')
+        tf.textRange.load('text')
+        return tf
+      }))
+    await context.sync()
+    const lines = frames.map((slideFrames, i) => {
+      const texts = slideFrames
+        .filter((tf) => !tf.isNullObject && tf.hasText)
+        .map((tf) => (tf.textRange.text || '').trim())
+        .filter(Boolean)
+      return `第${i + 1}页：${texts.join(' | ') || '（无文本）'}`
+    })
+    let out = lines.join('\n')
+    if (slides.items.length > MAX_PPT_SLIDES) {
+      out += `\n...（共 ${slides.items.length} 页，仅附前 ${MAX_PPT_SLIDES} 页）`
+    }
+    return out
+  })
+  return { text, name: documentDisplayName('当前 PowerPoint 演示文稿'), fileType: 'pptx' }
 }
 
 export async function readActiveDocument() {
   if (!officeAvailable()) return null
   try {
-    const text = await Word.run(async (context) => {
-      const body = context.document.body
-      body.load('text')
-      await context.sync()
-      return body.text || ''
-    })
-    let name = '当前 Word 文档'
-    try {
-      const url = Office.context && Office.context.document && Office.context.document.url
-      if (url) {
-        const seg = String(url).split(/[\\/]/).pop()
-        if (seg) name = seg
-      }
-    } catch (e) { /* 文档未保存时可能拿不到 url，用通称即可 */ }
+    const host = detectHost()
+    let doc
+    if (host === 'word') doc = await readWordBody()
+    else if (host === 'excel') doc = await readExcelSheet()
+    else if (host === 'powerpoint') doc = await readPptSlides()
+    else return null
+    const text = doc.text || ''
     return {
       // 该文档在后端没有 fileId，用固定合成 id 满足 activeContext 契约；
       // 正文经 inlineContent 内联上送，后端不会拿这个 id 去读库
       id: 'office-current-document',
-      name,
-      fileType: 'docx',
+      name: doc.name,
+      fileType: doc.fileType,
       inlineContent: text.length > MAX_BODY_CHARS ? text.slice(0, MAX_BODY_CHARS) : text
     }
   } catch (e) {
-    console.warn('[Addin] 读取文档正文失败', e)
+    console.warn('[Addin] 读取文档内容失败', e)
     return null
   }
 }
