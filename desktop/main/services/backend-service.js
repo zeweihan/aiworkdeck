@@ -98,6 +98,10 @@ function spawnEnv(ctx) {
     if (!env.EXTERNAL_TTS_PROVIDER) env.EXTERNAL_TTS_PROVIDER = 'local'
     env.EXTERNAL_TTS_LOCAL_BASE_URL = 'http://127.0.0.1:' + ctx.ports['kokoro-service']
   }
+  // 匿名使用统计的版本标注（版本单一来源 desktop/package.json，经 electron app 读取）
+  if (!env.AWD_APP_VERSION) {
+    try { env.AWD_APP_VERSION = require('electron').app.getVersion() } catch (e) { /* 非 electron 环境跳过 */ }
+  }
   return env
 }
 

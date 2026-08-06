@@ -198,6 +198,17 @@ ai:
     # 在线 Skill 广场注册表地址（官网公共注册表，见 SkillMarketService）
     registry-url: https://www.aiworkdeck.com/api/registry/skills
 
+# 匿名使用统计（设计见 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
+# 本地账本永远记录；出本机由 system_setting 的 telemetry.rollup.enabled（默认开）/
+# telemetry.events.enabled（默认关）控制，设置页可随时关闭
+telemetry:
+  # 官网 ingest 基址（POST {base}/rollup 与 {base}/events）
+  ingest-url: https://www.aiworkdeck.com/api/telemetry
+  # 应用版本（桌面壳经 AWD_APP_VERSION 注入；单一来源 desktop/package.json）
+  app-version: ${AWD_APP_VERSION:dev}
+  # 事项分类兜底用的平价模型
+  classifier-model: deepseek/deepseek-v4-flash
+
 # 文件存储配置
 storage:
   # 存储类型：local（本地文件系统）或 oss（对象存储）
