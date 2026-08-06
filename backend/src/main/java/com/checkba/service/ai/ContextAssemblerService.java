@@ -469,28 +469,6 @@ public class ContextAssemblerService {
         return legalTools.read_document(activeContext.getId());
     }
 
-    /** 内联正文防滥用上限：超出即截断（客户端可随请求直接携带正文，不能无限吃内存）。 */
-    private static final int MAX_INLINE_CONTENT_CHARS = 200_000;
-
-    /**
-     * 活跃文档正文来源二选一：
-     * 1) 请求随带的内联正文（Office 插件等场景——文档在客户端本地，后端没有可读的 fileId）优先；
-     * 2) 否则走既有 read_document(fileId) 路径。
-     * 两条路径产出同格式正文，后续统一由调用方做 CDATA 包裹与 maxCharsPerFile 截断。
-     */
-    private String resolveActiveDocumentContent(
-            com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
-        String inline = activeContext.getInlineContent();
-        if (inline != null && !inline.isEmpty()) {
-            if (inline.length() > MAX_INLINE_CONTENT_CHARS) {
-                inline = inline.substring(0, MAX_INLINE_CONTENT_CHARS)
-                        + "\n... [TRUNCATED - Inline content too long]";
-            }
-            return inline;
-        }
-        return legalTools.read_document(activeContext.getId());
-    }
-
     /**
      * Determines the current phase based on plan and task list state.
      * - CHAT: No plan, no task list (simple conversation)
