@@ -307,6 +307,7 @@
           <div v-else-if="msg.role === 'ASSISTANT'" class="assistant-root-wrapper">
              <RootBubble
                :bubble="msg"
+               :is-latest="index === bubbles.length - 1"
                @open-artifact-tab="handleArtifactOpenTab"
                @approve="handleArtifactApprove"
                @message-action="$emit('message-action', $event)"
@@ -1952,10 +1953,14 @@ export default {
        // Artifact
        handleArtifactOpenTab: (art) => emit('artifact-open-tab', art),
        handleArtifactApprove: async (art) => {
-          console.log('[ChatInterface] Artifact Approved:', art.id)
+          console.log('[ChatInterface] Artifact Approved:', art.id, art.revised ? `(revised x${art.changeCount})` : '')
+          // 计划卡一键推进：普通批准发确认语；修订版把改动数与修订后全文一并回喂模型
+          const prompt = art.revised
+             ? `我已修订计划（共 ${art.changeCount} 处改动，${art.diffSummary}）。请以下方修订版计划为准执行，注意修订处的差异：\n\n${art.content}`
+             : `已确认${art.type === 'implementation_plan' ? '实施计划' : '计划'}，请按此推进。`
           // 审批后使用 AGENT 模式执行计划
           await sendMessage({
-             prompt: `已批准实施计划: ${art.fileName}`,
+             prompt,
              fileList: [],
              projectId: props.projectId,
              modelId: currentModelId.value,

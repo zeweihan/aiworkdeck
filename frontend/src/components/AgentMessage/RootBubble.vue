@@ -36,11 +36,12 @@
                <TodoProgressCard :todos="bubble.planTodos" />
             </div>
 
-            <!-- 3. Process Stream（工具执行按 plan 步骤分组：最新步骤展开，旧步骤收起，
-                 避免整个面板被工具卡片刷满；无步骤归属的保持平铺） -->
+            <!-- 3. Process Stream（工具执行一律收进可折叠组：有 plan 步骤的按步骤分组，
+                 无归属的收进「执行过程」组；流式进行中展开最新组，结束后全部收起——
+                 后台操作细节默认不刷屏，点开才看） -->
             <div class="process-stream">
                <template v-for="(group, gi) in processGroups" :key="group.key + '-' + gi">
-                  <div v-if="group.title" class="step-group">
+                  <div class="step-group">
                      <div class="step-group-header" @click="toggleGroup(group.key, gi)">
                         <span class="step-group-marker" :class="{ done: isGroupDone(group), error: groupHasError(group) }"></span>
                         <span class="step-group-title">{{ group.title }}</span>
@@ -59,17 +60,10 @@
                         />
                      </div>
                   </div>
-                  <template v-else>
-                     <ProcessCard
-                       v-for="proc in group.procs"
-                       :key="proc.id"
-                       :process="proc"
-                     />
-                  </template>
                </template>
             </div>
 
-            <!-- 4. Artifacts -->
+            <!-- 4. Artifacts（计划卡只在最新一条助手消息里可操作） -->
             <div class="artifacts-stream" v-if="bubble.artifacts.length > 0">
                <div v-for="art in bubble.artifacts" :key="art.id" class="artifact-wrapper">
                   <ArtifactCard
@@ -79,6 +73,7 @@
                     :status="art.status"
                     :file-name="art.fileName"
                     :data="art.data"
+                    :actionable="isLatest && !bubble.isStreaming"
                     @open-tab="$emit('open-artifact-tab', $event)"
                     @approve="$emit('approve', $event)"
                   />
@@ -133,7 +128,9 @@ import ArtifactCard from '../ArtifactCard.vue'
 import MarkdownPreview from '../MarkdownPreview.vue'
 
 const props = defineProps({
-  bubble: { type: Object, required: true }
+  bubble: { type: Object, required: true },
+  /** 是否为最新一条助手消息（决定计划卡是否可操作） */
+  isLatest: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action'])
@@ -149,10 +146,10 @@ function pickAction(type) {
   sendAction(type)
 }
 
-// ---- 工具执行按 plan 步骤分组 ----
+// ---- 工具执行分组 ----
 // process 在创建时被 useAgentStream 打上 stepIndex/stepTitle（当时 in_progress 的
-// plan 项）。这里把相邻同步骤的 process 收进一个可折叠组；历史消息没有该标记，
-// 落入 key='' 的平铺组，渲染不变。
+// plan 项）。有步骤归属的按步骤收组；无归属的（含历史消息）也收进「执行过程」组，
+// 后台工具调用细节不再平铺刷屏。
 const processGroups = computed(() => {
   const groups = []
   let cur = null
@@ -160,7 +157,7 @@ const processGroups = computed(() => {
     const grouped = typeof p.stepIndex === 'number' && p.stepIndex >= 0
     const key = grouped ? `s${p.stepIndex}` : ''
     if (!cur || cur.key !== key) {
-      cur = { key, title: grouped ? (p.stepTitle || `步骤 ${p.stepIndex + 1}`) : '', procs: [] }
+      cur = { key, title: grouped ? (p.stepTitle || `步骤 ${p.stepIndex + 1}`) : '执行过程', procs: [] }
       groups.push(cur)
     }
     cur.procs.push(p)
@@ -168,11 +165,11 @@ const processGroups = computed(() => {
   return groups
 })
 
-// 默认只展开最新一组（正在进行的步骤）；用户手动开合后以用户为准
+// 流式进行中默认展开最新一组；结束后（含历史消息）全部收起。用户手动开合后以用户为准
 const groupToggles = ref({})
 const isGroupExpanded = (key, gi) => {
   if (key in groupToggles.value) return groupToggles.value[key]
-  return gi === processGroups.value.length - 1
+  return !!props.bubble.isStreaming && gi === processGroups.value.length - 1
 }
 const toggleGroup = (key, gi) => {
   groupToggles.value = { ...groupToggles.value, [key]: !isGroupExpanded(key, gi) }
