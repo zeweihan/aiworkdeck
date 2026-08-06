@@ -24,8 +24,8 @@
             v-for="opt in providerOptions"
             :key="opt.value"
             class="provider-card"
-            :class="{ selected: form.ai.activeProvider === opt.value }"
-            @tap="form.ai.activeProvider = opt.value"
+            :class="{ selected: form.ai.activeProvider === opt.value, unavailable: opt.unavailable }"
+            @tap="pickProvider(opt)"
           >
             <view class="provider-head">
               <view class="radio-dot" :class="{ checked: form.ai.activeProvider === opt.value }"></view>
@@ -35,6 +35,7 @@
               </text>
             </view>
             <text class="provider-desc">{{ opt.desc }}</text>
+            <text v-if="opt.unavailable" class="provider-blocked">{{ opt.hint }}</text>
             <view v-if="form.ai.activeProvider === opt.value && opt.setupHint" class="provider-setup">
               <text class="setup-line">{{ opt.setupHint }}</text>
               <text class="setup-cmd" selectable>{{ opt.setupCmd }}</text>
@@ -125,7 +126,13 @@
 </template>
 
 <script>
-import { getWizardStatus, submitWizard } from '@/services/api.js'
+import {
+  getWizardStatus,
+  submitWizard,
+  getAccountStatus,
+  getAccountUsage,
+} from '@/services/api.js'
+import { isDesktopHost } from '@/services/host.js'
 
 export default {
   name: 'FirstRunWizard',
@@ -133,12 +140,17 @@ export default {
     return {
       submitting: false,
       showAdvanced: false,
+      isDesktop: isDesktopHost(),
+      // 平台通道「AI Workdeck 云端」的两个前置条件，与 admin 页同一判据：
+      // 已连接账户（本地读盘）+ 已在官网从余额分配 AI 额度（用量接口）。
+      platformAiAvailable: false,
+      platformNeedsAllocation: false,
       // 各云端提供商的 key 暂存：切换选项不丢已填内容，提交时只带选中者
       apiKeys: {
         OPENROUTER: '',
         GEMINI: '',
       },
-      providerOptions: [
+      byokOptions: [
         {
           value: 'OLLAMA',
           label: '本地 Ollama',
@@ -171,7 +183,9 @@ export default {
       ],
       form: {
         ai: {
-          activeProvider: 'OLLAMA',
+          // 刻意不预选：预选 OLLAMA 时，没装 Ollama 的用户一路点「完成设置」，
+          // 会到发第一条消息才收到 Connection refused。必须让用户显式选一个。
+          activeProvider: '',
         },
         external: {
           aliyunOcr: { accessKeyId: '', accessKeySecret: '' },
@@ -183,10 +197,68 @@ export default {
       },
     }
   },
+  computed: {
+    // 「AI Workdeck 云端」置顶：用账户 Key 解锁的用户买的就是这条通道，
+    // 不列出来他会被引导去再配一家别的 Key。前置条件不满足时展示但不可选并给出下一步
+    // （隐藏会让人发现不了，直接可选又会拖到发消息那一刻才报错）。
+    providerOptions() {
+      if (!this.isDesktop) return this.byokOptions
+      let hint = ''
+      // 试用码解锁的用户走到这里账户是未连接的，引导指向进入产品后可用的入口
+      if (!this.platformAiAvailable) hint = '需先连接账户：进入产品后在「系统管理 → 账户与用量」粘贴官网账户 Key'
+      else if (this.platformNeedsAllocation) hint = '需先在官网账户页从余额分配 AI 额度'
+      return [
+        {
+          value: 'AWD_CLOUD',
+          label: 'AI Workdeck 云端',
+          local: false,
+          desc: '用账户余额直接调用平台模型，无需自备 Key。按实际扣费结算，用量在「系统管理 → 账户与用量」可查。',
+          keyField: null,
+          hint,
+          unavailable: !!hint,
+        },
+        ...this.byokOptions,
+      ]
+    },
+  },
   onLoad() {
     this.checkStatus()
+    if (this.isDesktop) {
+      this.loadPlatformAi()
+    }
   },
   methods: {
+    // 平台通道可用性：status 是后端本地读盘（不打官网），可用时再补一次用量接口判额度。
+    // 两个条件都满足才替用户预选它——解锁时粘的就是账户 Key 的人不该再被问一遍。
+    async loadPlatformAi() {
+      try {
+        const s = await getAccountStatus()
+        this.platformAiAvailable = !!(s && s.platformAiAvailable)
+      } catch (e) {
+        this.platformAiAvailable = false
+        return
+      }
+      if (!this.platformAiAvailable) return
+      try {
+        const usage = await getAccountUsage()
+        const platform = (usage && usage.platform) || null
+        // quotaAvailable=false 表示实时口径拿不到，此时不当作「没额度」拦人
+        this.platformNeedsAllocation = !!(platform && platform.quotaAvailable && !platform.hasAiQuota)
+      } catch (e) {
+        this.platformNeedsAllocation = false
+      }
+      if (!this.platformNeedsAllocation && !this.form.ai.activeProvider) {
+        this.form.ai.activeProvider = 'AWD_CLOUD'
+      }
+    },
+    // 不可选项给出下一步，而不是静默不响应（与 admin 页 onPickProvider 同口径）
+    pickProvider(opt) {
+      if (opt.unavailable) {
+        uni.showToast({ title: opt.hint || '当前不可用', icon: 'none' })
+        return
+      }
+      this.form.ai.activeProvider = opt.value
+    },
     async checkStatus() {
       try {
         const res = await getWizardStatus()
@@ -415,6 +487,19 @@ export default {
 .provider-card.selected {
   border-color: #2563eb;
   background: rgba(37, 99, 235, 0.04);
+}
+
+.provider-card.unavailable {
+  opacity: 0.62;
+  background: #f8fafc;
+}
+
+.provider-blocked {
+  display: block;
+  font-size: 12px;
+  color: #b45309;
+  margin-top: 6px;
+  line-height: 1.6;
 }
 
 .provider-head {

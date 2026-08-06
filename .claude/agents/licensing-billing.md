@@ -68,6 +68,9 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `service/ai/PlatformUsageAccountant.java` — 平台通道真实扣费对账（`GET https://openrouter.ai/api/v1/key` 累计消费差分）。
 - `service/ai/ChatModelFactory.java` — `Provider.AWD_CLOUD` 路由；`demotePlatformProvider()` 在断开账户时把供应商降级回落。
 - `model/entity/TokenUsage.java` 的 `costSource`：`platform`（真实扣费）/ `estimate`（BYOK 单价表估算）。
+- 前端选平台通道有**两个**入口，判据必须一致（已连接账户 + 已分配额度，缺哪个都展示但不可选并给下一步）：
+  `pages/admin/admin.vue` 的 `aiProviderOptions`、`pages/wizard/wizard.vue` 的 `providerOptions`（首启向导，
+  条件齐备时自动预选平台通道；向导刻意不预选任何供应商，见下方地雷 14）。
 
 **广场付费项（PR-D，链路见 plugin-marketplace.md）**
 - `backend/src/main/java/com/checkba/service/market/MarketPurchaseGate.java` — Skill 与插件两条安装链路共用的付费判定单一出口。
@@ -275,6 +278,12 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 13. **锁定拒绝不计入失败计数**。AuthController 里锁定检查（`checkLoginAttempt`）与凭据校验
     分属两个 try：锁定期内的轮询若也 `recordLoginFailure` 会把锁无限续期。同理 awdk-login
     只有官网明确 401/403（UNAUTHORIZED）才计失败，网络不可达不消耗尝试次数。
+
+14. **首启向导不预选 AI 供应商**。曾经预选「本地 Ollama」，没装 Ollama 的用户一路点「完成设置」，
+    要到发第一条消息才收到 Connection refused（`ChatModelFactory` 只在 OPENROUTER 下防回退 Ollama，
+    反向没有保护）。现在 `activeProvider` 初值是空串、由用户显式选，唯一的例外是「已连接账户且已分配额度」
+    时自动预选平台通道——用账户 Key 解锁的人买的就是这条通道，不该再被引导去配别家的 Key。
+    向导提交前的空值拦截在 `handleSubmit`，后端 `WizardController` 也拒空 `activeProvider`（两道都在才算数）。
 
 ## 验证
 
