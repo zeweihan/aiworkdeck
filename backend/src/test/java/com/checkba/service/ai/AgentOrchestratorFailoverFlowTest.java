@@ -120,7 +120,7 @@ class AgentOrchestratorFailoverFlowTest {
         RunLoopCompactor compactor =
                 new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties));
 
-        runState = new AgentRunStateService();
+        runState = new AgentRunStateService(mock(com.checkba.repository.AgentRunRecordRepository.class));
         orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, mock(TokenUsageService.class), assembler,
                 toolRegistry, skillRouter, parser, mock(MemoryPipelineService.class),
