@@ -124,4 +124,82 @@ async function ensurePysvcExtracted(opts) {
   }
 }
 
-module.exports = { pysvcPath, ensurePysvcExtracted, MARKER }
+// ---------------------------------------------------------------------------
+// P3：pysvc 源码层补丁（设计文档 §11 Phase 3）。
+// 解压产物在用户数据目录（可写、不在签名密封内），补丁 = 把 overlay 组件
+// pysvc-src 里的文件（相对 pysvc 根的同构路径）覆盖进解压树。覆盖前逐文件
+// 备份原件到 .patch-backup/，回滚即还原备份——不必重解 728MB 的 tar。
+// 全量升级换 pysvc-<version> 目录后补丁自然重放（marker 不匹配触发重应用）。
+
+const APPLIED_FILE = '.patch-applied.json'
+const BACKUP_DIR = '.patch-backup'
+
+function walkFiles(root, dir = root, out = []) {
+  let entries
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch (e) { return out }
+  for (const en of entries) {
+    const fp = path.join(dir, en.name)
+    if (en.isDirectory()) walkFiles(root, fp, out)
+    else if (en.isFile()) out.push(path.relative(root, fp))
+  }
+  return out
+}
+
+function restoreSrcPatch(pysvcRoot) {
+  const appliedFp = path.join(pysvcRoot, APPLIED_FILE)
+  let applied
+  try { applied = JSON.parse(fs.readFileSync(appliedFp, 'utf8')) } catch (e) { return false }
+  const backupRoot = path.join(pysvcRoot, BACKUP_DIR)
+  for (const rel of applied.files || []) {
+    const target = path.join(pysvcRoot, rel)
+    const backup = path.join(backupRoot, rel)
+    try {
+      if (fs.existsSync(backup)) {
+        fs.mkdirSync(path.dirname(target), { recursive: true })
+        fs.copyFileSync(backup, target)
+      } else {
+        fs.rmSync(target, { force: true }) // 补丁新增的文件：还原 = 删除
+      }
+    } catch (e) { /* 尽力而为，单文件失败不阻断其余还原 */ }
+  }
+  try { fs.rmSync(backupRoot, { recursive: true, force: true }) } catch (e) { /* ignore */ }
+  try { fs.rmSync(appliedFp, { force: true }) } catch (e) { /* ignore */ }
+  return true
+}
+
+/**
+ * 让解压树与 overlay 的 pysvc-src 组件对齐（幂等）。
+ * @param {string} pysvcRoot 解压产物根（<userData>/pysvc-<version>/pysvc）
+ * @param {string|null} patchDir overlay 组件目录；null = 无补丁（触发还原）
+ * @param {string|null} patchVersion 组件版本（marker 判等用）
+ * @returns {{applied?: boolean, reverted?: boolean}}
+ */
+function syncSrcPatch(pysvcRoot, patchDir, patchVersion) {
+  const appliedFp = path.join(pysvcRoot, APPLIED_FILE)
+  if (!patchDir) {
+    return { reverted: restoreSrcPatch(pysvcRoot) }
+  }
+  try {
+    const applied = JSON.parse(fs.readFileSync(appliedFp, 'utf8'))
+    if (applied.version === patchVersion) return { applied: false } // 已是该版本
+  } catch (e) { /* 未应用过 */ }
+
+  restoreSrcPatch(pysvcRoot) // 先回到干净基线，防旧补丁文件残留
+  const files = walkFiles(patchDir)
+  const backupRoot = path.join(pysvcRoot, BACKUP_DIR)
+  for (const rel of files) {
+    const target = path.join(pysvcRoot, rel)
+    if (fs.existsSync(target)) {
+      const backup = path.join(backupRoot, rel)
+      fs.mkdirSync(path.dirname(backup), { recursive: true })
+      fs.copyFileSync(target, backup)
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.copyFileSync(path.join(patchDir, rel), target)
+  }
+  // marker 最后写（写入即视为应用完成；中途失败下次启动整套重放）
+  fs.writeFileSync(appliedFp, JSON.stringify({ version: patchVersion, files }, null, 2))
+  return { applied: true }
+}
+
+module.exports = { pysvcPath, ensurePysvcExtracted, MARKER, extractTar, syncSrcPatch }

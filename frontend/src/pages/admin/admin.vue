@@ -701,6 +701,76 @@
           </view>
         </scroll-view>
 
+        <!-- 软件更新（仅桌面端）：小版本补丁应用内更新，大版本引导官网下载全量包
+             （docs/INCREMENTAL_UPDATE_DESIGN.md §6/§7） -->
+        <scroll-view
+          v-else-if="activeNav === 'updates'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">软件更新</text>
+              <text class="section-subtitle">
+                小版本更新只下载变化部分（通常不足 10MB），后台完成、重启生效；大版本需下载完整安装包
+              </text>
+            </view>
+            <view class="section-body">
+              <view class="comp-row">
+                <view class="comp-main">
+                  <text class="comp-name">当前版本 {{ update.effectiveVersion || '-' }}</text>
+                  <text class="comp-sub">
+                    <text v-if="update.effectiveVersion !== update.appVersion">安装包 {{ update.appVersion }} + 补丁 {{ update.effectiveVersion }}</text>
+                    <text v-else>完整安装包版本</text>
+                    <text v-if="update.checkedAt"> · 上次检查 {{ formatUpdateTime(update.checkedAt) }}</text>
+                  </text>
+                  <text v-if="update.phase === 'checking'" class="comp-sub">正在检查更新...</text>
+                  <text v-else-if="update.phase === 'downloading'" class="comp-sub">
+                    正在下载补丁 {{ update.progress && update.progress.component ? '（' + update.progress.component + '）' : '' }}
+                  </text>
+                  <text v-else-if="update.phase === 'ready'" class="comp-sub">
+                    新版本 {{ update.available && update.available.version }} 已就绪，重启后生效
+                  </text>
+                  <text v-else-if="update.phase === 'error'" class="comp-error">检查失败：{{ update.error }}</text>
+                  <text v-else-if="update.checkedAt && !update.majorAvailable" class="comp-sub">已是最新版本</text>
+                  <view v-if="update.phase === 'downloading' && update.progress && update.progress.total" class="comp-progress">
+                    <view
+                      class="comp-progress-fill"
+                      :style="{ width: Math.min(100, Math.round(update.progress.received / update.progress.total * 100)) + '%' }"
+                    />
+                  </view>
+                </view>
+                <view class="comp-actions">
+                  <button
+                    v-if="update.phase === 'ready'"
+                    class="comp-btn primary"
+                    @tap="handleUpdateRestart"
+                  >
+                    立即重启生效
+                  </button>
+                  <button
+                    v-else
+                    class="comp-btn"
+                    :disabled="update.phase === 'checking' || update.phase === 'downloading'"
+                    @tap="handleUpdateCheck"
+                  >
+                    检查更新
+                  </button>
+                </view>
+              </view>
+              <view v-if="update.majorAvailable" class="comp-row">
+                <view class="comp-main">
+                  <text class="comp-name">新大版本 {{ update.majorAvailable.major }} 已发布</text>
+                  <text class="comp-sub">涉及核心组件变更，需下载完整安装包覆盖安装；本机数据不受影响</text>
+                </view>
+                <view class="comp-actions">
+                  <button class="comp-btn primary" @tap="handleUpdateOpenDownload">前往下载</button>
+                </view>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
+
         <!-- 团队案件库（仅桌面端：连接案件库、管理已连的库）。项目里的协作抽屉是同一批动作的
              主入口，这里保留给「一台机器连多个库」与浏览器端的管理场景。 -->
         <scroll-view
@@ -840,10 +910,22 @@ export default {
         { key: 'ai', label: 'AI 功能设置' },
         { key: 'account', label: '账户与用量', desktopOnly: true },
         { key: 'components', label: '组件管理', desktopOnly: true },
+        { key: 'updates', label: '软件更新', desktopOnly: true },
         { key: 'cloud', label: '团队案件库', desktopOnly: true },
         { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
       ],
       components: [],
+      // 软件更新状态（主进程 update-service 快照；事件推送增量刷新）
+      update: {
+        phase: 'idle',
+        appVersion: '',
+        effectiveVersion: '',
+        checkedAt: null,
+        available: null,
+        majorAvailable: null,
+        progress: null,
+        error: null,
+      },
       form: {
         external: {
           google: { apiKey: '', modelName: '', apiBaseUrl: '' },
@@ -1008,6 +1090,13 @@ export default {
           this.loadComponents()
         }
       })
+      // 软件更新：拉初始状态 + 订阅主进程推送（快照全量携带，直接覆盖本地态）
+      this.loadUpdateStatus()
+      if (window.checkbaDesktop.update) {
+        this._updateEventUnsub = window.checkbaDesktop.update.onEvent((evt) => {
+          if (evt && evt.state) this.update = { ...this.update, ...evt.state }
+        })
+      }
     }
   },
   onUnload() {
@@ -1015,8 +1104,51 @@ export default {
       this._modelProgressUnsub()
       this._modelProgressUnsub = null
     }
+    if (this._updateEventUnsub) {
+      this._updateEventUnsub()
+      this._updateEventUnsub = null
+    }
   },
   methods: {
+    async loadUpdateStatus() {
+      if (!this.isDesktop || !window.checkbaDesktop.update) return
+      try {
+        const s = await window.checkbaDesktop.update.status()
+        if (s) this.update = { ...this.update, ...s }
+      } catch (e) {
+        console.error('loadUpdateStatus failed', e)
+      }
+    },
+    async handleUpdateCheck() {
+      try {
+        const s = await window.checkbaDesktop.update.check()
+        if (s) this.update = { ...this.update, ...s }
+      } catch (e) {
+        uni.showToast({ title: '检查更新失败', icon: 'none' })
+      }
+    },
+    handleUpdateRestart() {
+      uni.showModal({
+        title: '重启应用',
+        content: `将重启 AI Workdeck 以完成更新到 ${this.update.available ? this.update.available.version : '新版本'}。未保存的编辑会先自动保存。是否继续？`,
+        success: (r) => {
+          if (r.confirm) window.checkbaDesktop.update.restart()
+        },
+      })
+    },
+    handleUpdateOpenDownload() {
+      const page = (this.update.majorAvailable && this.update.majorAvailable.page) || 'https://www.aiworkdeck.com'
+      window.checkbaDesktop.shell.openExternal(page)
+    },
+    formatUpdateTime(iso) {
+      try {
+        const d = new Date(iso)
+        const p = (n) => (n < 10 ? '0' + n : '' + n)
+        return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+      } catch (e) {
+        return ''
+      }
+    },
     async loadComponents() {
       if (!this.isDesktop) return
       try {

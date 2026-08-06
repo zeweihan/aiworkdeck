@@ -76,9 +76,31 @@ if (!fs.existsSync(jmodsDir)) {
 fs.rmSync(outDir, { recursive: true, force: true });
 fs.mkdirSync(outDir, { recursive: true });
 
-// 1) Backend jar (normalized name so backend.js never tracks versions)
-fs.copyFileSync(jarPath, path.join(outDir, 'backend.jar'));
-console.log(`Copied ${jarPath} -> ${path.join(outDir, 'backend.jar')}`);
+// 1) Backend split layout (增量更新设计 §4.1)：fat jar 拆成 backend/lib/*.jar
+// （全部依赖，约 360MB，只随大版本变）+ backend/app.jar（业务代码，约 1.5MB，
+// 小版本补丁只发它）。启动改为 java -cp "app.jar:lib/*" com.checkba.CheckbaApplication
+// （backend-service.js javaLaunchArgs），不再依赖 Spring Boot 嵌套 classloader。
+const os = require('os');
+const jarTool = path.join(javaHome, 'bin', process.platform === 'win32' ? 'jar.exe' : 'jar');
+const work = fs.mkdtempSync(path.join(os.tmpdir(), 'backend-split-'));
+console.log(`Extracting fat jar (BOOT-INF) -> ${work}`);
+execFileSync(jarTool, ['-x', '-f', jarPath, 'BOOT-INF/lib', 'BOOT-INF/classes'], { cwd: work, stdio: 'inherit' });
+
+const backendDir = path.join(outDir, 'backend');
+fs.mkdirSync(backendDir, { recursive: true });
+fs.renameSync(path.join(work, 'BOOT-INF', 'lib'), path.join(backendDir, 'lib'));
+
+const classesDir = path.join(work, 'BOOT-INF', 'classes');
+const mainClassFile = path.join(classesDir, 'com', 'checkba', 'CheckbaApplication.class');
+if (!fs.existsSync(mainClassFile)) {
+    console.error(`Main class missing after extract: ${mainClassFile}`);
+    process.exit(1);
+}
+const appJar = path.join(backendDir, 'app.jar');
+execFileSync(jarTool, ['-c', '-f', appJar, '-C', classesDir, '.'], { stdio: 'inherit' });
+fs.rmSync(work, { recursive: true, force: true });
+const libCount = fs.readdirSync(path.join(backendDir, 'lib')).length;
+console.log(`Backend split: app.jar ${(fs.statSync(appJar).size / 1048576).toFixed(1)}MB + lib/ ${libCount} jars`);
 
 // 2) Trimmed runtime
 const jlink = path.join(javaHome, 'bin', process.platform === 'win32' ? 'jlink.exe' : 'jlink');

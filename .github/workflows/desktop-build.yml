@@ -26,8 +26,26 @@ permissions:
   contents: write
 
 jobs:
+  # 小版本发布纪律守门（增量更新设计 §2.3）：tag v0.X.Y（Y>0）时校验变更没有
+  # 越出补丁边界（Electron 壳 / pom 依赖 / LOWA 引擎 / requirements.lock 都只能
+  # 随大版本走）。违规直接失败——删 tag 升大版本号重打即可。
+  patch-gate:
+    name: Patch gate (minor tag)
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Enforce minor-release boundaries
+        run: bash desktop/scripts/patch-gate.sh "$GITHUB_REF_NAME"
+
   build:
     name: Build (${{ matrix.os }})
+    needs: [patch-gate]
+    # patch-gate 只在 tag 上运行；非 tag（PR / 手动触发）时它被 skip，
+    # build 必须照常跑，所以放行 success 与 skipped 两种结果
+    if: always() && (needs.patch-gate.result == 'success' || needs.patch-gate.result == 'skipped')
     strategy:
       fail-fast: false
       matrix:
@@ -190,13 +208,16 @@ jobs:
           # honors this env var).
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
-          # Boot the signed jar on the trimmed JRE exactly as the packaged app
-          # will — catches runtime/JRE/signing breakage that packaging alone
-          # cannot. (Cannot be tested on SIP-disabled dev machines: JDK-8326663.)
+          # Boot the signed backend on the trimmed JRE exactly as the packaged
+          # app will (split layout: java -cp "app.jar:lib/*"，见增量更新设计
+          # §4.1 与 backend-service.js javaLaunchArgs) — catches runtime/JRE/
+          # signing breakage that packaging alone cannot. (Cannot be tested on
+          # SIP-disabled dev machines: JDK-8326663.)
           mkdir -p "$RUNNER_TEMP/awd-home"
-          desktop/bundled/mac-arm64/jre/bin/java \
+          cd desktop/bundled/mac-arm64/backend
+          ../jre/bin/java \
             -Duser.home="$RUNNER_TEMP/awd-home" \
-            -jar desktop/bundled/mac-arm64/backend.jar \
+            -cp "app.jar:lib/*" com.checkba.CheckbaApplication \
             --spring.profiles.active=desktop --server.port=9696 \
             > "$RUNNER_TEMP/backend-smoke.log" 2>&1 &
           BACK_PID=$!
@@ -346,10 +367,13 @@ jobs:
           # test step for the full rationale.
           PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
         run: |
+          # split 布局直启（相对路径 + 引号防 MSYS 路径转换与 bash glob 展开；
+          # 通配符由 JVM 自己展开，分隔符 Windows 用分号）
           mkdir -p "$RUNNER_TEMP/awd-home"
-          desktop/bundled/win-x64/jre/bin/java.exe \
+          cd desktop/bundled/win-x64/backend
+          ../jre/bin/java.exe \
             -Duser.home="$RUNNER_TEMP/awd-home" \
-            -jar desktop/bundled/win-x64/backend.jar \
+            -cp "app.jar;lib/*" com.checkba.CheckbaApplication \
             --spring.profiles.active=desktop --server.port=9696 \
             > "$RUNNER_TEMP/backend-smoke.log" 2>&1 &
           BACK_PID=$!
@@ -448,6 +472,24 @@ jobs:
           # Windows code signing not set up yet (issue #12)
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx electron-builder --publish never
+      - name: Build patch assets + signed manifest (tag only)
+        # 补丁产物平台无关（业务 jar / h5 / 壳层 js 均无原生二进制，mac/win 共
+        # 用），只在 windows runner 生成一次（快、且 tag 构建两平台都在矩阵里）。
+        # 与上一版 manifest 内容级去重：未变组件沿用旧版本号与旧 asset URL。
+        if: runner.os == 'Windows' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          node desktop/scripts/build-patch-assets.js \
+            --version "${GITHUB_REF_NAME#v}" \
+            --backend desktop/bundled/win-x64/backend/app.jar \
+            --h5 frontend/dist/build/h5 \
+            --zeta frontend/dist/zetaoffice \
+            --pysvc desktop/bundled/win-x64/pysvc \
+            --prev https://www.aiworkdeck.com/update/desktop/manifest.json \
+            --out desktop/release/patch
+          ls -la desktop/release/patch
       - uses: actions/upload-artifact@v4
         with:
           name: aiworkdeck-${{ matrix.os }}
@@ -459,9 +501,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # patch/*：小版本补丁产物 + 签名 manifest（仅 windows job 生成，mac job
+          # 的 glob 落空属正常——softprops 默认不因 unmatched 失败）
           files: |
             desktop/release/*.dmg
             desktop/release/*.exe
+            desktop/release/patch/*
           # Auto-generate a "What's Changed" changelog from merged PRs since the
           # last tag, appended below the bilingual body template. Without this a
           # tag build creates a Release with EMPTY notes (had to `gh release edit`

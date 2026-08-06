@@ -61,6 +61,25 @@ function editorRoot() {
     : path.join(__dirname, '../../frontend/dist/zetaoffice')
 }
 
+// 增量更新（设计 §4.3）：壳层文件（editor.html/客户端 bundle）可经 overlay 组件
+// zetaoffice-wrapper 打补丁——静态服务双根查找，overlay 优先、内置兜底。
+// LOWA 引擎大文件不进补丁，永远命中内置根；dev 态无 overlay。
+function editorRoots() {
+  const roots = []
+  if (app.isPackaged) {
+    try {
+      const overlay = require('./services/overlay')
+      const dir = overlay.componentDir(
+        { packaged: true, dataDir: path.join(app.getPath('home'), '.aiworkdeck'), appVersion: app.getVersion() },
+        'zetaoffice-wrapper'
+      )
+      if (dir) roots.push(dir)
+    } catch (e) { /* overlay 异常时静默回内置 */ }
+  }
+  roots.push(editorRoot())
+  return roots
+}
+
 // lowa/.encodings.json (written by desktop/scripts/fetch-lowa-assets.js): map of
 // basename -> content-encoding to REPLAY when serving a baked file, because the
 // CDN ships soffice.wasm/.data brotli-compressed and the bytes are stored as-is.
@@ -98,6 +117,7 @@ function proxyUrl(url, res, redirects = 0) {
 function startEditorServer() {
   if (serverPromise) return serverPromise
   const root = editorRoot()
+  const roots = editorRoots()
   const lowaEncodings = loadLowaEncodings(root)
   serverPromise = new Promise((resolve, reject) => {
     const s = http.createServer(async (req, res) => {
@@ -144,11 +164,21 @@ function startEditorServer() {
           return proxyUrl(LOWA_CDN + rel, res)
         }
         if (urlPath === '/') urlPath = '/editor.html'
-        const filePath = path.normalize(path.join(root, urlPath))
-        if (filePath !== root && !filePath.startsWith(root + path.sep)) { res.writeHead(403).end('forbidden'); return }
+        // 双根查找：overlay（补丁壳层）优先，内置兜底（增量更新设计 §4.3）
+        let body = null
+        let served = null
+        for (const r of roots) {
+          const filePath = path.normalize(path.join(r, urlPath))
+          if (filePath !== r && !filePath.startsWith(r + path.sep)) { res.writeHead(403).end('forbidden'); return }
+          try {
+            body = await readFile(filePath)
+            served = filePath
+            break
+          } catch (e) { /* 该根没有此文件，试下一根 */ }
+        }
+        if (body === null) throw new Error('not found in any root')
         // No COOP/COEP here — Electron injects them on the partition.
-        const body = await readFile(filePath)
-        res.writeHead(200, { 'Content-Type': TYPES[path.extname(filePath)] || 'application/octet-stream' })
+        res.writeHead(200, { 'Content-Type': TYPES[path.extname(served)] || 'application/octet-stream' })
         res.end(body)
       } catch (e) {
         res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }).end('not found')

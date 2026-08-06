@@ -115,6 +115,19 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   services: {
     ensure: (name) => ipcRenderer.invoke('checkba:service-ensure', { name })
   },
+  // 应用内增量更新（docs/INCREMENTAL_UPDATE_DESIGN.md）：小版本补丁自动下载、
+  // 重启生效；大版本引导官网下载全量包。onEvent 返回退订函数——页面栈多实例
+  // 场景务必用活跃实例指针消费（见剪贴板去重地雷，PR#151）。
+  update: {
+    status: () => ipcRenderer.invoke('checkba:update-status'),
+    check: () => ipcRenderer.invoke('checkba:update-check'),
+    restart: () => ipcRenderer.invoke('checkba:update-restart'),
+    onEvent: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:update-event', listener)
+      return () => ipcRenderer.removeListener('checkba:update-event', listener)
+    }
+  },
   utils: {
     readFile: (path) => ipcRenderer.invoke('checkba:fs-read-file', { path })
   },
