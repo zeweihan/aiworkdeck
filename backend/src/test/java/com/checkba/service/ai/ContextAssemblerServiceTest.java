@@ -252,6 +252,45 @@ class ContextAssemblerServiceTest {
     }
 
     @Test
+    @DisplayName("office+excel 会话：提醒与活跃文档段改用 office_excel_* 口径，不点名 Word 面工具")
+    void wordingSwitchesToExcelToolsForExcelHost() {
+        capabilityService.record("conv-1", "office", "excel");
+
+        String lastUser = assembleLastUserText(officeDoc("名称\t金额\n甲\t100"));
+        assertTrue(lastUser.contains("[系统提醒]"), "excel 会话也应有末位提醒");
+        assertTrue(lastUser.contains("office_excel_set_values"), "应指引用 office_excel_* 工具修改");
+        assertFalse(lastUser.contains("office_replace_text"), "excel 会话不应点名 Word 面 office_* 工具");
+        assertFalse(lastUser.contains("doc_list_project_files"), "excel 会话不应点名 doc_* 工具");
+
+        String systemText = assembleSystemText(officeDoc("名称\t金额\n甲\t100"));
+        assertTrue(systemText.contains("office_excel_get_range"), "活跃文档段应指引 office_excel_* 读取");
+        assertFalse(systemText.contains("office_get_text"), "活跃文档段不应再点名 Word 面工具");
+    }
+
+    @Test
+    @DisplayName("office+powerpoint 会话：提醒与活跃文档段改用 office_ppt_* 口径")
+    void wordingSwitchesToPptToolsForPowerpointHost() {
+        capabilityService.record("conv-1", "office", "powerpoint");
+
+        String lastUser = assembleLastUserText(officeDoc("第1页：项目介绍……"));
+        assertTrue(lastUser.contains("office_ppt_replace_text"), "应指引用 office_ppt_* 工具修改");
+        assertFalse(lastUser.contains("office_insert_text"), "ppt 会话不应点名 Word 面 office_* 工具");
+
+        String systemText = assembleSystemText(officeDoc("第1页：项目介绍……"));
+        assertTrue(systemText.contains("office_ppt_get_slides"), "活跃文档段应指引 office_ppt_* 读取");
+    }
+
+    @Test
+    @DisplayName("office 会话未上送宿主：按 Word 兜底，保持既有 office_* 口径")
+    void officeCapabilityWithoutHostDefaultsToWordWording() {
+        capabilityService.record("conv-1", "office");
+
+        String lastUser = assembleLastUserText(officeDoc("第一条 试用期为三个月……"));
+        assertTrue(lastUser.contains("office_replace_text"), "缺省宿主应保持 Word 面口径");
+        assertFalse(lastUser.contains("office_excel_"), "缺省宿主不应出现 Excel 面口径");
+    }
+
+    @Test
     @DisplayName("none 会话：末位提醒为只读口径，不点名任何编辑工具")
     void reminderReadOnlyForNoneCapability() {
         capabilityService.record("conv-1", "none");

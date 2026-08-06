@@ -65,7 +65,9 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "搜索项目文件", category = "file")
-    @Tool("Search for files in the project. Can specify a sub-directory.")
+    @Tool("Locate a file by NAME PATTERN. Returns paths only, NO database fileId — once you know the name, "
+            + "get the fileId from doc_list_project_files (documents), pdf_list_files (PDF) or pptx_list_files (PPTX) "
+            + "before any open/edit/rename/move. Can specify a sub-directory.")
     public String search_project_files(
             @P("Filename pattern (e.g. '*Controller.java' or 'User*.java')") String fileNamePattern,
             @P("Optional: Sub-directory to search in, relative to the project folder. Default is the project root.") String dirPath
@@ -155,7 +157,10 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "列出文件", category = "file")
-    @Tool("List files and directories in a project's data folder. Note: This lists physical files, not database records. For database files, use doc_list_project_files or pptx_list_files.")
+    @Tool("PHYSICAL DISK view of the project folder: returns paths only, NO database fileId, so nothing here can be "
+            + "fed to open/edit/rename/move tools. Use doc_list_project_files (documents), pdf_list_files (PDF) or "
+            + "pptx_list_files (PPTX) whenever a later step needs a fileId. "
+            + "Lists files and directories under data/projects/{projectId}/.")
     public String list_files(
             @P("Project ID - files will be listed from data/projects/{projectId}/") Long projectId,
             @P("Optional: Subdirectory path within the project folder. Use '.' or empty for project root.") String subPath

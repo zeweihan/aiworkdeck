@@ -63,6 +63,7 @@ public final class EvalHarness {
             List<String> folderRenames,
             List<Boolean> toolsOfferedPerLlmCall,
             List<List<String>> toolNamesOfferedPerLlmCall,
+            List<String> promptTexts,
             int remainingScriptTurns) {
 
         /** 最终保存的 ASSISTANT 消息（含 executionLog 前缀） */
@@ -172,7 +173,9 @@ public final class EvalHarness {
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
                 registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange,
-                todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService(),
+                todoListService, checkpointService,
+                new com.checkba.service.ai.AgentRunStateService(
+                        mock(com.checkba.repository.AgentRunRecordRepository.class)),
                 workSessionService, failoverProperties, runLoopCompactor);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
@@ -186,7 +189,8 @@ public final class EvalHarness {
 
         return new RunResult(c, registry.dispatches(), List.copyOf(sseEvents), List.copyOf(savedMessages),
                 List.copyOf(artifactSaves), List.copyOf(folderRenames),
-                scripted.toolsOfferedPerCall(), scripted.toolNamesOfferedPerCall(), scripted.remainingTurns());
+                scripted.toolsOfferedPerCall(), scripted.toolNamesOfferedPerCall(),
+                scripted.promptTextPerCall(), scripted.remainingTurns());
     }
 
     /** 内置 skills 目录（与 EvalCase.casesDir 同思路：兼容从 backend/ 或仓库根目录跑测试） */

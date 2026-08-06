@@ -35,12 +35,39 @@
 
       <p v-if="status" class="status" :class="statusKind">{{ status }}</p>
     </section>
+
+    <section class="card key-card">
+      <h2>用账户 Key 连接</h2>
+      <p class="hint">
+        持有官网账户 Key（awdk_ 开头）时可一键换取本服务器的设备令牌，无需手工生成粘贴。
+        Key 仅用于本次换取，不会保存在本机。
+      </p>
+
+      <label class="field">
+        <span class="label">账户 Key（awdk_ 开头）</span>
+        <input
+          v-model="awdkKey"
+          type="password"
+          placeholder="粘贴 awdk_ 账户 Key"
+          spellcheck="false"
+          autocomplete="off"
+        />
+      </label>
+
+      <div class="actions">
+        <button class="btn primary" :disabled="connecting" @click="connectWithKey">
+          {{ connecting ? '连接中...' : '一键连接' }}
+        </button>
+      </div>
+
+      <p v-if="keyStatus" class="status" :class="keyStatusKind">{{ keyStatus }}</p>
+    </section>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
-import { fetchMyProjects } from '../lib/api.js'
+import { fetchMyProjects, postAwdkLogin } from '../lib/api.js'
 import { saveSettings, normalizeBaseUrl } from '../lib/settings.js'
 
 const props = defineProps({
@@ -54,6 +81,10 @@ const token = ref(props.initialToken)
 const testing = ref(false)
 const status = ref('')
 const statusKind = ref('ok')
+const awdkKey = ref('')
+const connecting = ref(false)
+const keyStatus = ref('')
+const keyStatusKind = ref('ok')
 
 async function testConnection() {
   status.value = ''
@@ -84,6 +115,40 @@ function save() {
   saveSettings({ serverUrl: serverUrl.value, token: token.value })
   emit('saved', { serverUrl: normalizeBaseUrl(serverUrl.value), token: token.value.trim() })
 }
+
+/**
+ * awdk_ 账户 Key 一键连接：换取 awdt_ 设备令牌后立即保存并进入对话视图。
+ * Key 本身用完即弃（不落 localStorage，只有换回的 awdt_ 令牌被保存）。
+ */
+async function connectWithKey() {
+  keyStatus.value = ''
+  if (!serverUrl.value.trim()) {
+    keyStatusKind.value = 'error'
+    keyStatus.value = '连接未就绪：请先填写上方的后端地址'
+    return
+  }
+  const key = awdkKey.value.trim()
+  if (!key) {
+    keyStatusKind.value = 'error'
+    keyStatus.value = '连接未就绪：请粘贴 awdk_ 账户 Key'
+    return
+  }
+  connecting.value = true
+  try {
+    const awdtToken = await postAwdkLogin({ serverUrl: serverUrl.value }, key)
+    awdkKey.value = ''
+    token.value = awdtToken
+    saveSettings({ serverUrl: serverUrl.value, token: awdtToken })
+    keyStatusKind.value = 'ok'
+    keyStatus.value = '连接成功：已换取设备令牌'
+    emit('saved', { serverUrl: normalizeBaseUrl(serverUrl.value), token: awdtToken })
+  } catch (e) {
+    keyStatusKind.value = 'error'
+    keyStatus.value = e.message || '账户直连失败'
+  } finally {
+    connecting.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -98,6 +163,8 @@ function save() {
   border-radius: 6px;
   padding: 14px;
 }
+
+.key-card { margin-top: 12px; }
 
 h2 {
   margin: 0 0 6px;

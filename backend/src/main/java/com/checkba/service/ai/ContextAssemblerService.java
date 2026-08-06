@@ -251,10 +251,27 @@ public class ContextAssemblerService {
             systemText.append("用户说\"修订一下\"\"这个文档\"\"当前文档\"或未指明对象时，默认就是指它。\n");
             switch (capability) {
                 case OFFICE -> {
-                    systemText.append("该文档在用户本机的 Microsoft Word 中打开，正文已随本请求内联注入下方。");
-                    systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
-                    systemText.append("office_replace_text / office_insert_text / office_add_comment 等），");
-                    systemText.append("修改会以 Word 原生修订形式呈现。本会话没有 doc_* 工具。\n\n");
+                    // 宿主细分（Word/Excel/PowerPoint）：三类宿主的工具集互不相通，点错就是死路径
+                    switch (clientCapabilityService.officeHostOf(conversationId)) {
+                        case EXCEL -> {
+                            systemText.append("该工作簿在用户本机的 Microsoft Excel 中打开，活动工作表内容已随本请求内联注入下方。");
+                            systemText.append("读取/修改它一律使用 office_excel_* 工具（office_excel_get_range / ");
+                            systemText.append("office_excel_set_values / office_excel_search），写入直接生效");
+                            systemText.append("（Excel 没有修订机制）。本会话没有 doc_* / sheet_* 工具，也没有 Word 面的 office_* 工具。\n\n");
+                        }
+                        case POWERPOINT -> {
+                            systemText.append("该演示文稿在用户本机的 Microsoft PowerPoint 中打开，各页文本已随本请求内联注入下方。");
+                            systemText.append("读取/修改它一律使用 office_ppt_* 工具（office_ppt_get_slides / ");
+                            systemText.append("office_ppt_replace_text），替换直接生效（PowerPoint 没有修订机制）。");
+                            systemText.append("本会话没有 doc_* 工具，也没有 Word 面的 office_* 工具。\n\n");
+                        }
+                        default -> {
+                            systemText.append("该文档在用户本机的 Microsoft Word 中打开，正文已随本请求内联注入下方。");
+                            systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
+                            systemText.append("office_replace_text / office_insert_text / office_add_comment 等），");
+                            systemText.append("修改会以 Word 原生修订形式呈现。本会话没有 doc_* 工具。\n\n");
+                        }
+                    }
                 }
                 case NONE -> {
                     systemText.append("当前客户端没有文档编辑执行器：正文仅供阅读分析，");
@@ -281,7 +298,11 @@ public class ContextAssemblerService {
             } else {
                 // 正文暂时读不到也要保留文档标识，模型仍可用读取类工具（按会话能力）直接读
                 String readHint = switch (capability) {
-                    case OFFICE -> "[正文暂不可读，可用 office_get_text 直接读取]";
+                    case OFFICE -> switch (clientCapabilityService.officeHostOf(conversationId)) {
+                        case EXCEL -> "[内容暂不可读，可用 office_excel_get_range 直接读取]";
+                        case POWERPOINT -> "[内容暂不可读，可用 office_ppt_get_slides 直接读取]";
+                        default -> "[正文暂不可读，可用 office_get_text 直接读取]";
+                    };
                     case NONE -> "[正文暂不可读]";
                     default -> "[正文暂不可读，可用 doc_get_document_text 直接分段读取]";
                 };
@@ -393,7 +414,8 @@ public class ContextAssemblerService {
         // 重新发现文档。末位消息是注意力最高的位置，这里再说一次才真正生效。
         messages.add(dev.langchain4j.data.message.UserMessage.from(
                 userPrompt + activeDocumentReminder(activeContext,
-                        clientCapabilityService.capabilityOf(conversationId))));
+                        clientCapabilityService.capabilityOf(conversationId),
+                        clientCapabilityService.officeHostOf(conversationId))));
 
         return messages;
     }
@@ -421,21 +443,34 @@ public class ContextAssemblerService {
 
     /**
      * 活跃文档的末位提醒（拼在用户消息尾部），文案按会话客户端能力切换（Phase C）：
-     * lowa=doc_* 口径（现状）；office=office_* 口径（正文已内联注入，改动经 office_* 落到 Word）；
-     * none=只读口径。无活跃文档时返回空串。
+     * lowa=doc_* 口径（现状）；office=office_* 口径（正文已内联注入，改动经 office_* 落到宿主，
+     * 按宿主 Word/Excel/PowerPoint 点名对应工具集）；none=只读口径。无活跃文档时返回空串。
      */
     private String activeDocumentReminder(com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
-                                          ClientCapabilityService.Capability capability) {
+                                          ClientCapabilityService.Capability capability,
+                                          ClientCapabilityService.OfficeHost officeHost) {
         if (activeContext == null || activeContext.getId() == null || activeContext.getId().isEmpty()) {
             return "";
         }
         String docLabel = activeDocDisplayName(activeContext.getName());
         return switch (capability) {
-            case OFFICE -> "\n\n[系统提醒] 用户此刻在 Microsoft Word 中打开着文档" + docLabel + "，"
-                    + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
-                    + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
-                    + "需要修改文档时调用 office_* 工具（office_replace_text / office_insert_text / "
-                    + "office_add_comment 等）落到 Word，修改会以 Word 原生修订形式呈现。";
+            case OFFICE -> switch (officeHost) {
+                case EXCEL -> "\n\n[系统提醒] 用户此刻在 Microsoft Excel 中打开着工作簿" + docLabel + "，"
+                        + "活动工作表内容已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
+                        + "用户未指明别的文件时，「这个」「当前表格」「改一下」等都指它——"
+                        + "读取/修改一律调用 office_excel_* 工具（office_excel_get_range / "
+                        + "office_excel_set_values / office_excel_search），写入直接生效（Excel 没有修订机制）。";
+                case POWERPOINT -> "\n\n[系统提醒] 用户此刻在 Microsoft PowerPoint 中打开着演示文稿" + docLabel + "，"
+                        + "各页文本已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
+                        + "用户未指明别的文件时，「这个」「当前演示文稿」「改一下」等都指它——"
+                        + "读取/修改一律调用 office_ppt_* 工具（office_ppt_get_slides / "
+                        + "office_ppt_replace_text），替换直接生效（PowerPoint 没有修订机制）。";
+                default -> "\n\n[系统提醒] 用户此刻在 Microsoft Word 中打开着文档" + docLabel + "，"
+                        + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
+                        + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
+                        + "需要修改文档时调用 office_* 工具（office_replace_text / office_insert_text / "
+                        + "office_add_comment 等）落到 Word，修改会以 Word 原生修订形式呈现。";
+            };
             case NONE -> "\n\n[系统提醒] 用户当前查看的文档是" + docLabel + "，"
                     + "其正文见 system prompt 的 <active_document>，仅供阅读分析。"
                     + "本会话的客户端没有文档编辑执行器，请以文字形式给出结论或修改建议，"
