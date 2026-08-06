@@ -1,0 +1,186 @@
+package com.checkba.service.ai.context;
+
+import com.checkba.config.AiContextProperties;
+import dev.langchain4j.agent.tool.ToolExecutionRequest;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.SystemMessage;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+
+/**
+ * runLoop 自动 compaction。
+ *
+ * <p>两条硬约束：短会话（回放评测用例）绝不能被误触发；折叠后工具调用与工具结果必须仍然配对，
+ * 否则 OpenAI 兼容通道会以「tool message 没有对应 tool_calls」直接 400。
+ */
+class RunLoopCompactorTest {
+
+    private AiContextProperties properties;
+    private ContextCompressor compressor;
+    private RunLoopCompactor compactor;
+
+    @BeforeEach
+    void setUp() {
+        properties = new AiContextProperties();
+        compressor = mock(ContextCompressor.class);
+        // 历史可用预算 1000 token，触发比例 0.8 → 阈值 800 token（chars-per-token=2 → 1600 字符）
+        when(compressor.getAvailableTokensForHistory(any())).thenReturn(1000);
+        compactor = new RunLoopCompactor(properties, compressor);
+    }
+
+    private static ChatMessage toolCall(String id, String name, String args) {
+        return AiMessage.from(ToolExecutionRequest.builder().id(id).name(name).arguments(args).build());
+    }
+
+    private static ChatMessage toolResult(String id, String name, String text) {
+        return ToolExecutionResultMessage.from(id, name, text);
+    }
+
+    private static String filler(int chars) {
+        return "内容".repeat(chars / 2);
+    }
+
+    /** 一段长到必然超阈值的 runLoop 消息栈：system + 用户目标 + N 组「调用 / 结果」 */
+    private static List<ChatMessage> longRun(int rounds, int charsPerResult) {
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.from("system prompt"));
+        messages.add(UserMessage.from("把这份合同的违约金条款改成 30%"));
+        for (int i = 0; i < rounds; i++) {
+            messages.add(toolCall("c" + i, "doc_read", "{\"page\":" + i + "}"));
+            messages.add(toolResult("c" + i, "doc_read", "第 " + i + " 段：" + filler(charsPerResult)));
+        }
+        return messages;
+    }
+
+    @Test
+    @DisplayName("短会话不触发：回放评测用例只有几百字符，压缩会平白丢上下文")
+    void shortConversationIsUntouched() {
+        List<ChatMessage> messages = new ArrayList<>(List.of(
+                SystemMessage.from("system prompt"),
+                UserMessage.from("你好"),
+                AiMessage.from("你好，有什么可以帮你的？")));
+
+        assertSame(messages, compactor.compact(messages, "anthropic/claude-3.5-sonnet"),
+                "未超阈值必须原样返回同一个列表实例");
+    }
+
+    @Test
+    @DisplayName("消息很长但中段不够条数：宁可不压，压了收益也抵不上丢的上下文")
+    void longButShallowStackIsUntouched() {
+        List<ChatMessage> messages = new ArrayList<>(List.of(
+                SystemMessage.from("system prompt"),
+                UserMessage.from(filler(4000)),
+                AiMessage.from(filler(4000))));
+
+        assertSame(messages, compactor.compact(messages, null));
+    }
+
+    @Test
+    @DisplayName("超阈值：折叠中段，system prompt、首条用户消息与最近若干轮全部保留")
+    void compactsMiddleKeepingHeadAndTail() {
+        List<ChatMessage> messages = longRun(12, 400);
+        int before = compactor.estimateTokens(messages);
+        assertTrue(before > compactor.triggerThreshold(null), "用例前提：必须超阈值");
+
+        List<ChatMessage> result = compactor.compact(messages, null);
+
+        assertTrue(result.size() < messages.size(), "应发生折叠");
+        assertEquals(SystemMessage.class, result.get(0).getClass(), "system prompt 必须留在最前");
+        assertTrue(((UserMessage) result.get(1)).singleText().contains("违约金"),
+                "首条用户消息（任务目标）必须保留，丢了模型立刻走神");
+        assertSame(messages.get(messages.size() - 1), result.get(result.size() - 1), "最后一条必须原样保留");
+        assertTrue(compactor.estimateTokens(result) < before, "压缩后 token 必须下降");
+
+        String digest = ((UserMessage) result.get(2)).singleText();
+        assertTrue(digest.startsWith(RunLoopCompactor.DIGEST_MARKER), "第三条应是摘要");
+        assertTrue(digest.contains("doc_read"), "摘要要保住「调过哪些工具」");
+    }
+
+    @Test
+    @DisplayName("折叠后工具结果不会变成孤儿：保留段绝不以 ToolExecutionResultMessage 开头")
+    void keepsToolCallAndResultPaired() {
+        // keep-recent 设成偶数会正好切在「调用 / 结果」中间，这里刻意用奇数逼出该情形
+        properties.getCompaction().setKeepRecent(5);
+
+        List<ChatMessage> result = compactor.compact(longRun(12, 400), null);
+
+        int digestIndex = -1;
+        for (int i = 0; i < result.size(); i++) {
+            if (result.get(i) instanceof UserMessage um
+                    && um.singleText().startsWith(RunLoopCompactor.DIGEST_MARKER)) {
+                digestIndex = i;
+            }
+        }
+        assertTrue(digestIndex > 0, "应生成摘要");
+        assertFalse(result.get(digestIndex + 1) instanceof ToolExecutionResultMessage,
+                "保留段打头的工具结果没有配对的 tool_calls，通道会直接 400");
+
+        // 全量校验：每条工具结果前面都能找到发起它的 AiMessage
+        for (int i = 0; i < result.size(); i++) {
+            if (result.get(i) instanceof ToolExecutionResultMessage tr) {
+                assertTrue(i > 0 && result.get(i - 1) instanceof AiMessage ai && ai.hasToolExecutionRequests()
+                                && ai.toolExecutionRequests().get(0).id().equals(tr.id()),
+                        "第 " + i + " 条工具结果失去了配对的调用");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("二次压缩：上一版摘要并入新摘要，而不是当普通消息折掉")
+    void mergesPreviousDigest() {
+        List<ChatMessage> first = compactor.compact(longRun(12, 400), null);
+
+        // 在已压缩的栈上继续跑若干轮，再压一次
+        List<ChatMessage> grown = new ArrayList<>(first);
+        for (int i = 100; i < 112; i++) {
+            grown.add(toolCall("c" + i, "doc_replace_text", "{\"i\":" + i + "}"));
+            grown.add(toolResult("c" + i, "doc_replace_text", filler(400)));
+        }
+        List<ChatMessage> second = compactor.compact(grown, null);
+
+        String digest = second.stream()
+                .filter(m -> m instanceof UserMessage um && um.singleText().startsWith(RunLoopCompactor.DIGEST_MARKER))
+                .map(m -> ((UserMessage) m).singleText())
+                .findFirst().orElseThrow();
+        assertEquals(1, second.stream()
+                .filter(m -> m instanceof UserMessage um && um.singleText().startsWith(RunLoopCompactor.DIGEST_MARKER))
+                .count(), "摘要只能有一条，不能每压一次堆一条");
+        assertTrue(digest.contains("doc_read"), "上一版摘要的内容要并进来，否则最早的事实被彻底丢干净");
+        assertTrue(digest.contains("doc_replace_text"), "新折叠的中段也要在");
+    }
+
+    @Test
+    @DisplayName("开关关掉即完全不压（行为回到加固前）")
+    void disabledMeansNoOp() {
+        properties.getCompaction().setEnabled(false);
+        List<ChatMessage> messages = longRun(12, 400);
+
+        assertSame(messages, compactor.compact(messages, null));
+    }
+
+    @Test
+    @DisplayName("token 估算要算上工具调用参数与工具结果——runLoop 里这两类才是大头")
+    void estimateCountsToolTraffic() {
+        List<ChatMessage> messages = List.of(
+                toolCall("c1", "doc_read", "{\"fileId\":123}"),
+                toolResult("c1", "doc_read", filler(2000)));
+
+        assertTrue(compactor.estimateTokens(messages) > 900,
+                "漏算工具消息会让阈值永远不触发");
+    }
+}
