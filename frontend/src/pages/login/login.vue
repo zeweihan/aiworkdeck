@@ -110,7 +110,7 @@
           </view>
 
           <!-- Login Form -->
-          <view v-if="activeTab === 'login'" class="form-body swing-in">
+          <view v-if="activeTab === 'login' && !smsStep" class="form-body swing-in">
             <view class="input-group">
               <text class="label">用户名</text>
               <input class="glass-input" type="text" v-model="loginForm.username" placeholder="请输入用户名" placeholder-class="placeholder-style" />
@@ -127,6 +127,22 @@
                <text class="link-text">忘记密码?</text>
             </view>
             <button class="action-btn" :loading="loginLoading" @tap="handleLogin">登 录</button>
+          </view>
+
+          <!-- SMS Verification Step（登录二次验证） -->
+          <view v-else-if="activeTab === 'login' && smsStep" class="form-body swing-in">
+            <view class="input-group">
+              <text class="label">短信验证</text>
+              <text class="sms-hint">验证码已发送至 {{ smsPhoneMasked }}</text>
+              <input class="glass-input" type="number" maxlength="6" v-model="smsCodeInput" @confirm="handleSmsLogin" placeholder="请输入 6 位验证码" placeholder-class="placeholder-style" />
+            </view>
+            <view class="form-options">
+              <text class="link-text" @tap="backToPassword">返回</text>
+              <text class="link-text" :class="{ disabled: smsCountdown > 0 }" @tap="resendSmsCode">
+                {{ smsCountdown > 0 ? smsCountdown + 's 后可重发' : '重新发送' }}
+              </text>
+            </view>
+            <button class="action-btn" :loading="loginLoading" @tap="handleSmsLogin">验证并登录</button>
           </view>
 
           <!-- Register Form -->
@@ -169,7 +185,7 @@
 </template>
 
 <script>
-import { login, register, clientLogin, getWizardStatus, getMyProjects } from '@/services/api.js'
+import { login, register, clientLogin, getWizardStatus, getMyProjects, sendSmsCode } from '@/services/api.js'
 import { saveSession, getSessionId, getCurrentUser } from '@/utils/auth.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
 
@@ -211,8 +227,17 @@ export default {
       },
       loginLoading: false,
       registerLoading: false,
-      clientLoginLoading: false
+      clientLoginLoading: false,
+      // 登录短信二次验证步骤（后端返回 4005 时进入）
+      smsStep: false,
+      smsPhoneMasked: '',
+      smsCodeInput: '',
+      smsCountdown: 0,
+      smsCountdownTimer: null
     }
+  },
+  onUnload() {
+    if (this.smsCountdownTimer) clearInterval(this.smsCountdownTimer)
   },
   computed: {
     deviceTransform() {
@@ -281,6 +306,76 @@ export default {
       this.loginForm = { username: '', password: '' };
       this.registerForm = { username: '', displayName: '', password: '', passwordConfirm: '' };
       this.clientForm = { accessCode: '' };
+      this.resetSmsStep();
+    },
+    resetSmsStep() {
+      this.smsStep = false;
+      this.smsPhoneMasked = '';
+      this.smsCodeInput = '';
+      this.smsCountdown = 0;
+      if (this.smsCountdownTimer) {
+        clearInterval(this.smsCountdownTimer);
+        this.smsCountdownTimer = null;
+      }
+    },
+    backToPassword() {
+      this.resetSmsStep();
+    },
+    startSmsCountdown() {
+      this.smsCountdown = 60;
+      if (this.smsCountdownTimer) clearInterval(this.smsCountdownTimer);
+      this.smsCountdownTimer = setInterval(() => {
+        if (this.smsCountdown > 0) {
+          this.smsCountdown--;
+        } else {
+          clearInterval(this.smsCountdownTimer);
+          this.smsCountdownTimer = null;
+        }
+      }, 1000);
+    },
+    async resendSmsCode() {
+      if (this.smsCountdown > 0) return;
+      try {
+        const res = await sendSmsCode({
+          scene: 'login',
+          username: this.loginForm.username,
+          password: this.loginForm.password
+        });
+        if (res.data && res.data.phoneMasked) this.smsPhoneMasked = res.data.phoneMasked;
+        this.startSmsCountdown();
+        uni.showToast({ title: '验证码已发送', icon: 'none' });
+      } catch (e) {
+        uni.showToast({ title: e.message || '发送失败', icon: 'none' });
+      }
+    },
+    async handleSmsLogin() {
+      if (!this.smsCodeInput || this.smsCodeInput.length < 6) {
+        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' });
+        return;
+      }
+      this.loginLoading = true;
+      try {
+        const res = await login(this.loginForm.username, this.loginForm.password, this.smsCodeInput);
+        if (res.code === 0 && res.data) {
+          this.resetSmsStep();
+          this.finishLogin(res);
+        } else {
+          uni.showToast({ title: res.message || '验证失败', icon: 'none' });
+        }
+      } catch (error) {
+        this.smsCodeInput = '';
+        uni.showToast({ title: error.message || '验证失败', icon: 'none' });
+      } finally {
+        this.loginLoading = false;
+      }
+    },
+    finishLogin(res) {
+      saveSession(res.data.sessionId, res.data.user);
+      if (!getSessionId()) throw new Error('Session Save Failed');
+      uni.showToast({ title: '登录成功', icon: 'success' });
+      setTimeout(() => {
+        uni.reLaunch({ url: '/pages/userprofile/userprofile' });
+      }, 300);
     },
     async handleClientLogin() {
       if (!this.clientForm.accessCode) {
@@ -315,18 +410,19 @@ export default {
       try {
         const res = await login(this.loginForm.username, this.loginForm.password);
         if (res.code === 0 && res.data) {
-          saveSession(res.data.sessionId, res.data.user);
-           // Verify session
-          if (!getSessionId()) throw new Error('Session Save Failed');
-          
-          uni.showToast({ title: '登录成功', icon: 'success' });
-          setTimeout(() => {
-            uni.reLaunch({ url: '/pages/userprofile/userprofile' });
-          }, 300);
+          this.finishLogin(res);
         } else {
           uni.showToast({ title: res.message || '登录失败', icon: 'none' });
         }
       } catch (error) {
+        if (error && error.smsRequired) {
+          // 密码已对，进入短信验证步骤并自动发一次码
+          this.smsStep = true;
+          this.smsPhoneMasked = (error.data && error.data.phoneMasked) || '';
+          this.smsCodeInput = '';
+          this.resendSmsCode();
+          return;
+        }
         console.error('Login Failed', error);
         uni.showToast({ title: error.message || '登录失败', icon: 'none' });
       } finally {
@@ -765,6 +861,18 @@ $glass-border: rgba(255, 255, 255, 0.5);
 .link-text {
   color: $color-primary;
   cursor: pointer;
+
+  &.disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+}
+
+.sms-hint {
+  display: block;
+  font-size: 12px;
+  color: $color-text-light;
+  margin-bottom: 6px;
 }
 
 .action-btn {

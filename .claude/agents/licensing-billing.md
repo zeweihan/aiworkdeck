@@ -80,11 +80,32 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
 - `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
 
+**登录短信验证（2026-08-06，sms-auth-integration）**
+- `backend/src/main/java/com/checkba/service/sms/SmsService.java` — 阿里云 dysmsapi 发送，**刻意不引 SDK**
+  （JDK HttpClient 直签 HMAC-SHA1，保补丁通道资格；签名算法有真机对拍向量护栏 `SmsServiceTest`）。
+  阿里云原始错误 Message 只进日志不进用户文案。
+- `service/sms/SmsCodeStore.java` — 验证码生命周期：6 位数字、5 分钟 TTL、一次性核销、单码 5 次验错作废、
+  60 秒重发冷却、单手机号日上限 10 条；内存只存 SHA-256。发送失败调 `invalidate` 回滚冷却（日配额不回滚）。
+- `service/sms/SmsAuthService.java` — 流程编排：scene 隔离（login 码≠bind 码）、大陆手机号校验、
+  绑定唯一性（发码与确认两处都查）。`active()` = server 模式 && sms 配置齐全；local-mode 恒旁路。
+- `User.phone`（unique 列）+ `UserRepository.findByPhone`。
+- AuthController：`/login` 与 `/device-token` 同一道闸——已绑手机号且启用时缺 `smsCode` 回
+  **code 4005** + `{smsRequired, phoneMasked}`（与 4001/4003 同族，前端 api.js 据此切验证码步骤）；
+  存量未绑定用户不拦。`POST /api/auth/sms/send-code`（scene=login 须带正确用户名密码且与 /login 共用
+  失败锁定，**否则就是免锁定的密码试探口**；scene=bind 须已登录）、`POST /api/auth/sms/bind`。
+  IP 维度限频在 `AuthAbuseGuard.checkSmsSendRate`（20 条/小时）。
+- `/api/auth/me` 多回 `smsAuthEnabled` + `phoneMasked`（空串=未绑定，Map.of 不收 null）；
+  绑定 UI 在 `userprofile.vue` 设置 tab「账号安全」，登录验证码步骤在 `login.vue`。
+- 配置 `sms.*`（application.yml）：`SMS_AUTH_ENABLED` 默认 false；AK/SK 走 `SMS_ACCESS_KEY_ID/SECRET`
+  环境变量（RAM 子用户仅授 AliyunDysmsFullAccess），签名/模板默认 `京微资易`/`SMS_483655011`。
+  **签名的运营商报备状态是外部前置条件**（2026-08 时点：报备卡「检测中」待推进，发送会 PORT_NOT_REGISTERED）。
+
 **配置**
 - `security.local-mode`（`application-desktop.yml:36` 为 true，默认 false = 团队服务器模式）。
 - `ai.account.base-url`（`application.yml:97-98`，默认 `https://www.aiworkdeck.com`；**强制 https**，回环 http 例外供本地联调）。
 - `security.license.dir`（默认 `${user.home}/.aiworkdeck`）——license/account/entitlements/platform-ai-key/storage-location 五个状态文件都落这里。
 - `security.registration-mode`（默认 open）与 `security.awdk-login-enabled`(默认 false)——两者都只影响 server 模式；官方托管的插件云后端应配 closed + true。
+- `sms.enabled`（`SMS_AUTH_ENABLED`，默认 false）——登录短信验证开关，仅 server 模式生效；官方托管的插件云后端应配 true + 注入 AK/SK 环境变量。
 
 ## 核心契约
 

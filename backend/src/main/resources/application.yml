@@ -90,6 +90,16 @@ mcp:
       timeout-seconds: 60
       enabled: true
 
+# 登录短信验证（阿里云 dysmsapi；仅 server 模式生效，local-mode 免登无登录环节）。
+# AK/SK 一律环境变量注入（与 OSS_ACCESS_KEY_* 同一模式），绝不写进任何入库文件。
+# 官方托管的插件云后端：SMS_AUTH_ENABLED=true + RAM 子用户密钥（仅 AliyunDysmsFullAccess）。
+sms:
+  enabled: ${SMS_AUTH_ENABLED:false}
+  access-key-id: ${SMS_ACCESS_KEY_ID:}
+  access-key-secret: ${SMS_ACCESS_KEY_SECRET:}
+  sign-name: ${SMS_SIGN_NAME:京微资易}
+  template-code: ${SMS_TEMPLATE_CODE:SMS_483655011}
+
 # AI 大模型配置（供应商可切换）
 ai:
   # 官网账户服务地址（解锁门在线校验、账户连接、平台 AI 通道密钥）。

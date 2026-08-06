@@ -50,6 +50,9 @@ public class AuthAbuseGuard {
     static final int MAX_REGISTRATIONS_PER_WINDOW = 10;
     static final Duration REGISTRATION_WINDOW = Duration.ofHours(1);
 
+    static final int MAX_SMS_SENDS_PER_WINDOW = 20;
+    static final Duration SMS_WINDOW = Duration.ofHours(1);
+
     /** 内存兜底：超过该条数触发一次过期清理，防止被海量伪造维度撑爆内存。 */
     private static final int PURGE_THRESHOLD = 10_000;
 
@@ -59,6 +62,7 @@ public class AuthAbuseGuard {
 
     private final Map<String, FailureState> loginFailures = new ConcurrentHashMap<>();
     private final Map<String, WindowCounter> registrations = new ConcurrentHashMap<>();
+    private final Map<String, WindowCounter> smsSends = new ConcurrentHashMap<>();
 
     @Autowired
     public AuthAbuseGuard(
@@ -145,6 +149,33 @@ public class AuthAbuseGuard {
         });
     }
 
+    // ==================== 短信发送限频（按 IP；手机号维度在 SmsCodeStore） ====================
+
+    public void checkSmsSendRate(String ip) {
+        if (localMode) return;
+        WindowCounter counter = smsSends.get(ip);
+        long now = nowMillis.getAsLong();
+        if (counter != null
+                && now - counter.windowStart <= SMS_WINDOW.toMillis()
+                && counter.count >= MAX_SMS_SENDS_PER_WINDOW) {
+            throw new IllegalArgumentException("验证码发送过于频繁，请稍后再试");
+        }
+    }
+
+    public void recordSmsSend(String ip) {
+        if (localMode) return;
+        purgeIfOversized();
+        long now = nowMillis.getAsLong();
+        smsSends.compute(ip, (k, counter) -> {
+            if (counter == null || now - counter.windowStart > SMS_WINDOW.toMillis()) {
+                counter = new WindowCounter();
+                counter.windowStart = now;
+            }
+            counter.count++;
+            return counter;
+        });
+    }
+
     // ==================== 内部 ====================
 
     private static String loginKey(String ip, String username) {
@@ -161,6 +192,10 @@ public class AuthAbuseGuard {
         if (registrations.size() > PURGE_THRESHOLD) {
             registrations.entrySet().removeIf(e ->
                     now - e.getValue().windowStart > REGISTRATION_WINDOW.toMillis());
+        }
+        if (smsSends.size() > PURGE_THRESHOLD) {
+            smsSends.entrySet().removeIf(e ->
+                    now - e.getValue().windowStart > SMS_WINDOW.toMillis());
         }
     }
 
