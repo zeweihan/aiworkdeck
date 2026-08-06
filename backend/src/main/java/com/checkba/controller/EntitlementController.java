@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.service.account.MachineAccountGuard;
 import com.checkba.service.entitlement.EntitlementService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -22,9 +23,12 @@ import java.util.Map;
 public class EntitlementController {
 
     private final EntitlementService entitlementService;
+    private final MachineAccountGuard machineAccountGuard;
 
-    public EntitlementController(EntitlementService entitlementService) {
+    public EntitlementController(EntitlementService entitlementService,
+                                 MachineAccountGuard machineAccountGuard) {
         this.entitlementService = entitlementService;
+        this.machineAccountGuard = machineAccountGuard;
     }
 
     /**
@@ -35,9 +39,9 @@ public class EntitlementController {
     public Map<String, Object> list(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
             @RequestParam(value = "refresh", required = false, defaultValue = "false") boolean refresh) {
-        if (AuthController.getUserIdFromSession(sessionId) == null) {
-            throw new IllegalArgumentException("未登录");
-        }
+        // 插件云后端加固：server 模式下权益缓存是机器级状态（EntitlementService 无 userId 维度），
+        // 仅 admin 可读；local-mode 行为一字不动（恒放行）。
+        machineAccountGuard.requireMachineScope(sessionId);
         if (refresh) {
             entitlementService.refreshQuietly();
         }

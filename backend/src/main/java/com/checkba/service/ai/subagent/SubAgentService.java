@@ -150,8 +150,11 @@ public class SubAgentService {
      */
     SubAgentResult runLoop(String subtaskId, String taskDescription, String expectedOutput,
                            List<String> toolScope, ToolContext parentCtx) {
-        Set<String> allowed = resolveScope(toolScope);
-        List<ToolSpecification> specs = toolRegistry.getAllSpecifications().stream()
+        // 子 Agent 继承主会话的客户端能力（不变式 3 同款思路）：
+        // office 会话派生的子 Agent 同样不该看到 doc_*/sheet_* 死路径工具
+        String parentConversationId = parentCtx != null ? parentCtx.conversationId() : null;
+        Set<String> allowed = resolveScope(toolScope, parentConversationId);
+        List<ToolSpecification> specs = toolRegistry.getAllSpecifications(parentConversationId).stream()
                 .filter(s -> allowed.contains(s.name()))
                 .toList();
 
@@ -245,10 +248,10 @@ public class SubAgentService {
      * 解析 tool_scope 为别名解析后的可用工具名集合。
      * 空 scope = 全部已注册工具；dispatch_subtask 无条件排除（防递归第一道防线）。
      */
-    private Set<String> resolveScope(List<String> toolScope) {
+    private Set<String> resolveScope(List<String> toolScope, String conversationId) {
         Set<String> allowed = new LinkedHashSet<>();
         if (toolScope == null || toolScope.isEmpty()) {
-            for (ToolSpecification spec : toolRegistry.getAllSpecifications()) {
+            for (ToolSpecification spec : toolRegistry.getAllSpecifications(conversationId)) {
                 allowed.add(spec.name());
             }
         } else {

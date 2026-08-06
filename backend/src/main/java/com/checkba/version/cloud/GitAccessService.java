@@ -27,6 +27,27 @@ public class GitAccessService {
     }
 
     public Long authorize(HttpServletRequest request, long projectId, boolean write) {
+        Long userId = resolveUser(request);
+        if (memberService.isClient(projectId, userId)) throw new GitAccessDeniedException(403);
+        boolean allowed = write
+                ? memberService.hasWritePermission(projectId, userId)
+                : memberService.hasReadPermission(projectId, userId);
+        if (!allowed) throw new GitAccessDeniedException(403);
+        return userId;
+    }
+
+    /**
+     * 用户记忆仓库（user-{id}-memory.git）：owner-only——读写都只有本人可以，
+     * 与项目成员体系无关（用户记忆里有跨项目的个人偏好，任何别人都不该看到）。
+     */
+    public Long authorizeUserMemory(HttpServletRequest request, long ownerUserId, boolean write) {
+        Long userId = resolveUser(request);
+        if (userId != ownerUserId) throw new GitAccessDeniedException(403);
+        return userId;
+    }
+
+    /** Basic 头的 password 位是设备令牌 → userId。解析失败一律 401。 */
+    private Long resolveUser(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
         if (header == null || !header.startsWith("Basic ")) {
             throw new GitAccessDeniedException(401);
@@ -42,11 +63,6 @@ public class GitAccessService {
         }
         Long userId = deviceTokenService.resolveUserId(token);
         if (userId == null) throw new GitAccessDeniedException(401);
-        if (memberService.isClient(projectId, userId)) throw new GitAccessDeniedException(403);
-        boolean allowed = write
-                ? memberService.hasWritePermission(projectId, userId)
-                : memberService.hasReadPermission(projectId, userId);
-        if (!allowed) throw new GitAccessDeniedException(403);
         return userId;
     }
 }

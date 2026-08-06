@@ -1,0 +1,39 @@
+/* AI Workdeck Office 插件——浅色、克制、专业 */
+:root {
+  --awd-bg: #f7f8fa;
+  --awd-surface: #ffffff;
+  --awd-border: #e2e6ec;
+  --awd-text: #1f2733;
+  --awd-text-secondary: #6b7686;
+  --awd-primary: #1f3a5f;
+  --awd-primary-hover: #2c4f7c;
+  --awd-danger: #b4232c;
+  --awd-user-bubble: #eef2f8;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--awd-bg);
+  color: var(--awd-text);
+  font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+#app { height: 100%; }
+
+button {
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+input, textarea, select {
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--awd-text);
+}

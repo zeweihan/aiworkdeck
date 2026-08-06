@@ -21,13 +21,21 @@ import java.util.Map;
     @Index(name = "idx_memory_type", columnList = "memory_type"),
     @Index(name = "idx_memory_key", columnList = "memory_key"),
     @Index(name = "idx_memory_conversation", columnList = "conversation_id"),
-    @Index(name = "idx_memory_scope_user", columnList = "scope, user_id")
+    @Index(name = "idx_memory_scope_user", columnList = "scope, user_id"),
+    @Index(name = "idx_memory_uid", columnList = "uid")
 })
 public class MemoryEntry {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
+
+    /**
+     * 跨机器稳定身份（UUID）。Git 记忆同步只认 uid，本机数字 id 永远是派生值
+     * （清单 v2 地雷 #27 同款纪律）。存量行由同步导出时懒回填（仿 tree.json v2）。
+     */
+    @Column(name = "uid", length = 36)
+    private String uid;
 
     /**
      * 项目ID
@@ -152,6 +160,8 @@ public class MemoryEntry {
     // Getters and Setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
+    public String getUid() { return uid; }
+    public void setUid(String uid) { this.uid = uid; }
     public Long getProjectId() { return projectId; }
     public void setProjectId(Long projectId) { this.projectId = projectId; }
     public Long getUserId() { return userId; }
@@ -187,8 +197,14 @@ public class MemoryEntry {
 
     @PrePersist
     protected void onCreate() {
-        createdAt = LocalDateTime.now();
-        updatedAt = LocalDateTime.now();
+        // 已预置的时间保留（Git 记忆同步回灌远端条目时带着原始时间进来，
+        // 无条件覆盖会让跨机器的 LWW 与时间衰减排序失真）；常规新建路径两者皆空，行为不变。
+        if (createdAt == null) {
+            createdAt = LocalDateTime.now();
+        }
+        if (updatedAt == null) {
+            updatedAt = LocalDateTime.now();
+        }
         if (lastAccessedAt == null) {
             lastAccessedAt = createdAt;
         }

@@ -41,6 +41,7 @@ public class ContextAssemblerService {
     private final FileContextLoader fileContextLoader;
     private final AiContextProperties contextProperties;
     private final com.checkba.service.ai.skill.SkillRouter skillRouter;
+    private final ClientCapabilityService clientCapabilityService;
 
     // 记忆系统组件（读侧：写侧见 MemoryPipelineService）
     private final MemoryManager memoryManager;
@@ -236,19 +237,35 @@ public class ContextAssemblerService {
         // This is injected when no explicit context is provided but user is viewing a document
         // LLM decides whether to use this based on user's instruction
         if (activeContext != null && activeContext.getId() != null && !activeContext.getId().isEmpty()) {
-            log.info("[Context] Injecting active document: id={}, name={}", 
-                     activeContext.getId(), activeContext.getName());
-            
-            String content = legalTools.read_document(activeContext.getId());
+            log.info("[Context] Injecting active document: id={}, name={}, inline={}",
+                     activeContext.getId(), activeContext.getName(),
+                     activeContext.getInlineContent() != null && !activeContext.getInlineContent().isEmpty());
+
+            String content = resolveActiveDocumentContent(activeContext);
+            ClientCapabilityService.Capability capability = clientCapabilityService.capabilityOf(conversationId);
 
             systemText.append("\n\n# Active Document (当前活跃文档)\n");
             systemText.append("该文档（id=").append(activeContext.getId())
                       .append(", name=").append(activeContext.getName())
                       .append("）**已在编辑器中打开**，就是用户此刻正在看的文档。");
             systemText.append("用户说\"修订一下\"\"这个文档\"\"当前文档\"或未指明对象时，默认就是指它。\n");
-            systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
-            systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+            switch (capability) {
+                case OFFICE -> {
+                    systemText.append("该文档在用户本机的 Microsoft Word 中打开，正文已随本请求内联注入下方。");
+                    systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
+                    systemText.append("office_replace_text / office_insert_text / office_add_comment 等），");
+                    systemText.append("修改会以 Word 原生修订形式呈现。本会话没有 doc_* 工具。\n\n");
+                }
+                case NONE -> {
+                    systemText.append("当前客户端没有文档编辑执行器：正文仅供阅读分析，");
+                    systemText.append("请以文字形式给出分析结论或修改建议，不要尝试调用文档编辑工具。\n\n");
+                }
+                default -> {
+                    systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
+                    systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
+                    systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+                }
+            }
 
             if (content != null && !content.isEmpty()) {
                 // Truncate if too long
@@ -262,10 +279,15 @@ public class ContextAssemblerService {
                 systemText.append(fenceSafe(content));
                 systemText.append("\n]]></active_document>\n");
             } else {
-                // 正文暂时读不到也要保留文档标识，模型仍可用 doc_get_document_text 等工具直接读
+                // 正文暂时读不到也要保留文档标识，模型仍可用读取类工具（按会话能力）直接读
+                String readHint = switch (capability) {
+                    case OFFICE -> "[正文暂不可读，可用 office_get_text 直接读取]";
+                    case NONE -> "[正文暂不可读]";
+                    default -> "[正文暂不可读，可用 doc_get_document_text 直接分段读取]";
+                };
                 systemText.append("<active_document id=\"").append(activeContext.getId())
                           .append("\" name=\"").append(attrSafe(activeContext.getName()))
-                          .append("\">[正文暂不可读，可用 doc_get_document_text 直接分段读取]</active_document>\n");
+                          .append("\">").append(readHint).append("</active_document>\n");
             }
         }
 
@@ -370,7 +392,8 @@ public class ContextAssemblerService {
         // 声明被弱模型（如 DeepSeek Flash）稳定无视——实测注入了正文仍先调 doc_list_project_files
         // 重新发现文档。末位消息是注意力最高的位置，这里再说一次才真正生效。
         messages.add(dev.langchain4j.data.message.UserMessage.from(
-                userPrompt + activeDocumentReminder(activeContext)));
+                userPrompt + activeDocumentReminder(activeContext,
+                        clientCapabilityService.capabilityOf(conversationId))));
 
         return messages;
     }
@@ -397,16 +420,53 @@ public class ContextAssemblerService {
     }
 
     /**
-     * 活跃文档的末位提醒（拼在用户消息尾部）。无活跃文档时返回空串。
+     * 活跃文档的末位提醒（拼在用户消息尾部），文案按会话客户端能力切换（Phase C）：
+     * lowa=doc_* 口径（现状）；office=office_* 口径（正文已内联注入，改动经 office_* 落到 Word）；
+     * none=只读口径。无活跃文档时返回空串。
      */
-    private String activeDocumentReminder(com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+    private String activeDocumentReminder(com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+                                          ClientCapabilityService.Capability capability) {
         if (activeContext == null || activeContext.getId() == null || activeContext.getId().isEmpty()) {
             return "";
         }
-        return "\n\n[系统提醒] 编辑器中当前已打开文档" + activeDocDisplayName(activeContext.getName()) + "（id="
-                + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
-                + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
-                + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+        String docLabel = activeDocDisplayName(activeContext.getName());
+        return switch (capability) {
+            case OFFICE -> "\n\n[系统提醒] 用户此刻在 Microsoft Word 中打开着文档" + docLabel + "，"
+                    + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
+                    + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
+                    + "需要修改文档时调用 office_* 工具（office_replace_text / office_insert_text / "
+                    + "office_add_comment 等）落到 Word，修改会以 Word 原生修订形式呈现。";
+            case NONE -> "\n\n[系统提醒] 用户当前查看的文档是" + docLabel + "，"
+                    + "其正文见 system prompt 的 <active_document>，仅供阅读分析。"
+                    + "本会话的客户端没有文档编辑执行器，请以文字形式给出结论或修改建议，"
+                    + "不要尝试调用文档编辑工具。";
+            default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
+                    + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
+                    + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
+                    + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+        };
+    }
+
+    /** 内联正文防滥用上限：超出即截断（客户端可随请求直接携带正文，不能无限吃内存）。 */
+    private static final int MAX_INLINE_CONTENT_CHARS = 200_000;
+
+    /**
+     * 活跃文档正文来源二选一：
+     * 1) 请求随带的内联正文（Office 插件等场景——文档在客户端本地，后端没有可读的 fileId）优先；
+     * 2) 否则走既有 read_document(fileId) 路径。
+     * 两条路径产出同格式正文，后续统一由调用方做 CDATA 包裹与 maxCharsPerFile 截断。
+     */
+    private String resolveActiveDocumentContent(
+            com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+        String inline = activeContext.getInlineContent();
+        if (inline != null && !inline.isEmpty()) {
+            if (inline.length() > MAX_INLINE_CONTENT_CHARS) {
+                inline = inline.substring(0, MAX_INLINE_CONTENT_CHARS)
+                        + "\n... [TRUNCATED - Inline content too long]";
+            }
+            return inline;
+        }
+        return legalTools.read_document(activeContext.getId());
     }
 
     /**

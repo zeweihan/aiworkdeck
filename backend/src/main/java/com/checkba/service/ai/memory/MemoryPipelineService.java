@@ -37,6 +37,7 @@ public class MemoryPipelineService {
     private final ProjectMemoryExtractor projectMemoryExtractor;
     private final MemCellExtractor memCellExtractor;
     private final ContextCompressor contextCompressor;
+    private final com.checkba.version.memory.MemorySyncService memorySyncService;
 
     /**
      * 一轮对话（Agent 循环）完成后的记忆更新。异步执行，失败不影响对话主流程。
@@ -106,6 +107,14 @@ public class MemoryPipelineService {
             } catch (Exception e) {
                 log.error("Failed to extract project memory: {}", e.getMessage(), e);
             }
+        }
+
+        // 3. 记忆 Git 同步（防抖导出 + push，spec Phase A）。方法自身吞掉一切异常且只对
+        //    已配置同步的领域生效，这里再包一层保险——同步永远不能反噬记忆管线。
+        try {
+            memorySyncService.onMemoriesTouched(projectIdLong, userId);
+        } catch (Exception e) {
+            log.warn("Memory git sync trigger failed (swallowed): {}", e.getMessage());
         }
     }
 }

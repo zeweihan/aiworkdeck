@@ -73,4 +73,33 @@ class UserServiceTest {
 
         assertThrows(IllegalArgumentException.class, () -> userService.login("dave", "wrong"));
     }
+
+    // ==================== 外部账户桥接（awdk-login）建的无密码账号 ====================
+
+    @Test
+    void externalAccountStoresSentinelNotUsablePassword() {
+        when(userRepository.findByUsername("awd_hanzewei")).thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User u = userService.registerExternal("awd_hanzewei", "韩泽伟");
+
+        assertTrue(u.getPassword().startsWith(UserService.EXTERNAL_ACCOUNT_MARK));
+        assertEquals("韩泽伟", u.getDisplayName());
+    }
+
+    @Test
+    void externalAccountCannotPasswordLogin() {
+        when(userRepository.findByUsername("awd_hanzewei")).thenReturn(Optional.empty());
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        User external = userService.registerExternal("awd_hanzewei", "韩泽伟");
+        when(userRepository.findByUsername("awd_hanzewei")).thenReturn(Optional.of(external));
+
+        // 无论输入什么都拒绝：哨兵字面量、存储值本身，全都不是「正确密码」
+        assertThrows(IllegalArgumentException.class,
+                () -> userService.login("awd_hanzewei", UserService.EXTERNAL_ACCOUNT_MARK));
+        assertThrows(IllegalArgumentException.class,
+                () -> userService.login("awd_hanzewei", external.getPassword()));
+        // 且绝不能触发「历史明文就地升级」——账号必须保持无密码
+        assertTrue(external.getPassword().startsWith(UserService.EXTERNAL_ACCOUNT_MARK));
+    }
 }

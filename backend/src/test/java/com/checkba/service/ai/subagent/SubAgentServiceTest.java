@@ -51,7 +51,8 @@ class SubAgentServiceTest {
     @BeforeEach
     void setUp() {
         registry = mock(ToolRegistry.class);
-        when(registry.getAllSpecifications()).thenReturn(List.of(
+        // 子 Agent 走会话能力感知的 getAllSpecifications(conversationId)（Phase C）
+        when(registry.getAllSpecifications(any())).thenReturn(List.of(
                 ToolSpecification.builder().name("search_web").description("web search").build(),
                 ToolSpecification.builder().name("read_document").description("read file").build(),
                 ToolSpecification.builder().name("dispatch_subtask").description("delegate").build()));

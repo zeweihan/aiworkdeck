@@ -30,6 +30,9 @@ public class ProjectMemoryExtractor {
     
     // 金额模式
     private static final Pattern AMOUNT_PATTERN = Pattern.compile("([\\d,]+\\.?\\d*)\\s*(万元|亿元|元|万|亿)");
+
+    /** 金额合理性上限（100 万亿元）：超出视为转写/识别噪音，防 NUMERIC(20,2) 溢出 */
+    private static final BigDecimal MAX_PLAUSIBLE_AMOUNT = new BigDecimal("100000000000000");
     
     // 日期模式
     private static final Pattern DATE_PATTERN = Pattern.compile("(\\d{4})年(\\d{1,2})月(\\d{1,2})日");
@@ -151,13 +154,19 @@ public class ProjectMemoryExtractor {
                 String numStr = matcher.group(1).replace(",", "");
                 String unit = matcher.group(2);
                 BigDecimal amount = new BigDecimal(numStr);
-                
+
                 // 转换为元
                 switch (unit) {
                     case "万元", "万" -> amount = amount.multiply(new BigDecimal("10000"));
                     case "亿元", "亿" -> amount = amount.multiply(new BigDecimal("100000000"));
                 }
-                
+
+                // 合理性钳制：语音转写噪音（如"1000100010001400万"）会撑爆
+                // transaction_amount NUMERIC(20,2) 并让整条 project_memory 更新失败，
+                // 超出 100 万亿元的金额按噪音丢弃
+                if (amount.compareTo(MAX_PLAUSIBLE_AMOUNT) > 0) {
+                    continue;
+                }
                 amounts.put(matcher.group(), amount);
             } catch (NumberFormatException e) {
                 // 忽略解析错误
