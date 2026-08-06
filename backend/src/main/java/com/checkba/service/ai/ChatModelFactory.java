@@ -26,6 +26,16 @@ public class ChatModelFactory {
     private final com.checkba.service.SystemSettingService systemSettingService;
     private final PlatformAiChannel platformAiChannel;
     private final PlatformUsageAccountant usageAccountant;
+    // 埋点：真实落地的 provider/model（请求传入的 modelId 可能被白名单改写，必须在 factory 记）
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
+
+    /** 埋点：模型实际使用（含缓存命中，反映每次调用的真实分布） */
+    private void recordModelUse(String provider, String model, boolean streaming) {
+        telemetryService.record("ai.model", java.util.Map.of(
+                "provider", provider,
+                "targetModel", model == null ? "" : model,
+                "streaming", streaming));
+    }
 
     // 缓存: key = provider + ":" + modelName
     private final Map<String, ChatLanguageModel> modelCache = new ConcurrentHashMap<>();
@@ -120,6 +130,7 @@ public class ChatModelFactory {
     }
 
     private ChatLanguageModel getOrCreateOpenRouterModel(String modelId) {
+        recordModelUse("OPENROUTER", modelId, false);
         String cacheKey = "openrouter:" + modelId;
         return modelCache.computeIfAbsent(cacheKey, k -> {
             log.info("Creating new OpenRouter ChatModel instance for: {}", modelId);
@@ -208,6 +219,7 @@ public class ChatModelFactory {
 
     /** 缓存 key 带密钥指纹：官网撤销重发后指纹变化，旧实例自然作废。 */
     private ChatLanguageModel getOrCreatePlatformModel(String modelId) {
+        recordModelUse("AWD_CLOUD", modelId, false);
         String apiKey = platformApiKey();
         String cacheKey = "awd_cloud:" + platformAiChannel.keyFingerprint() + ":" + modelId;
         return modelCache.computeIfAbsent(cacheKey, k -> {
@@ -227,6 +239,7 @@ public class ChatModelFactory {
     }
 
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreatePlatformStreamingModel(String modelId) {
+        recordModelUse("AWD_CLOUD", modelId, true);
         String apiKey = platformApiKey();
         String cacheKey = "awd_cloud_stream:" + platformAiChannel.keyFingerprint() + ":" + modelId;
         return streamingModelCache.computeIfAbsent(cacheKey, k -> {
@@ -244,6 +257,7 @@ public class ChatModelFactory {
     }
 
     private ChatLanguageModel getOrCreateOllamaModel(String modelName) {
+        recordModelUse("OLLAMA", modelName, false);
         String cacheKey = "ollama:" + modelName;
         return modelCache.computeIfAbsent(cacheKey, k -> {
             log.info("Creating new Ollama ChatModel instance for: {}", modelName);
@@ -258,6 +272,7 @@ public class ChatModelFactory {
     }
 
     private ChatLanguageModel getOrCreateGeminiModel(String modelName) {
+        recordModelUse("GEMINI", modelName, false);
         String cacheKey = "gemini:" + modelName;
         return modelCache.computeIfAbsent(cacheKey, k -> {
             log.info("Creating new Gemini ChatModel instance for: {}", modelName);
@@ -313,6 +328,7 @@ public class ChatModelFactory {
     }
 
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreateOpenRouterStreamingModel(String modelId) {
+        recordModelUse("OPENROUTER", modelId, true);
         String cacheKey = "openrouter_stream:" + modelId;
         return streamingModelCache.computeIfAbsent(cacheKey, k -> {
             log.info("Creating new OpenRouter StreamingChatModel for: {}", modelId);
@@ -337,6 +353,7 @@ public class ChatModelFactory {
     }
 
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreateOllamaStreamingModel(String modelName) {
+        recordModelUse("OLLAMA", modelName, true);
         String cacheKey = "ollama_stream:" + modelName;
         return streamingModelCache.computeIfAbsent(cacheKey, k -> {
             log.info("Creating new Ollama StreamingChatModel for: {}", modelName);

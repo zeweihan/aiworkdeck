@@ -41,6 +41,12 @@ public class SkillDefinition {
     /** 来源插件 id（插件携带的 skill）；内置 skill 为 null */
     private String sourcePluginId;
 
+    /**
+     * 法律事项类别（可选，用于匿名统计的事项类型分布，枚举值见
+     * com.checkba.service.telemetry.MatterCategory；缺省不参与事项统计）
+     */
+    private String category;
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
     public String getName() { return name; }
@@ -61,4 +67,6 @@ public class SkillDefinition {
     public void setRequires(List<String> requires) { this.requires = requires; }
     public String getSourcePluginId() { return sourcePluginId; }
     public void setSourcePluginId(String sourcePluginId) { this.sourcePluginId = sourcePluginId; }
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
 }

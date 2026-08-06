@@ -42,7 +42,11 @@ class SkillRouterTest {
         props.setBaseTools(List.of("read_document"));
         registry = new SkillRegistry(props, null, new PluginService());
         registry.init();
-        router = new SkillRouter(registry, props);
+        router = new SkillRouter(registry, props,
+                new com.checkba.service.telemetry.TelemetryService(
+                        org.mockito.Mockito.mock(com.checkba.repository.TelemetryEventRepository.class),
+                        new com.checkba.service.telemetry.InstallIdentityService(tempDir.toString()),
+                        "test"));
     }
 
     private void writeSkill(String id, List<String> triggers, List<String> allowedTools) throws IOException {

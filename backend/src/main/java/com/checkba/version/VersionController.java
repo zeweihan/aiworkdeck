@@ -30,19 +30,27 @@ public class VersionController {
     private final UserService userService;
     private final ProjectFileService projectFileService;
     private final ProjectTreeManifestService manifestService;
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
+
+    /** 埋点：版本记录关键动作计数（op 是端点枚举名，不带任何项目/版本信息） */
+    private void trackOp(String op) {
+        telemetryService.record("version.op", Map.of("op", op, "ok", true));
+    }
 
     public VersionController(ProjectRepoService repoService,
                              WorkSessionService sessionService,
                              ProjectMemberService projectMemberService,
                              UserService userService,
                              ProjectFileService projectFileService,
-                             ProjectTreeManifestService manifestService) {
+                             ProjectTreeManifestService manifestService,
+                             com.checkba.service.telemetry.TelemetryService telemetryService) {
         this.repoService = repoService;
         this.sessionService = sessionService;
         this.projectMemberService = projectMemberService;
         this.userService = userService;
         this.projectFileService = projectFileService;
         this.manifestService = manifestService;
+        this.telemetryService = telemetryService;
     }
 
     @GetMapping("/status")
@@ -194,6 +202,7 @@ public class VersionController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireWriteMember(projectId, sessionId);
         sessionService.enableVersionRecording(projectId, userName(userId), email(userId));
+        trackOp("enable");
         return ok(Map.of("enabled", true));
     }
 
@@ -278,6 +287,7 @@ public class VersionController {
         data.put("sha", r.sha() == null ? "" : r.sha());
         data.put("notice", r.notice() == null ? "" : r.notice());
         if (r.conflict() != null) data.put("conflict", sessionEndConflictData(r.conflict()));
+        trackOp("session_end");
         return ok(data);
     }
 
@@ -315,6 +325,7 @@ public class VersionController {
         Long userId = requireWriteMember(projectId, sessionId);
         // affectedFileIds：丢弃改写了磁盘，打开中的编辑器要走同一条重载链（同 revert）。
         List<Long> affectedFileIds = sessionService.discardSession(projectId, userId);
+        trackOp("session_discard");
         return ok(Map.of("discarded", true, "affectedFileIds", affectedFileIds));
     }
 
@@ -389,6 +400,7 @@ public class VersionController {
         Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.RevertResult result = sessionService.revertTo(
                 projectId, body.get("ref"), userId, userName(userId));
+        trackOp("revert");
         return ok(Map.of(
                 "sha", result.sha() == null ? "" : result.sha(),
                 "affectedFileIds", result.affectedFileIds()));
@@ -406,6 +418,7 @@ public class VersionController {
         String name = body == null ? null : body.get("name");
         WorkSessionService.DraftCreateResult result =
                 sessionService.createDraft(projectId, ref, name, userId, userName(userId));
+        trackOp("draft_create");
         return ok(Map.of(
                 "draftId", result.draft().getId(),
                 "branch", result.lineSwitch().branch(),
@@ -454,6 +467,7 @@ public class VersionController {
         Long userId = requireWriteMember(projectId, sessionId);
         WorkSessionService.AdoptOutcome outcome =
                 sessionService.adoptDraft(projectId, draftId, userId, userName(userId));
+        trackOp("draft_adopt");
         return ok(adoptOutcomeData(outcome));
     }
 
@@ -533,6 +547,7 @@ public class VersionController {
     @ExceptionHandler(VersionException.class)
     public ResponseEntity<Map<String, Object>> onVersionError(VersionException e) {
         log.warn("版本记录操作失败", e);
+        telemetryService.record("version.op", Map.of("op", "error", "ok", false));
         String message = e.isUserFacing() ? e.getMessage() : "版本记录操作失败，请重试";
         return ResponseEntity.ok(Map.of("code", 1, "message", message));
     }

@@ -33,13 +33,16 @@ public class CloudController {
     private final CloudSyncService cloudSyncService;
     private final ProjectMemberService projectMemberService;
     private final UserService userService;
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     public CloudController(CloudSyncService cloudSyncService,
                             ProjectMemberService projectMemberService,
-                            UserService userService) {
+                            UserService userService,
+                            com.checkba.service.telemetry.TelemetryService telemetryService) {
         this.cloudSyncService = cloudSyncService;
         this.projectMemberService = projectMemberService;
         this.userService = userService;
+        this.telemetryService = telemetryService;
     }
 
     // ==================== 连接级：只要求登录 ====================
@@ -93,7 +96,10 @@ public class CloudController {
         Long userId = requireLogin(sessionId);
         long connectionId = ((Number) body.get("connectionId")).longValue();
         long remoteProjectId = ((Number) body.get("remoteProjectId")).longValue();
-        return ok(cloudSyncService.cloneFromCloud(connectionId, remoteProjectId, userId));
+        Map<String, Object> cloned = cloudSyncService.cloneFromCloud(connectionId, remoteProjectId, userId);
+        telemetryService.record("project.created",
+                Map.of("kind", "cloud", "reused", false, "importedCount", 0));
+        return ok(cloned);
     }
 
     /** {id, serverUrl, username, displayName}——绝不带 deviceToken，防泄漏。 */

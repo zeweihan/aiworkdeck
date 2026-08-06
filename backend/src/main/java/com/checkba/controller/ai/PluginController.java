@@ -41,6 +41,7 @@ public class PluginController {
     private final com.checkba.service.ai.PluginRevocationService revocationService;
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     @lombok.Data
     public static class PluginView {
@@ -125,6 +126,7 @@ public class PluginController {
         }
         try {
             String id = pluginMarketService.install(body == null ? null : body.get("id"));
+            telemetryService.record("plugin.lifecycle", Map.of("pluginId", id, "op", "install"));
             Map<String, Object> result = ok();
             result.put("id", id);
             result.put("pendingEnable", true);
@@ -142,7 +144,11 @@ public class PluginController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
         }
         try {
-            pluginMarketService.uninstall(body == null ? null : body.get("id"));
+            String id = body == null ? null : body.get("id");
+            pluginMarketService.uninstall(id);
+            if (id != null) {
+                telemetryService.record("plugin.lifecycle", Map.of("pluginId", id, "op", "uninstall"));
+            }
             return ResponseEntity.ok(ok());
         } catch (Exception e) {
             return ResponseEntity.ok(error(e.getMessage()));
@@ -173,6 +179,8 @@ public class PluginController {
             // 被平台封禁的插件不允许重新启用
             return ResponseEntity.ok(error(e.getMessage()));
         }
+        telemetryService.record("plugin.lifecycle",
+                Map.of("pluginId", pluginId, "op", enabled ? "enable" : "disable"));
         return ResponseEntity.ok(ok());
     }
 

@@ -32,6 +32,7 @@ public class ProjectFileService {
     private final WorkSessionService workSessionService;
     private final UserService userService;
     private final com.checkba.service.quota.StageQuotaService stageQuotaService;
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public ProjectFileService(ProjectFileRepository projectFileRepository,
@@ -39,13 +40,15 @@ public class ProjectFileService {
                               StorageServiceFactory storageServiceFactory,
                               WorkSessionService workSessionService,
                               UserService userService,
-                              com.checkba.service.quota.StageQuotaService stageQuotaService) {
+                              com.checkba.service.quota.StageQuotaService stageQuotaService,
+                              com.checkba.service.telemetry.TelemetryService telemetryService) {
         this.projectFileRepository = projectFileRepository;
         this.projectRagService = projectRagService;
         this.storageServiceFactory = storageServiceFactory;
         this.workSessionService = workSessionService;
         this.userService = userService;
         this.stageQuotaService = stageQuotaService;
+        this.telemetryService = telemetryService;
     }
 
     /**
@@ -1193,6 +1196,8 @@ public class ProjectFileService {
      */
     private void signalChange(Long projectId, Long userId) {
         if (projectId == null) return;
+        // 埋点：仅计数，不带任何文件/项目信息
+        telemetryService.record("file.changed", null);
         try {
             workSessionService.onChangeSignal(projectId, userId, resolveUserName(userId));
         } catch (Exception e) {

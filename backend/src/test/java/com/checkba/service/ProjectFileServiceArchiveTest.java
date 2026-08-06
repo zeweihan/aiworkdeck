@@ -48,6 +48,8 @@ class ProjectFileServiceArchiveTest {
     private StorageServiceFactory storageServiceFactory;
     @Mock
     private StorageService storageService;
+    @Mock
+    private com.checkba.service.telemetry.TelemetryService telemetryService;
 
     @InjectMocks
     private ProjectFileService projectFileService;

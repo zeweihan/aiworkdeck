@@ -31,6 +31,7 @@ public class ProjectService {
     private final UserRepository userRepository;
     private final TushareService tushareService;
     private final ProjectVariableService projectVariableService;
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     @Transactional
     public Project createProject(ProjectCreateRequest request, Long userId) {
@@ -88,6 +89,8 @@ public class ProjectService {
         project.setUpdatedAt(now);
 
         Project savedProject = projectRepository.save(project);
+        telemetryService.record("project.created",
+                java.util.Map.of("kind", "managed", "reused", false, "importedCount", 0));
 
         // Add creator as ADMIN member
         ProjectMember member = new ProjectMember();

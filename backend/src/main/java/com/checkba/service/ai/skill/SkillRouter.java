@@ -32,6 +32,8 @@ public class SkillRouter {
 
     private final SkillRegistry skillRegistry;
     private final SkillProperties properties;
+    // 埋点：只记 skillId 枚举值，用户输入原文绝不进入（构造器变更需同步 EvalHarness/SkillRouterTest）
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     /**
      * 本轮命中的 skill：conversationId -> skillId。
@@ -93,6 +95,7 @@ public class SkillRouter {
                 activeSkillByConversation.put(conversationId, pinned.get().getId());
                 log.info("Skill '{}' activated for conversation {} (pinned by user)",
                         pinned.get().getId(), conversationId);
+                recordActivation(conversationId, pinned.get(), "pinned");
                 return;
             }
             log.warn("Pinned skill '{}' not found or unavailable, fall back to trigger matching", pinnedSkillId);
@@ -102,8 +105,19 @@ public class SkillRouter {
             activeSkillByConversation.put(conversationId, matched.get().getId());
             log.info("Skill '{}' activated for conversation {} (trigger matched)",
                     matched.get().getId(), conversationId);
+            recordActivation(conversationId, matched.get(), "matched");
         } else {
             activeSkillByConversation.remove(conversationId);
+        }
+    }
+
+    /** 埋点：skill 激活即事项类型信号（skill 带 category 时同步产出 matter.classified） */
+    private void recordActivation(String conversationId, SkillDefinition skill, String how) {
+        telemetryService.recordConv("skill.activated", conversationId,
+                Map.of("skillId", skill.getId(), "how", how));
+        if (skill.getCategory() != null && !skill.getCategory().isBlank()) {
+            telemetryService.recordConv("matter.classified", conversationId,
+                    Map.of("category", skill.getCategory(), "source", "skill"));
         }
     }
 

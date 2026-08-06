@@ -18,6 +18,12 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class AgentRunStateService {
 
+    private final com.checkba.service.telemetry.TelemetryTurnTracker turnTracker;
+
+    public AgentRunStateService(com.checkba.service.telemetry.TelemetryTurnTracker turnTracker) {
+        this.turnTracker = turnTracker;
+    }
+
     /** 会话运行状态。前端状态点依赖字面量，改名要同步 useAgentStream/历史列表。 */
     public enum RunStatus {
         /** 循环执行中 */
@@ -41,6 +47,8 @@ public class AgentRunStateService {
     public void mark(String conversationId, RunStatus status) {
         if (conversationId == null) return;
         states.put(conversationId, new RunState(status, System.currentTimeMillis()));
+        // 埋点：终态在此单点合成 ai.turn（新增终止分支只要走 mark 就自动覆盖）
+        turnTracker.onStatus(conversationId, status.name());
     }
 
     /** null = 本进程内从未跑过（历史会话），前端按「无任务」处理。 */

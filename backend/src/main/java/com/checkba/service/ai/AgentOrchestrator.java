@@ -94,6 +94,9 @@ public class AgentOrchestrator {
     private final DocumentCheckpointService documentCheckpointService;
     private final AgentRunStateService agentRunStateService;
     private final com.checkba.version.WorkSessionService workSessionService;
+    // 埋点（隐私红线与字段白名单见 service/telemetry；构造器变更需同步 EvalHarness）
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    private final com.checkba.service.telemetry.TelemetryTurnTracker telemetryTurnTracker;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -173,6 +176,22 @@ public class AgentOrchestrator {
 
     // ==================== 工具分发（统一走 ToolRegistry，编排器不感知具体工具） ====================
 
+    /** 埋点：工具调用结果（仅工具名/成败/耗时等枚举与数值，参数内容不采集） */
+    private void recordToolTelemetry(String toolName, ToolRegistry.ToolResult result,
+                                     String conversationId, long durationMs) {
+        java.util.Map<String, Object> attrs = new java.util.HashMap<>();
+        attrs.put("toolName", toolName);
+        attrs.put("success", result != null && result.success());
+        attrs.put("durationMs", durationMs);
+        if (result != null && result.tool() != null) {
+            attrs.put("fromPlugin", result.tool().fromPlugin());
+            if (result.tool().meta() != null && result.tool().meta().fileEffect() != null) {
+                attrs.put("fileEffect", result.tool().meta().fileEffect());
+            }
+        }
+        telemetryService.recordConv("ai.tool", conversationId, attrs);
+    }
+
     /**
      * 分发一次工具调用并处理声明式副作用（文件变更通知、文件树刷新）。
      * 修改类工具（fileEffect=MODIFIED）执行前自动为活跃文档创建本轮检查点。
@@ -204,7 +223,9 @@ public class AgentOrchestrator {
 
         com.checkba.service.ai.tools.ToolContext ctx =
                 new com.checkba.service.ai.tools.ToolContext(projectId, conversationId, userId, modelId);
+        long toolStartMs = System.currentTimeMillis();
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
+        recordToolTelemetry(toolName, result, conversationId, System.currentTimeMillis() - toolStartMs);
         applyToolSideEffects(result, argsJson, conversationId);
 
         // 模型仍去列文件时，把活跃文档钉在结果里，让它下一轮自己纠回来（不阻断跨文档场景）
@@ -316,6 +337,13 @@ public class AgentOrchestrator {
         activeStreamContent.put(conversationId, new StringBuilder());
         activeAssistantMessageId.remove(conversationId);
         // 状态登记：循环开跑（会话列表状态点/切回续流判断都依赖它）
+        // 埋点轮次上下文先于 mark 建立：终态由 AgentRunStateService.mark 单点合成 ai.turn
+        java.util.Map<String, Object> turnAttrs = new java.util.HashMap<>();
+        turnAttrs.put("mode", agentMode == null ? null : agentMode.name());
+        turnAttrs.put("model", request.getModel());
+        turnAttrs.put("attachmentCount", request.getFileIds() == null ? 0 : request.getFileIds().size());
+        turnAttrs.put("hasPinnedSkill", request.getPinnedSkillId() != null && !request.getPinnedSkillId().isEmpty());
+        telemetryTurnTracker.startTurn(conversationId, turnAttrs);
         agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.RUNNING);
         
         try {

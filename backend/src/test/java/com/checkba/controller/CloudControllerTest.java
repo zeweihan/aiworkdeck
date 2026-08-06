@@ -35,6 +35,8 @@ class CloudControllerTest {
     private ProjectMemberService projectMemberService;
     @Mock
     private UserService userService;
+    @Mock
+    private com.checkba.service.telemetry.TelemetryService telemetryService;
 
     @InjectMocks
     private CloudController controller;

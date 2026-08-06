@@ -101,7 +101,17 @@ public final class EvalHarness {
         skillProperties.setBaseTools(List.of("read_document", "list_files", "query_memory"));
         SkillRegistry skillRegistry = new SkillRegistry(skillProperties, null, pluginService);
         skillRegistry.init();
-        SkillRouter skillRouter = new SkillRouter(skillRegistry, skillProperties);
+        // 埋点：评测里用 mock 仓储的真实 TelemetryService（白名单路径被真实执行、不落库）
+        com.checkba.service.telemetry.TelemetryService telemetry =
+                new com.checkba.service.telemetry.TelemetryService(
+                        mock(com.checkba.repository.TelemetryEventRepository.class),
+                        new com.checkba.service.telemetry.InstallIdentityService(
+                                System.getProperty("java.io.tmpdir")),
+                        "eval");
+        com.checkba.service.telemetry.TelemetryTurnTracker turnTracker =
+                new com.checkba.service.telemetry.TelemetryTurnTracker(telemetry);
+
+        SkillRouter skillRouter = new SkillRouter(skillRegistry, skillProperties, telemetry);
 
         ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
         when(chatModelFactory.getStreamingChatModel(any())).thenReturn(scripted);
@@ -163,8 +173,8 @@ public final class EvalHarness {
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
                 registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange,
-                todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService(),
-                workSessionService);
+                todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService(turnTracker),
+                workSessionService, telemetry, turnTracker);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);
