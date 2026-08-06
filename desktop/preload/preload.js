@@ -1,6 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron')
 
+// 主进程经 additionalArguments 注入的后端地址（端口是启动时实际分配的，
+// 打包态默认 5269，冲突自动降级）。同步可读，供渲染层 api.js 首选。
+const apiBaseArg = process.argv.find((a) => a.startsWith('--checkba-api-base='))
+const apiBaseUrl = apiBaseArg ? apiBaseArg.slice('--checkba-api-base='.length) : null
+
 contextBridge.exposeInMainWorld('checkbaDesktop', {
+  apiBaseUrl,
   app: {
     onOpenInternal: (handler) => {
       const listener = (_evt, data) => handler && handler(data)

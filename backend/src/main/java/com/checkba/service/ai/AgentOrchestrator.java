@@ -40,6 +40,19 @@ public class AgentOrchestrator {
     // 工具连续失败达到该次数后，向模型注入强提示要求收敛
     private static final int CONSECUTIVE_FAILURE_NUDGE = 3;
 
+    // LLM 瞬时错误（429/5xx/超时/断连）自动重试：指数退避 8/16/32s，仅在本轮
+    // 尚未流出任何 token 时重放（对话状态未被污染，重放安全且用户无感知重复内容）
+    private static final int MAX_LLM_RETRIES = 3;
+    private static final int LLM_RETRY_BASE_SECONDS = 8;
+    // 流无活动看门狗：超过该秒数没有任何 token 到达即判定本轮停滞（配合 timeout 调大后的兜底）
+    private static final int STREAM_INACTIVITY_TIMEOUT_SECONDS = 180;
+    private static final java.util.concurrent.ScheduledExecutorService LLM_RETRY_SCHEDULER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "llm-retry-scheduler");
+                t.setDaemon(true);
+                return t;
+            });
+
     /**
      * 单次 Agent 运行的循环守卫状态（随递归传递）：
      * 重复调用检测 + 连续失败计数，防止模型原地打转耗尽步数预算。
@@ -48,6 +61,10 @@ public class AgentOrchestrator {
         String lastCallSignature;
         int repeatCount;
         int consecutiveFailures;
+        // 本轮 LLM 调用的瞬时错误重试次数（每个成功完成的轮次清零）
+        int llmRetries;
+        // 截断/未闭合 <tool_code> 的纠正轮次数（防纠正本身进入死循环）
+        int malformedToolRounds;
         // 当前活跃文档 ID（来自 activeContext 或 doc_open_file），用于修改前自动创建检查点
         Long activeFileId;
         // 活跃文档名（仅用于给模型的反馈文案）
@@ -468,6 +485,8 @@ public class AgentOrchestrator {
         // Callback for Loop
         handler.setOnComplete(response -> {
           try {
+            // 本轮成功完成：清零瞬时错误重试预算（重试额度按轮计，不跨轮累积）
+            guard.llmRetries = 0;
             // Unconditionally turn off streaming mode when generation ends
             boolean wasStreaming = editorBridgeService.isStreamingMode(conversationId);
             editorBridgeService.setStreamingMode(conversationId, false);
@@ -645,6 +664,26 @@ public class AgentOrchestrator {
                 }
             }
 
+            // 2.5 截断的工具调用（F-10）：输出里有 <tool_code> 却没有闭合标签——多为
+            // max_tokens/上游截断，解析器提不出任何调用。此前会落到"正常收尾"静默结束，
+            // 任务做一半、无错误提示、无继续按钮。这里回喂提示让模型重发，最多纠正 2 轮。
+            if (agentMode != AgentMode.ASK
+                    && content.contains("<tool_code>") && !content.contains("</tool_code>")) {
+                if (guard.malformedToolRounds < 2) {
+                    guard.malformedToolRounds++;
+                    log.warn("Truncated tool_code detected for {} (correction round {}), asking model to re-emit",
+                            conversationId, guard.malformedToolRounds);
+                    messages.add(dev.langchain4j.data.message.UserMessage.from(
+                            "[系统提醒] 你上一条输出中的 <tool_code> 标签未闭合（内容可能被截断），"
+                            + "该工具调用没有被执行。请重新、完整地输出这次工具调用；"
+                            + "若任务其实已完成，请直接输出最终总结。"));
+                    runLoop(model, messages, conversationId, projectId, userId, modelId,
+                            depth + 1, executionLog, agentMode, guard);
+                    return;
+                }
+                log.warn("Truncated tool_code persisted after corrections for {}, finishing normally", conversationId);
+            }
+
             // 3. Check for Artifacts
             // - Task List: Do NOT stop loop anymore (User Requirement). Backend maintains it or just logs it.
             // - Implementation Plan: STOP LOOP for approval.
@@ -784,25 +823,38 @@ public class AgentOrchestrator {
           }
         });
 
-        // 流式出错时的清理：关闭 emitter + 复位状态，避免 SSE 连接挂到超时、前端永久加载
+        // 流式出错处置：瞬时错误且零 token 已流出 → 指数退避自动重试本轮；
+        // 否则终态清理（关 emitter + 复位状态，避免 SSE 挂到超时、前端永久加载）
         handler.setOnError(err -> {
-            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
-            boolean wasStreamingOnError = editorBridgeService.isStreamingMode(conversationId);
-            editorBridgeService.setStreamingMode(conversationId, false);
-            // 出错也要让 worker 收尾（否则 markdown 状态机残留半行/半张表），须在 close 之前发
-            if (wasStreamingOnError) {
-                sseEmitterService.send(conversationId, "doc_stream_end", java.util.Map.of("status", "error"));
+            boolean retryable = !handler.hasStreamedTokens()
+                    && guard.llmRetries < MAX_LLM_RETRIES
+                    && isTransientLlmError(err)
+                    && !isCancelled(conversationId);
+            if (retryable) {
+                int attempt = ++guard.llmRetries;
+                long delaySec = (long) LLM_RETRY_BASE_SECONDS << (attempt - 1); // 8/16/32s
+                log.warn("Transient LLM error for {} (attempt {}/{}), retrying in {}s: {}",
+                        conversationId, attempt, MAX_LLM_RETRIES, delaySec, String.valueOf(err));
+                sendTextDelta(conversationId, String.format(
+                        "\n\n> 模型服务暂时不可用，%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                        delaySec, attempt, MAX_LLM_RETRIES));
+                LLM_RETRY_SCHEDULER.schedule(() -> {
+                    try {
+                        // 同 depth 重放本轮：messages 只在 onComplete 里被追加，失败轮未污染上下文
+                        runLoop(model, messages, conversationId, projectId, userId, modelId,
+                                depth, executionLog, agentMode, guard);
+                    } catch (Exception retryEx) {
+                        log.error("Retry runLoop failed for {}", conversationId, retryEx);
+                        handleStreamErrorTerminal(conversationId, projectId, userId, retryEx);
+                    }
+                }, delaySec, java.util.concurrent.TimeUnit.SECONDS);
+                return;
             }
-            // 保存已生成的部分内容，避免"当时看到了回复、历史里却没有"
-            StringBuilder sb = activeStreamContent.get(conversationId);
-            String partialContent = sb != null ? sb.toString() : "";
-            if (!partialContent.isEmpty()) {
-                saveAssistantMessage(conversationId, projectId, userId, partialContent + "\n\n[生成出错，已中断]");
-            }
-            sseEmitterService.close(conversationId);
-            clearCancelledState(conversationId);
-            editorBridgeService.clearCurrentConversationId();
+            handleStreamErrorTerminal(conversationId, projectId, userId, err);
         });
+
+        // 无活动看门狗：timeout 调大后，"流悄悄停了但不回调"的场景由它兜底终止本轮
+        handler.armInactivityWatchdog(STREAM_INACTIVITY_TIMEOUT_SECONDS);
 
         // Execute Generation with Tools
         // Ask 模式：不传递工具，禁止工具调用
@@ -815,6 +867,63 @@ public class AgentOrchestrator {
             List<ToolSpecification> allTools = skillRouter.visibleTools(conversationId, toolRegistry.getAllSpecifications());
             model.generate(messages, allTools, handler);
         }
+    }
+
+    /**
+     * 流式错误的终态处置（重试预算耗尽 / 不可重试错误 / 已流出部分内容）：
+     * 发 error 事件、保存部分内容、关流、复位状态。原 setOnError 内联逻辑提取而来。
+     */
+    private void handleStreamErrorTerminal(String conversationId, String projectId, Long userId, Throwable err) {
+        sseEmitterService.send(conversationId, "error", "Stream Error: " + err.getMessage());
+        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
+        boolean wasStreamingOnError = editorBridgeService.isStreamingMode(conversationId);
+        editorBridgeService.setStreamingMode(conversationId, false);
+        // 出错也要让 worker 收尾（否则 markdown 状态机残留半行/半张表），须在 close 之前发
+        if (wasStreamingOnError) {
+            sseEmitterService.send(conversationId, "doc_stream_end", java.util.Map.of("status", "error"));
+        }
+        // 保存已生成的部分内容，避免"当时看到了回复、历史里却没有"
+        StringBuilder sb = activeStreamContent.get(conversationId);
+        String partialContent = sb != null ? sb.toString() : "";
+        if (!partialContent.isEmpty()) {
+            saveAssistantMessage(conversationId, projectId, userId, partialContent + "\n\n[生成出错，已中断]");
+        }
+        sseEmitterService.close(conversationId);
+        clearCancelledState(conversationId);
+        editorBridgeService.clearCurrentConversationId();
+    }
+
+    /**
+     * 瞬时错误分类（对标 OpenHands RetryMixin）：限流/服务端错误/超时/断连可重试，
+     * 4xx 参数与鉴权类错误不可重试（重放也不会好，且可能重复扣费探测）。
+     */
+    static boolean isTransientLlmError(Throwable err) {
+        for (Throwable t = err; t != null; t = (t.getCause() == t ? null : t.getCause())) {
+            if (t instanceof java.net.SocketTimeoutException
+                    || t instanceof java.util.concurrent.TimeoutException
+                    || t instanceof java.net.ConnectException
+                    || t instanceof java.io.InterruptedIOException
+                    || t instanceof java.io.IOException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (msg != null) {
+                String m = msg.toLowerCase(java.util.Locale.ROOT);
+                // 明确不可重试：客户端参数/鉴权错误
+                if (m.contains("status code: 400") || m.contains("status code: 401")
+                        || m.contains("status code: 403") || m.contains("status code: 404")) {
+                    return false;
+                }
+                if (m.contains("status code: 429") || m.contains("status code: 5")
+                        || m.contains("rate limit") || m.contains("overloaded")
+                        || m.contains("timeout") || m.contains("timed out")
+                        || m.contains("connection reset") || m.contains("stream was reset")
+                        || m.contains("unexpected end of stream") || m.contains("canceled")) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     // =================================================================================

@@ -35,6 +35,12 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 
 每日全量 QA：`scripts/qa-nightly.sh`（crontab，跑在 ~/aiworkdeck-qa/repo 专用克隆，报告 ~/aiworkdeck-qa/reports/，失败 gh 开 issue 标签 qa-nightly，引擎取自已安装 app）。
 
+## 端口体系（2026-08 起）
+
+- **打包态桌面后端：5269 → 5369 → 5169 → 随机**（`desktop/main/services/backend-service.js` allocateBackendPort：真实 bind 探测；被占时先探 `/api/admin/wizard` 验明是否自家后端——是则复用，否则降级下一个。service-manager 的 verifyReuse/reallocatePort 契约即为此加）。实际端口经 BrowserWindow additionalArguments → preload → `window.checkbaDesktop.apiBaseUrl` 注入渲染层，`frontend/src/services/api.js` 最优先读它。
+- **dev 态后端仍 9696**：restart-backend.sh / e2e / CI 全部不变；`CHECKBA_BACKEND_PORT` 可显式覆盖两种模式。
+- pptx/mineru/kokoro 打包态是动态回环端口（由后端内部转发，前端不可见）；编辑器静态服务器 47613 因 COOP/COEP 跨源隔离必须独立源，勿并入。
+
 ## 本地开发启动
 
 - 一键：`./restart-all.sh`（Docker 服务 + 后端 + 前端 + 桌面）。

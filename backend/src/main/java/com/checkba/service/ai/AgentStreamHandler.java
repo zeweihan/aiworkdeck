@@ -29,6 +29,53 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
 
     private static final int MAX_BUFFER_SIZE = 50; // Buffer for XML tag detection
 
+    // ==================== 终态幂等 + 无活动看门狗（治"跑一半停了"F-01/F-03） ====================
+    // 终态只允许进入一次：看门狗超时与真实回调可能竞争，double-terminal 会重复关流/重复清理
+    private final java.util.concurrent.atomic.AtomicBoolean terminated =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+    // 是否已有 token 流出（重试决策依据：零 token 的失败轮可安全重放，不会给用户看重复内容）
+    private volatile boolean streamedAnyToken = false;
+    // 最近一次流活动时间（onNext 刷新），看门狗据此判定"流停滞"
+    private volatile long lastActivityNanos = System.nanoTime();
+    private volatile java.util.concurrent.ScheduledFuture<?> watchdogFuture;
+
+    // 守护线程调度器：进程退出不被它拖住；全局单线程足够（只做轻量检查）
+    private static final java.util.concurrent.ScheduledExecutorService WATCHDOG =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "llm-stream-watchdog");
+                t.setDaemon(true);
+                return t;
+            });
+
+    public boolean hasStreamedTokens() {
+        return streamedAnyToken;
+    }
+
+    /**
+     * 启动无活动看门狗：连续 inactivitySeconds 无任何 token 到达则主动以超时错误终止本轮
+     * （走 onError 路径，可被编排器的瞬时错误重试接住）。
+     * 背景：langchain4j 0.36 的单一 timeout 是整通调用墙钟上限；把它调大之后，
+     * "流悄悄断了但既不 onComplete 也不 onError"的场景需要这层兜底，否则会话永久 RUNNING。
+     */
+    public void armInactivityWatchdog(int inactivitySeconds) {
+        lastActivityNanos = System.nanoTime();
+        watchdogFuture = WATCHDOG.scheduleWithFixedDelay(() -> {
+            if (terminated.get()) return;
+            long idleSec = (System.nanoTime() - lastActivityNanos) / 1_000_000_000L;
+            if (idleSec >= inactivitySeconds) {
+                log.warn("Stream inactive for {}s (limit {}s) for {}, terminating round via watchdog",
+                        idleSec, inactivitySeconds, conversationId);
+                onError(new java.util.concurrent.TimeoutException(
+                        "流式响应停滞超过 " + inactivitySeconds + " 秒"));
+            }
+        }, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
+    }
+
+    private void cancelWatchdog() {
+        java.util.concurrent.ScheduledFuture<?> f = watchdogFuture;
+        if (f != null) f.cancel(false);
+    }
+
     public AgentStreamHandler(SseEmitterService sseEmitterService, String conversationId, TokenUsageService tokenUsageService, String projectId, Long userId, String modelId) {
         this.sseEmitterService = sseEmitterService;
         this.conversationId = conversationId;
@@ -53,6 +100,10 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
     @Override
     public void onNext(String token) {
         log.trace("Token for {}: [{}]", conversationId, token);
+        // 终态后到达的迟到 token 丢弃（看门狗已终止本轮时，底层流可能还在吐）
+        if (terminated.get()) return;
+        lastActivityNanos = System.nanoTime();
+        if (token != null && !token.isEmpty()) streamedAnyToken = true;
         if (token != null) {
             // Notify token callback for real-time state tracking
             if (onToken != null) {
@@ -407,6 +458,9 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
 
     @Override
     public void onComplete(Response<AiMessage> response) {
+        // 终态幂等：看门狗可能已抢先终止本轮
+        if (!terminated.compareAndSet(false, true)) return;
+        cancelWatchdog();
         // Flush remaining buffer
         if (buffer.length() > 0) {
             emitText(buffer.toString());
@@ -468,13 +522,18 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
 
     @Override
     public void onError(Throwable error) {
+        // 终态幂等：真实回调与看门狗超时可能竞争，只允许第一个进入
+        if (!terminated.compareAndSet(false, true)) return;
+        cancelWatchdog();
         log.error("Stream error for {}", conversationId, error);
-        sseEmitterService.send(conversationId, "error", "Stream Error: " + error.getMessage());
-        // 关键：出错时必须关闭 emitter 并清理编排器状态，否则 SSE 连接会一直挂到 30 分钟超时，
-        // 且 activeStreamContent / cancelledConversations 条目永不清理、前端永久显示加载态。
+        // 有编排器回调时把错误处置完全交给它：瞬时错误可能走自动重试，
+        // 此时不能先发 error 事件（前端会渲染"执行中断"），是否发由回调决定。
         if (onErrorCallback != null) {
             onErrorCallback.accept(error);
         } else {
+            // 无回调（单次响应）：保持旧行为——发 error 并关流，
+            // 否则 SSE 连接会挂到 30 分钟超时、前端永久显示加载态。
+            sseEmitterService.send(conversationId, "error", "Stream Error: " + error.getMessage());
             sseEmitterService.close(conversationId);
         }
     }

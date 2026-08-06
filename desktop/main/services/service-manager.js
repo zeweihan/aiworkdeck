@@ -46,6 +46,8 @@ function findFreePort() {
  *   logName: string                    // 打包态日志文件名（<dataDir>/logs/<logName>.log）
  *   enabled?: (ctx) => boolean         // 缺省 true；false 则 start() 返回 {ok:false, disabled:true}
  *   port: (ctx) => number|Promise<number>   // 分配端口（可读 env、可 findFreePort）
+ *   verifyReuse?: (ctx, port) => Promise<boolean>  // 端口已被监听时验明是否自家服务；缺省视为是（旧语义）
+ *   reallocatePort?: (ctx) => Promise<number>      // verifyReuse 失败（端口被陌生进程占）时重新分配
  *   startTimeoutMs: (ctx) => number
  *   prepare?: (ctx) => Promise<void>   // spawn 前置（dev 构建 jar / 打包态跑 DB 迁移）
  *   commands: (ctx) => [{cmd, args, env, cwd}]           // 候选命令，按序轮试
@@ -94,13 +96,28 @@ class ServiceManager {
     const d = this.descriptors.get(name)
     if (!d) throw new Error(`unknown service: ${name}`)
     if (d.enabled && !d.enabled(this.ctx)) return { ok: false, disabled: true }
-    const port = this.ports[name]
+    let port = this.ports[name]
 
-    // 已有实例在跑：直接复用（与原 BackendManager 语义一致）
-    if (await isPortOpen(port)) return { ok: true, reused: true }
+    // 已有实例在跑：验明正身后复用（无 verifyReuse 的服务保持旧语义直接复用）
+    // 'reuse' = 自家服务在听 | 'foreign' = 陌生进程占用 | 'free' = 无人监听
+    const probe = async () => {
+      if (!(await isPortOpen(port))) return 'free'
+      if (!d.verifyReuse || (await d.verifyReuse(this.ctx, port))) return 'reuse'
+      return 'foreign'
+    }
+    let state = await probe()
+    if (state === 'foreign' && d.reallocatePort) {
+      port = await d.reallocatePort(this.ctx)
+      this.ports[name] = port
+      state = await probe()
+    }
+    if (state === 'reuse') return { ok: true, reused: true }
+    if (state === 'foreign') throw new Error(`${name} port ${port} 被未知进程占用`)
 
     if (d.prepare) await d.prepare(this.ctx)
-    if (await isPortOpen(port)) return { ok: true, reused: true }
+    const postPrepare = await probe()
+    if (postPrepare === 'reuse') return { ok: true, reused: true }
+    if (postPrepare === 'foreign') throw new Error(`${name} port ${port} 被未知进程占用`)
     if (this.procs.get(name)) await this.stop(name)
 
     const timeoutMs = d.startTimeoutMs(this.ctx)

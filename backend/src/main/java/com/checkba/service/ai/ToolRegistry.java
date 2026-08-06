@@ -94,7 +94,14 @@ public class ToolRegistry {
     public record ToolResult(String output, RegisteredTool tool, boolean found) {
 
         public boolean success() {
-            return found && output != null && !output.startsWith("Error");
+            if (!found || output == null) return false;
+            String trimmed = output.stripLeading();
+            if (trimmed.startsWith("Error")) return false;
+            // 编辑器桥等工具的失败以 JSON 返回（如 {"error": "操作超时..."}）。
+            // 此前只认 "Error" 前缀，这类失败被判成 SUCCESS：失败熔断计数被清零、
+            // 前端显示绿勾、file_change 照发——模型一路"成功"空转到步数上限（F-09）。
+            String compact = trimmed.replace(" ", "").replace("\t", "");
+            return !compact.startsWith("{\"error\"");
         }
     }
 
@@ -262,7 +269,17 @@ public class ToolRegistry {
         }
 
         try {
-            cn.hutool.json.JSONObject args = parseArgs(argsJson);
+            cn.hutool.json.JSONObject args;
+            try {
+                args = parseArgs(argsJson);
+            } catch (IllegalArgumentException badArgs) {
+                // 参数 JSON 解析失败不能静默降级成空参执行（F-16）：工具会拿着一堆
+                // null/默认值跑出无意义结果甚至误改文档。返回可行动错误让模型自纠。
+                return new ToolResult("Error: tool arguments are not valid JSON. "
+                        + "Please re-emit the call to '" + resolvedName
+                        + "' with a well-formed JSON object of named arguments. Parse error: "
+                        + badArgs.getMessage(), tool, true);
+            }
             Object[] boundArgs = bindArguments(resolvedName, tool.method(), args, ctx);
             Object result = tool.method().invoke(tool.bean(), boundArgs);
             return new ToolResult(result != null ? result.toString() : "", tool, true);
@@ -288,9 +305,10 @@ public class ToolRegistry {
         try {
             return cn.hutool.json.JSONUtil.parseObj(argsJson);
         } catch (Exception e) {
-            log.warn("Failed to parse tool args as JSON, using empty args: {}",
+            log.warn("Failed to parse tool args as JSON: {}",
                     argsJson.length() > 200 ? argsJson.substring(0, 200) + "..." : argsJson);
-            return new cn.hutool.json.JSONObject();
+            // 交给 execute() 转成可行动的工具错误回喂模型，而不是空参硬跑（F-16）
+            throw new IllegalArgumentException(e.getMessage(), e);
         }
     }
 

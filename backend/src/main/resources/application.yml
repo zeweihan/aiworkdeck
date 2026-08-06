@@ -117,7 +117,10 @@ ai:
       api-key: ${OPENROUTER_API_KEY:}
       base-url: https://openrouter.ai/api/v1
       default-model: deepseek/deepseek-v4-flash
-      timeout: 120s
+      # langchain4j 0.36 把这一个值同时灌进 OkHttp 的 callTimeout（整通调用墙钟上限，
+      # 含完整流式响应体）。120s 会把仍在稳定吐 token 的长轮次拦腰掐断（跑一半断的头号根因），
+      # 调大到 600s；"流真停了"的场景由 AgentStreamHandler 的无活动看门狗（180s）兜底。
+      timeout: 600s
   # AI 上下文与压缩配置（对应 AiContextProperties，以下均为默认值，可按需覆盖）
   context:
     # 上下文总 token 预算
