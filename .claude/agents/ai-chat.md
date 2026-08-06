@@ -87,6 +87,6 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 ## 验证
 
-- `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，10 组）+ DesktopContextSmokeTest。
+- `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，12 组）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）与 cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文。
 - 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`。
 - 前端：`npm run check:emits`；UI 链路 `npm run test:app-e2e`。

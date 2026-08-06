@@ -112,6 +112,13 @@ class OrchestratorReplayEvalTest {
             }
         }
 
+        // 5.2 回喂断言：编排器主动追加的系统提醒应出现在某次 LLM 上下文里
+        for (String marker : c.expect.promptContains) {
+            assertTrue(r.promptTexts().stream().anyMatch(p -> p.contains(marker)),
+                    "期望某次 LLM 调用的上下文中包含 [" + marker + "]，但 " + r.promptTexts().size()
+                            + " 次调用里都没有出现");
+        }
+
         // 6. <title> 协议：会话文件夹重命名
         if (c.expect.renamedTitleContains != null) {
             assertTrue(r.folderRenames().stream().anyMatch(t -> t.contains(c.expect.renamedTitleContains)),
