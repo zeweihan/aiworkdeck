@@ -30,8 +30,14 @@ class ToolRegistryCapabilityFilterTest {
         @Tool("lowa sheet tool")
         public String sheet_cap_probe(@P("t") String t) { return "sheet:" + t; }
 
-        @Tool("office tool")
+        @Tool("office word tool")
         public String office_cap_probe(@P("t") String t) { return "office:" + t; }
+
+        @Tool("office excel tool")
+        public String office_excel_cap_probe(@P("t") String t) { return "excel:" + t; }
+
+        @Tool("office ppt tool")
+        public String office_ppt_cap_probe(@P("t") String t) { return "ppt:" + t; }
 
         @Tool("plain backend tool")
         public String plain_cap_probe(@P("t") String t) { return "plain:" + t; }
@@ -65,6 +71,9 @@ class ToolRegistryCapabilityFilterTest {
         assertFalse(names.contains("sheet_cap_probe"));
         assertTrue(names.contains("office_cap_probe"));
         assertTrue(names.contains("plain_cap_probe"));
+        // 未上送 officeHost 时按 Word 兜底：Excel/PPT 面工具隐藏
+        assertFalse(names.contains("office_excel_cap_probe"));
+        assertFalse(names.contains("office_ppt_cap_probe"));
 
         assertTrue(registry.resolve("doc_cap_probe", "conv-office").isEmpty());
         assertTrue(registry.resolve("sheet_cap_probe", "conv-office").isEmpty());
@@ -126,6 +135,40 @@ class ToolRegistryCapabilityFilterTest {
         // 非法能力值按 lowa 兜底
         capabilities.record("conv-weird", "quantum");
         assertTrue(specNames("conv-weird").contains("doc_cap_probe"));
+    }
+
+    @Test
+    @DisplayName("office 宿主细分：excel 会话只见 office_excel_*，ppt 会话只见 office_ppt_*")
+    void officeHostRefinesToolVisibility() {
+        capabilities.record("conv-excel", "office", "excel");
+        List<String> excelNames = specNames("conv-excel");
+        assertTrue(excelNames.contains("office_excel_cap_probe"));
+        assertFalse(excelNames.contains("office_cap_probe"), "Excel 会话不应见 Word 面 office_*");
+        assertFalse(excelNames.contains("office_ppt_cap_probe"));
+        assertFalse(excelNames.contains("doc_cap_probe"));
+        assertTrue(excelNames.contains("plain_cap_probe"));
+        assertFalse(registry.execute("office_cap_probe", "{}", ctx("conv-excel")).found(),
+                "Excel 会话 execute Word 面工具应按未知工具拒绝（防 30 秒超时死路径）");
+        assertTrue(registry.execute("office_excel_cap_probe", "{\"t\":\"x\"}", ctx("conv-excel")).found());
+
+        capabilities.record("conv-ppt", "office", "powerpoint");
+        List<String> pptNames = specNames("conv-ppt");
+        assertTrue(pptNames.contains("office_ppt_cap_probe"));
+        assertFalse(pptNames.contains("office_cap_probe"));
+        assertFalse(pptNames.contains("office_excel_cap_probe"));
+        assertTrue(registry.resolve("office_ppt_cap_probe", "conv-ppt").isPresent());
+        assertTrue(registry.resolve("office_excel_cap_probe", "conv-ppt").isEmpty());
+
+        // 非法宿主值按 word 兜底
+        capabilities.record("conv-weird-host", "office", "quantum");
+        List<String> weirdNames = specNames("conv-weird-host");
+        assertTrue(weirdNames.contains("office_cap_probe"));
+        assertFalse(weirdNames.contains("office_excel_cap_probe"));
+
+        // 宿主细分不影响 LOWA 会话：excel 宿主字段对 lowa 能力无意义
+        capabilities.record("conv-lowa-host", "lowa", "excel");
+        assertTrue(specNames("conv-lowa-host").contains("doc_cap_probe"));
+        assertFalse(specNames("conv-lowa-host").contains("office_excel_cap_probe"));
     }
 
     @Test
