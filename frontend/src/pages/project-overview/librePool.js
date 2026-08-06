@@ -2,6 +2,8 @@
 // 模式说明见 .claude/agents/sidebar-shell.md 与 PR#151/#159。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 
+import { isDesktopHost } from '@/services/host.js'
+
 // 内嵌 LibreOffice 实例保活上限（每个 LOWA 实例数百 MB 内存）。超过后按
 // LRU 淘汰最久未激活的实例——淘汰前自动保存（见 evictLibreInstance）。
 const LIBRE_KEEPALIVE_MAX = 3
@@ -69,8 +71,9 @@ export const librePoolMethods = {
     initLibreSpare() {
         // 页面栈多实例守卫：只有活跃 overview 实例建备胎（PR#148/#151 模式）。
         if (typeof this.isActiveOverviewInstance === 'function' && !this.isActiveOverviewInstance()) return
-        const api = typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.zetaoffice
-        if (!api) return // 非桌面版没有 LOWA
+        // 备胎是常驻的空白 LOWA 实例（数百 MB 内存），只在桌面壳里预热：
+        // Web 态没有保活语境（页面刷新即丢），不值这个内存。
+        if (!isDesktopHost()) return
         if (this.libreSpares.some(sp => !sp.file)) return // 已有空闲备胎
         this._libreSpareSeq = (this._libreSpareSeq || 0) + 1
         this.libreSpares.push({ key: this._libreSpareSeq, file: null })

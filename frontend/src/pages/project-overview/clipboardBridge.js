@@ -7,6 +7,7 @@
 
 import { saveClipboardText, saveClipboardFile } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { host } from '@/services/host.js'
 
 export const clipboardBridgeMethods = {
     bindClipboardListener() {
@@ -62,9 +63,9 @@ export const clipboardBridgeMethods = {
              try {
                // Must verify API exists (Electron only)
                 // eslint-disable-next-line
-               if (window.checkbaDesktop && window.checkbaDesktop.utils && window.checkbaDesktop.utils.readFile) {
+               if (host.utils && host.utils.readFile) {
                   // eslint-disable-next-line
-                  const resp = await window.checkbaDesktop.utils.readFile(payload.filePath)
+                  const resp = await host.utils.readFile(payload.filePath)
                   if (resp && resp.ok && resp.data) {
                      // resp.data is usually Uint8Array or serialized Buffer
                      const u8arr = new Uint8Array(resp.data)
@@ -129,10 +130,10 @@ export const clipboardBridgeMethods = {
       this._recordClipboardOnce = recordClipboardOnce
 
       // Desktop：由 Electron 主进程捕获 copy/cut，并直接推送剪贴板文本（更稳定，不依赖浏览器权限）
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.clipboard) {
+      if (this.isDesktopApp && host.clipboard) {
         try {
           if (!this._desktopClipboardUnsub) {
-            this._desktopClipboardUnsub = window.checkbaDesktop.clipboard.onCopied(async (payload) => {
+            this._desktopClipboardUnsub = host.clipboard.onCopied(async (payload) => {
               try {
                 // Pass full payload object to support IMAGE/FILE
                 await recordClipboardOnce(payload, 'desktop')

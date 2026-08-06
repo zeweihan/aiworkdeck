@@ -61,6 +61,7 @@
 <script>
 import { getApiBaseUrl } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
+import { host } from '@/services/host.js'
 
 export default {
   name: 'BrowserPane',
@@ -98,8 +99,8 @@ export default {
     },
     isDesktopBrowser() {
       try {
-        // 通过 preload 暴露的 checkbaDesktop 判断
-        return typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.browser
+        // 宿主是否具备 BrowserView 能力（Web 态该字段缺席）
+        return host.browser
       } catch (e) {
         return false
       }
@@ -171,7 +172,7 @@ export default {
   },
   methods: {
     async setupDesktopBrowser() {
-      const api = window.checkbaDesktop && window.checkbaDesktop.browser
+      const api = host.browser
       if (!api) return
 
       // 监听 window.open/_blank => 工作区新 tab
@@ -248,14 +249,14 @@ export default {
 
       // MVP：组件卸载即销毁 view（后续可由“tab close”统一管理，避免丢历史）
       try {
-        const api = window.checkbaDesktop && window.checkbaDesktop.browser
+        const api = host.browser
         if (api && this._desktopViewId) api.destroy({ id: this._desktopViewId })
       } catch (e) {
         // ignore
       }
     },
     syncDesktopBounds() {
-      const api = window.checkbaDesktop && window.checkbaDesktop.browser
+      const api = host.browser
       const mountRef = this.$refs.desktopMount
       const el = mountRef && mountRef.$el ? mountRef.$el : mountRef
       if (!api || !el || !this._desktopViewId) return
@@ -287,7 +288,7 @@ export default {
       // Desktop：直接导航 BrowserView
       if (this.isDesktopBrowser) {
         try {
-          const api = window.checkbaDesktop && window.checkbaDesktop.browser
+          const api = host.browser
           if (api && this._desktopViewId) {
             // 不让 invoke rejection 冒泡到控制台（主进程可能返回 ok=false / ERR_ABORTED）
             Promise.resolve(api.navigate({ id: this._desktopViewId, url: next })).catch(() => {})
@@ -342,7 +343,7 @@ export default {
     async toggleMobileMode() {
       if (!this.isDesktopBrowser) return
       this.isMobileMode = !this.isMobileMode
-      const api = window.checkbaDesktop && window.checkbaDesktop.browser
+      const api = host.browser
       if (!api || !this._desktopViewId) return
       
       const mobileUA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1'

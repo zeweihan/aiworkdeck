@@ -6,6 +6,7 @@
 
 import { ocrRecognize, createProjectFavorite, getProjectFiles, createFile, getApiBaseUrl } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
+import { host } from '@/services/host.js'
 
 export const ocrActionMethods = {
     async ensureOcrFrozenFrame() {
@@ -42,14 +43,14 @@ export const ocrActionMethods = {
     async ocrRefreshFrame() {
       // 抓一帧作为底图，并绘制到 overlay canvas（用户框选基于该底图）
       // #ifdef H5
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.ocr) {
+      if (this.isDesktopApp && host.ocr) {
         // 桌面端：抓“当前激活网页 Tab 的 BrowserView”（包含网页内容；不需要屏幕录制权限）
         const activeWebTab = this.getActiveWebTab()
         const viewId = activeWebTab && activeWebTab.id ? String(activeWebTab.id) : ''
 
         // 获取 BrowserView 的 bounds，用于把截图图像铺到网页区域，确保框选坐标正确
         try {
-          const api = window.checkbaDesktop && window.checkbaDesktop.browser
+          const api = host.browser
           const b = api && viewId ? await api.getBounds({ id: viewId }) : null
           if (b && b.ok && b.bounds) {
             this.ocrHostRect = {
@@ -67,8 +68,8 @@ export const ocrActionMethods = {
 
         // 若当前没有网页 tab，则回退抓当前窗口（此时 hostRect 为空，图片会铺满全屏）
         const resp = viewId
-          ? await window.checkbaDesktop.ocr.captureScreen({ viewId })
-          : await window.checkbaDesktop.ocr.captureScreen({ mode: 'window' })
+          ? await host.ocr.captureScreen({ viewId })
+          : await host.ocr.captureScreen({ mode: 'window' })
         if (!resp || resp.ok !== true || !resp.dataUrl) {
           const m = resp && resp.message ? String(resp.message) : ''
           throw new Error(m || '截图失败')
@@ -516,8 +517,8 @@ export const ocrActionMethods = {
         try {
           const active = this.focusedPane === 'right' ? this.activeFileRight : this.activeFileLeft
           const viewId = active && active.tabType === 'web' ? active.id : ''
-          if (this.isDesktopApp && viewId && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.getSnapshot) {
-            const snap = await window.checkbaDesktop.browser.getSnapshot({ id: viewId })
+          if (this.isDesktopApp && viewId && host.browser && host.browser.getSnapshot) {
+            const snap = await host.browser.getSnapshot({ id: viewId })
             if (snap && snap.ok) {
               metaObj.sourceUrl = snap.url || metaObj.sourceUrl
               metaObj.title = snap.title || ''

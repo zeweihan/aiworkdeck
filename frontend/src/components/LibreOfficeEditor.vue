@@ -78,10 +78,12 @@
 // by the project-overview keep-alive pool as the product inline document editor
 // （原 ⌘⇧O 实验覆盖层与探针工具栏已移除）.
 
-import { createWebviewEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
+import { webviewTransport, iframeTransport } from '@/composables/useZetaOfficeWebview.js'
+import { createRelayExecutor } from '@/composables/zetaOfficeRelay.js'
 import ReviewPanel from '@/components/ReviewPanel.vue'
 import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
+import { host } from '@/services/host.js'
 
 let seq = 0
 
@@ -172,9 +174,9 @@ export default {
   },
   async mounted() {
     try {
-      const api = typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.zetaoffice
+      const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
-        this.statusText = '仅桌面版可用'
+        this.statusText = '当前环境不支持文档编辑'
         return
       }
       // Prefetch the document bytes IN PARALLEL with the LOWA boot — the fetch
@@ -183,8 +185,9 @@ export default {
       // whole download to the perceived open time.
       if (this.file) this.prefetchBytes()
       this.startBootTrickle()
-      const info = await api.getEditor() // { url, preload, partition }
-      this.mountWebview(info)
+      // { kind:'webview', url, preload, partition } | { kind:'iframe', url }
+      const info = await api.getEditor()
+      this.mountEditor(info)
     } catch (e) {
       this.statusText = '初始化失败'
       this.appendLog('init failed: ' + (e && e.message ? e.message : e))
@@ -201,6 +204,10 @@ export default {
     // closed or switched. The executor ref lets the host ignore stale closes.
     try { this.$emit('close', this.executor) } catch (e) { /* ignore */ }
     try { if (this.executor && typeof this.executor.dispose === 'function') this.executor.dispose() } catch (e) { /* ignore */ }
+    // iframe 传输的订阅挂在 window 上，不随元素移除而消失——必须显式退订，
+    // 否则关一个文档漏一个监听器，且已销毁实例的 onDocModified 还会被触发。
+    try { if (this._eventUnsub) this._eventUnsub() } catch (e) { /* ignore */ }
+    this._eventUnsub = null
     try { if (this.webviewEl && this.webviewEl.remove) this.webviewEl.remove() } catch (e) { /* ignore */ }
     this.webviewEl = null
     this.executor = null
@@ -238,49 +245,80 @@ export default {
       console.log('[libre-editor]', m)
       this.log = (this.log + m + '\n').split('\n').slice(-200).join('\n')
     },
-    mountWebview(info) {
-      const host = document.getElementById(this.hostId)
-      if (!host) { this.appendLog('host element missing'); return }
+    // 按宿主给出的容器类型挂编辑器：桌面壳是 Electron <webview>（隔离分区 +
+    // preload），Web 服务器版是同源 <iframe>。两者之外的一切——relay 协议、
+    // executor 契约、worker、自动保存链路——完全共用。
+    mountEditor(info) {
+      const mountEl = document.getElementById(this.hostId)
+      if (!mountEl) { this.appendLog('host element missing'); return }
+      const el = info.kind === 'iframe' ? this.createIframe(info) : this.createWebview(info)
+      el.style.width = '100%'
+      el.style.height = '100%'
+      el.style.border = '0'
+      mountEl.appendChild(el)
+      this.webviewEl = el
+    },
+    createWebview(info) {
       const wv = document.createElement('webview')
       wv.setAttribute('partition', info.partition)
       if (info.preload) wv.setAttribute('preload', info.preload)
       // contextIsolation ON (the preload uses contextBridge), nodeIntegration OFF.
       wv.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no')
-      wv.style.width = '100%'
-      wv.style.height = '100%'
-      wv.style.border = '0'
-      wv.addEventListener('dom-ready', () => this.onDomReady(wv))
-      // (#79) document hyperlink clicks: the editor page forwards LO's
-      // window.open over lo-relay as {type:'open-url'} — surface it to the host
-      // (project-overview routes checkba:// internal links / http(s) tabs).
-      wv.addEventListener('ipc-message', (e) => {
-        if (e.channel !== 'lo-relay') return
-        const msg = e.args && e.args[0]
-        if (!msg || msg.__lo !== 'lo-relay') return
-        if (msg.type === 'open-url' && msg.url) {
-          this.$emit('open-url', String(msg.url))
-        } else if (msg.type === 'modified') {
-          // Worker modify signal (throttled in editor-main.js) → autosave.
-          this.onDocModified()
-        } else if (msg.type === 'boot-log') {
-          // 引擎启动里程碑 → 加载进度面板推进阶段
-          this.onBootLog(String(msg.msg || ''))
-        }
+      const transport = webviewTransport(wv)
+      // 事件订阅必须在建元素时就挂上，绝不能推迟到 dom-ready：boot-log 里程碑
+      // 从引擎启动第一刻就在发，modified 是自动保存的唯一触发信号——晚挂一步
+      // 就会丢掉开头那些消息（丢 modified = 用户的编辑不落盘）。
+      this.subscribeHostEvents(transport)
+      // dom-ready 只说明 webview 渲染进程起来了；命令通道在此接（此前 send 无处可去）。
+      wv.addEventListener('dom-ready', () => {
+        if (this.executor) return // dom-ready 可能因页内导航重复触发
+        this.wireExecutor(transport, 'webview dom-ready')
       })
       wv.addEventListener('did-fail-load', (e) => this.appendLog('did-fail-load: ' + (e.errorDescription || e.errorCode)))
       wv.addEventListener('console-message', (e) => { if (e.level >= 2) this.appendLog('[webview] ' + e.message) })
       wv.setAttribute('src', info.url)
-      host.appendChild(wv)
-      this.webviewEl = wv
+      return wv
     },
-    onDomReady(wv) {
-      if (this.executor) return // dom-ready can fire again on in-page navigation
+    createIframe(info) {
+      const fr = document.createElement('iframe')
+      // 同源 iframe：LOWA 要 SharedArrayBuffer，跨源隔离由站点级 COOP/COEP 提供
+      // （deploy/web/nginx.conf.example），不是靠 iframe 属性。这里不能加 sandbox
+      // ——沙箱会掐掉 SharedArrayBuffer 与 Worker，引擎起不来。
+      fr.setAttribute('allow', 'clipboard-read; clipboard-write')
+      // <iframe> 没有 dom-ready；订阅的是 window 的 message 事件，建元素时就能
+      // 全部挂上（比 webview 更早更稳），命令通道也不必等。
+      const transport = iframeTransport(fr)
+      this.subscribeHostEvents(transport)
+      this.wireExecutor(transport, 'iframe mounted')
+      fr.addEventListener('error', () => this.appendLog('iframe load error: ' + info.url))
+      fr.src = info.url
+      return fr
+    },
+    // 事件通道：与命令共用同一个传输，另挂一个订阅者。
+    // (#79) 文档超链接点击由页面侧转成 {type:'open-url'}；modified 驱动自动保存；
+    // boot-log 推进加载进度面板。
+    subscribeHostEvents(transport) {
+      this._eventUnsub = transport.subscribe((msg) => {
+        if (!msg || msg.__lo !== 'lo-relay') return
+        if (msg.type === 'open-url' && msg.url) {
+          this.$emit('open-url', String(msg.url))
+        } else if (msg.type === 'modified') {
+          this.onDocModified()
+        } else if (msg.type === 'boot-log') {
+          this.onBootLog(String(msg.msg || ''))
+        }
+      })
+    },
+    // 命令通道：把 {send, subscribe} 传输接成 executor。两种容器共用。
+    wireExecutor(transport, whence) {
       try {
-        // dom-ready means the webview's renderer is up — NOT that the office is
-        // booted. We wait for the endpoint-ready handshake (onReady) before
-        // marking ready / pushing the document, so load_document can't be dropped
-        // pre-boot.
-        this.executor = createWebviewEditorExecutor(wv, { onReady: () => this.onEndpointReady() })
+        // onReady 握手到达前不推 load_document，否则会被丢（页面侧 serveExecutor
+        // 还没订阅、office 也没 boot）。
+        this.executor = createRelayExecutor({
+          send: transport.send,
+          subscribe: transport.subscribe,
+          onReady: () => this.onEndpointReady(),
+        })
         // 命令繁忙跟踪：AI 命令与用户输入都走这同一个 executor。autoSave 据此
         // 避开活跃期（export_document 会冻结 office 线程上的 Qt 事件循环）。
         this._cmdBusy = 0
@@ -294,7 +332,7 @@ export default {
           finally { this._cmdBusy--; this._lastCmdAt = Date.now() }
         }
         this.statusText = this.file ? '加载文档中…' : '启动中…'
-        this.appendLog('webview dom-ready — executor wired, awaiting office endpoint')
+        this.appendLog(whence + ' — executor wired, awaiting office endpoint')
       } catch (e) {
         this.appendLog('executor wiring failed: ' + (e && e.message ? e.message : e))
       }

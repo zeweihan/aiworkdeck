@@ -381,6 +381,7 @@
 <script>
 import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone } from '@/services/api.js'
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
+import { host, isDesktopHost } from '@/services/host.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
@@ -393,7 +394,7 @@ export default {
     ICONS() { return ICONS },
 
     isDesktop() {
-      return typeof window !== 'undefined' && !!window.checkbaDesktop
+      return isDesktopHost()
     }
 
   },
@@ -453,14 +454,14 @@ export default {
   onLoad() {
     // Desktop：个人中心页必须隐藏 BrowserView（避免工作区网页残留覆盖）
     try {
-      if (typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.setViewsVisible) {
-        window.checkbaDesktop.browser.setViewsVisible({ visible: false }).catch(() => {})
+      if (host.browser && host.browser.setViewsVisible) {
+        host.browser.setViewsVisible({ visible: false }).catch(() => {})
       }
     } catch (e) {
       // ignore
     }
     // 检查登录状态（桌面端 local-mode 免登录，跳过该检查）
-    const isDesktopEnv = typeof window !== 'undefined' && !!window.checkbaDesktop
+    const isDesktopEnv = isDesktopHost()
     if (!isDesktopEnv) {
       const sessionId = getSessionId()
       const user = getCurrentUser()

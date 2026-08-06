@@ -1398,6 +1398,7 @@
 
 <script>
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
+import { host, isDesktopHost } from '@/services/host.js'
 import BrowserPane from '@/components/BrowserPane.vue'
 import FileTree from '@/components/FileTree.vue'
 import QuickOpenPanel from '@/components/QuickOpenPanel.vue'
@@ -2024,7 +2025,7 @@ export default {
     ,
     isDesktopApp() {
       try {
-        return typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.ocr
+        return host.ocr
       } catch (e) {
         return false
       }
@@ -2243,8 +2244,8 @@ export default {
     // Desktop：仅在工作区页面展示 BrowserView（否则会“飘”到其它页面）
     // 注意尊重弹窗状态：若返回页面时仍有全屏弹窗打开，保持隐藏
     try {
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.setViewsVisible) {
-        window.checkbaDesktop.browser.setViewsVisible({ visible: !this.desktopOverlayActive }).catch(() => {})
+      if (this.isDesktopApp && host.browser && host.browser.setViewsVisible) {
+        host.browser.setViewsVisible({ visible: !this.desktopOverlayActive }).catch(() => {})
       }
     } catch (e) {
       // ignore
@@ -2255,8 +2256,8 @@ export default {
 
     // Desktop：离开工作区页面（如去个人中心）必须隐藏 BrowserView
     try {
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.setViewsVisible) {
-        window.checkbaDesktop.browser.setViewsVisible({ visible: false }).catch(() => {})
+      if (this.isDesktopApp && host.browser && host.browser.setViewsVisible) {
+        host.browser.setViewsVisible({ visible: false }).catch(() => {})
       }
     } catch (e) {
       // ignore
@@ -2268,8 +2269,8 @@ export default {
 
     // 兜底：页面销毁也隐藏
     try {
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.setViewsVisible) {
-        window.checkbaDesktop.browser.setViewsVisible({ visible: false }).catch(() => {})
+      if (this.isDesktopApp && host.browser && host.browser.setViewsVisible) {
+        host.browser.setViewsVisible({ visible: false }).catch(() => {})
       }
     } catch (e) {
       // ignore
@@ -2329,9 +2330,9 @@ export default {
     }, 15000)
     // Desktop：网页选中“加入网核收藏”（右键菜单触发）
     try {
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.onWebMark) {
+      if (this.isDesktopApp && host.browser && host.browser.onWebMark) {
         if (!this._desktopWebMarkUnsub) {
-          this._desktopWebMarkUnsub = window.checkbaDesktop.browser.onWebMark(async (payload) => {
+          this._desktopWebMarkUnsub = host.browser.onWebMark(async (payload) => {
             // 页面栈里每个实例都订阅了本事件：只让活跃实例入库，否则一次“加入网核收藏”
             // 会按实例数重复 POST，且旧实例还会把收藏写进它自己的 projectId
             if (!this.isActiveOverviewInstance()) return
@@ -2369,9 +2370,9 @@ export default {
     // checkba:browser-open-new-tab { id: 'renderer' }，此前无人消费，
     // 导致桌面端"文件下载/查看/收藏开网页"等 window.open 全部静默失效。
     try {
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.browser && window.checkbaDesktop.browser.onOpenNewTab) {
+      if (this.isDesktopApp && host.browser && host.browser.onOpenNewTab) {
         if (!this._desktopRendererOpenUnsub) {
-          this._desktopRendererOpenUnsub = window.checkbaDesktop.browser.onOpenNewTab((data) => {
+          this._desktopRendererOpenUnsub = host.browser.onOpenNewTab((data) => {
             if (!this.isActiveOverviewInstance()) return
             try {
               if (!data || data.id !== 'renderer' || !data.url) return
@@ -2388,16 +2389,22 @@ export default {
 
     // Manual binding removed (reverted to native modifier)
 
-    // Epic #43 Track B / #79: when the desktop app exposes the embedded editor,
-    // make it THE editor for Office documents (inline, no ⌘⇧O needed) —
-    // install-and-use, zero config.
+    // Epic #43 Track B / #79: 宿主提供内嵌编辑器时，它就是 Office 文档的默认
+    // 编辑器（内联，零配置）。桌面壳恒为真；Web 服务器版取决于 /zetaoffice/
+    // 有没有随站点部署，所以要探一次——没部署就退回原来的预览路径，而不是
+    // 挂一个永远起不来的编辑器（dev server 与只部署了 h5 的站点都属此列）。
     try {
-      this.libreOfficePreferred = !!(
-        this.isDesktopApp &&
-        window.checkbaDesktop &&
-        window.checkbaDesktop.zetaoffice &&
-        typeof window.checkbaDesktop.zetaoffice.getEditor === 'function'
-      )
+      const zo = host.zetaoffice
+      if (!zo || typeof zo.getEditor !== 'function') {
+        this.libreOfficePreferred = false
+      } else if (isDesktopHost()) {
+        // 桌面壳：引擎随包分发，同步置位——mounted 里后续逻辑与自动打开的文件
+        // 都依赖它，异步落位会让首个文档按「无编辑器」渲染。
+        this.libreOfficePreferred = true
+      } else {
+        // Web 服务器版：探一次 /zetaoffice/ 是否真部署了，回来再置位。
+        zo.isAvailable().then((ok) => { this.libreOfficePreferred = !!ok }).catch(() => {})
+      }
     } catch (e) {
       this.libreOfficePreferred = false
     }
@@ -2407,9 +2414,9 @@ export default {
 
     // Desktop：拦截 WPS 中点击 “checkba://...” 的内部链接
     try {
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.app && window.checkbaDesktop.app.onOpenInternal) {
+      if (this.isDesktopApp && host.app && host.app.onOpenInternal) {
         if (!this._desktopOpenInternalUnsub) {
-          this._desktopOpenInternalUnsub = window.checkbaDesktop.app.onOpenInternal((payload) => {
+          this._desktopOpenInternalUnsub = host.app.onOpenInternal((payload) => {
             if (!this.isActiveOverviewInstance()) return
             try {
               const raw0 = payload && payload.url ? String(payload.url) : ''
@@ -2550,9 +2557,9 @@ export default {
 
     // Desktop：截图框选失败时给用户提示（避免“松手啥也没有”）
     try {
-      if (this.isDesktopApp && window.checkbaDesktop && window.checkbaDesktop.ocr && window.checkbaDesktop.ocr.onSelectionError) {
+      if (this.isDesktopApp && host.ocr && host.ocr.onSelectionError) {
         if (!this._desktopOcrSelectionErrUnsub) {
-          this._desktopOcrSelectionErrUnsub = window.checkbaDesktop.ocr.onSelectionError((data) => {
+          this._desktopOcrSelectionErrUnsub = host.ocr.onSelectionError((data) => {
             // 只让活跃实例弹一次 toast，避免页面栈里 N 个实例连弹 N 次
             if (!this.isActiveOverviewInstance()) return
             const msg = data && data.message ? String(data.message) : '截图失败'
@@ -2572,7 +2579,7 @@ export default {
     desktopOverlayActive(open) {
       if (!this.isDesktopApp) return
       try {
-        const api = window.checkbaDesktop && window.checkbaDesktop.browser
+        const api = host.browser
         if (!api || !api.setViewsVisible) return
         api.setViewsVisible({ visible: !open }).catch(() => {})
         if (!open) {
@@ -2596,7 +2603,7 @@ export default {
     // 授权标识：桌面端查授权模式与账户连接状态
     // （已连接账户 → 「已连接账户」chip；否则 mode=trial → 「试用版」chip）
     async loadLicenseMode() {
-      if (typeof window === 'undefined' || !window.checkbaDesktop) return
+      if (!isDesktopHost()) return
       try {
         const status = await getLicenseStatus()
         this.licenseMode = (status && status.mode) || ''
@@ -2685,8 +2692,7 @@ export default {
     // 文件树右键「在访达中显示」：后端解析物理路径（localRoot 感知），桌面壳高亮
     async onRevealFile(file) {
       if (!file) return
-      const shellApi = typeof window !== 'undefined' && window.checkbaDesktop
-        && window.checkbaDesktop.fs && window.checkbaDesktop.fs.showItemInFolder
+      const shellApi = host.fs && host.fs.showItemInFolder
       if (!shellApi) return
       try {
         let path = null
@@ -2702,7 +2708,7 @@ export default {
             return
           }
         }
-        if (path) await window.checkbaDesktop.fs.showItemInFolder(path)
+        if (path) await host.fs.showItemInFolder(path)
       } catch (e) {
         uni.showToast({ title: (e && e.message) || '无法在访达中显示', icon: 'none' })
       }

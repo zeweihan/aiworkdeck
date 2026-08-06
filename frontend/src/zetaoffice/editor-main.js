@@ -49,11 +49,20 @@ function pickTransport() {
       },
     }
   }
+  // <iframe> 路径（Web 服务器版 / 鸿蒙浏览器）。宿主与本页同源是部署硬前提
+  // （deploy/web/nginx.conf.example：站点与 /zetaoffice/ 同 origin + 全站 COOP/COEP），
+  // 所以收发都钉死在 location.origin：'*' 会把文档内容和编辑器指令暴露给任何把
+  // 本页嵌进去的第三方页面，也会让任何页面能伪造 lo-relay 指令改用户的文档。
   const target = window.parent && window.parent !== window ? window.parent : window
+  const origin = window.location.origin
   return {
-    send: (m) => target.postMessage(m, '*'),
+    send: (m) => target.postMessage(m, origin),
     subscribe: (h) => {
-      const f = (e) => h(e.data)
+      const f = (e) => {
+        if (e.source !== target) return
+        if (e.origin !== origin) return
+        h(e.data)
+      }
       window.addEventListener('message', f)
       return () => window.removeEventListener('message', f)
     },

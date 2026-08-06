@@ -2,14 +2,10 @@
 // newproject 页与应用菜单（App.vue 的 menu-action 处理器）共用，两处只差 busy UI。
 
 import { openLocalProject } from '@/services/api.js'
+import { host } from '@/services/host.js'
 
 export function desktopFsApi() {
-  return (typeof window !== 'undefined'
-    && window.checkbaDesktop
-    && window.checkbaDesktop.fs
-    && window.checkbaDesktop.fs.showOpenDialog)
-    ? window.checkbaDesktop.fs
-    : null
+  return (host.fs && host.fs.showOpenDialog) ? host.fs : null
 }
 
 async function launchProject(payload) {

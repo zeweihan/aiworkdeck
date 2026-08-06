@@ -5,6 +5,7 @@
 
 // 导入认证工具
 import { getAuthHeaders, getSessionId, clearSession } from '@/utils/auth.js'
+import { host, isDesktopHost } from '@/services/host.js'
 
 /**
  * 功能未配置时的统一引导（#18 T7）。
@@ -101,8 +102,7 @@ export function getApiBaseUrl() {
   // 桌面壳注入的后端地址最优先：端口是主进程启动时实际分配的
   // （打包态默认 5269，冲突自动降 5369/5169），不能再靠写死的常量猜
   try {
-    const injected = typeof window !== 'undefined'
-      && window.checkbaDesktop && window.checkbaDesktop.apiBaseUrl;
+    const injected = host.apiBaseUrl;
     if (injected) {
       cachedApiBaseUrl = injected;
       console.log('[API] 使用桌面壳注入的 API 地址:', cachedApiBaseUrl);
@@ -277,7 +277,7 @@ function request(options) {
               }
 
               // 桌面端（local-mode 免登录）没有登录页可去：只提示，不打断当前页面
-              const isDesktop = typeof window !== 'undefined' && !!window.checkbaDesktop;
+              const isDesktop = isDesktopHost();
               if (isDesktop) {
                 uni.showToast({
                   title: errorMessage,

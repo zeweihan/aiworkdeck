@@ -23,6 +23,7 @@ import {
   getMyProjects,
 } from '@/services/api.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
+import { isDesktopHost } from '@/services/host.js'
 
 export default {
   name: 'LaunchPage',
@@ -38,7 +39,7 @@ export default {
   },
   methods: {
     isDesktop() {
-      return typeof window !== 'undefined' && !!window.checkbaDesktop
+      return isDesktopHost()
     },
     async boot() {
       this.failed = false

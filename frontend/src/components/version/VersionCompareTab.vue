@@ -29,8 +29,9 @@
 </template>
 
 <script>
-import { createWebviewEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
+import { createWebviewEditorExecutor, createIframeEditorExecutor } from '@/composables/useZetaOfficeWebview.js'
 import { fetchVersionFileBytes } from '@/services/api.js'
+import { host } from '@/services/host.js'
 
 let seq = 0
 
@@ -52,9 +53,9 @@ export default {
   },
   async mounted() {
     try {
-      const api = typeof window !== 'undefined' && window.checkbaDesktop && window.checkbaDesktop.zetaoffice
+      const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
-        this.statusText = '版本对比仅桌面版可用'
+        this.statusText = '当前环境不支持版本对比'
         return
       }
       const spec = this.compareSpec
@@ -68,8 +69,9 @@ export default {
         fetchVersionFileBytes(spec.projectId, spec.newRef, spec.path),
         fetchVersionFileBytes(spec.projectId, spec.oldRef, spec.path),
       ]).catch((e) => { bytesError = e || new Error('读取版本内容失败'); return null })
-      const info = await api.getEditor() // { url, preload, partition }
-      await this.mountWebview(info) // resolves once 引擎端点就绪（onReady 握手），此前不发命令
+      // { kind:'webview', url, preload, partition } | { kind:'iframe', url }
+      const info = await api.getEditor()
+      await this.mountEditor(info) // resolves once 引擎端点就绪（onReady 握手），此前不发命令
       const bytes = await bytesPromise
       if (bytesError) throw bytesError
       const [newBytes, oldBytes] = bytes || []
@@ -107,42 +109,59 @@ export default {
     // dom-ready 只说明 webview 渲染进程起来了，onReady 才说明 office 端点起来、
     // 命令不会被丢——真实签名见 useZetaOfficeWebview.js:54 起
     // （createWebviewEditorExecutor(el, {onReady}) ，没有 whenReady()）。
-    mountWebview(info) {
+    mountEditor(info) {
       return new Promise((resolve, reject) => {
-        const host = document.getElementById(this.hostId)
-        if (!host) { reject(new Error('host missing')); return }
+        const mountEl = document.getElementById(this.hostId)
+        if (!mountEl) { reject(new Error('host missing')); return }
         // 引擎启动超时：150秒（WASM 编译 + 排版引擎约 90秒，留余量）。
         // onReady / did-fail-load 先到时清除，防止引擎挂死时 Promise 永不 settle。
         this._bootTimeout = setTimeout(() => {
           reject(new Error('对比准备超时，请关闭后重试'))
         }, 150000)
-        const wv = document.createElement('webview')
-        wv.setAttribute('partition', info.partition)
-        if (info.preload) wv.setAttribute('preload', info.preload)
-        wv.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no')
-        wv.style.width = '100%'; wv.style.height = '100%'; wv.style.border = '0'
-        wv.addEventListener('dom-ready', () => {
-          if (this.executor) return // dom-ready 可能因页内导航重复触发
+        const onReady = () => {
+          clearTimeout(this._bootTimeout)
+          resolve()
+        }
+        let el
+        if (info.kind === 'iframe') {
+          // Web 服务器版：同源 iframe，跨源隔离靠站点级 COOP/COEP（不能加 sandbox）。
+          el = document.createElement('iframe')
           try {
-            // 只读宿主：不订阅 lo-relay 的 modified 信号（没有自动保存这回事）。
-            this.executor = createWebviewEditorExecutor(wv, {
-              onReady: () => {
-                clearTimeout(this._bootTimeout)
-                resolve()
-              }
-            })
+            // 只读宿主：不订阅 modified（没有自动保存这回事）。
+            this.executor = createIframeEditorExecutor(el, { onReady })
           } catch (e) {
             clearTimeout(this._bootTimeout)
             reject(e)
+            return
           }
-        })
-        wv.addEventListener('did-fail-load', (e) => {
-          clearTimeout(this._bootTimeout)
-          reject(new Error('did-fail-load: ' + (e.errorDescription || e.errorCode)))
-        })
-        wv.src = info.url
-        host.appendChild(wv)
-        this.webviewEl = wv
+          el.addEventListener('error', () => {
+            clearTimeout(this._bootTimeout)
+            reject(new Error('编辑器页面加载失败'))
+          })
+          el.src = info.url
+        } else {
+          el = document.createElement('webview')
+          el.setAttribute('partition', info.partition)
+          if (info.preload) el.setAttribute('preload', info.preload)
+          el.setAttribute('webpreferences', 'contextIsolation=yes,nodeIntegration=no')
+          el.addEventListener('dom-ready', () => {
+            if (this.executor) return // dom-ready 可能因页内导航重复触发
+            try {
+              this.executor = createWebviewEditorExecutor(el, { onReady })
+            } catch (e) {
+              clearTimeout(this._bootTimeout)
+              reject(e)
+            }
+          })
+          el.addEventListener('did-fail-load', (e) => {
+            clearTimeout(this._bootTimeout)
+            reject(new Error('did-fail-load: ' + (e.errorDescription || e.errorCode)))
+          })
+          el.src = info.url
+        }
+        el.style.width = '100%'; el.style.height = '100%'; el.style.border = '0'
+        mountEl.appendChild(el)
+        this.webviewEl = el
       })
     },
   },

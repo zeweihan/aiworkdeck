@@ -1095,6 +1095,7 @@ import {
 import { getCurrentUser } from '@/utils/auth.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { host } from '@/services/host.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 
@@ -1202,7 +1203,7 @@ export default {
   },
   computed: {
     isDesktop() {
-      return typeof window !== 'undefined' && !!(window.checkbaDesktop && window.checkbaDesktop.model)
+      return !!(host.model)
     },
     stageUnlimited() {
       return isEnabled(FEATURES.STAGE_UNLIMITED)
@@ -1295,7 +1296,7 @@ export default {
       this.loadPlatformAiAvailability()
       this.loadComponents()
       // 订阅主进程模型下载进度；onUnload 退订
-      this._modelProgressUnsub = window.checkbaDesktop.model.onProgress((evt) => {
+      this._modelProgressUnsub = host.model.onProgress((evt) => {
         const comp = this.components.find((c) => c.id === evt.id)
         if (!comp) return
         if (evt.phase === 'progress') {
@@ -1308,8 +1309,8 @@ export default {
       })
       // 软件更新：拉初始状态 + 订阅主进程推送（快照全量携带，直接覆盖本地态）
       this.loadUpdateStatus()
-      if (window.checkbaDesktop.update) {
-        this._updateEventUnsub = window.checkbaDesktop.update.onEvent((evt) => {
+      if (host.update) {
+        this._updateEventUnsub = host.update.onEvent((evt) => {
           if (evt && evt.state) this.update = { ...this.update, ...evt.state }
         })
       }
@@ -1379,9 +1380,9 @@ export default {
       }
     },
     async loadUpdateStatus() {
-      if (!this.isDesktop || !window.checkbaDesktop.update) return
+      if (!this.isDesktop || !host.update) return
       try {
-        const s = await window.checkbaDesktop.update.status()
+        const s = await host.update.status()
         if (s) this.update = { ...this.update, ...s }
       } catch (e) {
         console.error('loadUpdateStatus failed', e)
@@ -1389,7 +1390,7 @@ export default {
     },
     async handleUpdateCheck() {
       try {
-        const s = await window.checkbaDesktop.update.check()
+        const s = await host.update.check()
         if (s) this.update = { ...this.update, ...s }
       } catch (e) {
         uni.showToast({ title: '检查更新失败', icon: 'none' })
@@ -1400,13 +1401,13 @@ export default {
         title: '重启应用',
         content: `将重启 AI Workdeck 以完成更新到 ${this.update.available ? this.update.available.version : '新版本'}。未保存的编辑会先自动保存。是否继续？`,
         success: (r) => {
-          if (r.confirm) window.checkbaDesktop.update.restart()
+          if (r.confirm) host.update.restart()
         },
       })
     },
     handleUpdateOpenDownload() {
       const page = (this.update.majorAvailable && this.update.majorAvailable.page) || 'https://www.aiworkdeck.com'
-      window.checkbaDesktop.shell.openExternal(page)
+      host.shell.openExternal(page)
     },
     formatUpdateTime(iso) {
       try {
@@ -1420,7 +1421,7 @@ export default {
     async loadComponents() {
       if (!this.isDesktop) return
       try {
-        const res = await window.checkbaDesktop.model.status()
+        const res = await host.model.status()
         this.components = (res && res.components ? res.components : []).map((c) => ({ percent: null, ...c }))
       } catch (e) {
         console.error('loadComponents failed', e)
@@ -1433,7 +1434,7 @@ export default {
         success: async (r) => {
           if (!r.confirm) return
           try {
-            await window.checkbaDesktop.model.download(comp.id)
+            await host.model.download(comp.id)
             comp.state = 'downloading'
             comp.percent = 0
           } catch (e) {
@@ -1444,7 +1445,7 @@ export default {
     },
     async handleComponentCancel(comp) {
       try {
-        await window.checkbaDesktop.model.cancel(comp.id)
+        await host.model.cancel(comp.id)
       } finally {
         this.loadComponents()
       }
@@ -1456,7 +1457,7 @@ export default {
         success: async (r) => {
           if (!r.confirm) return
           try {
-            await window.checkbaDesktop.model.remove(comp.id)
+            await host.model.remove(comp.id)
           } finally {
             this.loadComponents()
           }
@@ -1468,7 +1469,7 @@ export default {
       if (!comp.serviceName) return
       uni.showLoading({ title: '启动中...' })
       try {
-        const res = await window.checkbaDesktop.services.ensure(comp.serviceName)
+        const res = await host.services.ensure(comp.serviceName)
         if (!res || !res.ok) {
           uni.showToast({ title: '启动失败：' + ((res && res.message) || '未知错误'), icon: 'none' })
         }
@@ -1838,8 +1839,8 @@ export default {
       }
     },
     async onChangeStorageLocation() {
-      const desktop = typeof window !== 'undefined' ? window.checkbaDesktop : null
-      if (!desktop || !desktop.fs || typeof desktop.fs.showOpenDialog !== 'function') {
+      const desktop = host.fs && typeof host.fs.showOpenDialog === 'function' ? host : null
+      if (!desktop) {
         uni.showToast({ title: '仅桌面版支持选择目录', icon: 'none' })
         return
       }
