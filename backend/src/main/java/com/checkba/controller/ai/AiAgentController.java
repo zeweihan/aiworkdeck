@@ -332,7 +332,12 @@ public class AiAgentController {
         @com.fasterxml.jackson.annotation.JsonProperty("isDir")
         private boolean isDir;
         private String fileType;
-        
+        /**
+         * 可选：客户端随请求内联携带的文档正文（Office 插件场景——文档在客户端本地，
+         * 后端没有对应 fileId 可读）。非空时上下文组装直接采用它，不再走 read_document。
+         */
+        private String inlineContent;
+
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }
         public String getName() { return name; }
@@ -342,5 +347,7 @@ public class AiAgentController {
         public void setIsDir(boolean isDir) { this.isDir = isDir; }
         public String getFileType() { return fileType; }
         public void setFileType(String fileType) { this.fileType = fileType; }
+        public String getInlineContent() { return inlineContent; }
+        public void setInlineContent(String inlineContent) { this.inlineContent = inlineContent; }
     }
 }

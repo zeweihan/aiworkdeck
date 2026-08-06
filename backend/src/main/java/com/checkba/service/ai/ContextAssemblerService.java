@@ -236,10 +236,11 @@ public class ContextAssemblerService {
         // This is injected when no explicit context is provided but user is viewing a document
         // LLM decides whether to use this based on user's instruction
         if (activeContext != null && activeContext.getId() != null && !activeContext.getId().isEmpty()) {
-            log.info("[Context] Injecting active document: id={}, name={}", 
-                     activeContext.getId(), activeContext.getName());
-            
-            String content = legalTools.read_document(activeContext.getId());
+            log.info("[Context] Injecting active document: id={}, name={}, inline={}",
+                     activeContext.getId(), activeContext.getName(),
+                     activeContext.getInlineContent() != null && !activeContext.getInlineContent().isEmpty());
+
+            String content = resolveActiveDocumentContent(activeContext);
 
             systemText.append("\n\n# Active Document (当前活跃文档)\n");
             systemText.append("该文档（id=").append(activeContext.getId())
@@ -407,6 +408,28 @@ public class ContextAssemblerService {
                 + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
                 + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
                 + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+    }
+
+    /** 内联正文防滥用上限：超出即截断（客户端可随请求直接携带正文，不能无限吃内存）。 */
+    private static final int MAX_INLINE_CONTENT_CHARS = 200_000;
+
+    /**
+     * 活跃文档正文来源二选一：
+     * 1) 请求随带的内联正文（Office 插件等场景——文档在客户端本地，后端没有可读的 fileId）优先；
+     * 2) 否则走既有 read_document(fileId) 路径。
+     * 两条路径产出同格式正文，后续统一由调用方做 CDATA 包裹与 maxCharsPerFile 截断。
+     */
+    private String resolveActiveDocumentContent(
+            com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+        String inline = activeContext.getInlineContent();
+        if (inline != null && !inline.isEmpty()) {
+            if (inline.length() > MAX_INLINE_CONTENT_CHARS) {
+                inline = inline.substring(0, MAX_INLINE_CONTENT_CHARS)
+                        + "\n... [TRUNCATED - Inline content too long]";
+            }
+            return inline;
+        }
+        return legalTools.read_document(activeContext.getId());
     }
 
     /**
