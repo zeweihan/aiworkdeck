@@ -80,9 +80,10 @@ fs.mkdirSync(outDir, { recursive: true });
 // （全部依赖，约 360MB，只随大版本变）+ backend/app.jar（业务代码，约 1.5MB，
 // 小版本补丁只发它）。启动改为 java -cp "app.jar:lib/*" com.checkba.CheckbaApplication
 // （backend-service.js javaLaunchArgs），不再依赖 Spring Boot 嵌套 classloader。
-const os = require('os');
 const jarTool = path.join(javaHome, 'bin', process.platform === 'win32' ? 'jar.exe' : 'jar');
-const work = fs.mkdtempSync(path.join(os.tmpdir(), 'backend-split-'));
+// 工作目录放在 outDir 同盘：CI Windows runner 的 os.tmpdir() 在 C 盘而 workspace
+// 在 D 盘，跨盘 renameSync 直接 EXDEV（run 31081406715）
+const work = fs.mkdtempSync(path.join(path.dirname(outDir), 'backend-split-'));
 console.log(`Extracting fat jar (BOOT-INF) -> ${work}`);
 execFileSync(jarTool, ['-x', '-f', jarPath, 'BOOT-INF/lib', 'BOOT-INF/classes'], { cwd: work, stdio: 'inherit' });
 
