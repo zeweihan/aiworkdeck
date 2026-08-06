@@ -46,6 +46,8 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_* 编辑原语、E
 
 全集见 DocumentEditTools.java。易混对照：`doc_find_text`→`find_text_locations`、`doc_select_anchor`→`set_selection`、`doc_replace_at_anchor`→`replace_at_position`、`doc_collapse_cursor`→`collapse_selection`、`doc_start_stream`→`doc_open_file_sync`+setStreamingMode。批注 `doc_add_comment`→`add_comment`。格式面：`doc_apply_standard_format`→`apply_house_style`、`doc_set_numbering`→`set_numbering`、`doc_format_table`→`format_table`、`doc_insert_table`→`insert_table`（rowsJson 后端解析成 rows 数组下发）、`doc_get_formatting`→`get_formatting`。
 
+**Word 表格单元格级原语 `doc_table_*`**（issue #261；工具名去掉 `doc_` 前缀即 action 名）：`doc_table_read`→`table_read`（读成二维数组，改表前的眼睛）、`doc_table_set_cell`→`table_set_cell`（cell 形如 `B2`）、`doc_table_add_row`/`doc_table_delete_row`→`table_add_row`/`table_delete_row`、`doc_table_add_col`/`doc_table_delete_col`→`table_add_col`/`table_delete_col`。与整张表粒度的 `insert_table`/`format_table` 互补。worker 侧：定位与校验集中在 `resolveWriterTable`（tableName / tableIndex 0 开始 / 缺省用光标所在表；非 Writer 文档返回 `NOT_TEXT_DOC_MSG`），单元格坐标解析 `parseCellRef`/`parseColumnRef`，失败统一走 `tableFail()`——**同时写 `error` 与 `message` 两个字段**：前端 `handleEditorCommand` 只把 `result.error` 回传后端，只写 `message` 的话模型收到的是 `{"error": "null"}`（判得出失败但看不到原因）。`table_set_cell` 在 RecordChanges 开启且原格非空时走 `applyMinimalRedline`（与 replace_selection 同口径，只对差异字符落修订，返回 `via: 'minimalRedline'`），并把视图光标停在该格（后续原语可省 tableIndex）。增删行列用 `XTableRows/XTableColumns.insertByIndex/removeByIndex`，**删除侧按"行数变化 OR 修订条数变化"双口径判定生效**（修订模式下引擎可能记成删除修订而行数不变），返回 `removedRows/removedCols`、`redlineDelta`、`trackedAsRevision`。合并单元格本期不做；表里有合并/拆分格时 `table_read` 返回 `note` 提示那些网格位置取不到、单元格级修改会失败。真机回归见 lowa-e2e 组 20。
+
 **流式写入去 markdown 化**：doc_stream_data 的消费端不再 `insert_at_cursor` 原样落字，改走 worker 的 `stream_insert`（按行增量剥离 markdown 标记，按律所标准格式落字：楷体_GB2312/Arial、主标题 16 磅粗居中、正文 12 磅两端对齐段后 18 磅首行缩进 2 字符、markdown 表格转真 TextTable 套 Grid 1.5 磅）。流结束时编排器发 SSE `doc_stream_end`（onComplete 与 onError 两处），前端冲缓冲后调 `stream_flush` 收尾（写尾行/建尾表/复位状态机）；`stream_flush {discard:true}` 是换文档前的硬复位（open_sync 步骤 5）。标准格式常量在 office_thread.js 的 `HOUSE`。
 
 EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发的 load_document/export_document/insert_image/var_*/*_hyperlink 与诊断类 get_ui_lang/probe_modules/list_fonts/debug_revisions）。`ui_command` 是其中一个 action，worker 端再经 UI_COMMANDS 二级白名单映射 `.uno:` 槽（IME 快捷键用，非 AI 管线）。
@@ -71,6 +73,8 @@ EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发�
 ## 已知地雷
 
 - **新增 doc_* 工具四件套**：DocumentEditTools 加 @Tool + EDITOR_ACTIONS 白名单加 action + office_thread.js 加实现 + toolDisplayNames.js 加中文名。漏任何一环都是静默失败（PR#180 教训）。
+- **worker 失败返回必须带 `error` 字段**：前端 `handleEditorCommand` 只把 `result.error` 回传后端（`result.message` 不看），只写 `message` 的话模型收到 `{"error": "null"}`——判得出失败但拿不到原因，白白浪费一轮。`doc_table_*` 用 `tableFail()` 统一写两个字段。
+- **表格删行/删列不进修订**（真机实测 LO 24.2）：`XTableRows/XTableColumns.removeByIndex` 走 API 路线直接删除，RecordChanges 开着也是 `redlineDelta=0`——AI 删表格行的安全网是 doc_undo 与文档检查点，不是修订面板，工具描述里已对模型明说。生效判定仍按"行列数变化 OR 修订条数变化"双口径（防将来引擎改口径），别只看 `getRows().getCount()`。
 - **区间批注必须走 `.uno:InsertAnnotation` 派发**；LO API 路线（addAnnotation）会抛虚假异常且只批注锚点（PR#191）。
 - **replace_selection 仅在 RecordChanges 开启时启用最小修订路径**；修订应用必须从右到左，否则前面的编辑使后面的偏移失效（PR#188）。
 - **office 线程会被 export 冻结**：长 export 期间同步命令假死是已知模式，autoSave 需让路（PR#182）。
