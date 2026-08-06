@@ -117,7 +117,14 @@ public class FileTools implements AgentToolComponent {
             });
             
             if (matches.isEmpty()) return "No files found matching '" + fileNamePattern + "' in " + (dirPath != null ? dirPath : "root");
-            return String.join("\n", matches);
+            // 附上 DB fileId：让搜索结果可直接喂给 move_project_file / rename_project_file
+            var index = dbPathIndex(com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong());
+            return matches.stream()
+                    .map(m -> {
+                        ProjectFile pf = index.get(m.replace('\\', '/'));
+                        return pf != null ? m + " (fileId=" + pf.getId() + ")" : m;
+                    })
+                    .collect(java.util.stream.Collectors.joining("\n"));
             
         } catch (IOException e) {
             log.error("Error searching files", e);
@@ -173,10 +180,15 @@ public class FileTools implements AgentToolComponent {
             if (!Files.exists(dir)) return "Error: Directory not found: " + subPath;
             if (!Files.isDirectory(dir)) return "Error: Path is not a directory: " + subPath;
 
-            String displayPath = subPath == null || subPath.isEmpty() || ".".equals(subPath) ? 
+            String displayPath = subPath == null || subPath.isEmpty() || ".".equals(subPath) ?
                     "project " + projectId + " root" : subPath;
             StringBuilder sb = new StringBuilder("Contents of " + displayPath + ":\n");
-            
+
+            // 物理条目 join DB 记录：所有文件类型（含 txt 等非文档）都直接拿到 fileId，
+            // 供 move_project_file / rename_project_file 使用，不必再绕 doc/pdf 专用列表
+            var index = dbPathIndex(projectId);
+            String prefix = projectDataDir.relativize(dir.normalize()).toString().replace('\\', '/');
+
             // Stream and sort: Directories first, then files
             try (var stream = Files.list(dir)) {
                 stream.filter(p -> !p.getFileName().toString().startsWith(".")) // ignore hidden, incl. .awd/
@@ -188,11 +200,16 @@ public class FileTools implements AgentToolComponent {
                     return p1.getFileName().compareTo(p2.getFileName());
                 }).forEach(path -> {
                     String type = Files.isDirectory(path) ? "[DIR] " : "[FILE]";
-                    sb.append(type).append(" ").append(path.getFileName().toString()).append("\n");
+                    String name = path.getFileName().toString();
+                    ProjectFile pf = index.get(prefix.isEmpty() ? name : prefix + "/" + name);
+                    String idNote = pf == null
+                            ? " (unregistered: run scan_files before moving/renaming)"
+                            : (Files.isDirectory(path) ? " (folderId=" : " (fileId=") + pf.getId() + ")";
+                    sb.append(type).append(" ").append(name).append(idNote).append("\n");
                 });
             }
-            
-            sb.append("\nNote: These are physical files. Database file records may differ. Use doc_list_project_files for database files.");
+
+            sb.append("\nNote: fileId/folderId work with move_project_file, rename_project_file and create_folder. move_file accepts paths directly.");
             return sb.toString();
 
         } catch (IOException e) {
@@ -411,18 +428,93 @@ public class FileTools implements AgentToolComponent {
         return "Error: Permission Denied. AI Agent is not allowed to delete files. You can only create, move, or rename files.";
     }
 
-    @ToolMeta(displayName = "移动文件", category = "file")
-    @Tool("Move or Rename a file.")
+    @ToolMeta(displayName = "移动文件", category = "file", refreshFiles = true)
+    @Tool("Move or rename a project file/folder by path (file tree and storage stay in sync). " +
+            "Paths are relative to the project root, e.g. move_file('会议记录.txt', '归档/会议记录.txt'). " +
+            "If destPath is an existing folder, the file is moved into it keeping its name. " +
+            "Missing destination folders are created automatically. Path-based equivalent of move_project_file.")
     public String move_file(
-            @P("Source path") String sourcePath,
-            @P("Destination path (new name or location)") String destPath
+            @P("Source path (relative to project root)") String sourcePath,
+            @P("Destination path: target folder, or full path with new name") String destPath
     ) {
-         // 已停用（2026-08 harness 加固）：本工具只做物理 Files.move、不更新 project_file 表，
-         // 移动已注册文件后文件树仍显示旧位置、doc_open_file 会指向不存在的路径（净负资产）。
-         log.info("Tool: move_file called {} -> {} - DENIED (physical-only move is disabled)", sourcePath, destPath);
-         return "Error: move_file is disabled because it desyncs the project file tree. "
-                 + "Use move_project_file / rename_project_file instead "
-                 + "(look up fileId via doc_list_project_files).";
+        // 2026-08 由「停用回错误」复活为 DB 感知版：真机日志实证（conv-1785993773100），
+        // 非文档/非 PDF 文件（如 txt）在任何列表工具里都拿不到 fileId，模型对着停用
+        // 提示只能绕道 read_file+write_file 整篇重写——既移不动文件又撑爆输出。
+        // 本实现按路径解析 project_file 记录后走与 move_project_file 完全相同的服务路径。
+        log.info("Tool: move_file called {} -> {}", sourcePath, destPath);
+        if (!StringUtils.hasText(sourcePath) || !StringUtils.hasText(destPath)) {
+            return "Error: sourcePath and destPath are required.";
+        }
+        Long projectId = com.checkba.service.ai.context.ProjectContextHolder.getProjectIdAsLong();
+        if (projectId == null) {
+            return "Error: no project context for this request.";
+        }
+        String src = normalizeRelPath(sourcePath);
+        String dest = normalizeRelPath(destPath);
+        if (src == null || dest == null) {
+            return "Error: Access denied. Paths must stay inside the project directory (no '..').";
+        }
+        try {
+            var index = dbPathIndex(projectId);
+            ProjectFile source = index.get(src);
+            if (source == null) {
+                return "Error: '" + src + "' is not registered in the project file tree. "
+                        + "Run scan_files first to register it, then retry.";
+            }
+
+            // destPath 指向已有文件夹 → 移入该文件夹并保留原名
+            String parentDir;
+            String newName;
+            ProjectFile destEntry = index.get(dest);
+            if (destEntry != null && Boolean.TRUE.equals(destEntry.getIsFolder())) {
+                parentDir = dest;
+                newName = source.getName();
+            } else {
+                int slash = dest.lastIndexOf('/');
+                parentDir = slash < 0 ? null : dest.substring(0, slash);
+                newName = slash < 0 ? dest : dest.substring(slash + 1);
+            }
+
+            Long targetFolderId = null;
+            if (parentDir != null) {
+                ProjectFile folder = index.get(parentDir);
+                if (folder == null) {
+                    // 逐段补建缺失的目标文件夹
+                    Long parentId = null;
+                    StringBuilder walked = new StringBuilder();
+                    for (String seg : parentDir.split("/")) {
+                        if (walked.length() > 0) walked.append('/');
+                        walked.append(seg);
+                        ProjectFile existing = index.get(walked.toString());
+                        if (existing != null) {
+                            if (!Boolean.TRUE.equals(existing.getIsFolder())) {
+                                return "Error: '" + walked + "' exists but is a file, not a folder.";
+                            }
+                            parentId = existing.getId();
+                        } else {
+                            ProjectFile created = projectFileService.createFolder(projectId, parentId, seg, toolUserId());
+                            index.put(walked.toString(), created);
+                            parentId = created.getId();
+                        }
+                    }
+                    targetFolderId = parentId;
+                } else if (!Boolean.TRUE.equals(folder.getIsFolder())) {
+                    return "Error: '" + parentDir + "' exists but is a file, not a folder.";
+                } else {
+                    targetFolderId = folder.getId();
+                }
+            }
+
+            ProjectFile moved = projectFileService.move(source.getId(), targetFolderId, null, toolUserId());
+            if (!newName.equals(moved.getName())) {
+                moved = projectFileService.rename(moved.getId(), newName, toolUserId());
+            }
+            return "Successfully moved '" + src + "' to '" + (parentDir == null ? moved.getName() : parentDir + "/" + moved.getName())
+                    + "' (fileId=" + moved.getId() + ").";
+        } catch (Exception e) {
+            log.warn("move_file failed {} -> {}", sourcePath, destPath, e);
+            return "Error moving file: " + e.getMessage();
+        }
     }
 
     // ==================== 文件树管理原语（DB 感知：文件树/物理文件同步更新） ====================
@@ -488,6 +580,45 @@ public class FileTools implements AgentToolComponent {
     }
 
     // --- Helpers ---
+
+    /**
+     * 归一化项目内相对路径："./a/b" -> "a/b"；含 ".." 或越界返回 null（fail closed）。
+     */
+    private String normalizeRelPath(String path) {
+        String p = path.replace('\\', '/').trim();
+        while (p.startsWith("./")) p = p.substring(2);
+        if (p.startsWith("/")) p = p.substring(1);
+        while (p.endsWith("/")) p = p.substring(0, p.length() - 1);
+        if (p.isEmpty() || p.equals(".")) return null;
+        for (String seg : p.split("/")) {
+            if (seg.isEmpty() || seg.equals("..")) return null;
+        }
+        return p;
+    }
+
+    /**
+     * 项目文件树的相对路径索引："a/b/c.txt" -> ProjectFile（不含已删除，含文件夹）。
+     * 供路径类工具把物理路径映射回 DB 记录，让所有文件类型都能拿到 fileId。
+     */
+    private java.util.Map<String, ProjectFile> dbPathIndex(Long projectId) {
+        List<ProjectFile> all = projectFileRepository.findByProjectIdAndIsDeletedFalseOrderBySortOrderAsc(projectId);
+        java.util.Map<Long, ProjectFile> byId = new java.util.HashMap<>();
+        for (ProjectFile f : all) byId.put(f.getId(), f);
+        java.util.Map<String, ProjectFile> index = new java.util.HashMap<>();
+        for (ProjectFile f : all) {
+            StringBuilder p = new StringBuilder(f.getName());
+            ProjectFile cur = f;
+            int guard = 0;
+            while (cur.getParentId() != null && guard++ < 64) {
+                ProjectFile parent = byId.get(cur.getParentId());
+                if (parent == null) break;
+                p.insert(0, parent.getName() + "/");
+                cur = parent;
+            }
+            index.put(p.toString(), f);
+        }
+        return index;
+    }
 
     private Path resolvePath(String fileName) {
         Path root = currentProjectRoot();
