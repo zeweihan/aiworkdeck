@@ -40,10 +40,14 @@ echo "[patch-gate] 对比 $PREV..$TAG"
 
 violations=()
 
-# 1) desktop/ 改动（豁免 package.json 的 version 行）
-desktop_changed=$(git diff --name-only "$PREV..$TAG" -- desktop/ | grep -v '^desktop/package.json$' || true)
+# 1) 进包的 Electron 壳改动。只看真正进 .app 的路径——package.json 的 files
+# 字段是 main/** 与 preload/**，加上 build/（entitlements 与图标，进签名与安装器）。
+# desktop/scripts/ 与 desktop/tests/ 是 CI 侧产物，不进包：改它们只影响下一个
+# 全量安装包的构建方式，对存量用户的 .app 是 no-op，故豁免（否则连"修补丁打包
+# 脚本"这种纯 CI 修复都会逼出一个大版本）。
+desktop_changed=$(git diff --name-only "$PREV..$TAG" -- desktop/main/ desktop/preload/ desktop/build/ || true)
 if [ -n "$desktop_changed" ]; then
-  violations+=("desktop/ 有改动（Electron 壳只能随大版本走）：$(echo "$desktop_changed" | head -5 | tr '\n' ' ')")
+  violations+=("进包的 Electron 壳有改动（mac 签名密封，补丁到不了用户手里）：$(echo "$desktop_changed" | head -5 | tr '\n' ' ')")
 fi
 pkg_diff=$(git diff "$PREV..$TAG" -- desktop/package.json | grep -E '^[+-]' | grep -vE '^\+\+\+|^---' | grep -v '"version"' || true)
 if [ -n "$pkg_diff" ]; then
