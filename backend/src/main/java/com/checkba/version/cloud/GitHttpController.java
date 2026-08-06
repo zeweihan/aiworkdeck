@@ -2,6 +2,9 @@ package com.checkba.version.cloud;
 
 import com.checkba.version.ProjectRepoService;
 import com.checkba.version.WorkSessionService;
+import com.checkba.version.memory.MemoryRealm;
+import com.checkba.version.memory.MemoryRepoService;
+import com.checkba.version.memory.MemorySyncService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.eclipse.jgit.lib.ObjectChecker;
@@ -22,6 +25,14 @@ import java.util.zip.ZipException;
  * Git smart HTTP 协议端点（团队服务器侧）。
  * 不用 org.eclipse.jgit.http.server 的 GitServlet：那是 javax.servlet 系,
  * 本项目是 Boot 3 / jakarta。UploadPack/ReceivePack 本身 servlet 无关，直接对接流。
+ *
+ * 仓库键路由（Phase A 泛化）：
+ *   /git/{projectId}.git             —— 项目文档仓库（v2 既有行为，一字未动）
+ *   /git/user-{id}-memory.git        —— 用户记忆仓库（owner-only）
+ *   /git/project-{id}-memory.git     —— 项目记忆仓库（复用项目成员权限）
+ * 记忆仓库没有 prepare-remote 流程：鉴权通过后首次访问自动建空仓等首推。
+ * 记忆仓库的 receive 与 MemorySyncService 的同步循环共用同一把 per-repoKey 锁；
+ * 项目文档仓库照旧走 WorkSessionService.runLocked（per-projectId）。
  */
 @RestController
 @RequestMapping("/git")
@@ -36,16 +47,36 @@ public class GitHttpController {
     private final ProjectRepoService repoService;
     private final GitAccessService access;
     private final WorkSessionService sessionService;
+    private final MemoryRepoService memoryRepoService;
+    private final MemorySyncService memorySyncService;
 
     public GitHttpController(ProjectRepoService repoService, GitAccessService access,
-                             WorkSessionService sessionService) {
+                             WorkSessionService sessionService,
+                             MemoryRepoService memoryRepoService,
+                             MemorySyncService memorySyncService) {
         this.repoService = repoService;
         this.access = access;
         this.sessionService = sessionService;
+        this.memoryRepoService = memoryRepoService;
+        this.memorySyncService = memorySyncService;
     }
 
-    @GetMapping("/{projectId}.git/info/refs")
-    public void infoRefs(@PathVariable long projectId,
+    /**
+     * 仓库名解析：纯数字 = 项目文档仓库；user-{id}-memory / project-{id}-memory =
+     * 记忆仓库；其余一律 null（404）。projectId 与 memoryRealm 恰有其一非空。
+     */
+    record RepoTarget(Long projectId, MemoryRealm memoryRealm) {}
+
+    static RepoTarget parseRepoName(String name) {
+        if (name != null && name.matches("\\d{1,18}")) {
+            return new RepoTarget(Long.parseLong(name), null);
+        }
+        MemoryRealm realm = MemoryRealm.parse(name);
+        return realm == null ? null : new RepoTarget(null, realm);
+    }
+
+    @GetMapping("/{repo}.git/info/refs")
+    public void infoRefs(@PathVariable String repo,
                          @RequestParam(value = "service", required = false) String service,
                          HttpServletRequest request,
                          HttpServletResponse response) throws IOException {
@@ -53,25 +84,30 @@ public class GitHttpController {
             response.sendError(HttpServletResponse.SC_BAD_REQUEST, "smart protocol only");
             return;
         }
+        RepoTarget target = parseRepoName(repo);
+        if (target == null) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return;
+        }
         try {
-            if (!deny(response, () -> access.authorize(request, projectId, RECEIVE_PACK.equals(service)))) return;
-            if (!repoService.isInitialized(projectId)) {
+            if (!deny(response, () -> authorizeTarget(request, target, RECEIVE_PACK.equals(service)))) return;
+            if (!ensureRepoAvailable(target)) {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 return;
             }
             response.setContentType("application/x-" + service + "-advertisement");
             noCache(response);
-            try (Repository repo = repoService.open(projectId)) {
+            try (Repository repository = openTarget(target)) {
                 PacketLineOut out = new PacketLineOut(response.getOutputStream());
                 out.writeString("# service=" + service + "\n");
                 out.end();
                 if (UPLOAD_PACK.equals(service)) {
-                    UploadPack up = new UploadPack(repo);
+                    UploadPack up = new UploadPack(repository);
                     up.setBiDirectionalPipe(false);
                     up.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
                 } else {
-                    ReceivePack rp = new ReceivePack(repo);
-                    configureReceivePack(rp, projectId);
+                    ReceivePack rp = new ReceivePack(repository);
+                    configureReceivePack(rp, target);
                     rp.sendAdvertisedRefs(new RefAdvertiser.PacketLineOutRefAdvertiser(out));
                 }
             }
@@ -79,55 +115,65 @@ public class GitHttpController {
             // 全局 @ExceptionHandler(Exception.class) 会把异常统一改写成 HTTP 200 + JSON，
             // 把这段本该是 git 协议响应的输出污染成客户端读不懂的 "invalid advertisement"，
             // 所以这里要在协议层自己兜底。
-            log.warn("git info/refs 处理失败: projectId={}, service={}", projectId, service, e);
+            log.warn("git info/refs 处理失败: repo={}, service={}", repo, service, e);
             failSafely(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
     }
 
-    @PostMapping("/{projectId}.git/git-upload-pack")
-    public void uploadPack(@PathVariable long projectId,
+    @PostMapping("/{repo}.git/git-upload-pack")
+    public void uploadPack(@PathVariable String repo,
                            HttpServletRequest request,
                            HttpServletResponse response) throws IOException {
+        RepoTarget target = parseRepoName(repo);
+        if (target == null) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return;
+        }
         try {
-            if (!deny(response, () -> access.authorize(request, projectId, false))) return;
-            if (!repoService.isInitialized(projectId)) {
+            if (!deny(response, () -> authorizeTarget(request, target, false))) return;
+            if (!ensureRepoAvailable(target)) {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 return;
             }
             response.setContentType("application/x-git-upload-pack-result");
             noCache(response);
-            try (Repository repo = repoService.open(projectId)) {
-                UploadPack up = new UploadPack(repo);
+            try (Repository repository = openTarget(target)) {
+                UploadPack up = new UploadPack(repository);
                 up.setBiDirectionalPipe(false);
                 up.upload(body(request), response.getOutputStream(), null);
             }
         } catch (ZipException e) {
             // 请求体不是合法的 gzip 流，是客户端的问题，不是服务端错误
-            log.warn("git-upload-pack 请求体 gzip 解压失败: projectId={}", projectId, e);
+            log.warn("git-upload-pack 请求体 gzip 解压失败: repo={}", repo, e);
             failSafely(response, HttpServletResponse.SC_BAD_REQUEST);
         } catch (Exception e) {
-            log.warn("git-upload-pack 处理失败: projectId={}", projectId, e);
+            log.warn("git-upload-pack 处理失败: repo={}", repo, e);
             failSafely(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
         }
     }
 
-    @PostMapping("/{projectId}.git/git-receive-pack")
-    public void receivePack(@PathVariable long projectId,
+    @PostMapping("/{repo}.git/git-receive-pack")
+    public void receivePack(@PathVariable String repo,
                             HttpServletRequest request,
                             HttpServletResponse response) throws IOException {
+        RepoTarget target = parseRepoName(repo);
+        if (target == null) {
+            response.sendError(HttpServletResponse.SC_NOT_FOUND);
+            return;
+        }
         try {
-            if (!deny(response, () -> access.authorize(request, projectId, true))) return;
-            if (!repoService.isInitialized(projectId)) {
+            if (!deny(response, () -> authorizeTarget(request, target, true))) return;
+            if (!ensureRepoAvailable(target)) {
                 response.sendError(HttpServletResponse.SC_NOT_FOUND);
                 return;
             }
             response.setContentType("application/x-git-receive-pack-result");
             noCache(response);
-            try (Repository repo = repoService.open(projectId)) {
-                ReceivePack rp = new ReceivePack(repo);
+            try (Repository repository = openTarget(target)) {
+                ReceivePack rp = new ReceivePack(repository);
                 rp.setBiDirectionalPipe(false);
-                configureReceivePack(rp, projectId);
-                sessionService.runLocked(projectId, () -> {
+                configureReceivePack(rp, target);
+                runReceiveLocked(target, () -> {
                     try {
                         rp.receive(body(request), response.getOutputStream(), null);
                     } catch (IOException e) {
@@ -137,11 +183,59 @@ public class GitHttpController {
             }
         } catch (ZipException e) {
             // 请求体不是合法的 gzip 流，是客户端的问题，不是服务端错误
-            log.warn("git-receive-pack 请求体 gzip 解压失败: projectId={}", projectId, e);
+            log.warn("git-receive-pack 请求体 gzip 解压失败: repo={}", repo, e);
             failSafely(response, HttpServletResponse.SC_BAD_REQUEST);
         } catch (Exception e) {
-            log.warn("git-receive-pack 处理失败: projectId={}", projectId, e);
+            log.warn("git-receive-pack 处理失败: repo={}", repo, e);
             failSafely(response, HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
+        }
+    }
+
+    private Long authorizeTarget(HttpServletRequest request, RepoTarget target, boolean write) {
+        if (target.projectId() != null) {
+            return access.authorize(request, target.projectId(), write);
+        }
+        MemoryRealm realm = target.memoryRealm();
+        return realm.kind() == MemoryRealm.Kind.USER
+                ? access.authorizeUserMemory(request, realm.ownerId(), write)
+                : access.authorize(request, realm.ownerId(), write);
+    }
+
+    /**
+     * 项目文档仓库必须已由 prepare-remote 建好（否则 404，v2 既有语义）；
+     * 记忆仓库鉴权通过即自动建空仓（spec Phase A 第 7 条：跳过 prepare-remote 流程）。
+     */
+    private boolean ensureRepoAvailable(RepoTarget target) {
+        if (target.projectId() != null) {
+            return repoService.isInitialized(target.projectId());
+        }
+        String repoKey = target.memoryRealm().repoKey();
+        if (!memoryRepoService.isInitialized(repoKey)) {
+            memoryRepoService.init(repoKey);
+        }
+        return true;
+    }
+
+    private Repository openTarget(RepoTarget target) {
+        return target.projectId() != null
+                ? repoService.open(target.projectId())
+                : memoryRepoService.open(target.memoryRealm().repoKey());
+    }
+
+    /** receive 与本地提交路径互斥：项目仓库 per-projectId 锁，记忆仓库 per-repoKey 锁。 */
+    private void runReceiveLocked(RepoTarget target, Runnable body) {
+        if (target.projectId() != null) {
+            sessionService.runLocked(target.projectId(), body);
+        } else {
+            memorySyncService.runLocked(target.memoryRealm().repoKey(), body);
+        }
+    }
+
+    private void configureReceivePack(ReceivePack rp, RepoTarget target) {
+        if (target.projectId() != null) {
+            configureProjectReceivePack(rp, target.projectId());
+        } else {
+            configureMemoryReceivePack(rp, target.memoryRealm().repoKey());
         }
     }
 
@@ -154,7 +248,7 @@ public class GitHttpController {
      * setObjectChecker：push 上来的对象不可信（任何有写权限的成员都能手工构造 pack），
      * 开 JGit 的对象格式校验，畸形对象在入库前就被拒。
      */
-    private void configureReceivePack(ReceivePack rp, long projectId) {
+    private void configureProjectReceivePack(ReceivePack rp, long projectId) {
         rp.setObjectChecker(new ObjectChecker());
         rp.setPreReceiveHook((pack, commands) -> {
             if (repositoryMergingOrUnknown(projectId)) {
@@ -171,6 +265,24 @@ public class GitHttpController {
                 if ("refs/heads/master".equals(cmd.getRefName())
                         && cmd.getResult() == ReceiveCommand.Result.OK) {
                     sessionService.ingestPushedMainline(projectId,
+                            cmd.getOldId().name(), cmd.getNewId().name());
+                }
+            }
+        });
+    }
+
+    /**
+     * 记忆仓库的 receive：不需要 pre-receive 守卫——记忆仓库从不停留在 MERGING（LWW 全
+     * 自动），工作树也不承载未提交的用户编辑（可弃的物化区，每轮同步先重置）。post-receive
+     * 把这次 push 变化的文件回灌进服务端 DB（尽力而为，失败不影响 push 本身）。
+     */
+    private void configureMemoryReceivePack(ReceivePack rp, String repoKey) {
+        rp.setObjectChecker(new ObjectChecker());
+        rp.setPostReceiveHook((pack, commands) -> {
+            for (ReceiveCommand cmd : commands) {
+                if ("refs/heads/master".equals(cmd.getRefName())
+                        && cmd.getResult() == ReceiveCommand.Result.OK) {
+                    memorySyncService.ingestPushedMemory(repoKey,
                             cmd.getOldId().name(), cmd.getNewId().name());
                 }
             }
