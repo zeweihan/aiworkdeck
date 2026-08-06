@@ -60,9 +60,13 @@ done
 # 增量更新拆分（设计 §4.1）后依赖 jar 是 backend/lib/ 下的独立文件，直接原地
 # 更新条目即可——不再需要旧 fat jar 时代的 zip -0 回写（嵌套 jar 免压缩是
 # Spring Boot loader 的要求，classpath 直启没有这个约束）。
-LIBDIR="$BUNDLE_DIR/backend/lib"
+# 绝对路径：workflow 传入的 BUNDLE_DIR 是相对路径，下面 cd "$EXT" 后相对
+# libjar 就解析不到了（run 31083370657 unzip exit 9 顶穿 set -e）——与旧代码
+# 对 fat jar 的 "$(cd ... && pwd)" 同款处理
+LIBDIR="$(cd "$BUNDLE_DIR" && pwd)/backend/lib"
 
 for libjar in "$LIBDIR"/*.jar; do
+  [ -f "$libjar" ] || continue # 旧布局无 lib/ 时 glob 落空的字面量
   # candidate native entries: dylib/jnilib/so plus extension-less files —
   # bytedeco also ships bare CLI executables (ffmpeg, ffprobe, tesseract,
   # opencv_*) and python .so bindings that notarization rejects when
