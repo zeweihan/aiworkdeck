@@ -174,7 +174,8 @@ public final class EvalHarness {
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
                 registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange,
                 todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService(turnTracker),
-                workSessionService, telemetry, turnTracker);
+                workSessionService, telemetry, turnTracker,
+                mock(com.checkba.service.telemetry.MatterClassifierService.class));
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
         request.setProjectId(1L);

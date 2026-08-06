@@ -97,6 +97,7 @@ public class AgentOrchestrator {
     // 埋点（隐私红线与字段白名单见 service/telemetry；构造器变更需同步 EvalHarness）
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
     private final com.checkba.service.telemetry.TelemetryTurnTracker telemetryTurnTracker;
+    private final com.checkba.service.telemetry.MatterClassifierService matterClassifierService;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -377,6 +378,13 @@ public class AgentOrchestrator {
             
             // 1.2 Skill 激活（Phase 3B）：用户钉选优先，否则触发词匹配；都未命中时行为与现状一致
             skillRouter.activateForTurn(conversationId, request.getMessage(), request.getPinnedSkillId());
+
+            // 1.3 事项类型 AI 兜底分类：仅会话首轮且未命中 skill（skill 命中由 SkillRouter 产出类别）；
+            // 异步、开关关闭时 no-op，绝不阻塞对话主链路
+            if (existingMsgs.size() <= 1) {
+                matterClassifierService.classifyAsync(conversationId, request.getMessage(),
+                        skillRouter.activeSkill(conversationId).isPresent());
+            }
 
             // 2. Build Context & History Message Stack (Spec v1.8)
             log.info("Assembling full message context for conversation: {}", conversationId);
