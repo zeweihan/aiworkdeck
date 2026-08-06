@@ -315,8 +315,11 @@ public class AgentOrchestrator {
         cancelledConversations.remove(conversationId);
         activeStreamContent.put(conversationId, new StringBuilder());
         activeAssistantMessageId.remove(conversationId);
-        // 状态登记：循环开跑（会话列表状态点/切回续流判断都依赖它）
-        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.RUNNING);
+        // 状态登记：循环开跑（会话列表状态点/切回续流判断都依赖它）。
+        // 起跑这一次带上 projectId/userId 写进持久化记录——进程被杀后的启动回收靠它归属会话；
+        // 同时把上次遗留的 INTERRUPTED 覆盖掉（用户点「继续」走的就是这条路）。
+        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.RUNNING,
+                request.getProjectId(), userId);
         
         try {
             log.info("Agent Loop Started: conv={}, model={}, mode={}, msg={}", conversationId, request.getModel(), agentMode, request.getMessage());
