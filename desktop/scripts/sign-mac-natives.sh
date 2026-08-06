@@ -2,14 +2,12 @@
 # Sign Mach-O binaries that Apple notarization inspects but electron-builder
 # does not reach (Epic #18 T2):
 #   1. the jlink-trimmed JRE in <bundle-dir>/jre
-#   2. native libs nested inside the Spring Boot fat jar's BOOT-INF/lib/*.jar
-#      (bytedeco opencv/ffmpeg dylibs ship adhoc/linker-signed, which
-#      notarization rejects)
+#   2. native libs nested inside the backend dependency jars in
+#      <bundle-dir>/backend/lib/*.jar (bytedeco opencv/ffmpeg dylibs ship
+#      adhoc/linker-signed, which notarization rejects)
 #
 # Only unsigned/adhoc binaries are re-signed; vendor-signed ones (Temurin JRE,
-# Playwright's node) keep their valid Developer ID signatures. Nested jars are
-# spliced back into the fat jar with zip -0 (stored) — the Spring Boot loader
-# requires nested jars to be uncompressed.
+# Playwright's node) keep their valid Developer ID signatures.
 #
 # Usage: sign-mac-natives.sh <identity> <bundle-dir> <entitlements-plist>
 set -euo pipefail
@@ -58,12 +56,13 @@ for runtime_dir in "$BUNDLE_DIR/jre" "$BUNDLE_DIR/python" "$BUNDLE_DIR/pysvc"; d
   done
 done
 
-# --- 2) natives nested in the fat jar --------------------------------------
-JAR="$(cd "$BUNDLE_DIR" && pwd)/backend.jar"
-WORK="$(mktemp -d)"
-(cd "$WORK" && unzip -qq "$JAR" 'BOOT-INF/lib/*.jar')
+# --- 2) natives nested in the backend dependency jars -----------------------
+# 增量更新拆分（设计 §4.1）后依赖 jar 是 backend/lib/ 下的独立文件，直接原地
+# 更新条目即可——不再需要旧 fat jar 时代的 zip -0 回写（嵌套 jar 免压缩是
+# Spring Boot loader 的要求，classpath 直启没有这个约束）。
+LIBDIR="$BUNDLE_DIR/backend/lib"
 
-for libjar in "$WORK"/BOOT-INF/lib/*.jar; do
+for libjar in "$LIBDIR"/*.jar; do
   # candidate native entries: dylib/jnilib/so plus extension-less files —
   # bytedeco also ships bare CLI executables (ffmpeg, ffprobe, tesseract,
   # opencv_*) and python .so bindings that notarization rejects when
@@ -88,9 +87,7 @@ for libjar in "$WORK"/BOOT-INF/lib/*.jar; do
   [ "$changed" -eq 1 ] || continue
 
   (cd "$EXT" && zip -qq "$libjar" $natives)
-  rel="BOOT-INF/lib/$(basename "$libjar")"
-  (cd "$WORK" && zip -qq -0 -X "$JAR" "$rel")
-  echo "re-signed natives in $rel"
+  echo "re-signed natives in backend/lib/$(basename "$libjar")"
 done
 
 echo "sign-mac-natives done: $BUNDLE_DIR"

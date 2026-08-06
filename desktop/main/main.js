@@ -25,6 +25,17 @@ function escapeHtml(s) {
 let mainWindow = null
 let services = null
 let modelManager = null
+let updateService = null
+
+// 增量更新（docs/INCREMENTAL_UPDATE_DESIGN.md）：overlay 上下文——三个 seam
+// （backend jar / h5 / zetaoffice 壳层）与 update-service 共用
+function overlayCtx() {
+  return {
+    packaged: app.isPackaged,
+    dataDir: path.join(app.getPath('home'), '.aiworkdeck'),
+    appVersion: app.getVersion()
+  }
+}
 
 /** @type {Map<string, BrowserView>} */
 const views = new Map()
@@ -303,9 +314,18 @@ function createMainWindow() {
   } else {
     // Production Mode: Load from dist
     // (packaged builds carry the frontend via electron-builder extraResources)
-    const distPath = app.isPackaged
+    // 增量更新 seam：overlay 的 frontend-h5 组件整目录覆盖内置（设计 §4.2）
+    let distPath = app.isPackaged
       ? path.join(process.resourcesPath, 'frontend/dist/build/h5/index.html')
       : path.join(__dirname, '../../frontend/dist/build/h5/index.html')
+    if (app.isPackaged) {
+      try {
+        const overlayDir = require('./services/overlay').componentDir(overlayCtx(), 'frontend-h5')
+        if (overlayDir && require('fs').existsSync(path.join(overlayDir, 'index.html'))) {
+          distPath = path.join(overlayDir, 'index.html')
+        }
+      } catch (e) { /* overlay 损坏时静默回内置 */ }
+    }
     mainWindow.loadFile(distPath)
   }
 
@@ -1400,6 +1420,25 @@ ipcMain.handle('checkba:service-ensure', async (_evt, payload) => {
   }
 })
 
+// 应用内更新 IPC 面（增量更新 P1）：状态查询 / 手动检查 / 重启生效。
+// 版本口径：appVersion = 壳（安装包）版本，effectiveVersion = 补丁生效版本。
+ipcMain.handle('checkba:update-status', async () => {
+  if (!updateService) {
+    return { phase: 'idle', appVersion: app.getVersion(), effectiveVersion: app.getVersion(), disabled: true }
+  }
+  return updateService.getState()
+})
+ipcMain.handle('checkba:update-check', async () => {
+  if (!updateService) return { phase: 'error', error: 'update service 未就绪' }
+  return updateService.check()
+})
+ipcMain.handle('checkba:update-restart', async () => {
+  // 补丁已在下载完成时原子激活（overlay.activate），重启后三个 seam 自然读到新版本
+  app.relaunch()
+  app.quit()
+  return { ok: true }
+})
+
 // Epic #43: tell the renderer where to load the embedded LibreOffice editor
 // <webview>. Lazily installs COOP/COEP on the persist:zetaoffice partition and
 // starts the shared same-origin server (so LOWA/page are isolated) on first ask,
@@ -1459,17 +1498,75 @@ app.whenReady().then(() => {
     // （已移除）⌘⇧O 实验覆盖层：嵌入式编辑器已是产品默认内联编辑器，覆盖层
     // 只会在文档上凭空盖一条开发工具栏（用户报告）。独立验证窗 ⌘⇧L 保留。
   } catch (e) { /* ignore */ }
+  // 增量更新：清理非本大版本的 overlay 残留（全量升级后安装器不会替我们清）
+  try { require('./services/overlay').cleanupStaleMajors(overlayCtx()) } catch (e) { console.error('[overlay]', e) }
   // 桌面端启动时自动拉起本机服务（Java 后端 9696 + 打包态的 pptx-service）；
   // 打包态先确保 pysvc 已解压（首启/升级后带进度窗，常规启动是零开销快路径）
   ensurePysvcReady()
     .catch((e) => console.error('[pysvc]', e))
     .then(() => {
+      // P3：pysvc 源码层补丁与 overlay 对齐（无补丁时自动还原备份）
+      try {
+        const root = resolvePysvcRoot()
+        if (root) {
+          const overlay = require('./services/overlay')
+          const ctx = overlayCtx()
+          const dir = overlay.componentDir(ctx, 'pysvc-src')
+          const cur = overlay.readCurrent(ctx)
+          const ver = dir && cur && cur.components['pysvc-src'] ? cur.components['pysvc-src'].version : null
+          require('./services/pysvc-runtime').syncSrcPatch(root, dir, ver)
+        }
+      } catch (e) { console.error('[pysvc-src-patch]', e) }
       services = createServices()
       return services.allocatePorts()
     })
     .then(() => services.startEager())
-    .then((results) => {
+    .then(async (results) => {
+      // 增量更新自愈（设计 §6）：overlay 生效时后端起不来 → 记账，连续 2 次
+      // 自动回滚到上一版本/内置并当场重试一次；启动健康则清零计数并清理旧版本
+      try {
+        const overlay = require('./services/overlay')
+        const ctx = overlayCtx()
+        const b0 = results.backend
+        if (b0 && b0.ok) {
+          overlay.markBootOk(ctx)
+        } else if (overlay.readCurrent(ctx)) {
+          const { reverted } = overlay.noteBackendBootFailure(ctx)
+          if (updateService) updateService.logEvent(reverted ? 'reverted' : 'boot-failure', { message: b0 && b0.error })
+          if (reverted) {
+            console.error('[overlay] 后端连续启动失败，已回滚补丁并重试')
+            results.backend = await services.restart('backend').catch((e) => ({ ok: false, error: String(e && e.message ? e.message : e) }))
+          }
+        }
+      } catch (e) { console.error('[overlay]', e) }
       createMainWindow()
+      // 应用内更新检查（P1）：启动 2 分钟后静默首查，之后每 6 小时一次
+      try {
+        const { createUpdateService } = require('./services/update-service')
+        const { extractTar } = require('./services/pysvc-runtime')
+        updateService = createUpdateService(overlayCtx(), {
+          extractTar,
+          onEvent: (evt) => {
+            try { if (mainWindow) mainWindow.webContents.send('checkba:update-event', evt) } catch (e) { /* ignore */ }
+            // 非模态系统通知：补丁就绪 / 新大版本（设置页没开着也能看到）
+            try {
+              const { Notification } = require('electron')
+              if (evt.type === 'ready' && Notification.isSupported()) {
+                new Notification({
+                  title: 'AI Workdeck 更新已就绪',
+                  body: `新版本 ${evt.version} 已下载完成，重启应用后生效。`
+                }).show()
+              } else if (evt.type === 'major-available' && Notification.isSupported()) {
+                new Notification({
+                  title: 'AI Workdeck 新版本发布',
+                  body: `大版本 ${evt.major} 已发布，请前往官网下载完整安装包。`
+                }).show()
+              }
+            } catch (e) { /* ignore */ }
+          }
+        })
+        updateService.start()
+      } catch (e) { console.error('[update]', e) }
       // 启动前就收到的 open-file 路径：等渲染层就绪（App.onLaunch 注册好处理器）再补发
       if (pendingOpenPath && mainWindow) {
         const queued = pendingOpenPath
