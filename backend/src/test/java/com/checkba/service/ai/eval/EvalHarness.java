@@ -163,7 +163,9 @@ public final class EvalHarness {
         AgentOrchestrator orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, tokenUsage, assembler,
                 registry, skillRouter, parser, memoryPipeline, projectFileService, editorBridge, fileChange,
-                todoListService, checkpointService, new com.checkba.service.ai.AgentRunStateService(),
+                todoListService, checkpointService,
+                new com.checkba.service.ai.AgentRunStateService(
+                        mock(com.checkba.repository.AgentRunRecordRepository.class)),
                 workSessionService);
 
         AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
