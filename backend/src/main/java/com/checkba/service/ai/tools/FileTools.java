@@ -398,7 +398,8 @@ public class FileTools implements AgentToolComponent {
             
             return report.toString();
         } catch (Exception e) {
-             return "Scan failed: " + e.getMessage();
+             // "Error" 前缀是 ToolResult.success() 的失败判据，不能丢
+             return "Error: Scan failed: " + e.getMessage();
         }
     }
 
@@ -416,20 +417,74 @@ public class FileTools implements AgentToolComponent {
             @P("Source path") String sourcePath,
             @P("Destination path (new name or location)") String destPath
     ) {
-         log.info("Tool: move_file called {} -> {}", sourcePath, destPath);
-         try {
-             Path source = resolvePath(sourcePath);
-             Path dest = resolvePath(destPath);
-             
-             if (!Files.exists(source)) return "Error: Source not found.";
-             if (Files.exists(dest)) return "Error: Destination already exists.";
-             
-             Files.createDirectories(dest.getParent());
-             Files.move(source, dest, StandardCopyOption.ATOMIC_MOVE);
-             return "Successfully moved/renamed to: " + destPath;
-         } catch (Exception e) {
-             return "Error moving file: " + e.getMessage();
-         }
+         // 已停用（2026-08 harness 加固）：本工具只做物理 Files.move、不更新 project_file 表，
+         // 移动已注册文件后文件树仍显示旧位置、doc_open_file 会指向不存在的路径（净负资产）。
+         log.info("Tool: move_file called {} -> {} - DENIED (physical-only move is disabled)", sourcePath, destPath);
+         return "Error: move_file is disabled because it desyncs the project file tree. "
+                 + "Use move_project_file / rename_project_file instead "
+                 + "(look up fileId via doc_list_project_files).";
+    }
+
+    // ==================== 文件树管理原语（DB 感知：文件树/物理文件同步更新） ====================
+    // 治理"整理文件夹/重命名/移动"类诉求：此前没有任何 DB 感知的目录管理工具，
+    // 模型只能用物理 move_file 把文件树搞脱节。三个原语直通 ProjectFileService，
+    // 与前端文件树右键菜单同一条代码路径（同名校验/环检测/物理文件搬迁全部继承）。
+
+    /** 工具执行线程的真实用户；拿不到时退回 Agent 专户（与 write_docx 的口径一致）。 */
+    private Long toolUserId() {
+        Long uid = com.checkba.service.ai.context.ProjectContextHolder.getUserId();
+        return uid != null ? uid : AGENT_USER_ID;
+    }
+
+    @ToolMeta(displayName = "新建文件夹", category = "file", refreshFiles = true)
+    @Tool("Create a new folder in the project file tree. Returns the new folderId. " +
+            "Use parentFolderId to nest inside an existing folder (IDs from doc_list_project_files); omit for project root.")
+    public String create_folder(
+            @P("Folder name") String folderName,
+            @P("Project ID") Long projectId,
+            @P(value = "Parent folder ID (optional; omit for project root)", required = false) Long parentFolderId
+    ) {
+        log.info("Tool: create_folder '{}' parent={} project={}", folderName, parentFolderId, projectId);
+        try {
+            ProjectFile folder = projectFileService.createFolder(projectId, parentFolderId, folderName, toolUserId());
+            return "Successfully created folder '" + folder.getName() + "' (folderId=" + folder.getId() + ").";
+        } catch (Exception e) {
+            return "Error creating folder: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "重命名文件", category = "file", refreshFiles = true)
+    @Tool("Rename a project file or folder (file tree and storage stay in sync). " +
+            "Get the fileId from doc_list_project_files. For files, the original extension is preserved automatically.")
+    public String rename_project_file(
+            @P("File or folder ID") Long fileId,
+            @P("New name") String newName
+    ) {
+        log.info("Tool: rename_project_file {} -> '{}'", fileId, newName);
+        try {
+            ProjectFile renamed = projectFileService.rename(fileId, newName, toolUserId());
+            return "Successfully renamed to '" + renamed.getName() + "' (fileId=" + renamed.getId() + ").";
+        } catch (Exception e) {
+            return "Error renaming: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "移动文件", category = "file", refreshFiles = true)
+    @Tool("Move a project file or folder into another folder (file tree and storage stay in sync). " +
+            "targetFolderId comes from doc_list_project_files or create_folder; omit to move to project root. " +
+            "Moving a folder moves all its contents.")
+    public String move_project_file(
+            @P("File or folder ID to move") Long fileId,
+            @P(value = "Target folder ID (optional; omit for project root)", required = false) Long targetFolderId
+    ) {
+        log.info("Tool: move_project_file {} -> folder {}", fileId, targetFolderId);
+        try {
+            ProjectFile moved = projectFileService.move(fileId, targetFolderId, null, toolUserId());
+            return "Successfully moved '" + moved.getName() + "' to "
+                    + (targetFolderId == null ? "project root" : "folder " + targetFolderId) + ".";
+        } catch (Exception e) {
+            return "Error moving: " + e.getMessage();
+        }
     }
 
     // --- Helpers ---

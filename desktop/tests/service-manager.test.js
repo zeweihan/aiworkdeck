@@ -69,6 +69,70 @@ test('reuses already-open port without spawning', async () => {
   }
 })
 
+test('verifyReuse=false triggers reallocatePort instead of reusing foreign process', async () => {
+  const http = require('http')
+  // 陌生进程占着首选端口
+  const foreign = http.createServer((req, res) => res.end('not ours'))
+  const occupied = await findFreePort()
+  await new Promise((r) => foreign.listen(occupied, '127.0.0.1', r))
+  try {
+    const mgr = makeManager()
+    mgr.register(fakeDescriptor({
+      port: async () => occupied,
+      verifyReuse: async () => false,
+      reallocatePort: async () => findFreePort()
+    }))
+    await mgr.allocatePorts()
+    const res = await mgr.start('fake')
+    assert.strictEqual(res.ok, true)
+    assert.strictEqual(res.reused, false)
+    assert.notStrictEqual(mgr.ports.fake, occupied)
+    await mgr.stopAll()
+  } finally {
+    foreign.close()
+  }
+})
+
+test('verifyReuse=true keeps old reuse semantics', async () => {
+  const http = require('http')
+  const server = http.createServer((req, res) => res.end('ok'))
+  const port = await findFreePort()
+  await new Promise((r) => server.listen(port, '127.0.0.1', r))
+  try {
+    const mgr = makeManager()
+    mgr.register(fakeDescriptor({ port: async () => port, verifyReuse: async () => true }))
+    await mgr.allocatePorts()
+    const res = await mgr.start('fake')
+    assert.strictEqual(res.reused, true)
+  } finally {
+    server.close()
+  }
+})
+
+test('backend allocator walks the 5269/5369/5169 chain past a foreign listener', async () => {
+  // 直接驱动 allocateBackendPort 的探测逻辑：占住 5269（若本机空闲），期望分配落到 5369
+  const net = require('net')
+  const { createBackendDescriptor } = require('../main/services/backend-service')
+  const d = createBackendDescriptor()
+  const holder = net.createServer()
+  const first = await new Promise((resolve) => {
+    holder.once('error', () => resolve(null)) // 5269 本机已被真实占用：跳过该断言前提
+    holder.listen(5269, '127.0.0.1', () => resolve(5269))
+  })
+  try {
+    const port = await d.port({ packaged: true })
+    if (first) {
+      // 5269 被占且不是我们的后端（无 /api/admin/wizard 响应）→ 应降级到 5369（或更后）
+      assert.notStrictEqual(port, 5269)
+      assert.ok([5369, 5169].includes(port) || port > 1024)
+    } else {
+      assert.ok([5269, 5369, 5169].includes(port) || port > 1024)
+    }
+  } finally {
+    holder.close()
+  }
+})
+
 test('falls through failed candidate to next command', async () => {
   const mgr = makeManager()
   mgr.register(fakeDescriptor({

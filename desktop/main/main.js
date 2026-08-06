@@ -274,12 +274,18 @@ function attachCopyListener(webContents, sourceLabel) {
 }
 
 function createMainWindow() {
+  // 后端实际端口（打包态默认 5269，冲突自动降级，见 backend-service.js 端口链）。
+  // 经 additionalArguments 同步注入 preload → window.checkbaDesktop.apiBaseUrl，
+  // 渲染层 api.js 优先读它，取代原先写死的 9696。
+  const backendPort = (services && services.ports && services.ports.backend)
+    || Number(process.env.CHECKBA_BACKEND_PORT || (app.isPackaged ? 5269 : 9696))
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     icon: path.join(__dirname, '../../frontend/src/static/icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
+      additionalArguments: ['--checkba-api-base=http://127.0.0.1:' + backendPort],
       contextIsolation: true,
       nodeIntegration: false,
       // 允许跨域 Cookie（历史：为第三方在线编辑器 SameSite Cookie 而设；行为保留以兼容其它跨域资源）

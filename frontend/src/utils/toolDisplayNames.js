@@ -33,6 +33,9 @@ const NAMES = {
   scan_files: { zh: '扫描项目文件', en: 'Scan files' },
   delete_file: { zh: '删除文件', en: 'Delete file' },
   move_file: { zh: '移动文件', en: 'Move file' },
+  create_folder: { zh: '新建文件夹', en: 'Create folder' },
+  rename_project_file: { zh: '重命名文件', en: 'Rename file' },
+  move_project_file: { zh: '移动文件', en: 'Move file' },
   // 记忆
   save_memory: { zh: '保存记忆', en: 'Save memory' },
   query_memory: { zh: '检索记忆', en: 'Query memory' },

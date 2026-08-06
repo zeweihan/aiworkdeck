@@ -2,6 +2,24 @@ import { ref, reactive, nextTick } from 'vue'
 import { getApiBaseUrl, getConversationMetadata } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 
+// 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
+// 页面栈会多次实例化本 composable（PR#148 重复订阅地雷），window 监听只挂一次，
+// 回调经该指针分发到最近建连的实例。
+let activeNetworkRecoveryHook = null
+if (typeof window !== 'undefined' && !window.__awdSseNetworkHooks) {
+    window.__awdSseNetworkHooks = true
+    window.addEventListener('online', () => {
+        if (activeNetworkRecoveryHook) activeNetworkRecoveryHook('network-online')
+    })
+    if (typeof document !== 'undefined') {
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && activeNetworkRecoveryHook) {
+                activeNetworkRecoveryHook('page-visible')
+            }
+        })
+    }
+}
+
 export function useAgentStream() {
     // STATE: List of all bubbles (history + active)
     const bubbles = ref([])
@@ -36,6 +54,49 @@ export function useAgentStream() {
     // Abort Controllers
     let sseAbortController = null
     let messageAbortController = null
+
+    // --- 断线自动重连状态（F-05）---
+    let reconnectAttempts = 0
+    let reconnectTimer = null
+    let heartbeatMonitor = null
+    let lastSseActivityAt = 0 // 任何 SSE 字节到达都刷新（后端心跳 15s 一跳兜底保活）
+    const HEARTBEAT_STALE_MS = 45000 // 连续 3 个心跳周期无任何字节判定连接已死
+
+    const stopHeartbeatMonitor = () => {
+        if (heartbeatMonitor) { clearInterval(heartbeatMonitor); heartbeatMonitor = null }
+    }
+
+    const startHeartbeatMonitor = () => {
+        stopHeartbeatMonitor()
+        heartbeatMonitor = setInterval(() => {
+            if (!isConnected.value) return
+            if (Date.now() - lastSseActivityAt > HEARTBEAT_STALE_MS) {
+                console.warn('[AgentStream] SSE 心跳超时，判定连接已死，强制断开并自动重连')
+                stopHeartbeatMonitor()
+                try { if (sseAbortController) sseAbortController.abort() } catch (e) { /* ignore */ }
+                scheduleReconnect('heartbeat-stale')
+            }
+        }, 10000)
+    }
+
+    // 指数退避自动重连：1s/2s/4s…封顶 30s；建连成功即清零。
+    // 重连后由后端 connect 端点推 run_state（+RUNNING 时的 state_recovery）恢复 UI 态。
+    const scheduleReconnect = (reason) => {
+        if (reconnectTimer) return
+        if (!currentConversationId.value) return
+        const delay = Math.min(30000, 1000 * Math.pow(2, reconnectAttempts))
+        reconnectAttempts++
+        console.warn(`[AgentStream] SSE 断开（${reason}），${delay}ms 后自动重连（第 ${reconnectAttempts} 次）`)
+        reconnectTimer = setTimeout(async () => {
+            reconnectTimer = null
+            if (isConnected.value || !currentConversationId.value) return
+            try {
+                await connectSSE(currentConversationId.value)
+            } catch (e) {
+                scheduleReconnect('retry-failed')
+            }
+        }, delay)
+    }
 
     // Parser State (Local to the current stream)
     let parserBuffer = ''
@@ -155,6 +216,13 @@ export function useAgentStream() {
                 if (!response.ok) throw new Error(`SSE Connection Failed: ${response.status}`)
 
                 isConnected.value = true
+                reconnectAttempts = 0
+                lastSseActivityAt = Date.now()
+                startHeartbeatMonitor()
+                // 网络恢复/回前台时经模块级单例回调触发本实例重连
+                activeNetworkRecoveryHook = (reason) => {
+                    if (!isConnected.value && currentConversationId.value) scheduleReconnect(reason)
+                }
                 resolve()
 
                 const reader = response.body.getReader()
@@ -168,6 +236,7 @@ export function useAgentStream() {
                     const chunk = decoder.decode(value, { stream: true })
                     // 调试日志：显示接收到的 chunk 时间戳
                     console.log('[SSE] Chunk received at:', new Date().toISOString(), 'size:', chunk.length)
+                    lastSseActivityAt = Date.now()
                     buffer += chunk
 
                     const lines = buffer.split(/\r?\n/)
@@ -202,12 +271,15 @@ export function useAgentStream() {
                 if (sseAbortController === myController) {
                     sseAbortController = null
                     isConnected.value = false
+                    stopHeartbeatMonitor()
                     // SSE 连接结束时（包括正常结束），确保状态正确
-                    if (isStreaming.value && currentAssistantBubble.value) {
-                        // 如果仍在流式状态但连接已结束，说明可能是意外断开
-                        console.warn('[AgentStream] SSE connection ended while still streaming')
-                        currentAssistantBubble.value.isStreaming = false
+                    if (isStreaming.value) {
+                        // 仍在流式状态但连接已结束 = 意外断开。后台 @Async 循环并不依赖
+                        // SSE，多半还在跑——自动重连续流（run_state/state_recovery 恢复气泡）。
+                        console.warn('[AgentStream] SSE connection ended while still streaming, scheduling reconnect')
+                        if (currentAssistantBubble.value) currentAssistantBubble.value.isStreaming = false
                         isStreaming.value = false
+                        scheduleReconnect('stream-ended')
                     }
                 }
             }
@@ -215,9 +287,15 @@ export function useAgentStream() {
     }
 
     const sendMessage = async ({ prompt, contentHtml = '', fileList = [], projectId, modelId = 'default', assistantId, mode = 'AGENT', activeContext = null, pinnedSkillId = '', _userImages = [], _userContextFiles = [] }) => {
-        // 防重入：流式进行中再触发发送（回车/连点）会产生重复气泡和并发请求
+        // 防重入：流式进行中再触发发送（回车/连点）会产生重复气泡和并发请求。
+        // 必须给用户可见反馈——静默吞掉就是"点了发送什么都没发生"（F-07）
         if (isStreaming.value) {
             console.warn('[AgentStream] sendMessage ignored: already streaming')
+            try {
+                if (typeof uni !== 'undefined' && uni.showToast) {
+                    uni.showToast({ title: 'AI 正在执行中，请等待完成或点击停止', icon: 'none' })
+                }
+            } catch (e) { /* ignore */ }
             return
         }
         // Clear file changes for new turn
@@ -398,7 +476,44 @@ export function useAgentStream() {
             return
         }
 
-        if (!currentAssistantBubble.value) return
+        // 心跳：与气泡无关（重连判活依据），必须在气泡守卫之前处理
+        if (evt === 'heartbeat') {
+            try {
+                const d = JSON.parse(dataStr)
+                lastHeartbeat.value = {
+                    source: d.source,
+                    conversationId: d.conversationId,
+                    taskId: d.taskId,
+                    currentOperation: d.currentOperation,
+                    timestamp: d.timestamp || d.ts || Date.now()
+                }
+            } catch (e) {
+                lastHeartbeat.value = { timestamp: Date.now() }
+            }
+            return
+        }
+
+        if (!currentAssistantBubble.value) {
+            // 终态事件不能因气泡指针缺失而丢弃：重连落在"RUNNING 但快照未建"窗口时
+            // 若把 bubble_end/error/cancelled 一并吞掉，isStreaming 永久锁死、输入框
+            // 永久禁用（F-06/F-07 确定性 hang）。这里至少要解锁全局状态。
+            if (evt === 'bubble_end' || evt === 'error' || evt === 'cancelled') {
+                isStreaming.value = false
+                try {
+                    const d = JSON.parse(dataStr || '{}')
+                    agentPaused.value = (evt === 'bubble_end' && d.status === 'paused')
+                        ? { reason: d.reason || '' } : null
+                    agentRunStatus.value = evt === 'error' ? 'ERROR'
+                        : evt === 'cancelled' ? 'CANCELLED'
+                        : d.status === 'paused' ? 'PAUSED'
+                        : d.status === 'awaiting_approval' ? 'AWAITING_APPROVAL' : 'FINISHED'
+                } catch (e) {
+                    agentPaused.value = null
+                    agentRunStatus.value = evt === 'error' ? 'ERROR' : 'FINISHED'
+                }
+            }
+            return
+        }
 
         if (evt === 'text_delta') {
             try {
@@ -606,21 +721,7 @@ export function useAgentStream() {
             }
         }
 
-        // Handle heartbeat
-        if (evt === 'heartbeat') {
-            try {
-                const d = JSON.parse(dataStr)
-                lastHeartbeat.value = {
-                    source: d.source, // 'LLM_LOOP' or 'PPTX_SERVICE'
-                    conversationId: d.conversationId,
-                    taskId: d.taskId,
-                    currentOperation: d.currentOperation,
-                    timestamp: d.timestamp || Date.now()
-                }
-            } catch (e) {
-                console.error('Failed to parse heartbeat', e)
-            }
-        }
+        // heartbeat 已在气泡守卫之前处理（见上）
 
         // Handle File Changes (Added/Modified)
         if (evt === 'file_change') {

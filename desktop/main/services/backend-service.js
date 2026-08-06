@@ -1,6 +1,63 @@
 const path = require('path')
 const fs = require('fs')
+const net = require('net')
+const http = require('http')
 const { spawn, execFileSync } = require('child_process')
+const { isPortOpen } = require('./service-manager')
+
+// 打包态后端端口链：默认 5269，被占则依次降级（5269 是 IANA 注册的 XMPP
+// 服务器互联口，桌面软件几乎不用；5369/5169 未注册）。dev 态保持 9696，
+// 与 restart-backend.sh / e2e / CI 的既有工作流一致。
+const DESKTOP_PORT_CHAIN = [5269, 5369, 5169]
+
+// 端口上监听的是不是我们自己的后端：探 GET /api/admin/wizard，
+// 该端点免鉴权、回环放行，返回体带 "initialized" 特征字段。
+// 用于防止把陌生进程（恰好占了链上端口）误当后端复用。
+function isOurBackend(port, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const req = http.get(
+      { host: '127.0.0.1', port, path: '/api/admin/wizard', timeout: timeoutMs },
+      (res) => {
+        let body = ''
+        res.on('data', (c) => { if (body.length < 4096) body += c })
+        res.on('end', () => resolve(res.statusCode === 200 && body.includes('"initialized"')))
+      }
+    )
+    req.on('timeout', () => { req.destroy(); resolve(false) })
+    req.on('error', () => resolve(false))
+  })
+}
+
+// 能否真实绑定该端口（listen 后立刻释放；比 isPortOpen 的 connect 探测可靠——
+// 有些占用是 bind 而不 accept）。释放到 spawn 之间存在被抢窗口，与 findFreePort 同级，可接受。
+function canBind(port) {
+  return new Promise((resolve) => {
+    const s = net.createServer()
+    s.once('error', () => resolve(false))
+    s.listen(port, '127.0.0.1', () => s.close(() => resolve(true)))
+  })
+}
+
+async function allocateBackendPort(ctx) {
+  // 显式覆盖优先（e2e/脚本用）
+  if (process.env.CHECKBA_BACKEND_PORT) return Number(process.env.CHECKBA_BACKEND_PORT)
+  // dev 态维持 9696：复用 restart-backend.sh 起的后端，脚本/CI 不受影响
+  if (!ctx.packaged) return 9696
+  for (const cand of DESKTOP_PORT_CHAIN) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await isPortOpen(cand)) {
+      // 有人在听：是自己的后端（上次残留/多开实例）则复用，陌生进程则跳过
+      // eslint-disable-next-line no-await-in-loop
+      if (await isOurBackend(cand)) return cand
+      continue
+    }
+    // eslint-disable-next-line no-await-in-loop
+    if (await canBind(cand)) return cand
+  }
+  // 链上全被占：退随机空闲端口，保证应用仍能启动（渲染层经注入拿到实际端口）
+  const { findFreePort } = require('./service-manager')
+  return findFreePort()
+}
 
 function jarPath(ctx) {
   return ctx.packaged
@@ -79,7 +136,11 @@ function createBackendDescriptor() {
     name: 'backend',
     eager: true,
     logName: 'backend',
-    port: () => Number(process.env.CHECKBA_BACKEND_PORT || 9696),
+    port: (ctx) => allocateBackendPort(ctx),
+    // 占用端口的监听者必须验明正身才可复用（防"粘"到陌生进程）
+    verifyReuse: (ctx, port) => isOurBackend(port),
+    // 复用校验失败（分配后被抢）时重新走一遍分配链
+    reallocatePort: (ctx) => allocateBackendPort(ctx),
     startTimeoutMs: (ctx) => (ctx.packaged ? 60000 : 15000),
     prepare: async (ctx) => {
       if (fs.existsSync(jarPath(ctx))) return

@@ -24,7 +24,7 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 **工具注册与执行**
 - `service/ai/ToolRegistry.java`（428 行）— @PostConstruct 扫 AgentToolComponent 的 @Tool；getAllSpecifications / execute（反射+服务端强注入 projectId/conversationId/userId+容错类型转换）/ resolve；别名表 TOOL_NAME_ALIASES/ARG_ALIASES/LEGACY_DEFAULTS。**插件启停过滤也在这三处消费点**。
 - `service/ai/XmlToolCallParser.java` — XML <tool_code> 协议兜底（位置参数按签名映射为命名参数，PR#193）。
-- tools/：FileTools(9，含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(1)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13，含 pptx_inspect_format/pptx_apply_format 走 pptx-service 自有端点 /api/pptx/*)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 必须从 pdf_list_files 拿——doc_list_project_files 不列 PDF、search_project_files 不带 ID。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)→失败回退 Java 结构级提取；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。
+- tools/：FileTools(12，含 create_folder/rename_project_file/move_project_file 三个 DB 感知文件树原语——直通 ProjectFileService，与前端右键菜单同路径；move_file 已停用只回错误引导；含 extract_file_text——Tika/PDFBox 全文抽取，Word/Excel/PDF 均可读；write_docx 支持可选 parentFolderId 落指定文件夹)、LegalTools(5)、WebTools(2)、PythonTools(1)、TodoTools(1)、SubAgentTools(1，**@Lazy 防启动死环** PR#98)、EvidenceTools(1)、MemoryTools(8)、DocumentEditTools(32)、CheckpointTools(1)、PptxTools(13，含 pptx_inspect_format/pptx_apply_format 走 pptx-service 自有端点 /api/pptx/*)、PdfTools(7，PDFBox 层：pdf_list_files/pdf_inspect/pdf_highlight/pdf_annotate/pdf_redact/pdf_replace_text/pdf_to_word，实现在 PdfEditService；定位类限文本型未加密 PDF、靠引用原文，fileId 必须从 pdf_list_files 拿——doc_list_project_files 不列 PDF、search_project_files 不带 ID。pdf_to_word 三路由：文本型走 pptx-service /api/pdf/to-docx 版式级(pdf2docx)→失败回退 Java 结构级提取；扫描件走 /api/pdf/ocr-markdown 本地 MinerU OCR，不用第三方云 OCR)。PptxEditTools 已删（7 个工具全走编辑器桥 ppt_* 命令，前端明确拒绝，死路径；pptx_smart_modify/pptx_get_page_screenshot 同因服务端点不存在下线）。
 
 **记忆/证据/MCP/子 Agent**
 - memory/：MemoryPipelineService（轮次结束异步触发写侧管线）、MemoryManager（检索）、AgenticRetriever、MemCellExtractor、ProjectMemoryExtractor、MemoryEvidenceFormatter（证据账本：时间锚点/来源/更新信号，PR#155）。记忆五作用域 + 拟人化排序（重要性×衰减×随机）。
@@ -33,7 +33,17 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 - subagent/：SubAgentService（dispatch_subtask，发 subtask_progress）。
 
 **SSE**
-- `service/ai/SseEmitterService.java` — 连接池（cid→SseEmitter，超时 30 分钟，建连发 connected）。**所有事件唯一出口**。生产者：Orchestrator、StreamHandler、Controller、TodoListService(plan_update)、BackgroundTaskService(background_task_*/heartbeat/task_progress)、SubAgentService、EditorBridgeService。
+- `service/ai/SseEmitterService.java` — 连接池（cid→SseEmitter，超时 30 分钟，建连发 connected）。**所有事件唯一出口**。生产者：Orchestrator、StreamHandler、Controller、TodoListService(plan_update)、BackgroundTaskService(background_task_*/heartbeat/task_progress)、SubAgentService、EditorBridgeService。**15s 心跳广播**（@PostConstruct 调度器，穿透代理空闲回收 + 前端判活依据）；同 ID 重连会 complete 旧 emitter，回调移除一律用两参 remove(id, emitter) 防摘掉新连接。
+
+**可靠性层（2026-08 harness 加固，治"跑一半停了"）**
+- LLM timeout 600s（application.yml open-router.timeout；0.36 的单值=OkHttp callTimeout 整通墙钟上限，不是空闲超时）。
+- `AgentStreamHandler`：终态幂等（AtomicBoolean terminated）+ **无活动看门狗** armInactivityWatchdog(180s)——流停滞主动走 onError。
+- `AgentOrchestrator.setOnError`：瞬时错误（429/5xx/超时/断连，见 isTransientLlmError）且**零 token 已流出**时按 8/16/32s 指数退避重放本轮（RunGuard.llmRetries，成功轮清零）；否则 handleStreamErrorTerminal。
+- 截断 `<tool_code>`（有开无闭）不再静默正常收尾：回喂纠正提示重试，最多 2 轮（RunGuard.malformedToolRounds）。
+- `ToolResult.success()` 除 "Error" 前缀外还识别 `{"error"...}` JSON 形态（编辑器桥超时曾被判 SUCCESS 致绿勾空转 30 步）；工具参数 JSON 解析失败返回可行动错误回喂模型，不再静默空参硬跑。
+- connect 端点：run_state=RUNNING 时**无条件**发 state_recovery（哪怕快照为空）——前端靠它重建气泡指针，否则终态事件被守卫吞掉、isStreaming 永久锁死。
+- 前端 `useAgentStream`：心跳 45s 无字节判死 + 指数退避自动重连（1s→30s 封顶）+ online/visibilitychange 钩子（模块级单例，防页面栈多实例重复订阅）；bubble_end/error/cancelled 在气泡指针为 null 时也解锁 isStreaming；sendMessage 防重入有 toast 提示。
+- 线程池：`config/AsyncExecutorConfig.java` 显式 taskExecutor(16/32/队列200) + memoryExecutor(2/4)——MemoryPipelineService 的同步 LLM 调用已隔离，别再挂回 taskExecutor。
 
 **前端消费**
 - `frontend/src/composables/useAgentStream.js`（1233 行）— SSE 核心：connectSSE（fetch+ReadableStream，非 EventSource）、sendMessage、abort、handleEvent（~:352 分派）、handleTag/processTextDelta（XML 标签驱动气泡组装）、handleStateRecovery。

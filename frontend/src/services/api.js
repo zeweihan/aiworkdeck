@@ -98,6 +98,20 @@ export function getApiBaseUrl() {
     return cachedApiBaseUrl;
   }
 
+  // 桌面壳注入的后端地址最优先：端口是主进程启动时实际分配的
+  // （打包态默认 5269，冲突自动降 5369/5169），不能再靠写死的常量猜
+  try {
+    const injected = typeof window !== 'undefined'
+      && window.checkbaDesktop && window.checkbaDesktop.apiBaseUrl;
+    if (injected) {
+      cachedApiBaseUrl = injected;
+      console.log('[API] 使用桌面壳注入的 API 地址:', cachedApiBaseUrl);
+      return cachedApiBaseUrl;
+    }
+  } catch (e) {
+    // ignore
+  }
+
   // 优先使用环境变量配置
   try {
     // eslint-disable-next-line no-undef

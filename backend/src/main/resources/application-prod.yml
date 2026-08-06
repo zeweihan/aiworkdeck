@@ -46,7 +46,9 @@ ai:
       api-key: ${OPENROUTER_API_KEY:}
       base-url: https://openrouter.ai/api/v1
       default-model: deepseek/deepseek-v4-flash
-      timeout: 120s
+      # 与 application.yml 同步：120s 的 OkHttp callTimeout 会掐断长流式轮次，
+      # 停滞检测由编排层看门狗负责
+      timeout: 600s
     ollama:
       base-url: ${OLLAMA_BASE_URL:http://localhost:11434}
       model-name: ${OLLAMA_MODEL_NAME:qwen3-vl:8b}

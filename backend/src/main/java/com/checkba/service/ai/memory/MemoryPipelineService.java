@@ -40,8 +40,10 @@ public class MemoryPipelineService {
 
     /**
      * 一轮对话（Agent 循环）完成后的记忆更新。异步执行，失败不影响对话主流程。
+     * 独立池：本方法同步阻塞调 LLM（摘要/MemCell 提取），一次可占几十秒，
+     * 放 taskExecutor 会与编排循环抢线程（F-08），故隔离到 memoryExecutor。
      */
-    @Async("taskExecutor")
+    @Async("memoryExecutor")
     public void onConversationTurnCompleted(String conversationId, String projectId,
                                             Long userId, List<ChatMessage> messages) {
         log.info("Memory pipeline triggered: conversationId={}, messageCount={}",
