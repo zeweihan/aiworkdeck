@@ -107,14 +107,17 @@ public class ToolRegistry {
 
     private final List<AgentToolComponent> toolComponents;
     private final PluginService pluginService;
+    private final ClientCapabilityService clientCapabilityService;
 
     private final Map<String, RegisteredTool> builtinTools = new ConcurrentHashMap<>();
     private final Map<String, RegisteredTool> pluginToolCache = new ConcurrentHashMap<>();
     private final List<ToolSpecification> builtinSpecifications = new ArrayList<>();
 
-    public ToolRegistry(List<AgentToolComponent> toolComponents, PluginService pluginService) {
+    public ToolRegistry(List<AgentToolComponent> toolComponents, PluginService pluginService,
+                        ClientCapabilityService clientCapabilityService) {
         this.toolComponents = toolComponents;
         this.pluginService = pluginService;
+        this.clientCapabilityService = clientCapabilityService;
     }
 
     @PostConstruct
@@ -165,6 +168,21 @@ public class ToolRegistry {
     }
 
     /**
+     * 按会话客户端能力过滤后的全部工具规格（Phase C）：
+     * office 会话隐藏 doc_* 与 sheet_*（LOWA 专属远端执行工具），LOWA 会话隐藏 office_*，
+     * none 会话两者都隐藏。conversationId 为 null 时按默认能力（LOWA）处理。
+     */
+    public List<ToolSpecification> getAllSpecifications(String conversationId) {
+        List<ToolSpecification> filtered = new ArrayList<>();
+        for (ToolSpecification spec : getAllSpecifications()) {
+            if (clientCapabilityService.isToolVisible(spec.name(), conversationId)) {
+                filtered.add(spec);
+            }
+        }
+        return filtered;
+    }
+
+    /**
      * 插件启停过滤：内置工具（不属于任何插件，pid == null）恒可见；
      * 插件工具仅在所属插件启用时可见。
      */
@@ -190,6 +208,17 @@ public class ToolRegistry {
         }
         names.sort(Comparator.comparingInt(String::length).reversed());
         return names;
+    }
+
+    /**
+     * 会话能力感知的 resolve（Phase C）：能力档位下不可见的工具视同不存在。
+     * 无会话语境的元数据查询（展示名等）仍可用单参 {@link #resolve(String)}。
+     */
+    public Optional<RegisteredTool> resolve(String name, String conversationId) {
+        if (name != null && !clientCapabilityService.isToolVisible(name, conversationId)) {
+            return Optional.empty();
+        }
+        return resolve(name);
     }
 
     public Optional<RegisteredTool> resolve(String name) {
@@ -237,7 +266,8 @@ public class ToolRegistry {
      */
     public ToolResult execute(String name, String argsJson, ToolContext ctx) {
         String resolvedName = TOOL_NAME_ALIASES.getOrDefault(name, name);
-        Optional<RegisteredTool> toolOpt = resolve(resolvedName);
+        // 会话能力过滤：能力档位下不可见的工具按"不存在"拒绝（模型收到与未知工具一致的反馈）
+        Optional<RegisteredTool> toolOpt = resolve(resolvedName, ctx != null ? ctx.conversationId() : null);
         if (toolOpt.isEmpty()) {
             return new ToolResult("Tool not found or arguments invalid.", null, false);
         }
