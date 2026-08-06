@@ -52,6 +52,17 @@ EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发�
 
 **电子表格（Calc / xlsx）sheet_\* 原语**：doc_\* 是 Writer 专属（`xModel.getText()` 在 Calc 文档上必然失败），xlsx 走 sheet_\* 全集（工具名=action 名，不做映射）——单元格面：`sheet_get_overview / sheet_read_range / sheet_write_cells / sheet_select_range / sheet_format_cells / sheet_set_borders / sheet_set_row_col`；结构面：`sheet_manage_sheets`（工作表增删改名移动）/ `sheet_edit_rows_cols`（插删行列）/ `sheet_merge_cells` / `sheet_sort_range`（XSortable，SortFields 是纯 Array of TableSortField 值结构体）/ `sheet_set_autofilter`（经命名 DatabaseRanges，set 语义而非 .uno: toggle）/ `sheet_freeze_panes`（XViewFreezable）/ `sheet_conditional_format`（命中外观落自建 CellStyle `__awd_cf_N`，每次调用替换区域现有规则）；`sheet_create_file` 是纯后端工具（POI 建最小空白 xlsx + 注册 + sendOpenFileAction，无 worker action）。worker 端 `resolveSheet` 统一守卫文档类型（非 Calc 返回明确错误）并把命中的工作表切为活动表。Calc 没有 redline，写入即生效——安全网是 doc_undo 与文档检查点（写类工具都打了 `fileEffect="MODIFIED"`）。地雷：`VertJustify` 声明 long、个别引擎按 short 校验（失败退 shortAny）；写入时数字样式字符串落数值但**前导 0 的编号保持文本**；数字格式经 `getNumberFormats().queryKey/addNew`（非法格式码会抛）；**setFormula 走 API 文法**——参数分隔符必须分号（逗号 Err:508）、跨表引用必须 `Sheet.A1`（`Sheet!A1` 报 #NAME?），worker 的 `normalizeFormula` 在字符串字面量外做 `,`→`;`、`!`→`.` 归一（Excel 数组字面量与 Calc 交集操作符 `!` 被牺牲，AI 公式里趋近于零）；引擎 LO 24.2 **无 XLOOKUP**（24.8 才有），出错公式经 `sheet_write_cells` 返回值 `formulaErrors` 报给 AI 自纠，读回侧 `readCellOut` 先查 `getError()`（否则错误格伪装成 0）。
 
+## 第二条桥：office_* 工具桥（Word 插件，Phase C）
+
+与 LOWA 桥并存的独立桥，服务 `office-addin/`（Word 任务窗格插件）。**逐字同构但零共享**：不复用 EditorBridgeService、超时常量独立、单名契约（无双轨旧名）。
+
+- `backend/src/main/java/com/checkba/service/ai/OfficeBridgeService.java` — requestId + CompletableFuture + SSE `client_action`（tool 固定 `office_command`，payload `{requestId, command, args, conversationId}`）+ 30s 超时。失败一律 `{"error": ...}`（Jackson 序列化，非手拼），ToolResult.success() 靠该前缀防绿勾空转。
+- `backend/src/main/java/com/checkba/controller/ai/OfficeResultController.java` — `POST /api/agent/office/result`（body `{requestId, ok, data|error}`）。会话归属**不信任请求体**：以桥挂起表按 requestId 登记的 conversationId 为准，再过 canUseConversation。
+- `backend/src/main/java/com/checkba/service/ai/tools/OfficeEditTools.java` — office_* 工具集 v1（工具名 ≠ command 名）：office_get_text→get_text、office_get_selection→get_selection、office_search→search、office_replace_text→replace_text、office_insert_text→insert_text、office_add_comment→add_comment。conversationId 参数由 ToolRegistry 服务端注入（不走 EditorBridgeService 的 ThreadLocal）。
+- `office-addin/taskpane/lib/officeExecutor.js` — 插件端执行器（Office.js 实现全集 + COMMAND_DISPLAY_NAMES 中文名表）；ChatView 消费 client_action(tool=office_command) → 执行 → postOfficeResult 回传。修改类命令执行前置 `changeTrackingMode=TrackAll`（Word 原生修订）、执行后恢复原值；WordApi 1.4 不支持时降级直接修改并标 `tracked:false`。
+
+**会话级客户端能力过滤**：chat 请求可选 `clientCapability`（lowa/office/none，缺省 lowa）→ `ClientCapabilityService`（按 conversationId 内存登记）→ ToolRegistry 三消费点过滤（getAllSpecifications(conversationId)/execute/resolve(name, conversationId)）：office 会话隐藏 doc_* 与 sheet_*，lowa 会话隐藏 office_*，none 全隐藏。判定按工具名前缀（doc_/sheet_=LOWA 专属，office_=插件专属）。末位提醒与 <active_document> 段文案在 ContextAssemblerService 按能力三分支切换。
+
 ## 命名双轨现状（PR#192，下个发布周期摘旧名）
 
 仍活着的 wps_* 旧名：后端 `sendDualNamedAction`（doc_open_file/wps_open_file、doc_reload_file/wps_reload_file）、executeEditorCommand 双发 editor_command/wps_command、doc_open_file_sync↔wps_open_file_sync、doc_stream_data/wps_stream_data 双发、`/wps-result` 路由别名；前端 handleClientAction 显式识别全部旧名+latch 去重、toolDisplayNames 把 wps_* 归一为 doc_*。
@@ -70,6 +81,8 @@ EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发�
 - **`insert_at_cursor` 对带 markdown 标记的文本走剥离转换**（`MD_MARKER_RE` 判定，**→真粗体、行首 # 剥掉），纯文本原样插入；改插入路径要想到这两条分支。`insert_under_heading` 曾经后端一直派发但 worker 没实现+白名单没收录（静默失败年久失修），已补齐。
 - **改标准格式规范要改两处**：worker `HOUSE`（office_thread.js）+ 后端 `DocxStyleHelper`（编辑器流式 与 write_docx 两条路径各一份，规范必须一致）。
 - 流式中断（onError）也会发 doc_stream_end——新增流式相关终止分支时别忘了这个收尾信号，否则 worker 状态机残留半张表。
+- **新增 office_* 工具三件套**：OfficeEditTools 加 @Tool + officeExecutor.js 加 HANDLERS 实现 + COMMAND_DISPLAY_NAMES 加中文名（主前端 toolDisplayNames.js 兜底同步）。没有客户端实现的远端工具 = 30s 超时空转（与 doc_* 四件套同款地雷）。
+- **能力过滤靠工具名前缀**（doc_/sheet_/office_）：新增 LOWA 专属或插件专属工具必须沿用对应前缀，否则会漏到不该见它的会话里；ToolRegistry 构造器加了 ClientCapabilityService，改它要同步 RecordingToolRegistry（EvalHarness）与各测试构造点。
 
 ## 验证
 

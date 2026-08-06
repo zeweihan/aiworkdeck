@@ -96,10 +96,29 @@ npx office-addin-manifest validate manifest.xml
 8. 断网/停后端再发消息 → 出现「后端不可达」类错误提示，输入框不卡死。
 9. 关闭再重开任务窗格 → 设置与项目选择仍在（localStorage 持久化）。
 
-## 已知边界（MVP）
+### 工具桥场景（Phase C：office_* 工具）
 
-- 只消费 `text_delta`/`bubble_end`/`error`/`cancelled` 四类 SSE 事件，
-  `client_action`（工具桥，Phase C）、`plan_update` 等先忽略。
+10. 打开一份合同文档，让 AI「把甲方全部改成买受人」→ 对话流出现「替换文本（修订）」chip，
+    文档中的修改以 **Word 原生修订**（审阅 → 修订）形式出现，可逐条接受/拒绝；
+    执行前后用户自己的「修订」开关状态不变（执行完恢复原值）。
+11. 让 AI「在第一条后面插入一段不可抗力条款」→ 出现「插入文本（修订）」chip，
+    插入内容同样是修订形态。
+12. 让 AI「给违约金条款加个批注说明风险」→ 出现「插入批注」chip，
+    Word 批注面板出现批注（作者为当前 Word 登录用户）。
+13. 让 AI「找找文中有几处试用期」→ 出现「查找文本」chip，回复引用命中段落上下文。
+14. 观察整轮对话：AI 不应尝试调用 doc_* 工具（会话能力过滤，
+    插件 chat 请求带 `clientCapability: "office"`）；主前端（LOWA）会话反之不见 office_*。
+15. 任务窗格关闭时让主前端会话正常改文档（回归确认 LOWA 链路不受影响）。
+
+## 已知边界
+
+- 消费 `text_delta`/`bubble_end`/`error`/`cancelled` 与 `client_action`（tool=office_command）
+  五类 SSE 事件，`plan_update` 等先忽略。
+- office_* 工具桥命令集 v1：get_text / get_selection / search / replace_text /
+  insert_text / add_comment；结果回传 `POST /api/agent/office/result`
+  （body `{requestId, ok, data|error}`，后端按挂起表做会话归属校验）。
+- 修订与批注依赖 WordApi 1.4（Word 2019+/Microsoft 365）；不支持时替换/插入降级为
+  直接修改（结果携带 `tracked:false`），批注返回明确错误。
 - 流式文本按 XML 标签轻量分流：`<final>` 与标签外文本为主回复、`<thinking>` 折叠展示，
   `<process>`/`<artifact>` 等暂不渲染。
 - awdt_ 令牌手工粘贴是 MVP 形态，Phase D 用 awdk_ 桥替换。
