@@ -16,6 +16,7 @@ AI Workdeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 | 具体插件（尽调/股东大会、脱敏等）、skill 定义与注入 | `.claude/agents/plugin-system.md` |
 | 插件市场页、registry 同步、skill 安装与启停 | `.claude/agents/plugin-marketplace.md` |
 | 授权、计费、账户连接、entitlement、广场付费 | `.claude/agents/licensing-billing.md` |
+| Office 插件（Word/Excel/PPT 任务窗格）、manifest、Office.js、sideload | `.claude/agents/office-addin.md` |
 | 构建、发版、CI、测试体系、本地开发启动 | `.claude/agents/eng-infra.md` |
 | 版本记录、工作段、时间线、退回、Git 仓库 | `.claude/agents/version-control.md` |
 
