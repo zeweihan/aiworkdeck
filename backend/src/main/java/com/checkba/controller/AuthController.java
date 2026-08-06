@@ -19,6 +19,14 @@ public class AuthController {
     private final ClientInvitationService clientInvitationService;
     private final com.checkba.service.AdminAccessService adminAccessService;
     private final com.checkba.service.DeviceTokenService deviceTokenService;
+    private final com.checkba.service.AuthAbuseGuard authAbuseGuard;
+    private final com.checkba.service.account.AwdkLoginService awdkLoginService;
+
+    /**
+     * awdk 桥接限速的用户名维度占位：与真实用户名共用一套失败锁定，
+     * 但键上带冒号（注册时用户名不可能撞上），不会误伤同名账号。
+     */
+    private static final String AWDK_BRIDGE_RATE_KEY = "::awdk-bridge";
 
     // 简单的 session 存储（内存中，实际生产环境应使用 Redis 或 JWT）
     // 并发安全：登录写入与每请求读取/移除高频并发，普通 HashMap 扩容会损坏桶结构
@@ -41,11 +49,15 @@ public class AuthController {
 
     public AuthController(UserService userService, ClientInvitationService clientInvitationService,
                           com.checkba.service.AdminAccessService adminAccessService,
-                          com.checkba.service.DeviceTokenService deviceTokenService) {
+                          com.checkba.service.DeviceTokenService deviceTokenService,
+                          com.checkba.service.AuthAbuseGuard authAbuseGuard,
+                          com.checkba.service.account.AwdkLoginService awdkLoginService) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
         this.deviceTokenService = deviceTokenService;
+        this.authAbuseGuard = authAbuseGuard;
+        this.awdkLoginService = awdkLoginService;
         staticUserService = userService;
     }
 
@@ -53,13 +65,18 @@ public class AuthController {
      * 用户注册
      */
     @PostMapping("/register")
-    public Map<String, Object> register(@RequestBody RegisterRequest request) {
+    public Map<String, Object> register(@RequestBody RegisterRequest request,
+                                        jakarta.servlet.http.HttpServletRequest http) {
         try {
+            // 注册闸 + 按 IP 限频（server 模式；local-mode 旁路）
+            authAbuseGuard.requireRegistrationOpen();
+            authAbuseGuard.checkRegistrationRate(http.getRemoteAddr());
             User user = userService.register(
                     request.getUsername(),
                     request.getPassword(),
                     request.getDisplayName()
             );
+            authAbuseGuard.recordRegistration(http.getRemoteAddr());
 
             // 注册成功后自动登录
             String sessionId = generateSessionId();
@@ -92,9 +109,21 @@ public class AuthController {
      * 用户登录
      */
     @PostMapping("/login")
-    public Map<String, Object> login(@RequestBody LoginRequest request) {
+    public Map<String, Object> login(@RequestBody LoginRequest request,
+                                     jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        // 锁定检查独立于凭据校验的 try：锁定拒绝不再计入失败（否则轮询会把锁无限续期）
+        try {
+            authAbuseGuard.checkLoginAttempt(ip, request.getUsername());
+        } catch (IllegalArgumentException e) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
         try {
             User user = userService.login(request.getUsername(), request.getPassword());
+            authAbuseGuard.recordLoginSuccess(ip, request.getUsername());
 
             String sessionId = generateSessionId();
             SESSION_STORE.put(sessionId, user.getId());
@@ -115,11 +144,52 @@ public class AuthController {
             ));
             return result;
         } catch (IllegalArgumentException e) {
+            authAbuseGuard.recordLoginFailure(ip, request.getUsername());
             Map<String, Object> result = new HashMap<>();
             result.put("code", 1);
             result.put("message", e.getMessage());
             return result;
         }
+    }
+
+    /**
+     * awdk_ → server 会话桥（插件云后端）：官网账户 Key 换本服务器的 awdt_ 设备令牌。
+     * 匿名端点；开关 security.awdk-login-enabled 默认 false。限速与密码登录共用一套
+     * 失败锁定（按 IP + 固定桥接维度）。
+     */
+    @PostMapping("/awdk-login")
+    public Map<String, Object> awdkLogin(@RequestBody(required = false) Map<String, String> body,
+                                         jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkLoginAttempt(ip, AWDK_BRIDGE_RATE_KEY);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        try {
+            var session = awdkLoginService.login(body == null ? null : body.get("key"));
+            authAbuseGuard.recordLoginSuccess(ip, AWDK_BRIDGE_RATE_KEY);
+            result.put("code", 0);
+            result.put("data", Map.of(
+                    "token", session.token(),
+                    "userId", session.userId(),
+                    "username", session.username()));
+        } catch (com.checkba.service.account.AccountException e) {
+            // 只有官网明确拒绝（Key 无效）才计失败；网络不可达不该消耗尝试次数
+            if (e.getKind() == com.checkba.service.account.AccountException.Kind.UNAUTHORIZED) {
+                authAbuseGuard.recordLoginFailure(ip, AWDK_BRIDGE_RATE_KEY);
+            }
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        } catch (IllegalArgumentException e) {
+            // 开关关闭等业务态
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
     }
 
     /**
@@ -283,10 +353,21 @@ public class AuthController {
 
     /** 用账号密码换长期设备令牌（桌面端连接团队服务器用）。明文只在这里出现一次。 */
     @PostMapping("/device-token")
-    public Map<String, Object> issueDeviceToken(@RequestBody Map<String, String> body) {
+    public Map<String, Object> issueDeviceToken(@RequestBody Map<String, String> body,
+                                                jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
         Map<String, Object> result = new HashMap<>();
+        // 这也是一次密码登录，与 /login 共用同一套失败锁定
+        try {
+            authAbuseGuard.checkLoginAttempt(ip, body.get("username"));
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
         try {
             User user = userService.login(body.get("username"), body.get("password"));
+            authAbuseGuard.recordLoginSuccess(ip, body.get("username"));
             var issued = deviceTokenService.issue(user.getId(), body.get("name"));
             result.put("code", 0);
             result.put("data", Map.of(
@@ -296,6 +377,7 @@ public class AuthController {
                     "username", user.getUsername(),
                     "displayName", user.getDisplayName() == null ? user.getUsername() : user.getDisplayName()));
         } catch (Exception e) {
+            authAbuseGuard.recordLoginFailure(ip, body.get("username"));
             result.put("code", 1);
             result.put("message", e.getMessage());
         }

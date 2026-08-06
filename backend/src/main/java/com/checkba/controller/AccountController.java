@@ -4,6 +4,7 @@ import com.checkba.model.entity.TokenUsage;
 import com.checkba.repository.TokenUsageRepository;
 import com.checkba.service.account.AccountException;
 import com.checkba.service.account.AccountService;
+import com.checkba.service.account.MachineAccountGuard;
 import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.PlatformAiChannel;
 import com.checkba.service.ai.PlatformUsageAccountant;
@@ -59,29 +60,31 @@ public class AccountController {
     private final PlatformUsageAccountant platformUsageAccountant;
     private final ChatModelFactory chatModelFactory;
     private final TokenUsageRepository tokenUsageRepository;
+    private final MachineAccountGuard machineAccountGuard;
 
     public AccountController(AccountService accountService,
                              EntitlementService entitlementService,
                              PlatformAiChannel platformAiChannel,
                              PlatformUsageAccountant platformUsageAccountant,
                              ChatModelFactory chatModelFactory,
-                             TokenUsageRepository tokenUsageRepository) {
+                             TokenUsageRepository tokenUsageRepository,
+                             MachineAccountGuard machineAccountGuard) {
         this.accountService = accountService;
         this.entitlementService = entitlementService;
         this.platformAiChannel = platformAiChannel;
         this.platformUsageAccountant = platformUsageAccountant;
         this.chatModelFactory = chatModelFactory;
         this.tokenUsageRepository = tokenUsageRepository;
+        this.machineAccountGuard = machineAccountGuard;
     }
 
     /**
-     * 身份闸：local-mode 恒解析为本机用户（免登），server 模式无有效会话即拒绝。
-     * 「未登录」文案与全站一致，前端 api.js 据此清会话。
+     * 身份闸（插件云后端加固后收严）：local-mode 恒放行（本机用户即机器主人）；
+     * server 模式下账户连接是<b>机器级</b>状态，仅 admin 可读可改——普通租户
+     * disconnect 一下全服的平台 AI 通道就断了。判定在 {@link MachineAccountGuard}。
      */
-    private static void requireUser(String sessionId) {
-        if (AuthController.getUserIdFromSession(sessionId) == null) {
-            throw new IllegalArgumentException("未登录");
-        }
+    private void requireUser(String sessionId) {
+        machineAccountGuard.requireMachineScope(sessionId);
     }
 
     @GetMapping("/status")
