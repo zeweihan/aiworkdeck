@@ -49,9 +49,12 @@ public class AgentRunStateService {
     private final Map<String, RunState> states = new ConcurrentHashMap<>();
 
     private final AgentRunRecordRepository recordRepository;
+    private final com.checkba.service.telemetry.TelemetryTurnTracker turnTracker;
 
-    public AgentRunStateService(AgentRunRecordRepository recordRepository) {
+    public AgentRunStateService(AgentRunRecordRepository recordRepository,
+                                com.checkba.service.telemetry.TelemetryTurnTracker turnTracker) {
         this.recordRepository = recordRepository;
+        this.turnTracker = turnTracker;
     }
 
     public void mark(String conversationId, RunStatus status) {
@@ -65,6 +68,9 @@ public class AgentRunStateService {
     public void mark(String conversationId, RunStatus status, Long projectId, Long userId) {
         if (conversationId == null || status == null) return;
         states.put(conversationId, new RunState(status, System.currentTimeMillis()));
+        // 埋点：终态在此单点合成 ai.turn（新增终止分支只要走 mark 就自动覆盖）；
+        // restore() 刻意不打点——启动回收是既有状态回放，进程内也没有未闭合轮次
+        turnTracker.onStatus(conversationId, status.name());
         persist(conversationId, status, projectId, userId);
     }
 

@@ -66,14 +66,16 @@ class LocalProjectServiceTest {
                 storageFactory,
                 mock(com.checkba.version.WorkSessionService.class),
                 mock(UserService.class),
-                mock(com.checkba.service.quota.StageQuotaService.class));
+                mock(com.checkba.service.quota.StageQuotaService.class),
+                mock(com.checkba.service.telemetry.TelemetryService.class));
 
         ProjectMemberService memberService = mock(ProjectMemberService.class);
         when(memberService.hasReadPermission(anyLong(), anyLong())).thenReturn(true);
 
         svc = new LocalProjectService(projectRepository, projectMemberRepository,
                 projectFileRepository, projectFileService, memberService, resolver,
-                mock(org.springframework.context.ApplicationEventPublisher.class));
+                mock(org.springframework.context.ApplicationEventPublisher.class),
+                mock(com.checkba.service.telemetry.TelemetryService.class));
     }
 
     private Path userFolder(@TempDir Path tmp) {

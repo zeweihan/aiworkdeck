@@ -47,6 +47,7 @@ public class LocalProjectService {
     private final ProjectMemberService projectMemberService;
     private final ProjectStorageResolver storageResolver;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     public LocalProjectService(ProjectRepository projectRepository,
                                ProjectMemberRepository projectMemberRepository,
@@ -54,7 +55,8 @@ public class LocalProjectService {
                                ProjectFileService projectFileService,
                                ProjectMemberService projectMemberService,
                                ProjectStorageResolver storageResolver,
-                               org.springframework.context.ApplicationEventPublisher eventPublisher) {
+                               org.springframework.context.ApplicationEventPublisher eventPublisher,
+                               com.checkba.service.telemetry.TelemetryService telemetryService) {
         this.projectRepository = projectRepository;
         this.projectMemberRepository = projectMemberRepository;
         this.projectFileRepository = projectFileRepository;
@@ -62,6 +64,7 @@ public class LocalProjectService {
         this.projectMemberService = projectMemberService;
         this.storageResolver = storageResolver;
         this.eventPublisher = eventPublisher;
+        this.telemetryService = telemetryService;
     }
 
     /** 本地文件夹项目被打开/创建（LocalRootWatchService 据此启动监听）。 */
@@ -124,6 +127,8 @@ public class LocalProjectService {
         log.info("打开本地文件夹项目: project={}, root={}, reused={}, imported={}, truncated={}",
                 project.getId(), canonical, reused, stats.imported, stats.truncated);
         eventPublisher.publishEvent(new LocalProjectOpened(project.getId(), canonical));
+        telemetryService.record("project.created", java.util.Map.of(
+                "kind", "local", "reused", reused, "importedCount", stats.imported));
         return new OpenLocalResult(project, reused, openFileId, stats.imported, stats.truncated);
     }
 

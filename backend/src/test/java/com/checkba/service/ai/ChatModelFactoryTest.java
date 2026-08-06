@@ -44,7 +44,12 @@ class ChatModelFactoryTest {
                 .thenAnswer(inv -> inv.getArgument(1));
         platformAiChannel = mock(PlatformAiChannel.class);
         usageAccountant = mock(PlatformUsageAccountant.class);
-        factory = new ChatModelFactory(properties, systemSettingService, platformAiChannel, usageAccountant);
+        factory = new ChatModelFactory(properties, systemSettingService, platformAiChannel, usageAccountant,
+                new com.checkba.service.telemetry.TelemetryService(
+                        mock(com.checkba.repository.TelemetryEventRepository.class),
+                        new com.checkba.service.telemetry.InstallIdentityService(
+                                System.getProperty("java.io.tmpdir")),
+                        "test"));
     }
 
     private void setDbProvider(String provider) {

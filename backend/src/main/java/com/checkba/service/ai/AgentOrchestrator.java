@@ -96,6 +96,10 @@ public class AgentOrchestrator {
     private final com.checkba.version.WorkSessionService workSessionService;
     private final com.checkba.config.AiFailoverProperties failoverProperties;
     private final com.checkba.service.ai.context.RunLoopCompactor runLoopCompactor;
+    // 埋点（隐私红线与字段白名单见 service/telemetry；构造器变更需同步 EvalHarness）
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    private final com.checkba.service.telemetry.TelemetryTurnTracker telemetryTurnTracker;
+    private final com.checkba.service.telemetry.MatterClassifierService matterClassifierService;
 
     // ==================== 取消功能相关方法 ====================
 
@@ -175,6 +179,22 @@ public class AgentOrchestrator {
 
     // ==================== 工具分发（统一走 ToolRegistry，编排器不感知具体工具） ====================
 
+    /** 埋点：工具调用结果（仅工具名/成败/耗时等枚举与数值，参数内容不采集） */
+    private void recordToolTelemetry(String toolName, ToolRegistry.ToolResult result,
+                                     String conversationId, long durationMs) {
+        java.util.Map<String, Object> attrs = new java.util.HashMap<>();
+        attrs.put("toolName", toolName);
+        attrs.put("success", result != null && result.success());
+        attrs.put("durationMs", durationMs);
+        if (result != null && result.tool() != null) {
+            attrs.put("fromPlugin", result.tool().fromPlugin());
+            if (result.tool().meta() != null && result.tool().meta().fileEffect() != null) {
+                attrs.put("fileEffect", result.tool().meta().fileEffect());
+            }
+        }
+        telemetryService.recordConv("ai.tool", conversationId, attrs);
+    }
+
     /**
      * 分发一次工具调用并处理声明式副作用（文件变更通知、文件树刷新）。
      * 修改类工具（fileEffect=MODIFIED）执行前自动为活跃文档创建本轮检查点。
@@ -206,7 +226,9 @@ public class AgentOrchestrator {
 
         com.checkba.service.ai.tools.ToolContext ctx =
                 new com.checkba.service.ai.tools.ToolContext(projectId, conversationId, userId, modelId);
+        long toolStartMs = System.currentTimeMillis();
         ToolRegistry.ToolResult result = toolRegistry.execute(toolName, argsJson, ctx);
+        recordToolTelemetry(toolName, result, conversationId, System.currentTimeMillis() - toolStartMs);
         applyToolSideEffects(result, argsJson, conversationId);
 
         // 模型仍去列文件时，把活跃文档钉在结果里，让它下一轮自己纠回来（不阻断跨文档场景）
@@ -317,6 +339,13 @@ public class AgentOrchestrator {
         cancelledConversations.remove(conversationId);
         activeStreamContent.put(conversationId, new StringBuilder());
         activeAssistantMessageId.remove(conversationId);
+        // 埋点轮次上下文先于 mark 建立：终态由 AgentRunStateService.mark 单点合成 ai.turn
+        java.util.Map<String, Object> turnAttrs = new java.util.HashMap<>();
+        turnAttrs.put("mode", agentMode == null ? null : agentMode.name());
+        turnAttrs.put("model", request.getModel());
+        turnAttrs.put("attachmentCount", request.getFileIds() == null ? 0 : request.getFileIds().size());
+        turnAttrs.put("hasPinnedSkill", request.getPinnedSkillId() != null && !request.getPinnedSkillId().isEmpty());
+        telemetryTurnTracker.startTurn(conversationId, turnAttrs);
         // 状态登记：循环开跑（会话列表状态点/切回续流判断都依赖它）。
         // 起跑这一次带上 projectId/userId 写进持久化记录——进程被杀后的启动回收靠它归属会话；
         // 同时把上次遗留的 INTERRUPTED 覆盖掉（用户点「继续」走的就是这条路）。
@@ -354,6 +383,13 @@ public class AgentOrchestrator {
             
             // 1.2 Skill 激活（Phase 3B）：用户钉选优先，否则触发词匹配；都未命中时行为与现状一致
             skillRouter.activateForTurn(conversationId, request.getMessage(), request.getPinnedSkillId());
+
+            // 1.3 事项类型 AI 兜底分类：仅会话首轮且未命中 skill（skill 命中由 SkillRouter 产出类别）；
+            // 异步、开关关闭时 no-op，绝不阻塞对话主链路
+            if (existingMsgs.size() <= 1) {
+                matterClassifierService.classifyAsync(conversationId, request.getMessage(),
+                        skillRouter.activeSkill(conversationId).isPresent());
+            }
 
             // 2. Build Context & History Message Stack (Spec v1.8)
             log.info("Assembling full message context for conversation: {}", conversationId);

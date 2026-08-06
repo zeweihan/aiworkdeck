@@ -70,6 +70,10 @@ launch（**启动页**）/ unlock / identity / login / newproject / project-over
 
 ## 已知地雷
 
+- admin 页有「数据统计」分区（nav key `telemetry`）：匿名使用统计两开关 + 本地统计页，
+  API 见 api.js 的 getTelemetrySettings/updateTelemetrySettings/getTelemetrySummary。
+  页面路由埋点在 App.vue onLaunch 的 uni.addInterceptor（唯一收口，别在 50 处调用点逐个埋）；
+  面板切换埋点在 panelSwitching.js 的 toggleLeftPane（区分 staging/收展/切换三分支）。
 - sed 子串替换改类名会误伤（king-*→awd-* 迁移教训，PR#171）。
 - uni @tap 在 e2e 驱动下有陷阱（app-e2e 记录）。
 - 布局开关后不调 triggerWorkbenchResize 会导致编辑器/iframe 不重排。

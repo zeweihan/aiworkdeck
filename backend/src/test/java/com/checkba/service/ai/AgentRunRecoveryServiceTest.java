@@ -64,7 +64,7 @@ class AgentRunRecoveryServiceTest {
                 .thenAnswer(inv -> messages.getOrDefault(inv.<String>getArgument(0), List.of()));
         when(messageRepository.save(any(ProjectAiMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        stateService = new AgentRunStateService(recordRepository);
+        stateService = new AgentRunStateService(recordRepository, org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryTurnTracker.class));
         recoveryService = new AgentRunRecoveryService(recordRepository, messageRepository, stateService);
     }
 
@@ -118,7 +118,7 @@ class AgentRunRecoveryServiceTest {
         messages.put(CONV, List.of(msg("USER", "帮我改合同"), halfDone));
 
         // 新进程：内存登记簿清零
-        AgentRunStateService fresh = new AgentRunStateService(recordRepository);
+        AgentRunStateService fresh = new AgentRunStateService(recordRepository, org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryTurnTracker.class));
         AgentRunRecoveryService recovery =
                 new AgentRunRecoveryService(recordRepository, messageRepository, fresh);
 
@@ -156,7 +156,7 @@ class AgentRunRecoveryServiceTest {
         recoveryService.recoverInterruptedRuns();
 
         // 用户一直没点「继续」，又重启了一次：记录已是 INTERRUPTED，捞不到 RUNNING
-        AgentRunStateService fresh = new AgentRunStateService(recordRepository);
+        AgentRunStateService fresh = new AgentRunStateService(recordRepository, org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryTurnTracker.class));
         AgentRunRecoveryService recovery =
                 new AgentRunRecoveryService(recordRepository, messageRepository, fresh);
 

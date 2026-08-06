@@ -1,10 +1,25 @@
 <script>
 import { getSessionId } from '@/utils/auth.js'
 import { openFolderFlow, openFileFlow, openLocalRootPath, openLocalFilePath } from '@/utils/ideOpen.js'
+import { track } from '@/utils/telemetryClient.js'
 
 export default {
   onLaunch: function () {
     console.log('App Launch')
+    // 埋点：页面路由唯一收口（全仓 50 处 navigateTo/reLaunch 直调，拦截器一处全覆盖）；
+    // 只记页面路径枚举（pages.json 里的 11 个页面），query 参数不采集
+    const navTrack = (routeType) => ({
+      invoke(args) {
+        try {
+          const page = String((args && args.url) || '').split('?')[0]
+          if (page) track('ui.nav', { page, branch: routeType })
+        } catch (e) { /* 静默 */ }
+        return true
+      }
+    })
+    ;['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'].forEach((t) => {
+      try { uni.addInterceptor(t, navTrack(t)) } catch (e) { /* 静默 */ }
+    })
     // IDE 化应用菜单动作（桌面壳菜单栏 文件→打开文件夹/打开文件/新建/最近打开）。
     // App 级注册一次，天然避开 project-overview 的页面栈多实例问题。
     if (typeof window !== 'undefined' && window.checkbaDesktop

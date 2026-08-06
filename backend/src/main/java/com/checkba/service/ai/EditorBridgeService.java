@@ -40,6 +40,7 @@ public class EditorBridgeService {
 
     private final SseEmitterService sseEmitterService;
     private final ObjectMapper objectMapper;
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     // 请求 ID -> CompletableFuture 的映射
     private final ConcurrentHashMap<String, CompletableFuture<EditorActionResult>> pendingRequests = new ConcurrentHashMap<>();
@@ -203,9 +204,17 @@ public class EditorBridgeService {
         }
     }
 
+    /** 埋点：服务端往返（action 是原语枚举名，params 内容不采集） */
+    private void recordBridge(String action, String outcome, String conversationId, long startMs) {
+        telemetryService.recordConv("editor.bridge", conversationId, Map.of(
+                "action", action == null ? "" : action,
+                "outcome", outcome,
+                "durationMs", System.currentTimeMillis() - startMs));
+    }
+
     /**
      * 执行编辑器命令并等待前端返回结果
-     * 
+     *
      * @param action 操作类型（如 get_selection, find_replace 等）
      * @param params 操作参数
      * @return 执行结果的 JSON 字符串
@@ -219,6 +228,7 @@ public class EditorBridgeService {
         String requestId = UUID.randomUUID().toString();
         CompletableFuture<EditorActionResult> future = new CompletableFuture<>();
         pendingRequests.put(requestId, future);
+        long bridgeStartMs = System.currentTimeMillis();
 
         try {
             // 构建并发送 SSE 事件（双轨：新名 editor_command 在前、旧名 wps_command 在后，
@@ -241,19 +251,23 @@ public class EditorBridgeService {
             EditorActionResult result = future.get(EDITOR_ACTION_TIMEOUT, TimeUnit.SECONDS);
             
             if (result.isSuccess()) {
+                recordBridge(action, "ok", conversationId, bridgeStartMs);
                 return objectMapper.writeValueAsString(result.getData());
             } else {
+                recordBridge(action, "error", conversationId, bridgeStartMs);
                 return "{\"error\": \"" + result.getError() + "\"}";
             }
 
         } catch (TimeoutException e) {
             log.warn("Editor command timed out: action={}, requestId={}", action, requestId);
+            recordBridge(action, "timeout", conversationId, bridgeStartMs);
             return "{\"error\": \"操作超时。请确保编辑器已打开并可用。\"}";
-            
+
         } catch (Exception e) {
             log.error("Failed to execute editor command: action={}", action, e);
+            recordBridge(action, "error", conversationId, bridgeStartMs);
             return "{\"error\": \"" + e.getMessage() + "\"}";
-            
+
         } finally {
             pendingRequests.remove(requestId);
         }

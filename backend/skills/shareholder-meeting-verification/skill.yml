@@ -3,6 +3,9 @@ id: shareholder-meeting-verification
 name: 股东大会核查
 description: 上市公司/挂牌公司股东会法律见证：对照股东大会通知、董事会决议公告与投票结果做逐字段交叉核对与表决复算，撰写（或按本所初稿填充）法律意见书，并生成可溯源的交叉核对底稿表。
 
+# 法律事项类别（匿名统计用，枚举见 MatterCategory）
+category: 资本市场证券
+
 # 触发条件：用户输入包含任一关键词即命中（面板 kick-off prompt 以「股东大会核查」开头）
 triggers:
   - 股东大会核查

@@ -117,7 +117,8 @@ class VersionFileAccessTest {
 
     private VersionController newController() {
         return new VersionController(repoService, sessionService, projectMemberService, userService,
-                projectFileService, manifestService);
+                projectFileService, manifestService,
+                org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryService.class));
     }
 
     private static final long PROJECT_ID = 7L;

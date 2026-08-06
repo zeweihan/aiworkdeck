@@ -1,8 +1,17 @@
 // project-overview.vue 的左栏面板切换状态机：toggleLeftPane / 模式级 tab 记忆持久化。
 // 经展开进组件 methods（纯搬移，Phase 1 外置），`this` 即 project-overview 页面实例。
 
+import { track } from '@/utils/telemetryClient.js'
+
 export const panelSwitchingMethods = {
     toggleLeftPane(key) {
+      // 埋点：三分支语义分开记（staging 特殊 / 同 key 收展 / 异 key 真切换），
+      // 否则「切面板」数会被「折叠侧栏」污染
+      track('ui.nav', {
+        panelKey: String(key || ''),
+        branch: key === 'staging' ? 'staging'
+          : (this.leftPaneKey === key ? 'collapse_toggle' : 'switch')
+      })
       if (key === 'staging') {
         // Toggle staging visibility
         if (this.showStagingArea) {

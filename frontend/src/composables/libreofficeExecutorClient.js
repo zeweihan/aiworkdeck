@@ -98,6 +98,7 @@ export const EDITOR_ACTIONS = [
  * @param {object} [opts]
  * @param {number} [opts.timeoutMs=30000]
  * @param {(msg:string)=>void} [opts.onError] optional error sink
+ * @param {(attrs:object)=>void} [opts.onTelemetry] optional editor.action usage sink (app-side only)
  */
 export function createLibreOfficeExecutor(opts = {}) {
   const timeoutMs = opts.timeoutMs || 30000
@@ -161,17 +162,41 @@ export function createLibreOfficeExecutor(opts = {}) {
       return { success: false, message: m }
     }
     if (!EDITOR_ACTIONS.includes(action)) {
+      // 埋点：白名单外拒绝是「新工具漏配 EDITOR_ACTIONS」的静默失败计数器
+      trackEditorAction(action, params, false, 0, true)
       const m = 'Unknown action: ' + action
       if (opts.onError) opts.onError(m)
       return { success: false, message: m }
     }
+    const startMs = Date.now()
     try {
-      return await request(action, params)
+      const result = await request(action, params)
+      trackEditorAction(action, params, !!(result && result.success), Date.now() - startMs, false)
+      return result
     } catch (e) {
+      trackEditorAction(action, params, false, Date.now() - startMs, false)
       const m = e && e.message ? e.message : String(e)
       if (opts.onError) opts.onError(m)
       return { success: false, message: m }
     }
+  }
+
+  // 埋点：AI 与人工的全部编辑器动作总闸（__agent 是 AI 下发的唯一判别标记）；
+  // 只发 action 枚举名与成败/耗时，params 内容不采集。
+  // 本模块保持 framework-agnostic（还被 zetaoffice 独立 bundle 与 spike/e2e 打包，
+  // 那些上下文没有 @ 别名也没有 uni），采集经 opts.onTelemetry 注入：
+  // 应用侧 useLibreOfficeBridge 传入，其他宿主不传即零开销
+  function trackEditorAction(action, params, success, durationMs, whitelistRejected) {
+    if (!opts.onTelemetry) return
+    try {
+      opts.onTelemetry({
+        action: String(action || ''),
+        agent: !!(params && params.__agent),
+        success,
+        durationMs,
+        whitelistRejected
+      })
+    } catch (e) { /* 静默 */ }
   }
 
   return { connect, isConnected, executeCommand }

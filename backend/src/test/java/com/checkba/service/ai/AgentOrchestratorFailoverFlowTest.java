@@ -120,14 +120,17 @@ class AgentOrchestratorFailoverFlowTest {
         RunLoopCompactor compactor =
                 new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties));
 
-        runState = new AgentRunStateService(mock(com.checkba.repository.AgentRunRecordRepository.class));
+        runState = new AgentRunStateService(mock(com.checkba.repository.AgentRunRecordRepository.class), mock(com.checkba.service.telemetry.TelemetryTurnTracker.class));
         orchestrator = new AgentOrchestrator(
                 chatModelFactory, messageService, sse, mock(TokenUsageService.class), assembler,
                 toolRegistry, skillRouter, parser, mock(MemoryPipelineService.class),
                 mock(ProjectFileService.class), mock(EditorBridgeService.class),
                 mock(ConversationFileChangeService.class), mock(TodoListService.class),
                 mock(DocumentCheckpointService.class), runState, mock(com.checkba.version.WorkSessionService.class),
-                failoverProperties, compactor);
+                failoverProperties, compactor,
+                mock(com.checkba.service.telemetry.TelemetryService.class),
+                mock(com.checkba.service.telemetry.TelemetryTurnTracker.class),
+                mock(com.checkba.service.telemetry.MatterClassifierService.class));
     }
 
     private void run(String conversationId) {
@@ -218,6 +221,9 @@ class AgentOrchestratorFailoverFlowTest {
                 mock(ConversationFileChangeService.class), mock(TodoListService.class),
                 mock(DocumentCheckpointService.class), runState,
                 mock(com.checkba.version.WorkSessionService.class), failoverProperties,
-                new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties)));
+                new RunLoopCompactor(contextProperties, new ContextCompressor(null, null, contextProperties)),
+                mock(com.checkba.service.telemetry.TelemetryService.class),
+                mock(com.checkba.service.telemetry.TelemetryTurnTracker.class),
+                mock(com.checkba.service.telemetry.MatterClassifierService.class));
     }
 }

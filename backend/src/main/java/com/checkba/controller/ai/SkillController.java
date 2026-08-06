@@ -41,6 +41,7 @@ public class SkillController {
     private final SkillMarketService skillMarketService;
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
+    private final com.checkba.service.telemetry.TelemetryService telemetryService;
 
     @lombok.Data
     public static class SkillView {
@@ -173,6 +174,8 @@ public class SkillController {
         } catch (IllegalArgumentException e) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error("Skill 不存在: " + skillId));
         }
+        telemetryService.record("skill.lifecycle",
+                Map.of("skillId", skillId, "op", enabled ? "enable" : "disable"));
         return ResponseEntity.ok(ok());
     }
 
