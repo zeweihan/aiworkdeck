@@ -863,8 +863,9 @@ public class AgentOrchestrator {
             model.generate(messages, handler);
         } else {
             // Agent 和 Plan 模式：传递工具规格（内置 + 插件，统一来自注册表）
+            // 会话客户端能力过滤（Phase C：office/lowa/none）在注册表内完成；
             // Skill 命中时由 SkillRouter 做可见性白名单裁剪（Phase 3B，未命中原样返回）
-            List<ToolSpecification> allTools = skillRouter.visibleTools(conversationId, toolRegistry.getAllSpecifications());
+            List<ToolSpecification> allTools = skillRouter.visibleTools(conversationId, toolRegistry.getAllSpecifications(conversationId));
             model.generate(messages, allTools, handler);
         }
     }

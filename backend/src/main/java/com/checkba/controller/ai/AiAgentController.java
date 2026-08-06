@@ -31,6 +31,7 @@ public class AiAgentController {
     private final com.checkba.service.ai.TodoListService todoListService;
     private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
     private final com.checkba.service.ProjectMemberService projectMemberService;
+    private final com.checkba.service.ai.ClientCapabilityService clientCapabilityService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AiAgentController(SseEmitterService sseEmitterService,
@@ -40,7 +41,8 @@ public class AiAgentController {
                             com.checkba.service.ai.tools.PptxTools pptxTools,
                             com.checkba.service.ai.TodoListService todoListService,
                             com.checkba.service.ai.AgentRunStateService agentRunStateService,
-                            com.checkba.service.ProjectMemberService projectMemberService) {
+                            com.checkba.service.ProjectMemberService projectMemberService,
+                            com.checkba.service.ai.ClientCapabilityService clientCapabilityService) {
         this.sseEmitterService = sseEmitterService;
         this.agentOrchestrator = agentOrchestrator;
         this.messageService = messageService;
@@ -49,6 +51,7 @@ public class AiAgentController {
         this.todoListService = todoListService;
         this.agentRunStateService = agentRunStateService;
         this.projectMemberService = projectMemberService;
+        this.clientCapabilityService = clientCapabilityService;
     }
 
     /**
@@ -143,8 +146,11 @@ public class AiAgentController {
             return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
         }
 
-        log.info("Received Agent Chat Request: project={}, conversation={}, mode={}, msg={}", 
+        log.info("Received Agent Chat Request: project={}, conversation={}, mode={}, msg={}",
                 request.getProjectId(), request.getConversationId(), request.getAgentMode(), request.getMessage());
+
+        // 会话级客户端能力登记（Phase C）：lowa（默认，主前端）/ office（Word 插件）/ none（纯对话）
+        clientCapabilityService.record(request.getConversationId(), request.getClientCapability());
 
         agentOrchestrator.handleUserMessage(request, userId);
         
@@ -297,6 +303,11 @@ public class AiAgentController {
         private java.util.List<ContextItem> contextItems; // New: Full context metadata
         private ContextItem activeContext; // NEW: Auto-detected active tab (current document)
         private String pinnedSkillId; // 用户在对话中钉选的 Skill；为空则走触发词自动匹配
+        /**
+         * 可选：客户端文档编辑能力（lowa / office / none，Phase C）。
+         * 缺省按 lowa 处理，兼容不发送该字段的存量主前端。
+         */
+        private String clientCapability;
 
         public Long getProjectId() { return projectId; }
         public void setProjectId(Long projectId) { this.projectId = projectId; }
@@ -321,6 +332,8 @@ public class AiAgentController {
         public void setActiveContext(ContextItem activeContext) { this.activeContext = activeContext; }
         public String getPinnedSkillId() { return pinnedSkillId; }
         public void setPinnedSkillId(String pinnedSkillId) { this.pinnedSkillId = pinnedSkillId; }
+        public String getClientCapability() { return clientCapability; }
+        public void setClientCapability(String clientCapability) { this.clientCapability = clientCapability; }
     }
     
     /**

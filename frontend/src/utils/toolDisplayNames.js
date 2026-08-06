@@ -99,6 +99,14 @@ const NAMES = {
   sheet_set_autofilter: { zh: '设置自动筛选', en: 'Set autofilter' },
   sheet_freeze_panes: { zh: '冻结窗格', en: 'Freeze panes' },
   sheet_conditional_format: { zh: '设置条件格式', en: 'Conditional format' },
+  // Office 插件（Word 任务窗格）office_* 工具桥
+  // 正常情况下主前端（lowa 会话）看不到这些工具（会话能力过滤），收录仅作兜底
+  office_get_text: { zh: '读取文档', en: 'Read document' },
+  office_get_selection: { zh: '读取选区', en: 'Read selection' },
+  office_search: { zh: '查找文本', en: 'Find in document' },
+  office_replace_text: { zh: '替换文本（修订）', en: 'Replace text (tracked)' },
+  office_insert_text: { zh: '插入文本（修订）', en: 'Insert text (tracked)' },
+  office_add_comment: { zh: '插入批注', en: 'Add comment' },
   // PPT
   pptx_check_service: { zh: '检查PPT服务', en: 'Check PPT service' },
   pptx_generate: { zh: '生成PPT演示文稿', en: 'Generate slides' },
