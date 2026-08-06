@@ -171,6 +171,7 @@ AI Workdeck is designed for **self-hosted, private deployment**. The following d
 | Text-to-speech | **External** (ElevenLabs) | ⚠️ No fallback | Can be disabled |
 | Company data lookup | **External** (Qichacha) | ⚠️ No fallback | Optional feature |
 | AI model (cloud) | **External** (Gemini/OpenRouter) | ✅ Use Ollama | Configurable provider |
+| Anonymous usage stats | Local ledger + daily aggregated counts | ✅ Can be disabled | Counts and enum values only, no content; one switch in Settings, see legal/PRIVACY.md |
 
 **For air-gapped deployments**: Ollama + local storage + MinerU + PPTX service keeps all documents entirely within your network. Disable OCR, TTS, and cloud AI providers — the core workspace, document editing, agent orchestration, and due-diligence workflows function without external services.
 
@@ -217,7 +218,7 @@ See [`legal/COMMERCIAL-LICENSE.md`](legal/COMMERCIAL-LICENSE.md) or contact [hi@
 
 ### Where does our data go?
 
-In a self-hosted deployment with Ollama + local storage + Docker services, **documents never leave your network**. No telemetry, no phone-home, no analytics by default. Optional external services (OCR, TTS, cloud AI) are explicitly configured and can be disabled entirely.
+In a self-hosted deployment with Ollama + local storage + Docker services, **documents never leave your network**. Your documents, conversations, file names, and client information never leave your machine. The app shares anonymous aggregated usage statistics by default (daily counts of feature usage only, tied to a random install ID) to help improve the product; this can be turned off with one switch in Settings, and the exact data shape is documented in [`legal/PRIVACY.md`](legal/PRIVACY.md). Optional external services (OCR, TTS, cloud AI) are explicitly configured and can be disabled entirely.
 
 ## Quick Start
 
