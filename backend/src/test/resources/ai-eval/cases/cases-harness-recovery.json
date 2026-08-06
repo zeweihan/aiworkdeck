@@ -1,0 +1,56 @@
+[
+  {
+    "id": "truncated-tool-code-correction-xml",
+    "title": "截断的 tool_code 触发纠正回路而非静默收尾（F-10）",
+    "category": "files",
+    "protocol": "xml",
+    "userInput": "帮我建一个「尽调材料」文件夹",
+    "turns": [
+      {
+        "text": "<process name=\"新建文件夹\"><tool_code>create_folder(folderName=\"尽调材料\", projectId=1"
+      },
+      {
+        "text": "<process name=\"新建文件夹\"><tool_code>create_folder(folderName=\"尽调材料\", projectId=1)</tool_code></process>"
+      },
+      {
+        "text": "<final>已新建「尽调材料」文件夹。</final>"
+      }
+    ],
+    "toolStubs": {
+      "create_folder": "Successfully created folder '尽调材料' (folderId=77)."
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "create_folder", "argsContain": { "folderName": "尽调材料" } }
+      ],
+      "promptContains": ["标签未闭合"],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  },
+  {
+    "id": "editor-bridge-json-error-is-failure-xml",
+    "title": "编辑器桥 JSON 错误判为 FAILURE 而非 SUCCESS（F-09）",
+    "category": "revision",
+    "protocol": "xml",
+    "userInput": "把正文里的「甲方」全部替换成「委托方」",
+    "turns": [
+      {
+        "text": "<process name=\"查找替换\"><tool_code>doc_find_replace(findText=\"甲方\", replaceText=\"委托方\", replaceAll=true)</tool_code></process>"
+      },
+      {
+        "text": "<final>替换没有成功：编辑器 30 秒内没有回执。请确认文档已在编辑器中打开后再试一次。</final>"
+      }
+    ],
+    "toolStubs": {
+      "doc_find_replace": "{\"error\": \"操作超时：编辑器 30 秒内未返回回执\"}"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "doc_find_replace", "argsContain": { "findText": "甲方", "replaceText": "委托方" } }
+      ],
+      "structureContains": ["<tool_output status=\"FAILURE\">", "<final>"],
+      "bubbleEndStatus": "finished"
+    }
+  }
+]
