@@ -39,6 +39,7 @@ class ContextAssemblerServiceTest {
 
     private LegalTools legalTools;
     private ContextAssemblerService assembler;
+    private ClientCapabilityService capabilityService;
 
     @BeforeEach
     void setUp() {
@@ -56,9 +57,10 @@ class ContextAssemblerServiceTest {
         ContextCompressor contextCompressor = mock(ContextCompressor.class);
         when(contextCompressor.needsCompression(any(), any())).thenReturn(false);
 
+        capabilityService = new ClientCapabilityService();
         assembler = new ContextAssemblerService(
                 legalTools, messageService, fileContextLoader,
-                new AiContextProperties(), skillRouter, memoryManager, contextCompressor);
+                new AiContextProperties(), skillRouter, capabilityService, memoryManager, contextCompressor);
     }
 
     private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
@@ -195,7 +197,8 @@ class ContextAssemblerServiceTest {
         props.getFiles().setMaxCharsPerFile(500_000);
         ContextAssemblerService bigLimitAssembler = new ContextAssemblerService(
                 legalTools, mockedMessageService(), mock(FileContextLoader.class),
-                props, mockedSkillRouter(), mockedMemoryManager(), mockedCompressor());
+                props, mockedSkillRouter(), new ClientCapabilityService(),
+                mockedMemoryManager(), mockedCompressor());
 
         String huge = "甲".repeat(200_001);
         List<ChatMessage> messages = bigLimitAssembler.assemble(
@@ -216,6 +219,58 @@ class ContextAssemblerServiceTest {
         assertTrue(lastUser.contains("[系统提醒]"), "内联正文路径也应有末位提醒");
         assertTrue(lastUser.contains("劳动合同.docx"), "提醒里应点名当前文档");
         assertTrue(lastUser.contains("doc_list_project_files"), "应点名禁用 doc_list_project_files");
+    }
+
+    // ==== 末位提醒按会话客户端能力切换（Phase C）====
+    // office 会话的编辑工具是 office_*，提醒里再点名 doc_* 就是把模型往死路径上引。
+
+    @Test
+    @DisplayName("office 会话：末位提醒改用 office_* 口径，不再点名 doc_* 工具")
+    void reminderSwitchesToOfficeWordingForOfficeCapability() {
+        capabilityService.record("conv-1", "office");
+
+        String lastUser = assembleLastUserText(officeDoc("第一条 试用期为三个月……"));
+
+        assertTrue(lastUser.contains("[系统提醒]"), "office 会话也应有末位提醒");
+        assertTrue(lastUser.contains("office_replace_text"), "应指引用 office_* 工具修改文档");
+        assertTrue(lastUser.contains("修订"), "应说明修改以 Word 原生修订呈现");
+        assertFalse(lastUser.contains("doc_list_project_files"), "office 会话不应再点名 doc_* 工具");
+        assertFalse(lastUser.contains("doc_open_file"), "office 会话不应再点名 doc_* 工具");
+    }
+
+    @Test
+    @DisplayName("office 会话：system prompt 活跃文档段同样切换为 office_* 口径")
+    void systemPromptActiveDocSectionSwitchesForOfficeCapability() {
+        capabilityService.record("conv-1", "office");
+
+        String systemText = assembleSystemText(officeDoc("第一条 试用期为三个月……"));
+
+        assertTrue(systemText.contains("office_get_text"), "应指引用 office_* 工具读取");
+        // 基底 system_prompt.md 里仍有 doc_* 工具表（会话工具过滤才是硬闸门），
+        // 这里只断言活跃文档段自身的 LOWA 口径语句没有出现
+        assertFalse(systemText.contains("**无需也不要**调用"), "活跃文档段不应再是 doc_* 口径");
+    }
+
+    @Test
+    @DisplayName("none 会话：末位提醒为只读口径，不点名任何编辑工具")
+    void reminderReadOnlyForNoneCapability() {
+        capabilityService.record("conv-1", "none");
+
+        String lastUser = assembleLastUserText(officeDoc("第一条 试用期为三个月……"));
+
+        assertTrue(lastUser.contains("[系统提醒]"), "none 会话也应有末位提醒");
+        assertTrue(lastUser.contains("仅供阅读"), "应说明只读语义");
+        assertFalse(lastUser.contains("office_"), "none 会话不应点名 office_* 工具");
+        assertFalse(lastUser.contains("doc_list_project_files"), "none 会话不应点名 doc_* 工具");
+    }
+
+    @Test
+    @DisplayName("默认（未声明能力）会话：保持现状 doc_* 口径")
+    void reminderKeepsLowaWordingByDefault() {
+        String lastUser = assembleLastUserText(officeDoc("第一条 试用期为三个月……"));
+
+        assertTrue(lastUser.contains("doc_list_project_files"), "默认能力应保持 doc_* 口径");
+        assertFalse(lastUser.contains("office_replace_text"), "默认能力不应出现 office_* 口径");
     }
 
     // ---- 供自建 assembler 的 mock 工厂（与 setUp 同配方）----

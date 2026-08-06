@@ -1,6 +1,6 @@
 # WorkDeck Office 插件（Word/Excel/PPT）调研与规划
 
-日期：2026-08-06。状态：调研定稿，待立项。
+日期：2026-08-06。状态：调研定稿，已立项——维护者决策：插件必须可独立运行、不做 WPS、云端记忆立项且载体走 Git（官方 Git 服务器或用户自填标准 remote）。实施 spec 见 `docs/superpowers/specs/2026-08-06-office-addin-and-memory-sync.md`（其中推翻了本文第五节「本地直连为主」的预设，云端实例升为一等后端）。
 
 三条调研线：微软官方文档（Office Add-in 基建）、licensing-billing 领域（用户系统地基）、ai-chat 领域（记忆与上下文可共享性）。本文是三线汇总 + 架构建议 + 分期路线。
 

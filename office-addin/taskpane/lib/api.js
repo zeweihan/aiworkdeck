@@ -51,6 +51,25 @@ export async function postChat({ serverUrl, token }, payload) {
 }
 
 /**
+ * 回传一条 office_command 的执行结果（Phase C 工具桥）。
+ * payload: {requestId, ok, data|error}；后端按挂起表校验会话归属。
+ * 回传失败时后端工具会在超时后拿到明确错误，这里只记录不重试。
+ */
+export async function postOfficeResult({ serverUrl, token }, payload) {
+  const base = normalizeBaseUrl(serverUrl)
+  try {
+    const resp = await fetch(`${base}/api/agent/office/result`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify(payload)
+    })
+    if (!resp.ok) console.warn('[Addin] office 结果回传被拒绝', resp.status)
+  } catch (e) {
+    console.warn('[Addin] office 结果回传失败', e)
+  }
+}
+
+/**
  * 请求后端停止当前会话的执行。
  */
 export async function postCancel({ serverUrl, token }, conversationId) {

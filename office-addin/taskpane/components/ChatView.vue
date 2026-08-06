@@ -16,6 +16,11 @@
             <summary>思考过程</summary>
             <div class="thinking-body">{{ msg.thinking }}</div>
           </details>
+          <div v-if="msg.tools && msg.tools.length" class="tool-chips">
+            <span v-for="(tool, ti) in msg.tools" :key="ti" class="tool-chip" :class="tool.status">
+              {{ tool.label }}<span v-if="tool.status === 'running'">…</span><span v-else-if="tool.status === 'failed'">（失败）</span>
+            </span>
+          </div>
           <div class="bubble assistant-bubble">
             <span>{{ msg.text }}</span>
             <span v-if="msg.streaming" class="cursor"></span>
@@ -50,9 +55,10 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
-import { postChat, postCancel } from '../lib/api.js'
+import { postChat, postCancel, postOfficeResult } from '../lib/api.js'
 import { createSseConnection, createTagStreamParser } from '../lib/sse.js'
 import { readActiveDocument } from '../lib/wordDoc.js'
+import { executeOfficeCommand, commandDisplayName } from '../lib/officeExecutor.js'
 
 const props = defineProps({
   settings: { type: Object, required: true },
@@ -105,8 +111,38 @@ function handleEvent(evt, dataStr) {
   } else if (evt === 'cancelled') {
     if (currentAssistant && !currentAssistant.text) currentAssistant.text = '（已停止）'
     finishStreaming()
+  } else if (evt === 'client_action') {
+    handleClientAction(dataStr)
   }
-  // connected/heartbeat/client_action/plan_update 等其余事件：MVP 先忽略
+  // connected/heartbeat/plan_update 等其余事件：先忽略
+}
+
+/**
+ * office_command 执行链（Phase C 工具桥）：
+ * 后端 OfficeBridgeService 下发 {tool:'office_command', requestId, command, args}
+ * → Office.js 执行 → POST /api/agent/office/result 回传。
+ * 其余 client_action（editor_command 等 LOWA 契约）与本插件无关，忽略。
+ */
+async function handleClientAction(dataStr) {
+  let action = null
+  try { action = JSON.parse(dataStr) } catch (e) { return }
+  if (!action || action.tool !== 'office_command' || !action.requestId) return
+
+  const chip = reactive({ label: commandDisplayName(action.command), status: 'running' })
+  if (currentAssistant) {
+    if (!currentAssistant.tools) currentAssistant.tools = []
+    currentAssistant.tools.push(chip)
+    scrollToBottom()
+  }
+
+  const result = await executeOfficeCommand(action.command, action.args)
+  chip.status = result.ok ? 'done' : 'failed'
+  await postOfficeResult(props.settings, {
+    requestId: action.requestId,
+    ok: result.ok,
+    data: result.ok ? result.data : null,
+    error: result.ok ? null : result.error
+  })
 }
 
 async function ensureConnection() {
@@ -141,7 +177,7 @@ async function send() {
   input.value = ''
   messages.value.push({ role: 'user', text: prompt })
 
-  const assistant = reactive({ role: 'assistant', text: '', thinking: '', streaming: true, error: '' })
+  const assistant = reactive({ role: 'assistant', text: '', thinking: '', streaming: true, error: '', tools: [] })
   messages.value.push(assistant)
   currentAssistant = assistant
   parser = createTagStreamParser({
@@ -166,7 +202,9 @@ async function send() {
       conversationId,
       message: prompt,
       mode: 'AGENT',
-      activeContext
+      activeContext,
+      // 声明客户端能力（Phase C）：后端据此让本会话只见 office_* 工具、隐藏 doc_*
+      clientCapability: 'office'
     })
   } catch (e) {
     assistant.error = e.message || '消息发送失败'
@@ -242,6 +280,26 @@ onBeforeUnmount(() => {
   background: var(--awd-surface);
   border: 1px solid var(--awd-border);
 }
+
+.tool-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.tool-chip {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--awd-border);
+  background: var(--awd-surface);
+  color: var(--awd-text-secondary);
+  font-size: 11px;
+}
+
+.tool-chip.done { color: var(--awd-text-secondary); }
+.tool-chip.failed { color: var(--awd-danger); border-color: var(--awd-danger); }
 
 .thinking {
   margin-bottom: 6px;
