@@ -1017,17 +1017,47 @@ function resolveShape(page, p) {
   }
   return { error: '缺少 shapeName 或 matchText 参数' };
 }
-// 备注页文字：备注页上除标题镜像外通常有一个 NotesTextShape 承载正文。
-function notesPageText(notesPage) {
-  if (!notesPage) return '';
+// 备注页正文形状定位。r4 真机验证发现：pptx 经 oox 过滤器导入后，备注页上的
+// 占位符形状（缩略图/备注正文/页码）一律只 supportsService('presentation.Shape')
+// 这个通用服务，具体子类型（NotesTextShape/SlideNumberShape 等）不会出现在
+// supportsService/getSupportedServiceNames 里——原语按 NotesTextShape 判定会
+// 对真实 pptx 100% 落空（swriter/scalc 的 isWriterDoc/isCalcDoc 靠 xModel 顶层
+// 服务判型不受影响，这是 sd 占位符子类型独有的坑）。三级回退定位：
+//  1) 具体服务判定（若未来某个 LO 版本/ODP 原生文档确实实现了它，优先信）；
+//  2) 按名字（"Notes Placeholder" 是 PowerPoint/python-pptx 备注母版模板的默认
+//     英文命名，与文档 UI 语言无关，比 PlaceholderText 的本地化提示文字稳）；
+//  3) 兜底：排除已知非备注占位符（缩略图/页码/日期/页脚/页眉）后，取支持
+//     drawing.Text 的形状里面积最大的那个（备注正文框通常占据版面主体）。
+function findNotesTextShape(notesPage) {
+  if (!notesPage) return null;
   const n = notesPage.getCount();
   for (let i = 0; i < n; i++) {
     let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
-    try {
-      if (shape.supportsService('com.sun.star.presentation.NotesTextShape')) return shapeText(shape);
-    } catch (e) {}
+    try { if (shape.supportsService('com.sun.star.presentation.NotesTextShape')) return shape; } catch (e) {}
   }
-  return '';
+  const NON_NOTES_NAME = /slide image|slide number|date placeholder|footer placeholder|header placeholder/i;
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
+    let name = ''; try { name = shape.getName ? shape.getName() : ''; } catch (e) {}
+    if (/notes/i.test(name) && !NON_NOTES_NAME.test(name)) return shape;
+  }
+  let best = null, bestArea = -1;
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
+    let name = ''; try { name = shape.getName ? shape.getName() : ''; } catch (e) {}
+    if (NON_NOTES_NAME.test(name)) continue;
+    let hasText = false; try { hasText = shape.supportsService('com.sun.star.drawing.Text'); } catch (e) {}
+    if (!hasText) continue;
+    let size = null; try { size = shape.getSize(); } catch (e) {}
+    const area = size ? Number(size.Width) * Number(size.Height) : 0;
+    if (area > bestArea) { bestArea = area; best = shape; }
+  }
+  return best;
+}
+// 备注页文字：找到备注正文形状后读回其文字（找不到则视为无备注，不是错误）。
+function notesPageText(notesPage) {
+  const shape = findNotesTextShape(notesPage);
+  return shape ? shapeText(shape) : '';
 }
 // 版式名最佳努力映射（AutoLayout 是 short 常量，未在本次调研中逐值核对 idl，
 // 仅覆盖几个常被引用的值；命中不了就回退成 null，前端/模型仍能用数字 layout
@@ -4123,13 +4153,8 @@ const EXEC = {
     let notesPage;
     try { notesPage = r0.page.getNotesPage(); } catch (e) { return slideFail('获取备注页失败: ' + errStr(e)); }
     if (!notesPage) return slideFail('该幻灯片没有备注页');
-    const n = notesPage.getCount();
-    let noteShape = null;
-    for (let i = 0; i < n; i++) {
-      let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
-      try { if (shape.supportsService('com.sun.star.presentation.NotesTextShape')) { noteShape = shape; break; } } catch (e) {}
-    }
-    if (!noteShape) return slideFail('该幻灯片没有备注文本框（NotesTextShape 未找到）');
+    const noteShape = findNotesTextShape(notesPage);
+    if (!noteShape) return slideFail('该幻灯片没有备注文本框（备注正文形状未找到）');
     let previousText = ''; try { previousText = shapeText(noteShape); } catch (e) {}
     try { noteShape.getText().setString(text); } catch (e) { return slideFail('写入备注失败: ' + errStr(e)); }
     return { success: true, slideNumber: r0.index + 1, previousText: previousText };
