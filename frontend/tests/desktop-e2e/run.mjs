@@ -15,7 +15,8 @@
 // 注意：会在屏幕上弹出一个 dev Electron 窗口，跑完自动关闭。
 // PR-A 后无登录：local-mode 免登直达，不再注册 qa_desk 账号、不再注入会话。
 //
-// Env：DESKTOP_E2E_DEVURL（默认 http://localhost:5174）、APP_E2E_BACKEND（默认 9696）
+// Env：DESKTOP_E2E_DEVURL（默认 http://localhost:5174）、APP_E2E_BACKEND（默认 9696；
+// 端口会经 CHECKBA_BACKEND_PORT 传给 Electron 壳，渲染层因此跟测试用同一个后端）
 
 import { spawn, execSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -28,6 +29,13 @@ const frontendDir = path.resolve(here, '../..')
 const desktopDir = path.resolve(frontendDir, '../desktop')
 const DEVURL = process.env.DESKTOP_E2E_DEVURL || 'http://localhost:5174'
 const BACKEND = process.env.APP_E2E_BACKEND || 'http://127.0.0.1:9696'
+// 渲染层的后端地址由桌面壳注入（BrowserWindow additionalArguments → preload →
+// window.checkbaDesktop.apiBaseUrl），api.js 最优先读它——比 VITE_API_BASE_URL 还
+// 靠前。所以只把 dev server 指向 APP_E2E_BACKEND 不够：壳仍会注入 dev 默认 9696，
+// 页面便去了另一个后端，而这里 provision 的项目在 APP_E2E_BACKEND 上。
+// CHECKBA_BACKEND_PORT 是 backend-service.js 留的显式覆盖口，同时让壳复用这个已在
+// 跑的后端（verifyReuse 探 /api/admin/wizard）而不是另起一个 java。
+const BACKEND_PORT = new URL(BACKEND).port
 const CDP_PORT = 9333
 const MARKER = 'QA_SAVE_MARKER_' + Date.now()
 
@@ -76,7 +84,12 @@ async function api(ep, opts = {}) {
 console.log('启动 dev Electron（屏幕会出现窗口，结束自动关闭）...')
 const elec = spawn('npx', ['electron', '.', '--remote-debugging-port=' + CDP_PORT], {
   cwd: desktopDir,
-  env: { ...process.env, AIWORKDECK_DESKTOP_DEV: '1', CHECKBA_DEV_SERVER_URL: DEVURL },
+  env: {
+    ...process.env,
+    AIWORKDECK_DESKTOP_DEV: '1',
+    CHECKBA_DEV_SERVER_URL: DEVURL,
+    CHECKBA_BACKEND_PORT: BACKEND_PORT,
+  },
   stdio: ['ignore', 'pipe', 'pipe'],
 })
 const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'desktop-e2e-electron.log'))
@@ -106,15 +119,43 @@ try {
   }
   if (!page) throw new Error('找不到主渲染页')
 
-  const mouseClickSel = async (sel) => {
-    await page.waitForSelector(sel, { timeout: 15000 })
-    const box = await page.evaluate((s) => {
-      const el = document.querySelector(s); if (!el) return null
+  // 壳注入的基址若和 provision 用的后端不是同一个，后面每一步都会以"点了没反应"
+  // 的形态超时（文件建在别的库里/根本建不出来）。这里当场报死，别让人去查 UI。
+  {
+    const injected = await page.evaluate(() => (window.checkbaDesktop || {}).apiBaseUrl || null)
+    if (!injected || new URL(injected).port !== BACKEND_PORT) {
+      throw new Error('渲染层后端(' + injected + ') 与测试后端(' + BACKEND + ') 不一致')
+    }
+  }
+
+  // 坐标点击的通病：任何全屏浮层都会把点吃掉，而现象只是"点了没反应"——真正的
+  // 报错落在下一个 waitFor 上，十几秒后一句没头没尾的超时。dev 的 vite-error-overlay
+  // 就这么骗过一次（node_modules 落后于新增依赖，vite 推编译错误盖满视口）。
+  // 命中校验把它当场变成可读的错误。
+  const HIT_CHECK = `
+    function hitCheck(el) {
       const r = el.getBoundingClientRect()
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
-    }, sel)
+      const x = r.x + r.width / 2, y = r.y + r.height / 2
+      const hit = document.elementFromPoint(x, y)
+      if (hit && el.contains(hit)) return { x, y }
+      let who = hit ? hit.tagName.toLowerCase() : '(空白)'
+      try { if (hit && hit.shadowRoot) who += ': ' + hit.shadowRoot.textContent.replace(/\\s+/g, ' ').trim().slice(0, 200) } catch (e) {}
+      return { x, y, blockedBy: who }
+    }`
+  const clickAt = async (box, what) => {
+    if (!box) throw new Error('找不到可点元素: ' + what)
+    if (box.blockedBy) throw new Error('点击被遮挡[' + box.blockedBy + ']: ' + what)
     await page.mouse.click(box.x, box.y)
     await sleep(700)
+  }
+
+  const mouseClickSel = async (sel) => {
+    await page.waitForSelector(sel, { timeout: 15000 })
+    const box = await page.evaluate((check, s) => {
+      const el = document.querySelector(s); if (!el) return null
+      return eval(check + '; hitCheck(el)')
+    }, HIT_CHECK, sel)
+    await clickAt(box, sel)
   }
 
   await step('免登直达进入项目（PR-A 去登录：不注会话）', async () => {
@@ -123,16 +164,13 @@ try {
   })
 
   const mouseClickText = async (label) => {
-    const box = await page.evaluate((lbl) => {
+    const box = await page.evaluate((check, lbl) => {
       const els = [...document.querySelectorAll('*')].filter((el) =>
         el.children.length === 0 && el.innerText && el.offsetParent !== null && el.innerText.trim().includes(lbl))
       const el = els[0]; if (!el) return null
-      const r = el.getBoundingClientRect()
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
-    }, label)
-    if (!box) throw new Error('找不到文本: ' + label)
-    await page.mouse.click(box.x, box.y)
-    await sleep(700)
+      return eval(check + '; hitCheck(el)')
+    }, HIT_CHECK, label)
+    await clickAt(box, '文本 ' + label)
   }
 
   await step('新建 Word 文档并点击打开（编辑器 webview）', async () => {
