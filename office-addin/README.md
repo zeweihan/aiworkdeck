@@ -2,7 +2,7 @@
 
 Microsoft Office Add-in（spec Phase B/C）。任务窗格 = Vue3 + Vite；
 office.js 从微软官方 CDN 以 script 标签引入，不打包进 bundle。
-宿主支持 Word（全功能，含原生修订）、Excel（区域读写/查找）、
+宿主支持 Word（全功能，含原生修订）、Excel（区域读写/查找 + 单元格格式/边框/行列/合并/排序/工作表/冻结窗格/公式），
 PowerPoint（页文本读取/跨页替换，需 PowerPointApi 1.4）。
 
 插件独立连接后端实例（律所自建服务器 / 官方云 / 同机桌面版 `http://127.0.0.1:5269`），
@@ -146,23 +146,39 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
 17. 让 AI「把 B 列的单价都涨 10% 写到 D 列」→ 出现「读取区域」「写入区域」chip，
     单元格直接生效（Excel 没有修订机制，靠 Ctrl+Z 撤销）。
 18. 让 AI「找找表里哪里有华为」→ 出现「查找单元格」chip，回复列出命中单元格地址。
-19. 观察整轮对话：Excel 会话不应出现 Word 面工具（office_replace_text 等）与 doc_*/sheet_*。
+19. 让 AI「给表头那行加粗、居中、填充浅灰色」→ 出现「设置单元格格式」chip；再让它
+    「给这张表加个外边框」→ 出现「设置边框」chip；「在第 3 行上面插一行」再
+    「把 B 列到 D 列的列宽设成 100」→ 出现「编辑行列」chip。
+20. 让 AI「按第一列升序排一下这个区域」→ 出现「排序」chip；「新建一个叫汇总的工作表」
+    →「管理工作表」chip；「冻结第一行」→「冻结窗格」chip。
+21. 让 AI「在 D 列写公式算 B 列乘以 1.1」→ 出现「写入公式」chip，公式按 Excel 原生
+    文法落地（逗号分隔、`Sheet1!A1` 跨表引用）；故意让它写一个引用不存在工作表的公式，
+    确认它能从 formulaErrors 里看到 #REF!/#NAME? 并自纠。
+22. 让 AI「这个工作簿有几张表，各自多大」→ 出现「读取总览」chip，回复列出各表名称/
+    是否活动/已用区域尺寸；让它「带我去看看 F10 那块」→ 出现「选中区域」chip，
+    Excel 视图跳转并选中该区域。
+23. 让 AI「给这个区域加上筛选」→ 出现「设置自动筛选」chip，表头出现下拉箭头
+    （不预设筛选条件）；再让它「把筛选去掉」→ 同一 chip，`remove` 动作生效。
+24. 让 AI「金额超过 1000 的标红」→ 出现「设置条件格式」chip（cellValue + greaterThan）；
+    再让它「换成用颜色深浅表示数值大小」→ 同一 chip 但 ruleType=colorScale，
+    确认第二次调用替换而不是叠加第一次的规则。
+25. 观察整轮对话：Excel 会话不应出现 Word 面工具（office_replace_text 等）与 doc_*/sheet_*。
 
 ### PowerPoint 场景（officeHost=powerpoint，office_ppt_* 工具面）
 
-20. 在 PowerPoint 中 sideload 并打开任务窗格，打开一份演示文稿，
+26. 在 PowerPoint 中 sideload 并打开任务窗格，打开一份演示文稿，
     问「这份 PPT 讲了什么」→ 回复引用各页文本（第 N 页：…）。
-21. 让 AI「把标题里的 2025 都改成 2026」→ 出现「替换幻灯片文本」chip，
+27. 让 AI「把标题里的 2025 都改成 2026」→ 出现「替换幻灯片文本」chip，
     跨页替换直接生效；回复说明改了哪些页。
-22. 旧版 PowerPoint（不支持 PowerPointApi 1.4）上执行 20/21 → 工具 chip 显示失败，
+28. 旧版 PowerPoint（不支持 PowerPointApi 1.4）上执行 26/27 → 工具 chip 显示失败，
     回复解释版本不支持（不是 30 秒超时空转）。
 
 ### 连接链路场景
 
-23. 对话进行中断网 10 秒再恢复 → 出现「连接中断，正在自动重连……」提示，
+29. 对话进行中断网 10 秒再恢复 → 出现「连接中断，正在自动重连……」提示，
     恢复后提示消失、对话可继续；断线期间跑完的回复不会卡住输入框
     （重连后按 run_state 兜底解锁）。
-24. 设置页「用账户 Key 连接」：粘贴有效 awdk_ Key → 一键换取 awdt_ 令牌并直接进入
+30. 设置页「用账户 Key 连接」：粘贴有效 awdk_ Key → 一键换取 awdt_ 令牌并直接进入
     对话视图；重开任务窗格后连接仍在（保存的是 awdt_，Key 本身不落盘）。
     对未开启账户桥接的服务器 → 提示「该服务器未开启账户直连，请改用设备令牌」。
 
@@ -176,8 +192,12 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
 - office_* 工具桥命令集：Word 面 get_text / get_selection / search / replace_text /
   insert_text / add_comment / format_text / set_paragraph_format / get_formatting /
   set_numbering / format_table / apply_standard_format；
-  Excel 面 excel_get_range / excel_set_values /
-  excel_search；PPT 面 ppt_get_slides / ppt_replace_text。结果回传
+  Excel 面 excel_get_range / excel_set_values / excel_search / excel_format_cells /
+  excel_set_borders / excel_edit_rows_cols / excel_merge_cells / excel_sort_range /
+  excel_manage_sheets / excel_freeze_panes / excel_set_formulas / excel_get_overview /
+  excel_select_range / excel_set_autofilter / excel_conditional_format（15 个，与桌面端
+  sheet_* 原语数量对齐）；
+  PPT 面 ppt_get_slides / ppt_replace_text。结果回传
   `POST /api/agent/office/result`（body `{requestId, ok, data|error}`，
   后端按挂起表做会话归属校验）。后端按 chat 请求的 officeHost 只暴露当前宿主的工具面。
 - Word 修订与批注依赖 WordApi 1.4（Word 2019+/Microsoft 365）；不支持时替换/插入降级为
@@ -198,6 +218,18 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
 - Excel 区域读写基于 ExcelApi 1.1/1.2（getResizedRange），查找是客户端在已用区域
   内扫描（兼容旧宿主，不依赖 ExcelApi 1.9 的 findAll）；单次写入上限 2000 单元格，
   读取返回上限 500 行。Excel/PowerPoint 没有修订机制，写入直接生效。
+- Excel 格式/结构面（excel_format_cells / excel_set_borders / excel_edit_rows_cols /
+  excel_merge_cells / excel_sort_range / excel_manage_sheets / excel_freeze_panes /
+  excel_set_formulas / excel_get_overview / excel_select_range / excel_set_autofilter /
+  excel_conditional_format）：单元格格式/边框/行列插删/选中区域是 ExcelApi 1.1，
+  合并/排序/行高列宽是 ExcelApi 1.2，条件格式是 ExcelApi 1.6，自动筛选是 ExcelApi 1.9，
+  冻结窗格是 ExcelApi 1.7（旧宿主均返回明确错误而非空等）。删除工作表在只剩
+  一张表时会被拒绝（不依赖 Excel 原生异常，前端先查总数）。写公式必须用 Excel 原生
+  文法（逗号分隔参数、`Sheet1!A1` 跨表引用），与桌面端 LOWA 电子表格原语的分号/点号
+  文法刻意不同，两条桥各自忠于宿主原生语法；写入后自动读回结果，公式错误（`#REF!`
+  等）收进返回值 `formulaErrors` 供模型自纠。自动筛选首版只做套上/清除筛选，不支持
+  按具体条件筛值；条件格式每次套用会先清空该区域现有规则再套新规则（不叠加），
+  只做 cellValue（数值比较高亮）与 colorScale（固定红黄绿三色刻度）两类规则。
 - PowerPoint 文本读写依赖 PowerPointApi 1.4（TextFrame/TextRange，Microsoft 365
   较新版本才有；2019/2021 永久版不支持）；旧版宿主返回明确错误。修改只覆盖形状文本
   （表格/SmartArt/母版占位内容不在 v1 范围）。

@@ -258,7 +258,14 @@ public class ContextAssemblerService {
                             systemText.append("该工作簿在用户本机的 Microsoft Excel 中打开，活动工作表内容已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_excel_* 工具（office_excel_get_range / ");
                             systemText.append("office_excel_set_values / office_excel_search），写入直接生效");
-                            systemText.append("（Excel 没有修订机制）。本会话没有 doc_* / sheet_* 工具，也没有 Word 面的 office_* 工具。\n\n");
+                            systemText.append("（Excel 没有修订机制）。表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式）");
+                            systemText.append("用对应 office_excel_* 工具（office_excel_format_cells / office_excel_set_borders / ");
+                            systemText.append("office_excel_edit_rows_cols / office_excel_merge_cells / office_excel_sort_range / ");
+                            systemText.append("office_excel_manage_sheets / office_excel_freeze_panes / office_excel_set_formulas / ");
+                            systemText.append("office_excel_set_autofilter / office_excel_conditional_format）。");
+                            systemText.append("改表前可先用 office_excel_get_overview 看工作表清单与各表尺寸，");
+                            systemText.append("office_excel_select_range 可把用户视图定位到某处。");
+                            systemText.append("本会话没有 doc_* / sheet_* 工具，也没有 Word 面的 office_* 工具。\n\n");
                         }
                         case POWERPOINT -> {
                             systemText.append("该演示文稿在用户本机的 Microsoft PowerPoint 中打开，各页文本已随本请求内联注入下方。");
@@ -465,7 +472,13 @@ public class ContextAssemblerService {
                         + "活动工作表内容已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前表格」「改一下」等都指它——"
                         + "读取/修改一律调用 office_excel_* 工具（office_excel_get_range / "
-                        + "office_excel_set_values / office_excel_search），写入直接生效（Excel 没有修订机制）。";
+                        + "office_excel_set_values / office_excel_search），写入直接生效（Excel 没有修订机制）；"
+                        + "表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式/筛选/条件格式）用对应 office_excel_* 工具"
+                        + "（office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / "
+                        + "office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / "
+                        + "office_excel_freeze_panes / office_excel_set_formulas / office_excel_set_autofilter / "
+                        + "office_excel_conditional_format），office_excel_get_overview 可先看全局、"
+                        + "office_excel_select_range 可定位视图。";
                 case POWERPOINT -> "\n\n[系统提醒] 用户此刻在 Microsoft PowerPoint 中打开着演示文稿" + docLabel + "，"
                         + "各页文本已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前演示文稿」「改一下」等都指它——"
