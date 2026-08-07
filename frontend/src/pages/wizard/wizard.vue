@@ -24,7 +24,7 @@
             v-for="opt in providerOptions"
             :key="opt.value"
             class="provider-card"
-            :class="{ selected: form.ai.activeProvider === opt.value, unavailable: opt.unavailable }"
+            :class="{ selected: form.ai.activeProvider === opt.value }"
             @tap="pickProvider(opt)"
           >
             <view class="provider-head">
@@ -35,7 +35,6 @@
               </text>
             </view>
             <text class="provider-desc">{{ opt.desc }}</text>
-            <text v-if="opt.unavailable" class="provider-blocked">{{ opt.hint }}</text>
             <view v-if="form.ai.activeProvider === opt.value && opt.setupHint" class="provider-setup">
               <text class="setup-line">{{ opt.setupHint }}</text>
               <text class="setup-cmd" selectable>{{ opt.setupCmd }}</text>
@@ -47,6 +46,44 @@
                 v-model="apiKeys[opt.value]"
                 :placeholder="opt.keyPlaceholder"
               />
+            </view>
+            <!-- 平台通道的连接就地完成：把「进入产品后再去系统管理粘贴 Key」的死路收回向导内 -->
+            <view v-if="form.ai.activeProvider === opt.value && opt.accountField" class="provider-account">
+              <template v-if="!platformAiAvailable">
+                <text class="account-line">
+                  桌面端无需注册登录：在官网账户页生成一枚账户 Key（awdk_ 开头），粘贴到下面直接连接。Key 只保存在本机，随时可以断开。
+                </text>
+                <view class="account-actions">
+                  <text class="account-link" @tap="openAccountSite">前往官网获取 Key</text>
+                </view>
+                <input
+                  class="text-input"
+                  v-model="accountKey"
+                  placeholder="粘贴 awdk_ 开头的账户 Key"
+                />
+                <button
+                  class="account-btn"
+                  :disabled="connectingAccount"
+                  @tap="handleConnectAccount"
+                >
+                  {{ connectingAccount ? '正在连接…' : '连接账户' }}
+                </button>
+              </template>
+              <template v-else-if="platformNeedsAllocation">
+                <text class="account-line">
+                  账户已连接{{ accountLabel }}。还差一步：到官网账户页从余额分配 AI 额度，分配完点「重新检查」。
+                </text>
+                <view class="account-actions">
+                  <text class="account-link" @tap="openAccountSite">前往官网分配额度</text>
+                  <text class="account-link" @tap="handleRecheckAccount">
+                    {{ recheckingAccount ? '检查中…' : '重新检查' }}
+                  </text>
+                </view>
+              </template>
+              <template v-else>
+                <text class="account-line account-ok">账户已连接{{ accountLabel }}，可以直接开始使用。</text>
+              </template>
+              <text v-if="accountError" class="account-error">{{ accountError }}</text>
             </view>
           </view>
         </view>
@@ -131,8 +168,14 @@ import {
   submitWizard,
   getAccountStatus,
   getAccountUsage,
+  connectAccount,
 } from '@/services/api.js'
+import { refreshEntitlements } from '@/composables/useEntitlement.js'
 import { isDesktopHost } from '@/services/host.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
+
+// 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里（与 admin 页同一地址）
+const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
 
 export default {
   name: 'FirstRunWizard',
@@ -145,6 +188,11 @@ export default {
       // 已连接账户（本地读盘）+ 已在官网从余额分配 AI 额度（用量接口）。
       platformAiAvailable: false,
       platformNeedsAllocation: false,
+      accountName: '',
+      accountKey: '',
+      accountError: '',
+      connectingAccount: false,
+      recheckingAccount: false,
       // 各云端提供商的 key 暂存：切换选项不丢已填内容，提交时只带选中者
       apiKeys: {
         OPENROUTER: '',
@@ -199,14 +247,11 @@ export default {
   },
   computed: {
     // 「AI Workdeck 云端」置顶：用账户 Key 解锁的用户买的就是这条通道，
-    // 不列出来他会被引导去再配一家别的 Key。前置条件不满足时展示但不可选并给出下一步
-    // （隐藏会让人发现不了，直接可选又会拖到发消息那一刻才报错）。
+    // 不列出来他会被引导去再配一家别的 Key。选中即就地展开连接块——
+    // 前置条件不满足时**不能只给一句「进入产品后再去设置里连」**，那是死路：
+    // 用户在向导里没有任何办法把它变成可用，只能先选一家别的凑合。
     providerOptions() {
       if (!this.isDesktop) return this.byokOptions
-      let hint = ''
-      // 试用码解锁的用户走到这里账户是未连接的，引导指向进入产品后可用的入口
-      if (!this.platformAiAvailable) hint = '需先连接账户：进入产品后在「系统管理 → 账户与用量」粘贴官网账户 Key'
-      else if (this.platformNeedsAllocation) hint = '需先在官网账户页从余额分配 AI 额度'
       return [
         {
           value: 'AWD_CLOUD',
@@ -214,11 +259,13 @@ export default {
           local: false,
           desc: '用账户余额直接调用平台模型，无需自备 Key。按实际扣费结算，用量在「系统管理 → 账户与用量」可查。',
           keyField: null,
-          hint,
-          unavailable: !!hint,
+          accountField: true,
         },
         ...this.byokOptions,
       ]
+    },
+    accountLabel() {
+      return this.accountName ? `（${this.accountName}）` : ''
     },
   },
   onLoad() {
@@ -234,6 +281,7 @@ export default {
       try {
         const s = await getAccountStatus()
         this.platformAiAvailable = !!(s && s.platformAiAvailable)
+        this.accountName = (s && (s.displayName || s.username)) || ''
       } catch (e) {
         this.platformAiAvailable = false
         return
@@ -251,13 +299,47 @@ export default {
         this.form.ai.activeProvider = 'AWD_CLOUD'
       }
     },
-    // 不可选项给出下一步，而不是静默不响应（与 admin 页 onPickProvider 同口径）
     pickProvider(opt) {
-      if (opt.unavailable) {
-        uni.showToast({ title: opt.hint || '当前不可用', icon: 'none' })
+      this.form.ai.activeProvider = opt.value
+    },
+    openAccountSite() {
+      openExternalUrl(ACCOUNT_SITE_URL)
+    },
+    // 就地连接账户：与 admin 页 onConnectAccount 同一条链路（连接 → 重取状态 → 权益缓存失效）
+    async handleConnectAccount() {
+      const key = (this.accountKey || '').replace(/\s+/g, '')
+      if (!key) {
+        this.accountError = '请先粘贴账户 Key'
         return
       }
-      this.form.ai.activeProvider = opt.value
+      this.accountError = ''
+      this.connectingAccount = true
+      try {
+        await connectAccount(key)
+        this.accountKey = ''
+        await this.loadPlatformAi()
+        // 已购功能解锁随账户走，连接后必须让权益缓存失效重取
+        await refreshEntitlements(true)
+        uni.showToast({ title: '已连接账户', icon: 'none' })
+      } catch (e) {
+        this.accountError = (e && e.message) || '连接失败，请检查 Key 后重试'
+      } finally {
+        this.connectingAccount = false
+      }
+    },
+    // 用户到官网分配完额度回到向导：不必重启应用，重查一次即可
+    async handleRecheckAccount() {
+      if (this.recheckingAccount) return
+      this.accountError = ''
+      this.recheckingAccount = true
+      try {
+        await this.loadPlatformAi()
+        if (this.platformNeedsAllocation) {
+          this.accountError = '还没查到已分配的 AI 额度，稍等片刻再试'
+        }
+      } finally {
+        this.recheckingAccount = false
+      }
     },
     async checkStatus() {
       try {
@@ -318,6 +400,15 @@ export default {
       }
       if (provider === 'GEMINI' && !this.apiKeys.GEMINI.trim()) {
         uni.showToast({ title: '请填写 Gemini API Key', icon: 'none' })
+        return
+      }
+      // 平台通道两个前置条件缺一都会在发第一条消息时才报错，拦在这里并指出下一步
+      if (provider === 'AWD_CLOUD' && !this.platformAiAvailable) {
+        uni.showToast({ title: '请先在上方连接账户', icon: 'none' })
+        return
+      }
+      if (provider === 'AWD_CLOUD' && this.platformNeedsAllocation) {
+        uni.showToast({ title: '请先在官网账户页分配 AI 额度', icon: 'none' })
         return
       }
 
@@ -489,19 +580,6 @@ export default {
   background: rgba(37, 99, 235, 0.04);
 }
 
-.provider-card.unavailable {
-  opacity: 0.62;
-  background: #f8fafc;
-}
-
-.provider-blocked {
-  display: block;
-  font-size: 12px;
-  color: #b45309;
-  margin-top: 6px;
-  line-height: 1.6;
-}
-
 .provider-head {
   display: flex;
   align-items: center;
@@ -555,6 +633,63 @@ export default {
 
 .provider-key {
   margin-top: 10px;
+}
+
+.provider-account {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px dashed rgba(148, 163, 184, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.account-line {
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.7;
+}
+
+.account-ok {
+  color: #166534;
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.account-link {
+  font-size: 12px;
+  color: #1d4ed8;
+  cursor: pointer;
+}
+
+.account-link:hover {
+  text-decoration: underline;
+}
+
+.account-btn {
+  height: 36px;
+  line-height: 36px;
+  border-radius: 8px;
+  background: #1e293b;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.account-btn[disabled] {
+  opacity: 0.6;
+}
+
+.account-error {
+  font-size: 12px;
+  color: #dc2626;
+  line-height: 1.6;
 }
 
 .provider-setup {
