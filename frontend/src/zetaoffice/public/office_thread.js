@@ -846,6 +846,8 @@ function sheetRangeName(addr) {
   const b = colLetterOf(addr.EndColumn) + (addr.EndRow + 1);
   return a === b ? a : a + ':' + b;
 }
+// 绝对引用形式的单元格坐标（'$A$1'），命名区域公式拼接用。
+function absCellRef(col, row) { return '$' + colLetterOf(col) + '$' + (row + 1); }
 function usedRangeAddress(sheet) {
   const cur = sheet.createCursor();
   cur.gotoStartOfUsedArea(false);
@@ -3499,6 +3501,379 @@ const EXEC = {
         rule: String(p.rule), entries: readBack.getCount(), styleName: styleName,
       };
     } catch (e) { return { success: false, message: '条件格式设置失败: ' + errStr(e) }; }
+  },
+  // ---- [Calc 二期] 批注 / 数据验证 / 图表 / 搜索 / 命名区域 / 保护 / 分组 / 透视表 ----
+  // 文档能力矩阵（4.2 节）Excel 待办：此前 sheet_* 对这批能力零支持。
+  // [表格·批注] 单元格批注（XSheetAnnotations）。Calc 批注没有 Word 那种线程
+  // 回复/解决态概念——本组只做增/查/删三件事，不做 reply/resolve，工具描述里
+  // 已向模型说明这条与 Word 批注的差异。
+  sheet_add_comment(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const cellStr = p && p.cell ? String(p.cell).trim() : '';
+    const text = p && p.text != null ? String(p.text) : '';
+    if (!cellStr) return tableFail('sheet_add_comment requires {cell}（如 "B2"）');
+    if (!text) return tableFail('sheet_add_comment requires {text}');
+    const cellRange = sheetRange(sheet, cellStr);
+    if (!cellRange) return tableFail('无效的单元格: ' + cellStr);
+    const addr = cellRange.getRangeAddress();
+    let annotations;
+    try { annotations = sheet.getAnnotations(); } catch (e) { return tableFail('获取批注集合失败: ' + errStr(e)); }
+    let anno;
+    try {
+      anno = annotations.insertNew(
+        new css.table.CellAddress({ Sheet: addr.Sheet, Column: addr.StartColumn, Row: addr.StartRow }), text);
+    } catch (e) { return tableFail('新建批注失败: ' + errStr(e)); }
+    let author = '', date = '';
+    try { author = String(anno.getAuthor() || ''); } catch (e) {}
+    try { date = String(anno.getDate() || ''); } catch (e) {}
+    try { ctrl.select(cellRange); } catch (e) {}
+    return {
+      success: true, cell: colLetterOf(addr.StartColumn) + (addr.StartRow + 1),
+      sheet: sheet.getName(), author: author, date: date, text: text,
+    };
+  },
+  sheet_get_comments(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    let annotations;
+    try { annotations = sheet.getAnnotations(); } catch (e) { return tableFail('获取批注集合失败: ' + errStr(e)); }
+    const out = [];
+    try {
+      const n = annotations.getCount();
+      for (let i = 0; i < n; i++) {
+        const anno = annotations.getByIndex(i);
+        const pos = anno.getPosition();
+        const item = { index: i, cell: colLetterOf(pos.Column) + (pos.Row + 1) };
+        try { item.author = String(anno.getAuthor() || ''); } catch (e) {}
+        try { item.date = String(anno.getDate() || ''); } catch (e) {}
+        try { item.text = String(anno.getString() || '').slice(0, 500); } catch (e) {}
+        out.push(item);
+      }
+    } catch (e) { return tableFail(errStr(e)); }
+    return { success: true, sheet: sheet.getName(), count: out.length, comments: out };
+  },
+  sheet_delete_comment(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const cellStr = p && p.cell ? String(p.cell).trim() : '';
+    if (!cellStr) return tableFail('sheet_delete_comment requires {cell}（如 "B2"）');
+    const cellRange = sheetRange(sheet, cellStr);
+    if (!cellRange) return tableFail('无效的单元格: ' + cellStr);
+    const addr = cellRange.getRangeAddress();
+    let annotations;
+    try { annotations = sheet.getAnnotations(); } catch (e) { return tableFail('获取批注集合失败: ' + errStr(e)); }
+    let idx = -1;
+    try {
+      const n = annotations.getCount();
+      for (let i = 0; i < n; i++) {
+        const pos = annotations.getByIndex(i).getPosition();
+        if (pos.Column === addr.StartColumn && pos.Row === addr.StartRow) { idx = i; break; }
+      }
+    } catch (e) { return tableFail(errStr(e)); }
+    if (idx < 0) return tableFail('单元格 ' + cellStr + ' 没有批注');
+    try { annotations.removeByIndex(idx); } catch (e) { return tableFail('删除批注失败: ' + errStr(e)); }
+    return { success: true, cell: colLetterOf(addr.StartColumn) + (addr.StartRow + 1), sheet: sheet.getName() };
+  },
+  // [表格·结构] 数据验证（TableValidation）。range 的 'Validation' 属性是一个
+  // 属性集对象，改完必须整体 setPropertyValue 回 range 才生效（读出来改、不能
+  // 就地改）。list 类型 value1 是逗号分隔候选值，落成带引号的 Calc 显式列表公式
+  // （"a";"b";"c"）；wholeNumber/decimal/date/time/textLength 需要 operator +
+  // value1（between/notBetween 再加 value2）；custom 的 value1 是校验公式本身。
+  // clear=true 清除数据验证（Type 置回 ANY），忽略其他参数。
+  sheet_set_data_validation(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return tableFail('无效的区域: ' + (p.range || '(空)'));
+    if (p && p.clear) {
+      try {
+        const v0 = range.getPropertyValue('Validation');
+        v0.setPropertyValue('Type', css.sheet.ValidationType.ANY);
+        range.setPropertyValue('Validation', v0);
+      } catch (e) { return tableFail('清除数据验证失败: ' + errStr(e)); }
+      return { success: true, range: sheetRangeName(range.getRangeAddress()), cleared: true };
+    }
+    const TYPE_MAP = { list: 'LIST', wholenumber: 'WHOLE', whole: 'WHOLE', decimal: 'DECIMAL', date: 'DATE', time: 'TIME', textlength: 'TEXT_LEN', custom: 'CUSTOM' };
+    const typeKey = TYPE_MAP[String(p && p.type || '').toLowerCase().replace(/[_-]/g, '')];
+    if (!typeKey) return tableFail('bad type: ' + (p && p.type) + ' (list/wholeNumber/decimal/date/time/textLength/custom)');
+    const OP_MAP = { greater: 'GREATER', greaterequal: 'GREATER_EQUAL', less: 'LESS', lessequal: 'LESS_EQUAL', equal: 'EQUAL', notequal: 'NOT_EQUAL', between: 'BETWEEN', notbetween: 'NOT_BETWEEN' };
+    let formula1 = '', formula2 = '', operatorKey = null;
+    if (typeKey === 'LIST') {
+      const items = String((p && p.value1) || '').split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s !== ''; });
+      if (!items.length) return tableFail('list 类型的 value1 需要逗号分隔的候选值，如 "合规,不合规,待核查"');
+      formula1 = items.map(function (v) { return '"' + v.replace(/"/g, '""') + '"'; }).join(';');
+    } else if (typeKey === 'CUSTOM') {
+      formula1 = (p && p.value1 != null) ? String(p.value1) : '';
+      if (!formula1) return tableFail('custom 类型的 value1 需要一个返回布尔值的校验公式');
+      formula1 = normalizeFormula(formula1);
+    } else {
+      operatorKey = OP_MAP[String((p && p.operator) || '').toLowerCase().replace(/[_-]/g, '')];
+      if (!operatorKey) return tableFail('bad operator: ' + (p && p.operator) + ' (greater/greaterEqual/less/lessEqual/equal/notEqual/between/notBetween)');
+      if (!p || p.value1 == null || String(p.value1) === '') return tableFail(typeKey + ' 类型需要 value1');
+      formula1 = normalizeFormula(String(p.value1));
+      if (operatorKey === 'BETWEEN' || operatorKey === 'NOT_BETWEEN') {
+        if (p.value2 == null || String(p.value2) === '') return tableFail('between/notBetween 需要 value2');
+        formula2 = normalizeFormula(String(p.value2));
+      }
+    }
+    try {
+      const v = range.getPropertyValue('Validation');
+      v.setPropertyValue('Type', css.sheet.ValidationType[typeKey]);
+      if (operatorKey) v.setPropertyValue('Operator', css.sheet.ConditionOperator[operatorKey]);
+      v.setPropertyValue('Formula1', formula1);
+      if (formula2) v.setPropertyValue('Formula2', formula2);
+      v.setPropertyValue('IgnoreBlankCells', (p && p.allowBlank) !== false);
+      if (p && p.showInputMessage) {
+        v.setPropertyValue('ShowInputMessage', true);
+        if (p.inputTitle != null) v.setPropertyValue('InputTitle', String(p.inputTitle));
+        if (p.inputMessage != null) v.setPropertyValue('InputMessage', String(p.inputMessage));
+      }
+      if (p && p.errorMessage != null && String(p.errorMessage) !== '') {
+        v.setPropertyValue('ShowErrorMessage', true);
+        v.setPropertyValue('ErrorAlertStyle', css.sheet.ValidationAlertStyle.STOP);
+        if (p.errorTitle != null) v.setPropertyValue('ErrorTitle', String(p.errorTitle));
+        v.setPropertyValue('ErrorMessage', String(p.errorMessage));
+      }
+      range.setPropertyValue('Validation', v);
+    } catch (e) { return tableFail('设置数据验证失败: ' + errStr(e)); }
+    const res = { success: true, range: sheetRangeName(range.getRangeAddress()), type: String(p.type).toLowerCase(), formula1: formula1 };
+    if (formula2) res.formula2 = formula2;
+    return res;
+  },
+  // [表格·结构] 图表（XTableCharts）。起步做「建图表 + 选类型 + 标题」三件事：
+  // 数据区域整体作为图表数据源，类型 column/bar/line/pie（column/bar 同用
+  // BarDiagram，靠 Vertical 属性区分方向），标题经 HasMainTitle+Title 设置。
+  // 复杂配置（多数据系列自定义、坐标轴样式等）不支持。放置位置固定在数据区域
+  // 右侧一列，默认尺寸约 14cm×9cm——不接受自定义位置/尺寸参数，保持起步简单。
+  sheet_add_chart(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const range = sheetRange(sheet, String((p && p.range) || ''));
+    if (!range) return tableFail('无效的数据区域: ' + ((p && p.range) || '(空)'));
+    const addr = range.getRangeAddress();
+    const TYPE_MAP = { column: { cls: 'Bar', vertical: true }, bar: { cls: 'Bar', vertical: false }, line: { cls: 'Line' }, pie: { cls: 'Pie' } };
+    const typeInfo = TYPE_MAP[String((p && p.chartType) || 'column').toLowerCase()];
+    if (!typeInfo) return tableFail('bad chartType: ' + (p && p.chartType) + ' (column/bar/line/pie)');
+    let charts;
+    try { charts = sheet.getCharts(); } catch (e) { return tableFail('获取图表集合失败: ' + errStr(e)); }
+    const name = (p && p.name != null && String(p.name).trim()) ? String(p.name).trim() : ('Chart_' + Date.now());
+    if (charts.hasByName(name)) return tableFail('图表已存在: ' + name);
+    let rect;
+    try {
+      const anchorCol = Math.min(addr.EndColumn + 2, 1023);
+      const anchorCell = sheet.getCellByPosition(anchorCol, addr.StartRow);
+      const pos = anchorCell.getPropertyValue('Position');
+      rect = new css.awt.Rectangle({ X: pos.X, Y: pos.Y, Width: ptToMm100(400), Height: ptToMm100(250) });
+    } catch (e) { return tableFail('计算图表放置位置失败: ' + errStr(e)); }
+    try {
+      charts.addNewByName(name, rect, [addr], true, true);
+    } catch (e) { return tableFail('创建图表失败: ' + errStr(e)); }
+    const note = [];
+    try {
+      const embedded = charts.getByName(name).getEmbeddedObject();
+      const diagram = embedded.createInstance('com.sun.star.chart.' + typeInfo.cls + 'Diagram');
+      embedded.setDiagram(diagram);
+      if (typeInfo.cls === 'Bar') {
+        try { diagram.setPropertyValue('Vertical', !!typeInfo.vertical); } catch (e) { note.push('图表方向设置失败'); }
+      }
+      if (p && p.title) {
+        try {
+          embedded.setPropertyValue('HasMainTitle', true);
+          embedded.getTitle().setString(String(p.title));
+        } catch (e) { note.push('标题设置失败'); }
+      }
+    } catch (e) { note.push('图表类型/标题设置失败: ' + errStr(e)); }
+    const res = {
+      success: true, name: name, chartType: String((p && p.chartType) || 'column').toLowerCase(),
+      range: sheetRangeName(addr), sheet: sheet.getName(),
+    };
+    if (p && p.title) res.title = String(p.title);
+    if (note.length) res.note = note.join('；');
+    return res;
+  },
+  // [表格·看] Excel 专用查找：遍历区域（缺省=已用区域）逐格比对字符串，不区分
+  // 值来源（文本/数值/公式结果）。上限 50 条命中、20000 格扫描（超限要求缩小
+  // range）。与 doc_find_text 分开——那是 Writer 专属，本原语只认 Calc 文档。
+  sheet_search(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const query = (p && p.query != null) ? String(p.query) : '';
+    if (!query) return tableFail('sheet_search requires {query}');
+    const matchCase = !!(p && p.matchCase);
+    let addr;
+    try {
+      const range = (p && p.range) ? sheetRange(sheet, p.range) : null;
+      addr = range ? range.getRangeAddress() : usedRangeAddress(sheet);
+    } catch (e) { return tableFail('读取搜索区域失败: ' + errStr(e)); }
+    const nRows = addr.EndRow - addr.StartRow + 1;
+    const nCols = addr.EndColumn - addr.StartColumn + 1;
+    const MAX_SCAN = 20000;
+    if (nRows * nCols > MAX_SCAN) return tableFail('搜索区域过大（上限 ' + MAX_SCAN + ' 格），请缩小 range');
+    const needle = matchCase ? query : query.toLowerCase();
+    const hits = [];
+    for (let r = 0; r < nRows && hits.length < 50; r++) {
+      for (let c = 0; c < nCols && hits.length < 50; c++) {
+        const cell = sheet.getCellByPosition(addr.StartColumn + c, addr.StartRow + r);
+        const val = readCellOut(cell);
+        const s = val == null ? '' : String(val);
+        const hay = matchCase ? s : s.toLowerCase();
+        if (hay.indexOf(needle) !== -1) {
+          hits.push({ cell: colLetterOf(addr.StartColumn + c) + (addr.StartRow + r + 1), value: val });
+        }
+      }
+    }
+    return {
+      success: true, sheet: sheet.getName(), range: sheetRangeName(addr), query: query,
+      count: hits.length, hits: hits, truncated: hits.length >= 50,
+    };
+  },
+  // [表格·结构] 工作簿级命名区域（XNamedRanges）。op: add（name+range+可选
+  // sheet）/ remove（name）/ list（枚举全部）。add 落成绝对引用公式
+  // '$Sheet1.$A$1:$C$10'，与 range 参数所在工作表绑定。
+  sheet_define_name(p) {
+    const op = String((p && p.op) || 'list').toLowerCase();
+    let nr;
+    try { nr = xModel.getPropertyValue('NamedRanges'); } catch (e) { return tableFail('读取命名区域集合失败: ' + errStr(e)); }
+    if (op === 'list') {
+      const out = [];
+      try {
+        const n = nr.getCount();
+        for (let i = 0; i < n; i++) {
+          const item = nr.getByIndex(i);
+          out.push({ name: item.getName(), content: item.getContent() });
+        }
+      } catch (e) { return tableFail(errStr(e)); }
+      return { success: true, names: out };
+    }
+    const name = (p && p.name) ? String(p.name).trim() : '';
+    if (!name) return tableFail(op + ' 需要 {name}');
+    if (op === 'remove') {
+      if (!nr.hasByName(name)) return tableFail('命名区域不存在: ' + name);
+      try { nr.removeByName(name); } catch (e) { return tableFail('删除命名区域失败: ' + errStr(e)); }
+      return { success: true, op: 'remove', name: name };
+    }
+    if (op === 'add') {
+      if (nr.hasByName(name)) return tableFail('命名区域已存在: ' + name);
+      const r0 = resolveSheet(p);
+      if (r0.error) return tableFail(r0.error);
+      const range = sheetRange(r0.sheet, String((p && p.range) || ''));
+      if (!range) return tableFail('无效的区域: ' + ((p && p.range) || '(空)'));
+      const addr = range.getRangeAddress();
+      const content = '$' + r0.sheet.getName() + '.' + absCellRef(addr.StartColumn, addr.StartRow)
+        + ((addr.StartColumn !== addr.EndColumn || addr.StartRow !== addr.EndRow) ? ':' + absCellRef(addr.EndColumn, addr.EndRow) : '');
+      try {
+        nr.addNewByName(name, content, new css.table.CellAddress({ Sheet: addr.Sheet, Column: addr.StartColumn, Row: addr.StartRow }), 0);
+      } catch (e) { return tableFail('新建命名区域失败: ' + errStr(e)); }
+      return { success: true, op: 'add', name: name, range: content };
+    }
+    return tableFail('bad op: ' + op + ' (add/remove/list)');
+  },
+  // [表格·结构] 工作表保护（XProtectable）。密码可选（不传=无密码保护）；
+  // 密码参数不落日志，返回值也不回显密码。
+  sheet_protect_sheet(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const action = String((p && p.action) || 'protect').toLowerCase();
+    if (action !== 'protect' && action !== 'unprotect') return tableFail('bad action: ' + action + ' (protect/unprotect)');
+    const password = (p && p.password != null) ? String(p.password) : '';
+    try {
+      if (action === 'protect') sheet.protect(password);
+      else sheet.unprotect(password);
+    } catch (e) { return tableFail((action === 'protect' ? '保护' : '取消保护') + '工作表失败: ' + errStr(e)); }
+    let isProtected = null;
+    try { isProtected = sheet.isProtected(); } catch (e) {}
+    return { success: true, action: action, protected: isProtected };
+  },
+  // [表格·结构] 行列分组/大纲（XSheetOutline）。op: group/ungroup/show/hide；
+  // orient: rows/cols（show/hide 不区分方向，直接对 range 生效）。
+  sheet_group_rows_cols(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const range = sheetRange(sheet, String((p && p.range) || ''));
+    if (!range) return tableFail('无效的区域: ' + ((p && p.range) || '(空)'));
+    const addr = range.getRangeAddress();
+    const orientRaw = String((p && p.orient) || 'rows').toLowerCase();
+    const isCols = orientRaw === 'cols' || orientRaw === 'columns';
+    const isRows = orientRaw === 'rows';
+    if (!isCols && !isRows) return tableFail('bad orient: ' + (p && p.orient) + ' (rows/cols)');
+    const orientation = isCols ? css.table.TableOrientation.COLUMNS : css.table.TableOrientation.ROWS;
+    const op = String((p && p.op) || 'group').toLowerCase();
+    try {
+      if (op === 'group') sheet.group(addr, orientation);
+      else if (op === 'ungroup') sheet.ungroup(addr, orientation);
+      else if (op === 'show') sheet.showDetail(addr);
+      else if (op === 'hide') sheet.hideDetail(addr);
+      else return tableFail('bad op: ' + op + ' (group/ungroup/show/hide)');
+    } catch (e) { return tableFail('分组操作失败: ' + errStr(e)); }
+    return { success: true, op: op, orient: isCols ? 'cols' : 'rows', range: sheetRangeName(addr) };
+  },
+  // [表格·结构] 数据透视表（XDataPilotTables），基础形态：行分组 + 单个数据
+  // 字段求和。rowFields/dataField 必须与源区域首行表头文字完全一致（Calc 按
+  // 字段名定位）。复杂布局（列字段、多数据字段、自定义汇总函数、筛选字段）不
+  // 支持——起步只做「按行分组求和」这一种最常用形态。
+  sheet_add_pivot_table(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const source = sheetRange(sheet, String((p && p.sourceRange) || ''));
+    if (!source) return tableFail('无效的源数据区域: ' + ((p && p.sourceRange) || '(空)'));
+    const srcAddr = source.getRangeAddress();
+    const rowFieldNames = String((p && p.rowFields) || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    const dataFieldName = (p && p.dataField != null) ? String(p.dataField).trim() : '';
+    if (!rowFieldNames.length) return tableFail('sheet_add_pivot_table requires {rowFields}（逗号分隔的表头字段名）');
+    if (!dataFieldName) return tableFail('sheet_add_pivot_table requires {dataField}（求和字段的表头字段名）');
+    let dpTables;
+    try { dpTables = sheet.getDataPilotTables(); } catch (e) { return tableFail('获取数据透视表集合失败: ' + errStr(e)); }
+    const name = (p && p.name != null && String(p.name).trim()) ? String(p.name).trim() : ('PivotTable_' + Date.now());
+    if (dpTables.hasByName(name)) return tableFail('数据透视表已存在: ' + name);
+    let desc;
+    try {
+      desc = dpTables.createDataPilotDescriptor();
+      desc.setSourceRange(srcAddr);
+    } catch (e) { return tableFail('创建透视表描述失败: ' + errStr(e)); }
+    let fields;
+    try { fields = desc.getDataPilotFields(); } catch (e) { return tableFail('获取字段集合失败: ' + errStr(e)); }
+    const missing = [];
+    try {
+      rowFieldNames.forEach(function (fn) {
+        if (!fields.hasByName(fn)) { missing.push(fn); return; }
+        fields.getByName(fn).setPropertyValue('Orientation', css.sheet.DataPilotFieldOrientation.ROW);
+      });
+      if (!fields.hasByName(dataFieldName)) missing.push(dataFieldName);
+      else {
+        const df = fields.getByName(dataFieldName);
+        df.setPropertyValue('Orientation', css.sheet.DataPilotFieldOrientation.DATA);
+        df.setPropertyValue('Function', css.sheet.GeneralFunction.SUM);
+      }
+    } catch (e) { return tableFail('设置字段方向失败: ' + errStr(e)); }
+    if (missing.length) return tableFail('源区域表头找不到字段: ' + missing.join('、') + '（字段名须与首行表头文字完全一致）');
+    let outAddr;
+    try {
+      if (p && p.outputCell) {
+        const outCell = sheetRange(sheet, String(p.outputCell));
+        if (!outCell) return tableFail('无效的输出位置: ' + p.outputCell);
+        const oa = outCell.getRangeAddress();
+        outAddr = new css.table.CellAddress({ Sheet: oa.Sheet, Column: oa.StartColumn, Row: oa.StartRow });
+      } else {
+        const outCol = Math.min(srcAddr.EndColumn + 2, 1023);
+        outAddr = new css.table.CellAddress({ Sheet: srcAddr.Sheet, Column: outCol, Row: srcAddr.StartRow });
+      }
+    } catch (e) { return tableFail('计算输出位置失败: ' + errStr(e)); }
+    try {
+      dpTables.insertNewByName(name, outAddr, desc);
+    } catch (e) { return tableFail('插入数据透视表失败: ' + errStr(e)); }
+    return {
+      success: true, name: name, sourceRange: sheetRangeName(srcAddr),
+      rowFields: rowFieldNames, dataField: dataFieldName, function: 'sum', sheet: sheet.getName(),
+    };
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {

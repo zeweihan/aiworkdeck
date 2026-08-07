@@ -100,6 +100,13 @@ export const EDITOR_ACTIONS = [
   // host-initiated action）。
   'edit_header_footer', 'insert_break', 'insert_footnote', 'insert_endnote',
   'set_hyperlink_at_anchor', 'set_style',
+  // [Calc 二期] 文档能力矩阵 4.2 节 Excel 待办：单元格批注（无线程回复/解决态，
+  // 只做增/查/删）/ 数据验证 / 图表（建图表+选类型+标题起步）/ Excel 专用搜索 /
+  // 工作簿级命名区域 / 工作表保护 / 行列分组大纲 / 数据透视表（行分组+求和基础形态）。
+  'sheet_add_comment', 'sheet_get_comments', 'sheet_delete_comment',
+  'sheet_set_data_validation', 'sheet_add_chart', 'sheet_search',
+  'sheet_define_name', 'sheet_protect_sheet', 'sheet_group_rows_cols',
+  'sheet_add_pivot_table',
 ]
 
 /**
