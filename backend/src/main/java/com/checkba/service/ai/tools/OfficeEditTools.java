@@ -75,6 +75,43 @@ public class OfficeEditTools implements AgentToolComponent {
     private static final java.util.Set<String> STANDARD_FORMAT_SCOPES =
             java.util.Set.of("document", "selection");
 
+    /** Excel 单元格字体字号上限（Excel UI 硬上限 409 磅） */
+    private static final double MAX_EXCEL_FONT_SIZE = 409;
+
+    /** Excel 单元格格式对齐白名单 */
+    private static final java.util.Set<String> EXCEL_H_ALIGN_VALUES = java.util.Set.of("left", "center", "right");
+    private static final java.util.Set<String> EXCEL_V_ALIGN_VALUES = java.util.Set.of("top", "middle", "bottom");
+
+    /** Excel 边框范围/线宽白名单 */
+    private static final java.util.Set<String> EXCEL_BORDER_VALUES = java.util.Set.of("all", "outside", "inside", "none");
+    private static final java.util.Set<String> EXCEL_BORDER_STYLE_VALUES = java.util.Set.of("thin", "medium", "thick");
+
+    /** Excel 行列编辑动作白名单 */
+    private static final java.util.Set<String> EXCEL_EDIT_ROWS_COLS_ACTIONS =
+            java.util.Set.of("insert_rows", "delete_rows", "insert_cols", "delete_cols", "set_width", "set_height");
+    /** 单次插入/删除/改行高列宽的行列数上限 */
+    private static final int MAX_EXCEL_ROWS_COLS_COUNT = 100;
+
+    /** Excel 合并/取消合并动作白名单 */
+    private static final java.util.Set<String> EXCEL_MERGE_ACTIONS = java.util.Set.of("merge", "unmerge");
+
+    /** Excel 工作表管理动作白名单 */
+    private static final java.util.Set<String> EXCEL_SHEET_ACTIONS =
+            java.util.Set.of("add", "rename", "delete", "move", "activate");
+
+    /** Excel 冻结窗格动作白名单 */
+    private static final java.util.Set<String> EXCEL_FREEZE_ACTIONS =
+            java.util.Set.of("freeze_rows", "freeze_cols", "freeze_at", "unfreeze");
+
+    /** Excel 自动筛选动作白名单 */
+    private static final java.util.Set<String> EXCEL_AUTOFILTER_ACTIONS = java.util.Set.of("apply", "clear", "remove");
+
+    /** Excel 条件格式规则类型/比较运算符/动作白名单（值统一小写，normalizeEnum 归一后不含大小写边界） */
+    private static final java.util.Set<String> EXCEL_CF_RULE_TYPES = java.util.Set.of("cellvalue", "colorscale");
+    private static final java.util.Set<String> EXCEL_CF_OPERATOR_VALUES =
+            java.util.Set.of("greaterthan", "lessthan", "between", "equalto");
+    private static final java.util.Set<String> EXCEL_CF_ACTIONS = java.util.Set.of("apply", "clearall");
+
     /**
      * 枚举参数归一化：null/空返回 null（表示不改），命中白名单返回小写值，
      * 非法值抛 IllegalArgumentException 由调用方转成 "Error:" 文案。
@@ -557,6 +594,478 @@ public class OfficeEditTools implements AgentToolComponent {
         args.put("sheetName", sheetName == null ? "" : sheetName.trim());
         args.put("query", query);
         return officeBridgeService.executeOfficeCommand(conversationId, "excel_search", args);
+    }
+
+    // ==================== Excel 格式/结构（批次6，office_excel_*，仅 Excel 会话可见） ====================
+
+    @Tool("设置 Excel 区域的单元格格式：字体、字号、加粗、斜体、字体颜色、填充色、水平对齐、垂直对齐、数字格式、自动换行。" +
+          "直接生效（Excel 没有修订机制）。sheetName 缺省为当前活动工作表。格式参数至少要给一个，没传的保持原样。")
+    @ToolMeta(displayName = "设置单元格格式", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_format_cells(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 A1 或 A1:D20") String rangeAddress,
+            @P("字体名（不改则不传）") String fontName,
+            @P("字号（磅，1~409）（不改则不传）") Double fontSize,
+            @P("加粗 true/false（不改则不传）") Boolean bold,
+            @P("斜体 true/false（不改则不传）") Boolean italic,
+            @P("文字颜色 #RRGGBB（不改则不传）") String fontColor,
+            @P("填充色 #RRGGBB（不改则不传）") String fillColor,
+            @P("水平对齐：left/center/right（不改则不传）") String horizontalAlignment,
+            @P("垂直对齐：top/middle/bottom（不改则不传）") String verticalAlignment,
+            @P("数字格式码，如 0.00% 或 yyyy-mm-dd（不改则不传）") String numberFormat,
+            @P("是否自动换行 true/false（不改则不传）") Boolean wrapText
+    ) {
+        log.info("Tool: office_excel_format_cells called, sheet={}, range={}", sheetName, rangeAddress);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 区域地址不能为空且须为 A1 表示法（如 A1 或 A1:D20，不带工作表名）";
+        }
+        if (fontSize != null && (fontSize <= 0 || fontSize > MAX_EXCEL_FONT_SIZE)) {
+            return "Error: fontSize 须为大于 0 且不超过 " + (int) MAX_EXCEL_FONT_SIZE + " 的磅值";
+        }
+        if (fontColor != null && !fontColor.isBlank() && !HEX_COLOR.matcher(fontColor.trim()).matches()) {
+            return "Error: fontColor 须为 #RRGGBB 格式，如 #C00000";
+        }
+        if (fillColor != null && !fillColor.isBlank() && !HEX_COLOR.matcher(fillColor.trim()).matches()) {
+            return "Error: fillColor 须为 #RRGGBB 格式，如 #FFF2CC";
+        }
+        String hAlign;
+        String vAlign;
+        try {
+            hAlign = normalizeEnum(horizontalAlignment, EXCEL_H_ALIGN_VALUES, "horizontalAlignment");
+            vAlign = normalizeEnum(verticalAlignment, EXCEL_V_ALIGN_VALUES, "verticalAlignment");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        Map<String, Object> args = new HashMap<>();
+        if (fontName != null && !fontName.isBlank()) args.put("fontName", fontName.trim());
+        if (fontSize != null) args.put("fontSize", fontSize);
+        if (bold != null) args.put("bold", bold);
+        if (italic != null) args.put("italic", italic);
+        if (fontColor != null && !fontColor.isBlank()) args.put("fontColor", fontColor.trim());
+        if (fillColor != null && !fillColor.isBlank()) args.put("fillColor", fillColor.trim());
+        if (hAlign != null) args.put("horizontalAlignment", hAlign);
+        if (vAlign != null) args.put("verticalAlignment", vAlign);
+        if (numberFormat != null && !numberFormat.isBlank()) args.put("numberFormat", numberFormat.trim());
+        if (wrapText != null) args.put("wrapText", wrapText);
+        if (args.isEmpty()) {
+            return "Error: 未给出任何格式参数（fontName/fontSize/bold/italic/fontColor/fillColor/"
+                    + "horizontalAlignment/verticalAlignment/numberFormat/wrapText 至少给一个）";
+        }
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_format_cells", args);
+    }
+
+    @Tool("设置 Excel 区域的边框：范围（all/outside/inside/none）、线宽（thin/medium/thick）、颜色。" +
+          "直接生效（Excel 没有修订机制）。sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "设置边框", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_set_borders(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 A1:D20") String rangeAddress,
+            @P("边框范围：all/outside/inside/none") String borders,
+            @P("线宽：thin/medium/thick（缺省 thin，borders=none 时无意义）") String style,
+            @P("边框颜色 #RRGGBB（缺省 #000000，borders=none 时无意义）") String color
+    ) {
+        log.info("Tool: office_excel_set_borders called, sheet={}, range={}, borders={}", sheetName, rangeAddress, borders);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 区域地址不能为空且须为 A1 表示法（如 A1:D20，不带工作表名）";
+        }
+        String bordersValue;
+        String styleValue;
+        try {
+            bordersValue = normalizeEnum(borders, EXCEL_BORDER_VALUES, "borders");
+            styleValue = normalizeEnum(style, EXCEL_BORDER_STYLE_VALUES, "style");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (bordersValue == null) {
+            return "Error: borders 不能为空（all/outside/inside/none）";
+        }
+        if (color != null && !color.isBlank() && !HEX_COLOR.matcher(color.trim()).matches()) {
+            return "Error: color 须为 #RRGGBB 格式，如 #000000";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        args.put("borders", bordersValue);
+        if (!"none".equals(bordersValue)) {
+            args.put("style", styleValue == null ? "thin" : styleValue);
+            args.put("color", color == null || color.isBlank() ? "#000000" : color.trim());
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_set_borders", args);
+    }
+
+    @Tool("在当前 Excel 工作表插入/删除整行整列，或设置行高/列宽。" +
+          "index 是行/列序号（0 起），count 是本次影响的行列数（缺省 1，上限 100）。" +
+          "insert_rows/delete_rows/insert_cols/delete_cols 直接生效（Excel 没有修订机制，" +
+          "误操作靠 Ctrl+Z 或文档检查点，不是修订面板）；set_width（列宽，约合像素）/set_height（行高，磅）需额外传 size。" +
+          "sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "编辑行列", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_edit_rows_cols(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("动作：insert_rows/delete_rows/insert_cols/delete_cols/set_width/set_height") String action,
+            @P("起始行/列序号（0 起）") Integer index,
+            @P("影响的行列数（缺省 1，上限 100）") Integer count,
+            @P("set_width/set_height 专用：列宽（约合像素）或行高（磅）") Double size
+    ) {
+        log.info("Tool: office_excel_edit_rows_cols called, sheet={}, action={}, index={}", sheetName, action, index);
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_EDIT_ROWS_COLS_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（insert_rows/delete_rows/insert_cols/delete_cols/set_width/set_height）";
+        }
+        if (index == null || index < 0) {
+            return "Error: index 不能为空且不能为负（第一行/列是 0）";
+        }
+        int cnt = count == null ? 1 : count;
+        if (cnt < 1 || cnt > MAX_EXCEL_ROWS_COLS_COUNT) {
+            return "Error: count 须为 1~" + MAX_EXCEL_ROWS_COLS_COUNT + " 的整数（缺省 1）";
+        }
+        boolean needsSize = "set_width".equals(actionValue) || "set_height".equals(actionValue);
+        if (needsSize && (size == null || size <= 0)) {
+            return "Error: " + actionValue + " 需要 size（正数）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("action", actionValue);
+        args.put("index", index);
+        args.put("count", cnt);
+        if (needsSize) args.put("size", size);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_edit_rows_cols", args);
+    }
+
+    @Tool("合并或取消合并 Excel 区域的单元格。直接生效（Excel 没有修订机制）。sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "合并单元格", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_merge_cells(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 A1:D1") String rangeAddress,
+            @P("动作：merge/unmerge") String action
+    ) {
+        log.info("Tool: office_excel_merge_cells called, sheet={}, range={}, action={}", sheetName, rangeAddress, action);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 区域地址不能为空且须为 A1 表示法（如 A1:D1，不带工作表名）";
+        }
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_MERGE_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（merge/unmerge）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        args.put("action", actionValue);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_merge_cells", args);
+    }
+
+    @Tool("对 Excel 区域按某一列排序。keyColumn 是区域内的列偏移（0 起，不是工作表绝对列号）。" +
+          "直接生效（Excel 没有修订机制）。sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "排序", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_sort_range(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 A1:D20") String rangeAddress,
+            @P("排序依据列：区域内偏移，0 起（区域第一列是 0）") Integer keyColumn,
+            @P("是否升序（缺省 true）") Boolean ascending,
+            @P("区域是否带表头（表头行不参与排序，缺省 false）") Boolean hasHeader
+    ) {
+        log.info("Tool: office_excel_sort_range called, sheet={}, range={}, keyColumn={}", sheetName, rangeAddress, keyColumn);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 区域地址不能为空且须为 A1 表示法（如 A1:D20，不带工作表名）";
+        }
+        if (keyColumn == null || keyColumn < 0) {
+            return "Error: keyColumn 不能为空且不能为负（区域第一列是 0）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        args.put("keyColumn", keyColumn);
+        args.put("ascending", ascending == null || ascending);
+        args.put("hasHeader", hasHeader != null && hasHeader);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_sort_range", args);
+    }
+
+    @Tool("管理 Excel 工作簿的工作表：新增、重命名、删除、移动位置、设为当前活动表。" +
+          "add 时 sheetName 是可选的新表名（不传则由 Excel 自动命名）；" +
+          "rename/delete/move/activate 都要求 sheetName 指定目标表，rename 额外要 newName，move 额外要 position（0 起）。" +
+          "删除是不可逆动作且没有修订可撤——工作簿只剩一张表时会拒绝删除。直接生效（Excel 没有修订机制）。")
+    @ToolMeta(displayName = "管理工作表", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_manage_sheets(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("动作：add/rename/delete/move/activate") String action,
+            @P("目标工作表名（add 时可选新表名；其余动作必填）") String sheetName,
+            @P("新名称（仅 rename 用）") String newName,
+            @P("新位置，0 起（仅 move 用）") Integer position
+    ) {
+        log.info("Tool: office_excel_manage_sheets called, action={}, sheetName={}", action, sheetName);
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_SHEET_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（add/rename/delete/move/activate）";
+        }
+        String name = sheetName == null ? "" : sheetName.trim();
+        if (!"add".equals(actionValue) && name.isEmpty()) {
+            return "Error: sheetName 不能为空（" + actionValue + " 需要指定目标工作表）";
+        }
+        if ("rename".equals(actionValue) && (newName == null || newName.isBlank())) {
+            return "Error: rename 需要 newName（新表名不能为空）";
+        }
+        if ("move".equals(actionValue) && (position == null || position < 0)) {
+            return "Error: move 需要 position（0 起的整数，不能为负）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("action", actionValue);
+        args.put("sheetName", name);
+        if (newName != null && !newName.isBlank()) args.put("newName", newName.trim());
+        if (position != null) args.put("position", position);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_manage_sheets", args);
+    }
+
+    @Tool("冻结或取消冻结 Excel 工作表的窗格。freeze_rows/freeze_cols 从表格左上角起冻结指定行数/列数（count），" +
+          "freeze_at 冻结到指定单元格为止（cellAddress，该单元格左上方区域被冻结），unfreeze 取消冻结。" +
+          "需要 ExcelApi 1.7（较新版本 Excel）。直接生效（Excel 没有修订机制）。sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "冻结窗格", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_freeze_panes(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("动作：freeze_rows/freeze_cols/freeze_at/unfreeze") String action,
+            @P("冻结的行数或列数（freeze_rows/freeze_cols 用，缺省 1）") Integer count,
+            @P("冻结基准单元格，A1 表示法（freeze_at 用）") String cellAddress
+    ) {
+        log.info("Tool: office_excel_freeze_panes called, sheet={}, action={}", sheetName, action);
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_FREEZE_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（freeze_rows/freeze_cols/freeze_at/unfreeze）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("action", actionValue);
+        if ("freeze_rows".equals(actionValue) || "freeze_cols".equals(actionValue)) {
+            int cnt = count == null ? 1 : count;
+            if (cnt < 1) {
+                return "Error: count 须为正整数（缺省 1）";
+            }
+            args.put("count", cnt);
+        } else if ("freeze_at".equals(actionValue)) {
+            String addr = cellAddress == null ? "" : cellAddress.trim();
+            if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+                return "Error: freeze_at 需要 cellAddress（A1 表示法，如 C3）";
+            }
+            args.put("cellAddress", addr);
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_freeze_panes", args);
+    }
+
+    @Tool("向 Excel 区域批量写入公式（直接生效，Excel 没有修订机制）。" +
+          "formulasJson 是 JSON 二维数组（按行），每个元素须是以 = 开头的公式字符串，" +
+          "如 [[\"=SUM(A1:A10)\"],[\"=B1*1.1\"]]。**公式必须用 Excel 原生文法**：参数用逗号分隔、" +
+          "跨表引用写作 Sheet1!A1（与桌面端 LOWA 电子表格原语的分号/点号文法相反，不要混用）。" +
+          "rangeAddress 为单元格时按 formulas 尺寸向右下展开写入；为区域时尺寸必须与 formulas 一致。" +
+          "写入后自动读回结果，若某格算出 #REF!/#NAME? 等错误，会在返回值 formulaErrors 里列出供自纠。" +
+          "sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "写入公式", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_set_formulas(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("起始单元格或区域地址，A1 表示法如 B2 或 B2:B10") String rangeAddress,
+            @P("要写入的公式，JSON 二维数组（按行），元素为以 = 开头的公式字符串") String formulasJson
+    ) {
+        log.info("Tool: office_excel_set_formulas called, sheet={}, range={}", sheetName, rangeAddress);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 区域地址不能为空且须为 A1 表示法（如 B2 或 B2:B10，不带工作表名）";
+        }
+        java.util.List<java.util.List<Object>> formulas;
+        try {
+            formulas = objectMapper.readValue(formulasJson == null ? "" : formulasJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.List<Object>>>() {});
+        } catch (Exception e) {
+            return "Error: formulasJson 不是合法的 JSON 二维数组，示例：[[\"=SUM(A1:A10)\"]]";
+        }
+        if (formulas == null || formulas.isEmpty() || formulas.get(0) == null || formulas.get(0).isEmpty()) {
+            return "Error: formulasJson 不能为空数组";
+        }
+        int cols = formulas.get(0).size();
+        int cells = 0;
+        for (java.util.List<Object> row : formulas) {
+            if (row == null || row.size() != cols) {
+                return "Error: formulasJson 必须是矩形二维数组（每行列数一致）";
+            }
+            for (Object cell : row) {
+                if (!(cell instanceof String) || !((String) cell).trim().startsWith("=")) {
+                    return "Error: formulasJson 的每个元素都必须是以 = 开头的公式字符串";
+                }
+            }
+            cells += row.size();
+        }
+        if (cells > MAX_SET_CELLS) {
+            return "Error: 单次写入上限 " + MAX_SET_CELLS + " 个单元格，请分批写入";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        args.put("formulas", formulas);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_set_formulas", args);
+    }
+
+    @Tool("读取当前 Excel 工作簿总览：所有工作表清单（名称、是否为当前活动表）+ 各表已用区域尺寸" +
+          "（行数/列数/地址，空表为 null）。适合在动手改表前先建立全局认知，对标桌面端 sheet_get_overview。")
+    @ToolMeta(displayName = "读取总览", category = "office")
+    public String office_excel_get_overview(
+            @P("会话ID（系统自动注入）") String conversationId
+    ) {
+        log.info("Tool: office_excel_get_overview called");
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_get_overview", Map.of());
+    }
+
+    @Tool("把用户在 Excel 中的视图定位到指定区域并选中（不修改数据，只是把焦点带过去，" +
+          "常用于向用户展示「你看这里」）。sheetName 缺省为当前活动工作表；若指定了非活动表，会先切到该表。")
+    @ToolMeta(displayName = "选中区域", category = "office")
+    public String office_excel_select_range(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 A1 或 A1:D20") String rangeAddress
+    ) {
+        log.info("Tool: office_excel_select_range called, sheet={}, range={}", sheetName, rangeAddress);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 区域地址不能为空且须为 A1 表示法（如 A1 或 A1:D20，不带工作表名）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_select_range", args);
+    }
+
+    @Tool("设置 Excel 工作表的自动筛选：apply 套上筛选（在指定区域顶行加下拉箭头，不预设筛选条件）、" +
+          "clear 清除已生效的筛选条件（保留下拉箭头）、remove 彻底移除自动筛选。" +
+          "**首版只做套上/清除筛选，不支持按具体条件筛值**（如只看某列等于某值），" +
+          "按条件筛选请用户在 Excel 里手动点下拉箭头操作。需要 ExcelApi 1.9。直接生效（Excel 没有修订机制）。" +
+          "sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "设置自动筛选", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_set_autofilter(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 A1:D20（仅 apply 需要）") String rangeAddress,
+            @P("动作：apply/clear/remove") String action
+    ) {
+        log.info("Tool: office_excel_set_autofilter called, sheet={}, action={}", sheetName, action);
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_AUTOFILTER_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（apply/clear/remove）";
+        }
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if ("apply".equals(actionValue) && (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches())) {
+            return "Error: apply 需要 rangeAddress（A1 表示法，如 A1:D20）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("action", actionValue);
+        if ("apply".equals(actionValue)) args.put("rangeAddress", addr);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_set_autofilter", args);
+    }
+
+    @Tool("给 Excel 区域套用或清除条件格式。ruleType=cellValue 按单元格数值与阈值的比较关系" +
+          "（operator: greaterThan/lessThan/between/equalTo，between 需要 value1 与 value2，其余只需 value1）" +
+          "把命中单元格填色 fillColor（缺省 #FFC7CE，Excel 经典的浅红色高亮）；" +
+          "ruleType=colorScale 套用红黄绿三色刻度（低到高，无需额外参数）。" +
+          "action=clearAll 清除该区域已有的全部条件格式规则（此时 ruleType 等参数不需要）。" +
+          "**首版只做这两类规则**，不支持图标集/数据条/公式自定义规则。每次调用会先清空该区域现有规则再套用新规则" +
+          "（与桌面端 sheet_conditional_format 同口径，不是叠加）。" +
+          "需要 ExcelApi 1.6。直接生效（Excel 没有修订机制）。sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "设置条件格式", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_conditional_format(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 A1:D20") String rangeAddress,
+            @P("规则类型：cellValue/colorScale（action=apply 时必填）") String ruleType,
+            @P("比较运算符：greaterThan/lessThan/between/equalTo（ruleType=cellValue 时必填）") String operator,
+            @P("比较值 1（ruleType=cellValue 时必填）") Double value1,
+            @P("比较值 2（operator=between 时必填，用作区间上界）") Double value2,
+            @P("命中单元格填充色 #RRGGBB（ruleType=cellValue 用，缺省 #FFC7CE）") String fillColor,
+            @P("动作：apply（套用，缺省）/clearAll（清除该区域全部条件格式规则）") String action
+    ) {
+        log.info("Tool: office_excel_conditional_format called, sheet={}, range={}, action={}",
+                sheetName, rangeAddress, action);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 区域地址不能为空且须为 A1 表示法（如 A1:D20，不带工作表名）";
+        }
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_CF_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) actionValue = "apply";
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        args.put("action", actionValue);
+
+        if ("apply".equals(actionValue)) {
+            String ruleTypeValue;
+            String operatorValue;
+            try {
+                ruleTypeValue = normalizeEnum(ruleType, EXCEL_CF_RULE_TYPES, "ruleType");
+                operatorValue = normalizeEnum(operator, EXCEL_CF_OPERATOR_VALUES, "operator");
+            } catch (IllegalArgumentException e) {
+                return "Error: " + e.getMessage();
+            }
+            if (ruleTypeValue == null) {
+                return "Error: ruleType 不能为空（apply 时必填：cellValue/colorScale）";
+            }
+            if (fillColor != null && !fillColor.isBlank() && !HEX_COLOR.matcher(fillColor.trim()).matches()) {
+                return "Error: fillColor 须为 #RRGGBB 格式，如 #FFC7CE";
+            }
+            args.put("ruleType", ruleTypeValue);
+            if ("cellvalue".equals(ruleTypeValue)) {
+                if (operatorValue == null) {
+                    return "Error: ruleType=cellValue 时 operator 不能为空（greaterThan/lessThan/between/equalTo）";
+                }
+                if (value1 == null) {
+                    return "Error: ruleType=cellValue 时 value1 不能为空";
+                }
+                if ("between".equals(operatorValue) && value2 == null) {
+                    return "Error: operator=between 时 value2 不能为空（区间上界）";
+                }
+                args.put("operator", operatorValue);
+                args.put("value1", value1);
+                if (value2 != null) args.put("value2", value2);
+                args.put("fillColor", fillColor == null || fillColor.isBlank() ? "#FFC7CE" : fillColor.trim());
+            }
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_conditional_format", args);
     }
 
     // ==================== PowerPoint（office_ppt_*，仅 PowerPoint 会话可见） ====================

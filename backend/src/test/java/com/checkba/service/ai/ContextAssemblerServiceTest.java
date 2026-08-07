@@ -319,11 +319,17 @@ class ContextAssemblerServiceTest {
         String lastUser = assembleLastUserText(officeDoc("名称\t金额\n甲\t100"));
         assertTrue(lastUser.contains("[系统提醒]"), "excel 会话也应有末位提醒");
         assertTrue(lastUser.contains("office_excel_set_values"), "应指引用 office_excel_* 工具修改");
+        assertTrue(lastUser.contains("office_excel_format_cells"), "末位提醒应点名格式/结构工具集（批次6）");
+        assertTrue(lastUser.contains("office_excel_manage_sheets"), "末位提醒应点名工作表管理工具（批次6）");
+        assertTrue(lastUser.contains("office_excel_set_autofilter"), "末位提醒应点名自动筛选工具（批次6追加）");
+        assertTrue(lastUser.contains("office_excel_conditional_format"), "末位提醒应点名条件格式工具（批次6追加）");
         assertFalse(lastUser.contains("office_replace_text"), "excel 会话不应点名 Word 面 office_* 工具");
         assertFalse(lastUser.contains("doc_list_project_files"), "excel 会话不应点名 doc_* 工具");
 
         String systemText = assembleSystemText(officeDoc("名称\t金额\n甲\t100"));
         assertTrue(systemText.contains("office_excel_get_range"), "活跃文档段应指引 office_excel_* 读取");
+        assertTrue(systemText.contains("office_excel_set_formulas"), "活跃文档段应点名公式工具（批次6）");
+        assertTrue(systemText.contains("office_excel_get_overview"), "活跃文档段应点名总览工具（批次6追加）");
         assertFalse(systemText.contains("office_get_text"), "活跃文档段不应再点名 Word 面工具");
     }
 

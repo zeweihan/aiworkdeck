@@ -967,6 +967,380 @@ const HANDLERS = {
     })
   },
 
+  // ==================== Excel 格式/结构（批次6，excel_*） ====================
+
+  async excel_format_cells(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(rangeAddress)
+      const applied = {}
+      if (args.fontName) { range.format.font.name = String(args.fontName); applied.fontName = args.fontName }
+      if (args.fontSize != null) { range.format.font.size = Number(args.fontSize); applied.fontSize = args.fontSize }
+      if (args.bold != null) { range.format.font.bold = !!args.bold; applied.bold = !!args.bold }
+      if (args.italic != null) { range.format.font.italic = !!args.italic; applied.italic = !!args.italic }
+      if (args.fontColor) { range.format.font.color = String(args.fontColor); applied.fontColor = args.fontColor }
+      if (args.fillColor) { range.format.fill.color = String(args.fillColor); applied.fillColor = args.fillColor }
+      if (args.horizontalAlignment) {
+        range.format.horizontalAlignment = toEnumValue(EXCEL_H_ALIGN, args.horizontalAlignment, 'horizontalAlignment')
+        applied.horizontalAlignment = String(args.horizontalAlignment).trim().toLowerCase()
+      }
+      if (args.verticalAlignment) {
+        range.format.verticalAlignment = toEnumValue(EXCEL_V_ALIGN, args.verticalAlignment, 'verticalAlignment')
+        applied.verticalAlignment = String(args.verticalAlignment).trim().toLowerCase()
+      }
+      if (args.wrapText != null) { range.format.wrapText = !!args.wrapText; applied.wrapText = !!args.wrapText }
+      if (args.numberFormat) {
+        range.load('rowCount,columnCount')
+        await context.sync()
+        const fmt = String(args.numberFormat)
+        range.numberFormat = Array.from({ length: range.rowCount }, () => Array.from({ length: range.columnCount }, () => fmt))
+        applied.numberFormat = fmt
+      }
+      range.load('address')
+      await context.sync()
+      return { address: range.address, applied }
+    })
+  },
+
+  async excel_set_borders(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    const borders = String(args.borders || '').trim().toLowerCase()
+    if (borders !== 'none' && !EXCEL_BORDER_LOCATIONS[borders]) {
+      throw new Error(`borders 值非法：${args.borders}（合法值：all/outside/inside/none）`)
+    }
+    const weight = EXCEL_BORDER_WEIGHTS[String(args.style || 'thin').trim().toLowerCase()] || 'Thin'
+    const color = String(args.color || '#000000')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(rangeAddress)
+      const ids = borders === 'none' ? EXCEL_BORDER_LOCATIONS.all : EXCEL_BORDER_LOCATIONS[borders]
+      for (const id of ids) {
+        const border = range.format.borders.getItem(id)
+        border.style = borders === 'none' ? 'None' : 'Continuous'
+        if (borders !== 'none') {
+          border.weight = weight
+          border.color = color
+        }
+      }
+      range.load('address')
+      await context.sync()
+      const result = { address: range.address, borders }
+      if (borders !== 'none') {
+        result.style = String(args.style || 'thin').trim().toLowerCase()
+        result.color = color
+      }
+      return result
+    })
+  },
+
+  async excel_edit_rows_cols(args) {
+    const sheetName = String(args.sheetName || '')
+    const action = String(args.action || '').trim().toLowerCase()
+    if (!EXCEL_EDIT_ROWS_COLS_ACTIONS.includes(action)) {
+      throw new Error(`action 值非法：${args.action}（合法值：${EXCEL_EDIT_ROWS_COLS_ACTIONS.join('/')}）`)
+    }
+    let index = Math.floor(Number(args.index))
+    if (!Number.isFinite(index) || index < 0) throw new Error('index 不能为负')
+    let count = args.count == null ? 1 : Math.floor(Number(args.count))
+    if (!Number.isFinite(count) || count < 1) count = 1
+    const needsSize = action === 'set_width' || action === 'set_height'
+    let size = null
+    if (needsSize) {
+      size = Number(args.size)
+      if (!Number.isFinite(size) || size <= 0) throw new Error('size 须为正数')
+      if (!excelApiSupported('1.2')) {
+        throw new Error('当前 Excel 版本不支持设置行高/列宽（需要 ExcelApi 1.2）')
+      }
+    }
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const isRowAction = action === 'insert_rows' || action === 'delete_rows' || action === 'set_height'
+      const range = isRowAction
+        ? sheet.getRange(`${index + 1}:${index + count}`)
+        : sheet.getRange(`${columnLetter(index)}:${columnLetter(index + count - 1)}`)
+      const result = { action, index, count }
+      if (action === 'insert_rows') range.insert(Excel.InsertShiftDirection.down)
+      else if (action === 'delete_rows') range.delete(Excel.DeleteShiftDirection.up)
+      else if (action === 'insert_cols') range.insert(Excel.InsertShiftDirection.right)
+      else if (action === 'delete_cols') range.delete(Excel.DeleteShiftDirection.left)
+      else if (action === 'set_width') { range.format.columnWidth = size; result.size = size }
+      else if (action === 'set_height') { range.format.rowHeight = size; result.size = size }
+      await context.sync()
+      return result
+    })
+  },
+
+  async excel_merge_cells(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    const action = String(args.action || '').trim().toLowerCase()
+    if (!EXCEL_MERGE_ACTIONS.includes(action)) {
+      throw new Error(`action 值非法：${args.action}（合法值：merge/unmerge）`)
+    }
+    if (!excelApiSupported('1.2')) {
+      throw new Error('当前 Excel 版本不支持合并/取消合并单元格（需要 ExcelApi 1.2）')
+    }
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(rangeAddress)
+      if (action === 'merge') range.merge()
+      else range.unmerge()
+      range.load('address')
+      await context.sync()
+      return { address: range.address, action }
+    })
+  },
+
+  async excel_sort_range(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    const keyColumn = Math.floor(Number(args.keyColumn))
+    if (!Number.isFinite(keyColumn) || keyColumn < 0) throw new Error('keyColumn 不能为负')
+    const ascending = args.ascending !== false
+    const hasHeader = !!args.hasHeader
+    if (!excelApiSupported('1.2')) {
+      throw new Error('当前 Excel 版本不支持区域排序（需要 ExcelApi 1.2）')
+    }
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(rangeAddress)
+      range.sort.apply([{ key: keyColumn, ascending }], false, hasHeader)
+      range.load('address')
+      await context.sync()
+      return { address: range.address, keyColumn, ascending, hasHeader }
+    })
+  },
+
+  async excel_manage_sheets(args) {
+    const action = String(args.action || '').trim().toLowerCase()
+    if (!EXCEL_SHEET_ACTIONS.includes(action)) {
+      throw new Error(`action 值非法：${args.action}（合法值：${EXCEL_SHEET_ACTIONS.join('/')}）`)
+    }
+    const sheetName = String(args.sheetName || '')
+    if (action !== 'add' && !sheetName) throw new Error('sheetName 不能为空')
+    return Excel.run(async (context) => {
+      const worksheets = context.workbook.worksheets
+      const result = { action }
+      let target
+      if (action === 'add') {
+        target = worksheets.add(sheetName || undefined)
+      } else {
+        if (action === 'delete') {
+          worksheets.load('items')
+          await context.sync()
+          if (worksheets.items.length <= 1) {
+            throw new Error('无法删除：工作簿至少要保留一张工作表')
+          }
+        }
+        target = worksheets.getItem(sheetName)
+      }
+      if (action === 'rename') {
+        const newName = String(args.newName || '')
+        if (!newName) throw new Error('newName 不能为空')
+        target.name = newName
+      } else if (action === 'delete') {
+        target.delete()
+      } else if (action === 'move') {
+        const position = Math.floor(Number(args.position))
+        if (!Number.isFinite(position) || position < 0) throw new Error('position 不能为负')
+        target.position = position
+      } else if (action === 'activate') {
+        target.activate()
+      }
+      if (action === 'delete') {
+        await context.sync()
+      } else {
+        target.load('name,position')
+        await context.sync()
+        result.name = target.name
+        result.position = target.position
+      }
+      return result
+    })
+  },
+
+  async excel_freeze_panes(args) {
+    const action = String(args.action || '').trim().toLowerCase()
+    if (!EXCEL_FREEZE_ACTIONS.includes(action)) {
+      throw new Error(`action 值非法：${args.action}（合法值：${EXCEL_FREEZE_ACTIONS.join('/')}）`)
+    }
+    if (!excelApiSupported('1.7')) {
+      throw new Error('当前 Excel 版本不支持冻结窗格（需要 ExcelApi 1.7）')
+    }
+    const sheetName = String(args.sheetName || '')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      if (action === 'freeze_rows' || action === 'freeze_cols') {
+        let count = Math.floor(Number(args.count))
+        if (!Number.isFinite(count) || count < 1) count = 1
+        if (action === 'freeze_rows') sheet.freezePanes.freezeRows(count)
+        else sheet.freezePanes.freezeColumns(count)
+        await context.sync()
+        return { action, count }
+      }
+      if (action === 'freeze_at') {
+        const cellAddr = String(args.cellAddress || '')
+        if (!cellAddr) throw new Error('cellAddress 不能为空')
+        sheet.freezePanes.freezeAt(sheet.getRange(cellAddr))
+        await context.sync()
+        return { action, cellAddress: cellAddr }
+      }
+      sheet.freezePanes.unfreeze()
+      await context.sync()
+      return { action }
+    })
+  },
+
+  async excel_set_formulas(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    const formulas = args.formulas
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    if (!Array.isArray(formulas) || !formulas.length || !Array.isArray(formulas[0])) {
+      throw new Error('formulas 必须是非空二维数组')
+    }
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      let range = sheet.getRange(rangeAddress)
+      range.load('rowCount,columnCount,address')
+      await context.sync()
+      const rows = formulas.length
+      const cols = formulas[0].length
+      if (range.rowCount === 1 && range.columnCount === 1 && (rows > 1 || cols > 1)) {
+        range = range.getResizedRange(rows - 1, cols - 1)
+      } else if (range.rowCount !== rows || range.columnCount !== cols) {
+        throw new Error(`区域尺寸（${range.rowCount}x${range.columnCount}）与 formulas 尺寸（${rows}x${cols}）不一致`)
+      }
+      range.formulas = formulas
+      range.load('address,values,rowIndex,columnIndex')
+      await context.sync()
+      const formulaErrors = []
+      const values = range.values || []
+      for (let r = 0; r < values.length; r++) {
+        const row = values[r] || []
+        for (let c = 0; c < row.length; c++) {
+          const v = row[c]
+          if (typeof v === 'string' && v.startsWith('#')) {
+            formulaErrors.push({ address: cellAddress(range.rowIndex + r, range.columnIndex + c), value: v })
+          }
+        }
+      }
+      const result = { written: rows * cols, address: range.address }
+      if (formulaErrors.length) result.formulaErrors = formulaErrors
+      return result
+    })
+  },
+
+  async excel_get_overview() {
+    return Excel.run(async (context) => {
+      const worksheets = context.workbook.worksheets
+      const active = worksheets.getActiveWorksheet()
+      active.load('name')
+      worksheets.load('items/name')
+      await context.sync()
+      const sheets = worksheets.items
+      const usedRanges = sheets.map((sheet) => sheet.getUsedRangeOrNullObject(true))
+      usedRanges.forEach((u) => u.load('address,rowCount,columnCount,isNullObject'))
+      await context.sync()
+      const activeName = active.name
+      const result = sheets.map((sheet, i) => {
+        const u = usedRanges[i]
+        return {
+          name: sheet.name,
+          active: sheet.name === activeName,
+          usedRange: u.isNullObject ? null : { address: u.address, rows: u.rowCount, cols: u.columnCount }
+        }
+      })
+      return { sheetCount: sheets.length, sheets: result }
+    })
+  },
+
+  async excel_select_range(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      if (sheetName) sheet.activate()
+      const range = sheet.getRange(rangeAddress)
+      range.select()
+      range.load('address')
+      await context.sync()
+      return { address: range.address }
+    })
+  },
+
+  async excel_set_autofilter(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    const action = String(args.action || '').trim().toLowerCase()
+    if (!EXCEL_AUTOFILTER_ACTIONS.includes(action)) {
+      throw new Error(`action 值非法：${args.action}（合法值：apply/clear/remove）`)
+    }
+    if (action === 'apply' && !rangeAddress) throw new Error('apply 需要 rangeAddress')
+    if (!excelApiSupported('1.9')) {
+      throw new Error('当前 Excel 版本不支持自动筛选（需要 ExcelApi 1.9）')
+    }
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      if (action === 'apply') {
+        sheet.autoFilter.apply(sheet.getRange(rangeAddress))
+      } else if (action === 'clear') {
+        sheet.autoFilter.clearCriteria()
+      } else {
+        sheet.autoFilter.remove()
+      }
+      await context.sync()
+      const result = { action }
+      if (action === 'apply') result.rangeAddress = rangeAddress
+      return result
+    })
+  },
+
+  async excel_conditional_format(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    const action = String(args.action || 'apply').trim().toLowerCase()
+    if (!excelApiSupported('1.6')) {
+      throw new Error('当前 Excel 版本不支持条件格式（需要 ExcelApi 1.6）')
+    }
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(rangeAddress)
+      if (action === 'clearall') {
+        range.conditionalFormats.clearAll()
+        await context.sync()
+        return { action: 'clearAll' }
+      }
+      // apply：每次先清空该区域现有规则再套用新规则，不叠加（与桌面端 sheet_conditional_format 同口径）
+      range.conditionalFormats.clearAll()
+      const ruleType = String(args.ruleType || '').trim().toLowerCase()
+      const officeType = EXCEL_CF_RULE_TYPES[ruleType]
+      if (!officeType) throw new Error(`ruleType 值非法：${args.ruleType}（合法值：cellValue/colorScale）`)
+      const cf = range.conditionalFormats.add(officeType)
+      if (ruleType === 'cellvalue') {
+        const operator = EXCEL_CF_OPERATORS[String(args.operator || '').trim().toLowerCase()]
+        if (!operator) throw new Error(`operator 值非法：${args.operator}（合法值：greaterThan/lessThan/between/equalTo）`)
+        const rule = { operator, formula1: String(args.value1) }
+        if (operator === 'Between') rule.formula2 = String(args.value2)
+        cf.cellValue.rule = rule
+        cf.cellValue.format.fill.color = String(args.fillColor || '#FFC7CE')
+      } else {
+        cf.colorScale.criteria = EXCEL_CF_DEFAULT_COLOR_SCALE
+      }
+      await context.sync()
+      return { action: 'apply', ruleType }
+    })
+  },
+
   // ==================== PowerPoint（ppt_*，宿主须为 PowerPoint） ====================
 
   async ppt_get_slides() {
@@ -1036,6 +1410,63 @@ function cellAddress(rowIndex, colIndex) {
   return col + (rowIndex + 1)
 }
 
+/* ==================== Excel 格式/结构（批次6，excel_*） ====================
+ * Word 面走原生修订（changeTrackingMode），Excel 没有对应机制——这些工具写入即生效，
+ * 误操作的安全网是 Ctrl+Z 与文档检查点（后端 fileEffect="MODIFIED" 已保证检查点触发）。
+ */
+
+/** 0 起的列号转字母（不含行号，供行列范围拼 A1 引用用，如 "C:E"） */
+function columnLetter(colIndex) {
+  let col = ''
+  let n = colIndex + 1
+  while (n > 0) {
+    const rem = (n - 1) % 26
+    col = String.fromCharCode(65 + rem) + col
+    n = Math.floor((n - 1) / 26)
+  }
+  return col
+}
+
+/** ExcelApi 需求集守卫（merge/sort/columnWidth/rowHeight 属 1.2，freezePanes 属 1.7） */
+function excelApiSupported(version) {
+  try {
+    return Office.context.requirements.isSetSupported('ExcelApi', version)
+  } catch (e) {
+    return false
+  }
+}
+
+/** horizontalAlignment → Excel.HorizontalAlignment（本批次只开常用三种） */
+const EXCEL_H_ALIGN = { left: 'Left', center: 'Center', right: 'Right' }
+/** verticalAlignment → Excel.VerticalAlignment（Excel 的垂直居中叫 Center，不是 Middle） */
+const EXCEL_V_ALIGN = { top: 'Top', middle: 'Center', bottom: 'Bottom' }
+
+/** borders → 参与的 Excel.BorderIndex 集合（none 复用 all 的边去清空） */
+const EXCEL_BORDER_LOCATIONS = {
+  all: ['EdgeTop', 'EdgeBottom', 'EdgeLeft', 'EdgeRight', 'InsideHorizontal', 'InsideVertical'],
+  outside: ['EdgeTop', 'EdgeBottom', 'EdgeLeft', 'EdgeRight'],
+  inside: ['InsideHorizontal', 'InsideVertical']
+}
+/** style → Excel.BorderWeight */
+const EXCEL_BORDER_WEIGHTS = { thin: 'Thin', medium: 'Medium', thick: 'Thick' }
+
+const EXCEL_EDIT_ROWS_COLS_ACTIONS = ['insert_rows', 'delete_rows', 'insert_cols', 'delete_cols', 'set_width', 'set_height']
+const EXCEL_MERGE_ACTIONS = ['merge', 'unmerge']
+const EXCEL_SHEET_ACTIONS = ['add', 'rename', 'delete', 'move', 'activate']
+const EXCEL_FREEZE_ACTIONS = ['freeze_rows', 'freeze_cols', 'freeze_at', 'unfreeze']
+const EXCEL_AUTOFILTER_ACTIONS = ['apply', 'clear', 'remove']
+
+/** ruleType 小写短名 → Excel.ConditionalFormatType */
+const EXCEL_CF_RULE_TYPES = { cellvalue: 'CellValue', colorscale: 'ColorScale' }
+/** operator 小写短名 → Excel.ConditionalCellValueOperator */
+const EXCEL_CF_OPERATORS = { greaterthan: 'GreaterThan', lessthan: 'LessThan', between: 'Between', equalto: 'EqualTo' }
+/** colorScale 默认三色刻度（低到高：红-黄-绿），与桌面端 sheet_conditional_format 视觉口径一致 */
+const EXCEL_CF_DEFAULT_COLOR_SCALE = {
+  minimum: { formula: null, type: 'LowestValue', color: '#F8696B' },
+  midpoint: { formula: '50', type: 'Percent', color: '#FFEB84' },
+  maximum: { formula: null, type: 'HighestValue', color: '#63BE7B' }
+}
+
 /** PPT 文本读写依赖 PowerPointApi 1.4（TextFrame/TextRange），旧版宿主直接报错 */
 function requirePptTextApi() {
   let supported = false
@@ -1082,6 +1513,18 @@ export const COMMAND_DISPLAY_NAMES = {
   excel_get_range: '读取区域',
   excel_set_values: '写入区域',
   excel_search: '查找单元格',
+  excel_format_cells: '设置单元格格式',
+  excel_set_borders: '设置边框',
+  excel_edit_rows_cols: '编辑行列',
+  excel_merge_cells: '合并单元格',
+  excel_sort_range: '排序',
+  excel_manage_sheets: '管理工作表',
+  excel_freeze_panes: '冻结窗格',
+  excel_set_formulas: '写入公式',
+  excel_get_overview: '读取总览',
+  excel_select_range: '选中区域',
+  excel_set_autofilter: '设置自动筛选',
+  excel_conditional_format: '设置条件格式',
   ppt_get_slides: '读取幻灯片',
   ppt_replace_text: '替换幻灯片文本'
 }
@@ -1103,6 +1546,18 @@ const COMMAND_HOSTS = {
   excel_get_range: 'excel',
   excel_set_values: 'excel',
   excel_search: 'excel',
+  excel_format_cells: 'excel',
+  excel_set_borders: 'excel',
+  excel_edit_rows_cols: 'excel',
+  excel_merge_cells: 'excel',
+  excel_sort_range: 'excel',
+  excel_manage_sheets: 'excel',
+  excel_freeze_panes: 'excel',
+  excel_set_formulas: 'excel',
+  excel_get_overview: 'excel',
+  excel_select_range: 'excel',
+  excel_set_autofilter: 'excel',
+  excel_conditional_format: 'excel',
   ppt_get_slides: 'powerpoint',
   ppt_replace_text: 'powerpoint'
 }

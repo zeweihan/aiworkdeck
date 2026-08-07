@@ -351,4 +351,312 @@ class OfficeEditToolsTest {
         assertEquals("旧标题", args.getValue().get("searchText"));
         assertEquals("新标题", args.getValue().get("replaceText"));
     }
+
+    // ==================== Excel 格式/结构（批次6） ====================
+
+    @Test
+    @DisplayName("office_excel_format_cells：只下发给出的格式字段，枚举归一为小写短名")
+    void excelFormatCellsDispatchesGivenFieldsOnly() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_format_cells"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_format_cells("conv-1", "Sheet1", "A1:B2", "Arial", 12.0,
+                true, null, "#C00000", null, "Center", "Top", null, null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_format_cells"), args.capture());
+        Map<String, Object> sent = args.getValue();
+        assertEquals("Sheet1", sent.get("sheetName"));
+        assertEquals("A1:B2", sent.get("rangeAddress"));
+        assertEquals("Arial", sent.get("fontName"));
+        assertEquals(12.0, sent.get("fontSize"));
+        assertEquals(true, sent.get("bold"));
+        assertEquals("#C00000", sent.get("fontColor"));
+        assertEquals("center", sent.get("horizontalAlignment"));
+        assertEquals("top", sent.get("verticalAlignment"));
+        assertFalse(sent.containsKey("italic"));
+        assertFalse(sent.containsKey("fillColor"));
+        assertFalse(sent.containsKey("numberFormat"));
+        assertFalse(sent.containsKey("wrapText"));
+    }
+
+    @Test
+    @DisplayName("office_excel_set_borders：非 none 时带出 style/color 默认值，none 时不带修饰参数")
+    void excelSetBordersDefaultsAndNone() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_set_borders"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_set_borders("conv-1", null, "A1:D10", "outside", null, null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args1 = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_set_borders"), args1.capture());
+        assertEquals("outside", args1.getValue().get("borders"));
+        assertEquals("thin", args1.getValue().get("style"));
+        assertEquals("#000000", args1.getValue().get("color"));
+
+        tools.office_excel_set_borders("conv-1", null, "A1:D10", "none", "thick", "#C00000");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args2 = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("excel_set_borders"), args2.capture());
+        Map<String, Object> lastSent = args2.getAllValues().get(1);
+        assertEquals("none", lastSent.get("borders"));
+        assertFalse(lastSent.containsKey("style"));
+        assertFalse(lastSent.containsKey("color"));
+    }
+
+    @Test
+    @DisplayName("office_excel_edit_rows_cols：count 缺省为 1，set_width 需要 size")
+    void excelEditRowsColsDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_edit_rows_cols"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_edit_rows_cols("conv-1", "Sheet1", "insert_rows", 2, null, null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_edit_rows_cols"), args.capture());
+        assertEquals("insert_rows", args.getValue().get("action"));
+        assertEquals(2, args.getValue().get("index"));
+        assertEquals(1, args.getValue().get("count"));
+        assertFalse(args.getValue().containsKey("size"));
+
+        tools.office_excel_edit_rows_cols("conv-1", "Sheet1", "set_width", 0, 3, 80.0);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args2 = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("excel_edit_rows_cols"), args2.capture());
+        Map<String, Object> sent = args2.getAllValues().get(1);
+        assertEquals("set_width", sent.get("action"));
+        assertEquals(80.0, sent.get("size"));
+    }
+
+    @Test
+    @DisplayName("office_excel_merge_cells / office_excel_sort_range：下发对应动作与默认值")
+    void excelMergeAndSortDispatch() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_merge_cells"), anyMap())).thenReturn("{}");
+        tools.office_excel_merge_cells("conv-1", null, "A1:D1", "merge");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> mergeArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_merge_cells"), mergeArgs.capture());
+        assertEquals("merge", mergeArgs.getValue().get("action"));
+
+        when(bridge.executeOfficeCommand(any(), eq("excel_sort_range"), anyMap())).thenReturn("{}");
+        tools.office_excel_sort_range("conv-1", null, "A1:D20", 0, null, null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> sortArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_sort_range"), sortArgs.capture());
+        assertEquals(0, sortArgs.getValue().get("keyColumn"));
+        assertEquals(true, sortArgs.getValue().get("ascending"));
+        assertEquals(false, sortArgs.getValue().get("hasHeader"));
+    }
+
+    @Test
+    @DisplayName("office_excel_manage_sheets：按 action 下发对应必填字段")
+    void excelManageSheetsDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_manage_sheets"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_manage_sheets("conv-1", "rename", "Sheet1", "汇总表", null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_manage_sheets"), args.capture());
+        assertEquals("rename", args.getValue().get("action"));
+        assertEquals("Sheet1", args.getValue().get("sheetName"));
+        assertEquals("汇总表", args.getValue().get("newName"));
+
+        tools.office_excel_manage_sheets("conv-1", "add", null, null, null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args2 = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("excel_manage_sheets"), args2.capture());
+        Map<String, Object> addSent = args2.getAllValues().get(1);
+        assertEquals("add", addSent.get("action"));
+        assertEquals("", addSent.get("sheetName"));
+    }
+
+    @Test
+    @DisplayName("office_excel_freeze_panes / office_excel_set_formulas：下发对应字段")
+    void excelFreezePanesAndSetFormulasDispatch() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_freeze_panes"), anyMap())).thenReturn("{}");
+        tools.office_excel_freeze_panes("conv-1", null, "freeze_rows", null, null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> freezeArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_freeze_panes"), freezeArgs.capture());
+        assertEquals("freeze_rows", freezeArgs.getValue().get("action"));
+        assertEquals(1, freezeArgs.getValue().get("count"));
+
+        when(bridge.executeOfficeCommand(any(), eq("excel_set_formulas"), anyMap())).thenReturn("{}");
+        tools.office_excel_set_formulas("conv-1", "Sheet1", "B2", "[[\"=SUM(A1:A10)\"]]");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> formulaArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_set_formulas"), formulaArgs.capture());
+        assertEquals("B2", formulaArgs.getValue().get("rangeAddress"));
+        @SuppressWarnings("unchecked")
+        java.util.List<java.util.List<Object>> formulas =
+                (java.util.List<java.util.List<Object>>) formulaArgs.getValue().get("formulas");
+        assertEquals("=SUM(A1:A10)", formulas.get(0).get(0));
+    }
+
+    @Test
+    @DisplayName("office_excel_get_overview / office_excel_select_range：只读工具下发对应命令")
+    void excelOverviewAndSelectRangeDispatch() {
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("excel_get_overview"), anyMap()))
+                .thenReturn("{\"sheetCount\":1}");
+        assertEquals("{\"sheetCount\":1}", tools.office_excel_get_overview("conv-1"));
+
+        when(bridge.executeOfficeCommand(any(), eq("excel_select_range"), anyMap())).thenReturn("{}");
+        tools.office_excel_select_range("conv-1", "Sheet1", "B2:C4");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_select_range"), args.capture());
+        assertEquals("Sheet1", args.getValue().get("sheetName"));
+        assertEquals("B2:C4", args.getValue().get("rangeAddress"));
+    }
+
+    @Test
+    @DisplayName("office_excel_set_autofilter：apply 带出 rangeAddress，clear/remove 不带")
+    void excelSetAutofilterDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_set_autofilter"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_set_autofilter("conv-1", null, "A1:D20", "apply");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> applyArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_set_autofilter"), applyArgs.capture());
+        assertEquals("apply", applyArgs.getValue().get("action"));
+        assertEquals("A1:D20", applyArgs.getValue().get("rangeAddress"));
+
+        tools.office_excel_set_autofilter("conv-1", null, null, "remove");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> removeArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("excel_set_autofilter"), removeArgs.capture());
+        Map<String, Object> lastSent = removeArgs.getAllValues().get(1);
+        assertEquals("remove", lastSent.get("action"));
+        assertFalse(lastSent.containsKey("rangeAddress"));
+    }
+
+    @Test
+    @DisplayName("office_excel_conditional_format：cellValue/colorScale/clearAll 三种下发路径")
+    void excelConditionalFormatDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_conditional_format"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_conditional_format("conv-1", null, "A1:A10", "cellValue", "greaterThan",
+                100.0, null, null, null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> cellValueArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_conditional_format"), cellValueArgs.capture());
+        Map<String, Object> sent1 = cellValueArgs.getValue();
+        assertEquals("apply", sent1.get("action"));
+        assertEquals("cellvalue", sent1.get("ruleType"));
+        assertEquals("greaterthan", sent1.get("operator"));
+        assertEquals(100.0, sent1.get("value1"));
+        assertEquals("#FFC7CE", sent1.get("fillColor"));
+        assertFalse(sent1.containsKey("value2"));
+
+        tools.office_excel_conditional_format("conv-1", null, "A1:A10", "colorScale", null,
+                null, null, null, null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> colorScaleArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("excel_conditional_format"), colorScaleArgs.capture());
+        Map<String, Object> sent2 = colorScaleArgs.getAllValues().get(1);
+        assertEquals("colorscale", sent2.get("ruleType"));
+        assertFalse(sent2.containsKey("operator"));
+
+        tools.office_excel_conditional_format("conv-1", null, "A1:A10", null, null, null, null, null, "clearAll");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> clearArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(3))
+                .executeOfficeCommand(eq("conv-1"), eq("excel_conditional_format"), clearArgs.capture());
+        Map<String, Object> sent3 = clearArgs.getAllValues().get(2);
+        assertEquals("clearall", sent3.get("action"));
+        assertFalse(sent3.containsKey("ruleType"));
+    }
+
+    @Test
+    @DisplayName("Excel 只读/筛选/条件格式工具参数校验失败：返回 Error 前缀且不触碰桥")
+    void batch6ExtraValidationFailuresDoNotTouchBridge() {
+        // select_range：地址为空/非法
+        assertTrue(tools.office_excel_select_range("conv-1", null, "").startsWith("Error"));
+        assertTrue(tools.office_excel_select_range("conv-1", null, "Sheet1!A1").startsWith("Error"));
+
+        // set_autofilter：非法 action / apply 缺地址
+        assertTrue(tools.office_excel_set_autofilter("conv-1", null, "A1:D20", "toggle").startsWith("Error"));
+        assertTrue(tools.office_excel_set_autofilter("conv-1", null, null, "apply").startsWith("Error"));
+
+        // conditional_format：地址为空 / apply 缺 ruleType / cellValue 缺 operator 或 value1 /
+        // between 缺 value2 / 非法枚举 / 非法颜色
+        assertTrue(tools.office_excel_conditional_format("conv-1", null, "", "cellValue", "greaterThan",
+                1.0, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_conditional_format("conv-1", null, "A1:A10", null, null,
+                null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_conditional_format("conv-1", null, "A1:A10", "cellValue", null,
+                1.0, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_conditional_format("conv-1", null, "A1:A10", "cellValue", "greaterThan",
+                null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_conditional_format("conv-1", null, "A1:A10", "cellValue", "between",
+                1.0, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_conditional_format("conv-1", null, "A1:A10", "heatmap", "greaterThan",
+                1.0, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_conditional_format("conv-1", null, "A1:A10", "cellValue", "greaterThan",
+                1.0, null, "红色", null).startsWith("Error"));
+
+        verifyNoInteractions(bridge);
+    }
+
+    @Test
+    @DisplayName("Excel 格式/结构工具参数校验失败：返回 Error 前缀且不触碰桥")
+    void batch6ValidationFailuresDoNotTouchBridge() {
+        // format_cells：地址非法 / 一个格式参数都没给 / 非法枚举 / 非法颜色 / 非法字号
+        assertTrue(tools.office_excel_format_cells("conv-1", null, "Sheet1!A1", null, null,
+                null, null, null, null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_format_cells("conv-1", null, "A1", null, null,
+                null, null, null, null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_format_cells("conv-1", null, "A1", null, null,
+                null, null, null, null, "diagonal", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_format_cells("conv-1", null, "A1", null, null,
+                null, null, "红色", null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_format_cells("conv-1", null, "A1", null, 0.0,
+                null, null, null, null, null, null, null, null).startsWith("Error"));
+
+        // set_borders：地址为空 / borders 缺省或非法 / 非法颜色
+        assertTrue(tools.office_excel_set_borders("conv-1", null, "", "all", null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_set_borders("conv-1", null, "A1", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_set_borders("conv-1", null, "A1", "diagonal", null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_set_borders("conv-1", null, "A1", "all", null, "红色").startsWith("Error"));
+
+        // edit_rows_cols：非法 action / index 缺失或为负 / count 越界 / set_height 缺 size
+        assertTrue(tools.office_excel_edit_rows_cols("conv-1", null, "shuffle", 0, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_edit_rows_cols("conv-1", null, "insert_rows", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_edit_rows_cols("conv-1", null, "insert_rows", -1, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_edit_rows_cols("conv-1", null, "insert_rows", 0, 101, null).startsWith("Error"));
+        assertTrue(tools.office_excel_edit_rows_cols("conv-1", null, "set_height", 0, null, null).startsWith("Error"));
+
+        // merge_cells：地址为空 / 非法 action
+        assertTrue(tools.office_excel_merge_cells("conv-1", null, "", "merge").startsWith("Error"));
+        assertTrue(tools.office_excel_merge_cells("conv-1", null, "A1:B2", "combine").startsWith("Error"));
+
+        // sort_range：地址为空 / keyColumn 缺失或为负
+        assertTrue(tools.office_excel_sort_range("conv-1", null, "", 0, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_sort_range("conv-1", null, "A1:D20", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_sort_range("conv-1", null, "A1:D20", -1, null, null).startsWith("Error"));
+
+        // manage_sheets：非法 action / 非 add 时 sheetName 为空 / rename 缺 newName / move 缺 position
+        assertTrue(tools.office_excel_manage_sheets("conv-1", "duplicate", "Sheet1", null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_manage_sheets("conv-1", "rename", null, "新名", null).startsWith("Error"));
+        assertTrue(tools.office_excel_manage_sheets("conv-1", "rename", "Sheet1", null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_manage_sheets("conv-1", "move", "Sheet1", null, null).startsWith("Error"));
+
+        // freeze_panes：非法 action / freeze_at 缺 cellAddress
+        assertTrue(tools.office_excel_freeze_panes("conv-1", null, "pin", null, null).startsWith("Error"));
+        assertTrue(tools.office_excel_freeze_panes("conv-1", null, "freeze_at", null, null).startsWith("Error"));
+
+        // set_formulas：地址为空 / JSON 非法 / 空数组 / 非矩形 / 元素不以 = 开头 / 超上限
+        assertTrue(tools.office_excel_set_formulas("conv-1", null, "", "[[\"=A1\"]]").startsWith("Error"));
+        assertTrue(tools.office_excel_set_formulas("conv-1", null, "A1", "not json").startsWith("Error"));
+        assertTrue(tools.office_excel_set_formulas("conv-1", null, "A1", "[]").startsWith("Error"));
+        assertTrue(tools.office_excel_set_formulas("conv-1", null, "A1", "[[\"=A1\"],[\"=A2\",\"=A3\"]]").startsWith("Error"));
+        assertTrue(tools.office_excel_set_formulas("conv-1", null, "A1", "[[\"B1+1\"]]").startsWith("Error"));
+        String hugeFormulas = "[[" + "\"=A1\",".repeat(2000) + "\"=A1\"]]";
+        assertTrue(tools.office_excel_set_formulas("conv-1", null, "A1", hugeFormulas).startsWith("Error"));
+
+        verifyNoInteractions(bridge);
+    }
 }
