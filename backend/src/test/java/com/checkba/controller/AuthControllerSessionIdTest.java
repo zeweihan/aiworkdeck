@@ -1,15 +1,17 @@
 package com.checkba.controller;
 
+import com.checkba.repository.UserSessionRepository;
+import com.checkba.service.UserSessionService;
 import org.junit.jupiter.api.Test;
 
-import java.lang.reflect.Method;
 import java.util.HashSet;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.mock;
 
 /**
- * 锁定会话 ID 的不可预测性。
+ * 锁定会话 ID 的不可预测性（生成逻辑已随 DB 落库会话迁入 UserSessionService）。
  *
  * 历史实现是 "session_" + currentTimeMillis() + Math.random() 的 13 位小数：
  * Math.random() 背后是 48 位 LCG，攻击者注册一个账号拿到自己的会话 ID 就能反解种子，
@@ -18,20 +20,14 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class AuthControllerSessionIdTest {
 
-    private static String generate(AuthController controller) throws Exception {
-        Method m = AuthController.class.getDeclaredMethod("generateSessionId");
-        m.setAccessible(true);
-        return (String) m.invoke(controller);
-    }
-
     @Test
-    void sessionIdIsUnpredictable() throws Exception {
-        AuthController controller = new AuthController(null, null, null, null, null, null, null, null);
+    void sessionIdIsUnpredictable() {
+        UserSessionService service = new UserSessionService(mock(UserSessionRepository.class));
 
         long before = System.currentTimeMillis();
         Set<String> seen = new HashSet<>();
         for (int i = 0; i < 500; i++) {
-            seen.add(generate(controller));
+            seen.add(service.issue(1L));
         }
         long after = System.currentTimeMillis();
 

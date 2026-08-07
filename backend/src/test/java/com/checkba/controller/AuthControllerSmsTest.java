@@ -54,7 +54,10 @@ class AuthControllerSmsTest {
         // 短信分支的接线测试：二次验证协调层用真实实现（TOTP 未启用 → 判定落到短信）
         SecondFactorService secondFactor = new SecondFactorService(
                 new TotpService(), smsAuthService, mock(UserRepository.class));
-        return new AuthController(userService, null, null, null, guard, null, smsAuthService, secondFactor);
+        // DB 会话服务（repository 打桩）：登录成功路径要经它签发 sessionId
+        com.checkba.service.UserSessionService sessions = new com.checkba.service.UserSessionService(
+                mock(com.checkba.repository.UserSessionRepository.class));
+        return new AuthController(userService, null, null, null, guard, null, smsAuthService, secondFactor, sessions);
     }
 
     @Test

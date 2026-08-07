@@ -1,0 +1,95 @@
+# addin.aiworkdeck.com —— 官方托管的插件云后端 + Web 客户端（h5 + LOWA 编辑器）
+# 部署在北京 ECS（8.152.169.44），与官网共机。只新增本 server 块，不改任何既有配置。
+#
+# 结构沿袭 deploy/web/nginx.conf.example（COOP/COEP 全站头 + brotli 回放 + /api/ SSE 反代），
+# 差异只有域名、目录与证书路径。
+#
+# nginx 坑：location 里出现任意 add_header 会丢弃上层继承的 add_header，
+# 所以每个带 add_header 的 location 都必须重复 COOP/COEP 两行。
+
+server {
+    listen 80;
+    server_name addin.aiworkdeck.com;
+    # certbot webroot 验证
+    location /.well-known/acme-challenge/ {
+        root /opt/aiworkdeck/cloud/acme;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name addin.aiworkdeck.com;
+    ssl_certificate     /etc/letsencrypt/live/addin.aiworkdeck.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/addin.aiworkdeck.com/privkey.pem;
+
+    root /opt/aiworkdeck/cloud/web;
+    index index.html;
+
+    # ---- 跨域隔离（LOWA 需要 SharedArrayBuffer）----
+    add_header Cross-Origin-Opener-Policy   same-origin  always;
+    add_header Cross-Origin-Embedder-Policy require-corp always;
+
+    # ---- 后端 API（Spring Boot :9696，只监听 127.0.0.1）----
+    location /api/ {
+        proxy_pass http://127.0.0.1:9696;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # SSE（AI 编排器事件流）：关缓冲、放长超时
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        # 大文件上传（文档解析）
+        client_max_body_size 200m;
+    }
+
+    # ---- 登录/桥接端点限频（多实例部署的 AuthAbuseGuard 前置闸；单实例也留着）----
+    location = /api/auth/awdk-login {
+        limit_req zone=awd_auth burst=5 nodelay;
+        proxy_pass http://127.0.0.1:9696;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+    location = /api/auth/login {
+        limit_req zone=awd_auth burst=5 nodelay;
+        proxy_pass http://127.0.0.1:9696;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # ---- LOWA 运行时：brotli 预压缩文件按原编码回放 ----
+    # 若 lowa/.encodings.json 里对应文件不是 "br"，删掉对应 location。
+    location = /zetaoffice/lowa/soffice.wasm {
+        add_header Cross-Origin-Opener-Policy   same-origin  always;
+        add_header Cross-Origin-Embedder-Policy require-corp always;
+        add_header Content-Encoding br always;
+        types { } default_type application/wasm;
+    }
+    location = /zetaoffice/lowa/soffice.data {
+        add_header Cross-Origin-Opener-Policy   same-origin  always;
+        add_header Cross-Origin-Embedder-Policy require-corp always;
+        add_header Content-Encoding br always;
+        types { } default_type application/octet-stream;
+    }
+
+    # ---- SPA 回退 ----
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+
+# 放到 http{} 级别的限频 zone（宝塔机上进 /www/server/nginx/conf/nginx.conf 的 http 块，
+# 或单独 conf.d 文件）：
+#   limit_req_zone $binary_remote_addr zone=awd_auth:10m rate=10r/m;
