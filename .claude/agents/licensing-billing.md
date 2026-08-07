@@ -311,6 +311,21 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     时自动预选平台通道——用账户 Key 解锁的人买的就是这条通道，不该再被引导去配别家的 Key。
     向导提交前的空值拦截在 `handleSubmit`，后端 `WizardController` 也拒空 `activeProvider`（两道都在才算数）。
 
+15. **向导里每一条「下一步」都必须能在向导里做完**。平台通道曾经在未连接账户时置灰 +
+    提示「进入产品后在系统管理粘贴 Key」——那是死路：试用码解锁的用户在向导里无论如何都点不亮它，
+    只能先随便选一家凑合。现在 `AWD_CLOUD` 恒可选，选中就地展开连接块（`handleConnectAccount` 调
+    `POST /api/account/connect`，与 admin 页 `onConnectAccount` 同链路：连接 → 重取状态 →
+    `refreshEntitlements(true)`），已连接但没分配额度时给「前往官网分配额度 + 重新检查」两个动作。
+    两个前置条件缺任一时 `handleSubmit` 拦住提交并指出下一步——**闸门从「不可选」挪到了「不可提交」，
+    不是取消了**。
+
+16. **全新安装必须先钉 `system.wizard.completed=false`**（`DataInitializer`，仅 admin 不存在时写）。
+    `WizardController.isInitialized()` 在标记不存在时退回存量兜底「system_setting 非空即已初始化」，
+    而首启链上 `LocalIdentityService.commit()` 解析本机身份就会写下 `local.identity.selectedUserId`
+    一行——launch 页查身份在查向导之前，于是**全新安装反而整个跳过首启向导**（真机复现过：
+    解锁后直接进个人中心，`ai.activeProvider` 一直空着，要到发第一条消息才发现）。
+    护栏 `config/DataInitializerTest`：全新装写标记、存量库一个字都不许改（改了等于把匿名提交窗口重开）。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
