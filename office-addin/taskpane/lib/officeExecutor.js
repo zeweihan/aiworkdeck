@@ -17,14 +17,20 @@
  * 设为 TrackAll（Word 原生修订），执行后恢复原值；宿主不支持 WordApi 1.4 时
  * 降级为直接修改并在结果里标注 tracked:false。Excel/PowerPoint 没有修订机制，
  * 写入直接生效。
+ *
+ * replace_text 走字符级最小修订（见下方 applyMinimalRedline）：只对新旧文的
+ * 差异段落笔，避免修订面板里出现「整段删 + 整段插」。
  */
 
 import { officeAvailable, detectHost } from './wordDoc.js'
+import { minimalEdits } from './minimalEdit.js'
 
 // 与后端 ContextAssemblerService.MAX_INLINE_CONTENT_CHARS 一致的截断上限
 const MAX_TEXT_CHARS = 200_000
 // search 命中上下文的最大条数（防超长工具输出撑爆模型上下文）
 const MAX_SEARCH_HITS = 20
+// Word 的查找串上限（超了直接判非法）
+const WORD_SEARCH_MAX_CHARS = 255
 
 function trackingSupported() {
   try {
@@ -71,6 +77,146 @@ async function searchRanges(context, needle, matchCase) {
   results.load('items')
   await context.sync()
   return results.items
+}
+
+/* ==================== Word 最小修订（minimal redline） ====================
+ * TrackAll 下对整个命中 Range 直接 insertText(replace) 会记成「整段删除 +
+ * 整段插入」——「我爱你」改「我恨你」在修订面板里读作删「我爱你」加
+ * 「我恨你」。这里先用 minimalEdits 算出字符级差异段，再只对差异段落笔，
+ * 修订面板里就只剩删「爱」加「恨」（与桌面端 LOWA 的 applyMinimalRedline
+ * 同口径，PR#188）。
+ *
+ * Office.js 没有按字符偏移切 Range 的 API，差异段只能靠在命中 Range 内二次
+ * search 锚串来定位——所以「定位是否唯一」是整条路径的安全阀：任何一段定位
+ * 不到唯一结果，整个 Range 放弃最小修订、回退原来的整段替换。全部定位都在
+ * 任何写入之前完成，绝不会出现「改了一半又回退」的双重编辑。
+ */
+
+/** needle 在 hay 中的非重叠出现次数 */
+function countOccurrences(hay, needle) {
+  if (!needle) return 0
+  let n = 0
+  let i = hay.indexOf(needle)
+  while (i !== -1) {
+    n++
+    i = hay.indexOf(needle, i + needle.length)
+  }
+  return n
+}
+
+/** 含孤立代理项的串（差分按 UTF-16 码元切，可能劈开 emoji）不能拿去 search */
+function hasLoneSurrogate(s) {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = s.charCodeAt(i + 1)
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return true
+      i++
+    } else if (c >= 0xdc00 && c <= 0xdfff) return true
+  }
+  return false
+}
+
+/** Word 的 search 能安全吃下的查找串：非空、不超 255、不含特殊码前缀 ^、码元完整 */
+function searchable(s) {
+  return !!s && s.length <= WORD_SEARCH_MAX_CHARS && !s.includes('^') && !hasLoneSurrogate(s)
+}
+
+/**
+ * 为一段编辑构造在命中 Range 内的定位方案，返回 null 表示无法安全定位。
+ * 消歧策略：
+ *  - 替换/删除段（oldText 非空）：差异段在 Range 文本中唯一 → 直接 search
+ *    （mode 'direct'）。不唯一 → 以差异段为中心向两侧对称扩上下文窗口，直到
+ *    「窗口在 Range 内唯一」且「差异段在窗口内唯一」→ 先 search 窗口、再在
+ *    窗口内 search 差异段（mode 'window'）；扩到整段仍不满足就放弃。
+ *  - 纯插入段（oldText 为空）：以插入点左侧的一段文本为锚，锚唯一即
+ *    insertText(..., After)；左侧不可用（插入点在最左/左锚不唯一）时改用
+ *    右侧文本 + Before。
+ */
+function buildLocator(rangeText, edit) {
+  const seg = edit.oldText
+  const len = rangeText.length
+  if (seg) {
+    if (!searchable(seg)) return null
+    if (countOccurrences(rangeText, seg) === 1) return { mode: 'direct', needle: seg }
+    for (let pad = 1; ; pad++) {
+      const lo = Math.max(0, edit.start - pad)
+      const hi = Math.min(len, edit.end + pad)
+      const win = rangeText.slice(lo, hi)
+      if (!searchable(win)) return null
+      if (countOccurrences(rangeText, win) === 1 && countOccurrences(win, seg) === 1) {
+        return { mode: 'window', window: win, needle: seg }
+      }
+      if (lo === 0 && hi === len) return null
+    }
+  }
+  for (let pad = 1; pad <= edit.start; pad++) {
+    const anchor = rangeText.slice(edit.start - pad, edit.start)
+    if (!searchable(anchor)) break
+    if (countOccurrences(rangeText, anchor) === 1) return { mode: 'insertAfter', needle: anchor }
+  }
+  for (let pad = 1; edit.end + pad <= len; pad++) {
+    const anchor = rangeText.slice(edit.end, edit.end + pad)
+    if (!searchable(anchor)) break
+    if (countOccurrences(rangeText, anchor) === 1) return { mode: 'insertBefore', needle: anchor }
+  }
+  return null
+}
+
+/**
+ * 把 newText 以字符级最小修订写入命中 Range。
+ * @returns {Promise<number|null>} 实际落笔的编辑段数（0 = 新旧文一致，不留痕迹）；
+ *   null = 无法最小化，调用方回退整段 insertText(replace)。返回 null 时保证
+ *   一个字都还没写。
+ */
+async function applyMinimalRedline(context, range, rangeText, newText) {
+  const edits = minimalEdits(rangeText, newText)
+  if (!edits.length) return 0
+  // 差异覆盖整段：没有比整段替换更细的写法了
+  if (edits.length === 1 && edits[0].start === 0 && edits[0].end === rangeText.length) return null
+
+  const plans = []
+  for (const edit of edits) {
+    const loc = buildLocator(rangeText, edit)
+    if (!loc) return null
+    plans.push({ edit, loc })
+  }
+
+  // 第一轮定位：direct/纯插入的锚串，window 模式的外层窗口
+  for (const plan of plans) {
+    plan.primary = range.search(plan.loc.mode === 'window' ? plan.loc.window : plan.loc.needle, { matchCase: true })
+    plan.primary.load('items')
+  }
+  await context.sync()
+  for (const plan of plans) {
+    if (plan.primary.items.length !== 1) return null
+    plan.target = plan.primary.items[0]
+  }
+
+  // 第二轮定位：window 模式在唯一窗口内再切出差异段
+  const windowed = plans.filter((plan) => plan.loc.mode === 'window')
+  if (windowed.length) {
+    for (const plan of windowed) {
+      plan.inner = plan.target.search(plan.loc.needle, { matchCase: true })
+      plan.inner.load('items')
+    }
+    await context.sync()
+    for (const plan of windowed) {
+      if (plan.inner.items.length !== 1) return null
+      plan.target = plan.inner.items[0]
+    }
+  }
+
+  // 应用：从右到左。左侧编辑的定位不会被右侧的写入推移（与 LOWA 同理由）。
+  for (let i = plans.length - 1; i >= 0; i--) {
+    const { edit, loc, target } = plans[i]
+    if (loc.mode === 'insertAfter') target.insertText(edit.newText, Word.InsertLocation.after)
+    else if (loc.mode === 'insertBefore') target.insertText(edit.newText, Word.InsertLocation.before)
+    else if (edit.newText) target.insertText(edit.newText, Word.InsertLocation.replace)
+    else target.delete()
+  }
+  await context.sync()
+  return edits.length
 }
 
 const HANDLERS = {
@@ -128,11 +274,38 @@ const HANDLERS = {
           throw new Error('未找到目标文本，请确认 searchText 与文档内容精确一致（可先用 search 命令核对）')
         }
         const targets = replaceAll ? items : [items[0]]
-        for (const range of targets) {
-          range.insertText(replaceText, Word.InsertLocation.replace)
-        }
+        for (const range of targets) range.load('text')
         await context.sync()
-        return { replaced: targets.length, totalMatches: items.length }
+        // 跨段（\r/\n）交给整段替换：段落结构不该被字符级差分拆着改
+        const multiline = /[\r\n]/.test(searchText) || /[\r\n]/.test(replaceText)
+        let minimal = 0
+        let fallbacks = 0
+        let editSegments = 0
+        // 多个命中同样从右到左处理：前一处的写入不会推移后面命中的定位
+        for (let i = targets.length - 1; i >= 0; i--) {
+          const range = targets[i]
+          const rangeText = range.text == null ? '' : String(range.text)
+          const applied = multiline || !rangeText
+            ? null
+            : await applyMinimalRedline(context, range, rangeText, replaceText)
+          if (applied == null) {
+            range.insertText(replaceText, Word.InsertLocation.replace)
+            await context.sync()
+            fallbacks++
+          } else {
+            minimal++
+            editSegments += applied
+          }
+        }
+        const result = {
+          replaced: targets.length,
+          totalMatches: items.length,
+          via: fallbacks === 0 ? 'minimalRedline' : (minimal === 0 ? 'fullReplace' : 'mixed'),
+          edits: editSegments
+        }
+        if (fallbacks) result.fallbacks = fallbacks
+        if (!editSegments && !fallbacks) result.note = '新旧文本一致，未产生修订'
+        return result
       })
     })
   },
