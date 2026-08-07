@@ -32,6 +32,13 @@ description: Microsoft Office 插件领域。任务涉及 Word/Excel/PPT 任务�
 - 错误文案不得含「登录/未授权/请先」子串（主前端以此判定未登录清会话；licensing 领域红线）。统一说「连接未就绪/令牌无效/账户直连失败」。awdk 失败**不透传服务端原文**（服务端文案不受该红线约束）。
 - 全局禁 emoji；包管理 npm 不是 pnpm。
 - 部署期 CORS：插件正式 Origin 要进 `security.cors.allowed-origins`；local-mode 下 LocalModeAccessFilter 用同一份白名单硬拦非 GET 跨站请求。`security.cors.allow-all` 绝不能开。localhost/127.0.0.1 默认放行，开发态零配置。
+- **云后端首次上线的必配项清单**（Phase D 生产化尚未做，站起来之前照这张单子过一遍；截至 2026-08-07 两台 ECS 上都还没有这个后端实例）：
+  `security.local-mode=false`（默认）、`security.registration-mode=closed`、`security.awdk-login-enabled=true`、
+  `security.conversation-issuance-required=true`、`security.cors.allowed-origins` 填插件正式 Origin，
+  以及环境变量 **`AWD_PLATFORM_KEY_SECRET`**（per-user 平台 AI 密钥的落库加密密钥，任意高熵串，
+  例如 `openssl rand -base64 32`）。**最后这条是启动强不变式**：`awdk-login-enabled=true` 而它缺失时
+  服务直接拒绝启动（`PlatformAiKeyCipher` 构造器，licensing 领域地雷 17），刻意不做明文降级。
+  它与官网侧的 `AWD_KEY_ENCRYPTION_SECRET` 是两把互不相干的密钥，别复用同一个值。
 - Office 只加载 https 任务窗格：dev 证书 `npx office-addin-dev-certs install`，vite 配置自动拾取。
 - **新增 office_* 工具三件套**：后端 OfficeEditTools 加 @Tool + officeExecutor.js 的 HANDLERS 加实现 + COMMAND_DISPLAY_NAMES 加中文名，**并在 COMMAND_HOSTS 标宿主**。没有客户端实现的远端工具 = 30s 超时空转（PptxEditTools 教训）。**工具名前缀决定宿主可见性**：Excel 面必须 office_excel_*、PPT 面必须 office_ppt_*，其余 office_* 归 Word——起错前缀会漏进错误宿主的会话（死路径）。
 - Word 的 body.search 查找串上限 255 字符（后端工具已前置校验）；search/replace 的锚点必须与文档文本精确一致（matchCase）。

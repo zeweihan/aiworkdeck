@@ -71,9 +71,12 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   基线按**密钥指纹**分桶、worker 按指纹分片；兼做吊销探测（401/403 即作废本地密钥）。
 - `service/ai/ChatModelFactory.java` — `Provider.AWD_CLOUD` 路由；`demotePlatformProvider()` 在断开账户时把供应商降级回落。
 - `model/entity/TokenUsage.java` 的 `costSource`：`platform`（真实扣费）/ `estimate`（BYOK 单价表估算）。
-- 前端选平台通道有**两个**入口，判据必须一致（已连接账户 + 已分配额度，缺哪个都展示但不可选并给下一步）：
-  `pages/admin/admin.vue` 的 `aiProviderOptions`、`pages/wizard/wizard.vue` 的 `providerOptions`（首启向导，
-  条件齐备时自动预选平台通道；向导刻意不预选任何供应商，见下方地雷 14）。
+- 前端选平台通道有**两个**入口，前置条件相同（已连接账户 + 已分配额度）但**闸门形态不同**，别照抄：
+  - `pages/admin/admin.vue` 的 `aiProviderOptions`——缺条件时展示但 `unavailable`，`hint` 指出下一步
+    （「需先连接账户」/「需先在官网分配额度」）；
+  - `pages/wizard/wizard.vue` 的 `providerOptions`——`AWD_CLOUD` **恒可选**，选中就地展开连接块把条件补齐，
+    闸门挪到 `handleSubmit`（见下方地雷 15：向导里的每一条「下一步」都必须能在向导里做完）。
+    向导刻意不预选任何供应商，见下方地雷 14。
 
 **广场付费项（PR-D，链路见 plugin-marketplace.md）**
 - `backend/src/main/java/com/checkba/service/market/MarketPurchaseGate.java` — Skill 与插件两条安装链路共用的付费判定单一出口。
