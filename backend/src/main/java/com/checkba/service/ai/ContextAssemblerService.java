@@ -269,8 +269,11 @@ public class ContextAssemblerService {
                         }
                         case POWERPOINT -> {
                             systemText.append("该演示文稿在用户本机的 Microsoft PowerPoint 中打开，各页文本已随本请求内联注入下方。");
-                            systemText.append("读取/修改它一律使用 office_ppt_* 工具（office_ppt_get_slides / ");
-                            systemText.append("office_ppt_replace_text），替换直接生效（PowerPoint 没有修订机制）。");
+                            systemText.append("读取/修改它一律使用 office_ppt_* 工具（office_ppt_get_slides / office_ppt_replace_text / ");
+                            systemText.append("office_ppt_format_text 排版文字、office_ppt_add_slide / office_ppt_delete_slide / ");
+                            systemText.append("office_ppt_move_slide 管理页面、office_ppt_add_text_box / office_ppt_add_shape 插入文本框与形状、");
+                            systemText.append("office_ppt_get_slide_details / office_ppt_delete_shape 精确定位并删除形状），");
+                            systemText.append("写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。");
                             systemText.append("本会话没有 doc_* 工具，也没有 Word 面的 office_* 工具。\n\n");
                         }
                         default -> {
@@ -482,8 +485,11 @@ public class ContextAssemblerService {
                 case POWERPOINT -> "\n\n[系统提醒] 用户此刻在 Microsoft PowerPoint 中打开着演示文稿" + docLabel + "，"
                         + "各页文本已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前演示文稿」「改一下」等都指它——"
-                        + "读取/修改一律调用 office_ppt_* 工具（office_ppt_get_slides / "
-                        + "office_ppt_replace_text），替换直接生效（PowerPoint 没有修订机制）。";
+                        + "读取/修改一律调用 office_ppt_* 工具（office_ppt_get_slides / office_ppt_replace_text / "
+                        + "office_ppt_format_text / office_ppt_add_slide / office_ppt_delete_slide / "
+                        + "office_ppt_move_slide / office_ppt_add_text_box / office_ppt_add_shape / "
+                        + "office_ppt_get_slide_details / office_ppt_delete_shape），"
+                        + "写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。";
                 default -> "\n\n[系统提醒] 用户此刻在 Microsoft Word 中打开着文档" + docLabel + "，"
                         + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"

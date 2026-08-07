@@ -1385,6 +1385,289 @@ const HANDLERS = {
       await context.sync()
       return { replaced, slides: touchedSlides }
     })
+  },
+
+  async ppt_format_text(args) {
+    const searchText = String(args.searchText || '')
+    if (!searchText) throw new Error('查找文本不能为空')
+    const font = {}
+    if (args.fontName) font.name = String(args.fontName)
+    if (args.fontSize != null) font.size = Number(args.fontSize)
+    if (args.bold != null) font.bold = !!args.bold
+    if (args.italic != null) font.italic = !!args.italic
+    if (args.underline != null) font.underline = toEnumValue(PPT_UNDERLINE_TYPES, args.underline, 'underline')
+    if (args.color) font.color = String(args.color)
+    if (!Object.keys(font).length) {
+      throw new Error('未给出任何格式参数（fontName/fontSize/bold/italic/underline/color 至少给一个）')
+    }
+    requirePptTextApi()
+    return PowerPoint.run(async (context) => {
+      const frames = await loadPptTextFrames(context)
+      // 逐个 TextFrame 在其纯文本上找偏移，再用 getSubstring 切出精确子串设字体——
+      // 不改变文本长度，找到的偏移不会因为落格而失效，不需要像 Word 的字符级修订那样从右到左应用。
+      const targets = []
+      outer:
+      for (const slideFrames of frames) {
+        for (const tf of slideFrames) {
+          if (tf.isNullObject || !tf.hasText) continue
+          const text = tf.textRange.text || ''
+          let from = 0
+          while (true) {
+            const idx = text.indexOf(searchText, from)
+            if (idx === -1) break
+            targets.push({ tf, start: idx, len: searchText.length })
+            from = idx + searchText.length
+            if (!args.applyToAll) break outer
+          }
+        }
+      }
+      if (!targets.length) {
+        throw new Error('未找到目标文本，请确认 searchText 与幻灯片文本精确一致（可先用 ppt_get_slides 核对）')
+      }
+      for (const t of targets) {
+        const sub = t.tf.textRange.getSubstring(t.start, t.len)
+        applyProps(sub.font, font)
+      }
+      await context.sync()
+      return { formatted: targets.length, applied: font }
+    })
+  },
+
+  async ppt_add_slide(args) {
+    const position = args.position != null ? Math.floor(Number(args.position)) : null
+    const title = args.title ? String(args.title) : ''
+    const body = args.body ? String(args.body) : ''
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      const countResult = slides.getCount()
+      await context.sync()
+      const beforeCount = countResult.value
+
+      // slides.add()（PowerPointApi 1.3）总是追加到末尾——没有生产可用的"插到第 N 页"参数
+      // （AddSlideOptions.index 文档标注 preview-only，不能用）。要挪位置只能追加后再用
+      // Slide.moveTo（PowerPointApi 1.8，门槛更高）搬过去，旧宿主上退化为"留在末尾"。
+      slides.add()
+      await context.sync()
+
+      const newSlide = slides.getItemAt(beforeCount)
+      let finalPosition = beforeCount + 1
+      let moved = false
+      let note
+
+      if (position != null) {
+        const clamped = Math.max(1, Math.min(position, beforeCount + 1))
+        if (clamped !== finalPosition) {
+          if (pptApiSupported('1.8')) {
+            newSlide.moveTo(clamped - 1)
+            await context.sync()
+            moved = true
+            finalPosition = clamped
+          } else {
+            note = '当前 PowerPoint 版本不支持移动幻灯片位置（需要 PowerPointApi 1.8），已追加到演示文稿末尾'
+          }
+        }
+      }
+
+      let titleAdded = false
+      let bodyAdded = false
+      if (title || body) {
+        if (!pptApiSupported('1.4')) {
+          const result = { slideAdded: true, position: finalPosition, moved, titleAdded, bodyAdded }
+          result.note = (note ? note + '；' : '') +
+            '当前 PowerPoint 版本不支持插入文本框（需要 PowerPointApi 1.4），标题/正文未写入'
+          return result
+        }
+        const shapes = newSlide.shapes
+        if (title) {
+          const box = shapes.addTextBox(title, { left: 40, top: 30, width: 600, height: 60 })
+          box.textFrame.textRange.font.size = 28
+          box.textFrame.textRange.font.bold = true
+          titleAdded = true
+        }
+        if (body) {
+          shapes.addTextBox(body, { left: 40, top: 110, width: 600, height: 300 })
+          bodyAdded = true
+        }
+        await context.sync()
+      }
+
+      const result = { slideAdded: true, position: finalPosition, moved, titleAdded, bodyAdded }
+      if (note) result.note = note
+      return result
+    })
+  },
+
+  async ppt_delete_slide(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      const countResult = slides.getCount()
+      await context.sync()
+      const count = countResult.value
+      if (count <= 1) {
+        throw new Error('演示文稿只剩一页，无法删除（PowerPoint 不允许空演示文稿）')
+      }
+      if (slideNumber > count) {
+        throw new Error(`slideNumber ${slideNumber} 越界：演示文稿共 ${count} 页（页码从 1 开始）`)
+      }
+      const slide = slides.getItemAt(slideNumber - 1)
+      slide.delete()
+      await context.sync()
+      return { deleted: true, slideNumber, remaining: count - 1 }
+    })
+  },
+
+  async ppt_add_text_box(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    const text = String(args.text || '')
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    if (!text) throw new Error('文本框内容不能为空')
+    requirePptTextApi()
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, slideNumber)
+      const box = slide.shapes.addTextBox(text, {
+        left: args.left != null ? Number(args.left) : PPT_SHAPE_DEFAULTS.left,
+        top: args.top != null ? Number(args.top) : PPT_SHAPE_DEFAULTS.top,
+        width: args.width != null ? Number(args.width) : PPT_SHAPE_DEFAULTS.width,
+        height: args.height != null ? Number(args.height) : PPT_SHAPE_DEFAULTS.height
+      })
+      const font = {}
+      if (args.fontSize != null) font.size = Number(args.fontSize)
+      if (args.bold != null) font.bold = !!args.bold
+      if (args.color) font.color = String(args.color)
+      if (Object.keys(font).length) applyProps(box.textFrame.textRange.font, font)
+      await context.sync()
+      return { added: true, slideNumber }
+    })
+  },
+
+  async ppt_move_slide(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    const toPosition = Math.floor(Number(args.toPosition))
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    if (!Number.isFinite(toPosition) || toPosition < 1) throw new Error('toPosition 须为大于等于 1 的整数')
+    if (!pptApiSupported('1.8')) {
+      throw new Error('unsupported: 当前 PowerPoint 版本不支持移动幻灯片（需要 PowerPointApi 1.8，Microsoft 365 较新版本）')
+    }
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const count = slides.items.length
+      if (slideNumber > count) {
+        throw new Error(`slideNumber ${slideNumber} 越界：演示文稿共 ${count} 页（页码从 1 开始）`)
+      }
+      const clamped = Math.max(1, Math.min(toPosition, count))
+      const slide = slides.getItemAt(slideNumber - 1)
+      slide.moveTo(clamped - 1)
+      await context.sync()
+      return { moved: true, from: slideNumber, to: clamped }
+    })
+  },
+
+  async ppt_add_shape(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    const shapeType = toEnumValue(PPT_GEOMETRIC_SHAPE_TYPES, args.shapeType, 'shapeType')
+    requirePptTextApi()
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, slideNumber)
+      const shape = slide.shapes.addGeometricShape(shapeType, {
+        left: args.left != null ? Number(args.left) : PPT_SHAPE_DEFAULTS.left,
+        top: args.top != null ? Number(args.top) : PPT_SHAPE_DEFAULTS.top,
+        width: args.width != null ? Number(args.width) : 200,
+        height: args.height != null ? Number(args.height) : 150
+      })
+      if (args.fillColor) shape.fill.setSolidColor(String(args.fillColor))
+      await context.sync()
+      return { added: true, slideNumber, shapeType: String(args.shapeType).trim().toLowerCase() }
+    })
+  },
+
+  async ppt_get_slide_details(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    requirePptTextApi()
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, slideNumber)
+      const shapes = slide.shapes
+      shapes.load('items/id,items/type,items/left,items/top,items/width,items/height')
+      await context.sync()
+      const items = shapes.items
+      const frames = items.map((shape) => {
+        const tf = shape.getTextFrameOrNullObject()
+        tf.load('hasText,isNullObject')
+        tf.textRange.load('text')
+        return tf
+      })
+      await context.sync()
+      const result = items.map((shape, i) => {
+        const tf = frames[i]
+        const hasText = !tf.isNullObject && tf.hasText
+        return {
+          id: shape.id,
+          type: shape.type,
+          left: shape.left,
+          top: shape.top,
+          width: shape.width,
+          height: shape.height,
+          text: hasText ? (tf.textRange.text || '').slice(0, 500) : ''
+        }
+      })
+      return { slideNumber, shapeCount: result.length, shapes: result }
+    })
+  },
+
+  async ppt_delete_shape(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    const shapeId = args.shapeId ? String(args.shapeId) : ''
+    const textMatch = args.textMatch ? String(args.textMatch) : ''
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    if (!shapeId && !textMatch) throw new Error('shapeId 与 textMatch 须至少给一个')
+    if (!shapeId && textMatch) requirePptTextApi() // 按文字定位要读 TextFrame，走 1.4 门槛；按 id 定位只需 1.3
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, slideNumber)
+      const shapes = slide.shapes
+      shapes.load('items/id')
+      await context.sync()
+      let target
+      if (shapeId) {
+        target = shapes.items.find((s) => s.id === shapeId)
+        if (!target) {
+          throw new Error(`未找到 id 为 ${shapeId} 的形状（可先用 ppt_get_slide_details 核对）`)
+        }
+      } else {
+        const frames = shapes.items.map((shape) => {
+          const tf = shape.getTextFrameOrNullObject()
+          tf.load('hasText,isNullObject')
+          tf.textRange.load('text')
+          return tf
+        })
+        await context.sync()
+        const idx = frames.findIndex((tf) => !tf.isNullObject && tf.hasText && (tf.textRange.text || '') === textMatch)
+        if (idx === -1) {
+          throw new Error('未找到文字内容与 textMatch 精确一致的形状（可先用 ppt_get_slide_details 核对）')
+        }
+        target = shapes.items[idx]
+      }
+      const deletedId = target.id
+      target.delete()
+      await context.sync()
+      return { deleted: true, slideNumber, shapeId: deletedId }
+    })
   }
 }
 
@@ -1467,15 +1750,42 @@ const EXCEL_CF_DEFAULT_COLOR_SCALE = {
   maximum: { formula: null, type: 'HighestValue', color: '#63BE7B' }
 }
 
-/** PPT 文本读写依赖 PowerPointApi 1.4（TextFrame/TextRange），旧版宿主直接报错 */
-function requirePptTextApi() {
-  let supported = false
+/** 通用 PowerPoint API 需求集探测；version 形如 '1.4'/'1.8'，探测失败按不支持处理 */
+function pptApiSupported(version) {
   try {
-    supported = Office.context.requirements.isSetSupported('PowerPointApi', '1.4')
-  } catch (e) { /* fallthrough */ }
-  if (!supported) {
-    throw new Error('unsupported: 当前 PowerPoint 版本不支持读写幻灯片文本（需要 PowerPointApi 1.4，Microsoft 365 较新版本）')
+    return Office.context.requirements.isSetSupported('PowerPointApi', version)
+  } catch (e) {
+    return false
   }
+}
+
+/**
+ * PowerPointApi 1.4 是本插件 PPT 面绝大多数命令的公共门槛：TextFrame/TextRange 读写、
+ * Shape.left/top/width/height/type、addTextBox/addGeometricShape、ShapeFill 全在这一档
+ * （Slide.delete 是 1.2、slides.add 是 1.3，门槛更低，不受此函数约束）。旧版宿主直接报错。
+ */
+function requirePptTextApi() {
+  if (!pptApiSupported('1.4')) {
+    throw new Error('unsupported: 当前 PowerPoint 版本不支持该操作（需要 PowerPointApi 1.4，Microsoft 365 较新版本）')
+  }
+}
+
+/** PPT 字符格式下划线线型 → PowerPoint.ShapeFontUnderlineStyle（wave 映射为 Wavy） */
+const PPT_UNDERLINE_TYPES = { none: 'None', single: 'Single', double: 'Double', dotted: 'Dotted', wave: 'Wavy' }
+
+/** PPT 几何形状类型 → PowerPoint.GeometricShapeType（v1 起步三种） */
+const PPT_GEOMETRIC_SHAPE_TYPES = { rectangle: 'Rectangle', ellipse: 'Ellipse', triangle: 'Triangle' }
+
+/** 新增文本框/形状的默认位置尺寸（磅） */
+const PPT_SHAPE_DEFAULTS = { left: 50, top: 50, width: 400, height: 100 }
+
+/** 按 1 起页码取幻灯片；slides 须已 load('items/$none') 或等价并 sync 过 */
+function getSlideOrThrow(slides, slideNumber) {
+  const idx = slideNumber - 1
+  if (idx < 0 || idx >= slides.items.length) {
+    throw new Error(`slideNumber ${slideNumber} 越界：演示文稿共 ${slides.items.length} 页（页码从 1 开始）`)
+  }
+  return slides.items[idx]
 }
 
 /** 载入全部幻灯片各形状的 TextFrame（含 hasText 与 textRange.text），返回按页分组的数组 */
@@ -1526,7 +1836,15 @@ export const COMMAND_DISPLAY_NAMES = {
   excel_set_autofilter: '设置自动筛选',
   excel_conditional_format: '设置条件格式',
   ppt_get_slides: '读取幻灯片',
-  ppt_replace_text: '替换幻灯片文本'
+  ppt_replace_text: '替换幻灯片文本',
+  ppt_format_text: '设置幻灯片文字格式',
+  ppt_add_slide: '新增幻灯片',
+  ppt_delete_slide: '删除幻灯片',
+  ppt_add_text_box: '插入文本框',
+  ppt_move_slide: '移动幻灯片',
+  ppt_add_shape: '插入形状',
+  ppt_get_slide_details: '读取幻灯片明细',
+  ppt_delete_shape: '删除形状'
 }
 
 /** 每个 command 要求的宿主（与后端按 officeHost 的工具可见性过滤对齐） */
@@ -1559,7 +1877,15 @@ const COMMAND_HOSTS = {
   excel_set_autofilter: 'excel',
   excel_conditional_format: 'excel',
   ppt_get_slides: 'powerpoint',
-  ppt_replace_text: 'powerpoint'
+  ppt_replace_text: 'powerpoint',
+  ppt_format_text: 'powerpoint',
+  ppt_add_slide: 'powerpoint',
+  ppt_delete_slide: 'powerpoint',
+  ppt_add_text_box: 'powerpoint',
+  ppt_move_slide: 'powerpoint',
+  ppt_add_shape: 'powerpoint',
+  ppt_get_slide_details: 'powerpoint',
+  ppt_delete_shape: 'powerpoint'
 }
 
 const HOST_LABELS = { word: 'Word', excel: 'Excel', powerpoint: 'PowerPoint' }

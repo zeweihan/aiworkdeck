@@ -111,6 +111,16 @@ public class OfficeEditTools implements AgentToolComponent {
     private static final java.util.Set<String> EXCEL_CF_OPERATOR_VALUES =
             java.util.Set.of("greaterthan", "lessthan", "between", "equalto");
     private static final java.util.Set<String> EXCEL_CF_ACTIONS = java.util.Set.of("apply", "clearall");
+    /** PPT 字符格式下划线线型白名单（与 Word 面对齐；插件端 wave 映射为 PowerPoint 的 Wavy 枚举） */
+    private static final java.util.Set<String> PPT_UNDERLINE_VALUES =
+            java.util.Set.of("none", "single", "double", "dotted", "wave");
+
+    /** PPT 几何形状类型白名单（v1 起步三种；GeometricShapeType 全集远不止这些，按需再扩） */
+    private static final java.util.Set<String> PPT_SHAPE_TYPES =
+            java.util.Set.of("rectangle", "ellipse", "triangle");
+
+    /** PPT 结构操作（增删移动幻灯片/形状）页码与序号的防呆上限 */
+    private static final int MAX_PPT_SLIDE_NUMBER = 2000;
 
     /**
      * 枚举参数归一化：null/空返回 null（表示不改），命中白名单返回小写值，
@@ -1103,5 +1113,257 @@ public class OfficeEditTools implements AgentToolComponent {
         args.put("searchText", searchText);
         args.put("replaceText", replaceText);
         return officeBridgeService.executeOfficeCommand(conversationId, "ppt_replace_text", args);
+    }
+
+    @Tool("在当前 PowerPoint 演示文稿中查找文本并设置其字符格式：字体、字号、加粗、斜体、下划线、颜色。" +
+          "searchText 须与幻灯片文本精确一致（区分大小写），默认只对第一处匹配生效，applyToAll=true 对所有匹配生效。" +
+          "格式参数至少要给一个，没传的保持原样。直接生效（PowerPoint 没有修订机制）。" +
+          "需要 PowerPointApi 1.4，旧版宿主会返回明确错误。")
+    @ToolMeta(displayName = "设置幻灯片文字格式", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_format_text(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("要查找的文本（须与幻灯片文本精确一致）") String searchText,
+            @P("是否对所有匹配生效（false=仅第一处）") Boolean applyToAll,
+            @P("字体名（不改则不传）") String fontName,
+            @P("字号（磅）（不改则不传）") Double fontSize,
+            @P("加粗 true/false（不改则不传）") Boolean bold,
+            @P("斜体 true/false（不改则不传）") Boolean italic,
+            @P("下划线线型：none/single/double/dotted/wave（不改则不传）") String underline,
+            @P("文字颜色 #RRGGBB，如 #C00000（不改则不传）") String color
+    ) {
+        log.info("Tool: office_ppt_format_text called, search={}, applyToAll={}", searchText, applyToAll);
+        if (searchText == null || searchText.isBlank()) {
+            return "Error: 查找文本不能为空";
+        }
+        if (searchText.length() > 255) {
+            return "Error: 查找文本过长（上限 255 字符），请缩短后重试";
+        }
+        if (fontSize != null && (fontSize <= 0 || fontSize > 1638)) {
+            return "Error: fontSize 须为大于 0 且不超过 1638 的磅值";
+        }
+        if (color != null && !color.isBlank() && !HEX_COLOR.matcher(color.trim()).matches()) {
+            return "Error: color 须为 #RRGGBB 格式，如 #C00000";
+        }
+        String underlineValue;
+        try {
+            underlineValue = normalizeEnum(underline, PPT_UNDERLINE_VALUES, "underline");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        Map<String, Object> args = new HashMap<>();
+        if (fontName != null && !fontName.isBlank()) args.put("fontName", fontName.trim());
+        if (fontSize != null) args.put("fontSize", fontSize);
+        if (bold != null) args.put("bold", bold);
+        if (italic != null) args.put("italic", italic);
+        if (underlineValue != null) args.put("underline", underlineValue);
+        if (color != null && !color.isBlank()) args.put("color", color.trim());
+        if (args.isEmpty()) {
+            return "Error: 未给出任何格式参数（fontName/fontSize/bold/italic/underline/color 至少给一个）";
+        }
+        args.put("searchText", searchText);
+        args.put("applyToAll", applyToAll != null && applyToAll);
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_format_text", args);
+    }
+
+    @Tool("在当前 PowerPoint 演示文稿中新增一页幻灯片，可选写入标题与正文文本框。" +
+          "position 指定插入到第几页之后（1 起；不传则追加到末尾）——PowerPoint JS API 只能把新页加到末尾" +
+          "再挪动位置，挪动需要 PowerPointApi 1.8（较新 Microsoft 365），旧版宿主上会追加到末尾但不挪动位置，" +
+          "返回值 moved/note 字段说明实际情况。title/body 用文本框承载（需要 PowerPointApi 1.4），位置尺寸用固定默认值。")
+    @ToolMeta(displayName = "新增幻灯片", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_add_slide(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("插入到第几页之后（1 起；不传则追加到末尾）") Integer position,
+            @P("标题文本（可选）") String title,
+            @P("正文文本（可选）") String body
+    ) {
+        log.info("Tool: office_ppt_add_slide called, position={}", position);
+        if (position != null && (position < 1 || position > MAX_PPT_SLIDE_NUMBER)) {
+            return "Error: position 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        Map<String, Object> args = new HashMap<>();
+        if (position != null) args.put("position", position);
+        if (title != null && !title.isBlank()) args.put("title", title);
+        if (body != null && !body.isBlank()) args.put("body", body);
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_add_slide", args);
+    }
+
+    @Tool("删除当前 PowerPoint 演示文稿中的指定幻灯片。slideNumber 从 1 起。" +
+          "演示文稿只剩一页时拒绝删除（PowerPoint 不允许空演示文稿）。直接生效，无法通过审阅面板撤销——" +
+          "误删的安全网是 office_ppt_add_slide 补建或用户在 Word/PowerPoint 里 Ctrl+Z。")
+    @ToolMeta(displayName = "删除幻灯片", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_delete_slide(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("要删除的幻灯片页码（1 起）") Integer slideNumber
+    ) {
+        log.info("Tool: office_ppt_delete_slide called, slideNumber={}", slideNumber);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_delete_slide", args);
+    }
+
+    @Tool("在当前 PowerPoint 演示文稿的指定幻灯片上插入一个文本框。slideNumber 从 1 起，text 必填。" +
+          "left/top/width/height 单位磅，不传则用默认位置尺寸（left=50/top=50/width=400/height=100）。" +
+          "fontSize/bold/color 可选设置文本框内文字格式。直接生效（PowerPoint 没有修订机制）。" +
+          "需要 PowerPointApi 1.4，旧版宿主会返回明确错误。")
+    @ToolMeta(displayName = "插入文本框", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_add_text_box(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标幻灯片页码（1 起）") Integer slideNumber,
+            @P("文本框内容") String text,
+            @P("左边距（磅）（不传则用默认值 50）") Double left,
+            @P("上边距（磅）（不传则用默认值 50）") Double top,
+            @P("宽度（磅）（不传则用默认值 400）") Double width,
+            @P("高度（磅）（不传则用默认值 100）") Double height,
+            @P("字号（磅）（不改则不传）") Double fontSize,
+            @P("加粗 true/false（不改则不传）") Boolean bold,
+            @P("文字颜色 #RRGGBB（不改则不传）") String color
+    ) {
+        log.info("Tool: office_ppt_add_text_box called, slideNumber={}", slideNumber);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        if (text == null || text.isEmpty()) {
+            return "Error: 文本框内容不能为空";
+        }
+        if (width != null && width <= 0) {
+            return "Error: width 须为大于 0 的磅值";
+        }
+        if (height != null && height <= 0) {
+            return "Error: height 须为大于 0 的磅值";
+        }
+        if (fontSize != null && (fontSize <= 0 || fontSize > 1638)) {
+            return "Error: fontSize 须为大于 0 且不超过 1638 的磅值";
+        }
+        if (color != null && !color.isBlank() && !HEX_COLOR.matcher(color.trim()).matches()) {
+            return "Error: color 须为 #RRGGBB 格式，如 #C00000";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        args.put("text", text);
+        if (left != null) args.put("left", left);
+        if (top != null) args.put("top", top);
+        if (width != null) args.put("width", width);
+        if (height != null) args.put("height", height);
+        if (fontSize != null) args.put("fontSize", fontSize);
+        if (bold != null) args.put("bold", bold);
+        if (color != null && !color.isBlank()) args.put("color", color.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_add_text_box", args);
+    }
+
+    @Tool("把当前 PowerPoint 演示文稿中的一页幻灯片移动到新位置。slideNumber/toPosition 均从 1 起。" +
+          "需要 PowerPointApi 1.8（较新 Microsoft 365 才有，比其余 PPT 工具的 1.4 门槛更高），" +
+          "旧版宿主会返回明确错误而不是静默不生效。")
+    @ToolMeta(displayName = "移动幻灯片", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_move_slide(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("要移动的幻灯片页码（1 起）") Integer slideNumber,
+            @P("移动到的目标页码（1 起）") Integer toPosition
+    ) {
+        log.info("Tool: office_ppt_move_slide called, slideNumber={}, toPosition={}", slideNumber, toPosition);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        if (toPosition == null || toPosition < 1 || toPosition > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: toPosition 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        args.put("toPosition", toPosition);
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_move_slide", args);
+    }
+
+    @Tool("在当前 PowerPoint 演示文稿的指定幻灯片上插入一个几何形状：矩形/椭圆/三角形。slideNumber 从 1 起。" +
+          "left/top/width/height 单位磅，不传则用默认位置尺寸（left=50/top=50/width=200/height=150）。" +
+          "fillColor 可选设置填充色 #RRGGBB，不传则用形状默认填充。直接生效（PowerPoint 没有修订机制）。" +
+          "需要 PowerPointApi 1.4，旧版宿主会返回明确错误。")
+    @ToolMeta(displayName = "插入形状", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_add_shape(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标幻灯片页码（1 起）") Integer slideNumber,
+            @P("形状类型：rectangle/ellipse/triangle") String shapeType,
+            @P("左边距（磅）（不传则用默认值 50）") Double left,
+            @P("上边距（磅）（不传则用默认值 50）") Double top,
+            @P("宽度（磅）（不传则用默认值 200）") Double width,
+            @P("高度（磅）（不传则用默认值 150）") Double height,
+            @P("填充色 #RRGGBB（不传则用形状默认填充）") String fillColor
+    ) {
+        log.info("Tool: office_ppt_add_shape called, slideNumber={}, shapeType={}", slideNumber, shapeType);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        String shapeTypeValue;
+        try {
+            shapeTypeValue = normalizeEnum(shapeType, PPT_SHAPE_TYPES, "shapeType");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (shapeTypeValue == null) {
+            return "Error: shapeType 不能为空（rectangle/ellipse/triangle）";
+        }
+        if (width != null && width <= 0) {
+            return "Error: width 须为大于 0 的磅值";
+        }
+        if (height != null && height <= 0) {
+            return "Error: height 须为大于 0 的磅值";
+        }
+        if (fillColor != null && !fillColor.isBlank() && !HEX_COLOR.matcher(fillColor.trim()).matches()) {
+            return "Error: fillColor 须为 #RRGGBB 格式，如 #4472C4";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        args.put("shapeType", shapeTypeValue);
+        if (left != null) args.put("left", left);
+        if (top != null) args.put("top", top);
+        if (width != null) args.put("width", width);
+        if (height != null) args.put("height", height);
+        if (fillColor != null && !fillColor.isBlank()) args.put("fillColor", fillColor.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_add_shape", args);
+    }
+
+    @Tool("读取当前 PowerPoint 演示文稿中指定一页幻灯片的形状明细：每个形状的 id、类型、位置尺寸（磅）、" +
+          "文字内容（若有）。比 office_ppt_get_slides 细一级，供精确定位形状（如后续用 office_ppt_delete_shape）前先看一眼。" +
+          "需要 PowerPointApi 1.4，旧版宿主会返回明确错误。")
+    @ToolMeta(displayName = "读取幻灯片明细", category = "office")
+    public String office_ppt_get_slide_details(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标幻灯片页码（1 起）") Integer slideNumber
+    ) {
+        log.info("Tool: office_ppt_get_slide_details called, slideNumber={}", slideNumber);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_get_slide_details", args);
+    }
+
+    @Tool("删除当前 PowerPoint 演示文稿中指定幻灯片上的一个形状。slideNumber 从 1 起；" +
+          "shapeId 是 office_ppt_get_slide_details 返回的形状 id（精确定位，推荐）；" +
+          "不传 shapeId 时可传 textMatch，按形状文字内容精确匹配删除第一个命中的形状。" +
+          "shapeId 与 textMatch 至少给一个。直接生效，无法通过审阅面板撤销。")
+    @ToolMeta(displayName = "删除形状", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_delete_shape(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标幻灯片页码（1 起）") Integer slideNumber,
+            @P("形状 id（office_ppt_get_slide_details 返回，可选）") String shapeId,
+            @P("按形状文字内容精确匹配（可选，shapeId 未给时使用）") String textMatch
+    ) {
+        log.info("Tool: office_ppt_delete_shape called, slideNumber={}, shapeId={}", slideNumber, shapeId);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        boolean hasId = shapeId != null && !shapeId.isBlank();
+        boolean hasText = textMatch != null && !textMatch.isBlank();
+        if (!hasId && !hasText) {
+            return "Error: shapeId 与 textMatch 须至少给一个（先用 office_ppt_get_slide_details 看形状 id）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        if (hasId) args.put("shapeId", shapeId.trim());
+        if (hasText) args.put("textMatch", textMatch.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_delete_shape", args);
     }
 }
