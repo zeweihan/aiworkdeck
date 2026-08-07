@@ -69,6 +69,15 @@ server {
         proxy_set_header X-Forwarded-Proto $scheme;
     }
 
+    # ---- Office 插件任务窗格（dist-deploy 托管在 web/office-addin/）----
+    # office.js 必须从微软 CDN 加载（跨域脚本），COEP require-corp 会拦掉它，
+    # 因此本路径不得继承全站 COOP/COEP——location 内出现任意 add_header 即丢弃继承头，
+    # 这里的 Cache-Control 同时兼任「豁免开关」，删掉它头就会漏回来。
+    location /office-addin/ {
+        add_header Cache-Control "public, max-age=300";
+        try_files $uri $uri/ =404;
+    }
+
     # ---- LOWA 运行时：brotli 预压缩文件按原编码回放 ----
     # 若 lowa/.encodings.json 里对应文件不是 "br"，删掉对应 location。
     location = /zetaoffice/lowa/soffice.wasm {
