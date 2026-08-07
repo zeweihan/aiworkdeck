@@ -41,6 +41,38 @@ public class OfficeEditTools implements AgentToolComponent {
     /** office_excel_set_values 单次写入的单元格上限（防一把写爆工作表与 SSE payload） */
     private static final int MAX_SET_CELLS = 2000;
 
+    /** 文字颜色格式：#RRGGBB */
+    private static final java.util.regex.Pattern HEX_COLOR = java.util.regex.Pattern.compile("^#[0-9A-Fa-f]{6}$");
+
+    /** 下划线线型白名单（插件端映射为 Word.UnderlineType） */
+    private static final java.util.Set<String> UNDERLINE_VALUES =
+            java.util.Set.of("none", "single", "double", "dotted", "wave");
+
+    /** 段落对齐白名单（插件端映射为 Word.Alignment） */
+    private static final java.util.Set<String> ALIGNMENT_VALUES =
+            java.util.Set.of("left", "center", "right", "justify");
+
+    /** 段落内置样式白名单（插件端映射为 Word.BuiltInStyleName，用于标题级别） */
+    private static final java.util.Set<String> PARAGRAPH_STYLE_VALUES =
+            java.util.Set.of("normal", "heading1", "heading2", "heading3", "heading4");
+
+    /**
+     * 枚举参数归一化：null/空返回 null（表示不改），命中白名单返回小写值，
+     * 非法值抛 IllegalArgumentException 由调用方转成 "Error:" 文案。
+     * 枚举在后端先拦一道——比等 30 秒桥往返再报错便宜得多。
+     */
+    private static String normalizeEnum(String raw, java.util.Set<String> allowed, String field) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String value = raw.trim().toLowerCase();
+        if (!allowed.contains(value)) {
+            throw new IllegalArgumentException(field + " 只能是 "
+                    + String.join("/", new java.util.TreeSet<>(allowed)) + "（收到：" + raw + "）");
+        }
+        return value;
+    }
+
     // ==================== 读取 ====================
 
     @Tool("读取当前 Word 文档的全文纯文本。超长文档会被截断（约 20 万字符）。")
@@ -153,6 +185,142 @@ public class OfficeEditTools implements AgentToolComponent {
         args.put("anchorText", anchorText);
         args.put("comment", comment);
         return officeBridgeService.executeOfficeCommand(conversationId, "add_comment", args);
+    }
+
+    // ==================== 格式（Word 原生修订） ====================
+
+    @Tool("在当前 Word 文档中设置指定文本的字符格式：字体、字号、加粗、斜体、下划线、删除线、颜色。" +
+          "anchorText 须与文档中的文本精确一致，默认只对第一处匹配生效，applyToAll=true 对所有匹配生效。" +
+          "格式参数至少要给一个，没传的保持原样。fontName 中西文字体名都可（如 宋体 / 楷体_GB2312 / Times New Roman）。" +
+          "修改以 Word 原生修订（Track Changes）形式呈现。")
+    @ToolMeta(displayName = "设置文字格式", category = "office", fileEffect = "MODIFIED")
+    public String office_format_text(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("要设置格式的目标文本（须与文档精确一致）") String anchorText,
+            @P("是否对所有匹配生效（false=仅第一处）") Boolean applyToAll,
+            @P("字体名，如 宋体 / 楷体_GB2312 / Times New Roman（不改则不传）") String fontName,
+            @P("字号（磅），如 12（不改则不传）") Double fontSize,
+            @P("加粗 true/false（不改则不传）") Boolean bold,
+            @P("斜体 true/false（不改则不传）") Boolean italic,
+            @P("下划线线型：none/single/double/dotted/wave（wave=波浪线；不改则不传）") String underline,
+            @P("删除线 true/false（不改则不传）") Boolean strikeThrough,
+            @P("双删除线 true/false（不改则不传）") Boolean doubleStrikeThrough,
+            @P("文字颜色 #RRGGBB，如 #C00000（不改则不传）") String color
+    ) {
+        log.info("Tool: office_format_text called, anchor={}, applyToAll={}", anchorText, applyToAll);
+        if (anchorText == null || anchorText.isBlank()) {
+            return "Error: 目标文本不能为空";
+        }
+        if (anchorText.length() > 255) {
+            return "Error: 目标文本过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+        }
+        if (fontSize != null && (fontSize <= 0 || fontSize > 1638)) {
+            return "Error: fontSize 须为大于 0 且不超过 1638 的磅值";
+        }
+        if (color != null && !color.isBlank() && !HEX_COLOR.matcher(color.trim()).matches()) {
+            return "Error: color 须为 #RRGGBB 格式，如 #C00000";
+        }
+        String underlineValue;
+        try {
+            underlineValue = normalizeEnum(underline, UNDERLINE_VALUES, "underline");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+
+        Map<String, Object> args = new HashMap<>();
+        if (fontName != null && !fontName.isBlank()) args.put("fontName", fontName.trim());
+        if (fontSize != null) args.put("fontSize", fontSize);
+        if (bold != null) args.put("bold", bold);
+        if (italic != null) args.put("italic", italic);
+        if (underlineValue != null) args.put("underline", underlineValue);
+        if (strikeThrough != null) args.put("strikeThrough", strikeThrough);
+        if (doubleStrikeThrough != null) args.put("doubleStrikeThrough", doubleStrikeThrough);
+        if (color != null && !color.isBlank()) args.put("color", color.trim());
+        if (args.isEmpty()) {
+            return "Error: 未给出任何格式参数（fontName/fontSize/bold/italic/underline/strikeThrough/"
+                    + "doubleStrikeThrough/color 至少给一个）";
+        }
+        args.put("anchorText", anchorText);
+        args.put("applyToAll", applyToAll != null && applyToAll);
+        return officeBridgeService.executeOfficeCommand(conversationId, "format_text", args);
+    }
+
+    @Tool("在当前 Word 文档中设置段落格式：对齐、行距、段前段后间距、缩进、标题级别。" +
+          "anchorText 须与文档中的文本精确一致，命中处所在的整个段落即目标段落；" +
+          "默认只对第一处匹配所在段落生效，applyToAll=true 对所有匹配所在段落生效。" +
+          "格式参数至少要给一个，没传的保持原样。" +
+          "lineSpacing/spaceBefore/spaceAfter/firstLineIndent/leftIndent/rightIndent 单位都是磅：" +
+          "行距按字号换算（12 磅字的 1.5 倍行距填 18，2 倍填 24）；" +
+          "首行缩进按中文惯例 2 字符换算（12 磅字填 24）。" +
+          "styleBuiltIn 用于标题级别（heading1~heading4，normal 恢复正文）。" +
+          "修改以 Word 原生修订（Track Changes）形式呈现。")
+    @ToolMeta(displayName = "设置段落格式", category = "office", fileEffect = "MODIFIED")
+    public String office_set_paragraph_format(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标段落中的一段文本（须与文档精确一致）") String anchorText,
+            @P("是否对所有匹配所在段落生效（false=仅第一处）") Boolean applyToAll,
+            @P("对齐方式：left/center/right/justify（不改则不传）") String alignment,
+            @P("行距（磅），如 12 磅字的 1.5 倍行距填 18（不改则不传）") Double lineSpacing,
+            @P("段前间距（磅）（不改则不传）") Double spaceBefore,
+            @P("段后间距（磅）（不改则不传）") Double spaceAfter,
+            @P("首行缩进（磅），正值缩进；12 磅字缩进 2 字符填 24（不改则不传）") Double firstLineIndent,
+            @P("左缩进（磅）（不改则不传）") Double leftIndent,
+            @P("右缩进（磅）（不改则不传）") Double rightIndent,
+            @P("段落样式（标题级别）：normal/heading1/heading2/heading3/heading4（不改则不传）") String styleBuiltIn
+    ) {
+        log.info("Tool: office_set_paragraph_format called, anchor={}, alignment={}, styleBuiltIn={}",
+                anchorText, alignment, styleBuiltIn);
+        if (anchorText == null || anchorText.isBlank()) {
+            return "Error: 目标文本不能为空";
+        }
+        if (anchorText.length() > 255) {
+            return "Error: 目标文本过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+        }
+        if (lineSpacing != null && lineSpacing <= 0) {
+            return "Error: lineSpacing 须为大于 0 的磅值（12 磅字的 1.5 倍行距填 18）";
+        }
+        String alignmentValue;
+        String styleValue;
+        try {
+            alignmentValue = normalizeEnum(alignment, ALIGNMENT_VALUES, "alignment");
+            styleValue = normalizeEnum(styleBuiltIn, PARAGRAPH_STYLE_VALUES, "styleBuiltIn");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+
+        Map<String, Object> args = new HashMap<>();
+        if (alignmentValue != null) args.put("alignment", alignmentValue);
+        if (lineSpacing != null) args.put("lineSpacing", lineSpacing);
+        if (spaceBefore != null) args.put("spaceBefore", spaceBefore);
+        if (spaceAfter != null) args.put("spaceAfter", spaceAfter);
+        if (firstLineIndent != null) args.put("firstLineIndent", firstLineIndent);
+        if (leftIndent != null) args.put("leftIndent", leftIndent);
+        if (rightIndent != null) args.put("rightIndent", rightIndent);
+        if (styleValue != null) args.put("styleBuiltIn", styleValue);
+        if (args.isEmpty()) {
+            return "Error: 未给出任何格式参数（alignment/lineSpacing/spaceBefore/spaceAfter/"
+                    + "firstLineIndent/leftIndent/rightIndent/styleBuiltIn 至少给一个）";
+        }
+        args.put("anchorText", anchorText);
+        args.put("applyToAll", applyToAll != null && applyToAll);
+        return officeBridgeService.executeOfficeCommand(conversationId, "set_paragraph_format", args);
+    }
+
+    @Tool("读取当前 Word 文档中某处的现有格式（字符格式 + 所在段落的段落格式）。" +
+          "提供 anchorText 时读第一处匹配（须与文档精确一致）；不提供时读用户当前选区，" +
+          "选区为空则读光标所在段落。改格式前先用它看一眼现状。")
+    @ToolMeta(displayName = "读取格式", category = "office")
+    public String office_get_formatting(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标文本（可选；为空则读当前选区/光标处）") String anchorText
+    ) {
+        log.info("Tool: office_get_formatting called, anchor={}", anchorText);
+        if (anchorText != null && anchorText.length() > 255) {
+            return "Error: 目标文本过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("anchorText", anchorText == null ? "" : anchorText);
+        return officeBridgeService.executeOfficeCommand(conversationId, "get_formatting", args);
     }
 
     // ==================== Excel（office_excel_*，仅 Excel 会话可见） ====================

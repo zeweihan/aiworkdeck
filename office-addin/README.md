@@ -174,12 +174,16 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
   约两个周期（40s 无任何字节）判定死连接主动重建。首连失败不重连（即时报错）。
   事件为纯推送、后端不重放历史，重连不会重复渲染已收消息。
 - office_* 工具桥命令集：Word 面 get_text / get_selection / search / replace_text /
-  insert_text / add_comment；Excel 面 excel_get_range / excel_set_values /
+  insert_text / add_comment / format_text / set_paragraph_format / get_formatting；
+  Excel 面 excel_get_range / excel_set_values /
   excel_search；PPT 面 ppt_get_slides / ppt_replace_text。结果回传
   `POST /api/agent/office/result`（body `{requestId, ok, data|error}`，
   后端按挂起表做会话归属校验）。后端按 chat 请求的 officeHost 只暴露当前宿主的工具面。
 - Word 修订与批注依赖 WordApi 1.4（Word 2019+/Microsoft 365）；不支持时替换/插入降级为
   直接修改（结果携带 `tracked:false`），批注返回明确错误。
+- Word 格式面（format_text / set_paragraph_format / get_formatting）基于 WordApi 1.1，
+  唯独段落 styleBuiltIn（标题级别）属 WordApi 1.3，旧宿主上设置会返回明确错误、读取时
+  该字段缺省。长度单位一律是磅（行距按字号换算，12 磅字 1.5 倍行距 = 18 磅）。
 - Excel 区域读写基于 ExcelApi 1.1/1.2（getResizedRange），查找是客户端在已用区域
   内扫描（兼容旧宿主，不依赖 ExcelApi 1.9 的 findAll）；单次写入上限 2000 单元格，
   读取返回上限 500 行。Excel/PowerPoint 没有修订机制，写入直接生效。

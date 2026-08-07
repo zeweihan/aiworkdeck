@@ -9,6 +9,7 @@ import org.mockito.ArgumentCaptor;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
@@ -76,6 +77,103 @@ class OfficeEditToolsTest {
         verify(bridge).executeOfficeCommand(eq("conv-1"), eq("insert_text"), args.capture());
         assertEquals("after", args.getValue().get("position"));
         assertEquals("", args.getValue().get("anchorText"));
+    }
+
+    // ==================== 格式面（Word） ====================
+
+    @Test
+    @DisplayName("office_format_text：只下发给出的格式字段，枚举归一为小写短名")
+    void formatTextDispatchesGivenFieldsOnly() {
+        when(bridge.executeOfficeCommand(any(), eq("format_text"), anyMap()))
+                .thenReturn("{\"formatted\":1,\"tracked\":true}");
+
+        String result = tools.office_format_text("conv-1", "第一条", true, "楷体_GB2312", 12.0,
+                true, null, "Wave", null, null, "#C00000");
+
+        assertEquals("{\"formatted\":1,\"tracked\":true}", result);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("format_text"), args.capture());
+        Map<String, Object> sent = args.getValue();
+        assertEquals("第一条", sent.get("anchorText"));
+        assertEquals(true, sent.get("applyToAll"));
+        assertEquals("楷体_GB2312", sent.get("fontName"));
+        assertEquals(12.0, sent.get("fontSize"));
+        assertEquals(true, sent.get("bold"));
+        assertEquals("wave", sent.get("underline"));
+        assertEquals("#C00000", sent.get("color"));
+        assertFalse(sent.containsKey("italic"), "未给出的格式字段不应下发（避免把原格式改掉）");
+        assertFalse(sent.containsKey("strikeThrough"));
+    }
+
+    @Test
+    @DisplayName("office_set_paragraph_format：磅值与枚举透传，未给字段不下发")
+    void setParagraphFormatDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("set_paragraph_format"), anyMap())).thenReturn("{}");
+
+        tools.office_set_paragraph_format("conv-1", "第一条", null, "Justify", 18.0,
+                null, 18.0, 24.0, null, null, "heading2");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("set_paragraph_format"), args.capture());
+        Map<String, Object> sent = args.getValue();
+        assertEquals("第一条", sent.get("anchorText"));
+        assertEquals(false, sent.get("applyToAll"));
+        assertEquals("justify", sent.get("alignment"));
+        assertEquals(18.0, sent.get("lineSpacing"));
+        assertEquals(18.0, sent.get("spaceAfter"));
+        assertEquals(24.0, sent.get("firstLineIndent"));
+        assertEquals("heading2", sent.get("styleBuiltIn"));
+        assertFalse(sent.containsKey("spaceBefore"));
+        assertFalse(sent.containsKey("leftIndent"));
+    }
+
+    @Test
+    @DisplayName("office_get_formatting：锚点缺省传空串（插件端读当前选区/光标处）")
+    void getFormattingDefaults() {
+        when(bridge.executeOfficeCommand(any(), eq("get_formatting"), anyMap())).thenReturn("{}");
+
+        tools.office_get_formatting("conv-1", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("get_formatting"), args.capture());
+        assertEquals("", args.getValue().get("anchorText"));
+    }
+
+    @Test
+    @DisplayName("格式工具参数校验失败：返回 Error 前缀且不触碰桥")
+    void formatValidationFailuresDoNotTouchBridge() {
+        // 空锚点 / 锚点超 255
+        assertTrue(tools.office_format_text("conv-1", " ", null, "宋体", null,
+                null, null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_format_text("conv-1", "长".repeat(256), null, "宋体", null,
+                null, null, null, null, null, null).startsWith("Error"));
+        // 一个格式参数都没给
+        assertTrue(tools.office_format_text("conv-1", "第一条", null, null, null,
+                null, null, null, null, null, null).startsWith("Error"));
+        // 非法枚举 / 非法颜色 / 非法字号
+        assertTrue(tools.office_format_text("conv-1", "第一条", null, null, null,
+                null, null, "squiggly", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_format_text("conv-1", "第一条", null, null, null,
+                null, null, null, null, null, "红色").startsWith("Error"));
+        assertTrue(tools.office_format_text("conv-1", "第一条", null, null, 0.0,
+                null, null, null, null, null, null).startsWith("Error"));
+        // 段落面
+        assertTrue(tools.office_set_paragraph_format("conv-1", "", null, "left", null,
+                null, null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_set_paragraph_format("conv-1", "第一条", null, null, null,
+                null, null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_set_paragraph_format("conv-1", "第一条", null, "middle", null,
+                null, null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_set_paragraph_format("conv-1", "第一条", null, null, null,
+                null, null, null, null, null, "heading9").startsWith("Error"));
+        assertTrue(tools.office_set_paragraph_format("conv-1", "第一条", null, null, -1.0,
+                null, null, null, null, null, null).startsWith("Error"));
+        // 读取面
+        assertTrue(tools.office_get_formatting("conv-1", "长".repeat(256)).startsWith("Error"));
+        verifyNoInteractions(bridge);
     }
 
     // ==================== Excel/PPT 面（宿主细分工具） ====================

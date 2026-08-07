@@ -113,6 +113,9 @@ const NAMES = {
   office_replace_text: { zh: '替换文本（修订）', en: 'Replace text (tracked)' },
   office_insert_text: { zh: '插入文本（修订）', en: 'Insert text (tracked)' },
   office_add_comment: { zh: '插入批注', en: 'Add comment' },
+  office_format_text: { zh: '设置文字格式', en: 'Format text' },
+  office_set_paragraph_format: { zh: '设置段落格式', en: 'Set paragraph format' },
+  office_get_formatting: { zh: '读取格式', en: 'Read formatting' },
   // PPT
   pptx_check_service: { zh: '检查PPT服务', en: 'Check PPT service' },
   pptx_generate: { zh: '生成PPT演示文稿', en: 'Generate slides' },

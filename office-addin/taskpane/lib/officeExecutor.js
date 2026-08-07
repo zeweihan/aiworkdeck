@@ -40,6 +40,15 @@ function trackingSupported() {
   }
 }
 
+/** paragraph.styleBuiltIn（标题级别）属 WordApi 1.3，比其余格式属性门槛高一档 */
+function builtInStyleSupported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApi', '1.3')
+  } catch (e) {
+    return false
+  }
+}
+
 function truncate(text) {
   const s = text || ''
   return s.length > MAX_TEXT_CHARS
@@ -219,6 +228,89 @@ async function applyMinimalRedline(context, range, rangeText, newText) {
   return edits.length
 }
 
+/* ==================== Word 格式（字符面 + 段落面） ====================
+ * 后端下发的枚举一律是小写短名（none/single/center/heading1…），这里映射成
+ * Office.js 的枚举字符串值。映射表写死成字面量而不是引用 Word.UnderlineType，
+ * 是因为本模块在 Office.js 就绪前就被 import——引用 Word.* 会在加载期炸。
+ */
+
+/** underline → Word.UnderlineType（本批次只开常用五种，wave=波浪线） */
+const UNDERLINE_TYPES = {
+  none: 'None',
+  single: 'Single',
+  double: 'Double',
+  dotted: 'Dotted',
+  wave: 'Wave'
+}
+
+/** alignment → Word.Alignment */
+const ALIGNMENTS = {
+  left: 'Left',
+  center: 'Centered',
+  right: 'Right',
+  justify: 'Justified'
+}
+
+/** styleBuiltIn → Word.BuiltInStyleName（标题级别） */
+const PARAGRAPH_STYLES = {
+  normal: 'Normal',
+  heading1: 'Heading1',
+  heading2: 'Heading2',
+  heading3: 'Heading3',
+  heading4: 'Heading4'
+}
+
+/** 段落格式里按磅取值的字段（Office.js 侧同名） */
+const PARAGRAPH_POINT_FIELDS = [
+  'lineSpacing', 'spaceBefore', 'spaceAfter', 'firstLineIndent', 'leftIndent', 'rightIndent'
+]
+
+/** 小写短名 → Office.js 枚举值；非法值报错并列出合法值（后端已拦一道，这里是防线） */
+function toEnumValue(table, raw, field) {
+  const key = String(raw).trim().toLowerCase()
+  const value = table[key]
+  if (!value) {
+    throw new Error(`${field} 值非法：${raw}（合法值：${Object.keys(table).join('/')}）`)
+  }
+  return value
+}
+
+/** Office.js 枚举值 → 小写短名（读格式时回译，让模型读到的词与能填的词一致） */
+function fromEnumValue(table, raw) {
+  if (raw == null) return raw
+  const hit = Object.keys(table).find((key) => table[key] === raw)
+  return hit || raw
+}
+
+/** 只把给出的字段落到 Office.js 代理对象上（未给的保持原样） */
+function applyProps(target, patch) {
+  for (const [key, value] of Object.entries(patch)) target[key] = value
+}
+
+/** 从 args 里挑出字符格式字段（空对象 = 调用方没给任何格式参数） */
+function buildFontPatch(args) {
+  const patch = {}
+  if (args.fontName) patch.name = String(args.fontName)
+  if (args.fontSize != null) patch.size = Number(args.fontSize)
+  if (args.bold != null) patch.bold = !!args.bold
+  if (args.italic != null) patch.italic = !!args.italic
+  if (args.underline != null) patch.underline = toEnumValue(UNDERLINE_TYPES, args.underline, 'underline')
+  if (args.strikeThrough != null) patch.strikeThrough = !!args.strikeThrough
+  if (args.doubleStrikeThrough != null) patch.doubleStrikeThrough = !!args.doubleStrikeThrough
+  if (args.color) patch.color = String(args.color)
+  return patch
+}
+
+/** 从 args 里挑出段落格式字段（styleBuiltIn 单独处理，见 set_paragraph_format） */
+function buildParagraphPatch(args) {
+  const patch = {}
+  if (args.alignment != null) patch.alignment = toEnumValue(ALIGNMENTS, args.alignment, 'alignment')
+  for (const field of PARAGRAPH_POINT_FIELDS) {
+    if (args[field] != null) patch[field] = Number(args[field])
+  }
+  return patch
+}
+
 const HANDLERS = {
   async get_text() {
     return Word.run(async (context) => {
@@ -351,6 +443,116 @@ const HANDLERS = {
       items[0].insertComment(comment)
       await context.sync()
       return { commented: true }
+    })
+  },
+
+  // ==================== 格式（word 面，走 Word 原生修订） ====================
+
+  async format_text(args) {
+    const anchorText = String(args.anchorText || '')
+    if (!anchorText) throw new Error('目标文本不能为空')
+    const font = buildFontPatch(args)
+    if (!Object.keys(font).length) {
+      throw new Error('未给出任何格式参数（fontName/fontSize/bold/italic/underline/strikeThrough/doubleStrikeThrough/color 至少给一个）')
+    }
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const items = await searchRanges(context, anchorText, true)
+        if (!items.length) {
+          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+        }
+        const targets = args.applyToAll ? items : [items[0]]
+        for (const range of targets) applyProps(range.font, font)
+        await context.sync()
+        return { formatted: targets.length, totalMatches: items.length, applied: font }
+      })
+    })
+  },
+
+  async set_paragraph_format(args) {
+    const anchorText = String(args.anchorText || '')
+    if (!anchorText) throw new Error('目标文本不能为空')
+    const patch = buildParagraphPatch(args)
+    const styleBuiltIn = args.styleBuiltIn == null
+      ? null
+      : toEnumValue(PARAGRAPH_STYLES, args.styleBuiltIn, 'styleBuiltIn')
+    if (!styleBuiltIn && !Object.keys(patch).length) {
+      throw new Error('未给出任何格式参数（alignment/lineSpacing/spaceBefore/spaceAfter/firstLineIndent/leftIndent/rightIndent/styleBuiltIn 至少给一个）')
+    }
+    if (styleBuiltIn && !builtInStyleSupported()) {
+      throw new Error('当前 Word 版本不支持设置标题级别（需要 WordApi 1.3），可改用字号与加粗参数')
+    }
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const items = await searchRanges(context, anchorText, true)
+        if (!items.length) {
+          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+        }
+        const targets = args.applyToAll ? items : [items[0]]
+        const paragraphs = targets.map((range) => range.paragraphs.getFirst())
+        // 套内置样式会把段落格式重置成样式自带的那套，必须先落样式再落其余参数
+        if (styleBuiltIn) {
+          for (const paragraph of paragraphs) paragraph.styleBuiltIn = styleBuiltIn
+          await context.sync()
+        }
+        if (Object.keys(patch).length) {
+          for (const paragraph of paragraphs) applyProps(paragraph, patch)
+          await context.sync()
+        }
+        const applied = styleBuiltIn ? { ...patch, styleBuiltIn: args.styleBuiltIn } : patch
+        return { formatted: paragraphs.length, totalMatches: items.length, applied }
+      })
+    })
+  },
+
+  async get_formatting(args) {
+    const anchorText = String(args.anchorText || '')
+    return Word.run(async (context) => {
+      let range
+      if (anchorText) {
+        const items = await searchRanges(context, anchorText, true)
+        if (!items.length) {
+          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+        }
+        range = items[0]
+      } else {
+        // 无锚点：读用户当前选区；选区为空时 getFirst 取到的就是光标所在段落
+        range = context.document.getSelection()
+      }
+      const paragraph = range.paragraphs.getFirst()
+      range.load('text')
+      range.font.load('name,size,bold,italic,underline,strikeThrough,color')
+      // styleBuiltIn 属 WordApi 1.3：旧宿主上既不能 load 也不能读（未 load 的属性直接抛）
+      const withBuiltIn = builtInStyleSupported()
+      const paragraphFields = PARAGRAPH_POINT_FIELDS.concat(['alignment', 'style'])
+      if (withBuiltIn) paragraphFields.push('styleBuiltIn')
+      paragraph.load(paragraphFields.join(','))
+      await context.sync()
+      const font = range.font
+      return {
+        source: anchorText ? 'anchor' : 'selection',
+        text: (range.text || '').slice(0, 200),
+        font: {
+          name: font.name,
+          size: font.size,
+          bold: font.bold,
+          italic: font.italic,
+          underline: fromEnumValue(UNDERLINE_TYPES, font.underline),
+          strikeThrough: font.strikeThrough,
+          color: font.color
+        },
+        paragraph: {
+          alignment: fromEnumValue(ALIGNMENTS, paragraph.alignment),
+          lineSpacing: paragraph.lineSpacing,
+          spaceBefore: paragraph.spaceBefore,
+          spaceAfter: paragraph.spaceAfter,
+          firstLineIndent: paragraph.firstLineIndent,
+          leftIndent: paragraph.leftIndent,
+          rightIndent: paragraph.rightIndent,
+          style: paragraph.style,
+          styleBuiltIn: withBuiltIn ? fromEnumValue(PARAGRAPH_STYLES, paragraph.styleBuiltIn) : undefined
+        }
+      }
     })
   },
 
@@ -552,6 +754,9 @@ export const COMMAND_DISPLAY_NAMES = {
   replace_text: '替换文本（修订）',
   insert_text: '插入文本（修订）',
   add_comment: '插入批注',
+  format_text: '设置文字格式',
+  set_paragraph_format: '设置段落格式',
+  get_formatting: '读取格式',
   excel_get_range: '读取区域',
   excel_set_values: '写入区域',
   excel_search: '查找单元格',
@@ -567,6 +772,9 @@ const COMMAND_HOSTS = {
   replace_text: 'word',
   insert_text: 'word',
   add_comment: 'word',
+  format_text: 'word',
+  set_paragraph_format: 'word',
+  get_formatting: 'word',
   excel_get_range: 'excel',
   excel_set_values: 'excel',
   excel_search: 'excel',
