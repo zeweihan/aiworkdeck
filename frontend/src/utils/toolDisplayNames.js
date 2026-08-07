@@ -116,6 +116,9 @@ const NAMES = {
   office_format_text: { zh: '设置文字格式', en: 'Format text' },
   office_set_paragraph_format: { zh: '设置段落格式', en: 'Set paragraph format' },
   office_get_formatting: { zh: '读取格式', en: 'Read formatting' },
+  office_set_numbering: { zh: '设置自动编号', en: 'Set list numbering' },
+  office_format_table: { zh: '设置表格格式', en: 'Format table' },
+  office_apply_standard_format: { zh: '套用标准格式', en: 'Apply standard format' },
   // PPT
   pptx_check_service: { zh: '检查PPT服务', en: 'Check PPT service' },
   pptx_generate: { zh: '生成PPT演示文稿', en: 'Generate slides' },

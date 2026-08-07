@@ -176,6 +176,107 @@ class OfficeEditToolsTest {
         verifyNoInteractions(bridge);
     }
 
+    // ==================== 编号 / 表格 / 标准格式（Word 面批次 4B） ====================
+
+    @Test
+    @DisplayName("office_set_numbering：段数缺省为 1，枚举归一为小写短名")
+    void setNumberingDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("set_numbering"), anyMap()))
+                .thenReturn("{\"paragraphs\":1,\"via\":\"listApi\"}");
+
+        String result = tools.office_set_numbering("conv-1", "第一条", null, "Decimal");
+
+        assertEquals("{\"paragraphs\":1,\"via\":\"listApi\"}", result);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("set_numbering"), args.capture());
+        assertEquals("第一条", args.getValue().get("anchorText"));
+        assertEquals(1, args.getValue().get("paragraphCount"));
+        assertEquals("decimal", args.getValue().get("kind"));
+    }
+
+    @Test
+    @DisplayName("office_format_table：序号缺省 0，borders 带出颜色与粗细默认值")
+    void formatTableDispatchesWithBorderDefaults() {
+        when(bridge.executeOfficeCommand(any(), eq("format_table"), anyMap())).thenReturn("{}");
+
+        tools.office_format_table("conv-1", null, "Outside", null, null, "center", true, null, null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("format_table"), args.capture());
+        Map<String, Object> sent = args.getValue();
+        assertEquals(0, sent.get("tableIndex"));
+        assertEquals("outside", sent.get("borders"));
+        assertEquals("#000000", sent.get("borderColor"));
+        assertEquals(1.0, sent.get("borderWidth"));
+        assertEquals("center", sent.get("alignment"));
+        assertEquals(true, sent.get("headerBold"));
+        assertFalse(sent.containsKey("autoFit"), "未给出的格式字段不应下发");
+        assertFalse(sent.containsKey("fontSize"));
+    }
+
+    @Test
+    @DisplayName("office_format_table：borders=none 不带颜色与粗细（去线时这两个参数没有意义）")
+    void formatTableNoneBordersOmitsModifiers() {
+        when(bridge.executeOfficeCommand(any(), eq("format_table"), anyMap())).thenReturn("{}");
+
+        tools.office_format_table("conv-1", 2, "none", "#C00000", 2.0, null, null, null, null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("format_table"), args.capture());
+        Map<String, Object> sent = args.getValue();
+        assertEquals(2, sent.get("tableIndex"));
+        assertEquals("none", sent.get("borders"));
+        assertFalse(sent.containsKey("borderColor"));
+        assertFalse(sent.containsKey("borderWidth"));
+    }
+
+    @Test
+    @DisplayName("office_apply_standard_format：scope 缺省为 document")
+    void applyStandardFormatDefaults() {
+        when(bridge.executeOfficeCommand(any(), eq("apply_standard_format"), anyMap())).thenReturn("{}");
+
+        tools.office_apply_standard_format("conv-1", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("apply_standard_format"), args.capture());
+        assertEquals("document", args.getValue().get("scope"));
+    }
+
+    @Test
+    @DisplayName("编号/表格/标准格式的参数校验失败：返回 Error 前缀且不触碰桥")
+    void batch4bValidationFailuresDoNotTouchBridge() {
+        // 编号：空锚点 / 锚点超长 / kind 缺省或非法 / 段数越界
+        assertTrue(tools.office_set_numbering("conv-1", " ", 1, "decimal").startsWith("Error"));
+        assertTrue(tools.office_set_numbering("conv-1", "长".repeat(256), 1, "decimal").startsWith("Error"));
+        assertTrue(tools.office_set_numbering("conv-1", "第一条", 1, null).startsWith("Error"));
+        assertTrue(tools.office_set_numbering("conv-1", "第一条", 1, "roman").startsWith("Error"));
+        assertTrue(tools.office_set_numbering("conv-1", "第一条", 0, "decimal").startsWith("Error"));
+        assertTrue(tools.office_set_numbering("conv-1", "第一条", 201, "decimal").startsWith("Error"));
+        // 表格：负序号 / 非法枚举 / 非法颜色与粗细 / 一个格式参数都没给
+        assertTrue(tools.office_format_table("conv-1", -1, "all", null, null, null, null, null, null)
+                .startsWith("Error"));
+        assertTrue(tools.office_format_table("conv-1", 0, "diagonal", null, null, null, null, null, null)
+                .startsWith("Error"));
+        // 表格对齐没有 justify（Word 表格只有左/中/右）
+        assertTrue(tools.office_format_table("conv-1", 0, null, null, null, "justify", null, null, null)
+                .startsWith("Error"));
+        assertTrue(tools.office_format_table("conv-1", 0, "all", "红色", null, null, null, null, null)
+                .startsWith("Error"));
+        assertTrue(tools.office_format_table("conv-1", 0, "all", null, 9.0, null, null, null, null)
+                .startsWith("Error"));
+        assertTrue(tools.office_format_table("conv-1", 0, null, null, null, null, null, null, 0.0)
+                .startsWith("Error"));
+        assertTrue(tools.office_format_table("conv-1", 0, null, "#000000", 1.0, null, null, null, null)
+                .startsWith("Error"), "只给边框修饰参数不算给了格式参数");
+        // 标准格式：非法 scope
+        assertTrue(tools.office_apply_standard_format("conv-1", "page").startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
     // ==================== Excel/PPT 面（宿主细分工具） ====================
 
     @Test

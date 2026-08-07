@@ -269,9 +269,11 @@ public class ContextAssemblerService {
                             systemText.append("该文档在用户本机的 Microsoft Word 中打开，正文已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
                             systemText.append("office_replace_text / office_insert_text / office_add_comment / ");
-                            systemText.append("office_format_text / office_set_paragraph_format / office_get_formatting 等），");
+                            systemText.append("office_format_text / office_set_paragraph_format / office_get_formatting / ");
+                            systemText.append("office_set_numbering / office_format_table / office_apply_standard_format 等），");
                             systemText.append("修改会以 Word 原生修订形式呈现。");
-                            systemText.append("文档排版（字体/字号/行距/缩进/对齐/下划线/删除线）用 office_format_text 与 ");
+                            systemText.append("文档排版（字体/字号/行距/缩进/对齐/下划线/删除线/自动编号/表格边框；");
+                            systemText.append("整篇按律所标准格式化用 office_apply_standard_format）用 office_format_text 与 ");
                             systemText.append("office_set_paragraph_format。本会话没有 doc_* 工具。\n\n");
                         }
                     }
@@ -472,8 +474,10 @@ public class ContextAssemblerService {
                         + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
                         + "需要修改文档时调用 office_* 工具（office_replace_text / office_insert_text / "
-                        + "office_add_comment / office_format_text / office_set_paragraph_format 等）落到 Word，"
-                        + "修改会以 Word 原生修订形式呈现；文档排版（字体/字号/行距/缩进/对齐/下划线/删除线）"
+                        + "office_add_comment / office_format_text / office_set_paragraph_format / "
+                        + "office_set_numbering / office_format_table / office_apply_standard_format 等）落到 Word，"
+                        + "修改会以 Word 原生修订形式呈现；文档排版（字体/字号/行距/缩进/对齐/下划线/删除线/"
+                        + "自动编号/表格边框；整篇按律所标准格式化用 office_apply_standard_format）"
                         + "用 office_format_text 与 office_set_paragraph_format。";
             };
             case NONE -> "\n\n[系统提醒] 用户当前查看的文档是" + docLabel + "，"

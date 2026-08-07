@@ -237,6 +237,7 @@ class ContextAssemblerServiceTest {
         // 排版能力不点名，模型就不知道自己能改格式（维护者反馈第 8 条的根因之一）
         assertTrue(lastUser.contains("office_format_text"), "应点名字符格式工具");
         assertTrue(lastUser.contains("office_set_paragraph_format"), "应点名段落格式工具");
+        assertTrue(lastUser.contains("office_apply_standard_format"), "应点名整篇标准格式化工具");
         assertFalse(lastUser.contains("doc_list_project_files"), "office 会话不应再点名 doc_* 工具");
         assertFalse(lastUser.contains("doc_open_file"), "office 会话不应再点名 doc_* 工具");
     }
@@ -250,6 +251,7 @@ class ContextAssemblerServiceTest {
 
         assertTrue(systemText.contains("office_get_text"), "应指引用 office_* 工具读取");
         assertTrue(systemText.contains("office_set_paragraph_format"), "活跃文档段应点名排版工具");
+        assertTrue(systemText.contains("office_set_numbering"), "活跃文档段应点名自动编号工具");
         // 基底 system_prompt.md 里仍有 doc_* 工具表（会话工具过滤才是硬闸门），
         // 这里只断言活跃文档段自身的 LOWA 口径语句没有出现
         assertFalse(systemText.contains("**无需也不要**调用"), "活跃文档段不应再是 doc_* 口径");

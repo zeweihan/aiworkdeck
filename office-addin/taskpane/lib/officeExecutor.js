@@ -49,6 +49,31 @@ function builtInStyleSupported() {
   }
 }
 
+/**
+ * WordApi 1.3 门槛：自动编号（Word.List / startNewList / attachToList / detachFromList /
+ * paragraph.isListItem）与表格格式（body.tables / table.getBorder / alignment / autoFitWindow）
+ * 都在这一档。与 builtInStyleSupported 是同一个版本号、不同的能力面，分开命名以免误读。
+ */
+function wordApi13Supported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApi', '1.3')
+  } catch (e) {
+    return false
+  }
+}
+
+/**
+ * font.nameAscii / nameFarEast（中西文分开设字体）属 WordApiDesktop 1.3，只有较新的
+ * 桌面版 Word 才有。不支持时只能用单一的 font.name（标准格式退化为中文字体统管全篇）。
+ */
+function farEastFontSupported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApiDesktop', '1.3')
+  } catch (e) {
+    return false
+  }
+}
+
 function truncate(text) {
   const s = text || ''
   return s.length > MAX_TEXT_CHARS
@@ -264,6 +289,102 @@ const PARAGRAPH_STYLES = {
 const PARAGRAPH_POINT_FIELDS = [
   'lineSpacing', 'spaceBefore', 'spaceAfter', 'firstLineIndent', 'leftIndent', 'rightIndent'
 ]
+
+/* ---- 自动编号 ---- */
+
+/** 后端下发的编号类型（chinese 没有 Office.js 枚举，只能手写编号文字） */
+const NUMBERING_KINDS = ['bullet', 'decimal', 'chinese', 'none']
+
+/** Word.ListNumbering.arabic / Word.ListBullet.solid（枚举写死成字面量，理由同上方映射表） */
+const LIST_NUMBERING_ARABIC = 'Arabic'
+const LIST_BULLET_SOLID = 'Solid'
+
+/** 一次套用自动编号的最大段数（与后端 MAX_NUMBERING_PARAGRAPHS 一致） */
+const MAX_NUMBERING_PARAGRAPHS = 200
+
+const CHINESE_DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九']
+
+/** 1~200 的中文数字（十一、二十、一百零一、一百一十…） */
+function chineseNumeral(n) {
+  if (n < 10) return CHINESE_DIGITS[n]
+  if (n < 20) return '十' + (n % 10 ? CHINESE_DIGITS[n % 10] : '')
+  if (n < 100) return CHINESE_DIGITS[Math.floor(n / 10)] + '十' + (n % 10 ? CHINESE_DIGITS[n % 10] : '')
+  const head = CHINESE_DIGITS[Math.floor(n / 100)] + '百'
+  const rest = n % 100
+  if (!rest) return head
+  if (rest < 10) return head + '零' + CHINESE_DIGITS[rest]
+  if (rest < 20) return head + '一十' + (rest % 10 ? CHINESE_DIGITS[rest % 10] : '')
+  return head + CHINESE_DIGITS[Math.floor(rest / 10)] + '十' + (rest % 10 ? CHINESE_DIGITS[rest % 10] : '')
+}
+
+/** 手写编号回退时写到段首的前缀（i 从 0 起） */
+function numberingPrefix(kind, i) {
+  if (kind === 'chinese') return chineseNumeral(i + 1) + '、'
+  if (kind === 'decimal') return `${i + 1}. `
+  return '- '
+}
+
+/* ---- 表格格式 ---- */
+
+/** 后端下发的边框范围 → Word.BorderLocation（none 走 All + type=None，见 format_table） */
+const TABLE_BORDER_LOCATIONS = { all: 'All', outside: 'Outside', inside: 'Inside' }
+
+/** 表格整体对齐 → Word.Alignment。表格没有两端对齐，所以不能复用 ALIGNMENTS */
+const TABLE_ALIGNMENTS = { left: 'Left', center: 'Centered', right: 'Right' }
+
+/** Word.BorderType 的两个取值 */
+const BORDER_TYPE_SINGLE = 'Single'
+const BORDER_TYPE_NONE = 'None'
+
+/* ---- 律所标准格式 ---- */
+
+/**
+ * 律所标准格式常量。**三处同源**：桌面端 LOWA 的 office_thread.js `HOUSE`、
+ * 后端 `DocxStyleHelper`（write_docx / AiDocxExportService 两条生成路径）、这里。
+ * 数值必须逐字一致，改规范要三处一起改。
+ */
+const HOUSE = {
+  fontAsian: '楷体_GB2312',
+  fontWestern: 'Arial',
+  bodyPt: 12,
+  titlePt: 16,
+  spaceAfterPt: 18,
+  lineSpacingPt: 16,      // LOWA 侧是「最小值 16 磅」；Office.js 只有固定磅值行距（见下方 lineSpacingMode）
+  firstLineIndentPt: 24,  // 首行缩进 2 字符 = 2 × 12 磅
+  tablePt: 10
+}
+
+/**
+ * 小标题启发式：第X条/章/节/款/项、「一、」「（一）」「1.」这类序号开头且不长的段落。
+ * 与 LOWA 的规范一致——小标题与正文同款字号，只是加粗且不首行缩进。
+ */
+const HEADING_RE = /^(第[一二三四五六七八九十百千零〇\d]+[条章节款项]|[一二三四五六七八九十]+[、.．]|[（(][一二三四五六七八九十\d]+[)）]|\d+[、.．])/
+
+/** 主标题（文档首个非空段）的长度上限，超了当正文处理 */
+const HOUSE_TITLE_MAX_CHARS = 50
+/** 小标题的长度上限 */
+const HOUSE_HEADING_MAX_CHARS = 40
+/** 单次套用标准格式处理的段落上限（长文档只处理前这么多段并标 truncated） */
+const MAX_STANDARD_FORMAT_PARAGRAPHS = 500
+
+/** 按标准格式设置一个段落。kind: 'title' | 'heading' | 'body' */
+function applyHouseParagraph(paragraph, kind, fontSplit) {
+  const font = paragraph.font
+  font.name = HOUSE.fontAsian
+  if (fontSplit) {
+    // 中西文分开设（WordApiDesktop 1.3）；不支持时上面的 name 已让中文字体统管全篇
+    font.nameFarEast = HOUSE.fontAsian
+    font.nameAscii = HOUSE.fontWestern
+  }
+  font.size = kind === 'title' ? HOUSE.titlePt : HOUSE.bodyPt
+  font.bold = kind !== 'body'
+  font.color = '#000000'
+  paragraph.alignment = kind === 'title' ? ALIGNMENTS.center : ALIGNMENTS.justify
+  paragraph.lineSpacing = HOUSE.lineSpacingPt
+  paragraph.spaceBefore = 0
+  paragraph.spaceAfter = HOUSE.spaceAfterPt
+  paragraph.firstLineIndent = kind === 'body' ? HOUSE.firstLineIndentPt : 0
+}
 
 /** 小写短名 → Office.js 枚举值；非法值报错并列出合法值（后端已拦一道，这里是防线） */
 function toEnumValue(table, raw, field) {
@@ -556,6 +677,204 @@ const HANDLERS = {
     })
   },
 
+  async set_numbering(args) {
+    const anchorText = String(args.anchorText || '')
+    if (!anchorText) throw new Error('目标文本不能为空')
+    const kind = String(args.kind || '').trim().toLowerCase()
+    if (!NUMBERING_KINDS.includes(kind)) {
+      throw new Error(`kind 值非法：${args.kind}（合法值：${NUMBERING_KINDS.join('/')}）`)
+    }
+    let count = Math.floor(Number(args.paragraphCount))
+    if (!Number.isFinite(count) || count < 1) count = 1
+    count = Math.min(count, MAX_NUMBERING_PARAGRAPHS)
+    const listApi = wordApi13Supported()
+    if (kind === 'none' && !listApi) {
+      throw new Error('当前 Word 版本不支持清除编号（需要 WordApi 1.3）')
+    }
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const paragraphs = context.document.body.paragraphs
+        // isListItem 属 WordApi 1.3：旧宿主上既不能 load 也不能读（styleBuiltIn 同款门槛）
+        paragraphs.load(listApi ? 'text,isListItem' : 'text')
+        await context.sync()
+        const items = paragraphs.items
+        const start = items.findIndex((p) => String(p.text || '').includes(anchorText))
+        if (start < 0) {
+          throw new Error('未找到锚点段落，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+        }
+        const targets = items.slice(start, start + count)
+
+        if (kind === 'none') {
+          // 不是列表项的段落静默跳过（detachFromList 对非列表段没有意义）
+          let detached = 0
+          for (const paragraph of targets) {
+            if (!paragraph.isListItem) continue
+            paragraph.detachFromList()
+            detached++
+          }
+          await context.sync()
+          return { paragraphs: targets.length, detached, kind, via: 'listApi' }
+        }
+
+        if (listApi && kind !== 'chinese') {
+          const list = targets[0].startNewList()
+          list.load('id')
+          await context.sync()
+          if (kind === 'bullet') list.setLevelBullet(0, LIST_BULLET_SOLID)
+          else list.setLevelNumbering(0, LIST_NUMBERING_ARABIC)
+          for (let i = 1; i < targets.length; i++) targets[i].attachToList(list.id, 0)
+          await context.sync()
+          return { paragraphs: targets.length, kind, via: 'listApi' }
+        }
+
+        // 手写编号回退：chinese 没有对应的 Word.ListNumbering 枚举（原生编号根本没有中文数字这一档），
+        // 旧宿主（无 WordApi 1.3）则是连 List API 都没有——两种情况都退化成往段首写编号文字。
+        targets.forEach((paragraph, i) => {
+          paragraph.insertText(numberingPrefix(kind, i), Word.InsertLocation.start)
+        })
+        await context.sync()
+        return {
+          paragraphs: targets.length,
+          kind,
+          via: 'literalText',
+          note: kind === 'chinese'
+            ? 'Word 原生编号没有中文数字，编号已作为文字写入各段段首'
+            : '当前 Word 版本不支持自动编号（需要 WordApi 1.3），编号已作为文字写入各段段首'
+        }
+      })
+    })
+  },
+
+  async format_table(args) {
+    let index = Math.floor(Number(args.tableIndex))
+    if (!Number.isFinite(index) || index < 0) index = 0
+    const borders = args.borders == null ? null : String(args.borders).trim().toLowerCase()
+    if (borders && borders !== 'none' && !TABLE_BORDER_LOCATIONS[borders]) {
+      throw new Error(`borders 值非法：${args.borders}（合法值：all/outside/inside/none）`)
+    }
+    const alignment = args.alignment == null ? null : toEnumValue(TABLE_ALIGNMENTS, args.alignment, 'alignment')
+    const fontSize = args.fontSize == null ? null : Number(args.fontSize)
+    if (!borders && !alignment && args.headerBold == null && args.autoFit == null && fontSize == null) {
+      throw new Error('未给出任何格式参数（borders/alignment/headerBold/autoFit/fontSize 至少给一个）')
+    }
+    // 表格集合、getBorder、alignment、autoFitWindow 都属 WordApi 1.3
+    if (!wordApi13Supported()) {
+      throw new Error('当前 Word 版本不支持表格格式设置（需要 WordApi 1.3）')
+    }
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const tables = context.document.body.tables
+        tables.load('items')
+        await context.sync()
+        if (!tables.items.length) throw new Error('当前文档中没有表格')
+        if (index >= tables.items.length) {
+          throw new Error(`tableIndex ${index} 越界：文档中共 ${tables.items.length} 张表格（序号从 0 开始）`)
+        }
+        const table = tables.items[index]
+        const applied = {}
+        if (borders === 'none') {
+          table.getBorder(TABLE_BORDER_LOCATIONS.all).type = BORDER_TYPE_NONE
+          applied.borders = 'none'
+        } else if (borders) {
+          const color = String(args.borderColor || '#000000')
+          const width = Number(args.borderWidth) > 0 ? Number(args.borderWidth) : 1
+          const border = table.getBorder(TABLE_BORDER_LOCATIONS[borders])
+          border.type = BORDER_TYPE_SINGLE
+          border.color = color
+          border.width = width
+          applied.borders = borders
+          applied.borderColor = color
+          applied.borderWidth = width
+        }
+        if (alignment) {
+          table.alignment = alignment
+          applied.alignment = String(args.alignment).trim().toLowerCase()
+        }
+        if (args.headerBold != null) {
+          table.rows.getFirst().font.bold = !!args.headerBold
+          applied.headerBold = !!args.headerBold
+        }
+        if (fontSize != null) {
+          table.font.size = fontSize
+          applied.fontSize = fontSize
+        }
+        if (args.autoFit) {
+          table.autoFitWindow()
+          applied.autoFit = true
+        }
+        table.load('rowCount')
+        await context.sync()
+        return { tableIndex: index, tableCount: tables.items.length, rowCount: table.rowCount, applied }
+      })
+    })
+  },
+
+  async apply_standard_format(args) {
+    const scope = String(args.scope || 'document').trim().toLowerCase() === 'selection' ? 'selection' : 'document'
+    const fontSplit = farEastFontSupported()
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const root = scope === 'selection' ? context.document.getSelection() : context.document.body
+        const paragraphs = root.paragraphs
+        paragraphs.load('text')
+        await context.sync()
+        const all = paragraphs.items
+        const truncated = all.length > MAX_STANDARD_FORMAT_PARAGRAPHS
+        const items = truncated ? all.slice(0, MAX_STANDARD_FORMAT_PARAGRAPHS) : all
+
+        let firstNonEmptySeen = false
+        let titles = 0
+        let headings = 0
+        let bodies = 0
+        for (const paragraph of items) {
+          const text = String(paragraph.text || '').trim()
+          if (!text) continue
+          let kind = 'body'
+          if (!firstNonEmptySeen) {
+            // 主标题启发式：文档（或选区）的第一个非空段，且短到像个标题
+            firstNonEmptySeen = true
+            if (text.length <= HOUSE_TITLE_MAX_CHARS) kind = 'title'
+          } else if (text.length <= HOUSE_HEADING_MAX_CHARS && HEADING_RE.test(text)) {
+            kind = 'heading'
+          }
+          applyHouseParagraph(paragraph, kind, fontSplit)
+          if (kind === 'title') titles++
+          else if (kind === 'heading') headings++
+          else bodies++
+        }
+        await context.sync()
+
+        // 表格字号只在全文范围处理（选区里的表格不在 v1 范围）
+        let tableCount = 0
+        if (scope === 'document' && wordApi13Supported()) {
+          const tables = context.document.body.tables
+          tables.load('items')
+          await context.sync()
+          for (const table of tables.items) table.font.size = HOUSE.tablePt
+          tableCount = tables.items.length
+          await context.sync()
+        }
+
+        const result = {
+          scope,
+          paragraphs: titles + headings + bodies,
+          titles,
+          headings,
+          tables: tableCount,
+          fontSplit,
+          // Office.js 的 paragraph.lineSpacing 只有固定磅值行距，没有「最小值」这一档
+          lineSpacingMode: 'exact'
+        }
+        if (truncated) {
+          result.truncated = true
+          result.totalParagraphs = all.length
+        }
+        if (scope === 'selection') result.note = '选区范围不处理表格字号'
+        return result
+      })
+    })
+  },
+
   // ==================== Excel（excel_*，宿主须为 Excel） ====================
 
   async excel_get_range(args) {
@@ -757,6 +1076,9 @@ export const COMMAND_DISPLAY_NAMES = {
   format_text: '设置文字格式',
   set_paragraph_format: '设置段落格式',
   get_formatting: '读取格式',
+  set_numbering: '设置自动编号',
+  format_table: '设置表格格式',
+  apply_standard_format: '套用标准格式',
   excel_get_range: '读取区域',
   excel_set_values: '写入区域',
   excel_search: '查找单元格',
@@ -775,6 +1097,9 @@ const COMMAND_HOSTS = {
   format_text: 'word',
   set_paragraph_format: 'word',
   get_formatting: 'word',
+  set_numbering: 'word',
+  format_table: 'word',
+  apply_standard_format: 'word',
   excel_get_range: 'excel',
   excel_set_values: 'excel',
   excel_search: 'excel',
