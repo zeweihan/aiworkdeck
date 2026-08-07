@@ -100,8 +100,10 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `/api/auth/me` 多回 `smsAuthEnabled` + `phoneMasked`（空串=未绑定，Map.of 不收 null）；
   绑定 UI 在 `userprofile.vue` 设置 tab「账号安全」，登录验证码步骤在 `login.vue`。
 - 配置 `sms.*`（application.yml）：`SMS_AUTH_ENABLED` 默认 false；AK/SK 走 `SMS_ACCESS_KEY_ID/SECRET`
-  环境变量（RAM 子用户仅授 AliyunDysmsFullAccess），签名/模板默认 `京微资易`/`SMS_483655011`。
-  **签名的运营商报备状态是外部前置条件**（2026-08 时点：报备卡「检测中」待推进，发送会 PORT_NOT_REGISTERED）。
+  环境变量（RAM 子用户仅授 AliyunDysmsFullAccess），签名/模板默认 `京微资易科技`/`SMS_483655011`
+  （旧签名 `京微资易` 已在阿里云控制台删除，2026-08-06 重建为新签名）。
+  **签名的运营商报备状态是外部前置条件**：2026-08-07 实测联通已通（真机送达），移动/电信报备中，
+  未通的运营商发送会 PORT_NOT_REGISTERED；报备状态用 `GetSmsSign` API 可查。
 
 **配置**
 - `security.local-mode`（`application-desktop.yml:36` 为 true，默认 false = 团队服务器模式）。

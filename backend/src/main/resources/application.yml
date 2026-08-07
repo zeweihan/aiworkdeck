@@ -97,7 +97,7 @@ sms:
   enabled: ${SMS_AUTH_ENABLED:false}
   access-key-id: ${SMS_ACCESS_KEY_ID:}
   access-key-secret: ${SMS_ACCESS_KEY_SECRET:}
-  sign-name: ${SMS_SIGN_NAME:京微资易}
+  sign-name: ${SMS_SIGN_NAME:京微资易科技}
   template-code: ${SMS_TEMPLATE_CODE:SMS_483655011}
 
 # AI 大模型配置（供应商可切换）
