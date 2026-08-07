@@ -148,15 +148,15 @@
 | 低 | 样式应用（`doc_set_style`） | Word #17 | **已实现**（波次 A/B）：`doc_set_style`→`set_style` |
 | 低 | Excel 透视表（`sheet_add_pivot_table`） | Excel #16 | **已实现**（波次 C）：`XDataPilotTables`，仅「行分组+求和」基础形态 |
 | 低 | Excel 命名区域/保护/分组 | Excel #18/21/22 | **已实现**（波次 C）：`sheet_define_name`/`sheet_protect_sheet`/`sheet_group_rows_cols` |
-| 观察 | PPT 实时编辑桥（新建 `doc_ppt_*`/Impress 桥，对齐插件 10 + 待补 3 = 13 个 command 的能力面） | PPT 全表 | 大（需要新机制：Impress UNO 实时光标编辑桥，参照 doc_*/sheet_* 架构重新做一遍） | 中（产品判断，见存疑判定 3）——**仍未排期，波次 C 未涉及** |
+| 观察 | PPT 实时编辑桥（`slide_*`/Impress 桥，原语全表 20 个，对齐插件 10 + 待补能力面） | PPT 全表 | 大（新机制：Impress UNO 实时光标编辑桥，参照 doc_*/sheet_* 架构重新做一遍） | **已拍板走实时编辑桥**（2026-08-07，见 `docs/superpowers/specs/2026-08-07-impress-bridge-design.md`）。设计已定稿，Phase 1（打开/读取/文本编辑 7 原语 + 宿主接线）已实现（`SlideEditTools.java`/`office_thread.js`/`ClientCapabilityService`），**待 r4 引擎（含 Impress 模块）自托管验收后合并生效**；Phase 2（页/形状结构）、Phase 3（格式与表格）未排期 |
 
-桌面端 15 条候选中 14 条已在波次 A/B（Word）与波次 C（Excel）落地，仅剩 PPT 实时编辑桥（观察项，需产品先拍板架构方向）未排期。
+桌面端 15 条候选中 14 条已在波次 A/B（Word）与波次 C（Excel）落地；PPT 实时编辑桥架构方向已拍板，Phase 1 代码已实现待 r4 引擎验收合并，Phase 2/3 未排期。
 
 ---
 
 ## 五、最值得复核的三个判定
 
-1. **PPT 桌面端是否要建实时编辑桥，还是继续走批量文件重写路线**（判定原则 5 / PPT 全表前提）。这不是一个能力项缺口，是架构分岔：`PptxTools` 的批量机制已经覆盖了增删页、文本、格式、表格单元格读写这些核心诉求，代价是每次编辑都要整个文档重新加载，无法像 Word/Excel 那样逐字打修订、光标可见地增量编辑。如果法律场景对 PPT 的诉求主要是「生成初稿 + 偶尔改文字/表格数据」，现状够用；如果未来要支持「AI 逐步优化排版、用户实时看到光标在哪」，那批量机制在架构上做不到，必须新建 Impress 实时编辑桥（大工程，比照 doc_*/sheet_* 两套基建重新做一遍）。这条判定的分量最重，建议维护者先拍板产品方向，再决定 PPT 桌面端待办清单里那条「观察」项要不要真的排期。
+1. ~~**PPT 桌面端是否要建实时编辑桥，还是继续走批量文件重写路线**（判定原则 5 / PPT 全表前提）。~~ **已拍板**（2026-08-07）：走实时编辑桥，「迟早得走」。落地设计见 `docs/superpowers/specs/2026-08-07-impress-bridge-design.md`——引擎查实结论是 Impress 在编译期被裁（`--with-wasm-module` 一个 configure 开关，非源码补丁），`slide_*` 原语集 20 个（与 `doc_*`/`sheet_*` 三分），`PptxTools` 批量路线**保留不废弃**（pptx 经 Impress 往返是整篇重写、保真度显著低于 python-pptx 定点改写，两条路线分工互补，非互斥）。Phase 1（打开/读取/文本编辑）已实现，待 r4 引擎验收后合并生效。
 
 2. **Excel 单元格批注是否真的该跟 Word 批注同等优先级**。矩阵里判定「两侧都补，高优先级」，理由是「与 Word 批注类比」。但需要复核的是：法律场景里 Excel 批注的实际使用频率是否真的等同于 Word 批注——尽调底稿类文档确实常见批注核对数字，但如果多数场景数字核对靠的是「改单元格颜色 + 口头沟通」而不是插批注，那这条的优先级可能要往下调，不是稳赢的高优先级判定。
 

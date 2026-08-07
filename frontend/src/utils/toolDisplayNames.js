@@ -132,6 +132,14 @@ const NAMES = {
   sheet_protect_sheet: { zh: '保护/取消保护工作表', en: 'Protect sheet' },
   sheet_group_rows_cols: { zh: '行列分组', en: 'Group rows/columns' },
   sheet_add_pivot_table: { zh: '插入数据透视表', en: 'Add pivot table' },
+  // 演示文稿（Impress / pptx）slide_* 原语（Phase 1：打开/读取/文本编辑）
+  slide_get_overview: { zh: '查看幻灯片总览', en: 'Slide overview' },
+  slide_get_page: { zh: '读取幻灯片明细', en: 'Read slide details' },
+  slide_read_notes: { zh: '读取备注', en: 'Read notes' },
+  slide_write_notes: { zh: '写入备注', en: 'Write notes' },
+  slide_goto: { zh: '定位幻灯片', en: 'Go to slide' },
+  slide_set_shape_text: { zh: '设置形状文字', en: 'Set shape text' },
+  slide_replace_text: { zh: '替换幻灯片文字', en: 'Replace slide text' },
   // Office 插件（Word 任务窗格）office_* 工具桥
   // 正常情况下主前端（lowa 会话）看不到这些工具（会话能力过滤），收录仅作兜底
   office_get_text: { zh: '读取文档', en: 'Read document' },

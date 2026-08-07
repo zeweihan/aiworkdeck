@@ -310,9 +310,30 @@ public class ContextAssemblerService {
                     systemText.append("请以文字形式给出分析结论或修改建议，不要尝试调用文档编辑工具。\n\n");
                 }
                 default -> {
-                    systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
-                    systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-                    systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+                    // LOWA 会话按文档类型三分支：doc_*(Writer) / sheet_*(Calc) / slide_*(Impress)，
+                    // 三套原语互不相通（xModel.getText() 等 Writer 专属调用在其他文档类型上必然失败）。
+                    switch (lowaDocKind(activeContext)) {
+                        case "sheet" -> {
+                            systemText.append("这是一份电子表格，读取/修改一律使用 sheet_* 工具" +
+                                    "（sheet_get_overview 先看工作表结构、sheet_read_range / sheet_write_cells 读写单元格），" +
+                                    "写入直接生效（Calc 没有修订机制）——**无需也不要**调用 ");
+                            systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。\n\n");
+                        }
+                        case "slide" -> {
+                            systemText.append("这是一份演示文稿，读取/修改一律使用 slide_* 工具" +
+                                    "（slide_get_overview 先看幻灯片总览、slide_get_page 看某页明细、" +
+                                    "slide_set_shape_text / slide_replace_text 改文字、slide_write_notes 改备注），" +
+                                    "写入直接生效（PPT 没有修订机制，误改用 doc_restore_checkpoint 回滚）——**无需也不要**调用 ");
+                            systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。\n\n");
+                        }
+                        default -> {
+                            systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
+                            systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+                        }
+                    }
                 }
             }
 
@@ -336,7 +357,11 @@ public class ContextAssemblerService {
                         default -> "[正文暂不可读，可用 office_get_text 直接读取]";
                     };
                     case NONE -> "[正文暂不可读]";
-                    default -> "[正文暂不可读，可用 doc_get_document_text 直接分段读取]";
+                    default -> switch (lowaDocKind(activeContext)) {
+                        case "sheet" -> "[内容暂不可读，可用 sheet_get_overview / sheet_read_range 直接读取]";
+                        case "slide" -> "[内容暂不可读，可用 slide_get_overview / slide_get_page 直接读取]";
+                        default -> "[正文暂不可读，可用 doc_get_document_text 直接分段读取]";
+                    };
                 };
                 systemText.append("<active_document id=\"").append(activeContext.getId())
                           .append("\" name=\"").append(attrSafe(activeContext.getName()))
@@ -533,11 +558,41 @@ public class ContextAssemblerService {
                     + "其正文见 system prompt 的 <active_document>，仅供阅读分析。"
                     + "本会话的客户端没有文档编辑执行器，请以文字形式给出结论或修改建议，"
                     + "不要尝试调用文档编辑工具。";
-            default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
-                    + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
-                    + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
-                    + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+            default -> switch (lowaDocKind(activeContext)) {
+                case "sheet" -> "\n\n[系统提醒] 编辑器中当前已打开电子表格" + docLabel + "（id="
+                        + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
+                        + "用户未指明别的文档时，「这个」「当前表格」「改一下」等都指它——"
+                        + "直接调用 sheet_* 工具操作（Calc 没有修订机制，写入直接生效），"
+                        + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+                case "slide" -> "\n\n[系统提醒] 编辑器中当前已打开演示文稿" + docLabel + "（id="
+                        + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
+                        + "用户未指明别的文档时，「这个」「当前演示文稿」「改一下」等都指它——"
+                        + "直接调用 slide_* 工具操作（PPT 没有修订机制，写入直接生效，误改用 doc_restore_checkpoint 回滚），"
+                        + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+                default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
+                        + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
+                        + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
+                        + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+            };
         };
+    }
+
+    /**
+     * LOWA 会话的文档类型三分支判据：docx→doc_*（返回 "doc"）、xlsx→sheet_*（返回 "sheet"）、
+     * pptx→slide_*（返回 "slide"）。优先取 fileType（后端已知扩展名，无点号），
+     * 缺失时退回文件名后缀。三套原语互不相通，判据错了就是模型调用会死路径。
+     */
+    private static String lowaDocKind(com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+        String ext = activeContext.getFileType();
+        if (ext == null || ext.isBlank()) {
+            String name = activeContext.getName();
+            int dot = name == null ? -1 : name.lastIndexOf('.');
+            ext = (dot >= 0 && dot < name.length() - 1) ? name.substring(dot + 1) : "";
+        }
+        ext = ext.toLowerCase(java.util.Locale.ROOT);
+        if (ext.startsWith("xls") || ext.startsWith("et") || "csv".equals(ext)) return "sheet";
+        if (ext.startsWith("ppt") || "odp".equals(ext) || "potx".equals(ext)) return "slide";
+        return "doc";
     }
 
     /** 内联正文防滥用上限：超出即截断（客户端可随请求直接携带正文，不能无限吃内存）。 */

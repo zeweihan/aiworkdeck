@@ -13,8 +13,9 @@
         <view v-if="!isError && !ready" class="libre-spin"></view>
         <text>{{ displayStatus }}</text>
       </view>
-      <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图 -->
-      <text v-if="ready && !loadingOverlayVisible" class="libre-review-btn" :class="{ on: reviewOpen }"
+      <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
+           Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。 -->
+      <text v-if="ready && !loadingOverlayVisible && showsReview" class="libre-review-btn" :class="{ on: reviewOpen }"
             @tap="reviewOpen = !reviewOpen">审阅</text>
     </view>
     <!-- 加载进度面板：引擎启动 + 文档下载/打开是感知最慢的一段（尤其大文档），
@@ -56,7 +57,7 @@
     <view class="libre-body">
       <view :id="hostId" class="libre-host"></view>
       <ReviewPanel
-        v-if="reviewOpen && ready"
+        v-if="reviewOpen && ready && showsReview"
         :executor="executor"
         :refresh-key="reviewRefreshKey"
         @close="reviewOpen = false"
@@ -102,6 +103,10 @@ export default {
     return {
       hostId: 'libre-host-' + (++seq),
       ready: false,
+      // 当前文档内核类型（writer/calc/impress/unknown），worker load_document 返回值
+      // 里带回；boot 出来的空白文档恒为 writer，装真文档前保持这个默认值不算错。
+      // 审阅按钮/ReviewPanel 按它隐藏——Calc/Impress 都没有修订机制。
+      docKind: 'writer',
       // 审阅面板（修订/批注）开关与刷新信号
       reviewOpen: false,
       reviewRefreshKey: 0,
@@ -134,6 +139,10 @@ export default {
   computed: {
     isError() {
       return this.statusText.indexOf('失败') !== -1
+    },
+    // Calc/Impress 都没有修订（redline）机制——审阅面板对它们没有数据可展示。
+    showsReview() {
+      return this.docKind !== 'calc' && this.docKind !== 'impress'
     },
     // Stays quiet once ready — no permanent "就绪" badge.
     displayStatus() {
@@ -452,6 +461,7 @@ export default {
       const res = await this.executor.executeCommand('load_document', { bytes, name, authorName })
       this.appendLog('  ← ' + (Date.now() - t0) + 'ms ' + JSON.stringify(res))
       if (!res || !res.success) throw new Error((res && res.message) || 'load_document returned no success')
+      if (res.kind) this.docKind = res.kind
       return true
     },
     // 后端就地覆盖了本文件的内容（版本退回 / 检查点恢复 / AI 直接改文件），而
