@@ -172,6 +172,20 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
     跨页替换直接生效；回复说明改了哪些页。
 28. 旧版 PowerPoint（不支持 PowerPointApi 1.4）上执行 26/27 → 工具 chip 显示失败，
     回复解释版本不支持（不是 30 秒超时空转）。
+23. 让 AI「把第一页标题设成粗体红色」→ 出现「设置幻灯片文字格式」chip，直接生效
+    （无修订面板可查，靠 Ctrl+Z）。
+24. 让 AI「新增一页幻灯片，标题叫总结」→ 出现「新增幻灯片」chip；再让它「插到第 2 页后面」
+    → 若宿主支持 PowerPointApi 1.8 会挪到指定位置，不支持则留在末尾且回复说明原因
+    （返回值 `moved`/`note` 字段）。
+25. 让 AI「删除最后一页」→ 出现「删除幻灯片」chip；只剩一页时再让它删 → 明确拒绝
+    （PowerPoint 不允许空演示文稿）。
+26. 让 AI「在第一页插一个文本框写谢谢观看」「在第二页插一个蓝色矩形」→ 分别出现
+    「插入文本框」「插入形状」chip，直接生效。
+27. 让 AI「把第一页移到最后」→ 出现「移动幻灯片」chip；旧版宿主（无 PowerPointApi 1.8）
+    上执行 → 明确报错而不是静默不生效。
+28. 让 AI「看看第二页都有什么形状」→ 出现「读取幻灯片明细」chip，回复列出各形状
+    id/类型/位置尺寸/文字；再让它「把刚才那个文本框删掉」→ 出现「删除形状」chip
+    （按上一步拿到的 id 精确删除）。
 
 ### 连接链路场景
 
@@ -197,7 +211,9 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
   excel_manage_sheets / excel_freeze_panes / excel_set_formulas / excel_get_overview /
   excel_select_range / excel_set_autofilter / excel_conditional_format（15 个，与桌面端
   sheet_* 原语数量对齐）；
-  PPT 面 ppt_get_slides / ppt_replace_text。结果回传
+  PPT 面 ppt_get_slides / ppt_replace_text / ppt_format_text /
+  ppt_add_slide / ppt_delete_slide / ppt_add_text_box / ppt_move_slide /
+  ppt_add_shape / ppt_get_slide_details / ppt_delete_shape（批次7新增八项）。结果回传
   `POST /api/agent/office/result`（body `{requestId, ok, data|error}`，
   后端按挂起表做会话归属校验）。后端按 chat 请求的 officeHost 只暴露当前宿主的工具面。
 - Word 修订与批注依赖 WordApi 1.4（Word 2019+/Microsoft 365）；不支持时替换/插入降级为
@@ -233,6 +249,19 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
 - PowerPoint 文本读写依赖 PowerPointApi 1.4（TextFrame/TextRange，Microsoft 365
   较新版本才有；2019/2021 永久版不支持）；旧版宿主返回明确错误。修改只覆盖形状文本
   （表格/SmartArt/母版占位内容不在 v1 范围）。
+- PowerPoint 能力对齐（批次7）：`ppt_format_text` 用 `TextRange.getSubstring(start,len)`
+  在纯文本里找偏移后精确切子串设字体，不改文本长度、无需像 Word 字符级修订那样从右到左应用；
+  `ppt_add_slide` 的 `position` 是"追加末尾 + 条件性挪动"两步近似——`slides.add()`
+  （PowerPointApi 1.3）**只能加在末尾**（`AddSlideOptions.index` 官方文档标注 preview-only，
+  不能用于生产），挪到指定位置要靠 `Slide.moveTo`（**PowerPointApi 1.8**，比其余 PPT 工具的
+  1.4 门槛更高），旧宿主上退化为"留在末尾"并在返回值 `moved`/`note` 说明；`ppt_move_slide`
+  同样卡在 1.8。`ppt_delete_slide` 拒绝删到只剩 0 页。`ppt_add_text_box`/`ppt_add_shape`
+  用 `shapes.addTextBox`/`addGeometricShape`（均 1.4），形状类型 v1 只开 rectangle/ellipse/
+  triangle。`ppt_get_slide_details`/`ppt_delete_shape` 按 `Shape.id` 精确定位（1.3），
+  `ppt_delete_shape` 不传 id 时按文字精确匹配定位（这条分支要 1.4，因为要读 TextFrame）。
+  查证过做不了的：`AddSlideOptions.slideMasterId/layoutId` 选母版/版式需要先枚举
+  `presentation.slideMasters` 拿不透明 ID 串，本批次不做母版选择器，一律用默认母版/版式；
+  `shapes.addTable` 表格形状不在本批次范围。
 - 会话 ID 优先请求服务端签发（`POST /api/agent/conversations`），旧后端无该端点时
   静默回退客户端生成 `conv-<毫秒>`。
 - 流式文本按 XML 标签轻量分流：`<final>` 与标签外文本为主回复、`<thinking>` 折叠展示，

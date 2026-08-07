@@ -134,8 +134,17 @@ const NAMES = {
   office_excel_select_range: { zh: '选中区域', en: 'Select range' },
   office_excel_set_autofilter: { zh: '设置自动筛选', en: 'Set autofilter' },
   office_excel_conditional_format: { zh: '设置条件格式', en: 'Conditional format' },
+  // Office 插件（PowerPoint 任务窗格）office_ppt_* 工具桥（批次7；含此前遗漏的基础两项）
   office_ppt_get_slides: { zh: '读取幻灯片', en: 'Read slides' },
   office_ppt_replace_text: { zh: '替换幻灯片文本', en: 'Replace slide text' },
+  office_ppt_format_text: { zh: '设置幻灯片文字格式', en: 'Format slide text' },
+  office_ppt_add_slide: { zh: '新增幻灯片', en: 'Add slide' },
+  office_ppt_delete_slide: { zh: '删除幻灯片', en: 'Delete slide' },
+  office_ppt_add_text_box: { zh: '插入文本框', en: 'Insert text box' },
+  office_ppt_move_slide: { zh: '移动幻灯片', en: 'Move slide' },
+  office_ppt_add_shape: { zh: '插入形状', en: 'Insert shape' },
+  office_ppt_get_slide_details: { zh: '读取幻灯片明细', en: 'Read slide details' },
+  office_ppt_delete_shape: { zh: '删除形状', en: 'Delete shape' },
   // PPT
   pptx_check_service: { zh: '检查PPT服务', en: 'Check PPT service' },
   pptx_generate: { zh: '生成PPT演示文稿', en: 'Generate slides' },

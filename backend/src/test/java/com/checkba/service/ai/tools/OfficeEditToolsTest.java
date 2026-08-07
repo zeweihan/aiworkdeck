@@ -656,7 +656,161 @@ class OfficeEditToolsTest {
         assertTrue(tools.office_excel_set_formulas("conv-1", null, "A1", "[[\"B1+1\"]]").startsWith("Error"));
         String hugeFormulas = "[[" + "\"=A1\",".repeat(2000) + "\"=A1\"]]";
         assertTrue(tools.office_excel_set_formulas("conv-1", null, "A1", hugeFormulas).startsWith("Error"));
+    }
 
+    // ==================== PowerPoint 能力对齐（批次7） ====================
+
+    @Test
+    @DisplayName("office_ppt_format_text：只下发给出的格式字段，枚举归一为小写短名")
+    void pptFormatTextDispatchesGivenFieldsOnly() {
+        when(bridge.executeOfficeCommand(any(), eq("ppt_format_text"), anyMap()))
+                .thenReturn("{\"formatted\":1}");
+
+        String result = tools.office_ppt_format_text("conv-1", "项目介绍", true, "微软雅黑", 24.0,
+                true, null, "Wave", "#C00000");
+
+        assertEquals("{\"formatted\":1}", result);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("ppt_format_text"), args.capture());
+        Map<String, Object> sent = args.getValue();
+        assertEquals("项目介绍", sent.get("searchText"));
+        assertEquals(true, sent.get("applyToAll"));
+        assertEquals("微软雅黑", sent.get("fontName"));
+        assertEquals(24.0, sent.get("fontSize"));
+        assertEquals(true, sent.get("bold"));
+        assertEquals("wave", sent.get("underline"));
+        assertEquals("#C00000", sent.get("color"));
+        assertFalse(sent.containsKey("italic"), "未给出的格式字段不应下发");
+    }
+
+    @Test
+    @DisplayName("office_ppt_add_slide：position 缺省不下发，仅给出的字段透传")
+    void pptAddSlideDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("ppt_add_slide"), anyMap())).thenReturn("{}");
+
+        tools.office_ppt_add_slide("conv-1", 2, "标题", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("ppt_add_slide"), args.capture());
+        Map<String, Object> sent = args.getValue();
+        assertEquals(2, sent.get("position"));
+        assertEquals("标题", sent.get("title"));
+        assertFalse(sent.containsKey("body"));
+
+        tools.office_ppt_add_slide("conv-1", null, null, null);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("ppt_add_slide"), args.capture());
+        assertFalse(args.getValue().containsKey("position"));
+    }
+
+    @Test
+    @DisplayName("office_ppt_delete_slide / office_ppt_move_slide / office_ppt_get_slide_details：页码透传")
+    void pptSlideStructureDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("ppt_delete_slide"), anyMap())).thenReturn("{}");
+        tools.office_ppt_delete_slide("conv-1", 3);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> deleteArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("ppt_delete_slide"), deleteArgs.capture());
+        assertEquals(3, deleteArgs.getValue().get("slideNumber"));
+
+        when(bridge.executeOfficeCommand(any(), eq("ppt_move_slide"), anyMap())).thenReturn("{}");
+        tools.office_ppt_move_slide("conv-1", 1, 4);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> moveArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("ppt_move_slide"), moveArgs.capture());
+        assertEquals(1, moveArgs.getValue().get("slideNumber"));
+        assertEquals(4, moveArgs.getValue().get("toPosition"));
+
+        when(bridge.executeOfficeCommand(any(), eq("ppt_get_slide_details"), anyMap())).thenReturn("{}");
+        tools.office_ppt_get_slide_details("conv-1", 2);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> detailArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("ppt_get_slide_details"), detailArgs.capture());
+        assertEquals(2, detailArgs.getValue().get("slideNumber"));
+    }
+
+    @Test
+    @DisplayName("office_ppt_add_text_box / office_ppt_add_shape：位置尺寸未给不下发，给了就透传")
+    void pptAddTextBoxAndShapeDispatch() {
+        when(bridge.executeOfficeCommand(any(), eq("ppt_add_text_box"), anyMap())).thenReturn("{}");
+        tools.office_ppt_add_text_box("conv-1", 1, "正文", null, null, null, null, 18.0, true, "#000000");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> boxArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("ppt_add_text_box"), boxArgs.capture());
+        Map<String, Object> sentBox = boxArgs.getValue();
+        assertEquals(1, sentBox.get("slideNumber"));
+        assertEquals("正文", sentBox.get("text"));
+        assertEquals(18.0, sentBox.get("fontSize"));
+        assertFalse(sentBox.containsKey("left"), "未给出的位置字段不应下发（插件端用默认值）");
+
+        when(bridge.executeOfficeCommand(any(), eq("ppt_add_shape"), anyMap())).thenReturn("{}");
+        tools.office_ppt_add_shape("conv-1", 1, "Ellipse", 10.0, 20.0, null, null, "#4472C4");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> shapeArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("ppt_add_shape"), shapeArgs.capture());
+        Map<String, Object> sentShape = shapeArgs.getValue();
+        assertEquals("ellipse", sentShape.get("shapeType"));
+        assertEquals(10.0, sentShape.get("left"));
+        assertEquals("#4472C4", sentShape.get("fillColor"));
+        assertFalse(sentShape.containsKey("width"));
+    }
+
+    @Test
+    @DisplayName("office_ppt_delete_shape：shapeId 与 textMatch 二选一透传")
+    void pptDeleteShapeDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("ppt_delete_shape"), anyMap())).thenReturn("{}");
+
+        tools.office_ppt_delete_shape("conv-1", 1, "shape-42", null);
+        tools.office_ppt_delete_shape("conv-1", 1, null, "旧标题");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("ppt_delete_shape"), args.capture());
+        java.util.List<Map<String, Object>> sent = args.getAllValues();
+        assertEquals("shape-42", sent.get(0).get("shapeId"));
+        assertFalse(sent.get(0).containsKey("textMatch"));
+        assertEquals("旧标题", sent.get(1).get("textMatch"));
+        assertFalse(sent.get(1).containsKey("shapeId"));
+    }
+
+    @Test
+    @DisplayName("PowerPoint 能力对齐工具的参数校验失败：返回 Error 前缀且不触碰桥")
+    void pptCapabilityParityValidationFailuresDoNotTouchBridge() {
+        // format_text：空查找 / 超长 / 非法枚举 / 非法颜色 / 未给任何格式参数
+        assertTrue(tools.office_ppt_format_text("conv-1", " ", null, "宋体", null,
+                null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_ppt_format_text("conv-1", "长".repeat(256), null, "宋体", null,
+                null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_ppt_format_text("conv-1", "标题", null, null, null,
+                null, null, "squiggly", null).startsWith("Error"));
+        assertTrue(tools.office_ppt_format_text("conv-1", "标题", null, null, null,
+                null, null, null, "红色").startsWith("Error"));
+        assertTrue(tools.office_ppt_format_text("conv-1", "标题", null, null, null,
+                null, null, null, null).startsWith("Error"));
+        // add_slide：position 越界
+        assertTrue(tools.office_ppt_add_slide("conv-1", 0, null, null).startsWith("Error"));
+        // delete_slide / move_slide / get_slide_details：页码非法
+        assertTrue(tools.office_ppt_delete_slide("conv-1", null).startsWith("Error"));
+        assertTrue(tools.office_ppt_delete_slide("conv-1", 0).startsWith("Error"));
+        assertTrue(tools.office_ppt_move_slide("conv-1", 1, null).startsWith("Error"));
+        assertTrue(tools.office_ppt_move_slide("conv-1", 0, 1).startsWith("Error"));
+        assertTrue(tools.office_ppt_get_slide_details("conv-1", null).startsWith("Error"));
+        // add_text_box：空内容 / 非法尺寸
+        assertTrue(tools.office_ppt_add_text_box("conv-1", 1, "", null, null, null, null,
+                null, null, null).startsWith("Error"));
+        assertTrue(tools.office_ppt_add_text_box("conv-1", 1, "正文", null, null, 0.0, null,
+                null, null, null).startsWith("Error"));
+        // add_shape：非法形状类型 / 非法颜色
+        assertTrue(tools.office_ppt_add_shape("conv-1", 1, "circle", null, null, null, null, null)
+                .startsWith("Error"));
+        assertTrue(tools.office_ppt_add_shape("conv-1", 1, "rectangle", null, null, null, null, "红色")
+                .startsWith("Error"));
+        // delete_shape：shapeId 与 textMatch 都不给
+        assertTrue(tools.office_ppt_delete_shape("conv-1", 1, null, null).startsWith("Error"));
+        assertTrue(tools.office_ppt_delete_shape("conv-1", 1, " ", " ").startsWith("Error"));
         verifyNoInteractions(bridge);
     }
 }

@@ -340,10 +340,13 @@ class ContextAssemblerServiceTest {
 
         String lastUser = assembleLastUserText(officeDoc("第1页：项目介绍……"));
         assertTrue(lastUser.contains("office_ppt_replace_text"), "应指引用 office_ppt_* 工具修改");
+        assertTrue(lastUser.contains("office_ppt_add_slide"), "应点名新增幻灯片工具（批次7）");
+        assertTrue(lastUser.contains("office_ppt_format_text"), "应点名幻灯片文字排版工具（批次7）");
         assertFalse(lastUser.contains("office_insert_text"), "ppt 会话不应点名 Word 面 office_* 工具");
 
         String systemText = assembleSystemText(officeDoc("第1页：项目介绍……"));
         assertTrue(systemText.contains("office_ppt_get_slides"), "活跃文档段应指引 office_ppt_* 读取");
+        assertTrue(systemText.contains("office_ppt_delete_shape"), "活跃文档段应点名精确删除形状工具（批次7）");
     }
 
     @Test
