@@ -64,8 +64,11 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/service/storage/StorageLocationService.java` + `controller/StorageLocationController.java` — 自选存储位置（需 `stage.unlimited`；GET 与 reset 不设权益闸）。
 
 **平台 AI 通道与计费（PR-B，编排侧见 ai-chat.md）**
-- `backend/src/main/java/com/checkba/service/ai/PlatformAiChannel.java` — 取 provisioned OpenRouter key，缓存 `~/.aiworkdeck/platform-ai-key.json`（0600），`keyFingerprint()` 供模型实例缓存失效。
-- `service/ai/PlatformUsageAccountant.java` — 平台通道真实扣费对账（`GET https://openrouter.ai/api/v1/key` 累计消费差分）。
+- `backend/src/main/java/com/checkba/service/ai/PlatformAiChannel.java` — **取 key 的唯一路由出口**。
+  机器级路径（缓存 `~/.aiworkdeck/platform-ai-key.json`，0600）与 per-user 路径在这里分叉，
+  `keyFingerprint()` 供模型实例缓存失效。
+- `service/ai/PlatformUsageAccountant.java` — 平台通道真实扣费对账（`GET https://openrouter.ai/api/v1/key` 累计消费差分），
+  基线按**密钥指纹**分桶、worker 按指纹分片；兼做吊销探测（401/403 即作废本地密钥）。
 - `service/ai/ChatModelFactory.java` — `Provider.AWD_CLOUD` 路由；`demotePlatformProvider()` 在断开账户时把供应商降级回落。
 - `model/entity/TokenUsage.java` 的 `costSource`：`platform`（真实扣费）/ `estimate`（BYOK 单价表估算）。
 - 前端选平台通道有**两个**入口，判据必须一致（已连接账户 + 已分配额度，缺哪个都展示但不可选并给下一步）：
@@ -79,9 +82,27 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 
 **server 模式加固（插件云后端，2026-08-06）**
 - `backend/src/main/java/com/checkba/service/AuthAbuseGuard.java` — 注册闸（`security.registration-mode: open|closed`，默认 open）+ 登录失败锁定（IP+用户名 5 次失败锁 10 分钟）+ 注册按 IP 限频（10/小时）。进程内内存计数，**多实例部署必须前置 nginx limit_req**；local-mode 全部旁路。
-- `backend/src/main/java/com/checkba/service/account/AwdkLoginService.java` — `POST /api/auth/awdk-login`（匿名端点，AuthController）：awdk_ Key 调官网 `/api/account/me` 实时校验 → `account_binding` 映射（键是官网稳定 `accountId`，**官网侧尚未实施该字段**，见本仓 `doc/desktop-contract.md`）→ 首登 `UserService.registerExternal` 建无密码用户（`awd_` 前缀）→ `DeviceTokenService.issue` 签发 awdt_。开关 `security.awdk-login-enabled` 默认 false。
+- `backend/src/main/java/com/checkba/service/account/AwdkLoginService.java` — `POST /api/auth/awdk-login`（匿名端点，AuthController）：awdk_ Key 调官网 `/api/account/me` 实时校验 → `account_binding` 映射（键是官网稳定 `accountId`，官网侧已实施并进了权威契约与 contract-check）→ 首登 `UserService.registerExternal` 建无密码用户（`awd_` 前缀）→ `DeviceTokenService.issue` 签发 awdt_ → **顺手为该用户取一把 per-user 平台 AI key**（`PlatformAiKeyService.tryProvision`，失败绝不拖垮桥接）。开关 `security.awdk-login-enabled` 默认 false。
 - `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
 - `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
+
+**per-user 平台 AI key（2026-08-07，多租户计费隔离）**
+- 设计文档 `docs/superpowers/specs/2026-08-07-per-user-platform-ai-key.md`（含三方案的安全边界比较与已确认决策）。
+- `service/ai/PlatformAiKeyService.java` — **per-user 密钥的唯一出口**：`resolve/provision/tryProvision/refresh/evict/markVerified/status`。
+  `isBound()`（该用户有 `account_binding`）与 `multiTenant()`（本实例存在任一绑定）是两条路由判据。
+- `service/ai/PlatformAiKeyCipher.java` — AES-256-GCM 落库加密，密文形态 `v1:iv:tag:cipher`
+  与官网仓 `lib/openrouter-keys.ts` **逐字对齐**；构造器里带**启动强不变式**（见地雷 17）。
+- `model/entity/PlatformAiKey.java` + `repository/PlatformAiKeyRepository.java` — 每用户至多一行，
+  存密文 + 指纹 + limitUsd + fetchedAt/lastVerifiedAt。**刻意不挂在 `account_binding` 上**：
+  那张表是纯身份映射且每次桥接都要读，塞密文会改变它的安全等级。
+- `service/ai/PlatformAiUserScope.java` — 「这次调用花谁的额度」的线程作用域。
+  设置点共 8 处（编排器入口、标题生成 runAsync、AiChatService、MemoryPipelineService、
+  SubAgentService.dispatch、MatterClassifierService、AutoTaggingService、PPT 生成 runAsync），
+  **跨线程提交必须 `wrap`**。
+- `controller/PlatformAiKeyController.java` — `/api/platform-ai/key/{status,refresh}`，
+  **会话级不是机器级**（不走 `MachineAccountGuard`——那道闸管的是整台服务器的账户连接）。
+- 插件侧：`office-addin/taskpane/components/SettingsView.vue` 的「AI 额度」卡片
+  + `taskpane/lib/api.js` 的 `fetchPlatformAiStatus` / `refreshPlatformAiKey`。
 
 **登录二次验证的判定出口（2026-08-07）**
 - `backend/src/main/java/com/checkba/service/auth/SecondFactorService.java` — **`required(user)` 是唯一判定出口**，
@@ -132,6 +153,8 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `ai.account.base-url`（`application.yml:97-98`，默认 `https://www.aiworkdeck.com`；**强制 https**，回环 http 例外供本地联调）。
 - `security.license.dir`（默认 `${user.home}/.aiworkdeck`）——license/account/entitlements/platform-ai-key/storage-location 五个状态文件都落这里。
 - `security.registration-mode`（默认 open）与 `security.awdk-login-enabled`(默认 false)——两者都只影响 server 模式；官方托管的插件云后端应配 closed + true。
+- `security.platform-key-secret`（`AWD_PLATFORM_KEY_SECRET`，默认空）——per-user 平台密钥的落库加密密钥。
+  **`awdk-login-enabled=true` 时必配，缺失直接拒绝启动**（见地雷 17）。
 - `sms.enabled`（`SMS_AUTH_ENABLED`，默认 false）——大陆短信通道开关，仅 server 模式生效；官方托管的插件云后端应配 true + 注入 AK/SK 环境变量。
 - `sms.intl.enabled`（`SMS_INTL_ENABLED`，默认 false）+ `TWILIO_ACCOUNT_SID/AUTH_TOKEN/MESSAGING_SERVICE_SID`——境外短信通道。
   **认证器（TOTP）不需要任何配置**，server 模式恒可用，是国际用户的推荐路径。
@@ -326,6 +349,20 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     解锁后直接进个人中心，`ai.activeProvider` 一直空着，要到发第一条消息才发现）。
     护栏 `config/DataInitializerTest`：全新装写标记、存量库一个字都不许改（改了等于把匿名提交窗口重开）。
 
+17. **平台通道的 key 是「谁的额度」，多租户下缺身份必须报错而不是回落**。
+    OpenRouter 的额度上限是 per-key 的，一把机器级 key 就是一个共享额度池——回落等于拿别人的钱花，
+    且对账差分会把 A 的消费记到 B 头上。`PlatformAiChannel.resolveOrThrow` 的四分支要背下来：
+    local-mode 恒走机器级（**一字不动**）；server + 已桥接 → per-user；
+    server + **本实例存在任一绑定**（`multiTenant()`）时，未桥接用户与缺身份**一律拒绝**；
+    server + 一个绑定都没有的团队服务器 → 机器级路径与改动前逐字一致。
+    第三条用 `multiTenant()` 而不是「非 local-mode」来收口，是为了让没人桥接的团队服务器
+    不会因为某处漏传身份就被打断——严格判据只落在真正的多租户实例上。
+    身份靠 `PlatformAiUserScope`（ThreadLocal），**池线程不会自动继承**（继承的是创建者而非提交者），
+    每个跨线程提交点都要 `wrap`；漏一处的后果被设计成「那条路报错」而不是「那条路记错账」。
+    新增 AI 入口（新的 @Async / executor.submit / runAsync）时必须一并接上，否则多租户下那条路取不到 key。
+    另外 `security.platform-key-secret` 在 `awdk-login-enabled=true` 时**缺失即拒绝启动**
+    （`PlatformAiKeyCipher` 构造器）——明文降级是典型的潜伏逃生门，这里刻意不留。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
@@ -339,7 +376,10 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   `config/LocalModeAccessFilterTest`、`config/LocalModeLoopbackGuardTest`；
   server 模式加固：`service/AuthAbuseGuardTest`、`service/account/AwdkLoginServiceTest`、
   `service/account/MachineAccountGuardTest`、`controller/AuthControllerHardeningTest`、
-  `controller/AccountControllerMachineScopeTest`、`service/UserServiceTest`（无密码账户分支）。
+  `controller/AccountControllerMachineScopeTest`、`service/UserServiceTest`（无密码账户分支）；
+  per-user 平台密钥：`service/ai/PlatformAiKeyCipherTest`、`service/ai/PlatformAiKeyServiceTest`、
+  `service/ai/PlatformAiChannelRoutingTest`（四种形态的取 key 路由）、
+  `service/ai/PlatformAiUserScopeTest`、`controller/PlatformAiKeyControllerTest`。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
   （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。

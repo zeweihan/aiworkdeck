@@ -62,12 +62,53 @@
 
       <p v-if="keyStatus" class="status" :class="keyStatusKind">{{ keyStatus }}</p>
     </section>
+
+    <section v-if="quota" class="card quota-card">
+      <h2>AI 额度</h2>
+      <p class="hint">
+        「AI Workdeck 云端」通道按账号计费，额度在官网账户页从余额分配。
+      </p>
+
+      <dl class="quota">
+        <div class="quota-row">
+          <dt>额度上限</dt>
+          <dd>{{ money(quota.limitUsd) }}</dd>
+        </div>
+        <div class="quota-row">
+          <dt>已用</dt>
+          <dd>{{ money(quota.usageUsd) }}</dd>
+        </div>
+        <div class="quota-row">
+          <dt>剩余</dt>
+          <dd>{{ money(quota.remainingUsd) }}</dd>
+        </div>
+        <div class="quota-row">
+          <dt>最近验证</dt>
+          <dd>{{ shortTime(quota.lastVerifiedAt) }}</dd>
+        </div>
+      </dl>
+
+      <p v-if="quotaNotice" class="status warn">{{ quotaNotice }}</p>
+
+      <div class="actions">
+        <button class="btn secondary" :disabled="refreshing" @click="refreshQuota">
+          {{ refreshing ? '刷新中...' : '用上方账户 Key 刷新额度' }}
+        </button>
+      </div>
+
+      <p v-if="quotaStatus" class="status" :class="quotaStatusKind">{{ quotaStatus }}</p>
+    </section>
   </div>
 </template>
 
 <script setup>
-import { ref } from 'vue'
-import { fetchMyProjects, postAwdkLogin } from '../lib/api.js'
+import { computed, onMounted, ref } from 'vue'
+import {
+  fetchMyProjects,
+  postAwdkLogin,
+  fetchPlatformAiStatus,
+  refreshPlatformAiKey
+} from '../lib/api.js'
 import { saveSettings, normalizeBaseUrl } from '../lib/settings.js'
 
 const props = defineProps({
@@ -85,6 +126,74 @@ const awdkKey = ref('')
 const connecting = ref(false)
 const keyStatus = ref('')
 const keyStatusKind = ref('ok')
+/** 平台 AI 通道额度；null = 该后端没有这条能力（旧版本/单机形态），整块不展示 */
+const quota = ref(null)
+const refreshing = ref(false)
+const quotaStatus = ref('')
+const quotaStatusKind = ref('ok')
+
+/** 金额与时间都可能是 null（用量拿不到时不许把 0 当成剩余额度），统一显示为「—」 */
+function money(value) {
+  return typeof value === 'number' ? `$${value.toFixed(2)}` : '—'
+}
+
+function shortTime(value) {
+  if (!value) return '—'
+  const at = new Date(value)
+  return Number.isNaN(at.getTime()) ? '—' : at.toLocaleString()
+}
+
+const quotaNotice = computed(() => {
+  const q = quota.value
+  if (!q) return ''
+  if (!q.bound) return '本账号尚未通过账户 Key 直连，暂不能使用云端通道。'
+  if (q.stale) return '密钥超过 30 天未验证，已暂停使用，刷新后恢复。'
+  if (!q.hasKey) return '尚未分配 AI 额度，可在官网账户页从余额分配后回来刷新。'
+  if (!q.usageAvailable) return '暂时取不到实时用量，已用与剩余显示为「—」。'
+  return ''
+})
+
+async function loadQuota() {
+  if (!serverUrl.value.trim() || !token.value.trim()) {
+    quota.value = null
+    return
+  }
+  quota.value = await fetchPlatformAiStatus({
+    serverUrl: serverUrl.value,
+    token: token.value.trim()
+  })
+}
+
+/**
+ * 服务端不保存账户 Key，所以「在官网分配额度之后」只能由用户再贴一次 Key 来重取。
+ * 复用上方的输入框，用完即清空。
+ */
+async function refreshQuota() {
+  quotaStatus.value = ''
+  const key = awdkKey.value.trim()
+  if (!key) {
+    quotaStatusKind.value = 'error'
+    quotaStatus.value = '刷新未开始：请在上方粘贴 awdk_ 账户 Key'
+    return
+  }
+  refreshing.value = true
+  try {
+    quota.value = await refreshPlatformAiKey(
+      { serverUrl: serverUrl.value, token: token.value.trim() },
+      key
+    )
+    awdkKey.value = ''
+    quotaStatusKind.value = 'ok'
+    quotaStatus.value = '额度已刷新'
+  } catch (e) {
+    quotaStatusKind.value = 'error'
+    quotaStatus.value = e.message || '额度刷新失败'
+  } finally {
+    refreshing.value = false
+  }
+}
+
+onMounted(loadQuota)
 
 async function testConnection() {
   status.value = ''
@@ -141,6 +250,8 @@ async function connectWithKey() {
     saveSettings({ serverUrl: serverUrl.value, token: awdtToken })
     keyStatusKind.value = 'ok'
     keyStatus.value = '连接成功：已换取设备令牌'
+    // 桥接同时会为本账号取一把平台 AI 密钥，这里顺手把额度显示出来
+    await loadQuota()
     emit('saved', { serverUrl: normalizeBaseUrl(serverUrl.value), token: awdtToken })
   } catch (e) {
     keyStatusKind.value = 'error'
@@ -165,6 +276,27 @@ async function connectWithKey() {
 }
 
 .key-card { margin-top: 12px; }
+.quota-card { margin-top: 12px; }
+
+.quota {
+  margin: 0 0 12px;
+  font-size: 12px;
+}
+
+.quota-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--awd-border);
+}
+
+.quota-row:last-child { border-bottom: none; }
+
+.quota dt { color: var(--awd-text-secondary); }
+.quota dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
 
 h2 {
   margin: 0 0 6px;
@@ -237,4 +369,5 @@ input:focus, textarea:focus {
 
 .status.ok { color: #1d7a3e; }
 .status.error { color: var(--awd-danger); }
+.status.warn { color: var(--awd-text-secondary); }
 </style>

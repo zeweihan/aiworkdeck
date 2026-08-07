@@ -159,7 +159,6 @@ class ChatModelFactoryTest {
     @DisplayName("AWD_CLOUD：即便是白名单模型也走平台密钥，不能落到 BYOK 的 OpenRouter key")
     void platformChannelTakesPrecedenceOverAllowlistShortcut() {
         setDbProvider("AWD_CLOUD");
-        when(platformAiChannel.isAvailable()).thenReturn(true);
         when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
@@ -174,20 +173,22 @@ class ChatModelFactoryTest {
     @DisplayName("AWD_CLOUD 但未连接账户：明确报错，不静默回退 BYOK 花用户自己的 key")
     void platformChannelWithoutAccountFailsLoudly() {
         setDbProvider("AWD_CLOUD");
-        when(platformAiChannel.isAvailable()).thenReturn(false);
+        when(platformAiChannel.apiKey()).thenThrow(new com.checkba.service.account.AccountException(
+                com.checkba.service.account.AccountException.Kind.NOT_CONNECTED,
+                "「AI Workdeck 云端」需要连接账户，请到设置页粘贴账户 Key"));
 
         var e = assertThrows(com.checkba.service.account.AccountException.class,
                 () -> factory.getChatModel("deepseek/deepseek-v4-flash"));
         assertEquals(com.checkba.service.account.AccountException.Kind.NOT_CONNECTED, e.getKind());
         assertTrue(e.getMessage().contains("连接账户"), e.getMessage());
-        verify(platformAiChannel, never()).apiKey();
+        // 绝不回落 BYOK：用户自己的 key 一次都不该被读到
+        verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
     }
 
     @Test
     @DisplayName("故障转移换模型不换通道：平台通道下备选模型仍走平台密钥，不碰 BYOK 的 key")
     void failoverCandidateStaysOnPlatformChannel() {
         setDbProvider("AWD_CLOUD");
-        when(platformAiChannel.isAvailable()).thenReturn(true);
         when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
@@ -202,12 +203,11 @@ class ChatModelFactoryTest {
     @DisplayName("平台通道用之前先建用量基线：否则重启后第一条消息永远显示「待结算」")
     void platformChannelEstablishesUsageBaselineBeforeCall() {
         setDbProvider("AWD_CLOUD");
-        when(platformAiChannel.isAvailable()).thenReturn(true);
         when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
         factory.getStreamingChatModel("openai/gpt-5.2");
-        verify(usageAccountant, atLeastOnce()).ensureBaselineAsync();
+        verify(usageAccountant, atLeastOnce()).ensureBaselineAsync(any());
     }
 
     @Test
@@ -238,5 +238,52 @@ class ChatModelFactoryTest {
 
         assertNull(factory.demotePlatformProvider());
         verify(systemSettingService, never()).set(eq("ai.activeProvider"), anyString());
+    }
+
+    @Test
+    @DisplayName("多租户：还有按用户的密钥在用时，断开机器级账户不降级（否则把租户一起打断）")
+    void demoteKeepsPlatformWhenPerUserKeysExist() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.hasPerUserKeys()).thenReturn(true);
+        when(systemSettingService.get(eq("external.openrouter.apiKey"), any())).thenReturn("sk-or-db-key");
+
+        assertNull(factory.demotePlatformProvider());
+        verify(systemSettingService, never()).set(eq("ai.activeProvider"), anyString());
+    }
+
+    // ==================== per-user 平台密钥（server 模式多租户） ====================
+
+    @Test
+    @DisplayName("按用户取密钥：身份来自作用域，两个用户拿到不同的模型实例")
+    void perUserScopeYieldsSeparateModelInstances() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.apiKey()).thenAnswer(inv ->
+                PlatformAiUserScope.current() == 1L ? "sk-or-alice" : "sk-or-bob");
+        when(platformAiChannel.keyFingerprint()).thenAnswer(inv ->
+                PlatformAiUserScope.current() == 1L ? "aaaaaa" : "bbbbbb");
+
+        ChatLanguageModel alice = PlatformAiUserScope.call(1L, () -> factory.getChatModel("openai/gpt-5.2"));
+        ChatLanguageModel bob = PlatformAiUserScope.call(2L, () -> factory.getChatModel("openai/gpt-5.2"));
+
+        assertNotSame(alice, bob, "不同用户的密钥指纹不同，模型实例必须分叉，绝不能串用额度");
+        assertSame(alice, PlatformAiUserScope.call(1L, () -> factory.getChatModel("openai/gpt-5.2")));
+    }
+
+    @Test
+    @DisplayName("多租户下缺身份：报业务错误，绝不回落 BYOK 或机器级密钥")
+    void missingScopeFailsLoudly() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.apiKey()).thenThrow(new com.checkba.service.account.AccountException(
+                com.checkba.service.account.AccountException.Kind.CONFLICT,
+                "本次 AI 调用未携带用户身份，「AI Workdeck 云端」无法确定额度归属"));
+
+        var e = assertThrows(com.checkba.service.account.AccountException.class,
+                () -> factory.getChatModel("openai/gpt-5.2"));
+        assertEquals(com.checkba.service.account.AccountException.Kind.CONFLICT, e.getKind());
+        verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
+        for (String forbidden : new String[]{"登录", "未授权", "请先"}) {
+            assertFalse(e.getMessage().contains(forbidden),
+                    "业务错误文案不得含「" + forbidden + "」：前端据此判定掉线并清会话");
+        }
     }
 }

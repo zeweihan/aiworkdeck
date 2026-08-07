@@ -253,20 +253,21 @@ public class AiAgentController {
         final Long effectiveUserId = userId;
         
         // Asynchronous execution via PptxTools (which handles background task creation internally)
-        java.util.concurrent.CompletableFuture.runAsync(() -> {
-            pptxTools.performPptGenerationWithProgress(
-                request.getTopic(),
-                request.getProjectId(),
-                request.getParentId(),
-                request.getFileName(),
-                request.getStyle(),
-                request.getLanguage(),
-                request.getModelId(),
-                request.getConversationId(),
-                effectiveUserId,
-                request.isExportEditable()
-            );
-        });
+        // 平台通道按用户计费：后台线程上显式建立身份作用域，否则多租户下取不到 key
+        java.util.concurrent.CompletableFuture.runAsync(() ->
+            com.checkba.service.ai.PlatformAiUserScope.run(effectiveUserId, () ->
+                pptxTools.performPptGenerationWithProgress(
+                    request.getTopic(),
+                    request.getProjectId(),
+                    request.getParentId(),
+                    request.getFileName(),
+                    request.getStyle(),
+                    request.getLanguage(),
+                    request.getModelId(),
+                    request.getConversationId(),
+                    effectiveUserId,
+                    request.isExportEditable()
+                )));
         
         return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"PPT generation started\"}");
     }

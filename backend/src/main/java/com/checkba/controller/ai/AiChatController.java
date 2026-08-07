@@ -187,15 +187,19 @@ public class AiChatController {
      * Get public AI configuration (e.g. active provider) for all users
      */
     @GetMapping("/config")
-    public ResponseEntity<?> getAiConfig() {
+    public ResponseEntity<?> getAiConfig(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         String activeProvider = systemSettingService.get("ai.activeProvider",
                 aiModelProperties.getProvider() != null ? aiModelProperties.getProvider().name() : "OLLAMA");
 
         // Return a simple map or DTO
         Map<String, Object> config = new java.util.HashMap<>();
         config.put("activeProvider", activeProvider);
-        // 平台通道「AI Workdeck 云端」是否可选：未连接官网账户时前端不展示该供应商
-        config.put("platformAiAvailable", platformAiChannel.isAvailable());
+        // 平台通道「AI Workdeck 云端」是否可选：未连接官网账户时前端不展示该供应商。
+        // server 模式多租户下密钥是 per-user 的，判据也必须按人算——机器级的答案会
+        // 让没直连账户的租户看到一个选了就报错的供应商。
+        config.put("platformAiAvailable",
+                platformAiChannel.availableFor(AuthController.getUserIdFromSession(sessionId)));
         return ResponseEntity.ok(config);
     }
 

@@ -68,7 +68,9 @@ public class MatterClassifierService {
             if (!classified.add(conversationId)) return;
             String snippet = firstUserMessage.length() > 500
                     ? firstUserMessage.substring(0, 500) : firstUserMessage;
-            executor.execute(() -> classify(conversationId, snippet));
+            // 跨线程提交：平台通道按用户计费，身份必须显式重放（不重放的话多租户下取不到 key）
+            executor.execute(com.checkba.service.ai.PlatformAiUserScope.wrap(
+                    () -> classify(conversationId, snippet)));
         } catch (Exception ignored) {
         }
     }

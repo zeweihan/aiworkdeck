@@ -55,6 +55,7 @@ public class AwdkLoginService {
     private final AccountBindingRepository bindingRepository;
     private final UserService userService;
     private final DeviceTokenService deviceTokenService;
+    private final com.checkba.service.ai.PlatformAiKeyService platformAiKeyService;
     private final ObjectMapper objectMapper = AccountService.stateMapper();
 
     public AwdkLoginService(
@@ -63,7 +64,8 @@ public class AwdkLoginService {
             AccountTransport transport,
             AccountBindingRepository bindingRepository,
             UserService userService,
-            DeviceTokenService deviceTokenService) {
+            DeviceTokenService deviceTokenService,
+            com.checkba.service.ai.PlatformAiKeyService platformAiKeyService) {
         this.enabled = enabled;
         // 与 LicenseService / AccountService 共用同一条红线（https，回环 http 例外）
         this.baseUrl = AccountEndpoint.requireSecure(baseUrl);
@@ -71,6 +73,7 @@ public class AwdkLoginService {
         this.bindingRepository = bindingRepository;
         this.userService = userService;
         this.deviceTokenService = deviceTokenService;
+        this.platformAiKeyService = platformAiKeyService;
     }
 
     /** 桥接结果：awdt_ 设备令牌 + 映射到的 server 用户。 */
@@ -97,6 +100,10 @@ public class AwdkLoginService {
         }
 
         User user = resolveUser(accountId, str(me.get("username")), str(me.get("displayName")));
+        // per-user 平台 AI key：此刻是 server 唯一合法持有该用户 awdk_ 的时机，顺手换一把
+        // 属于他自己的 OpenRouter runtime key 存起来；awdk_ 本身用完即弃，仍然不落库。
+        // 取不到（最常见是还没分配额度）绝不影响桥接——插件的绝大多数能力与 AI 额度无关。
+        platformAiKeyService.tryProvision(user.getId(), key);
         DeviceTokenService.IssuedToken issued =
                 deviceTokenService.issue(user.getId(), "账户桥接");
         return new BridgeSession(issued.plaintext(), user.getId(), user.getUsername());
