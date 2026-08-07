@@ -74,7 +74,7 @@ server {
     # 因此本路径不得继承全站 COOP/COEP——location 内出现任意 add_header 即丢弃继承头，
     # 这里的 Cache-Control 同时兼任「豁免开关」，删掉它头就会漏回来。
     location /office-addin/ {
-        add_header Cache-Control "public, max-age=300";
+        add_header Cache-Control "no-cache";
         try_files $uri $uri/ =404;
     }
 
