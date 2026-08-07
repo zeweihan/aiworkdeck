@@ -28,10 +28,16 @@ class OfficeEditToolsTest {
     private OfficeBridgeService bridge;
     private OfficeEditTools tools;
 
+    private com.checkba.repository.ProjectFileRepository projectFileRepository;
+    private com.checkba.storage.StorageServiceFactory storageServiceFactory;
+
     @BeforeEach
     void setUp() {
         bridge = mock(OfficeBridgeService.class);
-        tools = new OfficeEditTools(bridge, new com.fasterxml.jackson.databind.ObjectMapper());
+        projectFileRepository = mock(com.checkba.repository.ProjectFileRepository.class);
+        storageServiceFactory = mock(com.checkba.storage.StorageServiceFactory.class);
+        tools = new OfficeEditTools(bridge, new com.fasterxml.jackson.databind.ObjectMapper(),
+                projectFileRepository, storageServiceFactory);
     }
 
     @Test
@@ -986,6 +992,236 @@ class OfficeEditToolsTest {
         // delete_shape：shapeId 与 textMatch 都不给
         assertTrue(tools.office_ppt_delete_shape("conv-1", 1, null, null).startsWith("Error"));
         assertTrue(tools.office_ppt_delete_shape("conv-1", 1, " ", " ").startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    // ==================== 批次 9：Excel 批注 ====================
+
+    @Test
+    @DisplayName("Excel 批注四件套 + 添加：正常下发透传")
+    void excelCommentGroupDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_add_comment"), anyMap())).thenReturn("{\"added\":true}");
+        when(bridge.executeOfficeCommand(any(), eq("excel_get_comments"), anyMap())).thenReturn("{\"count\":0}");
+        when(bridge.executeOfficeCommand(any(), eq("excel_reply_comment"), anyMap())).thenReturn("{\"replied\":true}");
+        when(bridge.executeOfficeCommand(any(), eq("excel_resolve_comment"), anyMap())).thenReturn("{\"resolved\":true}");
+        when(bridge.executeOfficeCommand(any(), eq("excel_delete_comment"), anyMap())).thenReturn("{\"deleted\":true}");
+
+        assertEquals("{\"added\":true}", tools.office_excel_add_comment("conv-1", "Sheet1", "B2", "核对金额"));
+        assertEquals("{\"count\":0}", tools.office_excel_get_comments("conv-1", "Sheet1", null));
+        assertEquals("{\"replied\":true}", tools.office_excel_reply_comment("conv-1", "Sheet1", "B2", "已核对"));
+        assertEquals("{\"resolved\":true}", tools.office_excel_resolve_comment("conv-1", "Sheet1", "B2", null));
+        assertEquals("{\"deleted\":true}", tools.office_excel_delete_comment("conv-1", "Sheet1", "B2"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> addArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_add_comment"), addArgs.capture());
+        assertEquals("B2", addArgs.getValue().get("cellAddress"));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> getArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_get_comments"), getArgs.capture());
+        assertEquals("sheet", getArgs.getValue().get("scope"));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> resolveArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_resolve_comment"), resolveArgs.capture());
+        assertEquals(true, resolveArgs.getValue().get("resolved"));
+    }
+
+    @Test
+    @DisplayName("Excel 批注参数校验失败：单格地址非法则拦下")
+    void excelCommentValidationFailuresDoNotTouchBridge() {
+        assertTrue(tools.office_excel_add_comment("conv-1", null, "B2:C3", "x").startsWith("Error"));
+        assertTrue(tools.office_excel_add_comment("conv-1", null, "B2", " ").startsWith("Error"));
+        assertTrue(tools.office_excel_get_comments("conv-1", null, "invalid").startsWith("Error"));
+        assertTrue(tools.office_excel_reply_comment("conv-1", null, "B2", "").startsWith("Error"));
+        assertTrue(tools.office_excel_resolve_comment("conv-1", null, "", null).startsWith("Error"));
+        assertTrue(tools.office_excel_delete_comment("conv-1", null, "B2:C3").startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    // ==================== 批次 9：Excel 数据验证/图表/命名区域/保护/分组/透视表 ====================
+
+    @Test
+    @DisplayName("office_excel_set_data_validation：list 与 wholeNumber 两种规则正常下发")
+    void excelDataValidationDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_set_data_validation"), anyMap())).thenReturn("{}");
+
+        tools.office_excel_set_data_validation("conv-1", null, "B2:B10", null, "list", null, null, null, "是,否,待定");
+        tools.office_excel_set_data_validation("conv-1", null, "C2:C10", null, "wholeNumber", "between", "0", "100", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge, org.mockito.Mockito.times(2))
+                .executeOfficeCommand(eq("conv-1"), eq("excel_set_data_validation"), args.capture());
+        java.util.List<Map<String, Object>> sent = args.getAllValues();
+        assertEquals("list", sent.get(0).get("type"));
+        assertEquals("是,否,待定", sent.get(0).get("listSource"));
+        assertEquals("wholenumber", sent.get(1).get("type"));
+        assertEquals("between", sent.get(1).get("operator"));
+        assertEquals("100", sent.get(1).get("value2"));
+    }
+
+    @Test
+    @DisplayName("office_excel_add_chart / define_name / protect_sheet / group_rows_cols / add_pivot_table：正常下发")
+    void excelMiscToolsDispatch() {
+        when(bridge.executeOfficeCommand(any(), eq("excel_add_chart"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("excel_define_name"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("excel_protect_sheet"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("excel_group_rows_cols"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("excel_add_pivot_table"), anyMap())).thenReturn("{}");
+
+        assertEquals("{}", tools.office_excel_add_chart("conv-1", null, "A1:C5", "column", "季度收入"));
+        assertEquals("{}", tools.office_excel_define_name("conv-1", null, "add", "ExpensesHeader", "A1:D1"));
+        assertEquals("{}", tools.office_excel_protect_sheet("conv-1", null, "protect", "s3cr3t"));
+        assertEquals("{}", tools.office_excel_group_rows_cols("conv-1", null, "4:9", "group", "rows"));
+        assertEquals("{}", tools.office_excel_add_pivot_table("conv-1", null, "A1:D50", "F1",
+                "[\"部门\"]", "[\"金额\"]", "透视表1"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> pivotArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("excel_add_pivot_table"), pivotArgs.capture());
+        assertEquals(java.util.List.of("部门"), pivotArgs.getValue().get("rowFields"));
+        assertEquals(java.util.List.of("金额"), pivotArgs.getValue().get("valueFields"));
+    }
+
+    @Test
+    @DisplayName("Excel 批次9 misc 工具参数校验失败：拦下不触碰桥")
+    void excelMiscValidationFailuresDoNotTouchBridge() {
+        assertTrue(tools.office_excel_add_chart("conv-1", null, "A1:C5", "circle", null).startsWith("Error"));
+        assertTrue(tools.office_excel_define_name("conv-1", null, "add", "1bad", "A1").startsWith("Error"));
+        assertTrue(tools.office_excel_define_name("conv-1", null, "add", "Good", null).startsWith("Error"));
+        assertTrue(tools.office_excel_protect_sheet("conv-1", null, "toggle", null).startsWith("Error"));
+        assertTrue(tools.office_excel_group_rows_cols("conv-1", null, "A1:C5", "group", "rows").startsWith("Error"));
+        assertTrue(tools.office_excel_group_rows_cols("conv-1", null, "4:9", "group", "cols").startsWith("Error"));
+        assertTrue(tools.office_excel_add_pivot_table("conv-1", null, "", "F1", "[\"部门\"]", "[\"金额\"]", null)
+                .startsWith("Error"));
+        assertTrue(tools.office_excel_add_pivot_table("conv-1", null, "A1:D50", "F1", "[]", "[\"金额\"]", null)
+                .startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    // ==================== 批次 9：Word 修订接受/拒绝 ====================
+
+    @Test
+    @DisplayName("office_get_revisions/accept_revision/reject_revision：正常下发")
+    void wordRevisionToolsDispatch() {
+        when(bridge.executeOfficeCommand(any(), eq("get_revisions"), anyMap())).thenReturn("{\"count\":0}");
+        when(bridge.executeOfficeCommand(any(), eq("accept_revision"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("reject_revision"), anyMap())).thenReturn("{}");
+
+        assertEquals("{\"count\":0}", tools.office_get_revisions("conv-1"));
+        tools.office_accept_revision("conv-1", 2, null);
+        tools.office_reject_revision("conv-1", null, true);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> acceptArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("accept_revision"), acceptArgs.capture());
+        assertEquals(false, acceptArgs.getValue().get("all"));
+        assertEquals(2, acceptArgs.getValue().get("revisionIndex"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> rejectArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("reject_revision"), rejectArgs.capture());
+        assertEquals(true, rejectArgs.getValue().get("all"));
+        assertFalse(rejectArgs.getValue().containsKey("revisionIndex"));
+    }
+
+    @Test
+    @DisplayName("修订接受/拒绝：既没有 index 也没有 all 时拦下")
+    void wordRevisionValidationFailuresDoNotTouchBridge() {
+        assertTrue(tools.office_accept_revision("conv-1", null, null).startsWith("Error"));
+        assertTrue(tools.office_reject_revision("conv-1", null, false).startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    // ==================== 批次 9：Word 脚注/尾注/样式/内容控件/文档属性 ====================
+
+    @Test
+    @DisplayName("office_insert_footnote/endnote/apply_style/manage_content_control/set_document_properties：正常下发")
+    void wordMiscBatch9ToolsDispatch() {
+        when(bridge.executeOfficeCommand(any(), eq("insert_footnote"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("insert_endnote"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("apply_style"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("manage_content_control"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("set_document_properties"), anyMap())).thenReturn("{}");
+
+        assertEquals("{}", tools.office_insert_footnote("conv-1", "第一条", "参见附件一"));
+        assertEquals("{}", tools.office_insert_endnote("conv-1", "第一条", "参见附件一"));
+        assertEquals("{}", tools.office_apply_style("conv-1", "标题", true, "标题 1"));
+        assertEquals("{}", tools.office_manage_content_control("conv-1", "insert", "填空处", "field-1", "客户名称", null, null));
+        assertEquals("{}", tools.office_set_document_properties("conv-1", "尽调报告", null, "AI Workdeck", null, null, null));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> ccArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("manage_content_control"), ccArgs.capture());
+        assertEquals("insert", ccArgs.getValue().get("action"));
+        assertEquals("field-1", ccArgs.getValue().get("tag"));
+        assertEquals("客户名称", ccArgs.getValue().get("title"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> propsArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("set_document_properties"), propsArgs.capture());
+        assertEquals("尽调报告", propsArgs.getValue().get("title"));
+        assertFalse(propsArgs.getValue().containsKey("subject"));
+    }
+
+    @Test
+    @DisplayName("批次9 Word 杂项工具参数校验失败：拦下不触碰桥")
+    void wordMiscBatch9ValidationFailuresDoNotTouchBridge() {
+        assertTrue(tools.office_insert_footnote("conv-1", "", "内容").startsWith("Error"));
+        assertTrue(tools.office_insert_endnote("conv-1", "锚点", "").startsWith("Error"));
+        assertTrue(tools.office_apply_style("conv-1", "", true, "标题 1").startsWith("Error"));
+        assertTrue(tools.office_apply_style("conv-1", "标题", true, "").startsWith("Error"));
+        assertTrue(tools.office_manage_content_control("conv-1", "insert", "", "tag1", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_manage_content_control("conv-1", "read", null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_manage_content_control("conv-1", "set_text", null, "tag1", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_set_document_properties("conv-1", null, null, null, null, null, null).startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    @Test
+    @DisplayName("office_insert_image：文件不存在时拦下且不触碰桥")
+    void insertImageMissingFileDoesNotTouchBridge() {
+        when(projectFileRepository.findById(999L)).thenReturn(java.util.Optional.empty());
+        assertTrue(tools.office_insert_image("conv-1", 999L, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_insert_image("conv-1", null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_insert_image("conv-1", 1L, "长".repeat(256), null, null).startsWith("Error"));
+        assertTrue(tools.office_insert_image("conv-1", 1L, null, "middle", null).startsWith("Error"));
+        assertTrue(tools.office_insert_image("conv-1", 1L, null, null, 0.0).startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    // ==================== 批次 9：PPT 表格/超链接 ====================
+
+    @Test
+    @DisplayName("office_ppt_add_table/table_read/table_set_cell/set_hyperlink：正常下发")
+    void pptBatch9ToolsDispatch() {
+        when(bridge.executeOfficeCommand(any(), eq("ppt_add_table"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("ppt_table_read"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("ppt_table_set_cell"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("ppt_set_hyperlink"), anyMap())).thenReturn("{}");
+
+        assertEquals("{}", tools.office_ppt_add_table("conv-1", 1, "[[\"项目\",\"金额\"],[\"咨询费\",\"10000\"]]",
+                null, null, null, null, null, null));
+        assertEquals("{}", tools.office_ppt_table_read("conv-1", 1, null));
+        assertEquals("{}", tools.office_ppt_table_set_cell("conv-1", 1, null, 0, 1, "20000"));
+        assertEquals("{}", tools.office_ppt_set_hyperlink("conv-1", 1, "点击查看", "https://example.com"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> tableArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("ppt_add_table"), tableArgs.capture());
+        assertEquals(2, ((java.util.List<?>) tableArgs.getValue().get("rows")).size());
+    }
+
+    @Test
+    @DisplayName("PPT 批次9工具参数校验失败：拦下不触碰桥")
+    void pptBatch9ValidationFailuresDoNotTouchBridge() {
+        assertTrue(tools.office_ppt_add_table("conv-1", 0, null, 2, 2, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_ppt_add_table("conv-1", 1, null, null, null, null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_ppt_table_read("conv-1", 0, null).startsWith("Error"));
+        assertTrue(tools.office_ppt_table_set_cell("conv-1", 1, null, null, 0, "x").startsWith("Error"));
+        assertTrue(tools.office_ppt_table_set_cell("conv-1", 1, null, 0, -1, "x").startsWith("Error"));
+        assertTrue(tools.office_ppt_set_hyperlink("conv-1", 1, "", "https://example.com").startsWith("Error"));
+        assertTrue(tools.office_ppt_set_hyperlink("conv-1", 1, "文本", "ftp://example.com").startsWith("Error"));
         verifyNoInteractions(bridge);
     }
 }

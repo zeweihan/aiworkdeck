@@ -204,6 +204,44 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
     id/类型/位置尺寸/文字；再让它「把刚才那个文本框删掉」→ 出现「删除形状」chip
     （按上一步拿到的 id 精确删除）。
 
+### 批次 9 场景（Word 修订接受/拒绝、脚注尾注、图片、样式、内容控件、文档属性；Excel 批注/数据验证/图表/命名区域/保护/分组/透视表；PPT 表格/超链接）
+
+31. 手动在 Word 里对一段文字做几处修改产生几条修订，让 AI「看看有哪些修订」→ 出现
+    「读取修订」chip，回复列出序号/作者/类型/摘要；再让它「把第一条接受、其余全部拒绝」
+    → 依次出现「接受修订」「拒绝修订」chip，审阅面板里对应修订消失。
+32. 让 AI「给'不可抗力'这段加个脚注说明适用范围」→ 出现「插入脚注」chip，页面底部出现
+    脚注；同样方式验证「插入尾注」chip 落在文档末尾。
+33. 项目里放一张图片，让 AI「把这张图插到标题下面，宽度设成 300 磅」→ 出现「插入图片」chip，
+    图片以内联修订形式出现且按指定宽度显示；换一张超过 2MB 的图片重试 → 明确报错
+    （不是空等 30 秒）。
+34. 文档里已有「标题 1」「正文」等样式，让 AI「把这段设成标题 1 样式」→ 出现「应用样式」
+    chip，段落格式变为该样式；传一个文档里不存在的样式名 → 收到 Word 报错文案（不是静默失败）。
+35. 让 AI「在'客户名称：'后面插一个内容控件标记，tag 叫 field-1」→ 出现「管理内容控件」chip，
+    该段落被内容控件包裹（Word 界面显示灰底边框）；再让它「读一下 field-1 里的内容」
+    →「set_text 改成'张三'」→「删掉这个控件」→ 依次出现对应 chip，最终控件消失。
+36. 让 AI「把文档标题设成'尽调报告'、作者设成'AI Workdeck'」→ 出现「设置文档属性」chip，
+    Word 文件 → 信息面板里对应属性更新。
+37. 在 Excel 里让 AI「在 B2 加个批注说这个数字要核实」→ 出现「添加批注」chip，单元格出现
+    批注标记；「看看这张表都有什么批注」→「读取批注」chip 列出内容；「回复说已核实」
+    →「标记为已解决」→「删掉这条批注」依次验证四件套。
+38. 让 AI「给 B 列设置数据验证，只能填是/否/待定」→ 出现「设置数据验证」chip，该列出现
+    下拉箭头；「给 C 列设置只能填 0 到 100 的整数」验证 wholeNumber 分支；「清除 B 列的验证」
+    验证 clear 分支。
+39. 让 AI「用 A1:C5 的数据插一个柱状图」→ 出现「插入图表」chip，工作表出现图表对象。
+40. 让 AI「把 A1:D1 命名为 表头区」→ 出现「管理命名区域」chip；再让它「删掉这个命名区域」
+    验证 remove 分支。
+41. 让 AI「保护这张工作表，密码设成 test123」→ 出现「保护工作表」chip，尝试手动编辑单元格
+    被 Excel 拦下；再让它「用密码 test123 解除保护」验证 unprotect 分支。
+42. 让 AI「把第 4 到 9 行分组」→ 出现「分组行列」chip，行号左侧出现折叠控件；「取消分组」
+    验证 ungroup 分支。
+43. 准备一张含"部门""金额"两列的数据表，让 AI「按部门做一个金额求和的透视表，放在 F1」
+    → 出现「创建透视表」chip，新透视表按部门分组显示金额合计。
+44. 在 PowerPoint 里让 AI「在第一页插一张两行两列的表格，写上项目和金额」→ 出现
+    「插入表格」chip；「把表格第一行第二列改成 20000」→「修改表格单元格」chip；
+    「读一下这张表」→「读取表格」chip 返回二维数组。
+45. 让 AI「把'点击查看详情'设置成指向 https://example.com 的超链接」→ 出现「设置超链接」
+    chip，对应文字变为可点击链接；旧版宿主（无 PowerPointApi 1.10）上执行 → 明确报错。
+
 ### 连接链路场景
 
 29. 对话进行中断网 10 秒再恢复 → 出现「连接中断，正在自动重连……」提示，
@@ -225,16 +263,23 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
   set_numbering / format_table / apply_standard_format / insert_table / table_read /
   table_set_cell / table_add_row / table_delete_row / table_add_col / table_delete_col /
   insert_break / set_hyperlink / edit_header_footer / get_comments / reply_comment /
-  resolve_comment；
+  resolve_comment / get_revisions / accept_revision / reject_revision / insert_footnote /
+  insert_endnote / insert_image / apply_style / manage_content_control /
+  set_document_properties（批次9新增九项）；
   Excel 面 excel_get_range / excel_set_values / excel_search / excel_format_cells /
   excel_set_borders / excel_edit_rows_cols / excel_merge_cells / excel_sort_range /
   excel_manage_sheets / excel_freeze_panes / excel_set_formulas / excel_get_overview /
   excel_select_range / excel_set_autofilter / excel_conditional_format（15 个，与桌面端
-  sheet_* 原语数量对齐）；
+  sheet_* 原语数量对齐）/ excel_add_comment / excel_get_comments / excel_reply_comment /
+  excel_resolve_comment / excel_delete_comment / excel_set_data_validation /
+  excel_add_chart / excel_define_name / excel_protect_sheet / excel_group_rows_cols /
+  excel_add_pivot_table（批次9新增十一项，桌面端 sheet_* 目前没有对应能力，见
+  ai-doc-bridge 领域文档的桌面端补齐清单）；
   PPT 面 ppt_get_slides / ppt_replace_text / ppt_format_text /
   ppt_add_slide / ppt_delete_slide / ppt_add_text_box / ppt_move_slide /
-  ppt_add_shape / ppt_get_slide_details / ppt_delete_shape（批次7新增八项）。结果回传
-  `POST /api/agent/office/result`（body `{requestId, ok, data|error}`，
+  ppt_add_shape / ppt_get_slide_details / ppt_delete_shape（批次7新增八项）/
+  ppt_add_table / ppt_table_read / ppt_table_set_cell / ppt_set_hyperlink（批次9新增四项）。
+  结果回传 `POST /api/agent/office/result`（body `{requestId, ok, data|error}`，
   后端按挂起表做会话归属校验）。后端按 chat 请求的 officeHost 只暴露当前宿主的工具面。
 - Word 修订与批注依赖 WordApi 1.4（Word 2019+/Microsoft 365）；不支持时替换/插入降级为
   直接修改（结果携带 `tracked:false`），批注返回明确错误。
@@ -290,6 +335,41 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
   开 page/sectionNext 两种分隔类型。edit_header_footer 只处理文档首节。批注读写依赖
   WordApi 1.4；get_comments 返回的 index/id 均可用于 reply_comment/resolve_comment
   定位，id 优先。
+- 批次 9（Word 面）：`get_revisions`/`accept_revision`/`reject_revision` 依赖 WordApi 1.6
+  （`Word.TrackedChangeCollection`），`revisionIndex` 是 `get_revisions` 返回列表里的序号、
+  每次调用都要重新读一遍（Word 的修订顺序会随接受/拒绝变化）；`accept_revision`/
+  `reject_revision` 传 `all:true` 时走 `acceptAll()`/`rejectAll()`，忽略 `revisionIndex`。
+  `insert_footnote`/`insert_endnote` 依赖 WordApi 1.5。`insert_image` 的图片数据经后端读
+  项目文件转 base64 下发（后端限制 2MB，插件端不再二次校验大小）；`Range.insertInlinePictureFromBase64`
+  接受 replace/before/after 三种插入位置，无锚点时退化为替换当前选区。`apply_style` 直接
+  设 `paragraph.style = styleName`（WordApi 1.1），传入文档里不存在的样式名会被 Word 原生
+  拒绝并把错误消息透传给模型（不做客户端白名单校验，样式名是自由文本）。
+  `manage_content_control` 的 insert 分支包裹的是**锚点所在的整个段落**（`Paragraph.insertContentControl()`），
+  不是仅锚点那段文本——Range 级别的 `insertContentControl` 未在 Microsoft Learn 找到确凿文档，
+  改用官方示例明确支持的 Paragraph 级 API，粒度因此比 replace_text 等字符级操作粗；
+  `getByTag(tag)` 命中多个同 tag 控件时各操作只取第一个。`set_document_properties` 依赖
+  WordApi 1.3，是文档元数据，不产生修订。
+- 批次 9（Excel 面）：批注 `excel_add_comment`/`excel_get_comments`/`excel_reply_comment`/
+  `excel_resolve_comment`/`excel_delete_comment` 依赖 ExcelApi 1.10（`Workbook.comments`/
+  `Comment.replies`，与旧版"Note"批注是两套不同 API，本批次只做新版线程式批注）；
+  定位单元格批注一律传 `Range` 对象给 `getItemByCell`（不是 `"Sheet!A1"` 限定字符串），
+  规避跨工作表地址歧义。`excel_set_data_validation` 依赖 ExcelApi 1.8，type=list 的下拉源
+  是逗号分隔的静态字符串（不支持引用区域作为数据源）。`excel_add_chart` 依赖 ExcelApi 1.1，
+  图表类型 v1 只开 column/line/pie/bar 四种。`excel_define_name` 的命名区域一律是工作簿级
+  （`workbook.names`，不支持工作表级同名）。`excel_protect_sheet` 的 `protect()` 用默认保护
+  选项（不暴露 `allowFormatCells` 等细粒度开关），密码参数不落日志。`excel_group_rows_cols`
+  的 `rangeAddress` 必须是整行（如 `4:9`）或整列（如 `C:E`），普通单元格区域会被拒绝，
+  依赖 ExcelApi 1.10。`excel_add_pivot_table` 依赖 ExcelApi 1.8，只做「行字段分组 + 数值字段
+  求和」的基础形态（`rowHierarchies`/`dataHierarchies`），不支持列字段/筛选字段/自定义汇总
+  函数；字段名必须与源区域表头文字完全一致。
+- 批次 9（PPT 面）：`ppt_add_table`/`ppt_table_read`/`ppt_table_set_cell` 依赖
+  PowerPointApi **1.8**（`ShapeCollection.addTable`/`Shape.getTable`/`Table.rowCount`/
+  `columnCount`/`values`/`getCellOrNullObject` 均在这一档；矩阵调研时按 `TableRowCollection`
+  猜测需要 1.9，实测这几个属性/方法本身在 1.8 已够用，只有真要枚举行列集合对象才需要
+  1.9，本批次未用到，门槛按 1.8 收紧）。`ppt_table_read`/`ppt_table_set_cell` 不传 `shapeId`
+  时取该页第一个 `type==='Table'` 的形状。`ppt_set_hyperlink` 依赖 PowerPointApi 1.10
+  （`TextRange.setHyperlink`），比其余 PPT 工具的 1.4 门槛更高；用法与 `ppt_format_text`
+  相同的子串定位（`getSubstring`），只命中第一处。
 - 会话 ID 优先请求服务端签发（`POST /api/agent/conversations`），旧后端无该端点时
   静默回退客户端生成 `conv-<毫秒>`。
 - 流式文本按 XML 标签轻量分流：`<final>` 与标签外文本为主回复、`<thinking>` 折叠展示，
