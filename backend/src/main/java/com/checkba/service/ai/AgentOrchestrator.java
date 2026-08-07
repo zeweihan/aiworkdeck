@@ -331,6 +331,13 @@ public class AgentOrchestrator {
      */
     @Async("taskExecutor") // Run in separate thread
     public void handleUserMessage(AiAgentController.AgentChatRequest request, Long userId) {
+        // 平台通道按用户计费（server 模式多租户）：整轮循环——含其中同步调用的上下文组装、
+        // 记忆检索、子 Agent、故障转移换模型——都在这个身份作用域内取 key。
+        // 本方法体里另有跨线程提交（标题生成），必须各自用 PlatformAiUserScope.wrap 重放。
+        PlatformAiUserScope.run(userId, () -> handleUserMessageInScope(request, userId));
+    }
+
+    private void handleUserMessageInScope(AiAgentController.AgentChatRequest request, Long userId) {
         String conversationId = request.getConversationId();
         String projectId = String.valueOf(request.getProjectId());
         AgentMode agentMode = request.getAgentMode(); // 获取 Agent 模式
@@ -365,7 +372,8 @@ public class AgentOrchestrator {
             if (existingMsgs.size() <= 1) { // Only the user message we just saved
                 final String convId = conversationId;
                 final String userMsg = request.getMessage();
-                CompletableFuture.runAsync(() -> {
+                // 跨线程提交：身份不会自动传递（池线程继承的是创建者而非提交者），显式重放
+                CompletableFuture.runAsync(PlatformAiUserScope.wrap(() -> {
                     try {
                         log.info("Generating conversation title for: {}", convId);
                         // Use a lightweight model for title generation
@@ -378,7 +386,7 @@ public class AgentOrchestrator {
                     } catch (Exception e) {
                         log.warn("Failed to generate conversation title for {}", convId, e);
                     }
-                });
+                }));
             }
             
             // 1.2 Skill 激活（Phase 3B）：用户钉选优先，否则触发词匹配；都未命中时行为与现状一致

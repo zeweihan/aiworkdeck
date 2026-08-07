@@ -71,6 +71,11 @@ public class AiChatService {
      * 处理一次同步 chat 请求（含多模态与上下文注入）。
      */
     public AiChatResponse chat(AiChatRequest request, Long userId) {
+        // 平台通道按用户计费：整条同步链路都在该身份作用域内取 key
+        return PlatformAiUserScope.call(userId, () -> chatInScope(request, userId));
+    }
+
+    private AiChatResponse chatInScope(AiChatRequest request, Long userId) {
         try {
             ProjectContextHolder.setProjectId(request.getProjectId());
 

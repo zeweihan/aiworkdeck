@@ -37,8 +37,24 @@ public class ChatModelFactory {
                 "streaming", streaming));
     }
 
-    // 缓存: key = provider + ":" + modelName
-    private final Map<String, ChatLanguageModel> modelCache = new ConcurrentHashMap<>();
+    /**
+     * 缓存上限。平台通道的缓存键含密钥指纹，per-user 化之后条目数从 O(模型数) 变成
+     * O(用户数×模型数)——多租户下无界 Map 就是内存泄漏，这里按访问顺序淘汰。
+     */
+    private static final int MODEL_CACHE_MAX = 64;
+
+    private static <V> Map<String, V> boundedCache() {
+        return java.util.Collections.synchronizedMap(
+                new java.util.LinkedHashMap<>(16, 0.75f, true) {
+                    @Override
+                    protected boolean removeEldestEntry(Map.Entry<String, V> eldest) {
+                        return size() > MODEL_CACHE_MAX;
+                    }
+                });
+    }
+
+    // 缓存: key = provider + ":" + modelName（平台通道另含密钥指纹）
+    private final Map<String, ChatLanguageModel> modelCache = boundedCache();
 
     /**
      * 解析当前生效的供应商：优先读管理后台/向导写入 system_setting 的 ai.activeProvider，
@@ -171,17 +187,16 @@ public class ChatModelFactory {
     /**
      * 平台通道密钥由官网 provision，取不到时**不能**静默回退 BYOK：
      * 那会把用户自己的 key 花掉，也会掩盖「未分配额度」这类需要用户去官网处理的状态。
-     * 这里原样抛出 AccountException（中文文案，如「请先在官网账户页分配 AI 额度」）。
+     * 这里原样抛出 AccountException（中文文案）。
+     *
+     * <p>server 模式多租户下密钥是 per-user 的，身份取自 {@link PlatformAiUserScope}；
+     * 缺身份同样抛业务错误，**绝不回落机器级 key**（那等于拿别人的额度花钱）。
      */
     private String platformApiKey() {
-        if (!platformAiChannel.isAvailable()) {
-            throw new com.checkba.service.account.AccountException(
-                    com.checkba.service.account.AccountException.Kind.NOT_CONNECTED,
-                    "「AI Workdeck 云端」需要连接账户，请到设置页粘贴账户 Key");
-        }
+        Long userId = PlatformAiUserScope.current();
         String key = platformAiChannel.apiKey();
         // 请求发出前先把用量基线建起来，否则重启后第一条消息只够建基线、cost 永远留空
-        usageAccountant.ensureBaselineAsync();
+        usageAccountant.ensureBaselineAsync(userId);
         return key;
     }
 
@@ -196,6 +211,12 @@ public class ChatModelFactory {
         String active = systemSettingService.get("ai.activeProvider", null);
         if (active == null
                 || !AiModelProperties.Provider.AWD_CLOUD.name().equalsIgnoreCase(active.trim())) {
+            return null;
+        }
+        // server 模式多租户：ai.activeProvider 是全局设置，而平台通道的密钥是 per-user 的。
+        // 管理员断开机器级账户不该把还在正常用 per-user 密钥的租户一起打断。
+        if (platformAiChannel.hasPerUserKeys()) {
+            log.info("机器级账户已断开，但仍有按用户的平台通道密钥在用，保持 AWD_CLOUD 不降级");
             return null;
         }
         String next;
@@ -290,7 +311,7 @@ public class ChatModelFactory {
         });
     }
     // Streaming Cache
-    private final Map<String, dev.langchain4j.model.chat.StreamingChatLanguageModel> streamingModelCache = new ConcurrentHashMap<>();
+    private final Map<String, dev.langchain4j.model.chat.StreamingChatLanguageModel> streamingModelCache = boundedCache();
 
     public dev.langchain4j.model.chat.StreamingChatLanguageModel getStreamingChatModel(String modelId) {
         String targetModel = (modelId == null || modelId.isEmpty()) ? "default" : modelId;

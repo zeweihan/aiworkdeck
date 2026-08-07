@@ -73,6 +73,57 @@ export async function postAwdkLogin({ serverUrl }, key) {
 }
 
 /**
+ * 取本账号的平台 AI 通道额度（GET /api/platform-ai/key/status）。
+ * 旧后端没有该端点（404）或任何失败时返回 null，由调用方隐藏额度卡片而不是报错——
+ * 额度是附加信息，拿不到不该妨碍对话。
+ */
+export async function fetchPlatformAiStatus({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !token) return null
+  try {
+    const resp = await fetch(`${base}/api/platform-ai/key/status`, { headers: headers(token) })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    if (data && data.code === 0 && data.data) return data.data
+  } catch (e) {
+    // 静默降级：额度未知
+  }
+  return null
+}
+
+/**
+ * 用官网账户 Key 重新取一把平台 AI 通道密钥（POST /api/platform-ai/key/refresh）。
+ * 用于「在官网分配额度/重发密钥之后」——服务端不保存账户 Key，只能由用户再贴一次。
+ * Key 用完即弃，不落本机存储。成功返回最新额度状态。
+ */
+export async function refreshPlatformAiKey({ serverUrl, token }, key) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error('连接未就绪：后端地址为空')
+  let resp
+  try {
+    resp = await fetch(`${base}/api/platform-ai/key/refresh`, {
+      method: 'POST',
+      headers: headers(token),
+      body: JSON.stringify({ key: (key || '').trim() })
+    })
+  } catch (e) {
+    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+  }
+  if (resp.status === 404) {
+    throw new Error('该服务器不支持按账号的 AI 额度刷新')
+  }
+  if (!resp.ok) throw new Error(`额度刷新失败（HTTP ${resp.status}）`)
+  let data
+  try {
+    data = await resp.json()
+  } catch (e) {
+    throw new Error('后端响应格式异常')
+  }
+  if (data && data.code === 0 && data.data) return data.data
+  throw new Error('额度刷新未通过：请确认这枚 Key 属于本账号且未过期')
+}
+
+/**
  * 请求后端签发会话 ID（POST /api/agent/conversations，body {projectId}）。
  * 契约与后端并行分支约定；旧后端没有该端点（404）或任何失败时返回 null，
  * 由调用方静默回退到客户端生成的 conv-<毫秒>。

@@ -76,6 +76,7 @@ class AwdkLoginServiceTest {
     private UserService userService;
     private DeviceTokenService deviceTokenService;
     private AccountBindingRepository bindingRepository;
+    private com.checkba.service.ai.PlatformAiKeyService platformAiKeyService;
 
     // 内存假库
     private final Map<String, User> usersByName = new HashMap<>();
@@ -118,6 +119,8 @@ class AwdkLoginServiceTest {
                 .thenAnswer(inv -> Optional.ofNullable(tokensByHash.get(inv.getArgument(0, String.class))));
         deviceTokenService = new DeviceTokenService(tokenRepository);
 
+        platformAiKeyService = mock(com.checkba.service.ai.PlatformAiKeyService.class);
+
         bindingRepository = mock(AccountBindingRepository.class);
         when(bindingRepository.findByExternalAccountId(anyString()))
                 .thenAnswer(inv -> Optional.ofNullable(bindingsByAccountId.get(inv.getArgument(0, String.class))));
@@ -131,7 +134,7 @@ class AwdkLoginServiceTest {
 
     private AwdkLoginService service(boolean enabled) {
         return new AwdkLoginService(enabled, "https://www.aiworkdeck.com",
-                transport, bindingRepository, userService, deviceTokenService);
+                transport, bindingRepository, userService, deviceTokenService, platformAiKeyService);
     }
 
     private static void assertNotMistakenForLogout(String message) {
@@ -265,5 +268,27 @@ class AwdkLoginServiceTest {
         AwdkLoginService.BridgeSession second = svc.login(KEY);
         assertNotEquals(first.userId(), second.userId());
         assertEquals(second.userId(), bindingsByAccountId.get("acc_9f3a").getUserId());
+    }
+
+    // ==================== per-user 平台 AI key（2026-08-07） ====================
+
+    @Test
+    @DisplayName("桥接成功即为该用户换一把平台 AI 密钥：awdk_ 只在这一刻被用到")
+    void bridgeProvisionsPerUserPlatformKey() {
+        transport.enqueue(200, ME_OK);
+        AwdkLoginService.BridgeSession session = service(true).login(KEY);
+
+        // 取 key 走的是「短暂持有的原始 awdk_」这一条路（不落库的前提下唯一可行的时机）
+        org.mockito.Mockito.verify(platformAiKeyService).tryProvision(session.userId(), KEY);
+    }
+
+    @Test
+    @DisplayName("Key 无效时不得去取平台密钥：官网都没认，更不该拿它换 runtime key")
+    void invalidKeyNeverProvisions() {
+        transport.enqueue(401, "{\"error\":\"unauthorized\"}");
+        assertThrows(AccountException.class, () -> service(true).login(KEY));
+
+        org.mockito.Mockito.verify(platformAiKeyService, org.mockito.Mockito.never())
+                .tryProvision(anyLong(), anyString());
     }
 }

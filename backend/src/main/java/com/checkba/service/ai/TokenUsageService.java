@@ -64,7 +64,8 @@ public class TokenUsageService {
 
             tokenUsageRepository.save(entity);
             if (platformChannel) {
-                scheduleReconcile(entity.getId());
+                // userId 决定这笔账查哪把 key 的累计消费（server 模式下密钥是 per-user 的）
+                scheduleReconcile(entity.getId(), userId);
             }
             log.debug("Recorded usage for model {}: {} tokens, source={}",
                     modelId, totalTokens, entity.getCostSource());
@@ -77,15 +78,15 @@ public class TokenUsageService {
      * 对账必须等事务提交后再入队：id 在 flush 时就有了，但对账 worker 是另一条连接，
      * 提交前 findById 查不到这条记录会静默 no-op，该条的 cost 永久留空。
      */
-    private void scheduleReconcile(Long tokenUsageId) {
+    private void scheduleReconcile(Long tokenUsageId, Long userId) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
-            platformUsageAccountant.reconcileAsync(tokenUsageId);
+            platformUsageAccountant.reconcileAsync(tokenUsageId, userId);
             return;
         }
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                platformUsageAccountant.reconcileAsync(tokenUsageId);
+                platformUsageAccountant.reconcileAsync(tokenUsageId, userId);
             }
         });
     }

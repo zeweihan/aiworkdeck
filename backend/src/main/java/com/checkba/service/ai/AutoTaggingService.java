@@ -34,6 +34,11 @@ public class AutoTaggingService {
      * Automatically generate and attach tags to a file based on its content.
      */
     public void autoTagFile(Long projectId, Long fileId, String storagePath, Long userId) {
+        // 平台通道按用户计费：这次 LLM 调用要落在上传者本人的额度上
+        PlatformAiUserScope.run(userId, () -> autoTagFileInScope(projectId, fileId, storagePath, userId));
+    }
+
+    private void autoTagFileInScope(Long projectId, Long fileId, String storagePath, Long userId) {
         log.info("Starting auto-tagging for fileId={}, path={}", fileId, storagePath);
         try {
             // 1. Extract text

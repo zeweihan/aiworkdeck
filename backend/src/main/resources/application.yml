@@ -288,6 +288,11 @@ security:
   # 客户端自造的 conv-<毫秒> ID 会被拒绝；已有消息的会话仍按 DB 归属判定。
   # 默认 false：桌面单机与既有前端自造 ID 流程行为完全不变。
   conversation-issuance-required: false
+  # per-user 平台 AI 通道密钥的落库加密密钥（AES-256-GCM，密钥 = SHA-256(本值)）。
+  # 开启账户桥接（security.awdk-login-enabled=true，即官方托管的插件云后端）时**必配**，
+  # 缺失直接拒绝启动——明文降级属于潜伏逃生门，不留。
+  # local-mode 与未开桥接的团队服务器不受影响：它们走机器级密钥文件，不碰这条路。
+  platform-key-secret: ${AWD_PLATFORM_KEY_SECRET:}
 
 # LangChain4j Ollama Configuration
 langchain4j:

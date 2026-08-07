@@ -140,6 +140,16 @@ public class AccountService {
     }
 
     /**
+     * GET /api/account/me，用调用方给定的 awdk_（不是本机连接的那把）。
+     *
+     * 供 server 模式下「代表某个已桥接用户校验其 Key」使用：Key 由调用方短暂持有、用完即弃，
+     * <b>不会落到 account.json，也不会落库</b>。
+     */
+    public Map<String, Object> fetchProfileWith(String awdkKey) {
+        return getJson("/api/account/me", awdkKey);
+    }
+
+    /**
      * GET /api/account/entitlements。
      * 契约返回 {@code {"entitlements":[{feature, purchasedAt, orderId}]}}。
      */
@@ -180,7 +190,17 @@ public class AccountService {
      * @throws AccountException CONFLICT（409 no_allocation：还没从余额分配 AI 额度）
      */
     public Map<String, Object> fetchAiKey() {
-        String key = requireKey();
+        return fetchAiKeyWith(requireKey());
+    }
+
+    /**
+     * 同 {@link #fetchAiKey()}，但用调用方给定的 awdk_。
+     *
+     * server 模式的 per-user 平台通道走这条：桥接登录/显式刷新时短暂持有该用户的 Key，
+     * 换回属于他自己的 runtime key，Key 本身用完即弃（见 {@code PlatformAiKeyService}）。
+     */
+    public Map<String, Object> fetchAiKeyWith(String awdkKey) {
+        String key = awdkKey;
         AccountTransport.Reply reply = transport.send("POST", baseUrl + "/api/account/ai-key", key, "{}");
         if (reply.networkFailure()) {
             throw networkError();

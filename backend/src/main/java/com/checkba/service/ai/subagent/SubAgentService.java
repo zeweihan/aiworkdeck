@@ -112,14 +112,16 @@ public class SubAgentService {
         String subtaskId = "subtask-" + UUID.randomUUID().toString().substring(0, 8);
         sendProgress(parentCtx, subtaskId, "started", 0, "子任务开始：" + brief(taskDescription));
 
-        Future<SubAgentResult> future = executor.submit(() -> {
-            IN_SUB_AGENT.set(Boolean.TRUE);
-            try {
-                return runLoop(subtaskId, taskDescription, expectedOutput, toolScope, parentCtx);
-            } finally {
-                IN_SUB_AGENT.remove();
-            }
-        });
+        // 跨线程提交：子 Agent 的模型调用也按主会话身份计费（平台通道 per-user），显式重放
+        Future<SubAgentResult> future = executor.submit(
+                com.checkba.service.ai.PlatformAiUserScope.<SubAgentResult>wrap(() -> {
+                    IN_SUB_AGENT.set(Boolean.TRUE);
+                    try {
+                        return runLoop(subtaskId, taskDescription, expectedOutput, toolScope, parentCtx);
+                    } finally {
+                        IN_SUB_AGENT.remove();
+                    }
+                }));
 
         SubAgentResult result;
         try {

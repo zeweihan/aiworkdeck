@@ -47,6 +47,13 @@ public class MemoryPipelineService {
     @Async("memoryExecutor")
     public void onConversationTurnCompleted(String conversationId, String projectId,
                                             Long userId, List<ChatMessage> messages) {
+        // 独立线程池：平台通道按用户计费，摘要/抽取这几次 LLM 调用要落在本人的额度上
+        com.checkba.service.ai.PlatformAiUserScope.run(userId,
+                () -> runPipeline(conversationId, projectId, userId, messages));
+    }
+
+    private void runPipeline(String conversationId, String projectId,
+                             Long userId, List<ChatMessage> messages) {
         log.info("Memory pipeline triggered: conversationId={}, messageCount={}",
                 conversationId, messages.size());
 

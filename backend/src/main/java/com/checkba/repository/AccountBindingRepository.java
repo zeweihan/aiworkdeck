@@ -7,4 +7,6 @@ import java.util.Optional;
 
 public interface AccountBindingRepository extends JpaRepository<AccountBinding, Long> {
     Optional<AccountBinding> findByExternalAccountId(String externalAccountId);
+
+    Optional<AccountBinding> findByUserId(Long userId);
 }
