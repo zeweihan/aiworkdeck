@@ -904,6 +904,141 @@ function normalizeFormula(f) {
   return out;
 }
 
+// ---- Impress（演示文稿 slide_*）原语 helpers --------------------------------
+// 引擎自 r4 起含 Impress 模块（doc-editor.md 待 r4 验收更新口径）；pptx/odp 经
+// load_document 打开后由 Impress 承载，doc_*（xModel.getText()）/sheet_*
+// （xModel.getSheets()）在演示文稿上必然失败——slide_* 是对等原语集。文档类型
+// 守卫集中在 resolvePage/resolveShape（同 resolveSheet/resolveWriterTable 口径）。
+// 设计依据：docs/superpowers/specs/2026-08-07-impress-bridge-design.md §4/§4.3。
+function isImpressDoc() {
+  try { return !!(xModel && xModel.supportsService && xModel.supportsService('com.sun.star.presentation.PresentationDocument')); }
+  catch (e) { return false; }
+}
+const NOT_PRESENTATION_MSG = '当前打开的不是演示文稿：slide_* 原语仅对 pptx/ppt/odp 生效。Word 文档请用 doc_* 原语，表格请用 sheet_* 原语；要操作演示文稿请先用 doc_open_file 打开它。';
+// 当前文档内核类型——get_doc_kind 诊断 action 与 load_document 返回值共用，宿主
+// 据此按 kind 隐藏「审阅」按钮/ReviewPanel（Calc/Impress 都没有修订机制）。
+function docKindOf() {
+  try { if (isWriterDoc()) return 'writer'; } catch (e) {}
+  try { if (isCalcDoc()) return 'calc'; } catch (e) {}
+  try { if (isImpressDoc()) return 'impress'; } catch (e) {}
+  return 'unknown';
+}
+// 统一失败返回：同时写 error（后端桥 handleEditorCommand 只回传 result.error）
+// 与 message（worker 既有约定），两者同文——同 tableFail 口径（doc_table_* 已踩过）。
+function slideFail(msg) { return { success: false, error: msg, message: msg }; }
+
+// 位置/尺寸对外一律磅（pt），UNO 的 Position/Size 值结构体单位是 1/100 mm。
+const PT_PER_HMM = 1 / 35.28;
+function hmmToPt(hmm) { return Math.round(Number(hmm) * PT_PER_HMM * 100) / 100; }
+
+// slideNumber 1 开始。命中后顺手 setCurrentPage（拟人：与 resolveSheet 切活动表
+// 同一口径，操作在哪页要让用户看得见）。返回 {page, index} 或 {error}。
+function resolvePage(p) {
+  if (!isImpressDoc()) return { error: NOT_PRESENTATION_MSG };
+  let pages;
+  try { pages = xModel.getDrawPages(); } catch (e) { return { error: '读取幻灯片列表失败: ' + errStr(e) }; }
+  const count = pages.getCount();
+  const want = p && p.slideNumber != null ? Number(p.slideNumber) : NaN;
+  if (!Number.isFinite(want) || want < 1 || want > count) {
+    return { error: '页码越界: ' + (p && p.slideNumber) + '（共 ' + count + ' 页，1 开始）' };
+  }
+  const index = want - 1;
+  let page;
+  try { page = pages.getByIndex(index); } catch (e) { return { error: '定位幻灯片失败: ' + errStr(e) }; }
+  try {
+    if (ctrl && ctrl.getCurrentPage && ctrl.setCurrentPage) {
+      const cur = ctrl.getCurrentPage();
+      if (!cur || !unoSameDrawPage(cur, page)) ctrl.setCurrentPage(page);
+    }
+  } catch (e) {}
+  return { page: page, index: index };
+}
+// XDrawPage 没有稳定的等值比较；退回按 Number 属性比对（GenericDrawPage.Number 只读）。
+function unoSameDrawPage(a, b) {
+  try { return a.getPropertyValue('Number') === b.getPropertyValue('Number'); } catch (e) { return a === b; }
+}
+// 未命名形状补一个稳定名 __awd_shape_N（页内下标），此后所有原语按名定位，
+// 避免用会因增删漂移的 index。
+function ensureShapeNames(page) {
+  const n = page.getCount();
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+    let name = ''; try { name = shape.getName ? shape.getName() : ''; } catch (e) {}
+    if (!name) { try { shape.setName('__awd_shape_' + i); } catch (e) {} }
+  }
+}
+// 形状文字：大多数形状（文本框/标题/占位符）实现 drawing.Text；线条/连接符/表格
+// 外壳等不实现，统一 try/catch 归零而非抛错，读取面据此判断"这个形状没有文字"。
+function shapeText(shape) {
+  try { return shape.getText().getString() || ''; } catch (e) { return ''; }
+}
+// 形状分类，仅用于 slide_get_overview/slide_get_page 的展示与 slide_replace_text
+// 的表格识别；不影响文字读写路径本身（那条走 getText() 统一处理，与分类无关）。
+function shapeKind(shape) {
+  try {
+    if (shape.supportsService('com.sun.star.presentation.TitleTextShape')) return 'title';
+    if (shape.supportsService('com.sun.star.presentation.OutlineTextShape') ||
+        shape.supportsService('com.sun.star.presentation.SubtitleTextShape') ||
+        shape.supportsService('com.sun.star.presentation.NotesTextShape')) return 'placeholder';
+    if (shape.supportsService('com.sun.star.drawing.TableShape')) return 'table';
+    if (shape.supportsService('com.sun.star.drawing.GraphicObjectShape')) return 'image';
+    if (shape.supportsService('com.sun.star.drawing.TextShape')) return 'text';
+    if (shape.supportsService('com.sun.star.drawing.RectangleShape')) return 'rectangle';
+    if (shape.supportsService('com.sun.star.drawing.EllipseShape')) return 'ellipse';
+    if (shape.supportsService('com.sun.star.drawing.LineShape')) return 'line';
+    if (shape.supportsService('com.sun.star.drawing.GroupShape')) return 'group';
+  } catch (e) {}
+  return 'other';
+}
+// 按 shapeName（XNamed.Name）或 matchText（子串匹配文字）定位形状。返回
+// {shape, index, name} 或 {error}。调用前应已 ensureShapeNames(page)。
+function resolveShape(page, p) {
+  const n = page.getCount();
+  const wantName = p && p.shapeName != null && String(p.shapeName).trim() !== '' ? String(p.shapeName).trim() : null;
+  const wantText = p && p.matchText != null && String(p.matchText).trim() !== '' ? String(p.matchText).trim() : null;
+  if (wantName) {
+    for (let i = 0; i < n; i++) {
+      let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+      let name = ''; try { name = shape.getName(); } catch (e) {}
+      if (name === wantName) return { shape: shape, index: i, name: name };
+    }
+    return { error: '形状不存在: ' + wantName + '（该页共 ' + n + ' 个形状，可用 slide_get_page 查看）' };
+  }
+  if (wantText) {
+    for (let i = 0; i < n; i++) {
+      let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+      const text = shapeText(shape);
+      if (text && text.indexOf(wantText) !== -1) {
+        let name = ''; try { name = shape.getName(); } catch (e) {}
+        return { shape: shape, index: i, name: name };
+      }
+    }
+    return { error: '未找到包含文字的形状: ' + wantText };
+  }
+  return { error: '缺少 shapeName 或 matchText 参数' };
+}
+// 备注页文字：备注页上除标题镜像外通常有一个 NotesTextShape 承载正文。
+function notesPageText(notesPage) {
+  if (!notesPage) return '';
+  const n = notesPage.getCount();
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
+    try {
+      if (shape.supportsService('com.sun.star.presentation.NotesTextShape')) return shapeText(shape);
+    } catch (e) {}
+  }
+  return '';
+}
+// 版式名最佳努力映射（AutoLayout 是 short 常量，未在本次调研中逐值核对 idl，
+// 仅覆盖几个常被引用的值；命中不了就回退成 null，前端/模型仍能用数字 layout
+// 字段）。r4 真机验证时如与实际枚举不符，直接改这张表，不影响原语契约。
+const AUTO_LAYOUT_NAMES = { 0: '标题页', 1: '标题+内容', 19: '仅标题', 20: '空白' };
+function layoutNameOf(layout) {
+  if (layout == null) return null;
+  const n = Number(layout);
+  return Object.prototype.hasOwnProperty.call(AUTO_LAYOUT_NAMES, n) ? AUTO_LAYOUT_NAMES[n] : null;
+}
+
 // ---- 流式写入状态机：markdown 行级解析 → 标准格式落字 ------------------------
 // stream_insert 攒字节、按完整行消费；stream_flush 收尾（写掉尾行/尾表、复位）。
 // 状态在 worker 内（宿主只透传 token），文档换人/换流由宿主在 open_sync 时
@@ -1627,7 +1762,7 @@ const EXEC = {
     // Empty body = a brand-new / unsaved document (the backend streams 200 + 0
     // bytes for it). That is NOT an error: keep the blank boot doc as-is. The
     // host also guards this, but defend here too.
-    if (!u8 || u8.length === 0) return { success: true, empty: true, name: name };
+    if (!u8 || u8.length === 0) return { success: true, empty: true, name: name, kind: docKindOf() };
     // zeta.js marshals JS→UNO sequences ONLY from plain Arrays (translateToEmbind
     // gates on Array.isArray), and sequence<byte> elements are SIGNED — so go
     // through an Int8Array view, then Array.from. Passing the typed array itself
@@ -1643,9 +1778,14 @@ const EXEC = {
       try { installKeyHandler(); } catch (e) {}
       // The listener is per-model — the freshly-loaded component needs its own.
       try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
-      // Revisions default ON for the real document too (same as bootDoc).
-      try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
-      showDeletionsInMargin();
+      // RecordChanges/ShowChangesInMargin 是 Writer 专属（Calc/Impress 没有该属性）——
+      // 此前对非 Writer 文档也无条件调用，靠 try/catch 兜住但会白抛异常 + 打噪声日志
+      // （Impress 场景尤其误导：看起来像"修订功能坏了"）。改成前置类型判定。
+      if (isWriterDoc()) {
+        // Revisions default ON for the real document too (same as bootDoc).
+        try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
+        showDeletionsInMargin();
+      }
     };
 
     const errs = [];
@@ -1668,7 +1808,7 @@ const EXEC = {
       if (loaded) {
         retarget(loaded);
         log('load_document: 已加载真实文档「' + name + '」/ loaded (' + u8.length + ' bytes, via file)');
-        return { success: true, name: name, bytes: u8.length, via: 'file' };
+        return { success: true, name: name, bytes: u8.length, via: 'file', kind: docKindOf() };
       }
       errs.push('file: loadComponentFromURL returned null');
     } catch (e) { errs.push('file: ' + errStr(e)); }
@@ -1684,7 +1824,7 @@ const EXEC = {
       if (loaded) {
         retarget(loaded);
         log('load_document: 已加载真实文档「' + name + '」/ loaded (' + u8.length + ' bytes, via stream)');
-        return { success: true, name: name, bytes: u8.length, via: 'stream' };
+        return { success: true, name: name, bytes: u8.length, via: 'stream', kind: docKindOf() };
       }
       errs.push('stream: loadComponentFromURL returned null');
     } catch (e) { errs.push('stream: ' + errStr(e)); }
@@ -2298,8 +2438,11 @@ const EXEC = {
     return Object.assign({ success: true, paragraphs: paras, tables: tables }, verifySnapshot());
   },
   // [流式] markdown 剥离 + 标准格式落字（doc_start_stream 管线的落字端）。
-  // 攒到完整行才消费；尾部残行等 stream_flush。
+  // 攒到完整行才消费；尾部残行等 stream_flush。HOUSE 是 Writer 排版语义
+  // （首行缩进 2 字符/段后 18 磅），在幻灯片/表格上无意义——遇到非 Writer 文档
+  // 直接报错，让模型改走 slide_*/sheet_*，不悄悄把 markdown 正文糊进错误的文档模型。
   stream_insert(p) {
+    if (!isWriterDoc()) return tableFail('doc_start_stream 仅支持 Word 文档：当前文档不是 Writer 文档。电子表格请用 sheet_* 原语，演示文稿请用 slide_* 原语逐处编辑。');
     streamEnsureActive();
     STREAM.buf += String(p.text || '');
     const nl = STREAM.buf.lastIndexOf('\n');
@@ -3874,6 +4017,220 @@ const EXEC = {
       success: true, name: name, sourceRange: sheetRangeName(srcAddr),
       rowFields: rowFieldNames, dataField: dataFieldName, function: 'sum', sheet: sheet.getName(),
     };
+  },
+  // ==================== 演示文稿原语（slide_*，Phase 1） ====================
+  // 与 doc_*/sheet_* 平行的 pptx/odp 操作面。Impress 没有 Writer 的修订（redline）
+  // 机制，写入即生效；安全网是 doc_undo 与后端文档检查点（fileEffect=MODIFIED）。
+  // [幻灯片·看] 每页页码/名称/版式/母版/标题/形状数/是否有备注/是否含表格。
+  // 打开演示文稿后的第一步。
+  slide_get_overview() {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    const count = pages.getCount();
+    const slides = [];
+    for (let i = 0; i < count; i++) {
+      let page; try { page = pages.getByIndex(i); } catch (e) { continue; }
+      let name = ''; try { name = page.getName ? page.getName() : ''; } catch (e) {}
+      let layout = null; try { layout = page.getPropertyValue('Layout'); } catch (e) {}
+      let masterName = ''; try { masterName = page.getMasterPage().getName(); } catch (e) {}
+      let shapeCount = 0; try { shapeCount = page.getCount(); } catch (e) {}
+      let titleText = '';
+      let hasTable = false;
+      for (let s = 0; s < shapeCount; s++) {
+        let shape; try { shape = page.getByIndex(s); } catch (e) { continue; }
+        const kind = shapeKind(shape);
+        if (kind === 'title' && !titleText) titleText = shapeText(shape);
+        if (kind === 'table') hasTable = true;
+      }
+      let hasNotes = false;
+      try { hasNotes = notesPageText(page.getNotesPage()).trim().length > 0; } catch (e) {}
+      slides.push({
+        number: i + 1, name: name, layout: layout, layoutName: layoutNameOf(layout),
+        masterName: masterName, titleText: titleText, shapeCount: shapeCount,
+        hasNotes: hasNotes, hasTable: hasTable,
+      });
+    }
+    return { success: true, slideCount: count, slides: slides };
+  },
+  // [幻灯片·看] 单页明细：尺寸/版式/母版/备注 + 每个形状的名称/类型/位置尺寸(磅)/
+  // 文字，表格形状另带行列数。未命名形状被分配稳定名 __awd_shape_N。
+  slide_get_page(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const page = r0.page;
+    ensureShapeNames(page);
+    let width = 0, height = 0;
+    try { width = hmmToPt(page.getPropertyValue('Width')); height = hmmToPt(page.getPropertyValue('Height')); } catch (e) {}
+    let layout = null; try { layout = page.getPropertyValue('Layout'); } catch (e) {}
+    let masterName = ''; try { masterName = page.getMasterPage().getName(); } catch (e) {}
+    let notesText = ''; try { notesText = notesPageText(page.getNotesPage()); } catch (e) {}
+    const n = page.getCount();
+    const shapes = [];
+    for (let i = 0; i < n; i++) {
+      let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+      let name = ''; try { name = shape.getName(); } catch (e) {}
+      const kind = shapeKind(shape);
+      let pos = null, size = null;
+      try { pos = shape.getPosition(); } catch (e) {}
+      try { size = shape.getSize(); } catch (e) {}
+      const item = {
+        name: name, kind: kind,
+        left: pos ? hmmToPt(pos.X) : null, top: pos ? hmmToPt(pos.Y) : null,
+        width: size ? hmmToPt(size.Width) : null, height: size ? hmmToPt(size.Height) : null,
+        text: shapeText(shape), isTable: kind === 'table',
+      };
+      if (item.isTable) {
+        try {
+          const table = shape.getPropertyValue('Model');
+          item.rows = table.getRows().getCount();
+          item.cols = table.getColumns().getCount();
+        } catch (e) { item.tableErr = errStr(e); }
+      }
+      shapes.push(item);
+    }
+    return {
+      success: true, number: r0.index + 1, width: width, height: height,
+      layout: layout, layoutName: layoutNameOf(layout), masterName: masterName,
+      notesText: notesText, shapes: shapes,
+    };
+  },
+  // [幻灯片·看] 备注页（Speaker Notes）文字。不传 slideNumber 读取全篇。
+  slide_read_notes(p) {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    const count = pages.getCount();
+    const want = p && p.slideNumber != null ? Number(p.slideNumber) : null;
+    if (want != null && (!Number.isFinite(want) || want < 1 || want > count)) {
+      return slideFail('页码越界: ' + p.slideNumber + '（共 ' + count + ' 页，1 开始）');
+    }
+    const from = want != null ? want - 1 : 0;
+    const to = want != null ? want - 1 : count - 1;
+    const notes = [];
+    for (let i = from; i <= to; i++) {
+      let page; try { page = pages.getByIndex(i); } catch (e) { continue; }
+      let text = ''; try { text = notesPageText(page.getNotesPage()); } catch (e) {}
+      notes.push({ slideNumber: i + 1, text: text });
+    }
+    return { success: true, notes: notes };
+  },
+  // [幻灯片·写] 整体覆盖指定页的备注文字。
+  slide_write_notes(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const text = p && p.text != null ? String(p.text) : '';
+    let notesPage;
+    try { notesPage = r0.page.getNotesPage(); } catch (e) { return slideFail('获取备注页失败: ' + errStr(e)); }
+    if (!notesPage) return slideFail('该幻灯片没有备注页');
+    const n = notesPage.getCount();
+    let noteShape = null;
+    for (let i = 0; i < n; i++) {
+      let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
+      try { if (shape.supportsService('com.sun.star.presentation.NotesTextShape')) { noteShape = shape; break; } } catch (e) {}
+    }
+    if (!noteShape) return slideFail('该幻灯片没有备注文本框（NotesTextShape 未找到）');
+    let previousText = ''; try { previousText = shapeText(noteShape); } catch (e) {}
+    try { noteShape.getText().setString(text); } catch (e) { return slideFail('写入备注失败: ' + errStr(e)); }
+    return { success: true, slideNumber: r0.index + 1, previousText: previousText };
+  },
+  // [幻灯片·定位] 视图切到指定页，可选再选中某个形状——拟人：操作发生在哪要让
+  // 用户看得见（同 resolveSheet 切活动表口径）。
+  slide_goto(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    let selected = null;
+    const wantShape = p && p.shapeName != null && String(p.shapeName).trim() !== '' ? String(p.shapeName).trim() : null;
+    if (wantShape) {
+      ensureShapeNames(r0.page);
+      const rs = resolveShape(r0.page, { shapeName: wantShape });
+      if (rs.error) return slideFail(rs.error);
+      try {
+        if (ctrl && ctrl.select) ctrl.select(rs.shape);
+        selected = rs.name;
+      } catch (e) { return slideFail('选中形状失败: ' + errStr(e)); }
+    }
+    return { success: true, slideNumber: r0.index + 1, selected: selected };
+  },
+  // [幻灯片·写] 整体覆盖指定形状的文字（文本框/标题/占位符）。
+  slide_set_shape_text(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    if (!(p && p.shapeName)) return slideFail('缺少 shapeName 参数');
+    ensureShapeNames(r0.page);
+    const rs = resolveShape(r0.page, p);
+    if (rs.error) return slideFail(rs.error);
+    const text = p && p.text != null ? String(p.text) : '';
+    let previousText = ''; try { previousText = shapeText(rs.shape); } catch (e) {}
+    try { rs.shape.getText().setString(text); } catch (e) { return slideFail('写入形状文字失败: ' + errStr(e)); }
+    return { success: true, previousText: previousText };
+  },
+  // [幻灯片·写] 跨页（或限定单页）查找替换文字，覆盖普通文本框与表格单元格。
+  // 缺省只替换第一处命中即返回；all=true 替换全部匹配。
+  slide_replace_text(p) {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    const searchText = p && p.searchText != null ? String(p.searchText) : '';
+    if (!searchText) return slideFail('缺少 searchText 参数');
+    const replaceText = p && p.replaceText != null ? String(p.replaceText) : '';
+    const all = !!(p && p.all);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    const count = pages.getCount();
+    let from = 0, to = count - 1;
+    if (p && p.slideNumber != null) {
+      const want = Number(p.slideNumber);
+      if (!Number.isFinite(want) || want < 1 || want > count) {
+        return slideFail('页码越界: ' + p.slideNumber + '（共 ' + count + ' 页，1 开始）');
+      }
+      from = to = want - 1;
+    }
+    let replaced = 0;
+    const hits = [];
+    for (let pi = from; pi <= to; pi++) {
+      let page; try { page = pages.getByIndex(pi); } catch (e) { continue; }
+      ensureShapeNames(page);
+      const n = page.getCount();
+      for (let si = 0; si < n; si++) {
+        let shape; try { shape = page.getByIndex(si); } catch (e) { continue; }
+        const kind = shapeKind(shape);
+        if (kind === 'table') {
+          let table; try { table = shape.getPropertyValue('Model'); } catch (e) { continue; }
+          let rows = 0, cols = 0;
+          try { rows = table.getRows().getCount(); cols = table.getColumns().getCount(); } catch (e) { continue; }
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              let cell; try { cell = table.getCellByPosition(c, r); } catch (e) { continue; }
+              let cellText = ''; try { cellText = cell.getString() || ''; } catch (e) {}
+              if (!cellText || cellText.indexOf(searchText) === -1) continue;
+              const hitCount = cellText.split(searchText).length - 1;
+              const newText = cellText.split(searchText).join(replaceText);
+              try { cell.setString(newText); } catch (e) { continue; }
+              replaced += hitCount;
+              let name = ''; try { name = shape.getName(); } catch (e) {}
+              hits.push({ slideNumber: pi + 1, shapeName: name });
+              if (!all) return { success: true, replaced: replaced, hits: hits };
+            }
+          }
+          continue;
+        }
+        const text = shapeText(shape);
+        if (!text || text.indexOf(searchText) === -1) continue;
+        const hitCount = text.split(searchText).length - 1;
+        const newText = text.split(searchText).join(replaceText);
+        try { shape.getText().setString(newText); } catch (e) { continue; }
+        replaced += hitCount;
+        let name = ''; try { name = shape.getName(); } catch (e) {}
+        hits.push({ slideNumber: pi + 1, shapeName: name });
+        if (!all) return { success: true, replaced: replaced, hits: hits };
+      }
+    }
+    return { success: true, replaced: replaced, hits: hits };
+  },
+  // [诊断] 当前文档内核类型——host UI（审阅按钮等）按 kind 隐藏的判据。常规打开
+  // 路径优先用 load_document 返回值里的 kind（省一次往返），本 action 供换文档
+  // 之外的场景（如 e2e 探针）直接查询。
+  get_doc_kind() {
+    return { success: true, kind: docKindOf() };
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {

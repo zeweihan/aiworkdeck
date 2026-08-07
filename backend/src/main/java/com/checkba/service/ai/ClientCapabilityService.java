@@ -99,7 +99,7 @@ public class ClientCapabilityService {
 
     /**
      * 工具对该会话是否可见。
-     * doc_* / sheet_* 是 LOWA 专属远端执行工具（经 EditorBridgeService 等前端回执）；
+     * doc_* / sheet_* / slide_* 是 LOWA 专属远端执行工具（经 EditorBridgeService 等前端回执）；
      * office_* 是 Office 插件专属（经 OfficeBridgeService 等插件回执），且按宿主再细分——
      * office_excel_* 只对 Excel 会话可见、office_ppt_* 只对 PowerPoint 会话可见、
      * 其余 office_*（Word 面）只对 Word 会话可见；
@@ -109,7 +109,7 @@ public class ClientCapabilityService {
         if (toolName == null) {
             return false;
         }
-        boolean lowaOnly = toolName.startsWith("doc_") || toolName.startsWith("sheet_");
+        boolean lowaOnly = toolName.startsWith("doc_") || toolName.startsWith("sheet_") || toolName.startsWith("slide_");
         boolean officeOnly = toolName.startsWith("office_");
         if (!lowaOnly && !officeOnly) {
             return true;

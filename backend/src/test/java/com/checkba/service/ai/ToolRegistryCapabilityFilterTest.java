@@ -30,6 +30,9 @@ class ToolRegistryCapabilityFilterTest {
         @Tool("lowa sheet tool")
         public String sheet_cap_probe(@P("t") String t) { return "sheet:" + t; }
 
+        @Tool("lowa slide tool")
+        public String slide_cap_probe(@P("t") String t) { return "slide:" + t; }
+
         @Tool("office word tool")
         public String office_cap_probe(@P("t") String t) { return "office:" + t; }
 
@@ -69,6 +72,7 @@ class ToolRegistryCapabilityFilterTest {
         List<String> names = specNames("conv-office");
         assertFalse(names.contains("doc_cap_probe"));
         assertFalse(names.contains("sheet_cap_probe"));
+        assertFalse(names.contains("slide_cap_probe"));
         assertTrue(names.contains("office_cap_probe"));
         assertTrue(names.contains("plain_cap_probe"));
         // 未上送 officeHost 时按 Word 兜底：Excel/PPT 面工具隐藏
@@ -77,10 +81,13 @@ class ToolRegistryCapabilityFilterTest {
 
         assertTrue(registry.resolve("doc_cap_probe", "conv-office").isEmpty());
         assertTrue(registry.resolve("sheet_cap_probe", "conv-office").isEmpty());
+        assertTrue(registry.resolve("slide_cap_probe", "conv-office").isEmpty());
         assertTrue(registry.resolve("office_cap_probe", "conv-office").isPresent());
 
         ToolRegistry.ToolResult denied = registry.execute("doc_cap_probe", "{\"t\":\"x\"}", ctx("conv-office"));
         assertFalse(denied.found(), "office 会话 execute doc_* 应按未知工具拒绝");
+        ToolRegistry.ToolResult slideDenied = registry.execute("slide_cap_probe", "{\"t\":\"x\"}", ctx("conv-office"));
+        assertFalse(slideDenied.found(), "office 会话 execute slide_* 应按未知工具拒绝");
         ToolRegistry.ToolResult ok = registry.execute("office_cap_probe", "{\"t\":\"x\"}", ctx("conv-office"));
         assertTrue(ok.found());
         assertTrue(ok.output().contains("office:x"));
@@ -94,15 +101,20 @@ class ToolRegistryCapabilityFilterTest {
         List<String> names = specNames("conv-lowa");
         assertTrue(names.contains("doc_cap_probe"));
         assertTrue(names.contains("sheet_cap_probe"));
+        assertTrue(names.contains("slide_cap_probe"));
         assertFalse(names.contains("office_cap_probe"));
 
         assertTrue(registry.resolve("office_cap_probe", "conv-lowa").isEmpty());
         assertTrue(registry.resolve("doc_cap_probe", "conv-lowa").isPresent());
+        assertTrue(registry.resolve("slide_cap_probe", "conv-lowa").isPresent());
 
         ToolRegistry.ToolResult denied = registry.execute("office_cap_probe", "{\"t\":\"x\"}", ctx("conv-lowa"));
         assertFalse(denied.found());
         ToolRegistry.ToolResult ok = registry.execute("doc_cap_probe", "{\"t\":\"x\"}", ctx("conv-lowa"));
         assertTrue(ok.found());
+        ToolRegistry.ToolResult slideOk = registry.execute("slide_cap_probe", "{\"t\":\"x\"}", ctx("conv-lowa"));
+        assertTrue(slideOk.found());
+        assertTrue(slideOk.output().contains("slide:x"));
     }
 
     @Test
@@ -113,10 +125,12 @@ class ToolRegistryCapabilityFilterTest {
         List<String> names = specNames("conv-none");
         assertFalse(names.contains("doc_cap_probe"));
         assertFalse(names.contains("sheet_cap_probe"));
+        assertFalse(names.contains("slide_cap_probe"));
         assertFalse(names.contains("office_cap_probe"));
         assertTrue(names.contains("plain_cap_probe"));
 
         assertFalse(registry.execute("doc_cap_probe", "{}", ctx("conv-none")).found());
+        assertFalse(registry.execute("slide_cap_probe", "{}", ctx("conv-none")).found());
         assertFalse(registry.execute("office_cap_probe", "{}", ctx("conv-none")).found());
         assertTrue(registry.execute("plain_cap_probe", "{\"t\":\"x\"}", ctx("conv-none")).found());
     }
@@ -126,6 +140,7 @@ class ToolRegistryCapabilityFilterTest {
     void unrecordedConversationDefaultsToLowa() {
         List<String> names = specNames("conv-never-recorded");
         assertTrue(names.contains("doc_cap_probe"), "未登记会话应保持现状（doc_* 可见）");
+        assertTrue(names.contains("slide_cap_probe"), "未登记会话按 lowa 兜底，slide_* 应可见");
         assertFalse(names.contains("office_cap_probe"), "未登记会话不应看到 office_*");
 
         assertTrue(registry.resolve("doc_cap_probe", null).isPresent());

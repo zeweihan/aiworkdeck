@@ -107,6 +107,15 @@ export const EDITOR_ACTIONS = [
   'sheet_set_data_validation', 'sheet_add_chart', 'sheet_search',
   'sheet_define_name', 'sheet_protect_sheet', 'sheet_group_rows_cols',
   'sheet_add_pivot_table',
+  // [Impress 演示文稿] slide_* 原语集 Phase 1（打开/读取/文本编辑）：与 doc_*(Writer)/
+  // sheet_*(Calc) 三分，工具名 = action 名不做映射。worker 侧 resolvePage/resolveShape
+  // 对非 Impress 文档返回明确错误（同 resolveSheet 口径）。
+  // 设计依据：docs/superpowers/specs/2026-08-07-impress-bridge-design.md §4。
+  'slide_get_overview', 'slide_get_page', 'slide_read_notes', 'slide_write_notes',
+  'slide_goto', 'slide_set_shape_text', 'slide_replace_text',
+  // [诊断] 当前文档内核类型（writer/calc/impress/unknown）——审阅按钮等 UI 按 kind
+  // 隐藏的判据；load_document 的返回值里也带 kind，宿主常规路径无需二次往返调用本诊断。
+  'get_doc_kind',
 ]
 
 /**

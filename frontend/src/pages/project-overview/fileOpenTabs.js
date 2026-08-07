@@ -305,15 +305,20 @@ export const fileOpenTabsMethods = {
       if (type === 'md' || type === 'markdown') return false
 
       // 3. Office 文档格式 —— 仅限自建 LOWA 引擎真正编入的模块（probe_modules
-      // 实测：仅 Writer + Calc；Impress/Draw 已裁）。
-      // - Presentation 一律走 FilePreview（pptx = pptx-preview 前端渲染）；
-      // - PDF 走 FilePreview 的 Chromium 原生渲染——LOWA 无 Draw 时 Writer 会把
-      //   PDF 二进制当文本导入，满屏乱码（2026-07 真机截图证实）。
+      // 实测：r3 起仅 Writer + Calc；Impress/Draw 随 r4 引擎补齐——见
+      // docs/superpowers/specs/2026-08-07-impress-bridge-design.md）。
+      // - PDF 仍走 FilePreview 的 Chromium 原生渲染——LOWA 无 Draw 时 Writer 会把
+      //   PDF 二进制当文本导入，满屏乱码（2026-07 真机截图证实），这一条与
+      //   Impress 是否可用无关，不受本次改动影响。
       const wpsFormats = [
           // Writer
           'wps', 'wpt', 'doc', 'dot', 'docx', 'dotx', 'docm', 'dotm', 'rtf', 'odt',
           // Spreadsheet
-          'et', 'ett', 'ets', 'xls', 'xlsx', 'xlt', 'xltx', 'xlsm', 'xltm', 'xlsb', 'csv'
+          'et', 'ett', 'ets', 'xls', 'xlsx', 'xlt', 'xltx', 'xlsm', 'xltm', 'xlsb', 'csv',
+          // Presentation（r4 引擎起：slide_* 原语面，桌面 + 引擎可用时让位给编辑器；
+          // web/h5 或引擎不可用仍走 FilePreview 的 pptx-preview 前端渲染，见
+          // FilePreview.vue 的 isPptx 分支——本行只影响 useLibreEditor 的判定）
+          'pptx', 'ppt', 'pptm', 'potx', 'odp'
       ]
 
       // Office 类型或带文件 ID（非媒体/markdown）即视为文档编辑器可打开

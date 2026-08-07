@@ -1,6 +1,6 @@
 ---
 name: ai-doc-bridge
-description: AI↔文档编辑桥接领域。任务涉及 doc_* 编辑原语、EditorBridgeService、editor_command 契约、修订（redline）、文档检查点、EDITOR_ACTIONS/ui_command 白名单时，先读本文档再动代码。
+description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 编辑原语、EditorBridgeService、editor_command 契约、修订（redline）、文档检查点、EDITOR_ACTIONS/ui_command 白名单时，先读本文档再动代码。
 ---
 
 # AI↔文档编辑桥接 领域地图
@@ -11,6 +11,7 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_* 编辑原语、E
 
 **后端工具原语**
 - `backend/src/main/java/com/checkba/service/ai/tools/DocumentEditTools.java` — doc_*/sheet_* 工具原语全集（84 个 @Tool 方法），翻译成 `editorBridgeService.executeEditorCommand(action, params)`。曾名 WpsTools。格式面：doc_format_selection（字符）、doc_set_paragraph_format（对齐/标题级别/行距/段距/缩进）、doc_set_numbering（bullet/decimal/chinese/multilevel）、doc_format_table、doc_insert_table、doc_get_formatting（读格式）、doc_apply_standard_format（全文标准格式化）。
+- `backend/src/main/java/com/checkba/service/ai/tools/SlideEditTools.java` — slide_* 演示文稿（Impress）原语，独立文件（不塞进 DocumentEditTools，后者已 70+ 方法），`List<AgentToolComponent>` 自动发现，ToolRegistry 无需改动。当前只有设计 Phase 1 的 7 个原语，见下方专节。
 - `backend/src/main/java/com/checkba/util/DocxStyleHelper.java` — write_docx/AiDocxExportService 两条 flexmark 生成路径的样式：`applyStandardFormat()` 在 render 后、save 前调用，与 worker 端 HOUSE 常量同一套律所标准格式规范。
 - `backend/src/main/java/com/checkba/service/ai/tools/CheckpointTools.java` — `doc_restore_checkpoint`。
 - `backend/src/main/java/com/checkba/service/ai/tools/ToolMeta.java` — `@ToolMeta(displayName/category/fileEffect)`；`fileEffect="MODIFIED"` 是检查点触发依据。
@@ -58,6 +59,22 @@ EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发�
 
 **Calc 二期**（能力矩阵 4.2 节 Excel 部分，与 Word 二期同批思路补齐）：批注面 `sheet_add_comment`/`sheet_get_comments`/`sheet_delete_comment`→同名 action，走 `XSheetAnnotations`（`sheet.getAnnotations().insertNew(CellAddress, text)` 建、遍历 `getAuthor()/getDate()/getString()/getPosition()` 读、按单元格坐标匹配 `Position` 找 index 后 `removeByIndex` 删）——**Calc 批注没有 Word 那种线程回复/解决态**（author/date 由引擎只读赋值，无法像 Word 侧 `.uno:InsertAnnotation` 那样传 Author 参数强制署名 AI Workdeck），工具描述已向模型说明，不做 reply/resolve。结构面：`sheet_set_data_validation`→`sheet_set_data_validation`（`range.getPropertyValue('Validation')` 取出属性集对象改完整体 `setPropertyValue` 回写，就地改不生效；list 类型的显式候选值靠拼 `"a";"b";"c"` 引号列表公式）、`sheet_add_chart`→`sheet_add_chart`（`XTableCharts.addNewByName` 起步做「建图表+选类型+标题」三件事，位置固定在数据区域右侧、默认约 14cm×9cm，不支持自定义位置/多系列）、`sheet_search`→`sheet_search`（Calc 专属查找，遍历区域逐格比对字符串而非 `XSearchable`，上限 20000 格扫描/50 条命中）、`sheet_define_name`→`sheet_define_name`（工作簿级 `XNamedRanges`，op=add/remove/list，add 落绝对引用公式 `$Sheet1.$A$1:$C$10`）、`sheet_protect_sheet`→`sheet_protect_sheet`（`XProtectable`，密码参数不落日志也不回显）、`sheet_group_rows_cols`→`sheet_group_rows_cols`（`XSheetOutline.group/ungroup/showDetail/hideDetail`，group/ungroup 需要 orient 区分 rows/cols）、`sheet_add_pivot_table`→`sheet_add_pivot_table`（`XDataPilotTables`，仅支持「行分组+单数据字段求和」基础形态，rowFields/dataField 必须与源区域表头文字完全一致，字段名找不到直接报错列出缺失项）。这批实现**未经真机 LOWA e2e 验证**（本次只过了 `node --check` 语法检查 + `mvn test-compile`），后续跑 `test:lowa-e2e` 时要把这十个原语的真机行为当第一次验证对待，尤其是 `Position` 属性能否用于图表锚定、`Validation`/`ConditionalFormat` 属性对象的取出-改毕-回写模式是否如预期生效。
 
+## 演示文稿（Impress / pptx）slide_\* 原语（设计 Phase 1：打开/读取/文本编辑）
+
+设计依据：`docs/superpowers/specs/2026-08-07-impress-bridge-design.md`（引擎具备性查实、原语全表 20 个、分期实施）。r4 引擎起 Impress 模块随 `--with-wasm-module=calc writer impress` 编入（r3 及以前只有 Writer+Calc，`probe_modules` 的 `simpress` 会报 `IllegalArgumentException`）——**本节代码在 r4 自托管并通过真机验收前不生效**，合并闸设在 r4 验收之后。
+
+与 `doc_*`（Writer）/`sheet_*`（Calc）三分，工具名 = action 名不做映射（沿用 `sheet_*` 口径）：`slide_get_overview`（每页页码/名称/版式/母版/标题/形状数/是否有备注/是否含表格，打开演示文稿的第一步）、`slide_get_page`（单页明细：尺寸/版式/母版/备注 + 每个形状的名称/类型/位置尺寸(磅)/文字，表格形状带行列数）、`slide_read_notes`/`slide_write_notes`（备注页读写）、`slide_goto`（视图切页 + 可选选中形状，拟人：操作要让用户看得见）、`slide_set_shape_text`（整体覆盖形状文字）、`slide_replace_text`（跨页/单页查找替换，覆盖文本框与表格单元格，缺省只替第一处、`all:true` 全部替换）。Phase 2（页与形状结构增删移动）、Phase 3（格式与表格）留待后续排期，**本次未实现**。
+
+worker 端（`office_thread.js`）三个 resolver 集中文档类型与定位守卫（对标 `resolveSheet`/`resolveWriterTable`）：`isImpressDoc()`（`supportsService('com.sun.star.presentation.PresentationDocument')`）、`resolvePage(p)`（`slideNumber` 1 开始校验越界，命中后 `setCurrentPage`）、`resolveShape(page, p)`（按 `shapeName`/`matchText` 定位，未命名形状经 `ensureShapeNames` 补 `__awd_shape_N` 稳定名）。失败统一走 `slideFail()`，同时写 `error`/`message` 双字段（同 `tableFail` 口径）。非 Impress 文档报错文案对标 `NOT_SPREADSHEET_MSG`：「当前打开的不是演示文稿：slide_\* 原语仅对 pptx/ppt/odp 生效…」。位置/尺寸对外一律**磅**，worker 内换算（UNO 的 Position/Size 值结构体单位是 1/100 mm）。
+
+诊断 action `get_doc_kind`（返回 `{kind: 'writer'|'calc'|'impress'|'unknown'}`）与 `load_document` 成功返回值里的 `kind` 字段共用同一判定（`docKindOf()`）：宿主（`LibreOfficeEditor.vue` 的 `docKind`/`showsReview`）据此隐藏「审阅」按钮与 `ReviewPanel`——Calc/Impress 都没有修订机制，此前只有 Word 隐藏，Calc 一直漏了，本次一并补上。
+
+Impress **没有 redline**：`slide_write_notes`/`slide_set_shape_text`/`slide_replace_text` 都打了 `@ToolMeta(fileEffect = "MODIFIED")`，安全网是编排器在本轮首个 MODIFIED 工具前建的文档检查点 + `doc_undo`，工具描述里已对模型明说「PPT 没有修订机制，改动直接生效」。`retarget`（`load_document` 内）对 `RecordChanges`/`showDeletionsInMargin` 两步加了 `isWriterDoc()` 前置守卫——此前对 Calc/Impress 也无条件调用，靠 try/catch 兜住但会白抛异常打噪声日志。`stream_insert`（`doc_start_stream` 的落字端）加了 `isWriterDoc()` 守卫直接报错——`HOUSE` 排版语义（首行缩进/段后间距）在幻灯片上无意义。
+
+宿主 tab 路由 `fileOpenTabs.js` 的 `wpsFormats` 加了 `pptx/ppt/pptm/potx/odp`：桌面 + 引擎可用时 pptx 走编辑器（`useLibreEditor`），web/h5 或引擎不可用仍走 `FilePreview.vue` 的 `pptx-preview` 分支（`libreOfficePreferred` 把关，`FilePreview.vue` 无需改动）。`ContextAssemblerService` 的 LOWA 分支按 `lowaDocKind()`（fileType/文件名后缀判定）三分：docx→doc_\*、xlsx→sheet_\*、pptx→slide_\*，末位提醒（`activeDocumentReminder`）同步三分。
+
+**Phase 1 未做、明确延后的项**（spec §5.2/§6 已标注理由，不是遗漏）：LRU 保活权重（Impress 实例记双倍权重）——spec 原话「具体阈值在 Phase 1 用真实 pptx 测了内存再定」，没有真机内存数据前不写死阈值；预热备胎过继到 Impress 文档的稳定性——架构上不需要改（池按 key 存实例，与文档类型无关），但"同一 Qt 窗口从 Writer view 换成 Impress view 是否稳定"必须真机验证，若不稳定的退化方案（pptx 不吃备胎）也留给真机验证后再决定要不要写。`layoutNameOf()` 的 `AutoLayout` 数值→名称映射是最佳努力（只覆盖几个常被引用的值，未逐值核对 idl），不影响原语契约，命中不了就回退 `null`。
+
 ## 第二条桥：office_* 工具桥（Word 插件，Phase C）
 
 与 LOWA 桥并存的独立桥，服务 `office-addin/`（Word/Excel/PowerPoint 任务窗格插件）。**逐字同构但零共享**：不复用 EditorBridgeService、超时常量独立、单名契约（无双轨旧名）。
@@ -97,10 +114,12 @@ EDITOR_ACTIONS 全集在 `libreofficeExecutorClient.js:15-67`（含宿主自发�
 - **PPT 表格门槛按 1.8 收紧、不是矩阵最初猜的 1.9**：`Table.rowCount/columnCount/values/getCellOrNullObject` 与 `ShapeCollection.addTable`/`Shape.getTable` 全部落在 PowerPointApi 1.8；`TableRowCollection`/`TableColumnCollection`（行列集合对象本身）才是 1.9，本批次未用到。别把工具门槛错设成 1.9，会让本可用的 1.8 宿主被拒之门外。
 - **Calc 批注 author/date 只读、拿不到 AI 署名**：`XSheetAnnotation.getAuthor()/getDate()` 没有对应 setter，插入即由引擎自动赋值（当前 WASM 环境很可能是空字符串），不像 Word 批注能靠 `.uno:InsertAnnotation` 的 `Author` dispatch 参数强制打上「AI Workdeck」——`sheet_add_comment` 返回值里的 author/date 是引擎给什么就是什么，工具描述与调用方都不要假设它等于 AI_AUTHOR。
 - **Calc 二期十个原语未经真机验证**：本次只跑了 `node --check` 语法检查和后端 `mvn test-compile`/`OfficeBridgeServiceTest`，UNO API 调用链（`XSheetAnnotations`/`Validation` 属性对象/`XTableCharts`/`XDataPilotTables`/`XSheetOutline`）全部基于既有 sheet_* 代码模式与 UNO API 文档记忆写就，没有真机跑过一次。下次改这十个原语或跑 lowa-e2e 前，先当它们是全新代码对待，不要假设已验证过。
+- **slide_\* 七个 Phase 1 原语同样未经真机验证，且比 Calc 二期更极端——连引擎都还没有**（r4 在本任务执行时仍在构建机上烧制）：`isImpressDoc`/`resolvePage`/`resolveShape`/`shapeKind`/`shapeText`/`notesPageText` 全部基于 spec 调研阶段核对过的 idl（`XPresentationPage.getNotesPage`/`DrawPage.Layout`/`XTable` 等）与既有 `resolveSheet`/`resolveWriterTable` 代码模式写就，`AutoLayout` 数值→名称映射（`layoutNameOf`）是未核对 idl 的最佳努力猜测。r4 自托管后第一件事：跑 `probe_modules` 确认 `simpress`/`sdraw` 为 `true`，再用真实 pptx 走一遍 spec §2.4 的「往返自检」（load→export→再 load 比对页数/形状数/文字），随后才是这七个原语的功能验证——不要假设任何一行已经对过真机。
+- **能力过滤靠工具名前缀新增了 `slide_`**：`ClientCapabilityService.isToolVisible` 的 `lowaOnly` 现在是 `doc_`/`sheet_`/`slide_` 三个前缀 OR 在一起；新增演示文稿专属工具必须沿用 `slide_` 前缀，否则会漏进 office/none 会话变成 30 秒超时死路径（与 `sheet_`/`office_excel_` 同款教训）。
 
 ## 验证
 
-- 编辑器三件套（原语/白名单/worker）改动后必跑：`cd frontend && npm run test:lowa-e2e`（基线 38 步）。
+- 编辑器三件套（原语/白名单/worker）改动后必跑：`cd frontend && npm run test:lowa-e2e`（基线 38 步；r4 引擎到位后 slide_\* 要补一组真机回归，spec §6 定的验收口径是「打开 probe.pptx → overview 页数正确 → 改标题 → 备注写入读回 → 触发 autosave → export 回来页数/文字一致」）。
 - 全链路回归：`npm run test:app-e2e`；前端事件契约 `npm run check:emits`。
 - 后端：`cd backend && mvn test`（JDK 21，默认 25 会 SIGBUS）；EvalHarness 回放评测在其中。
 - 原语级测试不够，必须走完 UI 链路验证（用户明确要求过）。
