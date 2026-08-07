@@ -30,7 +30,8 @@ import java.util.Map;
 @RequestMapping("/api/admin/wizard")
 public class WizardController {
 
-    static final String KEY_WIZARD_COMPLETED = "system.wizard.completed";
+    /** 全新安装时由 {@code DataInitializer} 先落一份 "false"，见那里的注释。 */
+    public static final String KEY_WIZARD_COMPLETED = "system.wizard.completed";
 
     private final SystemSettingService systemSettingService;
     private final SystemSettingRepository systemSettingRepository;

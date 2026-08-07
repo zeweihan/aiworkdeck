@@ -91,7 +91,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `service/ai/PlatformAiKeyService.java` — **per-user 密钥的唯一出口**：`resolve/provision/tryProvision/refresh/evict/markVerified/status`。
   `isBound()`（该用户有 `account_binding`）与 `multiTenant()`（本实例存在任一绑定）是两条路由判据。
 - `service/ai/PlatformAiKeyCipher.java` — AES-256-GCM 落库加密，密文形态 `v1:iv:tag:cipher`
-  与官网仓 `lib/openrouter-keys.ts` **逐字对齐**；构造器里带**启动强不变式**（见地雷 15）。
+  与官网仓 `lib/openrouter-keys.ts` **逐字对齐**；构造器里带**启动强不变式**（见地雷 17）。
 - `model/entity/PlatformAiKey.java` + `repository/PlatformAiKeyRepository.java` — 每用户至多一行，
   存密文 + 指纹 + limitUsd + fetchedAt/lastVerifiedAt。**刻意不挂在 `account_binding` 上**：
   那张表是纯身份映射且每次桥接都要读，塞密文会改变它的安全等级。
@@ -154,7 +154,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `security.license.dir`（默认 `${user.home}/.aiworkdeck`）——license/account/entitlements/platform-ai-key/storage-location 五个状态文件都落这里。
 - `security.registration-mode`（默认 open）与 `security.awdk-login-enabled`(默认 false)——两者都只影响 server 模式；官方托管的插件云后端应配 closed + true。
 - `security.platform-key-secret`（`AWD_PLATFORM_KEY_SECRET`，默认空）——per-user 平台密钥的落库加密密钥。
-  **`awdk-login-enabled=true` 时必配，缺失直接拒绝启动**（见地雷 15）。
+  **`awdk-login-enabled=true` 时必配，缺失直接拒绝启动**（见地雷 17）。
 - `sms.enabled`（`SMS_AUTH_ENABLED`，默认 false）——大陆短信通道开关，仅 server 模式生效；官方托管的插件云后端应配 true + 注入 AK/SK 环境变量。
 - `sms.intl.enabled`（`SMS_INTL_ENABLED`，默认 false）+ `TWILIO_ACCOUNT_SID/AUTH_TOKEN/MESSAGING_SERVICE_SID`——境外短信通道。
   **认证器（TOTP）不需要任何配置**，server 模式恒可用，是国际用户的推荐路径。
@@ -334,7 +334,22 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     时自动预选平台通道——用账户 Key 解锁的人买的就是这条通道，不该再被引导去配别家的 Key。
     向导提交前的空值拦截在 `handleSubmit`，后端 `WizardController` 也拒空 `activeProvider`（两道都在才算数）。
 
-15. **平台通道的 key 是「谁的额度」，多租户下缺身份必须报错而不是回落**。
+15. **向导里每一条「下一步」都必须能在向导里做完**。平台通道曾经在未连接账户时置灰 +
+    提示「进入产品后在系统管理粘贴 Key」——那是死路：试用码解锁的用户在向导里无论如何都点不亮它，
+    只能先随便选一家凑合。现在 `AWD_CLOUD` 恒可选，选中就地展开连接块（`handleConnectAccount` 调
+    `POST /api/account/connect`，与 admin 页 `onConnectAccount` 同链路：连接 → 重取状态 →
+    `refreshEntitlements(true)`），已连接但没分配额度时给「前往官网分配额度 + 重新检查」两个动作。
+    两个前置条件缺任一时 `handleSubmit` 拦住提交并指出下一步——**闸门从「不可选」挪到了「不可提交」，
+    不是取消了**。
+
+16. **全新安装必须先钉 `system.wizard.completed=false`**（`DataInitializer`，仅 admin 不存在时写）。
+    `WizardController.isInitialized()` 在标记不存在时退回存量兜底「system_setting 非空即已初始化」，
+    而首启链上 `LocalIdentityService.commit()` 解析本机身份就会写下 `local.identity.selectedUserId`
+    一行——launch 页查身份在查向导之前，于是**全新安装反而整个跳过首启向导**（真机复现过：
+    解锁后直接进个人中心，`ai.activeProvider` 一直空着，要到发第一条消息才发现）。
+    护栏 `config/DataInitializerTest`：全新装写标记、存量库一个字都不许改（改了等于把匿名提交窗口重开）。
+
+17. **平台通道的 key 是「谁的额度」，多租户下缺身份必须报错而不是回落**。
     OpenRouter 的额度上限是 per-key 的，一把机器级 key 就是一个共享额度池——回落等于拿别人的钱花，
     且对账差分会把 A 的消费记到 B 头上。`PlatformAiChannel.resolveOrThrow` 的四分支要背下来：
     local-mode 恒走机器级（**一字不动**）；server + 已桥接 → per-user；
