@@ -33,6 +33,7 @@ public class TwilioSmsGateway implements SmsGateway {
     private final SmsTransport transport;
     private final boolean enabled;
     private final String accountSid;
+    private final String apiKeySid;
     private final String authToken;
     private final String messagingServiceSid;
     private final String template;
@@ -41,6 +42,7 @@ public class TwilioSmsGateway implements SmsGateway {
     public TwilioSmsGateway(SmsTransport transport,
                             @Value("${sms.intl.enabled:false}") boolean enabled,
                             @Value("${sms.intl.account-sid:}") String accountSid,
+                            @Value("${sms.intl.api-key-sid:}") String apiKeySid,
                             @Value("${sms.intl.auth-token:}") String authToken,
                             @Value("${sms.intl.messaging-service-sid:}") String messagingServiceSid,
                             @Value("${sms.intl.template:Your AI Workdeck verification code is {code}. It expires in 5 minutes.}")
@@ -48,9 +50,19 @@ public class TwilioSmsGateway implements SmsGateway {
         this.transport = transport;
         this.enabled = enabled;
         this.accountSid = accountSid;
+        this.apiKeySid = apiKeySid;
         this.authToken = authToken;
         this.messagingServiceSid = messagingServiceSid;
         this.template = template;
+    }
+
+    /**
+     * Basic 认证的用户名：配了 API Key（SK 开头）就用它，否则回落账号自身的 Auth Token 认证。
+     * **推荐配 API Key**——可单独吊销，泄露时不必换掉整个账号的 Auth Token。
+     * 无论哪种，URL 路径里的账号标识始终是 Account SID（AC 开头）。
+     */
+    private String basicUser() {
+        return StringUtils.hasText(apiKeySid) ? apiKeySid : accountSid;
     }
 
     @Override
@@ -77,7 +89,7 @@ public class TwilioSmsGateway implements SmsGateway {
                 + "&Body=" + enc(template.replace("{code}", code));
         String url = API_BASE + "/Accounts/" + enc(accountSid) + "/Messages.json";
         String basic = Base64.getEncoder().encodeToString(
-                (accountSid + ":" + authToken).getBytes(StandardCharsets.UTF_8));
+                (basicUser() + ":" + authToken).getBytes(StandardCharsets.UTF_8));
 
         SmsTransport.Reply reply = transport.postForm(url, body, "Basic " + basic);
         // Twilio 成功回 201；失败体形如 {"code":21211,"message":"Invalid 'To' Phone Number"}

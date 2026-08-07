@@ -104,7 +104,12 @@ sms:
   # 里配置，代码只认 messaging-service-sid——加国家不需要改代码发版。
   intl:
     enabled: ${SMS_INTL_ENABLED:false}
+    # 账号标识（AC 开头），出现在 API 路径里
     account-sid: ${TWILIO_ACCOUNT_SID:}
+    # API Key（SK 开头，推荐）：可单独吊销，泄露时不必换整个账号的 Auth Token。
+    # 留空则用 account-sid 直接做 Basic 用户名（账号 Auth Token 认证）
+    api-key-sid: ${TWILIO_API_KEY_SID:}
+    # API Key 的 secret，或账号 Auth Token（取决于上一项是否配置）
     auth-token: ${TWILIO_AUTH_TOKEN:}
     messaging-service-sid: ${TWILIO_MESSAGING_SERVICE_SID:}
     template: ${TWILIO_SMS_TEMPLATE:Your AI Workdeck verification code is {code}. It expires in 5 minutes.}
