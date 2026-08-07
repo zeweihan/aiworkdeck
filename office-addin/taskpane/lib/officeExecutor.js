@@ -86,6 +86,24 @@ function wordApiDesktop13Supported() {
   }
 }
 
+/** Word.TrackedChange 集合（accept/reject/acceptAll/rejectAll）与脚注/尾注的公共门槛（批次 9） */
+function trackedChangesSupported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApi', '1.6')
+  } catch (e) {
+    return false
+  }
+}
+
+/** Range.insertFootnote/insertEndnote 属 WordApi 1.5（批次 9） */
+function footnoteApiSupported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApi', '1.5')
+  } catch (e) {
+    return false
+  }
+}
+
 function truncate(text) {
   const s = text || ''
   return s.length > MAX_TEXT_CHARS
@@ -1283,6 +1301,227 @@ const HANDLERS = {
     })
   },
 
+  // ==================== 修订接受/拒绝（批次 9，WordApi 1.6） ====================
+
+  async get_revisions() {
+    if (!trackedChangesSupported()) throw new Error('当前 Word 版本不支持读取修订（需要 WordApi 1.6）')
+    return Word.run(async (context) => {
+      const changes = context.document.body.getTrackedChanges()
+      changes.load('items')
+      await context.sync()
+      const items = changes.items
+      items.forEach((c) => c.load('author,date,text,type'))
+      await context.sync()
+      return {
+        count: items.length,
+        revisions: items.map((c, i) => ({
+          index: i,
+          author: c.author,
+          date: c.date ? new Date(c.date).toISOString() : null,
+          type: c.type,
+          text: (c.text || '').slice(0, 200)
+        }))
+      }
+    })
+  },
+
+  async accept_revision(args) {
+    if (!trackedChangesSupported()) throw new Error('当前 Word 版本不支持修订操作（需要 WordApi 1.6）')
+    return Word.run(async (context) => {
+      const changes = context.document.body.getTrackedChanges()
+      if (args.all) {
+        changes.acceptAll()
+        await context.sync()
+        return { acceptedAll: true }
+      }
+      changes.load('items')
+      await context.sync()
+      const index = Math.floor(Number(args.revisionIndex))
+      if (!Number.isFinite(index) || index < 0 || index >= changes.items.length) {
+        throw new Error(`revisionIndex ${args.revisionIndex} 越界：文档共 ${changes.items.length} 条修订（序号从 0 开始）`)
+      }
+      changes.items[index].accept()
+      await context.sync()
+      return { accepted: true, revisionIndex: index }
+    })
+  },
+
+  async reject_revision(args) {
+    if (!trackedChangesSupported()) throw new Error('当前 Word 版本不支持修订操作（需要 WordApi 1.6）')
+    return Word.run(async (context) => {
+      const changes = context.document.body.getTrackedChanges()
+      if (args.all) {
+        changes.rejectAll()
+        await context.sync()
+        return { rejectedAll: true }
+      }
+      changes.load('items')
+      await context.sync()
+      const index = Math.floor(Number(args.revisionIndex))
+      if (!Number.isFinite(index) || index < 0 || index >= changes.items.length) {
+        throw new Error(`revisionIndex ${args.revisionIndex} 越界：文档共 ${changes.items.length} 条修订（序号从 0 开始）`)
+      }
+      changes.items[index].reject()
+      await context.sync()
+      return { rejected: true, revisionIndex: index }
+    })
+  },
+
+  // ==================== 脚注/尾注（批次 9，WordApi 1.5） ====================
+
+  async insert_footnote(args) {
+    const anchorText = String(args.anchorText || '')
+    const text = String(args.text || '')
+    if (!anchorText) throw new Error('目标文本不能为空')
+    if (!text) throw new Error('脚注正文内容不能为空')
+    if (!footnoteApiSupported()) throw new Error('当前 Word 版本不支持插入脚注（需要 WordApi 1.5）')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const items = await searchRanges(context, anchorText, true)
+        if (!items.length) throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致')
+        items[0].insertFootnote(text)
+        await context.sync()
+        return { inserted: true }
+      })
+    })
+  },
+
+  async insert_endnote(args) {
+    const anchorText = String(args.anchorText || '')
+    const text = String(args.text || '')
+    if (!anchorText) throw new Error('目标文本不能为空')
+    if (!text) throw new Error('尾注正文内容不能为空')
+    if (!footnoteApiSupported()) throw new Error('当前 Word 版本不支持插入尾注（需要 WordApi 1.5）')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const items = await searchRanges(context, anchorText, true)
+        if (!items.length) throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致')
+        items[0].insertEndnote(text)
+        await context.sync()
+        return { inserted: true }
+      })
+    })
+  },
+
+  // ==================== 图片插入（批次 9，insert_image，WordApi 1.2） ====================
+
+  async insert_image(args) {
+    const base64 = String(args.imageBase64 || '')
+    const anchorText = String(args.anchorText || '')
+    const position = args.position === 'before' ? 'before' : 'after'
+    if (!base64) throw new Error('缺少图片数据')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        let picture
+        if (anchorText) {
+          const items = await searchRanges(context, anchorText, true)
+          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
+          picture = items[0].insertInlinePictureFromBase64(base64, location)
+        } else {
+          picture = context.document.getSelection().insertInlinePictureFromBase64(base64, Word.InsertLocation.replace)
+        }
+        if (args.width != null) {
+          picture.lockAspectRatio = true
+          picture.width = Number(args.width)
+        }
+        await context.sync()
+        return { inserted: true, anchored: !!anchorText }
+      })
+    })
+  },
+
+  // ==================== 样式应用（批次 9，apply_style，WordApi 1.1） ====================
+
+  async apply_style(args) {
+    const anchorText = String(args.anchorText || '')
+    const styleName = String(args.styleName || '')
+    if (!anchorText) throw new Error('目标文本不能为空')
+    if (!styleName) throw new Error('样式名不能为空')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const items = await searchRanges(context, anchorText, true)
+        if (!items.length) {
+          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+        }
+        const targets = args.applyToAll ? items : [items[0]]
+        const paragraphs = targets.map((range) => range.paragraphs.getFirst())
+        paragraphs.forEach((p) => { p.style = styleName })
+        await context.sync()
+        return { applied: paragraphs.length, totalMatches: items.length, styleName }
+      })
+    })
+  },
+
+  // ==================== 内容控件（批次 9，manage_content_control，WordApi 1.1） ====================
+
+  async manage_content_control(args) {
+    const action = String(args.action || '')
+    const tag = String(args.tag || '')
+    if (!tag) throw new Error('tag 不能为空')
+    return Word.run(async (context) => {
+      if (action === 'insert') {
+        const anchorText = String(args.anchorText || '')
+        if (!anchorText) throw new Error('insert 需要 anchorText')
+        return withTracking(context, async () => {
+          const items = await searchRanges(context, anchorText, true)
+          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          // 包裹整段（Paragraph.insertContentControl，比 Range 级更明确支持），锚点定位所在段落
+          const paragraph = items[0].paragraphs.getFirst()
+          const cc = paragraph.insertContentControl()
+          cc.tag = tag
+          if (args.title) cc.title = String(args.title)
+          await context.sync()
+          return { inserted: true, tag }
+        })
+      }
+      const ccs = context.document.contentControls.getByTag(tag)
+      ccs.load('items')
+      await context.sync()
+      if (!ccs.items.length) throw new Error(`未找到 tag 为 ${tag} 的内容控件`)
+      const cc = ccs.items[0]
+      if (action === 'read') {
+        cc.load('text,title,tag')
+        await context.sync()
+        return { tag, title: cc.title, text: cc.text }
+      }
+      if (action === 'set_text') {
+        const text = args.text == null ? '' : String(args.text)
+        return withTracking(context, async () => {
+          cc.insertText(text, Word.InsertLocation.replace)
+          await context.sync()
+          return { updated: true, tag }
+        })
+      }
+      if (action === 'delete') {
+        const keepContent = !!args.keepContent
+        return withTracking(context, async () => {
+          cc.delete(keepContent)
+          await context.sync()
+          return { deleted: true, tag, keepContent }
+        })
+      }
+      throw new Error(`action 值非法：${args.action}`)
+    })
+  },
+
+  // ==================== 文档属性（批次 9，set_document_properties，WordApi 1.3） ====================
+
+  async set_document_properties(args) {
+    return Word.run(async (context) => {
+      const props = context.document.properties
+      const applied = {}
+      if (args.title != null) { props.title = String(args.title); applied.title = args.title }
+      if (args.subject != null) { props.subject = String(args.subject); applied.subject = args.subject }
+      if (args.author != null) { props.author = String(args.author); applied.author = args.author }
+      if (args.keywords != null) { props.keywords = String(args.keywords); applied.keywords = args.keywords }
+      if (args.comments != null) { props.comments = String(args.comments); applied.comments = args.comments }
+      if (args.category != null) { props.category = String(args.category); applied.category = args.category }
+      await context.sync()
+      return { applied }
+    })
+  },
+
   // ==================== Excel（excel_*，宿主须为 Excel） ====================
 
   async excel_get_range(args) {
@@ -1749,6 +1988,268 @@ const HANDLERS = {
     })
   },
 
+  // ==================== Excel 批注（批次 9，excel_*，ExcelApi 1.10） ====================
+
+  async excel_add_comment(args) {
+    const sheetName = String(args.sheetName || '')
+    const cellAddress = String(args.cellAddress || '')
+    const comment = String(args.comment || '')
+    if (!cellAddress) throw new Error('cellAddress 不能为空')
+    if (!comment) throw new Error('批注内容不能为空')
+    if (!excelApiSupported('1.10')) throw new Error('当前 Excel 版本不支持批注（需要 ExcelApi 1.10）')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(cellAddress)
+      context.workbook.comments.add(range, comment)
+      await context.sync()
+      return { cellAddress, added: true }
+    })
+  },
+
+  async excel_get_comments(args) {
+    const sheetName = String(args.sheetName || '')
+    const scope = args.scope === 'workbook' ? 'workbook' : 'sheet'
+    if (!excelApiSupported('1.10')) throw new Error('当前 Excel 版本不支持批注（需要 ExcelApi 1.10）')
+    return Excel.run(async (context) => {
+      const comments = scope === 'workbook'
+        ? context.workbook.comments
+        : resolveSheet(context, sheetName).comments
+      comments.load('items')
+      await context.sync()
+      const items = comments.items
+      items.forEach((c) => c.load('content,authorName,creationDate,resolved'))
+      const locations = items.map((c) => c.getLocation())
+      locations.forEach((r) => r.load(scope === 'workbook' ? 'address,worksheet/name' : 'address'))
+      const repliesCols = items.map((c) => c.replies)
+      repliesCols.forEach((rc) => rc.load('items'))
+      await context.sync()
+      repliesCols.forEach((rc) => rc.items.forEach((rep) => rep.load('content,authorName,creationDate')))
+      await context.sync()
+      const result = items.map((c, i) => {
+        const entry = {
+          cellAddress: locations[i].address,
+          content: c.content,
+          author: c.authorName,
+          createdAt: c.creationDate ? new Date(c.creationDate).toISOString() : null,
+          resolved: !!c.resolved,
+          replies: repliesCols[i].items.map((rep) => ({
+            content: rep.content,
+            author: rep.authorName,
+            createdAt: rep.creationDate ? new Date(rep.creationDate).toISOString() : null
+          }))
+        }
+        if (scope === 'workbook') entry.sheet = locations[i].worksheet.name
+        return entry
+      })
+      return { count: result.length, comments: result }
+    })
+  },
+
+  async excel_reply_comment(args) {
+    const sheetName = String(args.sheetName || '')
+    const cellAddress = String(args.cellAddress || '')
+    const reply = String(args.reply || '')
+    if (!cellAddress) throw new Error('cellAddress 不能为空')
+    if (!reply) throw new Error('回复内容不能为空')
+    if (!excelApiSupported('1.10')) throw new Error('当前 Excel 版本不支持批注（需要 ExcelApi 1.10）')
+    return Excel.run(async (context) => {
+      const comment = getExcelComment(context, sheetName, cellAddress)
+      comment.replies.add(reply)
+      await context.sync()
+      return { cellAddress, replied: true }
+    })
+  },
+
+  async excel_resolve_comment(args) {
+    const sheetName = String(args.sheetName || '')
+    const cellAddress = String(args.cellAddress || '')
+    const resolved = args.resolved !== false
+    if (!cellAddress) throw new Error('cellAddress 不能为空')
+    if (!excelApiSupported('1.10')) throw new Error('当前 Excel 版本不支持批注（需要 ExcelApi 1.10）')
+    return Excel.run(async (context) => {
+      const comment = getExcelComment(context, sheetName, cellAddress)
+      comment.resolved = resolved
+      await context.sync()
+      return { cellAddress, resolved }
+    })
+  },
+
+  async excel_delete_comment(args) {
+    const sheetName = String(args.sheetName || '')
+    const cellAddress = String(args.cellAddress || '')
+    if (!cellAddress) throw new Error('cellAddress 不能为空')
+    if (!excelApiSupported('1.10')) throw new Error('当前 Excel 版本不支持批注（需要 ExcelApi 1.10）')
+    return Excel.run(async (context) => {
+      const comment = getExcelComment(context, sheetName, cellAddress)
+      comment.delete()
+      await context.sync()
+      return { cellAddress, deleted: true }
+    })
+  },
+
+  // ==================== Excel 数据验证（批次 9，excel_set_data_validation，ExcelApi 1.8） ====================
+
+  async excel_set_data_validation(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    const action = String(args.action || 'apply').trim().toLowerCase()
+    if (!rangeAddress) throw new Error('区域地址不能为空')
+    if (!excelApiSupported('1.8')) throw new Error('当前 Excel 版本不支持数据验证（需要 ExcelApi 1.8）')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(rangeAddress)
+      if (action === 'clear') {
+        range.dataValidation.clear()
+        await context.sync()
+        return { action: 'clear' }
+      }
+      const type = String(args.type || '').trim().toLowerCase()
+      let rule
+      if (type === 'list') {
+        const source = String(args.listSource || '')
+        if (!source) throw new Error('type=list 时 listSource 不能为空')
+        rule = { list: { inCellDropDown: true, source } }
+      } else if (type === 'wholenumber' || type === 'date') {
+        const operator = EXCEL_DV_OPERATORS[String(args.operator || '').trim().toLowerCase()]
+        if (!operator) throw new Error(`operator 值非法：${args.operator}`)
+        const basic = { formula1: args.value1, operator }
+        if (operator === 'Between') basic.formula2 = args.value2
+        rule = type === 'wholenumber' ? { wholeNumber: basic } : { date: basic }
+      } else {
+        throw new Error(`type 值非法：${args.type}（合法值：wholeNumber/list/date）`)
+      }
+      range.dataValidation.rule = rule
+      range.load('address')
+      await context.sync()
+      return { action: 'apply', type, address: range.address }
+    })
+  },
+
+  // ==================== Excel 图表（批次 9，excel_add_chart，ExcelApi 1.1） ====================
+
+  async excel_add_chart(args) {
+    const sheetName = String(args.sheetName || '')
+    const dataRangeAddress = String(args.dataRangeAddress || '')
+    if (!dataRangeAddress) throw new Error('数据源区域不能为空')
+    const chartType = EXCEL_CHART_TYPES[String(args.chartType || '').trim().toLowerCase()]
+    if (!chartType) throw new Error(`chartType 值非法：${args.chartType}（合法值：column/line/pie/bar）`)
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(dataRangeAddress)
+      const chart = sheet.charts.add(chartType, range, Excel.ChartSeriesBy.auto)
+      if (args.title) {
+        chart.title.text = String(args.title)
+        chart.title.visible = true
+      }
+      chart.load('name')
+      await context.sync()
+      return { added: true, name: chart.name, chartType: String(args.chartType).trim().toLowerCase() }
+    })
+  },
+
+  // ==================== Excel 命名区域（批次 9，excel_define_name，ExcelApi 1.1） ====================
+
+  async excel_define_name(args) {
+    const sheetName = String(args.sheetName || '')
+    const action = String(args.action || '').trim().toLowerCase()
+    const name = String(args.name || '')
+    if (!name) throw new Error('name 不能为空')
+    if (action !== 'add' && action !== 'remove') throw new Error(`action 值非法：${args.action}（合法值：add/remove）`)
+    return Excel.run(async (context) => {
+      if (action === 'add') {
+        const rangeAddress = String(args.rangeAddress || '')
+        if (!rangeAddress) throw new Error('add 需要 rangeAddress')
+        const sheet = resolveSheet(context, sheetName)
+        const range = sheet.getRange(rangeAddress)
+        context.workbook.names.add(name, range)
+        await context.sync()
+        return { action: 'add', name }
+      }
+      const item = context.workbook.names.getItemOrNullObject(name)
+      item.load('isNullObject')
+      await context.sync()
+      if (item.isNullObject) throw new Error(`未找到命名区域：${name}`)
+      item.delete()
+      await context.sync()
+      return { action: 'remove', name }
+    })
+  },
+
+  // ==================== Excel 工作表保护（批次 9，excel_protect_sheet，ExcelApi 1.2/1.7） ====================
+
+  async excel_protect_sheet(args) {
+    const sheetName = String(args.sheetName || '')
+    const action = String(args.action || '').trim().toLowerCase()
+    const password = args.password ? String(args.password) : undefined
+    if (action !== 'protect' && action !== 'unprotect') throw new Error(`action 值非法：${args.action}（合法值：protect/unprotect）`)
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      if (action === 'protect') {
+        sheet.protection.protect(undefined, password)
+      } else {
+        sheet.protection.unprotect(password)
+      }
+      await context.sync()
+      return { action }
+    })
+  },
+
+  // ==================== Excel 行列分组（批次 9，excel_group_rows_cols，ExcelApi 1.10） ====================
+
+  async excel_group_rows_cols(args) {
+    const sheetName = String(args.sheetName || '')
+    const rangeAddress = String(args.rangeAddress || '')
+    const action = String(args.action || '').trim().toLowerCase()
+    const by = String(args.by || '').trim().toLowerCase()
+    if (!rangeAddress) throw new Error('rangeAddress 不能为空')
+    if (action !== 'group' && action !== 'ungroup') throw new Error(`action 值非法：${args.action}（合法值：group/ungroup）`)
+    if (by !== 'rows' && by !== 'cols') throw new Error(`by 值非法：${args.by}（合法值：rows/cols）`)
+    if (!excelApiSupported('1.10')) throw new Error('当前 Excel 版本不支持分组（需要 ExcelApi 1.10）')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const range = sheet.getRange(rangeAddress)
+      const groupOption = by === 'rows' ? Excel.GroupOption.byRows : Excel.GroupOption.byColumns
+      if (action === 'group') range.group(groupOption)
+      else range.ungroup(groupOption)
+      await context.sync()
+      return { action, by }
+    })
+  },
+
+  // ==================== Excel 透视表（批次 9，excel_add_pivot_table，ExcelApi 1.8） ====================
+
+  async excel_add_pivot_table(args) {
+    const sheetName = String(args.sheetName || '')
+    const sourceRangeAddress = String(args.sourceRangeAddress || '')
+    const destinationCellAddress = String(args.destinationCellAddress || '')
+    const rowFields = Array.isArray(args.rowFields) ? args.rowFields : []
+    const valueFields = Array.isArray(args.valueFields) ? args.valueFields : []
+    if (!sourceRangeAddress) throw new Error('sourceRangeAddress 不能为空')
+    if (!destinationCellAddress) throw new Error('destinationCellAddress 不能为空')
+    if (!rowFields.length) throw new Error('rowFields 不能为空')
+    if (!valueFields.length) throw new Error('valueFields 不能为空')
+    if (!excelApiSupported('1.8')) throw new Error('当前 Excel 版本不支持透视表（需要 ExcelApi 1.8）')
+    return Excel.run(async (context) => {
+      const sheet = resolveSheet(context, sheetName)
+      const source = sheet.getRange(sourceRangeAddress)
+      const destination = sheet.getRange(destinationCellAddress)
+      const name = args.pivotName ? String(args.pivotName) : `PivotTable_${Date.now()}`
+      const pivot = sheet.pivotTables.add(name, source, destination)
+      pivot.load('name')
+      await context.sync()
+      for (const field of rowFields) {
+        const hierarchy = pivot.hierarchies.getItem(String(field))
+        pivot.rowHierarchies.add(hierarchy)
+      }
+      for (const field of valueFields) {
+        const hierarchy = pivot.hierarchies.getItem(String(field))
+        pivot.dataHierarchies.add(hierarchy)
+      }
+      await context.sync()
+      return { added: true, name: pivot.name, rowFields, valueFields }
+    })
+  },
+
   // ==================== PowerPoint（ppt_*，宿主须为 PowerPoint） ====================
 
   async ppt_get_slides() {
@@ -2076,6 +2577,119 @@ const HANDLERS = {
       await context.sync()
       return { deleted: true, slideNumber, shapeId: deletedId }
     })
+  },
+
+  // ==================== PPT 表格与超链接（批次 9） ====================
+
+  async ppt_add_table(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    const rows = Array.isArray(args.rows) ? args.rows : null
+    const rowCount = rows ? rows.length : Math.floor(Number(args.rowCount))
+    const colCount = rows ? (rows[0] ? rows[0].length : 0) : Math.floor(Number(args.colCount))
+    if (!rowCount || rowCount < 1 || !colCount || colCount < 1) throw new Error('表格行列数非法')
+    requirePptTableApi()
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, slideNumber)
+      const shape = slide.shapes.addTable(rowCount, colCount)
+      if (args.left != null) shape.left = Number(args.left)
+      if (args.top != null) shape.top = Number(args.top)
+      if (args.width != null) shape.width = Number(args.width)
+      if (args.height != null) shape.height = Number(args.height)
+      if (rows) {
+        const table = shape.getTable()
+        for (let r = 0; r < rowCount; r++) {
+          for (let c = 0; c < colCount; c++) {
+            const cell = table.getCellOrNullObject(r, c)
+            cell.text = String(rows[r][c] == null ? '' : rows[r][c])
+          }
+        }
+      }
+      await context.sync()
+      return { added: true, slideNumber, rows: rowCount, cols: colCount }
+    })
+  },
+
+  async ppt_table_read(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    requirePptTableApi()
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, slideNumber)
+      const table = await getPptTableOrThrow(context, slide, args.shapeId)
+      table.load('rowCount,columnCount,values')
+      await context.sync()
+      return { slideNumber, rowCount: table.rowCount, colCount: table.columnCount, cells: table.values }
+    })
+  },
+
+  async ppt_table_set_cell(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    const row = Math.floor(Number(args.row))
+    const col = Math.floor(Number(args.col))
+    if (!Number.isFinite(row) || row < 0) throw new Error('row 不能为负')
+    if (!Number.isFinite(col) || col < 0) throw new Error('col 不能为负')
+    const text = args.text == null ? '' : String(args.text)
+    requirePptTableApi()
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, slideNumber)
+      const table = await getPptTableOrThrow(context, slide, args.shapeId)
+      const cell = table.getCellOrNullObject(row, col)
+      cell.load('isNullObject')
+      await context.sync()
+      if (cell.isNullObject) throw new Error(`单元格 (${row},${col}) 不存在，请先用 office_ppt_table_read 核对`)
+      cell.text = text
+      await context.sync()
+      return { slideNumber, row, col, updated: true }
+    })
+  },
+
+  async ppt_set_hyperlink(args) {
+    const slideNumber = Math.floor(Number(args.slideNumber))
+    const searchText = String(args.searchText || '')
+    const url = String(args.url || '')
+    if (!Number.isFinite(slideNumber) || slideNumber < 1) throw new Error('slideNumber 须为大于等于 1 的整数')
+    if (!searchText) throw new Error('查找文本不能为空')
+    if (!url) throw new Error('url 不能为空')
+    requirePptTextApi()
+    requirePptHyperlinkApi()
+    return PowerPoint.run(async (context) => {
+      const slides = context.presentation.slides
+      slides.load('items/$none')
+      await context.sync()
+      const slide = getSlideOrThrow(slides, slideNumber)
+      const shapes = slide.shapes
+      shapes.load('items')
+      await context.sync()
+      const frames = shapes.items.map((shape) => {
+        const tf = shape.getTextFrameOrNullObject()
+        tf.load('hasText,isNullObject')
+        tf.textRange.load('text')
+        return tf
+      })
+      await context.sync()
+      for (const tf of frames) {
+        if (tf.isNullObject || !tf.hasText) continue
+        const text = tf.textRange.text || ''
+        const idx = text.indexOf(searchText)
+        if (idx === -1) continue
+        const sub = tf.textRange.getSubstring(idx, searchText.length)
+        sub.setHyperlink({ address: url })
+        await context.sync()
+        return { slideNumber, linked: true, url }
+      }
+      throw new Error('未找到目标文本，请确认 searchText 与幻灯片文本精确一致（可先用 office_ppt_get_slides 核对）')
+    })
   }
 }
 
@@ -2158,6 +2772,27 @@ const EXCEL_CF_DEFAULT_COLOR_SCALE = {
   maximum: { formula: null, type: 'HighestValue', color: '#63BE7B' }
 }
 
+/* ==================== Excel 批注/校验/图表/命名区域/保护/分组/透视表（批次 9） ==================== */
+
+/**
+ * 定位 Excel 单元格上的批注线程：用 Range 对象（而非 "Sheet!A1" 限定字符串）传给
+ * workbook.comments.getItemByCell，规避跨工作表的地址歧义。同步的构造，
+ * 调用方仍需在 context.sync() 前完成本次批处理里的其余排队操作。
+ */
+function getExcelComment(context, sheetName, cellAddress) {
+  const sheet = resolveSheet(context, sheetName)
+  const range = sheet.getRange(cellAddress)
+  return context.workbook.comments.getItemByCell(range)
+}
+
+/** operator 小写短名 → Excel.DataValidationOperator（与条件格式的 EXCEL_CF_OPERATORS 同款归一） */
+const EXCEL_DV_OPERATORS = {
+  between: 'Between', greaterthan: 'GreaterThan', lessthan: 'LessThan', equalto: 'EqualTo'
+}
+
+/** chartType 小写短名 → Excel.ChartType（v1 起步四种） */
+const EXCEL_CHART_TYPES = { column: 'ColumnClustered', line: 'Line', pie: 'Pie', bar: 'BarClustered' }
+
 /** 通用 PowerPoint API 需求集探测；version 形如 '1.4'/'1.8'，探测失败按不支持处理 */
 function pptApiSupported(version) {
   try {
@@ -2176,6 +2811,40 @@ function requirePptTextApi() {
   if (!pptApiSupported('1.4')) {
     throw new Error('unsupported: 当前 PowerPoint 版本不支持该操作（需要 PowerPointApi 1.4，Microsoft 365 较新版本）')
   }
+}
+
+/**
+ * PPT 表格操作门槛（批次 9）：ShapeCollection.addTable / Shape.getTable / Table.rowCount|columnCount|values|
+ * getCellOrNullObject 全在 PowerPointApi 1.8（TableRowCollection/TableColumnCollection 才是 1.9，
+ * 本批次不枚举行列集合，1.8 已够用）。
+ */
+function requirePptTableApi() {
+  if (!pptApiSupported('1.8')) {
+    throw new Error('unsupported: 当前 PowerPoint 版本不支持表格操作（需要 PowerPointApi 1.8，Microsoft 365 较新版本）')
+  }
+}
+
+/** TextRange.setHyperlink / HyperlinkCollection 属 PowerPointApi 1.10（批次 9） */
+function requirePptHyperlinkApi() {
+  if (!pptApiSupported('1.10')) {
+    throw new Error('unsupported: 当前 PowerPoint 版本不支持超链接（需要 PowerPointApi 1.10，Microsoft 365 较新版本）')
+  }
+}
+
+/** 定位一页幻灯片上的表格：shapeId 精确指定，或缺省取该页第一个 Table 类型形状（批次 9） */
+async function getPptTableOrThrow(context, slide, shapeId) {
+  const shapes = slide.shapes
+  shapes.load('items/id,items/type')
+  await context.sync()
+  let target
+  if (shapeId) {
+    target = shapes.items.find((s) => s.id === shapeId)
+    if (!target) throw new Error(`未找到 id 为 ${shapeId} 的形状（可先用 office_ppt_get_slide_details 核对）`)
+  } else {
+    target = shapes.items.find((s) => s.type === 'Table')
+    if (!target) throw new Error('该页没有表格，请先用 office_ppt_add_table 插入或核对 shapeId')
+  }
+  return target.getTable()
 }
 
 /** PPT 字符格式下划线线型 → PowerPoint.ShapeFontUnderlineStyle（wave 映射为 Wavy） */
@@ -2241,6 +2910,15 @@ export const COMMAND_DISPLAY_NAMES = {
   get_comments: '读取批注',
   reply_comment: '回复批注',
   resolve_comment: '解决批注',
+  get_revisions: '读取修订',
+  accept_revision: '接受修订',
+  reject_revision: '拒绝修订',
+  insert_footnote: '插入脚注',
+  insert_endnote: '插入尾注',
+  insert_image: '插入图片',
+  apply_style: '应用样式',
+  manage_content_control: '管理内容控件',
+  set_document_properties: '设置文档属性',
   excel_get_range: '读取区域',
   excel_set_values: '写入区域',
   excel_search: '查找单元格',
@@ -2256,6 +2934,17 @@ export const COMMAND_DISPLAY_NAMES = {
   excel_select_range: '选中区域',
   excel_set_autofilter: '设置自动筛选',
   excel_conditional_format: '设置条件格式',
+  excel_add_comment: '添加批注',
+  excel_get_comments: '读取批注',
+  excel_reply_comment: '回复批注',
+  excel_resolve_comment: '解决批注',
+  excel_delete_comment: '删除批注',
+  excel_set_data_validation: '设置数据验证',
+  excel_add_chart: '插入图表',
+  excel_define_name: '管理命名区域',
+  excel_protect_sheet: '保护工作表',
+  excel_group_rows_cols: '分组行列',
+  excel_add_pivot_table: '创建透视表',
   ppt_get_slides: '读取幻灯片',
   ppt_replace_text: '替换幻灯片文本',
   ppt_format_text: '设置幻灯片文字格式',
@@ -2265,7 +2954,11 @@ export const COMMAND_DISPLAY_NAMES = {
   ppt_move_slide: '移动幻灯片',
   ppt_add_shape: '插入形状',
   ppt_get_slide_details: '读取幻灯片明细',
-  ppt_delete_shape: '删除形状'
+  ppt_delete_shape: '删除形状',
+  ppt_add_table: '插入表格',
+  ppt_table_read: '读取表格',
+  ppt_table_set_cell: '修改表格单元格',
+  ppt_set_hyperlink: '设置超链接'
 }
 
 /** 每个 command 要求的宿主（与后端按 officeHost 的工具可见性过滤对齐） */
@@ -2295,6 +2988,15 @@ const COMMAND_HOSTS = {
   get_comments: 'word',
   reply_comment: 'word',
   resolve_comment: 'word',
+  get_revisions: 'word',
+  accept_revision: 'word',
+  reject_revision: 'word',
+  insert_footnote: 'word',
+  insert_endnote: 'word',
+  insert_image: 'word',
+  apply_style: 'word',
+  manage_content_control: 'word',
+  set_document_properties: 'word',
   excel_get_range: 'excel',
   excel_set_values: 'excel',
   excel_search: 'excel',
@@ -2310,6 +3012,17 @@ const COMMAND_HOSTS = {
   excel_select_range: 'excel',
   excel_set_autofilter: 'excel',
   excel_conditional_format: 'excel',
+  excel_add_comment: 'excel',
+  excel_get_comments: 'excel',
+  excel_reply_comment: 'excel',
+  excel_resolve_comment: 'excel',
+  excel_delete_comment: 'excel',
+  excel_set_data_validation: 'excel',
+  excel_add_chart: 'excel',
+  excel_define_name: 'excel',
+  excel_protect_sheet: 'excel',
+  excel_group_rows_cols: 'excel',
+  excel_add_pivot_table: 'excel',
   ppt_get_slides: 'powerpoint',
   ppt_replace_text: 'powerpoint',
   ppt_format_text: 'powerpoint',
@@ -2319,7 +3032,11 @@ const COMMAND_HOSTS = {
   ppt_move_slide: 'powerpoint',
   ppt_add_shape: 'powerpoint',
   ppt_get_slide_details: 'powerpoint',
-  ppt_delete_shape: 'powerpoint'
+  ppt_delete_shape: 'powerpoint',
+  ppt_add_table: 'powerpoint',
+  ppt_table_read: 'powerpoint',
+  ppt_table_set_cell: 'powerpoint',
+  ppt_set_hyperlink: 'powerpoint'
 }
 
 const HOST_LABELS = { word: 'Word', excel: 'Excel', powerpoint: 'PowerPoint' }

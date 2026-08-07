@@ -265,6 +265,10 @@ public class ContextAssemblerService {
                             systemText.append("office_excel_set_autofilter / office_excel_conditional_format）。");
                             systemText.append("改表前可先用 office_excel_get_overview 看工作表清单与各表尺寸，");
                             systemText.append("office_excel_select_range 可把用户视图定位到某处。");
+                            systemText.append("单元格批注用 office_excel_add_comment / office_excel_get_comments / office_excel_reply_comment / ");
+                            systemText.append("office_excel_resolve_comment / office_excel_delete_comment；数据验证用 office_excel_set_data_validation；");
+                            systemText.append("图表用 office_excel_add_chart；命名区域用 office_excel_define_name；工作表保护用 office_excel_protect_sheet；");
+                            systemText.append("行列分组用 office_excel_group_rows_cols；基础透视表用 office_excel_add_pivot_table。");
                             systemText.append("本会话没有 doc_* / sheet_* 工具，也没有 Word 面的 office_* 工具。\n\n");
                         }
                         case POWERPOINT -> {
@@ -274,6 +278,8 @@ public class ContextAssemblerService {
                             systemText.append("office_ppt_move_slide 管理页面、office_ppt_add_text_box / office_ppt_add_shape 插入文本框与形状、");
                             systemText.append("office_ppt_get_slide_details / office_ppt_delete_shape 精确定位并删除形状），");
                             systemText.append("写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。");
+                            systemText.append("表格用 office_ppt_add_table 插入、office_ppt_table_read / office_ppt_table_set_cell 读写单元格；");
+                            systemText.append("超链接用 office_ppt_set_hyperlink。");
                             systemText.append("本会话没有 doc_* 工具，也没有 Word 面的 office_* 工具。\n\n");
                         }
                         default -> {
@@ -291,6 +297,10 @@ public class ContextAssemblerService {
                             systemText.append("删行删列不进修订、只能靠撤销）；分页/分节符用 office_insert_break；超链接用 ");
                             systemText.append("office_set_hyperlink；页眉页脚（仅首节）用 office_edit_header_footer；");
                             systemText.append("批注用 office_get_comments / office_reply_comment / office_resolve_comment。");
+                            systemText.append("修订接受/拒绝用 office_get_revisions 先看列表、再用 office_accept_revision / office_reject_revision" +
+                                    "（单条按序号或 acceptAll/rejectAll 全部）；脚注/尾注用 office_insert_footnote / office_insert_endnote；");
+                            systemText.append("图片插入用 office_insert_image（fileId 指项目文件，上限 2MB）；套用已命名样式用 office_apply_style；");
+                            systemText.append("内容控件用 office_manage_content_control；文档属性（标题/作者等）用 office_set_document_properties。");
                             systemText.append("本会话没有 doc_* 工具。\n\n");
                         }
                     }
@@ -487,7 +497,10 @@ public class ContextAssemblerService {
                         + "office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / "
                         + "office_excel_freeze_panes / office_excel_set_formulas / office_excel_set_autofilter / "
                         + "office_excel_conditional_format），office_excel_get_overview 可先看全局、"
-                        + "office_excel_select_range 可定位视图。";
+                        + "office_excel_select_range 可定位视图。单元格批注/数据验证/图表/命名区域/工作表保护/行列分组/"
+                        + "基础透视表分别用 office_excel_add_comment 等批注四件套 / office_excel_set_data_validation / "
+                        + "office_excel_add_chart / office_excel_define_name / office_excel_protect_sheet / "
+                        + "office_excel_group_rows_cols / office_excel_add_pivot_table。";
                 case POWERPOINT -> "\n\n[系统提醒] 用户此刻在 Microsoft PowerPoint 中打开着演示文稿" + docLabel + "，"
                         + "各页文本已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前演示文稿」「改一下」等都指它——"
@@ -495,7 +508,9 @@ public class ContextAssemblerService {
                         + "office_ppt_format_text / office_ppt_add_slide / office_ppt_delete_slide / "
                         + "office_ppt_move_slide / office_ppt_add_text_box / office_ppt_add_shape / "
                         + "office_ppt_get_slide_details / office_ppt_delete_shape），"
-                        + "写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。";
+                        + "写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。"
+                        + "表格用 office_ppt_add_table / office_ppt_table_read / office_ppt_table_set_cell；"
+                        + "超链接用 office_ppt_set_hyperlink。";
                 default -> "\n\n[系统提醒] 用户此刻在 Microsoft Word 中打开着文档" + docLabel + "，"
                         + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
@@ -508,7 +523,11 @@ public class ContextAssemblerService {
                         + "office_table_read / office_table_set_cell / office_table_add_row / office_table_delete_row / "
                         + "office_table_add_col / office_table_delete_col；分页/分节符用 office_insert_break；"
                         + "超链接用 office_set_hyperlink；页眉页脚（仅首节）用 office_edit_header_footer；"
-                        + "批注用 office_get_comments / office_reply_comment / office_resolve_comment。";
+                        + "批注用 office_get_comments / office_reply_comment / office_resolve_comment；"
+                        + "修订接受/拒绝先 office_get_revisions 再 office_accept_revision / office_reject_revision；"
+                        + "脚注/尾注用 office_insert_footnote / office_insert_endnote；图片插入用 office_insert_image；"
+                        + "已命名样式用 office_apply_style；内容控件用 office_manage_content_control；"
+                        + "文档属性用 office_set_document_properties。";
             };
             case NONE -> "\n\n[系统提醒] 用户当前查看的文档是" + docLabel + "，"
                     + "其正文见 system prompt 的 <active_document>，仅供阅读分析。"

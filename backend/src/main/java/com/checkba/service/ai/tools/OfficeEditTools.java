@@ -1,6 +1,9 @@
 package com.checkba.service.ai.tools;
 
+import com.checkba.model.entity.ProjectFile;
+import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.ai.OfficeBridgeService;
+import com.checkba.storage.StorageServiceFactory;
 import dev.langchain4j.agent.tool.P;
 import dev.langchain4j.agent.tool.Tool;
 import lombok.RequiredArgsConstructor;
@@ -33,6 +36,9 @@ public class OfficeEditTools implements AgentToolComponent {
 
     private final OfficeBridgeService officeBridgeService;
     private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    /** office_insert_image 读取项目文件字节用（批次 9） */
+    private final ProjectFileRepository projectFileRepository;
+    private final StorageServiceFactory storageServiceFactory;
 
     /** Excel 区域地址（A1 表示法，不带工作表名）：A1 或 A1:B10 */
     private static final java.util.regex.Pattern RANGE_ADDRESS =
@@ -139,6 +145,49 @@ public class OfficeEditTools implements AgentToolComponent {
     /** 超链接协议白名单：只认 http/https，防止 javascript: 等协议注入 */
     private static final java.util.regex.Pattern HTTP_URL =
             java.util.regex.Pattern.compile("^https?://.+", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    // ==================== 批次 9 新增常量（Excel 批注/校验/图表/命名区域/保护/分组/透视表，
+    // Word 修订/脚注尾注/图片/样式/内容控件/文档属性，PPT 表格/超链接） ====================
+
+    /** Excel 单元格地址：A1 表示法，不带工作表名，须为单格（用于批注定位） */
+    private static final java.util.regex.Pattern SINGLE_CELL_ADDRESS =
+            java.util.regex.Pattern.compile("^[A-Za-z]{1,3}\\d{1,7}$");
+
+    /** Excel 批注读取范围白名单 */
+    private static final java.util.Set<String> EXCEL_COMMENT_SCOPES = java.util.Set.of("sheet", "workbook");
+
+    /** Excel 数据验证白名单 */
+    private static final java.util.Set<String> EXCEL_DV_ACTIONS = java.util.Set.of("apply", "clear");
+    private static final java.util.Set<String> EXCEL_DV_TYPES = java.util.Set.of("wholenumber", "list", "date");
+    private static final java.util.Set<String> EXCEL_DV_OPERATORS =
+            java.util.Set.of("between", "greaterthan", "lessthan", "equalto");
+
+    /** Excel 图表类型白名单（v1 起步四种） */
+    private static final java.util.Set<String> EXCEL_CHART_TYPES = java.util.Set.of("column", "line", "pie", "bar");
+
+    /** Excel 命名区域动作白名单 + 名称合法性（须以字母/下划线开头，只含字母数字下划线点号） */
+    private static final java.util.Set<String> EXCEL_NAME_ACTIONS = java.util.Set.of("add", "remove");
+    private static final java.util.regex.Pattern EXCEL_NAME_PATTERN =
+            java.util.regex.Pattern.compile("^[A-Za-z_][A-Za-z0-9_.]{0,254}$");
+
+    /** Excel 工作表保护动作白名单 */
+    private static final java.util.Set<String> EXCEL_PROTECT_ACTIONS = java.util.Set.of("protect", "unprotect");
+
+    /** Excel 行列分组动作/方向白名单；rangeAddress 须是整行区域（如 4:9）或整列区域（如 C:E） */
+    private static final java.util.Set<String> EXCEL_GROUP_ACTIONS = java.util.Set.of("group", "ungroup");
+    private static final java.util.Set<String> EXCEL_GROUP_BY = java.util.Set.of("rows", "cols");
+    private static final java.util.regex.Pattern EXCEL_ROWCOL_RANGE =
+            java.util.regex.Pattern.compile("^([A-Za-z]{1,3}:[A-Za-z]{1,3}|\\d{1,7}:\\d{1,7})$");
+
+    /** Excel 透视表行/值字段数上限 */
+    private static final int MAX_PIVOT_FIELDS = 10;
+
+    /** Word 内容控件动作白名单 */
+    private static final java.util.Set<String> CONTENT_CONTROL_ACTIONS =
+            java.util.Set.of("insert", "read", "set_text", "delete");
+
+    /** office_insert_image 单张图片字节上限（2MB；经桥下发 base64 后体积再膨胀约 1/3） */
+    private static final long MAX_INSERT_IMAGE_BYTES = 2L * 1024 * 1024;
 
     /**
      * 枚举参数归一化：null/空返回 null（表示不改），命中白名单返回小写值，
@@ -1717,5 +1766,808 @@ public class OfficeEditTools implements AgentToolComponent {
         if (hasId) args.put("shapeId", shapeId.trim());
         if (hasText) args.put("textMatch", textMatch.trim());
         return officeBridgeService.executeOfficeCommand(conversationId, "ppt_delete_shape", args);
+    }
+
+    // ==================== Excel 单元格批注（office_excel_*，批次 9，ExcelApi 1.10） ====================
+
+    @Tool("在 Excel 单元格上添加批注（线程式评论，非旧版批注/Note）。cellAddress 必须是单个单元格（如 B2，不能是区域）。" +
+          "需要 ExcelApi 1.10。sheetName 缺省为当前活动工作表。直接生效（Excel 没有修订机制）。")
+    @ToolMeta(displayName = "添加批注", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_add_comment(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("单元格地址，A1 表示法，须为单格如 B2") String cellAddress,
+            @P("批注内容") String comment
+    ) {
+        log.info("Tool: office_excel_add_comment called, sheet={}, cell={}", sheetName, cellAddress);
+        String addr = cellAddress == null ? "" : cellAddress.trim();
+        if (addr.isEmpty() || !SINGLE_CELL_ADDRESS.matcher(addr).matches()) {
+            return "Error: cellAddress 必须是单个单元格地址（如 B2），不能是区域";
+        }
+        if (comment == null || comment.isBlank()) {
+            return "Error: 批注内容不能为空";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("cellAddress", addr);
+        args.put("comment", comment);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_add_comment", args);
+    }
+
+    @Tool("读取当前 Excel 工作表（或整个工作簿）的全部批注线程：单元格地址、楼主内容、作者、是否已解决、回复列表。" +
+          "scope=sheet（缺省，当前工作表）或 workbook（整个工作簿）。回复/解决/删除批注时用返回的 cellAddress 定位。")
+    @ToolMeta(displayName = "读取批注", category = "office")
+    public String office_excel_get_comments(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表，仅 scope=sheet 时有效）") String sheetName,
+            @P("范围：sheet（缺省，当前工作表）或 workbook（整个工作簿）") String scope
+    ) {
+        log.info("Tool: office_excel_get_comments called, sheet={}, scope={}", sheetName, scope);
+        String scopeValue;
+        try {
+            scopeValue = normalizeEnum(scope, EXCEL_COMMENT_SCOPES, "scope");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("scope", scopeValue == null ? "sheet" : scopeValue);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_get_comments", args);
+    }
+
+    @Tool("回复 Excel 中某单元格的批注线程。cellAddress 定位目标单元格（须已有批注，先用 office_excel_get_comments 核对）。" +
+          "需要 ExcelApi 1.10。")
+    @ToolMeta(displayName = "回复批注", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_reply_comment(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("目标单元格地址，A1 表示法（须已有批注）") String cellAddress,
+            @P("回复内容") String reply
+    ) {
+        log.info("Tool: office_excel_reply_comment called, cell={}", cellAddress);
+        String addr = cellAddress == null ? "" : cellAddress.trim();
+        if (addr.isEmpty() || !SINGLE_CELL_ADDRESS.matcher(addr).matches()) {
+            return "Error: cellAddress 必须是单个单元格地址（如 B2）";
+        }
+        if (reply == null || reply.isBlank()) {
+            return "Error: 回复内容不能为空";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("cellAddress", addr);
+        args.put("reply", reply);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_reply_comment", args);
+    }
+
+    @Tool("标记 Excel 中某单元格的批注线程为已解决（或重新打开）。cellAddress 定位目标单元格。" +
+          "resolved 缺省 true。需要 ExcelApi 1.10。")
+    @ToolMeta(displayName = "解决批注", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_resolve_comment(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("目标单元格地址，A1 表示法（须已有批注）") String cellAddress,
+            @P("标记为已解决（true，缺省）还是重新打开（false）") Boolean resolved
+    ) {
+        log.info("Tool: office_excel_resolve_comment called, cell={}", cellAddress);
+        String addr = cellAddress == null ? "" : cellAddress.trim();
+        if (addr.isEmpty() || !SINGLE_CELL_ADDRESS.matcher(addr).matches()) {
+            return "Error: cellAddress 必须是单个单元格地址（如 B2）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("cellAddress", addr);
+        args.put("resolved", resolved == null || resolved);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_resolve_comment", args);
+    }
+
+    @Tool("删除 Excel 中某单元格的整条批注线程（含全部回复）。cellAddress 定位目标单元格。不可撤销（无修订机制），" +
+          "误删靠 Ctrl+Z 或文档检查点。")
+    @ToolMeta(displayName = "删除批注", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_delete_comment(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("目标单元格地址，A1 表示法（须已有批注）") String cellAddress
+    ) {
+        log.info("Tool: office_excel_delete_comment called, cell={}", cellAddress);
+        String addr = cellAddress == null ? "" : cellAddress.trim();
+        if (addr.isEmpty() || !SINGLE_CELL_ADDRESS.matcher(addr).matches()) {
+            return "Error: cellAddress 必须是单个单元格地址（如 B2）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("cellAddress", addr);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_delete_comment", args);
+    }
+
+    // ==================== Excel 数据验证（office_excel_set_data_validation，批次 9，ExcelApi 1.8） ====================
+
+    @Tool("给 Excel 区域设置或清除数据验证规则。action=apply 时 type 必填：" +
+          "wholeNumber=整数（operator+value1[+value2]）、list=下拉列表（listSource 逗号分隔的候选值）、" +
+          "date=日期（operator+value1[+value2]，日期用 yyyy-mm-dd）。operator=between 时 value2 是区间上界，" +
+          "其余 operator 只需 value1。action=clear 清除该区域已有的验证规则（此时其余参数不需要）。" +
+          "需要 ExcelApi 1.8。直接生效（Excel 没有修订机制）。sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "设置数据验证", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_set_data_validation(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("区域地址，A1 表示法如 B2:B20") String rangeAddress,
+            @P("动作：apply（套用，缺省）/clear（清除）") String action,
+            @P("验证类型：wholeNumber/list/date（action=apply 时必填）") String type,
+            @P("比较运算符：between/greaterThan/lessThan/equalTo（wholeNumber/date 用，between 时必填 value2）") String operator,
+            @P("比较值 1（wholeNumber 用数字字符串，date 用 yyyy-mm-dd）") String value1,
+            @P("比较值 2（operator=between 时必填，用作区间上界）") String value2,
+            @P("下拉候选值，逗号分隔（type=list 时必填，如 是,否,待定）") String listSource
+    ) {
+        log.info("Tool: office_excel_set_data_validation called, sheet={}, range={}, action={}", sheetName, rangeAddress, action);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 区域地址不能为空且须为 A1 表示法（如 B2:B20，不带工作表名）";
+        }
+        String actionValue;
+        String typeValue;
+        String operatorValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_DV_ACTIONS, "action");
+            typeValue = normalizeEnum(type, EXCEL_DV_TYPES, "type");
+            operatorValue = normalizeEnum(operator, EXCEL_DV_OPERATORS, "operator");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) actionValue = "apply";
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        args.put("action", actionValue);
+        if ("apply".equals(actionValue)) {
+            if (typeValue == null) {
+                return "Error: type 不能为空（apply 时必填：wholeNumber/list/date）";
+            }
+            args.put("type", typeValue);
+            if ("list".equals(typeValue)) {
+                if (listSource == null || listSource.isBlank()) {
+                    return "Error: type=list 时 listSource 不能为空（逗号分隔的候选值）";
+                }
+                args.put("listSource", listSource.trim());
+            } else {
+                if (operatorValue == null) {
+                    return "Error: type=" + typeValue + " 时 operator 不能为空（between/greaterThan/lessThan/equalTo）";
+                }
+                if (value1 == null || value1.isBlank()) {
+                    return "Error: value1 不能为空";
+                }
+                if ("between".equals(operatorValue) && (value2 == null || value2.isBlank())) {
+                    return "Error: operator=between 时 value2 不能为空（区间上界）";
+                }
+                args.put("operator", operatorValue);
+                args.put("value1", value1.trim());
+                if (value2 != null && !value2.isBlank()) args.put("value2", value2.trim());
+            }
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_set_data_validation", args);
+    }
+
+    // ==================== Excel 图表（office_excel_add_chart，批次 9，ExcelApi 1.1） ====================
+
+    @Tool("在 Excel 工作表插入图表：柱状图/折线图/饼图/条形图。dataRangeAddress 是数据源区域（含表头，第一行/列" +
+          "作为系列名或分类名）。title 可选设置图表标题。需要 ExcelApi 1.1。直接生效（Excel 没有修订机制）。" +
+          "sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "插入图表", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_add_chart(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("数据源区域，A1 表示法如 A1:C5") String dataRangeAddress,
+            @P("图表类型：column（柱状图）/line（折线图）/pie（饼图）/bar（条形图）") String chartType,
+            @P("图表标题（可选）") String title
+    ) {
+        log.info("Tool: office_excel_add_chart called, sheet={}, range={}, type={}", sheetName, dataRangeAddress, chartType);
+        String addr = dataRangeAddress == null ? "" : dataRangeAddress.trim();
+        if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+            return "Error: 数据源区域不能为空且须为 A1 表示法（如 A1:C5，不带工作表名）";
+        }
+        String typeValue;
+        try {
+            typeValue = normalizeEnum(chartType, EXCEL_CHART_TYPES, "chartType");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (typeValue == null) {
+            return "Error: chartType 不能为空（column/line/pie/bar）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("dataRangeAddress", addr);
+        args.put("chartType", typeValue);
+        if (title != null && !title.isBlank()) args.put("title", title.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_add_chart", args);
+    }
+
+    // ==================== Excel 命名区域（office_excel_define_name，批次 9，ExcelApi 1.1） ====================
+
+    @Tool("新增或删除 Excel 工作簿级命名区域（Named Range）。add 时需 rangeAddress；remove 只需 name。" +
+          "name 须以字母或下划线开头，只能含字母数字下划线点号。需要 ExcelApi 1.1。sheetName 缺省为当前活动工作表" +
+          "（仅用于解析 rangeAddress，命名区域本身是工作簿级）。")
+    @ToolMeta(displayName = "管理命名区域", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_define_name(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表，用于解析 rangeAddress）") String sheetName,
+            @P("动作：add/remove") String action,
+            @P("命名区域名称") String name,
+            @P("区域地址，A1 表示法如 A1:D1（action=add 时必填）") String rangeAddress
+    ) {
+        log.info("Tool: office_excel_define_name called, action={}, name={}", action, name);
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_NAME_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（add/remove）";
+        }
+        if (name == null || name.isBlank() || !EXCEL_NAME_PATTERN.matcher(name.trim()).matches()) {
+            return "Error: name 非法，须以字母或下划线开头，只能含字母数字下划线点号（如 ExpensesHeader）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("action", actionValue);
+        args.put("name", name.trim());
+        if ("add".equals(actionValue)) {
+            String addr = rangeAddress == null ? "" : rangeAddress.trim();
+            if (addr.isEmpty() || !RANGE_ADDRESS.matcher(addr).matches()) {
+                return "Error: add 需要 rangeAddress（A1 表示法，如 A1:D1，不带工作表名）";
+            }
+            args.put("rangeAddress", addr);
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_define_name", args);
+    }
+
+    // ==================== Excel 工作表保护（office_excel_protect_sheet，批次 9，ExcelApi 1.2/1.7） ====================
+
+    @Tool("保护或解除保护 Excel 工作表（阻止/允许用户编辑单元格）。password 可选（保护时设置解除密码，" +
+          "解除时如工作表设了密码则必须提供）。**password 参数内容不落日志**。需要 ExcelApi 1.2（密码参数需 1.7）。" +
+          "sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "保护工作表", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_protect_sheet(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("动作：protect/unprotect") String action,
+            @P("密码（可选，不落日志）") String password
+    ) {
+        log.info("Tool: office_excel_protect_sheet called, sheet={}, action={}", sheetName, action);
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_PROTECT_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（protect/unprotect）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("action", actionValue);
+        if (password != null && !password.isBlank()) args.put("password", password);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_protect_sheet", args);
+    }
+
+    // ==================== Excel 行列分组（office_excel_group_rows_cols，批次 9，ExcelApi 1.10） ====================
+
+    @Tool("对 Excel 行或列区域分组/取消分组，形成可折叠大纲。rangeAddress 须是整行区域（如 4:9）或整列区域（如 C:E），" +
+          "不能是普通单元格区域。by 指定分组方向：rows/cols，须与 rangeAddress 的行/列性质一致。需要 ExcelApi 1.10。" +
+          "直接生效（Excel 没有修订机制）。sheetName 缺省为当前活动工作表。")
+    @ToolMeta(displayName = "分组行列", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_group_rows_cols(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表）") String sheetName,
+            @P("整行区域（如 4:9）或整列区域（如 C:E）") String rangeAddress,
+            @P("动作：group/ungroup") String action,
+            @P("分组方向：rows/cols，须与 rangeAddress 一致") String by
+    ) {
+        log.info("Tool: office_excel_group_rows_cols called, sheet={}, range={}, action={}", sheetName, rangeAddress, action);
+        String addr = rangeAddress == null ? "" : rangeAddress.trim();
+        if (addr.isEmpty() || !EXCEL_ROWCOL_RANGE.matcher(addr).matches()) {
+            return "Error: rangeAddress 须是整行区域（如 4:9）或整列区域（如 C:E），不能是普通单元格区域";
+        }
+        String actionValue;
+        String byValue;
+        try {
+            actionValue = normalizeEnum(action, EXCEL_GROUP_ACTIONS, "action");
+            byValue = normalizeEnum(by, EXCEL_GROUP_BY, "by");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（group/ungroup）";
+        }
+        if (byValue == null) {
+            return "Error: by 不能为空（rows/cols），须与 rangeAddress 一致";
+        }
+        boolean isRowRange = addr.matches("\\d{1,7}:\\d{1,7}");
+        if (isRowRange != "rows".equals(byValue)) {
+            return "Error: by 与 rangeAddress 不一致（" + (isRowRange ? "rangeAddress 是整行区域，by 应为 rows"
+                    : "rangeAddress 是整列区域，by 应为 cols") + "）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("rangeAddress", addr);
+        args.put("action", actionValue);
+        args.put("by", byValue);
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_group_rows_cols", args);
+    }
+
+    // ==================== Excel 透视表（office_excel_add_pivot_table，批次 9，ExcelApi 1.8） ====================
+
+    @Tool("在 Excel 中创建一张基础透视表：源区域数据按行字段分组，值字段求和汇总。sourceRangeAddress 含表头。" +
+          "destinationCellAddress 是透视表放置的左上角单元格（可以是另一张工作表的空白处）。" +
+          "rowFieldsJson 是行分组字段名的 JSON 字符串数组（如 [\"部门\"]，最多 " + MAX_PIVOT_FIELDS + " 个）；" +
+          "valueFieldsJson 同样是字段名数组，按数值求和汇总（如 [\"金额\"]）。" +
+          "**只做基础形态**（行分组 + 求和汇总），不支持列字段/筛选字段/自定义汇总函数/复杂布局。" +
+          "需要 ExcelApi 1.8。sheetName 缺省为当前活动工作表（源区域所在表）。")
+    @ToolMeta(displayName = "创建透视表", category = "office", fileEffect = "MODIFIED")
+    public String office_excel_add_pivot_table(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("工作表名（可选；为空取当前活动工作表，源区域所在表）") String sheetName,
+            @P("源数据区域，A1 表示法，含表头，如 A1:D50") String sourceRangeAddress,
+            @P("透视表放置的左上角单元格，A1 表示法，如 F1") String destinationCellAddress,
+            @P("行分组字段名，JSON 字符串数组，如 [\"部门\"]") String rowFieldsJson,
+            @P("求和汇总字段名，JSON 字符串数组，如 [\"金额\"]") String valueFieldsJson,
+            @P("透视表名称（可选）") String pivotName
+    ) {
+        log.info("Tool: office_excel_add_pivot_table called, sheet={}, source={}, dest={}",
+                sheetName, sourceRangeAddress, destinationCellAddress);
+        String srcAddr = sourceRangeAddress == null ? "" : sourceRangeAddress.trim();
+        if (srcAddr.isEmpty() || !RANGE_ADDRESS.matcher(srcAddr).matches()) {
+            return "Error: sourceRangeAddress 不能为空且须为 A1 表示法（如 A1:D50，不带工作表名）";
+        }
+        String destAddr = destinationCellAddress == null ? "" : destinationCellAddress.trim();
+        if (destAddr.isEmpty() || !RANGE_ADDRESS.matcher(destAddr).matches()) {
+            return "Error: destinationCellAddress 不能为空且须为 A1 表示法（如 F1）";
+        }
+        java.util.List<String> rowFields;
+        java.util.List<String> valueFields;
+        try {
+            rowFields = objectMapper.readValue(rowFieldsJson == null ? "" : rowFieldsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {});
+            valueFields = objectMapper.readValue(valueFieldsJson == null ? "" : valueFieldsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.List<String>>() {});
+        } catch (Exception e) {
+            return "Error: rowFieldsJson/valueFieldsJson 不是合法的 JSON 字符串数组，示例：[\"部门\"]";
+        }
+        if (rowFields.isEmpty()) {
+            return "Error: rowFieldsJson 不能为空（至少一个行分组字段）";
+        }
+        if (valueFields.isEmpty()) {
+            return "Error: valueFieldsJson 不能为空（至少一个求和汇总字段）";
+        }
+        if (rowFields.size() > MAX_PIVOT_FIELDS || valueFields.size() > MAX_PIVOT_FIELDS) {
+            return "Error: 行分组字段与求和字段各自上限 " + MAX_PIVOT_FIELDS + " 个";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("sheetName", sheetName == null ? "" : sheetName.trim());
+        args.put("sourceRangeAddress", srcAddr);
+        args.put("destinationCellAddress", destAddr);
+        args.put("rowFields", rowFields);
+        args.put("valueFields", valueFields);
+        if (pivotName != null && !pivotName.isBlank()) args.put("pivotName", pivotName.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "excel_add_pivot_table", args);
+    }
+
+    // ==================== Word 修订接受/拒绝（office_*，批次 9，WordApi 1.6） ====================
+
+    @Tool("读取当前 Word 文档中的全部修订（Track Changes）记录：序号（index）、作者、时间、类型（插入/删除/格式）、文本摘要。" +
+          "接受/拒绝某条修订时用这里返回的 index 定位。需要 WordApi 1.6。")
+    @ToolMeta(displayName = "读取修订", category = "office")
+    public String office_get_revisions(
+            @P("会话ID（系统自动注入）") String conversationId
+    ) {
+        log.info("Tool: office_get_revisions called");
+        return officeBridgeService.executeOfficeCommand(conversationId, "get_revisions", Map.of());
+    }
+
+    @Tool("接受当前 Word 文档中的修订。revisionIndex（来自 office_get_revisions 的 index，0 开始）定位单条修订；" +
+          "acceptAll=true 时接受全部修订（此时忽略 revisionIndex）。两者至少给一个。需要 WordApi 1.6。")
+    @ToolMeta(displayName = "接受修订", category = "office", fileEffect = "MODIFIED")
+    public String office_accept_revision(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标修订的序号（0 开始，来自 office_get_revisions；acceptAll=true 时可不传）") Integer revisionIndex,
+            @P("是否接受全部修订（true 时忽略 revisionIndex）") Boolean acceptAll
+    ) {
+        log.info("Tool: office_accept_revision called, index={}, all={}", revisionIndex, acceptAll);
+        boolean all = acceptAll != null && acceptAll;
+        if (!all && (revisionIndex == null || revisionIndex < 0)) {
+            return "Error: 缺少 revisionIndex（0 开始，来自 office_get_revisions），或传 acceptAll=true 接受全部";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("all", all);
+        if (!all) args.put("revisionIndex", revisionIndex);
+        return officeBridgeService.executeOfficeCommand(conversationId, "accept_revision", args);
+    }
+
+    @Tool("拒绝当前 Word 文档中的修订。revisionIndex（来自 office_get_revisions 的 index，0 开始）定位单条修订；" +
+          "rejectAll=true 时拒绝全部修订（此时忽略 revisionIndex）。两者至少给一个。需要 WordApi 1.6。")
+    @ToolMeta(displayName = "拒绝修订", category = "office", fileEffect = "MODIFIED")
+    public String office_reject_revision(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标修订的序号（0 开始，来自 office_get_revisions；rejectAll=true 时可不传）") Integer revisionIndex,
+            @P("是否拒绝全部修订（true 时忽略 revisionIndex）") Boolean rejectAll
+    ) {
+        log.info("Tool: office_reject_revision called, index={}, all={}", revisionIndex, rejectAll);
+        boolean all = rejectAll != null && rejectAll;
+        if (!all && (revisionIndex == null || revisionIndex < 0)) {
+            return "Error: 缺少 revisionIndex（0 开始，来自 office_get_revisions），或传 rejectAll=true 拒绝全部";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("all", all);
+        if (!all) args.put("revisionIndex", revisionIndex);
+        return officeBridgeService.executeOfficeCommand(conversationId, "reject_revision", args);
+    }
+
+    // ==================== Word 脚注/尾注（office_*，批次 9，WordApi 1.5） ====================
+
+    @Tool("在当前 Word 文档中为指定文本插入脚注。anchorText 须与文档中的文本精确一致，脚注标记插在该文本之后，" +
+          "text 是脚注正文内容。需要 WordApi 1.5；插入以 Word 原生修订（Track Changes）形式呈现。")
+    @ToolMeta(displayName = "插入脚注", category = "office", fileEffect = "MODIFIED")
+    public String office_insert_footnote(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("插入脚注标记的目标文本（须与文档精确一致）") String anchorText,
+            @P("脚注正文内容") String text
+    ) {
+        log.info("Tool: office_insert_footnote called, anchor={}", anchorText);
+        if (anchorText == null || anchorText.isBlank()) {
+            return "Error: 目标文本不能为空";
+        }
+        if (anchorText.length() > 255) {
+            return "Error: 目标文本过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+        }
+        if (text == null || text.isBlank()) {
+            return "Error: 脚注正文内容不能为空";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("anchorText", anchorText);
+        args.put("text", text);
+        return officeBridgeService.executeOfficeCommand(conversationId, "insert_footnote", args);
+    }
+
+    @Tool("在当前 Word 文档中为指定文本插入尾注。用法与 office_insert_footnote 相同，" +
+          "区别是尾注排在文档末尾而非当页页脚。需要 WordApi 1.5；插入以 Word 原生修订形式呈现。")
+    @ToolMeta(displayName = "插入尾注", category = "office", fileEffect = "MODIFIED")
+    public String office_insert_endnote(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("插入尾注标记的目标文本（须与文档精确一致）") String anchorText,
+            @P("尾注正文内容") String text
+    ) {
+        log.info("Tool: office_insert_endnote called, anchor={}", anchorText);
+        if (anchorText == null || anchorText.isBlank()) {
+            return "Error: 目标文本不能为空";
+        }
+        if (anchorText.length() > 255) {
+            return "Error: 目标文本过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+        }
+        if (text == null || text.isBlank()) {
+            return "Error: 尾注正文内容不能为空";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("anchorText", anchorText);
+        args.put("text", text);
+        return officeBridgeService.executeOfficeCommand(conversationId, "insert_endnote", args);
+    }
+
+    // ==================== Word 图片插入（office_insert_image，批次 9，WordApi 1.2） ====================
+
+    @Tool("把项目里的一张图片文件插入到当前 Word 文档中（内联图片）。fileId 是项目文件的数据库 ID" +
+          "（doc_list_project_files 或素材列表可查到）。图片大小上限 2MB，超限会报错。" +
+          "提供 anchorText 时在该锚点前/后插入（锚点须与文档精确一致）；不提供时在当前光标/选区处插入。" +
+          "width 可选设置图片显示宽度（磅），不传则用图片原始尺寸。插入以 Word 原生修订形式呈现，需要 WordApi 1.2。")
+    @ToolMeta(displayName = "插入图片", category = "office", fileEffect = "MODIFIED")
+    public String office_insert_image(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("项目文件的数据库 ID（图片文件）") Long fileId,
+            @P("定位锚点文本（可选；为空则在当前光标/选区处插入）") String anchorText,
+            @P("相对锚点的位置：before 或 after（默认 after，仅提供锚点时有效）") String position,
+            @P("图片显示宽度（磅）（不改则不传，用原始尺寸）") Double width
+    ) {
+        log.info("Tool: office_insert_image called, fileId={}, anchor={}", fileId, anchorText);
+        if (fileId == null) {
+            return "Error: fileId 不能为空（项目文件的数据库 ID）";
+        }
+        if (anchorText != null && anchorText.length() > 255) {
+            return "Error: 锚点文本过长（Word 查找上限 255 字符），请改用更短的唯一锚点";
+        }
+        String pos = position == null || position.isBlank() ? "after" : position.trim().toLowerCase();
+        if (!"before".equals(pos) && !"after".equals(pos)) {
+            return "Error: position 只能是 before 或 after";
+        }
+        if (width != null && width <= 0) {
+            return "Error: width 须为大于 0 的磅值";
+        }
+        java.util.Optional<ProjectFile> fileOpt = projectFileRepository.findById(fileId);
+        if (fileOpt.isEmpty()) {
+            return "Error: 文件不存在（fileId=" + fileId + "）";
+        }
+        ProjectFile pf = fileOpt.get();
+        String denied = ToolFileGuard.rejectIfOutsideProject(pf);
+        if (denied != null) {
+            return denied;
+        }
+        String filePath = pf.getFilePath();
+        if (filePath == null || filePath.isBlank()) {
+            filePath = pf.getWpsFileId();
+        }
+        if (filePath == null || filePath.isBlank()) {
+            return "Error: 文件路径为空（fileId=" + fileId + "）";
+        }
+        byte[] bytes;
+        try {
+            org.springframework.core.io.Resource resource = storageServiceFactory.getStorageService().load(filePath);
+            try (java.io.InputStream is = resource.getInputStream()) {
+                bytes = is.readAllBytes();
+            }
+        } catch (Exception e) {
+            log.warn("office_insert_image: failed to load file, fileId={}", fileId, e);
+            return "Error: 读取文件失败：" + e.getMessage();
+        }
+        if (bytes.length > MAX_INSERT_IMAGE_BYTES) {
+            return "Error: 图片过大（" + (bytes.length / 1024) + "KB），上限 2MB（2048KB），请压缩后重试";
+        }
+        String base64 = java.util.Base64.getEncoder().encodeToString(bytes);
+        Map<String, Object> args = new HashMap<>();
+        args.put("imageBase64", base64);
+        args.put("anchorText", anchorText == null ? "" : anchorText);
+        args.put("position", pos);
+        if (width != null) args.put("width", width);
+        return officeBridgeService.executeOfficeCommand(conversationId, "insert_image", args);
+    }
+
+    // ==================== Word 样式应用（office_apply_style，批次 9，WordApi 1.1） ====================
+
+    @Tool("给当前 Word 文档中的段落套用一个已命名的样式（内置或自定义，如「标题 1」「正文」「引用」等，" +
+          "样式名须与文档中实际存在的样式名一致，中文文档通常是中文样式名）。anchorText 定位段落" +
+          "（命中处所在的整个段落就是目标段落），默认只对第一处匹配所在段落生效，applyToAll=true 对所有匹配所在段落生效。" +
+          "套样式会重置段落的直接格式为该样式自带的格式。需要 WordApi 1.1；修改以 Word 原生修订形式呈现。")
+    @ToolMeta(displayName = "应用样式", category = "office", fileEffect = "MODIFIED")
+    public String office_apply_style(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标段落中的一段文本（须与文档精确一致）") String anchorText,
+            @P("是否对所有匹配所在段落生效（false=仅第一处）") Boolean applyToAll,
+            @P("样式名，须与文档中实际存在的样式名一致（如 标题 1、正文、引用）") String styleName
+    ) {
+        log.info("Tool: office_apply_style called, anchor={}, styleName={}", anchorText, styleName);
+        if (anchorText == null || anchorText.isBlank()) {
+            return "Error: 目标文本不能为空";
+        }
+        if (anchorText.length() > 255) {
+            return "Error: 目标文本过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+        }
+        if (styleName == null || styleName.isBlank()) {
+            return "Error: 样式名不能为空";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("anchorText", anchorText);
+        args.put("applyToAll", applyToAll != null && applyToAll);
+        args.put("styleName", styleName.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "apply_style", args);
+    }
+
+    // ==================== Word 内容控件（office_manage_content_control，批次 9，WordApi 1.1） ====================
+
+    @Tool("管理当前 Word 文档中的内容控件（富文本类型，用于绑定/标记文档中的特定区域，如模板填空场景）。" +
+          "insert：用 anchorText 定位一段文本，该文本所在的**整个段落**会被包进新内容控件（不是仅那段文本），" +
+          "tag 是该控件的标识（后续用它定位，必填），" +
+          "title 是显示给用户的可选标签。read：用 tag 找到控件并返回其文本内容。set_text：用 tag 找到控件并整体替换其文本。" +
+          "delete：用 tag 找到控件并删除（keepContent=true 时只删控件外壳保留文字内容，缺省 false 连内容一起删）。" +
+          "tag 在同一文档内应保持唯一，重复 tag 时各操作只命中第一个。需要 WordApi 1.1；insert/set_text/delete 以 Word 原生修订形式呈现。")
+    @ToolMeta(displayName = "管理内容控件", category = "office", fileEffect = "MODIFIED")
+    public String office_manage_content_control(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("动作：insert/read/set_text/delete") String action,
+            @P("定位锚点文本（insert 时必填，须与文档精确一致）") String anchorText,
+            @P("内容控件标识（insert 时必填用于新建；read/set_text/delete 时必填用于定位）") String tag,
+            @P("控件显示标签（可选，仅 insert 用）") String title,
+            @P("新文本内容（set_text 时必填）") String text,
+            @P("delete 时是否保留内容只删控件外壳（缺省 false）") Boolean keepContent
+    ) {
+        log.info("Tool: office_manage_content_control called, action={}, tag={}", action, tag);
+        String actionValue;
+        try {
+            actionValue = normalizeEnum(action, CONTENT_CONTROL_ACTIONS, "action");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (actionValue == null) {
+            return "Error: action 不能为空（insert/read/set_text/delete）";
+        }
+        if ("insert".equals(actionValue)) {
+            if (anchorText == null || anchorText.isBlank()) {
+                return "Error: insert 需要 anchorText（须与文档精确一致）";
+            }
+            if (anchorText.length() > 255) {
+                return "Error: anchorText 过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+            }
+            if (tag == null || tag.isBlank()) {
+                return "Error: insert 需要 tag（内容控件标识）";
+            }
+        } else {
+            if (tag == null || tag.isBlank()) {
+                return "Error: " + actionValue + " 需要 tag（定位目标内容控件）";
+            }
+            if ("set_text".equals(actionValue) && text == null) {
+                return "Error: set_text 需要 text（新文本内容，删除文本请传空字符串）";
+            }
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("action", actionValue);
+        args.put("tag", tag.trim());
+        if ("insert".equals(actionValue)) {
+            args.put("anchorText", anchorText);
+            if (title != null && !title.isBlank()) args.put("title", title.trim());
+        } else if ("set_text".equals(actionValue)) {
+            args.put("text", text);
+        } else if ("delete".equals(actionValue)) {
+            args.put("keepContent", keepContent != null && keepContent);
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "manage_content_control", args);
+    }
+
+    // ==================== Word 文档属性（office_set_document_properties，批次 9，WordApi 1.3） ====================
+
+    @Tool("设置当前 Word 文档的内置属性：标题、主题、作者、关键词、备注、分类。参数至少要给一个，没传的保持原样。" +
+          "需要 WordApi 1.3。这是文档元数据，不产生 Word 修订记录（属性面板本身没有修订机制）。")
+    @ToolMeta(displayName = "设置文档属性", category = "office", fileEffect = "MODIFIED")
+    public String office_set_document_properties(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("标题（不改则不传）") String title,
+            @P("主题（不改则不传）") String subject,
+            @P("作者（不改则不传）") String author,
+            @P("关键词（不改则不传）") String keywords,
+            @P("备注（不改则不传）") String comments,
+            @P("分类（不改则不传）") String category
+    ) {
+        log.info("Tool: office_set_document_properties called");
+        Map<String, Object> args = new HashMap<>();
+        if (title != null) args.put("title", title);
+        if (subject != null) args.put("subject", subject);
+        if (author != null) args.put("author", author);
+        if (keywords != null) args.put("keywords", keywords);
+        if (comments != null) args.put("comments", comments);
+        if (category != null) args.put("category", category);
+        if (args.isEmpty()) {
+            return "Error: 未给出任何属性参数（title/subject/author/keywords/comments/category 至少给一个）";
+        }
+        return officeBridgeService.executeOfficeCommand(conversationId, "set_document_properties", args);
+    }
+
+    // ==================== PowerPoint 表格与超链接（office_ppt_*，批次 9） ====================
+
+    @Tool("在当前 PowerPoint 演示文稿的指定幻灯片上插入一张表格。slideNumber 从 1 起。rowsJson 是 JSON 二维字符串数组" +
+          "（矩形，每行列数一致），如 [[\"项目\",\"金额\"],[\"咨询费\",\"10000\"]]；不传则插入空白 rows x cols 表格" +
+          "（此时 rows/cols 必填）。left/top/width/height 单位磅，不传则用默认位置尺寸。需要 PowerPointApi 1.8。" +
+          "直接生效（PowerPoint 没有修订机制）。")
+    @ToolMeta(displayName = "插入表格", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_add_table(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标幻灯片页码（1 起）") Integer slideNumber,
+            @P("表格内容，JSON 二维字符串数组（矩形）（可选；不传则用 rows/cols 建空表）") String rowsJson,
+            @P("行数（rowsJson 未给时必填）") Integer rows,
+            @P("列数（rowsJson 未给时必填）") Integer cols,
+            @P("左边距（磅）（不传则用默认值）") Double left,
+            @P("上边距（磅）（不传则用默认值）") Double top,
+            @P("宽度（磅）（不传则用默认值）") Double width,
+            @P("高度（磅）（不传则用默认值）") Double height
+    ) {
+        log.info("Tool: office_ppt_add_table called, slideNumber={}", slideNumber);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        java.util.List<java.util.List<String>> rowsData = null;
+        if (rowsJson != null && !rowsJson.isBlank()) {
+            try {
+                rowsData = objectMapper.readValue(rowsJson,
+                        new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.List<String>>>() {});
+            } catch (Exception e) {
+                return "Error: rowsJson 不是合法的 JSON 二维数组，示例：[[\"项目\",\"金额\"],[\"咨询费\",\"10000\"]]";
+            }
+            if (rowsData.isEmpty() || rowsData.get(0) == null || rowsData.get(0).isEmpty()) {
+                return "Error: rowsJson 不能为空表";
+            }
+            int cols0 = rowsData.get(0).size();
+            for (java.util.List<String> row : rowsData) {
+                if (row == null || row.size() != cols0) {
+                    return "Error: rowsJson 必须是矩形二维数组（每行列数一致）";
+                }
+            }
+        } else if (rows == null || rows < 1 || cols == null || cols < 1) {
+            return "Error: 未提供 rowsJson 时必须给出 rows 与 cols（正整数）";
+        }
+        if (width != null && width <= 0) return "Error: width 须为大于 0 的磅值";
+        if (height != null && height <= 0) return "Error: height 须为大于 0 的磅值";
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        if (rowsData != null) {
+            args.put("rows", rowsData);
+        } else {
+            args.put("rowCount", rows);
+            args.put("colCount", cols);
+        }
+        if (left != null) args.put("left", left);
+        if (top != null) args.put("top", top);
+        if (width != null) args.put("width", width);
+        if (height != null) args.put("height", height);
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_add_table", args);
+    }
+
+    @Tool("把当前 PowerPoint 演示文稿指定幻灯片上一张表格读成二维数组。slideNumber 从 1 起，shapeId 是表格所在形状的 id" +
+          "（office_ppt_get_slide_details 可查到；不传则取该页第一张表格）。需要 PowerPointApi 1.8。")
+    @ToolMeta(displayName = "读取表格", category = "office")
+    public String office_ppt_table_read(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标幻灯片页码（1 起）") Integer slideNumber,
+            @P("表格所在形状 id（可选；不传则取该页第一张表格）") String shapeId
+    ) {
+        log.info("Tool: office_ppt_table_read called, slideNumber={}, shapeId={}", slideNumber, shapeId);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        if (shapeId != null && !shapeId.isBlank()) args.put("shapeId", shapeId.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_table_read", args);
+    }
+
+    @Tool("改当前 PowerPoint 演示文稿指定幻灯片上一张表格中一个单元格的文本（整格替换）。" +
+          "先用 office_ppt_table_read 看清表格坐标再改。row/col 均 0 开始。shapeId 不传则取该页第一张表格。" +
+          "直接生效（PowerPoint 没有修订机制）。需要 PowerPointApi 1.8。")
+    @ToolMeta(displayName = "修改表格单元格", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_table_set_cell(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标幻灯片页码（1 起）") Integer slideNumber,
+            @P("表格所在形状 id（可选；不传则取该页第一张表格）") String shapeId,
+            @P("行号（0 开始）") Integer row,
+            @P("列号（0 开始）") Integer col,
+            @P("该单元格的新文本") String text
+    ) {
+        log.info("Tool: office_ppt_table_set_cell called, slideNumber={}, row={}, col={}", slideNumber, row, col);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        if (row == null || row < 0) return "Error: row 不能为空且不能为负（0 开始）";
+        if (col == null || col < 0) return "Error: col 不能为空且不能为负（0 开始）";
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        if (shapeId != null && !shapeId.isBlank()) args.put("shapeId", shapeId.trim());
+        args.put("row", row);
+        args.put("col", col);
+        args.put("text", text == null ? "" : text);
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_table_set_cell", args);
+    }
+
+    @Tool("在当前 PowerPoint 演示文稿中查找文本并把它设置为超链接。slideNumber 从 1 起，searchText 须与幻灯片文本" +
+          "精确一致（命中第一处）。url 只认 http/https 协议。直接生效（PowerPoint 没有修订机制）。需要 PowerPointApi 1.10。")
+    @ToolMeta(displayName = "设置超链接", category = "office", fileEffect = "MODIFIED")
+    public String office_ppt_set_hyperlink(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标幻灯片页码（1 起）") Integer slideNumber,
+            @P("要设置超链接的文本（须与幻灯片文本精确一致）") String searchText,
+            @P("链接地址，须以 http:// 或 https:// 开头") String url
+    ) {
+        log.info("Tool: office_ppt_set_hyperlink called, slideNumber={}, url={}", slideNumber, url);
+        if (slideNumber == null || slideNumber < 1 || slideNumber > MAX_PPT_SLIDE_NUMBER) {
+            return "Error: slideNumber 须为 1~" + MAX_PPT_SLIDE_NUMBER + " 之间的整数";
+        }
+        if (searchText == null || searchText.isBlank()) {
+            return "Error: 查找文本不能为空";
+        }
+        if (searchText.length() > 255) {
+            return "Error: 查找文本过长（上限 255 字符），请缩短后重试";
+        }
+        if (url == null || url.isBlank() || !HTTP_URL.matcher(url.trim()).matches()) {
+            return "Error: url 须以 http:// 或 https:// 开头";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("slideNumber", slideNumber);
+        args.put("searchText", searchText);
+        args.put("url", url.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "ppt_set_hyperlink", args);
     }
 }

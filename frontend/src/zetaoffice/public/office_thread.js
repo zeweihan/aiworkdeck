@@ -235,8 +235,22 @@ function countComments() {
   } catch (e) {}
   return n;
 }
-function commentAt(index) {
-  const want = Number(index);
+// ref 接受两种形状：数字 index（枚举顺序，ReviewPanel 既有用法）或字符串 id
+// （批注的 Name 属性——AI 工具面用它替代 index，因为 index 在任何一条批注被
+// 处置/删除后就会整体前移，同一会话里两次调用之间不可靠）。
+function commentAt(ref) {
+  if (typeof ref === 'string' && ref !== '' && !/^\d+$/.test(ref)) {
+    try {
+      const en = xModel.getTextFields().createEnumeration();
+      while (en.hasMoreElements()) {
+        const f = en.nextElement();
+        if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+        try { if (String(f.getPropertyValue('Name')) === ref) return f; } catch (e) {}
+      }
+    } catch (e) {}
+    return null;
+  }
+  const want = Number(ref);
   if (!(want >= 0)) return null;
   try {
     const en = xModel.getTextFields().createEnumeration();
@@ -248,6 +262,9 @@ function commentAt(index) {
     }
   } catch (e) {}
   return null;
+}
+function commentIdOf(f) {
+  try { return String(f.getPropertyValue('Name') || ''); } catch (e) { return ''; }
 }
 // Insert text at the view cursor, honoring '\n' as a PARAGRAPH BREAK.
 // XText.insertString does NOT split paragraphs on '\n' (verified against the
@@ -1128,6 +1145,41 @@ function testInsertText(text) {
       log('inserttext: 经 UNO XText.insertString 追加「' + t + '」(无 ViewCursor 回退)。');
     }
   } catch (e) { log('inserttext ERROR: ' + errStr(e)); }
+}
+
+// ---- 脚注/尾注 helper --------------------------------------------------------
+// com.sun.star.text.Footnote 服务同时承载脚注与尾注——由 IsEndnote 属性区分
+// （常见 LO/OOo 宏写法）；该服务本身实现 XText，footnote.setString() 直接写
+// 注释正文。锚点插在光标处，可选 anchorId 复用既有 anchorRange() 精确定位。
+function insertFootnoteImpl(p, isEndnote) {
+  if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+  const text = p && p.text != null ? String(p.text) : '';
+  if (!text) return tableFail((isEndnote ? 'insert_endnote' : 'insert_footnote') + ' requires {text}');
+  const anchorId = p && p.anchor ? String(p.anchor) : '';
+  const vc = ctrl.getViewCursor();
+  if (anchorId) {
+    const r = anchorRange(anchorId);
+    if (!r) return tableFail('anchor not found: ' + anchorId);
+    try { vc.gotoRange(r.getEnd(), false); } catch (e) { return tableFail('无法定位锚点: ' + errStr(e)); }
+  } else {
+    vc.collapseToEnd();
+  }
+  let note;
+  try {
+    note = xModel.createInstance('com.sun.star.text.Footnote');
+  } catch (e) { return tableFail('创建' + (isEndnote ? '尾注' : '脚注') + '失败: ' + errStr(e)); }
+  if (isEndnote) {
+    try { note.setPropertyValue('IsEndnote', true); }
+    catch (e) { return tableFail('引擎不支持尾注（IsEndnote 属性设置失败）: ' + errStr(e)); }
+  }
+  try {
+    vc.getText().insertTextContent(vc, note, false);
+    note.setString(text);
+  } catch (e) { return tableFail('插入' + (isEndnote ? '尾注' : '脚注') + '失败: ' + errStr(e)); }
+  try { vc.collapseToEnd(); } catch (e) {}
+  let label = '';
+  try { label = String(note.getLabel() || ''); } catch (e) {}
+  return { success: true, text: text, label: label, endnote: !!isEndnote, anchor: anchorId || null };
 }
 
 // ==========================================================================
@@ -2400,6 +2452,29 @@ const EXEC = {
     cur.setPropertyValue('HyperLinkURL', url);
     return { success: true, text: text, url: url };
   },
+  // [Word 二期] AI 工具面的超链接原语——与 set_selection_hyperlink（host-initiated，
+  // 靠"当前选区"）不同，这里直接吃 anchor 参数，一次 worker 往返完成"找到锚点→
+  // 选中→设置"，走的是 replace_at_position（doc_replace_at_anchor 的下发目标）
+  // 同一先例：AI 工具面每次调用都是独立请求，两次请求之间"当前选区"不可靠，
+  // 必须靠锚点自己定位，不能依赖调用前谁选中了什么。
+  set_hyperlink_at_anchor(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const url = String((p && p.url) || '');
+    if (!url) return tableFail('set_hyperlink_at_anchor requires {url}');
+    if (!/^https?:\/\//i.test(url)) return tableFail('url 仅支持 http/https: ' + url);
+    const anchorId = p && p.anchor ? String(p.anchor) : '';
+    if (!anchorId) return tableFail('set_hyperlink_at_anchor requires {anchor}');
+    const range = anchorRange(anchorId);
+    if (!range) return tableFail('anchor not found: ' + anchorId);
+    if (!selectVisibly(range)) return tableFail('could not select anchor: ' + anchorId);
+    const text = range.getString() || '';
+    try {
+      const xText = range.getText();
+      const cur = xText.createTextCursorByRange(range);
+      cur.setPropertyValue('HyperLinkURL', url);
+    } catch (e) { return tableFail('设置超链接失败: ' + errStr(e)); }
+    return { success: true, anchor: anchorId, text: text, url: url };
+  },
   // insert {text} at the view cursor wrapped in a named bookmark, optionally
   // hyperlinked — the WPS-era insertEvidenceLink/insertTextWithBookmark (网核
   // 证据标记). Same insert shape as var_insert (bookmark spans the inserted run).
@@ -2520,6 +2595,112 @@ const EXEC = {
       paragraph: (paragraphTextOf(range) || '').slice(0, 200),
     };
   },
+  // ---- [Word 二期] 结构面：脚注/尾注、页眉页脚、分页/分节符、样式 -----------
+  // 文档能力矩阵（4.2 节）桌面端待办：批注/修订/超链接/图片是"包一层 AI 工具面
+  // 就够"，这一组是真正的新 worker 实现。
+  insert_footnote(p) { return insertFootnoteImpl(p, false); },
+  insert_endnote(p) { return insertFootnoteImpl(p, true); },
+  // 首节页眉/页脚文本 + 对齐。只处理文档的第一个（也是最常见情形下唯一的）页面
+  // 样式——按节差异化页眉页脚不在本次范围内（法律文件极少见，与 office_addin
+  // 侧 edit_header_footer"只处理首节"同一简化）。UNO 没有直接的"当前生效页面
+  // 样式"查询点：把视图光标挪到文档开头读 PageStyleName 是宏录制的标准取法
+  // （内部名恒为英文如 'Standard'，UI 显示才随 zh-CN 语言包本地化，因此不受
+  // 语言包影响）。
+  edit_header_footer(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const target = String((p && p.target) || 'header').toLowerCase();
+    if (target !== 'header' && target !== 'footer') return tableFail("target must be 'header' or 'footer'");
+    const text = p && p.text != null ? String(p.text) : null;
+    if (text == null) return tableFail('edit_header_footer requires {text}');
+    const ALIGN_MAP = { left: css.style.ParagraphAdjust.LEFT, right: css.style.ParagraphAdjust.RIGHT, center: css.style.ParagraphAdjust.CENTER, justify: css.style.ParagraphAdjust.BLOCK };
+    let alignValue = null;
+    if (p && p.align != null) {
+      alignValue = ALIGN_MAP[String(p.align).toLowerCase()];
+      // 先校验参数、后落笔——避免"对齐值非法"时页眉页脚文本已经写了一半
+      if (alignValue == null) return tableFail('bad align: ' + p.align + ' (left/right/center/justify)');
+    }
+    let styleName = '';
+    try {
+      const vc = ctrl.getViewCursor();
+      const savedRange = vc.getStart();
+      vc.gotoStart(false);
+      styleName = String(vc.getPropertyValue('PageStyleName') || '');
+      vc.gotoRange(savedRange, false);
+    } catch (e) { return tableFail('无法定位页面样式: ' + errStr(e)); }
+    if (!styleName) return tableFail('无法确定文档的页面样式');
+    let pageStyle;
+    try { pageStyle = xModel.getStyleFamilies().getByName('PageStyles').getByName(styleName); }
+    catch (e) { return tableFail('读取页面样式失败: ' + errStr(e)); }
+    const isOnProp = target === 'header' ? 'HeaderIsOn' : 'FooterIsOn';
+    const textProp = target === 'header' ? 'HeaderText' : 'FooterText';
+    try {
+      pageStyle.setPropertyValue(isOnProp, true);
+      const xt = pageStyle.getPropertyValue(textProp);
+      xt.setString(text);
+      if (alignValue != null) {
+        const en = xt.createEnumeration();
+        while (en.hasMoreElements()) {
+          const para = en.nextElement();
+          if (para.supportsService && para.supportsService('com.sun.star.text.Paragraph')) {
+            try { para.setPropertyValue('ParaAdjust', alignValue); } catch (e) {}
+          }
+        }
+      }
+    } catch (e) { return tableFail('设置' + (target === 'header' ? '页眉' : '页脚') + '失败: ' + errStr(e)); }
+    return { success: true, target: target, pageStyle: styleName, text: text };
+  },
+  // 分页符/分节符（Word 语义的"下一页"分节符）。页内插入而非追加：先在光标处
+  // 打一个段落断（把光标后的内容推到新段），再给这个新段打上 BreakType（纯分页）
+  // 或 PageDescName（分节——沿用当前页面样式起一个新的"页面样式序列"，这是
+  // UNO/ODF 与 Word 分节机制互通的标准写法，export 到 docx 落成真正的 <w:sectPr>）。
+  insert_break(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const breakType = String((p && p.breakType) || 'page').toLowerCase();
+    if (breakType !== 'page' && breakType !== 'sectionnext') return tableFail("breakType must be 'page' or 'sectionNext'");
+    const vc = ctrl.getViewCursor();
+    const xText = vc.getText();
+    vc.collapseToEnd(); // 塌陷选区，避免连带删掉已选中的文本
+    let styleName = '';
+    if (breakType === 'sectionnext') {
+      try { styleName = String(vc.getPropertyValue('PageStyleName') || ''); } catch (e) {}
+      if (!styleName) return tableFail('无法确定当前页面样式，无法插入分节符');
+    }
+    try {
+      xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+      if (breakType === 'page') vc.setPropertyValue('BreakType', css.style.BreakType.PAGE_BEFORE);
+      else vc.setPropertyValue('PageDescName', styleName);
+    } catch (e) { return tableFail('插入' + (breakType === 'page' ? '分页符' : '分节符') + '失败: ' + errStr(e)); }
+    return { success: true, breakType: breakType === 'page' ? 'page' : 'sectionNext' };
+  },
+  // 应用既有样式（段落样式 ParaStyleName / 字符样式 CharStyleName）。与
+  // doc_format_selection / doc_set_paragraph_format 同一约定：不接 anchor 参数，
+  // 作用于"当前选区/光标"——AI 侧先 doc_select_anchor / doc_select_paragraph
+  // 选中目标，再调用本原语，与那两个格式化原语的调用序列完全一致，不必再引入
+  // 第二套"直接传 anchor"的调用方式徒增分叉。
+  set_style(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const kind = String((p && p.kind) || 'paragraph').toLowerCase();
+    if (kind !== 'paragraph' && kind !== 'character') return tableFail("kind must be 'paragraph' or 'character'");
+    const styleName = p && p.styleName ? String(p.styleName) : '';
+    if (!styleName) return tableFail('set_style requires {styleName}');
+    const familyName = kind === 'paragraph' ? 'ParagraphStyles' : 'CharacterStyles';
+    let family;
+    try { family = xModel.getStyleFamilies().getByName(familyName); }
+    catch (e) { return tableFail('读取样式库失败: ' + errStr(e)); }
+    if (!family.hasByName(styleName)) {
+      const names = (family.getElementNames && family.getElementNames()) || [];
+      return tableFail('样式不存在: ' + styleName + '（可用样式：' + names.slice(0, 20).join('、')
+        + (names.length > 20 ? ' 等共 ' + names.length + ' 个' : '') + '）');
+    }
+    const vc = ctrl.getViewCursor();
+    if (kind === 'character' && (vc.getString() || '').length === 0) {
+      return tableFail('未选中文本：字符样式需要先选中要套样式的文字（doc_select_anchor / doc_select_paragraph）');
+    }
+    const propName = kind === 'paragraph' ? 'ParaStyleName' : 'CharStyleName';
+    try { vc.setPropertyValue(propName, styleName); }
+    catch (e) { return tableFail('应用样式失败: ' + errStr(e)); }
+    return { success: true, kind: kind, styleName: styleName, text: (vc.getString() || '').slice(0, 200) };
+  },
   // ---- [审阅面板] 修订与批注的清单 / 定位 / 逐条处置 --------------------
   // 页边显示解决了「删除文本压正文」，但同一表格行多格删除仍会在页边同高互叠，
   // 且页边小字读不到作者/时间。审阅面板（宿主右栏）用下面这组原语驱动：列出、
@@ -2559,7 +2740,7 @@ const EXEC = {
         it.text = String(it.text || '').slice(0, 120);
         out.push(it);
       }
-    } catch (e) { return { success: false, message: errStr(e) }; }
+    } catch (e) { return tableFail(errStr(e)); }
     return { success: true, count: out.length, revisions: out };
   },
   goto_revision(p) {
@@ -2576,10 +2757,10 @@ const EXEC = {
   // 多出一条空插入修订。
   resolve_revision(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
-    if (action !== 'accept' && action !== 'reject') return { success: false, message: "action must be accept|reject" };
+    if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const r = redlineAt(p && p.index);
-    if (!r) return { success: false, message: 'no revision at index ' + (p && p.index) };
-    if (!selectRedlineRange(r, true)) return { success: false, message: 'could not select revision range' };
+    if (!r) return tableFail('no revision at index ' + (p && p.index));
+    if (!selectRedlineRange(r, true)) return tableFail('could not select revision range');
     const before = countRedlines();
     css.frame.DispatchHelper.create(context).executeDispatch(
       ctrl.getFrame(), action === 'accept' ? '.uno:AcceptTrackedChange' : '.uno:RejectTrackedChange', '', 0, []);
@@ -2587,11 +2768,11 @@ const EXEC = {
     // dispatch 不报错也可能没命中——用条数变化确认，别对用户谎报成功
     return after < before
       ? { success: true, index: Number(p.index), action: action, remaining: after }
-      : { success: false, message: '修订未被处置（引擎未命中该条）', remaining: after };
+      : Object.assign(tableFail('修订未被处置（引擎未命中该条）'), { remaining: after });
   },
   resolve_all_revisions(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
-    if (action !== 'accept' && action !== 'reject') return { success: false, message: "action must be accept|reject" };
+    if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const before = countRedlines();
     css.frame.DispatchHelper.create(context).executeDispatch(
       ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
@@ -2606,6 +2787,7 @@ const EXEC = {
         const f = en.nextElement();
         if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
         const it = { index: out.length };
+        try { it.id = commentIdOf(f); } catch (e) {}
         try { it.author = f.getPropertyValue('Author'); } catch (e) {}
         try { it.content = String(f.getPropertyValue('Content') || '').slice(0, 500); } catch (e) {}
         try {
@@ -2620,7 +2802,7 @@ const EXEC = {
         } catch (e) {}
         out.push(it);
       }
-    } catch (e) { return { success: false, message: errStr(e) }; }
+    } catch (e) { return tableFail(errStr(e)); }
     return { success: true, count: out.length, comments: out };
   },
   goto_comment(p) {
@@ -2629,20 +2811,24 @@ const EXEC = {
     try { return selectVisibly(f.getAnchor()) ? { success: true, index: Number(p.index) } : { success: false, message: 'could not select anchor' }; }
     catch (e) { return { success: false, message: errStr(e) }; }
   },
+  // AI 工具面（doc_resolve_comment）与 ReviewPanel（{index}）共用本原语：ref 优先
+  // 取 id（commentAt 按 Name 定位，跨调用稳定），没有 id 才退回 index。
   set_comment_resolved(p) {
-    const f = commentAt(p && p.index);
-    if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
+    const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
+    const f = commentAt(ref);
+    if (!f) return tableFail('no comment at ' + ref);
     try {
       f.setPropertyValue('Resolved', !!(p && p.resolved));
-      return { success: true, index: Number(p.index), resolved: !!f.getPropertyValue('Resolved') };
-    } catch (e) { return { success: false, message: errStr(e) }; }
+      return { success: true, id: commentIdOf(f), resolved: !!f.getPropertyValue('Resolved') };
+    } catch (e) { return tableFail(errStr(e)); }
   },
   // 删除批注：removeTextContent 是正路。**dispose() 不能信**——它在本引擎上
   // 既不抛异常也不真的移除批注字段（真机实证），照着它的返回值报成功就是骗
   // 用户。两条路都跑完还要用条数复核。
   delete_comment(p) {
-    const f = commentAt(p && p.index);
-    if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
+    const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
+    const f = commentAt(ref);
+    if (!f) return tableFail('no comment at ' + ref);
     const before = countComments();
     const errs = [];
     // 主路：定位到批注锚点后派发 .uno:DeleteComment，**Id 参数（批注的 Name）
@@ -2654,8 +2840,7 @@ const EXEC = {
     try { if (f.getPropertyValue('Resolved')) f.setPropertyValue('Resolved', false); } catch (e) {}
     try { selectVisibly(f.getAnchor()); } catch (e) { errs.push(errStr(e)); }
     try {
-      let name = '';
-      try { name = String(f.getPropertyValue('Name') || ''); } catch (e) { errs.push(errStr(e)); }
+      const name = commentIdOf(f);
       css.frame.DispatchHelper.create(context).executeDispatch(
         ctrl.getFrame(), '.uno:DeleteComment', '', 0, [mkProp('Id', name)]);
     } catch (e) { errs.push(errStr(e)); }
@@ -2664,8 +2849,54 @@ const EXEC = {
     }
     const after = countComments();
     return after < before
-      ? { success: true, index: Number(p.index), remaining: after }
-      : { success: false, message: '批注未被删除' + (errs.length ? '：' + errs.join(' | ') : ''), remaining: after };
+      ? { success: true, remaining: after }
+      : Object.assign(tableFail('批注未被删除' + (errs.length ? '：' + errs.join(' | ') : '')), { remaining: after });
+  },
+  // [批注回复] 是否有真正的原生线程回复（LO 的 ParentId/ParentName 一类属性）
+  // 在这个引擎版本上待查证——vendored zeta.js 未见相关 typedef，无法在不接
+  // 真机的情况下确认属性名。保守做法：复用已验证可靠的 .uno:InsertAnnotation
+  // 路径（与 add_comment 同一先例），在父批注同一锚点区间上追加一条新批注，
+  // 内容前缀"回复 {父批注作者}："保证语义可读；随后 best-effort 尝试挂
+  // ParentId/ParentName 两个候选属性名，成功与否都不影响主流程（失败静默吞掉，
+  // 因为这只是锦上添花的原生线程标记，不是功能是否可用的判据）。
+  reply_comment(p) {
+    const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
+    const parent = commentAt(ref);
+    if (!parent) return tableFail('未找到要回复的批注: ' + ref);
+    const text = String((p && p.text) || '');
+    if (!text) return tableFail('reply_comment requires {text}');
+    let parentAuthor = '';
+    const parentId = commentIdOf(parent);
+    try { parentAuthor = String(parent.getPropertyValue('Author') || ''); } catch (e) {}
+    let anchor;
+    try { anchor = parent.getAnchor(); } catch (e) { return tableFail('无法定位批注锚点: ' + errStr(e)); }
+    if (!selectVisibly(anchor)) return tableFail('无法选中批注锚点');
+    const before = {};
+    try {
+      const en = xModel.getTextFields().createEnumeration();
+      while (en.hasMoreElements()) {
+        const f = en.nextElement();
+        if (f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation')) before[commentIdOf(f)] = true;
+      }
+    } catch (e) {}
+    const replyContent = (parentAuthor ? ('回复 ' + parentAuthor + '：') : '') + text;
+    css.frame.DispatchHelper.create(context).executeDispatch(
+      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+      [mkProp('Text', replyContent), mkProp('Author', AI_AUTHOR)]);
+    let newField = null, newName = '';
+    try {
+      const en2 = xModel.getTextFields().createEnumeration();
+      while (en2.hasMoreElements()) {
+        const f = en2.nextElement();
+        if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+        const nm = commentIdOf(f);
+        if (nm && !before[nm]) { newField = f; newName = nm; }
+      }
+    } catch (e) {}
+    if (!newField) return tableFail('回复未生效（引擎未产生新批注）');
+    try { newField.setPropertyValue('ParentId', parentId); } catch (e) {}
+    try { newField.setPropertyValue('ParentName', parentId); } catch (e) {}
+    return { success: true, id: newName, parentId: parentId, author: AI_AUTHOR, text: text };
   },
   // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
   // 一直派发 debug_revisions，worker 此前未实现（一律返回 not implemented）；

@@ -1007,6 +1007,317 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "查看批注", category = "document")
+    @Tool("【看/批注】列出文档中的全部批注：作者、时间、内容、附着的文本摘要、所在段落、id（用于回复/解决/删除）、是否已解决。" +
+          "处置某条批注前先用本工具确认 id。")
+    public String doc_get_comments() {
+        log.info("Tool: doc_get_comments called");
+        try {
+            return editorBridgeService.executeEditorCommand("list_comments", null);
+        } catch (Exception e) {
+            log.error("Failed to get comments", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "回复批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【批注】回复一条已有批注（commentId 来自 doc_get_comments 返回的 id）。回复以新批注呈现，" +
+          "附着在同一处文本，内容自动标出回复对象；署名 AI Workdeck。")
+    public String doc_reply_comment(
+            @P("要回复的批注 id（来自 doc_get_comments）") String commentId,
+            @P("回复内容") String text
+    ) {
+        log.info("Tool: doc_reply_comment called commentId={}", commentId);
+        if (commentId == null || commentId.isBlank()) {
+            return "Error: 缺少 commentId 参数（来自 doc_get_comments 返回的 id）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("id", commentId);
+            params.put("text", text != null ? text : "");
+            return editorBridgeService.executeEditorCommand("reply_comment", params);
+        } catch (Exception e) {
+            log.error("Failed to reply comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "解决批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【批注】把一条批注标记为已解决/取消已解决（commentId 来自 doc_get_comments 返回的 id）。")
+    public String doc_resolve_comment(
+            @P("批注 id（来自 doc_get_comments）") String commentId,
+            @P("true=标记已解决，false=取消已解决，默认 true") Boolean resolved
+    ) {
+        log.info("Tool: doc_resolve_comment called commentId={}, resolved={}", commentId, resolved);
+        if (commentId == null || commentId.isBlank()) {
+            return "Error: 缺少 commentId 参数（来自 doc_get_comments 返回的 id）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("id", commentId);
+            params.put("resolved", resolved == null || resolved);
+            return editorBridgeService.executeEditorCommand("set_comment_resolved", params);
+        } catch (Exception e) {
+            log.error("Failed to resolve comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "删除批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【批注】删除一条批注（commentId 来自 doc_get_comments 返回的 id）。删除不可撤销为修订，删前先确认。")
+    public String doc_delete_comment(
+            @P("批注 id（来自 doc_get_comments）") String commentId
+    ) {
+        log.info("Tool: doc_delete_comment called commentId={}", commentId);
+        if (commentId == null || commentId.isBlank()) {
+            return "Error: 缺少 commentId 参数（来自 doc_get_comments 返回的 id）";
+        }
+        try {
+            return editorBridgeService.executeEditorCommand("delete_comment", java.util.Map.of("id", commentId));
+        } catch (Exception e) {
+            log.error("Failed to delete comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== 修订处置（接受/拒绝） ====================
+    // 页边小字读不到作者/时间，修订的权威视图是审阅面板（ReviewPanel.vue）；
+    // 这组工具让 AI 也能走同一条 worker 原语（resolve_revision/resolve_all_revisions）。
+
+    @ToolMeta(displayName = "查看修订", category = "document")
+    @Tool("【看/修订】列出文档当前的全部修订记录：index（0 开始）、类型（Insert/Delete/...）、作者、日期、" +
+          "文本摘要、所在段落、是否在表格内。接受/拒绝一条后其余条目的 index 会前移，处置多条前重新调用本工具确认最新编号。")
+    public String doc_list_revisions() {
+        log.info("Tool: doc_list_revisions called");
+        try {
+            return editorBridgeService.executeEditorCommand("list_revisions", null);
+        } catch (Exception e) {
+            log.error("Failed to list revisions", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "接受修订", category = "document", fileEffect = "MODIFIED")
+    @Tool("【修订】接受一条修订（index 来自 doc_list_revisions，0 开始）。")
+    public String doc_accept_revision(
+            @P("修订序号，0 开始（来自 doc_list_revisions）") Integer index
+    ) {
+        log.info("Tool: doc_accept_revision called index={}", index);
+        if (index == null) return "Error: 缺少 index 参数（来自 doc_list_revisions）";
+        return dispatchRevisionResolve(index, "accept");
+    }
+
+    @ToolMeta(displayName = "拒绝修订", category = "document", fileEffect = "MODIFIED")
+    @Tool("【修订】拒绝一条修订（index 来自 doc_list_revisions，0 开始）。")
+    public String doc_reject_revision(
+            @P("修订序号，0 开始（来自 doc_list_revisions）") Integer index
+    ) {
+        log.info("Tool: doc_reject_revision called index={}", index);
+        if (index == null) return "Error: 缺少 index 参数（来自 doc_list_revisions）";
+        return dispatchRevisionResolve(index, "reject");
+    }
+
+    private String dispatchRevisionResolve(Integer index, String action) {
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("index", index);
+            params.put("action", action);
+            return editorBridgeService.executeEditorCommand("resolve_revision", params);
+        } catch (Exception e) {
+            log.error("Failed to resolve revision", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "接受全部修订", category = "document", fileEffect = "MODIFIED")
+    @Tool("【修订】一次性接受文档中的全部修订。这是批量不可逐条撤销的操作，先确认这确实是用户想要的。")
+    public String doc_accept_all_revisions() {
+        log.info("Tool: doc_accept_all_revisions called");
+        return dispatchRevisionResolveAll("accept");
+    }
+
+    @ToolMeta(displayName = "拒绝全部修订", category = "document", fileEffect = "MODIFIED")
+    @Tool("【修订】一次性拒绝文档中的全部修订。")
+    public String doc_reject_all_revisions() {
+        log.info("Tool: doc_reject_all_revisions called");
+        return dispatchRevisionResolveAll("reject");
+    }
+
+    private String dispatchRevisionResolveAll(String action) {
+        try {
+            return editorBridgeService.executeEditorCommand("resolve_all_revisions", java.util.Map.of("action", action));
+        } catch (Exception e) {
+            log.error("Failed to resolve all revisions", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== Word 结构面（页眉页脚/分页分节/脚注尾注/超链接/图片/样式） ====================
+
+    @ToolMeta(displayName = "设置页眉页脚", category = "document", fileEffect = "MODIFIED")
+    @Tool("【结构】设置文档首节的页眉或页脚文本（只处理第一个页面样式，法律文件极少按节区分页眉页脚）。" +
+          "target: header/footer；align 可选：left/center/right/justify，不传保持原对齐。")
+    public String doc_edit_header_footer(
+            @P("header=页眉，footer=页脚") String target,
+            @P("页眉/页脚文本") String text,
+            @P("对齐：left/center/right/justify，不改则不传") String align
+    ) {
+        log.info("Tool: doc_edit_header_footer called target={}", target);
+        if (text == null) {
+            return "Error: 缺少 text 参数（页眉/页脚文本，清空传空字符串）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("target", target != null && !target.isBlank() ? target : "header");
+            params.put("text", text);
+            if (align != null && !align.isBlank()) params.put("align", align);
+            return editorBridgeService.executeEditorCommand("edit_header_footer", params);
+        } catch (Exception e) {
+            log.error("Failed to edit header/footer", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入分页分节符", category = "document", fileEffect = "MODIFIED")
+    @Tool("【结构】在光标处插入分页符或分节符（Word 语义的\"下一页\"分节符）。breakType: page=分页符 / sectionNext=分节符。" +
+          "光标后的内容会被推到新的一页。")
+    public String doc_insert_break(
+            @P("page=分页符，sectionNext=分节符（下一页）") String breakType
+    ) {
+        log.info("Tool: doc_insert_break called breakType={}", breakType);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("breakType", breakType != null && !breakType.isBlank() ? breakType : "page");
+            return editorBridgeService.executeEditorCommand("insert_break", params);
+        } catch (Exception e) {
+            log.error("Failed to insert break", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入脚注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【插入】在文中位置插入一条脚注（页面底部编号注释），常用于法律文件的引用/释义说明。" +
+          "anchorId 传 doc_find_text 返回的锚点则插在该处之后，不传则插在当前光标处。")
+    public String doc_insert_footnote(
+            @P("doc_find_text 返回的 anchorId，插入位置；不传则用当前光标") String anchorId,
+            @P("脚注正文内容") String text
+    ) {
+        log.info("Tool: doc_insert_footnote called anchor={}", anchorId);
+        return dispatchInsertNote("insert_footnote", anchorId, text);
+    }
+
+    @ToolMeta(displayName = "插入尾注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【插入】在文中位置插入一条尾注（文档末尾编号注释）。anchorId 传 doc_find_text 返回的锚点则插在该处之后，" +
+          "不传则插在当前光标处。")
+    public String doc_insert_endnote(
+            @P("doc_find_text 返回的 anchorId，插入位置；不传则用当前光标") String anchorId,
+            @P("尾注正文内容") String text
+    ) {
+        log.info("Tool: doc_insert_endnote called anchor={}", anchorId);
+        return dispatchInsertNote("insert_endnote", anchorId, text);
+    }
+
+    private String dispatchInsertNote(String action, String anchorId, String text) {
+        if (text == null || text.isBlank()) {
+            return "Error: 缺少 text 参数（注释正文内容）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (anchorId != null && !anchorId.isBlank()) params.put("anchor", anchorId);
+            params.put("text", text);
+            return editorBridgeService.executeEditorCommand(action, params);
+        } catch (Exception e) {
+            log.error("Failed to insert note via {}", action, e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置超链接", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】给指定锚点处的文本设置超链接。先 doc_find_text 拿到目标文本的 anchorId，再对它设链接；" +
+          "url 仅支持 http/https。")
+    public String doc_set_hyperlink(
+            @P("doc_find_text 返回的 anchorId（要加链接的目标文本）") String anchorId,
+            @P("链接地址，http:// 或 https:// 开头") String url
+    ) {
+        log.info("Tool: doc_set_hyperlink called anchor={}, url={}", anchorId, url);
+        if (anchorId == null || anchorId.isBlank()) {
+            return "Error: 缺少 anchorId 参数（先用 doc_find_text 定位目标文本）";
+        }
+        if (url == null || url.isBlank()) {
+            return "Error: 缺少 url 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("anchor", anchorId);
+            params.put("url", url);
+            return editorBridgeService.executeEditorCommand("set_hyperlink_at_anchor", params);
+        } catch (Exception e) {
+            log.error("Failed to set hyperlink", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入图片", category = "document", fileEffect = "MODIFIED")
+    @Tool("【插入】在光标处插入一张图片。fileId 是项目文件树里图片文件（jpg/jpeg/png/gif/bmp/webp）的文件 ID，" +
+          "上限 2MB，超限会报错——先用 doc_list_project_files 之外的方式确认体积，或让用户换一张更小的图。")
+    public String doc_insert_image(
+            @P("项目文件树中图片文件的文件 ID") Long fileId
+    ) {
+        log.info("Tool: doc_insert_image called fileId={}", fileId);
+        if (fileId == null) {
+            return "Error: 缺少 fileId 参数";
+        }
+        try {
+            ProjectFile file = projectFileService.getFile(fileId);
+            if (file == null) {
+                return "Error: 文件不存在，ID=" + fileId;
+            }
+            String denied = ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) return denied;
+            if (!isImageFile(file.getName())) {
+                return "Error: 该文件不是支持的图片格式（jpg/jpeg/png/gif/bmp/webp）: " + file.getName();
+            }
+            java.nio.file.Path path = storageResolver.resolve(file.getFilePath());
+            if (!java.nio.file.Files.exists(path)) {
+                return "Error: 图片文件在磁盘上不存在: " + file.getName();
+            }
+            long size = java.nio.file.Files.size(path);
+            final long maxBytes = 2L * 1024 * 1024;
+            if (size > maxBytes) {
+                return "Error: 图片过大（" + (size / 1024) + "KB，上限 2MB）: " + file.getName();
+            }
+            byte[] bytes = java.nio.file.Files.readAllBytes(path);
+            String base64 = java.util.Base64.getEncoder().encodeToString(bytes);
+            return editorBridgeService.executeEditorCommand("insert_image", java.util.Map.of("base64", base64));
+        } catch (Exception e) {
+            log.error("Failed to insert image", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "应用样式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】给当前选区套用文档中已有的段落样式或字符样式（按样式名，不是本工具集里的标准格式化）。" +
+          "必须先选中目标（doc_select_anchor / doc_select_paragraph）。kind=paragraph（默认）或 character；" +
+          "样式名不存在会报错并列出可用样式名供改用。")
+    public String doc_set_style(
+            @P("样式名，如 'Heading 1'、'Quotations'（引擎内部样式名，不是中文标题）") String styleName,
+            @P("paragraph=段落样式（默认），character=字符样式") String kind
+    ) {
+        log.info("Tool: doc_set_style called styleName={}, kind={}", styleName, kind);
+        if (styleName == null || styleName.isBlank()) {
+            return "Error: 缺少 styleName 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("styleName", styleName);
+            params.put("kind", kind != null && !kind.isBlank() ? kind : "paragraph");
+            return editorBridgeService.executeEditorCommand("set_style", params);
+        } catch (Exception e) {
+            log.error("Failed to set style", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
     // ==================== 电子表格（Calc / xlsx）sheet_* 原语 ====================
     // 打开的 xlsx 由同一 LibreOffice 引擎的 Calc 模块承载；doc_* 的 Writer 原语
     // （getText 一族）在表格文档上必然失败，表格操作一律走本节 sheet_* 工具。
@@ -1440,9 +1751,19 @@ public class DocumentEditTools implements AgentToolComponent {
     private boolean isEditableDocument(String fileName) {
         if (fileName == null) return false;
         String lower = fileName.toLowerCase();
-        return lower.endsWith(".docx") || lower.endsWith(".doc") 
+        return lower.endsWith(".docx") || lower.endsWith(".doc")
                 || lower.endsWith(".xlsx") || lower.endsWith(".xls")
                 || lower.endsWith(".pptx") || lower.endsWith(".ppt");
+    }
+
+    /**
+     * 判断文件是否是 doc_insert_image 支持的图片格式
+     */
+    private boolean isImageFile(String fileName) {
+        if (fileName == null) return false;
+        String lower = fileName.toLowerCase();
+        return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
+                || lower.endsWith(".gif") || lower.endsWith(".bmp") || lower.endsWith(".webp");
     }
 }
 
