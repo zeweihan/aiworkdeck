@@ -6,7 +6,12 @@ package com.checkba.service.sms;
 public interface SmsTransport {
 
     /** 对 url 发送 application/x-www-form-urlencoded POST，返回状态码与响应体。 */
-    Reply postForm(String url, String formBody);
+    default Reply postForm(String url, String formBody) {
+        return postForm(url, formBody, null);
+    }
+
+    /** 同上，附带 Authorization 头（Twilio 走 Basic；阿里云在请求体里签名，传 null）。 */
+    Reply postForm(String url, String formBody, String authorization);
 
     record Reply(int status, String body) {
     }

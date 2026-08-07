@@ -3,7 +3,10 @@ package com.checkba.controller;
 import com.checkba.model.entity.User;
 import com.checkba.service.AuthAbuseGuard;
 import com.checkba.service.UserService;
+import com.checkba.repository.UserRepository;
+import com.checkba.service.auth.SecondFactorService;
 import com.checkba.service.sms.SmsAuthService;
+import com.checkba.service.totp.TotpService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockHttpServletRequest;
@@ -48,7 +51,10 @@ class AuthControllerSmsTest {
 
     private static AuthController controller(UserService userService, AuthAbuseGuard guard,
                                              SmsAuthService smsAuthService) {
-        return new AuthController(userService, null, null, null, guard, null, smsAuthService);
+        // 短信分支的接线测试：二次验证协调层用真实实现（TOTP 未启用 → 判定落到短信）
+        SecondFactorService secondFactor = new SecondFactorService(
+                new TotpService(), smsAuthService, mock(UserRepository.class));
+        return new AuthController(userService, null, null, null, guard, null, smsAuthService, secondFactor);
     }
 
     @Test

@@ -83,14 +83,36 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
 - `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
 
+**登录二次验证的判定出口（2026-08-07）**
+- `backend/src/main/java/com/checkba/service/auth/SecondFactorService.java` — **`required(user)` 是唯一判定出口**，
+  返回 `NONE / TOTP / SMS`。TOTP 优先于短信（零成本、无国界、不受运营商报备与 SIM 交换影响）。
+  两条密码入口（`/login`、`/device-token`）都只接 `AuthController.secondFactorChallenge()` 这一个私有方法——
+  **新增第三条密码入口时必须接它**，漏一条等于没设闸。
+- 同文件管认证器绑定：`startSetup`（生成密钥，尚未启用）→ `activate`（验一次码才启用）→
+  `disable`（**必须带当前码**，否则被借用的会话能直接摘掉二次验证）→ `resetByAdmin`（认证器丢失的唯一出路）。
+- `service/totp/TotpService.java` — RFC 6238 纯算法（HMAC-SHA1，不引依赖），
+  护栏是 **RFC 6238 Appendix B 官方测试向量**（`TotpServiceTest`）。测试要造合法码用
+  `src/test/.../totp/TotpTestCodes`（放在 totp 包的 test 源码里，刻意不把「凭密钥造码」提升为生产 API）。
+- **TOTP 重放拦截**：`User.totpLastUsedStep` 记录已消费的时间片，同一枚码在其 30 秒窗口内只能用一次。
+- 端点：`/api/auth/totp/{setup,activate,disable}`（需登录）、`/api/auth/totp/reset/{userId}`（仅 admin）。
+- 前端：`userprofile.vue` 设置页「账号安全」的认证器分区（二维码用 `qrcode` 懒加载渲染，
+  **otpauth URI 含密钥，只在前端本地转二维码，不走任何图片服务**）；`login.vue` 按 4005 的
+  `data.method` 区分 totp/sms 两种步骤（totp 不发短信、不显示重发倒计时）。
+
 **登录短信验证（2026-08-06，sms-auth-integration）**
 - `backend/src/main/java/com/checkba/service/sms/SmsService.java` — 阿里云 dysmsapi 发送，**刻意不引 SDK**
   （JDK HttpClient 直签 HMAC-SHA1，保补丁通道资格；签名算法有真机对拍向量护栏 `SmsServiceTest`）。
   阿里云原始错误 Message 只进日志不进用户文案。
 - `service/sms/SmsCodeStore.java` — 验证码生命周期：6 位数字、5 分钟 TTL、一次性核销、单码 5 次验错作废、
   60 秒重发冷却、单手机号日上限 10 条；内存只存 SHA-256。发送失败调 `invalidate` 回滚冷却（日配额不回滚）。
-- `service/sms/SmsAuthService.java` — 流程编排：scene 隔离（login 码≠bind 码）、大陆手机号校验、
-  绑定唯一性（发码与确认两处都查）。`active()` = server 模式 && sms 配置齐全；local-mode 恒旁路。
+- `service/sms/SmsAuthService.java` — 流程编排：scene 隔离（login 码≠bind 码）、号码规范化与校验、
+  绑定唯一性（发码与确认两处都查）。`active()` = server 模式 && 任一通道可用；local-mode 恒旁路。
+- **通道按号码归属地分流**（`SmsGateway` 接口，2026-08-07）：`SmsService` 收大陆号（阿里云），
+  `TwilioSmsGateway` 收境外号（Twilio Messages API，同样不引 SDK）。两条独立开关，只配国内的部署
+  遇到境外号会明确回「该号码所在地区暂不支持短信验证」，而不是发出去再失败。
+  **存储形态**：大陆号一律 11 位裸号（`+86` 前缀会被剥掉，否则同一个号能因写法不同绕过唯一性绑到两个账号），
+  境外号存 E.164。Twilio 侧的各国合规（Sender ID / 10DLC / DLT）在控制台的 Messaging Service 里配，
+  代码只认 `messaging-service-sid`——加国家不需要改代码发版。
 - `User.phone`（unique 列）+ `UserRepository.findByPhone`。
 - AuthController：`/login` 与 `/device-token` 同一道闸——已绑手机号且启用时缺 `smsCode` 回
   **code 4005** + `{smsRequired, phoneMasked}`（与 4001/4003 同族，前端 api.js 据此切验证码步骤）；
@@ -110,7 +132,9 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `ai.account.base-url`（`application.yml:97-98`，默认 `https://www.aiworkdeck.com`；**强制 https**，回环 http 例外供本地联调）。
 - `security.license.dir`（默认 `${user.home}/.aiworkdeck`）——license/account/entitlements/platform-ai-key/storage-location 五个状态文件都落这里。
 - `security.registration-mode`（默认 open）与 `security.awdk-login-enabled`(默认 false)——两者都只影响 server 模式；官方托管的插件云后端应配 closed + true。
-- `sms.enabled`（`SMS_AUTH_ENABLED`，默认 false）——登录短信验证开关，仅 server 模式生效；官方托管的插件云后端应配 true + 注入 AK/SK 环境变量。
+- `sms.enabled`（`SMS_AUTH_ENABLED`，默认 false）——大陆短信通道开关，仅 server 模式生效；官方托管的插件云后端应配 true + 注入 AK/SK 环境变量。
+- `sms.intl.enabled`（`SMS_INTL_ENABLED`，默认 false）+ `TWILIO_ACCOUNT_SID/AUTH_TOKEN/MESSAGING_SERVICE_SID`——境外短信通道。
+  **认证器（TOTP）不需要任何配置**，server 模式恒可用，是国际用户的推荐路径。
 
 ## 核心契约
 

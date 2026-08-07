@@ -905,6 +905,31 @@ export function bindPhone(phone, code) {
   });
 }
 
+// 认证器（TOTP）：开始绑定，返回 { secret, provisioningUri }。此时尚未生效
+export function totpSetup() {
+  return request({ url: '/api/auth/totp/setup', method: 'POST' });
+}
+
+// 认证器：验一次码完成绑定
+export function totpActivate(code) {
+  return request({
+    url: '/api/auth/totp/activate',
+    method: 'POST',
+    data: { code },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
+// 认证器：解绑（必须带当前码）
+export function totpDisable(code) {
+  return request({
+    url: '/api/auth/totp/disable',
+    method: 'POST',
+    data: { code },
+    header: { 'Content-Type': 'application/json' },
+  });
+}
+
 export function clientLogin(accessCode, displayName) {
   return request({
     url: '/api/auth/client-login',
