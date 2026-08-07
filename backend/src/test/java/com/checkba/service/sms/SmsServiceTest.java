@@ -54,7 +54,7 @@ class SmsServiceTest {
     @DisplayName("网关 OK 正常返回；请求体带齐手机号与模板参数")
     void sendsThroughTransport() {
         AtomicReference<String> captured = new AtomicReference<>();
-        SmsService svc = service((url, body) -> {
+        SmsService svc = service((url, body, auth) -> {
             captured.set(body);
             assertEquals(SmsService.ENDPOINT, url);
             return new SmsTransport.Reply(200, "{\"Code\":\"OK\",\"BizId\":\"1\"}");
@@ -68,7 +68,7 @@ class SmsServiceTest {
     @Test
     @DisplayName("运营商拒绝：文案通用且不外露阿里云原始 Message，也不含掉线三子串")
     void carrierRejectionUsesSafeMessage() {
-        SmsService svc = service((url, body) ->
+        SmsService svc = service((url, body, auth) ->
                 new SmsTransport.Reply(200, "{\"Code\":\"isv.MOBILE_NUMBER_ILLEGAL\",\"Message\":\"raw aliyun text\"}"));
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> svc.sendVerificationCode("13800000000", "111111"));
@@ -79,7 +79,7 @@ class SmsServiceTest {
     @Test
     @DisplayName("限流码给出可行动文案")
     void throttleCodeGetsActionableMessage() {
-        SmsService svc = service((url, body) ->
+        SmsService svc = service((url, body, auth) ->
                 new SmsTransport.Reply(200, "{\"Code\":\"isv.BUSINESS_LIMIT_CONTROL\"}"));
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> svc.sendVerificationCode("13800000000", "111111"));
@@ -90,7 +90,7 @@ class SmsServiceTest {
     @Test
     @DisplayName("传输层失败（超时/断网）不炸栈，抛业务错误")
     void transportFailureBecomesBusinessError() {
-        SmsService svc = service((url, body) -> new SmsTransport.Reply(-1, "timed out"));
+        SmsService svc = service((url, body, auth) -> new SmsTransport.Reply(-1, "timed out"));
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> svc.sendVerificationCode("13800000000", "111111"));
         assertNoLogoutSubstring(e.getMessage());
@@ -99,12 +99,12 @@ class SmsServiceTest {
     @Test
     @DisplayName("配置不齐即未启用（缺 AK/SK/签名/模板任一）")
     void incompleteConfigMeansDisabled() {
-        assertFalse(new SmsService((u, b) -> null, true, "", "s", "sign", "tpl").enabled());
-        assertFalse(new SmsService((u, b) -> null, true, "ak", "", "sign", "tpl").enabled());
-        assertFalse(new SmsService((u, b) -> null, true, "ak", "s", "", "tpl").enabled());
-        assertFalse(new SmsService((u, b) -> null, true, "ak", "s", "sign", "").enabled());
-        assertFalse(new SmsService((u, b) -> null, false, "ak", "s", "sign", "tpl").enabled());
-        assertTrue(new SmsService((u, b) -> null, true, "ak", "s", "sign", "tpl").enabled());
+        assertFalse(new SmsService((u, b, a) -> null, true, "", "s", "sign", "tpl").enabled());
+        assertFalse(new SmsService((u, b, a) -> null, true, "ak", "", "sign", "tpl").enabled());
+        assertFalse(new SmsService((u, b, a) -> null, true, "ak", "s", "", "tpl").enabled());
+        assertFalse(new SmsService((u, b, a) -> null, true, "ak", "s", "sign", "").enabled());
+        assertFalse(new SmsService((u, b, a) -> null, false, "ak", "s", "sign", "tpl").enabled());
+        assertTrue(new SmsService((u, b, a) -> null, true, "ak", "s", "sign", "tpl").enabled());
     }
 
     /** licensing 领域地雷 1：这些子串会被前端当成掉线清会话。 */

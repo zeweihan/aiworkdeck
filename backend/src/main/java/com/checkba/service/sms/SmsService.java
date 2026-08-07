@@ -33,7 +33,7 @@ import java.util.UUID;
  */
 @Service
 @Slf4j
-public class SmsService {
+public class SmsService implements SmsGateway {
 
     static final String ENDPOINT = "https://dysmsapi.aliyuncs.com/";
     static final String API_VERSION = "2017-05-25";
@@ -64,7 +64,14 @@ public class SmsService {
         this.templateCode = templateCode;
     }
 
+    /** 大陆号：规范化后是 11 位裸号，或显式 +86 前缀。 */
+    @Override
+    public boolean supports(String phone) {
+        return phone != null && (phone.startsWith("+86") || !phone.startsWith("+"));
+    }
+
     /** 配置齐全才算启用：开关 + AK/SK + 签名 + 模板缺一不可。 */
+    @Override
     public boolean enabled() {
         return enabled
                 && StringUtils.hasText(accessKeyId)
@@ -74,6 +81,7 @@ public class SmsService {
     }
 
     /** 发送验证码短信；网关或运营商拒绝时抛业务错误（文案见类注释红线）。 */
+    @Override
     public void sendVerificationCode(String phone, String code) {
         if (!enabled()) {
             throw new IllegalArgumentException("短信服务未配置");

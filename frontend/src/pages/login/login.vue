@@ -129,16 +129,18 @@
             <button class="action-btn" :loading="loginLoading" @tap="handleLogin">登 录</button>
           </view>
 
-          <!-- SMS Verification Step（登录二次验证） -->
+          <!-- Second Factor Step（登录二次验证：认证器或短信） -->
           <view v-else-if="activeTab === 'login' && smsStep" class="form-body swing-in">
             <view class="input-group">
-              <text class="label">短信验证</text>
-              <text class="sms-hint">验证码已发送至 {{ smsPhoneMasked }}</text>
+              <text class="label">{{ smsMethod === 'totp' ? '认证器验证' : '短信验证' }}</text>
+              <text class="sms-hint">
+                {{ smsMethod === 'totp' ? '请输入认证器 App 上当前显示的 6 位验证码' : '验证码已发送至 ' + smsPhoneMasked }}
+              </text>
               <input class="glass-input" type="number" maxlength="6" v-model="smsCodeInput" @confirm="handleSmsLogin" placeholder="请输入 6 位验证码" placeholder-class="placeholder-style" />
             </view>
             <view class="form-options">
               <text class="link-text" @tap="backToPassword">返回</text>
-              <text class="link-text" :class="{ disabled: smsCountdown > 0 }" @tap="resendSmsCode">
+              <text v-if="smsMethod !== 'totp'" class="link-text" :class="{ disabled: smsCountdown > 0 }" @tap="resendSmsCode">
                 {{ smsCountdown > 0 ? smsCountdown + 's 后可重发' : '重新发送' }}
               </text>
             </view>
@@ -228,8 +230,9 @@ export default {
       loginLoading: false,
       registerLoading: false,
       clientLoginLoading: false,
-      // 登录短信二次验证步骤（后端返回 4005 时进入）
+      // 登录二次验证步骤（后端返回 4005 时进入）；method: 'totp' | 'sms'
       smsStep: false,
+      smsMethod: 'sms',
       smsPhoneMasked: '',
       smsCodeInput: '',
       smsCountdown: 0,
@@ -310,6 +313,7 @@ export default {
     },
     resetSmsStep() {
       this.smsStep = false;
+      this.smsMethod = 'sms';
       this.smsPhoneMasked = '';
       this.smsCodeInput = '';
       this.smsCountdown = 0;
@@ -416,11 +420,12 @@ export default {
         }
       } catch (error) {
         if (error && error.smsRequired) {
-          // 密码已对，进入短信验证步骤并自动发一次码
+          // 密码已对，进入二次验证步骤。认证器方式的码在用户手机 App 里，不必发短信
           this.smsStep = true;
+          this.smsMethod = (error.data && error.data.method) || 'sms';
           this.smsPhoneMasked = (error.data && error.data.phoneMasked) || '';
           this.smsCodeInput = '';
-          this.resendSmsCode();
+          if (this.smsMethod !== 'totp') this.resendSmsCode();
           return;
         }
         console.error('Login Failed', error);

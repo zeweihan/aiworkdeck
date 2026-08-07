@@ -22,12 +22,17 @@ public class AuthController {
     private final com.checkba.service.AuthAbuseGuard authAbuseGuard;
     private final com.checkba.service.account.AwdkLoginService awdkLoginService;
     private final com.checkba.service.sms.SmsAuthService smsAuthService;
+    private final com.checkba.service.auth.SecondFactorService secondFactorService;
 
     /**
-     * 密码校验通过但还缺短信验证码时的响应 code（前端 api.js 据此弹验证码输入步骤，
+     * 密码校验通过但还缺二次验证码时的响应 code（前端 api.js 据此弹验证码输入步骤，
      * 与 4001 featureNotConfigured / 4003 quotaExceeded 同一族约定）。
+     * data 里的 {@code method} 区分 totp / sms。
      */
     static final int CODE_SMS_REQUIRED = 4005;
+
+    /** 认证器 App 里显示的服务名。 */
+    private static final String TOTP_ISSUER = "AI Workdeck";
 
     /**
      * awdk 桥接限速的用户名维度占位：与真实用户名共用一套失败锁定，
@@ -59,7 +64,8 @@ public class AuthController {
                           com.checkba.service.DeviceTokenService deviceTokenService,
                           com.checkba.service.AuthAbuseGuard authAbuseGuard,
                           com.checkba.service.account.AwdkLoginService awdkLoginService,
-                          com.checkba.service.sms.SmsAuthService smsAuthService) {
+                          com.checkba.service.sms.SmsAuthService smsAuthService,
+                          com.checkba.service.auth.SecondFactorService secondFactorService) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
@@ -67,7 +73,32 @@ public class AuthController {
         this.authAbuseGuard = authAbuseGuard;
         this.awdkLoginService = awdkLoginService;
         this.smsAuthService = smsAuthService;
+        this.secondFactorService = secondFactorService;
         staticUserService = userService;
+    }
+
+    /**
+     * 两条密码入口（/login、/device-token）共用的二次验证闸。
+     *
+     * @return 需要补验证码时返回 4005 信封；返回 null 表示已通过、调用方继续。
+     *         码不对则抛 IllegalArgumentException，由调用方的 catch 计入失败锁定。
+     */
+    private Map<String, Object> secondFactorChallenge(User user, String code) {
+        if (secondFactorService == null) return null;
+        var method = secondFactorService.required(user);
+        if (method == com.checkba.service.auth.SecondFactorService.Method.NONE) return null;
+        if (code == null || code.isBlank()) {
+            Map<String, Object> result = new HashMap<>();
+            result.put("code", CODE_SMS_REQUIRED);
+            result.put("message", "本次操作需要二次验证");
+            result.put("data", Map.of(
+                    "smsRequired", true, // 保留旧字段名，老客户端仍能识别
+                    "method", method.name().toLowerCase(),
+                    "phoneMasked", secondFactorService.target(user)));
+            return result;
+        }
+        secondFactorService.verify(user, code);
+        return null;
     }
 
     /**
@@ -133,20 +164,12 @@ public class AuthController {
         try {
             User user = userService.login(request.getUsername(), request.getPassword());
 
-            // 短信二次验证（仅 server 模式且用户已绑定手机号时要求）：
+            // 二次验证（TOTP 或短信，见 SecondFactorService）：
             // 缺码 → 4005 让前端进入验证码步骤（不发会话、不动失败计数——密码是对的）；
-            // 错码 → 落入下方 catch 计一次失败（叠加 SmsCodeStore 的单码尝试上限双重兜底）。
-            if (smsAuthService != null && smsAuthService.requiresCode(user)) {
-                if (request.getSmsCode() == null || request.getSmsCode().isBlank()) {
-                    Map<String, Object> result = new HashMap<>();
-                    result.put("code", CODE_SMS_REQUIRED);
-                    result.put("message", "本次操作需要短信验证");
-                    result.put("data", Map.of(
-                            "smsRequired", true,
-                            "phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone())));
-                    return result;
-                }
-                smsAuthService.verifyLoginCode(user, request.getSmsCode());
+            // 错码 → 落入下方 catch 计一次失败（叠加各自的单码尝试上限双重兜底）。
+            Map<String, Object> challenge = secondFactorChallenge(user, request.getSmsCode());
+            if (challenge != null) {
+                return challenge;
             }
             authAbuseGuard.recordLoginSuccess(ip, request.getUsername());
 
@@ -267,6 +290,73 @@ public class AuthController {
         return result;
     }
 
+    /**
+     * 开始绑定认证器（需已登录）：返回手工录入的密钥与扫码用的 otpauth URI。
+     * 此时尚未启用，必须再调 activate 验一次码才生效。
+     */
+    @PostMapping("/totp/setup")
+    public Map<String, Object> totpSetup(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) return Map.of("code", 1, "message", "未登录");
+        try {
+            var setup = secondFactorService.startSetup(userId, TOTP_ISSUER);
+            return Map.of("code", 0, "data", Map.of(
+                    "secret", setup.secret(),
+                    "provisioningUri", setup.provisioningUri()));
+        } catch (IllegalArgumentException e) {
+            return Map.of("code", 1, "message", e.getMessage());
+        }
+    }
+
+    /** 完成绑定：验一次认证器生成的码，证明 App 已配好。 */
+    @PostMapping("/totp/activate")
+    public Map<String, Object> totpActivate(
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) return Map.of("code", 1, "message", "未登录");
+        try {
+            secondFactorService.activate(userId, body == null ? null : body.get("code"));
+            return Map.of("code", 0, "message", "认证器已绑定");
+        } catch (IllegalArgumentException e) {
+            return Map.of("code", 1, "message", e.getMessage());
+        }
+    }
+
+    /** 解绑认证器：必须带当前码（防止被借用的会话直接摘掉二次验证）。 */
+    @PostMapping("/totp/disable")
+    public Map<String, Object> totpDisable(
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) return Map.of("code", 1, "message", "未登录");
+        try {
+            secondFactorService.disable(userId, body == null ? null : body.get("code"));
+            return Map.of("code", 0, "message", "认证器已解绑");
+        } catch (IllegalArgumentException e) {
+            return Map.of("code", 1, "message", e.getMessage());
+        }
+    }
+
+    /** 管理员为丢失认证器的用户清除绑定（否则该用户会被永久锁在门外）。 */
+    @PostMapping("/totp/reset/{targetUserId}")
+    public Map<String, Object> totpResetByAdmin(
+            @PathVariable Long targetUserId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) return Map.of("code", 1, "message", "未登录");
+        if (!adminAccessService.isAdmin(userService.getUserById(userId))) {
+            return Map.of("code", 1, "message", "仅系统管理员可执行该操作");
+        }
+        try {
+            secondFactorService.resetByAdmin(targetUserId);
+            return Map.of("code", 0, "message", "已清除该账号的认证器绑定");
+        } catch (IllegalArgumentException e) {
+            return Map.of("code", 1, "message", e.getMessage());
+        }
+    }
+
     /** 绑定/更换手机号（需已登录；验证码走 scene=bind 的 send-code）。 */
     @PostMapping("/sms/bind")
     public Map<String, Object> bindPhone(@RequestBody SmsBindRequest request,
@@ -369,9 +459,10 @@ public class AuthController {
                 "subscriptionType", user.getSubscriptionType(),
                 // 系统管理权限（桌面单机=全员；云端=仅 admin 账号），前端据此显示「系统设置」入口
                 "isAdmin", adminAccessService.isAdmin(user),
-                // 短信验证：绑定入口的显隐与当前绑定状态（Map.of 不收 null，空串=未绑定）
+                // 二次验证：入口显隐与当前绑定状态（Map.of 不收 null，空串=未绑定）
                 "smsAuthEnabled", smsAuthService != null && smsAuthService.active(),
-                "phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone())
+                "phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone()),
+                "totpEnabled", user.isTotpEnabled()
         ));
         return result;
     }
@@ -468,18 +559,10 @@ public class AuthController {
         }
         try {
             User user = userService.login(body.get("username"), body.get("password"));
-            // 与 /login 同一道短信闸：换令牌也是一次密码登录，留了旁路等于没设闸
-            if (smsAuthService != null && smsAuthService.requiresCode(user)) {
-                String smsCode = body.get("smsCode");
-                if (smsCode == null || smsCode.isBlank()) {
-                    result.put("code", CODE_SMS_REQUIRED);
-                    result.put("message", "本次操作需要短信验证");
-                    result.put("data", Map.of(
-                            "smsRequired", true,
-                            "phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone())));
-                    return result;
-                }
-                smsAuthService.verifyLoginCode(user, smsCode);
+            // 与 /login 同一道二次验证闸：换令牌也是一次密码登录，留了旁路等于没设闸
+            Map<String, Object> challenge = secondFactorChallenge(user, body.get("smsCode"));
+            if (challenge != null) {
+                return challenge;
             }
             authAbuseGuard.recordLoginSuccess(ip, body.get("username"));
             var issued = deviceTokenService.issue(user.getId(), body.get("name"));

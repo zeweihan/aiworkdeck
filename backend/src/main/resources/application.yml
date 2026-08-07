@@ -99,6 +99,15 @@ sms:
   access-key-secret: ${SMS_ACCESS_KEY_SECRET:}
   sign-name: ${SMS_SIGN_NAME:京微资易科技}
   template-code: ${SMS_TEMPLATE_CODE:SMS_483655011}
+  # 境外号码走 Twilio（大陆号仍走上面的阿里云通道，两条独立开关）。
+  # 各国 Sender ID / 美国 10DLC / 印度 DLT 等合规在 Twilio 控制台的 Messaging Service
+  # 里配置，代码只认 messaging-service-sid——加国家不需要改代码发版。
+  intl:
+    enabled: ${SMS_INTL_ENABLED:false}
+    account-sid: ${TWILIO_ACCOUNT_SID:}
+    auth-token: ${TWILIO_AUTH_TOKEN:}
+    messaging-service-sid: ${TWILIO_MESSAGING_SERVICE_SID:}
+    template: ${TWILIO_SMS_TEMPLATE:Your AI Workdeck verification code is {code}. It expires in 5 minutes.}
 
 # AI 大模型配置（供应商可切换）
 ai:

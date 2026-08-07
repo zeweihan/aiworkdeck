@@ -22,15 +22,17 @@ public class HttpSmsTransport implements SmsTransport {
             .build();
 
     @Override
-    public Reply postForm(String url, String formBody) {
+    public Reply postForm(String url, String formBody, String authorization) {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(url))
                     .timeout(TIMEOUT)
                     .header("Content-Type", "application/x-www-form-urlencoded")
-                    .POST(HttpRequest.BodyPublishers.ofString(formBody, StandardCharsets.UTF_8))
-                    .build();
-            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+                    .POST(HttpRequest.BodyPublishers.ofString(formBody, StandardCharsets.UTF_8));
+            if (authorization != null) {
+                builder.header("Authorization", authorization);
+            }
+            HttpResponse<String> response = client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
             return new Reply(response.statusCode(), response.body());
         } catch (java.io.IOException e) {
             return new Reply(-1, e.getMessage() == null ? "io error" : e.getMessage());

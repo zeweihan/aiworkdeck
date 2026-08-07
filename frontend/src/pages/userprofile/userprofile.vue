@@ -310,10 +310,47 @@
                 </view>
               </view>
               
-              <!-- 账号安全（server 模式且登录短信验证启用时显示） -->
-              <view v-if="userInfo.smsAuthEnabled" class="form-group">
+              <!-- 账号安全（server 模式；认证器恒可用，短信取决于通道配置） -->
+              <view v-if="!isDesktop" class="form-group">
                 <text class="group-title">账号安全</text>
+
+                <!-- 认证器（TOTP）：零成本、无国界，登录二次验证优先走它 -->
                 <view class="form-row">
+                  <text class="form-label">认证器</text>
+                  <text class="form-value">{{ userInfo.totpEnabled ? '已绑定' : '未绑定' }}</text>
+                  <text class="bind-link" @tap="toggleTotpPanel">{{ userInfo.totpEnabled ? '解绑' : '绑定' }}</text>
+                </view>
+                <view v-if="showTotpPanel" class="bind-phone-form">
+                  <template v-if="!userInfo.totpEnabled">
+                    <text class="bind-tip">用 Google Authenticator、1Password 等 App 扫码，或手工录入下方密钥</text>
+                    <image v-if="totpQrDataUrl" class="totp-qr" :src="totpQrDataUrl" mode="widthFix" />
+                    <view class="form-row">
+                      <text class="form-label">密钥</text>
+                      <text class="totp-secret">{{ totpSecret }}</text>
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">验证码</text>
+                      <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" placeholder="App 上的 6 位码" />
+                    </view>
+                    <view class="bind-actions">
+                      <button class="btn-bind-confirm" @tap="confirmTotpBind">完成绑定</button>
+                      <text class="bind-link" @tap="cancelTotpPanel">取消</text>
+                    </view>
+                  </template>
+                  <template v-else>
+                    <text class="bind-tip">解绑需要验证一次当前验证码</text>
+                    <view class="form-row">
+                      <text class="form-label">验证码</text>
+                      <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" placeholder="App 上的 6 位码" />
+                    </view>
+                    <view class="bind-actions">
+                      <button class="btn-bind-confirm" @tap="confirmTotpDisable">确认解绑</button>
+                      <text class="bind-link" @tap="cancelTotpPanel">取消</text>
+                    </view>
+                  </template>
+                </view>
+
+                <view v-if="userInfo.smsAuthEnabled" class="form-row">
                   <text class="form-label">手机号</text>
                   <text class="form-value">{{ userInfo.phoneMasked || '未绑定' }}</text>
                   <text class="bind-link" @tap="showBindPhone = !showBindPhone">{{ userInfo.phoneMasked ? '更换' : '绑定' }}</text>
@@ -379,7 +416,7 @@
 </template>
 
 <script>
-import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone } from '@/services/api.js'
+import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, totpSetup, totpActivate, totpDisable } from '@/services/api.js'
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
 import { host, isDesktopHost } from '@/services/host.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
@@ -433,6 +470,12 @@ export default {
 
       // 授权状态（桌面端）：{ unlocked, mode, plan, activatedAt? }
       licenseInfo: {},
+
+      // 认证器（TOTP）绑定
+      showTotpPanel: false,
+      totpSecret: '',
+      totpQrDataUrl: '',
+      totpCodeInput: '',
 
       // 手机号绑定（登录短信验证，仅 server 模式且启用时显示）
       showBindPhone: false,
@@ -722,6 +765,62 @@ export default {
       } catch (error) {
         console.error('获取用户信息失败:', error)
       }
+    },
+    async toggleTotpPanel() {
+      if (this.showTotpPanel) {
+        this.cancelTotpPanel()
+        return
+      }
+      this.totpCodeInput = ''
+      this.showTotpPanel = true
+      if (this.userInfo.totpEnabled) return
+      try {
+        const res = await totpSetup()
+        this.totpSecret = (res.data && res.data.secret) || ''
+        const uri = (res.data && res.data.provisioningUri) || ''
+        // 二维码在前端渲染：otpauth URI 含密钥，不该经由图片服务多走一手
+        const QRCode = (await import('qrcode')).default
+        this.totpQrDataUrl = uri ? await QRCode.toDataURL(uri, { margin: 1, width: 180 }) : ''
+      } catch (e) {
+        this.showTotpPanel = false
+        uni.showToast({ title: e.message || '获取绑定信息失败', icon: 'none' })
+      }
+    },
+    async confirmTotpBind() {
+      if (!this.totpCodeInput || this.totpCodeInput.length < 6) {
+        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' })
+        return
+      }
+      try {
+        await totpActivate(this.totpCodeInput)
+        this.userInfo = { ...this.userInfo, totpEnabled: true }
+        setSessionUser(this.userInfo)
+        uni.showToast({ title: '认证器已绑定', icon: 'success' })
+        this.cancelTotpPanel()
+      } catch (e) {
+        uni.showToast({ title: e.message || '绑定失败', icon: 'none' })
+      }
+    },
+    async confirmTotpDisable() {
+      if (!this.totpCodeInput || this.totpCodeInput.length < 6) {
+        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' })
+        return
+      }
+      try {
+        await totpDisable(this.totpCodeInput)
+        this.userInfo = { ...this.userInfo, totpEnabled: false }
+        setSessionUser(this.userInfo)
+        uni.showToast({ title: '认证器已解绑', icon: 'success' })
+        this.cancelTotpPanel()
+      } catch (e) {
+        uni.showToast({ title: e.message || '解绑失败', icon: 'none' })
+      }
+    },
+    cancelTotpPanel() {
+      this.showTotpPanel = false
+      this.totpSecret = ''
+      this.totpQrDataUrl = ''
+      this.totpCodeInput = ''
     },
     async sendBindPhoneCode() {
       if (this.bindCountdown > 0) return
@@ -1953,6 +2052,22 @@ $danger-color: #E74C3C;
     margin-top: 8px;
     font-size: 12px;
     color: $text-secondary;
+}
+.totp-qr {
+    width: 180px;
+    margin: 10px 0;
+    background: #fff;
+    border: 1px solid $border-color;
+    border-radius: 6px;
+}
+.totp-secret {
+    flex: 1;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    letter-spacing: 1px;
+    color: $text-main;
+    word-break: break-all;
+    user-select: text;
 }
 
 /* Work Log Styles */

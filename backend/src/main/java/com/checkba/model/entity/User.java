@@ -50,10 +50,30 @@ public class User {
     private String email;
 
     /**
-     * 绑定手机号（可选，登录短信验证用；唯一，未绑定为 null）
+     * 绑定手机号（可选，登录短信验证用；唯一，未绑定为 null）。
+     * 大陆号存 11 位裸号（历史形态），境外号存 E.164（带 + 前缀）。
      */
     @Column(length = 32, unique = true)
     private String phone;
+
+    /**
+     * TOTP 认证器密钥（base32）。设置未完成时也已落库（待 totpEnabled 置真才生效）
+     */
+    @Column(length = 64)
+    private String totpSecret;
+
+    /**
+     * TOTP 是否已启用（完成一次验证才置真）。
+     * 用可空 Boolean 而非原始 boolean：ddl-auto=update 给已有数据的表加 NOT NULL 列会直接失败，
+     * 且旧行读出的 NULL 灌进原始 boolean 会抛异常（真机升级即全站 500）。读取一律走 isTotpEnabled()。
+     */
+    @Column
+    private Boolean totpEnabled;
+
+    /**
+     * 最近一次已消费的 TOTP 时间片序号，用于重放拦截（同一码不可用两次）
+     */
+    private Long totpLastUsedStep;
 
     /**
      * 用户密码（加密存储）
@@ -136,6 +156,36 @@ public class User {
 
     public void setPhone(String phone) {
         this.phone = phone;
+    }
+
+    public String getTotpSecret() {
+        return totpSecret;
+    }
+
+    public void setTotpSecret(String totpSecret) {
+        this.totpSecret = totpSecret;
+    }
+
+    /** 历史行的 NULL 一律视为未启用。 */
+    public boolean isTotpEnabled() {
+        return Boolean.TRUE.equals(totpEnabled);
+    }
+
+    /** 原始值（含 null），仅供测试断言「未预置 false」这条迁移约束。 */
+    public Boolean getTotpEnabledRaw() {
+        return totpEnabled;
+    }
+
+    public void setTotpEnabled(boolean totpEnabled) {
+        this.totpEnabled = totpEnabled;
+    }
+
+    public Long getTotpLastUsedStep() {
+        return totpLastUsedStep;
+    }
+
+    public void setTotpLastUsedStep(Long totpLastUsedStep) {
+        this.totpLastUsedStep = totpLastUsedStep;
     }
 
     public String getPassword() {
