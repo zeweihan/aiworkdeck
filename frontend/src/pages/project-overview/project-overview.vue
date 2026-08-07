@@ -1457,8 +1457,7 @@ import {
   getFileLocalPath,
   getMyProjects, // 最近项目切换器
   bindShareholderMeetingConversation, // 股东大会核查：会话绑定
-  getLicenseStatus, // 试用版标识（商业化解锁门）
-  getAccountStatus, // 账户连接标识（商业化 PR-B）
+  getLicenseStatus, // 试用版/正式版标识（含 accountConnected 组合口径）
   getCloudStatus, // 协作 chip：这份案卷有没有放进团队案件库、状态如何
   checkCloud // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
 } from '@/services/api.js'
@@ -2605,16 +2604,13 @@ export default {
     async loadLicenseMode() {
       if (!isDesktopHost()) return
       try {
+        // 授权状态里已带 accountConnected（后端组合口径），不必再打一次账户端点
         const status = await getLicenseStatus()
         this.licenseMode = (status && status.mode) || ''
+        // 旧后端没有该字段：按未连接处理，与改动前查不到账户状态时的行为一致
+        this.accountConnected = !!(status && status.accountConnected)
       } catch (e) {
         // 服务器模式/旧后端没有该端点：静默忽略
-      }
-      try {
-        const account = await getAccountStatus()
-        this.accountConnected = !!(account && account.connected)
-      } catch (e) {
-        // 同上：查不到就按未连接处理，不影响试用版 chip
         this.accountConnected = false
       }
     },

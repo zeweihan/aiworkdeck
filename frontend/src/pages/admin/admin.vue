@@ -1042,6 +1042,14 @@
             </view>
           </view>
         </scroll-view>
+
+        <!-- 插件广场：与其余设置项一致地在页内切换（独立页 /pages/plugin-market 保留给直链） -->
+        <view
+          v-else-if="activeNav === 'plugins'"
+          class="market-embed"
+        >
+          <MarketPane :standalone="false" />
+        </view>
       </view>
     </view>
 
@@ -1098,13 +1106,14 @@ import { openExternalUrl } from '@/utils/externalLink.js'
 import { host } from '@/services/host.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import UnlockHint from '@/components/UnlockHint.vue'
+import MarketPane from '@/components/MarketPane.vue'
 
 // 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里
 const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
 
 export default {
   name: 'AdminPage',
-  components: { UnlockHint },
+  components: { UnlockHint, MarketPane },
   data() {
     return {
       userDisplayName: '用户',
@@ -1119,7 +1128,7 @@ export default {
         { key: 'cloud', label: '团队案件库', desktopOnly: true },
         { key: 'memory', label: '记忆同步', desktopOnly: true },
         { key: 'telemetry', label: '数据统计' },
-        { key: 'plugins', label: '插件广场', route: '/pages/plugin-market/plugin-market' },
+        { key: 'plugins', label: '插件广场' },
       ],
       components: [],
       // 软件更新状态（主进程 update-service 快照；事件推送增量刷新）
@@ -1282,10 +1291,9 @@ export default {
     if (user) {
       this.userDisplayName = user.displayName || user.username || '用户'
     }
-    // 深链定位面板（顶栏「已连接账户」chip → ?nav=account）；
-    // 只认当前可见的本页面板，route 型导航项不在此列
+    // 深链定位面板（顶栏「已连接账户」chip → ?nav=account）；只认当前可见的本页面板
     const nav = query && query.nav
-    if (nav && this.visibleNavItems.some((n) => n.key === nav && !n.route)) {
+    if (nav && this.visibleNavItems.some((n) => n.key === nav)) {
       this.onNavTap({ key: nav })
     }
     this.loadConfig()
@@ -1507,11 +1515,6 @@ export default {
       })
     },
     onNavTap(nav) {
-      // 带 route 的导航项跳转独立页面（如插件广场），其余切换本页内容区
-      if (nav.route) {
-        uni.navigateTo({ url: nav.route })
-        return
-      }
       this.activeNav = nav.key
       if (nav.key === 'cloud') {
         this.loadCloudConnections()
@@ -2339,6 +2342,13 @@ $border-color: #E9ECEF; // Gray-Light
 
 .config-scroll {
   height: calc(100vh - 140px);
+}
+
+/* 插件广场内嵌：与 .config-scroll 同高，MarketPane 自身按 100% 撑满并内部滚动 */
+.market-embed {
+  height: calc(100vh - 140px);
+  border-radius: 12px;
+  overflow: hidden;
 }
 
 .section-card {

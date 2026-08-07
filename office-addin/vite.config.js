@@ -23,8 +23,19 @@ function devHttps() {
   return undefined
 }
 
+/**
+ * 默认后端地址（构建期烧进产物）。
+ * 普通用户只需填一个官网 API Key，不必知道后端地址；律所自建服务器场景可在
+ * 「高级设置」里改，改过的值存 localStorage 并优先于此默认值。
+ * 私有部署可用 VITE_ADDIN_SERVER_URL 环境变量改默认值后重新构建。
+ */
+const defaultServerUrl = process.env.VITE_ADDIN_SERVER_URL || 'https://addin.aiworkdeck.com'
+
 export default defineConfig({
   plugins: [vue()],
+  define: {
+    __ADDIN_DEFAULT_SERVER__: JSON.stringify(defaultServerUrl)
+  },
   // 图标等静态资源目录（构建时原样拷入 dist 根，dev 下按根路径直出）
   publicDir: 'assets',
   server: {

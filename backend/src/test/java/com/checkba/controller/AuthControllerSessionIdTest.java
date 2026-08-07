@@ -26,7 +26,7 @@ class AuthControllerSessionIdTest {
 
     @Test
     void sessionIdIsUnpredictable() throws Exception {
-        AuthController controller = new AuthController(null, null, null, null, null, null, null, null);
+        AuthController controller = new AuthController(null, null, null, null, null, null, null, null, false);
 
         long before = System.currentTimeMillis();
         Set<String> seen = new HashSet<>();

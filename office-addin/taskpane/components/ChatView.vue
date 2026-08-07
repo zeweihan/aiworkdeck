@@ -3,8 +3,8 @@
     <div ref="listEl" class="message-list">
       <div v-if="!messages.length" class="empty">
         <p>与 AI 讨论当前文档或项目事务。</p>
-        <p v-if="!configured" class="empty-warn">连接未就绪：请点击右上角「设置」配置后端地址与设备令牌。</p>
-        <p v-else-if="!projectId" class="empty-warn">请先在顶部选择一个项目。</p>
+        <p v-if="!configured" class="empty-warn">连接未就绪：点击右上角「设置」填入官网 API Key。</p>
+        <p v-else-if="!projectId" class="empty-warn">尚未选择项目：在顶部下拉中选一个项目。</p>
       </div>
 
       <div v-for="(msg, i) in messages" :key="i" class="message" :class="msg.role">
@@ -198,7 +198,7 @@ async function ensureConnection() {
 async function send() {
   banner.value = ''
   if (!props.configured) { emit('need-settings'); return }
-  if (!props.projectId) { banner.value = '请先在顶部选择一个项目'; return }
+  if (!props.projectId) { banner.value = '尚未选择项目：在顶部下拉中选一个项目'; return }
   const prompt = input.value.trim()
   if (!prompt || streaming.value) return
 

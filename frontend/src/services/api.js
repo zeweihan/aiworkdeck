@@ -707,7 +707,10 @@ export function getFileLocalPath(fileId) {
 
 // ===================== 授权（解锁门）相关 API =====================
 
-// 查询本机授权状态：{ unlocked, mode: 'none'|'trial'|'account', plan }
+// 查询本机授权状态：{ unlocked, mode: 'none'|'trial'|'account', plan,
+//                    accountConnected, edition: 'paid'|'trial'|'none' }
+// 界面上一律读 edition：mode 只是授权票据，先用试用码解锁、后连账户的用户 mode 永远是 trial。
+// 旧后端没有 edition/accountConnected 两字段，调用方要各自兜底。
 export function getLicenseStatus() {
   return request({
     url: '/api/license/status',
@@ -732,6 +735,41 @@ export function activateLicense(code) {
 export function deactivateLicense() {
   return request({
     url: '/api/license/deactivate',
+    method: 'POST',
+  });
+}
+
+// ===================== 插件访问令牌（awdt_ 设备令牌）相关 API =====================
+//
+// 供 Microsoft Office 插件等外部客户端连接本机后端。桌面端单机免登、本机用户没有口令，
+// 走不了 /api/auth/device-token 那条账号口令路，改用 issue-local 拿当前本机会话换令牌
+// （该端点仅在 local-mode 存在，团队服务器仍只有账号口令一条路）。
+
+// 签发：{ code: 0, data: { tokenId, token, userId, username, displayName } }
+// token 明文只在这一次返回，之后无从再取。
+export function issueLocalDeviceToken(name) {
+  return request({
+    url: '/api/auth/device-token/issue-local',
+    method: 'POST',
+    data: { name: name || '' },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 列表：{ code: 0, data: { tokens: [{ id, name, createdAt, lastUsedAt }] } }
+export function listDeviceTokens() {
+  return request({
+    url: '/api/auth/device-tokens',
+    method: 'GET',
+  });
+}
+
+// 撤销：撤销后持该令牌的客户端立即失去访问权
+export function revokeDeviceToken(id) {
+  return request({
+    url: `/api/auth/device-token/${id}/revoke`,
     method: 'POST',
   });
 }
