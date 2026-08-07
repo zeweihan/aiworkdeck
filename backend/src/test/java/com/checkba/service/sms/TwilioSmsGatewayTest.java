@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.*;
 class TwilioSmsGatewayTest {
 
     private static TwilioSmsGateway gateway(SmsTransport transport) {
-        return new TwilioSmsGateway(transport, true, "ACtest", "token123", "MGtest",
+        return new TwilioSmsGateway(transport, true, "ACtest", "", "token123", "MGtest",
                 "Your AI Workdeck verification code is {code}. It expires in 5 minutes.");
     }
 
@@ -30,11 +30,11 @@ class TwilioSmsGatewayTest {
     @Test
     @DisplayName("配置不齐即未启用（缺 SID/Token/MessagingServiceSid 任一）")
     void incompleteConfigMeansDisabled() {
-        assertFalse(new TwilioSmsGateway((u, b, a) -> null, true, "", "t", "MG", "x").enabled());
-        assertFalse(new TwilioSmsGateway((u, b, a) -> null, true, "AC", "", "MG", "x").enabled());
-        assertFalse(new TwilioSmsGateway((u, b, a) -> null, true, "AC", "t", "", "x").enabled());
-        assertFalse(new TwilioSmsGateway((u, b, a) -> null, false, "AC", "t", "MG", "x").enabled());
-        assertTrue(new TwilioSmsGateway((u, b, a) -> null, true, "AC", "t", "MG", "x").enabled());
+        assertFalse(new TwilioSmsGateway((u, b, a) -> null, true, "", "", "t", "MG", "x").enabled());
+        assertFalse(new TwilioSmsGateway((u, b, a) -> null, true, "AC", "", "", "MG", "x").enabled());
+        assertFalse(new TwilioSmsGateway((u, b, a) -> null, true, "AC", "", "t", "", "x").enabled());
+        assertFalse(new TwilioSmsGateway((u, b, a) -> null, false, "AC", "", "t", "MG", "x").enabled());
+        assertTrue(new TwilioSmsGateway((u, b, a) -> null, true, "AC", "", "t", "MG", "x").enabled());
     }
 
     @Test
@@ -59,6 +59,24 @@ class TwilioSmsGatewayTest {
         assertTrue(body.get().contains("MessagingServiceSid=MGtest"));
         assertTrue(body.get().contains("246810"), "模板占位应被替换为真码");
         assertFalse(body.get().contains("%7Bcode%7D"), "模板占位不得原样发出");
+    }
+
+    @Test
+    @DisplayName("配了 API Key 时用 SK 做 Basic 用户名，URL 路径仍是 Account SID")
+    void apiKeyAuthPrefersKeySid() {
+        AtomicReference<String> url = new AtomicReference<>();
+        AtomicReference<String> auth = new AtomicReference<>();
+        TwilioSmsGateway gw = new TwilioSmsGateway((u, b, a) -> {
+            url.set(u);
+            auth.set(a);
+            return new SmsTransport.Reply(201, "{\"sid\":\"SM1\"}");
+        }, true, "ACtest", "SKtest", "keysecret", "MGtest", "code {code}");
+
+        gw.sendVerificationCode("+14155552671", "123456");
+
+        assertTrue(url.get().contains("/Accounts/ACtest/"), url.get());
+        assertEquals("Basic " + Base64.getEncoder().encodeToString(
+                "SKtest:keysecret".getBytes(StandardCharsets.UTF_8)), auth.get());
     }
 
     @Test
@@ -87,7 +105,7 @@ class TwilioSmsGatewayTest {
     void failuresBecomeBusinessErrors() {
         TwilioSmsGateway down = gateway((u, b, a) -> new SmsTransport.Reply(-1, "timed out"));
         assertThrows(IllegalArgumentException.class, () -> down.sendVerificationCode("+14155552671", "1"));
-        TwilioSmsGateway off = new TwilioSmsGateway((u, b, a) -> null, false, "", "", "", "x");
+        TwilioSmsGateway off = new TwilioSmsGateway((u, b, a) -> null, false, "", "", "", "", "x");
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> off.sendVerificationCode("+14155552671", "1"));
         assertNoLogoutSubstring(e.getMessage());
