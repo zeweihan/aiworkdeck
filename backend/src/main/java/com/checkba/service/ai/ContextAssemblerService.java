@@ -285,7 +285,13 @@ public class ContextAssemblerService {
                             systemText.append("修改会以 Word 原生修订形式呈现。");
                             systemText.append("文档排版（字体/字号/行距/缩进/对齐/下划线/删除线/自动编号/表格边框；");
                             systemText.append("整篇按律所标准格式化用 office_apply_standard_format）用 office_format_text 与 ");
-                            systemText.append("office_set_paragraph_format。本会话没有 doc_* 工具。\n\n");
+                            systemText.append("office_set_paragraph_format。表格建改用 office_insert_table / office_table_read / ");
+                            systemText.append("office_table_set_cell / office_table_add_row / office_table_delete_row / ");
+                            systemText.append("office_table_add_col / office_table_delete_col（改前先用 office_table_read 看清坐标，");
+                            systemText.append("删行删列不进修订、只能靠撤销）；分页/分节符用 office_insert_break；超链接用 ");
+                            systemText.append("office_set_hyperlink；页眉页脚（仅首节）用 office_edit_header_footer；");
+                            systemText.append("批注用 office_get_comments / office_reply_comment / office_resolve_comment。");
+                            systemText.append("本会话没有 doc_* 工具。\n\n");
                         }
                     }
                 }
@@ -498,7 +504,11 @@ public class ContextAssemblerService {
                         + "office_set_numbering / office_format_table / office_apply_standard_format 等）落到 Word，"
                         + "修改会以 Word 原生修订形式呈现；文档排版（字体/字号/行距/缩进/对齐/下划线/删除线/"
                         + "自动编号/表格边框；整篇按律所标准格式化用 office_apply_standard_format）"
-                        + "用 office_format_text 与 office_set_paragraph_format。";
+                        + "用 office_format_text 与 office_set_paragraph_format；表格建改用 office_insert_table / "
+                        + "office_table_read / office_table_set_cell / office_table_add_row / office_table_delete_row / "
+                        + "office_table_add_col / office_table_delete_col；分页/分节符用 office_insert_break；"
+                        + "超链接用 office_set_hyperlink；页眉页脚（仅首节）用 office_edit_header_footer；"
+                        + "批注用 office_get_comments / office_reply_comment / office_resolve_comment。";
             };
             case NONE -> "\n\n[系统提醒] 用户当前查看的文档是" + docLabel + "，"
                     + "其正文见 system prompt 的 <active_document>，仅供阅读分析。"
