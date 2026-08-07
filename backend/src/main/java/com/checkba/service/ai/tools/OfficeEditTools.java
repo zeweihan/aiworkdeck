@@ -56,6 +56,25 @@ public class OfficeEditTools implements AgentToolComponent {
     private static final java.util.Set<String> PARAGRAPH_STYLE_VALUES =
             java.util.Set.of("normal", "heading1", "heading2", "heading3", "heading4");
 
+    /** 自动编号类型白名单（bullet/decimal 走 Word 原生列表，chinese 走手写编号，none 清除） */
+    private static final java.util.Set<String> NUMBERING_KIND_VALUES =
+            java.util.Set.of("bullet", "decimal", "chinese", "none");
+
+    /** 一次套用自动编号的最大段数（防一把改爆整篇） */
+    private static final int MAX_NUMBERING_PARAGRAPHS = 200;
+
+    /** 表格边框范围白名单（插件端映射为 Word.BorderLocation） */
+    private static final java.util.Set<String> TABLE_BORDER_VALUES =
+            java.util.Set.of("all", "outside", "inside", "none");
+
+    /** 表格整体对齐白名单（Word 表格只有左/中/右，没有两端对齐） */
+    private static final java.util.Set<String> TABLE_ALIGNMENT_VALUES =
+            java.util.Set.of("left", "center", "right");
+
+    /** 标准格式套用范围白名单 */
+    private static final java.util.Set<String> STANDARD_FORMAT_SCOPES =
+            java.util.Set.of("document", "selection");
+
     /**
      * 枚举参数归一化：null/空返回 null（表示不改），命中白名单返回小写值，
      * 非法值抛 IllegalArgumentException 由调用方转成 "Error:" 文案。
@@ -321,6 +340,133 @@ public class OfficeEditTools implements AgentToolComponent {
         Map<String, Object> args = new HashMap<>();
         args.put("anchorText", anchorText == null ? "" : anchorText);
         return officeBridgeService.executeOfficeCommand(conversationId, "get_formatting", args);
+    }
+
+    @Tool("在当前 Word 文档中为一段连续段落设置自动编号或项目符号。" +
+          "anchorText 定位起始段落（须与文档精确一致，命中处所在的整个段落就是第一段），" +
+          "paragraphCount 是从该段起连续套用的段数（缺省 1，上限 200）。" +
+          "kind：bullet=项目符号、decimal=阿拉伯数字（1. 2. 3.）、chinese=中文数字（一、二、三、）、none=清除编号。" +
+          "bullet 与 decimal 用 Word 原生列表；chinese 是把「一、」这样的编号作为文字写入各段段首" +
+          "（Word 原生编号没有中文数字这一档），返回值的 via 字段会标明实际走的是 listApi 还是 literalText。" +
+          "修改以 Word 原生修订（Track Changes）形式呈现。")
+    @ToolMeta(displayName = "设置自动编号", category = "office", fileEffect = "MODIFIED")
+    public String office_set_numbering(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("起始段落中的一段文本（须与文档精确一致）") String anchorText,
+            @P("从起始段起连续套用的段数（缺省 1，上限 200）") Integer paragraphCount,
+            @P("编号类型：bullet/decimal/chinese/none") String kind
+    ) {
+        log.info("Tool: office_set_numbering called, anchor={}, count={}, kind={}", anchorText, paragraphCount, kind);
+        if (anchorText == null || anchorText.isBlank()) {
+            return "Error: 目标文本不能为空";
+        }
+        if (anchorText.length() > 255) {
+            return "Error: 目标文本过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+        }
+        String kindValue;
+        try {
+            kindValue = normalizeEnum(kind, NUMBERING_KIND_VALUES, "kind");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (kindValue == null) {
+            return "Error: kind 不能为空（bullet/decimal/chinese/none）";
+        }
+        int count = paragraphCount == null ? 1 : paragraphCount;
+        if (count < 1 || count > MAX_NUMBERING_PARAGRAPHS) {
+            return "Error: paragraphCount 须为 1~" + MAX_NUMBERING_PARAGRAPHS + " 的整数（缺省 1）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("anchorText", anchorText);
+        args.put("paragraphCount", count);
+        args.put("kind", kindValue);
+        return officeBridgeService.executeOfficeCommand(conversationId, "set_numbering", args);
+    }
+
+    @Tool("在当前 Word 文档中设置某张表格的整体格式：边框、表格对齐、首行加粗、自动调整列宽、全表字号。" +
+          "tableIndex 是文档中第几张表（0 起，缺省 0），越界时返回表格总数供重试。" +
+          "borders：all=全部框线、outside=外框线、inside=内框线、none=去掉框线；" +
+          "borderColor 缺省 #000000，borderWidth 缺省 1 磅。" +
+          "alignment 是表格相对页面的水平对齐（left/center/right）。" +
+          "格式参数（borders/alignment/headerBold/autoFit/fontSize）至少要给一个，没传的保持原样。" +
+          "需要 WordApi 1.3；Word 对表格格式的修订记录能力有限，返回值的 tracked 字段说明实际情况。")
+    @ToolMeta(displayName = "设置表格格式", category = "office", fileEffect = "MODIFIED")
+    public String office_format_table(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("表格序号（0 起，缺省 0）") Integer tableIndex,
+            @P("边框范围：all/outside/inside/none（不改则不传）") String borders,
+            @P("边框颜色 #RRGGBB（缺省 #000000，仅 borders 非 none 时有效）") String borderColor,
+            @P("边框粗细（磅，缺省 1，仅 borders 非 none 时有效）") Double borderWidth,
+            @P("表格整体对齐：left/center/right（不改则不传）") String alignment,
+            @P("首行是否加粗（不改则不传）") Boolean headerBold,
+            @P("是否自动调整列宽到页面宽度（不改则不传）") Boolean autoFit,
+            @P("全表字号（磅）（不改则不传）") Double fontSize
+    ) {
+        log.info("Tool: office_format_table called, index={}, borders={}, alignment={}", tableIndex, borders, alignment);
+        int index = tableIndex == null ? 0 : tableIndex;
+        if (index < 0) {
+            return "Error: tableIndex 不能为负（文档中第一张表是 0）";
+        }
+        if (fontSize != null && (fontSize <= 0 || fontSize > 1638)) {
+            return "Error: fontSize 须为大于 0 且不超过 1638 的磅值";
+        }
+        if (borderColor != null && !borderColor.isBlank() && !HEX_COLOR.matcher(borderColor.trim()).matches()) {
+            return "Error: borderColor 须为 #RRGGBB 格式，如 #000000";
+        }
+        if (borderWidth != null && (borderWidth <= 0 || borderWidth > 6)) {
+            return "Error: borderWidth 须为 0~6 之间的磅值（Word 框线上限 6 磅）";
+        }
+        String bordersValue;
+        String alignmentValue;
+        try {
+            bordersValue = normalizeEnum(borders, TABLE_BORDER_VALUES, "borders");
+            alignmentValue = normalizeEnum(alignment, TABLE_ALIGNMENT_VALUES, "alignment");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (bordersValue == null && alignmentValue == null && headerBold == null && autoFit == null && fontSize == null) {
+            return "Error: 未给出任何格式参数（borders/alignment/headerBold/autoFit/fontSize 至少给一个；"
+                    + "borderColor 与 borderWidth 只是 borders 的修饰参数）";
+        }
+
+        Map<String, Object> args = new HashMap<>();
+        args.put("tableIndex", index);
+        if (bordersValue != null) {
+            args.put("borders", bordersValue);
+            // 缺省值在后端定死，插件端不再猜（两处各有一套默认值最容易走偏）
+            if (!"none".equals(bordersValue)) {
+                args.put("borderColor", borderColor == null || borderColor.isBlank() ? "#000000" : borderColor.trim());
+                args.put("borderWidth", borderWidth == null ? 1.0 : borderWidth);
+            }
+        }
+        if (alignmentValue != null) args.put("alignment", alignmentValue);
+        if (headerBold != null) args.put("headerBold", headerBold);
+        if (autoFit != null) args.put("autoFit", autoFit);
+        if (fontSize != null) args.put("fontSize", fontSize);
+        return officeBridgeService.executeOfficeCommand(conversationId, "format_table", args);
+    }
+
+    @Tool("把当前 Word 文档整篇（或选区）套用律所标准格式：正文楷体_GB2312/Arial 12 磅两端对齐、" +
+          "段后 18 磅、行距 16 磅、首行缩进 2 字符；主标题 16 磅加粗居中；" +
+          "小标题（第X条、一、、（一）、1. 这类）与正文同款但加粗且不缩进；表格全表 10 磅。" +
+          "scope：document=全文（缺省）、selection=用户当前选区。" +
+          "超长文档只处理前 500 段并在返回值里标 truncated。" +
+          "整篇套用会产生大量格式修订，用户可在 Word 审阅面板逐条接受或拒绝。")
+    @ToolMeta(displayName = "套用标准格式", category = "office", fileEffect = "MODIFIED")
+    public String office_apply_standard_format(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("套用范围：document（全文，缺省）或 selection（当前选区）") String scope
+    ) {
+        log.info("Tool: office_apply_standard_format called, scope={}", scope);
+        String scopeValue;
+        try {
+            scopeValue = normalizeEnum(scope, STANDARD_FORMAT_SCOPES, "scope");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("scope", scopeValue == null ? "document" : scopeValue);
+        return officeBridgeService.executeOfficeCommand(conversationId, "apply_standard_format", args);
     }
 
     // ==================== Excel（office_excel_*，仅 Excel 会话可见） ====================

@@ -174,7 +174,8 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
   约两个周期（40s 无任何字节）判定死连接主动重建。首连失败不重连（即时报错）。
   事件为纯推送、后端不重放历史，重连不会重复渲染已收消息。
 - office_* 工具桥命令集：Word 面 get_text / get_selection / search / replace_text /
-  insert_text / add_comment / format_text / set_paragraph_format / get_formatting；
+  insert_text / add_comment / format_text / set_paragraph_format / get_formatting /
+  set_numbering / format_table / apply_standard_format；
   Excel 面 excel_get_range / excel_set_values /
   excel_search；PPT 面 ppt_get_slides / ppt_replace_text。结果回传
   `POST /api/agent/office/result`（body `{requestId, ok, data|error}`，
@@ -184,6 +185,16 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
 - Word 格式面（format_text / set_paragraph_format / get_formatting）基于 WordApi 1.1，
   唯独段落 styleBuiltIn（标题级别）属 WordApi 1.3，旧宿主上设置会返回明确错误、读取时
   该字段缺省。长度单位一律是磅（行距按字号换算，12 磅字 1.5 倍行距 = 18 磅）。
+- 自动编号与表格格式（set_numbering / format_table）整片依赖 WordApi 1.3
+  （Word.List 与表格边框 API），旧宿主返回明确错误。Word 原生编号没有中文数字这一档，
+  kind=chinese 改为把「一、」写进各段段首（返回值 via='literalText'，同样是修订形态）；
+  旧宿主上 bullet/decimal 也走同一条手写回退。
+- apply_standard_format 与桌面端 LOWA、后端 write_docx 同一套律所标准格式（正文 12 磅
+  两端对齐、段后 18 磅、行距 16 磅、首行缩进 2 字符，主标题 16 磅加粗居中，小标题加粗
+  不缩进，表格 10 磅）。Office.js 只有固定磅值行距（没有「最小值」档，返回值标
+  lineSpacingMode='exact'）；中西文分设字体属 WordApiDesktop 1.3，不支持时退化为单一
+  中文字体（返回值 fontSplit=false）。单次最多处理 500 段（超出标 truncated），
+  scope=selection 时不处理表格。
 - Excel 区域读写基于 ExcelApi 1.1/1.2（getResizedRange），查找是客户端在已用区域
   内扫描（兼容旧宿主，不依赖 ExcelApi 1.9 的 findAll）；单次写入上限 2000 单元格，
   读取返回上限 500 行。Excel/PowerPoint 没有修订机制，写入直接生效。
