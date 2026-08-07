@@ -122,6 +122,16 @@ const NAMES = {
   sheet_set_autofilter: { zh: '设置自动筛选', en: 'Set autofilter' },
   sheet_freeze_panes: { zh: '冻结窗格', en: 'Freeze panes' },
   sheet_conditional_format: { zh: '设置条件格式', en: 'Conditional format' },
+  sheet_add_comment: { zh: '添加单元格批注', en: 'Add cell comment' },
+  sheet_get_comments: { zh: '查看单元格批注', en: 'Get cell comments' },
+  sheet_delete_comment: { zh: '删除单元格批注', en: 'Delete cell comment' },
+  sheet_set_data_validation: { zh: '设置数据验证', en: 'Set data validation' },
+  sheet_add_chart: { zh: '插入图表', en: 'Add chart' },
+  sheet_search: { zh: '表格内查找', en: 'Search sheet' },
+  sheet_define_name: { zh: '管理命名区域', en: 'Define named range' },
+  sheet_protect_sheet: { zh: '保护/取消保护工作表', en: 'Protect sheet' },
+  sheet_group_rows_cols: { zh: '行列分组', en: 'Group rows/columns' },
+  sheet_add_pivot_table: { zh: '插入数据透视表', en: 'Add pivot table' },
   // Office 插件（Word 任务窗格）office_* 工具桥
   // 正常情况下主前端（lowa 会话）看不到这些工具（会话能力过滤），收录仅作兜底
   office_get_text: { zh: '读取文档', en: 'Read document' },

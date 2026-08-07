@@ -58,7 +58,7 @@
 |---|---|---|---|---|---|
 | 1 | 读取区域 | 已做：`office_excel_get_range` | 已做：`sheet_read_range` | 两侧都做 | |
 | 2 | 写入单元格 | 已做：`office_excel_set_values` | 已做：`sheet_write_cells` | 两侧都做 | |
-| 3 | 搜索 | 已做：`office_excel_search` | 已做（隐含在 `sheet_read_range` 读后自行比对，无专用搜索原语，待查证是否需要专门补） | 该补桌面端，低优先级 | 桌面缺专用 `sheet_search`，目前靠模型读区域自行找，效率低但能绕过 |
+| 3 | 搜索 | 已做：`office_excel_search` | **已做**：`sheet_search`（波次 C，遍历区域比对字符串） | 两侧都做 | 桌面端已补齐专用搜索原语 |
 | 4 | 单元格格式（字体/字号/颜色/对齐/数字格式） | 已做：`office_excel_format_cells` | 已做：`sheet_format_cells` | 两侧都做 | |
 | 5 | 边框 | 已做：`office_excel_set_borders` | 已做：`sheet_set_borders` | 两侧都做 | |
 | 6 | 行高列宽 | 已做：`office_excel_edit_rows_cols`（set_width/set_height） | 已做：`sheet_set_row_col` | 两侧都做 | |
@@ -70,14 +70,14 @@
 | 12 | 条件格式 | 已做：`office_excel_conditional_format`（cellValue/colorScale，每次 apply 替换） | 已做：`sheet_conditional_format`（同口径） | 两侧都做 | |
 | 13 | 工作表管理（增删改名移动） | 已做：`office_excel_manage_sheets` | 已做：`sheet_manage_sheets` | 两侧都做 | |
 | 14 | 公式写入与错误回读 | 已做：`office_excel_set_formulas`（Office.js 原生文法，逗号+`Sheet1!A1`） | 已做（经 `sheet_write_cells` 写入以 `=` 开头的字符串，LOWA `normalizeFormula` 做分号/点号归一）；**错误回读是否有 `formulaErrors` 同款返回值待查证** | 该补桌面端，中优先级（若确认缺失） | 插件侧写入后专门读回 `range.values` 收集 `#` 开头错误进 `formulaErrors`；桌面侧 `sheet_write_cells` 是否做等价回读需看代码确认，本次未逐行核实实现细节 |
-| 15 | 图表（Chart） | **可做未做**：`Excel.ChartCollection.add`（ExcelApi 1.1） | **未做**：`sheet_*` 无对应工具，UNO Calc 图表对象模型（`XTableChart`/`XDiagram`）存在但复杂度高 | **两侧都补，中优先级** | 尽调/财务分析报告常用图表展示数据趋势 |
-| 16 | 透视表（PivotTable） | **可做未做**：`Excel.PivotTableCollection.add`（ExcelApi 1.3，1.8 增强字段控制） | **未做**：`sheet_*` 无对应工具，UNO `DataPilotTables` 存在但编组复杂 | **两侧都补，中优先级** | 尽调场景常需要按维度汇总大量数据 |
+| 15 | 图表（Chart） | **可做未做**：`Excel.ChartCollection.add`（ExcelApi 1.1） | **已做**：`sheet_add_chart`（波次 C，`XTableCharts`，起步「建图表+选类型+标题」三件事，不支持自定义位置/多系列） | **两侧都补，中优先级** | 桌面端已补最小可用形态；插件端仍待做 |
+| 16 | 透视表（PivotTable） | **可做未做**：`Excel.PivotTableCollection.add`（ExcelApi 1.3，1.8 增强字段控制） | **已做**：`sheet_add_pivot_table`（波次 C，`XDataPilotTables`，仅「行分组+单数据字段求和」基础形态） | **两侧都补，中优先级** | 桌面端已补最小可用形态；插件端仍待做 |
 | 17 | Table 对象（结构化表/ListObject） | **可做未做**：`Excel.TableCollection.add`（ExcelApi 1.1） | **未做**：`sheet_*` 无「转为结构化表」原语，UNO `DatabaseRange` 存在 | 低价值不补 | 现有 `sheet_format_cells` + `sheet_set_autofilter` + `sheet_sort_range` 已覆盖视觉与交互效果的大部分诉求，ListObject 主要价值在自动扩展公式，AI 编辑场景用得少 |
-| 18 | 命名区域（Named Range） | **可做未做**：`NamedItemCollection.add`（ExcelApi 1.1）、`getRangeOrNullObject`/`scope`（ExcelApi 1.4） | **未做**：`sheet_*` 无对应工具，UNO `NamedRanges` 存在 | 低价值不补 | AI 直接用 `Sheet1!A1:C10` 地址已够用，命名区域是给人读的便利机制 |
-| 19 | 数据验证（Data Validation） | **可做未做**：`Excel.DataValidation`（ExcelApi 1.8，含下拉列表/数值范围/自定义公式） | **未做**：`sheet_*` 无对应工具，UNO `XSheetCellRange` 的 `Validation` 属性存在 | **两侧都补，中优先级** | 尽调数据收集模板（如「合规状态」下拉）场景有实际价值 |
-| 20 | 单元格批注/备注（Comment/Note） | **可做未做**：`Excel.CommentCollection`（ExcelApi 1.10，含回复线程/解决状态，与 Word 批注同构） | **未做**：`sheet_*` 完全没有批注能力，`doc_add_comment` 是 Writer 专属（`xModel.getText()` 在 Calc 上失败），UNO `XSheetAnnotations` 存在 | **两侧都补，高优先级** | 与判定原则 1 同理——律师在 Excel 里标注数据来源/疑点是核心动作，目前两侧都是空白，比 Word 批注读写缺口更彻底 |
-| 21 | 工作簿/工作表保护 | **可做未做**：`WorksheetProtection`（ExcelApi 1.2）、`WorkbookProtection`（ExcelApi 1.7） | **未做**：`sheet_*` 无对应工具 | 低价值不补 | 保护多用于分发防误改场景，AI 编辑阶段用处有限 |
-| 22 | 分组/大纲（Group/Outline） | **可做未做**：`Range.group`/`ungroup`（ExcelApi 1.10） | **未做**：`sheet_*` 无对应工具，UNO `XSheetOutline` 存在 | 低价值不补 | 锦上添花，法律场景使用频率低 |
+| 18 | 命名区域（Named Range） | **可做未做**：`NamedItemCollection.add`（ExcelApi 1.1）、`getRangeOrNullObject`/`scope`（ExcelApi 1.4） | **已做**：`sheet_define_name`（波次 C，工作簿级 `XNamedRanges`） | 低价值不补，但维护者拍板做了 | AI 直接用 `Sheet1!A1:C10` 地址已够用，命名区域是给人读的便利机制；桌面端仍按判定原则补齐，插件端未跟进 |
+| 19 | 数据验证（Data Validation） | **可做未做**：`Excel.DataValidation`（ExcelApi 1.8，含下拉列表/数值范围/自定义公式） | **已做**：`sheet_set_data_validation`（波次 C，`Validation` 属性对象，list/wholeNumber/decimal/date/time/textLength/custom） | **两侧都补，中优先级** | 桌面端已补；插件端仍待做 |
+| 20 | 单元格批注/备注（Comment/Note） | **可做未做**：`Excel.CommentCollection`（ExcelApi 1.10，含回复线程/解决状态，与 Word 批注同构） | **已做（不同构）**：`sheet_add_comment`/`sheet_get_comments`/`sheet_delete_comment`（波次 C，`XSheetAnnotations`）——**没有线程回复/解决状态**，author/date 只读、无法强制署名，与 Word 批注不同构，工具描述已注明差异 | **两侧都补，高优先级** | 桌面端补的是「增/查/删」三件事，不含 reply/resolve；插件端仍待做 |
+| 21 | 工作簿/工作表保护 | **可做未做**：`WorksheetProtection`（ExcelApi 1.2）、`WorkbookProtection`（ExcelApi 1.7） | **已做**：`sheet_protect_sheet`（波次 C，`XProtectable`，工作表级） | 低价值不补，但维护者拍板做了 | 保护多用于分发防误改场景，AI 编辑阶段用处有限；桌面端仍按判定原则补齐，插件端未跟进 |
+| 22 | 分组/大纲（Group/Outline） | **可做未做**：`Range.group`/`ungroup`（ExcelApi 1.10） | **已做**：`sheet_group_rows_cols`（波次 C，`XSheetOutline`） | 低价值不补，但维护者拍板做了 | 锦上添花，法律场景使用频率低；桌面端仍按判定原则补齐，插件端未跟进 |
 
 ---
 
@@ -136,21 +136,21 @@
 |---|---|---|---|
 | 高 | 批注读取/回复/解决（`doc_get_comments`/`reply_comment`/`resolve_comment`） | Word #9 | 中（worker 端 `list_comments`/`goto_comment`/`set_comment_resolved`/`delete_comment` 已存在，缺的是包一层 AI 工具面并补齐 reply 能力） |
 | 高 | 修订接受/拒绝（`doc_accept_revision`/`reject_revision`/`accept_all`/`reject_all`） | Word #10 | 中（worker `resolve_revision`/`resolve_all_revisions` 已存在，同上，包一层 AI 工具面） |
-| 高 | Excel 单元格批注（`sheet_add_comment` 等） | Excel #20 | 中到大（worker 侧目前对 Calc 批注零支持，UNO `XSheetAnnotations` 需新建） |
-| 中 | 页眉页脚（`doc_edit_header_footer`） | Word #11 | 中（UNO `Section.getHeader/getFooter` 成熟） |
-| 中 | 分页符/分节符（`doc_insert_break`） | Word #12 | 中（UNO 段落属性 `BreakType`/`PageDescName`） |
-| 中 | 超链接 AI 原语（`doc_insert_hyperlink`/`doc_set_hyperlink`） | Word #13 | 小（worker 已有 `get/set_selection_hyperlink` 实现，只差 AI 工具面） |
-| 中 | 脚注/尾注（`doc_insert_footnote`） | Word #15 | 中（UNO `XFootnote`） |
-| 中 | Excel 数据验证（`sheet_set_data_validation`） | Excel #19 | 小到中 |
-| 中 | Excel 图表（`sheet_add_chart`） | Excel #15 | 大（UNO Calc 图表对象模型复杂，`XTableChart`/`XDiagram`） |
-| 中 | 图片插入 AI 原语（把 `insert_image` 从 host-initiated 扩展出 AI 可调用分支） | Word #14 | 小（复用现有 worker `insert_image` action） |
-| 中 | Excel 专用搜索原语（`sheet_search`） | Excel #3 | 小 |
-| 低 | 样式应用（`doc_set_style`） | Word #17 | 中（UNO `ParaStyleName`/`CharStyleName`） |
-| 低 | Excel 透视表（`sheet_add_pivot_table`） | Excel #16 | 大 |
-| 低 | Excel 命名区域/保护/分组 | Excel #18/21/22 | 各小 |
-| 观察 | PPT 实时编辑桥（新建 `doc_ppt_*`/Impress 桥，对齐插件 10 + 待补 3 = 13 个 command 的能力面） | PPT 全表 | 大（需要新机制：Impress UNO 实时光标编辑桥，参照 doc_*/sheet_* 架构重新做一遍） | 中（产品判断，见存疑判定 3） |
+| 高 | Excel 单元格批注（`sheet_add_comment` 等） | Excel #20 | **已实现**（波次 C）：`sheet_add_comment`/`sheet_get_comments`/`sheet_delete_comment`，`XSheetAnnotations`，无 reply/resolve |
+| 中 | 页眉页脚（`doc_edit_header_footer`） | Word #11 | **已实现**（波次 A/B）：`doc_edit_header_footer`→`edit_header_footer` |
+| 中 | 分页符/分节符（`doc_insert_break`） | Word #12 | **已实现**（波次 A/B）：`doc_insert_break`→`insert_break` |
+| 中 | 超链接 AI 原语（`doc_insert_hyperlink`/`doc_set_hyperlink`） | Word #13 | **已实现**（波次 A/B）：`doc_set_hyperlink`→`set_hyperlink_at_anchor` |
+| 中 | 脚注/尾注（`doc_insert_footnote`） | Word #15 | **已实现**（波次 A/B）：`doc_insert_footnote`/`doc_insert_endnote` |
+| 中 | Excel 数据验证（`sheet_set_data_validation`） | Excel #19 | **已实现**（波次 C）：list/wholeNumber/decimal/date/time/textLength/custom |
+| 中 | Excel 图表（`sheet_add_chart`） | Excel #15 | **已实现**（波次 C）：`XTableCharts`，基础形态（建图表+选类型+标题） |
+| 中 | 图片插入 AI 原语（把 `insert_image` 从 host-initiated 扩展出 AI 可调用分支） | Word #14 | **已实现**（波次 A/B）：`doc_insert_image` |
+| 中 | Excel 专用搜索原语（`sheet_search`） | Excel #3 | **已实现**（波次 C） |
+| 低 | 样式应用（`doc_set_style`） | Word #17 | **已实现**（波次 A/B）：`doc_set_style`→`set_style` |
+| 低 | Excel 透视表（`sheet_add_pivot_table`） | Excel #16 | **已实现**（波次 C）：`XDataPilotTables`，仅「行分组+求和」基础形态 |
+| 低 | Excel 命名区域/保护/分组 | Excel #18/21/22 | **已实现**（波次 C）：`sheet_define_name`/`sheet_protect_sheet`/`sheet_group_rows_cols` |
+| 观察 | PPT 实时编辑桥（新建 `doc_ppt_*`/Impress 桥，对齐插件 10 + 待补 3 = 13 个 command 的能力面） | PPT 全表 | 大（需要新机制：Impress UNO 实时光标编辑桥，参照 doc_*/sheet_* 架构重新做一遍） | 中（产品判断，见存疑判定 3）——**仍未排期，波次 C 未涉及** |
 
-桌面端共 15 条候选，前三名：批注读取/回复/解决（高）、修订接受/拒绝（高）、Excel 单元格批注（高）。
+桌面端 15 条候选中 14 条已在波次 A/B（Word）与波次 C（Excel）落地，仅剩 PPT 实时编辑桥（观察项，需产品先拍板架构方向）未排期。
 
 ---
 
