@@ -277,6 +277,181 @@ class OfficeEditToolsTest {
         verifyNoInteractions(bridge);
     }
 
+    // ==================== 表格 / 结构 / 批注（批次 8） ====================
+
+    @Test
+    @DisplayName("office_insert_table：rowsJson 解析为二维数组下发，position 缺省为 after")
+    void insertTableDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("insert_table"), anyMap())).thenReturn("{}");
+
+        tools.office_insert_table("conv-1", "[[\"项目\",\"金额\"],[\"咨询费\",\"10000\"]]", true, "第一条", null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("insert_table"), args.capture());
+        Map<String, Object> sent = args.getValue();
+        assertEquals(true, sent.get("headerBold"));
+        assertEquals("第一条", sent.get("anchorText"));
+        assertEquals("after", sent.get("position"));
+        @SuppressWarnings("unchecked")
+        java.util.List<java.util.List<String>> rows = (java.util.List<java.util.List<String>>) sent.get("rows");
+        assertEquals("项目", rows.get(0).get(0));
+        assertEquals("10000", rows.get(1).get(1));
+    }
+
+    @Test
+    @DisplayName("office_table_set_cell：cell 坐标透传，tableIndex 缺省 0")
+    void tableSetCellDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("table_set_cell"), anyMap())).thenReturn("{}");
+
+        tools.office_table_set_cell("conv-1", null, "B2", "新内容");
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("table_set_cell"), args.capture());
+        assertEquals(0, args.getValue().get("tableIndex"));
+        assertEquals("B2", args.getValue().get("cell"));
+        assertEquals("新内容", args.getValue().get("text"));
+    }
+
+    @Test
+    @DisplayName("office_table_add_row：rowIndex 缺省下发 -1（追加到表尾），count 缺省 1")
+    void tableAddRowDefaults() {
+        when(bridge.executeOfficeCommand(any(), eq("table_add_row"), anyMap())).thenReturn("{}");
+
+        tools.office_table_add_row("conv-1", null, null, null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("table_add_row"), args.capture());
+        assertEquals(0, args.getValue().get("tableIndex"));
+        assertEquals(-1, args.getValue().get("position"));
+        assertEquals(1, args.getValue().get("count"));
+    }
+
+    @Test
+    @DisplayName("office_table_delete_row：rowIndex 必填，缺失时报错且不触碰桥")
+    void tableDeleteRowRequiresRowIndex() {
+        assertTrue(tools.office_table_delete_row("conv-1", 0, null, 1).startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    @Test
+    @DisplayName("office_table_add_col / office_table_delete_col：colIndex 透传为 position")
+    void tableColDispatches() {
+        when(bridge.executeOfficeCommand(any(), eq("table_add_col"), anyMap())).thenReturn("{}");
+        when(bridge.executeOfficeCommand(any(), eq("table_delete_col"), anyMap())).thenReturn("{}");
+
+        tools.office_table_add_col("conv-1", 1, 0, 2);
+        tools.office_table_delete_col("conv-1", 1, 2, 1);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> addArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("table_add_col"), addArgs.capture());
+        assertEquals(1, addArgs.getValue().get("tableIndex"));
+        assertEquals(0, addArgs.getValue().get("position"));
+        assertEquals(2, addArgs.getValue().get("count"));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> delArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("table_delete_col"), delArgs.capture());
+        assertEquals(2, delArgs.getValue().get("position"));
+    }
+
+    @Test
+    @DisplayName("表格工具参数校验失败：返回 Error 前缀且不触碰桥")
+    void tableValidationFailuresDoNotTouchBridge() {
+        assertTrue(tools.office_insert_table("conv-1", null, null, null, null).startsWith("Error"));
+        assertTrue(tools.office_insert_table("conv-1", "not json", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_insert_table("conv-1", "[]", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_insert_table("conv-1", "[[\"a\",\"b\"],[\"c\"]]", null, null, null).startsWith("Error"));
+        assertTrue(tools.office_insert_table("conv-1", "[[\"a\"]]", null, null, "middle").startsWith("Error"));
+        assertTrue(tools.office_table_read("conv-1", -1).startsWith("Error"));
+        assertTrue(tools.office_table_set_cell("conv-1", -1, "B2", "x").startsWith("Error"));
+        assertTrue(tools.office_table_set_cell("conv-1", 0, "", "x").startsWith("Error"));
+        assertTrue(tools.office_table_set_cell("conv-1", 0, "2B", "x").startsWith("Error"));
+        assertTrue(tools.office_table_add_row("conv-1", -1, null, null).startsWith("Error"));
+        assertTrue(tools.office_table_add_row("conv-1", 0, null, 0).startsWith("Error"));
+        assertTrue(tools.office_table_add_row("conv-1", 0, null, 51).startsWith("Error"));
+        assertTrue(tools.office_table_delete_col("conv-1", 0, null, 1).startsWith("Error"));
+        verifyNoInteractions(bridge);
+    }
+
+    @Test
+    @DisplayName("office_insert_break：breakType/position 缺省，anchorText 缺省传空串")
+    void insertBreakDefaults() {
+        when(bridge.executeOfficeCommand(any(), eq("insert_break"), anyMap())).thenReturn("{}");
+
+        tools.office_insert_break("conv-1", null, null, null);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("insert_break"), args.capture());
+        assertEquals("page", args.getValue().get("breakType"));
+        assertEquals("", args.getValue().get("anchorText"));
+        assertEquals("after", args.getValue().get("position"));
+    }
+
+    @Test
+    @DisplayName("office_set_hyperlink：url 协议白名单校验")
+    void setHyperlinkValidatesUrlProtocol() {
+        when(bridge.executeOfficeCommand(any(), eq("set_hyperlink"), anyMap())).thenReturn("{}");
+
+        tools.office_set_hyperlink("conv-1", "本所官网", "https://example.com");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("set_hyperlink"), args.capture());
+        assertEquals("https://example.com", args.getValue().get("url"));
+
+        assertTrue(tools.office_set_hyperlink("conv-1", "本所官网", "javascript:alert(1)").startsWith("Error"));
+        assertTrue(tools.office_set_hyperlink("conv-1", "本所官网", "").startsWith("Error"));
+        assertTrue(tools.office_set_hyperlink("conv-1", "", "https://example.com").startsWith("Error"));
+    }
+
+    @Test
+    @DisplayName("office_edit_header_footer：part 白名单校验，text 缺省传空串")
+    void editHeaderFooterValidatesPart() {
+        when(bridge.executeOfficeCommand(any(), eq("edit_header_footer"), anyMap())).thenReturn("{}");
+
+        tools.office_edit_header_footer("conv-1", "footer", null, "center");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> args = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("edit_header_footer"), args.capture());
+        assertEquals("footer", args.getValue().get("part"));
+        assertEquals("", args.getValue().get("text"));
+        assertEquals("center", args.getValue().get("alignment"));
+
+        assertTrue(tools.office_edit_header_footer("conv-1", "sidebar", "text", null).startsWith("Error"));
+    }
+
+    @Test
+    @DisplayName("office_get_comments / office_reply_comment / office_resolve_comment：定位参数与透传")
+    void commentToolsDispatch() {
+        when(bridge.executeOfficeCommand(eq("conv-1"), eq("get_comments"), anyMap()))
+                .thenReturn("{\"comments\":[]}");
+        assertEquals("{\"comments\":[]}", tools.office_get_comments("conv-1"));
+
+        when(bridge.executeOfficeCommand(any(), eq("reply_comment"), anyMap())).thenReturn("{}");
+        tools.office_reply_comment("conv-1", null, 0, "已核实");
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> replyArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("reply_comment"), replyArgs.capture());
+        assertEquals(0, replyArgs.getValue().get("commentIndex"));
+        assertEquals("已核实", replyArgs.getValue().get("reply"));
+
+        when(bridge.executeOfficeCommand(any(), eq("resolve_comment"), anyMap())).thenReturn("{}");
+        tools.office_resolve_comment("conv-1", "cmt-123", null, null);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> resolveArgs = ArgumentCaptor.forClass(Map.class);
+        verify(bridge).executeOfficeCommand(eq("conv-1"), eq("resolve_comment"), resolveArgs.capture());
+        assertEquals("cmt-123", resolveArgs.getValue().get("commentId"));
+        assertEquals(true, resolveArgs.getValue().get("resolved"));
+
+        assertTrue(tools.office_reply_comment("conv-1", null, null, "回复").startsWith("Error"));
+        assertTrue(tools.office_reply_comment("conv-1", null, 0, " ").startsWith("Error"));
+        assertTrue(tools.office_resolve_comment("conv-1", null, null, null).startsWith("Error"));
+    }
+
     // ==================== Excel/PPT 面（宿主细分工具） ====================
 
     @Test

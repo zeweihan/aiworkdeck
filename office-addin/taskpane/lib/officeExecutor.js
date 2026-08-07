@@ -74,6 +74,18 @@ function farEastFontSupported() {
   }
 }
 
+/**
+ * TableColumnCollection.add()（表格中间位置插列）属 WordApiDesktop 1.3——同一版本号、
+ * 同一门槛为 farEastFontSupported，但语义不同（表格结构 vs 字体），分开命名以免误读。
+ */
+function wordApiDesktop13Supported() {
+  try {
+    return Office.context.requirements.isSetSupported('WordApiDesktop', '1.3')
+  } catch (e) {
+    return false
+  }
+}
+
 function truncate(text) {
   const s = text || ''
   return s.length > MAX_TEXT_CHARS
@@ -335,6 +347,16 @@ const TABLE_ALIGNMENTS = { left: 'Left', center: 'Centered', right: 'Right' }
 /** Word.BorderType 的两个取值 */
 const BORDER_TYPE_SINGLE = 'Single'
 const BORDER_TYPE_NONE = 'None'
+
+/** 单元格坐标 "B2"（列字母+行号，行号 1 开始）→ 0 起的 {row, col}（批次 8） */
+function parseCellRef(ref) {
+  const m = /^([A-Za-z]{1,3})(\d{1,6})$/.exec(String(ref || '').trim())
+  if (!m) throw new Error(`单元格坐标格式非法：${ref}（应为列字母+行号，如 B2）`)
+  const letters = m[1].toUpperCase()
+  let col = 0
+  for (let i = 0; i < letters.length; i++) col = col * 26 + (letters.charCodeAt(i) - 64)
+  return { row: Number(m[2]) - 1, col: col - 1 }
+}
 
 /* ---- 律所标准格式 ---- */
 
@@ -872,6 +894,392 @@ const HANDLERS = {
         if (scope === 'selection') result.note = '选区范围不处理表格字号'
         return result
       })
+    })
+  },
+
+  // ==================== 表格（批次 8，走 Word 原生修订） ====================
+
+  async insert_table(args) {
+    const rows = args.rows
+    if (!Array.isArray(rows) || !rows.length || !Array.isArray(rows[0]) || !rows[0].length) {
+      throw new Error('rowsJson 不能为空表')
+    }
+    const rowCount = rows.length
+    const colCount = rows[0].length
+    const anchorText = String(args.anchorText || '')
+    const position = args.position === 'before' ? 'before' : 'after'
+    if (!wordApi13Supported()) throw new Error('当前 Word 版本不支持插入表格（需要 WordApi 1.3）')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        let table
+        if (anchorText) {
+          const items = await searchRanges(context, anchorText, true)
+          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
+          table = items[0].insertTable(rowCount, colCount, location, rows)
+        } else {
+          // 无锚点：插在当前光标/选区之后（与 insert_text 的无锚点语义一致）
+          table = context.document.getSelection().insertTable(rowCount, colCount, Word.InsertLocation.after, rows)
+        }
+        if (args.headerBold) table.rows.getFirst().font.bold = true
+        await context.sync()
+        return { inserted: true, rows: rowCount, cols: colCount, anchored: !!anchorText }
+      })
+    })
+  },
+
+  async table_read(args) {
+    let index = Math.floor(Number(args.tableIndex))
+    if (!Number.isFinite(index) || index < 0) index = 0
+    if (!wordApi13Supported()) throw new Error('当前 Word 版本不支持读取表格（需要 WordApi 1.3）')
+    return Word.run(async (context) => {
+      const tables = context.document.body.tables
+      tables.load('items')
+      await context.sync()
+      if (!tables.items.length) throw new Error('当前文档中没有表格')
+      if (index >= tables.items.length) {
+        throw new Error(`tableIndex ${index} 越界：文档中共 ${tables.items.length} 张表格（序号从 0 开始）`)
+      }
+      const table = tables.items[index]
+      const rows = table.rows
+      rows.load('items')
+      await context.sync()
+      const rowItems = rows.items
+      rowItems.forEach((row) => row.cells.load('items'))
+      await context.sync()
+      rowItems.forEach((row) => row.cells.items.forEach((cell) => cell.body.load('text')))
+      await context.sync()
+      const cells = rowItems.map((row) => row.cells.items.map((cell) => String(cell.body.text || '').replace(/\r$/, '').trim()))
+      return {
+        tableIndex: index,
+        tableCount: tables.items.length,
+        rowCount: cells.length,
+        colCount: cells[0] ? cells[0].length : 0,
+        cells
+      }
+    })
+  },
+
+  async table_set_cell(args) {
+    let index = Math.floor(Number(args.tableIndex))
+    if (!Number.isFinite(index) || index < 0) index = 0
+    const { row, col } = parseCellRef(args.cell)
+    const text = args.text == null ? '' : String(args.text)
+    if (!wordApi13Supported()) throw new Error('当前 Word 版本不支持修改表格单元格（需要 WordApi 1.3）')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const tables = context.document.body.tables
+        tables.load('items')
+        await context.sync()
+        if (index >= tables.items.length) {
+          throw new Error(`tableIndex ${index} 越界：文档中共 ${tables.items.length} 张表格（序号从 0 开始）`)
+        }
+        const table = tables.items[index]
+        const cell = table.getCellOrNullObject(row, col)
+        cell.load('isNullObject')
+        await context.sync()
+        if (cell.isNullObject) {
+          throw new Error(`单元格 ${args.cell} 不存在（可能越界或落在合并单元格里），请先用 office_table_read 核对`)
+        }
+        const body = cell.body
+        body.load('text')
+        await context.sync()
+        const rangeText = String(body.text == null ? '' : body.text).replace(/\r$/, '')
+        const multiline = /[\r\n]/.test(text)
+        const applied = multiline || !rangeText ? null : await applyMinimalRedline(context, body, rangeText, text)
+        let via
+        if (applied == null) {
+          body.insertText(text, Word.InsertLocation.replace)
+          await context.sync()
+          via = 'fullReplace'
+        } else {
+          via = applied ? 'minimalRedline' : 'unchanged'
+        }
+        return { cell: args.cell, via, edits: applied || 0 }
+      })
+    })
+  },
+
+  async table_add_row(args) {
+    let index = Math.floor(Number(args.tableIndex))
+    if (!Number.isFinite(index) || index < 0) index = 0
+    let position = Math.floor(Number(args.position))
+    if (!Number.isFinite(position)) position = -1
+    const count = Math.max(1, Math.floor(Number(args.count)) || 1)
+    if (!wordApi13Supported()) throw new Error('当前 Word 版本不支持表格行操作（需要 WordApi 1.3）')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const tables = context.document.body.tables
+        tables.load('items')
+        await context.sync()
+        if (index >= tables.items.length) {
+          throw new Error(`tableIndex ${index} 越界：文档中共 ${tables.items.length} 张表格（序号从 0 开始）`)
+        }
+        const table = tables.items[index]
+        table.load('rowCount')
+        await context.sync()
+        const rowCount = table.rowCount
+        if (position < 0 || position >= rowCount) {
+          table.addRows(Word.InsertLocation.end, count)
+        } else if (position === 0) {
+          table.addRows(Word.InsertLocation.start, count)
+        } else {
+          const rows = table.rows
+          rows.load('items')
+          await context.sync()
+          rows.items[position].insertRows(Word.InsertLocation.before, count)
+        }
+        table.load('rowCount')
+        await context.sync()
+        return { tableIndex: index, added: count, rowCount: table.rowCount }
+      })
+    })
+  },
+
+  // 表格结构删除走 API 直接删除，不产生修订（同桌面端 doc_table_delete_row/col 的已知限制）
+  async table_delete_row(args) {
+    let index = Math.floor(Number(args.tableIndex))
+    if (!Number.isFinite(index) || index < 0) index = 0
+    const position = Math.floor(Number(args.position))
+    const count = Math.max(1, Math.floor(Number(args.count)) || 1)
+    if (!Number.isFinite(position) || position < 0) throw new Error('缺少要删的行号（position，0 开始）')
+    if (!wordApi13Supported()) throw new Error('当前 Word 版本不支持表格行操作（需要 WordApi 1.3）')
+    return Word.run(async (context) => {
+      const tables = context.document.body.tables
+      tables.load('items')
+      await context.sync()
+      if (index >= tables.items.length) {
+        throw new Error(`tableIndex ${index} 越界：文档中共 ${tables.items.length} 张表格（序号从 0 开始）`)
+      }
+      const table = tables.items[index]
+      table.load('rowCount')
+      await context.sync()
+      if (position >= table.rowCount) {
+        throw new Error(`rowIndex ${position} 越界：表格共 ${table.rowCount} 行（序号从 0 开始）`)
+      }
+      if (table.rowCount - count < 1) {
+        throw new Error(`表格至少要留一行，当前 ${table.rowCount} 行删不了 ${count} 行`)
+      }
+      table.deleteRows(position, count)
+      await context.sync()
+      table.load('rowCount')
+      await context.sync()
+      return { tableIndex: index, deleted: count, rowCount: table.rowCount, tracked: false }
+    })
+  },
+
+  async table_add_col(args) {
+    let index = Math.floor(Number(args.tableIndex))
+    if (!Number.isFinite(index) || index < 0) index = 0
+    let position = Math.floor(Number(args.position))
+    if (!Number.isFinite(position)) position = -1
+    const count = Math.max(1, Math.floor(Number(args.count)) || 1)
+    if (!wordApi13Supported()) throw new Error('当前 Word 版本不支持表格列操作（需要 WordApi 1.3）')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const tables = context.document.body.tables
+        tables.load('items')
+        await context.sync()
+        if (index >= tables.items.length) {
+          throw new Error(`tableIndex ${index} 越界：文档中共 ${tables.items.length} 张表格（序号从 0 开始）`)
+        }
+        const table = tables.items[index]
+        const cols = table.columns
+        cols.load('items')
+        await context.sync()
+        const colCount = cols.items.length
+        if (position < 0 || position >= colCount) {
+          table.addColumns(Word.InsertLocation.end, count)
+        } else if (position === 0) {
+          table.addColumns(Word.InsertLocation.start, count)
+        } else {
+          if (!wordApiDesktop13Supported()) {
+            throw new Error('在表格中间位置插入列需要较新的桌面版 Word（WordApiDesktop 1.3，Word 网页版不支持），可改用 colIndex=0（最前）或 -1（最后）')
+          }
+          const target = cols.items[position]
+          for (let i = 0; i < count; i++) cols.add(target)
+        }
+        await context.sync()
+        return { tableIndex: index, added: count, colCount: colCount + count }
+      })
+    })
+  },
+
+  async table_delete_col(args) {
+    let index = Math.floor(Number(args.tableIndex))
+    if (!Number.isFinite(index) || index < 0) index = 0
+    const position = Math.floor(Number(args.position))
+    const count = Math.max(1, Math.floor(Number(args.count)) || 1)
+    if (!Number.isFinite(position) || position < 0) throw new Error('缺少要删的列号（position，0 开始）')
+    if (!wordApi13Supported()) throw new Error('当前 Word 版本不支持表格列操作（需要 WordApi 1.3）')
+    return Word.run(async (context) => {
+      const tables = context.document.body.tables
+      tables.load('items')
+      await context.sync()
+      if (index >= tables.items.length) {
+        throw new Error(`tableIndex ${index} 越界：文档中共 ${tables.items.length} 张表格（序号从 0 开始）`)
+      }
+      const table = tables.items[index]
+      const cols = table.columns
+      cols.load('items')
+      await context.sync()
+      const colCount = cols.items.length
+      if (position >= colCount) {
+        throw new Error(`colIndex ${position} 越界：表格共 ${colCount} 列（序号从 0 开始）`)
+      }
+      if (colCount - count < 1) {
+        throw new Error(`表格至少要留一列，当前 ${colCount} 列删不了 ${count} 列`)
+      }
+      table.deleteColumns(position, count)
+      await context.sync()
+      return { tableIndex: index, deleted: count, colCount: colCount - count, tracked: false }
+    })
+  },
+
+  // ==================== 结构（分页符/超链接/页眉页脚，批次 8） ====================
+
+  async insert_break(args) {
+    const breakType = args.breakType === 'sectionNext' ? Word.BreakType.sectionNext : Word.BreakType.page
+    const anchorText = String(args.anchorText || '')
+    const position = args.position === 'before' ? 'before' : 'after'
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const location = position === 'before' ? Word.InsertLocation.before : Word.InsertLocation.after
+        if (anchorText) {
+          const items = await searchRanges(context, anchorText, true)
+          if (!items.length) throw new Error('未找到锚点文本，请确认 anchorText 与文档内容精确一致')
+          items[0].insertBreak(breakType, location)
+        } else {
+          context.document.getSelection().insertBreak(breakType, location)
+        }
+        await context.sync()
+        return { inserted: true, breakType: args.breakType || 'page', anchored: !!anchorText }
+      })
+    })
+  },
+
+  async set_hyperlink(args) {
+    const anchorText = String(args.anchorText || '')
+    const url = String(args.url || '')
+    if (!anchorText) throw new Error('目标文本不能为空')
+    if (!url) throw new Error('url 不能为空')
+    if (!wordApi13Supported()) throw new Error('当前 Word 版本不支持设置超链接（需要 WordApi 1.3）')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const items = await searchRanges(context, anchorText, true)
+        if (!items.length) {
+          throw new Error('未找到目标文本，请确认 anchorText 与文档内容精确一致（可先用 search 命令核对）')
+        }
+        items[0].hyperlink = url
+        await context.sync()
+        return { linked: true, url }
+      })
+    })
+  },
+
+  async edit_header_footer(args) {
+    const part = args.part === 'footer' ? 'footer' : 'header'
+    const text = args.text == null ? '' : String(args.text)
+    const alignment = args.alignment == null ? null : toEnumValue(ALIGNMENTS, args.alignment, 'alignment')
+    return Word.run(async (context) => {
+      return withTracking(context, async () => {
+        const section = context.document.sections.getFirst()
+        const body = part === 'footer'
+          ? section.getFooter(Word.HeaderFooterType.primary)
+          : section.getHeader(Word.HeaderFooterType.primary)
+        body.insertText(text, Word.InsertLocation.replace)
+        await context.sync()
+        if (alignment) {
+          const paragraphs = body.paragraphs
+          paragraphs.load('items')
+          await context.sync()
+          paragraphs.items.forEach((p) => { p.alignment = alignment })
+          await context.sync()
+        }
+        return { part, textLength: text.length, alignment: args.alignment || null }
+      })
+    })
+  },
+
+  // ==================== 批注（读取/回复/解决，批次 8） ====================
+
+  async get_comments() {
+    if (!trackingSupported()) throw new Error('当前 Word 版本不支持读取批注（需要 WordApi 1.4）')
+    return Word.run(async (context) => {
+      const comments = context.document.body.getComments()
+      comments.load('items')
+      await context.sync()
+      const items = comments.items
+      items.forEach((c) => c.load('id,authorName,content,creationDate,resolved'))
+      const ranges = items.map((c) => {
+        const r = c.getRange()
+        r.load('text')
+        return r
+      })
+      await context.sync()
+      return {
+        count: items.length,
+        comments: items.map((c, i) => ({
+          index: i,
+          id: c.id,
+          author: c.authorName,
+          content: c.content,
+          createdAt: c.creationDate ? new Date(c.creationDate).toISOString() : null,
+          resolved: !!c.resolved,
+          anchorText: (ranges[i].text || '').slice(0, 200)
+        }))
+      }
+    })
+  },
+
+  async reply_comment(args) {
+    const commentId = String(args.commentId || '')
+    const commentIndex = args.commentIndex
+    const reply = String(args.reply || '')
+    if (!reply) throw new Error('回复内容不能为空')
+    if (!commentId && (commentIndex == null || commentIndex < 0)) {
+      throw new Error('缺少批注定位参数（commentId 或 commentIndex）')
+    }
+    if (!trackingSupported()) throw new Error('当前 Word 版本不支持批注（需要 WordApi 1.4）')
+    return Word.run(async (context) => {
+      const comments = context.document.body.getComments()
+      comments.load('items')
+      await context.sync()
+      const items = comments.items
+      if (commentId) items.forEach((c) => c.load('id'))
+      await context.sync()
+      const target = commentId
+        ? items.find((c) => c.id === commentId) || null
+        : (commentIndex >= 0 && commentIndex < items.length ? items[commentIndex] : null)
+      if (!target) throw new Error('未找到指定批注，请先用 office_get_comments 核对 commentId/commentIndex')
+      target.reply(reply)
+      await context.sync()
+      return { replied: true }
+    })
+  },
+
+  async resolve_comment(args) {
+    const commentId = String(args.commentId || '')
+    const commentIndex = args.commentIndex
+    const resolved = args.resolved !== false
+    if (!commentId && (commentIndex == null || commentIndex < 0)) {
+      throw new Error('缺少批注定位参数（commentId 或 commentIndex）')
+    }
+    if (!trackingSupported()) throw new Error('当前 Word 版本不支持批注（需要 WordApi 1.4）')
+    return Word.run(async (context) => {
+      const comments = context.document.body.getComments()
+      comments.load('items')
+      await context.sync()
+      const items = comments.items
+      if (commentId) items.forEach((c) => c.load('id'))
+      await context.sync()
+      const target = commentId
+        ? items.find((c) => c.id === commentId) || null
+        : (commentIndex >= 0 && commentIndex < items.length ? items[commentIndex] : null)
+      if (!target) throw new Error('未找到指定批注，请先用 office_get_comments 核对 commentId/commentIndex')
+      target.resolved = resolved
+      await context.sync()
+      return { resolved }
     })
   },
 
@@ -1820,6 +2228,19 @@ export const COMMAND_DISPLAY_NAMES = {
   set_numbering: '设置自动编号',
   format_table: '设置表格格式',
   apply_standard_format: '套用标准格式',
+  insert_table: '插入表格',
+  table_read: '读取表格',
+  table_set_cell: '修改单元格',
+  table_add_row: '插入表格行',
+  table_delete_row: '删除表格行',
+  table_add_col: '插入表格列',
+  table_delete_col: '删除表格列',
+  insert_break: '插入分页符',
+  set_hyperlink: '设置超链接',
+  edit_header_footer: '编辑页眉页脚',
+  get_comments: '读取批注',
+  reply_comment: '回复批注',
+  resolve_comment: '解决批注',
   excel_get_range: '读取区域',
   excel_set_values: '写入区域',
   excel_search: '查找单元格',
@@ -1861,6 +2282,19 @@ const COMMAND_HOSTS = {
   set_numbering: 'word',
   format_table: 'word',
   apply_standard_format: 'word',
+  insert_table: 'word',
+  table_read: 'word',
+  table_set_cell: 'word',
+  table_add_row: 'word',
+  table_delete_row: 'word',
+  table_add_col: 'word',
+  table_delete_col: 'word',
+  insert_break: 'word',
+  set_hyperlink: 'word',
+  edit_header_footer: 'word',
+  get_comments: 'word',
+  reply_comment: 'word',
+  resolve_comment: 'word',
   excel_get_range: 'excel',
   excel_set_values: 'excel',
   excel_search: 'excel',

@@ -138,6 +138,23 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
     主前端（LOWA）会话反之不见 office_*。
 15. 任务窗格关闭时让主前端会话正常改文档（回归确认 LOWA 链路不受影响）。
 
+### 表格/结构/批注场景（批次 8）
+
+15a. 让 AI「插入一张两列三行的表格，写上项目和金额」→ 出现「插入表格」chip，
+    表格以 Word 原生修订形式插入；接着让 AI「读一下这张表」→ 出现「读取表格」chip，
+    回复给出二维数组坐标。
+15b. 让 AI「把表格 B2 改成 20000」→ 出现「修改单元格」chip，单元格文本以修订形式变化。
+15c. 让 AI「给这张表加一行」再「删掉第二行」→ 分别出现「插入表格行」「删除表格行」chip；
+    删除**不会**出现在审阅面板的修订列表里（直接生效，靠 Ctrl+Z 撤销——工具描述已明说）。
+15d. 让 AI「在段落中间插一个分页符」→ 出现「插入分页符」chip，光标处出现分页。
+15e. 让 AI「把'点击这里'设置成指向 https://example.com 的链接」→ 出现「设置超链接」chip，
+    对应文字变蓝加下划线且可点击跳转。
+15f. 让 AI「把页脚改成'内部资料，禁止外传'」→ 出现「编辑页眉页脚」chip，页脚文字更新。
+15g. 手动在 Word 里给一段文字加一条批注，再让 AI「看看文档里有什么批注」→ 出现
+    「读取批注」chip，回复列出作者/内容/是否已解决；接着让 AI「回复说已核实，
+    标记为已解决」→ 依次出现「回复批注」「解决批注」chip，Word 批注面板里能看到
+    AI 的回复且该批注变灰（已解决状态）。
+
 ### Excel 场景（officeHost=excel，office_excel_* 工具面）
 
 16. 在 Excel 中 sideload 并打开任务窗格，打开一份有数据的工作簿，
@@ -205,7 +222,10 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
   事件为纯推送、后端不重放历史，重连不会重复渲染已收消息。
 - office_* 工具桥命令集：Word 面 get_text / get_selection / search / replace_text /
   insert_text / add_comment / format_text / set_paragraph_format / get_formatting /
-  set_numbering / format_table / apply_standard_format；
+  set_numbering / format_table / apply_standard_format / insert_table / table_read /
+  table_set_cell / table_add_row / table_delete_row / table_add_col / table_delete_col /
+  insert_break / set_hyperlink / edit_header_footer / get_comments / reply_comment /
+  resolve_comment；
   Excel 面 excel_get_range / excel_set_values / excel_search / excel_format_cells /
   excel_set_borders / excel_edit_rows_cols / excel_merge_cells / excel_sort_range /
   excel_manage_sheets / excel_freeze_panes / excel_set_formulas / excel_get_overview /
@@ -262,6 +282,14 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
   查证过做不了的：`AddSlideOptions.slideMasterId/layoutId` 选母版/版式需要先枚举
   `presentation.slideMasters` 拿不透明 ID 串，本批次不做母版选择器，一律用默认母版/版式；
   `shapes.addTable` 表格形状不在本批次范围。
+- 表格/结构/批注（批次 8）：insert_table / table_read / table_set_cell / table_add_row /
+  table_delete_row / table_add_col / table_delete_col 与 set_hyperlink 均依赖 WordApi
+  1.3；表格中间位置插列（colIndex 非 0/-1）额外依赖桌面版专属的 WordApiDesktop 1.3
+  （Word 网页版不支持，colIndex 传 0 或 -1 不受此限）；**表格删行删列不产生修订**，
+  直接生效（与桌面端 LOWA 的 doc_table_delete_row/col 同款限制）。insert_break 目前只
+  开 page/sectionNext 两种分隔类型。edit_header_footer 只处理文档首节。批注读写依赖
+  WordApi 1.4；get_comments 返回的 index/id 均可用于 reply_comment/resolve_comment
+  定位，id 优先。
 - 会话 ID 优先请求服务端签发（`POST /api/agent/conversations`），旧后端无该端点时
   静默回退客户端生成 `conv-<毫秒>`。
 - 流式文本按 XML 标签轻量分流：`<final>` 与标签外文本为主回复、`<thinking>` 折叠展示，

@@ -121,6 +121,24 @@ public class OfficeEditTools implements AgentToolComponent {
 
     /** PPT 结构操作（增删移动幻灯片/形状）页码与序号的防呆上限 */
     private static final int MAX_PPT_SLIDE_NUMBER = 2000;
+    /** 表格单元格坐标：列字母（1~3 位）+ 行号（1 开始），如 B2（批次 8） */
+    private static final java.util.regex.Pattern TABLE_CELL_REF =
+            java.util.regex.Pattern.compile("^[A-Za-z]{1,3}\\d{1,6}$");
+
+    /** 表格行/列结构操作（增删）单次的最大数量 */
+    private static final int MAX_TABLE_STRUCTURE_COUNT = 50;
+
+    /** 分页符类型白名单（起步只开页面分隔与节分隔两种，其余 Word.BreakType 成员暂不暴露给模型） */
+    private static final java.util.Set<String> BREAK_TYPE_VALUES =
+            java.util.Set.of("page", "sectionNext");
+
+    /** 页眉/页脚部位白名单 */
+    private static final java.util.Set<String> HEADER_FOOTER_PART_VALUES =
+            java.util.Set.of("header", "footer");
+
+    /** 超链接协议白名单：只认 http/https，防止 javascript: 等协议注入 */
+    private static final java.util.regex.Pattern HTTP_URL =
+            java.util.regex.Pattern.compile("^https?://.+", java.util.regex.Pattern.CASE_INSENSITIVE);
 
     /**
      * 枚举参数归一化：null/空返回 null（表示不改），命中白名单返回小写值，
@@ -514,6 +532,340 @@ public class OfficeEditTools implements AgentToolComponent {
         Map<String, Object> args = new HashMap<>();
         args.put("scope", scopeValue == null ? "document" : scopeValue);
         return officeBridgeService.executeOfficeCommand(conversationId, "apply_standard_format", args);
+    }
+
+    // ==================== 表格（Word 原生修订，批次 8） ====================
+
+    @Tool("在当前 Word 文档中插入一张表格。rowsJson 是 JSON 二维字符串数组（矩形，每行列数一致），如 " +
+          "[[\"项目\",\"金额\"],[\"咨询费\",\"10000\"]]，第一行默认为表头。" +
+          "提供 anchorText 时插在该锚点前/后（锚点须与文档精确一致）；不提供时插在当前光标/选区处。" +
+          "headerBold=true 时首行加粗。需要 WordApi 1.3；插入以 Word 原生修订（Track Changes）形式呈现。")
+    @ToolMeta(displayName = "插入表格", category = "office", fileEffect = "MODIFIED")
+    public String office_insert_table(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("表格内容，JSON 二维字符串数组（矩形），第一行为表头") String rowsJson,
+            @P("首行是否加粗（不改则不传）") Boolean headerBold,
+            @P("定位锚点文本（可选；为空则在当前光标/选区处插入）") String anchorText,
+            @P("相对锚点的位置：before 或 after（默认 after，仅提供锚点时有效）") String position
+    ) {
+        log.info("Tool: office_insert_table called, json length={}, anchor={}",
+                rowsJson != null ? rowsJson.length() : 0, anchorText);
+        if (rowsJson == null || rowsJson.isBlank()) {
+            return "Error: 缺少 rowsJson 参数（JSON 二维数组）";
+        }
+        if (anchorText != null && anchorText.length() > 255) {
+            return "Error: 锚点文本过长（Word 查找上限 255 字符），请改用更短的唯一锚点";
+        }
+        String pos = position == null || position.isBlank() ? "after" : position.trim().toLowerCase();
+        if (!"before".equals(pos) && !"after".equals(pos)) {
+            return "Error: position 只能是 before 或 after";
+        }
+        java.util.List<java.util.List<String>> rows;
+        try {
+            rows = objectMapper.readValue(rowsJson,
+                    new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.List<String>>>() {});
+        } catch (Exception e) {
+            return "Error: rowsJson 不是合法的 JSON 二维数组，示例：[[\"项目\",\"金额\"],[\"咨询费\",\"10000\"]]";
+        }
+        if (rows.isEmpty() || rows.get(0) == null || rows.get(0).isEmpty()) {
+            return "Error: rowsJson 不能为空表";
+        }
+        int cols = rows.get(0).size();
+        for (java.util.List<String> row : rows) {
+            if (row == null || row.size() != cols) {
+                return "Error: rowsJson 必须是矩形二维数组（每行列数一致）";
+            }
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("rows", rows);
+        if (headerBold != null) args.put("headerBold", headerBold);
+        args.put("anchorText", anchorText == null ? "" : anchorText);
+        args.put("position", pos);
+        return officeBridgeService.executeOfficeCommand(conversationId, "insert_table", args);
+    }
+
+    @Tool("把当前 Word 文档里的一张表读成二维数组（行列数 + 每格文本），改表格前必须先用它看清现状。" +
+          "tableIndex 是文档中第几张表（0 开始，缺省 0），越界时返回表格总数供重试。" +
+          "返回的 cells 按行给出，office_table_set_cell 的 cell 参数用列字母+行号（如 B2）坐标。" +
+          "需要 WordApi 1.3。")
+    @ToolMeta(displayName = "读取表格", category = "office")
+    public String office_table_read(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("表格序号（0 开始，缺省 0）") Integer tableIndex
+    ) {
+        log.info("Tool: office_table_read called, index={}", tableIndex);
+        int index = tableIndex == null ? 0 : tableIndex;
+        if (index < 0) {
+            return "Error: tableIndex 不能为负（文档中第一张表是 0）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("tableIndex", index);
+        return officeBridgeService.executeOfficeCommand(conversationId, "table_read", args);
+    }
+
+    @Tool("改当前 Word 文档里一张表格中一个单元格的文本（整格替换）。先用 office_table_read 看清表格坐标再改。" +
+          "cell 用列字母+行号，如 B2 = 第 2 列第 2 行。修订模式下只有真正变动的字符会落成修订，不是整格删了重打。" +
+          "tableIndex 是文档中第几张表（0 开始，缺省 0）。需要 WordApi 1.3；修改以 Word 原生修订形式呈现。")
+    @ToolMeta(displayName = "修改单元格", category = "office", fileEffect = "MODIFIED")
+    public String office_table_set_cell(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("表格序号（0 开始，缺省 0）") Integer tableIndex,
+            @P("单元格坐标，如 B2（列字母 + 行号，行号 1 开始）") String cell,
+            @P("该单元格的新文本") String text
+    ) {
+        log.info("Tool: office_table_set_cell called, index={}, cell={}", tableIndex, cell);
+        int index = tableIndex == null ? 0 : tableIndex;
+        if (index < 0) {
+            return "Error: tableIndex 不能为负（文档中第一张表是 0）";
+        }
+        if (cell == null || cell.isBlank() || !TABLE_CELL_REF.matcher(cell.trim()).matches()) {
+            return "Error: cell 格式非法，须为列字母+行号（如 B2）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("tableIndex", index);
+        args.put("cell", cell.trim());
+        args.put("text", text == null ? "" : text);
+        return officeBridgeService.executeOfficeCommand(conversationId, "table_set_cell", args);
+    }
+
+    @Tool("给当前 Word 文档里的一张表格插入空白行。rowIndex 是新行插入位置（0 开始，插在该行之前）；" +
+          "不传或传 -1 则追加到表尾。count 一次插几行（默认 1，上限 " + MAX_TABLE_STRUCTURE_COUNT + "）。" +
+          "插完用 office_table_set_cell 逐格填内容。tableIndex 是文档中第几张表（0 开始，缺省 0）。" +
+          "需要 WordApi 1.3；插入以 Word 原生修订形式呈现。")
+    @ToolMeta(displayName = "插入表格行", category = "office", fileEffect = "MODIFIED")
+    public String office_table_add_row(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("表格序号（0 开始，缺省 0）") Integer tableIndex,
+            @P("插入位置行号（0 开始，新行插在该行之前），不传或 -1 则追加到表尾") Integer rowIndex,
+            @P("插入几行，默认 1") Integer count
+    ) {
+        log.info("Tool: office_table_add_row called, tableIndex={}, rowIndex={}, count={}", tableIndex, rowIndex, count);
+        return dispatchTableStructureCommand(conversationId, "table_add_row", tableIndex, rowIndex, count, -1);
+    }
+
+    @Tool("删除当前 Word 文档里一张表格的整行。rowIndex 是要删的行号（0 开始，必填），" +
+          "count 连删几行（默认 1，上限 " + MAX_TABLE_STRUCTURE_COUNT + "）。" +
+          "注意：删行是**直接删除、不留修订痕迹**（Word 对表格结构变化的修订记录能力有限），" +
+          "删错只能靠 Ctrl+Z 或文档检查点回退，所以删之前务必先用 office_table_read 看清要删的是哪一行。" +
+          "表格至少要留一行。tableIndex 是文档中第几张表（0 开始，缺省 0）。需要 WordApi 1.3。")
+    @ToolMeta(displayName = "删除表格行", category = "office", fileEffect = "MODIFIED")
+    public String office_table_delete_row(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("表格序号（0 开始，缺省 0）") Integer tableIndex,
+            @P("要删的行号（0 开始，必填）") Integer rowIndex,
+            @P("连删几行，默认 1") Integer count
+    ) {
+        log.info("Tool: office_table_delete_row called, tableIndex={}, rowIndex={}, count={}", tableIndex, rowIndex, count);
+        if (rowIndex == null) {
+            return "Error: 缺少 rowIndex 参数（要删的行号，0 开始）";
+        }
+        return dispatchTableStructureCommand(conversationId, "table_delete_row", tableIndex, rowIndex, count, null);
+    }
+
+    @Tool("给当前 Word 文档里的一张表格插入空白列。colIndex 是新列插入位置（0 开始，插在该列之前）；" +
+          "不传或传 -1 则追加到最右。count 一次插几列（默认 1，上限 " + MAX_TABLE_STRUCTURE_COUNT + "）。" +
+          "colIndex 为 0 或 -1（表头/表尾）时任何 Word 版本都可用；插在表格中间某一列前** " +
+          "需要较新的桌面版 Word（WordApiDesktop 1.3，Word 网页版不支持）**，不支持时会明确报错，" +
+          "可改用 0 或 -1。tableIndex 是文档中第几张表（0 开始，缺省 0）。修改以 Word 原生修订形式呈现。")
+    @ToolMeta(displayName = "插入表格列", category = "office", fileEffect = "MODIFIED")
+    public String office_table_add_col(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("表格序号（0 开始，缺省 0）") Integer tableIndex,
+            @P("插入位置列号（0 开始，新列插在该列之前），不传或 -1 则追加到最右") Integer colIndex,
+            @P("插入几列，默认 1") Integer count
+    ) {
+        log.info("Tool: office_table_add_col called, tableIndex={}, colIndex={}, count={}", tableIndex, colIndex, count);
+        return dispatchTableStructureCommand(conversationId, "table_add_col", tableIndex, colIndex, count, -1);
+    }
+
+    @Tool("删除当前 Word 文档里一张表格的整列。colIndex 是要删的列号（0 开始，必填），" +
+          "count 连删几列（默认 1，上限 " + MAX_TABLE_STRUCTURE_COUNT + "）。" +
+          "与删行一样是**直接删除、不留修订痕迹**，删前先用 office_table_read 看清。表格至少要留一列。" +
+          "tableIndex 是文档中第几张表（0 开始，缺省 0）。需要 WordApi 1.3。")
+    @ToolMeta(displayName = "删除表格列", category = "office", fileEffect = "MODIFIED")
+    public String office_table_delete_col(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("表格序号（0 开始，缺省 0）") Integer tableIndex,
+            @P("要删的列号（0 开始，必填）") Integer colIndex,
+            @P("连删几列，默认 1") Integer count
+    ) {
+        log.info("Tool: office_table_delete_col called, tableIndex={}, colIndex={}, count={}", tableIndex, colIndex, count);
+        if (colIndex == null) {
+            return "Error: 缺少 colIndex 参数（要删的列号，0 开始）";
+        }
+        return dispatchTableStructureCommand(conversationId, "table_delete_col", tableIndex, colIndex, count, null);
+    }
+
+    /**
+     * 表格行/列增删四个原语的共同下发路径：tableIndex 定位 + position（行/列号）+ count 校验。
+     * defaultPositionWhenNull 非 null 时表示 position 缺省值（add 系列缺省 -1=追加到末尾）；
+     * 为 null 时表示 position 是必填参数（delete 系列，调用方已在此之前校验过非空）。
+     */
+    private String dispatchTableStructureCommand(String conversationId, String command, Integer tableIndex,
+                                                   Integer position, Integer count, Integer defaultPositionWhenNull) {
+        int index = tableIndex == null ? 0 : tableIndex;
+        if (index < 0) {
+            return "Error: tableIndex 不能为负（文档中第一张表是 0）";
+        }
+        int pos = position == null
+                ? (defaultPositionWhenNull == null ? Integer.MIN_VALUE : defaultPositionWhenNull)
+                : position;
+        if (pos < -1) {
+            return "Error: 位置参数不能小于 -1（-1 表示末尾）";
+        }
+        int cnt = count == null ? 1 : count;
+        if (cnt < 1 || cnt > MAX_TABLE_STRUCTURE_COUNT) {
+            return "Error: count 须为 1~" + MAX_TABLE_STRUCTURE_COUNT + " 的整数（缺省 1）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("tableIndex", index);
+        args.put("position", pos);
+        args.put("count", cnt);
+        return officeBridgeService.executeOfficeCommand(conversationId, command, args);
+    }
+
+    // ==================== 结构（分页符/超链接/页眉页脚，批次 8） ====================
+
+    @Tool("在当前 Word 文档中插入分页符或分节符。breakType：page=分页符（缺省）、sectionNext=下一页分节符。" +
+          "提供 anchorText 时在该锚点前/后插入（锚点须与文档精确一致）；不提供时在当前光标/选区处插入。" +
+          "插入以 Word 原生修订（Track Changes）形式呈现。")
+    @ToolMeta(displayName = "插入分页符", category = "office", fileEffect = "MODIFIED")
+    public String office_insert_break(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("分页类型：page（分页符，缺省）或 sectionNext（下一页分节符）") String breakType,
+            @P("定位锚点文本（可选；为空则在当前光标/选区处插入）") String anchorText,
+            @P("相对锚点的位置：before 或 after（默认 after，仅提供锚点时有效）") String position
+    ) {
+        log.info("Tool: office_insert_break called, breakType={}, anchor={}", breakType, anchorText);
+        String typeValue;
+        try {
+            typeValue = normalizeEnum(breakType, BREAK_TYPE_VALUES, "breakType");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (anchorText != null && anchorText.length() > 255) {
+            return "Error: 锚点文本过长（Word 查找上限 255 字符），请改用更短的唯一锚点";
+        }
+        String pos = position == null || position.isBlank() ? "after" : position.trim().toLowerCase();
+        if (!"before".equals(pos) && !"after".equals(pos)) {
+            return "Error: position 只能是 before 或 after";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("breakType", typeValue == null ? "page" : typeValue);
+        args.put("anchorText", anchorText == null ? "" : anchorText);
+        args.put("position", pos);
+        return officeBridgeService.executeOfficeCommand(conversationId, "insert_break", args);
+    }
+
+    @Tool("在当前 Word 文档中为指定文本设置超链接。anchorText 须与文档中的文本精确一致，" +
+          "命中第一处并把该文本变成指向 url 的链接（原有格式基本保留）。url 只认 http/https 协议。" +
+          "修改以 Word 原生修订（Track Changes）形式呈现，需要 WordApi 1.3。")
+    @ToolMeta(displayName = "设置超链接", category = "office", fileEffect = "MODIFIED")
+    public String office_set_hyperlink(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("要设置超链接的目标文本（须与文档精确一致）") String anchorText,
+            @P("链接地址，须以 http:// 或 https:// 开头") String url
+    ) {
+        log.info("Tool: office_set_hyperlink called, anchor={}, url={}", anchorText, url);
+        if (anchorText == null || anchorText.isBlank()) {
+            return "Error: 目标文本不能为空";
+        }
+        if (anchorText.length() > 255) {
+            return "Error: 目标文本过长（Word 查找上限 255 字符），请截取其中一段唯一文本作为目标";
+        }
+        if (url == null || url.isBlank() || !HTTP_URL.matcher(url.trim()).matches()) {
+            return "Error: url 须以 http:// 或 https:// 开头";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("anchorText", anchorText);
+        args.put("url", url.trim());
+        return officeBridgeService.executeOfficeCommand(conversationId, "set_hyperlink", args);
+    }
+
+    @Tool("编辑当前 Word 文档首节的页眉或页脚文字（覆盖原有内容）。part：header=页眉、footer=页脚。" +
+          "text 为空字符串等于清空该页眉/页脚。alignment 可选设置对齐方式。" +
+          "仅作用于文档首节——多节文档（如分节设置了不同页眉页脚）的其余节不受影响，" +
+          "如需处理请让用户确认要改的是哪一节。页眉页脚编辑是否记入 Word 修订面板取决于 Word 版本。")
+    @ToolMeta(displayName = "编辑页眉页脚", category = "office", fileEffect = "MODIFIED")
+    public String office_edit_header_footer(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("header（页眉）或 footer（页脚）") String part,
+            @P("要写入的文本，覆盖原有内容（空字符串等于清空）") String text,
+            @P("对齐方式：left/center/right/justify（不改则不传）") String alignment
+    ) {
+        log.info("Tool: office_edit_header_footer called, part={}", part);
+        String partValue;
+        String alignmentValue;
+        try {
+            partValue = normalizeEnum(part, HEADER_FOOTER_PART_VALUES, "part");
+            alignmentValue = normalizeEnum(alignment, ALIGNMENT_VALUES, "alignment");
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+        if (partValue == null) {
+            return "Error: part 不能为空（header 或 footer）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("part", partValue);
+        args.put("text", text == null ? "" : text);
+        if (alignmentValue != null) args.put("alignment", alignmentValue);
+        return officeBridgeService.executeOfficeCommand(conversationId, "edit_header_footer", args);
+    }
+
+    // ==================== 批注（读取/回复/解决，批次 8） ====================
+
+    @Tool("读取当前 Word 文档中的全部批注：作者、创建时间、内容、锚点文本摘要、是否已解决、序号（index）。" +
+          "回复或解决某条批注时，用这里返回的 index 定位。需要 WordApi 1.4。")
+    @ToolMeta(displayName = "读取批注", category = "office")
+    public String office_get_comments(
+            @P("会话ID（系统自动注入）") String conversationId
+    ) {
+        log.info("Tool: office_get_comments called");
+        return officeBridgeService.executeOfficeCommand(conversationId, "get_comments", Map.of());
+    }
+
+    @Tool("回复当前 Word 文档中的一条批注。用 office_get_comments 返回的 id 或 index（0 开始）定位目标批注，" +
+          "两者给一个即可（id 优先）；先调用 office_get_comments 拿到定位信息再回复。")
+    @ToolMeta(displayName = "回复批注", category = "office", fileEffect = "MODIFIED")
+    public String office_reply_comment(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标批注的 id（来自 office_get_comments 的返回值，与 commentIndex 二选一，id 优先）") String commentId,
+            @P("目标批注的序号（0 开始，来自 office_get_comments 的返回值，与 commentId 二选一）") Integer commentIndex,
+            @P("回复内容") String reply
+    ) {
+        log.info("Tool: office_reply_comment called, id={}, index={}", commentId, commentIndex);
+        if ((commentId == null || commentId.isBlank()) && (commentIndex == null || commentIndex < 0)) {
+            return "Error: 缺少批注定位参数（commentId 或 commentIndex，先调用 office_get_comments 拿到）";
+        }
+        if (reply == null || reply.isBlank()) {
+            return "Error: 回复内容不能为空";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("commentId", commentId == null ? "" : commentId.trim());
+        if (commentIndex != null) args.put("commentIndex", commentIndex);
+        args.put("reply", reply);
+        return officeBridgeService.executeOfficeCommand(conversationId, "reply_comment", args);
+    }
+
+    @Tool("标记当前 Word 文档中的一条批注为已解决（或重新打开）。用 office_get_comments 返回的 id 或 " +
+          "index（0 开始）定位目标批注，两者给一个即可（id 优先）；" +
+          "resolved 缺省 true（标记已解决），传 false 可重新打开一条已解决的批注。")
+    @ToolMeta(displayName = "解决批注", category = "office", fileEffect = "MODIFIED")
+    public String office_resolve_comment(
+            @P("会话ID（系统自动注入）") String conversationId,
+            @P("目标批注的 id（来自 office_get_comments 的返回值，与 commentIndex 二选一，id 优先）") String commentId,
+            @P("目标批注的序号（0 开始，来自 office_get_comments 的返回值，与 commentId 二选一）") Integer commentIndex,
+            @P("标记为已解决（true，缺省）还是重新打开（false）") Boolean resolved
+    ) {
+        log.info("Tool: office_resolve_comment called, id={}, index={}, resolved={}", commentId, commentIndex, resolved);
+        if ((commentId == null || commentId.isBlank()) && (commentIndex == null || commentIndex < 0)) {
+            return "Error: 缺少批注定位参数（commentId 或 commentIndex，先调用 office_get_comments 拿到）";
+        }
+        Map<String, Object> args = new HashMap<>();
+        args.put("commentId", commentId == null ? "" : commentId.trim());
+        if (commentIndex != null) args.put("commentIndex", commentIndex);
+        args.put("resolved", resolved == null || resolved);
+        return officeBridgeService.executeOfficeCommand(conversationId, "resolve_comment", args);
     }
 
     // ==================== Excel（office_excel_*，仅 Excel 会话可见） ====================
