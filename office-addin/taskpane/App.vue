@@ -1,21 +1,20 @@
 <template>
   <div class="app-shell">
+    <!-- Office 宿主已按 manifest 的 DisplayName 自绘一条标题，这里不再重复品牌名 -->
     <header class="app-header">
-      <div class="brand">AI Workdeck</div>
-      <div class="header-actions">
-        <select
-          v-if="view === 'chat' && projects.length"
-          class="project-select"
-          :value="projectId"
-          @change="onProjectChange($event.target.value)"
-        >
-          <option value="" disabled>选择项目</option>
-          <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
-        </select>
-        <button class="icon-btn" :title="view === 'chat' ? '设置' : '返回对话'" @click="toggleView">
-          {{ view === 'chat' ? '设置' : '返回' }}
-        </button>
-      </div>
+      <select
+        v-if="view === 'chat' && projects.length"
+        class="project-select"
+        :value="projectId"
+        @change="onProjectChange($event.target.value)"
+      >
+        <option value="" disabled>选择项目</option>
+        <option v-for="p in projects" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
+      </select>
+      <span class="header-spacer"></span>
+      <button class="icon-btn" :title="view === 'chat' ? '设置' : '返回对话'" @click="toggleView">
+        {{ view === 'chat' ? '设置' : '返回' }}
+      </button>
     </header>
 
     <main class="app-main">
@@ -92,38 +91,29 @@ onMounted(refreshProjects)
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 12px;
+  gap: 6px;
+  min-height: 34px;
+  padding: 3px 8px;
   background: var(--awd-surface);
   border-bottom: 1px solid var(--awd-border);
   flex-shrink: 0;
 }
 
-.brand {
-  font-weight: 600;
-  font-size: 14px;
-  color: var(--awd-primary);
-  white-space: nowrap;
-}
-
-.header-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
+.header-spacer {
+  flex: 1;
   min-width: 0;
 }
 
 .project-select {
   max-width: 160px;
-  padding: 4px 6px;
+  padding: 3px 6px;
   border: 1px solid var(--awd-border);
   border-radius: 4px;
   background: var(--awd-surface);
 }
 
 .icon-btn {
-  padding: 4px 10px;
+  padding: 3px 10px;
   border: 1px solid var(--awd-border);
   border-radius: 4px;
   background: var(--awd-surface);

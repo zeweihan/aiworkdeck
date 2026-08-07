@@ -27,7 +27,13 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/resources/license/trial-public-key.pem` — 内置 Ed25519 公钥
   （**与插件 registry 签名是两套独立密钥对**，别混用）。
 - `backend/src/main/java/com/checkba/controller/LicenseController.java` — `/api/license/{status,activate,deactivate}`，
-  **匿名端点**（解锁前没有身份可言）。activate 里粘 `awdk_` 会顺带 `AccountService.connect()` 一步到位。
+  **匿名端点**（解锁前没有身份可言）。activate 里粘 `awdk_` 会顺带 `AccountService.connect()` 一步到位；
+  连接失败不回滚解锁但**必须可见**：响应附 `accountConnected` / `accountNotice`，unlock 页弹提示（2026-08）。
+  `status` 除 LicenseService 的 `{unlocked,mode,plan}` 外另附**展示口径** `accountConnected` + `edition`（paid|trial|none，
+  `resolveEdition`：账户已连或 mode=account → paid）——授权票据与账户连接是两条独立状态，先试用码解锁、后连账户的用户
+  mode 永远停在 trial，界面判「试用版/正式版」**一律读 edition 不读 mode**（userprofile 授权行、顶栏 chip 已改）。
+  组合是只读的，**绝不回写 license.json**（改写会抹掉试用码票据，断开账户即掉回未解锁）；
+  非 local-mode 不查 AccountService（机器级状态 + 本端点匿名，照查等于泄露给匿名请求），edition 恒 paid。
 - 前端：`frontend/src/pages/launch/launch.vue`（启动分流页）、`pages/unlock/unlock.vue`（解锁页）、
   `pages/identity/identity.vue`（本机工作区选择页）。
 
@@ -106,6 +112,15 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   **会话级不是机器级**（不走 `MachineAccountGuard`——那道闸管的是整台服务器的账户连接）。
 - 插件侧：`office-addin/taskpane/components/SettingsView.vue` 的「AI 额度」卡片
   + `taskpane/lib/api.js` 的 `fetchPlatformAiStatus` / `refreshPlatformAiKey`。
+
+**设备令牌的本机签发（2026-08-07，Office 插件接入）**
+- `AuthController.issueLocalDeviceToken` — `POST /api/auth/device-token/issue-local`（body `{name}` 可空）：
+  **仅 local-mode**，身份走会话解析（免登下恒为本机用户），签发 `deviceTokenService.issue`，明文只返回一次。
+  为什么另开端点：`/api/auth/device-token` 是密码入口（与 /login 同锁定同二次验证闸），本机免登用户没有密码。
+  安全边界不新开口子：LocalModeLoopbackGuard + LocalModeAccessFilter 保证只有本机进程可达；
+  非 local-mode 回业务错误（团队服务器仍只有账号密码一条路）。护栏 `AuthControllerLocalDeviceTokenTest`。
+- 前端 UI：`userprofile.vue`「插件访问令牌」分组（仅桌面显示）：生成（备注名+明文一次性展示+复制）/列表/撤销；
+  api.js `issueLocalDeviceToken/listDeviceTokens/revokeDeviceToken`。
 
 **登录二次验证的判定出口（2026-08-07）**
 - `backend/src/main/java/com/checkba/service/auth/SecondFactorService.java` — **`required(user)` 是唯一判定出口**，

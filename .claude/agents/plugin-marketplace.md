@@ -13,11 +13,14 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 - `frontend/src/components/MarketSidebarPanel.vue` — **左栏列表面板**（rail 广场按钮 → `toggleLeftPane('market')` 打开）：顶部搜索（过滤全部分组）+ 三个折叠分组「已安装（含重扫按钮）/ Skill 广场 / 插件广场」的紧凑行（分类图标+名称+一行描述+版本·下载·分类，行内快捷安装钮）。点行 emit `open-detail`。
 - `frontend/src/components/MarketDetailPane.vue` — **中栏详情 tab**（overview `openMarketDetail(spec)` 打开，`tabType:'market-detail'`、id=`market-detail_{kind}_{id}`、单例、isTabVisible 常显）：头部图标+衬线标题+作者/版本/下载+动作区（Skill：安装/更新/卸载/生效方式三档；插件：安装带权限确认/启停 switch/卸载），正文触发词「」排版、能力、详细信息（标识/来源/主页，主页 emit open-url 走浏览器 tab）。
 - 两件通过 `uni.$emit('awd:market-changed')`（详情→列表）与 `'awd:market-changed-from-sidebar'`（列表→详情）互相刷新；组件卸载时 $off，不涉页面栈多实例地雷。
-- `frontend/src/components/MarketPane.vue` — 原整页版（深绿 hero 三 tab），现**仅存于 admin 独立页**：`frontend/src/pages/plugin-market/plugin-market.vue` 薄壳页 `<MarketPane :standalone="true">`，保留给 admin 页跳转与直链。
+- `frontend/src/components/MarketPane.vue` — 原整页版（深绿 hero 三 tab），现有两个宿主：admin 页内嵌
+  （`admin.vue` 的 `activeNav==='plugins'` 分支，`<MarketPane :standalone="false">`，与其余设置项一致的页内切换）
+  与 `frontend/src/pages/plugin-market/plugin-market.vue` 薄壳独立页（`:standalone="true"`，仅保留给直链）。
   **视觉规范以官网 `aiworkdeckweb/DESIGN.md` 为准**；新两件是浅色工作台密度形态（VS Code 扩展栏/详情页结构 + 产品浅色绿系）。
 - `frontend/src/config/icons.js` — `catContract/catLitigation/catCompliance/catResearch/catCorporate/catOffice/catOther` 七枚分类图标，**与官网 `components/skills/CategoryIcon.tsx` 的映射一一对应**，改一边必须同步另一边，否则同一个 Skill 在官网与桌面端长相不同。
 - `frontend/src/services/api.js` :407-485 — plugins、skills、skills/market 三组 HTTP 封装。
-- 入口：`frontend/src/pages/admin/admin.vue` :584 系统管理侧边栏项 `{key:'plugins', label:'插件广场', route:'/pages/plugin-market/plugin-market'}`。**leftSidebarPlugins.js 不含市场入口**（那是 IDE 左栏业务插件位）。
+- 入口：`frontend/src/pages/admin/admin.vue` 系统管理侧边栏项 `{key:'plugins', label:'插件广场'}`——2026-08 起**页内切换**
+  （onNavTap 不再 navigateTo，内容区内嵌 MarketPane；`?nav=plugins` 深链同样可达）。**leftSidebarPlugins.js 不含市场入口**（那是 IDE 左栏业务插件位）。
 
 **后端**
 - `backend/src/main/java/com/checkba/controller/ai/SkillController.java` — /api/skills：list、{id}/enable|disable、rescan、market/list|install|uninstall。
