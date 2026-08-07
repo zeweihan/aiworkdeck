@@ -117,6 +117,27 @@ async function readPptSlides() {
   return { text, name: documentDisplayName('当前 PowerPoint 演示文稿'), fileType: 'pptx' }
 }
 
+/**
+ * 正文内容哈希（SHA-256 十六进制小写），用于「文档没变就不重传正文」的省传判定。
+ * 口径与后端 InlineContentCache.sha256Hex 一致（UTF-8 字节）。
+ *
+ * crypto.subtle 只在 secure context 可用——任务窗格是 https，常态都有；
+ * 取不到或算失败时返回空串，调用方据此降级为恒传全文（永远不会因此丢正文）。
+ */
+export async function hashContent(text) {
+  try {
+    const subtle = globalThis.crypto && globalThis.crypto.subtle
+    if (!subtle) return ''
+    const bytes = new TextEncoder().encode(text || '')
+    const digest = await subtle.digest('SHA-256', bytes)
+    return Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('')
+  } catch (e) {
+    return ''
+  }
+}
+
 export async function readActiveDocument() {
   if (!officeAvailable()) return null
   try {
