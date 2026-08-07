@@ -3,7 +3,7 @@ import {
   postChat, postCancel, postOfficeResult, createConversation, fetchConversationHistory
 } from './api.js'
 import { createSseConnection, createTagStreamParser } from './sse.js'
-import { readActiveDocument, detectHost } from './wordDoc.js'
+import { readActiveDocument, detectHost, hashContent } from './wordDoc.js'
 import { executeOfficeCommand, commandDisplayName } from './officeExecutor.js'
 import { loadConversationId, saveConversationId, isConfigured } from './settings.js'
 
@@ -31,6 +31,12 @@ export const notice = ref('')
 export const includeDocument = ref(true)
 /** 滚动到底部的信号：store 不碰 DOM，视图 watch 这个计数器 */
 export const scrollSignal = ref(0)
+/**
+ * 最近一轮的耗时切片（毫秒整数）。界面暂不展示，控制台每轮打一条 [AddinPerf]。
+ * 「响应慢」得先能被测量：这里把一次发送拆成读文档 / 建连 / 请求受理 / 首字 / 全程五段，
+ * 优化前后各跑一遍就能说清快在哪一段。不上报遥测。
+ */
+export const lastPerf = ref(null)
 
 // ==================== 内部状态 ====================
 
@@ -50,13 +56,66 @@ let currentAssistant = null
 // （首连的 run_state 在 send 已置 streaming 之后到达，不能当终态看）
 let everReconnected = false
 // 本次建连是否由「回灌」触发（任务窗格重建后恢复既有会话）。
-// 区分「谁触发的建连」是 run_state 的两种读法的分水岭：
-//   - send 触发：streaming 已由 send 置起，首个 run_state 不能当终态；
-//   - 回灌触发：首个 run_state 就是当前运行状态的权威答案，据它决定锁不锁输入框。
+// 建连有三种来源，run_state 的读法各不相同（详见 handleRunState）：
+//   - 回灌触发（本标记位为 true）：首个 run_state 就是当前运行状态的权威答案；
+//   - 预连触发（进面板/新对话时提前建连）：本地没有进行中的轮次，run_state 无副作用；
+//   - send 触发（兜底重试）：streaming 已由 send 置起，首个 run_state 不能当终态。
 let restorePending = false
+
+/**
+ * 正文省传（内容哈希去重）的会话内状态。
+ * 文档没变时只上送哈希，后端按会话从 InlineContentCache 取回上一轮正文。
+ * - confirmed：上一轮正常收尾（bubble_end）过——只有这时才敢省传，
+ *   因为「后端确实收下并用了这份正文」只有轮次跑完才算数；
+ * - disabled：本会话出过 error（也覆盖旧后端不认 inlineContentHash 的情况），
+ *   之后整场退回恒传全文，宁可多传也不让模型看不到正文。
+ */
+let docCache = { conversationId: null, hash: '', confirmed: false, disabled: false }
+/** 本轮上送的正文哈希（轮次成功收尾时才提交进 docCache） */
+let pendingDocHash = ''
+
+function resetDocCache() {
+  docCache = { conversationId: null, hash: '', confirmed: false, disabled: false }
+  pendingDocHash = ''
+}
 
 function bumpScroll() {
   scrollSignal.value++
+}
+
+// ==================== 耗时埋点 ====================
+
+let perfRound = null
+
+function nowMs() {
+  return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()
+}
+
+/** 从用户点「发送」的那一刻起表 */
+function perfStart() {
+  perfRound = {
+    t0: nowMs(),
+    docReadMs: 0,      // 读当前文档正文 + 算哈希
+    docChars: 0,       // 本轮实际上送的正文字符数（省传时为 0）
+    docReused: false,  // 本轮是否命中省传（只上送哈希）
+    connectMs: 0,      // 本次发送触发的 SSE 建连（预连已就绪时为 0）
+    chatAcceptedMs: 0, // POST /chat 返回 200（相对起表）
+    firstTokenMs: 0,   // 本轮第一个 text_delta 到达（相对起表）
+    totalMs: 0         // 终态事件到达（相对起表）
+  }
+}
+
+function perfSince() {
+  return perfRound ? Math.round(nowMs() - perfRound.t0) : 0
+}
+
+function perfEnd() {
+  if (!perfRound) return
+  const { t0, ...fields } = perfRound
+  perfRound = null
+  const out = { ...fields, totalMs: Math.round(nowMs() - t0) }
+  lastPerf.value = out
+  console.info('[AddinPerf]', out)
 }
 
 // ==================== 会话激活与恢复 ====================
@@ -85,29 +144,52 @@ export async function activateSession({ settings, projectId }) {
   banner.value = ''
   notice.value = ''
   conversationId = null
+  resetDocCache()
 
   if (!pid || !settings || !isConfigured(settings)) return
 
   // 任务窗格重建（切文档、重开窗格）后：接着上次的会话，而不是从空白开始
   const stored = loadConversationId(pid)
-  if (!stored) return
-  conversationId = stored
-
-  const history = await fetchConversationHistory(settings, stored)
-  if (gen !== generation) return
-  if (history.length) {
-    messages.value = history.map(toLocalMessage)
-    bumpScroll()
+  if (stored) {
+    conversationId = stored
+    const history = await fetchConversationHistory(settings, stored)
+    if (gen !== generation) return
+    if (history.length) {
+      messages.value = history.map(toLocalMessage)
+      bumpScroll()
+    }
+    // 本次建连属于「回灌」，首个 run_state 是权威状态（见 handleRunState）
+    restorePending = true
   }
 
-  restorePending = true
+  // 有既有会话就只建连（回灌），没有就先签发再建连（预连）——同一条链，不存在两条并行建连
   try {
-    await ensureConnection()
+    await preconnect()
   } catch (e) {
-    // 回灌建连失败（后端不可达/令牌失效）不打断用户：下次发送时会再建一次并给出明确报错
+    // 建连失败（后端不可达/令牌失效）不打断用户：下次发送时会再建一次并给出明确报错
     restorePending = false
-    console.warn('[Addin] 会话恢复建连失败', e)
+    console.warn('[Addin] 会话预连失败', e)
   }
+}
+
+/**
+ * 备好会话 ID 与 SSE 连接。签发一个往返、建连一个往返，两个都从「发消息」的
+ * 关键路径上挪到这里——进面板/切项目时、以及新对话后就做完。
+ * 三处调用：activateSession（回灌或预连）、newConversation（新会话预连）、
+ * send（兜底重试：前两处失败或还没跑完时）。都已就位时是空操作。
+ */
+async function preconnect() {
+  if (!ctx.projectId || !ctx.settings || !isConfigured(ctx.settings)) return
+  if (!conversationId) {
+    // 会话 ID 优先服务端签发；旧后端无该端点时静默回退客户端生成。
+    // 按项目落本机存储，任务窗格重建后据它接回同一场对话。
+    const gen = generation
+    const issued = await createConversation(ctx.settings, parseInt(ctx.projectId, 10))
+    if (gen !== generation) return
+    conversationId = issued || `conv-${Date.now()}`
+    saveConversationId(ctx.projectId, conversationId)
+  }
+  await ensureConnection()
 }
 
 /**
@@ -138,6 +220,25 @@ function finishStreaming() {
   if (currentAssistant) currentAssistant.streaming = false
   streaming.value = false
   notice.value = ''
+  perfEnd()
+}
+
+/** 轮次正常收尾：本轮上送的正文哈希可以作为下一轮省传的依据了 */
+function commitDocHash() {
+  if (!pendingDocHash) return
+  docCache = {
+    conversationId,
+    hash: pendingDocHash,
+    confirmed: true,
+    disabled: docCache.disabled
+  }
+  pendingDocHash = ''
+}
+
+/** 轮次出错：本会话整场退回恒传全文（也覆盖旧后端不认 inlineContentHash 的情况） */
+function disableDocDedup() {
+  docCache = { conversationId: null, hash: '', confirmed: false, disabled: true }
+  pendingDocHash = ''
 }
 
 /**
@@ -176,16 +277,19 @@ function handleEvent(evt, dataStr) {
   if (evt === 'text_delta') {
     let content = dataStr
     try { content = JSON.parse(dataStr).content || '' } catch (e) { /* 按原文处理 */ }
+    if (perfRound && !perfRound.firstTokenMs) perfRound.firstTokenMs = perfSince()
     ensureAssistantBubble()
     if (parser) parser.feed(content)
     bumpScroll()
   } else if (evt === 'bubble_end') {
     if (parser) parser.flush()
+    commitDocHash()
     finishStreaming()
   } else if (evt === 'error') {
     let msg = '执行出错'
     try { msg = JSON.parse(dataStr).message || msg } catch (e) { /* ignore */ }
     if (currentAssistant) currentAssistant.error = msg
+    disableDocDedup()
     finishStreaming()
   } else if (evt === 'cancelled') {
     if (currentAssistant && !currentAssistant.text) currentAssistant.text = '（已停止）'
@@ -199,11 +303,15 @@ function handleEvent(evt, dataStr) {
 }
 
 /**
- * 建连时后端推送当前运行状态。两种读法，取决于这条连接是谁建的：
- *   - 回灌建连（restorePending）：窗格重建后本地没有 streaming 状态，这条就是权威答案。
- *     仍在跑 → 锁输入并提示，等后续正文经 SSE 推来；否则保持空闲。
- *   - send 建连：streaming 已经置起，首个 run_state 不能当终态看（后端可能还没标 RUNNING）。
- *     只有断线重连之后（everReconnected）才用它兜底解锁——断线期间可能漏掉了 bubble_end。
+ * 建连时后端推送当前运行状态。读法取决于这条连接是谁建的，共三种来源：
+ *   1. 回灌建连（restorePending=true）：窗格重建后本地没有 streaming 状态，这条就是权威答案。
+ *      仍在跑 → 锁输入并提示，等后续正文经 SSE 推来；否则保持空闲。
+ *   2. 预连建连（restorePending=false 且 streaming=false）：进面板/新对话时提前建的连，
+ *      本地没有进行中的轮次，这条 run_state 不该产生任何副作用——两个 if 都不进，
+ *      正是这里要的「无副作用」：既不锁输入（没人在发消息），也不解锁（本来就没锁）。
+ *   3. send 建连（兜底重试，streaming=true）：streaming 已由 send 置起，
+ *      首个 run_state 不能当终态看（后端可能还没标 RUNNING）。只有断线重连之后
+ *      （everReconnected）才用它兜底解锁——断线期间可能漏掉了 bubble_end。
  */
 function handleRunState(dataStr) {
   let status = null
@@ -255,6 +363,7 @@ async function handleClientAction(dataStr) {
 
 async function ensureConnection() {
   if (connection) return
+  const startedAt = nowMs()
   const conn = createSseConnection({
     baseUrl: ctx.settings.serverUrl,
     token: ctx.settings.token,
@@ -283,6 +392,8 @@ async function ensureConnection() {
     if (connection === conn) connection = null
     throw e
   }
+  // 只有「本次发送触发了建连」才记时——预连时没有轮次在跑，perfRound 为空
+  if (perfRound) perfRound.connectMs = Math.round(nowMs() - startedAt)
 }
 
 function closeConnection() {
@@ -294,6 +405,35 @@ function closeConnection() {
 }
 
 // ==================== 交互 ====================
+
+/**
+ * 读当前文档正文并算内容哈希。与「确保连接」并行跑——它是发送路径上唯一的长活儿
+ * （整篇正文最多 20 万字符），不该排在建连后面等。
+ */
+async function readDocumentForSend() {
+  const startedAt = nowMs()
+  const doc = await readActiveDocument()
+  const hash = doc ? await hashContent(doc.inlineContent) : ''
+  if (perfRound) perfRound.docReadMs = Math.round(nowMs() - startedAt)
+  return { doc, hash }
+}
+
+/**
+ * 组装 activeContext：正文没变（哈希相同）且上一轮正常收尾过，就只上送哈希，
+ * 让后端从会话缓存取回正文，省掉整篇正文的上行；否则全文与哈希一起上送。
+ * 哈希算不出（crypto.subtle 不可用）时恒传全文。
+ */
+function buildActiveContext(doc, hash) {
+  pendingDocHash = hash
+  const reusable = Boolean(hash) && docCache.confirmed && !docCache.disabled
+    && docCache.conversationId === conversationId && docCache.hash === hash
+  if (reusable) {
+    if (perfRound) perfRound.docReused = true
+    return { id: doc.id, name: doc.name, fileType: doc.fileType, inlineContentHash: hash }
+  }
+  if (perfRound) perfRound.docChars = (doc.inlineContent || '').length
+  return hash ? { ...doc, inlineContentHash: hash } : { ...doc }
+}
 
 export async function send() {
   banner.value = ''
@@ -312,27 +452,28 @@ export async function send() {
 
   currentAssistant = null
   parser = null
+  perfStart()
   const assistant = ensureAssistantBubble()
   // 本轮由 send 触发：run_state 回到「不能当终态」的读法（回灌建连若还没收到 run_state，到此作废）
   restorePending = false
+  // 上一轮若被中途停止，它的待提交哈希就此作废——本轮带不带正文由本轮说了算
+  pendingDocHash = ''
   streaming.value = true
   bumpScroll()
 
   try {
-    // 首条消息前先请求服务端签发会话 ID；旧后端无该端点时静默回退客户端生成。
-    // 会话 ID 按项目落本机存储，任务窗格重建后据它接回同一场对话。
-    if (!conversationId) {
-      conversationId = (await createConversation(settings, parseInt(projectId, 10)))
-        || `conv-${Date.now()}`
-      saveConversationId(projectId, conversationId)
-    }
-    await ensureConnection()
+    // 会话 ID 与 SSE 连接正常情况下已由预连备好，这里的 preconnect 只是兜底重试；
+    // 读文档与它并行——两件事互不依赖，串起来就是白等一个往返。
+    const [read] = await Promise.all([
+      includeDocument.value ? readDocumentForSend() : Promise.resolve(null),
+      preconnect()
+    ])
 
-    // 当前文档内容以内联形式随请求上送（activeContext.inlineContent）
+    // 当前文档内容以内联形式随请求上送（activeContext.inlineContent / inlineContentHash）
     let activeContext = null
-    if (includeDocument.value) {
-      activeContext = await readActiveDocument()
-      if (!activeContext) banner.value = '未能读取文档内容，本条消息不附带文档内容'
+    if (read) {
+      if (read.doc) activeContext = buildActiveContext(read.doc, read.hash)
+      else banner.value = '未能读取文档内容，本条消息不附带文档内容'
     }
 
     await postChat(settings, {
@@ -346,8 +487,10 @@ export async function send() {
       clientCapability: 'office',
       officeHost: detectHost() || 'word'
     })
+    if (perfRound) perfRound.chatAcceptedMs = perfSince()
   } catch (e) {
     assistant.error = e.message || '消息发送失败'
+    disableDocDedup()
     finishStreaming()
   }
   return { needSettings: false }
@@ -372,4 +515,8 @@ export function newConversation() {
   reconnecting.value = false
   everReconnected = false
   streaming.value = false
+  resetDocCache()
+  // 立刻预连新会话（签发新 ID + 建 SSE），让下一条消息零建连成本；
+  // 这条连接没有轮次在跑，其 run_state 不产生任何副作用（见 handleRunState 第 2 种来源）
+  preconnect().catch((e) => console.warn('[Addin] 新会话预连失败', e))
 }

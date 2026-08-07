@@ -23,7 +23,8 @@ description: Microsoft Office 插件领域。任务涉及 Word/Excel/PPT 任务�
 
 - **鉴权**：awdt_ 设备令牌放 `X-Session-Id` 请求头（后端 `getUserIdFromSession` 前缀解析）。连接测试 = `GET /api/projects/my`。桌面端生成 awdt_ 的界面在 userprofile「插件访问令牌」分组（走 `POST /api/auth/device-token/issue-local`，仅 local-mode，见 licensing-billing.md）。**awdk_ 一键连接**：`POST /api/auth/awdk-login`（body `{key}`，匿名端点，开关 `security.awdk-login-enabled` 默认关）→ `{code:0, data:{token}}` 换回 awdt_ 存本地，Key 本身用完即弃不落盘；开关未开/旧后端 404 → 提示「该服务器未开启账户直连，请改用设备令牌」。
 - **对话**：`POST /api/agent/chat` + `GET /api/agent/connect/{cid}` SSE（fetch + ReadableStream）。conversationId 优先服务端签发（`POST /api/agent/conversations`，body `{projectId}`，契约与后端并行分支约定），404/失败静默回退客户端 `conv-<毫秒>`。
-- **文档上下文**：按宿主读取（见 wordDoc.js），经 `activeContext.inlineContent` 内联上送（客户端 200k 截断）；activeContext.id 用合成值 `office-current-document`。后端侧 inlineContent 优先于 read_document（ContextAssemblerService，服务端同样 200k 上限）。
+- **文档上下文**：按宿主读取（见 wordDoc.js），经 `activeContext.inlineContent` 内联上送（客户端 200k 截断）；activeContext.id 用合成值 `office-current-document`。后端侧 inlineContent 优先于 read_document（ContextAssemblerService，服务端同样 200k 上限）。**正文省传**：同一会话内文档没变时客户端只上送 `activeContext.inlineContentHash`（SHA-256 十六进制，`wordDoc.js` 的 `hashContent`）、不带 inlineContent；后端 `InlineContentCache`（按会话，LRU 上限 32 条 ≈13MB）凭哈希取回上一轮正文，**哈希后端自算**（客户端上送值只当省传信号），未命中即按「无内联正文」现状处理不报错。
+- **发送路径（批次 5 性能）**：会话签发（`POST /api/agent/conversations`）与 SSE 建连提前到 `preconnect()`——进面板/切项目（activateSession）与「新对话」时就做完，send 只剩「读文档 ‖ 兜底 preconnect → POST /chat」两件并行事。每轮四段耗时经 `console.info('[AddinPerf]', {...})` 输出并存 `lastPerf`（docReadMs/docChars/docReused/connectMs/chatAcceptedMs/firstTokenMs/totalMs），不上报遥测。
 - **SSE 事件**：消费 text_delta/bubble_end/error/cancelled/run_state + `client_action`（仅 tool=office_command）。run_state 仅在断线重连后消费：漏掉终态事件时按状态（非 RUNNING/PAUSED/AWAITING_APPROVAL）兜底解锁输入框——首连的 run_state 不能当终态看（send 已先置 streaming）。
 - **工具桥（Phase C+宿主细分）**：chat 请求带 `clientCapability: "office"` + `officeHost: "word|excel|powerpoint"`（缺省 word）→ ClientCapabilityService 记录 → ToolRegistry 过滤：word 会话只见 Word 面 office_*（读写六个 + 格式六个）、excel 只见 office_excel_*、ppt 只见 office_ppt_*（前缀判定，`hostOfTool` 最长前缀优先）；doc_*/sheet_* 对 office 会话一律隐藏。ContextAssemblerService 的 office 分支文案按宿主点名对应工具集。命令链：SSE client_action `{tool:'office_command', requestId, command, args}` → officeExecutor 执行 → `POST /api/agent/office/result`。Word 修改类命令前置 `changeTrackingMode=TrackAll`、执行后恢复原值（WordApi 1.4 不支持时降级直改标 `tracked:false`）；**Excel/PPT 没有修订机制，写入直接生效**。
 
@@ -52,6 +53,8 @@ description: Microsoft Office 插件领域。任务涉及 Word/Excel/PPT 任务�
 - 修改类命令必须恢复用户原有的修订开关状态（withTracking 的 finally 恢复），别改成常开。
 - **PowerPoint 文本读写要 PowerPointApi 1.4**（TextFrame/TextRange；Microsoft 365 较新版本才有，2019/2021 永久版没有）——执行器 requirePptTextApi 前置报错，别绕开它直接调 API。Excel 查找是客户端扫已用区域（兼容旧宿主），别改成 ExcelApi 1.9 的 findAll。
 - SSE 重连语义：onClose 只在主动 close 触发；改 ChatView 的 streaming 解锁逻辑时记住三条路径（bubble_end/error/cancelled 正常终态、onClose 主动关、重连后 run_state 兜底）。
+- **建连有三种来源，run_state 三种读法**（chatSession.js 的 handleRunState）：回灌（restorePending=true，首个 run_state 是权威状态，RUNNING 则锁输入续写）、**预连**（无 restorePending 无 streaming，run_state 必须零副作用——两个分支都不进）、send 兜底（streaming 已置起，只有 everReconnected 后才用 run_state 解锁）。加预连类的新调用点时先确认它落在哪一种。
+- **省传只在上一轮 bubble_end 之后启用**：出过 error 的会话（含旧后端不认 inlineContentHash 的情况）整场退回恒传全文；`crypto.subtle` 取不到（非 secure context）时哈希为空串，同样恒传全文。改 docCache 的提交/失效时机要同时想「旧后端把只带哈希的请求当无正文」这条降级路径。
 - 世纪互联 CDN 替换只发生在 build-manifest.mjs 的输出目录——别把源 taskpane.html 的 office.js 地址改掉。
 
 ## 验证
@@ -59,4 +62,4 @@ description: Microsoft Office 插件领域。任务涉及 Word/Excel/PPT 任务�
 - `cd office-addin && npm install && npm run build`；manifest 校验（dev 与 dist-deploy 两份）见上。
 - `npm run build:deploy -- --url https://addin.example.com --china` 后检查 dist-deploy/manifest.xml 无 localhost URL、taskpane.html 用 partner.office365.cn CDN。
 - sideload 手测清单与步骤全在 `office-addin/README.md`（Word 工具桥场景 + Excel/PPT 场景 + 断线重连/awdk 连接场景）。
-- 后端单测（JDK 21）：`mvn test -Dtest='ContextAssemblerServiceTest,OfficeBridgeServiceTest,OfficeResultControllerTest,ToolRegistryCapabilityFilterTest,OfficeEditToolsTest'`。
+- 后端单测（JDK 21）：`mvn test -Dtest='ContextAssemblerServiceTest,InlineContentCacheTest,OfficeBridgeServiceTest,OfficeResultControllerTest,ToolRegistryCapabilityFilterTest,OfficeEditToolsTest'`。

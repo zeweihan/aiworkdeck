@@ -360,6 +360,12 @@ public class AiAgentController {
          * 后端没有对应 fileId 可读）。非空时上下文组装直接采用它，不再走 read_document。
          */
         private String inlineContent;
+        /**
+         * 可选：inlineContent 的 SHA-256 十六进制（Office 插件的「正文省传」）。
+         * 同一会话内文档没变时客户端只上送本字段、不再重传整篇正文，
+         * 后端凭它从 InlineContentCache 取回上一轮的正文；未命中即按「无内联正文」处理。
+         */
+        private String inlineContentHash;
 
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }
@@ -372,5 +378,7 @@ public class AiAgentController {
         public void setFileType(String fileType) { this.fileType = fileType; }
         public String getInlineContent() { return inlineContent; }
         public void setInlineContent(String inlineContent) { this.inlineContent = inlineContent; }
+        public String getInlineContentHash() { return inlineContentHash; }
+        public void setInlineContentHash(String inlineContentHash) { this.inlineContentHash = inlineContentHash; }
     }
 }

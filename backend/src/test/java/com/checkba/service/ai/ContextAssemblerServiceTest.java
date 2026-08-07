@@ -40,6 +40,7 @@ class ContextAssemblerServiceTest {
     private LegalTools legalTools;
     private ContextAssemblerService assembler;
     private ClientCapabilityService capabilityService;
+    private InlineContentCache inlineContentCache;
 
     @BeforeEach
     void setUp() {
@@ -58,9 +59,11 @@ class ContextAssemblerServiceTest {
         when(contextCompressor.needsCompression(any(), any())).thenReturn(false);
 
         capabilityService = new ClientCapabilityService();
+        inlineContentCache = new InlineContentCache();
         assembler = new ContextAssemblerService(
                 legalTools, messageService, fileContextLoader,
-                new AiContextProperties(), skillRouter, capabilityService, memoryManager, contextCompressor);
+                new AiContextProperties(), skillRouter, capabilityService, inlineContentCache,
+                memoryManager, contextCompressor);
     }
 
     private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
@@ -197,7 +200,7 @@ class ContextAssemblerServiceTest {
         props.getFiles().setMaxCharsPerFile(500_000);
         ContextAssemblerService bigLimitAssembler = new ContextAssemblerService(
                 legalTools, mockedMessageService(), mock(FileContextLoader.class),
-                props, mockedSkillRouter(), new ClientCapabilityService(),
+                props, mockedSkillRouter(), new ClientCapabilityService(), new InlineContentCache(),
                 mockedMemoryManager(), mockedCompressor());
 
         String huge = "甲".repeat(200_001);
@@ -219,6 +222,57 @@ class ContextAssemblerServiceTest {
         assertTrue(lastUser.contains("[系统提醒]"), "内联正文路径也应有末位提醒");
         assertTrue(lastUser.contains("劳动合同.docx"), "提醒里应点名当前文档");
         assertTrue(lastUser.contains("doc_list_project_files"), "应点名禁用 doc_list_project_files");
+    }
+
+    // ==== 正文省传（inlineContentHash + InlineContentCache）====
+    // 同一会话里文档没变时，插件只上送内容哈希，不再重传整篇正文（20 万字符上限）。
+
+    private static AiAgentController.ContextItem officeDocByHash(String hash) {
+        AiAgentController.ContextItem item = new AiAgentController.ContextItem();
+        item.setId("office-current-document");
+        item.setName("劳动合同.docx");
+        item.setFileType("docx");
+        item.setInlineContentHash(hash);
+        return item;
+    }
+
+    @Test
+    @DisplayName("带正文的请求：正常注入，并按会话落入内联正文缓存")
+    void inlineContentIsCachedForLaterHashOnlyRequests() {
+        String body = "第一条 试用期为三个月……";
+
+        String systemText = assembleSystemText(officeDoc(body));
+
+        assertTrue(systemText.contains(body), "本轮正文应正常注入");
+        assertEquals(body, inlineContentCache.get("conv-1", InlineContentCache.sha256Hex(body)),
+                "正文应按会话落缓存，哈希由后端自算");
+    }
+
+    @Test
+    @DisplayName("只带哈希且命中缓存：复用上一轮正文，不回落 read_document")
+    void hashOnlyRequestReusesCachedContent() {
+        String body = "第一条 试用期为三个月……";
+        assembleSystemText(officeDoc(body));
+
+        String systemText = assembleSystemText(officeDocByHash(InlineContentCache.sha256Hex(body)));
+
+        assertTrue(systemText.contains(body), "命中缓存应复用上一轮正文");
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.never()).read_document(anyString());
+    }
+
+    @Test
+    @DisplayName("只带哈希但未命中（文档已改/缓存已驱逐）：降级为无正文，不报错也不回落 read_document")
+    void hashMissDegradesToNoInlineBody() {
+        capabilityService.record("conv-1", "office");
+        String body = "第一条 试用期为三个月……";
+        assembleSystemText(officeDoc(body));
+
+        String systemText = assembleSystemText(officeDocByHash(InlineContentCache.sha256Hex("文档已被改动")));
+
+        assertFalse(systemText.contains(body), "哈希对不上不应复用旧正文");
+        assertTrue(systemText.contains("[正文暂不可读，可用 office_get_text 直接读取]"),
+                "未命中应走既有「正文暂不可读」文案，模型改用读取类工具");
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.never()).read_document(anyString());
     }
 
     // ==== 末位提醒按会话客户端能力切换（Phase C）====

@@ -42,6 +42,7 @@ public class ContextAssemblerService {
     private final AiContextProperties contextProperties;
     private final com.checkba.service.ai.skill.SkillRouter skillRouter;
     private final ClientCapabilityService clientCapabilityService;
+    private final InlineContentCache inlineContentCache;
 
     // 记忆系统组件（读侧：写侧见 MemoryPipelineService）
     private final MemoryManager memoryManager;
@@ -241,7 +242,7 @@ public class ContextAssemblerService {
                      activeContext.getId(), activeContext.getName(),
                      activeContext.getInlineContent() != null && !activeContext.getInlineContent().isEmpty());
 
-            String content = resolveActiveDocumentContent(activeContext);
+            String content = resolveActiveDocumentContent(activeContext, conversationId);
             ClientCapabilityService.Capability capability = clientCapabilityService.capabilityOf(conversationId);
 
             systemText.append("\n\n# Active Document (当前活跃文档)\n");
@@ -495,20 +496,36 @@ public class ContextAssemblerService {
     private static final int MAX_INLINE_CONTENT_CHARS = 200_000;
 
     /**
-     * 活跃文档正文来源二选一：
-     * 1) 请求随带的内联正文（Office 插件等场景——文档在客户端本地，后端没有可读的 fileId）优先；
-     * 2) 否则走既有 read_document(fileId) 路径。
-     * 两条路径产出同格式正文，后续统一由调用方做 CDATA 包裹与 maxCharsPerFile 截断。
+     * 活跃文档正文来源三选一：
+     * 1) 请求随带的内联正文（Office 插件等场景——文档在客户端本地，后端没有可读的 fileId）优先，
+     *    同时按会话存入 InlineContentCache 供后续「省传」轮次取用；
+     * 2) 只带内联正文哈希（文档自上一轮起没变，客户端省掉了整篇正文的上行）：凭哈希查缓存，
+     *    命中即复用；未命中（缓存已被 LRU 驱逐、或哈希对不上说明文档已改）返回 null，
+     *    由调用方按「正文暂不可读」现状处理——模型可改用读取类工具，不报错；
+     * 3) 两者都没有时走既有 read_document(fileId) 路径。
+     * 三条路径产出同格式正文，后续统一由调用方做 CDATA 包裹与 maxCharsPerFile 截断。
      */
     private String resolveActiveDocumentContent(
-            com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+            com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+            String conversationId) {
         String inline = activeContext.getInlineContent();
         if (inline != null && !inline.isEmpty()) {
             if (inline.length() > MAX_INLINE_CONTENT_CHARS) {
-                inline = inline.substring(0, MAX_INLINE_CONTENT_CHARS)
+                // 超限正文不入缓存：缓存的内存上界按每条 200k 字符估算
+                return inline.substring(0, MAX_INLINE_CONTENT_CHARS)
                         + "\n... [TRUNCATED - Inline content too long]";
             }
+            inlineContentCache.put(conversationId, inline);
             return inline;
+        }
+        String hash = activeContext.getInlineContentHash();
+        if (hash != null && !hash.isBlank()) {
+            String cached = inlineContentCache.get(conversationId, hash);
+            if (cached == null) {
+                log.info("[Context] Inline content hash miss for conversation {}, falling back to no inline body",
+                        conversationId);
+            }
+            return cached;
         }
         return legalTools.read_document(activeContext.getId());
     }
