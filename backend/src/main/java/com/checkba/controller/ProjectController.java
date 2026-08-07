@@ -17,6 +17,9 @@ import java.util.Map;
 @RequestMapping("/api/projects")
 public class ProjectController {
 
+    /** 插件懒建项目的固定名称 */
+    private static final String ADDIN_DEFAULT_PROJECT_NAME = "插件临时项目";
+
     private final ProjectService projectService;
     private final ProjectMemberService projectMemberService;
     private final com.checkba.service.LocalProjectService localProjectService;
@@ -49,6 +52,43 @@ public class ProjectController {
             throw new IllegalArgumentException("请先登录");
         }
         return projectService.createProject(request, userId);
+    }
+
+    /**
+     * Office 插件用：没有任何项目的账号，懒建一个「插件临时项目」。
+     *
+     * 项目是租户隔离维度（chat/history 等接口都按 projectId 判权），不能放开 null；
+     * 但插件用户不该被逼着先去桌面端建项目才能说第一句话。语义：
+     * - 已有任一项目 → 不建，返回 {created:false, project:null}（由用户自己选）；
+     * - 一个都没有 → 建一个并返回 {created:true, project:{id,name}}。
+     *
+     * 幂等靠「先查后建」。同一用户从插件并发首发的窗口极小（任务窗格单实例、首启只发一次），
+     * 故不引锁；真撞上了最坏结果是多出一个空项目，用户可自行删除。
+     * local-mode 与 server 模式行为一致：都只要求有效会话，无特判。
+     */
+    @PostMapping("/ensure-addin-default")
+    public Map<String, Object> ensureAddinDefaultProject(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            throw new IllegalArgumentException("请先登录");
+        }
+        Map<String, Object> result = new HashMap<>();
+        if (!projectService.getUserProjectCardDTOs(userId).isEmpty()) {
+            result.put("created", false);
+            result.put("project", null);
+            return result;
+        }
+        ProjectCreateRequest request = new ProjectCreateRequest();
+        request.setProjectType("BLANK");
+        request.setName(ADDIN_DEFAULT_PROJECT_NAME);
+        Project project = projectService.createProject(request, userId);
+        Map<String, Object> projectInfo = new HashMap<>();
+        projectInfo.put("id", project.getId());
+        projectInfo.put("name", project.getName());
+        result.put("created", true);
+        result.put("project", projectInfo);
+        return result;
     }
 
     /**

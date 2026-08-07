@@ -33,6 +33,52 @@ export async function fetchMyProjects({ serverUrl, token }) {
 }
 
 /**
+ * 一个项目都没有的账号：让后端懒建「插件临时项目」（POST /api/projects/ensure-addin-default）。
+ * 项目是后端的租户隔离维度不能为空，但用户不该被逼着先去建项目。
+ * 已有项目时后端返回 {created:false, project:null}；本函数只关心拿不拿得到项目。
+ * 旧后端没有该端点（404）或任何失败时返回 null，由调用方降级为「请选择项目」的现状，不报错。
+ */
+export async function ensureAddinDefaultProject({ serverUrl, token }) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) return null
+  try {
+    const resp = await fetch(`${base}/api/projects/ensure-addin-default`, {
+      method: 'POST',
+      headers: headers(token)
+    })
+    if (!resp.ok) return null
+    const data = await resp.json()
+    if (data && data.project && data.project.id != null) {
+      return { id: data.project.id, name: data.project.name }
+    }
+  } catch (e) {
+    // 静默降级：由调用方走「请选择项目」的现状路径
+  }
+  return null
+}
+
+/**
+ * 拉某个会话的历史消息（GET /api/ai/history?conversationId=...）。
+ * 任务窗格重建后据此把上一场对话回灌到界面。
+ * 403/404/网络失败一律返回空数组静默降级——历史拿不到不该打断用户开新的对话。
+ */
+export async function fetchConversationHistory({ serverUrl, token }, conversationId) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base || !conversationId) return []
+  try {
+    const resp = await fetch(
+      `${base}/api/ai/history?conversationId=${encodeURIComponent(conversationId)}`,
+      { headers: headers(token) })
+    if (!resp.ok) return []
+    const data = await resp.json()
+    return Array.isArray(data) ? data : []
+  } catch (e) {
+    // 静默降级：当作空会话
+  }
+  return []
+}
+
+/**
  * 用官网账户 Key（awdk_ 开头）换取本服务器的 awdt_ 设备令牌。
  * 匿名端点 POST /api/auth/awdk-login，body {key}；服务端开关未开时返回业务错误。
  * 成功返回 awdt_ 令牌字符串；一切失败以 Error 抛出（文案不含「登录/未授权/请先」，
