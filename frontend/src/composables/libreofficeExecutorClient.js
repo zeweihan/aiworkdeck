@@ -113,6 +113,10 @@ export const EDITOR_ACTIONS = [
   // 设计依据：docs/superpowers/specs/2026-08-07-impress-bridge-design.md §4。
   'slide_get_overview', 'slide_get_page', 'slide_read_notes', 'slide_write_notes',
   'slide_goto', 'slide_set_shape_text', 'slide_replace_text',
+  // [Impress Phase 2] 页与形状结构：插删移页 / 版式与母版 / 插文本框/形状 / 删形状 /
+  // 移动改尺寸形状。设计依据同上 §4.2（原语表 8-15）。
+  'slide_add_page', 'slide_delete_page', 'slide_move_page', 'slide_set_layout',
+  'slide_add_text_box', 'slide_add_shape', 'slide_delete_shape', 'slide_set_shape_geometry',
   // [诊断] 当前文档内核类型（writer/calc/impress/unknown）——审阅按钮等 UI 按 kind
   // 隐藏的判据；load_document 的返回值里也带 kind，宿主常规路径无需二次往返调用本诊断。
   'get_doc_kind',

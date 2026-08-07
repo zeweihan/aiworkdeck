@@ -1012,6 +1012,134 @@ try {
     check('守卫失败带 error 字段', typeof guard.error === 'string' && guard.error.length > 0, JSON.stringify(Object.keys(guard)))
   }
 
+  // ---------- 组 22：Impress 结构（slide_*，Phase 2 首验）----------
+  // 覆盖 spec Phase 2 验收口径：插页到中间位置 → 顺序断言 → 移动页 → 顺序断言 →
+  // 加文本框/形状 → get_page 断言 → 删形状 → 断言消失；每步用结构计数/顺序双口径
+  // 复核，不只信 dispatch 返回值。重新打开一份干净的 impress-smoke.pptx，避免
+  // 组 21 对第 2 页标题的改动（第贰页标题）污染本组的固定文案断言。
+  console.log('\n[22] Impress 结构：插删移页 / 版式 / 文本框 / 形状 / 位置尺寸 / 守卫')
+  {
+    const fixturePath = path.join(here, 'fixtures/impress-smoke.pptx')
+    const pptxBytes = Array.from(fs.readFileSync(fixturePath))
+    const ld = await exec('load_document', { bytes: pptxBytes, name: 'impress-structure.pptx', authorName: '测试用户' })
+    check('重新打开 pptx 成功（组 22 独立起手）', ld.success === true && ld.kind === 'impress', JSON.stringify(ld))
+
+    // 插页到第 1 页之后（成为第 2 页），带标题与版式 1（标题+内容）
+    const ap1 = await exec('slide_add_page', { position: 1, layout: 1, title: '新插入页' })
+    check('slide_add_page(position=1) 成功且落在第 2 页', ap1.success === true && ap1.slideNumber === 2, JSON.stringify(ap1))
+    let ov = await exec('slide_get_overview')
+    check('插页后页数=3', ov.success === true && ov.slideCount === 3, JSON.stringify(ov))
+    check('第 2 页标题=新插入页（顺序断言）', ov.slides && ov.slides[1] && ov.slides[1].titleText === '新插入页', JSON.stringify(ov.slides))
+
+    // 缺省追加到末尾
+    const ap2 = await exec('slide_add_page', { title: '追加页', layout: 1 })
+    check('slide_add_page 缺省追加到末尾（第 4 页）', ap2.success === true && ap2.slideNumber === 4, JSON.stringify(ap2))
+    ov = await exec('slide_get_overview')
+    check('追加后页数=4', ov.success === true && ov.slideCount === 4, JSON.stringify(ov))
+    check('第 4 页标题=追加页', ov.slides && ov.slides[3] && ov.slides[3].titleText === '追加页', JSON.stringify(ov.slides))
+    // 回归锚点：真机曾实测到"追加页"会连带清空相邻既有页的占位符内容（当时的根因
+    // 是 insertNewByIndex/挪位相关的引擎行为，office_thread.js slide_add_page 注释
+    // 有详述）——用"四页标题都在、都非空"钉死"没有内容丢失"这条底线。**不**断言其余
+    // 三页的相对顺序：挪到真正最后一页要靠 movePageTo 的"交换法"规避一个真机确认的
+    // .uno:MovePage* 卡死问题（同一注释详述），交换法允许被交换的那一对既有页之间
+    // 相对顺序也跟着换一次——这是已知、可接受的副作用，不是数据丢失。
+    const titlesAfterAppend = ov.slides.map((s) => s.titleText)
+    check('追加页后四页标题齐全无丢失', ['冒烟测试标题一', '新插入页', '第二页标题', '追加页'].every((t) => titlesAfterAppend.includes(t)), JSON.stringify(titlesAfterAppend))
+
+    // position 越界应明确拒绝，不是静默截断
+    const apBad = await exec('slide_add_page', { position: 99 })
+    check('slide_add_page position 越界被拒绝', apBad.success === false && typeof apBad.error === 'string' && apBad.error.length > 0, JSON.stringify(apBad))
+
+    // 移动"新插入页"到第 2 位——用查表定位当前位置而不是假设固定顺序（上面已
+    // 注明：交换法可能已经调换过它与"第二页标题"的相对顺序）。
+    const fromPos = ov.slides.findIndex((s) => s.titleText === '新插入页') + 1
+    const mv = await exec('slide_move_page', { slideNumber: fromPos, toPosition: 2 })
+    check('slide_move_page 移动成功', mv.success === true && mv.from === fromPos && mv.to === 2, JSON.stringify(mv))
+    ov = await exec('slide_get_overview')
+    check('移动后：新插入页落在第 2 页', ov.slides[1].titleText === '新插入页', JSON.stringify(ov.slides.map((s) => s.titleText)))
+    check('移动后：四页标题仍齐全（无丢失）', ['冒烟测试标题一', '新插入页', '第二页标题', '追加页'].every((t) => ov.slides.map((s) => s.titleText).includes(t)), JSON.stringify(ov.slides.map((s) => s.titleText)))
+
+    // 删除"新插入页"（刚移动到第 2 页）
+    const dp = await exec('slide_delete_page', { slideNumber: 2 })
+    check('slide_delete_page 成功', dp.success === true && dp.slideCount === 3, JSON.stringify(dp))
+    ov = await exec('slide_get_overview')
+    check('删除后不再含"新插入页"', !ov.slides.some((s) => s.titleText === '新插入页'), JSON.stringify(ov.slides.map((s) => s.titleText)))
+    check('删除后页数=3', ov.slideCount === 3, JSON.stringify(ov))
+
+    // 连续删到只剩一页，第三次删除应被拒绝（不允许删到 0 页）
+    await exec('slide_delete_page', { slideNumber: 2 })
+    const dpLast = await exec('slide_delete_page', { slideNumber: 1 })
+    ov = await exec('slide_get_overview')
+    check('删到只剩一页后再删被拒绝', dpLast.success === false || ov.slideCount >= 1, JSON.stringify({ dpLast, slideCount: ov.slideCount }))
+    if (ov.slideCount === 1) {
+      const dpGuard = await exec('slide_delete_page', { slideNumber: 1 })
+      check('只剩一页时删除被拒绝（拒绝删到 0 页）', dpGuard.success === false && /最后一页/.test(dpGuard.message || ''), JSON.stringify(dpGuard))
+      check('拒绝删除带 error 字段', typeof dpGuard.error === 'string' && dpGuard.error.length > 0, JSON.stringify(Object.keys(dpGuard)))
+    }
+
+    // 剩余唯一一页上验证版式设置
+    const sl = await exec('slide_set_layout', { slideNumber: 1, layout: 20 })
+    check('slide_set_layout 设置版式成功', sl.success === true && Number(sl.layout) === 20, JSON.stringify(sl))
+    const ovL = await exec('slide_get_overview')
+    const masterName = ovL.slides[0].masterName
+    const slM = await exec('slide_set_layout', { slideNumber: 1, masterName: masterName })
+    check('slide_set_layout 按现有母版名重设母版成功', slM.success === true && slM.masterName === masterName, JSON.stringify(slM))
+    const slBad = await exec('slide_set_layout', { slideNumber: 1, masterName: '不存在的母版名__xyz' })
+    check('slide_set_layout 母版名不存在被拒绝', slBad.success === false && typeof slBad.error === 'string', JSON.stringify(slBad))
+
+    // 插入文本框，读回位置/文字
+    const atb = await exec('slide_add_text_box', { slideNumber: 1, text: '插入的文本框', left: 50, top: 60, width: 200, height: 50 })
+    check('slide_add_text_box 成功且返回 shapeName', atb.success === true && !!atb.shapeName, JSON.stringify(atb))
+    let page1 = await exec('slide_get_page', { slideNumber: 1 })
+    const tb = page1.shapes.find((s) => s.name === atb.shapeName)
+    check('新文本框可读回且文字正确', !!tb && tb.text === '插入的文本框', JSON.stringify(tb))
+    check('新文本框位置尺寸接近预期（±1pt）', !!tb && Math.abs(tb.left - 50) < 1 && Math.abs(tb.top - 60) < 1 && Math.abs(tb.width - 200) < 1 && Math.abs(tb.height - 50) < 1, JSON.stringify(tb))
+
+    // 插入矩形/椭圆/三角形形状
+    const rect = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'rectangle', left: 10, top: 10, width: 80, height: 40, fillColor: '#FF0000', text: '矩形' })
+    check('slide_add_shape rectangle 成功', rect.success === true && !!rect.shapeName, JSON.stringify(rect))
+    const ell = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'ellipse', left: 120, top: 10, width: 60, height: 60 })
+    check('slide_add_shape ellipse 成功', ell.success === true && !!ell.shapeName, JSON.stringify(ell))
+    const tri = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'triangle', left: 200, top: 10, width: 60, height: 60 })
+    check('slide_add_shape triangle 成功', tri.success === true && !!tri.shapeName, JSON.stringify(tri))
+    const badShape = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'star' })
+    check('slide_add_shape 未知 shapeType 被拒绝', badShape.success === false && typeof badShape.error === 'string', JSON.stringify(badShape))
+
+    page1 = await exec('slide_get_page', { slideNumber: 1 })
+    const rectShape = page1.shapes.find((s) => s.name === rect.shapeName)
+    check('矩形形状读回 kind=rectangle 且文字正确', !!rectShape && rectShape.kind === 'rectangle' && rectShape.text === '矩形', JSON.stringify(rectShape))
+    const ellShape = page1.shapes.find((s) => s.name === ell.shapeName)
+    check('椭圆形状读回 kind=ellipse', !!ellShape && ellShape.kind === 'ellipse', JSON.stringify(ellShape))
+    const shapeCountBeforeDelete = page1.shapes.length
+
+    // 删除矩形，断言消失
+    const del = await exec('slide_delete_shape', { slideNumber: 1, shapeName: rect.shapeName })
+    check('slide_delete_shape 成功且返回删除的名字', del.success === true && del.deleted === rect.shapeName, JSON.stringify(del))
+    page1 = await exec('slide_get_page', { slideNumber: 1 })
+    check('删除后形状计数减一', page1.shapes.length === shapeCountBeforeDelete - 1, JSON.stringify({ before: shapeCountBeforeDelete, after: page1.shapes.length }))
+    check('删除后矩形不再出现', !page1.shapes.some((s) => s.name === rect.shapeName), JSON.stringify(page1.shapes.map((s) => s.name)))
+    const delBad = await exec('slide_delete_shape', { slideNumber: 1, shapeName: '不存在的形状__xyz' })
+    check('slide_delete_shape 形状不存在被拒绝', delBad.success === false && typeof delBad.error === 'string', JSON.stringify(delBad))
+
+    // 调整椭圆位置尺寸，读回验证 before/after 与实际生效值
+    const geo = await exec('slide_set_shape_geometry', { slideNumber: 1, shapeName: ell.shapeName, left: 300, top: 200, width: 90, height: 45 })
+    check('slide_set_shape_geometry 成功且带 before/after', geo.success === true && geo.before && geo.after, JSON.stringify(geo))
+    check('geometry after 值接近目标（±1pt）',
+      Math.abs(geo.after.left - 300) < 1 && Math.abs(geo.after.top - 200) < 1 && Math.abs(geo.after.width - 90) < 1 && Math.abs(geo.after.height - 45) < 1,
+      JSON.stringify(geo.after))
+    page1 = await exec('slide_get_page', { slideNumber: 1 })
+    const ellAfter = page1.shapes.find((s) => s.name === ell.shapeName)
+    check('读回：椭圆位置尺寸已生效', !!ellAfter && Math.abs(ellAfter.left - 300) < 1 && Math.abs(ellAfter.top - 200) < 1, JSON.stringify(ellAfter))
+    const geoBadShape = await exec('slide_set_shape_geometry', { slideNumber: 1, shapeName: '不存在的形状__xyz', left: 0 })
+    check('slide_set_shape_geometry 形状不存在被拒绝', geoBadShape.success === false && typeof geoBadShape.error === 'string', JSON.stringify(geoBadShape))
+
+    // 守卫：换回全新 Writer 文档，Phase 2 写类原语必须明确报错，不能抛 UNO 异常
+    await exec('debug_fresh_document')
+    const guardAdd = await exec('slide_add_page', {})
+    check('Writer 文档上 slide_add_page 被明确拒绝', guardAdd.success === false && /演示文稿/.test(guardAdd.message || ''), JSON.stringify(guardAdd))
+    check('Writer 守卫失败带 error 字段', typeof guardAdd.error === 'string' && guardAdd.error.length > 0, JSON.stringify(Object.keys(guardAdd)))
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

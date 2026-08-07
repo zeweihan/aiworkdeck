@@ -140,6 +140,15 @@ const NAMES = {
   slide_goto: { zh: '定位幻灯片', en: 'Go to slide' },
   slide_set_shape_text: { zh: '设置形状文字', en: 'Set shape text' },
   slide_replace_text: { zh: '替换幻灯片文字', en: 'Replace slide text' },
+  // 演示文稿 slide_* 原语（Phase 2：页与形状结构）
+  slide_add_page: { zh: '插入幻灯片', en: 'Add slide' },
+  slide_delete_page: { zh: '删除幻灯片', en: 'Delete slide' },
+  slide_move_page: { zh: '移动幻灯片', en: 'Move slide' },
+  slide_set_layout: { zh: '设置版式', en: 'Set layout' },
+  slide_add_text_box: { zh: '插入文本框', en: 'Add text box' },
+  slide_add_shape: { zh: '插入形状', en: 'Add shape' },
+  slide_delete_shape: { zh: '删除形状', en: 'Delete shape' },
+  slide_set_shape_geometry: { zh: '调整形状位置尺寸', en: 'Resize/move shape' },
   // Office 插件（Word 任务窗格）office_* 工具桥
   // 正常情况下主前端（lowa 会话）看不到这些工具（会话能力过滤），收录仅作兜底
   office_get_text: { zh: '读取文档', en: 'Read document' },
