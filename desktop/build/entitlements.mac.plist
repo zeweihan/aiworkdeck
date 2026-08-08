@@ -14,5 +14,10 @@
     <true/>
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
+    <!-- 反馈浮窗的语音留言：硬化运行时下没有这条，getUserMedia({audio}) 在签名包里
+         会被 TCC 直接拒掉（dev 未签名时却是好的，属于只有装包后才暴露的坑）。
+         配套的 NSMicrophoneUsageDescription 在 package.json 的 build.mac.extendInfo。 -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>

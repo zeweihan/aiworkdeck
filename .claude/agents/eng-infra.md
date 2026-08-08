@@ -32,6 +32,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 | `npm run check:emits` | frontend/ | @event 绑定 vs $emit 声明静态护栏（scripts/check-emit-bindings.mjs） |
 | `npm run test:lowa-e2e` | frontend/ | LOWA 真引擎+键盘链路（tests/lowa-e2e/run.mjs，puppeteer-core 无头，基线 19 组 169 断言；不经应用页面，天然无登录前置） |
 | `npm run test:app-e2e` | frontend/ | 全应用真人模拟（tests/app-e2e/run.mjs；PR-A 去登录后 J1=首启解锁门（试用码），其余旅程 local-mode 免登直达，不再注册 qa_bot_*；需 dev:h5 **5174** + local-mode 后端（默认 9696，冷启动可用新 jar 9797 顶班 + 隔离 user.home/H2/cwd，APP_E2E_JAR 供 J11）。**发版前必跑** |
+| `npm run test:feedback-e2e` | frontend/ | 反馈浮窗全链路（dev Electron + CDP：真走主进程框选截图、Chromium 假麦克风录音、提交后从 API 回读附件字节）。需 dev:h5 + local-mode 后端，同 desktop-e2e 的端口约定 |
 | `npm run test:desktop-e2e` | frontend/ | 桌面保存链路（弹 dev Electron 窗口，webview 真 LOWA 插文本→保存→API 下载验内容；PR-A 后免登直达，provision 会自动用试用码解锁+置向导）。`APP_E2E_BACKEND` 的端口会经 `CHECKBA_BACKEND_PORT` 传给 Electron 壳——渲染层的基址是壳注入的，只改 `VITE_API_BASE_URL` 对它无效 |
 
 每日全量 QA：`scripts/qa-nightly.sh`（crontab，跑在 ~/aiworkdeck-qa/repo 专用克隆，报告 ~/aiworkdeck-qa/reports/，失败 gh 开 issue 标签 qa-nightly，引擎取自已安装 app）。
