@@ -20,7 +20,7 @@ class OptimizerAgentServiceTest {
     OptimizerFeedbackSource source;
     FeedbackTriageService triageService;
     OptimizerCodeFixRunner fixRunner;
-    OptimizerMailer mailer;
+    OptimizerNotifyRouter notifier;
     OptimizerAgentService svc;
 
     UserFeedback row;
@@ -35,7 +35,7 @@ class OptimizerAgentServiceTest {
         source = mock(OptimizerFeedbackSource.class);
         triageService = mock(FeedbackTriageService.class);
         fixRunner = mock(OptimizerCodeFixRunner.class);
-        mailer = mock(OptimizerMailer.class);
+        notifier = mock(OptimizerNotifyRouter.class);
 
         row = new UserFeedback();
         row.setId(5L);
@@ -45,10 +45,11 @@ class OptimizerAgentServiceTest {
 
         when(source.pending(anyInt(), anyInt())).thenReturn(List.of(row));
         when(source.attachmentsOf(any(UserFeedback.class))).thenReturn(List.of());
-        when(mailer.isAvailable()).thenReturn(true);
-        when(mailer.unavailableReason()).thenReturn("");
+        when(notifier.isAvailable()).thenReturn(true);
+        when(notifier.unavailableReason()).thenReturn("");
+        when(notifier.notify(any(), any(), any(), any(), any())).thenReturn("");
 
-        svc = new OptimizerAgentService(props, source, triageService, fixRunner, mailer);
+        svc = new OptimizerAgentService(props, source, triageService, fixRunner, notifier);
     }
 
     private void triageReturns(String verdict, double confidence) {
@@ -62,7 +63,7 @@ class OptimizerAgentServiceTest {
         var report = svc.runOnce();
         assertEquals(0, report.picked());
         assertTrue(report.note().contains("未启用"));
-        verifyNoInteractions(triageService, fixRunner, mailer, source);
+        verifyNoInteractions(triageService, fixRunner, notifier, source);
     }
 
     @Test
@@ -81,7 +82,20 @@ class OptimizerAgentServiceTest {
         assertEquals(FeedbackTriageService.VERDICT_BUG, row.getTriageVerdict());
         assertNotNull(row.getHandledAt());
         assertNotNull(row.getTriageJson());
-        verify(mailer, never()).send(any(), any(), any(), any(), any());
+        verify(notifier, never()).notify(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void notifiedFeedbackRecordsTheIssueUrlAsItsDestination() {
+        triageReturns(FeedbackTriageService.VERDICT_SUGGESTION, 0.8);
+        when(notifier.notify(any(), any(), any(), any(), any()))
+                .thenReturn("https://github.com/a/b/issues/42");
+
+        svc.runOnce();
+
+        // 去向地址不区分 PR 还是 Issue：后台看板要能一键点开
+        assertEquals("https://github.com/a/b/issues/42", row.getPrUrl());
+        assertEquals(UserFeedback.STATUS_EMAILED, row.getStatus());
     }
 
     @Test
@@ -92,7 +106,7 @@ class OptimizerAgentServiceTest {
 
         assertEquals(1, report.emailed());
         assertEquals(UserFeedback.STATUS_EMAILED, row.getStatus());
-        verify(mailer).send(any(), any(), any(), any(), any());
+        verify(notifier).notify(any(), any(), any(), any(), any());
         verifyNoInteractions(fixRunner);
     }
 
@@ -118,7 +132,7 @@ class OptimizerAgentServiceTest {
 
         assertEquals(1, report.emailed());
         assertEquals(UserFeedback.STATUS_EMAILED, row.getStatus());
-        verify(mailer).send(any(), any(), any(), any(), contains("什么都没改"));
+        verify(notifier).notify(any(), any(), any(), any(), contains("什么都没改"));
     }
 
     @Test
@@ -130,7 +144,7 @@ class OptimizerAgentServiceTest {
         svc.runOnce();
 
         assertEquals(UserFeedback.STATUS_EMAILED, row.getStatus());
-        verify(mailer).send(any(), any(), any(), any(), contains(".github/"));
+        verify(notifier).notify(any(), any(), any(), any(), contains(".github/"));
     }
 
     @Test
@@ -146,10 +160,10 @@ class OptimizerAgentServiceTest {
     }
 
     @Test
-    void unavailableMailKeepsFeedbackForRetryInsteadOfMarkingItHandled() {
+    void unavailableNotifierKeepsFeedbackForRetryInsteadOfMarkingItHandled() {
         triageReturns(FeedbackTriageService.VERDICT_SUGGESTION, 0.8);
-        when(mailer.isAvailable()).thenReturn(false);
-        when(mailer.unavailableReason()).thenReturn("未配置 spring.mail.host（没有 JavaMailSender）");
+        when(notifier.isAvailable()).thenReturn(false);
+        when(notifier.unavailableReason()).thenReturn("邮件：未配置 spring.mail.host（没有 JavaMailSender）");
 
         var report = svc.runOnce();
 
@@ -164,7 +178,7 @@ class OptimizerAgentServiceTest {
     void repeatedFailureEventuallyStopsAtFailed() {
         props.setMaxAttempts(1);
         triageReturns(FeedbackTriageService.VERDICT_SUGGESTION, 0.8);
-        when(mailer.isAvailable()).thenReturn(false);
+        when(notifier.isAvailable()).thenReturn(false);
 
         svc.runOnce();
 
@@ -196,7 +210,7 @@ class OptimizerAgentServiceTest {
         assertEquals(0, row.getAttempts());
         assertEquals(FeedbackTriageService.VERDICT_BUG, row.getTriageVerdict(), "演练也要留下分诊结论");
         verifyNoInteractions(fixRunner);
-        verify(mailer, never()).send(any(), any(), any(), any(), any());
+        verify(notifier, never()).notify(any(), any(), any(), any(), any());
     }
 
     @Test

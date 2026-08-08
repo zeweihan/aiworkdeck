@@ -93,10 +93,63 @@ OPTIMIZER_AGENT_COMMAND_6={prompt}
 `{prompt}` 换成任务书正文，`{promptFile}` 换成任务书文件路径。
 `codex` 的 `--sandbox workspace-write` 恰好把写入限制在那棵临时 worktree 里。
 
+## 通知出口：默认不用配邮箱
+
+「建议 / 拿不准」那条出口默认是 **`auto`**：配了邮件就发邮件，**没配就开一条 GitHub Issue**。
+开 Issue 复用的是优化者本来就有的 `gh` 登录，**不需要任何新凭据**，所以开箱即用。
+
+想改用邮件（或两个都要）：把 `OPTIMIZER_NOTIFY_CHANNEL` 改成 `mail`（或 `both`），
+再配一条发信通道。**发信不走 `spring.mail.*`**，走仓库自己的双通道（按收件域名分流，
+见 `application.yml` 的 `mail` 段）——只配一条也能工作：
+
+```bash
+OPTIMIZER_NOTIFY_CHANNEL=mail
+OPTIMIZER_MAIL_TO=你自己的收件邮箱
+
+# 收件人是国内邮箱（QQ/163/126/139…）→ 阿里云邮件推送
+MAIL_DOMESTIC_ENABLED=true
+MAIL_DOMESTIC_USERNAME=<发信地址本身>
+MAIL_DOMESTIC_PASSWORD=<控制台「发信地址 → 设置SMTP密码」设的那个，不是 AccessKey>
+MAIL_DOMESTIC_FROM=<同上发信地址>
+
+# 收件人是境外邮箱（Gmail/Outlook/自有域名…）→ Resend
+MAIL_GLOBAL_ENABLED=true
+MAIL_GLOBAL_PASSWORD=<re_ 开头的 API key>
+MAIL_GLOBAL_FROM=<send.aiworkdeck.com 下的发信地址>
+```
+
+**发件人由通道决定，优化者不指定**：两条通道的发信域名不同，硬写 from 会和实际发信域名
+对不上、SPF 当场判失败。填完重启进程，`/api/optimizer/status` 的 `notifyChannel` 会显示成「邮件」。
+
 ## 出问题先看这三处
 
 | 现象 | 多半是 |
 |---|---|
-| 状态里 `pending` 一直 0、战报 note 写「取件失败」 | token 与收件箱不一致，或收件箱那边 `feedback.optimizer-token` 没配（没配 = 整组 403） |
-| 每条都走邮件、从不开 PR | 编码 Agent 没登录 → diff 为空 → 按 NO_CHANGES 转邮件。手动跑一次 `claude -p`/`codex exec` 验登录 |
-| 战报里 `failed` 全是「邮件出口不可用」 | `SPRING_MAIL_*` 没配全，或 `OPTIMIZER_MAIL_TO` 空 |
+| 战报 note 写「取件失败」 | token 与收件箱不一致，或收件箱那边 `feedback.optimizer-token` 没配（没配 = 整组 403） |
+| 每条都走通知、从不开 PR | 编码 Agent 没登录 → diff 为空 → 按 NO_CHANGES 转通知。手动跑一次 `claude -p` 验登录 |
+| 战报里 `failed` 全是「通知出口不可用」 | 两条发信通道都没配**且** `optimizer.repo.path` 也没配（开 Issue 也要在仓库目录里跑 gh） |
+| 战报里 `failed` 写「邮件发送失败」 | 先分清是**认证**还是**投递**：日志里 `MailAuthenticationException` = 凭据不对，其它多半是发信域名/收件方拒收 |
+
+### 发信通道自检
+
+出问题时别猜，直接对 SMTP 认证探一次（不动代码、不发信）：
+
+```bash
+python3 - <<'EOF'
+import smtplib, ssl
+# 阿里云：用户名就是发信地址；Resend：用户名固定字面量 resend、密码是 re_ key
+for label, host, port, user, pwd in [
+    ("阿里云", "smtpdm.aliyun.com", 465, "<发信地址>", "<SMTP密码>"),
+    ("Resend", "smtp.resend.com", 465, "resend", "<re_ key>"),
+]:
+    try:
+        with smtplib.SMTP_SSL(host, port, timeout=15, context=ssl.create_default_context()) as s:
+            s.login(user, pwd); print(label, "认证通过")
+    except Exception as e:
+        print(label, "失败:", e)
+EOF
+```
+
+**只有一条通道能用时**：把另一条 `MAIL_*_ENABLED` 置 false 即可。`MailRouter` 找不到认领该
+收件域名的通道时，会兜给唯一启用的那条——这是它设计里就有的退路，不是将就。
+（实测：收件人是 Gmail、Resend 密钥失效时，关掉 global 后由阿里云那条正常送达。）

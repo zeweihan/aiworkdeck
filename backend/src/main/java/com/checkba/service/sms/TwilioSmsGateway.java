@@ -15,7 +15,8 @@ import java.util.Base64;
 /**
  * 境外号码的短信通道：Twilio Messages API（不引 SDK，同 {@link SmsService} 的立场）。
  *
- * <p>只负责非大陆号码。发送内容由本服务拼装（验证码仍由 {@link SmsCodeStore} 统一签发与核销），
+ * <p>只负责非大陆号码。发送内容由本服务拼装（验证码仍由
+ * {@link com.checkba.service.auth.VerificationCodeStore} 统一签发与核销），
  * 这样国内外只有一套验证码生命周期，不必为 Twilio Verify 再维护一条远端校验路径。
  *
  * <p>合规（各国 Sender ID / 美国 10DLC / 印度 DLT）在 Twilio 控制台的 Messaging Service

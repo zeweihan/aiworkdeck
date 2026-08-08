@@ -1,6 +1,7 @@
 package com.checkba.service.sms;
 
 import com.checkba.model.entity.User;
+import com.checkba.service.auth.VerificationCodeStore;
 import com.checkba.repository.UserRepository;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -35,7 +36,7 @@ class SmsAuthServiceTest {
     @DisplayName("local-mode 恒未启用；server 模式看 SmsService 配置")
     void activeGating() {
         UserRepository repo = mock(UserRepository.class);
-        SmsCodeStore store = new SmsCodeStore();
+        VerificationCodeStore store = new VerificationCodeStore();
         assertFalse(new SmsAuthService(List.of(enabledSms(OK_TRANSPORT)), store, repo, true).active(),
                 "local-mode 必须旁路");
         assertTrue(new SmsAuthService(List.of(enabledSms(OK_TRANSPORT)), store, repo, false).active());
@@ -47,7 +48,7 @@ class SmsAuthServiceTest {
     @DisplayName("requiresCode：启用且已绑手机号才要求；存量未绑定用户不拦")
     void requiresCodeOnlyWithPhone() {
         SmsAuthService svc = new SmsAuthService(
-                List.of(enabledSms(OK_TRANSPORT)), new SmsCodeStore(), mock(UserRepository.class), false);
+                List.of(enabledSms(OK_TRANSPORT)), new VerificationCodeStore(), mock(UserRepository.class), false);
         assertTrue(svc.requiresCode(user(1, "13800000000")));
         assertFalse(svc.requiresCode(user(1, null)));
         assertFalse(svc.requiresCode(user(1, "")));
@@ -58,7 +59,7 @@ class SmsAuthServiceTest {
     @DisplayName("登录码全流程：发码（脱敏返回）→ 核销放行；错码抛业务错误")
     void loginCodeRoundTrip() {
         AtomicReference<String> sentBody = new AtomicReference<>();
-        SmsCodeStore store = new SmsCodeStore();
+        VerificationCodeStore store = new VerificationCodeStore();
         SmsAuthService svc = new SmsAuthService(List.of(enabledSms((url, body, auth) -> {
             sentBody.set(body);
             return new SmsTransport.Reply(200, "{\"Code\":\"OK\"}");
@@ -79,7 +80,7 @@ class SmsAuthServiceTest {
     @Test
     @DisplayName("发送失败回滚冷却：网关拒绝后可立即重试")
     void failedSendRollsBackCooldown() {
-        SmsCodeStore store = new SmsCodeStore();
+        VerificationCodeStore store = new VerificationCodeStore();
         AtomicReference<Boolean> fail = new AtomicReference<>(true);
         SmsAuthService svc = new SmsAuthService(List.of(enabledSms((url, body, auth) ->
                 fail.get() ? new SmsTransport.Reply(500, "boom")
@@ -95,7 +96,7 @@ class SmsAuthServiceTest {
     void bindRejectsPhoneBoundByOther() {
         UserRepository repo = mock(UserRepository.class);
         when(repo.findByPhone("13800000000")).thenReturn(Optional.of(user(99, "13800000000")));
-        SmsAuthService svc = new SmsAuthService(List.of(enabledSms(OK_TRANSPORT)), new SmsCodeStore(), repo, false);
+        SmsAuthService svc = new SmsAuthService(List.of(enabledSms(OK_TRANSPORT)), new VerificationCodeStore(), repo, false);
         assertThrows(IllegalArgumentException.class, () -> svc.sendBindCode(1L, "13800000000"));
         assertThrows(IllegalArgumentException.class, () -> svc.confirmBind(1L, "13800000000", "123456"));
     }
@@ -113,7 +114,7 @@ class SmsAuthServiceTest {
         SmsAuthService svc = new SmsAuthService(List.of(enabledSms((url, body, auth) -> {
             sentBody.set(body);
             return new SmsTransport.Reply(200, "{\"Code\":\"OK\"}");
-        })), new SmsCodeStore(), repo, false);
+        })), new VerificationCodeStore(), repo, false);
 
         svc.sendBindCode(1L, "13800000000");
         java.util.regex.Matcher m = java.util.regex.Pattern.compile("%22code%22%3A%22(\\d{6})%22")
@@ -128,7 +129,7 @@ class SmsAuthServiceTest {
     @DisplayName("手机号格式：非大陆手机号拒绝；空白剥离后再校验")
     void phoneFormatValidated() {
         SmsAuthService svc = new SmsAuthService(
-                List.of(enabledSms(OK_TRANSPORT)), new SmsCodeStore(), mock(UserRepository.class), false);
+                List.of(enabledSms(OK_TRANSPORT)), new VerificationCodeStore(), mock(UserRepository.class), false);
         assertThrows(IllegalArgumentException.class, () -> svc.sendBindCode(1L, "12345"));
         assertThrows(IllegalArgumentException.class, () -> svc.sendBindCode(1L, "23800000000"));
         assertThrows(IllegalArgumentException.class, () -> svc.sendBindCode(1L, null));
@@ -139,7 +140,7 @@ class SmsAuthServiceTest {
     @DisplayName("未启用时绑定类操作一律业务错误，且文案不踩掉线三子串")
     void inactiveRejectsBindOperations() {
         SmsAuthService svc = new SmsAuthService(
-                List.of(enabledSms(OK_TRANSPORT)), new SmsCodeStore(), mock(UserRepository.class), true);
+                List.of(enabledSms(OK_TRANSPORT)), new VerificationCodeStore(), mock(UserRepository.class), true);
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> svc.sendBindCode(1L, "13800000000"));
         assertFalse(e.getMessage().contains("登录"));

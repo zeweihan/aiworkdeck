@@ -29,15 +29,6 @@ spring:
         types:
           print:
             banner: false
-  # 邮件通道（只被「优化者」用来给维护者发信，产品功能不发任何邮件）。
-  # 刻意整段留空：配了 spring.mail.host 才会有 JavaMailSender bean，没配等于这条出口关闭。
-  # 维护者启用时用环境变量注入，别把授权码写进入库文件：
-  #   SPRING_MAIL_HOST=smtp.qq.com SPRING_MAIL_PORT=465
-  #   SPRING_MAIL_USERNAME=you@qq.com SPRING_MAIL_PASSWORD=<授权码>
-  #   SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH=true
-  #   SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE=true   # 465 直连 SSL
-  #   （587 的 STARTTLS 改用 ..._MAIL_SMTP_STARTTLS_ENABLE=true）
-  #   OPTIMIZER_MAIL_TO=you@example.com OPTIMIZER_MAIL_FROM=you@qq.com
   servlet:
     multipart:
       enabled: true
@@ -122,6 +113,36 @@ sms:
     auth-token: ${TWILIO_AUTH_TOKEN:}
     messaging-service-sid: ${TWILIO_MESSAGING_SERVICE_SID:}
     template: ${TWILIO_SMS_TEMPLATE:Your AI Workdeck verification code is {code}. It expires in 5 minutes.}
+
+# 邮件发信（按收件域名分流的两条 SMTP 通道，见 com.checkba.service.mail）。
+# 密码一律环境变量注入，与 SMS_ACCESS_KEY_* 同一模式，绝不写进任何入库文件。
+# 刻意不用 Spring Boot 的 spring.mail.*：那套只装配得出一个 JavaMailSender，
+# 而国内/国外必须并存——两条各自独立开关，只配一条的部署照常工作。
+mail:
+  # 发件人显示名，两条通道共用
+  from-name: ${MAIL_FROM_NAME:AI Workdeck}
+  # 邮箱免密登录（输邮箱→收码→直接登录，不过密码）。**独立开关且默认关**：
+  # 它是一条新的匿名登录入口，攻击面与密码登录不同——邮箱被盗即账号被盗。
+  # 关闭时邮箱仍可作为登录二次验证使用（那条不需要这个开关）。
+  passwordless-login-enabled: ${MAIL_PASSWORDLESS_LOGIN_ENABLED:false}
+  # 国内主流邮箱（QQ/163/126/139…）走这条：阿里云邮件推送，发信域名 dm.aiworkdeck.com。
+  # 用户名就是发信地址本身；密码是控制台「发信地址 → 设置SMTP密码」设的那个，不是 AccessKey。
+  domestic:
+    enabled: ${MAIL_DOMESTIC_ENABLED:false}
+    host: ${MAIL_DOMESTIC_HOST:smtpdm.aliyun.com}
+    port: ${MAIL_DOMESTIC_PORT:465}
+    username: ${MAIL_DOMESTIC_USERNAME:}
+    password: ${MAIL_DOMESTIC_PASSWORD:}
+    from: ${MAIL_DOMESTIC_FROM:}
+  # 其余邮箱（Gmail/Outlook/企业自有域名…）走这条：Resend，发信域名 send.aiworkdeck.com。
+  # 用户名固定字面量 resend，密码填 API key（re_ 开头），不是账号邮箱。
+  global:
+    enabled: ${MAIL_GLOBAL_ENABLED:false}
+    host: ${MAIL_GLOBAL_HOST:smtp.resend.com}
+    port: ${MAIL_GLOBAL_PORT:465}
+    username: ${MAIL_GLOBAL_USERNAME:resend}
+    password: ${MAIL_GLOBAL_PASSWORD:}
+    from: ${MAIL_GLOBAL_FROM:}
 
 # AI 大模型配置（供应商可切换）
 ai:
@@ -348,12 +369,19 @@ optimizer:
     # 编码 Agent 命令行；{prompt} 换成任务书正文，{promptFile} 换成任务书文件路径
     command: [ "claude", "-p", "{prompt}", "--permission-mode", "acceptEdits" ]
     timeout-seconds: 1800
+  # 通知出口：auto（默认，有邮件用邮件、没有就开 GitHub Issue）| mail | issue | both。
+  # 之所以默认自己降级：邮件要维护者亲自去邮箱后台生成授权码才能用，而开 Issue
+  # 复用优化者本来就有的 gh 登录，零新增凭据——「反馈没人管」不该取决于有没有腾出时间配 SMTP。
+  notify:
+    channel: ${OPTIMIZER_NOTIFY_CHANNEL:auto}
+    # 仓库里没建过的标签会被自动去掉重试，不会因此让整条出口不可用
+    issue-labels: [ user-feedback ]
   mail:
     enabled: true
-    # 收件人（维护者）。邮件通道本身用 spring.mail.*（见下），没配 host 就没有
-    # JavaMailSender，这条出口会明确报「不可用」而不是悄悄丢反馈。
+    # 收件人（维护者），逗号分隔可多个。发信通道本身是上面的 mail.domestic/global，
+    # 一条都没配时这条出口会报「不可用」并由 notify.channel=auto 落到开 Issue。
+    # 发件人由通道决定，此处不设——两条通道发信域名不同，硬写 from 会让 SPF 判失败。
     to: ${OPTIMIZER_MAIL_TO:}
-    from: ${OPTIMIZER_MAIL_FROM:}
     subject-prefix: "[AI Workdeck 优化者]"
 
 # 文件存储配置

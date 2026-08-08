@@ -129,10 +129,10 @@
             <button class="action-btn" :loading="loginLoading" @tap="handleLogin">登 录</button>
           </view>
 
-          <!-- Second Factor Step（登录二次验证：认证器或短信） -->
+          <!-- Second Factor Step（登录二次验证：认证器 / 邮箱 / 短信） -->
           <view v-else-if="activeTab === 'login' && smsStep" class="form-body swing-in">
             <view class="input-group">
-              <text class="label">{{ smsMethod === 'totp' ? '认证器验证' : '短信验证' }}</text>
+              <text class="label">{{ secondFactorLabel }}</text>
               <text class="sms-hint">
                 {{ smsMethod === 'totp' ? '请输入认证器 App 上当前显示的 6 位验证码' : '验证码已发送至 ' + smsPhoneMasked }}
               </text>
@@ -187,7 +187,7 @@
 </template>
 
 <script>
-import { login, register, clientLogin, getWizardStatus, getMyProjects, sendSmsCode } from '@/services/api.js'
+import { login, register, clientLogin, getWizardStatus, getMyProjects, sendSmsCode, sendMailCode } from '@/services/api.js'
 import { saveSession, getSessionId, getCurrentUser } from '@/utils/auth.js'
 import { syncRecentToMenu } from '@/utils/recentProjects.js'
 
@@ -243,6 +243,12 @@ export default {
     if (this.smsCountdownTimer) clearInterval(this.smsCountdownTimer)
   },
   computed: {
+    // 二次验证的方式由后端定（TOTP > 邮箱 > 短信），前端只负责说人话
+    secondFactorLabel() {
+      if (this.smsMethod === 'totp') return '认证器验证';
+      if (this.smsMethod === 'mail') return '邮箱验证';
+      return '短信验证';
+    },
     deviceTransform() {
       // Logic:
       // When mouse is at left (low %), device is tilted: rotateY(25deg) rotateX(5deg) scale(0.9)
@@ -340,12 +346,17 @@ export default {
     async resendSmsCode() {
       if (this.smsCountdown > 0) return;
       try {
-        const res = await sendSmsCode({
+        // 二次验证走哪条通道由后端 4005 信封里的 method 决定，发码就得打对应端点——
+        // 邮箱用户打短信端点会被判成「未绑定手机号」
+        const payload = {
           scene: 'login',
           username: this.loginForm.username,
           password: this.loginForm.password
-        });
-        if (res.data && res.data.phoneMasked) this.smsPhoneMasked = res.data.phoneMasked;
+        };
+        const res = this.smsMethod === 'mail' ? await sendMailCode(payload) : await sendSmsCode(payload);
+        // 邮箱通道回 emailMasked，短信回 phoneMasked；两者都填进同一个展示位
+        const masked = res.data && (res.data.emailMasked || res.data.phoneMasked);
+        if (masked) this.smsPhoneMasked = masked;
         this.startSmsCountdown();
         uni.showToast({ title: '验证码已发送', icon: 'none' });
       } catch (e) {

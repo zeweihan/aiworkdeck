@@ -2,10 +2,8 @@ package com.checkba.service.optimizer;
 
 import com.checkba.model.entity.FeedbackAttachment;
 import com.checkba.model.entity.UserFeedback;
+import com.checkba.service.mail.MailRouter;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -17,46 +15,66 @@ import java.util.List;
  * 都会把一个每天跑一次的批处理变成一个常驻服务；维护者读完信直接去改代码
  * 或在库里改状态更省事。信里因此写清「回信不会被系统读取」。
  *
- * <p>邮件通道用 Spring 的 {@code spring.mail.*}：配了 host 才有 JavaMailSender bean，
- * 没配就整条出口不可用（会记 FAILED 等人配置），不静默丢反馈。
+ * <p>发信走 {@link MailRouter}（{@code mail.domestic.*} / {@code mail.global.*}）：
+ * 一条通道都没配就整条出口不可用（会记 FAILED 等人配置），不静默丢反馈。
+ * 发件人由通道决定，本类不指定——两条通道的发信域名不同，硬写 from 会和实际发信域名对不上，
+ * SPF 当场判失败。
  */
 @Slf4j
 @Service
-public class OptimizerMailer {
+public class OptimizerMailer implements OptimizerNotifier {
 
     private final OptimizerProperties props;
-    private final ObjectProvider<JavaMailSender> mailSenderProvider;
+    private final MailRouter mailRouter;
 
-    public OptimizerMailer(OptimizerProperties props, ObjectProvider<JavaMailSender> mailSenderProvider) {
+    public OptimizerMailer(OptimizerProperties props, MailRouter mailRouter) {
         this.props = props;
-        this.mailSenderProvider = mailSenderProvider;
+        this.mailRouter = mailRouter;
     }
 
-    /** 邮件出口是否可用：要有 JavaMailSender（配了 spring.mail.host）且填了收件人。 */
+    @Override
+    public String name() {
+        return "邮件";
+    }
+
+    /** 邮件出口是否可用：至少一条发信通道配齐且填了收件人。 */
+    @Override
     public boolean isAvailable() {
         return props.getMail().isEnabled()
-                && mailSenderProvider.getIfAvailable() != null
+                && mailRouter.active()
                 && !props.getMail().getTo().isBlank();
     }
 
+    @Override
     public String unavailableReason() {
         if (!props.getMail().isEnabled()) return "optimizer.mail.enabled=false";
-        if (mailSenderProvider.getIfAvailable() == null) return "未配置 spring.mail.host（没有 JavaMailSender）";
+        if (!mailRouter.active()) return "未配置发信通道（mail.domestic.* 或 mail.global.*）";
         if (props.getMail().getTo().isBlank()) return "未配置 optimizer.mail.to（收件人）";
+        return "";
+    }
+
+    /** 邮件没有可点开的地址，恒返回空串。 */
+    @Override
+    public String notify(UserFeedback fb, FeedbackTriageService.TriageResult triage,
+                         List<FeedbackAttachment> attachments, OptimizerFeedbackSource source, String extraNote) {
+        send(fb, triage, attachments, source, extraNote);
         return "";
     }
 
     public void send(UserFeedback fb, FeedbackTriageService.TriageResult triage,
                      List<FeedbackAttachment> attachments, OptimizerFeedbackSource source, String extraNote) {
-        JavaMailSender sender = mailSenderProvider.getIfAvailable();
-        if (sender == null) throw new IllegalStateException(unavailableReason());
+        if (!mailRouter.active()) throw new IllegalStateException(unavailableReason());
 
-        SimpleMailMessage msg = new SimpleMailMessage();
-        msg.setTo(props.getMail().getTo().split(","));
-        if (!props.getMail().getFrom().isBlank()) msg.setFrom(props.getMail().getFrom());
-        msg.setSubject(subject(fb, triage));
-        msg.setText(body(fb, triage, attachments, source, extraNote));
-        sender.send(msg);
+        String subject = subject(fb, triage);
+        String body = body(fb, triage, attachments, source, extraNote);
+        // 逐个收件人分别发：多个收件人可能分属不同通道（维护者的 Gmail 与同事的 QQ 邮箱
+        // 走的不是同一条），塞进同一封信就只能挑一条通道发，另一半到达率白丢。
+        for (String to : props.getMail().getTo().split(",")) {
+            String trimmed = to.trim();
+            if (!trimmed.isEmpty()) {
+                mailRouter.send(trimmed, subject, body);
+            }
+        }
         log.info("[optimizer] 已发送反馈 #{} 的邮件到 {}", fb.getId(), props.getMail().getTo());
     }
 

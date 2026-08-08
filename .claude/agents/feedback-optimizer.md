@@ -36,6 +36,10 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
   —— 优化者读本地库还是云端收件箱，上层无感
 - `FeedbackTriageService` — 分诊；`OptimizerCodeFixRunner` — worktree + 编码 Agent + PR；
   `OptimizerMailer` — 只发不收；`OptimizerAgentService` — 调度与分流；`ProcessRunner` — 子进程出口
+- **邮件出口走 `service/mail/MailRouter`（`mail.domestic.*` / `mail.global.*`），不是 `spring.mail.*`**
+  （2026-08-08 PR#320 改）。多收件人**逐个分别发**：他们可能分属不同通道（维护者的 Gmail 与同事的
+  QQ 邮箱走的不是同一条），塞进同一封信只能挑一条，另一半到达率白丢。**发件人由通道决定**，
+  `optimizer.mail.from` 已删——两条通道发信域名不同，硬写 from 会让 SPF 当场判失败。
 - `controller/OptimizerController` — `/api/optimizer/run|status`（管理员，run 是异步）
 - 维护者机器上的常驻配方：`deploy/optimizer/`（run 脚本 + launchd plist + 搬机器步骤）
 

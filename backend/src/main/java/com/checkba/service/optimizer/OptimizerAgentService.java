@@ -41,7 +41,7 @@ public class OptimizerAgentService {
     private final OptimizerFeedbackSource source;
     private final FeedbackTriageService triageService;
     private final OptimizerCodeFixRunner codeFixRunner;
-    private final OptimizerMailer mailer;
+    private final OptimizerNotifyRouter notifier;
     private final ObjectMapper mapper = new ObjectMapper();
 
     private final AtomicBoolean running = new AtomicBoolean(false);
@@ -174,7 +174,7 @@ public class OptimizerAgentService {
                 }
                 case NO_CHANGES, BLOCKED -> {
                     // 判成 bug 但改不出来（或改到了受保护路径）：这恰恰是最该问人的情况
-                    return emailOrFail(fb, triage, attachments, outcome.detail());
+                    return notifyOrFail(fb, triage, attachments, outcome.detail());
                 }
                 default -> {
                     return fail(fb, outcome.detail(), triage);
@@ -182,7 +182,7 @@ public class OptimizerAgentService {
             }
         }
 
-        return emailOrFail(fb, triage, attachments, lowConfidenceNote(triage));
+        return notifyOrFail(fb, triage, attachments, lowConfidenceNote(triage));
     }
 
     private String lowConfidenceNote(FeedbackTriageService.TriageResult triage) {
@@ -193,22 +193,25 @@ public class OptimizerAgentService {
         return "";
     }
 
-    private ItemResult emailOrFail(UserFeedback fb, FeedbackTriageService.TriageResult triage,
-                                   List<FeedbackAttachment> attachments, String note) {
-        if (!mailer.isAvailable()) {
-            return fail(fb, "需要邮件出口但它不可用：" + mailer.unavailableReason(), triage);
+    private ItemResult notifyOrFail(UserFeedback fb, FeedbackTriageService.TriageResult triage,
+                                    List<FeedbackAttachment> attachments, String note) {
+        if (!notifier.isAvailable()) {
+            return fail(fb, "需要通知出口但它不可用：" + notifier.unavailableReason(), triage);
         }
+        String url;
         try {
-            mailer.send(fb, triage, attachments, source, note);
+            url = notifier.notify(fb, triage, attachments, source, note);
         } catch (Exception e) {
-            return fail(fb, "发邮件失败: " + e.getMessage(), triage);
+            return fail(fb, "通知失败: " + e.getMessage(), triage);
         }
         fb.setStatus(UserFeedback.STATUS_EMAILED);
+        // prUrl 存的是「去向地址」：开 PR 时是 PR，开 Issue 时是 Issue（列名沿用不改库）
+        if (url != null && !url.isBlank()) fb.setPrUrl(url);
         fb.setLastError(null);
         fb.setHandledAt(LocalDateTime.now());
         source.save(fb);
         return new ItemResult(fb.getId(), triage.verdict(), triage.confidence(),
-                UserFeedback.STATUS_EMAILED, note);
+                UserFeedback.STATUS_EMAILED, url == null || url.isBlank() ? note : url);
     }
 
     /** 本轮没成：没到重试上限就退回 NEW 等下一轮，到了上限停在 FAILED 等人看。 */

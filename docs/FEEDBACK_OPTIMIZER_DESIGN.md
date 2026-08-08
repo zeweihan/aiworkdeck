@@ -118,11 +118,24 @@ uni-h5 没导出 `Audio`；uni 的 `Input` 不支持 `type="file"`）。所以�
 改不出东西（`NO_CHANGES`）或碰了受保护路径（`BLOCKED`）**不是失败，是最该问人的情况**，
 自动转邮件出口并把原因写进信里。
 
-**出口 B：发邮件**（`OptimizerMailer`，建议 / 拿不准 / 置信度不够 / 出口 A 没走通）
+**出口 B：通知维护者**（建议 / 拿不准 / 置信度不够 / 出口 A 没走通）
 
-只发不收。收信要么轮询 IMAP 要么架 webhook，都会把一个每天跑一次的批处理变成常驻服务；
-信里因此明说「回信不会被系统读取」。信里有：用户原话、分诊结论与依据、为什么没直接开 PR、
-提交现场、附件在磁盘上的路径与 API 地址。
+两种投递方式，`optimizer.notify.channel` = `auto`（默认）| `mail` | `issue` | `both`：
+
+- **开 GitHub Issue**（`OptimizerIssueNotifier`）：**零新增凭据**——优化者本来就要有能推分支的
+  `gh` 登录。有编号可追、能回头搜，去向地址随回执写回反馈记录，后台看板上直接点得开。
+  只调 `gh issue create`，不碰工作区、不建 worktree、不产生提交。
+- **发邮件**（`OptimizerMailer`）：只发不收。收信要么轮 IMAP 要么架 webhook，
+  都会把一个每天跑一次的批处理变成常驻服务；信里因此明说「回信不会被系统读取」。
+  发信走 `MailRouter` 的国内/国外双通道（`mail.domestic.*` / `mail.global.*`），
+  **发件人由通道决定、本类不指定**——两条通道发信域名不同，硬写 from 会让 SPF 当场判失败。
+
+`auto` 的含义是「有邮件用邮件，没有就开 Issue」。**这样默认是刻意的**：邮件要维护者亲自去
+邮箱后台生成 SMTP 授权码才能用，而「反馈没人管」这件事不该取决于有没有腾出时间去配它。
+两条都不可用时，失败原因会把各自缺什么一起说出来。
+
+两种投递的正文一致：用户原话、分诊结论与依据、为什么没直接开 PR、提交现场、附件地址
+（附件在收件箱上，可带取件密钥 `curl -H "X-Optimizer-Token: …"` 取）。
 
 ## 四·五、云端收件箱
 
@@ -178,15 +191,15 @@ OPTIMIZER_BASE_BRANCH=master
 # 拿不到你终端里的交互式登录态。没登录的表现是 Agent 秒退、diff 为空、
 # 本条反馈按 NO_CHANGES 转成邮件出口（不会假装修好）。
 
-# 邮件出口：配了 spring.mail.host 才会有 JavaMailSender，没配这条出口明确报「不可用」
-SPRING_MAIL_HOST=smtp.qq.com
-SPRING_MAIL_PORT=465
-SPRING_MAIL_USERNAME=you@qq.com
-SPRING_MAIL_PASSWORD=<授权码>          # 一律环境变量，别写进入库文件
-SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH=true
-SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE=true   # 587 的 STARTTLS 改 ..._STARTTLS_ENABLE
+# 通知出口：默认 auto（配了发信通道就发邮件，没配就开 GitHub Issue，后者零新增凭据）
+OPTIMIZER_NOTIFY_CHANNEL=auto
 OPTIMIZER_MAIL_TO=you@example.com
-OPTIMIZER_MAIL_FROM=you@qq.com
+# 发信不走 spring.mail.*，走仓库自己的双通道（按收件域名分流，见 application.yml 的 mail 段）
+MAIL_DOMESTIC_ENABLED=true            # 国内收件人走阿里云邮件推送
+MAIL_DOMESTIC_USERNAME=<发信地址>      # 密码是「发信地址→设置SMTP密码」，不是 AccessKey
+MAIL_DOMESTIC_PASSWORD=<SMTP 密码>
+MAIL_DOMESTIC_FROM=<同上发信地址>
+# MAIL_GLOBAL_*                       # 境外收件人走 Resend，用户名固定 resend、密码是 re_ key
 
 # 语音转写（可选）
 FEEDBACK_ASR_ENABLED=true

@@ -2,41 +2,34 @@ package com.checkba.service.optimizer;
 
 import com.checkba.model.entity.FeedbackAttachment;
 import com.checkba.model.entity.UserFeedback;
+import com.checkba.service.mail.MailRouter;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.mail.SimpleMailMessage;
-import org.springframework.mail.javamail.JavaMailSender;
 
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /** 邮件出口：可用性判定的每条理由都要说得出口，正文要带够维护者直接动手的信息。 */
 class OptimizerMailerTest {
 
     OptimizerProperties props;
-    JavaMailSender sender;
+    MailRouter router;
     OptimizerMailer mailer;
-
-    @SuppressWarnings("unchecked")
-    private static ObjectProvider<JavaMailSender> providerOf(JavaMailSender s) {
-        ObjectProvider<JavaMailSender> p = mock(ObjectProvider.class);
-        when(p.getIfAvailable()).thenReturn(s);
-        return p;
-    }
 
     @BeforeEach
     void setup() {
         props = new OptimizerProperties();
         props.getMail().setTo("me@example.com");
-        props.getMail().setFrom("bot@example.com");
-        sender = mock(JavaMailSender.class);
-        mailer = new OptimizerMailer(props, providerOf(sender));
+        router = mock(MailRouter.class);
+        when(router.active()).thenReturn(true);
+        mailer = new OptimizerMailer(props, router);
     }
 
     /** 附件地址的形态由来源决定（本地磁盘路径 / 云端 URL），邮件只负责原样贴出来。 */
@@ -63,11 +56,26 @@ class OptimizerMailerTest {
                 "用户希望一次导出多个文件", "low", "属于新功能", "{}");
     }
 
+    /** 抓最近一次发信的正文。 */
+    private String capturedBody() {
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(router, atLeastOnce()).send(any(), any(), body.capture());
+        return body.getValue();
+    }
+
+    private String capturedSubject() {
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        verify(router, atLeastOnce()).send(any(), subject.capture(), any());
+        return subject.getValue();
+    }
+
     @Test
-    void unavailableWhenNoMailSender() {
-        OptimizerMailer none = new OptimizerMailer(props, providerOf(null));
-        assertFalse(none.isAvailable());
-        assertTrue(none.unavailableReason().contains("spring.mail.host"));
+    @DisplayName("一条发信通道都没配时不可用，理由要指到具体配置项")
+    void unavailableWhenNoMailChannel() {
+        when(router.active()).thenReturn(false);
+        assertFalse(mailer.isAvailable());
+        assertTrue(mailer.unavailableReason().contains("mail.domestic"),
+                "理由要说清缺哪一项：" + mailer.unavailableReason());
     }
 
     @Test
@@ -87,16 +95,11 @@ class OptimizerMailerTest {
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION),
                 List.of(a), sourceRef("/data/feedback/12/voice-1.webm  (API: /api/feedback/12/attachment/3)"), "");
 
-        ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
-        verify(sender).send(cap.capture());
-        SimpleMailMessage msg = cap.getValue();
+        verify(router).send(eq("me@example.com"), any(), any());
+        assertTrue(capturedSubject().startsWith("[AI Workdeck 优化者]"));
+        assertTrue(capturedSubject().contains("优化建议待定夺"));
 
-        assertArrayEquals(new String[]{"me@example.com"}, msg.getTo());
-        assertEquals("bot@example.com", msg.getFrom());
-        assertTrue(msg.getSubject().startsWith("[AI Workdeck 优化者]"));
-        assertTrue(msg.getSubject().contains("优化建议待定夺"));
-
-        String body = msg.getText();
+        String body = capturedBody();
         assertTrue(body.contains("希望批量导出"));
         assertTrue(body.contains("0.13.0"));
         assertTrue(body.contains("/data/feedback/12/voice-1.webm"));
@@ -112,20 +115,27 @@ class OptimizerMailerTest {
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_UNCLEAR),
                 List.of(), sourceRef(""), "改不出来");
 
-        ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
-        verify(sender).send(cap.capture());
-        assertTrue(cap.getValue().getSubject().contains("需要你拍板"));
-        assertTrue(cap.getValue().getText().contains("为什么没直接开 PR"));
-        assertTrue(cap.getValue().getText().contains("改不出来"));
+        assertTrue(capturedSubject().contains("需要你拍板"));
+        assertTrue(capturedBody().contains("为什么没直接开 PR"));
+        assertTrue(capturedBody().contains("改不出来"));
     }
 
     @Test
-    void multipleRecipientsAreSplit() {
-        props.getMail().setTo("a@example.com,b@example.com");
+    @DisplayName("多收件人逐个分别发——他们可能分属不同通道，塞一封信只能挑一条")
+    void multipleRecipientsAreSentIndividually() {
+        props.getMail().setTo("a@qq.com, b@gmail.com");
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), "");
 
-        ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
-        verify(sender).send(cap.capture());
-        assertArrayEquals(new String[]{"a@example.com", "b@example.com"}, cap.getValue().getTo());
+        verify(router).send(eq("a@qq.com"), any(), any());
+        verify(router).send(eq("b@gmail.com"), any(), any());
+        verify(router, times(2)).send(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("收件人串里的空项被跳过，不会发出一封没有收件人的信")
+    void skipsBlankRecipients() {
+        props.getMail().setTo("a@qq.com,, ,b@gmail.com");
+        mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), "");
+        verify(router, times(2)).send(any(), any(), any());
     }
 }

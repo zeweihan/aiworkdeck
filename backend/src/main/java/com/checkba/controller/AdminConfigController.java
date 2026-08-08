@@ -128,6 +128,20 @@ public class AdminConfigController {
     // === 配置 key 常量 ===
     // AI - System Prompts
     private static final String KEY_AI_ACTIVE_PROVIDER = "ai.activeProvider";
+    /**
+     * 跨境传输的单独同意（《个人信息保护法》第三十九条）。
+     *
+     * 值为 ISO 时间戳，空 = 未同意。平台 AI 通道把内容直接发往境外的 OpenRouter，
+     * 属「向境外提供个人信息」，需在**告知后单独取得**同意——不能与服务条款一揽子打包，
+     * 也不能预先勾选。同意点刻意放在「把供应商切成 AWD_CLOUD」这一刻：那正是内容
+     * 开始出境的决定点，既不打断新用户上手，又在做决定时就在眼前。
+     *
+     * 一并记下同意时看到的文本版本，日后改了告知内容才知道谁同意的是哪一版。
+     */
+    private static final String KEY_AI_CROSS_BORDER_CONSENT_AT = "ai.crossBorder.consentAt";
+    private static final String KEY_AI_CROSS_BORDER_CONSENT_VERSION = "ai.crossBorder.consentVersion";
+    /** 当前告知文本的版本号；改了跨境告知的实质内容就要 +1，让旧同意失效并重新征求 */
+    private static final String CROSS_BORDER_NOTICE_VERSION = "2026-08-08";
     private static final String KEY_AI_SYSTEM_PROMPT_OLLAMA = "ai.systemPrompt.OLLAMA";
     private static final String KEY_AI_SYSTEM_PROMPT_GEMINI = "ai.systemPrompt.GEMINI";
     private static final String KEY_AI_ASSISTANTS = "ai.assistants";
@@ -279,6 +293,13 @@ public class AdminConfigController {
         AiConfig ai = new AiConfig();
         String activeProvider = all.get(KEY_AI_ACTIVE_PROVIDER);
         ai.setActiveProvider(activeProvider);
+        // 同意只有在版本一致时才算数：告知文本改过，旧同意作废、需重新征求
+        String consentVersion = systemSettingService.get(KEY_AI_CROSS_BORDER_CONSENT_VERSION, "");
+        ai.setCrossBorderConsentAt(
+                CROSS_BORDER_NOTICE_VERSION.equals(consentVersion)
+                        ? systemSettingService.get(KEY_AI_CROSS_BORDER_CONSENT_AT, "")
+                        : "");
+        ai.setCrossBorderNoticeVersion(CROSS_BORDER_NOTICE_VERSION);
         
         // No fallback as requested
         ai.setSystemPromptOllama(systemSettingService.get(KEY_AI_SYSTEM_PROMPT_OLLAMA, ""));
@@ -313,6 +334,19 @@ public class AdminConfigController {
         if (admin == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(error("仅管理员可访问此接口"));
+        }
+
+        // 跨境同意闸门要在写库之前把关：平台通道会把内容直接发往境外的模型服务商，
+        // 属「向境外提供个人信息」，需单独同意（个保法第三十九条）。
+        // 校验放在这里而不是 toSettingsUpdates 里——后者是静态纯映射，拿不到 systemSettingService。
+        if (request.getAi() != null && request.getAi().getActiveProvider() != null
+                && AiModelProperties.Provider.AWD_CLOUD.name()
+                        .equalsIgnoreCase(request.getAi().getActiveProvider().trim())
+                && !hasCrossBorderConsent(request.getAi())) {
+            // 文案红线：不得含「登录」「未授权」「请先」——前端 api.js 用这三个子串判掉线并清会话
+            return ResponseEntity.badRequest().body(error(
+                    "「AI Workdeck 云端」会把你送入 AI 的内容发往境外的模型服务商处理。"
+                            + "勾选跨境传输同意后才能启用；不想让内容出境的话，可以改用本机模型或境内供应商。"));
         }
 
         Map<String, String> updates;
@@ -425,6 +459,15 @@ public class AdminConfigController {
             }
             if (ai.getSystemPromptGemini() != null) {
                 updates.put(KEY_AI_SYSTEM_PROMPT_GEMINI, ai.getSystemPromptGemini());
+            }
+            // 本次勾选了同意就先记下（含文本版本），再判断能不能切到平台通道
+            if (Boolean.TRUE.equals(ai.getCrossBorderConsent())) {
+                updates.put(KEY_AI_CROSS_BORDER_CONSENT_AT, java.time.Instant.now().toString());
+                updates.put(KEY_AI_CROSS_BORDER_CONSENT_VERSION, CROSS_BORDER_NOTICE_VERSION);
+            } else if (Boolean.FALSE.equals(ai.getCrossBorderConsent())) {
+                // 撤回同意：个保法第十五条给的权利，撤回后不得再走平台通道
+                updates.put(KEY_AI_CROSS_BORDER_CONSENT_AT, "");
+                updates.put(KEY_AI_CROSS_BORDER_CONSENT_VERSION, "");
             }
             if (ai.getActiveProvider() != null) {
                 updates.put(KEY_AI_ACTIVE_PROVIDER, ai.getActiveProvider());
@@ -658,14 +701,37 @@ public class AdminConfigController {
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
     }
 
+    /**
+     * 是否已就跨境传输取得有效的单独同意：本次请求勾选了，或库里已有同版本的同意记录。
+     * 版本不一致按未同意处理——告知文本改过，旧同意覆盖不到新的处理方式。
+     */
+    private boolean hasCrossBorderConsent(AiConfig ai) {
+        if (Boolean.TRUE.equals(ai.getCrossBorderConsent())) return true;
+        if (Boolean.FALSE.equals(ai.getCrossBorderConsent())) return false;
+        String at = systemSettingService.get(KEY_AI_CROSS_BORDER_CONSENT_AT, "");
+        String version = systemSettingService.get(KEY_AI_CROSS_BORDER_CONSENT_VERSION, "");
+        return at != null && !at.isBlank() && CROSS_BORDER_NOTICE_VERSION.equals(version);
+    }
+
     public static class AiConfig {
         private String activeProvider;
         private String systemPromptOllama;
         private String systemPromptGemini;
         private List<com.checkba.model.ai.AiAssistantConfig> assistants;
+        /** 读：已同意的时间戳（空 = 未同意）。写：本次是否勾选了跨境同意 */
+        private String crossBorderConsentAt;
+        private Boolean crossBorderConsent;
+        /** 读：当前告知文本版本，供前端判断是否需要重新征求 */
+        private String crossBorderNoticeVersion;
 
         public String getActiveProvider() { return activeProvider; }
         public void setActiveProvider(String activeProvider) { this.activeProvider = activeProvider; }
+        public String getCrossBorderConsentAt() { return crossBorderConsentAt; }
+        public void setCrossBorderConsentAt(String crossBorderConsentAt) { this.crossBorderConsentAt = crossBorderConsentAt; }
+        public Boolean getCrossBorderConsent() { return crossBorderConsent; }
+        public void setCrossBorderConsent(Boolean crossBorderConsent) { this.crossBorderConsent = crossBorderConsent; }
+        public String getCrossBorderNoticeVersion() { return crossBorderNoticeVersion; }
+        public void setCrossBorderNoticeVersion(String crossBorderNoticeVersion) { this.crossBorderNoticeVersion = crossBorderNoticeVersion; }
         public String getSystemPromptOllama() { return systemPromptOllama; }
         public void setSystemPromptOllama(String systemPromptOllama) { this.systemPromptOllama = systemPromptOllama; }
         public String getSystemPromptGemini() { return systemPromptGemini; }

@@ -34,7 +34,7 @@ public class OptimizerController {
 
     private final OptimizerAgentService optimizerAgentService;
     private final OptimizerProperties props;
-    private final OptimizerMailer mailer;
+    private final com.checkba.service.optimizer.OptimizerNotifyRouter notifier;
     private final com.checkba.service.optimizer.OptimizerFeedbackSource feedbackSource;
     private final UserFeedbackRepository feedbackRepository;
     private final UserRepository userRepository;
@@ -69,8 +69,10 @@ public class OptimizerController {
         data.put("running", optimizerAgentService.isRunning());
         data.put("lastRunAt", optimizerAgentService.lastRunAt() == null ? null
                 : optimizerAgentService.lastRunAt().toString());
-        data.put("mailReady", mailer.isAvailable());
-        data.put("mailIssue", mailer.unavailableReason());
+        // 通知出口：走邮件还是开 Issue（auto 模式下有邮件用邮件、没有就开 Issue）
+        data.put("notifyChannel", notifier.describe());
+        data.put("notifyReady", notifier.isAvailable());
+        data.put("notifyIssue", notifier.unavailableReason());
         data.put("repoPath", props.getRepo().getPath());
         // 配的是哪个编码 Agent：换 Agent 是按下标覆盖环境变量，没有回显的话
         // 「以为换了其实没换」只能等到某条反馈开不出 PR 才发现

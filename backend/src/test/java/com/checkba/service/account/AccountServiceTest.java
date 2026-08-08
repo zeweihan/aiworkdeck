@@ -195,13 +195,27 @@ class AccountServiceTest {
     }
 
     @Test
-    @DisplayName("ai-key 409 no_allocation：给出「去官网分配额度」的中文引导")
-    void aiKeyNoAllocationGivesGuidance() {
+    @DisplayName("ai-key 409 no_credits：引导去充值，且文案不得像掉线")
+    void aiKeyNoCreditsGivesGuidance() {
+        AccountService service = connected();
+        transport.enqueue(409, "{\"error\":\"no_credits\"}");
+        AccountException e = assertThrows(AccountException.class, service::fetchAiKey);
+        assertEquals(AccountException.Kind.CONFLICT, e.getKind());
+        assertEquals("账户 Credits 余额为空，到官网充值后即可使用平台 AI", e.getMessage());
+        for (String marker : new String[] {"登录", "未授权", "请先"}) {
+            assertFalse(e.getMessage().contains(marker), "Credits 文案不得含「" + marker + "」");
+        }
+    }
+
+    @Test
+    @DisplayName("ai-key 409 no_allocation：旧版官网的分支仍能给出可读引导")
+    void aiKeyLegacyNoAllocationStillHandled() {
+        // 官网 Credits 重构后不再返回这个码，但桌面端可能连到尚未升级的官网
         AccountService service = connected();
         transport.enqueue(409, "{\"error\":\"no_allocation\"}");
         AccountException e = assertThrows(AccountException.class, service::fetchAiKey);
         assertEquals(AccountException.Kind.CONFLICT, e.getKind());
-        assertEquals("尚未分配 AI 额度，请到官网账户页从余额分配", e.getMessage());
+        assertEquals("官网尚未为该账户签发 AI 通道密钥，到官网账户页看一下", e.getMessage());
     }
 
     @Test
