@@ -376,8 +376,9 @@ public class AgentOrchestrator {
                 CompletableFuture.runAsync(PlatformAiUserScope.wrap(() -> {
                     try {
                         log.info("Generating conversation title for: {}", convId);
-                        // Use a lightweight model for title generation
-                        dev.langchain4j.model.chat.ChatLanguageModel titleModel = chatModelFactory.getChatModel("deepseek/deepseek-v4-flash");
+                        // 起标题走辅助模型（ai.auxModel → yml ai.aux-model）：用户看不见但每个新会话都跑一次，
+                        // 写死模型 ID 等于把「换便宜模型省钱」这件事绕开了
+                        dev.langchain4j.model.chat.ChatLanguageModel titleModel = chatModelFactory.getAuxChatModel();
                         String title = messageService.generateConversationTitle(userMsg, titleModel);
                         messageService.updateConversationTitle(convId, title);
                         log.info("Conversation title generated: {} -> {}", convId, title);
@@ -532,7 +533,12 @@ public class AgentOrchestrator {
         });
         
         // Callback for Loop
-        handler.setOnComplete(response -> {
+        // 平台通道身份必须在回调线程里重建：流式回调跑在 HTTP 客户端的线程上，
+        // handleUserMessage 在 taskExecutor 线程建立的 PlatformAiUserScope 不跟着走。
+        // 本回调里同步做的这些事都要取 per-user 平台密钥：工具分发、自动 compaction（摘要模型）、
+        // 递归下一轮 generate、故障转移换模型——缺身份会被 PlatformAiChannel 判成
+        // 「本次 AI 调用未携带用户身份」，在编排器这层看起来就是「平台通道不可用」整轮终止。
+        handler.setOnComplete(response -> PlatformAiUserScope.run(userId, () -> {
           try {
             // 本轮成功完成：清零瞬时错误重试预算（重试额度按轮计，不跨轮累积）
             guard.llmRetries = 0;
@@ -893,15 +899,16 @@ public class AgentOrchestrator {
             // 流式回调运行在可复用线程池线程上，用完清理 ThreadLocal，防止会话串号
             editorBridgeService.clearCurrentConversationId();
           }
-        });
+        }));
 
         // 流式出错处置（零 token 流出才允许重放，否则用户会看到重复内容）：
         // 1. 限流/瞬时错误 → 按类型退避重试本轮（限流 30/60s，瞬时 8/16/32s）
         // 2. 重试预算耗尽或模型下线（404）→ 换备选模型继续，SSE 明说切了哪个
         // 3. 其余 → 终态清理（关 emitter + 复位状态，避免 SSE 挂到超时、前端永久加载）
-        handler.setOnError(err -> {
+        // 同 onComplete：错误回调也在 HTTP 线程上，换模型要取平台密钥，身份必须重建
+        handler.setOnError(err -> PlatformAiUserScope.run(userId, () -> {
             if (isCancelled(conversationId)) {
-                handleStreamErrorTerminal(conversationId, projectId, userId, err);
+                handleStreamErrorTerminal(conversationId, projectId, userId, err, null);
                 return;
             }
             LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(err);
@@ -918,29 +925,33 @@ public class AgentOrchestrator {
                                 ? "\n\n> 模型限流等待中，%d 秒后自动继续（第 %d/%d 次）…\n\n"
                                 : "\n\n> 模型服务暂时不可用，%d 秒后自动重试（第 %d/%d 次）…\n\n",
                         delaySec, attempt, kind.maxRetries()));
-                LLM_RETRY_SCHEDULER.schedule(() -> {
+                // 定时器是自己的单线程池：身份同样要显式重放，否则重放的这一轮取不到平台密钥
+                LLM_RETRY_SCHEDULER.schedule(PlatformAiUserScope.wrap(() -> {
                     try {
                         // 同 depth 重放本轮：messages 只在 onComplete 里被追加，失败轮未污染上下文
                         runLoop(model, messages, conversationId, projectId, userId, modelId,
                                 depth, executionLog, agentMode, guard);
                     } catch (Exception retryEx) {
                         log.error("Retry runLoop failed for {}", conversationId, retryEx);
-                        handleStreamErrorTerminal(conversationId, projectId, userId, retryEx);
+                        handleStreamErrorTerminal(conversationId, projectId, userId, retryEx, null);
                     }
-                }, delaySec, java.util.concurrent.TimeUnit.SECONDS);
+                }), delaySec, java.util.concurrent.TimeUnit.SECONDS);
                 return;
             }
 
             if (replayable && failoverProperties.isEnabled() && kind.failoverable()) {
                 guard.triedModels.add(modelId == null ? "" : modelId.toLowerCase(java.util.Locale.ROOT));
-                String next = nextFailoverModel(failoverProperties.getModels(), modelId, guard.triedModels);
+                // 地域拒绝（403 region）时候选必须收窄成区域无关模型：境内从一个国际档模型
+                // 切到另一个国际档只会再撞一次同样的 403，白花一次请求还把 triedModels 填满
+                String next = nextFailoverModel(failoverProperties.getModels(), modelId, guard.triedModels,
+                        kind.requiresRegionAgnosticFailover());
                 if (next != null && switchToFailoverModel(next, kind, err, messages, conversationId,
                         projectId, userId, modelId, depth, executionLog, agentMode, guard)) {
                     return;
                 }
             }
-            handleStreamErrorTerminal(conversationId, projectId, userId, err);
-        });
+            handleStreamErrorTerminal(conversationId, projectId, userId, err, kind);
+        }));
 
         // 无活动看门狗：timeout 调大后，"流悄悄停了但不回调"的场景由它兜底终止本轮
         handler.armInactivityWatchdog(STREAM_INACTIVITY_TIMEOUT_SECONDS);
@@ -1007,7 +1018,7 @@ public class AgentOrchestrator {
                     depth, executionLog, agentMode, guard);
         } catch (Exception e) {
             log.error("Failover runLoop failed for {}", conversationId, e);
-            handleStreamErrorTerminal(conversationId, projectId, userId, e);
+            handleStreamErrorTerminal(conversationId, projectId, userId, e, null);
         }
         return true;
     }
@@ -1015,9 +1026,18 @@ public class AgentOrchestrator {
     /**
      * 流式错误的终态处置（重试预算耗尽 / 不可重试错误 / 已流出部分内容）：
      * 发 error 事件、保存部分内容、关流、复位状态。原 setOnError 内联逻辑提取而来。
+     *
+     * @param kind 错误分类，可为 null（取消分支/重放失败等拿不到分类的路径）。
+     *             非 null 时经 {@link LlmErrorClassifier#taggedErrorMessage} 给 SSE 载荷加机器可读标记：
+     *             地域拒绝会带上 AI_REGION_BLOCKED，前端据此把上游英文原文换成中文引导
+     *             （见 useAgentStream.js 的 includes 检测）。不带标记的话前端只能显示英文原文。
      */
-    private void handleStreamErrorTerminal(String conversationId, String projectId, Long userId, Throwable err) {
-        sseEmitterService.send(conversationId, "error", "Stream Error: " + err.getMessage());
+    private void handleStreamErrorTerminal(String conversationId, String projectId, Long userId,
+                                           Throwable err, LlmErrorClassifier.Kind kind) {
+        String message = kind == null
+                ? err.getMessage()
+                : LlmErrorClassifier.taggedErrorMessage(kind, err.getMessage());
+        sseEmitterService.send(conversationId, "error", "Stream Error: " + message);
         agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
         boolean wasStreamingOnError = editorBridgeService.isStreamingMode(conversationId);
         editorBridgeService.setStreamingMode(conversationId, false);
@@ -1106,6 +1126,18 @@ public class AgentOrchestrator {
      * 平台通道（AWD_CLOUD）永远拿平台密钥，不存在被切回 BYOK 花用户自己 key 的路径。
      */
     static String nextFailoverModel(List<String> candidates, String currentModel, Set<String> tried) {
+        return nextFailoverModel(candidates, currentModel, tried, false);
+    }
+
+    /**
+     * 同上，额外支持把候选收窄成「区域无关」模型（{@link AllowedModels.Region#GLOBAL}）。
+     *
+     * @param regionAgnosticOnly true 时只接受 Region.GLOBAL 的候选。地域拒绝（403 region）就必须这样：
+     *                           境内网络下换一个同样是 INTERNATIONAL 的模型只会再撞一次 403。
+     *                           收窄后可能一个候选都不剩——那就走终态处置，比白花几次请求诚实。
+     */
+    static String nextFailoverModel(List<String> candidates, String currentModel, Set<String> tried,
+                                    boolean regionAgnosticOnly) {
         if (candidates == null) {
             return null;
         }
@@ -1120,7 +1152,11 @@ public class AgentOrchestrator {
             if (tried != null && tried.contains(model.toLowerCase(java.util.Locale.ROOT))) {
                 continue;
             }
-            if (!AllowedModels.isAllowed(model)) {
+            AllowedModels allowed = AllowedModels.fromId(model);
+            if (allowed == null) {
+                continue;
+            }
+            if (regionAgnosticOnly && allowed.getRegion() != AllowedModels.Region.GLOBAL) {
                 continue;
             }
             return model;

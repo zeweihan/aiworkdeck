@@ -60,10 +60,16 @@ class ToolRegistryTest {
         public String holder_probe() {
             return "holder:" + ProjectContextHolder.getProjectIdAsLong() + "|" + ProjectContextHolder.getUserId();
         }
+
+        @Tool("Platform AI user scope probe")
+        public String scope_probe() {
+            return "scope:" + PlatformAiUserScope.current();
+        }
     }
 
     private ToolRegistry registry;
-    private final ToolContext ctx = new ToolContext(5L, "conv-1", 7L, "google/gemini-2.5-pro");
+    private final ToolContext ctx = new ToolContext(5L, "conv-1", 7L,
+            AllowedModels.CLAUDE_SONNET_5.getModelId());
 
     @BeforeEach
     void setUp() {
@@ -79,7 +85,7 @@ class ToolRegistryTest {
     @Test
     @DisplayName("注册：@Tool 方法全部进入规格列表")
     void registersAllTools() {
-        assertEquals(7, registry.getAllSpecifications().size());
+        assertEquals(8, registry.getAllSpecifications().size());
         assertTrue(registry.hasTool("echo"));
         assertTrue(registry.hasTool("doc_find_replace"));
         assertFalse(registry.hasTool("nonexistent"));
@@ -123,11 +129,34 @@ class ToolRegistryTest {
     @DisplayName("modelId：LLM 未显式传参时回落到会话所选模型")
     void modelIdFallsBackToContext() {
         ToolRegistry.ToolResult r = registry.execute("model_probe", "{}", ctx);
-        assertEquals("model:google/gemini-2.5-pro", r.output());
+        assertEquals("model:" + AllowedModels.CLAUDE_SONNET_5.getModelId(), r.output());
 
         ToolRegistry.ToolResult explicit = registry.execute("model_probe",
-                "{\"modelId\":\"openai/gpt-4o\"}", ctx);
-        assertEquals("model:openai/gpt-4o", explicit.output());
+                "{\"modelId\":\"" + AllowedModels.DEEPSEEK_V4_PRO.getModelId() + "\"}", ctx);
+        assertEquals("model:" + AllowedModels.DEEPSEEK_V4_PRO.getModelId(), explicit.output());
+    }
+
+    @Test
+    @DisplayName("平台身份：分发前按 ctx.userId 重建 PlatformAiUserScope（工具内部的 LLM 调用要用它取密钥）")
+    void rebuildsPlatformUserScopeFromContext() {
+        // 调用线程刻意没有作用域：真实链路里工具分发跑在流式回调线程/子 Agent 线程上，
+        // 请求线程建立的 ThreadLocal 不跟着走。不重建的话，工具内部发起的 LLM 调用
+        // （子 Agent、deep_search 的查询扩展）在云多租户下会被判成「未携带用户身份」。
+        assertNull(PlatformAiUserScope.current());
+
+        ToolRegistry.ToolResult r = registry.execute("scope_probe", "{}", ctx);
+        assertEquals("scope:7", r.output());
+
+        // 作用域不外泄：退出后调用线程仍然没有身份
+        assertNull(PlatformAiUserScope.current());
+    }
+
+    @Test
+    @DisplayName("平台身份：ctx 里没有 userId 时不覆盖外层作用域")
+    void keepsOuterScopeWhenContextHasNoUser() {
+        ToolContext noUser = new ToolContext(5L, "conv-1", null, null);
+        PlatformAiUserScope.run(9L, () ->
+                assertEquals("scope:9", registry.execute("scope_probe", "{}", noUser).output()));
     }
 
     @Test

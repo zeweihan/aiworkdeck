@@ -309,7 +309,9 @@ try {
     const t = await textOf()
     if (t.includes('admin') && t.includes('123')) throw new Error('wizard 页仍含 admin/123 提示')
     // API 置初始化（与向导 UI 等价的后端出口；向导 UI 自身的交互不在本套件覆盖面）
-    const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'gemini' } } })
+    // 供应商必须是收敛后的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
+    // 已下线的 gemini 现在会被 toSettingsUpdates 的枚举校验打成 400。
+    const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
     if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
   })
 

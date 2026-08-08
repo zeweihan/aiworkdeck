@@ -35,13 +35,12 @@ external:
 
 # AI 大模型配置（生产环境建议全部走环境变量）
 ai:
+  # 辅助模型（起标题 / 上下文摘要 / 记忆抽取 / memory_search / 文件自动打标签），
+  # 与 application.yml 同口径；运行时可被 system_setting 的 ai.auxModel 覆盖
+  aux-model: qwen/qwen3.7-flash
   model:
+    # 三档：awd-cloud / open-router / ollama（GEMINI 档已下线）
     provider: ollama
-    gemini:
-      api-key: ${GEMINI_API_KEY:}
-      model-name: ${GEMINI_MODEL_NAME:gemini-1.5-pro}
-      api-base-url: ${GEMINI_API_BASE_URL:https://generativelanguage.googleapis.com/v1beta}
-      timeout: ${GEMINI_TIMEOUT:60s}
     open-router:
       api-key: ${OPENROUTER_API_KEY:}
       base-url: https://openrouter.ai/api/v1

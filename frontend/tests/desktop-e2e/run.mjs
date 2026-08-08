@@ -73,7 +73,8 @@ async function api(ep, opts = {}) {
   }
   const wiz = await api('/api/admin/wizard')
   if (wiz && wiz.initialized === false) {
-    await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'gemini' } } })
+    // 三档收敛后 gemini 会被枚举校验打成 400（见 AdminConfigController.toSettingsUpdates）
+    await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
   }
   const proj = await api('/api/projects', { method: 'POST', body: { name: '桌面链路QA_' + Date.now(), projectType: 'BLANK' } })
   QA.projectId = proj.id

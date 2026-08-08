@@ -20,8 +20,8 @@ import java.util.stream.Collectors;
 /**
  * 后台管理配置接口：
  * - 外部服务供应商配置（key / secret / baseUrl 等）
- * - AI 服务系统提示词
- * - AI 服务激活的供应商
+ * - AI 服务激活的供应商（三档：AWD_CLOUD / OPENROUTER / OLLAMA）
+ * - AI 模型选择（默认 / 辅助 / 子 Agent）、网络区域、本地 Ollama 的地址与模型名
  * - 用户管理（只读列表）
  *
  * 说明：
@@ -123,14 +123,26 @@ public class AdminConfigController {
     @Value("${ai.model.open-router.base-url:https://openrouter.ai/api/v1}")
     private String defaultOpenRouterBaseUrl;
 
-    // Google / Gemini 默认值来自 AiModelProperties
-
     // === 配置 key 常量 ===
-    // AI - System Prompts
+    // AI
     private static final String KEY_AI_ACTIVE_PROVIDER = "ai.activeProvider";
-    private static final String KEY_AI_SYSTEM_PROMPT_OLLAMA = "ai.systemPrompt.OLLAMA";
-    private static final String KEY_AI_SYSTEM_PROMPT_GEMINI = "ai.systemPrompt.GEMINI";
     private static final String KEY_AI_ASSISTANTS = "ai.assistants";
+    // 三个模型选择键：留空一律表示「跟随内置默认」（工厂侧空白视为未配置，回退 yml）。
+    // ai.subagentModel 留空是「继承 ai.auxModel」，不是「继承主会话模型」。
+    private static final String KEY_AI_DEFAULT_MODEL = "ai.defaultModel";
+    private static final String KEY_AI_AUX_MODEL = "ai.auxModel";
+    private static final String KEY_AI_SUBAGENT_MODEL = "ai.subagentModel";
+    // 网络区域手动覆盖（auto | domestic | international）。本地判定对出差/挂代理/
+    // 公司专线出境的用户必然判错，这个开关是唯一出路，属一等设置不是隐藏兜底。
+    private static final String KEY_AI_NETWORK_REGION = com.checkba.service.ai.NetworkRegionService.SETTING_KEY;
+    // 本地 Ollama（离线/实验档）的地址与模型名。改造前只能靠 AI_MODEL_OLLAMA_MODEL_NAME
+    // 环境变量覆盖 yml 里的硬编码字面量，终端用户等于改不了。
+    private static final String KEY_AI_OLLAMA_BASE_URL = "ai.ollama.baseUrl";
+    private static final String KEY_AI_OLLAMA_MODEL_NAME = "ai.ollama.modelName";
+    // 已废弃：ai.systemPrompt.OLLAMA / ai.systemPrompt.GEMINI 两个键随 v1 同步对话通道
+    // （AiChatService）一起删除。那两个 tab 在删除之前就已对全部通道失效——它按模型名
+    // 字符串而非 provider 选 key；今天真正生效的 system prompt 由 ContextAssemblerService
+    // 拼装、provider 无关、admin 没有入口（要给 admin 真入口是另一件事）。
 
     // Qichacha
     private static final String KEY_QICHACHA_BASE_URL = "external.qichacha.baseUrl";
@@ -163,11 +175,6 @@ public class AdminConfigController {
     // OpenRouter
     private static final String KEY_OPENROUTER_API_KEY = "external.openrouter.apiKey";
     private static final String KEY_OPENROUTER_BASE_URL = "external.openrouter.baseUrl";
-
-    // Google / Gemini
-    private static final String KEY_GOOGLE_API_KEY = "external.google.apiKey";
-    private static final String KEY_GOOGLE_MODEL_NAME = "external.google.modelName";
-    private static final String KEY_GOOGLE_API_BASE_URL = "external.google.apiBaseUrl";
 
     // ============ 配置读取 =============
 
@@ -218,16 +225,22 @@ public class AdminConfigController {
         defaults.put(KEY_OPENROUTER_API_KEY, defaultOpenRouterApiKey);
         defaults.put(KEY_OPENROUTER_BASE_URL, defaultOpenRouterBaseUrl);
 
-        // Google / Gemini 默认值来自配置类
-        defaults.put(KEY_GOOGLE_API_KEY, aiModelProperties.getGemini().getApiKey());
-        defaults.put(KEY_GOOGLE_MODEL_NAME, aiModelProperties.getGemini().getModelName());
-        defaults.put(KEY_GOOGLE_API_BASE_URL, aiModelProperties.getGemini().getApiBaseUrl());
-
         // AI 默认值
         defaults.put(KEY_AI_ACTIVE_PROVIDER,
                 aiModelProperties.getProvider() != null
                         ? aiModelProperties.getProvider().name()
                         : AiModelProperties.Provider.OLLAMA.name());
+        // 三个模型键的默认值刻意是空串：空 = 跟随内置默认（defaultModel 回退 yml、
+        // subagentModel 回退辅助模型）。这里回填 yml 的具体模型 id 会让「跟随默认」
+        // 这个选项在设置页保存一次之后永久消失。
+        defaults.put(KEY_AI_DEFAULT_MODEL, "");
+        defaults.put(KEY_AI_AUX_MODEL, "");
+        defaults.put(KEY_AI_SUBAGENT_MODEL, "");
+        defaults.put(KEY_AI_NETWORK_REGION, com.checkba.service.ai.NetworkRegionService.MODE_AUTO);
+        // Ollama 的两项相反：回填当前真正生效的值（yml 或 AI_MODEL_OLLAMA_* 环境变量），
+        // 否则设置页会显示空输入框，用户不知道现在连的是哪个地址、拉的是哪个模型。
+        defaults.put(KEY_AI_OLLAMA_BASE_URL, aiModelProperties.getOllama().getBaseUrl());
+        defaults.put(KEY_AI_OLLAMA_MODEL_NAME, aiModelProperties.getOllama().getModelName());
 
         // 当前存储值（DB > 默认值）
         Map<String, String> all = systemSettingService.getMany(defaults);
@@ -236,11 +249,6 @@ public class AdminConfigController {
 
         // 外部服务
         ExternalServicesConfig external = new ExternalServicesConfig();
-        external.setGoogle(new GoogleConfig(
-                all.get(KEY_GOOGLE_API_KEY),
-                all.get(KEY_GOOGLE_MODEL_NAME),
-                all.get(KEY_GOOGLE_API_BASE_URL)
-        ));
         external.setOpenRouter(new OpenRouterConfig(
                 all.get(KEY_OPENROUTER_API_KEY),
                 all.get(KEY_OPENROUTER_BASE_URL)
@@ -279,11 +287,13 @@ public class AdminConfigController {
         AiConfig ai = new AiConfig();
         String activeProvider = all.get(KEY_AI_ACTIVE_PROVIDER);
         ai.setActiveProvider(activeProvider);
-        
-        // No fallback as requested
-        ai.setSystemPromptOllama(systemSettingService.get(KEY_AI_SYSTEM_PROMPT_OLLAMA, ""));
-        ai.setSystemPromptGemini(systemSettingService.get(KEY_AI_SYSTEM_PROMPT_GEMINI, ""));
-        
+        ai.setDefaultModel(all.get(KEY_AI_DEFAULT_MODEL));
+        ai.setAuxModel(all.get(KEY_AI_AUX_MODEL));
+        ai.setSubagentModel(all.get(KEY_AI_SUBAGENT_MODEL));
+        ai.setNetworkRegion(all.get(KEY_AI_NETWORK_REGION));
+        ai.setOllamaBaseUrl(all.get(KEY_AI_OLLAMA_BASE_URL));
+        ai.setOllamaModelName(all.get(KEY_AI_OLLAMA_MODEL_NAME));
+
         // Assistants logic: DB only, no fallback
         String assistantsJson = systemSettingService.get(KEY_AI_ASSISTANTS, null);
         if (assistantsJson != null && !assistantsJson.isBlank()) {
@@ -371,7 +381,20 @@ public class AdminConfigController {
      * 供 /api/admin/config 与首次运行向导 /api/admin/wizard 共用，
      * 保证两个入口写入的 key 完全一致。
      *
-     * @throws IllegalArgumentException assistants 序列化失败时抛出
+     * <p><b>null 字段一律跳过，不再写空串</b>（{@link #putIfPresent}）。原来同组里只要有一个
+     * 字段有值，其余字段会被 {@code safe(null)} 变成空串落库；而 {@code SystemSettingService}
+     * 的读取（{@code get} / {@code getMany}）只在**行不存在**时回退默认值，
+     * 「行存在但值为空」返回的就是空串，于是 baseUrl 被清空后 QichachaService 的 url 变成
+     * {@code /ECIInfoVerify/GetInfo}、TushareService 往空串 post、TtsService 的 url 变成 {@code /voices}。
+     * 两种真正从可用变不可用的场景：baseUrl/secret 由环境变量提供的部署；管理员走
+     * {@code /api/admin/wizard/reset} 重跑向导，只填一个 key 就把原本正确的 baseUrl 清空。
+     *
+     * <p><b>语义变化</b>：admin 页是整表回传（每个字段都带着当前值），因此不受影响；但
+     * 「把某个字段清空」这个操作从此需要显式空串（前端传 {@code ""} 而不是不传/传 null）。
+     * 这是刻意的取舍——静默清掉别人的配置比少一个清空动作危险得多。
+     *
+     * @throws IllegalArgumentException assistants 序列化失败、模型 id 不在白名单、
+     *                                  或网络区域取值非法时抛出（调用方转 400）
      */
     static Map<String, String> toSettingsUpdates(AdminConfigUpdateRequest request,
                                                  com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
@@ -379,56 +402,77 @@ public class AdminConfigController {
 
         if (request.getExternal() != null) {
             ExternalServicesConfig ext = request.getExternal();
-            if (ext.getGoogle() != null) {
-                updates.put(KEY_GOOGLE_API_KEY, safe(ext.getGoogle().getApiKey()));
-                updates.put(KEY_GOOGLE_MODEL_NAME, safe(ext.getGoogle().getModelName()));
-                updates.put(KEY_GOOGLE_API_BASE_URL, safe(ext.getGoogle().getApiBaseUrl()));
-            }
             if (ext.getOpenRouter() != null) {
-                updates.put(KEY_OPENROUTER_API_KEY, safe(ext.getOpenRouter().getApiKey()));
-                updates.put(KEY_OPENROUTER_BASE_URL, safe(ext.getOpenRouter().getBaseUrl()));
+                putIfPresent(updates, KEY_OPENROUTER_API_KEY, ext.getOpenRouter().getApiKey());
+                putIfPresent(updates, KEY_OPENROUTER_BASE_URL, ext.getOpenRouter().getBaseUrl());
             }
             if (ext.getQichacha() != null) {
-                updates.put(KEY_QICHACHA_BASE_URL, safe(ext.getQichacha().getBaseUrl()));
-                updates.put(KEY_QICHACHA_KEY, safe(ext.getQichacha().getKey()));
-                updates.put(KEY_QICHACHA_SECRET, safe(ext.getQichacha().getSecret()));
+                putIfPresent(updates, KEY_QICHACHA_BASE_URL, ext.getQichacha().getBaseUrl());
+                putIfPresent(updates, KEY_QICHACHA_KEY, ext.getQichacha().getKey());
+                putIfPresent(updates, KEY_QICHACHA_SECRET, ext.getQichacha().getSecret());
             }
             if (ext.getTushare() != null) {
-                updates.put(KEY_TUSHARE_BASE_URL, safe(ext.getTushare().getBaseUrl()));
-                updates.put(KEY_TUSHARE_TOKEN, safe(ext.getTushare().getToken()));
+                putIfPresent(updates, KEY_TUSHARE_BASE_URL, ext.getTushare().getBaseUrl());
+                putIfPresent(updates, KEY_TUSHARE_TOKEN, ext.getTushare().getToken());
             }
             if (ext.getAliyunOcr() != null) {
-                updates.put(KEY_ALIYUN_OCR_ACCESS_KEY_ID, safe(ext.getAliyunOcr().getAccessKeyId()));
-                updates.put(KEY_ALIYUN_OCR_ACCESS_KEY_SECRET, safe(ext.getAliyunOcr().getAccessKeySecret()));
-                updates.put(KEY_ALIYUN_OCR_ENDPOINT, safe(ext.getAliyunOcr().getEndpoint()));
-                updates.put(KEY_ALIYUN_OCR_REGION_ID, safe(ext.getAliyunOcr().getRegionId()));
-                updates.put(KEY_ALIYUN_OCR_PUBLIC_BASE_URL, safe(ext.getAliyunOcr().getPublicBaseUrl()));
+                putIfPresent(updates, KEY_ALIYUN_OCR_ACCESS_KEY_ID, ext.getAliyunOcr().getAccessKeyId());
+                putIfPresent(updates, KEY_ALIYUN_OCR_ACCESS_KEY_SECRET, ext.getAliyunOcr().getAccessKeySecret());
+                putIfPresent(updates, KEY_ALIYUN_OCR_ENDPOINT, ext.getAliyunOcr().getEndpoint());
+                putIfPresent(updates, KEY_ALIYUN_OCR_REGION_ID, ext.getAliyunOcr().getRegionId());
+                putIfPresent(updates, KEY_ALIYUN_OCR_PUBLIC_BASE_URL, ext.getAliyunOcr().getPublicBaseUrl());
             }
             if (ext.getPkulaw() != null) {
-                updates.put(KEY_PKULAW_TOKEN, safe(ext.getPkulaw().getToken()));
+                putIfPresent(updates, KEY_PKULAW_TOKEN, ext.getPkulaw().getToken());
             }
             if (ext.getBocha() != null) {
-                updates.put(KEY_BOCHA_API_KEY, safe(ext.getBocha().getApiKey()));
+                putIfPresent(updates, KEY_BOCHA_API_KEY, ext.getBocha().getApiKey());
             }
             if (ext.getElevenLabs() != null) {
-                updates.put(KEY_ELEVENLABS_API_KEY, safe(ext.getElevenLabs().getApiKey()));
-                updates.put(KEY_ELEVENLABS_BASE_URL, safe(ext.getElevenLabs().getBaseUrl()));
-                updates.put(KEY_ELEVENLABS_MODEL_ID, safe(ext.getElevenLabs().getModelId()));
-                updates.put(KEY_ELEVENLABS_DEFAULT_VOICE_ID, safe(ext.getElevenLabs().getDefaultVoiceId()));
+                putIfPresent(updates, KEY_ELEVENLABS_API_KEY, ext.getElevenLabs().getApiKey());
+                putIfPresent(updates, KEY_ELEVENLABS_BASE_URL, ext.getElevenLabs().getBaseUrl());
+                putIfPresent(updates, KEY_ELEVENLABS_MODEL_ID, ext.getElevenLabs().getModelId());
+                putIfPresent(updates, KEY_ELEVENLABS_DEFAULT_VOICE_ID, ext.getElevenLabs().getDefaultVoiceId());
             }
         }
 
         if (request.getAi() != null) {
             AiConfig ai = request.getAi();
-            if (ai.getSystemPromptOllama() != null) {
-                updates.put(KEY_AI_SYSTEM_PROMPT_OLLAMA, ai.getSystemPromptOllama());
-            }
-            if (ai.getSystemPromptGemini() != null) {
-                updates.put(KEY_AI_SYSTEM_PROMPT_GEMINI, ai.getSystemPromptGemini());
-            }
             if (ai.getActiveProvider() != null) {
-                updates.put(KEY_AI_ACTIVE_PROVIDER, ai.getActiveProvider());
+                // 供应商收敛成三档后要挡住旧客户端/手工请求写回已下线的档位（如 GEMINI）：
+                // 启动期迁移只在启动时跑一次，运行期写进去的坏值会一直生效到下次重启，
+                // 而 resolveProvider() 对认不出的值只 warn 一句就静默回落 yml。
+                String provider = ai.getActiveProvider().trim().toUpperCase(java.util.Locale.ROOT);
+                try {
+                    AiModelProperties.Provider.valueOf(provider);
+                } catch (IllegalArgumentException e) {
+                    throw new IllegalArgumentException("AI 提供商取值非法：" + ai.getActiveProvider()
+                            + "（只接受 AWD_CLOUD / OPENROUTER / OLLAMA）");
+                }
+                updates.put(KEY_AI_ACTIVE_PROVIDER, provider);
             }
+            // 三个模型选择键：空串是合法值（= 跟随内置默认），非空必须在白名单内。
+            // 不校验的话一个手改/陈旧的 id 会被工厂静默回落默认模型，
+            // 设置页显示的与实际发出去的模型不一致——正是本次改造要修的老毛病。
+            putModelSetting(updates, KEY_AI_DEFAULT_MODEL, ai.getDefaultModel(), "默认模型");
+            putModelSetting(updates, KEY_AI_AUX_MODEL, ai.getAuxModel(), "辅助模型");
+            putModelSetting(updates, KEY_AI_SUBAGENT_MODEL, ai.getSubagentModel(), "子 Agent 模型");
+            if (ai.getNetworkRegion() != null) {
+                String region = ai.getNetworkRegion().trim().toLowerCase(java.util.Locale.ROOT);
+                boolean legal = region.isEmpty()
+                        || com.checkba.service.ai.NetworkRegionService.MODE_AUTO.equals(region)
+                        || com.checkba.service.ai.NetworkRegionService.MODE_DOMESTIC.equals(region)
+                        || com.checkba.service.ai.NetworkRegionService.MODE_INTERNATIONAL.equals(region);
+                if (!legal) {
+                    throw new IllegalArgumentException("网络区域取值非法：" + ai.getNetworkRegion()
+                            + "（只接受 auto / domestic / international）");
+                }
+                updates.put(KEY_AI_NETWORK_REGION, region.isEmpty()
+                        ? com.checkba.service.ai.NetworkRegionService.MODE_AUTO : region);
+            }
+            // Ollama 的地址与模型名是自由文本：本地模型名不在白名单内（白名单是 OpenRouter 的目录）
+            putIfPresent(updates, KEY_AI_OLLAMA_BASE_URL, ai.getOllamaBaseUrl());
+            putIfPresent(updates, KEY_AI_OLLAMA_MODEL_NAME, ai.getOllamaModelName());
             if (ai.getAssistants() != null) {
                 try {
                     String json = objectMapper.writeValueAsString(ai.getAssistants());
@@ -464,6 +508,33 @@ public class AdminConfigController {
         return v == null ? "" : v.trim();
     }
 
+    /**
+     * 只在字段真的被提交时写入（null = 本次请求没带这个字段，保持库里原值不动）。
+     * 空串仍然会写——那是「显式清空」，见 {@link #toSettingsUpdates} 的语义说明。
+     */
+    private static void putIfPresent(Map<String, String> updates, String key, String value) {
+        if (value == null) {
+            return;
+        }
+        updates.put(key, safe(value));
+    }
+
+    /**
+     * 模型选择键的写入：空串放行（跟随内置默认），非空必须在 {@link com.checkba.service.ai.AllowedModels}
+     * 白名单内，否则报 400 而不是让工厂静默回落。
+     */
+    private static void putModelSetting(Map<String, String> updates, String key, String value, String label) {
+        if (value == null) {
+            return;
+        }
+        String model = value.trim();
+        if (!model.isEmpty() && !com.checkba.service.ai.AllowedModels.isAllowed(model)) {
+            throw new IllegalArgumentException(label + "「" + model + "」不在可用模型清单内，"
+                    + "从设置页的模型下拉中重新选一个（留空表示跟随内置默认）");
+        }
+        updates.put(key, model);
+    }
+
     // -------- DTO 定义 --------
 
     public static class AdminConfigResponse {
@@ -487,7 +558,6 @@ public class AdminConfigController {
     }
 
     public static class ExternalServicesConfig {
-        private GoogleConfig google;
         private OpenRouterConfig openRouter;
         private QichachaConfig qichacha;
         private TushareConfig tushare;
@@ -496,8 +566,6 @@ public class AdminConfigController {
         private BochaConfig bocha;
         private ElevenLabsConfig elevenLabs;
 
-        public GoogleConfig getGoogle() { return google; }
-        public void setGoogle(GoogleConfig google) { this.google = google; }
         public OpenRouterConfig getOpenRouter() { return openRouter; }
         public void setOpenRouter(OpenRouterConfig openRouter) { this.openRouter = openRouter; }
         public QichachaConfig getQichacha() { return qichacha; }
@@ -512,27 +580,6 @@ public class AdminConfigController {
         public void setBocha(BochaConfig bocha) { this.bocha = bocha; }
         public ElevenLabsConfig getElevenLabs() { return elevenLabs; }
         public void setElevenLabs(ElevenLabsConfig elevenLabs) { this.elevenLabs = elevenLabs; }
-    }
-
-    public static class GoogleConfig {
-        private String apiKey;
-        private String modelName;
-        private String apiBaseUrl;
-
-        public GoogleConfig() {}
-
-        public GoogleConfig(String apiKey, String modelName, String apiBaseUrl) {
-            this.apiKey = apiKey;
-            this.modelName = modelName;
-            this.apiBaseUrl = apiBaseUrl;
-        }
-
-        public String getApiKey() { return apiKey; }
-        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
-        public String getModelName() { return modelName; }
-        public void setModelName(String modelName) { this.modelName = modelName; }
-        public String getApiBaseUrl() { return apiBaseUrl; }
-        public void setApiBaseUrl(String apiBaseUrl) { this.apiBaseUrl = apiBaseUrl; }
     }
 
     public static class QichachaConfig {
@@ -660,16 +707,32 @@ public class AdminConfigController {
 
     public static class AiConfig {
         private String activeProvider;
-        private String systemPromptOllama;
-        private String systemPromptGemini;
+        /** 空串 = 跟随内置默认（yml 的 ai.model.open-router.default-model）。 */
+        private String defaultModel;
+        /** 辅助模型：子 Agent / 起标题 / 上下文摘要 / 记忆抽取 / memory_search / 文件自动打标签。 */
+        private String auxModel;
+        /** 子 Agent 模型；空串 = 继承辅助模型（不是继承主会话模型）。 */
+        private String subagentModel;
+        /** auto | domestic | international。 */
+        private String networkRegion;
+        private String ollamaBaseUrl;
+        private String ollamaModelName;
         private List<com.checkba.model.ai.AiAssistantConfig> assistants;
 
         public String getActiveProvider() { return activeProvider; }
         public void setActiveProvider(String activeProvider) { this.activeProvider = activeProvider; }
-        public String getSystemPromptOllama() { return systemPromptOllama; }
-        public void setSystemPromptOllama(String systemPromptOllama) { this.systemPromptOllama = systemPromptOllama; }
-        public String getSystemPromptGemini() { return systemPromptGemini; }
-        public void setSystemPromptGemini(String systemPromptGemini) { this.systemPromptGemini = systemPromptGemini; }
+        public String getDefaultModel() { return defaultModel; }
+        public void setDefaultModel(String defaultModel) { this.defaultModel = defaultModel; }
+        public String getAuxModel() { return auxModel; }
+        public void setAuxModel(String auxModel) { this.auxModel = auxModel; }
+        public String getSubagentModel() { return subagentModel; }
+        public void setSubagentModel(String subagentModel) { this.subagentModel = subagentModel; }
+        public String getNetworkRegion() { return networkRegion; }
+        public void setNetworkRegion(String networkRegion) { this.networkRegion = networkRegion; }
+        public String getOllamaBaseUrl() { return ollamaBaseUrl; }
+        public void setOllamaBaseUrl(String ollamaBaseUrl) { this.ollamaBaseUrl = ollamaBaseUrl; }
+        public String getOllamaModelName() { return ollamaModelName; }
+        public void setOllamaModelName(String ollamaModelName) { this.ollamaModelName = ollamaModelName; }
         public List<com.checkba.model.ai.AiAssistantConfig> getAssistants() { return assistants; }
         public void setAssistants(List<com.checkba.model.ai.AiAssistantConfig> assistants) { this.assistants = assistants; }
     }

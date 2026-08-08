@@ -31,7 +31,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * 2. 运行时按需注册插件工具（PluginService 加载的 JAR 工具），使插件真正可被 Agent 调用；
  * 3. 按工具名分发调用：反射绑定参数、注入 {@link ToolContext}（projectId 等以服务端上下文为准，
  *    防止 LLM 伪造跨项目 ID）、容错转换 LLM 生成的参数值；
- * 4. 暴露工具元数据（{@link ToolMeta}）供编排层做展示名与文件副作用处理。
+ * 4. 暴露工具元数据（{@link ToolMeta}）供编排层做展示名与文件副作用处理；
+ * 5. 按 {@code ctx.userId()} 重建平台通道身份作用域（{@link PlatformAiUserScope}）——
+ *    工具分发跑在流式回调线程/子 Agent 线程上，请求线程的 ThreadLocal 不跟着走。
  *
  * 编排器（AgentOrchestrator）不再感知任何具体工具类——新增工具只需实现
  * AgentToolComponent 或作为插件放入 plugins/ 目录。
@@ -299,6 +301,26 @@ public class ToolRegistry {
         }
 
         try {
+            // 平台通道身份（PlatformAiUserScope）与上面几个 ThreadLocal 是同一类问题：
+            // 作用域在 taskExecutor 线程建立，而工具分发跑在流式回调线程/子 Agent 线程上，
+            // ThreadLocal 不跟着走。ctx.userId() 这里本来就有，按它重建即可——
+            // 不重建的话，工具内部发起的 LLM 调用（子 Agent、deep_search 的查询扩展）
+            // 在云多租户下会命中 PlatformAiChannel 的「未携带用户身份」拒绝，整轮直接终止。
+            Long scopedUser = ctx != null ? ctx.userId() : null;
+            return scopedUser == null
+                    ? invokeTool(resolvedName, tool, argsJson, ctx)
+                    : PlatformAiUserScope.call(scopedUser, () -> invokeTool(resolvedName, tool, argsJson, ctx));
+        } finally {
+            ToolContextHolder.clear();
+            // 同时清理 ProjectContextHolder：装填时设置了它（见上），此前只清 ToolContextHolder，
+            // 池化回调线程复用会残留上个会话的 projectId/userId，导致记忆作用域串号。
+            ProjectContextHolder.clear();
+        }
+    }
+
+    /** 实际反射调用（参数解析 → 绑定 → invoke），异常一律转成可回喂模型的工具结果。 */
+    private ToolResult invokeTool(String resolvedName, RegisteredTool tool, String argsJson, ToolContext ctx) {
+        try {
             cn.hutool.json.JSONObject args;
             try {
                 args = parseArgs(argsJson);
@@ -320,11 +342,6 @@ public class ToolRegistry {
         } catch (Exception e) {
             log.error("Tool '{}' dispatch failed", resolvedName, e);
             return new ToolResult("Error executing tool: " + e.getMessage(), tool, true);
-        } finally {
-            ToolContextHolder.clear();
-            // 同时清理 ProjectContextHolder：装填时设置了它（见上），此前只清 ToolContextHolder，
-            // 池化回调线程复用会残留上个会话的 projectId/userId，导致记忆作用域串号。
-            ProjectContextHolder.clear();
         }
     }
 

@@ -68,6 +68,10 @@ launch（**启动页**）/ unlock / identity / login / newproject / project-over
 - `frontend/src/config/tools.js` — 底部工具面板 tab（WORKBENCH_TOOLS）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
 - `frontend/src/components/FileTree.vue`（5195 行）— 左栏文件树。
 - 各页面：login.vue(777)、newproject/index.vue(660)、wizard.vue(593，重跑语义见 PR#134)、userprofile.vue(2158)、variable-library.vue(543)、admin.vue(1648+，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(766)。
+- admin 的「AI 功能设置」面板（nav key `ai`）是 AI 供应商与模型的唯一设置入口：三档供应商单选、
+  默认/辅助/子 Agent 三个模型下拉（清单来自 `GET /api/ai/models`，前端不许硬编码）、网络区域三选一
+  （auto/境内/境外，附判定依据）、本地 Ollama 的地址与模型名。nav 结构未变，改的是该面板内容；
+  契约与键名见 ai-chat.md 与 licensing-billing.md。
 
 ## 已知地雷
 

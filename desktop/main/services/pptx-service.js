@@ -22,6 +22,10 @@ function dataDir(ctx) {
   return path.join(ctx.dataDir, 'pptx')
 }
 
+// 刻意不注入任何 AI 密钥/模型 env：模型与密钥由 Java 侧 PptxTools 在每次请求的
+// model_config 里下发（供应商、key、地址、文本/图像模型），启动期注入会立刻和用户在设置页
+// 改的配置对不上，且写设置的接口另需 PPTX_SETTINGS_TOKEN（本仓从不设置，等于恒 403）。
+// 详见 pptx-service/UPGRADE_CHECKBA.md 的 model_config 段。
 function spawnEnv(ctx) {
   const env = {
     ...process.env,

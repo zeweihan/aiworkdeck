@@ -38,7 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * 可选环境变量：
  * - OPENROUTER_BASE_URL   默认 https://openrouter.ai/api/v1
- * - AI_EVAL_SMOKE_MODEL   默认 google/gemini-2.5-flash
+ * - AI_EVAL_SMOKE_MODEL   默认 deepseek/deepseek-v4-flash（白名单里的区域无关模型，境内也能跑）
  *
  * 运行：OPENROUTER_API_KEY=sk-or-... mvn test -Dtest=RealLlmSmokeTest
  */
@@ -56,7 +56,7 @@ class RealLlmSmokeTest {
         ChatLanguageModel model = OpenAiChatModel.builder()
                 .apiKey(System.getenv("OPENROUTER_API_KEY"))
                 .baseUrl(envOr("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"))
-                .modelName(envOr("AI_EVAL_SMOKE_MODEL", "google/gemini-2.5-flash"))
+                .modelName(envOr("AI_EVAL_SMOKE_MODEL", "deepseek/deepseek-v4-flash"))
                 .temperature(0.0)
                 .timeout(Duration.ofSeconds(120))
                 .build();

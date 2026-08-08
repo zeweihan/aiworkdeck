@@ -1,10 +1,7 @@
 package com.checkba.controller.ai;
 
-import com.checkba.config.AiModelProperties;
 import com.checkba.controller.AuthController;
 import com.checkba.service.ProjectAiMessageService;
-import com.checkba.service.SystemSettingService;
-import com.checkba.service.ai.AiChatService;
 import com.checkba.service.ai.AiDocxExportService;
 import com.checkba.service.ai.AiAssistantService;
 import org.springframework.http.ResponseEntity;
@@ -14,10 +11,15 @@ import org.springframework.util.StringUtils;
 import java.util.Map;
 
 /**
- * AI Chat HTTP 接入层。
+ * AI Chat 周边 HTTP 接入层（历史会话、助手清单、公共配置、导出 Word）。
  *
- * 只负责 HTTP 出入口、鉴权（session → userId）与 DTO 定义；
- * 业务编排下沉至 AiChatService 及各专职 Service（Phase 2 fat controller 治理）。
+ * 只负责 HTTP 出入口、鉴权（session → userId）与 DTO 定义。
+ *
+ * 历史背景：同步对话端点 POST /api/ai/chat 是 v1 通道，早已被 AiAgentController
+ * 的 SSE 链路取代。前端唯一调用方（project-overview.vue 的 handleAiSend）在 AI 面板
+ * 换成 ChatInterface 组件后模板里已无任何绑定，且请求体还漏传了 contexts 与
+ * assistantId——即双重死代码，本次供应商体系改造中一并移除，连带 AiChatService、
+ * MultiModalContentService 与两个 Gemini 类。
  */
 @RestController
 @RequestMapping("/api/ai")
@@ -25,66 +27,32 @@ public class AiChatController {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiChatController.class);
 
-    private final AiChatService aiChatService;
     private final AiAssistantService aiAssistantService;
     private final ProjectAiMessageService projectAiMessageService;
     private final AiDocxExportService aiDocxExportService;
-    private final AiModelProperties aiModelProperties;
-    private final SystemSettingService systemSettingService;
+    private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
     private final com.checkba.service.ai.ConversationFileChangeService conversationFileChangeService;
     private final com.checkba.repository.TokenUsageRepository tokenUsageRepository;
     private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
-    private final com.checkba.service.ProjectMemberService projectMemberService;
     private final com.checkba.service.ai.PlatformAiChannel platformAiChannel;
 
     public AiChatController(
-            AiChatService aiChatService,
             AiAssistantService aiAssistantService,
             ProjectAiMessageService projectAiMessageService,
             AiDocxExportService aiDocxExportService,
-            AiModelProperties aiModelProperties,
-            SystemSettingService systemSettingService,
+            com.checkba.service.ai.ChatModelFactory chatModelFactory,
             com.checkba.service.ai.ConversationFileChangeService conversationFileChangeService,
             com.checkba.repository.TokenUsageRepository tokenUsageRepository,
             com.checkba.service.ai.AgentRunStateService agentRunStateService,
-            com.checkba.service.ProjectMemberService projectMemberService,
             com.checkba.service.ai.PlatformAiChannel platformAiChannel) {
-        this.aiChatService = aiChatService;
         this.aiAssistantService = aiAssistantService;
         this.projectAiMessageService = projectAiMessageService;
         this.aiDocxExportService = aiDocxExportService;
-        this.aiModelProperties = aiModelProperties;
-        this.systemSettingService = systemSettingService;
+        this.chatModelFactory = chatModelFactory;
         this.conversationFileChangeService = conversationFileChangeService;
         this.tokenUsageRepository = tokenUsageRepository;
         this.agentRunStateService = agentRunStateService;
-        this.projectMemberService = projectMemberService;
         this.platformAiChannel = platformAiChannel;
-    }
-
-    @PostMapping("/chat")
-    public ResponseEntity<?> chat(@RequestBody AiChatRequest request, @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        log.info("Received AI chat request for project {}: {} (model={})", request.getProjectId(), request.getMessage(), request.getModel());
-
-        // 越权校验：projectId 由请求体给定，未登录也能跑，检索会命中该项目的向量库
-        Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) {
-            return ResponseEntity.status(401).body("请先登录");
-        }
-        Long projectId = parseProjectId(request.getProjectId());
-        if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
-            return ResponseEntity.status(403).body("无权访问该项目");
-        }
-
-        return ResponseEntity.ok(aiChatService.chat(request, userId));
-    }
-
-    private Long parseProjectId(String projectId) {
-        try {
-            return Long.parseLong(projectId);
-        } catch (Exception e) {
-            return null;
-        }
     }
 
     @GetMapping("/history")
@@ -185,12 +153,18 @@ public class AiChatController {
 
     /**
      * Get public AI configuration (e.g. active provider) for all users
+     *
+     * <p>activeProvider 直接取 {@link com.checkba.service.ai.ChatModelFactory#resolveProvider()}，
+     * 不再自己「读 setting、拿不到就回退 yml」——那份复制出来的解析有两处对不上真实路由：
+     * DB 里存了认不出的值时它原样返回（路由却已回退 yml），且回退链末端写死了字面量
+     * "OLLAMA"。三档收敛后前端拿这个字段决定「模式选择器给不给 Agent/Plan」
+     * （本地档只支持 ASK），一旦答错就是把云端用户误锁成只能问答。
+     * 供应商的唯一口径在工厂里，这里只做透出。
      */
     @GetMapping("/config")
     public ResponseEntity<?> getAiConfig(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        String activeProvider = systemSettingService.get("ai.activeProvider",
-                aiModelProperties.getProvider() != null ? aiModelProperties.getProvider().name() : "OLLAMA");
+        String activeProvider = chatModelFactory.resolveProvider().name();
 
         // Return a simple map or DTO
         Map<String, Object> config = new java.util.HashMap<>();
@@ -243,67 +217,6 @@ public class AiChatController {
             log.error("AI 导出 Word 失败", e);
             return ResponseEntity.status(500).body("导出 Word 失败: " + e.getMessage());
         }
-    }
-
-    public static class AiChatRequest {
-        private String projectId;
-        private String message;
-        private AiChatContext context; // Deprecated, use contexts
-        private java.util.List<AiChatContext> contexts; // New
-        private String model;
-        private String assistantId;
-        private String conversationId;
-
-        public String getProjectId() { return projectId; }
-        public void setProjectId(String projectId) { this.projectId = projectId; }
-        public String getMessage() { return message; }
-        public void setMessage(String message) { this.message = message; }
-        public AiChatContext getContext() { return context; }
-        public void setContext(AiChatContext context) { this.context = context; }
-        public java.util.List<AiChatContext> getContexts() { return contexts; }
-        public void setContexts(java.util.List<AiChatContext> contexts) { this.contexts = contexts; }
-        public String getModel() { return model; }
-        public void setModel(String model) { this.model = model; }
-        public String getAssistantId() { return assistantId; }
-        public void setAssistantId(String assistantId) { this.assistantId = assistantId; }
-        public String getConversationId() { return conversationId; }
-        public void setConversationId(String conversationId) { this.conversationId = conversationId; }
-    }
-
-    public static class AiChatResponse {
-        private String response;
-        private String conversationId;
-        public AiChatResponse(String response) { this.response = response; }
-        public AiChatResponse(String response, String conversationId) {
-            this.response = response;
-            this.conversationId = conversationId;
-        }
-        public String getResponse() { return response; }
-        public void setResponse(String response) { this.response = response; }
-        public String getConversationId() { return conversationId; }
-        public void setConversationId(String conversationId) { this.conversationId = conversationId; }
-    }
-
-    public static class AiChatContext {
-        private String fileId;
-        private String fileName;
-        private String fileType;
-        private String wpsFileId;
-        private String selectionText;
-        private String documentText;
-
-        public String getFileId() { return fileId; }
-        public void setFileId(String fileId) { this.fileId = fileId; }
-        public String getFileName() { return fileName; }
-        public void setFileName(String fileName) { this.fileName = fileName; }
-        public String getFileType() { return fileType; }
-        public void setFileType(String fileType) { this.fileType = fileType; }
-        public String getWpsFileId() { return wpsFileId; }
-        public void setWpsFileId(String wpsFileId) { this.wpsFileId = wpsFileId; }
-        public String getSelectionText() { return selectionText; }
-        public void setSelectionText(String selectionText) { this.selectionText = selectionText; }
-        public String getDocumentText() { return documentText; }
-        public void setDocumentText(String documentText) { this.documentText = documentText; }
     }
 
     public static class AiExportDocxRequest {

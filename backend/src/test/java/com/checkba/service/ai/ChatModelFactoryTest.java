@@ -44,7 +44,10 @@ class ChatModelFactoryTest {
                 .thenAnswer(inv -> inv.getArgument(1));
         platformAiChannel = mock(PlatformAiChannel.class);
         usageAccountant = mock(PlatformUsageAccountant.class);
+        // AuxModelResolver 用真实实例（无状态的两依赖纯类）：辅助模型 ID 的解析
+        // 只许有一处口径，用 mock 会让这里的断言测不到真实回退链。
         factory = new ChatModelFactory(properties, systemSettingService, platformAiChannel, usageAccountant,
+                new AuxModelResolver(systemSettingService, AllowedModels.QWEN_3_7_FLASH.getModelId()),
                 new com.checkba.service.telemetry.TelemetryService(
                         mock(com.checkba.repository.TelemetryEventRepository.class),
                         new com.checkba.service.telemetry.InstallIdentityService(
@@ -86,9 +89,9 @@ class ChatModelFactoryTest {
     @DisplayName("白名单模型：无论静态供应商是什么都走 OpenRouter")
     void allowedModelAlwaysUsesOpenRouter() {
         properties.setProvider(AiModelProperties.Provider.OLLAMA);
-        ChatLanguageModel model = factory.getChatModel("openai/gpt-5.2");
+        ChatLanguageModel model = factory.getChatModel("deepseek/deepseek-v4-pro");
         assertInstanceOf(OpenAiChatModel.class, model,
-                "前端下拉提供的 openai/gpt-5.2 必须在白名单内并走 OpenRouter");
+                "白名单内的模型必须走 OpenRouter，而不是落到本地 Ollama");
     }
 
     @Test
@@ -126,31 +129,119 @@ class ChatModelFactoryTest {
     void clearCacheRebuildsModels() {
         properties.setProvider(AiModelProperties.Provider.OPENROUTER);
 
-        ChatLanguageModel first = factory.getChatModel("openai/gpt-4o-mini");
-        assertSame(first, factory.getChatModel("openai/gpt-4o-mini"), "命中缓存应返回同一实例");
+        ChatLanguageModel first = factory.getChatModel("qwen/qwen3.7-flash");
+        assertSame(first, factory.getChatModel("qwen/qwen3.7-flash"), "命中缓存应返回同一实例");
 
         factory.clearCache();
-        assertNotSame(first, factory.getChatModel("openai/gpt-4o-mini"),
+        assertNotSame(first, factory.getChatModel("qwen/qwen3.7-flash"),
                 "clearCache 后应使用最新配置重建模型实例");
     }
 
+    // 原「白名单必须包含前端硬编码的 8 个 id」断言已删除：前端不再硬编码模型清单
+    // （改由 GET /api/ai/models 下发），那 8 个 id 里多数也已随本次白名单换代删掉，
+    // 留着只会在每次换代时报假警。替代护栏在模型目录端点的测试里：
+    // 它断言端点下发的清单等于 AllowedModels.availableIn(当前区域)，方向是双向的。
+
+    // ==================== 默认模型与辅助模型（本次改造新增） ====================
+
     @Test
-    @DisplayName("白名单应包含前端下拉与内部硬编码使用的全部模型（OpenRouter 2026-07 实测在线）")
-    void allowedModelsCoverFrontendAndInternalIds() {
-        // 前端 ChatInterface.vue availableModels + 标题/摘要/默认用的轻量模型
-        String[] required = {
-                "deepseek/deepseek-v4-flash",
-                "deepseek/deepseek-v4-pro",
-                "qwen/qwen3-235b-a22b-2507",
-                "moonshotai/kimi-k2.6",
-                "z-ai/glm-5",
-                "anthropic/claude-sonnet-5",
-                "google/gemini-3.1-pro-preview",
-                "openai/gpt-5.2",
-        };
-        for (String id : required) {
-            assertTrue(AllowedModels.isAllowed(id), "白名单缺失: " + id);
+    @DisplayName("resolveDefaultModel：DB 未配置时回退 yml 的 open-router.default-model")
+    void resolveDefaultModelFallsBackToYml() {
+        assertEquals(properties.getOpenRouter().getDefaultModel(), factory.resolveDefaultModel());
+    }
+
+    @Test
+    @DisplayName("resolveDefaultModel：DB 的 ai.defaultModel 优先；空白值视为未配置")
+    void resolveDefaultModelPrefersDbSetting() {
+        when(systemSettingService.get(eq("ai.defaultModel"), any())).thenReturn("z-ai/glm-5.2");
+        assertEquals("z-ai/glm-5.2", factory.resolveDefaultModel());
+
+        // 向导/后台未填的字段会以空串入库，必须回退而不是把默认模型置空
+        when(systemSettingService.get(eq("ai.defaultModel"), any())).thenReturn("  ");
+        assertEquals(properties.getOpenRouter().getDefaultModel(), factory.resolveDefaultModel());
+    }
+
+    @Test
+    @DisplayName("非白名单 modelId 的回落要用 ai.defaultModel，而不是钉死在 yml 上")
+    void unknownModelFallsBackToConfiguredDefaultModel() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        when(systemSettingService.get(eq("ai.defaultModel"), any())).thenReturn("z-ai/glm-5.2");
+
+        // 缓存键含模型 ID：回落命中的实例应与直接请求 glm-5.2 是同一个
+        assertSame(factory.getChatModel("z-ai/glm-5.2"),
+                factory.getChatModel("vendor/some-unlisted-model"),
+                "回落目标应是管理员设置的默认模型");
+        assertSame(factory.getStreamingChatModel("z-ai/glm-5.2"),
+                factory.getStreamingChatModel("vendor/some-unlisted-model"));
+    }
+
+    @Test
+    @DisplayName("getAuxChatModel：默认取 yml 的 ai.aux-model（白名单里最便宜的一条）")
+    void auxModelDefaultsToConfiguredCheapModel() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+
+        ChatLanguageModel aux = factory.getAuxChatModel();
+        assertInstanceOf(OpenAiChatModel.class, aux);
+        assertSame(factory.getChatModel("qwen/qwen3.7-flash"), aux,
+                "辅助调用必须落在 ai.aux-model 上，落到默认模型就等于没省钱");
+    }
+
+    @Test
+    @DisplayName("getAuxChatModel：DB 的 ai.auxModel 优先")
+    void auxModelPrefersDbSetting() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        when(systemSettingService.get(eq("ai.auxModel"), any())).thenReturn("deepseek/deepseek-v4-flash");
+
+        assertSame(factory.getChatModel("deepseek/deepseek-v4-flash"), factory.getAuxChatModel());
+    }
+
+    @Test
+    @DisplayName("getAuxChatModel：非白名单一律报错，不静默回落默认模型（账单要到月底才看得出来）")
+    void auxModelRejectsNonAllowlistedId() {
+        properties.setProvider(AiModelProperties.Provider.OPENROUTER);
+        when(systemSettingService.get(eq("ai.auxModel"), any())).thenReturn("vendor/ghost-model");
+
+        var e = assertThrows(com.checkba.exception.FeatureNotConfiguredException.class,
+                () -> factory.getAuxChatModel());
+        assertEquals("ai-aux-model", e.getFeature());
+        assertTrue(e.getMessage().contains("vendor/ghost-model"), e.getMessage());
+        for (String forbidden : new String[]{"登录", "未授权", "请先"}) {
+            assertFalse(e.getMessage().contains(forbidden),
+                    "业务错误文案不得含「" + forbidden + "」：前端据此判定掉线并清会话");
         }
+    }
+
+    @Test
+    @DisplayName("getAuxChatModel：平台通道下辅助调用仍走平台密钥（否则省钱省在用户自己的 key 上）")
+    void auxModelStaysOnPlatformChannel() {
+        setDbProvider("AWD_CLOUD");
+        when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
+        when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
+
+        assertInstanceOf(OpenAiChatModel.class, factory.getAuxChatModel());
+        verify(platformAiChannel, atLeastOnce()).apiKey();
+        verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
+    }
+
+    // ==================== GEMINI 档下线的存量迁移 ====================
+
+    @Test
+    @DisplayName("启动期迁移：DB 里存量的 GEMINI 改写成 OLLAMA，不静默回退 yml 静态配置")
+    void migratesRetiredGeminiProvider() {
+        setDbProvider("gemini");
+
+        factory.migrateRetiredGeminiProvider();
+        verify(systemSettingService).set("ai.activeProvider", "OLLAMA");
+    }
+
+    @Test
+    @DisplayName("启动期迁移是幂等的：值不是 GEMINI 就一个字都不写")
+    void migrationIsIdempotent() {
+        setDbProvider("OPENROUTER");
+
+        factory.migrateRetiredGeminiProvider();
+        factory.migrateRetiredGeminiProvider();
+        verify(systemSettingService, never()).set(eq("ai.activeProvider"), anyString());
     }
 
     // ==================== 平台通道「AI Workdeck 云端」（PR-B） ====================
@@ -162,8 +253,8 @@ class ChatModelFactoryTest {
         when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
-        assertInstanceOf(OpenAiChatModel.class, factory.getChatModel("openai/gpt-5.2"));
-        assertInstanceOf(OpenAiStreamingChatModel.class, factory.getStreamingChatModel("openai/gpt-5.2"));
+        assertInstanceOf(OpenAiChatModel.class, factory.getChatModel("anthropic/claude-sonnet-5"));
+        assertInstanceOf(OpenAiStreamingChatModel.class, factory.getStreamingChatModel("anthropic/claude-sonnet-5"));
         // 白名单短路分支绝不能先命中——那条路用的是 BYOK 的 key
         verify(platformAiChannel, atLeastOnce()).apiKey();
         verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
@@ -194,7 +285,7 @@ class ChatModelFactoryTest {
 
         // 编排器故障转移就是拿备选 modelId 再调一次工厂——通道由 provider 决定，与 modelId 无关
         assertInstanceOf(OpenAiStreamingChatModel.class,
-                factory.getStreamingChatModel("qwen/qwen3-235b-a22b-2507"));
+                factory.getStreamingChatModel("qwen/qwen3.7-flash"));
         verify(platformAiChannel, atLeastOnce()).apiKey();
         verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
     }
@@ -206,7 +297,7 @@ class ChatModelFactoryTest {
         when(platformAiChannel.apiKey()).thenReturn("sk-or-provisioned");
         when(platformAiChannel.keyFingerprint()).thenReturn("abc123");
 
-        factory.getStreamingChatModel("openai/gpt-5.2");
+        factory.getStreamingChatModel("anthropic/claude-sonnet-5");
         verify(usageAccountant, atLeastOnce()).ensureBaselineAsync(any());
     }
 
@@ -224,7 +315,6 @@ class ChatModelFactoryTest {
     @DisplayName("断开账户且没有任何云端 key：落到本地 Ollama（而不是留在打不通的平台通道）")
     void demoteFallsBackToOllamaWhenNothingConfigured() {
         properties.getOpenRouter().setApiKey("");
-        properties.getGemini().setApiKey("");
         setDbProvider("AWD_CLOUD");
 
         assertEquals("OLLAMA", factory.demotePlatformProvider());
@@ -262,11 +352,11 @@ class ChatModelFactoryTest {
         when(platformAiChannel.keyFingerprint()).thenAnswer(inv ->
                 PlatformAiUserScope.current() == 1L ? "aaaaaa" : "bbbbbb");
 
-        ChatLanguageModel alice = PlatformAiUserScope.call(1L, () -> factory.getChatModel("openai/gpt-5.2"));
-        ChatLanguageModel bob = PlatformAiUserScope.call(2L, () -> factory.getChatModel("openai/gpt-5.2"));
+        ChatLanguageModel alice = PlatformAiUserScope.call(1L, () -> factory.getChatModel("anthropic/claude-sonnet-5"));
+        ChatLanguageModel bob = PlatformAiUserScope.call(2L, () -> factory.getChatModel("anthropic/claude-sonnet-5"));
 
         assertNotSame(alice, bob, "不同用户的密钥指纹不同，模型实例必须分叉，绝不能串用额度");
-        assertSame(alice, PlatformAiUserScope.call(1L, () -> factory.getChatModel("openai/gpt-5.2")));
+        assertSame(alice, PlatformAiUserScope.call(1L, () -> factory.getChatModel("anthropic/claude-sonnet-5")));
     }
 
     @Test
@@ -278,7 +368,7 @@ class ChatModelFactoryTest {
                 "本次 AI 调用未携带用户身份，「AI Workdeck 云端」无法确定额度归属"));
 
         var e = assertThrows(com.checkba.service.account.AccountException.class,
-                () -> factory.getChatModel("openai/gpt-5.2"));
+                () -> factory.getChatModel("anthropic/claude-sonnet-5"));
         assertEquals(com.checkba.service.account.AccountException.Kind.CONFLICT, e.getKind());
         verify(systemSettingService, never()).get(eq("external.openrouter.apiKey"), any());
         for (String forbidden : new String[]{"登录", "未授权", "请先"}) {

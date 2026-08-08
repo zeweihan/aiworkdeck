@@ -13,14 +13,16 @@ import java.io.IOException;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * application.yml 的故障转移链与自动 compaction 配置绑定。
  *
- * <p>守两个静默失效：一是 key 拼错（failover.model / compaction.keep-recents 之类）绑不上、
+ * <p>守三个静默失效：一是 key 拼错（failover.model / compaction.keep-recents 之类）绑不上、
  * 默认值悄悄生效；二是候选模型不在 AllowedModels 白名单里——工厂会把它回落成默认模型，
- * 故障转移看似跑了实则原地踏步（PR#144 同源的坑）。
+ * 故障转移看似跑了实则原地踏步（PR#144 同源的坑）；三是候选是国际模型——
+ * 境内网络会被 OpenRouter 返回 403 region，兜底路径本身就走不通。
  */
 class AiFailoverPropertiesBindingTest {
 
@@ -31,7 +33,7 @@ class AiFailoverPropertiesBindingTest {
     }
 
     @Test
-    @DisplayName("ai.failover 绑得上，且候选模型全在白名单内")
+    @DisplayName("ai.failover 绑得上，候选模型全在白名单内且全是区域无关模型")
     void failoverChainBindsAndIsAllowlisted() throws IOException {
         AiFailoverProperties props = binder().bind("ai.failover", AiFailoverProperties.class).get();
 
@@ -40,6 +42,9 @@ class AiFailoverPropertiesBindingTest {
         for (String model : props.getModels()) {
             assertTrue(AllowedModels.isAllowed(model),
                     "候选 " + model + " 不在白名单内，切过去会被静默回落成默认模型");
+            assertSame(AllowedModels.Region.GLOBAL, AllowedModels.fromId(model).getRegion(),
+                    "候选 " + model + " 是国际模型：境内会被 OpenRouter 403 region 拒绝，"
+                            + "境内用户的兜底路径不能是境内用不了的模型");
         }
     }
 

@@ -10,18 +10,31 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 ## 关键文件（后端包根 backend/src/main/java/com/checkba/）
 
 **编排核心**
-- `controller/ai/AiAgentController.java` — 主入口（/api/agent）：GET /connect/{cid}（建 SSE）、POST /chat（异步 200）、POST /cancel/{cid}、/history/rollback、/tasks/active、/ppt/generate。AiChatController 是已被取代的 v1，非主链路。
+- `controller/ai/AiAgentController.java` — 主入口（/api/agent）：GET /connect/{cid}（建 SSE）、POST /chat（异步 200）、POST /cancel/{cid}、/history/rollback、/tasks/active、/ppt/generate。**对话只有这一条链路**。
+- `controller/ai/AiChatController.java` — 已不含任何对话端点，只剩会话周边：`GET /history`、`GET /conversations`（合并 AgentRunStateService 运行状态）、`GET /conversation/{id}/metadata`、`GET /assistants`、`GET /config`、`POST /export-docx`。**v1 同步端点 `POST /api/ai/chat` 已于 2026-08 供应商三档改造中删除**，连带 `AiChatService`、`MultiModalContentService`、`GeminiChatLanguageModel`、`GeminiCacheService` 与三个 DTO（AiChatRequest/AiChatResponse/AiChatContext）。删除依据：端点虽仍映射，但前端唯一调用方（project-overview.vue 的 handleAiSend）在 AI 面板换成 ChatInterface 组件后模板里已无任何绑定，且 `api.js` 的 payload 还漏传 contexts 与 assistantId——双重死。随之废弃的 system_setting 键：`ai.systemPrompt.OLLAMA`、`ai.systemPrompt.GEMINI`（唯一读者是 AiChatService，且它按**模型名字符串**而非 provider 选 key，所以那两个 admin 提示词 tab 对全部通道早已失效）。**今天真正生效的 system prompt 由 `ContextAssemblerService` 拼装、provider 无关、admin 无入口。**
+- `service/ai/AiAssistantService.java` — 只剩 `loadAssistants()`（读 `ai.assistants`，`GET /assistants` 在用）。`getAssistant()` 与 `assistantCache` 随 v1 删除：那个缓存键只有 modelId 加 assistantId、不含密钥指纹（对比 `ChatModelFactory` 刻意带了 `keyFingerprint()`），server 模式多租户下会让后来的用户复用别人平台 key 建出的实例。**将来若再引入按模型缓存的助手实例，缓存键必须带密钥指纹。**
 - **conversationId 服务端签发**（安全审计遗留 + Office 插件 Phase D）：`controller/ai/ConversationIssuanceController.java` `POST /api/agent/conversations` body `{projectId}` → `{"conversationId":"conv-<毫秒>-<16位随机base64url>"}`（鉴权 + hasReadPermission）。登记簿 `service/ai/ConversationIssuanceService.java`（内存 Map，惰性 24h 过期）；`ProjectAiMessageService.canUseConversation` 开头先查登记——签发给谁就归谁，关掉「空会话首条消息落库前任何登录用户可抢占」的窗口。开关 `security.conversation-issuance-required`（默认 false）：true（官方云配）时**尚无消息**的未登记会话一律拒绝（已有消息仍按 DB 归属，进程重启丢登记不影响历史）；local-mode 恒不强制，桌面自造 conv-毫秒 ID 流程不变。
 - `service/ai/AgentOrchestrator.java`（1193 行）— **编排器**：handleUserMessage（@Async("taskExecutor")）+ runLoop（递归）。RunGuard：打转检测（StuckDetector 滑动窗口，先干预后熔断）、连续失败提示=3、步数预算 MAX_LOOP_DEPTH=30、故障转移已试模型集。工具分发 dispatchTool、artifact/<title> 处理、检查点触发。
 - `service/ai/AgentStreamHandler.java`（493 行）— StreamingResponseHandler：token 流→SSE；<bubble_type>/<artifact> 边界解析缓冲、编辑器流过滤、token 用量上报。每次 runLoop 新建实例。
 - `service/ai/AgentRunStateService.java` — 每会话运行状态登记簿：RUNNING/PAUSED/AWAITING_APPROVAL/FINISHED/ERROR/CANCELLED/**INTERRUPTED**。内存 map 是快路径，同时写透 `agent_run_record` 表（entity `model/entity/AgentRunRecord`，ddl-auto 自动建表；DB 写失败只 log 不阻断）。**新增终止分支必打状态点**（PR#173 状态机契约）。
 - `service/ai/AgentRunRecoveryService.java` — 启动回收（harness 二期）：ApplicationReadyEvent 把 DB 里遗留的 RUNNING 全部翻成 INTERRUPTED 并塞回内存 map（/connect 的 run_state 只读内存），同时给该会话最后一条半截 ASSISTANT 消息追加 `> **[进程中断]** …`（按「含 [进程中断] 即跳过」幂等）。前端 run_state=INTERRUPTED → `agentPaused={reason:'process_interrupted'}` → 复用「继续」按钮（发一条「继续」消息，编排器起跑照常翻回 RUNNING）。**刻意不做 runLoop 快照重放**：工具副作用无法保证幂等；恢复粒度就是「从已持久化的轮次级执行日志继续」，丢失窗口只有最后一个未完成的 LLM 轮。
 - `service/ai/ContextAssemblerService.java`（507 行）— assemble()：prompts/system_prompt.md + enforcement 段 + 模式约束 + Skill 注入 + 记忆 + 文件上下文 + 历史栈。activeContext 正文来源二选一：ContextItem.inlineContent（Office 插件等外部客户端随请求内联携带，200k 截断）优先，否则 read_document(fileId)——见 resolveActiveDocumentContent；末位 [系统提醒] 两条路径共用不变。
-- `service/ai/ChatModelFactory.java` — 供应商路由（OpenRouter/Gemini/Ollama/**AWD_CLOUD**）；provider 优先 DB `ai.activeProvider` 再回退 yml（PR#144）。`AllowedModels.java` 白名单（含单价）。
+- `service/ai/ChatModelFactory.java` — 供应商路由，2026-08 起收敛为**三档**：`AWD_CLOUD`（平台通道）/ `OPENROUTER`（自备 Key）/ `OLLAMA`（本地，实验档）。**GEMINI 档已下线**（手写的 GeminiChatLanguageModel 不支持 tools 也没有流式，AGENT/PLAN 下是死路；Gemini 系列模型改由 OpenRouter 的 `google/*` 提供），存量库里的 `ai.activeProvider=GEMINI` 由 `migrateRetiredGeminiProvider()`（ApplicationReadyEvent，幂等）改写成 OLLAMA——不迁移的话 `resolveProvider()` 只 warn 一句就静默回退 yml，用户的选择被改掉而设置页显示的又是另一回事。provider 优先 DB `ai.activeProvider` 再回退 yml（PR#144）。公有解析 API：`resolveProvider()` / `resolveDefaultModel()`（DB `ai.defaultModel` → yml `open-router.default-model`）/ `getAuxChatModel()`（辅助模型，非白名单抛 `FeatureNotConfiguredException(feature="ai-aux-model")`，不静默回落）/ `resolveOllamaModelName()` / `resolveOllamaBaseUrl()`。**判定顺序不许改**：平台通道短路 → 白名单短路 → provider 分流（由 ChatModelFactoryTest 固化）。`AllowedModels.java` 白名单（分档单价，见下节）。
 - **平台通道 AWD_CLOUD「AI Workdeck 云端」（商业化 PR-B）**：key 由官网 provision（`service/ai/PlatformAiChannel.java`，缓存 `~/.aiworkdeck/platform-ai-key.json` 0600），判定**先于白名单短路**，取不到 key **绝不静默回退 BYOK**（会花用户自己的钱）。`service/ai/PlatformUsageAccountant.java` 用 OpenRouter `GET /api/v1/key` 累计消费差分补 `TokenUsage.costSource=platform` 的真实扣费（langchain4j 0.36 拿不到响应里的 `usage.cost`）；BYOK 仍是单价表估算，标 `costSource=estimate`。两套数字**分开标注不得合并**（Spec §3）。账户连接在 `service/account/`，权益在 `service/entitlement/`，两者与解锁门、计费契约一并见 `.claude/agents/licensing-billing.md`。
-- **AccountException 不是内部错误**：AgentOrchestrator 与 AiChatService 单独 catch 它，把中文文案（如「尚未分配 AI 额度，请到官网账户页从余额分配」）原样透出，不加 `Internal Error:` / `Sorry, I encountered an error:` 前缀——这是用户可自行处理的状态，未分配额度时每条消息都会走到。**账户类文案里不许出现「登录」「未授权」「请先」**：`services/api.js` 用这三个子串判定未登录，会清会话（浏览器端还跳登录页），`AccountServiceTest.accountMessagesDoNotLookLikeAuthErrors` 守这条。
+- **AccountException 不是内部错误**：AgentOrchestrator 单独 catch 它，把中文文案（如「尚未分配 AI 额度，请到官网账户页从余额分配」）原样透出，不加 `Internal Error:` / `Sorry, I encountered an error:` 前缀——这是用户可自行处理的状态，未分配额度时每条消息都会走到。**账户类文案里不许出现「登录」「未授权」「请先」**：`services/api.js` 用这三个子串判定未登录，会清会话（浏览器端还跳登录页），`AccountServiceTest.accountMessagesDoNotLookLikeAuthErrors` 守这条。
 - **平台通道的三个状态钩子**（改账户连接时容易漏）：① connect/disconnect 必须 `PlatformUsageAccountant.resetBaseline()`，否则两把 key 的累计消费之差会整个记到下一条消息头上；② 平台模型创建前调 `ensureBaselineAsync()`，否则进程重启后第一条消息永久显示「待结算」；③ disconnect 必须 `ChatModelFactory.demotePlatformProvider()` 把 `ai.activeProvider` 从 AWD_CLOUD 摘下来（返回落到的供应商，随 `/api/account/disconnect` 的 `aiProviderFallback` 下发给前端），否则设置页显示平台通道正常选中、每条消息却报未连接账户。
 - context/ 子包：ContextCompressor、ConversationSummarizer、FileContextLoader、LegalInfoProtector、ProjectContextHolder。
+
+**模型目录与区域判定（2026-08 供应商三档改造）**
+- `service/ai/AllowedModels.java` 是**模型目录的唯一事实来源**（12 条：GLOBAL 7 + INTERNATIONAL 5）。枚举带元数据：displayName（中文）/ Vendor（中文厂商名，前端按它分组）/ Region / contextLength / priceTiers。前端**不许再硬编码任何模型清单**——历史上有三份互不同步的副本（本枚举、ChatInterface.vue 硬编码数组、project-overview.vue 死代码），后果是「后端加模型用户看不到、前端加模型被工厂静默回落默认模型」。
+- **分档计价**：OpenRouter 对部分模型按输入长度分档涨价，白名单里 4 个模型有档（qwen3.7-flash 三档，seed-2.0-lite / gpt-5.6-terra / grok-4.5 两档）。价格是 `PriceTier(minPromptTokens, inputPricePerM, outputPricePerM)` 列表，按 minPromptTokens 升序、首档下限恒为 0，取档用 `priceTierFor(promptTokens)`（负数/0 回落首档，取档不许抛异常——记账抛异常会把整条流式对话带崩）。`TokenUsageService.calculateCost` 已按档计价；**只读首档会在长上下文下系统性低报**。刻意不建模提示缓存命中价（langchain4j 0.36 的 TokenUsage 只回 input/output，拿不到命中 token 数），因此估算值对命中缓存的轮次偏高——**已知偏差不是 bug**，真花的钱以 PlatformUsageAccountant 对账为准。
+- **价格漂移唯一护栏**：`AllowedModelsLiveContractTest`（联网对拍 `GET https://openrouter.ai/api/v1/models`，断言在线 + supported_parameters 含 tools + 单价一致，容差 1%）。门控 `RUN_LIVE_MODEL_CHECK=1`，默认跳过——mvn test 默认离线可跑是硬要求。首次对拍就抓到 5 条价格错，其中 kimi-k2.6 的输入/输出价分别对用户超收 14% 与 40%。**测试红了不许放宽容差**，先核对线上再改枚举。结构性前提（首档为 0、严格升序）与区域集合大小由离线的 `AllowedModelsTest` 守。
+- `service/ai/NetworkRegionService.java` — 区域判定，**走桌面本地判定（后端 JVM 信号）**，不走官网回传、不走前端 `navigator.language`（渲染进程的 `utils/zetaOfficeBoot.js` 把 navigator.language shim 成 zh-CN，前端读到的语言不可信）。API：`SETTING_KEY="ai.networkRegion"`、`MODE_AUTO/MODE_DOMESTIC/MODE_INTERNATIONAL`、`mode()`（非法值回落 auto）/ `effectiveRegion()`（返 `AllowedModels.Region`）/ `isManuallyOverridden()` / `detect()` / `detectionBasis()`。判据：`Locale.getDefault().getCountry()=="CN"` **或**时区属大陆集合 → 判大陆（effectiveRegion 返 GLOBAL，只放行区域无关模型）；**港澳台不算大陆**。误判方向刻意偏保守（宁可少给选项，不可给必然 403 的坏选项），所以手动覆盖是一等设置、设置页必须给入口。
+- `controller/ai/AiModelCatalogController.java` — `GET /api/ai/models`（鉴权口径同 AiChatController：X-Session-Id → userId，null 则 401）。响应契约：`{networkRegion, networkRegionMode, networkRegionBasis, defaultModel, models:[{id,name,vendor,region,contextLength,inputPricePerM,outputPricePerM,tiered}]}`。models 只含 `AllowedModels.availableIn(effectiveRegion())`；价格取首档，`tiered=true` 表示有分档、UI 要提示「长上下文单价更高」。defaultModel 必须由 `ChatModelFactory.resolveDefaultModel()` 解析（DB `ai.defaultModel` 优先于 yml），前端自己挑「清单第一条」会和实际发出去的模型不一致。刻意不放进 AiChatController——那是被治理过一轮的胖控制器，模型目录与对话没有共享状态。
+- **模型相关 system_setting 键**（DB 优先于 yml，改完必须 `chatModelFactory.clearCache()`）：`ai.defaultModel`（空→yml `ai.model.open-router.default-model`）、`ai.auxModel`（起标题/上下文摘要/记忆抽取/memory_search/文件自动打标签；空→yml `ai.aux-model`）、`ai.subagentModel`（空→`ai.auxModel`）、`ai.networkRegion`（auto|domestic|international）。
+- `service/ai/OllamaProbeService.java` + `controller/ai/OllamaProbeController.java` — 本地 Ollama 只读探测，`GET /api/ai/ollama/probe?model=<可选>`（鉴权同上）。**为什么需要**：Ollama 档没有密钥可校验，向导无法用「Key 填了没有」判断可用性；改造前全仓零探测代码，用户选完本地档要到发第一条消息才收到 Connection refused。打 `{ollama.baseUrl}/api/tags`，连接与响应各 **2 秒**超时（跑在向导关键路径上）。**永远返回 200**，结论在 `status` 三态：`READY`（服务在跑且目标模型已 pull，`command=null`，nextStep 明说只支持 ASK 模式）/ `MODEL_MISSING`（`command="ollama pull <model>"`）/ `SERVICE_DOWN`（连不上、非 200、响应解析不了一律归这档，`command="ollama serve"`）。完整响应：`{status, baseUrl, targetModel, installedModels[], message, nextStep, command}`。目标模型 = system_setting `ai.ollama.modelName`（空白视为未配置）→ yml `ai.model.ollama.model-name`；query 参数 `model` 再优先于二者（向导里没保存就先试）。地址同理走 `ai.ollama.baseUrl` → yml。**这两个键的字面量定义在 `ChatModelFactory.SETTING_OLLAMA_MODEL / SETTING_OLLAMA_BASE_URL`，探测服务引用它们**：探测读的键必须与真实路由读的键是同一个，各写一份的话用户在设置页换了本机模型后会看到「探测说已就绪、对话却发给 yml 里那个模型」。模型名比对两边都补默认 tag（`llama3` ≡ `llama3:latest`）。**baseUrl 刻意不接受调用方传入**——桌面后端与云后端共用这套代码，放开等于做成 SSRF 跳板。
+- **前端消费侧**（改模型选择器前先看这三条）：① `frontend/src/components/ChatInterface.vue` 的模型清单来自 `GET /api/ai/models`（`api.js` 的 `fetchAiModels()`，同一端点只有这一个函数名），下拉按 vendor 分组、`region=INTERNATIONAL` 的组排在最后并标注「需国际网络」、`tiered=true` 显示「长上下文单价更高」、每条显示首档单价；默认选中项取响应里的 `defaultModel`，**不许自己取 `models[0]`**。② 模型选择持久化在 uni storage 键 `ai_selected_model`（全局非按项目）；恢复时必须校验该 id 仍在端点返回集合里，不在则回落 `defaultModel` 并提示一次——AI 面板挂在 `v-if` 上，不落盘会静默复位，而这个选择有计费含义，静默换计价对象是本次要修的老毛病。③ `provider=OLLAMA` 时模式选择器只留 ASK（本地档不支持工具调用），判据取 `GET /api/ai/config` 的 `activeProvider`（模型目录端点不回 provider）；该字段现在由 `ChatModelFactory.resolveProvider()` 透出，与真实路由同源。
+- **AI PPT 的模型与密钥**不走上面这套：由 `tools/PptxTools.buildModelConfig` 按 `ai.activeProvider` / `ai.defaultModel` / DB 密钥解析后，随 `model_config` **每次请求**下发给 pptx-service（该字段曾在 re-vendor banana-slides 时被整包替换掉，源码级存活检查在 `pptx-service/compat_smoke_test.sh`）。图像模型是常量 `PptxServiceClient.IMAGE_MODEL`，**刻意不进 AllowedModels**——它按张计费、没有 prompt/completion 单价，进白名单会破坏分档计价的前提。本地 Ollama 档下 AI PPT 在入口即拒（`FeatureNotConfiguredException(feature="ai-ppt")`），因为本地模型没有 OpenAI 兼容的图像生成接口，放行只会跑到图片阶段才失败。
 
 **工具注册与执行**
 - `service/ai/ToolRegistry.java`（428 行）— @PostConstruct 扫 AgentToolComponent 的 @Tool；getAllSpecifications / execute（反射+服务端强注入 projectId/conversationId/userId+容错类型转换）/ resolve；别名表 TOOL_NAME_ALIASES/ARG_ALIASES/LEGACY_DEFAULTS。**插件启停过滤也在这三处消费点**。
@@ -40,8 +53,9 @@ description: AI 对话编排领域。任务涉及编排器 AgentOrchestrator、T
 **可靠性层（2026-08 harness 加固，治"跑一半停了"）**
 - LLM timeout 600s（application.yml open-router.timeout；0.36 的单值=OkHttp callTimeout 整通墙钟上限，不是空闲超时）。
 - `AgentStreamHandler`：终态幂等（AtomicBoolean terminated）+ **无活动看门狗** armInactivityWatchdog(180s)——流停滞主动走 onError。
-- `AgentOrchestrator.setOnError`：失败按 `LlmErrorClassifier.Kind` 分类（RATE_LIMITED / TRANSIENT / MODEL_UNAVAILABLE / FATAL，OpenAiHttpException 的结构化状态码优先于文本匹配），且**零 token 已流出**才允许重放。限流退避 30/60s ×2（限流窗口按分钟计，用 8/16/32 会在同一窗口连撞三次白烧预算），瞬时 8/16/32s ×3（RunGuard.llmRetries，成功轮与切模型后清零）；用户文案两套，限流说「限流等待中」不说「服务不可用」。
-- **故障转移链**（`ai.failover.models`，默认两个区域无关常青模型）：重试预算耗尽仍是限流/瞬时错误、或模型下线 404（PR#144 坑的一般化）时，`switchToFailoverModel` 换模型同 depth 重放本轮并发 SSE 明示切到了哪个。候选必须在 `AllowedModels` 白名单内——非白名单会被工厂静默回落默认模型，切了等于没切。**计费红线：只换 modelId，通道由 `ChatModelFactory.resolveProvider()` 决定，与 modelId 无关**；平台通道下取不到 key 抛的 AccountException 原样透出并终止，绝不回退 BYOK（会花用户自己的钱）。FATAL（400/401/403 与未知错误）不换模型。
+- `AgentOrchestrator.setOnError`：失败按 `LlmErrorClassifier.Kind` 分类（**五类**：RATE_LIMITED / TRANSIENT / MODEL_UNAVAILABLE / REGION_BLOCKED / FATAL，OpenAiHttpException 的结构化状态码优先于文本匹配），且**零 token 已流出**才允许重放。限流退避 30/60s ×2（限流窗口按分钟计，用 8/16/32 会在同一窗口连撞三次白烧预算），瞬时 8/16/32s ×3（RunGuard.llmRetries，成功轮与切模型后清零）；用户文案两套，限流说「限流等待中」不说「服务不可用」。
+- **REGION_BLOCKED = 403 的地域子类**：OpenRouter 对国际模型在境内网络返回 403「This model is not available in your region」。**不许整体放宽 403**——key 失效/额度禁用也是 403，放宽会把它们带进换模型重试变成重复扣费探测；判据是「403 + 响应体含地域语义」（多子串择一命中，`looksLikeRegionRejection`）。这是文本匹配，上游改文案会退化成 FATAL，退化方向安全（不换模型、只是文案回英文原文）。不重试（同网络重试永远撞同一个 403）但 failoverable，且 `Kind.requiresRegionAgnosticFailover()` 要求候选收窄成 `AllowedModels.Region.GLOBAL`。终态错误载荷带稳定标记 `LlmErrorClassifier.REGION_BLOCKED_MARKER`（"AI_REGION_BLOCKED"，由 `taggedErrorMessage` 拼），前端 `useAgentStream` 用 includes 命中后换成中文引导（载荷前面还拼着「Stream Error: 」，别写成前缀判断）。
+- **故障转移链**（`ai.failover.models`，默认两个区域无关常青模型）：重试预算耗尽仍是限流/瞬时错误、模型下线 404（PR#144 坑的一般化）、或地域拒绝时，`switchToFailoverModel` 换模型同 depth 重放本轮并发 SSE 明示切到了哪个。候选必须在 `AllowedModels` 白名单内——非白名单会被工厂静默回落默认模型，切了等于没切；REGION_BLOCKED 还要再按 `AllowedModels.availableIn(GLOBAL)` 过滤，否则换一个同样是国际档的模型只会再撞一次 403。**计费红线：只换 modelId，通道由 `ChatModelFactory.resolveProvider()` 决定，与 modelId 无关**；平台通道下取不到 key 抛的 AccountException 原样透出并终止，绝不回退 BYOK（会花用户自己的钱）。FATAL（400/401、非地域 403 与未知错误）不换模型。
 - **自动 compaction**（`context/RunLoopCompactor` + `ai.context.compaction`）：runLoop 每轮 generate 前估算 token，超「历史可用预算 × 0.8」时把中段折叠成一条摘要，保留 system prompt + 首条用户消息 + 最近 8 条。**结构感知**：保留段绝不以 ToolExecutionResultMessage 打头（拆散 tool_calls 配对会让 OpenAI 兼容通道直接 400），这也是不能直接复用 ContextCompressor 的原因——那套会把消息重建成纯文本、抹掉 toolExecutionRequests。摘要本地生成不调 LLM（交互路径中间插同步 LLM 调用等于新增一处卡死成因），上一版摘要会并进新摘要。压缩失败一律原样继续；中段不足 4 条不压，回放评测用例碰不到阈值。
 - **StuckDetector**（先干预后熔断）：RunGuard 的单槽 lastCallSignature 换成 6 格滑动窗口，识别 A/A/A 与 **A/B/A/B 交替**（旧实现对交替完全无感，一路空转到步数预算耗尽）。首次检出只往 **messages 末位**追加 `[系统提醒]` UserMessage、工具照常执行；二次检出才拒绝执行并回喂 `Error:` 前缀的熔断反馈。末位是硬要求——只写 system prompt 的约束会被弱模型无视（PR#209 实证）。
 - 截断 `<tool_code>`（有开无闭）不再静默正常收尾：回喂纠正提示重试，最多 2 轮（RunGuard.malformedToolRounds）。
@@ -96,10 +110,53 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   会停止更新（表现为日志停在几天前）。要拿新日志先彻底退出 app 让后端随之重启。
 - 防走神注入/todo_write 进度卡/文档检查点机制见 PR#161/162。
 - RunGuard 阈值改动影响回放评测断言。
+- 本地 Ollama 的地址与模型名有 DB 覆盖键（`ai.ollama.baseUrl` / `ai.ollama.modelName`，admin 页「本地 Ollama」分区写入）。
+  **探测端点与真实路由必须读同一对键**：字面量定义在 `ChatModelFactory.SETTING_OLLAMA_BASE_URL / SETTING_OLLAMA_MODEL`，
+  `OllamaProbeService` 引用它们。各写一份字面量的后果是「探测说就绪、对话却发给 yml 里那个模型」——
+  这类「显示与实际不一致」正是三档改造要消灭的主线问题。改完写入侧记得 `clearCache()`
+  （缓存键含模型名，但不含 baseUrl，只改地址时靠 clearCache 生效）。
+
+## 辅助模型、子 Agent 与身份作用域（2026-08 供应商三档改造）
+
+- **辅助模型（便宜档）**：`ChatModelFactory.getAuxChatModel()` 是「用户看不见但每轮都在跑」的调用的唯一入口，
+  模型 ID 解析链 `system_setting ai.auxModel → yml ai.aux-model`，非白名单抛
+  `FeatureNotConfiguredException(feature="ai-aux-model")`（不静默回落）。已接的调用点：
+  AgentOrchestrator 起标题、ConversationSummarizer 完整摘要与快速摘要、MemCellExtractor 抽取、
+  AgenticRetriever 查询扩展（deep_search）、AutoTaggingService 自动打标签。**新增此类内部调用一律用它**，
+  不要写死模型 ID、也不要 `getChatModel(null)`（那会落到主模型/默认模型上）。
+- **模型 ID 的解析口径**：`AuxModelResolver`（`service/ai/AuxModelResolver.java`）
+  ——`auxModelId()` 与 `subAgentModelId(ymlValue)`。记账必须带模型 ID：传 null 会落成 `"default"`，
+  且 `AllowedModels.fromId(null)` 为空会把估算成本算成 0（token 数对、钱是 0）。
+  ChatModelFactory 里还有一份同源解析，待收口成调用本类。
+- **子 Agent 模型**：`system_setting ai.subagentModel → yml ai.subagent.model → 辅助模型`。
+  留空**不再继承父会话**（长程任务的子任务跟着主模型跑最烧钱）；非白名单在 `dispatch` 起跑前
+  拒绝派发并返回可读中文提示（不静默回落——failover 链踩过同一个坑）。
+- **子 Agent 数值自洽**（SubAgentProperties 默认值，yml 若显式写了值会覆盖它，改默认要同时改 yml）：
+  `timeout-seconds=630` 必须 > 单次 LLM 读超时 600s（`ai.model.open-router.timeout`），
+  否则等待方先放弃而 `future.cancel(true)` 打不断阻塞的 HTTP 读，子 Agent 照样烧完 token 结果被丢弃；
+  `token-budget=60000`（×chars-per-token 2.0 = 120000 字符）要能装下至少两个满额文件
+  （单文件上限 50000 字符），原来 30000 会让「读一个文件」吃掉 5/6 预算。
+- **记账**：子 Agent 每轮的 `response.tokenUsage()` 与上面那批辅助调用都落 `token_usage`
+  （归属主会话的 project/conversation/user；辅助调用的 userId 取 PlatformAiUserScope）。
+  此前 sub-agent 一行账都没有，花费被整块折进下一条主循环记录——总额对、逐条归属与逐模型分布错。
+- **平台通道身份（PlatformAiUserScope）的跨线程红线**：作用域在 taskExecutor 线程建立，
+  而流式回调线程、LLM 重试定时器线程、子 Agent 线程池都不继承它。现有三处重建：
+  ① `ToolRegistry.execute` 按 `ctx.userId()` 重建（覆盖所有工具，含 deep_search 内部的 LLM 调用）；
+  ② `AgentOrchestrator` 的 `setOnComplete`/`setOnError`/重试定时器；
+  ③ `SubAgentService.dispatch` 按 `parentCtx.userId()` 重建。
+  漏一处的表现是云多租户下抛 AccountException「本次 AI 调用未携带用户身份」，
+  而编排器把它当「平台通道不可用」终止整轮——与真实原因无关的提示。
+  护栏：`PlatformScopeCloudMultiTenantTest`（真实 PlatformAiChannel + strictMultiTenant 形态）。
+- **地域拒绝的故障转移**：`setOnError` 里 `kind.requiresRegionAgnosticFailover()` 为真时，
+  候选经 `nextFailoverModel(..., regionAgnosticOnly=true)` 收窄成 `Region.GLOBAL`
+  （境内切到另一个国际档只会再撞一次 403）；收窄后无候选就走终态处置，
+  错误载荷经 `LlmErrorClassifier.taggedErrorMessage` 带上 `AI_REGION_BLOCKED` 供前端换中文文案。
+  因此 `ai.failover.models` 里至少要有两个 Region.GLOBAL 的模型，否则这条链形同不存在。
 
 ## 验证
 
 - `cd backend && mvn test`（JDK 21！默认 25 SIGBUS）——含回放评测 OrchestratorReplayEvalTest（用例 `backend/src/test/resources/ai-eval/cases/cases-*.json`，12 组）+ DesktopContextSmokeTest。新增 cases-file-tree（整理文件夹/重命名的 create_folder→move_project_file→rename_project_file 链）与 cases-harness-recovery（截断 tool_code 纠正回路 F-10、编辑器桥 `{"error"}` 判 FAILURE F-09）。`expect.promptContains` 断言编排器回喂的系统提醒确实进了下一轮上下文。
-- 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`。
+- 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`（默认模型已换成 deepseek/deepseek-v4-flash，境内可跑）。
+- 身份作用域与模型解析：`mvn test -Dtest=PlatformScopeCloudMultiTenantTest,AuxModelResolverTest,SubAgentServiceTest,AgentOrchestratorFailoverTest,AgentOrchestratorFailoverFlowTest`。
 - 状态持久化/启动回收：`mvn test -Dtest=AgentRunRecoveryServiceTest`（mark 写透、RUNNING→INTERRUPTED+补标记、幂等、续跑翻回 RUNNING）。
 - 前端：`npm run check:emits`；UI 链路 `npm run test:app-e2e`。

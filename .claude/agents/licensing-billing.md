@@ -83,6 +83,20 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   - `pages/wizard/wizard.vue` 的 `providerOptions`——`AWD_CLOUD` **恒可选**，选中就地展开连接块把条件补齐，
     闸门挪到 `handleSubmit`（见下方地雷 15：向导里的每一条「下一步」都必须能在向导里做完）。
     向导刻意不预选任何供应商，见下方地雷 14。
+- 供应商自 2026-08 收敛为**三档**：`AWD_CLOUD`（平台通道）/ `OPENROUTER`（自备 Key）/ `OLLAMA`
+  （本地，离线实验档，只支持 ASK）。`GEMINI` 已下线（Google Key 三个字段与 `external.google.*` 键一并删除，
+  Gemini 系列模型经 OpenRouter 的 `google/*` 仍可用）。两个入口的取值合法性由
+  `AdminConfigController.toSettingsUpdates` 统一校验（非三档枚举直接 400），
+  存量 DB 里的 `ai.activeProvider=GEMINI` 由 `ChatModelFactory` 的启动期迁移改写成 `OLLAMA`。
+- AI 相关设置的唯一写入口仍是这两处，写入的键：`ai.activeProvider`、`ai.defaultModel`、`ai.auxModel`、
+  `ai.subagentModel`（留空 = 继承 `ai.auxModel`）、`ai.networkRegion`（auto/domestic/international）、
+  `ai.ollama.baseUrl` / `ai.ollama.modelName`。三个模型键**空串是合法值**（= 跟随内置默认），
+  非空必须在 `AllowedModels` 白名单内，否则报 400 而不是让工厂静默回落。两个入口保存后都调
+  `chatModelFactory.clearCache()`。
+- `toSettingsUpdates` **跳过 null 字段**（不再把同组其余字段写成空串）：`SystemSettingService` 只在
+  行不存在时回退默认值，空串会被当成真实配置，历史上会把 env 提供的 baseUrl / 走
+  `wizard/reset` 重跑向导的正确 baseUrl 清掉（受害者 QichachaService / TushareService / TtsService）。
+  代价是「清空某字段」需要显式传空串——admin 页整表回传不受影响。
 
 **广场付费项（PR-D，链路见 plugin-marketplace.md）**
 - `backend/src/main/java/com/checkba/service/market/MarketPurchaseGate.java` — Skill 与插件两条安装链路共用的付费判定单一出口。
@@ -108,9 +122,15 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   存密文 + 指纹 + limitUsd + fetchedAt/lastVerifiedAt。**刻意不挂在 `account_binding` 上**：
   那张表是纯身份映射且每次桥接都要读，塞密文会改变它的安全等级。
 - `service/ai/PlatformAiUserScope.java` — 「这次调用花谁的额度」的线程作用域。
-  设置点共 8 处（编排器入口、标题生成 runAsync、AiChatService、MemoryPipelineService、
-  SubAgentService.dispatch、MatterClassifierService、AutoTaggingService、PPT 生成 runAsync），
-  **跨线程提交必须 `wrap`**。
+  设置点共 10 处：`AiAgentController`（对话与 PPT 生成两条异步入口共用这一处 run）、
+  `AgentOrchestrator` 四处（handleUserMessage 入口 run、标题生成 runAsync wrap、
+  **onComplete / onError 两个回调 run**、LLM 重试 scheduler wrap）、
+  **`ToolRegistry.execute`（按 `ctx.userId()` call，2026-08 新增）**、`MemoryPipelineService`、
+  `SubAgentService.dispatch`（优先按 `parentCtx.userId()` 显式重建，缺 userId 才回落 `current()`）、
+  `MatterClassifierService`、`AutoTaggingService`。**跨线程提交必须 `wrap`**。
+  （AiChatService 那一处随 v1 同步对话通道删除消失。）
+  ToolRegistry 这一处是 2026-08 补的 P0：工具方法内部发起的 LLM 调用（sub-agent 派发、
+  deep_search 的查询扩展）此前跑在没有作用域的线程上，平台通道取不到 per-user 密钥。
 - `controller/PlatformAiKeyController.java` — `/api/platform-ai/key/{status,refresh}`，
   **会话级不是机器级**（不走 `MachineAccountGuard`——那道闸管的是整台服务器的账户连接）。
 - 插件侧：`office-addin/taskpane/components/SettingsView.vue` 的「AI 额度」卡片
@@ -357,6 +377,7 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     反向没有保护）。现在 `activeProvider` 初值是空串、由用户显式选，唯一的例外是「已连接账户且已分配额度」
     时自动预选平台通道——用账户 Key 解锁的人买的就是这条通道，不该再被引导去配别家的 Key。
     向导提交前的空值拦截在 `handleSubmit`，后端 `WizardController` 也拒空 `activeProvider`（两道都在才算数）。
+    取值本身的合法性（三档枚举）在 `AdminConfigController.toSettingsUpdates`，两个入口共用。
 
 15. **向导里每一条「下一步」都必须能在向导里做完**。平台通道曾经在未连接账户时置灰 +
     提示「进入产品后在系统管理粘贴 Key」——那是死路：试用码解锁的用户在向导里无论如何都点不亮它，
@@ -365,6 +386,11 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     `refreshEntitlements(true)`），已连接但没分配额度时给「前往官网分配额度 + 重新检查」两个动作。
     两个前置条件缺任一时 `handleSubmit` 拦住提交并指出下一步——**闸门从「不可选」挪到了「不可提交」，
     不是取消了**。
+    同一条规则的第二个实例（2026-08）：选「本地 Ollama」时向导就地探测（`GET /api/ai/ollama/probe`，
+    选中即探一次 + 「重新检测」按钮），服务没起或目标模型没 pull 都由 `handleSubmit` 拦住，
+    并把 `ollama pull <模型名>` 与下载地址原样摆出来给用户复制。模型名取探测结果而不是前端写死，
+    因为它现在可以在 admin 里改（`ai.ollama.modelName`）。探测端点必须允许匿名调用——
+    全新安装走向导时还没有任何会话。
 
 16. **全新安装必须先钉 `system.wizard.completed=false`**（`DataInitializer`，仅 admin 不存在时写）。
     `WizardController.isInitialized()` 在标记不存在时退回存量兜底「system_setting 非空即已初始化」，

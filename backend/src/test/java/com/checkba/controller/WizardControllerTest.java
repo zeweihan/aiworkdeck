@@ -45,7 +45,12 @@ class WizardControllerTest {
     private com.checkba.service.ai.ChatModelFactory chatModelFactory;
 
     private WizardController newController() {
-        return new WizardController(systemSettingService, systemSettingRepository,
+        // WizardStateService 用真实实例包住同一批 mock（它是无状态的两依赖纯类）：
+        // 「是否已初始化」的判据从控制器抽出去之后，用真实实现能让这里原有的
+        // systemSettingService.get / systemSettingRepository.count 打桩继续守住真实行为，
+        // 换成 mock 反而会把这条安全前置条件测空。
+        return new WizardController(systemSettingService,
+                new com.checkba.service.WizardStateService(systemSettingService, systemSettingRepository),
                 userRepository, adminAccessService, new ObjectMapper(), chatModelFactory);
     }
 

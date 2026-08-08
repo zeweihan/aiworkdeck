@@ -18,6 +18,7 @@
 #   GET  /api/projects/{id}/export/pptx
 #   POST /api/projects/{id}/export/editable-pptx
 #   GET  /api/projects/{id}
+#   [checkba] 定制存活检查：model_config 消费端是否还在（纯源码 grep，无需服务/无需 key）
 #
 # 判定：某端点返回 404 = 路由被删/改名（契约破坏，FAIL）；非 404 = 路由存在（契约在，PASS）。
 #       生成/导出类端点在无 LLM/图像 key 时会 4xx/5xx，属正常——本脚本只验"端点在不在 + 关键字段"。
@@ -102,6 +103,28 @@ if [ "${RUN_FULL:-0}" = "1" ] && [ -n "$PID" ]; then
     if [ -n "$n" ] && [ "$n" -gt 0 ] 2>/dev/null; then ok "真实大纲生成成功，data.pages 契约在（$n 页）"; else bad "大纲返回 200 但 data.pages 结构变化，请核对 $TMP/body"; fi
   else bad "真实大纲生成 HTTP $c（key 未配或契约变更），响应首 300 字："; head -c 300 "$TMP/body"; echo; fi
 fi
+
+# 10) [checkba] 定制存活检查：model_config 消费端
+#     纯源码检查，不需要服务在跑、也不需要 key——re-vendor 后第一件要跑的就是它。
+#     0.1.0 → 0.4.0 整包替换时这层定制被丢掉，AI PPT 断了一个月才被发现。
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# custom_grep <名称> <模式> <相对文件> [最少出现次数]
+custom_grep() {
+  local name="$1" pattern="$2" file="$3" want="${4:-1}"
+  local n; n="$(grep -c -- "$pattern" "$HERE/$file" 2>/dev/null || true)"
+  n="${n:-0}"
+  if [ "$n" -ge "$want" ] 2>/dev/null; then
+    ok "定制在：$name"
+  else
+    bad "定制丢失：$name（$file 里 '$pattern' 出现 $n 次，应 >= $want）——re-vendor 漏移植，AI PPT 会在大纲阶段抛 GOOGLE_API_KEY is required，详见 UPGRADE_CHECKBA.md"
+  fi
+}
+
+custom_grep "model_config → AIService 工厂"       "def create_ai_service_with_config" backend/services/ai_service_manager.py
+custom_grep "进程级模型配置兜底"                   "def set_active_model_config"       backend/services/ai_service_manager.py
+custom_grep "大纲/描述/图片三端点消费 model_config" "set_active_model_config"           backend/controllers/project_controller.py 3
+custom_grep "可编辑导出消费 model_config"          "set_active_model_config"           backend/controllers/export_controller.py
 
 echo
 if [ "$FAIL" = "0" ]; then

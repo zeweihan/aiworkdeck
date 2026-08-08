@@ -49,42 +49,12 @@
             <view class="section-header">
               <text class="section-title">外部服务供应商</text>
               <text class="section-subtitle">
-                配置 Google（Gemini）、企查查、Tushare 的接入参数
+                配置 OpenRouter、企查查、Tushare 等外部服务的接入参数
               </text>
             </view>
             <view class="section-body">
-              <!-- Google / Gemini -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">Google（Gemini）</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">API Key</text>
-                  <input
-                    v-model="form.external.google.apiKey"
-                    class="form-input"
-                    placeholder="请输入 Google Gemini API Key"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">模型名称</text>
-                  <input
-                    v-model="form.external.google.modelName"
-                    class="form-input"
-                    placeholder="例如：gemini-2.5-pro"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">API 地址</text>
-                  <input
-                    v-model="form.external.google.apiBaseUrl"
-                    class="form-input"
-                    placeholder="https://generativelanguage.googleapis.com/v1beta"
-                  />
-                </view>
-              </view>
-
-              <!-- OpenRouter -->
+              <!-- OpenRouter。Google（Gemini）那三个字段随 GEMINI 供应商下线一起删除：
+                   Gemini 系列模型仍可用，走 OpenRouter 的 google/* 即可。 -->
               <view class="provider-card">
                 <view class="provider-header">
                   <text class="provider-name">OpenRouter</text>
@@ -95,6 +65,7 @@
                     v-model="form.external.openRouter.apiKey"
                     class="form-input"
                     placeholder="请输入 OpenRouter API Key"
+                    password
                   />
                 </view>
                 <view class="form-row">
@@ -306,7 +277,7 @@
             <view class="section-header">
               <text class="section-title">AI 服务配置</text>
               <text class="section-subtitle">
-                配置系统提示词与当前使用的大模型供应商
+                供应商、模型选择、网络区域与本地 Ollama 参数；保存后立即生效，不必重启
               </text>
             </view>
             <view class="section-body">
@@ -326,43 +297,128 @@
                   </view>
                 </view>
               </view>
-              
-              <!-- Tab for Prompt Config -->
-              <view class="prompt-tabs">
-                  <view 
-                    class="prompt-tab" 
-                    :class="{ active: activePromptTab === 'OLLAMA' }"
-                    @tap="activePromptTab = 'OLLAMA'"
-                  >本地 Ollama</view>
-                  <view 
-                    class="prompt-tab" 
-                    :class="{ active: activePromptTab === 'GEMINI' }"
-                    @tap="activePromptTab = 'GEMINI'"
-                  >Google Gemini</view>
+
+              <!-- 模型选择。清单唯一来源是后端模型目录（GET /api/ai/models）——
+                   历史上前端硬编码过两份互不同步的清单，结果是「后端加模型用户看不到、
+                   前端加模型被工厂静默回落默认模型」。 -->
+              <view class="section-divider"></view>
+              <view class="section-header-inline">
+                  <text class="section-title-sm">模型选择</text>
               </view>
-              
-              <view class="form-row vertical" v-if="activePromptTab === 'OLLAMA'">
-                <text class="form-label">Ollama 系统提示词</text>
-                <textarea
-                  class="prompt-textarea"
-                  v-model="form.ai.systemPromptOllama"
-                  placeholder="针对 Ollama 模型的系统提示词 (留空则无系统指令)"
-                  :maxlength="-1"
-                  auto-height
+              <text class="field-note">
+                只影响云端两档（本地 Ollama 用下面单独的模型名）。清单只列当前网络区域实测可用的模型；
+                标「分档计价」的模型在长上下文下单价更高。
+              </text>
+              <text v-if="modelCatalogError" class="field-note field-note-warn">{{ modelCatalogError }}</text>
+              <view class="form-row">
+                <text class="form-label">默认模型</text>
+                <picker
+                  class="mode-picker"
+                  mode="selector"
+                  :range="modelLabels('defaultModel')"
+                  :value="modelIndex('defaultModel')"
+                  @change="onModelPick('defaultModel', $event)"
+                >
+                  <view class="mode-value">
+                    <text>{{ modelLabels('defaultModel')[modelIndex('defaultModel')] }}</text>
+                    <text class="mode-caret">▾</text>
+                  </view>
+                </picker>
+              </view>
+              <text v-if="catalogDefaultModel" class="field-note">
+                当前生效的默认模型：{{ catalogDefaultModel }}
+              </text>
+              <view class="form-row">
+                <text class="form-label">辅助模型</text>
+                <picker
+                  class="mode-picker"
+                  mode="selector"
+                  :range="modelLabels('auxModel')"
+                  :value="modelIndex('auxModel')"
+                  @change="onModelPick('auxModel', $event)"
+                >
+                  <view class="mode-value">
+                    <text>{{ modelLabels('auxModel')[modelIndex('auxModel')] }}</text>
+                    <text class="mode-caret">▾</text>
+                  </view>
+                </picker>
+              </view>
+              <text class="field-note">
+                辅助模型用于子 Agent、会话起标题、上下文摘要、记忆抽取与文件自动打标签。
+                这些调用用户看不见但每轮都在跑，默认用一个便宜模型是刻意的——省钱主要省在这里。
+              </text>
+              <view class="form-row">
+                <text class="form-label">子 Agent 模型</text>
+                <picker
+                  class="mode-picker"
+                  mode="selector"
+                  :range="modelLabels('subagentModel')"
+                  :value="modelIndex('subagentModel')"
+                  @change="onModelPick('subagentModel', $event)"
+                >
+                  <view class="mode-value">
+                    <text>{{ modelLabels('subagentModel')[modelIndex('subagentModel')] }}</text>
+                    <text class="mode-caret">▾</text>
+                  </view>
+                </picker>
+              </view>
+              <text class="field-note">留空即继承上面的辅助模型。</text>
+
+              <!-- 网络区域。手动覆盖是一等设置不是隐藏兜底：本地判定（系统国家 + 时区）
+                   对出差、挂代理、公司专线出境的用户必然判错，手动指定是唯一出路。 -->
+              <view class="section-divider"></view>
+              <view class="section-header-inline">
+                  <text class="section-title-sm">网络区域</text>
+              </view>
+              <text class="field-note">
+                只在境外网络可用的模型，在境内网络会被服务商按地域拒绝，所以模型清单按区域过滤。
+                自动判定看的是本机的系统国家/地区与时区，判错时在这里手动指定。
+              </text>
+              <view class="form-row">
+                <text class="form-label">判定方式</text>
+                <view class="provider-radio-group">
+                  <view
+                    v-for="opt in networkRegionOptions"
+                    :key="opt.value"
+                    class="radio-item"
+                    :class="{ checked: form.ai.networkRegion === opt.value }"
+                    @tap="form.ai.networkRegion = opt.value"
+                  >
+                    <view class="radio-dot"></view>
+                    <text class="radio-label">{{ opt.label }}</text>
+                  </view>
+                </view>
+              </view>
+              <text class="field-note">{{ networkRegionSummary }}</text>
+
+              <!-- 本地 Ollama。改造前全产品无处可改：yml 里是硬编码字面量，
+                   只能靠 AI_MODEL_OLLAMA_MODEL_NAME 环境变量覆盖，终端用户等于改不了。 -->
+              <view class="section-divider"></view>
+              <view class="section-header-inline">
+                  <text class="section-title-sm">本地 Ollama（离线 / 实验档）</text>
+              </view>
+              <text class="field-note">
+                只支持「问答」模式：本机模型在当前依赖版本下不支持工具调用，选这一档时改文档、
+                查企业信息、多步任务都跑不了。以下两项只在供应商选「本地 Ollama」时生效，
+                模型需先在终端 ollama pull 拉取。
+              </text>
+              <view class="form-row">
+                <text class="form-label">服务地址</text>
+                <input
+                  v-model="form.ai.ollamaBaseUrl"
+                  class="form-input"
+                  placeholder="http://localhost:11434"
+                />
+              </view>
+              <view class="form-row">
+                <text class="form-label">模型名称</text>
+                <input
+                  v-model="form.ai.ollamaModelName"
+                  class="form-input"
+                  placeholder="例如：qwen3-vl:8b"
                 />
               </view>
 
-              <view class="form-row vertical" v-if="activePromptTab === 'GEMINI'">
-                <text class="form-label">Gemini 系统提示词</text>
-                <textarea
-                  class="prompt-textarea"
-                  v-model="form.ai.systemPromptGemini"
-                  placeholder="针对 Gemini 模型的系统提示词 (留空则无系统指令)"
-                  :maxlength="-1"
-                  auto-height
-                />
-              </view>
-              
               <!-- Assistant Management Section -->
               <view class="section-divider"></view>
               <view class="section-header-inline">
@@ -1099,6 +1155,7 @@ import {
   getMemorySyncStatus, setMemorySyncRemote, removeMemorySyncRemote, syncMemoryNow,
   getCurrentUser as fetchCurrentUser, getMyProjects,
   getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
+  fetchAiModels,
 } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
@@ -1118,7 +1175,6 @@ export default {
     return {
       userDisplayName: '用户',
       activeNav: 'config',
-      activePromptTab: 'OLLAMA', // 'OLLAMA' | 'GEMINI'
       navItems: [
         { key: 'config', label: '系统配置' },
         { key: 'ai', label: 'AI 功能设置' },
@@ -1144,7 +1200,6 @@ export default {
       },
       form: {
         external: {
-          google: { apiKey: '', modelName: '', apiBaseUrl: '' },
           openRouter: { apiKey: '', baseUrl: '' },
           qichacha: { baseUrl: '', key: '', secret: '' },
           tushare: { baseUrl: '', token: '' },
@@ -1154,12 +1209,26 @@ export default {
           elevenLabs: { apiKey: '', baseUrl: '', modelId: '', defaultVoiceId: '' },
         },
         ai: {
-          systemPromptOllama: '',
-          systemPromptGemini: '',
           activeProvider: 'OLLAMA',
+          // 三个模型键：空串 = 跟随内置默认（子 Agent 是继承辅助模型）
+          defaultModel: '',
+          auxModel: '',
+          subagentModel: '',
+          networkRegion: 'auto',
+          ollamaBaseUrl: '',
+          ollamaModelName: '',
           assistants: [],
         },
       },
+      // 模型目录（GET /api/ai/models）：模型清单 + 区域判定结果与依据。
+      // 前端不许再自己硬编码任何模型清单。
+      modelCatalog: null,
+      modelCatalogError: '',
+      networkRegionOptions: [
+        { value: 'auto', label: '自动判定' },
+        { value: 'domestic', label: '境内' },
+        { value: 'international', label: '境外' },
+      ],
       // 平台 AI 通道是否可选（= 是否已连接账户），来自 /api/account/status
       platformAiAvailable: false,
       // Helpers
@@ -1236,10 +1305,10 @@ export default {
     // 两个前置条件都要单独判：连接账户 → 在官网从余额分配 AI 额度。
     // 缺后者时官网 /api/account/ai-key 返回 409 no_allocation，只在发消息那一刻才炸。
     aiProviderOptions() {
+      // 三档（GEMINI 已下线：主对话在架构上跑不通，其模型经 OpenRouter 的 google/* 仍可用）
       const options = [
-        { value: 'OLLAMA', label: '本地 Ollama' },
-        { value: 'GEMINI', label: 'Google Gemini' },
-        { value: 'OPENROUTER', label: 'OpenRouter' },
+        { value: 'OLLAMA', label: '本地 Ollama（离线 / 实验，仅问答）' },
+        { value: 'OPENROUTER', label: 'OpenRouter（自备 Key）' },
       ]
       if (this.isDesktop) {
         let hint = ''
@@ -1285,6 +1354,26 @@ export default {
       const rows = this.accountUsage && this.accountUsage.local && this.accountUsage.local.recent
       return Array.isArray(rows) ? rows : []
     },
+    catalogModels() {
+      const models = this.modelCatalog && this.modelCatalog.models
+      return Array.isArray(models) ? models : []
+    },
+    // 后端解析出的「当前真正会用的默认模型」（DB 的 ai.defaultModel 优先于 yml）。
+    // 展示它是为了让「跟随内置默认」这个选项有可核对的落点。
+    catalogDefaultModel() {
+      return (this.modelCatalog && this.modelCatalog.defaultModel) || ''
+    },
+    // 区域判定的结果与依据都要摆出来：用户要能看懂「国际模型为什么不见了」
+    networkRegionSummary() {
+      const c = this.modelCatalog
+      if (!c) return '模型清单尚未读取，保存后可重新进入本页查看。'
+      const region = c.networkRegion === 'INTERNATIONAL'
+        ? '境外网络（全部模型可用）'
+        : '境内网络（只放行境内外均可用的模型）'
+      const mode = c.networkRegionMode === 'auto' ? '自动判定' : '已手动指定，不随本机环境变化'
+      return `当前生效：${region} · ${mode} · 判定依据：${c.networkRegionBasis || '—'}`
+        + ` · 当前可用模型 ${this.catalogModels.length} 个`
+    },
   },
   onLoad(query) {
     const user = getCurrentUser()
@@ -1297,6 +1386,7 @@ export default {
       this.onNavTap({ key: nav })
     }
     this.loadConfig()
+    this.loadModelCatalog()
     this.loadTelemetry()
     if (this.isDesktop) {
       // AI 面板的「AI Workdeck 云端」选项是否可选，取决于是否已连接账户。
@@ -1739,6 +1829,59 @@ export default {
         await this.loadAccountUsage()
       }
     },
+    // ---------- 模型目录与区域 ----------
+    async loadModelCatalog() {
+      try {
+        this.modelCatalog = await fetchAiModels()
+        this.modelCatalogError = ''
+      } catch (e) {
+        this.modelCatalog = null
+        // 拿不到清单时下拉只剩「跟随内置默认」与已保存的值：宁可少给选项，
+        // 也不要在这里塞一份硬编码清单当兜底（那正是三份清单互不同步的来源）
+        this.modelCatalogError = '模型清单暂时读取不到'
+          + ((e && e.message) ? ('：' + e.message) : '，稍后重新进入本页再试')
+      }
+    },
+    // 某个模型字段的可选项。第一项是「跟随内置默认 / 继承辅助模型」（空串）；
+    // 已保存但当前区域不可用的模型如实列出并标注——静默换成别的模型，
+    // 会让设置页显示的与实际发出去的不一致。
+    modelOptionsFor(field) {
+      const options = [{
+        value: '',
+        label: field === 'subagentModel' ? '继承辅助模型' : '跟随内置默认',
+      }]
+      this.catalogModels.forEach((m) => {
+        const price = (m.inputPricePerM != null && m.outputPricePerM != null)
+          ? ` · $${m.inputPricePerM}/$${m.outputPricePerM} 每 1M token`
+          : ''
+        options.push({
+          value: m.id,
+          label: `${m.name}（${m.vendor}）${price}${m.tiered ? ' · 分档计价' : ''}`,
+        })
+      })
+      const current = this.form.ai[field] || ''
+      if (current && !this.catalogModels.some((m) => m.id === current)) {
+        // 清单没读到时不要说成「区域不可用」，那是两回事
+        options.push({
+          value: current,
+          label: this.modelCatalog ? `${current}（当前网络区域不可用）` : `${current}（已保存）`,
+        })
+      }
+      return options
+    },
+    modelLabels(field) {
+      return this.modelOptionsFor(field).map((o) => o.label)
+    },
+    modelIndex(field) {
+      const current = this.form.ai[field] || ''
+      const idx = this.modelOptionsFor(field).findIndex((o) => o.value === current)
+      return idx < 0 ? 0 : idx
+    },
+    onModelPick(field, evt) {
+      const idx = Number(evt && evt.detail && evt.detail.value)
+      const opt = this.modelOptionsFor(field)[idx]
+      if (opt) this.form.ai[field] = opt.value
+    },
     // 供应商单选：不可选项给出下一步，而不是静默不响应
     onPickProvider(opt) {
       if (opt.value === this.form.ai.activeProvider) return
@@ -2034,11 +2177,6 @@ export default {
         const data = await getAdminConfig()
         if (data && data.external) {
           this.form.external = {
-            google: {
-              apiKey: data.external.google?.apiKey || '',
-              modelName: data.external.google?.modelName || '',
-              apiBaseUrl: data.external.google?.apiBaseUrl || '',
-            },
             qichacha: {
               baseUrl: data.external.qichacha?.baseUrl || '',
               key: data.external.qichacha?.key || '',
@@ -2074,10 +2212,16 @@ export default {
           }
         }
         if (data && data.ai) {
-          this.form.ai.systemPromptOllama = data.ai.systemPromptOllama || ''
-          this.form.ai.systemPromptGemini = data.ai.systemPromptGemini || ''
           this.form.ai.activeProvider = data.ai.activeProvider || 'OLLAMA'
-          
+          // 三个模型键留空是合法值（跟随内置默认 / 继承辅助模型），不要在这里塞默认模型 id
+          this.form.ai.defaultModel = data.ai.defaultModel || ''
+          this.form.ai.auxModel = data.ai.auxModel || ''
+          this.form.ai.subagentModel = data.ai.subagentModel || ''
+          this.form.ai.networkRegion = data.ai.networkRegion || 'auto'
+          this.form.ai.ollamaBaseUrl = data.ai.ollamaBaseUrl || ''
+          this.form.ai.ollamaModelName = data.ai.ollamaModelName || ''
+
+
           if (data.ai.assistants && data.ai.assistants.length > 0) {
               this.form.ai.assistants = data.ai.assistants;
           } else {
@@ -2096,6 +2240,9 @@ export default {
       try {
         await saveAdminConfig(this.form)
         uni.showToast({ title: '保存成功', icon: 'success' })
+        // 区域一改，可用模型清单跟着变；默认模型也可能因此落到清单外，
+        // 保存后重新拉一次目录，让页面上显示的就是新口径
+        this.loadModelCatalog()
       } catch (e) {
         console.error('保存后台配置失败', e)
         uni.showToast({
@@ -2183,25 +2330,6 @@ $text-main: #2C3338; // Gray-Dark
 $text-secondary: #6C757D; // Gray-Medium
 $border-color: #E9ECEF; // Gray-Light
 
-.prompt-tabs {
-    display: flex;
-    border-bottom: 1px solid $border-color;
-    margin-bottom: 16px;
-    gap: 24px;
-}
-.prompt-tab {
-    padding: 8px 0;
-    font-size: 13px;
-    color: $text-secondary;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    transition: all 0.2s;
-    font-weight: 500;
-}
-.prompt-tab.active {
-    color: $brand-primary;
-    border-bottom-color: $brand-primary;
-}
 .page-admin {
   min-height: 100vh;
   /* AI Workdeck Palette Background */
@@ -2408,13 +2536,6 @@ $border-color: #E9ECEF; // Gray-Light
   }
 }
 
-.form-row.vertical {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  width: 100%; /* Fix modal input width */
-}
-
 .form-label {
   width: 100px;
   font-size: 13px;
@@ -2438,21 +2559,43 @@ $border-color: #E9ECEF; // Gray-Light
   }
 }
 
-.prompt-textarea {
-  width: 100%;
-  min-height: 120px;
-  padding: 12px;
-  border-radius: 6px;
+/* 字段旁的说明行：模型/区域这几项的取舍必须写清楚，否则用户只能靠猜 */
+.field-note {
+  display: block;
+  font-size: 12px;
+  color: $text-secondary;
+  line-height: 1.7;
+  margin: -4px 0 12px;
+}
+
+.field-note-warn {
+  color: #B45309;
+}
+
+/* 模型下拉：与插件广场的生效方式下拉同一形态 */
+.mode-picker {
+  flex: 1;
+  min-width: 0;
+}
+
+.mode-value {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
   border: 1px solid $border-color;
-  font-size: 13px;
+  border-radius: 6px;
   background-color: #fff;
+  font-size: 13px;
+  color: $text-main;
   box-sizing: border-box;
-  line-height: 1.5;
-  
-  &:focus {
-      border-color: $brand-primary;
-      outline: none;
-  }
+}
+
+.mode-caret {
+  color: $text-secondary;
+  font-size: 12px;
 }
 
 .provider-radio-group {

@@ -84,6 +84,15 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 - **worktree 的 node_modules 落后于新增依赖**（如 TOTP 带来的 `qrcode`）时，vite 会推一个盖满视口的 `vite-error-overlay`，坐标点击全被它吃掉，e2e 表现成"点了没反应"的超时而非编译错误。冷启动 worktree 跑 e2e 前先 `npm install`；desktop-e2e 的点击已加命中校验，会直接报出遮挡者和它的文案。
 - 分支保护拦 gh pr merge 时权宜 = 用户网页点 Bypass rules and merge（白名单未配成）。
 - `docs/` 在 .gitignore，入库要 `git add -f`。
+- **改跨类 `public static final String` 常量的值必须 `mvn clean test`**：这类常量在编译期被内联进
+  调用方的字节码，maven 增量编译不重编未改动的测试类，于是出现「源码一致、字节码不一致」的假失败
+  （2026-08 改 Ollama 设置键时踩过：测试报 expected qwen3:14b but was qwen3-vl:8b，`javap` 确认
+  测试类里内联的还是老键名）。CI 是 clean build 所以只坑本地。
+- **删「零引用」的 Spring bean 前先想有没有 `@ConditionalOnMissingBean` 角色**：
+  `service/ai/DynamicContentRetriever` 全仓 grep 不到调用方，但它靠存在本身压住了 langchain4j
+  `RagAutoConfig`——删掉后自动配置自己造 `contentRetriever`，而本项目有两个
+  `EmbeddingStore<TextSegment>`，全部 `@SpringBootTest` 一起 NoUniqueBeanDefinition 起不来
+  （2026-08 清理孤儿类时踩过，16 个 context 加载失败）。`DesktopContextSmokeTest` 是这条的护栏。
 
 ## 验证（改本领域自身时）
 
