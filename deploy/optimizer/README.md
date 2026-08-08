@@ -128,3 +128,28 @@ MAIL_GLOBAL_FROM=<send.aiworkdeck.com 下的发信地址>
 | 战报 note 写「取件失败」 | token 与收件箱不一致，或收件箱那边 `feedback.optimizer-token` 没配（没配 = 整组 403） |
 | 每条都走通知、从不开 PR | 编码 Agent 没登录 → diff 为空 → 按 NO_CHANGES 转通知。手动跑一次 `claude -p` 验登录 |
 | 战报里 `failed` 全是「通知出口不可用」 | 两条发信通道都没配**且** `optimizer.repo.path` 也没配（开 Issue 也要在仓库目录里跑 gh） |
+| 战报里 `failed` 写「邮件发送失败」 | 先分清是**认证**还是**投递**：日志里 `MailAuthenticationException` = 凭据不对，其它多半是发信域名/收件方拒收 |
+
+### 发信通道自检
+
+出问题时别猜，直接对 SMTP 认证探一次（不动代码、不发信）：
+
+```bash
+python3 - <<'EOF'
+import smtplib, ssl
+# 阿里云：用户名就是发信地址；Resend：用户名固定字面量 resend、密码是 re_ key
+for label, host, port, user, pwd in [
+    ("阿里云", "smtpdm.aliyun.com", 465, "<发信地址>", "<SMTP密码>"),
+    ("Resend", "smtp.resend.com", 465, "resend", "<re_ key>"),
+]:
+    try:
+        with smtplib.SMTP_SSL(host, port, timeout=15, context=ssl.create_default_context()) as s:
+            s.login(user, pwd); print(label, "认证通过")
+    except Exception as e:
+        print(label, "失败:", e)
+EOF
+```
+
+**只有一条通道能用时**：把另一条 `MAIL_*_ENABLED` 置 false 即可。`MailRouter` 找不到认领该
+收件域名的通道时，会兜给唯一启用的那条——这是它设计里就有的退路，不是将就。
+（实测：收件人是 Gmail、Resend 密钥失效时，关掉 global 后由阿里云那条正常送达。）
