@@ -1446,7 +1446,6 @@ import {
   getProjectVariables,
   getProjectFiles,
   batchCopyFiles,
-  aiChat,
   exportAiDocx,
   getProjectMembers,
   logActivity,
@@ -1455,7 +1454,6 @@ import {
   getAiHistory,
 
   getAiConversations,
-  getAiConfig,
   getAssistants, // Added
   getPlugins, // Added
   getFileText,
@@ -1470,6 +1468,7 @@ import {
   checkCloud // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { loadSiteLinks, siteBaseUrl } from '@/utils/siteLinks.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
@@ -1613,12 +1612,9 @@ export default {
       scrollTop: 0, // Added for scroll control
       aiInput: '',
       pastedImages: [],
-      currentModelId: 'gemini-1.5-pro',
-      showModelDropdown: false,
-      availableModels: [
-        { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro' },
-        { id: 'ollama', name: 'Local (Ollama)' }
-      ],
+      // 注：旧 AI 面板的第二份模型清单（currentModelId/availableModels/showModelDropdown）
+      // 已随 v1 通道移除——它写死了 gemini-1.5-pro 与 ollama 两个非白名单 id，
+      // 模型选择的唯一入口是 ChatInterface 组件 + GET /api/ai/models。
       // Context
       activeAiFileName: '',
       manualContextFiles: [], // Multi Context Support
@@ -1947,10 +1943,6 @@ export default {
       }
       return this.activeFileLeft || this.activeFileRight
     },
-    currentModelName() {
-      const m = this.availableModels.find(item => item.id === this.currentModelId)
-      return m ? m.name : '选择模型'
-    },
     computedActiveToolName() {
       const target = this.getActiveAiTargetFile()
       return target && target.name ? target.name : ''
@@ -2167,6 +2159,9 @@ export default {
   onLoad(query) {
     this.pageEnterTime = Date.now()
     this.loadLicenseMode()
+    // 官网链接预热：本页有两处「跳官网」（试用 chip、缓存区满弹窗），都是同步取地址。
+    // 不预热的话第一次点击只能拿到兜底站点，国际站用户会被送到没有他账户的站
+    loadSiteLinks()
     if (query && query.id) {
       this.projectId = Number(query.id)
       recordProjectVisit(this.projectId) // IDE 化：启动直达/最近项目切换器的数据源
@@ -2224,8 +2219,6 @@ export default {
     // 登录态下启用剪贴板记录（仅记录本应用能感知到的 paste / 复制按钮）
     this.bindClipboardListener()
 
-    // Initialize AI Model (Persistence > System Default)
-    this.initAiModel()
     this.loadAssistants() // Fetch assistants
     this.loadDynamicPlugins() // Fetch dynamic plugins
   },
@@ -2635,7 +2628,7 @@ export default {
     },
     openUpgradeSite() {
       this.showTrialInfo = false
-      openExternalUrl('https://www.aiworkdeck.com')
+      openExternalUrl(siteBaseUrl())
     },
     // Phase 1 外置的方法组（纯搬移，this 即页面实例）
     ...panelSwitchingMethods,
@@ -4350,17 +4343,6 @@ export default {
        const el = e.target
        this.aiInput = el.innerText
     },
-    onRichKeydown(e) {
-       // Handle Enter: Enter = newline, Cmd/Ctrl+Enter = send
-       if (e.key === 'Enter') {
-          if (e.metaKey || e.ctrlKey) {
-             // Cmd/Ctrl+Enter: Send message
-             e.preventDefault()
-             this.handleAiSend()
-          }
-          // Otherwise: let default behavior (newline) happen
-       }
-    },
     // Paste Handler
     handleRichPaste(e) {
        // Check for clipboard items (images)
@@ -4514,107 +4496,16 @@ export default {
       }
     },
 
-  // --- AI 相关 ---
-  async initAiModel() {
-      // 1. Try to recover from local storage (User Preference)
-      const savedProvider = uni.getStorageSync('activeAiProvider')
-      if (savedProvider) {
-        this.currentModelId = savedProvider
-        return
-      }
-
-      // 2. Fallback to System Default (Public Config)
-      try {
-        const res = await getAiConfig()
-        if (res && res.activeProvider) {
-          // Map backend enum to frontend model ID
-          const provider = res.activeProvider.toUpperCase()
-          if (provider === 'OLLAMA') {
-            this.currentModelId = 'ollama'
-          } else if (provider === 'GEMINI') {
-            this.currentModelId = 'gemini-1.5-pro'
-          }
-        }
-      } catch (e) {
-        console.warn('Failed to load AI config, using default.', e)
-      }
-    },
-
-    toggleModelDropdown() {
-      this.showModelDropdown = !this.showModelDropdown
-      if (this.showModelDropdown) this.showContextDropdown = false
-    },
-    switchModel(modelId) {
-      this.currentModelId = modelId
-      this.showModelDropdown = false
-      // Persistence: Remember user's choice
-      uni.setStorageSync('activeAiProvider', modelId)
-    },
     // --- AI 对话 ---
+    // 注：旧面板的 initAiModel / toggleModelDropdown / switchModel 已移除。
+    // switchModel 模板零引用，所以它写的 activeAiProvider 这个 storage 键
+    // 从来没被真正写入过，无历史数据需要迁移。
     scrollToBottom() {
       this.scrollTop = this.scrollTop + 1 // trigger value change for watcher if needed?
       // Actually uni-app scroll-top works better when set to a large value
       this.$nextTick(() => {
         this.scrollTop = 99999
       })
-    },
-
-    async handleAiSend() {
-      if (this.aiLoading || !this.aiInput.trim()) return
-
-      // Logic: Send message to backend
-      this.aiLoading = true
-      // Push user message immediately for responsiveness
-      const tempId = Date.now()
-      const text = this.aiInput.trim()
-      this.aiMessages.push({
-        id: tempId,
-        role: 'user',
-        content: text
-      })
-      this.aiInput = '' // Clear input
-      this.clearRichInput() // Clear rich div
-
-      // Scroll to bottom
-      this.$nextTick(() => {
-        this.scrollToBottom()
-      })
-
-      try {
-        // Collect fresh context (List of contexts)
-        const activeContexts = await this.collectAiContextForChat()
-
-        const res = await aiChat({
-          projectId: this.projectId,
-          message: text,
-          contexts: activeContexts, // Updated to List
-          model: this.currentModelId,
-          assistantId: this.currentAssistantId,
-          conversationId: this.currentConversationId
-        })
-
-        // Update current conversation ID if it was new
-        if (res && res.conversationId) {
-             this.currentConversationId = res.conversationId
-        }
-
-        const responseText = res.response || ''
-
-        this.aiMessages.push({
-          id: Date.now() + 1,
-          role: 'assistant',
-          content: responseText
-        })
-      } catch (e) {
-        console.error('AI Chat Error:', e)
-        this.aiMessages.push({
-          id: Date.now() + 1,
-          role: 'assistant',
-          content: `出错啦：${e.message || '网络异常'}`
-        })
-      } finally {
-        this.aiLoading = false
-      }
     },
 
     // --- AI 导出为 Word ---
@@ -4794,33 +4685,6 @@ export default {
     handleSyncVariable() {
       if (this.$refs.variablePanel) this.$refs.variablePanel.syncDocument()
     },
-    handleInputKeydown(e) {
-      // Enter to send, Shift + Enter to newline
-      this.checkKeySend(e)
-    },
-
-    handleWrapperKeydown(e) {
-      // Capture phase backup
-      this.checkKeySend(e)
-    },
-
-    checkKeySend(e) {
-      // Enter to send, Shift + Enter to newline
-      const isEnter = e.key === 'Enter' || e.keyCode === 13
-
-      if (isEnter) {
-        if (!e.shiftKey) {
-          // Enter only: Send
-          e.preventDefault()
-          e.stopPropagation()
-          if (!this.aiLoading && this.aiInput.trim()) {
-            this.handleAiSend()
-          }
-        }
-        // Shift + Enter: Default behavior (newline), do nothing
-      }
-    },
-
     async fetchChatHistory(quiet = false) {
       if (!this.projectId) return
       if (!quiet) this.loadingHistory = true

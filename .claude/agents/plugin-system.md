@@ -50,6 +50,14 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - 编排接入（纯旁路两处）：`AgentOrchestrator.java` activateForTurn（~:255）+ visibleTools（~:709）；`ContextAssemblerService.java` match→promptInjectionFor（~:146）。ASK 模式跳过注入。
 - 配置：`SkillProperties.java`（ai.skills.dir / base-tools / disabled-cache-ttl-ms / registry-url）。
 
+### allowed_tools 与 base-tools 的交互（写 skill 前必读）
+
+`base-tools` 只有三个：`read_document / list_files / query_memory`（application.yml ~:237）。所以命中 skill 后模型可见的工具就是 **allowed_tools 这一份清单**加这三个，**不是**「常用工具默认都在」。skill 需要的每个工具都得逐个列出，漏一个就等于对模型隐藏了这个能力。
+
+裁剪只影响可见性、不拦分发（SkillRouter 类注释）。后果是：漏列的工具在**原生 function calling** 下模型压根看不见（永远不会用），但在 **XML 兜底协议**下模型凭 system_prompt 的记忆写出 `<tool_code>` 仍能被分发成功。**同一个 skill 的能力边界因此取决于当前模型走哪套协议**——这类 bug 在换模型时才暴露，排查时先看协议再看白名单。
+
+2026-08 实例：两个自带 skill（`shareholder-meeting-verification`、`listing-pathway`）都漏了 `dispatch_subtask`，而它们恰好是 `prompts/system_prompt.md` 第 6.5 节明确要委派子 Agent 的长程任务。已补上，并由回放评测用例 `skill-shareholder-meeting-dispatch-subtask-visible`（`backend/src/test/resources/ai-eval/cases/cases-skill.json`）守住「skill 命中时 dispatch_subtask 在可见工具集里」。新增 skill 时如果是长程任务，照抄这两份的 allowed_tools 结尾一项。
+
 ## skill 目录：可写 vs 只读内置（2026-08）
 
 `SkillRegistry` 扫**两个**目录：
@@ -67,6 +75,9 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 存在，只在 dev 生效**。已实证（发行版 Resources 下无任何 skill 痕迹）。修复即上面的
 双目录 + extraResources。`SkillRegistryTest` 有六条测试钉住这套语义。
 
+内置 skill 的 `allowed_tools` 是否都是真实工具名，由 `BuiltinSkillsTest` 反射扫
+`@Tool` 方法名逐条核对——上面那条「部分写错更阴险」的地雷从此会在 CI 里红。
+
 ## 启停存储与过滤
 
 - 存 `system_setting` 表（key/value 键值），值为禁用 id 的 JSON 数组，默认全启用，内存缓存 TTL 5s：插件 `ai.plugins.disabled`（PluginService），skill `ai.skills.disabled`（SkillRegistry）。
@@ -76,7 +87,8 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 ## 已知地雷
 
 - 新增面板型插件三步缺一不可：leftSidebarPlugins.js 注册 + project-overview.vue 面板区加 v-else-if 分支 + 组件本身；漏第二步就是"加载中..."占位符（股东大会曾长期如此，现已实现）。
-- skill 的 allowed_tools 写错工具名不会报错，只是白名单零命中回退不裁剪——排查工具可见性问题时先核对 ToolRegistry 真名。
+- skill 的 allowed_tools 写错工具名不会报错，只是白名单零命中回退不裁剪——排查工具可见性问题时先核对 ToolRegistry 真名。**部分**写错更阴险：剩下的名字还能命中，裁剪照常生效，写错的那个工具就静默消失了。
+- `RealToolBeans.instantiateAll()`（评测用的工具 bean 清单）与生产的 `AgentToolComponent` 实现集**不是自动同步的**：`TodoTools` 就不在里面，所以 `todo_write` 在回放评测里根本没注册，评测断言不到它的可见性。新增工具组件时要顺手补进去。
 - 插件启停语义只影响可见性，不拦截历史工具调用回放。
 - 改 AgentOrchestrator 构造器（如注入新服务）必须同步 EvalHarness（踩过两次）。
 - SubAgentTools 曾因循环依赖断启动，用 @Lazy 解决（PR#98），插件/工具类注入编排器时注意。

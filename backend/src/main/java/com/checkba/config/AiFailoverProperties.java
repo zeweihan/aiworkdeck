@@ -24,6 +24,10 @@ public class AiFailoverProperties {
     /**
      * 备选模型链，按顺序尝试。只有 AllowedModels 白名单内的模型才有意义：
      * 非白名单模型会被工厂静默回落到默认模型，等于没切。
+     *
+     * <p>而且候选必须全是 {@link com.checkba.service.ai.AllowedModels.Region#GLOBAL}：
+     * 境内网络下国际模型会被 OpenRouter 返回 403 region，把它放进兜底链等于兜底路径本身是死路。
+     * 两条都由 {@code AiFailoverPropertiesBindingTest} 守。
      */
     private List<String> models = new ArrayList<>();
 

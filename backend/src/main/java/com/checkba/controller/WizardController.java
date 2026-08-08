@@ -2,7 +2,6 @@ package com.checkba.controller;
 
 import com.checkba.controller.AdminConfigController.AdminConfigUpdateRequest;
 import com.checkba.model.entity.User;
-import com.checkba.repository.SystemSettingRepository;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.SystemSettingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -30,24 +29,28 @@ import java.util.Map;
 @RequestMapping("/api/admin/wizard")
 public class WizardController {
 
-    /** 全新安装时由 {@code DataInitializer} 先落一份 "false"，见那里的注释。 */
-    public static final String KEY_WIZARD_COMPLETED = "system.wizard.completed";
+    /**
+     * 向导完成标记的键。定义在 {@link com.checkba.service.WizardStateService}——
+     * 「是否已初始化」同时是一条安全前置条件（匿名窗口的边界），只许有一处定义。
+     */
+    public static final String KEY_WIZARD_COMPLETED =
+            com.checkba.service.WizardStateService.KEY_WIZARD_COMPLETED;
 
     private final SystemSettingService systemSettingService;
-    private final SystemSettingRepository systemSettingRepository;
+    private final com.checkba.service.WizardStateService wizardStateService;
     private final UserRepository userRepository;
     private final com.checkba.service.AdminAccessService adminAccessService;
     private final ObjectMapper objectMapper;
     private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
 
     public WizardController(SystemSettingService systemSettingService,
-                            SystemSettingRepository systemSettingRepository,
+                            com.checkba.service.WizardStateService wizardStateService,
                             UserRepository userRepository,
                             com.checkba.service.AdminAccessService adminAccessService,
                             ObjectMapper objectMapper,
                             com.checkba.service.ai.ChatModelFactory chatModelFactory) {
         this.systemSettingService = systemSettingService;
-        this.systemSettingRepository = systemSettingRepository;
+        this.wizardStateService = wizardStateService;
         this.userRepository = userRepository;
         this.adminAccessService = adminAccessService;
         this.objectMapper = objectMapper;
@@ -80,11 +83,23 @@ public class WizardController {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(error("仅管理员可重新运行向导 / Admin only"));
         }
+        // 拒空 activeProvider 是两道闸门里的后一道（前一道在 wizard.vue 的 handleSubmit）：
+        // 向导刻意不预选供应商（唯一例外是已连接账户且已分配额度时预选平台通道），
+        // 预选会让没装 Ollama 的用户一路点到发第一条消息才收到 Connection refused。
+        // 取值本身的合法性（三档枚举）由 toSettingsUpdates 统一校验。
         if (request == null || request.getAi() == null
                 || request.getAi().getActiveProvider() == null
                 || request.getAi().getActiveProvider().isBlank()) {
             return ResponseEntity.badRequest()
                     .body(error("必须选择一个 AI 提供商 / An AI provider must be selected"));
+        }
+
+        // 跨境同意闸门：与管理后台共用 AdminConfigController.crossBorderBlockReason 的同一处判定。
+        // 向导是用户选平台通道的主入口（AWD_CLOUD 在向导里恒可选），漏了这道闸等于同意形同装饰。
+        String crossBorderBlock = AdminConfigController.crossBorderBlockReason(
+                request.getAi(), systemSettingService);
+        if (crossBorderBlock != null) {
+            return ResponseEntity.badRequest().body(error(crossBorderBlock));
         }
 
         Map<String, String> updates;
@@ -108,6 +123,10 @@ public class WizardController {
      * 管理员重置向导：completed 置 "false"，之后向导页可再走一遍（提交成功
      * 自动置回 "true"）。窗口期内 POST /api/admin/wizard 仍要求管理员会话——
      * 重置由管理员在已登录状态下发起，reLaunch 到向导页会话仍在，不影响该流程。
+     *
+     * <p>注意这里只动 completed 标记，不清任何配置：重跑向导时只有向导真正填了的字段
+     * 会被覆盖（{@code AdminConfigController.toSettingsUpdates} 跳过 null 字段，
+     * 不会再把同组里没填的 baseUrl/secret 清成空串）。
      */
     @PostMapping("/reset")
     public ResponseEntity<?> reset(
@@ -128,13 +147,7 @@ public class WizardController {
     }
 
     private boolean isInitialized() {
-        // completed 标记显式存在时以它为准（reset 后 = "false"，向导重新开放）；
-        // 标记不存在的存量部署退回"保存过任何配置即已初始化"兜底，防匿名滥用
-        String completed = systemSettingService.get(KEY_WIZARD_COMPLETED, null);
-        if (completed != null) {
-            return Boolean.parseBoolean(completed);
-        }
-        return systemSettingRepository.count() > 0;
+        return wizardStateService.isInitialized();
     }
 
     private User requireAdmin(String sessionId) {

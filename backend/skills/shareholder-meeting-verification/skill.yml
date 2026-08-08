@@ -18,6 +18,11 @@ triggers:
 prompt: prompt.md
 
 # 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）
+# 基础工具集只有三个（read_document / list_files / query_memory，见 application.yml 的 ai.skills.base-tools），
+# 所以凡是本 skill 要用的工具都必须在这里逐个列出——漏了就是「模型看不见 = 不会调用」。
+# dispatch_subtask 曾经漏列：本 skill 是 system_prompt.md 第 6.5 节明确要委派的长程任务
+#（逐份文件抽取字段本身就是「会产生大量中间产物、只需要结论」的典型），裁剪把它藏起来后，
+# 能不能用 sub-agent 变成了「模型走原生 function calling 还是 XML 兜底协议」的偶然结果。
 allowed_tools:
   - extract_file_text
   - read_file
@@ -26,6 +31,7 @@ allowed_tools:
   - write_docx
   - run_python
   - todo_write
+  - dispatch_subtask
 
 # 输出结构约定（随 prompt 注入）
 output: |

@@ -2,8 +2,12 @@ package com.checkba.service.ai.subagent;
 
 import cn.hutool.json.JSONUtil;
 import com.checkba.dto.ai.TaskProgressEvent;
+import com.checkba.service.ai.AllowedModels;
+import com.checkba.service.ai.AuxModelResolver;
 import com.checkba.service.ai.ChatModelFactory;
+import com.checkba.service.ai.PlatformAiUserScope;
 import com.checkba.service.ai.SseEmitterService;
+import com.checkba.service.ai.TokenUsageService;
 import com.checkba.service.ai.ToolRegistry;
 import com.checkba.service.ai.XmlToolCallParser;
 import com.checkba.service.ai.tools.ToolContext;
@@ -25,6 +29,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -48,6 +53,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  *   projectId/conversationId/userId，LLM 无法伪造；
  * - 防递归：子 Agent 工具集排除 dispatch_subtask，且分发前二次拦截；
  * - 并行度/轮数/预算/超时全部来自 {@link SubAgentProperties}（不变式 5）；
+ * - 模型：system_setting {@code ai.subagentModel} → yml {@code ai.subagent.model} → 辅助模型
+ *   （{@link AuxModelResolver}）。<b>默认便宜模型而不是继承父会话</b>——长程任务的子任务
+ *   跟着主模型跑最烧钱；非白名单一律拒绝派发并给可读提示，不静默回落；
+ * - 记账：每轮的 tokenUsage 都落 token_usage（归属主会话的 project/conversation/user）；
  * - 子任务开始/结束向主会话 SSE 发送 subtask_progress 事件（新增事件，向后兼容）。
  */
 @Service
@@ -69,18 +78,24 @@ public class SubAgentService {
     private final XmlToolCallParser xmlToolCallParser;
     private final SseEmitterService sseEmitterService;
     private final SubAgentProperties props;
+    private final AuxModelResolver auxModelResolver;
+    private final TokenUsageService tokenUsageService;
     private final ExecutorService executor;
 
     public SubAgentService(ToolRegistry toolRegistry,
                            ChatModelFactory chatModelFactory,
                            XmlToolCallParser xmlToolCallParser,
                            SseEmitterService sseEmitterService,
-                           SubAgentProperties props) {
+                           SubAgentProperties props,
+                           AuxModelResolver auxModelResolver,
+                           TokenUsageService tokenUsageService) {
         this.toolRegistry = toolRegistry;
         this.chatModelFactory = chatModelFactory;
         this.xmlToolCallParser = xmlToolCallParser;
         this.sseEmitterService = sseEmitterService;
         this.props = props;
+        this.auxModelResolver = auxModelResolver;
+        this.tokenUsageService = tokenUsageService;
         AtomicInteger seq = new AtomicInteger();
         // 专用线程池：与主循环的 taskExecutor 隔离，池大小 = 子任务并行度上限
         this.executor = new ThreadPoolExecutor(
@@ -110,18 +125,42 @@ public class SubAgentService {
     public SubAgentResult dispatch(String taskDescription, String expectedOutput,
                                    List<String> toolScope, ToolContext parentCtx) {
         String subtaskId = "subtask-" + UUID.randomUUID().toString().substring(0, 8);
+        // started/结束事件必须成对发出（前端的子任务卡按 taskId 配对渲染），
+        // 所以模型校验失败那条路径也走"先 started 再 failed"，不能只发一个 failed
         sendProgress(parentCtx, subtaskId, "started", 0, "子任务开始：" + brief(taskDescription));
 
-        // 跨线程提交：子 Agent 的模型调用也按主会话身份计费（平台通道 per-user），显式重放
-        Future<SubAgentResult> future = executor.submit(
-                com.checkba.service.ai.PlatformAiUserScope.<SubAgentResult>wrap(() -> {
-                    IN_SUB_AGENT.set(Boolean.TRUE);
-                    try {
-                        return runLoop(subtaskId, taskDescription, expectedOutput, toolScope, parentCtx);
-                    } finally {
-                        IN_SUB_AGENT.remove();
-                    }
-                }));
+        // 模型在提交线程解析，非白名单在起跑前就拒绝：ChatModelFactory 对非白名单的处置是
+        // 静默回落默认模型——failover 链踩过的同一个坑（看着「配了便宜模型」，实际跑的是主模型，
+        // 账单要到月底才看得出来）。这里给出可读提示，让模型与面板都能看到原因。
+        String modelId = auxModelResolver.subAgentModelId(props.getModel());
+        if (!AllowedModels.isAllowed(modelId)) {
+            log.warn("子 Agent 模型 '{}' 不在可用模型清单内，子任务 {} 未派发", modelId, subtaskId);
+            SubAgentResult rejected = SubAgentResult.failure(subtaskId,
+                    "子 Agent 模型「" + modelId + "」不在可用模型清单内，本次子任务没有执行。"
+                            + "到设置页的 AI 供应商里把子 Agent 模型换成清单内的模型，"
+                            + "或清空该项让它跟随辅助模型。",
+                    List.of(), 0);
+            sendProgress(parentCtx, subtaskId, "failed", 100,
+                    "子任务失败：" + brief(rejected.error()));
+            return rejected;
+        }
+
+        // 跨线程提交：子 Agent 的模型调用也按主会话身份计费（平台通道 per-user），显式重放。
+        // 身份优先取 parentCtx.userId()（ToolRegistry 分发时已按它重建过作用域），
+        // 不指望「提交线程恰好有作用域」——流式回调线程/子 Agent 线程都不继承请求线程的 ThreadLocal，
+        // 缺身份在云多租户下会被 PlatformAiChannel 判成「未携带用户身份」直接抛 AccountException。
+        Long scopedUser = parentCtx != null && parentCtx.userId() != null
+                ? parentCtx.userId()
+                : PlatformAiUserScope.current();
+        Callable<SubAgentResult> task = () -> PlatformAiUserScope.call(scopedUser, () -> {
+            IN_SUB_AGENT.set(Boolean.TRUE);
+            try {
+                return runLoop(subtaskId, taskDescription, expectedOutput, toolScope, parentCtx, modelId);
+            } finally {
+                IN_SUB_AGENT.remove();
+            }
+        });
+        Future<SubAgentResult> future = executor.submit(task);
 
         SubAgentResult result;
         try {
@@ -149,9 +188,11 @@ public class SubAgentService {
     /**
      * 子 Agent 循环：主循环的极简版（Thought→Action→Observation，双协议），
      * 无 SSE 推流、无消息持久化、无 artifact/title 等主会话专属分支。
+     *
+     * @param modelId 已解析并校验过白名单的子 Agent 模型（见 {@link #dispatch}）
      */
     SubAgentResult runLoop(String subtaskId, String taskDescription, String expectedOutput,
-                           List<String> toolScope, ToolContext parentCtx) {
+                           List<String> toolScope, ToolContext parentCtx, String modelId) {
         // 子 Agent 继承主会话的客户端能力（不变式 3 同款思路）：
         // office 会话派生的子 Agent 同样不该看到 doc_*/sheet_* 死路径工具
         String parentConversationId = parentCtx != null ? parentCtx.conversationId() : null;
@@ -160,9 +201,6 @@ public class SubAgentService {
                 .filter(s -> allowed.contains(s.name()))
                 .toList();
 
-        String modelId = (props.getModel() != null && !props.getModel().isBlank())
-                ? props.getModel()
-                : (parentCtx != null ? parentCtx.modelId() : null);
         ChatLanguageModel model = chatModelFactory.getChatModel(modelId);
         // 子 Agent 的工具调用继承主会话身份（不变式 3），模型可独立
         ToolContext subCtx = parentCtx == null
@@ -194,6 +232,7 @@ public class SubAgentService {
                 return SubAgentResult.failure(subtaskId,
                         "sub-agent LLM call failed: " + e.getMessage(), toolsUsed, round - 1);
             }
+            recordUsage(response, modelId, parentCtx);
             AiMessage aiMessage = response.content();
             messages.add(aiMessage);
 
@@ -229,6 +268,32 @@ public class SubAgentService {
         return SubAgentResult.failure(subtaskId,
                 "sub-agent reached max rounds (" + props.getMaxRounds() + ") without a final answer",
                 toolsUsed, props.getMaxRounds());
+    }
+
+    /**
+     * 子 Agent 每一轮的 token 记账。
+     *
+     * <p>此前 {@code response.tokenUsage()} 从未被读过：跑满 6 轮的子任务在 token_usage 里一行都没有，
+     * 这些花费被整块折进下一条主循环记录——总额对，但逐条归属与逐模型分布是错的
+     * （子 Agent 现在默认走便宜的辅助模型，不记就看不出省了多少）。
+     *
+     * <p>归属取主会话上下文（不变式 3：projectId/conversationId/userId 一律继承，模型可独立），
+     * 记账失败绝不影响子任务结果。
+     */
+    private void recordUsage(Response<AiMessage> response, String modelId, ToolContext parentCtx) {
+        if (response == null || response.tokenUsage() == null) {
+            return;
+        }
+        try {
+            Long projectId = parentCtx != null ? parentCtx.projectId() : null;
+            Long userId = parentCtx != null && parentCtx.userId() != null
+                    ? parentCtx.userId()
+                    : PlatformAiUserScope.current();
+            String conversationId = parentCtx != null ? parentCtx.conversationId() : null;
+            tokenUsageService.recordUsage(projectId, userId, modelId, response.tokenUsage(), conversationId);
+        } catch (Exception e) {
+            log.warn("子 Agent token 记账失败（不影响子任务结果）: {}", e.getMessage());
+        }
     }
 
     /** 受限分发：先别名解析，再做防递归与工具域校验，最后经 ToolRegistry 执行 */

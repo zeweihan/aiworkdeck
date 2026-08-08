@@ -47,6 +47,16 @@ public class PptxServiceClient {
     private static final int MAX_POLL_ATTEMPTS = 300;  // 最大轮询次数 (10 分钟)
 
     /**
+     * AI PPT 的图像生成模型（OpenRouter 上的 Nano Banana Pro），幻灯片图与可编辑导出的
+     * 干净背景图都用它。
+     *
+     * <p>刻意<b>不</b>进 {@code AllowedModels}：图像模型按张计费，没有 prompt/completion
+     * 单价，塞进白名单会破坏「每个模型都有输入/输出单价、可按输入长度分档」这个前提。
+     * 代价是这部分花费目前不进 token_usage 记账，见 pptx-service/UPGRADE_CHECKBA.md。
+     */
+    public static final String IMAGE_MODEL = "google/gemini-3-pro-image-preview";
+
+    /**
      * Progress callback interface for reporting generation progress.
      * Called at each stage of PPTX generation to report progress and status.
      */
@@ -1037,7 +1047,10 @@ public class PptxServiceClient {
      * 用于传递给 PPTX 服务的 AI 模型设置
      */
     public static class ModelConfig {
-        /** 提供商类型: "openai" 或 "gemini" */
+        /**
+         * pptx-service 侧的 SDK 格式标识："openai"（OpenAI 兼容，OpenRouter 与平台通道都走它）
+         * 或 "gemini"。注意这不是 ai.activeProvider——供应商口径在 PptxTools 里解析完再落到这里。
+         */
         private String provider;
         /** API 密钥 */
         private String apiKey;
@@ -1045,7 +1058,7 @@ public class PptxServiceClient {
         private String apiBase;
         /** 文本生成模型名称 */
         private String textModel;
-        /** 图片生成模型名称 (默认: gemini-3-pro-image-preview for Nano Banana Pro) */
+        /** 图片生成模型名称（默认 {@link PptxServiceClient#IMAGE_MODEL}） */
         private String imageModel;
 
         public ModelConfig() {}
@@ -1100,7 +1113,7 @@ public class PptxServiceClient {
             json.set("api_base", apiBase);
             json.set("text_model", textModel);
             // 默认使用 Nano Banana Pro 进行图片生成
-            json.set("image_model", imageModel != null ? imageModel : "gemini-3-pro-image-preview");
+            json.set("image_model", imageModel != null ? imageModel : IMAGE_MODEL);
             return json;
         }
     }

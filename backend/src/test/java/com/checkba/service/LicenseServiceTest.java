@@ -30,7 +30,8 @@ class LicenseServiceTest {
 
     /** base-url 指向本机必拒端口，account Key 在线校验在测试里恒为「无法连接」。 */
     private LicenseService service(boolean localMode) {
-        return new LicenseService(localMode, "https://127.0.0.1:1", tempDir.toString());
+        return new LicenseService(localMode,
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://127.0.0.1:1"), tempDir.toString());
     }
 
     @Test
@@ -143,7 +144,7 @@ class LicenseServiceTest {
     void httpAccountBaseUrlIsRejected() {
         // 明文 awdk_ Key 不允许走未加密通道；默认值本就是 https，配成 http 属明确错误配置
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> new LicenseService(true, "http://www.aiworkdeck.com", tempDir.toString()));
+                () -> com.checkba.service.site.SiteProfileService.pinnedTo("http://www.aiworkdeck.com"));
         assertTrue(e.getMessage().contains("https"), e.getMessage());
     }
 

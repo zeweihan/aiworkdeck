@@ -35,11 +35,19 @@ public class MemCellExtractor {
     private final ChatModelFactory chatModelFactory;
     private final LegalInfoProtector legalInfoProtector;
     private final MemoryManager memoryManager;
+    // 记忆抽取走辅助模型（便宜档）并落账：这类后台调用此前既没换便宜模型也没记账
+    private final com.checkba.service.ai.AuxModelResolver auxModelResolver;
+    private final com.checkba.service.ai.TokenUsageService tokenUsageService;
 
-    public MemCellExtractor(ChatModelFactory chatModelFactory, LegalInfoProtector legalInfoProtector, MemoryManager memoryManager) {
+    public MemCellExtractor(ChatModelFactory chatModelFactory, LegalInfoProtector legalInfoProtector,
+                            MemoryManager memoryManager,
+                            com.checkba.service.ai.AuxModelResolver auxModelResolver,
+                            com.checkba.service.ai.TokenUsageService tokenUsageService) {
         this.chatModelFactory = chatModelFactory;
         this.legalInfoProtector = legalInfoProtector;
         this.memoryManager = memoryManager;
+        this.auxModelResolver = auxModelResolver;
+        this.tokenUsageService = tokenUsageService;
     }
 
     /**
@@ -121,8 +129,8 @@ public class MemCellExtractor {
         List<LegalInfoProtector.ProtectedSegment> legalSegments = 
                 legalInfoProtector.markProtectedInfo(conversationContent);
         
-        // 3. 使用 LLM 提取 MemCell
-        List<MemCellData> llmExtracted = extractWithLLM(conversationContent);
+        // 3. 使用 LLM 提取 MemCell（projectId/conversationId 一路带下去做记账归属）
+        List<MemCellData> llmExtracted = extractWithLLM(conversationContent, projectId, conversationId);
         
         // 4. 合并法律关键信息到提取结果
         List<MemCellData> merged = mergeWithLegalInfo(llmExtracted, legalSegments, conversationContent);
@@ -177,19 +185,20 @@ public class MemCellExtractor {
     }
 
     /**
-     * 使用 LLM 提取 MemCell
+     * 使用 LLM 提取 MemCell（辅助模型档，token 落 token_usage）
      */
-    private List<MemCellData> extractWithLLM(String conversationContent) {
+    private List<MemCellData> extractWithLLM(String conversationContent, Long projectId, String conversationId) {
         try {
-            ChatLanguageModel model = chatModelFactory.getChatModel(null);
-            
+            ChatLanguageModel model = chatModelFactory.getAuxChatModel();
+
             String prompt = String.format(MEMCELL_EXTRACTION_PROMPT, conversationContent);
-            
+
             var response = model.generate(
                     SystemMessage.from("你是一个专业的法律信息提取助手。"),
                     UserMessage.from(prompt)
             );
-            
+            recordUsage(response, projectId, conversationId);
+
             String responseText = response.content().text();
             log.debug("LLM extraction response length: {}", responseText.length());
             
@@ -198,6 +207,25 @@ public class MemCellExtractor {
         } catch (Exception e) {
             log.error("LLM MemCell extraction failed: {}", e.getMessage(), e);
             return Collections.emptyList();
+        }
+    }
+
+    /**
+     * 抽取调用的 token 记账。userId 取 {@link com.checkba.service.ai.PlatformAiUserScope}——
+     * 本类跑在记忆管线的独立线程池上、签名里没有 userId，而那条入口已建立作用域。
+     * 记账失败绝不影响抽取结果。
+     */
+    private void recordUsage(dev.langchain4j.model.output.Response<AiMessage> response,
+                            Long projectId, String conversationId) {
+        if (response == null || response.tokenUsage() == null) {
+            return;
+        }
+        try {
+            tokenUsageService.recordUsage(projectId,
+                    com.checkba.service.ai.PlatformAiUserScope.current(),
+                    auxModelResolver.auxModelId(), response.tokenUsage(), conversationId);
+        } catch (Exception e) {
+            log.warn("MemCell 抽取 token 记账失败（不影响抽取结果）: {}", e.getMessage());
         }
     }
 

@@ -1,10 +1,8 @@
 package com.checkba.service.ai;
 
-import com.checkba.config.AiModelProperties;
 import com.checkba.model.ai.AiAssistantConfig;
 import com.checkba.service.SystemSettingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import dev.langchain4j.model.chat.ChatLanguageModel;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -17,23 +15,20 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * AiAssistantService 测试：助手配置动态加载与 ProjectAssistant 实例缓存
- * （原 AiChatController.loadAssistants/getAssistant 下沉后的专职服务）
+ * AiAssistantService 测试：助手配置动态加载
+ * （原 AiChatController.loadAssistants 下沉后的专职服务）
+ *
+ * getAssistant 的实例缓存用例随 v1 同步端点一起删除——该方法已无调用方。
  */
 class AiAssistantServiceTest {
 
     private SystemSettingService systemSettingService;
-    private ChatModelFactory chatModelFactory;
     private AiAssistantService service;
 
     @BeforeEach
     void setUp() {
         systemSettingService = mock(SystemSettingService.class);
-        chatModelFactory = mock(ChatModelFactory.class);
-        when(chatModelFactory.getChatModel(any())).thenReturn(mock(ChatLanguageModel.class));
-
-        service = new AiAssistantService(systemSettingService, new AiModelProperties(),
-                chatModelFactory, new ObjectMapper());
+        service = new AiAssistantService(systemSettingService, new ObjectMapper());
     }
 
     @Test
@@ -58,18 +53,5 @@ class AiAssistantServiceTest {
 
         when(systemSettingService.get(eq("ai.assistants"), any())).thenReturn("not-json");
         assertTrue(service.loadAssistants().isEmpty());
-    }
-
-    @Test
-    @DisplayName("getAssistant：按 模型+助手 缓存实例")
-    void cachesAssistantByModelAndAssistantId() {
-        ProjectAssistant first = service.getAssistant("model-a", null);
-        ProjectAssistant again = service.getAssistant("model-a", null);
-        assertSame(first, again, "同一模型+助手应复用缓存实例");
-
-        ProjectAssistant other = service.getAssistant("model-b", null);
-        assertNotSame(first, other, "不同模型应创建不同实例");
-
-        verify(chatModelFactory, times(2)).getChatModel(any());
     }
 }

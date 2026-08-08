@@ -35,8 +35,15 @@ triggers:
 
 prompt: prompt.md
 
-# 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）
-# 三类：出图三件套（litigation_*）、读材料（抽取阶段要通读文件夹）、落地（建文件夹）
+# 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）。
+# base-tools 只有三个（read_document / list_files / query_memory），所以每个要用的工具
+# 都得逐条列出——漏一个就等于对模型隐藏了这个能力。
+# 四类：出图三件套（litigation_*）、读材料（抽取阶段要通读文件夹）、落地（建文件夹）、
+# 委派（dispatch_subtask）。
+#
+# dispatch_subtask：材料多时抽取是典型长程任务（逐份读判决书/证据再汇总成一份语义地图），
+# 正是 prompts/system_prompt.md 第 6.5 节要委派子 Agent 的场景。两个既有 skill 曾漏列，
+# 这里照它们的惯例带上。
 allowed_tools:
   - litigation_reference
   - litigation_checkpoint
@@ -46,6 +53,7 @@ allowed_tools:
   - read_file
   - create_folder
   - doc_list_project_files
+  - dispatch_subtask
 
 output: |
   交付 = 项目里一个以图名命名的文件夹，内含 .svg（母版，自动在编辑器打开）、.png

@@ -32,7 +32,10 @@ public class AgenticRetriever {
 
     private final MemoryManager memoryManager;
     private final ChatModelFactory chatModelFactory;
-    
+    // 查询扩展走辅助模型（便宜档）并落账：deep_search 一次可能多打好几轮，此前既不换模型也不记账
+    private final com.checkba.service.ai.AuxModelResolver auxModelResolver;
+    private final com.checkba.service.ai.TokenUsageService tokenUsageService;
+
     // 配置参数
     private static final int MIN_RESULTS_THRESHOLD = 3;  // 结果少于此数量时触发多轮召回
     private static final int MAX_SUPPLEMENTARY_QUERIES = 3;  // 最多生成的补充查询数
@@ -92,10 +95,11 @@ public class AgenticRetriever {
         log.info("Initial retrieval insufficient ({}), triggering agentic expansion", 
                 initialResults.size());
         
-        // 3. 生成补充查询
+        // 3. 生成补充查询（projectId 带下去做记账归属）
         List<String> supplementaryQueries = generateSupplementaryQueries(
-                query, 
-                assessment.getResultSummary()
+                query,
+                assessment.getResultSummary(),
+                projectId
         );
         
         if (supplementaryQueries.isEmpty()) {
@@ -160,19 +164,20 @@ public class AgenticRetriever {
     }
 
     /**
-     * 使用 LLM 生成补充查询
+     * 使用 LLM 生成补充查询（辅助模型档，token 落 token_usage）
      */
-    private List<String> generateSupplementaryQueries(String originalQuery, String resultSummary) {
+    private List<String> generateSupplementaryQueries(String originalQuery, String resultSummary, Long projectId) {
         try {
-            ChatLanguageModel model = chatModelFactory.getChatModel(null);
-            
+            ChatLanguageModel model = chatModelFactory.getAuxChatModel();
+
             String prompt = String.format(QUERY_EXPANSION_PROMPT, originalQuery, resultSummary);
-            
+
             var response = model.generate(
                     SystemMessage.from("你是一个专业的法律信息检索助手。"),
                     UserMessage.from(prompt)
             );
-            
+            recordUsage(response, projectId);
+
             String responseText = response.content().text();
             return parseQueries(responseText, originalQuery);
             
@@ -180,6 +185,31 @@ public class AgenticRetriever {
             log.error("Failed to generate supplementary queries: {}", e.getMessage());
             // 降级：使用简单的规则生成
             return generateFallbackQueries(originalQuery);
+        }
+    }
+
+    /**
+     * 查询扩展调用的 token 记账。
+     *
+     * <p>userId/conversationId 取工具执行上下文（{@code ToolContextHolder}，由 ToolRegistry 在
+     * 分发 deep_search 时装填）；拿不到就退回平台身份作用域。记账失败绝不影响检索结果。
+     */
+    private void recordUsage(dev.langchain4j.model.output.Response<dev.langchain4j.data.message.AiMessage> response,
+                            Long projectId) {
+        if (response == null || response.tokenUsage() == null) {
+            return;
+        }
+        try {
+            com.checkba.service.ai.tools.ToolContext ctx =
+                    com.checkba.service.ai.tools.ToolContextHolder.get();
+            Long userId = ctx != null && ctx.userId() != null
+                    ? ctx.userId()
+                    : com.checkba.service.ai.PlatformAiUserScope.current();
+            String conversationId = ctx != null ? ctx.conversationId() : null;
+            tokenUsageService.recordUsage(projectId, userId,
+                    auxModelResolver.auxModelId(), response.tokenUsage(), conversationId);
+        } catch (Exception e) {
+            log.warn("深度检索查询扩展 token 记账失败（不影响检索结果）: {}", e.getMessage());
         }
     }
 

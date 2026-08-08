@@ -5,7 +5,10 @@ import com.checkba.model.ai.TaskInfo;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.ProjectFileService;
+import com.checkba.service.ai.AllowedModels;
 import com.checkba.service.ai.BackgroundTaskService;
+import com.checkba.service.ai.ChatModelFactory;
+import com.checkba.service.ai.PlatformAiChannel;
 import com.checkba.service.ai.PptxServiceClient;
 import com.checkba.service.ai.EditorBridgeService;
 import com.checkba.storage.StorageServiceFactory;
@@ -52,6 +55,9 @@ public class PptxTools implements AgentToolComponent {
     private final StorageServiceFactory storageServiceFactory;
     private final AiModelProperties aiModelProperties;
     private final BackgroundTaskService backgroundTaskService;
+    // AI PPT 的模型与密钥必须与 AI 对话同口径（供应商/默认模型/DB 密钥），不能只读 yml
+    private final ChatModelFactory chatModelFactory;
+    private final PlatformAiChannel platformAiChannel;
 
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
     private static final Long AGENT_USER_ID = 10001L;
@@ -893,75 +899,65 @@ public class PptxTools implements AgentToolComponent {
     }
 
     /**
-     * 构建模型配置
-     * 
-     * 使用用户选择的模型（通过 modelId 传入），而不是配置文件中的默认值。
-     * 这样 PPTX 服务就可以使用用户在前端选择的 AI 模型。
-     * 
-     * @param modelId 用户选择的模型 ID（如 "google/gemini-3-pro-preview"）
+     * 构建下发给 pptx-service 的模型配置（供应商 / 密钥 / 文本模型 / 图像模型）。
+     *
+     * <p>口径与 AI 对话完全一致，都由 {@link ChatModelFactory} 解析：供应商读
+     * {@code ai.activeProvider}，密钥读 DB 的 {@code external.openrouter.*}（空白视为未配置、
+     * 回退 yml），默认模型走 {@code resolveDefaultModel()}。此前这里只读 yml 的 OpenRouter key，
+     * 用户在设置页/向导里填的 key 一律用不上，且 AWD_CLOUD 平台通道完全没有分支——
+     * 加上 pptx-service 侧 model_config 消费端被 re-vendor 删掉，AI PPT 三层同时断。
+     *
+     * @param modelId 本轮会话选定的模型 ID（由 ToolContextHolder 透传，可为空）
      * @return ModelConfig 模型配置对象
+     * @throws com.checkba.exception.FeatureNotConfiguredException 当前供应商跑不了 AI PPT（本地 Ollama / 缺 key）
+     * @throws com.checkba.service.account.AccountException 平台通道密钥不可用（原样抛，不回退 BYOK key）
      */
     private PptxServiceClient.ModelConfig buildModelConfig(String modelId) {
         AiModelProperties.OpenRouter orConfig = aiModelProperties.getOpenRouter();
-        
-        // 使用用户选择的模型，如果没有指定则使用配置文件默认值
-        String targetModel = (modelId != null && !modelId.isEmpty()) 
-                ? modelId 
-                : orConfig.getDefaultModel();
-        
-        // 将文本模型名映射到对应的图片模型名
-        // 参考：https://openrouter.ai/google/gemini-3-pro-image-preview
-        String imageModel = mapToImageModel(targetModel);
-        
-        log.info("Building model config with model: {} (user selected: {}), image model: {}", 
-                targetModel, modelId, imageModel);
-        
-        // 使用 OpenRouter 配置（OpenAI 兼容格式）
+        AiModelProperties.Provider provider = chatModelFactory.resolveProvider();
+
+        // 文本模型：会话选定的模型优先；空或非白名单一律回落统一默认模型（同 ChatModelFactory）
+        String textModel = (StringUtils.hasText(modelId) && AllowedModels.isAllowed(modelId))
+                ? modelId
+                : chatModelFactory.resolveDefaultModel();
+
+        String apiKey;
+        String apiBase;
+        if (provider == AiModelProperties.Provider.AWD_CLOUD) {
+            // 平台通道：密钥由官网按账户 provision。取不到时原样抛业务异常——静默回退用户自己的
+            // BYOK key 等于拿用户的钱去跑，还会掩盖「额度未就绪」这类需要去官网处理的状态。
+            apiKey = platformAiChannel.apiKey();
+            // baseUrl 只认 yml：DB 那份是用户 BYOK 的自定义地址，把 provision 出来的凭据发过去
+            // 等于把平台密钥交出去（与 ChatModelFactory 平台通道同规矩）
+            apiBase = orConfig.getBaseUrl();
+        } else if (provider == AiModelProperties.Provider.OPENROUTER) {
+            // 走工厂的解析入口，不在这里复制一份「读 DB、空白回退 yml」——
+            // 密钥解析有两处口径是本仓反复踩过的坑（改了一处、另一处继续读旧键）
+            apiKey = chatModelFactory.resolveOpenRouterApiKey();
+            apiBase = chatModelFactory.resolveOpenRouterBaseUrl();
+            if (!StringUtils.hasText(apiKey)) {
+                throw new com.checkba.exception.FeatureNotConfiguredException("ai-ppt",
+                        "AI PPT 需要 OpenRouter 的 API Key，到设置页的 AI 供应商里填好后即可生成");
+            }
+        } else {
+            // OLLAMA 是离线/实验档：本地模型没有 OpenAI 兼容的图像生成接口，PPT 的图片阶段跑不了
+            throw new com.checkba.exception.FeatureNotConfiguredException("ai-ppt",
+                    "当前 AI 供应商是本地 Ollama（离线实验档），AI PPT 需要云端模型；"
+                            + "到设置页切换为「AI Workdeck 云端」或 OpenRouter 后可重试");
+        }
+
+        log.info("Building PPT model config: provider={}, textModel={} (requested={}), imageModel={}",
+                provider, textModel, modelId, PptxServiceClient.IMAGE_MODEL);
+
         return PptxServiceClient.ModelConfig.builder()
-                .provider("openai")  // 使用 OpenAI 兼容格式
-                .apiKey(orConfig.getApiKey())
-                .apiBase(orConfig.getBaseUrl())
-                .textModel(targetModel)  // 使用用户选择的模型
-                .imageModel(imageModel)  // 使用对应的图片生成模型
+                .provider("openai")  // pptx-service 侧的 SDK 格式：OpenRouter 与平台通道都是 OpenAI 兼容
+                .apiKey(apiKey)
+                .apiBase(apiBase)
+                .textModel(textModel)
+                .imageModel(PptxServiceClient.IMAGE_MODEL)
                 .build();
     }
-    
-    /**
-     * 将文本模型名映射到对应的图片生成模型名
-     * OpenRouter 上的 Gemini 模型有两个版本：
-     * - 文本模型：google/gemini-3-pro-preview
-     * - 图片模型：google/gemini-3-pro-image-preview (Nano Banana Pro)
-     * 
-     * @param textModel 用户选择的文本模型
-     * @return 对应的图片生成模型
-     */
-    private String mapToImageModel(String textModel) {
-        if (textModel == null || textModel.isEmpty()) {
-            return "google/gemini-3-pro-image-preview";
-        }
-        
-        // Gemini 3 系列：将 -preview 替换为 -image-preview
-        if (textModel.contains("gemini-3") && textModel.endsWith("-preview")) {
-            // google/gemini-3-pro-preview -> google/gemini-3-pro-image-preview
-            return textModel.replace("-preview", "-image-preview");
-        }
-        
-        // Gemini 2.5 系列：类似处理
-        if (textModel.contains("gemini-2.5") && textModel.endsWith("-preview")) {
-            // google/gemini-2.5-flash-preview -> google/gemini-2.5-flash-image-preview
-            return textModel.replace("-preview", "-image-preview");
-        }
-        
-        // Gemini 2.0 系列
-        if (textModel.contains("gemini-2.0")) {
-            // gemini-2.0-flash-exp 本身就支持图片生成
-            return textModel;
-        }
-        
-        // 其他模型默认使用 Nano Banana Pro
-        return "google/gemini-3-pro-image-preview";
-    }
-    
+
     /**
      * 生成新的编辑器文件 ID（沿用 wpsFileId 字段名）
      * 当文件被修改后，需要更新 wpsFileId 以强制编辑器重新下载文件内容

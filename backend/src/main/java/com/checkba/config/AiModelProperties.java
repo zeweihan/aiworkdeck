@@ -16,16 +16,19 @@ import java.time.Duration;
 public class AiModelProperties {
 
     /**
-     * 模型提供商：
-     * - OLLAMA：本地 Ollama 服务
-     * - GEMINI：Google Gemini 云端模型
-     * - OPENROUTER: OpenRouter (OpenAI 兼容)
+     * 模型提供商（三档，2026-08 收敛）：
      * - AWD_CLOUD：平台通道「AI Workdeck 云端」——密钥由官网按账户 provision，
      *   仍走 OpenRouter，但用户不必自备 key（Spec §3）。未连接账户时不可选。
+     * - OPENROUTER: OpenRouter（OpenAI 兼容），用户自备 Key
+     * - OLLAMA：本地 Ollama 服务，离线/实验档，只支持 ASK 模式
+     *
+     * <p>GEMINI 档已下线：手写的 GeminiChatLanguageModel 不支持 tools 也没有流式实现，
+     * 在 AGENT/PLAN 模式下等于死路；Gemini 系列模型改由 OpenRouter 统一接入
+     * （见 AllowedModels 的 google/gemini-3.6-flash）。存量 DB 里的 GEMINI 值
+     * 由 ChatModelFactory 的启动期迁移改写成 OLLAMA。
      */
     public enum Provider {
         OLLAMA,
-        GEMINI,
         OPENROUTER,
         AWD_CLOUD
     }
@@ -34,11 +37,6 @@ public class AiModelProperties {
      * 当前使用的模型提供商，默认继续使用本地 Ollama。
      */
     private Provider provider = Provider.OLLAMA;
-
-    /**
-     * Google Gemini 配置。
-     */
-    private Gemini gemini = new Gemini();
 
     /**
      * OpenRouter 配置 (兼容 OpenAI 接口)。
@@ -56,14 +54,6 @@ public class AiModelProperties {
 
     public void setProvider(Provider provider) {
         this.provider = provider;
-    }
-
-    public Gemini getGemini() {
-        return gemini;
-    }
-
-    public void setGemini(Gemini gemini) {
-        this.gemini = gemini;
     }
 
     public OpenRouter getOpenRouter() {
@@ -106,39 +96,6 @@ public class AiModelProperties {
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public String getDefaultModel() { return defaultModel; }
         public void setDefaultModel(String defaultModel) { this.defaultModel = defaultModel; }
-        public Duration getTimeout() { return timeout; }
-        public void setTimeout(Duration timeout) { this.timeout = timeout; }
-    }
-
-    public static class Gemini {
-
-        /**
-         * Gemini API 密钥（建议通过环境变量 GEMINI_API_KEY 注入）。
-         */
-        private String apiKey;
-
-        /**
-         * 使用的 Gemini 模型名称，例如：gemini-2.5-pro、gemini-2.5-flash 等。
-         * 参考官方文档当前推荐的通用文本模型：https://ai.google.dev/gemini-api/docs/pricing?hl=zh-cn
-         */
-        private String modelName = "gemini-2.5-pro";
-
-        /**
-         * Gemini API 基础地址。
-         */
-        private String apiBaseUrl = "https://generativelanguage.googleapis.com/v1beta";
-
-        /**
-         * 请求超时时间。
-         */
-        private Duration timeout = Duration.ofSeconds(60);
-
-        public String getApiKey() { return apiKey; }
-        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
-        public String getModelName() { return modelName; }
-        public void setModelName(String modelName) { this.modelName = modelName; }
-        public String getApiBaseUrl() { return apiBaseUrl; }
-        public void setApiBaseUrl(String apiBaseUrl) { this.apiBaseUrl = apiBaseUrl; }
         public Duration getTimeout() { return timeout; }
         public void setTimeout(Duration timeout) { this.timeout = timeout; }
     }

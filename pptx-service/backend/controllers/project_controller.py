@@ -13,7 +13,7 @@ from werkzeug.exceptions import BadRequest
 
 from models import db, Project, Page, Task, ReferenceFile
 from services import ProjectContext
-from services.ai_service_manager import get_ai_service
+from services.ai_service_manager import get_ai_service, set_active_model_config
 from services.task_manager import (
     task_manager,
     generate_descriptions_task,
@@ -358,22 +358,25 @@ def generate_outline(project_id):
     Request body (optional):
     {
         "idea_prompt": "...",  # for idea type
-        "language": "zh"  # output language: zh, en, ja, auto
+        "language": "zh",  # output language: zh, en, ja, auto
+        "model_config": {...}  # [checkba] 主后端下发的供应商/密钥/模型，见 ai_service_manager
     }
     """
     try:
         project = Project.query.get(project_id)
-        
+
         if not project:
             return not_found('Project')
-        
-        # Get singleton AI service instance
-        ai_service = get_ai_service()
-        
+
         # Get request data and language parameter
         data = request.get_json() or {}
         language = data.get('language', current_app.config.get('OUTPUT_LANGUAGE', 'zh'))
-        
+
+        # [checkba] 主后端下发的模型配置：先记为进程级口径（后续无参调用点也能用），再取服务
+        model_config = data.get('model_config')
+        set_active_model_config(model_config)
+        ai_service = get_ai_service(model_config=model_config)
+
         # Get reference files content and create project context
         reference_files_content = _get_project_reference_files_content(project_id)
         if reference_files_content:
@@ -582,7 +585,8 @@ def generate_descriptions(project_id):
     Request body:
     {
         "max_workers": 5,
-        "language": "zh"  # output language: zh, en, ja, auto
+        "language": "zh",  # output language: zh, en, ja, auto
+        "model_config": {...}  # [checkba] 主后端下发的供应商/密钥/模型
     }
     """
     try:
@@ -625,14 +629,16 @@ def generate_descriptions(project_id):
         
         db.session.add(task)
         db.session.commit()
-        
-        # Get singleton AI service instance
-        ai_service = get_ai_service()
-        
+
+        # [checkba] 主后端下发的模型配置（描述阶段在线程池里逐页调用，进程级口径同样要记）
+        model_config = data.get('model_config')
+        set_active_model_config(model_config)
+        ai_service = get_ai_service(model_config=model_config)
+
         # Get reference files content and create project context
         reference_files_content = _get_project_reference_files_content(project_id)
         project_context = ProjectContext(project, reference_files_content)
-        
+
         # Get app instance for background task
         app = current_app._get_current_object()
         
@@ -675,7 +681,8 @@ def generate_images(project_id):
         "max_workers": 8,
         "use_template": true,
         "language": "zh",  # output language: zh, en, ja, auto
-        "page_ids": ["id1", "id2"]  # optional: specific page IDs to generate (if not provided, generates all)
+        "page_ids": ["id1", "id2"],  # optional: specific page IDs to generate (if not provided, generates all)
+        "model_config": {...}  # [checkba] 主后端下发的供应商/密钥/模型
     }
     """
     try:
@@ -732,10 +739,12 @@ def generate_images(project_id):
         
         db.session.add(task)
         db.session.commit()
-        
-        # Get singleton AI service instance
-        ai_service = get_ai_service()
-        
+
+        # [checkba] 主后端下发的模型配置（图片阶段的 image_model 就是从这里来的）
+        model_config = data.get('model_config')
+        set_active_model_config(model_config)
+        ai_service = get_ai_service(model_config=model_config)
+
         # 合并额外要求和风格描述
         combined_requirements = project.extra_requirements or ""
         if project.template_style:

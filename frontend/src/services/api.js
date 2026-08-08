@@ -364,27 +364,8 @@ export function fetchCompanyBasicInfo(payload) {
 
 // ===================== AI 助手相关 API =====================
 
-/**
- * 项目内 AI 对话
- * payload: { projectId: string|number, message: string, model?: string }
- */
-export function aiChat(payload) {
-  return request({
-    url: '/api/ai/chat',
-    method: 'POST',
-    data: {
-      projectId: String(payload.projectId),
-      message: payload.message,
-      context: payload.context || null,
-      model: payload.model || null,
-      conversationId: payload.conversationId || null
-    },
-    header: {
-      'Content-Type': 'application/json',
-    },
-    timeout: 300000, // Increase timeout to 300s for local LLM
-  });
-}
+// 注：aiChat（POST /api/ai/chat）已随 v1 同步对话通道一并移除。
+// 对话走 SSE：见 /api/agent/connect + /api/agent/chat。
 
 export function getAiHistory(params) {
   return request({
@@ -433,6 +414,47 @@ export function getAiConfig() {
   return request({
     url: '/api/ai/config',
     method: 'GET'
+  });
+}
+
+/**
+ * 获取当前区域可用的模型目录。
+ *
+ * 前端**不许再硬编码模型清单**：历史上有三份互不同步的副本（后端 AllowedModels、
+ * ChatInterface.vue 的数组、project-overview.vue 的死代码），后果是「后端加了模型
+ * 用户看不到、前端写的 id 被工厂静默回落成默认模型」。唯一事实来源是后端白名单。
+ *
+ * 响应：{ networkRegion, networkRegionMode, networkRegionBasis, defaultModel,
+ *        models: [{ id, name, vendor, region, contextLength,
+ *                   inputPricePerM, outputPricePerM, tiered }] }
+ * models 只含当前网络区域实测可用的模型（境内拿不到国际档，OpenRouter 会返 403 region）。
+ */
+export function fetchAiModels() {
+  return request({
+    url: '/api/ai/models',
+    method: 'GET'
+  });
+}
+
+/**
+ * 本机 Ollama 连通性与模型探测（供应商向导的本地档没有密钥可校验，只能靠探测）。
+ *
+ * 刻意不收 baseUrl 参数：地址由后端从自己的配置里读。放开等于把后端做成
+ * 可以被前端指使的内网探测跳板（云后端与桌面后端共用同一套代码）。
+ *
+ * 响应恒为 200（SERVICE_DOWN 也是一种正常结论，不是 HTTP 错误）：
+ * { status: 'READY' | 'MODEL_MISSING' | 'SERVICE_DOWN', baseUrl, targetModel,
+ *   installedModels: string[], message, nextStep, command }
+ * command 由后端原样给出（就绪时为 null），前端不要自己拼 `ollama pull`——
+ * 目标模型是后端按「入参 > DB > yml」解析的，前端拼的容易和它不一致。
+ *
+ * @param {string} [model] 可选：探测指定模型（向导里用户还没保存设置就想先试）
+ */
+export function probeOllama(model) {
+  return request({
+    url: '/api/ai/ollama/probe',
+    method: 'GET',
+    data: model ? { model } : {}
   });
 }
 
@@ -725,6 +747,30 @@ export function activateLicense(code) {
     url: '/api/license/activate',
     method: 'POST',
     data: { code },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 当前站点与可选站点（双主站）。
+// 返回 { current, pinned, multiSite, sites: [{ id, displayName, baseUrl, accountPageUrl }] }
+export function getSiteStatus() {
+  return request({
+    url: '/api/site',
+    method: 'GET',
+  });
+}
+
+// 切换站点。**破坏性动作**：会清掉旧站的账户连接、权益缓存、平台 AI 密钥，
+// 以及 account 模式的授权票据（试用码票据保留）。调用方必须先做二次确认。
+// 成功 200 { site, changed, licenseCleared, accountCleared, restartRecommended }；
+// 失败 400 { message }（request 层已转成 reject）
+export function selectSite(site) {
+  return request({
+    url: '/api/site/select',
+    method: 'POST',
+    data: { site },
     header: {
       'Content-Type': 'application/json',
     },
@@ -2002,7 +2048,6 @@ export function searchProjectContent(projectId, payload) {
 export default {
   getApiBaseUrl,
   request,
-  aiChat,
   exportAiDocx,
   fetchCompanyBasicInfo,
   createProject,

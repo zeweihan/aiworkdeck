@@ -6,6 +6,7 @@
 ## checkba 侧定制清单（re-vendor 时必须重新套用，代码内均有 `[checkba]` 标记）
 | 文件 | 定制内容 |
 |---|---|
+| `backend/services/ai_service_manager.py` + `backend/controllers/project_controller.py` + `backend/controllers/export_controller.py` | **模型配置 model_config 消费端**（见下方专节，2026-08-08 补回）：主后端在每个生成请求体里下发供应商/密钥/模型，本服务据此建 AIService，而不是用自己的 `GOOGLE_API_KEY` |
 | `backend/services/file_parser_service.py` | 本地 MinerU 优先逻辑：`_truthy`/`_should_force_cloud`/`_get_local_mineru_url` 辅助函数、`__init__` 的 `mineru_local_url` 参数（缺省自动读 Flask config/env，调用点无需改动）、`_check_local_service`/`_parse_with_local_service`/`_save_local_mineru_result` 三个方法、`parse_file` 里"本地优先→云端兜底→无 token 报错"路由 |
 | `backend/config.py` | `MINERU_LOCAL_URL`（默认 `http://mineru-service:8000`）与 `MINERU_FORCE_CLOUD`（默认 `'1'`，桌面端 spawn 时会传 env=0 放开本地优先） |
 | `backend/app.py` | `PPTX_DATA_DIR` 数据目录外置（桌面打包态 resources 只读，DB/uploads 必须写到注入目录）；配套测试 `backend/tests/test_data_dir.py`。**v0.7.0 tag 首次构建就是因 re-vendor 漏掉此项+下面端口语义变化而红** |
@@ -28,6 +29,73 @@
 > **端口语义变化（0.4.0）**：应用监听端口从读 `PORT` 改为读 `BACKEND_PORT`（`IN_DOCKER=1` 时固定 5000）。
 > 桌面 spawn（desktop/main/services/pptx-service.js）与 CI 冒烟（desktop-build.yml）已两个变量都传，
 > 升降级均兼容——再升级时留意上游是否又改此语义。
+
+## model_config：模型与密钥由主后端下发（最容易在 re-vendor 时丢的一项）
+
+**为什么必须有这层定制**：本服务自己那套 AI 配置（`GOOGLE_API_KEY` / `AI_PROVIDER_FORMAT` / `TEXT_MODEL`）
+在 AI Workdeck 里**没有任何配置入口**——桌面端不写 `.env`，写设置的接口 `POST /api/settings/*` 又要求
+`PPTX_SETTINGS_TOKEN`，而全仓从不设置这个变量（等于恒 403）。所以模型与密钥只能由主后端
+（`backend/.../service/ai/tools/PptxTools.java` 的 `buildModelConfig`）在**每次请求的 body 里下发**，
+键名 `model_config`：
+
+```json
+{"provider": "openai", "api_key": "sk-...", "api_base": "https://openrouter.ai/api/v1",
+ "text_model": "deepseek/deepseek-v4-flash", "image_model": "google/gemini-3-pro-image-preview"}
+```
+
+`provider` 是本服务侧的 SDK 格式标识（`openai` = OpenAI 兼容，OpenRouter 与 AI Workdeck 云端平台通道都走它），
+不是主后端的 `ai.activeProvider`。
+
+**消费端落点（re-vendor 后逐项核对，代码内均有 `[checkba]` 标记）**：
+
+| 文件 | 改动 |
+|---|---|
+| `backend/services/ai_service_manager.py` | 新增 `create_ai_service_with_config()`（按配置指纹缓存 AIService）、`set_active_model_config()` / `_active_model_config`（进程级兜底）、`get_ai_service()` 增加 `model_config` 形参且**动态配置优先于本服务单例**；`clear_ai_service_cache()` 连带清动态实例缓存 |
+| `backend/controllers/project_controller.py` | `generate_outline` / `generate_descriptions` / `generate_images` 三个端点从 body 取 `model_config`，先 `set_active_model_config()` 再 `get_ai_service(model_config=...)` |
+| `backend/controllers/export_controller.py` | `export_editable_pptx` 取 `model_config` 并 `set_active_model_config()`（干净背景图由递归分析链路自行取 AIService，只能靠进程级口径） |
+
+**为什么需要进程级兜底而不是纯参数透传**：`services/task_manager.py` 的子线程与
+`services/image_editability/factories.py` 的 `create_*` 工厂都自己调无参 `get_ai_service()`，
+拿不到请求体。因此 `set_active_model_config()` 记下最近一次下发的配置。
+代价是**本服务必须保持「单用户本机进程」形态**（桌面端就是；多用户共享一个 pptx-service 时，
+按用户 provision 的平台密钥会有串用风险）。
+
+**不带 model_config 的端点**：`/refine/outline`、`/pages/{id}/edit/image` 主后端目前不下发配置，
+靠上面的进程级兜底工作——正常流程它们一定跟在生成之后，配置已经在。
+只有「pptx-service 在生成之后重启、再单独调修改类端点」这一种情形会退回本服务自己的配置并报缺 key，
+要彻底闭合就在 `PptxServiceClient.refineOutline` / `editPageImage` 也带上 `model_config`。
+
+**丢掉这层定制的表现**：大纲阶段直接 `ValueError: GOOGLE_API_KEY ... is required`
+（`backend/services/ai_providers/__init__.py` 的 `_get_provider_config`，默认 provider 见 `config.py` 的
+`AI_PROVIDER_FORMAT=gemini`），产品内无处可配。0.1.0 → 0.4.0 re-vendor（PR#129，2026-07-09）
+就是这么丢的，且当时定制清单里没有这一行，两道防线都没照到——**这次补上，下次务必照表移植**。
+
+**真机验证步骤**（本轮只改代码，未起服务，以下留给验证阶段执行）：
+1. 源码级防线：`bash pptx-service/compat_smoke_test.sh` —— 末尾四条「定制在」必须全 PASS（不需要服务在跑）。
+2. 起服务：`cd pptx-service && docker compose up -d`（或跑打包版桌面端，pptx 走动态回环端口）。
+3. 只发一次请求验证链路（把 KEY 换成设置页里真实的 OpenRouter key）：
+   ```bash
+   PID=$(curl -s -X POST http://localhost:5001/api/projects \
+     -H 'Content-Type: application/json' \
+     -d '{"creation_type":"idea","idea_prompt":"AI 在法律行业的应用"}' \
+     | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["project_id"])')
+   curl -s -X POST "http://localhost:5001/api/projects/$PID/generate/outline" \
+     -H 'Content-Type: application/json' \
+     -d '{"language":"zh","model_config":{"provider":"openai","api_key":"KEY",
+          "api_base":"https://openrouter.ai/api/v1","text_model":"deepseek/deepseek-v4-flash",
+          "image_model":"google/gemini-3-pro-image-preview"}}' | head -c 400
+   ```
+   期望：返回 `data.pages` 非空；服务日志出现 `[checkba] creating AIService from model_config`，
+   **不得**出现 `GOOGLE_API_KEY ... is required`。
+4. 产品内端到端：桌面端在设置页分别选「AI Workdeck 云端」与 OpenRouter，各让 AI 生成一份 PPT
+   （AI 面板说「做一份关于 X 的 PPT」→ 配置卡选可编辑版），确认大纲/配图/可编辑导出三段都成。
+   切到本地 Ollama 时应立刻收到中文提示「AI PPT 需要云端模型」，而不是跑到一半失败。
+5. 平台通道负例：账户未连接/额度未就绪时选「AI Workdeck 云端」生成 PPT，
+   必须报账户侧的中文业务错误，**不能**悄悄用上用户自己填的 OpenRouter key（看后端日志里的 provider/key 指纹）。
+
+**已知缺口**：图像生成（幻灯片图、干净背景图）按张计费，模型 ID 是 `PptxServiceClient.IMAGE_MODEL`
+单列的常量，刻意不进主后端的 `AllowedModels` 白名单（那里的每个模型都要有 prompt/completion 单价
+才能按输入长度分档）。因此**AI PPT 的图像花费目前不进 `token_usage` 记账**，用量看板里看不到它。
 
 ## 为什么升级要单独走这个流程
 - 升级 = **重新 vendor 一整份上游源码**（0.1 → 0.4 是大 diff），不是改一行 pin；

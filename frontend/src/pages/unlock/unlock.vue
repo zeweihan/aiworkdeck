@@ -18,6 +18,16 @@
              引发布局变化时会补发一次 input 事件，错误提示会被立刻清掉（联调实测）。
              errorMsg 在每次点击解锁时重置，足够。 -->
         <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
+        <!-- 站点错配救济：国际站账户的 Key 粘到国内站会被判「Key 无效」，
+             而 Key 本身是好的。这里给一条一键切站重试的出路，省得用户跑去
+             官网重新生成 Key 再撞一次同样的墙。 -->
+        <text
+          v-if="canRescue"
+          class="unlock-link unlock-rescue"
+          @tap="handleRescue"
+        >
+          {{ rescueBusy ? '正在切换站点并重试' : rescueLabel }}
+        </text>
         <button
           class="unlock-btn"
           :class="{ 'is-busy': unlocking }"
@@ -32,17 +42,27 @@
         <text class="unlock-link" @tap="openTrialCodePage">获取试用码</text>
         <text class="unlock-link-sep">|</text>
         <text class="unlock-link" @tap="openOfficialSite">获取正式版</text>
+        <!-- 单站形态（multiSite=false）下整段不渲染，用户看不到任何变化 -->
+        <template v-if="showSiteRow">
+          <text class="unlock-link-sep">|</text>
+          <text v-if="siteStatus.pinned" class="unlock-site-fixed">站点：{{ currentSiteName }}</text>
+          <text v-else class="unlock-link" @tap="openSitePicker">{{ siteLinkLabel }}</text>
+        </template>
       </view>
     </view>
   </view>
 </template>
 
 <script>
-import { activateLicense } from '@/services/api.js'
+import { activateLicense, getSiteStatus, selectSite } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js'
 
+// 与站点无关（GitHub README），不走 siteBaseUrl()
 const TRIAL_CODE_URL = 'https://github.com/zeweihan/aiworkdeck#readme'
-const OFFICIAL_SITE_URL = 'https://www.aiworkdeck.com'
+
+// 切站会清掉的东西，主动切站时必须原样告知
+const SWITCH_COST = '账户连接、已购权益缓存、平台 AI 额度，以及用账户 Key 解锁的授权（试用码解锁不受影响）。'
 
 export default {
   name: 'UnlockPage',
@@ -51,12 +71,66 @@ export default {
       code: '',
       errorMsg: '',
       unlocking: false,
+      // 站点第一次真正生效就是解锁请求，所以站点选择必须落在这一页：
+      // 启动分流页不承载业务 UI，首启向导与设置页都在解锁之后
+      siteStatus: { current: '', pinned: false, multiSite: false, sites: [] },
+      siteBusy: false,
+      rescueBusy: false,
     }
   },
+  computed: {
+    currentSite() {
+      const sites = this.siteStatus.sites || []
+      return sites.find((s) => s && s.id === this.siteStatus.current) || null
+    },
+    currentSiteName() {
+      return (this.currentSite && this.currentSite.displayName) || ''
+    },
+    otherSites() {
+      return (this.siteStatus.sites || []).filter((s) => s && s.id !== this.siteStatus.current)
+    },
+    showSiteRow() {
+      return this.siteStatus.multiSite === true && !!this.currentSiteName
+    },
+    siteLinkLabel() {
+      return this.siteBusy ? '正在切换站点' : `站点：${this.currentSiteName}`
+    },
+    canRescue() {
+      // 有码可重试、且确实有别的站可切时才给出路
+      return !!this.errorMsg && this.siteStatus.multiSite === true
+        && this.otherSites.length > 0 && !!this.normalizedCode
+    },
+    rescueLabel() {
+      return this.otherSites.length === 1
+        ? `切换到「${this.otherSites[0].displayName}」并重试`
+        : '切换站点并重试'
+    },
+    // 自动去掉粘贴带进来的空白与换行
+    normalizedCode() {
+      return (this.code || '').replace(/\s+/g, '')
+    },
+  },
+  onLoad() {
+    // 两个请求都不能阻塞解锁：失败一律按单站处理
+    loadSiteLinks()
+    this.refreshSiteStatus()
+  },
   methods: {
+    async refreshSiteStatus() {
+      try {
+        const s = await getSiteStatus()
+        this.siteStatus = {
+          current: (s && s.current) || '',
+          pinned: !!(s && s.pinned),
+          multiSite: !!(s && s.multiSite),
+          sites: (s && s.sites) || [],
+        }
+      } catch (e) {
+        // 拿不到就当单站，站点入口不渲染
+      }
+    },
     async handleUnlock() {
-      // 自动去掉粘贴带进来的空白与换行
-      const code = (this.code || '').replace(/\s+/g, '')
+      const code = this.normalizedCode
       if (!code) {
         this.errorMsg = '请先粘贴试用码或账户 Key'
         return
@@ -65,44 +139,119 @@ export default {
       this.unlocking = true
       try {
         const res = await activateLicense(code)
-        const mode = res && res.mode
-        // 粘 awdk_ Key 时解锁与账户连接是两件事，后者失败过去被完全吞掉：
-        // 用户看到「已连接账户」进了产品，账户却是未连接状态而毫无感知
-        const accountNotice = (res && res.accountNotice) || ''
-        uni.showToast({
-          // 账户连接未完成时不能说「已连接账户」（随后弹窗会说明未完成）
-          title: mode === 'trial' ? '已解锁试用版'
-            : accountNotice ? '正式版已解锁' : '已连接账户，正式版已解锁',
-          icon: 'success',
-          duration: 1600,
-        })
-        if (accountNotice) {
-          setTimeout(() => {
-            uni.showModal({
-              title: '账户连接未完成',
-              content: accountNotice,
-              showCancel: false,
-              confirmText: '知道了',
-              // 提示不阻断进入产品：无论怎么关掉都继续走启动分流
-              complete: () => uni.reLaunch({ url: '/pages/launch/launch' }),
-            })
-          }, 900)
-          return
-        }
-        setTimeout(() => {
-          uni.reLaunch({ url: '/pages/launch/launch' })
-        }, 800)
+        this.applyUnlockResult(res)
       } catch (e) {
         this.errorMsg = (e && e.message) || '解锁失败，请检查后重试'
       } finally {
         this.unlocking = false
       }
     },
+    applyUnlockResult(res) {
+      const mode = res && res.mode
+      // 粘 awdk_ Key 时解锁与账户连接是两件事，后者失败过去被完全吞掉：
+      // 用户看到「已连接账户」进了产品，账户却是未连接状态而毫无感知
+      const accountNotice = (res && res.accountNotice) || ''
+      uni.showToast({
+        // 账户连接未完成时不能说「已连接账户」（随后弹窗会说明未完成）
+        title: mode === 'trial' ? '已解锁试用版'
+          : accountNotice ? '正式版已解锁' : '已连接账户，正式版已解锁',
+        icon: 'success',
+        duration: 1600,
+      })
+      if (accountNotice) {
+        setTimeout(() => {
+          uni.showModal({
+            title: '账户连接未完成',
+            content: accountNotice,
+            showCancel: false,
+            confirmText: '知道了',
+            // 提示不阻断进入产品：无论怎么关掉都继续走启动分流
+            complete: () => uni.reLaunch({ url: '/pages/launch/launch' }),
+          })
+        }, 900)
+        return
+      }
+      setTimeout(() => {
+        uni.reLaunch({ url: '/pages/launch/launch' })
+      }, 800)
+    },
+    /** 主动切站：先让用户从全部站点里挑一个 */
+    openSitePicker() {
+      if (this.siteBusy || this.rescueBusy || this.siteStatus.pinned) return
+      const sites = this.siteStatus.sites || []
+      uni.showActionSheet({
+        itemList: sites.map((s) => s.displayName),
+        success: (res) => {
+          const target = sites[res.tapIndex]
+          if (!target || target.id === this.siteStatus.current) return
+          this.confirmSwitchSite(target)
+        },
+        fail: () => {},
+      })
+    },
+    /** 主动切站是破坏性动作，必须二次确认并列清代价 */
+    confirmSwitchSite(target) {
+      uni.showModal({
+        title: '切换站点',
+        content: `切换到「${target.displayName}」会清掉本机与当前站点相关的数据：${SWITCH_COST}`,
+        confirmText: '切换',
+        cancelText: '取消',
+        success: (res) => {
+          if (res.confirm) this.switchSite(target)
+        },
+      })
+    },
+    async switchSite(target) {
+      this.siteBusy = true
+      try {
+        await selectSite(target.id)
+        resetSiteLinks()
+        await this.refreshSiteStatus()
+        uni.showToast({ title: `已切换到${target.displayName}`, icon: 'none', duration: 1600 })
+      } catch (e) {
+        this.errorMsg = (e && e.message) || '切换站点失败，稍后重试'
+      } finally {
+        this.siteBusy = false
+      }
+    },
+    /** 失败救济：这条路不再二次确认，错误文案本身就是上下文 */
+    handleRescue() {
+      if (this.rescueBusy || this.siteBusy) return
+      const others = this.otherSites
+      if (others.length === 1) {
+        this.switchSiteAndRetry(others[0])
+        return
+      }
+      uni.showActionSheet({
+        itemList: others.map((s) => s.displayName),
+        success: (res) => {
+          const target = others[res.tapIndex]
+          if (target) this.switchSiteAndRetry(target)
+        },
+        fail: () => {},
+      })
+    },
+    async switchSiteAndRetry(target) {
+      this.rescueBusy = true
+      try {
+        await selectSite(target.id)
+        resetSiteLinks()
+        await this.refreshSiteStatus()
+        const res = await activateLicense(this.normalizedCode)
+        // 成功之后才清错误：留着旧错误，救济入口在整个过程里都不会闪没
+        this.errorMsg = ''
+        this.applyUnlockResult(res)
+      } catch (e) {
+        this.errorMsg = (e && e.message) || '切换站点后仍未解锁，检查后重试'
+      } finally {
+        this.rescueBusy = false
+      }
+    },
     openTrialCodePage() {
       openExternalUrl(TRIAL_CODE_URL)
     },
     openOfficialSite() {
-      openExternalUrl(OFFICIAL_SITE_URL)
+      openExternalUrl(siteBaseUrl())
     },
   },
 }
@@ -229,5 +378,15 @@ export default {
 .unlock-link-sep {
   font-size: 12px;
   color: #cbd5e1;
+}
+
+.unlock-site-fixed {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.unlock-rescue {
+  align-self: flex-start;
+  margin-top: 8px;
 }
 </style>

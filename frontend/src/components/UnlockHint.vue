@@ -10,9 +10,7 @@
 // 只提示与外链，不做拦截——是否拦、拦在哪由调用方自己判断（配合 useEntitlement）。
 // 语气克制：用户没做错事，只是碰到了额度边界。
 import { openExternalUrl } from '@/utils/externalLink.js'
-
-// 官网账户页：解锁 SKU 的购买入口都挂在这里
-const DEFAULT_LINK_URL = 'https://www.aiworkdeck.com/zh/account'
+import { accountPageUrl } from '@/utils/siteLinks.js'
 
 export default {
   name: 'UnlockHint',
@@ -26,15 +24,18 @@ export default {
       type: String,
       default: '了解详情',
     },
-    // 外链地址；走系统浏览器（桌面端 window.open 会被主进程吞掉）
+    // 外链地址；走系统浏览器（桌面端 window.open 会被主进程吞掉）。
+    // 留空 = 当前站点的账户页（解锁 SKU 的购买入口都挂在那里）。
     linkUrl: {
       type: String,
-      default: DEFAULT_LINK_URL,
+      default: '',
     },
   },
   methods: {
     onLearnMore() {
-      openExternalUrl(this.linkUrl)
+      // 站点链接在点击时才取：siteLinks 首帧可能还是兜底值，
+      // 宿主页面在 onLoad 里已预热过，点击这一刻读到的是当前站点。
+      openExternalUrl(this.linkUrl || accountPageUrl())
     },
   },
 }

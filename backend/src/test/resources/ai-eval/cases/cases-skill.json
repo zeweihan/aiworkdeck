@@ -22,8 +22,27 @@
       ],
       "structureContains": ["<process", "<final>"],
       "bubbleEndStatus": "finished",
-      "offeredToolsInclude": ["law_search", "law_search_keyword", "get_law_article", "search_web", "write_docx", "read_document"],
+      "offeredToolsInclude": ["law_search", "law_search_keyword", "get_law_article", "search_web", "write_docx", "read_document", "dispatch_subtask"],
       "offeredToolsExclude": ["doc_open_file", "pptx_generate", "write_file", "run_python"]
+    }
+  },
+  {
+    "id": "skill-shareholder-meeting-dispatch-subtask-visible",
+    "title": "股东大会核查 Skill 命中：dispatch_subtask 必须在可见工具集里（长程任务要能委派子 Agent）",
+    "category": "skill",
+    "protocol": "xml",
+    "userInput": "帮我做这次股东大会核查：对照会议通知、董事会决议公告和投票结果做交叉核对",
+    "turns": [
+      {
+        "text": "<final>已完成交叉核对：会议通知、董事会决议公告与投票结果的召集主体、届次、议案编号一致；表决票数复算无误。详见底稿表。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished",
+      "offeredToolsInclude": ["dispatch_subtask", "extract_file_text", "search_project_files", "write_docx", "read_document"],
+      "offeredToolsExclude": ["law_search", "pptx_generate", "doc_open_file"]
     }
   },
   {
