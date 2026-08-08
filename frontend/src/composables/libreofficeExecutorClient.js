@@ -117,6 +117,12 @@ export const EDITOR_ACTIONS = [
   // 移动改尺寸形状。设计依据同上 §4.2（原语表 8-15）。
   'slide_add_page', 'slide_delete_page', 'slide_move_page', 'slide_set_layout',
   'slide_add_text_box', 'slide_add_shape', 'slide_delete_shape', 'slide_set_shape_geometry',
+  // [Impress Phase 3] 格式与表格：文字格式 / 形状填充边框透明度 / 建表读表改格 /
+  // 表格整体样式（表头加粗/边框/列宽，能做多少做多少）/ 超链接。设计依据同上 §4.2
+  // （原语表 16-20；slide_format_shape/slide_table_set_style 不在原表里，是任务方
+  // 直接点名要补的两项）。
+  'slide_format_text', 'slide_format_shape', 'slide_add_table', 'slide_table_read',
+  'slide_table_set_cell', 'slide_table_set_style', 'slide_set_hyperlink',
   // [诊断] 当前文档内核类型（writer/calc/impress/unknown）——审阅按钮等 UI 按 kind
   // 隐藏的判据；load_document 的返回值里也带 kind，宿主常规路径无需二次往返调用本诊断。
   'get_doc_kind',

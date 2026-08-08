@@ -149,6 +149,14 @@ const NAMES = {
   slide_add_shape: { zh: '插入形状', en: 'Add shape' },
   slide_delete_shape: { zh: '删除形状', en: 'Delete shape' },
   slide_set_shape_geometry: { zh: '调整形状位置尺寸', en: 'Resize/move shape' },
+  // 演示文稿 slide_* 原语（Phase 3：格式与表格）
+  slide_format_text: { zh: '设置文字格式', en: 'Format slide text' },
+  slide_format_shape: { zh: '设置形状样式', en: 'Format shape' },
+  slide_add_table: { zh: '插入表格', en: 'Add table' },
+  slide_table_read: { zh: '读取表格', en: 'Read table' },
+  slide_table_set_cell: { zh: '写表格单元格', en: 'Set table cell' },
+  slide_table_set_style: { zh: '设置表格样式', en: 'Set table style' },
+  slide_set_hyperlink: { zh: '设置超链接', en: 'Set hyperlink' },
   // Office 插件（Word 任务窗格）office_* 工具桥
   // 正常情况下主前端（lowa 会话）看不到这些工具（会话能力过滤），收录仅作兜底
   office_get_text: { zh: '读取文档', en: 'Read document' },
