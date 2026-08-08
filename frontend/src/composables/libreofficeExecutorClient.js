@@ -87,8 +87,35 @@ export const EDITOR_ACTIONS = [
   'sheet_set_autofilter', 'sheet_freeze_panes', 'sheet_conditional_format',
   // [审阅面板] 修订/批注的清单·定位·逐条处置。Host-initiated（ReviewPanel.vue），
   // 页边小字读不到作者/时间、表格同行多格删除还会互叠——面板是修订的权威视图。
+  // 这一组同时也是文档能力矩阵 4.2 节 Word 待办里"包一层 AI 工具面"的落点：
+  // doc_list_revisions/doc_accept(_all)_revision(s)/doc_reject(_all)_revision(s)、
+  // doc_get_comments/doc_resolve_comment/doc_delete_comment 直接复用同一批 action。
   'list_revisions', 'goto_revision', 'resolve_revision', 'resolve_all_revisions',
   'list_comments', 'goto_comment', 'set_comment_resolved', 'delete_comment',
+  // [批注回复] doc_reply_comment 的落点——同一批注锚点上追加一条新批注，见
+  // office_thread.js reply_comment 的实现注释（原生线程属性 best-effort）。
+  'reply_comment',
+  // [Word 二期结构面] 文档能力矩阵 4.2 节桌面端待办：页眉页脚 / 分页分节符 /
+  // 脚注尾注 / 锚点定位超链接 / 应用既有样式。均为新 worker 实现（非包装既有
+  // host-initiated action）。
+  'edit_header_footer', 'insert_break', 'insert_footnote', 'insert_endnote',
+  'set_hyperlink_at_anchor', 'set_style',
+  // [Calc 二期] 文档能力矩阵 4.2 节 Excel 待办：单元格批注（无线程回复/解决态，
+  // 只做增/查/删）/ 数据验证 / 图表（建图表+选类型+标题起步）/ Excel 专用搜索 /
+  // 工作簿级命名区域 / 工作表保护 / 行列分组大纲 / 数据透视表（行分组+求和基础形态）。
+  'sheet_add_comment', 'sheet_get_comments', 'sheet_delete_comment',
+  'sheet_set_data_validation', 'sheet_add_chart', 'sheet_search',
+  'sheet_define_name', 'sheet_protect_sheet', 'sheet_group_rows_cols',
+  'sheet_add_pivot_table',
+  // [Impress 演示文稿] slide_* 原语集 Phase 1（打开/读取/文本编辑）：与 doc_*(Writer)/
+  // sheet_*(Calc) 三分，工具名 = action 名不做映射。worker 侧 resolvePage/resolveShape
+  // 对非 Impress 文档返回明确错误（同 resolveSheet 口径）。
+  // 设计依据：docs/superpowers/specs/2026-08-07-impress-bridge-design.md §4。
+  'slide_get_overview', 'slide_get_page', 'slide_read_notes', 'slide_write_notes',
+  'slide_goto', 'slide_set_shape_text', 'slide_replace_text',
+  // [诊断] 当前文档内核类型（writer/calc/impress/unknown）——审阅按钮等 UI 按 kind
+  // 隐藏的判据；load_document 的返回值里也带 kind，宿主常规路径无需二次往返调用本诊断。
+  'get_doc_kind',
 ]
 
 /**

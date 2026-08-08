@@ -235,8 +235,22 @@ function countComments() {
   } catch (e) {}
   return n;
 }
-function commentAt(index) {
-  const want = Number(index);
+// ref 接受两种形状：数字 index（枚举顺序，ReviewPanel 既有用法）或字符串 id
+// （批注的 Name 属性——AI 工具面用它替代 index，因为 index 在任何一条批注被
+// 处置/删除后就会整体前移，同一会话里两次调用之间不可靠）。
+function commentAt(ref) {
+  if (typeof ref === 'string' && ref !== '' && !/^\d+$/.test(ref)) {
+    try {
+      const en = xModel.getTextFields().createEnumeration();
+      while (en.hasMoreElements()) {
+        const f = en.nextElement();
+        if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+        try { if (String(f.getPropertyValue('Name')) === ref) return f; } catch (e) {}
+      }
+    } catch (e) {}
+    return null;
+  }
+  const want = Number(ref);
   if (!(want >= 0)) return null;
   try {
     const en = xModel.getTextFields().createEnumeration();
@@ -248,6 +262,9 @@ function commentAt(index) {
     }
   } catch (e) {}
   return null;
+}
+function commentIdOf(f) {
+  try { return String(f.getPropertyValue('Name') || ''); } catch (e) { return ''; }
 }
 // Insert text at the view cursor, honoring '\n' as a PARAGRAPH BREAK.
 // XText.insertString does NOT split paragraphs on '\n' (verified against the
@@ -829,6 +846,8 @@ function sheetRangeName(addr) {
   const b = colLetterOf(addr.EndColumn) + (addr.EndRow + 1);
   return a === b ? a : a + ':' + b;
 }
+// 绝对引用形式的单元格坐标（'$A$1'），命名区域公式拼接用。
+function absCellRef(col, row) { return '$' + colLetterOf(col) + '$' + (row + 1); }
 function usedRangeAddress(sheet) {
   const cur = sheet.createCursor();
   cur.gotoStartOfUsedArea(false);
@@ -883,6 +902,171 @@ function normalizeFormula(f) {
     out += ch;
   }
   return out;
+}
+
+// ---- Impress（演示文稿 slide_*）原语 helpers --------------------------------
+// 引擎自 r4 起含 Impress 模块（doc-editor.md 待 r4 验收更新口径）；pptx/odp 经
+// load_document 打开后由 Impress 承载，doc_*（xModel.getText()）/sheet_*
+// （xModel.getSheets()）在演示文稿上必然失败——slide_* 是对等原语集。文档类型
+// 守卫集中在 resolvePage/resolveShape（同 resolveSheet/resolveWriterTable 口径）。
+// 设计依据：docs/superpowers/specs/2026-08-07-impress-bridge-design.md §4/§4.3。
+function isImpressDoc() {
+  try { return !!(xModel && xModel.supportsService && xModel.supportsService('com.sun.star.presentation.PresentationDocument')); }
+  catch (e) { return false; }
+}
+const NOT_PRESENTATION_MSG = '当前打开的不是演示文稿：slide_* 原语仅对 pptx/ppt/odp 生效。Word 文档请用 doc_* 原语，表格请用 sheet_* 原语；要操作演示文稿请先用 doc_open_file 打开它。';
+// 当前文档内核类型——get_doc_kind 诊断 action 与 load_document 返回值共用，宿主
+// 据此按 kind 隐藏「审阅」按钮/ReviewPanel（Calc/Impress 都没有修订机制）。
+function docKindOf() {
+  try { if (isWriterDoc()) return 'writer'; } catch (e) {}
+  try { if (isCalcDoc()) return 'calc'; } catch (e) {}
+  try { if (isImpressDoc()) return 'impress'; } catch (e) {}
+  return 'unknown';
+}
+// 统一失败返回：同时写 error（后端桥 handleEditorCommand 只回传 result.error）
+// 与 message（worker 既有约定），两者同文——同 tableFail 口径（doc_table_* 已踩过）。
+function slideFail(msg) { return { success: false, error: msg, message: msg }; }
+
+// 位置/尺寸对外一律磅（pt），UNO 的 Position/Size 值结构体单位是 1/100 mm。
+const PT_PER_HMM = 1 / 35.28;
+function hmmToPt(hmm) { return Math.round(Number(hmm) * PT_PER_HMM * 100) / 100; }
+
+// slideNumber 1 开始。命中后顺手 setCurrentPage（拟人：与 resolveSheet 切活动表
+// 同一口径，操作在哪页要让用户看得见）。返回 {page, index} 或 {error}。
+function resolvePage(p) {
+  if (!isImpressDoc()) return { error: NOT_PRESENTATION_MSG };
+  let pages;
+  try { pages = xModel.getDrawPages(); } catch (e) { return { error: '读取幻灯片列表失败: ' + errStr(e) }; }
+  const count = pages.getCount();
+  const want = p && p.slideNumber != null ? Number(p.slideNumber) : NaN;
+  if (!Number.isFinite(want) || want < 1 || want > count) {
+    return { error: '页码越界: ' + (p && p.slideNumber) + '（共 ' + count + ' 页，1 开始）' };
+  }
+  const index = want - 1;
+  let page;
+  try { page = pages.getByIndex(index); } catch (e) { return { error: '定位幻灯片失败: ' + errStr(e) }; }
+  try {
+    if (ctrl && ctrl.getCurrentPage && ctrl.setCurrentPage) {
+      const cur = ctrl.getCurrentPage();
+      if (!cur || !unoSameDrawPage(cur, page)) ctrl.setCurrentPage(page);
+    }
+  } catch (e) {}
+  return { page: page, index: index };
+}
+// XDrawPage 没有稳定的等值比较；退回按 Number 属性比对（GenericDrawPage.Number 只读）。
+function unoSameDrawPage(a, b) {
+  try { return a.getPropertyValue('Number') === b.getPropertyValue('Number'); } catch (e) { return a === b; }
+}
+// 未命名形状补一个稳定名 __awd_shape_N（页内下标），此后所有原语按名定位，
+// 避免用会因增删漂移的 index。
+function ensureShapeNames(page) {
+  const n = page.getCount();
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+    let name = ''; try { name = shape.getName ? shape.getName() : ''; } catch (e) {}
+    if (!name) { try { shape.setName('__awd_shape_' + i); } catch (e) {} }
+  }
+}
+// 形状文字：大多数形状（文本框/标题/占位符）实现 drawing.Text；线条/连接符/表格
+// 外壳等不实现，统一 try/catch 归零而非抛错，读取面据此判断"这个形状没有文字"。
+function shapeText(shape) {
+  try { return shape.getText().getString() || ''; } catch (e) { return ''; }
+}
+// 形状分类，仅用于 slide_get_overview/slide_get_page 的展示与 slide_replace_text
+// 的表格识别；不影响文字读写路径本身（那条走 getText() 统一处理，与分类无关）。
+function shapeKind(shape) {
+  try {
+    if (shape.supportsService('com.sun.star.presentation.TitleTextShape')) return 'title';
+    if (shape.supportsService('com.sun.star.presentation.OutlineTextShape') ||
+        shape.supportsService('com.sun.star.presentation.SubtitleTextShape') ||
+        shape.supportsService('com.sun.star.presentation.NotesTextShape')) return 'placeholder';
+    if (shape.supportsService('com.sun.star.drawing.TableShape')) return 'table';
+    if (shape.supportsService('com.sun.star.drawing.GraphicObjectShape')) return 'image';
+    if (shape.supportsService('com.sun.star.drawing.TextShape')) return 'text';
+    if (shape.supportsService('com.sun.star.drawing.RectangleShape')) return 'rectangle';
+    if (shape.supportsService('com.sun.star.drawing.EllipseShape')) return 'ellipse';
+    if (shape.supportsService('com.sun.star.drawing.LineShape')) return 'line';
+    if (shape.supportsService('com.sun.star.drawing.GroupShape')) return 'group';
+  } catch (e) {}
+  return 'other';
+}
+// 按 shapeName（XNamed.Name）或 matchText（子串匹配文字）定位形状。返回
+// {shape, index, name} 或 {error}。调用前应已 ensureShapeNames(page)。
+function resolveShape(page, p) {
+  const n = page.getCount();
+  const wantName = p && p.shapeName != null && String(p.shapeName).trim() !== '' ? String(p.shapeName).trim() : null;
+  const wantText = p && p.matchText != null && String(p.matchText).trim() !== '' ? String(p.matchText).trim() : null;
+  if (wantName) {
+    for (let i = 0; i < n; i++) {
+      let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+      let name = ''; try { name = shape.getName(); } catch (e) {}
+      if (name === wantName) return { shape: shape, index: i, name: name };
+    }
+    return { error: '形状不存在: ' + wantName + '（该页共 ' + n + ' 个形状，可用 slide_get_page 查看）' };
+  }
+  if (wantText) {
+    for (let i = 0; i < n; i++) {
+      let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+      const text = shapeText(shape);
+      if (text && text.indexOf(wantText) !== -1) {
+        let name = ''; try { name = shape.getName(); } catch (e) {}
+        return { shape: shape, index: i, name: name };
+      }
+    }
+    return { error: '未找到包含文字的形状: ' + wantText };
+  }
+  return { error: '缺少 shapeName 或 matchText 参数' };
+}
+// 备注页正文形状定位。r4 真机验证发现：pptx 经 oox 过滤器导入后，备注页上的
+// 占位符形状（缩略图/备注正文/页码）一律只 supportsService('presentation.Shape')
+// 这个通用服务，具体子类型（NotesTextShape/SlideNumberShape 等）不会出现在
+// supportsService/getSupportedServiceNames 里——原语按 NotesTextShape 判定会
+// 对真实 pptx 100% 落空（swriter/scalc 的 isWriterDoc/isCalcDoc 靠 xModel 顶层
+// 服务判型不受影响，这是 sd 占位符子类型独有的坑）。三级回退定位：
+//  1) 具体服务判定（若未来某个 LO 版本/ODP 原生文档确实实现了它，优先信）；
+//  2) 按名字（"Notes Placeholder" 是 PowerPoint/python-pptx 备注母版模板的默认
+//     英文命名，与文档 UI 语言无关，比 PlaceholderText 的本地化提示文字稳）；
+//  3) 兜底：排除已知非备注占位符（缩略图/页码/日期/页脚/页眉）后，取支持
+//     drawing.Text 的形状里面积最大的那个（备注正文框通常占据版面主体）。
+function findNotesTextShape(notesPage) {
+  if (!notesPage) return null;
+  const n = notesPage.getCount();
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
+    try { if (shape.supportsService('com.sun.star.presentation.NotesTextShape')) return shape; } catch (e) {}
+  }
+  const NON_NOTES_NAME = /slide image|slide number|date placeholder|footer placeholder|header placeholder/i;
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
+    let name = ''; try { name = shape.getName ? shape.getName() : ''; } catch (e) {}
+    if (/notes/i.test(name) && !NON_NOTES_NAME.test(name)) return shape;
+  }
+  let best = null, bestArea = -1;
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = notesPage.getByIndex(i); } catch (e) { continue; }
+    let name = ''; try { name = shape.getName ? shape.getName() : ''; } catch (e) {}
+    if (NON_NOTES_NAME.test(name)) continue;
+    let hasText = false; try { hasText = shape.supportsService('com.sun.star.drawing.Text'); } catch (e) {}
+    if (!hasText) continue;
+    let size = null; try { size = shape.getSize(); } catch (e) {}
+    const area = size ? Number(size.Width) * Number(size.Height) : 0;
+    if (area > bestArea) { bestArea = area; best = shape; }
+  }
+  return best;
+}
+// 备注页文字：找到备注正文形状后读回其文字（找不到则视为无备注，不是错误）。
+function notesPageText(notesPage) {
+  const shape = findNotesTextShape(notesPage);
+  return shape ? shapeText(shape) : '';
+}
+// 版式名最佳努力映射（AutoLayout 是 short 常量，未在本次调研中逐值核对 idl，
+// 仅覆盖几个常被引用的值；命中不了就回退成 null，前端/模型仍能用数字 layout
+// 字段）。r4 真机验证时如与实际枚举不符，直接改这张表，不影响原语契约。
+const AUTO_LAYOUT_NAMES = { 0: '标题页', 1: '标题+内容', 19: '仅标题', 20: '空白' };
+function layoutNameOf(layout) {
+  if (layout == null) return null;
+  const n = Number(layout);
+  return Object.prototype.hasOwnProperty.call(AUTO_LAYOUT_NAMES, n) ? AUTO_LAYOUT_NAMES[n] : null;
 }
 
 // ---- 流式写入状态机：markdown 行级解析 → 标准格式落字 ------------------------
@@ -1128,6 +1312,41 @@ function testInsertText(text) {
       log('inserttext: 经 UNO XText.insertString 追加「' + t + '」(无 ViewCursor 回退)。');
     }
   } catch (e) { log('inserttext ERROR: ' + errStr(e)); }
+}
+
+// ---- 脚注/尾注 helper --------------------------------------------------------
+// com.sun.star.text.Footnote 服务同时承载脚注与尾注——由 IsEndnote 属性区分
+// （常见 LO/OOo 宏写法）；该服务本身实现 XText，footnote.setString() 直接写
+// 注释正文。锚点插在光标处，可选 anchorId 复用既有 anchorRange() 精确定位。
+function insertFootnoteImpl(p, isEndnote) {
+  if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+  const text = p && p.text != null ? String(p.text) : '';
+  if (!text) return tableFail((isEndnote ? 'insert_endnote' : 'insert_footnote') + ' requires {text}');
+  const anchorId = p && p.anchor ? String(p.anchor) : '';
+  const vc = ctrl.getViewCursor();
+  if (anchorId) {
+    const r = anchorRange(anchorId);
+    if (!r) return tableFail('anchor not found: ' + anchorId);
+    try { vc.gotoRange(r.getEnd(), false); } catch (e) { return tableFail('无法定位锚点: ' + errStr(e)); }
+  } else {
+    vc.collapseToEnd();
+  }
+  let note;
+  try {
+    note = xModel.createInstance('com.sun.star.text.Footnote');
+  } catch (e) { return tableFail('创建' + (isEndnote ? '尾注' : '脚注') + '失败: ' + errStr(e)); }
+  if (isEndnote) {
+    try { note.setPropertyValue('IsEndnote', true); }
+    catch (e) { return tableFail('引擎不支持尾注（IsEndnote 属性设置失败）: ' + errStr(e)); }
+  }
+  try {
+    vc.getText().insertTextContent(vc, note, false);
+    note.setString(text);
+  } catch (e) { return tableFail('插入' + (isEndnote ? '尾注' : '脚注') + '失败: ' + errStr(e)); }
+  try { vc.collapseToEnd(); } catch (e) {}
+  let label = '';
+  try { label = String(note.getLabel() || ''); } catch (e) {}
+  return { success: true, text: text, label: label, endnote: !!isEndnote, anchor: anchorId || null };
 }
 
 // ==========================================================================
@@ -1573,7 +1792,7 @@ const EXEC = {
     // Empty body = a brand-new / unsaved document (the backend streams 200 + 0
     // bytes for it). That is NOT an error: keep the blank boot doc as-is. The
     // host also guards this, but defend here too.
-    if (!u8 || u8.length === 0) return { success: true, empty: true, name: name };
+    if (!u8 || u8.length === 0) return { success: true, empty: true, name: name, kind: docKindOf() };
     // zeta.js marshals JS→UNO sequences ONLY from plain Arrays (translateToEmbind
     // gates on Array.isArray), and sequence<byte> elements are SIGNED — so go
     // through an Int8Array view, then Array.from. Passing the typed array itself
@@ -1589,9 +1808,14 @@ const EXEC = {
       try { installKeyHandler(); } catch (e) {}
       // The listener is per-model — the freshly-loaded component needs its own.
       try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
-      // Revisions default ON for the real document too (same as bootDoc).
-      try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
-      showDeletionsInMargin();
+      // RecordChanges/ShowChangesInMargin 是 Writer 专属（Calc/Impress 没有该属性）——
+      // 此前对非 Writer 文档也无条件调用，靠 try/catch 兜住但会白抛异常 + 打噪声日志
+      // （Impress 场景尤其误导：看起来像"修订功能坏了"）。改成前置类型判定。
+      if (isWriterDoc()) {
+        // Revisions default ON for the real document too (same as bootDoc).
+        try { xModel.setPropertyValue('RecordChanges', true); } catch (e) {}
+        showDeletionsInMargin();
+      }
     };
 
     const errs = [];
@@ -1614,7 +1838,7 @@ const EXEC = {
       if (loaded) {
         retarget(loaded);
         log('load_document: 已加载真实文档「' + name + '」/ loaded (' + u8.length + ' bytes, via file)');
-        return { success: true, name: name, bytes: u8.length, via: 'file' };
+        return { success: true, name: name, bytes: u8.length, via: 'file', kind: docKindOf() };
       }
       errs.push('file: loadComponentFromURL returned null');
     } catch (e) { errs.push('file: ' + errStr(e)); }
@@ -1630,7 +1854,7 @@ const EXEC = {
       if (loaded) {
         retarget(loaded);
         log('load_document: 已加载真实文档「' + name + '」/ loaded (' + u8.length + ' bytes, via stream)');
-        return { success: true, name: name, bytes: u8.length, via: 'stream' };
+        return { success: true, name: name, bytes: u8.length, via: 'stream', kind: docKindOf() };
       }
       errs.push('stream: loadComponentFromURL returned null');
     } catch (e) { errs.push('stream: ' + errStr(e)); }
@@ -2244,8 +2468,11 @@ const EXEC = {
     return Object.assign({ success: true, paragraphs: paras, tables: tables }, verifySnapshot());
   },
   // [流式] markdown 剥离 + 标准格式落字（doc_start_stream 管线的落字端）。
-  // 攒到完整行才消费；尾部残行等 stream_flush。
+  // 攒到完整行才消费；尾部残行等 stream_flush。HOUSE 是 Writer 排版语义
+  // （首行缩进 2 字符/段后 18 磅），在幻灯片/表格上无意义——遇到非 Writer 文档
+  // 直接报错，让模型改走 slide_*/sheet_*，不悄悄把 markdown 正文糊进错误的文档模型。
   stream_insert(p) {
+    if (!isWriterDoc()) return tableFail('doc_start_stream 仅支持 Word 文档：当前文档不是 Writer 文档。电子表格请用 sheet_* 原语，演示文稿请用 slide_* 原语逐处编辑。');
     streamEnsureActive();
     STREAM.buf += String(p.text || '');
     const nl = STREAM.buf.lastIndexOf('\n');
@@ -2400,6 +2627,29 @@ const EXEC = {
     cur.setPropertyValue('HyperLinkURL', url);
     return { success: true, text: text, url: url };
   },
+  // [Word 二期] AI 工具面的超链接原语——与 set_selection_hyperlink（host-initiated，
+  // 靠"当前选区"）不同，这里直接吃 anchor 参数，一次 worker 往返完成"找到锚点→
+  // 选中→设置"，走的是 replace_at_position（doc_replace_at_anchor 的下发目标）
+  // 同一先例：AI 工具面每次调用都是独立请求，两次请求之间"当前选区"不可靠，
+  // 必须靠锚点自己定位，不能依赖调用前谁选中了什么。
+  set_hyperlink_at_anchor(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const url = String((p && p.url) || '');
+    if (!url) return tableFail('set_hyperlink_at_anchor requires {url}');
+    if (!/^https?:\/\//i.test(url)) return tableFail('url 仅支持 http/https: ' + url);
+    const anchorId = p && p.anchor ? String(p.anchor) : '';
+    if (!anchorId) return tableFail('set_hyperlink_at_anchor requires {anchor}');
+    const range = anchorRange(anchorId);
+    if (!range) return tableFail('anchor not found: ' + anchorId);
+    if (!selectVisibly(range)) return tableFail('could not select anchor: ' + anchorId);
+    const text = range.getString() || '';
+    try {
+      const xText = range.getText();
+      const cur = xText.createTextCursorByRange(range);
+      cur.setPropertyValue('HyperLinkURL', url);
+    } catch (e) { return tableFail('设置超链接失败: ' + errStr(e)); }
+    return { success: true, anchor: anchorId, text: text, url: url };
+  },
   // insert {text} at the view cursor wrapped in a named bookmark, optionally
   // hyperlinked — the WPS-era insertEvidenceLink/insertTextWithBookmark (网核
   // 证据标记). Same insert shape as var_insert (bookmark spans the inserted run).
@@ -2520,6 +2770,112 @@ const EXEC = {
       paragraph: (paragraphTextOf(range) || '').slice(0, 200),
     };
   },
+  // ---- [Word 二期] 结构面：脚注/尾注、页眉页脚、分页/分节符、样式 -----------
+  // 文档能力矩阵（4.2 节）桌面端待办：批注/修订/超链接/图片是"包一层 AI 工具面
+  // 就够"，这一组是真正的新 worker 实现。
+  insert_footnote(p) { return insertFootnoteImpl(p, false); },
+  insert_endnote(p) { return insertFootnoteImpl(p, true); },
+  // 首节页眉/页脚文本 + 对齐。只处理文档的第一个（也是最常见情形下唯一的）页面
+  // 样式——按节差异化页眉页脚不在本次范围内（法律文件极少见，与 office_addin
+  // 侧 edit_header_footer"只处理首节"同一简化）。UNO 没有直接的"当前生效页面
+  // 样式"查询点：把视图光标挪到文档开头读 PageStyleName 是宏录制的标准取法
+  // （内部名恒为英文如 'Standard'，UI 显示才随 zh-CN 语言包本地化，因此不受
+  // 语言包影响）。
+  edit_header_footer(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const target = String((p && p.target) || 'header').toLowerCase();
+    if (target !== 'header' && target !== 'footer') return tableFail("target must be 'header' or 'footer'");
+    const text = p && p.text != null ? String(p.text) : null;
+    if (text == null) return tableFail('edit_header_footer requires {text}');
+    const ALIGN_MAP = { left: css.style.ParagraphAdjust.LEFT, right: css.style.ParagraphAdjust.RIGHT, center: css.style.ParagraphAdjust.CENTER, justify: css.style.ParagraphAdjust.BLOCK };
+    let alignValue = null;
+    if (p && p.align != null) {
+      alignValue = ALIGN_MAP[String(p.align).toLowerCase()];
+      // 先校验参数、后落笔——避免"对齐值非法"时页眉页脚文本已经写了一半
+      if (alignValue == null) return tableFail('bad align: ' + p.align + ' (left/right/center/justify)');
+    }
+    let styleName = '';
+    try {
+      const vc = ctrl.getViewCursor();
+      const savedRange = vc.getStart();
+      vc.gotoStart(false);
+      styleName = String(vc.getPropertyValue('PageStyleName') || '');
+      vc.gotoRange(savedRange, false);
+    } catch (e) { return tableFail('无法定位页面样式: ' + errStr(e)); }
+    if (!styleName) return tableFail('无法确定文档的页面样式');
+    let pageStyle;
+    try { pageStyle = xModel.getStyleFamilies().getByName('PageStyles').getByName(styleName); }
+    catch (e) { return tableFail('读取页面样式失败: ' + errStr(e)); }
+    const isOnProp = target === 'header' ? 'HeaderIsOn' : 'FooterIsOn';
+    const textProp = target === 'header' ? 'HeaderText' : 'FooterText';
+    try {
+      pageStyle.setPropertyValue(isOnProp, true);
+      const xt = pageStyle.getPropertyValue(textProp);
+      xt.setString(text);
+      if (alignValue != null) {
+        const en = xt.createEnumeration();
+        while (en.hasMoreElements()) {
+          const para = en.nextElement();
+          if (para.supportsService && para.supportsService('com.sun.star.text.Paragraph')) {
+            try { para.setPropertyValue('ParaAdjust', alignValue); } catch (e) {}
+          }
+        }
+      }
+    } catch (e) { return tableFail('设置' + (target === 'header' ? '页眉' : '页脚') + '失败: ' + errStr(e)); }
+    return { success: true, target: target, pageStyle: styleName, text: text };
+  },
+  // 分页符/分节符（Word 语义的"下一页"分节符）。页内插入而非追加：先在光标处
+  // 打一个段落断（把光标后的内容推到新段），再给这个新段打上 BreakType（纯分页）
+  // 或 PageDescName（分节——沿用当前页面样式起一个新的"页面样式序列"，这是
+  // UNO/ODF 与 Word 分节机制互通的标准写法，export 到 docx 落成真正的 <w:sectPr>）。
+  insert_break(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const breakType = String((p && p.breakType) || 'page').toLowerCase();
+    if (breakType !== 'page' && breakType !== 'sectionnext') return tableFail("breakType must be 'page' or 'sectionNext'");
+    const vc = ctrl.getViewCursor();
+    const xText = vc.getText();
+    vc.collapseToEnd(); // 塌陷选区，避免连带删掉已选中的文本
+    let styleName = '';
+    if (breakType === 'sectionnext') {
+      try { styleName = String(vc.getPropertyValue('PageStyleName') || ''); } catch (e) {}
+      if (!styleName) return tableFail('无法确定当前页面样式，无法插入分节符');
+    }
+    try {
+      xText.insertControlCharacter(vc, css.text.ControlCharacter.PARAGRAPH_BREAK, false);
+      if (breakType === 'page') vc.setPropertyValue('BreakType', css.style.BreakType.PAGE_BEFORE);
+      else vc.setPropertyValue('PageDescName', styleName);
+    } catch (e) { return tableFail('插入' + (breakType === 'page' ? '分页符' : '分节符') + '失败: ' + errStr(e)); }
+    return { success: true, breakType: breakType === 'page' ? 'page' : 'sectionNext' };
+  },
+  // 应用既有样式（段落样式 ParaStyleName / 字符样式 CharStyleName）。与
+  // doc_format_selection / doc_set_paragraph_format 同一约定：不接 anchor 参数，
+  // 作用于"当前选区/光标"——AI 侧先 doc_select_anchor / doc_select_paragraph
+  // 选中目标，再调用本原语，与那两个格式化原语的调用序列完全一致，不必再引入
+  // 第二套"直接传 anchor"的调用方式徒增分叉。
+  set_style(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const kind = String((p && p.kind) || 'paragraph').toLowerCase();
+    if (kind !== 'paragraph' && kind !== 'character') return tableFail("kind must be 'paragraph' or 'character'");
+    const styleName = p && p.styleName ? String(p.styleName) : '';
+    if (!styleName) return tableFail('set_style requires {styleName}');
+    const familyName = kind === 'paragraph' ? 'ParagraphStyles' : 'CharacterStyles';
+    let family;
+    try { family = xModel.getStyleFamilies().getByName(familyName); }
+    catch (e) { return tableFail('读取样式库失败: ' + errStr(e)); }
+    if (!family.hasByName(styleName)) {
+      const names = (family.getElementNames && family.getElementNames()) || [];
+      return tableFail('样式不存在: ' + styleName + '（可用样式：' + names.slice(0, 20).join('、')
+        + (names.length > 20 ? ' 等共 ' + names.length + ' 个' : '') + '）');
+    }
+    const vc = ctrl.getViewCursor();
+    if (kind === 'character' && (vc.getString() || '').length === 0) {
+      return tableFail('未选中文本：字符样式需要先选中要套样式的文字（doc_select_anchor / doc_select_paragraph）');
+    }
+    const propName = kind === 'paragraph' ? 'ParaStyleName' : 'CharStyleName';
+    try { vc.setPropertyValue(propName, styleName); }
+    catch (e) { return tableFail('应用样式失败: ' + errStr(e)); }
+    return { success: true, kind: kind, styleName: styleName, text: (vc.getString() || '').slice(0, 200) };
+  },
   // ---- [审阅面板] 修订与批注的清单 / 定位 / 逐条处置 --------------------
   // 页边显示解决了「删除文本压正文」，但同一表格行多格删除仍会在页边同高互叠，
   // 且页边小字读不到作者/时间。审阅面板（宿主右栏）用下面这组原语驱动：列出、
@@ -2559,7 +2915,7 @@ const EXEC = {
         it.text = String(it.text || '').slice(0, 120);
         out.push(it);
       }
-    } catch (e) { return { success: false, message: errStr(e) }; }
+    } catch (e) { return tableFail(errStr(e)); }
     return { success: true, count: out.length, revisions: out };
   },
   goto_revision(p) {
@@ -2576,10 +2932,10 @@ const EXEC = {
   // 多出一条空插入修订。
   resolve_revision(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
-    if (action !== 'accept' && action !== 'reject') return { success: false, message: "action must be accept|reject" };
+    if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const r = redlineAt(p && p.index);
-    if (!r) return { success: false, message: 'no revision at index ' + (p && p.index) };
-    if (!selectRedlineRange(r, true)) return { success: false, message: 'could not select revision range' };
+    if (!r) return tableFail('no revision at index ' + (p && p.index));
+    if (!selectRedlineRange(r, true)) return tableFail('could not select revision range');
     const before = countRedlines();
     css.frame.DispatchHelper.create(context).executeDispatch(
       ctrl.getFrame(), action === 'accept' ? '.uno:AcceptTrackedChange' : '.uno:RejectTrackedChange', '', 0, []);
@@ -2587,11 +2943,11 @@ const EXEC = {
     // dispatch 不报错也可能没命中——用条数变化确认，别对用户谎报成功
     return after < before
       ? { success: true, index: Number(p.index), action: action, remaining: after }
-      : { success: false, message: '修订未被处置（引擎未命中该条）', remaining: after };
+      : Object.assign(tableFail('修订未被处置（引擎未命中该条）'), { remaining: after });
   },
   resolve_all_revisions(p) {
     const action = String((p && p.action) || 'accept').toLowerCase();
-    if (action !== 'accept' && action !== 'reject') return { success: false, message: "action must be accept|reject" };
+    if (action !== 'accept' && action !== 'reject') return tableFail("action must be accept|reject");
     const before = countRedlines();
     css.frame.DispatchHelper.create(context).executeDispatch(
       ctrl.getFrame(), action === 'accept' ? '.uno:AcceptAllTrackedChanges' : '.uno:RejectAllTrackedChanges', '', 0, []);
@@ -2606,6 +2962,7 @@ const EXEC = {
         const f = en.nextElement();
         if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
         const it = { index: out.length };
+        try { it.id = commentIdOf(f); } catch (e) {}
         try { it.author = f.getPropertyValue('Author'); } catch (e) {}
         try { it.content = String(f.getPropertyValue('Content') || '').slice(0, 500); } catch (e) {}
         try {
@@ -2620,7 +2977,7 @@ const EXEC = {
         } catch (e) {}
         out.push(it);
       }
-    } catch (e) { return { success: false, message: errStr(e) }; }
+    } catch (e) { return tableFail(errStr(e)); }
     return { success: true, count: out.length, comments: out };
   },
   goto_comment(p) {
@@ -2629,20 +2986,24 @@ const EXEC = {
     try { return selectVisibly(f.getAnchor()) ? { success: true, index: Number(p.index) } : { success: false, message: 'could not select anchor' }; }
     catch (e) { return { success: false, message: errStr(e) }; }
   },
+  // AI 工具面（doc_resolve_comment）与 ReviewPanel（{index}）共用本原语：ref 优先
+  // 取 id（commentAt 按 Name 定位，跨调用稳定），没有 id 才退回 index。
   set_comment_resolved(p) {
-    const f = commentAt(p && p.index);
-    if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
+    const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
+    const f = commentAt(ref);
+    if (!f) return tableFail('no comment at ' + ref);
     try {
       f.setPropertyValue('Resolved', !!(p && p.resolved));
-      return { success: true, index: Number(p.index), resolved: !!f.getPropertyValue('Resolved') };
-    } catch (e) { return { success: false, message: errStr(e) }; }
+      return { success: true, id: commentIdOf(f), resolved: !!f.getPropertyValue('Resolved') };
+    } catch (e) { return tableFail(errStr(e)); }
   },
   // 删除批注：removeTextContent 是正路。**dispose() 不能信**——它在本引擎上
   // 既不抛异常也不真的移除批注字段（真机实证），照着它的返回值报成功就是骗
   // 用户。两条路都跑完还要用条数复核。
   delete_comment(p) {
-    const f = commentAt(p && p.index);
-    if (!f) return { success: false, message: 'no comment at index ' + (p && p.index) };
+    const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
+    const f = commentAt(ref);
+    if (!f) return tableFail('no comment at ' + ref);
     const before = countComments();
     const errs = [];
     // 主路：定位到批注锚点后派发 .uno:DeleteComment，**Id 参数（批注的 Name）
@@ -2654,8 +3015,7 @@ const EXEC = {
     try { if (f.getPropertyValue('Resolved')) f.setPropertyValue('Resolved', false); } catch (e) {}
     try { selectVisibly(f.getAnchor()); } catch (e) { errs.push(errStr(e)); }
     try {
-      let name = '';
-      try { name = String(f.getPropertyValue('Name') || ''); } catch (e) { errs.push(errStr(e)); }
+      const name = commentIdOf(f);
       css.frame.DispatchHelper.create(context).executeDispatch(
         ctrl.getFrame(), '.uno:DeleteComment', '', 0, [mkProp('Id', name)]);
     } catch (e) { errs.push(errStr(e)); }
@@ -2664,8 +3024,54 @@ const EXEC = {
     }
     const after = countComments();
     return after < before
-      ? { success: true, index: Number(p.index), remaining: after }
-      : { success: false, message: '批注未被删除' + (errs.length ? '：' + errs.join(' | ') : ''), remaining: after };
+      ? { success: true, remaining: after }
+      : Object.assign(tableFail('批注未被删除' + (errs.length ? '：' + errs.join(' | ') : '')), { remaining: after });
+  },
+  // [批注回复] 是否有真正的原生线程回复（LO 的 ParentId/ParentName 一类属性）
+  // 在这个引擎版本上待查证——vendored zeta.js 未见相关 typedef，无法在不接
+  // 真机的情况下确认属性名。保守做法：复用已验证可靠的 .uno:InsertAnnotation
+  // 路径（与 add_comment 同一先例），在父批注同一锚点区间上追加一条新批注，
+  // 内容前缀"回复 {父批注作者}："保证语义可读；随后 best-effort 尝试挂
+  // ParentId/ParentName 两个候选属性名，成功与否都不影响主流程（失败静默吞掉，
+  // 因为这只是锦上添花的原生线程标记，不是功能是否可用的判据）。
+  reply_comment(p) {
+    const ref = p && (p.id != null && p.id !== '' ? p.id : p.index);
+    const parent = commentAt(ref);
+    if (!parent) return tableFail('未找到要回复的批注: ' + ref);
+    const text = String((p && p.text) || '');
+    if (!text) return tableFail('reply_comment requires {text}');
+    let parentAuthor = '';
+    const parentId = commentIdOf(parent);
+    try { parentAuthor = String(parent.getPropertyValue('Author') || ''); } catch (e) {}
+    let anchor;
+    try { anchor = parent.getAnchor(); } catch (e) { return tableFail('无法定位批注锚点: ' + errStr(e)); }
+    if (!selectVisibly(anchor)) return tableFail('无法选中批注锚点');
+    const before = {};
+    try {
+      const en = xModel.getTextFields().createEnumeration();
+      while (en.hasMoreElements()) {
+        const f = en.nextElement();
+        if (f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation')) before[commentIdOf(f)] = true;
+      }
+    } catch (e) {}
+    const replyContent = (parentAuthor ? ('回复 ' + parentAuthor + '：') : '') + text;
+    css.frame.DispatchHelper.create(context).executeDispatch(
+      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+      [mkProp('Text', replyContent), mkProp('Author', AI_AUTHOR)]);
+    let newField = null, newName = '';
+    try {
+      const en2 = xModel.getTextFields().createEnumeration();
+      while (en2.hasMoreElements()) {
+        const f = en2.nextElement();
+        if (!(f.supportsService && f.supportsService('com.sun.star.text.textfield.Annotation'))) continue;
+        const nm = commentIdOf(f);
+        if (nm && !before[nm]) { newField = f; newName = nm; }
+      }
+    } catch (e) {}
+    if (!newField) return tableFail('回复未生效（引擎未产生新批注）');
+    try { newField.setPropertyValue('ParentId', parentId); } catch (e) {}
+    try { newField.setPropertyValue('ParentName', parentId); } catch (e) {}
+    return { success: true, id: newName, parentId: parentId, author: AI_AUTHOR, text: text };
   },
   // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
   // 一直派发 debug_revisions，worker 此前未实现（一律返回 not implemented）；
@@ -3268,6 +3674,588 @@ const EXEC = {
         rule: String(p.rule), entries: readBack.getCount(), styleName: styleName,
       };
     } catch (e) { return { success: false, message: '条件格式设置失败: ' + errStr(e) }; }
+  },
+  // ---- [Calc 二期] 批注 / 数据验证 / 图表 / 搜索 / 命名区域 / 保护 / 分组 / 透视表 ----
+  // 文档能力矩阵（4.2 节）Excel 待办：此前 sheet_* 对这批能力零支持。
+  // [表格·批注] 单元格批注（XSheetAnnotations）。Calc 批注没有 Word 那种线程
+  // 回复/解决态概念——本组只做增/查/删三件事，不做 reply/resolve，工具描述里
+  // 已向模型说明这条与 Word 批注的差异。
+  sheet_add_comment(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const cellStr = p && p.cell ? String(p.cell).trim() : '';
+    const text = p && p.text != null ? String(p.text) : '';
+    if (!cellStr) return tableFail('sheet_add_comment requires {cell}（如 "B2"）');
+    if (!text) return tableFail('sheet_add_comment requires {text}');
+    const cellRange = sheetRange(sheet, cellStr);
+    if (!cellRange) return tableFail('无效的单元格: ' + cellStr);
+    const addr = cellRange.getRangeAddress();
+    let annotations;
+    try { annotations = sheet.getAnnotations(); } catch (e) { return tableFail('获取批注集合失败: ' + errStr(e)); }
+    let anno;
+    try {
+      anno = annotations.insertNew(
+        new css.table.CellAddress({ Sheet: addr.Sheet, Column: addr.StartColumn, Row: addr.StartRow }), text);
+    } catch (e) { return tableFail('新建批注失败: ' + errStr(e)); }
+    let author = '', date = '';
+    try { author = String(anno.getAuthor() || ''); } catch (e) {}
+    try { date = String(anno.getDate() || ''); } catch (e) {}
+    try { ctrl.select(cellRange); } catch (e) {}
+    return {
+      success: true, cell: colLetterOf(addr.StartColumn) + (addr.StartRow + 1),
+      sheet: sheet.getName(), author: author, date: date, text: text,
+    };
+  },
+  sheet_get_comments(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    let annotations;
+    try { annotations = sheet.getAnnotations(); } catch (e) { return tableFail('获取批注集合失败: ' + errStr(e)); }
+    const out = [];
+    try {
+      const n = annotations.getCount();
+      for (let i = 0; i < n; i++) {
+        const anno = annotations.getByIndex(i);
+        const pos = anno.getPosition();
+        const item = { index: i, cell: colLetterOf(pos.Column) + (pos.Row + 1) };
+        try { item.author = String(anno.getAuthor() || ''); } catch (e) {}
+        try { item.date = String(anno.getDate() || ''); } catch (e) {}
+        try { item.text = String(anno.getString() || '').slice(0, 500); } catch (e) {}
+        out.push(item);
+      }
+    } catch (e) { return tableFail(errStr(e)); }
+    return { success: true, sheet: sheet.getName(), count: out.length, comments: out };
+  },
+  sheet_delete_comment(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const cellStr = p && p.cell ? String(p.cell).trim() : '';
+    if (!cellStr) return tableFail('sheet_delete_comment requires {cell}（如 "B2"）');
+    const cellRange = sheetRange(sheet, cellStr);
+    if (!cellRange) return tableFail('无效的单元格: ' + cellStr);
+    const addr = cellRange.getRangeAddress();
+    let annotations;
+    try { annotations = sheet.getAnnotations(); } catch (e) { return tableFail('获取批注集合失败: ' + errStr(e)); }
+    let idx = -1;
+    try {
+      const n = annotations.getCount();
+      for (let i = 0; i < n; i++) {
+        const pos = annotations.getByIndex(i).getPosition();
+        if (pos.Column === addr.StartColumn && pos.Row === addr.StartRow) { idx = i; break; }
+      }
+    } catch (e) { return tableFail(errStr(e)); }
+    if (idx < 0) return tableFail('单元格 ' + cellStr + ' 没有批注');
+    try { annotations.removeByIndex(idx); } catch (e) { return tableFail('删除批注失败: ' + errStr(e)); }
+    return { success: true, cell: colLetterOf(addr.StartColumn) + (addr.StartRow + 1), sheet: sheet.getName() };
+  },
+  // [表格·结构] 数据验证（TableValidation）。range 的 'Validation' 属性是一个
+  // 属性集对象，改完必须整体 setPropertyValue 回 range 才生效（读出来改、不能
+  // 就地改）。list 类型 value1 是逗号分隔候选值，落成带引号的 Calc 显式列表公式
+  // （"a";"b";"c"）；wholeNumber/decimal/date/time/textLength 需要 operator +
+  // value1（between/notBetween 再加 value2）；custom 的 value1 是校验公式本身。
+  // clear=true 清除数据验证（Type 置回 ANY），忽略其他参数。
+  sheet_set_data_validation(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const range = sheetRange(r0.sheet, String(p.range || ''));
+    if (!range) return tableFail('无效的区域: ' + (p.range || '(空)'));
+    if (p && p.clear) {
+      try {
+        const v0 = range.getPropertyValue('Validation');
+        v0.setPropertyValue('Type', css.sheet.ValidationType.ANY);
+        range.setPropertyValue('Validation', v0);
+      } catch (e) { return tableFail('清除数据验证失败: ' + errStr(e)); }
+      return { success: true, range: sheetRangeName(range.getRangeAddress()), cleared: true };
+    }
+    const TYPE_MAP = { list: 'LIST', wholenumber: 'WHOLE', whole: 'WHOLE', decimal: 'DECIMAL', date: 'DATE', time: 'TIME', textlength: 'TEXT_LEN', custom: 'CUSTOM' };
+    const typeKey = TYPE_MAP[String(p && p.type || '').toLowerCase().replace(/[_-]/g, '')];
+    if (!typeKey) return tableFail('bad type: ' + (p && p.type) + ' (list/wholeNumber/decimal/date/time/textLength/custom)');
+    const OP_MAP = { greater: 'GREATER', greaterequal: 'GREATER_EQUAL', less: 'LESS', lessequal: 'LESS_EQUAL', equal: 'EQUAL', notequal: 'NOT_EQUAL', between: 'BETWEEN', notbetween: 'NOT_BETWEEN' };
+    let formula1 = '', formula2 = '', operatorKey = null;
+    if (typeKey === 'LIST') {
+      const items = String((p && p.value1) || '').split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s !== ''; });
+      if (!items.length) return tableFail('list 类型的 value1 需要逗号分隔的候选值，如 "合规,不合规,待核查"');
+      formula1 = items.map(function (v) { return '"' + v.replace(/"/g, '""') + '"'; }).join(';');
+    } else if (typeKey === 'CUSTOM') {
+      formula1 = (p && p.value1 != null) ? String(p.value1) : '';
+      if (!formula1) return tableFail('custom 类型的 value1 需要一个返回布尔值的校验公式');
+      formula1 = normalizeFormula(formula1);
+    } else {
+      operatorKey = OP_MAP[String((p && p.operator) || '').toLowerCase().replace(/[_-]/g, '')];
+      if (!operatorKey) return tableFail('bad operator: ' + (p && p.operator) + ' (greater/greaterEqual/less/lessEqual/equal/notEqual/between/notBetween)');
+      if (!p || p.value1 == null || String(p.value1) === '') return tableFail(typeKey + ' 类型需要 value1');
+      formula1 = normalizeFormula(String(p.value1));
+      if (operatorKey === 'BETWEEN' || operatorKey === 'NOT_BETWEEN') {
+        if (p.value2 == null || String(p.value2) === '') return tableFail('between/notBetween 需要 value2');
+        formula2 = normalizeFormula(String(p.value2));
+      }
+    }
+    try {
+      const v = range.getPropertyValue('Validation');
+      v.setPropertyValue('Type', css.sheet.ValidationType[typeKey]);
+      if (operatorKey) v.setPropertyValue('Operator', css.sheet.ConditionOperator[operatorKey]);
+      v.setPropertyValue('Formula1', formula1);
+      if (formula2) v.setPropertyValue('Formula2', formula2);
+      v.setPropertyValue('IgnoreBlankCells', (p && p.allowBlank) !== false);
+      if (p && p.showInputMessage) {
+        v.setPropertyValue('ShowInputMessage', true);
+        if (p.inputTitle != null) v.setPropertyValue('InputTitle', String(p.inputTitle));
+        if (p.inputMessage != null) v.setPropertyValue('InputMessage', String(p.inputMessage));
+      }
+      if (p && p.errorMessage != null && String(p.errorMessage) !== '') {
+        v.setPropertyValue('ShowErrorMessage', true);
+        v.setPropertyValue('ErrorAlertStyle', css.sheet.ValidationAlertStyle.STOP);
+        if (p.errorTitle != null) v.setPropertyValue('ErrorTitle', String(p.errorTitle));
+        v.setPropertyValue('ErrorMessage', String(p.errorMessage));
+      }
+      range.setPropertyValue('Validation', v);
+    } catch (e) { return tableFail('设置数据验证失败: ' + errStr(e)); }
+    const res = { success: true, range: sheetRangeName(range.getRangeAddress()), type: String(p.type).toLowerCase(), formula1: formula1 };
+    if (formula2) res.formula2 = formula2;
+    return res;
+  },
+  // [表格·结构] 图表（XTableCharts）。起步做「建图表 + 选类型 + 标题」三件事：
+  // 数据区域整体作为图表数据源，类型 column/bar/line/pie（column/bar 同用
+  // BarDiagram，靠 Vertical 属性区分方向），标题经 HasMainTitle+Title 设置。
+  // 复杂配置（多数据系列自定义、坐标轴样式等）不支持。放置位置固定在数据区域
+  // 右侧一列，默认尺寸约 14cm×9cm——不接受自定义位置/尺寸参数，保持起步简单。
+  sheet_add_chart(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const range = sheetRange(sheet, String((p && p.range) || ''));
+    if (!range) return tableFail('无效的数据区域: ' + ((p && p.range) || '(空)'));
+    const addr = range.getRangeAddress();
+    const TYPE_MAP = { column: { cls: 'Bar', vertical: true }, bar: { cls: 'Bar', vertical: false }, line: { cls: 'Line' }, pie: { cls: 'Pie' } };
+    const typeInfo = TYPE_MAP[String((p && p.chartType) || 'column').toLowerCase()];
+    if (!typeInfo) return tableFail('bad chartType: ' + (p && p.chartType) + ' (column/bar/line/pie)');
+    let charts;
+    try { charts = sheet.getCharts(); } catch (e) { return tableFail('获取图表集合失败: ' + errStr(e)); }
+    const name = (p && p.name != null && String(p.name).trim()) ? String(p.name).trim() : ('Chart_' + Date.now());
+    if (charts.hasByName(name)) return tableFail('图表已存在: ' + name);
+    let rect;
+    try {
+      const anchorCol = Math.min(addr.EndColumn + 2, 1023);
+      const anchorCell = sheet.getCellByPosition(anchorCol, addr.StartRow);
+      const pos = anchorCell.getPropertyValue('Position');
+      rect = new css.awt.Rectangle({ X: pos.X, Y: pos.Y, Width: ptToMm100(400), Height: ptToMm100(250) });
+    } catch (e) { return tableFail('计算图表放置位置失败: ' + errStr(e)); }
+    try {
+      charts.addNewByName(name, rect, [addr], true, true);
+    } catch (e) { return tableFail('创建图表失败: ' + errStr(e)); }
+    const note = [];
+    try {
+      const embedded = charts.getByName(name).getEmbeddedObject();
+      const diagram = embedded.createInstance('com.sun.star.chart.' + typeInfo.cls + 'Diagram');
+      embedded.setDiagram(diagram);
+      if (typeInfo.cls === 'Bar') {
+        try { diagram.setPropertyValue('Vertical', !!typeInfo.vertical); } catch (e) { note.push('图表方向设置失败'); }
+      }
+      if (p && p.title) {
+        try {
+          embedded.setPropertyValue('HasMainTitle', true);
+          embedded.getTitle().setString(String(p.title));
+        } catch (e) { note.push('标题设置失败'); }
+      }
+    } catch (e) { note.push('图表类型/标题设置失败: ' + errStr(e)); }
+    const res = {
+      success: true, name: name, chartType: String((p && p.chartType) || 'column').toLowerCase(),
+      range: sheetRangeName(addr), sheet: sheet.getName(),
+    };
+    if (p && p.title) res.title = String(p.title);
+    if (note.length) res.note = note.join('；');
+    return res;
+  },
+  // [表格·看] Excel 专用查找：遍历区域（缺省=已用区域）逐格比对字符串，不区分
+  // 值来源（文本/数值/公式结果）。上限 50 条命中、20000 格扫描（超限要求缩小
+  // range）。与 doc_find_text 分开——那是 Writer 专属，本原语只认 Calc 文档。
+  sheet_search(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const query = (p && p.query != null) ? String(p.query) : '';
+    if (!query) return tableFail('sheet_search requires {query}');
+    const matchCase = !!(p && p.matchCase);
+    let addr;
+    try {
+      const range = (p && p.range) ? sheetRange(sheet, p.range) : null;
+      addr = range ? range.getRangeAddress() : usedRangeAddress(sheet);
+    } catch (e) { return tableFail('读取搜索区域失败: ' + errStr(e)); }
+    const nRows = addr.EndRow - addr.StartRow + 1;
+    const nCols = addr.EndColumn - addr.StartColumn + 1;
+    const MAX_SCAN = 20000;
+    if (nRows * nCols > MAX_SCAN) return tableFail('搜索区域过大（上限 ' + MAX_SCAN + ' 格），请缩小 range');
+    const needle = matchCase ? query : query.toLowerCase();
+    const hits = [];
+    for (let r = 0; r < nRows && hits.length < 50; r++) {
+      for (let c = 0; c < nCols && hits.length < 50; c++) {
+        const cell = sheet.getCellByPosition(addr.StartColumn + c, addr.StartRow + r);
+        const val = readCellOut(cell);
+        const s = val == null ? '' : String(val);
+        const hay = matchCase ? s : s.toLowerCase();
+        if (hay.indexOf(needle) !== -1) {
+          hits.push({ cell: colLetterOf(addr.StartColumn + c) + (addr.StartRow + r + 1), value: val });
+        }
+      }
+    }
+    return {
+      success: true, sheet: sheet.getName(), range: sheetRangeName(addr), query: query,
+      count: hits.length, hits: hits, truncated: hits.length >= 50,
+    };
+  },
+  // [表格·结构] 工作簿级命名区域（XNamedRanges）。op: add（name+range+可选
+  // sheet）/ remove（name）/ list（枚举全部）。add 落成绝对引用公式
+  // '$Sheet1.$A$1:$C$10'，与 range 参数所在工作表绑定。
+  sheet_define_name(p) {
+    const op = String((p && p.op) || 'list').toLowerCase();
+    let nr;
+    try { nr = xModel.getPropertyValue('NamedRanges'); } catch (e) { return tableFail('读取命名区域集合失败: ' + errStr(e)); }
+    if (op === 'list') {
+      const out = [];
+      try {
+        const n = nr.getCount();
+        for (let i = 0; i < n; i++) {
+          const item = nr.getByIndex(i);
+          out.push({ name: item.getName(), content: item.getContent() });
+        }
+      } catch (e) { return tableFail(errStr(e)); }
+      return { success: true, names: out };
+    }
+    const name = (p && p.name) ? String(p.name).trim() : '';
+    if (!name) return tableFail(op + ' 需要 {name}');
+    if (op === 'remove') {
+      if (!nr.hasByName(name)) return tableFail('命名区域不存在: ' + name);
+      try { nr.removeByName(name); } catch (e) { return tableFail('删除命名区域失败: ' + errStr(e)); }
+      return { success: true, op: 'remove', name: name };
+    }
+    if (op === 'add') {
+      if (nr.hasByName(name)) return tableFail('命名区域已存在: ' + name);
+      const r0 = resolveSheet(p);
+      if (r0.error) return tableFail(r0.error);
+      const range = sheetRange(r0.sheet, String((p && p.range) || ''));
+      if (!range) return tableFail('无效的区域: ' + ((p && p.range) || '(空)'));
+      const addr = range.getRangeAddress();
+      const content = '$' + r0.sheet.getName() + '.' + absCellRef(addr.StartColumn, addr.StartRow)
+        + ((addr.StartColumn !== addr.EndColumn || addr.StartRow !== addr.EndRow) ? ':' + absCellRef(addr.EndColumn, addr.EndRow) : '');
+      try {
+        nr.addNewByName(name, content, new css.table.CellAddress({ Sheet: addr.Sheet, Column: addr.StartColumn, Row: addr.StartRow }), 0);
+      } catch (e) { return tableFail('新建命名区域失败: ' + errStr(e)); }
+      return { success: true, op: 'add', name: name, range: content };
+    }
+    return tableFail('bad op: ' + op + ' (add/remove/list)');
+  },
+  // [表格·结构] 工作表保护（XProtectable）。密码可选（不传=无密码保护）；
+  // 密码参数不落日志，返回值也不回显密码。
+  sheet_protect_sheet(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const action = String((p && p.action) || 'protect').toLowerCase();
+    if (action !== 'protect' && action !== 'unprotect') return tableFail('bad action: ' + action + ' (protect/unprotect)');
+    const password = (p && p.password != null) ? String(p.password) : '';
+    try {
+      if (action === 'protect') sheet.protect(password);
+      else sheet.unprotect(password);
+    } catch (e) { return tableFail((action === 'protect' ? '保护' : '取消保护') + '工作表失败: ' + errStr(e)); }
+    let isProtected = null;
+    try { isProtected = sheet.isProtected(); } catch (e) {}
+    return { success: true, action: action, protected: isProtected };
+  },
+  // [表格·结构] 行列分组/大纲（XSheetOutline）。op: group/ungroup/show/hide；
+  // orient: rows/cols（show/hide 不区分方向，直接对 range 生效）。
+  sheet_group_rows_cols(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const range = sheetRange(sheet, String((p && p.range) || ''));
+    if (!range) return tableFail('无效的区域: ' + ((p && p.range) || '(空)'));
+    const addr = range.getRangeAddress();
+    const orientRaw = String((p && p.orient) || 'rows').toLowerCase();
+    const isCols = orientRaw === 'cols' || orientRaw === 'columns';
+    const isRows = orientRaw === 'rows';
+    if (!isCols && !isRows) return tableFail('bad orient: ' + (p && p.orient) + ' (rows/cols)');
+    const orientation = isCols ? css.table.TableOrientation.COLUMNS : css.table.TableOrientation.ROWS;
+    const op = String((p && p.op) || 'group').toLowerCase();
+    try {
+      if (op === 'group') sheet.group(addr, orientation);
+      else if (op === 'ungroup') sheet.ungroup(addr, orientation);
+      else if (op === 'show') sheet.showDetail(addr);
+      else if (op === 'hide') sheet.hideDetail(addr);
+      else return tableFail('bad op: ' + op + ' (group/ungroup/show/hide)');
+    } catch (e) { return tableFail('分组操作失败: ' + errStr(e)); }
+    return { success: true, op: op, orient: isCols ? 'cols' : 'rows', range: sheetRangeName(addr) };
+  },
+  // [表格·结构] 数据透视表（XDataPilotTables），基础形态：行分组 + 单个数据
+  // 字段求和。rowFields/dataField 必须与源区域首行表头文字完全一致（Calc 按
+  // 字段名定位）。复杂布局（列字段、多数据字段、自定义汇总函数、筛选字段）不
+  // 支持——起步只做「按行分组求和」这一种最常用形态。
+  sheet_add_pivot_table(p) {
+    const r0 = resolveSheet(p);
+    if (r0.error) return tableFail(r0.error);
+    const sheet = r0.sheet;
+    const source = sheetRange(sheet, String((p && p.sourceRange) || ''));
+    if (!source) return tableFail('无效的源数据区域: ' + ((p && p.sourceRange) || '(空)'));
+    const srcAddr = source.getRangeAddress();
+    const rowFieldNames = String((p && p.rowFields) || '').split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    const dataFieldName = (p && p.dataField != null) ? String(p.dataField).trim() : '';
+    if (!rowFieldNames.length) return tableFail('sheet_add_pivot_table requires {rowFields}（逗号分隔的表头字段名）');
+    if (!dataFieldName) return tableFail('sheet_add_pivot_table requires {dataField}（求和字段的表头字段名）');
+    let dpTables;
+    try { dpTables = sheet.getDataPilotTables(); } catch (e) { return tableFail('获取数据透视表集合失败: ' + errStr(e)); }
+    const name = (p && p.name != null && String(p.name).trim()) ? String(p.name).trim() : ('PivotTable_' + Date.now());
+    if (dpTables.hasByName(name)) return tableFail('数据透视表已存在: ' + name);
+    let desc;
+    try {
+      desc = dpTables.createDataPilotDescriptor();
+      desc.setSourceRange(srcAddr);
+    } catch (e) { return tableFail('创建透视表描述失败: ' + errStr(e)); }
+    let fields;
+    try { fields = desc.getDataPilotFields(); } catch (e) { return tableFail('获取字段集合失败: ' + errStr(e)); }
+    const missing = [];
+    try {
+      rowFieldNames.forEach(function (fn) {
+        if (!fields.hasByName(fn)) { missing.push(fn); return; }
+        fields.getByName(fn).setPropertyValue('Orientation', css.sheet.DataPilotFieldOrientation.ROW);
+      });
+      if (!fields.hasByName(dataFieldName)) missing.push(dataFieldName);
+      else {
+        const df = fields.getByName(dataFieldName);
+        df.setPropertyValue('Orientation', css.sheet.DataPilotFieldOrientation.DATA);
+        df.setPropertyValue('Function', css.sheet.GeneralFunction.SUM);
+      }
+    } catch (e) { return tableFail('设置字段方向失败: ' + errStr(e)); }
+    if (missing.length) return tableFail('源区域表头找不到字段: ' + missing.join('、') + '（字段名须与首行表头文字完全一致）');
+    let outAddr;
+    try {
+      if (p && p.outputCell) {
+        const outCell = sheetRange(sheet, String(p.outputCell));
+        if (!outCell) return tableFail('无效的输出位置: ' + p.outputCell);
+        const oa = outCell.getRangeAddress();
+        outAddr = new css.table.CellAddress({ Sheet: oa.Sheet, Column: oa.StartColumn, Row: oa.StartRow });
+      } else {
+        const outCol = Math.min(srcAddr.EndColumn + 2, 1023);
+        outAddr = new css.table.CellAddress({ Sheet: srcAddr.Sheet, Column: outCol, Row: srcAddr.StartRow });
+      }
+    } catch (e) { return tableFail('计算输出位置失败: ' + errStr(e)); }
+    try {
+      dpTables.insertNewByName(name, outAddr, desc);
+    } catch (e) { return tableFail('插入数据透视表失败: ' + errStr(e)); }
+    return {
+      success: true, name: name, sourceRange: sheetRangeName(srcAddr),
+      rowFields: rowFieldNames, dataField: dataFieldName, function: 'sum', sheet: sheet.getName(),
+    };
+  },
+  // ==================== 演示文稿原语（slide_*，Phase 1） ====================
+  // 与 doc_*/sheet_* 平行的 pptx/odp 操作面。Impress 没有 Writer 的修订（redline）
+  // 机制，写入即生效；安全网是 doc_undo 与后端文档检查点（fileEffect=MODIFIED）。
+  // [幻灯片·看] 每页页码/名称/版式/母版/标题/形状数/是否有备注/是否含表格。
+  // 打开演示文稿后的第一步。
+  slide_get_overview() {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    const count = pages.getCount();
+    const slides = [];
+    for (let i = 0; i < count; i++) {
+      let page; try { page = pages.getByIndex(i); } catch (e) { continue; }
+      let name = ''; try { name = page.getName ? page.getName() : ''; } catch (e) {}
+      let layout = null; try { layout = page.getPropertyValue('Layout'); } catch (e) {}
+      let masterName = ''; try { masterName = page.getMasterPage().getName(); } catch (e) {}
+      let shapeCount = 0; try { shapeCount = page.getCount(); } catch (e) {}
+      let titleText = '';
+      let hasTable = false;
+      for (let s = 0; s < shapeCount; s++) {
+        let shape; try { shape = page.getByIndex(s); } catch (e) { continue; }
+        const kind = shapeKind(shape);
+        if (kind === 'title' && !titleText) titleText = shapeText(shape);
+        if (kind === 'table') hasTable = true;
+      }
+      let hasNotes = false;
+      try { hasNotes = notesPageText(page.getNotesPage()).trim().length > 0; } catch (e) {}
+      slides.push({
+        number: i + 1, name: name, layout: layout, layoutName: layoutNameOf(layout),
+        masterName: masterName, titleText: titleText, shapeCount: shapeCount,
+        hasNotes: hasNotes, hasTable: hasTable,
+      });
+    }
+    return { success: true, slideCount: count, slides: slides };
+  },
+  // [幻灯片·看] 单页明细：尺寸/版式/母版/备注 + 每个形状的名称/类型/位置尺寸(磅)/
+  // 文字，表格形状另带行列数。未命名形状被分配稳定名 __awd_shape_N。
+  slide_get_page(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const page = r0.page;
+    ensureShapeNames(page);
+    let width = 0, height = 0;
+    try { width = hmmToPt(page.getPropertyValue('Width')); height = hmmToPt(page.getPropertyValue('Height')); } catch (e) {}
+    let layout = null; try { layout = page.getPropertyValue('Layout'); } catch (e) {}
+    let masterName = ''; try { masterName = page.getMasterPage().getName(); } catch (e) {}
+    let notesText = ''; try { notesText = notesPageText(page.getNotesPage()); } catch (e) {}
+    const n = page.getCount();
+    const shapes = [];
+    for (let i = 0; i < n; i++) {
+      let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+      let name = ''; try { name = shape.getName(); } catch (e) {}
+      const kind = shapeKind(shape);
+      let pos = null, size = null;
+      try { pos = shape.getPosition(); } catch (e) {}
+      try { size = shape.getSize(); } catch (e) {}
+      const item = {
+        name: name, kind: kind,
+        left: pos ? hmmToPt(pos.X) : null, top: pos ? hmmToPt(pos.Y) : null,
+        width: size ? hmmToPt(size.Width) : null, height: size ? hmmToPt(size.Height) : null,
+        text: shapeText(shape), isTable: kind === 'table',
+      };
+      if (item.isTable) {
+        try {
+          const table = shape.getPropertyValue('Model');
+          item.rows = table.getRows().getCount();
+          item.cols = table.getColumns().getCount();
+        } catch (e) { item.tableErr = errStr(e); }
+      }
+      shapes.push(item);
+    }
+    return {
+      success: true, number: r0.index + 1, width: width, height: height,
+      layout: layout, layoutName: layoutNameOf(layout), masterName: masterName,
+      notesText: notesText, shapes: shapes,
+    };
+  },
+  // [幻灯片·看] 备注页（Speaker Notes）文字。不传 slideNumber 读取全篇。
+  slide_read_notes(p) {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    const count = pages.getCount();
+    const want = p && p.slideNumber != null ? Number(p.slideNumber) : null;
+    if (want != null && (!Number.isFinite(want) || want < 1 || want > count)) {
+      return slideFail('页码越界: ' + p.slideNumber + '（共 ' + count + ' 页，1 开始）');
+    }
+    const from = want != null ? want - 1 : 0;
+    const to = want != null ? want - 1 : count - 1;
+    const notes = [];
+    for (let i = from; i <= to; i++) {
+      let page; try { page = pages.getByIndex(i); } catch (e) { continue; }
+      let text = ''; try { text = notesPageText(page.getNotesPage()); } catch (e) {}
+      notes.push({ slideNumber: i + 1, text: text });
+    }
+    return { success: true, notes: notes };
+  },
+  // [幻灯片·写] 整体覆盖指定页的备注文字。
+  slide_write_notes(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const text = p && p.text != null ? String(p.text) : '';
+    let notesPage;
+    try { notesPage = r0.page.getNotesPage(); } catch (e) { return slideFail('获取备注页失败: ' + errStr(e)); }
+    if (!notesPage) return slideFail('该幻灯片没有备注页');
+    const noteShape = findNotesTextShape(notesPage);
+    if (!noteShape) return slideFail('该幻灯片没有备注文本框（备注正文形状未找到）');
+    let previousText = ''; try { previousText = shapeText(noteShape); } catch (e) {}
+    try { noteShape.getText().setString(text); } catch (e) { return slideFail('写入备注失败: ' + errStr(e)); }
+    return { success: true, slideNumber: r0.index + 1, previousText: previousText };
+  },
+  // [幻灯片·定位] 视图切到指定页，可选再选中某个形状——拟人：操作发生在哪要让
+  // 用户看得见（同 resolveSheet 切活动表口径）。
+  slide_goto(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    let selected = null;
+    const wantShape = p && p.shapeName != null && String(p.shapeName).trim() !== '' ? String(p.shapeName).trim() : null;
+    if (wantShape) {
+      ensureShapeNames(r0.page);
+      const rs = resolveShape(r0.page, { shapeName: wantShape });
+      if (rs.error) return slideFail(rs.error);
+      try {
+        if (ctrl && ctrl.select) ctrl.select(rs.shape);
+        selected = rs.name;
+      } catch (e) { return slideFail('选中形状失败: ' + errStr(e)); }
+    }
+    return { success: true, slideNumber: r0.index + 1, selected: selected };
+  },
+  // [幻灯片·写] 整体覆盖指定形状的文字（文本框/标题/占位符）。
+  slide_set_shape_text(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    if (!(p && p.shapeName)) return slideFail('缺少 shapeName 参数');
+    ensureShapeNames(r0.page);
+    const rs = resolveShape(r0.page, p);
+    if (rs.error) return slideFail(rs.error);
+    const text = p && p.text != null ? String(p.text) : '';
+    let previousText = ''; try { previousText = shapeText(rs.shape); } catch (e) {}
+    try { rs.shape.getText().setString(text); } catch (e) { return slideFail('写入形状文字失败: ' + errStr(e)); }
+    return { success: true, previousText: previousText };
+  },
+  // [幻灯片·写] 跨页（或限定单页）查找替换文字，覆盖普通文本框与表格单元格。
+  // 缺省只替换第一处命中即返回；all=true 替换全部匹配。
+  slide_replace_text(p) {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    const searchText = p && p.searchText != null ? String(p.searchText) : '';
+    if (!searchText) return slideFail('缺少 searchText 参数');
+    const replaceText = p && p.replaceText != null ? String(p.replaceText) : '';
+    const all = !!(p && p.all);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    const count = pages.getCount();
+    let from = 0, to = count - 1;
+    if (p && p.slideNumber != null) {
+      const want = Number(p.slideNumber);
+      if (!Number.isFinite(want) || want < 1 || want > count) {
+        return slideFail('页码越界: ' + p.slideNumber + '（共 ' + count + ' 页，1 开始）');
+      }
+      from = to = want - 1;
+    }
+    let replaced = 0;
+    const hits = [];
+    for (let pi = from; pi <= to; pi++) {
+      let page; try { page = pages.getByIndex(pi); } catch (e) { continue; }
+      ensureShapeNames(page);
+      const n = page.getCount();
+      for (let si = 0; si < n; si++) {
+        let shape; try { shape = page.getByIndex(si); } catch (e) { continue; }
+        const kind = shapeKind(shape);
+        if (kind === 'table') {
+          let table; try { table = shape.getPropertyValue('Model'); } catch (e) { continue; }
+          let rows = 0, cols = 0;
+          try { rows = table.getRows().getCount(); cols = table.getColumns().getCount(); } catch (e) { continue; }
+          for (let r = 0; r < rows; r++) {
+            for (let c = 0; c < cols; c++) {
+              let cell; try { cell = table.getCellByPosition(c, r); } catch (e) { continue; }
+              let cellText = ''; try { cellText = cell.getString() || ''; } catch (e) {}
+              if (!cellText || cellText.indexOf(searchText) === -1) continue;
+              const hitCount = cellText.split(searchText).length - 1;
+              const newText = cellText.split(searchText).join(replaceText);
+              try { cell.setString(newText); } catch (e) { continue; }
+              replaced += hitCount;
+              let name = ''; try { name = shape.getName(); } catch (e) {}
+              hits.push({ slideNumber: pi + 1, shapeName: name });
+              if (!all) return { success: true, replaced: replaced, hits: hits };
+            }
+          }
+          continue;
+        }
+        const text = shapeText(shape);
+        if (!text || text.indexOf(searchText) === -1) continue;
+        const hitCount = text.split(searchText).length - 1;
+        const newText = text.split(searchText).join(replaceText);
+        try { shape.getText().setString(newText); } catch (e) { continue; }
+        replaced += hitCount;
+        let name = ''; try { name = shape.getName(); } catch (e) {}
+        hits.push({ slideNumber: pi + 1, shapeName: name });
+        if (!all) return { success: true, replaced: replaced, hits: hits };
+      }
+    }
+    return { success: true, replaced: replaced, hits: hits };
+  },
+  // [诊断] 当前文档内核类型——host UI（审阅按钮等）按 kind 隐藏的判据。常规打开
+  // 路径优先用 load_document 返回值里的 kind（省一次往返），本 action 供换文档
+  // 之外的场景（如 e2e 探针）直接查询。
+  get_doc_kind() {
+    return { success: true, kind: docKindOf() };
   },
   // housekeeping: drop the hidden anchor bookmarks.
   clear_anchors() {

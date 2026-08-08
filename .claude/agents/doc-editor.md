@@ -11,7 +11,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 **引擎构建与分发**
 - `desktop/lowa-build/`：README.md（为什么自建 zh-CN）、RECIPE.md（精确配方+产物 sha256）、mega-build.sh（裸机全自动构建，PHASE_1..7）、autogen.input、patches/（两阶段 zh-CN 焙入 + ZZZ-aiworkdeck-locale-zh-CN.xcd 默认 ooLocale）。
-- `desktop/scripts/fetch-lowa-assets.js` — 构建期下载 LOWA 运行时 + OFL CJK 字体到 `frontend/dist/zetaoffice/lowa/`，写 `.encodings.json`（brotli 侧车）；`LOWA_BASE_URL` 指自托管引擎（`https://www.aiworkdeck.com/lowa-engine/24.2.8-zhcn-r3/`）。
+- `desktop/scripts/fetch-lowa-assets.js` — 构建期下载 LOWA 运行时 + OFL CJK 字体到 `frontend/dist/zetaoffice/lowa/`，写 `.encodings.json`（brotli 侧车）；`LOWA_BASE_URL` 指自托管引擎（`https://www.aiworkdeck.com/lowa-engine/24.2.8-zhcn-r4/`，2026-08-07 起；r4 = r3 + Impress/Draw/Math 进包（--with-wasm-module=calc writer impress），wasm.br 42.5MB(+23%)、data.br 18.6MB；r3 保留在架作回退，desktop-build.yml 一行切换）。
 - `desktop/scripts/lowa-selfhost.md` — 自托管流程文档。
 
 **桌面壳服务**

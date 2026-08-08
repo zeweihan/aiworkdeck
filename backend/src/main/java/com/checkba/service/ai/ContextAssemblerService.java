@@ -42,6 +42,7 @@ public class ContextAssemblerService {
     private final AiContextProperties contextProperties;
     private final com.checkba.service.ai.skill.SkillRouter skillRouter;
     private final ClientCapabilityService clientCapabilityService;
+    private final InlineContentCache inlineContentCache;
 
     // 记忆系统组件（读侧：写侧见 MemoryPipelineService）
     private final MemoryManager memoryManager;
@@ -241,7 +242,7 @@ public class ContextAssemblerService {
                      activeContext.getId(), activeContext.getName(),
                      activeContext.getInlineContent() != null && !activeContext.getInlineContent().isEmpty());
 
-            String content = resolveActiveDocumentContent(activeContext);
+            String content = resolveActiveDocumentContent(activeContext, conversationId);
             ClientCapabilityService.Capability capability = clientCapabilityService.capabilityOf(conversationId);
 
             systemText.append("\n\n# Active Document (当前活跃文档)\n");
@@ -257,19 +258,50 @@ public class ContextAssemblerService {
                             systemText.append("该工作簿在用户本机的 Microsoft Excel 中打开，活动工作表内容已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_excel_* 工具（office_excel_get_range / ");
                             systemText.append("office_excel_set_values / office_excel_search），写入直接生效");
-                            systemText.append("（Excel 没有修订机制）。本会话没有 doc_* / sheet_* 工具，也没有 Word 面的 office_* 工具。\n\n");
+                            systemText.append("（Excel 没有修订机制）。表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式）");
+                            systemText.append("用对应 office_excel_* 工具（office_excel_format_cells / office_excel_set_borders / ");
+                            systemText.append("office_excel_edit_rows_cols / office_excel_merge_cells / office_excel_sort_range / ");
+                            systemText.append("office_excel_manage_sheets / office_excel_freeze_panes / office_excel_set_formulas / ");
+                            systemText.append("office_excel_set_autofilter / office_excel_conditional_format）。");
+                            systemText.append("改表前可先用 office_excel_get_overview 看工作表清单与各表尺寸，");
+                            systemText.append("office_excel_select_range 可把用户视图定位到某处。");
+                            systemText.append("单元格批注用 office_excel_add_comment / office_excel_get_comments / office_excel_reply_comment / ");
+                            systemText.append("office_excel_resolve_comment / office_excel_delete_comment；数据验证用 office_excel_set_data_validation；");
+                            systemText.append("图表用 office_excel_add_chart；命名区域用 office_excel_define_name；工作表保护用 office_excel_protect_sheet；");
+                            systemText.append("行列分组用 office_excel_group_rows_cols；基础透视表用 office_excel_add_pivot_table。");
+                            systemText.append("本会话没有 doc_* / sheet_* 工具，也没有 Word 面的 office_* 工具。\n\n");
                         }
                         case POWERPOINT -> {
                             systemText.append("该演示文稿在用户本机的 Microsoft PowerPoint 中打开，各页文本已随本请求内联注入下方。");
-                            systemText.append("读取/修改它一律使用 office_ppt_* 工具（office_ppt_get_slides / ");
-                            systemText.append("office_ppt_replace_text），替换直接生效（PowerPoint 没有修订机制）。");
+                            systemText.append("读取/修改它一律使用 office_ppt_* 工具（office_ppt_get_slides / office_ppt_replace_text / ");
+                            systemText.append("office_ppt_format_text 排版文字、office_ppt_add_slide / office_ppt_delete_slide / ");
+                            systemText.append("office_ppt_move_slide 管理页面、office_ppt_add_text_box / office_ppt_add_shape 插入文本框与形状、");
+                            systemText.append("office_ppt_get_slide_details / office_ppt_delete_shape 精确定位并删除形状），");
+                            systemText.append("写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。");
+                            systemText.append("表格用 office_ppt_add_table 插入、office_ppt_table_read / office_ppt_table_set_cell 读写单元格；");
+                            systemText.append("超链接用 office_ppt_set_hyperlink。");
                             systemText.append("本会话没有 doc_* 工具，也没有 Word 面的 office_* 工具。\n\n");
                         }
                         default -> {
                             systemText.append("该文档在用户本机的 Microsoft Word 中打开，正文已随本请求内联注入下方。");
                             systemText.append("读取/修改它一律使用 office_* 工具（office_get_text / office_search / ");
-                            systemText.append("office_replace_text / office_insert_text / office_add_comment 等），");
-                            systemText.append("修改会以 Word 原生修订形式呈现。本会话没有 doc_* 工具。\n\n");
+                            systemText.append("office_replace_text / office_insert_text / office_add_comment / ");
+                            systemText.append("office_format_text / office_set_paragraph_format / office_get_formatting / ");
+                            systemText.append("office_set_numbering / office_format_table / office_apply_standard_format 等），");
+                            systemText.append("修改会以 Word 原生修订形式呈现。");
+                            systemText.append("文档排版（字体/字号/行距/缩进/对齐/下划线/删除线/自动编号/表格边框；");
+                            systemText.append("整篇按律所标准格式化用 office_apply_standard_format）用 office_format_text 与 ");
+                            systemText.append("office_set_paragraph_format。表格建改用 office_insert_table / office_table_read / ");
+                            systemText.append("office_table_set_cell / office_table_add_row / office_table_delete_row / ");
+                            systemText.append("office_table_add_col / office_table_delete_col（改前先用 office_table_read 看清坐标，");
+                            systemText.append("删行删列不进修订、只能靠撤销）；分页/分节符用 office_insert_break；超链接用 ");
+                            systemText.append("office_set_hyperlink；页眉页脚（仅首节）用 office_edit_header_footer；");
+                            systemText.append("批注用 office_get_comments / office_reply_comment / office_resolve_comment。");
+                            systemText.append("修订接受/拒绝用 office_get_revisions 先看列表、再用 office_accept_revision / office_reject_revision" +
+                                    "（单条按序号或 acceptAll/rejectAll 全部）；脚注/尾注用 office_insert_footnote / office_insert_endnote；");
+                            systemText.append("图片插入用 office_insert_image（fileId 指项目文件，上限 2MB）；套用已命名样式用 office_apply_style；");
+                            systemText.append("内容控件用 office_manage_content_control；文档属性（标题/作者等）用 office_set_document_properties。");
+                            systemText.append("本会话没有 doc_* 工具。\n\n");
                         }
                     }
                 }
@@ -278,9 +310,30 @@ public class ContextAssemblerService {
                     systemText.append("请以文字形式给出分析结论或修改建议，不要尝试调用文档编辑工具。\n\n");
                 }
                 default -> {
-                    systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
-                    systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-                    systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+                    // LOWA 会话按文档类型三分支：doc_*(Writer) / sheet_*(Calc) / slide_*(Impress)，
+                    // 三套原语互不相通（xModel.getText() 等 Writer 专属调用在其他文档类型上必然失败）。
+                    switch (lowaDocKind(activeContext)) {
+                        case "sheet" -> {
+                            systemText.append("这是一份电子表格，读取/修改一律使用 sheet_* 工具" +
+                                    "（sheet_get_overview 先看工作表结构、sheet_read_range / sheet_write_cells 读写单元格），" +
+                                    "写入直接生效（Calc 没有修订机制）——**无需也不要**调用 ");
+                            systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。\n\n");
+                        }
+                        case "slide" -> {
+                            systemText.append("这是一份演示文稿，读取/修改一律使用 slide_* 工具" +
+                                    "（slide_get_overview 先看幻灯片总览、slide_get_page 看某页明细、" +
+                                    "slide_set_shape_text / slide_replace_text 改文字、slide_write_notes 改备注），" +
+                                    "写入直接生效（PPT 没有修订机制，误改用 doc_restore_checkpoint 回滚）——**无需也不要**调用 ");
+                            systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。\n\n");
+                        }
+                        default -> {
+                            systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
+                            systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。\n\n");
+                        }
+                    }
                 }
             }
 
@@ -304,7 +357,11 @@ public class ContextAssemblerService {
                         default -> "[正文暂不可读，可用 office_get_text 直接读取]";
                     };
                     case NONE -> "[正文暂不可读]";
-                    default -> "[正文暂不可读，可用 doc_get_document_text 直接分段读取]";
+                    default -> switch (lowaDocKind(activeContext)) {
+                        case "sheet" -> "[内容暂不可读，可用 sheet_get_overview / sheet_read_range 直接读取]";
+                        case "slide" -> "[内容暂不可读，可用 slide_get_overview / slide_get_page 直接读取]";
+                        default -> "[正文暂不可读，可用 doc_get_document_text 直接分段读取]";
+                    };
                 };
                 systemText.append("<active_document id=\"").append(activeContext.getId())
                           .append("\" name=\"").append(attrSafe(activeContext.getName()))
@@ -459,47 +516,119 @@ public class ContextAssemblerService {
                         + "活动工作表内容已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前表格」「改一下」等都指它——"
                         + "读取/修改一律调用 office_excel_* 工具（office_excel_get_range / "
-                        + "office_excel_set_values / office_excel_search），写入直接生效（Excel 没有修订机制）。";
+                        + "office_excel_set_values / office_excel_search），写入直接生效（Excel 没有修订机制）；"
+                        + "表格格式/结构调整（单元格格式/边框/行列/合并/排序/工作表/冻结/公式/筛选/条件格式）用对应 office_excel_* 工具"
+                        + "（office_excel_format_cells / office_excel_set_borders / office_excel_edit_rows_cols / "
+                        + "office_excel_merge_cells / office_excel_sort_range / office_excel_manage_sheets / "
+                        + "office_excel_freeze_panes / office_excel_set_formulas / office_excel_set_autofilter / "
+                        + "office_excel_conditional_format），office_excel_get_overview 可先看全局、"
+                        + "office_excel_select_range 可定位视图。单元格批注/数据验证/图表/命名区域/工作表保护/行列分组/"
+                        + "基础透视表分别用 office_excel_add_comment 等批注四件套 / office_excel_set_data_validation / "
+                        + "office_excel_add_chart / office_excel_define_name / office_excel_protect_sheet / "
+                        + "office_excel_group_rows_cols / office_excel_add_pivot_table。";
                 case POWERPOINT -> "\n\n[系统提醒] 用户此刻在 Microsoft PowerPoint 中打开着演示文稿" + docLabel + "，"
                         + "各页文本已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文件时，「这个」「当前演示文稿」「改一下」等都指它——"
-                        + "读取/修改一律调用 office_ppt_* 工具（office_ppt_get_slides / "
-                        + "office_ppt_replace_text），替换直接生效（PowerPoint 没有修订机制）。";
+                        + "读取/修改一律调用 office_ppt_* 工具（office_ppt_get_slides / office_ppt_replace_text / "
+                        + "office_ppt_format_text / office_ppt_add_slide / office_ppt_delete_slide / "
+                        + "office_ppt_move_slide / office_ppt_add_text_box / office_ppt_add_shape / "
+                        + "office_ppt_get_slide_details / office_ppt_delete_shape），"
+                        + "写入直接生效（PowerPoint 没有修订机制，删改无法通过审阅面板撤销）。"
+                        + "表格用 office_ppt_add_table / office_ppt_table_read / office_ppt_table_set_cell；"
+                        + "超链接用 office_ppt_set_hyperlink。";
                 default -> "\n\n[系统提醒] 用户此刻在 Microsoft Word 中打开着文档" + docLabel + "，"
                         + "其正文已内联注入 system prompt 的 <active_document>，可直接阅读分析。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
                         + "需要修改文档时调用 office_* 工具（office_replace_text / office_insert_text / "
-                        + "office_add_comment 等）落到 Word，修改会以 Word 原生修订形式呈现。";
+                        + "office_add_comment / office_format_text / office_set_paragraph_format / "
+                        + "office_set_numbering / office_format_table / office_apply_standard_format 等）落到 Word，"
+                        + "修改会以 Word 原生修订形式呈现；文档排版（字体/字号/行距/缩进/对齐/下划线/删除线/"
+                        + "自动编号/表格边框；整篇按律所标准格式化用 office_apply_standard_format）"
+                        + "用 office_format_text 与 office_set_paragraph_format；表格建改用 office_insert_table / "
+                        + "office_table_read / office_table_set_cell / office_table_add_row / office_table_delete_row / "
+                        + "office_table_add_col / office_table_delete_col；分页/分节符用 office_insert_break；"
+                        + "超链接用 office_set_hyperlink；页眉页脚（仅首节）用 office_edit_header_footer；"
+                        + "批注用 office_get_comments / office_reply_comment / office_resolve_comment；"
+                        + "修订接受/拒绝先 office_get_revisions 再 office_accept_revision / office_reject_revision；"
+                        + "脚注/尾注用 office_insert_footnote / office_insert_endnote；图片插入用 office_insert_image；"
+                        + "已命名样式用 office_apply_style；内容控件用 office_manage_content_control；"
+                        + "文档属性用 office_set_document_properties。";
             };
             case NONE -> "\n\n[系统提醒] 用户当前查看的文档是" + docLabel + "，"
                     + "其正文见 system prompt 的 <active_document>，仅供阅读分析。"
                     + "本会话的客户端没有文档编辑执行器，请以文字形式给出结论或修改建议，"
                     + "不要尝试调用文档编辑工具。";
-            default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
-                    + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
-                    + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
-                    + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+            default -> switch (lowaDocKind(activeContext)) {
+                case "sheet" -> "\n\n[系统提醒] 编辑器中当前已打开电子表格" + docLabel + "（id="
+                        + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
+                        + "用户未指明别的文档时，「这个」「当前表格」「改一下」等都指它——"
+                        + "直接调用 sheet_* 工具操作（Calc 没有修订机制，写入直接生效），"
+                        + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+                case "slide" -> "\n\n[系统提醒] 编辑器中当前已打开演示文稿" + docLabel + "（id="
+                        + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
+                        + "用户未指明别的文档时，「这个」「当前演示文稿」「改一下」等都指它——"
+                        + "直接调用 slide_* 工具操作（PPT 没有修订机制，写入直接生效，误改用 doc_restore_checkpoint 回滚），"
+                        + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+                default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
+                        + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
+                        + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
+                        + "直接调用 doc_* 工具操作，**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+            };
         };
+    }
+
+    /**
+     * LOWA 会话的文档类型三分支判据：docx→doc_*（返回 "doc"）、xlsx→sheet_*（返回 "sheet"）、
+     * pptx→slide_*（返回 "slide"）。优先取 fileType（后端已知扩展名，无点号），
+     * 缺失时退回文件名后缀。三套原语互不相通，判据错了就是模型调用会死路径。
+     */
+    private static String lowaDocKind(com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+        String ext = activeContext.getFileType();
+        if (ext == null || ext.isBlank()) {
+            String name = activeContext.getName();
+            int dot = name == null ? -1 : name.lastIndexOf('.');
+            ext = (dot >= 0 && dot < name.length() - 1) ? name.substring(dot + 1) : "";
+        }
+        ext = ext.toLowerCase(java.util.Locale.ROOT);
+        if (ext.startsWith("xls") || ext.startsWith("et") || "csv".equals(ext)) return "sheet";
+        if (ext.startsWith("ppt") || "odp".equals(ext) || "potx".equals(ext)) return "slide";
+        return "doc";
     }
 
     /** 内联正文防滥用上限：超出即截断（客户端可随请求直接携带正文，不能无限吃内存）。 */
     private static final int MAX_INLINE_CONTENT_CHARS = 200_000;
 
     /**
-     * 活跃文档正文来源二选一：
-     * 1) 请求随带的内联正文（Office 插件等场景——文档在客户端本地，后端没有可读的 fileId）优先；
-     * 2) 否则走既有 read_document(fileId) 路径。
-     * 两条路径产出同格式正文，后续统一由调用方做 CDATA 包裹与 maxCharsPerFile 截断。
+     * 活跃文档正文来源三选一：
+     * 1) 请求随带的内联正文（Office 插件等场景——文档在客户端本地，后端没有可读的 fileId）优先，
+     *    同时按会话存入 InlineContentCache 供后续「省传」轮次取用；
+     * 2) 只带内联正文哈希（文档自上一轮起没变，客户端省掉了整篇正文的上行）：凭哈希查缓存，
+     *    命中即复用；未命中（缓存已被 LRU 驱逐、或哈希对不上说明文档已改）返回 null，
+     *    由调用方按「正文暂不可读」现状处理——模型可改用读取类工具，不报错；
+     * 3) 两者都没有时走既有 read_document(fileId) 路径。
+     * 三条路径产出同格式正文，后续统一由调用方做 CDATA 包裹与 maxCharsPerFile 截断。
      */
     private String resolveActiveDocumentContent(
-            com.checkba.controller.ai.AiAgentController.ContextItem activeContext) {
+            com.checkba.controller.ai.AiAgentController.ContextItem activeContext,
+            String conversationId) {
         String inline = activeContext.getInlineContent();
         if (inline != null && !inline.isEmpty()) {
             if (inline.length() > MAX_INLINE_CONTENT_CHARS) {
-                inline = inline.substring(0, MAX_INLINE_CONTENT_CHARS)
+                // 超限正文不入缓存：缓存的内存上界按每条 200k 字符估算
+                return inline.substring(0, MAX_INLINE_CONTENT_CHARS)
                         + "\n... [TRUNCATED - Inline content too long]";
             }
+            inlineContentCache.put(conversationId, inline);
             return inline;
+        }
+        String hash = activeContext.getInlineContentHash();
+        if (hash != null && !hash.isBlank()) {
+            String cached = inlineContentCache.get(conversationId, hash);
+            if (cached == null) {
+                log.info("[Context] Inline content hash miss for conversation {}, falling back to no inline body",
+                        conversationId);
+            }
+            return cached;
         }
         return legalTools.read_document(activeContext.getId());
     }

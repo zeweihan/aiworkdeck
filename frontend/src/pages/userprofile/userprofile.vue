@@ -380,13 +380,36 @@
                 <text class="group-title">授权</text>
                 <view class="form-row">
                   <text class="form-label">当前模式</text>
-                  <text class="form-value">{{ licenseInfo.mode === 'trial' ? '试用版' : '正式版' }}</text>
+                  <!-- 读 edition 不读 mode：mode 只是授权票据，先用试用码解锁、
+                       后连账户的用户 mode 永远停在 trial（后端已把两条状态组合成 edition） -->
+                  <text class="form-value">{{ licenseInfo.edition === 'paid' ? '正式版' : '试用版' }}</text>
                 </view>
                 <view class="form-row">
                   <text class="form-label">激活时间</text>
                   <text class="form-value">{{ licenseInfo.activatedAt ? formatTime(licenseInfo.activatedAt) : '—' }}</text>
                 </view>
                 <button class="btn-logout-settings" @tap="handleDeactivate">解除授权</button>
+              </view>
+
+              <!-- 插件访问令牌（桌面端）：Office 插件等外部客户端连接本机后端的凭据 -->
+              <view v-if="isDesktop" class="form-group">
+                <text class="group-title">插件访问令牌</text>
+                <text class="bind-tip">供 Microsoft Office 插件等外部客户端连接本机使用。令牌等同于你的访问身份，请妥善保管。</text>
+                <view class="form-row">
+                  <text class="form-label">备注名</text>
+                  <input class="bind-input" v-model="tokenNameInput" maxlength="30" placeholder="例如：Word 插件（可留空）" />
+                  <button class="btn-send-code" :disabled="tokenIssuing" @tap="handleIssueToken">生成令牌</button>
+                </view>
+                <view v-for="t in deviceTokens" :key="t.id" class="form-row">
+                  <view class="token-info">
+                    <text class="token-name">{{ t.name || '未命名令牌' }}</text>
+                    <text class="token-meta">
+                      创建于 {{ formatTime(t.createdAt) || '—' }} · 最近使用 {{ t.lastUsedAt ? formatTime(t.lastUsedAt) : '从未' }}
+                    </text>
+                  </view>
+                  <text class="bind-link" @tap="handleRevokeToken(t)">撤销</text>
+                </view>
+                <text v-if="!deviceTokens.length" class="bind-tip">还没有生成过令牌</text>
               </view>
 
               <view v-if="!isDesktop" class="form-group">
@@ -416,7 +439,7 @@
 </template>
 
 <script>
-import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, totpSetup, totpActivate, totpDisable } from '@/services/api.js'
+import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, totpSetup, totpActivate, totpDisable, issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken } from '@/services/api.js'
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
 import { host, isDesktopHost } from '@/services/host.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
@@ -468,8 +491,13 @@ export default {
       currentInviteProjectId: null,
       showCloudAccept: false,
 
-      // 授权状态（桌面端）：{ unlocked, mode, plan, activatedAt? }
+      // 授权状态（桌面端）：{ unlocked, mode, plan, activatedAt?, accountConnected, edition }
       licenseInfo: {},
+
+      // 插件访问令牌（桌面端）：明文只在生成时返回一次，这里只留列表元信息
+      deviceTokens: [],
+      tokenNameInput: '',
+      tokenIssuing: false,
 
       // 认证器（TOTP）绑定
       showTotpPanel: false,
@@ -524,9 +552,10 @@ export default {
       this.loadUserInfo()
       // 加载项目列表
       this.loadProjects()
-      // 桌面端：加载授权状态（设置面板「授权」卡片）
+      // 桌面端：加载授权状态（设置面板「授权」卡片）与插件访问令牌列表
       if (isDesktopEnv) {
         this.loadLicenseInfo()
+        this.loadDeviceTokens()
       }
     })
   },
@@ -569,6 +598,62 @@ export default {
         // 旧后端没有该端点：静默忽略
         this.licenseInfo = {}
       }
+    },
+    async loadDeviceTokens() {
+      try {
+        const res = await listDeviceTokens()
+        this.deviceTokens = (res && res.data && res.data.tokens) || []
+      } catch (e) {
+        // 旧后端没有该端点：当作没有令牌，不打扰用户
+        this.deviceTokens = []
+      }
+    },
+    async handleIssueToken() {
+      if (this.tokenIssuing) return
+      this.tokenIssuing = true
+      try {
+        const res = await issueLocalDeviceToken(this.tokenNameInput.trim())
+        const token = res && res.data && res.data.token
+        if (!token) throw new Error('令牌生成失败')
+        this.tokenNameInput = ''
+        await this.loadDeviceTokens()
+        // 明文只在这一次拿得到，弹窗里直接给复制
+        uni.showModal({
+          title: '令牌已生成',
+          content: token + '\n\n令牌仅显示这一次，关闭后无法再次查看。请立即复制并粘贴到插件设置里。',
+          cancelText: '关闭',
+          confirmText: '复制',
+          success: (r) => {
+            if (!r.confirm) return
+            uni.setClipboardData({
+              data: token,
+              success: () => uni.showToast({ title: '已复制', icon: 'none' }),
+            })
+          },
+        })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '令牌生成失败', icon: 'none' })
+      } finally {
+        this.tokenIssuing = false
+      }
+    },
+    handleRevokeToken(token) {
+      uni.showModal({
+        title: '撤销令牌',
+        content: '撤销后，正在使用这枚令牌的插件会立即失去访问权，需要重新生成。确定撤销吗？',
+        cancelText: '取消',
+        confirmText: '确认撤销',
+        success: async (r) => {
+          if (!r.confirm) return
+          try {
+            await revokeDeviceToken(token.id)
+            await this.loadDeviceTokens()
+            uni.showToast({ title: '已撤销', icon: 'none' })
+          } catch (e) {
+            uni.showToast({ title: (e && e.message) || '撤销失败', icon: 'none' })
+          }
+        },
+      })
     },
     handleDeactivate() {
       uni.showModal({
@@ -2050,6 +2135,21 @@ $danger-color: #E74C3C;
 .bind-tip {
     display: block;
     margin-top: 8px;
+    font-size: 12px;
+    color: $text-secondary;
+}
+.token-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+.token-name {
+    font-size: 14px;
+    color: $text-main;
+    font-weight: 500;
+}
+.token-meta {
+    margin-top: 2px;
     font-size: 12px;
     color: $text-secondary;
 }

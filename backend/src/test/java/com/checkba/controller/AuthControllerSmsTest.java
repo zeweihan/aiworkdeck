@@ -57,7 +57,7 @@ class AuthControllerSmsTest {
         // DB 会话服务（repository 打桩）：登录成功路径要经它签发 sessionId
         com.checkba.service.UserSessionService sessions = new com.checkba.service.UserSessionService(
                 mock(com.checkba.repository.UserSessionRepository.class));
-        return new AuthController(userService, null, null, null, guard, null, smsAuthService, secondFactor, sessions);
+        return new AuthController(userService, null, null, null, guard, null, smsAuthService, secondFactor, sessions, false);
     }
 
     @Test

@@ -14,6 +14,12 @@
 --with-package-format=emscripten
 --with-lang=en-US zh-CN
 
+# r4：开 Impress（桌面端 PPT 实时编辑桥 Phase 0，设计见
+# docs/superpowers/specs/2026-08-07-impress-bridge-design.md）。
+# 默认值是 'calc writer'——Impress 此前从未被编进引擎；本行连带解除
+# Draw/Math 裁剪（同一 strip 开关），PDF 导入类型会一并回归，Phase 0 要复验。
+--with-wasm-module=calc writer impress
+
 # Qt5-for-wasm install prefix (built from allotropia/qt5 5.15.2+wasm) — build.sh sets this.
 QT5DIR=@QT5DIR@
 

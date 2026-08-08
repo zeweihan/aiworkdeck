@@ -23,8 +23,23 @@ function devHttps() {
   return undefined
 }
 
-export default defineConfig({
+/**
+ * 默认后端地址（构建期烧进产物）。
+ * 普通用户只需填一个官网 API Key，不必知道后端地址；律所自建服务器场景可在
+ * 「高级设置」里改，改过的值存 localStorage 并优先于此默认值。
+ * 私有部署可用 VITE_ADDIN_SERVER_URL 环境变量改默认值后重新构建。
+ */
+const defaultServerUrl = process.env.VITE_ADDIN_SERVER_URL || 'https://addin.aiworkdeck.com'
+
+export default defineConfig(({ command }) => ({
   plugins: [vue()],
+  // 构建产物用相对路径引资源：dist 可能被托管在子路径下（官方云是
+  // https://addin.aiworkdeck.com/office-addin/），默认的绝对 /assets/... 会打到站点根、
+  // 被 SPA 回退顶成 index.html，任务窗格白屏（真机踩过）。dev 仍是 '/' 不受影响。
+  base: command === 'build' ? './' : '/',
+  define: {
+    __ADDIN_DEFAULT_SERVER__: JSON.stringify(defaultServerUrl)
+  },
   // 图标等静态资源目录（构建时原样拷入 dist 根，dev 下按根路径直出）
   publicDir: 'assets',
   server: {
@@ -36,4 +51,4 @@ export default defineConfig({
       input: path.resolve(rootDir, 'taskpane.html')
     }
   }
-})
+}))

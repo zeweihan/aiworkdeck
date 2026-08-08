@@ -1,54 +1,22 @@
 <template>
   <div class="settings">
     <section class="card">
-      <h2>连接设置</h2>
+      <h2>连接</h2>
+
+      <p v-if="token.trim()" class="summary">
+        已连接 {{ displayServerUrl }}
+      </p>
+
       <p class="hint">
-        插件独立连接后端实例：可填律所自建服务器地址，或同机桌面版的 http://127.0.0.1:5269。
+        填入官网账户页生成的 API Key 即可连接。Key 仅用于本次换取设备令牌，不保存在本机。
       </p>
 
       <label class="field">
-        <span class="label">后端地址</span>
-        <input
-          v-model="serverUrl"
-          type="text"
-          placeholder="例如 https://ai.yourfirm.com 或 http://127.0.0.1:5269"
-          spellcheck="false"
-        />
-      </label>
-
-      <label class="field">
-        <span class="label">设备令牌（awdt_ 开头）</span>
-        <textarea
-          v-model="token"
-          rows="3"
-          placeholder="粘贴 awdt_ 设备令牌。可在 AI Workdeck 桌面版的设置中生成。"
-          spellcheck="false"
-        ></textarea>
-      </label>
-
-      <div class="actions">
-        <button class="btn secondary" :disabled="testing" @click="testConnection">
-          {{ testing ? '测试中...' : '测试连接' }}
-        </button>
-        <button class="btn primary" @click="save">保存</button>
-      </div>
-
-      <p v-if="status" class="status" :class="statusKind">{{ status }}</p>
-    </section>
-
-    <section class="card key-card">
-      <h2>用账户 Key 连接</h2>
-      <p class="hint">
-        持有官网账户 Key（awdk_ 开头）时可一键换取本服务器的设备令牌，无需手工生成粘贴。
-        Key 仅用于本次换取，不会保存在本机。
-      </p>
-
-      <label class="field">
-        <span class="label">账户 Key（awdk_ 开头）</span>
+        <span class="label">官网 API Key（awdk_ 开头）</span>
         <input
           v-model="awdkKey"
           type="password"
-          placeholder="粘贴 awdk_ 账户 Key"
+          placeholder="粘贴 awdk_ 开头的 API Key"
           spellcheck="false"
           autocomplete="off"
         />
@@ -56,11 +24,49 @@
 
       <div class="actions">
         <button class="btn primary" :disabled="connecting" @click="connectWithKey">
-          {{ connecting ? '连接中...' : '一键连接' }}
+          {{ connecting ? '连接中...' : '连接' }}
         </button>
       </div>
 
       <p v-if="keyStatus" class="status" :class="keyStatusKind">{{ keyStatus }}</p>
+
+      <details class="advanced">
+        <summary>高级设置</summary>
+
+        <p class="hint">
+          自建服务器场景：可填律所自建后端地址，或同机桌面版的 http://127.0.0.1:5269，
+          并手工粘贴设备令牌。
+        </p>
+
+        <label class="field">
+          <span class="label">后端地址</span>
+          <input
+            v-model="serverUrl"
+            type="text"
+            placeholder="例如 https://ai.yourfirm.com 或 http://127.0.0.1:5269"
+            spellcheck="false"
+          />
+        </label>
+
+        <label class="field">
+          <span class="label">设备令牌（awdt_ 开头）</span>
+          <textarea
+            v-model="token"
+            rows="3"
+            placeholder="粘贴 awdt_ 设备令牌。可在 AI Workdeck 桌面版个人中心的「账号安全」中生成。"
+            spellcheck="false"
+          ></textarea>
+        </label>
+
+        <div class="actions">
+          <button class="btn secondary" :disabled="testing" @click="testConnection">
+            {{ testing ? '测试中...' : '测试连接' }}
+          </button>
+          <button class="btn primary" @click="save">保存</button>
+        </div>
+
+        <p v-if="status" class="status" :class="statusKind">{{ status }}</p>
+      </details>
     </section>
 
     <section v-if="quota" class="card quota-card">
@@ -92,7 +98,7 @@
 
       <div class="actions">
         <button class="btn secondary" :disabled="refreshing" @click="refreshQuota">
-          {{ refreshing ? '刷新中...' : '用上方账户 Key 刷新额度' }}
+          {{ refreshing ? '刷新中...' : '用上方 API Key 刷新额度' }}
         </button>
       </div>
 
@@ -109,7 +115,7 @@ import {
   fetchPlatformAiStatus,
   refreshPlatformAiKey
 } from '../lib/api.js'
-import { saveSettings, normalizeBaseUrl } from '../lib/settings.js'
+import { saveSettings, normalizeBaseUrl, DEFAULT_SERVER_URL } from '../lib/settings.js'
 
 const props = defineProps({
   initialServerUrl: { type: String, default: '' },
@@ -117,7 +123,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['saved'])
 
-const serverUrl = ref(props.initialServerUrl)
+const serverUrl = ref(props.initialServerUrl || normalizeBaseUrl(DEFAULT_SERVER_URL))
 const token = ref(props.initialToken)
 const testing = ref(false)
 const status = ref('')
@@ -131,6 +137,9 @@ const quota = ref(null)
 const refreshing = ref(false)
 const quotaStatus = ref('')
 const quotaStatusKind = ref('ok')
+
+/** 当前连接状态摘要：只读本地设置，不发请求 */
+const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || '（未设置地址）')
 
 /** 金额与时间都可能是 null（用量拿不到时不许把 0 当成剩余额度），统一显示为「—」 */
 function money(value) {
@@ -173,7 +182,7 @@ async function refreshQuota() {
   const key = awdkKey.value.trim()
   if (!key) {
     quotaStatusKind.value = 'error'
-    quotaStatus.value = '刷新未开始：请在上方粘贴 awdk_ 账户 Key'
+    quotaStatus.value = '刷新未开始：请在上方粘贴 awdk_ 开头的 API Key'
     return
   }
   refreshing.value = true
@@ -233,13 +242,13 @@ async function connectWithKey() {
   keyStatus.value = ''
   if (!serverUrl.value.trim()) {
     keyStatusKind.value = 'error'
-    keyStatus.value = '连接未就绪：请先填写上方的后端地址'
+    keyStatus.value = '连接未就绪：后端地址为空，可在「高级设置」中填写'
     return
   }
   const key = awdkKey.value.trim()
   if (!key) {
     keyStatusKind.value = 'error'
-    keyStatus.value = '连接未就绪：请粘贴 awdk_ 账户 Key'
+    keyStatus.value = '连接未就绪：请粘贴 awdk_ 开头的 API Key'
     return
   }
   connecting.value = true
@@ -275,8 +284,31 @@ async function connectWithKey() {
   padding: 14px;
 }
 
-.key-card { margin-top: 12px; }
 .quota-card { margin-top: 12px; }
+
+.summary {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--awd-text-secondary);
+  word-break: break-all;
+}
+
+.advanced {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--awd-border);
+}
+
+.advanced > summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--awd-text-secondary);
+  user-select: none;
+}
+
+.advanced > summary:hover { color: var(--awd-primary); }
+
+.advanced .hint { margin-top: 10px; }
 
 .quota {
   margin: 0 0 12px;

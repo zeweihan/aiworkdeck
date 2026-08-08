@@ -936,6 +936,82 @@ try {
     await exec('debug_set_record_changes', { on: false })
   }
 
+  // ---------- 组 21：Impress 冒烟（slide_*，r4 引擎首验）----------
+  // 覆盖 docs/superpowers/specs/2026-08-07-impress-bridge-design.md Phase 0/1
+  // 验收：模块具备性 → 打开真 pptx → overview/get_page → 改文字/跨页替换 →
+  // 备注往返 → export/reload 往返保真 → 非演示文稿上的守卫。
+  console.log('\n[21] Impress 冒烟：pptx 打开 / overview / 形状 / 替换 / 备注 / 往返')
+  {
+    const pm = await exec('probe_modules')
+    check('probe_modules：simpress 可用（r4 引擎）', pm.success === true && pm.simpress === true, JSON.stringify(pm))
+    check('probe_modules：sdraw 可用（r4 引擎）', pm.success === true && pm.sdraw === true, JSON.stringify(pm))
+
+    const fixturePath = path.join(here, 'fixtures/impress-smoke.pptx')
+    const pptxBytes = Array.from(fs.readFileSync(fixturePath))
+    const ld = await exec('load_document', { bytes: pptxBytes, name: 'impress-smoke.pptx', authorName: '测试用户' })
+    check('load_document 打开 pptx 成功', ld.success === true, JSON.stringify(ld))
+    check('load_document 返回 kind=impress', ld.kind === 'impress', JSON.stringify(ld))
+
+    const dk = await exec('get_doc_kind')
+    check('get_doc_kind = impress', dk.success === true && dk.kind === 'impress', JSON.stringify(dk))
+
+    const ov = await exec('slide_get_overview')
+    check('slide_get_overview 页数=2', ov.success === true && ov.slideCount === 2, JSON.stringify(ov))
+    check('第 1 页标题正确', ov.slides && ov.slides[0] && ov.slides[0].titleText === '冒烟测试标题一', JSON.stringify(ov.slides && ov.slides[0]))
+    check('第 2 页标题正确', ov.slides && ov.slides[1] && ov.slides[1].titleText === '第二页标题', JSON.stringify(ov.slides && ov.slides[1]))
+
+    const p1 = await exec('slide_get_page', { slideNumber: 1 })
+    check('slide_get_page(1) 形状清单非空', p1.success === true && Array.isArray(p1.shapes) && p1.shapes.length > 0, JSON.stringify(p1))
+    check('形状清单含文本', p1.shapes.some((s) => (s.text || '').includes('普通文本框内容')), JSON.stringify(p1.shapes))
+    const tbShape = p1.shapes.find((s) => (s.text || '').includes('普通文本框内容'))
+    check('普通文本框可定位（有 shapeName）', !!(tbShape && tbShape.name), JSON.stringify(tbShape))
+
+    const sst = await exec('slide_set_shape_text', { slideNumber: 1, shapeName: tbShape.name, text: '改后的文本框内容' })
+    check('slide_set_shape_text 成功且返回旧文字', sst.success === true && sst.previousText === '普通文本框内容', JSON.stringify(sst))
+    const p1b = await exec('slide_get_page', { slideNumber: 1 })
+    check('读回：文本框内容已改', p1b.shapes.some((s) => s.name === tbShape.name && s.text === '改后的文本框内容'), JSON.stringify(p1b.shapes))
+
+    const rep = await exec('slide_replace_text', { searchText: '第二页', replaceText: '第贰页', all: true })
+    check('slide_replace_text 跨页替换成功', rep.success === true && rep.replaced >= 1, JSON.stringify(rep))
+    const ov2 = await exec('slide_get_overview')
+    check('替换后第 2 页标题已变', ov2.slides[1].titleText === '第贰页标题', JSON.stringify(ov2.slides[1]))
+
+    const wn = await exec('slide_write_notes', { slideNumber: 1, text: '改后的第一页备注' })
+    check('slide_write_notes 成功且返回旧备注', wn.success === true && wn.previousText === '第一页备注', JSON.stringify(wn))
+    const rn = await exec('slide_read_notes', { slideNumber: 1 })
+    check('slide_read_notes 读回改后备注', rn.success === true && rn.notes[0].text === '改后的第一页备注', JSON.stringify(rn))
+    const rnAll = await exec('slide_read_notes', {})
+    check('slide_read_notes 缺省读全篇（2 页）', rnAll.success === true && rnAll.notes.length === 2, JSON.stringify(rnAll))
+
+    // 导出保存 → 重新打开：往返保真冒烟。bytes 字段经 CDP 返回值 JSON 化会变成
+    // 空对象（组 13 已踩过），实际字节要在 page.evaluate 内部先转 Array 再带出。
+    const exp = await exec('export_document', { name: 'impress-smoke.pptx' })
+    check('export_document 导出成功且非空字节', exp.success === true && exp.size > 0, JSON.stringify({ success: exp.success, size: exp.size }))
+    // export_document 缺省文件名回退 .docx（Writer 过滤器），对 Impress 文档会
+    // 用错导出过滤器——第二次取字节的调用必须带上同一个 pptx 文件名。
+    const expBytes = await page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', { name: 'impress-smoke.pptx' })
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    check('导出字节可安全带出浏览器边界', Array.isArray(expBytes) && expBytes.length > 0, String(expBytes && expBytes.length))
+
+    const ld2 = await exec('load_document', { bytes: expBytes, name: 'impress-smoke-roundtrip.pptx', authorName: '测试用户' })
+    check('重新打开导出的 pptx 成功', ld2.success === true && ld2.kind === 'impress', JSON.stringify(ld2))
+    const ov3 = await exec('slide_get_overview')
+    check('往返后页数仍为 2', ov3.success === true && ov3.slideCount === 2, JSON.stringify(ov3))
+    check('往返后第 2 页标题仍是改后文字', ov3.success === true && ov3.slides[1].titleText === '第贰页标题', JSON.stringify(ov3.slides && ov3.slides[1]))
+    const p1c = await exec('slide_get_page', { slideNumber: 1 })
+    check('往返后第 1 页文本框内容仍在', p1c.success === true && p1c.shapes.some((s) => (s.text || '') === '改后的文本框内容'), JSON.stringify(p1c.shapes))
+    const rn3 = await exec('slide_read_notes', { slideNumber: 1 })
+    check('往返后备注仍在', rn3.success === true && rn3.notes[0].text === '改后的第一页备注', JSON.stringify(rn3))
+
+    // 守卫：换回全新 Writer 文档，slide_* 必须明确报错，不能抛 UNO 异常
+    await exec('debug_fresh_document')
+    const guard = await exec('slide_get_overview')
+    check('Writer 文档上 slide_get_overview 被明确拒绝', guard.success === false && /演示文稿/.test(guard.message || ''), JSON.stringify(guard))
+    check('守卫失败带 error 字段', typeof guard.error === 'string' && guard.error.length > 0, JSON.stringify(Object.keys(guard)))
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

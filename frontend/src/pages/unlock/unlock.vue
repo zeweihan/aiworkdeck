@@ -66,11 +66,29 @@ export default {
       try {
         const res = await activateLicense(code)
         const mode = res && res.mode
+        // 粘 awdk_ Key 时解锁与账户连接是两件事，后者失败过去被完全吞掉：
+        // 用户看到「已连接账户」进了产品，账户却是未连接状态而毫无感知
+        const accountNotice = (res && res.accountNotice) || ''
         uni.showToast({
-          title: mode === 'trial' ? '已解锁试用版' : '已连接账户，正式版已解锁',
+          // 账户连接未完成时不能说「已连接账户」（随后弹窗会说明未完成）
+          title: mode === 'trial' ? '已解锁试用版'
+            : accountNotice ? '正式版已解锁' : '已连接账户，正式版已解锁',
           icon: 'success',
           duration: 1600,
         })
+        if (accountNotice) {
+          setTimeout(() => {
+            uni.showModal({
+              title: '账户连接未完成',
+              content: accountNotice,
+              showCancel: false,
+              confirmText: '知道了',
+              // 提示不阻断进入产品：无论怎么关掉都继续走启动分流
+              complete: () => uni.reLaunch({ url: '/pages/launch/launch' }),
+            })
+          }, 900)
+          return
+        }
         setTimeout(() => {
           uni.reLaunch({ url: '/pages/launch/launch' })
         }, 800)

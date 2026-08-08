@@ -24,6 +24,8 @@ public class AuthController {
     private final com.checkba.service.sms.SmsAuthService smsAuthService;
     private final com.checkba.service.auth.SecondFactorService secondFactorService;
     private final com.checkba.service.UserSessionService userSessionService;
+    /** 单机免登模式。设备令牌的会话签发路径只在这一模式下存在（见 issueLocalDeviceToken）。 */
+    private final boolean localMode;
 
     /**
      * 密码校验通过但还缺二次验证码时的响应 code（前端 api.js 据此弹验证码输入步骤，
@@ -68,7 +70,9 @@ public class AuthController {
                           com.checkba.service.account.AwdkLoginService awdkLoginService,
                           com.checkba.service.sms.SmsAuthService smsAuthService,
                           com.checkba.service.auth.SecondFactorService secondFactorService,
-                          com.checkba.service.UserSessionService userSessionService) {
+                          com.checkba.service.UserSessionService userSessionService,
+                          @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
+                          boolean localMode) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
@@ -78,6 +82,7 @@ public class AuthController {
         this.smsAuthService = smsAuthService;
         this.secondFactorService = secondFactorService;
         this.userSessionService = userSessionService;
+        this.localMode = localMode;
         staticUserService = userService;
     }
 
@@ -565,6 +570,55 @@ public class AuthController {
             authAbuseGuard.recordLoginFailure(ip, body.get("username"));
             result.put("code", 1);
             result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 单机免登模式下用当前本机会话直接换设备令牌（供 Microsoft Office 插件等外部客户端连接本机后端）。
+     *
+     * 为什么不能复用 {@link #issueDeviceToken}：那条路要账号 + 口令，而桌面单机版免登、
+     * 本机用户根本没有口令，桌面端无从生成令牌。
+     *
+     * 安全边界不新开口子，与其余 local-mode 端点同一套前提：
+     * - {@code LocalModeLoopbackGuard} 启动期强制 local-mode 必须绑回环地址；
+     * - {@code LocalModeAccessFilter} 每请求校验回环来源、拒绝反代痕迹与跨站 Origin。
+     * 因此能打到这里的只有本机进程。口令路径与它的失败锁定、二次验证闸一字未动；
+     * 非 local-mode（团队服务器）本端点直接拒绝，那边仍然只有账号口令一条路。
+     */
+    @PostMapping("/device-token/issue-local")
+    public Map<String, Object> issueLocalDeviceToken(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Map<String, Object> result = new HashMap<>();
+        if (!localMode) {
+            // 业务错误文案红线：不得含「登录 / 未授权 / 请先」，否则前端 api.js 会当成掉线清会话
+            result.put("code", 1);
+            result.put("message", "该服务器需用账号密码换取设备令牌");
+            return result;
+        }
+        Long userId = getUserIdFromSession(sessionId);
+        if (userId == null) {
+            result.put("code", 1);
+            result.put("message", "本机身份尚未就绪，稍后重试");
+            return result;
+        }
+        try {
+            var issued = deviceTokenService.issue(userId, body == null ? null : body.get("name"));
+            User user = userService == null ? null : userService.getUserById(userId);
+            String username = user == null || user.getUsername() == null ? "" : user.getUsername();
+            String displayName = user == null || user.getDisplayName() == null ? username : user.getDisplayName();
+            Map<String, Object> data = new HashMap<>();
+            data.put("tokenId", issued.id());
+            data.put("token", issued.plaintext());
+            data.put("userId", userId);
+            data.put("username", username);
+            data.put("displayName", displayName);
+            result.put("code", 0);
+            result.put("data", data);
+        } catch (Exception e) {
+            result.put("code", 1);
+            result.put("message", "令牌生成失败：" + e.getMessage());
         }
         return result;
     }

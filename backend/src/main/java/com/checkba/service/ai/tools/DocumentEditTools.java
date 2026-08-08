@@ -1007,6 +1007,317 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    @ToolMeta(displayName = "查看批注", category = "document")
+    @Tool("【看/批注】列出文档中的全部批注：作者、时间、内容、附着的文本摘要、所在段落、id（用于回复/解决/删除）、是否已解决。" +
+          "处置某条批注前先用本工具确认 id。")
+    public String doc_get_comments() {
+        log.info("Tool: doc_get_comments called");
+        try {
+            return editorBridgeService.executeEditorCommand("list_comments", null);
+        } catch (Exception e) {
+            log.error("Failed to get comments", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "回复批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【批注】回复一条已有批注（commentId 来自 doc_get_comments 返回的 id）。回复以新批注呈现，" +
+          "附着在同一处文本，内容自动标出回复对象；署名 AI Workdeck。")
+    public String doc_reply_comment(
+            @P("要回复的批注 id（来自 doc_get_comments）") String commentId,
+            @P("回复内容") String text
+    ) {
+        log.info("Tool: doc_reply_comment called commentId={}", commentId);
+        if (commentId == null || commentId.isBlank()) {
+            return "Error: 缺少 commentId 参数（来自 doc_get_comments 返回的 id）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("id", commentId);
+            params.put("text", text != null ? text : "");
+            return editorBridgeService.executeEditorCommand("reply_comment", params);
+        } catch (Exception e) {
+            log.error("Failed to reply comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "解决批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【批注】把一条批注标记为已解决/取消已解决（commentId 来自 doc_get_comments 返回的 id）。")
+    public String doc_resolve_comment(
+            @P("批注 id（来自 doc_get_comments）") String commentId,
+            @P("true=标记已解决，false=取消已解决，默认 true") Boolean resolved
+    ) {
+        log.info("Tool: doc_resolve_comment called commentId={}, resolved={}", commentId, resolved);
+        if (commentId == null || commentId.isBlank()) {
+            return "Error: 缺少 commentId 参数（来自 doc_get_comments 返回的 id）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("id", commentId);
+            params.put("resolved", resolved == null || resolved);
+            return editorBridgeService.executeEditorCommand("set_comment_resolved", params);
+        } catch (Exception e) {
+            log.error("Failed to resolve comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "删除批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【批注】删除一条批注（commentId 来自 doc_get_comments 返回的 id）。删除不可撤销为修订，删前先确认。")
+    public String doc_delete_comment(
+            @P("批注 id（来自 doc_get_comments）") String commentId
+    ) {
+        log.info("Tool: doc_delete_comment called commentId={}", commentId);
+        if (commentId == null || commentId.isBlank()) {
+            return "Error: 缺少 commentId 参数（来自 doc_get_comments 返回的 id）";
+        }
+        try {
+            return editorBridgeService.executeEditorCommand("delete_comment", java.util.Map.of("id", commentId));
+        } catch (Exception e) {
+            log.error("Failed to delete comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== 修订处置（接受/拒绝） ====================
+    // 页边小字读不到作者/时间，修订的权威视图是审阅面板（ReviewPanel.vue）；
+    // 这组工具让 AI 也能走同一条 worker 原语（resolve_revision/resolve_all_revisions）。
+
+    @ToolMeta(displayName = "查看修订", category = "document")
+    @Tool("【看/修订】列出文档当前的全部修订记录：index（0 开始）、类型（Insert/Delete/...）、作者、日期、" +
+          "文本摘要、所在段落、是否在表格内。接受/拒绝一条后其余条目的 index 会前移，处置多条前重新调用本工具确认最新编号。")
+    public String doc_list_revisions() {
+        log.info("Tool: doc_list_revisions called");
+        try {
+            return editorBridgeService.executeEditorCommand("list_revisions", null);
+        } catch (Exception e) {
+            log.error("Failed to list revisions", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "接受修订", category = "document", fileEffect = "MODIFIED")
+    @Tool("【修订】接受一条修订（index 来自 doc_list_revisions，0 开始）。")
+    public String doc_accept_revision(
+            @P("修订序号，0 开始（来自 doc_list_revisions）") Integer index
+    ) {
+        log.info("Tool: doc_accept_revision called index={}", index);
+        if (index == null) return "Error: 缺少 index 参数（来自 doc_list_revisions）";
+        return dispatchRevisionResolve(index, "accept");
+    }
+
+    @ToolMeta(displayName = "拒绝修订", category = "document", fileEffect = "MODIFIED")
+    @Tool("【修订】拒绝一条修订（index 来自 doc_list_revisions，0 开始）。")
+    public String doc_reject_revision(
+            @P("修订序号，0 开始（来自 doc_list_revisions）") Integer index
+    ) {
+        log.info("Tool: doc_reject_revision called index={}", index);
+        if (index == null) return "Error: 缺少 index 参数（来自 doc_list_revisions）";
+        return dispatchRevisionResolve(index, "reject");
+    }
+
+    private String dispatchRevisionResolve(Integer index, String action) {
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("index", index);
+            params.put("action", action);
+            return editorBridgeService.executeEditorCommand("resolve_revision", params);
+        } catch (Exception e) {
+            log.error("Failed to resolve revision", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "接受全部修订", category = "document", fileEffect = "MODIFIED")
+    @Tool("【修订】一次性接受文档中的全部修订。这是批量不可逐条撤销的操作，先确认这确实是用户想要的。")
+    public String doc_accept_all_revisions() {
+        log.info("Tool: doc_accept_all_revisions called");
+        return dispatchRevisionResolveAll("accept");
+    }
+
+    @ToolMeta(displayName = "拒绝全部修订", category = "document", fileEffect = "MODIFIED")
+    @Tool("【修订】一次性拒绝文档中的全部修订。")
+    public String doc_reject_all_revisions() {
+        log.info("Tool: doc_reject_all_revisions called");
+        return dispatchRevisionResolveAll("reject");
+    }
+
+    private String dispatchRevisionResolveAll(String action) {
+        try {
+            return editorBridgeService.executeEditorCommand("resolve_all_revisions", java.util.Map.of("action", action));
+        } catch (Exception e) {
+            log.error("Failed to resolve all revisions", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== Word 结构面（页眉页脚/分页分节/脚注尾注/超链接/图片/样式） ====================
+
+    @ToolMeta(displayName = "设置页眉页脚", category = "document", fileEffect = "MODIFIED")
+    @Tool("【结构】设置文档首节的页眉或页脚文本（只处理第一个页面样式，法律文件极少按节区分页眉页脚）。" +
+          "target: header/footer；align 可选：left/center/right/justify，不传保持原对齐。")
+    public String doc_edit_header_footer(
+            @P("header=页眉，footer=页脚") String target,
+            @P("页眉/页脚文本") String text,
+            @P("对齐：left/center/right/justify，不改则不传") String align
+    ) {
+        log.info("Tool: doc_edit_header_footer called target={}", target);
+        if (text == null) {
+            return "Error: 缺少 text 参数（页眉/页脚文本，清空传空字符串）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("target", target != null && !target.isBlank() ? target : "header");
+            params.put("text", text);
+            if (align != null && !align.isBlank()) params.put("align", align);
+            return editorBridgeService.executeEditorCommand("edit_header_footer", params);
+        } catch (Exception e) {
+            log.error("Failed to edit header/footer", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入分页分节符", category = "document", fileEffect = "MODIFIED")
+    @Tool("【结构】在光标处插入分页符或分节符（Word 语义的\"下一页\"分节符）。breakType: page=分页符 / sectionNext=分节符。" +
+          "光标后的内容会被推到新的一页。")
+    public String doc_insert_break(
+            @P("page=分页符，sectionNext=分节符（下一页）") String breakType
+    ) {
+        log.info("Tool: doc_insert_break called breakType={}", breakType);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("breakType", breakType != null && !breakType.isBlank() ? breakType : "page");
+            return editorBridgeService.executeEditorCommand("insert_break", params);
+        } catch (Exception e) {
+            log.error("Failed to insert break", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入脚注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【插入】在文中位置插入一条脚注（页面底部编号注释），常用于法律文件的引用/释义说明。" +
+          "anchorId 传 doc_find_text 返回的锚点则插在该处之后，不传则插在当前光标处。")
+    public String doc_insert_footnote(
+            @P("doc_find_text 返回的 anchorId，插入位置；不传则用当前光标") String anchorId,
+            @P("脚注正文内容") String text
+    ) {
+        log.info("Tool: doc_insert_footnote called anchor={}", anchorId);
+        return dispatchInsertNote("insert_footnote", anchorId, text);
+    }
+
+    @ToolMeta(displayName = "插入尾注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【插入】在文中位置插入一条尾注（文档末尾编号注释）。anchorId 传 doc_find_text 返回的锚点则插在该处之后，" +
+          "不传则插在当前光标处。")
+    public String doc_insert_endnote(
+            @P("doc_find_text 返回的 anchorId，插入位置；不传则用当前光标") String anchorId,
+            @P("尾注正文内容") String text
+    ) {
+        log.info("Tool: doc_insert_endnote called anchor={}", anchorId);
+        return dispatchInsertNote("insert_endnote", anchorId, text);
+    }
+
+    private String dispatchInsertNote(String action, String anchorId, String text) {
+        if (text == null || text.isBlank()) {
+            return "Error: 缺少 text 参数（注释正文内容）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (anchorId != null && !anchorId.isBlank()) params.put("anchor", anchorId);
+            params.put("text", text);
+            return editorBridgeService.executeEditorCommand(action, params);
+        } catch (Exception e) {
+            log.error("Failed to insert note via {}", action, e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置超链接", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】给指定锚点处的文本设置超链接。先 doc_find_text 拿到目标文本的 anchorId，再对它设链接；" +
+          "url 仅支持 http/https。")
+    public String doc_set_hyperlink(
+            @P("doc_find_text 返回的 anchorId（要加链接的目标文本）") String anchorId,
+            @P("链接地址，http:// 或 https:// 开头") String url
+    ) {
+        log.info("Tool: doc_set_hyperlink called anchor={}, url={}", anchorId, url);
+        if (anchorId == null || anchorId.isBlank()) {
+            return "Error: 缺少 anchorId 参数（先用 doc_find_text 定位目标文本）";
+        }
+        if (url == null || url.isBlank()) {
+            return "Error: 缺少 url 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("anchor", anchorId);
+            params.put("url", url);
+            return editorBridgeService.executeEditorCommand("set_hyperlink_at_anchor", params);
+        } catch (Exception e) {
+            log.error("Failed to set hyperlink", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入图片", category = "document", fileEffect = "MODIFIED")
+    @Tool("【插入】在光标处插入一张图片。fileId 是项目文件树里图片文件（jpg/jpeg/png/gif/bmp/webp）的文件 ID，" +
+          "上限 2MB，超限会报错——先用 doc_list_project_files 之外的方式确认体积，或让用户换一张更小的图。")
+    public String doc_insert_image(
+            @P("项目文件树中图片文件的文件 ID") Long fileId
+    ) {
+        log.info("Tool: doc_insert_image called fileId={}", fileId);
+        if (fileId == null) {
+            return "Error: 缺少 fileId 参数";
+        }
+        try {
+            ProjectFile file = projectFileService.getFile(fileId);
+            if (file == null) {
+                return "Error: 文件不存在，ID=" + fileId;
+            }
+            String denied = ToolFileGuard.rejectIfOutsideProject(file);
+            if (denied != null) return denied;
+            if (!isImageFile(file.getName())) {
+                return "Error: 该文件不是支持的图片格式（jpg/jpeg/png/gif/bmp/webp）: " + file.getName();
+            }
+            java.nio.file.Path path = storageResolver.resolve(file.getFilePath());
+            if (!java.nio.file.Files.exists(path)) {
+                return "Error: 图片文件在磁盘上不存在: " + file.getName();
+            }
+            long size = java.nio.file.Files.size(path);
+            final long maxBytes = 2L * 1024 * 1024;
+            if (size > maxBytes) {
+                return "Error: 图片过大（" + (size / 1024) + "KB，上限 2MB）: " + file.getName();
+            }
+            byte[] bytes = java.nio.file.Files.readAllBytes(path);
+            String base64 = java.util.Base64.getEncoder().encodeToString(bytes);
+            return editorBridgeService.executeEditorCommand("insert_image", java.util.Map.of("base64", base64));
+        } catch (Exception e) {
+            log.error("Failed to insert image", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "应用样式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【格式】给当前选区套用文档中已有的段落样式或字符样式（按样式名，不是本工具集里的标准格式化）。" +
+          "必须先选中目标（doc_select_anchor / doc_select_paragraph）。kind=paragraph（默认）或 character；" +
+          "样式名不存在会报错并列出可用样式名供改用。")
+    public String doc_set_style(
+            @P("样式名，如 'Heading 1'、'Quotations'（引擎内部样式名，不是中文标题）") String styleName,
+            @P("paragraph=段落样式（默认），character=字符样式") String kind
+    ) {
+        log.info("Tool: doc_set_style called styleName={}, kind={}", styleName, kind);
+        if (styleName == null || styleName.isBlank()) {
+            return "Error: 缺少 styleName 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("styleName", styleName);
+            params.put("kind", kind != null && !kind.isBlank() ? kind : "paragraph");
+            return editorBridgeService.executeEditorCommand("set_style", params);
+        } catch (Exception e) {
+            log.error("Failed to set style", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
     // ==================== 电子表格（Calc / xlsx）sheet_* 原语 ====================
     // 打开的 xlsx 由同一 LibreOffice 引擎的 Calc 模块承载；doc_* 的 Writer 原语
     // （getText 一族）在表格文档上必然失败，表格操作一律走本节 sheet_* 工具。
@@ -1419,6 +1730,284 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    // ==================== 电子表格二期：批注/数据验证/图表/搜索/结构 ====================
+    // 文档能力矩阵（docs/superpowers/specs/2026-08-07-document-capability-matrix.md
+    // §4.2 Excel 部分）桌面端待办。批注/图表/透视表按 UNO 实际能力面收口，工具
+    // 描述里已注明限制，见下方各方法注释。
+
+    @ToolMeta(displayName = "添加单元格批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·批注】给电子表格单元格添加批注。注意：Calc 批注与 Word 批注不同构——" +
+          "没有线程回复、没有解决/未解决状态，本工具集只提供添加/查看/删除三个原语，不支持回复或标记解决。")
+    public String sheet_add_comment(
+            @P("单元格，如 'B2'") String cell,
+            @P("批注内容") String text,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_add_comment called cell={}", cell);
+        if (cell == null || cell.isBlank()) {
+            return "Error: 缺少 cell 参数";
+        }
+        if (text == null || text.isBlank()) {
+            return "Error: 缺少 text 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("cell", cell);
+            params.put("text", text);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_add_comment", params);
+        } catch (Exception e) {
+            log.error("Failed to add sheet comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【表格·批注】列出当前工作表的全部单元格批注（单元格地址/作者/日期/内容）。" +
+          "Calc 批注无解决/未解决状态，返回值不含 resolved 字段。")
+    public String sheet_get_comments(
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_get_comments called sheet={}", sheet);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_get_comments", params);
+        } catch (Exception e) {
+            log.error("Failed to get sheet comments", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "删除单元格批注", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·批注】删除指定单元格上的批注。一个单元格最多一条批注，按单元格地址定位删除。")
+    public String sheet_delete_comment(
+            @P("单元格，如 'B2'") String cell,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_delete_comment called cell={}", cell);
+        if (cell == null || cell.isBlank()) {
+            return "Error: 缺少 cell 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("cell", cell);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_delete_comment", params);
+        } catch (Exception e) {
+            log.error("Failed to delete sheet comment", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置数据验证", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】给区域设置数据验证规则。type: list（下拉候选值，value1 传逗号分隔候选值，如 " +
+          "'合规,不合规,待核查'）/ wholeNumber / decimal / date / time / textLength（这五种需要 operator + value1，" +
+          "between/notBetween 再加 value2）/ custom（value1 是返回布尔值的校验公式）。" +
+          "operator: greater/greaterEqual/less/lessEqual/equal/notEqual/between/notBetween。" +
+          "可选 showInputMessage+inputTitle+inputMessage（输入提示）、errorTitle+errorMessage（校验失败提示）。" +
+          "clear=true 清除该区域数据验证，忽略其他参数。")
+    public String sheet_set_data_validation(
+            @P("区域，如 'C2:C50'") String range,
+            @P("类型：list/wholeNumber/decimal/date/time/textLength/custom") String type,
+            @P("运算符（list/custom 不需要）：greater/greaterEqual/less/lessEqual/equal/notEqual/between/notBetween") String operator,
+            @P("list=逗号分隔候选值；custom=校验公式；其余=比较值1") String value1,
+            @P("比较值2，仅 between/notBetween 需要") String value2,
+            @P("是否显示输入提示，不传则不显示") Boolean showInputMessage,
+            @P("输入提示标题") String inputTitle,
+            @P("输入提示内容") String inputMessage,
+            @P("校验失败提示标题") String errorTitle,
+            @P("校验失败提示内容（传了即视为需要显示错误提示）") String errorMessage,
+            @P("true=清除该区域数据验证，忽略其他参数") Boolean clear,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_set_data_validation called range={}, type={}", range, type);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range != null ? range : "");
+            if (clear != null && clear) {
+                params.put("clear", true);
+            } else {
+                if (type != null && !type.isBlank()) params.put("type", type);
+                if (operator != null && !operator.isBlank()) params.put("operator", operator);
+                if (value1 != null && !value1.isBlank()) params.put("value1", value1);
+                if (value2 != null && !value2.isBlank()) params.put("value2", value2);
+                if (showInputMessage != null) params.put("showInputMessage", showInputMessage);
+                if (inputTitle != null && !inputTitle.isBlank()) params.put("inputTitle", inputTitle);
+                if (inputMessage != null && !inputMessage.isBlank()) params.put("inputMessage", inputMessage);
+                if (errorTitle != null && !errorTitle.isBlank()) params.put("errorTitle", errorTitle);
+                if (errorMessage != null && !errorMessage.isBlank()) params.put("errorMessage", errorMessage);
+            }
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_set_data_validation", params);
+        } catch (Exception e) {
+            log.error("Failed to set data validation", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入图表", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】以区域数据建一个图表。chartType: column（柱状）/ bar（条状）/ line（折线）/ pie（饼图）。" +
+          "只做「建图表 + 选类型 + 标题」三件事，位置固定在数据区域右侧、默认尺寸，不支持自定义位置/尺寸/多系列等复杂配置。")
+    public String sheet_add_chart(
+            @P("数据区域，如 'A1:B10'（含表头）") String range,
+            @P("图表类型：column/bar/line/pie") String chartType,
+            @P("图表标题，不设则不传") String title,
+            @P("图表名称，不传自动生成") String name,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_add_chart called range={}, chartType={}", range, chartType);
+        if (range == null || range.isBlank()) {
+            return "Error: 缺少 range 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("range", range);
+            params.put("chartType", chartType != null && !chartType.isBlank() ? chartType : "column");
+            if (title != null && !title.isBlank()) params.put("title", title);
+            if (name != null && !name.isBlank()) params.put("name", name);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_add_chart", params);
+        } catch (Exception e) {
+            log.error("Failed to add chart", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【表格·看】在电子表格区域内查找文本（逐格比对字符串值，含公式计算结果）。区域不传则用整个已用区域；" +
+          "上限 50 条命中、20000 格扫描，超限需缩小 range 分块查找。与 doc_find_text 分开——本工具仅对表格文档有效。")
+    public String sheet_search(
+            @P("查找内容") String query,
+            @P("区域，如 'A1:D100'；不传用整个已用区域") String range,
+            @P("区分大小写，默认不区分") Boolean matchCase,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_search called query={}", query);
+        if (query == null || query.isBlank()) {
+            return "Error: 缺少 query 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("query", query);
+            if (range != null && !range.isBlank()) params.put("range", range);
+            if (matchCase != null) params.put("matchCase", matchCase);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_search", params);
+        } catch (Exception e) {
+            log.error("Failed to search sheet", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "管理命名区域", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】工作簿级命名区域管理。op=add 新建（name+range，range 所在工作表决定绑定表）、" +
+          "remove 删除（name）、list 列出全部（默认）。命名后可在公式里直接用该名字代替单元格地址。")
+    public String sheet_define_name(
+            @P("操作：add/remove/list，默认 list") String op,
+            @P("命名区域名（add/remove 需要）") String name,
+            @P("区域，如 'A1:C10'，仅 add 需要") String range,
+            @P("工作表名称或序号（0 开始），仅 add 需要；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_define_name called op={}, name={}", op, name);
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("op", op != null && !op.isBlank() ? op : "list");
+            if (name != null && !name.isBlank()) params.put("name", name);
+            if (range != null && !range.isBlank()) params.put("range", range);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_define_name", params);
+        } catch (Exception e) {
+            log.error("Failed to manage named range", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "保护/取消保护工作表", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】保护或取消保护当前工作表（防止误改）。密码可选，不传即无密码保护/取消。")
+    public String sheet_protect_sheet(
+            @P("操作：protect/unprotect") String action,
+            @P("密码，可选") String password,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_protect_sheet called action={}", action);
+        if (action == null || action.isBlank()) {
+            return "Error: 缺少 action 参数（protect/unprotect）";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("action", action);
+            if (password != null) params.put("password", password);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_protect_sheet", params);
+        } catch (Exception e) {
+            log.error("Failed to protect/unprotect sheet", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "行列分组", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】行列分组/大纲（可折叠展开的行列组）。op: group（分组）/ ungroup（取消分组）/ " +
+          "show（展开明细）/ hide（折叠明细）；orient: rows（默认）/ cols，仅 group/ungroup 需要区分方向。")
+    public String sheet_group_rows_cols(
+            @P("操作：group/ungroup/show/hide") String op,
+            @P("区域，如 'A2:A10'（覆盖到的整行/整列生效）") String range,
+            @P("方向：rows（默认）/cols，仅 group/ungroup 需要") String orient,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_group_rows_cols called op={}, range={}", op, range);
+        if (range == null || range.isBlank()) {
+            return "Error: 缺少 range 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("op", op != null && !op.isBlank() ? op : "group");
+            params.put("range", range);
+            if (orient != null && !orient.isBlank()) params.put("orient", orient);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_group_rows_cols", params);
+        } catch (Exception e) {
+            log.error("Failed to group rows/cols", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入数据透视表", category = "document", fileEffect = "MODIFIED")
+    @Tool("【表格·结构】基础形态的数据透视表：按 rowFields 分组、对 dataField 求和。" +
+          "rowFields 是逗号分隔的表头字段名（可多个，如 '部门,状态'），dataField 是要求和的表头字段名，" +
+          "两者都必须与 sourceRange 首行表头文字完全一致。结果默认放在源区域右侧一列，可用 outputCell 指定起点单元格。" +
+          "只支持这一种「行分组+求和」布局，不支持列字段/多数据字段/自定义汇总函数/筛选字段。")
+    public String sheet_add_pivot_table(
+            @P("源数据区域（含表头），如 'A1:D100'") String sourceRange,
+            @P("逗号分隔的行分组字段名（须为源区域表头文字），如 '部门,状态'") String rowFields,
+            @P("求和字段名（须为源区域表头文字）") String dataField,
+            @P("透视表放置起点单元格，不传默认放在源区域右侧") String outputCell,
+            @P("透视表名称，不传自动生成") String name,
+            @P("工作表名称或序号（0 开始）；不传用当前活动工作表") String sheet
+    ) {
+        log.info("Tool: sheet_add_pivot_table called sourceRange={}, rowFields={}, dataField={}", sourceRange, rowFields, dataField);
+        if (sourceRange == null || sourceRange.isBlank()) {
+            return "Error: 缺少 sourceRange 参数";
+        }
+        if (rowFields == null || rowFields.isBlank()) {
+            return "Error: 缺少 rowFields 参数";
+        }
+        if (dataField == null || dataField.isBlank()) {
+            return "Error: 缺少 dataField 参数";
+        }
+        try {
+            java.util.Map<String, Object> params = new java.util.HashMap<>();
+            params.put("sourceRange", sourceRange);
+            params.put("rowFields", rowFields);
+            params.put("dataField", dataField);
+            if (outputCell != null && !outputCell.isBlank()) params.put("outputCell", outputCell);
+            if (name != null && !name.isBlank()) params.put("name", name);
+            if (sheet != null && !sheet.isBlank()) params.put("sheet", sheet);
+            return editorBridgeService.executeEditorCommand("sheet_add_pivot_table", params);
+        } catch (Exception e) {
+            log.error("Failed to add pivot table", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
     // ==================== 调试工具 ====================
 
     @Tool("调试工具：获取文档中所有修订记录的详细信息，包括修订类型、位置、内容等。用于分析和诊断修订模式下的文本操作问题。")
@@ -1440,9 +2029,19 @@ public class DocumentEditTools implements AgentToolComponent {
     private boolean isEditableDocument(String fileName) {
         if (fileName == null) return false;
         String lower = fileName.toLowerCase();
-        return lower.endsWith(".docx") || lower.endsWith(".doc") 
+        return lower.endsWith(".docx") || lower.endsWith(".doc")
                 || lower.endsWith(".xlsx") || lower.endsWith(".xls")
                 || lower.endsWith(".pptx") || lower.endsWith(".ppt");
+    }
+
+    /**
+     * 判断文件是否是 doc_insert_image 支持的图片格式
+     */
+    private boolean isImageFile(String fileName) {
+        if (fileName == null) return false;
+        String lower = fileName.toLowerCase();
+        return lower.endsWith(".jpg") || lower.endsWith(".jpeg") || lower.endsWith(".png")
+                || lower.endsWith(".gif") || lower.endsWith(".bmp") || lower.endsWith(".webp");
     }
 }
 

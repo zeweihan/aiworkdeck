@@ -3,8 +3,8 @@
     <div ref="listEl" class="message-list">
       <div v-if="!messages.length" class="empty">
         <p>与 AI 讨论当前文档或项目事务。</p>
-        <p v-if="!configured" class="empty-warn">连接未就绪：请点击右上角「设置」配置后端地址与设备令牌。</p>
-        <p v-else-if="!projectId" class="empty-warn">请先在顶部选择一个项目。</p>
+        <p v-if="!configured" class="empty-warn">连接未就绪：点击右上角「设置」填入官网 API Key。</p>
+        <p v-else-if="!projectId" class="empty-warn">尚未选择项目：在顶部下拉中选一个项目。</p>
       </div>
 
       <div v-for="(msg, i) in messages" :key="i" class="message" :class="msg.role">
@@ -49,18 +49,23 @@
         </div>
       </div>
       <p v-if="reconnecting" class="banner conn">连接中断，正在自动重连……</p>
+      <p v-else-if="notice" class="banner conn">{{ notice }}</p>
       <p v-if="banner" class="banner">{{ banner }}</p>
     </footer>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, reactive, ref } from 'vue'
-import { postChat, postCancel, postOfficeResult, createConversation } from '../lib/api.js'
-import { createSseConnection, createTagStreamParser } from '../lib/sse.js'
-import { readActiveDocument, detectHost } from '../lib/wordDoc.js'
-import { executeOfficeCommand, commandDisplayName } from '../lib/officeExecutor.js'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import {
+  messages, input, streaming, reconnecting, banner, notice, includeDocument, scrollSignal,
+  activateSession, send as sendMessage, stop as stopRun, newConversation
+} from '../lib/chatSession.js'
 
+/**
+ * 纯渲染与交互层：会话态、SSE 连接与 office_command 执行链都在 lib/chatSession.js。
+ * 组件卸载（切到设置视图）不再关连接、不再丢消息——那正是「切一次页面就收不到回复」的根因。
+ */
 const props = defineProps({
   settings: { type: Object, required: true },
   projectId: { type: String, default: '' },
@@ -68,23 +73,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['need-settings'])
 
-const messages = ref([])
-const input = ref('')
-const streaming = ref(false)
-const includeDocument = ref(true)
-const banner = ref('')
 const listEl = ref(null)
-
-// 会话 ID 优先由服务端签发（POST /api/agent/conversations，契约与后端并行分支约定）；
-// 端点不存在或失败时静默回退客户端生成的 conv-<毫秒>（与主前端一致）。插件会话独立。
-let conversationId = null
-let connection = null
-let parser = null
-let currentAssistant = null
-// SSE 是否发生过断线重连：只有重连后的 run_state 才用于兜底解锁
-// （首连的 run_state 在 send 已置 streaming 之后到达，不能当终态看）
-let everReconnected = false
-const reconnecting = ref(false)
 
 const canSend = computed(() =>
   props.configured && props.projectId && input.value.trim().length > 0 && !streaming.value)
@@ -95,179 +84,27 @@ function scrollToBottom() {
   })
 }
 
-function finishStreaming() {
-  if (currentAssistant) currentAssistant.streaming = false
-  streaming.value = false
-}
+// 连接配置或项目变化时重新激活会话（同一身份是空操作，不打断进行中的对话）
+watch(
+  () => [props.settings.serverUrl, props.settings.token, props.projectId],
+  () => { activateSession({ settings: props.settings, projectId: props.projectId }) },
+  { immediate: true }
+)
 
-function handleEvent(evt, dataStr) {
-  if (evt === 'text_delta') {
-    let content = dataStr
-    try { content = JSON.parse(dataStr).content || '' } catch (e) { /* 按原文处理 */ }
-    if (parser) parser.feed(content)
-    scrollToBottom()
-  } else if (evt === 'bubble_end') {
-    if (parser) parser.flush()
-    finishStreaming()
-  } else if (evt === 'error') {
-    let msg = '执行出错'
-    try { msg = JSON.parse(dataStr).message || msg } catch (e) { /* ignore */ }
-    if (currentAssistant) currentAssistant.error = msg
-    finishStreaming()
-  } else if (evt === 'cancelled') {
-    if (currentAssistant && !currentAssistant.text) currentAssistant.text = '（已停止）'
-    finishStreaming()
-  } else if (evt === 'client_action') {
-    handleClientAction(dataStr)
-  } else if (evt === 'run_state') {
-    // 建连时后端推送当前运行状态。仅在断线重连后用作兜底：
-    // 断线期间漏掉了 bubble_end/error 等终态事件时，靠它解锁输入框
-    if (everReconnected && streaming.value) {
-      let status = null
-      try { status = JSON.parse(dataStr).status } catch (e) { /* ignore */ }
-      const stillRunning = status === 'RUNNING' || status === 'PAUSED' || status === 'AWAITING_APPROVAL'
-      if (!stillRunning) {
-        if (parser) parser.flush()
-        finishStreaming()
-      }
-    }
-  }
-  // connected/heartbeat/plan_update 等其余事件：先忽略
-}
+// store 不碰 DOM：由它发出滚动信号，视图负责滚
+watch(scrollSignal, scrollToBottom)
 
-/**
- * office_command 执行链（Phase C 工具桥）：
- * 后端 OfficeBridgeService 下发 {tool:'office_command', requestId, command, args}
- * → Office.js 执行 → POST /api/agent/office/result 回传。
- * 其余 client_action（editor_command 等 LOWA 契约）与本插件无关，忽略。
- */
-async function handleClientAction(dataStr) {
-  let action = null
-  try { action = JSON.parse(dataStr) } catch (e) { return }
-  if (!action || action.tool !== 'office_command' || !action.requestId) return
-
-  const chip = reactive({ label: commandDisplayName(action.command), status: 'running' })
-  if (currentAssistant) {
-    if (!currentAssistant.tools) currentAssistant.tools = []
-    currentAssistant.tools.push(chip)
-    scrollToBottom()
-  }
-
-  const result = await executeOfficeCommand(action.command, action.args)
-  chip.status = result.ok ? 'done' : 'failed'
-  await postOfficeResult(props.settings, {
-    requestId: action.requestId,
-    ok: result.ok,
-    data: result.ok ? result.data : null,
-    error: result.ok ? null : result.error
-  })
-}
-
-async function ensureConnection() {
-  if (connection) return
-  const conn = createSseConnection({
-    baseUrl: props.settings.serverUrl,
-    token: props.settings.token,
-    conversationId,
-    onEvent: handleEvent,
-    onStatus: (status) => {
-      if (connection !== conn) return
-      if (status === 'reconnecting') {
-        everReconnected = true
-        reconnecting.value = true
-      } else if (status === 'connected') {
-        reconnecting.value = false
-      }
-    },
-    onClose: () => {
-      if (connection === conn) connection = null
-      reconnecting.value = false
-      // 连接彻底关闭时不静默卡死输入框（断线重连由 sse.js 内部处理，不走这里）
-      if (streaming.value) finishStreaming()
-    }
-  })
-  connection = conn
-  try {
-    await conn.ready
-  } catch (e) {
-    if (connection === conn) connection = null
-    throw e
-  }
-}
+// 重新挂载（从设置视图切回来）时恢复到最新一条消息
+onMounted(scrollToBottom)
 
 async function send() {
-  banner.value = ''
-  if (!props.configured) { emit('need-settings'); return }
-  if (!props.projectId) { banner.value = '请先在顶部选择一个项目'; return }
-  const prompt = input.value.trim()
-  if (!prompt || streaming.value) return
-
-  input.value = ''
-  messages.value.push({ role: 'user', text: prompt })
-
-  const assistant = reactive({ role: 'assistant', text: '', thinking: '', streaming: true, error: '', tools: [] })
-  messages.value.push(assistant)
-  currentAssistant = assistant
-  parser = createTagStreamParser({
-    onMainText: (t) => { assistant.text += t },
-    onThinkingText: (t) => { assistant.thinking += t }
-  })
-  streaming.value = true
-  scrollToBottom()
-
-  try {
-    // 首条消息前先请求服务端签发会话 ID；旧后端无该端点时静默回退客户端生成
-    if (!conversationId) {
-      conversationId = (await createConversation(props.settings, parseInt(props.projectId, 10)))
-        || `conv-${Date.now()}`
-    }
-    await ensureConnection()
-
-    // 当前文档内容以内联形式随请求上送（activeContext.inlineContent）
-    let activeContext = null
-    if (includeDocument.value) {
-      activeContext = await readActiveDocument()
-      if (!activeContext) banner.value = '未能读取文档内容，本条消息不附带文档内容'
-    }
-
-    await postChat(props.settings, {
-      projectId: parseInt(props.projectId, 10),
-      conversationId,
-      message: prompt,
-      mode: 'AGENT',
-      activeContext,
-      // 声明客户端能力（Phase C）：后端据此让本会话只见 office_* 工具、隐藏 doc_*；
-      // officeHost 再按宿主细分（word/excel/powerpoint），点名对应工具面
-      clientCapability: 'office',
-      officeHost: detectHost() || 'word'
-    })
-  } catch (e) {
-    assistant.error = e.message || '消息发送失败'
-    finishStreaming()
-  }
+  const result = await sendMessage()
+  if (result && result.needSettings) emit('need-settings')
 }
 
-async function stop() {
-  if (conversationId) await postCancel(props.settings, conversationId)
-  if (connection) { connection.close(); connection = null }
-  if (currentAssistant && !currentAssistant.text) currentAssistant.text = '（已停止）'
-  finishStreaming()
+function stop() {
+  stopRun()
 }
-
-function newConversation() {
-  if (connection) { connection.close(); connection = null }
-  conversationId = null
-  messages.value = []
-  currentAssistant = null
-  parser = null
-  banner.value = ''
-  reconnecting.value = false
-  everReconnected = false
-}
-
-onBeforeUnmount(() => {
-  if (connection) connection.close()
-})
 </script>
 
 <style scoped>

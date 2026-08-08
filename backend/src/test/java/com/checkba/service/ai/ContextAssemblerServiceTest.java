@@ -40,6 +40,7 @@ class ContextAssemblerServiceTest {
     private LegalTools legalTools;
     private ContextAssemblerService assembler;
     private ClientCapabilityService capabilityService;
+    private InlineContentCache inlineContentCache;
 
     @BeforeEach
     void setUp() {
@@ -58,9 +59,11 @@ class ContextAssemblerServiceTest {
         when(contextCompressor.needsCompression(any(), any())).thenReturn(false);
 
         capabilityService = new ClientCapabilityService();
+        inlineContentCache = new InlineContentCache();
         assembler = new ContextAssemblerService(
                 legalTools, messageService, fileContextLoader,
-                new AiContextProperties(), skillRouter, capabilityService, memoryManager, contextCompressor);
+                new AiContextProperties(), skillRouter, capabilityService, inlineContentCache,
+                memoryManager, contextCompressor);
     }
 
     private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
@@ -197,7 +200,7 @@ class ContextAssemblerServiceTest {
         props.getFiles().setMaxCharsPerFile(500_000);
         ContextAssemblerService bigLimitAssembler = new ContextAssemblerService(
                 legalTools, mockedMessageService(), mock(FileContextLoader.class),
-                props, mockedSkillRouter(), new ClientCapabilityService(),
+                props, mockedSkillRouter(), new ClientCapabilityService(), new InlineContentCache(),
                 mockedMemoryManager(), mockedCompressor());
 
         String huge = "甲".repeat(200_001);
@@ -221,6 +224,57 @@ class ContextAssemblerServiceTest {
         assertTrue(lastUser.contains("doc_list_project_files"), "应点名禁用 doc_list_project_files");
     }
 
+    // ==== 正文省传（inlineContentHash + InlineContentCache）====
+    // 同一会话里文档没变时，插件只上送内容哈希，不再重传整篇正文（20 万字符上限）。
+
+    private static AiAgentController.ContextItem officeDocByHash(String hash) {
+        AiAgentController.ContextItem item = new AiAgentController.ContextItem();
+        item.setId("office-current-document");
+        item.setName("劳动合同.docx");
+        item.setFileType("docx");
+        item.setInlineContentHash(hash);
+        return item;
+    }
+
+    @Test
+    @DisplayName("带正文的请求：正常注入，并按会话落入内联正文缓存")
+    void inlineContentIsCachedForLaterHashOnlyRequests() {
+        String body = "第一条 试用期为三个月……";
+
+        String systemText = assembleSystemText(officeDoc(body));
+
+        assertTrue(systemText.contains(body), "本轮正文应正常注入");
+        assertEquals(body, inlineContentCache.get("conv-1", InlineContentCache.sha256Hex(body)),
+                "正文应按会话落缓存，哈希由后端自算");
+    }
+
+    @Test
+    @DisplayName("只带哈希且命中缓存：复用上一轮正文，不回落 read_document")
+    void hashOnlyRequestReusesCachedContent() {
+        String body = "第一条 试用期为三个月……";
+        assembleSystemText(officeDoc(body));
+
+        String systemText = assembleSystemText(officeDocByHash(InlineContentCache.sha256Hex(body)));
+
+        assertTrue(systemText.contains(body), "命中缓存应复用上一轮正文");
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.never()).read_document(anyString());
+    }
+
+    @Test
+    @DisplayName("只带哈希但未命中（文档已改/缓存已驱逐）：降级为无正文，不报错也不回落 read_document")
+    void hashMissDegradesToNoInlineBody() {
+        capabilityService.record("conv-1", "office");
+        String body = "第一条 试用期为三个月……";
+        assembleSystemText(officeDoc(body));
+
+        String systemText = assembleSystemText(officeDocByHash(InlineContentCache.sha256Hex("文档已被改动")));
+
+        assertFalse(systemText.contains(body), "哈希对不上不应复用旧正文");
+        assertTrue(systemText.contains("[正文暂不可读，可用 office_get_text 直接读取]"),
+                "未命中应走既有「正文暂不可读」文案，模型改用读取类工具");
+        org.mockito.Mockito.verify(legalTools, org.mockito.Mockito.never()).read_document(anyString());
+    }
+
     // ==== 末位提醒按会话客户端能力切换（Phase C）====
     // office 会话的编辑工具是 office_*，提醒里再点名 doc_* 就是把模型往死路径上引。
 
@@ -234,6 +288,10 @@ class ContextAssemblerServiceTest {
         assertTrue(lastUser.contains("[系统提醒]"), "office 会话也应有末位提醒");
         assertTrue(lastUser.contains("office_replace_text"), "应指引用 office_* 工具修改文档");
         assertTrue(lastUser.contains("修订"), "应说明修改以 Word 原生修订呈现");
+        // 排版能力不点名，模型就不知道自己能改格式（维护者反馈第 8 条的根因之一）
+        assertTrue(lastUser.contains("office_format_text"), "应点名字符格式工具");
+        assertTrue(lastUser.contains("office_set_paragraph_format"), "应点名段落格式工具");
+        assertTrue(lastUser.contains("office_apply_standard_format"), "应点名整篇标准格式化工具");
         assertFalse(lastUser.contains("doc_list_project_files"), "office 会话不应再点名 doc_* 工具");
         assertFalse(lastUser.contains("doc_open_file"), "office 会话不应再点名 doc_* 工具");
     }
@@ -246,6 +304,8 @@ class ContextAssemblerServiceTest {
         String systemText = assembleSystemText(officeDoc("第一条 试用期为三个月……"));
 
         assertTrue(systemText.contains("office_get_text"), "应指引用 office_* 工具读取");
+        assertTrue(systemText.contains("office_set_paragraph_format"), "活跃文档段应点名排版工具");
+        assertTrue(systemText.contains("office_set_numbering"), "活跃文档段应点名自动编号工具");
         // 基底 system_prompt.md 里仍有 doc_* 工具表（会话工具过滤才是硬闸门），
         // 这里只断言活跃文档段自身的 LOWA 口径语句没有出现
         assertFalse(systemText.contains("**无需也不要**调用"), "活跃文档段不应再是 doc_* 口径");
@@ -259,11 +319,17 @@ class ContextAssemblerServiceTest {
         String lastUser = assembleLastUserText(officeDoc("名称\t金额\n甲\t100"));
         assertTrue(lastUser.contains("[系统提醒]"), "excel 会话也应有末位提醒");
         assertTrue(lastUser.contains("office_excel_set_values"), "应指引用 office_excel_* 工具修改");
+        assertTrue(lastUser.contains("office_excel_format_cells"), "末位提醒应点名格式/结构工具集（批次6）");
+        assertTrue(lastUser.contains("office_excel_manage_sheets"), "末位提醒应点名工作表管理工具（批次6）");
+        assertTrue(lastUser.contains("office_excel_set_autofilter"), "末位提醒应点名自动筛选工具（批次6追加）");
+        assertTrue(lastUser.contains("office_excel_conditional_format"), "末位提醒应点名条件格式工具（批次6追加）");
         assertFalse(lastUser.contains("office_replace_text"), "excel 会话不应点名 Word 面 office_* 工具");
         assertFalse(lastUser.contains("doc_list_project_files"), "excel 会话不应点名 doc_* 工具");
 
         String systemText = assembleSystemText(officeDoc("名称\t金额\n甲\t100"));
         assertTrue(systemText.contains("office_excel_get_range"), "活跃文档段应指引 office_excel_* 读取");
+        assertTrue(systemText.contains("office_excel_set_formulas"), "活跃文档段应点名公式工具（批次6）");
+        assertTrue(systemText.contains("office_excel_get_overview"), "活跃文档段应点名总览工具（批次6追加）");
         assertFalse(systemText.contains("office_get_text"), "活跃文档段不应再点名 Word 面工具");
     }
 
@@ -274,10 +340,13 @@ class ContextAssemblerServiceTest {
 
         String lastUser = assembleLastUserText(officeDoc("第1页：项目介绍……"));
         assertTrue(lastUser.contains("office_ppt_replace_text"), "应指引用 office_ppt_* 工具修改");
+        assertTrue(lastUser.contains("office_ppt_add_slide"), "应点名新增幻灯片工具（批次7）");
+        assertTrue(lastUser.contains("office_ppt_format_text"), "应点名幻灯片文字排版工具（批次7）");
         assertFalse(lastUser.contains("office_insert_text"), "ppt 会话不应点名 Word 面 office_* 工具");
 
         String systemText = assembleSystemText(officeDoc("第1页：项目介绍……"));
         assertTrue(systemText.contains("office_ppt_get_slides"), "活跃文档段应指引 office_ppt_* 读取");
+        assertTrue(systemText.contains("office_ppt_delete_shape"), "活跃文档段应点名精确删除形状工具（批次7）");
     }
 
     @Test
