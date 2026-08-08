@@ -33,19 +33,25 @@ public class AccountService {
 
     private static final String KEY_PREFIX = "awdk_";
 
-    private final String baseUrl;
+    private final com.checkba.service.site.SiteProfileService siteProfileService;
     private final Path accountFile;
     private final AccountTransport transport;
     private final ObjectMapper objectMapper = stateMapper();
 
     public AccountService(
-            @Value("${ai.account.base-url:https://www.aiworkdeck.com}") String baseUrl,
+            com.checkba.service.site.SiteProfileService siteProfileService,
             @Value("${security.license.dir:${user.home}/.aiworkdeck}") String accountDir,
             AccountTransport transport) {
-        // 与 PR-A 的 LicenseService 共用同一条红线（https，回环 http 例外），见 AccountEndpoint
-        this.baseUrl = AccountEndpoint.requireSecure(baseUrl);
+        // 基址由站点决定；协议校验（https，回环 http 例外，见 AccountEndpoint）
+        // 在 SiteProfileService 的构造器里对全部站点做过一遍，与 PR-A 的 LicenseService 同源
+        this.siteProfileService = siteProfileService;
         this.accountFile = Path.of(accountDir, "account.json");
         this.transport = transport;
+    }
+
+    /** 当前站点的账户服务基址。切站后当场改指向。 */
+    private String baseUrl() {
+        return siteProfileService.baseUrl();
     }
 
     /** 持久化结构：~/.aiworkdeck/account.json */
@@ -201,7 +207,7 @@ public class AccountService {
      */
     public Map<String, Object> fetchAiKeyWith(String awdkKey) {
         String key = awdkKey;
-        AccountTransport.Reply reply = transport.send("POST", baseUrl + "/api/account/ai-key", key, "{}");
+        AccountTransport.Reply reply = transport.send("POST", baseUrl() + "/api/account/ai-key", key, "{}");
         if (reply.networkFailure()) {
             throw networkError();
         }
@@ -244,7 +250,7 @@ public class AccountService {
     }
 
     private Map<String, Object> getJson(String path, String key) {
-        AccountTransport.Reply reply = transport.send("GET", baseUrl + path, key, null);
+        AccountTransport.Reply reply = transport.send("GET", baseUrl() + path, key, null);
         if (reply.networkFailure()) {
             throw networkError();
         }
@@ -258,8 +264,7 @@ public class AccountService {
     private Map<String, Object> handle(AccountTransport.Reply reply) {
         int status = reply.status();
         if (status == 401 || status == 403) {
-            throw new AccountException(AccountException.Kind.UNAUTHORIZED,
-                    "账户 Key 无效或已被撤销，请到官网账户页重新生成");
+            throw new AccountException(AccountException.Kind.UNAUTHORIZED, unauthorizedMessage());
         }
         if (status >= 500) {
             throw new AccountException(AccountException.Kind.NETWORK,
@@ -270,6 +275,32 @@ public class AccountService {
                     "官网返回了预期外的状态（" + status + "），请稍后重试");
         }
         return parse(reply.body());
+    }
+
+    /**
+     * 401/403 的文案。双站形态下必须点名站点（双主站设计 §2.6）。
+     *
+     * <p>另一个站的 Key 拿到本站来用必然 401，而只说「Key 无效或已被撤销」是在指控一把好 Key——
+     * 用户会去官网重新生成，再撞一次同样的墙。
+     *
+     * <p>文案红线同 {@link #requireKey()}：不得含「登录」「未授权」「请先」三个子串，
+     * 否则前端 api.js 会把它当掉线清会话。护栏
+     * {@code AccountServiceTest.accountMessagesDoNotLookLikeAuthErrors}。
+     */
+    private String unauthorizedMessage() {
+        String base = "账户 Key 无效或已被撤销，可到官网账户页重新生成";
+        try {
+            if (!siteProfileService.multiSite()) return base;
+            String others = siteProfileService.otherSites().stream()
+                    .map(com.checkba.service.site.SiteProfile::displayName)
+                    .reduce((a, b) -> a + "、" + b)
+                    .orElse(null);
+            if (others == null) return base;
+            return base + "。当前站点是「" + siteProfileService.displayName()
+                    + "」；如果你的账户注册在「" + others + "」，切换站点后重试";
+        } catch (Exception e) {
+            return base;
+        }
     }
 
     private static AccountException networkError() {

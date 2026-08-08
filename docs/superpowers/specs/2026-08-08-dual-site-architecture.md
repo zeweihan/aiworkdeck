@@ -116,6 +116,11 @@ ai:
 
 ### 2.3 唯一解析出口
 
+> **实施时的形态与本节略有出入，以 §13「实现与设计的偏差」为准。**
+> 简述：四个站点相关地址改为在**属性层**（`SiteEnvironmentPostProcessor`）解析，
+> 因此 `service/ai/` 下的三个消费方一行都没改；`SiteProfileService` 只保留展示口径
+> 与账户链路的运行期改指向。
+
 新增 `backend/src/main/java/com/checkba/service/account/SiteProfileService.java`：
 
 ```
@@ -633,3 +638,67 @@ Phase 2 起同一条命令再跑一遍 `AWD_SITE=intl`。
 - **不动 `application.yml` 的 `ai.model.*` 与 `ai.subagent.*` 段**。
 - **不动 `wizard.vue` 的 Step 1 供应商选择**（Phase 1 连 `ACCOUNT_SITE_URL` 都不碰，推到 Phase 3）。
 - **不动 `admin.vue` 的 `aiProviderOptions` 与 AI 相关表单**。
+
+---
+
+## 13. 实现与设计的偏差（2026-08-08 实施记录）
+
+设计与实现有出入时**以本节为准**，与总 Spec 的做法一致。
+
+### 13.1 站点地址改在属性层解析（比设计更小的改动面）
+
+设计 §2.3 原计划把 `SiteProfileService` 注入六个消费方。实施时发现其中三个
+（`PluginMarketService`、`SkillProperties`、`TelemetryUploadService`）位于
+`backend/src/main/java/com/checkba/service/ai/`——**并行改造 AI 供应商体系的作用域**，不能碰。
+
+改为新增 `service/site/SiteEnvironmentPostProcessor`：Spring Boot 的 `EnvironmentPostProcessor`，
+在容器启动之前按 `site.json` 把四个属性一起改写：
+
+| 属性 | 消费方 | 是否改过该文件 |
+|---|---|---|
+| `ai.account.base-url` | LicenseService / AccountService / AwdkLoginService | 前两个改了（为运行期改指向），AwdkLoginService **未改** |
+| `ai.plugins.registry-url` | PluginMarketService | 否 |
+| `ai.skills.registry-url` | SkillProperties | 否 |
+| `telemetry.ingest-url` | TelemetryUploadService | 否 |
+
+属性源插在 `systemEnvironment` **之后**，优先级为
+`命令行 > 系统属性 > 环境变量 > 本处注入 > application.yml`。位置是刻意选的：
+要压过 yml 的默认值，又要输给环境变量——否则本地联调的
+`AI_ACCOUNT_BASE_URL=http://localhost:3000` 会被站点解析吃掉，改契约就没有安全的验证场地了。
+护栏 `SiteEnvironmentPostProcessorTest.systemEnvironmentStillWins`。
+
+### 13.2 切站的生效范围分成两段（有意，别当 bug 修）
+
+- **当场生效**：账户连接、解锁门在线校验、平台 AI 通道取 key。
+  `LicenseService` 与 `AccountService` 每次调用都读 `SiteProfileService.baseUrl()`。
+- **下次启动生效**：插件/Skill 广场、统计上报（在属性层固化）。
+  `POST /api/site/select` 因此回 `restartRecommended: true`，设置页据此提示。
+
+理由：切站是低频且破坏性的动作（会清掉账户与权益），用户本就要重新走一遍连接流程；
+为了两条不常用的通道把三个 `service/ai/` 下的类改成运行期可变，不划算。
+
+### 13.3 `AwdkLoginService` 一字未改
+
+它只在 server 模式生效，而 server 模式下站点由部署配置钉定
+（`SiteProfileService.isPinned()` 在非 local-mode 恒为 true）。
+继续读 `@Value("${ai.account.base-url}")` 与改后行为完全一致，注入 `SiteProfileService` 是纯churn。
+
+### 13.4 `application.yml` 的 `ai.account.base-url` 保留原值
+
+设计 §2.2 曾计划把它清空、URL 全部搬进 `sites` 表。实施时保留了
+`base-url: https://www.aiworkdeck.com`：它现在是「站点表没配 / 非 local-mode / 属性层没跑」
+三种情况的兜底，与 `sites.cn.base-url` 逐字相同，所以存量安装行为零变化。
+清空它会让 `AccountEndpoint.requireSecure("")` 在 server 模式启动期直接抛。
+
+### 13.5 单测用 `SiteProfileService.pinnedTo(baseUrl)` 构造
+
+`LicenseService` / `AccountService` 的构造器参数从 `String baseUrl` 变成 `SiteProfileService`，
+既有单测改成 `SiteProfileService.pinnedTo("https://...")` 一处替换。
+`pinnedTo` 恒为单站、恒钉住、协议红线照旧生效，所以
+「http 非回环地址必须拒绝」这条断言只是从 `LicenseService` 的构造器移到了 `pinnedTo`。
+
+### 13.6 新增测试
+
+`service/site/` 下四个：`SiteProfileServiceTest`（10）、`SiteEnvironmentPostProcessorTest`（7）、
+`SiteSwitchServiceTest`（5）、`SiteMismatchMessageTest`（7）。
+最后一个同时守住两条红线：站点错配的文案要点名站点，且不得含「登录 / 未授权 / 请先」。
