@@ -326,7 +326,13 @@ public class ContextAssemblerService {
                                     "slide_set_shape_text / slide_replace_text 改文字、slide_write_notes 改备注），" +
                                     "写入直接生效（PPT 没有修订机制，误改用 doc_restore_checkpoint 回滚）——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
-                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。\n\n");
+                            systemText.append("只有用户明确要操作**其他**文档时才需要那两个工具。本会话没有 doc_* 工具。");
+                            systemText.append("页与形状结构用 slide_add_page / slide_delete_page / slide_move_page / " +
+                                    "slide_set_layout 增删移页与设版式、slide_add_text_box / slide_add_shape 插文本框与形状、" +
+                                    "slide_delete_shape / slide_set_shape_geometry 删形状与调整位置尺寸。");
+                            systemText.append("文字格式（字体/字号/粗斜体/下划线/删除线/颜色/对齐）用 slide_format_text、" +
+                                    "形状填充边框透明度用 slide_format_shape；表格建改用 slide_add_table / slide_table_read / " +
+                                    "slide_table_set_cell / slide_table_set_style；超链接用 slide_set_hyperlink。\n\n");
                         }
                         default -> {
                             systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
@@ -568,6 +574,12 @@ public class ContextAssemblerService {
                         + activeContext.getId() + "），其结构/内容见 system prompt 的 <active_document>。"
                         + "用户未指明别的文档时，「这个」「当前演示文稿」「改一下」等都指它——"
                         + "直接调用 slide_* 工具操作（PPT 没有修订机制，写入直接生效，误改用 doc_restore_checkpoint 回滚），"
+                        + "页与形状结构（插删移页/设版式/插文本框与形状/删形状/调整位置尺寸）用 slide_add_page / "
+                        + "slide_delete_page / slide_move_page / slide_set_layout / slide_add_text_box / "
+                        + "slide_add_shape / slide_delete_shape / slide_set_shape_geometry，"
+                        + "文字格式用 slide_format_text、形状样式用 slide_format_shape，"
+                        + "表格用 slide_add_table / slide_table_read / slide_table_set_cell / slide_table_set_style，"
+                        + "超链接用 slide_set_hyperlink，"
                         + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
                 default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
                         + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
