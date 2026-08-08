@@ -42,6 +42,7 @@ function walk(dir, out = []) {
 }
 
 const vueFiles = walk(SRC)
+const feedbackWidgetFile = resolve(SRC, 'components/FeedbackWidget.vue')
 
 // 1) 每个 .vue 组件声明/使用的 emit 事件名（kebab 归一）
 const emitsByFile = new Map()   // absPath -> Set<kebab-name> | null(动态 emit，跳过)
@@ -93,8 +94,18 @@ for (const f of vueFiles) {
   }
 }
 
+// 回归护栏：反馈浮窗不允许“点遮罩空白处关闭”，否则用户误点会中断正在写的反馈。
+{
+  const code = readFileSync(feedbackWidgetFile, 'utf8')
+  const maskTag = code.match(/<div\b[^>]*class="awdfb-mask"[^>]*>/s)
+  if (maskTag && /@(mousedown|click)\.self\s*=\s*["']closePanel["']/.test(maskTag[0])) {
+    console.error('✗ FeedbackWidget: awdfb-mask 不应把空白点击绑定到 closePanel')
+    errors++
+  }
+}
+
 if (errors > 0) {
-  console.error(`\n共 ${errors} 处死绑定/事件名不匹配。子组件重构丢了 emit，或事件名拼错。`)
+  console.error(`\n共 ${errors} 处静态检查失败。`)
   process.exit(1)
 }
 console.log(`✓ emit/绑定契约检查通过（扫描 ${vueFiles.length} 个 .vue）`)

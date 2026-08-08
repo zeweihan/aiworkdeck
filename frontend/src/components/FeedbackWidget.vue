@@ -37,7 +37,7 @@
       <span>反馈</span>
     </div>
 
-    <div v-if="open" class="awdfb-mask" @mousedown.self="closePanel">
+    <div v-if="open" class="awdfb-mask">
       <div
         class="awdfb-panel"
         :class="{ 'is-dragging': dragging }"
