@@ -326,6 +326,24 @@
                   </view>
                 </view>
               </view>
+
+              <!-- 跨境传输的单独同意（个保法第三十九条）。只在选中云端通道时出现：
+                   那正是内容开始出境的决定点。绝不预勾选——预勾选的同意是无效的。 -->
+              <view v-if="form.ai.activeProvider === 'AWD_CLOUD'" class="form-row consent-row">
+                <view class="consent-box">
+                  <text class="consent-title">向境外提供个人信息的单独同意</text>
+                  <text class="consent-body">「AI Workdeck 云端」会把你送入 AI 的内容（文本与相关文件片段）发送至
+                    <text class="consent-em">OpenRouter, Inc.（美国）</text>处理，用于模型推理与用量计费，
+                    这属于向境外提供个人信息。你可以随时在此撤回同意，撤回后云端通道不再可用，
+                    改用本机模型或境内供应商即可继续工作。</text>
+                  <view class="consent-check" @tap="toggleCrossBorderConsent">
+                    <view class="consent-box-mark" :class="{ checked: crossBorderConsented }"></view>
+                    <text class="consent-check-label">我已阅读上述告知，同意将相关内容传输至境外接收方处理</text>
+                  </view>
+                  <text v-if="crossBorderConsentAt" class="consent-meta">已于 {{ formatConsentAt }} 同意</text>
+                  <text class="consent-link" @tap="openPrivacyCrossBorder">查看隐私政策「个人信息出境」一节</text>
+                </view>
+              </view>
               
               <!-- Tab for Prompt Config -->
               <view class="prompt-tabs">
@@ -1118,7 +1136,9 @@ export default {
     return {
       userDisplayName: '用户',
       activeNav: 'config',
-      activePromptTab: 'OLLAMA', // 'OLLAMA' | 'GEMINI'
+      activePromptTab: 'OLLAMA',
+      /** 服务端记录的同意时间戳；空 = 未同意或告知文本已改版需重新征求 */
+      crossBorderConsentAt: '', // 'OLLAMA' | 'GEMINI'
       navItems: [
         { key: 'config', label: '系统配置' },
         { key: 'ai', label: 'AI 功能设置' },
@@ -1157,6 +1177,9 @@ export default {
           systemPromptOllama: '',
           systemPromptGemini: '',
           activeProvider: 'OLLAMA',
+          // 跨境单独同意：null = 本次未动，true/false = 本次勾选/撤回。
+          // 绝不初始化为 true——预勾选的同意在个保法下无效。
+          crossBorderConsent: null,
           assistants: [],
         },
       },
@@ -1253,6 +1276,17 @@ export default {
         })
       }
       return options
+    },
+    // 已同意 = 本次刚勾选，或服务端有记录且本次没撤回
+    crossBorderConsented() {
+      if (this.form.ai.crossBorderConsent === true) return true
+      if (this.form.ai.crossBorderConsent === false) return false
+      return !!this.crossBorderConsentAt
+    },
+    formatConsentAt() {
+      if (!this.crossBorderConsentAt) return ''
+      const d = new Date(this.crossBorderConsentAt)
+      return Number.isNaN(d.getTime()) ? this.crossBorderConsentAt : d.toLocaleString()
     },
     // 平台结算段：官网不可达时 available=false，其余字段不可信
     accountPlatform() {
@@ -1746,6 +1780,14 @@ export default {
       }
     },
     // 供应商单选：不可选项给出下一步，而不是静默不响应
+    toggleCrossBorderConsent() {
+      // 明确的三态：null 跟随服务端，true/false 是本次的显式动作。
+      // 撤回是个保法第十五条给的权利，必须和给予一样容易操作。
+      this.form.ai.crossBorderConsent = !this.crossBorderConsented
+    },
+    openPrivacyCrossBorder() {
+      openExternalUrl('https://www.aiworkdeck.com/zh/legal/privacy#cross-border')
+    },
     onPickProvider(opt) {
       if (opt.value === this.form.ai.activeProvider) return
       if (opt.unavailable) {
@@ -2083,6 +2125,8 @@ export default {
           this.form.ai.systemPromptOllama = data.ai.systemPromptOllama || ''
           this.form.ai.systemPromptGemini = data.ai.systemPromptGemini || ''
           this.form.ai.activeProvider = data.ai.activeProvider || 'OLLAMA'
+          this.crossBorderConsentAt = data.ai.crossBorderConsentAt || ''
+          this.form.ai.crossBorderConsent = null
           
           if (data.ai.assistants && data.ai.assistants.length > 0) {
               this.form.ai.assistants = data.ai.assistants;
@@ -3219,4 +3263,73 @@ $border-color: #E9ECEF; // Gray-Light
   font-size: 13px;
   color: $text-secondary;
 }
+/* 跨境单独同意（个保法第三十九条）。刻意做得可读而不刺眼：
+   它不该吓退用户，但必须在做决定时看得见、看得懂。 */
+.consent-row {
+  margin-top: 12rpx;
+}
+.consent-box {
+  border: 1rpx solid #e3e6e8;
+  border-left: 4rpx solid #1a5336;
+  border-radius: 8rpx;
+  padding: 20rpx 24rpx;
+  background: #fafbfb;
+}
+.consent-title {
+  display: block;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #212629;
+  margin-bottom: 10rpx;
+}
+.consent-body {
+  display: block;
+  font-size: 24rpx;
+  line-height: 1.7;
+  color: #6c757d;
+}
+.consent-em {
+  color: #212629;
+  font-weight: 600;
+}
+.consent-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+  margin-top: 18rpx;
+  cursor: pointer;
+}
+.consent-box-mark {
+  width: 28rpx;
+  height: 28rpx;
+  flex-shrink: 0;
+  margin-top: 4rpx;
+  border: 2rpx solid #adb5bd;
+  border-radius: 4rpx;
+  background: #fff;
+  transition: all 0.15s;
+}
+.consent-box-mark.checked {
+  background: #1a5336;
+  border-color: #1a5336;
+}
+.consent-check-label {
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: #2c3338;
+}
+.consent-meta {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  color: #6c757d;
+}
+.consent-link {
+  display: inline-block;
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  color: #1a5336;
+  text-decoration: underline;
+}
+
 </style>
