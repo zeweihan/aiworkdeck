@@ -373,6 +373,30 @@
                   </view>
                   <text class="bind-tip">绑定后，本账号在网页端与桌面端连接时的密码登录均需短信验证码</text>
                 </view>
+
+                <view v-if="userInfo.mailAuthEnabled" class="form-row">
+                  <text class="form-label">邮箱</text>
+                  <text class="form-value">{{ userInfo.emailMasked || '未绑定' }}</text>
+                  <text class="bind-link" @tap="showBindEmail = !showBindEmail">{{ userInfo.emailMasked ? '更换' : '绑定' }}</text>
+                </view>
+                <view v-if="showBindEmail" class="bind-phone-form">
+                  <view class="form-row">
+                    <text class="form-label">新邮箱</text>
+                    <input class="bind-input" v-model="bindEmailInput" placeholder="请输入邮箱地址" />
+                  </view>
+                  <view class="form-row">
+                    <text class="form-label">验证码</text>
+                    <input class="bind-input code" type="number" maxlength="6" v-model="bindEmailCodeInput" placeholder="6 位验证码" />
+                    <button class="btn-send-code" :disabled="bindEmailCountdown > 0" @tap="sendBindEmailCode">
+                      {{ bindEmailCountdown > 0 ? bindEmailCountdown + 's' : '获取验证码' }}
+                    </button>
+                  </view>
+                  <view class="bind-actions">
+                    <button class="btn-bind-confirm" @tap="confirmBindEmail">确认绑定</button>
+                    <text class="bind-link" @tap="cancelBindEmail">取消</text>
+                  </view>
+                  <text class="bind-tip">绑定邮箱后，登录二次验证优先走邮件而不再发短信</text>
+                </view>
               </view>
 
               <!-- 授权（桌面端）：当前模式 / 激活时间 / 解除授权 -->
@@ -439,7 +463,7 @@
 </template>
 
 <script>
-import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, totpSetup, totpActivate, totpDisable, issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken } from '@/services/api.js'
+import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, sendMailCode, bindEmail, totpSetup, totpActivate, totpDisable, issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken } from '@/services/api.js'
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
 import { host, isDesktopHost } from '@/services/host.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
@@ -511,6 +535,13 @@ export default {
       bindCodeInput: '',
       bindCountdown: 0,
       bindCountdownTimer: null,
+
+      // 邮箱绑定（与手机号并列的二次验证方式；绑了之后优先走邮件，省短信费）
+      showBindEmail: false,
+      bindEmailInput: '',
+      bindEmailCodeInput: '',
+      bindEmailCountdown: 0,
+      bindEmailCountdownTimer: null,
 
       // Activity Logs
       activityLogs: [],
@@ -954,6 +985,56 @@ export default {
       if (this.bindCountdownTimer) {
         clearInterval(this.bindCountdownTimer)
         this.bindCountdownTimer = null
+      }
+    },
+    async sendBindEmailCode() {
+      if (this.bindEmailCountdown > 0) return
+      // 只挡明显不是邮箱的输入；真正的规范化与判定在后端，前端不复刻一套正则
+      if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test((this.bindEmailInput || '').trim())) {
+        uni.showToast({ title: '请输入正确的邮箱地址', icon: 'none' })
+        return
+      }
+      try {
+        await sendMailCode({ scene: 'bind', email: this.bindEmailInput.trim() })
+        uni.showToast({ title: '验证码已发送', icon: 'none' })
+        this.bindEmailCountdown = 60
+        if (this.bindEmailCountdownTimer) clearInterval(this.bindEmailCountdownTimer)
+        this.bindEmailCountdownTimer = setInterval(() => {
+          if (this.bindEmailCountdown > 0) {
+            this.bindEmailCountdown--
+          } else {
+            clearInterval(this.bindEmailCountdownTimer)
+            this.bindEmailCountdownTimer = null
+          }
+        }, 1000)
+      } catch (e) {
+        uni.showToast({ title: e.message || '发送失败', icon: 'none' })
+      }
+    },
+    async confirmBindEmail() {
+      if (!this.bindEmailCodeInput || this.bindEmailCodeInput.length < 6) {
+        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' })
+        return
+      }
+      try {
+        const res = await bindEmail(this.bindEmailInput.trim(), this.bindEmailCodeInput)
+        uni.showToast({ title: '绑定成功', icon: 'success' })
+        const emailMasked = (res.data && res.data.emailMasked) || ''
+        this.userInfo = { ...this.userInfo, emailMasked }
+        setSessionUser(this.userInfo)
+        this.cancelBindEmail()
+      } catch (e) {
+        uni.showToast({ title: e.message || '绑定失败', icon: 'none' })
+      }
+    },
+    cancelBindEmail() {
+      this.showBindEmail = false
+      this.bindEmailInput = ''
+      this.bindEmailCodeInput = ''
+      this.bindEmailCountdown = 0
+      if (this.bindEmailCountdownTimer) {
+        clearInterval(this.bindEmailCountdownTimer)
+        this.bindEmailCountdownTimer = null
       }
     },
     checkAdminTab() {
