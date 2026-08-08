@@ -1,0 +1,27 @@
+# /etc/systemd/system/aiworkdeck-cloud.service
+# 官方托管的插件云后端（addin.aiworkdeck.com）。
+# 与官网（PM2 管的 Next.js）共机，MemoryMax 兜底防止 JVM 吃垮官网。
+[Unit]
+Description=AI Workdeck Cloud Backend (addin.aiworkdeck.com)
+After=network.target postgresql@14-main.service
+Wants=postgresql@14-main.service
+
+[Service]
+Type=simple
+User=aiworkdeck
+Group=aiworkdeck
+WorkingDirectory=/opt/aiworkdeck/cloud
+# 密钥全走 EnvironmentFile（0600，root:aiworkdeck 属主），不进 unit 文件
+EnvironmentFile=/opt/aiworkdeck/cloud/env
+ExecStart=/usr/bin/java -Xms256m -Xmx1536m -jar /opt/aiworkdeck/cloud/backend.jar --spring.profiles.active=cloud
+Restart=always
+RestartSec=5
+# 共享 4c8G 机器上的资源护栏
+MemoryMax=2560M
+CPUWeight=80
+# 日志走 journald：journalctl -u aiworkdeck-cloud
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

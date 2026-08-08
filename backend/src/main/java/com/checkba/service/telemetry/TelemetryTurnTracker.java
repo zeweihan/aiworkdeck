@@ -34,8 +34,16 @@ public class TelemetryTurnTracker {
     /** 轮次发起（handleUserMessage 入口调用）；attrs 已按 ai.turn 白名单字段准备 */
     public void startTurn(String conversationId, Map<String, Object> attrs) {
         if (conversationId == null) return;
-        open.put(conversationId, new TurnCtx(System.currentTimeMillis(),
-                attrs == null ? Map.of() : Map.copyOf(attrs)));
+        // Map.copyOf 不收 null 值，而调用方的字段可为空（Office 插件不传 model，
+        // 曾让整轮在这里 NPE 静默死掉）——空值字段直接丢弃，不让埋点炸掉业务主链。
+        Map<String, Object> safe = Map.of();
+        if (attrs != null) {
+            safe = attrs.entrySet().stream()
+                    .filter(e -> e.getKey() != null && e.getValue() != null)
+                    .collect(java.util.stream.Collectors.toUnmodifiableMap(
+                            Map.Entry::getKey, Map.Entry::getValue));
+        }
+        open.put(conversationId, new TurnCtx(System.currentTimeMillis(), safe));
     }
 
     /** 状态跳变（AgentRunStateService.mark 调用）；非终态或无开启轮次时为 no-op */

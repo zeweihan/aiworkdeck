@@ -957,20 +957,122 @@ function resolvePage(p) {
 function unoSameDrawPage(a, b) {
   try { return a.getPropertyValue('Number') === b.getPropertyValue('Number'); } catch (e) { return a === b; }
 }
+// 用 .uno:MovePage* 把"当前页"从 fromIndex 挪到 toIndex（同一份 count 快照下，均
+// 0-based）。调用前必须已 ctrl.setCurrentPage() 到源页。XDrawPages 无直接 move
+// API（GenericDrawPage.Number 只读），只能走已验证可靠的 .uno: 派发——同「删除键
+// 必须走 .uno: 调度」PR#164/166 一条经验；slide_move_page 与 slide_add_page 的
+// 新页落点纠偏共用本函数。
+// 定位 page 当前在 xModel.getDrawPages() 里的下标（0-based），找不到返回 -1、
+// 顺带把当前总页数带出（out.total）。
+function locatePageIndex(page, out) {
+  try {
+    const pages = xModel.getDrawPages();
+    const total = pages.getCount();
+    if (out) out.total = total;
+    for (let i = 0; i < total; i++) {
+      let cand; try { cand = pages.getByIndex(i); } catch (e) { continue; }
+      if (unoSameDrawPage(cand, page)) return i;
+    }
+  } catch (e) {}
+  return -1;
+}
+// 把 page 逐步移动到 toIndex（0-based），每步之间用 Number 属性核对是否真的挪动
+// 了一步再继续——.uno:MovePageUp/Down 偶发不生效，不能假设一次 dispatch 必定
+// 生效一步。不处理"挪进真正最后一页"这个特殊情形（见 movePageTo）。
+function movePageStepwise(page, toIndex, maxSteps) {
+  const cap = maxSteps || 50;
+  let curIndex = -1;
+  for (let steps = 0; steps <= cap; steps++) {
+    const loc = {}; curIndex = locatePageIndex(page, loc);
+    if (curIndex === -1) return -1;
+    if (curIndex === toIndex || steps === cap) return curIndex;
+    try {
+      if (ctrl && ctrl.setCurrentPage) ctrl.setCurrentPage(page);
+      let cur = null;
+      try { cur = ctrl && ctrl.getCurrentPage ? ctrl.getCurrentPage() : null; } catch (e) {}
+      if (!cur || !unoSameDrawPage(cur, page)) return -2;
+      dispatchUno(curIndex < toIndex ? '.uno:MovePageDown' : '.uno:MovePageUp');
+    } catch (e) { return curIndex; }
+  }
+  return curIndex;
+}
+// 把 page 移动到 toIndex（0-based）。真机实测（r4）：无论用 .uno:MovePageDown
+// 连续派发，还是改派发 .uno:MovePageLast，把一页"挪进真正的最后一页"这最后一步
+// 都会卡住不动（e2e 组 22 实锤：4 页文档从 index0 出发，无论哪种方式，都停在
+// index2 到不了 index3）——但反方向没有这个毛病：.uno:MovePageUp 把"当前真正
+// 排在最后的那一页"往前挪一步，观察不到同款卡死。于是目标是真正最后一页时改用
+// 交换法：先把 page 挪到倒数第二（这一段是常规、非边界移动，走 movePageStepwise
+// 已验证可靠），再把此刻排在最后的那一页用 MovePageUp 往前挪一步——等价于把
+// page 换到了最后。返回 page 实际最终落点 index（-1/-2 = 失败，同 movePageStepwise
+// 的错误码）。
+function movePageTo(page, toIndex, maxSteps) {
+  const loc0 = {}; const curIndex = locatePageIndex(page, loc0);
+  if (curIndex === -1) return -1;
+  const total = loc0.total;
+  if (toIndex < 0 || toIndex >= total) return curIndex;
+  if (toIndex !== total - 1) return movePageStepwise(page, toIndex, maxSteps);
+  const nearLast = total - 2;
+  if (nearLast >= 0 && curIndex !== nearLast) {
+    const got = movePageStepwise(page, nearLast, maxSteps);
+    if (got !== nearLast) return got; // 半路已失败，如实返回不再继续
+  } else if (nearLast < 0) {
+    return curIndex; // 只有 1 页，没有"最后一页"这个位移概念
+  }
+  let lastPageObj = null;
+  try { lastPageObj = xModel.getDrawPages().getByIndex(total - 1); } catch (e) { return nearLast; }
+  if (unoSameDrawPage(lastPageObj, page)) return total - 1; // 已经就是最后一页
+  try {
+    if (ctrl && ctrl.setCurrentPage) ctrl.setCurrentPage(lastPageObj);
+    let cur = null;
+    try { cur = ctrl && ctrl.getCurrentPage ? ctrl.getCurrentPage() : null; } catch (e) {}
+    if (!cur || !unoSameDrawPage(cur, lastPageObj)) return nearLast;
+    dispatchUno('.uno:MovePageUp');
+  } catch (e) { return nearLast; }
+  const loc1 = {}; return locatePageIndex(page, loc1);
+}
 // 未命名形状补一个稳定名 __awd_shape_N（页内下标），此后所有原语按名定位，
 // 避免用会因增删漂移的 index。
 function ensureShapeNames(page) {
   const n = page.getCount();
+  // 真机实测（r4）：标题占位符形状会在页面经历其它结构性操作（加形状/加文本框
+  // 等）后被引擎悄悄重建（对象换了个新的、未命名），若此时它恰好落在某个"之前
+  // 已经把这个数字用掉"的下标上，单纯按当前下标拼名字会撞车——两个不同的形状
+  // 拿到同一个 __awd_shape_N，按名定位（resolveShape）会取到错的那个（e2e 组 22
+  // 实锤：矩形形状的名字后来指向了标题形状）。先收集页面上已占用的名字集合，
+  // 分配新名字时跳过已占用的，保证同一页内任何时刻名字唯一。
+  const used = new Set();
   for (let i = 0; i < n; i++) {
     let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
     let name = ''; try { name = shape.getName ? shape.getName() : ''; } catch (e) {}
-    if (!name) { try { shape.setName('__awd_shape_' + i); } catch (e) {} }
+    if (name) used.add(name);
+  }
+  let counter = 0;
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+    let name = ''; try { name = shape.getName ? shape.getName() : ''; } catch (e) {}
+    if (name) continue;
+    let candidate;
+    do { candidate = '__awd_shape_' + (counter++); } while (used.has(candidate));
+    try { shape.setName(candidate); used.add(candidate); } catch (e) {}
   }
 }
 // 形状文字：大多数形状（文本框/标题/占位符）实现 drawing.Text；线条/连接符/表格
 // 外壳等不实现，统一 try/catch 归零而非抛错，读取面据此判断"这个形状没有文字"。
 function shapeText(shape) {
   try { return shape.getText().getString() || ''; } catch (e) { return ''; }
+}
+// 鸭子类型表格判定：真机实测（r4，e2e 组 23）——刚用
+// createInstance('com.sun.star.drawing.TableShape') + page.add() 建出来的表格
+// 形状，经 page.getByIndex() 重新取到的引用上 supportsService('com.sun.star.
+// drawing.TableShape') 报 false，但它的 Model 属性货真价实是一张能读写行列的
+// XTable（slide_add_table 内部用同一属性建表已验证）。service 名判定在这个引擎
+// 构建上对新建表格不可靠，改成直接尝试取 Model 并鸭子类型检查 getRows/
+// getColumns 方法是否存在——不依赖 service 字符串，也不关心它为什么不可靠。
+function isTableShape(shape) {
+  try {
+    const m = shape.getPropertyValue('Model');
+    return !!(m && typeof m.getRows === 'function' && typeof m.getColumns === 'function');
+  } catch (e) { return false; }
 }
 // 形状分类，仅用于 slide_get_overview/slide_get_page 的展示与 slide_replace_text
 // 的表格识别；不影响文字读写路径本身（那条走 getText() 统一处理，与分类无关）。
@@ -980,7 +1082,7 @@ function shapeKind(shape) {
     if (shape.supportsService('com.sun.star.presentation.OutlineTextShape') ||
         shape.supportsService('com.sun.star.presentation.SubtitleTextShape') ||
         shape.supportsService('com.sun.star.presentation.NotesTextShape')) return 'placeholder';
-    if (shape.supportsService('com.sun.star.drawing.TableShape')) return 'table';
+    if (shape.supportsService('com.sun.star.drawing.TableShape') || isTableShape(shape)) return 'table';
     if (shape.supportsService('com.sun.star.drawing.GraphicObjectShape')) return 'image';
     if (shape.supportsService('com.sun.star.drawing.TextShape')) return 'text';
     if (shape.supportsService('com.sun.star.drawing.RectangleShape')) return 'rectangle';
@@ -1067,6 +1169,65 @@ function layoutNameOf(layout) {
   if (layout == null) return null;
   const n = Number(layout);
   return Object.prototype.hasOwnProperty.call(AUTO_LAYOUT_NAMES, n) ? AUTO_LAYOUT_NAMES[n] : null;
+}
+
+// ---- Impress Phase 3（格式与表格）helpers -----------------------------------
+// 设计依据：docs/superpowers/specs/2026-08-07-impress-bridge-design.md §4.2（原语 16-20）。
+// 形状文字格式读回：取首字符的字符属性作为整个形状的代表值（同 get_formatting
+// 读光标处格式的口径，不逐字符扫描）——slide_get_page 的 format 字段用它填充，
+// 供 slide_format_text 的调用方核实真实生效值，而不是只信 setter 自己的回声。
+// 无文字的形状返回 null。
+function shapeCharFormat(shape) {
+  let xText; try { xText = shape.getText(); } catch (e) { return null; }
+  let full = ''; try { full = xText.getString() || ''; } catch (e) {}
+  if (!full) return null;
+  let cur;
+  try { cur = xText.createTextCursor(); cur.gotoStart(false); cur.goRight(1, true); }
+  catch (e) { return null; }
+  const out = {};
+  try { out.fontName = cur.getPropertyValue('CharFontName'); } catch (e) {}
+  try { out.fontSize = cur.getPropertyValue('CharHeight'); } catch (e) {}
+  try { out.bold = cur.getPropertyValue('CharWeight') > 100; } catch (e) {}
+  try { out.italic = !enumEq(cur.getPropertyValue('CharPosture'), css.awt.FontSlant.NONE); } catch (e) {}
+  try { out.underline = !enumEq(cur.getPropertyValue('CharUnderline'), css.awt.FontUnderline.NONE); } catch (e) {}
+  try { out.strikethrough = !enumEq(cur.getPropertyValue('CharStrikeout'), css.awt.FontStrikeout.NONE); } catch (e) {}
+  try { const c = cur.getPropertyValue('CharColor'); out.color = c === -1 ? 'auto' : '#' + ('000000' + (c >>> 0).toString(16)).slice(-6); } catch (e) {}
+  try {
+    const a = cur.getPropertyValue('ParaAdjust');
+    const A = css.style.ParagraphAdjust;
+    out.alignment = enumEq(a, A.CENTER) ? 'center' : enumEq(a, A.RIGHT) ? 'right'
+      : (enumEq(a, A.BLOCK) || enumEq(a, A.STRETCH)) ? 'justify' : 'left';
+  } catch (e) {}
+  return out;
+}
+// 定位一张 Impress 表格形状：shapeName 显式指定；缺省要求该页恰好一张表格形状
+// （Impress 没有"光标所在表"的等价概念，不能像 resolveWriterTable 那样回退）。
+// 返回 {table, shapeName} 或 {error}。调用前应已 resolvePage(p) 拿到 page。
+function resolveSlideTable(page, p) {
+  ensureShapeNames(page);
+  const wantName = p && p.shapeName != null && String(p.shapeName).trim() !== '' ? String(p.shapeName).trim() : null;
+  if (wantName) {
+    const rs = resolveShape(page, { shapeName: wantName });
+    if (rs.error) return { error: rs.error };
+    if (shapeKind(rs.shape) !== 'table') return { error: '形状不是表格: ' + rs.name + '（用 slide_get_page 确认哪个形状是表格）' };
+    let table; try { table = rs.shape.getPropertyValue('Model'); } catch (e) { return { error: '读取表格模型失败: ' + errStr(e) }; }
+    if (!table) return { error: '表格模型不可用（引擎未返回 Model）' };
+    return { table: table, shapeName: rs.name };
+  }
+  const n = page.getCount();
+  let found = null, foundName = '', count = 0;
+  for (let i = 0; i < n; i++) {
+    let shape; try { shape = page.getByIndex(i); } catch (e) { continue; }
+    if (shapeKind(shape) === 'table') {
+      count++;
+      if (!found) { found = shape; try { foundName = shape.getName(); } catch (e) {} }
+    }
+  }
+  if (count === 0) return { error: '该页没有表格形状（用 slide_add_table 先建一张，或传 shapeName 指定其它页的表格）' };
+  if (count > 1) return { error: '该页有 ' + count + ' 张表格，请传 shapeName 指定操作哪一张' };
+  let table; try { table = found.getPropertyValue('Model'); } catch (e) { return { error: '读取表格模型失败: ' + errStr(e) }; }
+  if (!table) return { error: '表格模型不可用（引擎未返回 Model）' };
+  return { table: table, shapeName: foundName };
 }
 
 // ---- 流式写入状态机：markdown 行级解析 → 标准格式落字 ------------------------
@@ -4116,6 +4277,11 @@ const EXEC = {
           item.rows = table.getRows().getCount();
           item.cols = table.getColumns().getCount();
         } catch (e) { item.tableErr = errStr(e); }
+      } else {
+        // [Phase 3] 格式读回：首字符代表值，供 slide_format_text 的调用方核实
+        // 真实生效值（而非只信 setter 返回的 applied 回声）。表格形状不适用
+        // （每格文字可各自不同，读整格没有意义），保持 null。
+        item.format = shapeCharFormat(shape);
       }
       shapes.push(item);
     }
@@ -4250,6 +4416,678 @@ const EXEC = {
       }
     }
     return { success: true, replaced: replaced, hits: hits };
+  },
+  // ==================== 演示文稿原语（slide_*，Phase 2：页与形状结构） ====================
+  // 设计依据：docs/superpowers/specs/2026-08-07-impress-bridge-design.md §4.2（原语 8-15）。
+  // [幻灯片·写] 插入新页。position（1 起，插到第 N 页之后；缺省末尾）+ 可选 layout
+  // （AutoLayout short 常量）+ 可选 title/body（需要 layout 生成对应占位符才有地方落字，
+  // 未显式给 layout 但给了 title/body 时默认套 layout=1「标题+内容」）。
+  slide_add_page(p) {
+    if (!isImpressDoc()) return slideFail(NOT_PRESENTATION_MSG);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    const count = pages.getCount();
+    let insertIndex; // 目标最终 0-based 落点，面向调用方语义不变
+    if (p && p.position != null) {
+      const want = Number(p.position);
+      if (!Number.isFinite(want) || want < 1 || want > count) {
+        return slideFail('position 越界: ' + p.position + '（共 ' + count + ' 页，1 开始，插到第 N 页之后）');
+      }
+      insertIndex = want; // 插到第 want 页之后 => 新页 0-based index = want
+    } else {
+      insertIndex = count; // 缺省末尾
+    }
+    // 真机实测（r4）：XDrawPages.insertNewByIndex(nIndex) 的落点在这个引擎构建上
+    // 不总是 nIndex 本身——边界情形（nIndex===当前页数）与看似正常的中间索引都
+    // 观察到过偏差（debug_impress_bare_append 探针 + e2e 组 22 实测均复现），死信
+    // 任何具体传入索引都不可靠。改用唯一没有歧义的调用方式：永远插在最前面
+    // （index 0，不存在"边界"这回事），定位到它后再用已验证可靠的 .uno:MovePage*
+    // 挪到真正目标位置（与 slide_move_page 同一套实现，已过多组真机断言）。
+    // 另外，文档已经历过一次插入后，同一文档上再插入可能连带清空某个"仅标题"
+    // 版式（无内容占位符）既有页的标题占位符——与我们往新页里塞了什么完全无关
+    // （裸调、不加任何内容也一样复现），疑似 r4 引擎对 AutoLayout 占位符的重算
+    // 逻辑本身有 bug，规避不了触发条件；用"插入前拍全篇标题快照、插入后逐页核对
+    // 补回"的自愈兜底，保证"新增一页"这个操作的净效果里不会有别的页丢内容。
+    const beforeTitles = [];
+    for (let i = 0; i < count; i++) {
+      let pg; try { pg = pages.getByIndex(i); } catch (e) { beforeTitles.push(null); continue; }
+      let t = null;
+      for (let s = 0; s < pg.getCount(); s++) {
+        let sh; try { sh = pg.getByIndex(s); } catch (e) { continue; }
+        if (shapeKind(sh) === 'title') { try { t = shapeText(sh); } catch (e) {} break; }
+      }
+      beforeTitles.push(t);
+    }
+    try { pages.insertNewByIndex(0); } catch (e) { return slideFail('插入幻灯片失败: ' + errStr(e)); }
+    let pages2;
+    try { pages2 = xModel.getDrawPages(); } catch (e) { return slideFail('重新读取幻灯片列表失败: ' + errStr(e)); }
+    const newCount = pages2.getCount();
+    if (newCount !== count + 1) return slideFail('插入幻灯片后页数未增加，疑似失败');
+    // 鲁棒定位新页：index 0 应当就是刚创建的空白页（形状数=0）；万一这个假设也不
+    // 成立（引擎行为超出预期），退化为全篇扫描找空白页，找不到就明确报错，不要
+    // 悄悄操作错的页。
+    let newIndex = -1;
+    try { if (pages2.getByIndex(0).getCount() === 0) newIndex = 0; } catch (e) {}
+    if (newIndex === -1) {
+      for (let i = 0; i < newCount; i++) {
+        let cand; try { cand = pages2.getByIndex(i); } catch (e) { continue; }
+        let n = -1; try { n = cand.getCount(); } catch (e) {}
+        if (n === 0) { newIndex = i; break; }
+      }
+    }
+    if (newIndex === -1) return slideFail('插入幻灯片后无法定位新页（未找到空白页）');
+    let page;
+    try { page = pages2.getByIndex(newIndex); } catch (e) { return slideFail('定位新页失败: ' + errStr(e)); }
+    // 挪位放在自愈之前：自愈是在既有页上补形状，不改变页顺序，先做后做都不影响
+    // movePageTo 的落点判定（它每步都重新核对 page 的实际位置，不依赖顺序假设）。
+    if (newIndex !== insertIndex) {
+      const finalIndex = movePageTo(page, insertIndex);
+      if (finalIndex !== insertIndex) {
+        return slideFail('新页未能挪到预期位置: 目标第 ' + (insertIndex + 1) + ' 页，实际落在第 ' + (finalIndex + 1) + ' 页');
+      }
+    }
+    // 自愈核对：此刻新页已确定落在 insertIndex（要么本来就是，要么挪位已复核通过）。
+    // "index i（i!==insertIndex）对应插入前 index：i<insertIndex 时是 i 本身，
+    // 否则是 i-1"——因为其余既有页彼此之间的相对顺序全程不变，只是被新页插入的
+    // 那个位置隔开，这条位置算术与新页具体经过几次挪位无关，只看它最终停在哪。
+    try {
+      const pagesFinal = xModel.getDrawPages();
+      const finalCount = pagesFinal.getCount();
+      for (let i = 0; i < finalCount; i++) {
+        if (i === insertIndex) continue;
+        const preIdx = i < insertIndex ? i : i - 1;
+        if (preIdx < 0 || preIdx >= beforeTitles.length) continue;
+        const expected = beforeTitles[preIdx];
+        if (expected == null) continue; // 该页原本就没有标题占位符，不用管
+        let pg; try { pg = pagesFinal.getByIndex(i); } catch (e) { continue; }
+        let curTitle = null;
+        for (let s = 0; s < pg.getCount(); s++) {
+          let sh; try { sh = pg.getByIndex(s); } catch (e) { continue; }
+          if (shapeKind(sh) === 'title') { try { curTitle = shapeText(sh); } catch (e) {} break; }
+        }
+        if (curTitle === expected) continue; // 完好
+        try {
+          const repairShape = xModel.createInstance('com.sun.star.presentation.TitleTextShape');
+          pg.add(repairShape);
+          let rpw = 720, rph = 540;
+          try { rpw = Number(pg.getPropertyValue('Width')); rph = Number(pg.getPropertyValue('Height')); } catch (e) {}
+          repairShape.setPosition(new css.awt.Point({ X: Math.round(rpw * 0.08), Y: Math.round(rph * 0.05) }));
+          repairShape.setSize(new css.awt.Size({ Width: Math.round(rpw * 0.84), Height: Math.round(rph * 0.15) }));
+          repairShape.getText().setString(expected);
+        } catch (e) { /* 自愈失败不阻断主流程，已尽力保留原内容 */ }
+      }
+    } catch (e) { /* 自愈整体失败不阻断主流程 */ }
+    // layout 只在调用方显式给出时才碰这个属性。title/body 走手工 createInstance
+    // 真占位符服务类型（presentation.TitleTextShape / OutlineTextShape）直接
+    // page.add()，**不经过 Layout 属性**——保留 slide_get_page/slide_get_overview
+    // 靠 shapeKind() 识别 'title'/'placeholder' 的既有读取路径不用改；createInstance
+    // 失败（真机未核实这两个服务在未设 Layout 时能否独立
+    // 创建）时回退普通文本框，保证功能不因服务名不可用而整体失败。
+    const layoutIn = p && p.layout != null ? Number(p.layout) : null;
+    if (layoutIn != null) { try { page.setPropertyValue('Layout', shortAny(layoutIn)); } catch (e) {} }
+    const wantTitle = p && p.title != null ? String(p.title) : null;
+    const wantBody = p && p.body != null ? String(p.body) : null;
+    let pw = 720, ph = 540; // 缺省 fallback（1/100mm），读不到页面尺寸时仍能给出合理位置
+    try { pw = Number(page.getPropertyValue('Width')); ph = Number(page.getPropertyValue('Height')); } catch (e) {}
+    function createPlaceholderShape(service) {
+      try { const s = xModel.createInstance(service); page.add(s); return s; }
+      catch (e) {
+        try { const s2 = xModel.createInstance('com.sun.star.drawing.TextShape'); page.add(s2); return s2; }
+        catch (e2) { return null; }
+      }
+    }
+    if (wantTitle != null) {
+      try {
+        const titleShape = createPlaceholderShape('com.sun.star.presentation.TitleTextShape');
+        if (titleShape) {
+          titleShape.setPosition(new css.awt.Point({ X: Math.round(pw * 0.08), Y: Math.round(ph * 0.05) }));
+          titleShape.setSize(new css.awt.Size({ Width: Math.round(pw * 0.84), Height: Math.round(ph * 0.15) }));
+          titleShape.getText().setString(wantTitle);
+          try {
+            const cur = titleShape.getText().createTextCursor();
+            cur.gotoStart(false); cur.gotoEnd(true);
+            setCharProp(cur, 'CharHeight', 28);
+            setCharProp(cur, 'CharWeight', css.awt.FontWeight.BOLD);
+          } catch (e) {}
+        }
+      } catch (e) { /* 标题框创建失败不阻断整体插页 */ }
+    }
+    if (wantBody != null) {
+      try {
+        const bodyShape = createPlaceholderShape('com.sun.star.presentation.OutlineTextShape');
+        if (bodyShape) {
+          bodyShape.setPosition(new css.awt.Point({ X: Math.round(pw * 0.08), Y: Math.round(ph * 0.25) }));
+          bodyShape.setSize(new css.awt.Size({ Width: Math.round(pw * 0.84), Height: Math.round(ph * 0.65) }));
+          bodyShape.getText().setString(wantBody);
+        }
+      } catch (e) { /* 正文框创建失败不阻断整体插页 */ }
+    }
+    ensureShapeNames(page);
+    try { if (ctrl && ctrl.setCurrentPage) ctrl.setCurrentPage(page); } catch (e) {}
+    let layoutOut = null; try { layoutOut = page.getPropertyValue('Layout'); } catch (e) {}
+    return { success: true, slideNumber: insertIndex + 1, layout: layoutOut };
+  },
+  // [幻灯片·写] 删除指定页。拒绝删到 0 页（至少保留一页）。
+  slide_delete_page(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    if (pages.getCount() <= 1) return slideFail('无法删除：演示文稿只剩最后一页');
+    try { pages.remove(r0.page); } catch (e) { return slideFail('删除幻灯片失败: ' + errStr(e)); }
+    return { success: true, slideCount: pages.getCount() };
+  },
+  // [幻灯片·写] 把指定页移到新位置。XDrawPages 只有 insert/remove、无直接 move API
+  // （GenericDrawPage.Number 只读），走 .uno:MovePageUp/Down/First/Last 派发（同「删除键
+  // 必须走 .uno: 调度」PR#164/166 一个经验），再用页在 getDrawPages() 里的实际下标
+  // 双口径复核——不信 dispatch 本身的返回值。
+  slide_move_page(p) {
+    const r0 = resolvePage(p); // 顺手把 slideNumber 设为当前页，MovePage* 作用于当前页
+    if (r0.error) return slideFail(r0.error);
+    let pages;
+    try { pages = xModel.getDrawPages(); } catch (e) { return slideFail('读取幻灯片列表失败: ' + errStr(e)); }
+    const count = pages.getCount();
+    const to = p && p.toPosition != null ? Number(p.toPosition) : NaN;
+    if (!Number.isFinite(to) || to < 1 || to > count) {
+      return slideFail('toPosition 越界: ' + (p && p.toPosition) + '（共 ' + count + ' 页，1 开始）');
+    }
+    const from = r0.index;
+    const toIndex = to - 1;
+    const finalIndex = movePageTo(r0.page, toIndex);
+    if (finalIndex !== toIndex) {
+      return slideFail('移动幻灯片未达预期位置: 目标第 ' + to + ' 页，实际落在第 ' + (finalIndex + 1) + ' 页');
+    }
+    return { success: true, from: from + 1, to: to };
+  },
+  // [幻灯片·写] 设置版式（AutoLayout short 常量）与/或母版（按名匹配 XMasterPagesSupplier）。
+  // 至少给一个参数。
+  slide_set_layout(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    if (!p || (p.layout == null && (p.masterName == null || String(p.masterName).trim() === ''))) {
+      return slideFail('缺少 layout 或 masterName 参数（至少给一个）');
+    }
+    const page = r0.page;
+    if (p.layout != null) {
+      const layoutNum = Number(p.layout);
+      if (!Number.isFinite(layoutNum)) return slideFail('layout 必须是数字（AutoLayout 常量）');
+      try { page.setPropertyValue('Layout', shortAny(layoutNum)); } catch (e) { return slideFail('设置版式失败: ' + errStr(e)); }
+    }
+    if (p.masterName != null && String(p.masterName).trim() !== '') {
+      const wantMaster = String(p.masterName).trim();
+      let masters; try { masters = xModel.getMasterPages(); } catch (e) { return slideFail('读取母版列表失败: ' + errStr(e)); }
+      let found = null;
+      for (let i = 0; i < masters.getCount(); i++) {
+        let m; try { m = masters.getByIndex(i); } catch (e) { continue; }
+        let name = ''; try { name = m.getName(); } catch (e) {}
+        if (name === wantMaster) { found = m; break; }
+      }
+      if (!found) return slideFail('母版不存在: ' + wantMaster);
+      try { page.setMasterPage(found); } catch (e) { return slideFail('设置母版失败: ' + errStr(e)); }
+    }
+    let layoutOut = null; try { layoutOut = page.getPropertyValue('Layout'); } catch (e) {}
+    let masterOut = ''; try { masterOut = page.getMasterPage().getName(); } catch (e) {}
+    return { success: true, layout: layoutOut, layoutName: layoutNameOf(layoutOut), masterName: masterOut };
+  },
+  // [幻灯片·写] 插入文本框。位置尺寸缺省值（磅）：left/top=100, width=300, height=80。
+  slide_add_text_box(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const text = p && p.text != null ? String(p.text) : '';
+    const leftPt = p && p.left != null ? Number(p.left) : 100;
+    const topPt = p && p.top != null ? Number(p.top) : 100;
+    const widthPt = p && p.width != null ? Number(p.width) : 300;
+    const heightPt = p && p.height != null ? Number(p.height) : 80;
+    let shape;
+    try { shape = xModel.createInstance('com.sun.star.drawing.TextShape'); }
+    catch (e) { return slideFail('创建文本框失败: ' + errStr(e)); }
+    try { r0.page.add(shape); } catch (e) { return slideFail('添加文本框到页面失败: ' + errStr(e)); }
+    try {
+      shape.setSize(new css.awt.Size({ Width: ptToMm100(widthPt), Height: ptToMm100(heightPt) }));
+      shape.setPosition(new css.awt.Point({ X: ptToMm100(leftPt), Y: ptToMm100(topPt) }));
+    } catch (e) { return slideFail('设置文本框位置尺寸失败: ' + errStr(e)); }
+    try { shape.getText().setString(text); } catch (e) { return slideFail('写入文本框文字失败: ' + errStr(e)); }
+    if (p && (p.fontSize != null || p.bold != null || p.color != null)) {
+      try {
+        const cur = shape.getText().createTextCursor();
+        cur.gotoStart(false); cur.gotoEnd(true);
+        if (p.fontSize != null) setCharProp(cur, 'CharHeight', Number(p.fontSize));
+        if (p.bold != null) setCharProp(cur, 'CharWeight', p.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL);
+        if (p.color != null) { const c = parseColor(p.color); if (c != null) setCharProp(cur, 'CharColor', c); }
+      } catch (e) {}
+    }
+    ensureShapeNames(r0.page);
+    let name = ''; try { name = shape.getName(); } catch (e) {}
+    return { success: true, shapeName: name };
+  },
+  // [幻灯片·写] 插入形状：矩形/椭圆/线条走对应 UNO 服务；三角形走 CustomShape +
+  // CustomShapeGeometry（Type='triangle' 是 LO 内建的预设几何名，与形状库里的三角形
+  // 同一条 preset）。位置尺寸缺省值（磅）：left/top=100, width=200, height=150。
+  slide_add_shape(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const type = p && p.shapeType != null ? String(p.shapeType).trim().toLowerCase() : '';
+    const SHAPE_SERVICE = {
+      rectangle: 'com.sun.star.drawing.RectangleShape',
+      ellipse: 'com.sun.star.drawing.EllipseShape',
+      line: 'com.sun.star.drawing.LineShape',
+    };
+    const isTriangle = type === 'triangle';
+    const service = isTriangle ? 'com.sun.star.drawing.CustomShape' : SHAPE_SERVICE[type];
+    if (!service) return slideFail('未知 shapeType: ' + type + '（支持 rectangle/ellipse/triangle/line）');
+    const leftPt = p && p.left != null ? Number(p.left) : 100;
+    const topPt = p && p.top != null ? Number(p.top) : 100;
+    const widthPt = p && p.width != null ? Number(p.width) : 200;
+    const heightPt = p && p.height != null ? Number(p.height) : 150;
+    let shape;
+    try { shape = xModel.createInstance(service); } catch (e) { return slideFail('创建形状失败: ' + errStr(e)); }
+    try { r0.page.add(shape); } catch (e) { return slideFail('添加形状到页面失败: ' + errStr(e)); }
+    try {
+      shape.setSize(new css.awt.Size({ Width: ptToMm100(widthPt), Height: ptToMm100(heightPt) }));
+      shape.setPosition(new css.awt.Point({ X: ptToMm100(leftPt), Y: ptToMm100(topPt) }));
+    } catch (e) { return slideFail('设置形状位置尺寸失败: ' + errStr(e)); }
+    if (isTriangle) {
+      try { shape.setPropertyValue('CustomShapeGeometry', [mkProp('Type', 'triangle')]); }
+      catch (e) { return slideFail('设置三角形几何失败: ' + errStr(e)); }
+    }
+    if (p && p.fillColor != null) {
+      const c = parseColor(p.fillColor);
+      if (c != null) { try { shape.setPropertyValue('FillColor', c); } catch (e) {} }
+    }
+    if (p && p.text != null && String(p.text) !== '') {
+      try { shape.getText().setString(String(p.text)); } catch (e) {}
+    }
+    ensureShapeNames(r0.page);
+    let name = ''; try { name = shape.getName(); } catch (e) {}
+    return { success: true, shapeName: name };
+  },
+  // [幻灯片·写] 按 shapeName 精确删除一个形状。
+  slide_delete_shape(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    ensureShapeNames(r0.page);
+    const rs = resolveShape(r0.page, p);
+    if (rs.error) return slideFail(rs.error);
+    try { r0.page.remove(rs.shape); } catch (e) { return slideFail('删除形状失败: ' + errStr(e)); }
+    return { success: true, deleted: rs.name };
+  },
+  // [幻灯片·写] 移动/改尺寸一个形状（AI 逐步调排版）。left/top/width/height 均可选，
+  // 缺省保留原值；返回 before/after 供调用方核对实际生效值。
+  slide_set_shape_geometry(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    if (!(p && p.shapeName)) return slideFail('缺少 shapeName 参数');
+    ensureShapeNames(r0.page);
+    const rs = resolveShape(r0.page, p);
+    if (rs.error) return slideFail(rs.error);
+    const shape = rs.shape;
+    let beforePos = null, beforeSize = null;
+    try { beforePos = shape.getPosition(); beforeSize = shape.getSize(); } catch (e) {}
+    const before = {
+      left: beforePos ? hmmToPt(beforePos.X) : null, top: beforePos ? hmmToPt(beforePos.Y) : null,
+      width: beforeSize ? hmmToPt(beforeSize.Width) : null, height: beforeSize ? hmmToPt(beforeSize.Height) : null,
+    };
+    if (p.width != null || p.height != null) {
+      const w = p.width != null ? ptToMm100(Number(p.width)) : (beforeSize ? beforeSize.Width : 0);
+      const h = p.height != null ? ptToMm100(Number(p.height)) : (beforeSize ? beforeSize.Height : 0);
+      try { shape.setSize(new css.awt.Size({ Width: w, Height: h })); }
+      catch (e) { return slideFail('设置形状尺寸失败: ' + errStr(e)); }
+    }
+    if (p.left != null || p.top != null) {
+      const x = p.left != null ? ptToMm100(Number(p.left)) : (beforePos ? beforePos.X : 0);
+      const y = p.top != null ? ptToMm100(Number(p.top)) : (beforePos ? beforePos.Y : 0);
+      try { shape.setPosition(new css.awt.Point({ X: x, Y: y })); }
+      catch (e) { return slideFail('设置形状位置失败: ' + errStr(e)); }
+    }
+    let afterPos = null, afterSize = null;
+    try { afterPos = shape.getPosition(); afterSize = shape.getSize(); } catch (e) {}
+    const after = {
+      left: afterPos ? hmmToPt(afterPos.X) : null, top: afterPos ? hmmToPt(afterPos.Y) : null,
+      width: afterSize ? hmmToPt(afterSize.Width) : null, height: afterSize ? hmmToPt(afterSize.Height) : null,
+    };
+    return { success: true, before: before, after: after };
+  },
+  // ==================== 演示文稿原语（slide_*，Phase 3：格式与表格） ====================
+  // 设计依据同上 §4.2（原语表 16-20；slide_format_shape/slide_table_set_style 是
+  // 任务方直接点名要补的两项，不在原 20 个原语表里，随 Phase 3 一并实现）。
+  // [幻灯片·写] 设置形状文字的字体/字号/粗斜体/下划线/删除线/颜色/段落对齐。
+  // 不传 anchorText 格式化整个形状文字；传了则只格式化第一处命中该子串的文字。
+  slide_format_text(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    if (!(p && p.shapeName)) return slideFail('缺少 shapeName 参数（先用 slide_get_page 查看该页形状名）');
+    ensureShapeNames(r0.page);
+    const rs = resolveShape(r0.page, p);
+    if (rs.error) return slideFail(rs.error);
+    let xText; try { xText = rs.shape.getText(); } catch (e) { return slideFail('该形状不支持文字: ' + errStr(e)); }
+    const anchorText = p && p.anchorText != null && String(p.anchorText) !== '' ? String(p.anchorText) : null;
+    let cur;
+    if (anchorText) {
+      let full = ''; try { full = xText.getString() || ''; } catch (e) {}
+      const idx = full.indexOf(anchorText);
+      if (idx === -1) return slideFail('形状文字中未找到: ' + anchorText);
+      try {
+        cur = xText.createTextCursor();
+        cur.gotoStart(false);
+        if (idx > 0 && !cur.goRight(idx, false)) return slideFail('定位查找文字起点失败');
+        if (!cur.goRight(anchorText.length, true)) return slideFail('选中查找文字失败');
+      } catch (e) { return slideFail('定位查找文字失败: ' + errStr(e)); }
+    } else {
+      try { cur = xText.createTextCursor(); cur.gotoStart(false); cur.gotoEnd(true); }
+      catch (e) { return slideFail('选中形状全部文字失败: ' + errStr(e)); }
+      if ((cur.getString() || '').length === 0) return slideFail('该形状没有文字，无法格式化');
+    }
+    const applied = {};
+    if (p.fontName != null) { setCharProp(cur, 'CharFontName', String(p.fontName)); applied.fontName = String(p.fontName); }
+    if (p.fontSize != null) { setCharProp(cur, 'CharHeight', Number(p.fontSize)); applied.fontSize = Number(p.fontSize); }
+    if (p.bold != null) { setCharProp(cur, 'CharWeight', p.bold ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL); applied.bold = !!p.bold; }
+    if (p.italic != null) { setCharProp(cur, 'CharPosture', p.italic ? css.awt.FontSlant.ITALIC : css.awt.FontSlant.NONE); applied.italic = !!p.italic; }
+    if (p.underline != null) {
+      const U = css.awt.FontUnderline;
+      const m = { none: U.NONE, single: U.SINGLE, double: U.DOUBLE, dotted: U.DOTTED, wave: U.WAVE };
+      const v = m[String(p.underline).toLowerCase()];
+      if (v == null) return slideFail('未知 underline: ' + p.underline + '（支持 none/single/double/dotted/wave）');
+      try { cur.setPropertyValue('CharUnderline', v); applied.underline = String(p.underline).toLowerCase(); }
+      catch (e) { return slideFail('设置下划线失败: ' + errStr(e)); }
+    }
+    if (p.strikethrough != null) {
+      try { cur.setPropertyValue('CharStrikeout', p.strikethrough ? css.awt.FontStrikeout.SINGLE : css.awt.FontStrikeout.NONE); applied.strikethrough = !!p.strikethrough; }
+      catch (e) { return slideFail('设置删除线失败: ' + errStr(e)); }
+    }
+    if (p.color != null) {
+      const c = parseColor(p.color, { auto: -1 });
+      if (c == null) return slideFail('颜色格式非法: ' + p.color + '（用 #RRGGBB 或 auto）');
+      try { cur.setPropertyValue('CharColor', c); applied.color = String(p.color); }
+      catch (e) { return slideFail('设置颜色失败: ' + errStr(e)); }
+    }
+    if (p.alignment != null) {
+      const A = css.style.ParagraphAdjust;
+      const m2 = { left: A.LEFT, right: A.RIGHT, center: A.CENTER, justify: A.BLOCK };
+      const v2 = m2[String(p.alignment).toLowerCase()];
+      if (v2 == null) return slideFail('未知 alignment: ' + p.alignment + '（支持 left/right/center/justify）');
+      try { cur.setPropertyValue('ParaAdjust', v2); applied.alignment = String(p.alignment).toLowerCase(); }
+      catch (e) { return slideFail('设置对齐失败: ' + errStr(e)); }
+    }
+    if (Object.keys(applied).length === 0) return slideFail('未给出任何格式参数');
+    return { success: true, shapeName: rs.name, applied: applied };
+  },
+  // [幻灯片·写] 设置形状的填充色/边框颜色与粗细/透明度。noFill/noLine 取消填充/边框。
+  slide_format_shape(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    if (!(p && p.shapeName)) return slideFail('缺少 shapeName 参数（先用 slide_get_page 查看该页形状名）');
+    ensureShapeNames(r0.page);
+    const rs = resolveShape(r0.page, p);
+    if (rs.error) return slideFail(rs.error);
+    const shape = rs.shape;
+    // FillStyle/LineStyle 枚举名防御式取值（同 applyTableBorders 里 BorderLineStyle
+    // 的既有口径）——本次调研未在真机上逐值核对 css.drawing 命名空间是否已在这个
+    // 引擎构建里可用，取不到就退回 idl 已知的数值常量，不让整个原语因为枚举取值
+    // 失败而报错。
+    const FILL_STYLE = (css.drawing && css.drawing.FillStyle) || { NONE: 0, SOLID: 1 };
+    const LINE_STYLE = (css.drawing && css.drawing.LineStyle) || { NONE: 0, SOLID: 1 };
+    const applied = {};
+    if (p.noFill === true) {
+      try { shape.setPropertyValue('FillStyle', FILL_STYLE.NONE); applied.noFill = true; }
+      catch (e) { return slideFail('取消填充失败: ' + errStr(e)); }
+    } else if (p.fillColor != null) {
+      const c = parseColor(p.fillColor);
+      if (c == null) return slideFail('fillColor 格式非法: ' + p.fillColor + '（用 #RRGGBB）');
+      try { shape.setPropertyValue('FillStyle', FILL_STYLE.SOLID); shape.setPropertyValue('FillColor', c); applied.fillColor = String(p.fillColor); }
+      catch (e) { return slideFail('设置填充色失败: ' + errStr(e)); }
+    }
+    if (p.noLine === true) {
+      try { shape.setPropertyValue('LineStyle', LINE_STYLE.NONE); applied.noLine = true; }
+      catch (e) { return slideFail('取消边框失败: ' + errStr(e)); }
+    } else if (p.lineColor != null) {
+      const c = parseColor(p.lineColor);
+      if (c == null) return slideFail('lineColor 格式非法: ' + p.lineColor + '（用 #RRGGBB）');
+      try { shape.setPropertyValue('LineStyle', LINE_STYLE.SOLID); shape.setPropertyValue('LineColor', c); applied.lineColor = String(p.lineColor); }
+      catch (e) { return slideFail('设置边框颜色失败: ' + errStr(e)); }
+    }
+    if (p.lineWidthPt != null) {
+      try { shape.setPropertyValue('LineWidth', ptToMm100(Number(p.lineWidthPt))); applied.lineWidthPt = Number(p.lineWidthPt); }
+      catch (e) { return slideFail('设置边框粗细失败: ' + errStr(e)); }
+    }
+    if (p.fillTransparency != null) {
+      const t = Math.max(0, Math.min(100, Math.round(Number(p.fillTransparency))));
+      try { shape.setPropertyValue('FillTransparence', shortAny(t)); applied.fillTransparency = t; }
+      catch (e) { return slideFail('设置填充透明度失败: ' + errStr(e)); }
+    }
+    if (Object.keys(applied).length === 0) return slideFail('未给出任何样式参数（fillColor/noFill/lineColor/noLine/lineWidthPt/fillTransparency 至少给一个）');
+    return { success: true, shapeName: rs.name, applied: applied };
+  },
+  // [幻灯片·写] 插入一张表格形状。rowsJson（后端已解析为二维数组）给出时按其行列数
+  // 建表并写满；否则按 rows/cols（默认各 2）建空表。新建的 TableShape 默认行列数
+  // 未知，统一按"当前行列数 vs 目标行列数"的差值调用 insertByIndex/removeByIndex
+  // 补齐（与 doc_table_add_row/col 同一 XTableRows/XTableColumns 接口）。
+  slide_add_table(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const rowsData = p && Array.isArray(p.rowsJson) ? p.rowsJson : null;
+    if (rowsData != null && (!rowsData.length || !Array.isArray(rowsData[0]))) {
+      return slideFail('rowsJson 必须是非空二维数组');
+    }
+    let rowCount, colCount;
+    if (rowsData) { rowCount = rowsData.length; colCount = rowsData[0].length; }
+    else {
+      rowCount = p && p.rows != null ? Math.max(1, Math.round(Number(p.rows))) : 2;
+      colCount = p && p.cols != null ? Math.max(1, Math.round(Number(p.cols))) : 2;
+    }
+    if (rowCount > 50 || colCount > 20) return slideFail('表格过大（上限 50 行 × 20 列）');
+    let shape;
+    try { shape = xModel.createInstance('com.sun.star.drawing.TableShape'); }
+    catch (e) { return slideFail('创建表格形状失败: ' + errStr(e)); }
+    try { r0.page.add(shape); } catch (e) { return slideFail('添加表格到页面失败: ' + errStr(e)); }
+    const leftPt = p && p.left != null ? Number(p.left) : 100;
+    const topPt = p && p.top != null ? Number(p.top) : 100;
+    const widthPt = p && p.width != null ? Number(p.width) : 400;
+    const heightPt = p && p.height != null ? Number(p.height) : 200;
+    try {
+      shape.setSize(new css.awt.Size({ Width: ptToMm100(widthPt), Height: ptToMm100(heightPt) }));
+      shape.setPosition(new css.awt.Point({ X: ptToMm100(leftPt), Y: ptToMm100(topPt) }));
+    } catch (e) { return slideFail('设置表格位置尺寸失败: ' + errStr(e)); }
+    let table;
+    try { table = shape.getPropertyValue('Model'); } catch (e) { return slideFail('读取表格模型失败: ' + errStr(e)); }
+    if (!table) return slideFail('表格模型不可用（引擎未返回 Model）');
+    try {
+      const curRows = table.getRows().getCount();
+      if (rowCount > curRows) table.getRows().insertByIndex(curRows, rowCount - curRows);
+      else if (rowCount < curRows) table.getRows().removeByIndex(rowCount, curRows - rowCount);
+      const curCols = table.getColumns().getCount();
+      if (colCount > curCols) table.getColumns().insertByIndex(curCols, colCount - curCols);
+      else if (colCount < curCols) table.getColumns().removeByIndex(colCount, curCols - colCount);
+    } catch (e) { return slideFail('调整表格行列数失败: ' + errStr(e)); }
+    const afterRows = table.getRows().getCount(), afterCols = table.getColumns().getCount();
+    if (afterRows !== rowCount || afterCols !== colCount) {
+      return slideFail('表格行列数调整未生效（目标 ' + rowCount + '×' + colCount + '，实际 ' + afterRows + '×' + afterCols + '）');
+    }
+    if (rowsData) {
+      for (let rIdx = 0; rIdx < rowCount; rIdx++) {
+        for (let cIdx = 0; cIdx < colCount; cIdx++) {
+          const v = rowsData[rIdx][cIdx];
+          try { table.getCellByPosition(cIdx, rIdx).setString(v == null ? '' : String(v)); } catch (e) {}
+        }
+      }
+    }
+    ensureShapeNames(r0.page);
+    let name = ''; try { name = shape.getName(); } catch (e) {}
+    return { success: true, shapeName: name, rows: rowCount, cols: colCount };
+  },
+  // [幻灯片·看] 读一张表格形状为二维数组。不传 shapeName 要求该页只有一张表格。
+  slide_table_read(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const rt = resolveSlideTable(r0.page, p);
+    if (rt.error) return slideFail(rt.error);
+    let rows = 0, cols = 0;
+    try { rows = rt.table.getRows().getCount(); cols = rt.table.getColumns().getCount(); }
+    catch (e) { return slideFail('读取表格行列数失败: ' + errStr(e)); }
+    const maxRows = Math.min(rows, Math.max(1, Number(p && p.maxRows) || 50));
+    const maxCols = Math.min(cols, Math.max(1, Number(p && p.maxCols) || 20));
+    const cells = [];
+    for (let rIdx = 0; rIdx < maxRows; rIdx++) {
+      const line = [];
+      for (let cIdx = 0; cIdx < maxCols; cIdx++) {
+        let v = ''; try { v = rt.table.getCellByPosition(cIdx, rIdx).getString() || ''; } catch (e) {}
+        line.push(v);
+      }
+      cells.push(line);
+    }
+    return {
+      success: true, shapeName: rt.shapeName, rows: rows, cols: cols, cells: cells,
+      truncated: maxRows < rows || maxCols < cols,
+    };
+  },
+  // [幻灯片·写] 改一张表格形状的一格文本。row/col 均 0 开始。不传 shapeName 要求
+  // 该页只有一张表格。Impress 表格没有修订机制，写入直接生效。
+  slide_table_set_cell(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const rt = resolveSlideTable(r0.page, p);
+    if (rt.error) return slideFail(rt.error);
+    if (p == null || p.row == null || p.col == null) return slideFail('缺少 row/col 参数（均 0 开始）');
+    const rowIdx = Number(p.row), colIdx = Number(p.col);
+    let rows = 0, cols = 0;
+    try { rows = rt.table.getRows().getCount(); cols = rt.table.getColumns().getCount(); }
+    catch (e) { return slideFail('读取表格行列数失败: ' + errStr(e)); }
+    if (!Number.isFinite(rowIdx) || rowIdx < 0 || rowIdx >= rows) return slideFail('row 越界: ' + p.row + '（表格共 ' + rows + ' 行，0 开始）');
+    if (!Number.isFinite(colIdx) || colIdx < 0 || colIdx >= cols) return slideFail('col 越界: ' + p.col + '（表格共 ' + cols + ' 列，0 开始）');
+    let cell;
+    try { cell = rt.table.getCellByPosition(colIdx, rowIdx); } catch (e) { return slideFail('定位单元格失败: ' + errStr(e)); }
+    let previous = ''; try { previous = cell.getString() || ''; } catch (e) {}
+    const text = p.text != null ? String(p.text) : '';
+    try { cell.setString(text); } catch (e) { return slideFail('写入单元格失败: ' + errStr(e)); }
+    return { success: true, shapeName: rt.shapeName, row: rowIdx, col: colIdx, previous: previous };
+  },
+  // [幻灯片·写] 表格整体样式：表头加粗/边框/列宽。三项互相独立、各自尽力而为——
+  // Impress 表格的 UNO API 面比 Word/Calc 窄得多（本次实施调研没有查到 Impress
+  // 表格单元格是否真的暴露 Top/BottomBorder 或列的 Width 属性），每项都用
+  // try/catch 隔离，失败的项如实在返回值里报 applied:false 加原因，不装作成功。
+  slide_table_set_style(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const rt = resolveSlideTable(r0.page, p);
+    if (rt.error) return slideFail(rt.error);
+    const table = rt.table;
+    let rows = 0, cols = 0;
+    try { rows = table.getRows().getCount(); cols = table.getColumns().getCount(); }
+    catch (e) { return slideFail('读取表格行列数失败: ' + errStr(e)); }
+    const result = { success: true, shapeName: rt.shapeName };
+    let didAnything = false;
+
+    if (p && p.headerBold != null) {
+      didAnything = true;
+      const want = !!p.headerBold;
+      let ok = 0, fail = 0;
+      for (let c = 0; c < cols; c++) {
+        try {
+          const cell = table.getCellByPosition(c, 0);
+          let cur;
+          try { cur = cell.createTextCursor(); }
+          catch (e1) { cur = cell.getText().createTextCursor(); }
+          cur.gotoStart(false); cur.gotoEnd(true);
+          setCharProp(cur, 'CharWeight', want ? css.awt.FontWeight.BOLD : css.awt.FontWeight.NORMAL);
+          ok++;
+        } catch (e) { fail++; }
+      }
+      result.headerBold = { applied: ok > 0, cellsOk: ok, cellsFailed: fail };
+      if (ok === 0) result.headerBold.note = '表格单元格文字光标获取失败（cell.createTextCursor / cell.getText().createTextCursor 均失败），表头加粗未生效';
+    }
+
+    if (p && (p.borderWidthPt != null || p.borderColor != null)) {
+      didAnything = true;
+      const widthMm = p.borderWidthPt != null ? ptToMm100(Number(p.borderWidthPt)) : ptToMm100(1);
+      const colorNum = p.borderColor != null ? parseColor(p.borderColor, { black: 0 }) : 0;
+      if (p.borderColor != null && colorNum == null) return slideFail('borderColor 格式非法: ' + p.borderColor + '（用 #RRGGBB）');
+      const solid = (css.table.BorderLineStyle && css.table.BorderLineStyle.SOLID != null) ? css.table.BorderLineStyle.SOLID : 0;
+      let bl;
+      try { bl = new css.table.BorderLine2({ Color: colorNum == null ? 0 : colorNum, LineWidth: widthMm, LineStyle: solid }); }
+      catch (e) { return slideFail('构建边框样式失败: ' + errStr(e)); }
+      let ok = 0, fail = 0;
+      for (let rIdx = 0; rIdx < rows; rIdx++) {
+        for (let cIdx = 0; cIdx < cols; cIdx++) {
+          try {
+            const cell = table.getCellByPosition(cIdx, rIdx);
+            cell.setPropertyValue('TopBorder', bl);
+            cell.setPropertyValue('BottomBorder', bl);
+            cell.setPropertyValue('LeftBorder', bl);
+            cell.setPropertyValue('RightBorder', bl);
+            ok++;
+          } catch (e) { fail++; }
+        }
+      }
+      result.borders = { applied: ok > 0, cellsOk: ok, cellsFailed: fail };
+      if (ok === 0) result.borders.note = 'Impress 表格单元格未暴露 Top/Bottom/Left/RightBorder 属性（引擎不支持或本 API 路径不适用），边框设置未生效';
+    }
+
+    if (p && Array.isArray(p.columnWidthsPt)) {
+      didAnything = true;
+      let ok = 0, fail = 0;
+      const n = Math.min(p.columnWidthsPt.length, cols);
+      for (let i = 0; i < n; i++) {
+        const wPt = Number(p.columnWidthsPt[i]);
+        if (!Number.isFinite(wPt) || wPt <= 0) { fail++; continue; }
+        try { table.getColumns().getByIndex(i).setPropertyValue('Width', ptToMm100(wPt)); ok++; }
+        catch (e) { fail++; }
+      }
+      result.columnWidths = { applied: ok > 0, colsOk: ok, colsFailed: fail };
+      if (ok === 0) result.columnWidths.note = 'Impress 表格列未暴露可写的 Width 属性（引擎不支持），列宽设置未生效';
+    }
+
+    if (!didAnything) return slideFail('未给出任何样式参数（headerBold / borderWidthPt+borderColor / columnWidthsPt 至少给一个）');
+    return result;
+  },
+  // [幻灯片·写] 在指定页查找文字并加超链接。优先走与 Writer 的
+  // set_hyperlink_at_anchor 同一实现口径：直接在选中范围上设 HyperLinkURL 字符
+  // 属性。**真机实测（r4，e2e 组 23）：Impress 的 drawing.Text 不支持这个字符
+  // 属性**（`UnknownPropertyException`，与 spec 调研阶段"drawing.Text 尽量复刻
+  // Writer 功能"的预期不符，字符级超链接在这个引擎构建上不可行）——退回 spec
+  // 备选方案：整个形状的交互动作 `OnClick=ClickAction.DOCUMENT` + `Bookmark=url`
+  // （Impress UI「交互」面板同款机制），点击形状任意位置都会跳转，不再是"只有
+  // 命中文字可点"这个更精确的粒度。返回值 via 字段区分两种情形（'HyperLinkURL'
+  // 精确到字符 / 'shape-click-action' 整个形状降级），note 字段在降级时如实说明，
+  // 不装作达成了字符级精度。只在非表格形状的文字里查找，命中第一处即返回。
+  slide_set_hyperlink(p) {
+    const r0 = resolvePage(p);
+    if (r0.error) return slideFail(r0.error);
+    const searchText = p && p.searchText != null ? String(p.searchText) : '';
+    if (!searchText) return slideFail('缺少 searchText 参数');
+    const url = p && p.url != null ? String(p.url) : '';
+    if (!url) return slideFail('缺少 url 参数');
+    if (!/^https?:\/\//i.test(url)) return slideFail('url 仅支持 http/https: ' + url);
+    ensureShapeNames(r0.page);
+    const n = r0.page.getCount();
+    for (let i = 0; i < n; i++) {
+      let shape; try { shape = r0.page.getByIndex(i); } catch (e) { continue; }
+      if (shapeKind(shape) === 'table') continue; // 表格单元格内超链接本期不做
+      let xText; try { xText = shape.getText(); } catch (e) { continue; }
+      let full = ''; try { full = xText.getString() || ''; } catch (e) { continue; }
+      const idx = full.indexOf(searchText);
+      if (idx === -1) continue;
+      let name = ''; try { name = shape.getName(); } catch (e) {}
+      try {
+        const cur = xText.createTextCursor();
+        cur.gotoStart(false);
+        if (idx > 0 && !cur.goRight(idx, false)) return slideFail('定位查找文字起点失败');
+        if (!cur.goRight(searchText.length, true)) return slideFail('选中查找文字失败');
+        cur.setPropertyValue('HyperLinkURL', url);
+        return { success: true, shapeName: name, url: url, via: 'HyperLinkURL' };
+      } catch (charErr) {
+        try {
+          const CA = (css.presentation && css.presentation.ClickAction) || { DOCUMENT: 6 };
+          shape.setPropertyValue('OnClick', CA.DOCUMENT);
+          shape.setPropertyValue('Bookmark', url);
+          return {
+            success: true, shapeName: name, url: url, via: 'shape-click-action',
+            note: '该引擎的 Impress 文字不支持字符级超链接（HyperLinkURL 属性不存在），已回退为整个形状的点击交互动作——点击形状任意位置都会跳转，不只是命中文字',
+          };
+        } catch (shapeErr) {
+          return slideFail('设置超链接失败（字符级与形状级均不支持）: ' + errStr(shapeErr));
+        }
+      }
+    }
+    return slideFail('未在该页任何非表格形状的文字中找到: ' + searchText);
   },
   // [诊断] 当前文档内核类型——host UI（审阅按钮等）按 kind 隐藏的判据。常规打开
   // 路径优先用 load_document 返回值里的 kind（省一次往返），本 action 供换文档

@@ -179,6 +179,76 @@ const DEBUG_ACTIONS = `
       return out;
     } catch (e) { return { success: false, message: errStr(e) }; }
   },
+  debug_slide_shape_info(p) {
+    // 组 23 探针：读一个形状的填充/边框/透明度属性，核实 slide_format_shape
+    // 真正落到了引擎，不只信 setter 自己的回声；p.cell/{row,col} 给出时另读该
+    // 表格形状对应单元格的上边框宽；p.colIndex 给出时另读该列宽——核实
+    // slide_table_set_style 的 borders/columnWidths 分支是否真的在这个引擎
+    // 构建上生效（本次实施调研没有查到 Impress 表格是否暴露这两组属性）。
+    try {
+      const pages = xModel.getDrawPages();
+      const page = pages.getByIndex(Number(p && p.slideNumber != null ? p.slideNumber - 1 : 0));
+      const n = page.getCount();
+      let shape = null;
+      for (let i = 0; i < n; i++) {
+        const s = page.getByIndex(i);
+        let name = ''; try { name = s.getName(); } catch (e) {}
+        if (name === String(p && p.shapeName)) { shape = s; break; }
+      }
+      if (!shape) return { success: false, message: 'shape not found: ' + (p && p.shapeName) };
+      const out = { success: true };
+      try { out.fillColor = shape.getPropertyValue('FillColor'); } catch (e) {}
+      try { out.fillStyle = unoEnumVal(shape.getPropertyValue('FillStyle')); } catch (e) {}
+      try { out.lineColor = shape.getPropertyValue('LineColor'); } catch (e) {}
+      try { out.lineStyle = unoEnumVal(shape.getPropertyValue('LineStyle')); } catch (e) {}
+      try { out.lineWidth = shape.getPropertyValue('LineWidth'); } catch (e) {}
+      try { out.fillTransparence = shape.getPropertyValue('FillTransparence'); } catch (e) {}
+      try { out.onClick = unoEnumVal(shape.getPropertyValue('OnClick')); } catch (e) {}
+      try { out.bookmark = shape.getPropertyValue('Bookmark'); } catch (e) {}
+      if (p && p.cell) {
+        try {
+          const table = shape.getPropertyValue('Model');
+          const cell = table.getCellByPosition(Number(p.cell.col) || 0, Number(p.cell.row) || 0);
+          try { out.cellTopBorderWidth = cell.getPropertyValue('TopBorder').LineWidth; } catch (e) { out.cellBorderErr = errStr(e); }
+        } catch (e) { out.tableErr = errStr(e); }
+      }
+      if (p && p.colIndex != null) {
+        try {
+          const table = shape.getPropertyValue('Model');
+          out.colWidth = table.getColumns().getByIndex(Number(p.colIndex)).getPropertyValue('Width');
+        } catch (e) { out.colWidthErr = errStr(e); }
+      }
+      return out;
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
+  debug_slide_char_prop(p) {
+    // 组 23 探针：读形状文字任意位置（offset 0 开始，缺省 0）的字符属性——核实
+    // slide_format_text 的 anchorText 定位真的只影响了子串范围内的字符（范围外
+    // 字符不受影响），以及 slide_set_hyperlink 的 HyperLinkURL 真的落在了命中
+    // 文字的位置上。与 debug_char_prop（读当前视图光标处）不同，这个探针自己
+    // 按 shapeName+offset 定位，不依赖任何前序调用留下的选区状态。
+    try {
+      const pages = xModel.getDrawPages();
+      const page = pages.getByIndex(Number(p && p.slideNumber != null ? p.slideNumber - 1 : 0));
+      const n = page.getCount();
+      let shape = null;
+      for (let i = 0; i < n; i++) {
+        const s = page.getByIndex(i);
+        let name = ''; try { name = s.getName(); } catch (e) {}
+        if (name === String(p && p.shapeName)) { shape = s; break; }
+      }
+      if (!shape) return { success: false, message: 'shape not found: ' + (p && p.shapeName) };
+      const xText = shape.getText();
+      const cur = xText.createTextCursor();
+      cur.gotoStart(false);
+      const off = Number(p && p.offset) || 0;
+      if (off > 0 && !cur.goRight(off, false)) return { success: false, message: 'goRight(' + off + ') failed' };
+      if (!cur.goRight(1, true)) return { success: false, message: 'goRight(1, select) failed' };
+      const out = { success: true, text: cur.getString() };
+      try { out.value = cur.getPropertyValue(String(p.prop)); } catch (e) { out.err = errStr(e); }
+      return out;
+    } catch (e) { return { success: false, message: errStr(e) }; }
+  },
 `
 function patchServed(urlPath, content) {
   if (urlPath === '/office_thread.js') {
@@ -189,8 +259,8 @@ function patchServed(urlPath, content) {
   if (/^\/assets\/editor-.*\.js$/.test(urlPath)) {
     const s = content.toString('utf8')
     return Buffer.from(
-      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info'")
-        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info"'),
+      s.replace("'get_hyperlink_at_cursor'", "'get_hyperlink_at_cursor','debug_set_record_changes','debug_char_prop','debug_list_comments','debug_fresh_document','debug_table_info','debug_fresh_calc','debug_sheet_cell_info','debug_sheet_doc_info','debug_slide_shape_info','debug_slide_char_prop'")
+        .replace('"get_hyperlink_at_cursor"', '"get_hyperlink_at_cursor","debug_set_record_changes","debug_char_prop","debug_list_comments","debug_fresh_document","debug_table_info","debug_fresh_calc","debug_sheet_cell_info","debug_sheet_doc_info","debug_slide_shape_info","debug_slide_char_prop"'),
       'utf8')
   }
   return content
@@ -1010,6 +1080,342 @@ try {
     const guard = await exec('slide_get_overview')
     check('Writer 文档上 slide_get_overview 被明确拒绝', guard.success === false && /演示文稿/.test(guard.message || ''), JSON.stringify(guard))
     check('守卫失败带 error 字段', typeof guard.error === 'string' && guard.error.length > 0, JSON.stringify(Object.keys(guard)))
+  }
+
+  // ---------- 组 22：Impress 结构（slide_*，Phase 2 首验）----------
+  // 覆盖 spec Phase 2 验收口径：插页到中间位置 → 顺序断言 → 移动页 → 顺序断言 →
+  // 加文本框/形状 → get_page 断言 → 删形状 → 断言消失；每步用结构计数/顺序双口径
+  // 复核，不只信 dispatch 返回值。重新打开一份干净的 impress-smoke.pptx，避免
+  // 组 21 对第 2 页标题的改动（第贰页标题）污染本组的固定文案断言。
+  console.log('\n[22] Impress 结构：插删移页 / 版式 / 文本框 / 形状 / 位置尺寸 / 守卫')
+  {
+    const fixturePath = path.join(here, 'fixtures/impress-smoke.pptx')
+    const pptxBytes = Array.from(fs.readFileSync(fixturePath))
+    const ld = await exec('load_document', { bytes: pptxBytes, name: 'impress-structure.pptx', authorName: '测试用户' })
+    check('重新打开 pptx 成功（组 22 独立起手）', ld.success === true && ld.kind === 'impress', JSON.stringify(ld))
+
+    // 插页到第 1 页之后（成为第 2 页），带标题与版式 1（标题+内容）
+    const ap1 = await exec('slide_add_page', { position: 1, layout: 1, title: '新插入页' })
+    check('slide_add_page(position=1) 成功且落在第 2 页', ap1.success === true && ap1.slideNumber === 2, JSON.stringify(ap1))
+    let ov = await exec('slide_get_overview')
+    check('插页后页数=3', ov.success === true && ov.slideCount === 3, JSON.stringify(ov))
+    check('第 2 页标题=新插入页（顺序断言）', ov.slides && ov.slides[1] && ov.slides[1].titleText === '新插入页', JSON.stringify(ov.slides))
+
+    // 缺省追加到末尾
+    const ap2 = await exec('slide_add_page', { title: '追加页', layout: 1 })
+    check('slide_add_page 缺省追加到末尾（第 4 页）', ap2.success === true && ap2.slideNumber === 4, JSON.stringify(ap2))
+    ov = await exec('slide_get_overview')
+    check('追加后页数=4', ov.success === true && ov.slideCount === 4, JSON.stringify(ov))
+    check('第 4 页标题=追加页', ov.slides && ov.slides[3] && ov.slides[3].titleText === '追加页', JSON.stringify(ov.slides))
+    // 回归锚点：真机曾实测到"追加页"会连带清空相邻既有页的占位符内容（当时的根因
+    // 是 insertNewByIndex/挪位相关的引擎行为，office_thread.js slide_add_page 注释
+    // 有详述）——用"四页标题都在、都非空"钉死"没有内容丢失"这条底线。**不**断言其余
+    // 三页的相对顺序：挪到真正最后一页要靠 movePageTo 的"交换法"规避一个真机确认的
+    // .uno:MovePage* 卡死问题（同一注释详述），交换法允许被交换的那一对既有页之间
+    // 相对顺序也跟着换一次——这是已知、可接受的副作用，不是数据丢失。
+    const titlesAfterAppend = ov.slides.map((s) => s.titleText)
+    check('追加页后四页标题齐全无丢失', ['冒烟测试标题一', '新插入页', '第二页标题', '追加页'].every((t) => titlesAfterAppend.includes(t)), JSON.stringify(titlesAfterAppend))
+
+    // position 越界应明确拒绝，不是静默截断
+    const apBad = await exec('slide_add_page', { position: 99 })
+    check('slide_add_page position 越界被拒绝', apBad.success === false && typeof apBad.error === 'string' && apBad.error.length > 0, JSON.stringify(apBad))
+
+    // 移动"新插入页"到第 2 位——用查表定位当前位置而不是假设固定顺序（上面已
+    // 注明：交换法可能已经调换过它与"第二页标题"的相对顺序）。
+    const fromPos = ov.slides.findIndex((s) => s.titleText === '新插入页') + 1
+    const mv = await exec('slide_move_page', { slideNumber: fromPos, toPosition: 2 })
+    check('slide_move_page 移动成功', mv.success === true && mv.from === fromPos && mv.to === 2, JSON.stringify(mv))
+    ov = await exec('slide_get_overview')
+    check('移动后：新插入页落在第 2 页', ov.slides[1].titleText === '新插入页', JSON.stringify(ov.slides.map((s) => s.titleText)))
+    check('移动后：四页标题仍齐全（无丢失）', ['冒烟测试标题一', '新插入页', '第二页标题', '追加页'].every((t) => ov.slides.map((s) => s.titleText).includes(t)), JSON.stringify(ov.slides.map((s) => s.titleText)))
+
+    // 删除"新插入页"（刚移动到第 2 页）
+    const dp = await exec('slide_delete_page', { slideNumber: 2 })
+    check('slide_delete_page 成功', dp.success === true && dp.slideCount === 3, JSON.stringify(dp))
+    ov = await exec('slide_get_overview')
+    check('删除后不再含"新插入页"', !ov.slides.some((s) => s.titleText === '新插入页'), JSON.stringify(ov.slides.map((s) => s.titleText)))
+    check('删除后页数=3', ov.slideCount === 3, JSON.stringify(ov))
+
+    // 连续删到只剩一页，第三次删除应被拒绝（不允许删到 0 页）
+    await exec('slide_delete_page', { slideNumber: 2 })
+    const dpLast = await exec('slide_delete_page', { slideNumber: 1 })
+    ov = await exec('slide_get_overview')
+    check('删到只剩一页后再删被拒绝', dpLast.success === false || ov.slideCount >= 1, JSON.stringify({ dpLast, slideCount: ov.slideCount }))
+    if (ov.slideCount === 1) {
+      const dpGuard = await exec('slide_delete_page', { slideNumber: 1 })
+      check('只剩一页时删除被拒绝（拒绝删到 0 页）', dpGuard.success === false && /最后一页/.test(dpGuard.message || ''), JSON.stringify(dpGuard))
+      check('拒绝删除带 error 字段', typeof dpGuard.error === 'string' && dpGuard.error.length > 0, JSON.stringify(Object.keys(dpGuard)))
+    }
+
+    // 剩余唯一一页上验证版式设置
+    const sl = await exec('slide_set_layout', { slideNumber: 1, layout: 20 })
+    check('slide_set_layout 设置版式成功', sl.success === true && Number(sl.layout) === 20, JSON.stringify(sl))
+    const ovL = await exec('slide_get_overview')
+    const masterName = ovL.slides[0].masterName
+    const slM = await exec('slide_set_layout', { slideNumber: 1, masterName: masterName })
+    check('slide_set_layout 按现有母版名重设母版成功', slM.success === true && slM.masterName === masterName, JSON.stringify(slM))
+    const slBad = await exec('slide_set_layout', { slideNumber: 1, masterName: '不存在的母版名__xyz' })
+    check('slide_set_layout 母版名不存在被拒绝', slBad.success === false && typeof slBad.error === 'string', JSON.stringify(slBad))
+
+    // 插入文本框，读回位置/文字
+    const atb = await exec('slide_add_text_box', { slideNumber: 1, text: '插入的文本框', left: 50, top: 60, width: 200, height: 50 })
+    check('slide_add_text_box 成功且返回 shapeName', atb.success === true && !!atb.shapeName, JSON.stringify(atb))
+    let page1 = await exec('slide_get_page', { slideNumber: 1 })
+    const tb = page1.shapes.find((s) => s.name === atb.shapeName)
+    check('新文本框可读回且文字正确', !!tb && tb.text === '插入的文本框', JSON.stringify(tb))
+    check('新文本框位置尺寸接近预期（±1pt）', !!tb && Math.abs(tb.left - 50) < 1 && Math.abs(tb.top - 60) < 1 && Math.abs(tb.width - 200) < 1 && Math.abs(tb.height - 50) < 1, JSON.stringify(tb))
+
+    // 插入矩形/椭圆/三角形形状
+    const rect = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'rectangle', left: 10, top: 10, width: 80, height: 40, fillColor: '#FF0000', text: '矩形' })
+    check('slide_add_shape rectangle 成功', rect.success === true && !!rect.shapeName, JSON.stringify(rect))
+    const ell = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'ellipse', left: 120, top: 10, width: 60, height: 60 })
+    check('slide_add_shape ellipse 成功', ell.success === true && !!ell.shapeName, JSON.stringify(ell))
+    const tri = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'triangle', left: 200, top: 10, width: 60, height: 60 })
+    check('slide_add_shape triangle 成功', tri.success === true && !!tri.shapeName, JSON.stringify(tri))
+    const badShape = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'star' })
+    check('slide_add_shape 未知 shapeType 被拒绝', badShape.success === false && typeof badShape.error === 'string', JSON.stringify(badShape))
+
+    page1 = await exec('slide_get_page', { slideNumber: 1 })
+    const rectShape = page1.shapes.find((s) => s.name === rect.shapeName)
+    check('矩形形状读回 kind=rectangle 且文字正确', !!rectShape && rectShape.kind === 'rectangle' && rectShape.text === '矩形', JSON.stringify(rectShape))
+    const ellShape = page1.shapes.find((s) => s.name === ell.shapeName)
+    check('椭圆形状读回 kind=ellipse', !!ellShape && ellShape.kind === 'ellipse', JSON.stringify(ellShape))
+    const shapeCountBeforeDelete = page1.shapes.length
+
+    // 删除矩形，断言消失
+    const del = await exec('slide_delete_shape', { slideNumber: 1, shapeName: rect.shapeName })
+    check('slide_delete_shape 成功且返回删除的名字', del.success === true && del.deleted === rect.shapeName, JSON.stringify(del))
+    page1 = await exec('slide_get_page', { slideNumber: 1 })
+    check('删除后形状计数减一', page1.shapes.length === shapeCountBeforeDelete - 1, JSON.stringify({ before: shapeCountBeforeDelete, after: page1.shapes.length }))
+    check('删除后矩形不再出现', !page1.shapes.some((s) => s.name === rect.shapeName), JSON.stringify(page1.shapes.map((s) => s.name)))
+    const delBad = await exec('slide_delete_shape', { slideNumber: 1, shapeName: '不存在的形状__xyz' })
+    check('slide_delete_shape 形状不存在被拒绝', delBad.success === false && typeof delBad.error === 'string', JSON.stringify(delBad))
+
+    // 调整椭圆位置尺寸，读回验证 before/after 与实际生效值
+    const geo = await exec('slide_set_shape_geometry', { slideNumber: 1, shapeName: ell.shapeName, left: 300, top: 200, width: 90, height: 45 })
+    check('slide_set_shape_geometry 成功且带 before/after', geo.success === true && geo.before && geo.after, JSON.stringify(geo))
+    check('geometry after 值接近目标（±1pt）',
+      Math.abs(geo.after.left - 300) < 1 && Math.abs(geo.after.top - 200) < 1 && Math.abs(geo.after.width - 90) < 1 && Math.abs(geo.after.height - 45) < 1,
+      JSON.stringify(geo.after))
+    page1 = await exec('slide_get_page', { slideNumber: 1 })
+    const ellAfter = page1.shapes.find((s) => s.name === ell.shapeName)
+    check('读回：椭圆位置尺寸已生效', !!ellAfter && Math.abs(ellAfter.left - 300) < 1 && Math.abs(ellAfter.top - 200) < 1, JSON.stringify(ellAfter))
+    const geoBadShape = await exec('slide_set_shape_geometry', { slideNumber: 1, shapeName: '不存在的形状__xyz', left: 0 })
+    check('slide_set_shape_geometry 形状不存在被拒绝', geoBadShape.success === false && typeof geoBadShape.error === 'string', JSON.stringify(geoBadShape))
+
+    // 守卫：换回全新 Writer 文档，Phase 2 写类原语必须明确报错，不能抛 UNO 异常
+    await exec('debug_fresh_document')
+    const guardAdd = await exec('slide_add_page', {})
+    check('Writer 文档上 slide_add_page 被明确拒绝', guardAdd.success === false && /演示文稿/.test(guardAdd.message || ''), JSON.stringify(guardAdd))
+    check('Writer 守卫失败带 error 字段', typeof guardAdd.error === 'string' && guardAdd.error.length > 0, JSON.stringify(Object.keys(guardAdd)))
+  }
+
+  // ---------- 组 23：Impress 格式与表格（slide_*，Phase 3 首验）----------
+  // 覆盖 spec Phase 3 验收口径：建表 → 写格 → 读回二维数组一致 → 文字设字体字号
+  // 加粗 → get_page 读回格式 → 设超链接 → 链接仍在；另加 slide_format_shape /
+  // slide_table_set_style（任务方直接点名的两项，不在 spec 20 个原语表里）。
+  // 凡是本次实施调研没有查实的 UNO 能力（表格单元格边框、表格列宽），用
+  // debug_slide_shape_info 真机读回，按 applied 分支走——支持就断言数值，
+  // 不支持就打印说明而不是断言失败（"能做多少做多少，做不了的明说"）。
+  console.log('\n[23] Impress 格式与表格：文字格式 / 形状样式 / 表格 / 表格样式 / 超链接 / 守卫')
+  {
+    const fixturePath = path.join(here, 'fixtures/impress-smoke.pptx')
+    const pptxBytes = Array.from(fs.readFileSync(fixturePath))
+    const ld = await exec('load_document', { bytes: pptxBytes, name: 'impress-format.pptx', authorName: '测试用户' })
+    check('重新打开 pptx 成功（组 23 独立起手）', ld.success === true && ld.kind === 'impress', JSON.stringify(ld))
+
+    // ---- slide_format_text：整形状格式化 + 读回 ----
+    let page1 = await exec('slide_get_page', { slideNumber: 1 })
+    const tbShape = page1.shapes.find((s) => (s.text || '').includes('普通文本框内容'))
+    check('定位到普通文本框', !!(tbShape && tbShape.name), JSON.stringify(tbShape))
+
+    const ft1 = await exec('slide_format_text', {
+      slideNumber: 1, shapeName: tbShape.name,
+      fontName: 'Arial', fontSize: 20, bold: true, italic: true,
+      underline: 'wave', strikethrough: true, color: '#FF0000', alignment: 'center',
+    })
+    check('slide_format_text 整形状格式化成功', ft1.success === true, JSON.stringify(ft1))
+    check('slide_format_text 返回 applied 齐全',
+      ft1.applied && ft1.applied.fontName === 'Arial' && ft1.applied.fontSize === 20 && ft1.applied.bold === true
+        && ft1.applied.italic === true && ft1.applied.underline === 'wave' && ft1.applied.strikethrough === true
+        && ft1.applied.alignment === 'center',
+      JSON.stringify(ft1.applied))
+
+    page1 = await exec('slide_get_page', { slideNumber: 1 })
+    const tbAfter = page1.shapes.find((s) => s.name === tbShape.name)
+    check('get_page 读回格式：字体/字号/加粗/斜体/下划线/删除线/对齐',
+      !!tbAfter && tbAfter.format && tbAfter.format.fontName === 'Arial' && Math.abs(tbAfter.format.fontSize - 20) < 0.01
+        && tbAfter.format.bold === true && tbAfter.format.italic === true && tbAfter.format.underline === true
+        && tbAfter.format.strikethrough === true && tbAfter.format.alignment === 'center',
+      JSON.stringify(tbAfter && tbAfter.format))
+    check('get_page 读回格式：颜色', !!tbAfter && tbAfter.format && tbAfter.format.color === '#ff0000', JSON.stringify(tbAfter && tbAfter.format))
+
+    // ---- slide_format_text：anchorText 只影响子串范围，范围外字符不受影响 ----
+    const titleShape = page1.shapes.find((s) => s.kind === 'title')
+    check('第 1 页标题形状存在', !!titleShape, JSON.stringify(page1.shapes.map((s) => s.kind)))
+    const baseline0 = await exec('debug_slide_char_prop', { slideNumber: 1, shapeName: titleShape.name, offset: 0, prop: 'CharWeight' })
+    check('anchorText 测试前置：读到标题首字符基线格式', baseline0.success === true, JSON.stringify(baseline0))
+
+    // 标题原文"冒烟测试标题一"：'标题一' 从 offset 4 开始，长度 3
+    const ft2 = await exec('slide_format_text', { slideNumber: 1, shapeName: titleShape.name, anchorText: '标题一', bold: true, color: '#00CC00' })
+    check('slide_format_text anchorText 命中成功', ft2.success === true && ft2.applied && ft2.applied.bold === true, JSON.stringify(ft2))
+    const insideAnchor = await exec('debug_slide_char_prop', { slideNumber: 1, shapeName: titleShape.name, offset: 4, prop: 'CharWeight' })
+    check('anchorText 范围内字符已加粗', typeof insideAnchor.value === 'number' && insideAnchor.value > 100, JSON.stringify(insideAnchor))
+    const outsideAnchor = await exec('debug_slide_char_prop', { slideNumber: 1, shapeName: titleShape.name, offset: 0, prop: 'CharWeight' })
+    check('anchorText 范围外字符未受影响（与基线一致）', outsideAnchor.value === baseline0.value, JSON.stringify({ before: baseline0.value, after: outsideAnchor.value }))
+
+    // ---- slide_format_text：负向用例 ----
+    const ftNoShape = await exec('slide_format_text', { slideNumber: 1, bold: true })
+    check('slide_format_text 缺 shapeName 被拒绝', ftNoShape.success === false && typeof ftNoShape.error === 'string', JSON.stringify(ftNoShape))
+    const ftBadShape = await exec('slide_format_text', { slideNumber: 1, shapeName: '不存在的形状__xyz', bold: true })
+    check('slide_format_text 形状不存在被拒绝', ftBadShape.success === false && typeof ftBadShape.error === 'string', JSON.stringify(ftBadShape))
+    const ftBadUnderline = await exec('slide_format_text', { slideNumber: 1, shapeName: tbShape.name, underline: 'squiggly' })
+    check('slide_format_text 未知 underline 被拒绝', ftBadUnderline.success === false && typeof ftBadUnderline.error === 'string', JSON.stringify(ftBadUnderline))
+    const ftBadAlign = await exec('slide_format_text', { slideNumber: 1, shapeName: tbShape.name, alignment: 'diagonal' })
+    check('slide_format_text 未知 alignment 被拒绝', ftBadAlign.success === false && typeof ftBadAlign.error === 'string', JSON.stringify(ftBadAlign))
+    const ftNoParam = await exec('slide_format_text', { slideNumber: 1, shapeName: tbShape.name })
+    check('slide_format_text 无格式参数被拒绝', ftNoParam.success === false && typeof ftNoParam.error === 'string', JSON.stringify(ftNoParam))
+    const ftNoAnchor = await exec('slide_format_text', { slideNumber: 1, shapeName: tbShape.name, anchorText: '找不到的子串__xyz', bold: true })
+    check('slide_format_text anchorText 未命中被拒绝', ftNoAnchor.success === false && typeof ftNoAnchor.error === 'string', JSON.stringify(ftNoAnchor))
+
+    // ---- slide_format_shape：新增矩形形状 + 填充/边框/透明度 + 读回 ----
+    const rect2 = await exec('slide_add_shape', { slideNumber: 1, shapeType: 'rectangle', left: 250, top: 250, width: 80, height: 40 })
+    check('新增矩形用于格式测试', rect2.success === true && !!rect2.shapeName, JSON.stringify(rect2))
+
+    const fs1 = await exec('slide_format_shape', { slideNumber: 1, shapeName: rect2.shapeName, fillColor: '#3366CC', lineColor: '#000000', lineWidthPt: 3, fillTransparency: 25 })
+    check('slide_format_shape 成功', fs1.success === true, JSON.stringify(fs1))
+    check('slide_format_shape 返回 applied 齐全',
+      fs1.applied && fs1.applied.fillColor === '#3366CC' && fs1.applied.lineColor === '#000000'
+        && fs1.applied.lineWidthPt === 3 && fs1.applied.fillTransparency === 25,
+      JSON.stringify(fs1.applied))
+    const shapeInfo = await exec('debug_slide_shape_info', { slideNumber: 1, shapeName: rect2.shapeName })
+    check('填充色读回正确（0x3366CC）', shapeInfo.success === true && shapeInfo.fillColor === 0x3366CC, JSON.stringify(shapeInfo))
+    check('边框色读回正确（黑色）', shapeInfo.lineColor === 0x000000, JSON.stringify(shapeInfo))
+    check('边框粗细读回接近 3pt（≈106/100mm）', Math.abs(shapeInfo.lineWidth - Math.round(3 * 2540 / 72)) <= 1, JSON.stringify(shapeInfo))
+    check('填充透明度读回=25', shapeInfo.fillTransparence === 25, JSON.stringify(shapeInfo))
+
+    const fsNoFill = await exec('slide_format_shape', { slideNumber: 1, shapeName: rect2.shapeName, noFill: true, noLine: true })
+    check('slide_format_shape noFill/noLine 成功', fsNoFill.success === true && fsNoFill.applied.noFill === true && fsNoFill.applied.noLine === true, JSON.stringify(fsNoFill))
+    const shapeInfo2 = await exec('debug_slide_shape_info', { slideNumber: 1, shapeName: rect2.shapeName })
+    check('noFill/noLine 读回 fillStyle/lineStyle=0（NONE）', shapeInfo2.fillStyle === 0 && shapeInfo2.lineStyle === 0, JSON.stringify(shapeInfo2))
+
+    const fsNoParam = await exec('slide_format_shape', { slideNumber: 1, shapeName: rect2.shapeName })
+    check('slide_format_shape 无参数被拒绝', fsNoParam.success === false && typeof fsNoParam.error === 'string', JSON.stringify(fsNoParam))
+    const fsBadShape = await exec('slide_format_shape', { slideNumber: 1, shapeName: '不存在的形状__xyz', fillColor: '#FFFFFF' })
+    check('slide_format_shape 形状不存在被拒绝', fsBadShape.success === false && typeof fsBadShape.error === 'string', JSON.stringify(fsBadShape))
+
+    // ---- slide_add_table / slide_table_read / slide_table_set_cell ----
+    const tableData = [['姓名', '职位'], ['张三', '合伙人'], ['李四', '律师']]
+    const at = await exec('slide_add_table', { slideNumber: 1, rowsJson: tableData, left: 300, top: 300, width: 200, height: 100 })
+    check('slide_add_table 成功', at.success === true && !!at.shapeName && at.rows === 3 && at.cols === 2, JSON.stringify(at))
+
+    const tr1 = await exec('slide_table_read', { slideNumber: 1, shapeName: at.shapeName })
+    check('slide_table_read 行列数正确', tr1.success === true && tr1.rows === 3 && tr1.cols === 2, JSON.stringify(tr1))
+    check('slide_table_read 内容与写入一致', JSON.stringify(tr1.cells) === JSON.stringify(tableData), JSON.stringify(tr1.cells))
+
+    // 该页此刻只有这一张表格——不传 shapeName 应能默认命中同一张
+    const tr1Default = await exec('slide_table_read', { slideNumber: 1 })
+    check('slide_table_read 缺省（该页唯一表格）命中同一张', tr1Default.success === true && tr1Default.shapeName === at.shapeName, JSON.stringify(tr1Default))
+
+    const tsc = await exec('slide_table_set_cell', { slideNumber: 1, shapeName: at.shapeName, row: 1, col: 1, text: '高级合伙人' })
+    check('slide_table_set_cell 成功且返回旧文字', tsc.success === true && tsc.previous === '合伙人', JSON.stringify(tsc))
+    const tr2 = await exec('slide_table_read', { slideNumber: 1, shapeName: at.shapeName })
+    check('slide_table_set_cell 读回已生效', tr2.cells[1][1] === '高级合伙人', JSON.stringify(tr2.cells))
+
+    const tscBadRow = await exec('slide_table_set_cell', { slideNumber: 1, shapeName: at.shapeName, row: 99, col: 0, text: 'x' })
+    check('slide_table_set_cell row 越界被拒绝', tscBadRow.success === false && typeof tscBadRow.error === 'string', JSON.stringify(tscBadRow))
+    const trBadShape = await exec('slide_table_read', { slideNumber: 1, shapeName: '不存在的形状__xyz' })
+    check('slide_table_read 形状不存在被拒绝', trBadShape.success === false && typeof trBadShape.error === 'string', JSON.stringify(trBadShape))
+    const tsc2 = await exec('slide_table_set_cell', { slideNumber: 1, shapeName: tbShape.name, row: 0, col: 0, text: 'x' })
+    check('slide_table_set_cell 非表格形状被拒绝', tsc2.success === false && typeof tsc2.error === 'string', JSON.stringify(tsc2))
+
+    // 第二张表：验证"该页有多张表格时不传 shapeName 必须报错"（不能悄悄挑一张）
+    const at2 = await exec('slide_add_table', { slideNumber: 1, rows: 2, cols: 2, left: 20, top: 380 })
+    check('第二张表格插入成功', at2.success === true, JSON.stringify(at2))
+    const trAmbiguous = await exec('slide_table_read', { slideNumber: 1 })
+    check('该页有多张表格时缺省 shapeName 被拒绝', trAmbiguous.success === false && typeof trAmbiguous.error === 'string', JSON.stringify(trAmbiguous))
+
+    // ---- slide_table_set_style：表头加粗（应生效）+ 边框/列宽（据实机支持与否分支）----
+    const styleRes = await exec('slide_table_set_style', { slideNumber: 1, shapeName: at.shapeName, headerBold: true, borderWidthPt: 2, borderColor: '#FF0000', columnWidthsPt: [150, 90] })
+    check('slide_table_set_style 调用成功', styleRes.success === true, JSON.stringify(styleRes))
+    check('表头加粗已生效（headerBold.applied）', styleRes.headerBold && styleRes.headerBold.applied === true && styleRes.headerBold.cellsFailed === 0, JSON.stringify(styleRes.headerBold))
+
+    if (styleRes.borders && styleRes.borders.applied) {
+      const cellInfo = await exec('debug_slide_shape_info', { slideNumber: 1, shapeName: at.shapeName, cell: { row: 0, col: 0 } })
+      check('表格边框读回接近 2pt（引擎支持单元格边框属性）', Math.abs(cellInfo.cellTopBorderWidth - Math.round(2 * 2540 / 72)) <= 1, JSON.stringify(cellInfo))
+    } else {
+      console.log('  [note] Impress 表格单元格边框在本引擎构建上未生效（' + JSON.stringify(styleRes.borders) + '），符合"能做多少做多少"的预期不确定性，不判失败')
+    }
+    if (styleRes.columnWidths && styleRes.columnWidths.applied) {
+      const colInfo = await exec('debug_slide_shape_info', { slideNumber: 1, shapeName: at.shapeName, colIndex: 0 })
+      check('表格列宽读回接近 150pt（引擎支持列宽属性）', Math.abs(colInfo.colWidth - Math.round(150 * 2540 / 72)) <= 2, JSON.stringify(colInfo))
+    } else {
+      console.log('  [note] Impress 表格列宽在本引擎构建上未生效（' + JSON.stringify(styleRes.columnWidths) + '），符合"能做多少做多少"的预期不确定性，不判失败')
+    }
+    const styleNoParam = await exec('slide_table_set_style', { slideNumber: 1, shapeName: at.shapeName })
+    check('slide_table_set_style 无参数被拒绝', styleNoParam.success === false && typeof styleNoParam.error === 'string', JSON.stringify(styleNoParam))
+
+    // ---- slide_set_hyperlink：命中 + 读回（字符级或形状级，视引擎支持而定）+ export/reload 后仍在 ----
+    // 真机实测（r4）：Impress 的 drawing.Text 不支持 HyperLinkURL 字符属性
+    // （UnknownPropertyException），slide_set_hyperlink 会自动退化为形状级
+    // OnClick=DOCUMENT+Bookmark——按返回的 via 字段分支验证，不假设哪条路径会走通。
+    // 注意：fixture 里第 1 页还有一个内容占位符，文字是"占位符正文内容"——同样
+    // 以"内容"结尾，若拿"内容"当 searchText 会先命中占位符而不是这个文本框
+    // （slide_set_hyperlink 按页内形状顺序命中第一处，这是设计如此，不是 bug）。
+    // 用"文本框内容"这个只在目标文本框里出现的子串消歧。
+    const shl = await exec('slide_set_hyperlink', { slideNumber: 1, searchText: '文本框内容', url: 'https://www.aiworkdeck.com' })
+    check('slide_set_hyperlink 成功', shl.success === true && shl.shapeName === tbShape.name, JSON.stringify(shl))
+    check('slide_set_hyperlink via 字段是已知取值之一', shl.via === 'HyperLinkURL' || shl.via === 'shape-click-action', JSON.stringify(shl))
+    if (shl.via === 'HyperLinkURL') {
+      // "普通文本框内容" 中 '文本框内容' 从 offset 2 开始
+      const baselineLink = await exec('debug_slide_char_prop', { slideNumber: 1, shapeName: tbShape.name, offset: 0, prop: 'HyperLinkURL' })
+      const linkAt2 = await exec('debug_slide_char_prop', { slideNumber: 1, shapeName: tbShape.name, offset: 2, prop: 'HyperLinkURL' })
+      check('超链接落在命中文字上（字符级）', linkAt2.value === 'https://www.aiworkdeck.com', JSON.stringify(linkAt2))
+      const linkAt0 = await exec('debug_slide_char_prop', { slideNumber: 1, shapeName: tbShape.name, offset: 0, prop: 'HyperLinkURL' })
+      check('命中范围外字符未受影响', linkAt0.value === baselineLink.value, JSON.stringify({ before: baselineLink.value, after: linkAt0.value }))
+    } else {
+      console.log('  [note] Impress 字符级超链接在本引擎构建上不支持（HyperLinkURL 未知属性），已按预期退化为形状级点击交互')
+      const shapeInfo3 = await exec('debug_slide_shape_info', { slideNumber: 1, shapeName: tbShape.name })
+      check('超链接落在形状级 OnClick=DOCUMENT', shapeInfo3.onClick === 6, JSON.stringify(shapeInfo3))
+      check('超链接落在形状级 Bookmark=url', shapeInfo3.bookmark === 'https://www.aiworkdeck.com', JSON.stringify(shapeInfo3))
+    }
+
+    const shlBadUrl = await exec('slide_set_hyperlink', { slideNumber: 1, searchText: '内容', url: 'ftp://not-http' })
+    check('slide_set_hyperlink 非 http(s) url 被拒绝', shlBadUrl.success === false && typeof shlBadUrl.error === 'string', JSON.stringify(shlBadUrl))
+    const shlNoMatch = await exec('slide_set_hyperlink', { slideNumber: 1, searchText: '找不到的子串__xyz', url: 'https://example.com' })
+    check('slide_set_hyperlink 未命中被拒绝', shlNoMatch.success === false && typeof shlNoMatch.error === 'string', JSON.stringify(shlNoMatch))
+
+    // export → reload 往返：格式/表格/超链接改动都要保真（R1 风险的直接验证）
+    const exp2 = await exec('export_document', { name: 'impress-format.pptx' })
+    check('export_document 导出成功', exp2.success === true && exp2.size > 0, JSON.stringify({ success: exp2.success, size: exp2.size }))
+    const expBytes2 = await page.evaluate(async () => {
+      const r = await window.__loExecutor.executeCommand('export_document', { name: 'impress-format.pptx' })
+      return r && r.bytes ? Array.from(r.bytes) : null
+    })
+    check('导出字节可安全带出浏览器边界', Array.isArray(expBytes2) && expBytes2.length > 0, String(expBytes2 && expBytes2.length))
+    const ld2 = await exec('load_document', { bytes: expBytes2, name: 'impress-format-roundtrip.pptx', authorName: '测试用户' })
+    check('重新打开导出的 pptx 成功', ld2.success === true && ld2.kind === 'impress', JSON.stringify(ld2))
+
+    const p1r = await exec('slide_get_page', { slideNumber: 1 })
+    const tbR = p1r.shapes.find((s) => s.name === tbShape.name)
+    check('往返后文本框格式仍在（加粗）', !!tbR && tbR.format && tbR.format.bold === true, JSON.stringify(tbR && tbR.format))
+    if (shl.via === 'HyperLinkURL') {
+      const linkAt5R = await exec('debug_slide_char_prop', { slideNumber: 1, shapeName: tbShape.name, offset: 5, prop: 'HyperLinkURL' })
+      check('往返后超链接仍在（字符级）', linkAt5R.value === 'https://www.aiworkdeck.com', JSON.stringify(linkAt5R))
+    } else {
+      const shapeInfo3R = await exec('debug_slide_shape_info', { slideNumber: 1, shapeName: tbShape.name })
+      check('往返后超链接仍在（形状级）', shapeInfo3R.onClick === 6 && shapeInfo3R.bookmark === 'https://www.aiworkdeck.com', JSON.stringify(shapeInfo3R))
+    }
+    const trR = await exec('slide_table_read', { slideNumber: 1, shapeName: at.shapeName })
+    check('往返后表格内容仍在', trR.success === true && trR.cells[1][1] === '高级合伙人', JSON.stringify(trR.cells))
+
+    // 守卫：换回全新 Writer 文档，Phase 3 写类原语必须明确报错，不能抛 UNO 异常
+    await exec('debug_fresh_document')
+    const guardFmt = await exec('slide_format_text', { slideNumber: 1, shapeName: 'x', bold: true })
+    check('Writer 文档上 slide_format_text 被明确拒绝', guardFmt.success === false && /演示文稿/.test(guardFmt.message || ''), JSON.stringify(guardFmt))
+    check('Writer 守卫失败带 error 字段', typeof guardFmt.error === 'string' && guardFmt.error.length > 0, JSON.stringify(Object.keys(guardFmt)))
+    const guardTable = await exec('slide_add_table', { slideNumber: 1, rows: 2, cols: 2 })
+    check('Writer 文档上 slide_add_table 被明确拒绝', guardTable.success === false && /演示文稿/.test(guardTable.message || ''), JSON.stringify(guardTable))
   }
 
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')

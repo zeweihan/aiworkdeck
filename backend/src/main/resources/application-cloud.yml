@@ -1,0 +1,52 @@
+# 官方托管的插件云后端（addin.aiworkdeck.com）专用 profile。
+# 与 application-prod.yml（团队服务器 / restart-backend.sh 在用，MySQL）互不影响。
+#
+# 启动方式：java -jar backend.jar --spring.profiles.active=cloud
+# 必配环境变量（缺 AWD_PLATFORM_KEY_SECRET 会被 PlatformAiKeyCipher 直接拒绝启动，
+# 这是刻意的强不变式，不做明文降级）：
+#   DB_PASSWORD               PostgreSQL 专用账号口令
+#   AWD_PLATFORM_KEY_SECRET   per-user 平台 AI key 的落库加密密钥（openssl rand -base64 32；
+#                             与官网侧 AWD_KEY_ENCRYPTION_SECRET 是两把互不相干的密钥，勿复用）
+# 可选：SMS_AUTH_ENABLED + SMS_ACCESS_KEY_ID/SECRET（大陆短信）、SMS_INTL_ENABLED + TWILIO_*（境外）
+
+server:
+  port: 9696
+  # 只监听回环，对外一律经 nginx 反代 /api/（TLS 终结在 nginx）
+  address: 127.0.0.1
+  # 反代后还原真实客户端 IP（RemoteIpValve，只信回环来源的 X-Forwarded-For）。
+  # 不开的话 getRemoteAddr() 恒为 127.0.0.1，AuthAbuseGuard 的按 IP 失败锁定
+  # 会退化成全站共享一把锁：任何人连错 5 次 awdk Key，所有用户的桥接都被锁 10 分钟。
+  forward-headers-strategy: native
+
+spring:
+  datasource:
+    # PostgreSQL + pgvector（向量检索真落库；选 MySQL 会让 PgVectorConfig 回退进程内存）
+    driver-class-name: org.postgresql.Driver
+    url: jdbc:postgresql://localhost:5432/aiworkdeck_cloud
+    username: aiworkdeck_cloud
+    password: ${DB_PASSWORD}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+security:
+  # server 模式（多租户）：local-mode 的免登/回环闸整套不生效
+  local-mode: false
+  # 公网生产姿态：关闭自助注册，账号只经 awdk_ 桥接建立
+  registration-mode: closed
+  # 官网账户 Key（awdk_）一键桥接开关——插件云后端的核心登录方式
+  awdk-login-enabled: true
+  # conversationId 强制服务端签发（公网多租户防空会话抢占）
+  conversation-issuance-required: true
+  cors:
+    # Office 插件正式托管 Origin；localhost/127.0.0.1 开发态默认放行无需列出。
+    # allow-all 绝不能开（会整体旁路 Origin 闸）。
+    allowed-origins: https://addin.aiworkdeck.com
+
+storage:
+  type: local
+  local:
+    root-path: /opt/aiworkdeck/cloud/data
+    template-path: /opt/aiworkdeck/cloud/data/template.docx
