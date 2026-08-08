@@ -36,13 +36,39 @@ function parseArgs() {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i].startsWith('--') && i + 1 < argv.length) out[argv[i].slice(2)] = argv[++i]
   }
-  for (const k of ['from', 'out']) {
-    if (!out[k]) {
-      console.error(`missing --${k}`)
-      process.exit(1)
-    }
+  if (!out.out) {
+    console.error('missing --out')
+    process.exit(1)
   }
   return out
+}
+
+/**
+ * 定位一份已安装的 graphviz。
+ *
+ * `--from` 是可选的：**不传（或传的路径不存在）时从 PATH 上找 dot 反推安装根**。
+ * 这不是图省事——在 Windows 的 CI 上，步骤跑在 `shell: bash` 里，写出来的
+ * `/c/Program Files/Graphviz` 是 git-bash 风格路径，而 Node 不认它，
+ * `path.resolve` 会解成 `C:\c\Program Files\Graphviz`。装包工具（choco/brew）
+ * 本来就会把 dot 放进 PATH，从 PATH 反推既绕开了路径风格问题，
+ * 也不必把各平台的安装目录硬编码进构建脚本。
+ */
+function resolveSourceDir(explicit) {
+  if (explicit) {
+    const p = path.resolve(explicit)
+    if (fs.existsSync(path.join(p, 'bin')) || fs.existsSync(path.join(p, 'dot.exe'))) return p
+    console.warn(`--from 指向的位置不像 graphviz 安装根（${p}），改从 PATH 上找 dot`)
+  }
+  let where
+  try {
+    where = execFileSync(IS_WIN ? 'where' : 'which', ['dot'], { encoding: 'utf8' })
+  } catch (e) {
+    throw new Error('PATH 上没有 dot，且 --from 也没给出可用路径。'
+      + '先装 graphviz（macOS: brew install graphviz / Windows: choco install graphviz）')
+  }
+  const dot = fs.realpathSync(where.split(/\r?\n/).find((l) => l.trim())?.trim())
+  // <root>/bin/dot -> <root>
+  return path.dirname(path.dirname(dot))
 }
 
 function findFirstDir(base, candidates) {
@@ -166,7 +192,8 @@ function prepareWin(fromDir, outRoot) {
 
 function main() {
   const args = parseArgs()
-  const fromDir = path.resolve(args.from)
+  const fromDir = resolveSourceDir(args.from)
+  console.log(`graphviz 源：${fromDir}`)
   const outRoot = path.resolve(args.out, 'graphviz')
   fs.rmSync(outRoot, { recursive: true, force: true })
   fs.mkdirSync(outRoot, { recursive: true })

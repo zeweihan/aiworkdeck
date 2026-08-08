@@ -140,9 +140,8 @@ jobs:
           # 诉讼可视化的流程图布局要 graphviz 的 dot（其余六种布局零原生依赖）。
           # 只带布局引擎、不带任何渲染后端（我们只用 -Tplain），闭包约 4 MB。
           brew install graphviz
-          node desktop/scripts/prepare-graphviz.js \
-            --from "$(brew --prefix graphviz)" \
-            --out desktop/bundled/mac-arm64
+          # 不传 --from：脚本从 PATH 上找 dot 反推安装根，省得写死安装目录
+          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/mac-arm64
       - name: Bundle backend (Windows x64)
         if: runner.os == 'Windows'
         shell: bash
@@ -188,9 +187,11 @@ jobs:
           # 同 macOS 那步。Windows 上 DLL 在 exe 同目录解析，不需要重定位，
           # 整份 bin/ 拷走即可（约几 MB）。
           choco install graphviz --no-progress -y
-          node desktop/scripts/prepare-graphviz.js \
-            --from "/c/Program Files/Graphviz" \
-            --out desktop/bundled/win-x64
+          # choco 装完不会刷新当前 shell 的 PATH，手动补上再让脚本从 PATH 找 dot。
+          # 不写 "/c/Program Files/..." 是因为这步跑在 bash 里，而脚本是 Node：
+          # Node 在 Windows 上不认 git-bash 风格路径，会解成 C:\c\Program Files\...
+          export PATH="/c/Program Files/Graphviz/bin:$PATH"
+          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/win-x64
       - name: Sign bundled backend natives (macOS)
         if: runner.os == 'macOS'
         env:
