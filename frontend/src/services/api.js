@@ -943,6 +943,56 @@ export function bindPhone(phone, code) {
   });
 }
 
+// 发送邮箱验证码。与 sendSmsCode 逐一对称：scene='login' 需带 username/password
+// （发往已绑定邮箱）；scene='bind' 需已登录，带 email（发往待绑定的新邮箱）。
+export function sendMailCode(payload) {
+  return request({
+    url: '/api/auth/mail/send-code',
+    method: 'POST',
+    data: payload,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 绑定/更换邮箱（验证码走 sendMailCode 的 bind 场景）
+export function bindEmail(email, code) {
+  return request({
+    url: '/api/auth/mail/bind',
+    method: 'POST',
+    data: { email, code },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 邮箱免密登录第一步：发码。后端对「已注册」和「未注册」回同一个结果
+// （防账号枚举），所以这里成功也不代表该邮箱有账号。
+export function mailLoginSendCode(email) {
+  return request({
+    url: '/api/auth/mail-login/send-code',
+    method: 'POST',
+    data: { email },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 邮箱免密登录第二步：验码换会话，回包结构与密码登录一致
+export function mailLoginVerify(email, code) {
+  return request({
+    url: '/api/auth/mail-login/verify',
+    method: 'POST',
+    data: { email, code },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 认证器（TOTP）：开始绑定，返回 { secret, provisioningUri }。此时尚未生效
 export function totpSetup() {
   return request({ url: '/api/auth/totp/setup', method: 'POST' });
