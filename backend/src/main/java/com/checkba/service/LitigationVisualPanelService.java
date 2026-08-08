@@ -181,6 +181,13 @@ public class LitigationVisualPanelService {
                     StandardCopyOption.REPLACE_EXISTING);
 
             String base = mapFile.getName().substring(0, mapFile.getName().length() - ".map.json".length());
+            // 草稿图的 basename 本身就带 -draft，而地图里 confirmed 仍是 false——
+            // 直接拿它当前缀，引擎会**再加一次**后缀变成 xxx-draft-draft，
+            // 于是产物名与既有文件全对不上，五个文件被当成新文件重复登记一遍。
+            // 先剥掉，让引擎按地图的真实状态自己决定加不加。
+            if (base.endsWith("-draft")) {
+                base = base.substring(0, base.length() - "-draft".length());
+            }
             LitigationVisualService.Result r = litviz.render(map, work.resolve(base), mode, null);
             if (!r.ok()) throw new IllegalStateException("重画失败：" + r.error());
 

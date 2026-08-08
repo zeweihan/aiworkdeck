@@ -171,6 +171,34 @@ class LitigationVisualServiceTest {
     }
 
     @Test
+    @DisplayName("草稿后缀会叠加：前缀本身带 -draft 时引擎再加一次变成 -draft-draft")
+    void draftSuffixCompoundsOnAnAlreadyDraftBase() throws Exception {
+        // 这是「换风格」那条路的地基：面板从 <名>.map.json 反推 basename，
+        // 草稿图拿到的名字本身就带 -draft，直接当前缀传给引擎会得到 -draft-draft，
+        // 产物名与既有文件全对不上、五个文件被重复登记一遍。
+        // LitigationVisualPanelService.restyle 因此先剥掉 -draft 再渲染。
+        // 这条测试钉住引擎的这个行为——上游哪天改了，剥离逻辑就该跟着改，别让它静默失配。
+        requireRuntime();
+        Path out = Files.createTempDirectory("litviz-test-");
+        try {
+            String src = Files.readString(examples.resolve("timeline-points.json"), StandardCharsets.UTF_8);
+            JSONObject m = cn.hutool.json.JSONUtil.parseObj(src);
+            m.set("checkpoint", cn.hutool.json.JSONUtil.createObj().set("confirmed", false));
+            Path map = out.resolve("m.json");
+            Files.writeString(map, m.toString(), StandardCharsets.UTF_8);
+
+            assertEquals("图-draft",
+                    svc.render(map, out.resolve("图"), null, "svg").raw().getStr("basename"),
+                    "干净前缀应得到单个 -draft");
+            assertEquals("图-draft-draft",
+                    svc.render(map, out.resolve("图-draft"), null, "svg").raw().getStr("basename"),
+                    "前缀已带 -draft 时引擎会再加一次——restyle 必须先剥掉");
+        } finally {
+            deleteTree(out);
+        }
+    }
+
+    @Test
     @DisplayName("三种视觉模式都认，未知模式明确报错而不是默默按默认画")
     void honoursVisualModes() throws Exception {
         requireRuntime();
