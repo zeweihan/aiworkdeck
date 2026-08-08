@@ -22,7 +22,7 @@ import java.util.List;
  */
 @Slf4j
 @Service
-public class OptimizerMailer {
+public class OptimizerMailer implements OptimizerNotifier {
 
     private final OptimizerProperties props;
     private final ObjectProvider<JavaMailSender> mailSenderProvider;
@@ -32,17 +32,32 @@ public class OptimizerMailer {
         this.mailSenderProvider = mailSenderProvider;
     }
 
+    @Override
+    public String name() {
+        return "邮件";
+    }
+
     /** 邮件出口是否可用：要有 JavaMailSender（配了 spring.mail.host）且填了收件人。 */
+    @Override
     public boolean isAvailable() {
         return props.getMail().isEnabled()
                 && mailSenderProvider.getIfAvailable() != null
                 && !props.getMail().getTo().isBlank();
     }
 
+    @Override
     public String unavailableReason() {
         if (!props.getMail().isEnabled()) return "optimizer.mail.enabled=false";
         if (mailSenderProvider.getIfAvailable() == null) return "未配置 spring.mail.host（没有 JavaMailSender）";
         if (props.getMail().getTo().isBlank()) return "未配置 optimizer.mail.to（收件人）";
+        return "";
+    }
+
+    /** 邮件没有可点开的地址，恒返回空串。 */
+    @Override
+    public String notify(UserFeedback fb, FeedbackTriageService.TriageResult triage,
+                         List<FeedbackAttachment> attachments, OptimizerFeedbackSource source, String extraNote) {
+        send(fb, triage, attachments, source, extraNote);
         return "";
     }
 

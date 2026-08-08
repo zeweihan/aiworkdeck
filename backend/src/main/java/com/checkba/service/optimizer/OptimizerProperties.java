@@ -51,6 +51,19 @@ public class OptimizerProperties {
     private final Repo repo = new Repo();
     private final Agent agent = new Agent();
     private final Mail mail = new Mail();
+    private final Notify notify = new Notify();
+
+    @Getter
+    @Setter
+    public static class Notify {
+        /**
+         * 通知出口：auto（默认，有邮件用邮件、没有就开 Issue）| mail | issue | both。
+         * 默认自己降级，是为了让「反馈没人管」不取决于有没有腾出时间去配 SMTP 授权码。
+         */
+        private String channel = "auto";
+        /** 开 Issue 时打的标签；仓库里没建过的标签会被自动去掉重试。 */
+        private List<String> issueLabels = List.of("user-feedback");
+    }
 
     @Getter
     @Setter

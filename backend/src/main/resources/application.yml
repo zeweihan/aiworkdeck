@@ -321,10 +321,17 @@ optimizer:
     # 编码 Agent 命令行；{prompt} 换成任务书正文，{promptFile} 换成任务书文件路径
     command: [ "claude", "-p", "{prompt}", "--permission-mode", "acceptEdits" ]
     timeout-seconds: 1800
+  # 通知出口：auto（默认，有邮件用邮件、没有就开 GitHub Issue）| mail | issue | both。
+  # 之所以默认自己降级：邮件要维护者亲自去邮箱后台生成授权码才能用，而开 Issue
+  # 复用优化者本来就有的 gh 登录，零新增凭据——「反馈没人管」不该取决于有没有腾出时间配 SMTP。
+  notify:
+    channel: ${OPTIMIZER_NOTIFY_CHANNEL:auto}
+    # 仓库里没建过的标签会被自动去掉重试，不会因此让整条出口不可用
+    issue-labels: [ user-feedback ]
   mail:
     enabled: true
     # 收件人（维护者）。邮件通道本身用 spring.mail.*（见下），没配 host 就没有
-    # JavaMailSender，这条出口会明确报「不可用」而不是悄悄丢反馈。
+    # JavaMailSender，这条出口会报「不可用」并由 notify.channel=auto 落到开 Issue。
     to: ${OPTIMIZER_MAIL_TO:}
     from: ${OPTIMIZER_MAIL_FROM:}
     subject-prefix: "[AI Workdeck 优化者]"

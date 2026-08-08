@@ -1074,8 +1074,10 @@
                   <text class="fb-status-value">{{ optimizer.pending }}</text>
                 </view>
                 <view class="fb-status-cell">
-                  <text class="fb-status-label">邮件出口</text>
-                  <text class="fb-status-value">{{ optimizer.mailReady ? '可用' : (optimizer.mailIssue || '未配置') }}</text>
+                  <text class="fb-status-label">通知出口</text>
+                  <text class="fb-status-value">
+                    {{ optimizer.notifyReady ? optimizer.notifyChannel : (optimizer.notifyIssue || '未配置') }}
+                  </text>
                 </view>
                 <view class="fb-status-cell">
                   <text class="fb-status-label">上次运行</text>
@@ -1128,7 +1130,9 @@
                   <text class="fb-item-tag">{{ fb.page || '未知页面' }}</text>
                   <text class="fb-item-tag">{{ fb.appVersion || '—' }}</text>
                   <text v-if="fb.triageVerdict" class="fb-item-tag">分诊：{{ verdictLabel(fb.triageVerdict) }}</text>
-                  <text v-if="fb.prUrl" class="fb-item-tag link" @tap.stop="openPr(fb.prUrl)">查看 PR</text>
+                  <text v-if="fb.prUrl" class="fb-item-tag link" @tap.stop="openPr(fb.prUrl)">
+                    {{ fb.status === 'PR_OPENED' ? '查看 PR' : '查看 Issue' }}
+                  </text>
                 </view>
 
                 <view v-if="feedbackDetail && feedbackDetail.id === fb.id" class="fb-detail" @tap.stop>
@@ -1255,7 +1259,7 @@ export default {
         { key: '', label: '全部' },
         { key: 'NEW', label: '待处理' },
         { key: 'PR_OPENED', label: '已开 PR' },
-        { key: 'EMAILED', label: '已邮件' },
+        { key: 'EMAILED', label: '已通知' },
         { key: 'FAILED', label: '失败' },
       ],
       optimizer: {
@@ -1263,8 +1267,9 @@ export default {
         running: false,
         cron: '',
         pending: 0,
-        mailReady: false,
-        mailIssue: '',
+        notifyChannel: '',
+        notifyReady: false,
+        notifyIssue: '',
         lastRunAt: '',
         lastReportText: '',
       },
@@ -1696,8 +1701,9 @@ export default {
           running: !!d.running,
           cron: d.cron || '',
           pending: d.pending || 0,
-          mailReady: !!d.mailReady,
-          mailIssue: d.mailIssue || '',
+          notifyChannel: d.notifyChannel || '',
+          notifyReady: !!d.notifyReady,
+          notifyIssue: d.notifyIssue || '',
           lastRunAt: d.lastRunAt ? String(d.lastRunAt).replace('T', ' ').slice(0, 19) : '',
           lastReportText: d.lastReport
             ? `上轮：取 ${d.lastReport.picked} 条，开 PR ${d.lastReport.prOpened}，`
@@ -1791,7 +1797,7 @@ export default {
     },
     statusLabel(s) {
       return ({
-        NEW: '待处理', PR_OPENED: '已开 PR', EMAILED: '已邮件',
+        NEW: '待处理', PR_OPENED: '已开 PR', EMAILED: '已通知',
         SKIPPED: '已跳过', FAILED: '处理失败',
       })[s] || s
     },
