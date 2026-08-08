@@ -19,6 +19,7 @@ AI Workdeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 | Office 插件（Word/Excel/PPT 任务窗格）、manifest、Office.js、sideload | `.claude/agents/office-addin.md` |
 | 构建、发版、CI、测试体系、本地开发启动 | `.claude/agents/eng-infra.md` |
 | 版本记录、工作段、时间线、退回、Git 仓库 | `.claude/agents/version-control.md` |
+| 反馈浮窗、反馈落库、优化者（分诊/开 PR/发邮件）、后台反馈看板 | `.claude/agents/feedback-optimizer.md` |
 
 这些文件同时是可派遣的 sub-agent 定义：需要并行探查或委托领域内工作时，可直接用对应 agent 类型派子任务。
 

@@ -1507,6 +1507,62 @@ export function deleteClipboardItem(id) {
   })
 }
 
+/**
+ * 提交一条用户反馈（正文 + 图片 + 语音，一次 multipart 请求）。
+ * 分步上传会在网络抖动时留下一堆没有正文的空反馈——而反馈恰恰是「出问题时」提交的。
+ * @param {{kind:string,text:string,projectId:number|null,page:string,clientContext:object}} payload
+ * @param {File[]} files 图片（image/*）与语音（audio/*），服务端按 MIME 分类
+ */
+export function submitFeedback(payload, files = []) {
+  const baseUrl = getApiBaseUrl()
+  const sessionId = getSessionId()
+  const form = new FormData()
+  form.append('payload', JSON.stringify(payload || {}))
+  for (const f of files) {
+    if (f) form.append('files', f, f.name)
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${baseUrl.replace(/\/$/, '')}/api/feedback`)
+    if (sessionId) xhr.setRequestHeader('X-Session-Id', sessionId)
+    xhr.onload = () => {
+      if (xhr.status !== 200) {
+        reject(new Error('提交失败 (HTTP ' + xhr.status + ')'))
+        return
+      }
+      try {
+        const data = JSON.parse(xhr.responseText)
+        if (data.code === 0) resolve(data)
+        else reject(new Error(data.message || '提交失败'))
+      } catch (e) {
+        reject(new Error('解析响应失败'))
+      }
+    }
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.send(form)
+  })
+}
+
+/** 反馈列表（管理员）。 */
+export function getFeedbackList(status = '', limit = 50) {
+  const q = status ? `?status=${encodeURIComponent(status)}&limit=${limit}` : `?limit=${limit}`
+  return request({ url: `/api/feedback${q}`, method: 'GET' })
+}
+
+/** 单条反馈详情：附件清单 + 分诊结论 + 提交现场（管理员）。 */
+export function getFeedbackDetail(id) {
+  return request({ url: `/api/feedback/${id}`, method: 'GET' })
+}
+
+/** 优化者：手动跑一轮 / 查状态（管理员）。 */
+export function runOptimizer() {
+  return request({ url: '/api/optimizer/run', method: 'POST' })
+}
+
+export function getOptimizerStatus() {
+  return request({ url: '/api/optimizer/status', method: 'GET' })
+}
+
 export const getProjectVariables = (projectId) => {
   return request({
     url: `/api/variables/project/${projectId}`,

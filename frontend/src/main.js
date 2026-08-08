@@ -2,6 +2,7 @@ import {
 	createSSRApp
 } from "vue";
 import App from "./App.vue";
+import { recordFrontendError } from "./utils/errorBuffer.js";
 
 export function createApp() {
 	const app = createSSRApp(App);
@@ -29,6 +30,9 @@ export function createApp() {
 					message: errorMsg,
 					stack: error?.stack
 				})
+				// 同时记进环形缓冲，供反馈浮窗附带「最近的报错」——
+				// 用户点开反馈时早已离这声报错几十秒，控制台里没人会去翻
+				recordFrontendError({ kind: 'unhandledrejection', message: errorMsg, stack: error?.stack })
 				// 阻止默认行为（在控制台显示），但我们已经记录了
 				// event.preventDefault()
 			}
@@ -54,6 +58,12 @@ export function createApp() {
 					lineno: event.lineno,
 					colno: event.colno,
 					error: event.error
+				})
+				recordFrontendError({
+					kind: 'error',
+					message: errorMsg,
+					source: (event.filename || '') + ':' + event.lineno + ':' + event.colno,
+					stack: event.error?.stack
 				})
 			}
 		})
