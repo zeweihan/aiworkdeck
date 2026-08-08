@@ -27,8 +27,13 @@ class SkillRegistryTest {
     Path tempDir;
 
     private SkillRegistry newRegistry(Path skillsDir, PluginService pluginService) {
+        return newRegistry(skillsDir, null, pluginService);
+    }
+
+    private SkillRegistry newRegistry(Path skillsDir, Path builtinDir, PluginService pluginService) {
         SkillProperties props = new SkillProperties();
         props.setDir(skillsDir.toString());
+        props.setBuiltinDir(builtinDir == null ? "" : builtinDir.toString());
         SkillRegistry registry = new SkillRegistry(props, null, pluginService);
         registry.init();
         return registry;
@@ -194,5 +199,94 @@ class SkillRegistryTest {
         SkillRegistry registry = newRegistry(tempDir.resolve("does-not-exist"), new PluginService());
         assertEquals(0, registry.getSkills().size());
         assertEquals(Optional.empty(), registry.getSkill("anything"));
+    }
+
+    // ==================== 只读内置目录（随发行版分发） ====================
+    //
+    // 背景：v0.11.1 及以前 backend/skills/ 从未进过安装包，而打包态后端 cwd 是用户
+    // 数据目录，ai.skills.dir 的相对值 'skills' 解析到一个空目录——两个内置 skill
+    // 在发行版里实际上根本不存在，只在 dev 生效。这组测试钉住修复后的双目录语义。
+
+    @Test
+    @DisplayName("内置只读目录里的 skill 会被扫到（发行版里 backend/skills 的落点）")
+    void scansBuiltinDir() throws IOException {
+        Path writable = tempDir.resolve("userdata-skills");
+        Path builtin = tempDir.resolve("resources-skills");
+        Files.createDirectories(writable);
+        writeSkill(builtin.resolve("litigation-visual"), "litigation-visual", null);
+
+        SkillRegistry registry = newRegistry(writable, builtin, new PluginService());
+
+        assertTrue(registry.getSkill("litigation-visual").isPresent(),
+                "内置目录里的 skill 应被注册");
+    }
+
+    @Test
+    @DisplayName("两个目录的 skill 合并，互不遮挡")
+    void mergesBothDirs() throws IOException {
+        Path writable = tempDir.resolve("w");
+        Path builtin = tempDir.resolve("b");
+        writeSkill(writable.resolve("from-market"), "from-market", null);
+        writeSkill(builtin.resolve("built-in"), "built-in", null);
+
+        SkillRegistry registry = newRegistry(writable, builtin, new PluginService());
+
+        assertEquals(2, registry.getSkills().size());
+        assertTrue(registry.getSkill("from-market").isPresent());
+        assertTrue(registry.getSkill("built-in").isPresent());
+    }
+
+    @Test
+    @DisplayName("同 id 时可写目录赢——内置 skill 能走广场热修，不必等客户端发版")
+    void writableDirWinsOnIdClash() throws IOException {
+        Path writable = tempDir.resolve("w");
+        Path builtin = tempDir.resolve("b");
+        // 用 output 区分两份（name 已在模板里，再写一遍就是重复 YAML 键）
+        writeSkill(writable.resolve("dup"), "dup", "output: 广场热修版\n");
+        writeSkill(builtin.resolve("dup"), "dup", "output: 随包内置版\n");
+
+        SkillRegistry registry = newRegistry(writable, builtin, new PluginService());
+
+        assertEquals(1, registry.getSkills().size(), "同 id 只应留一个");
+        assertEquals("广场热修版", registry.getSkill("dup").orElseThrow().getOutput(),
+                "可写目录（广场安装）应覆盖随包内置的同 id skill");
+    }
+
+    @Test
+    @DisplayName("两处配到同一个目录时不重复扫（相对路径 vs 绝对路径也认得出）")
+    void sameDirConfiguredTwiceIsScannedOnce() throws IOException {
+        Path dir = tempDir.resolve("skills");
+        writeSkill(dir.resolve("only-one"), "only-one", null);
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(dir.toString());
+        // 同一个目录，换一种等价写法（多绕一层 . ）
+        props.setBuiltinDir(dir.resolve(".").toString());
+        SkillRegistry registry = new SkillRegistry(props, null, new PluginService());
+        registry.init();
+
+        assertEquals(1, registry.getSkills().size());
+    }
+
+    @Test
+    @DisplayName("内置目录留空 = dev 态，行为与改造前完全一致")
+    void blankBuiltinDirKeepsLegacyBehaviour() throws IOException {
+        Path dir = tempDir.resolve("skills");
+        writeSkill(dir.resolve("a"), "a", null);
+
+        SkillRegistry registry = newRegistry(dir, null, new PluginService());
+
+        assertEquals(1, registry.getSkills().size());
+    }
+
+    @Test
+    @DisplayName("内置目录配了但不存在时不阻断启动")
+    void missingBuiltinDirIsFine() throws IOException {
+        Path dir = tempDir.resolve("skills");
+        writeSkill(dir.resolve("a"), "a", null);
+
+        SkillRegistry registry = newRegistry(dir, tempDir.resolve("nope"), new PluginService());
+
+        assertEquals(1, registry.getSkills().size());
     }
 }

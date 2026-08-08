@@ -21,7 +21,9 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **股东大会核查**：面板 + AI 编排混合型（三层齐备）。前端 `frontend/src/components/ShareholderMeetingPanel.vue`（会话列表/五组材料槽位/巨潮拉取/开始核查，选文件用 FilePickerDialog 的 accept 过滤）；后端 `controller/ShareholderMeetingController.java`（/api/shareholder-meeting）+ `service/ShareholderMeetingService.java`（底稿夹 `股东大会核查/<公司>_<届次>/01..05` 五子目录、材料复制幂等、kick-off prompt 组装）+ `service/CninfoAnnouncementService.java`（巨潮拉取，挑选启发式移植自内核 skill 且有单测锁定）；skill `backend/skills/shareholder-meeting-verification/`。执行链路：面板 start 接口返回 prompt（以触发词「股东大会核查」开头）→ project-overview 经 `ChatInterface.sendExternalPrompt`（expose）以 AGENT 模式发送 → skill 注入 → AI 用 extract_file_text/run_python/write_docx（带 parentFolderId）产出核查底稿表与法律意见书到 04/05 子目录。**地雷**：pinnedSkillId 只裁剪工具不注入 prompt，触发词必须在 prompt 文本里；ASK 模式跳过注入。
 
-**上市路径选择（Skill 型）**：`backend/skills/listing-pathway/`（skill.yml + prompt.md），仓库内唯一内置 skill。无独立面板，对话触发。
+**上市路径选择（Skill 型）**：`backend/skills/listing-pathway/`（skill.yml + prompt.md）。无独立面板，对话触发。
+
+**诉讼可视化**：面板 + skill + 专用工具三层齐备，详见 `.claude/agents/litigation-visual.md`。skill 在 `backend/skills/litigation-visual/`。
 
 **动态 JAR**：前端 `frontend/src/components/PluginPane.vue`（纯 iframe 壳：props url/pluginId，url 空则报"未配置入口地址"；加载哪个插件由父页面按 leftPaneKey + dynamicPlugins[].frontendEntry 决定）；后端 `service/ai/PluginService.java` + `controller/ai/PluginController.java`（/api/plugins）。
 
@@ -55,6 +57,26 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 裁剪只影响可见性、不拦分发（SkillRouter 类注释）。后果是：漏列的工具在**原生 function calling** 下模型压根看不见（永远不会用），但在 **XML 兜底协议**下模型凭 system_prompt 的记忆写出 `<tool_code>` 仍能被分发成功。**同一个 skill 的能力边界因此取决于当前模型走哪套协议**——这类 bug 在换模型时才暴露，排查时先看协议再看白名单。
 
 2026-08 实例：两个自带 skill（`shareholder-meeting-verification`、`listing-pathway`）都漏了 `dispatch_subtask`，而它们恰好是 `prompts/system_prompt.md` 第 6.5 节明确要委派子 Agent 的长程任务。已补上，并由回放评测用例 `skill-shareholder-meeting-dispatch-subtask-visible`（`backend/src/test/resources/ai-eval/cases/cases-skill.json`）守住「skill 命中时 dispatch_subtask 在可见工具集里」。新增 skill 时如果是长程任务，照抄这两份的 allowed_tools 结尾一项。
+
+## skill 目录：可写 vs 只读内置（2026-08）
+
+`SkillRegistry` 扫**两个**目录：
+
+1. `ai.skills.dir`（默认相对目录 `skills`，**可写**）——广场安装/卸载的落点。
+   打包态后端 cwd 是用户数据目录，所以它解析到 `<userData>/skills`。
+2. `ai.skills.builtin-dir`（**只读**，绝对路径）——随发行版分发的内置 skill。
+   桌面端用 `AI_SKILLS_BUILTIN_DIR` 注入 `Resources/skills`；dev 态留空。
+
+**先扫可写目录**：id 去重是「先扫到优先」，于是广场装的同 id skill 能覆盖随包内置的
+那份——内置 skill 出问题可以走广场热修，不必等客户端发版。
+
+**历史坑（v0.11.1 及以前）**：`backend/skills/` 从未进过安装包，而打包态 `skills`
+相对目录解析到一个空目录——上市路径与股东大会核查两个内置 skill **在发行版里根本不
+存在，只在 dev 生效**。已实证（发行版 Resources 下无任何 skill 痕迹）。修复即上面的
+双目录 + extraResources。`SkillRegistryTest` 有六条测试钉住这套语义。
+
+内置 skill 的 `allowed_tools` 是否都是真实工具名，由 `BuiltinSkillsTest` 反射扫
+`@Tool` 方法名逐条核对——上面那条「部分写错更阴险」的地雷从此会在 CI 里红。
 
 ## 启停存储与过滤
 

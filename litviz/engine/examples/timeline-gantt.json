@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "layout": "proportional_gantt",
+  "title_text": "担保期间与诉讼时效比对图",
+  "axis": {
+    "mode": "proportional_year",
+    "start": "2015/01/01",
+    "end": "2025/12/31"
+  },
+  "spans": [
+    {
+      "id": "B1",
+      "label_text": "主债权1",
+      "from": "2015/11/03",
+      "to": "2016/11/03",
+      "emphasis": false
+    },
+    {
+      "id": "B2",
+      "label_text": "保证期间1",
+      "from": "2016/10/23",
+      "to": "2018/10/22",
+      "emphasis": false
+    },
+    {
+      "id": "B3",
+      "label_text": "主债权2",
+      "from": "2016/11/04",
+      "to": "2017/05/04",
+      "emphasis": false
+    },
+    {
+      "id": "B4",
+      "label_text": "保证期间2",
+      "from": "2017/05/05",
+      "to": "2019/05/04",
+      "emphasis": false
+    },
+    {
+      "id": "B5",
+      "label_text": "破产重整",
+      "from": "2019/12/23",
+      "to": "2020/10/30",
+      "emphasis": false
+    },
+    {
+      "id": "B6",
+      "label_text": "原《担保法解释》规定的行权时间",
+      "from": "2020/10/30",
+      "to": "2021/04/30",
+      "emphasis": false
+    },
+    {
+      "id": "B7",
+      "label_text": "最保守起算的诉讼时效",
+      "from": "2020/10/30",
+      "to": "2023/10/29",
+      "emphasis": true,
+      "directional": false
+    }
+  ],
+  "points": [
+    {
+      "id": "E1",
+      "label_text": "债权转让",
+      "date": "2017/06/27",
+      "label_level": 0,
+      "label_side": "right",
+      "emphasis": false
+    },
+    {
+      "id": "E2",
+      "label_text": "转让公告",
+      "date": "2017/07/28",
+      "label_level": 1,
+      "label_side": "left",
+      "emphasis": false
+    },
+    {
+      "id": "E3",
+      "label_text": "原告提起本诉",
+      "date": "2025/02/20",
+      "label_level": 0,
+      "label_side": "left",
+      "emphasis": true
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim",
+    "color_note": "原图破产重整为深蓝，按去蓝规则改为中性灰；主债权原为红色，按'红=唯一重点'改为灰，重点上移至诉讼时效",
+    "emphasis_note": "本次以'最保守起算的诉讼时效'为唯一深红重点(带箭头),并保留'原告提起本诉'为红色参考竖线——两者共同呈现'本诉是否超诉讼时效'这一核心争点;待用户确认",
+    "uncertainties": [
+      "各期间起止日期依原图文字逐字保留;轴按比例后端点已落在对应日期竖线"
+    ]
+  },
+  "checkpoint": {
+    "emphasis_source": "user",
+    "confirmed": true
+  }
+}

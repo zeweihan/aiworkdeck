@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "diagram_type": "flowchart",
+  "layout": "graphviz_flow",
+  "title_text": "中文ID",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "起点",
+      "kind": "terminal",
+      "title": "开始"
+    },
+    {
+      "id": "步骤 A",
+      "kind": "step",
+      "title": "处理"
+    },
+    {
+      "id": "判断-1",
+      "kind": "decision",
+      "title": "是否通过？"
+    }
+  ],
+  "edges": [
+    {
+      "from": "起点",
+      "to": "步骤 A"
+    },
+    {
+      "from": "步骤 A",
+      "to": "判断-1",
+      "label": "下一步"
+    }
+  ]
+}

@@ -18,12 +18,33 @@
     },
     "expect": {
       "toolCalls": [
-        { "name": "law_search", "argsContain": { "query": "科创板" } }
+        {
+          "name": "law_search",
+          "argsContain": {
+            "query": "科创板"
+          }
+        }
       ],
-      "structureContains": ["<process", "<final>"],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
       "bubbleEndStatus": "finished",
-      "offeredToolsInclude": ["law_search", "law_search_keyword", "get_law_article", "search_web", "write_docx", "read_document", "dispatch_subtask"],
-      "offeredToolsExclude": ["doc_open_file", "pptx_generate", "write_file", "run_python"]
+      "offeredToolsInclude": [
+        "law_search",
+        "law_search_keyword",
+        "get_law_article",
+        "search_web",
+        "write_docx",
+        "read_document",
+        "dispatch_subtask"
+      ],
+      "offeredToolsExclude": [
+        "doc_open_file",
+        "pptx_generate",
+        "write_file",
+        "run_python"
+      ]
     }
   },
   {
@@ -39,10 +60,69 @@
     ],
     "expect": {
       "toolCalls": [],
-      "structureContains": ["<final>"],
+      "structureContains": [
+        "<final>"
+      ],
       "bubbleEndStatus": "finished",
-      "offeredToolsInclude": ["dispatch_subtask", "extract_file_text", "search_project_files", "write_docx", "read_document"],
-      "offeredToolsExclude": ["law_search", "pptx_generate", "doc_open_file"]
+      "offeredToolsInclude": [
+        "dispatch_subtask",
+        "extract_file_text",
+        "search_project_files",
+        "write_docx",
+        "read_document"
+      ],
+      "offeredToolsExclude": [
+        "law_search",
+        "pptx_generate",
+        "doc_open_file"
+      ]
+    }
+  },
+  {
+    "id": "skill-litigation-visual-tools-visible",
+    "title": "诉讼可视化 Skill 命中：出图三件套与抽取工具都在可见集里，且不该出现的被裁掉",
+    "category": "skill",
+    "protocol": "xml",
+    "userInput": "帮我把这个案子的材料做成一张案件时间轴",
+    "turns": [
+      {
+        "text": "<process name=\"查阅制图规范\"><tool_code>litigation_reference(name=\"extraction\")</tool_code></process>"
+      },
+      {
+        "text": "<final>已按事实经过整理出 7 个节点，正在生成语义地图；出图前会把三个确认问题原样发给你。</final>"
+      }
+    ],
+    "toolStubs": {
+      "litigation_reference": "六步抽取纪律：1) 判定图种 2) 先找主干 3) 逐字转录 4) 剥掉装饰 5) 重点由用户定 6) 密集时主结构进图、旁注进 provenance"
+    },
+    "expect": {
+      "toolCalls": [
+        {
+          "name": "litigation_reference",
+          "argsContain": {
+            "name": "extraction"
+          }
+        }
+      ],
+      "structureContains": [
+        "<process",
+        "<final>"
+      ],
+      "bubbleEndStatus": "finished",
+      "offeredToolsInclude": [
+        "litigation_reference",
+        "litigation_checkpoint",
+        "litigation_render",
+        "extract_file_text",
+        "search_project_files",
+        "dispatch_subtask",
+        "read_document"
+      ],
+      "offeredToolsExclude": [
+        "law_search",
+        "pptx_generate",
+        "run_python"
+      ]
     }
   },
   {
@@ -58,9 +138,17 @@
     ],
     "expect": {
       "toolCalls": [],
-      "structureContains": ["<final>"],
+      "structureContains": [
+        "<final>"
+      ],
       "bubbleEndStatus": "finished",
-      "offeredToolsInclude": ["law_search", "doc_open_file", "pptx_generate", "write_docx", "search_web"]
+      "offeredToolsInclude": [
+        "law_search",
+        "doc_open_file",
+        "pptx_generate",
+        "write_docx",
+        "search_web"
+      ]
     }
   }
 ]

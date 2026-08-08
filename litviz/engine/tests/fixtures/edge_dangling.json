@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "layout": "graphviz_flow",
+  "title_text": "悬空边",
+  "nodes": [
+    {
+      "id": "a",
+      "title": "A"
+    }
+  ],
+  "edges": [
+    {
+      "from": "a",
+      "to": "ghost"
+    }
+  ]
+}

@@ -2434,3 +2434,35 @@ export function syncMemoryNow(repoKey) {
   return request({ url: `/api/memory-sync/${repoKey}/sync`, method: 'POST' })
 }
 
+
+// ==================== 诉讼可视化（litviz） ====================
+
+/** 出图环境自检：{available, reason, python, graphviz}。graphviz 只影响流程图一种布局。 */
+export function getLitigationVisualStatus() {
+  return request({ url: '/api/litigation-visual/status', method: 'GET' })
+}
+
+/** 本项目已生成的图（图廊）。识别靠后端的 wpsFileId 标记，用户自己放的 svg 不会混进来。 */
+export function getLitigationDiagrams(projectId) {
+  return request({ url: `/api/litigation-visual/projects/${projectId}/diagrams`, method: 'GET' })
+}
+
+/** 换视觉模式重画。用存下来的语义地图，内容一个字不会变。 */
+export function restyleLitigationDiagram(projectId, folderId, mode) {
+  return request({
+    url: `/api/litigation-visual/projects/${projectId}/restyle`,
+    method: 'POST',
+    data: { folderId, mode },
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+/** 取「开始出图」要发给 AI 的那句话（触发词由服务端保证在正文里）。 */
+export function getLitigationKickoffPrompt(projectId, payload) {
+  return request({
+    url: `/api/litigation-visual/projects/${projectId}/kickoff`,
+    method: 'POST',
+    data: payload,
+    header: { 'Content-Type': 'application/json' }
+  })
+}

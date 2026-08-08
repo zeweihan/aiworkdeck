@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "layout": "numbered_point_timeline",
+  "title_text": "缺字段",
+  "events": [
+    {
+      "id": "1",
+      "text": "没有band字段"
+    },
+    {
+      "id": "2",
+      "band": "down",
+      "date_text": "2025.01.01",
+      "text": "正常"
+    }
+  ]
+}

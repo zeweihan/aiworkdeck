@@ -301,6 +301,15 @@ export const fileOpenTabsMethods = {
       ]
       if (mediaTypes.includes(type)) return false
 
+      // 1b. 外部工具的源文件：交给别的软件打开，不是我们的编辑器能接的。
+      // 诉讼可视化一次出五种格式，其中 .drawio（draw.io/ProcessOn 的 XML）与
+      // .vsdx（Visio/WPS 流程图）都会带 wpsFileId 登记进文件树——不在这里挡掉的话，
+      // 下面那条 wpsFileId 兜底分支会判它们「可编辑」，于是 LOWA（引擎实测仅
+      // Writer + Calc）用 Writer 把 XML/二进制当文本导入，满屏乱码。
+      // 与上面 PDF 那条注释是同一类事故，只是换了扩展名。
+      const externalSourceTypes = ['drawio', 'vsdx', 'vsd']
+      if (externalSourceTypes.includes(type)) return false
+
       // 2. 排除 Markdown 文件，使用专门的 Markdown 预览组件
       if (type === 'md' || type === 'markdown') return false
 
