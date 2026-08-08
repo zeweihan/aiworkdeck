@@ -249,6 +249,27 @@
             <artifactId>activation</artifactId>
             <version>1.1.1</version>
         </dependency>
+
+        <!-- 诉讼可视化的 SVG→PNG 光栅化（LitigationPngService）。
+             为什么必须有位图：doc_insert_image 只收 jpg/png/gif/bmp/webp，不收 svg，
+             所以没有 PNG 的话，画好的诉讼图根本插不进用户正在写的起诉状——
+             那恰恰是这个功能的主线工作流。
+
+             为什么选 Batik 而不是外部光栅器：rsvg-convert / inkscape / soffice /
+             cairosvg 都要装原生程序，桌面端一个都不随包分发，靠它们等于「大多数
+             用户机器上没有 PNG」。Batik 是纯 Java，随 jar 走，任何装了本产品的
+             机器上行为一致。约 4.5 MB / 22 个 jar，相对 backend/lib 已有的体量可忽略。 -->
+        <dependency>
+            <groupId>org.apache.xmlgraphics</groupId>
+            <artifactId>batik-transcoder</artifactId>
+            <version>1.17</version>
+        </dependency>
+        <!-- PNG 编码器：不带它 PNGTranscoder 起不来（ImageIO 找不到注册的 writer） -->
+        <dependency>
+            <groupId>org.apache.xmlgraphics</groupId>
+            <artifactId>batik-codec</artifactId>
+            <version>1.17</version>
+        </dependency>
     </dependencies>
 
     <repositories>
