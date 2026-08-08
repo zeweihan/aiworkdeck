@@ -1,0 +1,74 @@
+{
+  "colors": {
+    "bg": "#FFFFFF",
+    "ink": "#1F2933",
+    "ink2": "#6B7280",
+    "note": "#9CA3AF",
+    "line": "#4B5563",
+    "line_soft": "#C3C9D2",
+    "grid": "#ECEEF1",
+    "card_fill": "#F3F4F6",
+    "card_stroke": "#D6DAE0",
+    "bar": "#D1D5DB",
+    "circle": "#374151",
+    "red": "#991B1B",
+    "white": "#FFFFFF"
+  },
+  "flow_colors": {
+    "line": "#6B7280",
+    "step_fill": "#E9ECEF",
+    "step_stroke": "#D6DAE0",
+    "decision_fill": "#FFFFFF",
+    "decision_stroke": "#9CA3AF",
+    "terminal_fill": "#374151",
+    "terminal_txt": "#FFFFFF"
+  },
+  "font_stack": "'PingFang SC','Microsoft YaHei','Noto Sans CJK SC','Noto Sans SC','Helvetica Neue',Arial,sans-serif",
+  "title_font": "'方正小标宋简体','思源宋体','Source Han Serif SC','Noto Serif CJK SC','华文中宋',serif",
+  "type_scale": {
+    "doc_title": 30,
+    "node_title": 17,
+    "subtitle": 13,
+    "note": 12,
+    "num": 22,
+    "axis_year": 14,
+    "edge_label": 13
+  },
+  "arrow": {
+    "path": "M 0 0 L 12 6 L 0 12 Z",
+    "size": 10,
+    "cover": 2.0,
+    "tip_clear": 3.5
+  },
+  "radius": {
+    "card": 12,
+    "capsule": 11,
+    "corner": 2.5,
+    "decision_hex_inset": 22
+  },
+  "dash": "6 4",
+  "stroke": {
+    "connector": 2,
+    "emphasis": 3,
+    "hairline": 1
+  },
+  "tuning": {
+    "_note": "Values arrived at by looking at the output, not derived from anything. They are correct for the figures in examples/; a very different map may want different ones. Named and gathered here so they can be found, explained and adjusted in ONE place instead of being hunted down inside seven renderers. Changing any of them changes every master figure — diff against the goldens afterwards.",
+    "flow_nodesep": 0.85,
+    "flow_ranksep": 1.1,
+    "flow_nodesep_note": "graphviz separation, in inches. Ranksep is the one that decides whether an edge label has room to sit beside its line.",
+    "guizang_title_ratio": 0.036,
+    "guizang_title_min": 30,
+    "guizang_title_max": 60,
+    "guizang_title_note": "the big centred title scales with canvas WIDTH so a wide figure does not get a title that looks lost; clamped so a narrow or enormous canvas stays sane.",
+    "guizang_top_margin": 60,
+    "guizang_top_margin_note": "天头 — blank reserved ABOVE the title. The canvas grows by this much and the content is translated down.",
+    "guizang_pad_x": 26,
+    "guizang_pad_y": 30,
+    "guizang_pad_note": "roomier inner padding than 奇川风 (16/13), which is what makes the modules read squarer in this mode.",
+    "guizang_decision_lift": 46,
+    "guizang_decision_lift_note": "extra height on a decision node so the diamond's edges meet its bounding box at the mid-points, which is where the connectors land — without it the arrowhead is eaten.",
+    "relation_side_label_bias": 0.9,
+    "relation_side_label_bias_note": "how far a side label sits from the outer end of its segment toward the middle. 1.0 would centre it."
+  }
+}

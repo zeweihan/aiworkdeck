@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "title_text": "工程款纠纷诉讼时效时间轴",
+  "layout": "dated_point_timeline",
+  "events": [
+    {
+      "id": "1",
+      "band": "up",
+      "date": "2013/6/20",
+      "date_text": "2013.06.20",
+      "text": "工程竣工验收合格",
+      "emphasis": false
+    },
+    {
+      "id": "2",
+      "band": "down",
+      "date": "2014/1/15",
+      "date_text": "2014.01.15",
+      "text": "约定付款期限届满，发包方未付",
+      "emphasis": false
+    },
+    {
+      "id": "3",
+      "band": "up",
+      "date": "2017/3/10",
+      "date_text": "2017.03.10",
+      "text": "发出催款函（诉讼时效中断）",
+      "emphasis": true
+    },
+    {
+      "id": "4",
+      "band": "down",
+      "date": "2020/5/8",
+      "date_text": "2020.05.08",
+      "text": "再次书面主张权利",
+      "emphasis": false
+    },
+    {
+      "id": "5",
+      "band": "up",
+      "date": "2023/9/1",
+      "date_text": "2023.09.01",
+      "text": "向法院提起诉讼",
+      "emphasis": false
+    },
+    {
+      "id": "6",
+      "band": "down",
+      "date": "2024/12/20",
+      "date_text": "2024.12.20",
+      "text": "一审判决支持工程款请求",
+      "emphasis": false
+    }
+  ],
+  "provenance": {
+    "numbering": "none",
+    "text_policy": "verbatim",
+    "date_note": "轴按真实日期成比例；浅灰长条上为年份刻度（间隔真实反映时间流逝）",
+    "emphasis_note": "AI建议：以『发出催款函（诉讼时效中断）』为深红重点，系时效是否届满的关键节点，待用户确认",
+    "uncertainties": []
+  },
+  "checkpoint": {
+    "emphasis_source": "user",
+    "confirmed": true
+  }
+}

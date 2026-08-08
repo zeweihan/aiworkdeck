@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "layout": "numbered_point_timeline",
+  "title_text": "超长文本",
+  "events": [
+    {
+      "id": "1",
+      "band": "up",
+      "date_text": "2025.01.01",
+      "text": "这是一段故意写得非常非常非常非常非常非常非常非常长的没有任何标点符号也没有空格的连续中文文本用来测试换行是否溢出",
+      "emphasis": true
+    }
+  ]
+}

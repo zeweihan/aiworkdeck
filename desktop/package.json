@@ -58,6 +58,27 @@
       {
         "from": "bundled/${os}-${arch}/pysvc.meta.json",
         "to": "pysvc.meta.json"
+      },
+      {
+        "from": "bundled/${os}-${arch}/graphviz",
+        "to": "graphviz"
+      },
+      {
+        "from": "../backend/skills",
+        "to": "skills",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**"
+        ]
+      },
+      {
+        "from": "../litviz",
+        "to": "litviz",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc"
+        ]
       }
     ],
     "mac": {

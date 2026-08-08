@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "layout": "comparison_table",
+  "title_text": "斯曼特案裁判要旨对比：最高法再审一 vs 最高检抗诉",
+  "columns": [
+    {
+      "id": "spc",
+      "title": "最高法 第一次再审"
+    },
+    {
+      "id": "spp",
+      "title": "最高检 抗诉",
+      "emphasis": true
+    }
+  ],
+  "rows": [
+    {
+      "dimension": "焦点一·催缴是否属勤勉义务",
+      "cells": {
+        "spc": "属于。参照旧公司法解释三第13条第4款认定催缴设立出资属董事勤勉义务，并无不当",
+        "spp": "同样认可属于董事应尽的勤勉义务"
+      }
+    },
+    {
+      "dimension": "焦点二·是否连带责任",
+      "cells": {
+        "spc": "构成连带清偿责任",
+        "spp": "不宜连带；应按过错承担侵权赔偿责任。将“相应责任”扩张解释为连带，属适用法律确有错误"
+      }
+    },
+    {
+      "dimension": "焦点三·责任范围",
+      "cells": {
+        "spc": "六董事全额连带 4,912,376.06 美元",
+        "spp": "第一届董事按过错担责；第二届董事（决议不再出资后才任职）不承担责任"
+      }
+    }
+  ],
+  "provenance": {
+    "text_policy": "condensed_from_prose (operative terms verbatim)",
+    "source_count": {
+      "rows": 3
+    },
+    "emphasis_note": "最高检一栏为深红(最终被采纳的裁判逻辑)，待确认"
+  },
+  "checkpoint": {
+    "emphasis_source": "none",
+    "confirmed": true
+  }
+}

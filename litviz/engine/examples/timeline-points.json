@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "title_text": "担保纠纷案件事实经过时间轴",
+  "layout": "numbered_point_timeline",
+  "events": [
+    {
+      "id": "1",
+      "band": "up",
+      "date_text": "2025.03.10",
+      "text": "签订借款合同和保证承诺书",
+      "emphasis": false
+    },
+    {
+      "id": "2",
+      "band": "up",
+      "date_text": "2025.03.11",
+      "text": "甲转账20万给乙",
+      "emphasis": false
+    },
+    {
+      "id": "3",
+      "band": "down",
+      "date_text": "2025.09.10",
+      "text": "借款到期，乙未还款",
+      "emphasis": false
+    },
+    {
+      "id": "4",
+      "band": "up",
+      "date_text": "2025.10.15",
+      "text": "甲邮寄催款函，乙签收，丙拒收",
+      "emphasis": false
+    },
+    {
+      "id": "5",
+      "band": "down",
+      "date_text": "2026.02",
+      "text": "乙停业失联",
+      "emphasis": false
+    },
+    {
+      "id": "6",
+      "band": "up",
+      "date_text": "2026.04.10",
+      "text": "甲起诉乙和丙",
+      "emphasis": false
+    },
+    {
+      "id": "7",
+      "band": "down",
+      "date_text": "",
+      "text": "判决：法院判决丙承担连带责任",
+      "emphasis": true
+    }
+  ],
+  "provenance": {
+    "numbering": "preserved_from_source(1-7)",
+    "text_policy": "verbatim",
+    "emphasis_note": "原图无红色强调；节点7(判决结果)由本次建议以深红标为重点，待用户确认，可移动或取消",
+    "uncertainties": [
+      "节点7原图无日期，保留为空"
+    ]
+  },
+  "checkpoint": {
+    "emphasis_source": "user",
+    "confirmed": true
+  }
+}

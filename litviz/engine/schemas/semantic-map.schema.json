@@ -1,0 +1,310 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MiaoQichuan/mqc-litigation-visual-redraw/semantic-map.schema.json",
+  "title": "mqc-litigation-visual-redraw semantic map",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "layout",
+    "title_text"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "diagram_type": {
+      "type": "string"
+    },
+    "layout": {
+      "_awd_patch_3": "见 litviz/PATCHES.md：上游这份枚举漏了 comparison_table，而 render.py 支持它、examples/ 里也有样例。schema 校验依赖可选的 jsonschema 包，没装就整段跳过，所以这个 bug 长期潜伏。",
+      "enum": [
+        "numbered_point_timeline",
+        "dated_point_timeline",
+        "proportional_gantt",
+        "graphviz_flow",
+        "graphviz_relation",
+        "relation_tree",
+        "comparison_table"
+      ]
+    },
+    "title_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "axis_unit": {
+      "enum": [
+        "year",
+        "month"
+      ]
+    },
+    "direction": {
+      "enum": [
+        "TB",
+        "LR"
+      ]
+    },
+    "engine": {
+      "enum": [
+        "dot",
+        "neato",
+        "fdp",
+        "twopi",
+        "circo"
+      ]
+    },
+    "arrows": {
+      "type": "boolean"
+    },
+    "tall_leaves": {
+      "type": "boolean"
+    },
+    "axis": {
+      "type": "object"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/event"
+      }
+    },
+    "spans": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/span"
+      }
+    },
+    "points": {
+      "type": "array"
+    },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/node"
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/edge"
+      }
+    },
+    "provenance": {
+      "type": "object"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "layout": {
+            "const": "dated_point_timeline"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "events"
+        ],
+        "properties": {
+          "events": {
+            "items": {
+              "required": [
+                "date",
+                "text"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layout": {
+            "const": "numbered_point_timeline"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "events"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layout": {
+            "const": "proportional_gantt"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "axis",
+          "spans"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "layout": {
+            "enum": [
+              "graphviz_flow",
+              "graphviz_relation",
+              "relation_tree"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "nodes"
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^.+$"
+    },
+    "event": {
+      "type": "object",
+      "required": [
+        "id",
+        "text"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "band": {
+          "enum": [
+            "up",
+            "down"
+          ]
+        },
+        "date": {
+          "type": "string"
+        },
+        "date_text": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "emphasis": {
+          "type": "boolean"
+        }
+      }
+    },
+    "span": {
+      "type": "object",
+      "required": [
+        "id",
+        "label_text",
+        "from",
+        "to"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "label_text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "emphasis": {
+          "type": "boolean"
+        },
+        "directional": {
+          "type": "boolean"
+        }
+      }
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "id",
+        "title"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "kind": {
+          "enum": [
+            "step",
+            "decision",
+            "terminal"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "note": {
+          "type": "string"
+        },
+        "level": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "emphasis": {
+          "type": "boolean"
+        },
+        "col": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "edge": {
+      "type": "object",
+      "required": [
+        "from",
+        "to"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "from": {
+          "$ref": "#/$defs/id"
+        },
+        "to": {
+          "$ref": "#/$defs/id"
+        },
+        "label": {
+          "type": "string"
+        },
+        "route": {
+          "enum": [
+            "straight",
+            "top",
+            "bottom"
+          ]
+        },
+        "emphasis": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

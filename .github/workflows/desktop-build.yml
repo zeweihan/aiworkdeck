@@ -134,6 +134,15 @@ jobs:
             --requirements kokoro-service/requirements.lock \
             --out desktop/bundled/mac-arm64
           du -sh desktop/bundled/mac-arm64/pysvc/kokoro-service/lib
+      - name: Bundle graphviz (macOS arm64)
+        if: runner.os == 'macOS'
+        run: |
+          # 诉讼可视化的流程图布局要 graphviz 的 dot（其余六种布局零原生依赖）。
+          # 只带布局引擎、不带任何渲染后端（我们只用 -Tplain），闭包约 4 MB。
+          brew install graphviz
+          node desktop/scripts/prepare-graphviz.js \
+            --from "$(brew --prefix graphviz)" \
+            --out desktop/bundled/mac-arm64
       - name: Bundle backend (Windows x64)
         if: runner.os == 'Windows'
         shell: bash
@@ -172,6 +181,16 @@ jobs:
             --requirements kokoro-service/requirements.lock \
             --out desktop/bundled/win-x64
           du -sh desktop/bundled/win-x64/pysvc/kokoro-service/lib
+      - name: Bundle graphviz (Windows x64)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # 同 macOS 那步。Windows 上 DLL 在 exe 同目录解析，不需要重定位，
+          # 整份 bin/ 拷走即可（约几 MB）。
+          choco install graphviz --no-progress -y
+          node desktop/scripts/prepare-graphviz.js \
+            --from "/c/Program Files/Graphviz" \
+            --out desktop/bundled/win-x64
       - name: Sign bundled backend natives (macOS)
         if: runner.os == 'macOS'
         env:

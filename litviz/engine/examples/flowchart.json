@@ -1,0 +1,180 @@
+{
+  "schema_version": 1,
+  "diagram_type": "flowchart",
+  "layout": "graphviz_flow",
+  "title_text": "担保纠纷案件法律流程",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "n1",
+      "kind": "terminal",
+      "title": "【起点】甲乙签订借款合同，丙提供连带责任保证"
+    },
+    {
+      "id": "n2",
+      "kind": "step",
+      "title": "甲依约放款，乙到期未还款"
+    },
+    {
+      "id": "n3",
+      "kind": "decision",
+      "title": "【决策】甲是否催款？"
+    },
+    {
+      "id": "n4",
+      "kind": "step",
+      "title": "甲向乙、丙发催款函"
+    },
+    {
+      "id": "n5",
+      "kind": "step",
+      "title": "a. 乙签收催款函，但仍不还款"
+    },
+    {
+      "id": "n6",
+      "kind": "step",
+      "title": "b. 丙拒收催款函"
+    },
+    {
+      "id": "n7",
+      "kind": "step",
+      "title": "丙、乙均未履行还款义务"
+    },
+    {
+      "id": "n8",
+      "kind": "step",
+      "title": "【操作】甲向法院起诉"
+    },
+    {
+      "id": "n9",
+      "kind": "step",
+      "title": "【开庭】a. 乙缺席／无正当理由拒不到庭"
+    },
+    {
+      "id": "n10",
+      "kind": "step",
+      "title": "【开庭】b. 丙出庭，提出抗辩",
+      "lines": [
+        "(1) 未收到催款函",
+        "(2) 不知是连带保证"
+      ]
+    },
+    {
+      "id": "n11",
+      "kind": "step",
+      "title": "【法院审理】查明事实",
+      "lines": [
+        "借款合同、保证合同有效；",
+        "甲已在保证期间内通过邮寄方式向丙主张权利，丙拒收不影响效力；",
+        "认定丙的抗辩理由不成立。"
+      ],
+      "emphasis": true
+    },
+    {
+      "id": "n12",
+      "kind": "step",
+      "title": "【判决】",
+      "lines": [
+        "a. 判令乙偿还本金及利息；",
+        "b. 判令丙对乙的全部债务承担连带清偿责任"
+      ],
+      "emphasis": true
+    },
+    {
+      "id": "n13",
+      "kind": "step",
+      "title": "【执行】若乙未履行，甲可申请强制执行丙的财产"
+    },
+    {
+      "id": "n14",
+      "kind": "step",
+      "title": "【追偿】丙承担保证责任后，有权向乙追偿"
+    },
+    {
+      "id": "n15",
+      "kind": "terminal",
+      "title": "【终点】案件执行完毕或追偿完成"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1",
+      "to": "n2"
+    },
+    {
+      "from": "n2",
+      "to": "n3"
+    },
+    {
+      "from": "n3",
+      "to": "n4",
+      "label": "是"
+    },
+    {
+      "from": "n4",
+      "to": "n5"
+    },
+    {
+      "from": "n4",
+      "to": "n6"
+    },
+    {
+      "from": "n5",
+      "to": "n7"
+    },
+    {
+      "from": "n6",
+      "to": "n7"
+    },
+    {
+      "from": "n7",
+      "to": "n8"
+    },
+    {
+      "from": "n8",
+      "to": "n9"
+    },
+    {
+      "from": "n8",
+      "to": "n10"
+    },
+    {
+      "from": "n9",
+      "to": "n11"
+    },
+    {
+      "from": "n10",
+      "to": "n11"
+    },
+    {
+      "from": "n11",
+      "to": "n12"
+    },
+    {
+      "from": "n12",
+      "to": "n13"
+    },
+    {
+      "from": "n13",
+      "to": "n14"
+    },
+    {
+      "from": "n14",
+      "to": "n15"
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim",
+    "tidy_note": "原图连线不自洽，已在不改法律含义前提下理顺为单一连贯流程；文字逐字保留",
+    "emphasis_note": "AI判断：以【法院审理】认定丙抗辩不成立(理由)与【判决】丙连带清偿(结论)两处为深红重点，构成本案裁判核心；每图深红控制在1-2处",
+    "uncertainties": [
+      "原图绿色菱形仅书『决策』二字、无判断标准，作为无信息噪声已略去",
+      "原图另有一独立『追偿』菱形，与末尾追偿步骤重复，已合并",
+      "【法院审理】原文有疑似OCR噪声『查查嫖审理』，此处取实质认定内容，前缀存疑待确认"
+    ]
+  },
+  "checkpoint": {
+    "emphasis_source": "user",
+    "confirmed": true
+  }
+}

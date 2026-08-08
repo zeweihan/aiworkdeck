@@ -133,6 +133,27 @@ function spawnEnv(ctx) {
     if (!env.EXTERNAL_TTS_PROVIDER) env.EXTERNAL_TTS_PROVIDER = 'local'
     env.EXTERNAL_TTS_LOCAL_BASE_URL = 'http://127.0.0.1:' + ctx.ports['kokoro-service']
   }
+  // 打包态资源定位。dev 态一律不注入：后端 cwd 是 backend/，自己就能按相对路径找到
+  // skills/ 与 ../litviz，注入反而会把开发中的改动指到别处去。
+  if (ctx.packaged) {
+    const res = ctx.resourcesPath
+    // 随发行版分发的只读内置 skill 目录。打包态后端 cwd 是用户数据目录，
+    // ai.skills.dir 的相对值 'skills' 会解析到 <userData>/skills（广场安装落点），
+    // 内置 skill 必须另指一条只读路径过去——v0.11.1 以前没有这一条，
+    // backend/skills/ 压根没进过安装包，两个内置 skill 在发行版里等于不存在。
+    if (!env.AI_SKILLS_BUILTIN_DIR) {
+      env.AI_SKILLS_BUILTIN_DIR = path.join(res, 'skills')
+    }
+    // 诉讼可视化引擎（litviz）与它要用的解释器。引擎是纯 stdlib，
+    // 直接复用已经为 pysvc 打进来的那个 Python 3.11，不额外带运行时。
+    if (!env.LITVIZ_DIR) env.LITVIZ_DIR = path.join(res, 'litviz')
+    if (!env.AWD_PYTHON_HOME) env.AWD_PYTHON_HOME = path.join(res, 'python')
+    // graphviz 只有流程图布局要用；没打进来时留空，后端会如实降级报缺。
+    const gvBin = path.join(res, 'graphviz', 'bin')
+    if (!env.LITVIZ_GRAPHVIZ_DIR && fs.existsSync(gvBin)) {
+      env.LITVIZ_GRAPHVIZ_DIR = gvBin
+    }
+  }
   // 匿名使用统计的版本标注（版本单一来源 desktop/package.json，经 electron app 读取）
   if (!env.AWD_APP_VERSION) {
     try { env.AWD_APP_VERSION = require('electron').app.getVersion() } catch (e) { /* 非 electron 环境跳过 */ }
