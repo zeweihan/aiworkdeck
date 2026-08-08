@@ -149,7 +149,7 @@ public class AuthAbuseGuard {
         });
     }
 
-    // ==================== 短信发送限频（按 IP；手机号维度在 SmsCodeStore） ====================
+    // ==================== 短信发送限频（按 IP；手机号维度在 VerificationCodeStore） ====================
 
     public void checkSmsSendRate(String ip) {
         if (localMode) return;

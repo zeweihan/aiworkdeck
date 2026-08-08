@@ -2,6 +2,7 @@ package com.checkba.service.auth;
 
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.mail.MailAuthService;
 import com.checkba.service.sms.SmsAuthService;
 import com.checkba.service.totp.TotpService;
 import lombok.RequiredArgsConstructor;
@@ -17,8 +18,9 @@ import java.time.LocalDateTime;
  * 任何一条漏了都等于没设闸。新增第三条密码入口时也只接这一个服务。
  *
  * <h3>方式选择</h3>
- * TOTP 优先于短信：零成本、无国界、不受运营商报备与 SIM 交换影响。短信是大陆用户的
- * 习惯路径与未装认证器时的兜底。两者都没有则不拦（存量用户不受影响）。
+ * TOTP &gt; 邮箱 &gt; 短信。TOTP 零成本、无国界、不受运营商报备与 SIM 交换影响，因此最优先。
+ * **邮箱排在短信之前是成本决策**：短信按条计费，邮件几乎免费，绑了邮箱的用户没理由再走短信。
+ * 短信降为未绑邮箱时的兜底与大陆用户的习惯路径。三者都没有则不拦（存量用户不受影响）。
  */
 @Service
 @RequiredArgsConstructor
@@ -29,11 +31,14 @@ public class SecondFactorService {
         NONE,
         /** 认证器 App（RFC 6238）。 */
         TOTP,
+        /** 邮箱验证码。 */
+        MAIL,
         /** 短信验证码。 */
         SMS
     }
 
     private final TotpService totpService;
+    private final MailAuthService mailAuthService;
     private final SmsAuthService smsAuthService;
     private final UserRepository userRepository;
 
@@ -43,15 +48,22 @@ public class SecondFactorService {
         if (user.isTotpEnabled() && StringUtils.hasText(user.getTotpSecret())) {
             return Method.TOTP;
         }
+        if (mailAuthService.requiresCode(user)) {
+            return Method.MAIL;
+        }
         if (smsAuthService.requiresCode(user)) {
             return Method.SMS;
         }
         return Method.NONE;
     }
 
-    /** 提示前端往哪儿看：短信回脱敏号码，TOTP 回空串（码在用户手机的 App 里）。 */
+    /** 提示前端往哪儿看：短信/邮箱回脱敏后的目标，TOTP 回空串（码在用户手机的 App 里）。 */
     public String target(User user) {
-        return required(user) == Method.SMS ? SmsAuthService.maskPhone(user.getPhone()) : "";
+        return switch (required(user)) {
+            case SMS -> SmsAuthService.maskPhone(user.getPhone());
+            case MAIL -> MailAuthService.maskEmail(user.getVerifiedEmail());
+            default -> "";
+        };
     }
 
     /**
@@ -63,6 +75,7 @@ public class SecondFactorService {
     public void verify(User user, String code) {
         switch (required(user)) {
             case TOTP -> verifyTotp(user, code);
+            case MAIL -> mailAuthService.verifyLoginCode(user, code);
             case SMS -> smsAuthService.verifyLoginCode(user, code);
             case NONE -> {
             }

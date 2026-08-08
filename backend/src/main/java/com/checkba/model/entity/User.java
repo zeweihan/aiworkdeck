@@ -44,10 +44,21 @@ public class User {
     private String avatarUrl;
 
     /**
-     * 用户邮箱（可选）
+     * 用户邮箱（可选，资料字段）。**未经验证、不唯一**，仅用于展示与联络，
+     * 不能用来定位账号——历史数据里存在重复与空串。登录身份见 {@link #verifiedEmail}。
      */
     @Column(length = 256)
     private String email;
+
+    /**
+     * 已验证邮箱（可选，邮箱验证码登录用；唯一，未绑定为 null）。
+     *
+     * <p>刻意与上面的 {@link #email} 分开而不是给它加唯一约束：{@code email} 是历史自由填写
+     * 的资料字段，直接加约束会在既有脏数据上失败。本列只由「收到验证码并验过」这一条路径写入，
+     * 语义与 {@link #phone} 完全对齐——两者都是「验证过因而可当身份」的联系方式。
+     */
+    @Column(length = 256, unique = true)
+    private String verifiedEmail;
 
     /**
      * 绑定手机号（可选，登录短信验证用；唯一，未绑定为 null）。
@@ -148,6 +159,14 @@ public class User {
 
     public void setEmail(String email) {
         this.email = email;
+    }
+
+    public String getVerifiedEmail() {
+        return verifiedEmail;
+    }
+
+    public void setVerifiedEmail(String verifiedEmail) {
+        this.verifiedEmail = verifiedEmail;
     }
 
     public String getPhone() {

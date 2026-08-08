@@ -1,4 +1,4 @@
-package com.checkba.service.sms;
+package com.checkba.service.auth;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -7,10 +7,10 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class SmsCodeStoreTest {
+class VerificationCodeStoreTest {
 
     private final AtomicLong clock = new AtomicLong(1_000_000L);
-    private final SmsCodeStore store = new SmsCodeStore(clock::get);
+    private final VerificationCodeStore store = new VerificationCodeStore(clock::get);
 
     @Test
     @DisplayName("签发-验证-核销：验证成功后同码立即失效（一次性）")
@@ -33,7 +33,7 @@ class SmsCodeStoreTest {
     @DisplayName("过期即失效（5 分钟 TTL）")
     void expiryInvalidates() {
         String code = store.issue("login", "13800000000");
-        clock.addAndGet(SmsCodeStore.TTL.toMillis() + 1);
+        clock.addAndGet(VerificationCodeStore.TTL.toMillis() + 1);
         assertFalse(store.verify("login", "13800000000", code));
     }
 
@@ -45,7 +45,7 @@ class SmsCodeStoreTest {
                 () -> store.issue("login", "13800000000"));
         assertTrue(e.getMessage().contains("频繁"));
 
-        clock.addAndGet(SmsCodeStore.RESEND_COOLDOWN.toMillis() + 1);
+        clock.addAndGet(VerificationCodeStore.RESEND_COOLDOWN.toMillis() + 1);
         String second = store.issue("login", "13800000000");
         if (!first.equals(second)) {
             assertFalse(store.verify("login", "13800000000", first), "重发后旧码应作废");
@@ -57,7 +57,7 @@ class SmsCodeStoreTest {
     @DisplayName("连续验错 5 次作废，正确码也救不回来（防在线爆破）")
     void attemptCapInvalidates() {
         String code = store.issue("login", "13800000000");
-        for (int i = 0; i < SmsCodeStore.MAX_ATTEMPTS; i++) {
+        for (int i = 0; i < VerificationCodeStore.MAX_ATTEMPTS; i++) {
             assertFalse(store.verify("login", "13800000000", "000000".equals(code) ? "111111" : "000000"));
         }
         assertFalse(store.verify("login", "13800000000", code));
@@ -66,9 +66,9 @@ class SmsCodeStoreTest {
     @Test
     @DisplayName("单手机号日上限：第 11 条被拒，跨天窗口滚动后恢复")
     void dailyCapPerPhone() {
-        for (int i = 0; i < SmsCodeStore.MAX_PER_PHONE_PER_DAY; i++) {
+        for (int i = 0; i < VerificationCodeStore.MAX_PER_TARGET_PER_DAY; i++) {
             store.issue("login", "13800000000");
-            clock.addAndGet(SmsCodeStore.RESEND_COOLDOWN.toMillis() + 1);
+            clock.addAndGet(VerificationCodeStore.RESEND_COOLDOWN.toMillis() + 1);
         }
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> store.issue("login", "13800000000"));

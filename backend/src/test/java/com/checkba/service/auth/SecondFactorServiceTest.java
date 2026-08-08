@@ -20,6 +20,7 @@ class SecondFactorServiceTest {
 
     private UserRepository repo;
     private SmsAuthService sms;
+    private com.checkba.service.mail.MailAuthService mail;
     private TotpService totp;
     private SecondFactorService service;
 
@@ -27,8 +28,9 @@ class SecondFactorServiceTest {
     void setUp() {
         repo = mock(UserRepository.class);
         sms = mock(SmsAuthService.class);
+        mail = mock(com.checkba.service.mail.MailAuthService.class);
         totp = new TotpService();
-        service = new SecondFactorService(totp, sms, repo);
+        service = new SecondFactorService(totp, mail, sms, repo);
         when(repo.save(any())).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -60,6 +62,38 @@ class SecondFactorServiceTest {
                 "同时具备时必须选零成本无国界的 TOTP");
 
         assertEquals(SecondFactorService.Method.NONE, service.required(null));
+    }
+
+    @Test
+    @DisplayName("邮箱优先于短信——这是成本决策：绑了邮箱就别再花钱发短信")
+    void mailOutranksSms() {
+        User u = user(1);
+        when(sms.requiresCode(u)).thenReturn(true);
+        when(mail.requiresCode(u)).thenReturn(true);
+        assertEquals(SecondFactorService.Method.MAIL, service.required(u),
+                "两者都可用时必须走邮箱，否则这个功能不省钱");
+
+        when(mail.requiresCode(u)).thenReturn(false);
+        assertEquals(SecondFactorService.Method.SMS, service.required(u), "没绑邮箱才回落短信");
+
+        // TOTP 仍然压过两者
+        when(mail.requiresCode(u)).thenReturn(true);
+        u.setTotpEnabled(true);
+        u.setTotpSecret(totp.newSecret());
+        assertEquals(SecondFactorService.Method.TOTP, service.required(u));
+    }
+
+    @Test
+    @DisplayName("邮箱分支的校验落到 MailAuthService，且提示目标是脱敏邮箱")
+    void mailBranchDelegatesAndMasks() {
+        User u = user(1);
+        u.setVerifiedEmail("alice@gmail.com");
+        when(mail.requiresCode(u)).thenReturn(true);
+
+        assertEquals("a***@gmail.com", service.target(u));
+        service.verify(u, "123456");
+        verify(mail).verifyLoginCode(u, "123456");
+        verify(sms, never()).verifyLoginCode(any(), any());
     }
 
     @Test

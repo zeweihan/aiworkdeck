@@ -255,7 +255,7 @@ public class AuthController {
      *       失败锁定与 /login 共用同一套计数。</li>
      *   <li>{@code scene=bind}：需已登录会话，发往待绑定的新手机号。</li>
      * </ul>
-     * IP 维度限频在 AuthAbuseGuard，手机号维度冷却/日上限在 SmsCodeStore。
+     * IP 维度限频在 AuthAbuseGuard，手机号维度冷却/日上限在 VerificationCodeStore。
      */
     @PostMapping("/sms/send-code")
     public Map<String, Object> sendSmsCode(@RequestBody SmsSendCodeRequest request,
