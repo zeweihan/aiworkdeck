@@ -86,5 +86,19 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
      * 查询回收站文件（已删除）
      */
     List<ProjectFile> findByProjectIdAndIsDeletedTrueOrderByDeletedAtDesc(Long projectId);
+
+    /**
+     * 项目文件树骨架（排除软删除）：只取统计需要的四列，不 hydrate 实体、不传文件内容。
+     * 行形状 [id(Long), parentId(Long), isFolder(Boolean), name(String)]。
+     *
+     * 概览页统计条要剔除 __staging_area__ 与 AI Assistant Files 的整棵子树，
+     * 派生 count 方法做不到递归，因此一次取回骨架、由服务层在内存里走一遍，
+     * 对外仍然只发两个整数。不要拿它当文件树接口用。
+     */
+    @org.springframework.data.jpa.repository.Query(
+            "SELECT pf.id, pf.parentId, pf.isFolder, pf.name FROM ProjectFile pf "
+            + "WHERE pf.projectId = :projectId AND pf.isDeleted = false")
+    List<Object[]> findTreeSkeletonByProjectId(
+            @org.springframework.data.repository.query.Param("projectId") Long projectId);
 }
 
