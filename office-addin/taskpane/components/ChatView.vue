@@ -25,6 +25,21 @@
             <span>{{ msg.text }}</span>
             <span v-if="msg.streaming" class="cursor"></span>
           </div>
+          <!-- 反问选项：正文已在上面的气泡里（解析器把 <question> 正文并进主文本），
+               选项刻意不进正文以免显示两遍，所以必须在这里渲染成按钮，否则用户
+               看得到问题、看不到备选项。窄栏纵向堆叠；选项之间不分主次——它们是
+               互斥的平级候选，给一个主色按钮会诱导用户点第一个。
+               只有最末一条未作答的可点（sealStaleQuestions 已封掉旧的）。 -->
+          <div v-if="msg.question && msg.question.options.length" class="question-options">
+            <button
+              v-for="(opt, oi) in msg.question.options"
+              :key="oi"
+              class="option-btn"
+              :disabled="msg.question.answered || streaming"
+              @click="answerQuestion(opt)"
+            >{{ opt }}</button>
+            <span v-if="msg.question.answered" class="option-answered">已回答</span>
+          </div>
           <div v-if="msg.error" class="msg-error">{{ msg.error }}</div>
         </template>
       </div>
@@ -59,7 +74,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import {
   messages, input, streaming, reconnecting, banner, notice, includeDocument, scrollSignal,
-  activateSession, send as sendMessage, stop as stopRun, newConversation
+  activateSession, send as sendMessage, stop as stopRun, newConversation,
+  answerQuestion
 } from '../lib/chatSession.js'
 
 /**
@@ -195,6 +211,42 @@ function stop() {
   margin-top: 4px;
   color: var(--awd-danger);
   font-size: 12px;
+}
+
+/* 反问选项：任务窗格很窄，纵向堆叠而不是横排挤成两行 */
+.question-options {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.option-btn {
+  max-width: 92%;
+  padding: 6px 11px;
+  border: 1px solid var(--awd-border);
+  border-radius: 8px;
+  background: var(--awd-surface);
+  color: var(--awd-text);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.option-btn:hover:not(:disabled) {
+  border-color: var(--awd-primary);
+  color: var(--awd-primary);
+}
+
+.option-btn:disabled {
+  color: var(--awd-text-secondary);
+  cursor: default;
+}
+
+.option-answered {
+  color: var(--awd-text-secondary);
+  font-size: 11px;
 }
 
 .cursor {

@@ -1777,7 +1777,9 @@ export default {
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
       const list = this.chatHistoryList || []
-      if (list.some(c => c.runStatus === 'PAUSED' || c.runStatus === 'AWAITING_APPROVAL' || c.runStatus === 'INTERRUPTED')) return 'dot-attention'
+      // AWAITING_INPUT（模型反问等回答）与待审批同属「球在用户这边」，共用黄点
+      if (list.some(c => c.runStatus === 'PAUSED' || c.runStatus === 'AWAITING_APPROVAL'
+          || c.runStatus === 'AWAITING_INPUT' || c.runStatus === 'INTERRUPTED')) return 'dot-attention'
       if (list.some(c => c.runStatus === 'RUNNING' && c.conversationId !== this.currentConversationId)) return 'dot-running'
       if (list.some(c => c.unread)) return 'dot-unread'
       return ''
@@ -4695,10 +4697,11 @@ export default {
                 }
             } else {
                 // Fallback for legacy - populate aiMessages directly
+                // 契约 D：用户看 displayContent、为空回退 content（模型永远只看 content）
                 this.aiMessages = (msgs || []).map(m => ({
                     id: m.id,
                     role: m.role ? m.role.toLowerCase() : 'user',
-                    content: m.content
+                    content: m.displayContent || m.content
                 }))
             }
             this.showHistoryDrawer = false
@@ -4714,7 +4717,8 @@ export default {
     convDotClass(chat) {
         if (!chat) return ''
         if (chat.runStatus === 'RUNNING') return 'dot-running'
-        if (chat.runStatus === 'PAUSED' || chat.runStatus === 'AWAITING_APPROVAL' || chat.runStatus === 'INTERRUPTED') return 'dot-attention'
+        if (chat.runStatus === 'PAUSED' || chat.runStatus === 'AWAITING_APPROVAL'
+            || chat.runStatus === 'AWAITING_INPUT' || chat.runStatus === 'INTERRUPTED') return 'dot-attention'
         if (chat.runStatus === 'ERROR') return 'dot-error'
         if (chat.unread) return 'dot-unread'
         return ''
@@ -4725,6 +4729,10 @@ export default {
         if (chat.runStatus === 'PAUSED') return '待继续'
         if (chat.runStatus === 'INTERRUPTED') return '已中断'
         if (chat.runStatus === 'AWAITING_APPROVAL') return '待审批'
+        // 「待回答」必须与「待审批」分开：这是新增 AWAITING_INPUT（而不复用
+        // AWAITING_APPROVAL）的全部目的——用户要能在列表上分出「AI 在问我」
+        // 和「AI 要我点头」两件事
+        if (chat.runStatus === 'AWAITING_INPUT') return '待回答'
         if (chat.runStatus === 'ERROR') return '出错'
         if (chat.unread) return '已完成'
         return ''

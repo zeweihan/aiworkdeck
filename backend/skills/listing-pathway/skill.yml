@@ -28,13 +28,17 @@ triggers:
 # prompt 模板文件名（相对本目录）
 prompt: prompt.md
 
-# 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）
+# 工具白名单：命中后本轮 LLM 可见工具
+#   = allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（SkillRouter.ORCHESTRATION_TOOLS）
 # 四类：法律检索（law_*）、网络搜索（search_web/browse_url）、成文输出（write_docx）、委派（dispatch_subtask）
 # 基础工具集只有三个（read_document / list_files / query_memory，见 application.yml 的 ai.skills.base-tools），
 # 要用的工具必须在这里逐个列出——漏了就是「模型看不见 = 不会调用」。
 # dispatch_subtask 曾经漏列：逐条路径独立检索监管门槛正是 system_prompt.md 第 6.5 节
 # 要求委派的形态（多轮搜索/浏览、只需要结论），裁剪把它藏起来后，能不能用 sub-agent
 # 变成了「模型走原生 function calling 还是 XML 兜底协议」的偶然结果。
+# 编排类工具（todo_write / dispatch_subtask）恒定可见、裁剪碰不到，**不要**为了"保险"
+# 把 todo_write 也抄进下面的清单：回放评测用例 skill-orchestration-tools-not-trimmed 正是靠
+# 「todo_write 不在本清单里却仍可见」来守这条不变式，抄进来会让那条断言变成空断言。
 allowed_tools:
   - law_search
   - law_search_keyword
@@ -50,3 +54,5 @@ output: |
   最终交付一份结构化的《上市路径比较分析》：企业画像 → 可行路径筛选（含排除理由）→
   逐路径比较表（监管门槛/时间/成本/控制权影响/后续融资）→ 结论与初步建议。
   篇幅较长或用户明确要求成文时，用 write_docx 生成 Word 备忘录并在 <final> 中说明文件名。
+  例外：画像要素缺失命中 prompt 第 1 步「一次问完」判据时，本轮只输出一个 <question>
+  并停下等回答，不要为了凑交付而先给一份靠猜的比较分析。

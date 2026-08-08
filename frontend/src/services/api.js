@@ -409,6 +409,27 @@ export function performPptGeneration(payload) {
   });
 }
 
+/**
+ * 停止一个正在跑的后台任务（PPT 生成等长任务）。
+ *
+ * 后端 `POST /api/agent/tasks/cancel`，请求体 { conversationId, taskId }；
+ * 归属校验按 conversationId（与 GET /api/agent/tasks/active 同口径），
+ * 任务已经结束时返回 404「该任务已经结束，无需停止」。
+ *
+ * **调用方文案只许说「正在停止」**：取消只改任务簿记并广播 background_task_complete，
+ * 已经交给 pptx-service 的活儿会继续跑完（cancel(true) 打不断在途的 HTTP 调用）。
+ */
+export function cancelBackgroundTask(conversationId, taskId) {
+  return request({
+    url: '/api/agent/tasks/cancel',
+    method: 'POST',
+    data: { conversationId, taskId },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 获取 AI 公共配置（如默认供应商）
 export function getAiConfig() {
   return request({

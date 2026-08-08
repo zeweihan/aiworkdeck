@@ -75,15 +75,45 @@
                 />
             </div>
 
-            <!-- CASE 3: Tool Execution（单行：人性化名称 + 状态；原始代号收进 title 提示） -->
-            <div v-else-if="item.type === 'tool'" class="tool-row" :title="rawToolName(item.code)">
-                <div class="tool-content">
-                     <span class="tool-name">{{ formatToolName(item.code) }}</span>
+            <!-- CASE 3: Tool Execution（单行：人性化名称 + 状态；原始代号收进 title 提示）
+                 有输出时整行可点开看结果——这是本领域「可核验」的底线：AI 说「已核对 12 处
+                 股东名册」，律师必须能自己点开看那 12 处。默认收起（PR#180 线性密度口径），
+                 展开只能是用户主动动作。 -->
+            <div v-else-if="item.type === 'tool'" class="tool-block">
+                <div
+                  class="tool-row"
+                  :class="{ 'is-clickable': hasOutput(item) }"
+                  :title="hasOutput(item) ? rawToolName(item.code) + ' — 点击查看返回结果' : rawToolName(item.code)"
+                  @click="hasOutput(item) && toggleOutput(idx)"
+                >
+                    <div class="tool-content">
+                         <span class="tool-name">{{ formatToolName(item.code) }}</span>
+                    </div>
+                    <div class="tool-right">
+                         <div class="tool-status">
+                              <span v-if="item.status === 'loading'" class="status-loading">正在调用...</span>
+                              <span v-else-if="item.status === 'success'" class="status-success">已完成</span>
+                              <span v-else class="status-error">出错</span>
+                         </div>
+                         <div v-if="hasOutput(item)" class="output-chevron" :class="{ 'is-rotated': isOutputOpen(idx) }">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                               <polyline points="6 9 12 15 18 9"></polyline>
+                            </svg>
+                         </div>
+                    </div>
                 </div>
-                <div class="tool-status">
-                     <span v-if="item.status === 'loading'" class="status-loading">正在调用...</span>
-                     <span v-else-if="item.status === 'success'" class="status-success">已完成</span>
-                     <span v-else class="status-error">出错</span>
+
+                <div v-if="hasOutput(item) && isOutputOpen(idx)" class="tool-output">
+                    <!-- 子任务结果单独渲染：dispatch_subtask 的输出是 SubAgentResult 的 JSON，
+                         裸 JSON 对律师毫无意义。解析不出预期结构就退回纯文本（下方分支）。 -->
+                    <SubtaskResultCard v-if="subtaskResult(item)" :result="subtaskResult(item)" />
+                    <div v-else class="output-text">{{ outputText(item) }}</div>
+                    <!-- 截断标记由后端 SSE 侧加（AgentOrchestrator.toolOutputDisplayLimit 按
+                         工具分档：结果型工具 16000，其余 4000），必须明示：模型看到的是全文，
+                         这里没有。刻意不写具体字数——上限是分档的，写死数字就会说谎。 -->
+                    <div v-if="isTruncated(item)" class="output-truncated">
+                        输出过长，此处只显示前一部分；完整内容只有模型看到了。
+                    </div>
                 </div>
             </div>
 
@@ -107,6 +137,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import ThinkingCard from './ThinkingCard.vue'
+import SubtaskResultCard from './SubtaskResultCard.vue'
 import FileTypeIcon from '../FileTypeIcon.vue'
 import { toolDisplayName, toolRawName } from '@/utils/toolDisplayNames.js'
 
@@ -169,6 +200,52 @@ const formatToolName = (code) => {
 }
 
 const rawToolName = (code) => toolRawName(code)
+
+// ---- 工具返回结果的折叠区 ----
+// 后端一直把每个工具的输出以 <tool_output status=…> 发到前端（流式与历史都有，
+// 落在 item.output 上），此前面板从不渲染它。默认收起，按 idx 记开合状态
+// （items 只追加不重排，idx 稳定）。
+const openOutputs = ref({})
+
+const hasOutput = (item) => !!(item && item.output && String(item.output).trim())
+
+const outputText = (item) => String((item && item.output) || '').trim()
+
+const isOutputOpen = (idx) => !!openOutputs.value[idx]
+
+const toggleOutput = (idx) => {
+    openOutputs.value[idx] = !openOutputs.value[idx]
+}
+
+// 截断标记由 AgentOrchestrator.truncate 拼在 SSE 载荷末尾（历史里存的是全文，
+// 所以历史消息通常不会命中这一条）。
+const isTruncated = (item) => outputText(item).endsWith('...(截断)')
+
+// 子任务结果解析缓存：流式中 output 每个 token 都在变，不缓存会让
+// SubtaskResultCard 每帧都收到新对象引用而整卡重建。键是 output 原文，
+// 超过 8 条直接清空（一张过程卡不会有那么多子任务）。
+const subtaskCache = new Map()
+
+/** dispatch_subtask 的输出是 SubAgentResult 的 JSON；解析不出预期结构返回 null → 调用方退回纯文本 */
+const subtaskResult = (item) => {
+    const raw = outputText(item)
+    if (!raw || raw.charAt(0) !== '{') return null
+    if (subtaskCache.has(raw)) return subtaskCache.get(raw)
+    let parsed = null
+    try {
+        const obj = JSON.parse(raw)
+        // 只认「像 SubAgentResult」的对象：必须有 subtaskId，否则可能是别的工具返回的 JSON
+        if (obj && typeof obj === 'object' && !Array.isArray(obj) && typeof obj.subtaskId === 'string') {
+            parsed = obj
+        }
+    } catch (e) {
+        // 截断的 JSON、非 JSON 输出等一律退回纯文本展示，不许抛异常炸掉整个气泡
+        parsed = null
+    }
+    if (subtaskCache.size > 8) subtaskCache.clear()
+    subtaskCache.set(raw, parsed)
+    return parsed
+}
 
 const detectFile = (text) => {
     if (!text) return null
@@ -378,6 +455,10 @@ const isSecondaryContent = (text) => {
 }
 
 /* Tool Row */
+.tool-block {
+  width: 100%;
+}
+
 .tool-row {
   display: flex;
   align-items: center;
@@ -386,6 +467,63 @@ const isSecondaryContent = (text) => {
   background: #F8F9FA;
   border-radius: 5px;
   margin-left: 0;
+}
+
+.tool-row.is-clickable {
+  cursor: pointer;
+}
+
+.tool-row.is-clickable:hover {
+  background: #E9ECEF;
+}
+
+.tool-right {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+}
+
+.output-chevron {
+    color: #ADB5BD;
+    display: flex;
+    align-items: center;
+    transition: transform 0.2s ease;
+}
+
+.output-chevron.is-rotated {
+    transform: rotate(180deg);
+}
+
+/* 工具返回结果折叠区 */
+.tool-output {
+    margin: 3px 0 5px 0;
+    border: 1px solid #E9ECEF;
+    border-radius: 6px;
+    background: #ffffff;
+    overflow: hidden;
+}
+
+.output-text {
+    padding: 6px 8px;
+    font-family: 'SF Mono', Menlo, Consolas, monospace;
+    font-size: 11px;
+    line-height: 1.5;
+    color: #2C3338;
+    white-space: pre-wrap;
+    word-break: break-word;
+    /* 长输出自己滚，不把气泡撑爆 */
+    max-height: 240px;
+    overflow-y: auto;
+    overflow-x: auto;
+}
+
+.output-truncated {
+    padding: 4px 8px;
+    border-top: 1px solid #F1F3F5;
+    background: #F8F9FA;
+    font-size: 10px;
+    color: #6C757D;
 }
 
 .tool-content {

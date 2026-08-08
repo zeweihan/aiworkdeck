@@ -4,7 +4,7 @@
     "title": "上市路径 Skill 命中：法律检索照常分发 + 可见工具裁剪为白名单∪基础工具",
     "category": "skill",
     "protocol": "xml",
-    "userInput": "我们是一家芯片设计公司，尚未盈利，帮我比较一下走科创板还是港股18C的上市路径哪个更合适？",
+    "userInput": "我们是一家芯片设计公司，尚未盈利，目前是纯境内架构没有红筹搭建，帮我比较一下走科创板还是港股18C的上市路径哪个更合适？",
     "turns": [
       {
         "text": "<process name=\"检索科创板上市条件\"><tool_code>law_search(query=\"科创板 上市条件 未盈利企业 科创属性\")</tool_code></process>"
@@ -43,6 +43,25 @@
       "bubbleEndStatus": "finished",
       "offeredToolsInclude": ["dispatch_subtask", "extract_file_text", "search_project_files", "write_docx", "read_document"],
       "offeredToolsExclude": ["law_search", "pptx_generate", "doc_open_file"]
+    }
+  },
+  {
+    "id": "skill-orchestration-tools-not-trimmed",
+    "title": "Skill 命中：编排类工具恒定可见——todo_write 不在 listing-pathway 的 allowed_tools 也不在 base-tools 里，仍不许被裁掉",
+    "category": "skill",
+    "protocol": "xml",
+    "userInput": "帮我梳理一下我们这家公司可选的上市路径，先列个工作计划",
+    "turns": [
+      {
+        "text": "<final>已列出工作计划：一、补齐企业画像要素；二、按硬性门槛筛选候选路径；三、逐路径比较监管门槛/时间/成本/控制权影响/后续融资；四、给出推荐排序与前置动作。</final>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<final>"],
+      "bubbleEndStatus": "finished",
+      "offeredToolsInclude": ["todo_write", "dispatch_subtask", "law_search"],
+      "offeredToolsExclude": ["pptx_generate", "doc_open_file", "run_python"]
     }
   },
   {

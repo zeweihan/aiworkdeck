@@ -1,0 +1,102 @@
+[
+  {
+    "id": "question-with-options-awaits-input",
+    "title": "反问带选项：停机等回答，bubble_end status=awaiting_input（新状态，非 awaiting_approval）",
+    "category": "question",
+    "protocol": "xml",
+    "userInput": "帮我把这份股权转让协议里的违约责任条款改得对我方更有利",
+    "turns": [
+      {
+        "text": "<thinking>用户没说自己是转让方还是受让方，两种立场下违约责任的修改方向正好相反，必须先问。</thinking>\n<question>\n这份协议里您代表哪一方？违约责任条款往哪个方向改取决于立场，我不能替您假设。\n<option>我方是转让方</option>\n<option>我方是受让方</option>\n</question>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<question>", "<option>"],
+      "bubbleEndStatus": "awaiting_input"
+    }
+  },
+  {
+    "id": "question-open-ended-awaits-input",
+    "title": "反问不带选项（纯开放式提问）：同样停机等回答，不因缺 option 退化成正常收尾",
+    "category": "question",
+    "protocol": "xml",
+    "userInput": "帮我查一下这个案子的最新进展",
+    "turns": [
+      {
+        "text": "<thinking>项目里有多个案件材料，无法确定用户指的是哪一个。</thinking>\n<question>请提供案号或当事人名称：本项目材料里涉及三个不同案件，我无法确定您指的是哪一个。</question>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<question>"],
+      "bubbleEndStatus": "awaiting_input"
+    }
+  },
+  {
+    "id": "question-after-tool-call-awaits-input",
+    "title": "工具跑完后再反问：执行日志随本轮一并落库，且即使同轮还输出了 <final> 也按 awaiting_input 收尾",
+    "category": "question",
+    "protocol": "xml",
+    "userInput": "核对一下项目里这几份材料的签约主体名称是否一致",
+    "turns": [
+      {
+        "text": "<process name=\"检索项目材料\"><tool_code>search_project_files(fileNamePattern=\"*协议*.docx\")</tool_code></process>"
+      },
+      {
+        "text": "<thinking>两份材料的签约主体写法不同，以哪份为准只有用户能定。</thinking>\n<question>\n两份材料的签约主体写法不同（「××科技有限公司」与「××科技（北京）有限公司」），以哪一份为准？\n<option>以股权转让协议的写法为准</option>\n<option>以工商登记信息为准，我另行上传</option>\n</question>\n<final>已比对 3 份材料：除签约主体写法外，其余当事人名称、身份证号与住所地均一致。</final>"
+      }
+    ],
+    "toolStubs": {
+      "search_project_files": "股权转让协议.docx\n补充协议.docx\n付款确认书.docx"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "search_project_files", "argsContain": { "fileNamePattern": "协议" } }
+      ],
+      "structureContains": ["<process", "<question>", "<final>"],
+      "bubbleEndStatus": "awaiting_input"
+    }
+  },
+  {
+    "id": "question-same-turn-as-tool-call-stops-without-recursion",
+    "title": "同一轮既调工具又反问：工具照常执行，但不再递归下一轮（脚本只预录 1 轮，多要一轮即失败）",
+    "category": "question",
+    "protocol": "xml",
+    "userInput": "把项目里的合同都找出来，然后按我的要求改一版",
+    "turns": [
+      {
+        "text": "<process name=\"检索项目合同\"><tool_code>search_project_files(fileNamePattern=\"*合同*.docx\")</tool_code></process>\n<question>\n找到 2 份合同。您说的「按我的要求改」具体指哪一项要求？我没有在本会话里看到修改口径。\n<option>先按标准格式统一体例</option>\n<option>我马上补充修改要求</option>\n</question>"
+      }
+    ],
+    "toolStubs": {
+      "search_project_files": "采购合同.docx\n服务合同.docx"
+    },
+    "expect": {
+      "toolCalls": [
+        { "name": "search_project_files", "argsContain": { "fileNamePattern": "合同" } }
+      ],
+      "structureContains": ["<question>", "<tool_output"],
+      "bubbleEndStatus": "awaiting_input"
+    }
+  },
+  {
+    "id": "question-loses-to-implementation-plan-approval",
+    "title": "计划审批优先于反问：同轮既给 implementation_plan 又反问时收尾为 awaiting_approval（顺序契约）",
+    "category": "question",
+    "protocol": "xml",
+    "mode": "PLAN",
+    "userInput": "给我一个并购重组项目的整体实施计划",
+    "turns": [
+      {
+        "text": "<artifact type=\"implementation_plan\" name=\"并购重组实施计划（待定交割方式）\">阶段一：尽职调查（4周）\n阶段二：交易架构设计与税务筹划（2周）\n阶段三：协议起草与谈判（3周）\n阶段四：交割与工商变更（2周）</artifact>\n<question>交割方式您倾向股权转让还是资产收购？这会改变阶段二与阶段四的工作量。\n<option>股权转让</option>\n<option>资产收购</option>\n</question>"
+      }
+    ],
+    "expect": {
+      "toolCalls": [],
+      "structureContains": ["<artifact", "<question>"],
+      "artifact": { "type": "implementation_plan", "filenameContains": "并购重组实施计划" },
+      "bubbleEndStatus": "awaiting_approval"
+    }
+  }
+]

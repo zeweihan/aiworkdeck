@@ -27,9 +27,12 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -81,6 +84,18 @@ public class SubAgentService {
     private final AuxModelResolver auxModelResolver;
     private final TokenUsageService tokenUsageService;
     private final ExecutorService executor;
+
+    /**
+     * 正在跑的子任务登记簿：subtaskId → 句柄。只服务于「任务级取消」，
+     * {@link #dispatch} 返回前一定移除（finally），不做过期清理。
+     */
+    private final Map<String, RunningSubtask> running = new ConcurrentHashMap<>();
+
+    /**
+     * 一个在跑的子任务。conversationId 一并记下来是为了鉴权：
+     * 取消端点只允许停「自己会话里的」子任务，光凭一个 subtaskId 不足以授权。
+     */
+    private record RunningSubtask(String conversationId, Future<SubAgentResult> future) {}
 
     public SubAgentService(ToolRegistry toolRegistry,
                            ChatModelFactory chatModelFactory,
@@ -161,8 +176,13 @@ public class SubAgentService {
             }
         });
         Future<SubAgentResult> future = executor.submit(task);
+        // 登记后才可能被取消端点看见；先 submit 再 put 的窗口只会让「刚提交那一瞬的取消」失败，
+        // 用户重点一次即可，比先 put 再 submit（句柄里是 null future）安全
+        running.put(subtaskId, new RunningSubtask(
+                parentCtx != null ? parentCtx.conversationId() : null, future));
 
         SubAgentResult result;
+        boolean cancelledByUser = false;
         try {
             result = future.get(props.getTimeoutSeconds(), TimeUnit.SECONDS);
         } catch (TimeoutException e) {
@@ -173,16 +193,54 @@ public class SubAgentService {
             Thread.currentThread().interrupt();
             future.cancel(true);
             result = SubAgentResult.failure(subtaskId, "sub-agent interrupted", List.of(), 0);
+        } catch (CancellationException e) {
+            // 用户点了「停止子任务」（见 cancel）。回喂给模型的文案必须点明「是用户停的、不要自动重派」：
+            // 只说 failed 的话模型下一轮会立刻再 dispatch 一次，用户看到的是「点了停止反而又跑起来」。
+            cancelledByUser = true;
+            result = SubAgentResult.failure(subtaskId,
+                    "sub-agent was stopped by the user. Do NOT dispatch this subtask again automatically; "
+                            + "tell the user it stopped and ask how to proceed.", List.of(), 0);
         } catch (Exception e) {
             log.error("Sub-agent {} failed unexpectedly", subtaskId, e);
             result = SubAgentResult.failure(subtaskId,
                     "sub-agent failed: " + e.getMessage(), List.of(), 0);
+        } finally {
+            running.remove(subtaskId);
         }
 
+        // 停止走的仍是 failed 这个 stage（前端按 stage=='started' 二分 loading/done，
+        // 新造一个 stage 值只会多一处待同步的字面量），区别体现在给用户看的文案上
         sendProgress(parentCtx, subtaskId,
                 result.success() ? "succeeded" : "failed", 100,
-                result.success() ? "子任务完成" : "子任务失败：" + brief(result.error()));
+                result.success() ? "子任务完成"
+                        : cancelledByUser ? "子任务已停止" : "子任务失败：" + brief(result.error()));
         return result;
+    }
+
+    /**
+     * 任务级取消：停掉一个正在跑的子任务（「长任务可控」的一半——另一半是后台任务取消）。
+     *
+     * <p><b>只承诺「正在停止」，不承诺「立即停止」</b>：{@code cancel(true)} 打不断已经发出去的
+     * HTTP 读（OkHttp 的阻塞 read 不响应 interrupt），而 {@link #runLoop} 的中断检查在每轮开头，
+     * 所以最坏情况是白烧一次在途 LLM 调用后才停下。文案上不要写「已停止」。
+     *
+     * @param subtaskId      dispatch 时生成、随 subtask_progress 事件下发给前端的子任务 ID
+     * @param conversationId 调用方声明的会话；必须与该子任务登记的会话一致
+     * @return true = 已请求停止；false = 没有这个正在跑的子任务，或它不属于该会话
+     */
+    public boolean cancel(String subtaskId, String conversationId) {
+        if (subtaskId == null || conversationId == null) {
+            return false;
+        }
+        RunningSubtask handle = running.get(subtaskId);
+        // 控制器只验证了「调用方能用这个会话」，这里再验「这个子任务属于这个会话」：
+        // 两道合起来才挡得住「拿自己的会话 ID + 猜到的 subtaskId 去停别人的子任务」
+        if (handle == null || !conversationId.equals(handle.conversationId())) {
+            return false;
+        }
+        handle.future().cancel(true);
+        log.info("子任务 {} 收到停止请求（会话 {}）", subtaskId, conversationId);
+        return true;
     }
 
     /**

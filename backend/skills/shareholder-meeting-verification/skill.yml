@@ -17,7 +17,10 @@ triggers:
 # prompt 模板文件名（相对本目录）
 prompt: prompt.md
 
-# 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）
+# 工具白名单：命中后本轮 LLM 可见工具
+#   = allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（SkillRouter.ORCHESTRATION_TOOLS）
+# 下面清单里的 todo_write / dispatch_subtask 现在已被编排类工具集恒定放行、属于冗余，
+# 刻意保留：显式声明是自文档（删掉会让本文件读起来像"本 skill 不需要清单/不需要子 Agent"）。
 # 基础工具集只有三个（read_document / list_files / query_memory，见 application.yml 的 ai.skills.base-tools），
 # 所以凡是本 skill 要用的工具都必须在这里逐个列出——漏了就是「模型看不见 = 不会调用」。
 # dispatch_subtask 曾经漏列：本 skill 是 system_prompt.md 第 6.5 节明确要委派的长程任务
@@ -39,3 +42,5 @@ output: |
   1.「核查底稿_公司_届次.docx」——交叉核对底稿表（逐字段三源对照 + 议案三标签 + 表决复算，每项结论注明出处）
   2.「法律意见书_公司_届次.docx」——完整法律意见书
   <final> 中简述核查结论（一致项数量、发现的问题清单、【核实】事项），不要复述全文。
+  例外：命中 prompt「缺口处置」C 类时，开工前先输出一个 <question> 停下等回答，
+  本轮不产出这两份文件——前提没定就动笔等于返工。

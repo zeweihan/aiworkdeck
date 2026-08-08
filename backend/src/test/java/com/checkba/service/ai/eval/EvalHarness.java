@@ -119,10 +119,17 @@ public final class EvalHarness {
 
         List<SavedMessage> savedMessages = new CopyOnWriteArrayList<>();
         ProjectAiMessageService messageService = mock(ProjectAiMessageService.class);
+        // USER 消息落库走六参重载（契约 D：末位是 displayContent，缺省 null）。
+        // 编排器只调六参那一个，五参重载在这里不桩也无妨；但**两个都桩着**是刻意的——
+        // 哪天有人把调用点改回五参，评测不会因为「一条 USER 消息都没记录」而给出误导性的失败。
         doAnswer(inv -> {
             savedMessages.add(new SavedMessage(inv.getArgument(3), inv.getArgument(4)));
             return null;
         }).when(messageService).saveMessage(any(), any(), any(), any(), any());
+        doAnswer(inv -> {
+            savedMessages.add(new SavedMessage(inv.getArgument(3), inv.getArgument(4)));
+            return null;
+        }).when(messageService).saveMessage(any(), any(), any(), any(), any(), any());
         // ASSISTANT 消息走轮次级 upsert（首次插入返回行 ID，本轮内后续保存更新同一行）
         when(messageService.upsertAssistantMessage(any(), any(), any(), any(), any())).thenAnswer(inv -> {
             savedMessages.add(new SavedMessage("ASSISTANT", inv.getArgument(4)));

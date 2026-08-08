@@ -156,6 +156,7 @@ export async function activateSession({ settings, projectId }) {
     if (gen !== generation) return
     if (history.length) {
       messages.value = history.map(toLocalMessage)
+      sealStaleQuestions()
       bumpScroll()
     }
     // 本次建连属于「回灌」，首个 run_state 是权威状态（见 handleRunState）
@@ -194,24 +195,35 @@ async function preconnect() {
 
 /**
  * 后端 GET /api/ai/history 的一条记录 → 插件消息模型。
- * 字段：role(USER|ASSISTANT) / content。ASSISTANT 的 content 是带标签的整段文本
- * （<thinking>/<final>/<process>… 见 AgentStreamHandler 协议），用与流式渲染同一个
- * 解析器拆成正文与思考，标签种类保持一致。
+ * 字段：role(USER|ASSISTANT) / content / displayContent(可空)。
+ *
+ * USER 的正文取 `displayContent || content`：模型看 content（可能是回喂给模型的
+ * 长文案），用户看 displayContent（一句人话）——「发送内容 ≠ 显示内容」通道，
+ * 缺省为 null 时两者同源，与旧后端行为一致。
+ *
+ * ASSISTANT 的 content 是带标签的整段文本（<thinking>/<final>/<question>… 见
+ * AgentStreamHandler 协议），用与流式渲染同一个解析器拆成正文、思考与反问选项，
+ * 标签种类保持一致——窗格重建后反问的选项按钮也跟着回来。
  * 工具活动 chip 无法从落库正文还原（历史里没有 requestId/状态），故不回灌——宁缺毋假。
  */
 function toLocalMessage(row) {
   const content = row && row.content ? String(row.content) : ''
   const role = row && row.role ? String(row.role).toUpperCase() : 'USER'
-  if (role === 'USER') return { role: 'user', text: content }
+  if (role === 'USER') {
+    const display = row && row.displayContent ? String(row.displayContent) : ''
+    return { role: 'user', text: display || content }
+  }
   let text = ''
   let thinking = ''
+  let question = null
   const p = createTagStreamParser({
     onMainText: (t) => { text += t },
-    onThinkingText: (t) => { thinking += t }
+    onThinkingText: (t) => { thinking += t },
+    onQuestion: (q) => { question = q.options.length ? { options: q.options, answered: false } : null }
   })
   p.feed(content)
   p.flush()
-  return reactive({ role: 'assistant', text, thinking, streaming: false, error: '', tools: [] })
+  return reactive({ role: 'assistant', text, thinking, streaming: false, error: '', tools: [], question })
 }
 
 // ==================== SSE ====================
@@ -247,7 +259,9 @@ function disableDocDedup() {
  */
 function ensureAssistantBubble() {
   if (currentAssistant) return currentAssistant
-  const assistant = reactive({ role: 'assistant', text: '', thinking: '', streaming: true, error: '', tools: [] })
+  const assistant = reactive({
+    role: 'assistant', text: '', thinking: '', streaming: true, error: '', tools: [], question: null
+  })
   messages.value.push(assistant)
   currentAssistant = assistant
   attachParser(assistant)
@@ -257,7 +271,24 @@ function ensureAssistantBubble() {
 function attachParser(assistant) {
   parser = createTagStreamParser({
     onMainText: (t) => { assistant.text += t },
-    onThinkingText: (t) => { assistant.thinking += t }
+    onThinkingText: (t) => { assistant.thinking += t },
+    // 反问的选项：正文已经流进气泡，这里只挂备选答案给界面做按钮（无选项则不挂，
+    // 用户直接在输入框回答）。一轮里问第二次时后一次覆盖前一次——可点的只有最后一问。
+    onQuestion: (q) => {
+      assistant.question = q.options.length ? { options: q.options, answered: false } : null
+    }
+  })
+}
+
+/**
+ * 只有最末那条消息上的反问才可点：更早的反问后面已经跟了新消息，
+ * 留着按钮只会让人以为还能再选一次。与桌面端「仅最新一条助手消息可操作」同口径。
+ * 不传 all 时保留最末一条；all=true 表示用户已经作答，全部封掉。
+ */
+function sealStaleQuestions(all = false) {
+  const list = messages.value
+  list.forEach((m, i) => {
+    if (m.question && (all || i !== list.length - 1)) m.question.answered = true
   })
 }
 
@@ -284,7 +315,13 @@ function handleEvent(evt, dataStr) {
   } else if (evt === 'bubble_end') {
     if (parser) parser.flush()
     commitDocHash()
+    let status = ''
+    try { status = String(JSON.parse(dataStr).status || '') } catch (e) { /* 无 status 按普通收尾 */ }
     finishStreaming()
+    // awaiting_input：编排器为了反问主动停机，球在用户这边。输入框此时已解锁
+    // （答案就是新一轮普通用户消息），只补一行状态提示，别让人以为回答被吞了。
+    // notice 由 finishStreaming 清空，所以要放在它之后。
+    if (status.toLowerCase() === 'awaiting_input') notice.value = '等待你的回答，回答后 AI 继续'
   } else if (evt === 'error') {
     let msg = '执行出错'
     try { msg = JSON.parse(dataStr).message || msg } catch (e) { /* ignore */ }
@@ -312,25 +349,44 @@ function handleEvent(evt, dataStr) {
  *   3. send 建连（兜底重试，streaming=true）：streaming 已由 send 置起，
  *      首个 run_state 不能当终态看（后端可能还没标 RUNNING）。只有断线重连之后
  *      （everReconnected）才用它兜底解锁——断线期间可能漏掉了 bubble_end。
+ *
+ * 状态分两档，**不能合成一个 stillRunning**：
+ *   - generating（RUNNING/PAUSED）：后端在生成，锁输入等正文；
+ *   - awaitingUser（AWAITING_APPROVAL/AWAITING_INPUT）：轮次没结束但球在用户这边。
+ *     这一档**必须解锁输入**——插件任务窗格没有桌面端那种「继续」按钮，
+ *     答案/确认就是新一轮普通用户消息，锁着输入等于让用户永远答不上话。
+ * run_state 的 status 是枚举名（大写），bubble_end 用的是小写字面量，
+ * 这里统一大写后比对，免得两套拼写差异变成静默故障。
  */
 function handleRunState(dataStr) {
   let status = null
   try { status = JSON.parse(dataStr).status } catch (e) { /* ignore */ }
-  const stillRunning = status === 'RUNNING' || status === 'PAUSED' || status === 'AWAITING_APPROVAL'
+  const name = status ? String(status).toUpperCase() : ''
+  const generating = name === 'RUNNING' || name === 'PAUSED'
+  const awaitingUser = name === 'AWAITING_APPROVAL' || name === 'AWAITING_INPUT'
+  const awaitingHint = name === 'AWAITING_INPUT'
+    ? '等待你的回答，回答后 AI 继续'
+    : 'AI 等你确认后继续：把意见发过去即可'
 
   if (restorePending) {
     restorePending = false
-    if (stillRunning) {
+    if (generating) {
       streaming.value = true
       notice.value = '上一次的任务仍在进行中，正在接收后续回复……'
       adoptLastAssistantBubble()
+    } else if (awaitingUser) {
+      // 窗格重建后接回「等用户」的轮次：不锁输入，只提示球在自己这边
+      // （末条助手消息里的反问选项已由历史回灌还原成按钮）
+      notice.value = awaitingHint
     }
     return
   }
 
-  if (everReconnected && streaming.value && !stillRunning) {
+  if (everReconnected && streaming.value && !generating) {
     if (parser) parser.flush()
     finishStreaming()
+    // 断线期间漏掉了 bubble_end：解锁之后把「等用户」这一档的提示补回来
+    if (awaitingUser) notice.value = awaitingHint
   }
 }
 
@@ -435,19 +491,29 @@ function buildActiveContext(doc, hash) {
   return hash ? { ...doc, inlineContentHash: hash } : { ...doc }
 }
 
-export async function send() {
+/**
+ * 发一条消息。overrideText 非空字符串时这条消息不来自输入框（点反问选项作答），
+ * 此时不清空输入框——用户可能正打着别的内容，点个选项不该把草稿吞掉。
+ * 类型判断是必需的：模板里若直接把本函数绑到 @click，第一个实参会是事件对象。
+ */
+export async function send(overrideText) {
+  const override = typeof overrideText === 'string' ? overrideText : null
   banner.value = ''
+  // 「等你回答/等你确认」的提示随本轮发送作废，别悬在下一轮的流式过程里
+  notice.value = ''
   if (!ctx.settings || !isConfigured(ctx.settings)) return { needSettings: true }
   if (!ctx.projectId) {
     banner.value = '尚未选择项目：在顶部下拉中选一个项目'
     return { needSettings: false }
   }
-  const prompt = input.value.trim()
+  const prompt = (override === null ? input.value : override).trim()
   if (!prompt || streaming.value) return { needSettings: false }
 
   const settings = ctx.settings
   const projectId = ctx.projectId
-  input.value = ''
+  if (override === null) input.value = ''
+  // 用户已经作答（不管是点选项还是自己打字）：所有反问的按钮就此封掉
+  sealStaleQuestions(true)
   messages.value.push({ role: 'user', text: prompt })
 
   currentAssistant = null
@@ -494,6 +560,20 @@ export async function send() {
     finishStreaming()
   }
   return { needSettings: false }
+}
+
+/**
+ * 点击反问里的一个选项作答。
+ *
+ * 契约（与桌面端一致）：选项文字**原样**作为这轮的用户消息发出——它本来就短、
+ * 像用户自己打的，所以不拼装「我选择了……」这类机器口吻长句，也就不需要
+ * 「显示内容 ≠ 发送内容」通道的 displayText。答案是**新一轮普通用户消息**，
+ * 不是把上一轮唤醒（编排器侧刻意如此，见 AWAITING_INPUT 停机语义）。
+ */
+export async function answerQuestion(optionText) {
+  const text = (optionText || '').trim()
+  if (!text || streaming.value) return { needSettings: false }
+  return send(text)
 }
 
 export async function stop() {

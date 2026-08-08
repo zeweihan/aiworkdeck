@@ -11,6 +11,7 @@ import com.checkba.service.ai.tools.PdfTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.SubAgentTools;
+import com.checkba.service.ai.tools.TodoTools;
 import com.checkba.service.ai.tools.WebTools;
 
 import java.lang.reflect.Constructor;
@@ -46,6 +47,11 @@ final class RealToolBeans {
                 PptxTools.class,
                 PythonTools.class,
                 SubAgentTools.class,
+                // TodoTools 长期漏列：todo_write 在整个回放评测里根本没注册，
+                // 于是「skill 命中时清单工具是否可见」这类断言写了也是空的（工具名不存在，
+                // offeredToolsInclude 永远失败、offeredToolsExclude 永远通过）。
+                // 补进来后 skill-orchestration-tools-not-trimmed 才真正有意义。
+                TodoTools.class,
                 WebTools.class);
         List<AgentToolComponent> beans = new ArrayList<>();
         for (Class<? extends AgentToolComponent> type : toolClasses) {

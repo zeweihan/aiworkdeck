@@ -32,6 +32,7 @@ public class AiAgentController {
     private final com.checkba.service.ai.AgentRunStateService agentRunStateService;
     private final com.checkba.service.ProjectMemberService projectMemberService;
     private final com.checkba.service.ai.ClientCapabilityService clientCapabilityService;
+    private final com.checkba.service.ai.subagent.SubAgentService subAgentService;
 
     @org.springframework.beans.factory.annotation.Autowired
     public AiAgentController(SseEmitterService sseEmitterService,
@@ -42,7 +43,8 @@ public class AiAgentController {
                             com.checkba.service.ai.TodoListService todoListService,
                             com.checkba.service.ai.AgentRunStateService agentRunStateService,
                             com.checkba.service.ProjectMemberService projectMemberService,
-                            com.checkba.service.ai.ClientCapabilityService clientCapabilityService) {
+                            com.checkba.service.ai.ClientCapabilityService clientCapabilityService,
+                            com.checkba.service.ai.subagent.SubAgentService subAgentService) {
         this.sseEmitterService = sseEmitterService;
         this.agentOrchestrator = agentOrchestrator;
         this.messageService = messageService;
@@ -52,6 +54,7 @@ public class AiAgentController {
         this.agentRunStateService = agentRunStateService;
         this.projectMemberService = projectMemberService;
         this.clientCapabilityService = clientCapabilityService;
+        this.subAgentService = subAgentService;
     }
 
     /**
@@ -116,8 +119,9 @@ public class AiAgentController {
         todoListService.resendToFrontend(conversationId);
 
         // 告知前端此会话的运行状态（RUNNING=续流中 / PAUSED=渲染继续按钮 /
-        // AWAITING_APPROVAL=等审批 / null=本进程内没跑过）——切回会话重连时，
-        // 前端靠它决定展示「运行中」还是纯静态历史。
+        // AWAITING_APPROVAL=等审批 / AWAITING_INPUT=等用户回答模型的反问 /
+        // null=本进程内没跑过）——切回会话重连时，前端靠它决定展示「运行中」还是纯静态历史。
+        // 载荷用 AgentRunStateService.statusName() 原样透出枚举名（大写），新增状态无需改本处代码。
         String runStatus = agentRunStateService.statusName(conversationId);
         sseEmitterService.send(conversationId, "run_state",
                 "{\"status\":" + (runStatus == null ? "null" : "\"" + runStatus + "\"") + "}");
@@ -181,6 +185,60 @@ public class AiAgentController {
             log.error("Cancel failed", e);
             return ResponseEntity.status(500).body("{\"status\":\"error\", \"message\":\"Cancel failed\"}");
         }
+    }
+
+    /**
+     * 停止一个正在跑的子任务（长任务可控：只掐这一个子任务，主循环继续）。
+     *
+     * <p>与 /cancel/{conversationId} 的区别：那个掐整轮生成，这个只掐一个 dispatch_subtask，
+     * 主循环会拿到「用户停了这个子任务」的结果继续往下走——所以<b>不打运行状态点</b>：
+     * 会话仍是 RUNNING，没有新增终止分支（PR#173 契约要求的 mark 只针对轮次终态）。
+     *
+     * <p>文案只说「正在停止」：cancel(true) 打不断已经发出去的 HTTP 调用，
+     * 最坏浪费一次在途 LLM 调用后才真正停下（见 SubAgentService#cancel）。
+     */
+    @PostMapping("/subtask/cancel")
+    public ResponseEntity<?> cancelSubtask(@RequestBody SubtaskCancelRequest request,
+                                           @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!canUseConversation(request.getConversationId(), userId)) {
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+        }
+        // 第二道校验在服务里：子任务必须登记在这个会话名下（光有会话权限还不够）
+        boolean requested = subAgentService.cancel(request.getSubtaskId(), request.getConversationId());
+        if (!requested) {
+            return ResponseEntity.status(404)
+                    .body("{\"status\":\"error\", \"message\":\"该子任务已经结束，无需停止\"}");
+        }
+        log.info("Subtask cancel requested: conv={}, subtask={}, user={}",
+                request.getConversationId(), request.getSubtaskId(), userId);
+        return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"正在停止该子任务\"}");
+    }
+
+    /**
+     * 停止一个正在跑的后台任务（PPT 生成等）。
+     *
+     * <p>{@code BackgroundTaskService.cancelTask} 早就实现完整，但全仓一个调用方都没有——
+     * 前端的进度卡因此只能干等到超时。本端点把它接上。
+     *
+     * <p>同样只说「正在停止」：取消只改任务簿记并广播 background_task_complete，
+     * 已经交给 pptx-service 的活儿会继续跑完、文件照样落盘。
+     */
+    @PostMapping("/tasks/cancel")
+    public ResponseEntity<?> cancelBackgroundTask(@RequestBody TaskCancelRequest request,
+                                                  @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (!canUseConversation(request.getConversationId(), userId)) {
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+        }
+        boolean cancelled = backgroundTaskService.cancelTask(request.getTaskId(), request.getConversationId());
+        if (!cancelled) {
+            return ResponseEntity.status(404)
+                    .body("{\"status\":\"error\", \"message\":\"该任务已经结束，无需停止\"}");
+        }
+        log.info("Background task cancel requested: conv={}, task={}, user={}",
+                request.getConversationId(), request.getTaskId(), userId);
+        return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"正在停止该任务\"}");
     }
 
     /**
@@ -255,8 +313,8 @@ public class AiAgentController {
         // Asynchronous execution via PptxTools (which handles background task creation internally)
         // 平台通道按用户计费：后台线程上显式建立身份作用域，否则多租户下取不到 key
         java.util.concurrent.CompletableFuture.runAsync(() ->
-            com.checkba.service.ai.PlatformAiUserScope.run(effectiveUserId, () ->
-                pptxTools.performPptGenerationWithProgress(
+            com.checkba.service.ai.PlatformAiUserScope.run(effectiveUserId, () -> {
+                String outcome = pptxTools.performPptGenerationWithProgress(
                     request.getTopic(),
                     request.getProjectId(),
                     request.getParentId(),
@@ -267,9 +325,64 @@ public class AiAgentController {
                     request.getConversationId(),
                     effectiveUserId,
                     request.isExportEditable()
-                )));
-        
+                );
+                persistPptOutcome(request, effectiveUserId, outcome);
+            }));
+
         return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"PPT generation started\"}");
+    }
+
+    /**
+     * PPT 生成结束后把结果落成一条 ASSISTANT 消息。
+     *
+     * <p>此前这段返回文本被整个丢弃：文件确实生成了，但对话历史里一个字都没有。
+     * 后果有两条——① 主 Agent 完全不知道这个文件存在，用户下一句「把刚生成的 PPT 改一下」
+     * 它只能重新列文件猜；② 刷新页面后用户自己也看不出发生过什么（进度卡是内存态）。
+     *
+     * <p>用契约 D 的双通道：{@code content} 给模型（fileId、PPTX 服务项目 ID、可编辑与否、
+     * 后续可用工具全在里面），{@code displayContent} 给用户一句人话——那段带工具名的长文本
+     * 直接进气泡是机器口吻。落库失败只 log：PPT 已经生成好了，不能因为记一笔失败而报错。
+     */
+    private void persistPptOutcome(PptGenerationRequest request, Long userId, String outcome) {
+        if (request.getConversationId() == null || outcome == null || outcome.isBlank()) {
+            return;
+        }
+        try {
+            boolean ok = outcome.startsWith("PPTX 生成成功");
+            String label = request.getFileName() != null && !request.getFileName().isBlank()
+                    ? request.getFileName()
+                    : brief(request.getTopic(), 30);
+            // 失败时首行本来就是可读中文（「PPTX 生成失败: …」/「错误：…」），直接当显示文案
+            String display = ok
+                    ? "已生成 PPT：" + label + "。文件已放入项目文件树，可以直接打开，也可以让我继续修改。"
+                    : outcome.split("\n", 2)[0].trim();
+            messageService.saveMessage(String.valueOf(request.getProjectId()), userId,
+                    request.getConversationId(), "ASSISTANT", outcome, display);
+        } catch (Exception e) {
+            log.warn("PPT 生成结果落库失败（不影响已生成的文件）: {}", e.getMessage());
+        }
+    }
+
+    private String brief(String text, int max) {
+        if (text == null) {
+            return "";
+        }
+        String oneLine = text.replaceAll("\\s+", " ").trim();
+        return oneLine.length() > max ? oneLine.substring(0, max) + "…" : oneLine;
+    }
+
+    /** 子任务停止请求体（两个字段都必填：会话用来鉴权，subtaskId 指定停哪一个） */
+    @Data
+    public static class SubtaskCancelRequest {
+        private String conversationId;
+        private String subtaskId;
+    }
+
+    /** 后台任务停止请求体（同上，taskId 是 registerTask 返回的 UUID） */
+    @Data
+    public static class TaskCancelRequest {
+        private String conversationId;
+        private String taskId;
     }
 
     @Data
@@ -300,6 +413,16 @@ public class AiAgentController {
         private Long projectId;
         private String conversationId;
         private String message;
+        /**
+         * 可选：这条消息在用户气泡里显示的文本（契约 D「发送内容 ≠ 显示内容」）。
+         * 落库进 project_ai_message.display_content；<b>模型永远只看 message</b>。
+         * 缺省 null = 与本字段不存在时完全一致（存量客户端不受影响）。
+         *
+         * <p>用途：点一个按钮/选项时，message 要带模型需要的细节（如计划审批卡回喂的
+         * 「已修订 N 处 + 修订版全文」），displayText 只给用户一句人话（「按此推进」）。
+         * 反问的选项本来就短、像用户自己打的，message 直接用选项原文、本字段可省。
+         */
+        private String displayText;
         private String model; // e.g. "anthropic/claude-3.5-sonnet"
         private String mode;  // Agent 模式: ASK, PLAN, AGENT (默认 AGENT)
         private java.util.List<String> fileIds; // Legacy: Context files to inject 
@@ -323,6 +446,8 @@ public class AiAgentController {
         public void setConversationId(String conversationId) { this.conversationId = conversationId; }
         public String getMessage() { return message; }
         public void setMessage(String message) { this.message = message; }
+        public String getDisplayText() { return displayText; }
+        public void setDisplayText(String displayText) { this.displayText = displayText; }
         public String getModel() { return model; }
         public void setModel(String model) { this.model = model; }
         public String getMode() { return mode; }

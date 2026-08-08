@@ -44,17 +44,23 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 ## skill 注入对话链路（backend/src/main/java/com/checkba/service/ai/skill/）
 
 - `SkillRegistry.java` — 发现/加载：扫内置 skills/ 目录 + 插件携带目录，SnakeYAML 解析，id 去重（先扫到优先）；`isAvailable` = 自身启用 且 所属插件未禁用。
-- `SkillRouter.java` — `match(userInput)` 取最长命中关键词；`activateForTurn` 每条用户消息刷新命中态；`visibleTools` 命中时裁剪为 allowed_tools ∪ baseTools（白名单零命中则不裁剪）；`promptInjectionFor` 拼 prompt 注入。
+- `SkillRouter.java` — `match(userInput)` 取最长命中关键词；`activateForTurn` 每条用户消息刷新命中态；`visibleTools` 命中时裁剪为 allowed_tools ∪ baseTools ∪ `ORCHESTRATION_TOOLS`（业务工具零命中则不裁剪）；`promptInjectionFor` 拼 prompt 注入。
 - 编排接入（纯旁路两处）：`AgentOrchestrator.java` activateForTurn（~:255）+ visibleTools（~:709）；`ContextAssemblerService.java` match→promptInjectionFor（~:146）。ASK 模式跳过注入。
 - 配置：`SkillProperties.java`（ai.skills.dir / base-tools / disabled-cache-ttl-ms / registry-url）。
 
-### allowed_tools 与 base-tools 的交互（写 skill 前必读）
+### allowed_tools、base-tools 与编排类工具（写 skill 前必读）
 
-`base-tools` 只有三个：`read_document / list_files / query_memory`（application.yml ~:237）。所以命中 skill 后模型可见的工具就是 **allowed_tools 这一份清单**加这三个，**不是**「常用工具默认都在」。skill 需要的每个工具都得逐个列出，漏一个就等于对模型隐藏了这个能力。
+命中 skill 后模型可见的工具 = **allowed_tools ∪ base-tools ∪ 编排类工具**，三份来源语义不同，别合并：
+
+- `allowed_tools`（skill.yml）——本 skill 的业务能力清单。**不是**「常用工具默认都在」，需要的每个工具都得逐个列出，漏一个就等于对模型隐藏了这个能力。
+- `base-tools`（application.yml `ai.skills.base-tools`，只有三个：`read_document / list_files / query_memory`）——业务能力兜底，随部署形态可调。
+- 编排类工具（`SkillRouter.ORCHESTRATION_TOOLS`，当前 `todo_write` / `dispatch_subtask`）——**恒定可见，任何 skill 都裁不掉**。编排能力属于「Agent 怎么干活」，不属于任何业务领域。刻意写死在代码里不做成配置项：做成 yml 的话 prod/desktop 覆写一次就能重新裁掉它，而这个故障是静默的。护栏是 `SkillRouterTest.orchestrationToolsAlwaysVisible`（用一个 allowed_tools 故意不含它们的假 skill 断言）。反问走 `<question>` 标签、不是工具，所以不在这组里。
+
+顺带的语义变化：白名单零命中的回退判据现在排除编排类工具（「业务工具零交集」才回退不裁剪），否则「零交集」永远至少剩那两个，原来的误配置保护会被静默废掉。
 
 裁剪只影响可见性、不拦分发（SkillRouter 类注释）。后果是：漏列的工具在**原生 function calling** 下模型压根看不见（永远不会用），但在 **XML 兜底协议**下模型凭 system_prompt 的记忆写出 `<tool_code>` 仍能被分发成功。**同一个 skill 的能力边界因此取决于当前模型走哪套协议**——这类 bug 在换模型时才暴露，排查时先看协议再看白名单。
 
-2026-08 实例：两个自带 skill（`shareholder-meeting-verification`、`listing-pathway`）都漏了 `dispatch_subtask`，而它们恰好是 `prompts/system_prompt.md` 第 6.5 节明确要委派子 Agent 的长程任务。已补上，并由回放评测用例 `skill-shareholder-meeting-dispatch-subtask-visible`（`backend/src/test/resources/ai-eval/cases/cases-skill.json`）守住「skill 命中时 dispatch_subtask 在可见工具集里」。新增 skill 时如果是长程任务，照抄这两份的 allowed_tools 结尾一项。
+2026-08 实例：两个自带 skill（`shareholder-meeting-verification`、`listing-pathway`）都漏了 `dispatch_subtask`，而它们恰好是 `prompts/system_prompt.md` 第 6.5 节明确要委派子 Agent 的长程任务。已补上（#323），并由回放评测用例 `skill-shareholder-meeting-dispatch-subtask-visible`（`backend/src/test/resources/ai-eval/cases/cases-skill.json`）守住「skill 命中时 dispatch_subtask 在可见工具集里」。这两处显式声明在编排类工具恒定可见之后**已经冗余，但刻意保留**——显式声明无害且自文档，删掉会让 skill.yml 看起来「不需要子 Agent」。
 
 ## 启停存储与过滤
 

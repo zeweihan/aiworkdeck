@@ -18,7 +18,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * 按触发条件（关键词，忽略大小写）匹配用户输入：
  * - 命中多个 skill 时取"最长命中关键词"的那个（更长的关键词 = 更 specific 的意图）；
  * - 命中后：a) prompt 模板由 ContextAssemblerService 在组装系统消息时注入（{@link #promptInjectionFor}）；
- *   b) 本轮 LLM 可见工具集裁剪为 allowed_tools ∪ 基础工具集（{@link #visibleTools}，
+ *   b) 本轮 LLM 可见工具集裁剪为 allowed_tools ∪ 基础工具集 ∪ 编排类工具（{@link #visibleTools}，
  *   复用 Phase 3A 的可见性出口：对 ToolRegistry.getAllSpecifications() 的结果做白名单过滤）。
  * - 未命中任何 skill 时行为与现状完全一致（不注入、不裁剪）。
  *
@@ -29,6 +29,25 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 @Slf4j
 public class SkillRouter {
+
+    /**
+     * 恒定可见的编排类工具：不管命中哪个 skill、它的 allowed_tools 怎么写，这些工具永远在可见集合里。
+     *
+     * 与 base-tools（ai.skills.base-tools）的区别——**不要把两者合并**：
+     * - base-tools 是"业务能力兜底"：被裁剪的回合也得留最基本的读取/记忆能力，是一份
+     *   随部署形态可调的清单，所以放 yml（云端与桌面可以给不同的值）。
+     * - 本清单是"编排能力"：todo_write（多步任务的进度可见）与 dispatch_subtask（长程子任务委派）
+     *   属于 Agent 怎么干活，不属于任何一个法律业务领域，任何 skill 都没有理由把它们藏起来。
+     *
+     * 刻意写死在代码里而不做成配置项：这是不变式，不是部署旋钮。一旦允许 yml 覆盖，
+     * application-prod.yml / application-desktop.yml 里的一次覆写就能重新把编排能力裁掉，
+     * 而这正是本次要消灭的静默故障——skill 裁掉 todo_write / dispatch_subtask 时既不报错也不告警，
+     * 表现只是"模型不写任务清单了 / 不派子任务了"（#323 给两个自带 skill 补了 allowed_tools，
+     * 但结构性问题还在：下一个新 skill 会再踩一次）。
+     *
+     * 反问（{@code <question>} 标签）不在此列：它走标签而不是工具，工具可见性裁剪根本碰不到它。
+     */
+    static final Set<String> ORCHESTRATION_TOOLS = Set.of("todo_write", "dispatch_subtask");
 
     private final SkillRegistry skillRegistry;
     private final SkillProperties properties;
@@ -132,7 +151,8 @@ public class SkillRouter {
 
     /**
      * 工具可见性裁剪：命中 skill 时把传给 LLM 的工具规格过滤为
-     * allowed_tools ∪ 基础工具集（ai.skills.base-tools）；未命中时原样返回。
+     * allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（{@link #ORCHESTRATION_TOOLS}）；
+     * 未命中时原样返回。
      *
      * 白名单过滤结果为空（allowed_tools 全部拼错等误配置）时回退为不裁剪并告警，
      * 避免把 Agent 裁成"无工具可用"。
@@ -145,11 +165,16 @@ public class SkillRouter {
         SkillDefinition skill = active.get();
         Set<String> whitelist = new HashSet<>(skill.getAllowedTools());
         whitelist.addAll(properties.getBaseTools());
+        whitelist.addAll(ORCHESTRATION_TOOLS);
         List<ToolSpecification> filtered = all.stream()
                 .filter(spec -> whitelist.contains(spec.name()))
                 .toList();
-        if (filtered.isEmpty()) {
-            log.warn("Skill '{}' whitelist matched no registered tools ({}), fall back to full tool set",
+        // 误配置保护：allowed_tools ∪ base-tools 在注册工具里零交集时回退为不裁剪。
+        // 判据刻意排除编排类工具——它们恒在白名单里，不排除的话"零交集"永远至少剩下那两个，
+        // 原来的回退保护就被本次改动悄悄废掉，skill 会被裁成只剩写清单/派子任务。
+        // （空集合下 allMatch 恒为真，所以这一个判断同时覆盖 filtered 为空的情况。）
+        if (filtered.stream().allMatch(spec -> ORCHESTRATION_TOOLS.contains(spec.name()))) {
+            log.warn("Skill '{}' whitelist matched no business tools ({}), fall back to full tool set",
                     skill.getId(), whitelist);
             return all;
         }

@@ -363,8 +363,11 @@ public class AgentOrchestrator {
             log.info("Agent Loop Started: conv={}, model={}, mode={}, msg={}", conversationId, request.getModel(), agentMode, request.getMessage());
             
             // 1. 保存用户消息 (Save only user message first; assistant saved after stream completes)
+            // displayText 是「发送内容 ≠ 显示内容」通道（契约 D）：content 留给模型（计划审批卡
+            // 回喂的修订版全文这类细节必须给全），displayContent 才是用户气泡里那句人话。
+            // 缺省 null = 与本通道不存在时完全一致；上下文组装一律只读 content。
             messageService.saveMessage(
-                projectId, userId, conversationId, "USER", request.getMessage()
+                projectId, userId, conversationId, "USER", request.getMessage(), request.getDisplayText()
             );
             
             // 1.1 首次对话时异步生成对话标题
@@ -577,6 +580,16 @@ public class AgentOrchestrator {
 
                 // Execute Native Tools (统一分发，无需感知具体工具)
                 for (dev.langchain4j.agent.tool.ToolExecutionRequest req : aiMessage.toolExecutionRequests()) {
+                    // 慢工具执行期的取消响应点。此前 isCancelled 只在 runLoop 入口与本回调开头各查一次，
+                    // 于是「停止」按钮在 dispatch_subtask（可跑 630 秒）或 AI PPT（十几分钟）中间
+                    // 完全不生效——用户看到的是按了没反应、还得继续等。一处检查覆盖所有慢工具：
+                    // 一轮里剩下的工具全部不再执行。已经跑完的工具副作用无法回滚（这是取消的固有语义）。
+                    if (isCancelled(conversationId)) {
+                        log.info("Conversation {} cancelled before tool {}, skipping remaining tools",
+                                conversationId, req.name());
+                        handleCancellation(conversationId, projectId, userId);
+                        return;
+                    }
                     // 面板可见性：原生工具调用复用 <process> XML 协议推送给前端，
                     // 与模型自发的 XML tool_code 走同一套任务卡渲染管线（修复：原生轮次面板无任何输出，看似卡死）
                     String displayName = toolRegistry.resolve(req.name())
@@ -609,7 +622,7 @@ public class AgentOrchestrator {
                     // Determine status for history and display
                     String nativeToolStatus = success ? "SUCCESS" : "FAILURE";
                     sendTextDelta(conversationId, String.format("<tool_output status=\"%s\">%s</tool_output>",
-                            nativeToolStatus, truncate(result, 4000)));
+                            nativeToolStatus, truncate(result, toolOutputDisplayLimit(req.name()))));
 
                     // Log for history persistence (include status attribute)
                     executionLog.append(String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
@@ -638,6 +651,14 @@ public class AgentOrchestrator {
                 saveAssistantMessage(conversationId, projectId, userId, intermediateContent);
                 log.info("Intermediate save after native tool execution for conversation: {}", conversationId);
 
+                // 反问优先于递归：模型在同一轮里既调了工具又问了问题时，继续递归会把问题埋在
+                // 后续输出里、模型自己接着猜下去（正是 <question> 要阻止的事）。工具已经跑完、
+                // 结果已落库，此处停机等回答即可。
+                if (containsQuestion(aiContent)) {
+                    stopForUserQuestion(conversationId, projectId, userId, intermediateContent);
+                    return;
+                }
+
                 runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode, guard);
                 return;
             }
@@ -659,6 +680,14 @@ public class AgentOrchestrator {
                 String stuckNudge = null;
 
                 for (XmlToolCallParser.ParsedCall call : xmlToolCallParser.parse(content)) {
+                    // 同原生分支：慢工具中间也要能取消。XML 兜底是弱模型的主路径，
+                    // 只修原生分支等于「换个模型停止键就又不灵了」
+                    if (isCancelled(conversationId)) {
+                        log.info("Conversation {} cancelled before XML tool {}, skipping remaining tools",
+                                conversationId, call.toolName());
+                        handleCancellation(conversationId, projectId, userId);
+                        return;
+                    }
                     String code = call.rawCode();
                     log.info("Parsed Tool Code: {}", code);
 
@@ -736,6 +765,12 @@ public class AgentOrchestrator {
                      saveAssistantMessage(conversationId, projectId, userId, intermediateXmlContent);
                      log.info("Intermediate save after XML tool execution for conversation: {}", conversationId);
 
+                     // 反问优先于递归（同原生分支）
+                     if (containsQuestion(content)) {
+                         stopForUserQuestion(conversationId, projectId, userId, intermediateXmlContent);
+                         return;
+                     }
+
                      // Recurse with executionLog
                      runLoop(model, messages, conversationId, projectId, userId, modelId, depth + 1, executionLog, agentMode, guard);
                      return;
@@ -745,7 +780,9 @@ public class AgentOrchestrator {
             // 2.5 截断的工具调用（F-10）：输出里有 <tool_code> 却没有闭合标签——多为
             // max_tokens/上游截断，解析器提不出任何调用。此前会落到"正常收尾"静默结束，
             // 任务做一半、无错误提示、无继续按钮。这里回喂提示让模型重发，最多纠正 2 轮。
-            if (agentMode != AgentMode.ASK
+            // 含 <question> 时不走纠正回路：模型问了问题、同时输出被截断，此刻正确的动作是
+            // 停下来等回答（下面 3.2），而不是催它重发工具调用——那等于让它带着未决问题继续猜。
+            if (agentMode != AgentMode.ASK && !containsQuestion(content)
                     && content.contains("<tool_code>") && !content.contains("</tool_code>")) {
                 if (guard.malformedToolRounds < 2) {
                     guard.malformedToolRounds++;
@@ -858,6 +895,15 @@ public class AgentOrchestrator {
                         }
                     }
                 }
+            }
+
+            // 3.2 反问停机（<question>）：模型缺关键前提、不敢猜，等用户回答。
+            // 放在 artifact 之后：同一轮既给计划又问问题时，计划审批（含 artifact 落盘）优先，
+            // 那条路本来就要用户点头，问题正文照样已经流给用户看了。
+            if (containsQuestion(content)) {
+                String fullContent = executionLog.length() > 0 ? executionLog.toString() + content : content;
+                stopForUserQuestion(conversationId, projectId, userId, fullContent);
+                return;
             }
 
             // 4. Default: Loop Finished
@@ -1095,6 +1141,65 @@ public class AgentOrchestrator {
     private String truncate(String s, int max) {
         if (s == null) return "";
         return s.length() <= max ? s : s.substring(0, max) + "...(截断)";
+    }
+
+    /** 工具输出在面板上的默认展示上限（历史落库存的是全文，这里只是 SSE 载荷） */
+    private static final int TOOL_OUTPUT_DISPLAY_LIMIT = 4000;
+    /** 结果型工具的展示上限：它们的输出本身就是要给用户核验的成果 */
+    private static final int RESULT_TOOL_OUTPUT_DISPLAY_LIMIT = 16000;
+    /**
+     * 「输出即成果」的工具：截断会砍掉用户最需要核对的那一段，
+     * 且 dispatch_subtask 的输出是 JSON（截断后前端结构化子任务卡直接解析失败退回裸文本）。
+     * 放宽只影响 SSE 载荷大小，不进上下文、不影响 token 与计费。
+     */
+    private static final Set<String> RESULT_HEAVY_TOOLS =
+            Set.of("dispatch_subtask", "extract_file_text", "pdf_inspect");
+
+    /** 该工具的面板展示上限。前端截断提示按 {@code ...(截断)} 后缀判定，不要在文案里写死字数。 */
+    static int toolOutputDisplayLimit(String toolName) {
+        return toolName != null && RESULT_HEAVY_TOOLS.contains(toolName)
+                ? RESULT_TOOL_OUTPUT_DISPLAY_LIMIT
+                : TOOL_OUTPUT_DISPLAY_LIMIT;
+    }
+
+    /** 反问标签的起始形态：{@code <question>}、带属性的 {@code <question type=...>}、以及跨行写法都算。 */
+    private static final java.util.regex.Pattern QUESTION_TAG_START =
+            java.util.regex.Pattern.compile("<question(?=[\\s/>])", java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    /**
+     * 助手正文里是否含反问标签。
+     *
+     * <p>刻意只认起始标签：模型把 {@code </question>} 漏掉（截断/笔误）时，问题正文已经流给
+     * 用户看了，此时按「有问题」停机远好过当成正常收尾——后者会让用户对着一个没有下文的
+     * 问句，而会话状态显示已完成。
+     */
+    static boolean containsQuestion(String content) {
+        return content != null && QUESTION_TAG_START.matcher(content).find();
+    }
+
+    /**
+     * 反问停机：保存本轮回复、打 AWAITING_INPUT 状态点、发 bubble_end 关流，**不递归**。
+     *
+     * <p>形态照抄 implementation_plan 的停机待审批：答案是**下一轮普通用户消息**，
+     * 不做「工具调用里阻塞等人类回答」——工具分发跑在流式回调线程上，撞 600s callTimeout
+     * 与 180s 无活动看门狗，taskExecutor 也只有 16/32；而律师完全可能关掉 app 明天再来答。
+     *
+     * <p>刻意不触发记忆管线与版本落档（与待审批一致）：本轮还没结束，用户答完的那一轮
+     * 收尾时会一并跑。
+     *
+     * <p>连续反问不会被守卫误伤：RunGuard（含 StuckDetector 滑动窗口、步数预算、重试预算）
+     * 每次 handleUserMessage 新建，而用户的回答就是新一轮消息，所以「答一个又被问下一个」
+     * 是两个独立的 run；StuckDetector 也只记录工具调用签名，反问本身根本不进窗口。
+     * 若哪天把 RunGuard 改成跨轮复用，必须让反问轮不计入打转窗口与步数预算。
+     */
+    private void stopForUserQuestion(String conversationId, String projectId, Long userId, String persistedContent) {
+        log.info("Detected <question> for {}, stopping loop and waiting for user answer", conversationId);
+        saveAssistantMessage(conversationId, projectId, userId, persistedContent);
+        agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.AWAITING_INPUT);
+        // status=awaiting_input：会话列表显示「待回答」（区别于待审批），前端解锁输入区
+        sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"awaiting_input\"}");
+        sseEmitterService.close(conversationId);
+        clearCancelledState(conversationId);
     }
 
     /**
