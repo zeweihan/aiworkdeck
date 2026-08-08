@@ -148,8 +148,35 @@ mail:
 ai:
   # 官网账户服务地址（解锁门在线校验、账户连接、平台 AI 通道密钥）。
   # 必须是 https：这条通道上跑的是明文 awdk_ 账户 Key，配成 http 会被启动期直接拒绝。
+  #
+  # 双主站（设计见 docs/superpowers/specs/2026-08-08-dual-site-architecture.md）：
+  # local-mode 下这个值由 SiteEnvironmentPostProcessor 按 ~/.aiworkdeck/site.json 选中的站点
+  # 在启动期覆盖；下面这一行是 site.json 缺失时的兜底，与 sites.cn.base-url 逐字相同，
+  # 所以存量安装的行为零变化。环境变量 AI_ACCOUNT_BASE_URL 优先级更高（本地联调用）。
   account:
     base-url: https://www.aiworkdeck.com
+    # site.json 缺失时的站点
+    default-site: cn
+    # 站点表。分的是商业与合规（币种、支付通道、发票、适用法、备案、默认语言、数据落点），
+    # **不是模型可用性**——桌面端所有 OpenRouter 请求从用户本机直连 openrouter.ai，
+    # 能不能用某个模型由出口 IP 决定，站点无从干预，别在这里加模型过滤。
+    sites:
+      cn:
+        enabled: true
+        display-name: AI Workdeck 国内站
+        base-url: https://www.aiworkdeck.com
+        registry-base-url: https://www.aiworkdeck.com/api/registry
+        telemetry-ingest-url: https://www.aiworkdeck.com/api/telemetry
+        account-page-url: https://www.aiworkdeck.com/zh/account
+      intl:
+        # 国际站上线前保持 false：站点选择器只在可选站点 >= 2 时出现，
+        # 置 false 时用户看不到任何与站点有关的界面变化
+        enabled: false
+        display-name: AI Workdeck International
+        base-url: https://www.workdeck.ai
+        registry-base-url: https://www.workdeck.ai/api/registry
+        telemetry-ingest-url: https://www.workdeck.ai/api/telemetry
+        account-page-url: https://www.workdeck.ai/en/account
   # 辅助模型：起标题 / 上下文摘要 / 记忆抽取 / memory_search / 文件自动打标签。
   # 这些调用用户看不见但每轮都在跑，单列一个便宜模型是省钱的主要来源；
   # 默认取白名单里最便宜且支持 tools 的一条（0.03/0.13 美元每 1M token，1M 上下文）。

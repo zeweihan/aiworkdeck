@@ -5,7 +5,7 @@
 // 官网旧格式没有这两个字段——后端已归一为 0 / 'once'，这里再兜一次底：
 // **字段缺失一律按免费**，绝不能因为跑在旧后端/旧 registry 上就把免费项锁住。
 
-const SITE_BASE = 'https://www.aiworkdeck.com'
+import { siteBaseUrl } from '@/utils/siteLinks.js'
 
 // 售价上限（分）= ¥100,000，与后端 MarketPurchaseGate.MAX_PRICE_CENTS 同口径。
 // 超上限必是注册表畸形值（如 long 被截成 int），按未知处理——展示一个假价格比展示「免费」更糟。
@@ -58,9 +58,13 @@ export function canInstall(state) {
  * Skill 有 /zh/skills/{id} 独立详情页（页内带购买按钮）；
  * 插件官网只有列表页 /zh/plugins（购买按钮在卡片上），**没有 /zh/plugins/{id} 路由**——
  * registry 里那个 homepage 默认值指向的路径并不存在，拿它当购买入口会打到 404。
+ *
+ * 站点前缀在调用时才取（三处调用点都在点击回调里），不做成模块常量——
+ * siteLinks 首帧可能还是兜底值，固化下来就再也纠正不回来了。
  */
 export function purchaseUrl(kind, id) {
+  const base = siteBaseUrl()
   return kind === 'plugin'
-    ? `${SITE_BASE}/zh/plugins`
-    : `${SITE_BASE}/zh/skills/${encodeURIComponent(id)}`
+    ? `${base}/zh/plugins`
+    : `${base}/zh/skills/${encodeURIComponent(id)}`
 }

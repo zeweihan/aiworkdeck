@@ -4,6 +4,7 @@
 
 import { getProjectFiles, createFolder, batchMoveFiles, getStageUsage } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { accountPageUrl } from '@/utils/siteLinks.js'
 
 export const stagingAreaMethods = {
     // 免费额度用量（顶部用量条的数据源）。取不到就当作「不限制」处理——
@@ -144,7 +145,7 @@ export const stagingAreaMethods = {
             confirmText: '了解详情',
             cancelText: '知道了',
             success: (r) => {
-              if (r.confirm) openExternalUrl('https://www.aiworkdeck.com/zh/account')
+              if (r.confirm) openExternalUrl(accountPageUrl())
             }
           })
           return

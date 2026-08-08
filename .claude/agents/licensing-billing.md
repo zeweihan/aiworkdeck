@@ -217,6 +217,34 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   **签名的运营商报备状态是外部前置条件**：2026-08-07 实测联通已通（真机送达），移动/电信报备中，
   未通的运营商发送会 PORT_NOT_REGISTERED；报备状态用 `GetSmsSign` API 可查。
 
+**站点（双主站，2026-08-08）**
+- 设计文档 `docs/superpowers/specs/2026-08-08-dual-site-architecture.md`（含实施记录一节，与设计有出入以那节为准）。
+- 两个站分的是**商业与合规**：币种、支付通道、发票、适用法、ICP 备案、默认语言、
+  telemetry 落点、registry 落点。国内站 `www.aiworkdeck.com`（北京 ECS、微信支付、人民币、中国法），
+  国际站 `www.workdeck.ai`（新加坡 ECS、Stripe、美元、香港主体）。**两站账户不互通**是接受的代价。
+- **绝不按站点过滤模型清单**：桌面端所有 OpenRouter 请求从用户本机直连 openrouter.ai
+  （`ai.model.open-router.base-url`，平台通道 AWD_CLOUD 刻意只读 yml 的 baseUrl），
+  能不能用某个模型由出口 IP 决定、由 OpenRouter 运行时返 403，我们没有任何开关能用注册地解锁境外模型。
+- `service/site/SiteProfileService.java` — 站点的**唯一解析出口**：`currentSite/profile/baseUrl/
+  displayName/availableSites/multiSite/otherSites/isPinned`。`pinnedTo(baseUrl)` 是单测与
+  「站点无关」场景的构造入口。
+- `service/site/SiteEnvironmentPostProcessor.java` + `resources/META-INF/spring/
+  org.springframework.boot.env.EnvironmentPostProcessor.imports` — 启动期按 `site.json`
+  改写四个属性（`ai.account.base-url`、`ai.plugins.registry-url`、`ai.skills.registry-url`、
+  `telemetry.ingest-url`）。**在属性层解析，是为了让 `service/ai/` 下的三个消费方一行都不用改。**
+  属性源插在 `systemEnvironment` 之后：压过 application.yml，输给环境变量（本地联调靠这条）。
+- `service/site/SiteStateFile.java` — `~/.aiworkdeck/site.json`，**刻意不依赖 Spring 与 Jackson**
+  （要在容器起来之前读一次）。站点是**机器级**状态，与 license/account 同目录同规格；
+  刻意不进数据库——`local.identity.selectedUserId` 进数据库是因为它是指向库内 user 表的外键必须同生共死，
+  站点描述的是「这台机器面向哪个商业实体」，还原旧库不该把站点还原掉。
+- `service/site/SiteSwitchService.java` — 切站编排，**是 `persistSelection` 的唯一合法调用方**。
+- `controller/SiteController.java` — `GET /api/site`、`POST /api/site/select`，**匿名端点**
+  （选站发生在解锁之前），靠 `LocalModeAccessFilter` 兜着，做法同 `POST /api/license/deactivate`。
+- `ai.account.sites.*`（application.yml）— 站点表；`intl.enabled` 在国际站上线前为 false，
+  可选站点 < 2 时前端整个不渲染站点 UI。
+- 前端：`frontend/src/utils/siteLinks.js`（官网链接的唯一出口，替代 7 处硬编码）、
+  `pages/unlock/unlock.vue`（站点行 + 错配一键救济）、`pages/admin/admin.vue`「账户与用量」的站点子区。
+
 **配置**
 - `security.local-mode`（`application-desktop.yml:36` 为 true，默认 false = 团队服务器模式）。
 - `ai.account.base-url`（`application.yml:97-98`，默认 `https://www.aiworkdeck.com`；**强制 https**，回环 http 例外供本地联调）。
@@ -453,6 +481,31 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     护栏：`CrossBorderConsentTest`（判定本身：版本作废、文案红线）
     + `CrossBorderConsentGateSharedTest`（这道闸没有第二份实现、没有入口漏掉它）。
 
+19. **切站不是「换个域名」，是换了一个商业实体，清理表必须背下来**（双主站设计 §2.4）。
+    删：`account.json`、`entitlements.json`、`platform-ai-key.json`、`license.json` 中 **mode=account** 的票据。
+    留：`license.json` 中 **mode=trial** 的票据（试用码是内置公钥离线验签的，与站点无关；
+    抹掉等于把一个只想换站看看的试用用户直接踢回未解锁页）、`storage-location`、项目数据库。
+    另必须调 `ChatModelFactory.demotePlatformProvider()`——不降级会出现「界面显示平台通道正常选中、
+    实际每条消息都报未连接账户」（同地雷 8）。护栏 `SiteSwitchServiceTest`。
+    切站的生效范围**有意分成两段**：账户/解锁门当场改指向，广场与统计上报下次启动才改
+    （在属性层固化），`select` 因此回 `restartRecommended:true`。
+
+20. **站点错配的文案不许指控用户的 Key**（双主站设计 §2.6）。另一个站的 Key 拿到本站必然
+    「verify-key 回 `valid:false`」或「账户端点 401」，而 Key 是好的——只说「Key 无效或已被撤销」
+    会让用户去官网重新生成一把，回来再撞一次，且没有任何线索指向真正的原因。
+    多站形态下 `LicenseService.invalidKeyMessage` 与 `AccountService.unauthorizedMessage`
+    会点名当前站与另一站。**文案照旧不得含「登录」「未授权」「请先」**（地雷 1），
+    所以写的是「切换站点后重试」而不是「请先切换站点」。护栏 `SiteMismatchMessageTest`。
+    **刻意不做「拿同一把 Key 依次探测两个站」**：`awdk_` 是明文 bearer 凭据，
+    把它发给一个不是它签发方的服务器等于向第三方泄露一把有效凭据；
+    两站由同一团队运营不改变这个判断——今天成立不等于第二方托管实例出现后仍成立。
+
+21. **官网侧的反代绝不能对 `/api/` 做 301/302**。桌面端 `HttpAccountTransport` 用 JDK HttpClient，
+    默认 `Redirect.NEVER`；一个 301 会被 `AccountService.handle` 判成「预期外状态」→ MALFORMED，
+    用户看到「官网返回了预期外的状态」而无从下手。这条在 workdeck.ai 的新加坡 vhost 上是真实风险：
+    那里按访客 IP 做 geo 分流，境内访客默认 301 回国内站，而「注册在国际站、人在境内」是合理场景。
+    必须给 `^~ /api/` 与 `^~ /update/` 加优先级更高的 location 绕开 geo 判断。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
@@ -467,6 +520,10 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   server 模式加固：`service/AuthAbuseGuardTest`、`service/account/AwdkLoginServiceTest`、
   `service/account/MachineAccountGuardTest`、`controller/AuthControllerHardeningTest`、
   `controller/AccountControllerMachineScopeTest`、`service/UserServiceTest`（无密码账户分支）；
+  站点：`service/site/SiteProfileServiceTest`（三级优先级、钉住判定、启动期校验全部 enabled 站点）、
+  `service/site/SiteEnvironmentPostProcessorTest`（属性注入与优先级，含「环境变量必须压过站点注入」）、
+  `service/site/SiteSwitchServiceTest`（切站清理表逐项）、
+  `service/site/SiteMismatchMessageTest`（错配文案点名站点 + 三个掉线子串的红线）；
   per-user 平台密钥：`service/ai/PlatformAiKeyCipherTest`、`service/ai/PlatformAiKeyServiceTest`、
   `service/ai/PlatformAiChannelRoutingTest`（四种形态的取 key 路由）、
   `service/ai/PlatformAiUserScopeTest`、`controller/PlatformAiKeyControllerTest`。

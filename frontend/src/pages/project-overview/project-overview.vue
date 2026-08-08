@@ -1461,6 +1461,7 @@ import {
   checkCloud // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { loadSiteLinks, siteBaseUrl } from '@/utils/siteLinks.js'
 import { getCurrentUser } from '@/utils/auth.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
@@ -2147,6 +2148,9 @@ export default {
   onLoad(query) {
     this.pageEnterTime = Date.now()
     this.loadLicenseMode()
+    // 官网链接预热：本页有两处「跳官网」（试用 chip、缓存区满弹窗），都是同步取地址。
+    // 不预热的话第一次点击只能拿到兜底站点，国际站用户会被送到没有他账户的站
+    loadSiteLinks()
     if (query && query.id) {
       this.projectId = Number(query.id)
       recordProjectVisit(this.projectId) // IDE 化：启动直达/最近项目切换器的数据源
@@ -2613,7 +2617,7 @@ export default {
     },
     openUpgradeSite() {
       this.showTrialInfo = false
-      openExternalUrl('https://www.aiworkdeck.com')
+      openExternalUrl(siteBaseUrl())
     },
     // Phase 1 外置的方法组（纯搬移，this 即页面实例）
     ...panelSwitchingMethods,

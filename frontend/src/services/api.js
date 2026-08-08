@@ -753,6 +753,30 @@ export function activateLicense(code) {
   });
 }
 
+// 当前站点与可选站点（双主站）。
+// 返回 { current, pinned, multiSite, sites: [{ id, displayName, baseUrl, accountPageUrl }] }
+export function getSiteStatus() {
+  return request({
+    url: '/api/site',
+    method: 'GET',
+  });
+}
+
+// 切换站点。**破坏性动作**：会清掉旧站的账户连接、权益缓存、平台 AI 密钥，
+// 以及 account 模式的授权票据（试用码票据保留）。调用方必须先做二次确认。
+// 成功 200 { site, changed, licenseCleared, accountCleared, restartRecommended }；
+// 失败 400 { message }（request 层已转成 reject）
+export function selectSite(site) {
+  return request({
+    url: '/api/site/select',
+    method: 'POST',
+    data: { site },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 解除授权：回到未解锁状态
 export function deactivateLicense() {
   return request({
