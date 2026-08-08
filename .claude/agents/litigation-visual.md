@@ -99,8 +99,13 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
   被只有 Writer+Calc 的引擎当文本导入，满屏乱码——与当年 PDF 同一类事故。
 - **触发词必须原样出现在 prompt 正文里**才命中 skill 注入（pinnedSkillId 只裁工具
   不注入 prompt）。所以 kickoff prompt 由服务端拼，不交给前端。
-- 新增 `litigation_*` 工具要同步 `frontend/src/utils/toolDisplayNames.js`，
-  否则面板里显示英文代号。
+- 新增 `litigation_*` 工具要同步**三处**：`frontend/src/utils/toolDisplayNames.js`
+  （否则面板里显示英文代号）、skill.yml 的 `allowed_tools`（漏列即对模型隐藏该能力）、
+  以及 `RealToolBeans.instantiateAll()`（评测用的工具 bean 清单是手工维护的，
+  漏了就等于那个工具在回放评测里从未注册、可见性断言形同虚设——
+  `EvalToolBeanParityTest` 现在会红）。
+- skill 命中时的工具可见性由回放用例 `skill-litigation-visual-tools-visible`
+  （`backend/src/test/resources/ai-eval/cases/cases-skill.json`）守住。
 - 上游 `doctor.py` 自称「Python ≥ 3.9」与实际不符（见 PATCHES.md PATCH 2）；
   `schemas/` 的 layout 枚举曾漏 `comparison_table`（PATCH 3）。**升级引擎后
   重跑 `litviz/tests/test_cli.py`，别信上游的自述。**
