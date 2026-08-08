@@ -388,7 +388,9 @@ project_profile_field
 
 **必修的鉴权与性能**：
 
-- `/api/ai/conversations` 的 `X-Session-Id` 是 `required=false`（`:123`），无 session 时 `userId=null` 走进恒不匹配的 SQL 条件，**静默返回空数组而不是 401**（会被误诊成前端 bug）。新端点模板：`getUserIdFromSession` → null 返 401，再 `hasReadPermission` → false 返 403。返回信封而非裸数组。
+- `/api/ai/conversations` 的 `X-Session-Id` 是 `required=false`（`:123`），无 session 时 `userId=null` 走进恒不匹配的 SQL 条件，**静默返回空数组**（会被误诊成前端 bug）。新端点模板：`getUserIdFromSession` → null 抛「未登录」，再 `hasReadPermission` → false 抛「无权访问该项目」。**返回信封而非裸数组。**
+
+  > **2026-08-08 修订：不引 401/403，走全站的 HTTP 200 + `{code,message}`。** 本文初稿写「返 401/403」，出实施计划时核到 `GlobalExceptionHandler.java:69-77` 对 `IllegalArgumentException` 一律 `ResponseEntity.ok()`，注释明写「统一返回 HTTP 200，通过 code 字段表示失败」，全站 90+ 端点同一口径，`api.js` 的 request 包装器也按 code 解。为四个新端点单开一套状态码，要么新造异常类型绕过全局处理器、要么让前端多一条分支，都是给一个已经自洽的体系打补丁。而这条要修的真实缺陷是「静默空数组让人以为没有对话」——`{code:1,message:"未登录"}` 同样修掉它，且与全站一致。
 - **`project_ai_message` 没有任何 `@Index`**，加上 `ddl-auto=update` 且无 schema.sql → 线上只有主键索引。按 projectId 铺全历史 + GROUP BY conversationId 是全表扫描。**加索引这一项必须显式排进实施清单。**
 - **分页用游标不用 offset**：按 `(MAX(createdAt), conversationId)` 倒序，请求带 `before=<timestamp>`，默认 pageSize 20。会话列表按活跃时间排序且实时变动，offset 分页在刷新时会跳行/重复。注意 `findConversationSummaries` 的三个标量子查询用了 JPQL `LIMIT 1` + GROUP BY，**套 Pageable 需手写 countQuery 或改两段式**。
 
@@ -526,7 +528,7 @@ project_task
 5. **`project_ai_message` 加索引**（§6.4）——现在线上只有主键索引
 6. **删项目清仓 + 清 AI 数据**（§3.5）——IDENTITY 主键复用会让新项目继承已删项目的档案
 7. **`GET /api/projects/{id}` 改返回 DTO**（§4.5）——现在把两个 companyInfoJson 下发给 CLIENT
-8. **`/api/ai/conversations` 无 session 时静默返回空数组 → 改 401**（§6.4）
+8. **`/api/ai/conversations` 无 session 时静默返回空数组 → 改成 `{code:1,message:"未登录"}`**（§6.4；不引 401，理由见该节的 2026-08-08 修订说明）
 9. **FSEvents watcher 过滤 `.awd/`**（§3.5）——一行改动
 10. **工作状态点显示条件改成 `working && changedCount > 0`**（§3.4）——否则默认开启后恒亮
 11. **项目列表 N+1**（每个项目一次 `getProjectMembers`，`Promise.all` 并发）——搬迁时让后端在 `ProjectCardDTO` 里带成员摘要，或先渲染再懒加载
