@@ -46,8 +46,10 @@ import static org.mockito.Mockito.when;
  */
 class AgentOrchestratorFailoverFlowTest {
 
-    private static final String PRIMARY = "openai/gpt-4o";
-    private static final String BACKUP = "qwen/qwen3-235b-a22b-2507";
+    /** 主模型故意选国际档：地域拒绝那条用例要的就是「境内打国际模型」这个形态 */
+    private static final String PRIMARY = "anthropic/claude-sonnet-5";
+    /** 备选是区域无关（Region.GLOBAL）模型：地域拒绝时唯一能救回本轮的一类候选 */
+    private static final String BACKUP = "qwen/qwen3.7-flash";
 
     private ChatModelFactory chatModelFactory;
     private SseEmitterService sse;
@@ -163,6 +165,48 @@ class AgentOrchestratorFailoverFlowTest {
         assertFalse(sseEvents.contains("error"), "换成功就不该再给用户报错");
         assertTrue(sseEvents.contains("bubble_end"), "本轮应正常收尾");
         assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-failover").status());
+    }
+
+    @Test
+    @DisplayName("地域 403：换到区域无关模型把本轮跑完，提示里点名原因与新模型")
+    void switchesToRegionAgnosticModelOnRegionBlock() {
+        when(chatModelFactory.getStreamingChatModel(PRIMARY))
+                .thenReturn(new FailingModel(new RuntimeException(
+                        "status code: 403 - This model is not available in your region")));
+        when(chatModelFactory.getStreamingChatModel(BACKUP))
+                .thenReturn(new HealthyModel("好的，我先读一下合同。"));
+
+        run("conv-region");
+
+        verify(chatModelFactory).getStreamingChatModel(BACKUP);
+        assertTrue(allText().contains("在当前网络环境不可用"), "要说清原模型为什么不能用：" + allText());
+        assertTrue(allText().contains(BACKUP), "要点名切到了哪个模型");
+        assertFalse(sseEvents.contains("error"), "换成功就不该再给用户报错");
+        assertEquals(AgentRunStateService.RunStatus.FINISHED, runState.get("conv-region").status());
+    }
+
+    @Test
+    @DisplayName("地域 403 且备选链里全是国际档：终态报错带 AI_REGION_BLOCKED 标记供前端换文案")
+    void tagsTerminalErrorWhenNoRegionAgnosticBackupExists() {
+        AiFailoverProperties internationalOnly = new AiFailoverProperties();
+        internationalOnly.setModels(List.of("google/gemini-3.6-flash"));
+        when(chatModelFactory.getStreamingChatModel(PRIMARY))
+                .thenReturn(new FailingModel(new RuntimeException(
+                        "status code: 403 - This model is not available in your region")));
+
+        AiAgentController.AgentChatRequest request = new AiAgentController.AgentChatRequest();
+        request.setProjectId(1L);
+        request.setConversationId("conv-region-dead-end");
+        request.setMessage("整理一下这份合同");
+        request.setModel(PRIMARY);
+        orchestratorWith(internationalOnly).handleUserMessage(request, 7L);
+
+        verify(chatModelFactory, never()).getStreamingChatModel(eq("google/gemini-3.6-flash"));
+        assertTrue(sseEvents.contains("error"), "无可用备选时应终态报错");
+        assertTrue(allText().contains(LlmErrorClassifier.REGION_BLOCKED_MARKER),
+                "错误载荷必须带标记，否则前端只能显示上游英文原文：" + allText());
+        assertEquals(AgentRunStateService.RunStatus.ERROR,
+                runState.get("conv-region-dead-end").status());
     }
 
     @Test

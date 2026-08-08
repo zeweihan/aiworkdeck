@@ -33,6 +33,10 @@ public class ConversationSummarizer {
 
     private final ChatModelFactory chatModelFactory;
     private final LegalInfoProtector legalInfoProtector;
+    // 摘要走辅助模型（便宜档），并把 token 记进 token_usage：这类「用户看不见但每轮都在跑」的
+    // 调用此前一行账都不记，用量看板因此系统性偏低
+    private final com.checkba.service.ai.AuxModelResolver auxModelResolver;
+    private final com.checkba.service.ai.TokenUsageService tokenUsageService;
 
     private static final String SUMMARY_PROMPT = """
         你是一个法律项目助理，需要为以下对话生成摘要。
@@ -74,21 +78,33 @@ public class ConversationSummarizer {
         """;
 
     /**
-     * 生成完整对话摘要
+     * 生成完整对话摘要（无归属信息版，记账只能落到当前身份上）
      */
     public SummaryResult generateSummary(List<ChatMessage> messages) {
+        return generateSummary(messages, null, null);
+    }
+
+    /**
+     * 生成完整对话摘要。
+     *
+     * @param projectId      记账归属的项目（可为 null）
+     * @param conversationId 记账归属的会话（可为 null）
+     */
+    public SummaryResult generateSummary(List<ChatMessage> messages, Long projectId, String conversationId) {
         log.info("Generating full conversation summary for {} messages", messages.size());
-        
+
         String content = formatMessages(messages);
         String prompt = String.format(SUMMARY_PROMPT, content);
-        
+
         try {
-            ChatLanguageModel model = chatModelFactory.getChatModel("deepseek/deepseek-v4-flash");
-            String summaryText = model.generate(prompt);
-            
+            ChatLanguageModel model = chatModelFactory.getAuxChatModel();
+            var response = model.generate(UserMessage.from(prompt));
+            recordUsage(response, projectId, conversationId);
+            String summaryText = response.content().text();
+
             // 清理输出
             summaryText = cleanSummaryOutput(summaryText);
-            
+
             // 解析摘要结构
             return parseSummary(summaryText, messages);
         } catch (Exception e) {
@@ -123,9 +139,11 @@ public class ConversationSummarizer {
         String content = formatMessagesCompact(messages);
         
         try {
-            ChatLanguageModel model = chatModelFactory.getChatModel("deepseek/deepseek-v4-flash");
-            String summary = model.generate(String.format(QUICK_SUMMARY_PROMPT, content));
-            summary = cleanSummaryOutput(summary);
+            ChatLanguageModel model = chatModelFactory.getAuxChatModel();
+            var response = model.generate(UserMessage.from(String.format(QUICK_SUMMARY_PROMPT, content)));
+            // 即时压缩的调用方（ContextCompressor）不带 project/conversation，只能按当前身份记账
+            recordUsage(response, null, null);
+            String summary = cleanSummaryOutput(response.content().text());
             
             // 确保法律关键信息被保留
             StringBuilder result = new StringBuilder(summary);
@@ -143,6 +161,27 @@ public class ConversationSummarizer {
         } catch (Exception e) {
             log.warn("Quick summary failed, using fallback: {}", e.getMessage());
             return generateFallbackQuickSummary(messages, legalRefs, amounts, dates);
+        }
+    }
+
+    /**
+     * 摘要调用的 token 记账。
+     *
+     * <p>userId 取 {@link com.checkba.service.ai.PlatformAiUserScope}——摘要跑在记忆管线的独立线程池上，
+     * 方法签名里没有 userId，而那条入口已经建立了作用域（缺身份时记成 null，只影响归属不影响总额）。
+     * 记账失败绝不影响摘要结果。
+     */
+    private void recordUsage(dev.langchain4j.model.output.Response<AiMessage> response,
+                            Long projectId, String conversationId) {
+        if (response == null || response.tokenUsage() == null) {
+            return;
+        }
+        try {
+            tokenUsageService.recordUsage(projectId,
+                    com.checkba.service.ai.PlatformAiUserScope.current(),
+                    auxModelResolver.auxModelId(), response.tokenUsage(), conversationId);
+        } catch (Exception e) {
+            log.warn("摘要 token 记账失败（不影响摘要结果）: {}", e.getMessage());
         }
     }
 
@@ -399,8 +438,8 @@ public class ConversationSummarizer {
     public EpisodeResult generateEpisode(List<ChatMessage> messages, String conversationId, Long projectId) {
         log.info("Generating Episode for {} messages, conversationId={}", messages.size(), conversationId);
         
-        // 1. 生成基础摘要
-        SummaryResult summary = generateSummary(messages);
+        // 1. 生成基础摘要（带上归属：这里本来就有 conversationId/projectId，记账不该丢）
+        SummaryResult summary = generateSummary(messages, projectId, conversationId);
         
         // 2. 提取事件列表
         List<Map<String, Object>> events = extractEvents(messages);

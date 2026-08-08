@@ -13,7 +13,7 @@ from utils import (
     parse_page_ids_from_query, parse_page_ids_from_body, get_filtered_pages
 )
 from services import ExportService, FileService
-from services.ai_service_manager import get_ai_service
+from services.ai_service_manager import get_ai_service, set_active_model_config
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +190,8 @@ def export_editable_pptx(project_id):
             "filename": "optional_custom_name.pptx",
             "page_ids": ["id1", "id2"],  // 可选，要导出的页面ID列表（不提供则导出所有）
             "max_depth": 1,      // 可选，递归深度（默认1=不递归，2=递归一层）
-            "max_workers": 4     // 可选，并发数（默认4）
+            "max_workers": 4,    // 可选，并发数（默认4）
+            "model_config": {...} // [checkba] 主后端下发的供应商/密钥/模型，用于生成干净背景图
         }
     
     Returns:
@@ -234,7 +235,12 @@ def export_editable_pptx(project_id):
         filename = data.get('filename', f'presentation_editable_{project_id}.pptx')
         if not filename.endswith('.pptx'):
             filename += '.pptx'
-        
+
+        # [checkba] 主后端下发的模型配置。可编辑导出要调 AI 生成干净背景图，而递归分析链路
+        # （services/image_editability/factories.py）自己去取 AIService，拿不到请求体，
+        # 只能先记成进程级口径再交给后台任务。
+        set_active_model_config(data.get('model_config'))
+
         # 递归分析参数
         # max_depth 语义：1=只处理表层不递归，2=递归一层（处理图片/图表中的子元素）
         max_depth = data.get('max_depth', 1)  # 默认不递归，与测试脚本一致

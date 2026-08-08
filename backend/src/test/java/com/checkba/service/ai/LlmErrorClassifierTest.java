@@ -58,12 +58,11 @@ class LlmErrorClassifierTest {
     }
 
     @Test
-    @DisplayName("400/401/403 与未知错误一律 FATAL：既不重试也不切模型")
+    @DisplayName("400/401 与未知错误一律 FATAL：既不重试也不切模型")
     void clientErrorsAreFatal() {
         for (String msg : new String[]{
                 "status code: 400 - invalid request",
-                "status code: 401 - no auth credentials found",
-                "status code: 403 - This model is not available in your region"}) {
+                "status code: 401 - no auth credentials found"}) {
             LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(new RuntimeException(msg));
             assertEquals(LlmErrorClassifier.Kind.FATAL, kind, msg);
             assertFalse(kind.retryable(), msg);
@@ -72,6 +71,67 @@ class LlmErrorClassifierTest {
         assertEquals(LlmErrorClassifier.Kind.FATAL,
                 LlmErrorClassifier.classify(new IllegalStateException("something odd")),
                 "未知错误保守处理：不切模型（切了可能重复扣费探测）");
+    }
+
+    @Test
+    @DisplayName("403 地域拒绝单列 REGION_BLOCKED：不重试但允许换模型，且候选要收窄成区域无关")
+    void regionRejectionIsFailoverable() {
+        for (String msg : new String[]{
+                "status code: 403 - This model is not available in your region",
+                "status code: 403 - {\"error\":{\"code\":\"unsupported_country_region_territory\"}}",
+                "status code: 403 - Requests from your Region are not supported"}) {
+            LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(new RuntimeException(msg));
+            assertEquals(LlmErrorClassifier.Kind.REGION_BLOCKED, kind, msg);
+            assertFalse(kind.retryable(), "同一网络里重试永远撞同一个 403");
+            assertTrue(kind.failoverable(), "必须允许切模型，否则用户没有任何出路");
+            assertTrue(kind.requiresRegionAgnosticFailover(), "候选必须过滤成区域无关模型");
+        }
+    }
+
+    @Test
+    @DisplayName("不整体放宽 403：key 失效/额度禁用仍是 FATAL，不许被带进换模型重试")
+    void nonRegionForbiddenStaysFatal() {
+        for (String msg : new String[]{
+                "status code: 403 - Your API key has been disabled",
+                "status code: 403 - Insufficient credits",
+                "status code: 403 - Forbidden"}) {
+            LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(new RuntimeException(msg));
+            assertEquals(LlmErrorClassifier.Kind.FATAL, kind, msg);
+            assertFalse(kind.failoverable(), msg);
+        }
+        // 结构化通道同一口径：403 但响应体没有地域语义
+        assertEquals(LlmErrorClassifier.Kind.FATAL, LlmErrorClassifier.classify(
+                new dev.ai4j.openai4j.OpenAiHttpException(403,
+                        "{\"error\":{\"message\":\"User not found or key revoked\"}}")));
+    }
+
+    @Test
+    @DisplayName("结构化 403 也走响应体判地域：message 里没有「status code」字样")
+    void structuredForbiddenUsesResponseBody() {
+        Throwable err = new RuntimeException("Error while streaming response",
+                new dev.ai4j.openai4j.OpenAiHttpException(403,
+                        "{\"error\":{\"message\":\"This model is not available in your region\"}}"));
+
+        assertEquals(LlmErrorClassifier.Kind.REGION_BLOCKED, LlmErrorClassifier.classify(err));
+    }
+
+    @Test
+    @DisplayName("上游改文案就退化成 FATAL：退化方向安全（不换模型、只是文案回英文原文）")
+    void unrecognizedForbiddenWordingDegradesToFatal() {
+        assertEquals(LlmErrorClassifier.Kind.FATAL, LlmErrorClassifier.classify(
+                new RuntimeException("status code: 403 - geo restriction applies")));
+    }
+
+    @Test
+    @DisplayName("SSE 载荷标记：只有区域拒绝加前缀，前端靠 includes 命中（前面还会拼 Stream Error:）")
+    void regionMarkerOnlyOnRegionBlocked() {
+        String tagged = LlmErrorClassifier.taggedErrorMessage(
+                LlmErrorClassifier.Kind.REGION_BLOCKED, "403 not available in your region");
+        assertTrue(tagged.contains(LlmErrorClassifier.REGION_BLOCKED_MARKER));
+        assertTrue(("Stream Error: " + tagged).contains(LlmErrorClassifier.REGION_BLOCKED_MARKER));
+
+        assertEquals("boom", LlmErrorClassifier.taggedErrorMessage(
+                LlmErrorClassifier.Kind.FATAL, "boom"), "其余分类不许引入噪声前缀");
     }
 
     @Test

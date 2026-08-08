@@ -101,14 +101,26 @@ public class TokenUsageService {
         }
     }
 
+    /**
+     * BYOK 本地估算单价 × token 数。
+     *
+     * <p><b>分档</b>：OpenRouter 对部分模型按输入长度分档涨价（本白名单里 4 个模型有分档），
+     * 所以单价必须按本轮的 promptTokens 取档——只读首档会在长上下文下系统性低报。
+     *
+     * <p><b>已知偏差，不是 bug</b>：命中提示缓存的轮次估算值会偏高。多数模型的
+     * {@code input_cache_read} 单价约为输入价的 1/10，但 langchain4j 0.36 的 TokenUsage
+     * 只回 input/output 两个数，拿不到缓存命中的 token 数，无法把这一档建模进来。
+     * 真花的钱以平台对账为准（{@link PlatformUsageAccountant}），这里的值只是本地统计。
+     */
     private BigDecimal calculateCost(String modelId, int promptTokens, int completionTokens) {
         AllowedModels model = AllowedModels.fromId(modelId);
         if (model == null) {
             return BigDecimal.ZERO; // Unknown model, 0 cost
         }
 
-        BigDecimal inputPrice = BigDecimal.valueOf(model.getInputPricePerM());
-        BigDecimal outputPrice = BigDecimal.valueOf(model.getOutputPricePerM());
+        AllowedModels.PriceTier tier = model.priceTierFor(promptTokens);
+        BigDecimal inputPrice = BigDecimal.valueOf(tier.inputPricePerM());
+        BigDecimal outputPrice = BigDecimal.valueOf(tier.outputPricePerM());
         BigDecimal millions = BigDecimal.valueOf(1_000_000);
 
         BigDecimal inputCost = BigDecimal.valueOf(promptTokens).multiply(inputPrice).divide(millions, 10, RoundingMode.HALF_UP);

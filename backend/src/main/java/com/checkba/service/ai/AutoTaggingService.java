@@ -29,6 +29,9 @@ public class AutoTaggingService {
     private final TagService tagService;
     private final FileTagService fileTagService;
     private final StorageServiceFactory storageServiceFactory;
+    // 自动打标签走辅助模型（便宜档）并落账：每次上传都会跑一次，此前用默认模型且一行账不记
+    private final AuxModelResolver auxModelResolver;
+    private final TokenUsageService tokenUsageService;
 
     /**
      * Automatically generate and attach tags to a file based on its content.
@@ -51,18 +54,21 @@ public class AutoTaggingService {
             // Truncate text to avoid token limits (e.g. first 3000 chars)
             String truncatedText = text.length() > 3000 ? text.substring(0, 3000) : text;
             
-            // 2. Call LLM
-            // Use a cheaper/faster model if possible, or default
-            ChatLanguageModel model = chatModelFactory.getChatModel(null); // Default model
-            
+            // 2. Call LLM（辅助模型档：ai.auxModel → yml ai.aux-model）
+            ChatLanguageModel model = chatModelFactory.getAuxChatModel();
+
             String prompt = "Analyze the following file content and suggest top 5 relevant tags. " +
                     "Tags should be concise (1-3 words), language should match the content. " +
                     "Return ONLY the tags separated by commas, no other text. " +
                     "Content:\n" + truncatedText;
-            
-            String response = model.generate(prompt);
+
+            // 用 Response 版而不是 generate(String)：后者拿不到 tokenUsage，这笔账就记不上
+            dev.langchain4j.model.output.Response<dev.langchain4j.data.message.AiMessage> llmResponse =
+                    model.generate(dev.langchain4j.data.message.UserMessage.from(prompt));
+            recordUsage(llmResponse, projectId, userId);
+            String response = llmResponse.content().text();
             log.info("LLM Auto-tag response: {}", response);
-            
+
             // 3. Parse and save tags
             if (StringUtils.hasText(response)) {
                 // Remove potential markdown code blocks or extra text if LLM is chatty
@@ -96,6 +102,20 @@ public class AutoTaggingService {
         }
     }
     
+    /** 打标签调用的 token 记账（会话无关，conversationId 传 null）。失败绝不影响打标签。 */
+    private void recordUsage(dev.langchain4j.model.output.Response<dev.langchain4j.data.message.AiMessage> response,
+                            Long projectId, Long userId) {
+        if (response == null || response.tokenUsage() == null) {
+            return;
+        }
+        try {
+            tokenUsageService.recordUsage(projectId, userId,
+                    auxModelResolver.auxModelId(), response.tokenUsage(), null);
+        } catch (Exception e) {
+            log.warn("自动打标签 token 记账失败（不影响打标签）: {}", e.getMessage());
+        }
+    }
+
     private String extractText(String storagePath) {
         try {
             StorageService storageService = storageServiceFactory.getStorageService();

@@ -372,19 +372,32 @@
                                 <text class="mode-option-desc">{{ mode.desc }}</text>
                              </view>
                           </view>
+                          <view v-if="localModeNotice" class="mode-note">{{ localModeNotice }}</view>
                        </view>
                     </view>
-                    <!-- Model Selector -->
+                    <!-- Model Selector：清单来自 GET /api/ai/models，按厂商分组、国际档在后 -->
                     <view class="model-selector" @tap="toggleModelDropdown">
                        <text class="model-name">{{ currentModelName }}</text>
                        <text class="dropdown-arrow">▼</text>
                        <view v-if="showModelDropdown" class="model-dropdown down">
-                          <view v-for="m in availableModels" :key="m.id"
-                                class="model-option"
-                                :class="{ active: currentModelId === m.id }"
-                                @tap.stop="selectModel(m)">
-                             {{ m.name }}
+                          <view v-for="g in modelGroups" :key="g.key" class="model-group">
+                             <view class="model-group-head">
+                                <text class="model-group-vendor">{{ g.vendor }}</text>
+                                <text v-if="g.region === 'INTERNATIONAL'" class="model-region-tag">需国际网络</text>
+                             </view>
+                             <view v-for="m in g.models" :key="m.id"
+                                   class="model-option"
+                                   :class="{ active: currentModelId === m.id }"
+                                   @tap.stop="selectModel(m)">
+                                <view class="model-option-head">
+                                   <text class="model-option-name">{{ m.name }}</text>
+                                   <text v-if="m.tiered" class="model-tier-tag">长上下文单价更高</text>
+                                </view>
+                                <text class="model-option-price">{{ priceLabel(m) }}</text>
+                             </view>
                           </view>
+                          <view v-if="!modelGroups.length" class="model-empty">暂无可用模型，到设置页检查 AI 供应商配置</view>
+                          <view v-if="networkRegionBasis" class="model-region-basis">网络判定：{{ networkRegionBasis }}</view>
                        </view>
                     </view>
                     <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
@@ -536,19 +549,32 @@
                             <text class="mode-option-desc">{{ mode.desc }}</text>
                          </view>
                       </view>
+                      <view v-if="localModeNotice" class="mode-note">{{ localModeNotice }}</view>
                    </view>
                 </view>
-                <!-- Model Selector -->
+                <!-- Model Selector：清单来自 GET /api/ai/models，按厂商分组、国际档在后 -->
                 <view class="model-selector" @tap="toggleModelDropdown">
                    <text class="model-name">{{ currentModelName }}</text>
                    <text class="dropdown-arrow">▲</text>
                    <view v-if="showModelDropdown" class="model-dropdown up">
-                      <view v-for="m in availableModels" :key="m.id"
-                            class="model-option"
-                            :class="{ active: currentModelId === m.id }"
-                            @tap.stop="selectModel(m)">
-                         {{ m.name }}
+                      <view v-for="g in modelGroups" :key="g.key" class="model-group">
+                         <view class="model-group-head">
+                            <text class="model-group-vendor">{{ g.vendor }}</text>
+                            <text v-if="g.region === 'INTERNATIONAL'" class="model-region-tag">需国际网络</text>
+                         </view>
+                         <view v-for="m in g.models" :key="m.id"
+                               class="model-option"
+                               :class="{ active: currentModelId === m.id }"
+                               @tap.stop="selectModel(m)">
+                            <view class="model-option-head">
+                               <text class="model-option-name">{{ m.name }}</text>
+                               <text v-if="m.tiered" class="model-tier-tag">长上下文单价更高</text>
+                            </view>
+                            <text class="model-option-price">{{ priceLabel(m) }}</text>
+                         </view>
                       </view>
+                      <view v-if="!modelGroups.length" class="model-empty">暂无可用模型，到设置页检查 AI 供应商配置</view>
+                      <view v-if="networkRegionBasis" class="model-region-basis">网络判定：{{ networkRegionBasis }}</view>
                    </view>
                 </view>
                 <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
@@ -602,7 +628,7 @@ import RootBubble from './AgentMessage/RootBubble.vue'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills } from '@/services/api.js'
+import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 
 export default {
@@ -687,40 +713,151 @@ export default {
 
     // Model Selection
     const showModelDropdown = ref(false)
-    // 模型 ID 必须与后端 AllowedModels 白名单一致，且为 OpenRouter 当前在线模型。
-    // 排序：区域无关模型在前（Google/Anthropic/OpenAI 系在国内网络会被
-    // OpenRouter 返回 403 region 错误，仅国际网络可用）
-    const availableModels = [
-      { id: 'deepseek/deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
-      { id: 'deepseek/deepseek-v4-pro', name: 'DeepSeek V4 Pro' },
-      { id: 'qwen/qwen3-235b-a22b-2507', name: 'Qwen3 235B' },
-      { id: 'moonshotai/kimi-k2.6', name: 'Kimi K2.6' },
-      { id: 'z-ai/glm-5', name: 'GLM-5' },
-      { id: 'anthropic/claude-sonnet-5', name: 'Claude Sonnet 5 (国际网络)' },
-      { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro (国际网络)' },
-      { id: 'openai/gpt-5.2', name: 'GPT-5.2 (国际网络)' }
-    ]
-    const currentModelId = ref(availableModels[0].id)
-    const currentModelName = ref(availableModels[0].name)
+    // 模型清单唯一来源是后端 GET /api/ai/models（后端 AllowedModels 白名单派生）。
+    // 这里曾经硬编码过 8 条，是「三份互不同步的事实来源」之一：前端写的 id 一旦
+    // 不在白名单里，工厂会静默回落成默认模型——用户以为在用贵模型，实际不是。
+    const availableModels = ref([])
+    const defaultModelId = ref('')
+    // 网络区域判定依据（后端本机 JVM 信号判的，不是官网回传、也不是 navigator.language）：
+    // 境内清单里不含国际档模型，这句人读的判据用来解释「国际模型为什么不见了」
+    const networkRegionBasis = ref('')
 
-    // Fix: Define selectModel explicitly
+    const currentModelId = ref('')
+    const currentModelName = ref('选择模型')
+
+    // 模型选择必须持久化：AI 面板挂在 v-if 上，关掉右栏再打开组件会重建，
+    // 不落盘就会静默复位成清单第一条——这是有计费含义的选择，不能悄悄改。
+    const MODEL_STORAGE_KEY = 'ai_selected_model'
+
+    const readPersistedModelId = () => {
+      try {
+        const v = uni.getStorageSync(MODEL_STORAGE_KEY)
+        // uni 的 storage 会按写入类型还原，非字符串一律视为脏数据丢弃
+        return typeof v === 'string' ? v.trim() : ''
+      } catch (e) {
+        console.warn('[ChatInterface] 读取模型选择失败:', e)
+        return ''
+      }
+    }
+
+    const persistModelId = (id) => {
+      try {
+        uni.setStorageSync(MODEL_STORAGE_KEY, id || '')
+      } catch (e) {
+        console.warn('[ChatInterface] 保存模型选择失败:', e)
+      }
+    }
+
+    // 单价跨度从 0.02 到 15 美元/百万 tokens，固定两位小数会把便宜模型显示成 0.00
+    const formatPrice = (v) => {
+      const n = Number(v)
+      if (!isFinite(n) || n < 0) return '-'
+      if (n === 0) return '0'
+      return (n < 1 ? n.toFixed(3) : n.toFixed(2)).replace(/0+$/, '').replace(/\.$/, '')
+    }
+
+    // 下拉里的价格标签：让用户在切模型之前就知道自己在花什么钱
+    const priceLabel = (m) => `输入 $${formatPrice(m.inputPricePerM)} / 输出 $${formatPrice(m.outputPricePerM)} 每百万 tokens`
+
+    // 按厂商分组；region=INTERNATIONAL 的组排在后面并标注「需国际网络」
+    const modelGroups = computed(() => {
+      const groups = []
+      const index = new Map()
+      for (const m of availableModels.value) {
+        const key = `${m.region}|${m.vendor}`
+        let g = index.get(key)
+        if (!g) {
+          g = { key, vendor: m.vendor || '其他', region: m.region, models: [] }
+          index.set(key, g)
+          groups.push(g)
+        }
+        g.models.push(m)
+      }
+      // 组内顺序保持后端下发顺序（白名单里已按国内在前、同厂商相邻排好）
+      return groups.sort((a, b) => (a.region === 'INTERNATIONAL' ? 1 : 0) - (b.region === 'INTERNATIONAL' ? 1 : 0))
+    })
+
+    const applyModelSelection = (id) => {
+      const hit = availableModels.value.find(m => m.id === id)
+      currentModelId.value = hit ? hit.id : (id || '')
+      currentModelName.value = hit ? hit.name : (id || '选择模型')
+    }
+
     const selectModel = (m) => {
       console.log('Switching model to:', m.name)
-      currentModelId.value = m.id
-      currentModelName.value = m.name
+      applyModelSelection(m.id)
+      persistModelId(m.id)
       showModelDropdown.value = false
+    }
+
+    const loadModelCatalog = async () => {
+      try {
+        const res = await fetchAiModels()
+        const list = Array.isArray(res?.models) ? res.models : []
+        availableModels.value = list
+        defaultModelId.value = res?.defaultModel || ''
+        networkRegionBasis.value = res?.networkRegionBasis || ''
+
+        if (!list.length) {
+          // 清单为空只有配置异常一种可能，此时不要伪造一个 id 发出去
+          applyModelSelection('')
+          return
+        }
+
+        // 默认模型取端点回的 defaultModel（DB 的 ai.defaultModel 优先于 yml），
+        // 不能自己取清单第一条：那会与后端实际发出去的模型不一致
+        const fallbackId = list.some(m => m.id === defaultModelId.value)
+          ? defaultModelId.value
+          : list[0].id
+
+        const saved = readPersistedModelId()
+        if (saved && list.some(m => m.id === saved)) {
+          applyModelSelection(saved)
+          return
+        }
+
+        applyModelSelection(fallbackId)
+        persistModelId(fallbackId)
+        if (saved) {
+          // 存过的模型已不在可用集合（被移出白名单，或换了网络区域后拿不到国际档）：
+          // 换了模型就必须说一声，静默改计价对象是这次要修的老毛病
+          uni.showToast({
+            title: `上次选择的模型不再可用，已切换为「${currentModelName.value}」`,
+            icon: 'none',
+            duration: 3000
+          })
+        }
+      } catch (e) {
+        // 拉不到目录不该让面板不可用：保留上次选择（可能为空），由发送时的后端校验兜底
+        console.warn('[ChatInterface] 加载模型目录失败:', e)
+        const saved = readPersistedModelId()
+        if (saved && !currentModelId.value) applyModelSelection(saved)
+      }
     }
 
     // Agent Mode Selection (Ask, Plan, Agent)
     const showModeDropdown = ref(false)
-    const availableModes = [
+    const ALL_MODES = [
       { id: 'AGENT', name: 'Agent', icon: '', desc: '自动执行' },
       { id: 'ASK', name: 'Ask', icon: '', desc: '纯对话' },
       { id: 'PLAN', name: 'Plan', icon: '', desc: '规划确认' }
     ]
-    const currentModeId = ref(availableModes[0].id)
-    const currentModeName = ref(availableModes[0].name)
-    const currentModeIcon = ref(availableModes[0].icon)
+    // 当前供应商（GET /api/ai/config 的 activeProvider）：模型目录端点不回 provider，
+    // 而模式可选范围是按供应商定的，只能另取这个信号
+    const activeProvider = ref('')
+    // 本地 Ollama 只支持 ASK：langchain4j 0.36 的 OllamaStreamingChatModel 没有三参
+    // generate，选 AGENT/PLAN 会在流式过程中抛英文异常，不如在选择器里就不给
+    const isLocalOnlyProvider = computed(() => String(activeProvider.value).toUpperCase() === 'OLLAMA')
+    const availableModes = computed(() =>
+      isLocalOnlyProvider.value ? ALL_MODES.filter(m => m.id === 'ASK') : ALL_MODES
+    )
+    const localModeNotice = computed(() =>
+      isLocalOnlyProvider.value ? '本地模型不支持工具调用，Agent 与 Plan 需要云端模型' : ''
+    )
+
+    const currentModeId = ref(ALL_MODES[0].id)
+    const currentModeName = ref(ALL_MODES[0].name)
+    const currentModeIcon = ref(ALL_MODES[0].icon)
 
     const selectMode = (mode) => {
       console.log('Switching agent mode to:', mode.name)
@@ -728,6 +865,21 @@ export default {
       currentModeName.value = mode.name
       currentModeIcon.value = mode.icon
       showModeDropdown.value = false
+    }
+
+    const loadAiProvider = async () => {
+      try {
+        const res = await getAiConfig()
+        activeProvider.value = res?.activeProvider || ''
+      } catch (e) {
+        // 取不到供应商时按云端处理（不缩减模式），避免误把云端用户锁成只能 Ask
+        console.warn('[ChatInterface] 加载 AI 供应商配置失败:', e)
+        activeProvider.value = ''
+      }
+      // 供应商是本地档时把当前模式收回 ASK：默认值是 AGENT，不收就会一发即报错
+      if (isLocalOnlyProvider.value && currentModeId.value !== 'ASK') {
+        selectMode(ALL_MODES.find(m => m.id === 'ASK'))
+      }
     }
 
     const toggleModeDropdown = () => {
@@ -901,6 +1053,13 @@ export default {
         showModifiedPopup.value = false
         showNewPopup.value = false
     }
+
+    // 模型目录与供应商在组件挂载时拉一次：面板挂在 v-if 上，每次打开都会重建，
+    // 这也正是恢复持久化模型选择的时机
+    onMounted(() => {
+      loadModelCatalog()
+      loadAiProvider()
+    })
 
     // Scroll to bottom when bubbles change
     watch(() => bubbles.value.length, () => {
@@ -1084,6 +1243,19 @@ export default {
         if (typeof uni !== 'undefined') {
           uni.showToast({ title: '请输入消息内容', icon: 'none' })
         }
+        return
+      }
+
+      // 只有图片、没有文字：产品没有原生图像输入通道（/api/agent/chat 的请求体里
+      // 根本没有图像字段），粘贴的图片只用于气泡展示，「图片进 AI」全靠 OCR 转文本。
+      // 这种消息发出去 prompt 是空串，用户看着自己的图片气泡等回答，模型收到一条空消息。
+      if (!text && hasImages && typeof uni !== 'undefined') {
+        uni.showModal({
+          title: '图片需要配一句说明',
+          content: '图片会以 OCR 识别出的文字形式加入上下文，模型看不到图像本身。补充一句要做什么（例如「把这张图里的条款整理成表格」），再发送。',
+          showCancel: false,
+          confirmText: '知道了'
+        })
         return
       }
 
@@ -1940,7 +2112,9 @@ export default {
        },
        selectModel,
        showModelDropdown,
-       availableModels,
+       modelGroups,
+       priceLabel,
+       networkRegionBasis,
        // Agent Mode
        currentModeId,
        currentModeName,
@@ -1949,6 +2123,7 @@ export default {
        selectMode,
        showModeDropdown,
        availableModes,
+       localModeNotice,
        // Skill 选择
        showSkillDropdown,
        availableSkills,
@@ -2425,8 +2600,9 @@ export default {
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   z-index: 1001;
-  min-width: 180px;
-  max-height: 200px;
+  /* 分组标题 + 单价标签比原来的纯模型名占位多，窄了会把价格挤成两行 */
+  min-width: 268px;
+  max-height: 320px;
   overflow-y: auto;
   padding: 4px 0;
 }
@@ -2528,6 +2704,17 @@ export default {
 .mode-option-desc {
   font-size: 11px;
   color: #888;
+}
+
+/* 本地供应商（Ollama）只剩 Ask 时的说明行 */
+.mode-note {
+  border-top: 1px solid #f0f0f0;
+  margin-top: 4px;
+  padding: 6px 14px 2px;
+  font-size: 10px;
+  color: #aaa;
+  line-height: 1.5;
+  max-width: 200px;
 }
 
 .dropdown-menu {
@@ -2699,11 +2886,14 @@ export default {
 }
 
 .model-option {
-  padding: 10px 14px;
+  padding: 8px 14px;
   cursor: pointer;
   font-size: 13px;
   color: #333;
   transition: background 0.15s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .model-option:hover {
   background: rgba(26, 83, 54, 0.08);
@@ -2712,6 +2902,62 @@ export default {
   color: #1A5336;
   font-weight: 500;
   background: rgba(26, 83, 54, 0.04);
+}
+
+/* ===== 模型下拉：按厂商分组，国际档在后并标注需国际网络 ===== */
+.model-group + .model-group {
+  border-top: 1px solid #f0f0f0;
+}
+.model-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px 2px;
+}
+.model-group-vendor {
+  font-size: 11px;
+  color: #999;
+  letter-spacing: 0.5px;
+}
+.model-region-tag {
+  font-size: 10px;
+  color: #b45309;
+  background: rgba(180, 83, 9, 0.1);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.model-option-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.model-option-name {
+  font-size: 13px;
+}
+.model-tier-tag {
+  font-size: 10px;
+  color: #64748b;
+  background: rgba(100, 116, 139, 0.1);
+  border-radius: 3px;
+  padding: 1px 4px;
+}
+.model-option-price {
+  font-size: 11px;
+  color: #888;
+  font-weight: 400;
+}
+.model-empty {
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #888;
+}
+.model-region-basis {
+  border-top: 1px solid #f0f0f0;
+  margin-top: 4px;
+  padding: 6px 14px 2px;
+  font-size: 10px;
+  color: #aaa;
+  line-height: 1.5;
 }
 
 .send-btn {

@@ -177,16 +177,14 @@ ai:
         registry-base-url: https://www.workdeck.ai/api/registry
         telemetry-ingest-url: https://www.workdeck.ai/api/telemetry
         account-page-url: https://www.workdeck.ai/en/account
+  # 辅助模型：起标题 / 上下文摘要 / 记忆抽取 / memory_search / 文件自动打标签。
+  # 这些调用用户看不见但每轮都在跑，单列一个便宜模型是省钱的主要来源；
+  # 默认取白名单里最便宜且支持 tools 的一条（0.03/0.13 美元每 1M token，1M 上下文）。
+  # 运行时可被 system_setting 的 ai.auxModel 覆盖；非白名单模型会被工厂直接拒绝（不静默回落）。
+  aux-model: qwen/qwen3.7-flash
   model:
-    # 当前启用的提供商：ollama（本地）或 gemini（Google 云端）
+    # 当前启用的提供商（三档）：awd-cloud（平台通道）/ open-router（自备 Key）/ ollama（本地，实验档）
     provider: open-router
-    gemini:
-      # 建议通过环境变量 GEMINI_API_KEY 注入，避免写死在配置文件
-      api-key: ${GEMINI_API_KEY:}
-      # 默认使用官方当前推荐的通用文本模型，可按需调整为 gemini-2.5-flash 等
-      model-name: gemini-2.5-flash
-      api-base-url: https://generativelanguage.googleapis.com/v1beta
-      timeout: 60s
     ollama:
       # 与当前本地 Ollama 配置保持一致，方便一键切换回本地模型
       base-url: http://localhost:11434
@@ -209,9 +207,11 @@ ai:
   failover:
     enabled: true
     models:
-      # 区域无关的常青模型（国内外均实测可用），与默认模型撞车时会自动跳过
+      # 区域无关的常青模型（国内外均实测可用），与默认模型撞车时会自动跳过。
+      # 必须是 AllowedModels.Region.GLOBAL——境内用户的兜底路径不能是境内被 403 的国际模型，
+      # 由 AiFailoverPropertiesBindingTest 守
       - deepseek/deepseek-v4-flash
-      - qwen/qwen3-235b-a22b-2507
+      - qwen/qwen3.7-flash
   # AI 上下文与压缩配置（对应 AiContextProperties，以下均为默认值，可按需覆盖）
   context:
     # 上下文总 token 预算
@@ -258,13 +258,18 @@ ai:
     max-rounds: 6
     # 同时运行的子任务数上限（专用线程池大小）
     max-parallel: 3
-    # 单个子任务超时（秒）
-    timeout-seconds: 180
-    # 子 Agent 消息栈 token 预算（估算）
-    token-budget: 30000
+    # 单个子任务超时（秒）。必须大于 ai.model.open-router.timeout（600s）：
+    # 小于它的话等待方先放弃，而 cancel(true) 打不断阻塞中的 HTTP 读，
+    # 子 Agent 会照样烧完 token 而结果被丢弃。
+    timeout-seconds: 630
+    # 子 Agent 消息栈 token 预算（估算）。× chars-per-token = 120000 字符，
+    # 要能装下两个满额（50000 字符）文件；30000 时读一个文件就吃掉 5/6 预算。
+    token-budget: 60000
     # token 估算系数（与 ai.context.chars-per-token 口径一致）
     chars-per-token: 2.0
-    # 子 Agent 模型 ID；留空则继承主会话所选模型
+    # 子 Agent 模型 ID。解析链：system_setting 的 ai.subagentModel → 本项 →
+    # 辅助模型（ai.auxModel / yml 的 ai.aux-model）。留空即用便宜的辅助模型，
+    # 不再继承主会话所选模型（子任务多是读文件/摘要这类活，没必要用贵模型）。
     model: ""
   # 插件体系配置（规范见 docs/PLUGIN_SPEC.md，在线分发见 docs/PLUGIN_DISTRIBUTION.md）
   plugins:

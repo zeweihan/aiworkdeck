@@ -658,7 +658,17 @@ export function useAgentStream() {
             // 注意：错误必须写入 content（walkthrough 卡片当前未渲染，写那里用户永远看不到）
             if (evt === 'error') {
                 const errMsg = dataStr || "Unknown Error"
-                currentAssistantBubble.value.content += `\n\n> **执行中断**：${errMsg}\n`
+                // 地域拒绝（后端 LlmErrorClassifier.REGION_BLOCKED_MARKER）：上游返回的是一句英文
+                // 「This model is not available in your region」，原样拼给用户等于没有信息。
+                // 这里换成中文引导。注意载荷前面还拼着「Stream Error: 」，所以用 includes 而不是前缀判断。
+                // 走到这一步说明后端连区域无关的备用模型也没换成（换成了会走文本流的切换提示，不是 error）。
+                if (errMsg.includes('AI_REGION_BLOCKED')) {
+                    currentAssistantBubble.value.content +=
+                        '\n\n> **该模型在当前网络环境不可用**：境外模型在境内网络会被服务商按地域拒绝。'
+                        + '可在设置中改用 AI Workdeck 云端通道，或换成标注「境内外均可用」的模型后重新发送。\n'
+                } else {
+                    currentAssistantBubble.value.content += `\n\n> **执行中断**：${errMsg}\n`
+                }
             }
         }
         if (evt === 'bubble_end' || evt === 'cancelled') isStreaming.value = false
