@@ -94,6 +94,12 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 - **PNG 在用户机器上不会生成**：需要外部光栅器（rsvg-convert / inkscape / soffice /
   cairosvg），桌面端一个都不随包分发。SVG 是矢量母版，展示打印都够用；
   交付说明里会如实解释这一条。想补齐的话，最省的路子是前端 canvas 从 SVG 转。
+  `LitigationVisualServiceTest` 断言的是「PNG 有无与本机 doctor 报的光栅器能力一致」，
+  不是写死的文件数——写死会让测试变成「构建机装了什么」的探针。
+- **Windows 侧打包体积 19.7 MB，macOS 只有 4.3 MB**（CI 实测）。差的约 15 MB 是
+  各种渲染后端 DLL（pango/cairo/gd/poppler…），我们只用 `-Tplain` 其实用不到。
+  没削是因为 Windows 上算不出 DLL 依赖闭包（没有 `otool -L` 的等价物），
+  盲删的后果是运行期 dlopen 失败、且只在用户机器上出现。**要削得先有台 Windows 验证。**
 - **`.drawio` / `.vsdx` 必须挡在 LOWA 编辑器之外**（`fileOpenTabs.js` 的
   `externalSourceTypes`）。它们带 wpsFileId，不挡就会走「可编辑」兜底分支，
   被只有 Writer+Calc 的引擎当文本导入，满屏乱码——与当年 PDF 同一类事故。

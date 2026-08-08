@@ -179,11 +179,23 @@ function prepareWin(fromDir, outRoot) {
   const binDir = path.join(outRoot, 'bin')
   fs.mkdirSync(binDir, { recursive: true })
   // Windows 的 DLL 就在 exe 同目录解析，不需要任何重定位；插件也在 bin/ 下。
-  // 体积不值得为了几百 KB 去逐个筛，整份 bin 拷走反而不会漏。
+  //
+  // 只丢掉**其它可执行文件**（acyclic/bcomps/ccomps/circo/neato/sfdp/twopi/gvpr…
+  // 二十来个），我们只调 dot。DLL 一个不动：Windows 上算不出依赖闭包
+  // （没有 otool -L 的等价物可用），少一个就是运行期 dlopen 失败，
+  // 而这种失败只在用户机器上出现。剩下的体积主要是各种渲染后端的 DLL
+  // （pango/cairo/gd/poppler…），我们只用 -Tplain 其实用不到——
+  // **已知欠账：Windows 侧 19.7 MB vs macOS 4.3 MB，多出来的约 15 MB 就在这里。**
+  // 要削得先有台 Windows 能验证闭包，不能盲删。
+  const dropExe = (f) => f.toLowerCase().endsWith('.exe') && f.toLowerCase() !== 'dot.exe'
+  let dropped = 0
   for (const f of fs.readdirSync(srcBin)) {
     const s = path.join(srcBin, f)
-    if (fs.statSync(s).isFile()) fs.copyFileSync(s, path.join(binDir, f))
+    if (!fs.statSync(s).isFile()) continue
+    if (dropExe(f)) { dropped++; continue }
+    fs.copyFileSync(s, path.join(binDir, f))
   }
+  console.log(`Windows：保留 dot.exe，跳过其余 ${dropped} 个可执行文件`)
   const dot = path.join(binDir, 'dot.exe')
   if (!fs.existsSync(dot)) throw new Error(`找不到 dot.exe：${dot}`)
   execFileSync(dot, ['-c'], { stdio: 'inherit' })
