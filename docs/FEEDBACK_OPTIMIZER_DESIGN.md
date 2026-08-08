@@ -126,7 +126,10 @@ OPTIMIZER_BASE_BRANCH=master
 # 编码 Agent（默认 claude -p；换成别的把 optimizer.agent.command 整条替换）
 #   claude:  ["claude","-p","{prompt}","--permission-mode","acceptEdits"]
 #   codex :  ["codex","exec","-m","gpt-5.5","--sandbox","workspace-write","{prompt}"]
-# {prompt} 换成任务书正文，{promptFile} 换成任务书文件路径
+# {prompt} 换成任务书正文，{promptFile} 换成任务书文件路径。
+# 前提：这个 CLI 必须在**跑优化者的那台机器上已登录**——它是以后端进程的身份被 spawn 的，
+# 拿不到你终端里的交互式登录态。没登录的表现是 Agent 秒退、diff 为空、
+# 本条反馈按 NO_CHANGES 转成邮件出口（不会假装修好）。
 
 # 邮件出口：配了 spring.mail.host 才会有 JavaMailSender，没配这条出口明确报「不可用」
 SPRING_MAIL_HOST=smtp.qq.com

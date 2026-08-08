@@ -1067,7 +1067,7 @@
                 </view>
                 <view class="fb-status-cell">
                   <text class="fb-status-label">计划</text>
-                  <text class="fb-status-value">{{ optimizer.cron || '—' }}</text>
+                  <text class="fb-status-value mono">{{ optimizer.cron || '—' }}</text>
                 </view>
                 <view class="fb-status-cell">
                   <text class="fb-status-label">待处理</text>
@@ -3508,6 +3508,12 @@ $border-color: #E9ECEF; // Gray-Light
 .fb-status-value {
   font-size: 13px;
   color: #12344D;
+}
+
+/* cron 表达式在正文衬线字体下星号会飘起来，读不出「0 0 9 * * *」的结构 */
+.fb-status-value.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
 }
 
 .fb-actions {
