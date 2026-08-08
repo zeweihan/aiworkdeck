@@ -46,6 +46,7 @@ public class LitigationVisualPanelService {
     private final ProjectFileService projectFileService;
     private final ProjectStorageResolver storageResolver;
     private final LitigationVisualService litviz;
+    private final com.checkba.service.ai.LitigationPngService pngService;
 
     /** 图廊里的一条。 */
     public record DiagramView(
@@ -194,6 +195,15 @@ public class LitigationVisualPanelService {
             // 原地替换：同名文件覆盖内容，文件 ID 不变——编辑器里已打开的标签会
             // 收到 reload 而不是变成一个孤儿标签。
             var files = r.raw().getJSONArray("files");
+            // 与出图那条一致：引擎的 PNG 依赖外部光栅器（桌面端不带），服务端补上，
+            // 否则换完风格这张图就插不回文书了。
+            java.util.List<Path> paths = new ArrayList<>();
+            for (int i = 0; i < files.size(); i++) {
+                paths.add(Path.of(files.getJSONObject(i).getStr("path")));
+            }
+            for (Path extra : pngService.ensurePngFor(paths)) {
+                files.add(cn.hutool.json.JSONUtil.createObj().set("path", extra.toString()));
+            }
             int replaced = 0;
             for (int i = 0; i < files.size(); i++) {
                 Path src = Path.of(files.getJSONObject(i).getStr("path"));

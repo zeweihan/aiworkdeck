@@ -76,6 +76,7 @@ public class LitigationVisualTools implements AgentToolComponent {
     }
 
     private final LitigationVisualService litviz;
+    private final com.checkba.service.ai.LitigationPngService pngService;
     private final ProjectFileService projectFileService;
     private final ProjectFileRepository projectFileRepository;
     private final ProjectStorageResolver storageResolver;
@@ -181,6 +182,20 @@ public class LitigationVisualTools implements AgentToolComponent {
             JSONArray files = r.raw().getJSONArray("files");
             if (files == null || files.isEmpty()) return "出图失败：引擎没有产出任何文件。";
 
+            // 引擎的 PNG 依赖外部光栅器，桌面端不随包分发，所以多数机器上这一项是空的。
+            // 用 Batik 在服务端补上——没有位图的话这张图就插不进用户正在写的文书
+            // （doc_insert_image 只收 jpg/png/gif/bmp/webp）。
+            List<Path> enginePaths = new ArrayList<>();
+            for (int i = 0; i < files.size(); i++) {
+                enginePaths.add(Path.of(files.getJSONObject(i).getStr("path")));
+            }
+            for (Path extra : pngService.ensurePngFor(enginePaths)) {
+                files.add(JSONUtil.createObj()
+                        .set("format", "png")
+                        .set("path", extra.toString())
+                        .set("bytes", Files.size(extra)));
+            }
+
             boolean draft = r.raw().getBool("draft", false);
             // 一图一文件夹：一次出五种格式，摊平在项目根下会把文件树冲垮。
             String folderName = sanitize(r.raw().getStr("basename", safeName), safeName);
@@ -241,13 +256,15 @@ public class LitigationVisualTools implements AgentToolComponent {
         sb.append("交付文件：").append(String.join("、", files)).append("\n");
         sb.append("其中 .svg 是母版（已在编辑器打开），.pptx / .drawio / .vsdx 是可以逐个图形"
                 + "接着改的源文件（PowerPoint、WPS、draw.io、ProcessOn、Visio 都能开）。\n");
-        // PNG 靠外部光栅器（rsvg-convert / inkscape / soffice / cairosvg），桌面端不随包
-        // 分发任何一个，所以多数用户机器上这一项会缺。不解释的话，用户只会看到
-        // "说好的五个文件少了一个"。SVG 是矢量母版，展示与打印都不比 PNG 差。
-        if (files.stream().noneMatch(n -> n.endsWith(".png"))) {
-            sb.append("没有 .png：这台机器上没有 SVG 光栅化工具。.svg 是矢量母版，"
-                    + "在编辑器里、浏览器里、打印时都能正常显示，通常不需要 PNG；"
-                    + "确实要位图时可以从 .pptx 里导出。\n");
+        // PNG 是插进文书用的那一份：doc_insert_image 只收位图，不收 svg。
+        // 引擎的 PNG 依赖外部光栅器（桌面端不带），所以服务端用 Batik 兜底补上；
+        // 真的一张都没有时说清楚，别让用户对着少掉的文件猜。
+        if (files.stream().anyMatch(n -> n.endsWith(".png"))) {
+            sb.append("要把图放进正在写的文书，用 doc_insert_image 插那张 .png"
+                    + "（它只收位图，不认 .svg）。\n");
+        } else {
+            sb.append("没有 .png：这台机器上的光栅化没成功。图本身没问题，"
+                    + ".svg 母版照常可看可打印；只是暂时插不进 Word 文书。\n");
         }
         if (draft) {
             sb.append("\n注意：这是**草稿**（文件名带 -draft）。语义地图里 checkpoint.confirmed 不为 true，"

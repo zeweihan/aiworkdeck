@@ -34,6 +34,8 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
   跑 cli.py、解 JSON。含参考文档读取（带路径穿越防护）。
 - `service/ai/tools/LitigationVisualTools.java` — 三个 @Tool：`litigation_reference`
   （渐进披露读规范）、`litigation_checkpoint`（三问）、`litigation_render`（出图）。
+- `service/ai/LitigationPngService.java` — SVG→PNG（Batik，纯 Java）。位图是插进文书
+  的那一环，见「已知地雷」里 PNG 那条。
 - `service/LitigationVisualPanelService.java` — 面板后端：图廊、换风格、拼 kickoff prompt。
 - `controller/LitigationVisualController.java` — /api/litigation-visual。
 - `backend/skills/litigation-visual/` — skill.yml + prompt.md（精简路由，细则按需读）。
@@ -91,11 +93,21 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
   有一条**反向自检**（不给 GVBINDIR 就必须失败）守着这个契约。
 - **install_name_tool 改过的 Mach-O 必须补 ad-hoc 签名**，否则 Apple Silicon 上
   内核直接 SIGKILL——不报错、不弹窗，进程凭空消失。
-- **PNG 在用户机器上不会生成**：需要外部光栅器（rsvg-convert / inkscape / soffice /
-  cairosvg），桌面端一个都不随包分发。SVG 是矢量母版，展示打印都够用；
-  交付说明里会如实解释这一条。想补齐的话，最省的路子是前端 canvas 从 SVG 转。
-  `LitigationVisualServiceTest` 断言的是「PNG 有无与本机 doctor 报的光栅器能力一致」，
-  不是写死的文件数——写死会让测试变成「构建机装了什么」的探针。
+- **PNG 由服务端 Batik 出，不靠引擎**（`LitigationPngService`）。引擎自己的 PNG 依赖
+  外部光栅器（rsvg-convert / inkscape / soffice / cairosvg），桌面端一个都不随包分发，
+  所以那条路在多数用户机器上是空的。**位图不是可选项**：`doc_insert_image` 只收
+  jpg/png/gif/bmp/webp，没有 PNG 这张图就插不进用户正在写的起诉状——那是主线工作流。
+  - 中文靠**注册随包字体 + 内存里给字体栈追加末位兜底**，不指望系统字体：SVG 标题
+    首选方正小标宋等商业字体，干净的 Windows 上一个都没有，落到通用 serif 就是
+    Times（不含汉字）。正文那条 sans 栈里有 Microsoft YaHei 所以看着正常，
+    于是这个 bug 只坏标题、特别容易漏——与 PATCHES.md 的 PATCH 1 是同一个坑的两侧。
+  - 追加而非替换，且插在通用关键字之前（通用关键字一旦命中就不再往后找）。
+    磁盘上的 SVG 母版一个字节不动。
+  - `LitigationVisualServiceTest` 断言的是「引擎侧 PNG 的有无与本机 doctor 报的
+    光栅器能力一致」，不是写死的文件数——写死会让测试变成「构建机装了什么」的探针。
+  - `LitigationPngServiceTest` 里字体栈重写与「Batik 接通了」两组**不依赖字体文件**，
+    在没跑过 fetch-lowa-assets 的机器（含 CI 后端 job）上照跑；CJK 覆盖与真图光栅化
+    两组按字体存在与否 skip。
 - **Windows 侧打包体积 19.7 MB，macOS 只有 4.3 MB**（CI 实测）。差的约 15 MB 是
   各种渲染后端 DLL（pango/cairo/gd/poppler…），我们只用 `-Tplain` 其实用不到。
   没削是因为 Windows 上算不出 DLL 依赖闭包（没有 `otool -L` 的等价物），
@@ -120,10 +132,15 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 
 ```bash
 python3 litviz/tests/test_cli.py                       # 契约 + 上游 149 项（预期 146/149）
-cd backend && mvn test -Dtest='LitigationVisual*,BuiltinSkillsTest,SkillRegistryTest'
+cd backend && mvn test -Dtest='Litigation*,BuiltinSkillsTest,SkillRegistryTest'
 node desktop/scripts/prepare-graphviz.js --from "$(brew --prefix graphviz)" --out /tmp/gv
 cd frontend && npm run check:emits && npm run build:h5
 ```
 
 上游 149 项预期 **146/149**：缺的 3 项是 README 文档守卫（我们没 vendor 上游 README），
 测试会断言失败的**正好是且仅是**那 3 项，别把它当成可以忽略的红。
+
+要跑全 `LitigationPngServiceTest`（含中文覆盖与真图光栅化）得先有随包字体：
+`node desktop/scripts/fetch-lowa-assets.js`，或从已安装的发行版
+`Resources/frontend/dist/zetaoffice/` 拷 `cjk-serif.otf` 与 `cjk.ttc` 过去。
+没有字体时那两组自动 skip，其余照跑。
