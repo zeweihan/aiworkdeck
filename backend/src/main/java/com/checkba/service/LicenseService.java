@@ -40,7 +40,7 @@ public class LicenseService {
     private static final Duration VERIFY_TIMEOUT = Duration.ofSeconds(5);
 
     private final boolean localMode;
-    private final String accountBaseUrl;
+    private final com.checkba.service.site.SiteProfileService siteProfileService;
     private final Path licenseFile;
     // 解析失败的异常 message 不许带原文——license.json 里存着明文 awdk_ 账户 Key
     private final ObjectMapper objectMapper = com.checkba.service.account.AccountService.stateMapper();
@@ -49,11 +49,12 @@ public class LicenseService {
 
     public LicenseService(
             @Value("${security.local-mode:false}") boolean localMode,
-            @Value("${ai.account.base-url:https://www.aiworkdeck.com}") String accountBaseUrl,
+            com.checkba.service.site.SiteProfileService siteProfileService,
             @Value("${security.license.dir:${user.home}/.aiworkdeck}") String licenseDir) {
         this.localMode = localMode;
-        // 授权服务器地址的协议校验与 AccountService 共用一份实现（https，回环 http 例外）
-        this.accountBaseUrl = com.checkba.service.account.AccountEndpoint.requireSecure(accountBaseUrl);
+        // 授权服务器地址由站点决定（协议校验在 SiteProfileService 里，与 AccountService 共用
+        // AccountEndpoint 那一份实现：https，回环 http 例外）。切站后当场改指向。
+        this.siteProfileService = siteProfileService;
         this.licenseFile = Path.of(licenseDir, "license.json");
     }
 
@@ -159,6 +160,23 @@ public class LicenseService {
         return Map.of("unlocked", false, "mode", "none", "plan", "none");
     }
 
+    /**
+     * 只清除 {@code account} 模式的授权票据，{@code trial} 原样保留。切站专用
+     * （{@link com.checkba.service.site.SiteSwitchService}，双主站设计 §2.4）。
+     *
+     * <p>account 票据是旧站 verify-key 发的，换站必须作废；试用码是内置公钥离线验签的，
+     * 与站点无关——顺手抹掉它等于把一个只想换站看看的试用用户直接踢回未解锁页。
+     *
+     * @return 是否真的清了（原本就不是 account 模式时为 false）
+     */
+    public synchronized boolean deactivateAccountMode() {
+        if (!localMode) return false;
+        State state = loadState();
+        if (!"account".equals(state.mode)) return false;
+        saveState(new State());
+        return true;
+    }
+
     // ==================== 激活分支 ====================
 
     private Map<String, Object> activateAccountKey(String key) {
@@ -179,9 +197,37 @@ public class LicenseService {
                 return Map.of("unlocked", true, "mode", "account", "plan", "paid");
             }
             case INVALID:
-                return failure("账户 Key 无效或已被撤销，请到官网账户页确认后重试");
+                return failure(invalidKeyMessage());
             default:
                 return failure("无法连接授权服务器，请检查网络后重试");
+        }
+    }
+
+    /**
+     * 「Key 无效」的文案。双站形态下必须点名站点（双主站设计 §2.6）。
+     *
+     * <p>国际站账户的 Key 粘到国内站，官网回 {@code 200 {valid:false}}，桌面端判 INVALID——
+     * 而这把 Key 其实是好的。只说「Key 无效或已被撤销」等于在指控用户，
+     * 他会去官网重新生成一把，再撞一次同样的墙。
+     *
+     * <p>文案红线：不得含「登录」「未授权」「请先」三个子串，
+     * {@code frontend/src/services/api.js} 对 {@code code:1} 的 message 做子串匹配识别掉线，
+     * 命中会清本地会话。所以这里写「切换站点后重试」而不是「请先切换站点」。
+     * 护栏见 {@code LicenseServiceTest}。
+     */
+    private String invalidKeyMessage() {
+        String base = "账户 Key 无效或已被撤销，可到官网账户页确认后重试";
+        try {
+            if (!siteProfileService.multiSite()) return base;
+            String others = siteProfileService.otherSites().stream()
+                    .map(com.checkba.service.site.SiteProfile::displayName)
+                    .reduce((a, b) -> a + "、" + b)
+                    .orElse(null);
+            if (others == null) return base;
+            return base + "。当前站点是「" + siteProfileService.displayName()
+                    + "」；如果你的账户注册在「" + others + "」，切换站点后重试";
+        } catch (Exception e) {
+            return base;
         }
     }
 
@@ -217,7 +263,7 @@ public class LicenseService {
                     .build();
             String body = objectMapper.writeValueAsString(Map.of("key", key));
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(accountBaseUrl + "/api/license/verify-key"))
+                    .uri(URI.create(siteProfileService.baseUrl() + "/api/license/verify-key"))
                     .timeout(VERIFY_TIMEOUT)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))

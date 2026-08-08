@@ -61,7 +61,9 @@ class AccountServiceTest {
     private StubTransport transport;
 
     private AccountService service() {
-        return new AccountService("https://www.aiworkdeck.com", tempDir.toString(), transport);
+        return new AccountService(
+                com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                tempDir.toString(), transport);
     }
 
     private AccountService connected() {
@@ -283,22 +285,22 @@ class AccountServiceTest {
     @DisplayName("base-url 配成 http 直接拒绝：明文 Key 不允许走未加密通道")
     void httpBaseUrlRejected() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> new AccountService("http://www.aiworkdeck.com", tempDir.toString(), new StubTransport()));
+                () -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://www.aiworkdeck.com"), tempDir.toString(), new StubTransport()));
         assertTrue(e.getMessage().contains("https"), e.getMessage());
     }
 
     @Test
     @DisplayName("回环 http 放行：本地起官网联调用，流量不出本机网卡")
     void loopbackHttpAllowed() {
-        assertDoesNotThrow(() -> new AccountService("http://localhost:3000", tempDir.toString(), new StubTransport()));
-        assertDoesNotThrow(() -> new AccountService("http://127.0.0.1:3000", tempDir.toString(), new StubTransport()));
+        assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://localhost:3000"), tempDir.toString(), new StubTransport()));
+        assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://127.0.0.1:3000"), tempDir.toString(), new StubTransport()));
     }
 
     @Test
     @DisplayName("尾部斜杠归一化：不能拼出 //api/account/me")
     void trailingSlashStripped() {
         transport = new StubTransport().enqueue(200, "{\"username\":\"u\"}");
-        new AccountService("https://www.aiworkdeck.com/", tempDir.toString(), transport).connect(KEY);
+        new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com/"), tempDir.toString(), transport).connect(KEY);
         assertEquals("GET https://www.aiworkdeck.com/api/account/me", transport.calls.get(0));
     }
 }

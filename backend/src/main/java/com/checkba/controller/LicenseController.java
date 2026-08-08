@@ -33,13 +33,16 @@ public class LicenseController {
     private final LicenseService licenseService;
     private final AccountService accountService;
     private final EntitlementService entitlementService;
+    private final com.checkba.service.site.SiteProfileService siteProfileService;
 
     public LicenseController(LicenseService licenseService,
                              AccountService accountService,
-                             EntitlementService entitlementService) {
+                             EntitlementService entitlementService,
+                             com.checkba.service.site.SiteProfileService siteProfileService) {
         this.licenseService = licenseService;
         this.accountService = accountService;
         this.entitlementService = entitlementService;
+        this.siteProfileService = siteProfileService;
     }
 
     @GetMapping("/status")
@@ -48,6 +51,11 @@ public class LicenseController {
         boolean connected = accountConnected();
         result.put("accountConnected", connected);
         result.put("edition", resolveEdition(String.valueOf(result.get("mode")), connected));
+        // 站点：解锁页与顶栏 chip 用它标注「这台机器面向哪个站」（双主站设计 §2.8）。
+        // 与 accountConnected/edition 一样是**只读展示口径**，绝不回写 license.json
+        result.put("site", siteProfileService.currentSite());
+        result.put("siteDisplayName", siteProfileService.displayName());
+        result.put("multiSite", siteProfileService.multiSite());
         return result;
     }
 

@@ -423,6 +423,45 @@
           scroll-y
           class="config-scroll"
         >
+          <!-- 当前站点。摆在账户连接之前：账户 Key 是站点签发的，
+               连接之前先知道自己在哪个站，才不会拿着另一个站的 Key 连不上。 -->
+          <view v-if="site.displayName" class="section-card">
+            <view class="section-header">
+              <text class="section-title">当前站点</text>
+              <text class="section-subtitle">
+                账户 Key、余额与已购权益都属于所选站点。两站账户体系相互独立，余额与已购不互通
+              </text>
+            </view>
+            <view class="section-body">
+              <view class="provider-card">
+                <view class="form-row">
+                  <text class="form-label">站点</text>
+                  <text class="site-name">{{ site.displayName }}</text>
+                </view>
+                <text v-if="site.pinned" class="account-note">
+                  由部署配置指定，本机不提供切换。
+                </text>
+                <template v-else-if="siteSwitchTargets.length">
+                  <view class="account-connect-actions">
+                    <button
+                      v-for="target in siteSwitchTargets"
+                      :key="target.id"
+                      class="comp-btn"
+                      :disabled="siteBusy"
+                      @tap="onSwitchSite(target)"
+                    >
+                      {{ siteBusy ? '切换中...' : '切换到' + target.displayName }}
+                    </button>
+                  </view>
+                  <text class="account-note">
+                    切换会清除本机与当前站点的账户连接、已购权益缓存、平台 AI 额度密钥，
+                    以及用账户 Key 解锁的授权；用试用码解锁的授权不受影响。
+                  </text>
+                </template>
+              </view>
+            </view>
+          </view>
+
           <!-- 未连接：引导去官网取 Key -->
           <view v-if="!account.connected" class="section-card">
             <view class="section-header">
@@ -1236,17 +1275,16 @@ import {
   getCurrentUser as fetchCurrentUser, getMyProjects,
   getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
+  getSiteStatus, selectSite,
 } from '@/services/api.js'
 import { getCurrentUser, getSessionId } from '@/utils/auth.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { accountPageUrl, siteBaseUrl, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
 import { host } from '@/services/host.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import MarketPane from '@/components/MarketPane.vue'
-
-// 官网账户页：生成账户 Key 与充值都在这里（Credits 重构后没有「分配额度」这一步）
-const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
 
 export default {
   name: 'AdminPage',
@@ -1349,6 +1387,9 @@ export default {
       cloudConnections: [],
       cloudForm: { serverUrl: '', username: '', password: '' },
       cloudBusy: false,
+      // 当前站点（双主站）。displayName 为空 = 还没取到 / 旧后端没有该端点，整块不渲染
+      site: { current: '', displayName: '', pinned: false, multiSite: false, sites: [] },
+      siteBusy: false,
       // 账户与用量（商业化 PR-B）
       // status 是纯本地读盘（不含余额），余额与额度都在 usage 的 platform 段
       account: { connected: false, username: '', displayName: '', keyMasked: '' },
@@ -1382,6 +1423,11 @@ export default {
     },
     stageUnlimited() {
       return isEnabled(FEATURES.STAGE_UNLIMITED)
+    },
+    // 可切换的目标站点（不含当前站点）。钉定或单站时为空数组，界面上就没有切换入口
+    siteSwitchTargets() {
+      if (this.site.pinned || !this.site.multiSite) return []
+      return (this.site.sites || []).filter((s) => s.id !== this.site.current)
     },
     // 能不能改到自选位置。以后端返回的 entitled 为准（它才是执行者）；
     // 老后端不返回这个字段时退回本地权益缓存判断。
@@ -1481,6 +1527,10 @@ export default {
     }
     this.loadConfig()
     this.loadTelemetry()
+    // 官网链接预热：本页多处「跳官网」（取 Key、解锁提示、广场购买）都是同步取地址，
+    // 而 siteLinks 的模块缓存不会被面板自己的 getSiteStatus 顺带填上。
+    // 不预热时第一次点击只能拿到兜底站点，国际站用户会被送到没有他账户的站
+    loadSiteLinks()
     if (this.isDesktop) {
       // AI 面板的「AI Workdeck 云端」选项是否可选，取决于是否已连接账户。
       // status 是后端纯本地读盘，不打官网，可以随页面加载
@@ -1703,6 +1753,7 @@ export default {
         this.loadCloudConnections()
       }
       if (nav.key === 'account') {
+        this.loadSite()
         this.loadAccount()
         // 权益决定「更改位置」按钮出不出现；当前位置本身无论有没有权益都要显示
         this.loadStorageLocation()
@@ -2063,7 +2114,10 @@ export default {
       this.form.ai.crossBorderConsent = !this.crossBorderConsented
     },
     openPrivacyCrossBorder() {
-      openExternalUrl('https://www.aiworkdeck.com/zh/legal/privacy#cross-border')
+      // 隐私政策是**按站点**的：两站缔约主体、适用法、出境路径都不同。
+      // 写死国内站地址会把国际站用户送去一份不适用于他的文本，
+      // 而这个入口恰恰是在向他征求出境同意。cross-border 是两站共用的锚点 id。
+      openExternalUrl(siteBaseUrl() + '/legal/privacy#cross-border')
     },
     onPickProvider(opt) {
       if (opt.value === this.form.ai.activeProvider) return
@@ -2072,6 +2126,68 @@ export default {
         return
       }
       this.form.ai.activeProvider = opt.value
+    },
+    // ---------- 当前站点（双主站） ----------
+    async loadSite() {
+      try {
+        const s = await getSiteStatus()
+        const sites = (s && s.sites) || []
+        const current = sites.find((x) => x.id === (s && s.current))
+        this.site = {
+          current: (s && s.current) || '',
+          displayName: (current && current.displayName) || '',
+          pinned: !!(s && s.pinned),
+          multiSite: !!(s && s.multiSite),
+          sites,
+        }
+      } catch (e) {
+        // 旧后端没有该端点：整块不渲染，不打断账户面板的其余内容
+        this.site = { current: '', displayName: '', pinned: false, multiSite: false, sites: [] }
+      }
+    },
+    // 切站是破坏性动作：旧站凭据一律清掉。用户多半只是想「换个站看看」，
+    // 不会预期账户被断开，所以弹窗必须逐条念出被清的东西，也必须说清什么不受影响。
+    async onSwitchSite(target) {
+      if (this.siteBusy) return
+      const ok = await new Promise((r) => uni.showModal({
+        title: '切换到' + target.displayName,
+        content: '两个站点的账户体系彼此独立。切换后本机会清除：\n'
+          + '· 账户连接（之后要用 ' + target.displayName + ' 的账户 Key 重新连接）\n'
+          + '· 已购权益缓存\n'
+          + '· 平台 AI 额度密钥\n'
+          + '· 用账户 Key 解锁的授权\n\n'
+          + '用试用码解锁的授权不受影响，本机的项目与文件也一个都不会动。',
+        confirmText: '切换站点',
+        success: (res) => r(res.confirm),
+      }))
+      if (!ok) return
+
+      this.siteBusy = true
+      try {
+        const res = await selectSite(target.id)
+        // 链接缓存里还是旧站地址，不清掉「前往官网」会把人送到一个没有他账户的站
+        resetSiteLinks()
+        await this.loadSite()
+        await this.loadAccount()
+        await refreshEntitlements(true)
+        await this.loadStorageLocation()
+        const lines = ['已切换到' + target.displayName + '。']
+        // 平台通道此刻必然没有密钥，后端会把 AI 供应商降级，不说一声用户会以为是自己改的
+        if (res && res.aiProviderFallback) {
+          lines.push('AI 供应商已从「AI Workdeck 云端」回落到本机可用的通道，可在「AI 功能设置」里重新选择。')
+        }
+        // 广场地址与统计上报地址在后端属性层固化，本次启动内不会变
+        lines.push('插件广场与统计上报将在下次启动后指向新站点。')
+        uni.showModal({ title: '站点已切换', content: lines.join('\n\n'), showCancel: false })
+      } catch (e) {
+        uni.showModal({
+          title: '切换未完成',
+          content: (e && e.message) || '切换站点失败，站点维持不变。',
+          showCancel: false,
+        })
+      } finally {
+        this.siteBusy = false
+      }
     },
     // ---------- 账户与用量 ----------
     // 拉状态；已连接才继续拉用量（未连接时后端没有可查的账户）
@@ -2104,8 +2220,10 @@ export default {
         this.accountUsage = null
       }
     },
+    // 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里。
+    // 地址在点击时才取——siteLinks 首帧可能还是兜底值，固化成常量就纠正不回来了
     openAccountSite() {
-      openExternalUrl(ACCOUNT_SITE_URL)
+      openExternalUrl(accountPageUrl())
     },
     // 购买在官网完成。这里强制重取一次权益（refresh=true 会让后端先同步官网），
     // 让刚买完回到桌面的用户不用重启就看到解锁结果。
@@ -3255,6 +3373,14 @@ $border-color: #E9ECEF; // Gray-Light
 .btn-primary:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* 当前站点 */
+.site-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 600;
+  color: $text-main;
 }
 
 /* 账户与用量 */
