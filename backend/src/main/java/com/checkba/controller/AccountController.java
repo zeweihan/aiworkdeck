@@ -232,19 +232,35 @@ public class AccountController {
     }
 
     /**
-     * AI 额度三个数（上限/已用/剩余）单独一段，失败只降级这一段：
-     * 余额与账本已经取到了，不该因为额度查询挂掉就一起隐藏。
-     * {@code quotaAvailable=false} 时前端显示「额度信息暂不可用」，不会把 0 当成真实剩余额度。
+     * AI 额度单独一段，失败只降级这一段：余额与账本已经取到了，不该因为额度查询挂掉就一起隐藏。
+     * {@code quotaAvailable=false} 时前端显示「额度信息暂不可用」，绝不把 0 当成真实剩余额度。
+     *
+     * Credits 重构后新增 {@code creditsCents}：这才是「能不能用平台 AI」的判据。
+     * hasAiQuota 现在由它算出，不再等价于「官网库里有没有 key 行」。
      */
     private void putAiQuota(Map<String, Object> platform) {
         try {
             Map<String, Object> quota = accountService.fetchAiUsage();
-            platform.put("quotaAvailable", true);
-            // hasKey=false 表示该账户还没从余额分配过 AI 额度——引导文案的判据
-            platform.put("hasAiQuota", Boolean.TRUE.equals(quota.get("hasKey")));
-            platform.put("limitUsd", quota.get("limitUsd"));
-            platform.put("usageUsd", quota.get("usageUsd"));
-            platform.put("remainingUsd", quota.get("remainingUsd"));
+            // 官网 Credits 重构后 usageAvailable=false 表示「用量查不到」，但 Credits 余额仍是可信的。
+            // 缺字段时按 true 处理，兼容尚未升级的官网。
+            boolean usageOk = !Boolean.FALSE.equals(quota.get("usageAvailable"));
+            platform.put("quotaAvailable", usageOk);
+            // 能不能用平台 AI，判据是 Credits 余额，**不是** hasKey。
+            // 新账户充完值到第一次调用之间 hasKey 仍为 false，用旧判据会把可用的用户挡在门外
+            // （向导里那条路当年就是这么走死的）。缺 creditsCents 时回落 hasKey 兼容旧官网。
+            Object credits = quota.get("creditsCents");
+            platform.put("creditsCents", credits);
+            platform.put("hasAiQuota", credits instanceof Number n
+                    ? n.longValue() > 0
+                    : Boolean.TRUE.equals(quota.get("hasKey")));
+            if (usageOk) {
+                platform.put("limitUsd", quota.get("limitUsd"));
+                platform.put("usageUsd", quota.get("usageUsd"));
+                platform.put("remainingUsd", quota.get("remainingUsd"));
+            } else {
+                platform.put("quotaMessage", "用量暂时查不到，Credits 余额不受影响");
+                platform.put("limitUsd", platformAiChannel.limitUsd());
+            }
         } catch (AccountException e) {
             platform.put("quotaAvailable", false);
             platform.put("quotaMessage", e.getMessage());

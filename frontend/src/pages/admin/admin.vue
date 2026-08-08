@@ -479,7 +479,7 @@
                     </view>
                     <!-- 已连账户但没分配过额度：平台 AI 通道此时不可用，给明确的下一步 -->
                     <text v-if="accountNeedsAllocation" class="account-note">
-                      尚未分配 AI 额度，暂时不能使用「AI Workdeck 云端」通道。请到官网账户页从余额分配额度后再回来。
+                      账户 Credits 余额为空，暂时不能使用「AI Workdeck 云端」通道。到官网充值后即可直接使用，不需要再做「分配额度」这一步。
                     </text>
                     <text v-else-if="!accountQuotaAvailable" class="account-note">
                       AI 额度信息暂时取不到，稍后重试。
@@ -1108,7 +1108,7 @@ import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntit
 import UnlockHint from '@/components/UnlockHint.vue'
 import MarketPane from '@/components/MarketPane.vue'
 
-// 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里
+// 官网账户页：生成账户 Key 与充值都在这里（Credits 重构后没有「分配额度」这一步）
 const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
 
 export default {
@@ -1233,7 +1233,7 @@ export default {
     },
     // 供应商单选项。「AI Workdeck 云端」是平台计费通道，条件不满足时展示但不可选——
     // 隐藏它会让用户根本发现不了这个选项，直接可选又会在发消息时才报错。
-    // 两个前置条件都要单独判：连接账户 → 在官网从余额分配 AI 额度。
+    // 两个前置条件都要单独判：连接账户 → 账户里有 Credits。
     // 缺后者时官网 /api/account/ai-key 返回 409 no_allocation，只在发消息那一刻才炸。
     aiProviderOptions() {
       const options = [
@@ -1244,7 +1244,7 @@ export default {
       if (this.isDesktop) {
         let hint = ''
         if (!this.platformAiAvailable) hint = '需先连接账户'
-        else if (this.accountNeedsAllocation) hint = '需先在官网分配额度'
+        else if (this.accountNeedsAllocation) hint = 'Credits 余额为空，去官网充值'
         options.push({
           value: 'AWD_CLOUD',
           label: 'AI Workdeck 云端',
@@ -1278,7 +1278,13 @@ export default {
       return !!(this.accountPlatform && this.accountPlatform.quotaAvailable)
     },
     // 已连账户但从未分配过 AI 额度：面板要给出「去官网分配」的引导
+    // Credits 重构后判据是余额，不是「官网库里有没有 key 行」。
+    // 后端 hasAiQuota 已由 creditsCents 算出；这里沿用它，语义变成「有没有 Credits」。
+    // 注意 quotaAvailable=false 只表示用量查不到，不代表没 Credits，所以不能据此判缺额度。
     accountNeedsAllocation() {
+      if (!this.accountPlatform) return false
+      const credits = this.accountPlatform.creditsCents
+      if (typeof credits === 'number') return credits <= 0
       return this.accountQuotaAvailable && !this.accountPlatform.hasAiQuota
     },
     accountUsageRows() {
@@ -1733,7 +1739,7 @@ export default {
       } catch (e) {
         this.platformAiAvailable = false
       }
-      // 「已连接但没分配额度」也会让平台通道打不通，判据在用量接口里（accountNeedsAllocation）。
+      // 「已连接但 Credits 为空」也会让平台通道打不通，判据在用量接口的 creditsCents 里。
       // 设置页不是热路径，多这一次请求换来单选项如实标注，好过发消息时才报错。
       if (this.platformAiAvailable) {
         await this.loadAccountUsage()
@@ -1775,7 +1781,7 @@ export default {
       try {
         this.accountUsage = await getAccountUsage()
       } catch (e) {
-        // 账户已连但尚未分配 AI 额度时后端会报错，此处按「无额度」展示
+        // 账户已连但 Credits 为空时后端会报错，此处按「无额度」展示
         this.accountUsage = null
       }
     },
@@ -2482,7 +2488,7 @@ $border-color: #E9ECEF; // Gray-Light
   background: $brand-mint-light;
 }
 
-// 前置条件未满足（未连接账户 / 未分配额度）的「AI Workdeck 云端」：
+// 前置条件未满足（未连接账户 / Credits 为空）的「AI Workdeck 云端」：
 // 可见但压低，点击给出下一步而不是静默失败
 .radio-item.unavailable {
   opacity: 0.55;

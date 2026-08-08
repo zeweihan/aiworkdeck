@@ -187,7 +187,10 @@ public class AccountService {
      * POST /api/account/ai-key —— 取该账户的 provisioned OpenRouter runtime key。
      * 幂等：已有未禁用的 key 直接返回同一把。
      *
-     * @throws AccountException CONFLICT（409 no_allocation：还没从余额分配 AI 额度）
+     * @throws AccountException CONFLICT（409 no_credits：账户 Credits 为空）
+     *
+     * 官网 Credits 重构后已无「先分配额度」这一步：有 Credits 就自动签发 key，
+     * 所以旧的 no_allocation 分支不会再出现。留着只为兼容尚未升级的官网。
      */
     public Map<String, Object> fetchAiKey() {
         return fetchAiKeyWith(requireKey());
@@ -207,9 +210,15 @@ public class AccountService {
         }
         if (reply.status() == 409) {
             String code = str(parse(reply.body()).get("error"));
-            if ("no_allocation".equals(code)) {
+            // 文案红线：不得含「登录」「未授权」「请先」——api.js 用这三个子串判掉线并清会话
+            if ("no_credits".equals(code)) {
                 throw new AccountException(AccountException.Kind.CONFLICT,
-                        "尚未分配 AI 额度，请到官网账户页从余额分配");
+                        "账户 Credits 余额为空，到官网充值后即可使用平台 AI");
+            }
+            if ("no_allocation".equals(code)) {
+                // 旧版官网才会返回；新版已无此分支
+                throw new AccountException(AccountException.Kind.CONFLICT,
+                        "官网尚未为该账户签发 AI 通道密钥，到官网账户页看一下");
             }
             throw new AccountException(AccountException.Kind.CONFLICT,
                     "官网 AI 额度状态异常（" + (code == null ? "未知" : code) + "），请到官网账户页查看");
