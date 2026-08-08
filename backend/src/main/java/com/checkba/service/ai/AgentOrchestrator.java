@@ -596,7 +596,8 @@ public class AgentOrchestrator {
                             .map(ToolRegistry.RegisteredTool::displayName)
                             .orElse(req.name());
                     sendTextDelta(conversationId, String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code></process>",
-                            displayName.replace("\"", "'"), req.name(), truncate(req.arguments(), 200)));
+                            displayName.replace("\"", "'"), req.name(),
+                            AgentTagProtocol.escape(truncate(req.arguments(), 200))));
 
                     String result;
                     boolean success;
@@ -621,12 +622,16 @@ public class AgentOrchestrator {
 
                     // Determine status for history and display
                     String nativeToolStatus = success ? "SUCCESS" : "FAILURE";
+                    // 载荷先截断再中和：截断口径按原文字数（与前端「...(截断)」提示一致），
+                    // 中和只保证载荷不会顶掉外层标签（AgentTagProtocol，两侧契约）
                     sendTextDelta(conversationId, String.format("<tool_output status=\"%s\">%s</tool_output>",
-                            nativeToolStatus, truncate(result, toolOutputDisplayLimit(req.name()))));
+                            nativeToolStatus,
+                            AgentTagProtocol.escape(truncate(result, toolOutputDisplayLimit(req.name())))));
 
                     // Log for history persistence (include status attribute)
                     executionLog.append(String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
-                        displayName.replace("\"", "'"), req.name(), req.arguments(), nativeToolStatus, result));
+                        displayName.replace("\"", "'"), req.name(), AgentTagProtocol.escape(req.arguments()),
+                        nativeToolStatus, AgentTagProtocol.escape(result)));
                 }
 
                 // 防走神注入（Claude Code system-reminder 模式）：每次工具执行后带上任务清单状态，
@@ -743,14 +748,17 @@ public class AgentOrchestrator {
                         ? llmProcessName
                         : (toolResult != null && toolResult.tool() != null ? toolResult.tool().displayName() : "工具执行");
                     executionLog.append(String.format("<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
-                        processNameForLog, code, statusPrefix, result));
+                        processNameForLog, AgentTagProtocol.escape(code), statusPrefix,
+                        AgentTagProtocol.escape(result)));
 
                     // Emit explicit tool_output for frontend parser with status attribute
                     // NOTE: Do NOT wrap in <process> - the tool_output belongs to the existing process
                     // that contained the tool_code.
                     String toolOutputXml = String.format("<tool_output status=\"%s\">%s</tool_output>",
-                        statusPrefix, result);
-                    sseEmitterService.send(conversationId, "text_delta", "{\"content\":\"" + toolOutputXml.replace("\"", "\\\"").replace("\n", "\\n") + "\"}");
+                        statusPrefix, AgentTagProtocol.escape(result));
+                    // 走 sendTextDelta 而不是自己拼 JSON：此处原来的手写转义漏了反斜杠，
+                    // 输出里带 Windows 路径或 JSON 字符串时整条 text_delta 在前端 JSON.parse 失败
+                    sendTextDelta(conversationId, toolOutputXml);
 
                     toolExecuted = true;
                 }

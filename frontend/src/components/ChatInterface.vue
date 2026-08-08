@@ -644,6 +644,7 @@
 import RootBubble from './AgentMessage/RootBubble.vue'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
+import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
@@ -1523,14 +1524,14 @@ export default {
                   }
 
                   // Extract <tool_code> and <tool_output> - create tool items
-                  const toolCodeMatch = processContent.match(/<tool_code>([\s\S]*?)<\/tool_code>/)
-                  const toolOutputMatch = processContent.match(/<tool_output([^>]*)>([\s\S]*?)<\/tool_output>/)
+                  // 解转义与标签清单都在 agentTagProtocol.mjs：落库正文里的工具载荷是中和过的
+                  // （否则输出里的 </tool_output>/</process> 会把这段解析整个带偏），此处还原成原文
+                  const toolBlock = parseToolBlock(processContent)
 
-                  if (toolCodeMatch) {
-                      const code = toolCodeMatch[1].trim()
-                      // toolOutputMatch[1] = attributes string, toolOutputMatch[2] = content
-                      const outputAttrs = toolOutputMatch ? toolOutputMatch[1] : ''
-                      const output = toolOutputMatch ? toolOutputMatch[2].trim() : ''
+                  if (toolBlock) {
+                      const code = toolBlock.code
+                      const outputAttrs = toolBlock.attrs
+                      const output = toolBlock.output
 
                       // First: Try to parse status from attribute (new format)
                       let status = 'success'

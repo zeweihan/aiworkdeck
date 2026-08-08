@@ -1,6 +1,7 @@
 import { ref, reactive, nextTick } from 'vue'
 import { getApiBaseUrl, getConversationMetadata } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
+import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
 // 页面栈会多次实例化本 composable（PR#148 重复订阅地雷），window 监听只挂一次，
@@ -1036,7 +1037,9 @@ export function useAgentStream() {
             if (p && p.items.length > 0) {
                 const lastItem = p.items[p.items.length - 1]
                 if (lastItem.type === 'tool') {
-                    lastItem.code += text
+                    // 解转义放在累加之后：&lt; 可能被切在两段字节之间，
+                    // 对整段已累加的文本还原才不会漏（decodeProtocolTags 幂等）
+                    lastItem.code = decodeProtocolTags(lastItem.code + text)
                 }
             }
         } else if (activeTag === 'tool_output') {
@@ -1047,7 +1050,8 @@ export function useAgentStream() {
                 if (p) toolItem = [...p.items].reverse().find(i => i.type === 'tool')
             }
             if (toolItem) {
-                toolItem.output += text
+                // 同 tool_code：对整段已累加的文本解转义，跨 chunk 的 &lt; 才不会漏
+                toolItem.output = decodeProtocolTags(toolItem.output + text)
                 // ONLY use heuristic if status wasn't set by backend (i.e., still 'loading')
                 // If backend already set status via <tool_output status="..."> attribute, do NOT override
                 if (toolItem.status === 'loading') {
@@ -1382,9 +1386,10 @@ export function useAgentStream() {
         parserBuffer = parserBuffer.replace(/```(?:xml|html|markdown)?\s*\n/g, '')
         parserBuffer = parserBuffer.replace(/\n```/g, '')
 
-        // option 是 question 的子标签（本次新增）：不认它的话选项文字会当正文流出去，
-        // 用户会在气泡里看到裸的 <option> 源码
-        const tagRegex = /<(\/?)(thinking|title|process|step|tool_code|tool_output|walkthrough|final|question|option|artifact)(\s+[^>]*)?>/g
+        // 标签清单在 agentTagProtocol.mjs（与后端 AgentTagProtocol.TAGS 同一份）：
+        // option 是 question 的子标签，不认它的话选项文字会当正文流出去，用户会看到裸的 <option> 源码；
+        // 后端按同一份清单中和工具载荷，载荷里的 </tool_output> 之类不会在这里顶掉外层标签
+        const tagRegex = createProtocolTagRegex()
 
         while (true) {
             const match = tagRegex.exec(parserBuffer)

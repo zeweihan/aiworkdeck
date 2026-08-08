@@ -162,6 +162,11 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
  * 标签，插件都比桌面端慢一步，而代价是用户当场看到裸的 XML 源码。判据收紧到
  * 「协议标签的形状」而不是「所有尖括号」，详见 step() 里的取舍说明。
  */
+// 必须覆盖后端 AgentTagProtocol.TAGS（= 桌面端 agentTagProtocol.mjs 的 PROTOCOL_TAGS）：
+// 后端只中和那份清单里的标签，清单外的标签名若在这里被当成标签、又出现在工具载荷里，
+// 本解析器的标签栈就会在载荷中间错位、把工具输出漏进正文（历史回灌同一条路径）。
+// 多认的 tool / bubble_type 不在中和清单里也无害：它们只会被 push/忽略，不会顶掉外层标签。
+// 插件不渲染工具载荷，故不需要解转义；对拍由 backend AgentTagProtocolTest 守。
 const KNOWN_TAGS = new Set([
   'thinking', 'title', 'process', 'artifact', 'final', 'walkthrough',
   'tool_code', 'step', 'tool', 'tool_output', 'bubble_type',
