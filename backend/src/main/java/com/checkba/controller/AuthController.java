@@ -22,6 +22,7 @@ public class AuthController {
     private final com.checkba.service.AuthAbuseGuard authAbuseGuard;
     private final com.checkba.service.account.AwdkLoginService awdkLoginService;
     private final com.checkba.service.sms.SmsAuthService smsAuthService;
+    private final com.checkba.service.mail.MailAuthService mailAuthService;
     private final com.checkba.service.auth.SecondFactorService secondFactorService;
     private final com.checkba.service.UserSessionService userSessionService;
     /** 单机免登模式。设备令牌的会话签发路径只在这一模式下存在（见 issueLocalDeviceToken）。 */
@@ -69,6 +70,7 @@ public class AuthController {
                           com.checkba.service.AuthAbuseGuard authAbuseGuard,
                           com.checkba.service.account.AwdkLoginService awdkLoginService,
                           com.checkba.service.sms.SmsAuthService smsAuthService,
+                          com.checkba.service.mail.MailAuthService mailAuthService,
                           com.checkba.service.auth.SecondFactorService secondFactorService,
                           com.checkba.service.UserSessionService userSessionService,
                           @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
@@ -80,6 +82,7 @@ public class AuthController {
         this.authAbuseGuard = authAbuseGuard;
         this.awdkLoginService = awdkLoginService;
         this.smsAuthService = smsAuthService;
+        this.mailAuthService = mailAuthService;
         this.secondFactorService = secondFactorService;
         this.userSessionService = userSessionService;
         this.localMode = localMode;
@@ -264,7 +267,7 @@ public class AuthController {
         String ip = http.getRemoteAddr();
         Map<String, Object> result = new HashMap<>();
         try {
-            authAbuseGuard.checkSmsSendRate(ip);
+            authAbuseGuard.checkCodeSendRate(ip);
             String phoneMasked;
             if ("bind".equals(request.getScene())) {
                 Long userId = getUserIdFromSession(sessionId);
@@ -286,7 +289,7 @@ public class AuthController {
                 }
                 phoneMasked = smsAuthService.sendLoginCode(user);
             }
-            authAbuseGuard.recordSmsSend(ip);
+            authAbuseGuard.recordCodeSend(ip);
             result.put("code", 0);
             result.put("message", "验证码已发送");
             result.put("data", Map.of("phoneMasked", phoneMasked));
@@ -388,6 +391,147 @@ public class AuthController {
     }
 
     /**
+     * 发送邮箱验证码。两个场景，与 {@code /sms/send-code} 完全对称：
+     * <ul>
+     *   <li>{@code scene=login}：匿名但必须携带正确的用户名密码，发往该用户已绑定的邮箱。
+     *       失败锁定与 /login 共用同一套计数。</li>
+     *   <li>{@code scene=bind}：需已登录会话，发往待绑定的新邮箱。</li>
+     * </ul>
+     * IP 维度限频与短信共用 AuthAbuseGuard 那把闸——否则换个通道就能绕过限频。
+     */
+    @PostMapping("/mail/send-code")
+    public Map<String, Object> sendMailCode(@RequestBody MailSendCodeRequest request,
+                                            @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+                                            jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkCodeSendRate(ip);
+            String emailMasked;
+            if ("bind".equals(request.getScene())) {
+                Long userId = getUserIdFromSession(sessionId);
+                if (userId == null) {
+                    result.put("code", 1);
+                    result.put("message", "未登录");
+                    return result;
+                }
+                emailMasked = mailAuthService.sendBindCode(userId, request.getEmail());
+            } else {
+                // login 场景：先过锁定闸再校验凭据，语义与 /login 完全一致
+                authAbuseGuard.checkLoginAttempt(ip, request.getUsername());
+                User user;
+                try {
+                    user = userService.login(request.getUsername(), request.getPassword());
+                } catch (IllegalArgumentException e) {
+                    authAbuseGuard.recordLoginFailure(ip, request.getUsername());
+                    throw e;
+                }
+                emailMasked = mailAuthService.sendLoginCode(user);
+            }
+            authAbuseGuard.recordCodeSend(ip);
+            result.put("code", 0);
+            result.put("message", "验证码已发送");
+            result.put("data", Map.of("emailMasked", emailMasked));
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /** 校验验证码并绑定邮箱（需已登录）。也用于换绑：直接绑新地址覆盖。 */
+    @PostMapping("/mail/bind")
+    public Map<String, Object> bindEmail(@RequestBody MailBindRequest request,
+                                         @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = getUserIdFromSession(sessionId);
+        Map<String, Object> result = new HashMap<>();
+        if (userId == null) {
+            result.put("code", 1);
+            result.put("message", "未登录");
+            return result;
+        }
+        try {
+            String emailMasked = mailAuthService.confirmBind(userId, request.getEmail(), request.getCode());
+            result.put("code", 0);
+            result.put("message", "绑定成功");
+            result.put("data", Map.of("emailMasked", emailMasked));
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 邮箱免密登录第一步：发码。
+     *
+     * <p>这是一条**匿名登录入口**，默认关（mail.passwordless-login-enabled）。
+     * 回包对「已注册」和「未注册」完全一致——未注册时 MailAuthService 不发信但照常返回，
+     * 否则这个端点就是账号枚举器。IP 维度限频与短信/绑定共用同一把闸。
+     */
+    @PostMapping("/mail-login/send-code")
+    public Map<String, Object> mailLoginSendCode(@RequestBody MailLoginRequest request,
+                                                 jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkCodeSendRate(ip);
+            mailAuthService.sendSigninCode(request.getEmail());
+            authAbuseGuard.recordCodeSend(ip);
+            result.put("code", 0);
+            result.put("message", "验证码已发送");
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 邮箱免密登录第二步：验码换会话。
+     *
+     * <p>走与密码登录同一套失败锁定，锁定键用邮箱本身——否则这条路就是一个不计失败次数的
+     * 6 位码爆破口（单枚码的尝试上限只管那一枚，换一枚重来不受限）。
+     */
+    @PostMapping("/mail-login/verify")
+    public Map<String, Object> mailLoginVerify(@RequestBody MailLoginRequest request,
+                                               jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        String lockKey = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase();
+        try {
+            authAbuseGuard.checkLoginAttempt(ip, lockKey);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        try {
+            User user = mailAuthService.verifySigninCode(request.getEmail(), request.getCode());
+            authAbuseGuard.recordLoginSuccess(ip, lockKey);
+            String newSessionId = userSessionService.issue(user.getId());
+            result.put("code", 0);
+            result.put("message", "登录成功");
+            result.put("data", Map.of(
+                    "sessionId", newSessionId,
+                    "user", Map.of(
+                            "id", user.getId(),
+                            "username", user.getUsername(),
+                            "displayName", user.getDisplayName(),
+                            "avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : "",
+                            "role", user.getRole(),
+                            "subscriptionType", user.getSubscriptionType()
+                    )
+            ));
+        } catch (IllegalArgumentException e) {
+            authAbuseGuard.recordLoginFailure(ip, lockKey);
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
      * 客户登录（使用访问码）
      */
     @PostMapping("/client-login")
@@ -456,19 +600,22 @@ public class AuthController {
 
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("data", Map.of(
-                "id", user.getId(),
-                "username", user.getUsername(),
-                "displayName", user.getDisplayName(),
-                "avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : "",
-                "role", user.getRole(),
-                "subscriptionType", user.getSubscriptionType(),
+        // Map.of 最多 10 对，这里已经 12 项——用 ofEntries，加字段时不会突然编译不过
+        result.put("data", Map.ofEntries(
+                Map.entry("id", user.getId()),
+                Map.entry("username", user.getUsername()),
+                Map.entry("displayName", user.getDisplayName()),
+                Map.entry("avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : ""),
+                Map.entry("role", user.getRole()),
+                Map.entry("subscriptionType", user.getSubscriptionType()),
                 // 系统管理权限（桌面单机=全员；云端=仅 admin 账号），前端据此显示「系统设置」入口
-                "isAdmin", adminAccessService.isAdmin(user),
-                // 二次验证：入口显隐与当前绑定状态（Map.of 不收 null，空串=未绑定）
-                "smsAuthEnabled", smsAuthService != null && smsAuthService.active(),
-                "phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone()),
-                "totpEnabled", user.isTotpEnabled()
+                Map.entry("isAdmin", adminAccessService.isAdmin(user)),
+                // 二次验证：入口显隐与当前绑定状态（Map.entry 不收 null，空串=未绑定）
+                Map.entry("smsAuthEnabled", smsAuthService != null && smsAuthService.active()),
+                Map.entry("phoneMasked", com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone())),
+                Map.entry("mailAuthEnabled", mailAuthService != null && mailAuthService.active()),
+                Map.entry("emailMasked", com.checkba.service.mail.MailAuthService.maskEmail(user.getVerifiedEmail())),
+                Map.entry("totpEnabled", user.isTotpEnabled())
         ));
         return result;
     }
@@ -675,6 +822,43 @@ public class AuthController {
         public void setPassword(String password) { this.password = password; }
         public String getSmsCode() { return smsCode; }
         public void setSmsCode(String smsCode) { this.smsCode = smsCode; }
+    }
+
+    static class MailSendCodeRequest {
+        private String scene;
+        private String username;
+        private String password;
+        private String email;
+
+        public String getScene() { return scene; }
+        public void setScene(String scene) { this.scene = scene; }
+        public String getUsername() { return username; }
+        public void setUsername(String username) { this.username = username; }
+        public String getPassword() { return password; }
+        public void setPassword(String password) { this.password = password; }
+        public String getEmail() { return email; }
+        public void setEmail(String email) { this.email = email; }
+    }
+
+    static class MailBindRequest {
+        private String email;
+        private String code;
+
+        public String getEmail() { return email; }
+        public void setEmail(String email) { this.email = email; }
+        public String getCode() { return code; }
+        public void setCode(String code) { this.code = code; }
+    }
+
+    /** 免密登录两步共用：第一步只填 email，第二步再带 code。 */
+    static class MailLoginRequest {
+        private String email;
+        private String code;
+
+        public String getEmail() { return email; }
+        public void setEmail(String email) { this.email = email; }
+        public String getCode() { return code; }
+        public void setCode(String code) { this.code = code; }
     }
 
     static class SmsSendCodeRequest {

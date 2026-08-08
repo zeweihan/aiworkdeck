@@ -50,8 +50,8 @@ public class AuthAbuseGuard {
     static final int MAX_REGISTRATIONS_PER_WINDOW = 10;
     static final Duration REGISTRATION_WINDOW = Duration.ofHours(1);
 
-    static final int MAX_SMS_SENDS_PER_WINDOW = 20;
-    static final Duration SMS_WINDOW = Duration.ofHours(1);
+    static final int MAX_CODE_SENDS_PER_WINDOW = 20;
+    static final Duration CODE_WINDOW = Duration.ofHours(1);
 
     /** 内存兜底：超过该条数触发一次过期清理，防止被海量伪造维度撑爆内存。 */
     private static final int PURGE_THRESHOLD = 10_000;
@@ -62,7 +62,7 @@ public class AuthAbuseGuard {
 
     private final Map<String, FailureState> loginFailures = new ConcurrentHashMap<>();
     private final Map<String, WindowCounter> registrations = new ConcurrentHashMap<>();
-    private final Map<String, WindowCounter> smsSends = new ConcurrentHashMap<>();
+    private final Map<String, WindowCounter> codeSends = new ConcurrentHashMap<>();
 
     @Autowired
     public AuthAbuseGuard(
@@ -149,25 +149,25 @@ public class AuthAbuseGuard {
         });
     }
 
-    // ==================== 短信发送限频（按 IP；手机号维度在 VerificationCodeStore） ====================
+    // ==================== 验证码发送限频（按 IP，短信与邮件共用；手机号/邮箱维度在 VerificationCodeStore） ====================
 
-    public void checkSmsSendRate(String ip) {
+    public void checkCodeSendRate(String ip) {
         if (localMode) return;
-        WindowCounter counter = smsSends.get(ip);
+        WindowCounter counter = codeSends.get(ip);
         long now = nowMillis.getAsLong();
         if (counter != null
-                && now - counter.windowStart <= SMS_WINDOW.toMillis()
-                && counter.count >= MAX_SMS_SENDS_PER_WINDOW) {
+                && now - counter.windowStart <= CODE_WINDOW.toMillis()
+                && counter.count >= MAX_CODE_SENDS_PER_WINDOW) {
             throw new IllegalArgumentException("验证码发送过于频繁，请稍后再试");
         }
     }
 
-    public void recordSmsSend(String ip) {
+    public void recordCodeSend(String ip) {
         if (localMode) return;
         purgeIfOversized();
         long now = nowMillis.getAsLong();
-        smsSends.compute(ip, (k, counter) -> {
-            if (counter == null || now - counter.windowStart > SMS_WINDOW.toMillis()) {
+        codeSends.compute(ip, (k, counter) -> {
+            if (counter == null || now - counter.windowStart > CODE_WINDOW.toMillis()) {
                 counter = new WindowCounter();
                 counter.windowStart = now;
             }
@@ -193,9 +193,9 @@ public class AuthAbuseGuard {
             registrations.entrySet().removeIf(e ->
                     now - e.getValue().windowStart > REGISTRATION_WINDOW.toMillis());
         }
-        if (smsSends.size() > PURGE_THRESHOLD) {
-            smsSends.entrySet().removeIf(e ->
-                    now - e.getValue().windowStart > SMS_WINDOW.toMillis());
+        if (codeSends.size() > PURGE_THRESHOLD) {
+            codeSends.entrySet().removeIf(e ->
+                    now - e.getValue().windowStart > CODE_WINDOW.toMillis());
         }
     }
 

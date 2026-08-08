@@ -104,9 +104,8 @@ public class OptimizerProperties {
     @Setter
     public static class Mail {
         private boolean enabled = true;
-        /** 收件人（维护者）。留空 = 邮件出口不可用，会退化成只写库并记 FAILED。 */
+        /** 收件人（维护者），逗号分隔。留空 = 邮件出口不可用，会退化成只写库并记 FAILED。 */
         private String to = "";
-        private String from = "";
         private String subjectPrefix = "[AI Workdeck 优化者]";
     }
 }

@@ -29,15 +29,6 @@ spring:
         types:
           print:
             banner: false
-  # 邮件通道（只被「优化者」用来给维护者发信，产品功能不发任何邮件）。
-  # 刻意整段留空：配了 spring.mail.host 才会有 JavaMailSender bean，没配等于这条出口关闭。
-  # 维护者启用时用环境变量注入，别把授权码写进入库文件：
-  #   SPRING_MAIL_HOST=smtp.qq.com SPRING_MAIL_PORT=465
-  #   SPRING_MAIL_USERNAME=you@qq.com SPRING_MAIL_PASSWORD=<授权码>
-  #   SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH=true
-  #   SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE=true   # 465 直连 SSL
-  #   （587 的 STARTTLS 改用 ..._MAIL_SMTP_STARTTLS_ENABLE=true）
-  #   OPTIMIZER_MAIL_TO=you@example.com OPTIMIZER_MAIL_FROM=you@qq.com
   servlet:
     multipart:
       enabled: true
@@ -360,10 +351,10 @@ optimizer:
     issue-labels: [ user-feedback ]
   mail:
     enabled: true
-    # 收件人（维护者）。邮件通道本身用 spring.mail.*（见下），没配 host 就没有
-    # JavaMailSender，这条出口会报「不可用」并由 notify.channel=auto 落到开 Issue。
+    # 收件人（维护者），逗号分隔可多个。发信通道本身是上面的 mail.domestic/global，
+    # 一条都没配时这条出口会报「不可用」并由 notify.channel=auto 落到开 Issue。
+    # 发件人由通道决定，此处不设——两条通道发信域名不同，硬写 from 会让 SPF 判失败。
     to: ${OPTIMIZER_MAIL_TO:}
-    from: ${OPTIMIZER_MAIL_FROM:}
     subject-prefix: "[AI Workdeck 优化者]"
 
 # 文件存储配置
