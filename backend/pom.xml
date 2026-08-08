@@ -30,6 +30,13 @@
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-crypto</artifactId>
         </dependency>
+        <!-- SMTP 发信（JavaMailSenderImpl + jakarta.mail）。注意：邮件通道不走 Spring Boot 的
+             spring.mail.* 自动装配——那套只能配出一个 JavaMailSender，而我们要国内/国外两条
+             并存，见 com.checkba.service.mail -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
         <dependency>
             <groupId>mysql</groupId>
             <artifactId>mysql-connector-java</artifactId>
