@@ -50,7 +50,14 @@ public class FeedbackIngestGuard {
         return enabled;
     }
 
-    /** 不通过就抛 IllegalArgumentException，由控制器转成 4xx 文案。 */
+    /** 配额到顶（可重试）与请求不合法（重试也没用）分开抛，控制器据此给 429 / 400。 */
+    public static class QuotaExceededException extends IllegalArgumentException {
+        public QuotaExceededException(String message) {
+            super(message);
+        }
+    }
+
+    /** 不通过就抛：配额类抛 {@link QuotaExceededException}，其余抛 IllegalArgumentException。 */
     public void check(String installId, List<MultipartFile> files) {
         if (!enabled) throw new IllegalStateException("本实例未开启反馈收件箱");
         if (installId == null || installId.isBlank() || installId.length() > 64) {
@@ -67,11 +74,11 @@ public class FeedbackIngestGuard {
         }
         LocalDateTime since = LocalDateTime.now().minusDays(1);
         if (feedbackRepository.countByInstallIdAndCreatedAtAfter(installId, since) >= perInstallDaily) {
-            throw new IllegalArgumentException("该安装今日提交已达上限");
+            throw new QuotaExceededException("该安装今日提交已达上限");
         }
         if (feedbackRepository.countByCreatedAtAfter(since) >= globalDaily) {
             log.warn("反馈收件箱触到全站日上限 {}，本条被拒", globalDaily);
-            throw new IllegalArgumentException("今日收件已满，请稍后再试");
+            throw new QuotaExceededException("今日收件已满，请稍后再试");
         }
     }
 

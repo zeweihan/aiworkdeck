@@ -76,6 +76,23 @@ mini 上还要确认两件事：`gh auth status` 已登录、`claude`（或 code
 > 两台同时跑没有数据损坏风险（回执是幂等的状态覆盖），但同一条反馈会被分诊两次、
 > 可能开出两个 PR。所以搬家时先停旧的再起新的。
 
+## 换编码 Agent
+
+`optimizer.agent.command` 是一整条命令行，用 Spring 的列表环境变量绑定按下标覆盖：
+
+```bash
+OPTIMIZER_AGENT_COMMAND_0=codex
+OPTIMIZER_AGENT_COMMAND_1=exec
+OPTIMIZER_AGENT_COMMAND_2=-m
+OPTIMIZER_AGENT_COMMAND_3=gpt-5.5
+OPTIMIZER_AGENT_COMMAND_4=--sandbox
+OPTIMIZER_AGENT_COMMAND_5=workspace-write
+OPTIMIZER_AGENT_COMMAND_6={prompt}
+```
+
+`{prompt}` 换成任务书正文，`{promptFile}` 换成任务书文件路径。
+`codex` 的 `--sandbox workspace-write` 恰好把写入限制在那棵临时 worktree 里。
+
 ## 出问题先看这三处
 
 | 现象 | 多半是 |

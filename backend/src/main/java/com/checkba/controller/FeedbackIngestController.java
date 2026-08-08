@@ -65,9 +65,13 @@ public class FeedbackIngestController {
         try {
             guard.check(installId, files);
         } catch (IllegalStateException e) {
+            // 这台没开收件箱：让上传方看见 404 而不是「被限流」，免得它永远重试
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(e.getMessage()));
-        } catch (IllegalArgumentException e) {
+        } catch (FeedbackIngestGuard.QuotaExceededException e) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(error(e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            // 请求本身不合法（缺 installId、附件过大）：429 会让上传方一直重试同一条坏请求
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error(e.getMessage()));
         }
         if (clientRef == null || clientRef.isBlank()) {
             return ResponseEntity.ok(error("缺少 clientRef"));

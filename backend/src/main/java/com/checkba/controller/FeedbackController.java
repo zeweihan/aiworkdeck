@@ -44,6 +44,9 @@ public class FeedbackController {
     private final AdminAccessService adminAccessService;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @org.springframework.beans.factory.annotation.Value("${feedback.optimizer-token:}")
+    private String optimizerToken;
+
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<?> submit(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
@@ -123,11 +126,15 @@ public class FeedbackController {
     @GetMapping("/{id}/attachment/{attachmentId}")
     public ResponseEntity<Resource> attachment(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
+            @RequestHeader(value = "X-Optimizer-Token", required = false) String optimizerToken,
             @RequestParam(value = "token", required = false) String token,
             @PathVariable Long id,
             @PathVariable Long attachmentId) {
         String effective = (sessionId == null || sessionId.isEmpty()) ? token : sessionId;
-        if (requireAdmin(effective) == null) {
+        // 优化者的邮件里给的是这条 URL；能取全部待办反馈的那把 token 也该能取它们的附件，
+        // 否则维护者收到一封「这里有张截图」的信却打不开（token 走 header，不进 URL）
+        boolean viaOptimizer = optimizerTokenOk(optimizerToken);
+        if (!viaOptimizer && requireAdmin(effective) == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
         }
         try {
@@ -209,6 +216,14 @@ public class FeedbackController {
         if (lower.endsWith(".mp3")) return MediaType.parseMediaType("audio/mpeg");
         if (lower.endsWith(".wav")) return MediaType.parseMediaType("audio/wav");
         return MediaType.APPLICATION_OCTET_STREAM;
+    }
+
+    private boolean optimizerTokenOk(String token) {
+        // 与取件/回执同一把钥匙；没配就当不存在（不留「未配置即放行」）
+        if (optimizerToken == null || optimizerToken.isBlank() || token == null) return false;
+        return java.security.MessageDigest.isEqual(
+                optimizerToken.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                token.getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     private User requireAdmin(String sessionId) {

@@ -116,6 +116,8 @@ public class OptimizerMailer {
         }
 
         sb.append("\n--\n")
+                .append("附件是 http(s) 地址时，直接点开需要先登录那台后台；也可以带取件密钥取：\n")
+                .append("  curl -H \"X-Optimizer-Token: <你的 token>\" '<附件地址>' -o shot.png\n")
                 .append("这封信由 AI Workdeck 优化者自动发出。**回信不会被系统读取**——\n")
                 .append("要推进就直接去改代码，或把这条反馈的 status 改掉（表 user_feedback，id=")
                 .append(fb.getId()).append("）。\n");

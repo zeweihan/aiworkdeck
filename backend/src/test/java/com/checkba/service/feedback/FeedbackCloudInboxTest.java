@@ -131,6 +131,8 @@ class FeedbackCloudInboxTest {
         org.springframework.test.util.ReflectionTestUtils.setField(guard, "maxAttachmentBytes", 10L);
 
         assertThrows(IllegalArgumentException.class, () -> guard.check("", List.of()));
+        assertFalse(assertThrows(IllegalArgumentException.class, () -> guard.check("", List.of()))
+                instanceof FeedbackIngestGuard.QuotaExceededException, "缺 installId 不是配额问题");
         assertThrows(IllegalArgumentException.class, () -> guard.check("i", List.of(
                 new MockMultipartFile("files", "a.png", "image/png", new byte[]{1}),
                 new MockMultipartFile("files", "b.png", "image/png", new byte[]{1}),
@@ -138,8 +140,9 @@ class FeedbackCloudInboxTest {
         assertThrows(IllegalArgumentException.class, () -> guard.check("i", List.of(
                 new MockMultipartFile("files", "big.png", "image/png", new byte[100]))));
 
+        // 配额到顶是「过会儿再来」（429），请求不合法是「重试也没用」（400）——两类必须分开
         when(r.countByInstallIdAndCreatedAtAfter(anyString(), any(LocalDateTime.class))).thenReturn(2L);
-        assertThrows(IllegalArgumentException.class, () -> guard.check("i", List.of()));
+        assertThrows(FeedbackIngestGuard.QuotaExceededException.class, () -> guard.check("i", List.of()));
     }
 
     @Test

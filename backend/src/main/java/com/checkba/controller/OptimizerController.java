@@ -72,9 +72,15 @@ public class OptimizerController {
         data.put("mailReady", mailer.isAvailable());
         data.put("mailIssue", mailer.unavailableReason());
         data.put("repoPath", props.getRepo().getPath());
+        // 配的是哪个编码 Agent：换 Agent 是按下标覆盖环境变量，没有回显的话
+        // 「以为换了其实没换」只能等到某条反馈开不出 PR 才发现
+        data.put("agentCommand", String.join(" ", props.getAgent().getCommand()));
         // 读的是本地库还是云端收件箱——一眼看出这台优化者在给谁干活
         data.put("source", feedbackSource.describe());
-        data.put("pending", feedbackRepository.countByStatus(UserFeedback.STATUS_NEW));
+        // pending 只在读本地库时有意义：remote 模式下本地库恒为空，把它显示成
+        // 「待处理 0」会让人以为云端没积压（真实积压在收件箱的 /inbox/status 上）
+        boolean local = feedbackSource instanceof com.checkba.service.optimizer.LocalFeedbackSource;
+        data.put("pending", local ? feedbackRepository.countByStatus(UserFeedback.STATUS_NEW) : null);
 
         OptimizerAgentService.RunReport r = optimizerAgentService.lastReport();
         if (r != null) {

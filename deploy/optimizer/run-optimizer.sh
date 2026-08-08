@@ -27,10 +27,12 @@ cd "$RUN_DIR/work"
 JAVA_BIN="${AWD_OPTIMIZER_JAVA:-$(/usr/libexec/java_home -v 21 2>/dev/null)/bin/java}"
 [ -x "$JAVA_BIN" ] || { echo "找不到 JDK 21（本机默认 25 会 SIGBUS）" >&2; exit 2; }
 
+# 末尾透传 "$@"：临时覆盖某个配置（换模型、指向测试收件箱）不必改 env 文件
 exec "$JAVA_BIN" \
   -Xmx1g \
   -Duser.home="$RUN_DIR/home" \
   -jar "$JAR" \
   --spring.profiles.active=desktop \
   --server.port="$PORT" \
-  --server.address=127.0.0.1
+  --server.address=127.0.0.1 \
+  "$@"
