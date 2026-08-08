@@ -60,6 +60,15 @@
               <span class="task-status" :class="task.status">
                 {{ getStatusText(task) }}
               </span>
+              <!-- 已结束的任务不再自动消失（改成结果要留着给用户核对），所以必须给一个
+                   关闭入口，否则这张卡关不掉。仍在跑的没有关闭按钮：任务与 SSE 无关还在
+                   跑，藏起来是骗人。 -->
+              <button
+                v-if="task.status !== 'running'"
+                class="task-dismiss-btn"
+                title="关闭这条记录"
+                @click="$emit('dismiss', task.taskId)"
+              >×</button>
             </div>
             
             <div class="progress-container">
@@ -100,6 +109,10 @@ const props = defineProps({
     default: null
   }
 })
+
+// dismiss：关闭一条已结束的任务记录（载荷 = taskId），由宿主接到
+// useAgentStream.dismissBackgroundTask 上
+defineEmits(['dismiss'])
 
 const isMinimized = ref(false)
 const brandMint = '#5BD197'
@@ -359,6 +372,23 @@ const formatTime = (seconds) => {
 .task-type {
   font-size: 13px;
   font-weight: 600;
+  color: #FFFFFF;
+  /* 状态与关闭按钮靠右成一组，所以标题吃掉剩余宽度 */
+  flex: 1;
+}
+
+.task-dismiss-btn {
+  margin-left: 8px;
+  padding: 0 4px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.task-dismiss-btn:hover {
   color: #FFFFFF;
 }
 

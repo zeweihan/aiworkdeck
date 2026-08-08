@@ -189,8 +189,33 @@ public class BackgroundTaskService {
     }
     
     /**
+     * 会话内取消一个后台任务。
+     *
+     * <p>控制器只能验证「调用方能用这个会话」，所以这里再验「这个任务属于这个会话」——
+     * 两道合起来才挡得住「拿自己的会话 ID + 猜到的 taskId 去掐别人的任务」。
+     * 任务 ID 是 UUID，猜中难，但把归属校验放进服务里可以避免调用方
+     * 先 getTask 再 cancelTask 的竞态。
+     *
+     * @return true = 已请求停止；false = 无此活跃任务，或它不属于该会话
+     */
+    public boolean cancelTask(String taskId, String conversationId) {
+        if (taskId == null || conversationId == null) {
+            return false;
+        }
+        TaskInfo task = activeTasks.get(taskId);
+        if (task == null || !conversationId.equals(task.getConversationId())) {
+            return false;
+        }
+        return cancelTask(taskId);
+    }
+
+    /**
      * Cancel a task.
-     * 
+     *
+     * <p>注意语义边界：本方法只改任务簿记并广播 background_task_complete(cancelled)，
+     * <b>停不掉已经交给外部服务的活儿</b>（PPT 生成在 pptx-service 里继续跑到底、文件照样落盘）。
+     * 因此面向用户的文案只能说「正在停止」，不能说「已停止」。
+     *
      * @param taskId The task ID
      * @return true if task was cancelled, false if not found or already completed
      */

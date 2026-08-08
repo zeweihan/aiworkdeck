@@ -28,7 +28,7 @@ public class EvalCase {
     public String id;
     /** 人类可读标题 */
     public String title;
-    /** 分类：drafting / revision / legal-research / pptx / chat / memory / files / artifacts */
+    /** 分类：drafting / revision / legal-research / pptx / chat / memory / files / artifacts / skill / question */
     public String category;
     /** 协议标注（仅文档用途）：xml / native / mixed */
     public String protocol;
@@ -72,7 +72,13 @@ public class EvalCase {
         public List<String> structureContains = new ArrayList<>();
         /** 期望保存的 artifact（null = 不断言） */
         public Artifact artifact;
-        /** 最后一个 bubble_end 事件的 status：finished / awaiting_approval */
+        /**
+         * 最后一个 bubble_end 事件的 status：
+         * finished / paused / awaiting_approval（implementation_plan 停机待审批）/
+         * awaiting_input（模型 &lt;question&gt; 反问，停机等用户回答；对应
+         * AgentRunStateService.RunStatus.AWAITING_INPUT）。
+         * 断言用 contains，别写成前缀匹配。
+         */
         public String bubbleEndStatus = "finished";
         /** 每次 LLM 调用是否携带工具规格（null = 不断言；ASK 模式应为 false） */
         public Boolean toolsOffered;

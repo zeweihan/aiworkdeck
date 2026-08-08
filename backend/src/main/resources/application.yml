@@ -302,8 +302,14 @@ ai:
     # 【历史】v0.11.1 及以前这项不存在，backend/skills/ 也没进过安装包——
     # 上市路径与股东大会核查两个内置 skill 在发行版里实际上根本不存在，只在 dev 生效。
     builtin-dir: ${AI_SKILLS_BUILTIN_DIR:}
-    # 基础工具集：Skill 命中后本轮 LLM 可见工具 = allowed_tools ∪ base-tools
+    # 基础工具集：Skill 命中后本轮 LLM 可见工具 = allowed_tools ∪ base-tools ∪ 编排类工具
+    # base-tools 管的是"业务能力兜底"（被裁剪的回合也留最基本的读取/记忆），可按部署形态调。
     base-tools: [read_document, list_files, query_memory]
+    # 编排类工具（todo_write / dispatch_subtask）刻意不在这里配置，写死在
+    # SkillRouter.ORCHESTRATION_TOOLS：它们是"Agent 怎么干活"而不是某个业务领域的能力，
+    # 任何 skill 都不该把它们裁掉。做成配置项的话，prod/desktop 覆写一次就能重新裁掉编排能力，
+    # 而这个故障是静默的（不报错不告警，只是模型不写任务清单/不派子任务了，见 #323）。
+    # 要增删这组清单去改那个常量，不要挪进 base-tools——两者语义不同，合并会丢掉这条不变式。
     # 启停名单内存缓存 TTL（毫秒）
     disabled-cache-ttl-ms: 5000
     # 在线 Skill 广场注册表地址（官网公共注册表，见 SkillMarketService）

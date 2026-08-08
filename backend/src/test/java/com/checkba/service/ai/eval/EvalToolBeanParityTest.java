@@ -30,7 +30,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class EvalToolBeanParityTest {
 
     private static final Set<String> KNOWN_MISSING = Set.of(
-            "TodoTools",          // todo_write：计划卡链路，评测里从未注册
+            // TodoTools 已于 2026-08 的交互对齐补进 RealToolBeans（反问/长任务那批改动里，
+            // todo_write 的可见性本来就是要断言的对象），故从名单移除。
             "CheckpointTools",    // 文档检查点
             "SlideEditTools"      // slide_* 演示文稿原语
     );

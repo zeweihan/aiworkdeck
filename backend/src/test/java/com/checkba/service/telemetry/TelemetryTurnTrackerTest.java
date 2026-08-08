@@ -1,5 +1,6 @@
 package com.checkba.service.telemetry;
 
+import com.checkba.service.ai.AgentRunStateService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -50,5 +51,46 @@ class TelemetryTurnTrackerTest {
         assertDoesNotThrow(() -> tracker.startTurn(null, null));
         assertDoesNotThrow(() -> tracker.startTurn("conv-y", null));
         assertDoesNotThrow(() -> tracker.onStatus("conv-y", "FINISHED"));
+    }
+
+    @Test
+    @DisplayName("反问停机 AWAITING_INPUT 闭合轮次：漏加进 TERMINAL 则 ai.turn 永不闭合")
+    void awaitingInputClosesTurn() {
+        TelemetryService telemetry = mock(TelemetryService.class);
+        TelemetryTurnTracker tracker = new TelemetryTurnTracker(telemetry);
+
+        tracker.startTurn("conv-q", Map.of("mode", "AGENT"));
+        tracker.onStatus("conv-q", AgentRunStateService.RunStatus.AWAITING_INPUT.name());
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
+        verify(telemetry).recordConv(eq("ai.turn"), eq("conv-q"), captor.capture());
+        assertEquals("AWAITING_INPUT", captor.getValue().get("outcome"));
+
+        // consume-once：用户回答是新一轮消息，旧上下文不该被第二个终态重复计数
+        tracker.onStatus("conv-q", "FINISHED");
+        verify(telemetry, times(1)).recordConv(eq("ai.turn"), eq("conv-q"), any());
+    }
+
+    @Test
+    @DisplayName("状态机全覆盖：除 RUNNING/INTERRUPTED 外每个 RunStatus 都必须闭合轮次")
+    void everyStoppingStatusClosesTurn() {
+        // 这条守的是「新增终止/停机分支忘了同步 TERMINAL」——后果不是报错而是
+        // 该会话的 TurnCtx 永远留在 open 里，ai.turn 静默少一条。
+        // 两个例外：RUNNING 是轮次起点；INTERRUPTED 只由启动回收在新进程里打，
+        // 那时进程内没有未闭合轮次（restore 更是刻意不打点）。
+        for (AgentRunStateService.RunStatus status : AgentRunStateService.RunStatus.values()) {
+            boolean expectClose = status != AgentRunStateService.RunStatus.RUNNING
+                    && status != AgentRunStateService.RunStatus.INTERRUPTED;
+            String conv = "conv-" + status.name();
+
+            TelemetryService telemetry = mock(TelemetryService.class);
+            TelemetryTurnTracker tracker = new TelemetryTurnTracker(telemetry);
+            tracker.startTurn(conv, Map.of("mode", "AGENT"));
+            tracker.onStatus(conv, status.name());
+
+            verify(telemetry, times(expectClose ? 1 : 0))
+                    .recordConv(eq("ai.turn"), eq(conv), any());
+        }
     }
 }

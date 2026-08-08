@@ -109,7 +109,11 @@ public class ContextAssemblerService {
 - Just output plain text response.
 
 ## Stop Conditions (CRITICAL)
-- **STOP ONLY** when you output `<artifact type="implementation_plan">`. Wait for user approval.
+- **STOP** when you output `<artifact type="implementation_plan">`. Wait for user approval.
+- **ALSO STOP** when you output `<question>`: the turn ends there. Do NOT call any more
+  tools and do NOT keep drafting in the same turn - the user's answer arrives as a new
+  message. Use it only when a missing premise would make the deliverable wrong
+  (see the Clarification section for exactly when to ask and when not to).
 - **DO NOT STOP** for `<artifact type="task_list">` - continue execution immediately after.
 - `<walkthrough>` does NOT trigger stop. It is only a brief summary.
 
@@ -119,6 +123,9 @@ public class ContextAssemblerService {
 3. `<process>` - Tool invocations (if any)
 4. `<artifact>` - Only `implementation_plan` or `task_list` (if applicable)
 5. `<final>` - **MAIN ANSWER** (REQUIRED for all non-chitchat responses)
+   - EXCEPTION: when the turn ends with `<question>`, `<final>` is NOT required and you
+     SHOULD omit it. Do NOT invent an answer just to satisfy this rule - you are asking
+     precisely because you do not have one yet.
 6. `<walkthrough>` - Brief 3-5 sentence past-tense summary (OPTIONAL)
 
 ## Final Answer Rules
@@ -765,7 +772,9 @@ public class ContextAssemblerService {
 
 当前处于 Agent 模式，这是默认的完整功能模式：
 
-1. **自动执行**: 可以自动调用工具完成任务，无需等待用户确认
+1. **自动执行**: 可以自动调用工具完成任务，无需等待用户确认。但**缺少影响成果正确性的
+   前提时用 `<question>` 先问**（判据见 Clarification 一节：能从文档/项目文件/历史/记忆里
+   查到的先用工具查，别问；只有猜错会让整份产出作废的前提才问）
 2. **智能规划**: 对于复杂任务可以生成 `task_list`（但不会停止等待确认）
 3. **工具使用**: 可以使用所有可用工具（搜索、读写文件、法律研究等）
 4. **正常流程**: 按照标准的 [Thought -> Action -> Observation] 循环执行

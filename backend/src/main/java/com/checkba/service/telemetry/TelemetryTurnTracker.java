@@ -18,9 +18,15 @@ import java.util.concurrent.ConcurrentHashMap;
 @Service
 public class TelemetryTurnTracker {
 
-    /** 视为「一轮结束」的状态：与 AgentRunStateService.RunStatus 字面量对齐 */
+    /**
+     * 视为「一轮结束」的状态：与 AgentRunStateService.RunStatus 字面量对齐。
+     *
+     * 「停机等人」的状态（PAUSED/AWAITING_APPROVAL/AWAITING_INPUT）都算轮次结束——
+     * 用户的答复会作为**新一轮**用户消息重新 startTurn。漏加一个新的停机状态的后果是
+     * 该轮的 TurnCtx 永远留在 open 里、ai.turn 永不闭合（既有教训）。
+     */
     private static final Set<String> TERMINAL =
-            Set.of("FINISHED", "ERROR", "CANCELLED", "PAUSED", "AWAITING_APPROVAL");
+            Set.of("FINISHED", "ERROR", "CANCELLED", "PAUSED", "AWAITING_APPROVAL", "AWAITING_INPUT");
 
     private record TurnCtx(long startMs, Map<String, Object> attrs) {}
 

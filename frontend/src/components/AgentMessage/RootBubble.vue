@@ -104,6 +104,19 @@
                <div v-if="showActions" class="msg-act-mask" @click.stop="showActions = false"></div>
             </div>
 
+            <!-- 5c. 反问卡（<question>）：模型缺关键前提时停机等回答。
+                 放在正文之后——若正文还在 bubble.content 里（旧格式历史消息），
+                 选项也要出现在那段话下面，读起来才是「先问、再给选项」。
+                 可操作性与计划卡同一条链（仅最新一条助手消息、且流已结束）。 -->
+            <QuestionCard
+              v-if="bubble.question"
+              :text="bubble.question.text || ''"
+              :options="bubble.question.options || []"
+              :answered="!!bubble.question.answered"
+              :actionable="isLatest && !bubble.isStreaming && !bubble.question.answered"
+              @answer="$emit('answer-question', $event)"
+            />
+
             <!-- 6. Walkthrough (Summary) - Temporarily hidden as per user request -->
             <!-- <WalkthroughCard
               v-if="bubble.walkthrough"
@@ -125,6 +138,7 @@ import TodoProgressCard from './TodoProgressCard.vue'
 import ProcessCard from './ProcessCard.vue'
 import WalkthroughCard from './WalkthroughCard.vue'
 import ArtifactCard from '../ArtifactCard.vue'
+import QuestionCard from './QuestionCard.vue'
 import MarkdownPreview from '../MarkdownPreview.vue'
 
 const props = defineProps({
@@ -133,7 +147,7 @@ const props = defineProps({
   isLatest: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action'])
+const emit = defineEmits(['open-artifact-tab', 'approve', 'message-action', 'answer-question'])
 
 // 载荷形状对齐 project-overview.handleChatInterfaceAction({ type, msg })，msg 只需 content
 function sendAction(type) {
@@ -181,10 +195,14 @@ const groupHasError = (g) => g.procs.some(p => (p.items || []).some(it => it.sta
 
 const hasPlan = computed(() => !!(props.bubble.planTodos && props.bubble.planTodos.length > 0))
 
+// 反问也算「有可见产出」：模型可以只输出一个 <question> 就停机（这正是反问的常见形态），
+// 漏掉这一项会让整条气泡停在 ghost thinking 态——用户看到的是「一直在想」，问题根本不显示。
+const hasQuestion = computed(() => !!props.bubble.question)
+
 const isReady = computed(() => {
     // Show full card if we have a Title OR Plan OR Processes OR Main Content
     // If only "Thinking", remain in Ghost state (unless it's done thinking and has no other content? No, unlikely)
-    return !!(props.bubble.title || hasPlan.value || props.bubble.processes.length > 0 || props.bubble.content)
+    return !!(props.bubble.title || hasPlan.value || props.bubble.processes.length > 0 || props.bubble.content || hasQuestion.value)
 })
 
 const hasContent = computed(() => {
@@ -194,7 +212,8 @@ const hasContent = computed(() => {
         hasPlan.value ||
         props.bubble.processes.length > 0 ||
         props.bubble.artifacts.length > 0 ||
-        props.bubble.content
+        props.bubble.content ||
+        hasQuestion.value
     )
 })
 </script>

@@ -287,6 +287,80 @@ class SubAgentServiceTest {
                 "子 Agent 线程里必须能取到主会话身份，否则平台通道拿不到 per-user 密钥");
     }
 
+    // ===== 任务级取消（长任务可控） =====
+
+    /**
+     * 停一个正在跑的子任务：结果必须明说「是用户停的、不要自动重派」——
+     * 只回一句 failed 的话，主循环下一轮会立刻再 dispatch 一次，
+     * 用户看到的是「点了停止反而又跑起来了」。
+     * 顺带守住鉴权：换一个 conversationId 停不掉别人会话里的子任务。
+     */
+    @Test
+    @DisplayName("取消：停掉在跑的子任务，结果明说是用户停的；跨会话停不动")
+    void cancelStopsRunningSubtask() throws Exception {
+        java.util.concurrent.CountDownLatch llmEntered = new java.util.concurrent.CountDownLatch(1);
+        when(model.generate(anyList(), anyList())).thenAnswer(inv -> {
+            llmEntered.countDown();
+            Thread.sleep(10_000); // 模拟在途 LLM 调用（cancel(true) 打不断它）
+            return textTurn("太迟了");
+        });
+        // 用 doAnswer 收事件而不是事后 verify：dispatch 跑在另一个线程上，
+        // 并发 invoke + verify 会让断言时序敏感
+        java.util.concurrent.BlockingQueue<String> events = new java.util.concurrent.LinkedBlockingQueue<>();
+        org.mockito.Mockito.doAnswer(inv -> {
+            // 必须显式给出类型（getArgument(2, String.class)）。写成
+            // String.valueOf(inv.getArgument(2)) 会踩 Java 重载决议：getArgument 是泛型
+            // <T> T，编译期挑最具体的 String.valueOf(char[]) 并把 T 推成 char[]，
+            // 运行时传进来的是 String 就抛 ClassCastException——而异常被 sendProgress
+            // 的 catch 吞掉只 log.warn，于是队列永远空、断言以「没收到 started 事件」失败，
+            // 看起来像生产代码不发事件，其实是测试自己炸了。
+            events.add(inv.getArgument(2, String.class));
+            return null;
+        }).when(sse).send(eq("conv-main"), eq("subtask_progress"), any());
+
+        SubAgentService service = newService();
+        AtomicReference<SubAgentResult> out = new AtomicReference<>();
+        Thread caller = new Thread(() ->
+                out.set(service.dispatch("慢任务", null, List.of("search_web"), PARENT_CTX)));
+        caller.setDaemon(true);
+        caller.start();
+
+        assertTrue(llmEntered.await(5, java.util.concurrent.TimeUnit.SECONDS), "子 Agent 应已进入 LLM 调用");
+        String started = events.poll(5, java.util.concurrent.TimeUnit.SECONDS);
+        assertNotNull(started, "应先收到 started 进度事件");
+        String subtaskId = cn.hutool.json.JSONUtil.parseObj(started).getStr("taskId");
+        assertNotNull(subtaskId);
+
+        assertFalse(service.cancel(subtaskId, "conv-other"), "别的会话不得停掉本会话的子任务");
+        assertTrue(service.cancel(subtaskId, "conv-main"), "本会话应能停掉自己的子任务");
+
+        caller.join(10_000);
+        SubAgentResult result = out.get();
+        assertNotNull(result, "dispatch 必须返回，不能挂死调用方");
+        assertFalse(result.success());
+        assertTrue(result.error().contains("stopped by the user"), "要点明是用户停的：" + result.error());
+        assertTrue(result.error().contains("Do NOT"), "要禁止自动重派：" + result.error());
+        // 结束事件仍与 started 成对（前端按 taskId 配对渲染）
+        String finished = events.poll(5, java.util.concurrent.TimeUnit.SECONDS);
+        assertNotNull(finished, "停止后仍要发一条结束事件");
+        assertTrue(cn.hutool.json.JSONUtil.parseObj(finished).getStr("message").contains("已停止"),
+                "给用户看的文案不该是模型看的那段英文：" + finished);
+    }
+
+    @Test
+    @DisplayName("取消：不存在或已结束的子任务返回 false（登记簿在 dispatch 返回前已移除）")
+    void cancelUnknownOrFinishedSubtask() {
+        when(model.generate(anyList(), anyList())).thenReturn(textTurn("结论"));
+        SubAgentService service = newService();
+
+        assertFalse(service.cancel("subtask-nope", "conv-main"));
+        assertFalse(service.cancel(null, "conv-main"));
+
+        SubAgentResult done = service.dispatch("任务", null, List.of("search_web"), PARENT_CTX);
+        assertTrue(done.success());
+        assertFalse(service.cancel(done.subtaskId(), "conv-main"), "跑完的子任务不再可停");
+    }
+
     @Test
     @DisplayName("tool_scope 容错解析：JSON 数组与逗号/顿号分隔均可")
     void parseToolScopeTolerant() {

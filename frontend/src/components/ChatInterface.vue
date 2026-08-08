@@ -284,9 +284,12 @@
                <image v-for="(img, idx) in msg.images" :key="idx" :src="img.path" mode="aspectFill" class="bubble-image-thumb" />
             </view>
             <!-- Content with inline file tags preserved at their original positions -->
+            <!-- displayContent（契约 D）：点按钮产生的消息里，模型要的细节在 content，
+                 用户气泡只显示那句人话；为空则回退 content，与今天行为完全一致。
+                 contentHtml 仍优先——它只在用户手打输入那条路上存在（带内联文件标签）。 -->
             <div
               class="user-bubble-content"
-              v-html="msg.contentHtml || escapeHtml(msg.content)"
+              v-html="msg.contentHtml || escapeHtml(msg.displayContent || msg.content)"
             ></div>
             <div class="bubble-footer">
               <!-- Rollback Button -->
@@ -310,6 +313,7 @@
                :is-latest="index === bubbles.length - 1"
                @open-artifact-tab="handleArtifactOpenTab"
                @approve="handleArtifactApprove"
+               @answer-question="handleQuestionAnswer"
                @message-action="$emit('message-action', $event)"
              />
              <!-- <span v-if="msg.timestamp" class="bubble-timestamp assistant">{{ msg.timestamp }}</span> -->
@@ -428,7 +432,7 @@
                  <view
                     class="send-btn"
                     :class="{ disabled: !inputPrompt.trim() && !isStreaming, stopping: isStreaming }"
-                    @tap="isStreaming ? abort() : handleSubmit()"
+                    @tap="isStreaming ? handleAbort() : handleSubmit()"
                  >
                     <text class="send-icon">{{ isStreaming ? '■' : '↑' }}</text>
                  </view>
@@ -462,6 +466,18 @@
        <view v-if="agentPaused && !isStreaming" class="continue-bar">
           <text class="continue-hint">{{ continueHint }}</text>
           <view class="continue-btn" @tap="handleContinue">继续执行</view>
+       </view>
+       <!-- 长任务可控：进度条在浮窗里（BackgroundTaskIndicator），控制放在输入框上方——
+            用户想停的时候手在输入区，不该先去浮窗里找按钮。
+            文案只说「正在停止」：取消打不断已经发出去的调用（PPT 服务那边还会跑完）。 -->
+       <view v-if="runningTasks.length > 0" class="task-control-bar">
+          <view v-for="t in runningTasks" :key="t.taskId" class="task-control-row">
+             <text class="task-control-name">{{ taskTypeName(t.type) }}</text>
+             <text class="task-control-msg">{{ t.message }}</text>
+             <view class="task-control-btn" :class="{ pending: !!stoppingTasks[t.taskId] }" @tap.stop="handleCancelTask(t)">
+                <text>{{ stoppingTasks[t.taskId] ? '正在停止…' : '停止' }}</text>
+             </view>
+          </view>
        </view>
        <!-- NEW: File Changes & Token Usage Bar (Always visible) -->
        <view class="status-bar-row">
@@ -605,7 +621,7 @@
              <view
                 class="send-btn"
                 :class="{ disabled: !inputPrompt.trim() && !isStreaming, stopping: isStreaming }"
-                @tap="isStreaming ? abort() : handleSubmit()"
+                @tap="isStreaming ? handleAbort() : handleSubmit()"
              >
                 <text class="send-icon">{{ isStreaming ? '■' : '↑' }}</text>
              </view>
@@ -618,6 +634,7 @@
     <BackgroundTaskIndicator
       :backgroundTasks="backgroundTasks"
       :lastHeartbeat="lastHeartbeat"
+      @dismiss="dismissBackgroundTask"
     />
 
   </view>
@@ -628,7 +645,7 @@ import RootBubble from './AgentMessage/RootBubble.vue'
 import BackgroundTaskIndicator from './BackgroundTaskIndicator.vue'
 import { useAgentStream } from '@/composables/useAgentStream.js'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
-import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig } from '@/services/api.js'
+import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 
 export default {
@@ -672,6 +689,7 @@ export default {
       onClientAction,
       onTitleUpdate,
       backgroundTasks,
+      dismissBackgroundTask,
       lastHeartbeat,
       tokenUsage,
       fileChanges,
@@ -1131,7 +1149,9 @@ export default {
         return
       }
       rollbackTargetIndex.value = index
-      rollbackTargetContent.value = msg.content || ''
+      // 预览与「回填到输入框重发」都用用户看到的那份（契约 D）：把回喂给模型的
+      // 长文案塞回输入框，用户没法在上面继续编辑，只会一头雾水
+      rollbackTargetContent.value = msg.displayContent || msg.content || ''
       rollbackTargetId.value = msg.id
       showRollbackDialog.value = true
     }
@@ -1317,6 +1337,52 @@ export default {
       scrollToBottom()
     }
 
+    // ---- 长任务可控（停止本轮 / 停止单个后台任务）----
+    // 硬规则：文案一律「正在停止」，不许写「已停止」。后端的取消是
+    // future.cancel(true) + 簿记，打不断已经发出去的 HTTP 读——在途的 LLM 调用会跑完，
+    // 交给 pptx-service 的活儿也会跑完并落盘。说「已停止」就是骗人。
+    const stoppingTasks = ref({}) // taskId -> true（按钮进入「正在停止…」）
+
+    // 停止本轮生成：仍走既有 abort（POST /api/agent/cancel/{cid} + 断前端连接），
+    // 这里只补一句诚实的提示。慢工具（dispatch_subtask 能跑 630 秒、AI PPT 十几分钟）
+    // 中间的取消响应点已由编排器在每个工具前检查 isCancelled 提供。
+    const handleAbort = () => {
+      uni.showToast({ title: '正在停止，在途的调用可能还会回一小段', icon: 'none' })
+      abort()
+    }
+
+    // 只列还在跑的：已完成/失败的条目留在浮窗里供用户核对结果，控制条不该再给停止按钮
+    const runningTasks = computed(() =>
+      Object.values(backgroundTasks.value || {}).filter(t => t && t.status === 'running')
+    )
+
+    // 与 BackgroundTaskIndicator.getTaskTypeName 同一张表（两处都要改，取值来自后端 TaskInfo.TaskType）
+    const taskTypeName = (type) => ({
+      'PPTX_GENERATE': 'PPT 生成',
+      'PPTX_MODIFY': 'PPT 修改',
+      'FILE_PROCESS': '文件处理',
+      'WEB_FETCH': '网页获取',
+      'OTHER': '其他任务'
+    })[type] || type || '后台任务'
+
+    const handleCancelTask = async (task) => {
+      if (!task || !task.taskId || stoppingTasks.value[task.taskId]) return
+      // conversationId 优先取任务自己带的：后台任务跨会话切换仍在跑，
+      // 拿当前会话去停别的会话的任务会被后端 403 挡掉
+      const cid = task.conversationId || currentConversationId.value
+      if (!cid) return
+      stoppingTasks.value = { ...stoppingTasks.value, [task.taskId]: true }
+      try {
+        await cancelBackgroundTask(cid, task.taskId)
+        uni.showToast({ title: '正在停止该任务', icon: 'none' })
+      } catch (e) {
+        // 后端对「任务已经结束」返 404——那不是故障，只是按晚了；两种情况给同一句可读提示
+        console.warn('[ChatInterface] 停止后台任务失败:', e)
+        uni.showToast({ title: '停止未生效，任务可能已经结束', icon: 'none' })
+        stoppingTasks.value = { ...stoppingTasks.value, [task.taskId]: false }
+      }
+    }
+
     // 续跑提示文案：区分「步数用完」和「上次进程被杀」两种中断来源
     const continueHint = computed(() => {
       return agentPaused.value && agentPaused.value.reason === 'process_interrupted'
@@ -1352,6 +1418,11 @@ export default {
                   id: msg.id,
                   role: 'USER',
                   content: msg.content,
+                  // 契约 D：后端 GET /api/ai/history 带 displayContent（可空）。
+                  // 渲染一律 displayContent || content——不带这个字段时与今天完全一致。
+                  // 助手消息刻意不走这条回退：那边的 content 是协议 XML，要解析而不是直显，
+                  // 而 displayContent 只会写在用户消息上。
+                  displayContent: msg.displayContent || '',
                   timestamp: formatTime(msg.createdAt)
               })
           } else {
@@ -1373,6 +1444,9 @@ export default {
                   artifacts: [],
                   walkthrough: '',
                   content: '', // Main Answer (from <final> tag)
+                  // 反问（<question>）解析结果，形状与 useAgentStream.createAssistantBubble 一致：
+                  // { text, options, answered } | null
+                  question: null,
                   timestamp: formatTime(msg.createdAt)
               }
 
@@ -1489,6 +1563,39 @@ export default {
               // Clean up process tags from remaining
               remaining = remaining.replace(/<process[^>]*>[\s\S]*?<\/process>/g, '')
 
+              // 反问（<question>）回灌。此前全仓不解析这个标签：落库正文里带着原样标签，
+              // 重开会话时整段 <question>…</question> 作为「未标记文本」掉进 bubble.content
+              // ——用户看到的是一堆 XML，选项更是无从点起。
+              // 刻意放在 <process> 剥离之后：工具输出里出现过 <question> 字样（模型复述协议）
+              // 也不会被当成真的反问。
+              // **这里不写 answered 的最终值**：artifact 那边把历史里的计划卡一律硬写成
+              // status:'draft'（见上方 Extract Artifacts），同样的写法换到问题卡上就是
+              // 「重开会话后已回答过的问题又长出一排能点的按钮」；answered 在整轮回灌结束后
+              // 按「这条之后还有没有用户消息」统一判定。
+              const questionMatch = remaining.match(/<question(?:\s[^>]*)?>([\s\S]*?)<\/question>/i)
+              // 兜底：模型漏了 </question>（截断/笔误）时后端仍按「有问题」停机
+              // （AgentOrchestrator.containsQuestion 只认起始标签），前端也得认，
+              // 否则这条最需要提示的消息反而只剩裸标签。
+              const openQuestionMatch = questionMatch
+                  ? null
+                  : remaining.match(/<question(?:\s[^>]*)?>([\s\S]*)$/i)
+              const questionRaw = questionMatch ? questionMatch[1] : (openQuestionMatch ? openQuestionMatch[1] : null)
+              if (questionRaw !== null) {
+                  const options = []
+                  const optionRegex = /<option>([\s\S]*?)<\/option>/gi
+                  let optMatch
+                  while ((optMatch = optionRegex.exec(questionRaw)) !== null) {
+                      const opt = optMatch[1].trim()
+                      if (opt) options.push(opt)
+                  }
+                  bubble.question = {
+                      text: questionRaw.replace(/<option>[\s\S]*?<\/option>/gi, '').trim(),
+                      options,
+                      answered: false
+                  }
+                  remaining = remaining.replace(questionMatch ? questionMatch[0] : openQuestionMatch[0], '')
+              }
+
               // Any remaining untagged text goes to content (fallback for legacy)
               remaining = remaining.trim()
               if (remaining && !bubble.content) {
@@ -1498,6 +1605,16 @@ export default {
               bubbles.value.push(bubble)
           }
        })
+
+       // 问题卡的已回答判定：这条助手消息后面还有用户消息，说明那一问已经答过了。
+       // 只写 answered（历史态徽标），不靠它控制可操作性——那条链仍是 RootBubble 的
+       // isLatest（仅最新一条助手消息可操作）。两者一致：真正未答的那一问必然是末条。
+       let seenLaterUser = false
+       for (let i = bubbles.value.length - 1; i >= 0; i--) {
+          const b = bubbles.value[i]
+          if (b.role === 'USER') { seenLaterUser = true; continue }
+          if (b.question && seenLaterUser) b.question.answered = true
+       }
 
        // 后台续跑关键一步：切回会话时重连 SSE。后端 connect 会推 run_state
        // （运行中还会推 state_recovery 全量续流 + plan_update 恢复任务清单），
@@ -1511,7 +1628,10 @@ export default {
     const recentDotClass = (h) => {
        if (!h) return ''
        if (h.runStatus === 'RUNNING') return 'dot-running'
-       if (h.runStatus === 'PAUSED' || h.runStatus === 'AWAITING_APPROVAL' || h.runStatus === 'INTERRUPTED') return 'dot-attention'
+       // AWAITING_INPUT（模型反问后等回答）与待审批同为「等用户」，共用黄点；
+       // 文案上要分开（待回答 / 待审批），文案表在宿主 project-overview.convStatusLabel
+       if (h.runStatus === 'PAUSED' || h.runStatus === 'AWAITING_APPROVAL'
+           || h.runStatus === 'AWAITING_INPUT' || h.runStatus === 'INTERRUPTED') return 'dot-attention'
        if (h.runStatus === 'ERROR') return 'dot-error'
        if (h.unread) return 'dot-unread'
        return ''
@@ -1552,6 +1672,9 @@ export default {
          .replace(/<tool_output>[\s\S]*?<\/tool_output>/gi, '')
          .replace(/<artifact[^>]*>[\s\S]*?<\/artifact>/gi, '')
          .replace(/<final>[\s\S]*?<\/final>/gi, '')
+         // 反问块整体剥掉：不剥的话「以纯反问收尾」的那一轮会把问题正文
+         // 当成会话标题（下面的兜底只摘标记、留内容）
+         .replace(/<question[^>]*>[\s\S]*?<\/question>/gi, '')
          .replace(/<[^>]+>/g, '') // Remove any remaining tags
          .trim()
        return cleaned || '新对话'
@@ -2076,7 +2199,7 @@ export default {
        contextFiles,
        pastedImages,
        handleSubmit,
-       abort,
+       handleAbort,
        handleRichInput,
        handleInputClick,
        handlePaste,
@@ -2140,13 +2263,34 @@ export default {
           const prompt = art.revised
              ? `我已修订计划（共 ${art.changeCount} 处改动，${art.diffSummary}）。请以下方修订版计划为准执行，注意修订处的差异：\n\n${art.content}`
              : `已确认${art.type === 'implementation_plan' ? '实施计划' : '计划'}，请按此推进。`
+          // 契约 D 要解决的原始病灶就在这里：上面那段是模型需要的细节（尤其修订版全文），
+          // 但它此前直接当成用户消息显示，于是用户在自己的气泡里读到一句自己没说过的机器口吻话。
+          // 现在细节仍走 message，气泡里只显示 displayText 这句人话。
+          const displayText = art.revised ? '已修订计划' : '按此推进'
           // 审批后使用 AGENT 模式执行计划
           await sendMessage({
              prompt,
+             displayText,
              fileList: [],
              projectId: props.projectId,
              modelId: currentModelId.value,
              mode: 'AGENT', // 审批后使用 Agent 模式执行
+             assistantId: props.currentAssistantId
+          })
+          scrollToBottom()
+       },
+       // 反问选项被点：选项原文本来就短、就像用户自己打的，所以 message 直接用它，
+       // **不传 displayText**（同值等于不传）。刻意不拼「我选择了 X」这类机器口吻长句——
+       // 那正是契约 D 要消灭的东西。
+       handleQuestionAnswer: async (option) => {
+          const text = typeof option === 'string' ? option.trim() : ''
+          if (!text) return
+          await sendMessage({
+             prompt: text,
+             fileList: [],
+             projectId: props.projectId,
+             modelId: currentModelId.value,
+             mode: currentModeId.value,
              assistantId: props.currentAssistantId
           })
           scrollToBottom()
@@ -2176,6 +2320,7 @@ export default {
        handleSelectorCreateFolder,
        // Background Task Indicator
        backgroundTasks,
+       dismissBackgroundTask,
        lastHeartbeat,
        // PPT Config
        showPptConfigDialog,
@@ -2189,6 +2334,11 @@ export default {
        agentPaused,
        continueHint,
        handleContinue,
+       // 长任务可控：后台任务停止
+       runningTasks,
+       taskTypeName,
+       stoppingTasks,
+       handleCancelTask,
        modifiedFiles,
        createdFiles,
        showModifiedPopup,
@@ -3748,6 +3898,67 @@ export default {
 
 .continue-btn:hover {
   background: #14402A;
+}
+
+/* 后台任务控制条（停止）：外形对齐 continue-bar，但用中性底色——
+   这不是「需要你处理」的黄色警示，只是一个随时可用的控制 */
+.task-control-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 12px 6px;
+}
+
+.task-control-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  background: #F8F9FA;
+  border: 1px solid #E9ECEF;
+  border-radius: 8px;
+}
+
+.task-control-name {
+  font-size: 11px;
+  font-weight: 600;
+  color: #2C3338;
+  flex-shrink: 0;
+}
+
+.task-control-msg {
+  flex: 1;
+  font-size: 11px;
+  color: #6C757D;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-control-btn {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #2C3338;
+  background: #FFFFFF;
+  border: 1px solid #E9ECEF;
+  border-radius: 6px;
+  padding: 3px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.task-control-btn:hover {
+  border-color: #5BD197;
+  color: #1A5336;
+  background: #E6F9F0;
+}
+
+/* 已发出停止请求：按钮变成状态显示，不再可点（重复点只会多发无用请求） */
+.task-control-btn.pending {
+  cursor: default;
+  color: #6C757D;
+  background: #F1F3F5;
+  border-color: #E9ECEF;
 }
 
 /* Status Bar Row (File Changes + Tokens) */

@@ -14,12 +14,13 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * SkillRouter 单测：触发匹配（命中/未命中/多命中取最长）、
- * 工具集裁剪（白名单∪基础工具、未命中不裁剪、空白名单回退）。
+ * 工具集裁剪（白名单∪基础工具、编排类工具恒定可见、未命中不裁剪、空白名单回退）。
  */
 class SkillRouterTest {
 
@@ -94,7 +95,7 @@ class SkillRouterTest {
     }
 
     @Test
-    @DisplayName("工具裁剪：命中后可见工具 = allowed_tools ∪ 基础工具集")
+    @DisplayName("工具裁剪：命中后可见工具 = allowed_tools ∪ 基础工具集（本例注册表里没有编排类工具）")
     void trimsToWhitelistPlusBaseTools() {
         router.activateForTurn("conv-1", "公司考虑IPO");
         List<ToolSpecification> all = specs("law_search", "write_docx", "doc_open_file",
@@ -103,6 +104,37 @@ class SkillRouterTest {
         List<ToolSpecification> visible = router.visibleTools("conv-1", all);
         List<String> names = visible.stream().map(ToolSpecification::name).toList();
         assertEquals(List.of("law_search", "write_docx", "read_document"), names);
+    }
+
+    @Test
+    @DisplayName("护栏：编排类工具恒定可见——skill 的 allowed_tools 不含它们也裁不掉")
+    void orchestrationToolsAlwaysVisible() {
+        // skill-a 的 allowed_tools 只有 law_search / write_docx，故意不含编排类工具；
+        // base-tools 也只有 read_document。按"allowed_tools ∪ base-tools"的老口径，
+        // todo_write 与 dispatch_subtask 会被静默裁掉（不报错不告警，只是模型不写清单/不派子任务）。
+        // 这条断言是防"下一个新 skill 再踩一次"的唯一屏障，不要因为自带 skill 已显式声明就删掉它。
+        router.activateForTurn("conv-orch", "公司考虑IPO");
+        List<ToolSpecification> all = specs("law_search", "write_docx", "doc_open_file",
+                "read_document", "todo_write", "dispatch_subtask");
+
+        List<String> names = router.visibleTools("conv-orch", all).stream()
+                .map(ToolSpecification::name).toList();
+        assertTrue(names.contains("todo_write"), "编排类工具 todo_write 必须恒定可见");
+        assertTrue(names.contains("dispatch_subtask"), "编排类工具 dispatch_subtask 必须恒定可见");
+        // 裁剪本身照旧生效：不在白名单里的业务工具仍然看不见
+        assertFalse(names.contains("doc_open_file"), "白名单外的业务工具仍应被裁掉");
+    }
+
+    @Test
+    @DisplayName("误配置回退不被编排类工具带偏：业务工具零交集时仍回退为不裁剪")
+    void orchestrationToolsDoNotDefeatEmptyWhitelistFallback() throws IOException {
+        writeSkill("skill-typo2", List.of("特殊触发词orch"), List.of("no_such_tool"));
+        registry.rescan();
+        props.setBaseTools(List.of());
+        router.activateForTurn("conv-orch2", "包含特殊触发词orch的请求");
+        // 若判据不排除恒定可见的编排类工具，这里会只剩那两个，skill 被裁成"只会写清单/派子任务"
+        List<ToolSpecification> all = specs("law_search", "todo_write", "dispatch_subtask");
+        assertSame(all, router.visibleTools("conv-orch2", all));
     }
 
     @Test

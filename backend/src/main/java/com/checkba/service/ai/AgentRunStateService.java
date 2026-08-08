@@ -34,6 +34,18 @@ public class AgentRunStateService {
         PAUSED,
         /** Plan 模式等用户审批 */
         AWAITING_APPROVAL,
+        /**
+         * 模型主动反问（{@code <question>} 标签），等用户回答。
+         *
+         * 刻意不复用 AWAITING_APPROVAL：会话列表要把「待回答」与「待审批」显示成两种文案
+         * （前者是模型缺信息不敢猜，后者是有草案等你点头），跨进程重启后也要能把
+         * 「AI 在等你」与「AI 答完了」区分开。SSE 上的 status 字面量是 awaiting_input。
+         *
+         * 停机语义与 AWAITING_APPROVAL 完全一致：答案是**下一轮普通用户消息**，
+         * 不是阻塞式挂起（工具分发跑在流式回调线程上，撞 600s callTimeout 与 180s
+         * 无活动看门狗，且律师会关掉 app 明天再来）。
+         */
+        AWAITING_INPUT,
         /** 正常跑完 */
         FINISHED,
         /** 异常终止 */

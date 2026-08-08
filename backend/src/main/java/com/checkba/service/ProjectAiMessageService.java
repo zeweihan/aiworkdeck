@@ -57,6 +57,21 @@ public class ProjectAiMessageService {
      * 总是插入新行；同一轮次内 ASSISTANT 消息的增量更新请用 {@link #upsertAssistantMessage}。
      */
     public void saveMessage(String projectIdStr, Long userId, String conversationId, String role, String content) {
+        saveMessage(projectIdStr, userId, conversationId, role, content, null);
+    }
+
+    /**
+     * 带「显示内容」的保存（契约 D：发送内容 ≠ 显示内容）。
+     *
+     * <p>{@code content} 是模型看的那份（细节要给全），{@code displayContent} 是用户看的那份
+     * （一句人话）。displayContent 为空/空白一律落 null——「缺省 = 与今天行为完全一致」
+     * 是这条通道的存量兼容前提，不许写空串占位，否则前端 {@code displayContent || content}
+     * 的回退判断在不同客户端上会有分歧。
+     *
+     * <p>模型侧读取一律走 content（见 ProjectAiMessage#displayContent 的红线说明）。
+     */
+    public void saveMessage(String projectIdStr, Long userId, String conversationId, String role,
+                            String content, String displayContent) {
         if (projectIdStr == null || role == null) {
             return;
         }
@@ -71,6 +86,7 @@ public class ProjectAiMessageService {
         msg.setUserId(userId);
         msg.setRole(role.toUpperCase());
         msg.setContent(content);
+        msg.setDisplayContent(displayContent == null || displayContent.isBlank() ? null : displayContent);
         msg.setConversationId(conversationId);
         msg.setCreatedAt(java.time.LocalDateTime.now());
         repository.save(msg);

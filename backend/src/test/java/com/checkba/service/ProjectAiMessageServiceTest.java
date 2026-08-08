@@ -100,6 +100,34 @@ class ProjectAiMessageServiceTest {
         verify(repository, never()).findById(anyLong());
     }
 
+    // ===== 契约 D：发送内容 ≠ 显示内容 =====
+
+    @Test
+    void 显示内容单独落列_模型看的content一字不动() {
+        service.saveMessage("1", 2L, "conv-1", "USER",
+                "已修订计划（共 3 处改动）：\n1. …\n2. …\n3. …", "已修订计划");
+
+        assertEquals(1, savedRows.size());
+        ProjectAiMessage row = savedRows.get(0);
+        assertTrue(row.getContent().contains("共 3 处改动"), "模型看的那份必须带全细节");
+        assertEquals("已修订计划", row.getDisplayContent(), "用户看的那份是一句人话");
+    }
+
+    /**
+     * 「缺省 = 与今天行为完全一致」是这条通道的存量兼容前提：
+     * 五参版本与空白显示内容都必须落 null，不许写空串占位——前端各端一律按
+     * displayContent || content 回退，空串在不同客户端上的真假判断会分歧。
+     */
+    @Test
+    void 未给显示内容时落null_空白也归一为null() {
+        service.saveMessage("1", 2L, "conv-1", "USER", "普通消息");
+        service.saveMessage("1", 2L, "conv-1", "USER", "普通消息", "   ");
+
+        assertEquals(2, savedRows.size());
+        assertNull(savedRows.get(0).getDisplayContent());
+        assertNull(savedRows.get(1).getDisplayContent());
+    }
+
     @Test
     void 项目ID非法时upsert返回null且不落库() {
         assertNull(service.upsertAssistantMessage(null, 2L, "conv-1", null, "内容"));

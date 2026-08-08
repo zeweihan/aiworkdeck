@@ -36,6 +36,8 @@ class AgentRunRecoveryServiceTest {
 
     private AgentRunStateService stateService;
     private AgentRunRecoveryService recoveryService;
+    /** mark 的埋点旁路：验证停机状态确实把轮次交给 TelemetryTurnTracker 闭合 */
+    private com.checkba.service.telemetry.TelemetryTurnTracker turnTracker;
 
     @BeforeEach
     void setUp() {
@@ -64,7 +66,8 @@ class AgentRunRecoveryServiceTest {
                 .thenAnswer(inv -> messages.getOrDefault(inv.<String>getArgument(0), List.of()));
         when(messageRepository.save(any(ProjectAiMessage.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        stateService = new AgentRunStateService(recordRepository, org.mockito.Mockito.mock(com.checkba.service.telemetry.TelemetryTurnTracker.class));
+        turnTracker = Mockito.mock(com.checkba.service.telemetry.TelemetryTurnTracker.class);
+        stateService = new AgentRunStateService(recordRepository, turnTracker);
         recoveryService = new AgentRunRecoveryService(recordRepository, messageRepository, stateService);
     }
 
@@ -182,6 +185,59 @@ class AgentRunRecoveryServiceTest {
         assertEquals("INTERRUPTED", stateService.statusName(CONV));
 
         // 用户点「继续」= 发一条普通消息，编排器起跑时照常翻成 RUNNING
+        stateService.mark(CONV, AgentRunStateService.RunStatus.RUNNING, 42L, 7L);
+
+        assertEquals("RUNNING", stateService.statusName(CONV));
+        assertEquals("RUNNING", table.get(CONV).getStatus());
+    }
+
+    // ---- 反问停机 AWAITING_INPUT（模型问用户，等下一轮回答）----
+
+    @Test
+    void awaitingInput_writesThroughAndIsTheRunStateWirePayload() {
+        stateService.mark(CONV, AgentRunStateService.RunStatus.RUNNING, 42L, 7L);
+        stateService.mark(CONV, AgentRunStateService.RunStatus.AWAITING_INPUT);
+
+        assertEquals("AWAITING_INPUT", table.get(CONV).getStatus(), "反问停机必须写透 DB");
+        // statusName 是 /connect 推 run_state 与会话列表 runStatus 的唯一数据源
+        // （AiAgentController 把它原样拼进 {"status":"…"}，AiChatController 拼进 conv.runStatus）
+        assertEquals("AWAITING_INPUT", stateService.statusName(CONV));
+        assertEquals(42L, table.get(CONV).getProjectId(), "终态打点不许抹掉归属");
+        assertEquals(7L, table.get(CONV).getUserId());
+    }
+
+    @Test
+    void awaitingInput_closesTelemetryTurn() {
+        stateService.mark(CONV, AgentRunStateService.RunStatus.AWAITING_INPUT);
+        // 不加进 TelemetryTurnTracker.TERMINAL 的后果是 ai.turn 永不闭合（静默少一条埋点）
+        Mockito.verify(turnTracker).onStatus(CONV, "AWAITING_INPUT");
+    }
+
+    @Test
+    void recovery_doesNotTouchAwaitingInput() {
+        // 律师关掉 app 明天再来点选项：AWAITING_INPUT 跨重启必须保持原样，
+        // 口径与 AWAITING_APPROVAL 一致（回收只认 RUNNING）
+        stateService.mark(CONV, AgentRunStateService.RunStatus.RUNNING, 42L, 7L);
+        stateService.mark(CONV, AgentRunStateService.RunStatus.AWAITING_INPUT);
+        ProjectAiMessage question = msg("ASSISTANT", "<question>按哪版章程核对？</question>");
+        messages.put(CONV, List.of(msg("USER", "核对决议"), question));
+
+        AgentRunStateService fresh = new AgentRunStateService(recordRepository,
+                Mockito.mock(com.checkba.service.telemetry.TelemetryTurnTracker.class));
+        AgentRunRecoveryService recovery =
+                new AgentRunRecoveryService(recordRepository, messageRepository, fresh);
+
+        assertEquals(0, recovery.recoverInterruptedRuns(), "等回答不是被杀，不该被回收");
+        assertEquals("AWAITING_INPUT", table.get(CONV).getStatus(), "DB 状态不许被改写成 INTERRUPTED");
+        assertFalse(question.getContent().contains("[进程中断]"), "问题气泡不许被补中断标记");
+    }
+
+    @Test
+    void awaitingInput_answerFlipsBackToRunning() {
+        stateService.mark(CONV, AgentRunStateService.RunStatus.RUNNING, 42L, 7L);
+        stateService.mark(CONV, AgentRunStateService.RunStatus.AWAITING_INPUT);
+
+        // 用户回答 = 一条普通用户消息，编排器起跑照常翻回 RUNNING（不做阻塞式挂起）
         stateService.mark(CONV, AgentRunStateService.RunStatus.RUNNING, 42L, 7L);
 
         assertEquals("RUNNING", stateService.statusName(CONV));

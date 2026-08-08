@@ -151,26 +151,56 @@ export function createSseConnection({ baseUrl, token, conversationId, onEvent, o
 /**
  * text_delta 的 content 是带 XML 标签的文本流（<thinking>/<process>/<final> 等，
  * 见后端 AgentStreamHandler 协议）。MVP 只区分三类：
- *   主文本 = 标签外的裸文本 + <final> 内容
+ *   主文本 = 标签外的裸文本 + <final> 内容 + <question> 正文
  *   思考   = <thinking> 内容
  *   其余（process/artifact/title/walkthrough/tool_code 等）不渲染。
- * 未知标签当普通文本放行，避免误吞正文里的 "<"。
+ *
+ * 反问 <question>：正文进主文本（与桌面端 useAgentStream 同语义），内含的
+ * <option> 子标签是备选答案，不进正文，闭合时整块经 onQuestion 交给界面做按钮。
+ *
+ * 未知标签的默认从「当正文放行」改成「只吞标记」：默认放行意味着后端每新增一个
+ * 标签，插件都比桌面端慢一步，而代价是用户当场看到裸的 XML 源码。判据收紧到
+ * 「协议标签的形状」而不是「所有尖括号」，详见 step() 里的取舍说明。
  */
 const KNOWN_TAGS = new Set([
   'thinking', 'title', 'process', 'artifact', 'final', 'walkthrough',
-  'tool_code', 'step', 'tool', 'tool_output', 'bubble_type'
+  'tool_code', 'step', 'tool', 'tool_output', 'bubble_type',
+  'question', 'option'
 ])
 const TAG_RE = /^<(\/?)([a-zA-Z_][\w-]*)(\s[^>]*)?>$/
 // "<" 之后仍可能补成合法标签的形态（尚未见到 ">"）
 const PARTIAL_TAG_RE = /^<\/?[a-zA-Z_]?[\w-]*(\s[^>]*)?$/
+// 协议标签的形状：全小写 ASCII 的短 snake_case 名（协议里全部标签都长这样）。
+// 未知但符合这个形状的标签按「像协议标签」处理，其余尖括号一律当正文。
+const PROTOCOL_TAG_SHAPE_RE = /^[a-z][a-z0-9_]{0,23}$/
 
-export function createTagStreamParser({ onMainText, onThinkingText }) {
+export function createTagStreamParser({ onMainText, onThinkingText, onQuestion }) {
   let pending = ''
   const stack = []
+  // 当前 <question> 块（未闭合时非空）与正在累积的 <option> 文案
+  let question = null
+  let optionBuf = ''
+
+  const finishOption = () => {
+    const text = optionBuf.trim()
+    optionBuf = ''
+    if (question && text) question.options.push(text)
+  }
+
+  const emitQuestion = () => {
+    const q = question
+    question = null
+    if (q && onQuestion) onQuestion(q)
+  }
 
   const route = (text) => {
     if (!text) return
-    if (stack.includes('final') || stack.length === 0) { onMainText(text); return }
+    // <option> 内容是按钮文案，不能混进正文
+    if (stack.includes('option')) { optionBuf += text; return }
+    if (stack.includes('final') || stack.includes('question') || stack.length === 0) {
+      onMainText(text)
+      return
+    }
     if (stack.includes('thinking')) { onThinkingText(text) }
     // 其余标签内的内容：MVP 不渲染
   }
@@ -194,11 +224,22 @@ export function createTagStreamParser({ onMainText, onThinkingText }) {
       if (m[1] === '/') {
         const idx = stack.lastIndexOf(name)
         if (idx !== -1) stack.splice(idx, 1)
+        if (name === 'option') finishOption()
+        else if (name === 'question') emitQuestion()
       } else if (!candidate.endsWith('/>')) {
         stack.push(name)
+        if (name === 'question') question = { options: [] }
+        else if (name === 'option') optionBuf = ''
       }
+    } else if (m && PROTOCOL_TAG_SHAPE_RE.test(m[2])) {
+      // 未知标签、但形状像协议标签：只吞掉标记本身，内容按外层上下文继续渲染。
+      // 为什么不连内容一起吞：万一后端把承载正文的标签改名（如 final→answer），
+      // 连吞会让用户收到一个空气泡，比多显示一段正文糟得多。
+      // 为什么不整体放行：默认放行就是把 XML 源码给用户看，这正是本次要修的缺陷。
     } else {
-      route(candidate) // 未知标签按普通文本放行
+      // 不像协议标签的尖括号——合同里的占位符（<甲方>、<Party A>、<甲方 全称>）
+      // 都落在这里，原样当正文。判据是「协议标签的形状」，不是「所有尖括号」。
+      route(candidate)
     }
     pending = pending.slice(gt + 1)
     return true
@@ -212,6 +253,9 @@ export function createTagStreamParser({ onMainText, onThinkingText }) {
     flush() {
       route(pending)
       pending = ''
+      // 标签没闭合就断流（截断、出错收尾）：已解析出的选项不丢
+      if (stack.includes('option')) finishOption()
+      if (question) emitQuestion()
     }
   }
 }
