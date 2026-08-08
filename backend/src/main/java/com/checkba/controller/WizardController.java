@@ -94,6 +94,14 @@ public class WizardController {
                     .body(error("必须选择一个 AI 提供商 / An AI provider must be selected"));
         }
 
+        // 跨境同意闸门：与管理后台共用 AdminConfigController.crossBorderBlockReason 的同一处判定。
+        // 向导是用户选平台通道的主入口（AWD_CLOUD 在向导里恒可选），漏了这道闸等于同意形同装饰。
+        String crossBorderBlock = AdminConfigController.crossBorderBlockReason(
+                request.getAi(), systemSettingService);
+        if (crossBorderBlock != null) {
+            return ResponseEntity.badRequest().body(error(crossBorderBlock));
+        }
+
         Map<String, String> updates;
         try {
             updates = AdminConfigController.toSettingsUpdates(request, objectMapper);

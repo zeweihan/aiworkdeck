@@ -103,10 +103,10 @@
               </template>
               <template v-else-if="platformNeedsAllocation">
                 <text class="account-line">
-                  账户已连接{{ accountLabel }}。还差一步：到官网账户页从余额分配 AI 额度，分配完点「重新检查」。
+                  账户已连接{{ accountLabel }}。Credits 余额为空——到官网充值后即可直接使用云端通道，充完点「重新检查」。
                 </text>
                 <view class="account-actions">
-                  <text class="account-link" @tap="openAccountSite">前往官网分配额度</text>
+                  <text class="account-link" @tap="openAccountSite">前往官网充值</text>
                   <text class="account-link" @tap="handleRecheckAccount">
                     {{ recheckingAccount ? '检查中…' : '重新检查' }}
                   </text>
@@ -116,6 +116,21 @@
                 <text class="account-line account-ok">账户已连接{{ accountLabel }}，可以直接开始使用。</text>
               </template>
               <text v-if="accountError" class="account-error">{{ accountError }}</text>
+
+              <!-- 跨境传输的单独同意（个保法第三十九条）。与管理后台是同一道闸
+                   （AdminConfigController.crossBorderBlockReason），向导这边曾经完全没有，
+                   而向导恰恰是选平台通道的主入口。绝不预勾选——预勾选的同意无效。 -->
+              <view class="consent-box">
+                <text class="consent-title">向境外提供个人信息的单独同意</text>
+                <text class="consent-body">「AI Workdeck 云端」会把你送入 AI 的内容（文本与相关文件片段）发送至
+                  OpenRouter, Inc.（美国）处理，用于模型推理与用量计费，这属于向境外提供个人信息。
+                  进入产品后可随时在「系统管理 → AI 功能设置」撤回同意，撤回后云端通道不再可用，
+                  改用本机模型或境内供应商即可继续工作。</text>
+                <view class="consent-check" @tap="crossBorderConsent = !crossBorderConsent">
+                  <view class="consent-box-mark" :class="{ checked: crossBorderConsent }"></view>
+                  <text class="consent-check-label">我已阅读上述告知，同意将相关内容传输至境外接收方处理</text>
+                </view>
+              </view>
             </view>
           </view>
         </view>
@@ -211,7 +226,7 @@ import { refreshEntitlements } from '@/composables/useEntitlement.js'
 import { isDesktopHost } from '@/services/host.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 
-// 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里（与 admin 页同一地址）
+// 官网账户页：生成账户 Key、充值都在这里（与 admin 页同一地址）。Credits 重构后没有「分配额度」这一步了
 const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
 
 export default {
@@ -222,7 +237,7 @@ export default {
       showAdvanced: false,
       isDesktop: isDesktopHost(),
       // 平台通道「AI Workdeck 云端」的两个前置条件，与 admin 页同一判据：
-      // 已连接账户（本地读盘）+ 已在官网从余额分配 AI 额度（用量接口）。
+      // 已连接账户（本地读盘）+ 账户有 Credits（用量接口的 creditsCents）。
       platformAiAvailable: false,
       platformNeedsAllocation: false,
       accountName: '',
@@ -230,6 +245,8 @@ export default {
       accountError: '',
       connectingAccount: false,
       recheckingAccount: false,
+      // 跨境传输的单独同意（个保法第三十九条）。初值必须是 false——预勾选的同意无效。
+      crossBorderConsent: false,
       // 各云端提供商的 key 暂存：切换选项不丢已填内容，提交时只带选中者
       apiKeys: {
         OPENROUTER: '',
@@ -334,7 +351,12 @@ export default {
         const usage = await getAccountUsage()
         const platform = (usage && usage.platform) || null
         // quotaAvailable=false 表示实时口径拿不到，此时不当作「没额度」拦人
+        // 判据是 Credits 余额。用旧的 hasKey 口径会卡住刚充完值、还没调用过 AI 的新用户——
+        // 「向导里每一条下一步都必须能在向导里做完」，这条路当年就是这么走死的。
         this.platformNeedsAllocation = !!(platform && platform.quotaAvailable && !platform.hasAiQuota)
+        if (platform && typeof platform.creditsCents === 'number') {
+          this.platformNeedsAllocation = platform.creditsCents <= 0
+        }
       } catch (e) {
         this.platformNeedsAllocation = false
       }
@@ -402,7 +424,7 @@ export default {
         this.connectingAccount = false
       }
     },
-    // 用户到官网分配完额度回到向导：不必重启应用，重查一次即可
+    // 用户到官网充完值回到向导：不必重启应用，重查一次即可
     async handleRecheckAccount() {
       if (this.recheckingAccount) return
       this.accountError = ''
@@ -410,7 +432,7 @@ export default {
       try {
         await this.loadPlatformAi()
         if (this.platformNeedsAllocation) {
-          this.accountError = '还没查到已分配的 AI 额度，稍等片刻再试'
+          this.accountError = '还没查到 Credits 余额，稍等片刻再试'
         }
       } finally {
         this.recheckingAccount = false
@@ -431,6 +453,10 @@ export default {
       const trim = (v) => (v || '').trim()
       const provider = this.form.ai.activeProvider
       const payload = { ai: { activeProvider: provider } }
+      // 只在选平台通道时带同意：其余档位不涉及跨境，带 false 会把已有同意误撤回
+      if (provider === 'AWD_CLOUD') {
+        payload.ai.crossBorderConsent = this.crossBorderConsent
+      }
       const external = {}
 
       if (provider === 'OPENROUTER' && trim(this.apiKeys.OPENROUTER)) {
@@ -496,7 +522,14 @@ export default {
         return
       }
       if (provider === 'AWD_CLOUD' && this.platformNeedsAllocation) {
-        uni.showToast({ title: '请先在官网账户页分配 AI 额度', icon: 'none' })
+        // 文案红线：不能含「请先」——api.js 用它判掉线并清会话
+        uni.showToast({ title: '账户 Credits 余额为空，到官网充值后再试', icon: 'none' })
+        return
+      }
+      // 跨境同意：后端 crossBorderBlockReason 也会拦（两道都在才算数），
+      // 这里拦一次是为了把提示给在勾选框旁边而不是提交失败之后
+      if (provider === 'AWD_CLOUD' && !this.crossBorderConsent) {
+        uni.showToast({ title: '云端通道需勾选跨境传输同意', icon: 'none' })
         return
       }
 
@@ -754,6 +787,60 @@ export default {
   font-size: 12px;
   color: #1d4ed8;
   cursor: pointer;
+}
+
+/* 跨境同意块。单位与配色跟随本页（px + slate 系），不要照抄 admin 页那份（rpx + #1a5336）。 */
+.consent-box {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #166534;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.consent-title {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 6px;
+}
+
+.consent-body {
+  display: block;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #475569;
+}
+
+.consent-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 10px;
+  cursor: pointer;
+}
+
+.consent-box-mark {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-top: 2px;
+  border: 1px solid #94a3b8;
+  border-radius: 3px;
+  background: #fff;
+}
+
+.consent-box-mark.checked {
+  background: #166534;
+  border-color: #166534;
+}
+
+.consent-check-label {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #334155;
 }
 
 .account-link:hover {

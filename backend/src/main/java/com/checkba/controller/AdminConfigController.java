@@ -126,6 +126,24 @@ public class AdminConfigController {
     // === 配置 key 常量 ===
     // AI
     private static final String KEY_AI_ACTIVE_PROVIDER = "ai.activeProvider";
+    /**
+     * 跨境传输的单独同意（《个人信息保护法》第三十九条）。
+     *
+     * 值为 ISO 时间戳，空 = 未同意。平台 AI 通道把内容直接发往境外的 OpenRouter，
+     * 属「向境外提供个人信息」，需在**告知后单独取得**同意——不能与服务条款一揽子打包，
+     * 也不能预先勾选。同意点刻意放在「把供应商切成 AWD_CLOUD」这一刻：那正是内容
+     * 开始出境的决定点，既不打断新用户上手，又在做决定时就在眼前。
+     *
+     * 一并记下同意时看到的文本版本，日后改了告知内容才知道谁同意的是哪一版。
+     */
+    private static final String KEY_AI_CROSS_BORDER_CONSENT_AT = "ai.crossBorder.consentAt";
+    private static final String KEY_AI_CROSS_BORDER_CONSENT_VERSION = "ai.crossBorder.consentVersion";
+    /** 当前告知文本的版本号；改了跨境告知的实质内容就要 +1，让旧同意失效并重新征求 */
+    private static final String CROSS_BORDER_NOTICE_VERSION = "2026-08-08";
+    // ai.systemPrompt.OLLAMA / ai.systemPrompt.GEMINI 两个键已随 v1 /api/ai/chat 一起移除：
+    // 唯一读者是已删的 AiChatService，且它按模型名字符串而非 provider 选 key，
+    // 对四条通道本来就全部失效。今天真正生效的 system prompt 由 ContextAssemblerService 拼装，
+    // provider 无关、admin 无入口。
     private static final String KEY_AI_ASSISTANTS = "ai.assistants";
     // 三个模型选择键：留空一律表示「跟随内置默认」（工厂侧空白视为未配置，回退 yml）。
     // ai.subagentModel 留空是「继承 ai.auxModel」，不是「继承主会话模型」。
@@ -294,6 +312,15 @@ public class AdminConfigController {
         ai.setOllamaBaseUrl(all.get(KEY_AI_OLLAMA_BASE_URL));
         ai.setOllamaModelName(all.get(KEY_AI_OLLAMA_MODEL_NAME));
 
+        // 同意只有在版本一致时才算数：告知文本改过，旧同意作废、需重新征求
+        String consentVersion = systemSettingService.get(KEY_AI_CROSS_BORDER_CONSENT_VERSION, "");
+        ai.setCrossBorderConsentAt(
+                CROSS_BORDER_NOTICE_VERSION.equals(consentVersion)
+                        ? systemSettingService.get(KEY_AI_CROSS_BORDER_CONSENT_AT, "")
+                        : "");
+        ai.setCrossBorderNoticeVersion(CROSS_BORDER_NOTICE_VERSION);
+
+
         // Assistants logic: DB only, no fallback
         String assistantsJson = systemSettingService.get(KEY_AI_ASSISTANTS, null);
         if (assistantsJson != null && !assistantsJson.isBlank()) {
@@ -323,6 +350,14 @@ public class AdminConfigController {
         if (admin == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(error("仅管理员可访问此接口"));
+        }
+
+        // 跨境同意闸门要在写库之前把关：平台通道会把内容直接发往境外的模型服务商，
+        // 属「向境外提供个人信息」，需单独同意（个保法第三十九条）。
+        // 判定与文案在 crossBorderBlockReason，与首启向导共用同一处定义。
+        String crossBorderBlock = crossBorderBlockReason(request.getAi(), systemSettingService);
+        if (crossBorderBlock != null) {
+            return ResponseEntity.badRequest().body(error(crossBorderBlock));
         }
 
         Map<String, String> updates;
@@ -438,6 +473,15 @@ public class AdminConfigController {
 
         if (request.getAi() != null) {
             AiConfig ai = request.getAi();
+            // 本次勾选了同意就先记下（含文本版本），再判断能不能切到平台通道
+            if (Boolean.TRUE.equals(ai.getCrossBorderConsent())) {
+                updates.put(KEY_AI_CROSS_BORDER_CONSENT_AT, java.time.Instant.now().toString());
+                updates.put(KEY_AI_CROSS_BORDER_CONSENT_VERSION, CROSS_BORDER_NOTICE_VERSION);
+            } else if (Boolean.FALSE.equals(ai.getCrossBorderConsent())) {
+                // 撤回同意：个保法第十五条给的权利，撤回后不得再走平台通道
+                updates.put(KEY_AI_CROSS_BORDER_CONSENT_AT, "");
+                updates.put(KEY_AI_CROSS_BORDER_CONSENT_VERSION, "");
+            }
             if (ai.getActiveProvider() != null) {
                 // 供应商收敛成三档后要挡住旧客户端/手工请求写回已下线的档位（如 GEMINI）：
                 // 启动期迁移只在启动时跑一次，运行期写进去的坏值会一直生效到下次重启，
@@ -705,6 +749,44 @@ public class AdminConfigController {
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
     }
 
+    /**
+     * 是否已就跨境传输取得有效的单独同意：本次请求勾选了，或库里已有同版本的同意记录。
+     * 版本不一致按未同意处理——告知文本改过，旧同意覆盖不到新的处理方式。
+     */
+    private boolean hasCrossBorderConsent(AiConfig ai) {
+        return hasCrossBorderConsent(ai, systemSettingService);
+    }
+
+    static boolean hasCrossBorderConsent(AiConfig ai, SystemSettingService settings) {
+        if (Boolean.TRUE.equals(ai.getCrossBorderConsent())) return true;
+        if (Boolean.FALSE.equals(ai.getCrossBorderConsent())) return false;
+        String at = settings.get(KEY_AI_CROSS_BORDER_CONSENT_AT, "");
+        String version = settings.get(KEY_AI_CROSS_BORDER_CONSENT_VERSION, "");
+        return at != null && !at.isBlank() && CROSS_BORDER_NOTICE_VERSION.equals(version);
+    }
+
+    /**
+     * 切换到平台通道时的跨境同意闸门：可以放行返回 null，否则返回给用户看的中文原因。
+     *
+     * <p><b>为什么做成静态、供两个入口共用</b>：这道闸原先只在
+     * {@link #updateAdminConfig} 里，而首启向导走的是 {@link WizardController#initialize}
+     * → 直接调静态的 {@link #toSettingsUpdates}，**完全绕过闸门**。而向导恰恰是用户
+     * 选平台通道的主入口（地雷 15：AWD_CLOUD 在向导里恒可选），于是同意对多数用户
+     * 形同装饰。合规判断只许有一处定义——两处各写一份，迟早只改了其中一处。
+     *
+     * <p>文案红线：不得含「登录」「未授权」「请先」——前端 api.js 用这三个子串判掉线并清会话。
+     */
+    static String crossBorderBlockReason(AiConfig ai, SystemSettingService settings) {
+        if (ai == null || ai.getActiveProvider() == null) return null;
+        if (!AiModelProperties.Provider.AWD_CLOUD.name()
+                .equalsIgnoreCase(ai.getActiveProvider().trim())) {
+            return null;
+        }
+        if (hasCrossBorderConsent(ai, settings)) return null;
+        return "「AI Workdeck 云端」会把你送入 AI 的内容发往境外的模型服务商处理。"
+                + "勾选跨境传输同意后才能启用；不想让内容出境的话，可以改用本机模型或境内供应商。";
+    }
+
     public static class AiConfig {
         private String activeProvider;
         /** 空串 = 跟随内置默认（yml 的 ai.model.open-router.default-model）。 */
@@ -718,6 +800,11 @@ public class AdminConfigController {
         private String ollamaBaseUrl;
         private String ollamaModelName;
         private List<com.checkba.model.ai.AiAssistantConfig> assistants;
+        /** 读：已同意的时间戳（空 = 未同意）。写：本次是否勾选了跨境同意 */
+        private String crossBorderConsentAt;
+        private Boolean crossBorderConsent;
+        /** 读：当前告知文本版本，供前端判断是否需要重新征求 */
+        private String crossBorderNoticeVersion;
 
         public String getActiveProvider() { return activeProvider; }
         public void setActiveProvider(String activeProvider) { this.activeProvider = activeProvider; }
@@ -733,6 +820,12 @@ public class AdminConfigController {
         public void setOllamaBaseUrl(String ollamaBaseUrl) { this.ollamaBaseUrl = ollamaBaseUrl; }
         public String getOllamaModelName() { return ollamaModelName; }
         public void setOllamaModelName(String ollamaModelName) { this.ollamaModelName = ollamaModelName; }
+        public String getCrossBorderConsentAt() { return crossBorderConsentAt; }
+        public void setCrossBorderConsentAt(String crossBorderConsentAt) { this.crossBorderConsentAt = crossBorderConsentAt; }
+        public Boolean getCrossBorderConsent() { return crossBorderConsent; }
+        public void setCrossBorderConsent(Boolean crossBorderConsent) { this.crossBorderConsent = crossBorderConsent; }
+        public String getCrossBorderNoticeVersion() { return crossBorderNoticeVersion; }
+        public void setCrossBorderNoticeVersion(String crossBorderNoticeVersion) { this.crossBorderNoticeVersion = crossBorderNoticeVersion; }
         public List<com.checkba.model.ai.AiAssistantConfig> getAssistants() { return assistants; }
         public void setAssistants(List<com.checkba.model.ai.AiAssistantConfig> assistants) { this.assistants = assistants; }
     }

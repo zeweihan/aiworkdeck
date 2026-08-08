@@ -2,6 +2,7 @@ package com.checkba.service.sms;
 
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.auth.VerificationCodeStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -18,7 +19,7 @@ import java.util.regex.Pattern;
  * <p>仅 server 模式生效——local-mode 是免登单机形态，没有登录环节，
  * {@link #active()} 恒 false，所有端点自然退化为未启用。
  *
- * <p>场景常量即 {@link SmsCodeStore} 的 scene 维度：login 码只能用于登录、
+ * <p>场景常量即 {@link VerificationCodeStore} 的 scene 维度：login 码只能用于登录、
  * bind 码只能用于绑定，互不通用。
  */
 @Service
@@ -33,12 +34,12 @@ public class SmsAuthService {
     private static final Pattern E164_PHONE = Pattern.compile("^\\+[1-9]\\d{6,14}$");
 
     private final List<SmsGateway> gateways;
-    private final SmsCodeStore codeStore;
+    private final VerificationCodeStore codeStore;
     private final UserRepository userRepository;
     private final boolean localMode;
 
     @Autowired
-    public SmsAuthService(List<SmsGateway> gateways, SmsCodeStore codeStore, UserRepository userRepository,
+    public SmsAuthService(List<SmsGateway> gateways, VerificationCodeStore codeStore, UserRepository userRepository,
                           @Value("${security.local-mode:false}") boolean localMode) {
         this.gateways = gateways;
         this.codeStore = codeStore;
@@ -74,7 +75,7 @@ public class SmsAuthService {
         return maskPhone(user.getPhone());
     }
 
-    /** 核销登录验证码；错码/过期抛业务错误（在线爆破由 SmsCodeStore 的尝试上限兜底）。 */
+    /** 核销登录验证码；错码/过期抛业务错误（在线爆破由 VerificationCodeStore 的尝试上限兜底）。 */
     public void verifyLoginCode(User user, String code) {
         if (!requiresCode(user)) {
             return;

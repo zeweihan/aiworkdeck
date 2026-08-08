@@ -1419,6 +1419,7 @@ import VersionPanel from '@/components/version/VersionPanel.vue'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CollabDialog from '@/components/collab/CollabDialog.vue'
 import { MEMBER_GROUP_LABELS } from '@/config/memberRoles.js'
+import { globalOverlayActive } from '@/utils/overlayState.js'
 import CompareDocDialog from '@/components/CompareDocDialog.vue'
 import DocDiffViewer from '@/components/DocDiffViewer.vue'
 import VersionCompareTab from '@/components/version/VersionCompareTab.vue'
@@ -1784,6 +1785,9 @@ export default {
     // HTML 之上，所以弹窗期间必须隐藏 BrowserView，否则弹窗会被网页挡住"点了没反应"。
     desktopOverlayActive() {
       return !!(
+        // 页面树之外的浮层（反馈浮窗）也要能压住 BrowserView：它自己不调
+        // setViewsVisible，只置这个全局 ref，避免和下面这一处 watcher 互相打架
+        globalOverlayActive.value ||
         this.showOcrOverlay ||
         this.showScreenshotSaveDialog ||
         this.showExportDialog ||

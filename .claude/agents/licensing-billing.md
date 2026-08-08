@@ -147,7 +147,8 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 
 **登录二次验证的判定出口（2026-08-07）**
 - `backend/src/main/java/com/checkba/service/auth/SecondFactorService.java` — **`required(user)` 是唯一判定出口**，
-  返回 `NONE / TOTP / SMS`。TOTP 优先于短信（零成本、无国界、不受运营商报备与 SIM 交换影响）。
+  返回 `NONE / TOTP / MAIL / SMS`。优先级 **TOTP > 邮箱 > 短信**：TOTP 零成本、无国界、不受运营商报备与
+  SIM 交换影响；**邮箱排在短信之前是成本决策**（短信按条计费，邮件几乎免费），短信降为未绑邮箱时的兜底。
   两条密码入口（`/login`、`/device-token`）都只接 `AuthController.secondFactorChallenge()` 这一个私有方法——
   **新增第三条密码入口时必须接它**，漏一条等于没设闸。
 - 同文件管认证器绑定：`startSetup`（生成密钥，尚未启用）→ `activate`（验一次码才启用）→
@@ -159,14 +160,17 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - 端点：`/api/auth/totp/{setup,activate,disable}`（需登录）、`/api/auth/totp/reset/{userId}`（仅 admin）。
 - 前端：`userprofile.vue` 设置页「账号安全」的认证器分区（二维码用 `qrcode` 懒加载渲染，
   **otpauth URI 含密钥，只在前端本地转二维码，不走任何图片服务**）；`login.vue` 按 4005 的
-  `data.method` 区分 totp/sms 两种步骤（totp 不发短信、不显示重发倒计时）。
+  `data.method` 区分 totp/mail/sms 三种步骤（totp 不发码、不显示重发倒计时；**mail 与 sms 的重发要打
+  各自的端点**，打错会被判成「未绑定手机号」）。
 
 **登录短信验证（2026-08-06，sms-auth-integration）**
 - `backend/src/main/java/com/checkba/service/sms/SmsService.java` — 阿里云 dysmsapi 发送，**刻意不引 SDK**
   （JDK HttpClient 直签 HMAC-SHA1，保补丁通道资格；签名算法有真机对拍向量护栏 `SmsServiceTest`）。
   阿里云原始错误 Message 只进日志不进用户文案。
-- `service/sms/SmsCodeStore.java` — 验证码生命周期：6 位数字、5 分钟 TTL、一次性核销、单码 5 次验错作废、
-  60 秒重发冷却、单手机号日上限 10 条；内存只存 SHA-256。发送失败调 `invalidate` 回滚冷却（日配额不回滚）。
+- `service/auth/VerificationCodeStore.java`（原 `service/sms/SmsCodeStore.java`，2026-08-08 更名）——
+  验证码生命周期，**短信与邮件共用一套**：6 位数字、5 分钟 TTL、一次性核销、单码 5 次验错作废、
+  60 秒重发冷却、单 target 日上限 10 条；内存只存 SHA-256。发送失败调 `invalidate` 回滚冷却（日配额不回滚）。
+  `target` 短信是规范化手机号、邮件是规范化邮箱，两者不会撞键（手机号里没有 `@`）。
 - `service/sms/SmsAuthService.java` — 流程编排：scene 隔离（login 码≠bind 码）、号码规范化与校验、
   绑定唯一性（发码与确认两处都查）。`active()` = server 模式 && 任一通道可用；local-mode 恒旁路。
 - **通道按号码归属地分流**（`SmsGateway` 接口，2026-08-07）：`SmsService` 收大陆号（阿里云），
@@ -180,9 +184,33 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   **code 4005** + `{smsRequired, phoneMasked}`（与 4001/4003 同族，前端 api.js 据此切验证码步骤）；
   存量未绑定用户不拦。`POST /api/auth/sms/send-code`（scene=login 须带正确用户名密码且与 /login 共用
   失败锁定，**否则就是免锁定的密码试探口**；scene=bind 须已登录）、`POST /api/auth/sms/bind`。
-  IP 维度限频在 `AuthAbuseGuard.checkSmsSendRate`（20 条/小时）。
-- `/api/auth/me` 多回 `smsAuthEnabled` + `phoneMasked`（空串=未绑定，Map.of 不收 null）；
+  IP 维度限频在 `AuthAbuseGuard.checkCodeSendRate`（20 条/小时，**短信与邮件共用这一把闸**——
+  各开一把等于换个通道就能绕过限频）。
+- `/api/auth/me` 多回 `smsAuthEnabled` + `phoneMasked` + `mailAuthEnabled` + `emailMasked`
+  （空串=未绑定，Map 不收 null；该 Map 已 12 项，超过 `Map.of` 的 10 对上限，用的是 `Map.ofEntries`）；
   绑定 UI 在 `userprofile.vue` 设置 tab「账号安全」，登录验证码步骤在 `login.vue`。
+
+**登录邮箱验证（2026-08-08，PR#320）**
+- `backend/src/main/java/com/checkba/service/mail/MailAuthService.java` — 流程编排，与 `SmsAuthService` 同构。
+  三个场景 `mail-bind / mail-login / mail-signin` **互不通用**：绑定码是已登录态下发的，
+  若能用于免密登录，等于把低权限操作兑换成完整登录。
+- `service/mail/`（`MailGateway` / `SmtpMailGateway` / `DomesticMailGateway` / `GlobalMailGateway` / `MailRouter`）——
+  `MailRouter` 按**收件域名**选路，国内主流邮箱走阿里云 DirectMail（`dm.aiworkdeck.com`），
+  其余走 Resend（`send.aiworkdeck.com`，兜底通道）。**刻意不用 Spring Boot 的 `spring.mail.*`**——
+  那套只装配得出一个 `JavaMailSender`，两条必须并存。`@Order` 钉死顺序，兜底通道排错会把 QQ/163 全吃掉。
+- `User.verifiedEmail`（**新增的 unique 列**）+ `UserRepository.findByVerifiedEmail`。
+  **不要给资料字段 `User.email` 加唯一约束**：它是历史自由填写的，有重复与空串，
+  `ddl-auto: update` 加约束会在脏数据上失败。`verifiedEmail` 只由「收到码并验过」写入。
+- 端点：`POST /api/auth/mail/send-code`（scene=login/bind，与短信同构）、`POST /api/auth/mail/bind`、
+  `POST /api/auth/mail-login/send-code` + `/verify`（免密登录两步）。
+- **免密登录的三条红线**：① 独立开关 `mail.passwordless-login-enabled` 且**默认关**——它是一条新的匿名
+  登录入口，邮箱被盗即账号被盗；② 未注册邮箱**不发信但照常返回**，回包对「已注册/未注册」完全一致，
+  否则这个端点就是账号枚举器；③ 验码失败**必须计入登录锁定**（锁定键=规范化后的邮箱）——单枚码的
+  尝试上限只管那一枚，换一枚重来不受限，不接锁定就是个 6 位码爆破口。
+- 配置 `mail.*`（application.yml）：两条通道各自 `enabled/host/port/username/password/from`，
+  默认全关。Resend 的 SMTP 用户名是**字面量 `resend`**、密码填 API key；`from` 必须含 `@`
+  （回落到 username 会拼出非法发件人，只在发信那一刻才炸，所以 `enabled()` 里就判掉）。
+  阿里云那条的密码是控制台「发信地址 → 设置SMTP密码」设的，**不是 AccessKey**。
 - 配置 `sms.*`（application.yml）：`SMS_AUTH_ENABLED` 默认 false；AK/SK 走 `SMS_ACCESS_KEY_ID/SECRET`
   环境变量（RAM 子用户仅授 AliyunDysmsFullAccess），签名/模板默认 `京微资易科技`/`SMS_483655011`
   （旧签名 `京微资易` 已在阿里云控制台删除，2026-08-06 重建为新签名）。
@@ -412,6 +440,18 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     新增 AI 入口（新的 @Async / executor.submit / runAsync）时必须一并接上，否则多租户下那条路取不到 key。
     另外 `security.platform-key-secret` 在 `awdk-login-enabled=true` 时**缺失即拒绝启动**
     （`PlatformAiKeyCipher` 构造器）——明文降级是典型的潜伏逃生门，这里刻意不留。
+
+18. **切到平台通道有两个入口，跨境同意闸必须两个都设**。同意（个保法第三十九条）的判定与
+    拒绝文案在 `AdminConfigController.crossBorderBlockReason(ai, settings)`（静态，与
+    `toSettingsUpdates` 同款），**管理后台 `updateAdminConfig` 与首启向导 `WizardController.initialize`
+    都要调它**。这条是踩出来的：闸门最初只在管理后台，而向导走的是 `toSettingsUpdates` 静态映射、
+    完全绕过闸门——偏偏向导才是用户选平台通道的主入口（AWD_CLOUD 恒可选，见地雷 15），
+    于是勾选框摆在了没人必须经过的页面上，同意形同装饰。
+    对应地，向导也必须自带同意勾选框（只加后端闸会让 AWD_CLOUD 在向导里不可提交，违反地雷 15）；
+    **两处初值都必须是未勾选**——预先勾选的同意在个保法下无效。
+    `crossBorderConsent` 只在选平台通道时才进 payload：其余档位带 `false` 会把已有同意误撤回。
+    护栏：`CrossBorderConsentTest`（判定本身：版本作废、文案红线）
+    + `CrossBorderConsentGateSharedTest`（这道闸没有第二份实现、没有入口漏掉它）。
 
 ## 验证
 

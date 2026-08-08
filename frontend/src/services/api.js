@@ -965,6 +965,56 @@ export function bindPhone(phone, code) {
   });
 }
 
+// 发送邮箱验证码。与 sendSmsCode 逐一对称：scene='login' 需带 username/password
+// （发往已绑定邮箱）；scene='bind' 需已登录，带 email（发往待绑定的新邮箱）。
+export function sendMailCode(payload) {
+  return request({
+    url: '/api/auth/mail/send-code',
+    method: 'POST',
+    data: payload,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 绑定/更换邮箱（验证码走 sendMailCode 的 bind 场景）
+export function bindEmail(email, code) {
+  return request({
+    url: '/api/auth/mail/bind',
+    method: 'POST',
+    data: { email, code },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 邮箱免密登录第一步：发码。后端对「已注册」和「未注册」回同一个结果
+// （防账号枚举），所以这里成功也不代表该邮箱有账号。
+export function mailLoginSendCode(email) {
+  return request({
+    url: '/api/auth/mail-login/send-code',
+    method: 'POST',
+    data: { email },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
+// 邮箱免密登录第二步：验码换会话，回包结构与密码登录一致
+export function mailLoginVerify(email, code) {
+  return request({
+    url: '/api/auth/mail-login/verify',
+    method: 'POST',
+    data: { email, code },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  });
+}
+
 // 认证器（TOTP）：开始绑定，返回 { secret, provisioningUri }。此时尚未生效
 export function totpSetup() {
   return request({ url: '/api/auth/totp/setup', method: 'POST' });
@@ -1527,6 +1577,62 @@ export function deleteClipboardItem(id) {
     url: `/api/clipboard/${id}`,
     method: 'DELETE',
   })
+}
+
+/**
+ * 提交一条用户反馈（正文 + 图片 + 语音，一次 multipart 请求）。
+ * 分步上传会在网络抖动时留下一堆没有正文的空反馈——而反馈恰恰是「出问题时」提交的。
+ * @param {{kind:string,text:string,projectId:number|null,page:string,clientContext:object}} payload
+ * @param {File[]} files 图片（image/*）与语音（audio/*），服务端按 MIME 分类
+ */
+export function submitFeedback(payload, files = []) {
+  const baseUrl = getApiBaseUrl()
+  const sessionId = getSessionId()
+  const form = new FormData()
+  form.append('payload', JSON.stringify(payload || {}))
+  for (const f of files) {
+    if (f) form.append('files', f, f.name)
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `${baseUrl.replace(/\/$/, '')}/api/feedback`)
+    if (sessionId) xhr.setRequestHeader('X-Session-Id', sessionId)
+    xhr.onload = () => {
+      if (xhr.status !== 200) {
+        reject(new Error('提交失败 (HTTP ' + xhr.status + ')'))
+        return
+      }
+      try {
+        const data = JSON.parse(xhr.responseText)
+        if (data.code === 0) resolve(data)
+        else reject(new Error(data.message || '提交失败'))
+      } catch (e) {
+        reject(new Error('解析响应失败'))
+      }
+    }
+    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.send(form)
+  })
+}
+
+/** 反馈列表（管理员）。 */
+export function getFeedbackList(status = '', limit = 50) {
+  const q = status ? `?status=${encodeURIComponent(status)}&limit=${limit}` : `?limit=${limit}`
+  return request({ url: `/api/feedback${q}`, method: 'GET' })
+}
+
+/** 单条反馈详情：附件清单 + 分诊结论 + 提交现场（管理员）。 */
+export function getFeedbackDetail(id) {
+  return request({ url: `/api/feedback/${id}`, method: 'GET' })
+}
+
+/** 优化者：手动跑一轮 / 查状态（管理员）。 */
+export function runOptimizer() {
+  return request({ url: '/api/optimizer/run', method: 'POST' })
+}
+
+export function getOptimizerStatus() {
+  return request({ url: '/api/optimizer/status', method: 'GET' })
 }
 
 export const getProjectVariables = (projectId) => {

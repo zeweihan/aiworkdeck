@@ -3,10 +3,13 @@ import { getSessionId } from '@/utils/auth.js'
 import { openFolderFlow, openFileFlow, openLocalRootPath, openLocalFilePath } from '@/utils/ideOpen.js'
 import { track } from '@/utils/telemetryClient.js'
 import { host } from '@/services/host.js'
+import { mountFeedbackWidget } from '@/utils/feedbackWidget.js'
 
 export default {
   onLaunch: function () {
     console.log('App Launch')
+    // 常驻反馈浮窗：挂在页面树之外，全应用一个实例（见 utils/feedbackWidget.js）
+    mountFeedbackWidget()
     // 埋点：页面路由唯一收口（全仓 50 处 navigateTo/reLaunch 直调，拦截器一处全覆盖）；
     // 只记页面路径枚举（pages.json 里的 11 个页面），query 参数不采集
     const navTrack = (routeType) => ({

@@ -72,7 +72,7 @@
     <section v-if="quota" class="card quota-card">
       <h2>AI 额度</h2>
       <p class="hint">
-        「AI Workdeck 云端」通道按账号计费，额度在官网账户页从余额分配。
+        「AI Workdeck 云端」通道按账号计费，充值得到的 Credits 可直接用于 AI，无需另做分配。
       </p>
 
       <dl class="quota">
@@ -157,7 +157,10 @@ const quotaNotice = computed(() => {
   if (!q) return ''
   if (!q.bound) return '本账号尚未通过账户 Key 直连，暂不能使用云端通道。'
   if (q.stale) return '密钥超过 30 天未验证，已暂停使用，刷新后恢复。'
-  if (!q.hasKey) return '尚未分配 AI 额度，可在官网账户页从余额分配后回来刷新。'
+  // 注意：这里的 hasKey 来自桌面 server 库（有没有 per-user 密钥行），
+  // 与官网 ai-usage 的 hasKey 同名不同义。Credits 重构后「能不能用」看官网的 Credits 余额，
+  // 本地这一条只表示「这台 server 还没替你取到密钥」。
+  if (!q.hasKey) return '本机尚未取到该账号的云端密钥，贴一次账户 Key 刷新即可。'
   if (!q.usageAvailable) return '暂时取不到实时用量，已用与剩余显示为「—」。'
   return ''
 })
@@ -174,7 +177,7 @@ async function loadQuota() {
 }
 
 /**
- * 服务端不保存账户 Key，所以「在官网分配额度之后」只能由用户再贴一次 Key 来重取。
+ * 服务端不保存账户 Key，所以充值之后只能由用户再贴一次 Key 来重取。
  * 复用上方的输入框，用完即清空。
  */
 async function refreshQuota() {

@@ -298,9 +298,29 @@
                 </view>
               </view>
 
+              <!-- 跨境传输的单独同意（个保法第三十九条）。只在选中云端通道时出现：
+                   那正是内容开始出境的决定点。绝不预勾选——预勾选的同意是无效的。 -->
+              <view v-if="form.ai.activeProvider === 'AWD_CLOUD'" class="form-row consent-row">
+                <view class="consent-box">
+                  <text class="consent-title">向境外提供个人信息的单独同意</text>
+                  <text class="consent-body">「AI Workdeck 云端」会把你送入 AI 的内容（文本与相关文件片段）发送至
+                    <text class="consent-em">OpenRouter, Inc.（美国）</text>处理，用于模型推理与用量计费，
+                    这属于向境外提供个人信息。你可以随时在此撤回同意，撤回后云端通道不再可用，
+                    改用本机模型或境内供应商即可继续工作。</text>
+                  <view class="consent-check" @tap="toggleCrossBorderConsent">
+                    <view class="consent-box-mark" :class="{ checked: crossBorderConsented }"></view>
+                    <text class="consent-check-label">我已阅读上述告知，同意将相关内容传输至境外接收方处理</text>
+                  </view>
+                  <text v-if="crossBorderConsentAt" class="consent-meta">已于 {{ formatConsentAt }} 同意</text>
+                  <text class="consent-link" @tap="openPrivacyCrossBorder">查看隐私政策「个人信息出境」一节</text>
+                </view>
+              </view>
+
               <!-- 模型选择。清单唯一来源是后端模型目录（GET /api/ai/models）——
                    历史上前端硬编码过两份互不同步的清单，结果是「后端加模型用户看不到、
-                   前端加模型被工厂静默回落默认模型」。 -->
+                   前端加模型被工厂静默回落默认模型」。
+                   系统提示词的 OLLAMA / GEMINI 两个 tab 已随 v1 对话通道移除：
+                   唯一读者是已删的 AiChatService，对四条通道本来就全部失效。 -->
               <view class="section-divider"></view>
               <view class="section-header-inline">
                   <text class="section-title-sm">模型选择</text>
@@ -535,7 +555,7 @@
                     </view>
                     <!-- 已连账户但没分配过额度：平台 AI 通道此时不可用，给明确的下一步 -->
                     <text v-if="accountNeedsAllocation" class="account-note">
-                      尚未分配 AI 额度，暂时不能使用「AI Workdeck 云端」通道。请到官网账户页从余额分配额度后再回来。
+                      账户 Credits 余额为空，暂时不能使用「AI Workdeck 云端」通道。到官网充值后即可直接使用，不需要再做「分配额度」这一步。
                     </text>
                     <text v-else-if="!accountQuotaAvailable" class="account-note">
                       AI 额度信息暂时取不到，稍后重试。
@@ -1099,6 +1119,124 @@
           </view>
         </scroll-view>
 
+        <!-- 用户反馈：谁在什么时候提了什么，以及优化者把它办到哪一步了 -->
+        <scroll-view
+          v-else-if="activeNav === 'feedback'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">优化者</text>
+              <text class="section-subtitle">
+                按计划读新反馈：确认是缺陷就定位修复并开 PR（永不自动合并），
+                是建议或拿不准就发邮件请你定夺。配置见 optimizer.* 与 spring.mail.*
+              </text>
+            </view>
+            <view class="section-body">
+              <view class="fb-status-row">
+                <view class="fb-status-cell">
+                  <text class="fb-status-label">状态</text>
+                  <text class="fb-status-value">
+                    {{ optimizer.enabled ? (optimizer.running ? '正在跑一轮' : '已启用') : '未启用' }}
+                  </text>
+                </view>
+                <view class="fb-status-cell">
+                  <text class="fb-status-label">计划</text>
+                  <text class="fb-status-value mono">{{ optimizer.cron || '—' }}</text>
+                </view>
+                <view class="fb-status-cell">
+                  <text class="fb-status-label">待处理</text>
+                  <text class="fb-status-value">{{ optimizer.pending }}</text>
+                </view>
+                <view class="fb-status-cell">
+                  <text class="fb-status-label">通知出口</text>
+                  <text class="fb-status-value">
+                    {{ optimizer.notifyReady ? optimizer.notifyChannel : (optimizer.notifyIssue || '未配置') }}
+                  </text>
+                </view>
+                <view class="fb-status-cell">
+                  <text class="fb-status-label">上次运行</text>
+                  <text class="fb-status-value">{{ optimizer.lastRunAt || '从未' }}</text>
+                </view>
+              </view>
+              <view class="fb-actions">
+                <text class="fb-btn" @tap="reloadFeedbackPanel">刷新</text>
+                <text
+                  class="fb-btn primary"
+                  :class="{ disabled: !optimizer.enabled || optimizer.running }"
+                  @tap="triggerOptimizer"
+                >立即跑一轮</text>
+              </view>
+              <text v-if="optimizer.lastReportText" class="fb-report">{{ optimizer.lastReportText }}</text>
+            </view>
+          </view>
+
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">反馈记录</text>
+              <text class="section-subtitle">用户从右下角浮窗提交的原始反馈，只改状态不删除</text>
+              <view class="telemetry-days-row">
+                <text
+                  v-for="f in feedbackFilters"
+                  :key="'ff-' + f.key"
+                  class="telemetry-days-btn"
+                  :class="{ active: feedbackFilter === f.key }"
+                  @tap="setFeedbackFilter(f.key)"
+                >{{ f.label }}</text>
+              </view>
+            </view>
+            <view class="section-body">
+              <view v-if="!feedbackList.length" class="telemetry-empty">
+                <text>{{ feedbackLoading ? '加载中…' : '还没有反馈' }}</text>
+              </view>
+              <view
+                v-for="fb in feedbackList"
+                :key="'fb-' + fb.id"
+                class="fb-item"
+                @tap="toggleFeedbackDetail(fb.id)"
+              >
+                <view class="fb-item-head">
+                  <text class="fb-chip" :class="'fb-chip-' + fb.status.toLowerCase()">{{ statusLabel(fb.status) }}</text>
+                  <text class="fb-item-title">#{{ fb.id }} · {{ fb.kind === 'IDEA' ? '建议' : '报障' }}</text>
+                  <text class="fb-item-meta">{{ fb.username || '未知用户' }} · {{ shortTime(fb.createdAt) }}</text>
+                </view>
+                <text class="fb-item-text">{{ fb.text || fb.voiceTranscript || '（只有截图或语音）' }}</text>
+                <view class="fb-item-sub">
+                  <text class="fb-item-tag">{{ fb.page || '未知页面' }}</text>
+                  <text class="fb-item-tag">{{ fb.appVersion || '—' }}</text>
+                  <text v-if="fb.triageVerdict" class="fb-item-tag">分诊：{{ verdictLabel(fb.triageVerdict) }}</text>
+                  <text v-if="fb.prUrl" class="fb-item-tag link" @tap.stop="openPr(fb.prUrl)">
+                    {{ fb.status === 'PR_OPENED' ? '查看 PR' : '查看 Issue' }}
+                  </text>
+                </view>
+
+                <view v-if="feedbackDetail && feedbackDetail.id === fb.id" class="fb-detail" @tap.stop>
+                  <view v-if="feedbackDetail.attachments && feedbackDetail.attachments.length" class="fb-atts">
+                    <template v-for="a in feedbackDetail.attachments" :key="'a-' + a.id">
+                      <image
+                        v-if="a.type === 'IMAGE'"
+                        class="fb-att-img"
+                        mode="aspectFill"
+                        :src="attachmentUrl(fb.id, a.id)"
+                        @tap.stop="previewAttachment(fb.id, a.id)"
+                      />
+                      <text v-else class="fb-item-tag link" @tap.stop="previewAttachment(fb.id, a.id)">
+                        语音 {{ Math.round((a.sizeBytes || 0) / 1024) }} KB
+                      </text>
+                    </template>
+                  </view>
+                  <text v-if="fb.voiceTranscript" class="fb-detail-line">语音转写：{{ fb.voiceTranscript }}</text>
+                  <text v-if="feedbackDetail.triageText" class="fb-detail-line">{{ feedbackDetail.triageText }}</text>
+                  <text v-if="fb.lastError" class="fb-detail-line err">未办成：{{ fb.lastError }}</text>
+                  <text class="fb-detail-label">提交现场</text>
+                  <text class="fb-detail-pre">{{ feedbackDetail.contextText }}</text>
+                </view>
+              </view>
+            </view>
+          </view>
+        </scroll-view>
+
         <!-- 插件广场：与其余设置项一致地在页内切换（独立页 /pages/plugin-market 保留给直链） -->
         <view
           v-else-if="activeNav === 'plugins'"
@@ -1156,8 +1294,9 @@ import {
   getCurrentUser as fetchCurrentUser, getMyProjects,
   getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
   fetchAiModels,
+  getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
 } from '@/services/api.js'
-import { getCurrentUser } from '@/utils/auth.js'
+import { getCurrentUser, getSessionId } from '@/utils/auth.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { host } from '@/services/host.js'
@@ -1165,7 +1304,7 @@ import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntit
 import UnlockHint from '@/components/UnlockHint.vue'
 import MarketPane from '@/components/MarketPane.vue'
 
-// 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里
+// 官网账户页：生成账户 Key 与充值都在这里（Credits 重构后没有「分配额度」这一步）
 const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
 
 export default {
@@ -1175,6 +1314,8 @@ export default {
     return {
       userDisplayName: '用户',
       activeNav: 'config',
+      /** 服务端记录的同意时间戳；空 = 未同意或告知文本已改版需重新征求 */
+      crossBorderConsentAt: '',
       navItems: [
         { key: 'config', label: '系统配置' },
         { key: 'ai', label: 'AI 功能设置' },
@@ -1184,8 +1325,32 @@ export default {
         { key: 'cloud', label: '团队案件库', desktopOnly: true },
         { key: 'memory', label: '记忆同步', desktopOnly: true },
         { key: 'telemetry', label: '数据统计' },
+        { key: 'feedback', label: '用户反馈' },
         { key: 'plugins', label: '插件广场' },
       ],
+      // 用户反馈与优化者（右下角浮窗提交 → 优化者分诊 → 开 PR / 发邮件）
+      feedbackList: [],
+      feedbackDetail: null,
+      feedbackLoading: false,
+      feedbackFilter: '',
+      feedbackFilters: [
+        { key: '', label: '全部' },
+        { key: 'NEW', label: '待处理' },
+        { key: 'PR_OPENED', label: '已开 PR' },
+        { key: 'EMAILED', label: '已通知' },
+        { key: 'FAILED', label: '失败' },
+      ],
+      optimizer: {
+        enabled: false,
+        running: false,
+        cron: '',
+        pending: 0,
+        notifyChannel: '',
+        notifyReady: false,
+        notifyIssue: '',
+        lastRunAt: '',
+        lastReportText: '',
+      },
       components: [],
       // 软件更新状态（主进程 update-service 快照；事件推送增量刷新）
       update: {
@@ -1217,6 +1382,9 @@ export default {
           networkRegion: 'auto',
           ollamaBaseUrl: '',
           ollamaModelName: '',
+          // 跨境单独同意：null = 本次未动，true/false = 本次勾选/撤回。
+          // 绝不初始化为 true——预勾选的同意在个保法下无效。
+          crossBorderConsent: null,
           assistants: [],
         },
       },
@@ -1302,7 +1470,7 @@ export default {
     },
     // 供应商单选项。「AI Workdeck 云端」是平台计费通道，条件不满足时展示但不可选——
     // 隐藏它会让用户根本发现不了这个选项，直接可选又会在发消息时才报错。
-    // 两个前置条件都要单独判：连接账户 → 在官网从余额分配 AI 额度。
+    // 两个前置条件都要单独判：连接账户 → 账户里有 Credits。
     // 缺后者时官网 /api/account/ai-key 返回 409 no_allocation，只在发消息那一刻才炸。
     aiProviderOptions() {
       // 三档（GEMINI 已下线：主对话在架构上跑不通，其模型经 OpenRouter 的 google/* 仍可用）
@@ -1313,7 +1481,7 @@ export default {
       if (this.isDesktop) {
         let hint = ''
         if (!this.platformAiAvailable) hint = '需先连接账户'
-        else if (this.accountNeedsAllocation) hint = '需先在官网分配额度'
+        else if (this.accountNeedsAllocation) hint = 'Credits 余额为空，去官网充值'
         options.push({
           value: 'AWD_CLOUD',
           label: 'AI Workdeck 云端',
@@ -1322,6 +1490,17 @@ export default {
         })
       }
       return options
+    },
+    // 已同意 = 本次刚勾选，或服务端有记录且本次没撤回
+    crossBorderConsented() {
+      if (this.form.ai.crossBorderConsent === true) return true
+      if (this.form.ai.crossBorderConsent === false) return false
+      return !!this.crossBorderConsentAt
+    },
+    formatConsentAt() {
+      if (!this.crossBorderConsentAt) return ''
+      const d = new Date(this.crossBorderConsentAt)
+      return Number.isNaN(d.getTime()) ? this.crossBorderConsentAt : d.toLocaleString()
     },
     // 平台结算段：官网不可达时 available=false，其余字段不可信
     accountPlatform() {
@@ -1347,7 +1526,13 @@ export default {
       return !!(this.accountPlatform && this.accountPlatform.quotaAvailable)
     },
     // 已连账户但从未分配过 AI 额度：面板要给出「去官网分配」的引导
+    // Credits 重构后判据是余额，不是「官网库里有没有 key 行」。
+    // 后端 hasAiQuota 已由 creditsCents 算出；这里沿用它，语义变成「有没有 Credits」。
+    // 注意 quotaAvailable=false 只表示用量查不到，不代表没 Credits，所以不能据此判缺额度。
     accountNeedsAllocation() {
+      if (!this.accountPlatform) return false
+      const credits = this.accountPlatform.creditsCents
+      if (typeof credits === 'number') return credits <= 0
       return this.accountQuotaAvailable && !this.accountPlatform.hasAiQuota
     },
     accountUsageRows() {
@@ -1619,6 +1804,140 @@ export default {
       if (nav.key === 'memory') {
         this.loadMemoryRepos()
       }
+      if (nav.key === 'feedback') {
+        this.reloadFeedbackPanel()
+      }
+    },
+
+    // ---- 用户反馈 / 优化者 ----
+    async reloadFeedbackPanel() {
+      await Promise.all([this.loadFeedbackList(), this.loadOptimizerStatus()])
+    },
+    async loadFeedbackList() {
+      this.feedbackLoading = true
+      try {
+        const res = await getFeedbackList(this.feedbackFilter, 100)
+        this.feedbackList = ((res && res.data && res.data.items) || [])
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '读取反馈失败', icon: 'none' })
+      } finally {
+        this.feedbackLoading = false
+      }
+    },
+    async loadOptimizerStatus() {
+      try {
+        const res = await getOptimizerStatus()
+        const d = (res && res.data) || {}
+        this.optimizer = {
+          enabled: !!d.enabled,
+          running: !!d.running,
+          cron: d.cron || '',
+          pending: d.pending || 0,
+          notifyChannel: d.notifyChannel || '',
+          notifyReady: !!d.notifyReady,
+          notifyIssue: d.notifyIssue || '',
+          lastRunAt: d.lastRunAt ? String(d.lastRunAt).replace('T', ' ').slice(0, 19) : '',
+          lastReportText: d.lastReport
+            ? `上轮：取 ${d.lastReport.picked} 条，开 PR ${d.lastReport.prOpened}，`
+              + `邮件 ${d.lastReport.emailed}，跳过 ${d.lastReport.skipped}，未办成 ${d.lastReport.failed}`
+              + (d.lastReport.note ? `（${d.lastReport.note}）` : '')
+            : '',
+        }
+      } catch (e) {
+        // 团队服务器上没开优化者时读不到，不拦整个面板
+        this.optimizer.enabled = false
+      }
+    },
+    setFeedbackFilter(key) {
+      this.feedbackFilter = key
+      this.feedbackDetail = null
+      this.loadFeedbackList()
+    },
+    async triggerOptimizer() {
+      if (!this.optimizer.enabled || this.optimizer.running) return
+      try {
+        await runOptimizer()
+        uni.showToast({ title: '已开始，稍后刷新看结果', icon: 'none' })
+        this.optimizer.running = true
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '触发失败', icon: 'none' })
+      }
+    },
+    async toggleFeedbackDetail(id) {
+      if (this.feedbackDetail && this.feedbackDetail.id === id) {
+        this.feedbackDetail = null
+        return
+      }
+      try {
+        const res = await getFeedbackDetail(id)
+        const d = (res && res.data) || {}
+        this.feedbackDetail = {
+          id,
+          attachments: d.attachments || [],
+          triageText: this.formatTriage(d.triageJson),
+          contextText: this.formatContext(d.contextJson),
+        }
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '读取详情失败', icon: 'none' })
+      }
+    },
+    formatTriage(json) {
+      if (!json) return ''
+      try {
+        const t = JSON.parse(json)
+        return `分诊：${this.verdictLabel(t.verdict)}（把握 ${Number(t.confidence || 0).toFixed(2)}）`
+          + `${t.summary ? ' · ' + t.summary : ''}${t.reason ? ' · 依据：' + t.reason : ''}`
+      } catch (e) {
+        return ''
+      }
+    },
+    formatContext(json) {
+      if (!json) return '（无）'
+      try {
+        const c = JSON.parse(json)
+        const lines = []
+        const rt = c.runtime || {}
+        lines.push(`版本 ${rt.appVersion || '—'} · ${rt.platform || '—'} · Java ${rt.java || '—'}`)
+        const cl = c.client || {}
+        if (cl.window) lines.push(`窗口 ${cl.window.w}x${cl.window.h} @${cl.window.dpr}`)
+        if (cl.localTime) lines.push(`本地时间 ${cl.localTime}`)
+        if (cl.recentErrors && cl.recentErrors.length) {
+          lines.push(`最近前端报错 ${cl.recentErrors.length} 条：`)
+          cl.recentErrors.slice(-5).forEach((e) => lines.push(`  · ${e.message}`))
+        }
+        if (c.backendLogTail) {
+          lines.push('后端日志尾巴（末 20 行）：')
+          String(c.backendLogTail).trim().split('\n').slice(-20).forEach((l) => lines.push('  ' + l))
+        }
+        return lines.join('\n')
+      } catch (e) {
+        return json.slice(0, 2000)
+      }
+    },
+    attachmentUrl(feedbackId, attachmentId) {
+      const sid = getSessionId()
+      return `${getApiBaseUrl()}/api/feedback/${feedbackId}/attachment/${attachmentId}`
+        + (sid ? `?token=${encodeURIComponent(sid)}` : '')
+    },
+    previewAttachment(feedbackId, attachmentId) {
+      const url = this.attachmentUrl(feedbackId, attachmentId)
+      // 图片走系统预览、语音交给系统浏览器：后台面板不自带播放器
+      uni.previewImage({ urls: [url], fail: () => openExternalUrl(url) })
+    },
+    openPr(url) {
+      openExternalUrl(url)
+    },
+    statusLabel(s) {
+      return ({
+        NEW: '待处理', PR_OPENED: '已开 PR', EMAILED: '已通知',
+        SKIPPED: '已跳过', FAILED: '处理失败',
+      })[s] || s
+    },
+    verdictLabel(v) {
+      return ({ BUG: '缺陷', SUGGESTION: '建议', UNCLEAR: '待定夺', NOISE: '无效' })[v] || v || '—'
+    },
+    shortTime(t) {
+      return t ? String(t).replace('T', ' ').slice(0, 16) : ''
     },
     async loadIdentityCandidates() {
       try {
@@ -1823,7 +2142,7 @@ export default {
       } catch (e) {
         this.platformAiAvailable = false
       }
-      // 「已连接但没分配额度」也会让平台通道打不通，判据在用量接口里（accountNeedsAllocation）。
+      // 「已连接但 Credits 为空」也会让平台通道打不通，判据在用量接口的 creditsCents 里。
       // 设置页不是热路径，多这一次请求换来单选项如实标注，好过发消息时才报错。
       if (this.platformAiAvailable) {
         await this.loadAccountUsage()
@@ -1883,6 +2202,14 @@ export default {
       if (opt) this.form.ai[field] = opt.value
     },
     // 供应商单选：不可选项给出下一步，而不是静默不响应
+    toggleCrossBorderConsent() {
+      // 明确的三态：null 跟随服务端，true/false 是本次的显式动作。
+      // 撤回是个保法第十五条给的权利，必须和给予一样容易操作。
+      this.form.ai.crossBorderConsent = !this.crossBorderConsented
+    },
+    openPrivacyCrossBorder() {
+      openExternalUrl('https://www.aiworkdeck.com/zh/legal/privacy#cross-border')
+    },
     onPickProvider(opt) {
       if (opt.value === this.form.ai.activeProvider) return
       if (opt.unavailable) {
@@ -1918,7 +2245,7 @@ export default {
       try {
         this.accountUsage = await getAccountUsage()
       } catch (e) {
-        // 账户已连但尚未分配 AI 额度时后端会报错，此处按「无额度」展示
+        // 账户已连但 Credits 为空时后端会报错，此处按「无额度」展示
         this.accountUsage = null
       }
     },
@@ -2220,6 +2547,8 @@ export default {
           this.form.ai.networkRegion = data.ai.networkRegion || 'auto'
           this.form.ai.ollamaBaseUrl = data.ai.ollamaBaseUrl || ''
           this.form.ai.ollamaModelName = data.ai.ollamaModelName || ''
+          this.crossBorderConsentAt = data.ai.crossBorderConsentAt || ''
+          this.form.ai.crossBorderConsent = null
 
 
           if (data.ai.assistants && data.ai.assistants.length > 0) {
@@ -2625,7 +2954,7 @@ $border-color: #E9ECEF; // Gray-Light
   background: $brand-mint-light;
 }
 
-// 前置条件未满足（未连接账户 / 未分配额度）的「AI Workdeck 云端」：
+// 前置条件未满足（未连接账户 / Credits 为空）的「AI Workdeck 云端」：
 // 可见但压低，点击给出下一步而不是静默失败
 .radio-item.unavailable {
   opacity: 0.55;
@@ -3356,4 +3685,267 @@ $border-color: #E9ECEF; // Gray-Light
   font-size: 13px;
   color: $text-secondary;
 }
+
+/* ---- 用户反馈 / 优化者 ---- */
+.fb-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-bottom: 14px;
+}
+
+.fb-status-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 120px;
+}
+
+.fb-status-label {
+  font-size: 11px;
+  color: $text-secondary;
+}
+
+.fb-status-value {
+  font-size: 13px;
+  color: #12344D;
+}
+
+/* cron 表达式在正文衬线字体下星号会飘起来，读不出「0 0 9 * * *」的结构 */
+.fb-status-value.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.fb-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.fb-btn {
+  border: 1px solid #E3E8E5;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 12px;
+  color: #12344D;
+  cursor: pointer;
+}
+
+.fb-btn.primary {
+  background: #1A5336;
+  border-color: #1A5336;
+  color: #FFFFFF;
+}
+
+.fb-btn.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.fb-report {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.fb-item {
+  border: 1px solid #EEF1EF;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  cursor: pointer;
+}
+
+.fb-item:hover {
+  border-color: #CFE3D8;
+}
+
+.fb-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.fb-chip {
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 9px;
+  background: #F0F2F1;
+  color: #6C757D;
+}
+
+.fb-chip-new { background: #FFF3E0; color: #B26A00; }
+.fb-chip-pr_opened { background: #E7F6EE; color: #1A5336; }
+.fb-chip-emailed { background: #E8F0FB; color: #1B4F86; }
+.fb-chip-failed { background: #FBE9E7; color: #C0392B; }
+
+.fb-item-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #12344D;
+}
+
+.fb-item-meta {
+  font-size: 11px;
+  color: $text-secondary;
+  margin-left: auto;
+}
+
+.fb-item-text {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #12344D;
+}
+
+.fb-item-sub {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.fb-item-tag {
+  font-size: 11px;
+  color: $text-secondary;
+  background: #F8F9FA;
+  border-radius: 5px;
+  padding: 1px 7px;
+}
+
+.fb-item-tag.link {
+  color: #1A5336;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.fb-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed #E3E8E5;
+}
+
+.fb-atts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.fb-att-img {
+  width: 132px;
+  height: 88px;
+  border: 1px solid #E3E8E5;
+  border-radius: 6px;
+  background: #F8F9FA;
+}
+
+.fb-detail-line {
+  display: block;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #12344D;
+}
+
+.fb-detail-line.err {
+  color: #C0392B;
+}
+
+.fb-detail-label {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  color: $text-secondary;
+}
+
+.fb-detail-pre {
+  display: block;
+  margin-top: 4px;
+  padding: 8px;
+  background: #F8F9FA;
+  border: 1px solid #EEF1EF;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.6;
+  color: $text-secondary;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 260px;
+  overflow: auto;
+}
+
+/* 跨境单独同意（个保法第三十九条）。刻意做得可读而不刺眼：
+   它不该吓退用户，但必须在做决定时看得见、看得懂。 */
+.consent-row {
+  margin-top: 12rpx;
+}
+.consent-box {
+  border: 1rpx solid #e3e6e8;
+  border-left: 4rpx solid #1a5336;
+  border-radius: 8rpx;
+  padding: 20rpx 24rpx;
+  background: #fafbfb;
+}
+.consent-title {
+  display: block;
+  font-size: 26rpx;
+  font-weight: 600;
+  color: #212629;
+  margin-bottom: 10rpx;
+}
+.consent-body {
+  display: block;
+  font-size: 24rpx;
+  line-height: 1.7;
+  color: #6c757d;
+}
+.consent-em {
+  color: #212629;
+  font-weight: 600;
+}
+.consent-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 12rpx;
+  margin-top: 18rpx;
+  cursor: pointer;
+}
+.consent-box-mark {
+  width: 28rpx;
+  height: 28rpx;
+  flex-shrink: 0;
+  margin-top: 4rpx;
+  border: 2rpx solid #adb5bd;
+  border-radius: 4rpx;
+  background: #fff;
+  transition: all 0.15s;
+}
+.consent-box-mark.checked {
+  background: #1a5336;
+  border-color: #1a5336;
+}
+.consent-check-label {
+  font-size: 24rpx;
+  line-height: 1.6;
+  color: #2c3338;
+}
+.consent-meta {
+  display: block;
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  color: #6c757d;
+}
+.consent-link {
+  display: inline-block;
+  margin-top: 10rpx;
+  font-size: 22rpx;
+  color: #1a5336;
+  text-decoration: underline;
+}
+
 </style>
