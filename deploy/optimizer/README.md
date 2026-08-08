@@ -93,10 +93,35 @@ OPTIMIZER_AGENT_COMMAND_6={prompt}
 `{prompt}` 换成任务书正文，`{promptFile}` 换成任务书文件路径。
 `codex` 的 `--sandbox workspace-write` 恰好把写入限制在那棵临时 worktree 里。
 
+## 通知出口：默认不用配邮箱
+
+「建议 / 拿不准」那条出口默认是 **`auto`**：配了邮件就发邮件，**没配就开一条 GitHub Issue**。
+开 Issue 复用的是优化者本来就有的 `gh` 登录，**不需要任何新凭据**，所以开箱即用。
+
+想改用邮件（或两个都要）：
+
+```bash
+OPTIMIZER_NOTIFY_CHANNEL=mail      # 或 issue / both
+SPRING_MAIL_HOST=smtp.qq.com
+SPRING_MAIL_PORT=465
+SPRING_MAIL_USERNAME=你的邮箱
+SPRING_MAIL_PASSWORD=授权码        # 不是登录密码
+SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH=true
+SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE=true   # 587 的 STARTTLS 改 ..._STARTTLS_ENABLE
+OPTIMIZER_MAIL_TO=收件人
+OPTIMIZER_MAIL_FROM=同 SPRING_MAIL_USERNAME
+```
+
+**授权码只能你自己生成**（要登录邮箱后台，这一步没法代劳）：
+QQ 邮箱 → 设置 → 账号 → POP3/SMTP 开启后拿到的那串 16 位；
+163 → 设置 → POP3/SMTP/IMAP → 客户端授权密码；
+Gmail → 开两步验证后在「应用专用密码」里生成，host `smtp.gmail.com`。
+填完重启进程，`/api/optimizer/status` 的 `notifyChannel` 会显示成「邮件」。
+
 ## 出问题先看这三处
 
 | 现象 | 多半是 |
 |---|---|
-| 状态里 `pending` 一直 0、战报 note 写「取件失败」 | token 与收件箱不一致，或收件箱那边 `feedback.optimizer-token` 没配（没配 = 整组 403） |
-| 每条都走邮件、从不开 PR | 编码 Agent 没登录 → diff 为空 → 按 NO_CHANGES 转邮件。手动跑一次 `claude -p`/`codex exec` 验登录 |
-| 战报里 `failed` 全是「邮件出口不可用」 | `SPRING_MAIL_*` 没配全，或 `OPTIMIZER_MAIL_TO` 空 |
+| 战报 note 写「取件失败」 | token 与收件箱不一致，或收件箱那边 `feedback.optimizer-token` 没配（没配 = 整组 403） |
+| 每条都走通知、从不开 PR | 编码 Agent 没登录 → diff 为空 → 按 NO_CHANGES 转通知。手动跑一次 `claude -p` 验登录 |
+| 战报里 `failed` 全是「通知出口不可用」 | 邮件没配全**且** `optimizer.repo.path` 也没配（开 Issue 也要在仓库目录里跑 gh） |
