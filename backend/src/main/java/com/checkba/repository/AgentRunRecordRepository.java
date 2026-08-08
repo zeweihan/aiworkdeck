@@ -14,4 +14,11 @@ public interface AgentRunRecordRepository extends JpaRepository<AgentRunRecord, 
 
     /** 启动回收用：捞出上次进程没跑完就被杀掉的会话。 */
     List<AgentRunRecord> findByStatus(String status);
+
+    /**
+     * 概览页统计条的「后台 AI 任务」：按项目取运行记录，最近更新的在前。
+     * 刻意读表不读 AgentRunStateService 的内存 Map——那份状态进程重启即清零，
+     * 概览页把历史铺开时会整片显示无状态。服务层再 limit，不在 SQL 里限条数。
+     */
+    List<AgentRunRecord> findByProjectIdOrderByUpdatedAtDesc(Long projectId);
 }
