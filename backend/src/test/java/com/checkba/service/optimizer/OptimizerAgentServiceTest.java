@@ -1,13 +1,9 @@
 package com.checkba.service.optimizer;
 
 import com.checkba.model.entity.UserFeedback;
-import com.checkba.repository.UserFeedbackRepository;
-import com.checkba.service.feedback.FeedbackService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.springframework.data.domain.Pageable;
 
-import java.nio.file.Path;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -21,8 +17,7 @@ import static org.mockito.Mockito.*;
 class OptimizerAgentServiceTest {
 
     OptimizerProperties props;
-    UserFeedbackRepository repo;
-    FeedbackService feedbackService;
+    OptimizerFeedbackSource source;
     FeedbackTriageService triageService;
     OptimizerCodeFixRunner fixRunner;
     OptimizerMailer mailer;
@@ -37,8 +32,7 @@ class OptimizerAgentServiceTest {
         props.setMinConfidence(0.7);
         props.setMaxAttempts(3);
 
-        repo = mock(UserFeedbackRepository.class);
-        feedbackService = mock(FeedbackService.class);
+        source = mock(OptimizerFeedbackSource.class);
         triageService = mock(FeedbackTriageService.class);
         fixRunner = mock(OptimizerCodeFixRunner.class);
         mailer = mock(OptimizerMailer.class);
@@ -49,15 +43,12 @@ class OptimizerAgentServiceTest {
         row.setText("点保存没反应");
         row.setStatus(UserFeedback.STATUS_NEW);
 
-        when(repo.findByStatusAndAttemptsLessThanOrderByIdAsc(eq(UserFeedback.STATUS_NEW), anyInt(), any(Pageable.class)))
-                .thenReturn(List.of(row));
-        when(repo.save(any(UserFeedback.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(feedbackService.attachmentsOf(anyLong())).thenReturn(List.of());
-        when(feedbackService.feedbackDir(anyLong())).thenReturn(Path.of("/tmp/feedback/5"));
+        when(source.pending(anyInt(), anyInt())).thenReturn(List.of(row));
+        when(source.attachmentsOf(any(UserFeedback.class))).thenReturn(List.of());
         when(mailer.isAvailable()).thenReturn(true);
         when(mailer.unavailableReason()).thenReturn("");
 
-        svc = new OptimizerAgentService(props, repo, feedbackService, triageService, fixRunner, mailer);
+        svc = new OptimizerAgentService(props, source, triageService, fixRunner, mailer);
     }
 
     private void triageReturns(String verdict, double confidence) {
@@ -71,7 +62,7 @@ class OptimizerAgentServiceTest {
         var report = svc.runOnce();
         assertEquals(0, report.picked());
         assertTrue(report.note().contains("未启用"));
-        verifyNoInteractions(triageService, fixRunner, mailer);
+        verifyNoInteractions(triageService, fixRunner, mailer, source);
     }
 
     @Test
@@ -149,9 +140,9 @@ class OptimizerAgentServiceTest {
         var report = svc.runOnce();
 
         assertEquals(1, report.skipped());
+        // 无效反馈也只是改状态：来源上没有任何删除入口，行永远留着
         assertEquals(UserFeedback.STATUS_SKIPPED, row.getStatus());
-        verify(repo, never()).delete(any());
-        verify(repo, never()).deleteById(any());
+        verify(source).save(row);
     }
 
     @Test
@@ -215,7 +206,6 @@ class OptimizerAgentServiceTest {
 
         svc.runOnce();
 
-        verify(repo).findByStatusAndAttemptsLessThanOrderByIdAsc(
-                eq(UserFeedback.STATUS_NEW), eq(3), argThat(p -> p.getPageSize() == 3));
+        verify(source).pending(3, 3);
     }
 }

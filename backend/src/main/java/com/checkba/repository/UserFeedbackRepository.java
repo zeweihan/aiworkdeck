@@ -4,7 +4,9 @@ import com.checkba.model.entity.UserFeedback;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 public interface UserFeedbackRepository extends JpaRepository<UserFeedback, Long> {
 
@@ -16,4 +18,14 @@ public interface UserFeedbackRepository extends JpaRepository<UserFeedback, Long
     List<UserFeedback> findByOrderByIdDesc(Pageable pageable);
 
     long countByStatus(String status);
+
+    /** 待上传到云端收件箱的本机反馈（只传本机自己产生的，收上来的不再转发）。 */
+    List<UserFeedback> findByUploadedFalseAndSourceOrderByIdAsc(String source, Pageable pageable);
+
+    /** 幂等键：同一个安装的同一条反馈，重传不得在云端变成两条。 */
+    Optional<UserFeedback> findByInstallIdAndClientRef(String installId, String clientRef);
+
+    long countByInstallIdAndCreatedAtAfter(String installId, LocalDateTime after);
+
+    long countByCreatedAtAfter(LocalDateTime after);
 }

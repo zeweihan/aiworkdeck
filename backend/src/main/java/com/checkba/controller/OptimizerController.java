@@ -35,6 +35,7 @@ public class OptimizerController {
     private final OptimizerAgentService optimizerAgentService;
     private final OptimizerProperties props;
     private final OptimizerMailer mailer;
+    private final com.checkba.service.optimizer.OptimizerFeedbackSource feedbackSource;
     private final UserFeedbackRepository feedbackRepository;
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
@@ -71,6 +72,8 @@ public class OptimizerController {
         data.put("mailReady", mailer.isAvailable());
         data.put("mailIssue", mailer.unavailableReason());
         data.put("repoPath", props.getRepo().getPath());
+        // 读的是本地库还是云端收件箱——一眼看出这台优化者在给谁干活
+        data.put("source", feedbackSource.describe());
         data.put("pending", feedbackRepository.countByStatus(UserFeedback.STATUS_NEW));
 
         OptimizerAgentService.RunReport r = optimizerAgentService.lastReport();

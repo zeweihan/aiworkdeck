@@ -8,7 +8,6 @@ import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Service;
 
-import java.nio.file.Path;
 import java.util.List;
 
 /**
@@ -48,7 +47,7 @@ public class OptimizerMailer {
     }
 
     public void send(UserFeedback fb, FeedbackTriageService.TriageResult triage,
-                     List<FeedbackAttachment> attachments, Path attachmentDir, String extraNote) {
+                     List<FeedbackAttachment> attachments, OptimizerFeedbackSource source, String extraNote) {
         JavaMailSender sender = mailSenderProvider.getIfAvailable();
         if (sender == null) throw new IllegalStateException(unavailableReason());
 
@@ -56,7 +55,7 @@ public class OptimizerMailer {
         msg.setTo(props.getMail().getTo().split(","));
         if (!props.getMail().getFrom().isBlank()) msg.setFrom(props.getMail().getFrom());
         msg.setSubject(subject(fb, triage));
-        msg.setText(body(fb, triage, attachments, attachmentDir, extraNote));
+        msg.setText(body(fb, triage, attachments, source, extraNote));
         sender.send(msg);
         log.info("[optimizer] 已发送反馈 #{} 的邮件到 {}", fb.getId(), props.getMail().getTo());
     }
@@ -73,7 +72,7 @@ public class OptimizerMailer {
     }
 
     String body(UserFeedback fb, FeedbackTriageService.TriageResult triage,
-                List<FeedbackAttachment> attachments, Path attachmentDir, String extraNote) {
+                List<FeedbackAttachment> attachments, OptimizerFeedbackSource source, String extraNote) {
         StringBuilder sb = new StringBuilder();
         sb.append("反馈 #").append(fb.getId())
                 .append("（").append(UserFeedback.KIND_IDEA.equals(fb.getKind()) ? "用户选了「建议」" : "用户选了「报障」")
@@ -101,13 +100,12 @@ public class OptimizerMailer {
                 .append("平台：").append(nz(fb.getPlatform())).append('\n');
 
         if (attachments != null && !attachments.isEmpty()) {
-            sb.append("\n== 附件（").append(attachments.size()).append(" 件，在运行反馈库的那台机器上）==\n");
+            sb.append("\n== 附件（").append(attachments.size()).append(" 件）==\n");
             for (FeedbackAttachment a : attachments) {
+                // 地址形态由来源决定：本地是磁盘路径，云端收件箱是可直接打开的 URL
                 sb.append("- ").append(a.getType()).append(' ')
-                        .append(attachmentDir == null ? a.getStoredName()
-                                : attachmentDir.resolve(a.getStoredName()).toString())
-                        .append("  (API: /api/feedback/").append(fb.getId())
-                        .append("/attachment/").append(a.getId()).append(")\n");
+                        .append(source == null ? a.getStoredName() : source.attachmentRef(fb, a))
+                        .append('\n');
             }
             boolean audioNoTranscript = attachments.stream()
                     .anyMatch(a -> FeedbackAttachment.TYPE_AUDIO.equals(a.getType()))

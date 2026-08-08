@@ -2,12 +2,9 @@ package com.checkba.service.optimizer;
 
 import com.checkba.model.entity.FeedbackAttachment;
 import com.checkba.model.entity.UserFeedback;
-import com.checkba.repository.UserFeedbackRepository;
-import com.checkba.service.feedback.FeedbackService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -41,8 +38,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class OptimizerAgentService {
 
     private final OptimizerProperties props;
-    private final UserFeedbackRepository feedbackRepository;
-    private final FeedbackService feedbackService;
+    private final OptimizerFeedbackSource source;
     private final FeedbackTriageService triageService;
     private final OptimizerCodeFixRunner codeFixRunner;
     private final OptimizerMailer mailer;
@@ -88,13 +84,28 @@ public class OptimizerAgentService {
             return new RunReport(0, 0, 0, 0, 0, List.of(), "已有一轮在跑");
         }
         try {
-            List<UserFeedback> batch = feedbackRepository.findByStatusAndAttemptsLessThanOrderByIdAsc(
-                    UserFeedback.STATUS_NEW, props.getMaxAttempts(),
-                    PageRequest.of(0, Math.max(1, props.getBatchSize())));
+            List<UserFeedback> batch;
+            try {
+                batch = source.pending(Math.max(1, props.getBatchSize()), props.getMaxAttempts());
+            } catch (Exception e) {
+                // 取件失败（云端不可达/token 不对）：整轮空转但要说清楚，别只在日志里
+                log.warn("[optimizer] 取件失败：{}", e.toString());
+                RunReport failed = new RunReport(0, 0, 0, 0, 0, List.of(), "取件失败：" + e.getMessage());
+                lastReport = failed;
+                lastRunAt = LocalDateTime.now();
+                return failed;
+            }
             List<ItemResult> items = new ArrayList<>();
             int prOpened = 0, emailed = 0, skipped = 0, failed = 0;
             for (UserFeedback fb : batch) {
-                ItemResult r = processOne(fb);
+                ItemResult r;
+                try {
+                    r = processOne(fb);
+                } catch (Exception e) {
+                    // 一条炸了不该带走整轮（远端回执失败最容易走到这）
+                    log.warn("[optimizer] 反馈 #{} 处理中断：{}", fb.getId(), e.toString());
+                    r = new ItemResult(fb.getId(), "", 0, UserFeedback.STATUS_FAILED, String.valueOf(e.getMessage()));
+                }
                 items.add(r);
                 switch (r.outcome()) {
                     case UserFeedback.STATUS_PR_OPENED -> prOpened++;
@@ -119,7 +130,7 @@ public class OptimizerAgentService {
     }
 
     private ItemResult processOne(UserFeedback fb) {
-        List<FeedbackAttachment> attachments = feedbackService.attachmentsOf(fb.getId());
+        List<FeedbackAttachment> attachments = source.attachmentsOf(fb);
         // 尝试次数在最前面加：分诊本身挂掉也要计数，否则一条永远分诊失败的反馈
         // 每轮都会被重新捞出来，永远到不了 maxAttempts（白烧 token）
         if (!props.isDryRun()) {
@@ -136,7 +147,7 @@ public class OptimizerAgentService {
         recordTriage(fb, triage);
 
         if (props.isDryRun()) {
-            feedbackRepository.save(fb);
+            source.save(fb);
             return new ItemResult(fb.getId(), triage.verdict(), triage.confidence(), "DRY_RUN",
                     "演练模式，未执行任何出口");
         }
@@ -144,7 +155,7 @@ public class OptimizerAgentService {
         if (FeedbackTriageService.VERDICT_NOISE.equals(triage.verdict())) {
             fb.setStatus(UserFeedback.STATUS_SKIPPED);
             fb.setHandledAt(LocalDateTime.now());
-            feedbackRepository.save(fb);
+            source.save(fb);
             return new ItemResult(fb.getId(), triage.verdict(), triage.confidence(),
                     UserFeedback.STATUS_SKIPPED, triage.reason());
         }
@@ -157,7 +168,7 @@ public class OptimizerAgentService {
                     fb.setPrUrl(outcome.prUrl());
                     fb.setLastError(null);
                     fb.setHandledAt(LocalDateTime.now());
-                    feedbackRepository.save(fb);
+                    source.save(fb);
                     return new ItemResult(fb.getId(), triage.verdict(), triage.confidence(),
                             UserFeedback.STATUS_PR_OPENED, outcome.prUrl());
                 }
@@ -188,14 +199,14 @@ public class OptimizerAgentService {
             return fail(fb, "需要邮件出口但它不可用：" + mailer.unavailableReason(), triage);
         }
         try {
-            mailer.send(fb, triage, attachments, feedbackService.feedbackDir(fb.getId()), note);
+            mailer.send(fb, triage, attachments, source, note);
         } catch (Exception e) {
             return fail(fb, "发邮件失败: " + e.getMessage(), triage);
         }
         fb.setStatus(UserFeedback.STATUS_EMAILED);
         fb.setLastError(null);
         fb.setHandledAt(LocalDateTime.now());
-        feedbackRepository.save(fb);
+        source.save(fb);
         return new ItemResult(fb.getId(), triage.verdict(), triage.confidence(),
                 UserFeedback.STATUS_EMAILED, note);
     }
@@ -205,7 +216,7 @@ public class OptimizerAgentService {
         fb.setStatus(fb.getAttempts() >= props.getMaxAttempts()
                 ? UserFeedback.STATUS_FAILED : UserFeedback.STATUS_NEW);
         fb.setLastError(reason);
-        feedbackRepository.save(fb);
+        source.save(fb);
         log.warn("[optimizer] 反馈 #{} 本轮未处理成功：{}", fb.getId(), reason);
         return new ItemResult(fb.getId(), triage == null ? "" : triage.verdict(),
                 triage == null ? 0 : triage.confidence(), UserFeedback.STATUS_FAILED, reason);

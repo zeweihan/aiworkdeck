@@ -116,6 +116,7 @@
           <div class="awdfb-ctx-toggle" role="button" @click="showContext = !showContext">
             {{ showContext ? '收起' : '查看' }}随反馈一起发送的现场信息（{{ contextSummary }}）
           </div>
+          <div class="awdfb-hint">提交后会发给 AI Workdeck 维护者；本机也会留一份，在「系统管理 → 用户反馈」里能查。</div>
           <pre v-if="showContext" class="awdfb-ctx">{{ contextPreview }}</pre>
         </div>
 

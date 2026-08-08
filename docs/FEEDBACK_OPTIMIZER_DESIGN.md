@@ -3,12 +3,22 @@
 让用户在软件里报的问题，自己推着产品往前走：
 
 ```
-桌面端右下角浮窗          后端库              优化者（每天一轮）
- 打字 / 截图 / 语音  ──►  user_feedback  ──►  分诊 ─┬─ 确认是缺陷 ──► 开 PR（永不合并）
- 自动附现场上下文         feedback_attachment      └─ 建议/拿不准 ──► 发邮件请人定夺
-                                                    ▲
-                                          admin「用户反馈」面板看全过程
+用户机器                          云端收件箱                     维护者机器
+┌────────────────────┐   上传    ┌──────────────────┐   取件   ┌──────────────────┐
+│ 右下角浮窗          │ ───────► │ addin.aiworkdeck │ ───────► │ 优化者（每天一轮）│
+│ 打字/截图/语音      │  异步补传 │  .com            │          │  分诊            │
+│ 自动附现场上下文    │          │  只收不改代码     │ ◄─────── │  ├─ 缺陷 → 开 PR │
+│ 本地库留一份 ───────┼──────────┤ user_feedback    │   回执   │  └─ 建议 → 发邮件│
+│ （自己后台可查）    │          │ feedback_attach. │          └──────────────────┘
+└────────────────────┘          └──────────────────┘
 ```
+
+**为什么拆成两段**：收件箱要开在公网上收各安装的反馈；优化者要带着仓库、GitHub 推送凭据
+和一个能写代码的 Agent。把后者放到生产站那台机器上，等于让**用户可控的文本**和生产环境
+做邻居——受保护路径拦截和永不合并挡得住结果，挡不住 Agent 那次运行本身。
+所以云端只当收件箱，优化者跑在维护者自己的机器上（部署见 `deploy/optimizer/README.md`）。
+
+单机自用时把 `optimizer.source` 留在默认的 `local` 即可，两段合一，行为与拆分前一致。
 
 ## 一、采集：右下角反馈浮窗
 
@@ -114,9 +124,46 @@ uni-h5 没导出 `Audio`；uni 的 `Input` 不支持 `type="file"`）。所以�
 信里因此明说「回信不会被系统读取」。信里有：用户原话、分诊结论与依据、为什么没直接开 PR、
 提交现场、附件在磁盘上的路径与 API 地址。
 
+## 四·五、云端收件箱
+
+**收件**：`POST /api/feedback/ingest`（multipart，与本地提交同形，额外带
+`installId` + `clientRef`）。默认关，只在承载收件箱的实例上 `FEEDBACK_INGEST_ENABLED=true`。
+
+- **不要求登录**：最该被听见的正是那些没注册、刚装上就撞墙的用户，要求账号等于把他们静音。
+  代价是端点对公网开着，闸门全压在配额与体积上（`FeedbackIngestGuard`：单安装每天 20 条、
+  全站每天 2000 条、单附件 5MB、一次 4 个）。限流按天数已入库的行，进程重启不清零。
+- **幂等**：`installId + clientRef`（上传方那条在自己库里的 id）。网络抖动导致的重传
+  绝不能在云端变成两条。
+- **版本/平台照抄上传方**——云端自己的版本号对排障没有意义。
+
+**上传**（`FeedbackUploadService`，桌面端）：先落本地库再异步补传，节奏抄 `TelemetryUploadService`。
+反馈恰恰是在断网、后端刚崩的时候提交的，先落本地保证一条都不丢；上传成功只置 `uploaded`
+标记，**本地那条永远不删**——用户在自己后台里还要能看见自己报过什么。
+`429` 不算成功（标成已上传等于这条永远消失）。
+
+**取件与回执**（给跑在别处的优化者）：`GET /api/feedback/pending`、
+`POST /api/feedback/{id}/resolution`，共享密钥 `X-Optimizer-Token`。
+**密钥没配就整组 403**，不留「未配置即不校验」的逃生门。
+
+`optimizer.source=remote` 时，`RemoteFeedbackSource` 把取回的行做成**游离对象**
+（id 是云端那条的 id，不进本地库），回执走 HTTP。取件失败会让整轮明确报「取件失败」
+而不是静默零条；回执失败**不吞异常**——丢了回执这条会被下轮重跑，可能再开一个 PR。
+
 ## 五、怎么配（维护者）
 
+优化者跑在自己的机器上，一次性准备与搬机器见 `deploy/optimizer/README.md`。
+
 ```bash
+# 云端收件箱那台（addin.aiworkdeck.com 的 /opt/aiworkdeck/cloud/env）
+FEEDBACK_INGEST_ENABLED=true
+FEEDBACK_OPTIMIZER_TOKEN=<随机长串，与优化者侧一致>
+FEEDBACK_UPLOAD_ENABLED=false     # 收件箱自己不再往外转发
+
+# 优化者那台
+OPTIMIZER_SOURCE=remote
+OPTIMIZER_REMOTE_URL=https://addin.aiworkdeck.com
+OPTIMIZER_REMOTE_TOKEN=<同上>
+
 # 优化者本体
 OPTIMIZER_ENABLED=true
 OPTIMIZER_CRON="0 0 9 * * *"          # 每天 09:00；每周一次写 "0 0 9 * * MON"
@@ -170,6 +217,10 @@ admin 页新增「用户反馈」分区（`activeNav === 'feedback'`）：
 | GET | `/api/feedback/{id}/attachment/{aid}?token=` | 管理员 |
 | POST | `/api/optimizer/run` | 管理员，异步 |
 | GET | `/api/optimizer/status` | 管理员 |
+| POST | `/api/feedback/ingest` | 公开（配额闸），需 `feedback.ingest.enabled` |
+| GET | `/api/feedback/pending` | `X-Optimizer-Token` |
+| POST | `/api/feedback/{id}/resolution` | `X-Optimizer-Token` |
+| GET | `/api/feedback/inbox/status` | `X-Optimizer-Token` |
 
 查看要管理员：反馈里带着截图与日志尾巴，那是别人的运行现场。
 

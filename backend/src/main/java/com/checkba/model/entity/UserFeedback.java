@@ -42,9 +42,36 @@ public class UserFeedback {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /** 提交人（local-mode 下就是本机用户） */
+    /** 本机提交的原始反馈 */
+    public static final String SOURCE_LOCAL = "LOCAL";
+    /** 别的安装上传上来的（只出现在云端收件箱） */
+    public static final String SOURCE_CLOUD = "CLOUD";
+
+    /** 提交人（local-mode 下就是本机用户；云端收上来的没有用户，为 null） */
     @Column(name = "user_id")
     private Long userId;
+
+    /** LOCAL / CLOUD */
+    @Column(name = "source", length = 16)
+    private String source;
+
+    /** 上传方的匿名安装标识（source=CLOUD 时有值，与埋点用的是同一个 installId） */
+    @Column(name = "install_id", length = 64)
+    private String installId;
+
+    /**
+     * 上传方那条反馈在它自己库里的 id。与 installId 一起做幂等键——
+     * 网络抖动导致的重传绝不能在云端变成两条。
+     */
+    @Column(name = "client_ref", length = 64)
+    private String clientRef;
+
+    /** 本机这条是否已上传到云端收件箱（source=LOCAL 才有意义） */
+    @Column(name = "uploaded", nullable = false)
+    private boolean uploaded;
+
+    @Column(name = "uploaded_at")
+    private LocalDateTime uploadedAt;
 
     /** 提交时所在项目（可为空：解锁页/向导页也能反馈） */
     @Column(name = "project_id")

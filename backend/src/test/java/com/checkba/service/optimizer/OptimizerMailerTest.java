@@ -9,11 +9,11 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.mail.SimpleMailMessage;
 import org.springframework.mail.javamail.JavaMailSender;
 
-import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /** 邮件出口：可用性判定的每条理由都要说得出口，正文要带够维护者直接动手的信息。 */
@@ -37,6 +37,13 @@ class OptimizerMailerTest {
         props.getMail().setFrom("bot@example.com");
         sender = mock(JavaMailSender.class);
         mailer = new OptimizerMailer(props, providerOf(sender));
+    }
+
+    /** 附件地址的形态由来源决定（本地磁盘路径 / 云端 URL），邮件只负责原样贴出来。 */
+    private static OptimizerFeedbackSource sourceRef(String ref) {
+        OptimizerFeedbackSource s = mock(OptimizerFeedbackSource.class);
+        when(s.attachmentRef(any(), any())).thenReturn(ref);
+        return s;
     }
 
     private static UserFeedback feedback() {
@@ -78,7 +85,7 @@ class OptimizerMailerTest {
         a.setStoredName("voice-1.webm");
 
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION),
-                List.of(a), Path.of("/data/feedback/12"), "");
+                List.of(a), sourceRef("/data/feedback/12/voice-1.webm  (API: /api/feedback/12/attachment/3)"), "");
 
         ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
         verify(sender).send(cap.capture());
@@ -103,7 +110,7 @@ class OptimizerMailerTest {
     @Test
     void unclearVerdictAsksForADecision() {
         mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_UNCLEAR),
-                List.of(), Path.of("/data/feedback/12"), "改不出来");
+                List.of(), sourceRef(""), "改不出来");
 
         ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
         verify(sender).send(cap.capture());
@@ -115,7 +122,7 @@ class OptimizerMailerTest {
     @Test
     void multipleRecipientsAreSplit() {
         props.getMail().setTo("a@example.com,b@example.com");
-        mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), null, "");
+        mailer.send(feedback(), triage(FeedbackTriageService.VERDICT_SUGGESTION), List.of(), sourceRef(""), "");
 
         ArgumentCaptor<SimpleMailMessage> cap = ArgumentCaptor.forClass(SimpleMailMessage.class);
         verify(sender).send(cap.capture());

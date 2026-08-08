@@ -24,11 +24,20 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
   `VoiceTranscriptionService` — 可选 OpenAI 兼容转写
 - `controller/FeedbackController` — `/api/feedback`（提交任何用户；查看要管理员）
 
+**云端收件箱（收各安装上传的反馈）**
+- `controller/FeedbackIngestController` — `/api/feedback/ingest`（公开+配额）、
+  `/pending`、`/{id}/resolution`、`/inbox/status`（`X-Optimizer-Token`）
+- `service/feedback/FeedbackIngestGuard` — 配额与体积闸；`FeedbackService.ingest` — 幂等收件
+- `service/feedback/FeedbackUploadService` — 桌面端异步补传（本地先落库，永不删）
+
 **优化者（后端 `service/optimizer/`）**
-- `OptimizerProperties`（前缀 `optimizer`，默认 enabled=false）
+- `OptimizerProperties`（前缀 `optimizer`，默认 enabled=false，source=local）
+- `OptimizerFeedbackSource` + `LocalFeedbackSource` / `RemoteFeedbackSource` / `OptimizerSourceConfig`
+  —— 优化者读本地库还是云端收件箱，上层无感
 - `FeedbackTriageService` — 分诊；`OptimizerCodeFixRunner` — worktree + 编码 Agent + PR；
   `OptimizerMailer` — 只发不收；`OptimizerAgentService` — 调度与分流；`ProcessRunner` — 子进程出口
 - `controller/OptimizerController` — `/api/optimizer/run|status`（管理员，run 是异步）
+- 维护者机器上的常驻配方：`deploy/optimizer/`（run 脚本 + launchd plist + 搬机器步骤）
 
 **看板**：`frontend/src/pages/admin/admin.vue` 的 `activeNav === 'feedback'` 分区
 
@@ -46,6 +55,13 @@ description: 用户反馈闭环领域。任务涉及右下角反馈浮窗、反�
    两种情况在调模型之前就直接转人。
 6. **尝试次数在分诊之前就加**：分诊本身挂掉也要计数，否则一条永远失败的反馈每轮都被
    重新捞出来，永远到不了上限（白烧 token）。
+7. **优化者与收件箱不同机**：收件箱在公网收用户可控文本，优化者带着推送凭据与编码 Agent。
+   合一只在单机自用（`optimizer.source=local`）时成立。
+8. **`feedback.optimizer-token` 没配 = 取件与回执整组 403**，不留「未配置即放行」。
+   `optimizer.source=remote` 缺 url/token **直接拒绝启动**，不静默退回 local
+   （退回的表现是「天天跑、天天零条」，比起不来更难发现）。
+9. **上传只置标记不删本地行**；`429` 不算上传成功（标了这条就永远消失了）。
+   云端幂等键是 `installId + clientRef`。
 
 ## 已知地雷
 

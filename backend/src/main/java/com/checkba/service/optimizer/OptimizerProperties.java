@@ -41,9 +41,25 @@ public class OptimizerProperties {
     /** 判成 bug 且置信度不低于此值才会去改代码，否则降级走邮件问人。 */
     private double minConfidence = 0.7;
 
+    /**
+     * 反馈来源：local（默认，读本进程的库）| remote（读云端收件箱）。
+     * 生产形态是 remote——收件箱在云上收各安装的反馈，优化者跑在维护者自己的机器上。
+     */
+    private String source = "local";
+
+    private final Remote remote = new Remote();
     private final Repo repo = new Repo();
     private final Agent agent = new Agent();
     private final Mail mail = new Mail();
+
+    @Getter
+    @Setter
+    public static class Remote {
+        /** 云端收件箱地址，如 https://addin.aiworkdeck.com */
+        private String baseUrl = "";
+        /** 与收件箱 feedback.optimizer-token 相同的共享密钥 */
+        private String token = "";
+    }
 
     @Getter
     @Setter

@@ -38,6 +38,7 @@ import java.util.Map;
 public class FeedbackController {
 
     private final FeedbackService feedbackService;
+    private final com.checkba.service.feedback.FeedbackUploadService uploadService;
     private final UserFeedbackRepository feedbackRepository;
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
@@ -63,6 +64,8 @@ public class FeedbackController {
                     str(payload.get("page")),
                     asMap(payload.get("clientContext")));
             UserFeedback fb = feedbackService.submit(userId, req, files);
+            // 立刻推一次云端收件箱（异步，用户不等网络）；失败留给 30 分钟的补传轮
+            uploadService.flushAsync();
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("id", fb.getId());
             data.put("status", fb.getStatus());

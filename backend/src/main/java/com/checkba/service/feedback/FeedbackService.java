@@ -69,6 +69,8 @@ public class FeedbackService {
         fb.setPlatform(trim(contextCollector.platform(), 128));
         fb.setStatus(UserFeedback.STATUS_NEW);
         fb.setAttempts(0);
+        fb.setSource(UserFeedback.SOURCE_LOCAL);
+        fb.setUploaded(false);
         fb.setCreatedAt(LocalDateTime.now());
         fb = feedbackRepository.save(fb);
 
@@ -144,6 +146,54 @@ public class FeedbackService {
         }
     }
 
+    /**
+     * 云端收件箱：收下别的安装上传来的一条反馈。
+     *
+     * <p>与 {@link #submit} 的区别只有三处：没有登录用户、带上传方的 installId+clientRef
+     * 做幂等、正文里的版本/平台**照抄上传方的**（云端自己的版本号对排障没有意义）。
+     *
+     * @return 已存在则原样返回旧行（幂等），不会重复建
+     */
+    public UserFeedback ingest(String installId, String clientRef, IngestRequest req,
+                               List<MultipartFile> files) throws IOException {
+        var existing = feedbackRepository.findByInstallIdAndClientRef(installId, clientRef);
+        if (existing.isPresent()) return existing.get();
+
+        String text = req.text() == null ? "" : req.text().trim();
+        List<MultipartFile> safeFiles = files == null ? List.of() : files;
+        if (text.isEmpty() && safeFiles.isEmpty() && (req.voiceTranscript() == null || req.voiceTranscript().isBlank())) {
+            throw new IllegalArgumentException("空反馈");
+        }
+        if (text.length() > MAX_TEXT_CHARS) text = text.substring(0, MAX_TEXT_CHARS);
+
+        UserFeedback fb = new UserFeedback();
+        fb.setUserId(null);
+        fb.setSource(UserFeedback.SOURCE_CLOUD);
+        fb.setInstallId(trim(installId, 64));
+        fb.setClientRef(trim(clientRef, 64));
+        fb.setKind(UserFeedback.KIND_IDEA.equals(req.kind()) ? UserFeedback.KIND_IDEA : UserFeedback.KIND_BUG);
+        fb.setText(text);
+        fb.setVoiceTranscript(req.voiceTranscript());
+        fb.setPage(trim(req.page(), 256));
+        fb.setAppVersion(trim(req.appVersion(), 64));
+        fb.setPlatform(trim(req.platform(), 128));
+        fb.setContextJson(req.contextJson());
+        fb.setStatus(UserFeedback.STATUS_NEW);
+        fb.setAttempts(0);
+        fb.setUploaded(true);
+        fb.setCreatedAt(LocalDateTime.now());
+        fb = feedbackRepository.save(fb);
+
+        storeAttachments(fb.getId(), safeFiles);
+        return fb;
+    }
+
+    public void markUploaded(UserFeedback fb) {
+        fb.setUploaded(true);
+        fb.setUploadedAt(LocalDateTime.now());
+        feedbackRepository.save(fb);
+    }
+
     public List<FeedbackAttachment> attachmentsOf(Long feedbackId) {
         return attachmentRepository.findByFeedbackIdOrderByIdAsc(feedbackId);
     }
@@ -201,5 +251,10 @@ public class FeedbackService {
     /** 提交请求（正文部分，与附件一起来自同一个 multipart 请求）。 */
     public record SubmitRequest(String kind, String text, Long projectId, String page,
                                 Map<String, Object> clientContext) {
+    }
+
+    /** 云端收件箱的入站请求：上传方已经采好的现场原样带过来。 */
+    public record IngestRequest(String kind, String text, String voiceTranscript, String page,
+                                String appVersion, String platform, String contextJson) {
     }
 }
