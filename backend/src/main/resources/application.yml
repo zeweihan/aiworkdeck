@@ -121,6 +121,10 @@ sms:
 mail:
   # 发件人显示名，两条通道共用
   from-name: ${MAIL_FROM_NAME:AI Workdeck}
+  # 邮箱免密登录（输邮箱→收码→直接登录，不过密码）。**独立开关且默认关**：
+  # 它是一条新的匿名登录入口，攻击面与密码登录不同——邮箱被盗即账号被盗。
+  # 关闭时邮箱仍可作为登录二次验证使用（那条不需要这个开关）。
+  passwordless-login-enabled: ${MAIL_PASSWORDLESS_LOGIN_ENABLED:false}
   # 国内主流邮箱（QQ/163/126/139…）走这条：阿里云邮件推送，发信域名 dm.aiworkdeck.com。
   # 用户名就是发信地址本身；密码是控制台「发信地址 → 设置SMTP密码」设的那个，不是 AccessKey。
   domestic:
