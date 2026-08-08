@@ -83,13 +83,29 @@ opt-in：`enabled = repoService.isInitialized(projectId)`（`VersionController.j
 
 #### 闸门 2：收录范围与文件树同源
 
-数据库导入有 3000 条上限、20 层深度、跳过点开头目录（`LocalProjectService.java:285/290/291-294/325`），`git add "."`（`ProjectRepoService.java:127-128`）不受任何约束。确定成立的后果：**超出 3000 条的部分、`.venv`/`.idea`/`.DS_Store` 里的普通文件会被 git 收下而文件树里看不见**。
+数据库导入有 3000 条上限、20 层深度、跳过点开头目录（`LocalProjectService.java:285/290/291-294/325`），`git add "."`（`ProjectRepoService.java:127-128`）不受任何约束。
 
 注意：`ProjectStorageResolver.java:28-29` 那条「git 提交的内容 = 用户看到的文件」契约**在 localRoot 项目上今天就已经破了**，默认开启只是把破口推广到全部项目。
 
-建仓时写一份默认 `.gitignore`，规则与导入规则同源（至少覆盖点开头目录），补 `node_modules/ dist/ target/ .venv/ *.mp4`。**这份 .gitignore 会出现在律师文件夹里，spec 明确接受**（`.awd/` 同理）。新口径写进 `.claude/agents/version-control.md` 作为契约修订。
+**实测结论**（2026-08-08，JGit 6.9.0.202403050737-r，护栏测试 `backend/src/test/java/com/checkba/version/JGitAddBehaviorProbeTest.java`，2 个用例全绿）：
 
-> **未验证，实施前必须实测**：JGit 6.9.0（`backend/pom.xml:111-113`）的 `AddCommand` 对三件事的实际行为没有任何代码或测试确认——① 是否应用工作区自带的 `.gitignore`；② 嵌套 `.git` 是当 gitlink 跳过还是展开；③ 符号链接是存 symlink blob 还是跟进目标。**这三条直接决定闸门 2 是否成立。** 用一个真实目录（含 node_modules + 自带 .gitignore + 嵌套 git 仓 + 指向外部的符号链接）跑一次实测再定策略。
+| 行为 | 实测结果 | 对设计的影响 |
+|---|---|---|
+| 工作区自带 `.gitignore` | **生效**（`app.log`、`node_modules/pkg/index.js` 都没进树） | 排除规则可行，**不需要**把 `addFilepattern(".")` 改成显式路径集合 |
+| 嵌套 `.git` 目录 | **存成 `GITLINK(160000)`**，内容不展开，`.git` 内部不泄漏 | 风险远小于预期。但见下方语义说明 |
+| 符号链接（指向目录 / 指向文件） | **都存成 `SYMLINK(120000)`，不跟进目标** | 外置盘、网络盘、大目录不会被顺着链接吞进来 |
+| 点开头目录里的普通文件 | **被 git 收下**（`.venv/lib/site.py`、`.DS_Store` 都在树里） | 确认「文件树看不见但已被版本记录收录」成立，排除规则必须覆盖点开头目录 |
+| `$GIT_DIR/info/exclude` | **生效，且与用户自带 `.gitignore` 叠加**（不互相顶掉） | **决定了下面的方案** |
+
+**方案：排除规则写进 `{gitDir}/info/exclude`，不往律师的文件夹里写任何东西。**
+
+gitDir 恒在 `{globalRoot}/repos/project-{id}.git`（工作区之外），所以这条规则对律师完全不可见，也不会与他自己的 `.gitignore` 互相覆盖——实测两者叠加生效。这比原计划的「写一份 `.gitignore` 进用户文件夹」严格更好：既守住了「用户自己的文件夹里不冒出他没写过的文件」这条既有承诺，又避免了「用户已有 `.gitignore` 时该追加还是覆盖」这个没有好答案的问题。
+
+默认规则（与导入规则同源）：`.*/`（点开头目录，对齐 `LocalProjectService.java:290`）、`node_modules/`、`dist/`、`target/`、`.venv/`、`*.mp4` 等大二进制。
+
+> **一条要写进领域文档的语义**：嵌套的 git 仓库存成 gitlink，意味着律师放在案卷里的某个 git 项目，**其内容不会进入版本记录的历史**——退回版本时那个子目录不受保护。这不是 bug（吞进去反而更糟），但要在 `.claude/agents/version-control.md` 里写明，否则将来会被当成数据丢失来查。
+
+`.awd/` 目录仍会出现在用户文件夹里（清单必须与内容进同一笔提交），这一条不变，spec 明确接受。新口径写进 `.claude/agents/version-control.md` 作为契约修订。
 
 #### 闸门 3：修 `isInitialized` 的半残仓陷阱
 
@@ -504,7 +520,7 @@ project_task
 ## 9. 前置修复清单（不修就不能上）
 
 1. **`isInitialized` 半残仓陷阱**（§3.3 闸门 3）——不修则默认建仓失败的项目永久不可恢复
-2. **JGit `AddCommand` 三项行为实测**（§3.3 闸门 2）——不测则闸门 2 建立在猜测上
+2. ~~JGit `AddCommand` 三项行为实测~~ —— **已完成**（2026-08-08，`JGitAddBehaviorProbeTest`，结论见 §3.3 闸门 2）
 3. **默认建仓触发点移出 `@Transactional`**（§3.3 闸门 4）
 4. **`/timeline` 未开仓时的错误信封改成早退空列表**（§6.3）
 5. **`project_ai_message` 加索引**（§6.4）——现在线上只有主键索引
@@ -526,7 +542,8 @@ project_task
 - `cd backend && mvn test`（JDK 21，**系统默认 25 会 SIGBUS**）
 - `cd frontend && npm run check:emits`
 - `cd frontend && npm run test:app-e2e`——**J2/J3 两段旅程要重写、J9 两步断言要改**（§5.4），基线会变
-- 新增：默认建仓的三个针对性用例（含 node_modules 的目录、含指向外部的符号链接的目录、含用户自带 `.git`/`.gitignore` 的目录）
+- **已落地**：`JGitAddBehaviorProbeTest`（含 node_modules + 用户自带 `.gitignore` + 点开头目录 + 嵌套 git 仓 + 指向外部的符号链接的真实目录，两个用例分别钉死 `add(".")` 的收录行为与 `info/exclude` 的生效）。**改动 `ProjectRepoService.init`/`commitAll` 的收录方式时必跑这个。**
+- 待补：默认建仓在大 localRoot 目录上的耗时用例（缺真实样本，见 §11 Q1）
 - 新表在 H2 与 MySQL 两种库上各验一次建表（§8）
 - 领域文档更新（CLAUDE.md 维护规则）：`sidebar-shell.md`（两个新页面、导航流、术语表）、`version-control.md`（默认建仓、`.awd/profile.json`、`.gitignore` 新契约）、`ai-chat.md`（`project_memory` 表结构与契约——**全仓目前只有 `ai-chat.md:32` 一行提到 `ProjectMemoryExtractor`**）
 
@@ -579,4 +596,4 @@ project_task
 21. ❌「`GET /api/ai/conversations` 可零后端改动直接接成『本项目全部对话历史』」——是 user-scoped，且有鉴权缺口
 22. ❌「`project_memory` 是项目基本情况最合适的落点，不用新建表」——不进 Git 同步、无 uid
 
-**标为「未验证」、不可当事实引用的**：JGit 6.9.0 对 `.gitignore`/嵌套 `.git`/符号链接的实际行为；`enableVersionRecording` 在大项目上的耗时；默认开启后 `onChangeSignal` 早退翻转的性能影响；`MemCellExtractor` 的输出结构；`ProjectMemoryExtractor` 注释里自述的那次「生产事故」（无 issue/PR/日志佐证）；`findConversationSummaries` 在 userId=null 时返回空（SQL 语义推断，未实跑）；taiga-front 的许可。
+**标为「未验证」、不可当事实引用的**：~~JGit 6.9.0 对 `.gitignore`/嵌套 `.git`/符号链接的实际行为~~（**2026-08-08 已实测，见 §3.3 闸门 2**）；`enableVersionRecording` 在大项目上的耗时；默认开启后 `onChangeSignal` 早退翻转的性能影响；`MemCellExtractor` 的输出结构；`ProjectMemoryExtractor` 注释里自述的那次「生产事故」（无 issue/PR/日志佐证）；`findConversationSummaries` 在 userId=null 时返回空（SQL 语义推断，未实跑）；taiga-front 的许可。
