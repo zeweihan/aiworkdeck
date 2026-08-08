@@ -93,7 +93,7 @@ class LitigationVisualServiceTest {
     // ==== 出图 ====
 
     @Test
-    @DisplayName("时间轴：五种格式全出，且报的路径就是真落盘的那个")
+    @DisplayName("时间轴：矢量与可编辑源文件必出，PNG 视机器有无光栅器而定")
     void rendersTimelineWithAllFormats() throws Exception {
         requireRuntime();
         Path out = Files.createTempDirectory("litviz-test-");
@@ -106,13 +106,26 @@ class LitigationVisualServiceTest {
             assertEquals("奇川风", r.raw().getStr("mode"));
 
             JSONArray files = r.raw().getJSONArray("files");
-            assertEquals(6, files.size(), "五种格式共 6 个文件（drawio 另出一份带内嵌模型的 svg）");
+            java.util.Set<String> got = new java.util.HashSet<>();
             for (int i = 0; i < files.size(); i++) {
                 JSONObject f = files.getJSONObject(i);
                 Path p = Path.of(f.getStr("path"));
                 assertTrue(Files.isRegularFile(p), "报了但没落盘：" + p);
                 assertTrue(f.getLong("bytes") > 0, "空文件：" + p);
+                got.add(f.getStr("format"));
             }
+
+            // 这五种是纯计算产物，任何机器上都必须有。
+            assertTrue(got.containsAll(java.util.Set.of("svg", "drawio", "drawio-svg", "pptx", "vsdx")),
+                    "缺少矢量母版或可编辑源文件：" + got);
+
+            // PNG 要外部光栅器（rsvg-convert / inkscape / soffice / cairosvg），
+            // 桌面端一个都不随包分发，CI 的 runner 上通常也没有。所以断言的是
+            // 「与本机实际能力一致」，而不是一个写死的文件数——写死数字会让这条
+            // 测试变成"构建机装了什么"的探针，在没装光栅器的机器上无故变红。
+            boolean hasRasteriser = svc.doctor().raw().getBool("rasteriser", false);
+            assertEquals(hasRasteriser, got.contains("png"),
+                    hasRasteriser ? "本机有光栅器，PNG 却没出" : "本机没有光栅器，不该凭空出 PNG");
         } finally {
             deleteTree(out);
         }
