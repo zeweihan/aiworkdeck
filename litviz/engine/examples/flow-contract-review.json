@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "diagram_type": "flowchart",
+  "layout": "graphviz_flow",
+  "title_text": "合同审查前处理流程",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "n1",
+      "kind": "terminal",
+      "title": "收到原始合同"
+    },
+    {
+      "id": "n2",
+      "kind": "step",
+      "title": "【必做】备份原始合同"
+    },
+    {
+      "id": "n3",
+      "kind": "step",
+      "title": "评估文档状态与AI模型能力"
+    },
+    {
+      "id": "n4",
+      "kind": "step",
+      "title": "条件A：文档良好／模型强大",
+      "lines": [
+        "原生Word或电子版PDF",
+        "字迹清晰的常规扫描件",
+        "且使用OCR能力强大支持文档直读的模型"
+      ]
+    },
+    {
+      "id": "n5",
+      "kind": "step",
+      "title": "条件B：文档棘手／模型受限",
+      "lines": [
+        "模糊的传真或复印件",
+        "包含复杂嵌套表格／特殊排版",
+        "且使用仅支持纯文本的轻量级模型"
+      ]
+    },
+    {
+      "id": "n6",
+      "kind": "step",
+      "title": "敏捷版 SOP",
+      "lines": [
+        "（耗时：1-2分钟）"
+      ]
+    },
+    {
+      "id": "n7",
+      "kind": "step",
+      "title": "完整版 SOP",
+      "lines": [
+        "（耗时：5-15分钟）"
+      ]
+    },
+    {
+      "id": "n8",
+      "kind": "step",
+      "title": "【跳过】",
+      "lines": [
+        "专业OCR转换",
+        "数据清洗"
+      ]
+    },
+    {
+      "id": "n9",
+      "kind": "step",
+      "title": "【选做】",
+      "lines": [
+        "调用专业OCR提取文本",
+        "人工清洗数据"
+      ]
+    },
+    {
+      "id": "n10",
+      "kind": "step",
+      "title": "【必做】核心敏感信息脱敏（替换占位符）",
+      "emphasis": true
+    },
+    {
+      "id": "n11",
+      "kind": "terminal",
+      "title": "上传文本，进入提示词交互"
+    }
+  ],
+  "edges": [
+    {
+      "from": "n1",
+      "to": "n2"
+    },
+    {
+      "from": "n2",
+      "to": "n3"
+    },
+    {
+      "from": "n3",
+      "to": "n4"
+    },
+    {
+      "from": "n3",
+      "to": "n5"
+    },
+    {
+      "from": "n4",
+      "to": "n6"
+    },
+    {
+      "from": "n5",
+      "to": "n7"
+    },
+    {
+      "from": "n6",
+      "to": "n8"
+    },
+    {
+      "from": "n7",
+      "to": "n9"
+    },
+    {
+      "from": "n8",
+      "to": "n10"
+    },
+    {
+      "from": "n9",
+      "to": "n10"
+    },
+    {
+      "from": "n10",
+      "to": "n11"
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim",
+    "tidy_note": "两条平行纵列（条件A/条件B）各自往下再合流，逐字保留",
+    "uncertainties": [],
+    "emphasis_note": "AI建议：以【必做】核心敏感信息脱敏为中点深红重点（合流后的关键动作），待用户确认，可取消"
+  },
+  "checkpoint": {
+    "emphasis_source": "user",
+    "confirmed": true
+  }
+}

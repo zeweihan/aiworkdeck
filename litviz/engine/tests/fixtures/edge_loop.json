@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "flowchart",
+  "layout": "graphviz_flow",
+  "title_text": "回流",
+  "direction": "TB",
+  "nodes": [
+    {
+      "id": "a",
+      "kind": "terminal",
+      "title": "开始"
+    },
+    {
+      "id": "b",
+      "kind": "step",
+      "title": "验收"
+    },
+    {
+      "id": "c",
+      "kind": "decision",
+      "title": "合格？"
+    },
+    {
+      "id": "d",
+      "kind": "step",
+      "title": "整改"
+    },
+    {
+      "id": "e",
+      "kind": "terminal",
+      "title": "完成"
+    }
+  ],
+  "edges": [
+    {
+      "from": "a",
+      "to": "b"
+    },
+    {
+      "from": "b",
+      "to": "c"
+    },
+    {
+      "from": "c",
+      "to": "e",
+      "label": "合格"
+    },
+    {
+      "from": "c",
+      "to": "d",
+      "label": "不合格"
+    },
+    {
+      "from": "d",
+      "to": "b",
+      "label": "重新验收"
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "diagram_type": "relationship",
+  "layout": "graphviz_relation",
+  "title_text": "借名代持与资金流关系图（匿名压力测试·高密度）",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "a",
+      "title": "甲（案外人）",
+      "note": "受乙指示代付款项"
+    },
+    {
+      "id": "b",
+      "title": "乙（出资人·父）",
+      "note": "账户尾号××××"
+    },
+    {
+      "id": "c",
+      "title": "丙（代持人）",
+      "note": "POS刷卡2万余元；单独所有"
+    },
+    {
+      "id": "d",
+      "title": "丁（出资人·母）",
+      "note": "账户尾号××××"
+    },
+    {
+      "id": "e",
+      "title": "开发商",
+      "note": "案涉房屋：某路某号"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "a",
+      "to": "c",
+      "label": "指示代付50,000元（二期）"
+    },
+    {
+      "id": "e2",
+      "from": "b",
+      "to": "c",
+      "label": "定金10,000元+三期82,213元（两笔）"
+    },
+    {
+      "id": "e3",
+      "from": "c",
+      "to": "e",
+      "label": "二期款123,321元（资金源自借名代持及分期优惠）"
+    },
+    {
+      "id": "e4",
+      "from": "d",
+      "to": "c",
+      "label": "回流同一账户49,000元"
+    },
+    {
+      "id": "e5",
+      "from": "d",
+      "to": "a",
+      "label": "借名代持（以丙名义签约享分期优惠及POS刷卡2万余元.07元）",
+      "emphasis": true
+    },
+    {
+      "id": "e6",
+      "from": "c",
+      "to": "d",
+      "label": "首期契税+大修"
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim",
+    "uncertainties": []
+  }
+}

@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""litviz/cli.py 的契约测试。
+
+守的是**后端 Java 依赖的那几条约定**，不是引擎的画图质量——画图质量由上游自带的
+149 项回归守（`engine/tests/run_checks.py`，本文件最后会连带跑一遍）。
+
+    python3 litviz/tests/test_cli.py
+    python3 litviz/tests/test_cli.py --skip-engine    # 只跑契约，不跑上游 149 项
+"""
+import json
+import os
+import subprocess
+import sys
+import tempfile
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_LITVIZ = os.path.dirname(_HERE)
+_CLI = os.path.join(_LITVIZ, "cli.py")
+_EXAMPLES = os.path.join(_LITVIZ, "engine", "examples")
+
+# 哪些布局离了 graphviz 就画不出来。实测矩阵（2026-08-08，引擎 v1.0.2）：
+# 只有流程图真的要 dot。graphviz_relation 名字里带 graphviz，但 v1.0.2 已经换成
+# 确定性的无 graphviz 布局（_layout_nodes），run_dot 在那个文件里是死代码。
+# 这条矩阵是我们决定"不装 graphviz 时功能降级到什么程度"的依据，别凭名字猜。
+NEEDS_GRAPHVIZ = {"flowchart", "flow-contract-review"}
+ALL_EXAMPLES = ["timeline-points", "timeline-dated", "timeline-gantt",
+                "relationship", "relation-tree", "comparison-table",
+                "flowchart", "flow-contract-review"]
+
+_failures = []
+
+
+def check(name, cond, detail=""):
+    if cond:
+        print("  [PASS] %s" % name)
+    else:
+        print("  [FAIL] %s%s" % (name, ("  → " + detail) if detail else ""))
+        _failures.append(name)
+
+
+def run_cli(args, env=None, python=None):
+    """跑一次 CLI，返回 (解析出的 JSON, 退出码, stderr)。
+
+    stdout 必须是**恰好一行 JSON**——这正是要测的东西，所以这里故意用严格解析：
+    多打一行日志到 stdout 就会在这里炸，而不是等到 Java 那侧莫名其妙解析失败。"""
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    p = subprocess.run([python or sys.executable, _CLI] + args,
+                       capture_output=True, text=True, env=e)
+    lines = [ln for ln in p.stdout.splitlines() if ln.strip()]
+    if len(lines) != 1:
+        return {"_stdout_lines": len(lines), "_raw": p.stdout}, p.returncode, p.stderr
+    return json.loads(lines[0]), p.returncode, p.stderr
+
+
+def bare_path_env():
+    """一个不含 graphviz 的 PATH，用来模拟没装 graphviz 的用户机器。"""
+    return {"PATH": "/usr/bin:/bin", "LITVIZ_GRAPHVIZ_DIR": ""}
+
+
+def main():
+    skip_engine = "--skip-engine" in sys.argv
+    tmp = tempfile.mkdtemp(prefix="litviz-test-")
+    have_dot = subprocess.run(["sh", "-c", "command -v dot"],
+                              capture_output=True).returncode == 0
+
+    print("\nlitviz · CLI 契约")
+
+    # ---- 1. stdout 只有一行 JSON ---------------------------------------
+    out, rc, _ = run_cli(["validate", "--map", os.path.join(_EXAMPLES, "relationship.json")])
+    check("validate: stdout 恰好一行 JSON", "_stdout_lines" not in out,
+          "实际 %s 行" % out.get("_stdout_lines"))
+    check("validate: ok=true 且退出码 0", out.get("ok") is True and rc == 0)
+    check("validate: 回报 layout", out.get("layout") == "graphviz_relation")
+
+    # ---- 2. 引擎的人类输出不许污染 stdout -------------------------------
+    out, rc, err = run_cli(["render", "--map", os.path.join(_EXAMPLES, "timeline-points.json"),
+                            "--out", os.path.join(tmp, "t1"), "--formats", "svg"])
+    check("render: stdout 仍然只有一行 JSON", "_stdout_lines" not in out,
+          "实际 %s 行" % out.get("_stdout_lines"))
+    check("render: 引擎日志走的是 stderr", "SVG:" in err)
+    check("render: 产物路径是绝对路径且真实存在",
+          out.get("ok") and all(os.path.isabs(f["path"]) and os.path.isfile(f["path"])
+                                for f in out.get("files", [])))
+
+    # ---- 3. 草稿闸 ------------------------------------------------------
+    # 未确认的地图必须写成 *-draft。这是上游一条刻意的安全设计（未经用户确认的
+    # 读法不许当终稿归档进诉讼材料），我们不能在包装层把它抹平。
+    src = json.load(open(os.path.join(_EXAMPLES, "timeline-points.json"), encoding="utf-8"))
+    src["checkpoint"] = {"confirmed": False}
+    unconfirmed = os.path.join(tmp, "unconfirmed.json")
+    json.dump(src, open(unconfirmed, "w", encoding="utf-8"), ensure_ascii=False)
+    out, rc, _ = run_cli(["render", "--map", unconfirmed,
+                          "--out", os.path.join(tmp, "t2"), "--formats", "svg"])
+    check("draft: 未确认 → draft=true", out.get("draft") is True)
+    check("draft: 文件名带 -draft 后缀", out.get("basename") == "t2-draft")
+    check("draft: 报的路径就是真落盘的那个",
+          all(os.path.isfile(f["path"]) for f in out.get("files", [])))
+
+    # ---- 4. 三种视觉模式 ------------------------------------------------
+    for raw, want in [("奇川风", "奇川风"), ("guizang", "歸藏风"), ("白描", "白描"),
+                      ("", "奇川风")]:
+        out, _, _ = run_cli(["render", "--map", os.path.join(_EXAMPLES, "timeline-points.json"),
+                             "--out", os.path.join(tmp, "m-" + (raw or "default")),
+                             "--formats", "svg"] + (["--mode", raw] if raw else []))
+        check("mode: %r → %s" % (raw, want), out.get("mode") == want, str(out.get("error", "")))
+
+    out, rc, _ = run_cli(["render", "--map", os.path.join(_EXAMPLES, "timeline-points.json"),
+                          "--out", os.path.join(tmp, "m-bad"), "--mode", "赛博朋克"])
+    check("mode: 未知模式 → ok=false 且退出码 1", out.get("ok") is False and rc == 1)
+
+    # ---- 5. 错误一律是结构化的，不是 traceback --------------------------
+    bad = os.path.join(tmp, "bad.json")
+    open(bad, "w").write('{"layout":"nope"}')
+    out, rc, _ = run_cli(["validate", "--map", bad])
+    check("error: 坏地图 → ok=false", out.get("ok") is False)
+    check("error: 退出码 1", rc == 1)
+    check("error: 带得上原因", "layout" in str(out.get("error", "")))
+
+    out, rc, _ = run_cli(["validate", "--map", os.path.join(tmp, "不存在.json")])
+    check("error: 文件不存在也是结构化的", out.get("ok") is False and rc == 1)
+
+    # ---- 6. graphviz 依赖矩阵 -------------------------------------------
+    # 这一组是打包决策的依据：确认"没有 dot 时到底哪些布局还能用"。
+    # 名字带 graphviz 的关系图其实不需要它——凭名字猜会把打包范围判错。
+    print("\nlitviz · 无 graphviz 时的布局矩阵")
+    for ex in ALL_EXAMPLES:
+        out, _, _ = run_cli(["render", "--map", os.path.join(_EXAMPLES, ex + ".json"),
+                             "--out", os.path.join(tmp, "nodot-" + ex), "--formats", "svg"],
+                            env=bare_path_env())
+        expect_ok = ex not in NEEDS_GRAPHVIZ
+        got_ok = out.get("ok") is True
+        check("%s: 无 dot 时 %s" % (ex, "可出图" if expect_ok else "明确报缺 graphviz"),
+              got_ok == expect_ok,
+              str(out.get("error", ""))[:90])
+        if not expect_ok and not got_ok:
+            check("  ↳ %s 的报错点名 graphviz" % ex,
+                  "graphviz" in str(out.get("error", "")).lower())
+
+    # ---- 7. checkpoint 原样透传 -----------------------------------------
+    out, rc, _ = run_cli(["checkpoint", "--map", os.path.join(_EXAMPLES, "timeline-points.json"),
+                          "--suggest", "3"])
+    q = out.get("questions", "")
+    check("checkpoint: 三问齐全", all(k in q for k in ("① 结构", "② 风格", "③ 重点")),
+          q[:80])
+    check("checkpoint: 候选清单来自地图里的真实元素", "乙停业失联" in q)
+
+    # ---- 8. doctor ------------------------------------------------------
+    out, rc, _ = run_cli(["doctor"])
+    check("doctor: 如实回报 graphviz 有无", out.get("graphviz") == have_dot)
+    check("doctor: 回报解释器版本", bool(out.get("python")))
+
+    # ---- 9. 上游 149 项回归 ---------------------------------------------
+    if not skip_engine:
+        print("\n上游引擎回归（engine/tests/run_checks.py）")
+        p = subprocess.run([sys.executable, os.path.join(_LITVIZ, "engine", "tests", "run_checks.py")],
+                           capture_output=True, text=True)
+        tail = [ln for ln in p.stdout.splitlines() if "checks passed" in ln]
+        summary = tail[-1].strip() if tail else "(没抓到统计行)"
+        print("  " + summary)
+        # 我们没 vendor 上游的 README.md（那是它的门面文档，与出图链路无关），
+        # 于是 3 项 README 文档守卫结构性缺席。除此之外任何一项红都是真回归。
+        fails = [ln for ln in p.stdout.splitlines() if "[FAIL]" in ln]
+        non_doc = [ln for ln in fails if "docs ·" not in ln]
+        check("引擎回归: 只有 README 文档守卫因未 vendor 而缺席",
+              len(non_doc) == 0,
+              "另有 %d 项失败：%s" % (len(non_doc), non_doc[:2]))
+        check("引擎回归: 缺席的正好是那 3 项", len(fails) == 3,
+              "实际 %d 项 [FAIL]" % len(fails))
+
+    print("\n%s" % ("全部通过" if not _failures
+                    else "%d 项失败：%s" % (len(_failures), _failures)))
+    return 1 if _failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

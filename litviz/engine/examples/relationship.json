@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "diagram_type": "relationship",
+  "layout": "graphviz_relation",
+  "title_text": "担保法律关系图",
+  "engine": "dot",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "jia",
+      "title": "债权人（甲）",
+      "note": "民间借贷关系（本金20万）"
+    },
+    {
+      "id": "yi",
+      "title": "债务人（乙）",
+      "note": "还款义务（本金+利息）"
+    },
+    {
+      "id": "bing",
+      "title": "保证人（丙）",
+      "note": "保证合同关系（连带责任）"
+    }
+  ],
+  "edges": [
+    {
+      "from": "jia",
+      "to": "yi",
+      "label": ""
+    },
+    {
+      "from": "yi",
+      "to": "bing",
+      "label": "追偿权（代偿后）"
+    },
+    {
+      "from": "jia",
+      "to": "bing",
+      "label": "连带清偿责任",
+      "route": "top",
+      "emphasis": true
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim",
+    "note_note": "原图下方三处朝上箭头标签作为各主体的注释处理，非独立关系边",
+    "emphasis_note": "AI判断：以甲对丙的『连带清偿责任』为深红重点，系本案担保责任要害",
+    "uncertainties": []
+  },
+  "checkpoint": {
+    "emphasis_source": "user",
+    "confirmed": true
+  }
+}

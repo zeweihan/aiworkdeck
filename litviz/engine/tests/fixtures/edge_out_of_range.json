@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "layout": "proportional_gantt",
+  "title_text": "越界",
+  "axis": {
+    "mode": "proportional_year",
+    "start": "2022/01/01",
+    "end": "2022/12/31"
+  },
+  "spans": [
+    {
+      "id": "B1",
+      "label_text": "跨到2024",
+      "from": "2021/06/01",
+      "to": "2024/03/01",
+      "emphasis": true
+    }
+  ]
+}

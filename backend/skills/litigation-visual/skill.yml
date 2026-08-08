@@ -1,0 +1,62 @@
+# 诉讼可视化 Skill（打包格式见 docs/SKILL_SPEC.md）
+#
+# 出图引擎 vendor 自 mqc-litigation-visual-redraw（作者缪奇川，MIT），见仓库 litviz/。
+# 本 skill 只教模型"怎么抽取"；几何全部由确定性脚本计算，模型不碰像素。
+id: litigation-visual
+name: 诉讼可视化
+description: 把案件材料画成能直接进诉讼材料的专业图——事实经过时间轴、诉讼时效/保证期间甘特图、案件流程图、当事人关系图、股权控制结构树、A/B 对比表。原文逐字保留，只改视觉表达。
+
+# 法律事项类别（匿名统计用，枚举见 MatterCategory）
+category: 争议解决
+
+# 触发条件：用户输入包含任一关键词即命中（不区分大小写）
+triggers:
+  - 诉讼可视化
+  - 案件时间轴
+  - 事实经过时间轴
+  - 时间轴
+  - 大事记
+  - 诉讼时效图
+  - 保证期间
+  - 案件流程图
+  - 诉讼流程图
+  - 当事人关系图
+  - 法律关系图
+  - 担保关系图
+  - 股权结构图
+  - 控制关系图
+  - 关系图
+  - 甘特图
+  - 把这张图重画
+  - 重画一下
+  - 画成图
+  - 出一张图
+  - 做张图
+
+prompt: prompt.md
+
+# 工具白名单：命中后本轮 LLM 可见工具 = allowed_tools ∪ 基础工具集（ai.skills.base-tools）。
+# base-tools 只有三个（read_document / list_files / query_memory），所以每个要用的工具
+# 都得逐条列出——漏一个就等于对模型隐藏了这个能力。
+# 四类：出图三件套（litigation_*）、读材料（抽取阶段要通读文件夹）、落地（建文件夹）、
+# 委派（dispatch_subtask）。
+#
+# dispatch_subtask：材料多时抽取是典型长程任务（逐份读判决书/证据再汇总成一份语义地图），
+# 正是 prompts/system_prompt.md 第 6.5 节要委派子 Agent 的场景。两个既有 skill 曾漏列，
+# 这里照它们的惯例带上。
+allowed_tools:
+  - litigation_reference
+  - litigation_checkpoint
+  - litigation_render
+  - extract_file_text
+  - search_project_files
+  - read_file
+  - create_folder
+  - doc_list_project_files
+  - dispatch_subtask
+
+output: |
+  交付 = 项目里一个以图名命名的文件夹，内含 .svg（母版，自动在编辑器打开）、.png
+  （预览）、.pptx / .drawio / .vsdx（可继续编辑的原生源文件）。
+  回复里给一句审计摘要：用了哪种布局与视觉模式、深红标在哪一处（或"未标"）、
+  有哪些没读准的地方。这些话只出现在回复里，绝不画进图上。

@@ -258,6 +258,10 @@ const NAMES = {
   pdf_redact: { zh: 'PDF脱敏', en: 'Redact PDF' },
   pdf_replace_text: { zh: '替换PDF文本', en: 'Replace PDF text' },
   pdf_to_word: { zh: 'PDF转Word', en: 'Convert PDF to Word' },
+  // 诉讼可视化
+  litigation_reference: { zh: '查阅制图规范', en: 'Read diagram standard' },
+  litigation_checkpoint: { zh: '出图前确认', en: 'Confirm before drawing' },
+  litigation_render: { zh: '生成诉讼图', en: 'Draw litigation diagram' },
 }
 
 // code 可以是纯工具名，也可以是 <tool_code> 里的 `tool_name({...})` 完整调用串。

@@ -200,22 +200,45 @@ public class SkillRegistry {
     // ==================== 扫描与解析 ====================
 
     private void scan() {
-        // 1. 内置 skills/ 目录
-        File dir = new File(properties.getDir());
-        if (dir.isDirectory()) {
-            File[] skillDirs = dir.listFiles(File::isDirectory);
-            if (skillDirs != null) {
-                java.util.Arrays.sort(skillDirs);
-                for (File skillDir : skillDirs) {
-                    register(skillDir, null);
-                }
+        // 1. 可写目录（广场安装落点）。**先扫它**：id 去重是"先扫到优先"，
+        //    这样广场装的同 id skill 能覆盖随发行版分发的那份——内置 skill 出了问题
+        //    可以走广场热修，不必等下一个客户端版本。被盖住的会打日志。
+        scanSkillDir(new File(properties.getDir()), "writable");
+        // 2. 随发行版分发的只读内置目录（打包态由 AI_SKILLS_BUILTIN_DIR 注入）。
+        //    dev 态留空——那时内置 skill 就在上面那个相对目录里。
+        String builtin = properties.getBuiltinDir();
+        if (builtin != null && !builtin.isBlank()) {
+            File builtinDir = new File(builtin);
+            // 两处配到同一个目录时别扫两遍（否则每个内置 skill 都要报一次重复告警）。
+            // 必须比 canonical 路径：一边可能是相对路径、一边绝对路径，File.equals 只做字面比较。
+            if (!sameDir(builtinDir, new File(properties.getDir()))) {
+                scanSkillDir(builtinDir, "builtin");
             }
-        } else {
-            log.info("Skills dir '{}' not found, skip built-in skill scan", properties.getDir());
         }
-        // 2. 插件携带的 skill 目录（manifest.skills，规范 v2.1）
+        // 3. 插件携带的 skill 目录（manifest.skills，规范 v2.1）
         for (PluginService.PluginSkillDir psd : pluginService.getPluginSkillDirs()) {
             register(psd.dir(), psd.pluginId());
+        }
+    }
+
+    private static boolean sameDir(File a, File b) {
+        try {
+            return a.getCanonicalFile().equals(b.getCanonicalFile());
+        } catch (java.io.IOException e) {
+            return a.getAbsoluteFile().equals(b.getAbsoluteFile());
+        }
+    }
+
+    private void scanSkillDir(File dir, String label) {
+        if (!dir.isDirectory()) {
+            log.info("Skills dir '{}' ({}) not found, skip", dir.getPath(), label);
+            return;
+        }
+        File[] skillDirs = dir.listFiles(File::isDirectory);
+        if (skillDirs == null) return;
+        java.util.Arrays.sort(skillDirs);
+        for (File skillDir : skillDirs) {
+            register(skillDir, null);
         }
     }
 

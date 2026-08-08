@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "diagram_type": "timeline",
+  "layout": "proportional_gantt",
+  "title_text": "坏日期",
+  "axis": {
+    "mode": "proportional_year",
+    "start": "2020/01/01",
+    "end": "2023/12/31"
+  },
+  "spans": [
+    {
+      "id": "B1",
+      "label_text": "正常",
+      "from": "2020/06/01",
+      "to": "2021/06/01"
+    },
+    {
+      "id": "B2",
+      "label_text": "坏",
+      "from": "2021年6月",
+      "to": "2022/01/01"
+    }
+  ]
+}

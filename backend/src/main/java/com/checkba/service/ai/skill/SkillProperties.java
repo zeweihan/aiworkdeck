@@ -15,8 +15,24 @@ import java.util.List;
 @ConfigurationProperties(prefix = "ai.skills")
 public class SkillProperties {
 
-    /** skill 扫描目录（相对服务端工作目录，做法同 ai.plugins.dir） */
+    /**
+     * 可写的 skill 目录（相对服务端工作目录，做法同 ai.plugins.dir）。
+     * 广场安装/卸载只动这里；打包态它落在用户数据目录下。
+     */
     private String dir = "skills";
+
+    /**
+     * 随发行版一同分发的**只读**内置 skill 目录（绝对路径，桌面端用
+     * AI_SKILLS_BUILTIN_DIR 注入 Resources/skills）。
+     *
+     * <p>为什么要单独一个目录，而不是首启把内置 skill 拷进可写目录：
+     * 一是拷过去之后广场的重装/卸载能覆盖甚至删掉内置 skill（卸载守卫只认
+     * "来自插件"，认不出"来自发行版"）；二是升级后用户数据目录里会留着上个版本的
+     * 陈旧副本，与新版本的内置 skill 静默打架。只读目录两个问题都不存在。
+     *
+     * <p>留空 = 没有内置目录（dev 态就是这样，内置 skill 在相对目录 skills/ 里）。
+     */
+    private String builtinDir = "";
 
     /**
      * 基础工具集：Skill 命中后本轮 LLM 可见工具 = allowed_tools ∪ base-tools。
@@ -32,6 +48,8 @@ public class SkillProperties {
 
     public String getDir() { return dir; }
     public void setDir(String dir) { this.dir = dir; }
+    public String getBuiltinDir() { return builtinDir; }
+    public void setBuiltinDir(String builtinDir) { this.builtinDir = builtinDir; }
     public List<String> getBaseTools() { return baseTools; }
     public void setBaseTools(List<String> baseTools) { this.baseTools = baseTools; }
     public long getDisabledCacheTtlMs() { return disabledCacheTtlMs; }

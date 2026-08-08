@@ -565,6 +565,13 @@
             :current-user="currentUser"
             @start-verification="handleShareholderMeetingStart"
           />
+          <LitigationVisualPanel
+            v-else-if="leftPaneKey === 'litigation-visual'"
+            :project-id="projectId"
+            @start-drawing="handleLitigationStart"
+            @open-file="handleLitigationOpenFile"
+            @request-scope-select="handleLitigationScopeSelect"
+          />
           <EasyVoicePane
              v-else-if="leftPaneKey === 'easyvoice'"
              @request-doc-text="handleEasyVoiceDocRequest"
@@ -1479,6 +1486,7 @@ import { activityTracker } from '@/utils/activityTracker.js'
 import { ICONS as GLYPHS } from '@/config/icons.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import ShareholderMeetingPanel from '@/components/ShareholderMeetingPanel.vue'
+import LitigationVisualPanel from '@/components/LitigationVisualPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
 import { panelSwitchingMethods } from './panelSwitching.js'
@@ -1506,6 +1514,7 @@ export default {
     ClipboardPanel,
     DdFilesPanel,
     ShareholderMeetingPanel,
+    LitigationVisualPanel,
     DdRequestEditor,
     InviteMemberDialog,
     CollabDialog,
@@ -1686,6 +1695,8 @@ export default {
       },
       // Desensitize Callback
       desensitizeFileSelectCallback: null,
+      // 诉讼可视化面板的材料范围选择回调（复用同一个 FilePickerDialog）
+      litigationScopeCallback: null,
 
       stagingFiles: [], // 文件暂存区列表
       // 免费额度用量 { fileCount, totalBytes, limited, maxFiles, maxBytes }；
@@ -2829,6 +2840,16 @@ export default {
             return
         }
 
+        // 诉讼可视化的材料范围选择：只取名字，不导入内容——AI 自己会去读
+        if (this.litigationScopeCallback) {
+            this.litigationScopeCallback({
+                label: file.name,
+                description: `《${file.name}》（fileId=${file.id}）`
+            })
+            this.litigationScopeCallback = null
+            return
+        }
+
         try {
             uni.showLoading({ title: '正在导入...' })
 
@@ -2983,6 +3004,37 @@ export default {
         }
       }
     },
+
+    // ==================== 诉讼可视化面板 ====================
+
+    // 出图那句话由服务端拼好（触发词必须原样在正文里才命中 skill 注入），
+    // 这里只负责以 AGENT 模式发出去——与股东大会核查同一条路。
+    async handleLitigationStart({ prompt }) {
+      const chat = this.$refs.chatInterface
+      if (!chat || !chat.sendExternalPrompt) {
+        uni.showToast({ title: 'AI 面板未就绪，请稍后重试', icon: 'none' })
+        return
+      }
+      await chat.sendExternalPrompt(prompt)
+    },
+
+    async handleLitigationOpenFile({ fileId }) {
+      if (!fileId) return
+      try {
+        const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
+        const file = await getFileDetail(pid, fileId)
+        if (file && file.id) this.openFile(file)
+      } catch (e) {
+        uni.showToast({ title: '打开失败', icon: 'none' })
+      }
+    },
+
+    // 材料范围选择：复用页面上那个 FilePickerDialog（与脱敏面板同一套回调约定）
+    handleLitigationScopeSelect(callback) {
+      this.litigationScopeCallback = callback
+      this.showFilePicker = true
+    },
+
     isTabVisible(file) {
       if (!file) return false
       // dd-request 或者 fileType 为 dd 的属于尽调清单类标签

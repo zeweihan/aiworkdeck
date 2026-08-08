@@ -36,6 +36,19 @@ export const LEFT_SIDEBAR_PLUGINS = [
     ]
   },
   {
+    key: 'litigation-visual',
+    label: '诉讼可视化',
+    // 折线 + 节点：时间轴/关系图的共同意象
+    svgPaths: [
+      { d: 'M3 17h18' },
+      { d: 'M7 17v-4' },
+      { d: 'M12 17V8' },
+      { d: 'M17 17v-7' },
+      { d: 'M7 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' },
+      { d: 'M17 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' }
+    ]
+  },
+  {
     key: 'search',
     label: '搜索',
     svgPaths: [

@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "diagram_type": "relationship",
+  "layout": "relation_tree",
+  "title_text": "被告方股权控制关系图",
+  "arrows": false,
+  "nodes": [
+    {
+      "id": "kong",
+      "title": "实际控制人 王某"
+    },
+    {
+      "id": "jia",
+      "title": "甲控股集团有限公司"
+    },
+    {
+      "id": "yi",
+      "title": "乙投资有限公司"
+    },
+    {
+      "id": "bing",
+      "title": "丙置业有限公司"
+    },
+    {
+      "id": "ding",
+      "title": "丁建设有限公司",
+      "note": "本案被告 / 被执行主体",
+      "emphasis": true
+    },
+    {
+      "id": "wu",
+      "title": "戊科技有限公司"
+    },
+    {
+      "id": "ji",
+      "title": "己贸易有限公司"
+    }
+  ],
+  "edges": [
+    {
+      "from": "kong",
+      "to": "jia",
+      "label": "持股80%"
+    },
+    {
+      "from": "kong",
+      "to": "yi",
+      "label": "持股65%"
+    },
+    {
+      "from": "jia",
+      "to": "bing",
+      "label": "持股100%"
+    },
+    {
+      "from": "jia",
+      "to": "ding",
+      "label": "持股70%"
+    },
+    {
+      "from": "yi",
+      "to": "wu",
+      "label": "持股51%"
+    },
+    {
+      "from": "yi",
+      "to": "ji",
+      "label": "持股90%"
+    }
+  ],
+  "provenance": {
+    "text_policy": "verbatim",
+    "emphasis_note": "AI判断：以『丁建设有限公司（本案被告/被执行主体）』为深红重点，系本案责任主体；每图深红控制在1-2处",
+    "uncertainties": []
+  },
+  "checkpoint": {
+    "emphasis_source": "user",
+    "confirmed": true
+  }
+}

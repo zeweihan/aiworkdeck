@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "diagram_type": "relationship",
+  "layout": "graphviz_relation",
+  "title_text": "转义<测试>&\"符号'",
+  "engine": "dot",
+  "direction": "LR",
+  "nodes": [
+    {
+      "id": "a",
+      "title": "甲<公司>&乙",
+      "note": "注释\"含\"符号"
+    },
+    {
+      "id": "b",
+      "title": "丙 & 丁"
+    }
+  ],
+  "edges": [
+    {
+      "from": "a",
+      "to": "b",
+      "label": "关系<A>&<B>"
+    }
+  ]
+}
