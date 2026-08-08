@@ -23,6 +23,7 @@ public class AuthController {
     private final com.checkba.service.account.AwdkLoginService awdkLoginService;
     private final com.checkba.service.sms.SmsAuthService smsAuthService;
     private final com.checkba.service.auth.SecondFactorService secondFactorService;
+    private final com.checkba.service.UserSessionService userSessionService;
     /** 单机免登模式。设备令牌的会话签发路径只在这一模式下存在（见 issueLocalDeviceToken）。 */
     private final boolean localMode;
 
@@ -42,18 +43,19 @@ public class AuthController {
      */
     private static final String AWDK_BRIDGE_RATE_KEY = "::awdk-bridge";
 
-    // 简单的 session 存储（内存中，实际生产环境应使用 Redis 或 JWT）
-    // 并发安全：登录写入与每请求读取/移除高频并发，普通 HashMap 扩容会损坏桶结构
-    // （丢 session 导致误判未登录，甚至 CPU 空转死循环）。
-    private static final Map<String, Long> SESSION_STORE = new java.util.concurrent.ConcurrentHashMap<>();
-
     private static UserService staticUserService;
     private static com.checkba.service.DeviceTokenService staticDeviceTokenService;
     private static com.checkba.service.LocalIdentityService staticLocalIdentityService;
+    private static com.checkba.service.UserSessionService staticUserSessionService;
 
     /** DeviceTokenService 构造时反向注册，静态鉴权入口由此识别设备令牌。 */
     public static void registerDeviceTokenService(com.checkba.service.DeviceTokenService svc) {
         staticDeviceTokenService = svc;
+    }
+
+    /** UserSessionService 构造时反向注册（同上模式），静态鉴权入口由此解析登录会话。 */
+    public static void registerUserSessionService(com.checkba.service.UserSessionService svc) {
+        staticUserSessionService = svc;
     }
 
     /** LocalIdentityService 仅在 local-mode 下反向注册（同上模式）；server 模式恒为 null。 */
@@ -68,6 +70,7 @@ public class AuthController {
                           com.checkba.service.account.AwdkLoginService awdkLoginService,
                           com.checkba.service.sms.SmsAuthService smsAuthService,
                           com.checkba.service.auth.SecondFactorService secondFactorService,
+                          com.checkba.service.UserSessionService userSessionService,
                           @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
                           boolean localMode) {
         this.userService = userService;
@@ -78,6 +81,7 @@ public class AuthController {
         this.awdkLoginService = awdkLoginService;
         this.smsAuthService = smsAuthService;
         this.secondFactorService = secondFactorService;
+        this.userSessionService = userSessionService;
         this.localMode = localMode;
         staticUserService = userService;
     }
@@ -124,8 +128,7 @@ public class AuthController {
             authAbuseGuard.recordRegistration(http.getRemoteAddr());
 
             // 注册成功后自动登录
-            String sessionId = generateSessionId();
-            SESSION_STORE.put(sessionId, user.getId());
+            String sessionId = userSessionService.issue(user.getId());
 
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
@@ -178,8 +181,7 @@ public class AuthController {
             }
             authAbuseGuard.recordLoginSuccess(ip, request.getUsername());
 
-            String sessionId = generateSessionId();
-            SESSION_STORE.put(sessionId, user.getId());
+            String sessionId = userSessionService.issue(user.getId());
 
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
@@ -407,8 +409,7 @@ public class AuthController {
                  user = userService.getUserById(invitation.getRelatedUserId());
             }
 
-            String sessionId = generateSessionId();
-            SESSION_STORE.put(sessionId, user.getId());
+            String sessionId = userSessionService.issue(user.getId());
 
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
@@ -441,8 +442,8 @@ public class AuthController {
     public Map<String, Object> getCurrentUser(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         // 经 getUserIdFromSession 解析：local-mode 免登下无 session 也要能拿到
         // 本机用户（userprofile/侧栏靠它显示身份与 isAdmin 的「系统设置」入口，
-        // 原来直查 SESSION_STORE 恒回「未登录」——app-e2e J2 抓到）。
-        // server 模式行为不变（getUserIdFromSession 落回 SESSION_STORE）。
+        // 原来直查会话表恒回「未登录」——app-e2e J2 抓到）。
+        // server 模式行为不变（getUserIdFromSession 落回 UserSessionService）。
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) {
             Map<String, Object> result = new HashMap<>();
@@ -477,8 +478,8 @@ public class AuthController {
      */
     @PostMapping("/logout")
     public Map<String, Object> logout(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        if (sessionId != null) {
-            SESSION_STORE.remove(sessionId);
+        if (sessionId != null && userSessionService != null) {
+            userSessionService.revoke(sessionId);
         }
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
@@ -502,26 +503,13 @@ public class AuthController {
         if (localIdentity != null && localIdentity.isLocalMode()) {
             return localIdentity.localUserId();
         }
-        if (sessionId == null) return null;
-        return SESSION_STORE.get(sessionId);
-    }
-
-    /**
-     * 会话 ID 必须不可预测：它是全站唯一的持有者凭证。
-     * Math.random() 背后是 48 位 LCG，攻击者用自己登录拿到的一个样本即可反解种子、
-     * 推算出其他人的会话 ID（时间戳部分本就可猜），因此只能用 CSPRNG。
-     */
-    private static final java.security.SecureRandom SECURE_RANDOM = new java.security.SecureRandom();
-
-    private String generateSessionId() {
-        byte[] bytes = new byte[32];
-        SECURE_RANDOM.nextBytes(bytes);
-        return "session_" + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        if (sessionId == null || staticUserSessionService == null) return null;
+        return staticUserSessionService.resolveUserId(sessionId);
     }
 
     public static String getUsernameFromSession(String sessionId) {
         // local-mode 免登：请求可以完全不带 session 头（sessionId == null）。
-        // 此前直接 SESSION_STORE.get(sessionId)，ConcurrentHashMap.get(null) 抛 NPE，
+        // 此前直查内存 SESSION_STORE 时 ConcurrentHashMap.get(null) 抛 NPE，
         // 上传/版本信号整条链 500（app-e2e 抓到）。设备令牌保持原行为（此处历来
         // 解析不出用户名，署名由 CloudConnection 身份链路负责），只补 local-mode
         // 与 null 两个分支。
@@ -531,10 +519,10 @@ public class AuthController {
                 && sessionId.startsWith(com.checkba.service.DeviceTokenService.TOKEN_PREFIX);
         if (localIdentity != null && localIdentity.isLocalMode() && !isDeviceToken) {
             userId = localIdentity.localUserId();
-        } else if (sessionId == null) {
+        } else if (sessionId == null || staticUserSessionService == null) {
             return null;
         } else {
-            userId = SESSION_STORE.get(sessionId);
+            userId = staticUserSessionService.resolveUserId(sessionId);
         }
         if (userId == null) return null;
         if (staticUserService != null) {

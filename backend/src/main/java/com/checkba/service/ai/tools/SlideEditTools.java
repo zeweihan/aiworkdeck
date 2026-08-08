@@ -22,10 +22,16 @@ import java.util.Map;
  * MODIFIED 工具前建立的文档检查点（@ToolMeta fileEffect=MODIFIED）与 doc_undo，
  * 工具描述里对模型明说，避免模型误以为可以走审阅面板撤销。
  *
- * 本文件只实现设计 Phase 1（打开/读取/文本编辑）的 7 个原语：slide_get_overview /
+ * 本文件实现设计 Phase 1（打开/读取/文本编辑，7 个原语：slide_get_overview /
  * slide_get_page / slide_read_notes / slide_write_notes / slide_goto /
- * slide_set_shape_text / slide_replace_text。Phase 2（页与形状结构增删移动）、
- * Phase 3（格式与表格）留待后续排期，不在本文件范围内。
+ * slide_set_shape_text / slide_replace_text）、Phase 2（页与形状结构，8 个原语：
+ * slide_add_page / slide_delete_page / slide_move_page / slide_set_layout /
+ * slide_add_text_box / slide_add_shape / slide_delete_shape / slide_set_shape_geometry）
+ * 与 Phase 3（格式与表格，7 个原语：slide_format_text / slide_format_shape /
+ * slide_add_table / slide_table_read / slide_table_set_cell / slide_table_set_style /
+ * slide_set_hyperlink）。slide_format_shape 与 slide_table_set_style 不在 spec 的
+ * 20 个原语表里，是任务方在实施指令里直接点名要补的两项（形状填充/边框、表头加粗/
+ * 边框/列宽），随 Phase 3 一并落地。
  *
  * 设计依据：docs/superpowers/specs/2026-08-07-impress-bridge-design.md §4（原语表）。
  * 新建独立文件而非塞进 DocumentEditTools：后者的 doc_*+sheet_* 已 70+ 个方法，
@@ -183,6 +189,499 @@ public class SlideEditTools implements AgentToolComponent {
             return editorBridgeService.executeEditorCommand("slide_replace_text", params);
         } catch (Exception e) {
             log.error("Failed to replace slide text", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== Phase 2：页与形状结构 ====================
+
+    @ToolMeta(displayName = "插入幻灯片", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】插入一页新幻灯片。position 指插到第 N 页之后（1 开始，不传则插到末尾，" +
+          "插到末尾时可能连带让另一对既有页的相对顺序也换一次，不丢内容只是顺序细节）；" +
+          "title/body 可选，写在新页的标题/内容占位符；layout（版式常量）是独立参数，与 title/body " +
+          "无关联，谨慎使用（多页文档上给已有页设置版式，真机实测过有清空相邻页占位符内容的风险，" +
+          "改前后建议用 slide_get_overview 核对）。" + NO_REVISION_NOTE)
+    public String slide_add_page(
+            @P("插到第 N 页之后，1 开始；不传则插到末尾") Integer position,
+            @P("版式常量（可选，独立生效，与 title/body 无关；多页文档上谨慎使用，见工具说明）") Integer layout,
+            @P("标题文字（可选，以文本框形式写在新页顶部）") String title,
+            @P("正文文字（可选，以文本框形式写在新页中部）") String body
+    ) {
+        log.info("Tool: slide_add_page called position={}, layout={}", position, layout);
+        try {
+            Map<String, Object> params = new HashMap<>();
+            if (position != null) params.put("position", position);
+            if (layout != null) params.put("layout", layout);
+            if (title != null) params.put("title", title);
+            if (body != null) params.put("body", body);
+            return editorBridgeService.executeEditorCommand("slide_add_page", params);
+        } catch (Exception e) {
+            log.error("Failed to add slide page", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "删除幻灯片", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】删除指定页。演示文稿至少保留一页，删到只剩最后一页时会被拒绝。" + NO_REVISION_NOTE)
+    public String slide_delete_page(
+            @P("要删除的页码，1 开始") Integer slideNumber
+    ) {
+        log.info("Tool: slide_delete_page called slideNumber={}", slideNumber);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            return editorBridgeService.executeEditorCommand("slide_delete_page", params);
+        } catch (Exception e) {
+            log.error("Failed to delete slide page", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "移动幻灯片", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】把指定页移动到新位置（重排顺序）。slideNumber 是移动前的页码，" +
+          "toPosition 是目标位置，两者都是 1 开始。移到末尾时可能连带让另一对既有页的相对顺序也换一次" +
+          "（不丢内容，只是顺序细节；改动大范围排序后建议用 slide_get_overview 核对最终顺序）。" +
+          NO_REVISION_NOTE)
+    public String slide_move_page(
+            @P("要移动的页码（移动前），1 开始") Integer slideNumber,
+            @P("目标位置，1 开始") Integer toPosition
+    ) {
+        log.info("Tool: slide_move_page called slideNumber={}, toPosition={}", slideNumber, toPosition);
+        if (slideNumber == null || toPosition == null) {
+            return "Error: 缺少 slideNumber 或 toPosition 参数（均 1 开始）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            params.put("toPosition", toPosition);
+            return editorBridgeService.executeEditorCommand("slide_move_page", params);
+        } catch (Exception e) {
+            log.error("Failed to move slide page", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置版式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】设置指定页的版式（layout，AutoLayout 常量）和/或母版（masterName，" +
+          "按名字匹配演示文稿现有母版）。两个参数至少给一个。谨慎使用 layout：真机实测过在多页文档上" +
+          "设置某页版式可能连带清空共享同一母版的相邻页占位符内容，改前后建议用 slide_get_overview " +
+          "核对相邻页未受影响，误改用 doc_restore_checkpoint 回滚。" + NO_REVISION_NOTE)
+    public String slide_set_layout(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("版式常量（可选）") Integer layout,
+            @P("母版名（可选，按名字匹配演示文稿现有母版）") String masterName
+    ) {
+        log.info("Tool: slide_set_layout called slideNumber={}, layout={}, masterName={}", slideNumber, layout, masterName);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        if (layout == null && (masterName == null || masterName.isBlank())) {
+            return "Error: layout 与 masterName 至少给一个";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            if (layout != null) params.put("layout", layout);
+            if (masterName != null && !masterName.isBlank()) params.put("masterName", masterName);
+            return editorBridgeService.executeEditorCommand("slide_set_layout", params);
+        } catch (Exception e) {
+            log.error("Failed to set slide layout", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入文本框", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】在指定页插入一个新文本框。位置尺寸单位为磅（pt），不传则用默认值" +
+          "（left/top=100, width=300, height=80）。可选设置字号/加粗/颜色。" + NO_REVISION_NOTE)
+    public String slide_add_text_box(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("文本框文字") String text,
+            @P("左边距（磅，可选，默认 100）") Double left,
+            @P("上边距（磅，可选，默认 100）") Double top,
+            @P("宽度（磅，可选，默认 300）") Double width,
+            @P("高度（磅，可选，默认 80）") Double height,
+            @P("字号（磅，可选）") Double fontSize,
+            @P("是否加粗（可选）") Boolean bold,
+            @P("文字颜色，形如 #RRGGBB（可选）") String color
+    ) {
+        log.info("Tool: slide_add_text_box called slideNumber={}", slideNumber);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            params.put("text", text != null ? text : "");
+            if (left != null) params.put("left", left);
+            if (top != null) params.put("top", top);
+            if (width != null) params.put("width", width);
+            if (height != null) params.put("height", height);
+            if (fontSize != null) params.put("fontSize", fontSize);
+            if (bold != null) params.put("bold", bold);
+            if (color != null) params.put("color", color);
+            return editorBridgeService.executeEditorCommand("slide_add_text_box", params);
+        } catch (Exception e) {
+            log.error("Failed to add text box", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入形状", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】在指定页插入一个几何形状：rectangle（矩形）/ ellipse（椭圆）/ " +
+          "triangle（三角形）/ line（直线）。位置尺寸单位为磅（pt），不传则用默认值" +
+          "（left/top=100, width=200, height=150）。可选填充色与形状内文字。" + NO_REVISION_NOTE)
+    public String slide_add_shape(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("形状类型：rectangle / ellipse / triangle / line") String shapeType,
+            @P("左边距（磅，可选，默认 100）") Double left,
+            @P("上边距（磅，可选，默认 100）") Double top,
+            @P("宽度（磅，可选，默认 200）") Double width,
+            @P("高度（磅，可选，默认 150）") Double height,
+            @P("形状内文字（可选）") String text,
+            @P("填充色，形如 #RRGGBB（可选）") String fillColor
+    ) {
+        log.info("Tool: slide_add_shape called slideNumber={}, shapeType={}", slideNumber, shapeType);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        if (shapeType == null || shapeType.isBlank()) {
+            return "Error: 缺少 shapeType 参数（rectangle/ellipse/triangle/line）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            params.put("shapeType", shapeType);
+            if (left != null) params.put("left", left);
+            if (top != null) params.put("top", top);
+            if (width != null) params.put("width", width);
+            if (height != null) params.put("height", height);
+            if (text != null) params.put("text", text);
+            if (fillColor != null) params.put("fillColor", fillColor);
+            return editorBridgeService.executeEditorCommand("slide_add_shape", params);
+        } catch (Exception e) {
+            log.error("Failed to add shape", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "删除形状", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】按 shapeName 精确删除指定页的一个形状（来自 slide_get_page 返回的 shapeName）。" +
+          NO_REVISION_NOTE)
+    public String slide_delete_shape(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("要删除的形状名，来自 slide_get_page 返回的 shapeName") String shapeName
+    ) {
+        log.info("Tool: slide_delete_shape called slideNumber={}, shapeName={}", slideNumber, shapeName);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        if (shapeName == null || shapeName.isBlank()) {
+            return "Error: 缺少 shapeName 参数（先用 slide_get_page 查看该页形状名）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            params.put("shapeName", shapeName);
+            return editorBridgeService.executeEditorCommand("slide_delete_shape", params);
+        } catch (Exception e) {
+            log.error("Failed to delete shape", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "调整形状位置尺寸", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】移动和/或改变指定形状的位置尺寸（磅）。left/top/width/height 均可选，" +
+          "不传的保留原值。用于逐步调整排版；返回值带 before/after 两组数值供核对实际生效结果。" +
+          NO_REVISION_NOTE)
+    public String slide_set_shape_geometry(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("形状名，来自 slide_get_page 返回的 shapeName") String shapeName,
+            @P("左边距（磅，可选）") Double left,
+            @P("上边距（磅，可选）") Double top,
+            @P("宽度（磅，可选）") Double width,
+            @P("高度（磅，可选）") Double height
+    ) {
+        log.info("Tool: slide_set_shape_geometry called slideNumber={}, shapeName={}", slideNumber, shapeName);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        if (shapeName == null || shapeName.isBlank()) {
+            return "Error: 缺少 shapeName 参数（先用 slide_get_page 查看该页形状名）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            params.put("shapeName", shapeName);
+            if (left != null) params.put("left", left);
+            if (top != null) params.put("top", top);
+            if (width != null) params.put("width", width);
+            if (height != null) params.put("height", height);
+            return editorBridgeService.executeEditorCommand("slide_set_shape_geometry", params);
+        } catch (Exception e) {
+            log.error("Failed to set shape geometry", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    // ==================== Phase 3：格式与表格 ====================
+
+    @ToolMeta(displayName = "设置文字格式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】设置指定形状文字的字体/字号/粗斜体/下划线/删除线/颜色/段落对齐。不传 anchorText 时" +
+          "格式化整个形状的文字；传了 anchorText 则只格式化形状文字里第一处包含该子串的文字。" + NO_REVISION_NOTE)
+    public String slide_format_text(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("形状名，来自 slide_get_page 返回的 shapeName") String shapeName,
+            @P("可选：只格式化形状文字中包含该子串的第一处；不传则格式化整个形状文字") String anchorText,
+            @P("字体名（可选）") String fontName,
+            @P("字号，磅（可选）") Double fontSize,
+            @P("是否加粗（可选）") Boolean bold,
+            @P("是否斜体（可选）") Boolean italic,
+            @P("下划线样式：none/single/double/dotted/wave（可选）") String underline,
+            @P("是否加删除线（可选）") Boolean strikethrough,
+            @P("文字颜色，形如 #RRGGBB 或 auto（可选）") String color,
+            @P("段落对齐：left/right/center/justify（可选）") String alignment
+    ) {
+        log.info("Tool: slide_format_text called slideNumber={}, shapeName={}", slideNumber, shapeName);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        if (shapeName == null || shapeName.isBlank()) {
+            return "Error: 缺少 shapeName 参数（先用 slide_get_page 查看该页形状名）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            params.put("shapeName", shapeName);
+            if (anchorText != null && !anchorText.isEmpty()) params.put("anchorText", anchorText);
+            if (fontName != null) params.put("fontName", fontName);
+            if (fontSize != null) params.put("fontSize", fontSize);
+            if (bold != null) params.put("bold", bold);
+            if (italic != null) params.put("italic", italic);
+            if (underline != null) params.put("underline", underline);
+            if (strikethrough != null) params.put("strikethrough", strikethrough);
+            if (color != null) params.put("color", color);
+            if (alignment != null) params.put("alignment", alignment);
+            return editorBridgeService.executeEditorCommand("slide_format_text", params);
+        } catch (Exception e) {
+            log.error("Failed to format slide text", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置形状样式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】设置指定形状的填充色/边框颜色与粗细/透明度。noFill/noLine 用于取消填充/边框。" +
+          "参数至少给一个。" + NO_REVISION_NOTE)
+    public String slide_format_shape(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("形状名，来自 slide_get_page 返回的 shapeName") String shapeName,
+            @P("填充色，形如 #RRGGBB（可选）") String fillColor,
+            @P("取消填充（可选，true 时忽略 fillColor）") Boolean noFill,
+            @P("边框颜色，形如 #RRGGBB（可选）") String lineColor,
+            @P("取消边框（可选，true 时忽略 lineColor/lineWidthPt）") Boolean noLine,
+            @P("边框粗细，磅（可选）") Double lineWidthPt,
+            @P("填充透明度，0-100（可选，0=不透明）") Integer fillTransparency
+    ) {
+        log.info("Tool: slide_format_shape called slideNumber={}, shapeName={}", slideNumber, shapeName);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        if (shapeName == null || shapeName.isBlank()) {
+            return "Error: 缺少 shapeName 参数（先用 slide_get_page 查看该页形状名）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            params.put("shapeName", shapeName);
+            if (fillColor != null) params.put("fillColor", fillColor);
+            if (noFill != null) params.put("noFill", noFill);
+            if (lineColor != null) params.put("lineColor", lineColor);
+            if (noLine != null) params.put("noLine", noLine);
+            if (lineWidthPt != null) params.put("lineWidthPt", lineWidthPt);
+            if (fillTransparency != null) params.put("fillTransparency", fillTransparency);
+            return editorBridgeService.executeEditorCommand("slide_format_shape", params);
+        } catch (Exception e) {
+            log.error("Failed to format shape", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "插入表格", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】在指定页插入一张表格。给 rowsJson（JSON 二维字符串数组，如 " +
+          "[[\"项目\",\"金额\"],[\"咨询费\",\"10000\"]]）时按其内容与形状建表并写满；不给 rowsJson 时按 " +
+          "rows/cols（默认各 2）建一张空表。位置尺寸单位为磅，不传则用默认值（left/top=100, width=400, height=200）。" +
+          NO_REVISION_NOTE)
+    public String slide_add_table(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("行数（可选，默认 2；给了 rowsJson 时以 rowsJson 行数为准）") Integer rows,
+            @P("列数（可选，默认 2；给了 rowsJson 时以 rowsJson 列数为准）") Integer cols,
+            @P("表格内容，JSON 二维字符串数组（可选，给了则按其内容建表并写满，忽略 rows/cols）") String rowsJson,
+            @P("左边距（磅，可选，默认 100）") Double left,
+            @P("上边距（磅，可选，默认 100）") Double top,
+            @P("宽度（磅，可选，默认 400）") Double width,
+            @P("高度（磅，可选，默认 200）") Double height
+    ) {
+        log.info("Tool: slide_add_table called slideNumber={}", slideNumber);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            if (rowsJson != null && !rowsJson.isBlank()) {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                java.util.List<java.util.List<String>> data = mapper.readValue(
+                        rowsJson, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<java.util.List<String>>>() {});
+                if (data.isEmpty() || data.get(0).isEmpty()) {
+                    return "Error: rowsJson 不能为空表";
+                }
+                params.put("rowsJson", data);
+            } else {
+                if (rows != null) params.put("rows", rows);
+                if (cols != null) params.put("cols", cols);
+            }
+            if (left != null) params.put("left", left);
+            if (top != null) params.put("top", top);
+            if (width != null) params.put("width", width);
+            if (height != null) params.put("height", height);
+            return editorBridgeService.executeEditorCommand("slide_add_table", params);
+        } catch (com.fasterxml.jackson.core.JacksonException je) {
+            return "Error: rowsJson 不是合法的 JSON 二维数组: " + je.getOriginalMessage();
+        } catch (Exception e) {
+            log.error("Failed to add table", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @Tool("【幻灯片·看】把指定页一张表格形状读成二维数组（行列数 + 每格文本）。不传 shapeName 时要求该页" +
+          "只有一张表格（否则报错要求指定 shapeName）；改表前建议先用本工具看清现状。row/col 均 0 开始。")
+    public String slide_table_read(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("表格形状名（可选；不传则要求该页只有一张表格）") String shapeName,
+            @P("最多读多少行，默认 50") Integer maxRows,
+            @P("最多读多少列，默认 20") Integer maxCols
+    ) {
+        log.info("Tool: slide_table_read called slideNumber={}, shapeName={}", slideNumber, shapeName);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            if (shapeName != null && !shapeName.isBlank()) params.put("shapeName", shapeName);
+            if (maxRows != null) params.put("maxRows", maxRows);
+            if (maxCols != null) params.put("maxCols", maxCols);
+            return editorBridgeService.executeEditorCommand("slide_table_read", params);
+        } catch (Exception e) {
+            log.error("Failed to read slide table", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "写表格单元格", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】改指定页一张表格形状的一格文本。不传 shapeName 时要求该页只有一张表格。" +
+          "row/col 均 0 开始（与 slide_table_read 的坐标一致）。" + NO_REVISION_NOTE)
+    public String slide_table_set_cell(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("表格形状名（可选；不传则要求该页只有一张表格）") String shapeName,
+            @P("行号，0 开始") Integer row,
+            @P("列号，0 开始") Integer col,
+            @P("新文本") String text
+    ) {
+        log.info("Tool: slide_table_set_cell called slideNumber={}, row={}, col={}", slideNumber, row, col);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        if (row == null || col == null) {
+            return "Error: 缺少 row 或 col 参数（均 0 开始）";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            if (shapeName != null && !shapeName.isBlank()) params.put("shapeName", shapeName);
+            params.put("row", row);
+            params.put("col", col);
+            params.put("text", text != null ? text : "");
+            return editorBridgeService.executeEditorCommand("slide_table_set_cell", params);
+        } catch (Exception e) {
+            log.error("Failed to set slide table cell", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置表格样式", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】给指定页一张表格形状设置整体样式：表头（第一行）加粗、边框颜色与粗细、各列宽度。" +
+          "参数至少给一个；不传 shapeName 时要求该页只有一张表格。Impress 表格的 UNO API 比 Word/Calc 有限，" +
+          "边框与列宽这两项若引擎不支持会在返回值里明确说明未生效，不会假装成功。" + NO_REVISION_NOTE)
+    public String slide_table_set_style(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("表格形状名（可选；不传则要求该页只有一张表格）") String shapeName,
+            @P("表头（第一行）是否加粗（可选）") Boolean headerBold,
+            @P("边框粗细，磅（可选，需与 borderColor 至少给一个生效）") Double borderWidthPt,
+            @P("边框颜色，形如 #RRGGBB（可选，不传默认黑色）") String borderColor,
+            @P("各列宽度，JSON 数字数组（磅），如 [120,80,80]（可选，按列序对应，超出实际列数的忽略）") String columnWidthsJson
+    ) {
+        log.info("Tool: slide_table_set_style called slideNumber={}, shapeName={}", slideNumber, shapeName);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        boolean hasStyleParam = headerBold != null || borderWidthPt != null || borderColor != null
+                || (columnWidthsJson != null && !columnWidthsJson.isBlank());
+        if (!hasStyleParam) {
+            return "Error: headerBold / borderWidthPt+borderColor / columnWidthsJson 至少给一个";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            if (shapeName != null && !shapeName.isBlank()) params.put("shapeName", shapeName);
+            if (headerBold != null) params.put("headerBold", headerBold);
+            if (borderWidthPt != null) params.put("borderWidthPt", borderWidthPt);
+            if (borderColor != null) params.put("borderColor", borderColor);
+            if (columnWidthsJson != null && !columnWidthsJson.isBlank()) {
+                com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                java.util.List<Double> widths = mapper.readValue(
+                        columnWidthsJson, new com.fasterxml.jackson.core.type.TypeReference<java.util.List<Double>>() {});
+                params.put("columnWidthsPt", widths);
+            }
+            return editorBridgeService.executeEditorCommand("slide_table_set_style", params);
+        } catch (com.fasterxml.jackson.core.JacksonException je) {
+            return "Error: columnWidthsJson 不是合法的 JSON 数字数组: " + je.getOriginalMessage();
+        } catch (Exception e) {
+            log.error("Failed to set slide table style", e);
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    @ToolMeta(displayName = "设置超链接", category = "document", fileEffect = "MODIFIED")
+    @Tool("【幻灯片·写】在指定页查找文字并给它加超链接（跳转到网页，不支持表格单元格内文字）。" +
+          "searchText 只在该页非表格形状的文字里查找，命中第一处即生效。url 仅支持 http/https。" +
+          "优先只对命中的文字生效（精确到字符）；引擎不支持字符级超链接时会自动退化为整个形状可点" +
+          "（点哪里都跳转），返回值 via 字段区分两种情形，退化时 note 字段会说明。" + NO_REVISION_NOTE)
+    public String slide_set_hyperlink(
+            @P("页码，1 开始") Integer slideNumber,
+            @P("要加超链接的文字") String searchText,
+            @P("链接地址，仅支持 http/https") String url
+    ) {
+        log.info("Tool: slide_set_hyperlink called slideNumber={}, searchText={}", slideNumber, searchText);
+        if (slideNumber == null) {
+            return "Error: 缺少 slideNumber 参数（1 开始）";
+        }
+        if (searchText == null || searchText.isEmpty()) {
+            return "Error: 缺少 searchText 参数";
+        }
+        if (url == null || url.isBlank()) {
+            return "Error: 缺少 url 参数";
+        }
+        try {
+            Map<String, Object> params = new HashMap<>();
+            params.put("slideNumber", slideNumber);
+            params.put("searchText", searchText);
+            params.put("url", url);
+            return editorBridgeService.executeEditorCommand("slide_set_hyperlink", params);
+        } catch (Exception e) {
+            log.error("Failed to set slide hyperlink", e);
             return "Error: " + e.getMessage();
         }
     }

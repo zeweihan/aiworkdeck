@@ -29,6 +29,15 @@ spring:
         types:
           print:
             banner: false
+  # 邮件通道（只被「优化者」用来给维护者发信，产品功能不发任何邮件）。
+  # 刻意整段留空：配了 spring.mail.host 才会有 JavaMailSender bean，没配等于这条出口关闭。
+  # 维护者启用时用环境变量注入，别把授权码写进入库文件：
+  #   SPRING_MAIL_HOST=smtp.qq.com SPRING_MAIL_PORT=465
+  #   SPRING_MAIL_USERNAME=you@qq.com SPRING_MAIL_PASSWORD=<授权码>
+  #   SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH=true
+  #   SPRING_MAIL_PROPERTIES_MAIL_SMTP_SSL_ENABLE=true   # 465 直连 SSL
+  #   （587 的 STARTTLS 改用 ..._MAIL_SMTP_STARTTLS_ENABLE=true）
+  #   OPTIMIZER_MAIL_TO=you@example.com OPTIMIZER_MAIL_FROM=you@qq.com
   servlet:
     multipart:
       enabled: true
@@ -250,6 +259,75 @@ telemetry:
   app-version: ${AWD_APP_VERSION:dev}
   # 事项分类兜底用的平价模型
   classifier-model: deepseek/deepseek-v4-flash
+
+# 用户反馈（桌面端右下角浮窗）。设计见 docs/FEEDBACK_OPTIMIZER_DESIGN.md
+feedback:
+  # 附在反馈里的后端日志尾巴取自这些文件（逗号分隔，取第一个存在且非空的）。
+  # 留空 = 用默认：~/.aiworkdeck/logs/backend.log（打包态）与 app.log（dev 态）
+  log-files: ""
+  # 上传到云端收件箱：本机先落库，再异步补传（断网/关机不丢，节奏同 telemetry）。
+  # 反馈是用户主动提交给我们的内容，默认开；不想外发把 enabled 置 false 即可，
+  # 本机后台仍然看得到自己报过什么。
+  upload:
+    enabled: ${FEEDBACK_UPLOAD_ENABLED:true}
+    url: ${FEEDBACK_UPLOAD_URL:https://addin.aiworkdeck.com/api/feedback/ingest}
+  # 云端收件箱（只在承载收件箱的那个实例上开；桌面版恒为 false）
+  ingest:
+    enabled: ${FEEDBACK_INGEST_ENABLED:false}
+    per-install-daily: 20
+    global-daily: 2000
+    max-attachment-bytes: 5242880
+    max-attachments: 4
+  # 优化者取件/回执的共享密钥（收件箱侧）。**留空 = 取件与回执整组 403**，
+  # 不留「未配置即放行」的逃生门。与优化者侧 optimizer.remote.token 必须一致。
+  optimizer-token: ${FEEDBACK_OPTIMIZER_TOKEN:}
+  # 语音转写（可选）。产品没捆绑离线 ASR，这里只留一个 OpenAI 兼容接口位：
+  # 配了就转写，没配语音仍会作为附件留存，且分诊会强制走「转人」出口。
+  transcription:
+    enabled: ${FEEDBACK_ASR_ENABLED:false}
+    base-url: ${FEEDBACK_ASR_BASE_URL:}
+    api-key: ${FEEDBACK_ASR_KEY:}
+    model: ${FEEDBACK_ASR_MODEL:whisper-1}
+
+# 优化者（Optimizer Agent）：按天读新反馈，确认是 bug 就开 PR，其余发邮件问人。
+# **默认整体关闭**——这是维护者侧能力（要仓库工作副本 + gh 登录 + 编码 Agent CLI +
+# 收件箱），装在用户机器上的桌面版绝不该自己跑起来开 PR。
+optimizer:
+  enabled: ${OPTIMIZER_ENABLED:false}
+  # Spring cron（6 段）。默认每天 09:00 一轮；改成每周一次就写 "0 0 9 * * MON"
+  cron: ${OPTIMIZER_CRON:0 0 9 * * *}
+  batch-size: 5
+  max-attempts: 3
+  # 演练：照常分诊写库，但不开 PR、不发邮件、不改状态
+  dry-run: ${OPTIMIZER_DRY_RUN:false}
+  # 分诊模型；留空继承 ChatModelFactory 的默认模型
+  model: ${OPTIMIZER_MODEL:}
+  # 判成 bug 且置信度不低于此值才去改代码，否则降级发邮件问人
+  min-confidence: 0.7
+  # 反馈来源：local（读本进程的库）| remote（读云端收件箱）。
+  # 生产形态是 remote：收件箱在云上收各安装的反馈，优化者跑在维护者自己的机器上——
+  # 一个能写代码、能推分支的 Agent 不该和生产站同机，而输入正是用户可控的文本。
+  source: ${OPTIMIZER_SOURCE:local}
+  remote:
+    base-url: ${OPTIMIZER_REMOTE_URL:}
+    token: ${OPTIMIZER_REMOTE_TOKEN:}
+  repo:
+    # 仓库工作副本的绝对路径（维护者机器上的一份 clone）
+    path: ${OPTIMIZER_REPO_PATH:}
+    base-branch: ${OPTIMIZER_BASE_BRANCH:master}
+    remote: origin
+    branch-prefix: optimizer/feedback-
+  agent:
+    # 编码 Agent 命令行；{prompt} 换成任务书正文，{promptFile} 换成任务书文件路径
+    command: [ "claude", "-p", "{prompt}", "--permission-mode", "acceptEdits" ]
+    timeout-seconds: 1800
+  mail:
+    enabled: true
+    # 收件人（维护者）。邮件通道本身用 spring.mail.*（见下），没配 host 就没有
+    # JavaMailSender，这条出口会明确报「不可用」而不是悄悄丢反馈。
+    to: ${OPTIMIZER_MAIL_TO:}
+    from: ${OPTIMIZER_MAIL_FROM:}
+    subject-prefix: "[AI Workdeck 优化者]"
 
 # 文件存储配置
 storage:

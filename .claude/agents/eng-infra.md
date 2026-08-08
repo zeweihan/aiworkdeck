@@ -32,6 +32,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 | `npm run check:emits` | frontend/ | @event 绑定 vs $emit 声明静态护栏（scripts/check-emit-bindings.mjs） |
 | `npm run test:lowa-e2e` | frontend/ | LOWA 真引擎+键盘链路（tests/lowa-e2e/run.mjs，puppeteer-core 无头，基线 19 组 169 断言；不经应用页面，天然无登录前置） |
 | `npm run test:app-e2e` | frontend/ | 全应用真人模拟（tests/app-e2e/run.mjs；PR-A 去登录后 J1=首启解锁门（试用码），其余旅程 local-mode 免登直达，不再注册 qa_bot_*；需 dev:h5 **5174** + local-mode 后端（默认 9696，冷启动可用新 jar 9797 顶班 + 隔离 user.home/H2/cwd，APP_E2E_JAR 供 J11）。**发版前必跑** |
+| `npm run test:feedback-e2e` | frontend/ | 反馈浮窗全链路（dev Electron + CDP：真走主进程框选截图、Chromium 假麦克风录音、提交后从 API 回读附件字节）。需 dev:h5 + local-mode 后端，同 desktop-e2e 的端口约定 |
 | `npm run test:desktop-e2e` | frontend/ | 桌面保存链路（弹 dev Electron 窗口，webview 真 LOWA 插文本→保存→API 下载验内容；PR-A 后免登直达，provision 会自动用试用码解锁+置向导）。`APP_E2E_BACKEND` 的端口会经 `CHECKBA_BACKEND_PORT` 传给 Electron 壳——渲染层的基址是壳注入的，只改 `VITE_API_BASE_URL` 对它无效 |
 
 每日全量 QA：`scripts/qa-nightly.sh`（crontab，跑在 ~/aiworkdeck-qa/repo 专用克隆，报告 ~/aiworkdeck-qa/reports/，失败 gh 开 issue 标签 qa-nightly，引擎取自已安装 app）。
@@ -62,6 +63,15 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 ## 部署与其它
 
 - `deploy/web/` — Web 服务器版（瘦客户端 Phase A2/鸿蒙路线）：nginx.conf.example、能力探针 probe/、后端 prod 只听 127.0.0.1。
+- `deploy/cloud/` — 官方托管的插件云后端（addin.aiworkdeck.com）：nginx server 块、systemd unit、env 模板、部署实录。
+- **`deploy/publish-lowa-engine.sh` — 换 LOWA 引擎必须走它，别手工传**（issue #310）。
+  `check-build <目录>` 只在本地验产物；`publish <目录> <版本号>` 发到两台机；`verify <版本号>` 切指针前必跑。
+  它把三件必须同时做对的事绑在一起：按形态判定该压不该压、**两台机都同步**（新加坡是本地镜像直出、
+  不回源北京，而 CI 从境外解析走新加坡——只传北京会让境内 curl 全 200 而 CI 报 404）、
+  以及内容级终验。校验不走「自己算的哈希对自己」这种闭环：wasm 断言解压后是 `\0asm`，
+  data 断言解压后字节数等于 metadata 里的 `remote_package_size`（emscripten 自带真值，
+  下游 fetch-lowa-assets.js 对 data 只查「长度 ≥1024」，兜不住双重压缩）。
+  落盘先落 web root 之外的暂存区、校验通过再 rename 换入，旧版本自动备份到 `/root/lowa-engine-backup/`。
 - 官网部署在独立仓库（website/，gitignore 掉），服务器 ssh -i ~/.ssh/aiworkdeck_ops root@47.92.111.102；ECS 8.137.95.63(~/.ssh/checkba_ecs)。
 - 模型不进包：mineru/kokoro 模型首启在"组件管理"下载（下载进度按字节级整体，PR#142）。
 

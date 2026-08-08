@@ -94,6 +94,9 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/service/account/AwdkLoginService.java` — `POST /api/auth/awdk-login`（匿名端点，AuthController）：awdk_ Key 调官网 `/api/account/me` 实时校验 → `account_binding` 映射（键是官网稳定 `accountId`，官网侧已实施并进了权威契约与 contract-check）→ 首登 `UserService.registerExternal` 建无密码用户（`awd_` 前缀）→ `DeviceTokenService.issue` 签发 awdt_ → **顺手为该用户取一把 per-user 平台 AI key**（`PlatformAiKeyService.tryProvision`，失败绝不拖垮桥接）。开关 `security.awdk-login-enabled` 默认 false。
 - `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
 - `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
+- `service/UserSessionService.java` + `model/entity/UserSession.java` — 浏览器登录会话 DB 落库（2026-08-07，
+  替代 AuthController 进程内 SESSION_STORE）：哈希落库、7 天滑动过期、lastUsedAt 写回节流（1 分钟）、
+  每日定时清理；重启不掉线。awdt_ 设备令牌与 local-mode 免登不走这条路，行为一字未变。
 
 **per-user 平台 AI key（2026-08-07，多租户计费隔离）**
 - 设计文档 `docs/superpowers/specs/2026-08-07-per-user-platform-ai-key.md`（含三方案的安全边界比较与已确认决策）。
@@ -171,6 +174,9 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `ai.account.base-url`（`application.yml:97-98`，默认 `https://www.aiworkdeck.com`；**强制 https**，回环 http 例外供本地联调）。
 - `security.license.dir`（默认 `${user.home}/.aiworkdeck`）——license/account/entitlements/platform-ai-key/storage-location 五个状态文件都落这里。
 - `security.registration-mode`（默认 open）与 `security.awdk-login-enabled`(默认 false)——两者都只影响 server 模式；官方托管的插件云后端应配 closed + true。
+- **官方托管实例已上线**（2026-08-07）：addin.aiworkdeck.com，北京 ECS 与官网共机；专用 profile
+  `application-cloud.yml`（PG + pgvector、RemoteIpValve——不开的话反代后按 IP 的失败锁定退化成全站一把锁）；
+  部署材料与实录见 `deploy/cloud/README.md`。
 - `security.platform-key-secret`（`AWD_PLATFORM_KEY_SECRET`，默认空）——per-user 平台密钥的落库加密密钥。
   **`awdk-login-enabled=true` 时必配，缺失直接拒绝启动**（见地雷 17）。
 - `sms.enabled`（`SMS_AUTH_ENABLED`，默认 false）——大陆短信通道开关，仅 server 模式生效；官方托管的插件云后端应配 true + 注入 AK/SK 环境变量。

@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  优化者常驻进程（macOS launchd）。装法与搬到 Mac mini 的做法见同目录 README.md。
+
+  路径里的用户名按自己的机器改；搬机器时这个文件是要跟着走的三件之一
+  （backend.jar / optimizer.env / 本 plist）。
+-->
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>com.aiworkdeck.optimizer</string>
+
+    <key>ProgramArguments</key>
+    <array>
+      <string>/bin/bash</string>
+      <string>-lc</string>
+      <string>exec "$HOME/aiworkdeck-optimizer/deploy/optimizer/run-optimizer.sh"</string>
+    </array>
+
+    <!-- 开机自启 + 崩了拉起。cron 在进程内部（optimizer.cron），
+         所以这里要的是常驻而不是定时唤起。 -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- 拉起太频繁多半是配置错了，给 60s 冷却免得刷屏 -->
+    <key>ThrottleInterval</key>
+    <integer>60</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/zewei/aiworkdeck-optimizer-run/optimizer.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/zewei/aiworkdeck-optimizer-run/optimizer.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/zewei/aiworkdeck-optimizer-run</string>
+  </dict>
+</plist>

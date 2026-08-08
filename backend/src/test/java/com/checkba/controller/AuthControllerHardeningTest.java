@@ -27,6 +27,12 @@ class AuthControllerHardeningTest {
         return new AuthAbuseGuard(false, registrationMode);
     }
 
+    /** DB 会话服务（repository 打桩）：注册/登录成功路径要经它签发 sessionId。 */
+    private static com.checkba.service.UserSessionService sessions() {
+        return new com.checkba.service.UserSessionService(
+                mock(com.checkba.repository.UserSessionRepository.class));
+    }
+
     private static MockHttpServletRequest http() {
         MockHttpServletRequest request = new MockHttpServletRequest();
         request.setRemoteAddr("9.9.9.9");
@@ -54,7 +60,7 @@ class AuthControllerHardeningTest {
     void closedRegistrationShortCircuits() {
         UserService userService = mock(UserService.class);
         AuthController controller = new AuthController(
-                userService, null, null, null, serverGuard("closed"), null, null, null, false);
+                userService, null, null, null, serverGuard("closed"), null, null, null, sessions(), false);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -70,7 +76,7 @@ class AuthControllerHardeningTest {
         when(userService.register(anyString(), anyString(), anyString()))
                 .thenReturn(user(1L, "alice"));
         AuthController controller = new AuthController(
-                userService, null, null, null, serverGuard("open"), null, null, null, false);
+                userService, null, null, null, serverGuard("open"), null, null, null, sessions(), false);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -85,7 +91,7 @@ class AuthControllerHardeningTest {
                 .thenReturn(user(1L, "alice"));
         AuthAbuseGuard localGuard = new AuthAbuseGuard(true, "closed");
         AuthController controller = new AuthController(
-                userService, null, null, null, localGuard, null, null, null, false);
+                userService, null, null, null, localGuard, null, null, null, sessions(), false);
 
         Map<String, Object> result = controller.register(registerRequest(), http());
 
@@ -99,7 +105,7 @@ class AuthControllerHardeningTest {
         when(userService.login(anyString(), anyString()))
                 .thenThrow(new IllegalArgumentException("用户名或密码错误"));
         AuthController controller = new AuthController(
-                userService, null, null, null, serverGuard("open"), null, null, null, false);
+                userService, null, null, null, serverGuard("open"), null, null, null, sessions(), false);
 
         AuthController.LoginRequest request = new AuthController.LoginRequest();
         request.setUsername("alice");
@@ -122,7 +128,7 @@ class AuthControllerHardeningTest {
         when(awdkLoginService.login(anyString()))
                 .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei"));
         AuthController controller = new AuthController(
-                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, false);
+                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, sessions(), false);
 
         Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
 
@@ -141,7 +147,7 @@ class AuthControllerHardeningTest {
         when(awdkLoginService.login(any()))
                 .thenThrow(new IllegalArgumentException("本服务器未开启账户桥接功能"));
         AuthController controller = new AuthController(
-                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, false);
+                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, sessions(), false);
 
         Map<String, Object> result = controller.awdkLogin(Map.of("key", "awdk_abc"), http());
 
@@ -160,7 +166,7 @@ class AuthControllerHardeningTest {
         when(awdkLoginService.login(anyString())).thenThrow(new AccountException(
                 AccountException.Kind.UNAUTHORIZED, "账户 Key 无效或已被撤销，请到官网账户页重新生成"));
         AuthController controller = new AuthController(
-                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, false);
+                null, null, null, null, serverGuard("open"), awdkLoginService, null, null, sessions(), false);
 
         for (int i = 0; i < 5; i++) {
             assertEquals(1, controller.awdkLogin(Map.of("key", "awdk_bad"), http()).get("code"));
