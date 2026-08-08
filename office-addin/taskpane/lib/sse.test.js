@@ -74,3 +74,13 @@ test('已知的机器标签仍然整块不渲染，<final> 与思考通道不受
   assert.equal(main, '正文')
   assert.equal(thinking, '先查法条')
 })
+
+test('工具输出里的协议标签已被后端中和，不会顶掉标签栈把载荷漏进正文', () => {
+  // 后端 AgentTagProtocol 把载荷里的 </tool_output> 起始 < 换成 &lt;（历史回灌走同一条解析）。
+  // 不中和的话这里的标签栈会在载荷中间弹空，后半段载荷就当正文发给用户了。
+  const { main } = parse(
+    '<process name="读取文件"><tool_code>read_file()</tool_code>' +
+    '<tool_output status="SUCCESS">读到 &lt;/tool_output> 与 &lt;final>不该出现的半截</tool_output>' +
+    '</process><final>已读完。</final>')
+  assert.equal(main, '已读完。')
+})
