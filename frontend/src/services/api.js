@@ -1660,6 +1660,11 @@ export function submitFeedback(payload, files = []) {
   })
 }
 
+/** 我的反馈（浮窗「我的反馈」视图用）：只回当前用户自己提交过的行，不需要管理员。 */
+export function getMyFeedback() {
+  return request({ url: '/api/feedback/mine', method: 'GET' })
+}
+
 /** 反馈列表（管理员）。 */
 export function getFeedbackList(status = '', limit = 50) {
   const q = status ? `?status=${encodeURIComponent(status)}&limit=${limit}` : `?limit=${limit}`
@@ -2482,6 +2487,20 @@ export function restyleLitigationDiagram(projectId, folderId, mode) {
 export function getLitigationKickoffPrompt(projectId, payload) {
   return request({
     url: `/api/litigation-visual/projects/${projectId}/kickoff`,
+    method: 'POST',
+    data: payload,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+/**
+ * 保存内嵌 draw.io 里改完的图。后端一次同步三份产物（.drawio / .svg / .png）——
+ * 只写回 .drawio 的话，用户改完图去插图，插进文书的还是旧的那张。
+ * @param payload {{xml:string, svg:string}} svg 留空则只存 XML
+ */
+export function saveDrawioDiagram(projectId, fileId, payload) {
+  return request({
+    url: `/api/litigation-visual/projects/${projectId}/drawio/${fileId}`,
     method: 'POST',
     data: payload,
     header: { 'Content-Type': 'application/json' }

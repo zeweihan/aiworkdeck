@@ -278,6 +278,8 @@ export const fileOpenTabsMethods = {
         'txt', 'md', 'markdown', 'json', 'xml', 'html', 'css', 'js', 'java', 'py', 'sh', 'sql', 'log',
         // 压缩包（FilePreview 条目预览 + 解压）
         'zip', 'rar', '7z',
+        // 图形源文件（内嵌 draw.io 编辑器）
+        'drawio',
         // 尽调清单
         'dd'
       ]
@@ -301,12 +303,13 @@ export const fileOpenTabsMethods = {
       ]
       if (mediaTypes.includes(type)) return false
 
-      // 1b. 外部工具的源文件：交给别的软件打开，不是我们的编辑器能接的。
-      // 诉讼可视化一次出五种格式，其中 .drawio（draw.io/ProcessOn 的 XML）与
-      // .vsdx（Visio/WPS 流程图）都会带 wpsFileId 登记进文件树——不在这里挡掉的话，
-      // 下面那条 wpsFileId 兜底分支会判它们「可编辑」，于是 LOWA（引擎实测仅
-      // Writer + Calc）用 Writer 把 XML/二进制当文本导入，满屏乱码。
-      // 与上面 PDF 那条注释是同一类事故，只是换了扩展名。
+      // 1b. 非 LOWA 能接的图形源文件。不在这里挡掉的话，下面那条 wpsFileId 兜底
+      // 分支会判它们「可编辑」，于是 LOWA（引擎实测仅 Writer + Calc）用 Writer 把
+      // XML/二进制当文本导入，满屏乱码。与上面 PDF 那条注释是同一类事故。
+      //
+      // .drawio 现在有自己的归宿（内嵌 draw.io，见 isDrawioFile / DrawioEditor.vue），
+      // 但同样不能进 LOWA，所以仍留在这份名单里。.vsdx/.vsd 没有内嵌编辑器，
+      // 走 FilePreview 的下载兜底。
       const externalSourceTypes = ['drawio', 'vsdx', 'vsd']
       if (externalSourceTypes.includes(type)) return false
 
@@ -340,6 +343,14 @@ export const fileOpenTabsMethods = {
     // the file falls through to FilePreview (docx 本地只读渲染).
     useLibreEditor(file) {
       return this.libreOfficePreferred && this.isEditorOpenableFile(file)
+    },
+
+    // .drawio 走内嵌 draw.io 编辑器（DrawioEditor.vue）。诉讼可视化出的四份产物里
+    // 它是唯一的「可继续编辑版」——没有这条分支它就会落进 FilePreview 的
+    // 「暂不支持预览」兜底，等于这个格式白出了。
+    isDrawioFile(file) {
+      if (!file || !file.fileType) return false
+      return file.fileType.toLowerCase() === 'drawio'
     },
 
     // Check if file is a markdown tab (for AI artifacts or real .md files)

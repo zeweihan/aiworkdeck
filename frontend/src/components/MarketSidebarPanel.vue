@@ -220,13 +220,17 @@ export default {
       const rows = []
       for (const s of this.skills) {
         const mode = s.activationMode || (s.enabled ? 'auto' : 'disabled')
+        const metaParts = ['Skill']
+        if (s.version) metaParts.push('v' + s.version)
+        if (s.author) metaParts.push(s.author)
+        if (s.sourcePluginId) metaParts.push('来自插件')
         rows.push({
           kind: 'skill',
           id: s.id,
           name: s.name || s.id,
           desc: s.description || '',
           glyph: CATEGORY_GLYPHS[s.category] || ICONS.skill,
-          meta: 'Skill' + (s.sourcePluginId ? ' · 来自插件' : ''),
+          meta: metaParts.join(' · '),
           stateLabel: ACTIVATION_STATE[mode] || '自动',
           stateClass: mode === 'disabled' ? 'off' : 'ok',
           raw: s,

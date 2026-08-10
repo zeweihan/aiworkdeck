@@ -26,10 +26,12 @@ import java.util.Map;
 /**
  * 云端收件箱：接收各安装上传的反馈，以及给**跑在别处的优化者**取件/回执。
  *
- * <p>两组端点两套闸：
+ * <p>三组端点三套闸：
  * <ul>
  *   <li>{@code POST /api/feedback/ingest} —— 公网开放（见 {@link FeedbackIngestGuard} 里
  *       「为什么不要求登录」），闸门是配额与体积；</li>
+ *   <li>{@code POST /api/feedback/ingest/status} —— 给上传方自己查回执用，
+ *       鉴权就是 installId 本身（只回它自己那些行），闸门复用 ingest 同一套配额；</li>
  *   <li>{@code /api/feedback/pending}、{@code /api/feedback/{id}/resolution} —— 给优化者用，
  *       共享密钥鉴权（{@code feedback.optimizer-token}）。**密钥没配就整组 403**，
  *       绝不留「没配 = 不校验」的逃生门。</li>
@@ -40,6 +42,9 @@ import java.util.Map;
 @RequestMapping("/api/feedback")
 @RequiredArgsConstructor
 public class FeedbackIngestController {
+
+    /** clientRefs 一次最多查这么多条——这条端点鉴权只靠 installId，别让它被当成扫描器使。 */
+    private static final int MAX_STATUS_REFS = 200;
 
     private final FeedbackService feedbackService;
     private final FeedbackIngestGuard guard;
@@ -91,6 +96,59 @@ public class FeedbackIngestController {
             log.error("反馈收件失败 installId={}", installId, e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error("收件失败"));
         }
+    }
+
+    /**
+     * 本机按 installId 自证身份查回执——桌面端定时拉这条，把结果写回本地那一行，
+     * 用户提交完才能在自己的浮窗里看见「已修复」而不是永远停在「待处理」。
+     *
+     * <p>鉴权就是 installId 本身：只返回 install_id 等于入参且 source=CLOUD 的行，
+     * <b>绝不能认 X-Optimizer-Token</b>——那是维护者取全部待办的钥匙，不能发给每个客户端。
+     * 只回状态字段（clientRef/status/triageVerdict/prUrl/handledAt），正文/附件/上下文一律不带，
+     * 最小化返回面；走的还是 ingest 同一套配额闸，防的是同一类滥用。
+     */
+    @PostMapping("/ingest/status")
+    public ResponseEntity<?> ingestStatus(@RequestBody Map<String, Object> body) {
+        Map<String, Object> safeBody = body == null ? Map.of() : body;
+        String installId = str(safeBody.get("installId"));
+        try {
+            guard.check(installId, List.of());
+        } catch (IllegalStateException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(e.getMessage()));
+        } catch (FeedbackIngestGuard.QuotaExceededException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS).body(error(e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error(e.getMessage()));
+        }
+
+        List<String> clientRefs = clientRefsOf(safeBody.get("clientRefs"));
+        List<Map<String, Object>> items = new ArrayList<>();
+        if (!clientRefs.isEmpty()) {
+            for (UserFeedback fb : feedbackRepository.findByInstallIdAndSourceAndClientRefIn(
+                    installId, UserFeedback.SOURCE_CLOUD, clientRefs)) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("clientRef", fb.getClientRef());
+                m.put("status", fb.getStatus());
+                m.put("triageVerdict", fb.getTriageVerdict());
+                m.put("prUrl", fb.getPrUrl());
+                m.put("handledAt", fb.getHandledAt() == null ? null : fb.getHandledAt().toString());
+                items.add(m);
+            }
+        }
+        return ResponseEntity.ok(success(Map.of("items", items)));
+    }
+
+    /** 截断到上限，别让空/非法输入或超大数组当扫描器使；只读，本方法不写库。 */
+    private static List<String> clientRefsOf(Object raw) {
+        List<String> out = new ArrayList<>();
+        if (!(raw instanceof List<?> list)) return out;
+        for (Object o : list) {
+            if (out.size() >= MAX_STATUS_REFS) break;
+            if (o == null) continue;
+            String s = String.valueOf(o).trim();
+            if (!s.isEmpty()) out.add(s);
+        }
+        return out;
     }
 
     /** 优化者取件：待分诊的反馈（含附件清单，正文与现场一并带出）。 */

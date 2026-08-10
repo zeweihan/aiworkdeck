@@ -47,6 +47,30 @@ public class SkillDefinition {
      */
     private String category;
 
+    /**
+     * 默认是否启用（默认 true）。为 false 时表示"随包分发但需要用户手动打开"——
+     * 见 {@link SkillRegistry} 里 seeded-once 的解释；skill.yml 对应字段 enabled_by_default。
+     */
+    private boolean enabledByDefault = true;
+
+    /** 展示用作者名（skill.yml: author），如 "AI Workdeck" */
+    private String author;
+
+    /** 作者主页/仓库链接（skill.yml: author_url） */
+    private String authorUrl;
+
+    /** 展示用版本号，自由格式，不参与 id 覆盖判断（skill.yml: version） */
+    private String version;
+
+    /** 许可证标识，如 "MIT"（skill.yml: license） */
+    private String license;
+
+    /**
+     * 随 skill 分发的第三方内容署名（如 vendor 引擎），满足 MIT 等许可证的版权声明
+     * 保留要求；每条一行自由文本，前端原样展示（skill.yml: credits）。
+     */
+    private List<String> credits = new ArrayList<>();
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
     public String getName() { return name; }
@@ -69,4 +93,16 @@ public class SkillDefinition {
     public void setSourcePluginId(String sourcePluginId) { this.sourcePluginId = sourcePluginId; }
     public String getCategory() { return category; }
     public void setCategory(String category) { this.category = category; }
+    public boolean isEnabledByDefault() { return enabledByDefault; }
+    public void setEnabledByDefault(boolean enabledByDefault) { this.enabledByDefault = enabledByDefault; }
+    public String getAuthor() { return author; }
+    public void setAuthor(String author) { this.author = author; }
+    public String getAuthorUrl() { return authorUrl; }
+    public void setAuthorUrl(String authorUrl) { this.authorUrl = authorUrl; }
+    public String getVersion() { return version; }
+    public void setVersion(String version) { this.version = version; }
+    public String getLicense() { return license; }
+    public void setLicense(String license) { this.license = license; }
+    public List<String> getCredits() { return credits; }
+    public void setCredits(List<String> credits) { this.credits = credits; }
 }

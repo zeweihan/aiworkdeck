@@ -59,9 +59,36 @@
           <!-- #endif -->
         </view>
 
-        <!-- 图片/SVG 预览 -->
-        <view v-else-if="isImage" class="preview-image">
-          <image :src="blobUrl" mode="aspectFit" class="preview-img" @error="handleImageError" />
+        <!-- 图片/SVG 预览：缩放平移查看器。用原生 img 配 CSS transform 而不是 uni 的
+             image 组件——transform 不好控。换文件时的状态重置见 resetImageViewState。
+             滚轮/拖拽/双击绑在容器而不是 img 本身：图片小于容器时四周还有留白，
+             绑在 img 上会让留白区域变成"死区"，滚轮/拖拽在那里没反应。 -->
+        <view
+          v-else-if="isImage"
+          class="preview-image"
+          :class="{ 'is-panning': imagePanning }"
+          ref="imageViewport"
+          @wheel="handleImageWheel"
+          @mousedown="handleImagePanStart"
+          @dblclick="handleImageDblClick"
+        >
+          <img
+            v-if="blobUrl"
+            :src="blobUrl"
+            class="preview-img"
+            :style="imageTransformStyle"
+            draggable="false"
+            @load="handleImageLoad"
+            @error="handleImageError"
+          />
+          <view v-if="imageReady" class="image-toolbar" @mousedown.stop>
+            <button class="img-tool-btn" size="mini" @tap="imageZoomOutBtn">−</button>
+            <text class="img-zoom-pct">{{ imageZoomPercentText }}</text>
+            <button class="img-tool-btn" size="mini" @tap="imageZoomInBtn">＋</button>
+            <view class="img-tool-sep"></view>
+            <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomActual">1:1</button>
+            <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomFit">适应窗口</button>
+          </view>
         </view>
 
         <!-- 视频预览：与图片/音频一致走带鉴权的 blob——直链 <video src> 不带
@@ -144,6 +171,10 @@ const IS_H5 = true
 const IS_H5 = false
 // #endif
 
+// 图片查看器缩放范围：10% ~ 800%，到边界停住不继续缩
+const IMAGE_MIN_SCALE = 0.1
+const IMAGE_MAX_SCALE = 8
+
 export default {
   name: 'FilePreview',
   props: {
@@ -172,7 +203,20 @@ export default {
       archiveEntries: [],
       archiveLoading: false,
       archiveError: '',
-      extracting: false
+      extracting: false,
+      // 图片查看器：缩放平移状态。换文件时在 resetImageViewState 里整体清零，
+      // 真正的「适应窗口」尺寸要等 handleImageLoad 拿到 naturalWidth/Height 才能算。
+      imageScale: 1,
+      imageTx: 0,
+      imageTy: 0,
+      imageFitScale: 1,
+      imageNaturalWidth: 0,
+      imageNaturalHeight: 0,
+      imagePanning: false,
+      imagePanStartX: 0,
+      imagePanStartY: 0,
+      imagePanStartTx: 0,
+      imagePanStartTy: 0
     }
   },
   computed: {
@@ -240,6 +284,18 @@ export default {
       if (!this.file || !this.file.fileType) return false
       const type = this.file.fileType.toLowerCase()
       return ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(type) && !!this.file.wpsFileId
+    },
+    // naturalWidth/Height 只有 img 解码完成后才有值，工具栏在此之前不该出现
+    imageReady() {
+      return this.imageNaturalWidth > 0 && this.imageNaturalHeight > 0
+    },
+    imageZoomPercentText() {
+      return Math.round(this.imageScale * 100) + '%'
+    },
+    imageTransformStyle() {
+      return {
+        transform: `translate(${this.imageTx}px, ${this.imageTy}px) scale(${this.imageScale})`
+      }
     }
   },
   watch: {
@@ -264,6 +320,9 @@ export default {
     if (this.blobUrl) {
       URL.revokeObjectURL(this.blobUrl)
     }
+    // 组件卸载时若正处于拖拽平移中，window 上的监听不会自己消失
+    window.removeEventListener('mousemove', this.handleImagePanMove)
+    window.removeEventListener('mouseup', this.handleImagePanEnd)
   },
   mounted() {
     console.log('FilePreview mounted, file:', this.file, 'fileUrl:', this.fileUrl)
@@ -279,6 +338,7 @@ export default {
 
       this.docxRenderFailed = false
       this.pptxRenderFailed = false
+      this.resetImageViewState()
 
       if (!newFile) return
 
@@ -293,6 +353,17 @@ export default {
       } else if (this.isArchive) {
         this.loadArchiveEntries()
       }
+    },
+    // 换文件（或重新加载同一文件）时清空缩放平移状态。真正的「适应窗口」尺寸
+    // 要等图片解码完成、handleImageLoad 拿到 naturalWidth/Height 后才能算，
+    // 这里先归零占位，避免上一张图的缩放值窜到下一张图上。
+    resetImageViewState() {
+      this.imageScale = 1
+      this.imageTx = 0
+      this.imageTy = 0
+      this.imageFitScale = 1
+      this.imageNaturalWidth = 0
+      this.imageNaturalHeight = 0
     },
     async loadTextContent() {
       if (!this.file || !this.fileUrl) return
@@ -510,6 +581,105 @@ export default {
         })
       }
     },
+    // uni 的 <view> 在 H5 端 $refs 拿到的有时是组件实例（带 $el），有时已经是原生
+    // DOM 节点，取决于具体编译产物——renderPptx/renderDocx 已经踩过这个坑，同款兜底。
+    getImageViewportEl() {
+      const ref = this.$refs.imageViewport
+      return ref && (ref.$el || ref)
+    },
+    clampImageScale(scale) {
+      return Math.min(IMAGE_MAX_SCALE, Math.max(IMAGE_MIN_SCALE, scale))
+    },
+    // 图片解码完成后才拿得到 naturalWidth/Height，第一时间按「适应窗口」摆好
+    handleImageLoad(e) {
+      const img = e.target
+      this.imageNaturalWidth = img.naturalWidth || 0
+      this.imageNaturalHeight = img.naturalHeight || 0
+      this.applyImageView('fit')
+    },
+    // 摆到「适应窗口」或「100%」，两种都居中显示——工具栏点这两个按钮时不保留
+    // 旧的平移量，语义上就是"重新摆一次"，而不是在当前位置基础上微调。
+    applyImageView(mode) {
+      const el = this.getImageViewportEl()
+      if (!el || !this.imageNaturalWidth || !this.imageNaturalHeight) return
+      const vw = el.clientWidth
+      const vh = el.clientHeight
+      this.imageFitScale = this.clampImageScale(
+        Math.min(vw / this.imageNaturalWidth, vh / this.imageNaturalHeight)
+      )
+      const scale = mode === 'fit' ? this.imageFitScale : this.clampImageScale(1)
+      this.imageScale = scale
+      this.imageTx = (vw - this.imageNaturalWidth * scale) / 2
+      this.imageTy = (vh - this.imageNaturalHeight * scale) / 2
+    },
+    // 以容器坐标 (anchorX, anchorY) 为锚点缩放到 targetScale：锚点在屏幕上的像素位置
+    // 缩放前后保持不动。滚轮缩放的手感全靠这个——以中心缩放会让光标指的地方跑掉。
+    zoomImageTo(targetScale, anchorX, anchorY) {
+      const newScale = this.clampImageScale(targetScale)
+      if (newScale === this.imageScale) return
+      const ratio = newScale / this.imageScale
+      this.imageTx = anchorX - (anchorX - this.imageTx) * ratio
+      this.imageTy = anchorY - (anchorY - this.imageTy) * ratio
+      this.imageScale = newScale
+    },
+    handleImageWheel(e) {
+      e.preventDefault()
+      if (!this.imageNaturalWidth) return
+      const el = this.getImageViewportEl()
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15
+      this.zoomImageTo(this.imageScale * factor, e.clientX - rect.left, e.clientY - rect.top)
+    },
+    handleImagePanStart(e) {
+      if (!this.imageNaturalWidth) return
+      e.preventDefault()
+      this.imagePanning = true
+      this.imagePanStartX = e.clientX
+      this.imagePanStartY = e.clientY
+      this.imagePanStartTx = this.imageTx
+      this.imagePanStartTy = this.imageTy
+      // 挂在 window 上而不是元素上：拖拽过程中鼠标很容易滑出图片区域甚至预览面板，
+      // 挂在元素上会在那一刻丢事件，导致图片"粘"在鼠标上放不下来。
+      window.addEventListener('mousemove', this.handleImagePanMove)
+      window.addEventListener('mouseup', this.handleImagePanEnd)
+    },
+    handleImagePanMove(e) {
+      if (!this.imagePanning) return
+      this.imageTx = this.imagePanStartTx + (e.clientX - this.imagePanStartX)
+      this.imageTy = this.imagePanStartTy + (e.clientY - this.imagePanStartY)
+    },
+    handleImagePanEnd() {
+      this.imagePanning = false
+      window.removeEventListener('mousemove', this.handleImagePanMove)
+      window.removeEventListener('mouseup', this.handleImagePanEnd)
+    },
+    // 双击在「适应窗口」「100%」之间切换：已经在 100% 就回到适应窗口，
+    // 其余任何状态（包括滚轮缩放到的任意值）一律跳到 100%。
+    handleImageDblClick(e) {
+      if (!this.imageNaturalWidth) return
+      const el = this.getImageViewportEl()
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const target = Math.abs(this.imageScale - 1) < 0.001 ? this.imageFitScale : 1
+      this.zoomImageTo(target, e.clientX - rect.left, e.clientY - rect.top)
+    },
+    imageZoomInBtn() {
+      const el = this.getImageViewportEl()
+      if (!el) return
+      this.zoomImageTo(this.imageScale * 1.25, el.clientWidth / 2, el.clientHeight / 2)
+    },
+    imageZoomOutBtn() {
+      const el = this.getImageViewportEl()
+      if (!el) return
+      this.zoomImageTo(this.imageScale / 1.25, el.clientWidth / 2, el.clientHeight / 2)
+    },
+    imageZoomActual() {
+      this.applyImageView('actual')
+    },
+    imageZoomFit() {
+      this.applyImageView('fit')
+    },
     handleImageError(e) {
       console.error('图片加载失败:', e)
       uni.showToast({
@@ -716,18 +886,81 @@ export default {
 }
 
 .preview-image {
+  position: relative;
   width: 100%;
   height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
   padding: 24rpx;
   background: #282828;
+  cursor: grab;
 }
 
+.preview-image.is-panning {
+  cursor: grabbing;
+}
+
+/* 缩放平移由 JS 算出的 transform 控制，图片本身按原始像素尺寸渲染 */
 .preview-img {
-  max-width: 100%;
-  max-height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.image-toolbar {
+  position: absolute;
+  left: 50%;
+  bottom: 24rpx;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4rpx;
+  padding: 8rpx 12rpx;
+  background: rgba(255, 255, 255, 0.96);
+  border: 1rpx solid #e5e7eb;
+  border-radius: 10rpx;
+  box-shadow: 0 4rpx 16rpx rgba(0, 0, 0, 0.18);
+  /* 容器背景的 cursor:grab 会被子元素继承，工具栏不是可拖拽画布，这里截断 */
+  cursor: default;
+}
+
+.img-tool-btn {
+  min-width: 48rpx;
+  height: 48rpx;
+  line-height: 48rpx;
+  padding: 0 8rpx;
+  margin: 0;
+  background: transparent;
+  border: none;
+  border-radius: 6rpx;
+  font-size: 26rpx;
+  color: #374151;
+  cursor: pointer;
+}
+
+.img-tool-btn:hover {
+  background: #f3f4f6;
+}
+
+.img-tool-btn-text {
+  font-size: 22rpx;
+  padding: 0 12rpx;
+}
+
+.img-zoom-pct {
+  min-width: 76rpx;
+  text-align: center;
+  font-size: 22rpx;
+  color: #6b7280;
+}
+
+.img-tool-sep {
+  width: 1rpx;
+  height: 28rpx;
+  background: #e5e7eb;
+  margin: 0 4rpx;
 }
 
 .preview-text {

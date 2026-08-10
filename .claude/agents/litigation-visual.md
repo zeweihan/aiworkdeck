@@ -40,8 +40,21 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 - `controller/LitigationVisualController.java` — /api/litigation-visual。
 - `backend/skills/litigation-visual/` — skill.yml + prompt.md（精简路由，细则按需读）。
 
+**内嵌 draw.io（.drawio 那份「可继续编辑版」的归宿）**
+- `desktop/scripts/fetch-drawio-assets.js` — 构建期下载钉死版本的 `draw.war`（官方唯一
+  发布物，53 MB / 解开 151 MB），**自带最小 zip 读取器**（CI 里这步跑在 `npm ci` 之前，
+  没有第三方依赖可用；mac 的 bsdtar 能解 zip 而 GNU tar 不能，不能靠 tar）。裁剪白名单
+  是**逐个补 404 实测**出来的，约 40 MB 落盘。升级 draw.io 必须重新实测「能起、能存、能导出」。
+- `desktop/main/drawio-server.js` — 本地静态服务（固定端口 47614，理由同 LOWA 的 47613：
+  Chromium 缓存按 origin 存）。**不挂在 zetaoffice-server 上**——那条链路带着 COOP/COEP
+  跨源隔离，draw.io 一样都不需要。`AIWORKDECK_DRAWIO_DIR` 可覆盖资源目录（dev / 单测）。
+- `frontend/src/components/DrawioEditor.vue` — embed + `proto=json` 的 postMessage 协议：
+  `init` → `load{xml}` → `save{xml}` → `export{format:svg}`。
+- `backend/.../LitigationVisualPanelService.saveDrawio` — 一次同步三份产物。
+
 **前端**
-- `components/LitigationVisualPanel.vue` — 左栏面板：选材料 → 开始出图 → 图廊 → 换风格。
+- `components/LitigationVisualPanel.vue` — 左栏面板：选材料 → 开始出图 → 图廊 →
+  打开 / 编辑（进 draw.io）/ 换风格。
 - `config/leftSidebarPlugins.js` — key `litigation-visual`。
 - `pages/project-overview/project-overview.vue` — 面板分支 + 三个 handler
   （`handleLitigationStart` / `handleLitigationOpenFile` / `handleLitigationScopeSelect`）。
@@ -68,8 +81,10 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 **红色授权制**：深红 `#991B1B` 只标一处，且必须 `checkpoint.emphasis_source` 交代
 来源。地图说不清红从哪来，引擎一点都不画。脚本强制，不靠模型自觉。
 
-**产物落点**：一图一文件夹，内含五种格式 + `<名>.map.json`（语义地图，留着才能
-「换风格」不重新问模型）。身份靠 `wpsFileId` 前缀
+**产物落点**：一图一文件夹，内含 svg + png + drawio 三种格式 + `<名>.map.json`
+（语义地图，留着才能「换风格」不重新问模型）。曾经默认还出 pptx/vsdx，PR 用户
+反馈「版本太多、留一个可编辑的就行」后收窄（`LitigationVisualTools.DEFAULT_FORMATS`）；
+引擎本身仍支持这两种格式，只是产品不再默认交付。身份靠 `wpsFileId` 前缀
 `project_litviz_` / `project_litvizmap_`。
 
 ## 依赖矩阵（实测，别凭名字猜）
@@ -115,6 +130,15 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 - **`.drawio` / `.vsdx` 必须挡在 LOWA 编辑器之外**（`fileOpenTabs.js` 的
   `externalSourceTypes`）。它们带 wpsFileId，不挡就会走「可编辑」兜底分支，
   被只有 Writer+Calc 的引擎当文本导入，满屏乱码——与当年 PDF 同一类事故。
+  `.drawio` 挡在 LOWA 之外**但另有归宿**（`isDrawioFile` → DrawioEditor.vue）；
+  它同时要在 `isFileTypeSupported` 的白名单里，否则双击文件树只会弹「无法打开」。
+- **draw.io 存回来的 SVG 不拿去出 PNG 的位图**：PNG 一律由服务端 Batik
+  （`LitigationPngService.rasterize`）出。随包中文字体的注册与字体栈末位兜底都在那条路上，
+  绕过去标题在干净的 Windows 上就是方块——与下面 PNG 那条是同一个坑。
+- **`stealth=1` 是红线不是可选参数**：删了它 draw.io 会开始往外发请求，功能却完全正常，
+  没有测试就没人会发现。`desktop/tests/drawio-server.test.js` 钉住了它。
+- **手工改过的图再「换风格」会被语义地图覆盖**。判据是 `.drawio` 比 `.map.json` 新
+  （`DiagramView.handEdited`），面板据此先弹确认框。
 - **触发词必须原样出现在 prompt 正文里**才命中 skill 注入（pinnedSkillId 只裁工具
   不注入 prompt）。所以 kickoff prompt 由服务端拼，不交给前端。
 - 新增 `litigation_*` 工具要同步**三处**：`frontend/src/utils/toolDisplayNames.js`
@@ -134,8 +158,13 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 python3 litviz/tests/test_cli.py                       # 契约 + 上游 149 项（预期 146/149）
 cd backend && mvn test -Dtest='Litigation*,BuiltinSkillsTest,SkillRegistryTest'
 node desktop/scripts/prepare-graphviz.js --from "$(brew --prefix graphviz)" --out /tmp/gv
+node desktop/scripts/fetch-drawio-assets.js            # 幂等；已就位会跳过
+cd desktop && npm test                                 # 含 drawio-server 的 stealth 与穿越守卫
 cd frontend && npm run check:emits && npm run build:h5
 ```
+
+`fetch-drawio-assets.js` 支持 `DRAWIO_WAR_URL=file:///abs/path/draw.war` 从本地包解，
+离线或反复调白名单时不用每次下 53 MB。
 
 上游 149 项预期 **146/149**：缺的 3 项是 README 文档守卫（我们没 vendor 上游 README），
 测试会断言失败的**正好是且仅是**那 3 项，别把它当成可以忽略的红。

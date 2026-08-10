@@ -91,6 +91,15 @@ jobs:
           # first and falls back to the CDN only for anything not bundled.
           node desktop/scripts/fetch-lowa-assets.js
           ls -la frontend/dist/zetaoffice/lowa frontend/dist/zetaoffice/cjk.ttc
+      - name: Bake draw.io editor into the frontend bundle (offline)
+        shell: bash
+        run: |
+          # 诉讼可视化出的 .drawio 是唯一可继续编辑的版本；内嵌 draw.io 让它在应用内
+          # 直接打开，而不是变成必须装别的软件才能用的死文件。官方只发 draw.war
+          # （53 MB / 解开 151 MB），脚本裁到主编辑器 + 默认图形 + 中英文案，约
+          # 40 MB 落盘。运行期完全离线（stealth=1），案件材料不出网。
+          node desktop/scripts/fetch-drawio-assets.js
+          ls -la frontend/dist/drawio/index.html frontend/dist/drawio/js/app.min.js
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci

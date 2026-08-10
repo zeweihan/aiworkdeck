@@ -167,6 +167,12 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   // （onOpenEmbed / ⌘⇧O 覆盖层已移除：内联编辑器就是产品默认。）
   zetaoffice: {
     getEditor: () => ipcRenderer.invoke('checkba:zetaoffice-editor')
+  },
+  // 内嵌 draw.io 编辑器（诉讼可视化出的 .drawio 是唯一可继续编辑的版本）。
+  // getEditor() 返回 { available, kind, origin, url }；available=false 表示这次
+  // 构建没烙 draw.io 资源，调用点应退回下载。
+  drawio: {
+    getEditor: () => ipcRenderer.invoke('checkba:drawio-editor')
   }
 })
 

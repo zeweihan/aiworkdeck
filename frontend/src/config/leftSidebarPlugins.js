@@ -38,6 +38,9 @@ export const LEFT_SIDEBAR_PLUGINS = [
   {
     key: 'litigation-visual',
     label: '诉讼可视化',
+    // 对应 skill.yml 的 enabled_by_default:false——默认不装，装了才出现在左栏。
+    // 见 filterPluginsByEnabledSkills。
+    requiresSkill: 'litigation-visual',
     // 折线 + 节点：时间轴/关系图的共同意象
     svgPaths: [
       { d: 'M3 17h18' },
@@ -94,5 +97,19 @@ export function getPluginsForUser(role) {
     return [getLeftSidebarPlugin('dd-files')]
   }
   return LEFT_SIDEBAR_PLUGINS
+}
+
+/**
+ * 按「已启用 skill 列表」过滤插件位：条目声明了 requiresSkill 的，只有对应 skill 已启用
+ * 才保留；没声明 requiresSkill 的条目不受影响。用于"默认不安装"的插件位（如诉讼可视化，
+ * 对应 skill.yml 的 enabled_by_default:false）——左栏出不出现跟着 SkillRegistry 的启停
+ * 状态走，不再单独维护一套插件位可见性开关。
+ *
+ * @param {Array} plugins 待过滤的插件位列表（通常是 getPluginsForUser() 的结果）
+ * @param {Iterable<string>} enabledSkillIds 当前已启用的 skill id（如 GET /api/skills 里 enabled===true 的 id）
+ */
+export function filterPluginsByEnabledSkills(plugins, enabledSkillIds) {
+  const enabled = enabledSkillIds instanceof Set ? enabledSkillIds : new Set(enabledSkillIds || [])
+  return plugins.filter(p => !p.requiresSkill || enabled.has(p.requiresSkill))
 }
 

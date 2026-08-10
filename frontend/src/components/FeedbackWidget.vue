@@ -46,11 +46,16 @@
         @drop.prevent="onDrop"
       >
         <div class="awdfb-head">
-          <div class="awdfb-title">告诉我们哪里不对</div>
-          <div class="awdfb-x" role="button" title="关闭" @click="closePanel">✕</div>
+          <div class="awdfb-title">{{ headTitle }}</div>
+          <div class="awdfb-head-right">
+            <div v-if="view === 'form'" class="awdfb-link" role="button" @click="openMine">我的反馈</div>
+            <div v-else class="awdfb-link" role="button" @click="backToForm">返回</div>
+            <div class="awdfb-x" role="button" title="关闭" @click="closePanel">✕</div>
+          </div>
         </div>
 
         <div class="awdfb-body">
+          <template v-if="view === 'form'">
           <div class="awdfb-kinds">
             <div
               class="awdfb-kind"
@@ -118,9 +123,41 @@
           </div>
           <div class="awdfb-hint">提交后会发给 AI Workdeck 维护者；本机也会留一份，在「系统管理 → 用户反馈」里能查。</div>
           <pre v-if="showContext" class="awdfb-ctx">{{ contextPreview }}</pre>
+          </template>
+
+          <template v-else-if="view === 'result'">
+            <div class="awdfb-result" :class="{ err: !resultOk }">
+              <div class="awdfb-result-msg">{{ resultMessage }}</div>
+              <div class="awdfb-result-actions">
+                <div v-if="resultOk" class="awdfb-tool" role="button" @click="openMine">查看进度</div>
+                <div v-else class="awdfb-tool" role="button" @click="backToForm">重试</div>
+              </div>
+            </div>
+          </template>
+
+          <template v-else-if="view === 'mine'">
+            <div v-if="mineLoading" class="awdfb-hint">加载中…</div>
+            <div v-else-if="mineError" class="awdfb-hint err">{{ mineError }}</div>
+            <div v-else-if="!mineList.length" class="awdfb-hint">还没有提交过反馈</div>
+            <div v-else class="awdfb-mine-list">
+              <div v-for="item in mineList" :key="item.id" class="awdfb-mine-item">
+                <div class="awdfb-mine-row">
+                  <span class="awdfb-badge" :class="item.kind === 'IDEA' ? 'idea' : 'bug'">
+                    {{ item.kind === 'IDEA' ? '建议' : '报障' }}
+                  </span>
+                  <span class="awdfb-mine-time">{{ item.timeLabel }}</span>
+                </div>
+                <div class="awdfb-mine-text">{{ item.excerpt }}</div>
+                <div class="awdfb-mine-status">
+                  <span>{{ item.statusLabel }}</span>
+                  <div v-if="item.prUrl" class="awdfb-mine-pr" role="button" @click="openPr(item.prUrl)">查看 PR</div>
+                </div>
+              </div>
+            </div>
+          </template>
         </div>
 
-        <div class="awdfb-foot">
+        <div v-if="view === 'form'" class="awdfb-foot">
           <div class="awdfb-status" :class="{ err: statusIsError }">{{ status }}</div>
           <div
             class="awdfb-submit"
@@ -136,19 +173,59 @@
 
 <script>
 import { host, isDesktopHost } from '@/services/host.js'
-import { submitFeedback } from '@/services/api.js'
+import { submitFeedback, getMyFeedback } from '@/services/api.js'
 import { setGlobalOverlay } from '@/utils/overlayState.js'
 import { getRecentErrors, recentErrorCount } from '@/utils/errorBuffer.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
+import { openExternalUrl } from '@/utils/externalLink.js'
 
 const MAX_IMAGES = 10
 const MAX_RECORD_SECONDS = 120
+
+// 状态对用户的说法：不暴露 NEW/PR_OPENED/EMAILED/SKIPPED/FAILED 这些内部枚举。
+const MINE_STATUS_LABELS = {
+  PR_OPENED: '已修复，等待发布',
+  EMAILED: '已转交维护者',
+  SKIPPED: '已归档',
+  FAILED: '处理中遇到问题，会自动重试',
+}
+
+function mineStatusLabel(item) {
+  if (item.status === 'NEW') return item.uploaded ? '已送达，排队处理中' : '待发送'
+  return MINE_STATUS_LABELS[item.status] || '处理中'
+}
+
+function mineExcerpt(item) {
+  const t = (item.text || '').trim() || (item.voiceTranscript || '').trim()
+  return t ? (t.length > 60 ? t.slice(0, 60) + '…' : t) : '（只有截图或语音）'
+}
+
+function mineTimeLabel(iso) {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const pad = (n) => String(n).padStart(2, '0')
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+    + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+}
+
+function formatMineItem(item) {
+  return {
+    id: item.id,
+    kind: item.kind,
+    excerpt: mineExcerpt(item),
+    timeLabel: mineTimeLabel(item.createdAt),
+    statusLabel: mineStatusLabel(item),
+    prUrl: item.prUrl || '',
+  }
+}
 
 export default {
   name: 'FeedbackWidget',
   data() {
     return {
       open: false,
+      view: 'form', // 'form' | 'result' | 'mine'
       kind: 'BUG',
       text: '',
       images: [],
@@ -163,6 +240,11 @@ export default {
       status: '',
       statusIsError: false,
       seq: 0,
+      resultOk: false,
+      resultMessage: '',
+      mineList: [],
+      mineLoading: false,
+      mineError: '',
     }
   },
   computed: {
@@ -184,6 +266,11 @@ export default {
     contextPreview() {
       return JSON.stringify(this.collectContext(), null, 2)
     },
+    headTitle() {
+      if (this.view === 'mine') return '我的反馈'
+      if (this.view === 'result') return this.resultOk ? '提交成功' : '提交失败'
+      return '告诉我们哪里不对'
+    },
   },
   beforeUnmount() {
     this.stopRecording(true)
@@ -194,6 +281,7 @@ export default {
   methods: {
     openPanel() {
       this.open = true
+      this.view = 'form'
       this.status = ''
       this.statusIsError = false
       setGlobalOverlay(true)
@@ -207,6 +295,30 @@ export default {
       this.stopPlay()
       this.open = false
       setGlobalOverlay(false)
+    },
+    backToForm() {
+      this.view = 'form'
+    },
+    // 「我的反馈」视图：每次打开都重新拉一遍，状态会随后台优化者的处理进度变化，
+    // 缓存旧列表只会让用户看到过期的「待发送」。
+    async openMine() {
+      this.view = 'mine'
+      this.mineLoading = true
+      this.mineError = ''
+      try {
+        const res = await getMyFeedback()
+        const items = (res && res.data && res.data.items) || []
+        this.mineList = items.map(formatMineItem)
+      } catch (e) {
+        this.mineError = (e && e.message) || '加载失败'
+      } finally {
+        this.mineLoading = false
+      }
+    },
+    // PR 链接必须走系统浏览器/新标签页：桌面端主进程会拦截渲染层的 window.open，
+    // 直接写 <a href> 在 Electron 里未必跳得出去，统一走这个既有出口（同 admin.vue 的 openPr）。
+    openPr(url) {
+      openExternalUrl(url)
     },
     reset() {
       this.stopPlay()
@@ -456,12 +568,14 @@ export default {
         }, files)
         const data = (res && res.data) || {}
         this.reset()
-        this.setStatus('收到了，谢谢。编号 #' + (data.id || '?'), false)
-        setTimeout(() => {
-          if (!this.submitting) this.closePanel()
-        }, 1400)
+        this.resultOk = true
+        this.resultMessage = '已收到，编号 #' + (data.id || '?')
+        this.view = 'result'
       } catch (e) {
-        this.setStatus((e && e.message) || '提交失败', true)
+        // 失败分支不 reset：文字/图片/语音原样留着，用户点「重试」能直接回到刚才那份草稿
+        this.resultOk = false
+        this.resultMessage = (e && e.message) || '提交失败'
+        this.view = 'result'
       } finally {
         this.submitting = false
       }
@@ -600,6 +714,23 @@ function pickAudioMime() {
 .awdfb-title {
   font-size: 14px;
   font-weight: 600;
+  color: #1A5336;
+}
+
+.awdfb-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.awdfb-link {
+  color: #6C757D;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.awdfb-link:hover {
   color: #1A5336;
 }
 
@@ -755,6 +886,10 @@ function pickAudioMime() {
   color: #8A9691;
 }
 
+.awdfb-hint.err {
+  color: #C0392B;
+}
+
 .awdfb-ctx-toggle {
   margin-top: 12px;
   font-size: 11px;
@@ -780,6 +915,95 @@ function pickAudioMime() {
   color: #6C757D;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.awdfb-result {
+  padding: 20px 6px 8px;
+  text-align: center;
+}
+
+.awdfb-result-msg {
+  font-size: 14px;
+  color: #12344D;
+  line-height: 1.6;
+}
+
+.awdfb-result.err .awdfb-result-msg {
+  color: #C0392B;
+}
+
+.awdfb-result-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.awdfb-mine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.awdfb-mine-item {
+  border: 1px solid #E3E8E5;
+  border-radius: 8px;
+  padding: 9px 11px;
+}
+
+.awdfb-mine-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.awdfb-mine-time {
+  font-size: 11px;
+  color: #8A9691;
+}
+
+.awdfb-mine-text {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #12344D;
+  word-break: break-all;
+}
+
+.awdfb-mine-status {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #6C757D;
+}
+
+.awdfb-mine-pr {
+  color: #1A5336;
+  cursor: pointer;
+  user-select: none;
+}
+
+.awdfb-mine-pr:hover {
+  text-decoration: underline;
+}
+
+.awdfb-badge {
+  display: inline-block;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.awdfb-badge.bug {
+  background: #FDEDEC;
+  color: #C0392B;
+}
+
+.awdfb-badge.idea {
+  background: #EAF6EF;
+  color: #1A5336;
 }
 
 .awdfb-foot {

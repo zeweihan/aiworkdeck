@@ -83,6 +83,25 @@ public class FeedbackController {
         }
     }
 
+    /**
+     * 用户自己提交过的反馈（浮窗「我的反馈」视图用）：只回当前 session 解析出的
+     * userId 自己的行，不需要管理员——这和 {@link #list} / {@link #detail} 不同，
+     * 那两个要看别人的现场（截图/日志），这个只让人看自己报过什么。
+     */
+    @GetMapping("/mine")
+    public ResponseEntity<?> mine(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+        }
+        List<Map<String, Object>> items = new ArrayList<>();
+        for (UserFeedback fb : feedbackService.listByUser(userId, 100)) {
+            items.add(mineBrief(fb));
+        }
+        return ResponseEntity.ok(success(Map.of("items", items)));
+    }
+
     @GetMapping
     public ResponseEntity<?> list(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
@@ -171,6 +190,15 @@ public class FeedbackController {
         m.put("attempts", fb.getAttempts());
         m.put("createdAt", fb.getCreatedAt() == null ? null : fb.getCreatedAt().toString());
         m.put("handledAt", fb.getHandledAt() == null ? null : fb.getHandledAt().toString());
+        return m;
+    }
+
+    /** {@link #brief} 去掉 lastError 这种内部字段，加上 uploaded——
+     * 用户视角要能分清「待发送」（还没传到云端）与「已送达」（云端已收到，排队处理中）。 */
+    private Map<String, Object> mineBrief(UserFeedback fb) {
+        Map<String, Object> m = brief(fb);
+        m.remove("lastError");
+        m.put("uploaded", fb.isUploaded());
         return m;
     }
 

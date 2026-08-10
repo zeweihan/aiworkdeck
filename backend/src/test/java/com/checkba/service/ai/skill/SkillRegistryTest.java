@@ -71,6 +71,75 @@ class SkillRegistryTest {
         assertEquals("输出一份比较分析", skill.getOutput().trim());
         assertNull(skill.getSourcePluginId());
         assertTrue(registry.isEnabled("test-skill"), "默认启用");
+        assertTrue(skill.isEnabledByDefault(), "enabled_by_default 缺省应为 true");
+    }
+
+    @Test
+    @DisplayName("解析 author/author_url/version/license/credits/enabled_by_default")
+    void parsesAuthorshipAndDefaultEnablementFields() throws IOException {
+        writeSkill(tempDir.resolve("authored-skill"), "authored-skill", """
+                author: AI Workdeck
+                author_url: https://www.aiworkdeck.com
+                version: 1.0.2
+                license: MIT
+                credits:
+                  - "引擎 xxx by 某人（MIT）"
+                enabled_by_default: false
+                """);
+        SkillRegistry registry = newRegistry(tempDir, new PluginService());
+        SkillDefinition skill = registry.getSkill("authored-skill").orElseThrow();
+
+        assertEquals("AI Workdeck", skill.getAuthor());
+        assertEquals("https://www.aiworkdeck.com", skill.getAuthorUrl());
+        assertEquals("1.0.2", skill.getVersion());
+        assertEquals("MIT", skill.getLicense());
+        assertEquals(List.of("引擎 xxx by 某人（MIT）"), skill.getCredits());
+        assertFalse(skill.isEnabledByDefault());
+        assertFalse(registry.isEnabled("authored-skill"), "enabled_by_default:false 首次扫描即默认禁用");
+    }
+
+    /**
+     * 极简内存版 SystemSettingService：只覆盖 get/set，用来验证禁用/种子名单能跨"重启"
+     * （新的 SkillRegistry 实例、同一份存储）持久化。父类真正依赖的仓储用不到，传 null。
+     */
+    private static class InMemorySystemSettingService extends com.checkba.service.SystemSettingService {
+        private final java.util.Map<String, String> store = new java.util.HashMap<>();
+        InMemorySystemSettingService() { super(null); }
+        @Override public String get(String key, String defaultValue) { return store.getOrDefault(key, defaultValue); }
+        @Override public void set(String key, String value) { store.put(key, value); }
+    }
+
+    @Test
+    @DisplayName("enabled_by_default:false：首次扫描默认禁用一次；用户启用后重启（新实例重新扫描）仍保持启用")
+    void enabledByDefaultFalseSeedsOnceThenRespectsUserChoiceAcrossRestart() throws IOException {
+        writeSkill(tempDir.resolve("opt-in-skill"), "opt-in-skill", "enabled_by_default: false\n");
+        InMemorySystemSettingService settings = new InMemorySystemSettingService();
+
+        SkillProperties props1 = new SkillProperties();
+        props1.setDir(tempDir.toString());
+        SkillRegistry registry1 = new SkillRegistry(props1, settings, new PluginService());
+        registry1.init();
+        assertFalse(registry1.isEnabled("opt-in-skill"), "enabled_by_default:false 首次扫描应默认禁用");
+
+        registry1.setEnabled("opt-in-skill", true);
+        assertTrue(registry1.isEnabled("opt-in-skill"));
+
+        // 模拟重启：新实例、同一份持久化存储、重新扫描同一目录
+        SkillProperties props2 = new SkillProperties();
+        props2.setDir(tempDir.toString());
+        SkillRegistry registry2 = new SkillRegistry(props2, settings, new PluginService());
+        registry2.init();
+
+        assertTrue(registry2.isEnabled("opt-in-skill"),
+                "用户启用过的 skill，重启重新扫描后不该被「首次默认关闭」的种子逻辑打回去");
+
+        // 用户显式关闭后再重启：一样不受种子逻辑影响（本来就该是关的）
+        registry2.setEnabled("opt-in-skill", false);
+        SkillProperties props3 = new SkillProperties();
+        props3.setDir(tempDir.toString());
+        SkillRegistry registry3 = new SkillRegistry(props3, settings, new PluginService());
+        registry3.init();
+        assertFalse(registry3.isEnabled("opt-in-skill"));
     }
 
     @Test
