@@ -3,7 +3,7 @@ package com.checkba.controller;
 import com.checkba.service.LicenseService;
 import com.checkba.service.account.AccountException;
 import com.checkba.service.account.AccountService;
-import com.checkba.service.entitlement.EntitlementService;
+import com.checkba.service.account.AccountSwitchCleanup;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
@@ -39,7 +39,7 @@ class LicenseControllerEditionTest {
         AccountService accountService = mock(AccountService.class);
         when(accountService.isConnected()).thenReturn(true);
         LicenseController controller = new LicenseController(
-                licenseService, accountService, mock(EntitlementService.class),
+                licenseService, accountService, mock(AccountSwitchCleanup.class),
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
 
         Map<String, Object> status = controller.status();
@@ -58,7 +58,7 @@ class LicenseControllerEditionTest {
         AccountService accountService = mock(AccountService.class);
         when(accountService.isConnected()).thenReturn(false);
         LicenseController controller = new LicenseController(
-                license(true, unlocked("trial", "trial")), accountService, mock(EntitlementService.class),
+                license(true, unlocked("trial", "trial")), accountService, mock(AccountSwitchCleanup.class),
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
 
         Map<String, Object> status = controller.status();
@@ -73,7 +73,7 @@ class LicenseControllerEditionTest {
         AccountService accountService = mock(AccountService.class);
         when(accountService.isConnected()).thenThrow(new RuntimeException("凭据文件损坏"));
         LicenseController controller = new LicenseController(
-                license(true, unlocked("account", "paid")), accountService, mock(EntitlementService.class),
+                license(true, unlocked("account", "paid")), accountService, mock(AccountSwitchCleanup.class),
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
 
         Map<String, Object> status = controller.status();
@@ -89,7 +89,7 @@ class LicenseControllerEditionTest {
         when(accountService.isConnected()).thenReturn(false);
         LicenseController controller = new LicenseController(
                 license(true, Map.of("unlocked", false, "mode", "none", "plan", "none")),
-                accountService, mock(EntitlementService.class),
+                accountService, mock(AccountSwitchCleanup.class),
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
 
         assertEquals("none", controller.status().get("edition"));
@@ -100,7 +100,7 @@ class LicenseControllerEditionTest {
     void serverModeIsPaidAndNeverReadsAccount() {
         AccountService accountService = mock(AccountService.class);
         LicenseController controller = new LicenseController(
-                license(false, unlocked("account", "paid")), accountService, mock(EntitlementService.class),
+                license(false, unlocked("account", "paid")), accountService, mock(AccountSwitchCleanup.class),
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
 
         Map<String, Object> status = controller.status();
@@ -121,7 +121,7 @@ class LicenseControllerEditionTest {
         when(accountService.connect(anyString())).thenThrow(
                 new AccountException(AccountException.Kind.NETWORK, "无法连接账户服务器"));
         LicenseController controller = new LicenseController(
-                licenseService, accountService, mock(EntitlementService.class),
+                licenseService, accountService, mock(AccountSwitchCleanup.class),
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
 
         ResponseEntity<Map<String, Object>> response =
@@ -145,9 +145,9 @@ class LicenseControllerEditionTest {
         LicenseService licenseService = license(true, unlocked("account", "paid"));
         when(licenseService.activate(anyString())).thenReturn(unlocked("account", "paid"));
         AccountService accountService = mock(AccountService.class);
-        EntitlementService entitlementService = mock(EntitlementService.class);
+        AccountSwitchCleanup accountSwitchCleanup = mock(AccountSwitchCleanup.class);
         LicenseController controller = new LicenseController(
-                licenseService, accountService, entitlementService,
+                licenseService, accountService, accountSwitchCleanup,
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
 
         Map<String, Object> body = controller.activate(Map.of("code", "awdk_abcdef")).getBody();
@@ -155,7 +155,9 @@ class LicenseControllerEditionTest {
         assertNotNull(body);
         assertEquals(true, body.get("accountConnected"));
         assertNull(body.get("accountNotice"));
-        verify(entitlementService).refreshAsync();
+        // 解锁页换账号必须走与设置页同一套作废动作。只刷权益、不清平台密钥/余额判定/用量基线的话，
+        // 没充值的新账号会接着花上一个账号的 OpenRouter 额度
+        verify(accountSwitchCleanup).afterConnect();
     }
 
     @Test
@@ -165,7 +167,7 @@ class LicenseControllerEditionTest {
         when(licenseService.activate(anyString())).thenReturn(unlocked("trial", "trial"));
         AccountService accountService = mock(AccountService.class);
         LicenseController controller = new LicenseController(
-                licenseService, accountService, mock(EntitlementService.class),
+                licenseService, accountService, mock(AccountSwitchCleanup.class),
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"));
 
         Map<String, Object> body = controller.activate(Map.of("code", "AWD-T-XXXX")).getBody();

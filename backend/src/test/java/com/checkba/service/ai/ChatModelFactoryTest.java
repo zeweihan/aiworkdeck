@@ -33,6 +33,7 @@ class ChatModelFactoryTest {
     private ChatModelFactory factory;
     private PlatformAiChannel platformAiChannel;
     private PlatformUsageAccountant usageAccountant;
+    private PlatformCreditsGate creditsGate;
 
     @BeforeEach
     void setUp() {
@@ -44,9 +45,12 @@ class ChatModelFactoryTest {
                 .thenAnswer(inv -> inv.getArgument(1));
         platformAiChannel = mock(PlatformAiChannel.class);
         usageAccountant = mock(PlatformUsageAccountant.class);
+        // 余额闸默认放行：本类测的是路由，闸门自身的判据在 PlatformCreditsGateTest
+        creditsGate = mock(PlatformCreditsGate.class);
         // AuxModelResolver 用真实实例（无状态的两依赖纯类）：辅助模型 ID 的解析
         // 只许有一处口径，用 mock 会让这里的断言测不到真实回退链。
-        factory = new ChatModelFactory(properties, systemSettingService, platformAiChannel, usageAccountant,
+        factory = new ChatModelFactory(properties, systemSettingService, platformAiChannel,
+                creditsGate, usageAccountant,
                 new AuxModelResolver(systemSettingService, AllowedModels.QWEN_3_7_FLASH.getModelId()),
                 new com.checkba.service.telemetry.TelemetryService(
                         mock(com.checkba.repository.TelemetryEventRepository.class),
