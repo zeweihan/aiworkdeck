@@ -29,6 +29,15 @@ public class LitigationVisualController {
         }
     }
 
+    /** 会改动项目文件的操作走写权限：只读成员能看图，但不能覆盖别人的卷宗材料。 */
+    private void requireWriter(String sessionId, Long projectId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) throw new IllegalArgumentException("未登录");
+        if (projectId == null || !projectMemberService.hasWritePermission(projectId, userId)) {
+            throw new IllegalArgumentException("无权修改该项目的文件");
+        }
+    }
+
     /**
      * 出图环境自检。前端据此做降级提示。
      * 不要项目上下文——它问的是"这台机器行不行"，与卷宗无关，登录即可。
@@ -73,10 +82,32 @@ public class LitigationVisualController {
         return Map.of("prompt", panelService.buildKickoffPrompt(dto.getScope(), dto.getDiagramHint()));
     }
 
+    /**
+     * 保存内嵌 draw.io 里改完的图：写回 .drawio，并同步同目录的 .svg 与 .png。
+     * 三份一起动的理由见 {@link LitigationVisualPanelService#saveDrawio}。
+     */
+    @PostMapping("/projects/{projectId}/drawio/{fileId}")
+    public Map<String, Object> saveDrawio(
+            @PathVariable Long projectId,
+            @PathVariable Long fileId,
+            @RequestBody SaveDrawioDto dto,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireWriter(sessionId, projectId);
+        return panelService.saveDrawio(projectId, fileId, dto.getXml(), dto.getSvg());
+    }
+
     @Data
     public static class RestyleDto {
         private Long folderId;
         private String mode;
+    }
+
+    @Data
+    public static class SaveDrawioDto {
+        /** draw.io 的图形 XML（mxGraphModel），即 .drawio 文件正文 */
+        private String xml;
+        /** draw.io 客户端导出的 SVG；留空表示只存 XML，不动 .svg / .png */
+        private String svg;
     }
 
     @Data

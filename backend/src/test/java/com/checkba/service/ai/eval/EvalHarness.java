@@ -102,6 +102,11 @@ public final class EvalHarness {
         skillProperties.setBaseTools(List.of("read_document", "list_files", "query_memory"));
         SkillRegistry skillRegistry = new SkillRegistry(skillProperties, null, pluginService);
         skillRegistry.init();
+        // litigation-visual 的 skill.yml 声明了 enabled_by_default:false（默认关闭，需用户手动
+        // 打开），首次扫描会被 SkillRegistry 自动禁用。skill-litigation-visual-tools-visible 这条
+        // 回放用例要验证的正是"命中该 skill 时工具可见性怎么裁剪"，禁用会让它连触发匹配都进不去，
+        // 白名单裁剪路径就测不到——这里显式开回去，让回放继续跑真实的裁剪逻辑。
+        skillRegistry.setEnabled("litigation-visual", true);
         // 埋点：评测里用 mock 仓储的真实 TelemetryService（白名单路径被真实执行、不落库）
         com.checkba.service.telemetry.TelemetryService telemetry =
                 new com.checkba.service.telemetry.TelemetryService(

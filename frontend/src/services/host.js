@@ -49,13 +49,41 @@ function probeWebEditor() {
   return webEditorProbe
 }
 
-// Web 态能力表：只有编辑器一项。浏览器面板/截图/剪贴板/组件下载/自动更新/
+// Web 态的 draw.io：与 zetaoffice 同一套「探一次、缓存结果」的思路。资源是否部署
+// 取决于运维有没有把 frontend/dist/drawio 放到站点下（dev server 上就没有）。
+// 探不到就返回 available:false，调用点退回「下载后用其他程序打开」——挂一个永远
+// 转圈的 iframe 比说清楚"这里没有编辑器"糟糕得多。
+const WEB_DRAWIO_BASE = '/drawio/'
+const WEB_DRAWIO_QUERY = 'embed=1&proto=json&stealth=1&spin=1&lang=zh&ui=min&noSaveBtn=0&saveAndExit=0'
+
+let webDrawioProbe = null
+function probeWebDrawio() {
+  if (!webDrawioProbe) {
+    webDrawioProbe = fetch(WEB_DRAWIO_BASE + 'index.html', { method: 'HEAD' })
+      .then((r) => r.ok)
+      .catch(() => false)
+  }
+  return webDrawioProbe
+}
+
+// Web 态能力表：只有编辑器两项。浏览器面板/截图/剪贴板/组件下载/自动更新/
 // 本地文件对话框等都依赖 Electron 主进程，浏览器里没有对等实现——缺席比假实现
 // 诚实，调用点的守卫会把对应入口收起来。
 const WEB_CAPABILITIES = {
   zetaoffice: {
     isAvailable: probeWebEditor,
     getEditor: async () => webEditorDescriptor(),
+  },
+  drawio: {
+    getEditor: async () => {
+      if (!(await probeWebDrawio())) return { available: false }
+      return {
+        available: true,
+        kind: 'iframe',
+        origin: window.location.origin,
+        url: WEB_DRAWIO_BASE + 'index.html?' + WEB_DRAWIO_QUERY,
+      }
+    },
   },
 }
 

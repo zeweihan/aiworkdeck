@@ -346,9 +346,12 @@
       </view>
 
       <!-- File Picker Dialog (for EasyVoice Import) -->
+      <!-- allowFolder 按调用方开关：只有诉讼可视化的「材料范围」需要选文件夹
+           （画一批材料本来就是按卷宗文件夹给的），EasyVoice 导入和脱敏都只收单文件。 -->
       <FilePickerDialog
         v-model:visible="showFilePicker"
         :project-id="projectId"
+        :allow-folder="filePickerAllowFolder"
         @confirm="handleFilePickerConfirm"
       />
 
@@ -838,6 +841,15 @@
                       :url="activeFileLeft.frontendEntry"
                       :plugin-id="activeFileLeft.id"
                     />
+                    <!-- .drawio：诉讼可视化四份产物里唯一的可继续编辑版，走内嵌
+                         draw.io。没有这条分支它会落进 FilePreview 的「暂不支持
+                         预览」兜底，这个格式就白出了。 -->
+                    <DrawioEditor
+                      v-else-if="isDrawioFile(activeFileLeft)"
+                      :key="'drawio-' + activeFileLeft.id"
+                      :file="activeFileLeft"
+                      :project-id="projectId"
+                    />
                     <FilePreview
                       v-else
                       :file="activeFileLeft"
@@ -920,6 +932,12 @@
                       v-else-if="activeFileRight.fileType === 'plugin'"
                       :url="activeFileRight.frontendEntry"
                       :plugin-id="activeFileRight.id"
+                    />
+                    <DrawioEditor
+                      v-else-if="isDrawioFile(activeFileRight)"
+                      :key="'drawio-' + activeFileRight.id"
+                      :file="activeFileRight"
+                      :project-id="projectId"
                     />
                     <FilePreview
                       v-else
@@ -1415,6 +1433,7 @@ import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
 import FileLinkDropZone from '@/components/FileLinkDropZone.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
+import DrawioEditor from '@/components/DrawioEditor.vue'
 // 插件广场 VS Code 形态：左栏列表面板 + 中栏详情 tab（整页 MarketPane 仅存于 admin 独立页）
 import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
 import MarketDetailPane from '@/components/MarketDetailPane.vue'
@@ -1456,6 +1475,7 @@ import {
   getAiConversations,
   getAssistants, // Added
   getPlugins, // Added
+  getSkills,
   getFileText,
   getVersionStatus, // 版本面板之外也要知道「有没有采纳等待处理」
   promptFeatureNotConfigured, // 功能未配置统一引导（#18 T7）
@@ -1477,6 +1497,7 @@ import { WORKBENCH_TOOLS } from '@/config/tools.js'
 import { OCR_ACTION_LABELS, INTERNAL_LINK_SCHEMES, WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
 import {
   LEFT_SIDEBAR_PLUGINS,
+  filterPluginsByEnabledSkills,
   getLeftSidebarPlugin,
   getPluginsForUser
 } from '@/config/leftSidebarPlugins.js'
@@ -1521,6 +1542,7 @@ export default {
     ChatInterface,
     MarkdownPreview,
     PluginPane, // Added
+    DrawioEditor,
     MarketSidebarPanel,
     MarketDetailPane,
     CompareDocDialog,
@@ -1548,6 +1570,11 @@ export default {
       isRenamingProject: false,
       // File Picker
       showFilePicker: false,
+      // 这次打开文件选择器允不允许选文件夹。默认 false，由调用方在打开前置位——
+      // 三个调用方共用同一个对话框实例，不区分的话脱敏面板也能选中文件夹了。
+      filePickerAllowFolder: false,
+      // 已启用的 skill id。null = 还没拉到（按全部启用处理，见 LEFT_SIDEBAR_PLUGINS）。
+      enabledSkillIds: null,
       easyVoiceImportCallback: null,
       renameProjectName: '',
       userDisplayName: '用户',
@@ -1815,12 +1842,17 @@ export default {
     },
     LEFT_SIDEBAR_PLUGINS() {
       const user = getCurrentUser()
-      if (user && user.role === 'CLIENT') {
-        const clientPlugins = getPluginsForUser('CLIENT')
-        // Append client-visible dynamic plugins if any (optional)
-        return clientPlugins
-      }
-      return [...LEFT_SIDEBAR_PLUGINS, ...this.dynamicPlugins]
+      const base = (user && user.role === 'CLIENT')
+        ? getPluginsForUser('CLIENT')
+        : [...LEFT_SIDEBAR_PLUGINS, ...this.dynamicPlugins]
+      // 声明了 requiresSkill 的插件位（诉讼可视化）跟着 skill 启停走：默认不安装，
+      // 用户在广场里装了才出现在左栏。
+      //
+      // null = 还没拉到启用列表，此时不过滤。**不能当成空集合**——那会把已装的
+      // 功能在每次刚进页面时先从左栏抹掉再冒出来，接口挂了更是永远不见。
+      // 宁可多显示一瞬，也不要让用户以为功能没了。
+      if (this.enabledSkillIds === null) return base
+      return filterPluginsByEnabledSkills(base, this.enabledSkillIds)
     },
     toolsSearchPlaceholder() {
       if (this.activeToolKey === 'variables') return '搜索变量…'
@@ -2054,6 +2086,13 @@ export default {
     // 后台任务状态轮询清理
     if (this.convStatusPollTimer) { clearInterval(this.convStatusPollTimer); this.convStatusPollTimer = null }
     this.stopCollabPolling()
+    // 广场变更订阅必须摘掉：本页是 navigateTo 打开的，页面栈里会存在多个实例，
+    // 不退订就每回来一次多一份订阅，同一个事件被处理 N 次（剪贴板那次事故的同款）
+    if (this._onMarketChanged) {
+      uni.$off('awd:market-changed', this._onMarketChanged)
+      uni.$off('awd:market-changed-from-sidebar', this._onMarketChanged)
+      this._onMarketChanged = null
+    }
     // IDE 化聚焦刷新监听清理（本实例自己加的，直接摘）
     if (typeof window !== 'undefined' && this._localFocusRefresh) {
       window.removeEventListener('focus', this._localFocusRefresh)
@@ -2223,6 +2262,14 @@ export default {
 
     this.loadAssistants() // Fetch assistants
     this.loadDynamicPlugins() // Fetch dynamic plugins
+    this.loadEnabledSkills() // 左栏插件位按 skill 启停过滤（诉讼可视化默认不安装）
+
+    // 广场里装/卸了 skill 之后左栏要立刻跟着变。广场有两个宿主（左栏列表面板、
+    // 中栏详情 tab），它们各发一个事件，两个都订上——只订一个的话，从另一个入口
+    // 装完 skill，左栏图标要等下次进页面才出现。
+    this._onMarketChanged = () => this.loadEnabledSkills()
+    uni.$on('awd:market-changed', this._onMarketChanged)
+    uni.$on('awd:market-changed-from-sidebar', this._onMarketChanged)
   },
   onShow() {
     // 多实例守卫：本实例重新可见（如从个人中心返回）时接管全局事件与 WPS 内链处理，
@@ -2803,12 +2850,14 @@ export default {
     async handleEasyVoiceDocRequest(callback) {
       console.log('[EasyVoice] Requesting doc text...')
       this.easyVoiceImportCallback = callback
+      this.filePickerAllowFolder = false
       this.showFilePicker = true
     },
 
     // ==================== Desensitize Handlers ====================
     handleDesensitizeSelectFile(callback) {
         this.desensitizeFileSelectCallback = callback
+        this.filePickerAllowFolder = false
         this.showFilePicker = true
     },
     handleDesensitizeActiveFile(callback) {
@@ -2840,11 +2889,20 @@ export default {
             return
         }
 
-        // 诉讼可视化的材料范围选择：只取名字，不导入内容——AI 自己会去读
+        // 诉讼可视化的材料范围选择：只取名字，不导入内容——AI 自己会去读。
+        //
+        // 文件与文件夹必须分开说。以前一律拼成《名字》（fileId=N），模型读起来就是
+        // 一份文档，于是拿去调 extract_file_text，撞上「这是个文件夹」的错误就卡死了。
+        // 文件夹要明说是文件夹、并把下一步（先列目录再逐份读）交代清楚。
         if (this.litigationScopeCallback) {
+            const isFolder = file.fileType === 'folder' || file.isFolder
             this.litigationScopeCallback({
-                label: file.name,
-                description: `《${file.name}》（fileId=${file.id}）`
+                label: isFolder ? `文件夹：${file.name}` : file.name,
+                isFolder,
+                description: isFolder
+                    ? `文件夹「${file.name}」（folderId=${file.id}）及其下全部材料。`
+                      + `先对 ${file.id} 调 extract_file_text 拿到该文件夹的文件清单，再逐份通读。`
+                    : `《${file.name}》（fileId=${file.id}）`
             })
             this.litigationScopeCallback = null
             return
@@ -3029,9 +3087,11 @@ export default {
       }
     },
 
-    // 材料范围选择：复用页面上那个 FilePickerDialog（与脱敏面板同一套回调约定）
+    // 材料范围选择：复用页面上那个 FilePickerDialog（与脱敏面板同一套回调约定）。
+    // 只有这一个调用方开 allowFolder——律师给材料的自然单位就是卷宗文件夹。
     handleLitigationScopeSelect(callback) {
       this.litigationScopeCallback = callback
+      this.filePickerAllowFolder = true
       this.showFilePicker = true
     },
 
@@ -3059,8 +3119,12 @@ export default {
       if (file.tabType === 'market-detail') {
         return true
       }
-      // 普通文件在资源管理器、搜索或EasyVoice模式下都可见
-      return this.leftPaneKey === 'files' || this.leftPaneKey === 'search' || this.leftPaneKey === 'easyvoice'
+      // 普通文件在资源管理器、搜索或EasyVoice模式下都可见。
+      // 诉讼可视化面板也要放行：图廊的「打开」是那个面板唯一的出图入口，
+      // 不放行的话点了之后标签被 v-show 藏死、编辑区显示空闲态，功能等于不存在
+      // （与上面版本对比标签同一类问题）。
+      return this.leftPaneKey === 'files' || this.leftPaneKey === 'search'
+        || this.leftPaneKey === 'easyvoice' || this.leftPaneKey === 'litigation-visual'
     },
     startRenameProject() {
       this.renameProjectName = this.project.name || ''
@@ -4495,6 +4559,19 @@ export default {
         }
       } catch (e) {
         console.error('Failed to load dynamic plugins:', e)
+      }
+    },
+
+    // 拉「哪些 skill 是启用的」，供左栏插件位过滤（诉讼可视化默认不安装，装了才显示）。
+    // 失败时保持 null = 不过滤：把已装功能藏起来的代价，远大于多显示一个入口。
+    async loadEnabledSkills() {
+      try {
+        const res = await getSkills()
+        const list = (res && res.data) || []
+        if (!Array.isArray(list)) return
+        this.enabledSkillIds = list.filter(s => s && s.enabled).map(s => s.id)
+      } catch (e) {
+        console.warn('拉取已启用 skill 失败，左栏不做过滤:', e)
       }
     },
 

@@ -1456,6 +1456,17 @@ ipcMain.handle('checkba:zetaoffice-editor', async () => {
   }
 })
 
+// 内嵌 draw.io：告诉渲染层去哪里加载编辑器 <iframe>。首次询问时才起静态服务。
+// 与 zetaoffice 不同，这里不需要分区也不需要 COOP/COEP——draw.io 是纯 DOM 应用。
+// 资源没烙进这次构建时返回 { available:false }，渲染层据此退回「下载后用其他程序打开」，
+// 而不是挂一个永远转圈的 iframe。
+ipcMain.handle('checkba:drawio-editor', async () => {
+  const { startDrawioServer, drawioUrl, isAvailable } = require('./drawio-server')
+  if (!(await isAvailable())) return { available: false }
+  const { origin } = await startDrawioServer()
+  return { available: true, kind: 'iframe', origin, url: drawioUrl(origin) }
+})
+
 // IDE 化：Finder「打开方式」/ 拖到 Dock 图标进来的路径（macOS open-file 事件，
 // 可能早于窗口创建，先存后发；目录/文件在主进程判好再交渲染层走 open-path 流程）
 let pendingOpenPath = null

@@ -55,9 +55,16 @@ public class LitigationVisualPanelService {
             Long svgFileId,
             Long pngFileId,
             Long mapFileId,
+            Long drawioFileId,
             String layout,
             String mode,
             boolean draft,
+            /**
+             * 这张图在 draw.io 里被手工改过。判据是 .drawio 比 .map.json 新——
+             * 语义地图只在出图/换风格时写，所以 .drawio 更新说明是人动的。
+             * 前端据此在「换风格」前提醒：重画会用语义地图覆盖手工改动。
+             */
+            boolean handEdited,
             List<String> formats,
             String updatedAt
     ) {}
@@ -104,15 +111,21 @@ public class LitigationVisualPanelService {
             ProjectFile folder = projectFileRepository.findById(e.getKey()).orElse(null);
             if (folder == null) continue;
 
-            Long svgId = null, pngId = null, mapId = null;
+            Long svgId = null, pngId = null, mapId = null, drawioId = null;
+            java.time.LocalDateTime mapAt = null, drawioAt = null;
             List<String> formats = new ArrayList<>();
             String newest = null;
             for (ProjectFile f : e.getValue()) {
                 String n = f.getName();
                 if (n.endsWith(".map.json")) {
                     mapId = f.getId();
+                    mapAt = f.getUpdatedAt();
                 } else if (n.endsWith(".drawio.svg")) {
                     formats.add("drawio");            // 带内嵌模型的那份不单独算一种格式
+                } else if (n.endsWith(".drawio")) {
+                    drawioId = f.getId();
+                    drawioAt = f.getUpdatedAt();
+                    formats.add("drawio");
                 } else if (n.endsWith(".svg")) {
                     svgId = f.getId();
                     formats.add("svg");
@@ -128,11 +141,15 @@ public class LitigationVisualPanelService {
             }
             if (svgId == null) continue;              // 连母版都没有的不算一张图
 
+            // 两边都有时间戳才判定。缺任一就当没改过——宁可少提醒一次，
+            // 也不要对着一张没动过的图弹"会覆盖你的修改"。
+            boolean handEdited = mapAt != null && drawioAt != null && drawioAt.isAfter(mapAt);
+
             Map<String, String> meta = readMapMeta(mapId);
             out.add(new DiagramView(
-                    folder.getId(), folder.getName(), svgId, pngId, mapId,
+                    folder.getId(), folder.getName(), svgId, pngId, mapId, drawioId,
                     meta.getOrDefault("layout", ""), meta.getOrDefault("mode", ""),
-                    folder.getName().endsWith("-draft"),
+                    folder.getName().endsWith("-draft"), handEdited,
                     formats.stream().distinct().sorted().toList(),
                     newest));
         }
@@ -236,6 +253,89 @@ public class LitigationVisualPanelService {
             throw new IllegalStateException("重画失败：" + e.getMessage(), e);
         } finally {
             deleteTree(work);
+        }
+    }
+
+    /**
+     * 保存用户在内嵌 draw.io 里改完的图。
+     *
+     * <p>三份产物必须一起动，否则用户会看到自相矛盾的东西：.drawio 是可编辑源、
+     * .svg 是母版（图廊与编辑器标签认它）、.png 是唯一能插进正在写的起诉状的格式
+     * （{@code doc_insert_image} 只收位图）。只写回 .drawio 的话，用户改完图去插图，
+     * 插进去的还是旧的那张。
+     *
+     * <p><b>PNG 由 Batik 出，不用 draw.io 自己导的位图。</b>随包中文字体的注册与
+     * 字体栈末位兜底都在 {@link com.checkba.service.ai.LitigationPngService} 里；
+     * 绕过它，标题在干净的 Windows 上会变成方块——这是记在案的地雷，见
+     * {@code .claude/agents/litigation-visual.md}。
+     *
+     * <p>非诉讼可视化产出的 .drawio（用户自己传的）同样能存：找不到同名 .svg 兄弟
+     * 就只写 XML，不报错。
+     *
+     * @param svg draw.io 客户端导出的 SVG；为空表示只存 XML
+     * @return 受影响的文件 id，供前端刷新已打开的标签
+     */
+    public Map<String, Object> saveDrawio(Long projectId, Long fileId, String xml, String svg) {
+        if (xml == null || xml.isBlank()) throw new IllegalArgumentException("图形内容为空，未保存");
+        ProjectFile drawio = projectFileService.getFile(fileId);
+        if (drawio == null || !projectId.equals(drawio.getProjectId())) {
+            throw new IllegalArgumentException("文件不存在或不属于该项目");
+        }
+        if (!drawio.getName().toLowerCase().endsWith(".drawio")) {
+            throw new IllegalArgumentException("只能保存 .drawio 文件");
+        }
+
+        Map<String, Object> out = new HashMap<>();
+        try {
+            Path xmlPath = storageResolver.resolve(drawio.getFilePath());
+            Files.createDirectories(xmlPath.getParent());
+            Files.writeString(xmlPath, xml, StandardCharsets.UTF_8);
+            drawio.setFileSize(Files.size(xmlPath));
+            projectFileRepository.save(drawio);
+            out.put("drawioFileId", drawio.getId());
+
+            if (svg == null || svg.isBlank() || drawio.getParentId() == null) return out;
+
+            String base = drawio.getName().substring(0, drawio.getName().length() - ".drawio".length());
+            List<ProjectFile> siblings = projectFileRepository
+                    .findByProjectIdAndParentIdOrderBySortOrderAsc(projectId, drawio.getParentId());
+            ProjectFile svgFile = siblings.stream()
+                    // .drawio.svg 是带内嵌模型的旧副本，不是母版，别把它当成要同步的那份
+                    .filter(f -> f.getName().equals(base + ".svg"))
+                    .findFirst().orElse(null);
+            if (svgFile == null) return out;
+
+            Path svgPath = storageResolver.resolve(svgFile.getFilePath());
+            Files.writeString(svgPath, svg, StandardCharsets.UTF_8);
+            svgFile.setFileSize(Files.size(svgPath));
+            projectFileRepository.save(svgFile);
+            out.put("svgFileId", svgFile.getId());
+
+            // PNG 重出失败不该让保存整体失败：用户的图已经落盘了，少一张预览位图
+            // 比"保存失败"这四个字准确得多。
+            Path png = pngService.rasterize(svgPath);
+            if (png != null) {
+                ProjectFile pngFile = siblings.stream()
+                        .filter(f -> f.getName().equals(base + ".png"))
+                        .findFirst().orElse(null);
+                if (pngFile == null) {
+                    pngFile = projectFileService.createFile(projectId, drawio.getParentId(), base + ".png",
+                            "png", Files.size(png), null,
+                            LitigationVisualTools.MARKER_ARTIFACT + projectId + "_" + System.currentTimeMillis(),
+                            AGENT_USER_ID);
+                }
+                Path dest = storageResolver.resolve(pngFile.getFilePath());
+                Files.createDirectories(dest.getParent());
+                if (!dest.equals(png)) Files.move(png, dest, StandardCopyOption.REPLACE_EXISTING);
+                pngFile.setFileSize(Files.size(dest));
+                projectFileRepository.save(pngFile);
+                out.put("pngFileId", pngFile.getId());
+            }
+            return out;
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException("保存失败：" + e.getMessage(), e);
         }
     }
 

@@ -214,6 +214,12 @@ public class FeedbackService {
         return feedbackRepository.findByStatusOrderByIdDesc(status.trim().toUpperCase(), page);
     }
 
+    /** 用户自己提交过的反馈（浮窗「我的反馈」用）：不要求管理员，只看自己的行。 */
+    public List<UserFeedback> listByUser(Long userId, int limit) {
+        int safeLimit = Math.max(1, Math.min(200, limit));
+        return feedbackRepository.findByUserIdOrderByIdDesc(userId, PageRequest.of(0, safeLimit));
+    }
+
     public Path feedbackDir(Long feedbackId) {
         return storageResolver.globalRoot().resolve("feedback").resolve(String.valueOf(feedbackId));
     }

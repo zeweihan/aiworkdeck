@@ -148,11 +148,16 @@
             <view class="mdp-kv-row"><text class="mdp-k">标识</text><text class="mdp-v mono">{{ spec.id }}</text></view>
             <view v-if="display.version" class="mdp-kv-row"><text class="mdp-k">版本</text><text class="mdp-v">v{{ display.version }}</text></view>
             <view v-if="display.author" class="mdp-kv-row"><text class="mdp-k">作者</text><text class="mdp-v">{{ display.author }}</text></view>
+            <view v-if="display.license" class="mdp-kv-row"><text class="mdp-k">许可</text><text class="mdp-v">{{ display.license }}</text></view>
             <view v-if="display.updatedAt" class="mdp-kv-row"><text class="mdp-k">更新于</text><text class="mdp-v">{{ display.updatedAt }}</text></view>
             <view class="mdp-kv-row"><text class="mdp-k">来源</text><text class="mdp-v">{{ sourceText }}</text></view>
             <view v-if="display.homepage" class="mdp-kv-row">
               <text class="mdp-k">主页</text>
               <text class="mdp-v mdp-link" @tap="$emit('open-url', display.homepage)">{{ display.homepage }}</text>
+            </view>
+            <!-- 第三方内容署名（如随 skill 分发的 vendor 引擎）：MIT 等许可要求保留的版权声明 -->
+            <view v-for="(c, ci) in display.credits" :key="ci" class="mdp-kv-row">
+              <text class="mdp-k">鸣谢</text><text class="mdp-v">{{ c }}</text>
             </view>
           </view>
         </view>
@@ -270,6 +275,9 @@ export default {
         description: m.description || i.description || '',
         author: m.authorDisplayName || m.author || i.author || '',
         version: m.version || i.version || '',
+        license: m.license || i.license || '',
+        // credits（第三方引擎署名）目前只有本机 skill 会带；官网 registry 契约暂未收录该字段
+        credits: i.credits || m.credits || [],
         downloads: downloads ? (downloads >= 10000 ? (downloads / 10000).toFixed(1) + 'w' : downloads >= 1000 ? (downloads / 1000).toFixed(1) + 'k' : String(downloads)) : '',
         categoryLabel: this.spec.kind === 'skill' && cat ? (CATEGORY_LABELS[cat] || '其他') : '',
         updatedAt: m.updatedAt ? String(m.updatedAt).slice(0, 10) : '',

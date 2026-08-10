@@ -218,12 +218,13 @@ try {
 
   await step('提交并拿到编号', async () => {
     await clickSel('.awdfb-submit')
+    // 提交结果落在结果卡（.awdfb-result-msg），不再是页脚状态行，且不再自动关闭
     await page.waitForFunction(
-      () => (document.querySelector('.awdfb-status') || {}).innerText?.includes('编号 #'),
+      () => (document.querySelector('.awdfb-result-msg') || {}).innerText?.includes('编号 #'),
       POLL(60000))
-    const txt = await page.$eval('.awdfb-status', (el) => el.innerText)
+    const txt = await page.$eval('.awdfb-result-msg', (el) => el.innerText)
     const m = txt.match(/#(\d+)/)
-    if (!m) throw new Error('状态里没有编号: ' + txt)
+    if (!m) throw new Error('结果卡里没有编号: ' + txt)
     feedbackId = Number(m[1])
     console.log('    反馈 #' + feedbackId)
   })
@@ -259,8 +260,9 @@ try {
 
   await step('浮窗关闭后 BrowserView 可见性被交还', async () => {
     // 浮窗只置全局 ref，由 project-overview 的 watcher 统一控制 view 显隐；
-    // 这里断言提交完成后那个 ref 已复位，否则下次开浏览器 tab 会是黑的
-    // 提交成功后浮窗停留 1.4s 展示编号再自动收起
+    // 这里断言提交完成后那个 ref 已复位，否则下次开浏览器 tab 会是黑的。
+    // 提交成功后不再自动关闭（用户要能看清结果卡），得手动点关闭。
+    await clickSel('.awdfb-x')
     await page.waitForFunction(() => !document.querySelector('.awdfb-mask'), POLL(10000))
     await page.waitForSelector('.awdfb-launcher', { timeout: 10000 })
   })
