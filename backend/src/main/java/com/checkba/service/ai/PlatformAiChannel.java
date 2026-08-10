@@ -66,6 +66,13 @@ public class PlatformAiChannel {
         public String openrouterKey;
         public Double limitUsd;
         public String fetchedAt;
+        /**
+         * 签发这把 key 的账户指纹（{@link AccountService#accountFingerprintOrNull()}）。
+         * 缓存文件是<b>机器级</b>的、而 key 是<b>账户级</b>的，没有这个字段就没法判断
+         * 「现在连着的还是不是当初换来它的那个账户」——换个没充值的账号进来会继续花上一个账号的额度。
+         * 存量文件没有这个字段，读到 null 视为不匹配、丢弃重取（见 {@link #current()}）。
+         */
+        public String owner;
     }
 
     /** 机器级通道是否可用（账户已连接）。不发网络请求。AccountController 的机器级视图用它。 */
@@ -150,6 +157,16 @@ public class PlatformAiChannel {
         return !localMode && userId != null && perUser.isBound(userId);
     }
 
+    /**
+     * 这次调用会不会用到<b>机器级</b>密钥文件。{@link PlatformCreditsGate} 用它决定余额闸要不要生效：
+     * 机器级路径的余额是「本机连着的那个账户」的，能用 {@code AccountService} 直接查；
+     * per-user 路径的额度由官网在签发 key 时就按人闸住了，这里再查一遍既查不到（拿不到对方的 awdk_ Key）
+     * 也没必要。
+     */
+    public boolean usesMachineKey(Long userId) {
+        return !perUserApplies(userId) && !strictMultiTenant();
+    }
+
     /** 多租户形态（本实例存在任一桥接绑定）下，机器级回落是禁止的。 */
     private boolean strictMultiTenant() {
         return !localMode && perUser.multiTenant();
@@ -183,12 +200,18 @@ public class PlatformAiChannel {
     private String machineFingerprint() {
         Cached cached = current();
         if (cached == null || cached.openrouterKey == null) return "none";
+        String fingerprint = fingerprint(cached.openrouterKey);
+        return fingerprint == null ? "none" : fingerprint;
+    }
+
+    private static String fingerprint(String material) {
+        if (material == null || material.isBlank()) return null;
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256")
-                    .digest(cached.openrouterKey.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    .digest(material.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return HexFormat.of().formatHex(digest, 0, 6);
         } catch (Exception e) {
-            return "none";
+            return null;
         }
     }
 
@@ -204,12 +227,26 @@ public class PlatformAiChannel {
 
     // ==================== 内部 ====================
 
+    /**
+     * 缓存必须与「当初换来它的那个账户」对得上，否则一律丢弃重取。
+     *
+     * <p>没有这道判断时，换账号会留下一把别人的 key 继续用：解锁页粘 {@code awdk_} 走的是
+     * {@code LicenseController} 那条路，它调 {@code AccountService.connect} 而<b>不经过</b>
+     * {@code AccountController.connect}，也就吃不到那里的 {@link #clearCache()}。
+     * 结果是一个没充值的新账号接着花上一个账号的 OpenRouter 额度。
+     * 把判据放在读缓存这一刻，任何入口漏调 clearCache 都不再造成漏钱——
+     * 「记得清缓存」是会忘的，「归属对不上就不认」不会。
+     *
+     * <p>存量文件的 {@code owner} 是 null，与已连接账户的非空指纹不相等，因此会走一次重取并重新绑定。
+     * 平台通道本来就要联网打 OpenRouter，不存在「离线靠这份缓存续命」的场景，丢弃是安全的。
+     */
     private synchronized Cached current() {
-        if (memory != null) return memory;
+        if (memory != null) return ownedByCurrentAccount(memory) ? memory : discard();
         try {
             if (Files.exists(keyFile)) {
                 Cached cached = objectMapper.readValue(Files.readAllBytes(keyFile), Cached.class);
                 if (cached != null && cached.openrouterKey != null && !cached.openrouterKey.isBlank()) {
+                    if (!ownedByCurrentAccount(cached)) return discard();
                     memory = cached;
                     return memory;
                 }
@@ -220,6 +257,16 @@ public class PlatformAiChannel {
         return null;
     }
 
+    private boolean ownedByCurrentAccount(Cached cached) {
+        return java.util.Objects.equals(cached.owner, accountService.accountFingerprintOrNull());
+    }
+
+    private Cached discard() {
+        log.info("平台 AI 通道密钥缓存归属与当前账户不符，已丢弃并将重新获取");
+        clearCache();
+        return null;
+    }
+
     private synchronized Cached fetch() {
         Map<String, Object> body = accountService.fetchAiKey();
         Cached cached = new Cached();
@@ -227,6 +274,7 @@ public class PlatformAiChannel {
         Object limit = body.get("limitUsd");
         cached.limitUsd = limit instanceof Number n ? n.doubleValue() : null;
         cached.fetchedAt = Instant.now().toString();
+        cached.owner = accountService.accountFingerprintOrNull();
         try {
             Files.createDirectories(keyFile.getParent());
             Files.write(keyFile, objectMapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(cached));

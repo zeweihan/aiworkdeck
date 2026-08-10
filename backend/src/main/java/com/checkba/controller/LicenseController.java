@@ -2,7 +2,7 @@ package com.checkba.controller;
 
 import com.checkba.service.LicenseService;
 import com.checkba.service.account.AccountService;
-import com.checkba.service.entitlement.EntitlementService;
+import com.checkba.service.account.AccountSwitchCleanup;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -32,16 +32,16 @@ public class LicenseController {
 
     private final LicenseService licenseService;
     private final AccountService accountService;
-    private final EntitlementService entitlementService;
+    private final AccountSwitchCleanup accountSwitchCleanup;
     private final com.checkba.service.site.SiteProfileService siteProfileService;
 
     public LicenseController(LicenseService licenseService,
                              AccountService accountService,
-                             EntitlementService entitlementService,
+                             AccountSwitchCleanup accountSwitchCleanup,
                              com.checkba.service.site.SiteProfileService siteProfileService) {
         this.licenseService = licenseService;
         this.accountService = accountService;
-        this.entitlementService = entitlementService;
+        this.accountSwitchCleanup = accountSwitchCleanup;
         this.siteProfileService = siteProfileService;
     }
 
@@ -125,7 +125,9 @@ public class LicenseController {
         if (!key.startsWith("awdk_")) return;
         try {
             accountService.connect(key);
-            entitlementService.refreshAsync();
+            // 与设置页那条连接路径共用同一套作废动作。这里曾经只刷权益、不清平台密钥/余额判定/用量基线，
+            // 于是从解锁页换一个没充值的账号进来能接着花上一个账号的 OpenRouter 额度
+            accountSwitchCleanup.afterConnect();
             out.put("accountConnected", true);
         } catch (Exception e) {
             log.warn("解锁成功但账户连接未完成（可在设置页重试）: {}", e.getMessage());

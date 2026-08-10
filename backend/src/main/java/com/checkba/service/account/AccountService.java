@@ -138,6 +138,27 @@ public class AccountService {
         return state.key == null || state.key.isBlank() ? null : state.key;
     }
 
+    /**
+     * 当前连接账户的指纹（Key 的 SHA-256 前 12 位十六进制）；未连接返回 null。
+     *
+     * <p>给需要回答「现在连的还是不是刚才那个账户」的地方用——机器级的缓存（平台 AI 密钥、
+     * 余额判定结果）都是账户级的内容，换了账号必须作废，否则新账号会接着用上一个账号的额度。
+     * <b>指纹是单向的</b>：可以比对、可以进日志，反推不出 Key，因此不受
+     * {@link #currentKeyOrNull()} 那条「别把 Key 拿出去传」的限制。
+     * 定义只此一处，比对两侧才不会漂。
+     */
+    public synchronized String accountFingerprintOrNull() {
+        String key = currentKeyOrNull();
+        if (key == null) return null;
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(key.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest, 0, 6);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     // ==================== 官网数据拉取 ====================
 
     /** GET /api/account/me —— 余额与账户档案（余额单位是整数分）。 */
