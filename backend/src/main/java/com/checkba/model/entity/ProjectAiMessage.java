@@ -9,7 +9,13 @@ import java.time.LocalDateTime;
  * 项目内 AI 对话消息，用于后续做历史聊天记录 / 上下文管理。
  */
 @Entity
-@Table(name = "project_ai_message")
+@Table(name = "project_ai_message", indexes = {
+        // 概览页按 projectId 铺全项目会话（GROUP BY conversationId + ORDER BY MAX(createdAt)）。
+        // 加索引前线上只有主键索引，这条查询是全表扫描。
+        @Index(name = "idx_ai_message_project_created", columnList = "project_id, created_at"),
+        // 会话正文回放与四个按 conversationId 的标量子查询。
+        @Index(name = "idx_ai_message_conversation_created", columnList = "conversation_id, created_at")
+})
 public class ProjectAiMessage {
 
     @Id
