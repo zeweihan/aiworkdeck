@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * 项目档案（客户 / 事项类型 / 立项时间 / 下一步 / 对方）。
@@ -62,6 +63,47 @@ public class ProjectProfileService {
             fields.add(render(fieldKey, rows.get(fieldKey), project));
         }
         return fields;
+    }
+
+    /**
+     * 手填单字段（A 期唯一的写入通道）。upsert 语义：
+     * 写入即把该字段锁成 source='user'，Plan 2 的 AI 抽取永不覆盖它。
+     *
+     * value 为 null 或 trim 后为空串 → 删除该行（回到未填态；openedAt 因此回落建档时间）。
+     */
+    public Map<String, Object> saveUserField(Long projectId, String fieldKey, String value) {
+        requireKnownKey(fieldKey);
+        Project project = projectRepository.findById(projectId).orElse(null);
+
+        String trimmed = value == null ? null : value.trim();
+        if (trimmed == null || trimmed.isEmpty()) {
+            repository.findByProjectIdAndFieldKey(projectId, fieldKey).ifPresent(repository::delete);
+            return render(fieldKey, null, project);
+        }
+
+        ProjectProfileField row = repository.findByProjectIdAndFieldKey(projectId, fieldKey)
+                .orElseGet(() -> newRow(projectId, fieldKey));
+        row.setFieldValue(trimmed);
+        row.setSource(SOURCE_USER);
+        // 改成手填就把 AI 那次判断的痕迹清掉——留着会让 UI 把手填值标成「模型猜的」
+        row.setConfidence(null);
+        row.setEvidence(null);
+        return render(fieldKey, repository.save(row), project);
+    }
+
+    /** 新行必须自带 uid：跨机器身份只认它，既有行的 uid 任何时候都不许换。 */
+    private ProjectProfileField newRow(Long projectId, String fieldKey) {
+        ProjectProfileField row = new ProjectProfileField();
+        row.setProjectId(projectId);
+        row.setFieldKey(fieldKey);
+        row.setUid(UUID.randomUUID().toString());
+        return row;
+    }
+
+    private void requireKnownKey(String fieldKey) {
+        if (!FIELD_KEYS.contains(fieldKey)) {
+            throw new IllegalArgumentException("未知的档案字段");
+        }
     }
 
     /**

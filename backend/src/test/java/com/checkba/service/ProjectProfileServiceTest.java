@@ -6,6 +6,7 @@ import com.checkba.repository.ProjectProfileFieldRepository;
 import com.checkba.repository.ProjectRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -13,7 +14,9 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
@@ -40,6 +43,15 @@ class ProjectProfileServiceTest {
         project.setCreatedAt(PROJECT_CREATED_AT);
         when(projectRepository.findById(42L)).thenReturn(Optional.of(project));
         when(repository.findByProjectId(anyLong())).thenReturn(List.of());
+
+        // 模拟 JPA：save 时给新实体分配自增 ID 并补 updatedAt（@UpdateTimestamp 在单元测试里不会触发）
+        when(repository.save(any(ProjectProfileField.class))).thenAnswer(inv -> {
+            ProjectProfileField f = inv.getArgument(0);
+            if (f.getId() == null) f.setId(100L);
+            if (f.getUpdatedAt() == null) f.setUpdatedAt(LocalDateTime.of(2026, 8, 8, 10, 11, 12));
+            return f;
+        });
+        when(repository.findByProjectIdAndFieldKey(anyLong(), anyString())).thenReturn(Optional.empty());
     }
 
     private ProjectProfileField row(String fieldKey, String value, String source) {
@@ -146,5 +158,78 @@ class ProjectProfileServiceTest {
 
         assertEquals("新值-第二行", client.get("fieldValue"));
         assertEquals("user", client.get("source"));
+    }
+
+    @Test
+    void 手填新字段落新行并锁成user() {
+        Map<String, Object> saved = service.saveUserField(42L, "client", "  北京某某科技有限公司  ");
+
+        ArgumentCaptor<ProjectProfileField> captor = ArgumentCaptor.forClass(ProjectProfileField.class);
+        verify(repository).save(captor.capture());
+        ProjectProfileField row = captor.getValue();
+        assertEquals(42L, row.getProjectId());
+        assertEquals("client", row.getFieldKey());
+        assertEquals("北京某某科技有限公司", row.getFieldValue(), "两端空白要 trim");
+        assertEquals("user", row.getSource());
+        assertNull(row.getConfidence());
+        assertNull(row.getEvidence());
+        assertNotNull(row.getUid(), "新建行必须生成 uid——跨机器身份只认它");
+        assertEquals(36, row.getUid().length());
+
+        assertEquals("client", saved.get("fieldKey"));
+        assertEquals("客户", saved.get("label"));
+        assertEquals("北京某某科技有限公司", saved.get("fieldValue"));
+        assertEquals("user", saved.get("source"));
+        assertEquals("2026-08-08T10:11:12", saved.get("updatedAt"));
+    }
+
+    @Test
+    void 改既有字段时uid不变() {
+        ProjectProfileField existing = row("client", "旧客户", "ai");
+        existing.setUid("uid-keep-me");
+        existing.setConfidence(0.7);
+        existing.setEvidence("从某份文件推断");
+        when(repository.findByProjectIdAndFieldKey(42L, "client")).thenReturn(Optional.of(existing));
+
+        service.saveUserField(42L, "client", "新客户");
+
+        assertEquals("uid-keep-me", existing.getUid());
+        assertEquals("新客户", existing.getFieldValue());
+        assertEquals("user", existing.getSource(), "律师改过就锁成 user");
+        assertNull(existing.getConfidence(), "改成手填后 AI 的置信度要清掉");
+        assertNull(existing.getEvidence(), "改成手填后 AI 的证据要清掉");
+    }
+
+    @Test
+    void 传空串删除该行() {
+        ProjectProfileField existing = row("nextStep", "下周一交初稿", "user");
+        when(repository.findByProjectIdAndFieldKey(42L, "nextStep")).thenReturn(Optional.of(existing));
+
+        Map<String, Object> result = service.saveUserField(42L, "nextStep", "   ");
+
+        verify(repository).delete(existing);
+        verify(repository, never()).save(any(ProjectProfileField.class));
+        assertNull(result.get("fieldValue"));
+        assertNull(result.get("source"));
+    }
+
+    @Test
+    void 删除openedAt后回落建档时间() {
+        ProjectProfileField existing = row("openedAt", "2026-07-15", "user");
+        when(repository.findByProjectIdAndFieldKey(42L, "openedAt")).thenReturn(Optional.of(existing));
+
+        Map<String, Object> result = service.saveUserField(42L, "openedAt", null);
+
+        verify(repository).delete(existing);
+        assertEquals("2026-08-01", result.get("fieldValue"));
+        assertEquals("default", result.get("source"));
+    }
+
+    @Test
+    void 未知字段名被拒() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> service.saveUserField(42L, "secretColumn", "随便"));
+        assertEquals("未知的档案字段", e.getMessage());
+        verify(repository, never()).save(any(ProjectProfileField.class));
     }
 }
