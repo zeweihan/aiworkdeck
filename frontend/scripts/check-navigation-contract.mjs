@@ -218,6 +218,79 @@ check('个人中心保住了不该删的东西', () => {
   return gone.length ? '误删: ' + gone.join(', ') : null
 })
 
+// ==================== 导航入口与出口 ====================
+
+const USERPROFILE_ROUTE = '/pages/userprofile/userprofile'
+const countOf = (s, sub) => s.split(sub).length - 1
+
+check('launch 无最近项目兜底落项目列表页', () => {
+  const src = readFrontend('src/pages/launch/launch.vue')
+  if (src.includes(USERPROFILE_ROUTE)) return '还指着个人中心'
+  if (!src.includes("reLaunch({ url: '/pages/project-list/project-list' })")) return '没有指向项目列表页'
+  if (!src.includes('/pages/project-overview/project-overview?id=')) return '启动直达工作台那条被改坏了'
+  return null
+})
+
+check('login 四处落点全改项目列表页', () => {
+  const src = readFrontend('src/pages/login/login.vue')
+  if (src.includes(USERPROFILE_ROUTE)) return '还有指着个人中心的落点'
+  const n = countOf(src, '/pages/project-list/project-list')
+  if (n !== 4) return '应当恰好四处（CLIENT 分支 / 无最近项目兜底 / 登录成功 / 注册成功），实际 ' + n
+  if (!src.includes('/pages/project-overview/project-overview?id=')) return '会话恢复直达工作台那条被改坏了'
+  return null
+})
+
+check('newproject 返回项目列表页且仍用 navigateTo', () => {
+  const src = readFrontend('src/pages/newproject/index.vue')
+  if (src.includes(USERPROFILE_ROUTE)) return '还指着个人中心'
+  if (!src.includes("navigateTo({ url: '/pages/project-list/project-list' })")) {
+    return '两端都不是工作台，应当 navigateTo 到项目列表页'
+  }
+  if (src.includes('goToUserProfile')) return '方法名还叫 goToUserProfile，与它现在的去向不符'
+  if (countOf(src, 'goToProjectList') !== 3) {
+    return 'goToProjectList 应当恰好 3 处（1 处定义 + 模板两处绑定），实际 ' + countOf(src, 'goToProjectList')
+  }
+  return null
+})
+
+check('工作台「全部项目」用 reLaunch 去项目列表页', () => {
+  const src = readFrontend('src/pages/project-overview/project-overview.vue')
+  const i = src.indexOf('goAllProjects()')
+  if (i < 0) return '找不到 goAllProjects'
+  const body = src.slice(i, i + 400)
+  if (!body.includes('/pages/project-list/project-list')) return 'goAllProjects 没有指向项目列表页'
+  if (!body.includes('reLaunch')) return '工作台参与的跳转一律 reLaunch，不能用 navigateTo'
+  return null
+})
+
+check('工作台 rail 头像仍 navigateTo 个人中心（不许顺手改）', () => {
+  const src = readFrontend('src/pages/project-overview/project-overview.vue')
+  const i = src.indexOf('goToUserProfile()')
+  if (i < 0) return '找不到 goToUserProfile'
+  const body = src.slice(i, i + 200)
+  if (!body.includes(USERPROFILE_ROUTE) || !body.includes('navigateTo')) {
+    return '它依赖页面栈保留实例以便 onShow 回流刷新，本次不改'
+  }
+  return null
+})
+
+check('五条直达工作台的出口一条都没动', () => {
+  const bad = []
+  if (!readFrontend('src/App.vue').includes('/pages/project-overview/project-overview?id=')) bad.push('App.vue 应用菜单「最近打开」')
+  if (!readFrontend('src/utils/ideOpen.js').includes('/pages/project-overview/project-overview?')) bad.push('ideOpen.js 打开本地文件夹/文件')
+  const ov = readFrontend('src/pages/project-overview/project-overview.vue')
+  const i = ov.indexOf('switchToProject(p) {') // 方法定义；'switchToProject(p)' 会先命中模板里的 @tap 调用
+  if (i < 0 || !ov.slice(i, i + 400).includes('/pages/project-overview/project-overview?id=')) bad.push('顶栏切换器 switchToProject')
+  return bad.length ? '被改坏: ' + bad.join(', ') : null
+})
+
+check('admin 切换本机工作区仍清最近项目', () => {
+  const src = readFrontend('src/pages/admin/admin.vue')
+  return src.includes("removeStorageSync('checkba_last_project_id')")
+    ? null
+    : '删了这行会让切身份之后仍直达上一个身份的项目'
+})
+
 // ---- 追加位：后续任务把新的 check(...) 加在这一行之前 ----
 
 if (failures.length) {

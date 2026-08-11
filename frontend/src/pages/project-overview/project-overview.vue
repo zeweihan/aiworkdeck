@@ -2735,7 +2735,9 @@ export default {
     },
     goAllProjects() {
       this.projectSwitcherOpen = false
-      uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+      // 工作台参与的跳转一律 reLaunch：navigateTo 会把工作台留在页面栈里，
+      // 从列表页再进另一个项目就出现两个存活的工作台实例（全局监听多实例地雷）
+      uni.reLaunch({ url: '/pages/project-list/project-list' })
     },
     // Cmd+P 快速打开面板选中文件
     onQuickOpenFile(file) {
