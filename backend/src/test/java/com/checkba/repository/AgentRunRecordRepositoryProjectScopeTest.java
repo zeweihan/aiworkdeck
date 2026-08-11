@@ -47,11 +47,29 @@ class AgentRunRecordRepositoryProjectScopeTest {
         record("c-new", 7L, "RUNNING", base.plusHours(2));
         record("c-other", 8L, "RUNNING", base.plusHours(3));
 
-        List<AgentRunRecord> runs = repository.findByProjectIdOrderByUpdatedAtDesc(7L);
+        List<AgentRunRecord> runs = repository.findTop5ByProjectIdOrderByUpdatedAtDesc(7L);
 
         assertEquals(2, runs.size());
         assertEquals("c-new", runs.get(0).getConversationId());
         assertEquals("RUNNING", runs.get(0).getStatus());
         assertEquals("c-old", runs.get(1).getConversationId());
+    }
+
+    /**
+     * 封顶 5 条现在是 findTop5By... 在 SQL 里直接 LIMIT，不再是服务层 Java 循环 break——
+     * 这条测试钉住这个契约本身：仓储层给多少条，上层就该信多少条。
+     */
+    @Test
+    void cappedAtFiveEvenWithMoreRowsInTable() {
+        LocalDateTime base = LocalDateTime.of(2026, 8, 8, 10, 0, 0);
+        for (int i = 0; i < 8; i++) {
+            record("c-" + i, 7L, "RUNNING", base.plusMinutes(i));
+        }
+
+        List<AgentRunRecord> runs = repository.findTop5ByProjectIdOrderByUpdatedAtDesc(7L);
+
+        assertEquals(5, runs.size());
+        assertEquals("c-7", runs.get(0).getConversationId(), "最近更新的在前");
+        assertEquals("c-3", runs.get(4).getConversationId(), "只留最近 5 条");
     }
 }

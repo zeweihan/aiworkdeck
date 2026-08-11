@@ -69,7 +69,7 @@ class ProjectOverviewServiceTest {
         p.setId(PROJECT);
         p.setUserId(ownerUserId);
         when(projectRepository.findById(PROJECT)).thenReturn(Optional.of(p));
-        when(agentRunRecordRepository.findByProjectIdOrderByUpdatedAtDesc(PROJECT)).thenReturn(runs);
+        when(agentRunRecordRepository.findTop5ByProjectIdOrderByUpdatedAtDesc(PROJECT)).thenReturn(runs);
     }
 
     @Test
@@ -115,10 +115,13 @@ class ProjectOverviewServiceTest {
     }
 
     @Test
-    void backgroundRunsAreCappedAtFiveAndCarryStatusAndIsoTime() {
+    void backgroundRunsCarryStatusAndIsoTime() {
+        // 封顶 5 条现在是仓储层 findTop5By... 的职责（SQL 里直接 LIMIT，见
+        // AgentRunRecordRepositoryProjectScopeTest.cappedAtFiveEvenWithMoreRowsInTable），
+        // 服务层不再自己 break——这里只验证服务把仓储给的结果原样透传成响应形状。
         LocalDateTime base = LocalDateTime.of(2026, 8, 8, 10, 11, 12);
         List<AgentRunRecord> runs = new ArrayList<>();
-        for (int i = 0; i < 9; i++) {
+        for (int i = 0; i < 5; i++) {
             runs.add(run("c-" + i, "RUNNING", base.minusMinutes(i)));
         }
         stub(List.of(), false, List.of(), 1L, runs);

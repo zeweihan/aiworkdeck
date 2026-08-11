@@ -33,9 +33,6 @@ public class ProjectOverviewService {
     /** AI 生成物固定落在项目根下这个文件夹（见 ProjectFileService.java:835）。 */
     static final String AI_ARTIFACT_FOLDER_NAME = "AI Assistant Files";
 
-    /** 统计条最多带回几条后台任务。 */
-    private static final int MAX_BACKGROUND_RUNS = 5;
-
     private final ProjectFileRepository projectFileRepository;
     private final ProjectMemberRepository projectMemberRepository;
     private final ProjectRepository projectRepository;
@@ -124,8 +121,9 @@ public class ProjectOverviewService {
 
     private List<Map<String, Object>> backgroundRuns(Long projectId) {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (AgentRunRecord r : agentRunRecordRepository.findByProjectIdOrderByUpdatedAtDesc(projectId)) {
-            if (out.size() >= MAX_BACKGROUND_RUNS) break;
+        // 封顶 5 条现在是仓储层 findTop5By... 的职责，SQL 里直接 LIMIT，这里不再 hydrate
+        // 全表再在 Java 层 break。
+        for (AgentRunRecord r : agentRunRecordRepository.findTop5ByProjectIdOrderByUpdatedAtDesc(projectId)) {
             // HashMap 允许 null 值；Map.of 不允许，updatedAt 可空所以不能用 Map.of
             Map<String, Object> m = new HashMap<>();
             m.put("conversationId", r.getConversationId());
