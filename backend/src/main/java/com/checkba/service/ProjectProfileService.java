@@ -4,7 +4,9 @@ import com.checkba.model.entity.Project;
 import com.checkba.model.entity.ProjectProfileField;
 import com.checkba.repository.ProjectProfileFieldRepository;
 import com.checkba.repository.ProjectRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -70,7 +72,12 @@ public class ProjectProfileService {
      * 写入即把该字段锁成 source='user'，Plan 2 的 AI 抽取永不覆盖它。
      *
      * value 为 null 或 trim 后为空串 → 删除该行（回到未填态；openedAt 因此回落建档时间）。
+     *
+     * @Transactional 覆盖读-写两次往返：并发下两个请求都可能查到空 Optional、都走插入，
+     * 第二个会撞 (projectId, fieldKey) 唯一约束——由 saveOrRecoverFromRace 兜底成更新语义，
+     * 不让 DataIntegrityViolationException 冒到 GlobalExceptionHandler 变成"服务器内部错误"。
      */
+    @Transactional
     public Map<String, Object> saveUserField(Long projectId, String fieldKey, String value) {
         requireKnownKey(fieldKey);
         Project project = projectRepository.findById(projectId).orElse(null);
@@ -88,7 +95,25 @@ public class ProjectProfileService {
         // 改成手填就把 AI 那次判断的痕迹清掉——留着会让 UI 把手填值标成「模型猜的」
         row.setConfidence(null);
         row.setEvidence(null);
-        return render(fieldKey, repository.save(row), project);
+        return render(fieldKey, saveOrRecoverFromRace(projectId, fieldKey, row), project);
+    }
+
+    /**
+     * 已经有人抢先插了同一 (projectId, fieldKey) 时，把本次要写的值/source/confidence/evidence
+     * 转移到既存那一行上再存——保留它已有的 uid，不用本次生成的那个。
+     */
+    private ProjectProfileField saveOrRecoverFromRace(Long projectId, String fieldKey, ProjectProfileField row) {
+        try {
+            return repository.save(row);
+        } catch (DataIntegrityViolationException raceLost) {
+            ProjectProfileField existing = repository.findByProjectIdAndFieldKey(projectId, fieldKey)
+                    .orElseThrow(() -> raceLost);
+            existing.setFieldValue(row.getFieldValue());
+            existing.setSource(row.getSource());
+            existing.setConfidence(row.getConfidence());
+            existing.setEvidence(row.getEvidence());
+            return repository.save(existing);
+        }
     }
 
     /** 新行必须自带 uid：跨机器身份只认它，既有行的 uid 任何时候都不许换。 */

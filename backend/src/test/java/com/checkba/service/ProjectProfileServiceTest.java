@@ -7,6 +7,7 @@ import com.checkba.repository.ProjectRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -198,6 +199,28 @@ class ProjectProfileServiceTest {
         assertEquals("user", existing.getSource(), "律师改过就锁成 user");
         assertNull(existing.getConfidence(), "改成手填后 AI 的置信度要清掉");
         assertNull(existing.getEvidence(), "改成手填后 AI 的证据要清掉");
+        verify(repository).save(existing);
+    }
+
+    @Test
+    void 并发撞车时按已存在处理不抛异常() {
+        // 两个请求都查到空 Optional、都走插入：第一次 save 撞 (projectId, fieldKey) 唯一约束，
+        // 恢复路径重新查到那一行（已存在），走更新语义、保留它的 uid。
+        ProjectProfileField existing = row("client", "旧客户", "user");
+        when(repository.findByProjectIdAndFieldKey(42L, "client"))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(existing));
+        when(repository.save(any(ProjectProfileField.class)))
+                .thenThrow(new DataIntegrityViolationException("duplicate key"))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        Map<String, Object> result = assertDoesNotThrow(
+                () -> service.saveUserField(42L, "client", "新客户"));
+
+        assertEquals("新客户", result.get("fieldValue"));
+        assertEquals("user", result.get("source"));
+        assertEquals("uid-1", existing.getUid(), "uid 用既存那行的，不是抢插失败那次生成的");
+        verify(repository, times(2)).save(any(ProjectProfileField.class));
     }
 
     @Test
