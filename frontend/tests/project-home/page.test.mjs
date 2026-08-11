@@ -140,3 +140,67 @@ test('保存失败必须通过 ref 调 ProfileHeader.restoreEdit，否则输入�
   assert.match(catchBody, /restoreEdit\(/, 'catch 里必须调 restoreEdit，否则保存失败时用户刚敲的字会静默消失')
   assert.match(SRC, /<ProfileHeader[\s\S]*?ref="profileHeader"/, 'ProfileHeader 必须挂 ref 才能被父级调用 restoreEdit')
 })
+
+// 请求代守卫：isActiveInstance() 只挡跨实例（切到别的项目）的过期写入，挡不住同一实例内
+// 两轮 loadAll() 之间的乱序——弱网下第一轮的慢请求可能在第二轮已经刷新完之后才 resolve，
+// 用旧数据覆盖刚刷新的新数据。下面几条断言源码里确实有「记代号 → 写回前比对代号」这一层。
+
+function methodBody(startMarker, endMarker) {
+  const i = SRC.indexOf(startMarker)
+  assert.ok(i > 0, '找不到方法: ' + startMarker)
+  const end = SRC.indexOf(endMarker)
+  assert.ok(end > i, '找不到方法边界: ' + startMarker + ' -> ' + endMarker)
+  return SRC.slice(i, end)
+}
+
+test('loadAll 每轮自增请求代', () => {
+  assert.match(SRC, /loadGeneration:\s*0/, "data() 里缺 loadGeneration 初值")
+  const body = methodBody('loadAll()', 'async loadProjectCard(')
+  assert.match(body, /this\.loadGeneration\+\+/, 'loadAll 必须先自增请求代，否则同实例内两轮取数无法区分新旧')
+})
+
+test('loadProjectCard / loadProfile 写回前比对请求代', () => {
+  for (const [name, next] of [
+    ['async loadProjectCard(', 'async loadProfile('],
+    ['async loadProfile(', 'async loadStats('],
+  ]) {
+    const body = methodBody(name, next)
+    assert.match(body, /const gen = this\.loadGeneration/, name + ' 没有在方法体开头记下请求代')
+    assert.match(body, /gen !== this\.loadGeneration/, name + ' 写回前没有比对请求代')
+  }
+})
+
+test('loadStats / loadActivity / loadTasks 的成功与失败两个分支都要比对请求代', () => {
+  for (const [name, next] of [
+    ['async loadStats(', 'async loadActivity('],
+    ['async loadActivity(', 'async loadTasks('],
+    ['async loadTasks(', 'async loadConversations('],
+  ]) {
+    const body = methodBody(name, next)
+    const catchIdx = body.indexOf('catch')
+    assert.ok(catchIdx > 0, name + ' 没有 catch 分支')
+    const tryBody = body.slice(0, catchIdx)
+    const catchBody = body.slice(catchIdx)
+    assert.match(tryBody, /gen !== this\.loadGeneration/, name + ' 的成功分支写回前没有比对请求代')
+    assert.match(
+      catchBody,
+      /gen !== this\.loadGeneration/,
+      name + ' 的失败分支写回前没有比对请求代——过期代的错误响应会清掉后来那轮已经写好的新数据'
+    )
+  }
+})
+
+test('loadConversations：翻页不自增请求代，但仍要比对请求代丢弃过期响应', () => {
+  const body = methodBody('async loadConversations(', 'onLoadMoreConversations(')
+  assert.match(body, /const gen = this\.loadGeneration/, '没有在方法体开头记下请求代')
+  const catchIdx = body.indexOf('catch')
+  assert.ok(catchIdx > 0, '没有 catch 分支')
+  const tryBody = body.slice(0, catchIdx)
+  const catchBody = body.slice(catchIdx)
+  assert.match(tryBody, /gen !== this\.loadGeneration/, '成功分支写回前没有比对请求代')
+  assert.match(catchBody, /gen !== this\.loadGeneration/, '失败分支写回前没有比对请求代')
+  // this.loadGeneration++ 只许在 loadAll 出现一次；翻页（reset=false）时自增会作废
+  // 自己正常的追加结果——「代号变了就该丢」只对「别人刷新了整页」成立，不对「我自己在翻页」成立。
+  const incrCount = (CODE.match(/this\.loadGeneration\+\+/g) || []).length
+  assert.equal(incrCount, 1, 'this.loadGeneration++ 应当只在 loadAll 出现一次')
+})

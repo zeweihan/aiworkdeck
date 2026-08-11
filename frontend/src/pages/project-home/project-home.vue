@@ -97,6 +97,12 @@ export default {
       nextBefore: null,
       nextBeforeId: null,
       firstShowDone: false,
+      // 请求代：每轮 loadAll() 自增一次。isActiveInstance() 只挡跨实例（切到别的项目）的
+      // 过期写入，挡不住同一实例内两轮 loadAll() 之间的乱序——弱网下第一轮的慢请求
+      // 可能在第二轮已经刷新完之后才姗姗来迟地 resolve，用旧数据覆盖刚刷新的新数据。
+      // 各 loadX 进方法体第一行就记下当时的代号，写回 data 之前比对是否还是当前代，
+      // 不是就丢弃这次响应。
+      loadGeneration: 0,
     }
   },
   computed: {
@@ -143,6 +149,8 @@ export default {
       return !window.__checkbaProjectHomeVm || window.__checkbaProjectHomeVm === this
     },
     loadAll() {
+      // 每轮取数递增请求代，配合各 loadX 里的比对丢弃过期响应
+      this.loadGeneration++
       this.loadProjectCard()
       this.loadProfile()
       this.loadStats()
@@ -151,13 +159,14 @@ export default {
       this.loadConversations({ reset: true })
     },
     async loadProjectCard() {
+      const gen = this.loadGeneration
       try {
         // GET /api/projects/my 返回**裸数组**（ProjectController 直接返 List<ProjectCardDTO>），
         // 不是信封。写 res.data 会恒空 —— admin.vue 就是这么坏掉的，别照抄。
         const res = await getMyProjects()
         const list = Array.isArray(res) ? res : []
         const card = list.find((p) => Number(p.id) === this.projectId)
-        if (!this.isActiveInstance()) return
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         this.projectName = (card && card.name) || ''
         this.canEdit = canEditProfile(card && card.myRole)
       } catch (e) {
@@ -165,39 +174,46 @@ export default {
       }
     },
     async loadProfile() {
+      const gen = this.loadGeneration
       try {
         const res = await getProjectProfile(this.projectId)
-        if (!this.isActiveInstance()) return
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         this.profileFields = (res && res.data && res.data.fields) || []
       } catch (e) {
         console.warn('[ProjectHome] 读取项目档案失败', e)
       }
     },
     async loadStats() {
+      const gen = this.loadGeneration
       this.statsLoading = true
       try {
         const res = await getProjectOverviewStats(this.projectId)
-        if (!this.isActiveInstance()) return
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         this.stats = (res && res.data) || {}
       } catch (e) {
         console.warn('[ProjectHome] 读取统计失败', e)
+        // 过期代的失败响应不许清掉后来那轮已经写好的新数据
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         this.stats = {}
       } finally {
         this.statsLoading = false
       }
     },
     async loadActivity() {
+      const gen = this.loadGeneration
       this.activityLoading = true
       this.activityUnavailable = false
       try {
         const res = await getVersionTimeline(this.projectId, 5)
-        if (!this.isActiveInstance()) return
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         this.versions = (res && res.data && res.data.versions) || []
       } catch (e) {
         // VersionController.requireMember:562-564 显式拒 CLIENT，客户身份一定走到这里；
         // 后端若还没做「未开仓早退回空 versions」那条修复，未开启版本记录的项目也走这里。
         // 新建项目十有八九没开版本记录，一进概览页就弹错是最差的第一印象：
         // 落成引导态，不弹 toast。
+        // 过期代的失败响应不许清掉后来那轮已经写好的新数据
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         this.versions = []
         this.activityUnavailable = true
       } finally {
@@ -205,13 +221,15 @@ export default {
       }
     },
     async loadTasks() {
+      const gen = this.loadGeneration
       this.tasksLoading = true
       try {
         const res = await getProjectTasks(this.projectId)
-        if (!this.isActiveInstance()) return
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         this.tasks = (res && res.data && res.data.tasks) || []
       } catch (e) {
         console.warn('[ProjectHome] 读取任务失败', e)
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         this.tasks = []
       } finally {
         this.tasksLoading = false
@@ -219,6 +237,10 @@ export default {
     },
     async loadConversations(options) {
       const reset = !!(options && options.reset)
+      // 翻页（reset=false）不自增代号，只是记下发起时的代号：如果响应回来时代号已经变了，
+      // 说明中途整页被 loadAll() 重刷过，这次翻页追加的结果确实该丢，不然会拼出一份
+      // 一半新一半旧的列表。
+      const gen = this.loadGeneration
       this.conversationsLoading = true
       try {
         // 复合游标成对传：只带 before 会让服务端退化成严格小于，
@@ -226,7 +248,7 @@ export default {
         const before = reset ? null : this.nextBefore
         const beforeId = reset ? null : this.nextBeforeId
         const res = await getProjectConversations(this.projectId, { limit: 20, before, beforeId })
-        if (!this.isActiveInstance()) return
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         const data = (res && res.data) || {}
         const page = data.conversations || []
         this.conversations = reset ? page : this.conversations.concat(page)
@@ -234,6 +256,7 @@ export default {
         this.nextBeforeId = data.nextBeforeId || null
       } catch (e) {
         console.warn('[ProjectHome] 读取对话历史失败', e)
+        if (!this.isActiveInstance() || gen !== this.loadGeneration) return
         if (reset) this.conversations = []
         this.nextBefore = null
         this.nextBeforeId = null
