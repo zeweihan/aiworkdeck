@@ -113,6 +113,69 @@ check('project-list.scss 守浅色外壳红线', () => {
   return null
 })
 
+// ==================== 项目列表页脚本 ====================
+
+check('项目列表页根节点带 e2e 锚点类名', () => {
+  const src = readFrontend('src/pages/project-list/project-list.vue')
+  return src.includes('class="page-project-list"') ? null : '根节点必须是 .page-project-list（e2e 锚点）'
+})
+
+check('项目列表页角色文案收敛到 config/memberRoles.js', () => {
+  const src = readFrontend('src/pages/project-list/project-list.vue')
+  if (!/from\s+'@\/config\/memberRoles\.js'/.test(src)) return "没有从 '@/config/memberRoles.js' 引入"
+  if (/'PARTICIPANT'\s*:/.test(src)) return '页面里还残留自己硬编码的角色映射表'
+  return null
+})
+
+check('项目列表页点卡片进项目概览页（navigateTo）', () => {
+  const src = readFrontend('src/pages/project-list/project-list.vue')
+  if (!src.includes('/pages/project-home/project-home?id=')) return 'goToProject 没有指向项目概览页'
+  if (src.includes('/pages/project-overview/project-overview')) {
+    return '不许从列表页直连工作台，必须先经概览页'
+  }
+  const i = src.indexOf('goToProject(projectId)')
+  if (i < 0) return '找不到 goToProject(projectId)'
+  if (!src.slice(i, i + 300).includes('navigateTo')) {
+    return '列表页→概览页两端都不是工作台，必须用 navigateTo 不是 reLaunch'
+  }
+  return null
+})
+
+check('项目列表页删掉了写死 0 的两张统计卡', () => {
+  // 禁字断言只看实际代码：注释里要写清楚「原先的进行中/已完成是写死的 0」，
+  // 那段说明性文字不该把断言判红。
+  const src = stripVueComments(readFrontend('src/pages/project-list/project-list.vue'))
+  if (src.includes('进行中') || src.includes('已完成')) {
+    return 'Project 实体没有状态字段，这两张卡的数字是写死的字面量 0，不许搬过来'
+  }
+  const cards = (src.match(/class="stat-card"/g) || []).length
+  return cards === 1 ? null : '统计条应当只剩「全部项目」一张卡，实际 ' + cards + ' 张'
+})
+
+check('项目列表页带全 CloudAcceptDialog 的两个入口', () => {
+  const src = readFrontend('src/pages/project-list/project-list.vue')
+  if (!src.includes('<CloudAcceptDialog')) return '弹窗组件没搬过来'
+  // 1 处 method 定义 + 2 处入口绑定（有项目态顶部按钮 / 空项目态入口）
+  const entries = (src.match(/openCloudAccept/g) || []).length
+  return entries >= 3 ? null : 'openCloudAccept 只出现 ' + entries + ' 次，两个入口缺一个'
+})
+
+check('项目列表页对 CLIENT 收起写操作入口', () => {
+  const src = readFrontend('src/pages/project-list/project-list.vue')
+  if (!/isClientUser\s*\(\)/.test(src)) return '缺 isClientUser computed'
+  if (!src.includes('!isClientUser && projects.length > 0')) return '顶部两个动作按钮没有对 CLIENT 隐藏'
+  if (!src.includes('canManageMembers')) return '成员增删没有对 CLIENT 收起'
+  return null
+})
+
+check('项目列表页别把裸数组当信封解', () => {
+  const src = readFrontend('src/pages/project-list/project-list.vue')
+  if (/getMyProjects\(\)[\s\S]{0,80}\.data/.test(src)) {
+    return 'getMyProjects 返回裸数组（ProjectController.java:193-200），取 .data 会恒空'
+  }
+  return null
+})
+
 // ---- 追加位：后续任务把新的 check(...) 加在这一行之前 ----
 
 if (failures.length) {
