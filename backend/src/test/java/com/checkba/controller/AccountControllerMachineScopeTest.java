@@ -8,6 +8,7 @@ import com.checkba.service.AdminAccessService;
 import com.checkba.service.DeviceTokenService;
 import com.checkba.service.UserService;
 import com.checkba.service.account.AccountService;
+import com.checkba.service.account.AccountSwitchCleanup;
 import com.checkba.service.account.MachineAccountGuard;
 import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.PlatformAiChannel;
@@ -77,9 +78,8 @@ class AccountControllerMachineScopeTest {
         accountService = mock(AccountService.class);
         entitlementService = mock(EntitlementService.class);
         PlatformAiChannel platformAiChannel = mock(PlatformAiChannel.class);
-        accountController = new AccountController(accountService, entitlementService,
-                platformAiChannel, mock(PlatformUsageAccountant.class), mock(ChatModelFactory.class),
-                mock(TokenUsageRepository.class), guard);
+        accountController = new AccountController(accountService, platformAiChannel,
+                mock(AccountSwitchCleanup.class), mock(TokenUsageRepository.class), guard);
         entitlementController = new EntitlementController(entitlementService, guard);
     }
 

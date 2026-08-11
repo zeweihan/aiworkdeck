@@ -30,6 +30,8 @@ public class ChatModelFactory {
     private final AiModelProperties aiModelProperties;
     private final com.checkba.service.SystemSettingService systemSettingService;
     private final PlatformAiChannel platformAiChannel;
+    /** 平台通道的余额闸：确知 Credits 为 0 时不让这一轮跑起来。 */
+    private final PlatformCreditsGate platformCreditsGate;
     private final PlatformUsageAccountant usageAccountant;
     /**
      * 辅助模型 ID 的解析器。**模型 ID 的解析只许有这一处**——记账侧
@@ -298,6 +300,9 @@ public class ChatModelFactory {
      */
     private String platformApiKey() {
         Long userId = PlatformAiUserScope.current();
+        // 余额闸排在取 key 之前：本地已经缓存过 key 时 apiKey() 根本不联网，
+        // 「没充值就不能用」不能只靠取 key 那一刻的 409（见 PlatformCreditsGate）
+        platformCreditsGate.ensureCredits(userId);
         String key = platformAiChannel.apiKey();
         // 请求发出前先把用量基线建起来，否则重启后第一条消息只够建基线、cost 永远留空
         usageAccountant.ensureBaselineAsync(userId);

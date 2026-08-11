@@ -43,6 +43,16 @@ public class SkillRegistry {
     /** system_setting 中存放"仅手动"skill id 列表（JSON 数组）的 key */
     public static final String MANUAL_KEY = "ai.skills.manual";
 
+    /**
+     * system_setting 中存放"已做过默认启停初始化"的 skill id 列表（JSON 数组）的 key。
+     *
+     * 只对 {@code enabled_by_default: false} 的 skill 起作用：第一次扫描到这样的 id 时
+     * 把它加入 {@link #DISABLED_KEY} 并把 id 记进这里；之后每次扫描/重启都先查这个名单——
+     * 已经记录过的 id 不再重复"打回默认关闭"，这样用户手动打开/关闭过的状态才不会被
+     * 下一次启动悄悄覆盖。做法与 DISABLED_KEY / MANUAL_KEY 一致（同一套 readIdSet/persist）。
+     */
+    public static final String SEEDED_KEY = "ai.skills.seeded";
+
     private final SkillProperties properties;
     private final SystemSettingService systemSettingService;
     private final PluginService pluginService;
@@ -55,6 +65,9 @@ public class SkillRegistry {
 
     /** "仅手动"skill id 集合：不参与触发词自动匹配，只能由用户在对话中钉选生效 */
     private final Set<String> manualSkillIds = ConcurrentHashMap.newKeySet();
+
+    /** 已做过默认启停初始化的 skill id 集合（见 {@link #SEEDED_KEY}） */
+    private final Set<String> seededSkillIds = ConcurrentHashMap.newKeySet();
 
     private volatile long disabledStateRefreshedAt = 0L;
 
@@ -254,6 +267,7 @@ public class SkillRegistry {
             if (previous != null) {
                 log.warn("Duplicate skill id '{}', skip dir: {}", skill.getId(), skillDir);
             } else {
+                seedDefaultDisabledIfNeeded(skill);
                 log.info("Registered skill '{}' ({} triggers, {} allowed tools{})",
                         skill.getId(), skill.getTriggers().size(), skill.getAllowedTools().size(),
                         sourcePluginId != null ? ", from plugin " + sourcePluginId : "");
@@ -261,6 +275,26 @@ public class SkillRegistry {
         } catch (Exception e) {
             log.error("Failed to load skill dir {}, skip: {}", skillDir, e.getMessage());
         }
+    }
+
+    /**
+     * skill.yml 声明 {@code enabled_by_default: false} 且这个 id **从未被种子化过**时，
+     * 把它加入禁用名单并把 id 记入 {@link #SEEDED_KEY}。
+     *
+     * 种子化只发生一次：下次扫描（rescan / 重启）时 {@link #seededSkillIds} 已经从持久化
+     * 存储里重新加载，命中即跳过——用户之后手动开/关过的状态不会被这条逻辑打回去。
+     * 未持久化场景（systemSettingService 为 null，如部分单测）里 seededSkillIds 每次都是空的，
+     * 这条逻辑退化为"每次扫描都按默认关闭初始化"，与"从未种过"语义一致，不算特例。
+     */
+    private void seedDefaultDisabledIfNeeded(SkillDefinition skill) {
+        if (skill.isEnabledByDefault() || seededSkillIds.contains(skill.getId())) {
+            return;
+        }
+        disabledSkillIds.add(skill.getId());
+        seededSkillIds.add(skill.getId());
+        persist(DISABLED_KEY, disabledSkillIds);
+        persist(SEEDED_KEY, seededSkillIds);
+        log.info("Skill '{}' seeded as disabled (enabled_by_default: false, first time seen)", skill.getId());
     }
 
     /**
@@ -294,6 +328,15 @@ public class SkillRegistry {
         skill.setOutput(asString(raw.get("output")));
         skill.setRequires(asStringList(raw.get("requires")));
         skill.setCategory(asString(raw.get("category")));
+        skill.setAuthor(asString(raw.get("author")));
+        skill.setAuthorUrl(asString(raw.get("author_url")));
+        skill.setVersion(asString(raw.get("version")));
+        skill.setLicense(asString(raw.get("license")));
+        skill.setCredits(asStringList(raw.get("credits")));
+        Boolean enabledByDefault = asBoolean(raw.get("enabled_by_default"));
+        if (enabledByDefault != null) {
+            skill.setEnabledByDefault(enabledByDefault);
+        }
         String promptFile = asString(raw.get("prompt"));
         if (promptFile != null && !promptFile.isBlank()) {
             skill.setPromptFile(promptFile);
@@ -320,6 +363,13 @@ public class SkillRegistry {
 
     private static String asString(Object v) {
         return v == null ? null : String.valueOf(v);
+    }
+
+    /** SnakeYAML 对 true/false 字面量已经解析成 Boolean；容错处理字符串写法 ("false"/"true") */
+    private static Boolean asBoolean(Object v) {
+        if (v == null) return null;
+        if (v instanceof Boolean b) return b;
+        return Boolean.parseBoolean(String.valueOf(v));
     }
 
     private static List<String> asStringList(Object v) {
@@ -354,12 +404,14 @@ public class SkillRegistry {
     private void loadDisabledState() {
         disabledSkillIds.clear();
         manualSkillIds.clear();
+        seededSkillIds.clear();
         if (systemSettingService == null) {
             return;
         }
         try {
             disabledSkillIds.addAll(readIdSet(DISABLED_KEY));
             manualSkillIds.addAll(readIdSet(MANUAL_KEY));
+            seededSkillIds.addAll(readIdSet(SEEDED_KEY));
         } catch (Exception e) {
             log.error("Failed to load skill activation state, default to all auto", e);
         } finally {

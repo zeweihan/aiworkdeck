@@ -53,6 +53,12 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `service/account/AccountEndpoint.java` — 授权服务器地址的协议校验（https，回环 http 例外），`LicenseService` 与 `AccountService` 共用。
 - `service/account/AccountException.java` — `Kind`：NETWORK / UNAUTHORIZED / CONFLICT / NOT_CONNECTED / MALFORMED。
 - `backend/src/main/java/com/checkba/controller/AccountController.java` — `/api/account/{status,connect,disconnect,usage}`。
+- `service/account/AccountSwitchCleanup.java` — **换账户后作废动作的唯一出口**（`afterConnect` / `afterDisconnect`）：
+  权益缓存 + 平台 AI 密钥缓存 + 余额判定 + 用量基线四样一起清，disconnect 还要 `demotePlatformProvider()`。
+  连接账户有**两个**入口（设置页 `AccountController.connect`、解锁页 `LicenseController.activate` 粘 `awdk_`），
+  动作抄两份必然漏（见地雷 22）。新增第三条连接路径时接这里。
+- `AccountService.accountFingerprintOrNull()` — 账户指纹（Key 的 SHA-256 前 12 位）的**唯一定义**。
+  机器级缓存都是账户级内容，换账号必须作废；指纹单向、可比对可进日志，不受「别把 Key 拿出去传」的限制。
 - 前端：`frontend/src/pages/admin/admin.vue` 的「账户与用量」分区（连接/断开、余额、AI 额度、最近用量、
   本机工作区切换、文件缓存区存储位置）；顶栏 chip 在 `project-overview.vue`（已连接账户优先于试用版标识）。
 
@@ -72,7 +78,11 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 **平台 AI 通道与计费（PR-B，编排侧见 ai-chat.md）**
 - `backend/src/main/java/com/checkba/service/ai/PlatformAiChannel.java` — **取 key 的唯一路由出口**。
   机器级路径（缓存 `~/.aiworkdeck/platform-ai-key.json`，0600）与 per-user 路径在这里分叉，
-  `keyFingerprint()` 供模型实例缓存失效。
+  `keyFingerprint()` 供模型实例缓存失效。缓存文件带 `owner`（签发它的账户指纹），
+  归属对不上一律丢弃重取（见地雷 22）。`usesMachineKey(userId)` 是余额闸的适用判据。
+- `service/ai/PlatformCreditsGate.java` — **余额闸**：确知 Credits 为 0 时不让这一轮跑起来，
+  由 `ChatModelFactory.platformApiKey()` 在取 key 之前调用（那是平台通道每条消息的必经点）。
+  三条判据见地雷 23。
 - `service/ai/PlatformUsageAccountant.java` — 平台通道真实扣费对账（`GET https://openrouter.ai/api/v1/key` 累计消费差分），
   基线按**密钥指纹**分桶、worker 按指纹分片；兼做吊销探测（401/403 即作废本地密钥）。
 - `service/ai/ChatModelFactory.java` — `Provider.AWD_CLOUD` 路由；`demotePlatformProvider()` 在断开账户时把供应商降级回落。
@@ -506,6 +516,32 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     那里按访客 IP 做 geo 分流，境内访客默认 301 回国内站，而「注册在国际站、人在境内」是合理场景。
     必须给 `^~ /api/` 与 `^~ /update/` 加优先级更高的 location 绕开 geo 判断。
 
+22. **机器级缓存装的是账户级内容，换账号必须整套作废——而且不能只靠调用方记得**。
+    连接账户有两个入口，作废动作原先只写在 `AccountController.connect` 里；
+    解锁页粘 `awdk_` 走的 `LicenseController.activate` 只调了 `entitlementService.refreshAsync()`，
+    于是从解锁页换一个**没充值的新账号**进来时，上一个账号的平台 AI 密钥、已购权益、用量基线
+    三样原封不动留着：新账号照样能花上一个账号的 OpenRouter 额度，也继承了它买过的付费项。
+    偏偏解锁页才是主入口（用账户 Key 解锁的人走的就是那条路）。
+    修法是**两层都要在**：① 动作收进 `AccountSwitchCleanup`，两个入口共用；
+    ② 平台密钥缓存自己记 `owner` 指纹，归属对不上就丢弃重取——
+    「记得清缓存」是会忘的，「归属对不上就不认」不会。
+    存量缓存文件没有 `owner`，读到 null 视为不匹配、重取一次重新绑定；平台通道本来就要联网打
+    OpenRouter，不存在「离线靠这份缓存续命」的场景。护栏：`PlatformAiKeyOwnershipTest`、
+    `LicenseControllerEditionTest.activateReportsAccountConnected`。
+
+23. **「没充值不能用」不能只靠取 key 那一刻的 409**。官网对零余额账户在 `POST /api/account/ai-key`
+    回 409 `no_credits`，但那只在**本地没有缓存 key** 时才会被问到；本地已经有一把没花完的 key 时
+    `PlatformAiChannel.apiKey()` 根本不联网。OpenRouter 侧的 per-key limit 管的是「这把 key 花了多少」，
+    不是「这个人还有没有钱」。补这一段的是 `PlatformCreditsGate`，三条判据顺序不能换：
+    ① **只管机器级路径**（`usesMachineKey`）——per-user 路径的额度在官网签发 key 时已按人闸住，
+    且本端拿不到对方的 awdk_ Key，查也查不了；
+    ② **确知为 0 才拦**——`GET /api/account/ai-usage` 在上游不可达时仍回 200 + 真实 `creditsCents`，
+    只有网络失败/端点缺失/字段缺失这三种「不知道」一律放行（同地雷 6：权益失效不等于把人锁在外面），
+    且**不保留上一次的 0**，否则一次抖动就把刚充完值的人锁住；
+    ③ **首次同步、之后后台刷新**（60 秒保鲜）——全新的零余额账户第一条消息就必须被拦住，
+    所以第一次不能异步；之后不给每条消息加一次官网往返。
+    文案照旧不得含「登录」「未授权」「请先」（地雷 1）。护栏：`PlatformCreditsGateTest`。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
@@ -526,7 +562,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   `service/site/SiteMismatchMessageTest`（错配文案点名站点 + 三个掉线子串的红线）；
   per-user 平台密钥：`service/ai/PlatformAiKeyCipherTest`、`service/ai/PlatformAiKeyServiceTest`、
   `service/ai/PlatformAiChannelRoutingTest`（四种形态的取 key 路由）、
-  `service/ai/PlatformAiUserScopeTest`、`controller/PlatformAiKeyControllerTest`。
+  `service/ai/PlatformAiUserScopeTest`、`controller/PlatformAiKeyControllerTest`；
+  白嫖闸：`service/ai/PlatformCreditsGateTest`（余额闸三条判据）、
+  `service/ai/PlatformAiKeyOwnershipTest`（换账号不复用旧 key、存量文件重新绑定）。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
   （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。

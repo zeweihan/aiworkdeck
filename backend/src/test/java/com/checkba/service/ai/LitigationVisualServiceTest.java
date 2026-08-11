@@ -115,8 +115,10 @@ class LitigationVisualServiceTest {
                 got.add(f.getStr("format"));
             }
 
-            // 这五种是纯计算产物，任何机器上都必须有。
-            assertTrue(got.containsAll(java.util.Set.of("svg", "drawio", "drawio-svg", "pptx", "vsdx")),
+            // 这三种是纯计算产物，任何机器上都必须有。pptx/vsdx 引擎仍会产出（这条用例
+            // 直接调 svc.render 不经过 LitigationVisualTools.DEFAULT_FORMATS，走的是
+            // cli.py 自己的默认值），但产品已不再交付这两种格式，不再断言。
+            assertTrue(got.containsAll(java.util.Set.of("svg", "drawio", "drawio-svg")),
                     "缺少矢量母版或可编辑源文件：" + got);
 
             // PNG 要外部光栅器（rsvg-convert / inkscape / soffice / cairosvg），

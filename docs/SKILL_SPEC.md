@@ -66,6 +66,12 @@ output: |
 | `allowed_tools` | string[] | 否 | 工具白名单（真实注册的工具名，见 `ToolRegistry`）。命中后本轮 LLM 可见工具 = `allowed_tools ∪ ai.skills.base-tools`；白名单与已注册工具零交集时回退为不裁剪（误配置保护）。缺省 `[]` = 只剩基础工具集。 |
 | `output` | string | 否 | 输出结构约定（自然语言），随 prompt 模板一起注入系统消息。 |
 | `requires` | string[] | 否 | 声明依赖的能力契约（如 `evidence.retrieve.v1`，见 `docs/EVIDENCE_CONTRACT.md`）。v1 仅声明不阻断加载：Skill 描述"需要什么能力"，插件/内置实现负责提供，实现缺失时相关工具自然不可见。 |
+| `enabled_by_default` | boolean | 否 | 默认 `true`。为 `false` 时，**只在这个 id 第一次被扫描到**（从未装过）时把它加入禁用名单；之后用户改过的启停状态不会被下一次扫描/重启打回去（"是否已种过"持久化在 `ai.skills.seeded`，做法同 `ai.skills.disabled`，见 `SkillRegistry.seedDefaultDisabledIfNeeded`）。用于"随包分发但需要用户手动打开"的 skill——如引擎体积较大的 `litigation-visual`：文件始终随包分发，"安装"就是启用、"卸载"就是禁用，不涉及下载/删除。 |
+| `author` | string | 否 | 展示用作者名，如 `AI Workdeck`。 |
+| `author_url` | string | 否 | 作者主页/仓库链接。 |
+| `version` | string | 否 | 展示用版本号，自由格式；不参与 id 覆盖判断（覆盖键始终是 `id`）。 |
+| `license` | string | 否 | 许可证标识，如 `MIT`。 |
+| `credits` | string[] | 否 | 随 skill 分发的第三方内容署名（如 vendor 引擎），用于满足 MIT 等许可证的版权声明保留要求；每条一行自由文本，前端原样展示在「详细信息」区。 |
 
 未知字段被忽略（向前兼容）。
 
@@ -125,14 +131,14 @@ ai:
 
 | 方法 | 路径 | 权限 | 说明 |
 |---|---|---|---|
-| GET | `/api/skills/list` | 登录 | Skill 列表：id/name/description/triggers/allowedTools/sourcePluginId/enabled/activationMode |
+| GET | `/api/skills/list` | 登录 | Skill 列表：id/name/description/triggers/allowedTools/sourcePluginId/enabled/activationMode/author/authorUrl/version/license/credits |
 | POST | `/api/skills/{id}/enable` | admin | 启用 skill |
 | POST | `/api/skills/{id}/disable` | admin | 禁用 skill |
 | POST | `/api/skills/{id}/activation` | admin | 设置生效方式，body `{"mode":"auto"\|"manual"\|"disabled"}` |
 | POST | `/api/skills/rescan` | admin | 重扫 skills/ 目录与插件携带的 skill，返回 `{ code, skillCount }` |
 | GET | `/api/skills/market/list` | 登录 | 在线 Skill 广场列表（官网 registry + 本地 `installed` 标记）；registry 不可达返回 `{code:1, message}` |
 | POST | `/api/skills/market/install` | admin | body `{id}`。下载 bundle 落盘 `skills/<id>/` 后 rescan，重装即更新 |
-| POST | `/api/skills/market/uninstall` | admin | body `{id}`。仅可卸载 `ai.skills.dir` 直属目录；插件携带的 skill 拒绝 |
+| POST | `/api/skills/market/uninstall` | admin | body `{id}`。仅可卸载 `ai.skills.dir` 直属目录；插件携带的 skill 拒绝；`enabled_by_default:false` 的内置 skill（随包分发，非在线安装）只停用不删文件 |
 
 管理接口鉴权与 PluginController 一致：`X-Session-Id` 请求头 → `AdminAccessService.isAdmin`
 （云端=用户名 admin；桌面单机 `security.admin.allow-all-users=true` 时全员管理员。

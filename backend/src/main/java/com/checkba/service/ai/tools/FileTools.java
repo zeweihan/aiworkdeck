@@ -224,9 +224,9 @@ public class FileTools implements AgentToolComponent {
     }
 
     @ToolMeta(displayName = "提取文档全文", category = "file")
-    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Returns extracted text (may be truncated for very large files).")
+    @Tool("Extract the full plain text of a project file (pdf/docx/xlsx/doc etc.) by its database file ID. Use this to read Word/Excel/PDF documents from the project file tree. Returns extracted text (may be truncated for very large files). If the ID is a FOLDER, returns a listing of its direct children (id + name + type) instead of an error, so you can then read each file in turn.")
     public String extract_file_text(
-            @P("Project file database ID (from doc_list_project_files / material list)") Long fileId
+            @P("Project file database ID (from doc_list_project_files / material list). May also be a folder ID — you get its contents listed.") Long fileId
     ) {
         log.info("Tool: extract_file_text called for fileId={}", fileId);
         if (fileId == null) {
@@ -239,8 +239,16 @@ public class FileTools implements AgentToolComponent {
         ProjectFile pf = fileOpt.get();
         String denied = ToolFileGuard.rejectIfOutsideProject(pf);
         if (denied != null) return denied;
-        if ("folder".equalsIgnoreCase(pf.getFileType())) {
-            return "Error: File is a folder: " + pf.getName();
+        if ("folder".equalsIgnoreCase(pf.getFileType()) || Boolean.TRUE.equals(pf.getIsFolder())) {
+            // 直接把文件夹内容答出来，而不是只说一句"这是个文件夹"。
+            //
+            // 原先返回的死错误让模型无路可走：用户在诉讼可视化里把一个卷宗文件夹当
+            // 材料范围交进来，模型调到这里就卡住了，表现就是"给它文件夹它不认识"。
+            // 指向别的工具也不成立——doc_list_project_files 只收 projectId、且只列
+            // 「可编辑文档」，PDF 和图片全漏，答不了"这个文件夹里有什么"。
+            // 模型问的是"这东西的内容"，回"这是文件夹，里面是这些"才是真答案，
+            // 还省掉一轮往返。
+            return describeFolder(pf);
         }
         try {
             String text = documentTextService.extractText(pf);
@@ -257,6 +265,40 @@ public class FileTools implements AgentToolComponent {
             log.warn("extract_file_text failed for fileId={}", fileId, e);
             return "Error extracting text: " + e.getMessage();
         }
+    }
+
+    /**
+     * 文件夹的「内容」= 它下面有什么。列直接子项，子文件夹标出来，让模型能自己往下走。
+     *
+     * <p>只列一层：卷宗嵌套通常不深，而递归展开一个大文件夹会把上下文吃光。
+     * 子文件夹带着 id 返回，模型想深入就再调一次。
+     */
+    private String describeFolder(ProjectFile folder) {
+        List<ProjectFile> children = projectFileRepository
+                .findByProjectIdAndParentIdAndIsDeletedFalseOrderBySortOrderAsc(
+                        folder.getProjectId(), folder.getId());
+        if (children.isEmpty()) {
+            return "[文件夹 " + folder.getName() + "（id=" + folder.getId() + "）] 是空的，里面没有文件。";
+        }
+        final int maxItems = 200;
+        StringBuilder sb = new StringBuilder();
+        sb.append("[文件夹 ").append(folder.getName()).append("（id=").append(folder.getId())
+                .append("）] 这是一个文件夹，不是文件。它直接包含 ").append(children.size()).append(" 项")
+                .append("；对其中的每个文件调用 extract_file_text 读正文，子文件夹可再次对其 id 调用本工具。\n");
+        int shown = 0;
+        for (ProjectFile c : children) {
+            if (shown >= maxItems) {
+                sb.append("- …（还有 ").append(children.size() - shown).append(" 项未列出）\n");
+                break;
+            }
+            boolean isDir = "folder".equalsIgnoreCase(c.getFileType()) || Boolean.TRUE.equals(c.getIsFolder());
+            sb.append("- ").append(isDir ? "[文件夹] " : "").append("id=").append(c.getId())
+                    .append("，名称：").append(c.getName());
+            if (!isDir && c.getFileType() != null) sb.append("，类型：").append(c.getFileType());
+            sb.append('\n');
+            shown++;
+        }
+        return sb.toString();
     }
 
     @ToolMeta(displayName = "写入文件", category = "file", fileEffect = "ADDED", fileArg = "fileName")

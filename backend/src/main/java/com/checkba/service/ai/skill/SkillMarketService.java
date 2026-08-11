@@ -166,6 +166,12 @@ public class SkillMarketService {
 
     /**
      * 卸载在线安装的 skill：删除 {ai.skills.dir}/{id}/ 目录并 rescan。
+     *
+     * <b>例外：{@code enabled_by_default: false} 的内置 skill（如诉讼可视化）只停用不删文件。</b>
+     * 这类 skill 的引擎/工具是随安装包分发的，不来自在线广场——删掉两个文本文件不会腾出
+     * 任何空间，反而会造出一种"卸载后装不回来"的新故障模式（本地既没有源文件、在线注册表
+     * 也没有这条目）。对它们而言"卸载"在语义上就是 {@link SkillRegistry#setEnabled} 关闭。
+     *
      * @throws IllegalArgumentException id 非法或未安装
      * @throws IllegalStateException skill 来自插件（应通过插件管理卸载）或删除失败
      */
@@ -174,6 +180,11 @@ public class SkillMarketService {
         SkillDefinition existing = skillRegistry.getSkill(id).orElse(null);
         if (existing != null && existing.getSourcePluginId() != null) {
             throw new IllegalStateException("该 Skill 来自插件 " + existing.getSourcePluginId() + "，请通过插件管理卸载");
+        }
+        if (existing != null && !existing.isEnabledByDefault()) {
+            skillRegistry.setEnabled(id, false);
+            log.info("Uninstalled market skill '{}': builtin optional skill, disabled only (files kept)", id);
+            return;
         }
         try {
             File skillsDir = new File(properties.getDir());

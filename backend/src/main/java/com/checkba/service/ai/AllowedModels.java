@@ -13,9 +13,14 @@ import java.util.List;
  *
  * <p><b>精选而非全量</b>：OpenRouter 上有 400 个模型，支持按 {@code supported_parameters=tools}
  * 等服务端筛选，但把 400 个模型丢给律师用户选是负价值。这里只收常用款，每一条都经真机核对
- * （2026-08-08 对拍 {@code GET https://openrouter.ai/api/v1/models}）：在线、支持 tools、
+ * （2026-08-10 重新对拍 {@code GET https://openrouter.ai/api/v1/models}）：在线、支持 tools、
  * 不是动态路由别名（{@code openrouter/auto} 之类 pricing 返 -1，静态价格表无法计价）、
  * 不带 {@code :free} 后缀（平台限流 20 RPM）。
+ *
+ * <p><b>单价会在我们背后变</b>：2026-08-10 那次对拍抓到 GLM-5.2 与 Kimi K2.6 的单价各自涨了
+ * 3.0 倍与 1.6 倍，而表里还是旧值——方向是<b>低报</b>，BYOK 的估算成本会系统性偏低，
+ * 且不会有任何东西报警（平台通道走真实扣费，看不出来）。所以这张表要定期对拍，
+ * 联网护栏是 {@code AllowedModelsLiveContractTest}（需 {@code RUN_LIVE_MODEL_CHECK=1}）。
  *
  * <p><b>区域</b>：{@link Region#INTERNATIONAL} 的模型在国内网络会被 OpenRouter 返回
  * 403 "This model is not available in your region"。OpenRouter 的 API **没有任何字段**
@@ -48,11 +53,20 @@ public enum AllowedModels {
 
     GLM_5_2("z-ai/glm-5.2", "GLM-5.2",
             Vendor.ZHIPU, Region.GLOBAL, 1_048_576,
-            tier(0, 0.252, 0.792)),
+            tier(0, 0.76, 2.42)),
 
     KIMI_K2_6("moonshotai/kimi-k2.6", "Kimi K2.6",
             Vendor.MOONSHOT, Region.GLOBAL, 262_144,
-            tier(0, 0.5795, 2.44)),
+            tier(0, 0.95, 4.0)),
+
+    // 国产旗舰档：上面几条都是中档，重活（长文书起草、复杂检索推理）需要够强的落点
+    KIMI_K3("moonshotai/kimi-k3", "Kimi K3",
+            Vendor.MOONSHOT, Region.GLOBAL, 1_048_576,
+            tier(0, 3.0, 15.0)),
+
+    QWEN_3_8_MAX("qwen/qwen3.8-max", "通义千问 3.8 Max",
+            Vendor.ALIBABA, Region.GLOBAL, 1_000_000,
+            tier(0, 2.0, 6.0)),
 
     // 极便宜且 1M 上下文，是 ai.aux-model（子 Agent / 起标题 / 上下文摘要）的默认值
     QWEN_3_7_FLASH("qwen/qwen3.7-flash", "通义千问 3.7 Flash",

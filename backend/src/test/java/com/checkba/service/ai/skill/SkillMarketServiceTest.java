@@ -215,6 +215,31 @@ class SkillMarketServiceTest {
     }
 
     @Test
+    @DisplayName("uninstall：enabled_by_default:false 的内置 skill（随包分发）只停用不删文件")
+    void uninstallOnlyDisablesBuiltinOptionalSkill() throws IOException {
+        Path skillsDir = tempDir.resolve("skills");
+        Path skillDir = skillsDir.resolve("litigation-visual");
+        Files.createDirectories(skillDir);
+        Files.writeString(skillDir.resolve("skill.yml"), """
+                id: litigation-visual
+                name: 诉讼可视化
+                triggers: [案件时间轴]
+                enabled_by_default: false
+                """);
+        Files.writeString(skillDir.resolve("prompt.md"), "指引");
+        StubMarketService service = newService(skillsDir, new PluginService());
+        assertFalse(registry.isEnabled("litigation-visual"), "首次扫描默认禁用");
+        registry.setEnabled("litigation-visual", true);
+        assertTrue(registry.isEnabled("litigation-visual"));
+
+        service.uninstall("litigation-visual");
+
+        assertFalse(registry.isEnabled("litigation-visual"), "卸载=停用");
+        assertTrue(Files.isDirectory(skillDir), "随包分发的文件必须保留，删了就再也装不回来（不在线上广场）");
+        assertTrue(registry.getSkill("litigation-visual").isPresent(), "仍在注册表里，只是被禁用");
+    }
+
+    @Test
     @DisplayName("uninstall：插件携带的 skill（sourcePluginId != null）拒绝卸载")
     void uninstallRefusesPluginCarriedSkill() throws IOException {
         Path pluginDir = tempDir.resolve("plugins").resolve("my-plugin");

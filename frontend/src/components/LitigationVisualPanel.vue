@@ -64,6 +64,7 @@
           </text>
         </view>
         <text class="lv-draft-badge" v-if="d.draft">草稿</text>
+        <text class="lv-edited-badge" v-else-if="d.handEdited">手工改过</text>
       </view>
 
       <view class="lv-card-formats">
@@ -72,6 +73,9 @@
 
       <view class="lv-card-actions">
         <view class="lv-btn ghost" @tap="openDiagram(d)">打开</view>
+        <!-- 「编辑」是 .drawio 这份产物在面板里的唯一入口。没有它，可编辑版就只能
+             从文件树里翻出来，等于大多数人不知道它存在。 -->
+        <view class="lv-btn ghost" v-if="d.drawioFileId" @tap="editDiagram(d)">编辑</view>
         <view
           v-for="m in MODES"
           :key="m"
@@ -81,6 +85,11 @@
         >{{ m }}</view>
       </view>
     </view>
+  </view>
+
+  <!-- MIT 许可要求保留版权声明：出图引擎 vendor 自 mqc-litigation-visual-redraw，见 litviz/UPSTREAM.md -->
+  <view class="lv-credit">
+    <text class="lv-credit-text">出图引擎 mqc-litigation-visual-redraw · Copyright (c) 2026 缪奇川 (Miao Qichuan) · MIT License</text>
   </view>
 </template>
 
@@ -200,8 +209,29 @@ export default {
       this.$emit('open-file', { fileId: d.svgFileId, name: d.name })
     },
 
+    // 打开可继续编辑的那份（.drawio，走内嵌 draw.io）
+    editDiagram(d) {
+      if (!d || !d.drawioFileId) return
+      this.$emit('open-file', { fileId: d.drawioFileId, name: d.name })
+    },
+
     async restyle(d, mode) {
       if (this.restylingId) return
+      // 换风格是拿语义地图重画，会整份覆盖产物。图在 draw.io 里手工改过的话，
+      // 那些改动不在地图里，重画就等于丢掉——必须先问一句。
+      if (d.handEdited) {
+        const ok = await new Promise((resolve) => {
+          uni.showModal({
+            title: '这张图手工改过',
+            content: `换成${mode}会用语义地图重新画一遍，你在 draw.io 里做的修改会被覆盖。继续吗？`,
+            confirmText: '继续重画',
+            cancelText: '取消',
+            success: (res) => resolve(!!res.confirm),
+            fail: () => resolve(false)
+          })
+        })
+        if (!ok) return
+      }
       this.restylingId = d.folderId
       uni.showLoading({ title: '重画中…', mask: true })
       try {
@@ -285,6 +315,10 @@ export default {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .lv-card-meta { display: block; font-size: 10px; color: #9aa0a8; margin-top: 2px; }
+.lv-edited-badge {
+  flex-shrink: 0; margin-left: 8px; padding: 1px 6px; font-size: 10px;
+  color: #2b6a4d; background: #f2f8f5; border: 1px solid #d6e7de; border-radius: 3px;
+}
 .lv-draft-badge {
   flex-shrink: 0; margin-left: 8px; padding: 1px 6px; font-size: 10px;
   color: #8a5a2b; background: #fdf6ec; border: 1px solid #f2e3cc; border-radius: 3px;
@@ -294,4 +328,7 @@ export default {
 .lv-format-chip { font-size: 10px; color: #7a8189; background: #f4f6f8; border-radius: 3px; padding: 1px 5px; }
 
 .lv-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.lv-credit { padding: 10px 14px 16px; }
+.lv-credit-text { display: block; font-size: 10px; color: #b0b5bb; text-align: center; }
 </style>

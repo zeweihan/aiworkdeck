@@ -54,6 +54,12 @@ public class SkillController {
         private boolean enabled;
         /** 生效方式：auto（命中触发词自动生效）/ manual（只能钉选）/ disabled */
         private String activationMode;
+        private String author;
+        private String authorUrl;
+        private String version;
+        private String license;
+        /** 随 skill 分发的第三方内容署名（如 vendor 引擎），前端「详细信息」区原样展示 */
+        private List<String> credits;
     }
 
     @GetMapping("/list")
@@ -189,6 +195,11 @@ public class SkillController {
         view.setSourcePluginId(skill.getSourcePluginId());
         view.setEnabled(skillRegistry.isEnabled(skill.getId()));
         view.setActivationMode(skillRegistry.activationMode(skill.getId()).name().toLowerCase());
+        view.setAuthor(skill.getAuthor());
+        view.setAuthorUrl(skill.getAuthorUrl());
+        view.setVersion(skill.getVersion());
+        view.setLicense(skill.getLicense());
+        view.setCredits(skill.getCredits());
         return view;
     }
 

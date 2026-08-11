@@ -4,11 +4,10 @@ import com.checkba.model.entity.TokenUsage;
 import com.checkba.repository.TokenUsageRepository;
 import com.checkba.service.account.AccountException;
 import com.checkba.service.account.AccountService;
+import com.checkba.service.account.AccountSwitchCleanup;
 import com.checkba.service.account.MachineAccountGuard;
-import com.checkba.service.ai.ChatModelFactory;
 import com.checkba.service.ai.PlatformAiChannel;
 import com.checkba.service.ai.PlatformUsageAccountant;
-import com.checkba.service.entitlement.EntitlementService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -55,25 +54,19 @@ import java.util.Map;
 public class AccountController {
 
     private final AccountService accountService;
-    private final EntitlementService entitlementService;
     private final PlatformAiChannel platformAiChannel;
-    private final PlatformUsageAccountant platformUsageAccountant;
-    private final ChatModelFactory chatModelFactory;
+    private final AccountSwitchCleanup accountSwitchCleanup;
     private final TokenUsageRepository tokenUsageRepository;
     private final MachineAccountGuard machineAccountGuard;
 
     public AccountController(AccountService accountService,
-                             EntitlementService entitlementService,
                              PlatformAiChannel platformAiChannel,
-                             PlatformUsageAccountant platformUsageAccountant,
-                             ChatModelFactory chatModelFactory,
+                             AccountSwitchCleanup accountSwitchCleanup,
                              TokenUsageRepository tokenUsageRepository,
                              MachineAccountGuard machineAccountGuard) {
         this.accountService = accountService;
-        this.entitlementService = entitlementService;
         this.platformAiChannel = platformAiChannel;
-        this.platformUsageAccountant = platformUsageAccountant;
-        this.chatModelFactory = chatModelFactory;
+        this.accountSwitchCleanup = accountSwitchCleanup;
         this.tokenUsageRepository = tokenUsageRepository;
         this.machineAccountGuard = machineAccountGuard;
     }
@@ -104,11 +97,9 @@ public class AccountController {
         requireUser(sessionId);
         String key = body == null ? null : body.get("key");
         Map<String, Object> status = accountService.connect(key);
-        // 换账户后旧账户的权益、平台密钥与用量基线必须立刻作废，不能等下一次刷新
-        entitlementService.clearAccountCache();
-        platformAiChannel.clearCache();
-        platformUsageAccountant.resetBaseline();
-        entitlementService.refreshAsync();
+        // 换账户后旧账户的权益、平台密钥、余额判定与用量基线必须立刻作废，不能等下一次刷新。
+        // 解锁页那条连接路径共用这一处（AccountSwitchCleanup），别在这里再抄一遍动作
+        accountSwitchCleanup.afterConnect();
         return ok(status);
     }
 
@@ -117,11 +108,8 @@ public class AccountController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireUser(sessionId);
         Map<String, Object> status = accountService.disconnect();
-        entitlementService.clearAccountCache();
-        platformAiChannel.clearCache();
-        platformUsageAccountant.resetBaseline();
         Map<String, Object> data = new LinkedHashMap<>(status);
-        String fallback = chatModelFactory.demotePlatformProvider();
+        String fallback = accountSwitchCleanup.afterDisconnect();
         if (fallback != null) {
             // 前端据此更新设置页的供应商单选并提示用户，避免「界面显示平台通道正常选中、
             // 实际每条消息都报未连接账户」

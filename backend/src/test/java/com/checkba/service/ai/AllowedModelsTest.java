@@ -96,15 +96,15 @@ class AllowedModelsTest {
     // ==================== availableIn ====================
 
     @Test
-    @DisplayName("境内只放行 GLOBAL 的 7 条，国际网络给全部 12 条")
+    @DisplayName("境内只放行 GLOBAL 的 9 条，国际网络给全部 14 条")
     void availableInFiltersByRegion() {
         List<AllowedModels> domestic = AllowedModels.availableIn(AllowedModels.Region.GLOBAL);
-        assertEquals(7, domestic.size(), "境内可用模型数变了：要么加了国内模型，要么误把国际模型标成 GLOBAL");
+        assertEquals(9, domestic.size(), "境内可用模型数变了：要么加了国内模型，要么误把国际模型标成 GLOBAL");
         assertTrue(domestic.stream().allMatch(m -> m.getRegion() == AllowedModels.Region.GLOBAL),
                 "境内清单里出现 INTERNATIONAL 模型，用户点了必然 403 region");
 
         List<AllowedModels> international = AllowedModels.availableIn(AllowedModels.Region.INTERNATIONAL);
-        assertEquals(12, international.size(), "国际网络应能用全部白名单模型");
+        assertEquals(14, international.size(), "国际网络应能用全部白名单模型");
         assertEquals(AllowedModels.values().length, international.size());
     }
 

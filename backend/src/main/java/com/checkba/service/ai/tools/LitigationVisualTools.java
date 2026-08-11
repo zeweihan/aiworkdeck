@@ -42,8 +42,13 @@ public class LitigationVisualTools implements AgentToolComponent {
 
     private static final Long AGENT_USER_ID = 10001L;
 
-    /** 默认交付全部五种格式：SVG 母版 + PNG 预览 + 三种律师能接着改的源文件。 */
-    private static final String DEFAULT_FORMATS = "svg,png,pptx,drawio,vsdx";
+    /**
+     * 默认交付四件：svg 是母版（图廊识别、换风格都靠它），png 是唯一能插进
+     * 正在写的起诉状的格式（doc_insert_image 只收位图），drawio 是可编辑版。
+     * 第四件 map.json 不在这个逗号列表里——它由 render 方法单独落盘，
+     * 丢了就没法「换风格」时不重新问模型。
+     */
+    private static final String DEFAULT_FORMATS = "svg,png,drawio";
 
     /**
      * 产物与语义地图的身份标记，写在 wpsFileId 前缀里。
@@ -155,7 +160,7 @@ public class LitigationVisualTools implements AgentToolComponent {
             @P(value = "Target folder ID (optional; omit for project root)", required = false) Long parentFolderId,
             @P(value = "Visual mode: 奇川风 (default, colour) / 歸藏风 (online, lecture) / 白描 (pure B&W print)",
                     required = false) String mode,
-            @P(value = "Comma-separated formats (optional; default svg,png,pptx,drawio,vsdx)",
+            @P(value = "Comma-separated formats (optional; default svg,png,drawio)",
                     required = false) String formats
     ) {
         if (projectId == null) return "Error: projectId is required.";
@@ -197,7 +202,7 @@ public class LitigationVisualTools implements AgentToolComponent {
             }
 
             boolean draft = r.raw().getBool("draft", false);
-            // 一图一文件夹：一次出五种格式，摊平在项目根下会把文件树冲垮。
+            // 一图一文件夹：一次出四种格式，摊平在项目根下会把文件树冲垮。
             String folderName = sanitize(r.raw().getStr("basename", safeName), safeName);
             ProjectFile folder = createFolderTolerant(projectId, parentFolderId, folderName);
 
@@ -254,8 +259,8 @@ public class LitigationVisualTools implements AgentToolComponent {
         sb.append("视觉模式：").append(raw.getStr("mode", "")).append("；")
           .append("布局：").append(raw.getStr("layout", "")).append("。\n");
         sb.append("交付文件：").append(String.join("、", files)).append("\n");
-        sb.append("其中 .svg 是母版（已在编辑器打开），.pptx / .drawio / .vsdx 是可以逐个图形"
-                + "接着改的源文件（PowerPoint、WPS、draw.io、ProcessOn、Visio 都能开）。\n");
+        sb.append("其中 .svg 是母版（已在编辑器打开），.drawio 是可以接着改的源文件"
+                + "（draw.io、ProcessOn 都能开）。\n");
         // PNG 是插进文书用的那一份：doc_insert_image 只收位图，不收 svg。
         // 引擎的 PNG 依赖外部光栅器（桌面端不带），所以服务端用 Batik 兜底补上；
         // 真的一张都没有时说清楚，别让用户对着少掉的文件猜。

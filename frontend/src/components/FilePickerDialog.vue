@@ -17,7 +17,7 @@
             />
          </view>
          <view class="selected-file-info" v-if="selectedFile">
-            <text class="info-label">已选择：</text>
+            <text class="info-label">已选择{{ selectedIsFolder ? '文件夹' : '' }}：</text>
             <text class="info-name">{{ selectedFile.name }}</text>
          </view>
       </view>
@@ -66,11 +66,24 @@ export default {
     accept: {
       type: Array,
       default: () => []
+    },
+    // 允不允许选中文件夹。默认 false —— 大多数调用方（EasyVoice 导入、脱敏）
+    // 要的是一份具体文档。诉讼可视化的「材料范围」例外：律师给材料的自然单位
+    // 就是卷宗文件夹，那边传 true。
+    allowFolder: {
+      type: Boolean,
+      default: false
     }
   },
   data() {
     return {
       selectedFile: null
+    }
+  },
+  computed: {
+    selectedIsFolder() {
+      const f = this.selectedFile
+      return !!f && (f.fileType === 'folder' || f.isFolder)
     }
   },
   watch: {
@@ -82,8 +95,14 @@ export default {
   },
   methods: {
     handleFileSelect(file) {
-      // Only allow selecting files, not folders (though FileTree usually handles this)
-      if (file.fileType === 'folder') return
+      const isFolder = file.fileType === 'folder' || file.isFolder
+      // 文件夹默认不可选；allowFolder 打开时可选，且不受 accept 扩展名过滤
+      // （文件夹没有扩展名，拿 accept 卡它等于永远选不中）。
+      if (isFolder) {
+        if (!this.allowFolder) return
+        this.selectedFile = file
+        return
+      }
       if (this.accept.length > 0) {
         const ext = (file.name || '').split('.').pop().toLowerCase()
         if (!this.accept.includes(ext)) {
