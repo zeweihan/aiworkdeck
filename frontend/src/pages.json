@@ -43,6 +43,13 @@
 			}
 		},
 		{
+			"path": "pages/project-list/project-list",
+			"style": {
+				"navigationBarTitleText": "我的项目",
+				"navigationStyle": "custom"
+			}
+		},
+		{
 			"path": "pages/variable-library/variable-library",
 			"style": {
 				"navigationBarTitleText": "变量库管理",
