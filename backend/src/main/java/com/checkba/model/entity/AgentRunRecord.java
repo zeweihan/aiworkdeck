@@ -14,7 +14,11 @@ import java.time.LocalDateTime;
  * INTERRUPTED），从而给用户一个「继续」入口，而不是留下一条没有结论的半截回复。
  */
 @Entity
-@Table(name = "agent_run_record")
+@Table(name = "agent_run_record", indexes = {
+        // 概览页统计条与会话列表按 projectId 取后台 AI 任务（findTop5ByProjectIdOrderByUpdatedAtDesc）。
+        // 云后端上这张表是全租户共库表，加索引前是全表扫描 + filesort。
+        @Index(name = "idx_agent_run_project_updated", columnList = "project_id, updated_at")
+})
 @Getter
 @Setter
 public class AgentRunRecord {

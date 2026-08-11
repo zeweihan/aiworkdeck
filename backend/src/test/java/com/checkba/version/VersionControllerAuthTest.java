@@ -88,6 +88,7 @@ class VersionControllerAuthTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
             when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+            when(repoService.isInitialized(7L)).thenReturn(true);
             when(repoService.log(7L, "HEAD", 50)).thenReturn(java.util.List.of());
 
             controller.timeline(7L, 50, null, "sess");
@@ -106,6 +107,7 @@ class VersionControllerAuthTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
             when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+            when(repoService.isInitialized(7L)).thenReturn(true);
             ProjectFile foreign = new ProjectFile();
             foreign.setId(50L);
             foreign.setProjectId(999L);
@@ -123,6 +125,7 @@ class VersionControllerAuthTest {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
             when(projectMemberService.isClient(7L, 1L)).thenReturn(false);
+            when(repoService.isInitialized(7L)).thenReturn(true);
             ProjectFile own = new ProjectFile();
             own.setId(50L);
             own.setProjectId(7L);
