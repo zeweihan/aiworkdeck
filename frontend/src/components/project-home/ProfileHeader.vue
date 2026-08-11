@@ -127,6 +127,14 @@ export default {
       this.draft = this.matterTypes[idx] || ''
       this.commitEdit()
     },
+    // commitEdit 是乐观退出：emit('save') 后立刻清空编辑态，界面退回显示旧值。
+    // 真实请求可能失败（网络抖动、权限刚好被收回等），届时 fields 不会更新成新值，
+    // 而 draft 已经清空——律师刚敲的可能是带日期的完整句子，丢了只能凭记忆重打，
+    // 且不会发觉自己丢了什么。父级容器必须在保存失败的 catch 里调用它，否则用户输入会丢。
+    restoreEdit(fieldKey, value) {
+      this.editingKey = fieldKey
+      this.draft = value
+    },
   },
 }
 </script>

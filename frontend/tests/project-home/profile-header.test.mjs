@@ -73,3 +73,16 @@ test('禁 emoji + 浅色', () => {
   assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(SRC))
   assert.ok(!SRC.includes('#212629'))
 })
+
+// 修复轮 1：commitEdit 是乐观退出（emit 后立刻清空编辑态），保存失败时草稿会
+// 随之丢失。restoreEdit 是父级容器在保存失败 catch 里的恢复入口。
+test('保存失败时的恢复入口：restoreEdit(fieldKey, value) 存在，重新进入该字段编辑态、draft 是传入的失败值', () => {
+  const m = SRC.match(/restoreEdit\(fieldKey,\s*value\)\s*\{([\s\S]*?)\n\s*\},/)
+  assert.ok(m, 'restoreEdit(fieldKey, value) 方法应存在')
+  assert.match(m[1], /this\.editingKey\s*=\s*fieldKey/)
+  assert.match(m[1], /this\.draft\s*=\s*value/)
+})
+
+test('留了路标注释：父级容器必须在保存失败的 catch 里调用 restoreEdit，否则用户输入会丢', () => {
+  assert.ok(SRC.includes('父级容器必须在保存失败的 catch 里调用它，否则用户输入会丢'))
+})
