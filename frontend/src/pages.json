@@ -50,6 +50,13 @@
 			}
 		},
 		{
+			"path": "pages/project-home/project-home",
+			"style": {
+				"navigationBarTitleText": "项目概览页",
+				"navigationStyle": "custom"
+			}
+		},
+		{
 			"path": "pages/variable-library/variable-library",
 			"style": {
 				"navigationBarTitleText": "变量库管理",

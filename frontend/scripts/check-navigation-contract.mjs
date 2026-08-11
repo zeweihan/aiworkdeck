@@ -21,6 +21,10 @@ const FRONTEND = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 const readFrontend = (rel) => readFileSync(resolve(FRONTEND, rel), 'utf8')
 const hasFile = (rel) => existsSync(resolve(FRONTEND, rel))
+const REPO = resolve(FRONTEND, '..')
+const readRepo = (rel) => readFileSync(resolve(REPO, rel), 'utf8')
+const readFrontendOrNull = (rel) =>
+  existsSync(resolve(FRONTEND, rel)) ? readFileSync(resolve(FRONTEND, rel), 'utf8') : null
 
 // pages.json 带 // 行注释，JSON.parse 之前要剥掉；先吃掉字符串字面量避免误伤 URL 里的 //
 const stripJsonComments = (s) =>
@@ -41,8 +45,21 @@ const check = (name, fn) => {
   if (msg) failures.push(name + ' — ' + msg)
 }
 
+// 全量层：只在 CHECK_NAV_FULL=1 时执行（npm run check:nav:full，CI 用它）。
+// 它校验的是同一个 PR 里别的批次的产出——概览页容器与它的五个子组件、领域文档、
+// app-e2e 旅程。那些还没落地时全量层必红，属预期，所以日常 npm run check:nav 不跑它。
+const FULL = process.env.CHECK_NAV_FULL === '1'
+let skipped = 0
+const checkFull = (name, fn) => {
+  if (!FULL) { skipped++; return }
+  check(name, fn)
+}
+
+const NOT_YET = '文件尚未落地（由项目概览页组 / e2e + 文档组产出）'
+
 const LIST_ROUTE = 'pages/project-list/project-list'
 const WORKBENCH_ROUTE = 'pages/project-overview/project-overview'
+const HOME_ROUTE = 'pages/project-home/project-home'
 
 // ==================== 路由注册 ====================
 
@@ -337,6 +354,156 @@ check('工作台消费概览页带来的 conversationId', () => {
   return null
 })
 
+// ==================== 概览页路由与埋点注释 ====================
+
+check('pages.json 注册 ' + HOME_ROUTE, () => {
+  const p = pageByPath.get(HOME_ROUTE)
+  if (!p) return '未注册'
+  if (!p.style || p.style.navigationStyle !== 'custom') {
+    return 'style.navigationStyle 必须显式写 custom（globalStyle 里没有这一项，漏写会得到系统导航栏）'
+  }
+  return null
+})
+
+check('App.vue 的路由埋点注释与 pages.json 对得上', () => {
+  const src = readFrontend('src/App.vue')
+  const n = pages.length
+  return src.includes(`pages.json 里的 ${n} 个页面`)
+    ? null
+    : `注释里的页面数与 pages.json 实际的 ${n} 个对不上`
+})
+
+check('CI 跑导航护栏', () => {
+  const yml = readRepo('.github/workflows/ci.yml')
+  return yml.includes('npm run check:nav:full') ? null : 'ci.yml 里没有 check:nav:full 这一步'
+})
+
+check('邀请话术仍指向真看得见的入口', () => {
+  const src = readFrontend('src/components/collab/CollabDialog.vue')
+  if (!src.includes('打开项目列表')) return '话术被改坏了'
+  const list = readFrontend('src/pages/project-list/project-list.vue')
+  return list.includes('从团队案件库取一份案卷') ? null : '话术指的入口在项目列表页上不存在'
+})
+
+// ==================== 全量层：别的批次的产出 ====================
+
+const HOME_VUE = 'src/pages/project-home/project-home.vue'
+
+checkFull('概览页容器带全三个 e2e 锚点类名', () => {
+  const src = readFrontendOrNull(HOME_VUE)
+  if (src === null) return NOT_YET
+  const miss = ['page-project-home', 'btn-project-list', 'btn-workbench'].filter((c) => !src.includes(c))
+  return miss.length ? '缺 e2e 锚点: ' + miss.join(', ') : null
+})
+
+checkFull('概览页挂了五个内容区块', () => {
+  const src = readFrontendOrNull(HOME_VUE)
+  if (src === null) return NOT_YET
+  const miss = ['<ProfileHeader', '<OverviewStatsBar', '<ActivityFeed', '<TaskSchedule', '<ConversationList']
+    .filter((t) => !src.includes(t))
+  return miss.length ? '缺子组件: ' + miss.join(', ') : null
+})
+
+checkFull('概览页登记最近项目', () => {
+  const src = readFrontendOrNull(HOME_VUE)
+  if (src === null) return NOT_YET
+  if (!/from\s+'@\/utils\/recentProjects\.js'/.test(src)) return "没有从 '@/utils/recentProjects.js' 引入"
+  if (!src.includes('recordProjectVisit(')) return '没有调 recordProjectVisit'
+  return null
+})
+
+checkFull('概览页用自己的活跃实例指针', () => {
+  const src = readFrontendOrNull(HOME_VUE)
+  if (src === null) return NOT_YET
+  // 禁字断言只看实际代码：概览页的注释里要解释「为什么不复用 __checkbaActiveOverviewVm」，
+  // 那段说明性文字不该把断言判红。「必须出现」那条仍然看整份源码。
+  const code = stripVueComments(src)
+  if (!src.includes('__checkbaProjectHomeVm')) return '缺活跃实例指针守卫'
+  if (code.includes('__checkbaActiveOverviewVm')) {
+    return '复用了工作台的指针，会让工作台的全局事件被概览页拦掉'
+  }
+  return null
+})
+
+checkFull('概览页 → 工作台用 reLaunch 并透传 openFileId', () => {
+  const src = readFrontendOrNull(HOME_VUE)
+  if (src === null) return NOT_YET
+  const i = src.indexOf('goWorkbench()')
+  if (i < 0) return '缺 goWorkbench()'
+  const body = src.slice(i, i + 500)
+  if (!body.includes('reLaunch')) return '进入工作台必须用 reLaunch（工作台参与的跳转一律 reLaunch）'
+  if (!body.includes('/pages/project-overview/project-overview')) return '目标不是工作台'
+  if (!body.includes('openFileId')) return '没有透传 openFileId'
+  return null
+})
+
+checkFull('概览页 → 项目列表页按页面栈分流', () => {
+  const src = readFrontendOrNull(HOME_VUE)
+  if (src === null) return NOT_YET
+  const i = src.indexOf('goProjectList()')
+  if (i < 0) return '缺 goProjectList()'
+  const body = src.slice(i, i + 600)
+  if (!body.includes('getCurrentPages')) return '没有判页面栈，无脑 navigateTo/redirectTo 会堆出多个列表页实例'
+  if (!body.includes('navigateBack') || !body.includes('redirectTo')) {
+    return '必须两条分支：栈里上一页是列表页就 navigateBack，否则 redirectTo'
+  }
+  return null
+})
+
+checkFull('概览页轮询纪律', () => {
+  const src = readFrontendOrNull(HOME_VUE)
+  if (src === null) return NOT_YET
+  // 禁字断言只看实际代码：概览页的注释里要写明「绝不调 /version/status」的理由，
+  // 那段说明性文字不该把断言判红。
+  const code = stripVueComments(src)
+  if (code.includes('getVersionStatus') || code.includes('/version/status')) {
+    return '不许调 /version/status：它在 enabled 时会跑两次 git add，并与工作台争 per-project 锁'
+  }
+  if (code.includes('setInterval')) return 'A 期只在 onLoad 与 onShow 各刷一次，不起轮询'
+  return null
+})
+
+checkFull('五个子组件的根节点类名是 e2e 锚点', () => {
+  const map = {
+    'src/components/project-home/ProfileHeader.vue': 'profile-header',
+    'src/components/project-home/OverviewStatsBar.vue': 'overview-stats-bar',
+    'src/components/project-home/ActivityFeed.vue': 'activity-feed',
+    'src/components/project-home/TaskSchedule.vue': 'task-schedule',
+    'src/components/project-home/ConversationList.vue': 'conversation-list',
+  }
+  const bad = []
+  for (const [file, cls] of Object.entries(map)) {
+    const src = readFrontendOrNull(file)
+    if (src === null) bad.push(file + '(未落地)')
+    else if (!src.includes(`class="${cls}`)) bad.push(file + ' 缺 .' + cls)
+  }
+  return bad.length ? bad.join(', ') : null
+})
+
+checkFull('CLAUDE.md 写下了三个同名不同物的术语', () => {
+  const md = readRepo('CLAUDE.md')
+  const miss = [HOME_ROUTE, LIST_ROUTE, '工作台'].filter((s) => !md.includes(s))
+  return miss.length ? '缺: ' + miss.join(', ') : null
+})
+
+checkFull('sidebar-shell.md 的页面路由一节收录了两个新页', () => {
+  const md = readRepo('.claude/agents/sidebar-shell.md')
+  const miss = ['project-list', 'project-home'].filter((s) => !md.includes(s))
+  return miss.length ? '缺: ' + miss.join(', ') : null
+})
+
+checkFull('app-e2e 走三级跳而不是把个人中心当必经之路', () => {
+  const src = readFrontend('tests/app-e2e/run.mjs')
+  if (!src.includes(LIST_ROUTE)) return 'J3 没有从项目列表页出发'
+  if (!src.includes(HOME_ROUTE)) return 'J3 没有经过项目概览页'
+  if (src.includes("mouseClickText('我的项目')")) return '个人中心已经没有「我的项目」tab 了'
+  const i = src.indexOf('解锁成功')
+  if (i < 0 || !src.slice(i, i + 500).includes(LIST_ROUTE)) {
+    return '解锁后的落点断言还没放行项目列表页'
+  }
+  return null
+})
+
 // ---- 追加位：后续任务把新的 check(...) 加在这一行之前 ----
 
 if (failures.length) {
@@ -344,4 +511,7 @@ if (failures.length) {
   for (const f of failures) console.error('  - ' + f)
   process.exit(1)
 }
-console.log('导航契约检查通过')
+console.log(
+  '导航契约检查通过' +
+    (FULL ? '（含全量层）' : `（跳过 ${skipped} 条全量层断言，用 npm run check:nav:full 跑全量）`)
+)
