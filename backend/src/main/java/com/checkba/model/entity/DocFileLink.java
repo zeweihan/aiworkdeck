@@ -15,7 +15,7 @@ import java.util.Objects;
  */
 @Entity
 @Table(name = "doc_file_link", indexes = {
-        @Index(name = "idx_doc_file_link_project_key", columnList = "projectId,linkKey", unique = true)
+        @Index(name = "idx_doc_file_link_project_key", columnList = "project_id,link_key", unique = true)
 })
 public class DocFileLink {
     @Id

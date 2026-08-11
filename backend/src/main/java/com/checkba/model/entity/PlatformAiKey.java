@@ -18,7 +18,7 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "platform_ai_key",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"userId"}))
+        uniqueConstraints = @UniqueConstraint(columnNames = {"user_id"}))
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class PlatformAiKey {

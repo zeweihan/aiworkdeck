@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 /** 一个项目与云端仓库的绑定关系。projectId 唯一——一个项目至多接一个云端。 */
 @Entity
 @Table(name = "project_remote",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"projectId"}))
+        uniqueConstraints = @UniqueConstraint(columnNames = {"project_id"}))
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class ProjectRemote {

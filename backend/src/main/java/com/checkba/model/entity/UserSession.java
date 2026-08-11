@@ -13,7 +13,7 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "user_session",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"tokenHash"}))
+        uniqueConstraints = @UniqueConstraint(columnNames = {"token_hash"}))
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class UserSession {
