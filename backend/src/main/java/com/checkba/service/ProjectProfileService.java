@@ -4,8 +4,11 @@ import com.checkba.model.entity.Project;
 import com.checkba.model.entity.ProjectProfileField;
 import com.checkba.repository.ProjectProfileFieldRepository;
 import com.checkba.repository.ProjectRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.UnexpectedRollbackException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -48,6 +51,19 @@ public class ProjectProfileService {
     private final ProjectProfileFieldRepository repository;
     private final ProjectRepository projectRepository;
 
+    /**
+     * 本 bean 的懒加载自身代理，只为让 saveUserField/applyAiSuggestion 的重试真正经过
+     * Spring 的事务代理开出一个新事务——同类方法互相调用（this.xxxTx(...)）不经代理，
+     * @Transactional 会被静默绕过。构造器没法自己注入自己，只能用字段注入；@Lazy 打破
+     * 自引用的构造期死环，代理在真正被调用时才解析到已建好的 bean。
+     *
+     * 包可见（不加 private）是特意的：ProjectProfileServiceTest 用手工 new 构造这个服务
+     * （不过 Spring 容器），需要在同包的 @BeforeEach 里手动把这个字段接到 service 自己。
+     */
+    @Autowired
+    @Lazy
+    ProjectProfileService self;
+
     public ProjectProfileService(ProjectProfileFieldRepository repository,
                                  ProjectRepository projectRepository) {
         this.repository = repository;
@@ -75,12 +91,33 @@ public class ProjectProfileService {
      *
      * value 为 null 或 trim 后为空串 → 删除该行（回到未填态；openedAt 因此回落建档时间）。
      *
-     * @Transactional 覆盖读-写两次往返：并发下两个请求都可能查到空 Optional、都走插入，
-     * 第二个会撞 (projectId, fieldKey) 唯一约束——由 saveOrRecoverFromRace 兜底成更新语义，
-     * 不让 DataIntegrityViolationException 冒到 GlobalExceptionHandler 变成"服务器内部错误"。
+     * <p><b>不带 @Transactional——并发撞车的重试必须落在新事务里。</b>旧写法是单个
+     * @Transactional 方法内部 try/catch DataIntegrityViolationException 后用同一个
+     * EntityManager 补救：IDENTITY 生成策略下 repository.save() 对新实体是立即 INSERT，
+     * 撞 (projectId, fieldKey) 唯一约束时 Hibernate 会在异常冒出来之前就把当前事务标记为
+     * rollback-only。catch 之后继续用同一个 EntityManager 补救能正常跑完、方法能正常返回，
+     * 但事务在方法出口提交时会因为 rollback-only 标记抛 UnexpectedRollbackException——
+     * 结果和完全不写兜底一模一样（被 GlobalExceptionHandler 兜成 200+{code:1,"服务器内部
+     * 错误"}），而且这次补救的写入随事务回滚一起被丢弃（实测结论，见并发测试）。
+     *
+     * <p>于是把重试拆成两次独立事务：本方法本身不开事务，两次尝试都通过 {@link #self}
+     * 调用 {@link #saveUserFieldTx}，各自在自己的新事务里跑。重试那次进新事务后
+     * find 能读到对方已提交的那一行，按更新语义写、保留它的 uid。
+     */
+    public Map<String, Object> saveUserField(Long projectId, String fieldKey, String value) {
+        try {
+            return self.saveUserFieldTx(projectId, fieldKey, value);
+        } catch (DataIntegrityViolationException | UnexpectedRollbackException e) {
+            return self.saveUserFieldTx(projectId, fieldKey, value);
+        }
+    }
+
+    /**
+     * {@link #saveUserField} 的事务体。不要直接调用（包括同类内部调用）——必须经
+     * {@link #self} 代理才能拿到独立的新事务，直接调用会绕过 Spring 的事务拦截。
      */
     @Transactional
-    public Map<String, Object> saveUserField(Long projectId, String fieldKey, String value) {
+    public Map<String, Object> saveUserFieldTx(Long projectId, String fieldKey, String value) {
         requireKnownKey(fieldKey);
         Project project = projectRepository.findById(projectId).orElse(null);
 
@@ -97,25 +134,7 @@ public class ProjectProfileService {
         // 改成手填就把 AI 那次判断的痕迹清掉——留着会让 UI 把手填值标成「模型猜的」
         row.setConfidence(null);
         row.setEvidence(null);
-        return render(fieldKey, saveOrRecoverFromRace(projectId, fieldKey, row), project);
-    }
-
-    /**
-     * 已经有人抢先插了同一 (projectId, fieldKey) 时，把本次要写的值/source/confidence/evidence
-     * 转移到既存那一行上再存——保留它已有的 uid，不用本次生成的那个。
-     */
-    private ProjectProfileField saveOrRecoverFromRace(Long projectId, String fieldKey, ProjectProfileField row) {
-        try {
-            return repository.save(row);
-        } catch (DataIntegrityViolationException raceLost) {
-            ProjectProfileField existing = repository.findByProjectIdAndFieldKey(projectId, fieldKey)
-                    .orElseThrow(() -> raceLost);
-            existing.setFieldValue(row.getFieldValue());
-            existing.setSource(row.getSource());
-            existing.setConfidence(row.getConfidence());
-            existing.setEvidence(row.getEvidence());
-            return repository.save(existing);
-        }
+        return render(fieldKey, repository.save(row), project);
     }
 
     /**
@@ -129,8 +148,27 @@ public class ProjectProfileService {
      * 不代表要清空律师已有的值。
      *
      * 不要给这个方法开 HTTP 端点：A 期没有任何触发 AI 抽取的入口，开了就是死端点。
+     *
+     * <p>不带 @Transactional，理由与 {@link #saveUserField} 完全一致：重试必须落在新事务里，
+     * 否则撞约束时的补救会在方法出口随 rollback-only 的事务一起被回滚成
+     * UnexpectedRollbackException。A 期没有调用方，这里先把并发形状和不变式一起立住——
+     * Plan 2 接上 AI 抽取链路后，AI 异步抽取与律师手填并发写同一行会让这条 race 从理论变常态。
      */
     public Map<String, Object> applyAiSuggestion(Long projectId, String fieldKey, String value,
+                                                 Double confidence, String evidence) {
+        try {
+            return self.applyAiSuggestionTx(projectId, fieldKey, value, confidence, evidence);
+        } catch (DataIntegrityViolationException | UnexpectedRollbackException e) {
+            return self.applyAiSuggestionTx(projectId, fieldKey, value, confidence, evidence);
+        }
+    }
+
+    /**
+     * {@link #applyAiSuggestion} 的事务体。不要直接调用（包括同类内部调用）——必须经
+     * {@link #self} 代理才能拿到独立的新事务，直接调用会绕过 Spring 的事务拦截。
+     */
+    @Transactional
+    public Map<String, Object> applyAiSuggestionTx(Long projectId, String fieldKey, String value,
                                                  Double confidence, String evidence) {
         requireKnownKey(fieldKey);
         Project project = projectRepository.findById(projectId).orElse(null);

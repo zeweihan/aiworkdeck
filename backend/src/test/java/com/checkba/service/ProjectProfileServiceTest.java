@@ -38,6 +38,11 @@ class ProjectProfileServiceTest {
         repository = mock(ProjectProfileFieldRepository.class);
         projectRepository = mock(ProjectRepository.class);
         service = new ProjectProfileService(repository, projectRepository);
+        // saveUserField/applyAiSuggestion 都经 self 转发到对应的 xxxTx 方法；生产环境里 self
+        // 是 Spring 注入的 @Lazy 代理，这里手工 new 没有容器，直接把 service 自己接上去——
+        // 单元测试只验证 Java 层的控制流，@Transactional 在没有 Spring AOP 的场景下本就是空注解，
+        // 真实的“新事务”语义由 ProjectProfileFieldConcurrentSaveTest 用真 Spring 容器 + 真 H2 验证。
+        service.self = service;
 
         Project project = new Project();
         project.setId(42L);
@@ -206,6 +211,11 @@ class ProjectProfileServiceTest {
     void 并发撞车时按已存在处理不抛异常() {
         // 两个请求都查到空 Optional、都走插入：第一次 save 撞 (projectId, fieldKey) 唯一约束，
         // 恢复路径重新查到那一行（已存在），走更新语义、保留它的 uid。
+        //
+        // 注意：这个用例只验证 Java 层的控制流（catch 到异常后重试一次、重试时二次 find/save
+        // 的调用序），repository 是 mock，不会复现 Hibernate 撞唯一约束时把事务标记
+        // rollback-only 的真实行为。它证明不了「重试真的落在了新事务里」——那件事只有走真
+        // Spring 容器 + 真 H2 唯一约束才测得出来，见 ProjectProfileFieldConcurrentSaveTest。
         ProjectProfileField existing = row("client", "旧客户", "user");
         when(repository.findByProjectIdAndFieldKey(42L, "client"))
                 .thenReturn(Optional.empty())
