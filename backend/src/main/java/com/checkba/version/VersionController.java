@@ -244,6 +244,12 @@ public class VersionController {
             @RequestParam(required = false) Long fileId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireMember(projectId, sessionId);
+        // 未开启版本记录不是错误：新建项目十有八九没开，概览页的动态块第一天就会撞上。
+        // 不早退的话这里会掉进 VersionException 的通用信封（「版本记录操作失败，请重试」），
+        // 概览页只能把「还没有版本记录」显示成「读取失败」。
+        if (!repoService.isInitialized(projectId)) {
+            return ok(Map.of("versions", List.of()));
+        }
         List<VersionEntry> entries;
         if (fileId != null) {
             ProjectFile f = projectFileService.getFile(fileId); // 文件不存在会抛异常
