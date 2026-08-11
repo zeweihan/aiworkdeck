@@ -302,6 +302,28 @@ check('admin 切换本机工作区仍清最近项目', () => {
     : '删了这行会让切身份之后仍直达上一个身份的项目'
 })
 
+// ==================== 工作台通往概览页的入口 ====================
+
+check('工作台切换器有通往项目概览页的入口', () => {
+  const src = readFrontend('src/pages/project-overview/project-overview.vue')
+  if (!src.includes('switcher-home')) return '模板里缺 .switcher-home 一项'
+  const i = src.indexOf('goProjectHome()', src.indexOf('methods:'))
+  if (i < 0) return 'goProjectHome 不在 methods 里'
+  const body = src.slice(i, i + 320)
+  if (!body.includes('/pages/project-home/project-home?id=')) return 'goProjectHome 没有指向项目概览页'
+  if (!body.includes('reLaunch')) return '工作台参与的跳转一律 reLaunch'
+  // 「项目概览」必须排在「全部项目…」之前（两者的首次出现都在模板里）
+  if (src.indexOf('switcher-home') > src.indexOf('switcher-all')) {
+    return '「项目概览」应当排在「全部项目…」之前'
+  }
+  return null
+})
+
+check('switcher-home 有对应样式', () => {
+  const css = readFrontend('src/pages/project-overview/project-overview.scss')
+  return css.includes('.switcher-home') ? null : 'project-overview.scss 里没有 .switcher-home'
+})
+
 // ---- 追加位：后续任务把新的 check(...) 加在这一行之前 ----
 
 if (failures.length) {

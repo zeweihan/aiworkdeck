@@ -35,6 +35,9 @@
               <view v-if="!switcherProjects.length" class="switcher-item switcher-empty">
                 <text>没有其他最近项目</text>
               </view>
+              <view class="switcher-item switcher-home" @tap="goProjectHome">
+                <text>项目概览</text>
+              </view>
               <view class="switcher-item switcher-all" @tap="goAllProjects">
                 <text>全部项目…</text>
               </view>
@@ -2732,6 +2735,12 @@ export default {
       if (!p || Number(p.id) === Number(this.projectId)) return
       // reLaunch：切项目不叠页面栈（多实例地雷）
       uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${p.id}` })
+    },
+    // 工作台通往项目概览页的唯一入口。工作台参与的跳转一律 reLaunch。
+    goProjectHome() {
+      this.projectSwitcherOpen = false
+      if (!this.projectId) return
+      uni.reLaunch({ url: `/pages/project-home/project-home?id=${this.projectId}` })
     },
     goAllProjects() {
       this.projectSwitcherOpen = false
