@@ -1,8 +1,10 @@
 package com.checkba.controller;
 
+import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ProjectOverviewService;
 import com.checkba.service.ProjectProfileService;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -10,8 +12,10 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
@@ -43,13 +47,16 @@ public class ProjectOverviewController {
     private final ProjectMemberService projectMemberService;
     private final ProjectOverviewService overviewService;
     private final ProjectProfileService projectProfileService;
+    private final ProjectAiMessageService projectAiMessageService;
 
     public ProjectOverviewController(ProjectMemberService projectMemberService,
                                      ProjectOverviewService overviewService,
-                                     ProjectProfileService projectProfileService) {
+                                     ProjectProfileService projectProfileService,
+                                     ProjectAiMessageService projectAiMessageService) {
         this.projectMemberService = projectMemberService;
         this.overviewService = overviewService;
         this.projectProfileService = projectProfileService;
+        this.projectAiMessageService = projectAiMessageService;
     }
 
     /**
@@ -130,6 +137,31 @@ public class ProjectOverviewController {
         requireWrite(projectId, sessionId);
         String value = body == null ? null : body.get("value");
         return ok(projectProfileService.saveUserField(projectId, fieldKey, value));
+    }
+
+    // ==================== 会话列表 ====================
+
+    /**
+     * 项目级 AI 对话历史（列表层，项目全员可见）。
+     *
+     * 与 user-scoped 的 GET /api/ai/conversations 是两条独立通道，后者一行不改。
+     * 那条在无 session 时静默返回空数组（会被误诊成前端 bug）；这条必须抛「未登录」。
+     *
+     * 分页是游标不是 offset，且游标是两维的：before（上一页最后一条的 updatedAt）
+     * 与 beforeId（它的 conversationId）。beforeId 可以不传，服务端会退化成严格小于——
+     * 不报错，但同一时刻落库的两个会话会丢一条。前端翻页时请把响应里的
+     * nextBefore 与 nextBeforeId 一起带回来。
+     */
+    @GetMapping("/conversations")
+    public ResponseEntity<Map<String, Object>> listConversations(
+            @PathVariable Long projectId,
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime before,
+            @RequestParam(required = false) String beforeId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireRead(projectId, sessionId);
+        return ok(projectAiMessageService.listProjectConversations(projectId, before, beforeId, limit));
     }
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {
