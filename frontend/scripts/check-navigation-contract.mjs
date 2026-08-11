@@ -70,6 +70,49 @@ check('项目列表页的两个文件都存在', () => {
   return missing.length ? '缺文件: ' + missing.join(', ') : null
 })
 
+// ==================== 项目列表页样式 ====================
+
+// 说明：SCSS 里选择器后面必然跟空格、换行或逗号，用这三种收尾判存在，避免
+// 「.stat-card」被「.stat-card-x」这类前缀关系误判成已存在。
+const hasSelector = (css, sel) =>
+  css.includes(sel + ' ') || css.includes(sel + '\n') || css.includes(sel + ',')
+
+check('project-list.scss 搬齐了必需的样式块', () => {
+  const css = readFrontend('src/pages/project-list/project-list.scss')
+  const need = [
+    '.page-project-list', '.project-list-container', '.main-content',
+    '.content-header', '.header-actions', '.btn-primary-small', '.btn-secondary-small',
+    '.cloud-accept-entry', '.projects-stats-row', '.stat-card',
+    '.project-grid', '.project-item-card', '.card-deco-header', '.action-btn-icon',
+    '.project-title-new', '.card-footer-new', '.member-avatar-new', '.add-member-btn-new',
+    '.enter-btn-arrow', '.empty-state-dashed', '.dashed-icon',
+    '.project-role-badge', '.role-owner', '.role-text',
+    '.manager-avatar-wrapper', '.members-split-container', '.clients-group',
+    '.act-glyph', '.badge-glyph',
+  ].filter((sel) => !hasSelector(css, sel))
+  return need.length ? '缺样式块: ' + need.join(', ') : null
+})
+
+check('project-list.scss 补齐了原页面无定义的三个 class', () => {
+  const css = readFrontend('src/pages/project-list/project-list.scss')
+  const miss = ['.panel-projects', '.loading-state', '.loading-text'].filter((s) => !css.includes(s))
+  return miss.length ? '未补: ' + miss.join(', ') : null
+})
+
+check('project-list.scss 不许把两块死样式搬过来', () => {
+  const css = readFrontend('src/pages/project-list/project-list.scss')
+  const dead = ['.modal-mask', '.project-members', '.member-list'].filter((s) => css.includes(s))
+  return dead.length ? '搬进了模板里已无命中的死样式: ' + dead.join(', ') : null
+})
+
+check('project-list.scss 守浅色外壳红线', () => {
+  const css = readFrontend('src/pages/project-list/project-list.scss')
+  if (!css.includes('#1A5336')) return '缺森林绿 #1A5336'
+  if (!css.includes('#F8F9FA')) return '缺浅底 #F8F9FA'
+  if (/background:\s*#(21262|1[0-9a-f]{5})\b/i.test(css)) return '外壳不做深色 chrome'
+  return null
+})
+
 // ---- 追加位：后续任务把新的 check(...) 加在这一行之前 ----
 
 if (failures.length) {
