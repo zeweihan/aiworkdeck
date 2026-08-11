@@ -358,9 +358,8 @@ check('工作台「全部项目」用 reLaunch 去项目列表页', () => {
 
 check('工作台 rail 头像仍 navigateTo 个人中心（不许顺手改）', () => {
   const src = readVue('src/pages/project-overview/project-overview.vue')
-  const i = src.indexOf('goToUserProfile()')
-  if (i < 0) return '找不到 goToUserProfile'
-  const body = src.slice(i, i + 200)
+  const body = extractMethodBody(src, 'goToUserProfile()')
+  if (!body) return '找不到 goToUserProfile'
   if (!body.includes(USERPROFILE_ROUTE) || !body.includes('navigateTo')) {
     return '它依赖页面栈保留实例以便 onShow 回流刷新，本次不改'
   }
@@ -492,9 +491,8 @@ checkFull('概览页用自己的活跃实例指针', () => {
 checkFull('概览页 → 工作台用 reLaunch 并透传 openFileId', () => {
   const src = readVueOrNull(HOME_VUE)
   if (src === null) return NOT_YET
-  const i = src.indexOf('goWorkbench()')
-  if (i < 0) return '缺 goWorkbench()'
-  const body = src.slice(i, i + 500)
+  const body = extractMethodBody(src, 'goWorkbench()')
+  if (!body) return '缺 goWorkbench()'
   if (!body.includes('reLaunch')) return '进入工作台必须用 reLaunch（工作台参与的跳转一律 reLaunch）'
   if (!body.includes('/pages/project-overview/project-overview')) return '目标不是工作台'
   if (!body.includes('openFileId')) return '没有透传 openFileId'
