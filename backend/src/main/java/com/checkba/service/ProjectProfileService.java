@@ -8,11 +8,13 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -114,6 +116,44 @@ public class ProjectProfileService {
             existing.setEvidence(row.getEvidence());
             return repository.save(existing);
         }
+    }
+
+    /**
+     * AI 抽取写入。**A 期没有调用方**（抽取链路属 Plan 2），本方法存在的意义是先把
+     * 档案表的核心不变式立住并测掉：
+     *
+     *   source='user' 的字段锁定，AI 永不覆盖。
+     *
+     * AI 有新判断时挂到同一行的 pending* 四列（唯一约束是 (projectId, fieldKey)，
+     * 建议不能另起一行），律师采纳后才转正。抽取结果为空时什么都不写——模型这轮没抽出来，
+     * 不代表要清空律师已有的值。
+     *
+     * 不要给这个方法开 HTTP 端点：A 期没有任何触发 AI 抽取的入口，开了就是死端点。
+     */
+    public Map<String, Object> applyAiSuggestion(Long projectId, String fieldKey, String value,
+                                                 Double confidence, String evidence) {
+        requireKnownKey(fieldKey);
+        Project project = projectRepository.findById(projectId).orElse(null);
+        Optional<ProjectProfileField> found = repository.findByProjectIdAndFieldKey(projectId, fieldKey);
+
+        String trimmed = value == null ? null : value.trim();
+        if (trimmed == null || trimmed.isEmpty()) {
+            return render(fieldKey, found.orElse(null), project);
+        }
+
+        ProjectProfileField row = found.orElseGet(() -> newRow(projectId, fieldKey));
+        if (SOURCE_USER.equals(row.getSource())) {
+            row.setPendingValue(trimmed);
+            row.setPendingConfidence(confidence);
+            row.setPendingEvidence(evidence);
+            row.setPendingAt(LocalDateTime.now());
+        } else {
+            row.setFieldValue(trimmed);
+            row.setSource(SOURCE_AI);
+            row.setConfidence(confidence);
+            row.setEvidence(evidence);
+        }
+        return render(fieldKey, repository.save(row), project);
     }
 
     /** 新行必须自带 uid：跨机器身份只认它，既有行的 uid 任何时候都不许换。 */

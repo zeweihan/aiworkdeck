@@ -255,4 +255,60 @@ class ProjectProfileServiceTest {
         assertEquals("未知的档案字段", e.getMessage());
         verify(repository, never()).save(any(ProjectProfileField.class));
     }
+
+    @Test
+    void AI不覆盖律师填过的字段_只挂pending() {
+        ProjectProfileField existing = row("client", "北京某某科技有限公司", "user");
+        existing.setUid("uid-user");
+        when(repository.findByProjectIdAndFieldKey(42L, "client")).thenReturn(Optional.of(existing));
+
+        Map<String, Object> result =
+                service.applyAiSuggestion(42L, "client", "上海某某贸易有限公司", 0.91, "股权转让协议.docx 第 1 条");
+
+        // 这是本表的核心不变式：律师改过的字段，AI 一个字节都不许动
+        assertEquals("北京某某科技有限公司", existing.getFieldValue());
+        assertEquals("user", existing.getSource());
+        assertNull(existing.getConfidence());
+        assertNull(existing.getEvidence());
+
+        assertEquals("上海某某贸易有限公司", existing.getPendingValue());
+        assertEquals(0.91, existing.getPendingConfidence(), 0.0001);
+        assertEquals("股权转让协议.docx 第 1 条", existing.getPendingEvidence());
+        assertNotNull(existing.getPendingAt());
+        assertEquals("uid-user", existing.getUid());
+
+        assertEquals("北京某某科技有限公司", result.get("fieldValue"), "返回的仍是律师那份值");
+        assertEquals("user", result.get("source"));
+    }
+
+    @Test
+    void AI可以覆盖自己上次填的字段与未填的字段() {
+        ProjectProfileField aiRow = row("matterType", "公司治理", "ai");
+        aiRow.setUid("uid-ai");
+        when(repository.findByProjectIdAndFieldKey(42L, "matterType")).thenReturn(Optional.of(aiRow));
+
+        service.applyAiSuggestion(42L, "matterType", "并购交易", 0.77, "股权转让协议.docx");
+        assertEquals("并购交易", aiRow.getFieldValue());
+        assertEquals("ai", aiRow.getSource());
+        assertEquals(0.77, aiRow.getConfidence(), 0.0001);
+        assertNull(aiRow.getPendingValue(), "能直接写就不该挂 pending");
+
+        // 未填过的字段（setUp 里 findByProjectIdAndFieldKey 默认返回 empty）
+        Map<String, Object> created =
+                service.applyAiSuggestion(42L, "counterparty", "某某集团", 0.5, "通知函.docx");
+        assertEquals("某某集团", created.get("fieldValue"));
+        assertEquals("ai", created.get("source"));
+    }
+
+    @Test
+    void AI抽空时不清掉已有值() {
+        ProjectProfileField existing = row("client", "北京某某科技有限公司", "user");
+        when(repository.findByProjectIdAndFieldKey(42L, "client")).thenReturn(Optional.of(existing));
+
+        Map<String, Object> result = service.applyAiSuggestion(42L, "client", "   ", 0.1, null);
+
+        verify(repository, never()).save(any(ProjectProfileField.class));
+        assertEquals("北京某某科技有限公司", result.get("fieldValue"));
+        assertNull(existing.getPendingValue());
+    }
 }
