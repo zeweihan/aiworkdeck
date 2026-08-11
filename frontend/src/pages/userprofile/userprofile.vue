@@ -33,6 +33,19 @@
           </view>
           
           
+          <!-- 返回项目列表：出口，不是 tab。故意放在 .nav-menu 外面而不是它的第一个子节点——
+               app-e2e J2 只挑 `.nav-menu .nav-text` 校验默认 tab 是「工作记录」，混进
+               nav-menu 会把这条返回入口误判成第 0 个 tab，把默认 tab 断言带偏。
+               「我的项目」tab 搬去 project-list 之后，本页 21 处 @tap 里没有一条能回到项目——
+               工作台 rail 头像是 navigateTo 进来的，页面栈里工作台还活着，只差一个返回按钮。
+               方法名不能叫 goToProjectList：check-navigation-contract.mjs 的禁字清单里有
+               'goToProject'，goToProjectList 含它作子串会被误判成残留的旧方法。
+               .nav-separator 复用既有样式（此前只留了个「Separator」注释占位，没有元素用它）。 -->
+          <view class="nav-item nav-item-back" @tap="goBackToList">
+            <text class="nav-text">返回项目列表</text>
+          </view>
+          <view class="nav-separator"></view>
+
           <!-- Navigation Menu (Moved from Top) -->
           <view class="nav-menu">
             <view
@@ -415,6 +428,16 @@ export default {
     })
   },
   methods: {
+    // 出口：工作台 rail 头像 navigateTo 进来时页面栈里工作台还活着，回退即可；
+    // 直达打开本页（页面栈只有这一页，例如刷新/深链）则 reLaunch 落项目列表页。
+    goBackToList() {
+      const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : []
+      if (pages.length >= 2) {
+        uni.navigateBack({ delta: 1 })
+      } else {
+        uni.reLaunch({ url: '/pages/project-list/project-list' })
+      }
+    },
     triggerAvatarUpload() {
         uni.chooseImage({
             count: 1,

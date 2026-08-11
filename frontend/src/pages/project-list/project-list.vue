@@ -4,9 +4,15 @@
       <view class="main-content">
         <view class="content-header">
           <text class="header-title">我的项目</text>
-          <view v-if="!isClientUser && projects.length > 0" class="header-actions">
-            <button class="btn-secondary-small" @tap="openCloudAccept">从团队案件库取一份案卷</button>
-            <button class="btn-primary-small" @tap="goToNewProject">+ 新建项目</button>
+          <!-- header-actions 本身不受角色/项目数门控：CLIENT 或零项目新用户否则在本页
+               找不到任何通往个人中心的入口（登出/设置/解除授权全部不可达）。
+               门控只收窄到「新建项目/取案卷」这两个写操作按钮上。 -->
+          <view class="header-actions">
+            <template v-if="!isClientUser && projects.length > 0">
+              <button class="btn-secondary-small" @tap="openCloudAccept">从团队案件库取一份案卷</button>
+              <button class="btn-primary-small" @tap="goToNewProject">+ 新建项目</button>
+            </template>
+            <button class="btn-secondary-small" @tap="goToUserProfile">个人中心</button>
           </view>
         </view>
 
@@ -435,6 +441,10 @@ export default {
     },
     goToNewProject() {
       uni.navigateTo({ url: '/pages/newproject/index' })
+    },
+    // 本页与个人中心两端都不是工作台，用 navigateTo（工作台参与的跳转才 reLaunch）
+    goToUserProfile() {
+      uni.navigateTo({ url: '/pages/userprofile/userprofile' })
     },
     startRename(project) {
       if (this.isClientUser) return
