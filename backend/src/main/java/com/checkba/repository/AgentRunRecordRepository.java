@@ -21,4 +21,7 @@ public interface AgentRunRecordRepository extends JpaRepository<AgentRunRecord, 
      * 概览页把历史铺开时会整片显示无状态。服务层再 limit，不在 SQL 里限条数。
      */
     List<AgentRunRecord> findByProjectIdOrderByUpdatedAtDesc(Long projectId);
+
+    /** 概览页会话列表批量取运行状态：一次查完，避免每个会话一次 findByConversationId 的 N+1。 */
+    List<AgentRunRecord> findByConversationIdIn(java.util.Collection<String> conversationIds);
 }
