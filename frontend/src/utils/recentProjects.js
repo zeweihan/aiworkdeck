@@ -1,5 +1,8 @@
 // IDE 化：最近项目记录（启动直达 + 顶栏最近项目切换器共用）。
-// 只存 id 与访问时间，名称一律从 getMyProjects 实时解析，避免改名后显示陈旧。
+// 只存 id（LAST_KEY 一个数字 + RECENT_KEY 一个 id 数组，**不存时间戳**，顺序即最近度）；
+// 名称一律从 getMyProjects 实时解析，避免改名后显示陈旧。
+// 格式刻意不扩：项目概览页也调 recordProjectVisit，但启动直达永远进工作台，
+// 不为「上次落在哪个页面」加字段（spec §5.3 决策）。
 
 import { host } from '@/services/host.js'
 

@@ -1,0 +1,104 @@
+/* 项目概览页容器样式。子组件各自的样式在各自 scoped 块里，这里只管容器。
+   外壳浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。 */
+$color-primary: #1A5336;
+$color-primary-light: #2D7A52;
+$color-accent: #5BD197;
+$color-text-main: #2C3338;
+$color-text-light: #6C757D;
+$color-border: #E9ECEF;
+$bg-pale: #F8F9FA;
+$bg-white: #FFFFFF;
+
+.page-project-home {
+  min-height: 100vh;
+  box-sizing: border-box;
+  background: $bg-pale;
+  color: $color-text-main;
+}
+
+.home-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 52px;
+  padding: 0 24px;
+  background: $bg-white;
+  border-bottom: 1px solid $color-border;
+}
+
+/* btn-project-list / btn-workbench 是 e2e 锚点类名，样式挂在 home-back / home-enter 上 */
+.home-back {
+  font-size: 13px;
+  color: $color-text-light;
+  cursor: pointer;
+}
+
+.home-back:hover {
+  color: $color-primary;
+}
+
+.home-topbar-title {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  color: $color-text-main;
+}
+
+.home-enter {
+  flex: none;
+  padding: 6px 16px;
+  border-radius: 4px;
+  background: $color-primary;
+  color: $bg-white;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.home-enter:hover {
+  background: $color-primary-light;
+}
+
+.home-scroll {
+  padding: 24px;
+}
+
+/* 一页纸卷轴：单列纵向 */
+.home-column {
+  max-width: 880px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.home-section {
+  background: $bg-white;
+  border: 1px solid $color-border;
+  border-radius: 6px;
+  padding: 16px 18px;
+}
+
+.home-section-title {
+  display: block;
+  margin-bottom: 12px;
+  padding: 0 0 8px 8px;
+  border-left: 3px solid $color-accent;
+  border-bottom: 1px solid $color-border;
+  font-size: 13px;
+  font-weight: 600;
+  color: $color-primary;
+}
+
+@media (max-width: 720px) {
+  .home-topbar {
+    padding: 0 12px;
+    gap: 10px;
+  }
+
+  .home-scroll {
+    padding: 16px 12px;
+  }
+}

@@ -55,8 +55,11 @@ public class UserActivityLog {
     private LocalDateTime timestamp;
 
     /**
-     * 持续时间（秒）
-     * 仅对 CLOSE_FILE / PAGE_VIEW 等结束事件有效，表示该次会话的持续时长
+     * 持续时间（**毫秒**）
+     * 仅对 CLOSE_FILE / PAGE_VIEW 等结束事件有效，表示该次会话的持续时长。
+     * 唯一写入方是前端 utils/activityTracker.js（:207 effectiveDuration 是
+     * Date.now() 差值，:223 原样经 logActivity 传上来），后端不做任何单位换算。
+     * 旧注释写「秒」，与实际差 1000 倍——读这个字段做统计前先看清楚。
      */
     @Column
     private Long duration;

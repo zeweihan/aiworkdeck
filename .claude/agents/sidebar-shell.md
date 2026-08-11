@@ -7,9 +7,23 @@ description: 侧边栏与工作台外壳领域。任务涉及左侧 rail/左栏�
 
 职责边界：工作台整体布局、左侧 rail 与左栏、面板切换状态机、页面路由。各面板内部逻辑归 utility-tools / plugin-system；右栏聊天内容归 ai-chat；编辑器归 doc-editor。
 
-## project-overview.vue 内部地图（10638 行，主战场）
+## project-overview.vue 内部地图（4939 行，主战场）
 
-三大块：template :1-1213 / script :1215-6729 / style(scss scoped) :6731-10638。
+> **下面这份 :xxx 行号地图早于「project-overview 分阶段拆分」，多数已漂（实测：
+> project-header :3 → :4、left-rail :172 → :210、sidebar-left :354 → :427、
+> workbench :595 → :656、data() :1314 → :1560、computed :1557 → :1814、
+> methods :2261 → :2671）。结构描述仍然准确，**引用任何具体行号前自己 grep 一遍**。
+> 已实测的锚点：`switchToProject` :2743（内部 reLaunch 在 :2747）、`goAllProjects` :2755、
+> `goToUserProfile` :3825、`goToSystemSettings` :3828、`isActiveOverviewInstance` :3439、
+> `beforeUnmount` :2084、`onLoad` :2203、`onShow` :2287、`mounted` :2348、
+> 顶栏切换器的 `.switcher-all`「全部项目…」:41。`toggleLeftPane` **已不在本文件里**，
+> 拆到同目录 `panelSwitching.js:7`。
+
+三大块：template :1-1425 / script :1427-4936 / style **已外置**——`:4939` 只有一行
+`<style lang="scss" scoped src="./project-overview.scss">`，样式实体在同目录
+`project-overview.scss`（4316 行）。逻辑也已拆出九个同目录 .js 模块：
+`agentClientActions` / `clipboardBridge` / `fileOpenTabs` / `librePool` / `ocrActions` /
+`ocrCapture` / `panelSwitching` / `stagingArea` / `tabDragSplit`（都以 mixin 形式并进页面）。
 布局是四列：常驻 rail（Activity Bar）→ 可收起左栏 sidebar-left → 中间 workbench（含底部工具抽屉）→ 右侧 AI 面板。
 
 **template**
@@ -46,9 +60,26 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 
 ## 页面路由（frontend/src/pages.json，全部 navigationStyle: custom）
 
-launch（**启动页**）/ unlock / identity / login / newproject / project-overview / variable-library / userprofile / admin / plugin-market / wizard。
-导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|project-overview|userprofile；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；overview navigateTo userprofile/admin；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；退出 reLaunch login。
+launch（**启动页**）/ unlock / identity / login / newproject / **project-list** / **project-home** / project-overview / variable-library / userprofile / admin / plugin-market / wizard。
+
+**术语表（同名不同物，全篇按此读）**：
+
+| 术语 | 指代 | 路由 |
+|---|---|---|
+| **工作台** | 现有四列布局的干活界面 | `pages/project-overview/project-overview`（**刻意不改名**，改名要动 9 处硬编码 URL + 九个模块文件 + e2e + 埋点 path 维度） |
+| **项目列表页** | 2026-08 从个人中心 projects tab 搬出的独立页 | `pages/project-list/project-list` |
+| **项目概览页** | 一页纸卷轴（档案头/统计条/动态/日程/AI 对话） | `pages/project-home/project-home` |
+
+代价是「project-overview」在代码里指工作台、在产品语言里指项目概览页。写代码时以路由为准，写文案时以术语表为准。
+
+**三级导航（2026-08）**：项目列表页 → 项目概览页 → 工作台。总规则两条——
+① **五条「直达工作台」的出口一条都不改**（启动直达 `launch.vue:97`、浏览器会话恢复 `login.vue:299`、应用菜单最近打开 `App.vue:45`、打开本地文件夹/文件 `ideOpen.js:22`、顶栏最近项目切换器 `project-overview.vue:2747`）——这些语境的用户意图是「立刻干活」，强插概览页只是多一跳；
+② **所有「去我的项目」的落点统一到项目列表页**（`launch.vue:99` 兜底、`login.vue:292` CLIENT 分支 / `:301` 会话恢复兜底 / `:394` 普通登录 / `:474` 注册成功、`newproject/index.vue:176` 返回、工作台 `goAllProjects`:2755）。
+
+导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|project-overview（有最近项目）|**project-list**（无最近项目）；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list navigateTo→project-home**（`goToProject`，`onCloudAccepted` 复用同一方法）；**project-home reLaunch→project-overview**（顶部「进入工作台」，`openFileId` 原样透传；点 AI 对话历史时另带 `conversationId`，**工作台侧已消费**——`onLoad` 读到 `conversationId` 后调既有 `loadHistoryChat({ conversationId })`（`project-overview.vue:4827`），它内部要 `$refs.chatInterface`，所以只能在 mounted 且 AI 面板已渲染之后调）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：列表↔概览会被反复来回点，双向 navigateTo 堆实例，而纯 redirectTo 在「列表→概览→列表」链上同样造第二个列表实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`:41，工作台参与的跳转一律 reLaunch）；**project-overview reLaunch→project-home**（在 `.switcher-all` **之前**插的 `.switcher-home`「项目概览」，是工作台通往概览页的唯一入口）；overview navigateTo userprofile/admin（**这两条保持 navigateTo 不动**——它们依赖页面栈保留实例以便 onShow 回流刷新，见 `project-overview.vue:2287` 的 onShow 重新接管全局处理器）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；退出 reLaunch login。
 **启动链只用 reLaunch，不用 navigateTo**——分流页不该留在页面栈里。
+**新页 pages.json 注册必须逐条显式写 `navigationStyle: custom`**：globalStyle 里没有这一项（只有 navigationBarTextStyle / TitleText / BackgroundColor / backgroundColor），漏写会得到一个系统导航栏，与全应用自绘顶栏形制冲突。
+**个人中心配套三改（已落地，实测行号）**：`userprofile.vue:324` 的 `activeTab` 默认值是 `'work_log'`、`:326` 起的 `tabs` 数组已不含 `{ key: 'projects', label: '我的项目' }`（只剩工作记录/收藏/代办/设置四项）、`onLoad`（:379）里 `$nextTick` 直接调一次 `loadActivityLogs()`（**不是删除**，:409）——工作记录 tab 是懒加载的，另一个触发点是 `switchTab`（:547）里 `key === 'work_log'` 分支（`loadActivityLogs` 定义在 :561）；默认 tab 落在懒加载 tab 上却不在 `onLoad` 里补调一次，就会得到一个默认打开却永远空白的 tab。
 **identity（本机工作区选择，2026-08-05）**：单机免登下所有请求解析为同一个「本机用户」，老安装的库里常有多个历史账号（admin 往往是空壳，真实数据在用户自己注册的账号名下）。后端 `LocalIdentityService` 按数据量解析，多个账号都有数据时不猜，`GET /api/local-identity/status` 回 needsSelection，launch 页据此分流到 identity 页；选定经 `POST /api/local-identity/select` 持久化到 SystemSetting，之后不再出现。补救入口在 admin 页「账户与用量」的「本机工作区」卡（候选 >1 才渲染）。
 **IDE 化体验对齐第二轮（2026-07-31，同分支）**：① 启动直达——login 页 `tryAutoResume()` 存储会话有效即 reLaunch 上次项目（`utils/recentProjects.js` 的 `checkba_last_project_id`），登录页只在会话失效时出现（**PR-A 去登录后这条只对浏览器访问团队服务器有效**：桌面端启动链已改为 launch 页分流，直达逻辑迁到 `launch.vue`，登录页在桌面端不再出现）；② 桌面应用菜单 `desktop/main/app-menu.js`（文件→打开文件夹 Cmd+O/打开文件/新建项目文件夹/最近打开动态子菜单；编辑菜单是 editMenu role，删了它 mac 输入框 Cmd+C/V 全灭；窗口菜单刻意无 close role——Cmd+W 留给渲染层关标签），动作经 `checkba:menu-action` 到 App.vue 全局处理器（`utils/ideOpen.js` 共用流程）；③ overview 键位 Cmd+P（`QuickOpenPanel.vue` 快速打开，document 捕获段拦键：uni input 不透传 keydown）/Cmd+W 关活跃标签，焦点在 LOWA webview 内收不到属已知边界；④ 顶栏项目名旁最近项目切换器（`.project-switcher`/`.switcher-menu`）与工作状态点（`.work-status-chip`，复用 `checkAdoptConflict` 的 /status，working/onDraft 才渲染）；⑤ 窗口标题「文件 — 项目 — AI Workdeck」（watch activeFileIdLeft/project.name）；⑥ 拖文件夹到窗口（App.vue capture 段 drop，单目录才接管，`fs.getPathForFile` preload helper）与 macOS open-file 事件（main.js `dispatchOpenPath`，窗口未就绪先存后发）都走 open-local。文件树方向键导航有意缓做（全局拦方向键与编辑器输入冲突）。
 **newproject 已 IDE 化（2026-07-31）**：桌面态三动作「打开文件夹/新建项目文件夹/打开文件」走 `window.checkbaDesktop.fs.showOpenDialog` + `POST /api/projects/open-local`（同一 localRoot 重复打开复用项目并幂等重扫导入，见 `LocalProjectService`）；浏览器降级为托管空白项目（BLANK）；成功后 reLaunch 进 overview，单文件过渡版带 `openFileId` 查询参数（`fileOpenTabs.js` 的 `openPendingLocalFile`）。项目类型选择表单已删除（`config/projectTypes.js` 仅剩 `getProjectTypeLabel` 供存量项目卡片显示）。FileTree 右键新增「在访达中显示」（`reveal-file` → overview `onRevealFile` → `/local-path` 端点 + `fs.showItemInFolder` IPC）。
@@ -63,6 +94,7 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
 `.claude/agents/feedback-optimizer.md`。
 
 **页面栈地雷（本领域核心机制）**：navigateTo 反复进入 project-overview 不销毁旧实例——页面栈多实例并存，每个都持有全局监听。守卫模式：活跃实例指针 `window.__checkbaActiveOverviewVm` + isActiveOverviewInstance() 判活跃、去重状态挂 window 不挂实例、只清/接管指向自己的指针（beforeUnmount/onShow/mounted 三处配合）。切换项目用 reLaunch 避免堆叠。**外壳里新增任何全局订阅必须套用此模式**（PR#148/#151）。
+**新页同样成立**：`project-home.vue` 套同一套守卫，但**必须用自己的指针名** `window.__checkbaProjectHomeVm`——复用工作台的 `__checkbaActiveOverviewVm`（:2086/:2291/:2352 登记与清理，:3444 判活跃）会让工作台的全局事件被概览页拦掉。`project-home` 的轮询纪律：只在 onLoad 与 onShow 各刷一次，不起定时器；**绝不调 `getVersionStatus` / `/version/status`**（enabled 时会一路走到 `ProjectRepoService` 跑两次 `git add "."`，工作台已有 ≥7 处触发点在喂同一份状态，概览页再打第三次是纯浪费且会与工作台争 per-project 锁）。要「最近修改」时间取 `/version/timeline` 最新一条的 when。
 
 ## CSS 体系
 
@@ -75,8 +107,10 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
 
 - `frontend/src/services/host.js` — **访问桌面壳能力的唯一出口**（浏览器面板/截图/剪贴板/组件下载/自动更新/本地文件对话框/应用菜单等）。业务代码一律 `import { host } from '@/services/host.js'`，**不要再写 `window.checkbaDesktop`**；「是不是桌面壳」用 `isDesktopHost()`。桌面态逐字段透传、Web 态缺席，所以既有的 `if (host.browser && ...)` 子对象守卫必须保留（守卫就是能力探测）。详见 doc-editor.md 的「宿主能力层与编辑器容器」。
 - `frontend/src/config/tools.js` — 底部工具面板 tab（WORKBENCH_TOOLS）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
-- `frontend/src/components/FileTree.vue`（5195 行）— 左栏文件树。
-- 各页面：login.vue(777)、newproject/index.vue(660)、wizard.vue(593，重跑语义见 PR#134)、userprofile.vue(2158)、variable-library.vue(543)、admin.vue(1648+，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(766)。
+- `frontend/src/components/FileTree.vue`（5225 行）— 左栏文件树。
+- 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（项目 tab 已搬出，只剩工作记录/收藏/代办/设置四 tab，行数随之变动、不再登记具体数字）、variable-library.vue(543)、admin.vue(4077，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
+- **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
+- **项目概览页** `frontend/src/pages/project-home/project-home.vue` + `project-home.scss`；五个子组件在 `frontend/src/components/project-home/`：`ProfileHeader` / `OverviewStatsBar` / `ActivityFeed` / `TaskSchedule` / `ConversationList`。**九个 e2e 稳定锚点类名**：页面根 `.page-project-home`、项目列表页根 `.page-project-list`、顶部两按钮 `.btn-workbench` / `.btn-project-list`、五个组件根 `.overview-stats-bar` / `.profile-header` / `.activity-feed` / `.task-schedule` / `.conversation-list`——**改这九个名字要同步改 `frontend/tests/app-e2e/run.mjs` 的 J2/J3 段**。档案编辑刻意走行内 input、删除确认走 `uni.showModal`，因此两个新页与五个新组件**都不需要自带 awd-\* 样式副本**（awd-\* 没有集中定义，改成弹窗就必须自带一份 scoped 副本，否则渲染成无样式裸框）。
 - admin 的「AI 功能设置」面板（nav key `ai`）是 AI 供应商与模型的唯一设置入口：三档供应商单选、
   默认/辅助/子 Agent 三个模型下拉（清单来自 `GET /api/ai/models`，前端不许硬编码）、网络区域三选一
   （auto/境内/境外，附判定依据）、本地 Ollama 的地址与模型名。nav 结构未变，改的是该面板内容；

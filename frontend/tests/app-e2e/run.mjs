@@ -2,7 +2,8 @@
 // 全应用"真人模拟"e2e / whole-app human-simulation e2e (browser target).
 //
 // 从桌面首启解锁门（launch → unlock，试用码真实打字解锁）开始，以真实鼠标点击
-// 走完核心用户旅程：个人中心四 tab、进入项目、上传文件（含 >5MB 分片路径回归）、
+// 走完核心用户旅程：项目列表页、个人中心四 tab、三级导航（列表→概览页→工作台，
+// 含概览页档案手填落库）、上传文件（含 >5MB 分片路径回归）、
 // 打开文件、左栏功能区、独立页面——全程收集控制台错误 / 失败 API / 可疑文案，
 // 任何断言失败退出码非 0。
 //
@@ -295,11 +296,14 @@ try {
     await page.type('.unlock-input textarea', messy)
     await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
     await mouseClickSel('.unlock-btn')
-    // 解锁成功 → toast → reLaunch 回 launch 分流：向导未初始化去 wizard，
-    // 已初始化直接进应用（长驻后端场景）
+    // 解锁成功 → toast → reLaunch 回 launch 分流，三个合法落点：
+    //  - 向导未初始化 → wizard
+    //  - 已初始化 + 有最近项目 → 工作台（launch.vue:97，直达语义保留不变）
+    //  - 已初始化 + 无最近项目 → 项目列表页（launch.vue:99，三级导航改造把这里
+    //    由 userprofile 改成了 project-list；全新 puppeteer profile 走的正是这条）
     await page.waitForFunction(() => {
       const h = location.hash
-      return h.includes('pages/wizard/wizard') || h.includes('pages/userprofile/userprofile')
+      return h.includes('pages/wizard/wizard') || h.includes('pages/project-list/project-list')
         || h.includes('pages/project-overview/project-overview')
     }, { timeout: 30000 })
   })
@@ -315,12 +319,18 @@ try {
     if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
   })
 
-  await step('已解锁重启 → 直达上次项目', async () => {
+  await step('已解锁重启 → 直达上次项目（工作台，不经概览页）', async () => {
     // uni h5 getStorageSync 兼容裸字符串
     await page.evaluate((id) => localStorage.setItem('checkba_last_project_id', String(id)), QA.projectId)
     await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForFunction(() => location.hash.includes('project-overview'), { timeout: 30000 })
+    // 三级导航后 project-list / project-home / project-overview 三个路由并存，
+    // 一律写全路径判定：裸 'project-overview' 目前确实不是另外两个的子串，但
+    // 'project-' 前缀家族已经三个成员了，模糊匹配迟早撞上。
+    // 断言落工作台而不是概览页 = 钉死「启动直达永远进工作台」这条产品决策
+    // （spec §5.3：概览页不做启动落点，recentProjects 存储格式不扩）。
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 30000 })
     await waitText('资源管理器', 20000)
   })
 
@@ -328,10 +338,52 @@ try {
     await page.waitForSelector('.trial-chip', { timeout: 15000 })
   })
 
-  // ============ J2 个人中心四 tab ============
-  console.log('== J2 个人中心 ==')
-  await page.goto(BASE + '/#/pages/userprofile/userprofile', { waitUntil: 'networkidle2' })
-  await page.waitForSelector('.project-item-card', { timeout: 20000 })
+  // ============ J2 项目列表页 + 个人中心四 tab ============
+  // 三级导航改造后「我的项目」不再是个人中心的一个 tab，而是独立页面
+  // pages/project-list/project-list；个人中心的默认 tab 随之变成「工作记录」，
+  // tabs 数组里已无 projects 项。这里拆成两段独立断言：
+  //  ① 项目列表页自己能加载出卡片（J3 的起点，必须先立住）
+  //  ② 个人中心剩下的四个 tab 仍能切、且默认 tab 不是空白页
+  // 不要再用「点『我的项目』tab 回到列表」这条老路径——那个 tab 已经不存在，
+  // mouseClickText 会抛「找不到文本」。
+  console.log('== J2 项目列表页 + 个人中心 ==')
+
+  await step('项目列表页加载出项目卡片', async () => {
+    await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
+    await page.waitForSelector('.page-project-list', { timeout: 20000 })
+    await page.waitForSelector('.project-item-card', { timeout: 20000 })
+    await waitText(QA.project.slice(0, 8))
+  })
+
+  await step('项目列表页文案巡检', async () => {
+    const t = await textOf()
+    const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
+    if (m) throw new Error('页面文本可疑: ' + m[0])
+    // 空项目态与有项目态都必须渲染「从团队案件库取一份案卷」——它是协作的唯一
+    // 入口，且 CollabDialog.vue:271 的邀请话术第 1 步就指着它。搬迁时漏掉
+    // CloudAcceptDialog 的两个入口，这条断言会红。
+    if (!t.includes('从团队案件库取一份案卷')) {
+      throw new Error('项目列表页缺「从团队案件库取一份案卷」入口（CloudAcceptDialog 没搬全）')
+    }
+  })
+
+  await shot('j2-project-list')
+
+  await step('个人中心不再有「我的项目」tab', async () => {
+    await page.goto(BASE + '/#/pages/userprofile/userprofile', { waitUntil: 'networkidle2' })
+    await waitText('工作记录', 20000)
+    // 只看 tab 栏本身（.nav-menu .nav-text），不看整页 innerText——
+    // 页面别处出现「我的项目」四个字不该让这条断言误红。
+    const labels = await page.evaluate(
+      () => [...document.querySelectorAll('.nav-menu .nav-text')].map((e) => e.innerText.trim()))
+    if (labels.includes('我的项目')) {
+      throw new Error('个人中心仍有「我的项目」tab（userprofile.vue:494 那行没删）: ' + JSON.stringify(labels))
+    }
+    if (labels[0] !== '工作记录') {
+      throw new Error('个人中心首个 tab 不是「工作记录」（userprofile.vue:492 默认值没改）: ' + JSON.stringify(labels))
+    }
+  })
+
   for (const tab of ['工作记录', '我的收藏', '我的代办', '设置']) {
     await step('tab ' + tab, async () => {
       await mouseClickText(tab)
@@ -340,17 +392,105 @@ try {
       if (m) throw new Error('页面文本可疑: ' + m[0])
     })
   }
-  await mouseClickText('我的项目')
 
-  // ============ J3 进入项目 ============
-  console.log('== J3 进入项目 ==')
-  await step('点项目卡片进入', async () => {
+  // ============ J3 三级导航：项目列表页 → 项目概览页 → 工作台 ============
+  // 术语（代码里同名不同物，别看错）：
+  //   pages/project-overview/project-overview = 工作台（四列干活界面，路由不改名）
+  //   pages/project-home/project-home         = 产品语言里的「项目概览页」（新增）
+  //   pages/project-list/project-list         = 项目列表页（从 userprofile 搬出，新增）
+  // 三个路由互不是子串，但同属 'project-' 前缀家族——一律写全路径判定。
+  console.log('== J3 三级导航 ==')
+
+  await step('列表页点卡片 → 项目概览页', async () => {
+    await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
     await page.waitForSelector('.project-item-card', { timeout: 15000 })
     await waitText(QA.project.slice(0, 8))
-    // 注意：卡片标题绑定 @tap.stop=startRename（点名字=重命名），进入项目要点
-    // 卡片主体 —— UX 疑点已记录于 docs/QA_JOURNEYS.md
+    // 卡片标题绑定 @tap.stop=startRename（点名字=重命名），进入要点卡片主体
+    // —— UX 疑点已记录于 docs/QA_JOURNEYS.md
     await mouseClickSel('.project-item-card')
-    await page.waitForFunction(() => location.hash.includes('project-overview'), { timeout: 15000 })
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-home/project-home'), { timeout: 15000 })
+    await page.waitForSelector('.page-project-home', { timeout: 15000 })
+  })
+
+  await step('概览页五个区块齐全', async () => {
+    // 组件根类名即 e2e 稳定锚点（仓里既有惯例：.cloud-bar / .adopt-dialog / .clip-panel）。
+    // 只等 .page-project-home 是不够的——子组件挂载失败时容器照样在。
+    for (const sel of ['.profile-header', '.overview-stats-bar', '.activity-feed',
+      '.task-schedule', '.conversation-list']) {
+      await page.waitForSelector(sel, { timeout: 15000 })
+    }
+    const t = await textOf()
+    const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
+    if (m) throw new Error('概览页文本可疑: ' + m[0])
+  })
+
+  await step('动态块不暴露版本记录的错误信封', async () => {
+    // Task 5 已让 /version/timeline 在未开仓时早退返回 {code:0,data:{versions:[]}}，
+    // 所以 QA 这个刚建的 BLANK 项目走的是 ActivityFeed 的「还没有动态」普通空态，
+    // 而不是 unavailable 引导态（unavailable 此后只剩 CLIENT 一条路径）。
+    // 这一条守的是「任何情况下都不许把版本记录的错误信封当通用错误暴露给用户」。
+    const t = await textOf()
+    if (t.includes('版本记录操作失败')) {
+      throw new Error('概览页把 /version/timeline 的错误信封当通用错误暴露了')
+    }
+  })
+
+  await shot('j3-project-home')
+
+  await step('概览页「返回项目列表」不堆页面栈', async () => {
+    await mouseClickSel('.btn-project-list')
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-list/project-list'), { timeout: 15000 })
+    // uni h5 的页面栈在 DOM 里是并存的（navigateTo 压栈时旧页留在文档里只是隐藏），
+    // 所以根节点计数就是页面栈实例数的直接证据。goProjectList() 的规则是
+    // 「上一页是 project-list 就 navigateBack、否则 redirectTo」——两条路走对了
+    // 这里恒为 1；写成无脑 navigateTo 会变成 2，且随来回次数线性增长。
+    const n = await page.evaluate(() => document.querySelectorAll('.page-project-list').length)
+    if (n !== 1) throw new Error('项目列表页实例数 = ' + n + '（页面栈堆叠，goProjectList 的分流规则没实现对）')
+  })
+
+  await step('再次进入概览页（来回点不堆栈）', async () => {
+    await mouseClickSel('.project-item-card')
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-home/project-home'), { timeout: 15000 })
+    const n = await page.evaluate(() => document.querySelectorAll('.page-project-home').length)
+    if (n !== 1) throw new Error('概览页实例数 = ' + n + '（页面栈堆叠）')
+  })
+
+  await step('概览页手填档案「客户」→ 落库 source=user', async () => {
+    // 档案头五个字段顺序固定 client → matterType → openedAt → nextStep → counterparty，
+    // 未填态渲染字面量「未填写」（ProfileHeader.vue）。openedAt 有建档时间兜底，
+    // 所以 nth=0 的「未填写」一定是 client（走行内 input，不是 matterType 那个 picker）。
+    // 这两个串是与概览页组之间的缝隙：断言红了先
+    //   grep -n "未填写\|profile-field-input" frontend/src/components/project-home/ProfileHeader.vue
+    await mouseClickText('未填写')
+    // uni-app h5 的 <input> 真实输入元素是内层 .uni-input-input
+    await page.waitForSelector('.profile-field-input .uni-input-input', { timeout: 10000 })
+    // uni useValueSync 的 triggerInput 是 100ms throttle：连打只有首字符进 v-model。
+    // 停一拍再补一个空格，让最后一次 input 以完整值触发（后端 PUT 会 value.trim()，
+    // 这个尾随空格不会落库）。
+    await page.type('.profile-field-input .uni-input-input', 'QA客户公司')
+    await sleep(250)
+    await page.type('.profile-field-input .uni-input-input', ' ')
+    await sleep(250)
+    // 点统计条让输入框失焦 → @blur 提交。刻意点 .overview-stats-bar 这个
+    // e2e 锚点而不是顶栏标题文案：类名是九个锚点契约的一部分，文案不是。
+    await mouseClickSel('.overview-stats-bar')
+    await waitText('QA客户公司', 15000)
+    const res = await api('/api/projects/' + QA.projectId + '/profile')
+    const fields = (res && res.data && res.data.fields) || []
+    if (fields.length !== 5) throw new Error('档案字段不是恒 5 条: ' + fields.length)
+    const client = fields.find((f) => f.fieldKey === 'client')
+    if (!client || client.fieldValue !== 'QA客户公司' || client.source !== 'user') {
+      throw new Error('档案未按 source=user 落库: ' + JSON.stringify(client))
+    }
+  })
+
+  await step('概览页「进入工作台」→ 工作台', async () => {
+    await mouseClickSel('.btn-workbench')
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 15000 })
     await waitText('资源管理器', 20000)
   })
   await shot('j3-project')

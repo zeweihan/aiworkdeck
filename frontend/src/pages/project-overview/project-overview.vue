@@ -35,6 +35,9 @@
               <view v-if="!switcherProjects.length" class="switcher-item switcher-empty">
                 <text>没有其他最近项目</text>
               </view>
+              <view class="switcher-item switcher-home" @tap="goProjectHome">
+                <text>项目概览</text>
+              </view>
               <view class="switcher-item switcher-all" @tap="goAllProjects">
                 <text>全部项目…</text>
               </view>
@@ -2223,6 +2226,16 @@ export default {
         setTimeout(() => this.openPendingLocalFile(pendingId), 600)
       }
 
+      // 概览页的 AI 对话列表点进来时带着 conversationId：把那条历史会话真打开。
+      // 右侧 AI 面板默认收起（showAiPanel: false）且 ChatInterface 挂在 v-if 里，
+      // 所以先开面板、再等它挂载完调 loadHistoryChat（它要 $refs.chatInterface）——
+      // 与上面 openFileId 同一手法，不另造一套时序。
+      if (query.conversationId) {
+        const pendingConversationId = String(query.conversationId)
+        if (!this.showAiPanel) this.toggleAiPanel()
+        setTimeout(() => this.loadHistoryChat({ conversationId: pendingConversationId }), 600)
+      }
+
       // Initialize Staging Area (Persistent)
       // We don't await here to avoid blocking page load, but ensuring folder exists is critical
       this.ensureStagingFolder().then(() => {
@@ -2733,9 +2746,17 @@ export default {
       // reLaunch：切项目不叠页面栈（多实例地雷）
       uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${p.id}` })
     },
+    // 工作台通往项目概览页的唯一入口。工作台参与的跳转一律 reLaunch。
+    goProjectHome() {
+      this.projectSwitcherOpen = false
+      if (!this.projectId) return
+      uni.reLaunch({ url: `/pages/project-home/project-home?id=${this.projectId}` })
+    },
     goAllProjects() {
       this.projectSwitcherOpen = false
-      uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+      // 工作台参与的跳转一律 reLaunch：navigateTo 会把工作台留在页面栈里，
+      // 从列表页再进另一个项目就出现两个存活的工作台实例（全局监听多实例地雷）
+      uni.reLaunch({ url: '/pages/project-list/project-list' })
     },
     // Cmd+P 快速打开面板选中文件
     onQuickOpenFile(file) {

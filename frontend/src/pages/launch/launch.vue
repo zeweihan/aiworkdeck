@@ -96,7 +96,7 @@ export default {
         if (lastId && list.some((p) => Number(p.id) === lastId)) {
           uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${lastId}` })
         } else {
-          uni.reLaunch({ url: '/pages/userprofile/userprofile' })
+          uni.reLaunch({ url: '/pages/project-list/project-list' })
         }
       } catch (e) {
         console.warn('启动直达失败:', e && e.message)

@@ -30,8 +30,8 @@
           </view>
 
           <view class="user-actions">
-            <view class="action-item" @tap="goToUserProfile">
-              <text class="action-text">返回个人中心</text>
+            <view class="action-item" @tap="goToProjectList">
+              <text class="action-text">返回项目列表</text>
               <text class="action-arrow">›</text>
             </view>
           </view>
@@ -93,7 +93,7 @@
               </view>
             </view>
             <view class="form-actions">
-               <button class="btn btn-cancel" @tap="goToUserProfile">取消</button>
+               <button class="btn btn-cancel" @tap="goToProjectList">取消</button>
                <button class="btn btn-create" :loading="busy" :disabled="!blankName || busy" @tap="onCreateBlank">
                   {{ busy ? '创建中...' : '创建项目' }}
                </button>
@@ -172,8 +172,9 @@ export default {
     },
   },
   methods: {
-    goToUserProfile() {
-      uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+    // 两端都不是工作台，用 navigateTo（工作台参与的跳转才 reLaunch）
+    goToProjectList() {
+      uni.navigateTo({ url: '/pages/project-list/project-list' })
     },
 
     // ---- IDE 化入口（桌面） ----

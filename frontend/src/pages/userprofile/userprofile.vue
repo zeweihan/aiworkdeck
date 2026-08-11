@@ -33,6 +33,19 @@
           </view>
           
           
+          <!-- 返回项目列表：出口，不是 tab。故意放在 .nav-menu 外面而不是它的第一个子节点——
+               app-e2e J2 只挑 `.nav-menu .nav-text` 校验默认 tab 是「工作记录」，混进
+               nav-menu 会把这条返回入口误判成第 0 个 tab，把默认 tab 断言带偏。
+               「我的项目」tab 搬去 project-list 之后，本页 21 处 @tap 里没有一条能回到项目——
+               工作台 rail 头像是 navigateTo 进来的，页面栈里工作台还活着，只差一个返回按钮。
+               方法名不能叫 goToProjectList：check-navigation-contract.mjs 的禁字清单里有
+               'goToProject'，goToProjectList 含它作子串会被误判成残留的旧方法。
+               .nav-separator 复用既有样式（此前只留了个「Separator」注释占位，没有元素用它）。 -->
+          <view class="nav-item nav-item-back" @tap="goBackToList">
+            <text class="nav-text">返回项目列表</text>
+          </view>
+          <view class="nav-separator"></view>
+
           <!-- Navigation Menu (Moved from Top) -->
           <view class="nav-menu">
             <view
@@ -59,162 +72,14 @@
         <!-- 顶部 Header (Title + Action) -->
         <view class="content-header">
            <text class="header-title">{{ getActiveTabLabel() }}</text>
-           <view v-if="activeTab === 'projects' && projects.length > 0" class="header-actions">
-             <button class="btn-secondary-small" @tap="openCloudAccept">从团队案件库取一份案卷</button>
-             <button class="btn-primary-small" @tap="goToNewProject">+ 新建项目</button>
-           </view>
         </view>
 
         <!-- Tab 内容区 -->
         <view class="tab-panel-container">
           
-          <!-- 我的项目 Tab -->
-          <view v-if="activeTab === 'projects'" class="panel-projects">
-            <!-- 概览统计行 (UI容器) -->
-            <!-- 概览统计行 (3张卡片) -->
-            <view class="projects-stats-row">
-              <view class="stat-card">
-                <text class="stat-value">{{ projects.length }}</text>
-                <text class="stat-label">全部项目</text>
-              </view>
-              <view class="stat-card">
-                <text class="stat-value">0</text>
-                <text class="stat-label">进行中</text>
-              </view>
-              <view class="stat-card">
-                <text class="stat-value">0</text>
-                <text class="stat-label">已完成</text>
-              </view>
-            </view>
-
-            <!-- 项目列表 -->
-            <view v-if="projectsLoading" class="loading-state">
-              <text class="loading-text">加载中...</text>
-            </view>
-
-            <view v-else-if="projects.length === 0">
-              <view class="empty-state-dashed" @tap="goToNewProject">
-                 <view class="dashed-content">
-                    <text class="dashed-icon">+</text>
-                    <text class="dashed-text">新建项目</text>
-                 </view>
-              </view>
-              <view class="cloud-accept-entry" @tap="openCloudAccept">
-                <text class="cloud-accept-entry-text">从团队案件库取一份案卷</text>
-              </view>
-            </view>
-
-            <view v-else class="project-grid">
-              <view
-                v-for="project in projects"
-                :key="project.id"
-                class="project-item-card"
-                :class="getProjectCardClass(project.projectType)"
-                @tap="goToProject(project.id)"
-              >
-                <!-- Card Decorative Header -->
-                <view class="card-deco-header"></view>
-
-                <!-- Top Row: Type Badge & Menu -->
-                <view class="card-top-row">
-                    <view class="project-type-badge-new">
-                        <text class="badge-text-new">{{ getProjectTypeLabel(project.projectType) }}</text>
-                    </view>
-                    <!-- Role Badge moved to title area -->
-                    <view class="card-actions">
-                         <view class="action-btn-icon danger" @tap.stop="handleDeleteProject(project.id)" title="删除"><svg class="act-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
-                    </view>
-                </view>
-
-                <!-- Main Content -->
-                <view class="card-main-content">
-                    <view class="project-title-area">
-                         <view v-if="renamingProjectId === project.id" class="rename-box" @tap.stop>
-                            <input
-                                class="rename-input"
-                                v-model="renameValue"
-                                :focus="true"
-                                @confirm="confirmRename"
-                                @blur="cancelRename"
-                            />
-                        </view>
-                        <view v-else class="title-row-flex">
-                             <text class="project-title-new" @tap.stop="startRename(project)">{{ project.name }}</text>
-                             <view class="project-role-badge" :class="getRoleClass(project.myRole)">
-                                <text class="role-text">{{ getRoleLabel(project.myRole) }}</text>
-                             </view>
-                        </view>
-                    </view>
-
-                    <!-- Company Info Area -->
-                    <view class="company-info-area" v-if="project.projectType !== 'BLANK'">
-                        <view class="info-row-new" v-if="shouldShowListedCompany(project.projectType)">
-                            <text class="info-label-new">上市公司</text>
-                            <text class="info-val-new highlight">{{ project.listedCompanyName || '-' }}</text>
-                        </view>
-                        <view class="info-row-new" v-if="shouldShowTargetCompany(project.projectType)">
-                            <text class="info-label-new">标的公司</text>
-                            <text class="info-val-new">{{ project.targetCompanyName || '-' }}</text>
-                        </view>
-                    </view>
-                    <view v-else class="blank-placeholder">
-                        <text class="placeholder-text">通用项目工作区</text>
-                    </view>
-                </view>
-                  
-                <!-- Footer: Members & Time -->
-                <view class="card-footer-new">
-                    <view class="members-area-new">
-                        <!-- Manager Avatar (Distinct) -->
-                        <view class="manager-avatar-wrapper" v-if="project.managerId" :title="'项目负责人: ' + (project.managerName || '未知')">
-                             <image v-if="project.managerAvatarUrl" :src="project.managerAvatarUrl" class="manager-avatar-img" />
-                             <view v-else class="manager-avatar-placeholder">{{ project.managerName?.charAt(0) || 'M' }}</view>
-                             <view class="manager-badge-icon"><svg class="badge-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.crown" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
-                        </view>
-                        <view class="members-divider" v-if="project.managerId && getInternalMembers(project).length > 0"></view>
-                        
-                        <!-- Split Members: Internal & Clients -->
-                        <view class="members-split-container">
-                            <!-- Internal Members -->
-                            <view class="members-group">
-                                <view v-for="member in getInternalMembers(project)" :key="member.id" class="member-avatar-new" :title="member.displayName">
-                                    <image v-if="member.avatarUrl" :src="member.avatarUrl" class="avatar-img-new" />
-                                    <view v-else class="avatar-placeholder-new">{{ member.displayName?.charAt(0) || 'U' }}</view>
-                                    
-                                    <view v-if="isProjectAdmin(project) && member.userId !== userInfo.id" class="member-remove-overlay" @tap.stop="removeMember(project.id, member.userId)">×</view>
-                                </view>
-                                <!-- Add Button (Internal) -->
-                                <view v-if="isProjectAdmin(project)" class="add-member-btn-new" @tap.stop="openInviteModal(project.id)">+</view>
-                            </view>
-
-                            <!-- Divider (Only if clients exist) -->
-                            <view class="members-vertical-divider" v-if="getClientMembers(project).length > 0"></view>
-
-                            <!-- Client Members -->
-                            <view class="members-group clients-group" v-if="getClientMembers(project).length > 0">
-                                <text class="client-group-label">客户</text>
-                                <view v-for="member in getClientMembers(project)" :key="member.id" class="member-avatar-new client-avatar" :title="member.displayName + ' (客户)'">
-                                    <image v-if="member.avatarUrl" :src="member.avatarUrl" class="avatar-img-new" />
-                                    <view v-else class="avatar-placeholder-new client-placeholder">{{ member.displayName?.charAt(0) || '客' }}</view>
-                                    
-                                    <view v-if="isProjectAdmin(project)" class="member-remove-overlay" @tap.stop="removeMember(project.id, member.userId)">×</view>
-                                </view>
-                            </view>
-                        </view>
-                    </view>
-                    <view class="footer-meta">
-                        <text class="time-text-new">{{ formatTime(project.createdAt) }}</text>
-                        <view class="enter-btn-arrow">
-                           <text class="arrow-char">→</text>
-                        </view>
-                    </view>
-                </view>
-              </view>
-            </view>
-          </view>
 
           <!-- 工作记录 Tab -->
-          <view v-else-if="activeTab === 'work_log'" class="panel-work-log">
+          <view v-if="activeTab === 'work_log'" class="panel-work-log">
              <view class="log-filter-bar">
                  <input class="filter-input" v-model="activityFilter.date" placeholder="日期 (YYYY-MM-DD)" />
                  <input class="filter-input" v-model="activityFilter.project" placeholder="项目名称" />
@@ -446,29 +311,13 @@
       </view>
     </view>
     
-    <!-- Invite Member Dialog -->
-    <InviteMemberDialog
-        v-model:visible="showInviteModal"
-        :project-id="currentInviteProjectId"
-        @success="loadProjects"
-        @close="closeInviteModal"
-    />
-
-    <!-- 从团队案件库取一份案卷 -->
-    <CloudAcceptDialog
-        v-model:visible="showCloudAccept"
-        @accepted="onCloudAccepted"
-    />
   </view>
 </template>
 
 <script>
-import { getMyProjects, deleteProject, renameProject, getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, getProjectMembers, addProjectMember, removeProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, sendMailCode, bindEmail, totpSetup, totpActivate, totpDisable, issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken } from '@/services/api.js'
-import { getProjectTypeLabel } from '@/config/projectTypes.js'
+import { getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, addProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, sendMailCode, bindEmail, totpSetup, totpActivate, totpDisable, issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken } from '@/services/api.js'
 import { host, isDesktopHost } from '@/services/host.js'
  import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
-import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
-import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 import { ICONS } from '@/config/icons.js'
 
 export default {
@@ -483,15 +332,10 @@ export default {
 
   },
   name: 'UserProfile',
-  components: {
-    InviteMemberDialog,
-    CloudAcceptDialog
-  },
   data() {
     return {
-      activeTab: 'projects',
+      activeTab: 'work_log',
       tabs: [
-        { key: 'projects', label: '我的项目' },
         { key: 'work_log', label: '工作记录' },
         { key: 'favorites', label: '我的收藏' },
         { key: 'todos', label: '我的代办' },
@@ -503,17 +347,9 @@ export default {
         displayName: '用户',
         avatarUrl: null,
       },
-      projects: [],
-      projectsLoading: false,
-      deletingProjectId: null,
-      renamingProjectId: null,
-      renameValue: '',
       favoritesLoading: false,
       favorites: [],
       
-      showInviteModal: false,
-      currentInviteProjectId: null,
-      showCloudAccept: false,
 
       // 授权状态（桌面端）：{ unlocked, mode, plan, activatedAt?, accountConnected, edition }
       licenseInfo: {},
@@ -581,8 +417,9 @@ export default {
     this.$nextTick(() => {
       // 加载用户信息
       this.loadUserInfo()
-      // 加载项目列表
-      this.loadProjects()
+      // 默认 tab 是「工作记录」，它和收藏一样是懒加载的（只在 switchTab 里触发），
+      // 默认落它就必须在这里补一次，否则一进来是一张永远空白的表
+      this.loadActivityLogs()
       // 桌面端：加载授权状态（设置面板「授权」卡片）与插件访问令牌列表
       if (isDesktopEnv) {
         this.loadLicenseInfo()
@@ -591,6 +428,16 @@ export default {
     })
   },
   methods: {
+    // 出口：工作台 rail 头像 navigateTo 进来时页面栈里工作台还活着，回退即可；
+    // 直达打开本页（页面栈只有这一页，例如刷新/深链）则 reLaunch 落项目列表页。
+    goBackToList() {
+      const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : []
+      if (pages.length >= 2) {
+        uni.navigateBack({ delta: 1 })
+      } else {
+        uni.reLaunch({ url: '/pages/project-list/project-list' })
+      }
+    },
     triggerAvatarUpload() {
         uni.chooseImage({
             count: 1,
@@ -1055,133 +902,6 @@ export default {
             }
         }
     },
-    async loadProjects() {
-      this.projectsLoading = true
-      try {
-        const projects = await getMyProjects()
-        // Fetch members for each project
-        const projectsWithMembers = await Promise.all(projects.map(async (p) => {
-            try {
-                const res = await getProjectMembers(p.id)
-                let members = res.data || []
-                // Deduplicate members by userId to prevent display issues
-                const seen = new Set()
-                members = members.filter(m => {
-                    if (seen.has(m.userId)) return false
-                    seen.add(m.userId)
-                    return true
-                })
-                return { ...p, members }
-            } catch (e) {
-                console.error(`Failed to load members for project ${p.id}`, e)
-                return { ...p, members: [] }
-            }
-        }))
-        this.projects = projectsWithMembers
-      } catch (error) {
-        console.error('加载项目列表失败:', error)
-        // 桌面端免登：绝不跳 login（launch 分流已保证桌面不进登录页，这里若跳就是死胡同），
-        // 只提示错误。浏览器端保留原「登录失效回登录页」兜底。
-        if (!this.isDesktop && error.message && error.message.includes('登录')) {
-          uni.reLaunch({
-            url: '/pages/login/login',
-          })
-        } else {
-          uni.showToast({
-            title: error.message || '加载失败，请稍后重试',
-            icon: 'none',
-            duration: 2000,
-          })
-        }
-      } finally {
-        this.projectsLoading = false
-      }
-    },
-    
-    // Member Management
-    openInviteModal(projectId) {
-        this.currentInviteProjectId = projectId
-        this.showInviteModal = true
-    },
-    closeInviteModal() {
-        this.showInviteModal = false
-        this.currentInviteProjectId = null
-    },
-    async removeMember(projectId, userId) {
-        uni.showModal({
-            title: '确认移除',
-            content: '确定要移除该成员吗？',
-            cancelText: '取消',
-            confirmText: '确认',
-            success: async (res) => {
-                if (res.confirm) {
-                    try {
-                        await removeProjectMember(projectId, userId)
-                        uni.showToast({ title: '移除成功', icon: 'success' })
-                        this.loadProjects()
-                    } catch (e) {
-                         uni.showToast({ title: e.message || '移除失败', icon: 'none' })
-                    }
-                }
-            }
-        })
-    },
-    isProjectAdmin(project) {
-        if (!this.userInfo || !project) return false
-        if (project.userId === this.userInfo.id) return true
-        const member = project.members?.find(m => m.userId === this.userInfo.id)
-        return member && member.role === 'ADMIN'
-    },
-    getRoleLabel(role) {
-        const map = {
-            'OWNER': '负责人',
-            'ADMIN': '管理员',
-            'PARTICIPANT': '成员',
-            'READ_ONLY': '只读',
-            'CLIENT': '客户'
-        }
-        return map[role] || role || '成员'
-    },
-    getRoleClass(role) {
-        if (role === 'OWNER') return 'role-owner'
-        if (role === 'ADMIN') return 'role-admin'
-        if (role === 'CLIENT') return 'role-client'
-        return 'role-member'
-    },
-    getInternalMembers(project) {
-        if (!project.members) return []
-        // Internal: NOT Client AND NOT Manager (if displayed separately)
-        return project.members.filter(m => {
-            const isClient = ['CLIENT', 'CLIENT_NAMED', 'CLIENT_GENERIC'].includes(m.role)
-            const isManager = project.managerId && m.userId === project.managerId
-            return !isClient && !isManager
-        })
-    },
-    getClientMembers(project) {
-        if (!project.members) return []
-        // Client only
-        return project.members.filter(m => ['CLIENT', 'CLIENT_NAMED', 'CLIENT_GENERIC'].includes(m.role))
-    },
-    getProjectTypeLabel(projectType) {
-      return getProjectTypeLabel(projectType) || projectType
-    },
-    // New helper for card styling
-    getProjectCardClass(type) {
-        if (['MAJOR_ASSET_RESTRUCTURING', 'ACQUISITION'].includes(type)) {
-            return 'card-style-restructuring'
-        } else if (['PRIVATE_PLACEMENT', 'PUBLIC_PLACEMENT'].includes(type)) {
-            return 'card-style-refinancing'
-        } else if (type === 'BLANK') {
-            return 'card-style-blank'
-        }
-        return 'card-style-default'
-    },
-    shouldShowListedCompany(type) {
-        return type !== 'BLANK'
-    },
-    shouldShowTargetCompany(type) {
-        return ['MAJOR_ASSET_RESTRUCTURING', 'ACQUISITION'].includes(type)
-    },
     formatTime(timeStr) {
       if (!timeStr) return ''
       try {
@@ -1209,87 +929,10 @@ export default {
         return timeStr
       }
     },
-    goToProject(projectId) {
-      uni.navigateTo({
-        url: `/pages/project-overview/project-overview?id=${projectId}`,
-      })
-    },
-    openCloudAccept() {
-      this.showCloudAccept = true
-    },
-    onCloudAccepted(localProjectId) {
-      this.loadProjects()
-      if (localProjectId) this.goToProject(localProjectId)
-    },
-    async handleDeleteProject(projectId) {
-      uni.showModal({
-        title: '确认删除',
-        content: '确定要删除这个项目吗？删除后无法恢复。',
-        cancelText: '取消',
-        confirmText: '确认',
-        success: async (res) => {
-          if (res.confirm) {
-            this.deletingProjectId = projectId
-            try {
-              await deleteProject(projectId)
-              uni.showToast({
-                title: '删除成功',
-                icon: 'success',
-                duration: 2000,
-              })
-              // 重新加载项目列表
-              await this.loadProjects()
-            } catch (error) {
-              console.error('删除项目失败:', error)
-              uni.showToast({
-                title: error.message || '删除失败，请稍后重试',
-                icon: 'none',
-                duration: 2000,
-              })
-            } finally {
-              this.deletingProjectId = null
-            }
-          }
-        },
-      })
-    },
-    goToNewProject() {
-      uni.navigateTo({
-        url: '/pages/newproject/index',
-      })
-    },
     goToAdmin() {
       uni.navigateTo({
         url: '/pages/admin/admin',
       })
-    },
-    startRename(project) {
-        this.renamingProjectId = project.id
-        this.renameValue = project.name
-    },
-    async confirmRename() {
-        if (!this.renameValue || !this.renameValue.trim()) {
-            uni.showToast({ title: '项目名称不能为空', icon: 'none' })
-            return
-        }
-        try {
-            await renameProject(this.renamingProjectId, this.renameValue.trim())
-            // Update local state
-            const project = this.projects.find(p => p.id === this.renamingProjectId)
-            if (project) {
-                project.name = this.renameValue.trim()
-            }
-            this.renamingProjectId = null
-            this.renameValue = ''
-            uni.showToast({ title: '重命名成功', icon: 'success' })
-        } catch (e) {
-            console.error('重命名失败', e)
-            uni.showToast({ title: '重命名失败', icon: 'none' })
-        }
-    },
-    cancelRename() {
-        this.renamingProjectId = null
-        this.renameValue = ''
     },
   },
 }
@@ -1532,404 +1175,6 @@ $danger-color: #E74C3C;
     flex: 0 0 auto;
 }
 
-.header-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-left: auto;
-}
-
-.btn-primary-small {
-    background: rgba(26, 83, 54, 0.08); /* Soft Green Background */
-    color: $brand-primary;
-    font-size: 13px;
-    font-weight: 500;
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid rgba(26, 83, 54, 0.1);
-    cursor: pointer;
-    line-height: 1.5;
-    transition: all 0.2s;
-
-    &:hover {
-        background: $brand-primary;
-        color: white;
-        border-color: $brand-primary;
-    }
-}
-
-.btn-secondary-small {
-    background: #fff;
-    color: $text-light;
-    font-size: 13px;
-    font-weight: 500;
-    padding: 6px 12px;
-    border-radius: 6px;
-    border: 1px solid $border-color;
-    cursor: pointer;
-    line-height: 1.5;
-    transition: all 0.2s;
-
-    &:hover {
-        border-color: $brand-primary;
-        color: $brand-primary;
-    }
-}
-
-.cloud-accept-entry {
-    margin-top: 16px;
-    text-align: center;
-    cursor: pointer;
-}
-
-.cloud-accept-entry-text {
-    font-size: 13px;
-    color: $text-light;
-    text-decoration: underline;
-}
-
-.cloud-accept-entry:hover .cloud-accept-entry-text {
-    color: $brand-primary;
-}
-
-/* 概览统计 */
-.projects-stats-row {
-  display: flex;
-  flex-direction: row;
-  gap: 16px;
-  margin-bottom: 24px;
-}
-
-.stat-card {
-  flex: 1;
-  background: $brand-white;
-  border-radius: 12px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* Softer shadow */
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  border: 1px solid $border-color;
-}
-
-.stat-value {
-  font-size: 24px;
-  font-weight: 600;
-  color: $brand-primary;
-  margin-bottom: 4px;
-  font-family: 'Inter', sans-serif;
-}
-
-.stat-label {
-  font-size: 13px;
-  color: $text-secondary;
-}
-
-/* 项目列表 Grid */
-.project-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
-  gap: 24px;
-}
-
-/* Card Base Style */
-.project-item-card {
-  background: $brand-white;
-  border-radius: 16px;
-  box-shadow: 0 4px 20px rgba(18, 52, 77, 0.04);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  transition: all 0.2s ease;
-  border: 1px solid rgba(0,0,0,0.02);
-  position: relative;
-  min-height: 200px;
-
-  &:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 12px 30px rgba(18, 52, 77, 0.1);
-  }
-}
-
-/* Card Variants */
-.card-style-restructuring {
-  border-top: 4px solid $brand-dark;
-  
-  .card-deco-header {
-      background: linear-gradient(90deg, rgba($brand-dark, 0.05), transparent);
-  }
-  .project-type-badge-new {
-      background: rgba($brand-dark, 0.1);
-      color: $brand-dark;
-  }
-  .info-val-new.highlight {
-      color: $brand-dark;
-      font-weight: 600;
-  }
-}
-
-.card-style-refinancing {
-  border-top: 4px solid #2ecc71; /* Green for growth/money */
-
-  .project-type-badge-new {
-      background: rgba(46, 204, 113, 0.1);
-      color: #27ae60;
-  }
-  .info-val-new.highlight {
-      color: #27ae60;
-      font-weight: 600;
-  }
-}
-
-.card-style-blank {
-  border-top: 4px solid #e0e0e0;
-  
-  .project-type-badge-new {
-      background: #f5f5f5;
-      color: #999;
-  }
-  .project-title-new {
-      font-weight: 500;
-      color: #666;
-  }
-}
-
-/* Card Header */
-.card-top-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    padding: 16px 20px 0;
-}
-
-.project-type-badge-new {
-    padding: 4px 10px;
-    border-radius: 6px;
-    font-size: 12px;
-    font-weight: 500;
-    display: inline-block;
-}
-
-.card-actions {
-    display: flex;
-    gap: 8px;
-}
-
-.action-btn-icon {
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 14px;
-    opacity: 0.6;
-    transition: opacity 0.2s;
-    
-    &:hover {
-        opacity: 1;
-        background: #f0f0f0;
-    }
-    
-    &.danger:hover {
-        background: #fff5f5;
-        color: red;
-    }
-}
-
-/* Card Content */
-.card-main-content {
-    padding: 16px 20px;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-}
-
-.project-title-area {
-    margin-bottom: 16px;
-    min-height: 48px; /* Ensure alignment */
-}
-
-.project-title-new {
-    font-size: 18px;
-    font-weight: 700;
-    color: $text-main;
-    line-height: 1.4;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    overflow: hidden;
-    cursor: pointer;
-    
-    &:hover {
-        color: $brand-primary;
-    }
-}
-
-.company-info-area {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.info-row-new {
-    display: flex;
-    align-items: center;
-    font-size: 13px;
-}
-
-.info-label-new {
-    color: $text-light;
-    width: 70px;
-    flex-shrink: 0;
-}
-
-.info-val-new {
-    color: $text-secondary;
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.blank-placeholder {
-    height: 40px;
-    display: flex;
-    align-items: center;
-    
-    .placeholder-text {
-        font-size: 13px;
-        color: #ccc;
-        font-style: italic;
-    }
-}
-
-/* Footer */
-.card-footer-new {
-    padding: 12px 20px;
-    border-top: 1px solid #f5f5f5;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #fafbfc;
-}
-
-.members-area-new {
-    display: flex;
-    align-items: center;
-}
-
-.members-list-new {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-}
-
-.member-avatar-new {
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    position: relative;
-    cursor: pointer;
-    
-    &:hover {
-        z-index: 10;
-        transform: scale(1.1);
-    }
-}
-
-.avatar-img-new {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    border: 1px solid #fff;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.avatar-placeholder-new {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    background: #eef2f5;
-    color: #666;
-    font-size: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: 1px solid #fff;
-}
-
-.member-remove-overlay {
-    position: absolute;
-    top: -2px;
-    right: -2px;
-    width: 12px;
-    height: 12px;
-    background: #ff4d4f;
-    color: white;
-    border-radius: 50%;
-    font-size: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    line-height: 1;
-    display: none;
-}
-
-.member-avatar-new:hover .member-remove-overlay {
-    display: flex;
-}
-
-.add-member-btn-new {
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    border: 1px dashed #ccc;
-    color: #999;
-    font-size: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    
-    &:hover {
-        border-color: $brand-primary;
-        color: $brand-primary;
-    }
-}
-
-.footer-meta {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.time-text-new {
-    font-size: 12px;
-    color: #bbb;
-}
-
-.enter-btn-arrow {
-    width: 24px;
-    height: 24px;
-    background: $brand-dark;
-    color: #fff;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 12px;
-    opacity: 0; /* Hidden by default, show on hover */
-    transform: translateX(-10px);
-    transition: all 0.2s;
-}
-
-.project-item-card:hover .enter-btn-arrow {
-    opacity: 1;
-    transform: translateX(0);
-}
 
 .panel-favorites {
   width: 100%;
@@ -2028,41 +1273,6 @@ $danger-color: #E74C3C;
   }
 }
 
-/* Dashed Empty State */
-.empty-state-dashed {
-    height: 180px;
-    border: 2px dashed $border-color;
-    border-radius: 12px;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    cursor: pointer;
-    transition: all 0.2s;
-    background: #fff;
-}
-
-.empty-state-dashed:hover {
-    border-color: $brand-accent;
-    background: rgba(91, 209, 151, 0.03);
-}
-
-.dashed-content {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-.dashed-icon {
-    font-size: 32px;
-    color: $text-light;
-    font-weight: 300;
-}
-
-.dashed-text {
-    margin-top: 8px;
-    font-size: 15px;
-    color: $text-secondary;
-}
 
 /* 占位 Tab */
 .panel-placeholder {
@@ -2369,13 +1579,6 @@ $danger-color: #E74C3C;
     width: 100%;
   }
   
-  .projects-stats-row {
-    flex-wrap: wrap;
-  }
-  
-  .stat-card {
-    min-width: 45%;
-  }
 }
 
 /* Members */
@@ -2587,145 +1790,7 @@ $danger-color: #E74C3C;
     cursor: pointer;
 }
 
-/* Project Role Badge */
-.project-role-badge {
-    margin-left: 8px;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 500;
-}
-.role-owner {
-    background: #e6f7ff;
-    color: #1890ff;
-    border: 1px solid #91d5ff;
-}
-.role-admin {
-    background: #f6ffed;
-    color: #52c41a;
-    border: 1px solid #b7eb8f;
-}
-.role-client {
-    background: #fff0f6;
-    color: #eb2f96;
-    border: 1px solid #ffadd2;
-}
-.role-member {
-    background: #f0f5ff;
-    color: #2f54eb;
-    border: 1px solid #adc6ff;
-}
 
-/* Manager Avatar */
-.manager-avatar-wrapper {
-    position: relative;
-    width: 26px;
-    height: 26px;
-    margin-right: 6px;
-    cursor: default; /* Changed from help to default */
-}
-.manager-avatar-img {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    border: 1px solid #ffd700; /* Gold border for manager */
-}
-.manager-avatar-img {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    border: 1px solid #ffd700; /* Gold border for manager */
-    display: block; /* Eliminate font-size gap */
-}
-.manager-avatar-placeholder {
-    width: 100%;
-    height: 100%;
-    border-radius: 50%;
-    background: #fffbe6;
-    color: #faad14;
-    border: 1px solid #ffd700;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    font-weight: bold;
-}
-.manager-badge-icon {
-    position: absolute;
-    bottom: -4px;
-    right: -4px;
-    font-size: 10px;
-    line-height: 1;
-}
-.members-divider {
-    width: 1px;
-    height: 16px;
-    background: #e8e8e8;
-    margin: 0 10px; /* Increased margin for better spacing */
-    flex-shrink: 0; /* Prevent shrinking */
-}
-
-/* New CSS for Layout Opt */
-.title-row-flex {
-    display: flex;
-    align-items: center;
-}
-
-.members-split-container {
-    display: flex;
-    align-items: center;
-}
-
-.members-group {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.members-vertical-divider {
-    width: 1px;
-    height: 18px;
-    background: #e8e8e8;
-    margin: 0 12px;
-}
-
-.clients-group {
-    background: #fafafa;
-    border-radius: 20px;
-    padding: 2px 8px 2px 6px;
-    border: 1px dashed #e8e8e8;
-}
-
-.client-group-label {
-    font-size: 10px;
-    color: #999;
-    margin-right: 4px;
-    font-weight: 500;
-}
-
-.client-avatar {
-    width: 22px;
-    height: 22px;
-}
-
-.client-placeholder {
-    background: #fff0f6;
-    color: #eb2f96;
-    border-color: #ffadd2;
-}
-
-
-.act-glyph {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-}
-
-.badge-glyph {
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-}
 
 .empty-icon {
   width: 40px;

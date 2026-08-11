@@ -3,6 +3,8 @@
   "version": "0.0.0",
   "scripts": {
     "check:emits": "node scripts/check-emit-bindings.mjs",
+    "check:nav": "node scripts/check-navigation-contract.mjs",
+    "check:nav:full": "CHECK_NAV_FULL=1 node scripts/check-navigation-contract.mjs",
     "dev:custom": "uni -p",
     "dev:h5": "uni",
     "dev:h5:ssr": "uni --ssr",
@@ -40,7 +42,8 @@
     "test:lowa-e2e": "node tests/lowa-e2e/run.mjs",
     "test:app-e2e": "node tests/app-e2e/run.mjs",
     "test:desktop-e2e": "node tests/desktop-e2e/run.mjs",
-    "test:feedback-e2e": "node tests/feedback-e2e/run.mjs"
+    "test:feedback-e2e": "node tests/feedback-e2e/run.mjs",
+    "test:project-home": "node --test tests/project-home/*.test.mjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4080420251103001",

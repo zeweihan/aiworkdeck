@@ -2201,7 +2201,63 @@ export default {
   deleteTag,
   addTagToFile,
   removeTagFromFile,
-  searchProjectContent
+  searchProjectContent,
+  // 项目概览页（pages/project-home）
+  getProjectOverviewStats,
+  getProjectProfile,
+  saveProjectProfileField,
+  getProjectConversations,
+  getProjectTasks
+}
+
+// ==================== 项目概览页（pages/project-home） ====================
+// 五个端点一律返回信封：request() 见到 {code:0,...} 时 resolve 的是整个响应体，
+// 所以调用方一律写 `const res = await getProjectProfile(id); res.data.fields`。
+// 反例：getMyProjects 走的是裸数组（ProjectController 直接返 List），别照抄这里加 .data。
+
+export function getProjectOverviewStats(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/overview/stats`,
+    method: 'GET'
+  });
+}
+
+export function getProjectProfile(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/profile`,
+    method: 'GET'
+  });
+}
+
+/** value 传空串 = 清空该字段（服务端删行；openedAt 因此回落建档时间默认值）。 */
+export function saveProjectProfileField(projectId, fieldKey, value) {
+  return request({
+    url: `/api/projects/${projectId}/profile/${encodeURIComponent(fieldKey)}`,
+    method: 'PUT',
+    data: { value },
+    header: { 'Content-Type': 'application/json' }
+  });
+}
+
+/** options.before / options.beforeId 是上一页最后一条的 (updatedAt, conversationId) 复合游标，成对传。 */
+export function getProjectConversations(projectId, options = {}) {
+  return request({
+    url: `/api/projects/${projectId}/conversations`,
+    method: 'GET',
+    params: {
+      limit: options.limit || 20,
+      ...(options.before ? { before: options.before } : {}),
+      ...(options.beforeId ? { beforeId: options.beforeId } : {})
+    }
+  });
+}
+
+/** A 期恒返回 {code:0,data:{tasks:[]}}；B 期接任务系统时本函数一行不改。 */
+export function getProjectTasks(projectId) {
+  return request({
+    url: `/api/projects/${projectId}/tasks`,
+    method: 'GET'
+  });
 }
 
 // ==================== 版本记录 ====================

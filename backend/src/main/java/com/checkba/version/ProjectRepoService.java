@@ -167,7 +167,10 @@ public class ProjectRepoService {
      * NO_FF 合并、对工作分支这一父天然 TREESAME——律师命名的工作段节点会在单文件
      * 历史里全部消失，只剩自动存档。这里改为自己走全量历史，逐条按「相对第一父提交
      * 的 diff」判断是否触及该文件；对合并节点来说这份 diff 正是这段工作对该文件的
-     * 净变化，也正是律师想看的那一条。单项目仓库很小、limit 上限 100，开销可接受。
+     * 净变化，也正是律师想看的那一条。单项目仓库很小，全量走历史的开销可接受。
+     * 注意 limit **没有服务端上限**：VersionController.timeline（:243）的 @RequestParam
+     * 默认 50、原样直传到这里的 setMaxCount，调用方传多大就走多大。（旧注释曾自称
+     * 「上限 100」，全链核对过，那个钳制从来不存在。）
      */
     public List<VersionEntry> logForPath(long projectId, String ref, String relPath, int limit) {
         List<VersionEntry> out = new ArrayList<>();

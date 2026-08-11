@@ -279,7 +279,9 @@ export default {
   },
   methods: {
     // IDE 化启动直达：会话有效 → 直进上次项目（像 VS Code 打开即回到上个工作区）；
-    // 会话失效/网络异常 → 静默停留登录页。CLIENT 账号视图受限，只回个人中心。
+    // 会话失效/网络异常 → 静默停留登录页。CLIENT 账号视图受限，落项目列表页——
+    // getUserProjects 把成员身份的项目也算进去，客户在那里看得见律师分享给他的案卷；
+    // 项目 tab 搬出个人中心之后，落个人中心会得到一张空白页。
     async tryAutoResume() {
       const sid = getSessionId()
       const user = getCurrentUser()
@@ -287,7 +289,7 @@ export default {
       try {
         const projects = await getMyProjects() // 顺带校验会话有效性
         if (user.role === 'CLIENT') {
-          uni.reLaunch({ url: '/pages/userprofile/userprofile' })
+          uni.reLaunch({ url: '/pages/project-list/project-list' })
           return
         }
         const list = Array.isArray(projects) ? projects : (projects && projects.data) || []
@@ -296,7 +298,7 @@ export default {
         if (lastId && list.some((p) => Number(p.id) === lastId)) {
           uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${lastId}` })
         } else {
-          uni.reLaunch({ url: '/pages/userprofile/userprofile' })
+          uni.reLaunch({ url: '/pages/project-list/project-list' })
         }
       } catch (e) {
         console.warn('会话恢复失败，停留登录页:', e && e.message)
@@ -389,7 +391,7 @@ export default {
       if (!getSessionId()) throw new Error('Session Save Failed');
       uni.showToast({ title: '登录成功', icon: 'success' });
       setTimeout(() => {
-        uni.reLaunch({ url: '/pages/userprofile/userprofile' });
+        uni.reLaunch({ url: '/pages/project-list/project-list' });
       }, 300);
     },
     async handleClientLogin() {
@@ -469,7 +471,7 @@ export default {
           saveSession(res.data.sessionId, res.data.user);
           uni.showToast({ title: '注册成功', icon: 'success' });
           setTimeout(() => {
-            uni.reLaunch({ url: '/pages/userprofile/userprofile' });
+            uni.reLaunch({ url: '/pages/project-list/project-list' });
           }, 500);
         } else {
           uni.showToast({ title: res.message || '注册失败', icon: 'none' });

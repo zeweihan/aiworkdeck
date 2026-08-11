@@ -1,0 +1,693 @@
+/* 项目列表页样式。
+ *
+ * 来源：2026-08-08 从 pages/userprofile/userprofile.vue 的「我的项目」tab 整块搬出。
+ * 抽行区间：1299-1310 品牌配色变量 / 1430-1434 .role-text（与个人信息卡共用，是复制不是搬走）/
+ * 1517-1593 页头与两个按钮 / 1595-1932 统计条与项目卡片 / 2031-2065 虚线空态 /
+ * 2590-2617 角色徽章 / 2619-2728 负责人头像与成员分组。
+ *
+ * 没搬的两块：userprofile.vue 的 2381-2451 与 2453-2588（模板里已无 class 命中的死样式，
+ * 成员改用 -new 变体、弹窗已组件化）；2730-2735 的 .empty-icon 服务收藏/待办空态，留在 userprofile。
+ *
+ * 原页面就没有定义的 class 这次补了三个（.panel-projects / .loading-state / .loading-text）；
+ * 另外 .card-style-default / .badge-text-new / .arrow-char / .rename-box / .rename-input
+ * 在原页面同样无定义，本次是纯搬迁不夹带视觉改动，保持无定义。
+ *
+ * 配色守浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。
+ */
+/* 品牌配色变量 - Updated to AI Workdeck Palette */
+$brand-primary: #1A5336; /* Forest Green */
+$brand-accent: #5BD197;  /* Mint Green */
+$brand-dark: #212629;    /* Dark BG */
+$brand-bg: #F8F9FA;      /* Gray-Pale */
+$brand-white: #FFFFFF;
+$text-main: #2C3338;     /* Gray-Dark */
+$text-secondary: #6C757D;/* Gray-Medium */
+$text-light: #ADB5BD;
+$border-color: #E9ECEF;  /* Gray-Light */
+$danger-color: #E74C3C;
+
+
+/* 页面外壳。原 .page-userprofile（:1311-1327）与 .main-content（:1509-1515）改写：
+   本页没有左侧个人信息栏，容器由两列改成单列，因此 .workbench-container 不搬。 */
+.page-project-list {
+  min-height: 100vh;
+  background: linear-gradient(135deg, #F8F9FA 0%, #E8F3ED 100%);
+  padding: 40px 24px;
+  box-sizing: border-box;
+  color: $text-main;
+}
+
+.project-list-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 24px;
+}
+
+.main-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* .role-text：卡片角色徽章与原页面的个人信息卡共用，这里是复制，userprofile 那份别删 */
+.role-text {
+  font-size: 12px;
+  color: $brand-primary;
+  font-weight: 500;
+}
+
+.content-header {
+    display: flex !important;
+    flex-direction: row !important;
+    justify-content: flex-start !important;
+    gap: 20px;
+    align-items: center !important;
+    margin-bottom: 24px;
+    border-bottom: 1px solid $border-color;
+    padding-bottom: 16px;
+}
+
+.header-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: $text-main;
+    flex: 0 0 auto;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+}
+
+.btn-primary-small {
+    background: rgba(26, 83, 54, 0.08); /* Soft Green Background */
+    color: $brand-primary;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(26, 83, 54, 0.1);
+    cursor: pointer;
+    line-height: 1.5;
+    transition: all 0.2s;
+
+    &:hover {
+        background: $brand-primary;
+        color: white;
+        border-color: $brand-primary;
+    }
+}
+
+.btn-secondary-small {
+    background: #fff;
+    color: $text-light;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    border: 1px solid $border-color;
+    cursor: pointer;
+    line-height: 1.5;
+    transition: all 0.2s;
+
+    &:hover {
+        border-color: $brand-primary;
+        color: $brand-primary;
+    }
+}
+
+.cloud-accept-entry {
+    margin-top: 16px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.cloud-accept-entry-text {
+    font-size: 13px;
+    color: $text-light;
+    text-decoration: underline;
+}
+
+.cloud-accept-entry:hover .cloud-accept-entry-text {
+    color: $brand-primary;
+}
+
+/* 概览统计 */
+.projects-stats-row {
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.stat-card {
+  flex: 1;
+  background: $brand-white;
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05); /* Softer shadow */
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  border: 1px solid $border-color;
+}
+
+.stat-value {
+  font-size: 24px;
+  font-weight: 600;
+  color: $brand-primary;
+  margin-bottom: 4px;
+  font-family: 'Inter', sans-serif;
+}
+
+.stat-label {
+  font-size: 13px;
+  color: $text-secondary;
+}
+
+/* 项目列表 Grid */
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 24px;
+}
+
+/* Card Base Style */
+.project-item-card {
+  background: $brand-white;
+  border-radius: 16px;
+  box-shadow: 0 4px 20px rgba(18, 52, 77, 0.04);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  border: 1px solid rgba(0,0,0,0.02);
+  position: relative;
+  min-height: 200px;
+
+  &:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 30px rgba(18, 52, 77, 0.1);
+  }
+}
+
+/* Card Variants */
+.card-style-restructuring {
+  border-top: 4px solid $brand-dark;
+  
+  .card-deco-header {
+      background: linear-gradient(90deg, rgba($brand-dark, 0.05), transparent);
+  }
+  .project-type-badge-new {
+      background: rgba($brand-dark, 0.1);
+      color: $brand-dark;
+  }
+  .info-val-new.highlight {
+      color: $brand-dark;
+      font-weight: 600;
+  }
+}
+
+.card-style-refinancing {
+  border-top: 4px solid #2ecc71; /* Green for growth/money */
+
+  .project-type-badge-new {
+      background: rgba(46, 204, 113, 0.1);
+      color: #27ae60;
+  }
+  .info-val-new.highlight {
+      color: #27ae60;
+      font-weight: 600;
+  }
+}
+
+.card-style-blank {
+  border-top: 4px solid #e0e0e0;
+  
+  .project-type-badge-new {
+      background: #f5f5f5;
+      color: #999;
+  }
+  .project-title-new {
+      font-weight: 500;
+      color: #666;
+  }
+}
+
+/* Card Header */
+.card-top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    padding: 16px 20px 0;
+}
+
+.project-type-badge-new {
+    padding: 4px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    display: inline-block;
+}
+
+.card-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.action-btn-icon {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+    
+    &:hover {
+        opacity: 1;
+        background: #f0f0f0;
+    }
+    
+    &.danger:hover {
+        background: #fff5f5;
+        color: red;
+    }
+}
+
+/* Card Content */
+.card-main-content {
+    padding: 16px 20px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.project-title-area {
+    margin-bottom: 16px;
+    min-height: 48px; /* Ensure alignment */
+}
+
+.project-title-new {
+    font-size: 18px;
+    font-weight: 700;
+    color: $text-main;
+    line-height: 1.4;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    cursor: pointer;
+    
+    &:hover {
+        color: $brand-primary;
+    }
+}
+
+.company-info-area {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.info-row-new {
+    display: flex;
+    align-items: center;
+    font-size: 13px;
+}
+
+.info-label-new {
+    color: $text-light;
+    width: 70px;
+    flex-shrink: 0;
+}
+
+.info-val-new {
+    color: $text-secondary;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.blank-placeholder {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    
+    .placeholder-text {
+        font-size: 13px;
+        color: #ccc;
+        font-style: italic;
+    }
+}
+
+/* Footer */
+.card-footer-new {
+    padding: 12px 20px;
+    border-top: 1px solid #f5f5f5;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #fafbfc;
+}
+
+.members-area-new {
+    display: flex;
+    align-items: center;
+}
+
+.members-list-new {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.member-avatar-new {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    position: relative;
+    cursor: pointer;
+    
+    &:hover {
+        z-index: 10;
+        transform: scale(1.1);
+    }
+}
+
+.avatar-img-new {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 1px solid #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.avatar-placeholder-new {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: #eef2f5;
+    color: #666;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid #fff;
+}
+
+.member-remove-overlay {
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 12px;
+    height: 12px;
+    background: #ff4d4f;
+    color: white;
+    border-radius: 50%;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    display: none;
+}
+
+.member-avatar-new:hover .member-remove-overlay {
+    display: flex;
+}
+
+.add-member-btn-new {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    border: 1px dashed #ccc;
+    color: #999;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    
+    &:hover {
+        border-color: $brand-primary;
+        color: $brand-primary;
+    }
+}
+
+.footer-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.time-text-new {
+    font-size: 12px;
+    color: #bbb;
+}
+
+.enter-btn-arrow {
+    width: 24px;
+    height: 24px;
+    background: $brand-dark;
+    color: #fff;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    opacity: 0; /* Hidden by default, show on hover */
+    transform: translateX(-10px);
+    transition: all 0.2s;
+}
+
+.project-item-card:hover .enter-btn-arrow {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+/* Dashed Empty State */
+.empty-state-dashed {
+    height: 180px;
+    border: 2px dashed $border-color;
+    border-radius: 12px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: #fff;
+}
+
+.empty-state-dashed:hover {
+    border-color: $brand-accent;
+    background: rgba(91, 209, 151, 0.03);
+}
+
+.dashed-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.dashed-icon {
+    font-size: 32px;
+    color: $text-light;
+    font-weight: 300;
+}
+
+.dashed-text {
+    margin-top: 8px;
+    font-size: 15px;
+    color: $text-secondary;
+}
+
+/* Project Role Badge */
+.project-role-badge {
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+}
+.role-owner {
+    background: #e6f7ff;
+    color: #1890ff;
+    border: 1px solid #91d5ff;
+}
+.role-admin {
+    background: #f6ffed;
+    color: #52c41a;
+    border: 1px solid #b7eb8f;
+}
+.role-client {
+    background: #fff0f6;
+    color: #eb2f96;
+    border: 1px solid #ffadd2;
+}
+.role-member {
+    background: #f0f5ff;
+    color: #2f54eb;
+    border: 1px solid #adc6ff;
+}
+
+/* Manager Avatar */
+.manager-avatar-wrapper {
+    position: relative;
+    width: 26px;
+    height: 26px;
+    margin-right: 6px;
+    cursor: default; /* Changed from help to default */
+}
+.manager-avatar-img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 1px solid #ffd700; /* Gold border for manager */
+}
+.manager-avatar-img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    border: 1px solid #ffd700; /* Gold border for manager */
+    display: block; /* Eliminate font-size gap */
+}
+.manager-avatar-placeholder {
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: #fffbe6;
+    color: #faad14;
+    border: 1px solid #ffd700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: bold;
+}
+.manager-badge-icon {
+    position: absolute;
+    bottom: -4px;
+    right: -4px;
+    font-size: 10px;
+    line-height: 1;
+}
+.members-divider {
+    width: 1px;
+    height: 16px;
+    background: #e8e8e8;
+    margin: 0 10px; /* Increased margin for better spacing */
+    flex-shrink: 0; /* Prevent shrinking */
+}
+
+/* New CSS for Layout Opt */
+.title-row-flex {
+    display: flex;
+    align-items: center;
+}
+
+.members-split-container {
+    display: flex;
+    align-items: center;
+}
+
+.members-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.members-vertical-divider {
+    width: 1px;
+    height: 18px;
+    background: #e8e8e8;
+    margin: 0 12px;
+}
+
+.clients-group {
+    background: #fafafa;
+    border-radius: 20px;
+    padding: 2px 8px 2px 6px;
+    border: 1px dashed #e8e8e8;
+}
+
+.client-group-label {
+    font-size: 10px;
+    color: #999;
+    margin-right: 4px;
+    font-weight: 500;
+}
+
+.client-avatar {
+    width: 22px;
+    height: 22px;
+}
+
+.client-placeholder {
+    background: #fff0f6;
+    color: #eb2f96;
+    border-color: #ffadd2;
+}
+
+
+.act-glyph {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.badge-glyph {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* 补齐：这三个 class 在原页面模板里用了但全文无样式定义，加载态一直是裸文本 */
+.panel-projects {
+  width: 100%;
+}
+
+.loading-state {
+  padding: 48px 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loading-text {
+  font-size: 14px;
+  color: $text-secondary;
+}
+
+/* CLIENT 的空态：没有「新建项目」可点，虚线框只作说明用，不做 hover 抬升 */
+.empty-state-dashed.client-empty {
+  cursor: default;
+
+  &:hover {
+    border-color: $border-color;
+    background: transparent;
+  }
+}
+
+/* 响应式：源 userprofile.vue:2363-2379，只取与本页有关的两条
+   （另两条 .workbench-container / .user-sidebar 是个人中心两列布局的，留在原页） */
+@media screen and (max-width: 768px) {
+  .projects-stats-row {
+    flex-wrap: wrap;
+  }
+
+  .stat-card {
+    min-width: 45%;
+  }
+}

@@ -36,6 +36,12 @@ jobs:
       - name: Check emit/binding contracts
         working-directory: frontend
         run: npm run check:emits
+      - name: Check navigation contracts
+        working-directory: frontend
+        run: npm run check:nav:full
+      - name: Test project-home page
+        working-directory: frontend
+        run: npm run test:project-home
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5
