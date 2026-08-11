@@ -176,6 +176,48 @@ check('项目列表页别把裸数组当信封解', () => {
   return null
 })
 
+// ==================== 个人中心瘦身 ====================
+
+check('个人中心默认 tab 不再是被搬走的 projects', () => {
+  const src = readFrontend('src/pages/userprofile/userprofile.vue')
+  if (!/activeTab:\s*'work_log'/.test(src)) return "activeTab 默认值必须是 'work_log'"
+  if (/key:\s*'projects'/.test(src)) return 'tabs 数组里还留着 projects 项'
+  return null
+})
+
+check('个人中心默认 tab 有人给它加载数据', () => {
+  const src = readFrontend('src/pages/userprofile/userprofile.vue')
+  // 工作记录是懒加载的（只在 switchTab 里触发），默认落它就必须在 onLoad 里补一次
+  const onLoad = src.slice(src.indexOf('onLoad()'), src.indexOf('methods:'))
+  return onLoad.includes('this.loadActivityLogs()')
+    ? null
+    : 'onLoad 里没有 loadActivityLogs()，默认 tab 会永远空白'
+})
+
+check('个人中心已清空项目相关的模板与方法', () => {
+  const src = readFrontend('src/pages/userprofile/userprofile.vue')
+  const left = [
+    'project-item-card', 'panel-projects', 'projects-stats-row',
+    'loadProjects', 'goToProject', 'handleDeleteProject', 'confirmRename',
+    'CloudAcceptDialog', 'InviteMemberDialog', 'getRoleLabel',
+  ].filter((s) => src.includes(s))
+  return left.length ? '还残留: ' + left.join(', ') : null
+})
+
+check('个人中心已摘掉被搬迁搞成孤儿的导入', () => {
+  const src = readFrontend('src/pages/userprofile/userprofile.vue')
+  const orphan = ['getMyProjects', 'deleteProject', 'renameProject', 'getProjectMembers', 'removeProjectMember', 'getProjectTypeLabel']
+    .filter((s) => src.includes(s))
+  return orphan.length ? '孤儿导入: ' + orphan.join(', ') : null
+})
+
+check('个人中心保住了不该删的东西', () => {
+  const src = readFrontend('src/pages/userprofile/userprofile.vue')
+  const gone = ['formatTime(', 'formatDateTime(', '.role-text', '.empty-icon', 'loadActivityLogs', 'loadFavorites', 'addProjectMember', 'inviteClient']
+    .filter((s) => !src.includes(s))
+  return gone.length ? '误删: ' + gone.join(', ') : null
+})
+
 // ---- 追加位：后续任务把新的 check(...) 加在这一行之前 ----
 
 if (failures.length) {
