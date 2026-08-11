@@ -253,6 +253,17 @@ check('newproject 返回项目列表页且仍用 navigateTo', () => {
   return null
 })
 
+check('newproject 按钮文案与跳转目标一致（不许挂着"个人中心"却跳项目列表）', () => {
+  const src = readFrontend('src/pages/newproject/index.vue')
+  let idx = -1
+  while ((idx = src.indexOf('goToProjectList', idx + 1)) !== -1) {
+    if (src.slice(idx, idx + 200).includes('个人中心')) {
+      return '@tap 指向 goToProjectList，附近文案却还写着「个人中心」，与实际跳转目标不符'
+    }
+  }
+  return null
+})
+
 check('工作台「全部项目」用 reLaunch 去项目列表页', () => {
   const src = readFrontend('src/pages/project-overview/project-overview.vue')
   const i = src.indexOf('goAllProjects()')

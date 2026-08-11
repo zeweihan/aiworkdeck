@@ -31,7 +31,7 @@
 
           <view class="user-actions">
             <view class="action-item" @tap="goToProjectList">
-              <text class="action-text">返回个人中心</text>
+              <text class="action-text">返回项目列表</text>
               <text class="action-arrow">›</text>
             </view>
           </view>
