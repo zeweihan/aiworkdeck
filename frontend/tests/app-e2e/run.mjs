@@ -337,10 +337,52 @@ try {
     await page.waitForSelector('.trial-chip', { timeout: 15000 })
   })
 
-  // ============ J2 个人中心四 tab ============
-  console.log('== J2 个人中心 ==')
-  await page.goto(BASE + '/#/pages/userprofile/userprofile', { waitUntil: 'networkidle2' })
-  await page.waitForSelector('.project-item-card', { timeout: 20000 })
+  // ============ J2 项目列表页 + 个人中心四 tab ============
+  // 三级导航改造后「我的项目」不再是个人中心的一个 tab，而是独立页面
+  // pages/project-list/project-list；个人中心的默认 tab 随之变成「工作记录」，
+  // tabs 数组里已无 projects 项。这里拆成两段独立断言：
+  //  ① 项目列表页自己能加载出卡片（J3 的起点，必须先立住）
+  //  ② 个人中心剩下的四个 tab 仍能切、且默认 tab 不是空白页
+  // 不要再用「点『我的项目』tab 回到列表」这条老路径——那个 tab 已经不存在，
+  // mouseClickText 会抛「找不到文本」。
+  console.log('== J2 项目列表页 + 个人中心 ==')
+
+  await step('项目列表页加载出项目卡片', async () => {
+    await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
+    await page.waitForSelector('.page-project-list', { timeout: 20000 })
+    await page.waitForSelector('.project-item-card', { timeout: 20000 })
+    await waitText(QA.project.slice(0, 8))
+  })
+
+  await step('项目列表页文案巡检', async () => {
+    const t = await textOf()
+    const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
+    if (m) throw new Error('页面文本可疑: ' + m[0])
+    // 空项目态与有项目态都必须渲染「从团队案件库取一份案卷」——它是协作的唯一
+    // 入口，且 CollabDialog.vue:271 的邀请话术第 1 步就指着它。搬迁时漏掉
+    // CloudAcceptDialog 的两个入口，这条断言会红。
+    if (!t.includes('从团队案件库取一份案卷')) {
+      throw new Error('项目列表页缺「从团队案件库取一份案卷」入口（CloudAcceptDialog 没搬全）')
+    }
+  })
+
+  await shot('j2-project-list')
+
+  await step('个人中心不再有「我的项目」tab', async () => {
+    await page.goto(BASE + '/#/pages/userprofile/userprofile', { waitUntil: 'networkidle2' })
+    await waitText('工作记录', 20000)
+    // 只看 tab 栏本身（.nav-menu .nav-text），不看整页 innerText——
+    // 页面别处出现「我的项目」四个字不该让这条断言误红。
+    const labels = await page.evaluate(
+      () => [...document.querySelectorAll('.nav-menu .nav-text')].map((e) => e.innerText.trim()))
+    if (labels.includes('我的项目')) {
+      throw new Error('个人中心仍有「我的项目」tab（userprofile.vue:494 那行没删）: ' + JSON.stringify(labels))
+    }
+    if (labels[0] !== '工作记录') {
+      throw new Error('个人中心首个 tab 不是「工作记录」（userprofile.vue:492 默认值没改）: ' + JSON.stringify(labels))
+    }
+  })
+
   for (const tab of ['工作记录', '我的收藏', '我的代办', '设置']) {
     await step('tab ' + tab, async () => {
       await mouseClickText(tab)
@@ -349,7 +391,6 @@ try {
       if (m) throw new Error('页面文本可疑: ' + m[0])
     })
   }
-  await mouseClickText('我的项目')
 
   // ============ J3 进入项目 ============
   console.log('== J3 进入项目 ==')
