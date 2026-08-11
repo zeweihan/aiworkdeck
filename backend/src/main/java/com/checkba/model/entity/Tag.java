@@ -19,7 +19,7 @@ import java.time.LocalDateTime;
 @Table(name = "project_tag", uniqueConstraints = {
     // 同项目内标签名唯一：应用层 existsByProjectIdAndName 是"先查后插"，并发下仍可能重复；
     // DB 唯一约束兜底，避免重复标签导致 findByProjectIdAndName 抛 NonUniqueResultException。
-    @UniqueConstraint(columnNames = {"projectId", "name"})
+    @UniqueConstraint(columnNames = {"project_id", "name"})
 })
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true) // 仅用 id，与仓库其余实体一致，避免可变字段/未持久化时的 hashCode 陷阱

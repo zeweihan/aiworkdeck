@@ -17,7 +17,7 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "project_file_tag", uniqueConstraints = {
-    @UniqueConstraint(columnNames = {"fileId", "tagId"})
+    @UniqueConstraint(columnNames = {"file_id", "tag_id"})
 })
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true) // 仅用 id：join 实体最易被放进 Set 去重，字段型 hashCode 在 save 前后会变

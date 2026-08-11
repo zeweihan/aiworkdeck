@@ -15,7 +15,7 @@ import java.time.LocalDateTime;
  */
 @Entity
 @Table(name = "account_binding",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"externalAccountId"}))
+        uniqueConstraints = @UniqueConstraint(columnNames = {"external_account_id"}))
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class AccountBinding {
