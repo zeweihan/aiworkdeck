@@ -110,4 +110,41 @@ class ProjectProfileServiceTest {
         assertNull(openedAt.get("fieldValue"));
         assertNull(openedAt.get("source"));
     }
+
+    @Test
+    void 白名单外字段混入不影响五条固定顺序() {
+        when(repository.findByProjectId(42L)).thenReturn(List.of(
+                row("client", "北京某某科技有限公司", "user"),
+                row("bogusKey", "不在白名单里的脏数据", "ai")));
+
+        List<Map<String, Object>> fields = service.getProfile(42L);
+
+        assertEquals(5, fields.size());
+        assertEquals(List.of("client", "matterType", "openedAt", "nextStep", "counterparty"),
+                fields.stream().map(f -> f.get("fieldKey")).toList());
+
+        assertEquals("北京某某科技有限公司", fields.get(0).get("fieldValue"));
+        // 白名单外的行不会挤占任何位置，其余四个仍是未填态（openedAt 除外，
+        // 它会回落建档时间——这里没有可比对的固定值，只断言没有被串位成"不在白名单里的脏数据"）
+        assertNull(fields.get(1).get("fieldValue"));
+        assertNotEquals("不在白名单里的脏数据", fields.get(2).get("fieldValue"));
+        assertNull(fields.get(3).get("fieldValue"));
+        assertNull(fields.get(4).get("fieldValue"));
+    }
+
+    @Test
+    void 同一fieldKey两行时后到的行覆盖前一行() {
+        // 正常情况下库里 (project_id, field_key) 唯一约束挡着，这种数据形状进不来；
+        // 这个用例守的是服务层自身的防御行为：万一出现重复，语义是什么。
+        // 实现用 HashMap.put 按 fieldKey 建索引（ProjectProfileService.getProfile），
+        // 遍历仓储返回的列表时后出现的行会覆盖先出现的行。
+        when(repository.findByProjectId(42L)).thenReturn(List.of(
+                row("client", "旧值-第一行", "ai"),
+                row("client", "新值-第二行", "user")));
+
+        Map<String, Object> client = service.getProfile(42L).get(0);
+
+        assertEquals("新值-第二行", client.get("fieldValue"));
+        assertEquals("user", client.get("source"));
+    }
 }
