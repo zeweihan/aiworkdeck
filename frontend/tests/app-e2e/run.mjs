@@ -295,11 +295,14 @@ try {
     await page.type('.unlock-input textarea', messy)
     await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
     await mouseClickSel('.unlock-btn')
-    // 解锁成功 → toast → reLaunch 回 launch 分流：向导未初始化去 wizard，
-    // 已初始化直接进应用（长驻后端场景）
+    // 解锁成功 → toast → reLaunch 回 launch 分流，三个合法落点：
+    //  - 向导未初始化 → wizard
+    //  - 已初始化 + 有最近项目 → 工作台（launch.vue:97，直达语义保留不变）
+    //  - 已初始化 + 无最近项目 → 项目列表页（launch.vue:99，三级导航改造把这里
+    //    由 userprofile 改成了 project-list；全新 puppeteer profile 走的正是这条）
     await page.waitForFunction(() => {
       const h = location.hash
-      return h.includes('pages/wizard/wizard') || h.includes('pages/userprofile/userprofile')
+      return h.includes('pages/wizard/wizard') || h.includes('pages/project-list/project-list')
         || h.includes('pages/project-overview/project-overview')
     }, { timeout: 30000 })
   })
@@ -315,12 +318,18 @@ try {
     if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
   })
 
-  await step('已解锁重启 → 直达上次项目', async () => {
+  await step('已解锁重启 → 直达上次项目（工作台，不经概览页）', async () => {
     // uni h5 getStorageSync 兼容裸字符串
     await page.evaluate((id) => localStorage.setItem('checkba_last_project_id', String(id)), QA.projectId)
     await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
-    await page.waitForFunction(() => location.hash.includes('project-overview'), { timeout: 30000 })
+    // 三级导航后 project-list / project-home / project-overview 三个路由并存，
+    // 一律写全路径判定：裸 'project-overview' 目前确实不是另外两个的子串，但
+    // 'project-' 前缀家族已经三个成员了，模糊匹配迟早撞上。
+    // 断言落工作台而不是概览页 = 钉死「启动直达永远进工作台」这条产品决策
+    // （spec §5.3：概览页不做启动落点，recentProjects 存储格式不扩）。
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 30000 })
     await waitText('资源管理器', 20000)
   })
 
