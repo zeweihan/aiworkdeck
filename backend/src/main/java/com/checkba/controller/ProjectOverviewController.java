@@ -2,9 +2,12 @@ package com.checkba.controller;
 
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ProjectOverviewService;
+import com.checkba.service.ProjectProfileService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -39,11 +42,14 @@ public class ProjectOverviewController {
 
     private final ProjectMemberService projectMemberService;
     private final ProjectOverviewService overviewService;
+    private final ProjectProfileService projectProfileService;
 
     public ProjectOverviewController(ProjectMemberService projectMemberService,
-                                     ProjectOverviewService overviewService) {
+                                     ProjectOverviewService overviewService,
+                                     ProjectProfileService projectProfileService) {
         this.projectMemberService = projectMemberService;
         this.overviewService = overviewService;
+        this.projectProfileService = projectProfileService;
     }
 
     /**
@@ -61,6 +67,20 @@ public class ProjectOverviewController {
         if (userId == null) throw new IllegalArgumentException("未登录");
         if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
             throw new IllegalArgumentException("无权访问该项目");
+        }
+        return userId;
+    }
+
+    /** 登录 + 写权限 + 拒 CLIENT。返回 userId。参数序恒为 (projectId, sessionId)。 */
+    private Long requireWrite(Long projectId, String sessionId) {
+        Long userId = AuthController.getUserIdFromSession(sessionId);
+        if (userId == null) throw new IllegalArgumentException("未登录");
+        // hasWritePermission 已天然只放行 ADMIN/PARTICIPANT + owner，但 isClient 是三个字面量的
+        // 显式 or（不是 startsWith("CLIENT")），新增 CLIENT_* 角色时会漏判——显式双判是第二道闸。
+        if (projectId == null
+                || !projectMemberService.hasWritePermission(projectId, userId)
+                || projectMemberService.isClient(projectId, userId)) {
+            throw new IllegalArgumentException("无权修改该项目");
         }
         return userId;
     }
@@ -86,6 +106,30 @@ public class ProjectOverviewController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireRead(projectId, sessionId);
         return ok(Map.of("tasks", List.of()));
+    }
+
+    // ==================== 项目档案 ====================
+
+    /** 档案读：固定五个字段全量返回，未填的也返回、值为 null。不拒 CLIENT。 */
+    @GetMapping("/profile")
+    public ResponseEntity<Map<String, Object>> getProfile(
+            @PathVariable Long projectId,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireRead(projectId, sessionId);
+        List<Map<String, Object>> fields = projectProfileService.getProfile(projectId);
+        return ok(Map.of("fields", fields));
+    }
+
+    /** 档案手填单字段（A 期唯一的写入通道）。value 为空即清空该字段。 */
+    @PutMapping("/profile/{fieldKey}")
+    public ResponseEntity<Map<String, Object>> saveProfileField(
+            @PathVariable Long projectId,
+            @PathVariable String fieldKey,
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireWrite(projectId, sessionId);
+        String value = body == null ? null : body.get("value");
+        return ok(projectProfileService.saveUserField(projectId, fieldKey, value));
     }
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {
