@@ -37,7 +37,9 @@ class ProjectAiMessageServiceTest {
         repository = mock(ProjectAiMessageRepository.class);
         // 默认配置：不强制签发、非 local-mode（与 application.yml 默认一致）
         issuanceService = new com.checkba.service.ai.ConversationIssuanceService(false, false);
-        service = new ProjectAiMessageService(repository, issuanceService);
+        service = new ProjectAiMessageService(repository, issuanceService,
+                mock(com.checkba.repository.AgentRunRecordRepository.class),
+                mock(com.checkba.repository.UserRepository.class));
         savedRows.clear();
         AtomicLong idGen = new AtomicLong(0);
         when(repository.save(any(ProjectAiMessage.class))).thenAnswer(inv -> {
@@ -184,7 +186,9 @@ class ProjectAiMessageServiceTest {
     void 强制签发开启时_未登记的空会话被拒_已签发的可用() {
         com.checkba.service.ai.ConversationIssuanceService issuance =
                 new com.checkba.service.ai.ConversationIssuanceService(true, false);
-        ProjectAiMessageService enforcing = new ProjectAiMessageService(repository, issuance);
+        ProjectAiMessageService enforcing = new ProjectAiMessageService(repository, issuance,
+                mock(com.checkba.repository.AgentRunRecordRepository.class),
+                mock(com.checkba.repository.UserRepository.class));
 
         when(repository.findFirstByConversationId("conv-1754400000000")).thenReturn(Optional.empty());
         assertFalse(enforcing.canUseConversation("conv-1754400000000", 7L),
@@ -198,7 +202,9 @@ class ProjectAiMessageServiceTest {
     @Test
     void 强制签发开启时_已有消息的会话仍按DB归属判定_进程重启丢登记不影响历史() {
         ProjectAiMessageService enforcing = new ProjectAiMessageService(
-                repository, new com.checkba.service.ai.ConversationIssuanceService(true, false));
+                repository, new com.checkba.service.ai.ConversationIssuanceService(true, false),
+                mock(com.checkba.repository.AgentRunRecordRepository.class),
+                mock(com.checkba.repository.UserRepository.class));
         ProjectAiMessage first = new ProjectAiMessage();
         first.setUserId(7L);
         when(repository.findFirstByConversationId("conv-old")).thenReturn(Optional.of(first));
@@ -211,7 +217,9 @@ class ProjectAiMessageServiceTest {
     @Test
     void localMode下恒不强制签发_桌面自造ID流程不变() {
         ProjectAiMessageService localMode = new ProjectAiMessageService(
-                repository, new com.checkba.service.ai.ConversationIssuanceService(true, true));
+                repository, new com.checkba.service.ai.ConversationIssuanceService(true, true),
+                mock(com.checkba.repository.AgentRunRecordRepository.class),
+                mock(com.checkba.repository.UserRepository.class));
         when(repository.findFirstByConversationId("conv-1754400000000")).thenReturn(Optional.empty());
 
         assertTrue(localMode.canUseConversation("conv-1754400000000", 7L),
