@@ -42,7 +42,8 @@
     "test:lowa-e2e": "node tests/lowa-e2e/run.mjs",
     "test:app-e2e": "node tests/app-e2e/run.mjs",
     "test:desktop-e2e": "node tests/desktop-e2e/run.mjs",
-    "test:feedback-e2e": "node tests/feedback-e2e/run.mjs"
+    "test:feedback-e2e": "node tests/feedback-e2e/run.mjs",
+    "test:project-home": "node --test \"tests/project-home/*.test.mjs\""
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4080420251103001",
