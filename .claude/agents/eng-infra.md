@@ -95,6 +95,15 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   `RagAutoConfig`——删掉后自动配置自己造 `contentRetriever`，而本项目有两个
   `EmbeddingStore<TextSegment>`，全部 `@SpringBootTest` 一起 NoUniqueBeanDefinition 起不来
   （2026-08 清理孤儿类时踩过，16 个 context 加载失败）。`DesktopContextSmokeTest` 是这条的护栏。
+- **`@Table` 的 `indexes` / `uniqueConstraints` 里必须写 snake_case 物理列名**：这两处不参与
+  PhysicalNamingStrategy 的驼峰转换（本仓没配自定义策略，用 Spring Boot 默认的
+  CamelCaseToUnderscoresNamingStrategy，字段 `projectId` 落成列 `project_id`）。
+  Hibernate 6.4.4 会先把它当**逻辑名**查一次，所以写驼峰往往侥幸能解析、索引其实建对了；
+  但一旦查不到就把字符串原样塞进 DDL，而 `@UniqueConstraint` 是内联在 `create table` 里的，
+  整条建表语句失败、Hibernate 只打一行 WARN（`GenerationTarget encountered exception`）
+  就继续启动——**表根本没建出来，启动看着正常，第一次查询才炸**。
+  `EntityIndexColumnNamingTest` 是这条的护栏：反射扫全部 `@Entity`，对着 H2 的
+  INFORMATION_SCHEMA 逐条对账列名与索引，新实体写错驼峰会自动红。
 
 ## 验证（改本领域自身时）
 

@@ -9,7 +9,7 @@ import java.time.LocalDateTime;
 /** 云端协作的长期设备令牌。库里只存 SHA-256，明文只在发放时返回一次。 */
 @Entity
 @Table(name = "device_token",
-        uniqueConstraints = @UniqueConstraint(columnNames = {"tokenHash"}))
+        uniqueConstraints = @UniqueConstraint(columnNames = {"token_hash"}))
 @Data
 @EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class DeviceToken {
