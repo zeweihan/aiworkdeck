@@ -78,7 +78,7 @@ class ProjectConversationListTest {
                 row("c-a", BASE, "<thinking>先想一下</thinking><final>已核对通知与决议的届次</final>",
                         "股东会材料核查", "届次对不对", 7L)));
 
-        Map<String, Object> result = service.listProjectConversations(1L, null, null, 20);
+        Map<String, Object> result = service.listProjectConversations(1L, null, null, 20, 7L);
         Map<String, Object> item = conversationsOf(result).get(0);
 
         assertEquals("c-a", item.get("conversationId"));
@@ -95,7 +95,7 @@ class ProjectConversationListTest {
                 // 「明显是代码」过滤），预览必须回退
                 row("c-b", BASE, "const x = 1", null, "帮我起草一份股权转让协议", 9L)));
 
-        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20)).get(0);
+        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20, 9L)).get(0);
 
         assertEquals("const x = 1", item.get("title"), "无 conversationTitle 时标题走 cleanTitle");
         assertEquals("帮我起草一份股权转让协议", item.get("lastMessage"),
@@ -107,7 +107,7 @@ class ProjectConversationListTest {
         when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(List.<Object[]>of(
                 row("c-short", BASE, "已核对", "标题", "这是用户问的很长的一句话", 7L)));
 
-        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20)).get(0);
+        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L)).get(0);
 
         assertEquals("已核对", item.get("lastMessage"),
                 "回退条件只能是 isEmpty()；带上『长度不足 5』会把合法短回复替换成用户的提问");
@@ -123,7 +123,7 @@ class ProjectConversationListTest {
         running.setStatus("RUNNING");
         when(runRecordRepository.findByConversationIdIn(any())).thenReturn(List.of(running));
 
-        List<Map<String, Object>> items = conversationsOf(service.listProjectConversations(1L, null, null, 20));
+        List<Map<String, Object>> items = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L));
 
         assertEquals("RUNNING", items.get(0).get("runStatus"));
         assertNull(items.get(1).get("runStatus"), "没有运行记录的会话 runStatus 为 null");
@@ -140,7 +140,7 @@ class ProjectConversationListTest {
                 user(7L, "张三", "zhangsan"),
                 user(8L, "  ", "lisi")));
 
-        List<Map<String, Object>> items = conversationsOf(service.listProjectConversations(1L, null, null, 20));
+        List<Map<String, Object>> items = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L));
 
         assertEquals("张三", items.get(0).get("ownerName"));
         assertEquals(Long.valueOf(7L), items.get(0).get("ownerUserId"));
@@ -156,7 +156,7 @@ class ProjectConversationListTest {
                 row("c-2", BASE.plusHours(1), "b", "t2", "q2", 7L),
                 row("c-3", BASE, "c", "t3", "q3", 7L)));
 
-        Map<String, Object> result = service.listProjectConversations(1L, null, null, 2);
+        Map<String, Object> result = service.listProjectConversations(1L, null, null, 2, 7L);
 
         assertEquals(2, conversationsOf(result).size(), "多取的第 3 条只用来判有没有下一页，不下发");
         assertEquals("2026-08-08T11:00:12", result.get("nextBefore"));
@@ -169,7 +169,7 @@ class ProjectConversationListTest {
         when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(List.<Object[]>of(
                 row("c-1", BASE, "a", "t1", "q1", 7L)));
 
-        Map<String, Object> result = service.listProjectConversations(1L, null, null, 20);
+        Map<String, Object> result = service.listProjectConversations(1L, null, null, 20, 7L);
 
         assertEquals(1, conversationsOf(result).size());
         assertNull(result.get("nextBefore"));
@@ -180,7 +180,7 @@ class ProjectConversationListTest {
     void 零会话时返回空数组而不是null() {
         when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(List.of());
 
-        Map<String, Object> result = service.listProjectConversations(1L, null, null, 20);
+        Map<String, Object> result = service.listProjectConversations(1L, null, null, 20, 7L);
 
         assertNotNull(conversationsOf(result));
         assertTrue(conversationsOf(result).isEmpty());
@@ -198,11 +198,11 @@ class ProjectConversationListTest {
         }
         when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(many);
 
-        assertEquals(50, conversationsOf(service.listProjectConversations(1L, null, null, 999)).size(),
+        assertEquals(50, conversationsOf(service.listProjectConversations(1L, null, null, 999, 7L)).size(),
                 "上钳到 50");
-        assertEquals(1, conversationsOf(service.listProjectConversations(1L, null, null, 0)).size(),
+        assertEquals(1, conversationsOf(service.listProjectConversations(1L, null, null, 0, 7L)).size(),
                 "下钳到 1");
-        assertEquals(1, conversationsOf(service.listProjectConversations(1L, null, null, -5)).size(),
+        assertEquals(1, conversationsOf(service.listProjectConversations(1L, null, null, -5, 7L)).size(),
                 "负数也钳到 1");
     }
 
@@ -211,7 +211,7 @@ class ProjectConversationListTest {
         LocalDateTime cursor = BASE.plusHours(3);
         when(repository.findProjectConversationSummaries(eq(1L), eq(cursor), eq("c-x"))).thenReturn(List.of());
 
-        service.listProjectConversations(1L, cursor, "c-x", 20);
+        service.listProjectConversations(1L, cursor, "c-x", 20, 7L);
 
         verify(repository).findProjectConversationSummaries(1L, cursor, "c-x");
     }
@@ -221,10 +221,62 @@ class ProjectConversationListTest {
         when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(List.<Object[]>of(
                 row("c-a", BASE, "这是完整正文不该原样下发", "标题", "问题", 7L)));
 
-        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20)).get(0);
+        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L)).get(0);
 
         assertEquals(java.util.Set.of("conversationId", "title", "lastMessage", "updatedAt",
                         "runStatus", "ownerUserId", "ownerName"), item.keySet(),
                 "键集合固定；正文层仍走 canUseConversation，列表层不许多出 content/messages 之类的键");
+    }
+
+    // ==================== 问题③：非本人会话不下发正文（spec §6.4） ====================
+
+    @Test
+    void 非本人会话_lastMessage置空_有storedTitle仍显示标题() {
+        when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(List.<Object[]>of(
+                row("c-other", BASE, "这是同事的对话正文，含文档原文与工具输出", "股东会材料核查", "问题", 9L)));
+
+        // 调用者是 7L，会话发起人是 9L —— 不是同一个人
+        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L)).get(0);
+
+        assertNull(item.get("lastMessage"), "非本人发起的会话不下发正文预览");
+        assertEquals("股东会材料核查", item.get("title"),
+                "有 storedTitle 时仍然显示标题——标题/时间/发起人/状态属于列表层授权范围");
+        assertEquals(9L, item.get("ownerUserId"));
+    }
+
+    @Test
+    void 非本人会话_无storedTitle时给中性文案而不是从正文推标题() {
+        when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(List.<Object[]>of(
+                row("c-other", BASE, "这是同事的对话正文，不许被当成标题来源", null, "问题", 9L)));
+
+        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L)).get(0);
+
+        assertNull(item.get("lastMessage"));
+        assertEquals("新对话", item.get("title"),
+                "没有 storedTitle 时不许用 cleanTitle(正文) 从别人的对话正文推标题，只给中性文案");
+    }
+
+    @Test
+    void 本人会话不受影响_lastMessage与title照旧从正文清洗() {
+        when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(List.<Object[]>of(
+                row("c-mine", BASE, "已核对通知与决议的届次", null, "问题", 7L)));
+
+        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L)).get(0);
+
+        assertEquals("已核对通知与决议的届次", item.get("lastMessage"), "自己发起的会话不受这条口径影响");
+        assertEquals("已核对通知与决议的届次", item.get("title"),
+                "自己的会话没有 storedTitle 时仍走 cleanTitle(正文)，这是既有行为，不受本次修复影响");
+    }
+
+    @Test
+    void ownerUserId为null时按非本人处理_不下发正文() {
+        when(repository.findProjectConversationSummaries(eq(1L), eq(null), eq(null))).thenReturn(List.<Object[]>of(
+                row("c-orphan", BASE, "归属不明的一行正文", "标题还在", "问题", null)));
+
+        Map<String, Object> item = conversationsOf(service.listProjectConversations(1L, null, null, 20, 7L)).get(0);
+
+        assertNull(item.get("lastMessage"), "ownerUserId 缺失时不能因为无法判定而放行正文，保守按非本人处理");
+        assertEquals("标题还在", item.get("title"));
+        assertNull(item.get("ownerUserId"));
     }
 }

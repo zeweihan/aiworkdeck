@@ -160,8 +160,8 @@ public class ProjectOverviewController {
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime before,
             @RequestParam(required = false) String beforeId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        requireRead(projectId, sessionId);
-        return ok(projectAiMessageService.listProjectConversations(projectId, before, beforeId, limit));
+        Long userId = requireRead(projectId, sessionId);
+        return ok(projectAiMessageService.listProjectConversations(projectId, before, beforeId, limit, userId));
     }
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {

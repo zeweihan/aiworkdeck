@@ -55,7 +55,7 @@ class ProjectOverviewConversationsAuthTest {
                     () -> controller.listConversations(42L, 20, null, null, null));
             assertEquals("未登录", ex.getMessage());
             verify(projectAiMessageService, never())
-                    .listProjectConversations(any(), any(), any(), anyInt());
+                    .listProjectConversations(any(), any(), any(), anyInt(), any());
         }
     }
 
@@ -70,7 +70,7 @@ class ProjectOverviewConversationsAuthTest {
                     () -> controller.listConversations(42L, 20, null, null, "sess"));
             assertEquals("无权访问该项目", ex.getMessage());
             verify(projectAiMessageService, never())
-                    .listProjectConversations(any(), any(), any(), anyInt());
+                    .listProjectConversations(any(), any(), any(), anyInt(), any());
         }
     }
 
@@ -85,7 +85,7 @@ class ProjectOverviewConversationsAuthTest {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
             when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
-            when(projectAiMessageService.listProjectConversations(42L, cursor, "c-b", 5))
+            when(projectAiMessageService.listProjectConversations(42L, cursor, "c-b", 5, 7L))
                     .thenReturn(payload);
 
             ResponseEntity<Map<String, Object>> res =
@@ -94,7 +94,7 @@ class ProjectOverviewConversationsAuthTest {
             assertNotNull(res.getBody());
             assertEquals(Integer.valueOf(0), res.getBody().get("code"), "必须是信封，不是裸数组");
             assertSame(payload, res.getBody().get("data"));
-            verify(projectAiMessageService).listProjectConversations(42L, cursor, "c-b", 5);
+            verify(projectAiMessageService).listProjectConversations(42L, cursor, "c-b", 5, 7L);
         }
     }
 
@@ -103,12 +103,28 @@ class ProjectOverviewConversationsAuthTest {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(7L);
             when(projectMemberService.hasReadPermission(42L, 7L)).thenReturn(true);
-            when(projectAiMessageService.listProjectConversations(any(), any(), any(), anyInt()))
+            when(projectAiMessageService.listProjectConversations(any(), any(), any(), anyInt(), any()))
                     .thenReturn(Map.of("conversations", List.of()));
 
             assertNotNull(controller.listConversations(42L, 20, null, null, "sess"));
             // 读端点不该去问 isClient —— 问了就说明写成写端点的口径了
             verify(projectMemberService, never()).isClient(anyLong(), anyLong());
+        }
+    }
+
+    @Test
+    void 调用者userId原样传给服务层用于收窄可见性() {
+        try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
+            auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(9L);
+            when(projectMemberService.hasReadPermission(42L, 9L)).thenReturn(true);
+            when(projectAiMessageService.listProjectConversations(any(), any(), any(), anyInt(), any()))
+                    .thenReturn(Map.of("conversations", List.of()));
+
+            controller.listConversations(42L, 20, null, null, "sess");
+
+            // requireRead 已经拿到 userId，控制器必须把它接住传给服务层——
+            // 不接住就没法判定每一行是不是调用者自己的会话（问题③的根因）。
+            verify(projectAiMessageService).listProjectConversations(42L, null, null, 20, 9L);
         }
     }
 }

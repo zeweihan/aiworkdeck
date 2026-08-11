@@ -162,7 +162,8 @@ class ProjectConversationsEndpointIntegrationTest {
                         .path("conversationId").asText(),
                 "同一时刻落库的另一个会话必须还在 —— 单字段游标会把它永久丢掉");
 
-        // 5) 第三页：bob 发起的会话，项目成员也看得到；运行状态来自表
+        // 5) 第三页：bob 发起的会话，项目成员也看得到——但只在列表层实际授权的那些字段
+        //    （标题/时间/发起人/状态，spec §6.4）；运行状态来自表
         JsonNode page3 = getConversations(projectId, aliceSid, nextQuery(page2));
         JsonNode third = page3.path("data").path("conversations").get(0);
         assertEquals("c-new", third.path("conversationId").asText());
@@ -171,7 +172,15 @@ class ProjectConversationsEndpointIntegrationTest {
         assertEquals(bobName, third.path("ownerName").asText(), "发起人显示名取 displayName");
         assertEquals("RUNNING", third.path("runStatus").asText(),
                 "runStatus 来自 agent_run_record 表，不是 AgentRunStateService 的内存 Map");
-        assertTrue(third.path("content").isMissingNode(), "列表层一行正文都不下发");
+        // 这条只证明响应里没有叫 content 的键，证不到"正文没下发"——lastMessage 才是曾经
+        // 把同事对话正文剥标签后的前 80 字泄露给全体项目成员（含 CLIENT）的那个字段，
+        // 下面两条才是真正钉住可见性口径的断言。
+        assertTrue(third.path("content").isMissingNode(), "响应里不存在名为 content 的键");
+        assertTrue(third.path("lastMessage").isNull(),
+                "非本人发起的会话不下发正文预览：spec §6.4 只把标题/时间/发起人/状态授权到列表层，"
+                        + "lastMessage 曾是同事对话正文剥标签后的前 80 字，对项目内其他成员是越权下发");
+        assertEquals("新对话", third.path("title").asText(),
+                "没有 storedTitle 时不许用 cleanTitle(正文) 从别人的对话正文推标题，只给中性文案");
 
         // 6) 第四页：最后一条，两个游标字段都归 null
         JsonNode page4 = getConversations(projectId, aliceSid, nextQuery(page3));

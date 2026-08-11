@@ -363,14 +363,22 @@ public class ProjectAiMessageService {
      *
      * 只有列表层。正文一行都不下发 —— 正文层仍走 canUseConversation 判权。
      *
-     * @param before   游标的时间维；null 表示第一页
-     * @param beforeId 游标的会话维（上一页最后一条的 conversationId）。与 before 成对使用：
-     *                 只给 before 时同一时刻的另一个会话会被永久跳过
-     * @param limit    期望条数，服务端钳到 1..50
+     * <p><b>可见性口径（spec §6.4）</b>：列表层只把标题/时间/发起人/状态授权给项目全员——
+     * 不包括正文。{@code ownerUserId} 与 {@code callerUserId} 不一致的行，
+     * {@code lastMessage} 恒为 null；{@code title} 只信 storedTitle，没有 storedTitle
+     * 时给 cleanTitle 对空白输入返回的那个中性文案，不许像自己的会话那样用
+     * cleanTitle(正文) 从别人的对话正文推标题——那等于把正文换了个字段名继续下发。
+     * 自己发起的行（ownerUserId 与 callerUserId 相同）不受影响，行为与此前一致。
+     *
+     * @param before       游标的时间维；null 表示第一页
+     * @param beforeId     游标的会话维（上一页最后一条的 conversationId）。与 before 成对使用：
+     *                     只给 before 时同一时刻的另一个会话会被永久跳过
+     * @param limit        期望条数，服务端钳到 1..50
+     * @param callerUserId 发起本次查询的用户 —— 用来判定每一行是不是调用者自己的会话
      * @return {"conversations": [...], "nextBefore": ISO 串或 null, "nextBeforeId": 会话 id 或 null}
      */
     public java.util.Map<String, Object> listProjectConversations(Long projectId, LocalDateTime before,
-                                                                 String beforeId, int limit) {
+                                                                 String beforeId, int limit, Long callerUserId) {
         int pageSize = Math.max(1, Math.min(50, limit));
 
         // limit 只能在 Java 层做：那条 JPQL 有 4 个标量子查询 + GROUP BY + HAVING，
@@ -425,19 +433,33 @@ public class ProjectAiMessageService {
             String storedTitle = row[3] != null ? row[3].toString() : null;
             String firstUserMessage = row[4] != null ? row[4].toString() : "";
             Long ownerUserId = (Long) row[5];
+            boolean isOwnConversation = ownerUserId != null && ownerUserId.equals(callerUserId);
 
-            String preview = extractPreview(lastContent);
-            if (preview.isEmpty()) {
-                // extractPreview 对以 import/def/function/class/const/let/var/public/private
-                // 开头的正文直接返回空串（本类 :275），回退到用户第一条消息。
-                // 只判空串：加「长度不足 N」会把「已核对」「好的」这类合法短回复也顶掉。
-                preview = truncatePreview(firstUserMessage.replaceAll("<[^>]+>", "").replaceAll("\\s+", " ").trim());
+            String lastMessage = null;
+            String title;
+            if (isOwnConversation) {
+                String preview = extractPreview(lastContent);
+                if (preview.isEmpty()) {
+                    // extractPreview 对以 import/def/function/class/const/let/var/public/private
+                    // 开头的正文直接返回空串（本类 :275），回退到用户第一条消息。
+                    // 只判空串：加「长度不足 N」会把「已核对」「好的」这类合法短回复也顶掉。
+                    preview = truncatePreview(
+                            firstUserMessage.replaceAll("<[^>]+>", "").replaceAll("\\s+", " ").trim());
+                }
+                lastMessage = preview;
+                title = storedTitle != null && !storedTitle.isBlank() ? storedTitle : cleanTitle(lastContent);
+            } else {
+                // spec §6.4：列表层只把标题/时间/发起人/状态授权给项目全员，正文不在其中。
+                // lastMessage 保持 null；title 只信 storedTitle，没有时给中性文案——
+                // 不许像自己的会话那样用 cleanTitle(lastContent) 从别人的正文推标题，
+                // 那等于把正文换个字段名继续下发（2026-08 安全审计修过的那类问题）。
+                title = storedTitle != null && !storedTitle.isBlank() ? storedTitle : cleanTitle(null);
             }
 
             java.util.Map<String, Object> item = new java.util.LinkedHashMap<>();
             item.put("conversationId", conversationId);
-            item.put("title", storedTitle != null && !storedTitle.isBlank() ? storedTitle : cleanTitle(lastContent));
-            item.put("lastMessage", preview);
+            item.put("title", title);
+            item.put("lastMessage", lastMessage);
             // ISO 串而不是原始 LocalDateTime：前端直接显示，且能原样当成下一页的 before 传回来
             // （保留纳秒精度，避免截到秒后漏掉同一秒内的另一个会话）。
             item.put("updatedAt", updatedAt == null ? null : updatedAt.toString());
