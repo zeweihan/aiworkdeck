@@ -324,6 +324,19 @@ check('switcher-home 有对应样式', () => {
   return css.includes('.switcher-home') ? null : 'project-overview.scss 里没有 .switcher-home'
 })
 
+check('工作台消费概览页带来的 conversationId', () => {
+  const src = readFrontend('src/pages/project-overview/project-overview.vue')
+  const i = src.indexOf('onLoad(query)')
+  if (i < 0) return '找不到 onLoad(query)'
+  const body = src.slice(i, i + 3000)
+  if (!body.includes('query.conversationId')) {
+    return 'onLoad 没有读 conversationId——概览页点历史对话进来会停在当前会话'
+  }
+  if (!body.includes('loadHistoryChat(')) return '读了 conversationId 却没有打开那条会话'
+  if (!body.includes('showAiPanel')) return '右侧 AI 面板默认收起，不打开它 $refs.chatInterface 不存在'
+  return null
+})
+
 // ---- 追加位：后续任务把新的 check(...) 加在这一行之前 ----
 
 if (failures.length) {

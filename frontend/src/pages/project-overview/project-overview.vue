@@ -2226,6 +2226,16 @@ export default {
         setTimeout(() => this.openPendingLocalFile(pendingId), 600)
       }
 
+      // 概览页的 AI 对话列表点进来时带着 conversationId：把那条历史会话真打开。
+      // 右侧 AI 面板默认收起（showAiPanel: false）且 ChatInterface 挂在 v-if 里，
+      // 所以先开面板、再等它挂载完调 loadHistoryChat（它要 $refs.chatInterface）——
+      // 与上面 openFileId 同一手法，不另造一套时序。
+      if (query.conversationId) {
+        const pendingConversationId = String(query.conversationId)
+        if (!this.showAiPanel) this.toggleAiPanel()
+        setTimeout(() => this.loadHistoryChat({ conversationId: pendingConversationId }), 600)
+      }
+
       // Initialize Staging Area (Persistent)
       // We don't await here to avoid blocking page load, but ensuring folder exists is critical
       this.ensureStagingFolder().then(() => {
