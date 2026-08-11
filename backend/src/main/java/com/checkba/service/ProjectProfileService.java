@@ -9,6 +9,7 @@ import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.UnexpectedRollbackException;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
@@ -115,8 +116,15 @@ public class ProjectProfileService {
     /**
      * {@link #saveUserField} 的事务体。不要直接调用（包括同类内部调用）——必须经
      * {@link #self} 代理才能拿到独立的新事务，直接调用会绕过 Spring 的事务拦截。
+     *
+     * <p>propagation 显式钉死 REQUIRES_NEW，不用默认的 REQUIRED：REQUIRED 只在调用方
+     * 当前没有事务时才会新开事务，这个前提今天成立（唯一入口是非事务的控制器），但
+     * 只要调用方本身处于某个外层事务里，REQUIRED 就会让两次重试都 join 进同一个外层
+     * 事务——重试语义形同虚设，而且撞约束打上的 rollback-only 标记会随 join 一起污染
+     * 外层事务，把外层事务里其它无关的写入也拖着一起回滚。REQUIRES_NEW 不看调用方有没有
+     * 事务，每次都强制挂起外层、开一个全新的物理事务，这个保证与调用方是否处于事务中无关。
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Map<String, Object> saveUserFieldTx(Long projectId, String fieldKey, String value) {
         requireKnownKey(fieldKey);
         Project project = projectRepository.findById(projectId).orElse(null);
@@ -166,8 +174,17 @@ public class ProjectProfileService {
     /**
      * {@link #applyAiSuggestion} 的事务体。不要直接调用（包括同类内部调用）——必须经
      * {@link #self} 代理才能拿到独立的新事务，直接调用会绕过 Spring 的事务拦截。
+     *
+     * <p>propagation 显式钉死 REQUIRES_NEW，不用默认的 REQUIRED，理由与
+     * {@link #saveUserFieldTx} 完全一致，但这里的风险不是假设性的：Plan 2 接上 AI 抽取
+     * 链路后，调用方大概率会包一层 @Transactional（例如批量抽取跑在一个事务里）。届时
+     * REQUIRED 会让本方法的两次重试都 join 进那个外层事务而不是各自独立——重试语义静默
+     * 失效，回到本类头部注释描述的 UnexpectedRollbackException 老问题；更糟的是撞约束
+     * 打上的 rollback-only 标记会随 join 一起污染外层事务，把外层事务里其它无关的写入
+     * （例如同一批次里别的字段）也拖着一起回滚。REQUIRES_NEW 不看调用方有没有事务，每次
+     * 都强制挂起外层、开一个全新的物理事务，提前把这个坑堵死。
      */
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Map<String, Object> applyAiSuggestionTx(Long projectId, String fieldKey, String value,
                                                  Double confidence, String evidence) {
         requireKnownKey(fieldKey);
