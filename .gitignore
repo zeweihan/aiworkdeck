@@ -51,6 +51,7 @@ env.production
 .agent/
 .cursor/
 .shared/
+.superpowers/
 .trae/
 AI Workdeck汇报/
 docs/
