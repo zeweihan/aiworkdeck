@@ -9,7 +9,7 @@
 
         <view class="nav-card">
             <view class="nav-card-header">
-                <text class="nav-card-title">系统管理</text>
+                <text class="nav-card-title">{{ $t('admin.navCardTitle') }}</text>
             </view>
             <view class="nav-list">
                 <view
@@ -25,11 +25,11 @@
             
             <view class="nav-footer">
                 <view class="action-item" @tap="handleRerunWizard">
-                  <text class="action-text">重新运行首次向导</text>
+                  <text class="action-text">{{ $t('admin.rerunWizard') }}</text>
                   <text class="action-arrow">›</text>
                 </view>
                 <view class="action-item" @tap="goToUserProfile">
-                  <text class="action-text">返回个人中心</text>
+                  <text class="action-text">{{ $t('admin.backToProfile') }}</text>
                   <text class="action-arrow">›</text>
                 </view>
             </view>
@@ -77,9 +77,9 @@
           <!-- 外部服务 -->
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">外部服务供应商</text>
+              <text class="section-title">{{ $t('admin.externalTitle') }}</text>
               <text class="section-subtitle">
-                配置 OpenRouter、企查查、Tushare 等外部服务的接入参数
+                {{ $t('admin.externalSubtitle') }}
               </text>
             </view>
             <view class="section-body">
@@ -94,12 +94,12 @@
                   <input
                     v-model="form.external.openRouter.apiKey"
                     class="form-input"
-                    placeholder="请输入 OpenRouter API Key"
+                    :placeholder="$t('admin.openRouterKeyPlaceholder')"
                     password
                   />
                 </view>
                 <view class="form-row">
-                  <text class="form-label">API 地址</text>
+                  <text class="form-label">{{ $t('admin.apiBaseUrlLabel') }}</text>
                   <input
                     v-model="form.external.openRouter.baseUrl"
                     class="form-input"
@@ -111,7 +111,7 @@
               <!-- 企查查 -->
               <view class="provider-card">
                 <view class="provider-header">
-                  <text class="provider-name">企查查</text>
+                  <text class="provider-name">{{ $t('admin.providerQichacha') }}</text>
                 </view>
                 <view class="form-row">
                   <text class="form-label">Base URL</text>
@@ -126,7 +126,7 @@
                   <input
                     v-model="form.external.qichacha.key"
                     class="form-input"
-                    placeholder="请输入 key"
+                    :placeholder="$t('admin.enterKeyPlaceholder')"
                   />
                 </view>
                 <view class="form-row">
@@ -134,7 +134,7 @@
                   <input
                     v-model="form.external.qichacha.secret"
                     class="form-input"
-                    placeholder="请输入 secret"
+                    :placeholder="$t('admin.enterSecretPlaceholder')"
                   />
                 </view>
               </view>
@@ -157,7 +157,7 @@
                   <input
                     v-model="form.external.tushare.token"
                     class="form-input"
-                    placeholder="请输入 Token"
+                    :placeholder="$t('admin.enterTokenPlaceholder')"
                   />
                 </view>
               </view>
@@ -165,14 +165,14 @@
               <!-- 阿里云 OCR -->
               <view class="provider-card">
                 <view class="provider-header">
-                  <text class="provider-name">阿里云 OCR</text>
+                  <text class="provider-name">{{ $t('admin.providerAliyunOcr') }}</text>
                 </view>
                 <view class="form-row">
                   <text class="form-label">AccessKey ID</text>
                   <input
                     v-model="form.external.aliyunOcr.accessKeyId"
                     class="form-input"
-                    placeholder="请输入 AccessKey ID"
+                    :placeholder="$t('admin.ocrKeyIdPlaceholder')"
                   />
                 </view>
                 <view class="form-row">
@@ -180,7 +180,7 @@
                   <input
                     v-model="form.external.aliyunOcr.accessKeySecret"
                     class="form-input"
-                    placeholder="请输入 AccessKey Secret（将保存到系统配置）"
+                    :placeholder="$t('admin.ocrKeySecretPlaceholder')"
                     password
                   />
                 </view>
@@ -189,7 +189,7 @@
                   <input
                     v-model="form.external.aliyunOcr.endpoint"
                     class="form-input"
-                    placeholder="例如：ocr-api.cn-hangzhou.aliyuncs.com"
+                    :placeholder="$t('admin.ocrEndpointPlaceholder')"
                   />
                 </view>
                 <view class="form-row">
@@ -197,15 +197,15 @@
                   <input
                     v-model="form.external.aliyunOcr.regionId"
                     class="form-input"
-                    placeholder="例如：cn-hangzhou"
+                    :placeholder="$t('admin.ocrRegionPlaceholder')"
                   />
                 </view>
                 <view class="form-row">
-                  <text class="form-label">公网 Base URL</text>
+                  <text class="form-label">{{ $t('admin.publicBaseUrlLabel') }}</text>
                   <input
                     v-model="form.external.aliyunOcr.publicBaseUrl"
                     class="form-input"
-                    placeholder="例如：https://你的域名（用于 /api/ocr/temp 供阿里云拉图）"
+                    :placeholder="$t('admin.ocrPublicBaseUrlPlaceholder')"
                   />
                 </view>
               </view>
@@ -214,14 +214,14 @@
               <!-- PKULaw -->
               <view class="provider-card">
                 <view class="provider-header">
-                  <text class="provider-name">北大法宝 (PKULam)</text>
+                  <text class="provider-name">{{ $t('admin.providerPkulaw') }}</text>
                 </view>
                 <view class="form-row">
                   <text class="form-label">Token</text>
                   <input
                     v-model="form.external.pkulaw.token"
                     class="form-input"
-                    placeholder="请输入 PKULaw Access Token"
+                    :placeholder="$t('admin.pkulawTokenPlaceholder')"
                   />
                 </view>
               </view>
@@ -229,14 +229,14 @@
               <!-- 博查搜索（AI 网络搜索工具） -->
               <view class="provider-card">
                 <view class="provider-header">
-                  <text class="provider-name">博查搜索 (Bocha AI)</text>
+                  <text class="provider-name">{{ $t('admin.providerBocha') }}</text>
                 </view>
                 <view class="form-row">
                   <text class="form-label">API Key</text>
                   <input
                     v-model="form.external.bocha.apiKey"
                     class="form-input"
-                    placeholder="AI 助手「网络搜索」所需，bochaai.com 申请"
+                    :placeholder="$t('admin.bochaKeyPlaceholder')"
                   />
                 </view>
               </view>
@@ -251,11 +251,11 @@
                   <input
                     v-model="form.external.elevenLabs.apiKey"
                     class="form-input"
-                    placeholder="请输入 ElevenLabs API Key"
+                    :placeholder="$t('admin.elevenKeyPlaceholder')"
                   />
                 </view>
                 <view class="form-row">
-                  <text class="form-label">API 地址</text>
+                  <text class="form-label">{{ $t('admin.apiBaseUrlLabel') }}</text>
                   <input
                     v-model="form.external.elevenLabs.baseUrl"
                     class="form-input"
@@ -263,7 +263,7 @@
                   />
                 </view>
                 <view class="form-row">
-                  <text class="form-label">模型 ID</text>
+                  <text class="form-label">{{ $t('admin.modelIdLabel') }}</text>
                   <input
                     v-model="form.external.elevenLabs.modelId"
                     class="form-input"
@@ -271,11 +271,11 @@
                   />
                 </view>
                 <view class="form-row">
-                  <text class="form-label">默认 Voice ID</text>
+                  <text class="form-label">{{ $t('admin.defaultVoiceIdLabel') }}</text>
                   <input
                     v-model="form.external.elevenLabs.defaultVoiceId"
                     class="form-input"
-                    placeholder="例如: JBFqnCBsd6RMkjVDRZzb"
+                    :placeholder="$t('admin.voiceIdPlaceholder')"
                   />
                 </view>
               </view>
@@ -292,7 +292,7 @@
               :loading="saving"
               @tap="handleSave"
             >
-              保存配置
+              {{ $t('admin.saveConfigButton') }}
             </button>
           </view>
         </scroll-view>
@@ -305,14 +305,14 @@
         >
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">AI 服务配置</text>
+              <text class="section-title">{{ $t('admin.aiSectionTitle') }}</text>
               <text class="section-subtitle">
-                供应商、模型选择、网络区域与本地 Ollama 参数；保存后立即生效，不必重启
+                {{ $t('admin.aiSectionSubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view class="form-row">
-                <text class="form-label">默认AI供应商</text>
+                <text class="form-label">{{ $t('admin.defaultProviderLabel') }}</text>
                 <view class="provider-radio-group">
                   <view
                     v-for="opt in aiProviderOptions"
@@ -332,17 +332,14 @@
                    那正是内容开始出境的决定点。绝不预勾选——预勾选的同意是无效的。 -->
               <view v-if="form.ai.activeProvider === 'AWD_CLOUD'" class="form-row consent-row">
                 <view class="consent-box">
-                  <text class="consent-title">向境外提供个人信息的单独同意</text>
-                  <text class="consent-body">「AI Workdeck 云端」会把你送入 AI 的内容（文本与相关文件片段）发送至
-                    <text class="consent-em">OpenRouter, Inc.（美国）</text>处理，用于模型推理与用量计费，
-                    这属于向境外提供个人信息。你可以随时在此撤回同意，撤回后云端通道不再可用，
-                    改用本机模型或境内供应商即可继续工作。</text>
+                  <text class="consent-title">{{ $t('admin.consentTitle') }}</text>
+                  <text class="consent-body">{{ $t('admin.consentBodyPrefix') }}<text class="consent-em">{{ $t('admin.consentEntity') }}</text>{{ $t('admin.consentBodySuffix') }}</text>
                   <view class="consent-check" @tap="toggleCrossBorderConsent">
                     <view class="consent-box-mark" :class="{ checked: crossBorderConsented }"></view>
-                    <text class="consent-check-label">我已阅读上述告知，同意将相关内容传输至境外接收方处理</text>
+                    <text class="consent-check-label">{{ $t('admin.consentCheckLabel') }}</text>
                   </view>
-                  <text v-if="crossBorderConsentAt" class="consent-meta">已于 {{ formatConsentAt }} 同意</text>
-                  <text class="consent-link" @tap="openPrivacyCrossBorder">查看隐私政策「个人信息出境」一节</text>
+                  <text v-if="crossBorderConsentAt" class="consent-meta">{{ $t('admin.consentAt', { time: formatConsentAt }) }}</text>
+                  <text class="consent-link" @tap="openPrivacyCrossBorder">{{ $t('admin.consentPrivacyLink') }}</text>
                 </view>
               </view>
 
@@ -353,15 +350,14 @@
                    唯一读者是已删的 AiChatService，对四条通道本来就全部失效。 -->
               <view class="section-divider"></view>
               <view class="section-header-inline">
-                  <text class="section-title-sm">模型选择</text>
+                  <text class="section-title-sm">{{ $t('admin.modelSelectionTitle') }}</text>
               </view>
               <text class="field-note">
-                只影响云端两档（本地 Ollama 用下面单独的模型名）。清单只列当前网络区域实测可用的模型；
-                标「分档计价」的模型在长上下文下单价更高。
+                {{ $t('admin.modelSelectionNote') }}
               </text>
               <text v-if="modelCatalogError" class="field-note field-note-warn">{{ modelCatalogError }}</text>
               <view class="form-row">
-                <text class="form-label">默认模型</text>
+                <text class="form-label">{{ $t('admin.defaultModelLabel') }}</text>
                 <picker
                   class="mode-picker"
                   mode="selector"
@@ -376,10 +372,10 @@
                 </picker>
               </view>
               <text v-if="catalogDefaultModel" class="field-note">
-                当前生效的默认模型：{{ catalogDefaultModel }}
+                {{ $t('admin.effectiveDefaultModel', { model: catalogDefaultModel }) }}
               </text>
               <view class="form-row">
-                <text class="form-label">辅助模型</text>
+                <text class="form-label">{{ $t('admin.auxModelLabel') }}</text>
                 <picker
                   class="mode-picker"
                   mode="selector"
@@ -394,11 +390,10 @@
                 </picker>
               </view>
               <text class="field-note">
-                辅助模型用于子 Agent、会话起标题、上下文摘要、记忆抽取与文件自动打标签。
-                这些调用用户看不见但每轮都在跑，默认用一个便宜模型是刻意的——省钱主要省在这里。
+                {{ $t('admin.auxModelNote') }}
               </text>
               <view class="form-row">
-                <text class="form-label">子 Agent 模型</text>
+                <text class="form-label">{{ $t('admin.subagentModelLabel') }}</text>
                 <picker
                   class="mode-picker"
                   mode="selector"
@@ -412,20 +407,19 @@
                   </view>
                 </picker>
               </view>
-              <text class="field-note">留空即继承上面的辅助模型。</text>
+              <text class="field-note">{{ $t('admin.subagentModelNote') }}</text>
 
               <!-- 网络区域。手动覆盖是一等设置不是隐藏兜底：本地判定（系统国家 + 时区）
                    对出差、挂代理、公司专线出境的用户必然判错，手动指定是唯一出路。 -->
               <view class="section-divider"></view>
               <view class="section-header-inline">
-                  <text class="section-title-sm">网络区域</text>
+                  <text class="section-title-sm">{{ $t('admin.networkRegionTitle') }}</text>
               </view>
               <text class="field-note">
-                只在境外网络可用的模型，在境内网络会被服务商按地域拒绝，所以模型清单按区域过滤。
-                自动判定看的是本机的系统国家/地区与时区，判错时在这里手动指定。
+                {{ $t('admin.networkRegionNote') }}
               </text>
               <view class="form-row">
-                <text class="form-label">判定方式</text>
+                <text class="form-label">{{ $t('admin.regionModeLabel') }}</text>
                 <view class="provider-radio-group">
                   <view
                     v-for="opt in networkRegionOptions"
@@ -445,15 +439,13 @@
                    只能靠 AI_MODEL_OLLAMA_MODEL_NAME 环境变量覆盖，终端用户等于改不了。 -->
               <view class="section-divider"></view>
               <view class="section-header-inline">
-                  <text class="section-title-sm">本地 Ollama（离线 / 实验档）</text>
+                  <text class="section-title-sm">{{ $t('admin.ollamaSectionTitle') }}</text>
               </view>
               <text class="field-note">
-                只支持「问答」模式：本机模型在当前依赖版本下不支持工具调用，选这一档时改文档、
-                查企业信息、多步任务都跑不了。以下两项只在供应商选「本地 Ollama」时生效，
-                模型需先在终端 ollama pull 拉取。
+                {{ $t('admin.ollamaNote') }}
               </text>
               <view class="form-row">
-                <text class="form-label">服务地址</text>
+                <text class="form-label">{{ $t('admin.serverAddressLabel') }}</text>
                 <input
                   v-model="form.ai.ollamaBaseUrl"
                   class="form-input"
@@ -461,31 +453,31 @@
                 />
               </view>
               <view class="form-row">
-                <text class="form-label">模型名称</text>
+                <text class="form-label">{{ $t('admin.modelNameLabel') }}</text>
                 <input
                   v-model="form.ai.ollamaModelName"
                   class="form-input"
-                  placeholder="例如：qwen3-vl:8b"
+                  :placeholder="$t('admin.ollamaModelPlaceholder')"
                 />
               </view>
 
               <!-- Assistant Management Section -->
               <view class="section-divider"></view>
               <view class="section-header-inline">
-                  <text class="section-title-sm">AI 助手管理</text>
-                  <view class="admin-ai-add-btn" @tap="handleAddAssistant">+ 新增助手</view>
+                  <text class="section-title-sm">{{ $t('admin.assistantMgmtTitle') }}</text>
+                  <view class="admin-ai-add-btn" @tap="handleAddAssistant">{{ $t('admin.addAssistantButton') }}</view>
               </view>
-              
+
               <view class="assistant-list">
                   <view v-for="(ast, index) in form.ai.assistants" :key="ast.id" class="assistant-card">
                       <view class="ast-header">
                           <text class="ast-name">{{ ast.name }} <text class="ast-id">({{ ast.id }})</text></text>
                           <view class="ast-actions">
-                              <text class="action-btn" @tap="handleEditAssistant(index)">编辑</text>
-                              <text class="action-btn delete" @tap="handleDeleteAssistant(index)">删除</text>
+                              <text class="action-btn" @tap="handleEditAssistant(index)">{{ $t('admin.edit') }}</text>
+                              <text class="action-btn delete" @tap="handleDeleteAssistant(index)">{{ $t('common.delete') }}</text>
                           </view>
                       </view>
-                      <text class="ast-desc">{{ ast.description || '暂无描述' }}</text>
+                      <text class="ast-desc">{{ ast.description || $t('admin.noDescription') }}</text>
                   </view>
               </view>
 
@@ -500,7 +492,7 @@
               :loading="saving"
               @tap="handleSave"
             >
-              保存配置
+              {{ $t('admin.saveConfigButton') }}
             </button>
           </view>
         </scroll-view>
@@ -515,19 +507,19 @@
                连接之前先知道自己在哪个站，才不会拿着另一个站的 Key 连不上。 -->
           <view v-if="site.displayName" class="section-card">
             <view class="section-header">
-              <text class="section-title">当前站点</text>
+              <text class="section-title">{{ $t('admin.siteSectionTitle') }}</text>
               <text class="section-subtitle">
-                账户 Key、余额与已购权益都属于所选站点。两站账户体系相互独立，余额与已购不互通
+                {{ $t('admin.siteSectionSubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view class="provider-card">
                 <view class="form-row">
-                  <text class="form-label">站点</text>
+                  <text class="form-label">{{ $t('admin.siteLabel') }}</text>
                   <text class="site-name">{{ site.displayName }}</text>
                 </view>
                 <text v-if="site.pinned" class="account-note">
-                  由部署配置指定，本机不提供切换。
+                  {{ $t('admin.sitePinnedNote') }}
                 </text>
                 <template v-else-if="siteSwitchTargets.length">
                   <view class="account-connect-actions">
@@ -538,12 +530,11 @@
                       :disabled="siteBusy"
                       @tap="onSwitchSite(target)"
                     >
-                      {{ siteBusy ? '切换中...' : '切换到' + target.displayName }}
+                      {{ siteBusy ? $t('admin.siteSwitching') : $t('admin.switchToSite', { name: target.displayName }) }}
                     </button>
                   </view>
                   <text class="account-note">
-                    切换会清除本机与当前站点的账户连接、已购权益缓存、平台 AI 额度密钥，
-                    以及用账户 Key 解锁的授权；用试用码解锁的授权不受影响。
+                    {{ $t('admin.siteSwitchNote') }}
                   </text>
                 </template>
               </view>
@@ -553,30 +544,30 @@
           <!-- 未连接：引导去官网取 Key -->
           <view v-if="!account.connected" class="section-card">
             <view class="section-header">
-              <text class="section-title">账户与用量</text>
+              <text class="section-title">{{ $t('admin.navAccount') }}</text>
               <text class="section-subtitle">
-                连接 AI Workdeck 账户后，可以使用平台 AI 通道、查看余额与用量，并同步已购插件与功能解锁
+                {{ $t('admin.accountSectionSubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view class="provider-card">
                 <text class="account-intro">
-                  桌面端不需要注册登录。在官网账户页生成一枚账户 Key（awdk_ 开头），粘贴到下面即可完成连接；Key 保存在本机，随时可以断开。
+                  {{ $t('admin.accountIntro') }}
                 </text>
                 <view class="account-link-row">
-                  <button class="comp-btn" @tap="openAccountSite">前往官网获取 Key</button>
+                  <button class="comp-btn" @tap="openAccountSite">{{ $t('admin.getKeyButton') }}</button>
                 </view>
                 <view class="form-row">
-                  <text class="form-label">账户 Key</text>
+                  <text class="form-label">{{ $t('admin.accountKeyLabel') }}</text>
                   <input
                     v-model="accountKeyInput"
                     class="form-input"
-                    placeholder="粘贴 awdk_ 开头的账户 Key"
+                    :placeholder="$t('admin.accountKeyPlaceholder')"
                   />
                 </view>
                 <view class="account-connect-actions">
                   <button class="btn-primary" :disabled="accountBusy" @tap="onConnectAccount">
-                    {{ accountBusy ? '连接中...' : '连接账户' }}
+                    {{ accountBusy ? $t('admin.accountConnecting') : $t('admin.connectAccountButton') }}
                   </button>
                 </view>
               </view>
@@ -587,56 +578,56 @@
           <template v-else>
             <view class="section-card">
               <view class="section-header">
-                <text class="section-title">账户</text>
-                <text class="section-subtitle">当前本机已连接的 AI Workdeck 账户</text>
+                <text class="section-title">{{ $t('admin.accountTitle') }}</text>
+                <text class="section-subtitle">{{ $t('admin.accountConnectedSubtitle') }}</text>
               </view>
               <view class="section-body">
                 <view class="provider-card">
                   <view class="provider-header account-header">
                     <view class="account-identity">
-                      <text class="provider-name">{{ account.displayName || account.username || '账户' }}</text>
+                      <text class="provider-name">{{ account.displayName || account.username || $t('admin.accountTitle') }}</text>
                       <text class="account-sub">{{ account.username }}<text v-if="accountPlanLabel"> · {{ accountPlanLabel }}</text></text>
                     </view>
-                    <button class="comp-btn danger" @tap="onDisconnectAccount">断开连接</button>
+                    <button class="comp-btn danger" @tap="onDisconnectAccount">{{ $t('admin.disconnectButton') }}</button>
                   </view>
                   <!-- 官网不可达：只降级平台数字，本地统计照常 -->
                   <text v-if="!accountPlatformReachable" class="account-note">
-                    {{ (accountPlatform && accountPlatform.message) || '暂时无法连接 AI Workdeck 服务器，余额与额度稍后再试。本机连接未受影响。' }}
+                    {{ (accountPlatform && accountPlatform.message) || $t('admin.platformUnreachable') }}
                   </text>
                   <template v-else>
                     <view class="account-metrics">
                       <view class="account-metric">
-                        <text class="account-metric-label">钱包余额</text>
-                        <text class="account-metric-value">{{ accountBalanceYuan }} 元</text>
+                        <text class="account-metric-label">{{ $t('admin.walletBalanceLabel') }}</text>
+                        <text class="account-metric-value">{{ $t('admin.balanceYuan', { amount: accountBalanceYuan }) }}</text>
                       </view>
                       <view class="account-metric">
-                        <text class="account-metric-label">AI 额度已用</text>
+                        <text class="account-metric-label">{{ $t('admin.quotaUsedLabel') }}</text>
                         <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.usageUsd) }}</text>
                       </view>
                       <view class="account-metric">
-                        <text class="account-metric-label">AI 额度剩余</text>
+                        <text class="account-metric-label">{{ $t('admin.quotaRemainingLabel') }}</text>
                         <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.remainingUsd) }}</text>
                       </view>
                       <view class="account-metric">
-                        <text class="account-metric-label">AI 额度上限</text>
+                        <text class="account-metric-label">{{ $t('admin.quotaLimitLabel') }}</text>
                         <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.limitUsd) }}</text>
                       </view>
                     </view>
                     <!-- 已连账户但没分配过额度：平台 AI 通道此时不可用，给明确的下一步 -->
                     <text v-if="accountNeedsAllocation" class="account-note">
-                      账户 Credits 余额为空，暂时不能使用「AI Workdeck 云端」通道。到官网充值后即可直接使用，不需要再做「分配额度」这一步。
+                      {{ $t('admin.needsAllocationNote') }}
                     </text>
                     <text v-else-if="!accountQuotaAvailable" class="account-note">
-                      AI 额度信息暂时取不到，稍后重试。
+                      {{ $t('admin.quotaUnavailableNote') }}
                     </text>
                   </template>
                   <text class="account-note">
-                    余额用于充值与购买；AI 额度是从余额分配到平台 AI 通道的部分，在官网账户页分配。
+                    {{ $t('admin.balanceExplainNote') }}
                   </text>
                   <!-- 购买在官网完成，桌面端拉一次即可看到新解锁的功能 -->
                   <view class="account-refresh-row">
                     <button class="comp-btn" :disabled="entitlementBusy" @tap="onRefreshEntitlements">
-                      {{ entitlementBusy ? '刷新中...' : '我已购买，刷新权益' }}
+                      {{ entitlementBusy ? $t('admin.refreshing') : $t('admin.refreshEntitlementsButton') }}
                     </button>
                   </view>
                 </view>
@@ -645,14 +636,14 @@
 
             <view class="section-card">
               <view class="section-header">
-                <text class="section-title">最近用量</text>
+                <text class="section-title">{{ $t('admin.recentUsageTitle') }}</text>
                 <text class="section-subtitle">
-                  本机记录的调用明细。自带 Key 的通道费用为本地估算，平台通道以实际扣费为准
+                  {{ $t('admin.recentUsageSubtitle') }}
                 </text>
               </view>
               <view class="section-body">
                 <view v-if="!accountUsageRows.length" class="empty">
-                  <text class="empty-text">暂无用量记录</text>
+                  <text class="empty-text">{{ $t('admin.noUsage') }}</text>
                 </view>
                 <view
                   v-for="(row, idx) in accountUsageRows"
@@ -660,7 +651,7 @@
                   class="usage-row"
                 >
                   <view class="usage-main">
-                    <text class="usage-model">{{ row.model || '未知模型' }}</text>
+                    <text class="usage-model">{{ row.model || $t('admin.unknownModel') }}</text>
                     <text class="usage-time">
                       {{ formatUsageTime(row.createdAt) }}
                       <text v-if="usageSourceLabel(row)"> · {{ usageSourceLabel(row) }}</text>
@@ -683,26 +674,26 @@
                未解锁时藏的是「更改位置」这个付费动作，不是信息本身。 -->
           <view v-if="storageLocation.path" class="section-card">
             <view class="section-header">
-              <text class="section-title">文件缓存区存储位置</text>
+              <text class="section-title">{{ $t('admin.storageSectionTitle') }}</text>
               <text class="section-subtitle">
-                文件缓存区与项目文件在本机的存放目录。解锁无限版后不再有容量限制，建议放到空间充裕的磁盘
+                {{ $t('admin.storageSectionSubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view class="provider-card">
                 <view class="form-row">
-                  <text class="form-label">当前位置</text>
+                  <text class="form-label">{{ $t('admin.storageCurrentLabel') }}</text>
                   <text class="storage-path">{{ storageLocation.path }}</text>
                 </view>
                 <text v-if="!storageLocation.available" class="storage-warn">
-                  该目录当前不可访问（磁盘未连接或已被移动）。文件操作会失败，请接回磁盘，或恢复默认位置。
+                  {{ $t('admin.storageUnavailableWarn') }}
                 </text>
                 <text v-else-if="!storageLocation.custom" class="account-note">
-                  当前使用默认位置。
+                  {{ $t('admin.storageDefaultNote') }}
                 </text>
                 <UnlockHint
                   v-if="!storageCanMove"
-                  text="更改存储位置属于「文件缓存区无限版」。已有文件不受影响，仍在上面这个目录里。"
+                  :text="$t('admin.unlockHintStorage')"
                 />
                 <view class="account-connect-actions">
                   <button
@@ -711,7 +702,7 @@
                     :disabled="storageBusy"
                     @tap="onChangeStorageLocation"
                   >
-                    {{ storageBusy ? '迁移中...' : '更改位置' }}
+                    {{ storageBusy ? $t('admin.migrating') : $t('admin.changeLocationButton') }}
                   </button>
                   <!-- 恢复默认不设权益闸：这是退回免费版的默认状态，不发放任何付费能力。
                        锁在付费墙后面会让「权益失效 + 外置盘拔掉」的用户彻底出不来。 -->
@@ -721,13 +712,11 @@
                     :disabled="storageBusy"
                     @tap="onResetStorageLocation"
                   >
-                    恢复默认位置
+                    {{ $t('admin.resetLocationButton') }}
                   </button>
                 </view>
                 <text v-if="storageCanMove" class="account-note">
-                  迁移会把现有文件<text class="storage-emph">复制</text>到新目录并逐一校验，成功后才切换。
-                  原目录会完整保留为备份，确认无误后可自行删除。迁移期间请不要编辑文档，
-                  若期间有文档自动保存，本次迁移会整体放弃并保持原位置。
+                  {{ $t('admin.storageMoveNotePrefix') }}<text class="storage-emph">{{ $t('admin.storageMoveNoteEm') }}</text>{{ $t('admin.storageMoveNoteSuffix') }}
                 </text>
               </view>
             </view>
@@ -739,9 +728,9 @@
                启动时的选择页只出现一次。 -->
           <view v-if="identityCandidates.length > 1" class="section-card">
             <view class="section-header">
-              <text class="section-title">本机工作区</text>
+              <text class="section-title">{{ $t('admin.identitySectionTitle') }}</text>
               <text class="section-subtitle">
-                本机检测到多个历史账号，当前使用的是其中一个。切换后项目与文件会换成另一个账号名下的内容，数据不会移动
+                {{ $t('admin.identitySectionSubtitle') }}
               </text>
             </view>
             <view class="section-body">
@@ -753,18 +742,18 @@
                 <view class="comp-main">
                   <text class="comp-name">{{ item.displayName || item.username }}</text>
                   <text class="comp-sub">
-                    {{ item.username }} · {{ item.projectCount }} 个项目 · {{ item.fileCount }} 个文件
+                    {{ $t('admin.identityMeta', { username: item.username, projects: item.projectCount, files: item.fileCount }) }}
                   </text>
                 </view>
                 <view class="comp-actions">
-                  <text v-if="item.userId === identityCurrentId" class="account-note">当前使用</text>
+                  <text v-if="item.userId === identityCurrentId" class="account-note">{{ $t('admin.identityCurrent') }}</text>
                   <button
                     v-else
                     class="comp-btn"
                     :disabled="identityBusy"
                     @tap="onSwitchIdentity(item)"
                   >
-                    切换
+                    {{ $t('admin.switchButton') }}
                   </button>
                 </view>
               </view>
@@ -780,14 +769,14 @@
         >
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">组件管理</text>
+              <text class="section-title">{{ $t('admin.navComponents') }}</text>
               <text class="section-subtitle">
-                本地 AI 组件按需下载，数据不出本机；下载为一次性，之后离线可用
+                {{ $t('admin.componentsSubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view v-if="components.length === 0" class="empty">
-                <text class="empty-text">加载中...</text>
+                <text class="empty-text">{{ $t('admin.loadingDots') }}</text>
               </view>
               <view
                 v-for="comp in components"
@@ -798,11 +787,11 @@
                   <text class="comp-name">{{ comp.name }}</text>
                   <text class="comp-sub">
                     {{ comp.sizeHint }}
-                    <text v-if="comp.state === 'installed' && comp.serviceRunning"> · 服务运行中</text>
-                    <text v-else-if="comp.state === 'installed'"> · 已就绪</text>
-                    <text v-else-if="comp.state === 'downloading'"> · 下载中 {{ comp.percent != null ? comp.percent + '%' : '' }}</text>
-                    <text v-else-if="comp.state === 'error'" class="comp-error"> · 出错：{{ comp.message }}</text>
-                    <text v-else> · 未下载</text>
+                    <text v-if="comp.state === 'installed' && comp.serviceRunning"> · {{ $t('admin.compServiceRunning') }}</text>
+                    <text v-else-if="comp.state === 'installed'"> · {{ $t('admin.compReady') }}</text>
+                    <text v-else-if="comp.state === 'downloading'"> · {{ $t('admin.compDownloading') }} {{ comp.percent != null ? comp.percent + '%' : '' }}</text>
+                    <text v-else-if="comp.state === 'error'" class="comp-error"> · {{ $t('admin.compError', { msg: comp.message }) }}</text>
+                    <text v-else> · {{ $t('admin.compNotDownloaded') }}</text>
                   </text>
                   <view v-if="comp.state === 'downloading'" class="comp-progress">
                     <view
@@ -817,28 +806,28 @@
                     class="comp-btn primary"
                     @tap="handleComponentDownload(comp)"
                   >
-                    下载
+                    {{ $t('admin.downloadButton') }}
                   </button>
                   <button
                     v-if="comp.state === 'downloading'"
                     class="comp-btn"
                     @tap="handleComponentCancel(comp)"
                   >
-                    取消
+                    {{ $t('common.cancel') }}
                   </button>
                   <button
                     v-if="comp.state === 'installed' && !comp.serviceRunning"
                     class="comp-btn primary"
                     @tap="handleComponentEnable(comp)"
                   >
-                    启用
+                    {{ $t('admin.enableButton') }}
                   </button>
                   <button
                     v-if="comp.state === 'installed'"
                     class="comp-btn danger"
                     @tap="handleComponentRemove(comp)"
                   >
-                    删除
+                    {{ $t('common.delete') }}
                   </button>
                 </view>
               </view>
@@ -855,29 +844,29 @@
         >
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">软件更新</text>
+              <text class="section-title">{{ $t('admin.navUpdates') }}</text>
               <text class="section-subtitle">
-                小版本更新只下载变化部分（通常不足 10MB），后台完成、重启生效；大版本需下载完整安装包
+                {{ $t('admin.updatesSubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view class="comp-row">
                 <view class="comp-main">
-                  <text class="comp-name">当前版本 {{ update.effectiveVersion || '-' }}</text>
+                  <text class="comp-name">{{ $t('admin.currentVersion', { version: update.effectiveVersion || '-' }) }}</text>
                   <text class="comp-sub">
-                    <text v-if="update.effectiveVersion !== update.appVersion">安装包 {{ update.appVersion }} + 补丁 {{ update.effectiveVersion }}</text>
-                    <text v-else>完整安装包版本</text>
-                    <text v-if="update.checkedAt"> · 上次检查 {{ formatUpdateTime(update.checkedAt) }}</text>
+                    <text v-if="update.effectiveVersion !== update.appVersion">{{ $t('admin.updateBaseAndPatch', { app: update.appVersion, effective: update.effectiveVersion }) }}</text>
+                    <text v-else>{{ $t('admin.fullInstallerVersion') }}</text>
+                    <text v-if="update.checkedAt"> · {{ $t('admin.lastChecked', { time: formatUpdateTime(update.checkedAt) }) }}</text>
                   </text>
-                  <text v-if="update.phase === 'checking'" class="comp-sub">正在检查更新...</text>
+                  <text v-if="update.phase === 'checking'" class="comp-sub">{{ $t('admin.checkingUpdate') }}</text>
                   <text v-else-if="update.phase === 'downloading'" class="comp-sub">
-                    正在下载补丁 {{ update.progress && update.progress.component ? '（' + update.progress.component + '）' : '' }}
+                    {{ update.progress && update.progress.component ? $t('admin.downloadingPatchComp', { name: update.progress.component }) : $t('admin.downloadingPatch') }}
                   </text>
                   <text v-else-if="update.phase === 'ready'" class="comp-sub">
-                    新版本 {{ update.available && update.available.version }} 已就绪，重启后生效
+                    {{ $t('admin.updateReady', { version: update.available && update.available.version }) }}
                   </text>
-                  <text v-else-if="update.phase === 'error'" class="comp-error">检查失败：{{ update.error }}</text>
-                  <text v-else-if="update.checkedAt && !update.majorAvailable" class="comp-sub">已是最新版本</text>
+                  <text v-else-if="update.phase === 'error'" class="comp-error">{{ $t('admin.updateCheckFailedMsg', { error: update.error }) }}</text>
+                  <text v-else-if="update.checkedAt && !update.majorAvailable" class="comp-sub">{{ $t('admin.upToDate') }}</text>
                   <view v-if="update.phase === 'downloading' && update.progress && update.progress.total" class="comp-progress">
                     <view
                       class="comp-progress-fill"
@@ -891,7 +880,7 @@
                     class="comp-btn primary"
                     @tap="handleUpdateRestart"
                   >
-                    立即重启生效
+                    {{ $t('admin.restartNowButton') }}
                   </button>
                   <button
                     v-else
@@ -899,17 +888,17 @@
                     :disabled="update.phase === 'checking' || update.phase === 'downloading'"
                     @tap="handleUpdateCheck"
                   >
-                    检查更新
+                    {{ $t('admin.checkUpdateButton') }}
                   </button>
                 </view>
               </view>
               <view v-if="update.majorAvailable" class="comp-row">
                 <view class="comp-main">
-                  <text class="comp-name">新大版本 {{ update.majorAvailable.major }} 已发布</text>
-                  <text class="comp-sub">涉及核心组件变更，需下载完整安装包覆盖安装；本机数据不受影响</text>
+                  <text class="comp-name">{{ $t('admin.majorReleased', { version: update.majorAvailable.major }) }}</text>
+                  <text class="comp-sub">{{ $t('admin.majorNote') }}</text>
                 </view>
                 <view class="comp-actions">
-                  <button class="comp-btn primary" @tap="handleUpdateOpenDownload">前往下载</button>
+                  <button class="comp-btn primary" @tap="handleUpdateOpenDownload">{{ $t('admin.goDownloadButton') }}</button>
                 </view>
               </view>
             </view>
@@ -925,10 +914,9 @@
         >
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">团队案件库</text>
+              <text class="section-title">{{ $t('admin.navCloud') }}</text>
               <text class="section-subtitle">
-                团队案件库是律所自己的一台服务器。连上之后，案卷可以放进去，所里同事各自取一份到本机办，
-                各自改各自的，交稿时再合到一起
+                {{ $t('admin.cloudSubtitle') }}
               </text>
             </view>
             <view class="section-body">
@@ -942,45 +930,45 @@
                     <text class="provider-name">{{ conn.serverUrl }}</text>
                     <text class="cloud-conn-user">{{ conn.displayName || conn.username }}</text>
                   </view>
-                  <button class="comp-btn danger" @tap="onDisconnectCloud(conn)">退出这个案件库</button>
+                  <button class="comp-btn danger" @tap="onDisconnectCloud(conn)">{{ $t('admin.cloudDisconnectButton') }}</button>
                 </view>
               </view>
 
               <view class="provider-card">
                 <view class="provider-header">
-                  <text class="provider-name">连接团队案件库</text>
+                  <text class="provider-name">{{ $t('admin.cloudConnectTitle') }}</text>
                 </view>
                 <view class="form-row">
-                  <text class="form-label">案件库地址</text>
+                  <text class="form-label">{{ $t('admin.cloudServerLabel') }}</text>
                   <input
                     v-model="cloudForm.serverUrl"
                     class="form-input"
-                    placeholder="例如 https://team.example.com"
+                    :placeholder="$t('admin.cloudServerPlaceholder')"
                   />
                 </view>
                 <text v-if="cloudServerUrlIsHttp" class="cloud-http-warn">
-                  未加密地址仅建议在律所内网使用
+                  {{ $t('admin.cloudHttpWarn') }}
                 </text>
                 <view class="form-row">
-                  <text class="form-label">账号</text>
+                  <text class="form-label">{{ $t('admin.usernameLabel') }}</text>
                   <input
                     v-model="cloudForm.username"
                     class="form-input"
-                    placeholder="你在案件库里的账号"
+                    :placeholder="$t('admin.cloudUsernamePlaceholder')"
                   />
                 </view>
                 <view class="form-row">
-                  <text class="form-label">密码</text>
+                  <text class="form-label">{{ $t('admin.passwordLabel') }}</text>
                   <input
                     v-model="cloudForm.password"
                     class="form-input"
-                    placeholder="密码"
+                    :placeholder="$t('admin.passwordLabel')"
                     password
                   />
                 </view>
                 <view class="cloud-connect-actions">
                   <button class="btn-primary" :disabled="cloudBusy" @tap="onConnectCloud">
-                    {{ cloudBusy ? '连接中…' : '连接' }}
+                    {{ cloudBusy ? $t('admin.cloudConnecting') : $t('admin.connectButton') }}
                   </button>
                 </view>
               </view>
@@ -997,15 +985,14 @@
         >
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">记忆同步</text>
+              <text class="section-title">{{ $t('admin.navMemory') }}</text>
               <text class="section-subtitle">
-                AI 在使用中积累的记忆可以通过 Git 仓库在多台机器之间同步。填一个可推送的仓库地址即可，
-                团队案件库或律所自建的 Git 服务都行；不配置则记忆只留在本机
+                {{ $t('admin.memorySubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view v-if="memoryLoading && !memoryRepos.length" class="empty">
-                <text class="empty-text">加载中...</text>
+                <text class="empty-text">{{ $t('admin.loadingDots') }}</text>
               </view>
               <view
                 v-for="repo in memoryRepos"
@@ -1022,23 +1009,23 @@
                   </text>
                 </view>
                 <view class="form-row">
-                  <text class="form-label">同步地址</text>
+                  <text class="form-label">{{ $t('admin.memoryUrlLabel') }}</text>
                   <input
                     v-model="repo.form.url"
                     class="form-input"
-                    :placeholder="'例如 https://team.example.com/git/' + repo.repoKey + '.git'"
+                    :placeholder="$t('admin.memoryUrlPlaceholder', { repoKey: repo.repoKey })"
                   />
                 </view>
                 <view class="form-row">
-                  <text class="form-label">账号</text>
+                  <text class="form-label">{{ $t('admin.usernameLabel') }}</text>
                   <input
                     v-model="repo.form.username"
                     class="form-input"
-                    placeholder="Git 服务上的账号，没有可留空"
+                    :placeholder="$t('admin.memoryUsernamePlaceholder')"
                   />
                 </view>
                 <view class="form-row">
-                  <text class="form-label">访问令牌</text>
+                  <text class="form-label">{{ $t('admin.memorySecretLabel') }}</text>
                   <input
                     v-model="repo.form.secret"
                     class="form-input"
@@ -1053,7 +1040,7 @@
                     :disabled="repo.busy"
                     @tap="onDisconnectMemory(repo)"
                   >
-                    断开
+                    {{ $t('admin.disconnect') }}
                   </button>
                   <button
                     v-if="repo.status && repo.status.configured"
@@ -1061,10 +1048,10 @@
                     :disabled="repo.busy"
                     @tap="onSyncMemoryNow(repo)"
                   >
-                    立即同步
+                    {{ $t('admin.syncNowButton') }}
                   </button>
                   <button class="btn-primary" :disabled="repo.busy" @tap="onSaveMemoryRemote(repo)">
-                    {{ repo.busy ? '处理中...' : '保存并同步' }}
+                    {{ repo.busy ? $t('admin.processing') : $t('admin.saveAndSyncButton') }}
                   </button>
                 </view>
                 <text
@@ -1074,7 +1061,7 @@
                 >{{ repo.feedback }}</text>
               </view>
               <view v-if="!memoryLoading && !memoryRepos.length" class="empty">
-                <text class="empty-text">暂时没有可配置的记忆仓库</text>
+                <text class="empty-text">{{ $t('admin.noMemoryRepos') }}</text>
               </view>
             </view>
           </view>
@@ -1088,19 +1075,18 @@
         >
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">数据统计</text>
+              <text class="section-title">{{ $t('admin.navTelemetry') }}</text>
               <text class="section-subtitle">
-                产品会在本机记录功能使用情况（仅动作类型与计数，从不记录文档内容、对话文本或文件名），
-                用于下方的使用统计。以下开关控制哪些数据会以匿名形式帮助我们改进产品。
+                {{ $t('admin.telemetrySubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view class="provider-card">
                 <view class="provider-header telemetry-switch-row">
                   <view class="telemetry-switch-info">
-                    <text class="provider-name">分享匿名使用统计</text>
+                    <text class="provider-name">{{ $t('admin.telemetryRollupTitle') }}</text>
                     <text class="telemetry-switch-desc">
-                      每日一条聚合计数（功能使用次数、事项类型分布），匿名安装标识，随时可关
+                      {{ $t('admin.telemetryRollupDesc') }}
                     </text>
                   </view>
                   <switch
@@ -1114,9 +1100,9 @@
               <view class="provider-card">
                 <view class="provider-header telemetry-switch-row">
                   <view class="telemetry-switch-info">
-                    <text class="provider-name">分享脱敏使用明细</text>
+                    <text class="provider-name">{{ $t('admin.telemetryEventsTitle') }}</text>
                     <text class="telemetry-switch-desc">
-                      在计数之外分享脱敏后的操作明细（动作名与耗时），帮助定位体验问题。默认关闭
+                      {{ $t('admin.telemetryEventsDesc') }}
                     </text>
                   </view>
                   <switch
@@ -1128,16 +1114,16 @@
                 </view>
               </view>
               <view class="telemetry-privacy-note">
-                <text class="telemetry-privacy-title">永远不会离开这台电脑的数据</text>
-                <text class="telemetry-privacy-line">文档与合同内容、AI 对话文本、文件名与文件路径、项目与客户名称、账户信息</text>
+                <text class="telemetry-privacy-title">{{ $t('admin.telemetryPrivacyTitle') }}</text>
+                <text class="telemetry-privacy-line">{{ $t('admin.telemetryPrivacyLine') }}</text>
               </view>
             </view>
           </view>
 
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">本地使用统计</text>
-              <text class="section-subtitle">数据全部来自本机，与上面的分享开关无关</text>
+              <text class="section-title">{{ $t('admin.localStatsTitle') }}</text>
+              <text class="section-subtitle">{{ $t('admin.localStatsSubtitle') }}</text>
               <view class="telemetry-days-row">
                 <text
                   v-for="d in [7, 30, 90]"
@@ -1145,37 +1131,37 @@
                   class="telemetry-days-btn"
                   :class="{ active: telemetryDays === d }"
                   @tap="setTelemetryDays(d)"
-                >近 {{ d }} 天</text>
+                >{{ $t('admin.lastNDays', { n: d }) }}</text>
               </view>
             </view>
             <view class="section-body" v-if="telemetrySummary">
               <view class="telemetry-kpi-row">
                 <view class="telemetry-kpi">
                   <text class="telemetry-kpi-num">{{ telemetrySummary.counters['ai.turn'] || 0 }}</text>
-                  <text class="telemetry-kpi-label">AI 对话轮次</text>
+                  <text class="telemetry-kpi-label">{{ $t('admin.kpiTurns') }}</text>
                 </view>
                 <view class="telemetry-kpi">
                   <text class="telemetry-kpi-num">{{ telemetrySummary.counters['ai.tool'] || 0 }}</text>
-                  <text class="telemetry-kpi-label">工具调用</text>
+                  <text class="telemetry-kpi-label">{{ $t('admin.kpiTools') }}</text>
                 </view>
                 <view class="telemetry-kpi">
                   <text class="telemetry-kpi-num">{{ telemetrySummary.editorActions.agent || 0 }}</text>
-                  <text class="telemetry-kpi-label">AI 编辑动作</text>
+                  <text class="telemetry-kpi-label">{{ $t('admin.kpiAgentEdits') }}</text>
                 </view>
                 <view class="telemetry-kpi">
                   <text class="telemetry-kpi-num">{{ telemetrySummary.editorActions.human || 0 }}</text>
-                  <text class="telemetry-kpi-label">手动编辑动作</text>
+                  <text class="telemetry-kpi-label">{{ $t('admin.kpiHumanEdits') }}</text>
                 </view>
               </view>
               <view v-if="telemetrySummary.byMatterCategory.length" class="telemetry-list">
-                <text class="telemetry-list-title">事项类型分布</text>
+                <text class="telemetry-list-title">{{ $t('admin.matterCategoryTitle') }}</text>
                 <view v-for="item in telemetrySummary.byMatterCategory" :key="'m-' + item.name" class="telemetry-list-row">
                   <text class="telemetry-list-name">{{ item.name }}</text>
                   <text class="telemetry-list-count">{{ item.count }}</text>
                 </view>
               </view>
               <view v-if="telemetrySummary.byTool.length" class="telemetry-list">
-                <text class="telemetry-list-title">最常用的 AI 工具</text>
+                <text class="telemetry-list-title">{{ $t('admin.topToolsTitle') }}</text>
                 <view v-for="item in telemetrySummary.byTool.slice(0, 8)" :key="'t-' + item.name" class="telemetry-list-row">
                   <text class="telemetry-list-name">{{ item.name }}</text>
                   <text class="telemetry-list-count">{{ item.count }}</text>
@@ -1183,7 +1169,7 @@
               </view>
             </view>
             <view class="section-body" v-else>
-              <text class="telemetry-empty">暂无统计数据，正常使用后这里会出现你的效率画像</text>
+              <text class="telemetry-empty">{{ $t('admin.telemetryEmpty') }}</text>
             </view>
           </view>
         </scroll-view>
@@ -1196,46 +1182,45 @@
         >
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">优化者</text>
+              <text class="section-title">{{ $t('admin.optimizerTitle') }}</text>
               <text class="section-subtitle">
-                按计划读新反馈：确认是缺陷就定位修复并开 PR（永不自动合并），
-                是建议或拿不准就发邮件请你定夺。配置见 optimizer.* 与 spring.mail.*
+                {{ $t('admin.optimizerSubtitle') }}
               </text>
             </view>
             <view class="section-body">
               <view class="fb-status-row">
                 <view class="fb-status-cell">
-                  <text class="fb-status-label">状态</text>
+                  <text class="fb-status-label">{{ $t('admin.statusLabelText') }}</text>
                   <text class="fb-status-value">
-                    {{ optimizer.enabled ? (optimizer.running ? '正在跑一轮' : '已启用') : '未启用' }}
+                    {{ optimizer.enabled ? (optimizer.running ? $t('admin.optimizerRunningNow') : $t('admin.enabledText')) : $t('admin.notEnabledText') }}
                   </text>
                 </view>
                 <view class="fb-status-cell">
-                  <text class="fb-status-label">计划</text>
+                  <text class="fb-status-label">{{ $t('admin.scheduleLabel') }}</text>
                   <text class="fb-status-value mono">{{ optimizer.cron || '—' }}</text>
                 </view>
                 <view class="fb-status-cell">
-                  <text class="fb-status-label">待处理</text>
+                  <text class="fb-status-label">{{ $t('admin.pendingLabel') }}</text>
                   <text class="fb-status-value">{{ optimizer.pending }}</text>
                 </view>
                 <view class="fb-status-cell">
-                  <text class="fb-status-label">通知出口</text>
+                  <text class="fb-status-label">{{ $t('admin.notifyChannelLabel') }}</text>
                   <text class="fb-status-value">
-                    {{ optimizer.notifyReady ? optimizer.notifyChannel : (optimizer.notifyIssue || '未配置') }}
+                    {{ optimizer.notifyReady ? optimizer.notifyChannel : (optimizer.notifyIssue || $t('admin.notConfigured')) }}
                   </text>
                 </view>
                 <view class="fb-status-cell">
-                  <text class="fb-status-label">上次运行</text>
-                  <text class="fb-status-value">{{ optimizer.lastRunAt || '从未' }}</text>
+                  <text class="fb-status-label">{{ $t('admin.lastRunLabel') }}</text>
+                  <text class="fb-status-value">{{ optimizer.lastRunAt || $t('admin.never') }}</text>
                 </view>
               </view>
               <view class="fb-actions">
-                <text class="fb-btn" @tap="reloadFeedbackPanel">刷新</text>
+                <text class="fb-btn" @tap="reloadFeedbackPanel">{{ $t('admin.refreshButton') }}</text>
                 <text
                   class="fb-btn primary"
                   :class="{ disabled: !optimizer.enabled || optimizer.running }"
                   @tap="triggerOptimizer"
-                >立即跑一轮</text>
+                >{{ $t('admin.runNowButton') }}</text>
               </view>
               <text v-if="optimizer.lastReportText" class="fb-report">{{ optimizer.lastReportText }}</text>
             </view>
@@ -1243,8 +1228,8 @@
 
           <view class="section-card">
             <view class="section-header">
-              <text class="section-title">反馈记录</text>
-              <text class="section-subtitle">用户从右下角浮窗提交的原始反馈，只改状态不删除</text>
+              <text class="section-title">{{ $t('admin.feedbackRecordsTitle') }}</text>
+              <text class="section-subtitle">{{ $t('admin.feedbackRecordsSubtitle') }}</text>
               <view class="telemetry-days-row">
                 <text
                   v-for="f in feedbackFilters"
@@ -1257,7 +1242,7 @@
             </view>
             <view class="section-body">
               <view v-if="!feedbackList.length" class="telemetry-empty">
-                <text>{{ feedbackLoading ? '加载中…' : '还没有反馈' }}</text>
+                <text>{{ feedbackLoading ? $t('common.loading') : $t('admin.noFeedbackYet') }}</text>
               </view>
               <view
                 v-for="fb in feedbackList"
@@ -1267,16 +1252,16 @@
               >
                 <view class="fb-item-head">
                   <text class="fb-chip" :class="'fb-chip-' + fb.status.toLowerCase()">{{ statusLabel(fb.status) }}</text>
-                  <text class="fb-item-title">#{{ fb.id }} · {{ fb.kind === 'IDEA' ? '建议' : '报障' }}</text>
-                  <text class="fb-item-meta">{{ fb.username || '未知用户' }} · {{ shortTime(fb.createdAt) }}</text>
+                  <text class="fb-item-title">#{{ fb.id }} · {{ fb.kind === 'IDEA' ? $t('admin.kindIdea') : $t('admin.kindBug') }}</text>
+                  <text class="fb-item-meta">{{ fb.username || $t('admin.unknownUser') }} · {{ shortTime(fb.createdAt) }}</text>
                 </view>
-                <text class="fb-item-text">{{ fb.text || fb.voiceTranscript || '（只有截图或语音）' }}</text>
+                <text class="fb-item-text">{{ fb.text || fb.voiceTranscript || $t('admin.onlyAttachment') }}</text>
                 <view class="fb-item-sub">
-                  <text class="fb-item-tag">{{ fb.page || '未知页面' }}</text>
+                  <text class="fb-item-tag">{{ fb.page || $t('admin.unknownPage') }}</text>
                   <text class="fb-item-tag">{{ fb.appVersion || '—' }}</text>
-                  <text v-if="fb.triageVerdict" class="fb-item-tag">分诊：{{ verdictLabel(fb.triageVerdict) }}</text>
+                  <text v-if="fb.triageVerdict" class="fb-item-tag">{{ $t('admin.triageLabel', { verdict: verdictLabel(fb.triageVerdict) }) }}</text>
                   <text v-if="fb.prUrl" class="fb-item-tag link" @tap.stop="openPr(fb.prUrl)">
-                    {{ fb.status === 'PR_OPENED' ? '查看 PR' : '查看 Issue' }}
+                    {{ fb.status === 'PR_OPENED' ? $t('admin.viewPr') : $t('admin.viewIssue') }}
                   </text>
                 </view>
 
@@ -1291,14 +1276,14 @@
                         @tap.stop="previewAttachment(fb.id, a.id)"
                       />
                       <text v-else class="fb-item-tag link" @tap.stop="previewAttachment(fb.id, a.id)">
-                        语音 {{ Math.round((a.sizeBytes || 0) / 1024) }} KB
+                        {{ $t('admin.voiceSize', { size: Math.round((a.sizeBytes || 0) / 1024) }) }}
                       </text>
                     </template>
                   </view>
-                  <text v-if="fb.voiceTranscript" class="fb-detail-line">语音转写：{{ fb.voiceTranscript }}</text>
+                  <text v-if="fb.voiceTranscript" class="fb-detail-line">{{ $t('admin.voiceTranscript', { text: fb.voiceTranscript }) }}</text>
                   <text v-if="feedbackDetail.triageText" class="fb-detail-line">{{ feedbackDetail.triageText }}</text>
-                  <text v-if="fb.lastError" class="fb-detail-line err">未办成：{{ fb.lastError }}</text>
-                  <text class="fb-detail-label">提交现场</text>
+                  <text v-if="fb.lastError" class="fb-detail-line err">{{ $t('admin.lastError', { error: fb.lastError }) }}</text>
+                  <text class="fb-detail-label">{{ $t('admin.contextLabel') }}</text>
                   <text class="fb-detail-pre">{{ feedbackDetail.contextText }}</text>
                 </view>
               </view>
@@ -1320,32 +1305,32 @@
     <view v-if="showAssistantModal" class="modal-overlay" @tap.stop>
         <view class="modal-content">
             <view class="modal-header">
-                <text class="modal-title">{{ isEditing ? '编辑助手' : '新增助手' }}</text>
+                <text class="modal-title">{{ isEditing ? $t('admin.editAssistantTitle') : $t('admin.newAssistantTitle') }}</text>
                 <text class="modal-close" @tap="closeAssistantModal">×</text>
             </view>
             <scroll-view scroll-y class="modal-body">
                 <view class="modal-body-inner">
                     <view class="modal-field">
-                        <text class="form-label">ID (唯一标识)</text>
-                        <input class="modal-input" v-model="editingAssistant.id" :disabled="isEditing" placeholder="例如: code-reviewer"/>
+                        <text class="form-label">{{ $t('admin.assistantIdLabel') }}</text>
+                        <input class="modal-input" v-model="editingAssistant.id" :disabled="isEditing" :placeholder="$t('admin.assistantIdPlaceholder')"/>
                     </view>
                      <view class="modal-field">
-                        <text class="form-label">助手名称</text>
-                        <input class="modal-input" v-model="editingAssistant.name" placeholder="例如: 代码评审专家"/>
+                        <text class="form-label">{{ $t('admin.assistantNameLabel') }}</text>
+                        <input class="modal-input" v-model="editingAssistant.name" :placeholder="$t('admin.assistantNamePlaceholder')"/>
                     </view>
                      <view class="modal-field">
-                        <text class="form-label">描述</text>
-                        <input class="modal-input" v-model="editingAssistant.description" placeholder="简短描述功能"/>
+                        <text class="form-label">{{ $t('admin.descriptionLabel') }}</text>
+                        <input class="modal-input" v-model="editingAssistant.description" :placeholder="$t('admin.assistantDescPlaceholder')"/>
                     </view>
                      <view class="modal-field">
-                        <text class="form-label">系统提示词</text>
-                        <textarea class="modal-textarea" v-model="editingAssistant.systemPrompt" placeholder="设定助手的角色和行为..." maxlength="-1" auto-height/>
+                        <text class="form-label">{{ $t('admin.systemPromptLabel') }}</text>
+                        <textarea class="modal-textarea" v-model="editingAssistant.systemPrompt" :placeholder="$t('admin.systemPromptPlaceholder')" maxlength="-1" auto-height/>
                     </view>
                 </view>
             </scroll-view>
             <view class="modal-footer">
-                <button class="btn-cancel" @tap="closeAssistantModal">取消</button>
-                <button class="btn-primary" @tap="saveAssistantModal">确定</button>
+                <button class="btn-cancel" @tap="closeAssistantModal">{{ $t('common.cancel') }}</button>
+                <button class="btn-primary" @tap="saveAssistantModal">{{ $t('common.confirm') }}</button>
             </view>
         </view>
     </view>
@@ -1381,7 +1366,7 @@ export default {
   components: { UnlockHint, MarketPane },
   data() {
     return {
-      userDisplayName: '用户',
+      userDisplayName: this.$t('admin.userFallbackName'),
       activeNav: 'config',
       // 应用语言：读写走 utils/appLanguage.js（storage 权威源 + App.vue 镜像同步），
       // 与 form/handleSave 无关。选项标签用各自母语，刻意不随语言翻译。
@@ -1393,16 +1378,16 @@ export default {
       /** 服务端记录的同意时间戳；空 = 未同意或告知文本已改版需重新征求 */
       crossBorderConsentAt: '',
       navItems: [
-        { key: 'config', label: '系统配置' },
-        { key: 'ai', label: 'AI 功能设置' },
-        { key: 'account', label: '账户与用量', desktopOnly: true },
-        { key: 'components', label: '组件管理', desktopOnly: true },
-        { key: 'updates', label: '软件更新', desktopOnly: true },
-        { key: 'cloud', label: '团队案件库', desktopOnly: true },
-        { key: 'memory', label: '记忆同步', desktopOnly: true },
-        { key: 'telemetry', label: '数据统计' },
-        { key: 'feedback', label: '用户反馈' },
-        { key: 'plugins', label: '插件广场' },
+        { key: 'config', label: this.$t('admin.navConfig') },
+        { key: 'ai', label: this.$t('admin.navAi') },
+        { key: 'account', label: this.$t('admin.navAccount'), desktopOnly: true },
+        { key: 'components', label: this.$t('admin.navComponents'), desktopOnly: true },
+        { key: 'updates', label: this.$t('admin.navUpdates'), desktopOnly: true },
+        { key: 'cloud', label: this.$t('admin.navCloud'), desktopOnly: true },
+        { key: 'memory', label: this.$t('admin.navMemory'), desktopOnly: true },
+        { key: 'telemetry', label: this.$t('admin.navTelemetry') },
+        { key: 'feedback', label: this.$t('admin.navFeedback') },
+        { key: 'plugins', label: this.$t('admin.navPlugins') },
       ],
       // 用户反馈与优化者（右下角浮窗提交 → 优化者分诊 → 开 PR / 发邮件）
       feedbackList: [],
@@ -1410,11 +1395,11 @@ export default {
       feedbackLoading: false,
       feedbackFilter: '',
       feedbackFilters: [
-        { key: '', label: '全部' },
-        { key: 'NEW', label: '待处理' },
-        { key: 'PR_OPENED', label: '已开 PR' },
-        { key: 'EMAILED', label: '已通知' },
-        { key: 'FAILED', label: '失败' },
+        { key: '', label: this.$t('admin.filterAll') },
+        { key: 'NEW', label: this.$t('admin.pendingLabel') },
+        { key: 'PR_OPENED', label: this.$t('admin.prOpened') },
+        { key: 'EMAILED', label: this.$t('admin.emailed') },
+        { key: 'FAILED', label: this.$t('admin.filterFailed') },
       ],
       optimizer: {
         enabled: false,
@@ -1469,9 +1454,9 @@ export default {
       modelCatalog: null,
       modelCatalogError: '',
       networkRegionOptions: [
-        { value: 'auto', label: '自动判定' },
-        { value: 'domestic', label: '境内' },
-        { value: 'international', label: '境外' },
+        { value: 'auto', label: this.$t('admin.regionAuto') },
+        { value: 'domestic', label: this.$t('admin.regionDomestic') },
+        { value: 'international', label: this.$t('admin.regionInternational') },
       ],
       // 平台 AI 通道是否可选（= 是否已连接账户），来自 /api/account/status
       platformAiAvailable: false,
@@ -1559,16 +1544,16 @@ export default {
     aiProviderOptions() {
       // 三档（GEMINI 已下线：主对话在架构上跑不通，其模型经 OpenRouter 的 google/* 仍可用）
       const options = [
-        { value: 'OLLAMA', label: '本地 Ollama（离线 / 实验，仅问答）' },
-        { value: 'OPENROUTER', label: 'OpenRouter（自备 Key）' },
+        { value: 'OLLAMA', label: this.$t('admin.providerOllama') },
+        { value: 'OPENROUTER', label: this.$t('admin.providerOpenRouter') },
       ]
       if (this.isDesktop) {
         let hint = ''
-        if (!this.platformAiAvailable) hint = '需先连接账户'
-        else if (this.accountNeedsAllocation) hint = 'Credits 余额为空，去官网充值'
+        if (!this.platformAiAvailable) hint = this.$t('admin.hintConnectFirst')
+        else if (this.accountNeedsAllocation) hint = this.$t('admin.hintTopUp')
         options.push({
           value: 'AWD_CLOUD',
-          label: 'AI Workdeck 云端',
+          label: this.$t('admin.providerAwdCloud'),
           hint,
           unavailable: !!hint,
         })
@@ -1600,8 +1585,8 @@ export default {
     },
     accountPlanLabel() {
       const plan = this.accountPlatform && this.accountPlatform.plan
-      if (plan === 'paid') return '付费账户'
-      if (plan === 'free') return '免费账户'
+      if (plan === 'paid') return this.$t('admin.paidPlan')
+      if (plan === 'free') return this.$t('admin.freePlan')
       return ''
     },
     // 额度三个数只在实时口径拿得到时才展示——拿不到时显示「暂不可用」，
@@ -1635,19 +1620,23 @@ export default {
     // 区域判定的结果与依据都要摆出来：用户要能看懂「国际模型为什么不见了」
     networkRegionSummary() {
       const c = this.modelCatalog
-      if (!c) return '模型清单尚未读取，保存后可重新进入本页查看。'
+      if (!c) return this.$t('admin.catalogNotLoaded')
       const region = c.networkRegion === 'INTERNATIONAL'
-        ? '境外网络（全部模型可用）'
-        : '境内网络（只放行境内外均可用的模型）'
-      const mode = c.networkRegionMode === 'auto' ? '自动判定' : '已手动指定，不随本机环境变化'
-      return `当前生效：${region} · ${mode} · 判定依据：${c.networkRegionBasis || '—'}`
-        + ` · 当前可用模型 ${this.catalogModels.length} 个`
+        ? this.$t('admin.regionIntlDesc')
+        : this.$t('admin.regionDomesticDesc')
+      const mode = c.networkRegionMode === 'auto' ? this.$t('admin.regionAuto') : this.$t('admin.regionManualDesc')
+      return this.$t('admin.regionSummary', {
+        region,
+        mode,
+        basis: c.networkRegionBasis || '—',
+        count: this.catalogModels.length,
+      })
     },
   },
   onLoad(query) {
     const user = getCurrentUser()
     if (user) {
-      this.userDisplayName = user.displayName || user.username || '用户'
+      this.userDisplayName = user.displayName || user.username || this.$t('admin.userFallbackName')
     }
     // 深链定位面板（顶栏「已连接账户」chip → ?nav=account）；只认当前可见的本页面板
     const nav = query && query.nav
@@ -1743,7 +1732,7 @@ export default {
           this.telemetrySettings.eventsEnabled = !!r.eventsEnabled
         }
       } catch (e) {
-        uni.showToast({ title: '保存失败，请重试', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.saveFailedPleaseRetry'), icon: 'none' })
         // 回读真实状态，避免开关显示与后端不一致
         this.loadTelemetry()
       } finally {
@@ -1764,13 +1753,15 @@ export default {
         const s = await host.update.check()
         if (s) this.update = { ...this.update, ...s }
       } catch (e) {
-        uni.showToast({ title: '检查更新失败', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.updateCheckToastFailed'), icon: 'none' })
       }
     },
     handleUpdateRestart() {
       uni.showModal({
-        title: '重启应用',
-        content: `将重启 AI Workdeck 以完成更新到 ${this.update.available ? this.update.available.version : '新版本'}。未保存的编辑会先自动保存。是否继续？`,
+        title: this.$t('admin.restartAppTitle'),
+        content: this.$t('admin.restartAppContent', {
+          version: this.update.available ? this.update.available.version : this.$t('admin.newVersionFallback'),
+        }),
         success: (r) => {
           if (r.confirm) host.update.restart()
         },
@@ -1800,8 +1791,8 @@ export default {
     },
     handleComponentDownload(comp) {
       uni.showModal({
-        title: '下载组件',
-        content: `「${comp.name}」需一次性下载${comp.sizeHint}到本机，之后离线可用。是否开始？`,
+        title: this.$t('admin.downloadComponentTitle'),
+        content: this.$t('admin.downloadComponentContent', { name: comp.name, size: comp.sizeHint }),
         success: async (r) => {
           if (!r.confirm) return
           try {
@@ -1809,7 +1800,7 @@ export default {
             comp.state = 'downloading'
             comp.percent = 0
           } catch (e) {
-            uni.showToast({ title: '启动下载失败', icon: 'none' })
+            uni.showToast({ title: this.$t('admin.startDownloadFailed'), icon: 'none' })
           }
         },
       })
@@ -1823,8 +1814,8 @@ export default {
     },
     handleComponentRemove(comp) {
       uni.showModal({
-        title: '删除组件',
-        content: `将删除「${comp.name}」的本地文件（${comp.sizeHint}），再次使用需重新下载。确认删除？`,
+        title: this.$t('admin.removeComponentTitle'),
+        content: this.$t('admin.removeComponentContent', { name: comp.name, size: comp.sizeHint }),
         success: async (r) => {
           if (!r.confirm) return
           try {
@@ -1838,11 +1829,11 @@ export default {
     async handleComponentEnable(comp) {
       // serviceName 由主进程 model-status 按组件→服务映射带回
       if (!comp.serviceName) return
-      uni.showLoading({ title: '启动中...' })
+      uni.showLoading({ title: this.$t('admin.startingService') })
       try {
         const res = await host.services.ensure(comp.serviceName)
         if (!res || !res.ok) {
-          uni.showToast({ title: '启动失败：' + ((res && res.message) || '未知错误'), icon: 'none' })
+          uni.showToast({ title: this.$t('admin.serviceStartFailed', { msg: (res && res.message) || this.$t('admin.unknownError') }), icon: 'none' })
         }
       } finally {
         uni.hideLoading()
@@ -1864,15 +1855,15 @@ export default {
     // 向导提交时按新填内容覆盖对应 key。
     handleRerunWizard() {
       uni.showModal({
-        title: '重新运行首次向导',
-        content: '将重新打开首次运行向导（重新选择 AI 提供商并填写 Key）。现有配置不会被清空，向导提交后按新填内容覆盖。是否继续？',
+        title: this.$t('admin.rerunWizard'),
+        content: this.$t('admin.rerunWizardContent'),
         success: async (r) => {
           if (!r.confirm) return
           try {
             await resetWizard()
             uni.reLaunch({ url: '/pages/wizard/wizard' })
           } catch (e) {
-            uni.showToast({ title: (e && e.message) || '重置失败', icon: 'none' })
+            uni.showToast({ title: (e && e.message) || this.$t('admin.resetFailed'), icon: 'none' })
           }
         },
       })
@@ -1922,7 +1913,7 @@ export default {
         const res = await getFeedbackList(this.feedbackFilter, 100)
         this.feedbackList = ((res && res.data && res.data.items) || [])
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '读取反馈失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('admin.loadFeedbackFailed'), icon: 'none' })
       } finally {
         this.feedbackLoading = false
       }
@@ -1941,9 +1932,13 @@ export default {
           notifyIssue: d.notifyIssue || '',
           lastRunAt: d.lastRunAt ? String(d.lastRunAt).replace('T', ' ').slice(0, 19) : '',
           lastReportText: d.lastReport
-            ? `上轮：取 ${d.lastReport.picked} 条，开 PR ${d.lastReport.prOpened}，`
-              + `邮件 ${d.lastReport.emailed}，跳过 ${d.lastReport.skipped}，未办成 ${d.lastReport.failed}`
-              + (d.lastReport.note ? `（${d.lastReport.note}）` : '')
+            ? this.$t('admin.lastReport', {
+              picked: d.lastReport.picked,
+              prOpened: d.lastReport.prOpened,
+              emailed: d.lastReport.emailed,
+              skipped: d.lastReport.skipped,
+              failed: d.lastReport.failed,
+            }) + (d.lastReport.note ? this.$t('admin.lastReportNote', { note: d.lastReport.note }) : '')
             : '',
         }
       } catch (e) {
@@ -1960,10 +1955,10 @@ export default {
       if (!this.optimizer.enabled || this.optimizer.running) return
       try {
         await runOptimizer()
-        uni.showToast({ title: '已开始，稍后刷新看结果', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.optimizerStarted'), icon: 'none' })
         this.optimizer.running = true
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '触发失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('admin.triggerFailed'), icon: 'none' })
       }
     },
     async toggleFeedbackDetail(id) {
@@ -1981,35 +1976,39 @@ export default {
           contextText: this.formatContext(d.contextJson),
         }
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '读取详情失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('admin.loadDetailFailed'), icon: 'none' })
       }
     },
     formatTriage(json) {
       if (!json) return ''
       try {
         const t = JSON.parse(json)
-        return `分诊：${this.verdictLabel(t.verdict)}（把握 ${Number(t.confidence || 0).toFixed(2)}）`
-          + `${t.summary ? ' · ' + t.summary : ''}${t.reason ? ' · 依据：' + t.reason : ''}`
+        return this.$t('admin.triageSummary', {
+          verdict: this.verdictLabel(t.verdict),
+          confidence: Number(t.confidence || 0).toFixed(2),
+        })
+          + `${t.summary ? ' · ' + t.summary : ''}`
+          + `${t.reason ? ' · ' + this.$t('admin.triageBasis', { reason: t.reason }) : ''}`
       } catch (e) {
         return ''
       }
     },
     formatContext(json) {
-      if (!json) return '（无）'
+      if (!json) return this.$t('admin.ctxNone')
       try {
         const c = JSON.parse(json)
         const lines = []
         const rt = c.runtime || {}
-        lines.push(`版本 ${rt.appVersion || '—'} · ${rt.platform || '—'} · Java ${rt.java || '—'}`)
+        lines.push(this.$t('admin.ctxVersion', { version: rt.appVersion || '—', platform: rt.platform || '—', java: rt.java || '—' }))
         const cl = c.client || {}
-        if (cl.window) lines.push(`窗口 ${cl.window.w}x${cl.window.h} @${cl.window.dpr}`)
-        if (cl.localTime) lines.push(`本地时间 ${cl.localTime}`)
+        if (cl.window) lines.push(this.$t('admin.ctxWindow', { w: cl.window.w, h: cl.window.h, dpr: cl.window.dpr }))
+        if (cl.localTime) lines.push(this.$t('admin.ctxLocalTime', { time: cl.localTime }))
         if (cl.recentErrors && cl.recentErrors.length) {
-          lines.push(`最近前端报错 ${cl.recentErrors.length} 条：`)
+          lines.push(this.$t('admin.ctxRecentErrors', { count: cl.recentErrors.length }))
           cl.recentErrors.slice(-5).forEach((e) => lines.push(`  · ${e.message}`))
         }
         if (c.backendLogTail) {
-          lines.push('后端日志尾巴（末 20 行）：')
+          lines.push(this.$t('admin.ctxBackendLog'))
           String(c.backendLogTail).trim().split('\n').slice(-20).forEach((l) => lines.push('  ' + l))
         }
         return lines.join('\n')
@@ -2032,12 +2031,12 @@ export default {
     },
     statusLabel(s) {
       return ({
-        NEW: '待处理', PR_OPENED: '已开 PR', EMAILED: '已通知',
-        SKIPPED: '已跳过', FAILED: '处理失败',
+        NEW: this.$t('admin.pendingLabel'), PR_OPENED: this.$t('admin.prOpened'), EMAILED: this.$t('admin.emailed'),
+        SKIPPED: this.$t('admin.skipped'), FAILED: this.$t('admin.processFailed'),
       })[s] || s
     },
     verdictLabel(v) {
-      return ({ BUG: '缺陷', SUGGESTION: '建议', UNCLEAR: '待定夺', NOISE: '无效' })[v] || v || '—'
+      return ({ BUG: this.$t('admin.verdictBug'), SUGGESTION: this.$t('admin.kindIdea'), UNCLEAR: this.$t('admin.verdictUnclear'), NOISE: this.$t('admin.verdictNoise') })[v] || v || '—'
     },
     shortTime(t) {
       return t ? String(t).replace('T', ' ').slice(0, 16) : ''
@@ -2055,10 +2054,9 @@ export default {
     },
     async onSwitchIdentity(item) {
       const ok = await new Promise((r) => uni.showModal({
-        title: '切换本机工作区',
-        content: `切换到「${item.displayName || item.username}」后，项目与文件会换成该账号名下的内容。`
-          + '当前账号的数据不会被删除或移动，随时可以切回来。切换后应用会重新启动。',
-        confirmText: '切换',
+        title: this.$t('admin.switchIdentityTitle'),
+        content: this.$t('admin.switchIdentityContent', { name: item.displayName || item.username }),
+        confirmText: this.$t('admin.switchButton'),
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -2069,7 +2067,7 @@ export default {
         uni.removeStorageSync('checkba_last_project_id')
         uni.reLaunch({ url: '/pages/launch/launch' })
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '切换失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('admin.switchFailed'), icon: 'none' })
       } finally {
         this.identityBusy = false
       }
@@ -2084,8 +2082,8 @@ export default {
         const uid = me && me.data && me.data.id
         if (uid) {
           repos.push(this.newMemoryRepo(
-            `user-${uid}-memory`, '我的记忆',
-            '跟着人走的积累（工作习惯、常用表述等），在任何案卷里都会用到',
+            `user-${uid}-memory`, this.$t('admin.myMemoryTitle'),
+            this.$t('admin.myMemorySubtitle'),
           ))
         }
       } catch (e) {
@@ -2104,8 +2102,8 @@ export default {
         }
         repos.push(this.newMemoryRepo(
           `project-${projectId}-memory`,
-          name ? `案卷记忆：${name}` : '当前案卷记忆',
-          '跟着这份案卷走的积累（案情要点、文件脉络等）',
+          name ? this.$t('admin.caseMemoryTitleNamed', { name }) : this.$t('admin.caseMemoryTitle'),
+          this.$t('admin.caseMemorySubtitle'),
         ))
       }
       this.memoryRepos = repos
@@ -2136,16 +2134,16 @@ export default {
         repo.form.secret = ''
       } catch (e) {
         repo.status = { configured: false }
-        repo.feedback = (e && e.message) || '状态读取失败，稍后重试'
+        repo.feedback = (e && e.message) || this.$t('admin.statusReadFailed')
         repo.feedbackError = true
       }
     },
     memoryStatusLabel(repo) {
       const s = repo.status
       if (!s) return ''
-      if (!s.configured) return '未配置'
-      if (s.pendingUpload) return '已配置 · 有更新待推送'
-      return s.lastSyncAt ? `上次同步 ${this.formatUsageTime(s.lastSyncAt)}` : '已配置'
+      if (!s.configured) return this.$t('admin.memoryNotConfigured')
+      if (s.pendingUpload) return this.$t('admin.memoryConfiguredPending')
+      return s.lastSyncAt ? this.$t('admin.memoryLastSync', { time: this.formatUsageTime(s.lastSyncAt) }) : this.$t('admin.memoryConfigured')
     },
     memoryStatusClass(repo) {
       const s = repo.status
@@ -2157,13 +2155,13 @@ export default {
     memorySecretPlaceholder(repo) {
       const masked = repo.status && repo.status.secretMasked
       return masked
-        ? `已保存（${masked}），留空表示沿用`
-        : '设备令牌或 Git 访问令牌，没有可留空'
+        ? this.$t('admin.memorySecretSaved', { masked })
+        : this.$t('admin.memorySecretPlaceholderText')
     },
     async onSaveMemoryRemote(repo) {
       const url = (repo.form.url || '').trim()
       if (!url) {
-        repo.feedback = '同步地址不能为空'
+        repo.feedback = this.$t('admin.memoryUrlRequired')
         repo.feedbackError = true
         return
       }
@@ -2176,10 +2174,10 @@ export default {
           secret: repo.form.secret || '',
         })
         const sync = res && res.data && res.data.sync
-        this.applyMemorySyncResult(repo, sync, '配置已保存')
+        this.applyMemorySyncResult(repo, sync, this.$t('admin.memorySaved'))
         await this.refreshMemoryStatus(repo)
       } catch (e) {
-        repo.feedback = (e && e.message) || '保存失败，稍后重试'
+        repo.feedback = (e && e.message) || this.$t('admin.saveFailedRetry')
         repo.feedbackError = true
       } finally {
         repo.busy = false
@@ -2190,10 +2188,10 @@ export default {
       repo.feedback = ''
       try {
         const res = await syncMemoryNow(repo.repoKey)
-        this.applyMemorySyncResult(repo, res && res.data, '同步完成')
+        this.applyMemorySyncResult(repo, res && res.data, this.$t('admin.syncDone'))
         await this.refreshMemoryStatus(repo)
       } catch (e) {
-        repo.feedback = (e && e.message) || '同步失败，稍后会自动重试'
+        repo.feedback = (e && e.message) || this.$t('admin.syncFailedAutoRetry')
         repo.feedbackError = true
       } finally {
         repo.busy = false
@@ -2207,21 +2205,21 @@ export default {
         return
       }
       if (sync.offline) {
-        repo.feedback = `${okText}，但暂时连不上同步地址，稍后会自动重试`
+        repo.feedback = this.$t('admin.syncOffline', { ok: okText })
         repo.feedbackError = true
       } else if (sync.pendingUpload) {
-        repo.feedback = `${okText}，推送暂未成功，稍后会自动重试`
+        repo.feedback = this.$t('admin.syncPendingPush', { ok: okText })
         repo.feedbackError = true
       } else {
-        repo.feedback = `${okText}，本机记忆已与远端一致`
+        repo.feedback = this.$t('admin.syncInSync', { ok: okText })
         repo.feedbackError = false
       }
     },
     async onDisconnectMemory(repo) {
       const ok = await new Promise((r) => uni.showModal({
-        title: '断开记忆同步',
-        content: '断开后本机记忆完整保留，只是不再与远端同步；远端仓库也不会被删除。随时可以重新配置。',
-        confirmText: '断开',
+        title: this.$t('admin.memoryDisconnectTitle'),
+        content: this.$t('admin.memoryDisconnectContent'),
+        confirmText: this.$t('admin.disconnect'),
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -2229,10 +2227,10 @@ export default {
       try {
         await removeMemorySyncRemote(repo.repoKey)
         await this.refreshMemoryStatus(repo)
-        repo.feedback = '已断开，本机记忆不受影响'
+        repo.feedback = this.$t('admin.memoryDisconnected')
         repo.feedbackError = false
       } catch (e) {
-        repo.feedback = (e && e.message) || '断开失败，稍后重试'
+        repo.feedback = (e && e.message) || this.$t('admin.disconnectFailedRetry')
         repo.feedbackError = true
       } finally {
         repo.busy = false
@@ -2260,8 +2258,9 @@ export default {
         this.modelCatalog = null
         // 拿不到清单时下拉只剩「跟随内置默认」与已保存的值：宁可少给选项，
         // 也不要在这里塞一份硬编码清单当兜底（那正是三份清单互不同步的来源）
-        this.modelCatalogError = '模型清单暂时读取不到'
-          + ((e && e.message) ? ('：' + e.message) : '，稍后重新进入本页再试')
+        this.modelCatalogError = (e && e.message)
+          ? this.$t('admin.catalogLoadFailedWithMsg', { msg: e.message })
+          : this.$t('admin.catalogLoadFailedRetry')
       }
     },
     // 某个模型字段的可选项。第一项是「跟随内置默认 / 继承辅助模型」（空串）；
@@ -2270,15 +2269,16 @@ export default {
     modelOptionsFor(field) {
       const options = [{
         value: '',
-        label: field === 'subagentModel' ? '继承辅助模型' : '跟随内置默认',
+        label: field === 'subagentModel' ? this.$t('admin.inheritAux') : this.$t('admin.followBuiltIn'),
       }]
       this.catalogModels.forEach((m) => {
         const price = (m.inputPricePerM != null && m.outputPricePerM != null)
-          ? ` · $${m.inputPricePerM}/$${m.outputPricePerM} 每 1M token`
+          ? this.$t('admin.modelPrice', { in: m.inputPricePerM, out: m.outputPricePerM })
           : ''
         options.push({
           value: m.id,
-          label: `${m.name}（${m.vendor}）${price}${m.tiered ? ' · 分档计价' : ''}`,
+          label: this.$t('admin.modelOption', { name: m.name, vendor: m.vendor })
+            + price + (m.tiered ? this.$t('admin.tieredSuffix') : ''),
         })
       })
       const current = this.form.ai[field] || ''
@@ -2286,7 +2286,9 @@ export default {
         // 清单没读到时不要说成「区域不可用」，那是两回事
         options.push({
           value: current,
-          label: this.modelCatalog ? `${current}（当前网络区域不可用）` : `${current}（已保存）`,
+          label: this.modelCatalog
+            ? this.$t('admin.modelUnavailableInRegion', { model: current })
+            : this.$t('admin.modelSaved', { model: current }),
         })
       }
       return options
@@ -2319,7 +2321,7 @@ export default {
     onPickProvider(opt) {
       if (opt.value === this.form.ai.activeProvider) return
       if (opt.unavailable) {
-        uni.showToast({ title: opt.hint || '当前不可用', icon: 'none' })
+        uni.showToast({ title: opt.hint || this.$t('admin.currentlyUnavailable'), icon: 'none' })
         return
       }
       this.form.ai.activeProvider = opt.value
@@ -2347,14 +2349,9 @@ export default {
     async onSwitchSite(target) {
       if (this.siteBusy) return
       const ok = await new Promise((r) => uni.showModal({
-        title: '切换到' + target.displayName,
-        content: '两个站点的账户体系彼此独立。切换后本机会清除：\n'
-          + '· 账户连接（之后要用 ' + target.displayName + ' 的账户 Key 重新连接）\n'
-          + '· 已购权益缓存\n'
-          + '· 平台 AI 额度密钥\n'
-          + '· 用账户 Key 解锁的授权\n\n'
-          + '用试用码解锁的授权不受影响，本机的项目与文件也一个都不会动。',
-        confirmText: '切换站点',
+        title: this.$t('admin.switchToSite', { name: target.displayName }),
+        content: this.$t('admin.siteSwitchConfirmContent', { name: target.displayName }),
+        confirmText: this.$t('admin.siteSwitchConfirm'),
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -2368,18 +2365,18 @@ export default {
         await this.loadAccount()
         await refreshEntitlements(true)
         await this.loadStorageLocation()
-        const lines = ['已切换到' + target.displayName + '。']
+        const lines = [this.$t('admin.siteSwitchedLine', { name: target.displayName })]
         // 平台通道此刻必然没有密钥，后端会把 AI 供应商降级，不说一声用户会以为是自己改的
         if (res && res.aiProviderFallback) {
-          lines.push('AI 供应商已从「AI Workdeck 云端」回落到本机可用的通道，可在「AI 功能设置」里重新选择。')
+          lines.push(this.$t('admin.siteAiFallbackLine'))
         }
         // 广场地址与统计上报地址在后端属性层固化，本次启动内不会变
-        lines.push('插件广场与统计上报将在下次启动后指向新站点。')
-        uni.showModal({ title: '站点已切换', content: lines.join('\n\n'), showCancel: false })
+        lines.push(this.$t('admin.siteNextLaunchLine'))
+        uni.showModal({ title: this.$t('admin.siteSwitchedTitle'), content: lines.join('\n\n'), showCancel: false })
       } catch (e) {
         uni.showModal({
-          title: '切换未完成',
-          content: (e && e.message) || '切换站点失败，站点维持不变。',
+          title: this.$t('admin.siteSwitchFailedTitle'),
+          content: (e && e.message) || this.$t('admin.siteSwitchFailedContent'),
           showCancel: false,
         })
       } finally {
@@ -2430,11 +2427,11 @@ export default {
         await refreshEntitlements(true)
         await this.loadStorageLocation()
         uni.showToast({
-          title: this.stageUnlimited ? '权益已更新' : '已刷新，未发现新的解锁',
+          title: this.stageUnlimited ? this.$t('admin.entitlementsUpdated') : this.$t('admin.entitlementsNoNew'),
           icon: 'none',
         })
       } catch (e) {
-        uni.showToast({ title: '刷新失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.refreshFailedRetry'), icon: 'none' })
       } finally {
         this.entitlementBusy = false
       }
@@ -2453,11 +2450,12 @@ export default {
     async onResetStorageLocation() {
       const previous = this.storageLocation.path
       const ok = await new Promise((r) => uni.showModal({
-        title: '恢复默认位置',
-        content: '应用将改用默认目录：\n' + (this.storageLocation.defaultPath || '')
-          + '\n\n当前目录中的文件不会被删除，仍完整保留在：\n' + previous
-          + '\n\n恢复后这些文件在应用里将不再出现（数据仍在磁盘上），可稍后自行拷回或重新迁移。',
-        confirmText: '恢复默认',
+        title: this.$t('admin.resetLocationButton'),
+        content: this.$t('admin.resetLocationContent', {
+          defaultPath: this.storageLocation.defaultPath || '',
+          previous,
+        }),
+        confirmText: this.$t('admin.restoreDefaultConfirm'),
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -2467,14 +2465,14 @@ export default {
         await resetStorageLocation()
         await this.loadStorageLocation()
         uni.showModal({
-          title: '已恢复默认位置',
-          content: '原目录中的文件一个都没有删除，仍在：\n' + previous,
+          title: this.$t('admin.resetDoneTitle'),
+          content: this.$t('admin.resetDoneContent', { previous }),
           showCancel: false,
         })
       } catch (e) {
         uni.showModal({
-          title: '恢复未完成',
-          content: (e && e.message) || '恢复失败，存储位置维持不变。',
+          title: this.$t('admin.resetFailedTitle'),
+          content: (e && e.message) || this.$t('admin.resetFailedContent'),
           showCancel: false,
         })
       } finally {
@@ -2484,27 +2482,26 @@ export default {
     async onChangeStorageLocation() {
       const desktop = host.fs && typeof host.fs.showOpenDialog === 'function' ? host : null
       if (!desktop) {
-        uni.showToast({ title: '仅桌面版支持选择目录', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.desktopOnlyDirPicker'), icon: 'none' })
         return
       }
       let picked
       try {
         const res = await desktop.fs.showOpenDialog({
-          title: '选择文件缓存区存储位置',
+          title: this.$t('admin.storagePickerTitle'),
           properties: ['openDirectory', 'createDirectory'],
         })
         if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
         picked = res.filePaths[0]
       } catch (e) {
-        uni.showToast({ title: '打开目录选择器失败', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.openDirPickerFailed'), icon: 'none' })
         return
       }
 
       const ok = await new Promise((r) => uni.showModal({
-        title: '迁移到新位置',
-        content: '将把现有文件复制到：\n' + picked
-          + '\n\n复制并校验通过后才会切换，原目录会完整保留为备份。迁移期间请不要编辑文档。',
-        confirmText: '开始迁移',
+        title: this.$t('admin.migrateTitle'),
+        content: this.$t('admin.migrateContent', { path: picked }),
+        confirmText: this.$t('admin.migrateConfirm'),
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -2515,16 +2512,18 @@ export default {
         await this.loadStorageLocation()
         const data = (res && res.data) || {}
         uni.showModal({
-          title: '迁移完成',
-          content: '已迁移 ' + (data.movedFiles || 0) + ' 个文件到新位置。\n\n原目录仍保留在：\n'
-            + (data.previousPath || '') + '\n\n确认一切正常后，可自行删除原目录。',
+          title: this.$t('admin.migrateDoneTitle'),
+          content: this.$t('admin.migrateDoneContent', {
+            count: data.movedFiles || 0,
+            previous: data.previousPath || '',
+          }),
           showCancel: false,
         })
       } catch (e) {
         // 失败即回滚：存储位置维持原样，用户数据一个字节没动
         uni.showModal({
-          title: '迁移未完成',
-          content: (e && e.message) || '迁移失败。存储位置维持不变，文件未受影响。',
+          title: this.$t('admin.migrateFailedTitle'),
+          content: (e && e.message) || this.$t('admin.migrateFailedContent'),
           showCancel: false,
         })
       } finally {
@@ -2534,7 +2533,7 @@ export default {
     async onConnectAccount() {
       const key = (this.accountKeyInput || '').trim()
       if (!key) {
-        uni.showToast({ title: '请先粘贴账户 Key', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.pasteKeyFirst'), icon: 'none' })
         return
       }
       this.accountBusy = true
@@ -2545,18 +2544,18 @@ export default {
         // 已购功能解锁随账户走，连接后必须让权益缓存失效重取
         await refreshEntitlements(true)
         this.notifyMarketAccountChanged()
-        uni.showToast({ title: '已连接账户', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.accountConnectedToast'), icon: 'none' })
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '连接失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('admin.connectFailed'), icon: 'none' })
       } finally {
         this.accountBusy = false
       }
     },
     async onDisconnectAccount() {
       const ok = await new Promise((r) => uni.showModal({
-        title: '断开账户连接',
-        content: '断开后本机将清除账户 Key：不再能使用平台 AI 通道，已购插件与功能解锁也会同步失效。本机数据不受影响，随时可以重新连接。',
-        confirmText: '断开',
+        title: this.$t('admin.disconnectAccountTitle'),
+        content: this.$t('admin.disconnectAccountContent'),
+        confirmText: this.$t('admin.disconnect'),
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -2572,15 +2571,15 @@ export default {
           this.form.ai.activeProvider = fallback
           const label = (this.aiProviderOptions.find((o) => o.value === fallback) || {}).label || fallback
           uni.showModal({
-            title: '已断开连接',
-            content: 'AI 供应商原本是「AI Workdeck 云端」，断开后已切换为「' + label + '」。可在「AI 服务配置」重新选择。',
+            title: this.$t('admin.disconnectedTitle'),
+            content: this.$t('admin.providerFallbackContent', { label }),
             showCancel: false,
           })
         } else {
-          uni.showToast({ title: '已断开连接', icon: 'none' })
+          uni.showToast({ title: this.$t('admin.disconnectedTitle'), icon: 'none' })
         }
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '操作失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('common.failed'), icon: 'none' })
       }
     },
     /**
@@ -2609,8 +2608,8 @@ export default {
     // 费用口径标注（Spec §3：本地估算与平台结算两套数字必须分得开）
     usageSourceLabel(row) {
       const src = row && row.costSource
-      if (src === 'platform') return '平台结算'
-      if (src === 'estimate') return '本地估算'
+      if (src === 'platform') return this.$t('admin.usagePlatform')
+      if (src === 'estimate') return this.$t('admin.usageEstimate')
       return ''
     },
     // 平台通道在对账完成前 cost 为 null——显示「待结算」，
@@ -2618,7 +2617,7 @@ export default {
     usageCostText(row) {
       const cost = row && row.cost
       if (cost === null || cost === undefined || cost === '') {
-        return row && row.costSource === 'platform' ? '待结算' : '—'
+        return row && row.costSource === 'platform' ? this.$t('admin.pendingSettlement') : '—'
       }
       // 估算值加约等号，避免和真实账单混淆
       const prefix = row && row.costSource === 'estimate' ? '≈' : ''
@@ -2648,17 +2647,17 @@ export default {
         )
         this.cloudForm = { serverUrl: '', username: '', password: '' }
         await this.loadCloudConnections()
-        uni.showToast({ title: '已连上团队案件库', icon: 'none' })
+        uni.showToast({ title: this.$t('admin.cloudConnectedToast'), icon: 'none' })
       } catch (e) {
-        uni.showToast({ title: e.message || '连接失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('admin.connectFailed'), icon: 'none' })
       } finally {
         this.cloudBusy = false
       }
     },
     async onDisconnectCloud(conn) {
       const ok = await new Promise((r) => uni.showModal({
-        title: '退出这个案件库',
-        content: '退出后本机不再和这个案件库同步；已经放进去的案卷要重新连上才能继续交稿。案件库里的内容不受影响。',
+        title: this.$t('admin.cloudDisconnectButton'),
+        content: this.$t('admin.cloudDisconnectContent'),
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -2666,7 +2665,7 @@ export default {
         await disconnectCloudConnection(conn.id)
         await this.loadCloudConnections()
       } catch (e) {
-        uni.showToast({ title: e.message || '操作失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('common.failed'), icon: 'none' })
       }
     },
     async loadConfig() {
@@ -2731,21 +2730,21 @@ export default {
       } catch (e) {
         console.error('加载后台配置失败', e)
         // 403（非 admin 账号）时把后端原因带给用户：请用 admin 账号登录后配置
-        uni.showToast({ title: (e && e.message) || '加载配置失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('admin.loadConfigFailed'), icon: 'none' })
       }
     },
     async handleSave() {
       this.saving = true
       try {
         await saveAdminConfig(this.form)
-        uni.showToast({ title: '保存成功', icon: 'success' })
+        uni.showToast({ title: this.$t('admin.saveSuccess'), icon: 'success' })
         // 区域一改，可用模型清单跟着变；默认模型也可能因此落到清单外，
         // 保存后重新拉一次目录，让页面上显示的就是新口径
         this.loadModelCatalog()
       } catch (e) {
         console.error('保存后台配置失败', e)
         uni.showToast({
-          title: e.message || '保存失败',
+          title: e.message || this.$t('admin.saveFailed'),
           icon: 'none',
         })
       } finally {
@@ -2773,9 +2772,9 @@ export default {
     },
     handleDeleteAssistant(index) {
         uni.showModal({
-            title: '确认删除',
-            content: '确定要删除这个助手吗？',
-            confirmText: '删除',
+            title: this.$t('admin.confirmDeleteTitle'),
+            content: this.$t('admin.confirmDeleteAssistant'),
+            confirmText: this.$t('common.delete'),
             confirmColor: '#ff4d4f',
             success: (res) => {
                 if (res.confirm) {
@@ -2789,7 +2788,7 @@ export default {
     },
     saveAssistantModal() {
         if (!this.editingAssistant.id || !this.editingAssistant.name) {
-            uni.showToast({ title: 'ID和名称不能为空', icon: 'none' });
+            uni.showToast({ title: this.$t('admin.idNameRequired'), icon: 'none' });
             return;
         }
         
@@ -2797,7 +2796,7 @@ export default {
         if (!this.isEditing) {
             const exists = this.form.ai.assistants.find(a => a.id === this.editingAssistant.id);
             if (exists) {
-                uni.showToast({ title: 'ID 已存在', icon: 'none' });
+                uni.showToast({ title: this.$t('admin.idExists'), icon: 'none' });
                 return;
             }
             this.form.ai.assistants.push(this.editingAssistant);

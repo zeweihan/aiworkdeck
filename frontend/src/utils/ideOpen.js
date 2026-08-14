@@ -3,6 +3,7 @@
 
 import { openLocalProject } from '@/services/api.js'
 import { host } from '@/services/host.js'
+import { t } from '@/i18n'
 
 export function desktopFsApi() {
   return (host.fs && host.fs.showOpenDialog) ? host.fs : null
@@ -12,10 +13,10 @@ async function launchProject(payload) {
   const r = await openLocalProject(payload)
   const d = (r && r.data) || {}
   if (!d.projectId) {
-    throw new Error('打开项目失败，请稍后重试')
+    throw new Error(t('common.openProjectFailed'))
   }
   if (d.truncated) {
-    uni.showToast({ title: '文件夹内容过多，仅导入了前 3000 项', icon: 'none' })
+    uni.showToast({ title: t('common.folderImportTruncated'), icon: 'none' })
   }
   const query = `id=${d.projectId}` + (d.openFileId ? `&openFileId=${d.openFileId}` : '')
   // reLaunch：避免页面栈里堆叠多个 project-overview 实例（全局监听多实例地雷）
@@ -27,8 +28,8 @@ export async function openFolderFlow() {
   const fs = desktopFsApi()
   if (!fs) return false
   const res = await fs.showOpenDialog({
-    title: '打开文件夹',
-    buttonLabel: '打开',
+    title: t('common.openFolder'),
+    buttonLabel: t('common.open'),
     properties: ['openDirectory', 'createDirectory'],
   })
   if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return false
@@ -41,15 +42,15 @@ export async function openFileFlow() {
   const fs = desktopFsApi()
   if (!fs) return false
   const res = await fs.showOpenDialog({
-    title: '打开文件',
-    buttonLabel: '打开',
+    title: t('common.openFile'),
+    buttonLabel: t('common.open'),
     properties: ['openFile'],
   })
   if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return false
   const filePath = res.filePaths[0]
   const idx = Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\'))
   if (idx <= 0) {
-    throw new Error('无法识别该文件的所在文件夹')
+    throw new Error(t('common.cannotResolveParentFolder'))
   }
   await launchProject({
     localRoot: filePath.slice(0, idx),
@@ -69,7 +70,7 @@ export async function openLocalRootPath(absPath) {
 export async function openLocalFilePath(absPath) {
   if (!absPath) return false
   const idx = Math.max(absPath.lastIndexOf('/'), absPath.lastIndexOf('\\'))
-  if (idx <= 0) throw new Error('无法识别该文件的所在文件夹')
+  if (idx <= 0) throw new Error(t('common.cannotResolveParentFolder'))
   await launchProject({ localRoot: absPath.slice(0, idx), openFileName: absPath.slice(idx + 1) })
   return true
 }

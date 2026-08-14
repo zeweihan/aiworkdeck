@@ -1,9 +1,11 @@
 // 左侧侧边栏（IDE 左栏）插件位配置：集中维护，避免页面内硬编码
 
+import { t } from '@/i18n'
+
 export const LEFT_SIDEBAR_PLUGINS = [
   {
     key: 'files',
-    label: '资源管理器',
+    label: t('config.sidebar.files'),
     svgPaths: [
       { d: 'M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7l-5-5Z' },
       { d: 'M15 2v5h5' },
@@ -13,7 +15,7 @@ export const LEFT_SIDEBAR_PLUGINS = [
   },
   {
     key: 'dd-files',
-    label: '尽调文件',
+    label: t('config.sidebar.ddFiles'),
     svgPaths: [
       { d: 'M3 5l1.5 1.5L7 4' },
       { d: 'M3 12l1.5 1.5L7 10.5' },
@@ -25,7 +27,7 @@ export const LEFT_SIDEBAR_PLUGINS = [
   },
   {
     key: 'shareholder-meeting',
-    label: '股东大会',
+    label: t('config.sidebar.shareholderMeeting'),
     svgPaths: [
       { d: 'M3 22h18' },
       { d: 'M6 18v-7' },
@@ -37,7 +39,7 @@ export const LEFT_SIDEBAR_PLUGINS = [
   },
   {
     key: 'litigation-visual',
-    label: '诉讼可视化',
+    label: t('config.sidebar.litigationVisual'),
     // 对应 skill.yml 的 enabled_by_default:false——默认不装，装了才出现在左栏。
     // 见 filterPluginsByEnabledSkills。
     requiresSkill: 'litigation-visual',
@@ -53,7 +55,7 @@ export const LEFT_SIDEBAR_PLUGINS = [
   },
   {
     key: 'search',
-    label: '搜索',
+    label: t('config.sidebar.search'),
     svgPaths: [
       { d: "M11 19C15.4183 19 19 15.4183 19 11C19 6.58172 15.4183 3 11 3C6.58172 3 3 6.58172 3 11C3 15.4183 6.58172 19 11 19Z" },
       { d: "M21 21L16.65 16.65" }
@@ -73,14 +75,14 @@ export const LEFT_SIDEBAR_PLUGINS = [
   },
   {
     key: 'desensitize',
-    label: '文件脱敏',
+    label: t('config.sidebar.desensitize'),
     svgPaths: [
       { d: "M12 22C12 22 20 18 20 12V5L12 2L4 5V12C4 18 12 22 12 22Z" }
     ]
   },
   {
     key: 'version',
-    label: '版本',
+    label: t('config.sidebar.version'),
     svgPaths: [
       { d: "M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" },
       { d: "M12 7V12L15.5 14" }

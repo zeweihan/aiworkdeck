@@ -4,7 +4,7 @@
       <input 
         v-model="searchText"
         class="tag-input"
-        placeholder="添加标签..."
+        :placeholder="$t('files.addTagPlaceholder')"
         @focus="showDropdown = true"
         confirm-type="done"
       />
@@ -19,10 +19,10 @@
       <!-- Color Picker Mode -->
       <view v-if="isCreatingTag" class="color-picker-mode">
         <view class="picker-header">
-          <text class="picker-title">创建新标签: "{{ pendingTagName }}"</text>
+          <text class="picker-title">{{ $t('files.createNewTag', { name: pendingTagName }) }}</text>
         </view>
-        
-        <text class="picker-subtitle">选择颜色</text>
+
+        <text class="picker-subtitle">{{ $t('files.pickColor') }}</text>
         <scroll-view scroll-x class="color-scroll" :show-scrollbar="false">
             <view class="color-row">
               <view 
@@ -43,8 +43,8 @@
         </scroll-view>
 
         <view class="picker-actions-compact">
-          <view class="cancel-btn-compact" @click="cancelCreate">取消</view>
-          <view class="confirm-btn-compact" @click="confirmCreate">创建</view>
+          <view class="cancel-btn-compact" @click="cancelCreate">{{ $t('common.cancel') }}</view>
+          <view class="confirm-btn-compact" @click="confirmCreate">{{ $t('files.create') }}</view>
         </view>
       </view>
       
@@ -62,18 +62,18 @@
           </view>
         </view>
         <view v-else-if="searchText" class="no-tags">
-          <text>未找到相关标签</text>
+          <text>{{ $t('files.noTagsFound') }}</text>
           <view class="create-option-card" @click="startCreate">
              <view class="create-icon">+</view>
-             <text>创建 "{{ searchText }}"</text>
+             <text>{{ $t('files.createTagQuoted', { name: searchText }) }}</text>
           </view>
         </view>
         <view v-else class="no-tags">
-          <text>搜索或创建标签</text>
+          <text>{{ $t('files.searchOrCreateTag') }}</text>
         </view>
         
         <view class="dropdown-footer">
-          <text class="manage-link" @click="openManager">管理所有标签</text>
+          <text class="manage-link" @click="openManager">{{ $t('files.manageAllTags') }}</text>
           <view class="close-btn-icon" @click.stop="showDropdown = false">
              <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="16" height="16">
                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />

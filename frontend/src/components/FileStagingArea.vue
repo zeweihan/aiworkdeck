@@ -12,13 +12,13 @@
     <!-- Header / Title -->
     <view class="staging-header">
       <view class="header-left">
-        <text class="staging-title">文件暂存区</text>
+        <text class="staging-title">{{ $t('files.stagingTitle') }}</text>
         <view v-if="files.length > 0" class="staging-actions">
-            <text class="clear-btn" @tap.stop="$emit('clear')">清空</text>
+            <text class="clear-btn" @tap.stop="$emit('clear')">{{ $t('files.clear') }}</text>
         </view>
       </view>
       <view class="header-right">
-        <view class="collapse-btn" @tap.stop="$emit('collapse')" title="收起">
+        <view class="collapse-btn" @tap.stop="$emit('collapse')" :title="$t('files.collapse')">
           <text class="collapse-icon">▼</text>
         </view>
       </view>
@@ -35,7 +35,7 @@
     <UnlockHint
       v-if="quotaTight"
       class="staging-unlock-hint"
-      text="缓存区快满了，解锁无限版可不限文件数与容量"
+      :text="$t('files.quotaTightHint')"
     />
 
     <!-- Contrast Button (Visible when exactly 2 DOC/DOCX files are selected) -->
@@ -44,13 +44,13 @@
          <svg class="compare-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
            <path v-for="(d, gi) in ICONS.compare" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
          </svg>
-         <text>对比选中文件</text>
+         <text>{{ $t('files.compareSelected') }}</text>
        </button>
     </view>
     
     <!-- Empty State (Drop Zone Hint) -->
     <view v-if="files.length === 0" class="staging-empty">
-       <text>拖拽文件到此处暂存</text>
+       <text>{{ $t('files.dragHereToStage') }}</text>
     </view>
 
     <!-- File List Container -->
@@ -99,7 +99,7 @@
       @dragleave.prevent="onDragLeave"
       @drop.prevent="onDrop"
     >
-      <text>松手暂存文件</text>
+      <text>{{ $t('files.dropToStage') }}</text>
     </view>
     
   </view>
@@ -159,7 +159,12 @@ export default {
     quotaText() {
       if (!this.quotaVisible) return ''
       const u = this.usage
-      return `${u.fileCount || 0}/${u.maxFiles} 个文件 · ${this.formatSize(u.totalBytes || 0)}/${this.formatSize(u.maxBytes)}`
+      return this.$t('files.quotaText', {
+        count: u.fileCount || 0,
+        max: u.maxFiles,
+        used: this.formatSize(u.totalBytes || 0),
+        total: this.formatSize(u.maxBytes)
+      })
     },
     canCompare() {
       if (this.selectedIds.length !== 2) return false

@@ -1,13 +1,15 @@
 // 工作台交互文案与内部协议集中维护（禁止在组件中硬编码）
 
+import { t } from '@/i18n'
+
 export const OCR_ACTION_LABELS = {
-  refresh: '刷新画面',
-  recognize: '识别',
-  download: '下载',
-  copy: '复制',
-  insertDoc: '插入文档',
-  webLink: '网核关联',
-  favorite: '加入收藏'
+  refresh: t('config.ocr.refresh'),
+  recognize: t('config.ocr.recognize'),
+  download: t('config.ocr.download'),
+  copy: t('config.ocr.copy'),
+  insertDoc: t('config.ocr.insertDoc'),
+  webLink: t('config.ocr.webLink'),
+  favorite: t('config.ocr.favorite')
 }
 
 // WPS 内部超链接协议：用于拦截点击并在应用内打开

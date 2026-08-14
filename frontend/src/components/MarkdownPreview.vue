@@ -1,7 +1,7 @@
 <template>
   <view class="markdown-preview">
     <view v-if="loading" class="markdown-loading">
-      <text>正在加载...</text>
+      <text>{{ $t('files.loadingDots') }}</text>
     </view>
     <view v-else class="markdown-body" v-html="displayedHtml"></view>
   </view>
@@ -76,7 +76,7 @@ export default {
         this.loadedContent = await response.text()
       } catch (e) {
         console.error('加载 Markdown 文件失败:', e)
-        this.loadedContent = `加载失败: ${e.message}`
+        this.loadedContent = this.$t('files.loadFailedWithReason', { reason: e.message })
       } finally {
         this.loading = false
       }

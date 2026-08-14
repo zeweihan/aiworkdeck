@@ -6,17 +6,17 @@
       <view class="awd-dialog awd-dialog-large" @tap.stop>
         <view class="awd-dialog-header">
           <view class="header-row">
-            <text class="awd-dialog-title">上传文件</text>
-            <text class="awd-dialog-subtitle">选择目标位置并选择要上传的文档</text>
+            <text class="awd-dialog-title">{{ $t('chat.uploadFileTitle') }}</text>
+            <text class="awd-dialog-subtitle">{{ $t('chat.uploadFileSubtitle') }}</text>
           </view>
         </view>
         <view class="awd-dialog-body">
           <view class="form-group">
-            <text class="form-label">上传位置</text>
+            <text class="form-label">{{ $t('chat.uploadLocation') }}</text>
             <view class="awd-field clickable" @tap="openFolderSelector">
               <image src="/static/folder-closed.png" class="field-icon-img" mode="aspectFit" />
               <text class="field-value">
-                {{ selectedUploadParent ? getFolderPath(selectedUploadParent) : '根目录' }}
+                {{ selectedUploadParent ? getFolderPath(selectedUploadParent) : $t('chat.rootFolder') }}
               </text>
             </view>
           </view>
@@ -24,23 +24,23 @@
           <!-- H5 Folder Upload -->
           <!-- #ifdef H5 -->
           <view class="form-group">
-            <text class="form-label">上传文件夹</text>
+            <text class="form-label">{{ $t('chat.uploadFolder') }}</text>
             <view class="awd-field clickable" @tap="triggerFolderUploadInput">
                <view v-if="isFolderUpload && uploadSelectedFiles.length > 0" class="field-content-row">
-                  <text class="field-value">已选择 {{ uploadSelectedFiles.length }} 个文件</text>
+                  <text class="field-value">{{ $t('chat.filesSelected', { count: uploadSelectedFiles.length }) }}</text>
                </view>
                <view v-else>
-                  <text class="field-placeholder">点击选择文件夹...</text>
+                  <text class="field-placeholder">{{ $t('chat.clickSelectFolder') }}</text>
                </view>
             </view>
           </view>
           <!-- #endif -->
 
           <view class="form-group">
-            <text class="form-label">上传文件</text>
+            <text class="form-label">{{ $t('chat.uploadFileTitle') }}</text>
             <view class="awd-field clickable" @tap="selectFilesForUpload">
               <view v-if="uploadSelectedFiles.length === 0 || isFolderUpload">
-                <text class="field-placeholder">选择文件（支持多选）</text>
+                <text class="field-placeholder">{{ $t('chat.selectFilesMulti') }}</text>
               </view>
               <view v-else class="selected-files-list">
                 <text v-for="(file, index) in uploadSelectedFiles" :key="index" class="selected-file-tag">
@@ -51,13 +51,13 @@
           </view>
         </view>
         <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">取消</view>
+          <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">{{ $t('chat.cancel') }}</view>
           <view
             class="awd-btn awd-btn-primary"
             :class="{ disabled: !uploadSelectedFiles.length }"
             @tap="uploadSelectedFiles.length ? confirmUploadAndAddContext() : null"
           >
-            确定上传
+            {{ $t('chat.confirmUpload') }}
           </view>
         </view>
       </view>
@@ -68,10 +68,10 @@
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header">
           <view class="header-row folder-selector-header">
-            <text class="awd-dialog-title">选择文件夹</text>
+            <text class="awd-dialog-title">{{ $t('chat.selectFolderTitle') }}</text>
             <view class="new-folder-btn" @tap="handleSelectorCreateFolder">
               <text class="btn-plus">+</text>
-              <text>新建文件夹</text>
+              <text>{{ $t('chat.newFolder') }}</text>
             </view>
           </view>
         </view>
@@ -95,7 +95,7 @@
               style="margin-right: 8px;"
               mode="aspectFit"
             />
-            <text class="folder-name">根目录</text>
+            <text class="folder-name">{{ $t('chat.rootFolder') }}</text>
           </view>
 
           <view
@@ -121,11 +121,11 @@
             />
             <text class="folder-name">{{ folder.name }}</text>
           </view>
-          <view v-if="folderTree.length === 0" class="empty-tip">暂无其他文件夹</view>
+          <view v-if="folderTree.length === 0" class="empty-tip">{{ $t('chat.noOtherFolders') }}</view>
         </view>
         <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="showFolderSelector = false">取消</view>
-          <view class="awd-btn awd-btn-primary" @tap="confirmFolderSelection">确定</view>
+          <view class="awd-btn awd-btn-secondary" @tap="showFolderSelector = false">{{ $t('chat.cancel') }}</view>
+          <view class="awd-btn awd-btn-primary" @tap="confirmFolderSelection">{{ $t('chat.confirm') }}</view>
         </view>
       </view>
     </view>
@@ -134,30 +134,30 @@
     <view v-if="showRollbackDialog" class="awd-dialog-mask" style="z-index: 3100;" @tap="cancelRollback">
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header warning-header">
-          <text class="awd-dialog-title warning-title">确认回退</text>
+          <text class="awd-dialog-title warning-title">{{ $t('chat.rollbackConfirmTitle') }}</text>
         </view>
         <view class="awd-dialog-body">
           <view class="rollback-warning-content">
-            <text class="warning-text">此操作将删除该消息以及之后的所有对话记录，且无法恢复。</text>
+            <text class="warning-text">{{ $t('chat.rollbackWarning') }}</text>
             <view class="doc-tip-box">
               <svg class="doc-tip-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M12 3a6 6 0 0 0-3.5 10.9V17h7v-3.1A6 6 0 0 0 12 3Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
                 <path d="M10 20h4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
               </svg>
               <view class="doc-tip-text">
-                <text>如果助手在后续对话中修改了文档（Word/PPT），文件内容不会自动回退。</text>
-                <text class="doc-link-text">AI 的文档修改以修订痕迹记录，可在编辑器中「拒绝修订」恢复原文。</text>
+                <text>{{ $t('chat.rollbackDocTip') }}</text>
+                <text class="doc-link-text">{{ $t('chat.rollbackDocTipLink') }}</text>
               </view>
             </view>
             <view class="rollback-preview">
-              <text class="preview-label">将回退到并编辑：</text>
+              <text class="preview-label">{{ $t('chat.rollbackPreviewLabel') }}</text>
               <text class="preview-content">"{{ truncateName(rollbackTargetContent, 50) }}"</text>
             </view>
           </view>
         </view>
         <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="cancelRollback">取消</view>
-          <view class="awd-btn awd-btn-danger" @tap="confirmRollback">确认回退</view>
+          <view class="awd-btn awd-btn-secondary" @tap="cancelRollback">{{ $t('chat.cancel') }}</view>
+          <view class="awd-btn awd-btn-danger" @tap="confirmRollback">{{ $t('chat.rollbackConfirmTitle') }}</view>
         </view>
       </view>
     </view>
@@ -166,11 +166,11 @@
     <view v-if="showPptConfigDialog" class="awd-dialog-mask" style="z-index: 3200;" @tap="cancelPptConfig">
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header">
-           <text class="awd-dialog-title">PPT 生成选项</text>
+           <text class="awd-dialog-title">{{ $t('chat.pptConfigTitle') }}</text>
         </view>
         <view class="awd-dialog-body">
            <view class="ppt-config-section">
-              <text class="section-title">请选择导出格式</text>
+              <text class="section-title">{{ $t('chat.pptSelectFormat') }}</text>
 
               <!-- Option 1: Editable (Beta) -->
               <view class="ppt-option-card"
@@ -181,12 +181,12 @@
                        <path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16v4Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
                        <path d="M14.5 5.5 18.5 9.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
                     </svg>
-                    <text class="option-name">可编辑版 (Beta)</text>
+                    <text class="option-name">{{ $t('chat.pptEditableName') }}</text>
                     <text v-if="pptExportEditable === true" class="check-mark">✔</text>
                  </view>
                  <view class="option-desc">
-                    生成原生 PPTX 文本和表格。
-                    <text class="warning-text">实验性功能，复杂排版可能不稳定。</text>
+                    {{ $t('chat.pptEditableDesc') }}
+                    <text class="warning-text">{{ $t('chat.pptEditableWarn') }}</text>
                  </view>
               </view>
 
@@ -200,19 +200,19 @@
                        <path d="m4 16 4.5-4.5 3 3L15 11l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
                        <path d="M9 9.5h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                     </svg>
-                    <text class="option-name">高清图片版 (推荐)</text>
+                    <text class="option-name">{{ $t('chat.pptImageName') }}</text>
                     <text v-if="pptExportEditable === false" class="check-mark">✔</text>
                  </view>
                  <view class="option-desc">
-                    将每页渲染为高清图片。
-                    <text class="highlight-text">排版完美，渲染稳定，但文字不可编辑。</text>
+                    {{ $t('chat.pptImageDesc') }}
+                    <text class="highlight-text">{{ $t('chat.pptImageHighlight') }}</text>
                  </view>
               </view>
            </view>
         </view>
         <view class="awd-dialog-footer">
-           <view class="awd-btn awd-btn-secondary" @tap="cancelPptConfig">取消</view>
-           <view class="awd-btn awd-btn-primary" @tap="confirmPptGeneration">开始生成</view>
+           <view class="awd-btn awd-btn-secondary" @tap="cancelPptConfig">{{ $t('chat.cancel') }}</view>
+           <view class="awd-btn awd-btn-primary" @tap="confirmPptGeneration">{{ $t('chat.pptStart') }}</view>
         </view>
       </view>
     </view>
@@ -245,7 +245,7 @@
 
     <!-- Assistant Dropdown Panel - positioned relative to chat-interface like history drawer -->
     <view v-if="showAssistantMenu" class="assistant-dropdown-panel" @tap.stop>
-       <view class="assistant-menu-header">智慧助手</view>
+       <view class="assistant-menu-header">{{ $t('chat.assistantMenuHeader') }}</view>
        <view
          v-for="ast in assistants"
          :key="ast.id"
@@ -293,14 +293,14 @@
             ></div>
             <div class="bubble-footer">
               <!-- Rollback Button -->
-              <view v-if="!isStreaming" class="rollback-btn" @tap.stop="openRollbackDialog(msg, index)" title="回退到此消息（修改重发）">
+              <view v-if="!isStreaming" class="rollback-btn" @tap.stop="openRollbackDialog(msg, index)" :title="$t('chat.rollbackBtnTitle')">
                  <div class="rollback-icon-svg">
                     <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M9 14 4 9l5-5"></path>
                         <path d="M4 9h12a5 5 0 0 1 5 5v3"></path>
                     </svg>
                  </div>
-                 <text class="rollback-text">回退</text>
+                 <text class="rollback-text">{{ $t('chat.rollbackBtn') }}</text>
               </view>
               <span v-if="msg.timestamp" class="bubble-timestamp user">{{ msg.timestamp }}</span>
             </div>
@@ -326,8 +326,8 @@
     <view v-if="bubbles.length === 0 && !isStreaming" class="empty-flow-container">
        <!-- Top: Welcome Text (between header and input) -->
        <view class="empty-top-section">
-          <text class="welcome-text">有什么可以帮您？</text>
-          <text class="welcome-subtitle">随时为您解答疑问、起草文档或分析数据。</text>
+          <text class="welcome-text">{{ $t('chat.welcome') }}</text>
+          <text class="welcome-subtitle">{{ $t('chat.welcomeSubtitle') }}</text>
        </view>
 
        <!-- Center: Input -->
@@ -351,7 +351,7 @@
                 @paste="handlePaste"
                 @keydown.enter="handleEnterKey"
                 @click="handleInputClick"
-                data-placeholder="请输入问题、拖拽文件/文件夹至此、粘贴合同文本或描述案情..."
+                :data-placeholder="$t('chat.inputPlaceholderEmpty')"
               ></div>
               <!-- Note: Context files are now shown as inline tags inside the rich input -->
               <view class="input-footer">
@@ -387,7 +387,7 @@
                           <view v-for="g in modelGroups" :key="g.key" class="model-group">
                              <view class="model-group-head">
                                 <text class="model-group-vendor">{{ g.vendor }}</text>
-                                <text v-if="g.region === 'INTERNATIONAL'" class="model-region-tag">需国际网络</text>
+                                <text v-if="g.region === 'INTERNATIONAL'" class="model-region-tag">{{ $t('chat.intlNetworkRequired') }}</text>
                              </view>
                              <view v-for="m in g.models" :key="m.id"
                                    class="model-option"
@@ -395,23 +395,23 @@
                                    @tap.stop="selectModel(m)">
                                 <view class="model-option-head">
                                    <text class="model-option-name">{{ m.name }}</text>
-                                   <text v-if="m.tiered" class="model-tier-tag">长上下文单价更高</text>
+                                   <text v-if="m.tiered" class="model-tier-tag">{{ $t('chat.tieredPricing') }}</text>
                                 </view>
                                 <text class="model-option-price">{{ priceLabel(m) }}</text>
                              </view>
                           </view>
-                          <view v-if="!modelGroups.length" class="model-empty">暂无可用模型，到设置页检查 AI 供应商配置</view>
-                          <view v-if="networkRegionBasis" class="model-region-basis">网络判定：{{ networkRegionBasis }}</view>
+                          <view v-if="!modelGroups.length" class="model-empty">{{ $t('chat.noModels') }}</view>
+                          <view v-if="networkRegionBasis" class="model-region-basis">{{ $t('chat.networkBasis', { basis: networkRegionBasis }) }}</view>
                        </view>
                     </view>
                     <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
-                    <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? ('已固定使用 Skill：' + skillChipLabel) : 'Skill（默认自动匹配触发词）'" @tap="toggleSkillDropdown">
+                    <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? $t('chat.skillPinnedTitle', { name: skillChipLabel }) : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
                        <text class="skill-glyph">◲</text>
                        <view v-if="showSkillDropdown" class="skill-dropdown down">
                           <view class="skill-option" :class="{ active: !pinnedSkillId }" @tap.stop="selectSkill('')">
                              <view class="skill-option-text">
-                                <text class="skill-option-name">自动匹配</text>
-                                <text class="skill-option-desc">命中触发词时自动生效</text>
+                                <text class="skill-option-name">{{ $t('chat.skillAutoMatch') }}</text>
+                                <text class="skill-option-desc">{{ $t('chat.skillAutoMatchDesc') }}</text>
                              </view>
                           </view>
                           <view v-if="availableSkills.length" class="skill-divider"></view>
@@ -421,11 +421,11 @@
                                 @tap.stop="selectSkill(s.id)">
                              <view class="skill-option-text">
                                 <text class="skill-option-name">{{ s.name || s.id }}</text>
-                                <text class="skill-option-desc">{{ s.activationMode === 'manual' ? '仅手动' : (s.triggers || []).join(' / ') || '无触发词' }}</text>
+                                <text class="skill-option-desc">{{ s.activationMode === 'manual' ? $t('chat.skillManualOnly') : (s.triggers || []).join(' / ') || $t('chat.skillNoTriggers') }}</text>
                              </view>
                           </view>
                           <view class="skill-divider"></view>
-                          <view class="skill-manage" @tap.stop="goToSkillManagement">管理已安装 Skill</view>
+                          <view class="skill-manage" @tap.stop="goToSkillManagement">{{ $t('chat.skillManage') }}</view>
                        </view>
                     </view>
                  </view>
@@ -443,7 +443,7 @@
 
        <!-- Bottom: History (pushed to bottom with flexbox) -->
        <view class="empty-bottom-section">
-          <view class="recent-history-header">近期对话</view>
+          <view class="recent-history-header">{{ $t('chat.recentChats') }}</view>
           <view class="recent-history" v-if="recentHistory && recentHistory.length > 0">
              <view v-for="h in recentHistory" :key="h.id" class="history-item" @tap="$emit('load-history', h)">
                 <view v-if="recentDotClass(h)" class="conv-dot" :class="recentDotClass(h)"></view>
@@ -454,7 +454,7 @@
           <view v-else class="history-empty-placeholder">
              <text>Your recent chats will appear here</text>
           </view>
-          <view class="history-disclaimer">AI生成内容仅供参考，不构成正式意见，请自负责任使用。</view>
+          <view class="history-disclaimer">{{ $t('chat.aiDisclaimer') }}</view>
        </view>
     </view>
 
@@ -465,7 +465,7 @@
        <!-- 步数超限暂停 / 上次进程被杀：一键继续，免得用户手动输入「继续」 -->
        <view v-if="agentPaused && !isStreaming" class="continue-bar">
           <text class="continue-hint">{{ continueHint }}</text>
-          <view class="continue-btn" @tap="handleContinue">继续执行</view>
+          <view class="continue-btn" @tap="handleContinue">{{ $t('chat.continueRun') }}</view>
        </view>
        <!-- 长任务可控：进度条在浮窗里（BackgroundTaskIndicator），控制放在输入框上方——
             用户想停的时候手在输入区，不该先去浮窗里找按钮。
@@ -475,7 +475,7 @@
              <text class="task-control-name">{{ taskTypeName(t.type) }}</text>
              <text class="task-control-msg">{{ t.message }}</text>
              <view class="task-control-btn" :class="{ pending: !!stoppingTasks[t.taskId] }" @tap.stop="handleCancelTask(t)">
-                <text>{{ stoppingTasks[t.taskId] ? '正在停止…' : '停止' }}</text>
+                <text>{{ stoppingTasks[t.taskId] ? $t('chat.stoppingEllipsis') : $t('chat.stop') }}</text>
              </view>
           </view>
        </view>
@@ -487,7 +487,7 @@
                 <view class="status-btn-wrapper">
                     <view class="status-btn modified" :class="{ empty: modifiedFiles.length === 0 }" @tap.stop="modifiedFiles.length > 0 ? toggleModifiedPopup() : null">
                         <svg class="status-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-                        <text>改动 ({{ modifiedFiles.length }})</text>
+                        <text>{{ $t('chat.modifiedCount', { count: modifiedFiles.length }) }}</text>
                     </view>
                    <view v-if="showModifiedPopup && modifiedFiles.length > 0" class="status-popup up">
                        <view v-for="(f, i) in modifiedFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
@@ -502,7 +502,7 @@
                <view class="status-btn-wrapper">
                    <view class="status-btn created" :class="{ empty: createdFiles.length === 0 }" @tap.stop="createdFiles.length > 0 ? toggleNewPopup() : null">
                        <svg class="status-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-                       <text>新增 ({{ createdFiles.length }})</text>
+                       <text>{{ $t('chat.createdCount', { count: createdFiles.length }) }}</text>
                    </view>
                    <view v-if="showNewPopup && createdFiles.length > 0" class="status-popup up">
                        <view v-for="(f, i) in createdFiles" :key="i" class="status-popup-item" @tap.stop="handleOpenFile(f)">
@@ -576,7 +576,7 @@
                       <view v-for="g in modelGroups" :key="g.key" class="model-group">
                          <view class="model-group-head">
                             <text class="model-group-vendor">{{ g.vendor }}</text>
-                            <text v-if="g.region === 'INTERNATIONAL'" class="model-region-tag">需国际网络</text>
+                            <text v-if="g.region === 'INTERNATIONAL'" class="model-region-tag">{{ $t('chat.intlNetworkRequired') }}</text>
                          </view>
                          <view v-for="m in g.models" :key="m.id"
                                class="model-option"
@@ -584,23 +584,23 @@
                                @tap.stop="selectModel(m)">
                             <view class="model-option-head">
                                <text class="model-option-name">{{ m.name }}</text>
-                               <text v-if="m.tiered" class="model-tier-tag">长上下文单价更高</text>
+                               <text v-if="m.tiered" class="model-tier-tag">{{ $t('chat.tieredPricing') }}</text>
                             </view>
                             <text class="model-option-price">{{ priceLabel(m) }}</text>
                          </view>
                       </view>
-                      <view v-if="!modelGroups.length" class="model-empty">暂无可用模型，到设置页检查 AI 供应商配置</view>
-                      <view v-if="networkRegionBasis" class="model-region-basis">网络判定：{{ networkRegionBasis }}</view>
+                      <view v-if="!modelGroups.length" class="model-empty">{{ $t('chat.noModels') }}</view>
+                      <view v-if="networkRegionBasis" class="model-region-basis">{{ $t('chat.networkBasis', { basis: networkRegionBasis }) }}</view>
                    </view>
                 </view>
                 <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
-                <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? ('已固定使用 Skill：' + skillChipLabel) : 'Skill（默认自动匹配触发词）'" @tap="toggleSkillDropdown">
+                <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? $t('chat.skillPinnedTitle', { name: skillChipLabel }) : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
                    <text class="skill-glyph">◲</text>
                    <view v-if="showSkillDropdown" class="skill-dropdown up">
                       <view class="skill-option" :class="{ active: !pinnedSkillId }" @tap.stop="selectSkill('')">
                          <view class="skill-option-text">
-                            <text class="skill-option-name">自动匹配</text>
-                            <text class="skill-option-desc">命中触发词时自动生效</text>
+                            <text class="skill-option-name">{{ $t('chat.skillAutoMatch') }}</text>
+                            <text class="skill-option-desc">{{ $t('chat.skillAutoMatchDesc') }}</text>
                          </view>
                       </view>
                       <view v-if="availableSkills.length" class="skill-divider"></view>
@@ -610,11 +610,11 @@
                             @tap.stop="selectSkill(s.id)">
                          <view class="skill-option-text">
                             <text class="skill-option-name">{{ s.name || s.id }}</text>
-                            <text class="skill-option-desc">{{ s.activationMode === 'manual' ? '仅手动' : (s.triggers || []).join(' / ') || '无触发词' }}</text>
+                            <text class="skill-option-desc">{{ s.activationMode === 'manual' ? $t('chat.skillManualOnly') : (s.triggers || []).join(' / ') || $t('chat.skillNoTriggers') }}</text>
                          </view>
                       </view>
                       <view class="skill-divider"></view>
-                      <view class="skill-manage" @tap.stop="goToSkillManagement">管理已安装 Skill</view>
+                      <view class="skill-manage" @tap.stop="goToSkillManagement">{{ $t('chat.skillManage') }}</view>
                    </view>
                 </view>
              </view>
@@ -648,6 +648,7 @@ import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
+import { t } from '@/i18n'
 
 export default {
   name: 'ChatInterface',
@@ -742,7 +743,7 @@ export default {
     const networkRegionBasis = ref('')
 
     const currentModelId = ref('')
-    const currentModelName = ref('选择模型')
+    const currentModelName = ref(t('chat.selectModel'))
 
     // 模型选择必须持久化：AI 面板挂在 v-if 上，关掉右栏再打开组件会重建，
     // 不落盘就会静默复位成清单第一条——这是有计费含义的选择，不能悄悄改。
@@ -776,7 +777,7 @@ export default {
     }
 
     // 下拉里的价格标签：让用户在切模型之前就知道自己在花什么钱
-    const priceLabel = (m) => `输入 $${formatPrice(m.inputPricePerM)} / 输出 $${formatPrice(m.outputPricePerM)} 每百万 tokens`
+    const priceLabel = (m) => t('chat.priceLabel', { input: formatPrice(m.inputPricePerM), output: formatPrice(m.outputPricePerM) })
 
     // 按厂商分组；region=INTERNATIONAL 的组排在后面并标注「需国际网络」
     const modelGroups = computed(() => {
@@ -786,7 +787,7 @@ export default {
         const key = `${m.region}|${m.vendor}`
         let g = index.get(key)
         if (!g) {
-          g = { key, vendor: m.vendor || '其他', region: m.region, models: [] }
+          g = { key, vendor: m.vendor || t('chat.vendorOther'), region: m.region, models: [] }
           index.set(key, g)
           groups.push(g)
         }
@@ -799,7 +800,7 @@ export default {
     const applyModelSelection = (id) => {
       const hit = availableModels.value.find(m => m.id === id)
       currentModelId.value = hit ? hit.id : (id || '')
-      currentModelName.value = hit ? hit.name : (id || '选择模型')
+      currentModelName.value = hit ? hit.name : (id || t('chat.selectModel'))
     }
 
     const selectModel = (m) => {
@@ -841,7 +842,7 @@ export default {
           // 存过的模型已不在可用集合（被移出白名单，或换了网络区域后拿不到国际档）：
           // 换了模型就必须说一声，静默改计价对象是这次要修的老毛病
           uni.showToast({
-            title: `上次选择的模型不再可用，已切换为「${currentModelName.value}」`,
+            title: t('chat.modelUnavailableSwitch', { name: currentModelName.value }),
             icon: 'none',
             duration: 3000
           })
@@ -857,9 +858,9 @@ export default {
     // Agent Mode Selection (Ask, Plan, Agent)
     const showModeDropdown = ref(false)
     const ALL_MODES = [
-      { id: 'AGENT', name: 'Agent', icon: '', desc: '自动执行' },
-      { id: 'ASK', name: 'Ask', icon: '', desc: '纯对话' },
-      { id: 'PLAN', name: 'Plan', icon: '', desc: '规划确认' }
+      { id: 'AGENT', name: 'Agent', icon: '', desc: t('chat.modeAgentDesc') },
+      { id: 'ASK', name: 'Ask', icon: '', desc: t('chat.modeAskDesc') },
+      { id: 'PLAN', name: 'Plan', icon: '', desc: t('chat.modePlanDesc') }
     ]
     // 当前供应商（GET /api/ai/config 的 activeProvider）：模型目录端点不回 provider，
     // 而模式可选范围是按供应商定的，只能另取这个信号
@@ -871,7 +872,7 @@ export default {
       isLocalOnlyProvider.value ? ALL_MODES.filter(m => m.id === 'ASK') : ALL_MODES
     )
     const localModeNotice = computed(() =>
-      isLocalOnlyProvider.value ? '本地模型不支持工具调用，Agent 与 Plan 需要云端模型' : ''
+      isLocalOnlyProvider.value ? t('chat.localModeNotice') : ''
     )
 
     const currentModeId = ref(ALL_MODES[0].id)
@@ -1034,9 +1035,9 @@ export default {
 
     // Computed: Selected folder name (for backward compatibility)
     const selectedUploadParentName = computed(() => {
-      if (selectedUploadParent.value === null) return '根目录'
+      if (selectedUploadParent.value === null) return t('chat.rootFolder')
       const folder = allProjectFiles.value.find(f => f.id === selectedUploadParent.value)
-      return folder ? folder.name : '根目录'
+      return folder ? folder.name : t('chat.rootFolder')
     })
 
     // --- File Changes Logic ---
@@ -1109,7 +1110,7 @@ export default {
        // Ideally we should tell user "Cancelled".
        bubbles.value.push({
           role: 'ASSISTANT',
-          content: 'PPT 生成已取消。',
+          content: t('chat.pptCancelled'),
           timestamp: new Date().toLocaleTimeString()
        })
     }
@@ -1133,20 +1134,20 @@ export default {
           // Add a system bubble saying "Starting generation..."
           bubbles.value.push({
              role: 'ASSISTANT',
-             content: `开始生成 PPT (${pptExportEditable.value ? '可编辑版' : '高清图片版'})...\n请留意上方进度条。`,
+             content: t('chat.pptStarting', { variant: pptExportEditable.value ? t('chat.pptVariantEditable') : t('chat.pptVariantImage') }),
              timestamp: new Date().toLocaleTimeString()
           })
 
        } catch (err) {
           console.error("Failed to start PPT generation:", err)
-          uni.showToast({ title: '启动生成失败', icon: 'none' })
+          uni.showToast({ title: t('chat.pptStartFailed'), icon: 'none' })
        }
     }
 
     // --- Rollback Functions ---
     const openRollbackDialog = (msg, index) => {
       if (isStreaming.value) {
-        uni.showToast({ title: '请等待当前对话完成', icon: 'none' })
+        uni.showToast({ title: t('chat.waitCurrentChat'), icon: 'none' })
         return
       }
       rollbackTargetIndex.value = index
@@ -1190,10 +1191,10 @@ export default {
         // 4. 通知父组件刷新历史
         emit('refresh-history')
 
-        uni.showToast({ title: '已回退', icon: 'success' })
+        uni.showToast({ title: t('chat.rollbackDone'), icon: 'success' })
       } catch (err) {
         console.error('[ChatInterface] Rollback failed:', err)
-        uni.showToast({ title: '回退失败: ' + (err.message || '未知错误'), icon: 'none' })
+        uni.showToast({ title: t('chat.rollbackFailed', { error: err.message || t('chat.unknownError') }), icon: 'none' })
       }
 
       // 重置状态
@@ -1262,7 +1263,7 @@ export default {
         }
         // 显示提示
         if (typeof uni !== 'undefined') {
-          uni.showToast({ title: '请输入消息内容', icon: 'none' })
+          uni.showToast({ title: t('chat.emptyMessageToast'), icon: 'none' })
         }
         return
       }
@@ -1272,10 +1273,10 @@ export default {
       // 这种消息发出去 prompt 是空串，用户看着自己的图片气泡等回答，模型收到一条空消息。
       if (!text && hasImages && typeof uni !== 'undefined') {
         uni.showModal({
-          title: '图片需要配一句说明',
-          content: '图片会以 OCR 识别出的文字形式加入上下文，模型看不到图像本身。补充一句要做什么（例如「把这张图里的条款整理成表格」），再发送。',
+          title: t('chat.imageNeedsCaptionTitle'),
+          content: t('chat.imageNeedsCaptionContent'),
           showCancel: false,
-          confirmText: '知道了'
+          confirmText: t('chat.gotIt')
         })
         return
       }
@@ -1348,7 +1349,7 @@ export default {
     // 这里只补一句诚实的提示。慢工具（dispatch_subtask 能跑 630 秒、AI PPT 十几分钟）
     // 中间的取消响应点已由编排器在每个工具前检查 isCancelled 提供。
     const handleAbort = () => {
-      uni.showToast({ title: '正在停止，在途的调用可能还会回一小段', icon: 'none' })
+      uni.showToast({ title: t('chat.abortToast'), icon: 'none' })
       abort()
     }
 
@@ -1359,12 +1360,12 @@ export default {
 
     // 与 BackgroundTaskIndicator.getTaskTypeName 同一张表（两处都要改，取值来自后端 TaskInfo.TaskType）
     const taskTypeName = (type) => ({
-      'PPTX_GENERATE': 'PPT 生成',
-      'PPTX_MODIFY': 'PPT 修改',
-      'FILE_PROCESS': '文件处理',
-      'WEB_FETCH': '网页获取',
-      'OTHER': '其他任务'
-    })[type] || type || '后台任务'
+      'PPTX_GENERATE': t('chat.taskPptGenerate'),
+      'PPTX_MODIFY': t('chat.taskPptModify'),
+      'FILE_PROCESS': t('chat.taskFileProcess'),
+      'WEB_FETCH': t('chat.taskWebFetch'),
+      'OTHER': t('chat.taskOther')
+    })[type] || type || t('chat.taskBackgroundFallback')
 
     const handleCancelTask = async (task) => {
       if (!task || !task.taskId || stoppingTasks.value[task.taskId]) return
@@ -1375,11 +1376,11 @@ export default {
       stoppingTasks.value = { ...stoppingTasks.value, [task.taskId]: true }
       try {
         await cancelBackgroundTask(cid, task.taskId)
-        uni.showToast({ title: '正在停止该任务', icon: 'none' })
+        uni.showToast({ title: t('chat.stoppingTask'), icon: 'none' })
       } catch (e) {
         // 后端对「任务已经结束」返 404——那不是故障，只是按晚了；两种情况给同一句可读提示
         console.warn('[ChatInterface] 停止后台任务失败:', e)
-        uni.showToast({ title: '停止未生效，任务可能已经结束', icon: 'none' })
+        uni.showToast({ title: t('chat.stopNotEffective'), icon: 'none' })
         stoppingTasks.value = { ...stoppingTasks.value, [task.taskId]: false }
       }
     }
@@ -1387,8 +1388,8 @@ export default {
     // 续跑提示文案：区分「步数用完」和「上次进程被杀」两种中断来源
     const continueHint = computed(() => {
       return agentPaused.value && agentPaused.value.reason === 'process_interrupted'
-        ? '上次任务执行中应用被关闭，任务已中断'
-        : '已达单轮执行步数上限，任务已暂停'
+        ? t('chat.continueHintInterrupted')
+        : t('chat.continueHintPaused')
     })
 
     // 一键续跑（步数超限暂停 / 进程中断）：等价于用户输入「继续」（后端 depth 归零重新起循环），
@@ -1396,7 +1397,7 @@ export default {
     const handleContinue = async () => {
       if (isStreaming.value) return
       await sendMessage({
-        prompt: '继续',
+        prompt: t('chat.continuePrompt'),
         projectId: props.projectId,
         modelId: currentModelId.value,
         mode: currentModeId.value,
@@ -1654,16 +1655,16 @@ export default {
        const diffHours = Math.floor(diffMs / (1000 * 60 * 60))
        const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24))
 
-       if (diffMins < 1) return '刚刚'
-       if (diffMins < 60) return `${diffMins}分钟前`
-       if (diffHours < 24) return `${diffHours}小时前`
-       if (diffDays < 7) return `${diffDays}天前`
+       if (diffMins < 1) return t('chat.justNow')
+       if (diffMins < 60) return t('chat.minutesAgo', { n: diffMins })
+       if (diffHours < 24) return t('chat.hoursAgo', { n: diffHours })
+       if (diffDays < 7) return t('chat.daysAgo', { n: diffDays })
        return `${d.getMonth()+1}/${d.getDate()}`
     }
 
     // Clean title - strip XML tags like <thinking>, <process>, etc.
     const cleanTitle = (title) => {
-       if (!title) return '新对话'
+       if (!title) return t('chat.newConversation')
        // Remove common XML tags
        let cleaned = title
          .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
@@ -1678,7 +1679,7 @@ export default {
          .replace(/<question[^>]*>[\s\S]*?<\/question>/gi, '')
          .replace(/<[^>]+>/g, '') // Remove any remaining tags
          .trim()
-       return cleaned || '新对话'
+       return cleaned || t('chat.newConversation')
     }
 
     const handleRichInput = (e) => {
@@ -1903,7 +1904,7 @@ export default {
         },
         fail: (err) => {
           console.error('选择文件失败:', err)
-          uni.showToast({ title: '选择文件失败', icon: 'none' })
+          uni.showToast({ title: t('chat.chooseFileFailed'), icon: 'none' })
         }
       })
     }
@@ -1974,12 +1975,12 @@ export default {
         if (folder) {
           return buildFolderPath(folder)
         }
-        return '未知文件夹'
+        return t('chat.unknownFolder')
       }
       if (folderId && folderId.name) {
         return buildFolderPath(folderId)
       }
-      return '根目录'
+      return t('chat.rootFolder')
     }
 
     // Build full folder path string
@@ -2003,9 +2004,9 @@ export default {
     const handleSelectorCreateFolder = async () => {
       const folderName = await new Promise((resolve) => {
         uni.showModal({
-          title: '新建文件夹',
+          title: t('chat.newFolder'),
           editable: true,
-          placeholderText: '请输入文件夹名称',
+          placeholderText: t('chat.folderNamePlaceholder'),
           success: (res) => {
             if (res.confirm && res.content) {
               resolve(res.content.trim())
@@ -2035,11 +2036,11 @@ export default {
           if (parentId) {
             folderSelectorExpanded.value = { ...folderSelectorExpanded.value, [String(parentId)]: true }
           }
-          uni.showToast({ title: '文件夹创建成功', icon: 'success' })
+          uni.showToast({ title: t('chat.folderCreated'), icon: 'success' })
         }
       } catch (error) {
         console.error('[ChatInterface] Create folder failed:', error)
-        uni.showToast({ title: error.message || '创建文件夹失败', icon: 'none' })
+        uni.showToast({ title: error.message || t('chat.folderCreateFailed'), icon: 'none' })
       }
     }
 
@@ -2068,12 +2069,12 @@ export default {
     // Confirm upload and add to context (like drag-drop)
     const confirmUploadAndAddContext = async () => {
       if (uploadSelectedFiles.value.length === 0) {
-        uni.showToast({ title: '请选择要上传的文件', icon: 'none' })
+        uni.showToast({ title: t('chat.pleaseSelectFiles'), icon: 'none' })
         return
       }
 
       if (!props.projectId) {
-        uni.showToast({ title: '项目ID未设置', icon: 'none' })
+        uni.showToast({ title: t('chat.projectIdMissing'), icon: 'none' })
         return
       }
 
@@ -2125,10 +2126,10 @@ export default {
           }
         }
 
-        uni.showToast({ title: `已添加 ${filesToUpload.length} 个文件`, icon: 'success' })
+        uni.showToast({ title: t('chat.filesAdded', { count: filesToUpload.length }), icon: 'success' })
       } catch (error) {
         console.error('[ChatInterface] Upload failed:', error)
-        uni.showToast({ title: error.message || '上传失败', icon: 'none' })
+        uni.showToast({ title: error.message || t('chat.uploadFailed'), icon: 'none' })
       } finally {
         isUploading.value = false
       }
@@ -2172,7 +2173,7 @@ export default {
     const sendExternalPrompt = async (prompt) => {
       if (!prompt) return null
       if (isStreaming.value) {
-        uni.showToast({ title: 'AI 正在执行其他任务，请稍后再试', icon: 'none' })
+        uni.showToast({ title: t('chat.busyToast'), icon: 'none' })
         return null
       }
       await sendMessage({
@@ -2267,7 +2268,7 @@ export default {
           // 契约 D 要解决的原始病灶就在这里：上面那段是模型需要的细节（尤其修订版全文），
           // 但它此前直接当成用户消息显示，于是用户在自己的气泡里读到一句自己没说过的机器口吻话。
           // 现在细节仍走 message，气泡里只显示 displayText 这句人话。
-          const displayText = art.revised ? '已修订计划' : '按此推进'
+          const displayText = art.revised ? t('chat.approveDisplayRevised') : t('chat.proceedBtn')
           // 审批后使用 AGENT 模式执行计划
           await sendMessage({
              prompt,

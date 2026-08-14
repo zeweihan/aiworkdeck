@@ -740,7 +740,7 @@ function ensureView(id) {
 
       const menu = Menu.buildFromTemplate([
         {
-          label: require('./app-language').t({ zh: '加入网核收藏', en: 'Save to Web Research Favorites' }),
+          label: require('./app-language').t({ zh: '加入网核收藏', en: 'Save as Web Evidence' }),
           click: async () => {
             try {
               const url = params.pageURL ? String(params.pageURL) : ''

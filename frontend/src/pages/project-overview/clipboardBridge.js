@@ -53,7 +53,7 @@ export const clipboardBridgeMethods = {
                const res = await saveClipboardFile({ file: f }, 'IMAGE')
                const saved = (res && res.data) ? res.data : res
                this.onClipboardSaved(saved)
-               uni.showToast({ title: '已捕获图片', icon: 'success' })
+               uni.showToast({ title: this.$t('workbenchOps.imageCaptured'), icon: 'success' })
                return saved
              } catch (e) {
                console.error('Image upload failed', e)
@@ -78,7 +78,7 @@ export const clipboardBridgeMethods = {
                      const res = await saveClipboardFile({ file: f }, 'FILE')
                      const saved = (res && res.data) ? res.data : res
                      this.onClipboardSaved(saved)
-                     uni.showToast({ title: '已捕获文件', icon: 'success' })
+                     uni.showToast({ title: this.$t('workbenchOps.fileCaptured'), icon: 'success' })
                      return saved
                   }
                }

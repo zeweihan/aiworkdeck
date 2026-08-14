@@ -2,12 +2,12 @@
   <div v-if="store.audioList && store.audioList.length > 0" class="download-area">
     <!-- 下载列表标题 -->
     <div class="download-header">
-      <span class="header-title">下载列表 ({{ store.audioList.length }})</span>
+      <span class="header-title">{{ t('files.downloadListTitle', { count: store.audioList.length }) }}</span>
       <span class="header-title-tips">
         <el-tooltip
           class="box-item"
           effect="dark"
-          content="刷新页面将删除所有音频，请确保已下载所有需要的音频文件。"
+          :content="t('files.refreshWarning')"
           placement="top"
         >
           <el-icon><WarningFilled /></el-icon>
@@ -41,7 +41,7 @@
           >
             <transition name="text-fade" mode="out-in">
               <span :key="item.isPlaying ? 'playing' : 'play'">
-                {{ item.isPlaying ? '暂停' : '播放' }}
+                {{ item.isPlaying ? t('files.pause') : t('files.play') }}
               </span>
             </transition>
           </el-button>
@@ -54,7 +54,7 @@
             :loading="item.isDownloading"
             :icon="Service"
           >
-            {{ item.isDownloading ? '下载中' : '下载' }}
+            {{ item.isDownloading ? t('files.downloading') : t('files.download') }}
           </el-button>
           <el-button
             v-if="item.srt"
@@ -66,9 +66,9 @@
             :loading="item.isSrtLoading"
             :icon="ChatLineSquare"
           >
-            {{ item.isSrtLoading ? '下载中' : '下载' }}
+            {{ item.isSrtLoading ? t('files.downloading') : t('files.download') }}
           </el-button>
-          <el-tooltip content="删除" placement="top" :disabled="item.isDownloading" effect="dark">
+          <el-tooltip :content="t('common.delete')" placement="top" :disabled="item.isDownloading" effect="dark">
             <el-icon class="delete-icon" @click="removeDownloadItem(item)">
               <CircleCloseFilled />
             </el-icon>
@@ -81,11 +81,11 @@
     <div class="batch-actions">
       <el-button type="primary" size="small" round @click="downloadAll">
         <el-icon><Download /></el-icon>
-        全部下载
+        {{ t('files.downloadAll') }}
       </el-button>
       <el-button type="danger" size="small" round @click="clearAll">
         <el-icon><Delete /></el-icon>
-        清空列表
+        {{ t('files.clearList') }}
       </el-button>
     </div>
   </div>
@@ -107,6 +107,7 @@ import {
   WarningFilled,
 } from '@element-plus/icons-vue'
 import { useAudio } from '@/utils/index'
+import { t } from '@/i18n'
 import type { Audio } from '../stores/generation'
 
 const store = useGenerationStore()
@@ -123,7 +124,7 @@ const playAudio = async (item: Audio, _: number) => {
     } catch (err) {
       if (err instanceof Error && err.name === 'NotSupportedError') {
         // 处理不支持的场景
-        ElMessage.error('糟糕！音频可能丢失了!')
+        ElMessage.error(t('files.audioMissing'))
       }
       console.log(`audio.play error`, (err as Error).message)
     }
@@ -137,7 +138,7 @@ const playAudio = async (item: Audio, _: number) => {
 const commonDownload = (
   item: Audio,
   file: string,
-  title: string,
+  successMsg: string,
   loadingProp: keyof Pick<Audio, 'isSrtLoading' | 'isDownloading'>
 ) => {
   try {
@@ -149,7 +150,7 @@ const commonDownload = (
     document.body.appendChild(link)
     link.click()
     document.body.removeChild(link)
-    ElMessage.success(`下载${title}成功！`)
+    ElMessage.success(successMsg)
   } catch (err) {
     console.log(`commonDownload error: ${file}`, (err as Error).message)
   } finally {
@@ -173,25 +174,25 @@ function downloadByBlobs(blobs: Blob[], name: string) {
 const downloadAudio = (item: Audio, _: number) => {
   if (item.blobs) return downloadByBlobs(item.blobs, item.name || 'audio')
   if (!item.file) return
-  commonDownload(item, item.file, '音频', 'isDownloading')
+  commonDownload(item, item.file, t('files.downloadAudioSuccess'), 'isDownloading')
 }
 const downloadSrt = (item: Audio, _: number) => {
   console.log('item.srt', item.srt)
   if (!item.srt) return
-  commonDownload(item, item.srt, '字幕', 'isSrtLoading')
+  commonDownload(item, item.srt, t('files.downloadSrtSuccess'), 'isSrtLoading')
 }
 
 const removeDownloadItem = (item: Audio) => {
   if (item.isDownloading) return
   // 确认删除操作
-  ElMessageBox.confirm('确定删除该下载项吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
+  ElMessageBox.confirm(t('files.confirmDeleteDownload'), t('files.tipTitle'), {
+    confirmButtonText: t('common.confirm'),
+    cancelButtonText: t('common.cancel'),
     type: 'warning',
   }).then(() => {
     const newList = store.audioList.filter((audio) => audio !== item)
     store.updateAudioList(newList)
-    ElMessage.success('已删除')
+    ElMessage.success(t('files.deleted'))
   })
 }
 
@@ -213,13 +214,13 @@ const downloadAll = () => {
 }
 
 const clearAll = () => {
-  ElMessageBox.confirm('确定清空下载列表吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
+  ElMessageBox.confirm(t('files.confirmClearList'), t('files.tipTitle'), {
+    confirmButtonText: t('common.confirm'),
+    cancelButtonText: t('common.cancel'),
     type: 'warning',
   }).then(() => {
     store.updateAudioList([])
-    ElMessage.success('已清空')
+    ElMessage.success(t('files.cleared'))
   })
 }
 </script>

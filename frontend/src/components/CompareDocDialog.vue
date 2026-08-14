@@ -2,12 +2,12 @@
   <view v-if="visible" class="compare-dialog-mask" @tap="handleCancel">
     <view class="compare-dialog" @tap.stop>
       <view class="dialog-header">
-        <text class="dialog-title">选择对比文档</text>
+        <text class="dialog-title">{{ $t('editor.compare.title') }}</text>
         <text class="dialog-close" @tap="handleCancel">×</text>
       </view>
       
       <view class="dialog-body">
-        <text class="dialog-desc">请选择源文档（作为对比基准）和新文档（与源文档比较差异）</text>
+        <text class="dialog-desc">{{ $t('editor.compare.desc') }}</text>
         
         <view class="doc-selection">
           <view class="doc-item">
@@ -15,7 +15,7 @@
               <svg class="label-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
-              <text class="label-text">源文档（基准）</text>
+              <text class="label-text">{{ $t('editor.compare.sourceLabel') }}</text>
             </view>
             <view class="doc-options">
               <view 
@@ -33,7 +33,7 @@
           
           <view class="doc-arrow">
             <text>↓</text>
-            <text class="arrow-label">对比</text>
+            <text class="arrow-label">{{ $t('editor.compare.arrowLabel') }}</text>
             <text>↓</text>
           </view>
           
@@ -42,7 +42,7 @@
               <svg class="label-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path v-for="(d, gi) in ICONS.docText" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
-              <text class="label-text">新文档（比较对象）</text>
+              <text class="label-text">{{ $t('editor.compare.targetLabel') }}</text>
             </view>
             <view class="doc-options">
               <view 
@@ -61,13 +61,13 @@
       </view>
       
       <view class="dialog-footer">
-        <button class="btn-cancel" @tap="handleCancel">取消</button>
-        <button 
-          class="btn-confirm" 
+        <button class="btn-cancel" @tap="handleCancel">{{ $t('editor.compare.cancel') }}</button>
+        <button
+          class="btn-confirm"
           :class="{ disabled: !canConfirm }"
           @tap="handleConfirm"
         >
-          开始对比
+          {{ $t('editor.compare.start') }}
         </button>
       </view>
     </view>
