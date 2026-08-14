@@ -1411,6 +1411,7 @@ function bootDoc() {
 
   installKeyHandler();
   try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
+  try { installSelectionListener(ctrl); } catch (e) { log('XSelectionChangeListener 安装失败 / install failed: ' + errStr(e)); }
   post('ui_ready');
   log('空白文档就绪 swriter / blank doc ready');
   try { const loc = readConfigLocale(); log('UI locale 诊断 / config: ' + JSON.stringify(loc)); } catch (e) { log('UI locale 诊断失败: ' + errStr(e)); }
@@ -1443,6 +1444,23 @@ function installModifyListener(model) {
   });
   model.addModifyListener(listener);
   log('XModifyListener 已装 / installed — 文档修改将上报宿主触发自动保存');
+}
+
+// ---- 自建工具栏：选区变化上报 -------------------------------------------
+// 工具栏的激活态（B 是否高亮、当前字体字号样式对齐）必须跟着光标走，而 LO 不会
+// 主动把「选区变了」推出来。装在 controller 上（XSelectionSupplier），每次触发
+// 就给宿主发一个信号，宿主据此重读 get_ui_state。
+//
+// **这条通道只覆盖「选区」类变化**：真机实测扩选/全选/选中段落每次都触发，但
+// **纯光标移动（塌陷选区左右挪）基本不触发**。所以编辑器页还会在画布 mouseup
+// 和覆盖层转发控制键之后各补一发——两路合起来才盖得住用户的实际操作。
+function installSelectionListener(controller) {
+  const listener = zetajs.unoObject([css.view.XSelectionChangeListener], {
+    selectionChanged() { try { post('sel_changed'); } catch (e) { /* ignore */ } },
+    disposing() {},
+  });
+  controller.addSelectionChangeListener(listener);
+  log('XSelectionChangeListener 已装 / installed — 选区变化将上报宿主刷新工具栏');
 }
 
 // ---- probe 2: selection via UNO (model-native, NO text offset) -----------
@@ -1608,6 +1626,8 @@ const EXEC = {
     xModel.setPropertyValue('RecordChanges', true);
     const sd = xModel.createSearchDescriptor();
     sd.setSearchString(String(p.findText || ''));
+    // matchCase 是后加的可选项（自建查找替换面板要它）；不传时行为与从前一致。
+    try { sd.setPropertyValue('SearchCaseSensitive', !!p.matchCase); } catch (e) {}
     const all = p.replaceAll !== false;
     let hit = xModel.findFirst(sd), n = 0;
     while (hit !== null) {
@@ -1895,6 +1915,53 @@ const EXEC = {
     if (!url) return { success: false, message: 'ui_command not allowed: ' + (p.name || '') };
     dispatchUno(url);
     return { success: true, name: String(p.name) };
+  },
+  // 自建查找栏的「上一个/下一个」。**不用 find_text_locations**——那条路每个匹配
+  // 插一个书签当锚点，书签会跟着文档存进 docx，用户只是搜个词不该在文件里留下
+  // 一堆书签。这里全程用 findFirst/findNext 枚举，只动视图光标。
+  //
+  // 上一个：UNO 没有 findPrevious，所以按文档序收齐全部匹配（上限 500，再多的
+  // 文档里逐个跳也没意义），再按当前光标位置挑前一个/后一个，到头绕回。
+  find_navigate(p) {
+    const kw = String((p && p.keyword) || '');
+    if (!kw) return tableFail('find_navigate requires {keyword}');
+    const dir = String((p && p.direction) || 'next').toLowerCase();
+    const sd = xModel.createSearchDescriptor();
+    sd.setSearchString(kw);
+    try { sd.setPropertyValue('SearchCaseSensitive', !!(p && p.matchCase)); } catch (e) {}
+    const all = [];
+    let hit = null;
+    try { hit = xModel.findFirst(sd); } catch (e) { return tableFail('查找失败: ' + errStr(e)); }
+    while (hit !== null && all.length < 500) {
+      all.push(hit);
+      try { hit = xModel.findNext(hit, sd); } catch (e) { hit = null; }
+    }
+    if (!all.length) return { success: true, found: false, total: 0 };
+    // 光标当前落在第几个匹配之后（compareRegionStarts(A,B)：A 在 B 前返回 1，
+    // 相等返回 0）。跨 XText（表格单元格 vs 正文）会抛，跳过即可——那种匹配
+    // 只是定位不到"当前在第几个"，不影响能跳过去。
+    //
+    // 起点相同要分两种情形，混为一谈会差一个：
+    //   - 光标**塌陷**停在某处匹配的起点（如刚 goto 文首，而文首正好是匹配）：
+    //     这一处还**没被访问过**，next 就应该落在它身上；
+    //   - 光标**带选区**且起点相同：说明它就是刚被选中的当前这一处，next 要跳下一个。
+    const vc = ctrl.getViewCursor();
+    let collapsed = true;
+    try { collapsed = (vc.getString() || '').length === 0; } catch (e) {}
+    let curIdx = -1;
+    for (let i = 0; i < all.length; i++) {
+      try {
+        const c = all[i].getText().compareRegionStarts(all[i], vc);
+        if (c > 0) curIdx = i;                       // 严格在光标前 = 已越过
+        else if (c === 0 && !collapsed) curIdx = i;  // 起点相同且选中着 = 当前这一处
+      } catch (e) {}
+    }
+    const n = all.length;
+    const target = dir === 'prev'
+      ? (curIdx <= 0 ? n - 1 : curIdx - 1)
+      : (curIdx < 0 ? 0 : (curIdx + 1) % n);
+    if (!selectVisibly(all[target])) return tableFail('无法选中该匹配');
+    return { success: true, found: true, index: target + 1, total: n, truncated: n >= 500 };
   },
   // 视图缩放（触控板捏合 / Cmd+加减号 / 工具栏缩放控件）。
   // {value} 给绝对百分比，{delta} 给相对增量；不传就只读回当前值。
@@ -2193,6 +2260,8 @@ const EXEC = {
       try { installKeyHandler(); } catch (e) {}
       // The listener is per-model — the freshly-loaded component needs its own.
       try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
+      // 选区监听是 per-controller 的，换文档同样要重装（漏了工具栏就再也不刷新）
+      try { installSelectionListener(ctrl); } catch (e) { log('XSelectionChangeListener 安装失败 / install failed: ' + errStr(e)); }
       // RecordChanges/ShowChangesInMargin 是 Writer 专属（Calc/Impress 没有该属性）——
       // 此前对非 Writer 文档也无条件调用，靠 try/catch 兜住但会白抛异常 + 打噪声日志
       // （Impress 场景尤其误导：看起来像"修订功能坏了"）。改成前置类型判定。
@@ -3153,6 +3222,30 @@ const EXEC = {
       success: true, anchor: anchorId, author: AI_AUTHOR, comment: comment,
       annotatedText: annotatedText,
       paragraph: (paragraphTextOf(range) || '').slice(0, 200),
+    };
+  },
+  // 用户在工具栏上给**当前选区**加批注。与 add_comment 的差别有两处，所以不能
+  // 复用：① 没有 anchorId（用户是选中文字直接点按钮，不走 find_text_locations）；
+  // ② 署名必须是用户本人，不是 AI Workdeck。派发路线仍是已验证的
+  // `.uno:InsertAnnotation`——API 路线（addAnnotation）会抛虚假异常且只批注锚点。
+  add_comment_at_selection(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const comment = String((p && p.comment) || '');
+    if (!comment) return tableFail('add_comment_at_selection requires {comment}');
+    const vc = ctrl.getViewCursor();
+    const annotatedText = String(vc.getString() || '');
+    if (!annotatedText.length) return tableFail('请先选中要批注的文字');
+    const author = humanAuthor || '';
+    const before = countComments();
+    css.frame.DispatchHelper.create(context).executeDispatch(
+      ctrl.getFrame(), '.uno:InsertAnnotation', '', 0,
+      [mkProp('Text', comment), mkProp('Author', author)]);
+    // 派发不报错也可能没命中——用批注条数变化确认，别对用户谎报成功
+    const after = countComments();
+    if (after <= before) return tableFail('批注未被插入（引擎未命中）');
+    return {
+      success: true, author: author, comment: comment,
+      annotatedText: annotatedText.slice(0, 120), count: after,
     };
   },
   // ---- [Word 二期] 结构面：脚注/尾注、页眉页脚、分页/分节符、样式 -----------

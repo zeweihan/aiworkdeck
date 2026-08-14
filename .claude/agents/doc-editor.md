@@ -81,6 +81,8 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - 撤销/重做可用性走 `xModel.getUndoManager()`（XUndoManagerSupplier 的**方法**）；`getPropertyValue('UndoManager')` 抛 UnknownPropertyException。
 - `XSelectionChangeListener` 装得上、选区变化每次触发，但**纯光标移动基本不触发**——工具栏状态刷新必须是「事件 + 聚焦时轮询」混合。
 - `format_selection` 拒绝空选区，工具栏「先设格式再打字」这条路目前是断的（P2 待补）。
+- **LO 对话框在本 WASM 构建上不可靠，不许挂进自建菜单**（真机审计）：`.uno:TableDialog`/`.uno:InsertSymbol`/`.uno:SpellDialog` 派发**完全没反应**；`SearchDialog`/`FontDialog`/`ParagraphDialog`/`InsertTable`/`HyperlinkDialog`/`PageStyleName`/`InsertGraphic`/`BulletsAndNumberingDialog`/`WordCountDialog` 弹得出来但**键盘关不掉**（把 IME 覆盖层 blur、焦点还给画布后按 Esc 同样无效——所以不是覆盖层抢焦点造成的）。需要对话框的功能一律自建 DOM 面板。今天 LO 菜单栏还露着，用户点开「查找和替换」就可能卡住；P4 隐藏 chrome 顺带消除这个坑。
+- **查找导航不要用 `find_text_locations`**：它每个匹配插一个锚点书签，书签会跟着文档存进 docx（用户只是搜个词）。用 `find_navigate`（findFirst/findNext + `compareRegionStarts` 定位当前序号，只动视图光标）。
 
 ## 已知地雷
 

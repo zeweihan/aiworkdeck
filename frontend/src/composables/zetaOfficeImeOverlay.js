@@ -120,10 +120,13 @@ export function cursorRectToPixels(raw, offset) {
  *        plus desktop shortcuts (undo/redo/select-all/clipboard/format/line-nav).
  *        Without it, those keys fall through to the (empty) input and the
  *        document is unaffected.
+ * @param {()=>void} [options.onCursorMoved] OPTIONAL. Fired after every action
+ *        that moves the LO cursor (commit / control key / arrow / canvas click).
+ *        宿主用它刷新工具栏激活态——引擎的选区监听盖不住纯光标移动。
  * @param {(msg:string)=>void} [options.onLog] optional progress/diagnostic log.
  * @returns {{element, focus, reposition, computeRect, destroy}}
  */
-export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onLog } = {}) {
+export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCommand, onCursorMoved, onLog } = {}) {
   if (!canvas) throw new Error('attachImeOverlay: canvas is required')
   if (typeof commit !== 'function') throw new Error('attachImeOverlay: commit(text) is required')
   const log = (m) => { if (onLog) onLog(m) }
@@ -253,6 +256,10 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     if (rect) applyCursorBox(rect)
     else if (lastClick) applyCursorBox({ left: lastClick.x, top: Math.max(0, lastClick.y - 9), height: 18 })
     else applyCover()
+    // 光标动过了。覆盖层在**每一个**移动光标的动作后都会走到这里（上屏、回车、
+    // 退格、方向键、快捷键、画布点击），所以这一个钩子就够宿主刷新工具栏激活态
+    // ——引擎的 XSelectionChangeListener 盖不住纯光标移动，靠的就是这条补。
+    if (typeof onCursorMoved === 'function') { try { onCursorMoved() } catch (e) { /* ignore */ } }
   }
 
   // Commit logic: identical to the verified toolbar bridge. dedup the input event

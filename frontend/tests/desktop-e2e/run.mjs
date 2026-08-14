@@ -228,6 +228,74 @@ try {
     throw new Error('引擎未就绪(超时)')
   })
 
+  // 自建工具栏（P2a）：必须走完 UI 链路验证——原语级测试通过不代表按钮真的接上了。
+  // 断言三件事：① 工具栏渲染出来了；② 激活态从引擎读到了真值；③ 点一个按钮，
+  // 文档状态**真的变了**（不是「点了没报错」）。
+  await step('自建工具栏渲染并接上引擎', async () => {
+    const r = await page.evaluate((finder) => {
+      const ed = eval(finder + '; findEditor()')
+      if (!ed) return { err: 'editor component not found' }
+      const el = ed.$el && ed.$el.querySelector ? ed.$el.querySelector('.etb') : null
+      // 组件树里找 EditorToolbar 实例（拿它的 state 与方法）
+      let tb = null
+      const q = [ed.$]
+      while (q.length && !tb) {
+        const c = q.shift()
+        if (c && c.type && c.type.name === 'EditorToolbar') { tb = c.proxy; break }
+        const stack = [c && c.subTree]
+        while (stack.length) {
+          const v = stack.pop()
+          if (!v) continue
+          if (v.component) q.push(v.component)
+          else if (Array.isArray(v.children)) stack.push(...v.children)
+        }
+      }
+      return {
+        rendered: !!el,
+        buttons: el ? el.querySelectorAll('.etb-btn').length : 0,
+        hasToolbar: !!tb,
+        style: tb && tb.state && tb.state.paragraph ? tb.state.paragraph.styleName : null,
+        zoom: tb && tb.state && tb.state.view ? tb.state.view.zoom : null,
+        fonts: tb ? tb.fontList.length : 0,
+        styles: tb ? tb.styleList.length : 0,
+      }
+    }, FIND_EDITOR)
+    if (r.err) throw new Error(r.err)
+    if (!r.rendered) throw new Error('工具栏未渲染（.etb 不存在）')
+    if (r.buttons < 15) throw new Error('工具栏按钮数异常: ' + r.buttons)
+    if (!r.hasToolbar) throw new Error('组件树里找不到 EditorToolbar 实例')
+    if (!r.style || !r.zoom) throw new Error('激活态没从引擎读到真值: ' + JSON.stringify(r))
+    if (r.fonts < 5 || r.styles < 50) throw new Error('字体/样式清单没拉到: ' + JSON.stringify(r))
+    console.log('      工具栏: ' + r.buttons + ' 个按钮 / 样式=' + r.style + ' / 缩放=' + r.zoom
+      + ' / 字体 ' + r.fonts + ' 款 / 样式库 ' + r.styles + ' 条')
+  })
+
+  await step('点工具栏按钮 → 文档状态真的变了', async () => {
+    const r = await page.evaluate(async (finder) => {
+      const ed = eval(finder + '; findEditor()')
+      if (!ed) return { err: 'editor component not found' }
+      const exec = (a, p) => ed.executor.executeCommand(a, p || {})
+      await exec('insert_at_cursor', { text: '工具栏按钮链路验证段落' })
+      await exec('select_paragraph', {})
+      const el = ed.$el.querySelector('.etb')
+      const btns = Array.from(el.querySelectorAll('.etb-btn'))
+      const boldBtn = btns.find((b) => (b.textContent || '').trim() === 'B')
+      if (!boldBtn) return { err: '找不到加粗按钮' }
+      const before = await exec('get_ui_state')
+      boldBtn.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await new Promise((r2) => setTimeout(r2, 900))
+      const after = await exec('get_ui_state')
+      return {
+        beforeBold: before.character.bold, afterBold: after.character.bold,
+        highlighted: boldBtn.className.indexOf('on') >= 0,
+      }
+    }, FIND_EDITOR)
+    if (r.err) throw new Error(r.err)
+    if (r.beforeBold === r.afterBold) throw new Error('点了加粗但引擎里没变: ' + JSON.stringify(r))
+    if (!r.highlighted) throw new Error('加粗生效了但按钮没高亮（激活态没刷新）: ' + JSON.stringify(r))
+    console.log('      加粗: ' + r.beforeBold + ' → ' + r.afterBold + '，按钮已高亮')
+  })
+
   await step('宿主执行器插入标记文本', async () => {
     const r = await page.evaluate(async (finder, marker) => {
       const ed = eval(finder + '; findEditor()')
@@ -237,10 +305,11 @@ try {
     if (!r || r.success !== true) throw new Error('insert 失败: ' + JSON.stringify(r).slice(0, 150))
   })
 
-  await step('等待自动保存「已保存」', async () => {
+  await step('等待自动保存完成', async () => {
     // 手动保存按钮已随 PR#185 实验工具栏移除——插入即触发 modified → 自动
-    // 保存（约 2.5s 防抖）。「已保存」徽标只停 2.5s，也接受 dirty 已清且不在
-    // 保存中（徽标窗口被轮询错过时的等价完成信号）。
+    // 保存（约 2.5s 防抖）。**成功保存不再显示「已保存」**（PR#345：那个徽标
+    // 反复闪变很打扰），所以完成信号就是「脏标记已清 + 不在保存中 + 没有失败」；
+    // 保留对「已保存」的识别只是为了兼容旧版本前端。
     for (let i = 0; i < 60; i++) {
       const st = await editorEval('return { status: ed.statusText, saving: ed.saving, dirty: ed.dirty }')
       if (/已保存/.test(st.status)) return

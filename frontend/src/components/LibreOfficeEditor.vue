@@ -40,6 +40,19 @@
          compiler does not know the <webview> tag); it mounts into this host.
          审阅面板与画布并排（挤宽而非浮层）——webview 是独立合成层，浮层压在
          上面的行为不可靠。 -->
+    <!-- 自建工具栏（P2a）：只加不减——LO 自己的菜单栏/工具栏这一期原样保留，
+         等自建这套功能覆盖到位再谈隐藏（体验不能退步是硬约束）。
+         Calc/Impress 的命令面完全不同，先只给 Writer。 -->
+    <!-- file 判空不能省：预热备胎（file=null）也会走到 ready，工具栏挂上去就会
+         对着一个隐藏的空白实例白跑 get_ui_state/list_styles/list_fonts。 -->
+    <EditorToolbar
+      v-if="ready && file && !loadingOverlayVisible && docKind === 'writer'"
+      :executor="executor"
+      :refresh-key="uiRefreshKey"
+      :review-open="reviewOpen"
+      @toggle-review="reviewOpen = !reviewOpen"
+      @changed="onDocModified"
+    />
     <view class="libre-body">
       <!-- 浮层必须钉在**画布**上而不是整个编辑器上：审阅面板是并排挤宽的，钉在
            外层右上角会正好压住面板的「修订/批注」标题行（真机截图实证）。 -->
@@ -53,8 +66,10 @@
             <text>{{ displayStatus }}</text>
           </view>
           <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
-               Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。 -->
-          <text v-if="ready && !loadingOverlayVisible && showsReview" class="libre-review-btn" :class="{ on: reviewOpen }"
+               Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。
+               Writer 上这个开关已经在自建工具栏里，浮层不再重复一个。 -->
+          <text v-if="ready && !loadingOverlayVisible && showsReview && docKind !== 'writer'"
+                class="libre-review-btn" :class="{ on: reviewOpen }"
                 @tap="reviewOpen = !reviewOpen">{{ $t('editor.reviewBtn') }}</text>
         </view>
       </view>
@@ -84,6 +99,7 @@
 import { webviewTransport, iframeTransport } from '@/composables/useZetaOfficeWebview.js'
 import { createRelayExecutor } from '@/composables/zetaOfficeRelay.js'
 import ReviewPanel from '@/components/ReviewPanel.vue'
+import EditorToolbar from '@/components/EditorToolbar.vue'
 import { getFileDownloadUrl, getFileUploadUrl } from '@/services/api.js'
 import { getAuthHeaders, getCurrentUser } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
@@ -92,7 +108,7 @@ let seq = 0
 
 export default {
   name: 'LibreOfficeEditor',
-  components: { ReviewPanel },
+  components: { ReviewPanel, EditorToolbar },
   emits: ['close', 'ready', 'open-url'],
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
@@ -112,6 +128,10 @@ export default {
       // 审阅面板（修订/批注）开关与刷新信号
       reviewOpen: false,
       reviewRefreshKey: 0,
+      // 自建工具栏的激活态刷新信号。由「选区/光标动了」和「文档改了」驱动——
+      // 没有轮询：编辑器页把 worker 的选区监听与 IME 覆盖层的光标移动合流成
+      // 一个 selection 事件送过来，覆盖了用户能让光标动起来的所有途径。
+      uiRefreshKey: 0,
       // 状态用 key 存（editor.status.* 命名空间），显示时经 $t 取文案；
       // isError/displayStatus 与「安静保存」的自比较全部按 key 判断，
       // zh 渲染结果与判定行为都与迁移前逐字节一致。
@@ -330,6 +350,9 @@ export default {
           this.$emit('open-url', String(msg.url))
         } else if (msg.type === 'modified') {
           this.onDocModified()
+        } else if (msg.type === 'selection') {
+          // 光标/选区动了：工具栏重读激活态。不标脏——移动光标不是修改文档。
+          if (this.ready) this.uiRefreshKey++
         } else if (msg.type === 'boot-log') {
           this.onBootLog(String(msg.msg || ''))
         }
@@ -588,6 +611,8 @@ export default {
       this.scheduleAutoSave()
       // 文档变了（打字 / AI 改动）——面板开着就刷新，别让它显示过期清单
       if (this.reviewOpen) this.reviewRefreshKey++
+      // 工具栏激活态也可能变了（AI 改了格式、用户敲了字）
+      this.uiRefreshKey++
     },
     scheduleAutoSave() {
       clearTimeout(this._saveTimer)
