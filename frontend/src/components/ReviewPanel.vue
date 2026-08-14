@@ -2,7 +2,7 @@
   <view class="rp">
     <view class="rp-head">
       <view class="rp-tabs">
-        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">修订 {{ revisions.length }}</text>
+        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">修订 {{ revisionGroups.length }}</text>
         <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">批注 {{ comments.length }}</text>
       </view>
       <text class="rp-close" @tap="$emit('close')">收起</text>
@@ -22,18 +22,19 @@
           <text class="rp-empty-t">没有待处理的修订</text>
           <text class="rp-empty-s">对文档的改动会以修订形式出现在这里，可逐条接受或拒绝</text>
         </view>
-        <view v-for="r in revisions" :key="'r' + r.index" class="rp-card" @tap="goto(r)">
+        <view v-for="g in revisionGroups" :key="g.key" class="rp-card" @tap="goto(g)">
           <view class="rp-card-top">
-            <text class="rp-tag" :class="r.type === 'Delete' ? 'del' : 'ins'">{{ r.type === 'Delete' ? '删除' : '插入' }}</text>
-            <text v-if="r.inTable" class="rp-tag tbl">表格</text>
-            <text class="rp-author">{{ r.author || '未署名' }}</text>
-            <text class="rp-date">{{ r.date || '' }}</text>
+            <text class="rp-tag" :class="g.type === 'Delete' ? 'del' : 'ins'">{{ g.type === 'Delete' ? '删除' : '插入' }}</text>
+            <text v-if="g.inTable" class="rp-tag tbl">表格</text>
+            <text v-if="g.items.length > 1" class="rp-tag cnt">{{ g.items.length }} 处连续</text>
+            <text class="rp-author">{{ g.author || '未署名' }}</text>
+            <text class="rp-date">{{ g.date || '' }}</text>
           </view>
-          <text class="rp-text" :class="{ del: r.type === 'Delete' }">{{ r.text || '（空）' }}</text>
-          <text v-if="r.paragraph" class="rp-ctx">{{ r.paragraph }}</text>
+          <text class="rp-text" :class="{ del: g.type === 'Delete' }">{{ g.text || '（空）' }}</text>
+          <text v-if="g.paragraph" class="rp-ctx">{{ g.paragraph }}</text>
           <view class="rp-acts">
-            <text class="rp-act ok" @tap.stop="resolve(r, 'accept')">接受</text>
-            <text class="rp-act no" @tap.stop="resolve(r, 'reject')">拒绝</text>
+            <text class="rp-act ok" @tap.stop="resolveGroup(g, 'accept')">接受</text>
+            <text class="rp-act no" @tap.stop="resolveGroup(g, 'reject')">拒绝</text>
           </view>
         </view>
       </template>
@@ -86,6 +87,35 @@ export default {
   data() {
     return { tab: 'rev', revisions: [], comments: [], error: '' }
   },
+  computed: {
+    // 引擎按「一次编辑操作」记一条 redline：连按 Backspace 删掉一个词，就是一个字
+    // 一条（页边模式下每次删除还各自带走一段内容，引擎也不会替我们合并）。面板是
+    // 修订的权威视图，就得按人的理解呈现——把**位置上首尾相接、且同类型同作者同
+    // 分钟**的相邻条目并成一条卡片，接受/拒绝作用于整组。
+    // contiguous 由 worker 的 list_revisions 用区间比较给出（同段落里相隔很远的
+    // 两处删除不会被误并）；拿不到该字段的旧 worker 退化成不合并，行为与从前一致。
+    revisionGroups() {
+      const groups = []
+      for (const r of this.revisions) {
+        const last = groups[groups.length - 1]
+        const joins = last && r.contiguous
+          && last.type === r.type
+          && (last.author || '') === (r.author || '')
+          && (last.date || '') === (r.date || '')
+        if (joins) {
+          last.items.push(r)
+          last.text += (r.text || '')
+        } else {
+          groups.push({
+            key: 'g' + r.index, type: r.type, author: r.author, date: r.date,
+            inTable: r.inTable, paragraph: r.paragraph, text: r.text || '', items: [r],
+          })
+        }
+      }
+      for (const g of groups) if (g.text.length > 120) g.text = g.text.slice(0, 120) + '…'
+      return groups
+    },
+  },
   watch: {
     executor: { handler() { this.reload() }, immediate: true },
     refreshKey() { this.reload() },
@@ -109,11 +139,19 @@ export default {
       this.revisions = (rv && rv.revisions) || []
       this.comments = (cm && cm.comments) || []
     },
-    goto(r) { this.run('goto_revision', { index: r.index }) },
+    goto(g) { this.run('goto_revision', { index: g.items[0].index }) },
     gotoComment(c) { this.run('goto_comment', { index: c.index }) },
-    async resolve(r, action) {
-      const res = await this.run('resolve_revision', { index: r.index, action })
-      if (res) this.$emit('changed')
+    // 整组处置。**必须从高索引往低处理**：index 就是枚举序，处置掉一条之后比它
+    // 大的索引全部前移一位，而比它小的不受影响——倒着走，剩下的索引才一直有效。
+    async resolveGroup(g, action) {
+      const indices = g.items.map((r) => r.index).sort((a, b) => b - a)
+      let done = 0
+      for (const index of indices) {
+        if (await this.run('resolve_revision', { index, action })) done++
+      }
+      if (done) this.$emit('changed')
+      // 引擎没命中的如实说，别让用户以为整组都处理完了
+      if (done < indices.length) this.error = `本组 ${indices.length} 处中有 ${indices.length - done} 处未被引擎处置`
       await this.reload()
     },
     async resolveAll(action) {
@@ -154,6 +192,7 @@ export default {
 .rp-tag.ins { background: #E6F9F0; color: #1A5336; }
 .rp-tag.del { background: #FEF2F2; color: #991B1B; }
 .rp-tag.tbl { background: #EEF2FF; color: #3730A3; }
+.rp-tag.cnt { background: #F1F3F5; color: #495057; }
 .rp-tag.done { background: #F1F3F5; color: #868E96; }
 .rp-author { font-size: 12px; color: #495057; }
 .rp-date { font-size: 11px; color: #ADB5BD; margin-left: auto; }

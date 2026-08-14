@@ -4,20 +4,6 @@
          (user feedback). Status floats over the editor's top-right corner;
          the pill only appears while something is happening (saving/failure)
          and vanishes when ready. -->
-    <view class="libre-float">
-      <!-- No manual save button: edits auto-save (modify listener → debounced
-           saveDocument). The pill doubles as the autosave indicator
-           (保存中… / 已保存 / 保存失败). Boot/load 阶段由下方进度面板展示，
-           pill 只负责就绪后的保存状态。 -->
-      <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
-        <view v-if="!isError && !ready" class="libre-spin"></view>
-        <text>{{ displayStatus }}</text>
-      </view>
-      <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
-           Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。 -->
-      <text v-if="ready && !loadingOverlayVisible && showsReview" class="libre-review-btn" :class="{ on: reviewOpen }"
-            @tap="reviewOpen = !reviewOpen">审阅</text>
-    </view>
     <!-- 加载进度面板：引擎启动 + 文档下载/打开是感知最慢的一段（尤其大文档），
          把过程阶段化展示出来（用户反馈：不能更快，也要看得见进展）。 -->
     <view v-if="loadingOverlayVisible" class="libre-loading">
@@ -55,7 +41,23 @@
          审阅面板与画布并排（挤宽而非浮层）——webview 是独立合成层，浮层压在
          上面的行为不可靠。 -->
     <view class="libre-body">
-      <view :id="hostId" class="libre-host"></view>
+      <!-- 浮层必须钉在**画布**上而不是整个编辑器上：审阅面板是并排挤宽的，钉在
+           外层右上角会正好压住面板的「修订/批注」标题行（真机截图实证）。 -->
+      <view class="libre-canvas-wrap">
+        <view :id="hostId" class="libre-host"></view>
+        <view class="libre-float">
+          <!-- No manual save button: edits auto-save (modify listener → debounced
+               saveDocument). 保存状态只在「慢」和「失败」时出声——见 saveDocument。 -->
+          <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
+            <view v-if="!isError && !ready" class="libre-spin"></view>
+            <text>{{ displayStatus }}</text>
+          </view>
+          <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
+               Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。 -->
+          <text v-if="ready && !loadingOverlayVisible && showsReview" class="libre-review-btn" :class="{ on: reviewOpen }"
+                @tap="reviewOpen = !reviewOpen">审阅</text>
+        </view>
+      </view>
       <ReviewPanel
         v-if="reviewOpen && ready && showsReview"
         :executor="executor"
@@ -207,6 +209,7 @@ export default {
     // by the closer (closeFile / evictLibreInstance await flushSave first) —
     // export needs the live webview, so saving from here is already too late.
     clearTimeout(this._saveTimer)
+    clearTimeout(this._slowSaveTimer)
     clearInterval(this._bootTimer)
     // Tell the host this editor (and its executor) is going away — so it can
     // stop routing AI commands to a disposed executor when the document tab is
@@ -632,8 +635,13 @@ export default {
       const fileId = f.wpsFileId || f.id
       if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return false }
       this.saving = true
-      const prevStatus = this.statusText
-      this.statusText = '保存中…'
+      // 保存状态别抢戏：绝大多数保存几百毫秒就完了，闪一下「保存中…→已保存」
+      // 纯粹是干扰（用户反馈：经常有变化，不好看且会打扰）。规则改成——慢到 2s
+      // 以上才提示「保存中…」，成功后安静收回、不报「已保存」，失败才常驻显示。
+      // 上一次的「保存失败」不能当成要恢复的状态，这次成功了就该回到就绪。
+      const prevStatus = this.statusText.indexOf('失败') !== -1 ? '就绪' : this.statusText
+      clearTimeout(this._slowSaveTimer)
+      this._slowSaveTimer = setTimeout(() => { if (this.saving) this.statusText = '保存中…' }, 2000)
       try {
         const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
         this.appendLog('▶ export_document「' + name + '」…')
@@ -660,7 +668,6 @@ export default {
         }
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
-        this.statusText = '已保存'
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
         return true
       } catch (e) {
@@ -669,8 +676,9 @@ export default {
         return false
       } finally {
         this.saving = false
-        // Let the badge linger, then settle back to ready (unless a failure is showing).
-        setTimeout(() => { if (this.statusText === '已保存') this.statusText = prevStatus }, 2500)
+        clearTimeout(this._slowSaveTimer)
+        // 只收回自己挂上去的「保存中…」；失败态是 catch 里刚设的，必须留着
+        if (this.statusText === '保存中…') this.statusText = prevStatus
       }
     },
     // Authed multipart POST — the upload twin of fetchArrayBuffer (backend
@@ -694,9 +702,9 @@ export default {
 
 <style scoped>
 .libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
-/* Floating status pill, pinned over the editor's top-right corner (LO's own
-   menubar leaves that region empty). No layout height is reserved — the
-   document canvas gets the full pane. */
+/* Floating status pill, pinned over the CANVAS's top-right corner (not the
+   wrapper's — the review panel sits to the right and would be covered). No
+   layout height is reserved — the document canvas gets the full pane. */
 .libre-float { position: absolute; top: 6px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 8px; }
 .libre-pill { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
   background: rgba(31, 41, 55, 0.78); color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
@@ -705,7 +713,8 @@ export default {
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
 .libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
-.libre-host { flex: 1; min-width: 0; min-height: 0; height: 100%; }
+.libre-canvas-wrap { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; }
+.libre-host { width: 100%; height: 100%; }
 .libre-review-btn { padding: 3px 10px; border-radius: 999px; background: rgba(31, 41, 55, 0.78);
   color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
 .libre-review-btn.on { background: #E6F9F0; color: #1A5336; }

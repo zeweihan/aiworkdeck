@@ -205,6 +205,13 @@ function countRedlines() {
   try { const en = xModel.getRedlines().createEnumeration(); while (en.hasMoreElements()) { en.nextElement(); n++; } } catch (e) {}
   return n;
 }
+// 两个文本区间的起点是否重合——list_revisions 用它判断相邻修订是否首尾相接。
+// 跨 XText（正文 vs 表格单元格）比较时引擎抛 IllegalArgumentException：那本来
+// 也不算相接，吞掉当 false。
+function rangeStartsEqual(a, b) {
+  if (!a || !b) return false;
+  try { return a.getText().compareRegionStarts(a, b) === 0; } catch (e) { return false; }
+}
 // 把视图光标摆到 .uno:Accept/RejectTrackedChange 能命中的位置。**两种修订
 // 类型要求相反的摆法**（真机探针逐一试出来的，别凭直觉改）：
 //   - 插入型：文本在正文流里，光标必须**跨选**整个区间才命中；
@@ -398,6 +405,10 @@ function dispatchUno(url) {
 // ALLOWLIST map (name -> .uno: slot), deliberately NOT a raw dispatch
 // passthrough. Toggles (bold/italic/underline) are the engine's own, so
 // collapsed-cursor and mixed-selection semantics match the desktop app.
+// 缩放上下限。LO 自身允许 20%..600%，越界写进去引擎会自己夹，但夹之前会先按
+// 非法值重排一次版；在 JS 侧先夹住，捏合手势连发时不至于抖。
+const ZOOM_MIN = 20, ZOOM_MAX = 600;
+
 const UI_COMMANDS = {
   select_all: '.uno:SelectAll',
   bold: '.uno:Bold', italic: '.uno:Italic', underline: '.uno:Underline',
@@ -1841,6 +1852,29 @@ const EXEC = {
     dispatchUno(url);
     return { success: true, name: String(p.name) };
   },
+  // 视图缩放（触控板捏合 / Cmd+加减号 / 工具栏缩放控件）。
+  // {value} 给绝对百分比，{delta} 给相对增量；不传就只读回当前值。
+  // ZoomType 必须先切 BY_VALUE——停在「适合页宽」这类自动模式时，引擎会按窗口
+  // 重算 ZoomValue，写进去的数当场被覆盖。两个属性都是 sal_Int16，裸 number 会
+  // 编组成 long 被严格 setter 拒绝（且常被 try 吞掉），必须走 shortAny。
+  set_zoom(p) {
+    let vs = null;
+    try { vs = ctrl.getViewSettings(); } catch (e) { return { success: false, message: 'no view settings: ' + errStr(e) }; }
+    let cur = 100;
+    try { cur = Number(vs.getPropertyValue('ZoomValue')) || 100; } catch (e) {}
+    const hasValue = p && p.value != null;
+    const hasDelta = p && p.delta != null;
+    if (!hasValue && !hasDelta) return { success: true, zoom: cur };
+    let next = hasValue ? Number(p.value) : cur + Number(p.delta);
+    if (!isFinite(next)) return { success: false, message: 'set_zoom: value/delta 不是数字' };
+    next = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, Math.round(next)));
+    try { vs.setPropertyValue('ZoomType', shortAny(css.view.DocumentZoomType.BY_VALUE)); } catch (e) {}
+    try { vs.setPropertyValue('ZoomValue', shortAny(next)); }
+    catch (e) { return { success: false, message: 'set_zoom 失败: ' + errStr(e) }; }
+    let applied = next;
+    try { applied = Number(vs.getPropertyValue('ZoomValue')) || next; } catch (e) {}
+    return { success: true, zoom: applied };
+  },
   // [spike] Phase B: raw measurements for mapping the view cursor to canvas
   // pixels. We DELIBERATELY return primitives (not a final px rect) so the
   // mm->px formula can be calibrated on the JS side without restarting LOWA.
@@ -3044,6 +3078,7 @@ const EXEC = {
   list_revisions(p) {
     const limit = Math.max(1, Math.min(500, Number(p && p.limit) || 200));
     const out = [];
+    let prevEnd = null;   // 上一条的 RedlineEnd，用来判「首尾相接」（见 contiguous）
     try {
       const en = xModel.getRedlines().createEnumeration();
       while (en.hasMoreElements() && out.length < limit) {
@@ -3059,9 +3094,16 @@ const EXEC = {
         // 删除型在页边模式下文本收进 redline 对象（getString 可取）；插入型的
         // 文本只在正文流里，要靠 RedlineStart/End 区间取。两路都试。
         try { if (typeof r.getString === 'function') it.text = String(r.getString() || ''); } catch (e) {}
+        let curEnd = null;
         try {
           const rs = r.getPropertyValue('RedlineStart'), re = r.getPropertyValue('RedlineEnd');
           if (rs && re) {
+            curEnd = re;
+            // 与上一条首尾相接？审阅面板据此把「连按 Backspace 产生的一串单字
+            // 删除」并成一条卡片（用户反馈：一个字一条记录很不科学）。页边模式下
+            // 删除文本被移出正文流，一串连续删除的区间会塌到同一个正文位置，正好
+            // 命中这个判据；同段落里相隔很远的两处删除则不会被误并。
+            it.contiguous = rangeStartsEqual(prevEnd, rs);
             if (!it.text) {
               const rc = rs.getText().createTextCursorByRange(rs);
               rc.gotoRange(re, true);
@@ -3073,6 +3115,7 @@ const EXEC = {
             try { it.inTable = !!rs.getPropertyValue('Cell'); } catch (e) { it.inTable = false; }
           }
         } catch (e) {}
+        prevEnd = curEnd;
         it.text = String(it.text || '').slice(0, 120);
         out.push(it);
       }
