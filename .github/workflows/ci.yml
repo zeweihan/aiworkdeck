@@ -18,7 +18,12 @@ jobs:
           cache: maven
       - name: Test
         working-directory: backend
-        run: mvn -B test
+        # forkNode 走 TCP 而不是默认的 stdout 管道：套件里有测试进程往 native stdout
+        # 吐脏字节（surefire 报 Corrupted channel），管道模式下 fork 信道被污染，
+        # surefire 误判 "VM terminated without properly saying goodbye"（退出码 0、
+        # 零断言失败也算 BUILD FAILURE），2026-08-14 一天在 Linux runner 上撞了两次，
+        # 两次都死在同一位置附近、重跑又过。TCP 信道对 stdout 污染免疫。
+        run: mvn -B test -Dsurefire.forkNode.factory=org.apache.maven.plugin.surefire.extensions.SurefireForkNodeFactory
 
   frontend:
     name: Frontend (build:h5)
