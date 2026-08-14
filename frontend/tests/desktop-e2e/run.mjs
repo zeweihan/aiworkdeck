@@ -207,10 +207,63 @@ try {
     await clickAt(box, '文本 ' + label)
   }
 
+  // 点击类失败最难查的是"点了到底有没有发出请求"。把写请求录下来，失败时一并报出。
+  const apiWrites = []
+  page.on('request', (r) => {
+    try { if (r.method() !== 'GET' && r.url().includes('/api/')) apiWrites.push(r.method() + ' ' + new URL(r.url()).pathname) } catch (e) { /* ignore */ }
+  })
+  const pageErrs = []
+  page.on('pageerror', (e) => pageErrs.push(String(e).slice(0, 160)))
+
   await step('新建 Word 文档并点击打开（编辑器 webview）', async () => {
-    await mouseClickSel('[title="新建文档"]')
+    // 「新建文档」是个 18×16 的小图标，而顶栏（试用徽标/负责人行）在这前后还在
+    // 重排——命中检查算出坐标、真正点下去之间元素会挪几像素，于是点空。表现是
+    // 间歇性的"点了没反应、一个写请求都没发"。所以：点了就验效果，没效果就重点。
+    // 先等文件树组件真的挂上：onFileTreeQuickAction 的第一行就是
+    // `const tree = this.$refs.fileTree; if (!tree) return` —— ref 没到位时点击
+    // 静默什么都不做，现象正是"一个写请求都没发"。
+    await page.waitForFunction(() => {
+      let seed = null
+      for (const el of document.querySelectorAll('*')) { if (el.__vueParentComponent) { seed = el.__vueParentComponent; break } }
+      if (!seed) return false
+      let root = seed; while (root.parent) root = root.parent
+      const q = [root]
+      while (q.length) {
+        const c = q.shift()
+        if (c.proxy && c.proxy.$refs && c.proxy.$refs.fileTree) return true
+        const stack = [c.subTree]
+        while (stack.length) {
+          const v = stack.pop()
+          if (!v) continue
+          if (v.component) q.push(v.component)
+          else if (Array.isArray(v.children)) stack.push(...v.children)
+        }
+      }
+      return false
+    }, { timeout: 30000 }).catch(() => {})
+
+    let created = false
+    for (let attempt = 0; attempt < 3 && !created; attempt++) {
+      await mouseClickSel('[title="新建文档"]')
+      created = await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 8000 })
+        .then(() => true).catch(() => false)
+    }
     // 创建只落文件不开编辑器；等文件出现在树里再点击打开
-    await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 15000 })
+    try {
+      if (!created) await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 8000 })
+    } catch (e) {
+      const snap = await page.evaluate(() => {
+        const el = document.querySelector('[title="新建文档"]')
+        const r = el ? el.getBoundingClientRect() : null
+        return {
+          btnRect: r ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) } : null,
+          viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
+          text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 200),
+        }
+      }).catch(() => null)
+      throw new Error('点了新建文档但文件没出现；写请求=' + JSON.stringify(apiWrites.slice(-6))
+        + ' 页面错误=' + JSON.stringify(pageErrs.slice(0, 3)) + ' 现场=' + JSON.stringify(snap))
+    }
     await mouseClickText('newdocument')
     await page.waitForSelector('webview', { timeout: 30000 })
   })
@@ -265,7 +318,7 @@ try {
   // 断言三件事：① 工具栏渲染出来了；② 激活态从引擎读到了真值；③ 点一个按钮，
   // 文档状态**真的变了**（不是「点了没报错」）。
   await step('自建工具栏渲染并接上引擎', async () => {
-    const r = await page.evaluate((finder) => {
+    const READ_TOOLBAR = (finder) => {
       const ed = eval(finder + '; findEditor()')
       if (!ed) return { err: 'editor component not found' }
       const el = ed.$el && ed.$el.querySelector ? ed.$el.querySelector('.etb') : null
@@ -292,9 +345,17 @@ try {
         fonts: tb ? tb.fontList.length : 0,
         styles: tb ? tb.styleList.length : 0,
       }
-    }, FIND_EDITOR)
+    }
+    let r = await page.evaluate(READ_TOOLBAR, FIND_EDITOR)
     if (r.err) throw new Error(r.err)
     if (!r.rendered) throw new Error('工具栏未渲染（.etb 不存在）')
+    // 组件挂载后 get_ui_state / list_styles / list_fonts 是异步拉的，引擎刚
+    // ready 时还没回来——立刻断言必然读到空值。等它填好再判（本步曾因此误报）。
+    for (let i = 0; i < 40 && (!r.style || !r.zoom || r.fonts < 5 || r.styles < 50); i++) {
+      await sleep(500)
+      r = await page.evaluate(READ_TOOLBAR, FIND_EDITOR)
+      if (r.err) throw new Error(r.err)
+    }
     if (r.buttons < 15) throw new Error('工具栏按钮数异常: ' + r.buttons)
     if (!r.hasToolbar) throw new Error('组件树里找不到 EditorToolbar 实例')
     if (!r.style || !r.zoom) throw new Error('激活态没从引擎读到真值: ' + JSON.stringify(r))
@@ -350,7 +411,8 @@ try {
       if (/失败/.test(st.status)) throw new Error('保存状态: ' + st.status)
       await sleep(1000)
     }
-    throw new Error('自动保存未确认(超时)')
+    const last = await editorEval('return { status: ed.statusText, key: ed.statusKey, saving: ed.saving, dirty: ed.dirty, docLoadFailed: ed.docLoadFailed }')
+    throw new Error('自动保存未确认(超时)；最后状态=' + JSON.stringify(last))
   })
 
   await step('API 下载 docx 验证内容落盘', async () => {
