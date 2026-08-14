@@ -1811,6 +1811,24 @@ export function logTelemetryEvent(eventName, attrs) {
   })
 }
 
+// 应用语言（zh-CN / en-US）。权威源在前端 utils/appLanguage.js，这两个函数只负责
+// 把值镜像到后端 system_setting（后端据此选 system prompt 语言与文案语言）。
+export function getAppLanguageRemote() {
+  return request({
+    url: '/api/app/language',
+    method: 'GET'
+  })
+}
+
+export function saveAppLanguageRemote(language) {
+  return request({
+    url: '/api/app/language',
+    method: 'POST',
+    data: { language },
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
 export function getTelemetrySettings() {
   return request({
     url: '/api/telemetry/settings',

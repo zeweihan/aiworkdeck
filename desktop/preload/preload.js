@@ -162,6 +162,11 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     },
     setRecentProjects: (list) => ipcRenderer.send('checkba:recent-projects', list)
   },
+  // 应用语言（zh-CN/en-US）：渲染层是权威源，启动与切换时推给主进程
+  // （菜单/原生对话框文案随之重建，见 desktop/main/app-language.js）。
+  appLanguage: {
+    set: (lang) => ipcRenderer.send('checkba:app-language', lang)
+  },
   // Epic #43: embedded LibreOffice editor <webview> wiring. getEditor() returns
   // { url, preload, partition } for the host to mount the webview.
   // （onOpenEmbed / ⌘⇧O 覆盖层已移除：内联编辑器就是产品默认。）

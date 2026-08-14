@@ -5,6 +5,8 @@
 // 后端新增工具时同步补一行；未收录的代号按 snake_case → 空格分词兜底展示。
 // wps_* 是 doc_* 的灰度别名（PR#87），查表前先归一化。
 
+import { isEnglish } from '@/utils/appLanguage.js'
+
 const NAMES = {
   // 计划 / 项目
   todo_write: { zh: '更新任务清单', en: 'Update plan' },
@@ -265,15 +267,16 @@ const NAMES = {
 }
 
 // code 可以是纯工具名，也可以是 <tool_code> 里的 `tool_name({...})` 完整调用串。
-// 产品是中文优先：显示名一律取 zh（此前按 uni.getLocale() 取语言，Electron 常
-// 返回 en-*，导致面板里中英文混杂——用户反馈统一为中文）。en 列保留给未来 i18n。
+// 语言判定只走应用自己的语言设置（utils/appLanguage.js），不信系统 locale：
+// 此前按 uni.getLocale() 取语言，Electron 常返回 en-*，导致面板里中英文混杂
+//（用户反馈后曾统一写死 zh）。现在 zh/en 两列都在用，随语言设置切换。
 export function toolDisplayName(code) {
   if (!code) return ''
   const m = String(code).match(/^\s*([\w.]+)\s*\(/)
   let name = m ? m[1] : String(code).trim()
   if (name.startsWith('wps_')) name = 'doc_' + name.slice(4) // 灰度别名归一
   const entry = NAMES[name]
-  if (entry) return entry.zh
+  if (entry) return isEnglish() ? entry.en : entry.zh
   // 兜底：未收录的代号按 snake_case 分词，至少可读
   return name.replace(/_/g, ' ')
 }
