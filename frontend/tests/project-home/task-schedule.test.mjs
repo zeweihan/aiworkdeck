@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/TaskSchedule.vue'),
   'utf8')
+const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.meta.url), 'utf8')
 
 // 只在「实际代码」里做禁字断言：注释里必须能写清楚为什么不做某件事，
 // 那些说明性文字不该把断言判红。
@@ -24,7 +25,8 @@ test('props 契约', () => {
 })
 
 test('空态文案存在（A 期唯一会渲染的分支）', () => {
-  assert.ok(SRC.includes('还没有排任务'))
+  assert.ok(ZH.includes('还没有排任务'), '文案已迁 locale')
+  assert.ok(SRC.includes('noTasksTitle'), '组件要引用该 key')
 })
 
 test('列表分支已落地（B 期只换渲染分支，父页面与端点不改）', () => {
