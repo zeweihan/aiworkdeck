@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/ActivityFeed.vue'),
   'utf8')
+const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.meta.url), 'utf8')
 
 // 只在「实际代码」里做禁字断言：注释里必须能写清楚为什么不做某件事，
 // 那些说明性文字不该把断言判红。
@@ -27,13 +28,15 @@ test('四个 props 齐全且都有默认值', () => {
 
 test('unavailable 走中性引导态而不是错误态', () => {
   assert.match(SRC, /v-else-if="unavailable"/)
-  assert.ok(SRC.includes('这份案卷还没有版本记录'))
+  assert.ok(ZH.includes('这份案卷还没有版本记录'), '文案已迁 locale')
+  assert.ok(SRC.includes('noVersionHistoryTitle'), '组件要引用该 key')
   for (const bad of ['读取失败', '加载失败', '出错了', '请重试'])
     assert.ok(!CODE.includes(bad), 'unavailable 不许是错误文案: ' + bad)
 })
 
 test('空列表另有一条空态文案，与 unavailable 分开', () => {
-  assert.ok(SRC.includes('还没有动态'))
+  assert.ok(ZH.includes('还没有动态'), '文案已迁 locale')
+  assert.ok(SRC.includes('noActivityTitle'), '组件要引用该 key')
 })
 
 test('不标注 AI/人', () => {

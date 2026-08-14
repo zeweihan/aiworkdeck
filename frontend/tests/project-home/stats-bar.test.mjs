@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/OverviewStatsBar.vue'),
   'utf8')
+const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.meta.url), 'utf8')
 
 // 只在「实际代码」里做禁字断言：注释里必须能写清楚为什么不做某件事，
 // 那些说明性文字不该把断言判红。
@@ -34,9 +35,12 @@ test('不展示项目大小与最近修改（那两个数是假的）', () => {
 })
 
 test('四个统计格都在：文件 / 文件夹 / 参与人 / 后台任务', () => {
-  assert.ok(SRC.includes('个文件夹'))
-  assert.ok(SRC.includes('位参与人'))
-  assert.ok(SRC.includes('个后台任务'))
+  assert.ok(ZH.includes('个文件夹'), '文案已迁 locale')
+  assert.ok(SRC.includes('folderCountLabel'), '组件要引用该 key')
+  assert.ok(ZH.includes('位参与人'), '文案已迁 locale')
+  assert.ok(SRC.includes('memberCountLabel'), '组件要引用该 key')
+  assert.ok(ZH.includes('个后台任务'), '文案已迁 locale')
+  assert.ok(SRC.includes('runCountLabel'), '组件要引用该 key')
   assert.match(SRC, /class="stat-tile"/)
 })
 

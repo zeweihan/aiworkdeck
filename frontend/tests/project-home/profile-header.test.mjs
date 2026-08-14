@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url'
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/ProfileHeader.vue'),
   'utf8')
+const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.meta.url), 'utf8')
 
 // 只在「实际代码」里做禁字断言：注释里必须能写清楚为什么不做某件事，
 // 那些说明性文字不该把断言判红。
@@ -66,7 +67,8 @@ test('ai / default 都弱化标记，走 profileFieldHint', () => {
 test('空态引导 + 事项类型下拉用 MATTER_TYPES', () => {
   assert.match(SRC, /import\s*\{\s*MATTER_TYPES\s*\}\s*from\s*'@\/config\/matterTypes\.js'/)
   assert.match(SRC, /isProfileEmpty/)
-  assert.ok(SRC.includes('这份案卷的档案还是空的'))
+  assert.ok(ZH.includes('这份案卷的档案还是空的'), '文案已迁 locale')
+  assert.ok(SRC.includes('profileEmptyGuideDesc'), '组件要引用该 key')
 })
 
 test('禁 emoji + 浅色', () => {
