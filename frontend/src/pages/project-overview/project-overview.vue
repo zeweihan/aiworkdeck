@@ -578,6 +578,12 @@
             @open-file="handleLitigationOpenFile"
             @request-scope-select="handleLitigationScopeSelect"
           />
+          <MeetingRecordingPanel
+            v-else-if="leftPaneKey === 'meeting-recorder'"
+            :project-id="projectId"
+            :current-user="currentUser"
+            @generate-minutes="handleMeetingMinutesStart"
+          />
           <EasyVoicePane
              v-else-if="leftPaneKey === 'easyvoice'"
              @request-doc-text="handleEasyVoiceDocRequest"
@@ -1510,6 +1516,7 @@ import { activityTracker } from '@/utils/activityTracker.js'
 import { ICONS as GLYPHS } from '@/config/icons.js'
 import DdFilesPanel from '@/components/DdFilesPanel.vue'
 import ShareholderMeetingPanel from '@/components/ShareholderMeetingPanel.vue'
+import MeetingRecordingPanel from '@/components/MeetingRecordingPanel.vue'
 import LitigationVisualPanel from '@/components/LitigationVisualPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
@@ -1538,6 +1545,7 @@ export default {
     ClipboardPanel,
     DdFilesPanel,
     ShareholderMeetingPanel,
+    MeetingRecordingPanel,
     LitigationVisualPanel,
     DdRequestEditor,
     InviteMemberDialog,
@@ -3084,6 +3092,17 @@ export default {
       }
     },
 
+    // 会议录音「生成纪要」：prompt 由服务端拼好（触发词「会议纪要」开头才命中 skill 注入），
+    // 这里只负责以 AGENT 模式发出去——与股东大会核查同一条路。
+    async handleMeetingMinutesStart({ prompt }) {
+      const chat = this.$refs.chatInterface
+      if (!chat || !chat.sendExternalPrompt) {
+        uni.showToast({ title: 'AI 面板未就绪，请稍后重试', icon: 'none' })
+        return
+      }
+      await chat.sendExternalPrompt(prompt)
+    },
+
     // ==================== 诉讼可视化面板 ====================
 
     // 出图那句话由服务端拼好（触发词必须原样在正文里才命中 skill 注入），
@@ -4588,7 +4607,9 @@ export default {
     async loadEnabledSkills() {
       try {
         const res = await getSkills()
-        const list = (res && res.data) || []
+        // /api/skills/list 裸返回数组（无 {code,data} 信封，request() 原样透传）；
+        // 旧写法只认 res.data，导致这里恒为空数组 = requiresSkill 门控入口装了也不出现
+        const list = Array.isArray(res) ? res : ((res && res.data) || [])
         if (!Array.isArray(list)) return
         this.enabledSkillIds = list.filter(s => s && s.enabled).map(s => s.id)
       } catch (e) {

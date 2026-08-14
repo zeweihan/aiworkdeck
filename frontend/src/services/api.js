@@ -2004,6 +2004,75 @@ export function bindShareholderMeetingConversation(checkId, conversationId, stat
   })
 }
 
+// ===================== 会议录音 (Meeting Recording) =====================
+export function createMeetingRecording(projectId) {
+  return request({
+    url: `/api/meetings/projects/${projectId}`,
+    method: 'POST'
+  })
+}
+
+export function getMeetingRecordings(projectId) {
+  return request({
+    url: `/api/meetings/projects/${projectId}`,
+    method: 'GET'
+  })
+}
+
+// 转写中后端会顺手向听悟问一次进度（poll-on-read），前端定时调它即可推进状态
+export function getMeetingRecording(meetingId) {
+  return request({
+    url: `/api/meetings/${meetingId}`,
+    method: 'GET'
+  })
+}
+
+export function finishMeetingRecording(meetingId, durationMs, transcribe) {
+  return request({
+    url: `/api/meetings/${meetingId}/finish`,
+    method: 'POST',
+    data: { durationMs, transcribe },
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function transcribeMeetingRecording(meetingId) {
+  return request({
+    url: `/api/meetings/${meetingId}/transcribe`,
+    method: 'POST'
+  })
+}
+
+export function updateMeetingRecording(meetingId, payload) {
+  return request({
+    url: `/api/meetings/${meetingId}`,
+    method: 'PATCH',
+    data: payload,
+    header: { 'Content-Type': 'application/json' }
+  })
+}
+
+export function exportMeetingTranscript(meetingId) {
+  return request({
+    url: `/api/meetings/${meetingId}/export`,
+    method: 'POST'
+  })
+}
+
+export function getMeetingMinutesPrompt(meetingId) {
+  return request({
+    url: `/api/meetings/${meetingId}/minutes-prompt`,
+    method: 'POST'
+  })
+}
+
+export function deleteMeetingRecording(meetingId) {
+  return request({
+    url: `/api/meetings/${meetingId}`,
+    method: 'DELETE'
+  })
+}
+
 // ==================== 编辑器操作结果回调 ====================
 
 /**

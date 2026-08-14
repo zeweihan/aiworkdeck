@@ -1,0 +1,52 @@
+# 会议录音 Skill（打包格式见 docs/SKILL_SPEC.md）
+#
+# 本 skill 是「会议录音」面板插件的 AI 侧：面板负责录音/转写（说话人分离走通义听悟），
+# 「生成纪要」按钮拼含触发词的 kick-off prompt 交给 AI 编排，命中本 skill 后
+# 用 meeting_get_transcript 读转写稿、write_docx 产出律师级纪要。
+id: meeting-recorder
+name: 会议录音
+description: 开会一键录音，自动转写并区分说话人，AI 生成结构化会议纪要（议题、讨论要点、决议、待办、风险提示）落进项目文件。转写走阿里云通义听悟，需在设置中配置凭证。
+
+author: AI Workdeck
+author_url: https://www.aiworkdeck.com
+version: 1.0.0
+license: MIT
+
+# 默认不安装：转写依赖用户自己的阿里云凭证，装了才在左栏出现（requiresSkill 过滤）；
+# 用户在插件广场手动启用（= 安装），见 SkillRegistry/SkillMarketService。
+enabled_by_default: false
+
+# 法律事项类别（匿名统计用，枚举见 MatterCategory）
+category: 其他法律事务
+
+# 触发条件：用户输入包含任一关键词即命中（面板 kick-off prompt 以「会议纪要」开头）
+triggers:
+  - 会议纪要
+  - 会议录音
+  - 生成纪要
+  - 整理会议
+  - 会议转写
+  - 谈判纪要
+
+# prompt 模板文件名（相对本目录）
+prompt: prompt.md
+
+# 工具白名单：命中后本轮 LLM 可见工具
+#   = allowed_tools ∪ 基础工具集（ai.skills.base-tools）∪ 编排类工具（SkillRouter.ORCHESTRATION_TOOLS）
+# 基础工具集只有 read_document / list_files / query_memory 三个，
+# 本 skill 要用的工具必须逐个列出——漏了就是「模型看不见 = 不会调用」。
+# todo_write 已被编排类工具集恒定放行，显式声明是自文档。
+allowed_tools:
+  - meeting_list_recordings
+  - meeting_get_transcript
+  - write_docx
+  - read_file
+  - search_project_files
+  - todo_write
+
+# 输出结构约定（随 prompt 注入）
+output: |
+  一份 Word 交付物，用 write_docx 写入项目文件：
+  「会议纪要_<会议标题>.docx」——结构化会议纪要（基本信息、议题与讨论要点、
+  决议事项、待办事项、风险提示与待核实事项）。
+  <final> 中简述：几项决议、几项待办、有无需要核实的事项。不要复述纪要全文。

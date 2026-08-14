@@ -6,6 +6,7 @@ import com.checkba.service.ai.tools.EvidenceTools;
 import com.checkba.service.ai.tools.FileTools;
 import com.checkba.service.ai.tools.LegalTools;
 import com.checkba.service.ai.tools.LitigationVisualTools;
+import com.checkba.service.ai.tools.MeetingTools;
 import com.checkba.service.ai.tools.MemoryTools;
 import com.checkba.service.ai.tools.OfficeEditTools;
 import com.checkba.service.ai.tools.PdfTools;
@@ -43,6 +44,7 @@ final class RealToolBeans {
                 FileTools.class,
                 LegalTools.class,
                 LitigationVisualTools.class,
+                MeetingTools.class,
                 MemoryTools.class,
                 OfficeEditTools.class,
                 PdfTools.class,

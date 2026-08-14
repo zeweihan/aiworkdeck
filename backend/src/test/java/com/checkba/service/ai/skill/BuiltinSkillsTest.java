@@ -123,6 +123,23 @@ class BuiltinSkillsTest {
     }
 
     @Test
+    @DisplayName("会议录音 skill 就位：触发词、meeting 工具与产出链路齐全")
+    void meetingRecorderSkillIsWiredUp() {
+        SkillDefinition s = registry.getSkill("meeting-recorder")
+                .orElseThrow(() -> new AssertionError("meeting-recorder 未注册"));
+
+        assertTrue(s.getTriggers().contains("会议纪要"),
+                "面板 kick-off prompt 以「会议纪要」开头，触发词缺了整条链路断掉");
+        assertTrue(s.getAllowedTools().containsAll(
+                        List.of("meeting_get_transcript", "meeting_list_recordings", "write_docx")),
+                "读稿两件套与 write_docx 必须都在白名单里：" + s.getAllowedTools());
+        assertFalse(s.isEnabledByDefault(), "默认不安装（广场装启停），别悄悄改成默认开");
+        assertFalse(s.getPromptTemplate().isBlank(), "prompt.md 应有内容");
+        assertTrue(s.getPromptTemplate().contains("meeting_get_transcript"),
+                "prompt 必须交代先读转写稿再写纪要");
+    }
+
+    @Test
     @DisplayName("prompt 守住那条铁律：模型抽取、脚本画图")
     void promptCarriesTheGoldenRule() {
         String prompt = registry.getSkill("litigation-visual").orElseThrow().getPromptTemplate();

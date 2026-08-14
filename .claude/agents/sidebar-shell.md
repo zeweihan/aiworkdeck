@@ -48,7 +48,7 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 
 ## 左栏入口（frontend/src/config/leftSidebarPlugins.js，57 行）
 
-固定入口：files(资源管理器→FileTree)、dd-files(尽调文件)、shareholder-meeting(股东大会，**面板区无分支=占位**)、search、easyvoice、desensitize、version(版本记录→VersionPanel，见 `.claude/agents/version-control.md`)。辅助函数 getLeftSidebarPlugin(key)（找不到回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。rail 齿轮对所有人可见，admin 页/接口后端 requireAdmin（用户名 admin）。
+固定入口：files(资源管理器→FileTree)、dd-files(尽调文件)、shareholder-meeting(股东大会)、search、easyvoice、desensitize、version(版本记录→VersionPanel，见 `.claude/agents/version-control.md`)；requiresSkill 门控入口：litigation-visual(诉讼可视化)、meeting-recorder(会议录音→MeetingRecordingPanel，skill 启用才出现在 rail；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（找不到回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。rail 齿轮对所有人可见，admin 页/接口后端 requireAdmin（用户名 admin）。
 **插件广场入口（2026-08 二改：VS Code 扩展栏形态）**：rail 广场按钮 goToPluginMarket → `toggleLeftPane('market')` 开左栏列表面板（`MarketSidebarPanel`，leftPaneKey='market'，leftPaneTitle 特判）；点列表行 → `openMarketDetail(spec)` 在中栏开详情 tab（`MarketDetailPane`，`tabType:'market-detail'`、单例、isTabVisible 常显、直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported——与浏览器 tab 同法）。独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。详见 plugin-marketplace.md。
 
 ## 协作入口（PR-E，2026-08-06）
