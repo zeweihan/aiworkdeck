@@ -93,9 +93,11 @@ public class LocalIdentityService {
         this.projectFileRepository = projectFileRepository;
         this.systemSettingRepository = systemSettingRepository;
         this.localMode = localMode;
-        if (localMode) {
-            AuthController.registerLocalIdentityService(this);
-        }
+        // 无条件注册（与 UserSessionService 同款）：localMode=false 时也要把 static 指回
+        // 本上下文，否则测试 JVM 里先起过的 local-mode=true 上下文会一直霸占这个指针，
+        // 后续显式关闭 local-mode 的集成测试（如 IdorAuthIntegrationTest）全部被解析成
+        // 同一个本机用户，越权断言随类执行顺序漂移（Linux CI 红、mac 本地绿）。
+        AuthController.registerLocalIdentityService(this);
     }
 
     /**

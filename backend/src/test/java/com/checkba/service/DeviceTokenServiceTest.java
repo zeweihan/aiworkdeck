@@ -30,6 +30,12 @@ class DeviceTokenServiceTest {
 
     @BeforeEach
     void setUp() {
+        // 本类不走 Spring TestContext，StaticAuthPointerResetListener 覆盖不到：
+        // 先跑的 local-mode=true 上下文可能把 static 指针钉在别人的 LocalIdentityService 上，
+        // getUserIdFromSession(null) 会被解析成本机用户而不是 null。钉回一个关着
+        // local-mode 的实例（localMode=false 时构造器不触碰任何仓库，传 null 安全）。
+        AuthController.registerLocalIdentityService(
+                new LocalIdentityService(null, null, null, null, false));
         byHash.clear();
         repo = mock(DeviceTokenRepository.class);
         when(repo.save(any())).thenAnswer(inv -> {

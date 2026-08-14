@@ -195,7 +195,14 @@ jobs:
         run: |
           # 同 macOS 那步。Windows 上 DLL 在 exe 同目录解析，不需要重定位，
           # 整份 bin/ 拷走即可（约几 MB）。
-          choco install graphviz --no-progress -y
+          # chocolatey 社区源对 CI runner 限流严重（v0.15.0 发版 PR 连续两次 503），
+          # 带退避重试，五次全 503 才算真挂。
+          for attempt in 1 2 3 4 5; do
+            choco install graphviz --no-progress -y && break
+            [ "$attempt" = "5" ] && { echo "choco 重试耗尽"; exit 1; }
+            echo "choco install 第 $attempt 次失败（多半是社区源 503），$((attempt * 30))s 后重试"
+            sleep $((attempt * 30))
+          done
           # choco 装完不会刷新当前 shell 的 PATH，手动补上再让脚本从 PATH 找 dot。
           # 不写 "/c/Program Files/..." 是因为这步跑在 bash 里，而脚本是 Node：
           # Node 在 Windows 上不认 git-bash 风格路径，会解成 C:\c\Program Files\...
