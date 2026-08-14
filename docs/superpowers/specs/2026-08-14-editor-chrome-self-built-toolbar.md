@@ -43,19 +43,32 @@ private:resource/statusbar/statusbar          状态栏
 与工具栏无关、可独立发布的五条，见本次 PR：中文标点吞键、输入过程不可见、
 手势缩放、保存状态胶囊、审阅面板逐字符删除合并。
 
-### P1 — 命令层底座（worker 侧）
+### P1 — 命令层底座（worker 侧，已完成）
 
-自建工具栏的每个按钮最终都要落到 worker 的一个 action 上。四件事：
+自建工具栏的每个按钮最终都要落到 worker 的一个 action 上。
 
-1. **`ui_command` 白名单扩容**。现在只有 12 条（IME 快捷键用）。按菜单分组扩到
-   覆盖工具栏 + 菜单条所需的 `.uno:` 全集。白名单仍是硬约束——**不开放任意
+1. **`ui_command` 白名单扩容**：加了删除线/上下标/清除格式/大小写/四种对齐/
+   增减缩进/项目符号/编号/分页/格式标记。白名单是硬约束——**不开放任意
    `.uno:` 透传**，否则宿主 DOM 就成了引擎的任意命令通道。
-2. **`get_ui_state`**：一次调用返回工具栏要显示的全部状态。已有的
-   `get_formatting` 覆盖了字符/段落属性，但缺三样：撤销/重做是否可用、修订开关
-   当前状态、当前缩放。工具栏是高频回读，必须一次拿全、且廉价。
-3. **`list_styles`**：段落样式清单，喂样式下拉（`set_style` 已经有了）。
-4. **`set_chrome`**：一次性隐藏/显示 menubar / 两条工具栏 / 状态栏 / 标尺，
-   每一步用 `isElementVisible` 复核后如实返回。
+2. **`get_ui_state`**：一次拿全字符/段落/视图/选区/撤销可用性。实测 ~6ms。
+3. **`list_styles`**：段落样式清单（`name` 程序名 + `display` 显示名 + `inUse`）。
+4. **`set_chrome`**：逐项或 `{all:false}` 一刀切隐藏 LO chrome，每一步用
+   `isElementVisible` 复核后如实返回。
+5. **`set_track_changes`**：修订开关。直接写 `RecordChanges` 属性而不是派发
+   `.uno:TrackChanges`——后者是切换语义，宿主要设成确定状态还得先读再判。
+
+**真机实测得到的三条硬结论：**
+
+- **`.uno:Grow` / `.uno:Shrink` 在本引擎是哑弹**：派发不报错，`CharHeight`
+  纹丝不动（12→12）。已从白名单剔除。字号步进改由宿主做：`get_ui_state` 读到
+  当前字号 → `format_selection {sizePt}`（这条路已验证）。**宁可不给按钮，
+  也不给点了没反应的按钮。**
+- **撤销/重做可用性走 `xModel.getUndoManager()`**（XUndoManagerSupplier 的方法），
+  不是属性——`getPropertyValue('UndoManager')` 抛 UnknownPropertyException。
+  实测能读出 `canUndo/canRedo`。读不到时宿主让两个按钮常亮，不许灰掉能用的功能。
+- **`LayoutManager.setVisible(false)` 可用**，是关掉全部 chrome 最稳的一刀切；
+  逐项关的时候必须把 11 条 `singlemode-*` 上下文工具栏一起关，否则一选中表格
+  就又钻出一条老气的工具栏。
 
 ### P1.5 — 状态刷新机制（spike 已完成，2026-08-14）
 
@@ -80,6 +93,21 @@ private:resource/statusbar/statusbar          状态栏
 
 注：方向键其实也会经 IME 覆盖层转成 `move_cursor` 命令，命中第 2 条；轮询主要
 兜的是画布点击定位和引擎内部的光标移动。
+
+**P1 留给 P2 的两个已知缺口：**
+
+- **空选区下改不了格式**。`format_selection` 要求非空选区（`nothing selected —
+  select first, then format`）。但工具栏的常见用法是「先设好字号再开始打字」，
+  这条路现在是断的。P2 要么扩原语支持塌陷光标（写 CharHeight 到 view cursor 上，
+  LO 本身支持「后续输入用此格式」），要么在没有选区时把按钮置灰并说明原因——
+  但**不许点了没反应**。
+  （注意参数名：`get_ui_state` 回的是 `sizePt`，`format_selection` 收的是
+  `fontSize`；这是既有的 AI 工具契约，别为了对称去改名。）
+- **样式显示名的语言存疑**。spike 环境里 `get_ui_lang` 回 `ooLocale: en-US`，
+  于是 `DisplayName` 拿到的是英文（Default Paragraph Style / Body Text）；而真机
+  截图里 LO 自己的样式下拉显示的是中文（默认段落样式）。两者对不上，说明 spike
+  的 boot 没走到 zh-CN。P2 的做法：优先用 `display`，同时自备一张常用样式
+  （正文/标题 1-6/引用/列表…）的中文名映射兜底，**两条路都在，语言就不会翻车**。
 
 ### P2 — 工具栏组件（宿主 DOM）
 
