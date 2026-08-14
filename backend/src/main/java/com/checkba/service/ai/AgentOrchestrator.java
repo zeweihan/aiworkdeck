@@ -65,6 +65,8 @@ public class AgentOrchestrator {
         int llmRetries;
         // 截断/未闭合 <tool_code> 的纠正轮次数（防纠正本身进入死循环）
         int malformedToolRounds;
+        // 上下文溢出后的强制压缩重试次数（每个成功完成的轮次清零；上限 1，压不动就终态）
+        int overflowCompactions;
         // 当前活跃文档 ID（来自 activeContext 或 doc_open_file），用于修改前自动创建检查点
         Long activeFileId;
         // 活跃文档名（仅用于给模型的反馈文案）
@@ -543,8 +545,8 @@ public class AgentOrchestrator {
         // 「本次 AI 调用未携带用户身份」，在编排器这层看起来就是「平台通道不可用」整轮终止。
         handler.setOnComplete(response -> PlatformAiUserScope.run(userId, () -> {
           try {
-            // 本轮成功完成：清零瞬时错误重试预算（重试额度按轮计，不跨轮累积）
-            guard.llmRetries = 0;
+            // 重试/溢出预算的清零不在此处——必须等空响应判定之后（见下）：空响应也会走到
+            // onComplete，在判定前清零会让它每次都从第 1 次重试起步，变成无限重试循环。
             // Unconditionally turn off streaming mode when generation ends
             boolean wasStreaming = editorBridgeService.isStreamingMode(conversationId);
             editorBridgeService.setStreamingMode(conversationId, false);
@@ -565,6 +567,54 @@ public class AgentOrchestrator {
             editorBridgeService.setCurrentConversationId(conversationId);
             
             dev.langchain4j.data.message.AiMessage aiMessage = response.content();
+
+            // 空响应当瞬时错误重试，不当正常收尾（对标 dsh EMPTY_RESPONSE 教训）：
+            // 上游偶发「正常终止 + 零内容零工具调用」，落到默认收尾会静默 FINISHED——
+            // 用户面前一片空白、没有错误提示、没有任何重试入口，循环也无从接续。
+            // 零 token 流出保证重放不会给用户看重复内容；空的 AiMessage 不入栈
+            //（空 assistant 轮次发回服务商是另一类 400 的成因）。
+            if (isEmptyResponse(aiMessage, handler.hasStreamedTokens())) {
+                handleEmptyResponse(model, messages, conversationId, projectId, userId, modelId,
+                        depth, executionLog, agentMode, guard);
+                return;
+            }
+
+            // 本轮真正成功完成（有内容或有工具调用）：清零瞬时错误重试预算与溢出压缩预算
+            //（额度按轮计，不跨轮累积；溢出预算跨轮清零对标 dsh——长任务里
+            // 「涨到溢出→压缩→继续跑→再涨到溢出」是合法路径）
+            guard.llmRetries = 0;
+            guard.overflowCompactions = 0;
+
+            // LENGTH 截断轮的工具调用一律不执行（对标 dsh：max-tokens 时丢弃 tool-call 块）：
+            // 参数被砍半后 JSON 解析失败还好（已有回喂纠正），恰好仍可解析才最危险——
+            // 半篇正文的 write_file 会直接覆盖掉用户的文件。带截断 tool_calls 的 AiMessage
+            // 也不入栈：不执行又入栈会让 OpenAI 兼容通道以「tool_calls 无配对结果」400。
+            if (isTruncatedToolCallRound(response.finishReason(), aiMessage)) {
+                if (guard.malformedToolRounds < 2) {
+                    guard.malformedToolRounds++;
+                    log.warn("LENGTH-truncated native tool calls for {} (correction round {}), asking model to re-emit",
+                            conversationId, guard.malformedToolRounds);
+                    messages.add(dev.langchain4j.data.message.UserMessage.from(
+                            "[系统提醒] 你上一条输出因达到单次输出长度上限被截断，其中的工具调用参数不完整、"
+                            + "没有被执行。请把动作拆小，重新、完整地输出这次工具调用；一次只做一步也可以。"));
+                    runLoop(model, messages, conversationId, projectId, userId, modelId,
+                            depth + 1, executionLog, agentMode, guard);
+                    return;
+                }
+                // 纠正预算耗尽：按「存档 + 请示」暂停（同步数预算收尾的语义），绝不执行截断的调用
+                log.warn("LENGTH-truncated tool calls persisted after corrections for {}, pausing", conversationId);
+                String notice = "\n\n> 模型输出连续多次达到长度上限、工具调用无法完整发出，先暂停。点击下方「继续」按钮可接着执行。";
+                sendTextDelta(conversationId, notice);
+                String truncPersisted = (executionLog.length() > 0 ? executionLog.toString() : "")
+                        + (aiMessage.text() != null ? aiMessage.text() : "") + notice;
+                saveAssistantMessage(conversationId, projectId, userId, truncPersisted);
+                agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
+                sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
+                sseEmitterService.close(conversationId);
+                clearCancelledState(conversationId);
+                return;
+            }
+
             messages.add(aiMessage);
 
             // 注意：本轮生成内容已由 onToken 回调逐 token 累加进 activeStreamContent，
@@ -914,6 +964,23 @@ public class AgentOrchestrator {
                 return;
             }
 
+            // 3.3 正文被长度上限截断（LENGTH 且无工具调用）：不能装作正常完成。
+            // 半句话戛然而止的回答按「暂停 + 继续」收尾，语义同步数预算耗尽（存档 + 请示）；
+            // 刻意不触发记忆管线与版本落档——本轮没有真正结束，续写完成的那轮一并跑。
+            if (response.finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH) {
+                log.warn("Answer truncated by output length limit for {}, pausing for continuation", conversationId);
+                String notice = "\n\n> 回答达到单次输出长度上限被截断，点击下方「继续」按钮可接着生成。";
+                sendTextDelta(conversationId, notice);
+                String truncContent = (executionLog.length() > 0 ? executionLog.toString() + content : content) + notice;
+                saveAssistantMessage(conversationId, projectId, userId, truncContent);
+                agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.PAUSED);
+                sseEmitterService.send(conversationId, "bubble_end", "{\"status\":\"paused\",\"reason\":\"max_tokens\"}");
+                sseEmitterService.close(conversationId);
+                clearCancelledState(conversationId);
+                activeStreamContent.remove(conversationId);
+                return;
+            }
+
             // 4. Default: Loop Finished
             log.info("Agent Loop Finished for {}", conversationId);
             if (!content.isEmpty()) {
@@ -991,6 +1058,31 @@ public class AgentOrchestrator {
                     }
                 }), delaySec, java.util.concurrent.TimeUnit.SECONDS);
                 return;
+            }
+
+            // 上下文溢出的被动恢复通道（对标 dsh context-overflow）：主动压缩靠估算 token 触发，
+            // 中文语料按 chars-per-token=2 估会系统性低估，估漏时服务商用 400 兜底证实。
+            // 重试凭证 = 压缩确实缩小了消息栈（compact 返回了新实例）；压不动就直接终态，
+            // 原样重发必然再撞同一个 400。预算 1 次/轮，成功轮清零（见 onComplete）。
+            if (replayable && kind == LlmErrorClassifier.Kind.CONTEXT_OVERFLOW
+                    && guard.overflowCompactions < 1) {
+                guard.overflowCompactions++;
+                if (forceCompactAfterOverflow(messages, conversationId, modelId)) {
+                    log.warn("Context overflow for {} confirmed by provider, retrying after forced compaction",
+                            conversationId);
+                    sendTextDelta(conversationId,
+                            "\n\n> 对话上下文超出模型窗口，已自动压缩较早的内容后重试…\n\n");
+                    try {
+                        runLoop(model, messages, conversationId, projectId, userId, modelId,
+                                depth, executionLog, agentMode, guard);
+                    } catch (Exception retryEx) {
+                        log.error("Post-compaction retry failed for {}", conversationId, retryEx);
+                        handleStreamErrorTerminal(conversationId, projectId, userId, retryEx, null);
+                    }
+                    return;
+                }
+                log.warn("Context overflow for {} but compaction could not shrink the stack, giving up",
+                        conversationId);
             }
 
             if (replayable && failoverProperties.isEnabled() && kind.failoverable()) {
@@ -1130,6 +1222,87 @@ public class AgentOrchestrator {
             }
         } catch (Exception e) {
             log.warn("Context compaction skipped for {} due to error", conversationId, e);
+        }
+    }
+
+    /**
+     * 空响应判定（对标 dsh EMPTY_RESPONSE）：无工具调用、正文空白、且流式过程零 token。
+     * 最后一个条件是双保险——只要有 token 给用户看过，就绝不能悄悄重放（会看到重复内容）。
+     */
+    static boolean isEmptyResponse(dev.langchain4j.data.message.AiMessage aiMessage, boolean streamedTokens) {
+        if (streamedTokens) return false;
+        if (aiMessage == null) return true;
+        return !aiMessage.hasToolExecutionRequests()
+                && (aiMessage.text() == null || aiMessage.text().isBlank());
+    }
+
+    /**
+     * LENGTH 截断轮判定：finishReason=LENGTH 且带工具调用。此时参数大概率不完整，
+     * 「恰好仍可解析」比「解析失败」更危险（半截参数的写类工具会造成半篇覆盖），一律不执行。
+     * finishReason 为 null（部分通道不回）时不判截断，行为与改造前一致。
+     */
+    static boolean isTruncatedToolCallRound(dev.langchain4j.model.output.FinishReason finishReason,
+                                            dev.langchain4j.data.message.AiMessage aiMessage) {
+        return finishReason == dev.langchain4j.model.output.FinishReason.LENGTH
+                && aiMessage != null && aiMessage.hasToolExecutionRequests();
+    }
+
+    /**
+     * 空响应处置：按瞬时错误的退避预算重试本轮（空 AiMessage 不入栈，栈未污染可同 depth 重放）；
+     * 预算耗尽转终态错误——比静默 FINISHED 强，用户至少知道出了什么事、可以重发。
+     */
+    private void handleEmptyResponse(StreamingChatLanguageModel model,
+                                     java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                     String conversationId, String projectId, Long userId, String modelId,
+                                     int depth, StringBuilder executionLog, AgentMode agentMode, RunGuard guard) {
+        LlmErrorClassifier.Kind kind = LlmErrorClassifier.Kind.TRANSIENT;
+        if (guard.llmRetries < kind.maxRetries()) {
+            int attempt = ++guard.llmRetries;
+            long delaySec = kind.retryDelaySeconds(attempt);
+            log.warn("Empty LLM response for {} (attempt {}/{}), retrying in {}s",
+                    conversationId, attempt, kind.maxRetries(), delaySec);
+            sendTextDelta(conversationId, String.format(
+                    "\n\n> 模型返回了空响应，%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                    delaySec, attempt, kind.maxRetries()));
+            // 同 onError 的重试路径：定时器线程不继承平台通道身份，必须显式重建
+            LLM_RETRY_SCHEDULER.schedule(PlatformAiUserScope.wrap(() -> {
+                try {
+                    runLoop(model, messages, conversationId, projectId, userId, modelId,
+                            depth, executionLog, agentMode, guard);
+                } catch (Exception retryEx) {
+                    log.error("Empty-response retry failed for {}", conversationId, retryEx);
+                    handleStreamErrorTerminal(conversationId, projectId, userId, retryEx, null);
+                }
+            }), delaySec, java.util.concurrent.TimeUnit.SECONDS);
+            return;
+        }
+        log.error("Empty LLM response persisted after retries for {}", conversationId);
+        handleStreamErrorTerminal(conversationId, projectId, userId,
+                new IllegalStateException("模型连续返回空响应，请稍后重发这条消息"), kind);
+    }
+
+    /**
+     * 溢出后的强制压缩：跳过阈值判断做剪枝 + 折叠，原地替换消息栈（同 compactIfNeeded 的
+     * 先拷贝再清空口径）。返回 true = 确实缩小了，可以重放一次。
+     */
+    private boolean forceCompactAfterOverflow(java.util.List<dev.langchain4j.data.message.ChatMessage> messages,
+                                              String conversationId, String modelId) {
+        try {
+            java.util.List<dev.langchain4j.data.message.ChatMessage> compacted =
+                    runLoopCompactor.forceCompact(messages, modelId);
+            if (compacted == messages) {
+                return false;
+            }
+            log.info("Forced compaction after overflow for {}: {} -> {} messages",
+                    conversationId, messages.size(), compacted.size());
+            java.util.List<dev.langchain4j.data.message.ChatMessage> snapshot =
+                    new java.util.ArrayList<>(compacted);
+            messages.clear();
+            messages.addAll(snapshot);
+            return true;
+        } catch (Exception e) {
+            log.warn("Forced compaction after overflow failed for {}", conversationId, e);
+            return false;
         }
     }
 

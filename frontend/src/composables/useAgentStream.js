@@ -836,6 +836,16 @@ export function useAgentStream() {
                 if (errMsg.includes('AI_REGION_BLOCKED')) {
                     currentAssistantBubble.value.content +=
                         '\n\n' + t('agentStream.regionBlockedNotice') + '\n'
+                } else if (errMsg.includes('AI_QUOTA_EXHAUSTED')) {
+                    // 配额耗尽（后端 LlmErrorClassifier.QUOTA_EXHAUSTED_MARKER）：终局错误，
+                    // 后端不会退避重试也不会换模型——换哪个模型都是同一个没钱的账户
+                    currentAssistantBubble.value.content +=
+                        '\n\n' + t('agentStream.quotaExhaustedNotice') + '\n'
+                } else if (errMsg.includes('AI_CONTEXT_OVERFLOW')) {
+                    // 上下文超窗（后端 LlmErrorClassifier.CONTEXT_OVERFLOW_MARKER）：
+                    // 走到这里说明后端强制压缩后仍装不下（或压不动）
+                    currentAssistantBubble.value.content +=
+                        '\n\n' + t('agentStream.contextOverflowNotice') + '\n'
                 } else {
                     currentAssistantBubble.value.content += '\n\n' + t('agentStream.executionInterrupted', { message: errMsg }) + '\n'
                 }
