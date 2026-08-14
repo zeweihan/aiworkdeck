@@ -23,6 +23,12 @@ REPO="${REPO:-zeweihan/aiworkdeck}"
 WEB_ROOT="${WEB_ROOT:-/www/wwwroot/update/desktop}"
 API="https://api.github.com/repos/${REPO}/releases/latest"
 
+# 全局互斥锁：安装包是 GB 级、大陆拉 GitHub 可能一跑数小时，cron 每小时一发，
+# 不加锁必然叠车——2026-08-14 实测三个并发实例互分带宽，每个只剩 ~15KB/s，
+# 谁都跑不完。锁不住就静默退出，把机会留给在跑的那个。
+exec 9>/var/lock/awd-update-mirror-sync.lock
+flock -n 9 || { echo "[mirror-sync] 已有实例在跑（/var/lock/awd-update-mirror-sync.lock），本次退出"; exit 0; }
+
 mkdir -p "$WEB_ROOT/assets" "$WEB_ROOT/installers"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -127,11 +133,14 @@ if [ -s "$TMP/installers.tsv" ]; then
     if [ -f "$dest" ] && [ "$(stat -c %s "$dest" 2>/dev/null || stat -f %z "$dest")" = "$size" ]; then
       echo "[mirror-sync] skip (exists): $name"
     else
+      # 断点续传的半成品放固定路径而不是 mktemp：GB 级下载常跨越多次 cron，
+      # 每轮换一个 TMP 会把已下的几百 MB 全部作废、永远从零开始。
+      part="$WEB_ROOT/installers/.$name.part"
       echo "[mirror-sync] download installer: $name (${size} bytes)"
-      if fetch_with_retry "$url" "$TMP/$name" "$size" "$name"; then
-        mv "$TMP/$name" "$dest"
+      if fetch_with_retry "$url" "$part" "$size" "$name"; then
+        mv "$part" "$dest"
       else
-        echo "[mirror-sync] 放弃: $name（重试耗尽）" >&2
+        echo "[mirror-sync] 放弃: $name（重试耗尽，半成品保留供下轮续传）" >&2
         INSTALLERS_FAILED=1
       fi
     fi
@@ -155,14 +164,15 @@ EOF
     mv "$TMP/latest.json" "$WEB_ROOT/installers/latest.json"
     echo "[mirror-sync] installers/latest.json updated -> $TAG"
 
-    # 清理旧安装包（只删 .dmg/.exe，不碰 latest.json）
+    # 清理旧安装包与过期半成品（只删 .dmg/.exe/.part，不碰 latest.json）
     while IFS= read -r -d '' f; do
       base="$(basename "$f")"
-      if ! grep -qF "$base" "$TMP/installers.tsv"; then
+      stem="${base#.}"; stem="${stem%.part}"
+      if ! grep -qF "$stem" "$TMP/installers.tsv"; then
         echo "[mirror-sync] prune old installer: $base"
         rm -f "$f"
       fi
-    done < <(find "$WEB_ROOT/installers" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.exe' \) -print0)
+    done < <(find "$WEB_ROOT/installers" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.exe' -o -name '.*.part' \) -print0)
   else
     echo "[mirror-sync] 安装包未全部就位，latest.json 不更新（官网继续发上一版）；重跑本脚本可续传补齐" >&2
   fi
