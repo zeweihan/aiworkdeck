@@ -53,6 +53,10 @@ public class SkillRouter {
     private final SkillProperties properties;
     // 埋点：只记 skillId 枚举值，用户输入原文绝不进入（构造器变更需同步 EvalHarness/SkillRouterTest）
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    // 应用语言（EN 版 PR5）：英文模式下触发词并入 triggers_en、注入块选英文模板/前缀。
+    // 可空（部分单测/评测不接语言服务）——为 null 时按 zh-CN 语义，行为与引入前一致。
+    @org.springframework.lang.Nullable
+    private final com.checkba.service.AppLanguageService appLanguageService;
 
     /**
      * 本轮命中的 skill：conversationId -> skillId。
@@ -72,13 +76,14 @@ public class SkillRouter {
             return Optional.empty();
         }
         String normalized = userInput.toLowerCase();
+        boolean english = isEnglish();
         SkillDefinition best = null;
         int bestLen = 0;
         for (SkillDefinition skill : skillRegistry.getSkills()) {
             if (!skillRegistry.isAvailable(skill) || skillRegistry.isManual(skill.getId())) {
                 continue;
             }
-            for (String trigger : skill.getTriggers()) {
+            for (String trigger : matchTriggers(skill, english)) {
                 if (trigger == null || trigger.isBlank()) {
                     continue;
                 }
@@ -184,6 +189,9 @@ public class SkillRouter {
 
     /** 组装注入块：skill 的 prompt 模板 + 输出约定（由 ContextAssemblerService 追加到系统消息） */
     public String promptInjectionFor(SkillDefinition skill) {
+        if (isEnglish()) {
+            return promptInjectionForEn(skill);
+        }
         StringBuilder sb = new StringBuilder();
         sb.append("\n\n# Active Skill: ").append(skill.getName() != null ? skill.getName() : skill.getId());
         sb.append("\n[SYSTEM INJECTION] 用户本轮请求命中了技能「")
@@ -192,6 +200,49 @@ public class SkillRouter {
         sb.append(skill.getPromptTemplate());
         if (skill.getOutput() != null && !skill.getOutput().isBlank()) {
             sb.append("\n\n## 输出约定\n").append(skill.getOutput());
+        }
+        return sb.toString();
+    }
+
+    // ==================== 应用语言（EN 版 PR5） ====================
+
+    private boolean isEnglish() {
+        return appLanguageService != null && appLanguageService.isEnglish();
+    }
+
+    /**
+     * 参与匹配的触发词：zh-CN 只用 triggers（行为保持）；en-US 为 triggers ∪ triggers_en——
+     * 英文界面下中文输入仍可命中（注入的会是英文指引），而 triggers_en 绝不参与中文匹配，
+     * 保证中文版匹配行为逐字节不变。
+     */
+    private static List<String> matchTriggers(SkillDefinition skill, boolean english) {
+        if (!english || skill.getTriggersEn() == null || skill.getTriggersEn().isEmpty()) {
+            return skill.getTriggers();
+        }
+        List<String> merged = new java.util.ArrayList<>(skill.getTriggers());
+        merged.addAll(skill.getTriggersEn());
+        return merged;
+    }
+
+    /** 注入块英文版：前缀/标题走英文，模板与输出约定优先取英文字段，缺省回退中文（可用胜于空白）。 */
+    private String promptInjectionForEn(SkillDefinition skill) {
+        String displayName = skill.getNameEn() != null && !skill.getNameEn().isBlank()
+                ? skill.getNameEn()
+                : (skill.getName() != null ? skill.getName() : skill.getId());
+        String template = skill.getPromptTemplateEn() != null && !skill.getPromptTemplateEn().isBlank()
+                ? skill.getPromptTemplateEn()
+                : skill.getPromptTemplate();
+        String output = skill.getOutputEn() != null && !skill.getOutputEn().isBlank()
+                ? skill.getOutputEn()
+                : skill.getOutput();
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n\n# Active Skill: ").append(displayName);
+        sb.append("\n[SYSTEM INJECTION] The user's request this turn matched the skill \"")
+                .append(displayName)
+                .append("\". Handle this turn according to the skill guidance below:\n\n");
+        sb.append(template);
+        if (output != null && !output.isBlank()) {
+            sb.append("\n\n## Output Conventions\n").append(output);
         }
         return sb.toString();
     }

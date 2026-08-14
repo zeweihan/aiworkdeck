@@ -41,6 +41,7 @@ class ContextAssemblerServiceTest {
     private ContextAssemblerService assembler;
     private ClientCapabilityService capabilityService;
     private InlineContentCache inlineContentCache;
+    private com.checkba.service.AppLanguageService appLanguageService;
 
     @BeforeEach
     void setUp() {
@@ -60,10 +61,12 @@ class ContextAssemblerServiceTest {
 
         capabilityService = new ClientCapabilityService();
         inlineContentCache = new InlineContentCache();
+        // 应用语言：mock 默认 isEnglish()=false，即 zh-CN——既有断言全部走中文路径（行为保持）
+        appLanguageService = mock(com.checkba.service.AppLanguageService.class);
         assembler = new ContextAssemblerService(
                 legalTools, messageService, fileContextLoader,
                 new AiContextProperties(), skillRouter, capabilityService, inlineContentCache,
-                memoryManager, contextCompressor);
+                memoryManager, contextCompressor, appLanguageService);
     }
 
     private List<ChatMessage> assembleMessages(AiAgentController.ContextItem activeContext) {
@@ -201,7 +204,8 @@ class ContextAssemblerServiceTest {
         ContextAssemblerService bigLimitAssembler = new ContextAssemblerService(
                 legalTools, mockedMessageService(), mock(FileContextLoader.class),
                 props, mockedSkillRouter(), new ClientCapabilityService(), new InlineContentCache(),
-                mockedMemoryManager(), mockedCompressor());
+                mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class));
 
         String huge = "甲".repeat(200_001);
         List<ChatMessage> messages = bigLimitAssembler.assemble(
@@ -379,6 +383,59 @@ class ContextAssemblerServiceTest {
 
         assertTrue(lastUser.contains("doc_list_project_files"), "默认能力应保持 doc_* 口径");
         assertFalse(lastUser.contains("office_replace_text"), "默认能力不应出现 office_* 口径");
+    }
+
+    // ==== 应用语言切换（EN 版 PR5）====
+    // en-US 时选英文 system prompt / enforcement / 模式约束 / 活跃文档指引与末位提醒；
+    // zh-CN（本测试类其余全部用例）行为与引入前逐字节一致。
+
+    @Test
+    @DisplayName("英文模式：system prompt 为英文，Language 行是 ENGLISH ONLY，不含中文约束字样")
+    void englishModeAssemblesEnglishSystemPrompt() {
+        when(appLanguageService.isEnglish()).thenReturn(true);
+        when(legalTools.read_document("123")).thenReturn("Article 1 Scope of Cooperation...");
+
+        String systemText = assembleSystemText(activeDoc());
+
+        assertTrue(systemText.contains("ENGLISH ONLY"), "enforcement 段的 Language 行应为 ENGLISH ONLY");
+        assertFalse(systemText.contains("SIMPLIFIED CHINESE ONLY"), "不应再出现中文版 Language 行");
+        assertFalse(systemText.contains("Simplified Chinese"), "基底 prompt 不应再要求简体中文输出");
+        assertFalse(systemText.contains("简体中文"), "英文模式下不应出现「简体中文」类字样");
+        assertTrue(systemText.contains("jurisdiction-neutral"), "应加载英文版基底 system_prompt.en.md");
+        assertTrue(systemText.contains("# MODE: AGENT MODE (autonomous execution)"),
+                "模式约束应为英文版");
+        assertFalse(systemText.contains("自动执行模式"), "不应再出现中文版模式约束");
+    }
+
+    @Test
+    @DisplayName("英文模式：活跃文档指引与末位提醒为英文，协议要点（禁 list/open）保持")
+    void englishModeActiveDocGuidanceAndReminderInEnglish() {
+        when(appLanguageService.isEnglish()).thenReturn(true);
+        when(legalTools.read_document("123")).thenReturn("Article 1 Scope of Cooperation...");
+
+        String systemText = assembleSystemText(activeDoc());
+        assertTrue(systemText.contains("# Active Document"), "应有英文活跃文档段标题");
+        assertTrue(systemText.contains("is open in the editor"), "应声明文档已打开（英文）");
+        assertFalse(systemText.contains("已在编辑器中打开"), "不应再出现中文声明");
+        assertTrue(systemText.contains("<active_document id=\"123\""), "active_document 标签结构不变");
+
+        String lastUser = assembleLastUserText(activeDoc());
+        assertTrue(lastUser.startsWith("帮我修订一下"), "用户原话仍在前，提醒只作尾部追加");
+        assertTrue(lastUser.contains("[System reminder]"), "末位提醒应为英文口径");
+        assertFalse(lastUser.contains("[系统提醒]"), "不应再出现中文提醒前缀");
+        assertTrue(lastUser.contains("doc_list_project_files"), "英文提醒仍须点名禁用 doc_list_project_files");
+        assertTrue(lastUser.contains("doc_open_file"), "英文提醒仍须点名禁用 doc_open_file");
+    }
+
+    @Test
+    @DisplayName("中文模式（默认）：enforcement 的 Language 行保持 SIMPLIFIED CHINESE ONLY")
+    void chineseModeKeepsChineseLanguageRule() {
+        when(legalTools.read_document("123")).thenReturn("第一条 合作范围……");
+
+        String systemText = assembleSystemText(activeDoc());
+
+        assertTrue(systemText.contains("SIMPLIFIED CHINESE ONLY"), "中文模式 Language 行不变");
+        assertFalse(systemText.contains("ENGLISH ONLY"), "中文模式不应出现英文 Language 行");
     }
 
     // ---- 供自建 assembler 的 mock 工厂（与 setUp 同配方）----
