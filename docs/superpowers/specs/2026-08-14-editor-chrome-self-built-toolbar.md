@@ -57,17 +57,29 @@ private:resource/statusbar/statusbar          状态栏
 4. **`set_chrome`**：一次性隐藏/显示 menubar / 两条工具栏 / 状态栏 / 标尺，
    每一步用 `isElementVisible` 复核后如实返回。
 
-### P1.5 — 选区变化事件（spike，卡住 P2 的唯一未知项）
+### P1.5 — 状态刷新机制（spike 已完成，2026-08-14）
 
-工具栏的激活态（B 是否高亮、当前字体字号、当前样式）必须跟着光标走。
-LO 不会主动把「选区变了」推给宿主。两条路：
+工具栏的激活态（B 是否高亮、当前字体字号、当前样式）必须跟着光标走。实测结论：
 
-- **首选**：worker 里装 `XSelectionChangeListener`（`ctrl.addSelectionChangeListener`），
-  变化时 post 给宿主。可行性有旁证——`installModifyListener`（XModifyListener）
-  已经在跑，说明 zetajs 建 UNO listener 这条路是通的。
-- **兜底**：编辑器获得焦点时按 250ms 轮询 `get_ui_state`，失焦停轮询。
+| 探测 | 结果 |
+|---|---|
+| `zetajs.unoObject([css.view.XSelectionChangeListener])` + `ctrl.addSelectionChangeListener` | ✅ 装得上、能触发 |
+| 扩选 / 全选 / 选中段落 | ✅ 每次都触发（一次一条） |
+| **纯光标移动（collapsed，无选区）** | ❌ **基本不触发**（连移 5 次只收到 1 条） |
+| 一次性回读全部工具栏状态的耗时 | **5.8ms/次**（20 次共 116ms） |
+| `xModel.getPropertyValue('UndoManager')` | ❌ UnknownPropertyException——**要改走 `XUndoManagerSupplier.getUndoManager()`**，P1 里重测；实在读不到就让撤销/重做常亮（LO 自己也这么干过一阵） |
+| 段落样式清单 | ✅ 126 条，但 `getElementNames()` 给的是**英文程序名**（Standard / Heading 1 / Text body）。下拉要显示中文，得读每个样式的 `DisplayName` |
 
-先 spike，通了走首选。
+**定案：事件 + 轮询混合。**光标移动这条路 listener 靠不住，但回读只要 5.8ms，
+按 400ms 轮询完全够廉价。刷新触发点：
+
+1. `XSelectionChangeListener` 事件（选区类变化，最及时）；
+2. 任何经 executor 发出的命令之后（工具栏自己的按钮、AI 命令）；
+3. 已有的 `modified` 信号（打字）；
+4. 编辑器聚焦时 400ms 安全轮询，失焦即停（兜住纯光标移动与画布点击）。
+
+注：方向键其实也会经 IME 覆盖层转成 `move_cursor` 命令，命中第 2 条；轮询主要
+兜的是画布点击定位和引擎内部的光标移动。
 
 ### P2 — 工具栏组件（宿主 DOM）
 
