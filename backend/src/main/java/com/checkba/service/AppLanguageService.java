@@ -1,5 +1,6 @@
 package com.checkba.service;
 
+import jakarta.annotation.PostConstruct;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
@@ -20,6 +21,15 @@ public class AppLanguageService {
     private static final Set<String> SUPPORTED = Set.of(ZH_CN, EN_US);
 
     private final SystemSettingService settings;
+
+    /**
+     * 登记 LangText 静态桥。刻意用 @PostConstruct 而不是构造器：只有 Spring 容器里的
+     * 这个实例才该成为全局指针，单测里 new 出来的实例不登记（否则跨测试类污染静态状态）。
+     */
+    @PostConstruct
+    void registerLangTextBridge() {
+        LangText.register(this);
+    }
 
     public String language() {
         String v = settings.get(KEY, ZH_CN);

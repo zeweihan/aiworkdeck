@@ -99,16 +99,25 @@ public final class LlmErrorClassifier {
             return this == REGION_BLOCKED;
         }
 
-        /** 给用户看的一句话原因（中文，进 SSE 文本流）。 */
+        /**
+         * 给用户看的一句话原因（按应用语言二选一，进 SSE 文本流）。
+         * enum 不是 Spring bean，语言经 {@link com.checkba.service.LangText} 静态桥取。
+         * 英文措辞是谓语形态：拼进故障转移文案「Model "X" &lt;reason&gt;; …」要成句。
+         */
         public String userFacingReason() {
             return switch (this) {
-                case RATE_LIMITED -> "触发了限流";
-                case MODEL_UNAVAILABLE -> "当前不可用（可能已下线）";
-                case REGION_BLOCKED -> "在当前网络环境不可用（服务商按地域拒绝）";
-                case QUOTA_EXHAUSTED -> "账户额度不足";
-                case CONTEXT_OVERFLOW -> "上下文超出模型窗口";
-                case TRANSIENT -> "连续多次响应失败";
-                case FATAL -> "调用失败";
+                case RATE_LIMITED -> com.checkba.service.LangText.of("触发了限流", "hit a rate limit");
+                case MODEL_UNAVAILABLE -> com.checkba.service.LangText.of("当前不可用（可能已下线）",
+                        "is currently unavailable (possibly retired)");
+                case REGION_BLOCKED -> com.checkba.service.LangText.of("在当前网络环境不可用（服务商按地域拒绝）",
+                        "is unavailable on the current network (rejected by the provider for this region)");
+                case QUOTA_EXHAUSTED -> com.checkba.service.LangText.of("账户额度不足",
+                        "ran out of account credit");
+                case CONTEXT_OVERFLOW -> com.checkba.service.LangText.of("上下文超出模型窗口",
+                        "exceeded the model's context window");
+                case TRANSIENT -> com.checkba.service.LangText.of("连续多次响应失败",
+                        "failed to respond several times in a row");
+                case FATAL -> com.checkba.service.LangText.of("调用失败", "failed to be called");
             };
         }
     }

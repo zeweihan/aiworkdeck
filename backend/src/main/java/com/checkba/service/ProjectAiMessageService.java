@@ -212,8 +212,9 @@ public class ProjectAiMessageService {
      * Clean conversation title by stripping common XML tags like <thinking>, <process>, etc.
      */
     private String cleanTitle(String rawTitle) {
+        // 读时兜底按当前应用语言渲染（存量库里也可能存着另一种语言的字面量，不迁移）
         if (rawTitle == null || rawTitle.isBlank()) {
-            return "新对话";
+            return LangText.of("新对话", "New chat");
         }
         // Remove common XML tags
         String cleaned = rawTitle
@@ -232,7 +233,7 @@ public class ProjectAiMessageService {
             cleaned = cleaned.substring(0, 100) + "...";
         }
         
-        return cleaned.isEmpty() ? "新对话" : cleaned;
+        return cleaned.isEmpty() ? LangText.of("新对话", "New chat") : cleaned;
     }
 
     /**
@@ -309,16 +310,23 @@ public class ProjectAiMessageService {
      * 调用 LLM 生成对话标题（基于用户第一条消息）
      */
     public String generateConversationTitle(String userMessage, dev.langchain4j.model.chat.ChatLanguageModel model) {
-        String prompt = "请为以下用户问题生成一个简短的对话标题（不超过15个字，不要标点符号，只输出标题本身）:\n" + userMessage;
+        // 英文模式换英文 prompt：否则英文界面会持续产生中文标题（标题是落库文案，跟应用语言走）
+        String prompt = LangText.of(
+                "请为以下用户问题生成一个简短的对话标题（不超过15个字，不要标点符号，只输出标题本身）:\n",
+                "Generate a short conversation title in English for the following user question "
+                        + "(no more than 8 words, no punctuation, output only the title itself):\n")
+                + userMessage;
         try {
             String title = model.generate(prompt);
             // Clean any XML tags or extra formatting the model might output
             title = title.replaceAll("<[^>]+>", "").replaceAll("```[a-z]*", "").trim();
             title = title.replaceAll("^[\"']+|[\"']+$", ""); // Remove quotes
-            if (title.length() > 30) title = title.substring(0, 30);
-            return title.isEmpty() ? "新对话" : title;
+            // 英文标题按词计数，30 字符会把词砍半：英文模式放宽到 60 字符（zh 行为不变）
+            int cap = LangText.isEnglish() ? 60 : 30;
+            if (title.length() > cap) title = title.substring(0, cap);
+            return title.isEmpty() ? LangText.of("新对话", "New chat") : title;
         } catch (Exception e) {
-            return "新对话";
+            return LangText.of("新对话", "New chat");
         }
     }
 
