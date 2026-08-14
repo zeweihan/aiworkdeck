@@ -3,11 +3,29 @@
  *
  * 抽出来的理由：这几条口径全部是硬约束（localRoot 措辞、时间线 6 种文案形状、
  * source=default 弱化、空预览兜底），而 .vue 模板在本仓没有单测手段。
- * 本文件不 import 任何东西、不碰 uni.*，才能被 node --test 直接跑。
+ * 本文件不做任何静态 import、不碰 uni.*，才能被 node --test 直接跑。
+ * i18n 走下面的守卫式动态 import：node 下解析不到 '@/i18n' 会静默失败，
+ * 各函数回落到 zh 字面量（与单测断言逐字节一致）；应用里 i18n 模块早已在
+ * 图里，首个异步数据到达前动态 import 必已 resolve。
  *
  * 与工作台 project-overview.vue:4769-4790 的 convStatusLabel/convDotClass 形状相同
  * 但不共用：概览页是新页面，重构工作台不在本次范围内。两边的取值表必须一起改。
  */
+
+let _t = null
+try {
+  import('@/i18n').then((m) => { _t = m.t }).catch(() => {})
+} catch (e) {
+  // node --test 环境：保持 zh 回落
+}
+
+/** t() 可用则翻译，否则返回 zh 回落串（node --test 环境）。 */
+function tr(key, params, zhFallback) {
+  if (_t) {
+    try { return params ? _t(key, params) : _t(key) } catch (e) { /* 回落 */ }
+  }
+  return zhFallback
+}
 
 function pad2(n) {
   return String(n).padStart(2, '0')
@@ -18,7 +36,10 @@ export function formatDateTime(value) {
   if (!value) return ''
   const d = new Date(value)
   if (Number.isNaN(d.getTime())) return ''
-  return `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  const month = d.getMonth() + 1
+  const day = d.getDate()
+  const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  return tr('common.dateTimeMdHm', { month, day, time }, `${month} 月 ${day} 日 ${time}`)
 }
 
 /**
@@ -38,7 +59,9 @@ export function versionTitle(entry) {
  */
 export function fileCountLabel(stats) {
   const n = Number((stats && stats.fileCount) || 0)
-  return stats && stats.isLocalRoot ? `已登记 ${n} 项` : `${n} 个文件`
+  return stats && stats.isLocalRoot
+    ? tr('common.registeredItems', { count: n }, `已登记 ${n} 项`)
+    : tr('common.filesCount', { count: n }, `${n} 个文件`)
 }
 
 /**
@@ -48,12 +71,12 @@ export function fileCountLabel(stats) {
  * 前者是模型缺信息在问你，后者是有草案等你点头。
  */
 export function runStatusLabel(status) {
-  if (status === 'RUNNING') return '运行中'
-  if (status === 'PAUSED') return '待继续'
-  if (status === 'INTERRUPTED') return '已中断'
-  if (status === 'AWAITING_APPROVAL') return '待审批'
-  if (status === 'AWAITING_INPUT') return '待回答'
-  if (status === 'ERROR') return '出错'
+  if (status === 'RUNNING') return tr('common.statusRunning', null, '运行中')
+  if (status === 'PAUSED') return tr('common.statusPaused', null, '待继续')
+  if (status === 'INTERRUPTED') return tr('common.statusInterrupted', null, '已中断')
+  if (status === 'AWAITING_APPROVAL') return tr('common.statusAwaitingApproval', null, '待审批')
+  if (status === 'AWAITING_INPUT') return tr('common.statusAwaitingInput', null, '待回答')
+  if (status === 'ERROR') return tr('common.statusError', null, '出错')
   return ''
 }
 
@@ -78,8 +101,8 @@ export function isProfileEmpty(fields) {
 /** 字段值下方的弱化说明。律师不能把模型猜的立项日期当事实。 */
 export function profileFieldHint(field) {
   if (!field) return ''
-  if (field.source === 'default') return '取自建档时间'
-  if (field.source === 'ai') return 'AI 读文件得出，请核对'
+  if (field.source === 'default') return tr('common.hintFromCreationTime', null, '取自建档时间')
+  if (field.source === 'ai') return tr('common.hintAiInferred', null, 'AI 读文件得出，请核对')
   return ''
 }
 

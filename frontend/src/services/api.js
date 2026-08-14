@@ -6,6 +6,7 @@
 // 导入认证工具
 import { getAuthHeaders, getSessionId, clearSession } from '@/utils/auth.js'
 import { host, isDesktopHost } from '@/services/host.js'
+import { t } from '@/i18n'
 
 /**
  * 功能未配置时的统一引导（#18 T7）。
@@ -13,12 +14,12 @@ import { host, isDesktopHost } from '@/services/host.js'
  * @param {Error} err request() reject 出的错误，带 featureNotConfigured / feature / message
  */
 export function promptFeatureNotConfigured(err) {
-  const message = (err && err.message) || '该功能尚未配置，请在设置中补充';
+  const message = (err && err.message) || t('common.featureNotConfigured');
   uni.showModal({
-    title: '功能未配置 / Not configured',
+    title: t('common.featureNotConfiguredTitle'),
     content: message,
-    confirmText: '去设置',
-    cancelText: '稍后',
+    confirmText: t('common.goToSettings'),
+    cancelText: t('common.later'),
     success: (r) => {
       if (r.confirm) {
         uni.navigateTo({ url: '/pages/admin/admin' });
@@ -199,7 +200,7 @@ function request(options) {
         if (status !== 200) {
           const message =
             (res.data && (res.data.message || res.data.error)) ||
-            `请求失败 (${status})`;
+            t('common.requestFailedWithStatus', { status });
           console.error('HTTP 状态码错误:', {
             statusCode: status,
             message: message,
@@ -232,7 +233,7 @@ function request(options) {
           } else if (res.data.code === 4005) {
             // 密码已对但还差短信验证码（登录二次验证）：reject 时带 smsRequired 标记，
             // 登录页据此切到验证码输入步骤。这不是错误态，不能落进通用报错。
-            const err = new Error(res.data.message || '本次操作需要短信验证');
+            const err = new Error(res.data.message || t('common.smsVerificationRequired'));
             err.smsRequired = true;
             err.data = res.data.data || {};
             reject(err);
@@ -240,7 +241,7 @@ function request(options) {
             // 功能未配置（#18 T7）：reject 时带 featureNotConfigured 标记，
             // 由调用方决定如何引导（弹"去设置" / 降级为只读），避免在拦截器
             // 层强弹全局弹窗导致打开文档时反复打扰。
-            const msg = res.data.message || '该功能尚未配置，请在设置中补充';
+            const msg = res.data.message || t('common.featureNotConfigured');
             console.warn('功能未配置:', { feature: res.data.feature, message: msg });
             const err = new Error(msg);
             err.featureNotConfigured = true;
@@ -250,7 +251,7 @@ function request(options) {
             // 免费额度已满（PR-C）：功能本身是好的，只是到顶了，下一步是解锁而非去设置。
             // 打上 quotaExceeded 标记让调用方能显示解锁引导而不是通用报错。
             // 注意：这条路径**只拒绝新增**，用户已有的数据一条都没动。
-            const msg = res.data.message || '免费额度已满';
+            const msg = res.data.message || t('common.freeQuotaExceeded');
             const err = new Error(msg);
             err.quotaExceeded = true;
             err.feature = res.data.feature || '';
@@ -258,7 +259,7 @@ function request(options) {
             reject(err);
           } else {
             // 业务失败：code=1 或其他非0值
-            const errorMessage = res.data.message || '服务异常，请稍后重试'
+            const errorMessage = res.data.message || t('common.serviceErrorRetryLater')
             console.error('业务错误:', {
               code: res.data.code,
               message: errorMessage,
@@ -291,7 +292,7 @@ function request(options) {
                   success: () => {
                     console.log('已跳转到登录页');
                     uni.showToast({
-                      title: '登录已过期，请重新登录',
+                      title: t('common.loginExpired'),
                       icon: 'none',
                       duration: 2000
                     });
@@ -1132,10 +1133,10 @@ export function uploadAvatar(filePath) {
             if (data.code === 0) {
               resolve(data)
             } else {
-              reject(new Error(data.message || '上传失败'))
+              reject(new Error(data.message || t('common.uploadFailed')))
             }
           } catch (e) {
-            reject(new Error('解析响应失败'))
+            reject(new Error(t('common.parseResponseFailed')))
           }
         } else {
           reject(new Error('HTTP Error ' + uploadFileRes.statusCode))
@@ -1601,10 +1602,10 @@ export function saveClipboardFile(fileObj, type = 'FILE') {
           if (data.code === 0) {
             resolve(data)
           } else {
-            reject(new Error(data.message || '上传失败'))
+            reject(new Error(data.message || t('common.uploadFailed')))
           }
         } catch (e) {
-          reject(new Error('解析响应失败'))
+          reject(new Error(t('common.parseResponseFailed')))
         }
       } else {
         reject(new Error('HTTP Error ' + xhr.status))
@@ -1644,18 +1645,18 @@ export function submitFeedback(payload, files = []) {
     if (sessionId) xhr.setRequestHeader('X-Session-Id', sessionId)
     xhr.onload = () => {
       if (xhr.status !== 200) {
-        reject(new Error('提交失败 (HTTP ' + xhr.status + ')'))
+        reject(new Error(t('common.submitFailedWithStatus', { status: xhr.status })))
         return
       }
       try {
         const data = JSON.parse(xhr.responseText)
         if (data.code === 0) resolve(data)
-        else reject(new Error(data.message || '提交失败'))
+        else reject(new Error(data.message || t('common.submitFailed')))
       } catch (e) {
-        reject(new Error('解析响应失败'))
+        reject(new Error(t('common.parseResponseFailed')))
       }
     }
-    xhr.onerror = () => reject(new Error('网络错误'))
+    xhr.onerror = () => reject(new Error(t('common.networkError')))
     xhr.send(form)
   })
 }
@@ -2370,9 +2371,9 @@ export async function fetchVersionFileBytes(projectId, ref, path) {
   const ct = resp.headers.get('content-type') || '';
   if (ct.includes('application/json')) {
     const j = await resp.json();
-    throw new Error((j && j.message) || '读取版本文件失败');
+    throw new Error((j && j.message) || t('common.readVersionFileFailed'));
   }
-  if (!resp.ok) throw new Error('读取版本文件失败');
+  if (!resp.ok) throw new Error(t('common.readVersionFileFailed'));
   return new Uint8Array(await resp.arrayBuffer());
 }
 

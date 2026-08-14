@@ -20,9 +20,9 @@
       </div>
       <div class="right">
 
-        <div v-if="hasError" class="status-badge error">出错</div>
-        <div v-else-if="isFinished" class="status-badge success">成功</div>
-        <div v-else class="status-badge processing">执行中</div>
+        <div v-if="hasError" class="status-badge error">{{ $t('chat.statusError') }}</div>
+        <div v-else-if="isFinished" class="status-badge success">{{ $t('chat.statusSuccess') }}</div>
+        <div v-else class="status-badge processing">{{ $t('chat.statusRunning') }}</div>
         <div class="chevron-wrapper" :class="{ 'is-rotated': isExpanded }">
           <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="6 9 12 15 18 9"></polyline>
@@ -60,7 +60,7 @@
                 </template>
                 <div v-else class="step-row">
                     <span class="step-dot" :class="{ 'done': item.status !== 'doing' }"></span>
-                    <span class="step-text" :class="{ 'is-meta': isSecondaryContent(item.text) }">{{ item.text || '处理中…' }}</span>
+                    <span class="step-text" :class="{ 'is-meta': isSecondaryContent(item.text) }">{{ item.text || $t('chat.processing') }}</span>
                 </div>
             </div>
 
@@ -83,7 +83,7 @@
                 <div
                   class="tool-row"
                   :class="{ 'is-clickable': hasOutput(item) }"
-                  :title="hasOutput(item) ? rawToolName(item.code) + ' — 点击查看返回结果' : rawToolName(item.code)"
+                  :title="hasOutput(item) ? $t('chat.toolClickToView', { name: rawToolName(item.code) }) : rawToolName(item.code)"
                   @click="hasOutput(item) && toggleOutput(idx)"
                 >
                     <div class="tool-content">
@@ -91,9 +91,9 @@
                     </div>
                     <div class="tool-right">
                          <div class="tool-status">
-                              <span v-if="item.status === 'loading'" class="status-loading">正在调用...</span>
-                              <span v-else-if="item.status === 'success'" class="status-success">已完成</span>
-                              <span v-else class="status-error">出错</span>
+                              <span v-if="item.status === 'loading'" class="status-loading">{{ $t('chat.toolCalling') }}</span>
+                              <span v-else-if="item.status === 'success'" class="status-success">{{ $t('chat.done') }}</span>
+                              <span v-else class="status-error">{{ $t('chat.statusError') }}</span>
                          </div>
                          <div v-if="hasOutput(item)" class="output-chevron" :class="{ 'is-rotated': isOutputOpen(idx) }">
                             <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -112,7 +112,7 @@
                          工具分档：结果型工具 16000，其余 4000），必须明示：模型看到的是全文，
                          这里没有。刻意不写具体字数——上限是分档的，写死数字就会说谎。 -->
                     <div v-if="isTruncated(item)" class="output-truncated">
-                        输出过长，此处只显示前一部分；完整内容只有模型看到了。
+                        {{ $t('chat.outputTruncatedNote') }}
                     </div>
                 </div>
             </div>
@@ -140,6 +140,8 @@ import ThinkingCard from './ThinkingCard.vue'
 import SubtaskResultCard from './SubtaskResultCard.vue'
 import FileTypeIcon from '../FileTypeIcon.vue'
 import { toolDisplayName, toolRawName } from '@/utils/toolDisplayNames.js'
+import { isEnglish } from '@/utils/appLanguage.js'
+import { t } from '@/i18n'
 
 const props = defineProps({
   process: { type: Object, required: true }
@@ -157,14 +159,17 @@ const isHeadless = computed(() => {
 })
 
 const processTitle = computed(() => {
-    const t = props.process.title || 'Processing...'
+    const title = props.process.title || 'Processing...'
+    const firstTool = (props.process.items || []).find(it => it.type === 'tool' && it.code)
+    // 英文界面：后端 <process name> 里的 displayName 是中文（PR4 之前后端不分语言），
+    // 只要能解析出首个工具代号就优先用前端表的 en 列；解析不出再回退后端标题。
+    if (isEnglish() && firstTool) return toolDisplayName(firstTool.code)
     // 模型偶尔把 process 命名成笼统的「工具执行」——与内部的「执行工具 xxx」行
     // 冗余（用户反馈）。此时直接用第一个工具的人性化名称当标题。
-    if (t === '工具执行' || t === 'Processing...' || t === 'Tool Execution') {
-        const firstTool = (props.process.items || []).find(it => it.type === 'tool' && it.code)
+    if (title === '工具执行' || title === 'Processing...' || title === 'Tool Execution') {
         if (firstTool) return toolDisplayName(firstTool.code)
     }
-    return t
+    return title
 })
 
 const isFinished = computed(() => {
@@ -194,7 +199,7 @@ watch(() => props.process.items?.length, (newLen, oldLen) => {
 }, { immediate: true })
 
 const formatToolName = (code) => {
-    if (!code) return '工具调用'
+    if (!code) return t('chat.toolCallFallback')
     const name = toolDisplayName(code)
     return name.length > 40 ? name.substring(0, 37) + '...' : name
 }

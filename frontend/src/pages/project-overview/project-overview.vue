@@ -16,14 +16,14 @@
                 @blur="cancelRenameProject"
               />
             </view>
-            <text v-else class="project-name" @tap="startRenameProject" title="点击重命名">{{ project.name || '未命名项目' }}</text>
+            <text v-else class="project-name" @tap="startRenameProject" :title="$t('workbench.clickToRename')">{{ project.name || $t('workbench.unnamedProject') }}</text>
             <!-- IDE 化：最近项目切换器（VS Code 的 Open Recent 语义） -->
-            <view class="project-switcher" @tap.stop="toggleProjectSwitcher" title="切换到最近项目">
+            <view class="project-switcher" @tap.stop="toggleProjectSwitcher" :title="$t('workbench.switchRecentProject')">
               <text class="switcher-arrow" :class="{ 'is-open': projectSwitcherOpen }">▾</text>
             </view>
             <view v-if="projectSwitcherOpen" class="switcher-mask" @tap.stop="projectSwitcherOpen = false"></view>
             <view v-if="projectSwitcherOpen" class="switcher-menu" @tap.stop>
-              <view class="switcher-title"><text>最近项目</text></view>
+              <view class="switcher-title"><text>{{ $t('workbench.recentProjects') }}</text></view>
               <view
                 v-for="p in switcherProjects"
                 :key="p.id"
@@ -33,17 +33,17 @@
                 <text class="switcher-item-name">{{ p.name }}</text>
               </view>
               <view v-if="!switcherProjects.length" class="switcher-item switcher-empty">
-                <text>没有其他最近项目</text>
+                <text>{{ $t('workbench.noOtherRecentProjects') }}</text>
               </view>
               <view class="switcher-item switcher-home" @tap="goProjectHome">
-                <text>项目概览</text>
+                <text>{{ $t('workbench.projectHome') }}</text>
               </view>
               <view class="switcher-item switcher-all" @tap="goAllProjects">
-                <text>全部项目…</text>
+                <text>{{ $t('workbench.allProjects') }}</text>
               </view>
             </view>
             <view class="project-status-badge">
-              <text class="status-text">进行中</text>
+              <text class="status-text">{{ $t('workbench.statusInProgress') }}</text>
             </view>
             <!-- IDE 化：常驻工作状态点（版本记录开着且有未收尾工作/稿时可见，点击直达版本面板） -->
             <view
@@ -62,23 +62,23 @@
               class="collab-chip"
               :class="'collab-chip-' + collabTone"
               @tap.stop="openCollab('casefile')"
-              title="协作"
+              :title="$t('workbench.collab')"
             >
               <view class="collab-chip-dot"></view>
               <text class="collab-chip-text">{{ collabStateText }}</text>
             </view>
           </view>
           <view class="project-meta">
-            <text class="meta-item">负责人：{{ project.manager || userDisplayName || '我' }}</text>
+            <text class="meta-item">{{ $t('workbench.managerLabel', { name: project.manager || userDisplayName || $t('workbench.me') }) }}</text>
 
             <block v-if="project.listedCompanyName && project.listedCompanyName !== '-'">
                 <text class="meta-divider">|</text>
-                <text class="meta-item">上市公司：{{ project.listedCompanyName }}</text>
+                <text class="meta-item">{{ $t('workbench.listedCompanyLabel', { name: project.listedCompanyName }) }}</text>
             </block>
 
             <block v-if="project.createdAt">
                 <text class="meta-divider">|</text>
-                <text class="meta-item">创建时间：{{ formatTime(project.createdAt) }}</text>
+                <text class="meta-item">{{ $t('workbench.createdAtLabel', { time: formatTime(project.createdAt) }) }}</text>
             </block>
           </view>
         </view>
@@ -96,17 +96,17 @@
           v-if="accountConnected"
           class="trial-chip account-chip"
           @tap.stop="goToAccountPanel"
-          title="账户与用量"
+          :title="$t('workbench.accountUsage')"
         >
-          <text class="trial-chip-text">已连接账户</text>
+          <text class="trial-chip-text">{{ $t('workbench.accountConnected') }}</text>
         </view>
         <view
           v-else-if="licenseMode === 'trial'"
           class="trial-chip"
           @tap.stop="showTrialInfo = true"
-          title="试用版说明"
+          :title="$t('workbench.trialInfo')"
         >
-          <text class="trial-chip-text">试用版</text>
+          <text class="trial-chip-text">{{ $t('workbench.trialBadge') }}</text>
         </view>
         <!-- 顶部工具区（IDE 风格）：分屏 / 浏览器 / 摘录 / AI / 工具 -->
         <view class="header-tools" v-if="!isClientView">
@@ -115,7 +115,7 @@
             class="top-bar-btn"
             :class="{ active: !sidebarCollapsed }"
             @tap="toggleSidebar"
-            :title="sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'"
+            :title="sidebarCollapsed ? $t('workbench.expandSidebar') : $t('workbench.collapseSidebar')"
           >
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.panelLeft" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -127,7 +127,7 @@
             class="top-bar-btn"
             :class="{ active: showToolsPanel }"
             @tap="toggleToolsPanel"
-            title="常用工具"
+            :title="$t('workbench.toolsPanel')"
           >
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.panelBottom" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -139,7 +139,7 @@
             class="top-bar-btn"
             :class="{ active: showAiPanel }"
             @tap="toggleAiPanel"
-            title="AI 助手"
+            :title="$t('workbench.aiAssistant')"
           >
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.panelRight" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -151,7 +151,7 @@
             class="top-bar-btn split-btn"
             :class="{ active: splitMode }"
             @tap="toggleSplitMode"
-            :title="splitMode ? '关闭分屏' : '开启分屏'"
+            :title="splitMode ? $t('workbench.closeSplit') : $t('workbench.openSplit')"
           >
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.splitCols" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -162,7 +162,7 @@
           <view
             class="top-bar-btn"
             @tap="startOcrCapture"
-            title="截图摘录（OCR）"
+            :title="$t('workbench.ocrCapture')"
           >
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.camera" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -173,7 +173,7 @@
           <view
             class="top-bar-btn"
             @tap="openBrowserTab()"
-            title="浏览器"
+            :title="$t('workbench.browser')"
           >
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.web" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -185,7 +185,7 @@
             class="top-bar-btn"
             :class="{ active: isRecording, recording: isRecording }"
             @tap="toggleRecording"
-            title="录制活动"
+            :title="$t('workbench.recordActivity')"
           >
             <svg class="tool-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, gi) in GLYPHS.record" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -195,7 +195,7 @@
         <view v-else>
             <!-- Client View Only Tools -->
             <view class="header-tools">
-               <view class="icon-btn" @tap="handleLogout" title="退出登录">
+               <view class="icon-btn" @tap="handleLogout" :title="$t('workbench.logout')">
                    <text class="tool-icon">×</text>
                </view>
             </view>
@@ -246,7 +246,7 @@
         <view
           class="rail-btn"
           :class="{ active: (leftPaneKey === 'staging' && !sidebarCollapsed) || stagingPinned }"
-          title="文件暂存区"
+          :title="$t('workbench.stagingArea')"
           @tap="toggleLeftPane('staging')"
         >
           <view class="rail-icon-wrapper">
@@ -260,7 +260,7 @@
         <view
           class="rail-btn"
           :class="{ active: leftPaneKey === 'market' && !sidebarCollapsed }"
-          title="插件广场"
+          :title="$t('workbench.pluginMarket')"
           @tap="goToPluginMarket"
         >
           <view class="rail-icon-wrapper">
@@ -275,7 +275,7 @@
 
         <!-- 系统设置：AI 提供商 / API Key 等随时可改（不再只藏在首次向导里）。
              页面与接口仅管理员可用（后端 requireAdmin），入口对所有人可见便于发现。 -->
-        <view class="rail-btn" title="系统设置（AI 提供商 / API Key）" @tap="goToSystemSettings">
+        <view class="rail-btn" :title="$t('workbench.systemSettings')" @tap="goToSystemSettings">
           <view class="rail-icon-wrapper">
             <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
@@ -315,7 +315,7 @@
                                    <view class="member-avatar-wrapper">
                                      <image v-if="member.avatarUrl" :src="member.avatarUrl" class="member-avatar-grid" />
                                      <view v-else class="member-avatar-placeholder-grid" :class="{ 'is-client': member.role === 'CLIENT' }">
-                                       {{ member.role === 'CLIENT' ? '客' : (member.displayName?.charAt(0) || 'U') }}
+                                       {{ member.role === 'CLIENT' ? $t('workbench.clientInitial') : (member.displayName?.charAt(0) || 'U') }}
                                      </view>
                                    </view>
                               </view>
@@ -329,7 +329,7 @@
 
                       <!-- Add Member Trigger (Appended to the list visually) -->
                       <view class="add-member-row" style="padding: 0 12px 12px;">
-                          <view class="add-member-btn" @tap.stop="showInviteModal = true" title="加人">
+                          <view class="add-member-btn" @tap.stop="showInviteModal = true" :title="$t('workbench.addMember')">
                               <text class="add-icon">＋</text>
                           </view>
                       </view>
@@ -340,7 +340,7 @@
 
         <!-- User Avatar (Bottom) -->
         <!-- User Avatar (Bottom) -->
-        <view class="rail-user-avatar" @tap="goToUserProfile" title="个人中心">
+        <view class="rail-user-avatar" @tap="goToUserProfile" :title="$t('workbench.profile')">
            <view class="rail-user-avatar-inner">
                <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
                <text v-else class="avatar-text">{{ (userDisplayName || currentUser?.displayName)?.charAt(0) || 'U' }}</text>
@@ -398,27 +398,27 @@
       <view v-if="showAssistantConfigDialog" class="dialog-overlay" style="z-index: 9999;" @tap="closeAssistantConfigDialog">
          <view class="config-dialog" @tap.stop>
             <view class="dialog-header">
-               <text class="dialog-title">配置助手</text>
+               <text class="dialog-title">{{ $t('workbench.configAssistant') }}</text>
                <text class="dialog-close" @tap="closeAssistantConfigDialog">×</text>
             </view>
             <view class="dialog-content">
                <view class="form-item">
-                  <text class="label">助手名称 (System)</text>
+                  <text class="label">{{ $t('workbench.assistantNameLabel') }}</text>
                   <input class="input readonly" :value="editingAssistant.name" disabled />
                </view>
                <view class="form-item">
-                  <text class="label">预设 Prompt (System)</text>
+                  <text class="label">{{ $t('workbench.presetPromptLabel') }}</text>
                   <textarea class="textarea readonly" :value="editingAssistant.systemPrompt" disabled></textarea>
                </view>
                <view class="form-item">
-                  <text class="label">用户自定义 Prompt</text>
-                  <textarea class="textarea" v-model="editingAssistant.userPrompt" placeholder="输入自定义指令..."></textarea>
-                  <text class="hint">注意：如果设置了自定义 Prompt，预设 Prompt 将被忽略（User Prompt Prevails）。</text>
+                  <text class="label">{{ $t('workbench.userPromptLabel') }}</text>
+                  <textarea class="textarea" v-model="editingAssistant.userPrompt" :placeholder="$t('workbench.userPromptPlaceholder')"></textarea>
+                  <text class="hint">{{ $t('workbench.userPromptHint') }}</text>
                </view>
             </view>
             <view class="dialog-footer">
-               <button class="btn-cancel" @tap="closeAssistantConfigDialog">取消</button>
-               <button class="btn-save" @tap="saveAssistantConfig">保存</button>
+               <button class="btn-cancel" @tap="closeAssistantConfigDialog">{{ $t('common.cancel') }}</button>
+               <button class="btn-save" @tap="saveAssistantConfig">{{ $t('common.save') }}</button>
             </view>
          </view>
       </view>
@@ -435,7 +435,7 @@
               class="btn-select-all"
               @tap="selectAllFiles"
             >
-              <text>选择全部</text>
+              <text>{{ $t('workbench.selectAll') }}</text>
             </view>
           </view>
 
@@ -446,7 +446,7 @@
                 v-if="!fileBatchMode"
                 class="icon-btn mini"
                 @tap="onFileTreeQuickAction('newFile')"
-                title="新建文档"
+                :title="$t('workbench.newDoc')"
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.filePlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -458,7 +458,7 @@
                 v-if="!fileBatchMode"
                 class="icon-btn mini"
                 @tap="onFileTreeQuickAction('newFolder')"
-                title="新建文件夹"
+                :title="$t('workbench.newFolder')"
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.folderPlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -470,7 +470,7 @@
                 class="icon-btn mini"
                 :class="{ active: fileBatchMode }"
                 @tap="toggleFileBatchMode"
-                title="批量选择"
+                :title="$t('workbench.batchSelect')"
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.checkSquare" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -482,7 +482,7 @@
                 v-if="!fileBatchMode"
                 class="icon-btn mini"
                 @tap="onFileTreeQuickAction('upload')"
-                title="上传文件"
+                :title="$t('workbench.uploadFile')"
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.upload" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -494,7 +494,7 @@
                 v-if="fileBatchMode"
                 class="icon-btn mini"
                 @tap="onFileTreeQuickAction('download')"
-                title="批量下载"
+                :title="$t('workbench.batchDownload')"
                 :class="{ disabled: checkedFileCount <= 0 }"
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -507,7 +507,7 @@
                 v-if="!fileBatchMode"
                 class="icon-btn mini"
                 @tap="onFileTreeQuickAction('sort')"
-                title="排序"
+                :title="$t('workbench.sort')"
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.sort" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -519,7 +519,7 @@
                 v-if="fileBatchMode"
                 class="icon-btn mini"
                 @tap="onFileTreeQuickAction('copy')"
-                title="批量复制"
+                :title="$t('workbench.batchCopy')"
                 :class="{ disabled: checkedFileCount <= 0 }"
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -531,7 +531,7 @@
               <view
                 class="icon-btn mini"
                 @tap="onFileTreeQuickAction('recycleBin')"
-                :title="fileBatchMode ? '删除选中' : '回收站'"
+                :title="fileBatchMode ? $t('workbench.deleteSelected') : $t('workbench.recycleBin')"
               >
                 <svg class="mini-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
@@ -618,7 +618,7 @@
           />
           <view v-else class="sidebar-plugin-placeholder">
             <text class="placeholder-title">{{ leftPaneTitle }}</text>
-            <text class="placeholder-desc">加载中...</text>
+            <text class="placeholder-desc">{{ $t('workbench.loadingText') }}</text>
           </view>
 
 
@@ -692,7 +692,7 @@
                     </view>
                   </view>
                 </scroll-view>
-                <view class="tabs-plus" @tap="onTabsPlusClick('left')" title="新建/复制">
+                <view class="tabs-plus" @tap="onTabsPlusClick('left')" :title="$t('workbench.newOrCopy')">
                   <text class="tabs-plus-icon">＋</text>
                 </view>
               </view>
@@ -730,7 +730,7 @@
                     </view>
                   </view>
                 </scroll-view>
-                <view class="tabs-plus" @tap="onTabsPlusClick('right')" title="新建/复制">
+                <view class="tabs-plus" @tap="onTabsPlusClick('right')" :title="$t('workbench.newOrCopy')">
                   <text class="tabs-plus-icon">＋</text>
                 </view>
               </view>
@@ -743,7 +743,7 @@
               <view v-if="leftFiles.length === 0 && !splitMode" class="empty-workspace">
                 <view class="empty-content">
                   <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
-                  <text class="empty-text">选择文件开始工作</text>
+                  <text class="empty-text">{{ $t('workbench.emptyWorkspace') }}</text>
                 </view>
               </view>
 
@@ -862,7 +862,7 @@
                   </view>
                   <view v-else-if="!activeFileLeft" class="pane-empty">
                     <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
-                    <text class="empty-text">左侧空闲</text>
+                    <text class="empty-text">{{ $t('workbench.leftPaneIdle') }}</text>
                   </view>
                 </view>
 
@@ -951,7 +951,7 @@
                   </view>
                   <view v-else-if="!activeFileRight" class="pane-empty">
                     <image src="/static/iconmark_v2.png" class="empty-state-img" mode="aspectFit" />
-                    <text class="empty-text">右侧空闲</text>
+                    <text class="empty-text">{{ $t('workbench.rightPaneIdle') }}</text>
                   </view>
                 </view>
               </view>
@@ -979,13 +979,13 @@
 
                   <!-- Variable Specific Actions (Moved from VariablePanel) -->
                   <view v-if="activeToolKey === 'variables'" class="tool-actions-group">
-                    <view class="tool-action-btn" @tap="handleOpenCreateVariable" title="设为变量">
+                    <view class="tool-action-btn" @tap="handleOpenCreateVariable" :title="$t('workbench.setAsVariable')">
                       <text class="btn-icon">＋</text>
-                      <text class="btn-text">设为变量</text>
+                      <text class="btn-text">{{ $t('workbench.setAsVariable') }}</text>
                     </view>
-                    <view class="tool-action-btn" @tap="handleSyncVariable" title="同步">
+                    <view class="tool-action-btn" @tap="handleSyncVariable" :title="$t('workbench.sync')">
                       <text class="btn-icon">↻</text>
-                      <text class="btn-text">同步</text>
+                      <text class="btn-text">{{ $t('workbench.sync') }}</text>
                     </view>
                   </view>
                 </view>
@@ -1004,7 +1004,7 @@
                 </view>
 
                 <view class="panel-actions">
-                  <view class="icon-btn" title="收起" @tap="toggleToolsPanel">
+                  <view class="icon-btn" :title="$t('workbench.collapse')" @tap="toggleToolsPanel">
                     <text class="tool-icon">×</text>
                   </view>
                 </view>
@@ -1088,14 +1088,14 @@
 
             <!-- 3. History Dropdown (Unified style) -->
             <view v-if="showHistoryDrawer" class="ai-dropdown-panel" @tap.stop style="top: 36px; border-radius: 0 0 8px 8px;">
-                <view class="menu-item header">历史对话</view>
+                <view class="menu-item header">{{ $t('workbench.historyConversations') }}</view>
                 <scroll-view scroll-y class="drawer-list" style="max-height: 350px;">
-                    <view v-if="loadingHistory" class="menu-item" style="color:#999;">加载中...</view>
-                    <view v-else-if="chatHistoryList.length === 0" class="menu-item" style="color:#999;">暂无历史记录</view>
+                    <view v-if="loadingHistory" class="menu-item" style="color:#999;">{{ $t('workbench.loadingText') }}</view>
+                    <view v-else-if="chatHistoryList.length === 0" class="menu-item" style="color:#999;">{{ $t('workbench.noHistory') }}</view>
                     <view v-else v-for="chat in chatHistoryList" :key="chat.id" class="menu-item" @tap="loadHistoryChat(chat)">
                         <view v-if="convDotClass(chat)" class="conv-dot" :class="convDotClass(chat)"></view>
                         <view style="flex:1; overflow:hidden;">
-                            <text class="item-title" style="display:block; font-size:13px; color:#333; margin-bottom:2px;">{{ chat.title || '未命名对话' }}</text>
+                            <text class="item-title" style="display:block; font-size:13px; color:#333; margin-bottom:2px;">{{ chat.title || $t('workbench.unnamedConversation') }}</text>
                             <text class="item-preview" style="display:block; font-size:11px; color:#999; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">{{ chat.lastMessage }}</text>
                         </view>
                         <view style="display:flex; flex-direction:column; align-items:flex-end; margin-left:8px; flex-shrink:0;">
@@ -1114,20 +1114,20 @@
       <view v-if="showExportDialog" class="upload-mask" @tap="closeExportDialog">
         <view class="folder-modal" @tap.stop>
           <view class="upload-header">
-            <text class="upload-title">导出为 Word</text>
-            <text class="upload-subtitle">选择存放位置并输入文件名</text>
+            <text class="upload-title">{{ $t('workbench.exportWordTitle') }}</text>
+            <text class="upload-subtitle">{{ $t('workbench.exportWordSubtitle') }}</text>
           </view>
           <view class="folder-body">
             <view class="upload-row">
-              <text class="upload-label">文件名</text>
+              <text class="upload-label">{{ $t('workbench.fileNameLabel') }}</text>
               <input
                 v-model="exportFileName"
                 class="dialog-input"
-                placeholder="例如：AI回复.docx"
+                :placeholder="$t('workbench.exportFileNamePlaceholder')"
               />
             </view>
             <view class="upload-row export-folder-label-row">
-              <text class="upload-label">存放位置</text>
+              <text class="upload-label">{{ $t('workbench.saveLocationLabel') }}</text>
             </view>
             <scroll-view class="export-folder-list" scroll-y>
               <view
@@ -1138,7 +1138,7 @@
                 <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.folder" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
-                <text class="folder-name">根目录</text>
+                <text class="folder-name">{{ $t('workbench.rootFolder') }}</text>
               </view>
               <view
                 v-for="folder in exportFolderTree"
@@ -1157,20 +1157,20 @@
                 <text class="folder-name">{{ folder.name }}</text>
               </view>
               <view v-if="!exportFolderTree.length" class="empty-tip">
-                <text>暂无其他文件夹，将保存到根目录</text>
+                <text>{{ $t('workbench.noOtherFolders') }}</text>
               </view>
             </scroll-view>
           </view>
           <view class="upload-footer">
             <view class="upload-btn upload-btn-secondary" @tap="closeExportDialog">
-              取消
+              {{ $t('common.cancel') }}
             </view>
             <view
               class="upload-btn upload-btn-primary"
               :class="{ 'upload-btn-disabled': exportLoading || !exportFileName.trim() }"
               @tap="!exportLoading && exportFileName.trim() && confirmExportWord()"
             >
-              {{ exportLoading ? '导出中...' : '确定导出' }}
+              {{ exportLoading ? $t('workbench.exporting') : $t('workbench.confirmExport') }}
             </view>
           </view>
         </view>
@@ -1186,19 +1186,19 @@
       <view v-if="showScreenshotSaveDialog" class="upload-mask" @tap="closeScreenshotSaveDialog">
         <view class="folder-modal" @tap.stop>
           <view class="upload-header">
-            <text class="upload-title">保存截图</text>
+            <text class="upload-title">{{ $t('workbench.saveScreenshotTitle') }}</text>
           </view>
           <view class="folder-content">
             <view class="upload-row">
-              <text class="upload-label">文件名</text>
+              <text class="upload-label">{{ $t('workbench.fileNameLabel') }}</text>
               <input
                 v-model="screenshotSaveName"
                 class="dialog-input"
-                placeholder="例如：screenshot.png"
+                :placeholder="$t('workbench.screenshotNamePlaceholder')"
               />
             </view>
             <view class="upload-row export-folder-label-row">
-              <text class="upload-label">存放位置</text>
+              <text class="upload-label">{{ $t('workbench.saveLocationLabel') }}</text>
             </view>
             <scroll-view scroll-y class="folder-tree-list">
               <view
@@ -1209,7 +1209,7 @@
                 <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                   <path v-for="(d, gi) in GLYPHS.folderOpen" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                 </svg>
-                <text class="folder-name">根目录</text>
+                <text class="folder-name">{{ $t('workbench.rootFolder') }}</text>
                 <view v-if="!screenshotSaveParentId" class="check-icon">✓</view>
               </view>
               <template v-for="folder in screenshotFolderTree">
@@ -1240,20 +1240,20 @@
                   </view>
               </template>
               <view v-if="!screenshotFolderTree.length" class="empty-tip">
-                <text>暂无子文件夹</text>
+                <text>{{ $t('workbench.noSubfolders') }}</text>
               </view>
             </scroll-view>
           </view>
           <view class="upload-footer">
             <view class="upload-btn upload-btn-secondary" @tap="closeScreenshotSaveDialog">
-              取消
+              {{ $t('common.cancel') }}
             </view>
             <view
               class="upload-btn upload-btn-primary"
               :class="{ 'upload-btn-disabled': screenshotSaveLoading || !screenshotSaveName.trim() }"
               @tap="!screenshotSaveLoading && screenshotSaveName.trim() && confirmSaveScreenshot()"
             >
-              {{ screenshotSaveLoading ? '保存中...' : '确定保存' }}
+              {{ screenshotSaveLoading ? $t('workbench.savingText') : $t('workbench.confirmSave') }}
             </view>
           </view>
         </view>
@@ -1273,11 +1273,11 @@
           :style="ocrFrameImgStyle"
         />
         <view v-else class="ocr-frame-loading">
-          <text>正在获取画面…</text>
+          <text>{{ $t('workbench.ocrFetchingFrame') }}</text>
         </view>
         <!-- #endif -->
         <view class="ocr-overlay-hintline">
-          <text>拖动框选 · 单击/ESC 退出</text>
+          <text>{{ $t('workbench.ocrHint') }}</text>
         </view>
         <view class="ocr-frame-shade"></view>
         <view v-if="ocrOverlaySelecting || ocrHasSelection" class="ocr-selection" :style="ocrSelectionStyle"></view>
@@ -1310,7 +1310,7 @@
       <view v-if="fileLinkPicker.visible" class="upload-mask" @tap="closeFileLinkPicker">
         <view class="folder-modal" @tap.stop>
           <view class="upload-header">
-            <text class="upload-title">选择要打开的文件</text>
+            <text class="upload-title">{{ $t('workbench.chooseFileToOpen') }}</text>
           </view>
           <view class="folder-body">
             <view
@@ -1325,11 +1325,11 @@
               <text class="folder-name">{{ f.name }}</text>
             </view>
             <view v-if="!fileLinkPicker.files || fileLinkPicker.files.length === 0" class="empty-tip">
-              <text>无可用关联文件</text>
+              <text>{{ $t('workbench.noLinkedFiles') }}</text>
             </view>
           </view>
           <view class="upload-footer">
-            <view class="upload-btn upload-btn-secondary" @tap="closeFileLinkPicker">关闭</view>
+            <view class="upload-btn upload-btn-secondary" @tap="closeFileLinkPicker">{{ $t('common.close') }}</view>
           </view>
         </view>
       </view>
@@ -1341,7 +1341,7 @@
           :style="{ left: webLinkDrag.x + 'px', top: webLinkDrag.y + 'px' }"
         >
           <image class="webmark-ghost-img" :src="webLinkDrag.imageDataUrl" mode="aspectFill" />
-          <view class="webmark-ghost-badge">网核</view>
+          <view class="webmark-ghost-badge">{{ $t('workbench.webMark') }}</view>
         </view>
       </view>
 
@@ -1354,8 +1354,8 @@
         v-if="adoptConflictPending && leftPaneKey !== 'version'"
         class="adopt-pending-bar"
       >
-        <text class="adopt-pending-text">有文件等你做选择</text>
-        <text class="adopt-pending-go" @tap="goHandleAdoptConflict">去处理</text>
+        <text class="adopt-pending-text">{{ $t('workbench.adoptPendingText') }}</text>
+        <text class="adopt-pending-go" @tap="goHandleAdoptConflict">{{ $t('workbench.goHandle') }}</text>
       </view>
 
       <!-- IDE 化 Cmd+P 快速打开 -->
@@ -1370,14 +1370,14 @@
       <view v-if="showTrialInfo" class="awd-dialog-mask" @tap="showTrialInfo = false">
         <view class="awd-dialog" @tap.stop>
           <view class="awd-dialog-header">
-            <text class="awd-dialog-title">试用版</text>
+            <text class="awd-dialog-title">{{ $t('workbench.trialBadge') }}</text>
           </view>
           <view class="awd-dialog-body">
-            <text class="awd-dialog-text">当前为试用版，全部功能均可正常使用。升级正式版可连接 AI Workdeck 账户，同步已购内容并使用平台 AI 通道。</text>
+            <text class="awd-dialog-text">{{ $t('workbench.trialInfoBody') }}</text>
           </view>
           <view class="awd-dialog-footer">
-            <button class="awd-btn awd-btn-secondary" @tap="showTrialInfo = false">知道了</button>
-            <button class="awd-btn awd-btn-primary" @tap="openUpgradeSite">了解正式版</button>
+            <button class="awd-btn awd-btn-secondary" @tap="showTrialInfo = false">{{ $t('workbench.gotIt') }}</button>
+            <button class="awd-btn awd-btn-primary" @tap="openUpgradeSite">{{ $t('workbench.learnFullVersion') }}</button>
           </view>
         </view>
       </view>
@@ -1398,7 +1398,7 @@
       <view class="status-sep"></view>
       <view v-if="isRecording" class="status-item status-recording">
         <view class="status-dot recording"></view>
-        <text>活动录制中</text>
+        <text>{{ $t('workbench.recordingActive') }}</text>
       </view>
       <view v-if="versionWorkStatus.enabled && (versionWorkStatus.working || versionWorkStatus.onDraft)" class="status-item status-clickable" @tap="goHandleAdoptConflict">
         <view class="status-dot amber"></view>
@@ -1413,7 +1413,7 @@
         <text>{{ activeFileLeft.name }}</text>
       </view>
       <view v-if="splitMode" class="status-item">
-        <text>分屏</text>
+        <text>{{ $t('workbench.splitBadge') }}</text>
       </view>
       <view class="status-sep"></view>
       <view class="status-item status-brand">
@@ -1580,7 +1580,7 @@ export default {
       enabledSkillIds: null,
       easyVoiceImportCallback: null,
       renameProjectName: '',
-      userDisplayName: '用户',
+      userDisplayName: this.$t('workbench.defaultUserName'),
 
       // 授权状态（试用版标识，商业化解锁门）
       licenseMode: '',
@@ -1858,10 +1858,10 @@ export default {
       return filterPluginsByEnabledSkills(base, this.enabledSkillIds)
     },
     toolsSearchPlaceholder() {
-      if (this.activeToolKey === 'variables') return '搜索变量…'
-      if (this.activeToolKey === 'favorites') return '搜索收藏…'
-      if (this.activeToolKey === 'clipboard') return '搜索剪贴板…'
-      return '搜索…'
+      if (this.activeToolKey === 'variables') return this.$t('workbench.searchVariables')
+      if (this.activeToolKey === 'favorites') return this.$t('workbench.searchFavorites')
+      if (this.activeToolKey === 'clipboard') return this.$t('workbench.searchClipboard')
+      return this.$t('workbench.searchDefault')
     },
     OCR_ACTION_LABELS() {
       return OCR_ACTION_LABELS
@@ -1879,8 +1879,8 @@ export default {
     // IDE 化顶栏工作状态点文案
     versionWorkStatusLabel() {
       const s = this.versionWorkStatus
-      if (s.onDraft && s.onDraft.name) return `正在稿《${s.onDraft.name}》上修改`
-      if (s.working) return s.changedCount ? `工作中 · 已改 ${s.changedCount} 份` : '工作中'
+      if (s.onDraft && s.onDraft.name) return this.$t('workbench.workingOnDraft', { name: s.onDraft.name })
+      if (s.working) return s.changedCount ? this.$t('workbench.workingChanged', { count: s.changedCount }) : this.$t('workbench.working')
       return ''
     },
     isClientView() {
@@ -1901,12 +1901,12 @@ export default {
      * （还没落成版本，确实没什么可交），律师读起来却是假绿灯。
      */
     collabStateText() {
-      if (this.adoptConflictPending) return '有文件等你做选择'
+      if (this.adoptConflictPending) return this.$t('workbench.adoptPendingText')
       const c = this.collabCloud || {}
-      if (c.offline) return '暂时连不上案件库'
-      if (c.remoteAhead) return '同事交了新稿'
-      if (c.pendingUpload || this.versionWorkStatus.working) return '有改动还没交稿'
-      return '和大家的稿一致'
+      if (c.offline) return this.$t('workbench.collabOffline')
+      if (c.remoteAhead) return this.$t('workbench.collabRemoteAhead')
+      if (c.pendingUpload || this.versionWorkStatus.working) return this.$t('workbench.collabPendingUpload')
+      return this.$t('workbench.collabInSync')
     },
     collabTone() {
       if (this.adoptConflictPending) return 'amber'
@@ -1922,11 +1922,11 @@ export default {
       return user && user.role !== 'CLIENT'
     },
     leftPaneTitle() {
-      if (this.leftPaneKey === 'market') return '插件广场'
+      if (this.leftPaneKey === 'market') return this.$t('workbench.pluginMarket')
       try {
-        return getLeftSidebarPlugin(this.leftPaneKey)?.label || '文件树'
+        return getLeftSidebarPlugin(this.leftPaneKey)?.label || this.$t('workbench.explorerFallback')
       } catch (e) {
-        return '文件树'
+        return this.$t('workbench.explorerFallback')
       }
     },
     groupedMembers() {
@@ -2413,7 +2413,7 @@ export default {
               if (!text || !this.projectId) return
               const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
               await createProjectFavorite(pid, {
-                title: title || (url ? (() => { try { return new URL(url).host } catch (e) { return '网核' } })() : '网核'),
+                title: title || (url ? (() => { try { return new URL(url).host } catch (e) { return this.$t('workbench.webMark') } })() : this.$t('workbench.webMark')),
                 sourceUrl: url,
                 content: text,
                 imageBase64: imageBase64 || ''
@@ -2422,10 +2422,10 @@ export default {
               if (this.$refs.favoritesPanel && typeof this.$refs.favoritesPanel.refresh === 'function') {
                 this.$refs.favoritesPanel.refresh()
               }
-              uni.showToast({ title: '已加入网核收藏', icon: 'success' })
+              uni.showToast({ title: this.$t('workbench.webMarkFavAdded'), icon: 'success' })
             } catch (e) {
               console.error('保存网核收藏失败:', e)
-              uni.showToast({ title: e.message || '保存失败', icon: 'none' })
+              uni.showToast({ title: e.message || this.$t('workbench.saveFailed'), icon: 'none' })
             }
           })
         }
@@ -2523,7 +2523,7 @@ export default {
                     const files = resp && resp.files ? resp.files : (resp && resp.data && resp.data.files ? resp.data.files : [])
                     const list = Array.isArray(files) ? files : []
                     if (list.length <= 0) {
-                      uni.showToast({ title: '关联文件不存在', icon: 'none' })
+                      uni.showToast({ title: this.$t('workbench.linkedFileMissing'), icon: 'none' })
                       return
                     }
                     if (list.length === 1) {
@@ -2533,7 +2533,7 @@ export default {
                     this.fileLinkPicker = { visible: true, side: this.focusedPane === 'right' && this.splitMode ? 'right' : 'left', files: list, linkKey }
                   })
                   .catch((e) => {
-                    uni.showToast({ title: (e && e.message) ? e.message : '打开失败', icon: 'none' })
+                    uni.showToast({ title: (e && e.message) ? e.message : this.$t('workbench.openFailed'), icon: 'none' })
                   })
                 return
               }
@@ -2599,7 +2599,7 @@ export default {
                   const files = resp && resp.files ? resp.files : (resp && resp.data && resp.data.files ? resp.data.files : [])
                   const list = Array.isArray(files) ? files : []
                   if (list.length <= 0) {
-                    uni.showToast({ title: '关联文件不存在', icon: 'none' })
+                    uni.showToast({ title: this.$t('workbench.linkedFileMissing'), icon: 'none' })
                     return
                   }
                   if (list.length === 1) {
@@ -2609,7 +2609,7 @@ export default {
                   this.fileLinkPicker = { visible: true, side: this.focusedPane === 'right' && this.splitMode ? 'right' : 'left', files: list, linkKey }
                 })
                 .catch((e) => {
-                  uni.showToast({ title: (e && e.message) ? e.message : '打开失败', icon: 'none' })
+                  uni.showToast({ title: (e && e.message) ? e.message : this.$t('workbench.openFailed'), icon: 'none' })
                 })
               return
             }
@@ -2631,7 +2631,7 @@ export default {
           this._desktopOcrSelectionErrUnsub = host.ocr.onSelectionError((data) => {
             // 只让活跃实例弹一次 toast，避免页面栈里 N 个实例连弹 N 次
             if (!this.isActiveOverviewInstance()) return
-            const msg = data && data.message ? String(data.message) : '截图失败'
+            const msg = data && data.message ? String(data.message) : this.$t('workbench.screenshotFailed')
             uni.showToast({ title: msg, icon: 'none' })
           })
         }
@@ -2778,13 +2778,13 @@ export default {
           const r = await getFileLocalPath(file.id)
           path = r && r.data && r.data.path
           if (!(r && r.data && r.data.exists)) {
-            uni.showToast({ title: '磁盘上没有这份文件', icon: 'none' })
+            uni.showToast({ title: this.$t('workbench.fileNotOnDisk'), icon: 'none' })
             return
           }
         }
         if (path) await host.fs.showItemInFolder(path)
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '无法在访达中显示', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('workbench.revealFailed'), icon: 'none' })
       }
     },
     // 「有一次采纳等待处理」固定条的入口：切到版本面板，AdoptConflictDialog 会随
@@ -2918,7 +2918,7 @@ export default {
         if (this.litigationScopeCallback) {
             const isFolder = file.fileType === 'folder' || file.isFolder
             this.litigationScopeCallback({
-                label: isFolder ? `文件夹：${file.name}` : file.name,
+                label: isFolder ? this.$t('workbench.folderScopeLabel', { name: file.name }) : file.name,
                 isFolder,
                 description: isFolder
                     ? `文件夹「${file.name}」（folderId=${file.id}）及其下全部材料。`
@@ -2930,7 +2930,7 @@ export default {
         }
 
         try {
-            uni.showLoading({ title: '正在导入...' })
+            uni.showLoading({ title: this.$t('workbench.importing') })
 
             // Check if it is a text file -> use content directly if available/loaded?
             // Better to call backend always for consistency, or check file extension.
@@ -2960,13 +2960,13 @@ export default {
                   fileType: fileType,
                   filePath: file.filePath
                 })
-                uni.showToast({ title: '导入成功', icon: 'success' })
+                uni.showToast({ title: this.$t('workbench.importSuccess'), icon: 'success' })
             } else {
-                throw new Error(res.message || '导入失败')
+                throw new Error(res.message || this.$t('workbench.importFailed'))
             }
         } catch (e) {
             console.error('Failed to import doc text', e)
-            uni.showToast({ title: '导入失败: ' + e.message, icon: 'none' })
+            uni.showToast({ title: this.$t('workbench.importFailedWithMsg', { msg: e.message }), icon: 'none' })
         } finally {
             uni.hideLoading()
             this.easyVoiceImportCallback = null
@@ -3011,21 +3011,21 @@ export default {
     async removeMember(member) {
       if (!this.projectId) return
       if (!this.canRemoveMember(member)) {
-         uni.showToast({ title: '你没有权限把这个人移出案卷', icon: 'none' })
+         uni.showToast({ title: this.$t('workbench.noPermissionRemoveMember'), icon: 'none' })
          return
       }
       uni.showModal({
-        title: '移出案卷',
-        content: `把 ${member.displayName} 移出这份案卷？移出后他不再能打开和修改这里的文件。`,
+        title: this.$t('workbench.removeMemberTitle'),
+        content: this.$t('workbench.removeMemberConfirm', { name: member.displayName }),
         success: async (res) => {
           if (res.confirm) {
             try {
               await removeProjectMember(this.projectId, member.userId)
-              uni.showToast({ title: '已移出', icon: 'success' })
+              uni.showToast({ title: this.$t('workbench.removed'), icon: 'success' })
               this.loadProjectMembers()
             } catch (e) {
               console.error(e)
-              uni.showToast({ title: e.message || '没能移出', icon: 'none' })
+              uni.showToast({ title: e.message || this.$t('workbench.removeFailed'), icon: 'none' })
             }
           }
         }
@@ -3071,7 +3071,7 @@ export default {
     async handleShareholderMeetingStart({ check, prompt }) {
       const chat = this.$refs.chatInterface
       if (!chat || !chat.sendExternalPrompt) {
-        uni.showToast({ title: 'AI 面板未就绪，请稍后重试', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.aiPanelNotReady'), icon: 'none' })
         return
       }
       const conversationId = await chat.sendExternalPrompt(prompt)
@@ -3091,7 +3091,7 @@ export default {
     async handleLitigationStart({ prompt }) {
       const chat = this.$refs.chatInterface
       if (!chat || !chat.sendExternalPrompt) {
-        uni.showToast({ title: 'AI 面板未就绪，请稍后重试', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.aiPanelNotReady'), icon: 'none' })
         return
       }
       await chat.sendExternalPrompt(prompt)
@@ -3104,7 +3104,7 @@ export default {
         const file = await getFileDetail(pid, fileId)
         if (file && file.id) this.openFile(file)
       } catch (e) {
-        uni.showToast({ title: '打开失败', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.openFailed'), icon: 'none' })
       }
     },
 
@@ -3153,17 +3153,17 @@ export default {
     },
     async confirmRenameProject() {
       if (!this.renameProjectName || !this.renameProjectName.trim()) {
-        uni.showToast({ title: '项目名称不能为空', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.projectNameEmpty'), icon: 'none' })
         return
       }
       try {
         await renameProject(this.projectId, this.renameProjectName.trim())
         this.project.name = this.renameProjectName.trim()
         this.isRenamingProject = false
-        uni.showToast({ title: '重命名成功', icon: 'success' })
+        uni.showToast({ title: this.$t('workbench.renameSuccess'), icon: 'success' })
       } catch (e) {
         console.error('重命名失败', e)
-        uni.showToast({ title: '重命名失败', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.renameFailed'), icon: 'none' })
       }
     },
     cancelRenameProject() {
@@ -3284,7 +3284,7 @@ export default {
       // linkKey + set_selection_hyperlink 写入），后端 DocFileLink 契约不变。
       console.log('createWpsSelectionFileLink start:', { side, fileId: file && file.id })
       if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
-        uni.showToast({ title: '请先打开一个文档', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
         return
       }
       const exec = (action, params) => this.libreOfficeExecutor.executeCommand(action, params)
@@ -3302,7 +3302,7 @@ export default {
         console.warn('get_selection_hyperlink failed:', e)
       }
       if (!selText) {
-        uni.showToast({ title: '请先在文档中高亮一段文本（蓝色选区）', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.highlightTextFirst'), icon: 'none' })
         return
       }
 
@@ -3331,7 +3331,7 @@ export default {
         const r = await exec('set_selection_hyperlink', { url })
         if (!r || !r.success) {
           console.error('设置超链接失败:', r && r.message)
-          uni.showToast({ title: '设置超链接失败', icon: 'none' })
+          uni.showToast({ title: this.$t('workbench.setHyperlinkFailed'), icon: 'none' })
           return
         }
       }
@@ -3341,7 +3341,7 @@ export default {
         const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         const doc = side === 'right' ? this.activeFileRight : this.activeFileLeft
         const docWpsFileId = doc && this.isEditorOpenableFile(doc) ? (doc.wpsFileId || '') : ''
-        if (!docWpsFileId) throw new Error('文档未就绪')
+        if (!docWpsFileId) throw new Error(this.$t('workbench.docNotReady'))
         const payload = await createDocFileLink(pid, {
           linkKey,
           docWpsFileId,
@@ -3352,9 +3352,9 @@ export default {
           fileIds: [Number(file.id)]
         })
         if (payload && payload.linkKey) linkKey = payload.linkKey
-        uni.showToast({ title: '已建立关联', icon: 'success' })
+        uni.showToast({ title: this.$t('workbench.linkCreated'), icon: 'success' })
       } catch (e) {
-        uni.showToast({ title: e.message || '关联失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbench.linkFailed'), icon: 'none' })
       }
     },
 
@@ -3369,13 +3369,13 @@ export default {
       try {
         const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         const file = await getFileDetail(pid, fid)
-        if (!file) throw new Error('文件不存在')
+        if (!file) throw new Error(this.$t('workbench.fileMissing'))
         const old = this.focusedPane
         this.focusedPane = side === 'right' && this.splitMode ? 'right' : 'left'
         this.openFile(file)
         this.focusedPane = old
       } catch (e) {
-        uni.showToast({ title: e.message || '打开失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbench.openFailed'), icon: 'none' })
       }
     },
     // OCR 采集与浮层生命周期方法组已外置（Phase 3c） → ./ocrCapture.js
@@ -3420,11 +3420,11 @@ export default {
           this.openFile(createdFile)
           this.focusedPane = oldFocus
         } else {
-          uni.showToast({ title: '复制失败：未返回新文件', icon: 'none' })
+          uni.showToast({ title: this.$t('workbench.copyFailedNoNewFile'), icon: 'none' })
         }
       } catch (e) {
         console.error('复制文件失败', e)
-        uni.showToast({ title: e.message || '复制失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbench.copyFailed'), icon: 'none' })
       }
     },
     switchToolTab(key) {
@@ -3519,10 +3519,10 @@ export default {
       const idProp = targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'
 
       const id = `web_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-      let name = '浏览器'
+      let name = this.$t('workbench.browser')
       try {
         const u = new URL(url)
-        name = u.host || '浏览器'
+        name = u.host || this.$t('workbench.browser')
       } catch (e) {
         // ignore
       }
@@ -3559,7 +3559,7 @@ export default {
         this.isRecording = newState
 
         // Custom Toast
-        this.recordingToastMessage = newState ? '开始录制工作' : '已停止录制工作'
+        this.recordingToastMessage = newState ? this.$t('workbench.recordingStarted') : this.$t('workbench.recordingStopped')
         this.showRecordingToast = true
         if (this.recordingToastTimer) clearTimeout(this.recordingToastTimer)
         this.recordingToastTimer = setTimeout(() => {
@@ -3641,21 +3641,21 @@ export default {
          const t = (text || '').trim()
          if (!t) return
          if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
-           uni.showToast({ title: '请先打开一个文档', icon: 'none' })
+           uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
            return
          }
          try {
            await this.libreOfficeExecutor.executeCommand('insert_at_cursor', { text: t })
-           uni.showToast({ title: '已插入文档', icon: 'success' })
+           uni.showToast({ title: this.$t('workbench.insertedToDoc'), icon: 'success' })
          } catch (e) {
            console.error(e)
-           uni.showToast({ title: '插入失败', icon: 'none' })
+           uni.showToast({ title: this.$t('workbench.insertFailed'), icon: 'none' })
          }
       } else if (type === 'IMAGE') {
          // #79 债已还：经执行器 insert_image 在光标处插入（data URL → UNO 图形对象）
          if (!content) return
          if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
-           uni.showToast({ title: '请先打开一个文档', icon: 'none' })
+           uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
            return
          }
          try {
@@ -3664,21 +3664,21 @@ export default {
            let dataUrl = content
            if (!/^data:/i.test(dataUrl)) {
              const resp = await fetch(dataUrl)
-             if (!resp.ok) throw new Error('图片下载失败')
+             if (!resp.ok) throw new Error(this.$t('workbench.imageDownloadFailed'))
              const blob = await resp.blob()
              dataUrl = await new Promise((resolve, reject) => {
                const reader = new FileReader()
                reader.onload = () => resolve(reader.result)
-               reader.onerror = () => reject(new Error('图片读取失败'))
+               reader.onerror = () => reject(new Error(this.$t('workbench.imageReadFailed')))
                reader.readAsDataURL(blob)
              })
            }
            const r = await this.libreOfficeExecutor.executeCommand('insert_image', { dataUrl })
-           if (!r || !r.success) throw new Error((r && r.message) || '插入图片失败')
-           uni.showToast({ title: '已插入图片', icon: 'success' })
+           if (!r || !r.success) throw new Error((r && r.message) || this.$t('workbench.insertImageFailed'))
+           uni.showToast({ title: this.$t('workbench.imageInserted'), icon: 'success' })
          } catch (e) {
            console.error(e)
-           uni.showToast({ title: e.message || '插入图片失败', icon: 'none' })
+           uni.showToast({ title: e.message || this.$t('workbench.insertImageFailed'), icon: 'none' })
          }
       }
     },
@@ -3742,25 +3742,25 @@ export default {
       }
       try {
         if (!hitEditor()) {
-          uni.showToast({ title: '请拖拽到文档区域进行关联', icon: 'none' })
+          uni.showToast({ title: this.$t('workbench.dragToDocArea'), icon: 'none' })
           return
         }
         if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
-          uni.showToast({ title: '请先打开一个文档', icon: 'none' })
+          uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
           return
         }
         const favId = this.webLinkDrag.favoriteId
-        const host = this.webLinkDrag.sourceUrl ? (() => { try { return new URL(this.webLinkDrag.sourceUrl).host } catch (e) { return '网核' } })() : '网核'
+        const host = this.webLinkDrag.sourceUrl ? (() => { try { return new URL(this.webLinkDrag.sourceUrl).host } catch (e) { return this.$t('workbench.webMark') } })() : this.$t('workbench.webMark')
         const ts = new Date().toLocaleString()
-        const text = `【网核证据：${host}｜${ts}】`
+        const text = this.$t('workbench.webMarkEvidence', { host, time: ts })
         const bookmarkName = `WEB_EVID_${favId || Date.now()}`
         const internalUrl = this.wrapWpsInternalLink(`checkba://webfav?id=${encodeURIComponent(String(favId || ''))}&projectId=${encodeURIComponent(String(this.projectId || ''))}`)
         const r = await this.libreOfficeExecutor.executeCommand('insert_link_with_bookmark', { text, bookmarkName, url: internalUrl })
-        if (!r || !r.success) throw new Error((r && r.message) || '插入失败')
-        uni.showToast({ title: '已插入网核标记', icon: 'success' })
+        if (!r || !r.success) throw new Error((r && r.message) || this.$t('workbench.insertFailed'))
+        uni.showToast({ title: this.$t('workbench.webMarkInserted'), icon: 'success' })
       } catch (e) {
         console.error('插入网核标记失败:', e)
-        uni.showToast({ title: e.message || '插入失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbench.insertFailed'), icon: 'none' })
       } finally {
         this.stopWebLinkDrag()
       }
@@ -3873,13 +3873,13 @@ export default {
 
   // Return relative time format
   if (diffMins < 1) {
-    return '刚刚'
+    return this.$t('workbench.justNow')
   } else if (diffMins < 60) {
-    return `${diffMins}分钟前`
+    return this.$t('workbench.minutesAgo', { n: diffMins })
   } else if (diffHrs < 24) {
-    return `${diffHrs}小时前`
+    return this.$t('workbench.hoursAgo', { n: diffHrs })
   } else if (diffDays < 7) {
-    return `${diffDays}天前`
+    return this.$t('workbench.daysAgo', { n: diffDays })
   } else {
     // Fallback to MM/DD format for older dates
     return `${date.getMonth() + 1}/${date.getDate()}`
@@ -3983,7 +3983,7 @@ export default {
           if (f.id === activeFile.id) f.name = oldName
         })
         this.$forceUpdate()
-        uni.showToast({ title: '重命名同步失败', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.renameSyncFailed'), icon: 'none' })
       }
     },
 
@@ -4096,7 +4096,7 @@ export default {
     buildAiContextPreview(context) {
       if (!context) return null
       return {
-        fileName: context.fileName || this.activeAiFileName || '未命名文件',
+        fileName: context.fileName || this.activeAiFileName || this.$t('workbench.unnamedFile'),
         selection: this.normalizeContextText(context.selectionText || '', 160),
         snippet: this.normalizeContextText(context.documentText || '', 200),
         updatedAt: Date.now()
@@ -4198,17 +4198,17 @@ export default {
         if (manualTrigger) {
            if (!contexts || contexts.length === 0) {
               if (this.manualContextFiles.length === 0) {
-                 uni.showToast({ title: '没有激活的上下文', icon: 'none' })
+                 uni.showToast({ title: this.$t('workbench.noActiveContext'), icon: 'none' })
               }
            } else {
-              uni.showToast({ title: '上下文已更新', icon: 'none' })
+              uni.showToast({ title: this.$t('workbench.contextUpdated'), icon: 'none' })
            }
         }
         return contexts
       } catch (e) {
         console.error('刷新 AI 上下文失败', e)
         if (manualTrigger) {
-          uni.showToast({ title: '同步失败', icon: 'none' })
+          uni.showToast({ title: this.$t('workbench.syncFailed'), icon: 'none' })
         }
         return null
       } finally {
@@ -4242,7 +4242,7 @@ export default {
       const virtualFile = {
         id: `artifact-${artifactInfo.id}`,
         artifactId: artifactInfo.id,
-        name: artifactInfo.fileName || 'AI工作计划.md',
+        name: artifactInfo.fileName || this.$t('workbench.aiWorkPlanFileName'),
         tabType: 'markdown',
         fileType: 'md',
         content: artifactInfo.content || artifactInfo.data?.content || '',
@@ -4273,6 +4273,7 @@ export default {
     getLibreVariableBridge() {
       if (!this.libreOfficeActive || !this.libreOfficeExecutor) return null
       const exec = (action, params) => this.libreOfficeExecutor.executeCommand(action, params)
+      const t = (key) => this.$t(key)
       return {
         async getSelectionText() {
           const r = await exec('get_selection', {})
@@ -4280,22 +4281,22 @@ export default {
         },
         async listVariableFields() {
           const r = await exec('var_list', {})
-          if (!r || !r.success) throw new Error((r && r.message) || '读取文档变量域失败')
+          if (!r || !r.success) throw new Error((r && r.message) || t('workbench.varListFailed'))
           return r.fields || []
         },
         async insertTextWithDocumentField(value, scope, name) {
           const r = await exec('var_insert', { text: value == null ? '' : String(value), scope, name })
-          if (!r || !r.success) throw new Error((r && r.message) || '插入文档变量域失败')
+          if (!r || !r.success) throw new Error((r && r.message) || t('workbench.varInsertFailed'))
         },
         async updateDocumentField(fieldId, nextText) {
           const r = await exec('var_update', { id: fieldId, text: nextText == null ? '' : String(nextText) })
-          if (!r || !r.success) throw new Error((r && r.message) || '更新文档变量域失败')
+          if (!r || !r.success) throw new Error((r && r.message) || t('workbench.varUpdateFailed'))
         },
         // resolver 是面板本地回调，无法跨 worker 传递：在这一侧枚举字段、逐个求值并回写。
         // 空值不回写——后端变量缺失时 resolver 返回 ''，同步不应清空文档里的内容。
         async syncAllDocumentFields(resolver) {
           const lr = await exec('var_list', {})
-          if (!lr || !lr.success) throw new Error((lr && lr.message) || '读取文档变量域失败')
+          if (!lr || !lr.success) throw new Error((lr && lr.message) || t('workbench.varListFailed'))
           let updated = 0
           for (const f of lr.fields || []) {
             let next
@@ -4320,21 +4321,21 @@ export default {
     async applyAiMessageToSelection(message) {
       if (!message || !message.content) return
       if (!this.libreOfficeActive || !this.libreOfficeExecutor) {
-        uni.showToast({ title: '请先打开一个文档', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.openDocFirst'), icon: 'none' })
         return
       }
       try {
         const sel = await this.libreOfficeExecutor.executeCommand('get_selection', {})
         if (!String((sel && sel.text) || '').trim()) {
-          uni.showToast({ title: '请先在文档中选择要替换的内容', icon: 'none' })
+          uni.showToast({ title: this.$t('workbench.selectReplaceContentFirst'), icon: 'none' })
           return
         }
         await this.libreOfficeExecutor.executeCommand('replace_selection', { text: markdownToPlainText(message.content) })
-        uni.showToast({ title: '已替换选区', icon: 'success' })
+        uni.showToast({ title: this.$t('workbench.selectionReplaced'), icon: 'success' })
         return
       } catch (e) {
         console.error('替换选区失败', e)
-        uni.showToast({ title: e.message || '替换失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbench.replaceFailed'), icon: 'none' })
       }
     },
     // --- AI Context Drag & Drop ---
@@ -4398,7 +4399,7 @@ export default {
 
                  const totalFiles = countDescendants(file.id)
                  if (totalFiles > 10) {
-                     uni.showToast({ title: `文件夹含${totalFiles}个文件(超出10个限制)，请减少数量`, icon: 'none' })
+                     uni.showToast({ title: this.$t('workbench.folderTooManyFiles', { count: totalFiles }), icon: 'none' })
                      return
                  }
              }
@@ -4408,10 +4409,10 @@ export default {
              }
 
              // Note: Visual tag display is now handled within ChatInterface
-             uni.showToast({ title: '已添加: ' + fileData.name, icon: 'none' })
+             uni.showToast({ title: this.$t('workbench.fileAdded', { name: fileData.name }), icon: 'none' })
 
         } else {
-             uni.showToast({ title: '未获取到拖拽数据', icon: 'none' })
+             uni.showToast({ title: this.$t('workbench.noDragData'), icon: 'none' })
         }
     },
     removeContextFile(index) {
@@ -4553,13 +4554,13 @@ export default {
           } else {
               // Fallback default if needed, or keep empty
               this.assistants = [
-                  { id: 'default', name: '默认助手', systemPrompt: '你是一个专业的助手。' }
+                  { id: 'default', name: this.$t('workbench.defaultAssistantName'), systemPrompt: this.$t('workbench.defaultAssistantPrompt') }
               ]
           }
       } catch (e) {
           console.error('Failed to load assistants', e)
           this.assistants = [
-              { id: 'default', name: '默认助手', systemPrompt: '你是一个专业的助手。' }
+              { id: 'default', name: this.$t('workbench.defaultAssistantName'), systemPrompt: this.$t('workbench.defaultAssistantPrompt') }
           ]
       }
   },
@@ -4611,16 +4612,16 @@ export default {
     // --- AI 导出为 Word ---
     async openExportDialog(message) {
       if (!this.projectId) {
-        uni.showToast({ title: '项目未就绪', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.projectNotReady'), icon: 'none' })
         return
       }
       if (!message || !message.content) {
-        uni.showToast({ title: '暂无可导出内容', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.noExportContent'), icon: 'none' })
         return
       }
       this.exportSourceMessage = message
       // 默认文件名：项目名 + 时间
-      const baseName = this.project.name || 'AI回复'
+      const baseName = this.project.name || this.$t('workbench.aiReplyBaseName')
       const ts = new Date()
       const pad = n => (n < 10 ? `0${n}` : `${n}`)
       const defaultName = `${baseName}-${ts.getFullYear()}${pad(
@@ -4636,7 +4637,7 @@ export default {
         this.exportFolderTree = this.buildExportFolderTree(allFiles || [])
       } catch (e) {
         console.error('加载文件夹列表失败', e)
-        uni.showToast({ title: '加载文件夹失败', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.loadFoldersFailed'), icon: 'none' })
       }
     },
 
@@ -4720,12 +4721,12 @@ export default {
 
     async confirmExportWord() {
       if (!this.projectId || !this.exportSourceMessage) {
-        uni.showToast({ title: '项目未就绪', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.projectNotReady'), icon: 'none' })
         return
       }
       let name = (this.exportFileName || '').trim()
       if (!name) {
-        uni.showToast({ title: '请输入文件名', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.enterFileName'), icon: 'none' })
         return
       }
       if (!/\.docx$/i.test(name)) {
@@ -4755,10 +4756,10 @@ export default {
         if (createdFile) {
           this.openFile(createdFile)
         }
-        uni.showToast({ title: '文档已生成', icon: 'none' })
+        uni.showToast({ title: this.$t('workbench.docGenerated'), icon: 'none' })
       } catch (e) {
         console.error('导出 Word 失败', e)
-        uni.showToast({ title: e.message || '导出失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbench.exportFailed'), icon: 'none' })
       } finally {
         this.exportLoading = false
       }
@@ -4809,7 +4810,7 @@ export default {
           // We map to: { id, title, date }
           this.chatHistoryList = (res || []).map(item => ({
               id: item.conversationId,
-              title: item.title ? item.title.replace(/<[^>]+>/g, '').trim() : (item.lastMessage ? (item.lastMessage.substring(0, 20) + (item.lastMessage.length > 20 ? '...' : '')) : '新对话'),
+              title: item.title ? item.title.replace(/<[^>]+>/g, '').trim() : (item.lastMessage ? (item.lastMessage.substring(0, 20) + (item.lastMessage.length > 20 ? '...' : '')) : this.$t('workbench.newConversation')),
               updatedAt: item.updatedAt,
               lastMessage: item.lastMessage ? item.lastMessage.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').substring(0, 60) + (item.lastMessage.length > 60 ? '...' : '') : '',
               conversationId: item.conversationId,
@@ -4818,7 +4819,7 @@ export default {
           }))
       } catch (e) {
         console.error('Fetch history failed', e)
-        if (!quiet) uni.showToast({ title: '加载历史失败', icon: 'none' })
+        if (!quiet) uni.showToast({ title: this.$t('workbench.loadHistoryFailed'), icon: 'none' })
       } finally {
         if (!quiet) this.loadingHistory = false
       }
@@ -4857,7 +4858,7 @@ export default {
             this.showHistoryDrawer = false
         } catch (e) {
             console.error('Load chat failed', e)
-            uni.showToast({ title: '加载对话失败', icon: 'none' })
+            uni.showToast({ title: this.$t('workbench.loadConversationFailed'), icon: 'none' })
         } finally {
             this.loadingHistory = false
         }
@@ -4875,16 +4876,16 @@ export default {
     },
     convStatusLabel(chat) {
         if (!chat) return ''
-        if (chat.runStatus === 'RUNNING') return '运行中'
-        if (chat.runStatus === 'PAUSED') return '待继续'
-        if (chat.runStatus === 'INTERRUPTED') return '已中断'
-        if (chat.runStatus === 'AWAITING_APPROVAL') return '待审批'
+        if (chat.runStatus === 'RUNNING') return this.$t('workbench.statusRunning')
+        if (chat.runStatus === 'PAUSED') return this.$t('workbench.statusPaused')
+        if (chat.runStatus === 'INTERRUPTED') return this.$t('workbench.statusInterrupted')
+        if (chat.runStatus === 'AWAITING_APPROVAL') return this.$t('workbench.statusAwaitingApproval')
         // 「待回答」必须与「待审批」分开：这是新增 AWAITING_INPUT（而不复用
         // AWAITING_APPROVAL）的全部目的——用户要能在列表上分出「AI 在问我」
         // 和「AI 要我点头」两件事
-        if (chat.runStatus === 'AWAITING_INPUT') return '待回答'
-        if (chat.runStatus === 'ERROR') return '出错'
-        if (chat.unread) return '已完成'
+        if (chat.runStatus === 'AWAITING_INPUT') return this.$t('workbench.statusAwaitingInput')
+        if (chat.runStatus === 'ERROR') return this.$t('workbench.statusError')
+        if (chat.unread) return this.$t('workbench.statusDone')
         return ''
     },
     toggleAssistantMenu() {
@@ -4895,12 +4896,12 @@ export default {
         this.showAssistantMenu = false
         const ast = this.assistants.find(a => a.id === id)
         if (ast) {
-             uni.showToast({ title: `已切换为：${ast.name}`, icon: 'none' })
+             uni.showToast({ title: this.$t('workbench.assistantSwitchedToast', { name: ast.name }), icon: 'none' })
              // Inject system prompt notification (hidden or visible)
              this.aiMessages.push({
                  id: Date.now(),
                  role: 'system', // Display as special notice
-                 content: `助手切换为：${ast.name}`
+                 content: this.$t('workbench.assistantSwitchedMsg', { name: ast.name })
              })
         }
     },
@@ -4927,7 +4928,7 @@ export default {
         if (idx !== -1) {
              this.assistants.splice(idx, 1, this.editingAssistant)
              // Sync to backend would happen here
-             uni.showToast({ title: '配置已保存', icon: 'success' })
+             uni.showToast({ title: this.$t('workbench.configSaved'), icon: 'success' })
         }
         this.closeAssistantConfigDialog()
     },

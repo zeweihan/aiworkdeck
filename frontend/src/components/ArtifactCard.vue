@@ -5,13 +5,13 @@
       <div class="card-title-group">
         <span class="card-icon-box"></span>
         <span class="card-title">{{ typeLabel }}</span>
-        <span v-if="effectiveStatus === 'resolved'" class="status-badge resolved">已确认执行</span>
+        <span v-if="effectiveStatus === 'resolved'" class="status-badge resolved">{{ $t('chat.confirmedExecuted') }}</span>
         <span v-if="revisionNote" class="status-badge revised">{{ revisionNote }}</span>
       </div>
 
       <div class="card-actions">
         <div class="btn-view" @click.stop="handleOpenTab">
-          <span>查看内容</span>
+          <span>{{ $t('chat.viewContent') }}</span>
         </div>
       </div>
     </div>
@@ -43,18 +43,18 @@
     <div v-if="showApprovalBar" class="approval-bar">
       <template v-if="!editing">
         <div class="btn-approve" @click.stop="approvePlain">
-          <span>按此推进</span>
+          <span>{{ $t('chat.proceedBtn') }}</span>
         </div>
         <div class="btn-revise" @click.stop="startEditing">
-          <span>修订</span>
+          <span>{{ $t('chat.reviseBtn') }}</span>
         </div>
       </template>
       <template v-else>
         <div class="btn-approve" @click.stop="approveRevised">
-          <span>按修订版推进</span>
+          <span>{{ $t('chat.proceedRevisedBtn') }}</span>
         </div>
         <div class="btn-revise" @click.stop="cancelEditing">
-          <span>取消</span>
+          <span>{{ $t('chat.cancel') }}</span>
         </div>
       </template>
     </div>
@@ -181,25 +181,25 @@ export default {
     },
     typeLabel() {
       const labels = {
-        'task_list': '任务清单',
-        'plan': '执行方案',
-        'implementation_plan': '实施计划',
-        'walkthrough': '详细说明'
+        'task_list': this.$t('chat.typeTaskList'),
+        'plan': this.$t('chat.typePlan'),
+        'implementation_plan': this.$t('chat.typeImplPlan'),
+        'walkthrough': this.$t('chat.typeWalkthrough')
       }
       return labels[this.type] || this.type
     },
     statusMessage() {
       if (this.effectiveStatus === 'resolved') {
-        return '已批准执行'
+        return this.$t('chat.approvedExecute')
       }
       const typeNames = {
-        'task_list': '任务清单',
-        'plan': '工作计划',
-        'implementation_plan': '实施计划',
-        'walkthrough': '详细内容'
+        'task_list': this.$t('chat.typeTaskList'),
+        'plan': this.$t('chat.typeNamePlan'),
+        'implementation_plan': this.$t('chat.typeImplPlan'),
+        'walkthrough': this.$t('chat.typeNameWalkthrough')
       }
-      const typeName = typeNames[this.type] || '工作计划'
-      return `已生成${typeName}，点击查看详情`
+      const typeName = typeNames[this.type] || this.$t('chat.typeNamePlan')
+      return this.$t('chat.generatedClickView', { name: typeName })
     }
   },
   methods: {
@@ -244,7 +244,7 @@ export default {
       if (this.data) this.data.content = edited
       this.editing = false
       this.localResolved = true
-      this.revisionNote = `已修订 ${stats.hunks} 处（+${stats.added} 行 / -${stats.removed} 行）`
+      this.revisionNote = this.$t('chat.revisionNote', { hunks: stats.hunks, added: stats.added, removed: stats.removed })
       this.$emit('approve', {
         id: this.id,
         type: this.type,

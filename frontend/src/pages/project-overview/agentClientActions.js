@@ -21,7 +21,7 @@ export const agentClientActionMethods = {
             if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
                 console.log('[ProjectOverview] Refreshing File Tree...')
                 this.$refs.fileTree.loadFiles()
-                uni.showToast({ title: '文件已更新', icon: 'none' })
+                uni.showToast({ title: this.$t('workbenchOps.fileUpdated'), icon: 'none' })
             }
         }
         // AI Agent 请求打开文件
@@ -172,7 +172,7 @@ export const agentClientActionMethods = {
                 status: 'ready'
             }, null)
 
-            uni.showToast({ title: `已打开: ${file.name}`, icon: 'none' })
+            uni.showToast({ title: this.$t('workbenchOps.openedNamed', { name: file.name }), icon: 'none' })
 
         } catch (e) {
             console.error('[ProjectOverview] handleEditorOpenFileSync error:', e)
@@ -196,7 +196,7 @@ export const agentClientActionMethods = {
             const file = await getFileDetail(this.projectId, fileId)
             if (!file) {
                 console.error('[ProjectOverview] File not found:', fileId)
-                uni.showToast({ title: '文件不存在', icon: 'none' })
+                uni.showToast({ title: this.$t('workbenchOps.fileNotFound'), icon: 'none' })
                 return
             }
 
@@ -204,11 +204,11 @@ export const agentClientActionMethods = {
             this.openFile(file)
 
             // 提示用户
-            uni.showToast({ title: `已打开: ${file.name}`, icon: 'none' })
+            uni.showToast({ title: this.$t('workbenchOps.openedNamed', { name: file.name }), icon: 'none' })
 
         } catch (e) {
             console.error('[ProjectOverview] handleEditorOpenFile error:', e)
-            uni.showToast({ title: '打开文件失败', icon: 'none' })
+            uni.showToast({ title: this.$t('workbenchOps.openFileFailed'), icon: 'none' })
         }
     },
 
@@ -249,7 +249,7 @@ export const agentClientActionMethods = {
             const file = await getFileDetail(this.projectId, fileId)
             if (!file) {
                 console.error('[ProjectOverview] File not found:', fileId)
-                uni.showToast({ title: '文件不存在', icon: 'none' })
+                uni.showToast({ title: this.$t('workbenchOps.fileNotFound'), icon: 'none' })
                 return false
             }
 
@@ -316,11 +316,11 @@ export const agentClientActionMethods = {
 
             if (reloadOk) {
                 if (!silentSuccessToast) {
-                    uni.showToast({ title: `文件已更新: ${file.name}`, icon: 'success' })
+                    uni.showToast({ title: this.$t('workbenchOps.fileUpdatedNamed', { name: file.name }), icon: 'success' })
                 }
             } else {
                 // 画布上仍是旧内容（该实例已自己拦下保存），不能报"已更新"。
-                uni.showToast({ title: `${file.name} 重新加载失败，请关闭标签后重新打开`, icon: 'none', duration: 4000 })
+                uni.showToast({ title: this.$t('workbenchOps.reloadFailedNamed', { name: file.name }), icon: 'none', duration: 4000 })
             }
 
             // 刷新文件树以更新文件信息
@@ -331,7 +331,7 @@ export const agentClientActionMethods = {
             return reloadOk
         } catch (e) {
             console.error('[ProjectOverview] handleEditorReloadFile error:', e)
-            uni.showToast({ title: '刷新文件失败', icon: 'none' })
+            uni.showToast({ title: this.$t('workbenchOps.refreshFileFailed'), icon: 'none' })
             return false
         }
     },

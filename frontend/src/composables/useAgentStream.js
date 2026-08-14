@@ -2,6 +2,7 @@ import { ref, reactive, nextTick } from 'vue'
 import { getApiBaseUrl, getConversationMetadata } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
+import { t } from '@/i18n'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
 // 页面栈会多次实例化本 composable（PR#148 重复订阅地雷），window 监听只挂一次，
@@ -239,28 +240,28 @@ export function useAgentStream() {
             if (!resp.ok) return
             const tasks = await resp.json()
             if (!Array.isArray(tasks)) return
-            tasks.forEach(t => {
-                if (!t || !t.taskId) return
-                const existing = backgroundTasks.value[t.taskId]
+            tasks.forEach(task => {
+                if (!task || !task.taskId) return
+                const existing = backgroundTasks.value[task.taskId]
                 if (existing) {
                     // 已有条目（本次会话内起跑过）：服务端的进度才是权威，本地那份停在断线那一刻
                     Object.assign(existing, {
-                        progress: t.progress || 0,
-                        message: t.message || existing.message,
+                        progress: task.progress || 0,
+                        message: task.message || existing.message,
                         status: 'running',
                         lastUpdate: Date.now()
                     })
                     return
                 }
-                backgroundTasks.value[t.taskId] = {
-                    taskId: t.taskId,
-                    type: t.taskType,
-                    conversationId: t.conversationId,
-                    progress: t.progress || 0,
-                    message: t.message || '任务进行中...',
+                backgroundTasks.value[task.taskId] = {
+                    taskId: task.taskId,
+                    type: task.taskType,
+                    conversationId: task.conversationId,
+                    progress: task.progress || 0,
+                    message: task.message || t('agentStream.taskInProgress'),
                     stage: 'running',
-                    startedAt: toEpochMs(t.startedAt),
-                    estimatedDurationSec: t.estimatedDurationSec,
+                    startedAt: toEpochMs(task.startedAt),
+                    estimatedDurationSec: task.estimatedDurationSec,
                     status: 'running'
                 }
             })
@@ -342,7 +343,7 @@ export function useAgentStream() {
                     // SSE 连接出错时，确保结束当前 bubble 的加载状态
                     if (isCurrent && currentAssistantBubble.value && currentAssistantBubble.value.isStreaming) {
                         currentAssistantBubble.value.isStreaming = false
-                        currentAssistantBubble.value.content += '\n\n*[连接中断]*'
+                        currentAssistantBubble.value.content += '\n\n' + t('agentStream.connectionInterrupted')
                     }
                 }
                 if (isCurrent) {
@@ -379,7 +380,7 @@ export function useAgentStream() {
             console.warn('[AgentStream] sendMessage ignored: already streaming')
             try {
                 if (typeof uni !== 'undefined' && uni.showToast) {
-                    uni.showToast({ title: 'AI 正在执行中，请等待完成或点击停止', icon: 'none' })
+                    uni.showToast({ title: t('agentStream.alreadyStreamingToast'), icon: 'none' })
                 }
             } catch (e) { /* ignore */ }
             return
@@ -458,14 +459,14 @@ export function useAgentStream() {
             })
             // fetch 对 4xx/5xx 不 reject，需显式校验，否则会话过期/后端错误时加载态永久卡死
             if (!chatResp.ok) {
-                throw new Error(`对话请求失败: HTTP ${chatResp.status}`)
+                throw new Error(t('agentStream.chatRequestFailed', { status: chatResp.status }))
             }
 
         } catch (err) {
             if (err.name !== 'AbortError') {
                 error.value = err.message
                 if (currentAssistantBubble.value) {
-                    currentAssistantBubble.value.content += `\n**错误**: ${err.message}`
+                    currentAssistantBubble.value.content += '\n' + t('agentStream.errorWithMessage', { message: err.message })
                     currentAssistantBubble.value.isStreaming = false
                 }
                 isStreaming.value = false
@@ -501,7 +502,7 @@ export function useAgentStream() {
             // 停止标记（必须写 content，walkthrough 当前未渲染）。措辞只说「正在停止」：
             // 取消打不断已经发出去的 HTTP 读，在途的那一次调用还可能回一小段，
             // 写「已停止」就是对用户说谎
-            currentAssistantBubble.value.content += '\n\n*[正在停止]*'
+            currentAssistantBubble.value.content += '\n\n' + t('agentStream.stopping')
         }
     }
 
@@ -594,7 +595,7 @@ export function useAgentStream() {
                     type: d.taskType,
                     conversationId: d.conversationId,
                     progress: 0,
-                    message: '任务开始...',
+                    message: t('agentStream.taskStarting'),
                     stage: 'starting',
                     startedAt: Date.now(),
                     estimatedDurationSec: d.estimatedDurationSec,
@@ -632,7 +633,7 @@ export function useAgentStream() {
                 if (d.taskId && backgroundTasks.value[d.taskId]) {
                     backgroundTasks.value[d.taskId].status = d.success ? 'completed' : 'failed'
                     backgroundTasks.value[d.taskId].progress = d.success ? 100 : backgroundTasks.value[d.taskId].progress
-                    backgroundTasks.value[d.taskId].message = d.success ? '任务完成' : (d.error || '任务失败')
+                    backgroundTasks.value[d.taskId].message = d.success ? t('agentStream.taskCompleted') : (d.error || t('agentStream.taskFailed'))
                     backgroundTasks.value[d.taskId].result = d.result
                     backgroundTasks.value[d.taskId].error = d.error
                     backgroundTasks.value[d.taskId].completedAt = Date.now()
@@ -715,7 +716,7 @@ export function useAgentStream() {
             try {
                 const d = JSON.parse(dataStr)
                 appendStatusStep(
-                    d.message || `子任务${d.stage === 'started' ? '开始' : '结束'}`,
+                    d.message || (d.stage === 'started' ? t('agentStream.subtaskStarted') : t('agentStream.subtaskEnded')),
                     d.stage !== 'started'
                 )
             } catch (e) {
@@ -760,7 +761,7 @@ export function useAgentStream() {
                     currentAssistantBubble.value.isEditorStreaming = true
                     // Add a placeholder message if content is empty
                     if (!currentAssistantBubble.value.content) {
-                        currentAssistantBubble.value.content = '*（正在向文档流式写入内容…）*'
+                        currentAssistantBubble.value.content = t('agentStream.docStreamingPlaceholder')
                     }
                 }
 
@@ -834,23 +835,19 @@ export function useAgentStream() {
                 // 走到这一步说明后端连区域无关的备用模型也没换成（换成了会走文本流的切换提示，不是 error）。
                 if (errMsg.includes('AI_REGION_BLOCKED')) {
                     currentAssistantBubble.value.content +=
-                        '\n\n> **该模型在当前网络环境不可用**：境外模型在境内网络会被服务商按地域拒绝。'
-                        + '可在设置中改用 AI Workdeck 云端通道，或换成标注「境内外均可用」的模型后重新发送。\n'
+                        '\n\n' + t('agentStream.regionBlockedNotice') + '\n'
                 } else if (errMsg.includes('AI_QUOTA_EXHAUSTED')) {
                     // 配额耗尽（后端 LlmErrorClassifier.QUOTA_EXHAUSTED_MARKER）：终局错误，
                     // 后端不会退避重试也不会换模型——换哪个模型都是同一个没钱的账户
                     currentAssistantBubble.value.content +=
-                        '\n\n> **AI 服务额度不足**：当前通道的余额或配额已用完。'
-                        + '使用自备 Key 时请到服务商（如 OpenRouter）充值；'
-                        + '使用 AI Workdeck 云端通道时请到官网账户页检查额度分配。\n'
+                        '\n\n' + t('agentStream.quotaExhaustedNotice') + '\n'
                 } else if (errMsg.includes('AI_CONTEXT_OVERFLOW')) {
                     // 上下文超窗（后端 LlmErrorClassifier.CONTEXT_OVERFLOW_MARKER）：
                     // 走到这里说明后端强制压缩后仍装不下（或压不动）
                     currentAssistantBubble.value.content +=
-                        '\n\n> **对话上下文超出模型窗口**：已尝试自动压缩仍超限。'
-                        + '建议开启新对话继续，或减少一次携带的文件数量与长度。\n'
+                        '\n\n' + t('agentStream.contextOverflowNotice') + '\n'
                 } else {
-                    currentAssistantBubble.value.content += `\n\n> **执行中断**：${errMsg}\n`
+                    currentAssistantBubble.value.content += '\n\n' + t('agentStream.executionInterrupted', { message: errMsg }) + '\n'
                 }
             }
         }
@@ -941,7 +938,8 @@ export function useAgentStream() {
             || bubble.processes[bubble.processes.length - 1]
         if (!proc) {
             // 尚无任何过程卡（子任务在首个 <process> 之前就起跑）：建一张无归属的
-            proc = { id: `proc-sys-${Date.now()}`, title: '系统操作', isExpanded: true, items: [], content: '' }
+            // ProcessCard.vue 按标题串识别系统卡（'系统操作' / 'System Actions'），locale 值不得改措辞
+            proc = { id: `proc-sys-${Date.now()}`, title: t('agentStream.systemOperation'), isExpanded: true, items: [], content: '' }
             bubble.processes.push(proc)
         }
         if (!proc.items) proc.items = []
@@ -991,7 +989,7 @@ export function useAgentStream() {
                 type: evt.type,
                 status: evt.status,
                 data: evt.data,
-                fileName: evt.name ? evt.name : (evt.type === 'task_list' ? '任务清单' : '计划')
+                fileName: evt.name ? evt.name : (evt.type === 'task_list' ? t('agentStream.taskListArtifact') : t('agentStream.planArtifact'))
             })
         }
     }

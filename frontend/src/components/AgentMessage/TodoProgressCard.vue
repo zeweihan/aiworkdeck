@@ -2,7 +2,7 @@
   <div class="todo-progress-card" v-if="todos && todos.length > 0">
     <div class="todo-header" @click="isCollapsed = !isCollapsed">
       <div class="todo-header-left">
-        <span class="todo-title">任务进度</span>
+        <span class="todo-title">{{ $t('chat.taskProgress') }}</span>
         <span class="todo-counter">{{ completedCount }}/{{ todos.length }}</span>
       </div>
       <div class="todo-header-right">

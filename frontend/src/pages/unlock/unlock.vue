@@ -4,13 +4,13 @@
     <view class="unlock-card">
       <image class="unlock-logo" src="/static/logo_full_v2.png" mode="heightFix" />
       <text class="unlock-title">AI Workdeck</text>
-      <text class="unlock-subtitle">面向法律工作者的 AI 工作台</text>
+      <text class="unlock-subtitle">{{ $t('onboarding.unlock.subtitle') }}</text>
 
       <view class="unlock-form">
         <textarea
           class="unlock-input"
           v-model="code"
-          placeholder="粘贴试用码或账户 Key"
+          :placeholder="$t('onboarding.unlock.codePlaceholder')"
           placeholder-class="unlock-placeholder"
           :maxlength="-1"
         />
@@ -26,7 +26,7 @@
           class="unlock-link unlock-rescue"
           @tap="handleRescue"
         >
-          {{ rescueBusy ? '正在切换站点并重试' : rescueLabel }}
+          {{ rescueBusy ? $t('onboarding.unlock.rescueSwitching') : rescueLabel }}
         </text>
         <button
           class="unlock-btn"
@@ -34,18 +34,18 @@
           :disabled="unlocking"
           @tap="handleUnlock"
         >
-          {{ unlocking ? '正在解锁' : '解锁' }}
+          {{ unlocking ? $t('onboarding.unlock.unlocking') : $t('onboarding.unlock.unlock') }}
         </button>
       </view>
 
       <view class="unlock-links">
-        <text class="unlock-link" @tap="openTrialCodePage">获取试用码</text>
+        <text class="unlock-link" @tap="openTrialCodePage">{{ $t('onboarding.unlock.getTrialCode') }}</text>
         <text class="unlock-link-sep">|</text>
-        <text class="unlock-link" @tap="openOfficialSite">获取正式版</text>
+        <text class="unlock-link" @tap="openOfficialSite">{{ $t('onboarding.unlock.getFullVersion') }}</text>
         <!-- 单站形态（multiSite=false）下整段不渲染，用户看不到任何变化 -->
         <template v-if="showSiteRow">
           <text class="unlock-link-sep">|</text>
-          <text v-if="siteStatus.pinned" class="unlock-site-fixed">站点：{{ currentSiteName }}</text>
+          <text v-if="siteStatus.pinned" class="unlock-site-fixed">{{ $t('onboarding.unlock.siteLabel', { name: currentSiteName }) }}</text>
           <text v-else class="unlock-link" @tap="openSitePicker">{{ siteLinkLabel }}</text>
         </template>
       </view>
@@ -60,9 +60,6 @@ import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js
 
 // 与站点无关（GitHub README），不走 siteBaseUrl()
 const TRIAL_CODE_URL = 'https://github.com/zeweihan/aiworkdeck#readme'
-
-// 切站会清掉的东西，主动切站时必须原样告知
-const SWITCH_COST = '账户连接、已购权益缓存、平台 AI 额度，以及用账户 Key 解锁的授权（试用码解锁不受影响）。'
 
 export default {
   name: 'UnlockPage',
@@ -93,7 +90,9 @@ export default {
       return this.siteStatus.multiSite === true && !!this.currentSiteName
     },
     siteLinkLabel() {
-      return this.siteBusy ? '正在切换站点' : `站点：${this.currentSiteName}`
+      return this.siteBusy
+        ? this.$t('onboarding.unlock.siteSwitching')
+        : this.$t('onboarding.unlock.siteLabel', { name: this.currentSiteName })
     },
     canRescue() {
       // 有码可重试、且确实有别的站可切时才给出路
@@ -102,8 +101,8 @@ export default {
     },
     rescueLabel() {
       return this.otherSites.length === 1
-        ? `切换到「${this.otherSites[0].displayName}」并重试`
-        : '切换站点并重试'
+        ? this.$t('onboarding.unlock.rescueToOne', { name: this.otherSites[0].displayName })
+        : this.$t('onboarding.unlock.rescueGeneric')
     },
     // 自动去掉粘贴带进来的空白与换行
     normalizedCode() {
@@ -132,7 +131,7 @@ export default {
     async handleUnlock() {
       const code = this.normalizedCode
       if (!code) {
-        this.errorMsg = '请先粘贴试用码或账户 Key'
+        this.errorMsg = this.$t('onboarding.unlock.pasteFirst')
         return
       }
       this.errorMsg = ''
@@ -141,7 +140,7 @@ export default {
         const res = await activateLicense(code)
         this.applyUnlockResult(res)
       } catch (e) {
-        this.errorMsg = (e && e.message) || '解锁失败，请检查后重试'
+        this.errorMsg = (e && e.message) || this.$t('onboarding.unlock.unlockFailed')
       } finally {
         this.unlocking = false
       }
@@ -153,18 +152,18 @@ export default {
       const accountNotice = (res && res.accountNotice) || ''
       uni.showToast({
         // 账户连接未完成时不能说「已连接账户」（随后弹窗会说明未完成）
-        title: mode === 'trial' ? '已解锁试用版'
-          : accountNotice ? '正式版已解锁' : '已连接账户，正式版已解锁',
+        title: mode === 'trial' ? this.$t('onboarding.unlock.trialUnlocked')
+          : accountNotice ? this.$t('onboarding.unlock.fullUnlocked') : this.$t('onboarding.unlock.accountAndUnlocked'),
         icon: 'success',
         duration: 1600,
       })
       if (accountNotice) {
         setTimeout(() => {
           uni.showModal({
-            title: '账户连接未完成',
+            title: this.$t('onboarding.unlock.accountNoticeTitle'),
             content: accountNotice,
             showCancel: false,
-            confirmText: '知道了',
+            confirmText: this.$t('onboarding.unlock.gotIt'),
             // 提示不阻断进入产品：无论怎么关掉都继续走启动分流
             complete: () => uni.reLaunch({ url: '/pages/launch/launch' }),
           })
@@ -192,10 +191,10 @@ export default {
     /** 主动切站是破坏性动作，必须二次确认并列清代价 */
     confirmSwitchSite(target) {
       uni.showModal({
-        title: '切换站点',
-        content: `切换到「${target.displayName}」会清掉本机与当前站点相关的数据：${SWITCH_COST}`,
-        confirmText: '切换',
-        cancelText: '取消',
+        title: this.$t('onboarding.unlock.switchSiteTitle'),
+        content: this.$t('onboarding.unlock.switchSiteContent', { name: target.displayName }),
+        confirmText: this.$t('onboarding.unlock.switch'),
+        cancelText: this.$t('onboarding.unlock.cancel'),
         success: (res) => {
           if (res.confirm) this.switchSite(target)
         },
@@ -207,9 +206,9 @@ export default {
         await selectSite(target.id)
         resetSiteLinks()
         await this.refreshSiteStatus()
-        uni.showToast({ title: `已切换到${target.displayName}`, icon: 'none', duration: 1600 })
+        uni.showToast({ title: this.$t('onboarding.unlock.switchedTo', { name: target.displayName }), icon: 'none', duration: 1600 })
       } catch (e) {
-        this.errorMsg = (e && e.message) || '切换站点失败，稍后重试'
+        this.errorMsg = (e && e.message) || this.$t('onboarding.unlock.switchFailed')
       } finally {
         this.siteBusy = false
       }
@@ -242,7 +241,7 @@ export default {
         this.errorMsg = ''
         this.applyUnlockResult(res)
       } catch (e) {
-        this.errorMsg = (e && e.message) || '切换站点后仍未解锁，检查后重试'
+        this.errorMsg = (e && e.message) || this.$t('onboarding.unlock.rescueFailed')
       } finally {
         this.rescueBusy = false
       }

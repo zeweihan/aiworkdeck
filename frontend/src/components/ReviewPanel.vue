@@ -2,15 +2,15 @@
   <view class="rp">
     <view class="rp-head">
       <view class="rp-tabs">
-        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">修订 {{ revisionGroups.length }}</text>
-        <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">批注 {{ comments.length }}</text>
+        <text class="rp-tab" :class="{ on: tab === 'rev' }" @tap="tab = 'rev'">{{ $t('editor.review.revTab', { count: revisionGroups.length }) }}</text>
+        <text class="rp-tab" :class="{ on: tab === 'cmt' }" @tap="tab = 'cmt'">{{ $t('editor.review.cmtTab', { count: comments.length }) }}</text>
       </view>
-      <text class="rp-close" @tap="$emit('close')">收起</text>
+      <text class="rp-close" @tap="$emit('close')">{{ $t('editor.review.collapse') }}</text>
     </view>
 
     <view v-if="tab === 'rev' && revisions.length" class="rp-bulk">
-      <text class="rp-bulk-btn" @tap="resolveAll('accept')">全部接受</text>
-      <text class="rp-bulk-btn" @tap="resolveAll('reject')">全部拒绝</text>
+      <text class="rp-bulk-btn" @tap="resolveAll('accept')">{{ $t('editor.review.acceptAll') }}</text>
+      <text class="rp-bulk-btn" @tap="resolveAll('reject')">{{ $t('editor.review.rejectAll') }}</text>
     </view>
 
     <view v-if="error" class="rp-error">{{ error }}</view>
@@ -19,22 +19,22 @@
       <!-- 修订 -->
       <template v-if="tab === 'rev'">
         <view v-if="!revisions.length" class="rp-empty">
-          <text class="rp-empty-t">没有待处理的修订</text>
-          <text class="rp-empty-s">对文档的改动会以修订形式出现在这里，可逐条接受或拒绝</text>
+          <text class="rp-empty-t">{{ $t('editor.review.emptyRevTitle') }}</text>
+          <text class="rp-empty-s">{{ $t('editor.review.emptyRevSub') }}</text>
         </view>
         <view v-for="g in revisionGroups" :key="g.key" class="rp-card" @tap="goto(g)">
           <view class="rp-card-top">
-            <text class="rp-tag" :class="g.type === 'Delete' ? 'del' : 'ins'">{{ g.type === 'Delete' ? '删除' : '插入' }}</text>
-            <text v-if="g.inTable" class="rp-tag tbl">表格</text>
-            <text v-if="g.items.length > 1" class="rp-tag cnt">{{ g.items.length }} 处连续</text>
-            <text class="rp-author">{{ g.author || '未署名' }}</text>
+            <text class="rp-tag" :class="g.type === 'Delete' ? 'del' : 'ins'">{{ g.type === 'Delete' ? $t('editor.review.deletion') : $t('editor.review.insertion') }}</text>
+            <text v-if="g.inTable" class="rp-tag tbl">{{ $t('editor.review.table') }}</text>
+            <text v-if="g.items.length > 1" class="rp-tag cnt">{{ $t('editor.review.contiguousCount', { count: g.items.length }) }}</text>
+            <text class="rp-author">{{ g.author || $t('editor.review.unknownAuthor') }}</text>
             <text class="rp-date">{{ g.date || '' }}</text>
           </view>
-          <text class="rp-text" :class="{ del: g.type === 'Delete' }">{{ g.text || '（空）' }}</text>
+          <text class="rp-text" :class="{ del: g.type === 'Delete' }">{{ g.text || $t('editor.review.emptyText') }}</text>
           <text v-if="g.paragraph" class="rp-ctx">{{ g.paragraph }}</text>
           <view class="rp-acts">
-            <text class="rp-act ok" @tap.stop="resolveGroup(g, 'accept')">接受</text>
-            <text class="rp-act no" @tap.stop="resolveGroup(g, 'reject')">拒绝</text>
+            <text class="rp-act ok" @tap.stop="resolveGroup(g, 'accept')">{{ $t('editor.review.accept') }}</text>
+            <text class="rp-act no" @tap.stop="resolveGroup(g, 'reject')">{{ $t('editor.review.reject') }}</text>
           </view>
         </view>
       </template>
@@ -42,22 +42,22 @@
       <!-- 批注 -->
       <template v-else>
         <view v-if="!comments.length" class="rp-empty">
-          <text class="rp-empty-t">没有批注</text>
-          <text class="rp-empty-s">AI 的说明与提醒会挂成批注，不会写进正文</text>
+          <text class="rp-empty-t">{{ $t('editor.review.emptyCmtTitle') }}</text>
+          <text class="rp-empty-s">{{ $t('editor.review.emptyCmtSub') }}</text>
         </view>
         <view v-for="c in comments" :key="'c' + c.index" class="rp-card" :class="{ done: c.resolved }" @tap="gotoComment(c)">
           <view class="rp-card-top">
-            <text class="rp-author">{{ c.author || '未署名' }}</text>
+            <text class="rp-author">{{ c.author || $t('editor.review.unknownAuthor') }}</text>
             <text class="rp-date">{{ c.date || '' }}</text>
-            <text v-if="c.resolved" class="rp-tag done">已解决</text>
+            <text v-if="c.resolved" class="rp-tag done">{{ $t('editor.review.resolved') }}</text>
           </view>
           <text class="rp-text">{{ c.content }}</text>
-          <text v-if="c.anchorText" class="rp-ctx">锚定：{{ c.anchorText }}</text>
+          <text v-if="c.anchorText" class="rp-ctx">{{ $t('editor.review.anchor', { text: c.anchorText }) }}</text>
           <!-- 没有「删除」按钮：引擎的 .uno:DeleteComment 按活动批注窗口找 Id，
                在宿主加载出来的文档上下文里够不着（真机四轮验证），做不到就不放
                按钮——删除批注请用编辑器自身批注栏的右键菜单。 -->
           <view class="rp-acts">
-            <text class="rp-act" @tap.stop="toggleResolved(c)">{{ c.resolved ? '重新打开' : '标记解决' }}</text>
+            <text class="rp-act" @tap.stop="toggleResolved(c)">{{ c.resolved ? $t('editor.review.reopen') : $t('editor.review.resolve') }}</text>
           </view>
         </view>
       </template>
@@ -125,7 +125,7 @@ export default {
       if (!this.executor) return null
       try {
         const r = await this.executor.executeCommand(action, params || {})
-        if (r && r.success === false) { this.error = r.message || '操作未成功'; return null }
+        if (r && r.success === false) { this.error = r.message || this.$t('editor.review.opFailed'); return null }
         this.error = ''
         return r
       } catch (e) {
@@ -151,7 +151,7 @@ export default {
       }
       if (done) this.$emit('changed')
       // 引擎没命中的如实说，别让用户以为整组都处理完了
-      if (done < indices.length) this.error = `本组 ${indices.length} 处中有 ${indices.length - done} 处未被引擎处置`
+      if (done < indices.length) this.error = this.$t('editor.review.groupPartialFail', { total: indices.length, failed: indices.length - done })
       await this.reload()
     },
     async resolveAll(action) {

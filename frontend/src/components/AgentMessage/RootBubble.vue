@@ -94,12 +94,12 @@
                      <polyline points="14 2 14 8 20 8"></polyline>
                      <line x1="9" y1="15" x2="15" y2="15"></line>
                   </svg>
-                  <span>用到文档</span>
+                  <span>{{ $t('chat.useInDocument') }}</span>
                </div>
                <div v-if="showActions" class="msg-act-menu">
-                  <div class="msg-act-item" @click="pickAction('insert')">插入当前文档</div>
-                  <div class="msg-act-item" @click="pickAction('replace')">替换选区</div>
-                  <div class="msg-act-item" @click="pickAction('export')">导出为Word</div>
+                  <div class="msg-act-item" @click="pickAction('insert')">{{ $t('chat.insertToDocument') }}</div>
+                  <div class="msg-act-item" @click="pickAction('replace')">{{ $t('chat.replaceSelection') }}</div>
+                  <div class="msg-act-item" @click="pickAction('export')">{{ $t('chat.exportAsWord') }}</div>
                </div>
                <div v-if="showActions" class="msg-act-mask" @click.stop="showActions = false"></div>
             </div>
@@ -140,6 +140,7 @@ import WalkthroughCard from './WalkthroughCard.vue'
 import ArtifactCard from '../ArtifactCard.vue'
 import QuestionCard from './QuestionCard.vue'
 import MarkdownPreview from '../MarkdownPreview.vue'
+import { t } from '@/i18n'
 
 const props = defineProps({
   bubble: { type: Object, required: true },
@@ -171,7 +172,7 @@ const processGroups = computed(() => {
     const grouped = typeof p.stepIndex === 'number' && p.stepIndex >= 0
     const key = grouped ? `s${p.stepIndex}` : ''
     if (!cur || cur.key !== key) {
-      cur = { key, title: grouped ? (p.stepTitle || `步骤 ${p.stepIndex + 1}`) : '执行过程', procs: [] }
+      cur = { key, title: grouped ? (p.stepTitle || t('chat.stepN', { n: p.stepIndex + 1 })) : t('chat.stepsGroup'), procs: [] }
       groups.push(cur)
     }
     cur.procs.push(p)

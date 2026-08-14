@@ -66,11 +66,11 @@ export const fileOpenTabsMethods = {
           this.openFile(targetFile)
         } else {
           console.warn('File not found:', name, 'in', files.map(f => f.name))
-          uni.showToast({ title: '未找到文件: ' + name, icon: 'none' })
+          uni.showToast({ title: this.$t('workbenchOps.fileNotFoundNamed', { name }), icon: 'none' })
         }
       } catch (e) {
         console.error('Failed to fetch files for open:', e)
-        uni.showToast({ title: '获取文件列表失败', icon: 'none' })
+        uni.showToast({ title: this.$t('workbenchOps.fetchFileListFailed'), icon: 'none' })
       }
     },
 
@@ -78,10 +78,13 @@ export const fileOpenTabsMethods = {
       // 检查文件类型是否支持打开
       if (!this.isFileTypeSupported(file)) {
         uni.showModal({
-          title: '无法打开文件',
-          content: `暂不支持打开此类型文件：${file.name}\n\n文件类型：${file.fileType || '无后缀名'}\n\n支持的文件类型：\n• 文档：doc, docx, xls, xlsx, ppt, pptx, pdf\n• 图片：jpg, jpeg, png, gif, bmp, webp, svg\n• 视频：mp4, webm, ogg, mov, mkv, avi\n• 音频：mp3, wav, m4a, flac, aac\n• 文本：txt, md, json, xml, html等`,
+          title: this.$t('workbenchOps.cannotOpenFileTitle'),
+          content: this.$t('workbenchOps.unsupportedFileContent', {
+            name: file.name,
+            fileType: file.fileType || this.$t('workbenchOps.noExtension')
+          }),
           showCancel: false,
-          confirmText: '我知道了',
+          confirmText: this.$t('workbenchOps.gotIt'),
           success: (res) => {
             if (res.confirm) {
               console.log('用户确认无法打开文件')
@@ -376,7 +379,7 @@ export const fileOpenTabsMethods = {
       const id = `vcmp-${spec.newRef.slice(0, 8)}-${Date.now()}`
       const tab = {
         id,
-        name: `${spec.name} 版本对比`,
+        name: this.$t('workbenchOps.versionCompareTabName', { name: spec.name }),
         tabType: 'version-compare',
         fileType: 'version-compare',
         compareSpec: {
@@ -420,10 +423,10 @@ export const fileOpenTabsMethods = {
     openVersionTextDiffTab(spec) {
       const id = `vtd-${spec.newRef.slice(0, 8)}-${Date.now()}`
       const tab = {
-        id, name: `${spec.name} 版本对比`, tabType: 'version-text-diff', fileType: 'version-text-diff',
+        id, name: this.$t('workbenchOps.versionCompareTabName', { name: spec.name }), tabType: 'version-text-diff', fileType: 'version-text-diff',
         versionSpec: {
           projectId: spec.projectId, path: spec.path, oldRef: spec.oldRef, newRef: spec.newRef,
-          oldLabel: spec.oldLabel || '上一版', newLabel: spec.newLabel || '这一版',
+          oldLabel: spec.oldLabel || this.$t('workbenchOps.previousVersion'), newLabel: spec.newLabel || this.$t('workbenchOps.currentVersion'),
         },
         createdAt: Date.now(),
       }
@@ -438,7 +441,7 @@ export const fileOpenTabsMethods = {
     onCompareDocumentsRequest(docs) {
       // FileTree 发起的文档对比请求
       if (!docs || docs.length !== 2) {
-        uni.showToast({ title: '请选择两个文档进行对比', icon: 'none' })
+        uni.showToast({ title: this.$t('workbenchOps.selectTwoDocsToCompare'), icon: 'none' })
         return
       }
       this.compareDocuments = docs
@@ -517,7 +520,7 @@ export const fileOpenTabsMethods = {
       }
       // 失败的那几份各自已经报过（静音只吞成功提示），这里只汇报成功的份数。
       if (many && ok) {
-        uni.showToast({ title: `已更新 ${ok} 份打开中的文件`, icon: 'success' })
+        uni.showToast({ title: this.$t('workbenchOps.updatedOpenFiles', { count: ok }), icon: 'success' })
       }
     },
 }

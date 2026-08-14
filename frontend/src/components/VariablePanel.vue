@@ -5,9 +5,9 @@
 
 
         <div class="variable-list">
-          <div v-if="loading" class="loading">加载中...</div>
-          <div v-else-if="displayItems.length === 0" class="empty">暂无变量</div>
-          <div v-else-if="!filteredItems.length" class="empty">未找到匹配的变量</div>
+          <div v-if="loading" class="loading">{{ $t('editor.vars.loading') }}</div>
+          <div v-else-if="displayItems.length === 0" class="empty">{{ $t('editor.vars.empty') }}</div>
+          <div v-else-if="!filteredItems.length" class="empty">{{ $t('editor.vars.noMatch') }}</div>
 
           <div v-else class="list-scroll">
             <div class="list-grid">
@@ -20,17 +20,17 @@
                   </div>
                   <div class="var-actions-top">
                     <!-- Vertical Stack -->
-                    <button class="var-act-btn" @click.stop="insertVariable(it)" title="插入"><svg class="var-act-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
-                    <button class="var-act-btn" @click.stop="updateValueFromSelection(it)" title="更新值">↻</button>
+                    <button class="var-act-btn" @click.stop="insertVariable(it)" :title="$t('editor.vars.insert')"><svg class="var-act-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></button>
+                    <button class="var-act-btn" @click.stop="updateValueFromSelection(it)" :title="$t('editor.vars.updateValue')">↻</button>
                     <div class="del-wrapper" style="position: relative;">
-                      <button v-if="it.canDelete" class="var-act-btn danger" @click.stop="requestDelete(it)" title="删除">×</button>
+                      <button v-if="it.canDelete" class="var-act-btn danger" @click.stop="requestDelete(it)" :title="$t('editor.vars.delete')">×</button>
                       <!-- Inline Confirm Popup -->
                       <div v-if="confirmDeleteKey === it.key" class="delete-popover" @click.stop>
                         <div class="pop-arrow"></div>
-                        <div class="pop-text">确认删除?</div>
+                        <div class="pop-text">{{ $t('editor.vars.confirmDelete') }}</div>
                         <div class="pop-row">
-                          <span class="pop-btn" @click.stop="cancelDelete">取消</span>
-                          <span class="pop-btn danger" @click.stop="confirmDelete(it)">确定</span>
+                          <span class="pop-btn" @click.stop="cancelDelete">{{ $t('editor.vars.cancel') }}</span>
+                          <span class="pop-btn danger" @click.stop="confirmDelete(it)">{{ $t('editor.vars.confirm') }}</span>
                         </div>
                       </div>
                     </div>
@@ -38,7 +38,7 @@
                 </div>
                 
                 
-                <div class="var-value" :title="it.value">{{ it.value || '（空）' }}</div>
+                <div class="var-value" :title="it.value">{{ it.value || $t('editor.vars.emptyValue') }}</div>
                 
                 <!-- Footer removed to maximize content space -->
               </div>
@@ -49,9 +49,9 @@
 
       <!-- 变量类型：右侧纵向排列（IDE 终端风格） -->
       <div class="scope-rail">
-        <div class="scope-item" :class="{ active: activeScope === 'doc' }" @click="switchScope('doc')">文本变量</div>
-        <div class="scope-item" :class="{ active: activeScope === 'project' }" @click="switchScope('project')">项目变量</div>
-        <div class="scope-item" :class="{ active: activeScope === 'user' }" @click="switchScope('user')">用户变量</div>
+        <div class="scope-item" :class="{ active: activeScope === 'doc' }" @click="switchScope('doc')">{{ $t('editor.vars.docScope') }}</div>
+        <div class="scope-item" :class="{ active: activeScope === 'project' }" @click="switchScope('project')">{{ $t('editor.vars.projectScope') }}</div>
+        <div class="scope-item" :class="{ active: activeScope === 'user' }" @click="switchScope('user')">{{ $t('editor.vars.userScope') }}</div>
       </div>
     </div>
 
@@ -64,12 +64,12 @@
 
     <div v-if="showCreateModal" class="modal-mask" @click="closeCreateModal">
       <div class="modal" @click.stop>
-        <div class="modal-title">将选中文字设为变量</div>
-        <div class="modal-subtitle">变量名建议简短且可复用（同名会覆盖）</div>
-        <input class="modal-input" v-model="createForm.name" placeholder="请输入变量名，例如：主营业务" />
+        <div class="modal-title">{{ $t('editor.vars.modalTitle') }}</div>
+        <div class="modal-subtitle">{{ $t('editor.vars.modalSubtitle') }}</div>
+        <input class="modal-input" v-model="createForm.name" :placeholder="$t('editor.vars.namePlaceholder')" />
         <div class="modal-actions">
-          <button class="modal-btn" @click="closeCreateModal">取消</button>
-          <button class="modal-btn primary" :disabled="!createForm.name.trim()" @click="confirmCreate">创建</button>
+          <button class="modal-btn" @click="closeCreateModal">{{ $t('editor.vars.cancel') }}</button>
+          <button class="modal-btn primary" :disabled="!createForm.name.trim()" @click="confirmCreate">{{ $t('editor.vars.create') }}</button>
         </div>
       </div>
     </div>
@@ -313,13 +313,13 @@ export default {
     async confirmCreate() {
       const editor = this.getEditor ? this.getEditor() : null
       if (!editor || typeof editor.getSelectionText !== 'function') {
-        uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
+        uni.showToast({ title: this.$t('editor.vars.activateEditorFirst'), icon: 'none' })
         return
       }
       const selected = await editor.getSelectionText()
       const text = (selected || '').trim()
       if (!text) {
-        uni.showToast({ title: '请先在文档中选择内容', icon: 'none' })
+        uni.showToast({ title: this.$t('editor.vars.selectInDocFirst'), icon: 'none' })
         return
       }
       const name = (this.createForm.name || '').trim()
@@ -334,50 +334,50 @@ export default {
         }
 
         if (typeof editor.insertTextWithDocumentField !== 'function') {
-          throw new Error('当前 WPS 组件未提供“域插入”能力')
+          throw new Error(this.$t('editor.vars.noFieldInsert'))
         }
         await editor.insertTextWithDocumentField(text, scope, name)
 
         this.closeCreateModal()
         await this.refresh()
-        uni.showToast({ title: '已创建', icon: 'success' })
+        uni.showToast({ title: this.$t('editor.vars.created'), icon: 'success' })
       } catch (e) {
-        uni.showToast({ title: e.message || '创建失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('editor.vars.createFailed'), icon: 'none' })
       }
     },
 
     async insertVariable(it) {
       const editor = this.getEditor ? this.getEditor() : null
       if (!editor || typeof editor.insertTextWithDocumentField !== 'function') {
-        uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
+        uni.showToast({ title: this.$t('editor.vars.activateEditorFirst'), icon: 'none' })
         return
       }
       try {
         const value = this._resolveValue(it.scope, it.name, it.value)
         await editor.insertTextWithDocumentField(value, it.scope, it.name)
-        uni.showToast({ title: '插入成功', icon: 'success' })
+        uni.showToast({ title: this.$t('editor.vars.inserted'), icon: 'success' })
         await this.fetchDocFields()
       } catch (e) {
-        uni.showToast({ title: e.message || '插入失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('editor.vars.insertFailed'), icon: 'none' })
       }
     },
 
     async updateValueFromSelection(it) {
       const editor = this.getEditor ? this.getEditor() : null
       if (!editor || typeof editor.getSelectionText !== 'function') {
-        uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
+        uni.showToast({ title: this.$t('editor.vars.activateEditorFirst'), icon: 'none' })
         return
       }
       const selected = await editor.getSelectionText()
       const text = (selected || '').trim()
       if (!text) {
-        uni.showToast({ title: '请先选择内容', icon: 'none' })
+        uni.showToast({ title: this.$t('editor.vars.selectContentFirst'), icon: 'none' })
         return
       }
 
       uni.showModal({
-        title: '确认更新',
-        content: `确认将变量 \"${it.name}\" 更新为选中文本？`,
+        title: this.$t('editor.vars.confirmUpdateTitle'),
+        content: this.$t('editor.vars.confirmUpdateContent', { name: it.name }),
         success: async (res) => {
           if (!res.confirm) return
           try {
@@ -393,9 +393,9 @@ export default {
               await this._updateAllFieldInstances('D', it.name, text)
             }
             await this.fetchDocFields()
-            uni.showToast({ title: '更新成功', icon: 'success' })
+            uni.showToast({ title: this.$t('editor.vars.updated'), icon: 'success' })
           } catch (e) {
-            uni.showToast({ title: e.message || '更新失败', icon: 'none' })
+            uni.showToast({ title: e.message || this.$t('editor.vars.updateFailed'), icon: 'none' })
           }
         }
       })
@@ -417,10 +417,10 @@ export default {
     async syncDocument() {
       const editor = this.getEditor ? this.getEditor() : null
       if (!editor || typeof editor.syncAllDocumentFields !== 'function') {
-        uni.showToast({ title: '请先点击激活一个编辑窗口', icon: 'none' })
+        uni.showToast({ title: this.$t('editor.vars.activateEditorFirst'), icon: 'none' })
         return
       }
-      uni.showLoading({ title: '同步中...' })
+      uni.showLoading({ title: this.$t('editor.vars.syncing') })
       try {
         await this.fetchProjectVars()
         await this.fetchUserVars()
@@ -430,10 +430,10 @@ export default {
         })
         uni.hideLoading()
         await this.fetchDocFields()
-        uni.showToast({ title: `同步完成 (${res.updated || 0})`, icon: 'none' })
+        uni.showToast({ title: this.$t('editor.vars.syncDone', { count: res.updated || 0 }), icon: 'none' })
       } catch (e) {
         uni.hideLoading()
-        uni.showToast({ title: e.message || '同步失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('editor.vars.syncFailed'), icon: 'none' })
       }
     },
 
@@ -467,9 +467,9 @@ export default {
           if (it.backendId) await deleteUserVariable(it.backendId)
           await this.fetchUserVars()
         }
-        uni.showToast({ title: '已删除', icon: 'success' })
+        uni.showToast({ title: this.$t('editor.vars.deleted'), icon: 'success' })
       } catch (e) {
-        uni.showToast({ title: e.message || '删除失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('editor.vars.deleteFailed'), icon: 'none' })
       }
     }
   }

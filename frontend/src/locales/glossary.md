@@ -21,13 +21,17 @@
 | 案卷 | Case File | 协作语境；单份工作文档集 |
 | 团队案件库 | Team Case Library | |
 | 案件参与人 | Case Members | |
+| 负责人 | Lead | 项目负责人；「负责人：{name}」 → Lead: {name} |
 | 暂存区 | Staging Area | |
+| 回收站 | Recycle Bin | 文件树软删除；toast 句中用小写 recycle bin |
+| 根目录 | Root Directory | 文件树；句中用小写 the root directory |
 | 左栏/侧边栏 | Sidebar | |
 | 底部工具抽屉 | Tools Panel | |
 | AI 面板 | AI Panel | |
 | 资源管理器（文件树） | Explorer | 对齐 VS Code 惯例 |
 | 变量库 | Variable Library | |
 | 收藏夹 | Favorites | |
+| 标签 | Tag | 文件标签；标签管理 → Manage Tags |
 | 剪贴板 | Clipboard | |
 | 浏览器面板 | Browser | |
 | 插件广场 | Plugin Marketplace | |
@@ -41,6 +45,7 @@
 | 向导 | Setup Wizard | |
 | 解锁 | Unlock | |
 | 试用码 | Trial Code | |
+| 无限版 | Unlimited edition | 缓存区/存储容量档位；「解锁无限版」 → Unlock the Unlimited edition |
 | 额度 | Credits | 站内唯一计价单位，不译成 quota |
 | 平台通道（AI Workdeck 云端） | AI Workdeck Cloud | |
 | 自备 Key | Your Own Key (BYOK) | |
@@ -99,8 +104,11 @@
 | 交易结构 | Transaction Structure | |
 | 法条/法律依据 | Legal Provision / Legal Basis | 不预设法域 |
 | 证据 | Evidence | |
+| 网络核查（活动/域） | Web Verification | 尽调公开信息核查这件事本身 |
+| 网核标记/网核收藏/网核证据（取证物） | Web Evidence | 浏览器取证产物；「加入网核收藏」 → Save as Web Evidence；「网核关联」 → Link as Web Evidence |
 | 案由 | Cause of Action | |
 | 卷宗 | Case Bundle | |
+| 控制权收购（上市公司） | Takeover | 项目类型「上市公司控制权收购」 → Listed Company Takeover |
 
 ## AI 对话与编排
 
@@ -123,6 +131,8 @@
 | 上下文 | Context | |
 | 活跃文档 | Active Document | |
 | 进程中断 | Process Interrupted | |
+| 执行中断 | Execution interrupted | 客户端 error 事件标记（agentStream）；句中 sentence case |
+| 连接中断 | Connection lost | SSE 断线标记（agentStream） |
 | 长上下文单价更高 | Higher rates for long context | 模型下拉提示 |
 | 需国际网络 | Requires international network | |
 

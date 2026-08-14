@@ -5,17 +5,17 @@
     <scroll-view class="etb-scroll" scroll-x>
       <view class="etb-row">
         <!-- 撤销 / 重做 -->
-        <view class="etb-btn" :class="{ off: undoDisabled }" title="撤销 (Cmd/Ctrl+Z)" @tap.stop="run('undo')">
+        <view class="etb-btn" :class="{ off: undoDisabled }" :title="$t('editor.toolbar.undo')" @tap.stop="run('undo')">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.undo" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </view>
-        <view class="etb-btn" :class="{ off: redoDisabled }" title="重做 (Cmd/Ctrl+Shift+Z)" @tap.stop="run('redo')">
+        <view class="etb-btn" :class="{ off: redoDisabled }" :title="$t('editor.toolbar.redo')" @tap.stop="run('redo')">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.redo" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </view>
         <view class="etb-sep"></view>
 
         <!-- 段落样式 -->
         <view class="etb-drop" :class="{ open: menu === 'style' }">
-          <view class="etb-field w110" title="段落样式" @tap.stop="toggleMenu('style')">
+          <view class="etb-field w110" :title="$t('editor.toolbar.paraStyle')" @tap.stop="toggleMenu('style')">
             <text class="etb-field-t">{{ styleLabel }}</text>
             <text class="etb-caret">⌄</text>
           </view>
@@ -29,7 +29,7 @@
 
         <!-- 字体 -->
         <view class="etb-drop" :class="{ open: menu === 'font' }">
-          <view class="etb-field w110" title="字体" @tap.stop="toggleMenu('font')">
+          <view class="etb-field w110" :title="$t('editor.toolbar.font')" @tap.stop="toggleMenu('font')">
             <text class="etb-field-t">{{ fontLabel }}</text>
             <text class="etb-caret">⌄</text>
           </view>
@@ -42,7 +42,7 @@
         </view>
 
         <!-- 字号：引擎的 .uno:Grow/Shrink 是哑弹，这里读回当前值自己步进 -->
-        <view class="etb-stepper" title="字号">
+        <view class="etb-stepper" :title="$t('editor.toolbar.fontSize')">
           <text class="etb-step-b" @tap.stop="stepSize(-1)">−</text>
           <text class="etb-step-v">{{ sizeLabel }}</text>
           <text class="etb-step-b" @tap.stop="stepSize(1)">+</text>
@@ -50,115 +50,115 @@
         <view class="etb-sep"></view>
 
         <!-- 字符格式 -->
-        <view class="etb-btn" :class="{ on: state.character.bold }" title="加粗 (Cmd/Ctrl+B)" @tap.stop="ui('bold')"><text class="etb-tx b">B</text></view>
-        <view class="etb-btn" :class="{ on: state.character.italic }" title="倾斜 (Cmd/Ctrl+I)" @tap.stop="ui('italic')"><text class="etb-tx i">I</text></view>
-        <view class="etb-btn" :class="{ on: state.character.underline }" title="下划线 (Cmd/Ctrl+U)" @tap.stop="ui('underline')"><text class="etb-tx u">U</text></view>
-        <view class="etb-btn" :class="{ on: state.character.strikeout }" title="删除线" @tap.stop="ui('strikeout')"><text class="etb-tx s">S</text></view>
-        <view class="etb-btn" :class="{ on: state.character.superscript }" title="上标" @tap.stop="ui('superscript')"><text class="etb-tx">X²</text></view>
-        <view class="etb-btn" :class="{ on: state.character.subscript }" title="下标" @tap.stop="ui('subscript')"><text class="etb-tx">X₂</text></view>
+        <view class="etb-btn" :class="{ on: state.character.bold }" :title="$t('editor.toolbar.bold')" @tap.stop="ui('bold')"><text class="etb-tx b">B</text></view>
+        <view class="etb-btn" :class="{ on: state.character.italic }" :title="$t('editor.toolbar.italic')" @tap.stop="ui('italic')"><text class="etb-tx i">I</text></view>
+        <view class="etb-btn" :class="{ on: state.character.underline }" :title="$t('editor.toolbar.underline')" @tap.stop="ui('underline')"><text class="etb-tx u">U</text></view>
+        <view class="etb-btn" :class="{ on: state.character.strikeout }" :title="$t('editor.toolbar.strikeout')" @tap.stop="ui('strikeout')"><text class="etb-tx s">S</text></view>
+        <view class="etb-btn" :class="{ on: state.character.superscript }" :title="$t('editor.toolbar.superscript')" @tap.stop="ui('superscript')"><text class="etb-tx">X²</text></view>
+        <view class="etb-btn" :class="{ on: state.character.subscript }" :title="$t('editor.toolbar.subscript')" @tap.stop="ui('subscript')"><text class="etb-tx">X₂</text></view>
 
         <!-- 字色 / 高亮 -->
         <view class="etb-drop" :class="{ open: menu === 'color' }">
-          <view class="etb-btn" title="字体颜色" @tap.stop="toggleMenu('color')">
+          <view class="etb-btn" :title="$t('editor.toolbar.textColor')" @tap.stop="toggleMenu('color')">
             <text class="etb-tx">A</text>
             <view class="etb-swatch" :style="{ background: state.character.color === 'auto' ? '#2C3338' : state.character.color }"></view>
           </view>
           <view v-if="menu === 'color'" class="etb-palette" @tap.stop>
             <view v-for="c in TEXT_COLORS" :key="c.v" class="etb-chip" :style="{ background: c.v === 'auto' ? '#2C3338' : c.v }"
-                  :title="c.t" @tap.stop="applyColor('color', c.v)"></view>
+                  :title="$t('editor.toolbar.colors.' + c.t)" @tap.stop="applyColor('color', c.v)"></view>
           </view>
         </view>
         <view class="etb-drop" :class="{ open: menu === 'hl' }">
-          <view class="etb-btn" title="突出显示" @tap.stop="toggleMenu('hl')">
+          <view class="etb-btn" :title="$t('editor.toolbar.highlight')" @tap.stop="toggleMenu('hl')">
             <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.marker" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <view class="etb-swatch" :style="{ background: state.character.highlight === 'none' ? 'transparent' : state.character.highlight }"></view>
           </view>
           <view v-if="menu === 'hl'" class="etb-palette" @tap.stop>
             <view v-for="c in HL_COLORS" :key="c.v" class="etb-chip" :class="{ none: c.v === 'none' }"
-                  :style="{ background: c.v === 'none' ? '#fff' : c.v }" :title="c.t" @tap.stop="applyColor('highlight', c.v)"></view>
+                  :style="{ background: c.v === 'none' ? '#fff' : c.v }" :title="$t('editor.toolbar.colors.' + c.t)" @tap.stop="applyColor('highlight', c.v)"></view>
           </view>
         </view>
-        <view class="etb-btn" title="清除格式" @tap.stop="ui('clear_formatting')">
+        <view class="etb-btn" :title="$t('editor.toolbar.clearFormatting')" @tap.stop="ui('clear_formatting')">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.clear" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </view>
         <view class="etb-sep"></view>
 
         <!-- 段落 -->
         <view v-for="a in ALIGNS" :key="a.k" class="etb-btn" :class="{ on: state.paragraph.alignment === a.k }"
-              :title="a.t" @tap.stop="ui(a.cmd)">
+              :title="$t('editor.toolbar.' + a.t)" @tap.stop="ui(a.cmd)">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS[a.icon]" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </view>
-        <view class="etb-btn" :class="{ on: state.paragraph.listKind === 'bullet' }" title="项目符号" @tap.stop="ui('bullet_list')">
+        <view class="etb-btn" :class="{ on: state.paragraph.listKind === 'bullet' }" :title="$t('editor.toolbar.bulletList')" @tap.stop="ui('bullet_list')">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.bullet" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </view>
-        <view class="etb-btn" :class="{ on: state.paragraph.listKind === 'number' }" title="编号列表" @tap.stop="ui('number_list')">
+        <view class="etb-btn" :class="{ on: state.paragraph.listKind === 'number' }" :title="$t('editor.toolbar.numberList')" @tap.stop="ui('number_list')">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.number" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
         </view>
-        <view class="etb-btn" title="减少缩进" @tap.stop="ui('indent_less')">
+        <view class="etb-btn" :title="$t('editor.toolbar.indentLess')" @tap.stop="ui('indent_less')">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.outdent" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </view>
-        <view class="etb-btn" title="增加缩进" @tap.stop="ui('indent_more')">
+        <view class="etb-btn" :title="$t('editor.toolbar.indentMore')" @tap.stop="ui('indent_more')">
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.indent" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </view>
         <view class="etb-sep"></view>
 
         <!-- 插入 -->
         <view class="etb-drop" :class="{ open: menu === 'insert' }">
-          <view class="etb-field w72" title="插入" @tap.stop="openInsert">
-            <text class="etb-field-t">插入</text>
+          <view class="etb-field w72" :title="$t('editor.toolbar.insert')" @tap.stop="openInsert">
+            <text class="etb-field-t">{{ $t('editor.toolbar.insert') }}</text>
             <text class="etb-caret">⌄</text>
           </view>
           <view v-if="menu === 'insert'" class="etb-menu w200 pad" @tap.stop>
             <!-- 一级清单 -->
             <template v-if="!insertMode">
-              <view class="etb-item" @tap.stop="insertMode = 'table'"><text class="etb-item-t">表格…</text></view>
-              <view class="etb-item" @tap.stop="pickImage"><text class="etb-item-t">图片…</text></view>
+              <view class="etb-item" @tap.stop="insertMode = 'table'"><text class="etb-item-t">{{ $t('editor.toolbar.insertTable') }}</text></view>
+              <view class="etb-item" @tap.stop="pickImage"><text class="etb-item-t">{{ $t('editor.toolbar.insertImage') }}</text></view>
               <view class="etb-item" :class="{ dim: noSelection }" @tap.stop="startLink">
-                <text class="etb-item-t">超链接…</text>
-                <text v-if="noSelection" class="etb-hint">需先选中文字</text>
+                <text class="etb-item-t">{{ $t('editor.toolbar.insertLink') }}</text>
+                <text v-if="noSelection" class="etb-hint">{{ $t('editor.toolbar.needSelection') }}</text>
               </view>
               <view class="etb-item" :class="{ dim: noSelection }" @tap.stop="startComment">
-                <text class="etb-item-t">批注…</text>
-                <text v-if="noSelection" class="etb-hint">需先选中文字</text>
+                <text class="etb-item-t">{{ $t('editor.toolbar.insertComment') }}</text>
+                <text v-if="noSelection" class="etb-hint">{{ $t('editor.toolbar.needSelection') }}</text>
               </view>
-              <view class="etb-item" @tap.stop="ui('page_break')"><text class="etb-item-t">分页符</text></view>
+              <view class="etb-item" @tap.stop="ui('page_break')"><text class="etb-item-t">{{ $t('editor.toolbar.insertPageBreak') }}</text></view>
             </template>
 
             <!-- 表格：网格选择器 -->
             <view v-else-if="insertMode === 'table'" class="etb-form">
-              <text class="etb-form-t">{{ grid.r ? grid.r + ' × ' + grid.c + ' 表格' : '选择行列数' }}</text>
+              <text class="etb-form-t">{{ grid.r ? $t('editor.toolbar.gridSize', { rows: grid.r, cols: grid.c }) : $t('editor.toolbar.gridPrompt') }}</text>
               <view class="etb-grid">
                 <view v-for="cell in GRID_CELLS" :key="cell.k" class="etb-cell"
                       :class="{ hot: cell.r <= grid.r && cell.c <= grid.c }"
                       @mouseenter="grid = { r: cell.r, c: cell.c }" @tap.stop="doInsertTable(cell.r, cell.c)"></view>
               </view>
-              <view class="etb-form-acts"><text class="etb-form-b" @tap.stop="insertMode = ''">取消</text></view>
+              <view class="etb-form-acts"><text class="etb-form-b" @tap.stop="insertMode = ''">{{ $t('editor.toolbar.cancel') }}</text></view>
             </view>
 
             <!-- 超链接 -->
             <view v-else-if="insertMode === 'link'" class="etb-form">
-              <text class="etb-form-t">给「{{ selPreview }}」加链接</text>
-              <input class="etb-input" v-model="linkUrl" placeholder="https://" @click.stop />
+              <text class="etb-form-t">{{ $t('editor.toolbar.linkTitle', { sel: selPreview }) }}</text>
+              <input class="etb-input" v-model="linkUrl" :placeholder="$t('editor.toolbar.linkPlaceholder')" @click.stop />
               <view class="etb-form-acts">
-                <text class="etb-form-b" @tap.stop="insertMode = ''">取消</text>
-                <text class="etb-form-b ok" @tap.stop="doLink">确定</text>
+                <text class="etb-form-b" @tap.stop="insertMode = ''">{{ $t('editor.toolbar.cancel') }}</text>
+                <text class="etb-form-b ok" @tap.stop="doLink">{{ $t('editor.toolbar.confirm') }}</text>
               </view>
             </view>
 
             <!-- 批注 -->
             <view v-else-if="insertMode === 'comment'" class="etb-form">
-              <text class="etb-form-t">对「{{ selPreview }}」批注</text>
-              <textarea class="etb-input ta" v-model="commentText" placeholder="批注内容" @click.stop />
+              <text class="etb-form-t">{{ $t('editor.toolbar.commentTitle', { sel: selPreview }) }}</text>
+              <textarea class="etb-input ta" v-model="commentText" :placeholder="$t('editor.toolbar.commentPlaceholder')" @click.stop />
               <view class="etb-form-acts">
-                <text class="etb-form-b" @tap.stop="insertMode = ''">取消</text>
-                <text class="etb-form-b ok" @tap.stop="doComment">确定</text>
+                <text class="etb-form-b" @tap.stop="insertMode = ''">{{ $t('editor.toolbar.cancel') }}</text>
+                <text class="etb-form-b ok" @tap.stop="doComment">{{ $t('editor.toolbar.confirm') }}</text>
               </view>
             </view>
             <text v-if="insertErr" class="etb-err">{{ insertErr }}</text>
           </view>
         </view>
 
-        <view class="etb-btn" :class="{ on: formattingMarks }" title="显示格式标记" @tap.stop="toggleMarks">
+        <view class="etb-btn" :class="{ on: formattingMarks }" :title="$t('editor.toolbar.formattingMarks')" @tap.stop="toggleMarks">
           <text class="etb-tx">¶</text>
         </view>
       </view>
@@ -166,16 +166,16 @@
 
     <!-- 右侧常驻区：不参与滚动 -->
     <view class="etb-right">
-      <view class="etb-btn wide" :class="{ on: findOpen }" title="查找和替换" @tap.stop="toggleFind">
-        <text class="etb-tx sm">查找</text>
+      <view class="etb-btn wide" :class="{ on: findOpen }" :title="$t('editor.toolbar.findAndReplace')" @tap.stop="toggleFind">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.find') }}</text>
       </view>
-      <view class="etb-btn wide" :class="{ on: state.view.recordChanges }" title="记录修订" @tap.stop="toggleTrack">
-        <text class="etb-tx sm">修订</text>
+      <view class="etb-btn wide" :class="{ on: state.view.recordChanges }" :title="$t('editor.toolbar.trackChanges')" @tap.stop="toggleTrack">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.trackChangesShort') }}</text>
       </view>
-      <view class="etb-btn wide" :class="{ on: reviewOpen }" title="审阅面板" @tap.stop="$emit('toggle-review')">
-        <text class="etb-tx sm">审阅</text>
+      <view class="etb-btn wide" :class="{ on: reviewOpen }" :title="$t('editor.toolbar.reviewPanel')" @tap.stop="$emit('toggle-review')">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.reviewShort') }}</text>
       </view>
-      <view class="etb-stepper" title="显示比例">
+      <view class="etb-stepper" :title="$t('editor.toolbar.zoom')">
         <text class="etb-step-b" @tap.stop="stepZoom(-10)">−</text>
         <text class="etb-step-v z" @tap.stop="resetZoom">{{ Math.round(state.view.zoom || 100) }}%</text>
         <text class="etb-step-b" @tap.stop="stepZoom(10)">+</text>
@@ -186,15 +186,15 @@
   <!-- 查找替换：自建面板，不走 LO 的 .uno:SearchDialog——真机审计实证那个对话框
        弹得出来但**键盘关不掉**（画布聚焦时按 Esc 同样无效），挂上去就是个坑。 -->
   <view v-if="findOpen" class="etb-find">
-    <input class="etb-input fi" v-model="findText" placeholder="查找" @input="onFindInput" @confirm="findNext" />
+    <input class="etb-input fi" v-model="findText" :placeholder="$t('editor.toolbar.findPlaceholder')" @input="onFindInput" @confirm="findNext" />
     <text class="etb-find-n">{{ findStatus }}</text>
-    <text class="etb-find-b" title="上一个" @tap.stop="findPrev">上一个</text>
-    <text class="etb-find-b" title="下一个" @tap.stop="findNext">下一个</text>
-    <input class="etb-input fi" v-model="replaceText" placeholder="替换为" />
-    <text class="etb-find-b" @tap.stop="replaceCurrent">替换</text>
-    <text class="etb-find-b" @tap.stop="replaceAll">全部替换</text>
-    <text class="etb-find-b" :class="{ on: matchCase }" title="区分大小写" @tap.stop="toggleCase">Aa</text>
-    <text class="etb-find-x" @tap.stop="toggleFind">关闭</text>
+    <text class="etb-find-b" :title="$t('editor.toolbar.prevMatch')" @tap.stop="findPrev">{{ $t('editor.toolbar.prevMatch') }}</text>
+    <text class="etb-find-b" :title="$t('editor.toolbar.nextMatch')" @tap.stop="findNext">{{ $t('editor.toolbar.nextMatch') }}</text>
+    <input class="etb-input fi" v-model="replaceText" :placeholder="$t('editor.toolbar.replacePlaceholder')" />
+    <text class="etb-find-b" @tap.stop="replaceCurrent">{{ $t('editor.toolbar.replace') }}</text>
+    <text class="etb-find-b" @tap.stop="replaceAll">{{ $t('editor.toolbar.replaceAll') }}</text>
+    <text class="etb-find-b" :class="{ on: matchCase }" :title="$t('editor.toolbar.matchCase')" @tap.stop="toggleCase">Aa</text>
+    <text class="etb-find-x" @tap.stop="toggleFind">{{ $t('editor.toolbar.close') }}</text>
   </view>
   <text v-if="findOpen && findErr" class="etb-err bar">{{ findErr }}</text>
   </view>
@@ -238,30 +238,20 @@ const ICONS = {
   pagebreak: ['M6 4h12', 'M6 20h12', 'M3 12h4', 'M10 12h4', 'M17 12h4'],
 }
 const ALIGNS = [
-  { k: 'left', cmd: 'align_left', t: '左对齐', icon: 'alignLeft' },
-  { k: 'center', cmd: 'align_center', t: '居中', icon: 'alignCenter' },
-  { k: 'right', cmd: 'align_right', t: '右对齐', icon: 'alignRight' },
-  { k: 'justify', cmd: 'align_justify', t: '两端对齐', icon: 'alignJustify' },
+  { k: 'left', cmd: 'align_left', t: 'alignLeft', icon: 'alignLeft' },
+  { k: 'center', cmd: 'align_center', t: 'alignCenter', icon: 'alignCenter' },
+  { k: 'right', cmd: 'align_right', t: 'alignRight', icon: 'alignRight' },
+  { k: 'justify', cmd: 'align_justify', t: 'alignJustify', icon: 'alignJustify' },
 ]
 const TEXT_COLORS = [
-  { v: 'auto', t: '自动' }, { v: '#C0392B', t: '红' }, { v: '#1A5336', t: '墨绿' },
-  { v: '#1D4ED8', t: '蓝' }, { v: '#B45309', t: '棕' }, { v: '#6B21A8', t: '紫' },
-  { v: '#495057', t: '深灰' }, { v: '#868E96', t: '灰' },
+  { v: 'auto', t: 'auto' }, { v: '#C0392B', t: 'red' }, { v: '#1A5336', t: 'ink' },
+  { v: '#1D4ED8', t: 'blue' }, { v: '#B45309', t: 'brown' }, { v: '#6B21A8', t: 'purple' },
+  { v: '#495057', t: 'darkGray' }, { v: '#868E96', t: 'gray' },
 ]
 const HL_COLORS = [
-  { v: 'none', t: '无' }, { v: 'yellow', t: '黄' }, { v: 'green', t: '绿' },
-  { v: 'cyan', t: '青' }, { v: 'magenta', t: '品红' }, { v: 'gray', t: '灰' },
+  { v: 'none', t: 'none' }, { v: 'yellow', t: 'yellow' }, { v: 'green', t: 'green' },
+  { v: 'cyan', t: 'cyan' }, { v: 'magenta', t: 'magenta' }, { v: 'gray', t: 'gray' },
 ]
-// LO 的样式**程序名**是英文（Standard / Heading 1），DisplayName 在部分构建上
-// 也回英文。常用几条自备中文名兜底，引擎给了中文就用引擎的。
-const STYLE_ZH = {
-  'Standard': '正文', 'Default Paragraph Style': '正文', 'Text body': '正文文本',
-  'Heading': '标题', 'Heading 1': '标题 1', 'Heading 2': '标题 2', 'Heading 3': '标题 3',
-  'Heading 4': '标题 4', 'Heading 5': '标题 5', 'Heading 6': '标题 6',
-  'Title': '文档标题', 'Subtitle': '副标题', 'Quotations': '引用', 'List': '列表',
-  'Caption': '题注', 'First line indent': '首行缩进', 'Hanging indent': '悬挂缩进',
-  'Signature': '署名', 'Salutation': '称谓',
-}
 // 样式下拉只列律师真会用的这些（126 条全塞进去没人找得到）；当前段落用的样式
 // 若不在表里也会被补进列表，不至于「显示的样式选不回来」。
 const STYLE_PICKS = [
@@ -310,17 +300,19 @@ export default {
     findStatus() {
       if (!this.findText) return ''
       if (this.findTotal === null) return '…'
-      if (this.findTotal === 0) return '无匹配'
+      if (this.findTotal === 0) return this.$t('editor.toolbar.noMatch')
       const total = this.findTruncated ? this.findTotal + '+' : this.findTotal
-      return this.findIndex ? this.findIndex + ' / ' + total : '共 ' + total + ' 处'
+      return this.findIndex
+        ? this.$t('editor.toolbar.matchPosition', { index: this.findIndex, total })
+        : this.$t('editor.toolbar.matchTotal', { total })
     },
     // 读不到撤销可用性时**不置灰**——宁可多点一下，也不要把能用的功能锁死
     undoDisabled() { return this.state.undo ? this.state.undo.canUndo === false : false },
     redoDisabled() { return this.state.undo ? this.state.undo.canRedo === false : false },
-    styleLabel() { return this.zhStyle(this.state.paragraph.styleName || '正文') },
+    styleLabel() { return this.localStyleName(this.state.paragraph.styleName || '') || this.$t('editor.toolbar.paraStyle') },
     fontLabel() {
       const f = this.state.character.font || ''
-      return f.length > 8 ? f.slice(0, 8) + '…' : (f || '字体')
+      return f.length > 8 ? f.slice(0, 8) + '…' : (f || this.$t('editor.toolbar.fontFallback'))
     },
     sizeLabel() {
       const s = this.state.character.sizePt
@@ -332,7 +324,7 @@ export default {
       const picks = STYLE_PICKS.filter((n) => have[n])
       const cur = this.state.paragraph.styleName
       if (cur && picks.indexOf(cur) === -1 && have[cur]) picks.unshift(cur)
-      return picks.map((n) => ({ name: n, label: this.zhStyle(n, have[n] && have[n].display) }))
+      return picks.map((n) => ({ name: n, label: this.localStyleName(n, have[n] && have[n].display) }))
     },
     // 中文字体排前面——这是给中国律师用的编辑器，别让他们在 300 个西文字体里翻
     fontOptions() {
@@ -397,7 +389,7 @@ export default {
     // 失败必须说出来。工具栏上「点了没反应」和「点了偷偷失败」一样糟。
     async finishInsert(res, okMsg) {
       if (!res || res.success !== true) {
-        this.insertErr = (res && res.message) || '操作未成功'
+        this.insertErr = (res && res.message) || this.$t('editor.toolbar.opFailed')
         return false
       }
       this.closeMenus()
@@ -413,12 +405,12 @@ export default {
     },
     doLink() {
       const url = String(this.linkUrl || '').trim()
-      if (!url) { this.insertErr = '请填写链接地址'; return null }
+      if (!url) { this.insertErr = this.$t('editor.toolbar.linkRequired'); return null }
       return this.call('set_selection_hyperlink', { url }).then((res) => this.finishInsert(res))
     },
     doComment() {
       const comment = String(this.commentText || '').trim()
-      if (!comment) { this.insertErr = '请填写批注内容'; return null }
+      if (!comment) { this.insertErr = this.$t('editor.toolbar.commentRequired'); return null }
       return this.call('add_comment_at_selection', { comment }).then((res) => this.finishInsert(res))
     },
     // 图片走浏览器原生文件选择：引擎的 .uno:InsertGraphic 会开 LO 自己的文件
@@ -432,15 +424,18 @@ export default {
         if (!f) return
         const fr = new FileReader()
         fr.onload = () => this.call('insert_image', { dataUrl: String(fr.result) }).then((res) => this.finishInsert(res))
-        fr.onerror = () => { this.insertErr = '图片读取失败' }
+        fr.onerror = () => { this.insertErr = this.$t('editor.toolbar.imageReadFailed') }
         fr.readAsDataURL(f)
       }
       el.click()
     },
-    zhStyle(name, display) {
+    // 样式名显示：本地化表优先（引擎的 DisplayName 在部分构建上回英文），
+    // 表里没有就用引擎给的，再没有才退回程序名。
+    localStyleName(name, display) {
       if (!name) return ''
-      if (STYLE_ZH[name]) return STYLE_ZH[name]
-      if (display && /[一-龥]/.test(display)) return display
+      const key = 'editor.toolbar.styleNames.' + name
+      const hit = this.$t(key)
+      if (hit && hit !== key) return hit
       return display || name
     },
     applyStyle(name) {
@@ -495,7 +490,7 @@ export default {
       if (!keyword) return null
       this.findErr = ''
       const r = await this.call('find_navigate', { keyword, direction, matchCase: this.matchCase })
-      if (!r || r.success !== true) { this.findErr = (r && r.message) || '查找失败'; return null }
+      if (!r || r.success !== true) { this.findErr = (r && r.message) || this.$t('editor.toolbar.findFailed'); return null }
       this.findTotal = r.total || 0
       this.findTruncated = !!r.truncated
       this.findIndex = r.found ? r.index : 0
@@ -511,7 +506,7 @@ export default {
       if (!this.findText) return
       if (!this.findIndex) { const r = await this.findNext(); if (!r || !r.found) return }
       const res = await this.call('replace_selection', { text: String(this.replaceText || '') })
-      if (!res || res.success === false) { this.findErr = (res && res.message) || '替换失败'; return }
+      if (!res || res.success === false) { this.findErr = (res && res.message) || this.$t('editor.toolbar.replaceFailed'); return }
       this.$emit('changed')
       this.findIndex = 0
       await this.findNext()
@@ -522,8 +517,8 @@ export default {
       const res = await this.call('find_replace', {
         findText, replaceText: String(this.replaceText || ''), replaceAll: true, matchCase: this.matchCase,
       })
-      if (!res || res.success !== true) { this.findErr = (res && res.message) || '替换失败'; return }
-      this.findErr = res.replaced ? '' : '没有找到可替换的内容'
+      if (!res || res.success !== true) { this.findErr = (res && res.message) || this.$t('editor.toolbar.replaceFailed'); return }
+      this.findErr = res.replaced ? '' : this.$t('editor.toolbar.nothingReplaced')
       this.findTotal = 0; this.findIndex = 0
       await this.after(res)
     },

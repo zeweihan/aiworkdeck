@@ -4,7 +4,7 @@
       <input
         class="qo-input"
         type="text"
-        placeholder="输入文件名，回车打开"
+        :placeholder="$t('files.quickOpenPlaceholder')"
         :value="query"
         :focus="true"
         @input="onInput"
@@ -24,7 +24,7 @@
         </view>
       </scroll-view>
       <view v-else class="qo-empty">
-        <text>{{ loading ? '加载文件列表…' : (query ? '没有匹配的文件' : '开始输入以搜索文件') }}</text>
+        <text>{{ loading ? $t('files.loadingFileList') : (query ? $t('files.noMatchingFiles') : $t('files.typeToSearch')) }}</text>
       </view>
     </view>
   </view>

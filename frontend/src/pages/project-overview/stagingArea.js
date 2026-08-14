@@ -80,7 +80,7 @@ export const stagingAreaMethods = {
         this.loadStagingUsage()
       } catch (e) {
         console.error('Failed to load staging files:', e)
-        uni.showToast({ title: '加载暂存区文件失败', icon: 'none' })
+        uni.showToast({ title: this.$t('workbenchOps.loadStagingFailed'), icon: 'none' })
       }
     },
     async onStagingDrop(files) {
@@ -132,7 +132,7 @@ export const stagingAreaMethods = {
 
         // Auto-pin
         this.stagingPinned = true
-        uni.showToast({ title: '已加入暂存区', icon: 'success' })
+        uni.showToast({ title: this.$t('workbenchOps.addedToStaging'), icon: 'success' })
       } catch (e) {
         if (e && e.quotaExceeded) {
           // 免费额度拦截：后端一个文件都没移动，缓存区里的存量原样保留。
@@ -140,10 +140,10 @@ export const stagingAreaMethods = {
           this.stagingPinned = true
           this.loadStagingUsage()
           uni.showModal({
-            title: '文件缓存区已满',
+            title: this.$t('workbenchOps.stagingFullTitle'),
             content: e.message,
-            confirmText: '了解详情',
-            cancelText: '知道了',
+            confirmText: this.$t('workbenchOps.learnMore'),
+            cancelText: this.$t('workbenchOps.okKnown'),
             success: (r) => {
               if (r.confirm) openExternalUrl(accountPageUrl())
             }
@@ -151,7 +151,7 @@ export const stagingAreaMethods = {
           return
         }
         console.error('Failed to move files to staging:', e)
-        uni.showToast({ title: '加入暂存区失败', icon: 'none' })
+        uni.showToast({ title: this.$t('workbenchOps.addToStagingFailed'), icon: 'none' })
       }
     },
     handleStagingClear() {
@@ -191,13 +191,13 @@ export const stagingAreaMethods = {
              delete this.stagingOriginalParents[id]
              await this.loadStagingFiles()
              this.$refs.fileTree.loadFiles()
-             uni.showToast({ title: '原目录已不存在，已移至根目录', icon: 'none' })
+             uni.showToast({ title: this.$t('workbenchOps.movedToRootFallback'), icon: 'none' })
              return
            } catch (e2) {
              console.error('Fallback to root also failed:', e2)
            }
          }
-         uni.showToast({ title: '移出暂存区失败', icon: 'none' })
+         uni.showToast({ title: this.$t('workbenchOps.removeFromStagingFailed'), icon: 'none' })
        }
     },
     handleStagingCompare(files) {

@@ -194,7 +194,7 @@ export const ocrCaptureMethods = {
           const activeWebTab = this.getActiveWebTab()
           const viewId = activeWebTab && activeWebTab.id ? String(activeWebTab.id) : ''
           if (!host.ocr.startSelection) {
-            uni.showToast({ title: '桌面端截图能力不可用', icon: 'none' })
+            uni.showToast({ title: this.$t('workbenchOps.desktopCaptureUnavailable'), icon: 'none' })
             return
           }
           // 全局截图：无网页 tab 时走 window 模式（两边都是文档也能截图）
@@ -203,20 +203,20 @@ export const ocrCaptureMethods = {
             : await host.ocr.startSelection({ mode: 'window' })
           if (!resp || resp.ok !== true) {
             if (resp && resp.cancelled) return
-            uni.showToast({ title: (resp && resp.message) ? String(resp.message) : '截图失败', icon: 'none' })
+            uni.showToast({ title: (resp && resp.message) ? String(resp.message) : this.$t('workbenchOps.captureFailed'), icon: 'none' })
             return
           }
           if (resp && resp.payload) {
             await this.applyDesktopOcrSelection(resp.payload)
           } else {
             // 兼容旧事件回调（但不再依赖）
-            uni.showToast({ title: '截图完成，但未收到结果', icon: 'none' })
+            uni.showToast({ title: this.$t('workbenchOps.captureNoResult'), icon: 'none' })
           }
           return
         }
 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-          uni.showToast({ title: '当前浏览器不支持屏幕共享', icon: 'none' })
+          uni.showToast({ title: this.$t('workbenchOps.screenShareUnsupported'), icon: 'none' })
           return
         }
 
@@ -245,7 +245,7 @@ export const ocrCaptureMethods = {
       } catch (e) {
         console.error('启动 OCR 截图失败:', e)
         // 桌面端不需要浏览器授权：避免误导
-        const title = this.isDesktopApp ? (e.message || '截图失败') : '截图失败（请允许共享标签页/窗口）'
+        const title = this.isDesktopApp ? (e.message || this.$t('workbenchOps.captureFailed')) : this.$t('workbenchOps.captureFailedAllowShare')
         uni.showToast({ title, icon: 'none' })
         // 失败时统一走 closeOcrOverlay 复位（BrowserView 恢复由 watcher 处理）
         try {
@@ -256,7 +256,7 @@ export const ocrCaptureMethods = {
       }
       // #endif
       // #ifndef H5
-      uni.showToast({ title: '仅 H5 支持截图摘录', icon: 'none' })
+      uni.showToast({ title: this.$t('workbenchOps.captureH5Only'), icon: 'none' })
       // #endif
     },
 
@@ -329,7 +329,7 @@ export const ocrCaptureMethods = {
     }
       } catch (e) {
         console.error('截图裁剪失败:', e)
-        uni.showToast({ title: e.message || '截图失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbenchOps.captureFailed'), icon: 'none' })
       }
       // #endif
     },

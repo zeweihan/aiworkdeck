@@ -1,8 +1,8 @@
 <template>
   <div class="subtask-result" :class="{ 'is-failed': !isSuccess }">
     <div class="sr-header">
-      <span class="sr-title">子任务结果</span>
-      <span class="sr-badge" :class="isSuccess ? 'ok' : 'bad'">{{ isSuccess ? '已产出' : '未完成' }}</span>
+      <span class="sr-title">{{ $t('chat.subtaskResultTitle') }}</span>
+      <span class="sr-badge" :class="isSuccess ? 'ok' : 'bad'">{{ isSuccess ? $t('chat.subtaskProduced') : $t('chat.subtaskIncomplete') }}</span>
     </div>
 
     <!-- 正文：成功取 result，失败取 error。律师要能核验子 Agent 到底拿回了什么，
@@ -13,7 +13,7 @@
          「读了哪份合同、抽了哪一段」不能只信主 Agent 转述，工具清单是最低限度的过程痕迹。 -->
     <div class="sr-meta">
       <div class="sr-meta-row" v-if="toolChips.length > 0">
-        <span class="sr-meta-label">调用工具</span>
+        <span class="sr-meta-label">{{ $t('chat.toolsUsed') }}</span>
         <div class="sr-chips">
           <span class="sr-chip" v-for="chip in toolChips" :key="chip.raw" :title="chip.raw">
             {{ chip.label }}<span v-if="chip.count > 1" class="sr-chip-count">×{{ chip.count }}</span>
@@ -21,19 +21,19 @@
         </div>
       </div>
       <div class="sr-meta-row" v-else>
-        <span class="sr-meta-label">调用工具</span>
-        <span class="sr-meta-value is-empty">未调用任何工具（仅凭任务描述作答）</span>
+        <span class="sr-meta-label">{{ $t('chat.toolsUsed') }}</span>
+        <span class="sr-meta-value is-empty">{{ $t('chat.noToolsUsed') }}</span>
       </div>
       <div class="sr-meta-row">
-        <span class="sr-meta-label">执行轮数</span>
+        <span class="sr-meta-label">{{ $t('chat.roundsLabel') }}</span>
         <span class="sr-meta-value">{{ roundsText }}</span>
       </div>
       <div class="sr-meta-row" v-if="modelText">
-        <span class="sr-meta-label">实际模型</span>
+        <span class="sr-meta-label">{{ $t('chat.actualModel') }}</span>
         <span class="sr-meta-value is-mono">{{ modelText }}</span>
       </div>
       <div class="sr-meta-row" v-if="subtaskId">
-        <span class="sr-meta-label">子任务编号</span>
+        <span class="sr-meta-label">{{ $t('chat.subtaskIdLabel') }}</span>
         <span class="sr-meta-value is-mono">{{ subtaskId }}</span>
       </div>
     </div>
@@ -43,6 +43,7 @@
 <script setup>
 import { computed } from 'vue'
 import { toolDisplayName, toolRawName } from '@/utils/toolDisplayNames.js'
+import { t } from '@/i18n'
 
 // result：已由调用方（ProcessCard）解析好的 SubAgentResult 对象。
 // 解析失败的情况调用方不会渲染本组件，会退回纯文本——这里只做字段级容错，
@@ -58,7 +59,7 @@ const bodyText = computed(() => {
   const text = isSuccess.value ? r.result : r.error
   if (typeof text === 'string' && text.trim()) return text
   // 兜底：success=true 但没带 result（不该出现，出现了也别给律师看空白）
-  return isSuccess.value ? '（子任务未返回结果正文）' : '（子任务失败但未返回原因）'
+  return isSuccess.value ? t('chat.subtaskNoResult') : t('chat.subtaskNoError')
 })
 
 const toolChips = computed(() => {
@@ -82,7 +83,7 @@ const toolChips = computed(() => {
 
 const roundsText = computed(() => {
   const n = Number(props.result?.rounds)
-  return Number.isFinite(n) && n > 0 ? `${n} 轮` : '未知'
+  return Number.isFinite(n) && n > 0 ? t('chat.roundsN', { n }) : t('chat.unknown')
 })
 
 // model / modelId 两个字段名都认：后端今天还没在 SubAgentResult 里带模型 ID，

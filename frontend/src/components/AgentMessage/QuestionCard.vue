@@ -2,8 +2,8 @@
   <div class="question-card" :class="{ 'is-history': !actionable }">
     <div class="q-head">
       <span class="q-dot"></span>
-      <span class="q-title">需要你确认</span>
-      <span v-if="answered" class="q-badge">已回答</span>
+      <span class="q-title">{{ $t('chat.questionTitle') }}</span>
+      <span v-if="answered" class="q-badge">{{ $t('chat.answeredBadge') }}</span>
     </div>
 
     <!-- 正文：<question> 标签里的提问本身。
@@ -31,7 +31,7 @@
 
     <!-- 无选项 = 开放式提问：只提示在既有输入框回答，绝不另造第二个输入框
          （两个输入框的界面用户永远不知道该往哪个里打字） -->
-    <div v-else-if="actionable" class="q-hint">在下方输入框回答即可，AI 会接着这一问继续。</div>
+    <div v-else-if="actionable" class="q-hint">{{ $t('chat.answerHint') }}</div>
   </div>
 </template>
 

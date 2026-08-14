@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "scripts": {
     "check:emits": "node scripts/check-emit-bindings.mjs",
+    "check:locales": "node scripts/check-locale-parity.mjs",
     "check:nav": "node scripts/check-navigation-contract.mjs",
     "check:nav:full": "CHECK_NAV_FULL=1 node scripts/check-navigation-contract.mjs",
     "dev:custom": "uni -p",

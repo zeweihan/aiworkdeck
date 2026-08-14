@@ -17,19 +17,19 @@
             />
          </view>
          <view class="selected-file-info" v-if="selectedFile">
-            <text class="info-label">已选择{{ selectedIsFolder ? '文件夹' : '' }}：</text>
+            <text class="info-label">{{ selectedIsFolder ? $t('files.selectedFolderLabel') : $t('files.selectedLabel') }}</text>
             <text class="info-name">{{ selectedFile.name }}</text>
          </view>
       </view>
       
       <view class="dialog-footer">
-        <button class="btn-cancel" @tap="handleCancel">取消</button>
-        <button 
-          class="btn-confirm" 
+        <button class="btn-cancel" @tap="handleCancel">{{ $t('common.cancel') }}</button>
+        <button
+          class="btn-confirm"
           :class="{ disabled: !selectedFile }"
           @tap="handleConfirm"
         >
-          确定导入
+          {{ $t('files.confirmImport') }}
         </button>
       </view>
     </view>
@@ -42,6 +42,7 @@
 // Since this is a new component, we should probably import FileTree here to be safe and self-contained, 
 // OR register it in the parent. Let's try to import it.
 import FileTree from '@/components/FileTree.vue'
+import { t } from '@/i18n'
 
 export default {
   name: 'FilePickerDialog',
@@ -60,7 +61,7 @@ export default {
     // 对话框标题（不同调用方复用）
     title: {
       type: String,
-      default: '选择要导入的文档'
+      default: () => t('files.pickerDefaultTitle')
     },
     // 允许选择的扩展名（小写、不带点，如 ['pdf', 'docx']）；空数组不过滤
     accept: {
@@ -106,7 +107,7 @@ export default {
       if (this.accept.length > 0) {
         const ext = (file.name || '').split('.').pop().toLowerCase()
         if (!this.accept.includes(ext)) {
-          uni.showToast({ title: `仅支持 ${this.accept.join('/')} 文件`, icon: 'none' })
+          uni.showToast({ title: this.$t('files.onlyTypesSupported', { types: this.accept.join('/') }), icon: 'none' })
           return
         }
       }

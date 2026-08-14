@@ -3,92 +3,94 @@
 // - 这里只做前端显示与表单配置，真正的字段含义和映射由后端接口负责。
 // - 后续如果改为从后端读取配置，可以保持这份结构作为参考。
 
+import { t } from '@/i18n'
+
 export const PROJECT_TYPES = [
   {
     value: 'MAJOR_ASSET_RESTRUCTURING',
-    label: '上市公司重大资产重组',
+    label: t('config.projectTypes.majorAssetRestructuring'),
     formFields: [
       {
         field: 'listedCompanyName',
-        label: '上市公司名称',
+        label: t('config.projectFields.listedCompanyName'),
         required: true,
-        placeholder: '请输入上市公司全称或简称',
+        placeholder: t('config.projectFields.listedCompanyNamePlaceholder'),
       },
       {
         field: 'targetCompanyName',
-        label: '标的公司名称',
+        label: t('config.projectFields.targetCompanyName'),
         required: true,
-        placeholder: '请输入标的公司全称',
+        placeholder: t('config.projectFields.targetCompanyNamePlaceholder'),
       },
     ],
     companyDisplay: {
-      LISTED: { label: '上市公司基础信息', fields: [], lists: [] },
-      TARGET: { label: '标的公司基础信息', fields: [], lists: [] }
+      LISTED: { label: t('config.projectFields.listedCompanyInfo'), fields: [], lists: [] },
+      TARGET: { label: t('config.projectFields.targetCompanyInfo'), fields: [], lists: [] }
     }
   },
   {
     value: 'PRIVATE_PLACEMENT',
-    label: '上市公司向特定对象发行股份',
+    label: t('config.projectTypes.privatePlacement'),
     formFields: [
       {
         field: 'listedCompanyName',
-        label: '上市公司名称',
+        label: t('config.projectFields.listedCompanyName'),
         required: true,
-        placeholder: '请输入上市公司全称或简称',
+        placeholder: t('config.projectFields.listedCompanyNamePlaceholder'),
       },
     ],
     companyDisplay: {
-      LISTED: { label: '上市公司基础信息', fields: [], lists: [] },
+      LISTED: { label: t('config.projectFields.listedCompanyInfo'), fields: [], lists: [] },
       TARGET: null
     }
   },
   {
     value: 'PUBLIC_PLACEMENT',
-    label: '上市公司向不特定对象发行股份',
+    label: t('config.projectTypes.publicPlacement'),
     formFields: [
       {
         field: 'listedCompanyName',
-        label: '上市公司名称',
+        label: t('config.projectFields.listedCompanyName'),
         required: true,
-        placeholder: '请输入上市公司全称或简称',
+        placeholder: t('config.projectFields.listedCompanyNamePlaceholder'),
       },
     ],
     companyDisplay: {
-      LISTED: { label: '上市公司基础信息', fields: [], lists: [] },
+      LISTED: { label: t('config.projectFields.listedCompanyInfo'), fields: [], lists: [] },
       TARGET: null
     }
   },
   {
     value: 'ACQUISITION',
-    label: '上市公司控制权收购',
+    label: t('config.projectTypes.acquisition'),
     formFields: [
       {
         field: 'listedCompanyName',
-        label: '上市公司名称',
+        label: t('config.projectFields.listedCompanyName'),
         required: true,
-        placeholder: '请输入上市公司全称或简称',
+        placeholder: t('config.projectFields.listedCompanyNamePlaceholder'),
       },
       {
         field: 'targetCompanyName',
-        label: '标的公司名称',
+        label: t('config.projectFields.targetCompanyName'),
         required: true,
-        placeholder: '请输入标的公司全称',
+        placeholder: t('config.projectFields.targetCompanyNamePlaceholder'),
       },
     ],
     companyDisplay: {
-      LISTED: { label: '上市公司基础信息', fields: [], lists: [] },
-      TARGET: { label: '标的公司基础信息', fields: [], lists: [] }
+      LISTED: { label: t('config.projectFields.listedCompanyInfo'), fields: [], lists: [] },
+      TARGET: { label: t('config.projectFields.targetCompanyInfo'), fields: [], lists: [] }
     }
   },
   {
     value: 'BLANK',
-    label: '空白项目',
+    label: t('config.projectTypes.blank'),
     formFields: [
         {
             field: 'name',
-            label: '项目名称',
+            label: t('config.projectFields.projectName'),
             required: true,
-            placeholder: '请输入项目名称',
+            placeholder: t('config.projectFields.projectNamePlaceholder'),
         }
     ],
     companyDisplay: null

@@ -3,19 +3,19 @@
     <!-- 工具栏 -->
     <view class="diff-toolbar">
       <view class="toolbar-left">
-        <text class="toolbar-title">文档对比</text>
+        <text class="toolbar-title">{{ $t('editor.diff.title') }}</text>
         <text class="toolbar-subtitle">{{ displaySourceName }} vs {{ displayTargetName }}</text>
       </view>
       <view class="toolbar-right">
         <view class="diff-nav">
           <button class="nav-btn" @tap="goToPrevDiff" :disabled="currentDiffIndex <= 0">
             <text>↑</text>
-            <text class="nav-text">上一处</text>
+            <text class="nav-text">{{ $t('editor.diff.prev') }}</text>
           </button>
           <text class="diff-count">{{ currentDiffIndex + 1 }} / {{ totalDiffs }}</text>
           <button class="nav-btn" @tap="goToNextDiff" :disabled="currentDiffIndex >= totalDiffs - 1">
             <text>↓</text>
-            <text class="nav-text">下一处</text>
+            <text class="nav-text">{{ $t('editor.diff.next') }}</text>
           </button>
         </view>
         <view class="view-toggle">
@@ -24,14 +24,14 @@
             :class="{ active: viewMode === 'side' }"
             @tap="viewMode = 'side'"
           >
-            并排
+            {{ $t('editor.diff.sideBySide') }}
           </button>
           <button 
             class="toggle-btn" 
             :class="{ active: viewMode === 'inline' }"
             @tap="viewMode = 'inline'"
           >
-            内联
+            {{ $t('editor.diff.inline') }}
           </button>
         </view>
       </view>
@@ -50,8 +50,8 @@
       <scroll-view scroll-y class="fallback-scroll">
         <view class="fallback-content">
           <view class="fallback-header">
-            <text class="fallback-label source-label">源文档: {{ displaySourceName }}</text>
-            <text class="fallback-label target-label">新文档: {{ displayTargetName }}</text>
+            <text class="fallback-label source-label">{{ $t('editor.diff.sourceLabel', { name: displaySourceName }) }}</text>
+            <text class="fallback-label target-label">{{ $t('editor.diff.targetLabel', { name: displayTargetName }) }}</text>
           </view>
           <view v-for="(line, idx) in diffLines" :key="idx" class="diff-line" :class="line.type">
             <text class="line-prefix">{{ line.prefix }}</text>
@@ -65,7 +65,7 @@
     <!-- Loading 状态 -->
     <view v-if="loading" class="loading-overlay">
       <view class="loading-spinner"></view>
-      <text class="loading-text">正在加载文档内容...</text>
+      <text class="loading-text">{{ $t('editor.diff.loadingContent') }}</text>
     </view>
     
     <!-- 错误状态 -->
@@ -74,7 +74,7 @@
         <path v-for="(d, gi) in ICONS.warning" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
       <text class="error-text">{{ error }}</text>
-      <button class="retry-btn" @tap="loadDocuments">重试</button>
+      <button class="retry-btn" @tap="loadDocuments">{{ $t('editor.diff.retry') }}</button>
     </view>
   </view>
 </template>
@@ -83,6 +83,7 @@
 import { markRaw } from 'vue'
 import api, { getVersionFileText } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
+import { t } from '@/i18n'
 
 export default {
 
@@ -92,10 +93,10 @@ export default {
 
     // versionSpec 模式下标题用「上一版/这一版」这类批准用语，忽略 sourceName/targetName
     displaySourceName() {
-      return this.versionSpec ? (this.versionSpec.oldLabel || '上一版') : this.sourceName
+      return this.versionSpec ? (this.versionSpec.oldLabel || this.$t('editor.diff.prevVersion')) : this.sourceName
     },
     displayTargetName() {
-      return this.versionSpec ? (this.versionSpec.newLabel || '这一版') : this.targetName
+      return this.versionSpec ? (this.versionSpec.newLabel || this.$t('editor.diff.thisVersion')) : this.targetName
     }
 
   },
@@ -111,11 +112,11 @@ export default {
     },
     sourceName: {
       type: String,
-      default: '源文档'
+      default: () => t('editor.diff.sourceDocDefault')
     },
     targetName: {
       type: String,
-      default: '新文档'
+      default: () => t('editor.diff.newDocDefault')
     },
     // 版本对比降级模式：设了它就走版本文本源（file-text 端点），忽略 sourceId/targetId
     versionSpec: {
@@ -163,7 +164,7 @@ export default {
           ])
 
           if (oldRes.code !== 0 || newRes.code !== 0) {
-            throw new Error(oldRes.message || newRes.message || '获取版本文件内容失败')
+            throw new Error(oldRes.message || newRes.message || this.$t('editor.diff.fetchVersionFailed'))
           }
 
           this.sourceText = (oldRes.data && oldRes.data.text) || ''
@@ -172,7 +173,7 @@ export default {
           const res = await api.compareDocuments(this.sourceId, this.targetId)
 
           if (res.code !== 0) {
-            throw new Error(res.message || '获取文档内容失败')
+            throw new Error(res.message || this.$t('editor.diff.fetchDocFailed'))
           }
 
           this.sourceText = res.data.source.text || ''
@@ -189,7 +190,7 @@ export default {
         
       } catch (e) {
         console.error('加载文档失败:', e)
-        this.error = e.message || '加载文档失败'
+        this.error = e.message || this.$t('editor.diff.loadFailed')
       } finally {
         this.loading = false
       }
@@ -203,7 +204,7 @@ export default {
         
         const container = document.getElementById('monaco-diff-container')
         if (!container) {
-          throw new Error('找不到编辑器容器')
+          throw new Error(this.$t('editor.diff.containerMissing'))
         }
         
         // 创建 Diff Editor。markRaw 不能省：diffEditor 是 data 字段，直接赋值会让
@@ -241,7 +242,7 @@ export default {
         
       } catch (e) {
         console.error('初始化 Monaco 编辑器失败:', e)
-        this.error = '初始化编辑器失败: ' + e.message
+        this.error = this.$t('editor.diff.initFailed', { msg: e.message })
       }
     },
     
@@ -263,7 +264,7 @@ export default {
             resolve(window.monaco)
           })
         }
-        script.onerror = () => reject(new Error('加载 Monaco Editor 失败'))
+        script.onerror = () => reject(new Error(this.$t('editor.diff.monacoLoadFailed')))
         document.head.appendChild(script)
       })
     },
