@@ -151,7 +151,19 @@ try {
   }
 
   const mouseClickSel = async (sel) => {
-    await page.waitForSelector(sel, { timeout: 15000 })
+    // dev Electron 首帧比普通浏览器慢不少（vite 按需编译 + webview 初始化），
+    // 15s 不够；超时也要带上页面当时的样子，别只丢一句 timeout。
+    try {
+      await page.waitForSelector(sel, { timeout: 40000 })
+    } catch (e) {
+      const snap = await page.evaluate(() => ({
+        url: location.href,
+        lang: (() => { try { return localStorage.getItem('awd_app_language') } catch (e2) { return '?' } })(),
+        titles: [...document.querySelectorAll('[title]')].map((el) => el.getAttribute('title')).slice(0, 20),
+        text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 250),
+      })).catch(() => null)
+      throw new Error('等不到 ' + sel + '；' + JSON.stringify(snap))
+    }
     const box = await page.evaluate((check, s) => {
       const el = document.querySelector(s); if (!el) return null
       return eval(check + '; hitCheck(el)')
@@ -159,9 +171,30 @@ try {
     await clickAt(box, sel)
   }
 
+  // 语言必须钉死中文：本套断言全是中文字面量（「资源管理器」「新建文档」…），
+  // 而 appLanguage 对全新安装是按 navigator.language 猜的——Electron 常带
+  // --lang=en-GB、无头 Chrome 是 en-US，两边都会猜成英文，第一步就找不到中文。
+  // 注意不能用 evaluateOnNewDocument：壳启动时已经把页面引导到项目列表并按环境
+  // 语言落了盘，随后跳工作台只是改 hash（同文档导航），钩子根本不触发。
+  await page.evaluate(() => { try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ } })
+
   await step('免登直达进入项目（PR-A 去登录：不注会话）', async () => {
     await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId, { waitUntil: 'networkidle2' })
-    await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 20000 })
+    // 同上：跳工作台若只是改 hash，uni 路由会把它弹回项目列表（工作台参与的跳转
+    // 本该走 reLaunch）。整页重载一次，直接以工作台路由、以中文重新 boot。
+    await page.reload({ waitUntil: 'networkidle2' })
+    try {
+      await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 30000 })
+    } catch (e) {
+      // 光一句超时查不出任何东西（本套件为此栽过好几轮：先后误判成单实例锁、
+      // 编译超时、界面语言）。把页面当场的真实样子带进错误里。
+      const snap = await page.evaluate(() => ({
+        url: location.href,
+        lang: (() => { try { return localStorage.getItem('awd_app_language') } catch (e2) { return '?' } })(),
+        text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 400),
+      })).catch(() => null)
+      throw new Error('页面未出现「资源管理器」；' + JSON.stringify(snap))
+    }
   })
 
   const mouseClickText = async (label) => {
