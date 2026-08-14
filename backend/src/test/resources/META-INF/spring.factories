@@ -1,0 +1,3 @@
+# 全局测试监听器：每个测试方法前把 AuthController 的 static 服务指针钉回当前上下文
+# （多上下文并存时指针随类执行顺序漂移的治本方案，详见该类 javadoc）
+org.springframework.test.context.TestExecutionListener=com.checkba.testsupport.StaticAuthPointerResetListener
