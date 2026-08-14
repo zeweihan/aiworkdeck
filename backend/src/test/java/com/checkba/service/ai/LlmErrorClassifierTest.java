@@ -89,11 +89,10 @@ class LlmErrorClassifierTest {
     }
 
     @Test
-    @DisplayName("不整体放宽 403：key 失效/额度禁用仍是 FATAL，不许被带进换模型重试")
+    @DisplayName("不整体放宽 403：key 失效等仍是 FATAL，不许被带进换模型重试")
     void nonRegionForbiddenStaysFatal() {
         for (String msg : new String[]{
                 "status code: 403 - Your API key has been disabled",
-                "status code: 403 - Insufficient credits",
                 "status code: 403 - Forbidden"}) {
             LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(new RuntimeException(msg));
             assertEquals(LlmErrorClassifier.Kind.FATAL, kind, msg);
@@ -103,6 +102,57 @@ class LlmErrorClassifierTest {
         assertEquals(LlmErrorClassifier.Kind.FATAL, LlmErrorClassifier.classify(
                 new dev.ai4j.openai4j.OpenAiHttpException(403,
                         "{\"error\":{\"message\":\"User not found or key revoked\"}}")));
+    }
+
+    @Test
+    @DisplayName("配额耗尽单列 QUOTA_EXHAUSTED：终局——不重试、不换模型（换哪个都是同一个没钱的账户）")
+    void quotaExhaustionIsTerminal() {
+        for (String msg : new String[]{
+                "status code: 402 - Payment Required",
+                "status code: 403 - Insufficient credits",
+                "status code: 429 - You exceeded your current quota, please check your plan and billing details",
+                "Insufficient Balance"}) {
+            LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(new RuntimeException(msg));
+            assertEquals(LlmErrorClassifier.Kind.QUOTA_EXHAUSTED, kind, msg);
+            assertFalse(kind.retryable(), msg);
+            assertFalse(kind.failoverable(), msg);
+        }
+        // 结构化通道：OpenRouter 余额耗尽是 402；429 载荷带配额语义时也要判成配额而不是限流
+        assertEquals(LlmErrorClassifier.Kind.QUOTA_EXHAUSTED, LlmErrorClassifier.classify(
+                new dev.ai4j.openai4j.OpenAiHttpException(402,
+                        "{\"error\":{\"message\":\"Insufficient credits. Add more using https://openrouter.ai/credits\"}}")));
+        assertEquals(LlmErrorClassifier.Kind.QUOTA_EXHAUSTED, LlmErrorClassifier.classify(
+                new dev.ai4j.openai4j.OpenAiHttpException(429,
+                        "{\"error\":{\"message\":\"quota exceeded for this billing cycle\"}}")));
+    }
+
+    @Test
+    @DisplayName("配额判定先于限流：普通 429 仍是 RATE_LIMITED，带配额语义的 429 才是 QUOTA")
+    void plainRateLimitStillRateLimited() {
+        assertEquals(LlmErrorClassifier.Kind.RATE_LIMITED, LlmErrorClassifier.classify(
+                new RuntimeException("status code: 429 - rate limit exceeded, retry shortly")));
+    }
+
+    @Test
+    @DisplayName("上下文超窗单列 CONTEXT_OVERFLOW：不退避不换模型，交给编排器的强制压缩重试通道")
+    void contextOverflowGetsDedicatedRecoveryChannel() {
+        for (String msg : new String[]{
+                "status code: 400 - This model's maximum context length is 131072 tokens. However, you requested 140000 tokens",
+                "status code: 400 - {\"error\":{\"code\":\"context_length_exceeded\"}}",
+                "status code: 400 - prompt is too long: 210000 tokens > 200000 maximum",
+                "status code: 400 - input length and max_tokens exceed context limit"}) {
+            LlmErrorClassifier.Kind kind = LlmErrorClassifier.classify(new RuntimeException(msg));
+            assertEquals(LlmErrorClassifier.Kind.CONTEXT_OVERFLOW, kind, msg);
+            assertFalse(kind.retryable(), "原样重发必然再撞同一个 400：" + msg);
+            assertFalse(kind.failoverable(), "不走故障转移链，走压缩重试通道：" + msg);
+        }
+        // 结构化通道同一口径
+        assertEquals(LlmErrorClassifier.Kind.CONTEXT_OVERFLOW, LlmErrorClassifier.classify(
+                new dev.ai4j.openai4j.OpenAiHttpException(400,
+                        "{\"error\":{\"message\":\"This model's maximum context length is 131072 tokens\"}}")));
+        // 普通 400 仍是 FATAL：判据顺序反了会把参数错误也带进压缩重试
+        assertEquals(LlmErrorClassifier.Kind.FATAL, LlmErrorClassifier.classify(
+                new RuntimeException("status code: 400 - invalid request: unknown parameter")));
     }
 
     @Test
@@ -123,15 +173,24 @@ class LlmErrorClassifierTest {
     }
 
     @Test
-    @DisplayName("SSE 载荷标记：只有区域拒绝加前缀，前端靠 includes 命中（前面还会拼 Stream Error:）")
-    void regionMarkerOnlyOnRegionBlocked() {
+    @DisplayName("SSE 载荷标记：区域拒绝/配额耗尽/上下文超窗三类加前缀，前端靠 includes 命中")
+    void machineReadableMarkersOnTaggedKinds() {
         String tagged = LlmErrorClassifier.taggedErrorMessage(
                 LlmErrorClassifier.Kind.REGION_BLOCKED, "403 not available in your region");
         assertTrue(tagged.contains(LlmErrorClassifier.REGION_BLOCKED_MARKER));
         assertTrue(("Stream Error: " + tagged).contains(LlmErrorClassifier.REGION_BLOCKED_MARKER));
 
+        assertTrue(LlmErrorClassifier.taggedErrorMessage(
+                        LlmErrorClassifier.Kind.QUOTA_EXHAUSTED, "Insufficient credits")
+                .contains(LlmErrorClassifier.QUOTA_EXHAUSTED_MARKER));
+        assertTrue(LlmErrorClassifier.taggedErrorMessage(
+                        LlmErrorClassifier.Kind.CONTEXT_OVERFLOW, "maximum context length exceeded")
+                .contains(LlmErrorClassifier.CONTEXT_OVERFLOW_MARKER));
+
         assertEquals("boom", LlmErrorClassifier.taggedErrorMessage(
                 LlmErrorClassifier.Kind.FATAL, "boom"), "其余分类不许引入噪声前缀");
+        assertEquals("boom", LlmErrorClassifier.taggedErrorMessage(
+                LlmErrorClassifier.Kind.RATE_LIMITED, "boom"), "其余分类不许引入噪声前缀");
     }
 
     @Test

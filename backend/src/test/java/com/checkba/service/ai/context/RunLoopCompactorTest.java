@@ -183,4 +183,88 @@ class RunLoopCompactorTest {
         assertTrue(compactor.estimateTokens(messages) > 900,
                 "漏算工具消息会让阈值永远不触发");
     }
+
+    @Test
+    @DisplayName("剪枝够用就不折叠：中段超长工具结果只留首尾，原文比摘要保得多")
+    void pruningAloneSufficesWhenItShrinksEnough() {
+        // 预算调大：阈值 6400 token。中段一条 20000 字符的工具结果剪成约 5.1k 后就够了
+        when(compressor.getAvailableTokensForHistory(any())).thenReturn(8000);
+        List<ChatMessage> messages = longRun(8, 400);
+        messages.set(5, toolResult("c1", "doc_read", filler(20000)));
+        int before = compactor.estimateTokens(messages);
+        assertTrue(before > compactor.triggerThreshold(null), "用例前提：必须超阈值");
+
+        List<ChatMessage> result = compactor.compact(messages, null);
+
+        assertEquals(messages.size(), result.size(), "剪枝只改正文，不折叠任何消息");
+        assertTrue(result.stream().noneMatch(m -> m instanceof UserMessage um
+                        && um.singleText().startsWith(RunLoopCompactor.DIGEST_MARKER)),
+                "剪枝够用时不该生成摘要");
+        ToolExecutionResultMessage pruned = (ToolExecutionResultMessage) result.get(5);
+        assertTrue(pruned.text().contains(RunLoopCompactor.PRUNE_MARKER), "中段要有省略标记");
+        assertTrue(pruned.text().length() < 20000, "剪枝后必须变小");
+        assertEquals("c1", pruned.id(), "id 必须原样保留，否则与 tool_calls 的配对断裂");
+        assertEquals("doc_read", pruned.toolName());
+        assertTrue(compactor.estimateTokens(result) <= compactor.triggerThreshold(null),
+                "剪完应低于阈值（这正是跳过折叠的依据）");
+    }
+
+    @Test
+    @DisplayName("最近的工具结果刻意不剪：模型正在引用它，剪了等于逼模型重调")
+    void recentToolResultsAreNeverPruned() {
+        List<ChatMessage> messages = longRun(12, 400);
+        // 最后一轮的结果超长：位于 keepRecent 尾部区间，必须原样保留
+        ChatMessage hugeTail = toolResult("c11", "doc_read", filler(20000));
+        messages.set(messages.size() - 1, hugeTail);
+
+        List<ChatMessage> result = compactor.compact(messages, null);
+
+        assertSame(hugeTail, result.get(result.size() - 1), "尾部超长结果必须是原对象，不剪不动");
+    }
+
+    @Test
+    @DisplayName("forceCompact：未超阈值也压（服务商已用 400 证实装不下，本地估算不作数）")
+    void forceCompactBypassesThreshold() {
+        // 预算调到远超栈大小：普通压缩绝不触发，但服务商回了 400 就得强压
+        when(compressor.getAvailableTokensForHistory(any())).thenReturn(50000);
+        List<ChatMessage> messages = longRun(6, 1000);
+        int before = compactor.estimateTokens(messages);
+        assertSame(messages, compactor.compact(messages, null), "用例前提：普通压缩不触发");
+
+        List<ChatMessage> result = compactor.forceCompact(messages, null);
+
+        assertTrue(result != messages, "强制压缩必须返回新实例（重试凭证 = 确实缩小了）");
+        assertTrue(result.size() < messages.size());
+        assertTrue(compactor.estimateTokens(result) < before, "强压后 token 必须下降");
+        assertTrue(result.stream().anyMatch(m -> m instanceof UserMessage um
+                && um.singleText().startsWith(RunLoopCompactor.DIGEST_MARKER)), "应生成摘要");
+        for (int i = 0; i < result.size(); i++) {
+            if (result.get(i) instanceof ToolExecutionResultMessage tr) {
+                assertTrue(i > 0 && result.get(i - 1) instanceof AiMessage ai && ai.hasToolExecutionRequests()
+                                && ai.toolExecutionRequests().get(0).id().equals(tr.id()),
+                        "强制压缩也不许拆散工具配对（第 " + i + " 条）");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("forceCompact 压不动就返回原实例：调用方据此放弃重试，避免原样重发再撞 400")
+    void forceCompactReturnsSameInstanceWhenNothingToShrink() {
+        List<ChatMessage> messages = new ArrayList<>(List.of(
+                SystemMessage.from("system prompt"),
+                UserMessage.from("你好"),
+                AiMessage.from("你好，有什么可以帮你的？")));
+
+        assertSame(messages, compactor.forceCompact(messages, null),
+                "中段不足、又没有可剪的工具结果：必须承认压不动");
+    }
+
+    @Test
+    @DisplayName("折叠不缩小就放弃（必须变小）：小中段的摘要头开销会让栈反而变大")
+    void foldThatWouldGrowIsAbandoned() {
+        // 中段只有 4 条 100 字符级消息：摘要固定头 + 提示语比被折叠的内容还长
+        List<ChatMessage> messages = longRun(6, 100);
+        assertSame(messages, compactor.forceCompact(messages, null),
+                "折叠后更大 = 净负资产，溢出恢复会拿着更大的栈白撞一次 400");
+    }
 }
