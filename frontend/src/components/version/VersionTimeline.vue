@@ -1,10 +1,10 @@
 <template>
   <scroll-view class="timeline" scroll-y>
     <view v-if="loadError" class="timeline-error">
-      <text class="timeline-error-desc">版本记录读取失败，请稍后重试。</text>
-      <text class="timeline-error-retry" @tap="load">重试</text>
+      <text class="timeline-error-desc">{{ $t('version.loadFailedDesc') }}</text>
+      <text class="timeline-error-retry" @tap="load">{{ $t('common.retry') }}</text>
     </view>
-    <view v-else-if="!versions.length" class="timeline-empty">还没有任何版本记录</view>
+    <view v-else-if="!versions.length" class="timeline-empty">{{ $t('version.timelineEmpty') }}</view>
 
     <view
       v-for="group in grouped"
@@ -15,7 +15,7 @@
       <view class="node-line" />
       <view class="node-main" @tap="select(group.head)">
         <view class="node-title" :class="{ 'has-milestone': group.head.milestone }">
-          <text v-if="group.head.milestone" class="milestone-flag">重要版本</text>
+          <text v-if="group.head.milestone" class="milestone-flag">{{ $t('version.milestoneFlag') }}</text>
           {{ group.head.milestone || titleOf(group.head) }}
         </view>
         <view class="node-meta">{{ group.head.authorName }} · {{ timeOf(group.head) }}</view>
@@ -26,7 +26,7 @@
         class="node-autos-toggle"
         @tap="toggle(group.head.sha)"
       >
-        {{ expanded[group.head.sha] ? '收起' : `这段工作里还有 ${group.autos.length} 次自动存档` }}
+        {{ expanded[group.head.sha] ? $t('version.collapse') : $t('version.autoSaveCount', { count: group.autos.length }) }}
       </view>
       <view v-if="expanded[group.head.sha]" class="node-autos">
         <view
@@ -37,7 +37,7 @@
         >
           <text class="auto-time">{{ timeOf(a) }}</text>
           <text class="auto-msg" :class="{ 'has-milestone': a.milestone }">
-            <text v-if="a.milestone" class="milestone-flag">重要版本</text>
+            <text v-if="a.milestone" class="milestone-flag">{{ $t('version.milestoneFlag') }}</text>
             {{ a.milestone || a.message }}
           </text>
         </view>
@@ -105,7 +105,7 @@ export default {
       } catch (e) {
         console.warn('[Version] 读取时间线失败', e)
         this.loadError = true
-        uni.showToast({ title: '读取失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: this.$t('version.loadFailedToast'), icon: 'none' })
       }
     },
     titleOf(v) {
@@ -114,7 +114,9 @@ export default {
     timeOf(v) {
       const d = new Date(v.when)
       const pad = (n) => String(n).padStart(2, '0')
-      return `${d.getMonth() + 1} 月 ${d.getDate()} 日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
+      return this.$t('common.dateTimeMdHm', {
+        month: d.getMonth() + 1, day: d.getDate(), time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      })
     },
     toggle(sha) {
       this.expanded = { ...this.expanded, [sha]: !this.expanded[sha] }

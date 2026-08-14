@@ -2,7 +2,7 @@
   <view v-if="visible" class="awd-mask collab-mask" @tap.self="close">
     <view class="awd-dialog collab-dialog" @tap.stop>
       <view class="awd-header collab-header">
-        <text class="awd-title">协作</text>
+        <text class="awd-title">{{ $t('version.collabTitle') }}</text>
         <view class="collab-close" @tap="close">×</view>
       </view>
 
@@ -21,16 +21,15 @@
         <template v-if="activeTab === 'casefile'">
           <template v-if="!linked">
             <view class="collab-lead">
-              《{{ projectName }}》还只在你自己的电脑上。放进团队案件库之后，库里的同事就能取到这份案卷；
-              你们各自改各自的，交稿时再合到一起。
+              {{ $t('version.collabLeadNotLinked', { name: projectName }) }}
             </view>
             <view v-if="!connections.length" class="collab-empty-action">
-              <text class="collab-note">你还没有连过团队案件库。</text>
-              <view class="awd-btn awd-btn-primary" @tap="switchTab('library')">去连接团队案件库</view>
+              <text class="collab-note">{{ $t('version.noLibraryConnectedNote') }}</text>
+              <view class="awd-btn awd-btn-primary" @tap="switchTab('library')">{{ $t('version.goConnectLibrary') }}</view>
             </view>
             <template v-else>
               <view v-if="connections.length > 1" class="collab-field">
-                <text class="collab-label">放进哪个案件库</text>
+                <text class="collab-label">{{ $t('version.chooseLibraryLabel') }}</text>
                 <view class="collab-picker">
                   <view
                     v-for="c in connections"
@@ -49,7 +48,7 @@
                   class="awd-btn awd-btn-primary"
                   :class="{ 'awd-btn-disabled': busy }"
                   @tap="onShare"
-                >放进团队案件库</view>
+                >{{ $t('version.addToTeamLibrary') }}</view>
               </view>
             </template>
           </template>
@@ -60,29 +59,28 @@
               <text class="collab-state-text">{{ stateText }}</text>
             </view>
             <view class="collab-meta">
-              <text class="collab-meta-line">案卷：{{ projectName }}</text>
-              <text class="collab-meta-line">案件库：{{ cloud.serverUrl }}</text>
+              <text class="collab-meta-line">{{ $t('version.caseFileLabel', { name: projectName }) }}</text>
+              <text class="collab-meta-line">{{ $t('version.libraryUrlLabel', { url: cloud.serverUrl }) }}</text>
             </view>
             <view class="collab-actions">
               <view
                 class="awd-btn awd-btn-primary"
                 :class="{ 'awd-btn-disabled': busy }"
                 @tap="onUpload"
-              >交稿</view>
+              >{{ $t('version.submitDraftAction') }}</view>
               <view
                 class="awd-btn awd-btn-secondary"
                 :class="{ 'awd-btn-disabled': busy }"
                 @tap="onUpdate"
-              >取回最新稿</view>
+              >{{ $t('version.pullLatestAction') }}</view>
               <view
                 class="awd-btn awd-btn-secondary"
                 :class="{ 'awd-btn-disabled': busy }"
                 @tap="onRefresh"
-              >刷新状态</view>
+              >{{ $t('version.refreshStatus') }}</view>
             </view>
             <view class="collab-note">
-              交稿 = 把你这边改好的内容送进案件库，同事下次取回就能看到。
-              取回最新稿 = 把同事送进案件库的内容拿到本机。同一份文件两边都改过时，会让你逐份选择整份留哪一边。
+              {{ $t('version.collabActionsNote') }}
             </view>
           </template>
         </template>
@@ -91,15 +89,15 @@
         <template v-else-if="activeTab === 'people'">
           <template v-if="!linked">
             <view class="collab-lead">
-              先把这份案卷放进团队案件库，才能把同事加进来。
+              {{ $t('version.peopleNeedLinkFirst') }}
             </view>
             <view class="collab-actions">
-              <view class="awd-btn awd-btn-secondary" @tap="switchTab('casefile')">去放进案件库</view>
+              <view class="awd-btn awd-btn-secondary" @tap="switchTab('casefile')">{{ $t('version.goAddToLibrary') }}</view>
             </view>
           </template>
           <template v-else>
-            <view v-if="membersLoading" class="collab-note">正在读取…</view>
-            <view v-else-if="!members.length" class="collab-note">这份案卷目前只有你一个人。</view>
+            <view v-if="membersLoading" class="collab-note">{{ $t('version.loadingGeneric') }}</view>
+            <view v-else-if="!members.length" class="collab-note">{{ $t('version.onlyYouInCaseFile') }}</view>
             <view v-else class="collab-member-list">
               <view v-for="m in members" :key="m.username || m.id" class="collab-member-row">
                 <text class="collab-member-name">{{ m.displayName || m.username }}</text>
@@ -108,14 +106,14 @@
             </view>
 
             <view class="collab-field">
-              <text class="collab-label">把同事加进来</text>
+              <text class="collab-label">{{ $t('version.addColleagueLabel') }}</text>
               <view class="collab-add-row">
-                <input v-model="addUsername" class="awd-input" placeholder="输入同事在案件库里的账号" />
+                <input v-model="addUsername" class="awd-input" :placeholder="$t('version.colleagueUsernamePlaceholder')" />
                 <view
                   class="awd-btn awd-btn-primary"
                   :class="{ 'awd-btn-disabled': memberBusy || !addUsername }"
                   @tap="onAddMember"
-                >加进来</view>
+                >{{ $t('version.addAction') }}</view>
               </view>
               <view class="collab-role-picker">
                 <view
@@ -133,13 +131,13 @@
             </view>
 
             <view class="collab-field">
-              <text class="collab-label">发给同事的加入说明</text>
+              <text class="collab-label">{{ $t('version.inviteInstructionsLabel') }}</text>
               <view class="collab-invite-box"><text class="collab-invite-text">{{ inviteText }}</text></view>
               <view class="collab-actions">
-                <view class="awd-btn awd-btn-secondary" @tap="copyInvite">复制这段话</view>
+                <view class="awd-btn awd-btn-secondary" @tap="copyInvite">{{ $t('version.copyThisText') }}</view>
               </view>
               <text class="collab-note">
-                同事还要有这个案件库的账号；加进来之后，他在自己电脑上按这几步就能取到案卷。
+                {{ $t('version.inviteFooterNote') }}
               </text>
             </view>
           </template>
@@ -148,8 +146,7 @@
         <!-- ==================== 团队案件库 ==================== -->
         <template v-else>
           <view v-if="!connections.length" class="collab-lead">
-            团队案件库是律所自己的一台服务器，案卷放在上面，所里同事各自取一份到本机办；
-            没有它也能照常办案，只是这份案卷只在你这台电脑上。
+            {{ $t('version.libraryIntro') }}
           </view>
           <view v-else class="collab-conn-list">
             <view v-for="c in connections" :key="c.id" class="collab-conn-row">
@@ -157,29 +154,29 @@
                 <text class="collab-conn-url">{{ c.serverUrl }}</text>
                 <text class="collab-conn-user">{{ c.displayName || c.username }}</text>
               </view>
-              <view class="awd-btn awd-btn-danger" @tap="onDisconnect(c)">退出这个案件库</view>
+              <view class="awd-btn awd-btn-danger" @tap="onDisconnect(c)">{{ $t('version.disconnectLibrary') }}</view>
             </view>
           </view>
 
           <view class="collab-field">
-            <text class="collab-label">连接团队案件库</text>
-            <input v-model="form.serverUrl" class="awd-input" placeholder="案件库地址，例如 https://team.example.com" />
-            <text v-if="serverUrlIsHttp" class="collab-warn">未加密地址仅建议在律所内网使用</text>
-            <input v-model="form.username" class="awd-input" placeholder="你在案件库里的账号" />
-            <input v-model="form.password" class="awd-input" placeholder="密码" password />
+            <text class="collab-label">{{ $t('version.connectLibrary') }}</text>
+            <input v-model="form.serverUrl" class="awd-input" :placeholder="$t('version.libraryUrlPlaceholder')" />
+            <text v-if="serverUrlIsHttp" class="collab-warn">{{ $t('version.httpWarning') }}</text>
+            <input v-model="form.username" class="awd-input" :placeholder="$t('version.libraryUsernamePlaceholder')" />
+            <input v-model="form.password" class="awd-input" :placeholder="$t('version.passwordPlaceholder')" password />
             <view class="collab-actions">
               <view
                 class="awd-btn awd-btn-primary"
                 :class="{ 'awd-btn-disabled': connectBusy || !form.serverUrl || !form.username }"
                 @tap="onConnect"
-              >{{ connectBusy ? '连接中…' : '连接' }}</view>
+              >{{ connectBusy ? $t('version.connecting') : $t('version.connect') }}</view>
             </view>
           </view>
         </template>
       </view>
 
       <view class="awd-footer">
-        <view class="awd-btn awd-btn-secondary" @tap="close">关闭</view>
+        <view class="awd-btn awd-btn-secondary" @tap="close">{{ $t('common.close') }}</view>
       </view>
     </view>
   </view>
@@ -215,11 +212,6 @@ export default {
   data() {
     return {
       activeTab: 'casefile',
-      tabs: [
-        { key: 'casefile', label: '这份案卷' },
-        { key: 'people', label: '案件参与人' },
-        { key: 'library', label: '团队案件库' },
-      ],
       connections: [],
       shareConnectionId: null,
       busy: false,
@@ -234,6 +226,13 @@ export default {
     }
   },
   computed: {
+    tabs() {
+      return [
+        { key: 'casefile', label: this.$t('version.tabCaseFile') },
+        { key: 'people', label: this.$t('version.tabCaseMembers') },
+        { key: 'library', label: this.$t('version.tabTeamLibrary') },
+      ]
+    },
     linked() {
       return !!(this.cloud && this.cloud.linked)
     },
@@ -243,12 +242,12 @@ export default {
     // 优先级与页面上的状态 chip 同源同序（口径见 project-overview.collabStateText）：
     // 待选择 > 连不上 > 同事交了新稿 > 有改动还没交稿 > 一致。
     stateText() {
-      if (this.conflictPending) return '有文件等你做选择'
+      if (this.conflictPending) return this.$t('version.pendingChoice')
       if (!this.cloud) return ''
-      if (this.cloud.offline) return '暂时连不上案件库'
-      if (this.cloud.remoteAhead) return '同事交了新稿'
-      if (this.cloud.pendingUpload || this.working) return '有改动还没交稿'
-      return '和大家的稿一致'
+      if (this.cloud.offline) return this.$t('version.libraryUnreachable')
+      if (this.cloud.remoteAhead) return this.$t('version.colleagueSubmittedNew')
+      if (this.cloud.pendingUpload || this.working) return this.$t('version.hasUnsubmittedChanges')
+      return this.$t('version.inSyncWithTeam')
     },
     stateClass() {
       if (this.conflictPending) return 'collab-dot-amber'
@@ -263,17 +262,11 @@ export default {
     // 「设置」面板里没有团队案件库，照着点会找不着。
     inviteText() {
       const url = (this.cloud && this.cloud.serverUrl) || ''
-      const who = this.inviterName ? this.inviterName + '邀你' : '邀你'
-      return [
-        `${who}一起办《${this.projectName}》。`,
-        '',
-        '在 AI Workdeck 里这样加入：',
-        '1. 打开项目列表，点「从团队案件库取一份案卷」；',
-        `2. 第一次用要先连库：点「去连一个」，填地址 ${url}，用你的账号密码连上；`,
-        `3. 回到「从团队案件库取一份案卷」，选《${this.projectName}》，点「取到本机」。`,
-        '',
-        '之后你改你的、我改我的，各自点「交稿」就能合到一起。',
-      ].join('\n')
+      const inviter = this.inviterName || ''
+      // 有/无邀请人分两个键：英文人名后要空格，单键拼 {inviter} 在两种语言里无法同时成立。
+      return inviter
+        ? this.$t('version.inviteText', { inviter, project: this.projectName, url })
+        : this.$t('version.inviteTextNoInviter', { project: this.projectName, url })
     },
   },
   watch: {
@@ -310,16 +303,16 @@ export default {
       // 多个案件库时必须由律师指名放进哪一个：拿列表第一条会在存量死连接（服务器早已
       // 不在、令牌早已失效）排在前面时，拿着死令牌去连一个不存在的后端。
       if (!this.shareConnectionId) {
-        uni.showToast({ title: '请先选一个团队案件库', icon: 'none' })
+        uni.showToast({ title: this.$t('version.noLibrarySelectedToast'), icon: 'none' })
         return
       }
       this.busy = true
       try {
         await shareProjectToCloud(this.projectId, this.shareConnectionId)
-        uni.showToast({ title: '已放进团队案件库', icon: 'none' })
+        uni.showToast({ title: this.$t('version.sharedToLibrary'), icon: 'none' })
         this.$emit('changed')
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '没能放进案件库', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.shareToLibraryFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -331,7 +324,7 @@ export default {
         const res = await uploadToCloud(this.projectId)
         const d = (res && res.data) || {}
         if (d.status === 'UPLOADED') {
-          uni.showToast({ title: '已交稿', icon: 'none' })
+          uni.showToast({ title: this.$t('version.submitted'), icon: 'none' })
           // 前台交稿被拒后会自动整合，磁盘可能已被改写：受影响文件要走重载链，
           // 否则打开中的编辑器会把整合前的旧字节自动保存写回去。
           const ids = d.affectedFileIds || []
@@ -340,11 +333,11 @@ export default {
           this.close()
           this.$emit('conflict')
         } else {
-          uni.showToast({ title: d.message || '暂时没能交稿', icon: 'none' })
+          uni.showToast({ title: d.message || this.$t('version.submitFailedNotice'), icon: 'none' })
         }
         this.$emit('changed')
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '交稿失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.submitFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -356,19 +349,19 @@ export default {
         const res = await updateFromCloud(this.projectId)
         const d = (res && res.data) || {}
         if (d.status === 'UPDATED') {
-          uni.showToast({ title: '已取回最新稿', icon: 'none' })
+          uni.showToast({ title: this.$t('version.pulledLatest'), icon: 'none' })
           this.$emit('reload-files', d.affectedFileIds || [])
         } else if (d.status === 'CONFLICT') {
           this.close()
           this.$emit('conflict')
         } else if (d.status === 'OFFLINE') {
-          uni.showToast({ title: '暂时连不上案件库', icon: 'none' })
+          uni.showToast({ title: this.$t('version.libraryOffline'), icon: 'none' })
         } else {
-          uni.showToast({ title: '已经是最新稿了', icon: 'none' })
+          uni.showToast({ title: this.$t('version.alreadyLatest'), icon: 'none' })
         }
         this.$emit('changed')
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '取回失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.pullFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -380,7 +373,7 @@ export default {
         await checkCloud(this.projectId)
         this.$emit('changed')
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '暂时连不上案件库', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.libraryOffline'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -391,7 +384,7 @@ export default {
         const res = await getCloudMembers(this.projectId)
         this.members = (res && res.data && res.data.members) || []
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '读取参与人失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.loadMembersFailed'), icon: 'none' })
       } finally {
         this.membersLoading = false
       }
@@ -402,10 +395,10 @@ export default {
       try {
         await addCloudMember(this.projectId, this.addUsername, this.addRole)
         this.addUsername = ''
-        uni.showToast({ title: '已加进来', icon: 'none' })
+        uni.showToast({ title: this.$t('version.addedSuccess'), icon: 'none' })
         await this.loadMembers()
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '没能加进来', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.addMemberFailed'), icon: 'none' })
       } finally {
         this.memberBusy = false
       }
@@ -413,7 +406,7 @@ export default {
     copyInvite() {
       uni.setClipboardData({
         data: this.inviteText,
-        success: () => uni.showToast({ title: '已复制，粘贴给同事即可', icon: 'none' }),
+        success: () => uni.showToast({ title: this.$t('version.copiedPasteToColleague'), icon: 'none' }),
       })
     },
     async onConnect() {
@@ -424,18 +417,18 @@ export default {
           this.form.serverUrl.trim(), this.form.username.trim(), this.form.password, '桌面端')
         this.form = { serverUrl: '', username: '', password: '' }
         await this.loadConnections()
-        uni.showToast({ title: '已连上团队案件库', icon: 'none' })
+        uni.showToast({ title: this.$t('version.connectedToLibrary'), icon: 'none' })
         this.$emit('changed')
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '连接失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.connectFailed'), icon: 'none' })
       } finally {
         this.connectBusy = false
       }
     },
     async onDisconnect(conn) {
       const ok = await new Promise((r) => uni.showModal({
-        title: '退出这个案件库',
-        content: '退出后本机不再和这个案件库同步；已经放进去的案卷要重新连上才能继续交稿。案件库里的内容不受影响。',
+        title: this.$t('version.disconnectLibrary'),
+        content: this.$t('version.disconnectLibraryConfirmContent'),
         success: (res) => r(res.confirm),
       }))
       if (!ok) return
@@ -444,7 +437,7 @@ export default {
         await this.loadConnections()
         this.$emit('changed')
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '操作失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.disconnectFailed'), icon: 'none' })
       }
     },
   },

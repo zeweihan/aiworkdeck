@@ -1,9 +1,9 @@
 <template>
   <view class="page-project-home">
     <view class="home-topbar">
-      <text class="home-back btn-project-list" @tap="goProjectList">返回项目列表</text>
-      <text class="home-topbar-title">项目概览</text>
-      <view class="home-enter btn-workbench" @tap="goWorkbench">进入工作台</view>
+      <text class="home-back btn-project-list" @tap="goProjectList">{{ $t('projects.backToList') }}</text>
+      <text class="home-topbar-title">{{ $t('projects.overviewPageTitle') }}</text>
+      <view class="home-enter btn-workbench" @tap="goWorkbench">{{ $t('projects.enterWorkbench') }}</view>
     </view>
 
     <view class="home-scroll">
@@ -20,7 +20,7 @@
         <OverviewStatsBar :stats="stats" :loading="statsLoading" />
 
         <view class="home-section">
-          <text class="home-section-title">动态</text>
+          <text class="home-section-title">{{ $t('projects.activitySectionTitle') }}</text>
           <ActivityFeed
             :versions="versions"
             :background-runs="backgroundRuns"
@@ -30,12 +30,12 @@
         </view>
 
         <view class="home-section">
-          <text class="home-section-title">日程与任务</text>
+          <text class="home-section-title">{{ $t('projects.taskSectionTitle') }}</text>
           <TaskSchedule :tasks="tasks" :loading="tasksLoading" />
         </view>
 
         <view class="home-section">
-          <text class="home-section-title">AI 对话</text>
+          <text class="home-section-title">{{ $t('projects.conversationSectionTitle') }}</text>
           <ConversationList
             :conversations="conversations"
             :loading="conversationsLoading"
@@ -113,7 +113,7 @@ export default {
   onLoad(query) {
     const id = Number((query && query.id) || 0)
     if (!id) {
-      uni.showToast({ title: '缺少项目参数', icon: 'none' })
+      uni.showToast({ title: this.$t('projects.missingProjectParam'), icon: 'none' })
       uni.redirectTo({ url: '/pages/project-list/project-list' })
       return
     }
@@ -285,7 +285,7 @@ export default {
         if (this.$refs.profileHeader) {
           this.$refs.profileHeader.restoreEdit(payload.fieldKey, payload.value)
         }
-        uni.showToast({ title: (e && e.message) || '保存失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('projects.saveFailed'), icon: 'none' })
       }
     },
     goWorkbench() {

@@ -2,8 +2,8 @@
   <!-- Vue 3 多根节点：与 DdFilesPanel / ShareholderMeetingPanel 同构 -->
 
   <view class="lv-panel-header">
-    <text class="lv-panel-title">诉讼可视化</text>
-    <view class="lv-refresh-btn" @tap="reload" title="刷新">
+    <text class="lv-panel-title">{{ $t('panels.litTitle') }}</text>
+    <view class="lv-refresh-btn" @tap="reload" :title="$t('panels.litRefresh')">
       <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
         <path d="M21 3v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
@@ -16,21 +16,21 @@
     <text class="lv-notice-text">{{ status.reason }}</text>
   </view>
   <view class="lv-notice subtle" v-else-if="status && !status.graphviz">
-    <text class="lv-notice-text">这台机器没有 graphviz，流程图暂时画不了；时间轴、关系图、股权结构树等六种照常。</text>
+    <text class="lv-notice-text">{{ $t('panels.litNoGraphvizNotice') }}</text>
   </view>
 
   <!-- 出图 -->
   <view class="lv-section">
-    <text class="lv-section-title">出一张新图</text>
+    <text class="lv-section-title">{{ $t('panels.litNewDiagramSectionTitle') }}</text>
 
     <view class="lv-scope" @tap="pickScope">
-      <text class="lv-scope-label">材料</text>
+      <text class="lv-scope-label">{{ $t('panels.litScopeLabel') }}</text>
       <text class="lv-scope-value" :class="{ placeholder: !scopeLabel }">
-        {{ scopeLabel || '本项目全部材料（点击改为指定文件夹或文件）' }}
+        {{ scopeLabel || $t('panels.litScopeDefault') }}
       </text>
     </view>
 
-    <text class="lv-hint-label">图种</text>
+    <text class="lv-hint-label">{{ $t('panels.litKindsLabel') }}</text>
     <view class="lv-kinds">
       <view
         v-for="k in KINDS"
@@ -40,19 +40,19 @@
         @tap="diagramHint = diagramHint === k.value ? '' : k.value"
       >{{ k.label }}</view>
     </view>
-    <text class="lv-kind-tip">不选 = 让 AI 按材料自己判断该画哪种。</text>
+    <text class="lv-kind-tip">{{ $t('panels.litKindTip') }}</text>
 
     <view class="lv-btn primary" :class="{ disabled: starting }" @tap="start">
-      {{ starting ? '正在交给 AI…' : '开始出图' }}
+      {{ starting ? $t('panels.litStarting') : $t('panels.litStart') }}
     </view>
   </view>
 
   <!-- 图廊 -->
   <view class="lv-section">
-    <text class="lv-section-title">本项目的图（{{ diagrams.length }}）</text>
+    <text class="lv-section-title">{{ $t('panels.litGalleryTitle', { count: diagrams.length }) }}</text>
 
     <view class="lv-empty" v-if="!loading && diagrams.length === 0">
-      <text class="lv-empty-text">还没有图。上面选好材料点「开始出图」。</text>
+      <text class="lv-empty-text">{{ $t('panels.litEmptyText') }}</text>
     </view>
 
     <view v-for="d in diagrams" :key="d.folderId" class="lv-card">
@@ -63,8 +63,8 @@
             {{ layoutLabel(d.layout) }}<template v-if="d.mode"> · {{ d.mode }}</template>
           </text>
         </view>
-        <text class="lv-draft-badge" v-if="d.draft">草稿</text>
-        <text class="lv-edited-badge" v-else-if="d.handEdited">手工改过</text>
+        <text class="lv-draft-badge" v-if="d.draft">{{ $t('panels.litDraftBadge') }}</text>
+        <text class="lv-edited-badge" v-else-if="d.handEdited">{{ $t('panels.litHandEditedBadge') }}</text>
       </view>
 
       <view class="lv-card-formats">
@@ -72,10 +72,10 @@
       </view>
 
       <view class="lv-card-actions">
-        <view class="lv-btn ghost" @tap="openDiagram(d)">打开</view>
+        <view class="lv-btn ghost" @tap="openDiagram(d)">{{ $t('panels.litOpen') }}</view>
         <!-- 「编辑」是 .drawio 这份产物在面板里的唯一入口。没有它，可编辑版就只能
              从文件树里翻出来，等于大多数人不知道它存在。 -->
-        <view class="lv-btn ghost" v-if="d.drawioFileId" @tap="editDiagram(d)">编辑</view>
+        <view class="lv-btn ghost" v-if="d.drawioFileId" @tap="editDiagram(d)">{{ $t('panels.litEdit') }}</view>
         <view
           v-for="m in MODES"
           :key="m"
@@ -89,7 +89,7 @@
 
   <!-- MIT 许可要求保留版权声明：出图引擎 vendor 自 mqc-litigation-visual-redraw，见 litviz/UPSTREAM.md -->
   <view class="lv-credit">
-    <text class="lv-credit-text">出图引擎 mqc-litigation-visual-redraw · Copyright (c) 2026 缪奇川 (Miao Qichuan) · MIT License</text>
+    <text class="lv-credit-text">{{ $t('panels.litCreditText') }}</text>
   </view>
 </template>
 
@@ -100,6 +100,7 @@ import {
   restyleLitigationDiagram,
   getLitigationKickoffPrompt
 } from '@/services/api.js'
+import { t } from '@/i18n'
 
 // 与引擎的三种视觉模式一一对应（litviz/engine/references/visual-style.md）
 const MODES = ['奇川风', '歸藏风', '白描']
@@ -107,22 +108,24 @@ const MODES = ['奇川风', '歸藏风', '白描']
 // 面板只给"用户会用自己的话说出来"的图种。七种布局里 comparison_table
 // 不单列——它是关系族的 A/B 变体，用户想要时在对话里说就行，
 // 摆在这里会让这排按钮看起来像一份需要先学习的分类表。
+// value 是发给服务端拼 prompt 的触发词（必须原样中文，不翻译）；label 是面板按钮展示文案
 const KINDS = [
-  { value: '事实经过时间轴', label: '事实时间轴' },
-  { value: '诉讼时效/保证期间甘特图', label: '时效期间图' },
-  { value: '案件流程图', label: '流程图' },
-  { value: '当事人法律关系图', label: '关系图' },
-  { value: '股权控制结构树', label: '股权结构' }
+  { value: '事实经过时间轴', label: t('panels.litKindTimeline') },
+  { value: '诉讼时效/保证期间甘特图', label: t('panels.litKindPeriod') },
+  { value: '案件流程图', label: t('panels.litKindFlowchart') },
+  { value: '当事人法律关系图', label: t('panels.litKindRelation') },
+  { value: '股权控制结构树', label: t('panels.litKindEquity') }
 ]
 
-const LAYOUT_LABELS = {
-  numbered_point_timeline: '时间轴 · 编号型',
-  dated_point_timeline: '时间轴 · 日期型',
-  proportional_gantt: '期间图 · 甘特',
-  graphviz_flow: '流程图',
-  graphviz_relation: '关系图',
-  relation_tree: '层级结构树',
-  comparison_table: '对比表'
+// key 为引擎输出的布局标识符（数据，不翻译），value 走 i18n 键名（下方 layoutLabel() 里取值）
+const LAYOUT_LABEL_KEYS = {
+  numbered_point_timeline: 'litLayoutNumberedTimeline',
+  dated_point_timeline: 'litLayoutDatedTimeline',
+  proportional_gantt: 'litLayoutGantt',
+  graphviz_flow: 'litLayoutFlow',
+  graphviz_relation: 'litLayoutRelation',
+  relation_tree: 'litLayoutTree',
+  comparison_table: 'litLayoutComparison'
 }
 
 export default {
@@ -157,7 +160,8 @@ export default {
   },
   methods: {
     layoutLabel(layout) {
-      return LAYOUT_LABELS[layout] || '图'
+      const key = LAYOUT_LABEL_KEYS[layout]
+      return key ? this.$t(`panels.${key}`) : this.$t('panels.litLayoutFallback')
     },
 
     async reload() {
@@ -184,7 +188,7 @@ export default {
     async start() {
       if (this.starting || !this.projectId) return
       if (this.status && !this.status.available) {
-        uni.showToast({ title: this.status.reason || '出图环境不可用', icon: 'none' })
+        uni.showToast({ title: this.status.reason || this.$t('panels.litUnavailableFallback'), icon: 'none' })
         return
       }
       this.starting = true
@@ -198,7 +202,7 @@ export default {
           this.$emit('start-drawing', { prompt: res.prompt })
         }
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '启动失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('panels.litStartFailedFallback'), icon: 'none' })
       } finally {
         this.starting = false
       }
@@ -222,10 +226,10 @@ export default {
       if (d.handEdited) {
         const ok = await new Promise((resolve) => {
           uni.showModal({
-            title: '这张图手工改过',
-            content: `换成${mode}会用语义地图重新画一遍，你在 draw.io 里做的修改会被覆盖。继续吗？`,
-            confirmText: '继续重画',
-            cancelText: '取消',
+            title: this.$t('panels.litHandEditedConfirmTitle'),
+            content: this.$t('panels.litHandEditedConfirmBody', { mode }),
+            confirmText: this.$t('panels.litContinueRedraw'),
+            cancelText: this.$t('panels.litCancel'),
             success: (res) => resolve(!!res.confirm),
             fail: () => resolve(false)
           })
@@ -233,15 +237,15 @@ export default {
         if (!ok) return
       }
       this.restylingId = d.folderId
-      uni.showLoading({ title: '重画中…', mask: true })
+      uni.showLoading({ title: this.$t('panels.litRedrawing'), mask: true })
       try {
         await restyleLitigationDiagram(this.projectId, d.folderId, mode)
         await this.reload()
         // 图变了但文件 ID 没变，已打开的标签要重新拉一次
         uni.$emit('awd:litviz-restyled', { folderId: d.folderId, svgFileId: d.svgFileId })
-        uni.showToast({ title: `已换成${mode}`, icon: 'none' })
+        uni.showToast({ title: this.$t('panels.litRestyledTo', { mode }), icon: 'none' })
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '重画失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('panels.litRedrawFailedFallback'), icon: 'none' })
       } finally {
         uni.hideLoading()
         this.restylingId = null

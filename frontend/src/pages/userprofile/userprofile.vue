@@ -25,10 +25,10 @@
               <!-- Hidden File Input for Avatar Upload -->
               <!-- Note: uniapp h5 mode uses uni.chooseImage, so we don't strictly need an input tag if we use the API -->
             </view>
-            <text class="user-name">{{ userInfo.displayName || '用户' }}</text>
+            <text class="user-name">{{ userInfo.displayName || $t('account.defaultUserName') }}</text>
             <text class="user-handle">@{{ userInfo.username || userInfo.id || 'unknown' }}</text>
             <view class="user-role-tag">
-              <text class="role-text">标准用户</text>
+              <text class="role-text">{{ $t('account.standardUserRole') }}</text>
             </view>
           </view>
           
@@ -42,7 +42,7 @@
                'goToProject'，goToProjectList 含它作子串会被误判成残留的旧方法。
                .nav-separator 复用既有样式（此前只留了个「Separator」注释占位，没有元素用它）。 -->
           <view class="nav-item nav-item-back" @tap="goBackToList">
-            <text class="nav-text">返回项目列表</text>
+            <text class="nav-text">{{ $t('account.backToProjectList') }}</text>
           </view>
           <view class="nav-separator"></view>
 
@@ -81,24 +81,24 @@
           <!-- 工作记录 Tab -->
           <view v-if="activeTab === 'work_log'" class="panel-work-log">
              <view class="log-filter-bar">
-                 <input class="filter-input" v-model="activityFilter.date" placeholder="日期 (YYYY-MM-DD)" />
-                 <input class="filter-input" v-model="activityFilter.project" placeholder="项目名称" />
-                 <input class="filter-input" v-model="activityFilter.content" placeholder="工作内容关键词" />
-                 <button class="btn-export" @tap="exportLogsToExcel">导出 Excel</button>
+                 <input class="filter-input" v-model="activityFilter.date" :placeholder="$t('account.filterDatePlaceholder')" />
+                 <input class="filter-input" v-model="activityFilter.project" :placeholder="$t('account.projectNameLabel')" />
+                 <input class="filter-input" v-model="activityFilter.content" :placeholder="$t('account.filterContentPlaceholder')" />
+                 <button class="btn-export" @tap="exportLogsToExcel">{{ $t('account.exportExcelBtn') }}</button>
              </view>
-             
+
              <view class="log-table-container">
                  <view class="log-table-header">
-                     <text class="th th-project">项目</text>
-                     <text class="th th-action">操作</text>
-                     <text class="th th-object">对象</text>
-                     <text class="th th-start">开始时间</text>
-                     <text class="th th-end">结束时间</text>
-                     <text class="th th-duration">累计时长</text>
-                     <text class="th th-idle">连续无动作时间</text>
+                     <text class="th th-project">{{ $t('account.thProject') }}</text>
+                     <text class="th th-action">{{ $t('account.thAction') }}</text>
+                     <text class="th th-object">{{ $t('account.thObject') }}</text>
+                     <text class="th th-start">{{ $t('account.thStart') }}</text>
+                     <text class="th th-end">{{ $t('account.thEnd') }}</text>
+                     <text class="th th-duration">{{ $t('account.thDuration') }}</text>
+                     <text class="th th-idle">{{ $t('account.thIdle') }}</text>
                  </view>
-                 <view v-if="activityLoading" class="loading-row">加载中...</view>
-                 <view v-else-if="getFilteredLogs().length === 0" class="empty-row">无记录</view>
+                 <view v-if="activityLoading" class="loading-row">{{ $t('account.loadingEllipsis') }}</view>
+                 <view v-else-if="getFilteredLogs().length === 0" class="empty-row">{{ $t('account.noRecords') }}</view>
                  <scroll-view v-else scroll-y class="log-table-body">
                      <view v-for="log in getFilteredLogs()" :key="log.id" class="log-table-row">
                          <text class="td td-project" :title="getLogProject(log)">{{ getLogProject(log) }}</text>
@@ -116,20 +116,20 @@
           <!-- 我的收藏 -->
           <view v-else-if="activeTab === 'favorites'" class="panel-favorites">
             <view v-if="favoritesLoading" class="loading">
-              <text class="loading-text">加载中...</text>
+              <text class="loading-text">{{ $t('account.loadingEllipsis') }}</text>
             </view>
             <view v-else-if="favorites.length === 0" class="empty-state">
               <view class="empty-icon-circle">
                 <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.star" :key="gi" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </view>
-              <text class="empty-title">我的收藏</text>
-              <text class="empty-desc">暂无收藏内容</text>
+              <text class="empty-title">{{ $t('account.tabFavorites') }}</text>
+              <text class="empty-desc">{{ $t('account.emptyFavoritesDesc') }}</text>
             </view>
             <view v-else class="favorites-list">
               <view v-for="fav in favorites" :key="fav.id" class="favorite-card">
                 <view class="favorite-header">
-                  <text class="favorite-title">{{ fav.title || (fav.sourceUrl ? fav.sourceUrl : '未命名摘录') }}</text>
-                  <button class="btn-danger-outline small" @tap.stop="handleDeleteFavorite(fav.id)">删除</button>
+                  <text class="favorite-title">{{ fav.title || (fav.sourceUrl ? fav.sourceUrl : $t('account.untitledExcerpt')) }}</text>
+                  <button class="btn-danger-outline small" @tap.stop="handleDeleteFavorite(fav.id)">{{ $t('common.delete') }}</button>
                 </view>
                 <view v-if="fav.sourceUrl" class="favorite-url">
                   <text class="url-text">{{ fav.sourceUrl }}</text>
@@ -153,8 +153,8 @@
               <view class="empty-icon-circle">
                 <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.docText" :key="gi" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
               </view>
-              <text class="empty-title">我的代办</text>
-              <text class="empty-desc">暂无待办事项</text>
+              <text class="empty-title">{{ $t('account.tabTodos') }}</text>
+              <text class="empty-desc">{{ $t('account.emptyTodosDesc') }}</text>
             </view>
           </view>
 
@@ -162,147 +162,147 @@
           <view v-else-if="activeTab === 'settings'" class="panel-settings">
             <view class="settings-form">
               <view class="form-group">
-                <text class="group-title">基本信息</text>
+                <text class="group-title">{{ $t('account.basicInfoGroupTitle') }}</text>
                 <view class="form-row">
-                  <text class="form-label">头像</text>
+                  <text class="form-label">{{ $t('account.avatarLabel') }}</text>
                   <view class="avatar-preview">
                     <text class="avatar-char">{{ userInfo.displayName?.charAt(0) || 'U' }}</text>
                   </view>
                 </view>
                 <view class="form-row">
-                  <text class="form-label">昵称</text>
+                  <text class="form-label">{{ $t('account.nicknameLabel') }}</text>
                   <text class="form-value">{{ userInfo.displayName }}</text>
                 </view>
               </view>
-              
+
               <!-- 账号安全（server 模式；认证器恒可用，短信取决于通道配置） -->
               <view v-if="!isDesktop" class="form-group">
-                <text class="group-title">账号安全</text>
+                <text class="group-title">{{ $t('account.accountSecurityGroupTitle') }}</text>
 
                 <!-- 认证器（TOTP）：零成本、无国界，登录二次验证优先走它 -->
                 <view class="form-row">
-                  <text class="form-label">认证器</text>
-                  <text class="form-value">{{ userInfo.totpEnabled ? '已绑定' : '未绑定' }}</text>
-                  <text class="bind-link" @tap="toggleTotpPanel">{{ userInfo.totpEnabled ? '解绑' : '绑定' }}</text>
+                  <text class="form-label">{{ $t('account.authenticatorLabel') }}</text>
+                  <text class="form-value">{{ userInfo.totpEnabled ? $t('account.bound') : $t('account.unbound') }}</text>
+                  <text class="bind-link" @tap="toggleTotpPanel">{{ userInfo.totpEnabled ? $t('account.unbindAction') : $t('account.bindAction') }}</text>
                 </view>
                 <view v-if="showTotpPanel" class="bind-phone-form">
                   <template v-if="!userInfo.totpEnabled">
-                    <text class="bind-tip">用 Google Authenticator、1Password 等 App 扫码，或手工录入下方密钥</text>
+                    <text class="bind-tip">{{ $t('account.totpSetupTip') }}</text>
                     <image v-if="totpQrDataUrl" class="totp-qr" :src="totpQrDataUrl" mode="widthFix" />
                     <view class="form-row">
-                      <text class="form-label">密钥</text>
+                      <text class="form-label">{{ $t('account.secretKeyLabel') }}</text>
                       <text class="totp-secret">{{ totpSecret }}</text>
                     </view>
                     <view class="form-row">
-                      <text class="form-label">验证码</text>
-                      <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" placeholder="App 上的 6 位码" />
+                      <text class="form-label">{{ $t('account.verificationCodeLabel') }}</text>
+                      <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" :placeholder="$t('account.appCodePlaceholder')" />
                     </view>
                     <view class="bind-actions">
-                      <button class="btn-bind-confirm" @tap="confirmTotpBind">完成绑定</button>
-                      <text class="bind-link" @tap="cancelTotpPanel">取消</text>
+                      <button class="btn-bind-confirm" @tap="confirmTotpBind">{{ $t('account.finishBindBtn') }}</button>
+                      <text class="bind-link" @tap="cancelTotpPanel">{{ $t('common.cancel') }}</text>
                     </view>
                   </template>
                   <template v-else>
-                    <text class="bind-tip">解绑需要验证一次当前验证码</text>
+                    <text class="bind-tip">{{ $t('account.unbindTotpTip') }}</text>
                     <view class="form-row">
-                      <text class="form-label">验证码</text>
-                      <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" placeholder="App 上的 6 位码" />
+                      <text class="form-label">{{ $t('account.verificationCodeLabel') }}</text>
+                      <input class="bind-input code" type="number" maxlength="6" v-model="totpCodeInput" :placeholder="$t('account.appCodePlaceholder')" />
                     </view>
                     <view class="bind-actions">
-                      <button class="btn-bind-confirm" @tap="confirmTotpDisable">确认解绑</button>
-                      <text class="bind-link" @tap="cancelTotpPanel">取消</text>
+                      <button class="btn-bind-confirm" @tap="confirmTotpDisable">{{ $t('account.confirmUnbindBtn') }}</button>
+                      <text class="bind-link" @tap="cancelTotpPanel">{{ $t('common.cancel') }}</text>
                     </view>
                   </template>
                 </view>
 
                 <view v-if="userInfo.smsAuthEnabled" class="form-row">
-                  <text class="form-label">手机号</text>
-                  <text class="form-value">{{ userInfo.phoneMasked || '未绑定' }}</text>
-                  <text class="bind-link" @tap="showBindPhone = !showBindPhone">{{ userInfo.phoneMasked ? '更换' : '绑定' }}</text>
+                  <text class="form-label">{{ $t('account.phoneLabel') }}</text>
+                  <text class="form-value">{{ userInfo.phoneMasked || $t('account.unbound') }}</text>
+                  <text class="bind-link" @tap="showBindPhone = !showBindPhone">{{ userInfo.phoneMasked ? $t('account.changeAction') : $t('account.bindAction') }}</text>
                 </view>
                 <view v-if="showBindPhone" class="bind-phone-form">
                   <view class="form-row">
-                    <text class="form-label">新手机号</text>
-                    <input class="bind-input" type="number" maxlength="11" v-model="bindPhoneInput" placeholder="请输入大陆手机号" />
+                    <text class="form-label">{{ $t('account.newPhoneLabel') }}</text>
+                    <input class="bind-input" type="number" maxlength="11" v-model="bindPhoneInput" :placeholder="$t('account.phoneInputPlaceholder')" />
                   </view>
                   <view class="form-row">
-                    <text class="form-label">验证码</text>
-                    <input class="bind-input code" type="number" maxlength="6" v-model="bindCodeInput" placeholder="6 位验证码" />
+                    <text class="form-label">{{ $t('account.verificationCodeLabel') }}</text>
+                    <input class="bind-input code" type="number" maxlength="6" v-model="bindCodeInput" :placeholder="$t('account.sixDigitCodePlaceholder')" />
                     <button class="btn-send-code" :disabled="bindCountdown > 0" @tap="sendBindPhoneCode">
-                      {{ bindCountdown > 0 ? bindCountdown + 's' : '获取验证码' }}
+                      {{ bindCountdown > 0 ? bindCountdown + 's' : $t('account.getCodeBtn') }}
                     </button>
                   </view>
                   <view class="bind-actions">
-                    <button class="btn-bind-confirm" @tap="confirmBindPhone">确认绑定</button>
-                    <text class="bind-link" @tap="cancelBindPhone">取消</text>
+                    <button class="btn-bind-confirm" @tap="confirmBindPhone">{{ $t('account.confirmBindBtn') }}</button>
+                    <text class="bind-link" @tap="cancelBindPhone">{{ $t('common.cancel') }}</text>
                   </view>
-                  <text class="bind-tip">绑定后，本账号在网页端与桌面端连接时的密码登录均需短信验证码</text>
+                  <text class="bind-tip">{{ $t('account.bindPhoneTip') }}</text>
                 </view>
 
                 <view v-if="userInfo.mailAuthEnabled" class="form-row">
-                  <text class="form-label">邮箱</text>
-                  <text class="form-value">{{ userInfo.emailMasked || '未绑定' }}</text>
-                  <text class="bind-link" @tap="showBindEmail = !showBindEmail">{{ userInfo.emailMasked ? '更换' : '绑定' }}</text>
+                  <text class="form-label">{{ $t('account.emailLabel') }}</text>
+                  <text class="form-value">{{ userInfo.emailMasked || $t('account.unbound') }}</text>
+                  <text class="bind-link" @tap="showBindEmail = !showBindEmail">{{ userInfo.emailMasked ? $t('account.changeAction') : $t('account.bindAction') }}</text>
                 </view>
                 <view v-if="showBindEmail" class="bind-phone-form">
                   <view class="form-row">
-                    <text class="form-label">新邮箱</text>
-                    <input class="bind-input" v-model="bindEmailInput" placeholder="请输入邮箱地址" />
+                    <text class="form-label">{{ $t('account.newEmailLabel') }}</text>
+                    <input class="bind-input" v-model="bindEmailInput" :placeholder="$t('account.emailInputPlaceholder')" />
                   </view>
                   <view class="form-row">
-                    <text class="form-label">验证码</text>
-                    <input class="bind-input code" type="number" maxlength="6" v-model="bindEmailCodeInput" placeholder="6 位验证码" />
+                    <text class="form-label">{{ $t('account.verificationCodeLabel') }}</text>
+                    <input class="bind-input code" type="number" maxlength="6" v-model="bindEmailCodeInput" :placeholder="$t('account.sixDigitCodePlaceholder')" />
                     <button class="btn-send-code" :disabled="bindEmailCountdown > 0" @tap="sendBindEmailCode">
-                      {{ bindEmailCountdown > 0 ? bindEmailCountdown + 's' : '获取验证码' }}
+                      {{ bindEmailCountdown > 0 ? bindEmailCountdown + 's' : $t('account.getCodeBtn') }}
                     </button>
                   </view>
                   <view class="bind-actions">
-                    <button class="btn-bind-confirm" @tap="confirmBindEmail">确认绑定</button>
-                    <text class="bind-link" @tap="cancelBindEmail">取消</text>
+                    <button class="btn-bind-confirm" @tap="confirmBindEmail">{{ $t('account.confirmBindBtn') }}</button>
+                    <text class="bind-link" @tap="cancelBindEmail">{{ $t('common.cancel') }}</text>
                   </view>
-                  <text class="bind-tip">绑定邮箱后，登录二次验证优先走邮件而不再发短信</text>
+                  <text class="bind-tip">{{ $t('account.bindEmailTip') }}</text>
                 </view>
               </view>
 
               <!-- 授权（桌面端）：当前模式 / 激活时间 / 解除授权 -->
               <view v-if="isDesktop && licenseInfo.unlocked" class="form-group">
-                <text class="group-title">授权</text>
+                <text class="group-title">{{ $t('account.licenseGroupTitle') }}</text>
                 <view class="form-row">
-                  <text class="form-label">当前模式</text>
+                  <text class="form-label">{{ $t('account.currentModeLabel') }}</text>
                   <!-- 读 edition 不读 mode：mode 只是授权票据，先用试用码解锁、
                        后连账户的用户 mode 永远停在 trial（后端已把两条状态组合成 edition） -->
-                  <text class="form-value">{{ licenseInfo.edition === 'paid' ? '正式版' : '试用版' }}</text>
+                  <text class="form-value">{{ licenseInfo.edition === 'paid' ? $t('account.paidEdition') : $t('account.trialEdition') }}</text>
                 </view>
                 <view class="form-row">
-                  <text class="form-label">激活时间</text>
+                  <text class="form-label">{{ $t('account.activatedAtLabel') }}</text>
                   <text class="form-value">{{ licenseInfo.activatedAt ? formatTime(licenseInfo.activatedAt) : '—' }}</text>
                 </view>
-                <button class="btn-logout-settings" @tap="handleDeactivate">解除授权</button>
+                <button class="btn-logout-settings" @tap="handleDeactivate">{{ $t('account.deactivateBtn') }}</button>
               </view>
 
               <!-- 插件访问令牌（桌面端）：Office 插件等外部客户端连接本机后端的凭据 -->
               <view v-if="isDesktop" class="form-group">
-                <text class="group-title">插件访问令牌</text>
-                <text class="bind-tip">供 Microsoft Office 插件等外部客户端连接本机使用。令牌等同于你的访问身份，请妥善保管。</text>
+                <text class="group-title">{{ $t('account.deviceTokenGroupTitle') }}</text>
+                <text class="bind-tip">{{ $t('account.deviceTokenTip') }}</text>
                 <view class="form-row">
-                  <text class="form-label">备注名</text>
-                  <input class="bind-input" v-model="tokenNameInput" maxlength="30" placeholder="例如：Word 插件（可留空）" />
-                  <button class="btn-send-code" :disabled="tokenIssuing" @tap="handleIssueToken">生成令牌</button>
+                  <text class="form-label">{{ $t('account.tokenNameLabel') }}</text>
+                  <input class="bind-input" v-model="tokenNameInput" maxlength="30" :placeholder="$t('account.tokenNamePlaceholder')" />
+                  <button class="btn-send-code" :disabled="tokenIssuing" @tap="handleIssueToken">{{ $t('account.issueTokenBtn') }}</button>
                 </view>
                 <view v-for="t in deviceTokens" :key="t.id" class="form-row">
                   <view class="token-info">
-                    <text class="token-name">{{ t.name || '未命名令牌' }}</text>
+                    <text class="token-name">{{ t.name || $t('account.unnamedToken') }}</text>
                     <text class="token-meta">
-                      创建于 {{ formatTime(t.createdAt) || '—' }} · 最近使用 {{ t.lastUsedAt ? formatTime(t.lastUsedAt) : '从未' }}
+                      {{ $t('account.tokenMeta', { createdAt: formatTime(t.createdAt) || '—', lastUsed: t.lastUsedAt ? formatTime(t.lastUsedAt) : $t('account.never') }) }}
                     </text>
                   </view>
-                  <text class="bind-link" @tap="handleRevokeToken(t)">撤销</text>
+                  <text class="bind-link" @tap="handleRevokeToken(t)">{{ $t('account.revokeAction') }}</text>
                 </view>
-                <text v-if="!deviceTokens.length" class="bind-tip">还没有生成过令牌</text>
+                <text v-if="!deviceTokens.length" class="bind-tip">{{ $t('account.noTokensYet') }}</text>
               </view>
 
               <view v-if="!isDesktop" class="form-group">
-                  <button class="btn-logout-settings" @tap="handleLogout">退出登录</button>
+                  <button class="btn-logout-settings" @tap="handleLogout">{{ $t('account.logoutBtn') }}</button>
               </view>
             </view>
           </view>
@@ -336,15 +336,15 @@ export default {
     return {
       activeTab: 'work_log',
       tabs: [
-        { key: 'work_log', label: '工作记录' },
-        { key: 'favorites', label: '我的收藏' },
-        { key: 'todos', label: '我的代办' },
-        { key: 'settings', label: '设置' },
+        { key: 'work_log', label: this.$t('account.tabWorkLog') },
+        { key: 'favorites', label: this.$t('account.tabFavorites') },
+        { key: 'todos', label: this.$t('account.tabTodos') },
+        { key: 'settings', label: this.$t('common.settings') },
       ],
       userInfo: {
         id: null,
         username: '',
-        displayName: '用户',
+        displayName: this.$t('account.defaultUserName'),
         avatarUrl: null,
       },
       favoritesLoading: false,
@@ -446,18 +446,18 @@ export default {
             success: async (res) => {
                 const tempFilePath = res.tempFilePaths[0];
                 try {
-                    uni.showLoading({ title: '上传中...' });
+                    uni.showLoading({ title: this.$t('account.uploadingTitle') });
                     const result = await uploadAvatar(tempFilePath);
-                    
+
                     if (result.data && result.data.avatarUrl) {
                         this.userInfo.avatarUrl = result.data.avatarUrl;
                         // Update local storage/session
                         setSessionUser(this.userInfo);
-                        uni.showToast({ title: '头像更新成功', icon: 'success' });
+                        uni.showToast({ title: this.$t('account.avatarUpdateSuccess'), icon: 'success' });
                     }
                 } catch (e) {
                     console.error('Avatar upload failed', e);
-                    uni.showToast({ title: '上传失败: ' + e.message, icon: 'none' });
+                    uni.showToast({ title: this.$t('account.avatarUploadFailed', { message: e.message }), icon: 'none' });
                 } finally {
                     uni.hideLoading();
                 }
@@ -492,70 +492,70 @@ export default {
       try {
         const res = await issueLocalDeviceToken(this.tokenNameInput.trim())
         const token = res && res.data && res.data.token
-        if (!token) throw new Error('令牌生成失败')
+        if (!token) throw new Error(this.$t('account.tokenIssueFailed'))
         this.tokenNameInput = ''
         await this.loadDeviceTokens()
         // 明文只在这一次拿得到，弹窗里直接给复制
         uni.showModal({
-          title: '令牌已生成',
-          content: token + '\n\n令牌仅显示这一次，关闭后无法再次查看。请立即复制并粘贴到插件设置里。',
-          cancelText: '关闭',
-          confirmText: '复制',
+          title: this.$t('account.tokenGeneratedTitle'),
+          content: token + '\n\n' + this.$t('account.tokenGeneratedTip'),
+          cancelText: this.$t('common.close'),
+          confirmText: this.$t('account.copyAction'),
           success: (r) => {
             if (!r.confirm) return
             uni.setClipboardData({
               data: token,
-              success: () => uni.showToast({ title: '已复制', icon: 'none' }),
+              success: () => uni.showToast({ title: this.$t('common.copied'), icon: 'none' }),
             })
           },
         })
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '令牌生成失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('account.tokenIssueFailed'), icon: 'none' })
       } finally {
         this.tokenIssuing = false
       }
     },
     handleRevokeToken(token) {
       uni.showModal({
-        title: '撤销令牌',
-        content: '撤销后，正在使用这枚令牌的插件会立即失去访问权，需要重新生成。确定撤销吗？',
-        cancelText: '取消',
-        confirmText: '确认撤销',
+        title: this.$t('account.revokeTokenTitle'),
+        content: this.$t('account.revokeTokenContent'),
+        cancelText: this.$t('common.cancel'),
+        confirmText: this.$t('account.confirmRevokeBtn'),
         success: async (r) => {
           if (!r.confirm) return
           try {
             await revokeDeviceToken(token.id)
             await this.loadDeviceTokens()
-            uni.showToast({ title: '已撤销', icon: 'none' })
+            uni.showToast({ title: this.$t('account.revokedToast'), icon: 'none' })
           } catch (e) {
-            uni.showToast({ title: (e && e.message) || '撤销失败', icon: 'none' })
+            uni.showToast({ title: (e && e.message) || this.$t('account.revokeFailed'), icon: 'none' })
           }
         },
       })
     },
     handleDeactivate() {
       uni.showModal({
-        title: '解除授权',
-        content: '解除后应用将回到解锁页，需要重新输入试用码或账户 Key 才能继续使用。确定解除吗？',
-        cancelText: '取消',
-        confirmText: '确认解除',
+        title: this.$t('account.deactivateBtn'),
+        content: this.$t('account.deactivateContent'),
+        cancelText: this.$t('common.cancel'),
+        confirmText: this.$t('account.confirmDeactivateBtn'),
         success: async (res) => {
           if (!res.confirm) return
           try {
             await deactivateLicense()
             uni.reLaunch({ url: '/pages/launch/launch' })
           } catch (e) {
-            uni.showToast({ title: (e && e.message) || '解除授权失败', icon: 'none' })
+            uni.showToast({ title: (e && e.message) || this.$t('account.deactivateFailed'), icon: 'none' })
           }
         }
       })
     },
     handleLogout() {
       uni.showModal({
-        title: '确认注销',
-        content: '确定要退出登录吗？',
-        cancelText: '取消',
-        confirmText: '确认',
+        title: this.$t('account.logoutConfirmTitle'),
+        content: this.$t('account.logoutConfirmContent'),
+        cancelText: this.$t('common.cancel'),
+        confirmText: this.$t('account.confirmBtn'),
         success: (res) => {
           if (!res.confirm) return
           try {
@@ -631,12 +631,12 @@ export default {
              const seconds = log.duration / 1000
              const roundedSeconds = Math.ceil(seconds / 15) * 15
              const minutes = roundedSeconds / 60
-             return minutes.toFixed(2) + '分'
+             return this.$t('account.minutesSuffix', { count: minutes.toFixed(2) })
         }
         // Fallback for old logs or if duration is 0 (instant actions)
         if (log.metaInfo && log.metaInfo.includes('总时长:')) {
              const match = log.metaInfo.match(/总时长:\s*([\d.]+)分/)
-             if (match) return match[1] + '分'
+             if (match) return this.$t('account.minutesSuffix', { count: match[1] })
         }
         return '-'
     },
@@ -655,7 +655,7 @@ export default {
         // Simple CSV export for now
         const logs = this.getFilteredLogs()
         let csvContent = "data:text/csv;charset=utf-8,\uFEFF"; // Add BOM
-        csvContent += "项目,操作,对象,开始时间,结束时间,累计时长,连续无动作时间\n";
+        csvContent += `${this.$t('account.thProject')},${this.$t('account.thAction')},${this.$t('account.thObject')},${this.$t('account.thStart')},${this.$t('account.thEnd')},${this.$t('account.thDuration')},${this.$t('account.thIdle')}\n`;
         
         logs.forEach(log => {
             const project = (this.getLogProject(log) || '').replace(/,/g, ' ')
@@ -684,7 +684,7 @@ export default {
         this.favorites = Array.isArray(list) ? list : (list?.data || [])
       } catch (e) {
         console.error('加载收藏失败:', e)
-        uni.showToast({ title: '加载收藏失败', icon: 'none' })
+        uni.showToast({ title: this.$t('account.loadFavoritesFailed'), icon: 'none' })
       } finally {
         this.favoritesLoading = false
       }
@@ -694,19 +694,19 @@ export default {
     },
     async handleDeleteFavorite(id) {
       uni.showModal({
-        title: '确认删除',
-        content: '确定要删除该收藏吗？',
-        cancelText: '取消',
-        confirmText: '确认',
+        title: this.$t('account.deleteFavoriteTitle'),
+        content: this.$t('account.deleteFavoriteContent'),
+        cancelText: this.$t('common.cancel'),
+        confirmText: this.$t('account.confirmBtn'),
         success: async (res) => {
           if (!res.confirm) return
           try {
             await deleteFavorite(id)
             await this.loadFavorites()
-            uni.showToast({ title: '删除成功', icon: 'success' })
+            uni.showToast({ title: this.$t('account.deleteSuccessToast'), icon: 'success' })
           } catch (e) {
             console.error('删除收藏失败:', e)
-            uni.showToast({ title: '删除失败', icon: 'none' })
+            uni.showToast({ title: this.$t('account.deleteFailedToast'), icon: 'none' })
           }
         }
       })
@@ -746,37 +746,37 @@ export default {
         this.totpQrDataUrl = uri ? await QRCode.toDataURL(uri, { margin: 1, width: 180 }) : ''
       } catch (e) {
         this.showTotpPanel = false
-        uni.showToast({ title: e.message || '获取绑定信息失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('account.getTotpBindInfoFailed'), icon: 'none' })
       }
     },
     async confirmTotpBind() {
       if (!this.totpCodeInput || this.totpCodeInput.length < 6) {
-        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' })
+        uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' })
         return
       }
       try {
         await totpActivate(this.totpCodeInput)
         this.userInfo = { ...this.userInfo, totpEnabled: true }
         setSessionUser(this.userInfo)
-        uni.showToast({ title: '认证器已绑定', icon: 'success' })
+        uni.showToast({ title: this.$t('account.totpBoundSuccess'), icon: 'success' })
         this.cancelTotpPanel()
       } catch (e) {
-        uni.showToast({ title: e.message || '绑定失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('account.bindFailed'), icon: 'none' })
       }
     },
     async confirmTotpDisable() {
       if (!this.totpCodeInput || this.totpCodeInput.length < 6) {
-        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' })
+        uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' })
         return
       }
       try {
         await totpDisable(this.totpCodeInput)
         this.userInfo = { ...this.userInfo, totpEnabled: false }
         setSessionUser(this.userInfo)
-        uni.showToast({ title: '认证器已解绑', icon: 'success' })
+        uni.showToast({ title: this.$t('account.totpUnboundSuccess'), icon: 'success' })
         this.cancelTotpPanel()
       } catch (e) {
-        uni.showToast({ title: e.message || '解绑失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('account.unbindFailed'), icon: 'none' })
       }
     },
     cancelTotpPanel() {
@@ -788,12 +788,12 @@ export default {
     async sendBindPhoneCode() {
       if (this.bindCountdown > 0) return
       if (!/^1[3-9]\d{9}$/.test(this.bindPhoneInput)) {
-        uni.showToast({ title: '请输入正确的手机号', icon: 'none' })
+        uni.showToast({ title: this.$t('account.invalidPhone'), icon: 'none' })
         return
       }
       try {
         await sendSmsCode({ scene: 'bind', phone: this.bindPhoneInput })
-        uni.showToast({ title: '验证码已发送', icon: 'none' })
+        uni.showToast({ title: this.$t('account.codeSentToast'), icon: 'none' })
         this.bindCountdown = 60
         if (this.bindCountdownTimer) clearInterval(this.bindCountdownTimer)
         this.bindCountdownTimer = setInterval(() => {
@@ -805,23 +805,23 @@ export default {
           }
         }, 1000)
       } catch (e) {
-        uni.showToast({ title: e.message || '发送失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('account.sendFailed'), icon: 'none' })
       }
     },
     async confirmBindPhone() {
       if (!this.bindCodeInput || this.bindCodeInput.length < 6) {
-        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' })
+        uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' })
         return
       }
       try {
         const res = await bindPhone(this.bindPhoneInput, this.bindCodeInput)
-        uni.showToast({ title: '绑定成功', icon: 'success' })
+        uni.showToast({ title: this.$t('account.bindSuccessToast'), icon: 'success' })
         const phoneMasked = (res.data && res.data.phoneMasked) || ''
         this.userInfo = { ...this.userInfo, phoneMasked }
         setSessionUser(this.userInfo)
         this.cancelBindPhone()
       } catch (e) {
-        uni.showToast({ title: e.message || '绑定失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('account.bindFailed'), icon: 'none' })
       }
     },
     cancelBindPhone() {
@@ -838,12 +838,12 @@ export default {
       if (this.bindEmailCountdown > 0) return
       // 只挡明显不是邮箱的输入；真正的规范化与判定在后端，前端不复刻一套正则
       if (!/^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/.test((this.bindEmailInput || '').trim())) {
-        uni.showToast({ title: '请输入正确的邮箱地址', icon: 'none' })
+        uni.showToast({ title: this.$t('account.invalidEmail'), icon: 'none' })
         return
       }
       try {
         await sendMailCode({ scene: 'bind', email: this.bindEmailInput.trim() })
-        uni.showToast({ title: '验证码已发送', icon: 'none' })
+        uni.showToast({ title: this.$t('account.codeSentToast'), icon: 'none' })
         this.bindEmailCountdown = 60
         if (this.bindEmailCountdownTimer) clearInterval(this.bindEmailCountdownTimer)
         this.bindEmailCountdownTimer = setInterval(() => {
@@ -855,23 +855,23 @@ export default {
           }
         }, 1000)
       } catch (e) {
-        uni.showToast({ title: e.message || '发送失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('account.sendFailed'), icon: 'none' })
       }
     },
     async confirmBindEmail() {
       if (!this.bindEmailCodeInput || this.bindEmailCodeInput.length < 6) {
-        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' })
+        uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' })
         return
       }
       try {
         const res = await bindEmail(this.bindEmailInput.trim(), this.bindEmailCodeInput)
-        uni.showToast({ title: '绑定成功', icon: 'success' })
+        uni.showToast({ title: this.$t('account.bindSuccessToast'), icon: 'success' })
         const emailMasked = (res.data && res.data.emailMasked) || ''
         this.userInfo = { ...this.userInfo, emailMasked }
         setSessionUser(this.userInfo)
         this.cancelBindEmail()
       } catch (e) {
-        uni.showToast({ title: e.message || '绑定失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('account.bindFailed'), icon: 'none' })
       }
     },
     cancelBindEmail() {
@@ -892,7 +892,7 @@ export default {
             if (!hasAdminTab) {
                 // Insert before 'settings' or at the end
                 const settingsIndex = this.tabs.findIndex(t => t.key === 'settings')
-                const adminTab = { key: 'system_admin', label: '系统设置' }
+                const adminTab = { key: 'system_admin', label: this.$t('account.systemSettingsTab') }
                 
                 if (settingsIndex >= 0) {
                     this.tabs.splice(settingsIndex, 0, adminTab)

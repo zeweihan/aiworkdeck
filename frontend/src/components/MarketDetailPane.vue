@@ -11,14 +11,14 @@
         <view class="mdp-head-main">
           <view class="mdp-title-row">
             <text class="mdp-title">{{ display.name }}</text>
-            <text class="mdp-kind-badge">{{ spec.kind === 'plugin' ? '插件' : 'Skill' }}</text>
-            <text v-if="installedInfo" class="mdp-installed-badge">已安装</text>
+            <text class="mdp-kind-badge">{{ spec.kind === 'plugin' ? $t('market.pluginLabel') : $t('market.kindBadgeSkill') }}</text>
+            <text v-if="installedInfo" class="mdp-installed-badge">{{ $t('market.installedTag') }}</text>
             <text v-if="marketInfo" class="mdp-price-badge" :class="{ paid: isPaidItem }">{{ priceBadge }}</text>
           </view>
           <view class="mdp-byline">
             <text v-if="display.author" class="mdp-byline-item mdp-author">{{ display.author }}</text>
             <text v-if="display.version" class="mdp-byline-item">v{{ display.version }}</text>
-            <text v-if="display.downloads" class="mdp-byline-item">{{ display.downloads }} 下载</text>
+            <text v-if="display.downloads" class="mdp-byline-item">{{ $t('market.downloadsCount', { count: display.downloads }) }}</text>
             <text v-if="display.categoryLabel" class="mdp-byline-item">{{ display.categoryLabel }}</text>
           </view>
           <!-- 性质说明：Skill 与插件是两种东西，用户不该靠猜 -->
@@ -30,13 +30,13 @@
             <!-- 付费未购（Skill 与插件同款）：先去官网买，本机不给安装按钮——点了也只会拿到 402 -->
             <template v-if="marketInfo && !installedInfo && needsPurchase">
               <view class="mdp-btn primary" @tap="openPurchase">
-                <text>购买 {{ priceText }}</text>
+                <text>{{ $t('market.buyWithPrice', { price: priceText }) }}</text>
               </view>
               <view v-if="paidStateValue === 'need-account'" class="mdp-btn" @tap="goToAccountSettings">
-                <text>去连接账户</text>
+                <text>{{ $t('market.goConnectAccount') }}</text>
               </view>
               <view v-else class="mdp-btn" :class="{ busy }" @tap="onPurchasedRefresh">
-                <text>{{ busy ? '刷新中…' : '我已购买，刷新' }}</text>
+                <text>{{ busy ? $t('market.refreshing') : $t('market.alreadyPurchasedRefresh') }}</text>
               </view>
             </template>
 
@@ -48,7 +48,7 @@
                 :class="{ busy }"
                 @tap="doInstallSkill"
               >
-                <text>{{ busy ? '安装中…' : '安装' }}</text>
+                <text>{{ busy ? $t('market.installingEllipsis') : $t('market.install') }}</text>
               </view>
               <view
                 v-else-if="marketInfo && installedInfo"
@@ -56,7 +56,7 @@
                 :class="{ busy }"
                 @tap="doInstallSkill"
               >
-                <text>{{ busy ? '处理中…' : '重新安装 / 更新' }}</text>
+                <text>{{ busy ? $t('market.processingEllipsis') : $t('market.reinstallOrUpdate') }}</text>
               </view>
               <picker
                 v-if="installedInfo && !installedInfo.sourcePluginId"
@@ -65,17 +65,17 @@
                 @change="onActivationChange"
               >
                 <view class="mdp-btn">
-                  <text>生效方式：{{ ACTIVATION_LABELS[activationIndex] }} ▾</text>
+                  <text>{{ $t('market.activationModeLabel', { mode: ACTIVATION_LABELS[activationIndex] }) }}</text>
                 </view>
               </picker>
-              <text v-if="installedInfo && installedInfo.sourcePluginId" class="mdp-action-hint">随插件启停，不可单独设置</text>
+              <text v-if="installedInfo && installedInfo.sourcePluginId" class="mdp-action-hint">{{ $t('market.activationHintSourcePlugin') }}</text>
               <view
                 v-if="installedInfo && marketInfo && !installedInfo.sourcePluginId"
                 class="mdp-btn danger"
                 :class="{ busy }"
                 @tap="doUninstallSkill"
               >
-                <text>卸载</text>
+                <text>{{ $t('market.uninstallBtn') }}</text>
               </view>
             </template>
 
@@ -87,10 +87,10 @@
                 :class="{ busy }"
                 @tap="doInstallPlugin"
               >
-                <text>{{ busy ? '安装中…' : '安装' }}</text>
+                <text>{{ busy ? $t('market.installingEllipsis') : $t('market.install') }}</text>
               </view>
               <view v-if="installedInfo" class="mdp-switch-row">
-                <text class="mdp-switch-label">{{ installedInfo.enabled ? '已启用' : '已停用' }}</text>
+                <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
                 <switch :checked="!!installedInfo.enabled" color="#1A5336" style="transform: scale(0.7);" @change="onPluginToggle" />
               </view>
               <view
@@ -99,7 +99,7 @@
                 :class="{ busy }"
                 @tap="doUninstallPlugin"
               >
-                <text>卸载</text>
+                <text>{{ $t('market.uninstallBtn') }}</text>
               </view>
             </template>
           </view>
@@ -110,54 +110,54 @@
 
       <view class="mdp-divider"></view>
 
-      <view v-if="loading" class="mdp-loading"><text>加载中…</text></view>
+      <view v-if="loading" class="mdp-loading"><text>{{ $t('market.loadingEllipsis') }}</text></view>
       <view v-else-if="!marketInfo && !installedInfo" class="mdp-loading">
-        <text>{{ loadError ? '加载失败：' + loadError : '没有找到这一项（可能已从广场下架或本机已卸载）' }}</text>
+        <text>{{ loadError ? $t('market.loadFailedPrefix', { error: loadError }) : $t('market.itemNotFound') }}</text>
       </view>
 
       <template v-else>
         <!-- 适用场景（Skill）：把触发词翻译成「什么时候找它」，工具清单不在这里刷存在感 -->
         <view v-if="spec.kind === 'skill' && triggerList.length" class="mdp-section">
-          <text class="mdp-sec-title">什么时候用</text>
+          <text class="mdp-sec-title">{{ $t('market.whenToUse') }}</text>
           <view class="mdp-scenario">
-            <text class="mdp-scenario-lead">在对话里说出类似这些诉求时，它会自动接管：</text>
+            <text class="mdp-scenario-lead">{{ $t('market.scenarioLead') }}</text>
             <view class="mdp-triggers">
-              <text v-for="(t, i) in triggerList" :key="i" class="mdp-trigger">「{{ t }}」</text>
+              <text v-for="(t, i) in triggerList" :key="i" class="mdp-trigger">{{ $t('market.triggerWrap', { trigger: t }) }}</text>
             </view>
-            <text class="mdp-sec-note">也可以在输入框用 / 手动选用；生效方式可随时在本页调整。</text>
+            <text class="mdp-sec-note">{{ $t('market.scenarioNote') }}</text>
           </view>
         </view>
 
         <!-- 声明能力（插件）：安全相关，保持显眼 -->
         <view v-if="spec.kind === 'plugin'" class="mdp-section">
-          <text class="mdp-sec-title">声明能力</text>
+          <text class="mdp-sec-title">{{ $t('market.declaredCapability') }}</text>
           <text class="mdp-sec-body">{{ pluginPermissionText }}</text>
-          <text class="mdp-sec-note">插件与本机应用同等权限。平台已人工审核并签名，安装后默认停用，启用前不会执行任何插件代码。</text>
+          <text class="mdp-sec-note">{{ $t('market.pluginPermissionNote') }}</text>
         </view>
 
         <!-- 详细信息：工具权限压缩为一行人话摘要，不再枚举内部工具名 -->
         <view class="mdp-section">
-          <text class="mdp-sec-title">详细信息</text>
+          <text class="mdp-sec-title">{{ $t('market.detailInfo') }}</text>
           <view class="mdp-kv">
             <view v-if="spec.kind === 'skill' && toolSummary" class="mdp-kv-row">
-              <text class="mdp-k">工具权限</text><text class="mdp-v">{{ toolSummary }}</text>
+              <text class="mdp-k">{{ $t('market.kvToolPermission') }}</text><text class="mdp-v">{{ toolSummary }}</text>
             </view>
             <view v-if="marketInfo" class="mdp-kv-row">
-              <text class="mdp-k">价格</text><text class="mdp-v">{{ priceDetailText }}</text>
+              <text class="mdp-k">{{ $t('market.kvPrice') }}</text><text class="mdp-v">{{ priceDetailText }}</text>
             </view>
-            <view class="mdp-kv-row"><text class="mdp-k">标识</text><text class="mdp-v mono">{{ spec.id }}</text></view>
-            <view v-if="display.version" class="mdp-kv-row"><text class="mdp-k">版本</text><text class="mdp-v">v{{ display.version }}</text></view>
-            <view v-if="display.author" class="mdp-kv-row"><text class="mdp-k">作者</text><text class="mdp-v">{{ display.author }}</text></view>
-            <view v-if="display.license" class="mdp-kv-row"><text class="mdp-k">许可</text><text class="mdp-v">{{ display.license }}</text></view>
-            <view v-if="display.updatedAt" class="mdp-kv-row"><text class="mdp-k">更新于</text><text class="mdp-v">{{ display.updatedAt }}</text></view>
-            <view class="mdp-kv-row"><text class="mdp-k">来源</text><text class="mdp-v">{{ sourceText }}</text></view>
+            <view class="mdp-kv-row"><text class="mdp-k">{{ $t('market.kvId') }}</text><text class="mdp-v mono">{{ spec.id }}</text></view>
+            <view v-if="display.version" class="mdp-kv-row"><text class="mdp-k">{{ $t('market.kvVersion') }}</text><text class="mdp-v">v{{ display.version }}</text></view>
+            <view v-if="display.author" class="mdp-kv-row"><text class="mdp-k">{{ $t('market.kvAuthor') }}</text><text class="mdp-v">{{ display.author }}</text></view>
+            <view v-if="display.license" class="mdp-kv-row"><text class="mdp-k">{{ $t('market.kvLicense') }}</text><text class="mdp-v">{{ display.license }}</text></view>
+            <view v-if="display.updatedAt" class="mdp-kv-row"><text class="mdp-k">{{ $t('market.kvUpdatedAt') }}</text><text class="mdp-v">{{ display.updatedAt }}</text></view>
+            <view class="mdp-kv-row"><text class="mdp-k">{{ $t('market.kvSource') }}</text><text class="mdp-v">{{ sourceText }}</text></view>
             <view v-if="display.homepage" class="mdp-kv-row">
-              <text class="mdp-k">主页</text>
+              <text class="mdp-k">{{ $t('market.kvHomepage') }}</text>
               <text class="mdp-v mdp-link" @tap="$emit('open-url', display.homepage)">{{ display.homepage }}</text>
             </view>
             <!-- 第三方内容署名（如随 skill 分发的 vendor 引擎）：MIT 等许可要求保留的版权声明 -->
             <view v-for="(c, ci) in display.credits" :key="ci" class="mdp-kv-row">
-              <text class="mdp-k">鸣谢</text><text class="mdp-v">{{ c }}</text>
+              <text class="mdp-k">{{ $t('market.kvCredits') }}</text><text class="mdp-v">{{ c }}</text>
             </view>
           </view>
         </view>
@@ -175,6 +175,7 @@ import { ICONS } from '@/config/icons.js'
 import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements } from '@/composables/useEntitlement.js'
+import { t } from '@/i18n'
 
 const CATEGORY_GLYPHS = {
   contract: ICONS.catContract,
@@ -187,24 +188,24 @@ const CATEGORY_GLYPHS = {
 }
 
 const CATEGORY_LABELS = {
-  contract: '合同',
-  litigation: '诉讼与争议',
-  compliance: '合规风控',
-  research: '法律研究',
-  corporate: '公司与投融资',
-  office: '办公效率',
-  other: '其他',
+  contract: t('market.catContract'),
+  litigation: t('market.catLitigation'),
+  compliance: t('market.catCompliance'),
+  research: t('market.catResearch'),
+  corporate: t('market.catCorporate'),
+  office: t('market.catOffice'),
+  other: t('market.catOther'),
 }
 
 const PERMISSION_LABELS = {
-  file_read: '读取文件',
-  file_write: '写入文件',
-  network: '网络访问',
-  editor: '编辑器',
+  file_read: t('market.permFileRead'),
+  file_write: t('market.permFileWrite'),
+  network: t('market.permNetwork'),
+  editor: t('market.permEditor'),
 }
 
 const ACTIVATION_MODES = ['auto', 'manual', 'disabled']
-const ACTIVATION_LABELS = ['自动触发', '仅手动', '停用']
+const ACTIVATION_LABELS = [t('market.activationAuto'), t('market.activationManual'), t('market.activationDisabled')]
 
 export default {
   name: 'MarketDetailPane',
@@ -249,16 +250,16 @@ export default {
       return formatPrice(priceCentsOf(this.marketInfo))
     },
     priceDetailText() {
-      if (!this.isPaidItem) return '免费'
-      const base = this.priceText + '（一次性买断）'
-      return this.marketInfo && this.marketInfo.purchased ? base + ' · 已购买' : base
+      if (!this.isPaidItem) return this.$t('market.free')
+      const base = this.priceText + this.$t('market.onetimePurchase')
+      return this.marketInfo && this.marketInfo.purchased ? base + this.$t('market.purchasedSuffix') : base
     },
     purchaseHint() {
       if (!this.needsPurchase) return ''
       if (this.paidStateValue === 'need-account') {
-        return '这是付费项目。请先在设置的「账户与用量」中连接 AI Workdeck 账户，安装时才能校验购买记录。'
+        return this.$t('market.needAccountHint')
       }
-      return '这是付费项目。购买在官网完成，付款后回到本页点「我已购买，刷新」即可安装。'
+      return this.$t('market.buyHint')
     },
     headGlyph() {
       if (this.spec.kind === 'plugin') return ICONS.blocks
@@ -279,7 +280,7 @@ export default {
         // credits（第三方引擎署名）目前只有本机 skill 会带；官网 registry 契约暂未收录该字段
         credits: i.credits || m.credits || [],
         downloads: downloads ? (downloads >= 10000 ? (downloads / 10000).toFixed(1) + 'w' : downloads >= 1000 ? (downloads / 1000).toFixed(1) + 'k' : String(downloads)) : '',
-        categoryLabel: this.spec.kind === 'skill' && cat ? (CATEGORY_LABELS[cat] || '其他') : '',
+        categoryLabel: this.spec.kind === 'skill' && cat ? (CATEGORY_LABELS[cat] || this.$t('market.catOther')) : '',
         updatedAt: m.updatedAt ? String(m.updatedAt).slice(0, 10) : '',
         homepage: m.homepage || '',
       }
@@ -290,9 +291,9 @@ export default {
     /** Skill 与插件是两种东西：一句话讲清性质，别让用户靠徽章猜 */
     kindNote() {
       if (this.spec.kind === 'plugin') {
-        return '插件是可执行扩展：为工作台增加新功能，与本机应用同等权限，经平台人工审核并签名分发。'
+        return this.$t('market.kindNotePlugin')
       }
-      return 'Skill 是提示词工作流：教 AI 助手按一套业务方法做事，纯文本、不含可执行代码。'
+      return this.$t('market.kindNoteSkill')
     },
     /** 工具名是给机器看的；给用户压缩成能力域的人话摘要 */
     toolSummary() {
@@ -301,25 +302,25 @@ export default {
       if (!tools.length) return ''
       const domains = []
       const has = (re) => tools.some(t => re.test(t))
-      if (has(/^doc_|^read_document|^write_docx|_docx$/)) domains.push('文档读写')
-      if (has(/^sheet_/)) domains.push('电子表格')
-      if (has(/^pptx_/)) domains.push('幻灯片')
-      if (has(/^pdf_/)) domains.push('PDF 处理')
-      if (has(/^law_|^get_law_/)) domains.push('法律检索')
-      if (has(/search_web|browse_url|deep_search/)) domains.push('联网检索')
-      if (has(/^read_file$|^write_file$|^list_files$|project_files|extract_file_text/)) domains.push('项目文件')
-      if (has(/memory/)) domains.push('工作记忆')
-      if (has(/evidence/)) domains.push('证据核查')
-      const head = domains.length ? domains.join('、') : '通用对话'
-      return `${head} 等 ${tools.length} 项（限定范围，仅在本 Skill 生效时可用）`
+      if (has(/^doc_|^read_document|^write_docx|_docx$/)) domains.push(this.$t('market.domainDoc'))
+      if (has(/^sheet_/)) domains.push(this.$t('market.domainSheet'))
+      if (has(/^pptx_/)) domains.push(this.$t('market.domainSlides'))
+      if (has(/^pdf_/)) domains.push(this.$t('market.domainPdf'))
+      if (has(/^law_|^get_law_/)) domains.push(this.$t('market.domainLaw'))
+      if (has(/search_web|browse_url|deep_search/)) domains.push(this.$t('market.domainWeb'))
+      if (has(/^read_file$|^write_file$|^list_files$|project_files|extract_file_text/)) domains.push(this.$t('market.domainFiles'))
+      if (has(/memory/)) domains.push(this.$t('market.domainMemory'))
+      if (has(/evidence/)) domains.push(this.$t('market.domainEvidence'))
+      const head = domains.length ? domains.join(this.$t('market.listSeparator')) : this.$t('market.domainGeneral')
+      return this.$t('market.toolSummaryText', { domains: head, count: tools.length })
     },
     pluginPermissionText() {
       const item = this.marketInfo || this.installedInfo || {}
       const parts = []
       const toolCount = item.toolCount != null ? item.toolCount : (item.tools || []).length
-      if (toolCount) parts.push(`提供 ${toolCount} 个工具`)
+      if (toolCount) parts.push(this.$t('market.providesTools', { count: toolCount }))
       const perms = (item.permissions || []).map(p => PERMISSION_LABELS[p] || p)
-      parts.push(perms.length ? `需要 ${perms.join('、')}` : '未声明敏感能力')
+      parts.push(perms.length ? this.$t('market.requiresPerms', { perms: perms.join(this.$t('market.listSeparator')) }) : this.$t('market.noSensitiveCapability'))
       return parts.join(' · ')
     },
     activationIndex() {
@@ -330,9 +331,9 @@ export default {
       return idx >= 0 ? idx : 0
     },
     sourceText() {
-      if (this.installedInfo?.sourcePluginId) return `插件内置（${this.installedInfo.sourcePluginId}）`
-      if (this.marketInfo) return '官网广场（平台签名分发）'
-      return '本机'
+      if (this.installedInfo?.sourcePluginId) return this.$t('market.sourceBuiltinPlugin', { id: this.installedInfo.sourcePluginId })
+      if (this.marketInfo) return this.$t('market.sourceOfficialMarket')
+      return this.$t('market.sourceLocal')
     },
   },
   mounted() {
@@ -374,11 +375,11 @@ export default {
         }
         // 本机已装的项即使广场挂了也照常展示（信息来自本地），不必报错打扰
         if (!this.marketInfo && !this.installedInfo && marketError) {
-          this.loadError = marketError.message || '在线广场不可用'
+          this.loadError = marketError.message || this.$t('market.marketUnavailableShort')
         }
       } catch (e) {
         console.error('加载详情失败:', e)
-        this.loadError = e?.message || '网络不可用'
+        this.loadError = e?.message || this.$t('market.networkUnavailable')
       } finally {
         this.loading = false
       }
@@ -408,7 +409,7 @@ export default {
         this.busy = false
       }
       if (this.needsPurchase) {
-        uni.showToast({ title: '还没查到这一项的购买记录，请确认已在官网完成支付', icon: 'none' })
+        uni.showToast({ title: this.$t('market.purchaseNotFoundHint'), icon: 'none' })
         return
       }
       if (this.installedInfo) return
@@ -420,12 +421,12 @@ export default {
       this.busy = true
       try {
         await installMarketSkill(this.spec.id)
-        uni.showToast({ title: this.installedInfo ? '已更新' : '已安装', icon: 'none' })
+        uni.showToast({ title: this.installedInfo ? this.$t('market.updatedToast') : this.$t('market.genericInstalledToast'), icon: 'none' })
         await this.reload()
         this.notifyChanged()
       } catch (e) {
         console.error('安装 Skill 失败:', e)
-        uni.showToast({ title: e?.message || '安装失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -435,12 +436,12 @@ export default {
       this.busy = true
       try {
         await uninstallMarketSkill(this.spec.id)
-        uni.showToast({ title: '已卸载', icon: 'none' })
+        uni.showToast({ title: this.$t('market.uninstalledToast'), icon: 'none' })
         await this.reload()
         this.notifyChanged()
       } catch (e) {
         console.error('卸载 Skill 失败:', e)
-        uni.showToast({ title: e?.message || '卸载失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.uninstallFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -448,13 +449,18 @@ export default {
     async doInstallPlugin() {
       if (this.busy) return
       const m = this.marketInfo || {}
-      const perms = (m.permissions || []).map(p => PERMISSION_LABELS[p] || p).join('、') || '未声明敏感能力'
+      const perms = (m.permissions || []).map(p => PERMISSION_LABELS[p] || p).join(this.$t('market.listSeparator')) || this.$t('market.noSensitiveCapability')
       const ok = await new Promise(resolve => {
         uni.showModal({
-          title: '确认安装插件',
-          content: `${m.name || this.spec.id} v${m.version}\n作者：${m.authorDisplayName || m.author || '未知'}\n声明能力：${perms}\n\n插件与本机应用同等权限，能读写你的文件并访问网络。安装后默认停用，需你手动启用。`,
-          confirmText: '安装',
-          cancelText: '取消',
+          title: this.$t('market.confirmInstallPluginTitle'),
+          content: this.$t('market.confirmInstallPluginContent', {
+            name: m.name || this.spec.id,
+            version: m.version,
+            author: m.authorDisplayName || m.author || this.$t('market.unknownAuthor'),
+            perms,
+          }),
+          confirmText: this.$t('market.install'),
+          cancelText: this.$t('market.cancelBtn'),
           success: r => resolve(r.confirm),
           fail: () => resolve(false),
         })
@@ -463,12 +469,12 @@ export default {
       this.busy = true
       try {
         await installMarketPlugin(this.spec.id)
-        uni.showToast({ title: '已安装，请启用后使用', icon: 'none' })
+        uni.showToast({ title: this.$t('market.installedUsableHint'), icon: 'none' })
         await this.reload()
         this.notifyChanged()
       } catch (e) {
         console.error('安装插件失败:', e)
-        uni.showToast({ title: e?.message || '安装失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -478,12 +484,12 @@ export default {
       this.busy = true
       try {
         await uninstallMarketPlugin(this.spec.id)
-        uni.showToast({ title: '已卸载', icon: 'none' })
+        uni.showToast({ title: this.$t('market.uninstalledToast'), icon: 'none' })
         await this.reload()
         this.notifyChanged()
       } catch (e) {
         console.error('卸载插件失败:', e)
-        uni.showToast({ title: e?.message || '卸载失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.uninstallFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -493,11 +499,11 @@ export default {
       try {
         await setPluginEnabled(this.spec.id, enabled)
         if (this.installedInfo) this.installedInfo.enabled = enabled
-        uni.showToast({ title: enabled ? '已启用' : '已禁用', icon: 'none' })
+        uni.showToast({ title: enabled ? this.$t('market.enabledToast') : this.$t('market.disabledToggleToast'), icon: 'none' })
         this.notifyChanged()
       } catch (e) {
         console.error('切换插件状态失败:', e)
-        uni.showToast({ title: e?.message || '操作失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.operationFailedNeedAdmin'), icon: 'none' })
         await this.reload()
       }
     },
@@ -509,11 +515,11 @@ export default {
         await setSkillActivation(this.spec.id, mode)
         this.installedInfo.activationMode = mode
         this.installedInfo.enabled = mode !== 'disabled'
-        uni.showToast({ title: `已设为「${ACTIVATION_LABELS[idx]}」`, icon: 'none' })
+        uni.showToast({ title: this.$t('market.setActivationTo', { mode: ACTIVATION_LABELS[idx] }), icon: 'none' })
         this.notifyChanged()
       } catch (e) {
         console.error('设置生效方式失败:', e)
-        uni.showToast({ title: e?.message || '操作失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.operationFailedNeedAdmin'), icon: 'none' })
         await this.reload()
       }
     },

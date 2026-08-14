@@ -9,18 +9,18 @@
           v-model="requestName"
           @blur="updateRequestName"
           @confirm="updateRequestName"
-          :placeholder="request ? request.name : '加载中...'"
+          :placeholder="request ? request.name : $t('panels.ddLoadingPlaceholder')"
         />
         <view class="status-badge" v-if="request" :class="request.status">
            {{ getStatusText(request.status) }}
         </view>
-        <text class="progress-info" v-if="items.length > 0">完成进度: {{ completedCount }}/{{ items.length }}</text>
+        <text class="progress-info" v-if="items.length > 0">{{ $t('panels.ddProgress', { completed: completedCount, total: items.length }) }}</text>
       </view>
 
       <view style="display: flex; gap: 10px; align-items: center;">
-        <button class="delete-list-btn" @tap="handleDeleteRequest">删除清单</button>
+        <button class="delete-list-btn" @tap="handleDeleteRequest">{{ $t('panels.ddDeleteList') }}</button>
         <button class="new-btn" @tap="handleAddItem">
-            <text>+ 新建</text>
+            <text>{{ $t('panels.ddNewItem') }}</text>
         </button>
       </view>
     </view>
@@ -28,11 +28,11 @@
     <!-- Table -->
     <view class="table-container">
       <view class="table-header">
-        <view class="col-name">文件名称</view>
-        <view class="col-desc">说明</view>
-        <view class="col-example">示例</view>
-        <view class="col-upload">上传</view>
-        <view class="col-qa">留言</view>
+        <view class="col-name">{{ $t('panels.ddColName') }}</view>
+        <view class="col-desc">{{ $t('panels.ddColDesc') }}</view>
+        <view class="col-example">{{ $t('panels.ddColExample') }}</view>
+        <view class="col-upload">{{ $t('panels.ddColUpload') }}</view>
+        <view class="col-qa">{{ $t('panels.ddColQa') }}</view>
         <view class="col-action"></view>
       </view>
 
@@ -58,8 +58,8 @@
                 <!-- Arrows for Indent/Outdent (Hover Only) -->
                 <!-- Positioned specifically to not overlap the triangle -->
                 <view class="indent-controls" v-if="hoveredItemId === item.id">
-                  <view class="arrow-btn" @tap.stop="handleOutdent(item)" title="升级 (Outdent)">‹</view>
-                  <view class="arrow-btn" @tap.stop="handleIndent(item)" title="降级 (Indent)">›</view>
+                  <view class="arrow-btn" @tap.stop="handleOutdent(item)" :title="$t('panels.ddOutdentTitle')">‹</view>
+                  <view class="arrow-btn" @tap.stop="handleIndent(item)" :title="$t('panels.ddIndentTitle')">›</view>
                 </view>
                 <view class="indent-placeholder" v-else></view>
 
@@ -78,7 +78,7 @@
               class="silent-input title-input"
               v-model="item.title"
               @blur="updateInfo(item)"
-              placeholder="输入名称"
+              :placeholder="$t('panels.ddNamePlaceholder')"
             />
           </view>
 
@@ -88,13 +88,13 @@
               class="silent-input"
               v-model="item.description"
               @blur="updateInfo(item)"
-              placeholder="输入说明"
+              :placeholder="$t('panels.ddDescPlaceholder')"
             />
           </view>
 
           <!-- Example -->
           <view class="col-example">
-            <text class="link-text" v-if="item.exampleFileId">查看</text>
+            <text class="link-text" v-if="item.exampleFileId">{{ $t('panels.ddView') }}</text>
           </view>
 
           <!-- Upload -->
@@ -103,14 +103,14 @@
                <svg class="file-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                  <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                </svg>
-               <text class="file-name">已上传</text>
+               <text class="file-name">{{ $t('panels.ddUploaded') }}</text>
             </view>
              <button
               class="mini-btn upload"
               v-else-if="!isApproved(item.status)"
               @tap.stop="chooseFile(item)"
             >
-              上传
+              {{ $t('panels.ddUpload') }}
             </button>
              <view class="status-tag" :class="item.status.toLowerCase()" v-if="item.status !== 'PENDING' && !item.uploadedFileId">
                {{ getItemStatusText(item.status) }}
@@ -120,21 +120,21 @@
           <!-- QA/Comments -->
           <view class="col-qa">
              <view class="comment-trigger" @tap.stop="toggleComments(item)">
-                <text>留言</text>
+                <text>{{ $t('panels.ddComment') }}</text>
                 <view class="dot" v-if="item.comments && item.comments.length > 0"></view>
              </view>
           </view>
 
           <!-- Delete Action -->
           <view class="col-action">
-              <view class="delete-btn" @tap.stop="handleDeleteItem(item)" title="删除">
+              <view class="delete-btn" @tap.stop="handleDeleteItem(item)" :title="$t('panels.ddDeleteTitle')">
                    <text>×</text>
               </view>
           </view>
         </view>
 
         <view v-if="items.length === 0" class="empty-state">
-          <text>点击右上角“+ 新建”添加清单项</text>
+          <text>{{ $t('panels.ddEmptyState') }}</text>
         </view>
         <!-- Bottom padding for scrolling -->
         <view style="height: 100px;"></view>
@@ -144,16 +144,16 @@
     <!-- Comment Drawer (Simplified) -->
     <view v-if="showCommentsDrawer" class="drawer-mask" @tap="showCommentsDrawer = false">
         <view class="drawer" @tap.stop>
-            <view class="drawer-header">留言板</view>
+            <view class="drawer-header">{{ $t('panels.ddCommentBoardTitle') }}</view>
             <view class="drawer-body">
                 <view v-for="c in activeItemComments" :key="c.id" class="comment-row">
                     <text class="user">{{c.userId}}:</text> <text>{{c.content}}</text>
                 </view>
-                <view v-if="activeItemComments.length === 0" class="no-data">暂无留言</view>
+                <view v-if="activeItemComments.length === 0" class="no-data">{{ $t('panels.ddNoComments') }}</view>
             </view>
             <view class="drawer-footer">
-                <input v-model="newCommentText" placeholder="输入留言..." @confirm="sendComment" />
-                <button @tap="sendComment">发送</button>
+                <input v-model="newCommentText" :placeholder="$t('panels.ddCommentPlaceholder')" @confirm="sendComment" />
+                <button @tap="sendComment">{{ $t('panels.ddSend') }}</button>
             </view>
         </view>
     </view>
@@ -259,7 +259,7 @@ export default {
         try {
             await api.updateDdRequest(this.requestId, this.requestName)
             this.request.name = this.requestName
-            uni.showToast({ title: '已更名', icon: 'success' })
+            uni.showToast({ title: this.$t('panels.ddRenamed'), icon: 'success' })
             // Would be nice to emit event to refresh sidebar
             // this.$emit('refresh')
         } catch (e) {
@@ -301,10 +301,10 @@ export default {
       try {
         await api.addDdItem(this.requestId, parentId)
         await this.fetchData()
-        uni.showToast({ title: '已新建', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.ddCreated'), icon: 'none' })
       } catch (e) {
         console.error(e)
-        uni.showToast({ title: '新建失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.ddCreateFailed'), icon: 'none' })
       }
     },
 
@@ -333,7 +333,7 @@ export default {
         if (newParentId) this.expandedItems.add(newParentId)
       } catch (e) {
         console.error(e)
-        uni.showToast({ title: '操作失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.ddOperationFailed'), icon: 'none' })
       }
     },
 
@@ -344,10 +344,15 @@ export default {
     },
 
     getStatusText(s) {
-      return s === 'PUBLISHED' ? '进行中' : (s === 'DRAFT' ? '草稿' : s)
+      return s === 'PUBLISHED' ? this.$t('panels.ddStatusPublished') : (s === 'DRAFT' ? this.$t('panels.ddStatusDraft') : s)
     },
     getItemStatusText(s) {
-      const map = { 'PENDING': '待上传', 'UPLOADED': '已提交', 'APPROVED': '通过', 'REJECTED': '驳回' }
+      const map = {
+        'PENDING': this.$t('panels.ddItemPending'),
+        'UPLOADED': this.$t('panels.ddItemUploaded'),
+        'APPROVED': this.$t('panels.ddItemApproved'),
+        'REJECTED': this.$t('panels.ddItemRejected')
+      }
       return map[s] || s
     },
     isApproved(s) { return s === 'APPROVED' },
@@ -362,7 +367,7 @@ export default {
     },
     async uploadFile(item, file) {
       const uploadUrl = `${getApiBaseUrl()}/api/dd/items/${item.id}/upload`
-      uni.showLoading({ title: '上传中...' })
+      uni.showLoading({ title: this.$t('panels.ddUploading') })
       uni.uploadFile({
         url: uploadUrl,
         filePath: file.path,
@@ -372,13 +377,13 @@ export default {
         success: (res) => {
           uni.hideLoading()
           if (res.statusCode === 200) {
-            uni.showToast({ title: '上传成功' })
+            uni.showToast({ title: this.$t('panels.ddUploadSuccess') })
             this.fetchData()
           } else {
-            uni.showToast({ title: '失败', icon: 'none' })
+            uni.showToast({ title: this.$t('panels.ddUploadFail'), icon: 'none' })
           }
         },
-        fail: () => { uni.hideLoading(); uni.showToast({ title: '网络错误', icon: 'none' }) }
+        fail: () => { uni.hideLoading(); uni.showToast({ title: this.$t('panels.ddNetworkError'), icon: 'none' }) }
       })
     },
     viewFile(fileId) {
@@ -406,16 +411,16 @@ export default {
 
     handleDeleteItem(item) {
         uni.showModal({
-            title: '确认删除',
-            content: '删除此项将连带删除其子项。如果文件未被移动，也将一并删除。是否继续？',
+            title: this.$t('panels.ddConfirmDeleteTitle'),
+            content: this.$t('panels.ddDeleteItemConfirmBody'),
             success: async (res) => {
                 if (res.confirm) {
                     try {
                         await api.deleteDdItem(item.id)
                         this.fetchData()
-                        uni.showToast({title: '已删除', icon: 'none'})
+                        uni.showToast({title: this.$t('panels.ddDeleted'), icon: 'none'})
                     } catch (e) {
-                         uni.showToast({title: '删除失败', icon: 'none'})
+                         uni.showToast({title: this.$t('panels.ddDeleteFailed'), icon: 'none'})
                          console.error(e)
                     }
                 }
@@ -425,20 +430,20 @@ export default {
 
     handleDeleteRequest() {
         uni.showModal({
-            title: '确认删除',
-            content: '确定要删除整个尽调清单吗？关联文件将被删除（如果未移动）。此操作不可恢复。',
+            title: this.$t('panels.ddConfirmDeleteTitle'),
+            content: this.$t('panels.ddDeleteRequestConfirmBody'),
             confirmColor: '#DC3545',
             success: async (res) => {
                 if (res.confirm) {
                     try {
                         await api.deleteDdRequest(this.requestId)
-                        uni.showToast({title: '已删除', icon: 'success'})
+                        uni.showToast({title: this.$t('panels.ddDeleted'), icon: 'success'})
                         // Emit event to close editor or refresh list
                         this.$emit('deleted')
                         // For now just back?
                         // uni.navigateBack()
                     } catch(e) {
-                         uni.showToast({title: '删除失败', icon: 'none'})
+                         uni.showToast({title: this.$t('panels.ddDeleteFailed'), icon: 'none'})
                          console.error(e)
                     }
                 }

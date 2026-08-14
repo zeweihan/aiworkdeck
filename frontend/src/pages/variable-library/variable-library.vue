@@ -3,22 +3,22 @@
     <!-- 顶部项目信息 -->
     <view class="header-card">
       <view class="title-row">
-        <text class="project-name">{{ project.name || '未命名项目' }}</text>
-        <text class="project-type-tag">{{ project.projectTypeLabel || '项目类型待定' }}</text>
+        <text class="project-name">{{ project.name || $t('panels.vlUnnamedProject') }}</text>
+        <text class="project-type-tag">{{ project.projectTypeLabel || $t('panels.vlProjectTypePending') }}</text>
       </view>
       <view class="meta-row">
-        <text class="meta-item">上市公司：{{ project.listedCompanyName || '-' }}</text>
-        <text class="meta-item">标的公司：{{ project.targetCompanyName || '-' }}</text>
+        <text class="meta-item">{{ $t('panels.vlListedCompanyLine', { name: project.listedCompanyName || '-' }) }}</text>
+        <text class="meta-item">{{ $t('panels.vlTargetCompanyLine', { name: project.targetCompanyName || '-' }) }}</text>
       </view>
     </view>
 
     <!-- 工具栏 -->
     <view class="toolbar">
       <button class="btn" type="primary" size="mini" @tap="addVariable">
-        新增变量
+        {{ $t('panels.vlAddVariable') }}
       </button>
       <button class="btn" type="default" size="mini" @tap="goBack">
-        返回上一页
+        {{ $t('panels.vlGoBack') }}
       </button>
     </view>
 
@@ -36,10 +36,10 @@
     <!-- 变量列表 -->
     <scroll-view class="variable-list" scroll-y="true">
       <view v-if="loading" class="empty">
-        加载中...
+        {{ $t('panels.vlLoading') }}
       </view>
       <view v-else-if="variables.length === 0" class="empty">
-        暂无变量，可点击“新增变量”创建
+        {{ $t('panels.vlEmptyVariables') }}
       </view>
       <view v-else>
         <view 
@@ -60,17 +60,17 @@
               <input
                 class="var-name-input"
                 v-model="v.name"
-                placeholder="变量名称（如：交易对价）"
+                :placeholder="$t('panels.vlNamePlaceholder')"
                 @input="markDirty(v)"
               />
               <text class="var-type-tag">
-                {{ v.type === 'TEMPLATE' ? '复合' : '文本' }}
+                {{ v.type === 'TEMPLATE' ? $t('panels.vlTypeComposite') : $t('panels.vlTypeText') }}
               </text>
             </view>
             <textarea
               class="var-value-input"
               v-model="v.value"
-              placeholder="变量内容"
+              :placeholder="$t('panels.vlValuePlaceholder')"
               auto-height
               @input="markDirty(v)"
             />
@@ -82,7 +82,7 @@
                 :disabled="!v._dirty || saving"
                 @tap="saveVariable(v)"
               >
-                保存
+                {{ $t('panels.vlSave') }}
               </button>
               <button
                 class="btn-small"
@@ -91,11 +91,11 @@
                 :disabled="!v.id || saving"
                 @tap="deleteVariable(v)"
               >
-                删除
+                {{ $t('panels.vlDelete') }}
               </button>
             </view>
             <view class="card-meta" v-if="v.updatedAt">
-              <text class="meta-text">更新于：{{ formatTime(v.updatedAt) }}</text>
+              <text class="meta-text">{{ $t('panels.vlUpdatedAtLine', { time: formatTime(v.updatedAt) }) }}</text>
             </view>
           </view>
         </view>
@@ -134,7 +134,7 @@ export default {
     groupedVariables() {
       const groups = {};
       this.filteredVariables.forEach(v => {
-        const group = v.variableGroup || '其他变量';
+        const group = v.variableGroup || this.$t('panels.vlOtherGroup');
         if (!groups[group]) {
           groups[group] = [];
         }
@@ -204,7 +204,7 @@ export default {
       } catch (e) {
         console.error('加载变量列表失败:', e)
         uni.showToast({
-          title: '加载变量失败',
+          title: this.$t('panels.vlLoadFailed'),
           icon: 'none'
         })
       } finally {
@@ -214,7 +214,7 @@ export default {
     addVariable() {
       if (!this.projectId) {
         uni.showToast({
-          title: '项目信息缺失，无法新增变量',
+          title: this.$t('panels.vlProjectMissing'),
           icon: 'none'
         })
         return
@@ -236,7 +236,7 @@ export default {
     async saveVariable(v) {
       if (!v.name || !v.name.trim()) {
         uni.showToast({
-          title: '变量名称不能为空',
+          title: this.$t('panels.vlNameRequired'),
           icon: 'none'
         })
         return
@@ -265,13 +265,13 @@ export default {
         }
 
         uni.showToast({
-          title: '保存成功',
+          title: this.$t('panels.vlSaveSuccess'),
           icon: 'success'
         })
       } catch (e) {
         console.error('保存变量失败:', e)
         uni.showToast({
-          title: '保存失败: ' + (e.message || '未知错误'),
+          title: this.$t('panels.vlSaveFailed', { msg: e.message || this.$t('panels.vlUnknownError') }),
           icon: 'none'
         })
       } finally {
@@ -286,8 +286,8 @@ export default {
       }
       const res = await new Promise(resolve => {
         uni.showModal({
-          title: '确认删除',
-          content: `确定要删除变量 "${v.name}" 吗？\n该操作不可恢复。`,
+          title: this.$t('panels.vlConfirmDeleteTitle'),
+          content: this.$t('panels.vlConfirmDeleteBody', { name: v.name }),
           success: resolve
         })
       })
@@ -298,13 +298,13 @@ export default {
         await deleteProjectVariable(v.id)
         this.variables = this.variables.filter(item => item.id !== v.id)
         uni.showToast({
-          title: '已删除',
+          title: this.$t('panels.vlDeleted'),
           icon: 'none'
         })
       } catch (e) {
         console.error('删除变量失败:', e)
         uni.showToast({
-          title: '删除失败',
+          title: this.$t('panels.vlDeleteFailed'),
           icon: 'none'
         })
       } finally {

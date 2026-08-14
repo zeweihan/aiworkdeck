@@ -14,7 +14,7 @@
                 v-if="mainlineTip && draftTip"
                 class="adopt-row-compare"
                 @tap="compare(row)"
-              >看看两边差在哪</text>
+              >{{ $t('version.compareViewDiff') }}</text>
             </view>
             <view class="adopt-row-choices">
               <view
@@ -37,7 +37,7 @@
         <!-- 文案要跟下面那个按钮的字对上：这里唯一可点的出口就是「先不采纳」，
              说「撤销」会让律师在界面上找不到对应的按钮。 -->
         <view v-else class="adopt-orphan-hint">
-          这次采纳的信息读不全了，请点「先不采纳」退出来，稍后再试一次
+          {{ $t('version.conflictOrphanHint') }}
         </view>
       </view>
       <view class="awd-footer">
@@ -47,13 +47,13 @@
           class="awd-btn awd-btn-primary"
           :class="{ 'awd-btn-disabled': !allChosen || busy }"
           @tap="confirm"
-        >就按我选的来</view>
+        >{{ $t('version.confirmChoice') }}</view>
       </view>
     </view>
   </view>
   <view v-else class="adopt-collapsed-bar">
-    <text class="adopt-collapsed-text">还有文件等你选留哪一份</text>
-    <text class="adopt-collapsed-resume" @tap="collapsed = false">继续处理</text>
+    <text class="adopt-collapsed-text">{{ $t('version.pendingChoiceBar') }}</text>
+    <text class="adopt-collapsed-resume" @tap="collapsed = false">{{ $t('version.resumeProcessing') }}</text>
   </view>
 </template>
 
@@ -97,9 +97,9 @@ export default {
       return this.mode === 'adopt' ? !!this.draftId : true
     },
     dialogTitle() {
-      if (this.mode === 'cloud') return '这几份文件你和同事都改过'
-      if (this.mode === 'session-end') return '收尾时发现同事已经交了新稿'
-      return `采纳《${this.draftName || '这一稿'}》`
+      if (this.mode === 'cloud') return this.$t('version.conflictTitleCloud')
+      if (this.mode === 'session-end') return this.$t('version.conflictTitleSessionEnd')
+      return this.$t('version.conflictTitleAdopt', { name: this.draftName || this.$t('version.thisDraftFallback') })
     },
     /*
      * 措辞不能说「改的是同一处」。Word/PDF 这些文档在版本记录里是整份字节，两边只要
@@ -108,15 +108,14 @@ export default {
      * 实际丢的是对方对这份文档的全部改动。所以只讲事实：两边都改过，整份二选一。
      */
     hintText() {
-      return '下面这些文件两边都改过，没法自动合到一起——请逐份选择整份留哪一边：'
+      return this.$t('version.conflictHint')
     },
     // 三个选项的后果说明必须短到各占一行——弹窗高度受 max-height 限制，说明一长
     // 第三个选项就被挤到可视区外，而它在 DOM 里仍"可见"、点击坐标却落在别处
     // （v1 地雷 #24 的同款失败形态，本 PR 编写时现场踩到）。共性的兜底说明统一
     // 收到这条脚注里，不在每个选项里重复。
     footNote() {
-      return `「两份都留着」的副本叫《原名（来自：${this.bothCopySide}）》。`
-        + '不管怎么选，两边的内容都留在版本记录里，事后还能翻出来对比、退回。'
+      return this.$t('version.conflictFootNote', { side: this.bothCopySide })
     },
     /*
      * 三语境的 MAIN / DRAFT 指向的物理侧不是同一件事（方向表见
@@ -136,39 +135,39 @@ export default {
     choiceOptions() {
       if (this.mode === 'cloud') {
         return [
-          { value: 'MAIN', label: '留我这份', desc: '整份用你的内容，同事对它的改动不进来' },
-          { value: 'DRAFT', label: '用同事那份', desc: '整份换成同事的，你对它的改动不进最终稿' },
-          { value: 'BOTH', label: '两份都留着', desc: '你的留在原文件，同事那份另存一个副本' },
+          { value: 'MAIN', label: this.$t('version.keepMineLabel'), desc: this.$t('version.cloudKeepMineDesc') },
+          { value: 'DRAFT', label: this.$t('version.useColleagueLabel'), desc: this.$t('version.cloudUseColleagueDesc') },
+          { value: 'BOTH', label: this.$t('version.bothLabel'), desc: this.$t('version.cloudBothDesc') },
         ]
       }
       if (this.mode === 'session-end') {
         return [
-          { value: 'MAIN', label: '用同事那份', desc: '整份按同事的收尾，你对它的改动不进最终稿' },
-          { value: 'DRAFT', label: '留我这份', desc: '整份按你的收尾，同事那版不进来' },
-          { value: 'BOTH', label: '两份都留着', desc: '同事的留在原文件，你这份另存一个副本' },
+          { value: 'MAIN', label: this.$t('version.useColleagueLabel'), desc: this.$t('version.sessionUseColleagueDesc') },
+          { value: 'DRAFT', label: this.$t('version.keepMineLabel'), desc: this.$t('version.sessionKeepMineDesc') },
+          { value: 'BOTH', label: this.$t('version.bothLabel'), desc: this.$t('version.sessionBothDesc') },
         ]
       }
       return [
-        { value: 'MAIN', label: '用原来那份', desc: '整份保持采纳前的内容，这一稿的改动不进来' },
-        { value: 'DRAFT', label: '用这一稿的', desc: '整份换成这一稿的，原来那版不再是当前内容' },
-        { value: 'BOTH', label: '两份都留着', desc: '原来的留在原文件，这一稿那份另存一个副本' },
+        { value: 'MAIN', label: this.$t('version.adoptUseOriginalLabel'), desc: this.$t('version.adoptUseOriginalDesc') },
+        { value: 'DRAFT', label: this.$t('version.adoptUseDraftLabel'), desc: this.$t('version.adoptUseDraftDesc') },
+        { value: 'BOTH', label: this.$t('version.bothLabel'), desc: this.$t('version.adoptBothDesc') },
       ]
     },
     // 「两份都留着」另存出来的副本名里那个「来自」是谁，与后端 sideBySideRelPath 的
     // 「原名（来自：{增量侧名字}）扩展名」一致：cloud 传常量、其余传稿名/工作标题。
     bothCopySide() {
-      if (this.mode === 'cloud') return '团队案件库'
-      return this.draftName || '另一份'
+      if (this.mode === 'cloud') return this.$t('version.teamCaseLibrary')
+      return this.draftName || this.$t('version.anotherCopy')
     },
     compareLabels() {
-      if (this.mode === 'cloud') return { oldLabel: '我这份', newLabel: '同事那份' }
-      if (this.mode === 'session-end') return { oldLabel: '同事那份', newLabel: '我这份' }
-      return { oldLabel: '原来那份', newLabel: '这一稿的' }
+      if (this.mode === 'cloud') return { oldLabel: this.$t('version.myShareLabel'), newLabel: this.$t('version.colleagueShareLabel') }
+      if (this.mode === 'session-end') return { oldLabel: this.$t('version.colleagueShareLabel'), newLabel: this.$t('version.myShareLabel') }
+      return { oldLabel: this.$t('version.originalShareLabel'), newLabel: this.$t('version.thisDraftShareLabel') }
     },
     abortLabel() {
-      if (this.mode === 'cloud') return '先不取回'
-      if (this.mode === 'session-end') return '先不收尾'
-      return '先不采纳'
+      if (this.mode === 'cloud') return this.$t('version.abortCloud')
+      if (this.mode === 'session-end') return this.$t('version.abortSessionEnd')
+      return this.$t('version.abortAdopt')
     },
     rows() {
       return this.conflictingPaths.map((path) => ({
@@ -214,9 +213,9 @@ export default {
         if (data.notice) uni.showToast({ title: data.notice, icon: 'none' })
         this.$emit('resolved', data.affectedFileIds || [])
       } catch (e) {
-        const fallback = this.mode === 'cloud' ? '没能按你的选择处理，请稍后重试'
-          : this.mode === 'session-end' ? '收尾没能完成，请稍后重试'
-          : '采纳没能完成，请稍后重试'
+        const fallback = this.mode === 'cloud' ? this.$t('version.resolveFailedCloud')
+          : this.mode === 'session-end' ? this.$t('version.resolveFailedSessionEnd')
+          : this.$t('version.resolveFailedAdopt')
         uni.showToast({ title: (e && e.message) || fallback, icon: 'none' })
       } finally {
         this.busy = false
@@ -230,22 +229,22 @@ export default {
         let fallbackNotice
         if (this.mode === 'cloud') {
           res = await abortCloudMerge(this.projectId)
-          fallbackNotice = '这次没有取回，你和同事的内容都还在'
+          fallbackNotice = this.$t('version.abortNoticeCloud')
         } else if (this.mode === 'session-end') {
           res = await abortSessionEnd(this.projectId)
-          fallbackNotice = '这次没有收尾，你的改动都还在'
+          fallbackNotice = this.$t('version.abortNoticeSessionEnd')
         } else {
           // abort-adopt 的路径参数在后端不参与判断（只按 projectId 找当前合并中的仓库），
           // draftId 反查落空（残局）时也用得到这条逃生门，占位传 0。
           res = await abortAdopt(this.projectId, this.draftId || 0)
           // 与后端 WorkSessionService.ADOPT_ABORTED_NOTICE 逐字一致：正常路径显示的
           // 是后端那句，两处措辞不同的话只有在后端没带 message 时才会露馅，很难被发现。
-          fallbackNotice = '这次采纳没有完成，你的两份稿件都还在'
+          fallbackNotice = this.$t('version.abortNoticeAdopt')
         }
         uni.showToast({ title: (res && res.message) || fallbackNotice, icon: 'none' })
         this.$emit('aborted')
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '没能退出来，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.abortFailedGeneric'), icon: 'none' })
       } finally {
         this.busy = false
       }

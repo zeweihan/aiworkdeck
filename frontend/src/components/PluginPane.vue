@@ -9,7 +9,7 @@
       @load="onFrameLoad"
     ></iframe>
     <view v-else class="plugin-error">
-      <text>无法加载插件：未配置入口地址</text>
+      <text>{{ $t('panels.ppLoadFailed') }}</text>
     </view>
   </view>
 </template>

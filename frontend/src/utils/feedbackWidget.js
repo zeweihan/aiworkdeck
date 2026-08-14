@@ -9,6 +9,7 @@
 // 里一律用原生标签；uni 的全局 API（uni.getStorageSync 等）不受影响，它们挂在 window 上。
 import { createApp } from 'vue'
 import FeedbackWidget from '@/components/FeedbackWidget.vue'
+import { i18n } from '@/i18n'
 
 const CONTAINER_ID = 'awd-feedback-widget'
 
@@ -22,7 +23,8 @@ export function mountFeedbackWidget() {
     const el = document.createElement('div')
     el.id = CONTAINER_ID
     document.body.appendChild(el)
-    createApp(FeedbackWidget).mount(el)
+    // 独立 app 实例，主 app 的 app.use(i18n) 覆盖不到这里，得自己挂一遍才有 this.$t
+    createApp(FeedbackWidget).use(i18n).mount(el)
     mounted = true
   } catch (e) {
     // 反馈入口挂不上不能影响应用本身

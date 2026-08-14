@@ -22,7 +22,7 @@
       class="awdfb-launcher"
       role="button"
       tabindex="0"
-      title="报告问题 / 提建议"
+      :title="$t('feedback.launcherTitle')"
       @click="openPanel"
       @keydown.enter="openPanel"
     >
@@ -34,7 +34,7 @@
         <path d="M12 7.2v3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         <circle cx="12" cy="12.4" r="0.9" fill="currentColor" />
       </svg>
-      <span>反馈</span>
+      <span>{{ $t('feedback.launcherLabel') }}</span>
     </div>
 
     <div v-if="open" class="awdfb-mask">
@@ -48,9 +48,9 @@
         <div class="awdfb-head">
           <div class="awdfb-title">{{ headTitle }}</div>
           <div class="awdfb-head-right">
-            <div v-if="view === 'form'" class="awdfb-link" role="button" @click="openMine">我的反馈</div>
-            <div v-else class="awdfb-link" role="button" @click="backToForm">返回</div>
-            <div class="awdfb-x" role="button" title="关闭" @click="closePanel">✕</div>
+            <div v-if="view === 'form'" class="awdfb-link" role="button" @click="openMine">{{ $t('feedback.myFeedback') }}</div>
+            <div v-else class="awdfb-link" role="button" @click="backToForm">{{ $t('feedback.back') }}</div>
+            <div class="awdfb-x" role="button" :title="$t('feedback.close')" @click="closePanel">✕</div>
           </div>
         </div>
 
@@ -62,13 +62,13 @@
               role="button"
               :class="{ active: kind === 'BUG' }"
               @click="kind = 'BUG'"
-            >报障</div>
+            >{{ $t('feedback.kindBug') }}</div>
             <div
               class="awdfb-kind"
               role="button"
               :class="{ active: kind === 'IDEA' }"
               @click="kind = 'IDEA'"
-            >建议</div>
+            >{{ $t('feedback.kindIdea') }}</div>
           </div>
 
           <component
@@ -77,8 +77,8 @@
             class="awdfb-text"
             :value="text"
             :placeholder="kind === 'BUG'
-              ? '出了什么问题？刚才在做什么？（可直接粘贴截图）'
-              : '你希望它变成什么样？（可直接粘贴截图）'"
+              ? $t('feedback.placeholderBug')
+              : $t('feedback.placeholderIdea')"
             @input="text = $event.target.value"
             @paste="onPaste"
           />
@@ -90,38 +90,38 @@
               role="button"
               :class="{ disabled: capturing }"
               @click="captureScreenshot"
-            >{{ capturing ? '框选中…' : '框选截图' }}</div>
-            <div class="awdfb-tool" role="button" @click="pickImages">选图片</div>
+            >{{ capturing ? $t('feedback.capturingScreenshot') : $t('feedback.captureScreenshotBtn') }}</div>
+            <div class="awdfb-tool" role="button" @click="pickImages">{{ $t('feedback.pickImages') }}</div>
             <div
               class="awdfb-tool"
               role="button"
               :class="{ recording: recording }"
               @click="toggleRecording"
-            >{{ recording ? '停止录音 ' + recordSeconds + 's' : '说一段' }}</div>
+            >{{ recording ? $t('feedback.stopRecording', { seconds: recordSeconds }) : $t('feedback.recordVoice') }}</div>
           </div>
 
           <div v-if="images.length" class="awdfb-shots">
             <div v-for="(img, i) in images" :key="img.id" class="awdfb-shot">
               <img :src="img.url" alt="" />
-              <div class="awdfb-shot-x" role="button" title="移除" @click="removeImage(i)">✕</div>
+              <div class="awdfb-shot-x" role="button" :title="$t('feedback.remove')" @click="removeImage(i)">✕</div>
             </div>
           </div>
 
           <div v-if="audio" class="awdfb-audio">
-            <span class="awdfb-audio-label">语音 {{ audio.seconds }}s</span>
+            <span class="awdfb-audio-label">{{ $t('feedback.audioLabel', { seconds: audio.seconds }) }}</span>
             <div class="awdfb-tool" role="button" @click="togglePlay">
-              {{ playing ? '停止' : '试听' }}
+              {{ playing ? $t('feedback.stopPlay') : $t('feedback.play') }}
             </div>
-            <div class="awdfb-tool" role="button" @click="removeAudio">移除</div>
+            <div class="awdfb-tool" role="button" @click="removeAudio">{{ $t('feedback.remove') }}</div>
           </div>
           <div v-if="audio" class="awdfb-hint">
-            没配转写服务时，这段录音会原样留给维护者听，不会被丢掉。
+            {{ $t('feedback.audioHint') }}
           </div>
 
           <div class="awdfb-ctx-toggle" role="button" @click="showContext = !showContext">
-            {{ showContext ? '收起' : '查看' }}随反馈一起发送的现场信息（{{ contextSummary }}）
+            {{ showContext ? $t('feedback.contextToggleCollapse', { summary: contextSummary }) : $t('feedback.contextToggleExpand', { summary: contextSummary }) }}
           </div>
-          <div class="awdfb-hint">提交后会发给 AI Workdeck 维护者；本机也会留一份，在「系统管理 → 用户反馈」里能查。</div>
+          <div class="awdfb-hint">{{ $t('feedback.submitHint') }}</div>
           <pre v-if="showContext" class="awdfb-ctx">{{ contextPreview }}</pre>
           </template>
 
@@ -129,28 +129,28 @@
             <div class="awdfb-result" :class="{ err: !resultOk }">
               <div class="awdfb-result-msg">{{ resultMessage }}</div>
               <div class="awdfb-result-actions">
-                <div v-if="resultOk" class="awdfb-tool" role="button" @click="openMine">查看进度</div>
-                <div v-else class="awdfb-tool" role="button" @click="backToForm">重试</div>
+                <div v-if="resultOk" class="awdfb-tool" role="button" @click="openMine">{{ $t('feedback.viewProgress') }}</div>
+                <div v-else class="awdfb-tool" role="button" @click="backToForm">{{ $t('feedback.retry') }}</div>
               </div>
             </div>
           </template>
 
           <template v-else-if="view === 'mine'">
-            <div v-if="mineLoading" class="awdfb-hint">加载中…</div>
+            <div v-if="mineLoading" class="awdfb-hint">{{ $t('feedback.loading') }}</div>
             <div v-else-if="mineError" class="awdfb-hint err">{{ mineError }}</div>
-            <div v-else-if="!mineList.length" class="awdfb-hint">还没有提交过反馈</div>
+            <div v-else-if="!mineList.length" class="awdfb-hint">{{ $t('feedback.noFeedbackYet') }}</div>
             <div v-else class="awdfb-mine-list">
               <div v-for="item in mineList" :key="item.id" class="awdfb-mine-item">
                 <div class="awdfb-mine-row">
                   <span class="awdfb-badge" :class="item.kind === 'IDEA' ? 'idea' : 'bug'">
-                    {{ item.kind === 'IDEA' ? '建议' : '报障' }}
+                    {{ item.kind === 'IDEA' ? $t('feedback.kindIdea') : $t('feedback.kindBug') }}
                   </span>
                   <span class="awdfb-mine-time">{{ item.timeLabel }}</span>
                 </div>
                 <div class="awdfb-mine-text">{{ item.excerpt }}</div>
                 <div class="awdfb-mine-status">
                   <span>{{ item.statusLabel }}</span>
-                  <div v-if="item.prUrl" class="awdfb-mine-pr" role="button" @click="openPr(item.prUrl)">查看 PR</div>
+                  <div v-if="item.prUrl" class="awdfb-mine-pr" role="button" @click="openPr(item.prUrl)">{{ $t('feedback.viewPr') }}</div>
                 </div>
               </div>
             </div>
@@ -164,7 +164,7 @@
             role="button"
             :class="{ disabled: submitting || !canSubmit }"
             @click="submit"
-          >{{ submitting ? '提交中…' : '提交' }}</div>
+          >{{ submitting ? $t('feedback.submitting') : $t('feedback.submit') }}</div>
         </div>
       </div>
     </div>
@@ -178,26 +178,27 @@ import { setGlobalOverlay } from '@/utils/overlayState.js'
 import { getRecentErrors, recentErrorCount } from '@/utils/errorBuffer.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { t as t$ } from '@/i18n'
 
 const MAX_IMAGES = 10
 const MAX_RECORD_SECONDS = 120
 
 // 状态对用户的说法：不暴露 NEW/PR_OPENED/EMAILED/SKIPPED/FAILED 这些内部枚举。
 const MINE_STATUS_LABELS = {
-  PR_OPENED: '已修复，等待发布',
-  EMAILED: '已转交维护者',
-  SKIPPED: '已归档',
-  FAILED: '处理中遇到问题，会自动重试',
+  PR_OPENED: 'feedback.statusPrOpened',
+  EMAILED: 'feedback.statusEmailed',
+  SKIPPED: 'feedback.statusSkipped',
+  FAILED: 'feedback.statusFailed',
 }
 
 function mineStatusLabel(item) {
-  if (item.status === 'NEW') return item.uploaded ? '已送达，排队处理中' : '待发送'
-  return MINE_STATUS_LABELS[item.status] || '处理中'
+  if (item.status === 'NEW') return t$(item.uploaded ? 'feedback.statusUploaded' : 'feedback.statusPending')
+  return t$(MINE_STATUS_LABELS[item.status] || 'feedback.statusProcessing')
 }
 
 function mineExcerpt(item) {
-  const t = (item.text || '').trim() || (item.voiceTranscript || '').trim()
-  return t ? (t.length > 60 ? t.slice(0, 60) + '…' : t) : '（只有截图或语音）'
+  const text = (item.text || '').trim() || (item.voiceTranscript || '').trim()
+  return text ? (text.length > 60 ? text.slice(0, 60) + '…' : text) : t$('feedback.excerptOnlyMedia')
 }
 
 function mineTimeLabel(iso) {
@@ -257,19 +258,19 @@ export default {
       return !!(this.text.trim() || this.images.length || this.audio || this.recording)
     },
     contextSummary() {
-      const bits = ['当前页面', '版本与系统']
+      const bits = [this.$t('feedback.contextCurrentPage'), this.$t('feedback.contextVersionSystem')]
       const n = recentErrorCount()
-      if (n) bits.push(n + ' 条前端报错')
-      bits.push('后端日志片段')
+      if (n) bits.push(this.$t('feedback.contextFrontendErrors', { count: n }))
+      bits.push(this.$t('feedback.contextBackendLogs'))
       return bits.join(' · ')
     },
     contextPreview() {
       return JSON.stringify(this.collectContext(), null, 2)
     },
     headTitle() {
-      if (this.view === 'mine') return '我的反馈'
-      if (this.view === 'result') return this.resultOk ? '提交成功' : '提交失败'
-      return '告诉我们哪里不对'
+      if (this.view === 'mine') return this.$t('feedback.myFeedback')
+      if (this.view === 'result') return this.resultOk ? this.$t('feedback.headResultOk') : this.$t('feedback.submitFailed')
+      return this.$t('feedback.headDefaultTitle')
     },
   },
   beforeUnmount() {
@@ -310,7 +311,7 @@ export default {
         const items = (res && res.data && res.data.items) || []
         this.mineList = items.map(formatMineItem)
       } catch (e) {
-        this.mineError = (e && e.message) || '加载失败'
+        this.mineError = (e && e.message) || this.$t('feedback.loadFailed')
       } finally {
         this.mineLoading = false
       }
@@ -340,7 +341,7 @@ export default {
     // ---- 图片 ----
     addImageBlob(blob, name) {
       if (this.images.length >= MAX_IMAGES) {
-        this.setStatus('最多 ' + MAX_IMAGES + ' 张图片', true)
+        this.setStatus(this.$t('feedback.maxImages', { max: MAX_IMAGES }), true)
         return
       }
       const file = blob instanceof File
@@ -400,14 +401,14 @@ export default {
         const resp = await host.ocr.startSelection({ mode: 'window' })
         if (!resp || resp.ok !== true) {
           if (!(resp && resp.cancelled)) {
-            this.setStatus((resp && resp.message) || '截图失败', true)
+            this.setStatus((resp && resp.message) || this.$t('feedback.screenshotFailed'), true)
           }
           return
         }
         const blob = await cropSelection(resp.payload)
         if (blob) this.addImageBlob(blob, 'screenshot.png')
       } catch (e) {
-        this.setStatus((e && e.message) || '截图失败', true)
+        this.setStatus((e && e.message) || this.$t('feedback.screenshotFailed'), true)
       } finally {
         this.capturing = false
         this.open = true
@@ -422,11 +423,11 @@ export default {
         return
       }
       if (this.audio) {
-        this.setStatus('只能附一段语音，请先移除现有的', true)
+        this.setStatus(this.$t('feedback.onlyOneAudio'), true)
         return
       }
       if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices) {
-        this.setStatus('当前环境不支持录音', true)
+        this.setStatus(this.$t('feedback.recordingUnsupported'), true)
         return
       }
       try {
@@ -465,7 +466,7 @@ export default {
           if (this.recordSeconds >= MAX_RECORD_SECONDS) this.stopRecording(false)
         }, 1000)
       } catch (e) {
-        this.setStatus('拿不到麦克风权限：' + ((e && e.message) || e), true)
+        this.setStatus(this.$t('feedback.micPermissionDenied', { message: (e && e.message) || e }), true)
       }
     },
     /** @returns {Promise<void>} 录音真正落成 File 之后才 resolve。 */
@@ -509,7 +510,7 @@ export default {
         this._player.play()
         this.playing = true
       } catch (e) {
-        this.setStatus('试听失败：' + ((e && e.message) || e), true)
+        this.setStatus(this.$t('feedback.playFailed', { message: (e && e.message) || e }), true)
       }
     },
     stopPlay() {
@@ -554,7 +555,7 @@ export default {
       if (this.submitting || !this.canSubmit) return
       if (this.recording) await this.stopRecording(false)
       this.submitting = true
-      this.setStatus('提交中…', false)
+      this.setStatus(this.$t('feedback.submitting'), false)
       try {
         const files = this.images.map((i) => i.file)
         if (this.audio) files.push(this.audio.file)
@@ -569,12 +570,12 @@ export default {
         const data = (res && res.data) || {}
         this.reset()
         this.resultOk = true
-        this.resultMessage = '已收到，编号 #' + (data.id || '?')
+        this.resultMessage = this.$t('feedback.receivedWithId', { id: data.id || '?' })
         this.view = 'result'
       } catch (e) {
         // 失败分支不 reset：文字/图片/语音原样留着，用户点「重试」能直接回到刚才那份草稿
         this.resultOk = false
-        this.resultMessage = (e && e.message) || '提交失败'
+        this.resultMessage = (e && e.message) || this.$t('feedback.submitFailed')
         this.view = 'result'
       } finally {
         this.submitting = false
@@ -595,12 +596,12 @@ async function cropSelection(payload) {
   const img = await new Promise((resolve, reject) => {
     const im = new Image()
     im.onload = () => resolve(im)
-    im.onerror = () => reject(new Error('截图图片加载失败'))
+    im.onerror = () => reject(new Error(t$('feedback.screenshotImageLoadFailed')))
     im.src = String(payload.dataUrl)
   })
   const vw = img.naturalWidth || img.width || 0
   const vh = img.naturalHeight || img.height || 0
-  if (!vw || !vh) throw new Error('截图图片尺寸异常')
+  if (!vw || !vh) throw new Error(t$('feedback.screenshotImageSizeInvalid'))
 
   const b = payload.bounds || null
   const cw = b && b.width ? Number(b.width) : window.innerWidth

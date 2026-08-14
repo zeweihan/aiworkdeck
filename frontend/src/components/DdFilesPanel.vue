@@ -3,8 +3,8 @@
   
   <!-- Header -->
   <view class="dd-panel-header">
-    <text class="dd-panel-title">尽调清单</text>
-    <view class="dd-add-btn" v-if="canCreateRequest" @tap="createRequest" title="新建清单">
+    <text class="dd-panel-title">{{ $t('panels.dfTitle') }}</text>
+    <view class="dd-add-btn" v-if="canCreateRequest" @tap="createRequest" :title="$t('panels.dfCreateTitle')">
       <text class="dd-add-icon">＋</text>
     </view>
   </view>
@@ -55,7 +55,7 @@
         <view
             class="dd-action-btn"
             @tap.stop="copyRequest(req)"
-            title="复制"
+            :title="$t('panels.dfCopy')"
         >
             <image src="/static/copy.png" class="dd-action-img default" />
             <image src="/static/copy_selected.png" class="dd-action-img hover" />
@@ -63,7 +63,7 @@
         <view
             class="dd-action-btn"
             @tap.stop="startRename(req)"
-            title="重命名"
+            :title="$t('panels.dfRename')"
         >
             <image src="/static/rename.png" class="dd-action-img default" />
             <image src="/static/rename_selected.png" class="dd-action-img hover" />
@@ -71,7 +71,7 @@
         <view
             class="dd-action-btn"
             @tap.stop="confirmDelete(req)"
-            title="删除"
+            :title="$t('panels.dfDeleteTitle')"
         >
             <image src="/static/delete.png" class="dd-action-img default" />
             <image src="/static/delete_selected.png" class="dd-action-img hover" />
@@ -80,7 +80,7 @@
     </view>
 
     <view v-if="requests.length === 0" class="dd-empty-state">
-      <text>暂无尽调清单</text>
+      <text>{{ $t('panels.dfEmptyState') }}</text>
     </view>
   </view>
 
@@ -88,14 +88,14 @@
   <view class="dd-dialog-mask" v-if="showDeleteDialog" @tap="showDeleteDialog = false">
     <view class="dd-dialog-content" @tap.stop>
       <view class="dd-dialog-header">
-        <text class="dd-dialog-title">提示</text>
+        <text class="dd-dialog-title">{{ $t('panels.dfDialogTitle') }}</text>
       </view>
       <view class="dd-dialog-body">
-        <text class="dd-dialog-msg">删除将可能删除清单下所有文件，请再次确认，点击确认后才删除。</text>
+        <text class="dd-dialog-msg">{{ $t('panels.dfDeleteConfirmBody') }}</text>
       </view>
       <view class="dd-dialog-footer">
-        <view class="dd-dialog-btn cancel" @tap="showDeleteDialog = false">取消</view>
-        <view class="dd-dialog-btn confirm" @tap="handleDelete">确认</view>
+        <view class="dd-dialog-btn cancel" @tap="showDeleteDialog = false">{{ $t('panels.dfCancel') }}</view>
+        <view class="dd-dialog-btn confirm" @tap="handleDelete">{{ $t('panels.dfConfirm') }}</view>
       </view>
     </view>
   </view>
@@ -155,7 +155,7 @@ export default {
         await this.fetchRequests()
       } catch (e) {
         console.error('Failed to create DD request', e)
-        uni.showToast({ title: '创建失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.dfCreateFailed'), icon: 'none' })
       }
     },
     async openRequest(req) {
@@ -166,11 +166,11 @@ export default {
     async copyRequest(req) {
       try {
         await api.copyDdRequest(req.id)
-        uni.showToast({ title: '已复制', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.dfCopied'), icon: 'none' })
         await this.fetchRequests()
       } catch (e) {
         console.error('Failed to copy request', e)
-        uni.showToast({ title: '复制失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.dfCopyFailed'), icon: 'none' })
       }
     },
     confirmDelete(req) {
@@ -181,13 +181,13 @@ export default {
       if (!this.deletingRequest) return
       try {
         await api.deleteDdRequest(this.deletingRequest.id)
-        uni.showToast({ title: '已删除', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.dfDeleted'), icon: 'none' })
         this.showDeleteDialog = false
         this.deletingRequest = null
         await this.fetchRequests()
       } catch (e) {
         console.error('Failed to delete request', e)
-        uni.showToast({ title: '删除失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.dfDeleteFailed'), icon: 'none' })
       }
     },
     startRename(req) {
@@ -200,19 +200,19 @@ export default {
             try {
                 await api.updateDdRequest(req.id, this.editName)
                 req.name = this.editName
-                uni.showToast({ title: '已更名', icon: 'none' })
+                uni.showToast({ title: this.$t('panels.dfRenamed'), icon: 'none' })
             } catch (e) {
                 console.error(e)
-                uni.showToast({ title: '更名失败', icon: 'none' })
+                uni.showToast({ title: this.$t('panels.dfRenameFailed'), icon: 'none' })
             }
         }
         this.editingId = null
     },
     getStatusText(status) {
       const map = {
-        'DRAFT': '草稿',
-        'PUBLISHED': '进行中',
-        'COMPLETED': '已完成'
+        'DRAFT': this.$t('panels.dfStatusDraft'),
+        'PUBLISHED': this.$t('panels.dfStatusPublished'),
+        'COMPLETED': this.$t('panels.dfStatusCompleted')
       }
       return map[status] || status
     }

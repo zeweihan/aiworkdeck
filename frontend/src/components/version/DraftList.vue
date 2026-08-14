@@ -1,30 +1,30 @@
 <template>
   <view v-if="drafts.length" class="draft-list">
     <view class="draft-list-header">
-      <text class="draft-list-title">进行中的稿</text>
-      <view class="awd-btn awd-btn-secondary draft-new-btn" @tap="openNaming">另起一稿</view>
+      <text class="draft-list-title">{{ $t('version.draftsInProgress') }}</text>
+      <view class="awd-btn awd-btn-secondary draft-new-btn" @tap="openNaming">{{ $t('version.newDraft') }}</view>
     </view>
     <view v-for="d in drafts" :key="d.id" class="draft-row">
       <view class="draft-row-main">
-        <text class="draft-row-name">{{ d.name || '未命名稿' }}</text>
+        <text class="draft-row-name">{{ d.name || $t('version.unnamedDraft') }}</text>
         <text class="draft-row-date">{{ dateOf(d.startedAt) }}</text>
       </view>
-      <view class="awd-btn awd-btn-secondary draft-row-btn" @tap="switchTo(d)">切到这一稿</view>
+      <view class="awd-btn awd-btn-secondary draft-row-btn" @tap="switchTo(d)">{{ $t('version.switchToDraft') }}</view>
     </view>
 
     <view v-if="naming" class="awd-mask" @tap.self="naming = false">
       <view class="awd-dialog">
-        <view class="awd-header"><text class="awd-title">给这份稿起个名字</text></view>
+        <view class="awd-header"><text class="awd-title">{{ $t('version.nameDraftTitle') }}</text></view>
         <view class="awd-body">
           <input
             v-model="title"
             class="awd-input"
-            placeholder="例如：客户方案 B"
+            :placeholder="$t('version.draftNamePlaceholder')"
           />
         </view>
         <view class="awd-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="naming = false">取消</view>
-          <view class="awd-btn awd-btn-primary" @tap="create">开始</view>
+          <view class="awd-btn awd-btn-secondary" @tap="naming = false">{{ $t('common.cancel') }}</view>
+          <view class="awd-btn awd-btn-primary" @tap="create">{{ $t('version.start') }}</view>
         </view>
       </view>
     </view>
@@ -51,7 +51,10 @@ export default {
       if (!v) return ''
       const d = new Date(v)
       const pad = (n) => String(n).padStart(2, '0')
-      return `${d.getFullYear()} 年 ${d.getMonth() + 1} 月 ${d.getDate()} 日 ${pad(d.getHours())}:${pad(d.getMinutes())}`
+      return this.$t('version.dateYmdHm', {
+        year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(),
+        time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
+      })
     },
     openNaming() {
       this.title = ''
@@ -61,7 +64,7 @@ export default {
       if (this.busy) return
       const name = (this.title || '').trim()
       if (!name) {
-        uni.showToast({ title: '请给这一稿起个名字', icon: 'none' })
+        uni.showToast({ title: this.$t('version.draftNameRequired'), icon: 'none' })
         return
       }
       this.busy = true
@@ -69,10 +72,10 @@ export default {
         const res = await createDraft(this.projectId, null, name)
         const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
         this.naming = false
-        uni.showToast({ title: `已建立稿《${name}》，正在切换`, icon: 'none' })
+        uni.showToast({ title: this.$t('version.draftCreatedSwitching', { name }), icon: 'none' })
         this.$emit('created', affectedFileIds)
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '开稿失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.createDraftFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -85,7 +88,7 @@ export default {
         const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
         this.$emit('switched', affectedFileIds)
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '切换失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.switchDraftFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }

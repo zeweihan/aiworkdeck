@@ -23,7 +23,7 @@
       <text>{{ statusText }}</text>
     </view>
     <view v-if="ready" class="vcmp-banner">
-      <text>版本对比（只读）：左删右增的修订即两版差异，共 {{ redlineCount }} 处</text>
+      <text>{{ $t('version.compareTabBanner', { count: redlineCount }) }}</text>
     </view>
   </view>
 </template>
@@ -45,17 +45,18 @@ export default {
     return {
       hostId: 'vcmp-host-' + (++seq),
       ready: false,
-      statusText: '正在准备对比…',
+      statusText: '',
       redlineCount: 0,
       webviewEl: null,
       executor: null,
     }
   },
   async mounted() {
+    this.statusText = this.$t('version.compareTabPreparing')
     try {
       const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
-        this.statusText = '当前环境不支持版本对比'
+        this.statusText = this.$t('version.compareTabUnsupportedEnv')
         return
       }
       const spec = this.compareSpec
@@ -68,7 +69,7 @@ export default {
       const bytesPromise = Promise.all([
         fetchVersionFileBytes(spec.projectId, spec.newRef, spec.path),
         fetchVersionFileBytes(spec.projectId, spec.oldRef, spec.path),
-      ]).catch((e) => { bytesError = e || new Error('读取版本内容失败'); return null })
+      ]).catch((e) => { bytesError = e || new Error(this.$t('version.compareFetchBytesFailed')); return null })
       // { kind:'webview', url, preload, partition } | { kind:'iframe', url }
       const info = await api.getEditor()
       await this.mountEditor(info) // resolves once 引擎端点就绪（onReady 握手），此前不发命令
@@ -77,21 +78,21 @@ export default {
       const [newBytes, oldBytes] = bytes || []
       // 空的新版字节进 load_document 只会得到一个空白文档，再 compare 出满篇「删除」
       // 修订——那是假的对比结果，比报错更糟。直接失败。
-      if (!newBytes || !newBytes.length) throw new Error('这一版里没有这份文件的内容')
-      this.statusText = '正在生成对比…'
+      if (!newBytes || !newBytes.length) throw new Error(this.$t('version.compareEmptyContent'))
+      this.statusText = this.$t('version.compareTabGenerating')
       const name = spec.path.split('/').pop() || 'compare.docx'
       const loaded = await this.executor.executeCommand('load_document', {
-        bytes: newBytes, name, authorName: '版本对比',
+        bytes: newBytes, name, authorName: this.$t('version.compareAuthorName'),
       })
-      if (!loaded || loaded.success === false) throw new Error('加载新版失败')
+      if (!loaded || loaded.success === false) throw new Error(this.$t('version.compareLoadNewFailed'))
       // 每实例只能调一次：结尾会派发 .uno:EditDoc（toggle）切回只读。
       const cmp = await this.executor.executeCommand('compare_document', { baseBytes: oldBytes })
-      if (!cmp || cmp.success !== true) throw new Error('对比生成失败')
+      if (!cmp || cmp.success !== true) throw new Error(this.$t('version.compareGenerateFailed'))
       this.redlineCount = cmp.redlineCount || 0
       this.ready = true
     } catch (e) {
       console.warn('[VersionCompare] 失败', e)
-      this.statusText = (e && e.message) || '对比生成失败，请稍后重试'
+      this.statusText = (e && e.message) || this.$t('version.compareFailedRetry')
     }
   },
   beforeUnmount() {
@@ -116,7 +117,7 @@ export default {
         // 引擎启动超时：150秒（WASM 编译 + 排版引擎约 90秒，留余量）。
         // onReady / did-fail-load 先到时清除，防止引擎挂死时 Promise 永不 settle。
         this._bootTimeout = setTimeout(() => {
-          reject(new Error('对比准备超时，请关闭后重试'))
+          reject(new Error(this.$t('version.compareTimeout')))
         }, 150000)
         const onReady = () => {
           clearTimeout(this._bootTimeout)
@@ -136,7 +137,7 @@ export default {
           }
           el.addEventListener('error', () => {
             clearTimeout(this._bootTimeout)
-            reject(new Error('编辑器页面加载失败'))
+            reject(new Error(this.$t('version.compareIframeLoadFailed')))
           })
           el.src = info.url
         } else {

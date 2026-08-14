@@ -2,14 +2,14 @@
   <view class="favorites-panel">
     <scroll-view class="favorites-body" scroll-x :show-scrollbar="true" :scroll-into-view="scrollIntoView" scroll-with-animation>
       <view v-if="loading" class="loading">
-        <text class="loading-text">加载中...</text>
+        <text class="loading-text">{{ $t('panels.pfLoading') }}</text>
       </view>
       <view v-else-if="items.length === 0" class="empty">
-        <text class="empty-text">暂无收藏</text>
+        <text class="empty-text">{{ $t('panels.pfEmpty') }}</text>
       </view>
       <view v-else class="list-grid">
         <view v-for="fav in items" :key="fav.id" class="fav-card" :id="getCardDomId(fav.id)" :class="{ 'card--highlight': highlightId === fav.id }">
-          
+
           <!-- New Header Structure -->
           <view class="card-header">
              <view class="header-left">
@@ -17,26 +17,26 @@
                <text class="card-time">{{ formatTime(fav.createdAt) }}</text>
              </view>
              <view class="header-right">
-                <view v-if="fav.sourceUrl" class="favo-btn" @tap.stop="openUrl(fav.sourceUrl)" title="新标签页打开">
+                <view v-if="fav.sourceUrl" class="favo-btn" @tap.stop="openUrl(fav.sourceUrl)" :title="$t('panels.pfOpenNewTabTitle')">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path v-for="(d, gi) in ICONS.link" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                   </svg>
                 </view>
                 <!-- Insert Button -->
-                <view class="favo-btn" @tap.stop="insertFav(fav)" title="插入">
+                <view class="favo-btn" @tap.stop="insertFav(fav)" :title="$t('panels.pfInsertTitle')">
                   <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
                 </view>
                 <!-- Delete -->
                 <view class="del-wrapper" style="position: relative;">
-                  <view class="favo-btn danger" @tap.stop="requestDelete(fav.id)" title="删除">
+                  <view class="favo-btn danger" @tap.stop="requestDelete(fav.id)" :title="$t('panels.pfDeleteTitle')">
                     <text class="icon">×</text>
                   </view>
                   <view v-if="confirmDeleteId === fav.id" class="delete-popover" @tap.stop>
                     <view class="pop-arrow"></view>
-                    <text class="pop-text">确认删除?</text>
+                    <text class="pop-text">{{ $t('panels.pfConfirmDeleteText') }}</text>
                     <view class="pop-row">
-                      <view class="pop-btn" @tap.stop="cancelDelete">取消</view>
-                      <view class="pop-btn danger" @tap.stop="confirmDelete(fav.id)">确定</view>
+                      <view class="pop-btn" @tap.stop="cancelDelete">{{ $t('panels.pfCancel') }}</view>
+                      <view class="pop-btn danger" @tap.stop="confirmDelete(fav.id)">{{ $t('panels.pfConfirm') }}</view>
                     </view>
                   </view>
                 </view>
@@ -51,7 +51,7 @@
              </view>
              <!-- Or Text Preview -->
              <view v-else class="text-preview">
-                <text class="content-text">{{ fav.content || fav.title || '无内容' }}</text>
+                <text class="content-text">{{ fav.content || fav.title || $t('panels.pfNoContent') }}</text>
              </view>
              <!-- Source Host (if web) -->
              <view v-if="fav.sourceHost" class="source-host">{{ fav.sourceHost }}</view>
@@ -109,9 +109,9 @@ export default {
   },
   methods: {
     getTypeLabel(fav) {
-      if (fav.sourceUrl) return '网页'
-      if (fav.imagePath) return '图片'
-      return '文本'
+      if (fav.sourceUrl) return this.$t('panels.pfTypeWeb')
+      if (fav.imagePath) return this.$t('panels.pfTypeImage')
+      return this.$t('panels.pfTypeText')
     },
     getTypeClass(fav) {
       if (fav.sourceUrl) return 'type-web'
@@ -186,7 +186,7 @@ export default {
         this.items = Array.isArray(list) ? list : (list?.data || [])
       } catch (e) {
         console.error('加载项目收藏失败:', e)
-        uni.showToast({ title: '加载收藏失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.pfLoadFailed'), icon: 'none' })
       } finally {
         this.loading = false
       }
@@ -215,10 +215,10 @@ export default {
       try {
         await deleteFavorite(id)
         await this.refresh()
-        uni.showToast({ title: '删除成功', icon: 'success' })
+        uni.showToast({ title: this.$t('panels.pfDeleteSuccess'), icon: 'success' })
       } catch (e) {
         console.error('删除收藏失败:', e)
-        uni.showToast({ title: '删除失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.pfDeleteFailed'), icon: 'none' })
       }
     }
   }

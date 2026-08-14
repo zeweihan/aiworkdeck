@@ -1,18 +1,18 @@
 <template>
   <view class="version-panel">
-    <view v-if="loading" class="version-empty">正在读取版本记录…</view>
+    <view v-if="loading" class="version-empty">{{ $t('version.loadingHistory') }}</view>
 
     <view v-else-if="loadError" class="version-error">
-      <view class="version-error-desc">版本记录读取失败，请稍后重试。</view>
-      <view class="awd-btn awd-btn-primary" @tap="refresh">重试</view>
+      <view class="version-error-desc">{{ $t('version.loadFailedDesc') }}</view>
+      <view class="awd-btn awd-btn-primary" @tap="refresh">{{ $t('common.retry') }}</view>
     </view>
 
     <view v-else-if="!enabled" class="version-intro">
-      <view class="version-intro-title">本项目还没有开启版本记录</view>
+      <view class="version-intro-title">{{ $t('version.notEnabledTitle') }}</view>
       <view class="version-intro-desc">
-        开启后，你每次改动都会自动留底，随时可以看到项目改了什么、退回到以前的样子。
+        {{ $t('version.notEnabledDesc') }}
       </view>
-      <view class="awd-btn awd-btn-primary" @tap="enable">开启版本记录</view>
+      <view class="awd-btn awd-btn-primary" @tap="enable">{{ $t('version.enable') }}</view>
     </view>
 
     <template v-else>
@@ -34,8 +34,8 @@
         @open-collab="$emit('open-collab', $event)"
       />
       <view v-if="fileFilter" class="version-file-filter">
-        <text class="version-file-filter-text">只看《{{ fileFilter.name }}》的历史</text>
-        <text class="version-file-filter-clear" @tap="$emit('clear-file-filter')">显示全部</text>
+        <text class="version-file-filter-text">{{ $t('version.filterOnlyFile', { name: fileFilter.name }) }}</text>
+        <text class="version-file-filter-clear" @tap="$emit('clear-file-filter')">{{ $t('version.showAll') }}</text>
       </view>
       <DraftList
         v-if="drafts.length"
@@ -183,7 +183,7 @@ export default {
         // 去重复点开启。宁可显示可区分的错误态，保留 enabled 的上一次已知值。
         console.warn('[Version] 读取状态失败', e)
         this.loadError = true
-        uni.showToast({ title: '读取失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: this.$t('version.loadFailedToast'), icon: 'none' })
       } finally {
         this.loading = false
       }
@@ -231,7 +231,7 @@ export default {
         await enableVersionControl(this.projectId)
         await this.refresh()
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '开启失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.enableFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }

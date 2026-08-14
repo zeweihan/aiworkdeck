@@ -3,21 +3,21 @@
 
   <!-- Header -->
   <view class="sm-panel-header">
-    <text class="sm-panel-title">股东大会核查</text>
-    <view class="sm-add-btn" @tap="showCreateForm = !showCreateForm" title="新建核查">
+    <text class="sm-panel-title">{{ $t('panels.smTitle') }}</text>
+    <view class="sm-add-btn" @tap="showCreateForm = !showCreateForm" :title="$t('panels.smCreateTitle')">
       <text class="sm-add-icon">＋</text>
     </view>
   </view>
 
   <!-- Create Form -->
   <view class="sm-create-form" v-if="showCreateForm">
-    <input class="sm-input" v-model="form.companyName" placeholder="公司名称（必填）" />
-    <input class="sm-input" v-model="form.stockCode" placeholder="股票代码（6 位，选填）" />
-    <input class="sm-input" v-model="form.meetingName" placeholder="届次，如 2026年第一次临时股东会" />
-    <input class="sm-input" v-model="form.meetingDate" placeholder="召开日期 YYYY-MM-DD" />
+    <input class="sm-input" v-model="form.companyName" :placeholder="$t('panels.smCompanyNamePlaceholder')" />
+    <input class="sm-input" v-model="form.stockCode" :placeholder="$t('panels.smStockCodePlaceholder')" />
+    <input class="sm-input" v-model="form.meetingName" :placeholder="$t('panels.smMeetingNamePlaceholder')" />
+    <input class="sm-input" v-model="form.meetingDate" :placeholder="$t('panels.smMeetingDatePlaceholder')" />
     <view class="sm-form-actions">
-      <view class="sm-btn secondary" @tap="showCreateForm = false">取消</view>
-      <view class="sm-btn primary" @tap="createCheck">创建</view>
+      <view class="sm-btn secondary" @tap="showCreateForm = false">{{ $t('panels.smCancel') }}</view>
+      <view class="sm-btn primary" @tap="createCheck">{{ $t('panels.smCreate') }}</view>
     </view>
   </view>
 
@@ -35,9 +35,9 @@
             class="sm-del-btn"
             v-if="expandedId === check.id"
             @tap.stop="confirmDelete(check)"
-            title="删除"
+            :title="$t('panels.smDeleteTitle')"
           >
-            <text>删</text>
+            <text>{{ $t('panels.smDeleteShort') }}</text>
           </view>
         </view>
       </view>
@@ -45,44 +45,44 @@
       <!-- Detail -->
       <view class="sm-check-detail" v-if="expandedId === check.id">
         <view class="sm-meta-line" v-if="check.stockCode || check.meetingDate">
-          <text>{{ check.stockCode || '无代码' }} · {{ check.meetingDate || '未填日期' }}</text>
+          <text>{{ check.stockCode || $t('panels.smNoStockCode') }} · {{ check.meetingDate || $t('panels.smNoMeetingDate') }}</text>
         </view>
 
         <!-- Material Slots -->
         <view class="sm-slot" v-for="slot in slotDefs" :key="slot.key">
           <view class="sm-slot-head">
             <text class="sm-slot-label">{{ slot.label }}</text>
-            <text class="sm-slot-link" @tap="openPicker(check, slot)">{{ slot.multi ? '添加' : (slotFiles(check, slot).length ? '更换' : '关联') }}</text>
+            <text class="sm-slot-link" @tap="openPicker(check, slot)">{{ slot.multi ? $t('panels.smAdd') : (slotFiles(check, slot).length ? $t('panels.smReplace') : $t('panels.smLink')) }}</text>
           </view>
           <view class="sm-slot-files">
             <view v-for="f in slotFiles(check, slot)" :key="f.id" class="sm-slot-file">
               <text class="sm-file-name">{{ f.name }}</text>
               <text class="sm-file-remove" @tap="removeMaterial(check, slot, f)">×</text>
             </view>
-            <text v-if="slotFiles(check, slot).length === 0" class="sm-slot-empty">{{ slot.optional ? '未关联（可选）' : '未关联' }}</text>
+            <text v-if="slotFiles(check, slot).length === 0" class="sm-slot-empty">{{ slot.optional ? $t('panels.smNotLinkedOptional') : $t('panels.smNotLinked') }}</text>
           </view>
         </view>
 
         <!-- Actions -->
         <view class="sm-actions">
           <view class="sm-btn secondary" :class="{ disabled: fetching }" @tap="fetchCninfo(check)">
-            {{ fetching ? '拉取中...' : '从巨潮拉取通知与决议' }}
+            {{ fetching ? $t('panels.smFetchingCninfo') : $t('panels.smFetchCninfo') }}
           </view>
           <view class="sm-btn primary" :class="{ disabled: starting || check.status === 'RUNNING' }" @tap="startCheck(check)">
-            {{ starting ? '准备中...' : (check.status === 'RUNNING' ? '核查执行中' : '开始核查') }}
+            {{ starting ? $t('panels.smPreparing') : (check.status === 'RUNNING' ? $t('panels.smCheckRunning') : $t('panels.smStartCheck')) }}
           </view>
         </view>
         <view class="sm-hint" v-if="check.status === 'RUNNING'">
-          <text>AI 正在 AI 面板中执行核查，产出将写入底稿夹。</text>
+          <text>{{ $t('panels.smHintRunning') }}</text>
         </view>
         <view class="sm-hint" v-if="check.status === 'DONE'">
-          <text>核查完成，产出见资源管理器「股东大会核查」文件夹。</text>
+          <text>{{ $t('panels.smHintDone') }}</text>
         </view>
       </view>
     </view>
 
     <view v-if="checks.length === 0 && !showCreateForm" class="sm-empty-state">
-      <text>暂无核查会话，点右上角＋新建</text>
+      <text>{{ $t('panels.smEmptyState') }}</text>
     </view>
   </view>
 
@@ -98,13 +98,13 @@
   <!-- Delete Confirm -->
   <view class="sm-dialog-mask" v-if="showDeleteDialog" @tap="showDeleteDialog = false">
     <view class="sm-dialog-content" @tap.stop>
-      <view class="sm-dialog-header"><text class="sm-dialog-title">提示</text></view>
+      <view class="sm-dialog-header"><text class="sm-dialog-title">{{ $t('panels.smDialogTitle') }}</text></view>
       <view class="sm-dialog-body">
-        <text>删除核查会话不会删除文件树中的材料与产出，确认删除？</text>
+        <text>{{ $t('panels.smDeleteConfirmBody') }}</text>
       </view>
       <view class="sm-dialog-footer">
-        <view class="sm-dialog-btn cancel" @tap="showDeleteDialog = false">取消</view>
-        <view class="sm-dialog-btn confirm" @tap="handleDelete">确认</view>
+        <view class="sm-dialog-btn cancel" @tap="showDeleteDialog = false">{{ $t('panels.smCancel') }}</view>
+        <view class="sm-dialog-btn confirm" @tap="handleDelete">{{ $t('panels.smConfirm') }}</view>
       </view>
     </view>
   </view>
@@ -114,12 +114,14 @@
 import api from '@/services/api'
 import FilePickerDialog from '@/components/FilePickerDialog.vue'
 
+import { t } from '@/i18n'
+
 const SLOT_DEFS = [
-  { key: 'notice', label: '股东大会通知', field: 'noticeFileId', multi: false, optional: false, accept: ['pdf', 'docx', 'doc'] },
-  { key: 'resolution', label: '董事会决议公告', field: 'resolutionFileId', multi: false, optional: false, accept: ['pdf', 'docx', 'doc'] },
-  { key: 'voteResult', label: '投票结果', field: 'voteResultFileIds', multi: true, optional: false, accept: ['xlsx', 'xls', 'csv', 'pdf', 'docx', 'doc'] },
-  { key: 'template', label: '意见书模板/会前初稿', field: 'templateFileId', multi: false, optional: true, accept: ['docx', 'doc'] },
-  { key: 'other', label: '其他材料', field: 'otherFileIds', multi: true, optional: true, accept: [] }
+  { key: 'notice', label: t('panels.smSlotNotice'), field: 'noticeFileId', multi: false, optional: false, accept: ['pdf', 'docx', 'doc'] },
+  { key: 'resolution', label: t('panels.smSlotResolution'), field: 'resolutionFileId', multi: false, optional: false, accept: ['pdf', 'docx', 'doc'] },
+  { key: 'voteResult', label: t('panels.smSlotVoteResult'), field: 'voteResultFileIds', multi: true, optional: false, accept: ['xlsx', 'xls', 'csv', 'pdf', 'docx', 'doc'] },
+  { key: 'template', label: t('panels.smSlotTemplate'), field: 'templateFileId', multi: false, optional: true, accept: ['docx', 'doc'] },
+  { key: 'other', label: t('panels.smSlotOther'), field: 'otherFileIds', multi: true, optional: true, accept: [] }
 ]
 
 export default {
@@ -145,7 +147,7 @@ export default {
       form: { companyName: '', stockCode: '', meetingName: '', meetingDate: '' },
       slotDefs: SLOT_DEFS,
       pickerVisible: false,
-      pickerTitle: '选择材料文件',
+      pickerTitle: t('panels.smPickerDefaultTitle'),
       pickerAccept: [],
       pickerTarget: null, // { check, slot }
       fetching: false,
@@ -189,7 +191,7 @@ export default {
       const ids = slot.multi
         ? this.parseIds(check[slot.field])
         : (check[slot.field] ? [check[slot.field]] : [])
-      return ids.map(id => this.fileNames[id] || { id, name: `文件 #${id}` })
+      return ids.map(id => this.fileNames[id] || { id, name: this.$t('panels.smFileNamed', { id }) })
     },
     parseIds(json) {
       if (!json) return []
@@ -201,18 +203,24 @@ export default {
       }
     },
     statusText(status) {
-      return { DRAFT: '建档中', READY: '待执行', RUNNING: '核查中', DONE: '已完成' }[status] || status
+      const map = {
+        DRAFT: this.$t('panels.smStatusDraft'),
+        READY: this.$t('panels.smStatusReady'),
+        RUNNING: this.$t('panels.smStatusRunning'),
+        DONE: this.$t('panels.smStatusDone')
+      }
+      return map[status] || status
     },
     toggleExpand(check) {
       this.expandedId = this.expandedId === check.id ? null : check.id
     },
     async createCheck() {
       if (!this.form.companyName.trim() || !this.form.meetingName.trim()) {
-        uni.showToast({ title: '公司名称与届次必填', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smCompanyMeetingRequired'), icon: 'none' })
         return
       }
       if (this.form.meetingDate && !/^\d{4}-\d{2}-\d{2}$/.test(this.form.meetingDate.trim())) {
-        uni.showToast({ title: '日期格式应为 YYYY-MM-DD', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smDateFormatInvalid'), icon: 'none' })
         return
       }
       try {
@@ -227,12 +235,12 @@ export default {
         await this.loadChecks()
         this.expandedId = (check && check.id) || null
       } catch (e) {
-        uni.showToast({ title: '创建失败：' + (e.message || e), icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smCreateFailed', { msg: e.message || e }), icon: 'none' })
       }
     },
     openPicker(check, slot) {
       this.pickerTarget = { check, slot }
-      this.pickerTitle = `选择「${slot.label}」文件`
+      this.pickerTitle = this.$t('panels.smPickerTitleFor', { label: slot.label })
       this.pickerAccept = slot.accept
       this.pickerVisible = true
     },
@@ -244,7 +252,7 @@ export default {
         await this.loadChecks()
         this.expandedId = check.id
       } catch (e) {
-        uni.showToast({ title: '关联失败：' + (e.message || e), icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smLinkFailed', { msg: e.message || e }), icon: 'none' })
       }
     },
     async removeMaterial(check, slot, file) {
@@ -253,13 +261,13 @@ export default {
         await this.loadChecks()
         this.expandedId = check.id
       } catch (e) {
-        uni.showToast({ title: '移除失败：' + (e.message || e), icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smRemoveFailed', { msg: e.message || e }), icon: 'none' })
       }
     },
     async fetchCninfo(check) {
       if (this.fetching) return
       if (!check.stockCode || !check.meetingDate) {
-        uni.showToast({ title: '需先填写股票代码与召开日期', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smNeedStockAndDate'), icon: 'none' })
         return
       }
       this.fetching = true
@@ -267,18 +275,18 @@ export default {
         const res = await api.fetchShareholderMeetingCninfo(check.id)
         const errors = (res && res.errors) || []
         const got = []
-        if (res && res.notice && res.notice.fileId) got.push('通知')
-        if (res && res.resolution && res.resolution.fileId) got.push('决议')
+        if (res && res.notice && res.notice.fileId) got.push(this.$t('panels.smNoticeWord'))
+        if (res && res.resolution && res.resolution.fileId) got.push(this.$t('panels.smResolutionWord'))
         if (got.length) {
-          uni.showToast({ title: `已拉取：${got.join('、')}`, icon: 'none' })
+          uni.showToast({ title: this.$t('panels.smFetchedList', { list: got.join(this.$t('panels.smListSeparator')) }), icon: 'none' })
         }
         if (errors.length) {
-          uni.showToast({ title: `部分未拉到：${errors[0]}`, icon: 'none' })
+          uni.showToast({ title: this.$t('panels.smPartialFetchFailed', { msg: errors[0] }), icon: 'none' })
         }
         await this.loadChecks()
         this.expandedId = check.id
       } catch (e) {
-        uni.showToast({ title: '拉取失败，请改用手动关联：' + (e.message || e), icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smFetchFailedFallback', { msg: e.message || e }), icon: 'none' })
       } finally {
         this.fetching = false
       }
@@ -287,7 +295,7 @@ export default {
       if (this.starting || check.status === 'RUNNING') return
       const hasVote = this.parseIds(check.voteResultFileIds).length > 0
       if (!check.noticeFileId && !check.resolutionFileId && !hasVote) {
-        uni.showToast({ title: '请至少关联一份材料', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smAtLeastOneMaterial'), icon: 'none' })
         return
       }
       this.starting = true
@@ -298,7 +306,7 @@ export default {
         await this.loadChecks()
         this.expandedId = check.id
       } catch (e) {
-        uni.showToast({ title: '开始核查失败：' + (e.message || e), icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smStartCheckFailed', { msg: e.message || e }), icon: 'none' })
       } finally {
         this.starting = false
       }
@@ -315,7 +323,7 @@ export default {
         if (this.expandedId === this.deletingCheck.id) this.expandedId = null
         await this.loadChecks()
       } catch (e) {
-        uni.showToast({ title: '删除失败：' + (e.message || e), icon: 'none' })
+        uni.showToast({ title: this.$t('panels.smDeleteFailed', { msg: e.message || e }), icon: 'none' })
       } finally {
         this.deletingCheck = null
       }

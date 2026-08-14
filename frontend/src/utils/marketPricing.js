@@ -6,6 +6,7 @@
 // **字段缺失一律按免费**，绝不能因为跑在旧后端/旧 registry 上就把免费项锁住。
 
 import { siteBaseUrl } from '@/utils/siteLinks.js'
+import { t } from '@/i18n'
 
 // 售价上限（分）= ¥100,000，与后端 MarketPurchaseGate.MAX_PRICE_CENTS 同口径。
 // 超上限必是注册表畸形值（如 long 被截成 int），按未知处理——展示一个假价格比展示「免费」更糟。
@@ -29,8 +30,8 @@ export function formatPrice(cents) {
 /** 价格标签：免费项「免费」，已购项「已购买」，其余「¥xx.xx」。 */
 export function priceLabel(item) {
   const cents = priceCentsOf(item)
-  if (!cents) return '免费'
-  if (item && item.purchased) return '已购买'
+  if (!cents) return t('market.free')
+  if (item && item.purchased) return t('market.purchased')
   return formatPrice(cents)
 }
 

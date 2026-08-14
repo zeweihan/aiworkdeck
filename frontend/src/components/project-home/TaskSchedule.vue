@@ -1,10 +1,10 @@
 <template>
   <view class="task-schedule">
-    <view v-if="loading" class="task-hint">正在读取任务…</view>
+    <view v-if="loading" class="task-hint">{{ $t('projects.tasksLoadingHint') }}</view>
 
     <view v-else-if="!tasks.length" class="task-guide">
-      <text class="task-guide-title">还没有排任务</text>
-      <text class="task-guide-desc">交付日期、待办和提醒以后会排在这里。</text>
+      <text class="task-guide-title">{{ $t('projects.noTasksTitle') }}</text>
+      <text class="task-guide-desc">{{ $t('projects.noTasksDesc') }}</text>
     </view>
 
     <view v-else class="task-rows">
@@ -37,9 +37,9 @@ export default {
       return String(status || 'OPEN').toLowerCase()
     },
     statusLabel(status) {
-      if (status === 'DOING') return '进行中'
-      if (status === 'DONE') return '已完成'
-      return '待办'
+      if (status === 'DOING') return this.$t('projects.statusDoing')
+      if (status === 'DONE') return this.$t('projects.statusDone')
+      return this.$t('projects.statusOpen')
     },
   },
 }
