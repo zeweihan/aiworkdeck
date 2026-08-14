@@ -1,4 +1,5 @@
 <template>
+  <view class="etb-wrap">
   <view class="etb" @tap="closeMenus">
     <!-- 主命令区：窄了就横向滚动，不换行（换行会把画布挤下去） -->
     <scroll-view class="etb-scroll" scroll-x>
@@ -100,9 +101,63 @@
           <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.indent" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </view>
         <view class="etb-sep"></view>
-        <view class="etb-btn" title="插入分页符" @tap.stop="ui('page_break')">
-          <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.pagebreak" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+
+        <!-- 插入 -->
+        <view class="etb-drop" :class="{ open: menu === 'insert' }">
+          <view class="etb-field w72" title="插入" @tap.stop="openInsert">
+            <text class="etb-field-t">插入</text>
+            <text class="etb-caret">⌄</text>
+          </view>
+          <view v-if="menu === 'insert'" class="etb-menu w200 pad" @tap.stop>
+            <!-- 一级清单 -->
+            <template v-if="!insertMode">
+              <view class="etb-item" @tap.stop="insertMode = 'table'"><text class="etb-item-t">表格…</text></view>
+              <view class="etb-item" @tap.stop="pickImage"><text class="etb-item-t">图片…</text></view>
+              <view class="etb-item" :class="{ dim: noSelection }" @tap.stop="startLink">
+                <text class="etb-item-t">超链接…</text>
+                <text v-if="noSelection" class="etb-hint">需先选中文字</text>
+              </view>
+              <view class="etb-item" :class="{ dim: noSelection }" @tap.stop="startComment">
+                <text class="etb-item-t">批注…</text>
+                <text v-if="noSelection" class="etb-hint">需先选中文字</text>
+              </view>
+              <view class="etb-item" @tap.stop="ui('page_break')"><text class="etb-item-t">分页符</text></view>
+            </template>
+
+            <!-- 表格：网格选择器 -->
+            <view v-else-if="insertMode === 'table'" class="etb-form">
+              <text class="etb-form-t">{{ grid.r ? grid.r + ' × ' + grid.c + ' 表格' : '选择行列数' }}</text>
+              <view class="etb-grid">
+                <view v-for="cell in GRID_CELLS" :key="cell.k" class="etb-cell"
+                      :class="{ hot: cell.r <= grid.r && cell.c <= grid.c }"
+                      @mouseenter="grid = { r: cell.r, c: cell.c }" @tap.stop="doInsertTable(cell.r, cell.c)"></view>
+              </view>
+              <view class="etb-form-acts"><text class="etb-form-b" @tap.stop="insertMode = ''">取消</text></view>
+            </view>
+
+            <!-- 超链接 -->
+            <view v-else-if="insertMode === 'link'" class="etb-form">
+              <text class="etb-form-t">给「{{ selPreview }}」加链接</text>
+              <input class="etb-input" v-model="linkUrl" placeholder="https://" @click.stop />
+              <view class="etb-form-acts">
+                <text class="etb-form-b" @tap.stop="insertMode = ''">取消</text>
+                <text class="etb-form-b ok" @tap.stop="doLink">确定</text>
+              </view>
+            </view>
+
+            <!-- 批注 -->
+            <view v-else-if="insertMode === 'comment'" class="etb-form">
+              <text class="etb-form-t">对「{{ selPreview }}」批注</text>
+              <textarea class="etb-input ta" v-model="commentText" placeholder="批注内容" @click.stop />
+              <view class="etb-form-acts">
+                <text class="etb-form-b" @tap.stop="insertMode = ''">取消</text>
+                <text class="etb-form-b ok" @tap.stop="doComment">确定</text>
+              </view>
+            </view>
+            <text v-if="insertErr" class="etb-err">{{ insertErr }}</text>
+          </view>
         </view>
+
         <view class="etb-btn" :class="{ on: formattingMarks }" title="显示格式标记" @tap.stop="toggleMarks">
           <text class="etb-tx">¶</text>
         </view>
@@ -111,6 +166,9 @@
 
     <!-- 右侧常驻区：不参与滚动 -->
     <view class="etb-right">
+      <view class="etb-btn wide" :class="{ on: findOpen }" title="查找和替换" @tap.stop="toggleFind">
+        <text class="etb-tx sm">查找</text>
+      </view>
       <view class="etb-btn wide" :class="{ on: state.view.recordChanges }" title="记录修订" @tap.stop="toggleTrack">
         <text class="etb-tx sm">修订</text>
       </view>
@@ -123,6 +181,22 @@
         <text class="etb-step-b" @tap.stop="stepZoom(10)">+</text>
       </view>
     </view>
+  </view>
+
+  <!-- 查找替换：自建面板，不走 LO 的 .uno:SearchDialog——真机审计实证那个对话框
+       弹得出来但**键盘关不掉**（画布聚焦时按 Esc 同样无效），挂上去就是个坑。 -->
+  <view v-if="findOpen" class="etb-find">
+    <input class="etb-input fi" v-model="findText" placeholder="查找" @input="onFindInput" @confirm="findNext" />
+    <text class="etb-find-n">{{ findStatus }}</text>
+    <text class="etb-find-b" title="上一个" @tap.stop="findPrev">上一个</text>
+    <text class="etb-find-b" title="下一个" @tap.stop="findNext">下一个</text>
+    <input class="etb-input fi" v-model="replaceText" placeholder="替换为" />
+    <text class="etb-find-b" @tap.stop="replaceCurrent">替换</text>
+    <text class="etb-find-b" @tap.stop="replaceAll">全部替换</text>
+    <text class="etb-find-b" :class="{ on: matchCase }" title="区分大小写" @tap.stop="toggleCase">Aa</text>
+    <text class="etb-find-x" @tap.stop="toggleFind">关闭</text>
+  </view>
+  <text v-if="findOpen && findErr" class="etb-err bar">{{ findErr }}</text>
   </view>
 </template>
 
@@ -196,6 +270,11 @@ const STYLE_PICKS = [
   'Quotations', 'List', 'Caption', 'First line indent',
 ]
 const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72]
+// 插入表格的网格选择器：8 行 × 8 列够覆盖手工建表的绝大多数情形，再大的表
+// 律师是从 Excel 粘过来或让 AI 生成的，不是在这里点出来的。
+const GRID_R = 8, GRID_C = 8
+const GRID_CELLS = []
+for (let r = 1; r <= GRID_R; r++) for (let c = 1; c <= GRID_C; c++) GRID_CELLS.push({ r, c, k: r + '-' + c })
 
 const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, undo: null })
 
@@ -210,11 +289,31 @@ export default {
     reviewOpen: { type: Boolean, default: false },
   },
   data() {
-    return { state: EMPTY(), styleList: [], fontList: [], menu: '', formattingMarks: false }
+    return {
+      state: EMPTY(), styleList: [], fontList: [], menu: '', formattingMarks: false,
+      // 插入菜单：'' | 'table' | 'link' | 'comment'
+      insertMode: '', insertErr: '', grid: { r: 0, c: 0 }, linkUrl: '', commentText: '', selText: '',
+      // 查找替换
+      findOpen: false, findText: '', replaceText: '', matchCase: false,
+      findTotal: null, findIndex: 0, findErr: '', findTruncated: false,
+    }
   },
   computed: {
     ICONS: () => ICONS, ALIGNS: () => ALIGNS,
-    TEXT_COLORS: () => TEXT_COLORS, HL_COLORS: () => HL_COLORS,
+    TEXT_COLORS: () => TEXT_COLORS, HL_COLORS: () => HL_COLORS, GRID_CELLS: () => GRID_CELLS,
+    // 超链接/批注都作用于选区。没有选区就明说「需先选中文字」，不做成点了没反应
+    noSelection() { return this.state.selection.collapsed !== false },
+    selPreview() {
+      const t = this.selText || ''
+      return t.length > 12 ? t.slice(0, 12) + '…' : t
+    },
+    findStatus() {
+      if (!this.findText) return ''
+      if (this.findTotal === null) return '…'
+      if (this.findTotal === 0) return '无匹配'
+      const total = this.findTruncated ? this.findTotal + '+' : this.findTotal
+      return this.findIndex ? this.findIndex + ' / ' + total : '共 ' + total + ' 处'
+    },
     // 读不到撤销可用性时**不置灰**——宁可多点一下，也不要把能用的功能锁死
     undoDisabled() { return this.state.undo ? this.state.undo.canUndo === false : false },
     redoDisabled() { return this.state.undo ? this.state.undo.canRedo === false : false },
@@ -273,7 +372,71 @@ export default {
     ui(name) { this.closeMenus(); return this.call('ui_command', { name }).then((r) => this.after(r)) },
     run(action) { this.closeMenus(); return this.call(action, {}).then((r) => this.after(r)) },
     toggleMenu(name) { this.menu = this.menu === name ? '' : name },
-    closeMenus() { this.menu = '' },
+    closeMenus() { this.menu = ''; this.insertMode = ''; this.insertErr = '' },
+
+    // ---- 插入菜单 ----
+    openInsert() {
+      const opening = this.menu !== 'insert'
+      this.insertMode = ''; this.insertErr = ''; this.grid = { r: 0, c: 0 }
+      this.menu = opening ? 'insert' : ''
+      // 选区文字要现读：菜单里要显示「给『xxx』加链接」，而 get_ui_state 只回
+      // collapsed 布尔值。顺带刷新一次状态，免得按上一次的选区判空。
+      if (opening) {
+        this.refresh()
+        this.call('get_selection', {}).then((r) => { this.selText = (r && r.text) || '' })
+      }
+    },
+    startLink() {
+      if (this.noSelection) return
+      this.linkUrl = ''; this.insertErr = ''; this.insertMode = 'link'
+    },
+    startComment() {
+      if (this.noSelection) return
+      this.commentText = ''; this.insertErr = ''; this.insertMode = 'comment'
+    },
+    // 失败必须说出来。工具栏上「点了没反应」和「点了偷偷失败」一样糟。
+    async finishInsert(res, okMsg) {
+      if (!res || res.success !== true) {
+        this.insertErr = (res && res.message) || '操作未成功'
+        return false
+      }
+      this.closeMenus()
+      await this.after(res)
+      return true
+    },
+    doInsertTable(r, c) {
+      // insert_table 收的是内容矩阵（string[][]），空表就是全空串；headerRow
+      // 关掉——用户手工插的表还没内容，先加粗首行没有意义。
+      const rows = []
+      for (let i = 0; i < r; i++) rows.push(new Array(c).fill(''))
+      return this.call('insert_table', { rows, headerRow: false }).then((res) => this.finishInsert(res))
+    },
+    doLink() {
+      const url = String(this.linkUrl || '').trim()
+      if (!url) { this.insertErr = '请填写链接地址'; return null }
+      return this.call('set_selection_hyperlink', { url }).then((res) => this.finishInsert(res))
+    },
+    doComment() {
+      const comment = String(this.commentText || '').trim()
+      if (!comment) { this.insertErr = '请填写批注内容'; return null }
+      return this.call('add_comment_at_selection', { comment }).then((res) => this.finishInsert(res))
+    },
+    // 图片走浏览器原生文件选择：引擎的 .uno:InsertGraphic 会开 LO 自己的文件
+    // 对话框，在 WASM 里够不到本机文件系统。读成 dataURL 交给 insert_image。
+    pickImage() {
+      const el = document.createElement('input')
+      el.type = 'file'
+      el.accept = 'image/*'
+      el.onchange = () => {
+        const f = el.files && el.files[0]
+        if (!f) return
+        const fr = new FileReader()
+        fr.onload = () => this.call('insert_image', { dataUrl: String(fr.result) }).then((res) => this.finishInsert(res))
+        fr.onerror = () => { this.insertErr = '图片读取失败' }
+        fr.readAsDataURL(f)
+      }
+      el.click()
+    },
     zhStyle(name, display) {
       if (!name) return ''
       if (STYLE_ZH[name]) return STYLE_ZH[name]
@@ -312,6 +475,58 @@ export default {
       const next = !this.state.view.recordChanges
       return this.call('set_track_changes', { on: next }).then((r) => this.after(r, false))
     },
+    // ---- 查找替换 ----
+    toggleFind() {
+      this.findOpen = !this.findOpen
+      this.closeMenus()
+      if (!this.findOpen) { this.findErr = ''; return }
+      this.findTotal = null; this.findIndex = 0; this.findErr = ''
+    },
+    toggleCase() { this.matchCase = !this.matchCase; this.findIndex = 0; this.onFindInput() },
+    // 打字时不要每个字符都去搜一遍整篇文档——搜索跑在 office 线程上，连打会卡。
+    onFindInput() {
+      clearTimeout(this._findTimer)
+      this.findTotal = null; this.findIndex = 0
+      if (!this.findText) return
+      this._findTimer = setTimeout(() => this.findNext(), 350)
+    },
+    async findGo(direction) {
+      const keyword = String(this.findText || '')
+      if (!keyword) return null
+      this.findErr = ''
+      const r = await this.call('find_navigate', { keyword, direction, matchCase: this.matchCase })
+      if (!r || r.success !== true) { this.findErr = (r && r.message) || '查找失败'; return null }
+      this.findTotal = r.total || 0
+      this.findTruncated = !!r.truncated
+      this.findIndex = r.found ? r.index : 0
+      // 选区变了，工具栏激活态跟着刷新（但没改文档，别标脏）
+      await this.refresh()
+      return r
+    },
+    findNext() { return this.findGo('next') },
+    findPrev() { return this.findGo('prev') },
+    // 替换当前这一处：查找栏已经把它选中了，直接替换选区。RecordChanges 开着时
+    // replace_selection 走最小修订路径，跟 AI 改文档同一条路。
+    async replaceCurrent() {
+      if (!this.findText) return
+      if (!this.findIndex) { const r = await this.findNext(); if (!r || !r.found) return }
+      const res = await this.call('replace_selection', { text: String(this.replaceText || '') })
+      if (!res || res.success === false) { this.findErr = (res && res.message) || '替换失败'; return }
+      this.$emit('changed')
+      this.findIndex = 0
+      await this.findNext()
+    },
+    async replaceAll() {
+      const findText = String(this.findText || '')
+      if (!findText) return
+      const res = await this.call('find_replace', {
+        findText, replaceText: String(this.replaceText || ''), replaceAll: true, matchCase: this.matchCase,
+      })
+      if (!res || res.success !== true) { this.findErr = (res && res.message) || '替换失败'; return }
+      this.findErr = res.replaced ? '' : '没有找到可替换的内容'
+      this.findTotal = 0; this.findIndex = 0
+      await this.after(res)
+    },
     // 格式标记是纯视图开关，引擎不回报状态，本地记一份
     toggleMarks() {
       this.formattingMarks = !this.formattingMarks
@@ -322,8 +537,20 @@ export default {
 </script>
 
 <style scoped>
+.etb-wrap { display: flex; flex-direction: column; flex-shrink: 0; }
 .etb { display: flex; align-items: center; gap: 6px; height: 38px; padding: 0 8px; flex-shrink: 0;
   background: #FBFCFD; border-bottom: 1px solid #E9ECEF; }
+/* 查找替换条：工具栏下面单独一行，开着才占高度 */
+.etb-find { display: flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px; flex-shrink: 0;
+  background: #fff; border-bottom: 1px solid #E9ECEF; }
+.etb-input.fi { width: 148px; height: 26px; flex-shrink: 0; }
+.etb-find-n { min-width: 62px; font-size: 11px; color: #868E96; }
+.etb-find-b { padding: 3px 9px; border: 1px solid #DEE2E6; border-radius: 5px; font-size: 12px;
+  color: #495057; flex-shrink: 0; }
+.etb-find-b:hover { border-color: #ADB5BD; }
+.etb-find-b.on { background: #E6F9F0; border-color: #5BD197; color: #1A5336; }
+.etb-find-x { margin-left: auto; padding: 3px 9px; font-size: 12px; color: #868E96; flex-shrink: 0; }
+.etb-err.bar { margin: 0; border-radius: 0; padding: 4px 10px; }
 .etb-scroll { flex: 1; min-width: 0; white-space: nowrap; }
 .etb-row { display: flex; align-items: center; gap: 2px; }
 .etb-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-left: 6px;
@@ -359,10 +586,30 @@ export default {
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.12); }
 .w160 { width: 160px; }
 .w180 { width: 180px; }
-.etb-item { padding: 5px 8px; border-radius: 5px; }
+.w200 { width: 200px; }
+.w72 { width: 72px; }
+.etb-menu.pad { padding: 6px; }
+.etb-item { display: flex; align-items: baseline; justify-content: space-between; gap: 6px;
+  padding: 5px 8px; border-radius: 5px; }
 .etb-item:hover { background: #F1F3F5; }
 .etb-item.on { background: #E6F9F0; }
+.etb-item.dim .etb-item-t { color: #ADB5BD; }
 .etb-item-t { font-size: 12px; color: #2C3338; }
+.etb-hint { font-size: 10px; color: #ADB5BD; }
+
+.etb-form { display: flex; flex-direction: column; gap: 7px; padding: 3px 4px 1px; }
+.etb-form-t { font-size: 12px; color: #495057; }
+.etb-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
+.etb-cell { height: 15px; border: 1px solid #DEE2E6; border-radius: 2px; background: #fff; }
+.etb-cell.hot { background: #E6F9F0; border-color: #5BD197; }
+.etb-input { width: 100%; height: 28px; padding: 0 7px; box-sizing: border-box; font-size: 12px;
+  color: #2C3338; border: 1px solid #DEE2E6; border-radius: 5px; background: #fff; }
+.etb-input.ta { height: 58px; padding: 5px 7px; line-height: 1.45; }
+.etb-form-acts { display: flex; justify-content: flex-end; gap: 6px; }
+.etb-form-b { padding: 3px 11px; border: 1px solid #DEE2E6; border-radius: 5px; font-size: 12px; color: #495057; }
+.etb-form-b.ok { border-color: #5BD197; color: #1A5336; background: #E6F9F0; }
+.etb-err { display: block; margin-top: 6px; padding: 4px 7px; border-radius: 5px;
+  background: #FEF2F2; color: #991B1B; font-size: 11px; line-height: 1.4; }
 
 .etb-palette { position: absolute; top: 30px; left: 0; z-index: 40; display: flex; flex-wrap: wrap; gap: 5px;
   width: 128px; padding: 7px; background: #fff; border: 1px solid #E9ECEF; border-radius: 8px;

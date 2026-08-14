@@ -1498,6 +1498,73 @@ try {
     await exec('set_chrome', { statusbar: true, toolbars: true, rulers: true })
   }
 
+  // ---------- 组 25：插入菜单与自建查找替换（P2b / P3）----------
+  // 查找替换刻意**不走** `.uno:SearchDialog`：真机审计实证那个对话框弹得出来但
+  // 键盘关不掉（画布聚焦时按 Esc 同样无效），挂进菜单就是个坑。
+  console.log('\n[25] 插入菜单与自建查找替换：批注 / 表格 / 链接 / 查找导航')
+  {
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '合同由甲方与乙方签署，甲方承担交付义务，乙方承担付款义务。' })
+
+    // 批注：作用于当前选区、署名用户本人（AI 管线的 add_comment 走 anchor + AI 署名）
+    await exec('select_paragraph', {})
+    const cmt = await exec('add_comment_at_selection', { comment: '此处需要复核' })
+    check('add_comment_at_selection 成功', cmt.success === true, JSON.stringify(cmt).slice(0, 160))
+    const cl = await exec('list_comments')
+    check('批注真的进了文档', (cl.comments || []).some((c) => c.content === '此处需要复核'), JSON.stringify(cl).slice(0, 200))
+    await exec('collapse_selection', {})
+    const cmtEmpty = await exec('add_comment_at_selection', { comment: 'x' })
+    check('空选区加批注被明确拒绝', cmtEmpty.success === false && /选中/.test(cmtEmpty.message || ''), JSON.stringify(cmtEmpty))
+
+    // 表格：工具栏的网格选择器给的就是这种空内容矩阵
+    await exec('goto', { type: 'end' })
+    const tbl = await exec('insert_table', { rows: [['', '', ''], ['', '', '']], headerRow: false })
+    check('网格选择器路线插表成功', tbl.success === true && tbl.rows === 2 && tbl.cols === 3, JSON.stringify(tbl).slice(0, 140))
+
+    // 超链接：作用于当前选区
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '官网' })
+    await exec('select_paragraph', {})
+    const lk = await exec('set_selection_hyperlink', { url: 'https://www.aiworkdeck.com' })
+    check('选区加超链接成功', lk.success === true && lk.url === 'https://www.aiworkdeck.com', JSON.stringify(lk).slice(0, 140))
+
+    // 查找导航：全程 findFirst/findNext，**不留书签**（书签会跟着存进 docx）
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '甲方甲方甲方' })
+    await exec('goto', { type: 'start' })
+    const f1 = await exec('find_navigate', { keyword: '甲方', direction: 'next' })
+    check('find_navigate 找到第 1 处', f1.found === true && f1.index === 1 && f1.total === 3, JSON.stringify(f1))
+    const f2 = await exec('find_navigate', { keyword: '甲方', direction: 'next' })
+    check('下一个 → 第 2 处', f2.index === 2, JSON.stringify(f2))
+    const f3 = await exec('find_navigate', { keyword: '甲方', direction: 'prev' })
+    check('上一个 → 回到第 1 处', f3.index === 1, JSON.stringify(f3))
+    const f4 = await exec('find_navigate', { keyword: '甲方', direction: 'prev' })
+    check('第 1 处再上一个 → 绕回最后一处', f4.index === 3, JSON.stringify(f4))
+    const f0 = await exec('find_navigate', { keyword: '不存在的词', direction: 'next' })
+    check('查无匹配如实回报', f0.success === true && f0.found === false && f0.total === 0, JSON.stringify(f0))
+    check('选中的确实是匹配文本', (await exec('get_selection')).text === '甲方')
+    // 查完不许在文档里留锚点书签——书签会跟着文档存进 docx。clear_anchors 回报
+    // 清掉了几个，0 才算真的没留（find_text_locations 那条路会留一堆）。
+    const anchors = await exec('clear_anchors', {})
+    check('查找没有留下锚点书签', anchors.cleared === 0, JSON.stringify(anchors))
+
+    // 区分大小写：新加的 matchCase 走通（find_navigate 与 find_replace 都要认）
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: 'Party party PARTY' })
+    await exec('goto', { type: 'start' })
+    const cs = await exec('find_navigate', { keyword: 'party', direction: 'next', matchCase: true })
+    check('区分大小写只匹配 1 处', cs.total === 1, JSON.stringify(cs))
+    const ci = await exec('find_navigate', { keyword: 'party', direction: 'next', matchCase: false })
+    check('不区分大小写匹配 3 处', ci.total === 3, JSON.stringify(ci))
+    await exec('debug_set_record_changes', { on: false })
+    const ra = await exec('find_replace', { findText: 'party', replaceText: '当事人', replaceAll: true, matchCase: true })
+    check('find_replace 认 matchCase（只替 1 处）', ra.replaced === 1, JSON.stringify(ra))
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

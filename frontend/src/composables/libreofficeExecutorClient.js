@@ -39,6 +39,10 @@ export const EDITOR_ACTIONS = [
   // [自建工具栏 P1] 工具栏状态一次性回读、样式下拉数据、LO chrome 开关、修订开关。
   // 全部宿主发起（EditorToolbar → executor），不是 AI 管线。
   'get_ui_state', 'list_styles', 'set_chrome', 'set_track_changes',
+  // [自建工具栏 P2b] 用户对当前选区加批注（署名用户本人；AI 管线走 add_comment）
+  'add_comment_at_selection',
+  // [自建查找栏 P3] 上一个/下一个匹配。不留书签——只动视图光标。
+  'find_navigate',
   // [Track D] load the user's real document into the editor (host-initiated, not
   // an AI-agent command): {bytes, name} -> MEMFS + loadComponentFromURL + retarget.
   'load_document',

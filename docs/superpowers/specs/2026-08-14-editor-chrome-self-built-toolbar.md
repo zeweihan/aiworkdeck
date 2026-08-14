@@ -144,11 +144,45 @@ canvas 上方（占布局高度，不是浮层——浮层压在 webview 上不�
 - 撤销/重做读不到可用性时**不置灰**：宁可多点一下，也不把能用的功能锁死。
 - 预热备胎（`file=null`）不挂工具栏，否则会对着隐藏的空白实例白跑三个查询。
 
-### P2b — 插入菜单（未做）
+### P2b — 插入菜单（已完成）
 
-表格（网格选择器）/ 图片（宿主文件选择）/ 超链接 / 批注 —— 都需要参数输入，
-放在一个「插入▾」下拉里。原语都已存在（`insert_table`/`insert_image`/
-`set_selection_hyperlink`/`add_comment`）。
+「插入▾」下拉：表格（8×8 网格选择器）/ 图片 / 超链接 / 批注 / 分页符。
+
+- **图片走浏览器原生文件选择**，不是 `.uno:InsertGraphic`——后者开的是 LO 自己的
+  文件对话框，在 WASM 里够不到本机文件系统。读成 dataURL 交 `insert_image`。
+- **批注新增 `add_comment_at_selection`**：现成的 `add_comment` 要 anchorId
+  （AI 管线从 `find_text_locations` 拿）且硬署名 AI Workdeck，用户在工具栏上
+  选中文字直接点批注这条路两样都不对。新原语作用于当前选区、署名用户本人，
+  并用批注条数变化复核，派发没命中就如实报错。
+- 超链接/批注在**没有选区时明说「需先选中文字」**，不做成点了没反应。
+
+### P3 — 查找替换：自建面板，不用 LO 对话框
+
+**先做了一次对话框可用性审计（真机，截图字节差分判定弹没弹）。结论决定了 P3 的走法：**
+
+| `.uno:` | 结果 |
+|---|---|
+| `TableDialog` / `InsertSymbol` / `SpellDialog` | **派发完全没反应**（Δ=0）——挂进菜单就是死按钮 |
+| `SearchDialog` / `FontDialog` / `ParagraphDialog` / `InsertTable` / `HyperlinkDialog` / `PageStyleName` / `InsertGraphic` / `BulletsAndNumberingDialog` / `WordCountDialog` | 弹得出来，但**键盘关不掉** |
+
+「关不掉」做过对照实验：IME 覆盖层霸占键盘焦点的假说**不成立**——把覆盖层 blur、
+焦点还给画布之后按 Esc 同样关不掉。所以是引擎侧 Qt-WASM 的键盘/模态处理问题，
+不是我们的覆盖层造成的。（能否用鼠标点对话框上的按钮关掉，未验证。）
+
+**因此：菜单一律不挂 LO 对话框，需要的自己做 DOM 面板。**这也意味着 P4 隐藏
+LO 菜单栏其实**顺带消除了一个现存的坑**——今天用户从 LO 菜单里点开「查找和替换」
+就可能卡在一个关不掉的对话框上。
+
+自建查找替换条（工具栏下方一行）：查找 / 替换为、上一个 / 下一个、替换 / 全部
+替换、区分大小写。
+
+- 导航走新增的 `find_navigate`，**全程 findFirst/findNext，不留书签**。
+  没用现成的 `find_text_locations`——那条路每个匹配插一个锚点书签，而书签会
+  跟着文档存进 docx：用户只是搜个词，不该在文件里留下一堆书签。
+- UNO 没有 findPrevious，所以按文档序收齐全部匹配（上限 500）再按光标位置挑
+  前一个/后一个，到头绕回；`compareRegionStarts` 定位「当前在第几处」。
+- `find_replace` 补了 `matchCase` 可选参数（不传时行为与从前一致）。
+- 打字防抖 350ms——搜索跑在 office 线程上，连打会卡。
 
 ### P3 — 菜单层
 
