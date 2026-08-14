@@ -836,6 +836,19 @@ export function useAgentStream() {
                     currentAssistantBubble.value.content +=
                         '\n\n> **该模型在当前网络环境不可用**：境外模型在境内网络会被服务商按地域拒绝。'
                         + '可在设置中改用 AI Workdeck 云端通道，或换成标注「境内外均可用」的模型后重新发送。\n'
+                } else if (errMsg.includes('AI_QUOTA_EXHAUSTED')) {
+                    // 配额耗尽（后端 LlmErrorClassifier.QUOTA_EXHAUSTED_MARKER）：终局错误，
+                    // 后端不会退避重试也不会换模型——换哪个模型都是同一个没钱的账户
+                    currentAssistantBubble.value.content +=
+                        '\n\n> **AI 服务额度不足**：当前通道的余额或配额已用完。'
+                        + '使用自备 Key 时请到服务商（如 OpenRouter）充值；'
+                        + '使用 AI Workdeck 云端通道时请到官网账户页检查额度分配。\n'
+                } else if (errMsg.includes('AI_CONTEXT_OVERFLOW')) {
+                    // 上下文超窗（后端 LlmErrorClassifier.CONTEXT_OVERFLOW_MARKER）：
+                    // 走到这里说明后端强制压缩后仍装不下（或压不动）
+                    currentAssistantBubble.value.content +=
+                        '\n\n> **对话上下文超出模型窗口**：已尝试自动压缩仍超限。'
+                        + '建议开启新对话继续，或减少一次携带的文件数量与长度。\n'
                 } else {
                     currentAssistantBubble.value.content += `\n\n> **执行中断**：${errMsg}\n`
                 }
