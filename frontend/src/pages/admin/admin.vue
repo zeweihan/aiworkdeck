@@ -1881,9 +1881,15 @@ export default {
       if (value === this.appLanguage) return
       this.appLanguage = setAppLanguage(value)
       uni.showToast({
-        title: this.appLanguage === 'en-US' ? 'Language switched' : '已切换为简体中文',
+        title: this.appLanguage === 'en-US' ? 'Switching to English…' : '正在切换为简体中文…',
         icon: 'none',
       })
+      // 整页 reload：i18n 单例的 locale、config 模块顶层取值的静态 label、
+      // LOWA 编辑器 uilang 全部随之重建。延迟给 App.vue 的镜像同步
+      //（主进程 IPC + 后端 POST）留出发出的窗口。
+      setTimeout(() => {
+        try { window.location.reload() } catch (e) { /* 非浏览器环境忽略 */ }
+      }, 600)
     },
     onNavTap(nav) {
       this.activeNav = nav.key
