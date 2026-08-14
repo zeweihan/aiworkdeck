@@ -1418,6 +1418,86 @@ try {
     check('Writer 文档上 slide_add_table 被明确拒绝', guardTable.success === false && /演示文稿/.test(guardTable.message || ''), JSON.stringify(guardTable))
   }
 
+  // ---------- 组 24：自建工具栏命令层（P1）----------
+  // 每条都断言**可观察效果**，不是「派发没报错」——工具栏上一个点了没反应的
+  // 按钮就是体验退步。`.uno:Grow/Shrink` 正是因为这条规矩被剔出白名单的
+  // （本引擎上派发成功但 CharHeight 纹丝不动）。
+  console.log('\n[24] 自建工具栏命令层：状态回读 / 扩展 .uno: / 样式清单 / chrome 开关')
+  {
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '工具栏命令层回归段落。' })
+    await exec('select_paragraph', {})
+
+    const st = await exec('get_ui_state')
+    check('get_ui_state 成功', st.success === true, JSON.stringify(st).slice(0, 200))
+    check('回读字符状态', typeof st.character.bold === 'boolean' && st.character.sizePt > 0, JSON.stringify(st.character))
+    check('回读段落样式与对齐', !!st.paragraph.styleName && !!st.paragraph.alignment, JSON.stringify(st.paragraph))
+    check('回读缩放与修订开关', st.view.zoom > 0 && st.view.recordChanges === false, JSON.stringify(st.view))
+    check('回读选区状态', st.selection.collapsed === false, JSON.stringify(st.selection))
+    // 撤销可用性走 XUndoManagerSupplier 的方法（属性读法会抛 UnknownPropertyException）
+    check('回读撤销/重做可用性', st.undo && typeof st.undo.canUndo === 'boolean', JSON.stringify(st.undo || st.undoErr))
+
+    await exec('ui_command', { name: 'strikeout' })
+    check('strikeout 生效', (await exec('get_ui_state')).character.strikeout === true)
+    await exec('ui_command', { name: 'strikeout' })
+    await exec('ui_command', { name: 'superscript' })
+    check('superscript 生效', (await exec('get_ui_state')).character.superscript === true)
+    await exec('ui_command', { name: 'superscript' })
+    await exec('ui_command', { name: 'align_center' })
+    check('align_center 生效', (await exec('get_ui_state')).paragraph.alignment === 'center')
+    await exec('ui_command', { name: 'align_justify' })
+    check('align_justify 生效', (await exec('get_ui_state')).paragraph.alignment === 'justify')
+    await exec('ui_command', { name: 'align_left' })
+    check('align_left 生效', (await exec('get_ui_state')).paragraph.alignment === 'left')
+    await exec('ui_command', { name: 'bullet_list' })
+    const bl = (await exec('get_ui_state')).paragraph
+    check('bullet_list 识别为项目符号', bl.inList === true && bl.listKind === 'bullet', JSON.stringify(bl))
+    await exec('ui_command', { name: 'bullet_list' })
+    await exec('ui_command', { name: 'number_list' })
+    check('number_list 识别为编号', (await exec('get_ui_state')).paragraph.listKind === 'number')
+    await exec('ui_command', { name: 'number_list' })
+    await exec('ui_command', { name: 'bold' })
+    await exec('ui_command', { name: 'clear_formatting' })
+    check('clear_formatting 清掉直接格式', (await exec('get_ui_state')).character.bold === false)
+    check('白名单外的名字被拒绝', (await exec('ui_command', { name: 'font_grow' })).success === false)
+
+    // 字号步进的宿主实现路线（.uno:Grow 是哑弹，工具栏靠这条）
+    const sz0 = (await exec('get_ui_state')).character.sizePt
+    await exec('format_selection', { fontSize: sz0 + 2 })
+    check('字号步进（读回 sizePt → 写 fontSize）生效', (await exec('get_ui_state')).character.sizePt === sz0 + 2)
+    await exec('format_selection', { fontSize: sz0 })
+
+    check('set_track_changes 开', (await exec('set_track_changes', { on: true })).recordChanges === true)
+    check('set_track_changes 关', (await exec('set_track_changes', { on: false })).recordChanges === false)
+    check('set_track_changes 只读回读', (await exec('set_track_changes')).recordChanges === false)
+
+    const ls = await exec('list_styles')
+    check('list_styles 返回样式清单', ls.success === true && ls.count > 50, String(ls.count))
+    const std = (ls.styles || []).find((s) => s.name === 'Standard')
+    check('样式带显示名与在用标记', !!(std && std.display) && std.inUse === true, JSON.stringify(std))
+
+    const hidden = await exec('set_chrome', { menubar: false, statusbar: false, toolbars: false, rulers: false })
+    check('menubar 已隐藏', hidden.applied.menubar === false, JSON.stringify(hidden.applied.menubar))
+    check('statusbar 已隐藏', hidden.applied.statusbar === false)
+    check('两条主工具栏已隐藏',
+      hidden.applied.toolbars.standardbar === false && hidden.applied.toolbars.textobjectbar === false,
+      JSON.stringify(hidden.applied.toolbars))
+    check('上下文工具栏也一并隐藏（否则选中表格就冒出来）',
+      hidden.applied.toolbars['singlemode-table'] === false, JSON.stringify(hidden.applied.toolbars))
+    check('标尺已关', hidden.applied.rulers.ShowHoriRuler === false, JSON.stringify(hidden.applied.rulers))
+    // chrome 全隐藏之后功能不许退步
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: 'chrome 隐藏后仍可编辑' })
+    check('隐藏后仍可编辑', (await doc()).indexOf('仍可编辑') >= 0, await doc())
+    check('隐藏后状态回读仍可用', (await exec('get_ui_state')).success === true)
+    check('隐藏后缩放仍可用', (await exec('set_zoom', { value: 130 })).zoom === 130)
+    check('menubar 可恢复（逃生开关）', (await exec('set_chrome', { menubar: true })).applied.menubar === true)
+    await exec('set_zoom', { value: 100 })
+    await exec('set_chrome', { statusbar: true, toolbars: true, rulers: true })
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

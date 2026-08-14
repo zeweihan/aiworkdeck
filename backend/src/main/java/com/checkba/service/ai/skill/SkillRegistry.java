@@ -57,6 +57,12 @@ public class SkillRegistry {
     private final SystemSettingService systemSettingService;
     private final PluginService pluginService;
 
+    /**
+     * 应用语言（EN 版 PR5）：{@link #isAvailable} 按 skill.yml 的 languages 字段过滤。
+     * 可空（部分单测/评测不接语言服务）——为 null 时按 zh-CN 语义，行为与引入前一致。
+     */
+    private final com.checkba.service.AppLanguageService appLanguageService;
+
     /** id -> skill（保持扫描顺序，内置目录优先于插件） */
     private final Map<String, SkillDefinition> skills = new LinkedHashMap<>();
 
@@ -74,10 +80,12 @@ public class SkillRegistry {
     @Autowired
     public SkillRegistry(SkillProperties properties,
                          @Nullable SystemSettingService systemSettingService,
-                         PluginService pluginService) {
+                         PluginService pluginService,
+                         @Nullable com.checkba.service.AppLanguageService appLanguageService) {
         this.properties = properties;
         this.systemSettingService = systemSettingService;
         this.pluginService = pluginService;
+        this.appLanguageService = appLanguageService;
     }
 
     @PostConstruct
@@ -113,10 +121,32 @@ public class SkillRegistry {
      * 用户钉选时仍要能生效。自动匹配的额外过滤见 {@link SkillRouter#match}。
      */
     public boolean isAvailable(SkillDefinition skill) {
+        if (!supportsCurrentLanguage(skill)) {
+            return false;
+        }
         if (!isEnabled(skill.getId())) {
             return false;
         }
         return skill.getSourcePluginId() == null || pluginService.isEnabled(skill.getSourcePluginId());
+    }
+
+    /**
+     * 语言过滤（EN 版 PR5）：skill.yml 的 languages 列表声明可用的应用语言，
+     * **缺省（空）= 只在 zh-CN 可用**——存量 skill 没有该字段，英文版下自动隐藏，方向安全
+     * （如 listing-pathway 的触发词含 IPO/SPAC/VIE，会命中英文输入，必须真隐藏）。
+     * 收口选在 isAvailable：match（自动匹配）、activateForTurn（钉选）、activeSkill（注入前复查）
+     * 三条路径都过它，不会出现"列表过滤了、注入没过滤"的缝。
+     * zh-CN 下空列表恒可用，行为与引入前逐字节一致。
+     */
+    private boolean supportsCurrentLanguage(SkillDefinition skill) {
+        String lang = appLanguageService != null
+                ? appLanguageService.language()
+                : com.checkba.service.AppLanguageService.ZH_CN;
+        List<String> langs = skill.getLanguages();
+        if (langs == null || langs.isEmpty()) {
+            return com.checkba.service.AppLanguageService.ZH_CN.equals(lang);
+        }
+        return langs.contains(lang);
     }
 
     /** skill 是否为"仅手动"（不参与触发词自动匹配） */
@@ -333,6 +363,11 @@ public class SkillRegistry {
         skill.setVersion(asString(raw.get("version")));
         skill.setLicense(asString(raw.get("license")));
         skill.setCredits(asStringList(raw.get("credits")));
+        // 应用语言相关的可选字段（EN 版 PR5）：缺省时全部为空，语义 = 只在 zh-CN 可用
+        skill.setLanguages(asStringList(raw.get("languages")));
+        skill.setNameEn(asString(raw.get("name_en")));
+        skill.setTriggersEn(asStringList(raw.get("triggers_en")));
+        skill.setOutputEn(asString(raw.get("output_en")));
         Boolean enabledByDefault = asBoolean(raw.get("enabled_by_default"));
         if (enabledByDefault != null) {
             skill.setEnabledByDefault(enabledByDefault);
@@ -358,6 +393,13 @@ public class SkillRegistry {
             return null;
         }
         skill.setPromptTemplate(Files.readString(prompt.toPath(), StandardCharsets.UTF_8));
+
+        // 英文 prompt 模板（约定文件名 prompt.en.md，可选）：存在即加载，英文模式注入时优先用它。
+        // 扫描期两版都读进内存——语言是运行期设置，切换语言不需要 rescan。
+        File promptEn = new File(skillDir, "prompt.en.md");
+        if (promptEn.isFile()) {
+            skill.setPromptTemplateEn(Files.readString(promptEn.toPath(), StandardCharsets.UTF_8));
+        }
         return skill;
     }
 

@@ -401,14 +401,42 @@ function dispatchUno(url) {
   css.frame.DispatchHelper.create(context).executeDispatch(ctrl.getFrame(), url, '', 0, []);
 }
 
-// Desktop-keyboard parity set for the IME overlay's ui_command action — an
-// ALLOWLIST map (name -> .uno: slot), deliberately NOT a raw dispatch
-// passthrough. Toggles (bold/italic/underline) are the engine's own, so
-// collapsed-cursor and mixed-selection semantics match the desktop app.
 // 缩放上下限。LO 自身允许 20%..600%，越界写进去引擎会自己夹，但夹之前会先按
 // 非法值重排一次版；在 JS 侧先夹住，捏合手势连发时不至于抖。
 const ZOOM_MIN = 20, ZOOM_MAX = 600;
 
+// LO 自己的 chrome（自建工具栏要关掉的那些）。singlemode-* 是选中表格/图片时
+// 自动冒出来的上下文工具栏——逐项关的时候必须连它们一起关，否则一选中表格就
+// 又钻出一条老气的工具栏。真机枚举所得（LayoutManager.getElements）。
+const CHROME_URLS = {
+  menubar: 'private:resource/menubar/menubar',
+  statusbar: 'private:resource/statusbar/statusbar',
+  toolbars: [
+    'private:resource/toolbar/standardbar',
+    'private:resource/toolbar/textobjectbar',
+    'private:resource/toolbar/findbar',
+    'private:resource/toolbar/singlemode-ole',
+    'private:resource/toolbar/singlemode-draw',
+    'private:resource/toolbar/singlemode-form',
+    'private:resource/toolbar/singlemode-text',
+    'private:resource/toolbar/singlemode-frame',
+    'private:resource/toolbar/singlemode-media',
+    'private:resource/toolbar/singlemode-table',
+    'private:resource/toolbar/singlemode-graphic',
+    'private:resource/toolbar/singlemode-drawtext',
+    'private:resource/toolbar/singlemode-annotation',
+    'private:resource/toolbar/singlemode-printpreview',
+  ],
+};
+
+// Desktop-keyboard parity set for the IME overlay's ui_command action — an
+// ALLOWLIST map (name -> .uno: slot), deliberately NOT a raw dispatch
+// passthrough. Toggles (bold/italic/underline) are the engine's own, so
+// collapsed-cursor and mixed-selection semantics match the desktop app.
+//
+// 自建工具栏（见 docs/superpowers/specs/2026-08-14-editor-chrome-self-built-toolbar.md）
+// 的按钮同样走这张表。**白名单是安全边界，不许改成任意 .uno: 透传**——那等于把
+// 宿主 DOM 变成引擎的任意命令通道。新增按钮就在这里加一行。
 const UI_COMMANDS = {
   select_all: '.uno:SelectAll',
   bold: '.uno:Bold', italic: '.uno:Italic', underline: '.uno:Underline',
@@ -420,6 +448,22 @@ const UI_COMMANDS = {
   line_start_sel: '.uno:StartOfLineSel', line_end_sel: '.uno:EndOfLineSel',
   escape: '.uno:Escape',                                  // 取消选区
   page_up: '.uno:PageUp', page_down: '.uno:PageDown',
+  // ---- [P1 自建工具栏] 字符格式 ----
+  strikeout: '.uno:Strikeout',
+  superscript: '.uno:SuperScript', subscript: '.uno:SubScript',
+  // 字号增大/减小**不走 .uno:Grow/.uno:Shrink**——本引擎上这两个槽是哑弹，
+  // 派发不报错也不改 CharHeight（真机实证 12→12）。宿主用 get_ui_state 读到
+  // 当前字号再调 format_selection{sizePt} 自己步进，别留成点了没反应的按钮。
+  clear_formatting: '.uno:ResetAttributes',               // 清除直接格式
+  case_upper: '.uno:ChangeCaseToUpper', case_lower: '.uno:ChangeCaseToLower',
+  // ---- [P1 自建工具栏] 段落格式 ----
+  align_left: '.uno:LeftPara', align_center: '.uno:CenterPara',
+  align_right: '.uno:RightPara', align_justify: '.uno:JustifyPara',
+  indent_more: '.uno:IncrementIndent', indent_less: '.uno:DecrementIndent',
+  bullet_list: '.uno:DefaultBullet', number_list: '.uno:DefaultNumbering',
+  // ---- [P1 自建工具栏] 插入 / 视图 ----
+  page_break: '.uno:InsertPagebreak',
+  formatting_marks: '.uno:ControlCodes',                  // 显示/隐藏格式标记
 };
 
 // Shared verification snapshot returned by mutating commands: where the cursor
@@ -1874,6 +1918,152 @@ const EXEC = {
     let applied = next;
     try { applied = Number(vs.getPropertyValue('ZoomValue')) || next; } catch (e) {}
     return { success: true, zoom: applied };
+  },
+  // ---- [P1 自建工具栏] 状态回读 / 样式清单 / chrome 开关 -------------------
+  // 工具栏的激活态（B 是否高亮、当前字体字号样式对齐、能不能撤销）一次拿全。
+  // 高频调用（选区事件 + 400ms 聚焦轮询），实测整套读一遍约 6ms——每个字段各自
+  // try/catch，缺一个不影响其余，绝不因为某个属性在当前上下文不存在就整体失败。
+  get_ui_state() {
+    const out = { success: true };
+    let vc = null;
+    try { vc = ctrl.getViewCursor(); } catch (e) { return { success: false, message: errStr(e) }; }
+    const ch = {};
+    try { ch.bold = vc.getPropertyValue('CharWeight') > 100; } catch (e) {}
+    try { ch.italic = !enumEq(vc.getPropertyValue('CharPosture'), css.awt.FontSlant.NONE); } catch (e) {}
+    try { ch.underline = !enumEq(vc.getPropertyValue('CharUnderline'), css.awt.FontUnderline.NONE); } catch (e) {}
+    try { ch.strikeout = !enumEq(vc.getPropertyValue('CharStrikeout'), css.awt.FontStrikeout.NONE); } catch (e) {}
+    try {
+      const esc = Number(vc.getPropertyValue('CharEscapement')) || 0;
+      ch.superscript = esc > 0; ch.subscript = esc < 0;
+    } catch (e) {}
+    try { ch.font = vc.getPropertyValue('CharFontName'); } catch (e) {}
+    try { ch.fontAsian = vc.getPropertyValue('CharFontNameAsian'); } catch (e) {}
+    try { ch.sizePt = vc.getPropertyValue('CharHeight'); } catch (e) {}
+    try { const c = vc.getPropertyValue('CharColor'); ch.color = c === -1 ? 'auto' : '#' + ('000000' + (c >>> 0).toString(16)).slice(-6); } catch (e) {}
+    try { const h = vc.getPropertyValue('CharHighlight'); ch.highlight = h === -1 ? 'none' : '#' + ('000000' + (h >>> 0).toString(16)).slice(-6); } catch (e) {}
+    out.character = ch;
+    const pa = {};
+    try { pa.styleName = vc.getPropertyValue('ParaStyleName'); } catch (e) {}
+    try {
+      const a = vc.getPropertyValue('ParaAdjust');
+      const A = css.style.ParagraphAdjust;
+      pa.alignment = enumEq(a, A.CENTER) ? 'center' : enumEq(a, A.RIGHT) ? 'right'
+        : (enumEq(a, A.BLOCK) || enumEq(a, A.STRETCH)) ? 'justify' : 'left';
+    } catch (e) {}
+    try { pa.outlineLevel = vc.getPropertyValue('OutlineLevel') || 0; } catch (e) {}
+    // 列表种类：工具栏要分别高亮「项目符号」和「编号」两个按钮。NumberingIsNumber
+    // 只说明在不在列表里，具体是符号还是数字要看规则第 0 级的 NumberingType。
+    try {
+      pa.inList = !!vc.getPropertyValue('NumberingIsNumber');
+      if (pa.inList) {
+        pa.listKind = 'list';   // 读不出细分时的保守取值
+        const rules = vc.getPropertyValue('NumberingRules');
+        if (rules && rules.getCount && rules.getCount() > 0) {
+          const lvl = rules.getByIndex(0);
+          let nt = null;
+          for (let i = 0; i < (lvl.length || 0); i++) if (lvl[i].Name === 'NumberingType') nt = Number(lvl[i].Value);
+          const NT = css.style.NumberingType;
+          if (nt != null) pa.listKind = (nt === NT.CHAR_SPECIAL || nt === NT.BITMAP) ? 'bullet' : 'number';
+        }
+      } else pa.listKind = 'none';
+    } catch (e) {}
+    out.paragraph = pa;
+    const view = {};
+    try { view.zoom = ctrl.getViewSettings().getPropertyValue('ZoomValue'); } catch (e) {}
+    try { view.recordChanges = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+    out.view = view;
+    const sel = {};
+    try { sel.collapsed = (vc.getString() || '').length === 0; } catch (e) {}
+    try { sel.inTable = !!vc.getPropertyValue('Cell'); } catch (e) { sel.inTable = false; }
+    out.selection = sel;
+    // 撤销/重做可用性。UndoManager 不是属性（getPropertyValue 抛
+    // UnknownPropertyException，真机验过），要走 XUndoManagerSupplier 的方法。
+    // 实在拿不到就不给字段——宿主据此让两个按钮常亮，宁可多点一下也别灰掉能用的功能。
+    try {
+      const um = xModel.getUndoManager();
+      const u = {};
+      try { u.canUndo = !!um.isUndoPossible(); } catch (e) {}
+      try { u.canRedo = !!um.isRedoPossible(); } catch (e) {}
+      if (u.canUndo != null || u.canRedo != null) out.undo = u;
+    } catch (e) { out.undoErr = errStr(e); }
+    return out;
+  },
+  // 段落样式清单（样式下拉）。getElementNames() 给的是**英文程序名**
+  // （Standard / Heading 1），中文界面要显示的是 DisplayName——两者都带回，
+  // set_style 认的仍是程序名。
+  list_styles(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    const kind = String((p && p.kind) || 'paragraph').toLowerCase();
+    const familyName = kind === 'character' ? 'CharacterStyles' : 'ParagraphStyles';
+    try {
+      const fam = xModel.getStyleFamilies().getByName(familyName);
+      const names = fam.getElementNames();
+      const out = [];
+      for (let i = 0; i < (names.length || 0); i++) {
+        const it = { name: String(names[i]) };
+        try {
+          const st = fam.getByName(names[i]);
+          try { it.display = String(st.getPropertyValue('DisplayName') || it.name); } catch (e) { it.display = it.name; }
+          try { it.inUse = !!st.isInUse(); } catch (e) {}
+        } catch (e) { it.display = it.name; }
+        out.push(it);
+      }
+      return { success: true, kind: kind, count: out.length, styles: out };
+    } catch (e) { return tableFail('读取样式库失败: ' + errStr(e)); }
+  },
+  // LO 自己的 chrome 开关（自建工具栏上线后默认全关，设置里留逃生开关）。
+  // {all:false} 走 LayoutManager.setVisible(false) 一刀切——这样上下文工具栏
+  // （选中表格/图片时自动冒出来的 singlemode-*）也不会再钻出来；逐项开关用
+  // {menubar/toolbars/statusbar/rulers}。
+  // **hideElement() 的返回值恒为 false，不代表失败**（真机实证），一律用
+  // isElementVisible() 复核后如实回报。
+  set_chrome(p) {
+    const req = p || {};
+    const out = { success: true, applied: {} };
+    let lm = null;
+    try { lm = ctrl.getFrame().getPropertyValue('LayoutManager'); }
+    catch (e) { return { success: false, message: 'LayoutManager 不可达: ' + errStr(e) }; }
+    if (!lm) return { success: false, message: 'LayoutManager 为空' };
+    const setOne = (url, on) => {
+      try { if (on) lm.showElement(url); else lm.hideElement(url); } catch (e) {}
+      try { return !!lm.isElementVisible(url); } catch (e) { return null; }
+    };
+    if (req.all != null) {
+      try { lm.setVisible(!!req.all); } catch (e) { out.allErr = errStr(e); }
+      try { out.applied.all = !!lm.isVisible(); } catch (e) {}
+    }
+    if (req.menubar != null) out.applied.menubar = setOne(CHROME_URLS.menubar, !!req.menubar);
+    if (req.statusbar != null) out.applied.statusbar = setOne(CHROME_URLS.statusbar, !!req.statusbar);
+    if (req.toolbars != null) {
+      const states = {};
+      for (let i = 0; i < CHROME_URLS.toolbars.length; i++) {
+        const u = CHROME_URLS.toolbars[i];
+        states[u.slice(u.lastIndexOf('/') + 1)] = setOne(u, !!req.toolbars);
+      }
+      out.applied.toolbars = states;
+    }
+    if (req.rulers != null) {
+      const vs = ctrl.getViewSettings();
+      const r = {};
+      for (const k of ['ShowHoriRuler', 'ShowVertRuler']) {
+        try { vs.setPropertyValue(k, !!req.rulers); } catch (e) {}
+        try { r[k] = !!vs.getPropertyValue(k); } catch (e) {}
+      }
+      out.applied.rulers = r;
+    }
+    return out;
+  },
+  // 修订开关（工具栏的「修订」按钮）。RecordChanges 是文档属性，直接写比派发
+  // .uno:TrackChanges 可靠——后者是切换语义，宿主想设成确定状态就得先读再判。
+  set_track_changes(p) {
+    if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
+    if (p && p.on != null) {
+      try { xModel.setPropertyValue('RecordChanges', !!p.on); }
+      catch (e) { return tableFail('设置修订开关失败: ' + errStr(e)); }
+    }
+    let on = null;
+    try { on = !!xModel.getPropertyValue('RecordChanges'); } catch (e) {}
+    return { success: true, recordChanges: on };
   },
   // [spike] Phase B: raw measurements for mapping the view cursor to canvas
   // pixels. We DELIBERATELY return primitives (not a final px rect) so the

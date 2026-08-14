@@ -36,6 +36,9 @@ export const EDITOR_ACTIONS = [
   // [视图缩放] 触控板捏合 / Cmd+加减号；{value} 绝对百分比、{delta} 相对增量，
   // 不带参数就是只读回当前缩放。宿主发起，不是 AI 管线。
   'set_zoom',
+  // [自建工具栏 P1] 工具栏状态一次性回读、样式下拉数据、LO chrome 开关、修订开关。
+  // 全部宿主发起（EditorToolbar → executor），不是 AI 管线。
+  'get_ui_state', 'list_styles', 'set_chrome', 'set_track_changes',
   // [Track D] load the user's real document into the editor (host-initiated, not
   // an AI-agent command): {bytes, name} -> MEMFS + loadComponentFromURL + retarget.
   'load_document',

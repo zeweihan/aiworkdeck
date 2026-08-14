@@ -71,6 +71,28 @@ public class SkillDefinition {
      */
     private List<String> credits = new ArrayList<>();
 
+    // ==================== 应用语言（EN 版 PR5，skill.yml 可选字段） ====================
+
+    /**
+     * 本 skill 可用的应用语言列表（skill.yml: languages，值为 zh-CN / en-US）。
+     * **缺省（空列表）= 只在 zh-CN 可用**：存量第三方 skill 没有这个字段，英文版下
+     * 自动隐藏——方向安全（中国法深度绑定的 skill 不会在英文输入上误触发）。
+     * 过滤收口在 {@link SkillRegistry#isAvailable}（match/钉选/注入三条路径共用）。
+     */
+    private List<String> languages = new ArrayList<>();
+
+    /** 英文展示名（skill.yml: name_en，可选）；英文模式下注入块用它，缺省回退 name */
+    private String nameEn;
+
+    /** 英文触发词（skill.yml: triggers_en，可选）；仅英文模式参与匹配（连同 triggers 一起） */
+    private List<String> triggersEn = new ArrayList<>();
+
+    /** 英文输出约定（skill.yml: output_en，可选）；英文模式下注入块用它，缺省回退 output */
+    private String outputEn;
+
+    /** 英文 prompt 模板（目录下存在 prompt.en.md 时加载）；英文模式下注入用它，缺省回退 promptTemplate */
+    private String promptTemplateEn;
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
     public String getName() { return name; }
@@ -105,4 +127,14 @@ public class SkillDefinition {
     public void setLicense(String license) { this.license = license; }
     public List<String> getCredits() { return credits; }
     public void setCredits(List<String> credits) { this.credits = credits; }
+    public List<String> getLanguages() { return languages; }
+    public void setLanguages(List<String> languages) { this.languages = languages; }
+    public String getNameEn() { return nameEn; }
+    public void setNameEn(String nameEn) { this.nameEn = nameEn; }
+    public List<String> getTriggersEn() { return triggersEn; }
+    public void setTriggersEn(List<String> triggersEn) { this.triggersEn = triggersEn; }
+    public String getOutputEn() { return outputEn; }
+    public void setOutputEn(String outputEn) { this.outputEn = outputEn; }
+    public String getPromptTemplateEn() { return promptTemplateEn; }
+    public void setPromptTemplateEn(String promptTemplateEn) { this.promptTemplateEn = promptTemplateEn; }
 }
