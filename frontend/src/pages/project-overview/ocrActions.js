@@ -4,7 +4,7 @@
 // 经展开进组件 methods（纯搬移，Phase 3b 外置），`this` 即 project-overview 页面实例。
 
 
-import { ocrRecognize, createProjectFavorite, getProjectFiles, createFile, getApiBaseUrl } from '@/services/api.js'
+import { ocrRecognize, createProjectFavorite, getProjectFiles, createFile, getApiBaseUrl, promptFeatureNotConfigured } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { host } from '@/services/host.js'
 

@@ -11,7 +11,6 @@ export default {
     reloading: '重新加载中…',
     reloadFailed: '重新加载失败，内容已过期',
     saving: '保存中…',
-    saved: '已保存',
     saveFailed: '保存失败',
     desktopOnly: '仅桌面版可用',
   },
@@ -41,6 +40,7 @@ export default {
     deletion: '删除',
     insertion: '插入',
     table: '表格',
+    contiguousCount: '{count} 处连续',
     unknownAuthor: '未署名',
     emptyText: '（空）',
     emptyCmtTitle: '没有批注',
@@ -52,6 +52,7 @@ export default {
     accept: '接受',
     reject: '拒绝',
     opFailed: '操作未成功',
+    groupPartialFail: '本组 {total} 处中有 {failed} 处未被引擎处置',
   },
   diff: {
     title: '文档对比',

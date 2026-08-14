@@ -34,7 +34,7 @@ class SkillRegistryTest {
         SkillProperties props = new SkillProperties();
         props.setDir(skillsDir.toString());
         props.setBuiltinDir(builtinDir == null ? "" : builtinDir.toString());
-        SkillRegistry registry = new SkillRegistry(props, null, pluginService);
+        SkillRegistry registry = new SkillRegistry(props, null, pluginService, null);
         registry.init();
         return registry;
     }
@@ -117,7 +117,7 @@ class SkillRegistryTest {
 
         SkillProperties props1 = new SkillProperties();
         props1.setDir(tempDir.toString());
-        SkillRegistry registry1 = new SkillRegistry(props1, settings, new PluginService());
+        SkillRegistry registry1 = new SkillRegistry(props1, settings, new PluginService(), null);
         registry1.init();
         assertFalse(registry1.isEnabled("opt-in-skill"), "enabled_by_default:false 首次扫描应默认禁用");
 
@@ -127,7 +127,7 @@ class SkillRegistryTest {
         // 模拟重启：新实例、同一份持久化存储、重新扫描同一目录
         SkillProperties props2 = new SkillProperties();
         props2.setDir(tempDir.toString());
-        SkillRegistry registry2 = new SkillRegistry(props2, settings, new PluginService());
+        SkillRegistry registry2 = new SkillRegistry(props2, settings, new PluginService(), null);
         registry2.init();
 
         assertTrue(registry2.isEnabled("opt-in-skill"),
@@ -137,7 +137,7 @@ class SkillRegistryTest {
         registry2.setEnabled("opt-in-skill", false);
         SkillProperties props3 = new SkillProperties();
         props3.setDir(tempDir.toString());
-        SkillRegistry registry3 = new SkillRegistry(props3, settings, new PluginService());
+        SkillRegistry registry3 = new SkillRegistry(props3, settings, new PluginService(), null);
         registry3.init();
         assertFalse(registry3.isEnabled("opt-in-skill"));
     }
@@ -331,7 +331,7 @@ class SkillRegistryTest {
         props.setDir(dir.toString());
         // 同一个目录，换一种等价写法（多绕一层 . ）
         props.setBuiltinDir(dir.resolve(".").toString());
-        SkillRegistry registry = new SkillRegistry(props, null, new PluginService());
+        SkillRegistry registry = new SkillRegistry(props, null, new PluginService(), null);
         registry.init();
 
         assertEquals(1, registry.getSkills().size());

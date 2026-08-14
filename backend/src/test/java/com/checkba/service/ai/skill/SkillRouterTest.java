@@ -41,13 +41,14 @@ class SkillRouterTest {
         props = new SkillProperties();
         props.setDir(tempDir.toString());
         props.setBaseTools(List.of("read_document"));
-        registry = new SkillRegistry(props, null, new PluginService());
+        registry = new SkillRegistry(props, null, new PluginService(), null);
         registry.init();
         router = new SkillRouter(registry, props,
                 new com.checkba.service.telemetry.TelemetryService(
                         org.mockito.Mockito.mock(com.checkba.repository.TelemetryEventRepository.class),
                         new com.checkba.service.telemetry.InstallIdentityService(tempDir.toString()),
-                        "test"));
+                        "test"),
+                null);
     }
 
     private void writeSkill(String id, List<String> triggers, List<String> allowedTools) throws IOException {
@@ -216,5 +217,83 @@ class SkillRouterTest {
         registry.setActivationMode("skill-b", SkillRegistry.ActivationMode.DISABLED);
         router.activateForTurn("conv-y", "公司考虑IPO", "skill-b");
         assertEquals("skill-a", router.activeSkill("conv-y").orElseThrow().getId());
+    }
+
+    // ==== 应用语言（EN 版 PR5）====
+
+    /** 写一个双语 skill（languages: zh-CN/en-US + triggers_en + prompt.en.md + output_en + name_en） */
+    private void writeBilingualSkill(String id) throws IOException {
+        Path dir = tempDir.resolve(id);
+        Files.createDirectories(dir);
+        Files.writeString(dir.resolve("skill.yml"), """
+                id: %s
+                name: 双语技能
+                name_en: Bilingual Skill
+                languages: [zh-CN, en-US]
+                triggers: [双语触发词]
+                triggers_en: [bilingual trigger phrase]
+                output: 中文输出约定
+                output_en: English output convention
+                allowed_tools: [law_search]
+                """.formatted(id));
+        Files.writeString(dir.resolve("prompt.md"), "中文模板正文");
+        Files.writeString(dir.resolve("prompt.en.md"), "English template body");
+    }
+
+    private SkillRouter englishRouter() {
+        com.checkba.service.AppLanguageService en =
+                org.mockito.Mockito.mock(com.checkba.service.AppLanguageService.class);
+        org.mockito.Mockito.when(en.language()).thenReturn(com.checkba.service.AppLanguageService.EN_US);
+        org.mockito.Mockito.when(en.isEnglish()).thenReturn(true);
+        SkillRegistry enRegistry = new SkillRegistry(props, null, new PluginService(), en);
+        enRegistry.init();
+        return new SkillRouter(enRegistry, props, null, en);
+    }
+
+    @Test
+    @DisplayName("英文模式：triggers_en 参与匹配；缺 languages 的存量 skill 整体隐藏")
+    void englishModeMatchesEnTriggersAndHidesZhOnlySkills() throws IOException {
+        writeBilingualSkill("skill-bi");
+        SkillRouter enRouter = englishRouter();
+
+        assertEquals("skill-bi",
+                enRouter.match("please use the bilingual trigger phrase").orElseThrow().getId());
+        // skill-a / skill-b 没有 languages 字段（= 只在 zh-CN 可用），英文模式下触发词命中也不生效
+        assertEquals(Optional.empty(), enRouter.match("公司考虑IPO"));
+        // 双语 skill 的中文触发词在英文模式下仍可命中（英文界面下输入中文是合法场景）
+        assertEquals("skill-bi", enRouter.match("请用双语触发词处理").orElseThrow().getId());
+    }
+
+    @Test
+    @DisplayName("中文模式：triggers_en 绝不参与匹配（中文匹配行为保持不变）")
+    void chineseModeIgnoresEnTriggers() throws IOException {
+        writeBilingualSkill("skill-bi2");
+        registry.rescan();
+
+        assertEquals(Optional.empty(), router.match("please use the bilingual trigger phrase"),
+                "triggers_en 不应在 zh-CN 下参与匹配");
+        assertEquals("skill-bi2", router.match("请用双语触发词处理").orElseThrow().getId());
+    }
+
+    @Test
+    @DisplayName("英文模式注入块：英文前缀 + prompt.en.md + output_en + name_en；中文模式保持原样")
+    void promptInjectionSwitchesByLanguage() throws IOException {
+        writeBilingualSkill("skill-bi3");
+        SkillRouter enRouter = englishRouter();
+        registry.rescan();
+
+        SkillDefinition viaEn = enRouter.match("bilingual trigger phrase").orElseThrow();
+        String enBlock = enRouter.promptInjectionFor(viaEn);
+        assertTrue(enBlock.contains("# Active Skill: Bilingual Skill"), "英文块应用 name_en");
+        assertTrue(enBlock.contains("matched the skill"), "前缀应为英文");
+        assertTrue(enBlock.contains("English template body"), "应注入 prompt.en.md 模板");
+        assertTrue(enBlock.contains("## Output Conventions"), "输出约定标题应为英文");
+        assertTrue(enBlock.contains("English output convention"), "应注入 output_en");
+        assertFalse(enBlock.contains("中文模板正文"), "英文块不应夹带中文模板");
+
+        String zhBlock = router.promptInjectionFor(registry.getSkill("skill-bi3").orElseThrow());
+        assertTrue(zhBlock.contains("用户本轮请求命中了技能「双语技能」"), "中文前缀保持原样");
+        assertTrue(zhBlock.contains("中文模板正文"), "中文模式仍注入 prompt.md");
+        assertTrue(zhBlock.contains("## 输出约定"), "中文输出约定标题保持原样");
     }
 }

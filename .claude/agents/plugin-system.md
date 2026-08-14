@@ -39,6 +39,8 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 目录式：`skills/<id>/skill.yml + prompt.md`。skill.yml 字段：`id`（必需，kebab-case，启停键）、`name`、`description`、`triggers`（必需，关键词数组，用户输入"包含"即命中）、`prompt`（默认 prompt.md）、`allowed_tools`（须为 ToolRegistry 真实工具名）、`output`、`requires`（如 evidence.retrieve.v1，v1 仅声明）。未知字段忽略；解析失败跳过不阻断。
 
+**应用语言字段（EN 版 PR5，全部可选）**：`languages`（数组，可用的应用语言；**缺省 = 只在 zh-CN 可用**——存量第三方 skill 没这个字段，英文版自动隐藏，方向安全）、`name_en` / `triggers_en` / `output_en`（英文侧文本；triggers_en 只在 en-US 参与匹配，zh-CN 匹配行为不变）、目录下可放 `prompt.en.md`（存在即加载，英文注入优先用它，缺省回退 prompt.md）。语言过滤收口在 `SkillRegistry.isAvailable`（match/钉选/注入三条路径共用，不会只滤列表不滤注入）；内置三 skill：股东大会核查与上市路径 `languages: [zh-CN]`（中国法深度绑定，且后者触发词含 IPO/SPAC/VIE 会命中英文输入，必须真隐藏），诉讼可视化双语（带 triggers_en + prompt.en.md）。守卫在 BuiltinSkillsTest / SkillRouterTest 的语言组测试。注意 `/api/skills/list` 与广场列表**不做**语言过滤（管理面照常展示，只是英文模式下 zh-only skill 永不注入）。
+
 插件携带 skill：manifest.json `skills` 字段列子目录名，PluginService 只收集目录（`getPluginSkillDirs()`），解析/启停归 SkillRegistry，记 sourcePluginId。
 
 manifest.json 要点：id（必需）/name/version/icon/author/permissions（file_read/file_write/network/editor）/tools[]/frontendEntry/backendJars[]/skills[]。

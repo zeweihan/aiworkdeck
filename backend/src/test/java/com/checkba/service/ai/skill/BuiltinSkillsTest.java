@@ -47,7 +47,7 @@ class BuiltinSkillsTest {
     static void setUp() {
         SkillProperties props = new SkillProperties();
         props.setDir(SKILLS_DIR.toString());
-        registry = new SkillRegistry(props, null, new PluginService());
+        registry = new SkillRegistry(props, null, new PluginService(), null);
         registry.init();
         realToolNames = scanRealToolNames();
     }
@@ -129,5 +129,60 @@ class BuiltinSkillsTest {
         assertTrue(prompt.contains("不要手写 SVG"), "必须明确禁止手写 SVG 坐标");
         assertTrue(prompt.contains("litigation_checkpoint"), "必须交代出图前要走确认");
         assertTrue(prompt.contains("逐字"), "必须交代原文逐字保留");
+    }
+
+    // ==== 应用语言（EN 版 PR5）====
+
+    @Test
+    @DisplayName("英文模式：两个中国法深度绑定 skill 真隐藏，诉讼可视化双语可用且英文侧文本齐全")
+    void englishModeHidesChinaBoundSkillsAndKeepsLitigationVisual() {
+        com.checkba.service.AppLanguageService en =
+                org.mockito.Mockito.mock(com.checkba.service.AppLanguageService.class);
+        org.mockito.Mockito.when(en.language()).thenReturn(com.checkba.service.AppLanguageService.EN_US);
+        org.mockito.Mockito.when(en.isEnglish()).thenReturn(true);
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(SKILLS_DIR.toString());
+        SkillRegistry enRegistry = new SkillRegistry(props, null, new PluginService(), en);
+        enRegistry.init();
+        // 排除启停因素，单测语言过滤本身（litigation-visual 默认 enabled_by_default:false）
+        enRegistry.setEnabled("litigation-visual", true);
+        enRegistry.setEnabled("shareholder-meeting-verification", true);
+        enRegistry.setEnabled("listing-pathway", true);
+
+        assertFalse(enRegistry.isAvailable(enRegistry.getSkill("shareholder-meeting-verification").orElseThrow()),
+                "股东大会核查是中国证券法语境交付物，英文版必须隐藏");
+        assertFalse(enRegistry.isAvailable(enRegistry.getSkill("listing-pathway").orElseThrow()),
+                "上市路径的触发词含 IPO/SPAC/VIE 会命中英文输入，英文版必须真隐藏");
+        assertTrue(enRegistry.isAvailable(enRegistry.getSkill("litigation-visual").orElseThrow()),
+                "诉讼可视化声明了 en-US，英文版应可用");
+
+        SkillDefinition lv = enRegistry.getSkill("litigation-visual").orElseThrow();
+        assertFalse(lv.getTriggersEn().isEmpty(), "litigation-visual 应带英文触发词（triggers_en）");
+        assertTrue(lv.getPromptTemplateEn() != null
+                        && lv.getPromptTemplateEn().contains("litigation_checkpoint"),
+                "prompt.en.md 应被加载且保留出图前确认的铁律");
+        assertTrue(lv.getPromptTemplateEn().contains("NEVER hand-write SVG"),
+                "英文 prompt 应保留禁止手写 SVG 的铁律");
+
+        // 英文输入 "IPO" 不能召来中国上市路径分析（不隐藏的话 listing-pathway 的英文触发词会命中）
+        SkillRouter enRouter = new SkillRouter(enRegistry, props, null, en);
+        assertTrue(enRouter.match("We are considering an IPO next year").isEmpty(),
+                "英文模式下 IPO 不应命中任何中国法 skill");
+        assertEquals("litigation-visual",
+                enRouter.match("Please draw a case timeline of the dispute").orElseThrow().getId(),
+                "英文触发词应命中诉讼可视化");
+    }
+
+    @Test
+    @DisplayName("中文模式（默认）：语言过滤不改变任何既有可用性")
+    void chineseModeAvailabilityUnchanged() {
+        for (SkillDefinition skill : registry.getSkills()) {
+            // 本测试类的 registry 未接语言服务（null = zh-CN 语义）：
+            // 可用性只由启停决定，languages 字段不应产生任何影响
+            boolean expected = registry.isEnabled(skill.getId());
+            assertEquals(expected, registry.isAvailable(skill),
+                    "zh-CN 下 " + skill.getId() + " 的可用性不应被语言过滤改变");
+        }
     }
 }

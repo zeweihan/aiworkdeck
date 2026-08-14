@@ -33,7 +33,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - Web 态部署布局见 `deploy/web/nginx.conf.example`（站点 root 下 `zetaoffice/`，全站 COOP/COEP）；`host.zetaoffice.isAvailable()` 在 Web 态 HEAD 探一次编辑器页，没部署就让宿主退回预览路径，而不是挂一个永远起不来的 iframe。
 
 **宿主 UI（保活/实例管理/自动保存）**
-- `frontend/src/components/ReviewPanel.vue` — 审阅面板（编辑器右栏）：修订/批注两栏清单，点击定位、逐条接受/拒绝、全部接受/拒绝、批注标记解决/删除。数据全走 worker 原语（list_revisions/goto_revision/resolve_revision/resolve_all_revisions、list_comments/goto_comment/set_comment_resolved/delete_comment），executor 由 LibreOfficeEditor 注入；处置后 emit changed → 走自动保存链路。**面板是修订的权威视图**（页边小字读不到作者/时间，且同行多格删除会在页边互叠）。
+- `frontend/src/components/ReviewPanel.vue` — 审阅面板（编辑器右栏）：修订/批注两栏清单，点击定位、逐条接受/拒绝、全部接受/拒绝、批注标记解决/删除。数据全走 worker 原语（list_revisions/goto_revision/resolve_revision/resolve_all_revisions、list_comments/goto_comment/set_comment_resolved/delete_comment），executor 由 LibreOfficeEditor 注入；处置后 emit changed → 走自动保存链路。**面板是修订的权威视图**（页边小字读不到作者/时间，且同行多格删除会在页边互叠）。**卡片是「组」不是「条」**：引擎按一次编辑操作记一条 redline，连按 Backspace 删一个词就是一字一条（页边模式下引擎不会自行合并，真机实证 5 次删除 = 5 条）；面板把 `contiguous`（worker 用区间比较给出的首尾相接判据）+ 同类型同作者同分钟的相邻条目并成一张卡，处置时**从高索引往低索引**逐条 resolve（index 是枚举序，处置一条后更大的索引会前移）。
 - `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave、reloadFromBackend。支持**备胎过继**（watch file 仅 null→文档；引擎已就绪走 finishDocLoad，未就绪由 onEndpointReady 接手）与**只读预览接力**（字节预取完成即 docx-preview 本地渲染，previewReady 后 overlay 变成可滚动阅读 + 顶部细进度条，ready 后整体消失）。
 - `frontend/src/pages/project-overview/librePool.js` — 保活池方法组（Phase 1 外置）：libreLruKeys/touchLibreLru/evictLibreInstance、syncLibreExecutor 活跃指针、`_libreRefs`/`_libreExecMap` 非响应式注册表、`LIBRE_KEEPALIVE_MAX = 3`、reloadActiveLibreInstances（版本退回/检查点恢复后就地重载）；**预热备胎**（PR#220）：libreSpares（{key, file}，file=null 是后台预 boot 的空白隐藏实例），onActiveOfficeFileChanged 里 maybeAdoptLibreSpare（须在 touchLibreLru 之前，靠"不在 lru 记账"识别无实例）过继给池外首开文档，过继后按 'left:fileId' 常规记账；补胎在过继 ready 后（scheduleLibreSpare，4s 延迟）。仅左窗格设备胎（webview 不能跨容器移动）；h5 无 checkbaDesktop 不建胎；常驻多一个空白实例内存（数百 MB）。
 
@@ -68,6 +68,20 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 
 守卫（防空文档覆盖，PR#194）：`docLoadFailed` 闸——load 失败或"元数据非空却下载 0 字节"（fileSize>0 而 bytes 空）时置位，此后 onDocModified 与 saveDocument 一律拒绝；fileSize==0 才当新建空白。**该编辑器存/取走整文件 XHR，不含分片上传**。
 
+## LO chrome 的取舍（自建工具栏路线，spike 已验证）
+
+维护者定调：**最终形态是自建工具栏**，LO 自己的 menubar/toolbar 退场（菜单栏末端那个 × 会把 webview 里的文档关掉）。分期方案见 `docs/superpowers/specs/2026-08-14-editor-chrome-self-built-toolbar.md`。
+
+- 入口：`ctrl.getFrame().getPropertyValue('LayoutManager')`；元素 URL 形如 `private:resource/menubar/menubar`、`private:resource/toolbar/standardbar`、`private:resource/toolbar/textobjectbar`、`private:resource/statusbar/statusbar`，外加 11 条 `singlemode-*` 上下文工具栏（选中表格/图片时自动冒出，逐项关必须连它们一起关）。全集在 `office_thread.js` 的 `CHROME_URLS`。
+- **`hideElement()` 的返回值恒为 false，不代表失败**——必须用 `isElementVisible()` 复核。`showElement()` 可逆（返回 true 且 visible 恢复），这是「体验不能退步」的逃生口。`LayoutManager.setVisible(false)` 是关掉全部 chrome 最稳的一刀切。
+- 标尺不归 LayoutManager 管，是 `ViewSettings.ShowHoriRuler/ShowVertRuler`。
+- 隐藏 chrome 后编辑、`.uno:` 派发、格式原语、缩放全部照常；引擎自带对话框仍画在 canvas 上，不受影响。
+- **P1 命令层原语**（宿主发起，非 AI 管线）：`get_ui_state`（工具栏激活态一次拿全，实测 ~6ms）、`list_styles`（`name` 程序名 + `display` 显示名 + `inUse`）、`set_chrome`、`set_track_changes`（直接写 `RecordChanges`，比派发切换语义的 `.uno:TrackChanges` 可靠）。工具栏按钮统一走 `ui_command` 白名单，**不许改成任意 `.uno:` 透传**。
+- **`.uno:Grow` / `.uno:Shrink` 在本引擎是哑弹**（派发不报错，CharHeight 纹丝不动）。字号步进走 `get_ui_state` 读当前值 + `format_selection {fontSize}`。参数名不对称是既有契约：读回叫 `sizePt`，写入叫 `fontSize`，别改。
+- 撤销/重做可用性走 `xModel.getUndoManager()`（XUndoManagerSupplier 的**方法**）；`getPropertyValue('UndoManager')` 抛 UnknownPropertyException。
+- `XSelectionChangeListener` 装得上、选区变化每次触发，但**纯光标移动基本不触发**——工具栏状态刷新必须是「事件 + 聚焦时轮询」混合。
+- `format_selection` 拒绝空选区，工具栏「先设格式再打字」这条路目前是断的（P2 待补）。
+
 ## 已知地雷
 
 - boot 三地雷勿回退（canvas 必须 id=qtcanvas 且禁 border/padding；COOP/COEP 缺失 SharedArrayBuffer 不可用；locale shim）。
@@ -77,6 +91,10 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - 引擎仅 Writer+Calc 实锤（PR#165），别承诺 Impress。
 - CJK 字体走类别映射别名（PR#157/158），**不能用 assign 硬替换**；tofu 排查用 list_fonts 诊断 action。
 - 删除键/快捷键必须走 `.uno:` 调度（覆盖层吞键+修订模式手工删卡死教训，PR#164/166）。
+- **IME 覆盖层的「吞掉尾随 input」闩不能无条件置位**（`zetaOfficeImeOverlay.js`）：`compositionend` 之后浏览器**不一定**补发 input 事件（中文态标点直接上屏、组合被取消都不发），闩挂着不解就会吃掉用户随后敲的第一个字符——真机现象是「中文标点要按两次才过去」。判据用 `inputType`（只吞 insertCompositionText/insertFromComposition），并且无论如何在下一个宏任务解闩，绝不让它跨事件循环存活。
+- **组合中的文字要用独立预览条显示**：覆盖层的 `<input>` 压在画布上，必须全透明（显字会与正文叠印），所以「输入过程」看不见。预览条不依赖光标映射，未点过画布 / 映射失败时照样可见。
+- **触控板捏合必须在 canvas 上 `preventDefault`**：Chromium 把捏合报成 `ctrl+wheel`，不拦就是浏览器缩放整个 webview 页面（工具栏跟着放大、画布发糊、IME 像素映射基准作废）。拦下来改派 `set_zoom`（`ViewSettings.ZoomValue`，先切 `ZoomType=BY_VALUE` 否则自动模式会把值算回去；两个属性都是 sal_Int16，必须 `shortAny()`）。
+- **保存状态胶囊只在「慢」和「失败」时出声**：成功保存不报「已保存」（维护者反馈：经常闪变、打扰）。浮层要钉在**画布**上而不是编辑器外层——审阅面板是并排挤宽的，钉外层会压住面板标题行。
 - `npm run build:zetaoffice` 会清空 dist 并删掉已 fetch 的引擎——本地反复跑 e2e 用 `LOWA_ENGINE_DIR` 规避，或从兄弟 worktree 复制引擎（CDN 挂时的配方）。
 - 修订作者：params 带 `__agent:true` → 署名 "AI Workdeck"。
 - **ShowChangesInMargin 依赖自建引擎 ≥24.2.8-zhcn-r3**：原生 LO 把页边删除文本画在锚点所在 frame 左侧，表格内 frame=单元格会叠画左邻格正文；r3 焙入 frmpaint.cxx 表格锚点补丁（`desktop/lowa-build/patches`，锚 FindTabFrame 整表左缘）后才能开。页边模式非纯视图设置：开=删除文本移入 redline 对象（getString 可取、正文不含），关=留正文流且 redline getString 抛异常——debug_revisions 已带 RedlineText/区间双路取回，两种模式都能读。已知残留局限：同一表格行多格删除会在页边同 Y 相互叠（上游按行画、无跨格协调）。批注侧栏与此设置无关。
