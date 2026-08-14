@@ -4,6 +4,7 @@ import com.checkba.model.entity.AgentRunRecord;
 import com.checkba.model.entity.ProjectAiMessage;
 import com.checkba.repository.AgentRunRecordRepository;
 import com.checkba.repository.ProjectAiMessageRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -69,6 +70,19 @@ class AgentRunRecoveryServiceTest {
         turnTracker = Mockito.mock(com.checkba.service.telemetry.TelemetryTurnTracker.class);
         stateService = new AgentRunStateService(recordRepository, turnTracker);
         recoveryService = new AgentRunRecoveryService(recordRepository, messageRepository, stateService);
+    }
+
+    @AfterEach
+    void resetLangText() {
+        // 静态语言桥必须清干净，否则 en 模式的测试会污染同 fork 里的其他测试类
+        com.checkba.service.LangText.reset();
+    }
+
+    private void switchToEnglish() {
+        com.checkba.service.AppLanguageService en =
+                Mockito.mock(com.checkba.service.AppLanguageService.class);
+        when(en.isEnglish()).thenReturn(true);
+        com.checkba.service.LangText.register(en);
     }
 
     private ProjectAiMessage msg(String role, String content) {
@@ -242,6 +256,49 @@ class AgentRunRecoveryServiceTest {
 
         assertEquals("RUNNING", stateService.statusName(CONV));
         assertEquals("RUNNING", table.get(CONV).getStatus());
+    }
+
+    // ---- 中断说明的双语与幂等（EN 版 PR4-A）----
+
+    @Test
+    void recovery_englishMode_appendsEnglishNotice() {
+        switchToEnglish();
+        stateService.mark(CONV, AgentRunStateService.RunStatus.RUNNING, 42L, 7L);
+        ProjectAiMessage halfDone = msg("ASSISTANT", "half-finished reply");
+        messages.put(CONV, List.of(halfDone));
+
+        assertEquals(1, recoveryService.recoverInterruptedRuns());
+        assertTrue(halfDone.getContent().contains("[Process interrupted]"), "en 模式要补英文标记");
+        assertFalse(halfDone.getContent().contains("[进程中断]"), "en 模式不该出现中文标记");
+    }
+
+    @Test
+    void recovery_englishMode_skipsLegacyChineseMarker() {
+        // 升级场景：存量中文半截消息已带 [进程中断]，切到 en 后重启不能被二次追加英文说明
+        switchToEnglish();
+        stateService.mark(CONV, AgentRunStateService.RunStatus.RUNNING, 42L, 7L);
+        ProjectAiMessage halfDone = msg("ASSISTANT",
+                "半截内容" + AgentRunRecoveryService.INTERRUPT_NOTICE_ZH);
+        messages.put(CONV, List.of(halfDone));
+
+        assertEquals(1, recoveryService.recoverInterruptedRuns());
+        assertEquals(0, countOccurrences(halfDone.getContent(), "[Process interrupted]"),
+                "已带中文标记的消息不能再叠英文说明");
+        assertEquals(1, countOccurrences(halfDone.getContent(), "[进程中断]"));
+    }
+
+    @Test
+    void recovery_chineseMode_skipsEnglishMarker() {
+        // 反向切换：en 时期落库的英文标记，切回 zh 后重启同样不能叠中文说明
+        stateService.mark(CONV, AgentRunStateService.RunStatus.RUNNING, 42L, 7L);
+        ProjectAiMessage halfDone = msg("ASSISTANT",
+                "half-finished reply" + AgentRunRecoveryService.INTERRUPT_NOTICE_EN);
+        messages.put(CONV, List.of(halfDone));
+
+        assertEquals(1, recoveryService.recoverInterruptedRuns());
+        assertEquals(0, countOccurrences(halfDone.getContent(), "[进程中断]"),
+                "已带英文标记的消息不能再叠中文说明");
+        assertEquals(1, countOccurrences(halfDone.getContent(), "[Process interrupted]"));
     }
 
     private static int countOccurrences(String text, String needle) {

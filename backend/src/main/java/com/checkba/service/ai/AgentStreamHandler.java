@@ -66,7 +66,9 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
                 log.warn("Stream inactive for {}s (limit {}s) for {}, terminating round via watchdog",
                         idleSec, inactivitySeconds, conversationId);
                 onError(new java.util.concurrent.TimeoutException(
-                        "流式响应停滞超过 " + inactivitySeconds + " 秒"));
+                        com.checkba.service.LangText.of(
+                                "流式响应停滞超过 " + inactivitySeconds + " 秒",
+                                "Streaming response stalled for more than " + inactivitySeconds + " seconds")));
             }
         }, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
     }

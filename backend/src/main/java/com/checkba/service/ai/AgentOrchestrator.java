@@ -3,6 +3,7 @@ package com.checkba.service.ai;
 import com.checkba.controller.ai.AiAgentController;
 import com.checkba.model.ai.AgentMode;
 import com.checkba.model.entity.ProjectAiMessage;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectAiMessageService;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
@@ -35,6 +36,13 @@ public class AgentOrchestrator {
 
     // 循环步数预算：达到上限时优雅收尾（保存进度 + 告知用户可继续），而不是静默中断
     private static final int MAX_LOOP_DEPTH = 30;
+
+    /** 步数预算耗尽的用户提示（抽成方法便于按应用语言断言，见 AgentTextLanguageTest）。 */
+    static String maxDepthNotice() {
+        return LangText.of(
+                "\n\n> 本轮已达最大执行步数（" + MAX_LOOP_DEPTH + " 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。",
+                "\n\n> This run reached the maximum step budget (" + MAX_LOOP_DEPTH + " steps) and is paused. All completed changes have taken effect; click the Continue button below to carry on with the remaining work.");
+    }
     // 工具连续失败达到该次数后，向模型注入强提示要求收敛
     private static final int CONSECUTIVE_FAILURE_NUDGE = 3;
 
@@ -153,14 +161,15 @@ public class AgentOrchestrator {
         
         // 如果有部分内容，保存并标记为已中断
         if (!partialContent.isEmpty()) {
-            String contentToSave = partialContent + "\n\n[已中断]";
+            String contentToSave = partialContent + LangText.of("\n\n[已中断]", "\n\n[Interrupted]");
             saveAssistantMessage(conversationId, projectId, userId, contentToSave);
             log.info("Saved partial content ({} chars) for cancelled conversation: {}", partialContent.length(), conversationId);
         }
         
         agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.CANCELLED);
         // 发送取消事件
-        sseEmitterService.send(conversationId, "cancelled", "{\"message\":\"用户已停止生成\"}");
+        sseEmitterService.send(conversationId, "cancelled",
+                "{\"message\":\"" + LangText.of("用户已停止生成", "Generation stopped by the user") + "\"}");
         sseEmitterService.close(conversationId);
         
         // 清理状态
@@ -485,7 +494,7 @@ public class AgentOrchestrator {
         if (depth > MAX_LOOP_DEPTH) {
             // 步数预算耗尽：不是报错，而是"存档 + 请示"——保存进度、明确告知用户、干净收尾。
             log.warn("Agent loop reached max depth {} for conversation {}, stopping gracefully", MAX_LOOP_DEPTH, conversationId);
-            String notice = "\n\n> 本轮已达最大执行步数（" + MAX_LOOP_DEPTH + " 步），先暂停。已完成的修改均已生效，点击下方「继续」按钮可接着执行剩余任务。";
+            String notice = maxDepthNotice();
             sendTextDelta(conversationId, notice);
             String persisted = (executionLog.length() > 0 ? executionLog.toString() : "") + notice;
             saveAssistantMessage(conversationId, projectId, userId, persisted);
@@ -603,7 +612,9 @@ public class AgentOrchestrator {
                 }
                 // 纠正预算耗尽：按「存档 + 请示」暂停（同步数预算收尾的语义），绝不执行截断的调用
                 log.warn("LENGTH-truncated tool calls persisted after corrections for {}, pausing", conversationId);
-                String notice = "\n\n> 模型输出连续多次达到长度上限、工具调用无法完整发出，先暂停。点击下方「继续」按钮可接着执行。";
+                String notice = LangText.of(
+                        "\n\n> 模型输出连续多次达到长度上限、工具调用无法完整发出，先暂停。点击下方「继续」按钮可接着执行。",
+                        "\n\n> The model's output kept hitting the length limit and the tool call could not be emitted in full; pausing here. Click the Continue button below to resume.");
                 sendTextDelta(conversationId, notice);
                 String truncPersisted = (executionLog.length() > 0 ? executionLog.toString() : "")
                         + (aiMessage.text() != null ? aiMessage.text() : "") + notice;
@@ -796,7 +807,8 @@ public class AgentOrchestrator {
                     // 优先使用LLM选择的process name，否则用工具元数据里的中文显示名
                     String processNameForLog = (llmProcessName != null && !llmProcessName.isEmpty())
                         ? llmProcessName
-                        : (toolResult != null && toolResult.tool() != null ? toolResult.tool().displayName() : "工具执行");
+                        : (toolResult != null && toolResult.tool() != null ? toolResult.tool().displayName()
+                                : LangText.of("工具执行", "Tool execution"));
                     executionLog.append(String.format("<process name=\"%s\"><tool_code>%s</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
                         processNameForLog, AgentTagProtocol.escape(code), statusPrefix,
                         AgentTagProtocol.escape(result)));
@@ -969,7 +981,9 @@ public class AgentOrchestrator {
             // 刻意不触发记忆管线与版本落档——本轮没有真正结束，续写完成的那轮一并跑。
             if (response.finishReason() == dev.langchain4j.model.output.FinishReason.LENGTH) {
                 log.warn("Answer truncated by output length limit for {}, pausing for continuation", conversationId);
-                String notice = "\n\n> 回答达到单次输出长度上限被截断，点击下方「继续」按钮可接着生成。";
+                String notice = LangText.of(
+                        "\n\n> 回答达到单次输出长度上限被截断，点击下方「继续」按钮可接着生成。",
+                        "\n\n> The answer was cut off by the per-response output length limit. Click the Continue button below to keep generating.");
                 sendTextDelta(conversationId, notice);
                 String truncContent = (executionLog.length() > 0 ? executionLog.toString() + content : content) + notice;
                 saveAssistantMessage(conversationId, projectId, userId, truncContent);
@@ -1043,8 +1057,10 @@ public class AgentOrchestrator {
                 // 限流与故障文案分开：用户看到「服务不可用」而实际是限流排队，会误判成产品坏了
                 sendTextDelta(conversationId, String.format(
                         kind == LlmErrorClassifier.Kind.RATE_LIMITED
-                                ? "\n\n> 模型限流等待中，%d 秒后自动继续（第 %d/%d 次）…\n\n"
-                                : "\n\n> 模型服务暂时不可用，%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                                ? LangText.of("\n\n> 模型限流等待中，%d 秒后自动继续（第 %d/%d 次）…\n\n",
+                                        "\n\n> The model is rate limited; continuing automatically in %d s (attempt %d/%d)…\n\n")
+                                : LangText.of("\n\n> 模型服务暂时不可用，%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                                        "\n\n> The model service is temporarily unavailable; retrying in %d s (attempt %d/%d)…\n\n"),
                         delaySec, attempt, kind.maxRetries()));
                 // 定时器是自己的单线程池：身份同样要显式重放，否则重放的这一轮取不到平台密钥
                 LLM_RETRY_SCHEDULER.schedule(PlatformAiUserScope.wrap(() -> {
@@ -1070,8 +1086,9 @@ public class AgentOrchestrator {
                 if (forceCompactAfterOverflow(messages, conversationId, modelId)) {
                     log.warn("Context overflow for {} confirmed by provider, retrying after forced compaction",
                             conversationId);
-                    sendTextDelta(conversationId,
-                            "\n\n> 对话上下文超出模型窗口，已自动压缩较早的内容后重试…\n\n");
+                    sendTextDelta(conversationId, LangText.of(
+                            "\n\n> 对话上下文超出模型窗口，已自动压缩较早的内容后重试…\n\n",
+                            "\n\n> The conversation exceeded the model's context window; earlier content was compacted automatically, retrying…\n\n"));
                     try {
                         runLoop(model, messages, conversationId, projectId, userId, modelId,
                                 depth, executionLog, agentMode, guard);
@@ -1157,7 +1174,8 @@ public class AgentOrchestrator {
         // 换模型等于换了一条通道，重试预算重新计
         guard.llmRetries = 0;
         sendTextDelta(conversationId, String.format(
-                "\n\n> 模型「%s」%s，已自动切换到备用模型「%s」继续本轮任务。\n\n",
+                LangText.of("\n\n> 模型「%s」%s，已自动切换到备用模型「%s」继续本轮任务。\n\n",
+                        "\n\n> Model \"%s\" %s; automatically switched to fallback model \"%s\" to continue this round.\n\n"),
                 failedModelId, kind.userFacingReason(), nextModelId));
         try {
             runLoop(nextModel, messages, conversationId, projectId, userId, nextModelId,
@@ -1195,7 +1213,8 @@ public class AgentOrchestrator {
         StringBuilder sb = activeStreamContent.get(conversationId);
         String partialContent = sb != null ? sb.toString() : "";
         if (!partialContent.isEmpty()) {
-            saveAssistantMessage(conversationId, projectId, userId, partialContent + "\n\n[生成出错，已中断]");
+            saveAssistantMessage(conversationId, projectId, userId,
+                    partialContent + LangText.of("\n\n[生成出错，已中断]", "\n\n[Generation error, interrupted]"));
         }
         sseEmitterService.close(conversationId);
         clearCancelledState(conversationId);
@@ -1262,7 +1281,8 @@ public class AgentOrchestrator {
             log.warn("Empty LLM response for {} (attempt {}/{}), retrying in {}s",
                     conversationId, attempt, kind.maxRetries(), delaySec);
             sendTextDelta(conversationId, String.format(
-                    "\n\n> 模型返回了空响应，%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                    LangText.of("\n\n> 模型返回了空响应，%d 秒后自动重试（第 %d/%d 次）…\n\n",
+                            "\n\n> The model returned an empty response; retrying in %d s (attempt %d/%d)…\n\n"),
                     delaySec, attempt, kind.maxRetries()));
             // 同 onError 的重试路径：定时器线程不继承平台通道身份，必须显式重建
             LLM_RETRY_SCHEDULER.schedule(PlatformAiUserScope.wrap(() -> {
@@ -1278,7 +1298,8 @@ public class AgentOrchestrator {
         }
         log.error("Empty LLM response persisted after retries for {}", conversationId);
         handleStreamErrorTerminal(conversationId, projectId, userId,
-                new IllegalStateException("模型连续返回空响应，请稍后重发这条消息"), kind);
+                new IllegalStateException(LangText.of("模型连续返回空响应，请稍后重发这条消息",
+                        "The model kept returning empty responses; please resend this message later")), kind);
     }
 
     /**

@@ -27,9 +27,20 @@ public class AgentRunRecoveryService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AgentRunRecoveryService.class);
 
-    /** 追加到半截回复末尾的中断说明；口径对齐取消路径的 [已中断]。 */
-    static final String INTERRUPT_NOTICE =
-            "\n\n> **[进程中断]** 任务执行中应用被关闭，点击下方「继续」按钮可接着执行。";
+    /** 追加到半截回复末尾的中断说明（中文标记）；口径对齐取消路径的 [已中断]。 */
+    static final String INTERRUPT_MARKER_ZH = "[进程中断]";
+    /** 英文标记。幂等检查必须两个标记都认（见 {@link #appendInterruptNotice}）。 */
+    static final String INTERRUPT_MARKER_EN = "[Process interrupted]";
+
+    static final String INTERRUPT_NOTICE_ZH =
+            "\n\n> **" + INTERRUPT_MARKER_ZH + "** 任务执行中应用被关闭，点击下方「继续」按钮可接着执行。";
+    static final String INTERRUPT_NOTICE_EN =
+            "\n\n> **" + INTERRUPT_MARKER_EN + "** The app was closed while this task was running. Click the Continue button below to resume.";
+
+    /** 按应用语言取本次要写入的中断说明。 */
+    static String interruptNotice() {
+        return com.checkba.service.LangText.of(INTERRUPT_NOTICE_ZH, INTERRUPT_NOTICE_EN);
+    }
 
     private final AgentRunRecordRepository recordRepository;
     private final ProjectAiMessageRepository messageRepository;
@@ -103,9 +114,10 @@ public class AgentRunRecoveryService {
         }
         if (last == null) return;
         String content = last.getContent() == null ? "" : last.getContent();
-        // 幂等：重复启动（或回收跑了两次）不该把说明叠加成一串
-        if (content.contains("[进程中断]")) return;
-        last.setContent(content + INTERRUPT_NOTICE);
+        // 幂等：重复启动（或回收跑了两次）不该把说明叠加成一串。
+        // 中英两个标记都要认——切换语言后重启（或升级后存量中文半截消息）不能被二次追加
+        if (content.contains(INTERRUPT_MARKER_ZH) || content.contains(INTERRUPT_MARKER_EN)) return;
+        last.setContent(content + interruptNotice());
         messageRepository.save(last);
     }
 }

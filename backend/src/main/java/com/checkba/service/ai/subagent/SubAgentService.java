@@ -142,7 +142,8 @@ public class SubAgentService {
         String subtaskId = "subtask-" + UUID.randomUUID().toString().substring(0, 8);
         // started/结束事件必须成对发出（前端的子任务卡按 taskId 配对渲染），
         // 所以模型校验失败那条路径也走"先 started 再 failed"，不能只发一个 failed
-        sendProgress(parentCtx, subtaskId, "started", 0, "子任务开始：" + brief(taskDescription));
+        sendProgress(parentCtx, subtaskId, "started", 0,
+                com.checkba.service.LangText.of("子任务开始：", "Subtask started: ") + brief(taskDescription));
 
         // 模型在提交线程解析，非白名单在起跑前就拒绝：ChatModelFactory 对非白名单的处置是
         // 静默回落默认模型——failover 链踩过的同一个坑（看着「配了便宜模型」，实际跑的是主模型，
@@ -151,12 +152,16 @@ public class SubAgentService {
         if (!AllowedModels.isAllowed(modelId)) {
             log.warn("子 Agent 模型 '{}' 不在可用模型清单内，子任务 {} 未派发", modelId, subtaskId);
             SubAgentResult rejected = SubAgentResult.failure(subtaskId,
-                    "子 Agent 模型「" + modelId + "」不在可用模型清单内，本次子任务没有执行。"
-                            + "到设置页的 AI 供应商里把子 Agent 模型换成清单内的模型，"
-                            + "或清空该项让它跟随辅助模型。",
+                    com.checkba.service.LangText.of(
+                            "子 Agent 模型「" + modelId + "」不在可用模型清单内，本次子任务没有执行。"
+                                    + "到设置页的 AI 供应商里把子 Agent 模型换成清单内的模型，"
+                                    + "或清空该项让它跟随辅助模型。",
+                            "Sub-agent model \"" + modelId + "\" is not in the allowed model list, so this subtask was not executed. "
+                                    + "In Settings > AI Provider, switch the sub-agent model to one from the list, "
+                                    + "or clear the field to follow the auxiliary model."),
                     List.of(), 0);
             sendProgress(parentCtx, subtaskId, "failed", 100,
-                    "子任务失败：" + brief(rejected.error()));
+                    com.checkba.service.LangText.of("子任务失败：", "Subtask failed: ") + brief(rejected.error()));
             return rejected;
         }
 
@@ -212,8 +217,9 @@ public class SubAgentService {
         // 新造一个 stage 值只会多一处待同步的字面量），区别体现在给用户看的文案上
         sendProgress(parentCtx, subtaskId,
                 result.success() ? "succeeded" : "failed", 100,
-                result.success() ? "子任务完成"
-                        : cancelledByUser ? "子任务已停止" : "子任务失败：" + brief(result.error()));
+                result.success() ? com.checkba.service.LangText.of("子任务完成", "Subtask completed")
+                        : cancelledByUser ? com.checkba.service.LangText.of("子任务已停止", "Subtask stopped")
+                        : com.checkba.service.LangText.of("子任务失败：", "Subtask failed: ") + brief(result.error()));
         return result;
     }
 

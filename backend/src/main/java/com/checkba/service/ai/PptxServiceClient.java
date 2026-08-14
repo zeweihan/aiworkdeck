@@ -5,6 +5,7 @@ import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.checkba.service.LangText;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -572,33 +573,42 @@ public class PptxServiceClient {
         
         try {
             // 1. 创建项目 (2%)
-            reportProgress.accept(2, new String[]{"creating_project", "正在创建 PPT 项目..."});
+            reportProgress.accept(2, new String[]{"creating_project",
+                    LangText.of("正在创建 PPT 项目...", "Creating the PPT project...")});
             String projectId = createProject(topic);
             result.setProjectId(projectId);
             
             // 2. 生成大纲 (10%)
-            reportProgress.accept(5, new String[]{"generating_outline", "正在生成演示文稿大纲..."});
+            reportProgress.accept(5, new String[]{"generating_outline",
+                    LangText.of("正在生成演示文稿大纲...", "Generating the presentation outline...")});
             JSONArray pages = generateOutline(projectId, language, modelConfig);
             result.setPagesCount(pages.size());
-            reportProgress.accept(10, new String[]{"generating_outline", "大纲生成完成，共 " + pages.size() + " 页"});
+            reportProgress.accept(10, new String[]{"generating_outline",
+                    LangText.of("大纲生成完成，共 " + pages.size() + " 页",
+                            "Outline generated: " + pages.size() + " pages")});
             
             // 3. 生成描述 (10% -> 25%)
-            reportProgress.accept(12, new String[]{"generating_descriptions", "正在生成页面内容描述..."});
+            reportProgress.accept(12, new String[]{"generating_descriptions",
+                    LangText.of("正在生成页面内容描述...", "Generating page content descriptions...")});
             String descTaskId = startGenerateDescriptions(projectId, language, modelConfig);
             JSONObject descTaskResult = waitForTaskWithProgress(projectId, descTaskId, 10, 25, 
-                    "generating_descriptions", "正在生成页面描述", progressCallback);
+                    "generating_descriptions",
+                    LangText.of("正在生成页面描述", "Generating page descriptions"), progressCallback);
             if (descTaskResult == null) {
                 result.setSuccess(false);
                 result.setError("Description generation failed");
                 return result;
             }
-            reportProgress.accept(25, new String[]{"generating_descriptions", "页面描述生成完成"});
+            reportProgress.accept(25, new String[]{"generating_descriptions",
+                    LangText.of("页面描述生成完成", "Page descriptions generated")});
             
             // 4. 生成图片 (25% -> 70%)
-            reportProgress.accept(27, new String[]{"generating_images", "正在生成幻灯片图片..."});
+            reportProgress.accept(27, new String[]{"generating_images",
+                    LangText.of("正在生成幻灯片图片...", "Generating slide images...")});
             String imgTaskId = startGenerateImages(projectId, language, templateStyle, modelConfig);
             JSONObject imgTaskResult = waitForTaskWithProgress(projectId, imgTaskId, 25, 70, 
-                    "generating_images", "正在生成幻灯片图片", progressCallback);
+                    "generating_images",
+                    LangText.of("正在生成幻灯片图片", "Generating slide images"), progressCallback);
             if (imgTaskResult == null) {
                 result.setSuccess(false);
                 result.setError("Image generation failed");
@@ -615,19 +625,23 @@ public class PptxServiceClient {
                     }
                 }
             }
-            reportProgress.accept(70, new String[]{"generating_images", "幻灯片图片生成完成"});
+            reportProgress.accept(70, new String[]{"generating_images",
+                    LangText.of("幻灯片图片生成完成", "Slide images generated")});
             
             // 5. 导出 PPTX (70% -> 95%)
-            reportProgress.accept(72, new String[]{"exporting_pptx", "正在导出 PPTX 文件..."});
+            reportProgress.accept(72, new String[]{"exporting_pptx",
+                    LangText.of("正在导出 PPTX 文件...", "Exporting the PPTX file...")});
             String filename = "presentation_" + projectId + ".pptx";
             String downloadUrl;
             
             if (exportEditable) {
-                reportProgress.accept(75, new String[]{"exporting_pptx", "正在生成可编辑版本..."});
+                reportProgress.accept(75, new String[]{"exporting_pptx",
+                        LangText.of("正在生成可编辑版本...", "Generating the editable version...")});
                 try {
                     String editableTaskId = startExportEditable(projectId, filename, modelConfig);
                     JSONObject editableTaskResult = waitForTaskWithProgress(projectId, editableTaskId, 75, 95, 
-                            "exporting_pptx", "正在导出可编辑版本", progressCallback);
+                            "exporting_pptx",
+                            LangText.of("正在导出可编辑版本", "Exporting the editable version"), progressCallback);
                     
                     if (editableTaskResult != null) {
                         JSONObject editableProgress = editableTaskResult.getJSONObject("progress");
@@ -659,17 +673,20 @@ public class PptxServiceClient {
             }
             
             result.setDownloadUrl(downloadUrl);
-            reportProgress.accept(95, new String[]{"exporting_pptx", "PPTX 导出完成"});
+            reportProgress.accept(95, new String[]{"exporting_pptx",
+                    LangText.of("PPTX 导出完成", "PPTX export completed")});
             
             // 6. 下载到本地 (95% -> 100%)
             if (localSavePath != null && !localSavePath.isEmpty()) {
-                reportProgress.accept(97, new String[]{"downloading", "正在保存文件到本地..."});
+                reportProgress.accept(97, new String[]{"downloading",
+                        LangText.of("正在保存文件到本地...", "Saving the file locally...")});
                 String savedPath = downloadPptx(downloadUrl, localSavePath);
                 result.setLocalPath(savedPath);
             }
             
             result.setSuccess(true);
-            reportProgress.accept(100, new String[]{"completed", "PPTX 生成完成！"});
+            reportProgress.accept(100, new String[]{"completed",
+                    LangText.of("PPTX 生成完成！", "PPTX generation completed.")});
             log.info("PPTX generation with progress completed: {}, editable={}", result.getLocalPath(), result.isEditable());
             
         } catch (Exception e) {

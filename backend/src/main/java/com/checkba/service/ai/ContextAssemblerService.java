@@ -428,7 +428,7 @@ public class ContextAssemblerService {
             Optional<ProjectMemory> projectMemoryOpt = memoryManager.getProjectMemory(projectIdLong);
             if (projectMemoryOpt.isPresent()) {
                 ProjectMemory pm = projectMemoryOpt.get();
-                systemText.append("\n\n# 项目记忆（长期记忆）\n");
+                systemText.append(english ? "\n\n# Project Memory (long-term)\n" : "\n\n# 项目记忆（长期记忆）\n");
                 systemText.append(pm.toCoreContext());
             }
             
@@ -436,7 +436,7 @@ public class ContextAssemblerService {
             List<MemoryEntry> relevantMemories = memoryManager.retrieveMemories(
                     projectIdLong, userPrompt, null, 5);
             if (!relevantMemories.isEmpty()) {
-                systemText.append("\n\n# 相关记忆（证据账本）\n");
+                systemText.append(english ? "\n\n# Relevant Memories (evidence ledger)\n" : "\n\n# 相关记忆（证据账本）\n");
                 systemText.append(memoryManager.formatAsEvidenceLedger(relevantMemories));
             }
         }
@@ -445,8 +445,12 @@ public class ContextAssemblerService {
         if (userId != null) {
             List<MemoryEntry> userMemories = memoryManager.retrieveUserMemories(userId, 5);
             if (!userMemories.isEmpty()) {
-                systemText.append("\n\n# 用户偏好与习惯（跨项目记忆）\n");
-                systemText.append("以下是该用户长期积累的偏好与习惯，输出时应遵循：\n");
+                systemText.append(english
+                        ? "\n\n# User Preferences and Habits (cross-project memory)\n"
+                        : "\n\n# 用户偏好与习惯（跨项目记忆）\n");
+                systemText.append(english
+                        ? "The following are this user's long-standing preferences and habits; follow them in your output:\n"
+                        : "以下是该用户长期积累的偏好与习惯，输出时应遵循：\n");
                 for (MemoryEntry mem : userMemories) {
                     systemText.append("- ");
                     if (mem.getMemoryKey() != null) {
