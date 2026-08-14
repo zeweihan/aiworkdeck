@@ -443,9 +443,13 @@ check('CI 跑导航护栏', () => {
 })
 
 check('邀请话术仍指向真看得见的入口', () => {
+  // i18n 迁移后 zh 文案实体在 locale 文件里（组件里只剩 $t 键），
+  // 契约不变：话术短语必须存在于组件或对应 zh locale 之一
   const src = readVue('src/components/collab/CollabDialog.vue')
+    + readVue('src/locales/zh-CN/version.js')
   if (!src.includes('打开项目列表')) return '话术被改坏了'
   const list = readVue('src/pages/project-list/project-list.vue')
+    + readVue('src/locales/zh-CN/projects.js')
   return list.includes('从团队案件库取一份案卷') ? null : '话术指的入口在项目列表页上不存在'
 })
 
