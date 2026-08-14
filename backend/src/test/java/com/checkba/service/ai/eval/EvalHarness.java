@@ -100,7 +100,7 @@ public final class EvalHarness {
         SkillProperties skillProperties = new SkillProperties();
         skillProperties.setDir(skillsDir());
         skillProperties.setBaseTools(List.of("read_document", "list_files", "query_memory"));
-        SkillRegistry skillRegistry = new SkillRegistry(skillProperties, null, pluginService);
+        SkillRegistry skillRegistry = new SkillRegistry(skillProperties, null, pluginService, null);
         skillRegistry.init();
         // litigation-visual 的 skill.yml 声明了 enabled_by_default:false（默认关闭，需用户手动
         // 打开），首次扫描会被 SkillRegistry 自动禁用。skill-litigation-visual-tools-visible 这条
@@ -117,7 +117,7 @@ public final class EvalHarness {
         com.checkba.service.telemetry.TelemetryTurnTracker turnTracker =
                 new com.checkba.service.telemetry.TelemetryTurnTracker(telemetry);
 
-        SkillRouter skillRouter = new SkillRouter(skillRegistry, skillProperties, telemetry);
+        SkillRouter skillRouter = new SkillRouter(skillRegistry, skillProperties, telemetry, null);
 
         ChatModelFactory chatModelFactory = mock(ChatModelFactory.class);
         when(chatModelFactory.getStreamingChatModel(any())).thenReturn(scripted);

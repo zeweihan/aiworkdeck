@@ -25,6 +25,15 @@ enabled_by_default: false
 # 法律事项类别（匿名统计用，枚举见 MatterCategory）
 category: 争议解决
 
+# 可用语言（EN 版 PR5）：抽取→semantic-map.json→确定性出图的管线不绑定任何法域，
+# 七种布局（时间轴/甘特/流程/关系/层级/对比表）都是普适诉讼图件，英文版可用。
+# 英文侧文本：name_en / triggers_en / output_en 见下，英文 prompt 在 prompt.en.md。
+languages:
+  - zh-CN
+  - en-US
+
+name_en: Litigation Visualization
+
 # 触发条件：用户输入包含任一关键词即命中（不区分大小写）
 triggers:
   - 诉讼可视化
@@ -48,6 +57,29 @@ triggers:
   - 画成图
   - 出一张图
   - 做张图
+
+# 英文触发词（仅 en-US 应用语言下参与匹配；zh-CN 匹配行为不受影响）。
+# "timeline" / "gantt chart" 偏宽，与中文清单收录「时间轴」的取舍一致：先接受误触发风险。
+triggers_en:
+  - litigation visualization
+  - case timeline
+  - fact timeline
+  - timeline
+  - chronology
+  - limitation period chart
+  - guarantee period
+  - case flowchart
+  - litigation flowchart
+  - party relationship map
+  - relationship map
+  - ownership structure chart
+  - control structure
+  - gantt chart
+  - redraw this diagram
+  - redraw it
+  - turn this into a diagram
+  - make a diagram
+  - draw a chart
 
 prompt: prompt.md
 
@@ -76,3 +108,11 @@ output: |
   （唯一能插进正在写的文书的格式）、.drawio（可继续编辑的源文件）。
   回复里给一句审计摘要：用了哪种布局与视觉模式、深红标在哪一处（或"未标"）、
   有哪些没读准的地方。这些话只出现在回复里，绝不画进图上。
+
+output_en: |
+  Deliverable = one folder in the project, named after the figure, containing the .svg
+  (master copy, opened in the editor automatically), the .png (the ONLY format that can be
+  inserted into a document being drafted), and the .drawio (editable source file).
+  In the reply, give a one-line audit summary: which layout and visual mode were used,
+  where the crimson accent was placed (or "none"), and anything that could not be read with
+  confidence. These remarks go in the reply ONLY - never onto the figure itself.

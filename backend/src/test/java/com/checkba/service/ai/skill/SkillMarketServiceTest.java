@@ -87,7 +87,7 @@ class SkillMarketServiceTest {
         props = new SkillProperties();
         props.setDir(skillsDir.toString());
         props.setRegistryUrl(REGISTRY_URL);
-        registry = new SkillRegistry(props, null, pluginService);
+        registry = new SkillRegistry(props, null, pluginService, null);
         registry.init();
         return new StubMarketService(props, registry, gate);
     }
