@@ -1411,6 +1411,7 @@ function bootDoc() {
 
   installKeyHandler();
   try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
+  try { installSelectionListener(ctrl); } catch (e) { log('XSelectionChangeListener 安装失败 / install failed: ' + errStr(e)); }
   post('ui_ready');
   log('空白文档就绪 swriter / blank doc ready');
   try { const loc = readConfigLocale(); log('UI locale 诊断 / config: ' + JSON.stringify(loc)); } catch (e) { log('UI locale 诊断失败: ' + errStr(e)); }
@@ -1443,6 +1444,23 @@ function installModifyListener(model) {
   });
   model.addModifyListener(listener);
   log('XModifyListener 已装 / installed — 文档修改将上报宿主触发自动保存');
+}
+
+// ---- 自建工具栏：选区变化上报 -------------------------------------------
+// 工具栏的激活态（B 是否高亮、当前字体字号样式对齐）必须跟着光标走，而 LO 不会
+// 主动把「选区变了」推出来。装在 controller 上（XSelectionSupplier），每次触发
+// 就给宿主发一个信号，宿主据此重读 get_ui_state。
+//
+// **这条通道只覆盖「选区」类变化**：真机实测扩选/全选/选中段落每次都触发，但
+// **纯光标移动（塌陷选区左右挪）基本不触发**。所以编辑器页还会在画布 mouseup
+// 和覆盖层转发控制键之后各补一发——两路合起来才盖得住用户的实际操作。
+function installSelectionListener(controller) {
+  const listener = zetajs.unoObject([css.view.XSelectionChangeListener], {
+    selectionChanged() { try { post('sel_changed'); } catch (e) { /* ignore */ } },
+    disposing() {},
+  });
+  controller.addSelectionChangeListener(listener);
+  log('XSelectionChangeListener 已装 / installed — 选区变化将上报宿主刷新工具栏');
 }
 
 // ---- probe 2: selection via UNO (model-native, NO text offset) -----------
@@ -2193,6 +2211,8 @@ const EXEC = {
       try { installKeyHandler(); } catch (e) {}
       // The listener is per-model — the freshly-loaded component needs its own.
       try { installModifyListener(xModel); } catch (e) { log('XModifyListener 安装失败 / install failed: ' + errStr(e)); }
+      // 选区监听是 per-controller 的，换文档同样要重装（漏了工具栏就再也不刷新）
+      try { installSelectionListener(ctrl); } catch (e) { log('XSelectionChangeListener 安装失败 / install failed: ' + errStr(e)); }
       // RecordChanges/ShowChangesInMargin 是 Writer 专属（Calc/Impress 没有该属性）——
       // 此前对非 Writer 文档也无条件调用，靠 try/catch 兜住但会白抛异常 + 打噪声日志
       // （Impress 场景尤其误导：看起来像"修订功能坏了"）。改成前置类型判定。

@@ -172,11 +172,31 @@ try {
 // needs an edge to debounce-save on, so throttle the relay to 1/500ms.
 let lastModifiedRelay = 0
 function relayModified(d) {
-  if (!d || d.cmd !== 'modified') return
+  if (!d || !d.cmd) return
+  if (d.cmd === 'sel_changed') { relaySelection(); return }
+  if (d.cmd !== 'modified') return
   const now = Date.now()
   if (now - lastModifiedRelay < 500) return
   lastModifiedRelay = now
   try { hostTransport.send({ __lo: 'lo-relay', type: 'modified' }) } catch (e) { /* ignore */ }
+}
+
+// (自建工具栏) 光标/选区动了 → 宿主重读 get_ui_state 刷新激活态。两个来源：
+// worker 的 XSelectionChangeListener（盖选区类变化）与 IME 覆盖层的
+// onCursorMoved（盖纯光标移动与画布点击，前者盖不住）。合流后节流 1/150ms，
+// 免得连续方向键把通道打满。
+let lastSelectionRelay = 0
+let selectionTimer = 0
+function relaySelection() {
+  const now = Date.now()
+  const since = now - lastSelectionRelay
+  if (since < 150) {
+    // 尾随一发，保证最后一次移动的状态一定送到（否则连按方向键停下时是旧状态）
+    if (!selectionTimer) selectionTimer = setTimeout(() => { selectionTimer = 0; relaySelection() }, 150 - since)
+    return
+  }
+  lastSelectionRelay = now
+  try { hostTransport.send({ __lo: 'lo-relay', type: 'selection' }) } catch (e) { /* ignore */ }
 }
 
 startEditorEndpoint({
@@ -268,6 +288,8 @@ startEditorEndpoint({
       // link (v0.3.1 real-machine report: Backspace did nothing).
       onEnter: () => endpoint.executor.executeCommand('insert_paragraph', {}),
       sendCommand: (action, params) => endpoint.executor.executeCommand(action, params),
+      // 覆盖层每做完一个移动光标的动作就报一声，宿主据此刷新工具栏激活态
+      onCursorMoved: relaySelection,
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
     })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
