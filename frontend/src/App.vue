@@ -2,12 +2,28 @@
 import { getSessionId } from '@/utils/auth.js'
 import { openFolderFlow, openFileFlow, openLocalRootPath, openLocalFilePath } from '@/utils/ideOpen.js'
 import { track } from '@/utils/telemetryClient.js'
-import { host } from '@/services/host.js'
+import { host, isDesktopHost } from '@/services/host.js'
 import { mountFeedbackWidget } from '@/utils/feedbackWidget.js'
+import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
+import { saveAppLanguageRemote } from '@/services/api.js'
 
 export default {
   onLaunch: function () {
     console.log('App Launch')
+    // 应用语言：最早读一次（首启在此完成猜测并持久化），并把镜像写透到
+    // 桌面主进程（菜单等原生文案）与后端 system_setting（prompt/文案语言）。
+    // 之后语言切换（设置页 setAppLanguage）经 APP_LANGUAGE_EVENT 走同一条同步链。
+    const syncLanguageMirrors = (lang) => {
+      try { if (host.appLanguage && host.appLanguage.set) host.appLanguage.set(lang) } catch (e) { /* ignore */ }
+      // fire-and-forget：后端没起来也不能拦启动，下次切换/启动会再补。
+      // 浏览器态未登录时不发——POST 会回「未登录」，request 包装器据此清会话
+      // 并 reLaunch 登录页，启动链会被这条后台同步搅乱；桌面 local-mode 恒可发。
+      if (isDesktopHost() || getSessionId()) {
+        try { saveAppLanguageRemote(lang).catch(() => {}) } catch (e) { /* ignore */ }
+      }
+    }
+    syncLanguageMirrors(getAppLanguage())
+    try { uni.$on(APP_LANGUAGE_EVENT, syncLanguageMirrors) } catch (e) { /* ignore */ }
     // 常驻反馈浮窗：挂在页面树之外，全应用一个实例（见 utils/feedbackWidget.js）
     mountFeedbackWidget()
     // 埋点：页面路由唯一收口（全仓 50 处 navigateTo/reLaunch 直调，拦截器一处全覆盖）；

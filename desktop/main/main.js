@@ -397,7 +397,7 @@ function createMainWindow() {
   mainWindow.webContents.session.on('will-download', (event, item, webContents) => {
     // Set options for the save dialog
     item.setSaveDialogOptions({
-      title: '保存文件',
+      title: require('./app-language').t({ zh: '保存文件', en: 'Save File' }),
       defaultPath: item.getFilename() // Use the default filename suggestion
     })
     // Note: If item.setSavePath() is NOT called, Electron implicitly shows the dialog 
@@ -740,7 +740,7 @@ function ensureView(id) {
 
       const menu = Menu.buildFromTemplate([
         {
-          label: '加入网核收藏',
+          label: require('./app-language').t({ zh: '加入网核收藏', en: 'Save to Web Research Favorites' }),
           click: async () => {
             try {
               const url = params.pageURL ? String(params.pageURL) : ''
@@ -1154,10 +1154,11 @@ ipcMain.handle('checkba:shell-open-external', async (_evt, payload) => {
 // 桌面端：统一的“应用内确认弹窗”（不依赖 uni.showModal，且不会被 BrowserView/iframe 遮挡）
 ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
   if (!mainWindow) return { ok: false, confirmed: false, message: 'window not ready' }
-  const title = payload && payload.title ? String(payload.title) : '确认'
+  const { t: tL } = require('./app-language')
+  const title = payload && payload.title ? String(payload.title) : tL({ zh: '确认', en: 'Confirm' })
   const content = payload && payload.content ? String(payload.content) : ''
-  const okText = payload && payload.okText ? String(payload.okText) : '确定'
-  const cancelText = payload && payload.cancelText ? String(payload.cancelText) : '取消'
+  const okText = payload && payload.okText ? String(payload.okText) : tL({ zh: '确定', en: 'OK' })
+  const cancelText = payload && payload.cancelText ? String(payload.cancelText) : tL({ zh: '取消', en: 'Cancel' })
 
   const reqId = `confirm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
   const resultChannel = `checkba:ui-confirm-result:${reqId}`
@@ -1336,7 +1337,13 @@ async function ensurePysvcReady() {
     console.error('[pysvc] extract failed:', result.message)
     try {
       const { dialog } = require('electron')
-      dialog.showErrorBox('本地组件解压失败', `部分本地功能（文档解析/PPT/语音）将不可用：\n${result.message || ''}`)
+      dialog.showErrorBox(
+        require('./app-language').t({ zh: '本地组件解压失败', en: 'Local Component Extraction Failed' }),
+        require('./app-language').t({
+          zh: `部分本地功能（文档解析/PPT/语音）将不可用：\n${result.message || ''}`,
+          en: `Some local features (document parsing/slides/voice) will be unavailable:\n${result.message || ''}`,
+        })
+      )
     } catch (e) { /* ignore */ }
   }
 }
@@ -1450,7 +1457,9 @@ ipcMain.handle('checkba:zetaoffice-editor', async () => {
   installZetaOfficeIsolation(ZETAOFFICE_PARTITION)
   const { origin } = await startEditorServer()
   return {
-    url: editorUrl(origin),
+    // LO 画布 UI 语言跟随应用语言；只影响新建的编辑器实例（保活池里已 boot 的
+    // 实例保持原语言，重启应用后全量生效）。
+    url: editorUrl(origin, { uilang: require('./app-language').getAppLanguage() }),
     preload: require('url').pathToFileURL(path.join(__dirname, '../preload/zetaoffice-webview-preload.js')).href,
     partition: ZETAOFFICE_PARTITION,
   }
@@ -1465,6 +1474,12 @@ ipcMain.handle('checkba:drawio-editor', async () => {
   if (!(await isAvailable())) return { available: false }
   const { origin } = await startDrawioServer()
   return { available: true, kind: 'iframe', origin, url: drawioUrl(origin) }
+})
+
+// 应用语言：渲染层是权威源（uni storage + 后端 system_setting），启动与切换时
+// send 过来；app-language.js 持久化并通知订阅方（应用菜单重建等）。
+ipcMain.on('checkba:app-language', (_evt, lang) => {
+  try { require('./app-language').setAppLanguage(String(lang || '')) } catch (e) { /* ignore */ }
 })
 
 // IDE 化：Finder「打开方式」/ 拖到 Dock 图标进来的路径（macOS open-file 事件，
@@ -1562,15 +1577,22 @@ app.whenReady().then(() => {
             // 非模态系统通知：补丁就绪 / 新大版本（设置页没开着也能看到）
             try {
               const { Notification } = require('electron')
+              const { t: tL } = require('./app-language')
               if (evt.type === 'ready' && Notification.isSupported()) {
                 new Notification({
-                  title: 'AI Workdeck 更新已就绪',
-                  body: `新版本 ${evt.version} 已下载完成，重启应用后生效。`
+                  title: tL({ zh: 'AI Workdeck 更新已就绪', en: 'AI Workdeck Update Ready' }),
+                  body: tL({
+                    zh: `新版本 ${evt.version} 已下载完成，重启应用后生效。`,
+                    en: `Version ${evt.version} has been downloaded. Restart the app to apply it.`,
+                  })
                 }).show()
               } else if (evt.type === 'major-available' && Notification.isSupported()) {
                 new Notification({
-                  title: 'AI Workdeck 新版本发布',
-                  body: `大版本 ${evt.major} 已发布，请前往官网下载完整安装包。`
+                  title: tL({ zh: 'AI Workdeck 新版本发布', en: 'New AI Workdeck Release' }),
+                  body: tL({
+                    zh: `大版本 ${evt.major} 已发布，请前往官网下载完整安装包。`,
+                    en: `Major version ${evt.major} is available. Download the full installer from the website.`,
+                  })
                 }).show()
               }
             } catch (e) { /* ignore */ }

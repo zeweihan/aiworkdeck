@@ -208,11 +208,14 @@ function startEditorServer() {
  * same-origin proxy (?lowa=); zeta.js / office_thread.js / cjk.ttc resolve to
  * their relative defaults served next to the page.
  * @param {string} origin e.g. http://127.0.0.1:54321
- * @param {{verify?:boolean}} [opts] verify=1 shows the standalone test panel.
+ * @param {{verify?:boolean, uilang?:string}} [opts] verify=1 shows the standalone
+ *   test panel; uilang 走 editor-main.js 的既有 ?uilang= 契约（LO 画布 UI 语言，
+ *   引擎双语资源已随包，缺省时 editor-main.js 落回 zh-CN）。
  */
 function editorUrl(origin, opts = {}) {
   const q = new URLSearchParams()
   if (opts.verify) q.set('verify', '1')
+  if (opts.uilang) q.set('uilang', opts.uilang)
   q.set('lowa', origin + '/lowa/')
   return origin + '/editor.html?' + q.toString()
 }

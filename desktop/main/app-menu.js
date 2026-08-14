@@ -3,8 +3,10 @@
 // 「最近打开」子菜单由渲染层经 'checkba:recent-projects' 推送后整体重建。
 // 注意：窗口子菜单刻意不含 close 角色——Cmd+W 留给渲染层「关闭当前标签」（IDE 语义），
 // 不能让菜单加速器抢走它去关整个窗口。
+// 菜单文案随应用语言（app-language.js）双语；语言切换经 onAppLanguageChange 整体重建。
 
 const { app, Menu, ipcMain } = require('electron')
+const { t, onAppLanguageChange } = require('./app-language')
 
 let getWindow = () => null
 let recentProjects = []
@@ -18,56 +20,56 @@ function send(action, payload) {
 function buildTemplate() {
   const recentSubmenu = recentProjects.length
     ? recentProjects.map((r) => ({
-        label: String(r.name || ('项目 ' + r.id)),
+        label: String(r.name || (t({ zh: '项目 ', en: 'Project ' }) + r.id)),
         click: () => send('open-recent', { projectId: r.id }),
       }))
-    : [{ label: '暂无最近项目', enabled: false }]
+    : [{ label: t({ zh: '暂无最近项目', en: 'No Recent Projects' }), enabled: false }]
 
   return [
     {
       label: app.name,
       submenu: [
-        { role: 'about', label: '关于 ' + app.name },
+        { role: 'about', label: t({ zh: '关于 ', en: 'About ' }) + app.name },
         { type: 'separator' },
-        { role: 'hide', label: '隐藏 ' + app.name },
-        { role: 'hideOthers', label: '隐藏其他' },
-        { role: 'unhide', label: '全部显示' },
+        { role: 'hide', label: t({ zh: '隐藏 ', en: 'Hide ' }) + app.name },
+        { role: 'hideOthers', label: t({ zh: '隐藏其他', en: 'Hide Others' }) },
+        { role: 'unhide', label: t({ zh: '全部显示', en: 'Show All' }) },
         { type: 'separator' },
-        { role: 'quit', label: '退出 ' + app.name },
+        { role: 'quit', label: t({ zh: '退出 ', en: 'Quit ' }) + app.name },
       ],
     },
     {
-      label: '文件',
+      label: t({ zh: '文件', en: 'File' }),
       submenu: [
-        { label: '打开文件夹…', accelerator: 'CmdOrCtrl+O', click: () => send('open-folder') },
-        { label: '打开文件…', accelerator: 'CmdOrCtrl+Shift+O', click: () => send('open-file') },
-        { label: '新建项目文件夹…', accelerator: 'CmdOrCtrl+Shift+N', click: () => send('create-folder') },
+        { label: t({ zh: '打开文件夹…', en: 'Open Folder…' }), accelerator: 'CmdOrCtrl+O', click: () => send('open-folder') },
+        { label: t({ zh: '打开文件…', en: 'Open File…' }), accelerator: 'CmdOrCtrl+Shift+O', click: () => send('open-file') },
+        { label: t({ zh: '新建项目文件夹…', en: 'New Project Folder…' }), accelerator: 'CmdOrCtrl+Shift+N', click: () => send('create-folder') },
         { type: 'separator' },
-        { label: '最近打开', submenu: recentSubmenu },
+        { label: t({ zh: '最近打开', en: 'Open Recent' }), submenu: recentSubmenu },
       ],
     },
     // 标准编辑角色：mac 上没有它，所有输入框的 Cmd+C/V/X/Z 全部失灵
-    { label: '编辑', role: 'editMenu' },
+    { label: t({ zh: '编辑', en: 'Edit' }), role: 'editMenu' },
     {
-      label: '视图',
+      label: t({ zh: '视图', en: 'View' }),
       submenu: [
-        { role: 'reload', label: '重新加载' },
-        { role: 'toggleDevTools', label: '开发者工具' },
+        { role: 'reload', label: t({ zh: '重新加载', en: 'Reload' }) },
+        { role: 'toggleDevTools', label: t({ zh: '开发者工具', en: 'Developer Tools' }) },
         { type: 'separator' },
-        { role: 'resetZoom', label: '实际大小' },
-        { role: 'zoomIn', label: '放大' },
-        { role: 'zoomOut', label: '缩小' },
+        { role: 'resetZoom', label: t({ zh: '实际大小', en: 'Actual Size' }) },
+        { role: 'zoomIn', label: t({ zh: '放大', en: 'Zoom In' }) },
+        { role: 'zoomOut', label: t({ zh: '缩小', en: 'Zoom Out' }) },
         { type: 'separator' },
-        { role: 'togglefullscreen', label: '全屏' },
+        { role: 'togglefullscreen', label: t({ zh: '全屏', en: 'Toggle Full Screen' }) },
       ],
     },
     {
-      label: '窗口',
+      label: t({ zh: '窗口', en: 'Window' }),
       submenu: [
-        { role: 'minimize', label: '最小化' },
-        { role: 'zoom', label: '缩放' },
+        { role: 'minimize', label: t({ zh: '最小化', en: 'Minimize' }) },
+        { role: 'zoom', label: t({ zh: '缩放', en: 'Zoom' }) },
         { type: 'separator' },
-        { role: 'front', label: '前置全部窗口' },
+        { role: 'front', label: t({ zh: '前置全部窗口', en: 'Bring All to Front' }) },
       ],
     },
   ]
@@ -80,6 +82,7 @@ function rebuild() {
 function initAppMenu(mainWindowGetter) {
   getWindow = mainWindowGetter
   rebuild()
+  onAppLanguageChange(() => rebuild())
   ipcMain.on('checkba:recent-projects', (event, list) => {
     recentProjects = Array.isArray(list)
       ? list.filter((r) => r && r.id).slice(0, 8)

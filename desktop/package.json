@@ -100,7 +100,7 @@
       "entitlementsInherit": "build/entitlements.mac.plist",
       "gatekeeperAssess": false,
       "extendInfo": {
-        "NSMicrophoneUsageDescription": "反馈浮窗里的“说一段”需要用麦克风录下你的语音说明，录音只随这条反馈提交，不会在后台采集。"
+        "NSMicrophoneUsageDescription": "反馈浮窗里的“说一段”需要用麦克风录下你的语音说明，录音只随这条反馈提交，不会在后台采集。 The in-app feedback voice note uses the microphone to record your message; audio is only sent with that feedback and never captured in the background."
       },
       "notarize": {
         "teamId": "X9B97KVA84"

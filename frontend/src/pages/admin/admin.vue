@@ -44,6 +44,36 @@
           scroll-y
           class="config-scroll"
         >
+          <!-- 应用语言：立即生效、独立保存链（setAppLanguage 直写，不走 handleSave
+               的 /api/admin/config——那条要求 admin 权限，语言是人人可改的设置）。 -->
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ appLanguage === 'en-US' ? 'Language' : '语言 / Language' }}</text>
+              <text class="section-subtitle">
+                {{ appLanguage === 'en-US'
+                  ? 'Applies to the interface, document editor, and AI replies. Newly opened editors use the new language; restart the app for full effect.'
+                  : '作用于界面、文档编辑器与 AI 回复。新打开的编辑器使用新语言，重启应用后完全生效。' }}
+              </text>
+            </view>
+            <view class="section-body">
+              <view class="form-row">
+                <text class="form-label">{{ appLanguage === 'en-US' ? 'Language' : '界面语言' }}</text>
+                <view class="provider-radio-group">
+                  <view
+                    v-for="opt in appLanguageOptions"
+                    :key="opt.value"
+                    class="radio-item"
+                    :class="{ checked: appLanguage === opt.value }"
+                    @tap="onAppLanguagePick(opt.value)"
+                  >
+                    <view class="radio-dot"></view>
+                    <text class="radio-label">{{ opt.label }}</text>
+                  </view>
+                </view>
+              </view>
+            </view>
+          </view>
+
           <!-- 外部服务 -->
           <view class="section-card">
             <view class="section-header">
@@ -1342,6 +1372,7 @@ import { openExternalUrl } from '@/utils/externalLink.js'
 import { accountPageUrl, siteBaseUrl, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
 import { host } from '@/services/host.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
+import { getAppLanguage, setAppLanguage } from '@/utils/appLanguage.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import MarketPane from '@/components/MarketPane.vue'
 
@@ -1352,6 +1383,13 @@ export default {
     return {
       userDisplayName: '用户',
       activeNav: 'config',
+      // 应用语言：读写走 utils/appLanguage.js（storage 权威源 + App.vue 镜像同步），
+      // 与 form/handleSave 无关。选项标签用各自母语，刻意不随语言翻译。
+      appLanguage: getAppLanguage(),
+      appLanguageOptions: [
+        { value: 'zh-CN', label: '简体中文' },
+        { value: 'en-US', label: 'English' },
+      ],
       /** 服务端记录的同意时间戳；空 = 未同意或告知文本已改版需重新征求 */
       crossBorderConsentAt: '',
       navItems: [
@@ -1837,6 +1875,14 @@ export default {
             uni.showToast({ title: (e && e.message) || '重置失败', icon: 'none' })
           }
         },
+      })
+    },
+    onAppLanguagePick(value) {
+      if (value === this.appLanguage) return
+      this.appLanguage = setAppLanguage(value)
+      uni.showToast({
+        title: this.appLanguage === 'en-US' ? 'Language switched' : '已切换为简体中文',
+        icon: 'none',
       })
     },
     onNavTap(nav) {
