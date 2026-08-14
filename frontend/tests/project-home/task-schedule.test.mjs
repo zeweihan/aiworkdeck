@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { localeValuesOf } from './_locale-text.mjs'
 
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/TaskSchedule.vue'),
@@ -14,6 +15,9 @@ const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.me
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 const CODE = stripComments(SRC)
+// 文案类禁字断言要看组件实际引用的 locale 值——只查源码的话，
+// 迁移后把 locale 改成禁用词也拦不住（见 _locale-text.mjs）。
+const CODE_TEXT = CODE + '\n' + localeValuesOf(SRC)
 
 test('e2e 锚点：根节点类名是 task-schedule', () => {
   assert.ok(SRC.includes('class="task-schedule"'))
@@ -38,7 +42,7 @@ test('列表分支已落地（B 期只换渲染分支，父页面与端点不改
 })
 
 test('不混用 AI 步骤条的词', () => {
-  assert.ok(!CODE.includes('进度条'), '「进度」是 todo_write 的词，项目级里程碑一律叫「任务」')
+  assert.ok(!CODE_TEXT.includes('进度条'), '「进度」是 todo_write 的词，项目级里程碑一律叫「任务」')
 })
 
 test('禁 emoji + 浅色', () => {
