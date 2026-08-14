@@ -2,6 +2,7 @@ package com.checkba.service.mail;
 
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.auth.VerificationCodeStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -72,9 +73,9 @@ public class MailAuthService {
     /** 给已绑定邮箱的用户发登录验证码，返回脱敏地址。调用方须先完成密码校验。 */
     public String sendLoginCode(User user) {
         if (!requiresCode(user)) {
-            throw new IllegalArgumentException("邮箱验证未启用");
+            throw new IllegalArgumentException(LangText.of("邮箱验证未启用", "Email verification is not enabled"));
         }
-        sendWithRollback(SCENE_LOGIN, user.getVerifiedEmail(), "登录验证码");
+        sendWithRollback(SCENE_LOGIN, user.getVerifiedEmail(), LangText.of("登录验证码", "Sign-in Verification Code"));
         return maskEmail(user.getVerifiedEmail());
     }
 
@@ -84,7 +85,7 @@ public class MailAuthService {
             return;
         }
         if (!codeStore.verify(SCENE_LOGIN, user.getVerifiedEmail(), code)) {
-            throw new IllegalArgumentException("验证码错误或已过期");
+            throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
     }
 
@@ -95,7 +96,7 @@ public class MailAuthService {
         requireActive();
         String normalized = MailRouter.normalize(email);
         requireNotBoundByOther(userId, normalized);
-        sendWithRollback(SCENE_BIND, normalized, "邮箱绑定验证码");
+        sendWithRollback(SCENE_BIND, normalized, LangText.of("邮箱绑定验证码", "Email Verification Code"));
         return maskEmail(normalized);
     }
 
@@ -105,10 +106,10 @@ public class MailAuthService {
         String normalized = MailRouter.normalize(email);
         requireNotBoundByOther(userId, normalized);
         if (!codeStore.verify(SCENE_BIND, normalized, code)) {
-            throw new IllegalArgumentException("验证码错误或已过期");
+            throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("用户不存在: " + userId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("用户不存在: ", "User does not exist: ") + userId));
         user.setVerifiedEmail(normalized);
         // 资料邮箱为空时顺手补上，已填的不覆盖——那是用户自己写的
         if (!StringUtils.hasText(user.getEmail())) {
@@ -130,13 +131,13 @@ public class MailAuthService {
      */
     public void sendSigninCode(String email) {
         if (!passwordlessActive()) {
-            throw new IllegalArgumentException("邮箱登录未启用");
+            throw new IllegalArgumentException(LangText.of("邮箱登录未启用", "Passwordless email sign-in is not enabled"));
         }
         String normalized = MailRouter.normalize(email);
         if (userRepository.findByVerifiedEmail(normalized).isEmpty()) {
             return;
         }
-        sendWithRollback(SCENE_SIGNIN, normalized, "登录验证码");
+        sendWithRollback(SCENE_SIGNIN, normalized, LangText.of("登录验证码", "Sign-in Verification Code"));
     }
 
     /**
@@ -145,14 +146,14 @@ public class MailAuthService {
      */
     public User verifySigninCode(String email, String code) {
         if (!passwordlessActive()) {
-            throw new IllegalArgumentException("邮箱登录未启用");
+            throw new IllegalArgumentException(LangText.of("邮箱登录未启用", "Passwordless email sign-in is not enabled"));
         }
         String normalized = MailRouter.normalize(email);
         if (!codeStore.verify(SCENE_SIGNIN, normalized, code)) {
-            throw new IllegalArgumentException("验证码错误或已过期");
+            throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
         return userRepository.findByVerifiedEmail(normalized)
-                .orElseThrow(() -> new IllegalArgumentException("验证码错误或已过期"));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code")));
     }
 
     // ==================== 内部 ====================
@@ -171,10 +172,14 @@ public class MailAuthService {
         String code = codeStore.issue(scene, email);
         try {
             mailRouter.send(email, "AI Workdeck " + purpose,
-                    "你的验证码是：" + code + "\n\n"
+                    LangText.of("你的验证码是：" + code + "\n\n"
                             + "5 分钟内有效，请勿转发给任何人。\n"
                             + "如果这不是你本人操作，忽略本邮件即可。\n\n"
-                            + "回信不会被系统读取。");
+                            + "回信不会被系统读取。",
+                    "Your verification code is: " + code + "\n\n"
+                            + "Valid for 5 minutes. Do not forward it to anyone.\n"
+                            + "If this wasn't you, simply ignore this email.\n\n"
+                            + "Replies to this email are not monitored."));
         } catch (RuntimeException e) {
             // 没发出去就不该占用户的冷却期（当日配额不回滚：网关受理即可能计费）
             codeStore.invalidate(scene, email);
@@ -184,14 +189,14 @@ public class MailAuthService {
 
     private void requireActive() {
         if (!active()) {
-            throw new IllegalArgumentException("邮箱验证未启用");
+            throw new IllegalArgumentException(LangText.of("邮箱验证未启用", "Email verification is not enabled"));
         }
     }
 
     private void requireNotBoundByOther(Long userId, String email) {
         Optional<User> holder = userRepository.findByVerifiedEmail(email);
         if (holder.isPresent() && !holder.get().getId().equals(userId)) {
-            throw new IllegalArgumentException("该邮箱已绑定其他账号");
+            throw new IllegalArgumentException(LangText.of("该邮箱已绑定其他账号", "This email is already linked to another account"));
         }
     }
 }

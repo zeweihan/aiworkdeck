@@ -3,6 +3,7 @@ package com.checkba.controller;
 import com.checkba.controller.AdminConfigController.AdminConfigUpdateRequest;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.SystemSettingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.http.HttpStatus;
@@ -72,7 +73,7 @@ public class WizardController {
         // synchronized：串行化初始化，堵住两个并发匿名 POST 同时通过 isInitialized()==false 的 TOCTOU 竞态
         if (isInitialized()) {
             return ResponseEntity.status(HttpStatus.CONFLICT)
-                    .body(error("系统已初始化，请通过管理后台修改配置 / Already initialized; use the admin console instead"));
+                    .body(error(LangText.of("系统已初始化，请通过管理后台修改配置", "Already initialized; use the admin console instead")));
         }
         // completed 标记存在即说明本机已被初始化过一次（当前为管理员 reset 重开的窗口）：
         // 该窗口由管理员主动打开，重新提交必须携带管理员会话，否则就是一个可被
@@ -81,7 +82,7 @@ public class WizardController {
         if (systemSettingService.get(KEY_WIZARD_COMPLETED, null) != null
                 && requireAdmin(sessionId) == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(error("仅管理员可重新运行向导 / Admin only"));
+                    .body(error(LangText.of("仅管理员可重新运行向导", "Admin only")));
         }
         // 拒空 activeProvider 是两道闸门里的后一道（前一道在 wizard.vue 的 handleSubmit）：
         // 向导刻意不预选供应商（唯一例外是已连接账户且已分配额度时预选平台通道），
@@ -91,7 +92,7 @@ public class WizardController {
                 || request.getAi().getActiveProvider() == null
                 || request.getAi().getActiveProvider().isBlank()) {
             return ResponseEntity.badRequest()
-                    .body(error("必须选择一个 AI 提供商 / An AI provider must be selected"));
+                    .body(error(LangText.of("必须选择一个 AI 提供商", "An AI provider must be selected")));
         }
 
         // 跨境同意闸门：与管理后台共用 AdminConfigController.crossBorderBlockReason 的同一处判定。
@@ -115,7 +116,7 @@ public class WizardController {
 
         Map<String, Object> ok = new HashMap<>();
         ok.put("code", 0);
-        ok.put("message", "初始化完成 / Initialized");
+        ok.put("message", LangText.of("初始化完成", "Initialized"));
         return ResponseEntity.ok(ok);
     }
 
@@ -134,7 +135,7 @@ public class WizardController {
         User admin = requireAdmin(sessionId);
         if (admin == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(error("仅管理员可重置向导 / Admin only"));
+                    .body(error(LangText.of("仅管理员可重置向导", "Admin only")));
         }
         Map<String, String> updates = new HashMap<>();
         updates.put(KEY_WIZARD_COMPLETED, "false");
@@ -142,7 +143,7 @@ public class WizardController {
 
         Map<String, Object> ok = new HashMap<>();
         ok.put("code", 0);
-        ok.put("message", "向导已重置，可重新运行 / Wizard reset");
+        ok.put("message", LangText.of("向导已重置，可重新运行", "Wizard reset"));
         return ResponseEntity.ok(ok);
     }
 

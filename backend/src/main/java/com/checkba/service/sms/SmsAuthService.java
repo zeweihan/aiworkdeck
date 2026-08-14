@@ -2,6 +2,7 @@ package com.checkba.service.sms;
 
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.auth.VerificationCodeStore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -58,7 +59,7 @@ public class SmsAuthService {
                 .filter(SmsGateway::enabled)
                 .filter(g -> g.supports(phone))
                 .findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("该号码所在地区暂不支持短信验证"));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("该号码所在地区暂不支持短信验证", "SMS verification is not yet supported in this number's region")));
     }
 
     /** 该用户本次登录是否需要短信验证码（启用且已绑定手机号；未绑定的存量用户不拦）。 */
@@ -69,7 +70,7 @@ public class SmsAuthService {
     /** 给已绑定手机号的用户发登录验证码，返回脱敏手机号。调用方须先完成密码校验。 */
     public String sendLoginCode(User user) {
         if (!requiresCode(user)) {
-            throw new IllegalArgumentException("短信验证未启用");
+            throw new IllegalArgumentException(LangText.of("短信验证未启用", "SMS verification is not enabled"));
         }
         sendWithRollback(SCENE_LOGIN, user.getPhone());
         return maskPhone(user.getPhone());
@@ -81,7 +82,7 @@ public class SmsAuthService {
             return;
         }
         if (!codeStore.verify(SCENE_LOGIN, user.getPhone(), code)) {
-            throw new IllegalArgumentException("验证码错误或已过期");
+            throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
     }
 
@@ -100,10 +101,10 @@ public class SmsAuthService {
         String normalized = normalizePhone(phone);
         requireNotBoundByOther(userId, normalized);
         if (!codeStore.verify(SCENE_BIND, normalized, code)) {
-            throw new IllegalArgumentException("验证码错误或已过期");
+            throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("用户不存在: " + userId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("用户不存在: ", "User does not exist: ") + userId));
         user.setPhone(normalized);
         user.setUpdatedAt(LocalDateTime.now());
         userRepository.save(user);
@@ -130,7 +131,7 @@ public class SmsAuthService {
 
     private void requireActive() {
         if (!active()) {
-            throw new IllegalArgumentException("短信验证未启用");
+            throw new IllegalArgumentException(LangText.of("短信验证未启用", "SMS verification is not enabled"));
         }
     }
 
@@ -146,13 +147,13 @@ public class SmsAuthService {
         if (MAINLAND_PHONE.matcher(trimmed).matches() || E164_PHONE.matcher(trimmed).matches()) {
             return trimmed;
         }
-        throw new IllegalArgumentException("手机号格式不正确");
+        throw new IllegalArgumentException(LangText.of("手机号格式不正确", "Invalid phone number format"));
     }
 
     private void requireNotBoundByOther(Long userId, String phone) {
         Optional<User> holder = userRepository.findByPhone(phone);
         if (holder.isPresent() && !holder.get().getId().equals(userId)) {
-            throw new IllegalArgumentException("该手机号已绑定其他账号");
+            throw new IllegalArgumentException(LangText.of("该手机号已绑定其他账号", "This phone number is already linked to another account"));
         }
     }
 }

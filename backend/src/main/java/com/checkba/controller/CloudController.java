@@ -1,6 +1,7 @@
 package com.checkba.controller;
 
 import com.checkba.model.entity.CloudConnection;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.UserService;
 import com.checkba.version.CloudSyncService;
@@ -220,7 +221,7 @@ public class CloudController {
             try {
                 out.put(e.getKey(), WorkSessionService.Resolution.valueOf(e.getValue()));
             } catch (Exception ex) {
-                throw VersionException.userFacing("无效的选择");
+                throw VersionException.userFacing(LangText.of("无效的选择", "Invalid choice"));
             }
         }
         return out;
@@ -237,7 +238,7 @@ public class CloudController {
     @ExceptionHandler(VersionException.class)
     public ResponseEntity<Map<String, Object>> onVersionError(VersionException e) {
         log.warn("云端协作操作失败", e);
-        String message = e.isUserFacing() ? e.getMessage() : "这次协作操作没能完成，请稍后重试";
+        String message = e.isUserFacing() ? e.getMessage() : LangText.of("这次协作操作没能完成，请稍后重试", "This collaboration action didn't finish — please try again later");
         return ResponseEntity.ok(Map.of("code", 1, "message", message));
     }
 
@@ -253,10 +254,10 @@ public class CloudController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
         if (!projectMemberService.hasReadPermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该项目");
+            throw new IllegalArgumentException(LangText.of("无权访问该项目", "You don't have access to this project"));
         }
         if (projectMemberService.isClient(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该项目");
+            throw new IllegalArgumentException(LangText.of("无权访问该项目", "You don't have access to this project"));
         }
         return userId;
     }
@@ -269,7 +270,7 @@ public class CloudController {
     private Long requireWriteMember(Long projectId, String sessionId) {
         Long userId = requireMemberNonClient(projectId, sessionId);
         if (!projectMemberService.hasWritePermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权修改该项目");
+            throw new IllegalArgumentException(LangText.of("无权修改该项目", "You don't have permission to modify this project"));
         }
         return userId;
     }
@@ -281,7 +282,7 @@ public class CloudController {
         } catch (Exception e) {
             log.warn("取用户名失败: userId={}", userId, e);
         }
-        return "用户";
+        return LangText.of("用户", "User");
     }
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {

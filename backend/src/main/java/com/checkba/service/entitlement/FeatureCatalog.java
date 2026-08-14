@@ -1,5 +1,7 @@
 package com.checkba.service.entitlement;
 
+import com.checkba.service.LangText;
+
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -34,6 +36,9 @@ public final class FeatureCatalog {
     /** feature -> 面向用户的中文名。插入顺序即 GET /api/entitlements 的返回顺序。 */
     private static final Map<String, String> DISPLAY_NAMES;
 
+    /** feature -> 面向用户的英文名，与 {@link #DISPLAY_NAMES} 一一对应，惰性按 {@link LangText#isEnglish()} 二选一。 */
+    private static final Map<String, String> DISPLAY_NAMES_EN;
+
     static {
         Map<String, String> names = new LinkedHashMap<>();
         names.put(APP_UNLOCKED, "应用解锁");
@@ -41,6 +46,13 @@ public final class FeatureCatalog {
         names.put(STAGE_UNLIMITED, "文件缓存区无限版");
         names.put(PLAN_PRO, "Pro 订阅");
         DISPLAY_NAMES = Collections.unmodifiableMap(names);
+
+        Map<String, String> namesEn = new LinkedHashMap<>();
+        namesEn.put(APP_UNLOCKED, "App Unlocked");
+        namesEn.put(CLIPBOARD_UNLIMITED, "Wireless Clipboard Unlimited Edition");
+        namesEn.put(STAGE_UNLIMITED, "File Staging Area Unlimited Edition");
+        namesEn.put(PLAN_PRO, "Pro Subscription");
+        DISPLAY_NAMES_EN = Collections.unmodifiableMap(namesEn);
     }
 
     /** 目录内全部 feature。 */
@@ -48,9 +60,11 @@ public final class FeatureCatalog {
         return DISPLAY_NAMES.keySet();
     }
 
-    /** 面向用户的中文名；未知 feature 原样返回。 */
+    /** 面向用户的名字（按应用语言二选一）；未知 feature 原样返回。 */
     public static String displayName(String feature) {
-        return DISPLAY_NAMES.getOrDefault(feature, feature);
+        return LangText.of(
+                DISPLAY_NAMES.getOrDefault(feature, feature),
+                DISPLAY_NAMES_EN.getOrDefault(feature, feature));
     }
 
     public static boolean isKnown(String feature) {

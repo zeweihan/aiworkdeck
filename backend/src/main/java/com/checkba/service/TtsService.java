@@ -178,8 +178,8 @@ public class TtsService {
         String configuredApiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);
         if (configuredApiKey == null || configuredApiKey.isBlank()) {
             throw new FeatureNotConfiguredException("tts",
-                    "语音合成未配置：请在设置中配置 ElevenLabs TTS / "
-                            + "Text-to-speech is not configured: set up ElevenLabs in Settings.");
+                    LangText.of("语音合成未配置：请在设置中配置 ElevenLabs TTS",
+                            "Text-to-speech is not configured: set up ElevenLabs in Settings."));
         }
         try {
             String baseUrl = systemSettingService.get("external.elevenlabs.baseUrl", defaultBaseUrl);
@@ -281,8 +281,8 @@ public class TtsService {
         String base = localBaseUrl();
         if (base == null || base.isBlank()) {
             throw new FeatureNotConfiguredException("tts",
-                    "本地语音组件未就绪：请在「系统管理 → 组件管理」下载语音组件 / "
-                            + "Local speech component is not ready: download it in Admin → Components.");
+                    LangText.of("本地语音组件未就绪：请在「系统管理 → 组件管理」下载语音组件",
+                            "Local speech component is not ready: download it in Admin → Components."));
         }
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -309,8 +309,8 @@ public class TtsService {
         } catch (org.springframework.web.client.ResourceAccessException e) {
             // 连接被拒/超时：组件未启动（未下载或被删除）
             throw new FeatureNotConfiguredException("tts",
-                    "本地语音组件未就绪：请在「系统管理 → 组件管理」下载并启用语音组件 / "
-                            + "Local speech component is not running: download & enable it in Admin → Components.");
+                    LangText.of("本地语音组件未就绪：请在「系统管理 → 组件管理」下载并启用语音组件",
+                            "Local speech component is not running: download & enable it in Admin → Components."));
         } catch (FeatureNotConfiguredException e) {
             throw e;
         } catch (Exception e) {

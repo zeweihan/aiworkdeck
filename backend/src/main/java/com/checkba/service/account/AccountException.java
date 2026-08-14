@@ -7,7 +7,8 @@ package com.checkba.service.account;
  * 否则用户一进地铁就被断开；{@link Kind#UNAUTHORIZED}（官网明确拒绝）才是真的失效。
  * 这与 PR-A 的 {@code LicenseService} 4xx=INVALID / 5xx=UNREACHABLE 判定同源。
  *
- * message 一律中文且**不含 awdk_ Key 明文**——它会进日志、进前端 toast。
+ * message 经 {@code LangText.of} 按应用语言双语化（zh/en），且**不含 awdk_ Key 明文**——
+ * 它会进日志、进前端 toast。
  */
 public class AccountException extends RuntimeException {
 

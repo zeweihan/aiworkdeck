@@ -4,6 +4,7 @@ import com.checkba.model.entity.AccountBinding;
 import com.checkba.model.entity.User;
 import com.checkba.repository.AccountBindingRepository;
 import com.checkba.service.DeviceTokenService;
+import com.checkba.service.LangText;
 import com.checkba.service.UserService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -85,18 +86,20 @@ public class AwdkLoginService {
      */
     public synchronized BridgeSession login(String rawKey) {
         if (!enabled) {
-            throw new IllegalArgumentException("本服务器未开启账户桥接功能");
+            throw new IllegalArgumentException(LangText.of("本服务器未开启账户桥接功能", "This server has not enabled account bridging"));
         }
         String key = rawKey == null ? "" : rawKey.trim();
         if (key.isEmpty() || !key.startsWith(KEY_PREFIX)) {
             throw new AccountException(AccountException.Kind.UNAUTHORIZED,
-                    "账户 Key 格式不正确，应以 awdk_ 开头（在官网账户页「桌面连接」生成）");
+                    LangText.of("账户 Key 格式不正确，应以 awdk_ 开头（在官网账户页「桌面连接」生成）",
+                            "Invalid account key format; it must start with awdk_ (generate one on the website account page under \"Desktop Connection\")"));
         }
         Map<String, Object> me = fetchMe(key);
         String accountId = str(me.get("accountId"));
         if (accountId == null || accountId.isBlank()) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "官网账户信息缺少 accountId 字段，本服务器暂无法完成账户桥接");
+                    LangText.of("官网账户信息缺少 accountId 字段，本服务器暂无法完成账户桥接",
+                            "The website account information is missing the accountId field; this server cannot complete account bridging yet"));
         }
 
         User user = resolveUser(accountId, str(me.get("username")), str(me.get("displayName")));
@@ -105,7 +108,7 @@ public class AwdkLoginService {
         // 取不到（最常见是还没分配额度）绝不影响桥接——插件的绝大多数能力与 AI 额度无关。
         platformAiKeyService.tryProvision(user.getId(), key);
         DeviceTokenService.IssuedToken issued =
-                deviceTokenService.issue(user.getId(), "账户桥接");
+                deviceTokenService.issue(user.getId(), LangText.of("账户桥接", "Account bridging"));
         return new BridgeSession(issued.plaintext(), user.getId(), user.getUsername());
     }
 
@@ -115,20 +118,21 @@ public class AwdkLoginService {
         AccountTransport.Reply reply = transport.send("GET", baseUrl + "/api/account/me", key, null);
         if (reply.networkFailure()) {
             throw new AccountException(AccountException.Kind.NETWORK,
-                    "无法连接 AI Workdeck 服务器，请检查网络后重试");
+                    LangText.of("无法连接 AI Workdeck 服务器，请检查网络后重试", "Could not connect to the AI Workdeck server, please check your network and retry"));
         }
         int status = reply.status();
         if (status == 401 || status == 403) {
             throw new AccountException(AccountException.Kind.UNAUTHORIZED,
-                    "账户 Key 无效或已被撤销，请到官网账户页重新生成");
+                    LangText.of("账户 Key 无效或已被撤销，请到官网账户页重新生成", "Account key is invalid or has been revoked; please generate a new one on the website account page"));
         }
         if (status >= 500) {
             throw new AccountException(AccountException.Kind.NETWORK,
-                    "AI Workdeck 服务器暂时不可用，请稍后重试");
+                    LangText.of("AI Workdeck 服务器暂时不可用，请稍后重试", "The AI Workdeck server is temporarily unavailable, please retry shortly"));
         }
         if (status < 200 || status >= 300) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "官网返回了预期外的状态（" + status + "），请稍后重试");
+                    LangText.of("官网返回了预期外的状态（", "The website returned an unexpected status (") + status
+                            + LangText.of("），请稍后重试", "), please retry shortly"));
         }
         try {
             Map<String, Object> parsed =
@@ -136,7 +140,7 @@ public class AwdkLoginService {
             return parsed == null ? Map.of() : parsed;
         } catch (Exception e) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "官网返回的内容无法解析，请稍后重试");
+                    LangText.of("官网返回的内容无法解析，请稍后重试", "Could not parse the website's response, please retry shortly"));
         }
     }
 
@@ -190,7 +194,7 @@ public class AwdkLoginService {
         candidate = truncate(USERNAME_PREFIX + base + "_" + shortHash(accountId));
         if (userService.getUserByUsername(candidate).isEmpty()) return candidate;
         throw new AccountException(AccountException.Kind.MALFORMED,
-                "无法为该账户分配用户名，请联系服务器管理员");
+                LangText.of("无法为该账户分配用户名，请联系服务器管理员", "Could not allocate a username for this account, please contact the server administrator"));
     }
 
     private static String sanitize(String name) {

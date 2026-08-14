@@ -34,7 +34,7 @@ public class WebFavoriteController {
     public ResponseEntity<?> myFavorites(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         List<WebFavorite> list = webFavoriteService.listMyFavorites(userId);
         return ResponseEntity.ok(list);
@@ -48,7 +48,7 @@ public class WebFavoriteController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         // 性能关键：返回轻量列表（meta 可能包含 html 快照，体积巨大）
         List<WebFavorite> list = webFavoriteService.searchProjectFavorites(projectId, userId, q, limit);
@@ -62,11 +62,11 @@ public class WebFavoriteController {
             @RequestBody CreateFavoriteRequest request) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         User user = userRepository.findById(userId).orElse(null);
         if (user == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
 
         WebFavorite fav = webFavoriteService.createFavorite(
@@ -87,12 +87,12 @@ public class WebFavoriteController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         webFavoriteService.delete(favoriteId, userId);
         Map<String, Object> ok = new HashMap<>();
         ok.put("code", 0);
-        ok.put("message", "删除成功");
+        ok.put("message", com.checkba.service.LangText.of("删除成功", "Deleted successfully"));
         ok.put("data", new HashMap<>());
         return ResponseEntity.ok(ok);
     }
@@ -105,7 +105,7 @@ public class WebFavoriteController {
         String finalSessionId = sessionId != null ? sessionId : token;
         Long userId = AuthController.getUserIdFromSession(finalSessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         Resource res = webFavoriteService.loadImage(favoriteId, userId);
         return ResponseEntity.ok(res);

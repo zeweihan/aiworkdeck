@@ -44,18 +44,18 @@ public class UserService {
      */
     public User register(String username, String password, String displayName) {
         if (!StringUtils.hasText(username)) {
-            throw new IllegalArgumentException("用户名不能为空");
+            throw new IllegalArgumentException(LangText.of("用户名不能为空", "Username cannot be empty"));
         }
         if (!StringUtils.hasText(password)) {
-            throw new IllegalArgumentException("密码不能为空");
+            throw new IllegalArgumentException(LangText.of("密码不能为空", "Password cannot be empty"));
         }
         if (password.length() < 6) {
-            throw new IllegalArgumentException("密码长度不能少于6位");
+            throw new IllegalArgumentException(LangText.of("密码长度不能少于6位", "Password must be at least 6 characters"));
         }
 
         // 检查用户名是否已存在
         if (userRepository.findByUsername(username).isPresent()) {
-            throw new IllegalArgumentException("用户名已存在");
+            throw new IllegalArgumentException(LangText.of("用户名已存在", "Username already exists"));
         }
 
         User user = new User();
@@ -74,10 +74,10 @@ public class UserService {
      */
     public User registerExternal(String username, String displayName) {
         if (!StringUtils.hasText(username)) {
-            throw new IllegalArgumentException("用户名不能为空");
+            throw new IllegalArgumentException(LangText.of("用户名不能为空", "Username cannot be empty"));
         }
         if (userRepository.findByUsername(username).isPresent()) {
-            throw new IllegalArgumentException("用户名已存在");
+            throw new IllegalArgumentException(LangText.of("用户名已存在", "Username already exists"));
         }
         byte[] raw = new byte[32];
         SECURE_RANDOM.nextBytes(raw);
@@ -96,22 +96,22 @@ public class UserService {
      */
     public User login(String username, String password) {
         if (!StringUtils.hasText(username)) {
-            throw new IllegalArgumentException("用户名不能为空");
+            throw new IllegalArgumentException(LangText.of("用户名不能为空", "Username cannot be empty"));
         }
         if (!StringUtils.hasText(password)) {
-            throw new IllegalArgumentException("密码不能为空");
+            throw new IllegalArgumentException(LangText.of("密码不能为空", "Password cannot be empty"));
         }
 
         Optional<User> userOpt = userRepository.findByUsername(username);
         if (userOpt.isEmpty()) {
-            throw new IllegalArgumentException("用户名或密码错误");
+            throw new IllegalArgumentException(LangText.of("用户名或密码错误", "Incorrect username or password"));
         }
 
         User user = userOpt.get();
         String stored = user.getPassword();
         // 外部账户桥接建的无密码账号：一律按凭据错误拒绝（文案与普通失败一致，不泄露账号类型）
         if (stored != null && stored.startsWith(EXTERNAL_ACCOUNT_MARK)) {
-            throw new IllegalArgumentException("用户名或密码错误");
+            throw new IllegalArgumentException(LangText.of("用户名或密码错误", "Incorrect username or password"));
         }
         boolean ok;
         if (isBcryptHash(stored)) {
@@ -125,7 +125,7 @@ public class UserService {
             }
         }
         if (!ok) {
-            throw new IllegalArgumentException("用户名或密码错误");
+            throw new IllegalArgumentException(LangText.of("用户名或密码错误", "Incorrect username or password"));
         }
 
         return user;
@@ -136,7 +136,7 @@ public class UserService {
      */
     public User getUserById(Long id) {
         return userRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("用户不存在: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("用户不存在: ", "User does not exist: ") + id));
     }
 
     /**

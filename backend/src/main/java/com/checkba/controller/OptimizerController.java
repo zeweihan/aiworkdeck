@@ -5,6 +5,7 @@ import com.checkba.model.entity.UserFeedback;
 import com.checkba.repository.UserFeedbackRepository;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.AdminAccessService;
+import com.checkba.service.LangText;
 import com.checkba.service.optimizer.OptimizerAgentService;
 import com.checkba.service.optimizer.OptimizerMailer;
 import com.checkba.service.optimizer.OptimizerProperties;
@@ -43,13 +44,13 @@ public class OptimizerController {
     @PostMapping("/run")
     public ResponseEntity<?> run(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (requireAdmin(sessionId) == null) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("需要管理员权限"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("需要管理员权限", "Admin access required")));
         }
         if (!props.isEnabled()) {
-            return ResponseEntity.ok(error("优化者未启用（optimizer.enabled=false）"));
+            return ResponseEntity.ok(error(LangText.of("优化者未启用（optimizer.enabled=false）", "The optimizer is disabled (optimizer.enabled=false)")));
         }
         if (optimizerAgentService.isRunning()) {
-            return ResponseEntity.ok(error("已有一轮在跑"));
+            return ResponseEntity.ok(error(LangText.of("已有一轮在跑", "A run is already in progress")));
         }
         Thread t = new Thread(optimizerAgentService::runOnce, "optimizer-manual-run");
         t.setDaemon(true);
@@ -60,7 +61,7 @@ public class OptimizerController {
     @GetMapping("/status")
     public ResponseEntity<?> status(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (requireAdmin(sessionId) == null) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("需要管理员权限"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("需要管理员权限", "Admin access required")));
         }
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("enabled", props.isEnabled());

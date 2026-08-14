@@ -3,6 +3,7 @@ package com.checkba.version.memory;
 import com.checkba.controller.AuthController;
 import com.checkba.model.entity.MemoryRemote;
 import com.checkba.repository.MemoryRemoteRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.version.VersionException;
 import org.springframework.http.ResponseEntity;
@@ -68,7 +69,7 @@ public class MemorySyncController {
         MemoryRealm realm = requireRealm(repoKey, sessionId, true);
         String url = body.get("url");
         if (url == null || url.isBlank()) {
-            throw VersionException.userFacing("同步地址不能为空");
+            throw VersionException.userFacing(LangText.of("同步地址不能为空", "The sync address cannot be empty"));
         }
         MemoryRemote cfg = remoteRepository.findByRepoKey(realm.repoKey())
                 .orElseGet(() -> {
@@ -114,24 +115,24 @@ public class MemorySyncController {
     private MemoryRealm requireRealm(String repoKey, String sessionId, boolean write) {
         MemoryRealm realm = MemoryRealm.parse(repoKey);
         if (realm == null) {
-            throw VersionException.userFacing("记忆仓库标识不正确");
+            throw VersionException.userFacing(LangText.of("记忆仓库标识不正确", "Invalid memory repository identifier"));
         }
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            throw new IllegalArgumentException("无法确认当前用户身份");
+            throw new IllegalArgumentException(LangText.of("无法确认当前用户身份", "Couldn't confirm the current user's identity"));
         }
         if (realm.kind() == MemoryRealm.Kind.USER) {
             if (realm.ownerId() != userId) {
-                throw new IllegalArgumentException("无权访问这个记忆仓库");
+                throw new IllegalArgumentException(LangText.of("无权访问这个记忆仓库", "You don't have access to this memory repository"));
             }
         } else {
             long projectId = realm.ownerId();
             if (!memberService.hasReadPermission(projectId, userId)
                     || memberService.isClient(projectId, userId)) {
-                throw new IllegalArgumentException("无权访问该项目");
+                throw new IllegalArgumentException(LangText.of("无权访问该项目", "You don't have access to this project"));
             }
             if (write && !memberService.hasWritePermission(projectId, userId)) {
-                throw new IllegalArgumentException("无权修改该项目");
+                throw new IllegalArgumentException(LangText.of("无权修改该项目", "You don't have permission to modify this project"));
             }
         }
         return realm;
@@ -148,7 +149,7 @@ public class MemorySyncController {
     @ExceptionHandler(VersionException.class)
     public ResponseEntity<Map<String, Object>> onVersionError(VersionException e) {
         log.warn("记忆同步操作失败", e);
-        String message = e.isUserFacing() ? e.getMessage() : "记忆同步失败，稍后会自动重试";
+        String message = e.isUserFacing() ? e.getMessage() : LangText.of("记忆同步失败，稍后会自动重试", "Memory sync failed — it will retry automatically later");
         return ResponseEntity.ok(Map.of("code", 1, "message", message));
     }
 

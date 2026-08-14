@@ -52,9 +52,9 @@ public class DocFileLinkService {
                                            Integer rangeEnd,
                                            List<Long> fileIds) {
         if (userId == null) throw new IllegalArgumentException("请先登录");
-        if (projectId == null) throw new IllegalArgumentException("项目ID不能为空");
-        if (!StringUtils.hasText(docWpsFileId)) throw new IllegalArgumentException("docWpsFileId 不能为空");
-        if (fileIds == null || fileIds.isEmpty()) throw new IllegalArgumentException("fileIds 不能为空");
+        if (projectId == null) throw new IllegalArgumentException(LangText.of("项目ID不能为空", "Project ID must not be empty"));
+        if (!StringUtils.hasText(docWpsFileId)) throw new IllegalArgumentException(LangText.of("docWpsFileId 不能为空", "docWpsFileId must not be empty"));
+        if (fileIds == null || fileIds.isEmpty()) throw new IllegalArgumentException(LangText.of("fileIds 不能为空", "fileIds must not be empty"));
 
         // 归属校验：只接受属于本项目的 fileId，防止把他人项目文件 ID 存入链接后经 getByKey
         // 读回其文件名/存储路径/wpsFileId 等元数据（IDOR）
@@ -62,7 +62,7 @@ public class DocFileLinkService {
             if (fid == null) continue;
             ProjectFile pf = projectFileRepository.findById(fid).orElse(null);
             if (pf == null || !projectId.equals(pf.getProjectId())) {
-                throw new IllegalArgumentException("文件不属于该项目: " + fid);
+                throw new IllegalArgumentException(LangText.of("文件不属于该项目: ", "This file does not belong to this project: ") + fid);
             }
         }
 
@@ -81,7 +81,7 @@ public class DocFileLinkService {
         } else {
             // 只允许创建者修改（避免跨用户污染）
             if (!Objects.equals(link.getUserId(), userId)) {
-                throw new IllegalArgumentException("无权限修改该链接");
+                throw new IllegalArgumentException(LangText.of("无权限修改该链接", "You do not have permission to modify this link"));
             }
             // 文档 ID 变更（理论不应发生），保留原值，避免把同 key 混到另一文档
         }
@@ -109,15 +109,15 @@ public class DocFileLinkService {
     @Transactional(readOnly = true)
     public DocFileLinkResult getByKey(Long userId, Long projectId, String linkKey) {
         if (userId == null) throw new IllegalArgumentException("请先登录");
-        if (projectId == null) throw new IllegalArgumentException("项目ID不能为空");
-        if (!StringUtils.hasText(linkKey)) throw new IllegalArgumentException("linkKey 不能为空");
+        if (projectId == null) throw new IllegalArgumentException(LangText.of("项目ID不能为空", "Project ID must not be empty"));
+        if (!StringUtils.hasText(linkKey)) throw new IllegalArgumentException(LangText.of("linkKey 不能为空", "linkKey must not be empty"));
 
         DocFileLink link = docFileLinkRepository.findByProjectIdAndLinkKey(projectId, linkKey.trim())
-                .orElseThrow(() -> new IllegalArgumentException("链接不存在"));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("链接不存在", "Link not found")));
 
         // 只允许创建者读取（后续可扩展为项目内共享）
         if (!Objects.equals(link.getUserId(), userId)) {
-            throw new IllegalArgumentException("无权限访问该链接");
+            throw new IllegalArgumentException(LangText.of("无权限访问该链接", "You do not have access to this link"));
         }
         return buildResult(link);
     }

@@ -2,6 +2,7 @@ package com.checkba.service.ai;
 
 import com.checkba.model.entity.AgentTodoList;
 import com.checkba.repository.AgentTodoListRepository;
+import com.checkba.service.LangText;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -77,8 +78,13 @@ public class TodoListService {
         pushToFrontend(conversationId, todos);
 
         long done = todos.stream().filter(t -> "completed".equals(t.status())).count();
-        String confirmation = String.format("任务清单已更新：共 %d 项，已完成 %d 项。%s", todos.size(), done,
-                parsed.demotedExtraInProgress() ? "（注意：同一时刻只允许一项 in_progress，多余的已降级为 pending）" : "");
+        String confirmation = String.format(
+                LangText.of("任务清单已更新：共 %d 项，已完成 %d 项。%s", "Todo list updated: %d item(s) total, %d completed.%s"),
+                todos.size(), done,
+                parsed.demotedExtraInProgress()
+                        ? LangText.of("（注意：同一时刻只允许一项 in_progress，多余的已降级为 pending）",
+                                " (Note: only one item may be in_progress at a time; extras were demoted to pending.)")
+                        : "");
         log.info("Todo list updated for {}: {}/{} completed", conversationId, done, todos.size());
         return confirmation;
     }
@@ -91,7 +97,8 @@ public class TodoListService {
             com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(todosJson);
             if (!root.isArray()) {
                 return new ParsedTodos(List.of(), false,
-                        "Error: todos 必须是 JSON 数组，元素形如 {\"content\":\"...\",\"activeForm\":\"...\",\"status\":\"pending\"}");
+                        LangText.of("Error: todos 必须是 JSON 数组，元素形如 {\"content\":\"...\",\"activeForm\":\"...\",\"status\":\"pending\"}",
+                                "Error: todos must be a JSON array, with elements like {\"content\":\"...\",\"activeForm\":\"...\",\"status\":\"pending\"}"));
             }
             boolean seenInProgress = false;
             for (com.fasterxml.jackson.databind.JsonNode n : root) {
@@ -114,10 +121,13 @@ public class TodoListService {
             }
         } catch (Exception e) {
             return new ParsedTodos(List.of(), false,
-                    "Error: todos JSON 解析失败（" + e.getMessage() + "）。请传合法 JSON 数组。");
+                    LangText.of("Error: todos JSON 解析失败（", "Error: failed to parse todos JSON (") + e.getMessage() +
+                            LangText.of("）。请传合法 JSON 数组。", "). Please pass a valid JSON array."));
         }
         if (todos.isEmpty()) {
-            return new ParsedTodos(List.of(), false, "Error: 任务清单为空。至少提供一项，或不要调用 todo_write。");
+            return new ParsedTodos(List.of(), false, LangText.of(
+                    "Error: 任务清单为空。至少提供一项，或不要调用 todo_write。",
+                    "Error: the todo list is empty. Provide at least one item, or don't call todo_write."));
         }
         return new ParsedTodos(todos, demotedExtraInProgress, null);
     }

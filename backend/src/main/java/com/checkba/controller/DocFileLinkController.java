@@ -60,7 +60,7 @@ public class DocFileLinkController {
      */
     private void requireProjectMember(Long projectId, Long userId) {
         if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权限访问该项目");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("无权限访问该项目", "You do not have access to this project"));
         }
     }
 

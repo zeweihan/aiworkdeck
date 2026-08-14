@@ -5,6 +5,7 @@ import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.checkba.service.LangText;
 import com.checkba.service.market.MarketPurchaseGate;
 import com.checkba.service.market.RegistryReply;
 import lombok.extern.slf4j.Slf4j;
@@ -114,7 +115,7 @@ public class PluginMarketService {
         try {
             list = JSONUtil.toList(JSONUtil.parseArray(body), MarketPluginView.class);
         } catch (Exception e) {
-            throw new IllegalStateException("注册表返回内容无法解析: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("注册表返回内容无法解析: ", "Failed to parse registry response: ") + e.getMessage());
         }
         for (MarketPluginView view : list) {
             view.setPriceCents(MarketPurchaseGate.normalizePrice(view.getPriceCents()));
@@ -152,7 +153,9 @@ public class PluginMarketService {
     public synchronized String install(String id) {
         requireValidId(id);
         if (publicKeyPem == null || publicKeyPem.isBlank()) {
-            throw new IllegalStateException("未配置插件注册表公钥（ai.plugins.registry-public-key），拒绝安装");
+            throw new IllegalStateException(LangText.of(
+                    "未配置插件注册表公钥（ai.plugins.registry-public-key），拒绝安装",
+                    "Plugin registry public key not configured (ai.plugins.registry-public-key); installation refused"));
         }
 
         MarketPluginView listing = findRegistryEntry(id);
@@ -170,7 +173,7 @@ public class PluginMarketService {
         } catch (IllegalStateException e) {
             throw e;
         } catch (Exception e) {
-            throw new IllegalStateException("安装清单无法解析: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("安装清单无法解析: ", "Failed to parse install manifest: ") + e.getMessage());
         }
 
         String version = bundle.getStr("version");
@@ -178,7 +181,7 @@ public class PluginMarketService {
         String signature = bundle.getStr("signature");
         JSONObject filesObj = bundle.getJSONObject("files");
         if (version == null || publishedAt == null || signature == null || filesObj == null || filesObj.isEmpty()) {
-            throw new IllegalStateException("安装清单缺少必需字段");
+            throw new IllegalStateException(LangText.of("安装清单缺少必需字段", "Install manifest is missing required fields"));
         }
 
         // 键按字典序重建 canonical JSON——必须与官网 lib/plugin-signing.ts 逐字节一致
@@ -187,7 +190,9 @@ public class PluginMarketService {
             files.put(key, filesObj.getStr(key));
         }
         if (!verifySignature(id, version, publishedAt, files, signature)) {
-            throw new IllegalStateException("签名验证失败，已中止安装（包可能被篡改或来源不可信）");
+            throw new IllegalStateException(LangText.of(
+                    "签名验证失败，已中止安装（包可能被篡改或来源不可信）",
+                    "Signature verification failed; installation aborted (the package may have been tampered with or is from an untrusted source)"));
         }
         log.info("Plugin {} v{} signature verified", id, version);
 
@@ -196,23 +201,25 @@ public class PluginMarketService {
         try {
             staging = Files.createTempDirectory("awd-plugin-" + id + "-");
         } catch (Exception e) {
-            throw new IllegalStateException("创建临时目录失败: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("创建临时目录失败: ", "Failed to create temp directory: ") + e.getMessage());
         }
         try {
             for (Map.Entry<String, String> entry : files.entrySet()) {
                 String relPath = entry.getKey();
                 if (!isSafeRelPath(relPath)) {
-                    throw new IllegalStateException("清单包含非法路径: " + relPath);
+                    throw new IllegalStateException(LangText.of("清单包含非法路径: ", "Manifest contains an invalid path: ") + relPath);
                 }
                 byte[] data = readBinary(registryUrl + "/" + id + "/file?path=" + urlEncode(relPath),
                         bearer, itemName, priceCents);
                 String actual = sha256Hex(data);
                 if (!actual.equalsIgnoreCase(entry.getValue())) {
-                    throw new IllegalStateException("文件校验失败: " + relPath + "（内容与签名清单不符）");
+                    throw new IllegalStateException(LangText.of(
+                            "文件校验失败: " + relPath + "（内容与签名清单不符）",
+                            "File verification failed: " + relPath + " (content does not match the signed manifest)"));
                 }
                 Path dest = staging.resolve(relPath).normalize();
                 if (!dest.startsWith(staging)) {
-                    throw new IllegalStateException("清单路径越界: " + relPath);
+                    throw new IllegalStateException(LangText.of("清单路径越界: ", "Manifest path escapes the target directory: ") + relPath);
                 }
                 Files.createDirectories(dest.getParent());
                 Files.write(dest, data);
@@ -233,7 +240,7 @@ public class PluginMarketService {
             throw e;
         } catch (Exception e) {
             FileUtil.del(staging.toFile());
-            throw new IllegalStateException("写入插件文件失败: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("写入插件文件失败: ", "Failed to write plugin files: ") + e.getMessage());
         }
 
         // 先置为禁用再 rescan：新装插件在用户确认前不加载任何代码
@@ -250,13 +257,13 @@ public class PluginMarketService {
         File dir = new File(pluginsRoot, id);
         try {
             if (!dir.getCanonicalPath().startsWith(pluginsRoot.getCanonicalPath() + File.separator)) {
-                throw new IllegalArgumentException("非法插件目录: " + id);
+                throw new IllegalArgumentException(LangText.of("非法插件目录: ", "Invalid plugin directory: ") + id);
             }
         } catch (java.io.IOException e) {
-            throw new IllegalStateException("路径检查失败: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("路径检查失败: ", "Path check failed: ") + e.getMessage());
         }
         if (!dir.isDirectory()) {
-            throw new IllegalArgumentException("插件未安装: " + id);
+            throw new IllegalArgumentException(LangText.of("插件未安装: ", "Plugin not installed: ") + id);
         }
         FileUtil.del(dir);
         pluginService.rescan();
@@ -280,7 +287,7 @@ public class PluginMarketService {
                         j.getStr("id"), j.getStr("version"), j.getStr("reason"), j.getStr("revokedAt")));
             }
         } catch (Exception e) {
-            throw new IllegalStateException("封禁列表无法解析: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("封禁列表无法解析: ", "Failed to parse the revocation list: ") + e.getMessage());
         }
         return result;
     }
@@ -367,7 +374,7 @@ public class PluginMarketService {
 
     private static void requireValidId(String id) {
         if (id == null || !PLUGIN_ID.matcher(id).matches()) {
-            throw new IllegalArgumentException("非法插件 id: " + id);
+            throw new IllegalArgumentException(LangText.of("非法插件 id: ", "Invalid plugin ID: ") + id);
         }
     }
 
@@ -402,7 +409,7 @@ public class PluginMarketService {
             throw purchaseGate.paymentRequired(reply.body(), itemName, priceCents);
         }
         if (reply.status() != 200) {
-            throw new IllegalStateException("注册表请求失败 (HTTP " + reply.status() + ")");
+            throw new IllegalStateException(LangText.of("注册表请求失败 (HTTP ", "Registry request failed (HTTP ") + reply.status() + ")");
         }
         return reply.body();
     }
@@ -414,14 +421,14 @@ public class PluginMarketService {
             throw purchaseGate.paymentRequired(reply.body(), itemName, priceCents);
         }
         if (reply.status() != 200) {
-            throw new IllegalStateException("下载失败 (HTTP " + reply.status() + ")");
+            throw new IllegalStateException(LangText.of("下载失败 (HTTP ", "Download failed (HTTP ") + reply.status() + ")");
         }
         byte[] data = reply.data();
         if (data == null) {
-            throw new IllegalStateException("下载内容为空");
+            throw new IllegalStateException(LangText.of("下载内容为空", "Downloaded content is empty"));
         }
         if (data.length > MAX_FILE_BYTES) {
-            throw new IllegalStateException("文件超过 50 MB 上限");
+            throw new IllegalStateException(LangText.of("文件超过 50 MB 上限", "File exceeds the 50 MB limit"));
         }
         return data;
     }
@@ -430,7 +437,7 @@ public class PluginMarketService {
     protected String httpGet(String url) {
         RegistryReply reply = httpGet(url, null);
         if (reply.status() != 200) {
-            throw new IllegalStateException("注册表请求失败 (HTTP " + reply.status() + ")");
+            throw new IllegalStateException(LangText.of("注册表请求失败 (HTTP ", "Registry request failed (HTTP ") + reply.status() + ")");
         }
         return reply.body();
     }
@@ -448,7 +455,7 @@ public class PluginMarketService {
             }
             resp = req.execute();
         } catch (Exception e) {
-            throw new IllegalStateException("注册表不可达: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("注册表不可达: ", "Registry unreachable: ") + e.getMessage());
         }
         return new RegistryReply(resp.getStatus(), resp.bodyBytes());
     }
@@ -466,7 +473,7 @@ public class PluginMarketService {
             }
             resp = req.execute();
         } catch (Exception e) {
-            throw new IllegalStateException("下载失败: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("下载失败: ", "Download failed: ") + e.getMessage());
         }
         return new RegistryReply(resp.getStatus(), resp.bodyBytes());
     }

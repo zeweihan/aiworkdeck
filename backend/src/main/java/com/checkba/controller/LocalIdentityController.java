@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.service.LangText;
 import com.checkba.service.LocalIdentityService;
 import com.checkba.service.UserService;
 import lombok.extern.slf4j.Slf4j;
@@ -101,7 +102,8 @@ public class LocalIdentityController {
     public ResponseEntity<Map<String, Object>> select(@RequestBody(required = false) Map<String, Object> body) {
         if (!localIdentityService.isLocalMode()) {
             return ResponseEntity.badRequest()
-                    .body(Map.of("message", "团队服务器部署不支持切换本机工作区"));
+                    .body(Map.of("message", LangText.of("团队服务器部署不支持切换本机工作区",
+                            "Switching the local workspace is not supported in a team server deployment")));
         }
         Long userId = parseUserId(body == null ? null : body.get("userId"));
         try {

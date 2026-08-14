@@ -1,5 +1,6 @@
 package com.checkba.service.sms;
 
+import com.checkba.service.LangText;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
@@ -84,7 +85,7 @@ public class SmsService implements SmsGateway {
     @Override
     public void sendVerificationCode(String phone, String code) {
         if (!enabled()) {
-            throw new IllegalArgumentException("短信服务未配置");
+            throw new IllegalArgumentException(LangText.of("短信服务未配置", "SMS service is not configured"));
         }
         String templateParam;
         try {
@@ -111,7 +112,7 @@ public class SmsService implements SmsGateway {
         SmsTransport.Reply reply = transport.postForm(ENDPOINT, body);
         if (reply.status() != 200) {
             log.warn("短信网关异常: status={} body={}", reply.status(), abbreviate(reply.body()));
-            throw new IllegalArgumentException("短信发送失败，请稍后重试");
+            throw new IllegalArgumentException(LangText.of("短信发送失败，请稍后重试", "Failed to send SMS, please retry shortly"));
         }
         String resultCode;
         try {
@@ -122,16 +123,16 @@ public class SmsService implements SmsGateway {
             }
         } catch (Exception e) {
             log.warn("短信响应解析失败: {}", abbreviate(reply.body()));
-            throw new IllegalArgumentException("短信发送失败，请稍后重试");
+            throw new IllegalArgumentException(LangText.of("短信发送失败，请稍后重试", "Failed to send SMS, please retry shortly"));
         }
         if ("OK".equals(resultCode)) {
             return;
         }
         // 限流类给出可行动文案，其余一律通用文案（阿里云原始 Message 不外露）
         if ("isv.BUSINESS_LIMIT_CONTROL".equals(resultCode)) {
-            throw new IllegalArgumentException("短信发送过于频繁，请稍后再试");
+            throw new IllegalArgumentException(LangText.of("短信发送过于频繁，请稍后再试", "Too many SMS requests, please try again later"));
         }
-        throw new IllegalArgumentException("短信发送失败，请稍后重试");
+        throw new IllegalArgumentException(LangText.of("短信发送失败，请稍后重试", "Failed to send SMS, please retry shortly"));
     }
 
     /**

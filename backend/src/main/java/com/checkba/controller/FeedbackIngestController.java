@@ -3,6 +3,7 @@ package com.checkba.controller;
 import com.checkba.model.entity.FeedbackAttachment;
 import com.checkba.model.entity.UserFeedback;
 import com.checkba.repository.UserFeedbackRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.feedback.FeedbackIngestGuard;
 import com.checkba.service.feedback.FeedbackService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -63,7 +64,7 @@ public class FeedbackIngestController {
             payload = payloadJson == null || payloadJson.isBlank()
                     ? Map.of() : mapper.readValue(payloadJson, Map.class);
         } catch (Exception e) {
-            return ResponseEntity.ok(error("提交内容格式有误"));
+            return ResponseEntity.ok(error(LangText.of("提交内容格式有误", "Submitted content is malformed")));
         }
         String installId = str(payload.get("installId"));
         String clientRef = str(payload.get("clientRef"));
@@ -79,7 +80,7 @@ public class FeedbackIngestController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error(e.getMessage()));
         }
         if (clientRef == null || clientRef.isBlank()) {
-            return ResponseEntity.ok(error("缺少 clientRef"));
+            return ResponseEntity.ok(error(LangText.of("缺少 clientRef", "Missing clientRef")));
         }
         try {
             UserFeedback fb = feedbackService.ingest(installId, clientRef,
@@ -94,7 +95,7 @@ public class FeedbackIngestController {
             return ResponseEntity.ok(error(e.getMessage()));
         } catch (Exception e) {
             log.error("反馈收件失败 installId={}", installId, e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error("收件失败"));
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error(LangText.of("收件失败", "Ingest failed")));
         }
     }
 
@@ -157,7 +158,7 @@ public class FeedbackIngestController {
             @RequestHeader(value = "X-Optimizer-Token", required = false) String token,
             @RequestParam(value = "limit", required = false, defaultValue = "5") int limit,
             @RequestParam(value = "maxAttempts", required = false, defaultValue = "3") int maxAttempts) {
-        if (!tokenOk(token)) return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("token 不对"));
+        if (!tokenOk(token)) return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("token 不对", "Invalid token")));
         List<UserFeedback> rows = feedbackRepository.findByStatusAndAttemptsLessThanOrderByIdAsc(
                 UserFeedback.STATUS_NEW, maxAttempts, PageRequest.of(0, Math.max(1, Math.min(50, limit))));
         List<Map<String, Object>> items = new ArrayList<>();
@@ -190,9 +191,9 @@ public class FeedbackIngestController {
             @RequestHeader(value = "X-Optimizer-Token", required = false) String token,
             @PathVariable Long id,
             @RequestBody Map<String, Object> body) {
-        if (!tokenOk(token)) return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("token 不对"));
+        if (!tokenOk(token)) return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("token 不对", "Invalid token")));
         UserFeedback fb = feedbackRepository.findById(id).orElse(null);
-        if (fb == null) return ResponseEntity.ok(error("反馈不存在"));
+        if (fb == null) return ResponseEntity.ok(error(LangText.of("反馈不存在", "Feedback not found")));
 
         String status = str(body.get("status"));
         if (status != null && !status.isBlank()) fb.setStatus(status);
@@ -210,7 +211,7 @@ public class FeedbackIngestController {
     @GetMapping("/inbox/status")
     public ResponseEntity<?> inboxStatus(
             @RequestHeader(value = "X-Optimizer-Token", required = false) String token) {
-        if (!tokenOk(token)) return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("token 不对"));
+        if (!tokenOk(token)) return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("token 不对", "Invalid token")));
         return ResponseEntity.ok(success(Map.of(
                 "ingestEnabled", guard.isEnabled(),
                 "last24h", guard.todayCount(),

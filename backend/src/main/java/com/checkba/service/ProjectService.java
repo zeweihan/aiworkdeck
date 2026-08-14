@@ -36,15 +36,15 @@ public class ProjectService {
     @Transactional
     public Project createProject(ProjectCreateRequest request, Long userId) {
         if (!StringUtils.hasText(request.getProjectType())) {
-            throw new IllegalArgumentException("项目类型不能为空");
+            throw new IllegalArgumentException(LangText.of("项目类型不能为空", "Project type must not be empty"));
         }
-        
+
         // 如果不是空白项目，则校验公司名称
         boolean isBlankProject = "BLANK".equalsIgnoreCase(request.getProjectType());
         if (!isBlankProject) {
             if (!StringUtils.hasText(request.getListedCompanyName())) {
                 // 部分项目类型可能不需要标的公司，但目前大多数都需要上市公司
-                 throw new IllegalArgumentException("上市公司名称不能为空");
+                 throw new IllegalArgumentException(LangText.of("上市公司名称不能为空", "Listed company name must not be empty"));
             }
             // 某些类型可能不需要标的公司，这里暂时保持原有逻辑，或者根据类型判断
             // if (!StringUtils.hasText(request.getTargetCompanyName())) {
@@ -53,7 +53,7 @@ public class ProjectService {
         }
 
         if (userId == null) {
-            throw new IllegalArgumentException("用户 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
 
         Project project = new Project();
@@ -61,11 +61,11 @@ public class ProjectService {
         String name = request.getName();
         if (!StringUtils.hasText(name)) {
             if (isBlankProject) {
-                name = "未命名项目";
+                name = LangText.of("未命名项目", "Untitled Project");
             } else {
                 // 默认项目名：{上市公司名称} - {标的公司名称} 项目
                 String target = request.getTargetCompanyName();
-                name = request.getListedCompanyName() + (StringUtils.hasText(target) ? " - " + target : "") + " 项目";
+                name = request.getListedCompanyName() + (StringUtils.hasText(target) ? " - " + target : "") + LangText.of(" 项目", " Project");
             }
         }
 
@@ -119,7 +119,7 @@ public class ProjectService {
      */
     public Project updateProjectName(Long id, String newName) {
         if (!StringUtils.hasText(newName)) {
-            throw new IllegalArgumentException("项目名称不能为空");
+            throw new IllegalArgumentException(LangText.of("项目名称不能为空", "Project name must not be empty"));
         }
         Project project = getProject(id);
         project.setName(newName);
@@ -133,9 +133,9 @@ public class ProjectService {
      */
     public List<Project> getUserProjects(Long userId) {
         if (userId == null) {
-            throw new IllegalArgumentException("用户 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
-        
+
         // 1. Created projects
         List<Project> createdProjects = projectRepository.findByUserIdOrderByCreatedAtDesc(userId);
 
@@ -193,7 +193,7 @@ public class ProjectService {
 
     public Project getProject(Long id) {
         return projectRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("项目不存在: " + id));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("项目不存在: ", "Project not found: ") + id));
     }
 
     /**
@@ -201,7 +201,7 @@ public class ProjectService {
      */
     public void deleteProject(Long id) {
         if (!projectRepository.existsById(id)) {
-            throw new IllegalArgumentException("项目不存在: " + id);
+            throw new IllegalArgumentException(LangText.of("项目不存在: ", "Project not found: ") + id);
         }
         projectRepository.deleteById(id);
     }

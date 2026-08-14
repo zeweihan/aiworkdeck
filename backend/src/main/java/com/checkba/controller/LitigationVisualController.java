@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.service.LangText;
 import com.checkba.service.LitigationVisualPanelService;
 import com.checkba.service.ProjectMemberService;
 import lombok.Data;
@@ -25,7 +26,7 @@ public class LitigationVisualController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
         if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该资源");
+            throw new IllegalArgumentException(LangText.of("无权访问该资源", "You don't have permission to access this resource"));
         }
     }
 
@@ -34,7 +35,7 @@ public class LitigationVisualController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
         if (projectId == null || !projectMemberService.hasWritePermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权修改该项目的文件");
+            throw new IllegalArgumentException(LangText.of("无权修改该项目的文件", "You don't have permission to modify files in this project"));
         }
     }
 

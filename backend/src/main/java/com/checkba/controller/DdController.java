@@ -4,6 +4,7 @@ import com.checkba.model.entity.DdComment;
 import com.checkba.model.entity.DdItem;
 import com.checkba.model.entity.DdRequest;
 import com.checkba.service.DdService;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectMemberService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -32,7 +33,7 @@ public class DdController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
         if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该资源");
+            throw new IllegalArgumentException(LangText.of("无权访问该资源", "You don't have permission to access this resource"));
         }
         return userId;
     }

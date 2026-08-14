@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.service.LangText;
 import com.checkba.service.SensitiveService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -65,7 +66,7 @@ public class SensitiveController {
             com.checkba.model.entity.ProjectFile originalFile = projectFileService.getFile(fileId);
             // 越权校验：此前仅校验登录，可对他人项目文件脱敏（读取+复制内容）
             if (!projectMemberService.hasReadPermission(originalFile.getProjectId(), userId)) {
-                return ResponseEntity.status(403).body(Map.of("error", "无权访问该文件"));
+                return ResponseEntity.status(403).body(Map.of("error", LangText.of("无权访问该文件", "You don't have permission to access this file")));
             }
             String originalFilePath = originalFile.getFilePath();
             

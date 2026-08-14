@@ -2,6 +2,7 @@ package com.checkba.controller;
 
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.OcrService;
 import com.checkba.service.ocr.OcrResult;
 import com.checkba.storage.StorageServiceFactory;
@@ -59,7 +60,7 @@ public class OcrController {
     @GetMapping("/temp/{fileName}")
     public ResponseEntity<?> tempImage(@PathVariable String fileName) {
         if (fileName == null || fileName.contains("..") || fileName.contains("/") || fileName.contains("\\")) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error("fileName 非法"));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error(LangText.of("fileName 非法", "Invalid fileName")));
         }
         String path = "ocr/tmp/" + fileName;
         try {

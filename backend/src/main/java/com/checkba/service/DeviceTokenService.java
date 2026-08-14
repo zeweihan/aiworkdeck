@@ -37,7 +37,8 @@ public class DeviceTokenService {
         DeviceToken t = new DeviceToken();
         t.setUserId(userId);
         t.setTokenHash(sha256(plaintext));
-        t.setName(name == null || name.isBlank() ? "未命名设备" : name.trim());
+        t.setName(name == null || name.isBlank()
+                ? LangText.of("未命名设备", "Unnamed device") : name.trim());
         t.setCreatedAt(LocalDateTime.now());
         t = repository.save(t);
         return new IssuedToken(t.getId(), plaintext);

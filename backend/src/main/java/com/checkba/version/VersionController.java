@@ -2,6 +2,7 @@ package com.checkba.version;
 
 import com.checkba.controller.AuthController;
 import com.checkba.model.entity.ProjectFile;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectFileService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.UserService;
@@ -222,7 +223,7 @@ public class VersionController {
         }
         TreeManifest head = manifestServiceReadHeadSafely(projectId);
         if (head != null && head.version() < 2) {
-            sessionService.commitNow(projectId, userId, userName(userId), "升级版本记录格式");
+            sessionService.commitNow(projectId, userId, userName(userId), LangText.of("升级版本记录格式", "Upgraded version history format"));
         }
         return ok(Map.of("prepared", true, "fresh", false));
     }
@@ -255,7 +256,7 @@ public class VersionController {
             ProjectFile f = projectFileService.getFile(fileId); // 文件不存在会抛异常
             if (!projectId.equals(f.getProjectId())) {
                 // 拒绝消息不带 fileId：越权探测者不该从错误文案里拿到内部 id 的存在性回执。
-                throw new IllegalArgumentException("无权访问该文件");
+                throw new IllegalArgumentException(LangText.of("无权访问该文件", "You don't have access to this file"));
             }
             String relPath = WorkSessionService.repoRelativePath(f);
             entries = repoService.logForPath(projectId, "HEAD", relPath, limit);
@@ -305,7 +306,7 @@ public class VersionController {
         Long userId = requireWriteMember(projectId, sessionId);
         Object rawSessionId = body.get("sessionId");
         if (!(rawSessionId instanceof Number)) {
-            throw VersionException.userFacing("无效的请求");
+            throw VersionException.userFacing(LangText.of("无效的请求", "Invalid request"));
         }
         long targetSession = ((Number) rawSessionId).longValue();
         @SuppressWarnings("unchecked")
@@ -353,7 +354,7 @@ public class VersionController {
         String rel = WorkSessionService.safeRepoPath(path);
         byte[] bytes = repoService.readBlobAtCommit(projectId, ref, rel);
         if (bytes == null) {
-            throw VersionException.userFacing("这一版里没有这份文件");
+            throw VersionException.userFacing(LangText.of("这一版里没有这份文件", "This file isn't in this version"));
         }
         return ResponseEntity.ok()
                 .header("Content-Type", "application/octet-stream")
@@ -369,7 +370,7 @@ public class VersionController {
         String rel = WorkSessionService.safeRepoPath(path);
         byte[] bytes = repoService.readBlobAtCommit(projectId, ref, rel);
         if (bytes == null) {
-            throw VersionException.userFacing("这一版里没有这份文件");
+            throw VersionException.userFacing(LangText.of("这一版里没有这份文件", "This file isn't in this version"));
         }
         try (java.io.InputStream in = new java.io.ByteArrayInputStream(bytes)) {
             org.apache.tika.Tika tika = new org.apache.tika.Tika();
@@ -389,10 +390,10 @@ public class VersionController {
         requireWriteMember(projectId, sessionId);
         String name = body == null ? null : body.get("name");
         if (name == null || name.isBlank()) {
-            throw VersionException.userFacing("请给重要版本起个名字");
+            throw VersionException.userFacing(LangText.of("请给重要版本起个名字", "Please give this milestone a name"));
         }
         if (name.strip().length() > 64) {
-            throw VersionException.userFacing("名字太长了，请控制在 64 字以内");
+            throw VersionException.userFacing(LangText.of("名字太长了，请控制在 64 字以内", "That name is too long — please keep it under 64 characters"));
         }
         repoService.tagMilestone(projectId, sha, name.strip());
         return ok(Map.of("marked", true));
@@ -495,7 +496,7 @@ public class VersionController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireWriteMember(projectId, sessionId);
         sessionService.abortAdopt(projectId);
-        return okWithMessage(Map.of("aborted", true), WorkSessionService.ADOPT_ABORTED_NOTICE);
+        return okWithMessage(Map.of("aborted", true), WorkSessionService.adoptAbortedNotice());
     }
 
     @PostMapping("/draft/{id}/abandon")
@@ -526,7 +527,7 @@ public class VersionController {
             try {
                 out.put(e.getKey(), WorkSessionService.Resolution.valueOf(e.getValue()));
             } catch (Exception ex) {
-                throw VersionException.userFacing("无效的选择");
+                throw VersionException.userFacing(LangText.of("无效的选择", "Invalid choice"));
             }
         }
         return out;
@@ -554,7 +555,7 @@ public class VersionController {
     public ResponseEntity<Map<String, Object>> onVersionError(VersionException e) {
         log.warn("版本记录操作失败", e);
         telemetryService.record("version.op", Map.of("op", "error", "ok", false));
-        String message = e.isUserFacing() ? e.getMessage() : "版本记录操作失败，请重试";
+        String message = e.isUserFacing() ? e.getMessage() : LangText.of("版本记录操作失败，请重试", "Version history operation failed — please try again");
         return ResponseEntity.ok(Map.of("code", 1, "message", message));
     }
 
@@ -563,10 +564,10 @@ public class VersionController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
         if (!projectMemberService.hasReadPermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该项目");
+            throw new IllegalArgumentException(LangText.of("无权访问该项目", "You don't have access to this project"));
         }
         if (projectMemberService.isClient(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该项目");
+            throw new IllegalArgumentException(LangText.of("无权访问该项目", "You don't have access to this project"));
         }
         return userId;
     }
@@ -580,7 +581,7 @@ public class VersionController {
     private Long requireWriteMember(Long projectId, String sessionId) {
         Long userId = requireMember(projectId, sessionId);
         if (!projectMemberService.hasWritePermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权修改该项目");
+            throw new IllegalArgumentException(LangText.of("无权修改该项目", "You don't have permission to modify this project"));
         }
         return userId;
     }
@@ -592,7 +593,7 @@ public class VersionController {
         } catch (Exception e) {
             log.warn("取用户名失败: userId={}", userId, e);
         }
-        return "用户";
+        return LangText.of("用户", "User");
     }
 
     private String email(Long userId) {

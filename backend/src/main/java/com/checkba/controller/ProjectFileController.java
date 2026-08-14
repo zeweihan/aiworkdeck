@@ -97,10 +97,10 @@ public class ProjectFileController {
     
     private void checkFileTreeAccess(Long projectId, Long userId) {
          if (!projectMemberService.hasReadPermission(projectId, userId)) {
-              throw new IllegalArgumentException("无权访问该项目");
+              throw new IllegalArgumentException(com.checkba.service.LangText.of("无权访问该项目", "You do not have access to this project"));
          }
          if (projectMemberService.isClient(projectId, userId)) {
-             throw new IllegalArgumentException("客户无权访问资源管理器");
+             throw new IllegalArgumentException(com.checkba.service.LangText.of("客户无权访问资源管理器", "Clients do not have access to the Explorer"));
          }
     }
 
@@ -112,7 +112,7 @@ public class ProjectFileController {
     private void checkFileWriteAccess(Long projectId, Long userId) {
         checkFileTreeAccess(projectId, userId);
         if (!projectMemberService.hasWritePermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权修改该项目的文件");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("无权修改该项目的文件", "You do not have permission to modify files in this project"));
         }
     }
 
@@ -124,7 +124,7 @@ public class ProjectFileController {
     private void checkFileInProject(Long fileId, Long projectId) {
         ProjectFile file = projectFileService.getFile(fileId); // 文件不存在会抛异常
         if (!projectId.equals(file.getProjectId())) {
-            throw new IllegalArgumentException("文件不属于该项目");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("文件不属于该项目", "This file does not belong to this project"));
         }
     }
 
@@ -184,7 +184,7 @@ public class ProjectFileController {
         checkFileInProject(fileId, projectId);
         // 解压会写入项目资源，要求写权限（读权限成员只能浏览条目）
         if (!projectMemberService.hasWritePermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权在该项目中解压文件");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("无权在该项目中解压文件", "You do not have permission to extract files in this project"));
         }
         return projectFileService.extractArchive(projectId, fileId, userId);
     }
@@ -254,7 +254,7 @@ public class ProjectFileController {
         projectFileService.delete(fileId, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "删除成功");
+        result.put("message", com.checkba.service.LangText.of("删除成功", "Deleted successfully"));
         return result;
     }
 
@@ -275,7 +275,7 @@ public class ProjectFileController {
         projectFileService.batchDelete(projectId, request, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "删除成功");
+        result.put("message", com.checkba.service.LangText.of("删除成功", "Deleted successfully"));
         result.put("data", new HashMap<>());
         return result;
     }
@@ -297,7 +297,7 @@ public class ProjectFileController {
         List<ProjectFile> moved = projectFileService.batchMove(projectId, request, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "移动成功");
+        result.put("message", com.checkba.service.LangText.of("移动成功", "Moved successfully"));
         Map<String, Object> data = new HashMap<>();
         data.put("files", moved);
         result.put("data", data);
@@ -321,7 +321,7 @@ public class ProjectFileController {
         List<ProjectFile> created = projectFileService.batchCopy(projectId, request, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "复制成功");
+        result.put("message", com.checkba.service.LangText.of("复制成功", "Copied successfully"));
         Map<String, Object> data = new HashMap<>();
         data.put("files", created);
         result.put("data", data);
@@ -399,7 +399,7 @@ public class ProjectFileController {
         projectFileService.restore(fileId, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "还原成功");
+        result.put("message", com.checkba.service.LangText.of("还原成功", "Restored successfully"));
         return result;
     }
     
@@ -421,7 +421,7 @@ public class ProjectFileController {
         projectFileService.permDelete(fileId, userId);
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "彻底删除成功");
+        result.put("message", com.checkba.service.LangText.of("彻底删除成功", "Permanently deleted successfully"));
         return result;
     }
 

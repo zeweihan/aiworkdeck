@@ -3,6 +3,7 @@ package com.checkba.controller;
 import com.checkba.model.dto.CompanyBasicInfoDTO;
 import com.checkba.model.dto.CompanySearchRequest;
 import com.checkba.service.CompanyMirrorService;
+import com.checkba.service.LangText;
 import com.checkba.service.QichachaService;
 import com.checkba.service.StockCodeService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -79,8 +80,8 @@ public class ExternalController {
             // 二次判空：searchCompany 可能返回 null，后续解引用会 NPE→500
             if (dto == null) {
                 Map<String, String> error = new HashMap<>();
-                error.put("error", "未找到相关企业信息，请检查公司名称是否正确");
-                error.put("message", "查询无结果: " + searchKey);
+                error.put("error", LangText.of("未找到相关企业信息，请检查公司名称是否正确", "No matching company information found. Please check the company name."));
+                error.put("message", LangText.of("查询无结果: ", "No results: ") + searchKey);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
             }
 
@@ -98,18 +99,18 @@ public class ExternalController {
             String message = e.getMessage();
             // 检查多种可能的错误消息格式
             if (message != null && (message.contains("查询无结果") || message.contains("未查询到") || message.contains("查询失败"))) {
-                error.put("error", "未找到相关企业信息，请检查公司名称是否正确");
-                error.put("message", "企查查查询无结果: " + searchKey);
+                error.put("error", LangText.of("未找到相关企业信息，请检查公司名称是否正确", "No matching company information found. Please check the company name."));
+                error.put("message", LangText.of("企查查查询无结果: ", "Qichacha lookup returned no results: ") + searchKey);
                 return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error);
             } else {
-                error.put("error", "查询失败，请稍后重试");
-                error.put("message", message != null ? message : "未知错误");
+                error.put("error", LangText.of("查询失败，请稍后重试", "Lookup failed, please try again later."));
+                error.put("message", message != null ? message : LangText.of("未知错误", "Unknown error"));
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
             }
         } catch (Exception e) {
             Map<String, String> error = new HashMap<>();
-            error.put("error", "服务异常，请稍后重试");
-            error.put("message", e.getMessage() != null ? e.getMessage() : "未知错误");
+            error.put("error", LangText.of("服务异常，请稍后重试", "Service error, please try again later."));
+            error.put("message", e.getMessage() != null ? e.getMessage() : LangText.of("未知错误", "Unknown error"));
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }

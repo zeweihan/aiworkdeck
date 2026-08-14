@@ -1,6 +1,7 @@
 package com.checkba.controller;
 
 import com.checkba.model.entity.User;
+import com.checkba.service.LangText;
 import com.checkba.service.UserService;
 import com.checkba.storage.StorageService;
 import com.checkba.storage.StorageServiceFactory;
@@ -52,18 +53,18 @@ public class UserController {
 
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(401).body(Map.of("code", 1, "message", "无效的会话"));
+            return ResponseEntity.status(401).body(Map.of("code", 1, "message", LangText.of("无效的会话", "Invalid session")));
         }
 
         if (file.isEmpty()) {
-            return ResponseEntity.badRequest().body(Map.of("code", 1, "message", "文件不能为空"));
+            return ResponseEntity.badRequest().body(Map.of("code", 1, "message", LangText.of("文件不能为空", "File must not be empty")));
         }
 
         try {
             // Check file type
             String contentType = file.getContentType();
             if (contentType == null || !contentType.startsWith("image/")) {
-                return ResponseEntity.badRequest().body(Map.of("code", 1, "message", "只能上传图片"));
+                return ResponseEntity.badRequest().body(Map.of("code", 1, "message", LangText.of("只能上传图片", "Only image files can be uploaded")));
             }
 
             // Generate filename: avatars/{userId}.{ext}
@@ -97,14 +98,14 @@ public class UserController {
 
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
-            result.put("message", "上传成功");
+            result.put("message", LangText.of("上传成功", "Uploaded successfully"));
             result.put("data", Map.of("avatarUrl", avatarUrl));
             
             return ResponseEntity.ok(result);
 
         } catch (IOException e) {
             log.error("Avatar upload failed", e);
-            return ResponseEntity.status(500).body(Map.of("code", 1, "message", "上传失败: " + e.getMessage()));
+            return ResponseEntity.status(500).body(Map.of("code", 1, "message", LangText.of("上传失败: ", "Upload failed: ") + e.getMessage()));
         }
     }
 

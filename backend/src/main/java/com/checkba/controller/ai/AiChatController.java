@@ -1,6 +1,7 @@
 package com.checkba.controller.ai;
 
 import com.checkba.controller.AuthController;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ai.AiDocxExportService;
 import com.checkba.service.ai.AiAssistantService;
@@ -74,7 +75,7 @@ public class AiChatController {
              // 用「可用」而非「归属」：新会话还没有消息，前端一进项目就会来拉一次，
              // 拿严格归属判会把每个新会话都挡成 403
              if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
-                 return ResponseEntity.status(403).body("无权查看该会话");
+                 return ResponseEntity.status(403).body(LangText.of("无权查看该会话", "You do not have permission to view this conversation"));
              }
              return ResponseEntity.ok(projectAiMessageService.listByConversationId(conversationId));
         }
@@ -112,7 +113,7 @@ public class AiChatController {
         // 归属校验：文件变动清单会暴露他人项目的文件名，此前此接口连 session 都不读
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (!projectAiMessageService.canUseConversation(conversationId, userId)) {
-            return ResponseEntity.status(403).body("无权查看该会话");
+            return ResponseEntity.status(403).body(LangText.of("无权查看该会话", "You do not have permission to view this conversation"));
         }
         try {
             // Get file changes
@@ -190,11 +191,11 @@ public class AiChatController {
             }
             Long projectId = request.getProjectId();
             if (projectId == null) {
-                return ResponseEntity.badRequest().body("项目 ID 不能为空");
+                return ResponseEntity.badRequest().body(LangText.of("项目 ID 不能为空", "Project ID is required"));
             }
             String fileName = request.getFileName();
             if (fileName == null || fileName.trim().isEmpty()) {
-                return ResponseEntity.badRequest().body("文件名不能为空");
+                return ResponseEntity.badRequest().body(LangText.of("文件名不能为空", "File name is required"));
             }
 
             // 如果没有 .docx 后缀，自动补上
@@ -215,7 +216,7 @@ public class AiChatController {
             return ResponseEntity.ok(file);
         } catch (Exception e) {
             log.error("AI 导出 Word 失败", e);
-            return ResponseEntity.status(500).body("导出 Word 失败: " + e.getMessage());
+            return ResponseEntity.status(500).body(LangText.of("导出 Word 失败: ", "Failed to export Word: ") + e.getMessage());
         }
     }
 

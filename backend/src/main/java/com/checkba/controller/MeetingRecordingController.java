@@ -2,6 +2,7 @@ package com.checkba.controller;
 
 import com.checkba.model.entity.MeetingRecording;
 import com.checkba.model.entity.ProjectFile;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.meeting.MeetingRecordingService;
 import com.checkba.service.meeting.MeetingTranscriptionService;
@@ -30,7 +31,7 @@ public class MeetingRecordingController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
         if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该资源");
+            throw new IllegalArgumentException(LangText.of("无权访问该资源", "You don't have permission to access this resource"));
         }
         return userId;
     }
@@ -132,7 +133,7 @@ public class MeetingRecordingController {
         requireMemberByMeeting(sessionId, meetingId);
         MeetingRecording meeting = meetingService.get(meetingId);
         if (!MeetingRecording.STATUS_TRANSCRIBED.equals(meeting.getStatus())) {
-            throw new IllegalArgumentException("转写完成后才能生成纪要");
+            throw new IllegalArgumentException(LangText.of("转写完成后才能生成纪要", "Minutes can only be generated after the transcription is finished"));
         }
         Map<String, Object> result = new HashMap<>();
         result.put("prompt", meetingService.buildMinutesKickoffPrompt(meeting));

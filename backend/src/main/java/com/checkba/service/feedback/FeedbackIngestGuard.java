@@ -2,6 +2,7 @@ package com.checkba.service.feedback;
 
 import com.checkba.model.entity.UserFeedback;
 import com.checkba.repository.UserFeedbackRepository;
+import com.checkba.service.LangText;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -59,26 +60,26 @@ public class FeedbackIngestGuard {
 
     /** 不通过就抛：配额类抛 {@link QuotaExceededException}，其余抛 IllegalArgumentException。 */
     public void check(String installId, List<MultipartFile> files) {
-        if (!enabled) throw new IllegalStateException("本实例未开启反馈收件箱");
+        if (!enabled) throw new IllegalStateException(LangText.of("本实例未开启反馈收件箱", "The feedback inbox is not enabled on this instance"));
         if (installId == null || installId.isBlank() || installId.length() > 64) {
-            throw new IllegalArgumentException("缺少或非法的 installId");
+            throw new IllegalArgumentException(LangText.of("缺少或非法的 installId", "Missing or invalid installId"));
         }
         List<MultipartFile> safe = files == null ? List.of() : files;
         if (safe.size() > maxAttachments) {
-            throw new IllegalArgumentException("附件过多");
+            throw new IllegalArgumentException(LangText.of("附件过多", "Too many attachments"));
         }
         for (MultipartFile f : safe) {
             if (f != null && f.getSize() > maxAttachmentBytes) {
-                throw new IllegalArgumentException("附件过大");
+                throw new IllegalArgumentException(LangText.of("附件过大", "Attachment is too large"));
             }
         }
         LocalDateTime since = LocalDateTime.now().minusDays(1);
         if (feedbackRepository.countByInstallIdAndCreatedAtAfter(installId, since) >= perInstallDaily) {
-            throw new QuotaExceededException("该安装今日提交已达上限");
+            throw new QuotaExceededException(LangText.of("该安装今日提交已达上限", "This installation has reached today's submission limit"));
         }
         if (feedbackRepository.countByCreatedAtAfter(since) >= globalDaily) {
             log.warn("反馈收件箱触到全站日上限 {}，本条被拒", globalDaily);
-            throw new QuotaExceededException("今日收件已满，请稍后再试");
+            throw new QuotaExceededException(LangText.of("今日收件已满，请稍后再试", "Today's inbox is full, please try again later"));
         }
     }
 

@@ -43,9 +43,9 @@ public class WebFavoriteService {
 
     @Transactional
     public WebFavorite createFavorite(Long userId, Long projectId, String title, String sourceUrl, String content, String imageBase64, String meta) {
-        if (userId == null) throw new IllegalArgumentException("userId 不能为空");
+        if (userId == null) throw new IllegalArgumentException(LangText.of("userId 不能为空", "userId must not be empty"));
         if (!StringUtils.hasText(content) && !StringUtils.hasText(imageBase64)) {
-            throw new IllegalArgumentException("content 或 imageBase64 至少提供一个");
+            throw new IllegalArgumentException(LangText.of("content 或 imageBase64 至少提供一个", "Please provide at least one of content or imageBase64"));
         }
 
         WebFavorite fav = new WebFavorite();
@@ -81,9 +81,9 @@ public class WebFavoriteService {
     @Transactional
     public void delete(Long favoriteId, Long userId) {
         WebFavorite fav = repository.findById(favoriteId)
-                .orElseThrow(() -> new IllegalArgumentException("收藏不存在"));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("收藏不存在", "Favorite not found")));
         if (!fav.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权删除该收藏");
+            throw new IllegalArgumentException(LangText.of("无权删除该收藏", "You do not have permission to delete this favorite"));
         }
         if (StringUtils.hasText(fav.getImagePath())) {
             try {
@@ -97,12 +97,12 @@ public class WebFavoriteService {
 
     public Resource loadImage(Long favoriteId, Long userId) {
         WebFavorite fav = repository.findById(favoriteId)
-                .orElseThrow(() -> new IllegalArgumentException("收藏不存在"));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("收藏不存在", "Favorite not found")));
         if (!fav.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权访问该收藏");
+            throw new IllegalArgumentException(LangText.of("无权访问该收藏", "You do not have access to this favorite"));
         }
         if (!StringUtils.hasText(fav.getImagePath())) {
-            throw new IllegalArgumentException("该收藏没有截图");
+            throw new IllegalArgumentException(LangText.of("该收藏没有截图", "This favorite has no screenshot"));
         }
         return storageServiceFactory.getStorageService().load(fav.getImagePath());
     }

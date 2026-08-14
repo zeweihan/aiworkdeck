@@ -4,6 +4,7 @@ import com.checkba.config.GlobalExceptionHandler;
 import com.checkba.model.entity.ProjectInvitation;
 import com.checkba.model.entity.User;
 import com.checkba.service.ClientInvitationService;
+import com.checkba.service.LangText;
 import com.checkba.service.UserService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -103,7 +104,7 @@ public class AuthController {
         if (code == null || code.isBlank()) {
             Map<String, Object> result = new HashMap<>();
             result.put("code", CODE_SMS_REQUIRED);
-            result.put("message", "本次操作需要二次验证");
+            result.put("message", LangText.of("本次操作需要二次验证", "This action requires a second verification step"));
             result.put("data", Map.of(
                     "smsRequired", true, // 保留旧字段名，老客户端仍能识别
                     "method", method.name().toLowerCase(),
@@ -136,7 +137,7 @@ public class AuthController {
 
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
-            result.put("message", "注册成功");
+            result.put("message", LangText.of("注册成功", "Registration successful"));
             result.put("data", Map.of(
                     "sessionId", sessionId,
                     "user", Map.of(
@@ -189,7 +190,7 @@ public class AuthController {
 
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
-            result.put("message", "登录成功");
+            result.put("message", LangText.of("登录成功", "Signed in successfully"));
             result.put("data", Map.of(
                     "sessionId", sessionId,
                     "user", Map.of(
@@ -292,7 +293,7 @@ public class AuthController {
             }
             authAbuseGuard.recordCodeSend(ip);
             result.put("code", 0);
-            result.put("message", "验证码已发送");
+            result.put("message", LangText.of("验证码已发送", "Verification code sent"));
             result.put("data", Map.of("phoneMasked", phoneMasked));
         } catch (IllegalArgumentException e) {
             result.put("code", 1);
@@ -329,7 +330,7 @@ public class AuthController {
         if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
         try {
             secondFactorService.activate(userId, body == null ? null : body.get("code"));
-            return Map.of("code", 0, "message", "认证器已绑定");
+            return Map.of("code", 0, "message", LangText.of("认证器已绑定", "Authenticator linked"));
         } catch (IllegalArgumentException e) {
             return Map.of("code", 1, "message", e.getMessage());
         }
@@ -344,7 +345,7 @@ public class AuthController {
         if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
         try {
             secondFactorService.disable(userId, body == null ? null : body.get("code"));
-            return Map.of("code", 0, "message", "认证器已解绑");
+            return Map.of("code", 0, "message", LangText.of("认证器已解绑", "Authenticator unlinked"));
         } catch (IllegalArgumentException e) {
             return Map.of("code", 1, "message", e.getMessage());
         }
@@ -358,11 +359,11 @@ public class AuthController {
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
         if (!adminAccessService.isAdmin(userService.getUserById(userId))) {
-            return Map.of("code", 1, "message", "仅系统管理员可执行该操作");
+            return Map.of("code", 1, "message", LangText.of("仅系统管理员可执行该操作", "Only a system administrator can perform this action"));
         }
         try {
             secondFactorService.resetByAdmin(targetUserId);
-            return Map.of("code", 0, "message", "已清除该账号的认证器绑定");
+            return Map.of("code", 0, "message", LangText.of("已清除该账号的认证器绑定", "This account's authenticator link has been cleared"));
         } catch (IllegalArgumentException e) {
             return Map.of("code", 1, "message", e.getMessage());
         }
@@ -382,7 +383,7 @@ public class AuthController {
         try {
             String phoneMasked = smsAuthService.confirmBind(userId, request.getPhone(), request.getCode());
             result.put("code", 0);
-            result.put("message", "绑定成功");
+            result.put("message", LangText.of("绑定成功", "Linked successfully"));
             result.put("data", Map.of("phoneMasked", phoneMasked));
         } catch (IllegalArgumentException e) {
             result.put("code", 1);
@@ -431,7 +432,7 @@ public class AuthController {
             }
             authAbuseGuard.recordCodeSend(ip);
             result.put("code", 0);
-            result.put("message", "验证码已发送");
+            result.put("message", LangText.of("验证码已发送", "Verification code sent"));
             result.put("data", Map.of("emailMasked", emailMasked));
         } catch (IllegalArgumentException e) {
             result.put("code", 1);
@@ -454,7 +455,7 @@ public class AuthController {
         try {
             String emailMasked = mailAuthService.confirmBind(userId, request.getEmail(), request.getCode());
             result.put("code", 0);
-            result.put("message", "绑定成功");
+            result.put("message", LangText.of("绑定成功", "Linked successfully"));
             result.put("data", Map.of("emailMasked", emailMasked));
         } catch (IllegalArgumentException e) {
             result.put("code", 1);
@@ -480,7 +481,7 @@ public class AuthController {
             mailAuthService.sendSigninCode(request.getEmail());
             authAbuseGuard.recordCodeSend(ip);
             result.put("code", 0);
-            result.put("message", "验证码已发送");
+            result.put("message", LangText.of("验证码已发送", "Verification code sent"));
         } catch (IllegalArgumentException e) {
             result.put("code", 1);
             result.put("message", e.getMessage());
@@ -512,7 +513,7 @@ public class AuthController {
             authAbuseGuard.recordLoginSuccess(ip, lockKey);
             String newSessionId = userSessionService.issue(user.getId());
             result.put("code", 0);
-            result.put("message", "登录成功");
+            result.put("message", LangText.of("登录成功", "Signed in successfully"));
             result.put("data", Map.of(
                     "sessionId", newSessionId,
                     "user", Map.of(
@@ -558,7 +559,7 @@ public class AuthController {
 
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
-            result.put("message", "登录成功");
+            result.put("message", LangText.of("登录成功", "Signed in successfully"));
             result.put("data", Map.of(
                     "sessionId", sessionId,
                     "projectId", invitation.getProjectId(), // Return projectId so frontend knows where to go
@@ -631,7 +632,7 @@ public class AuthController {
         }
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "登出成功");
+        result.put("message", LangText.of("登出成功", "Signed out successfully"));
         return result;
     }
 
@@ -742,13 +743,13 @@ public class AuthController {
         if (!localMode) {
             // 业务错误文案红线：不得含「登录 / 未授权 / 请先」，否则前端 api.js 会当成掉线清会话
             result.put("code", 1);
-            result.put("message", "该服务器需用账号密码换取设备令牌");
+            result.put("message", LangText.of("该服务器需用账号密码换取设备令牌", "This server requires a username and password to issue a device token"));
             return result;
         }
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) {
             result.put("code", 1);
-            result.put("message", "本机身份尚未就绪，稍后重试");
+            result.put("message", LangText.of("本机身份尚未就绪，稍后重试", "Local identity is not ready yet, please retry shortly"));
             return result;
         }
         try {
@@ -766,7 +767,7 @@ public class AuthController {
             result.put("data", data);
         } catch (Exception e) {
             result.put("code", 1);
-            result.put("message", "令牌生成失败：" + e.getMessage());
+            result.put("message", LangText.of("令牌生成失败：", "Token generation failed: ") + e.getMessage());
         }
         return result;
     }
@@ -796,7 +797,7 @@ public class AuthController {
         Long userId = getUserIdFromSession(sessionId);
         if (userId == null) return Map.of("code", GlobalExceptionHandler.CODE_UNAUTHENTICATED, "message", "未登录");
         deviceTokenService.revoke(userId, id);
-        return Map.of("code", 0, "message", "已撤销");
+        return Map.of("code", 0, "message", LangText.of("已撤销", "Revoked"));
     }
 
     static class RegisterRequest {

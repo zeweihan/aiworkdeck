@@ -3,6 +3,7 @@ package com.checkba.controller;
 import com.checkba.config.AiModelProperties;
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.SystemSettingService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -226,7 +227,7 @@ public class AdminConfigController {
         User admin = requireAdmin(sessionId);
         if (admin == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(error("仅管理员可访问此接口"));
+                    .body(error(LangText.of("仅管理员可访问此接口", "Admin access only")));
         }
 
         // 外部服务默认值
@@ -385,7 +386,7 @@ public class AdminConfigController {
         User admin = requireAdmin(sessionId);
         if (admin == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(error("仅管理员可访问此接口"));
+                    .body(error(LangText.of("仅管理员可访问此接口", "Admin access only")));
         }
 
         // 跨境同意闸门要在写库之前把关：平台通道会把内容直接发往境外的模型服务商，
@@ -409,7 +410,7 @@ public class AdminConfigController {
 
         Map<String, Object> ok = new HashMap<>();
         ok.put("code", 0);
-        ok.put("message", "保存成功");
+        ok.put("message", LangText.of("保存成功", "Saved"));
         ok.put("timestamp", LocalDateTime.now().toString());
         return ResponseEntity.ok(ok);
     }
@@ -424,7 +425,7 @@ public class AdminConfigController {
         User admin = requireAdmin(sessionId);
         if (admin == null) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body(error("仅管理员可访问此接口"));
+                    .body(error(LangText.of("仅管理员可访问此接口", "Admin access only")));
         }
 
         List<UserSummary> users = userRepository.findAll()
@@ -533,17 +534,20 @@ public class AdminConfigController {
                 try {
                     AiModelProperties.Provider.valueOf(provider);
                 } catch (IllegalArgumentException e) {
-                    throw new IllegalArgumentException("AI 提供商取值非法：" + ai.getActiveProvider()
-                            + "（只接受 AWD_CLOUD / OPENROUTER / OLLAMA）");
+                    throw new IllegalArgumentException(LangText.of(
+                            "AI 提供商取值非法：" + ai.getActiveProvider()
+                                    + "（只接受 AWD_CLOUD / OPENROUTER / OLLAMA）",
+                            "Invalid AI provider value: " + ai.getActiveProvider()
+                                    + " (only AWD_CLOUD / OPENROUTER / OLLAMA are accepted)"));
                 }
                 updates.put(KEY_AI_ACTIVE_PROVIDER, provider);
             }
             // 三个模型选择键：空串是合法值（= 跟随内置默认），非空必须在白名单内。
             // 不校验的话一个手改/陈旧的 id 会被工厂静默回落默认模型，
             // 设置页显示的与实际发出去的模型不一致——正是本次改造要修的老毛病。
-            putModelSetting(updates, KEY_AI_DEFAULT_MODEL, ai.getDefaultModel(), "默认模型");
-            putModelSetting(updates, KEY_AI_AUX_MODEL, ai.getAuxModel(), "辅助模型");
-            putModelSetting(updates, KEY_AI_SUBAGENT_MODEL, ai.getSubagentModel(), "子 Agent 模型");
+            putModelSetting(updates, KEY_AI_DEFAULT_MODEL, ai.getDefaultModel(), LangText.of("默认模型", "Default model"));
+            putModelSetting(updates, KEY_AI_AUX_MODEL, ai.getAuxModel(), LangText.of("辅助模型", "Auxiliary model"));
+            putModelSetting(updates, KEY_AI_SUBAGENT_MODEL, ai.getSubagentModel(), LangText.of("子 Agent 模型", "Sub-agent model"));
             if (ai.getNetworkRegion() != null) {
                 String region = ai.getNetworkRegion().trim().toLowerCase(java.util.Locale.ROOT);
                 boolean legal = region.isEmpty()
@@ -551,8 +555,11 @@ public class AdminConfigController {
                         || com.checkba.service.ai.NetworkRegionService.MODE_DOMESTIC.equals(region)
                         || com.checkba.service.ai.NetworkRegionService.MODE_INTERNATIONAL.equals(region);
                 if (!legal) {
-                    throw new IllegalArgumentException("网络区域取值非法：" + ai.getNetworkRegion()
-                            + "（只接受 auto / domestic / international）");
+                    throw new IllegalArgumentException(LangText.of(
+                            "网络区域取值非法：" + ai.getNetworkRegion()
+                                    + "（只接受 auto / domestic / international）",
+                            "Invalid network region value: " + ai.getNetworkRegion()
+                                    + " (only auto / domestic / international are accepted)"));
                 }
                 updates.put(KEY_AI_NETWORK_REGION, region.isEmpty()
                         ? com.checkba.service.ai.NetworkRegionService.MODE_AUTO : region);
@@ -616,8 +623,9 @@ public class AdminConfigController {
         }
         String model = value.trim();
         if (!model.isEmpty() && !com.checkba.service.ai.AllowedModels.isAllowed(model)) {
-            throw new IllegalArgumentException(label + "「" + model + "」不在可用模型清单内，"
-                    + "从设置页的模型下拉中重新选一个（留空表示跟随内置默认）");
+            throw new IllegalArgumentException(label + LangText.of(
+                    "「" + model + "」不在可用模型清单内，从设置页的模型下拉中重新选一个（留空表示跟随内置默认）",
+                    " \"" + model + "\" is not in the available models list. Pick one from the model dropdown in Settings (leave blank to follow the built-in default)."));
         }
         updates.put(key, model);
     }
@@ -860,8 +868,11 @@ public class AdminConfigController {
             return null;
         }
         if (hasCrossBorderConsent(ai, settings)) return null;
-        return "「AI Workdeck 云端」会把你送入 AI 的内容发往境外的模型服务商处理。"
-                + "勾选跨境传输同意后才能启用；不想让内容出境的话，可以改用本机模型或境内供应商。";
+        return LangText.of(
+                "「AI Workdeck 云端」会把你送入 AI 的内容发往境外的模型服务商处理。"
+                        + "勾选跨境传输同意后才能启用；不想让内容出境的话，可以改用本机模型或境内供应商。",
+                "\"AI Workdeck Cloud\" sends the content you give the AI to a model provider outside mainland China for processing. "
+                        + "Enable it by checking cross-border transfer consent; if you don't want content to leave mainland China, use a local model or a domestic provider instead.");
     }
 
     public static class AiConfig {

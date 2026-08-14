@@ -102,7 +102,7 @@ public class ProjectRepoService {
                 try (Git git = new Git(repo)) {
                     git.add().addFilepattern(".").call();
                     git.commit()
-                       .setMessage("初始版本\n\nX-AWD-Kind: session")
+                       .setMessage(com.checkba.service.LangText.of("初始版本", "Initial version") + "\n\nX-AWD-Kind: session")
                        .setAuthor(authorName, authorEmail)
                        .setAllowEmpty(true)
                        .call();
@@ -636,7 +636,7 @@ public class ProjectRepoService {
             ObjectId id = repo.resolve(sha);
             // 律师点的是时间线上的节点，正常不会不存在；真出现（并发 GC/脏客户端）
             // 时这句话对他有意义、也不含任何内部标识，走 userFacing 直接回显。
-            if (id == null) throw VersionException.userFacing("这一版已经不存在了");
+            if (id == null) throw VersionException.userFacing(com.checkba.service.LangText.of("这一版已经不存在了", "This version no longer exists"));
             git.tag()
                .setObjectId(walk.parseCommit(id))
                .setName("awd/milestone/" + sha.substring(0, Math.min(12, sha.length())))

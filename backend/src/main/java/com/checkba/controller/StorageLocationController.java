@@ -1,6 +1,7 @@
 package com.checkba.controller;
 
 import com.checkba.exception.UnauthorizedException;
+import com.checkba.service.LangText;
 import com.checkba.service.entitlement.EntitlementService;
 import com.checkba.service.entitlement.FeatureCatalog;
 import com.checkba.service.storage.StorageLocationService;
@@ -80,7 +81,8 @@ public class StorageLocationController {
         }
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "已恢复默认位置。原目录中的文件一个都没有删除，仍在原处。");
+        result.put("message", LangText.of("已恢复默认位置。原目录中的文件一个都没有删除，仍在原处。",
+                "Restored to the default location. No files in the original directory were deleted; they remain in place."));
         result.put("data", data);
         return result;
     }
@@ -91,7 +93,9 @@ public class StorageLocationController {
             @RequestBody MoveRequest request) {
         requireLocalDesktop(sessionId);
         if (!entitlementService.isEnabled(FeatureCatalog.STAGE_UNLIMITED)) {
-            throw new IllegalArgumentException("自选存储位置需要先解锁「文件缓存区无限版」");
+            throw new IllegalArgumentException(LangText.of(
+                    "自选存储位置需要先解锁「文件缓存区无限版」",
+                    "Choosing a custom storage location requires unlocking the File Staging Area Unlimited edition first"));
         }
         Map<String, Object> data;
         try {
@@ -105,7 +109,8 @@ public class StorageLocationController {
         }
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "已迁移。原目录保留为备份，确认无误后可自行删除。");
+        result.put("message", LangText.of("已迁移。原目录保留为备份，确认无误后可自行删除。",
+                "Migration complete. The original directory is kept as a backup; you may delete it yourself once you've confirmed everything is correct."));
         result.put("data", data);
         return result;
     }
@@ -115,7 +120,7 @@ public class StorageLocationController {
             throw new UnauthorizedException("请先登录");
         }
         if (!localMode) {
-            throw new IllegalArgumentException("该功能仅在本机单机版可用");
+            throw new IllegalArgumentException(LangText.of("该功能仅在本机单机版可用", "This feature is only available in the local desktop edition"));
         }
     }
 
