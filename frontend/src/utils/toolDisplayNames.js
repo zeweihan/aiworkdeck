@@ -264,6 +264,9 @@ const NAMES = {
   litigation_reference: { zh: '查阅制图规范', en: 'Read diagram standard' },
   litigation_checkpoint: { zh: '出图前确认', en: 'Confirm before drawing' },
   litigation_render: { zh: '生成诉讼图', en: 'Draw litigation diagram' },
+  // 会议录音
+  meeting_list_recordings: { zh: '列出会议录音', en: 'List meeting recordings' },
+  meeting_get_transcript: { zh: '读取会议转写稿', en: 'Read meeting transcript' },
 }
 
 // code 可以是纯工具名，也可以是 <tool_code> 里的 `tool_name({...})` 完整调用串。

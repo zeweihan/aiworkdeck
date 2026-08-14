@@ -54,6 +54,19 @@ export const LEFT_SIDEBAR_PLUGINS = [
     ]
   },
   {
+    key: 'meeting-recorder',
+    label: '会议录音',
+    // 对应 skill.yml 的 enabled_by_default:false——默认不装，广场启用后才出现在左栏。
+    requiresSkill: 'meeting-recorder',
+    // 麦克风
+    svgPaths: [
+      { d: 'M12 2a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V5a3 3 0 0 1 3-3Z' },
+      { d: 'M19 10v1a7 7 0 0 1-14 0v-1' },
+      { d: 'M12 18v4' },
+      { d: 'M8 22h8' }
+    ]
+  },
+  {
     key: 'search',
     label: t('config.sidebar.search'),
     svgPaths: [

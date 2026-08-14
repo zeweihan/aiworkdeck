@@ -4,6 +4,7 @@ import { openFolderFlow, openFileFlow, openLocalRootPath, openLocalFilePath } fr
 import { track } from '@/utils/telemetryClient.js'
 import { host, isDesktopHost } from '@/services/host.js'
 import { mountFeedbackWidget } from '@/utils/feedbackWidget.js'
+import { mountRecordingIndicator } from '@/utils/recordingIndicator.js'
 import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
 
@@ -26,6 +27,8 @@ export default {
     try { uni.$on(APP_LANGUAGE_EVENT, syncLanguageMirrors) } catch (e) { /* ignore */ }
     // 常驻反馈浮窗：挂在页面树之外，全应用一个实例（见 utils/feedbackWidget.js）
     mountFeedbackWidget()
+    // 会议「录音中」浮动指示器：同一模式，录音时才显形（见 utils/recordingIndicator.js）
+    mountRecordingIndicator()
     // 埋点：页面路由唯一收口（全仓 50 处 navigateTo/reLaunch 直调，拦截器一处全覆盖）；
     // 只记页面路径枚举（pages.json 里的 13 个页面，2026-08-08 三级导航加了
     // project-list 与 project-home 两页），query 参数不采集

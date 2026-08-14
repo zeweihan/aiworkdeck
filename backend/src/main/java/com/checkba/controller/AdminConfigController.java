@@ -103,6 +103,22 @@ public class AdminConfigController {
     @Value("${bocha.api.key:}")
     private String defaultBochaApiKey;
 
+    // 会议转写默认值（通义听悟 + OSS，与 MeetingTranscriptionService 同源）
+    @Value("${meeting.asr.access-key-id:}")
+    private String defaultMeetingAccessKeyId;
+
+    @Value("${meeting.asr.access-key-secret:}")
+    private String defaultMeetingAccessKeySecret;
+
+    @Value("${meeting.asr.app-key:}")
+    private String defaultMeetingAppKey;
+
+    @Value("${meeting.oss.bucket:}")
+    private String defaultMeetingOssBucket;
+
+    @Value("${meeting.oss.endpoint:}")
+    private String defaultMeetingOssEndpoint;
+
     // ElevenLabs 默认值
     @Value("${external.elevenlabs.api-key:}")
     private String defaultElevenLabsApiKey;
@@ -184,6 +200,13 @@ public class AdminConfigController {
     // 博查搜索（Bocha AI）
     private static final String KEY_BOCHA_API_KEY = "external.bocha.apiKey";
 
+    // 会议转写（键名与 MeetingTranscriptionService.KEY_* 一致，勿改单侧）
+    private static final String KEY_MEETING_ACCESS_KEY_ID = com.checkba.service.meeting.MeetingTranscriptionService.KEY_ACCESS_KEY_ID;
+    private static final String KEY_MEETING_ACCESS_KEY_SECRET = com.checkba.service.meeting.MeetingTranscriptionService.KEY_ACCESS_KEY_SECRET;
+    private static final String KEY_MEETING_APP_KEY = com.checkba.service.meeting.MeetingTranscriptionService.KEY_APP_KEY;
+    private static final String KEY_MEETING_OSS_BUCKET = com.checkba.service.meeting.MeetingTranscriptionService.KEY_OSS_BUCKET;
+    private static final String KEY_MEETING_OSS_ENDPOINT = com.checkba.service.meeting.MeetingTranscriptionService.KEY_OSS_ENDPOINT;
+
     // ElevenLabs
     private static final String KEY_ELEVENLABS_API_KEY = "external.elevenlabs.apiKey";
     private static final String KEY_ELEVENLABS_BASE_URL = "external.elevenlabs.baseUrl";
@@ -232,6 +255,12 @@ public class AdminConfigController {
 
         // 博查搜索
         defaults.put(KEY_BOCHA_API_KEY, defaultBochaApiKey);
+
+        defaults.put(KEY_MEETING_ACCESS_KEY_ID, defaultMeetingAccessKeyId);
+        defaults.put(KEY_MEETING_ACCESS_KEY_SECRET, defaultMeetingAccessKeySecret);
+        defaults.put(KEY_MEETING_APP_KEY, defaultMeetingAppKey);
+        defaults.put(KEY_MEETING_OSS_BUCKET, defaultMeetingOssBucket);
+        defaults.put(KEY_MEETING_OSS_ENDPOINT, defaultMeetingOssEndpoint);
 
         // ElevenLabs
         defaults.put(KEY_ELEVENLABS_API_KEY, defaultElevenLabsApiKey);
@@ -292,6 +321,13 @@ public class AdminConfigController {
         ));
         external.setBocha(new BochaConfig(
                 all.get(KEY_BOCHA_API_KEY)
+        ));
+        external.setTingwu(new TingwuConfig(
+                all.get(KEY_MEETING_ACCESS_KEY_ID),
+                all.get(KEY_MEETING_ACCESS_KEY_SECRET),
+                all.get(KEY_MEETING_APP_KEY),
+                all.get(KEY_MEETING_OSS_BUCKET),
+                all.get(KEY_MEETING_OSS_ENDPOINT)
         ));
         external.setElevenLabs(new ElevenLabsConfig(
                 all.get(KEY_ELEVENLABS_API_KEY),
@@ -463,6 +499,13 @@ public class AdminConfigController {
             if (ext.getBocha() != null) {
                 putIfPresent(updates, KEY_BOCHA_API_KEY, ext.getBocha().getApiKey());
             }
+            if (ext.getTingwu() != null) {
+                putIfPresent(updates, KEY_MEETING_ACCESS_KEY_ID, ext.getTingwu().getAccessKeyId());
+                putIfPresent(updates, KEY_MEETING_ACCESS_KEY_SECRET, ext.getTingwu().getAccessKeySecret());
+                putIfPresent(updates, KEY_MEETING_APP_KEY, ext.getTingwu().getAppKey());
+                putIfPresent(updates, KEY_MEETING_OSS_BUCKET, ext.getTingwu().getOssBucket());
+                putIfPresent(updates, KEY_MEETING_OSS_ENDPOINT, ext.getTingwu().getOssEndpoint());
+            }
             if (ext.getElevenLabs() != null) {
                 putIfPresent(updates, KEY_ELEVENLABS_API_KEY, ext.getElevenLabs().getApiKey());
                 putIfPresent(updates, KEY_ELEVENLABS_BASE_URL, ext.getElevenLabs().getBaseUrl());
@@ -608,6 +651,7 @@ public class AdminConfigController {
         private AliyunOcrConfig aliyunOcr;
         private PkulawConfig pkulaw;
         private BochaConfig bocha;
+        private TingwuConfig tingwu;
         private ElevenLabsConfig elevenLabs;
 
         public OpenRouterConfig getOpenRouter() { return openRouter; }
@@ -622,8 +666,41 @@ public class AdminConfigController {
         public void setPkulaw(PkulawConfig pkulaw) { this.pkulaw = pkulaw; }
         public BochaConfig getBocha() { return bocha; }
         public void setBocha(BochaConfig bocha) { this.bocha = bocha; }
+        public TingwuConfig getTingwu() { return tingwu; }
+        public void setTingwu(TingwuConfig tingwu) { this.tingwu = tingwu; }
         public ElevenLabsConfig getElevenLabs() { return elevenLabs; }
         public void setElevenLabs(ElevenLabsConfig elevenLabs) { this.elevenLabs = elevenLabs; }
+    }
+
+    /** 会议转写（通义听悟 + OSS 中转）凭证五件套 */
+    public static class TingwuConfig {
+        private String accessKeyId;
+        private String accessKeySecret;
+        private String appKey;
+        private String ossBucket;
+        private String ossEndpoint;
+
+        public TingwuConfig() {}
+
+        public TingwuConfig(String accessKeyId, String accessKeySecret, String appKey,
+                            String ossBucket, String ossEndpoint) {
+            this.accessKeyId = accessKeyId;
+            this.accessKeySecret = accessKeySecret;
+            this.appKey = appKey;
+            this.ossBucket = ossBucket;
+            this.ossEndpoint = ossEndpoint;
+        }
+
+        public String getAccessKeyId() { return accessKeyId; }
+        public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
+        public String getAccessKeySecret() { return accessKeySecret; }
+        public void setAccessKeySecret(String accessKeySecret) { this.accessKeySecret = accessKeySecret; }
+        public String getAppKey() { return appKey; }
+        public void setAppKey(String appKey) { this.appKey = appKey; }
+        public String getOssBucket() { return ossBucket; }
+        public void setOssBucket(String ossBucket) { this.ossBucket = ossBucket; }
+        public String getOssEndpoint() { return ossEndpoint; }
+        public void setOssEndpoint(String ossEndpoint) { this.ossEndpoint = ossEndpoint; }
     }
 
     public static class QichachaConfig {

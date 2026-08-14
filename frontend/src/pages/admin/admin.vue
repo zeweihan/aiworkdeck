@@ -241,6 +241,54 @@
                 </view>
               </view>
 
+              <!-- 会议转写（通义听悟 + OSS 中转，会议录音插件使用） -->
+              <view class="provider-card">
+                <view class="provider-header">
+                  <text class="provider-name">会议转写（通义听悟）</text>
+                </view>
+                <view class="form-row">
+                  <text class="form-label">AccessKey ID</text>
+                  <input
+                    v-model="form.external.tingwu.accessKeyId"
+                    class="form-input"
+                    placeholder="阿里云 RAM AccessKeyId（需听悟与 OSS 权限）"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">AccessKey Secret</text>
+                  <input
+                    v-model="form.external.tingwu.accessKeySecret"
+                    class="form-input"
+                    password
+                    placeholder="阿里云 RAM AccessKeySecret"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">听悟 AppKey</text>
+                  <input
+                    v-model="form.external.tingwu.appKey"
+                    class="form-input"
+                    placeholder="通义听悟控制台创建项目后获得"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">OSS Bucket</text>
+                  <input
+                    v-model="form.external.tingwu.ossBucket"
+                    class="form-input"
+                    placeholder="私有 bucket 名（音频中转，转写完即删）"
+                  />
+                </view>
+                <view class="form-row">
+                  <text class="form-label">OSS Endpoint</text>
+                  <input
+                    v-model="form.external.tingwu.ossEndpoint"
+                    class="form-input"
+                    placeholder="如 oss-cn-beijing.aliyuncs.com"
+                  />
+                </view>
+              </view>
+
               <!-- ElevenLabs -->
               <view class="provider-card">
                 <view class="provider-header">
@@ -1432,6 +1480,7 @@ export default {
           aliyunOcr: { accessKeyId: '', accessKeySecret: '', endpoint: '', regionId: '', publicBaseUrl: '' },
           pkulaw: { token: '' },
           bocha: { apiKey: '' },
+          tingwu: { accessKeyId: '', accessKeySecret: '', appKey: '', ossBucket: '', ossEndpoint: '' },
           elevenLabs: { apiKey: '', baseUrl: '', modelId: '', defaultVoiceId: '' },
         },
         ai: {
@@ -2698,6 +2747,13 @@ export default {
             },
             bocha: {
               apiKey: data.external.bocha?.apiKey || '',
+            },
+            tingwu: {
+              accessKeyId: data.external.tingwu?.accessKeyId || '',
+              accessKeySecret: data.external.tingwu?.accessKeySecret || '',
+              appKey: data.external.tingwu?.appKey || '',
+              ossBucket: data.external.tingwu?.ossBucket || '',
+              ossEndpoint: data.external.tingwu?.ossEndpoint || '',
             },
             elevenLabs: {
               apiKey: data.external.elevenLabs?.apiKey || '',

@@ -24,6 +24,8 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 
 **语音 TTS**：`EasyVoicePane.vue`（api：getTtsVoices/generateTtsAudio）；desktop 本地 Kokoro 由 `desktop/main/services/kokoro-service.js` 管理；后端 `controller/TtsController.java`（/api/tts/voices、/generate）+ `service/TtsService.java`——`external.tts.provider`：elevenlabs（云端默认）| local（桌面捆绑 Kokoro，OpenAI 兼容 /v1，base-url=`external.tts.local-base-url`）。easyvoice Docker 段已停用。
 
+**录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写走通义听悟（说话人分离），详见 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
+
 **文件缓存区（左下角「文件暂存区」）**：`FileStagingArea.vue`（纯展示，用量条读 `usage` prop）+ `pages/project-overview/stagingArea.js`（方法组）。**物理形态是项目内名为 `__staging_area__` 的文件夹**，「加入缓存区」= `batchMoveFiles` 把已有项目文件移进去，没有独立的缓存区目录。
   **免费额度（PR-C）**：`service/quota/StageQuotaService.java`，未拥有 `stage.unlimited` 时上限 20 个文件 / 500MB。**实现是移入时拦截，已有文件一律不动**——`ProjectFileService.batchMove` 在循环前整体准入检查，超额抛 `StageQuotaExceededException` → GlobalExceptionHandler 转 `code=4003 + feature + usage`，前端 api.js 打 `err.quotaExceeded` 标记。移出方向永不拦截（否则用户无法自救）。跨项目 id 不参与计算（防越权探测文件大小）。**文件夹按它装的全部文件递归计数**（准入与用量同一口径）——文件树允许把整个文件夹拖进缓存区，只算 1 个条目 0 字节的话，套一层目录就能让两条额度同时失效。用量端点 `GET /api/projects/{id}/files/stage/usage?folderId=`，**folderId 是全局 id，必须 `checkFileInProject` 校验归属**（只验路径 projectId 的话能枚举他人项目任意目录的文件数与字节数）。与剪贴板同理，额度只在 local-mode 执行。
 
