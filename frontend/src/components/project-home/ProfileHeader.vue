@@ -3,8 +3,8 @@
     <text class="profile-project-name">{{ projectName }}</text>
 
     <view v-if="showGuide" class="profile-guide">
-      <text class="profile-guide-desc">这份案卷的档案还是空的。先把客户和事项类型填上，同事和客户点进来一眼就知道这是什么案子。</text>
-      <view v-if="canEdit" class="profile-guide-btn" @tap="startEdit('client')">开始填写</view>
+      <text class="profile-guide-desc">{{ $t('projects.profileEmptyGuideDesc') }}</text>
+      <view v-if="canEdit" class="profile-guide-btn" @tap="startEdit('client')">{{ $t('projects.startFilling') }}</view>
     </view>
 
     <view class="profile-fields">
@@ -18,7 +18,7 @@
           @change="onPickMatterType"
           @cancel="cancelEdit"
         >
-          <view class="profile-field-picker">{{ draft || '选择事项类型' }}</view>
+          <view class="profile-field-picker">{{ draft || $t('projects.selectMatterType') }}</view>
         </picker>
 
         <input
@@ -37,7 +37,7 @@
           class="profile-field-value"
           :class="{ 'profile-field-empty': !f.fieldValue, 'profile-field-weak': isWeak(f) }"
           @tap="startEdit(f.fieldKey)"
-        >{{ f.fieldValue || '未填写' }}</text>
+        >{{ f.fieldValue || $t('projects.notFilled') }}</text>
 
         <text v-if="hintOf(f)" class="profile-field-hint">{{ hintOf(f) }}</text>
       </view>
@@ -57,13 +57,15 @@
 // Plan 2 上线 AI 抽取后，把空态引导改回 AI 文案，并把按钮随抽取链路一起放出来。
 import { MATTER_TYPES } from '@/config/matterTypes.js'
 import { isProfileEmpty, profileFieldHint } from '@/utils/projectHomeFormat.js'
+import { t } from '@/i18n'
 
+// 语言切换 = 整页 reload，模块顶层调 t() 取到的静态文案是安全的（同 CONVENTIONS.md）
 const PLACEHOLDERS = {
-  client: '例如：北京某某科技有限公司',
-  matterType: '选择事项类型',
-  openedAt: '例如：2026-08-01',
-  nextStep: '例如：8 月 15 日前出尽调报告初稿',
-  counterparty: '例如：上海某某贸易有限公司',
+  client: t('projects.placeholderClient'),
+  matterType: t('projects.selectMatterType'),
+  openedAt: t('projects.placeholderOpenedAt'),
+  nextStep: t('projects.placeholderNextStep'),
+  counterparty: t('projects.placeholderCounterparty'),
 }
 
 export default {

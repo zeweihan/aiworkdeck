@@ -10,9 +10,9 @@
         <image class="nav-logo" src="/static/logo_full_v2.png" mode="heightFix" />
       </view>
       <view class="nav-right">
-        <text class="nav-item">使用指引</text>
-        <text class="nav-item">帮助中心</text>
-        <text class="nav-item">官网</text>
+        <text class="nav-item">{{ $t('account.guideNav') }}</text>
+        <text class="nav-item">{{ $t('account.helpCenterNav') }}</text>
+        <text class="nav-item">{{ $t('account.officialSiteNav') }}</text>
       </view>
     </view>
 
@@ -42,30 +42,30 @@
                 </view>
                 <view class="ide-explorer">
                   <view class="explorer-item">Project Alpha</view>
-                  <view class="explorer-item indent">立案文件</view>
-                  <view class="explorer-item indent active">尽职调查</view>
-                  <view class="explorer-item indent">法律意见书</view>
+                  <view class="explorer-item indent">{{ $t('account.demoCaseFiles') }}</view>
+                  <view class="explorer-item indent active">{{ $t('account.demoDueDiligence') }}</view>
+                  <view class="explorer-item indent">{{ $t('account.demoLegalOpinion') }}</view>
                 </view>
                 <view class="ide-editor">
                   <view class="editor-tabs">
-                    <view class="tab active">尽职调查报告.doc</view>
-                    <view class="tab">证据清单.xlsx</view>
+                    <view class="tab active">{{ $t('account.demoDiligenceReportDoc') }}</view>
+                    <view class="tab">{{ $t('account.demoEvidenceListXlsx') }}</view>
                   </view>
                   <view class="doc-area">
-                    <view class="doc-title">关于 Project Alpha 的法律尽职调查报告</view>
+                    <view class="doc-title">{{ $t('account.demoDocTitle') }}</view>
                     <view class="doc-meta">
-                      <text>致：客户委员会</text>
-                      <text style="margin-left: 20px;">日期：2025-12-17</text>
+                      <text>{{ $t('account.demoDocTo') }}</text>
+                      <text style="margin-left: 20px;">{{ $t('account.demoDocDate') }}</text>
                     </view>
                     <view class="doc-content">
                       <view class="doc-paragraph">
-                        <text>第一章 法律尽职调查概述</text>
+                        <text>{{ $t('account.demoChapterTitle') }}</text>
                       </view>
                       <view class="doc-paragraph text-body">
-                        <text>本次尽职调查旨在全面评估目标公司的法律合规性，包括但不限于公司设立与存续、主要资产、重大债权债务、税务合规等方面。</text>
+                        <text>{{ $t('account.demoParagraph1') }}</text>
                       </view>
                       <view class="doc-paragraph text-body">
-                        <text>我们查阅了目标公司提供的工商档案、合同文件及相关的政府批文，并对关键管理人员进行了访谈...</text>
+                        <text>{{ $t('account.demoParagraph2') }}</text>
                       </view>
                       <!-- Skeleton lines for "blank" look -->
                       <view class="skeleton-line" style="width: 90%"></view>
@@ -97,36 +97,36 @@
             <image class="card-logo" src="/static/iconmark_v2.png" mode="heightFix" />
             <view class="card-texts">
               <text class="product-name">AI Workdeck</text>
-              <text class="product-subtitle">一站式AI文档工作台</text>
+              <text class="product-subtitle">{{ $t('account.productSubtitle') }}</text>
             </view>
           </view>
 
           <!-- Tabs -->
           <view class="auth-tabs">
-            <view class="tab-btn" :class="{ active: activeTab === 'login' }" @tap="switchTab('login')">登录</view>
-            <view class="tab-btn" :class="{ active: activeTab === 'register' }" @tap="switchTab('register')">注册</view>
-            <view class="tab-btn" :class="{ active: activeTab === 'client' }" @tap="switchTab('client')">客户</view>
+            <view class="tab-btn" :class="{ active: activeTab === 'login' }" @tap="switchTab('login')">{{ $t('account.loginTab') }}</view>
+            <view class="tab-btn" :class="{ active: activeTab === 'register' }" @tap="switchTab('register')">{{ $t('account.registerTab') }}</view>
+            <view class="tab-btn" :class="{ active: activeTab === 'client' }" @tap="switchTab('client')">{{ $t('account.clientTab') }}</view>
             <view class="tab-indicator" :style="indicatorStyle"></view>
           </view>
 
           <!-- Login Form -->
           <view v-if="activeTab === 'login' && !smsStep" class="form-body swing-in">
             <view class="input-group">
-              <text class="label">用户名</text>
-              <input class="glass-input" type="text" v-model="loginForm.username" placeholder="请输入用户名" placeholder-class="placeholder-style" />
+              <text class="label">{{ $t('account.usernameLabel') }}</text>
+              <input class="glass-input" type="text" v-model="loginForm.username" :placeholder="$t('account.usernamePlaceholder')" placeholder-class="placeholder-style" />
             </view>
             <view class="input-group">
-              <text class="label">密码</text>
-              <input class="glass-input" type="password" v-model="loginForm.password" @confirm="handleLogin" placeholder="请输入密码" placeholder-class="placeholder-style" />
+              <text class="label">{{ $t('account.passwordLabel') }}</text>
+              <input class="glass-input" type="password" v-model="loginForm.password" @confirm="handleLogin" :placeholder="$t('account.passwordPlaceholder')" placeholder-class="placeholder-style" />
             </view>
             <view class="form-options">
                <view class="remember-me">
                  <checkbox style="transform:scale(0.7)" color="#5BD197" checked />
-                 <text>记住我</text>
+                 <text>{{ $t('account.rememberMe') }}</text>
                </view>
-               <text class="link-text">忘记密码?</text>
+               <text class="link-text">{{ $t('account.forgotPassword') }}</text>
             </view>
-            <button class="action-btn" :loading="loginLoading" @tap="handleLogin">登 录</button>
+            <button class="action-btn" :loading="loginLoading" @tap="handleLogin">{{ $t('account.loginBtn') }}</button>
           </view>
 
           <!-- Second Factor Step（登录二次验证：认证器 / 邮箱 / 短信） -->
@@ -134,51 +134,51 @@
             <view class="input-group">
               <text class="label">{{ secondFactorLabel }}</text>
               <text class="sms-hint">
-                {{ smsMethod === 'totp' ? '请输入认证器 App 上当前显示的 6 位验证码' : '验证码已发送至 ' + smsPhoneMasked }}
+                {{ smsMethod === 'totp' ? $t('account.totpHint') : $t('account.codeSentTo', { phone: smsPhoneMasked }) }}
               </text>
-              <input class="glass-input" type="number" maxlength="6" v-model="smsCodeInput" @confirm="handleSmsLogin" placeholder="请输入 6 位验证码" placeholder-class="placeholder-style" />
+              <input class="glass-input" type="number" maxlength="6" v-model="smsCodeInput" @confirm="handleSmsLogin" :placeholder="$t('account.enterSixDigitCode')" placeholder-class="placeholder-style" />
             </view>
             <view class="form-options">
-              <text class="link-text" @tap="backToPassword">返回</text>
+              <text class="link-text" @tap="backToPassword">{{ $t('account.backAction') }}</text>
               <text v-if="smsMethod !== 'totp'" class="link-text" :class="{ disabled: smsCountdown > 0 }" @tap="resendSmsCode">
-                {{ smsCountdown > 0 ? smsCountdown + 's 后可重发' : '重新发送' }}
+                {{ smsCountdown > 0 ? $t('account.resendCountdown', { count: smsCountdown }) : $t('account.resendCode') }}
               </text>
             </view>
-            <button class="action-btn" :loading="loginLoading" @tap="handleSmsLogin">验证并登录</button>
+            <button class="action-btn" :loading="loginLoading" @tap="handleSmsLogin">{{ $t('account.verifyAndLoginBtn') }}</button>
           </view>
 
           <!-- Register Form -->
           <view v-else-if="activeTab === 'register'" class="form-body swing-in">
             <view class="input-group">
-              <text class="label">用户名</text>
-              <input class="glass-input" type="text" v-model="registerForm.username" placeholder="6-20个字符" placeholder-class="placeholder-style" />
+              <text class="label">{{ $t('account.usernameLabel') }}</text>
+              <input class="glass-input" type="text" v-model="registerForm.username" :placeholder="$t('account.usernameLengthPlaceholder')" placeholder-class="placeholder-style" />
             </view>
             <view class="input-group">
-              <text class="label">显示名称</text>
-              <input class="glass-input" type="text" v-model="registerForm.displayName" placeholder="可选" placeholder-class="placeholder-style" />
+              <text class="label">{{ $t('account.displayNameLabel') }}</text>
+              <input class="glass-input" type="text" v-model="registerForm.displayName" :placeholder="$t('account.optionalPlaceholder')" placeholder-class="placeholder-style" />
             </view>
             <view class="input-group">
-              <text class="label">密码</text>
-              <input class="glass-input" type="password" v-model="registerForm.password" placeholder="至少6位" placeholder-class="placeholder-style" />
+              <text class="label">{{ $t('account.passwordLabel') }}</text>
+              <input class="glass-input" type="password" v-model="registerForm.password" :placeholder="$t('account.passwordMinLengthPlaceholder')" placeholder-class="placeholder-style" />
             </view>
             <view class="input-group">
-              <text class="label">确认密码</text>
-              <input class="glass-input" type="password" v-model="registerForm.passwordConfirm" @confirm="handleRegister" placeholder="再次输入密码" placeholder-class="placeholder-style" />
+              <text class="label">{{ $t('account.confirmPasswordLabel') }}</text>
+              <input class="glass-input" type="password" v-model="registerForm.passwordConfirm" @confirm="handleRegister" :placeholder="$t('account.confirmPasswordPlaceholder')" placeholder-class="placeholder-style" />
             </view>
-            <button class="action-btn" :loading="registerLoading" @tap="handleRegister">注 册</button>
+            <button class="action-btn" :loading="registerLoading" @tap="handleRegister">{{ $t('account.registerBtn') }}</button>
           </view>
 
           <!-- Client Form -->
           <view v-else class="form-body swing-in">
             <view class="input-group">
-              <text class="label">案卷访问码</text>
-              <input class="glass-input" type="text" v-model="clientForm.accessCode" @confirm="handleClientLogin" placeholder="请输入律师发给你的访问码" placeholder-class="placeholder-style" />
+              <text class="label">{{ $t('account.caseAccessCodeLabel') }}</text>
+              <input class="glass-input" type="text" v-model="clientForm.accessCode" @confirm="handleClientLogin" :placeholder="$t('account.caseAccessCodePlaceholder')" placeholder-class="placeholder-style" />
             </view>
-            <button class="action-btn" :loading="clientLoginLoading" @tap="handleClientLogin">进入案卷</button>
+            <button class="action-btn" :loading="clientLoginLoading" @tap="handleClientLogin">{{ $t('account.enterCaseBtn') }}</button>
           </view>
-          
+
           <view class="card-footer">
-            <text>让法律人聚焦专业判断</text>
+            <text>{{ $t('account.footerTagline') }}</text>
           </view>
         </view>
       </view>
@@ -245,9 +245,9 @@ export default {
   computed: {
     // 二次验证的方式由后端定（TOTP > 邮箱 > 短信），前端只负责说人话
     secondFactorLabel() {
-      if (this.smsMethod === 'totp') return '认证器验证';
-      if (this.smsMethod === 'mail') return '邮箱验证';
-      return '短信验证';
+      if (this.smsMethod === 'totp') return this.$t('account.totpVerificationLabel');
+      if (this.smsMethod === 'mail') return this.$t('account.mailVerificationLabel');
+      return this.$t('account.smsVerificationLabel');
     },
     deviceTransform() {
       // Logic:
@@ -360,14 +360,14 @@ export default {
         const masked = res.data && (res.data.emailMasked || res.data.phoneMasked);
         if (masked) this.smsPhoneMasked = masked;
         this.startSmsCountdown();
-        uni.showToast({ title: '验证码已发送', icon: 'none' });
+        uni.showToast({ title: this.$t('account.codeSentToast'), icon: 'none' });
       } catch (e) {
-        uni.showToast({ title: e.message || '发送失败', icon: 'none' });
+        uni.showToast({ title: e.message || this.$t('account.sendFailed'), icon: 'none' });
       }
     },
     async handleSmsLogin() {
       if (!this.smsCodeInput || this.smsCodeInput.length < 6) {
-        uni.showToast({ title: '请输入 6 位验证码', icon: 'none' });
+        uni.showToast({ title: this.$t('account.enterSixDigitCode'), icon: 'none' });
         return;
       }
       this.loginLoading = true;
@@ -377,11 +377,11 @@ export default {
           this.resetSmsStep();
           this.finishLogin(res);
         } else {
-          uni.showToast({ title: res.message || '验证失败', icon: 'none' });
+          uni.showToast({ title: res.message || this.$t('account.verifyFailed'), icon: 'none' });
         }
       } catch (error) {
         this.smsCodeInput = '';
-        uni.showToast({ title: error.message || '验证失败', icon: 'none' });
+        uni.showToast({ title: error.message || this.$t('account.verifyFailed'), icon: 'none' });
       } finally {
         this.loginLoading = false;
       }
@@ -389,14 +389,14 @@ export default {
     finishLogin(res) {
       saveSession(res.data.sessionId, res.data.user);
       if (!getSessionId()) throw new Error('Session Save Failed');
-      uni.showToast({ title: '登录成功', icon: 'success' });
+      uni.showToast({ title: this.$t('account.loginSuccessToast'), icon: 'success' });
       setTimeout(() => {
         uni.reLaunch({ url: '/pages/project-list/project-list' });
       }, 300);
     },
     async handleClientLogin() {
       if (!this.clientForm.accessCode) {
-        uni.showToast({ title: '请输入律师发给你的访问码', icon: 'none' });
+        uni.showToast({ title: this.$t('account.caseAccessCodePlaceholder'), icon: 'none' });
         return;
       }
       this.clientLoginLoading = true;
@@ -404,23 +404,23 @@ export default {
         const res = await clientLogin(this.clientForm.accessCode, null);
         if (res.code === 0 && res.data) {
           saveSession(res.data.sessionId, res.data.user);
-          uni.showToast({ title: '登录成功', icon: 'success' });
+          uni.showToast({ title: this.$t('account.loginSuccessToast'), icon: 'success' });
           const projectId = res.data.projectId;
           setTimeout(() => {
             uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${projectId}` });
           }, 300);
         } else {
-          uni.showToast({ title: res.message || '登录失败', icon: 'none' });
+          uni.showToast({ title: res.message || this.$t('account.loginFailedToast'), icon: 'none' });
         }
       } catch (e) {
-        uni.showToast({ title: e.message || '登录失败', icon: 'none' });
+        uni.showToast({ title: e.message || this.$t('account.loginFailedToast'), icon: 'none' });
       } finally {
         this.clientLoginLoading = false;
       }
     },
     async handleLogin() {
       if (!this.loginForm.username || !this.loginForm.password) {
-        uni.showToast({ title: '请输入用户名和密码', icon: 'none' });
+        uni.showToast({ title: this.$t('account.enterUsernamePassword'), icon: 'none' });
         return;
       }
       this.loginLoading = true;
@@ -429,7 +429,7 @@ export default {
         if (res.code === 0 && res.data) {
           this.finishLogin(res);
         } else {
-          uni.showToast({ title: res.message || '登录失败', icon: 'none' });
+          uni.showToast({ title: res.message || this.$t('account.loginFailedToast'), icon: 'none' });
         }
       } catch (error) {
         if (error && error.smsRequired) {
@@ -442,22 +442,22 @@ export default {
           return;
         }
         console.error('Login Failed', error);
-        uni.showToast({ title: error.message || '登录失败', icon: 'none' });
+        uni.showToast({ title: error.message || this.$t('account.loginFailedToast'), icon: 'none' });
       } finally {
         this.loginLoading = false;
       }
     },
     async handleRegister() {
       if (!this.registerForm.username || !this.registerForm.password) {
-        uni.showToast({ title: '请输入用户名和密码', icon: 'none' });
+        uni.showToast({ title: this.$t('account.enterUsernamePassword'), icon: 'none' });
         return;
       }
       if (this.registerForm.password.length < 6) {
-        uni.showToast({ title: '密码长度不能少于6位', icon: 'none' });
+        uni.showToast({ title: this.$t('account.passwordTooShort'), icon: 'none' });
         return;
       }
       if (this.registerForm.password !== this.registerForm.passwordConfirm) {
-        uni.showToast({ title: '两次输入的密码不一致', icon: 'none' });
+        uni.showToast({ title: this.$t('account.passwordMismatch'), icon: 'none' });
         return;
       }
       this.registerLoading = true;
@@ -469,16 +469,16 @@ export default {
         );
         if (res.code === 0 && res.data) {
           saveSession(res.data.sessionId, res.data.user);
-          uni.showToast({ title: '注册成功', icon: 'success' });
+          uni.showToast({ title: this.$t('account.registerSuccessToast'), icon: 'success' });
           setTimeout(() => {
             uni.reLaunch({ url: '/pages/project-list/project-list' });
           }, 500);
         } else {
-          uni.showToast({ title: res.message || '注册失败', icon: 'none' });
+          uni.showToast({ title: res.message || this.$t('account.registerFailedToast'), icon: 'none' });
         }
       } catch (error) {
         console.error('Register Failed', error);
-        uni.showToast({ title: error.message || '注册失败', icon: 'none' });
+        uni.showToast({ title: error.message || this.$t('account.registerFailedToast'), icon: 'none' });
       } finally {
         this.registerLoading = false;
       }

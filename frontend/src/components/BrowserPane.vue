@@ -1,31 +1,31 @@
 <template>
   <view class="browser-pane">
     <view class="browser-toolbar">
-      <view class="browser-btn" @tap="goBack" :class="{ disabled: !canGoBack }" title="后退">
+      <view class="browser-btn" @tap="goBack" :class="{ disabled: !canGoBack }" :title="$t('panels.bpBack')">
         <text class="btn-icon">←</text>
       </view>
-      <view class="browser-btn" @tap="goForward" :class="{ disabled: !canGoForward }" title="前进">
+      <view class="browser-btn" @tap="goForward" :class="{ disabled: !canGoForward }" :title="$t('panels.bpForward')">
         <text class="btn-icon">→</text>
       </view>
-      <view class="browser-btn" @tap="reload" title="刷新">
+      <view class="browser-btn" @tap="reload" :title="$t('panels.bpRefresh')">
         <text class="btn-icon">↻</text>
       </view>
 
       <input
         v-model="inputUrl"
         class="url-input"
-        placeholder="输入网址（https://...）"
+        :placeholder="$t('panels.bpUrlPlaceholder')"
         @confirm="navigate(inputUrl)"
       />
-      <view class="browser-btn primary" @tap="navigate(inputUrl)" title="打开">
+      <view class="browser-btn primary" @tap="navigate(inputUrl)" :title="$t('panels.bpOpen')">
         <text class="btn-icon">↵</text>
       </view>
 
-      <view class="browser-btn" @tap="openInAppNewTab" title="新标签页">
+      <view class="browser-btn" @tap="openInAppNewTab" :title="$t('panels.bpNewTab')">
         <text class="btn-icon">⧉</text>
       </view>
 
-      <view class="browser-btn" :class="{ primary: isMobileMode }" @tap="toggleMobileMode" :title="isMobileMode ? '切换回桌面版' : '切换移动版 (解决网页过宽)'">
+      <view class="browser-btn" :class="{ primary: isMobileMode }" @tap="toggleMobileMode" :title="isMobileMode ? $t('panels.bpSwitchToDesktop') : $t('panels.bpSwitchToMobile')">
         <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in (isMobileMode ? ICONS.phone : ICONS.desktop)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
       </view>
     </view>
@@ -51,7 +51,7 @@
       <!-- 非 H5：占位（后续可扩展 web-view） -->
       <!-- #ifndef H5 -->
       <view class="browser-fallback">
-        <text>当前平台暂不支持浏览器控件（仅 H5）</text>
+        <text>{{ $t('panels.bpUnsupportedPlatform') }}</text>
       </view>
       <!-- #endif -->
     </view>

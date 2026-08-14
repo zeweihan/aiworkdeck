@@ -45,6 +45,12 @@
 | 向导 | Setup Wizard | |
 | 解锁 | Unlock | |
 | 试用码 | Trial Code | |
+| 授权（桌面激活） | License | 设置里的授权卡片；「解除授权」 → Deactivate License |
+| 正式版 | Full Edition | 桌面授权 edition |
+| 试用版 | Trial Edition | |
+| 插件访问令牌 | Plugin Access Token | Office 插件等外部客户端连接本机的凭据 |
+| 认证器 | Authenticator | TOTP 登录二次验证 |
+| 案卷访问码 | Case File Access Code | 客户登录入口 |
 | 无限版 | Unlimited edition | 缓存区/存储容量档位；「解锁无限版」 → Unlock the Unlimited edition |
 | 额度 | Credits | 站内唯一计价单位，不译成 quota |
 | 平台通道（AI Workdeck 云端） | AI Workdeck Cloud | |
@@ -67,6 +73,8 @@
 | 只读预览 | Read-only Preview | |
 | 版本记录 | Version History | |
 | 工作段 | Work Session | |
+| 重要版本 | Milestone | 版本时间线里的星标版本；「标为重要版本」 → Mark as Milestone |
+| 主线 | Mainline | 「回到主线工作」 → Return to Mainline |
 | 时间线 | Timeline | |
 | 退回（版本） | Revert | |
 | 丢弃工作 | Discard Changes | |

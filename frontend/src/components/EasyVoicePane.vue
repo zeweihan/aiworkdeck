@@ -3,12 +3,12 @@
     <!-- Text Input Section -->
     <view class="section no-border">
       <view class="section-header">
-        <text class="section-title">文本内容</text>
+        <text class="section-title">{{ $t('panels.evTextContentTitle') }}</text>
         <view class="section-actions">
-           <view class="mini-btn" @tap="importFromDoc" title="从当前文档导入">
-             <text>导入</text>
+           <view class="mini-btn" @tap="importFromDoc" :title="$t('panels.evImportTitle')">
+             <text>{{ $t('panels.evImport') }}</text>
            </view>
-           <view class="mini-btn" @tap="text = ''" title="清空">
+           <view class="mini-btn" @tap="text = ''" :title="$t('panels.evClearTitle')">
              <svg class="btn-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
            </view>
         </view>
@@ -16,23 +16,23 @@
       <textarea
         class="voice-textarea"
         v-model="text"
-        placeholder="在此输入要转换的文本..."
+        :placeholder="$t('panels.evTextPlaceholder')"
         maxlength="-1"
       />
     </view>
 
     <!-- Settings Section -->
     <view class="section no-border">
-      <text class="section-title">语音设置</text>
-      
+      <text class="section-title">{{ $t('panels.evVoiceSettingsTitle') }}</text>
+
       <!-- Voice Selection (Custom Dropdown) -->
       <view class="form-item relative">
-        <text class="label">说话人</text>
-        
+        <text class="label">{{ $t('panels.evSpeakerLabel') }}</text>
+
         <view class="voice-select-trigger" @tap="toggleVoiceDropdown">
           <view class="selected-text">
              <text v-if="selectedVoiceLabel">{{ selectedVoiceLabel }}</text>
-             <text v-else class="placeholder">选择语音...</text>
+             <text v-else class="placeholder">{{ $t('panels.evSelectVoicePlaceholder') }}</text>
           </view>
           <text class="select-arrow">▼</text>
         </view>
@@ -40,17 +40,17 @@
         <!-- Dropdown Drawer -->
         <view v-if="showVoiceDropdown" class="voice-dropdown" @tap.stop>
            <view class="voice-search-box">
-              <input 
-                v-model="voiceSearch" 
-                class="voice-search-input" 
-                placeholder="搜索语音..." 
+              <input
+                v-model="voiceSearch"
+                class="voice-search-input"
+                :placeholder="$t('panels.evSearchVoicePlaceholder')"
                 :focus="true"
               />
            </view>
            <scroll-view scroll-y class="voice-list-scroll">
-              <view 
-                 v-for="voice in filteredVoices" 
-                 :key="voice.voiceId" 
+              <view
+                 v-for="voice in filteredVoices"
+                 :key="voice.voiceId"
                  class="voice-option"
                  :class="{ active: selectedVoiceId === voice.voiceId }"
                  @tap="selectVoice(voice)"
@@ -62,7 +62,7 @@
                  <text class="voice-locale-text">{{ voice.locale }}</text>
               </view>
               <view v-if="filteredVoices.length === 0" class="empty-tip">
-                 无匹配语音
+                 {{ $t('panels.evNoMatchVoice') }}
               </view>
            </scroll-view>
         </view>
@@ -72,7 +72,7 @@
       <!-- Rate -->
       <view class="form-item">
         <view class="slider-header">
-           <text class="label">语速</text>
+           <text class="label">{{ $t('panels.evRateLabel') }}</text>
            <text class="value-text">{{ rate }}%</text>
         </view>
         <slider 
@@ -91,7 +91,7 @@
       <!-- Pitch -->
       <view class="form-item">
         <view class="slider-header">
-           <text class="label">语调</text>
+           <text class="label">{{ $t('panels.evPitchLabel') }}</text>
            <text class="value-text">{{ pitch }}Hz</text>
         </view>
         <slider 
@@ -110,7 +110,7 @@
       <!-- Volume -->
        <view class="form-item">
         <view class="slider-header">
-           <text class="label">音量</text>
+           <text class="label">{{ $t('panels.evVolumeLabel') }}</text>
            <text class="value-text">{{ volume }}%</text>
         </view>
          <slider 
@@ -129,30 +129,30 @@
 
     <!-- Generate Action -->
     <view class="action-area">
-      <button 
-        class="workdeck-btn workdeck-btn-primary full-width" 
+      <button
+        class="workdeck-btn workdeck-btn-primary full-width"
         @tap="handleGenerate"
         :disabled="generating || !text"
         :loading="generating"
       >
-        {{ generating ? '生成中...' : '开始生成' }}
+        {{ generating ? $t('panels.evGenerating') : $t('panels.evGenerate') }}
       </button>
     </view>
 
     <!-- Result Area -->
     <view v-if="audioUrl" class="section no-border result-area">
       <view class="result-header">
-         <text class="result-title">生成结果</text>
-         <text class="download-link" @tap="downloadAudio">下载</text>
+         <text class="result-title">{{ $t('panels.evResultTitle') }}</text>
+         <text class="download-link" @tap="downloadAudio">{{ $t('panels.evDownload') }}</text>
       </view>
-      
+
       <!-- Custom Audio Player -->
       <view class="custom-player" :class="{ playing: isPlaying }">
           <view class="play-btn" @tap="togglePlay">
               <text class="play-icon">{{ isPlaying ? '⏸' : '▶' }}</text>
           </view>
           <view class="player-info">
-              <text class="player-status">{{ isPlaying ? '正在播放...' : '点击播放试听' }}</text>
+              <text class="player-status">{{ isPlaying ? $t('panels.evPlaying') : $t('panels.evClickToPlay') }}</text>
           </view>
       </view>
     </view>
@@ -315,16 +315,16 @@ export default {
              this.audioInstance.onerror = (e) => {
                 console.error('Audio playback error', e)
                 this.isPlaying = false
-                uni.showToast({ title: '播放失败', icon: 'none' })
+                uni.showToast({ title: this.$t('panels.evPlayFailed'), icon: 'none' })
             }
         }
-        
+
         if (this.isPlaying) {
             this.audioInstance.pause()
         } else {
             this.audioInstance.play().catch(e => {
                 console.error('Play failed', e)
-                uni.showToast({ title: '无法播放', icon: 'none' })
+                uni.showToast({ title: this.$t('panels.evCannotPlay'), icon: 'none' })
             })
         }
     },
@@ -358,7 +358,7 @@ export default {
         }
       } catch (e) {
         console.error('[EasyVoicePane] Failed to load voices', e)
-        uni.showToast({ title: '加载语音列表失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.evLoadVoicesFailed'), icon: 'none' })
       }
     },
     onRateChange(e) {
@@ -377,9 +377,9 @@ export default {
                 // Split into sentences for karaoke highlighting
                 this.sentences = this.splitTextToSentences(content)
                 console.log('[EasyVoice] Split into', this.sentences.length, 'sentences')
-                uni.showToast({ title: '已导入文档内容', icon: 'success' })
+                uni.showToast({ title: this.$t('panels.evImportedDocSuccess'), icon: 'success' })
             } else {
-                 uni.showToast({ title: '无法获取文档内容', icon: 'none' })
+                 uni.showToast({ title: this.$t('panels.evCannotGetDocContent'), icon: 'none' })
             }
         };
         // Keep global emit for potential other listeners
@@ -424,7 +424,7 @@ export default {
           // TTS 未配置：引导去设置而非报"生成失败"（#18 T7）
           promptFeatureNotConfigured(e)
         } else {
-          uni.showToast({ title: '生成失败', icon: 'none' })
+          uni.showToast({ title: this.$t('panels.evGenerateFailed'), icon: 'none' })
         }
       } finally {
         this.generating = false

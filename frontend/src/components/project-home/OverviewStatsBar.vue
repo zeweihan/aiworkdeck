@@ -1,21 +1,21 @@
 <template>
   <view class="overview-stats-bar">
-    <view v-if="loading" class="stats-loading">正在读取项目情况…</view>
+    <view v-if="loading" class="stats-loading">{{ $t('projects.statsLoadingHint') }}</view>
     <view v-else class="stats-tiles">
       <view class="stat-tile">
         <text class="stat-value">{{ fileLabel }}</text>
         <text class="stat-caption">{{ fileCaption }}</text>
       </view>
       <view class="stat-tile">
-        <text class="stat-value">{{ folderCount }} 个文件夹</text>
-        <text class="stat-caption">不含系统目录</text>
+        <text class="stat-value">{{ $t('projects.folderCountLabel', { count: folderCount }) }}</text>
+        <text class="stat-caption">{{ $t('projects.folderCaption') }}</text>
       </view>
       <view class="stat-tile">
-        <text class="stat-value">{{ memberCount }} 位参与人</text>
-        <text class="stat-caption">含负责人</text>
+        <text class="stat-value">{{ $t('projects.memberCountLabel', { count: memberCount }) }}</text>
+        <text class="stat-caption">{{ $t('projects.memberCaption') }}</text>
       </view>
       <view class="stat-tile">
-        <text class="stat-value">{{ runCount }} 个后台任务</text>
+        <text class="stat-value">{{ $t('projects.runCountLabel', { count: runCount }) }}</text>
         <text class="stat-caption">{{ runCaption }}</text>
       </view>
     </view>
@@ -41,7 +41,7 @@ export default {
       return fileCountLabel(this.stats)
     },
     fileCaption() {
-      return this.stats.isLocalRoot ? '本机文件夹，取自最近一次对账' : '不含缓存区与 AI 生成目录'
+      return this.stats.isLocalRoot ? this.$t('projects.localRootCaption') : this.$t('projects.defaultFileCaption')
     },
     folderCount() {
       return Number(this.stats.folderCount || 0)
@@ -56,9 +56,9 @@ export default {
       return this.runs.length
     },
     runCaption() {
-      if (!this.runs.length) return '当前没有在跑的任务'
+      if (!this.runs.length) return this.$t('projects.noRunningTasks')
       const label = runStatusLabel(this.runs[0].status)
-      return label ? '最近一个：' + label : '最近一个：已结束'
+      return this.$t('projects.recentRunPrefix', { status: label || this.$t('projects.runFinished') })
     },
   },
 }

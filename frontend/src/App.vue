@@ -48,7 +48,7 @@ export default {
         const action = data && data.action
         if (!action) return
         if (!getSessionId()) {
-          uni.showToast({ title: '请先登录', icon: 'none' })
+          uni.showToast({ title: this.$t('shell.pleaseLoginFirst'), icon: 'none' })
           return
         }
         try {
@@ -66,7 +66,7 @@ export default {
             else await openLocalFilePath(data.path)
           }
         } catch (e) {
-          uni.showToast({ title: (e && e.message) || '操作失败', icon: 'none' })
+          uni.showToast({ title: (e && e.message) || this.$t('shell.menuActionFailed'), icon: 'none' })
         }
       })
     }
@@ -85,17 +85,17 @@ export default {
           const path = host.fs.getPathForFile(e.dataTransfer.files[0])
           if (!path) return
           if (!getSessionId()) {
-            uni.showToast({ title: '请先登录', icon: 'none' })
+            uni.showToast({ title: this.$t('shell.pleaseLoginFirst'), icon: 'none' })
             return
           }
           uni.showModal({
-            title: '打开文件夹',
-            content: `把「${entry.name}」作为项目打开？`,
-            confirmText: '打开',
+            title: this.$t('shell.openFolderTitle'),
+            content: this.$t('shell.openFolderConfirm', { name: entry.name }),
+            confirmText: this.$t('shell.open'),
             success: (r) => {
               if (r.confirm) {
                 openLocalRootPath(path).catch((err) => {
-                  uni.showToast({ title: (err && err.message) || '打开失败', icon: 'none' })
+                  uni.showToast({ title: (err && err.message) || this.$t('shell.openFolderFailed'), icon: 'none' })
                 })
               }
             },

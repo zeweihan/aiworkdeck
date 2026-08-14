@@ -3,13 +3,13 @@
     <template v-if="!linked">
       <text class="cloud-text cloud-unlinked">{{ unlinkedText }}</text>
       <text class="cloud-open-link" @tap="open(hasConnection ? 'casefile' : 'library')">
-        {{ hasConnection ? '放进案件库' : '连接团队案件库' }}
+        {{ hasConnection ? $t('version.addToLibrary') : $t('version.connectLibrary') }}
       </text>
     </template>
     <template v-else>
       <text class="cloud-dot" :class="stateClass"></text>
       <text class="cloud-text">{{ stateText }}</text>
-      <text class="cloud-open-link" @tap="open('casefile')">打开协作</text>
+      <text class="cloud-open-link" @tap="open('casefile')">{{ $t('version.openCollab') }}</text>
     </template>
   </view>
 </template>
@@ -44,15 +44,15 @@ export default {
     },
     unlinkedText() {
       return this.hasConnection
-        ? '这份案卷还没放进团队案件库'
-        : '还没连团队案件库，这份案卷只在你这台电脑上'
+        ? this.$t('version.notInLibrary')
+        : this.$t('version.noConnectionLocalOnly')
     },
     stateText() {
-      if (this.conflictPending) return '有文件等你做选择'
-      if (this.cloud.offline) return '暂时连不上案件库'
-      if (this.cloud.remoteAhead) return '同事交了新稿'
-      if (this.cloud.pendingUpload || this.working) return '有改动还没交稿'
-      return '和大家的稿一致'
+      if (this.conflictPending) return this.$t('version.pendingChoice')
+      if (this.cloud.offline) return this.$t('version.libraryUnreachable')
+      if (this.cloud.remoteAhead) return this.$t('version.colleagueSubmittedNew')
+      if (this.cloud.pendingUpload || this.working) return this.$t('version.hasUnsubmittedChanges')
+      return this.$t('version.inSyncWithTeam')
     },
     stateClass() {
       if (this.conflictPending || this.cloud.offline) return 'cloud-dot-yellow'

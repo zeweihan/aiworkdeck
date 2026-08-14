@@ -61,7 +61,7 @@ export default {
     inline: 'Inline',
     sourceLabel: 'Source document: {name}',
     targetLabel: 'New document: {name}',
-    loadingContent: 'Loading document content...',
+    loadingContent: 'Loading document content…',
     retry: 'Retry',
     sourceDocDefault: 'Source Document',
     newDocDefault: 'New Document',

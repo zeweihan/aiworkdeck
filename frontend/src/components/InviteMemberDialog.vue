@@ -2,25 +2,25 @@
   <view v-if="visible" class="workdeck-dialog-mask" @tap="close">
     <view class="workdeck-dialog" @tap.stop>
       <view class="workdeck-dialog-header">
-        <text class="workdeck-dialog-title">把人加进这份案卷</text>
+        <text class="workdeck-dialog-title">{{ $t('version.addPeopleTitle') }}</text>
         <view class="modal-close" @tap="close">×</view>
       </view>
 
       <!-- Tabs -->
       <view class="dialog-tabs">
-        <view 
-          class="dialog-tab" 
+        <view
+          class="dialog-tab"
           :class="{ active: activeTab === 'MEMBER' }"
           @tap="activeTab = 'MEMBER'"
         >
-          所里同事
+          {{ $t('version.tabColleague') }}
         </view>
-        <view 
-          class="dialog-tab" 
+        <view
+          class="dialog-tab"
           :class="{ active: activeTab === 'CLIENT' }"
           @tap="activeTab = 'CLIENT'"
         >
-          客户
+          {{ $t('version.tabClient') }}
         </view>
         <!-- Border bottom line -->
         <view class="tab-line" :style="{ left: activeTab === 'MEMBER' ? '0%' : '50%' }"></view>
@@ -30,16 +30,16 @@
         <!-- Internal Member Form -->
         <view v-if="activeTab === 'MEMBER'">
           <view class="form-group">
-            <text class="form-label">账号</text>
-            <input 
-              class="workdeck-input" 
-              v-model="memberForm.username" 
-              placeholder="输入同事的账号" 
+            <text class="form-label">{{ $t('version.accountLabel') }}</text>
+            <input
+              class="workdeck-input"
+              v-model="memberForm.username"
+              :placeholder="$t('version.colleagueUsernamePlaceholderShort')"
               :focus="activeTab === 'MEMBER'"
             />
           </view>
           <view class="form-group">
-            <text class="form-label">他在这份案卷里能做什么</text>
+            <text class="form-label">{{ $t('version.memberPermissionLabel') }}</text>
             <view class="role-options">
                <view
                  v-for="r in ASSIGNABLE_ROLES"
@@ -60,54 +60,51 @@
                同一套角色标签，界面上再无区别信号——只在库里加、没在这里加（或反过来）都
                会让同事白等，所以必须把这句话写在动作旁边。 -->
           <text class="role-hint">
-            这里加的是这份案卷在本机的参与人。案卷已经放进团队案件库的话，还要在顶栏「协作」
-            的「案件参与人」里再加一次，同事才取得到这份案卷。
+            {{ $t('version.localMemberDualTrackHint') }}
           </text>
         </view>
 
         <!-- External Client Form -->
         <view v-else>
            <view class="invite-desc-box">
-             <text class="invite-desc">给客户一串访问码。客户在网页上输入它就能进这份案卷，把你要的材料传上来；
-             他只看得到这一份案卷，你和同事的往来记录、底稿、内部意见他都看不到。</text>
+             <text class="invite-desc">{{ $t('version.clientInviteDesc') }}</text>
            </view>
-           
+
            <view v-if="!clientInviteCode">
                <view class="form-group">
-                 <text class="form-label">客户称呼</text>
-                 <input 
-                   class="workdeck-input" 
-                   v-model="clientName" 
-                   placeholder="例如「某某公司 张总」（可不填）" 
+                 <text class="form-label">{{ $t('version.clientNameLabel') }}</text>
+                 <input
+                   class="workdeck-input"
+                   v-model="clientName"
+                   :placeholder="$t('version.clientNamePlaceholder')"
                  />
                </view>
            </view>
 
            <view v-else class="code-result-box">
-               <text class="code-label">访问码：</text>
+               <text class="code-label">{{ $t('version.accessCodeLabel') }}</text>
                <view class="code-display-row">
                    <text class="code-text">{{ clientInviteCode }}</text>
-                   <text class="copy-link" @tap="copyClientCode">复制</text>
+                   <text class="copy-link" @tap="copyClientCode">{{ $t('version.copy') }}</text>
                </view>
-               <text class="code-tip">把这串码发给客户，请他在登录页选「客户」输入即可。
-               这串码等同于进这份案卷的钥匙，只发给本人。</text>
+               <text class="code-tip">{{ $t('version.accessCodeTip') }}</text>
            </view>
         </view>
       </view>
 
       <view class="workdeck-dialog-footer">
-        <view class="workdeck-btn workdeck-btn-secondary" @tap="close">取消</view>
-        
+        <view class="workdeck-btn workdeck-btn-secondary" @tap="close">{{ $t('common.cancel') }}</view>
+
         <block v-if="activeTab === 'MEMBER'">
             <view class="workdeck-btn workdeck-btn-primary" @tap="submitMemberInvite" :class="{ disabled: loading }">
-                {{ loading ? '处理中…' : '加进来' }}
+                {{ loading ? $t('version.processingEllipsis') : $t('version.addAction') }}
             </view>
         </block>
         <block v-else>
             <view v-if="!clientInviteCode" class="workdeck-btn workdeck-btn-primary" @tap="generateClientCode" :class="{ disabled: loading }">
-                {{ loading ? '生成中…' : '生成访问码' }}
+                {{ loading ? $t('version.generatingEllipsis') : $t('version.generateAccessCode') }}
             </view>
-            <view v-else class="workdeck-btn workdeck-btn-primary" @tap="close">完成</view>
+            <view v-else class="workdeck-btn workdeck-btn-primary" @tap="close">{{ $t('version.finish') }}</view>
         </block>
       </view>
     </view>
@@ -168,17 +165,17 @@ export default {
     },
     async submitMemberInvite() {
        if (!this.memberForm.username) {
-         uni.showToast({ title: '请输入同事的账号', icon: 'none' })
+         uni.showToast({ title: this.$t('version.usernameRequired'), icon: 'none' })
          return
        }
        this.loading = true
        try {
          await addProjectMember(this.projectId, this.memberForm.username, this.memberForm.role)
-         uni.showToast({ title: '已加进来', icon: 'success' })
+         uni.showToast({ title: this.$t('version.addedSuccess'), icon: 'success' })
          this.$emit('success')
          this.close()
        } catch (e) {
-         uni.showToast({ title: e.message || '没能加进来', icon: 'none' })
+         uni.showToast({ title: e.message || this.$t('version.addMemberFailed'), icon: 'none' })
        } finally {
          this.loading = false
        }
@@ -190,10 +187,10 @@ export default {
             if (res.code === 0 && res.data && res.data.accessCode) {
                 this.clientInviteCode = res.data.accessCode
             } else {
-                throw new Error('生成失败')
+                throw new Error(this.$t('version.generateFailed'))
             }
         } catch (e) {
-            uni.showToast({ title: e.message || '生成失败', icon: 'none' })
+            uni.showToast({ title: e.message || this.$t('version.generateFailed'), icon: 'none' })
         } finally {
             this.loading = false
         }
@@ -203,7 +200,7 @@ export default {
         uni.setClipboardData({
             data: this.clientInviteCode,
             success: () => {
-                uni.showToast({ title: '已复制', icon: 'success' })
+                uni.showToast({ title: this.$t('common.copied'), icon: 'success' })
             }
         })
     }

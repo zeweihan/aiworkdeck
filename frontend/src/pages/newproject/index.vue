@@ -25,13 +25,13 @@
             <text class="user-name">{{ userDisplayName }}</text>
             <text class="user-handle">@{{ username || 'user' }}</text>
             <view class="user-role-tag">
-              <text class="role-text">标准用户</text>
+              <text class="role-text">{{ $t('account.standardUserRole') }}</text>
             </view>
           </view>
 
           <view class="user-actions">
             <view class="action-item" @tap="goToProjectList">
-              <text class="action-text">返回项目列表</text>
+              <text class="action-text">{{ $t('account.backToProjectList') }}</text>
               <text class="action-arrow">›</text>
             </view>
           </view>
@@ -41,30 +41,30 @@
       <!-- 右侧主内容区 -->
       <view class="main-content">
         <view class="content-header">
-           <text class="content-title">新建或打开项目</text>
-           <text class="content-subtitle">项目就是您电脑上的一个文件夹：文件保存在原位，随时可在访达（Finder）中查看和管理。</text>
+           <text class="content-title">{{ $t('account.newOrOpenProjectTitle') }}</text>
+           <text class="content-subtitle">{{ $t('account.newProjectSubtitle') }}</text>
         </view>
 
         <view class="card project-form-card">
           <template v-if="isDesktop">
             <view class="ide-action" :class="{ 'is-busy': busy }" @tap="onOpenFolder">
               <view class="ide-action-text">
-                <text class="ide-action-title">打开文件夹…</text>
-                <text class="ide-action-desc">把电脑上已有的文件夹作为项目打开，里面的文件自动进入文件树</text>
+                <text class="ide-action-title">{{ $t('account.openFolderTitle') }}</text>
+                <text class="ide-action-desc">{{ $t('account.openFolderDesc') }}</text>
               </view>
               <text class="ide-action-arrow">›</text>
             </view>
             <view class="ide-action" :class="{ 'is-busy': busy }" @tap="onCreateFolder">
               <view class="ide-action-text">
-                <text class="ide-action-title">新建项目文件夹…</text>
-                <text class="ide-action-desc">选择存放位置并新建一个文件夹，从空白开始工作</text>
+                <text class="ide-action-title">{{ $t('account.createFolderTitle') }}</text>
+                <text class="ide-action-desc">{{ $t('account.createFolderDesc') }}</text>
               </view>
               <text class="ide-action-arrow">›</text>
             </view>
             <view class="ide-action" :class="{ 'is-busy': busy }" @tap="onOpenFile">
               <view class="ide-action-text">
-                <text class="ide-action-title">打开文件…</text>
-                <text class="ide-action-desc">打开单个文件，自动以它所在的文件夹作为项目</text>
+                <text class="ide-action-title">{{ $t('account.openFileTitle') }}</text>
+                <text class="ide-action-desc">{{ $t('account.openFileDesc') }}</text>
               </view>
               <text class="ide-action-arrow">›</text>
             </view>
@@ -78,14 +78,14 @@
             <view class="form-grid">
               <view class="form-row">
                 <view class="form-label">
-                  <text>项目名称</text>
+                  <text>{{ $t('account.projectNameLabel') }}</text>
                   <text class="required-mark">*</text>
                 </view>
                 <view class="form-field">
                   <input
                     class="input"
                     type="text"
-                    placeholder="请输入项目名称"
+                    :placeholder="$t('account.projectNamePlaceholder')"
                     :value="blankName"
                     @input="e => { blankName = e.detail && e.detail.value }"
                   />
@@ -93,13 +93,13 @@
               </view>
             </view>
             <view class="form-actions">
-               <button class="btn btn-cancel" @tap="goToProjectList">取消</button>
+               <button class="btn btn-cancel" @tap="goToProjectList">{{ $t('common.cancel') }}</button>
                <button class="btn btn-create" :loading="busy" :disabled="!blankName || busy" @tap="onCreateBlank">
-                  {{ busy ? '创建中...' : '创建项目' }}
+                  {{ busy ? $t('account.creatingEllipsis') : $t('account.createProjectBtn') }}
                </button>
             </view>
             <view class="ide-web-hint">
-              <text>提示：在桌面版中，新建项目可直接打开本地文件夹，与 IDE 体验一致。</text>
+              <text>{{ $t('account.webHint') }}</text>
             </view>
           </template>
         </view>
@@ -109,20 +109,20 @@
     <!-- 新建项目文件夹：命名弹窗 -->
     <view v-if="namingVisible" class="naming-mask" @tap.self="namingVisible = false">
       <view class="naming-dialog">
-        <text class="naming-title">新建项目文件夹</text>
-        <text class="naming-location">位置：{{ namingParentDir }}</text>
+        <text class="naming-title">{{ $t('account.createFolderDialogTitle') }}</text>
+        <text class="naming-location">{{ $t('account.locationLabel', { path: namingParentDir }) }}</text>
         <input
           class="input naming-input"
           type="text"
-          placeholder="文件夹名称"
+          :placeholder="$t('account.folderNamePlaceholder')"
           :value="namingName"
           :focus="namingVisible"
           @input="e => { namingName = e.detail && e.detail.value }"
           @confirm="confirmCreateFolder"
         />
         <view class="naming-actions">
-          <button class="btn btn-cancel" @tap="namingVisible = false">取消</button>
-          <button class="btn btn-create" :disabled="!namingNameValid || busy" @tap="confirmCreateFolder">创建</button>
+          <button class="btn btn-cancel" @tap="namingVisible = false">{{ $t('common.cancel') }}</button>
+          <button class="btn btn-create" :disabled="!namingNameValid || busy" @tap="confirmCreateFolder">{{ $t('account.createBtn') }}</button>
         </view>
       </view>
     </view>
@@ -138,11 +138,11 @@ import { host } from '@/services/host.js'
 export default {
   data() {
     return {
-      userDisplayName: '用户',
+      userDisplayName: this.$t('account.defaultUserName'),
       username: '',
       userAvatarUrl: '',
       busy: false,
-      busyText: '正在打开项目…',
+      busyText: this.$t('account.busyOpeningProject'),
       blankName: '',
       namingVisible: false,
       namingParentDir: '',
@@ -152,7 +152,7 @@ export default {
   onLoad(query) {
     const user = getCurrentUser()
     if (user) {
-      this.userDisplayName = user.displayName || user.username || '用户'
+      this.userDisplayName = user.displayName || user.username || this.$t('account.defaultUserName')
       this.username = user.username
       this.userAvatarUrl = user.avatarUrl
     }
@@ -181,14 +181,14 @@ export default {
 
     async onOpenFolder() {
       if (this.busy) return
-      await this.withBusy('正在打开文件夹…', () => openFolderFlow())
+      await this.withBusy(this.$t('account.busyOpeningFolder'), () => openFolderFlow())
     },
 
     async onCreateFolder() {
       if (this.busy) return
       const res = await host.fs.showOpenDialog({
-        title: '选择存放位置',
-        buttonLabel: '选择此处',
+        title: this.$t('account.selectLocationTitle'),
+        buttonLabel: this.$t('account.selectHereBtn'),
         properties: ['openDirectory', 'createDirectory'],
       })
       if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
@@ -202,21 +202,21 @@ export default {
       const parentDir = this.namingParentDir
       const name = this.namingName.trim()
       this.namingVisible = false
-      await this.withBusy('正在创建项目…', () => createFolderFlow(parentDir, name))
+      await this.withBusy(this.$t('account.busyCreatingProject'), () => createFolderFlow(parentDir, name))
     },
 
     async onOpenFile() {
       if (this.busy) return
-      await this.withBusy('正在打开文件…', () => openFileFlow())
+      await this.withBusy(this.$t('account.busyOpeningFile'), () => openFileFlow())
     },
 
     async withBusy(busyText, flow) {
       this.busy = true
-      this.busyText = busyText || '正在打开项目…'
+      this.busyText = busyText || this.$t('account.busyOpeningProject')
       try {
         await flow()
       } catch (err) {
-        uni.showToast({ title: (err && err.message) || '打开项目失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (err && err.message) || this.$t('common.openProjectFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -230,12 +230,12 @@ export default {
       try {
         const res = await createProject({ projectType: 'BLANK', name: this.blankName })
         const projectId = res && res.id
-        uni.showToast({ title: '项目创建成功', icon: 'success' })
+        uni.showToast({ title: this.$t('account.projectCreateSuccess'), icon: 'success' })
         setTimeout(() => {
           uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${projectId}` })
         }, 500)
       } catch (err) {
-        uni.showToast({ title: (err && err.message) || '创建项目失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (err && err.message) || this.$t('account.createProjectFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }

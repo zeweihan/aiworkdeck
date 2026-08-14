@@ -5,7 +5,7 @@
       <svg class="msb-search-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
         <path v-for="(d, gi) in ICONS.search" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
-      <input class="msb-search-input" v-model="searchText" placeholder="搜索 Skill 与插件" />
+      <input class="msb-search-input" v-model="searchText" :placeholder="$t('market.searchPlaceholder')" />
       <view v-if="searchText" class="msb-search-clear" @tap="searchText = ''">×</view>
     </view>
 
@@ -13,10 +13,10 @@
       <!-- ===== 已安装 ===== -->
       <view class="msb-sec-head" @tap="toggleSection('installed')">
         <text class="msb-sec-chevron" :class="{ open: sections.installed }">›</text>
-        <text class="msb-sec-title">已安装</text>
+        <text class="msb-sec-title">{{ $t('market.tabInstalled') }}</text>
         <text class="msb-sec-count">{{ installedRows.length }}</text>
         <view class="msb-sec-spacer"></view>
-        <view class="msb-sec-action" title="重新扫描本机 Skill 与插件" @tap.stop="rescan">
+        <view class="msb-sec-action" :title="$t('market.rescanTooltip')" @tap.stop="rescan">
           <svg class="msb-sec-action-icon" :class="{ spinning: rescanning }" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path v-for="(d, gi) in ICONS.refresh" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
@@ -24,7 +24,7 @@
       </view>
       <view v-if="sections.installed">
         <view v-if="!installedRows.length" class="msb-empty">
-          <text>{{ searchText ? '没有匹配的已安装项' : '还没有安装任何 Skill 或插件' }}</text>
+          <text>{{ searchText ? $t('market.noMatchingInstalled') : $t('market.noInstalledYet') }}</text>
         </view>
         <view
           v-for="row in installedRows"
@@ -51,16 +51,16 @@
       <!-- ===== Skill 广场 ===== -->
       <view class="msb-sec-head" @tap="toggleSection('skill')">
         <text class="msb-sec-chevron" :class="{ open: sections.skill }">›</text>
-        <text class="msb-sec-title">Skill 广场</text>
+        <text class="msb-sec-title">{{ $t('market.tabSkillMarket') }}</text>
         <text class="msb-sec-count">{{ skillRows.length }}</text>
       </view>
       <view v-if="sections.skill">
-        <view v-if="marketLoading" class="msb-empty"><text>加载中…</text></view>
+        <view v-if="marketLoading" class="msb-empty"><text>{{ $t('market.loadingEllipsis') }}</text></view>
         <view v-else-if="marketError" class="msb-empty msb-error">
-          <text>在线广场不可用：{{ marketError }}</text>
+          <text>{{ $t('market.marketUnavailablePrefixed', { error: marketError }) }}</text>
         </view>
         <view v-else-if="!skillRows.length" class="msb-empty">
-          <text>{{ searchText ? '没有匹配的 Skill' : '广场暂无 Skill' }}</text>
+          <text>{{ searchText ? $t('market.noMatchingSkill') : $t('market.marketEmptySkillShort') }}</text>
         </view>
         <view
           v-for="row in skillRows"
@@ -78,20 +78,20 @@
             <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
             <text class="msb-row-meta">{{ row.meta }}</text>
           </view>
-          <view v-if="row.installed" class="msb-row-state ok"><text>已装</text></view>
+          <view v-if="row.installed" class="msb-row-state ok"><text>{{ $t('market.installedShort') }}</text></view>
           <view
             v-else-if="row.canInstall"
             class="msb-row-install"
             :class="{ busy: marketBusyId === row.id }"
             @tap.stop="installSkillRow(row)"
           >
-            <text>{{ marketBusyId === row.id ? '…' : '安装' }}</text>
+            <text>{{ marketBusyId === row.id ? '…' : $t('market.install') }}</text>
           </view>
           <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
-            <text>购买</text>
+            <text>{{ $t('market.buy') }}</text>
           </view>
           <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
-            <text>需连接账户</text>
+            <text>{{ $t('market.needAccount') }}</text>
           </view>
         </view>
       </view>
@@ -99,16 +99,16 @@
       <!-- ===== 插件广场 ===== -->
       <view class="msb-sec-head" @tap="toggleSection('plugin')">
         <text class="msb-sec-chevron" :class="{ open: sections.plugin }">›</text>
-        <text class="msb-sec-title">插件广场</text>
+        <text class="msb-sec-title">{{ $t('market.tabPluginMarket') }}</text>
         <text class="msb-sec-count">{{ pluginRows.length }}</text>
       </view>
       <view v-if="sections.plugin">
-        <view v-if="marketPluginLoading" class="msb-empty"><text>加载中…</text></view>
+        <view v-if="marketPluginLoading" class="msb-empty"><text>{{ $t('market.loadingEllipsis') }}</text></view>
         <view v-else-if="marketPluginError" class="msb-empty msb-error">
-          <text>在线广场不可用：{{ marketPluginError }}</text>
+          <text>{{ $t('market.marketUnavailablePrefixed', { error: marketPluginError }) }}</text>
         </view>
         <view v-else-if="!pluginRows.length" class="msb-empty">
-          <text>{{ searchText ? '没有匹配的插件' : '广场暂无插件' }}</text>
+          <text>{{ searchText ? $t('market.noMatchingPlugin') : $t('market.marketEmptyPlugin') }}</text>
         </view>
         <view
           v-for="row in pluginRows"
@@ -126,20 +126,20 @@
             <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
             <text class="msb-row-meta">{{ row.meta }}</text>
           </view>
-          <view v-if="row.installed" class="msb-row-state ok"><text>已装</text></view>
+          <view v-if="row.installed" class="msb-row-state ok"><text>{{ $t('market.installedShort') }}</text></view>
           <view
             v-else-if="row.canInstall"
             class="msb-row-install"
             :class="{ busy: pluginBusyId === row.id }"
             @tap.stop="installPluginRow(row)"
           >
-            <text>{{ pluginBusyId === row.id ? '…' : '安装' }}</text>
+            <text>{{ pluginBusyId === row.id ? '…' : $t('market.install') }}</text>
           </view>
           <view v-else-if="row.paidState === 'buy'" class="msb-row-install buy" @tap.stop="openPurchase(row)">
-            <text>购买</text>
+            <text>{{ $t('market.buy') }}</text>
           </view>
           <view v-else class="msb-row-state need" @tap.stop="goToAccountSettings">
-            <text>需连接账户</text>
+            <text>{{ $t('market.needAccount') }}</text>
           </view>
         </view>
       </view>
@@ -155,6 +155,7 @@ import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSk
 import { ICONS } from '@/config/icons.js'
 import { canInstall, paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { t } from '@/i18n'
 
 const CATEGORY_GLYPHS = {
   contract: ICONS.catContract,
@@ -167,19 +168,19 @@ const CATEGORY_GLYPHS = {
 }
 
 const CATEGORY_LABELS = {
-  contract: '合同',
-  litigation: '诉讼与争议',
-  compliance: '合规风控',
-  research: '法律研究',
-  corporate: '公司与投融资',
-  office: '办公效率',
-  other: '其他',
+  contract: t('market.catContract'),
+  litigation: t('market.catLitigation'),
+  compliance: t('market.catCompliance'),
+  research: t('market.catResearch'),
+  corporate: t('market.catCorporate'),
+  office: t('market.catOffice'),
+  other: t('market.catOther'),
 }
 
 const ACTIVATION_STATE = {
-  auto: '自动',
-  manual: '手动',
-  disabled: '停用',
+  auto: t('market.activationStateAuto'),
+  manual: t('market.activationStateManual'),
+  disabled: t('market.activationDisabled'),
 }
 
 function fmtDownloads(n) {
@@ -220,10 +221,10 @@ export default {
       const rows = []
       for (const s of this.skills) {
         const mode = s.activationMode || (s.enabled ? 'auto' : 'disabled')
-        const metaParts = ['Skill']
+        const metaParts = [this.$t('market.skillWord')]
         if (s.version) metaParts.push('v' + s.version)
         if (s.author) metaParts.push(s.author)
-        if (s.sourcePluginId) metaParts.push('来自插件')
+        if (s.sourcePluginId) metaParts.push(this.$t('market.fromPluginTag'))
         rows.push({
           kind: 'skill',
           id: s.id,
@@ -231,7 +232,7 @@ export default {
           desc: s.description || '',
           glyph: CATEGORY_GLYPHS[s.category] || ICONS.skill,
           meta: metaParts.join(' · '),
-          stateLabel: ACTIVATION_STATE[mode] || '自动',
+          stateLabel: ACTIVATION_STATE[mode] || this.$t('market.activationStateAuto'),
           stateClass: mode === 'disabled' ? 'off' : 'ok',
           raw: s,
         })
@@ -243,8 +244,8 @@ export default {
           name: p.name || p.id,
           desc: p.description || '',
           glyph: ICONS.blocks,
-          meta: '插件' + (p.version ? ' · v' + p.version : ''),
-          stateLabel: p.enabled ? '已启用' : '已停用',
+          meta: this.$t('market.pluginLabel') + (p.version ? ' · v' + p.version : ''),
+          stateLabel: p.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'),
           stateClass: p.enabled ? 'ok' : 'off',
           raw: p,
         })
@@ -258,8 +259,8 @@ export default {
         const metaParts = []
         if (m.version) metaParts.push('v' + m.version)
         const dl = fmtDownloads(m.downloads)
-        if (dl) metaParts.push(dl + ' 下载')
-        metaParts.push(CATEGORY_LABELS[cat] || '其他')
+        if (dl) metaParts.push(dl + this.$t('market.downloadsSuffix'))
+        metaParts.push(CATEGORY_LABELS[cat] || this.$t('market.catOther'))
         metaParts.push(priceLabel(m))
         const state = paidState(m, this.accountConnected)
         return {
@@ -298,7 +299,7 @@ export default {
           name: m.name || m.id,
           desc: m.description || '',
           glyph: ICONS.blocks,
-          meta: metaParts.join(' · ') || '插件',
+          meta: metaParts.join(' · ') || this.$t('market.pluginLabel'),
           installed: installedIds.has(m.id) || !!m.installed,
           paidState: state,
           canInstall: canInstall(state),
@@ -326,7 +327,7 @@ export default {
     // 购买走系统浏览器：支付要用用户已登录的浏览器会话，内嵌 tab 里付不了
     openPurchase(row) {
       openExternalUrl(purchaseUrl(row.kind, row.id))
-      uni.showToast({ title: '已在浏览器打开商品页，购买后回到详情页点「我已购买，刷新」', icon: 'none' })
+      uni.showToast({ title: this.$t('market.openedPurchasePage'), icon: 'none' })
     },
     goToAccountSettings() {
       uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
@@ -354,7 +355,7 @@ export default {
         if (typeof res?.accountConnected === 'boolean') this.accountConnected = res.accountConnected
       } catch (e) {
         console.warn('在线 Skill 广场不可用:', e)
-        this.marketError = e?.message || '网络不可用'
+        this.marketError = e?.message || this.$t('market.networkUnavailable')
         this.marketSkills = []
       } finally {
         this.marketLoading = false
@@ -369,7 +370,7 @@ export default {
         if (typeof res?.accountConnected === 'boolean') this.accountConnected = res.accountConnected
       } catch (e) {
         console.warn('在线插件广场不可用:', e)
-        this.marketPluginError = e?.message || '网络不可用'
+        this.marketPluginError = e?.message || this.$t('market.networkUnavailable')
         this.marketPlugins = []
       } finally {
         this.marketPluginLoading = false
@@ -380,12 +381,12 @@ export default {
       this.marketBusyId = row.id
       try {
         await installMarketSkill(row.id)
-        uni.showToast({ title: '已安装', icon: 'none' })
+        uni.showToast({ title: this.$t('market.genericInstalledToast'), icon: 'none' })
         await this.reloadAll()
         uni.$emit('awd:market-changed-from-sidebar')
       } catch (e) {
         console.error('安装 Skill 失败:', e)
-        uni.showToast({ title: e?.message || '安装失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.marketBusyId = ''
       }
@@ -393,13 +394,18 @@ export default {
     async installPluginRow(row) {
       if (this.pluginBusyId) return
       const m = row.raw
-      const perms = (m.permissions || []).join('、') || '未声明敏感能力'
+      const perms = (m.permissions || []).join(this.$t('market.listSeparator')) || this.$t('market.noSensitiveCapability')
       const ok = await new Promise(resolve => {
         uni.showModal({
-          title: '确认安装插件',
-          content: `${m.name || m.id} v${m.version}\n作者：${m.authorDisplayName || m.author || '未知'}\n声明能力：${perms}\n\n插件与本机应用同等权限，能读写你的文件并访问网络。安装后默认停用，需你手动启用。`,
-          confirmText: '安装',
-          cancelText: '取消',
+          title: this.$t('market.confirmInstallPluginTitle'),
+          content: this.$t('market.confirmInstallPluginContent', {
+            name: m.name || m.id,
+            version: m.version,
+            author: m.authorDisplayName || m.author || this.$t('market.unknownAuthor'),
+            perms,
+          }),
+          confirmText: this.$t('market.install'),
+          cancelText: this.$t('market.cancelBtn'),
           success: r => resolve(r.confirm),
           fail: () => resolve(false),
         })
@@ -408,12 +414,12 @@ export default {
       this.pluginBusyId = row.id
       try {
         await installMarketPlugin(row.id)
-        uni.showToast({ title: '已安装，启用前不会执行任何插件代码', icon: 'none' })
+        uni.showToast({ title: this.$t('market.installedNoExecuteHint'), icon: 'none' })
         await this.reloadAll()
         uni.$emit('awd:market-changed-from-sidebar')
       } catch (e) {
         console.error('安装插件失败:', e)
-        uni.showToast({ title: e?.message || '安装失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.pluginBusyId = ''
       }
@@ -425,13 +431,13 @@ export default {
         const res = await rescanPlugins()
         const skillRes = await rescanSkills().catch(() => null)
         uni.showToast({
-          title: `扫描完成：${res?.pluginCount ?? 0} 个插件、${skillRes?.skillCount ?? 0} 个 Skill`,
+          title: this.$t('market.scanComplete', { pluginCount: res?.pluginCount ?? 0, skillCount: skillRes?.skillCount ?? 0 }),
           icon: 'none',
         })
         await this.reloadAll()
       } catch (e) {
         console.error('重新扫描失败:', e)
-        uni.showToast({ title: e?.message || '扫描失败（需要管理员权限）', icon: 'none' })
+        uni.showToast({ title: e?.message || this.$t('market.scanFailedNeedAdmin'), icon: 'none' })
       } finally {
         this.rescanning = false
       }

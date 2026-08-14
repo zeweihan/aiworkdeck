@@ -1,18 +1,18 @@
 <template>
   <view v-if="visible" class="awd-mask" @tap.self="close">
     <view class="awd-dialog">
-      <view class="awd-header"><text class="awd-title">从团队案件库取一份案卷</text></view>
+      <view class="awd-header"><text class="awd-title">{{ $t('version.pullFromLibraryTitle') }}</text></view>
       <view class="awd-body">
-        <view v-if="loading" class="cloud-accept-hint">正在读取…</view>
+        <view v-if="loading" class="cloud-accept-hint">{{ $t('version.loadingGeneric') }}</view>
         <view v-else-if="noConnection" class="cloud-accept-empty">
-          <text class="cloud-accept-hint">你还没有连过团队案件库</text>
-          <text class="cloud-accept-goto-settings" @tap="gotoSettings">去连一个</text>
+          <text class="cloud-accept-hint">{{ $t('version.noLibraryConnectedShort') }}</text>
+          <text class="cloud-accept-goto-settings" @tap="gotoSettings">{{ $t('version.goConnectOne') }}</text>
         </view>
         <template v-else>
           <!-- 连了多个案件库时必须由律师指名去哪一个取：拿列表第一条会在存量死连接
                排在前面时对着一个早已不在的服务器发请求。 -->
           <view v-if="connections.length > 1" class="cloud-accept-picker">
-            <text class="cloud-accept-picker-label">从哪个案件库取</text>
+            <text class="cloud-accept-picker-label">{{ $t('version.chooseLibrarySourceShortLabel') }}</text>
             <view
               v-for="c in connections"
               :key="c.id"
@@ -24,7 +24,7 @@
               <text class="cloud-accept-picker-text">{{ c.serverUrl }}</text>
             </view>
           </view>
-          <view v-if="!projects.length" class="cloud-accept-hint">这个案件库里还没有共享给你的案卷</view>
+          <view v-if="!projects.length" class="cloud-accept-hint">{{ $t('version.noSharedProjects') }}</view>
           <view v-else class="cloud-project-list">
             <view v-for="p in projects" :key="p.id" class="cloud-project-row">
               <text class="cloud-project-name">{{ p.name }}</text>
@@ -32,13 +32,13 @@
                 class="awd-btn awd-btn-secondary"
                 :class="{ 'awd-btn-disabled': busy }"
                 @tap="onAccept(p)"
-              >取到本机</view>
+              >{{ $t('version.pullToDevice') }}</view>
             </view>
           </view>
         </template>
       </view>
       <view class="awd-footer">
-        <view class="awd-btn awd-btn-secondary" @tap="close">关闭</view>
+        <view class="awd-btn awd-btn-secondary" @tap="close">{{ $t('common.close') }}</view>
       </view>
     </view>
   </view>
@@ -81,7 +81,7 @@ export default {
         this.connectionId = conns[0].id
         await this.loadProjects()
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '读取案件库里的案卷失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.loadRemoteProjectsFailed'), icon: 'none' })
       } finally {
         this.loading = false
       }
@@ -98,7 +98,7 @@ export default {
       try {
         await this.loadProjects()
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '读取案件库里的案卷失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.loadRemoteProjectsFailed'), icon: 'none' })
       } finally {
         this.loading = false
       }
@@ -112,7 +112,7 @@ export default {
         this.close()
         this.$emit('accepted', localProjectId)
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '没能取到本机，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.pullToDeviceFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }

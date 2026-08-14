@@ -1,10 +1,10 @@
 <template>
   <view class="conversation-list">
-    <view v-if="loading && !conversations.length" class="conv-hint">正在读取对话历史…</view>
+    <view v-if="loading && !conversations.length" class="conv-hint">{{ $t('projects.conversationsLoadingHint') }}</view>
 
     <view v-else-if="!conversations.length" class="conv-guide">
-      <text class="conv-guide-title">这份案卷还没有 AI 对话</text>
-      <text class="conv-guide-desc">进工作台打开 AI 面板问第一个问题，之后每次对话都会记在这里。</text>
+      <text class="conv-guide-title">{{ $t('projects.noConversationsTitle') }}</text>
+      <text class="conv-guide-desc">{{ $t('projects.noConversationsDesc') }}</text>
     </view>
 
     <template v-else>
@@ -23,7 +23,7 @@
         <text v-if="hasPreview(c)" class="conv-preview">{{ c.lastMessage }}</text>
         <text class="conv-meta">{{ metaOf(c) }}</text>
       </view>
-      <view v-if="hasMore" class="conv-more" @tap="$emit('load-more')">看更早的对话</view>
+      <view v-if="hasMore" class="conv-more" @tap="$emit('load-more')">{{ $t('projects.loadMoreConversations') }}</view>
     </template>
   </view>
 </template>

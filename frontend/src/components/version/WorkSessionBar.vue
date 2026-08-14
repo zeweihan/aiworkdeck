@@ -2,34 +2,34 @@
   <view class="session-bar">
     <template v-if="onDraft">
       <view class="session-dot draft-dot" />
-      <text class="session-text">正在稿《{{ onDraft.name }}》上修改</text>
-      <view class="awd-btn awd-btn-secondary session-btn" @tap="returnToMainline">回到主线工作</view>
-      <view class="awd-btn awd-btn-primary session-btn" @tap="adopt">采纳这一稿</view>
-      <view class="awd-btn awd-btn-danger session-btn" @tap="confirmAbandon">放弃这一稿</view>
+      <text class="session-text">{{ $t('version.workingOnDraft', { name: onDraft.name }) }}</text>
+      <view class="awd-btn awd-btn-secondary session-btn" @tap="returnToMainline">{{ $t('version.returnToMainline') }}</view>
+      <view class="awd-btn awd-btn-primary session-btn" @tap="adopt">{{ $t('version.adoptDraft') }}</view>
+      <view class="awd-btn awd-btn-danger session-btn" @tap="confirmAbandon">{{ $t('version.abandonDraft') }}</view>
     </template>
     <template v-else-if="working">
       <view class="session-dot" />
-      <text class="session-text">工作中{{ changedCount ? `（已改 ${changedCount} 份文件）` : '' }}</text>
-      <view class="awd-btn awd-btn-primary session-btn" @tap="openNaming">结束本次工作</view>
-      <view class="awd-btn awd-btn-danger session-btn" @tap="confirmDiscard">丢弃</view>
+      <text class="session-text">{{ changedCount ? $t('version.workingWithCount', { count: changedCount }) : $t('version.working') }}</text>
+      <view class="awd-btn awd-btn-primary session-btn" @tap="openNaming">{{ $t('version.endSession') }}</view>
+      <view class="awd-btn awd-btn-danger session-btn" @tap="confirmDiscard">{{ $t('version.discard') }}</view>
     </template>
     <template v-else>
-      <text class="session-text session-idle">当前没有进行中的工作</text>
+      <text class="session-text session-idle">{{ $t('version.noActiveSession') }}</text>
     </template>
 
     <view v-if="naming" class="awd-mask" @tap.self="naming = false">
       <view class="awd-dialog">
-        <view class="awd-header"><text class="awd-title">给这次工作起个名字</text></view>
+        <view class="awd-header"><text class="awd-title">{{ $t('version.nameSessionTitle') }}</text></view>
         <view class="awd-body">
           <input
             v-model="title"
             class="awd-input"
-            placeholder="例如：发客户第一稿（不填也可以）"
+            :placeholder="$t('version.sessionNamePlaceholder')"
           />
         </view>
         <view class="awd-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="naming = false">取消</view>
-          <view class="awd-btn awd-btn-primary" @tap="end">完成</view>
+          <view class="awd-btn awd-btn-secondary" @tap="naming = false">{{ $t('common.cancel') }}</view>
+          <view class="awd-btn awd-btn-primary" @tap="end">{{ $t('version.finish') }}</view>
         </view>
       </view>
     </view>
@@ -67,7 +67,7 @@ export default {
         const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
         this.$emit('mainline-resumed', affectedFileIds)
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '回到主线工作失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.returnMainlineFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }
@@ -86,15 +86,15 @@ export default {
         }
         this.$emit('draft-adopted', data.affectedFileIds || [])
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '采纳失败，请稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.adoptFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }
     },
     confirmAbandon() {
       uni.showModal({
-        title: '放弃这一稿',
-        content: '这一稿的所有改动都会被丢掉，确定吗？',
+        title: this.$t('version.abandonDraft'),
+        content: this.$t('version.abandonDraftConfirmContent'),
         success: async (r) => {
           if (!r.confirm) return
           if (this.busy) return
@@ -104,7 +104,7 @@ export default {
             const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
             this.$emit('draft-abandoned', affectedFileIds)
           } catch (e) {
-            uni.showToast({ title: (e && e.message) || '放弃失败，请稍后重试', icon: 'none' })
+            uni.showToast({ title: (e && e.message) || this.$t('version.abandonFailed'), icon: 'none' })
           } finally {
             this.busy = false
           }
@@ -124,15 +124,15 @@ export default {
         this.naming = false
         this.$emit('ended')
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '本次工作还没能收尾，你的改动都还在', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('version.endFailed'), icon: 'none' })
       } finally {
         this.busy = false
       }
     },
     confirmDiscard() {
       uni.showModal({
-        title: '丢弃本次工作',
-        content: '本次工作的所有改动都会被撤销，回到开始工作之前的样子。确定吗？',
+        title: this.$t('version.discardSessionTitle'),
+        content: this.$t('version.discardSessionContent'),
         success: async (r) => {
           if (!r.confirm) return
           if (this.busy) return
@@ -144,7 +144,7 @@ export default {
             const affectedFileIds = (res && res.data && res.data.affectedFileIds) || []
             this.$emit('discarded', affectedFileIds)
           } catch (e) {
-            uni.showToast({ title: (e && e.message) || '丢弃失败，请稍后重试', icon: 'none' })
+            uni.showToast({ title: (e && e.message) || this.$t('version.discardFailed'), icon: 'none' })
           } finally {
             this.busy = false
           }

@@ -1,24 +1,24 @@
 <template>
   <scroll-view scroll-y class="desensitize-pane">
     <view class="section">
-      <view class="section-title">文件选择</view>
+      <view class="section-title">{{ $t('panels.deSectionFileSelect') }}</view>
       <view class="file-input-wrapper">
          <view class="path-display" :class="{ empty: !filePath }" @tap="triggerFileSelect">
-            {{ filePath ? filePath : '点击选择或拖入文件' }}
+            {{ filePath ? filePath : $t('panels.deFilePlaceholder') }}
          </view>
          <view class="actions-row">
-            <view class="mini-btn" @tap="importFromActiveTab" title="从当前打开文件导入">
-               <text>导入当前</text>
+            <view class="mini-btn" @tap="importFromActiveTab" :title="$t('panels.deImportFromTabTitle')">
+               <text>{{ $t('panels.deImportCurrent') }}</text>
             </view>
-            <view class="mini-btn" @tap="triggerFileSelect" title="从项目浏览">
-               <text>浏览</text>
+            <view class="mini-btn" @tap="triggerFileSelect" :title="$t('panels.deBrowseTitle')">
+               <text>{{ $t('panels.deBrowse') }}</text>
             </view>
          </view>
       </view>
     </view>
 
     <view class="section">
-      <view class="section-title">脱敏策略</view>
+      <view class="section-title">{{ $t('panels.deStrategiesTitle') }}</view>
       <view class="strategies-list">
         <label
           v-for="s in availableStrategies"
@@ -41,12 +41,12 @@
         :disabled="processing || !filePath || selectedStrategies.length === 0"
         :loading="processing"
       >
-        {{ processing ? '处理中...' : '生成脱敏文件' }}
+        {{ processing ? $t('panels.deProcessing') : $t('panels.deGenerate') }}
       </button>
     </view>
 
     <view class="info-tip" v-if="filePath">
-       <text>将生成: [已脱敏]{{ fileName }}</text>
+       <text>{{ $t('panels.deWillGenerate', { fileName }) }}</text>
     </view>
   </scroll-view>
 </template>
@@ -100,7 +100,7 @@ export default {
                  .map(s => s.value)
         } catch (e) {
             console.error('Failed to fetch strategies', e)
-            uni.showToast({ title: '获取策略失败', icon: 'none' })
+            uni.showToast({ title: this.$t('panels.deFetchStrategiesFailed'), icon: 'none' })
         }
     },
     toggleStrategy(val) {
@@ -128,21 +128,21 @@ export default {
         this.$emit('request-active-file', (file) => {
              if (file) {
                  if (!file.filePath) {
-                     uni.showToast({ title: '当前文件未保存或无路径', icon: 'none' })
+                     uni.showToast({ title: this.$t('panels.deNoPathCurrentFile'), icon: 'none' })
                      return
                  }
                  this.filePath = file.filePath
                  this.fileName = file.name
                  this.fileId = file.id // Store fileId
-                 uni.showToast({ title: '已选择当前文件', icon: 'success' })
+                 uni.showToast({ title: this.$t('panels.deSelectedCurrentFile'), icon: 'success' })
              } else {
-                 uni.showToast({ title: '无打开的文件', icon: 'none' })
+                 uni.showToast({ title: this.$t('panels.deNoOpenFile'), icon: 'none' })
              }
         })
     },
     async handleGenerate() {
         if (!this.fileId || this.selectedStrategies.length === 0) {
-             if (!this.fileId) uni.showToast({ title: '请选择有效文件', icon: 'none' })
+             if (!this.fileId) uni.showToast({ title: this.$t('panels.deSelectValidFile'), icon: 'none' })
              return
         }
         this.processing = true
@@ -151,16 +151,16 @@ export default {
                 fileId: this.fileId, // Send fileId
                 strategies: this.selectedStrategies
             })
-            
+
             // Backend now returns the full ProjectFile object
             if (res && res.id) {
-                uni.showToast({ title: '脱敏成功', icon: 'success' })
+                uni.showToast({ title: this.$t('panels.deSuccess'), icon: 'success' })
                 // Open the new file (pass the full object)
                 this.$emit('open-file', res)
             }
         } catch (e) {
             console.error('Desensitization failed', e)
-            uni.showToast({ title: '处理失败: ' + e.message, icon: 'none' })
+            uni.showToast({ title: this.$t('panels.deProcessFailed', { msg: e.message }), icon: 'none' })
         } finally {
             this.processing = false
         }

@@ -4,11 +4,11 @@
     <UnlockHint
       v-if="hiddenCount > 0"
       class="clip-unlock-hint"
-      :text="`另有 ${hiddenCount} 条历史记录，解锁无限版后可查看`"
+      :text="$t('panels.cpUnlockHint', { count: hiddenCount })"
     />
     <scroll-view class="clip-body" :scroll-y="false" :scroll-x="true" show-scrollbar="false">
-      <view v-if="loading" class="loading">加载中...</view>
-      <view v-else-if="items.length === 0" class="empty">暂无记录</view>
+      <view v-if="loading" class="loading">{{ $t('panels.cpLoading') }}</view>
+      <view v-else-if="items.length === 0" class="empty">{{ $t('panels.cpEmpty') }}</view>
       <view v-else class="list-grid">
         <view v-for="it in items" :key="it.id" class="clip-card" @tap="copy(it.text)">
           <view class="card-header">
@@ -23,34 +23,34 @@
             </view>
             <!-- Actions Top Right -->
             <view class="cli-actions-top">
-               <view v-if="it.type === 'TEXT'" class="cli-btn" @tap.stop="copy(it.text)" title="复制">
+               <view v-if="it.type === 'TEXT'" class="cli-btn" @tap.stop="copy(it.text)" :title="$t('panels.cpCopyTitle')">
                  <text class="icon">⧉</text>
                </view>
                <!-- Text Insert -->
-               <view v-if="it.type === 'TEXT'" class="cli-btn" @tap.stop="$emit('insert', { type: 'TEXT', content: it.text })" title="插入">
+               <view v-if="it.type === 'TEXT'" class="cli-btn" @tap.stop="$emit('insert', { type: 'TEXT', content: it.text })" :title="$t('panels.cpInsertTitle')">
                  <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
                </view>
                <!-- Image Insert -->
-               <view v-if="it.type === 'IMAGE'" class="cli-btn" @tap.stop="$emit('insert', { type: 'IMAGE', content: getImageUrl(it) })" title="插入">
+               <view v-if="it.type === 'IMAGE'" class="cli-btn" @tap.stop="$emit('insert', { type: 'IMAGE', content: getImageUrl(it) })" :title="$t('panels.cpInsertTitle')">
                  <svg class="icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.bolt" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
                </view>
                <view class="del-wrapper" style="position: relative;">
-                 <view class="cli-btn danger" @tap.stop="requestDelete(it.id)" title="删除">
+                 <view class="cli-btn danger" @tap.stop="requestDelete(it.id)" :title="$t('panels.cpDeleteTitle')">
                    <text class="icon">×</text>
                  </view>
                  <!-- Inline Confirm Popup -->
                  <view v-if="confirmDeleteId === it.id" class="delete-popover" @tap.stop>
                    <view class="pop-arrow"></view>
-                   <text class="pop-text">确认删除?</text>
+                   <text class="pop-text">{{ $t('panels.cpConfirmDeleteText') }}</text>
                    <view class="pop-row">
-                     <view class="pop-btn" @tap.stop="cancelDelete">取消</view>
-                     <view class="pop-btn danger" @tap.stop="confirmDelete(it.id)">确定</view>
+                     <view class="pop-btn" @tap.stop="cancelDelete">{{ $t('panels.cpCancel') }}</view>
+                     <view class="pop-btn danger" @tap.stop="confirmDelete(it.id)">{{ $t('panels.cpConfirm') }}</view>
                    </view>
                  </view>
                </view>
             </view>
           </view>
-          
+
           <!-- Content: Horizontal Scroll -->
           <view class="card-content">
             <text v-if="it.type === 'TEXT'" class="content-text">{{ it.text }}</text>
@@ -59,7 +59,7 @@
                <svg class="file-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                  <path v-for="(d, gi) in ICONS.doc" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
                </svg>
-               <text class="file-name">{{ it.fileName || '未知文件' }}</text>
+               <text class="file-name">{{ it.fileName || $t('panels.cpUnknownFile') }}</text>
             </view>
           </view>
         </view>
@@ -131,7 +131,7 @@ export default {
         }
       } catch (e) {
         console.error('加载剪贴板失败:', e)
-        uni.showToast({ title: '加载剪贴板失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.cpLoadFailed'), icon: 'none' })
       } finally {
         this.loading = false
       }
@@ -142,7 +142,7 @@ export default {
         /* No truncation here if we want scroll, pass full text or reasonably long */
         return t
       }
-      return it.meta || '未知内容'
+      return it.meta || this.$t('panels.cpUnknownContent')
     },
     formatTime(v) {
       if (!v) return ''
@@ -169,7 +169,7 @@ export default {
         } else {
           uni.setClipboardData({ data: t })
         }
-        uni.showToast({ title: '已复制', icon: 'success' })
+        uni.showToast({ title: this.$t('panels.cpCopied'), icon: 'success' })
       } catch (e) {
         uni.setClipboardData({ data: t })
       }
@@ -203,7 +203,7 @@ export default {
         await deleteClipboardItem(id)
         await this.refresh()
       } catch (e) {
-        uni.showToast({ title: '删除失败', icon: 'none' })
+        uni.showToast({ title: this.$t('panels.cpDeleteFailed'), icon: 'none' })
       }
     },
     getImageUrl(it) {

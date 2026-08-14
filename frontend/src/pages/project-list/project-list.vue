@@ -3,16 +3,16 @@
     <view class="project-list-container">
       <view class="main-content">
         <view class="content-header">
-          <text class="header-title">我的项目</text>
+          <text class="header-title">{{ $t('projects.myProjects') }}</text>
           <!-- header-actions 本身不受角色/项目数门控：CLIENT 或零项目新用户否则在本页
                找不到任何通往个人中心的入口（登出/设置/解除授权全部不可达）。
                门控只收窄到「新建项目/取案卷」这两个写操作按钮上。 -->
           <view class="header-actions">
             <template v-if="!isClientUser && projects.length > 0">
-              <button class="btn-secondary-small" @tap="openCloudAccept">从团队案件库取一份案卷</button>
-              <button class="btn-primary-small" @tap="goToNewProject">+ 新建项目</button>
+              <button class="btn-secondary-small" @tap="openCloudAccept">{{ $t('projects.pullFromTeamLibrary') }}</button>
+              <button class="btn-primary-small" @tap="goToNewProject">{{ $t('projects.newProjectBtn') }}</button>
             </template>
-            <button class="btn-secondary-small" @tap="goToUserProfile">个人中心</button>
+            <button class="btn-secondary-small" @tap="goToUserProfile">{{ $t('projects.personalCenter') }}</button>
           </view>
         </view>
 
@@ -22,12 +22,12 @@
           <view class="projects-stats-row">
             <view class="stat-card">
               <text class="stat-value">{{ projects.length }}</text>
-              <text class="stat-label">全部项目</text>
+              <text class="stat-label">{{ $t('projects.allProjects') }}</text>
             </view>
           </view>
 
           <view v-if="projectsLoading" class="loading-state">
-            <text class="loading-text">加载中...</text>
+            <text class="loading-text">{{ $t('projects.loading') }}</text>
           </view>
 
           <view v-else-if="projects.length === 0">
@@ -35,20 +35,20 @@
             <template v-if="isClientUser">
               <view class="empty-state-dashed client-empty">
                 <view class="dashed-content">
-                  <text class="dashed-text">律师把案卷分享给你之后，会出现在这里</text>
+                  <text class="dashed-text">{{ $t('projects.clientEmptyHint') }}</text>
                 </view>
               </view>
             </template>
             <template v-else>
               <view class="empty-state-dashed" @tap="goToNewProject">
                 <view class="dashed-content">
-                  <text class="dashed-icon">+</text>
-                  <text class="dashed-text">新建项目</text>
+                  <text class="dashed-icon">{{ $t('projects.plusSign') }}</text>
+                  <text class="dashed-text">{{ $t('projects.newProject') }}</text>
                 </view>
               </view>
               <!-- 协作的唯一入口。CollabDialog 的邀请话术写死指向这里，别删 -->
               <view class="cloud-accept-entry" @tap="openCloudAccept">
-                <text class="cloud-accept-entry-text">从团队案件库取一份案卷</text>
+                <text class="cloud-accept-entry-text">{{ $t('projects.pullFromTeamLibrary') }}</text>
               </view>
             </template>
           </view>
@@ -68,7 +68,7 @@
                   <text class="badge-text-new">{{ getProjectTypeLabel(project.projectType) }}</text>
                 </view>
                 <view v-if="!isClientUser" class="card-actions">
-                  <view class="action-btn-icon danger" @tap.stop="handleDeleteProject(project.id)" title="删除"><svg class="act-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
+                  <view class="action-btn-icon danger" @tap.stop="handleDeleteProject(project.id)" :title="$t('projects.delete')"><svg class="act-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
                 </view>
               </view>
 
@@ -93,22 +93,22 @@
 
                 <view class="company-info-area" v-if="project.projectType !== 'BLANK'">
                   <view class="info-row-new" v-if="shouldShowListedCompany(project.projectType)">
-                    <text class="info-label-new">上市公司</text>
+                    <text class="info-label-new">{{ $t('projects.listedCompany') }}</text>
                     <text class="info-val-new highlight">{{ project.listedCompanyName || '-' }}</text>
                   </view>
                   <view class="info-row-new" v-if="shouldShowTargetCompany(project.projectType)">
-                    <text class="info-label-new">标的公司</text>
+                    <text class="info-label-new">{{ $t('projects.targetCompany') }}</text>
                     <text class="info-val-new">{{ project.targetCompanyName || '-' }}</text>
                   </view>
                 </view>
                 <view v-else class="blank-placeholder">
-                  <text class="placeholder-text">通用项目工作区</text>
+                  <text class="placeholder-text">{{ $t('projects.blankWorkspace') }}</text>
                 </view>
               </view>
 
               <view class="card-footer-new">
                 <view class="members-area-new">
-                  <view class="manager-avatar-wrapper" v-if="project.managerId" :title="'项目负责人: ' + (project.managerName || '未知')">
+                  <view class="manager-avatar-wrapper" v-if="project.managerId" :title="$t('projects.managerLabel', { name: project.managerName || $t('projects.unknown') })">
                     <image v-if="project.managerAvatarUrl" :src="project.managerAvatarUrl" class="manager-avatar-img" />
                     <view v-else class="manager-avatar-placeholder">{{ project.managerName?.charAt(0) || 'M' }}</view>
                     <view class="manager-badge-icon"><svg class="badge-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.crown" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg></view>
@@ -128,10 +128,10 @@
                     <view class="members-vertical-divider" v-if="getClientMembers(project).length > 0"></view>
 
                     <view class="members-group clients-group" v-if="getClientMembers(project).length > 0">
-                      <text class="client-group-label">客户</text>
-                      <view v-for="member in getClientMembers(project)" :key="member.id" class="member-avatar-new client-avatar" :title="member.displayName + ' (客户)'">
+                      <text class="client-group-label">{{ $t('projects.clientLabel') }}</text>
+                      <view v-for="member in getClientMembers(project)" :key="member.id" class="member-avatar-new client-avatar" :title="$t('projects.clientMemberTitle', { name: member.displayName })">
                         <image v-if="member.avatarUrl" :src="member.avatarUrl" class="avatar-img-new" />
-                        <view v-else class="avatar-placeholder-new client-placeholder">{{ member.displayName?.charAt(0) || '客' }}</view>
+                        <view v-else class="avatar-placeholder-new client-placeholder">{{ member.displayName?.charAt(0) || $t('projects.clientInitial') }}</view>
                         <view v-if="canManageMembers(project)" class="member-remove-overlay" @tap.stop="removeMember(project.id, member.userId)">×</view>
                       </view>
                     </view>
@@ -292,7 +292,7 @@ export default {
           uni.reLaunch({ url: '/pages/login/login' })
         } else {
           uni.showToast({
-            title: error.message || '加载失败，请稍后重试',
+            title: error.message || this.$t('projects.loadFailedRetry'),
             icon: 'none',
             duration: 2000,
           })
@@ -313,18 +313,18 @@ export default {
     },
     async removeMember(projectId, userId) {
       uni.showModal({
-        title: '确认移除',
-        content: '确定要移除该成员吗？',
-        cancelText: '取消',
-        confirmText: '确认',
+        title: this.$t('projects.removeConfirmTitle'),
+        content: this.$t('projects.removeConfirmContent'),
+        cancelText: this.$t('projects.cancel'),
+        confirmText: this.$t('projects.confirm'),
         success: async (res) => {
           if (res.confirm) {
             try {
               await removeProjectMember(projectId, userId)
-              uni.showToast({ title: '移除成功', icon: 'success' })
+              uni.showToast({ title: this.$t('projects.removeSuccess'), icon: 'success' })
               this.loadProjects()
             } catch (e) {
-              uni.showToast({ title: e.message || '移除失败', icon: 'none' })
+              uni.showToast({ title: e.message || this.$t('projects.removeFailed'), icon: 'none' })
             }
           }
         },
@@ -414,21 +414,21 @@ export default {
     },
     async handleDeleteProject(projectId) {
       uni.showModal({
-        title: '确认删除',
-        content: '确定要删除这个项目吗？删除后无法恢复。',
-        cancelText: '取消',
-        confirmText: '确认',
+        title: this.$t('projects.deleteConfirmTitle'),
+        content: this.$t('projects.deleteConfirmContent'),
+        cancelText: this.$t('projects.cancel'),
+        confirmText: this.$t('projects.confirm'),
         success: async (res) => {
           if (res.confirm) {
             this.deletingProjectId = projectId
             try {
               await deleteProject(projectId)
-              uni.showToast({ title: '删除成功', icon: 'success', duration: 2000 })
+              uni.showToast({ title: this.$t('projects.deleteSuccess'), icon: 'success', duration: 2000 })
               await this.loadProjects()
             } catch (error) {
               console.error('删除项目失败:', error)
               uni.showToast({
-                title: error.message || '删除失败，请稍后重试',
+                title: error.message || this.$t('projects.deleteFailedRetry'),
                 icon: 'none',
                 duration: 2000,
               })
@@ -453,7 +453,7 @@ export default {
     },
     async confirmRename() {
       if (!this.renameValue || !this.renameValue.trim()) {
-        uni.showToast({ title: '项目名称不能为空', icon: 'none' })
+        uni.showToast({ title: this.$t('projects.projectNameEmpty'), icon: 'none' })
         return
       }
       try {
@@ -464,10 +464,10 @@ export default {
         }
         this.renamingProjectId = null
         this.renameValue = ''
-        uni.showToast({ title: '重命名成功', icon: 'success' })
+        uni.showToast({ title: this.$t('projects.renameSuccess'), icon: 'success' })
       } catch (e) {
         console.error('重命名失败', e)
-        uni.showToast({ title: '重命名失败', icon: 'none' })
+        uni.showToast({ title: this.$t('projects.renameFailed'), icon: 'none' })
       }
     },
     cancelRename() {

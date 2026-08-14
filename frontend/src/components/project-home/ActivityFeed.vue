@@ -1,15 +1,15 @@
 <template>
   <view class="activity-feed">
-    <view v-if="loading" class="activity-hint">正在读取动态…</view>
+    <view v-if="loading" class="activity-hint">{{ $t('projects.activityLoadingHint') }}</view>
 
     <view v-else-if="unavailable" class="activity-guide">
-      <text class="activity-guide-title">这份案卷还没有版本记录</text>
-      <text class="activity-guide-desc">开启之后，每次改动都会自动留底，这里会按时间列出做过什么。开启的入口在工作台右侧的「版本」面板里。</text>
+      <text class="activity-guide-title">{{ $t('projects.noVersionHistoryTitle') }}</text>
+      <text class="activity-guide-desc">{{ $t('projects.noVersionHistoryDesc') }}</text>
     </view>
 
     <view v-else-if="!rows.length" class="activity-guide">
-      <text class="activity-guide-title">还没有动态</text>
-      <text class="activity-guide-desc">在工作台里改过文件、或者让 AI 跑过一次任务之后，这里就会有记录。</text>
+      <text class="activity-guide-title">{{ $t('projects.noActivityTitle') }}</text>
+      <text class="activity-guide-desc">{{ $t('projects.noActivityDesc') }}</text>
     </view>
 
     <view v-else class="activity-rows">
@@ -50,7 +50,7 @@ export default {
     rows() {
       const runs = (this.backgroundRuns || []).map((r) => ({
         key: 'run-' + r.conversationId,
-        title: 'AI 任务 ' + (runStatusLabel(r.status) || '已结束'),
+        title: this.$t('projects.aiTaskLabel', { status: runStatusLabel(r.status) || this.$t('projects.runFinished') }),
         time: formatDateTime(r.updatedAt),
         dotClass: runStatusDotClass(r.status),
       }))
