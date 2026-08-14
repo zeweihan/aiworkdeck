@@ -122,7 +122,21 @@
                 <text v-if="noSelection" class="etb-hint">{{ $t('editor.toolbar.needSelection') }}</text>
               </view>
               <view class="etb-item" @tap.stop="ui('page_break')"><text class="etb-item-t">{{ $t('editor.toolbar.insertPageBreak') }}</text></view>
+              <view class="etb-item" @tap.stop="startText('footnote')"><text class="etb-item-t">{{ $t('editor.toolbar.insertFootnote') }}</text></view>
+              <view class="etb-item" @tap.stop="startText('header')"><text class="etb-item-t">{{ $t('editor.toolbar.editHeader') }}</text></view>
+              <view class="etb-item" @tap.stop="startText('footer')"><text class="etb-item-t">{{ $t('editor.toolbar.editFooter') }}</text></view>
             </template>
+
+            <!-- 脚注 / 尾注 / 页眉 / 页脚：同一个单行文本表单 -->
+            <view v-else-if="TEXT_FORMS[insertMode]" class="etb-form">
+              <text class="etb-form-t">{{ $t('editor.toolbar.' + TEXT_FORMS[insertMode].title) }}</text>
+              <textarea class="etb-input ta" v-model="formText"
+                        :placeholder="$t('editor.toolbar.' + TEXT_FORMS[insertMode].ph)" @click.stop />
+              <view class="etb-form-acts">
+                <text class="etb-form-b" @tap.stop="insertMode = ''">{{ $t('editor.toolbar.cancel') }}</text>
+                <text class="etb-form-b ok" @tap.stop="doTextForm">{{ $t('editor.toolbar.confirm') }}</text>
+              </view>
+            </view>
 
             <!-- 表格：网格选择器 -->
             <view v-else-if="insertMode === 'table'" class="etb-form">
@@ -161,11 +175,40 @@
         <view class="etb-btn" :class="{ on: formattingMarks }" :title="$t('editor.toolbar.formattingMarks')" @tap.stop="toggleMarks">
           <text class="etb-tx">¶</text>
         </view>
+
+        <!-- 表格上下文组：光标在表格里才出现（LO 自己那条 singlemode-table 工具栏
+             的替代品）。行/列号从 get_ui_state 回的单元格名算出来——table_* 原语
+             收的是绝对行号列号，没有「当前位置」的概念。 -->
+        <template v-if="inTable">
+          <view class="etb-sep"></view>
+          <text class="etb-group-t">{{ $t('editor.toolbar.tableGroup') }}</text>
+          <view class="etb-btn" :title="$t('editor.toolbar.rowAbove')" @tap.stop="tableOp('rowAbove')">
+            <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.rowAbove" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </view>
+          <view class="etb-btn" :title="$t('editor.toolbar.rowBelow')" @tap.stop="tableOp('rowBelow')">
+            <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.rowBelow" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </view>
+          <view class="etb-btn" :title="$t('editor.toolbar.colLeft')" @tap.stop="tableOp('colLeft')">
+            <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.colLeft" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </view>
+          <view class="etb-btn" :title="$t('editor.toolbar.colRight')" @tap.stop="tableOp('colRight')">
+            <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.colRight" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </view>
+          <view class="etb-btn" :title="$t('editor.toolbar.deleteRow')" @tap.stop="tableOp('delRow')">
+            <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.delRow" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </view>
+          <view class="etb-btn" :title="$t('editor.toolbar.deleteCol')" @tap.stop="tableOp('delCol')">
+            <svg class="etb-ico" viewBox="0 0 24 24" fill="none"><path v-for="(d,i) in ICONS.delCol" :key="i" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          </view>
+        </template>
       </view>
     </scroll-view>
 
     <!-- 右侧常驻区：不参与滚动 -->
     <view class="etb-right">
+      <view class="etb-btn wide" :class="{ on: !chromeHidden }" :title="$t('editor.toolbar.nativeMenusTitle')" @tap.stop="toggleChrome">
+        <text class="etb-tx sm">{{ $t('editor.toolbar.nativeMenus') }}</text>
+      </view>
       <view class="etb-btn wide" :class="{ on: findOpen }" :title="$t('editor.toolbar.findAndReplace')" @tap.stop="toggleFind">
         <text class="etb-tx sm">{{ $t('editor.toolbar.find') }}</text>
       </view>
@@ -236,6 +279,12 @@ const ICONS = {
   indent: ['M4 6h16', 'M10 10h10', 'M10 14h10', 'M4 18h16', 'M4 10l3 2-3 2'],
   outdent: ['M4 6h16', 'M10 10h10', 'M10 14h10', 'M4 18h16', 'M7 10l-3 2 3 2'],
   pagebreak: ['M6 4h12', 'M6 20h12', 'M3 12h4', 'M10 12h4', 'M17 12h4'],
+  rowAbove: ['M4 13h16v7H4z', 'M12 3v7', 'M9 6l3-3 3 3'],
+  rowBelow: ['M4 4h16v7H4z', 'M12 21v-7', 'M9 18l3 3 3-3'],
+  colLeft: ['M13 4h7v16h-7z', 'M3 12h7', 'M6 9l-3 3 3 3'],
+  colRight: ['M4 4h7v16H4z', 'M21 12h-7', 'M18 9l3 3-3 3'],
+  delRow: ['M4 9h16v6H4z', 'M9 5l6 14'],
+  delCol: ['M9 4h6v16H9z', 'M5 9l14 6'],
 }
 const ALIGNS = [
   { k: 'left', cmd: 'align_left', t: 'alignLeft', icon: 'alignLeft' },
@@ -259,6 +308,14 @@ const STYLE_PICKS = [
   'Heading 1', 'Heading 2', 'Heading 3', 'Heading 4',
   'Quotations', 'List', 'Caption', 'First line indent',
 ]
+// 脚注/尾注/页眉/页脚共用一个单行文本表单：只差调哪个原语、用哪句提示。
+// 注意：**没有尾注**。本引擎构建不支持——insert_endnote 设 IsEndnote 时抛
+// IllegalArgumentException（真机实证）。做不到的不放按钮。
+const TEXT_FORMS = {
+  footnote: { title: 'footnoteTitle', ph: 'footnotePlaceholder', action: 'insert_footnote', arg: 'text' },
+  header: { title: 'headerTitle', ph: 'headerPlaceholder', action: 'edit_header_footer', arg: 'text', extra: { target: 'header' } },
+  footer: { title: 'footerTitle', ph: 'footerPlaceholder', action: 'edit_header_footer', arg: 'text', extra: { target: 'footer' } },
+}
 const SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72]
 // 插入表格的网格选择器：8 行 × 8 列够覆盖手工建表的绝大多数情形，再大的表
 // 律师是从 Excel 粘过来或让 AI 生成的，不是在这里点出来的。
@@ -282,15 +339,25 @@ export default {
     return {
       state: EMPTY(), styleList: [], fontList: [], menu: '', formattingMarks: false,
       // 插入菜单：'' | 'table' | 'link' | 'comment'
-      insertMode: '', insertErr: '', grid: { r: 0, c: 0 }, linkUrl: '', commentText: '', selText: '',
+      insertMode: '', insertErr: '', grid: { r: 0, c: 0 }, linkUrl: '', commentText: '', formText: '', selText: '',
       // 查找替换
       findOpen: false, findText: '', replaceText: '', matchCase: false,
       findTotal: null, findIndex: 0, findErr: '', findTruncated: false,
+      // LO 自己的菜单栏/工具栏/状态栏/标尺。默认藏起来——这条工具栏就是它们的
+      // 替代品；留一个开关是逃生阀，不是常规路径（开了那个会关文档的 × 也回来）。
+      chromeHidden: true,
     }
   },
   computed: {
     ICONS: () => ICONS, ALIGNS: () => ALIGNS,
     TEXT_COLORS: () => TEXT_COLORS, HL_COLORS: () => HL_COLORS, GRID_CELLS: () => GRID_CELLS,
+    TEXT_FORMS: () => TEXT_FORMS,
+    inTable() { return this.state.selection.inTable === true },
+    // 单元格名如 "B2" → {row:2, col:'B'}。table_* 原语收 1 起的行号与列字母。
+    cellPos() {
+      const m = /^([A-Z]+)(\d+)$/.exec(String(this.state.selection.cellName || ''))
+      return m ? { col: m[1], row: Number(m[2]) } : null
+    },
     // 超链接/批注都作用于选区。没有选区就明说「需先选中文字」，不做成点了没反应
     noSelection() { return this.state.selection.collapsed !== false },
     selPreview() {
@@ -350,6 +417,9 @@ export default {
       const [st, fo] = await Promise.all([this.call('list_styles', {}), this.call('list_fonts', {})])
       this.styleList = (st && st.styles) || []
       this.fontList = (fo && fo.families) || []
+      // 自建工具栏挂上了，LO 自己那套就该退场。只在 Writer 上做——本组件本来
+      // 就只给 Writer 渲染；Calc/Impress 没有替代品，藏了会剩一片空白。
+      await this.applyChrome(true)
     },
     async refresh() {
       const r = await this.call('get_ui_state', {})
@@ -377,6 +447,37 @@ export default {
         this.refresh()
         this.call('get_selection', {}).then((r) => { this.selText = (r && r.text) || '' })
       }
+    },
+    startText(kind) { this.formText = ''; this.insertErr = ''; this.insertMode = kind },
+    doTextForm() {
+      const form = TEXT_FORMS[this.insertMode]
+      if (!form) return null
+      const text = String(this.formText || '').trim()
+      if (!text) { this.insertErr = this.$t('editor.toolbar.textRequired'); return null }
+      const params = Object.assign({ [form.arg]: text }, form.extra || {})
+      return this.call(form.action, params).then((res) => this.finishInsert(res))
+    },
+    // 表格相对操作。position 的语义是「插在该行/列之前」，缺省追加到末尾——
+    // 所以「下方插入」= position+1，「右侧插入」= 列号+1。删除直接给当前行/列。
+    async tableOp(op) {
+      const pos = this.cellPos
+      if (!pos) return null
+      const colNum = pos.col.split('').reduce((n, ch) => n * 26 + (ch.charCodeAt(0) - 64), 0)
+      const map = {
+        rowAbove: ['table_add_row', { position: pos.row }],
+        rowBelow: ['table_add_row', { position: pos.row + 1 }],
+        colLeft: ['table_add_col', { position: colNum }],
+        colRight: ['table_add_col', { position: colNum + 1 }],
+        delRow: ['table_delete_row', { position: pos.row }],
+        delCol: ['table_delete_col', { position: colNum }],
+      }
+      const spec = map[op]
+      if (!spec) return null
+      const res = await this.call(spec[0], spec[1])
+      // 引擎拒绝（如合并过单元格的表按列插入）要如实说，不能默默什么都没发生
+      if (!res || res.success !== true) { this.insertErr = (res && res.message) || this.$t('editor.toolbar.opFailed'); return null }
+      this.insertErr = ''
+      return this.after(res)
     },
     startLink() {
       if (this.noSelection) return
@@ -470,6 +571,17 @@ export default {
       const next = !this.state.view.recordChanges
       return this.call('set_track_changes', { on: next }).then((r) => this.after(r, false))
     },
+    // LO chrome 开关。hideElement 的返回值不可信，原语内部用 isElementVisible
+    // 复核后回报，这里只按结果记状态。
+    async applyChrome(hide) {
+      const res = await this.call('set_chrome', {
+        menubar: !hide, statusbar: !hide, toolbars: !hide, rulers: !hide,
+      })
+      if (res && res.success) this.chromeHidden = hide
+      return res
+    },
+    toggleChrome() { this.closeMenus(); return this.applyChrome(!this.chromeHidden) },
+
     // ---- 查找替换 ----
     toggleFind() {
       this.findOpen = !this.findOpen
@@ -550,6 +662,7 @@ export default {
 .etb-row { display: flex; align-items: center; gap: 2px; }
 .etb-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; padding-left: 6px;
   border-left: 1px solid #E9ECEF; }
+.etb-group-t { flex-shrink: 0; padding: 0 4px; font-size: 11px; color: #ADB5BD; }
 .etb-sep { width: 1px; height: 18px; background: #E9ECEF; margin: 0 5px; flex-shrink: 0; }
 
 .etb-btn { position: relative; display: flex; align-items: center; justify-content: center; gap: 3px;
