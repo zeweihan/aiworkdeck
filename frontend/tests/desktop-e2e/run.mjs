@@ -151,7 +151,19 @@ try {
   }
 
   const mouseClickSel = async (sel) => {
-    await page.waitForSelector(sel, { timeout: 15000 })
+    // dev Electron 首帧比普通浏览器慢不少（vite 按需编译 + webview 初始化），
+    // 15s 不够；超时也要带上页面当时的样子，别只丢一句 timeout。
+    try {
+      await page.waitForSelector(sel, { timeout: 40000 })
+    } catch (e) {
+      const snap = await page.evaluate(() => ({
+        url: location.href,
+        lang: (() => { try { return localStorage.getItem('awd_app_language') } catch (e2) { return '?' } })(),
+        titles: [...document.querySelectorAll('[title]')].map((el) => el.getAttribute('title')).slice(0, 20),
+        text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 250),
+      })).catch(() => null)
+      throw new Error('等不到 ' + sel + '；' + JSON.stringify(snap))
+    }
     const box = await page.evaluate((check, s) => {
       const el = document.querySelector(s); if (!el) return null
       return eval(check + '; hitCheck(el)')
@@ -159,9 +171,30 @@ try {
     await clickAt(box, sel)
   }
 
+  // 语言必须钉死中文：本套断言全是中文字面量（「资源管理器」「新建文档」…），
+  // 而 appLanguage 对全新安装是按 navigator.language 猜的——Electron 常带
+  // --lang=en-GB、无头 Chrome 是 en-US，两边都会猜成英文，第一步就找不到中文。
+  // 注意不能用 evaluateOnNewDocument：壳启动时已经把页面引导到项目列表并按环境
+  // 语言落了盘，随后跳工作台只是改 hash（同文档导航），钩子根本不触发。
+  await page.evaluate(() => { try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ } })
+
   await step('免登直达进入项目（PR-A 去登录：不注会话）', async () => {
     await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId, { waitUntil: 'networkidle2' })
-    await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 20000 })
+    // 同上：跳工作台若只是改 hash，uni 路由会把它弹回项目列表（工作台参与的跳转
+    // 本该走 reLaunch）。整页重载一次，直接以工作台路由、以中文重新 boot。
+    await page.reload({ waitUntil: 'networkidle2' })
+    try {
+      await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 30000 })
+    } catch (e) {
+      // 光一句超时查不出任何东西（本套件为此栽过好几轮：先后误判成单实例锁、
+      // 编译超时、界面语言）。把页面当场的真实样子带进错误里。
+      const snap = await page.evaluate(() => ({
+        url: location.href,
+        lang: (() => { try { return localStorage.getItem('awd_app_language') } catch (e2) { return '?' } })(),
+        text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 400),
+      })).catch(() => null)
+      throw new Error('页面未出现「资源管理器」；' + JSON.stringify(snap))
+    }
   })
 
   const mouseClickText = async (label) => {
@@ -174,10 +207,63 @@ try {
     await clickAt(box, '文本 ' + label)
   }
 
+  // 点击类失败最难查的是"点了到底有没有发出请求"。把写请求录下来，失败时一并报出。
+  const apiWrites = []
+  page.on('request', (r) => {
+    try { if (r.method() !== 'GET' && r.url().includes('/api/')) apiWrites.push(r.method() + ' ' + new URL(r.url()).pathname) } catch (e) { /* ignore */ }
+  })
+  const pageErrs = []
+  page.on('pageerror', (e) => pageErrs.push(String(e).slice(0, 160)))
+
   await step('新建 Word 文档并点击打开（编辑器 webview）', async () => {
-    await mouseClickSel('[title="新建文档"]')
+    // 「新建文档」是个 18×16 的小图标，而顶栏（试用徽标/负责人行）在这前后还在
+    // 重排——命中检查算出坐标、真正点下去之间元素会挪几像素，于是点空。表现是
+    // 间歇性的"点了没反应、一个写请求都没发"。所以：点了就验效果，没效果就重点。
+    // 先等文件树组件真的挂上：onFileTreeQuickAction 的第一行就是
+    // `const tree = this.$refs.fileTree; if (!tree) return` —— ref 没到位时点击
+    // 静默什么都不做，现象正是"一个写请求都没发"。
+    await page.waitForFunction(() => {
+      let seed = null
+      for (const el of document.querySelectorAll('*')) { if (el.__vueParentComponent) { seed = el.__vueParentComponent; break } }
+      if (!seed) return false
+      let root = seed; while (root.parent) root = root.parent
+      const q = [root]
+      while (q.length) {
+        const c = q.shift()
+        if (c.proxy && c.proxy.$refs && c.proxy.$refs.fileTree) return true
+        const stack = [c.subTree]
+        while (stack.length) {
+          const v = stack.pop()
+          if (!v) continue
+          if (v.component) q.push(v.component)
+          else if (Array.isArray(v.children)) stack.push(...v.children)
+        }
+      }
+      return false
+    }, { timeout: 30000 }).catch(() => {})
+
+    let created = false
+    for (let attempt = 0; attempt < 3 && !created; attempt++) {
+      await mouseClickSel('[title="新建文档"]')
+      created = await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 8000 })
+        .then(() => true).catch(() => false)
+    }
     // 创建只落文件不开编辑器；等文件出现在树里再点击打开
-    await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 15000 })
+    try {
+      if (!created) await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 8000 })
+    } catch (e) {
+      const snap = await page.evaluate(() => {
+        const el = document.querySelector('[title="新建文档"]')
+        const r = el ? el.getBoundingClientRect() : null
+        return {
+          btnRect: r ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) } : null,
+          viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
+          text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 200),
+        }
+      }).catch(() => null)
+      throw new Error('点了新建文档但文件没出现；写请求=' + JSON.stringify(apiWrites.slice(-6))
+        + ' 页面错误=' + JSON.stringify(pageErrs.slice(0, 3)) + ' 现场=' + JSON.stringify(snap))
+    }
     await mouseClickText('newdocument')
     await page.waitForSelector('webview', { timeout: 30000 })
   })
@@ -232,7 +318,7 @@ try {
   // 断言三件事：① 工具栏渲染出来了；② 激活态从引擎读到了真值；③ 点一个按钮，
   // 文档状态**真的变了**（不是「点了没报错」）。
   await step('自建工具栏渲染并接上引擎', async () => {
-    const r = await page.evaluate((finder) => {
+    const READ_TOOLBAR = (finder) => {
       const ed = eval(finder + '; findEditor()')
       if (!ed) return { err: 'editor component not found' }
       const el = ed.$el && ed.$el.querySelector ? ed.$el.querySelector('.etb') : null
@@ -259,9 +345,17 @@ try {
         fonts: tb ? tb.fontList.length : 0,
         styles: tb ? tb.styleList.length : 0,
       }
-    }, FIND_EDITOR)
+    }
+    let r = await page.evaluate(READ_TOOLBAR, FIND_EDITOR)
     if (r.err) throw new Error(r.err)
     if (!r.rendered) throw new Error('工具栏未渲染（.etb 不存在）')
+    // 组件挂载后 get_ui_state / list_styles / list_fonts 是异步拉的，引擎刚
+    // ready 时还没回来——立刻断言必然读到空值。等它填好再判（本步曾因此误报）。
+    for (let i = 0; i < 40 && (!r.style || !r.zoom || r.fonts < 5 || r.styles < 50); i++) {
+      await sleep(500)
+      r = await page.evaluate(READ_TOOLBAR, FIND_EDITOR)
+      if (r.err) throw new Error(r.err)
+    }
     if (r.buttons < 15) throw new Error('工具栏按钮数异常: ' + r.buttons)
     if (!r.hasToolbar) throw new Error('组件树里找不到 EditorToolbar 实例')
     if (!r.style || !r.zoom) throw new Error('激活态没从引擎读到真值: ' + JSON.stringify(r))
@@ -317,7 +411,8 @@ try {
       if (/失败/.test(st.status)) throw new Error('保存状态: ' + st.status)
       await sleep(1000)
     }
-    throw new Error('自动保存未确认(超时)')
+    const last = await editorEval('return { status: ed.statusText, key: ed.statusKey, saving: ed.saving, dirty: ed.dirty, docLoadFailed: ed.docLoadFailed }')
+    throw new Error('自动保存未确认(超时)；最后状态=' + JSON.stringify(last))
   })
 
   await step('API 下载 docx 验证内容落盘', async () => {
