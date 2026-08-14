@@ -1565,6 +1565,91 @@ try {
     check('find_replace 认 matchCase（只替 1 处）', ra.replaced === 1, JSON.stringify(ra))
   }
 
+  // ---------- 组 26：表格上下文操作 + 脚注页眉 + chrome 退场（P4 前置）----------
+  console.log('\n[26] 表格相对操作 / 脚注尾注页眉页脚 / LO chrome 退场')
+  {
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '表格上下文操作验证' })
+    await exec('goto', { type: 'end' })
+    await exec('insert_table', { rows: [['a1', 'b1', 'c1'], ['a2', 'b2', 'c2'], ['a3', 'b3', 'c3']], headerRow: false })
+
+    // 光标进表格：get_ui_state 要回报所在单元格，工具栏靠它算相对行列
+    const t0 = await exec('find_navigate', { keyword: 'b2', direction: 'next' })
+    check('光标定位到表格单元格', t0.found === true, JSON.stringify(t0))
+    const inCell = await exec('get_ui_state')
+    check('get_ui_state 回报在表格内', inCell.selection.inTable === true, JSON.stringify(inCell.selection))
+    check('get_ui_state 回报单元格名', /^[A-Z]+\d+$/.test(inCell.selection.cellName || ''), JSON.stringify(inCell.selection))
+
+    // 「在上方插入行」= position 取当前行（原语语义：插在该行之前）
+    const cell = inCell.selection.cellName
+    const row = Number(/\d+$/.exec(cell)[0])
+    const before = await exec('table_read', {})
+    const rowsBefore = (before.cells || []).length
+    const addAbove = await exec('table_add_row', { position: row })
+    check('在上方插入行成功', addAbove.success === true && addAbove.rows === rowsBefore + 1, JSON.stringify(addAbove).slice(0, 140))
+    const addBelow = await exec('table_add_row', { position: row + 2 })
+    check('在下方插入行成功', addBelow.success === true, JSON.stringify(addBelow).slice(0, 120))
+    const addCol = await exec('table_add_col', { position: 2 })
+    check('在左侧插入列成功', addCol.success === true, JSON.stringify(addCol).slice(0, 120))
+    const delRow = await exec('table_delete_row', { position: row })
+    check('删除本行成功', delRow.success === true, JSON.stringify(delRow).slice(0, 120))
+    const delCol = await exec('table_delete_col', { position: 2 })
+    check('删除本列成功', delCol.success === true, JSON.stringify(delCol).slice(0, 120))
+
+    // 脚注 / 尾注 / 页眉 / 页脚：插入菜单里的四条，都走已有原语
+    await exec('debug_fresh_document')
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: '脚注与页眉验证段落' })
+    await exec('goto', { type: 'end' })
+    check('插入脚注成功', (await exec('insert_footnote', { text: '见《公司法》第二十条' })).success === true)
+    // 尾注：本引擎构建**不支持**（IsEndnote 抛 IllegalArgumentException）。所以
+    // 工具栏里刻意没有这一项——做不到的不放按钮。这里锁住「明确拒绝且给得出
+    // 可读原因」，将来引擎支持了这条会红，提醒把菜单项加回去。
+    const en = await exec('insert_endnote', { text: '尾注内容' })
+    check('尾注被明确拒绝且说明原因', en.success === false && /尾注/.test(en.message || ''), JSON.stringify(en).slice(0, 160))
+    check('设置页眉成功', (await exec('edit_header_footer', { target: 'header', text: '金冠纾困项目' })).success === true)
+    check('设置页脚成功', (await exec('edit_header_footer', { target: 'footer', text: '第 1 页' })).success === true)
+    check('空内容脚注被拒绝', (await exec('insert_footnote', { text: '' })).success === false)
+
+    // chrome 退场：自建工具栏挂上之后 LO 那套要全部藏起来，且**选中表格时
+    // 上下文工具栏不许再钻出来**（引擎会自己拉起 singlemode-table）
+    // 必须复位：insert_footnote 之后视图光标停在脚注区里，不换文档的话下面的
+    // select_all / replace_selection 会全打在脚注上（本组首次跑就是这么挂的）。
+    await exec('debug_fresh_document')
+    await exec('debug_set_record_changes', { on: false })
+    await exec('ui_command', { name: 'select_all' })
+    await exec('replace_selection', { text: 'chrome 退场验证' })
+    await exec('set_chrome', { menubar: false, statusbar: false, toolbars: false, rulers: false })
+    // 先验「藏完还能干活」，再插表——插完表光标就落在单元格里了，那之后
+    // goto start / select_all 都只在该单元格内生效，而 get_document_text 只读
+    // 正文，看起来就像"编辑没生效"（本组连挂两轮就是栽在这）。
+    await exec('goto', { type: 'end' })
+    await exec('insert_at_cursor', { text: '退场后依然可编辑' })
+    check('chrome 退场后仍可编辑', (await doc()).indexOf('依然可编辑') >= 0, await doc())
+    await exec('goto', { type: 'end' })
+    await exec('insert_table', { rows: [['x', 'y'], ['1', '2']], headerRow: false })
+    await exec('find_navigate', { keyword: 'x', direction: 'next' })
+    const vis = await exec('set_chrome', {})   // 无字段 = 只读查询
+    check('查询模式回报可见性', vis.success === true && !!vis.visible, JSON.stringify(vis).slice(0, 120))
+    check('菜单栏保持隐藏', vis.visible.menubar === false, JSON.stringify(vis.visible.menubar))
+    check('状态栏保持隐藏', vis.visible.statusbar === false)
+    check('标尺保持关闭', vis.visible.rulers.ShowHoriRuler === false, JSON.stringify(vis.visible.rulers))
+    check('选中表格后上下文工具栏没冒出来',
+      vis.visible.toolbars['singlemode-table'] === false, JSON.stringify(vis.visible.toolbars))
+    check('主工具栏保持隐藏',
+      vis.visible.toolbars.standardbar === false && vis.visible.toolbars.textobjectbar === false,
+      JSON.stringify(vis.visible.toolbars))
+    // 逃生阀：一键把原生菜单要回来
+    const back = await exec('set_chrome', { menubar: true, statusbar: true, toolbars: true, rulers: true })
+    check('逃生开关能把原生菜单要回来', back.applied.menubar === true, JSON.stringify(back.applied.menubar))
+    await exec('set_chrome', { menubar: false, statusbar: false, toolbars: false, rulers: false })
+    const off = await exec('set_chrome', {})
+    check('再次隐藏仍然生效', off.visible.menubar === false, JSON.stringify(off.visible.menubar))
+    await exec('set_chrome', { menubar: true, statusbar: true, toolbars: true, rulers: true })
+  }
+
   console.log('\n结果 / result: ' + passed + ' passed, ' + failed + ' failed')
 } finally {
   await browser.close()

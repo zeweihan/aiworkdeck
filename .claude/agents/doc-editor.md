@@ -73,7 +73,8 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 维护者定调：**最终形态是自建工具栏**，LO 自己的 menubar/toolbar 退场（菜单栏末端那个 × 会把 webview 里的文档关掉）。分期方案见 `docs/superpowers/specs/2026-08-14-editor-chrome-self-built-toolbar.md`。
 
 - 入口：`ctrl.getFrame().getPropertyValue('LayoutManager')`；元素 URL 形如 `private:resource/menubar/menubar`、`private:resource/toolbar/standardbar`、`private:resource/toolbar/textobjectbar`、`private:resource/statusbar/statusbar`，外加 11 条 `singlemode-*` 上下文工具栏（选中表格/图片时自动冒出，逐项关必须连它们一起关）。全集在 `office_thread.js` 的 `CHROME_URLS`。
-- **`hideElement()` 的返回值恒为 false，不代表失败**——必须用 `isElementVisible()` 复核。`showElement()` 可逆（返回 true 且 visible 恢复），这是「体验不能退步」的逃生口。`LayoutManager.setVisible(false)` 是关掉全部 chrome 最稳的一刀切。
+- **`hideElement()` 的返回值恒为 false，不代表失败**——必须用 `isElementVisible()` 复核。
+- **恢复（逃生开关）必须复核 + 重试**：藏过全套（含 11 条 `singlemode-*`）之后，单纯 `showElement()` 有时恢复不出来（真机实证，e2e 组 26 锁住）。可靠顺序是 `showElement` → 不行就 `createElement` + `showElement` → 再不行就 `setVisible(true)` + `showElement`，每步都用 `isElementVisible` 复核。这是「体验不能退步」的兜底保证，不能靠一次调用碰运气。
 - 标尺不归 LayoutManager 管，是 `ViewSettings.ShowHoriRuler/ShowVertRuler`。
 - 隐藏 chrome 后编辑、`.uno:` 派发、格式原语、缩放全部照常；引擎自带对话框仍画在 canvas 上，不受影响。
 - **P1 命令层原语**（宿主发起，非 AI 管线）：`get_ui_state`（工具栏激活态一次拿全，实测 ~6ms）、`list_styles`（`name` 程序名 + `display` 显示名 + `inUse`）、`set_chrome`、`set_track_changes`（直接写 `RecordChanges`，比派发切换语义的 `.uno:TrackChanges` 可靠）。工具栏按钮统一走 `ui_command` 白名单，**不许改成任意 `.uno:` 透传**。
@@ -81,6 +82,9 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - 撤销/重做可用性走 `xModel.getUndoManager()`（XUndoManagerSupplier 的**方法**）；`getPropertyValue('UndoManager')` 抛 UnknownPropertyException。
 - `XSelectionChangeListener` 装得上、选区变化每次触发，但**纯光标移动基本不触发**——工具栏状态刷新必须是「事件 + 聚焦时轮询」混合。
 - `format_selection` 拒绝空选区，工具栏「先设格式再打字」这条路目前是断的（P2 待补）。
+- **本引擎不支持尾注**：`insert_endnote` 设 `IsEndnote` 时抛 IllegalArgumentException（脚注正常）。工具栏刻意没有这一项；e2e 组 26 锁住「明确拒绝且给出可读原因」，将来引擎支持了那条会红，提醒把菜单项加回去。
+- **`insert_footnote` 之后视图光标停在脚注区里**：紧接着的 `select_all`/`replace_selection` 会打在脚注上而不是正文。
+- **`replace_selection` 处理不了跨表格的选区**：静默什么都不改。验证"还能编辑"要用 `insert_at_cursor`，别用 select_all + replace。
 - **LO 对话框在本 WASM 构建上不可靠，不许挂进自建菜单**（真机审计）：`.uno:TableDialog`/`.uno:InsertSymbol`/`.uno:SpellDialog` 派发**完全没反应**；`SearchDialog`/`FontDialog`/`ParagraphDialog`/`InsertTable`/`HyperlinkDialog`/`PageStyleName`/`InsertGraphic`/`BulletsAndNumberingDialog`/`WordCountDialog` 弹得出来但**键盘关不掉**（把 IME 覆盖层 blur、焦点还给画布后按 Esc 同样无效——所以不是覆盖层抢焦点造成的）。需要对话框的功能一律自建 DOM 面板。今天 LO 菜单栏还露着，用户点开「查找和替换」就可能卡住；P4 隐藏 chrome 顺带消除这个坑。
 - **查找导航不要用 `find_text_locations`**：它每个匹配插一个锚点书签，书签会跟着文档存进 docx（用户只是搜个词）。用 `find_navigate`（findFirst/findNext + `compareRegionStarts` 定位当前序号，只动视图光标）。
 
