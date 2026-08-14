@@ -288,7 +288,7 @@ export default {
         console.error('加载项目列表失败:', error)
         // 桌面端免登：绝不跳 login（launch 分流已保证桌面不进登录页，这里若跳就是死胡同），
         // 只提示错误。浏览器端保留原「登录失效回登录页」兜底。
-        if (!this.isDesktop && error.message && error.message.includes('登录')) {
+        if (!this.isDesktop && error && error.code === 4010) {
           uni.reLaunch({ url: '/pages/login/login' })
         } else {
           uni.showToast({

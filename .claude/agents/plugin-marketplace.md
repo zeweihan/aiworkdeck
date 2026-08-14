@@ -80,9 +80,9 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
      注意这不等于「不多一次往返」：`install()` 会先拉一次 registry 列表拿价格，**免费项也走这一步**。
 - **价格必须服务端自查**：`install()` 先拉一次 registry 列表定价，不信前端传来的 priceCents，
   否则等于让客户端决定付费闸门何时生效。这也是免费项唯一多出来的一次往返，别为了省它按前端值分流。
-- **错误文案红线**：付费闸门抛的中文里**不能出现「登录」「未授权」「请先」**——
-  `frontend/src/services/api.js` 对 `code:1` 的消息做子串匹配来识别掉线，命中就清本地会话，
-  浏览器端还会跳登录页。这是业务错误不是掉线。两个测试文件里的 `assertNotMistakenForLogout` 钉住了这条。
+- **错误信封红线**：付费闸门是业务错误不是掉线，**响应不许带 code=4010**——
+  PR4-0 起 `frontend/src/services/api.js` 只认 code=4010 判定未登录（已不做「登录/未授权/请先」
+  中文子串匹配），命中就清本地会话，浏览器端还会跳登录页。两个测试文件里的 `assertNotMistakenForLogout` 钉住了这条。
 - **402 ≠ 用户没买过**：本机未连账户时官网无从查购买记录，`paymentRequired` 在这种情况下
   说的是「去连接账户」而不是「去购买」。
 - **前端**：`frontend/src/utils/marketPricing.js` 是价格展示与状态判定的唯一出口

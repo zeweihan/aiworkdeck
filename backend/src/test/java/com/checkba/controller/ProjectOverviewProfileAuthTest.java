@@ -188,14 +188,14 @@ class ProjectOverviewProfileAuthTest {
     }
 
     @Test
-    void 未登录读档案在HTTP层是200加code1不是401() throws Exception {
+    void 未登录读档案在HTTP层是200加code4010不是401() throws Exception {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(null);
 
             MvcResult result = mvc().perform(get("/api/projects/42/profile")
                             .header("X-Session-Id", "sess"))
                     .andExpect(status().isOk())
-                    .andExpect(jsonPath("$.code").value(1))
+                    .andExpect(jsonPath("$.code").value(4010))
                     .andReturn();
             assertTrue(utf8Body(result).contains("未登录"), utf8Body(result));
         }
