@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { visibleText, visibleCode } from './_visible-text.mjs'
 
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/TaskSchedule.vue'),
@@ -12,7 +13,9 @@ const SRC = readFileSync(
 // 那些说明性文字不该把断言判红。
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-const CODE = stripComments(SRC)
+const CODE = visibleCode(SRC, stripComments)
+// 界面文案已外置到 zh locale：断言"显示了这句话"要看组件实际引用的键解析出的中文
+const TEXT = visibleText(SRC)
 
 test('e2e 锚点：根节点类名是 task-schedule', () => {
   assert.ok(SRC.includes('class="task-schedule"'))
@@ -24,7 +27,7 @@ test('props 契约', () => {
 })
 
 test('空态文案存在（A 期唯一会渲染的分支）', () => {
-  assert.ok(SRC.includes('还没有排任务'))
+  assert.ok(TEXT.includes('还没有排任务'))
 })
 
 test('列表分支已落地（B 期只换渲染分支，父页面与端点不改）', () => {

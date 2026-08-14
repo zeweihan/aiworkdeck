@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { visibleText, visibleCode } from './_visible-text.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../src')
 const SRC = readFileSync(resolve(ROOT, 'pages/project-home/project-home.vue'), 'utf8')
@@ -11,7 +12,9 @@ const SRC = readFileSync(resolve(ROOT, 'pages/project-home/project-home.vue'), '
 // 那些说明性文字不该把断言判红。
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-const CODE = stripComments(SRC)
+const CODE = visibleCode(SRC, stripComments)
+// 界面文案已外置到 zh locale：断言"显示了这句话"要看组件实际引用的键解析出的中文
+const TEXT = visibleText(SRC)
 
 // pages.json 不是纯 JSON（:2 行尾有 // 注释，注释里还带 https:// ），
 // 用逐字符扫描剥注释，别用 /\/\/.*$/ ——那会把字符串里的 URL 也砍掉。
@@ -57,7 +60,9 @@ test('App.vue 的路由埋点注释与 pages.json 的页面数一致', () => {
 test('e2e 锚点类名齐全', () => {
   for (const c of ['page-project-home', 'btn-project-list', 'btn-workbench', 'home-topbar-title'])
     assert.ok(SRC.includes(c), '缺 e2e 锚点: ' + c)
-  assert.ok(SRC.includes('>项目概览<'), 'e2e 用顶栏标题文案做 blur 触发点')
+  // 文案已外置到 locale，原来那个「>项目概览<」的尖括号写法是用来确认它在模板文本
+  // 节点里的，现在由上面的 home-topbar-title 类名断言承担；这里只保证文案还在。
+  assert.ok(TEXT.includes('项目概览'), 'e2e 用顶栏标题文案做 blur 触发点')
 })
 
 test('轮询纪律：不起定时器，不调 /version/status', () => {

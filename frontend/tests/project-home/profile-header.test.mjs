@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { visibleText, visibleCode } from './_visible-text.mjs'
 
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/ProfileHeader.vue'),
@@ -12,7 +13,9 @@ const SRC = readFileSync(
 // 那些说明性文字不该把断言判红。
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-const CODE = stripComments(SRC)
+const CODE = visibleCode(SRC, stripComments)
+// 界面文案已外置到 zh locale：断言"显示了这句话"要看组件实际引用的键解析出的中文
+const TEXT = visibleText(SRC)
 
 test('e2e 锚点：根类名 profile-header + 输入框类名 profile-field-input', () => {
   assert.ok(SRC.includes('class="profile-header"'))
@@ -66,7 +69,7 @@ test('ai / default 都弱化标记，走 profileFieldHint', () => {
 test('空态引导 + 事项类型下拉用 MATTER_TYPES', () => {
   assert.match(SRC, /import\s*\{\s*MATTER_TYPES\s*\}\s*from\s*'@\/config\/matterTypes\.js'/)
   assert.match(SRC, /isProfileEmpty/)
-  assert.ok(SRC.includes('这份案卷的档案还是空的'))
+  assert.ok(TEXT.includes('这份案卷的档案还是空的'))
 })
 
 test('禁 emoji + 浅色', () => {

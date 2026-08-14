@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { visibleCode } from './_visible-text.mjs'
 
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/ConversationList.vue'),
@@ -12,7 +13,7 @@ const SRC = readFileSync(
 // 那些说明性文字不该把断言判红。
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-const CODE = stripComments(SRC)
+const CODE = visibleCode(SRC, stripComments)
 
 test('e2e 锚点：根节点类名是 conversation-list', () => {
   assert.ok(SRC.includes('class="conversation-list"'))
