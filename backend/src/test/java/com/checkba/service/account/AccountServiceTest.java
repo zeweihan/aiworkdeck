@@ -219,22 +219,25 @@ class AccountServiceTest {
     }
 
     @Test
-    @DisplayName("账户类文案不许命中前端的「未登录」判据，否则会误清会话/跳登录页")
+    @DisplayName("账户类信封不许带 4010，否则前端会误清会话/跳登录页")
     void accountMessagesDoNotLookLikeAuthErrors() {
-        // frontend/src/services/api.js 用这三个子串判定未登录（清 session，浏览器端还会 reLaunch 登录页）。
-        // 账户未连接、未分配额度都与登录无关，文案撞上就会把用户踢出去。
-        String[] loginMarkers = {"登录", "未授权", "请先"};
-
+        // PR4-0 起 frontend/src/services/api.js 只认 code === 4010 判定未登录（清 session，
+        // 浏览器端还会 reLaunch 登录页），不再做中文子串匹配。账户未连接、未分配额度都与
+        // 登录无关：它们经两处 @ExceptionHandler(AccountException) 转信封时必须是 code=1。
         AccountService notConnected = service();
-        String notConnectedMsg = assertThrows(AccountException.class, notConnected::fetchProfile).getMessage();
+        AccountException notConnectedEx = assertThrows(AccountException.class, notConnected::fetchProfile);
 
         AccountService service = connected();
         transport.enqueue(409, "{\"error\":\"no_allocation\"}");
-        String noAllocationMsg = assertThrows(AccountException.class, service::fetchAiKey).getMessage();
+        AccountException noAllocationEx = assertThrows(AccountException.class, service::fetchAiKey);
 
-        for (String marker : loginMarkers) {
-            assertFalse(notConnectedMsg.contains(marker), notConnectedMsg + " 含 " + marker);
-            assertFalse(noAllocationMsg.contains(marker), noAllocationMsg + " 含 " + marker);
+        var accountController = new com.checkba.controller.AccountController(null, null, null, null, null);
+        var keyController = new com.checkba.controller.PlatformAiKeyController(null, null);
+        for (AccountException e : new AccountException[] {notConnectedEx, noAllocationEx}) {
+            assertEquals(1, accountController.handleAccountException(e).getBody().get("code"),
+                    "AccountController 信封不许带 4010：" + e.getMessage());
+            assertEquals(1, keyController.handleAccountException(e).getBody().get("code"),
+                    "PlatformAiKeyController 信封不许带 4010：" + e.getMessage());
         }
     }
 

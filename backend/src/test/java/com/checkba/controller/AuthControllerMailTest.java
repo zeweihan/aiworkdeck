@@ -111,7 +111,7 @@ class AuthControllerMailTest {
         Map<String, Object> result = controller(mock(UserService.class), guard, mail)
                 .sendMailCode(sendCodeRequest("bind", "new@qq.com"), null, http());
 
-        assertEquals(1, result.get("code"));
+        assertEquals(4010, result.get("code"));
         assertEquals("未登录", result.get("message"));
         verify(mail, never()).sendBindCode(any(), anyString());
         verify(guard, never()).recordCodeSend(anyString());
@@ -128,7 +128,7 @@ class AuthControllerMailTest {
         Map<String, Object> result = controller(mock(UserService.class), mock(AuthAbuseGuard.class), mail)
                 .bindEmail(r, null);
 
-        assertEquals(1, result.get("code"));
+        assertEquals(4010, result.get("code"));
         verify(mail, never()).confirmBind(any(), anyString(), anyString());
     }
 

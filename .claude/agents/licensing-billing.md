@@ -365,10 +365,10 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
    POST {telemetry.ingest-url}/rollup 与 /events；开关在 system_setting 的
    telemetry.rollup.enabled 默认开 / telemetry.events.enabled 默认关，设置页「数据统计」可关）。
    README 隐私口径已随 PR 改为「匿名聚合统计默认开启可关闭」，动上报行为要同步 legal/PRIVACY.md。
-1. **文案里出现「登录」「未授权」「请先」会被前端当成掉线**。`frontend/src/services/api.js:249` 对
-   `code:1` 的 message 做子串匹配识别未登录，命中就清本地会话（浏览器端还跳登录页）。
-   账户未连接、未分配额度、付费项未购买全是**业务错误不是掉线**，文案必须绕开这三个子串
-   （`AccountService.requireKey` 与 `MarketPurchaseGate.needAccountMessage` 的注释里都写了这条）。
+1. **响应带 code=4010 会被前端当成掉线**。PR4-0 起 `frontend/src/services/api.js` 只认
+   code=4010 判定未登录（已不做「登录/未授权/请先」中文子串匹配），命中就清本地会话
+   （浏览器端还跳登录页）。账户未连接、未分配额度、付费项未购买全是**业务错误不是掉线**，
+   必须走 code=1 信封、绝不带 4010。
    护栏：`AccountServiceTest.accountMessagesDoNotLookLikeAuthErrors`、两个 market 测试里的 `assertNotMistakenForLogout`。
 2. **local-mode 与团队服务器模式行为差异是一整套，不是一个开关**。`EntitlementService` 是**按本机**的
    （数据源是 `~/.aiworkdeck` 的 license/account 状态，没有 userId 维度），团队服务器上权益恒为空集。
@@ -504,8 +504,7 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     「verify-key 回 `valid:false`」或「账户端点 401」，而 Key 是好的——只说「Key 无效或已被撤销」
     会让用户去官网重新生成一把，回来再撞一次，且没有任何线索指向真正的原因。
     多站形态下 `LicenseService.invalidKeyMessage` 与 `AccountService.unauthorizedMessage`
-    会点名当前站与另一站。**文案照旧不得含「登录」「未授权」「请先」**（地雷 1），
-    所以写的是「切换站点后重试」而不是「请先切换站点」。护栏 `SiteMismatchMessageTest`。
+    会点名当前站与另一站。**信封照旧不得带 code=4010**（地雷 1；文案写「切换站点后重试」是当年子串判定时代的遗留措辞，保留无害）。护栏 `SiteMismatchMessageTest`。
     **刻意不做「拿同一把 Key 依次探测两个站」**：`awdk_` 是明文 bearer 凭据，
     把它发给一个不是它签发方的服务器等于向第三方泄露一把有效凭据；
     两站由同一团队运营不改变这个判断——今天成立不等于第二方托管实例出现后仍成立。

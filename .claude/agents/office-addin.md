@@ -34,7 +34,7 @@ description: Microsoft Office 插件领域。任务涉及 Word/Excel/PPT 任务�
 
 ## 已知地雷
 
-- 错误文案不得含「登录/未授权/请先」子串（主前端以此判定未登录清会话；licensing 领域红线）。统一说「连接未就绪/令牌无效/账户直连失败」。awdk 失败**不透传服务端原文**（服务端文案不受该红线约束）。
+- 错误响应不得带 code=4010（PR4-0 起主前端只认 code=4010 判定未登录清会话，已不做「登录/未授权/请先」子串匹配；licensing 领域红线）。统一说「连接未就绪/令牌无效/账户直连失败」。awdk 失败**不透传服务端原文**（服务端文案不受该红线约束）。
 - 全局禁 emoji；包管理 npm 不是 pnpm。
 - 部署期 CORS：插件正式 Origin 要进 `security.cors.allowed-origins`；local-mode 下 LocalModeAccessFilter 用同一份白名单硬拦非 GET 跨站请求。`security.cors.allow-all` 绝不能开。localhost/127.0.0.1 默认放行，开发态零配置。
 - **云后端的必配项清单**（官方实例 addin.aiworkdeck.com 已于 2026-08-07 按此清单上线，配置落在

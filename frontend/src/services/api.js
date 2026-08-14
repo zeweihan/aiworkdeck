@@ -267,8 +267,10 @@ function request(options) {
               fullResponse: res.data
             })
 
-            // 特殊处理：未登录错误（code=1且message包含"登录"关键字）
-            if (errorMessage.includes('登录') || errorMessage.includes('未授权') || errorMessage.includes('请先')) {
+            // 特殊处理：未登录错误（PR4-0：后端统一回 code=4010，只认 code 不再做
+            // 「登录/未授权/请先」中文子串匹配——子串会误伤含「请先」的业务文案，
+            // 且后端文案英文化后整条判定失效）
+            if (res.data.code === 4010) {
               // 清除本地存储的 session 信息（真实 key 是 checkba_session_id / checkba_user，
               // 统一走 auth.js 的 clearSession，避免再清错 key）
               try {
@@ -304,7 +306,11 @@ function request(options) {
               }
             }
 
-            reject(new Error(errorMessage));
+            // 把 code 附在 err 上：调用方（如 project-list.vue）判 err.code === 4010，
+            // 不再对 err.message 做中文子串匹配
+            const bizErr = new Error(errorMessage);
+            bizErr.code = res.data.code;
+            reject(bizErr);
           }
         } else {
           // 如果没有 code 字段，直接返回数据（兼容旧接口）

@@ -19,11 +19,18 @@ import java.util.Map;
 @lombok.extern.slf4j.Slf4j
 public class GlobalExceptionHandler {
 
+    /**
+     * 未登录/会话过期的机器可读码（PR4-0）。前端 api.js 只认这个 code 来清会话/跳登录，
+     * 不再做「登录/未授权/请先」中文子串匹配——那套判定会误伤含「请先」的业务文案，
+     * 且后端文案英文化后整条失效。
+     */
+    public static final int CODE_UNAUTHENTICATED = 4010;
+
     @ExceptionHandler(UnauthorizedException.class)
     public ResponseEntity<Map<String, Object>> handleUnauthorizedException(UnauthorizedException e) {
         log.warn("GlobalExceptionHandler caught UnauthorizedException: {}", e.getMessage());
         Map<String, Object> result = new HashMap<>();
-        result.put("code", 1);
+        result.put("code", CODE_UNAUTHENTICATED);
         result.put("message", e.getMessage() != null ? e.getMessage() : "请先登录");
         // 统一返回 HTTP 200，通过 code 字段表示失败
         return ResponseEntity.ok().body(result);
@@ -70,7 +77,11 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, Object>> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("GlobalExceptionHandler caught IllegalArgumentException: {}", e.getMessage());
         Map<String, Object> result = new HashMap<>();
-        result.put("code", 1);
+        // 全站 ~100 处鉴权失败写的是 throw new IllegalArgumentException("未登录")，
+        // 判定收敛在这一处：message 恰为这两个字面量时视为未登录，回 4010。
+        // 只做精确匹配，不做子串——「请先选择文件」这类业务提示必须仍是 code=1。
+        boolean isAuthFailure = "未登录".equals(e.getMessage()) || "请先登录".equals(e.getMessage());
+        result.put("code", isAuthFailure ? CODE_UNAUTHENTICATED : 1);
         result.put("message", e.getMessage() != null ? e.getMessage() : "请求参数错误");
         // 统一返回 HTTP 200，通过 code 字段表示失败
         return ResponseEntity.ok().body(result);

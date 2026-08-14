@@ -136,9 +136,9 @@ class ProjectConversationsEndpointIntegrationTest {
         running.setUpdatedAt(BASE.plusHours(1));
         runRecordRepository.save(running);
 
-        // 1) 不带 session：必须是「未登录」，不许静默返回空数组
+        // 1) 不带 session：必须是「未登录」（PR4-0 起未登录统一 code=4010），不许静默返回空数组
         JsonNode anon = getConversations(projectId, null, "");
-        assertEquals(1, anon.path("code").asInt(), "无 session 必须走失败信封：" + anon);
+        assertEquals(4010, anon.path("code").asInt(), "无 session 必须走未登录信封：" + anon);
         assertEquals("未登录", anon.path("message").asText());
 
         // 2) bob 不是这个项目的成员：被 hasReadPermission 挡掉

@@ -195,7 +195,7 @@ class AuthControllerSmsTest {
         request.setPhone("13800000000");
 
         Map<String, Object> result = controller.sendSmsCode(request, "session_not_exist", http());
-        assertEquals(1, result.get("code"));
+        assertEquals(4010, result.get("code"));
         verify(sms, never()).sendBindCode(any(), anyString());
     }
 
