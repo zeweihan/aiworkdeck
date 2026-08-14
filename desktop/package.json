@@ -1,7 +1,7 @@
 {
   "name": "aiworkdeck-desktop",
   "private": true,
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "AI Workdeck desktop shell (Electron)",
   "author": "AI Workdeck contributors",
   "main": "main/main.js",
@@ -89,7 +89,9 @@
       "target": [
         {
           "target": "dmg",
-          "arch": ["arm64"]
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "category": "public.app-category.productivity",
@@ -126,7 +128,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     }
