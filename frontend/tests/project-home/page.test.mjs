@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../src')
 const SRC = readFileSync(resolve(ROOT, 'pages/project-home/project-home.vue'), 'utf8')
+const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.meta.url), 'utf8')
 
 // 只在「实际代码」里做禁字断言：注释里必须能写清楚为什么不做某件事，
 // 那些说明性文字不该把断言判红。
@@ -57,7 +58,10 @@ test('App.vue 的路由埋点注释与 pages.json 的页面数一致', () => {
 test('e2e 锚点类名齐全', () => {
   for (const c of ['page-project-home', 'btn-project-list', 'btn-workbench', 'home-topbar-title'])
     assert.ok(SRC.includes(c), '缺 e2e 锚点: ' + c)
-  assert.ok(SRC.includes('>项目概览<'), 'e2e 用顶栏标题文案做 blur 触发点')
+  // i18n 之后顶栏标题是 {{ $t('projects.overviewPageTitle') }}，不再是字面量。
+  // e2e 仍按渲染后的中文找它，所以两头都要锁：组件引用这个 key、locale 里是「项目概览」。
+  assert.ok(SRC.includes('overviewPageTitle'), '顶栏标题要走 projects.overviewPageTitle')
+  assert.ok(ZH.includes("overviewPageTitle: '项目概览'"), 'e2e 用顶栏标题文案做 blur 触发点')
 })
 
 test('轮询纪律：不起定时器，不调 /version/status', () => {

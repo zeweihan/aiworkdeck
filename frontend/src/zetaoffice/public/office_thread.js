@@ -2041,7 +2041,14 @@ const EXEC = {
     out.view = view;
     const sel = {};
     try { sel.collapsed = (vc.getString() || '').length === 0; } catch (e) {}
-    try { sel.inTable = !!vc.getPropertyValue('Cell'); } catch (e) { sel.inTable = false; }
+    // 光标所在单元格（如 "B2"）。工具栏的表格组要靠它算出当前行/列，才能做
+    // 「在上方插入行」「删除本列」这类相对操作——table_* 原语收的是 1 起的
+    // 行号与列字母/列号，没有「当前位置」的概念。
+    try {
+      const cell = vc.getPropertyValue('Cell');
+      sel.inTable = !!cell;
+      if (cell) { try { sel.cellName = String(cell.getPropertyValue('CellName') || ''); } catch (e) {} }
+    } catch (e) { sel.inTable = false; }
     out.selection = sel;
     // 撤销/重做可用性。UndoManager 不是属性（getPropertyValue 抛
     // UnknownPropertyException，真机验过），要走 XUndoManagerSupplier 的方法。
@@ -2091,10 +2098,41 @@ const EXEC = {
     try { lm = ctrl.getFrame().getPropertyValue('LayoutManager'); }
     catch (e) { return { success: false, message: 'LayoutManager 不可达: ' + errStr(e) }; }
     if (!lm) return { success: false, message: 'LayoutManager 为空' };
+    const visible = (url) => { try { return !!lm.isElementVisible(url); } catch (e) { return null; } };
+    // 显示这一侧要**复核 + 重试**：藏过全套（含 11 条 singlemode-* 上下文工具栏）
+    // 之后，单纯 showElement 有时恢复不出来（真机实证）。逃生开关是「体验不能
+    // 退步」的兜底保证，不能靠一次调用碰运气——先补 createElement 重建元素，
+    // 再把整个 LayoutManager 打开，每一步都用 isElementVisible 复核。
     const setOne = (url, on) => {
-      try { if (on) lm.showElement(url); else lm.hideElement(url); } catch (e) {}
-      try { return !!lm.isElementVisible(url); } catch (e) { return null; }
+      if (!on) {
+        try { lm.hideElement(url); } catch (e) {}
+        return visible(url);
+      }
+      try { lm.showElement(url); } catch (e) {}
+      if (visible(url) === true) return true;
+      try { lm.createElement(url); lm.showElement(url); } catch (e) {}
+      if (visible(url) === true) return true;
+      try { lm.setVisible(true); lm.showElement(url); } catch (e) {}
+      return visible(url);
     };
+    // 不带任何字段 = 只读查询：回报当前各处可见性。宿主用它复核「藏了之后
+    // 真的没再冒出来」（上下文工具栏是选中表格/图片时由引擎自己拉起来的）。
+    const anyField = ['all', 'menubar', 'statusbar', 'toolbars', 'rulers'].some((k) => req[k] != null);
+    if (!anyField) {
+      const cur = { toolbars: {} };
+      try { cur.all = !!lm.isVisible(); } catch (e) {}
+      try { cur.menubar = !!lm.isElementVisible(CHROME_URLS.menubar); } catch (e) {}
+      try { cur.statusbar = !!lm.isElementVisible(CHROME_URLS.statusbar); } catch (e) {}
+      for (let i = 0; i < CHROME_URLS.toolbars.length; i++) {
+        const u = CHROME_URLS.toolbars[i];
+        try { cur.toolbars[u.slice(u.lastIndexOf('/') + 1)] = !!lm.isElementVisible(u); } catch (e) {}
+      }
+      try {
+        const vs = ctrl.getViewSettings();
+        cur.rulers = { ShowHoriRuler: !!vs.getPropertyValue('ShowHoriRuler'), ShowVertRuler: !!vs.getPropertyValue('ShowVertRuler') };
+      } catch (e) {}
+      return { success: true, visible: cur };
+    }
     if (req.all != null) {
       try { lm.setVisible(!!req.all); } catch (e) { out.allErr = errStr(e); }
       try { out.applied.all = !!lm.isVisible(); } catch (e) {}
