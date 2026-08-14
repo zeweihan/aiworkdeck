@@ -24,6 +24,18 @@ jobs:
         # 零断言失败也算 BUILD FAILURE），2026-08-14 一天在 Linux runner 上撞了两次，
         # 两次都死在同一位置附近、重跑又过。TCP 信道对 stdout 污染免疫。
         run: mvn -B test -Dsurefire.forkNode.factory=org.apache.maven.plugin.surefire.extensions.SurefireForkNodeFactory
+      - name: Dump surefire fork diagnostics on failure
+        if: failure()
+        working-directory: backend
+        # fork JVM 静默死亡（退出码 0、零断言失败）时，唯一的现场证据在 dumpstream：
+        # 里面有写进信道的原始脏字节与 fork 侧异常。不上传 artifact，直接打进日志。
+        run: |
+          for f in target/surefire-reports/*.dumpstream target/surefire-reports/*.dump; do
+            [ -f "$f" ] || continue
+            echo "===== $f ====="
+            head -c 20000 "$f" | LC_ALL=C tr -c '[:print:]\n\t' '.'
+            echo
+          done
 
   frontend:
     name: Frontend (build:h5)
