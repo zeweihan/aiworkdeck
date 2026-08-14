@@ -4,20 +4,6 @@
          (user feedback). Status floats over the editor's top-right corner;
          the pill only appears while something is happening (saving/failure)
          and vanishes when ready. -->
-    <view class="libre-float">
-      <!-- No manual save button: edits auto-save (modify listener → debounced
-           saveDocument). The pill doubles as the autosave indicator
-           (保存中… / 已保存 / 保存失败). Boot/load 阶段由下方进度面板展示，
-           pill 只负责就绪后的保存状态。 -->
-      <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
-        <view v-if="!isError && !ready" class="libre-spin"></view>
-        <text>{{ displayStatus }}</text>
-      </view>
-      <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
-           Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。 -->
-      <text v-if="ready && !loadingOverlayVisible && showsReview" class="libre-review-btn" :class="{ on: reviewOpen }"
-            @tap="reviewOpen = !reviewOpen">{{ $t('editor.reviewBtn') }}</text>
-    </view>
     <!-- 加载进度面板：引擎启动 + 文档下载/打开是感知最慢的一段（尤其大文档），
          把过程阶段化展示出来（用户反馈：不能更快，也要看得见进展）。 -->
     <view v-if="loadingOverlayVisible" class="libre-loading">
@@ -26,7 +12,7 @@
            渲染失败/非 Word/空文档保持原进度卡片。 -->
       <view v-show="previewReady" class="libre-preview-strip">
         <view class="libre-strip-track"><view class="libre-strip-fill" :style="{ width: bootPct + '%' }"></view></view>
-        <text class="libre-strip-text">{{ bootStageText }} {{ Math.round(bootPct) }}% — {{ $t('editor.previewReadableHint') }}</text>
+        <text class="libre-strip-text">{{ bootStage }} {{ Math.round(bootPct) }}% — 已可阅读，编辑器就绪后可直接编辑</text>
       </view>
       <view v-show="previewReady" ref="docxPreviewHost" class="libre-preview-host"></view>
       <view v-if="!previewReady" class="libre-loading-card">
@@ -43,11 +29,11 @@
           </view>
         </view>
         <view class="libre-loading-meta">
-          <text class="libre-loading-stage">{{ bootStageText }}</text>
+          <text class="libre-loading-stage">{{ bootStage }}</text>
           <text class="libre-loading-pct">{{ Math.round(bootPct) }}%</text>
         </view>
         <text v-if="dlText" class="libre-loading-dl">{{ dlText }}</text>
-        <text class="libre-loading-hint">{{ $t('editor.firstOpenHint') }}</text>
+        <text class="libre-loading-hint">首次打开需初始化文档引擎，大文档会稍慢，请稍候</text>
       </view>
     </view>
     <!-- The Electron <webview> is created imperatively (uni-app's template
@@ -55,7 +41,23 @@
          审阅面板与画布并排（挤宽而非浮层）——webview 是独立合成层，浮层压在
          上面的行为不可靠。 -->
     <view class="libre-body">
-      <view :id="hostId" class="libre-host"></view>
+      <!-- 浮层必须钉在**画布**上而不是整个编辑器上：审阅面板是并排挤宽的，钉在
+           外层右上角会正好压住面板的「修订/批注」标题行（真机截图实证）。 -->
+      <view class="libre-canvas-wrap">
+        <view :id="hostId" class="libre-host"></view>
+        <view class="libre-float">
+          <!-- No manual save button: edits auto-save (modify listener → debounced
+               saveDocument). 保存状态只在「慢」和「失败」时出声——见 saveDocument。 -->
+          <view v-if="displayStatus && !loadingOverlayVisible" class="libre-pill" :class="{ error: isError }">
+            <view v-if="!isError && !ready" class="libre-spin"></view>
+            <text>{{ displayStatus }}</text>
+          </view>
+          <!-- 审阅面板开关：页边小字读不到作者/时间，面板才是修订的权威视图。
+               Calc/Impress 都没有修订（redline）机制，按 docKind 隐藏——不能只是点了没反应。 -->
+          <text v-if="ready && !loadingOverlayVisible && showsReview" class="libre-review-btn" :class="{ on: reviewOpen }"
+                @tap="reviewOpen = !reviewOpen">审阅</text>
+        </view>
+      </view>
       <ReviewPanel
         v-if="reviewOpen && ready && showsReview"
         :executor="executor"
@@ -110,9 +112,7 @@ export default {
       // 审阅面板（修订/批注）开关与刷新信号
       reviewOpen: false,
       reviewRefreshKey: 0,
-      // 状态用 key 存（editor.status.* 命名空间），显示时经 $t 取文案；
-      // isError/displayStatus 等判断改为按 key 判断，中文渲染结果不变。
-      statusKey: 'booting',
+      statusText: '启动中…',
       log: '',
       webviewEl: null,
       executor: null,
@@ -129,7 +129,7 @@ export default {
       // bootCap 是当前阶段允许滴到的上限；dl* 是文档字节下载进度。
       bootPct: 3,
       bootCap: 12,
-      bootStageKey: 'engineStarting',
+      bootStage: '正在启动文档引擎',
       dlLoaded: 0,
       dlTotal: 0,
       // 只读预览接力：字节预取完成后 docx-preview 渲染成功置 previewReady，
@@ -140,13 +140,7 @@ export default {
   },
   computed: {
     isError() {
-      return this.statusKey.endsWith('Failed')
-    },
-    // e2e 契约：tests/desktop-e2e/run.mjs 从组件实例读 ed.statusText 并按中文
-    // 状态串（就绪/加载文档中/已保存/失败）判定——statusKey 化后保留这个只读
-    // 别名，zh 语言下取值与迁移前逐字节一致。改名/删除前先改该套件。
-    statusText() {
-      return this.$t('editor.status.' + this.statusKey)
+      return this.statusText.indexOf('失败') !== -1
     },
     // Calc/Impress 都没有修订（redline）机制——审阅面板对它们没有数据可展示。
     showsReview() {
@@ -154,24 +148,21 @@ export default {
     },
     // Stays quiet once ready — no permanent "就绪" badge.
     displayStatus() {
-      return this.statusKey === 'ready' ? '' : this.$t('editor.status.' + this.statusKey)
-    },
-    bootStageText() {
-      return this.$t('editor.boot.' + this.bootStageKey)
+      return this.statusText === '就绪' ? '' : this.statusText
     },
     loadingOverlayVisible() {
       // 「仅桌面版可用」是终态（h5 预览等场景），不是加载中——不展示进度面板
-      return !this.ready && !this.isError && this.statusKey !== 'desktopOnly'
+      return !this.ready && !this.isError && this.statusText !== '仅桌面版可用'
     },
     loadingTitle() {
-      return (this.file && this.file.name) ? this.file.name : this.$t('editor.preparingEditor')
+      return (this.file && this.file.name) ? this.file.name : '正在准备编辑器'
     },
     dlText() {
       if (!this.dlLoaded) return ''
       const fmt = (n) => n > 1024 * 1024 ? (n / 1024 / 1024).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'
       return this.dlTotal > 0
-        ? this.$t('editor.dlProgress', { loaded: fmt(this.dlLoaded), total: fmt(this.dlTotal) })
-        : this.$t('editor.dlLoadedOnly', { size: fmt(this.dlLoaded) })
+        ? `文档内容 ${fmt(this.dlLoaded)} / ${fmt(this.dlTotal)}`
+        : `已下载文档内容 ${fmt(this.dlLoaded)}`
     },
   },
   watch: {
@@ -184,10 +175,10 @@ export default {
       if (!this._endpointUp) return
       this.ready = false
       this.docLoadFailed = false
-      this.statusKey = 'loadingDoc'
+      this.statusText = '加载文档中…'
       this.bootPct = 75
       this.bootCap = 95
-      this.bootStageKey = 'openingDoc'
+      this.bootStage = '正在打开文档'
       this.startBootTrickle()
       this.finishDocLoad()
     },
@@ -196,7 +187,7 @@ export default {
     try {
       const api = host.zetaoffice
       if (!api || typeof api.getEditor !== 'function') {
-        this.statusKey = 'unsupported'
+        this.statusText = '当前环境不支持文档编辑'
         return
       }
       // Prefetch the document bytes IN PARALLEL with the LOWA boot — the fetch
@@ -209,7 +200,7 @@ export default {
       const info = await api.getEditor()
       this.mountEditor(info)
     } catch (e) {
-      this.statusKey = 'initFailed'
+      this.statusText = '初始化失败'
       this.appendLog('init failed: ' + (e && e.message ? e.message : e))
     }
   },
@@ -218,6 +209,7 @@ export default {
     // by the closer (closeFile / evictLibreInstance await flushSave first) —
     // export needs the live webview, so saving from here is already too late.
     clearTimeout(this._saveTimer)
+    clearTimeout(this._slowSaveTimer)
     clearInterval(this._bootTimer)
     // Tell the host this editor (and its executor) is going away — so it can
     // stop routing AI commands to a disposed executor when the document tab is
@@ -243,21 +235,21 @@ export default {
         if (this.bootPct < this.bootCap) this.bootPct = Math.min(this.bootCap, this.bootPct + 0.6)
       }, 400)
     },
-    bootMilestone(base, cap, stageKey) {
+    bootMilestone(base, cap, stage) {
       if (this.ready) return
       this.bootPct = Math.max(this.bootPct, base)
       this.bootCap = Math.max(this.bootCap, cap)
-      if (stageKey) this.bootStageKey = stageKey
+      if (stage) this.bootStage = stage
     },
     onBootLog(m) {
       if (!m) return
-      if (m.indexOf('CJK font fetched') !== -1) this.bootMilestone(15, 30, 'cjkFonts')
-      else if (m.indexOf('soffice.js loaded') !== -1) this.bootMilestone(32, 55, 'layoutEngine')
-      else if (m.indexOf('thread port ready') !== -1) this.bootMilestone(58, 70, 'docService')
+      if (m.indexOf('CJK font fetched') !== -1) this.bootMilestone(15, 30, '正在加载中文字体')
+      else if (m.indexOf('soffice.js loaded') !== -1) this.bootMilestone(32, 55, '正在初始化排版引擎')
+      else if (m.indexOf('thread port ready') !== -1) this.bootMilestone(58, 70, '正在启动文档服务')
       else if (m.indexOf('空白文档就绪') !== -1 || m.indexOf('UI ready') !== -1) {
-        this.bootMilestone(72, 85, this.file ? 'openingDoc' : 'almostReady')
+        this.bootMilestone(72, 85, this.file ? '正在打开文档' : '即将就绪')
       } else if (m.indexOf('load_document: 已加载真实文档') !== -1) {
-        this.bootMilestone(96, 99, 'rendering')
+        this.bootMilestone(96, 99, '正在渲染文档')
       }
     },
     appendLog(m) {
@@ -351,7 +343,7 @@ export default {
           try { return await innerExec(action, params) }
           finally { this._cmdBusy--; this._lastCmdAt = Date.now() }
         }
-        this.statusKey = this.file ? 'loadingDoc' : 'booting'
+        this.statusText = this.file ? '加载文档中…' : '启动中…'
         this.appendLog(whence + ' — executor wired, awaiting office endpoint')
       } catch (e) {
         this.appendLog('executor wiring failed: ' + (e && e.message ? e.message : e))
@@ -377,14 +369,14 @@ export default {
           // is wrong, so this is loud, not silent. docLoadFailed 关保存闸——
           // 空白画布上的任何编辑都不得回传覆盖后端真文件。
           this.docLoadFailed = true
-          this.statusKey = 'loadFailed'
+          this.statusText = '文档加载失败'
           this.appendLog('load_document failed: ' + (e && e.message ? e.message : e))
         }
       }
       this.bootPct = 100
       clearInterval(this._bootTimer)
       this.ready = true
-      if (!this.statusKey.endsWith('Failed')) this.statusKey = 'ready'
+      if (this.statusText.indexOf('失败') === -1) this.statusText = '就绪'
       this.$emit('ready', this.executor)
       // 装载期间后端把这份文件改掉了（版本退回 / 检查点恢复），刚装进来的是
       // 预取到的旧字节——不 await，让宿主先拿到 ready 再补一次真重载。
@@ -463,7 +455,7 @@ export default {
         return false
       }
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
-      this.bootMilestone(86, 95, 'openingDoc')
+      this.bootMilestone(86, 95, '正在打开文档')
       // 当前登录用户名随文档传给 worker：用户本人编辑的修订以用户名署名，
       // AI 命令产生的修订署名 AI Workdeck（worker execCommand 按 __agent 切换）。
       const u = getCurrentUser() || {}
@@ -521,8 +513,8 @@ export default {
       this._bytesPromise = null
       this.dlLoaded = 0
       this.dlTotal = 0
-      const prevStatusKey = this.statusKey
-      this.statusKey = 'reloading'
+      const prevStatus = this.statusText
+      this.statusText = '重新加载中…'
       try {
         const loaded = await this.loadDocument()
         if (!loaded) throw new Error('后端返回 0 字节，未替换编辑器内文档')
@@ -530,14 +522,14 @@ export default {
         // 换完再清一次脏（retarget 里设 RecordChanges 会触发一次 modified）。
         this.docLoadFailed = false
         cancelAutoSave()
-        this.statusKey = prevStatusKey.endsWith('Failed') ? 'ready' : prevStatusKey
+        this.statusText = prevStatus.indexOf('失败') === -1 ? prevStatus : '就绪'
         this.appendLog('reload: 已就地换成后端最新内容')
         return true
       } catch (e) {
         // 换文档失败 = 画布上仍是改前内容。保存闸必须落下，否则下一次 autosave
         // 会用旧内容覆盖后端刚改好的文件。
         this.docLoadFailed = true
-        this.statusKey = 'reloadFailed'
+        this.statusText = '重新加载失败，内容已过期'
         this.appendLog('reload failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {
@@ -643,8 +635,13 @@ export default {
       const fileId = f.wpsFileId || f.id
       if (!fileId) { this.appendLog('save: file has no id/wpsFileId'); return false }
       this.saving = true
-      const prevStatusKey = this.statusKey
-      this.statusKey = 'saving'
+      // 保存状态别抢戏：绝大多数保存几百毫秒就完了，闪一下「保存中…→已保存」
+      // 纯粹是干扰（用户反馈：经常有变化，不好看且会打扰）。规则改成——慢到 2s
+      // 以上才提示「保存中…」，成功后安静收回、不报「已保存」，失败才常驻显示。
+      // 上一次的「保存失败」不能当成要恢复的状态，这次成功了就该回到就绪。
+      const prevStatus = this.statusText.indexOf('失败') !== -1 ? '就绪' : this.statusText
+      clearTimeout(this._slowSaveTimer)
+      this._slowSaveTimer = setTimeout(() => { if (this.saving) this.statusText = '保存中…' }, 2000)
       try {
         const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
         this.appendLog('▶ export_document「' + name + '」…')
@@ -671,17 +668,17 @@ export default {
         }
         this.appendLog('  ← exported ' + u8.length + ' bytes, uploading…')
         await this.uploadBytes(getFileUploadUrl(fileId), u8, name)
-        this.statusKey = 'saved'
         this.appendLog('  ← saved to backend (fileId=' + fileId + ')')
         return true
       } catch (e) {
-        this.statusKey = 'saveFailed'
+        this.statusText = '保存失败'
         this.appendLog('save failed: ' + (e && e.message ? e.message : e))
         return false
       } finally {
         this.saving = false
-        // Let the badge linger, then settle back to ready (unless a failure is showing).
-        setTimeout(() => { if (this.statusKey === 'saved') this.statusKey = prevStatusKey }, 2500)
+        clearTimeout(this._slowSaveTimer)
+        // 只收回自己挂上去的「保存中…」；失败态是 catch 里刚设的，必须留着
+        if (this.statusText === '保存中…') this.statusText = prevStatus
       }
     },
     // Authed multipart POST — the upload twin of fetchArrayBuffer (backend
@@ -705,9 +702,9 @@ export default {
 
 <style scoped>
 .libre-editor-wrapper { position: relative; display: flex; flex-direction: column; width: 100%; height: 100%; background: #fff; }
-/* Floating status pill, pinned over the editor's top-right corner (LO's own
-   menubar leaves that region empty). No layout height is reserved — the
-   document canvas gets the full pane. */
+/* Floating status pill, pinned over the CANVAS's top-right corner (not the
+   wrapper's — the review panel sits to the right and would be covered). No
+   layout height is reserved — the document canvas gets the full pane. */
 .libre-float { position: absolute; top: 6px; right: 16px; z-index: 20; display: flex; align-items: center; gap: 8px; }
 .libre-pill { display: flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
   background: rgba(31, 41, 55, 0.78); color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
@@ -716,7 +713,8 @@ export default {
   border-radius: 50%; animation: libre-rot 0.8s linear infinite; }
 @keyframes libre-rot { to { transform: rotate(360deg); } }
 .libre-body { flex: 1; min-height: 0; width: 100%; display: flex; flex-direction: row; }
-.libre-host { flex: 1; min-width: 0; min-height: 0; height: 100%; }
+.libre-canvas-wrap { position: relative; flex: 1; min-width: 0; min-height: 0; height: 100%; }
+.libre-host { width: 100%; height: 100%; }
 .libre-review-btn { padding: 3px 10px; border-radius: 999px; background: rgba(31, 41, 55, 0.78);
   color: #e5e7eb; font-size: 12px; backdrop-filter: blur(4px); }
 .libre-review-btn.on { background: #E6F9F0; color: #1A5336; }

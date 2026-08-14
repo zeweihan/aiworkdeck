@@ -33,6 +33,9 @@ export const EDITOR_ACTIONS = [
   // [overlay 快捷键] desktop-parity keys (Cmd/Ctrl+A/B/I/U, Home/End) — the
   // worker holds the .uno: allowlist (UI_COMMANDS in office_thread.js).
   'ui_command',
+  // [视图缩放] 触控板捏合 / Cmd+加减号；{value} 绝对百分比、{delta} 相对增量，
+  // 不带参数就是只读回当前缩放。宿主发起，不是 AI 管线。
+  'set_zoom',
   // [Track D] load the user's real document into the editor (host-initiated, not
   // an AI-agent command): {bytes, name} -> MEMFS + loadComponentFromURL + retarget.
   'load_document',

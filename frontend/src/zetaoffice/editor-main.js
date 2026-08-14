@@ -256,8 +256,9 @@ startEditorEndpoint({
   // in the document (Qt5-WASM gives the canvas no IME). Commits at the LO cursor
   // via the same verified path as agent commands. Attached in BOTH webview and
   // verify modes — local typing is a real-user need, not just a verification one.
+  let overlay = null
   try {
-    attachImeOverlay({
+    overlay = attachImeOverlay({
       canvas: document.getElementById('qtcanvas'),
       commit: (text) => endpoint.executor.executeCommand('insert_at_cursor', { text }),
       // Control keys: the overlay swallows keystrokes (it IS the focused input),
@@ -270,6 +271,43 @@ startEditorEndpoint({
       onLog: (m) => { console.log('[zeta-editor]', m); if (VERIFY) vlog(m) },
     })
   } catch (e) { console.error('[zeta-editor] IME overlay failed:', e); if (VERIFY) vlog('IME overlay failed: ' + (e && e.message || e)) }
+  // 触控板捏合缩放。Chromium 把捏合报成 ctrlKey + wheel；**不拦下来**浏览器就去
+  // 缩放整个 webview 页面——LO 自己的工具栏跟着一起放大、画布重采样发糊，而且
+  // IME 覆盖层的像素映射基准（CSS px per 1/100 mm）整个作废。拦下来改成缩放
+  // 文档视图（ViewSettings.ZoomValue），这才是用户要的那种缩放。
+  try {
+    const canvas = document.getElementById('qtcanvas')
+    let zoomPct = 100      // 本地镜像：捏合连发时以它为基准，引擎回值再校正
+    let zoomTarget = null
+    let zoomTimer = 0
+    // 起始缩放问一次引擎（无参 set_zoom = 只读回当前值）
+    endpoint.executor.executeCommand('set_zoom', {})
+      .then((r) => { if (r && r.success && r.zoom) zoomPct = r.zoom })
+      .catch(() => { /* 读不到就按 100% 起步 */ })
+    const flushZoom = () => {
+      zoomTimer = 0
+      const v = zoomTarget
+      zoomTarget = null
+      if (v == null) return
+      endpoint.executor.executeCommand('set_zoom', { value: v })
+        .then((r) => {
+          // 只有没有更新的目标在排队时才回写，否则会把连发中的中间值倒推回去
+          if (zoomTarget == null && r && r.success && r.zoom) zoomPct = r.zoom
+          if (overlay) overlay.reposition()   // 缩放后光标的像素位置变了
+        })
+        .catch((err) => console.warn('[zeta-editor] set_zoom failed:', err))
+    }
+    canvas.addEventListener('wheel', (ev) => {
+      if (!ev.ctrlKey) return                 // 普通两指滚动照旧交给 Qt
+      ev.preventDefault()
+      const next = Math.max(20, Math.min(600, Math.round(zoomPct * Math.exp(-ev.deltaY / 100))))
+      if (next === zoomPct) return
+      zoomPct = next
+      zoomTarget = next
+      // 一次捏合会连发几十个 wheel：合并到 ~60ms 一发，否则每一步都要等引擎重排版
+      if (!zoomTimer) zoomTimer = setTimeout(flushZoom, 60)
+    }, { passive: false })
+  } catch (e) { console.error('[zeta-editor] pinch-zoom wiring failed:', e) }
   if (VERIFY) {
     wireVerifyPanel(endpoint.executor)
     // Automation hook: lets a headless-browser test driver call the executor

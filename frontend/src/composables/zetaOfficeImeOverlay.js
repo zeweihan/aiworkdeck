@@ -11,13 +11,17 @@
 //     caller's `commit` callback — the SAME verified path as agent commands:
 //     executor.executeCommand('insert_at_cursor', {text}).
 //
-// PHASE A (default, no getCursorRaw): the overlay covers the whole canvas,
-// transparent — the IME candidate box pops at the canvas top-left.
+// PHASE A (default, no getCursorRaw): the overlay covers the whole canvas until
+// the first click, then follows the last click point — the IME candidate box
+// pops there instead of the canvas top-left.
 //
 // PHASE B (when getCursorRaw is supplied): the overlay anchors a small box at the
 // LO view cursor's pixel rect so the native candidate window appears AT the
-// cursor; composing text shows inline (color turned visible), then clears on
-// commit while LO renders the real text.
+// cursor.
+//
+// 组合中的文字（"输入过程"）由一个独立的不透明预览条显示，贴在光标框上方——
+// 输入框本身必须全透明（它压在画布上，显字会与正文叠印），而预览条不依赖光标
+// 映射，Phase A 下照样可见。
 //
 //   MAPPING — doc 1/100 mm -> canvas CSS px is affine: px = origin + scale*(doc - scroll).
 //   * scale is STABLE: 96/2540 CSS px per 1/100 mm at 100% zoom (CSS defines
@@ -127,6 +131,8 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   const phaseB = typeof getCursorRaw === 'function'
   let mapOk = phaseB     // flips false (-> Phase A) if a raw read ever throws
   let anchor = null      // {x,y} live origin offset in host px, set on canvas click
+  let lastClick = null   // 最近一次画布点击（host 相对 px）——没有光标映射时的摆位依据
+  let lastBox = null     // 最近一次算出的光标框，组合预览条据此贴在光标上方
 
   const input = document.createElement('input')
   input.setAttribute('autocomplete', 'off')
@@ -146,8 +152,28 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
   if (getComputedStyle(host).position === 'static') host.style.position = 'relative'
   host.appendChild(input)
 
+  // 组合预览条。输入法的候选窗只显示候选，正在拼的那串字（"输入过程"）是画在
+  // 输入框里的——而这个框必须全透明（它压在画布上，显字会和正文叠在一起）。所以
+  // 单独挂一个不透明小条来显示组合中的文字：它独立于映射是否可用，未点过画布、
+  // 光标映射失败时照样看得见（真机反馈：看不到输入过程）。
+  const preview = document.createElement('div')
+  preview.setAttribute('aria-hidden', 'true')
+  Object.assign(preview.style, {
+    position: 'absolute', display: 'none', zIndex: '6',
+    maxWidth: '32em', padding: '2px 7px',
+    background: '#fff', border: '1px solid #C7CDD3', borderRadius: '5px',
+    boxShadow: '0 2px 8px rgba(15, 23, 42, 0.16)',
+    font: '14px/1.45 system-ui, -apple-system, "PingFang SC", sans-serif',
+    color: '#1F2937', whiteSpace: 'pre', overflow: 'hidden', textOverflow: 'ellipsis',
+    textDecoration: 'underline', textDecorationColor: '#9CA3AF',
+    pointerEvents: 'none',
+  })
+  host.appendChild(preview)
+
   function applyCover() {
     Object.assign(input.style, { left: '0', top: '0', width: '100%', height: '100%' })
+    lastBox = null
+    positionPreview()
   }
   function applyCursorBox(rect) {
     Object.assign(input.style, {
@@ -156,14 +182,29 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
       width: '16em',
       height: Math.round(rect.height) + 'px',
     })
+    lastBox = rect
+    positionPreview()
   }
-  applyCover()
 
-  function setPreviewVisible(on) {
-    const show = on && mapOk && anchor
-    input.style.color = show ? '#111' : 'transparent'
-    input.style.caretColor = show ? '#111' : 'transparent'
+  // 预览条贴在光标框**上方**：系统候选窗弹在输入框下方，两者错开才不会互相盖住。
+  // 顶到画布上边时翻到下方。没有光标框就退回最后点击处，再退回左上角。
+  function positionPreview() {
+    if (preview.style.display === 'none') return
+    const box = lastBox
+      || (lastClick ? { left: lastClick.x, top: Math.max(0, lastClick.y - 9), height: 18 } : { left: 8, top: 24, height: 18 })
+    const above = box.top - preview.offsetHeight - 4
+    preview.style.left = Math.max(4, Math.round(box.left)) + 'px'
+    preview.style.top = Math.round(above >= 2 ? above : box.top + box.height + 4) + 'px'
   }
+  function showPreview(text) {
+    if (!text) { preview.style.display = 'none'; return }
+    preview.textContent = text
+    preview.style.display = 'block'
+    positionPreview()
+  }
+  function hidePreview() { preview.style.display = 'none' }
+
+  applyCover()
 
   // Re-derive the live origin offset from a canvas click: clickPx (host-relative)
   // and the cursor's doc coords AT that click give offset = clickPx - scale*pos.
@@ -204,15 +245,33 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     } catch (e) { mapOk = false; return null }
   }
 
-  // Move the box to the current LO cursor. Cover (Phase A) until first click.
+  // Move the box to the current LO cursor. 拿不到光标映射时（没点过画布 / 映射
+  // 失败）退回**最后一次点击处**而不是全覆盖：系统候选窗跟着输入框走，落在用户
+  // 刚点的地方总比钉在画布左上角强。一次都没点过才全覆盖。
   async function reposition() {
     const rect = await computeRect()
-    if (rect) applyCursorBox(rect); else applyCover()
+    if (rect) applyCursorBox(rect)
+    else if (lastClick) applyCursorBox({ left: lastClick.x, top: Math.max(0, lastClick.y - 9), height: 18 })
+    else applyCover()
   }
 
   // Commit logic: identical to the verified toolbar bridge. dedup the input event
   // that trails compositionend so a committed phrase isn't inserted twice.
+  //
+  // 这个闩曾经是「中文标点要按两次」的根因：compositionend 后无条件置位，指望
+  // 紧跟着一定有一个 input 事件来把它消费掉。可**不是每次都有**——中文态下标点
+  // 直接上屏、组合被取消等情形都不补发，闩就一直挂着，把用户随后敲的第一个字符
+  // 吃掉，于是"按两次才过去"。两道保险：
+  //   1) 有 inputType 时只吞组合产物（insertCompositionText/insertFromComposition），
+  //      普通字符（直接上屏的标点走 insertText）一律照常上屏；
+  //   2) 无论如何都在下一个宏任务里自动解闩——尾随 input 与 compositionend 由浏览器
+  //      在同一个任务里连发，解闩排在它之后，闩绝不跨事件循环存活。
   let composing = false, skipNextInput = false
+  const armSkip = () => {
+    skipNextInput = true
+    setTimeout(() => { skipNextInput = false }, 0)
+  }
+  const isCompositionInput = (e) => e.inputType === 'insertCompositionText' || e.inputType === 'insertFromComposition'
   const doCommit = (t) => {
     input.value = ''
     if (!t) return
@@ -220,16 +279,21 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     try { Promise.resolve(commit(t)).catch((e) => log('overlay commit error: ' + (e && e.message || e))) }
     catch (e) { log('overlay commit error: ' + (e && e.message || e)) }
   }
-  input.addEventListener('compositionstart', () => { composing = true; setPreviewVisible(true) })
+  input.addEventListener('compositionstart', () => { composing = true })
+  input.addEventListener('compositionupdate', (e) => showPreview(e.data || ''))
   input.addEventListener('compositionend', (e) => {
-    composing = false; skipNextInput = true
-    setPreviewVisible(false)
+    composing = false; armSkip()
+    hidePreview()
     doCommit(e.data)
     reposition() // cursor advanced past the committed text
   })
   input.addEventListener('input', (e) => {
-    if (composing) return                                  // mid-composition: wait for end
-    if (skipNextInput) { skipNextInput = false; return }   // trailing event after compositionend
+    if (composing) { showPreview(input.value); return }    // mid-composition: wait for end
+    if (skipNextInput) {
+      skipNextInput = false
+      // 只吞组合产物；直接上屏的标点带 insertText，必须放行（见 armSkip 注释）
+      if (!e.inputType || isCompositionInput(e)) return
+    }
     doCommit(e.data != null ? e.data : input.value)
     reposition()
   })
@@ -380,6 +444,9 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     const cx = e.clientX, cy = e.clientY
     setTimeout(() => {
       try { input.focus() } catch (err) {}
+      // 光标映射不可用时就靠它摆输入框/预览条——所以每次点击都记，不看 phaseB。
+      const r = host.getBoundingClientRect()
+      lastClick = { x: cx - r.left, y: cy - r.top }
       anchorFromClick(cx, cy).then(reposition)
     }, 0)
   }
@@ -400,6 +467,7 @@ export function attachImeOverlay({ canvas, commit, getCursorRaw, onEnter, sendCo
     destroy() {
       canvas.removeEventListener('mouseup', onMouseUp)
       input.remove()
+      preview.remove()
     },
   }
 }
