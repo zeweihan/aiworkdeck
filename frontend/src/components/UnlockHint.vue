@@ -11,6 +11,7 @@
 // 语气克制：用户没做错事，只是碰到了额度边界。
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { accountPageUrl } from '@/utils/siteLinks.js'
+import { t } from '@/i18n'
 
 export default {
   name: 'UnlockHint',
@@ -22,7 +23,7 @@ export default {
     },
     linkText: {
       type: String,
-      default: '了解详情',
+      default: () => t('onboarding.hint.learnMore'),
     },
     // 外链地址；走系统浏览器（桌面端 window.open 会被主进程吞掉）。
     // 留空 = 当前站点的账户页（解锁 SKU 的购买入口都挂在那里）。

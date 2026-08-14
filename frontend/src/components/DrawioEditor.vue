@@ -1,28 +1,28 @@
 <template>
   <view class="drawio-editor">
     <view v-if="phase === 'loading'" class="drawio-status">
-      <text class="drawio-status-text">正在打开图形编辑器…</text>
+      <text class="drawio-status-text">{{ $t('editor.drawio.opening') }}</text>
     </view>
 
     <!-- 这次构建没烙 draw.io 资源（Web 部署未放 dist/drawio，或壳层版本旧）。
          说清楚比挂一个永远转圈的 iframe 诚实。 -->
     <view v-else-if="phase === 'unavailable'" class="drawio-status">
-      <text class="drawio-status-text">当前环境没有内置图形编辑器</text>
+      <text class="drawio-status-text">{{ $t('editor.drawio.unavailable') }}</text>
       <text class="drawio-status-hint">
-        这份 {{ file && file.name }} 可以下载后用 draw.io 打开继续编辑。
+        {{ $t('editor.drawio.downloadHint', { name: (file && file.name) || '' }) }}
       </text>
-      <view class="drawio-btn" role="button" @tap="download">下载文件</view>
+      <view class="drawio-btn" role="button" @tap="download">{{ $t('editor.drawio.downloadFile') }}</view>
     </view>
 
     <view v-else-if="phase === 'error'" class="drawio-status">
       <text class="drawio-status-text">{{ errorText }}</text>
-      <view class="drawio-btn" role="button" @tap="boot">重试</view>
+      <view class="drawio-btn" role="button" @tap="boot">{{ $t('editor.drawio.retry') }}</view>
     </view>
 
     <template v-else>
       <view class="drawio-bar">
         <text class="drawio-name">{{ file && file.name }}</text>
-        <text class="drawio-dirty" v-if="dirty">未保存</text>
+        <text class="drawio-dirty" v-if="dirty">{{ $t('editor.drawio.unsaved') }}</text>
         <text class="drawio-saved" v-else-if="savedTip">{{ savedTip }}</text>
       </view>
       <!-- iframe 不加 sandbox：draw.io 要同源读自己的资源，sandbox 会把它按跨源
@@ -112,7 +112,7 @@ export default {
         this.editorUrl = info.url
         this.phase = 'ready'
       } catch (e) {
-        this.errorText = (e && e.message) || '打开失败'
+        this.errorText = (e && e.message) || this.$t('editor.drawio.openFailed')
         this.phase = 'error'
       }
     },
@@ -122,11 +122,11 @@ export default {
     // 一张空白图。
     async loadXml() {
       const id = this.file && (this.file.wpsFileId || this.file.id)
-      if (!id) throw new Error('文件不存在')
+      if (!id) throw new Error(this.$t('editor.drawio.fileMissing'))
       const res = await fetch(getFileDownloadUrl(id), { headers: getAuthHeaders() || {} })
-      if (!res.ok) throw new Error('读取文件失败（' + res.status + '）')
+      if (!res.ok) throw new Error(this.$t('editor.drawio.readFailed', { status: res.status }))
       const text = await res.text()
-      if (!text || !text.trim()) throw new Error('文件是空的')
+      if (!text || !text.trim()) throw new Error(this.$t('editor.drawio.fileEmpty'))
       return text
     },
 
@@ -186,14 +186,14 @@ export default {
 
     async persist(xml) {
       if (!xml) return
-      this.savedTip = '保存中…'
+      this.savedTip = this.$t('editor.drawio.saving')
       try {
         const dataUri = await this.exportSvg(xml)
         const svg = this.decodeSvg(dataUri)
         const res = await saveDrawioDiagram(this.projectId, this.file.id, { xml, svg })
         this.xml = xml
         this.dirty = false
-        this.savedTip = '已保存'
+        this.savedTip = this.$t('editor.drawio.saved')
         // 同一张图的 .svg / .png 被一起改了，已打开的标签要重拉。
         // 复用换风格那条既有广播，订阅方不用改。
         uni.$emit('awd:litviz-restyled', {
@@ -203,7 +203,7 @@ export default {
         this.$emit('saved', res)
       } catch (e) {
         this.savedTip = ''
-        uni.showToast({ title: (e && e.message) || '保存失败', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('editor.drawio.saveFailed'), icon: 'none' })
       }
     },
 

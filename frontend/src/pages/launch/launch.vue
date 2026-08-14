@@ -9,7 +9,7 @@
       </view>
       <view v-else class="launch-error">
         <text class="launch-error-text">{{ errorText }}</text>
-        <button class="launch-retry-btn" @tap="boot">重试</button>
+        <button class="launch-retry-btn" @tap="boot">{{ $t('onboarding.launch.retry') }}</button>
       </view>
     </view>
   </view>
@@ -30,8 +30,8 @@ export default {
   data() {
     return {
       failed: false,
-      statusText: '正在启动',
-      errorText: '无法连接本地服务，请稍后重试',
+      statusText: this.$t('onboarding.launch.starting'),
+      errorText: this.$t('onboarding.launch.cannotConnect'),
     }
   },
   onLoad() {
@@ -43,7 +43,7 @@ export default {
     },
     async boot() {
       this.failed = false
-      this.statusText = '正在启动'
+      this.statusText = this.$t('onboarding.launch.starting')
 
       // 非桌面环境（浏览器访问团队服务器）：走原登录流程，一字不动
       if (!this.isDesktop()) {
@@ -112,7 +112,7 @@ export default {
           return await getLicenseStatus()
         } catch (e) {
           if (!shownBooting) {
-            this.statusText = '正在启动本地服务'
+            this.statusText = this.$t('onboarding.launch.bootingLocal')
             shownBooting = true
           }
           await new Promise((resolve) => setTimeout(resolve, 1500))

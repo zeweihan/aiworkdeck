@@ -16,7 +16,7 @@
           <input
             class="search-input"
             v-model="searchQuery"
-            placeholder="搜索文件或内容..."
+            :placeholder="$t('files.searchPlaceholder')"
             @focus="isSearchFocused = true"
             @blur="isSearchFocused = false"
             @confirm="performSearch"
@@ -32,7 +32,7 @@
       </view>
 
       <!-- Tag Filters -->
-      <view class="section-label" v-if="visibleTags && visibleTags.length > 0">按标签筛选</view>
+      <view class="section-label" v-if="visibleTags && visibleTags.length > 0">{{ $t('files.filterByTag') }}</view>
       <view class="tags-container" v-if="visibleTags && visibleTags.length > 0">
         <view
           v-for="tag in visibleTags"
@@ -48,11 +48,11 @@
 
       <!-- Search Stats -->
       <view class="search-stats" v-if="hasSearched">
-         <text v-if="loading">正在搜索...</text>
-         <text v-else-if="results.totalMatches === 0 && (!results.results || results.results.length === 0)">未找到结果</text>
+         <text v-if="loading">{{ $t('files.searching') }}</text>
+         <text v-else-if="results.totalMatches === 0 && (!results.results || results.results.length === 0)">{{ $t('files.noResults') }}</text>
          <template v-else>
-            <text class="highlight">{{ results.totalMatches }}</text> 个匹配 ·
-            <text class="highlight">{{ results.totalFiles }}</text> 个文件
+            <text class="highlight">{{ results.totalMatches }}</text> {{ $t('files.matchesSuffix') }} ·
+            <text class="highlight">{{ results.totalFiles }}</text> {{ $t('files.filesSuffix') }}
          </template>
       </view>
     </view>
@@ -105,7 +105,7 @@
              <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
        </view>
-       <text class="empty-text">在所有文件中搜索</text>
+       <text class="empty-text">{{ $t('files.searchAllFiles') }}</text>
     </view>
   </view>
 </template>

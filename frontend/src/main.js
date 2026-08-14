@@ -3,9 +3,12 @@ import {
 } from "vue";
 import App from "./App.vue";
 import { recordFrontendError } from "./utils/errorBuffer.js";
+import { i18n } from "./i18n/index.js";
 
 export function createApp() {
 	const app = createSSRApp(App);
+	// i18n（EN 版）：locale 由 utils/appLanguage.js 决定；语言切换走整页 reload
+	app.use(i18n);
 	
 	// 全局错误处理：捕获未处理的 Promise rejection
 	if (typeof window !== 'undefined') {

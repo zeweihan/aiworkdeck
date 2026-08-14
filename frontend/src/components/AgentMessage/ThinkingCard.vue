@@ -4,9 +4,9 @@
      <div class="h-wrap" @click="isExpanded = !isExpanded">
         <!-- Removed Emoji Icon -->
          <span class="label">
-            <span v-if="status === 'thinking'">思考中… {{ liveSeconds }} 秒</span>
-            <span v-else-if="duration > 0">思考过程（{{ displayDuration }}）</span>
-            <span v-else>思考过程</span>
+            <span v-if="status === 'thinking'">{{ $t('chat.thinkingLive', { seconds: liveSeconds }) }}</span>
+            <span v-else-if="duration > 0">{{ $t('chat.thinkingProcessWithDuration', { duration: displayDuration }) }}</span>
+            <span v-else>{{ $t('chat.thinkingProcess') }}</span>
          </span>
          <span class="chevron" :class="{ 'open': isExpanded }"></span>
      </div>
@@ -24,9 +24,9 @@
           <!-- Removed Emoji Icon -->
         </div>
         <span class="title">
-          <span v-if="status === 'thinking'">思考中… {{ liveSeconds }} 秒</span>
-          <span v-else-if="duration > 0">已思考 {{ displayDuration }}</span>
-          <span v-else>思考过程</span>
+          <span v-if="status === 'thinking'">{{ $t('chat.thinkingLive', { seconds: liveSeconds }) }}</span>
+          <span v-else-if="duration > 0">{{ $t('chat.thoughtFor', { duration: displayDuration }) }}</span>
+          <span v-else>{{ $t('chat.thinkingProcess') }}</span>
         </span>
       </div>
       <div class="right">
@@ -47,6 +47,7 @@
 <script setup>
 import { ref, watch, computed, onMounted, onUnmounted } from 'vue'
 import MarkdownPreview from '../MarkdownPreview.vue'
+import { t } from '@/i18n'
 
 const props = defineProps({
   status: { type: String, default: 'idle' }, // 'idle' | 'thinking' | 'done'
@@ -105,13 +106,13 @@ const updateTime = () => {
 const displayDuration = computed(() => {
     // If actively thinking, show live timer
     if (props.status === 'thinking') {
-        return `${liveSeconds.value} 秒`
+        return t('chat.secondsUnit', { n: liveSeconds.value })
     }
     // Otherwise show the final recorded duration for this segment
     const dur = props.duration || 0
     if (dur <= 0) return ''
     // 10 秒以内保留一位小数，更真实；更长就取整
-    return dur < 10 ? `${dur.toFixed(1)} 秒` : `${Math.round(dur)} 秒`
+    return t('chat.secondsUnit', { n: dur < 10 ? dur.toFixed(1) : Math.round(dur) })
 })
 
 const toggle = () => {

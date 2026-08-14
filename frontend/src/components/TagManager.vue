@@ -1,7 +1,7 @@
 <template>
   <view class="tag-manager">
     <view class="header">
-      <text class="title">标签管理</text>
+      <text class="title">{{ $t('files.tagManagerTitle') }}</text>
       <view class="close-btn" @click="$emit('close')">
         <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="20" height="20">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -14,7 +14,7 @@
         <input 
           v-model="newTagName" 
           class="new-tag-input" 
-          placeholder="请输入标签名称" 
+          :placeholder="$t('files.tagNamePlaceholder')"
           @confirm="handleAdd"
         />
         <view 
@@ -22,7 +22,7 @@
           :style="{ backgroundColor: newTagColor }"
           @click="toggleColorPicker"
         ></view>
-        <button class="add-btn" @click="handleAdd" :disabled="!newTagName">添加</button>
+        <button class="add-btn" @click="handleAdd" :disabled="!newTagName">{{ $t('files.add') }}</button>
       </view>
       
       <view v-if="showColorPicker" class="color-options">
@@ -55,7 +55,7 @@
                 @confirm="saveEdit(tag)"
               />
               <text v-else class="tag-name-text" @click="startEdit(tag)">{{ tag.name }}</text>
-              <text v-if="tag.isSystem" class="system-badge">系统</text>
+              <text v-if="tag.isSystem" class="system-badge">{{ $t('files.systemBadge') }}</text>
             </view>
             <view class="actions">
               <view class="action-btn edit" @click="startEdit(tag)">
@@ -156,10 +156,10 @@ export default {
     },
     async handleDelete(tag) {
       uni.showModal({
-        title: '删除标签',
-        content: `确定要删除标签 "${tag.name}" 吗？`,
-        confirmText: '删除',
-        cancelText: '取消',
+        title: this.$t('files.deleteTagTitle'),
+        content: this.$t('files.deleteTagConfirm', { name: tag.name }),
+        confirmText: this.$t('common.delete'),
+        cancelText: this.$t('common.cancel'),
         confirmColor: '#E74C3C',
         success: async (res) => {
           if (res.confirm) {
@@ -167,7 +167,7 @@ export default {
               await api.deleteTag(this.projectId, tag.id);
               this.refreshTags();
             } catch (e) {
-              uni.showToast({ title: '删除失败', icon: 'none' });
+              uni.showToast({ title: this.$t('files.deleteFailed'), icon: 'none' });
             }
           }
         }

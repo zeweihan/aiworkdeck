@@ -18,7 +18,7 @@ export const ocrActionMethods = {
           if (this.ocrFrameCanvas && this.ocrFrameView) return
           await new Promise(r => setTimeout(r, 30))
         }
-        throw new Error('截图画面未就绪')
+        throw new Error(this.$t('workbenchOps.frameNotReady'))
       }
       this.ocrFrameLoading = true
       try {
@@ -72,18 +72,18 @@ export const ocrActionMethods = {
           : await host.ocr.captureScreen({ mode: 'window' })
         if (!resp || resp.ok !== true || !resp.dataUrl) {
           const m = resp && resp.message ? String(resp.message) : ''
-          throw new Error(m || '截图失败')
+          throw new Error(m || this.$t('workbenchOps.captureFailed'))
         }
         await this.ocrSetFrameFromDataUrl(resp.dataUrl, this.ocrHostRect)
         return
       }
       const video = this.ocrVideo
-      if (!video) throw new Error('截图视频未就绪')
+      if (!video) throw new Error(this.$t('workbenchOps.videoNotReady'))
       await this.ensureOcrFrameReady()
 
       const vw = video.videoWidth || 0
       const vh = video.videoHeight || 0
-      if (!vw || !vh) throw new Error('截图视频尺寸异常')
+      if (!vw || !vh) throw new Error(this.$t('workbenchOps.videoSizeInvalid'))
 
       const frame = document.createElement('canvas')
       frame.width = vw
@@ -124,16 +124,16 @@ export const ocrActionMethods = {
 
     async ocrSetFrameFromDataUrl(dataUrl, hostRect = null) {
       const url = String(dataUrl || '')
-      if (!url) throw new Error('截图失败')
+      if (!url) throw new Error(this.$t('workbenchOps.captureFailed'))
       const img = await new Promise((resolve, reject) => {
         const im = new Image()
         im.onload = () => resolve(im)
-        im.onerror = () => reject(new Error('截图图片加载失败'))
+        im.onerror = () => reject(new Error(this.$t('workbenchOps.imageLoadFailed')))
         im.src = url
       })
       const vw = img.naturalWidth || img.width || 0
       const vh = img.naturalHeight || img.height || 0
-      if (!vw || !vh) throw new Error('截图图片尺寸异常')
+      if (!vw || !vh) throw new Error(this.$t('workbenchOps.imageSizeInvalid'))
 
       const frame = document.createElement('canvas')
       frame.width = vw
@@ -161,7 +161,7 @@ export const ocrActionMethods = {
     async ensureOcrFrameReady() {
       // 确保 videoWidth/videoHeight 与 cover 已就绪（防止第一下松开太快）
       const videoEl = this.ocrVideo
-      if (!videoEl) throw new Error('截图视频未就绪')
+      if (!videoEl) throw new Error(this.$t('workbenchOps.videoNotReady'))
       const start = Date.now()
       const timeoutMs = 900
       while (Date.now() - start < timeoutMs) {
@@ -181,7 +181,7 @@ export const ocrActionMethods = {
 
       const frame = this.ocrFrameCanvas
       const view = this.ocrFrameView
-      if (!frame || !view) throw new Error('截图画面未就绪')
+      if (!frame || !view) throw new Error(this.$t('workbenchOps.frameNotReady'))
 
       // 将用户在 viewport 的框选，映射到“冻结帧”像素坐标
       const clamp = (v, min, max) => Math.max(min, Math.min(max, v))
@@ -226,7 +226,7 @@ export const ocrActionMethods = {
       // Wait, `closeOcrOverlay` resets `ocrText`, `ocrImageDataUrl`.
 
       // Since UI is gone, I should use `uni.showLoading`
-      uni.showLoading({ title: '识别中…' })
+      uni.showLoading({ title: this.$t('workbenchOps.recognizing') })
 
       try {
         const res = await ocrRecognize(imageData)
@@ -234,9 +234,9 @@ export const ocrActionMethods = {
         if (text) {
           // Auto copy
           await this.insertClipboardAndCopy(text, { saveToHistory: true })
-          uni.showToast({ title: '识别并复制成功', icon: 'success' })
+          uni.showToast({ title: this.$t('workbenchOps.recognizeCopySuccess'), icon: 'success' })
         } else {
-          uni.showToast({ title: '未识别到文字', icon: 'none' })
+          uni.showToast({ title: this.$t('workbenchOps.noTextRecognized'), icon: 'none' })
         }
       } catch (e) {
         console.error('OCR 识别失败:', e)
@@ -244,7 +244,7 @@ export const ocrActionMethods = {
           // OCR 未配置：引导去设置而非报"识别失败"（#18 T7）
           promptFeatureNotConfigured(e)
         } else {
-          uni.showToast({ title: e.message || '识别失败', icon: 'none' })
+          uni.showToast({ title: e.message || this.$t('workbenchOps.recognizeFailed'), icon: 'none' })
         }
       } finally {
         uni.hideLoading()
@@ -271,13 +271,13 @@ export const ocrActionMethods = {
           if (navigator.clipboard && navigator.clipboard.write) {
               const item = new ClipboardItem({ [blob.type]: blob })
               await navigator.clipboard.write([item])
-              uni.showToast({ title: '已复制图片', icon: 'success' })
+              uni.showToast({ title: this.$t('workbenchOps.imageCopied'), icon: 'success' })
           } else {
               throw new Error('Clipboard API unavailable')
           }
       } catch (e) {
           console.error('Copy Image Failed', e)
-          uni.showToast({ title: '复制失败', icon: 'none' })
+          uni.showToast({ title: this.$t('workbenchOps.copyFailed'), icon: 'none' })
       }
     },
 
@@ -330,7 +330,7 @@ export const ocrActionMethods = {
         if (!this.screenshotSaveDataUrl) return
         let name = (this.screenshotSaveName || '').trim()
         if (!name) {
-            uni.showToast({ title: '请输入文件名', icon: 'none' })
+            uni.showToast({ title: this.$t('workbenchOps.enterFileName'), icon: 'none' })
             return
         }
         if (!/\.(png|jpg|jpeg)$/i.test(name)) {
@@ -394,7 +394,7 @@ export const ocrActionMethods = {
              })
         })
 
-        uni.showToast({ title: '保存成功', icon: 'success' })
+        uni.showToast({ title: this.$t('workbenchOps.saveSuccess'), icon: 'success' })
         this.showScreenshotSaveDialog = false
         this.screenshotSaveDataUrl = ''
         // Refresh items: Switch to files pane and reload
@@ -413,7 +413,7 @@ export const ocrActionMethods = {
         })
     } catch (e) {
         console.error('保存失败', e)
-        uni.showToast({ title: '保存失败: ' + (e.message || '未知错误'), icon: 'none' })
+        uni.showToast({ title: this.$t('workbenchOps.saveFailedNamed', { msg: e.message || this.$t('workbenchOps.unknownError') }), icon: 'none' })
     } finally {
         this.screenshotSaveLoading = false
     }
@@ -443,9 +443,9 @@ export const ocrActionMethods = {
       this.closeOcrOverlay()
 
       try {
-        uni.showToast({ title: '正在加入收藏…', icon: 'loading', duration: 1200 })
+        uni.showToast({ title: this.$t('workbenchOps.addingFavorite'), icon: 'loading', duration: 1200 })
         const created = await createProjectFavorite(this.projectId, {
-          title: srcUrl ? srcUrl : '网页摘录',
+          title: srcUrl ? srcUrl : this.$t('workbenchOps.webExcerpt'),
           sourceUrl: srcUrl,
           content: '',
           imageBase64: imgData
@@ -464,10 +464,10 @@ export const ocrActionMethods = {
             // ignore
           }
         })
-        uni.showToast({ title: '收藏成功', icon: 'success' })
+        uni.showToast({ title: this.$t('workbenchOps.favoriteSuccess'), icon: 'success' })
       } catch (e) {
         console.error('收藏失败:', e)
-        uni.showToast({ title: e.message || '收藏失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbenchOps.favoriteFailed'), icon: 'none' })
       }
     },
 
@@ -475,7 +475,7 @@ export const ocrActionMethods = {
       // 目标：将框选截图作为“网核证据”入库，并进入“拖拽关联到文档”模式
       if (this.ocrLoading) return
       if (!this.ocrImageDataUrl) {
-        uni.showToast({ title: '请先框选区域', icon: 'none' })
+        uni.showToast({ title: this.$t('workbenchOps.selectAreaFirst'), icon: 'none' })
         return
       }
       // 1) Cache State
@@ -487,7 +487,7 @@ export const ocrActionMethods = {
       // 2) Close UI immediately
       this.closeOcrOverlay()
 
-      uni.showLoading({ title: '处理中…' })
+      uni.showLoading({ title: this.$t('workbenchOps.processing') })
 
       try {
         // 1) 采集网页上下文
@@ -534,7 +534,7 @@ export const ocrActionMethods = {
         }
 
         const pid = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-        const title = metaObj.title || (metaObj.sourceUrl ? (() => { try { return new URL(metaObj.sourceUrl).host } catch (e) { return '网核' } })() : '网核')
+        const title = metaObj.title || (metaObj.sourceUrl ? (() => { try { return new URL(metaObj.sourceUrl).host } catch (e) { return this.$t('workbenchOps.webMark') } })() : this.$t('workbenchOps.webMark'))
 
         // 2) 入库
         const res = await createProjectFavorite(pid, {
@@ -563,7 +563,7 @@ export const ocrActionMethods = {
         })
       } catch (e) {
         console.error('网核关联失败:', e)
-        uni.showToast({ title: e.message || '网核关联失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('workbenchOps.webMarkLinkFailed'), icon: 'none' })
       } finally {
         uni.hideLoading()
       }

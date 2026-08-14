@@ -7,8 +7,8 @@
       <view class="card-header">
         <image class="card-logo" src="/static/iconmark_v2.png" mode="heightFix" />
         <view class="header-texts">
-          <text class="wizard-title">欢迎使用 AI Workdeck</text>
-          <text class="wizard-subtitle">首次运行设置 · 只需一步，选择您的 AI 提供商即可开始</text>
+          <text class="wizard-title">{{ $t('onboarding.wizard.title') }}</text>
+          <text class="wizard-subtitle">{{ $t('onboarding.wizard.subtitle') }}</text>
         </view>
       </view>
 
@@ -16,8 +16,8 @@
       <view class="section">
         <view class="section-title">
           <text class="step-badge">1</text>
-          <text class="title-text">AI 提供商</text>
-          <text class="required-tag">必选</text>
+          <text class="title-text">{{ $t('onboarding.wizard.step1Title') }}</text>
+          <text class="required-tag">{{ $t('onboarding.wizard.required') }}</text>
         </view>
         <view class="provider-list">
           <view
@@ -31,7 +31,7 @@
               <view class="radio-dot" :class="{ checked: form.ai.activeProvider === opt.value }"></view>
               <text class="provider-name">{{ opt.label }}</text>
               <text class="data-flow-tag" :class="opt.local ? 'tag-local' : 'tag-cloud'">
-                {{ opt.local ? '数据不出本机' : '数据发往云端' }}
+                {{ opt.local ? $t('onboarding.wizard.dataLocal') : $t('onboarding.wizard.dataCloud') }}
               </text>
             </view>
             <text class="provider-desc">{{ opt.desc }}</text>
@@ -43,11 +43,8 @@
                  三件事都要在向导里能看清并能重试，不能让用户点完「完成设置」
                  到发第一条消息才收到 Connection refused（地雷 15）。 -->
             <view v-if="form.ai.activeProvider === opt.value && opt.value === 'OLLAMA'" class="provider-setup ollama-probe">
-              <text class="setup-line">
-                只支持「问答」模式：本机模型这一档在当前依赖版本下不支持工具调用，
-                因此不能改文档、不能查企业信息、不能跑多步任务。需要这些能力请选云端两档。
-              </text>
-              <text v-if="ollamaProbe.checking" class="setup-line">正在检测本机 Ollama…</text>
+              <text class="setup-line">{{ $t('onboarding.wizard.ollamaAskOnly') }}</text>
+              <text v-if="ollamaProbe.checking" class="setup-line">{{ $t('onboarding.wizard.ollamaProbing') }}</text>
               <template v-else-if="ollamaProbe.error">
                 <text class="setup-line probe-bad">{{ ollamaProbe.error }}</text>
               </template>
@@ -64,12 +61,10 @@
               </template>
               <view class="account-actions">
                 <text class="account-link" @tap="runOllamaProbe">
-                  {{ ollamaProbe.checking ? '检测中…' : '重新检测' }}
+                  {{ ollamaProbe.checking ? $t('onboarding.wizard.probing') : $t('onboarding.wizard.reprobe') }}
                 </text>
               </view>
-              <text class="setup-line">
-                想换成别的本机模型（或改 Ollama 地址）：进入产品后在「系统管理 → AI 功能设置」里改，改完立即生效。
-              </text>
+              <text class="setup-line">{{ $t('onboarding.wizard.ollamaChangeHint') }}</text>
             </view>
             <view v-if="form.ai.activeProvider === opt.value && opt.keyField" class="provider-key">
               <input
@@ -82,38 +77,34 @@
             <!-- 平台通道的连接就地完成：把「进入产品后再去系统管理粘贴 Key」的死路收回向导内 -->
             <view v-if="form.ai.activeProvider === opt.value && opt.accountField" class="provider-account">
               <template v-if="!platformAiAvailable">
-                <text class="account-line">
-                  桌面端无需注册登录：在官网账户页生成一枚账户 Key（awdk_ 开头），粘贴到下面直接连接。Key 只保存在本机，随时可以断开。
-                </text>
+                <text class="account-line">{{ $t('onboarding.wizard.accountIntro') }}</text>
                 <view class="account-actions">
-                  <text class="account-link" @tap="openAccountSite">前往官网获取 Key</text>
+                  <text class="account-link" @tap="openAccountSite">{{ $t('onboarding.wizard.goGetKey') }}</text>
                 </view>
                 <input
                   class="text-input"
                   v-model="accountKey"
-                  placeholder="粘贴 awdk_ 开头的账户 Key"
+                  :placeholder="$t('onboarding.wizard.accountKeyPlaceholder')"
                 />
                 <button
                   class="account-btn"
                   :disabled="connectingAccount"
                   @tap="handleConnectAccount"
                 >
-                  {{ connectingAccount ? '正在连接…' : '连接账户' }}
+                  {{ connectingAccount ? $t('onboarding.wizard.connecting') : $t('onboarding.wizard.connectAccount') }}
                 </button>
               </template>
               <template v-else-if="platformNeedsAllocation">
-                <text class="account-line">
-                  账户已连接{{ accountLabel }}。Credits 余额为空——到官网充值后即可直接使用云端通道，充完点「重新检查」。
-                </text>
+                <text class="account-line">{{ $t('onboarding.wizard.accountNoCredits', { label: accountLabel }) }}</text>
                 <view class="account-actions">
-                  <text class="account-link" @tap="openAccountSite">前往官网充值</text>
+                  <text class="account-link" @tap="openAccountSite">{{ $t('onboarding.wizard.goTopUp') }}</text>
                   <text class="account-link" @tap="handleRecheckAccount">
-                    {{ recheckingAccount ? '检查中…' : '重新检查' }}
+                    {{ recheckingAccount ? $t('onboarding.wizard.rechecking') : $t('onboarding.wizard.recheck') }}
                   </text>
                 </view>
               </template>
               <template v-else>
-                <text class="account-line account-ok">账户已连接{{ accountLabel }}，可以直接开始使用。</text>
+                <text class="account-line account-ok">{{ $t('onboarding.wizard.accountReady', { label: accountLabel }) }}</text>
               </template>
               <text v-if="accountError" class="account-error">{{ accountError }}</text>
 
@@ -121,14 +112,11 @@
                    （AdminConfigController.crossBorderBlockReason），向导这边曾经完全没有，
                    而向导恰恰是选平台通道的主入口。绝不预勾选——预勾选的同意无效。 -->
               <view class="consent-box">
-                <text class="consent-title">向境外提供个人信息的单独同意</text>
-                <text class="consent-body">「AI Workdeck 云端」会把你送入 AI 的内容（文本与相关文件片段）发送至
-                  OpenRouter, Inc.（美国）处理，用于模型推理与用量计费，这属于向境外提供个人信息。
-                  进入产品后可随时在「系统管理 → AI 功能设置」撤回同意，撤回后云端通道不再可用，
-                  改用本机模型或境内供应商即可继续工作。</text>
+                <text class="consent-title">{{ $t('onboarding.wizard.consentTitle') }}</text>
+                <text class="consent-body">{{ $t('onboarding.wizard.consentBody') }}</text>
                 <view class="consent-check" @tap="crossBorderConsent = !crossBorderConsent">
                   <view class="consent-box-mark" :class="{ checked: crossBorderConsent }"></view>
-                  <text class="consent-check-label">我已阅读上述告知，同意将相关内容传输至境外接收方处理</text>
+                  <text class="consent-check-label">{{ $t('onboarding.wizard.consentCheckLabel') }}</text>
                 </view>
               </view>
             </view>
@@ -138,12 +126,7 @@
              数据不出本机」，而 AI PPT 的大纲、页面文案与配图全部交给云端模型生成，
              对律师是错误承诺。 -->
         <view class="compliance-note">
-          <text>
-            数据流向说明：选择本地 Ollama 时，对话内容仅在本机处理；选择云端提供商时，对话内容将发送至该第三方服务，
-            请律师朋友注意执业保密义务。当前使用的模型与提供商在产品内可见，且可随时在「系统管理」中更换或停用。
-            文档解析与语音合成在本机完成、数据不出本机；AI PPT 的大纲、页面文案与配图由所选云端模型生成（相关内容会发送给该模型的提供商），
-            仅最终文件在本机组装。本地组件（解析/语音模型）首次使用需在「系统管理 → 组件管理」一次性下载，之后离线可用。
-          </text>
+          <text>{{ $t('onboarding.wizard.complianceNote') }}</text>
         </view>
       </view>
 
@@ -151,51 +134,51 @@
       <view class="section">
         <view class="section-title collapsible" @tap="showAdvanced = !showAdvanced">
           <text class="step-badge">2</text>
-          <text class="title-text">高级选项（OCR / 语音 / 企业数据）</text>
-          <text class="optional-tag">可选</text>
-          <text class="collapse-arrow">{{ showAdvanced ? '▲ 收起' : '▼ 展开' }}</text>
+          <text class="title-text">{{ $t('onboarding.wizard.step2Title') }}</text>
+          <text class="optional-tag">{{ $t('onboarding.wizard.optional') }}</text>
+          <text class="collapse-arrow">{{ showAdvanced ? $t('onboarding.wizard.collapse') : $t('onboarding.wizard.expand') }}</text>
         </view>
         <view v-if="showAdvanced" class="advanced-body">
           <view class="adv-group">
-            <text class="adv-group-title">OCR 识别（阿里云）</text>
+            <text class="adv-group-title">{{ $t('onboarding.wizard.ocrGroup') }}</text>
             <view class="form-grid">
               <view class="form-item">
                 <text class="form-label">AccessKey ID</text>
-                <input class="text-input" v-model="form.external.aliyunOcr.accessKeyId" placeholder="选填" />
+                <input class="text-input" v-model="form.external.aliyunOcr.accessKeyId" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
               </view>
               <view class="form-item">
                 <text class="form-label">AccessKey Secret</text>
-                <input class="text-input" :password="true" v-model="form.external.aliyunOcr.accessKeySecret" placeholder="选填" />
+                <input class="text-input" :password="true" v-model="form.external.aliyunOcr.accessKeySecret" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
               </view>
             </view>
           </view>
           <view class="adv-group">
-            <text class="adv-group-title">语音合成（可选云端 ElevenLabs——默认使用本地引擎，无需配置）</text>
+            <text class="adv-group-title">{{ $t('onboarding.wizard.ttsGroup') }}</text>
             <view class="form-grid">
               <view class="form-item">
                 <text class="form-label">API Key</text>
-                <input class="text-input" :password="true" v-model="form.external.elevenLabs.apiKey" placeholder="选填" />
+                <input class="text-input" :password="true" v-model="form.external.elevenLabs.apiKey" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
               </view>
             </view>
           </view>
           <view class="adv-group">
-            <text class="adv-group-title">企业与法律数据</text>
+            <text class="adv-group-title">{{ $t('onboarding.wizard.dataGroup') }}</text>
             <view class="form-grid">
               <view class="form-item">
-                <text class="form-label">企查查 Key</text>
-                <input class="text-input" v-model="form.external.qichacha.key" placeholder="选填" />
+                <text class="form-label">{{ $t('onboarding.wizard.qichachaKey') }}</text>
+                <input class="text-input" v-model="form.external.qichacha.key" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
               </view>
               <view class="form-item">
-                <text class="form-label">企查查 SecretKey</text>
-                <input class="text-input" :password="true" v-model="form.external.qichacha.secret" placeholder="选填" />
+                <text class="form-label">{{ $t('onboarding.wizard.qichachaSecret') }}</text>
+                <input class="text-input" :password="true" v-model="form.external.qichacha.secret" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
               </view>
               <view class="form-item">
                 <text class="form-label">Tushare Token</text>
-                <input class="text-input" :password="true" v-model="form.external.tushare.token" placeholder="选填" />
+                <input class="text-input" :password="true" v-model="form.external.tushare.token" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
               </view>
               <view class="form-item">
-                <text class="form-label">北大法宝 Token</text>
-                <input class="text-input" :password="true" v-model="form.external.pkulaw.token" placeholder="选填" />
+                <text class="form-label">{{ $t('onboarding.wizard.pkulawToken') }}</text>
+                <input class="text-input" :password="true" v-model="form.external.pkulaw.token" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
               </view>
             </view>
           </view>
@@ -204,9 +187,9 @@
 
       <!-- Footer -->
       <view class="footer">
-        <text class="footer-hint">所有配置可随时在「系统管理」中修改。</text>
+        <text class="footer-hint">{{ $t('onboarding.wizard.footerHint') }}</text>
         <button class="submit-btn" :disabled="submitting" :loading="submitting" @tap="handleSubmit">
-          {{ submitting ? '正在初始化…' : '完成设置' }}
+          {{ submitting ? $t('onboarding.wizard.initializing') : $t('onboarding.wizard.finishSetup') }}
         </button>
       </view>
     </view>
@@ -272,20 +255,19 @@ export default {
       byokOptions: [
         {
           value: 'OLLAMA',
-          label: '本地 Ollama（离线 / 实验）',
+          label: this.$t('onboarding.wizard.ollamaLabel'),
           local: true,
-          desc: '零密钥、零费用，对话数据全程不离开本机。实验档：只支持「问答」模式，'
-            + '不能改文档、不能调用工具。需先在本机安装并启动 Ollama 并拉取模型，选中后会自动检测。',
+          desc: this.$t('onboarding.wizard.ollamaDesc'),
           keyField: null,
         },
         {
           value: 'OPENROUTER',
           label: 'OpenRouter',
           local: false,
-          desc: '一个 Key 接入多家主流模型（OpenAI / Anthropic / Google / DeepSeek 等），按用量计费。',
+          desc: this.$t('onboarding.wizard.openRouterDesc'),
           keyField: 'apiKey',
-          keyPlaceholder: '请输入 OpenRouter API Key（必填）',
-          setupHint: '如何获取：打开下方网址 → 注册/登录 → 在 Keys 页面点「Create Key」→ 复制生成的 Key 粘贴到下方输入框（首次使用需在 Credits 页面充值少量金额）：',
+          keyPlaceholder: this.$t('onboarding.wizard.openRouterKeyPlaceholder'),
+          setupHint: this.$t('onboarding.wizard.openRouterSetupHint'),
           setupCmd: 'https://openrouter.ai/settings/keys',
         },
       ],
@@ -315,9 +297,9 @@ export default {
       return [
         {
           value: 'AWD_CLOUD',
-          label: 'AI Workdeck 云端',
+          label: this.$t('onboarding.wizard.awdCloudLabel'),
           local: false,
-          desc: '用账户余额直接调用平台模型，无需自备 Key。按实际扣费结算，用量在「系统管理 → 账户与用量」可查。',
+          desc: this.$t('onboarding.wizard.awdCloudDesc'),
           keyField: null,
           accountField: true,
         },
@@ -325,7 +307,7 @@ export default {
       ]
     },
     accountLabel() {
-      return this.accountName ? `（${this.accountName}）` : ''
+      return this.accountName ? this.$t('onboarding.wizard.accountLabel', { name: this.accountName }) : ''
     },
   },
   onLoad() {
@@ -393,8 +375,8 @@ export default {
         this.ollamaProbe.status = ''
         this.ollamaProbe.done = true
         this.ollamaProbe.error = (e && e.message)
-          ? ('无法完成本机检测：' + e.message)
-          : '无法完成本机检测，稍后再点「重新检测」'
+          ? this.$t('onboarding.wizard.probeFailedWithReason', { reason: e.message })
+          : this.$t('onboarding.wizard.probeFailedRetry')
       } finally {
         this.ollamaProbe.checking = false
       }
@@ -406,7 +388,7 @@ export default {
     async handleConnectAccount() {
       const key = (this.accountKey || '').replace(/\s+/g, '')
       if (!key) {
-        this.accountError = '请先粘贴账户 Key'
+        this.accountError = this.$t('onboarding.wizard.pasteKeyFirst')
         return
       }
       this.accountError = ''
@@ -417,9 +399,9 @@ export default {
         await this.loadPlatformAi()
         // 已购功能解锁随账户走，连接后必须让权益缓存失效重取
         await refreshEntitlements(true)
-        uni.showToast({ title: '已连接账户', icon: 'none' })
+        uni.showToast({ title: this.$t('onboarding.wizard.accountConnectedToast'), icon: 'none' })
       } catch (e) {
-        this.accountError = (e && e.message) || '连接失败，请检查 Key 后重试'
+        this.accountError = (e && e.message) || this.$t('onboarding.wizard.connectFailed')
       } finally {
         this.connectingAccount = false
       }
@@ -432,7 +414,7 @@ export default {
       try {
         await this.loadPlatformAi()
         if (this.platformNeedsAllocation) {
-          this.accountError = '还没查到 Credits 余额，稍等片刻再试'
+          this.accountError = this.$t('onboarding.wizard.creditsNotFoundYet')
         }
       } finally {
         this.recheckingAccount = false
@@ -489,11 +471,11 @@ export default {
     async handleSubmit() {
       const provider = this.form.ai.activeProvider
       if (!provider) {
-        uni.showToast({ title: '请选择 AI 提供商', icon: 'none' })
+        uni.showToast({ title: this.$t('onboarding.wizard.pickProviderFirst'), icon: 'none' })
         return
       }
       if (provider === 'OPENROUTER' && !this.apiKeys.OPENROUTER.trim()) {
-        uni.showToast({ title: '请填写 OpenRouter API Key', icon: 'none' })
+        uni.showToast({ title: this.$t('onboarding.wizard.fillOpenRouterKey'), icon: 'none' })
         return
       }
       // 本地档：服务没起或目标模型没 pull 都拦住，并指出下一步（同上方探测块）。
@@ -503,48 +485,48 @@ export default {
           await this.runOllamaProbe()
         }
         if (this.ollamaProbe.error) {
-          uni.showToast({ title: '本机检测未完成，请点「重新检测」', icon: 'none' })
+          uni.showToast({ title: this.$t('onboarding.wizard.probeNotDone'), icon: 'none' })
           return
         }
         if (this.ollamaProbe.status === 'SERVICE_DOWN') {
-          uni.showToast({ title: '未检测到 Ollama 服务，启动后点「重新检测」', icon: 'none' })
+          uni.showToast({ title: this.$t('onboarding.wizard.ollamaServiceDown'), icon: 'none' })
           return
         }
         if (this.ollamaProbe.status !== 'READY') {
           // MODEL_MISSING，以及后端返回了认不出的 status（宁可拦住也不放行一个跑不起来的配置）
-          uni.showToast({ title: '模型还没拉取，执行 ollama pull 后点「重新检测」', icon: 'none' })
+          uni.showToast({ title: this.$t('onboarding.wizard.ollamaModelMissing'), icon: 'none' })
           return
         }
       }
       // 平台通道两个前置条件缺一都会在发第一条消息时才报错，拦在这里并指出下一步
       if (provider === 'AWD_CLOUD' && !this.platformAiAvailable) {
-        uni.showToast({ title: '请先在上方连接账户', icon: 'none' })
+        uni.showToast({ title: this.$t('onboarding.wizard.connectAccountFirst'), icon: 'none' })
         return
       }
       if (provider === 'AWD_CLOUD' && this.platformNeedsAllocation) {
         // 文案红线：不能含「请先」——api.js 用它判掉线并清会话
-        uni.showToast({ title: '账户 Credits 余额为空，到官网充值后再试', icon: 'none' })
+        uni.showToast({ title: this.$t('onboarding.wizard.creditsEmpty'), icon: 'none' })
         return
       }
       // 跨境同意：后端 crossBorderBlockReason 也会拦（两道都在才算数），
       // 这里拦一次是为了把提示给在勾选框旁边而不是提交失败之后
       if (provider === 'AWD_CLOUD' && !this.crossBorderConsent) {
-        uni.showToast({ title: '云端通道需勾选跨境传输同意', icon: 'none' })
+        uni.showToast({ title: this.$t('onboarding.wizard.consentRequired'), icon: 'none' })
         return
       }
 
       this.submitting = true
       try {
         await submitWizard(this.buildPayload())
-        uni.showToast({ title: '初始化完成', icon: 'success' })
+        uni.showToast({ title: this.$t('onboarding.wizard.initDone'), icon: 'success' })
         setTimeout(() => {
           uni.reLaunch({ url: '/pages/launch/launch' })
         }, 600)
       } catch (e) {
-        const msg = e && e.message ? e.message : '初始化失败，请重试'
-        // 409（已初始化）等场景：提示后回到登录页
+        const msg = e && e.message ? e.message : this.$t('onboarding.wizard.initFailed')
+        // 409（已初始化）等场景：提示后回到登录页（indexOf 的两个匹配串是后端消息判据，不抽）
         if (msg.indexOf('已初始化') !== -1 || msg.indexOf('Already initialized') !== -1) {
-          uni.showToast({ title: '系统已初始化', icon: 'none' })
+          uni.showToast({ title: this.$t('onboarding.wizard.alreadyInitialized'), icon: 'none' })
           setTimeout(() => {
             uni.reLaunch({ url: '/pages/launch/launch' })
           }, 800)

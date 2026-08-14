@@ -2,7 +2,7 @@
   <Transition name="slide-up">
     <div v-if="hasActiveTasks" class="background-task-indicator" :class="{ 'is-minimized': isMinimized }">
       <!-- Minimized Circular View -->
-      <div v-if="isMinimized" class="minimized-circle" @click="isMinimized = false" title="查看任务详情">
+      <div v-if="isMinimized" class="minimized-circle" @click="isMinimized = false" :title="$t('chat.viewTaskDetails')">
         <svg class="progress-ring" viewBox="0 0 40 40">
           <circle
             class="progress-ring__bg"
@@ -35,11 +35,11 @@
         <div class="panel-header">
           <span class="header-title">
             <i class="fas fa-tasks"></i>
-            后台任务
+            {{ $t('chat.backgroundTasksHeader') }}
           </span>
           <div class="header-right">
             <span class="task-count">{{ activeTaskCount }}</span>
-            <button class="minimize-btn" @click="isMinimized = true" title="最小化">
+            <button class="minimize-btn" @click="isMinimized = true" :title="$t('chat.minimize')">
               <span class="minimize-icon"></span>
             </button>
           </div>
@@ -66,7 +66,7 @@
               <button
                 v-if="task.status !== 'running'"
                 class="task-dismiss-btn"
-                title="关闭这条记录"
+                :title="$t('chat.dismissRecord')"
                 @click="$emit('dismiss', task.taskId)"
               >×</button>
             </div>
@@ -87,7 +87,7 @@
             <div class="task-message">{{ task.message }}</div>
             
             <div v-if="task.estimatedRemainingSec" class="task-eta">
-              预计剩余：{{ formatTime(task.estimatedRemainingSec) }}
+              {{ $t('chat.etaRemaining', { time: formatTime(task.estimatedRemainingSec) }) }}
             </div>
           </div>
         </div>
@@ -98,6 +98,7 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { t } from '@/i18n'
 
 const props = defineProps({
   backgroundTasks: {
@@ -150,30 +151,30 @@ const ringDashoffset = computed(() => {
 
 const getTaskTypeName = (type) => {
   const names = {
-    'PPTX_GENERATE': 'PPT 生成',
-    'PPTX_MODIFY': 'PPT 修改',
-    'FILE_PROCESS': '文件处理',
-    'WEB_FETCH': '网页获取',
-    'OTHER': '其他任务'
+    'PPTX_GENERATE': t('chat.taskPptGenerate'),
+    'PPTX_MODIFY': t('chat.taskPptModify'),
+    'FILE_PROCESS': t('chat.taskFileProcess'),
+    'WEB_FETCH': t('chat.taskWebFetch'),
+    'OTHER': t('chat.taskOther')
   }
   return names[type] || type
 }
 
 const getStatusText = (task) => {
   switch (task.status) {
-    case 'running': return '进行中'
-    case 'completed': return '已完成'
-    case 'failed': return '失败'
-    case 'cancelled': return '已取消'
+    case 'running': return t('chat.taskRunning')
+    case 'completed': return t('chat.done')
+    case 'failed': return t('chat.failed')
+    case 'cancelled': return t('chat.canceled')
     default: return task.status
   }
 }
 
 const formatTime = (seconds) => {
-  if (seconds < 60) return `${seconds}秒`
+  if (seconds < 60) return t('chat.timeSecondsCompact', { s: seconds })
   const minutes = Math.floor(seconds / 60)
   const secs = seconds % 60
-  return secs > 0 ? `${minutes}分${secs}秒` : `${minutes}分钟`
+  return secs > 0 ? t('chat.timeMinSec', { m: minutes, s: secs }) : t('chat.timeMinutes', { m: minutes })
 }
 </script>
 

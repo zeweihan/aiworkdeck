@@ -1,7 +1,7 @@
 <template>
   <view class="file-preview">
     <view v-if="!file" class="preview-placeholder">
-      <text>请从左侧选择文件进行预览</text>
+      <text>{{ $t('files.selectFilePrompt') }}</text>
     </view>
     <view v-else class="preview-content">
       <!-- 文件信息头部 -->
@@ -15,12 +15,12 @@
             size="mini"
             @tap="handleEdit"
           >
-            编辑
+            {{ $t('files.edit') }}
           </button>
         </view>
         <view class="preview-meta">
-          <text class="meta-item" v-if="file.fileType">类型：{{ file.fileType }}</text>
-          <text class="meta-item" v-if="file.fileSize">大小：{{ formatFileSize(file.fileSize) }}</text>
+          <text class="meta-item" v-if="file.fileType">{{ $t('files.typeLabel', { type: file.fileType }) }}</text>
+          <text class="meta-item" v-if="file.fileSize">{{ $t('files.sizeLabel', { size: formatFileSize(file.fileSize) }) }}</text>
         </view>
       </view>
 
@@ -28,24 +28,24 @@
       <view class="preview-body">
         <!-- Word 文档零配置只读渲染：docx-preview 本地解析，无需任何密钥，数据不出本机（承接 #18 T6） -->
         <view v-if="isWord && useDocxPreview && !docxRenderFailed" class="preview-docx">
-          <view v-if="docxLoading" class="docx-loading"><text>正在渲染文档…</text></view>
+          <view v-if="docxLoading" class="docx-loading"><text>{{ $t('files.renderingDoc') }}</text></view>
           <view ref="docxContainer" class="docx-host"></view>
         </view>
 
         <!-- PPTX 零配置只读渲染：pptx-preview 本地解析（自建 LOWA 引擎无 Impress
              模块，演示文稿由前端渲染承接） -->
         <view v-else-if="isPptx && usePptxPreview && !pptxRenderFailed" class="preview-pptx">
-          <view v-if="pptxLoading" class="docx-loading"><text>正在渲染演示文稿…</text></view>
+          <view v-if="pptxLoading" class="docx-loading"><text>{{ $t('files.renderingSlides') }}</text></view>
           <view ref="pptxContainer" class="pptx-host"></view>
         </view>
 
         <!-- 其余 Office 文件（ppt 二进制等，或渲染失败/非 H5）：暂不支持在线预览（#79，
              WPS 预览回退已移除） -->
         <view v-else-if="isOffice" class="preview-unsupported">
-          <text>该文件暂不支持在线预览</text>
-          <text class="preview-hint">文件类型: {{ file.fileType || '未知' }}，可下载后在本地打开</text>
+          <text>{{ $t('files.officePreviewUnsupported') }}</text>
+          <text class="preview-hint">{{ $t('files.fileTypeHintDownload', { type: file.fileType || $t('files.unknown') }) }}</text>
           <button class="btn-download" type="default" size="mini" @tap="handleDownload">
-            下载文件
+            {{ $t('files.downloadFile') }}
           </button>
         </view>
 
@@ -87,7 +87,7 @@
             <button class="img-tool-btn" size="mini" @tap="imageZoomInBtn">＋</button>
             <view class="img-tool-sep"></view>
             <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomActual">1:1</button>
-            <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomFit">适应窗口</button>
+            <button class="img-tool-btn img-tool-btn-text" size="mini" @tap="imageZoomFit">{{ $t('files.fitWindow') }}</button>
           </view>
         </view>
 
@@ -104,9 +104,9 @@
             @error="handleVideoError"
             @loadeddata="onVideoLoaded"
           >
-            您的浏览器不支持视频播放
+            {{ $t('files.videoNotSupported') }}
           </video>
-          <view v-else class="loading-video"><text>视频加载中…</text></view>
+          <view v-else class="loading-video"><text>{{ $t('files.videoLoading') }}</text></view>
         </view>
 
         <!-- 音频预览 -->
@@ -128,12 +128,12 @@
         <!-- 压缩包预览：条目列表 + 解压到当前目录 -->
         <view v-else-if="isArchive" class="preview-archive">
           <view class="archive-toolbar">
-            <text class="archive-count">{{ archiveLoading || archiveError ? '' : archiveEntries.length + ' 个条目' }}</text>
+            <text class="archive-count">{{ archiveLoading || archiveError ? '' : $t('files.entriesCount', { count: archiveEntries.length }) }}</text>
             <button class="btn-extract" size="mini" :disabled="archiveLoading || extracting || !!archiveError" @tap="handleExtract">
-              {{ extracting ? '解压中…' : '解压' }}
+              {{ extracting ? $t('files.extracting') : $t('files.extract') }}
             </button>
           </view>
-          <view v-if="archiveLoading" class="archive-status"><text>正在读取压缩包…</text></view>
+          <view v-if="archiveLoading" class="archive-status"><text>{{ $t('files.readingArchive') }}</text></view>
           <view v-else-if="archiveError" class="archive-status archive-error"><text>{{ archiveError }}</text></view>
           <scroll-view v-else scroll-y class="archive-list">
             <view v-for="(entry, i) in archiveEntries" :key="i" class="archive-entry">
@@ -146,11 +146,11 @@
 
         <!-- 不支持预览的文件类型 -->
         <view v-else class="preview-unsupported">
-          <text>该文件类型暂不支持预览</text>
-          <text class="preview-hint">文件类型: {{ file.fileType || '未知' }}</text>
-          <text class="preview-hint">文件ID: {{ file.wpsFileId || file.id }}</text>
+          <text>{{ $t('files.previewUnsupportedType') }}</text>
+          <text class="preview-hint">{{ $t('files.fileTypeHint', { type: file.fileType || $t('files.unknown') }) }}</text>
+          <text class="preview-hint">{{ $t('files.fileIdHint', { id: file.wpsFileId || file.id }) }}</text>
           <button class="btn-download" type="default" size="mini" @tap="handleDownload">
-            下载文件
+            {{ $t('files.downloadFile') }}
           </button>
         </view>
       </view>
@@ -378,7 +378,7 @@ export default {
         this.textContent = response.data || ''
       } catch (error) {
         console.error('加载文本内容失败:', error)
-        this.textContent = '加载失败'
+        this.textContent = this.$t('files.loadFailed')
       } finally {
         this.loading = false
       }
@@ -423,7 +423,7 @@ export default {
           } else {
             console.error('loadMediaResource: 请求失败', xhr.status)
             uni.showToast({
-              title: '资源加载失败: ' + xhr.status,
+              title: self.$t('files.resourceLoadFailedStatus', { status: xhr.status }),
               icon: 'none'
             })
           }
@@ -433,7 +433,7 @@ export default {
         xhr.onerror = function() {
           console.error('loadMediaResource: 网络错误')
           uni.showToast({
-            title: '网络错误，资源加载失败',
+            title: self.$t('files.networkErrorResource'),
             icon: 'none'
           })
           self.loading = false
@@ -552,7 +552,7 @@ export default {
         const res = await getArchiveEntries(this.file.projectId, this.file.id)
         this.archiveEntries = (res && res.entries) || []
       } catch (e) {
-        this.archiveError = (e && e.message) || '压缩包读取失败'
+        this.archiveError = (e && e.message) || this.$t('files.archiveReadFailed')
       } finally {
         this.archiveLoading = false
       }
@@ -563,10 +563,10 @@ export default {
       this.extracting = true
       try {
         const folder = await extractArchive(this.file.projectId, this.file.id)
-        uni.showToast({ title: '已解压到「' + ((folder && folder.name) || '') + '」', icon: 'success' })
+        uni.showToast({ title: this.$t('files.extractedTo', { name: (folder && folder.name) || '' }), icon: 'success' })
         this.$emit('extracted', folder)
       } catch (e) {
-        uni.showModal({ title: '解压失败', content: (e && e.message) || '解压失败', showCancel: false })
+        uni.showModal({ title: this.$t('files.extractFailed'), content: (e && e.message) || this.$t('files.extractFailed'), showCancel: false })
       } finally {
         this.extracting = false
       }
@@ -683,7 +683,7 @@ export default {
     handleImageError(e) {
       console.error('图片加载失败:', e)
       uni.showToast({
-        title: '图片加载失败',
+        title: this.$t('files.imageLoadFailed'),
         icon: 'none'
       })
     },
@@ -704,14 +704,14 @@ export default {
       console.log('当前 blobUrl:', this.blobUrl)
       console.log('视频 src:', video ? video.src : 'N/A')
       uni.showToast({
-        title: '视频播放失败，可能是编码格式不支持',
+        title: this.$t('files.videoPlayFailed'),
         icon: 'none'
       })
     },
     handleAudioError(e) {
       console.error('音频加载失败:', e)
       uni.showToast({
-        title: '音频播放失败',
+        title: this.$t('files.audioPlayFailed'),
         icon: 'none'
       })
     },
@@ -736,7 +736,7 @@ export default {
                 fail: (err) => {
                   console.error('打开文档失败:', err)
                   uni.showToast({
-                    title: '打开文档失败',
+                    title: this.$t('files.openDocFailed'),
                     icon: 'none'
                   })
                 }
@@ -746,7 +746,7 @@ export default {
           fail: (err) => {
             console.error('下载文件失败:', err)
             uni.showToast({
-              title: '下载失败',
+              title: this.$t('files.downloadFailed'),
               icon: 'none'
             })
           }

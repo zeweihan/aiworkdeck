@@ -3,18 +3,16 @@
   <view class="identity-page">
     <view class="identity-card">
       <image class="identity-logo" src="/static/logo_full_v2.png" mode="heightFix" />
-      <text class="identity-title">选择本机工作区</text>
-      <text class="identity-subtitle">
-        检测到本机有多个历史账号，请选择要继续使用的工作区。选定后不会再问，之后可在「设置 - 账户与用量」里更改。
-      </text>
+      <text class="identity-title">{{ $t('onboarding.identity.title') }}</text>
+      <text class="identity-subtitle">{{ $t('onboarding.identity.subtitle') }}</text>
 
       <view v-if="loading" class="identity-hint">
-        <text class="identity-hint-text">正在读取本机账号</text>
+        <text class="identity-hint-text">{{ $t('onboarding.identity.reading') }}</text>
       </view>
 
       <view v-else-if="errorMsg" class="identity-hint">
         <text class="identity-error">{{ errorMsg }}</text>
-        <button class="identity-retry-btn" @tap="load">重试</button>
+        <button class="identity-retry-btn" @tap="load">{{ $t('onboarding.identity.retry') }}</button>
       </view>
 
       <view v-else class="identity-list">
@@ -29,7 +27,7 @@
             <text class="identity-name">{{ item.displayName || item.username }}</text>
             <text class="identity-username">{{ item.username }}</text>
           </view>
-          <text class="identity-meta">{{ item.projectCount }} 个项目 · {{ item.fileCount }} 个文件</text>
+          <text class="identity-meta">{{ $t('onboarding.identity.itemMeta', { projects: item.projectCount, files: item.fileCount }) }}</text>
         </view>
       </view>
 
@@ -39,7 +37,7 @@
         :disabled="!selectedId || submitting"
         @tap="confirm"
       >
-        {{ submitting ? '正在进入' : '进入工作区' }}
+        {{ submitting ? $t('onboarding.identity.entering') : $t('onboarding.identity.enter') }}
       </button>
       <text v-if="submitError" class="identity-error">{{ submitError }}</text>
     </view>
@@ -80,7 +78,7 @@ export default {
         }
         this.selectedId = this.candidates[0].userId
       } catch (e) {
-        this.errorMsg = (e && e.message) || '无法读取本机账号，请重试'
+        this.errorMsg = (e && e.message) || this.$t('onboarding.identity.loadFailed')
       } finally {
         this.loading = false
       }
@@ -93,7 +91,7 @@ export default {
         await selectLocalIdentity(this.selectedId)
         uni.reLaunch({ url: '/pages/launch/launch' })
       } catch (e) {
-        this.submitError = (e && e.message) || '选择失败，请重试'
+        this.submitError = (e && e.message) || this.$t('onboarding.identity.selectFailed')
         this.submitting = false
       }
     },

@@ -7,25 +7,25 @@
     <view v-if="showDeleteDialog" class="awd-dialog-mask" @tap="showDeleteDialog = false">
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header">
-          <text class="awd-dialog-title">{{ deleteMode === 'hard' ? '彻底删除' : '移入回收站' }}</text>
+          <text class="awd-dialog-title">{{ deleteMode === 'hard' ? $t('fileTree.hardDeleteTitle') : $t('fileTree.softDeleteTitle') }}</text>
         </view>
         <view class="awd-dialog-body">
           <text class="awd-dialog-text">
             <template v-if="!deleteIsBatch && deleteTargetItem">
-              确定要将选中的 {{ deleteTargetItem.isFolder ? '文件夹' : '文件' }} "{{ deleteTargetItem.name }}" {{ deleteMode === 'hard' ? '彻底删除' : '移入回收站' }}吗？
-              {{ deleteTargetItem.isFolder && deleteMode !== 'hard' ? '文件夹内的所有文件也会被移入回收站。' : '' }}
-              {{ deleteMode === 'hard' ? '此操作无法撤销。' : '' }}
+              {{ $t(deleteMode === 'hard' ? 'fileTree.deleteConfirmItemHard' : 'fileTree.deleteConfirmItemSoft', { kind: deleteTargetItem.isFolder ? $t('fileTree.folder') : $t('fileTree.file'), name: deleteTargetItem.name }) }}
+              {{ deleteTargetItem.isFolder && deleteMode !== 'hard' ? $t('fileTree.folderSoftDeleteNote') : '' }}
+              {{ deleteMode === 'hard' ? $t('fileTree.irreversibleNote') : '' }}
             </template>
             <template v-else-if="deleteIsBatch">
-              确定要将选中的 {{ deleteBatchIds.length }} 项{{ deleteMode === 'hard' ? '彻底删除' : '移入回收站' }}吗？
-              {{ deleteMode === 'hard' ? '此操作无法撤销。' : '' }}
+              {{ $t(deleteMode === 'hard' ? 'fileTree.deleteConfirmBatchHard' : 'fileTree.deleteConfirmBatchSoft', { count: deleteBatchIds.length }) }}
+              {{ deleteMode === 'hard' ? $t('fileTree.irreversibleNote') : '' }}
             </template>
           </text>
         </view>
         <view class="awd-dialog-footer">
-           <view class="awd-btn awd-btn-secondary" @tap="showDeleteDialog = false">取消</view>
+           <view class="awd-btn awd-btn-secondary" @tap="showDeleteDialog = false">{{ $t('fileTree.cancel') }}</view>
            <!-- Use Danger (Red) for Delete Actions -->
-           <view class="awd-btn awd-btn-danger" @tap="confirmDelete">确定删除</view>
+           <view class="awd-btn awd-btn-danger" @tap="confirmDelete">{{ $t('fileTree.confirmDeleteBtn') }}</view>
         </view>
       </view>
     </view>
@@ -34,20 +34,20 @@
     <view v-if="showCreateDialog" class="awd-dialog-mask" @tap="showCreateDialog = false">
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header">
-          <text class="awd-dialog-title">新建文件夹</text>
+          <text class="awd-dialog-title">{{ $t('fileTree.newFolder') }}</text>
         </view>
         <view class="awd-dialog-body">
           <input
             v-model="newFolderName"
             class="awd-input"
-            placeholder="请输入文件夹名称"
+            :placeholder="$t('fileTree.folderNamePlaceholder')"
             @confirm="handleCreateFolder"
             :focus="true"
           />
         </view>
         <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="showCreateDialog = false">取消</view>
-          <view class="awd-btn awd-btn-primary" @tap="handleCreateFolder">确定</view>
+          <view class="awd-btn awd-btn-secondary" @tap="showCreateDialog = false">{{ $t('fileTree.cancel') }}</view>
+          <view class="awd-btn awd-btn-primary" @tap="handleCreateFolder">{{ $t('fileTree.confirm') }}</view>
         </view>
       </view>
     </view>
@@ -57,17 +57,17 @@
       <view class="awd-dialog awd-dialog-large" @tap.stop>
         <view class="awd-dialog-header">
           <view class="header-row">
-            <text class="awd-dialog-title">上传文件</text>
-            <text class="awd-dialog-subtitle">选择目标位置并选择要上传的文档</text>
+            <text class="awd-dialog-title">{{ $t('fileTree.uploadFile') }}</text>
+            <text class="awd-dialog-subtitle">{{ $t('fileTree.uploadDialogSubtitle') }}</text>
           </view>
         </view>
         <view class="awd-dialog-body">
           <view class="form-group">
-            <text class="form-label">上传位置</text>
+            <text class="form-label">{{ $t('fileTree.uploadLocation') }}</text>
             <view class="awd-field clickable" @tap="showFolderSelector = true">
               <image src="/static/folder-closed.png" class="field-icon-img" mode="aspectFit" />
               <text class="field-value">
-                {{ selectedUploadParent ? getFolderPath(selectedUploadParent) : '根目录' }}
+                {{ selectedUploadParent ? getFolderPath(selectedUploadParent) : $t('fileTree.rootDirectory') }}
               </text>
             </view>
           </view>
@@ -75,24 +75,24 @@
           <!-- H5 Folder Upload -->
           <!-- #ifdef H5 -->
           <view class="form-group">
-            <text class="form-label">上传文件夹</text>
+            <text class="form-label">{{ $t('fileTree.uploadFolder') }}</text>
             <view class="awd-field clickable" @tap="triggerFolderUpload">
                <view v-if="isFolderUpload && selectedFiles.length > 0" class="field-content-row">
-                  <text class="field-value">已选择 {{ selectedFiles.length }} 个文件</text>
-                  <text class="field-desc">({{ selectedFiles[0].relativePath ? selectedFiles[0].relativePath.split('/')[0] : '文件夹' }})</text>
+                  <text class="field-value">{{ $t('fileTree.selectedFilesCount', { count: selectedFiles.length }) }}</text>
+                  <text class="field-desc">({{ selectedFiles[0].relativePath ? selectedFiles[0].relativePath.split('/')[0] : $t('fileTree.folder') }})</text>
                </view>
                <view v-else>
-                  <text class="field-placeholder">点击选择文件夹...</text>
+                  <text class="field-placeholder">{{ $t('fileTree.clickToSelectFolder') }}</text>
                </view>
             </view>
           </view>
           <!-- #endif -->
 
           <view class="form-group">
-            <text class="form-label">上传文件</text>
+            <text class="form-label">{{ $t('fileTree.uploadFile') }}</text>
             <view class="awd-field clickable" @tap="selectFiles">
               <view v-if="selectedFiles.length === 0 || isFolderUpload">
-                <text class="field-placeholder">选择文件（支持多选）</text>
+                <text class="field-placeholder">{{ $t('fileTree.selectFilesPlaceholder') }}</text>
               </view>
               <view v-else class="selected-files-list">
                 <text v-for="(file, index) in selectedFiles" :key="index" class="selected-file-tag">
@@ -103,13 +103,13 @@
           </view>
         </view>
         <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">取消</view>
+          <view class="awd-btn awd-btn-secondary" @tap="cancelUpload">{{ $t('fileTree.cancel') }}</view>
           <view
             class="awd-btn awd-btn-primary"
             :class="{ disabled: !selectedFiles.length }"
             @tap="selectedFiles.length ? confirmUpload() : null"
           >
-            确定上传
+            {{ $t('fileTree.confirmUploadBtn') }}
           </view>
         </view>
       </view>
@@ -120,16 +120,16 @@
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header">
           <view class="header-row">
-            <text class="awd-dialog-title">管理标签</text>
+            <text class="awd-dialog-title">{{ $t('fileTree.manageTags') }}</text>
             <text class="awd-dialog-subtitle">{{ targetFileForTags ? targetFileForTags.name : '' }}</text>
           </view>
         </view>
         <view class="awd-dialog-body" style="min-height: 200px;">
            <view class="form-group">
-              <text class="form-label">当前标签</text>
+              <text class="form-label">{{ $t('fileTree.currentTags') }}</text>
               <view class="tags-container" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; min-height: 32px;">
                   <view v-if="!targetFileForTags || !targetFileForTags.tags || targetFileForTags.tags.length === 0" class="empty-tags">
-                     <text style="color: #6C757D; font-size: 13px;">暂无标签</text>
+                     <text style="color: #6C757D; font-size: 13px;">{{ $t('fileTree.noTags') }}</text>
                   </view>
                   <TagChip
                     v-for="tag in (targetFileForTags ? targetFileForTags.tags : [])"
@@ -142,7 +142,7 @@
            </view>
 
            <view class="form-group">
-              <text class="form-label">添加标签</text>
+              <text class="form-label">{{ $t('fileTree.addTag') }}</text>
               <TagSelector
                 :available-tags="projectTags"
                 :existing-tag-ids="(targetFileForTags && targetFileForTags.tags) ? targetFileForTags.tags.map(t => t.id) : []"
@@ -154,7 +154,7 @@
            </view>
         </view>
         <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-primary" @tap="showTagEditDialog = false">完成</view>
+          <view class="awd-btn awd-btn-primary" @tap="showTagEditDialog = false">{{ $t('fileTree.done') }}</view>
         </view>
       </view>
     </view>
@@ -171,10 +171,10 @@
       <view class="awd-dialog" @tap.stop>
         <view class="awd-dialog-header">
           <view class="header-row">
-            <text class="awd-dialog-title">选择文件夹</text>
+            <text class="awd-dialog-title">{{ $t('fileTree.selectFolder') }}</text>
             <view class="new-folder-btn" @tap="handleSelectorCreateFolder">
               <text class="btn-plus">+</text>
-              <text>新建文件夹</text>
+              <text>{{ $t('fileTree.newFolder') }}</text>
             </view>
           </view>
         </view>
@@ -198,7 +198,7 @@
               style="margin-right: 8px;"
               mode="aspectFit"
             />
-            <text class="folder-name">根目录</text>
+            <text class="folder-name">{{ $t('fileTree.rootDirectory') }}</text>
           </view>
 
           <view
@@ -234,11 +234,11 @@
             </view>
             <text v-else class="folder-name">{{ folder.name }}</text>
           </view>
-          <view v-if="folderTree.length === 0" class="empty-tip">暂无其他文件夹</view>
+          <view v-if="folderTree.length === 0" class="empty-tip">{{ $t('fileTree.noOtherFolders') }}</view>
         </view>
         <view class="awd-dialog-footer">
-          <view class="awd-btn awd-btn-secondary" @tap="showFolderSelector = false">取消</view>
-          <view class="awd-btn awd-btn-primary" @tap="confirmFolderSelection">确定</view>
+          <view class="awd-btn awd-btn-secondary" @tap="showFolderSelector = false">{{ $t('fileTree.cancel') }}</view>
+          <view class="awd-btn awd-btn-primary" @tap="confirmFolderSelection">{{ $t('fileTree.confirm') }}</view>
         </view>
       </view>
     </view>
@@ -262,7 +262,7 @@
               <rect x="3" y="3" width="18" height="18" rx="2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">比较文档</text>
+          <text class="context-menu-text">{{ $t('fileTree.compareDocuments') }}</text>
         </view>
         <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="handleDownload(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
@@ -272,7 +272,7 @@
               <line x1="12" y1="15" x2="12" y2="3" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">下载</text>
+          <text class="context-menu-text">{{ $t('fileTree.download') }}</text>
         </view>
         <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="handleRename(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
@@ -281,7 +281,7 @@
               <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">重命名</text>
+          <text class="context-menu-text">{{ $t('fileTree.rename') }}</text>
         </view>
         <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item" @tap="openTagEditDialog(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
@@ -290,7 +290,7 @@
               <line x1="7" y1="7" x2="7.01" y2="7" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">管理标签</text>
+          <text class="context-menu-text">{{ $t('fileTree.manageTags') }}</text>
         </view>
         <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item"
           @tap="$emit('file-history', contextMenu.targetItem); closeContextMenu()">
@@ -299,7 +299,7 @@
               <circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2" stroke-linecap="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">这份文件的历史</text>
+          <text class="context-menu-text">{{ $t('fileTree.fileHistory') }}</text>
         </view>
         <view v-if="contextMenu.targetItem && isDesktopShell" class="context-menu-item"
           @tap="$emit('reveal-file', contextMenu.targetItem); closeContextMenu()">
@@ -308,7 +308,7 @@
               <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">在访达中显示</text>
+          <text class="context-menu-text">{{ $t('fileTree.revealInFinder') }}</text>
         </view>
         <view v-if="contextMenu.targetItem" class="context-menu-item context-menu-item-danger" @tap="handleDelete(contextMenu.targetItem); closeContextMenu()">
           <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
@@ -317,7 +317,7 @@
               <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke-linecap="round" stroke-linejoin="round"/>
             </svg>
           </view>
-          <text class="context-menu-text">删除</text>
+          <text class="context-menu-text">{{ $t('fileTree.delete') }}</text>
         </view>
       </view>
     </view>
@@ -328,34 +328,34 @@
          <svg class="recycle-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
            <path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
          </svg>
-         <text style="font-size: 12px; color: #1A5336; display: flex; align-items: center; font-weight: 500;">回收站 ({{ recycleBin.length }})</text>
-         <text class="action-btn recycle-back-btn" @tap="exitRecycleBin">返回</text>
+         <text style="font-size: 12px; color: #1A5336; display: flex; align-items: center; font-weight: 500;">{{ $t('fileTree.recycleBinCount', { count: recycleBin.length }) }}</text>
+         <text class="action-btn recycle-back-btn" @tap="exitRecycleBin">{{ $t('fileTree.back') }}</text>
       </view>
 
       <!-- Sort Menu (Dropdown) -->
       <view v-if="showSortMenu" class="sort-menu-mask" @tap="showSortMenu = false">
          <view class="sort-menu" @tap.stop>
             <view class="sort-item" :class="{ active: sortMode === 'name' }" @tap="setSortMode('name')">
-               <text>名称</text>
+               <text>{{ $t('fileTree.sortName') }}</text>
                <text v-if="sortMode === 'name'">✓</text>
             </view>
             <view class="sort-item" :class="{ active: sortMode === 'date' }" @tap="setSortMode('date')">
-               <text>修改日期</text>
+               <text>{{ $t('fileTree.sortDate') }}</text>
                <text v-if="sortMode === 'date'">✓</text>
             </view>
             <view class="sort-item" :class="{ active: sortMode === 'type' }" @tap="setSortMode('type')">
-               <text>类型</text>
+               <text>{{ $t('fileTree.sortType') }}</text>
                <text v-if="sortMode === 'type'">✓</text>
             </view>
          </view>
       </view>
 
       <view v-if="loading" class="tree-loading">
-        <text>加载中...</text>
+        <text>{{ $t('fileTree.loading') }}</text>
       </view>
       <view v-else-if="displayFiles.length === 0" class="tree-empty">
         <view class="empty-content">
-          <text>暂无文件</text>
+          <text>{{ $t('fileTree.noFiles') }}</text>
         </view>
         <!-- Root Drop Zone for empty folders -->
         <!-- #ifdef H5 -->
@@ -367,7 +367,7 @@
           @dragleave="onRootDragLeave"
           @drop.prevent="onRootDrop"
         >
-          <text>拖拽到此处移至根目录</text>
+          <text>{{ $t('fileTree.dropToRoot') }}</text>
         </view>
         <!-- #endif -->
       </view>
@@ -456,23 +456,23 @@
             </text>
             <view class="tree-item-actions" @tap.stop>
               <template v-if="viewMode === 'files' && renamingId !== item.id">
-                <view class="action-btn icon-btn" title="下载" @tap="handleDownload(item)">
+                <view class="action-btn icon-btn" :title="$t('fileTree.download')" @tap="handleDownload(item)">
                    <image src="/static/download.png" class="action-icon" mode="aspectFit" />
                 </view>
-                <view class="action-btn icon-btn" title="复制" @tap="handleCopy(item)">
+                <view class="action-btn icon-btn" :title="$t('fileTree.copy')" @tap="handleCopy(item)">
                    <image src="/static/copy.png" class="action-icon" mode="aspectFit" />
                 </view>
-                <view class="action-btn icon-btn" title="重命名" @tap="handleRename(item)">
+                <view class="action-btn icon-btn" :title="$t('fileTree.rename')" @tap="handleRename(item)">
                    <image src="/static/rename.png" class="action-icon" mode="aspectFit" />
                 </view>
-                <view class="action-btn icon-btn" title="删除" @tap="handleDelete(item)">
+                <view class="action-btn icon-btn" :title="$t('fileTree.delete')" @tap="handleDelete(item)">
                    <image src="/static/delete.png" class="action-icon" mode="aspectFit" />
                 </view>
               </template>
               <template v-else-if="viewMode === 'recycle'">
                 <view
                   class="action-btn icon-btn"
-                  title="还原"
+                  :title="$t('fileTree.restore')"
                   @tap="restoreFile(item)"
                   @mouseenter="hoverRestore = { ...hoverRestore, [item.id]: true }"
                   @mouseleave="hoverRestore = { ...hoverRestore, [item.id]: false }"
@@ -485,7 +485,7 @@
                 </view>
                 <view
                   class="action-btn icon-btn"
-                  title="彻底删除"
+                  :title="$t('fileTree.hardDeleteTitle')"
                   @tap="permDeleteFile(item)"
                   @mouseenter="hoverPermDelete = { ...hoverPermDelete, [item.id]: true }"
                   @mouseleave="hoverPermDelete = { ...hoverPermDelete, [item.id]: false }"
@@ -510,7 +510,7 @@
           <view v-if="uploadStatusMap[item.id]" class="upload-progress-inline-text">
             {{ (uploadStatusMap[item.id].progress || 0) }}%
             <text v-if="uploadStatusMap[item.id].speed"> · {{ formatSpeed(uploadStatusMap[item.id].speed) }}</text>
-            <text v-if="uploadStatusMap[item.id].eta !== null"> · 约 {{ formatEta(uploadStatusMap[item.id].eta) }}</text>
+            <text v-if="uploadStatusMap[item.id].eta !== null"> · {{ $t('fileTree.etaAbout', { time: formatEta(uploadStatusMap[item.id].eta) }) }}</text>
           </view>
         </view>
         <!-- #endif -->
@@ -593,23 +593,23 @@
             </text>
             <view class="tree-item-actions" @tap.stop>
               <template v-if="viewMode === 'files' && renamingId !== item.id">
-                <view class="action-btn icon-btn" title="下载" @tap="handleDownload(item)">
+                <view class="action-btn icon-btn" :title="$t('fileTree.download')" @tap="handleDownload(item)">
                    <image src="/static/download.png" class="action-icon" mode="aspectFit" />
                 </view>
-                <view class="action-btn icon-btn" title="复制" @tap="handleCopy(item)">
+                <view class="action-btn icon-btn" :title="$t('fileTree.copy')" @tap="handleCopy(item)">
                    <image src="/static/copy.png" class="action-icon" mode="aspectFit" />
                 </view>
-                <view class="action-btn icon-btn" title="重命名" @tap="handleRename(item)">
+                <view class="action-btn icon-btn" :title="$t('fileTree.rename')" @tap="handleRename(item)">
                    <image src="/static/rename.png" class="action-icon" mode="aspectFit" />
                 </view>
-                <view class="action-btn icon-btn" title="删除" @tap="handleDelete(item)">
+                <view class="action-btn icon-btn" :title="$t('fileTree.delete')" @tap="handleDelete(item)">
                    <image src="/static/delete.png" class="action-icon" mode="aspectFit" />
                 </view>
               </template>
               <template v-else-if="viewMode === 'recycle'">
                 <view
                   class="action-btn icon-btn"
-                  title="还原"
+                  :title="$t('fileTree.restore')"
                   @tap="restoreFile(item)"
                   @mouseenter="hoverRestore = { ...hoverRestore, [item.id]: true }"
                   @mouseleave="hoverRestore = { ...hoverRestore, [item.id]: false }"
@@ -622,7 +622,7 @@
                 </view>
                 <view
                   class="action-btn icon-btn"
-                  title="彻底删除"
+                  :title="$t('fileTree.hardDeleteTitle')"
                   @tap="permDeleteFile(item)"
                   @mouseenter="hoverPermDelete = { ...hoverPermDelete, [item.id]: true }"
                   @mouseleave="hoverPermDelete = { ...hoverPermDelete, [item.id]: false }"
@@ -650,7 +650,7 @@
           @dragleave="onRootDragLeave"
           @drop.prevent="onRootDrop"
         >
-          <text>拖拽到此处移至根目录</text>
+          <text>{{ $t('fileTree.dropToRoot') }}</text>
         </view>
         <!-- #endif -->
       </view> <!-- Close tree-list -->
@@ -668,12 +668,12 @@
         <!-- 悬浮详情列表 -->
         <view v-if="showUploadDetails" class="upload-details-popover" style="position: absolute; bottom: 100%; left: 0; right: 0; background: white; border: 1px solid #eee; border-radius: 4px; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); max-height: 200px; overflow-y: auto; z-index: 100;">
             <view class="popover-header" style="padding: 8px 12px; border-bottom: 1px solid #f0f0f0; display: flex; justify-content: space-between; align-items: center; background: #f9fafb;">
-                <text style="font-size: 12px; font-weight: bold; color: #333;">上传列表 ({{ Object.keys(uploadStatusMap).length }})</text>
+                <text style="font-size: 12px; font-weight: bold; color: #333;">{{ $t('fileTree.uploadListCount', { count: Object.keys(uploadStatusMap).length }) }}</text>
                 <view style="display: flex; align-items: center; gap: 12px;">
                     <text
                         style="font-size: 11px; color: #ef4444; cursor: pointer; padding: 2px 8px; border: 1px solid #fecaca; border-radius: 4px; background: #fef2f2;"
                         @tap.stop="cancelAllUploads"
-                    >取消全部</text>
+                    >{{ $t('fileTree.cancelAll') }}</text>
                     <text style="font-size: 12px; color: #666; cursor: pointer;" @tap.stop="showUploadDetails = false">▼</text>
                 </view>
             </view>
@@ -683,7 +683,7 @@
                         <text style="font-size: 12px; color: #333; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;">{{ status.name }}</text>
                         <!-- Error/Interrupted State -->
                         <view v-if="status.error || status.status === 'interrupted'" style="display: flex; align-items: center; margin-top: 4px;">
-                             <text style="font-size: 10px; color: #ef4444;">{{ status.errorMessage || '已中断' }}</text>
+                             <text style="font-size: 10px; color: #ef4444;">{{ status.errorMessage || $t('fileTree.interrupted') }}</text>
                         </view>
                         <!-- Normal Progress -->
                         <view v-else style="display: flex; align-items: center; margin-top: 4px;">
@@ -700,9 +700,9 @@
                             class="btn-retry"
                             @tap.stop="resumeUpload(status.fileId)"
                             style="font-size: 14px; color: #2563eb; cursor: pointer; padding: 0 4px; margin-right: 4px;"
-                            title="继续上传"
+                            :title="$t('fileTree.resumeUploadTitle')"
                         >↻</text>
-                        <text class="btn-cancel" @tap.stop="cancelSingleUpload(status.fileId)" style="font-size: 16px; color: #999; cursor: pointer; padding: 0 4px;" title="取消上传">×</text>
+                        <text class="btn-cancel" @tap.stop="cancelSingleUpload(status.fileId)" style="font-size: 16px; color: #999; cursor: pointer; padding: 0 4px;" :title="$t('fileTree.cancelUploadTitle')">×</text>
                     </view>
                 </view>
             </view>
@@ -737,25 +737,25 @@
             <text style="font-size: 12px; font-weight: bold;">{{ Math.floor(globalUploadProgress || 0) }}%</text>
           </CircularProgress>
           <view class="upload-status-text" style="display: flex; flex-direction: column; flex: 1;">
-             <text class="status-title" style="font-size: 12px; color: #333;">正在上传... ({{ uploadedCount }}/{{ totalUploadCount }})</text>
+             <text class="status-title" style="font-size: 12px; color: #333;">{{ $t('fileTree.uploadingProgress', { done: uploadedCount, total: totalUploadCount }) }}</text>
              <text class="status-detail" v-if="globalUploadProgress !== null" style="font-size: 10px; color: #666;">{{ Math.floor(globalUploadProgress) }}%</text>
           </view>
           <text
             style="font-size: 11px; color: #ef4444; cursor: pointer; padding: 4px 10px; border: 1px solid #fecaca; border-radius: 4px; background: #fef2f2; flex-shrink: 0;"
             @tap.stop="cancelAllUploads"
-          >取消全部</text>
+          >{{ $t('fileTree.cancelAll') }}</text>
         </view>
     </view>
 
     <!-- 文档对比按钮（选中 2 个文档时显示） -->
     <view v-if="canCompareDocuments()" class="compare-bar">
       <view class="compare-bar-content">
-        <text class="compare-bar-text">已选择 2 个文档</text>
+        <text class="compare-bar-text">{{ $t('fileTree.twoDocsSelected') }}</text>
         <button class="btn-compare" @tap="startDocumentCompare">
           <svg class="compare-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
             <path v-for="(d, gi) in ICONS.compare" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
-          <text>对比文档</text>
+          <text>{{ $t('fileTree.compareDocsBtn') }}</text>
         </button>
       </view>
     </view>
@@ -766,16 +766,16 @@
        <!-- 第一行：新建文件夹和新建Word -->
        <view class="footer-row">
         <button class="btn-new-folder" @tap="showCreateFolderDialog">
-          新建文件夹
+          {{ $t('fileTree.newFolder') }}
         </button>
         <button class="btn-new-word" @tap="handleCreateWord">
-          新建Word
+          {{ $t('fileTree.newWord') }}
         </button>
       </view>
       <!-- 第二行：上传文件 -->
       <view class="footer-row">
         <button class="btn-upload" @tap="handleUploadFile">
-          上传文件
+          {{ $t('fileTree.uploadFile') }}
         </button>
       </view>
     </view>
@@ -784,15 +784,15 @@
     <view v-if="showRecycleBin" class="upload-mask" @tap="showRecycleBin = false">
       <view class="upload-modal" @tap.stop>
          <view class="upload-header">
-           <text class="upload-title">回收站</text>
+           <text class="upload-title">{{ $t('fileTree.recycleBin') }}</text>
          </view>
          <view class="upload-body" style="max-height: 300px; overflow-y: auto;">
-            <view v-if="recycleBin.length === 0" class="tree-empty">回收站为空</view>
+            <view v-if="recycleBin.length === 0" class="tree-empty">{{ $t('fileTree.recycleBinEmpty') }}</view>
             <view v-else v-for="f in recycleBin" :key="f.id" style="display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #eee;">
                <text>{{ f.name }}</text>
                <view style="display: flex; gap: 10px;">
-                  <text @tap="restoreFile(f)" style="color: blue; cursor: pointer;">还原</text>
-                  <text @tap="permDeleteFile(f)" style="color: red; cursor: pointer;">彻底删除</text>
+                  <text @tap="restoreFile(f)" style="color: blue; cursor: pointer;">{{ $t('fileTree.restore') }}</text>
+                  <text @tap="permDeleteFile(f)" style="color: red; cursor: pointer;">{{ $t('fileTree.hardDeleteTitle') }}</text>
                </view>
             </view>
          </view>
@@ -805,19 +805,19 @@
     <view v-if="showRenameDialog" class="dialog-overlay" @tap="showRenameDialog = false">
       <view class="dialog-content" @tap.stop>
         <view class="dialog-header">
-          <text class="dialog-title">重命名</text>
+          <text class="dialog-title">{{ $t('fileTree.rename') }}</text>
         </view>
         <view class="dialog-body">
           <input
             v-model="renameValue"
             class="dialog-input"
-            placeholder="请输入新名称"
+            :placeholder="$t('fileTree.newNamePlaceholder')"
             @confirm="handleConfirmRename"
           />
         </view>
         <view class="dialog-footer">
-          <button class="dialog-btn dialog-btn-default" @tap="showRenameDialog = false">取消</button>
-          <button class="dialog-btn dialog-btn-primary" @tap="handleConfirmRename">确定</button>
+          <button class="dialog-btn dialog-btn-default" @tap="showRenameDialog = false">{{ $t('fileTree.cancel') }}</button>
+          <button class="dialog-btn dialog-btn-primary" @tap="handleConfirmRename">{{ $t('fileTree.confirm') }}</button>
         </view>
       </view>
     </view>
@@ -983,8 +983,8 @@ export default {
       return !!(host.fs && host.fs.showItemInFolder)
     },
     sortLabel() {
-      const map = { name: '名称', date: '修改时间', type: '类型' }
-      return map[this.sortMode] || '排序'
+      const map = { name: this.$t('fileTree.sortName'), date: this.$t('fileTree.sortModifiedTime'), type: this.$t('fileTree.sortType') }
+      return map[this.sortMode] || this.$t('fileTree.sortLabelDefault')
     },
     displayFiles() {
        let result = []
@@ -1223,7 +1223,7 @@ export default {
         // 确保 projectId 是数字类型
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         if (isNaN(projectId)) {
-          throw new Error('项目ID格式错误')
+          throw new Error(this.$t('fileTree.projectIdInvalid'))
         }
         if (this.viewMode === 'recycle') {
            this.files = [] // Clear existing
@@ -1262,7 +1262,7 @@ export default {
           toString: error.toString()
         })
         uni.showToast({
-          title: error.message || '加载失败',
+          title: error.message || this.$t('fileTree.loadFailed'),
           icon: 'none',
           duration: 3000
         })
@@ -1283,7 +1283,7 @@ export default {
     async handleCreateFolder() {
       if (!this.newFolderName.trim()) {
         uni.showToast({
-          title: '请输入文件夹名称',
+          title: this.$t('fileTree.folderNamePlaceholder'),
           icon: 'none'
         })
         return
@@ -1293,7 +1293,7 @@ export default {
       const reservedNames = ['.stagezone', '__staging_area__']
       if (reservedNames.includes(this.newFolderName.trim())) {
         uni.showToast({
-          title: '不能使用系统保留名称',
+          title: this.$t('fileTree.reservedNameNotAllowed'),
           icon: 'none'
         })
         return
@@ -1301,7 +1301,7 @@ export default {
 
       if (!this.projectId) {
         uni.showToast({
-          title: '项目ID未设置，无法创建文件夹',
+          title: this.$t('fileTree.projectIdMissingCreateFolder'),
           icon: 'none'
         })
         return
@@ -1311,7 +1311,7 @@ export default {
         // 确保 projectId 是数字类型
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         if (isNaN(projectId)) {
-          throw new Error('项目ID格式错误')
+          throw new Error(this.$t('fileTree.projectIdInvalid'))
         }
         // Use activeFolderId or parentId
         const parentId = this.activeFolderId || this.parentId
@@ -1320,13 +1320,13 @@ export default {
         this.newFolderName = ''
         await this.loadFiles()
         uni.showToast({
-          title: '创建成功',
+          title: this.$t('fileTree.createSuccess'),
           icon: 'success'
         })
       } catch (error) {
         console.error('创建文件夹失败:', error)
         uni.showToast({
-          title: error.message || '创建失败',
+          title: error.message || this.$t('fileTree.createFailed'),
           icon: 'none'
         })
       }
@@ -1334,7 +1334,7 @@ export default {
     async handleCreateWord() {
       if (!this.projectId) {
         uni.showToast({
-          title: '项目ID未设置，无法创建文件',
+          title: this.$t('fileTree.projectIdMissingCreateFile'),
           icon: 'none'
         })
         return
@@ -1344,7 +1344,7 @@ export default {
         // 确保 projectId 是数字类型
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         if (isNaN(projectId)) {
-          throw new Error('项目ID格式错误')
+          throw new Error(this.$t('fileTree.projectIdInvalid'))
         }
 
         // Auto Rename Logic: Check displayFiles for collisions
@@ -1375,13 +1375,13 @@ export default {
 
         await this.loadFiles()
         uni.showToast({
-          title: '创建成功',
+          title: this.$t('fileTree.createSuccess'),
           icon: 'success'
         })
       } catch (error) {
         console.error('创建Word文件失败:', error)
         // 使用模态对话框显示错误
-        this.showErrorModal(error.message || '文件创建失败，请重试', '创建失败')
+        this.showErrorModal(error.message || this.$t('fileTree.createFileFailedRetry'), this.$t('fileTree.createFailed'))
       }
     },
     handleRenameKeydown(e) {
@@ -1400,14 +1400,14 @@ export default {
          uni.setClipboardData({
              data: item.name,
              success: () => {
-                 uni.showToast({ title: '已复制并创建副本', icon: 'none' })
+                 uni.showToast({ title: this.$t('fileTree.copiedAndDuplicated'), icon: 'none' })
              }
          })
 
          await this.loadFiles()
        } catch (error) {
          console.error('复制失败:', error)
-         this.showErrorModal(error.message || '文件复制失败，请重试', '复制失败')
+         this.showErrorModal(error.message || this.$t('fileTree.copyFileFailedRetry'), this.$t('fileTree.copyFailed'))
        }
     },
     handleRename(item) {
@@ -1426,7 +1426,7 @@ export default {
       this.tempRenameValue = ''
 
       if (!newName) {
-        uni.showToast({ title: '名称不能为空', icon: 'none' })
+        uni.showToast({ title: this.$t('fileTree.nameEmpty'), icon: 'none' })
         return
       }
 
@@ -1434,7 +1434,7 @@ export default {
       const reservedNames = ['.stagezone', '__staging_area__']
       if (reservedNames.includes(newName)) {
         uni.showToast({
-          title: '不能使用系统保留名称',
+          title: this.$t('fileTree.reservedNameNotAllowed'),
           icon: 'none'
         })
         return
@@ -1452,17 +1452,17 @@ export default {
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         await renameFile(projectId, fileId, newName)
         await this.loadFiles()
-        uni.showToast({ title: '重命名成功', icon: 'success' })
+        uni.showToast({ title: this.$t('fileTree.renameSuccess'), icon: 'success' })
       } catch (error) {
         console.error('重命名失败:', error)
-        this.showErrorModal(error.message || '重命名失败，请重试', '重命名失败')
+        this.showErrorModal(error.message || this.$t('fileTree.renameFailedRetry'), this.$t('fileTree.renameFailed'))
       }
     },
     // Deprecated dialog method
     async handleConfirmRename() {
       if (!this.renameValue.trim()) {
         uni.showToast({
-          title: '请输入新名称',
+          title: this.$t('fileTree.newNamePlaceholder'),
           icon: 'none'
         })
         return
@@ -1470,7 +1470,7 @@ export default {
 
       if (!this.projectId) {
         uni.showToast({
-          title: '项目ID未设置',
+          title: this.$t('fileTree.projectIdMissing'),
           icon: 'none'
         })
         return
@@ -1479,7 +1479,7 @@ export default {
       try {
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         if (isNaN(projectId)) {
-          throw new Error('项目ID格式错误')
+          throw new Error(this.$t('fileTree.projectIdInvalid'))
         }
         await renameFile(projectId, this.renamingFile.id, this.renameValue.trim())
         this.showRenameDialog = false
@@ -1487,20 +1487,20 @@ export default {
         this.renameValue = ''
         await this.loadFiles()
         uni.showToast({
-          title: '重命名成功',
+          title: this.$t('fileTree.renameSuccess'),
           icon: 'success'
         })
       } catch (error) {
         console.error('重命名失败:', error)
         uni.showToast({
-          title: error.message || '重命名失败',
+          title: error.message || this.$t('fileTree.renameFailed'),
           icon: 'none'
         })
       }
     },
     async handleDelete(item) {
       if (!this.projectId) {
-        uni.showToast({ title: '项目ID未设置', icon: 'none' })
+        uni.showToast({ title: this.$t('fileTree.projectIdMissing'), icon: 'none' })
         return
       }
       this.deleteTargetItem = item
@@ -1524,7 +1524,7 @@ export default {
         }
       } catch (error) {
         console.error('操作失败:', error)
-        this.showErrorModal(error.message || '删除操作失败，请重试', '操作失败')
+        this.showErrorModal(error.message || this.$t('fileTree.deleteOpFailedRetry'), this.$t('fileTree.opFailed'))
       } finally {
         this.deleteTargetItem = null
         this.deleteBatchIds = []
@@ -1533,7 +1533,7 @@ export default {
 
     async executeSoftDelete(item) {
       const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
-      if (isNaN(projectId)) throw new Error('项目ID格式错误')
+      if (isNaN(projectId)) throw new Error(this.$t('fileTree.projectIdInvalid'))
 
       // 2. Call API (Soft Delete)
       try {
@@ -1548,7 +1548,7 @@ export default {
       }
       
       await this.loadFiles()
-      uni.showToast({ title: '已移入回收站', icon: 'success' })
+      uni.showToast({ title: this.$t('fileTree.movedToRecycleBin'), icon: 'success' })
       
       // Emit events
       this.$emit('file-deleted', { ids: [item.id] })
@@ -1576,7 +1576,7 @@ export default {
             if (idx > -1) {
               this.recycleBin.splice(idx, 1)
             }
-            uni.showToast({ title: '彻底删除成功', icon: 'success' })
+            uni.showToast({ title: this.$t('fileTree.permDeleteSuccess'), icon: 'success' })
             this.$emit('file-deleted', { ids: [item.id] })
         } catch (e) {
              if (e.statusCode === 404 || e.status === 404) {
@@ -1585,10 +1585,10 @@ export default {
                if (idx > -1) {
                  this.recycleBin.splice(idx, 1)
                }
-               uni.showToast({ title: '彻底删除成功', icon: 'success' })
+               uni.showToast({ title: this.$t('fileTree.permDeleteSuccess'), icon: 'success' })
                this.$emit('file-deleted', { ids: [item.id] })
              } else {
-               uni.showToast({ title: '删除失败', icon: 'none' })
+               uni.showToast({ title: this.$t('fileTree.deleteFailed'), icon: 'none' })
              }
         }
     },
@@ -1611,7 +1611,7 @@ export default {
             // Update local state
             const deletedSet = new Set(ids.map(Number));
             this.recycleBin = this.recycleBin.filter(f => !deletedSet.has(f.id));
-             uni.showToast({ title: '已彻底删除', icon: 'success' })
+             uni.showToast({ title: this.$t('fileTree.permDeleted'), icon: 'success' })
              this.$emit('file-deleted', { ids: ids })
         } else {
             // Soft Batch Delete
@@ -1623,7 +1623,7 @@ export default {
                 throw e
              }
              await this.loadFiles()
-             uni.showToast({ title: '已移入回收站', icon: 'success' })
+             uni.showToast({ title: this.$t('fileTree.movedToRecycleBin'), icon: 'success' })
              this.$emit('file-deleted', { ids: ids })
         }
         this.clearChecked()
@@ -1639,14 +1639,14 @@ export default {
             if (idx > -1) {
               this.recycleBin.splice(idx, 1)
             }
-            uni.showToast({ title: '已还原', icon: 'success' })
+            uni.showToast({ title: this.$t('fileTree.restored'), icon: 'success' })
             // If we are viewing files, we might want to refresh, but usually restore is done in recycle view.
             if (this.viewMode !== 'recycle') {
                 this.loadFiles()
             }
         } catch (e) {
             console.error('还原失败:', e)
-            uni.showToast({ title: '还原失败', icon: 'none' })
+            uni.showToast({ title: this.$t('fileTree.restoreFailed'), icon: 'none' })
         }
     },
 
@@ -1724,7 +1724,7 @@ export default {
     toggleSortOrder() {
       this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc'
       uni.showToast({
-        title: this.sortOrder === 'asc' ? '正序排列' : '倒序排列',
+        title: this.sortOrder === 'asc' ? this.$t('fileTree.ascOrder') : this.$t('fileTree.descOrder'),
         icon: 'none'
       })
       this.refreshTreeView()
@@ -1767,7 +1767,7 @@ export default {
 
       try {
         const pId = this.tempSelectedParent // 这个是当前的高亮选中项
-        const folderName = '新建文件夹'
+        const folderName = this.$t('fileTree.newFolder')
         // 1. 创建文件夹
         const res = await createFolder(this.projectId, pId, folderName)
         const newFolderId = res.id || res.data?.id
@@ -1797,7 +1797,7 @@ export default {
 
       } catch (error) {
         console.error('新建文件夹失败:', error)
-        uni.showToast({ title: '新建文件夹失败', icon: 'none' })
+        uni.showToast({ title: this.$t('fileTree.newFolderFailed'), icon: 'none' })
       }
     },
     // 切换选择器中某个文件夹的展开/收起
@@ -2010,7 +2010,7 @@ export default {
        const selectedItems = (this.allFiles || this.files || []).filter(f => idSet.has(String(f.id)))
 
        if (selectedItems.length > 1) {
-           uni.showToast({ title: '暂不支持批量下载', icon: 'error' })
+           uni.showToast({ title: this.$t('fileTree.batchDownloadUnsupported'), icon: 'error' })
            return
        }
 
@@ -2018,11 +2018,11 @@ export default {
        if (!item) return
 
        if (item.isFolder) {
-           uni.showToast({ title: '暂不支持批量下载', icon: 'error' })
+           uni.showToast({ title: this.$t('fileTree.batchDownloadUnsupported'), icon: 'error' })
            return
        }
 
-       uni.showToast({ title: '开始下载...', icon: 'none' })
+       uni.showToast({ title: this.$t('fileTree.downloadStarting'), icon: 'none' })
 
        const baseUrl = getApiBaseUrl()
        const token = getSessionId() || ''
@@ -2050,16 +2050,16 @@ export default {
         const targetParentId = this.batchTargetParentId
         if (action === 'move' || action === 'cut') {
           await batchMoveFiles(projectId, ids, targetParentId)
-          uni.showToast({ title: '移动成功', icon: 'success' })
+          uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
         } else if (action === 'copy') {
           await batchCopyFiles(projectId, ids, targetParentId)
-          uni.showToast({ title: '复制成功', icon: 'success' })
+          uni.showToast({ title: this.$t('fileTree.copySuccess'), icon: 'success' })
         }
         this.clearChecked()
         await this.loadFiles()
       } catch (e) {
         console.error('批量操作失败:', e)
-        uni.showToast({ title: e.message || '批量操作失败', icon: 'none' })
+        uni.showToast({ title: e.message || this.$t('fileTree.batchOpFailed'), icon: 'none' })
       }
     },
     handleDownload(item) {
@@ -2331,7 +2331,7 @@ export default {
     },
     // 格式化剩余时间（秒 => Xm Ys）
     formatEta(etaSeconds) {
-      if (etaSeconds == null || etaSeconds <= 0) return '完成'
+      if (etaSeconds == null || etaSeconds <= 0) return this.$t('fileTree.etaDone')
       const s = Math.round(etaSeconds)
       const m = Math.floor(s / 60)
       const rest = s % 60
@@ -2450,10 +2450,10 @@ export default {
 
             await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
             await this.loadFiles()
-            uni.showToast({ title: '移动成功', icon: 'success' })
+            uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
           } catch (error) {
             console.error('移动文件失败:', error)
-            uni.showToast({ title: error.message || '移动失败', icon: 'none' })
+            uni.showToast({ title: error.message || this.$t('fileTree.moveFailed'), icon: 'none' })
           }
       }
       // Case 2: External Drag (e.g. from Staging Area)
@@ -2488,7 +2488,7 @@ export default {
              try {
                  await moveFile(projectId, droppedFileId, targetParentId, newSortOrder)
                  await this.loadFiles()
-                 uni.showToast({ title: '移动成功', icon: 'success' })
+                 uni.showToast({ title: this.$t('fileTree.moveSuccess'), icon: 'success' })
 
                  // If Staging Area listens to file changes (it does via project-overview reloading),
                  // it will update automatically.
@@ -2501,7 +2501,7 @@ export default {
                  // Verify if project-overview handles this.
              } catch (error) {
                 console.error('从暂存区移动失败:', error)
-                uni.showToast({ title: error.message || '移动失败', icon: 'none' })
+                uni.showToast({ title: error.message || this.$t('fileTree.moveFailed'), icon: 'none' })
              }
           }
       }
@@ -2539,11 +2539,11 @@ export default {
             // If already in root (parentId is null or matches), we might still want to allow movement if subfolder -> root
             await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
             await this.loadFiles()
-            uni.showToast({ title: '移动到根目录成功', icon: 'success' })
+            uni.showToast({ title: this.$t('fileTree.moveToRootSuccess'), icon: 'success' })
             this.draggedIndex = -1
           } catch (error) {
             console.error('移动到根目录失败:', error)
-            uni.showToast({ title: error.message || '移动失败', icon: 'none' })
+            uni.showToast({ title: error.message || this.$t('fileTree.moveFailed'), icon: 'none' })
           }
       }
       // Case 2: External Drag (e.g. from Staging Area)
@@ -2568,11 +2568,11 @@ export default {
              try {
                  await moveFile(projectId, droppedFileId, targetParentId, newSortOrder)
                  await this.loadFiles()
-                 uni.showToast({ title: '移动到根目录成功', icon: 'success' })
+                 uni.showToast({ title: this.$t('fileTree.moveToRootSuccess'), icon: 'success' })
                  this.$emit('files-changed')
              } catch (error) {
                 console.error('从外部移动到根目录失败:', error)
-                uni.showToast({ title: error.message || '移动失败', icon: 'none' })
+                uni.showToast({ title: error.message || this.$t('fileTree.moveFailed'), icon: 'none' })
              }
           }
       }
@@ -2622,13 +2622,13 @@ export default {
           await moveFile(projectId, draggedItem.id, targetParentId, newSortOrder)
           await this.loadFiles()
           uni.showToast({
-            title: '移动成功',
+            title: this.$t('fileTree.moveSuccess'),
             icon: 'success'
           })
         } catch (error) {
           console.error('移动文件失败:', error)
           uni.showToast({
-            title: error.message || '移动失败',
+            title: error.message || this.$t('fileTree.moveFailed'),
             icon: 'none'
           })
         }
@@ -2688,7 +2688,7 @@ export default {
         fail: (err) => {
           console.error('选择文件失败:', err)
           uni.showToast({
-            title: '选择文件失败',
+            title: this.$t('fileTree.chooseFileFailed'),
             icon: 'none'
           })
         }
@@ -2851,13 +2851,13 @@ export default {
         if (folder) {
           return this.buildFolderPath(folder)
         }
-        return '未知文件夹'
+        return this.$t('fileTree.unknownFolder')
       }
       // 如果传入的是文件夹对象
       if (folderId && folderId.name) {
         return this.buildFolderPath(folderId)
       }
-      return '根目录'
+      return this.$t('fileTree.rootDirectory')
     },
     // 构建文件夹完整路径
     buildFolderPath(folder) {
@@ -2884,7 +2884,7 @@ export default {
     async confirmUpload() {
       if (this.selectedFiles.length === 0) {
         uni.showToast({
-          title: '请选择要上传的文件',
+          title: this.$t('fileTree.selectFilesFirst'),
           icon: 'none'
         })
         return
@@ -2892,7 +2892,7 @@ export default {
 
       if (!this.projectId) {
         uni.showToast({
-          title: '项目ID未设置',
+          title: this.$t('fileTree.projectIdMissing'),
           icon: 'none'
         })
         return
@@ -2901,7 +2901,7 @@ export default {
       try {
         const projectId = typeof this.projectId === 'string' ? Number(this.projectId) : this.projectId
         if (isNaN(projectId)) {
-          throw new Error('项目ID格式错误')
+          throw new Error(this.$t('fileTree.projectIdInvalid'))
         }
         const files = [...this.selectedFiles]
         const rootParentId = this.selectedUploadParent
@@ -3053,21 +3053,21 @@ export default {
                      if (failCount === 0) {
                        // 全部成功
                        uni.showToast({
-                         title: `成功上传 ${successCount} 个文件`,
+                         title: this.$t('fileTree.uploadSuccessCount', { count: successCount }),
                          icon: 'success',
                          duration: 2000
                        })
                      } else if (successCount === 0) {
                        // 全部失败
                        uni.showToast({
-                         title: `上传失败 ${failCount} 个文件`,
+                         title: this.$t('fileTree.uploadFailCount', { count: failCount }),
                          icon: 'error',
                          duration: 2000
                        })
                      } else {
                        // 部分成功
                        uni.showToast({
-                         title: `成功 ${successCount} 个，失败 ${failCount} 个`,
+                         title: this.$t('fileTree.uploadPartialResult', { success: successCount, fail: failCount }),
                          icon: successCount > failCount ? 'success' : 'none',
                          duration: 2500
                        })
@@ -3093,12 +3093,12 @@ export default {
                  console.error('上传文件失败:', error)
                  failCount++ // 失败计数
                  // 显示错误提示（使用模态对话框）
-                 this.showErrorModal(error.message || '文件上传失败，请重试', '上传失败')
+                 this.showErrorModal(error.message || this.$t('fileTree.uploadFileFailedRetry'), this.$t('fileTree.uploadFailed'))
                  // Keep the error in status map so user can see it
                  if (this.uploadStatusMap[tempId]) {
                       this.uploadStatusMap[tempId].status = 'interrupted'
                       this.uploadStatusMap[tempId].error = true
-                      this.uploadStatusMap[tempId].errorMessage = error.message || '上传失败'
+                      this.uploadStatusMap[tempId].errorMessage = error.message || this.$t('fileTree.uploadFailed')
                       this.saveUploadState()
                  }
                  // Do not delete from map, allow retry
@@ -3115,7 +3115,7 @@ export default {
 
       } catch (error) {
         console.error('上传文件失败:', error)
-        this.showErrorModal(error.message || '文件上传失败，请重试', '上传失败')
+        this.showErrorModal(error.message || this.$t('fileTree.uploadFileFailedRetry'), this.$t('fileTree.uploadFailed'))
         this.isBatchUploading = false
       }
     },
@@ -3354,7 +3354,7 @@ export default {
                    // 由于非H5端 FileSlice 支持有限，这里简单处理：
                    // 如果是大文件，建议使用特定平台的原生上传插件
                    // 这里暂且回退到整文件上传或报错
-                   reject(new Error('非H5端暂不支持分片断点续传'))
+                   reject(new Error(this.$t('fileTree.chunkUnsupportedNonH5')))
                    // #endif
                })
 
@@ -3379,8 +3379,8 @@ export default {
        } catch (error) {
            console.error('分片上传失败:', error)
            // 显示具体的错误信息（使用模态对话框）
-           const errorMessage = error.message || '上传中断，请重试'
-           this.showErrorModal(errorMessage, '上传失败')
+           const errorMessage = error.message || this.$t('fileTree.uploadInterruptedRetry')
+           this.showErrorModal(errorMessage, this.$t('fileTree.uploadFailed'))
            // 不要删除 status，保留进度条以允许重试
            status.error = true
            status.errorMessage = errorMessage
@@ -3455,7 +3455,7 @@ export default {
             }
 
             uni.showToast({
-                title: '已取消上传',
+                title: this.$t('fileTree.uploadCanceled'),
                 icon: 'none'
             })
         }
@@ -3492,7 +3492,7 @@ export default {
         this.saveUploadState()
 
         uni.showToast({
-            title: '已取消全部上传',
+            title: this.$t('fileTree.allUploadsCanceled'),
             icon: 'none'
         })
     },
@@ -3510,7 +3510,7 @@ export default {
 
         // Strategy 2: Fallback to File Selection (If refreshed)
         // #ifdef H5
-        uni.showToast({ title: '页面已刷新，请重新选择原文件', icon: 'none' })
+        uni.showToast({ title: this.$t('fileTree.reselectAfterRefresh'), icon: 'none' })
         uni.chooseFile({
             count: 1,
             success: (res) => {
@@ -3526,7 +3526,7 @@ export default {
         // #endif
 
         // #ifndef H5
-        uni.showToast({ title: 'App端暂不支持重新选择续传', icon: 'none' })
+        uni.showToast({ title: this.$t('fileTree.resumeUnsupportedApp'), icon: 'none' })
         // #endif
     },
 
@@ -3539,11 +3539,11 @@ export default {
         // Validation: Verify if same file
         if (file.name !== status.name || Math.abs(file.size - status.size) > 1024) {
              if (file.name !== status.name) {
-                 uni.showToast({ title: `请选择文件: ${status.name}`, icon: 'none' })
+                 uni.showToast({ title: this.$t('fileTree.selectNamedFile', { name: status.name }), icon: 'none' })
                  return
              }
              if (file.size !== status.size) {
-                 uni.showToast({ title: '文件大小不一致', icon: 'none' })
+                 uni.showToast({ title: this.$t('fileTree.fileSizeMismatch'), icon: 'none' })
                  return
              }
         }
@@ -3558,7 +3558,7 @@ export default {
         })
 
         // Restart upload
-        uni.showToast({ title: '正在恢复上传...', icon: 'none' })
+        uni.showToast({ title: this.$t('fileTree.resumingUpload'), icon: 'none' })
         this.processChunkedUpload(this.resumingFileId, file)
 
         this.resumingFileId = null
@@ -3602,7 +3602,7 @@ export default {
                 if (item.progress < 100) {
                     item.error = true
                     item.status = 'interrupted' // Add explicitly status
-                    item.errorMessage = '页面刷新导致中断'
+                    item.errorMessage = this.$t('fileTree.refreshInterrupted')
                     // 确保 xhr 是空的
                     item.xhr = null
                 }
@@ -3616,7 +3616,7 @@ export default {
        // ... kept for fallback if needed, or removed
     },
     // 统一的错误提示函数
-    showErrorModal(message, title = '操作失败') {
+    showErrorModal(message, title = this.$t('fileTree.opFailed')) {
       // 使用 Toast 替代 Modal，无需手动确认
       uni.showToast({
         title: message,

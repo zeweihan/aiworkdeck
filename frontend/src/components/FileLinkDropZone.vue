@@ -1,7 +1,7 @@
 <template>
   <view v-if="visible" class="drop-zone-container">
-    <view class="drop-zone-title">拖到这里松手：关联到当前高亮文本</view>
-    <view class="drop-zone-sub">当前文件：{{ fileName }}</view>
+    <view class="drop-zone-title">{{ $t('files.dropToLink') }}</view>
+    <view class="drop-zone-sub">{{ $t('files.currentFileLabel', { name: fileName }) }}</view>
 
     <view class="drop-zones">
       <!-- 左侧区域 -->
@@ -13,7 +13,7 @@
         @dragleave.prevent="onDragLeave('left')"
         @drop.prevent="onDrop('left')"
       >
-        关联到左侧文档
+        {{ $t('files.linkToLeftDoc') }}
       </view>
 
       <!-- 右侧区域（分屏模式下显示） -->
@@ -26,7 +26,7 @@
         @dragleave.prevent="onDragLeave('right')"
         @drop.prevent="onDrop('right')"
       >
-        关联到右侧文档
+        {{ $t('files.linkToRightDoc') }}
       </view>
     </view>
   </view>

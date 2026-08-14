@@ -53,6 +53,9 @@ jobs:
       - name: Check emit/binding contracts
         working-directory: frontend
         run: npm run check:emits
+      - name: Check locale key parity (zh-CN vs en-US)
+        working-directory: frontend
+        run: npm run check:locales
       - name: Check navigation contracts
         working-directory: frontend
         run: npm run check:nav:full

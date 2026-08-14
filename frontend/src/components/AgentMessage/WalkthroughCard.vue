@@ -12,7 +12,7 @@
        </div>
        
        <div v-if="isLongContent && !expanded" class="expand-action" @tap="handleOpen">
-         <text class="expand-btn">查看完整内容</text>
+         <text class="expand-btn">{{ $t('chat.viewFullContent') }}</text>
        </div>
     </div>
   </div>
