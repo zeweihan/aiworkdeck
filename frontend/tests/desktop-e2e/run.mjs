@@ -406,6 +406,9 @@ try {
     // 保留对「已保存」的识别只是为了兼容旧版本前端。
     for (let i = 0; i < 60; i++) {
       const st = await editorEval('return { status: ed.statusText, saving: ed.saving, dirty: ed.dirty }')
+      // editorEval 找不到组件时回 { err }，而 !st.dirty / !st.saving 对 undefined
+      // 恒为真——不挡住就会把「编辑器压根没挂上」判成「保存完成」（实测假绿过）
+      if (st.err) throw new Error('读不到编辑器实例: ' + st.err)
       if (/已保存/.test(st.status)) return
       if (i > 5 && !st.dirty && !st.saving && !/失败/.test(st.status)) return
       if (/失败/.test(st.status)) throw new Error('保存状态: ' + st.status)

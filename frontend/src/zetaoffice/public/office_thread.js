@@ -1432,6 +1432,9 @@ function installKeyHandler() {
 }
 
 // ---- autosave: forward document modify events to the editor page ---------
+// 导出期间抑制 modified 上报：storeToURL 会把文档标成已修改，见 export_document。
+let exportInFlight = false;
+
 // XModifyBroadcaster fires `modified` on every document change regardless of
 // origin (canvas typing, IME overlay commit, AI agent command) — the one seam
 // that sees them all. The editor page throttles and relays the signal to the
@@ -1439,7 +1442,11 @@ function installKeyHandler() {
 // out the broadcast a later setModified(false) would emit.
 function installModifyListener(model) {
   const listener = zetajs.unoObject([css.util.XModifyListener], {
-    modified() { try { if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
+    // exportInFlight：storeToURL 自己会把文档标成 modified（见 export_document）。
+    // 不挡掉的话每次自动保存都会引出一次 modified，宿主据此再排一次保存——
+    // 实测形成每 3 秒一轮的「保存→modified→保存」死循环，整份 docx 反复上传，
+    // 且 export 是全文档同步序列化，会周期性冻住 Qt 事件循环。
+    modified() { try { if (exportInFlight) return; if (model.isModified()) post('modified'); } catch (e) { /* ignore */ } },
     disposing() {},
   });
   model.addModifyListener(listener);
@@ -2385,7 +2392,19 @@ const EXEC = {
     if (filter) props.push(mkProp('FilterName', filter));
     // private:stream = "write to the OutputStream in the media descriptor" —
     // the standard LO idiom for exporting to memory (no filesystem involved).
-    xModel.storeToURL('private:stream', props);
+    // storeToURL 会把文档标成 modified（实测：导出完 isModified() 恒为 true）。
+    // 不复原的话宿主收到 modified 又排一次自动保存，形成保存死循环，所以这里
+    // 既要在导出期间闭掉上报，也要把标志恢复成导出前的值。
+    // 导出是同步的、跑在这条 office 线程上，期间不可能有用户编辑挤进来，
+    // 复原不会吃掉真实修改；宿主侧的 dirty 是另一套独立记账，也不受影响。
+    const wasModified = (() => { try { return !!xModel.isModified(); } catch (e) { return false; } })();
+    exportInFlight = true;
+    try {
+      xModel.storeToURL('private:stream', props);
+    } finally {
+      exportInFlight = false;
+      try { if (!!xModel.isModified() !== wasModified) xModel.setModified(wasModified); } catch (e) { /* 只读文档等场景可能拒绝，忽略 */ }
+    }
     saveSeq++;
     if (total === 0) return { success: false, message: 'export_document: store produced 0 bytes' };
     const u8 = new Uint8Array(total);
