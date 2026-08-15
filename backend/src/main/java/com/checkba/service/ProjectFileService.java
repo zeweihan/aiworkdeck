@@ -56,7 +56,7 @@ public class ProjectFileService {
      */
     public List<ProjectFile> getFilesByParent(Long projectId, Long parentId) {
         if (projectId == null) {
-            throw new IllegalArgumentException("项目 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
         return projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(projectId, parentId);
     }
@@ -66,7 +66,7 @@ public class ProjectFileService {
      */
     public List<ProjectFile> getFileTree(Long projectId) {
         if (projectId == null) {
-            throw new IllegalArgumentException("项目 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
         return projectFileRepository.findByProjectIdOrderBySortOrderAsc(projectId);
     }
@@ -77,19 +77,19 @@ public class ProjectFileService {
     @Transactional
     public ProjectFile createFolder(Long projectId, Long parentId, String name, Long userId) {
         if (projectId == null) {
-            throw new IllegalArgumentException("项目 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
         if (!StringUtils.hasText(name)) {
-            throw new IllegalArgumentException("文件夹名称不能为空");
+            throw new IllegalArgumentException(LangText.of("文件夹名称不能为空", "Folder name must not be empty"));
         }
         validateNodeName(name);
         if (userId == null) {
-            throw new IllegalArgumentException("用户 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
 
         // 检查同名文件夹是否存在
         if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, name, -1L)) {
-            throw new IllegalArgumentException("该文件夹下已存在同名文件夹: " + name);
+            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件夹: ", "A folder with this name already exists: ") + name);
         }
 
         // 获取当前父文件夹下的最大排序序号
@@ -121,7 +121,7 @@ public class ProjectFileService {
     private void validateNodeName(String name) {
         String n = name == null ? "" : name.trim();
         if (n.contains("/") || n.contains("\\") || ".".equals(n) || "..".equals(n)) {
-            throw new IllegalArgumentException("名称包含非法字符: " + name);
+            throw new IllegalArgumentException(LangText.of("名称包含非法字符: ", "Name contains invalid characters: ") + name);
         }
     }
 
@@ -133,7 +133,7 @@ public class ProjectFileService {
     private String requireProjectScopedPath(Long projectId, String filePath) {
         String key = filePath.replace('\\', '/');
         if (!key.startsWith("projects/" + projectId + "/") || ("/" + key + "/").contains("/../")) {
-            throw new IllegalArgumentException("非法文件路径: " + filePath);
+            throw new IllegalArgumentException(LangText.of("非法文件路径: ", "Invalid file path: ") + filePath);
         }
         return key;
     }
@@ -211,18 +211,18 @@ public class ProjectFileService {
     public ProjectFile createFile(Long projectId, Long parentId, String name, String fileType, 
                                   Long fileSize, String filePath, String wpsFileId, Long userId) {
         if (projectId == null) {
-            throw new IllegalArgumentException("项目 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("项目 ID 不能为空", "Project ID must not be empty"));
         }
         if (!StringUtils.hasText(name)) {
-            throw new IllegalArgumentException("文件名不能为空");
+            throw new IllegalArgumentException(LangText.of("文件名不能为空", "File name must not be empty"));
         }
         if (userId == null) {
-            throw new IllegalArgumentException("用户 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("用户 ID 不能为空", "User ID must not be empty"));
         }
 
         // 检查同名文件是否存在
         if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(projectId, parentId, name, -1L)) {
-            throw new IllegalArgumentException("该文件夹下已存在同名文件: " + name);
+            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件: ", "A file with this name already exists: ") + name);
         }
 
         // 获取当前父文件夹下的最大排序序号
@@ -272,22 +272,22 @@ public class ProjectFileService {
     @Transactional
     public ProjectFile rename(Long fileId, String newName, Long userId) {
         if (fileId == null) {
-            throw new IllegalArgumentException("文件 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("文件 ID 不能为空", "File ID must not be empty"));
         }
         if (!StringUtils.hasText(newName)) {
-            throw new IllegalArgumentException("新名称不能为空");
+            throw new IllegalArgumentException(LangText.of("新名称不能为空", "New name must not be empty"));
         }
         validateNodeName(newName);
 
         ProjectFile file = projectFileRepository.findById(fileId)
-                .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
         // 检查同名文件是否存在
         if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
                 file.getProjectId(), file.getParentId(), newName.trim(), fileId)) {
-            throw new IllegalArgumentException("该文件夹下已存在同名文件/文件夹: " + newName);
+            throw new IllegalArgumentException(LangText.of("该文件夹下已存在同名文件/文件夹: ", "A file or folder with this name already exists: ") + newName);
         }
 
         String oldName = file.getName();
@@ -347,11 +347,11 @@ public class ProjectFileService {
     @Transactional
     public void delete(Long fileId, Long userId) {
         if (fileId == null) {
-            throw new IllegalArgumentException("文件 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("文件 ID 不能为空", "File ID must not be empty"));
         }
 
         ProjectFile file = projectFileRepository.findById(fileId)
-                .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
@@ -382,13 +382,13 @@ public class ProjectFileService {
     @Transactional
     public void permDelete(Long fileId, Long userId) {
         if (fileId == null) {
-            throw new IllegalArgumentException("文件 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("文件 ID 不能为空", "File ID must not be empty"));
         }
 
         ProjectFile file = projectFileRepository.findById(fileId)
                 // 如果文件找不到，可能已经被删除了，这是幂等操作，可以直接返回，但为了明确反馈，这里还是查一下
                 // 注意：findById 默认查所有（包括 isDeleted=true）
-                .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
@@ -440,7 +440,7 @@ public class ProjectFileService {
     @Transactional
     public void restore(Long fileId, Long userId) {
          ProjectFile file = projectFileRepository.findById(fileId)
-                .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
          
          // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
@@ -482,18 +482,18 @@ public class ProjectFileService {
     @Transactional
     public ProjectFile move(Long fileId, Long newParentId, Integer newSortOrder, Long userId) {
         if (fileId == null) {
-            throw new IllegalArgumentException("文件 ID 不能为空");
+            throw new IllegalArgumentException(LangText.of("文件 ID 不能为空", "File ID must not be empty"));
         }
 
         ProjectFile file = projectFileRepository.findById(fileId)
-                .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
 
         // 权限检查已移至 Controller 层，这里不再检查创建者身份
 
         // 检查不能移动到自己的子文件夹中
         if (file.getIsFolder() && newParentId != null) {
             if (isDescendant(fileId, newParentId)) {
-                throw new IllegalArgumentException("不能将文件夹移动到自己的子文件夹中");
+                throw new IllegalArgumentException(LangText.of("不能将文件夹移动到自己的子文件夹中", "You cannot move a folder into its own subfolder"));
             }
         }
 
@@ -502,7 +502,7 @@ public class ProjectFileService {
         Long targetParentId = newParentId;
         if (projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(
                 file.getProjectId(), targetParentId, file.getName(), fileId)) {
-            throw new IllegalArgumentException("目标文件夹下已存在同名文件/文件夹: " + file.getName());
+            throw new IllegalArgumentException(LangText.of("目标文件夹下已存在同名文件/文件夹: ", "A file or folder with this name already exists in the target folder: ") + file.getName());
         }
 
         String oldFilePath = file.getFilePath();
@@ -539,20 +539,20 @@ public class ProjectFileService {
     @Transactional
     public void batchDelete(Long projectId, com.checkba.model.dto.ProjectFileBatchRequest request, Long userId) {
         if (request == null || request.getFileIds() == null || request.getFileIds().isEmpty()) {
-            throw new IllegalArgumentException("fileIds 不能为空");
+            throw new IllegalArgumentException(LangText.of("fileIds 不能为空", "fileIds must not be empty"));
         }
         for (Long id : request.getFileIds()) {
             if (id == null) continue;
             // 归属校验：防止越权批量删除他人项目的文件（delete(id,...) 本身不校验 projectId）
             ProjectFile owned = projectFileRepository.findById(id).orElse(null);
             if (owned != null && !Objects.equals(owned.getProjectId(), projectId)) {
-                throw new IllegalArgumentException("跨项目删除不支持: " + id);
+                throw new IllegalArgumentException(LangText.of("跨项目删除不支持: ", "Cross-project deletion is not supported: ") + id);
             }
             try {
                 delete(id, userId);
             } catch (IllegalArgumentException e) {
-                // 忽略文件不存在的错误，实现幂等删除
-                if (e.getMessage() != null && e.getMessage().contains("文件不存在")) {
+                // 忽略文件不存在的错误，实现幂等删除（消息可能是中文或英文，两个都要匹配）
+                if (e.getMessage() != null && (e.getMessage().contains("文件不存在") || e.getMessage().contains("File not found"))) {
                     log.warn("批量删除时忽略不存在的文件: {}", id);
                     continue;
                 }
@@ -571,7 +571,7 @@ public class ProjectFileService {
     @Transactional
     public List<ProjectFile> batchMove(Long projectId, com.checkba.model.dto.ProjectFileBatchRequest request, Long userId) {
         if (request == null || request.getFileIds() == null || request.getFileIds().isEmpty()) {
-            throw new IllegalArgumentException("fileIds 不能为空");
+            throw new IllegalArgumentException(LangText.of("fileIds 不能为空", "fileIds must not be empty"));
         }
         // 文件缓存区免费额度：目标是缓存区且超额时在这里整体拒绝，一个文件都不移动。
         // 放在循环之前而非循环内，避免「移了一半才发现超额」的半成品状态。
@@ -582,7 +582,7 @@ public class ProjectFileService {
             // 归属校验：防止越权批量移动他人项目的文件（move(id,...) 本身不校验 projectId）
             ProjectFile owned = projectFileRepository.findById(id).orElse(null);
             if (owned != null && !Objects.equals(owned.getProjectId(), projectId)) {
-                throw new IllegalArgumentException("跨项目移动不支持: " + id);
+                throw new IllegalArgumentException(LangText.of("跨项目移动不支持: ", "Cross-project move is not supported: ") + id);
             }
             result.add(move(id, request.getTargetParentId(), null, userId));
         }
@@ -596,19 +596,19 @@ public class ProjectFileService {
     @Transactional
     public List<ProjectFile> batchCopy(Long projectId, com.checkba.model.dto.ProjectFileBatchRequest request, Long userId) {
         if (request == null || request.getFileIds() == null || request.getFileIds().isEmpty()) {
-            throw new IllegalArgumentException("fileIds 不能为空");
+            throw new IllegalArgumentException(LangText.of("fileIds 不能为空", "fileIds must not be empty"));
         }
         if (request.getTargetParentId() == null && projectId == null) {
             // 防御性校验
-            throw new IllegalArgumentException("projectId 不能为空");
+            throw new IllegalArgumentException(LangText.of("projectId 不能为空", "projectId must not be empty"));
         }
         List<ProjectFile> createdRoots = new ArrayList<>();
         for (Long id : request.getFileIds()) {
             if (id == null) continue;
             ProjectFile source = projectFileRepository.findById(id)
-                    .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + id));
+                    .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + id));
             if (!Objects.equals(source.getProjectId(), projectId)) {
-                throw new IllegalArgumentException("跨项目复制不支持");
+                throw new IllegalArgumentException(LangText.of("跨项目复制不支持", "Cross-project copy is not supported"));
             }
             createdRoots.add(copyRecursive(projectId, source, request.getTargetParentId(), userId));
         }
@@ -666,7 +666,7 @@ public class ProjectFileService {
         if (Boolean.TRUE.equals(source.getIsFolder())) {
             String desiredName = source.getName();
             if (Objects.equals(source.getParentId(), targetParentId)) {
-                desiredName = "【副本】" + desiredName;
+                desiredName = LangText.of("【副本】", "Copy of ") + desiredName;
             }
             String newFolderName = resolveUniqueName(projectId, targetParentId, desiredName);
             ProjectFile newFolder = new ProjectFile();
@@ -690,7 +690,7 @@ public class ProjectFileService {
         // file
         String desiredName = source.getName();
         if (Objects.equals(source.getParentId(), targetParentId)) {
-            desiredName = "【副本】" + desiredName;
+            desiredName = LangText.of("【副本】", "Copy of ") + desiredName;
         }
         String newName = resolveUniqueName(projectId, targetParentId, desiredName);
         ProjectFile newFile = new ProjectFile();
@@ -804,7 +804,7 @@ public class ProjectFileService {
      */
     public ProjectFile getFile(Long fileId) {
         return projectFileRepository.findById(fileId)
-                .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
     }
 
     /**
@@ -981,7 +981,7 @@ public class ProjectFileService {
             walkArchive(archiveType(pf), bytes, (path, dir, size, content) -> {
                 String norm = normalizeEntryPath(path);
                 if (norm == null) return; // 系统噪音（__MACOSX/.DS_Store）或空路径
-                if (entries.size() >= MAX_ARCHIVE_ENTRIES) throw new IllegalArgumentException("压缩包条目过多（上限 " + MAX_ARCHIVE_ENTRIES + "）");
+                if (entries.size() >= MAX_ARCHIVE_ENTRIES) throw new IllegalArgumentException(LangText.of("压缩包条目过多（上限 ", "Too many entries in the archive (limit ") + MAX_ARCHIVE_ENTRIES + LangText.of("）", ")"));
                 java.util.Map<String, Object> e = new java.util.LinkedHashMap<>();
                 e.put("path", norm);
                 e.put("name", norm.substring(norm.lastIndexOf('/') + 1));
@@ -1004,7 +1004,7 @@ public class ProjectFileService {
     @Transactional
     public ProjectFile extractArchive(Long projectId, Long fileId, Long userId) {
         ProjectFile pf = getFile(fileId);
-        if (!projectId.equals(pf.getProjectId())) throw new IllegalArgumentException("文件不属于该项目");
+        if (!projectId.equals(pf.getProjectId())) throw new IllegalArgumentException(LangText.of("文件不属于该项目", "This file does not belong to this project"));
         byte[] bytes = loadArchiveBytes(pf);
 
         String baseName = pf.getName();
@@ -1020,7 +1020,7 @@ public class ProjectFileService {
             walkArchive(archiveType(pf), bytes, (path, dir, size, content) -> {
                 String norm = normalizeEntryPath(path);
                 if (norm == null) return;
-                if (totals[0] + totals[1] >= MAX_ARCHIVE_ENTRIES) throw new IllegalArgumentException("压缩包条目过多（上限 " + MAX_ARCHIVE_ENTRIES + "）");
+                if (totals[0] + totals[1] >= MAX_ARCHIVE_ENTRIES) throw new IllegalArgumentException(LangText.of("压缩包条目过多（上限 ", "Too many entries in the archive (limit ") + MAX_ARCHIVE_ENTRIES + LangText.of("）", ")"));
                 String[] segs = norm.split("/");
                 // 逐级确保父文件夹存在（目录条目建到最后一级，文件条目建到倒数第二级）
                 Long parentId = root.getId();
@@ -1045,7 +1045,7 @@ public class ProjectFileService {
                     data = in.readAllBytes();
                 }
                 totals[2] += data.length;
-                if (totals[2] > MAX_EXTRACT_TOTAL) throw new IllegalArgumentException("解压后总量超过上限");
+                if (totals[2] > MAX_EXTRACT_TOTAL) throw new IllegalArgumentException(LangText.of("解压后总量超过上限", "Extracted size exceeds the limit"));
                 String fileName = resolveUniqueName(projectId, parentId, segs[segs.length - 1]);
                 String ext = "";
                 int d2 = fileName.lastIndexOf('.');
@@ -1067,21 +1067,21 @@ public class ProjectFileService {
 
     private String archiveType(ProjectFile pf) {
         String t = pf.getFileType() == null ? "" : pf.getFileType().toLowerCase();
-        if (!ARCHIVE_TYPES.contains(t)) throw new IllegalArgumentException("不支持的压缩包类型: " + t);
+        if (!ARCHIVE_TYPES.contains(t)) throw new IllegalArgumentException(LangText.of("不支持的压缩包类型: ", "Unsupported archive type: ") + t);
         return t;
     }
 
     private byte[] loadArchiveBytes(ProjectFile pf) {
         if (pf.getFileSize() != null && pf.getFileSize() > MAX_ARCHIVE_BYTES) {
-            throw new IllegalArgumentException("压缩包过大（上限 1GB）");
+            throw new IllegalArgumentException(LangText.of("压缩包过大（上限 1GB）", "Archive too large (limit 1GB)"));
         }
         try {
             byte[] bytes = getFileBytes(pf.getId());
-            if (bytes == null || bytes.length == 0) throw new IllegalArgumentException("压缩包为空或不存在");
-            if (bytes.length > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException("压缩包过大（上限 1GB）");
+            if (bytes == null || bytes.length == 0) throw new IllegalArgumentException(LangText.of("压缩包为空或不存在", "The archive is empty or does not exist"));
+            if (bytes.length > MAX_ARCHIVE_BYTES) throw new IllegalArgumentException(LangText.of("压缩包过大（上限 1GB）", "Archive too large (limit 1GB)"));
             return bytes;
         } catch (java.io.IOException e) {
-            throw new IllegalArgumentException("读取压缩包失败: " + e.getMessage(), e);
+            throw new IllegalArgumentException(LangText.of("读取压缩包失败: ", "Failed to read archive: ") + e.getMessage(), e);
         }
     }
 
@@ -1096,7 +1096,7 @@ public class ProjectFileService {
         for (String s : p.split("/")) {
             String seg = s.trim();
             if (seg.isEmpty() || ".".equals(seg)) continue;
-            if ("..".equals(seg)) throw new IllegalArgumentException("压缩包含非法路径: " + raw);
+            if ("..".equals(seg)) throw new IllegalArgumentException(LangText.of("压缩包含非法路径: ", "Archive contains an invalid path: ") + raw);
             segs.add(seg);
         }
         if (segs.isEmpty()) return null;
@@ -1132,14 +1132,14 @@ public class ProjectFileService {
             case "rar": {
                 try (com.github.junrar.Archive ar = new com.github.junrar.Archive(new java.io.ByteArrayInputStream(bytes))) {
                     for (com.github.junrar.rarfile.FileHeader h : ar.getFileHeaders()) {
-                        if (h.isEncrypted()) throw new IllegalArgumentException("加密压缩包暂不支持");
+                        if (h.isEncrypted()) throw new IllegalArgumentException(LangText.of("加密压缩包暂不支持", "Encrypted archives are not supported yet"));
                         visitor.visit(h.getFileName(), h.isDirectory(), h.getFullUnpackSize(), () -> ar.getInputStream(h));
                     }
                 }
                 return;
             }
             default:
-                throw new IllegalArgumentException("不支持的压缩包类型: " + type);
+                throw new IllegalArgumentException(LangText.of("不支持的压缩包类型: ", "Unsupported archive type: ") + type);
         }
     }
 
@@ -1181,13 +1181,13 @@ public class ProjectFileService {
         String name = e.getClass().getSimpleName();
         String msg = e.getMessage() == null ? "" : e.getMessage();
         if (name.contains("UnsupportedRarV5") || msg.contains("rar 5")) {
-            return "RAR5 格式暂不支持，请转存为 zip 或 RAR4 后重试";
+            return LangText.of("RAR5 格式暂不支持，请转存为 zip 或 RAR4 后重试", "RAR5 format is not supported yet; please re-save as zip or RAR4 and try again");
         }
         if (name.contains("PasswordRequired") || msg.toLowerCase().contains("password") || msg.contains("加密")) {
-            return "加密压缩包暂不支持";
+            return LangText.of("加密压缩包暂不支持", "Encrypted archives are not supported yet");
         }
         log.warn("压缩包解析失败", e);
-        return "压缩包解析失败：文件可能已损坏或格式不受支持";
+        return LangText.of("压缩包解析失败：文件可能已损坏或格式不受支持", "Failed to parse the archive: the file may be corrupted or the format is unsupported");
     }
 
     /**
@@ -1206,14 +1206,14 @@ public class ProjectFileService {
     }
 
     private String resolveUserName(Long userId) {
-        if (userId == null) return "用户";
+        if (userId == null) return LangText.of("用户", "User");
         try {
             var u = userService.getUserById(userId);
             if (u != null && u.getUsername() != null) return u.getUsername();
         } catch (Exception e) {
             log.warn("解析用户名失败: userId={}", userId, e);
         }
-        return "用户";
+        return LangText.of("用户", "User");
     }
 }
 

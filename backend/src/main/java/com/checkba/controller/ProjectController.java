@@ -18,7 +18,8 @@ import java.util.Map;
 public class ProjectController {
 
     /** 插件懒建项目的固定名称 */
-    private static final String ADDIN_DEFAULT_PROJECT_NAME = "插件临时项目";
+    private static final String ADDIN_DEFAULT_PROJECT_NAME_ZH = "插件临时项目";
+    private static final String ADDIN_DEFAULT_PROJECT_NAME_EN = "Plugin Temporary Project";
 
     private final ProjectService projectService;
     private final ProjectMemberService projectMemberService;
@@ -81,7 +82,7 @@ public class ProjectController {
         }
         ProjectCreateRequest request = new ProjectCreateRequest();
         request.setProjectType("BLANK");
-        request.setName(ADDIN_DEFAULT_PROJECT_NAME);
+        request.setName(com.checkba.service.LangText.of(ADDIN_DEFAULT_PROJECT_NAME_ZH, ADDIN_DEFAULT_PROJECT_NAME_EN));
         Project project = projectService.createProject(request, userId);
         Map<String, Object> projectInfo = new HashMap<>();
         projectInfo.put("id", project.getId());
@@ -105,7 +106,7 @@ public class ProjectController {
             throw new IllegalArgumentException("请先登录");
         }
         if (!localFolderProjectsEnabled) {
-            throw new IllegalArgumentException("当前部署未开放「打开本机文件夹」功能");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("当前部署未开放「打开本机文件夹」功能", "This deployment does not support opening a local folder"));
         }
         LocalProjectService.OpenLocalResult r = localProjectService.openLocalFolder(
                 (String) body.get("localRoot"),
@@ -138,7 +139,7 @@ public class ProjectController {
             throw new IllegalArgumentException("请先登录");
         }
         if (!projectMemberService.hasReadPermission(id, userId)) {
-            throw new IllegalArgumentException("无权访问此项目");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("无权访问此项目", "You do not have access to this project"));
         }
         java.nio.file.Path root = storageResolver.projectRoot(id);
         Map<String, Object> result = new HashMap<>();
@@ -160,7 +161,7 @@ public class ProjectController {
             throw new IllegalArgumentException("请先登录");
         }
         if (!projectMemberService.hasReadPermission(id, userId)) {
-            throw new IllegalArgumentException("无权访问此项目");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("无权访问此项目", "You do not have access to this project"));
         }
         return projectService.getProject(id);
     }
@@ -180,7 +181,7 @@ public class ProjectController {
         
         Project project = projectService.getProject(id);
         if (!project.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权修改此项目");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("无权修改此项目", "You do not have permission to modify this project"));
         }
 
         String newName = body.get("name");
@@ -214,14 +215,14 @@ public class ProjectController {
         Project project = projectService.getProject(id);
         // 检查权限：只有项目创建者可以删除
         if (!project.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权删除此项目");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("无权删除此项目", "You do not have permission to delete this project"));
         }
 
         projectService.deleteProject(id);
 
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
-        result.put("message", "删除成功");
+        result.put("message", com.checkba.service.LangText.of("删除成功", "Deleted successfully"));
         return result;
     }
 

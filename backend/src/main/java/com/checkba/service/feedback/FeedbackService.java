@@ -4,6 +4,7 @@ import com.checkba.model.entity.FeedbackAttachment;
 import com.checkba.model.entity.UserFeedback;
 import com.checkba.repository.FeedbackAttachmentRepository;
 import com.checkba.repository.UserFeedbackRepository;
+import com.checkba.service.LangText;
 import com.checkba.storage.ProjectStorageResolver;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
@@ -53,7 +54,7 @@ public class FeedbackService {
         String text = req.text() == null ? "" : req.text().trim();
         List<MultipartFile> safeFiles = files == null ? List.of() : files;
         if (text.isEmpty() && safeFiles.isEmpty()) {
-            throw new IllegalArgumentException("请至少写一句话，或附一张截图/一段语音");
+            throw new IllegalArgumentException(LangText.of("请至少写一句话，或附一张截图/一段语音", "Please write at least a sentence, or attach a screenshot/voice note"));
         }
         if (text.length() > MAX_TEXT_CHARS) {
             text = text.substring(0, MAX_TEXT_CHARS);
@@ -99,18 +100,18 @@ public class FeedbackService {
         for (MultipartFile f : files) {
             if (f == null || f.isEmpty()) continue;
             if (f.getSize() > MAX_ATTACHMENT_BYTES) {
-                throw new IllegalArgumentException("附件过大（上限 20MB）：" + safeName(f.getOriginalFilename()));
+                throw new IllegalArgumentException(LangText.of("附件过大（上限 20MB）：", "Attachment is too large (20MB limit): ") + safeName(f.getOriginalFilename()));
             }
             String ct = f.getContentType() == null ? "" : f.getContentType().toLowerCase();
             String type;
             if (ct.startsWith("audio/")) {
-                if (++audios > MAX_AUDIOS) throw new IllegalArgumentException("最多附 1 段语音");
+                if (++audios > MAX_AUDIOS) throw new IllegalArgumentException(LangText.of("最多附 1 段语音", "At most 1 voice note may be attached"));
                 type = FeedbackAttachment.TYPE_AUDIO;
             } else if (ct.startsWith("image/")) {
-                if (++images > MAX_IMAGES) throw new IllegalArgumentException("最多附 " + MAX_IMAGES + " 张图片");
+                if (++images > MAX_IMAGES) throw new IllegalArgumentException(LangText.of("最多附 " + MAX_IMAGES + " 张图片", "At most " + MAX_IMAGES + " images may be attached"));
                 type = FeedbackAttachment.TYPE_IMAGE;
             } else {
-                throw new IllegalArgumentException("只接受图片与语音附件：" + safeName(f.getOriginalFilename()));
+                throw new IllegalArgumentException(LangText.of("只接受图片与语音附件：", "Only image and voice attachments are accepted: ") + safeName(f.getOriginalFilename()));
             }
 
             // 落盘文件名由服务端生成：客户端文件名一律只作展示，不参与路径拼接
@@ -162,7 +163,7 @@ public class FeedbackService {
         String text = req.text() == null ? "" : req.text().trim();
         List<MultipartFile> safeFiles = files == null ? List.of() : files;
         if (text.isEmpty() && safeFiles.isEmpty() && (req.voiceTranscript() == null || req.voiceTranscript().isBlank())) {
-            throw new IllegalArgumentException("空反馈");
+            throw new IllegalArgumentException(LangText.of("空反馈", "Empty feedback"));
         }
         if (text.length() > MAX_TEXT_CHARS) text = text.substring(0, MAX_TEXT_CHARS);
 
@@ -201,7 +202,7 @@ public class FeedbackService {
     public Resource readAttachment(Long feedbackId, Long attachmentId) {
         FeedbackAttachment a = attachmentRepository.findById(attachmentId)
                 .filter(x -> x.getFeedbackId().equals(feedbackId))
-                .orElseThrow(() -> new IllegalArgumentException("附件不存在"));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("附件不存在", "Attachment not found")));
         return new FileSystemResource(attachmentPath(feedbackId, a.getStoredName()));
     }
 

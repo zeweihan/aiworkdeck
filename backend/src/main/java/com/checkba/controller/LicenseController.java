@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.service.LangText;
 import com.checkba.service.LicenseService;
 import com.checkba.service.account.AccountService;
 import com.checkba.service.account.AccountSwitchCleanup;
@@ -133,7 +134,8 @@ public class LicenseController {
             log.warn("解锁成功但账户连接未完成（可在设置页重试）: {}", e.getMessage());
             out.put("accountConnected", false);
             // 文案红线：不得含「登录 / 未授权 / 请先」，否则前端 api.js 会当成掉线清会话
-            out.put("accountNotice", "已解锁，但账户连接未完成，可稍后在设置的账户分区重试");
+            out.put("accountNotice", LangText.of("已解锁，但账户连接未完成，可稍后在设置的账户分区重试",
+                    "Unlocked, but the account connection didn't finish. You can retry later in the Account section of Settings."));
         }
     }
 

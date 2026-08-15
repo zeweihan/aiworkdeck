@@ -5,6 +5,7 @@ import cn.hutool.http.HttpRequest;
 import cn.hutool.http.HttpResponse;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
+import com.checkba.service.LangText;
 import com.checkba.service.market.MarketPurchaseGate;
 import com.checkba.service.market.RegistryReply;
 import lombok.extern.slf4j.Slf4j;
@@ -95,7 +96,7 @@ public class SkillMarketService {
         try {
             list = JSONUtil.toList(JSONUtil.parseArray(body), MarketSkillView.class);
         } catch (Exception e) {
-            throw new IllegalStateException("注册表返回内容无法解析: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("注册表返回内容无法解析: ", "Failed to parse registry response: ") + e.getMessage());
         }
         for (MarketSkillView view : list) {
             view.setPriceCents(MarketPurchaseGate.normalizePrice(view.getPriceCents()));
@@ -136,18 +137,18 @@ public class SkillMarketService {
             throw purchaseGate.paymentRequired(reply.body(), itemName, priceCents);
         }
         if (reply.status() != 200) {
-            throw new IllegalStateException("注册表请求失败 (HTTP " + reply.status() + ")");
+            throw new IllegalStateException(LangText.of("注册表请求失败 (HTTP ", "Registry request failed (HTTP ") + reply.status() + ")");
         }
         String body = reply.body();
         JSONObject files;
         try {
             files = JSONUtil.parseObj(body).getJSONObject("files");
         } catch (Exception e) {
-            throw new IllegalStateException("bundle 内容无法解析: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("bundle 内容无法解析: ", "Failed to parse bundle content: ") + e.getMessage());
         }
         for (String name : BUNDLE_FILES) {
             if (files == null || !(files.get(name) instanceof CharSequence)) {
-                throw new IllegalStateException("bundle 缺少必需文件: " + name);
+                throw new IllegalStateException(LangText.of("bundle 缺少必需文件: ", "Bundle is missing required file: ") + name);
             }
         }
         try {
@@ -157,7 +158,7 @@ public class SkillMarketService {
                 Files.writeString(new File(skillDir, name).toPath(), files.getStr(name), StandardCharsets.UTF_8);
             }
         } catch (Exception e) {
-            throw new IllegalStateException("写入 skill 文件失败: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("写入 skill 文件失败: ", "Failed to write skill files: ") + e.getMessage());
         }
         skillRegistry.rescan();
         log.info("Installed market skill '{}'", id);
@@ -179,7 +180,9 @@ public class SkillMarketService {
         requireValidId(id);
         SkillDefinition existing = skillRegistry.getSkill(id).orElse(null);
         if (existing != null && existing.getSourcePluginId() != null) {
-            throw new IllegalStateException("该 Skill 来自插件 " + existing.getSourcePluginId() + "，请通过插件管理卸载");
+            throw new IllegalStateException(LangText.of(
+                    "该 Skill 来自插件 " + existing.getSourcePluginId() + "，请通过插件管理卸载",
+                    "This skill comes from the plugin " + existing.getSourcePluginId() + "; uninstall it via plugin management"));
         }
         if (existing != null && !existing.isEnabledByDefault()) {
             skillRegistry.setEnabled(id, false);
@@ -191,14 +194,14 @@ public class SkillMarketService {
             File skillDir = new File(skillsDir, id);
             // 只允许删除 skills 目录正下方的子目录（canonical 校验防符号链接逃逸）
             if (!skillDir.getCanonicalPath().startsWith(skillsDir.getCanonicalPath() + File.separator)) {
-                throw new IllegalArgumentException("非法 skill 目录: " + id);
+                throw new IllegalArgumentException(LangText.of("非法 skill 目录: ", "Invalid skill directory: ") + id);
             }
             if (!skillDir.isDirectory()) {
-                throw new IllegalArgumentException("Skill 未安装: " + id);
+                throw new IllegalArgumentException(LangText.of("Skill 未安装: ", "Skill not installed: ") + id);
             }
             FileUtil.del(skillDir);
         } catch (java.io.IOException e) {
-            throw new IllegalStateException("删除 skill 目录失败: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("删除 skill 目录失败: ", "Failed to delete skill directory: ") + e.getMessage());
         }
         skillRegistry.rescan();
         log.info("Uninstalled market skill '{}'", id);
@@ -206,7 +209,7 @@ public class SkillMarketService {
 
     private static void requireValidId(String id) {
         if (id == null || !SKILL_ID.matcher(id).matches()) {
-            throw new IllegalArgumentException("非法 skill id: " + id);
+            throw new IllegalArgumentException(LangText.of("非法 skill id: ", "Invalid skill ID: ") + id);
         }
     }
 
@@ -234,7 +237,7 @@ public class SkillMarketService {
     protected String httpGet(String url) {
         RegistryReply reply = httpGet(url, null);
         if (reply.status() != 200) {
-            throw new IllegalStateException("注册表请求失败 (HTTP " + reply.status() + ")");
+            throw new IllegalStateException(LangText.of("注册表请求失败 (HTTP ", "Registry request failed (HTTP ") + reply.status() + ")");
         }
         return reply.body();
     }
@@ -256,7 +259,7 @@ public class SkillMarketService {
             }
             resp = req.execute();
         } catch (Exception e) {
-            throw new IllegalStateException("注册表不可达: " + e.getMessage());
+            throw new IllegalStateException(LangText.of("注册表不可达: ", "Registry unreachable: ") + e.getMessage());
         }
         return new RegistryReply(resp.getStatus(), resp.bodyBytes());
     }

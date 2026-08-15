@@ -74,14 +74,14 @@ public class FileController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionHeader) {
         Optional<ProjectFile> pfOpt = projectFileRepository.findById(fileId);
         if (pfOpt.isEmpty()) {
-            return ResponseEntity.ok(Map.of("code", 1, "message", "文件不存在"));
+            return ResponseEntity.ok(Map.of("code", 1, "message", com.checkba.service.LangText.of("文件不存在", "File not found")));
         }
         ProjectFile pf = pfOpt.get();
         if (!isAuthorizedForProject(null, sessionHeader, pf.getProjectId())) {
-            return ResponseEntity.status(403).body(Map.of("code", 1, "message", "无权访问该文件"));
+            return ResponseEntity.status(403).body(Map.of("code", 1, "message", com.checkba.service.LangText.of("无权访问该文件", "You do not have access to this file")));
         }
         if (!org.springframework.util.StringUtils.hasText(pf.getFilePath())) {
-            return ResponseEntity.ok(Map.of("code", 1, "message", "该文件没有物理路径"));
+            return ResponseEntity.ok(Map.of("code", 1, "message", com.checkba.service.LangText.of("该文件没有物理路径", "This file has no physical path")));
         }
         java.nio.file.Path p = storageResolver.resolve(pf.getFilePath());
         return ResponseEntity.ok(Map.of("code", 0, "data", Map.of(
@@ -335,10 +335,10 @@ public class FileController {
             // 鉴权与同类接口对齐：此前完全匿名，可按 fileId 枚举文件是否存在及其大小；
             // 找不到记录时不再回落到裸 fileId 当存储路径探测
             if (pfOpt.isEmpty()) {
-                return ResponseEntity.status(404).body(Map.of("code", -1, "message", "文件不存在"));
+                return ResponseEntity.status(404).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("文件不存在", "File not found")));
             }
             if (!isAuthorizedForProject(token, sessionHeader, pfOpt.get().getProjectId())) {
-                return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权访问该文件"));
+                return ResponseEntity.status(403).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("无权访问该文件", "You do not have access to this file")));
             }
             String path = pfOpt.map(ProjectFile::getFilePath).filter(StringUtils::hasText).orElse(fileId);
             long size = getStorageService().getSize(path);
@@ -378,16 +378,16 @@ public class FileController {
                 // 鉴权：上传是就地覆盖文件字节，必须要写权限——此前只校验读权限，
                 // READ_ONLY 成员与客户可以静默改写已签署合同等文档
                 if (!isAuthorizedForWrite(token, sessionHeader, projectId)) {
-                    return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权上传到该文件"));
+                    return ResponseEntity.status(403).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("无权上传到该文件", "You do not have permission to upload to this file")));
                 }
                 Long totalSize = projectFileRepository.sumSizeByProjectId(projectId); // Need to add this method to repo
                 if (totalSize != null && totalSize > 20L * 1024 * 1024 * 1024) {
-                     return ResponseEntity.status(400).body(Map.of("code", -1, "message", "项目文件总大小超过20GB限制"));
+                     return ResponseEntity.status(400).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("项目文件总大小超过20GB限制", "Project file storage exceeds the 20GB limit")));
                 }
             } else {
                 // 找不到文件记录就无从判断归属：此前只要求登录，resolveUploadStoragePath
                 // 会把裸 fileId 当存储键，任何登录用户都能凭它往存储根写字节
-                return ResponseEntity.status(404).body(Map.of("code", -1, "message", "文件不存在"));
+                return ResponseEntity.status(404).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("文件不存在", "File not found")));
             }
 
             String contentType = request.getContentType();
@@ -403,7 +403,7 @@ public class FileController {
                      }
                 }
                 if (multipartFile == null || multipartFile.isEmpty()) {
-                     return ResponseEntity.status(400).body(Map.of("code", -1, "message", "未找到文件"));
+                     return ResponseEntity.status(400).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("未找到文件", "No file provided")));
                 }
                 inputStream = multipartFile.getInputStream();
             } else {
@@ -524,18 +524,18 @@ public class FileController {
         try {
             Optional<ProjectFile> fileOpt = projectFileRepository.findById(fileId);
             if (fileOpt.isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of("code", -1, "message", "文件不存在"));
+                return ResponseEntity.badRequest().body(Map.of("code", -1, "message", com.checkba.service.LangText.of("文件不存在", "File not found")));
             }
             if (!isAuthorizedForProject(token, sessionHeader, fileOpt.get().getProjectId())) {
-                return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权访问该文件"));
+                return ResponseEntity.status(403).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("无权访问该文件", "You do not have access to this file")));
             }
 
             String text = extractDocumentText(fileOpt.get());
-            
+
             return ResponseEntity.ok(Map.of("code", 0, "data", text));
         } catch (Exception e) {
             log.error("获取文件文本失败: fileId={}", fileId, e);
-            return ResponseEntity.status(500).body(Map.of("code", -1, "message", "获取文本失败: " + e.getMessage()));
+            return ResponseEntity.status(500).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("获取文本失败: ", "Failed to retrieve text: ") + e.getMessage()));
         }
     }
 
@@ -560,26 +560,26 @@ public class FileController {
             if (sourceOpt.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of(
                     "code", -1,
-                    "message", "源文档不存在: " + sourceId
+                    "message", com.checkba.service.LangText.of("源文档不存在: ", "Source document not found: ") + sourceId
                 ));
             }
-            
+
             // 2. 查找目标文档
             Optional<ProjectFile> targetOpt = projectFileRepository.findById(targetId);
             if (targetOpt.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of(
                     "code", -1,
-                    "message", "目标文档不存在: " + targetId
+                    "message", com.checkba.service.LangText.of("目标文档不存在: ", "Target document not found: ") + targetId
                 ));
             }
-            
+
             ProjectFile sourceFile = sourceOpt.get();
             ProjectFile targetFile = targetOpt.get();
 
             // 鉴权：两个文档所属项目都需当前用户有权访问
             if (!isAuthorizedForProject(token, sessionHeader, sourceFile.getProjectId())
                     || !isAuthorizedForProject(token, sessionHeader, targetFile.getProjectId())) {
-                return ResponseEntity.status(403).body(Map.of("code", -1, "message", "无权访问该文件"));
+                return ResponseEntity.status(403).body(Map.of("code", -1, "message", com.checkba.service.LangText.of("无权访问该文件", "You do not have access to this file")));
             }
 
             // 3. 检查文件类型（只支持 doc/docx）
@@ -590,13 +590,13 @@ public class FileController {
             if (!supportedTypes.contains(sourceType)) {
                 return ResponseEntity.badRequest().body(Map.of(
                     "code", -1,
-                    "message", "源文档类型不支持比较: " + sourceType
+                    "message", com.checkba.service.LangText.of("源文档类型不支持比较: ", "Source document type does not support comparison: ") + sourceType
                 ));
             }
             if (!supportedTypes.contains(targetType)) {
                 return ResponseEntity.badRequest().body(Map.of(
                     "code", -1,
-                    "message", "目标文档类型不支持比较: " + targetType
+                    "message", com.checkba.service.LangText.of("目标文档类型不支持比较: ", "Target document type does not support comparison: ") + targetType
                 ));
             }
             
@@ -630,7 +630,7 @@ public class FileController {
             log.error("文档比较失败: sourceId={}, targetId={}", sourceId, targetId, e);
             return ResponseEntity.status(500).body(Map.of(
                 "code", -1,
-                "message", "文档比较失败: " + e.getMessage()
+                "message", com.checkba.service.LangText.of("文档比较失败: ", "Document comparison failed: ") + e.getMessage()
             ));
         }
     }

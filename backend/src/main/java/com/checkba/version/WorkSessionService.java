@@ -2,6 +2,7 @@ package com.checkba.version;
 
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.service.LangText;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.TaskScheduler;
 import org.springframework.stereotype.Service;
@@ -36,6 +37,8 @@ public class WorkSessionService {
 
     private static final DateTimeFormatter TITLE_FMT =
             DateTimeFormatter.ofPattern("M 月 d 日");
+    private static final DateTimeFormatter TITLE_FMT_EN =
+            DateTimeFormatter.ofPattern("MMM d", java.util.Locale.ENGLISH);
 
     /** AI 轮次自动存档的固定署名，让律师在时间线上分辨哪些改动是 AI 做的。 */
     private static final String AI_AUTHOR_NAME = "AI Workdeck";
@@ -182,7 +185,7 @@ public class WorkSessionService {
             // 口径与 endSession/discardSession/revertTo/切线/开稿一致。
             requireNotMerging(projectId);
             WorkSession s = activeSession(projectId)
-                    .orElseThrow(() -> VersionException.userFacing("当前没有未结束的工作"));
+                    .orElseThrow(() -> VersionException.userFacing(LangText.of("当前没有未结束的工作", "No unfinished work session")));
             repoService.checkoutBranch(projectId, s.getBranchName());
         } finally {
             lock.unlock();
@@ -395,7 +398,7 @@ public class WorkSessionService {
             if (!repoService.mainBranch().equals(repoService.currentBranch(projectId))) return;
             if (repoService.pendingChanges(projectId).isEmpty()) return;
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
-            repoService.commitAll(projectId, "自动存档", "auto", null,
+            repoService.commitAll(projectId, LangText.of("自动存档", "Autosave"), "auto", null,
                     "AI Workdeck", "system@aiworkdeck.local");
             log.info("push 前停靠了主线脏区: project={}", projectId);
         } catch (Exception e) {
@@ -548,7 +551,7 @@ public class WorkSessionService {
         try {
             requireNotMerging(projectId);
             WorkSession s = activeSession(projectId)
-                    .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
+                    .orElseThrow(() -> VersionException.userFacing(LangText.of("当前没有进行中的工作", "No work session in progress")));
 
             cancelPending(projectId);
             commitNow(projectId, userId, userName, null);
@@ -567,7 +570,7 @@ public class WorkSessionService {
                 sessionRepository.save(s);
                 log.info("空工作段结束，未产生版本: project={}, branch={}", projectId, s.getBranchName());
                 retryPendingIngest(projectId);
-                return new SessionEndResult(null, "本次工作没有任何改动，未生成版本", null);
+                return new SessionEndResult(null, LangText.of("本次工作没有任何改动，未生成版本", "This work session had no changes, so no version was created"), null);
             }
 
             String finalTitle = (title == null || title.isBlank())
@@ -586,7 +589,7 @@ public class WorkSessionService {
                 if (!outcome.success()) {
                     // 合并没成，把用户放回他的工作段，改动一个都不能丢
                     repoService.checkoutBranch(projectId, s.getBranchName());
-                    throw VersionException.userFacing("本次工作还没能收尾，你的改动都还在");
+                    throw VersionException.userFacing(LangText.of("本次工作还没能收尾，你的改动都还在", "This work session couldn't be wrapped up yet — your changes are still there"));
                 }
                 s.setStatus(WorkSession.Status.MERGED);
                 s.setEndedAt(LocalDateTime.now());
@@ -679,14 +682,14 @@ public class WorkSessionService {
             WorkSession s = sessionRepository.findById(sessionId)
                     .filter(x -> x.getProjectId().equals(projectId))
                     .filter(x -> x.getStatus() == WorkSession.Status.ACTIVE)
-                    .orElseThrow(() -> VersionException.userFacing("这段工作不存在或已收尾"));
+                    .orElseThrow(() -> VersionException.userFacing(LangText.of("这段工作不存在或已收尾", "This work session doesn't exist or has already been wrapped up")));
             if (!repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("现在没有等你做选择的文件");
+                throw VersionException.userFacing(LangText.of("现在没有等你做选择的文件", "There are no files waiting on your choice right now"));
             }
             String sessionTip = repoService.mergeHeadRef(projectId);
             if (sessionTip == null || !sessionTip.equals(
                     repoService.resolveRef(projectId, s.getBranchName()))) {
-                throw VersionException.userFacing("正在处理的是另一件事，请先把它处理完");
+                throw VersionException.userFacing(LangText.of("正在处理的是另一件事，请先把它处理完", "Something else is already in progress — please finish that first"));
             }
             String mainTip = repoService.resolveRef(projectId, "HEAD");
             List<String> rawConflicts = repoService.conflictingPaths(projectId);
@@ -697,7 +700,7 @@ public class WorkSessionService {
             Map<String, Resolution> choices = resolutions == null ? Map.of() : resolutions;
             for (String path : conflicts) {
                 if (choices.get(path) == null) {
-                    throw VersionException.userFacing("还有文件没选留哪一份");
+                    throw VersionException.userFacing(LangText.of("还有文件没选留哪一份", "There are still files where you haven't picked which version to keep"));
                 }
             }
             for (String path : conflicts) {
@@ -716,14 +719,14 @@ public class WorkSessionService {
         lock.lock();
         try {
             WorkSession s = activeSession(projectId)
-                    .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
+                    .orElseThrow(() -> VersionException.userFacing(LangText.of("当前没有进行中的工作", "No work session in progress")));
             repoService.abortMerge(projectId);
             if (!s.getBranchName().equals(repoService.currentBranch(projectId))) {
                 repoService.checkoutBranch(projectId, s.getBranchName());
             }
             armIdleTimer(projectId, s.getId());
             log.info("中止一次工作收尾: project={}, session={}", projectId, s.getId());
-            return "本次工作还没能收尾，你的改动都还在";
+            return LangText.of("本次工作还没能收尾，你的改动都还在", "This work session couldn't be wrapped up yet — your changes are still there");
         } finally {
             lock.unlock();
         }
@@ -742,7 +745,7 @@ public class WorkSessionService {
         try {
             requireNotMerging(projectId);
             WorkSession s = activeSession(projectId)
-                    .orElseThrow(() -> VersionException.userFacing("当前没有进行中的工作"));
+                    .orElseThrow(() -> VersionException.userFacing(LangText.of("当前没有进行中的工作", "No work session in progress")));
 
             cancelPending(projectId);
 
@@ -819,7 +822,7 @@ public class WorkSessionService {
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
 
             String sha = repoService.commitAll(projectId,
-                    "退回到早先的版本", "session", null, userName, email(userName));
+                    LangText.of("退回到早先的版本", "Reverted to an earlier version"), "session", null, userName, email(userName));
             log.info("退回: project={}, ref={}, newSha={}", projectId, ref, sha);
 
             List<Long> affectedFileIds = sha == null
@@ -981,7 +984,13 @@ public class WorkSessionService {
      * {@link #abortAdopt} 本身不抛异常也不返回它——中止是成功路径，
      * 由控制器把这个常量放进响应的 message 字段。
      */
-    public static final String ADOPT_ABORTED_NOTICE = "这次采纳没有完成，你的两份稿件都还在";
+    public static String adoptAbortedNotice() {
+        // 中英两句都要与 AdoptConflictDialog 的 version.abortNoticeAdopt 措辞一致：后端没带
+        // message 时前端回退到自己那句，措辞不同只会在那时露馅。（撇号按后端全域惯例用直撇，
+        // 前端 locale 用弯撇，只差这一个字符，不影响措辞一致。）
+        return LangText.of("这次采纳没有完成，你的两份稿件都还在",
+                "This adoption wasn't completed — both of your drafts are still there");
+    }
 
     /**
      * 采纳一稿：把稿合并回主线，稿从此结束。
@@ -1003,7 +1012,7 @@ public class WorkSessionService {
         try {
             requireNotMerging(projectId);
             if (activeSession(projectId).isPresent()) {
-                throw VersionException.userFacing("请先结束或丢弃当前工作，再采纳这一稿");
+                throw VersionException.userFacing(LangText.of("请先结束或丢弃当前工作，再采纳这一稿", "Please finish or discard the current work session before adopting this draft"));
             }
             WorkSession draft = requireActiveDraft(projectId, draftId);
 
@@ -1043,7 +1052,7 @@ public class WorkSessionService {
                 // 后面的自裁/裁决路径一步都走不通，必须显式失败，不能误当自裁路径。
                 log.warn("采纳没能开始: project={}, branch={}, conflicts={}",
                         projectId, draft.getBranchName(), outcome.conflictingPaths());
-                throw VersionException.userFacing("这次采纳没能开始，请稍后重试");
+                throw VersionException.userFacing(LangText.of("这次采纳没能开始，请稍后重试", "This adoption couldn't get started — please try again later"));
             }
             if (conflicts.isEmpty()) {
                 // 只有内部的文件树清单冲突。律师不认识这个文件、也无从选择，
@@ -1080,12 +1089,12 @@ public class WorkSessionService {
         try {
             WorkSession draft = requireActiveDraft(projectId, draftId);
             if (!repoService.repositoryMerging(projectId)) {
-                throw VersionException.userFacing("现在没有等你做选择的文件");
+                throw VersionException.userFacing(LangText.of("现在没有等你做选择的文件", "There are no files waiting on your choice right now"));
             }
             String draftTip = repoService.mergeHeadRef(projectId);
             if (draftTip == null
                     || !draftTip.equals(repoService.resolveRef(projectId, draft.getBranchName()))) {
-                throw VersionException.userFacing("正在处理的是另一稿，请先把它处理完");
+                throw VersionException.userFacing(LangText.of("正在处理的是另一稿，请先把它处理完", "Another draft is already being processed — please finish that first"));
             }
             String mainTipBefore = repoService.resolveRef(projectId, "HEAD");
 
@@ -1105,7 +1114,7 @@ public class WorkSessionService {
             Map<String, Resolution> choices = resolutions == null ? Map.of() : resolutions;
             for (String path : conflicts) {
                 if (choices.get(path) == null) {
-                    throw VersionException.userFacing("还有文件没选留哪一份");
+                    throw VersionException.userFacing(LangText.of("还有文件没选留哪一份", "There are still files where you haven't picked which version to keep"));
                 }
             }
 
@@ -1171,7 +1180,7 @@ public class WorkSessionService {
 
     /** 时间线上这个采纳节点的名字。裁决路径与干净路径必须用同一句，否则同一动作两种叫法。 */
     private static String adoptMessage(WorkSession draft) {
-        return "采纳：" + draft.getTitle();
+        return LangText.of("采纳：", "Adopt: ") + draft.getTitle();
     }
 
     /**
@@ -1231,7 +1240,7 @@ public class WorkSessionService {
         log.info("采纳一稿但没有实质内容，未生成版本: project={}, branch={}, name={}",
                 projectId, draft.getBranchName(), draft.getTitle());
         return new AdoptOutcome(true, null, List.of(), List.of(),
-                "这一稿没有任何改动，未生成版本");
+                LangText.of("这一稿没有任何改动，未生成版本", "This draft had no changes, so no version was created"));
     }
 
     /**
@@ -1298,7 +1307,12 @@ public class WorkSessionService {
         int dot = fileName.lastIndexOf('.');
         String base = dot > 0 ? fileName.substring(0, dot) : fileName;
         String ext = dot > 0 ? fileName.substring(dot) : "";
-        String suffix = "（来自：" + draftName + "）";
+        // 前后括号必须一次性取语言：拆成两次 LangText.of 会在语言切换的窗口期拼出
+        // 半中半英的括号。英文括注口径与 AdoptConflictDialog 的 conflictFootNote
+        // （"Original Name (from: {side})"）逐字一致，否则弹窗说的和落盘的名字对不上。
+        String suffix = LangText.isEnglish()
+                ? " (from: " + draftName + ")"
+                : "（来自：" + draftName + "）";
 
         Path work = repoService.workTree(projectId);
         String candidate = dir + base + suffix + ext;
@@ -1396,7 +1410,7 @@ public class WorkSessionService {
     /** 仓库处于保留冲突态的合并中时，拒绝一切切线/开稿——那期间工作区是裁决现场。 */
     private void requireNotMerging(long projectId) {
         if (repoService.repositoryMerging(projectId)) {
-            throw VersionException.userFacing("请先处理正在进行的采纳");
+            throw VersionException.userFacing(LangText.of("请先处理正在进行的采纳", "Please finish the adoption already in progress first"));
         }
     }
 
@@ -1407,7 +1421,7 @@ public class WorkSessionService {
                 || !draft.getProjectId().equals(projectId)
                 || draft.getStatus() != WorkSession.Status.ACTIVE
                 || draft.getSessionType() != WorkSession.SessionType.DRAFT) {
-            throw VersionException.userFacing("这一稿不存在或已处理");
+            throw VersionException.userFacing(LangText.of("这一稿不存在或已处理", "This draft doesn't exist or has already been processed"));
         }
         return draft;
     }
@@ -1415,11 +1429,11 @@ public class WorkSessionService {
     /** 稿名口径照里程碑命名（VersionController.markMilestone）：必填，最多 64 字。 */
     private static String validateDraftName(String name) {
         if (name == null || name.isBlank()) {
-            throw VersionException.userFacing("请给这一稿起个名字");
+            throw VersionException.userFacing(LangText.of("请给这一稿起个名字", "Please give this draft a name"));
         }
         String trimmed = name.strip();
         if (trimmed.length() > 64) {
-            throw VersionException.userFacing("名字太长了，请控制在 64 字以内");
+            throw VersionException.userFacing(LangText.of("名字太长了，请控制在 64 字以内", "That name is too long — please keep it under 64 characters"));
         }
         return trimmed;
     }
@@ -1566,9 +1580,16 @@ public class WorkSessionService {
                 .filter(p -> !p.startsWith(".awd/"))
                 .map(WorkSessionService::displayName)
                 .toList();
-        if (names.isEmpty()) return "整理了文件结构";
-        if (names.size() == 1) return "修改了《" + names.get(0) + "》";
-        return "修改了《" + names.get(0) + "》等 " + names.size() + " 份文件";
+        if (names.isEmpty()) return LangText.of("整理了文件结构", "Reorganized the file structure");
+        // 英文里书名号换成直双引号（后端全域用直引号，不跟前端 locale 的弯引号排版）。
+        if (names.size() == 1) {
+            return LangText.of("修改了《" + names.get(0) + "》", "Edited \"" + names.get(0) + "\"");
+        }
+        int others = names.size() - 1;
+        return LangText.of(
+                "修改了《" + names.get(0) + "》等 " + names.size() + " 份文件",
+                "Edited \"" + names.get(0) + "\" and " + others
+                        + (others == 1 ? " more file" : " more files"));
     }
 
     /** 取文件名并去掉扩展名——律师习惯说《股权转让协议》，不说 .docx。 */
@@ -1583,12 +1604,16 @@ public class WorkSessionService {
             return describeChanges(repoService.pendingChanges(projectId));
         } catch (Exception e) {
             log.warn("生成变更描述失败: project={}", projectId, e);
-            return "修改了项目文件";
+            return LangText.of("修改了项目文件", "Edited project files");
         }
     }
 
     private String defaultTitle(LocalDateTime startedAt) {
         LocalDateTime t = startedAt != null ? startedAt : LocalDateTime.now();
+        if (LangText.isEnglish()) {
+            String half = t.getHour() < 12 ? "morning" : (t.getHour() < 18 ? "afternoon" : "evening");
+            return t.format(TITLE_FMT_EN) + " " + half + " session";
+        }
         String half = t.getHour() < 12 ? "上午" : (t.getHour() < 18 ? "下午" : "晚上");
         return t.format(TITLE_FMT) + half + "的工作";
     }

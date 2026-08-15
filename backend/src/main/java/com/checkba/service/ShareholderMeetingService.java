@@ -58,7 +58,7 @@ public class ShareholderMeetingService {
 
     public ShareholderMeetingCheck get(Long checkId) {
         return checkRepository.findById(checkId)
-                .orElseThrow(() -> new IllegalArgumentException("核查会话不存在: " + checkId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("核查会话不存在: ", "Verification session not found: ") + checkId));
     }
 
     public Long getProjectIdByCheckId(Long checkId) {
@@ -67,8 +67,8 @@ public class ShareholderMeetingService {
 
     public ShareholderMeetingCheck create(Long projectId, String companyName, String stockCode,
                                           String meetingName, LocalDate meetingDate, Long userId) {
-        if (!StringUtils.hasText(companyName)) throw new IllegalArgumentException("公司名称不能为空");
-        if (!StringUtils.hasText(meetingName)) throw new IllegalArgumentException("届次名称不能为空");
+        if (!StringUtils.hasText(companyName)) throw new IllegalArgumentException(LangText.of("公司名称不能为空", "Company name must not be empty"));
+        if (!StringUtils.hasText(meetingName)) throw new IllegalArgumentException(LangText.of("届次名称不能为空", "Meeting session name must not be empty"));
         ShareholderMeetingCheck check = new ShareholderMeetingCheck();
         check.setProjectId(projectId);
         check.setCompanyName(companyName.trim());
@@ -108,12 +108,12 @@ public class ShareholderMeetingService {
     public ShareholderMeetingCheck attachMaterial(Long checkId, String slot, Long fileId) {
         ShareholderMeetingCheck check = get(checkId);
         ProjectFile file = projectFileRepository.findById(fileId)
-                .orElseThrow(() -> new IllegalArgumentException("文件不存在: " + fileId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在: ", "File not found: ") + fileId));
         if (!check.getProjectId().equals(file.getProjectId())) {
-            throw new IllegalArgumentException("文件不属于本项目");
+            throw new IllegalArgumentException(LangText.of("文件不属于本项目", "File does not belong to this project"));
         }
         if ("folder".equalsIgnoreCase(file.getFileType())) {
-            throw new IllegalArgumentException("不能关联文件夹");
+            throw new IllegalArgumentException(LangText.of("不能关联文件夹", "A folder cannot be linked as material"));
         }
         switch (slot) {
             case SLOT_NOTICE -> check.setNoticeFileId(fileId);
@@ -121,7 +121,7 @@ public class ShareholderMeetingService {
             case SLOT_TEMPLATE -> check.setTemplateFileId(fileId);
             case SLOT_VOTE_RESULT -> check.setVoteResultFileIds(appendId(check.getVoteResultFileIds(), fileId));
             case SLOT_OTHER -> check.setOtherFileIds(appendId(check.getOtherFileIds(), fileId));
-            default -> throw new IllegalArgumentException("未知材料槽位: " + slot);
+            default -> throw new IllegalArgumentException(LangText.of("未知材料槽位: ", "Unknown material slot: ") + slot);
         }
         return checkRepository.save(check);
     }
@@ -134,7 +134,7 @@ public class ShareholderMeetingService {
             case SLOT_TEMPLATE -> check.setTemplateFileId(null);
             case SLOT_VOTE_RESULT -> check.setVoteResultFileIds(removeId(check.getVoteResultFileIds(), fileId));
             case SLOT_OTHER -> check.setOtherFileIds(removeId(check.getOtherFileIds(), fileId));
-            default -> throw new IllegalArgumentException("未知材料槽位: " + slot);
+            default -> throw new IllegalArgumentException(LangText.of("未知材料槽位: ", "Unknown material slot: ") + slot);
         }
         return checkRepository.save(check);
     }
@@ -204,10 +204,10 @@ public class ShareholderMeetingService {
     public Map<String, Object> fetchFromCninfo(Long checkId, String market, Long userId) {
         ShareholderMeetingCheck check = get(checkId);
         if (!StringUtils.hasText(check.getStockCode())) {
-            throw new IllegalArgumentException("请先填写股票代码");
+            throw new IllegalArgumentException(LangText.of("请先填写股票代码", "Please fill in the stock code first"));
         }
         if (check.getMeetingDate() == null) {
-            throw new IllegalArgumentException("请先填写股东会召开日期");
+            throw new IllegalArgumentException(LangText.of("请先填写股东会召开日期", "Please fill in the meeting date first"));
         }
         String mkt = StringUtils.hasText(market) ? market : CninfoAnnouncementService.MARKET_SZ_SH_BJ;
 
@@ -243,7 +243,7 @@ public class ShareholderMeetingService {
         info.put("title", ann.title());
         String pdfUrl = ann.pdfUrl();
         if (pdfUrl == null) {
-            errors.add(ann.title() + "：附件地址为空，无法下载");
+            errors.add(ann.title() + LangText.of("：附件地址为空，无法下载", ": attachment URL is empty, cannot download"));
             return info;
         }
         try {
@@ -256,7 +256,7 @@ public class ShareholderMeetingService {
             info.put("fileName", saved.getName());
         } catch (Exception e) {
             log.warn("巨潮公告下载失败: {}", ann.title(), e);
-            errors.add(ann.title() + "：下载失败 " + e.getMessage());
+            errors.add(ann.title() + LangText.of("：下载失败 ", ": download failed ") + e.getMessage());
         }
         return info;
     }

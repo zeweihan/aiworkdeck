@@ -1,5 +1,6 @@
 package com.checkba.service.storage;
 
+import com.checkba.service.LangText;
 import com.checkba.storage.ProjectStorageResolver;
 import com.checkba.storage.StorageException;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -111,8 +112,11 @@ public class StorageLocationService {
         // 源不可访问时不能往下走：copyTree 见源目录不存在会把它建出来，
         // 于是「0 个文件迁移成功」，指针切到新的空目录，用户的数据留在拔掉的那块盘上而应用一片空白。
         if (!Files.isDirectory(source)) {
-            throw new StorageException("当前存储目录不可访问（磁盘未连接或已被移动），无法迁移。"
-                    + "请先接回磁盘再迁移；若不打算继续使用该磁盘，可先恢复默认位置。");
+            throw new StorageException(LangText.of(
+                    "当前存储目录不可访问（磁盘未连接或已被移动），无法迁移。"
+                            + "请先接回磁盘再迁移；若不打算继续使用该磁盘，可先恢复默认位置。",
+                    "The current storage directory is not accessible (the disk may be disconnected or moved), so migration cannot proceed. "
+                            + "Please reconnect the disk before migrating; if you no longer intend to use this disk, restore the default location first."));
         }
         Path target = validateTarget(targetPath, source);
 
@@ -130,11 +134,16 @@ public class StorageLocationService {
             // 那个文件在文件树里看得见却打不开。宁可让用户重来一次。
             Tally sourceAfter = tally(source);
             if (sourceAfter.files != sourceTally.files || sourceAfter.bytes != sourceTally.bytes) {
-                throw new StorageException("迁移期间原目录发生了变化（可能有文档在自动保存，或有下载/AI 改动在进行），"
-                        + "为确保一个文件都不落下，已放弃本次迁移并保持原位置。请关闭正在编辑的文档后重试。");
+                throw new StorageException(LangText.of(
+                        "迁移期间原目录发生了变化（可能有文档在自动保存，或有下载/AI 改动在进行），"
+                                + "为确保一个文件都不落下，已放弃本次迁移并保持原位置。请关闭正在编辑的文档后重试。",
+                        "The original directory changed during migration (a document may have been autosaving, or a download/AI edit was in progress). "
+                                + "To make sure no file was left behind, this migration was aborted and the original location was kept. Please close any documents being edited and try again."));
             }
             if (targetTally.files != sourceTally.files || targetTally.bytes != sourceTally.bytes) {
-                throw new StorageException("迁移校验未通过（文件数或大小不一致），已放弃本次迁移");
+                throw new StorageException(LangText.of(
+                        "迁移校验未通过（文件数或大小不一致），已放弃本次迁移",
+                        "Migration validation failed (file count or size mismatch); this migration was aborted"));
             }
         } catch (StorageException e) {
             rollback(target, createdTargetDir);
@@ -142,7 +151,7 @@ public class StorageLocationService {
         } catch (Exception e) {
             rollback(target, createdTargetDir);
             log.error("存储位置迁移失败，已回滚，仍使用原位置: {}", source, e);
-            throw new StorageException("迁移失败，已保持原存储位置：" + e.getMessage());
+            throw new StorageException(LangText.of("迁移失败，已保持原存储位置：", "Migration failed; the original storage location was kept: ") + e.getMessage());
         }
 
         // 复制与校验都过了才落配置、才换指针。这两步之间即使进程被杀，
@@ -184,7 +193,7 @@ public class StorageLocationService {
         Path previous = resolver.globalRoot();
         Path defaultRoot = resolver.configuredRoot();
         if (previous.equals(defaultRoot)) {
-            throw new StorageException("当前已经是默认位置");
+            throw new StorageException(LangText.of("当前已经是默认位置", "This is already the default location"));
         }
         saveState(new State()); // root=null：下次启动不再应用自选路径
         resolver.relocate(defaultRoot);
@@ -200,7 +209,7 @@ public class StorageLocationService {
 
     private Path validateTarget(String targetPath, Path source) {
         if (targetPath == null || targetPath.isBlank()) {
-            throw new StorageException("请选择一个目录");
+            throw new StorageException(LangText.of("请选择一个目录", "Please choose a directory"));
         }
         Path target = Path.of(targetPath).toAbsolutePath().normalize();
         // 嵌套判断必须在**解析软链之后**做：normalize() 是纯词法的，
@@ -210,27 +219,29 @@ public class StorageLocationService {
         Path realSource = realPathOf(source);
         Path realTarget = realPathOf(target);
         if (realTarget.equals(realSource)) {
-            throw new StorageException("新位置与当前位置相同");
+            throw new StorageException(LangText.of("新位置与当前位置相同", "The new location is the same as the current location"));
         }
         // 互相嵌套会让「复制整棵树」变成无限自我复制，或把源埋进目标里
         if (realTarget.startsWith(realSource)) {
-            throw new StorageException("新位置不能在当前存储目录内部");
+            throw new StorageException(LangText.of("新位置不能在当前存储目录内部", "The new location cannot be inside the current storage directory"));
         }
         if (realSource.startsWith(realTarget)) {
-            throw new StorageException("新位置不能是当前存储目录的上级目录");
+            throw new StorageException(LangText.of("新位置不能是当前存储目录的上级目录", "The new location cannot be a parent directory of the current storage directory"));
         }
         if (Files.exists(target) && !Files.isDirectory(target)) {
-            throw new StorageException("所选路径不是目录");
+            throw new StorageException(LangText.of("所选路径不是目录", "The selected path is not a directory"));
         }
         // 只接受空目录：避免与目标里已有的同名文件发生覆盖或合并语义，
         // 那是丢数据最容易发生的地方
         if (Files.isDirectory(target)) {
             try (var entries = Files.list(target)) {
                 if (entries.findAny().isPresent()) {
-                    throw new StorageException("请选择一个空目录（或新建一个），以免与已有文件混在一起");
+                    throw new StorageException(LangText.of(
+                            "请选择一个空目录（或新建一个），以免与已有文件混在一起",
+                            "Please choose an empty directory (or create a new one) to avoid mixing with existing files"));
                 }
             } catch (IOException e) {
-                throw new StorageException("无法读取所选目录：" + e.getMessage());
+                throw new StorageException(LangText.of("无法读取所选目录：", "Unable to read the selected directory: ") + e.getMessage());
             }
         }
         return target;
@@ -261,7 +272,7 @@ public class StorageLocationService {
             Files.writeString(probe, "ok");
             Files.deleteIfExists(probe);
         } catch (IOException e) {
-            throw new StorageException("所选目录不可写，请换一个位置或检查权限");
+            throw new StorageException(LangText.of("所选目录不可写，请换一个位置或检查权限", "The selected directory is not writable. Please choose another location or check permissions"));
         }
     }
 
@@ -345,7 +356,7 @@ public class StorageLocationService {
         } catch (Exception e) {
             // 抛出去（而不是吞掉）：配置没记住就等于这次操作没发生，调用方据此回滚并保持原位置。
             // 注意文案不能说「已迁移」——此时 relocate 还没执行，存储根一动没动。
-            throw new StorageException("存储位置配置写入失败，已保持原位置：" + e.getMessage());
+            throw new StorageException(LangText.of("存储位置配置写入失败，已保持原位置：", "Failed to write the storage location configuration; the original location was kept: ") + e.getMessage());
         }
     }
 }

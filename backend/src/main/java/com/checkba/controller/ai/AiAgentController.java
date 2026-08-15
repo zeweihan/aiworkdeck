@@ -2,6 +2,7 @@ package com.checkba.controller.ai;
 
 import com.checkba.controller.AuthController;
 import com.checkba.model.ai.AgentMode;
+import com.checkba.service.LangText;
 import com.checkba.service.ai.SseEmitterService;
 import com.checkba.service.ai.AgentOrchestrator;
 import lombok.Data;
@@ -144,10 +145,12 @@ public class AiAgentController {
             return ResponseEntity.status(401).body("{\"status\":\"error\", \"message\":\"请先登录\"}");
         }
         if (request.getProjectId() == null || !projectMemberService.hasReadPermission(request.getProjectId(), userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权访问该项目\"}");
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("无权访问该项目", "You do not have access to this project") + "\"}");
         }
         if (!canUseConversation(request.getConversationId(), userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
 
         log.info("Received Agent Chat Request: project={}, conversation={}, mode={}, msg={}",
@@ -173,7 +176,8 @@ public class AiAgentController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         // 归属校验：否则任何人猜到会话 ID 就能掐断别人正在跑的生成
         if (!canUseConversation(conversationId, userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
 
         log.info("Cancel request received: conv={}, user={}", conversationId, userId);
@@ -202,17 +206,20 @@ public class AiAgentController {
                                            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (!canUseConversation(request.getConversationId(), userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
         // 第二道校验在服务里：子任务必须登记在这个会话名下（光有会话权限还不够）
         boolean requested = subAgentService.cancel(request.getSubtaskId(), request.getConversationId());
         if (!requested) {
             return ResponseEntity.status(404)
-                    .body("{\"status\":\"error\", \"message\":\"该子任务已经结束，无需停止\"}");
+                    .body("{\"status\":\"error\", \"message\":\"" +
+                            LangText.of("该子任务已经结束，无需停止", "This subtask has already finished; no need to stop it") + "\"}");
         }
         log.info("Subtask cancel requested: conv={}, subtask={}, user={}",
                 request.getConversationId(), request.getSubtaskId(), userId);
-        return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"正在停止该子任务\"}");
+        return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"" +
+                LangText.of("正在停止该子任务", "Stopping this subtask") + "\"}");
     }
 
     /**
@@ -229,16 +236,19 @@ public class AiAgentController {
                                                   @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (!canUseConversation(request.getConversationId(), userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
         boolean cancelled = backgroundTaskService.cancelTask(request.getTaskId(), request.getConversationId());
         if (!cancelled) {
             return ResponseEntity.status(404)
-                    .body("{\"status\":\"error\", \"message\":\"该任务已经结束，无需停止\"}");
+                    .body("{\"status\":\"error\", \"message\":\"" +
+                            LangText.of("该任务已经结束，无需停止", "This task has already finished; no need to stop it") + "\"}");
         }
         log.info("Background task cancel requested: conv={}, task={}, user={}",
                 request.getConversationId(), request.getTaskId(), userId);
-        return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"正在停止该任务\"}");
+        return ResponseEntity.ok().body("{\"status\":\"ok\", \"message\":\"" +
+                LangText.of("正在停止该任务", "Stopping this task") + "\"}");
     }
 
     /**
@@ -251,7 +261,8 @@ public class AiAgentController {
         // 归属校验：任务信息带文件名与进度描述，不能按会话 ID 裸查
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (!canUseConversation(conversationId, userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
         try {
             // Get active tasks from BackgroundTaskService
@@ -275,7 +286,8 @@ public class AiAgentController {
         Long userId = (sessionId != null) ? AuthController.getUserIdFromSession(sessionId) : null;
         // 归属校验：此前 userId 为 null 也会执行截断（破坏性），且不校验会话归属
         if (userId == null || !messageService.isConversationOwnedBy(request.getConversationId(), userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权操作该会话\"}");
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("无权操作该会话", "You do not have permission for this conversation") + "\"}");
         }
         log.info("Rollback request: conv={}, msgId={}, user={}", request.getConversationId(), request.getMessageId(), userId);
 
@@ -302,7 +314,8 @@ public class AiAgentController {
             return ResponseEntity.status(401).body("{\"status\":\"error\", \"message\":\"请先登录\"}");
         }
         if (request.getProjectId() == null || !projectMemberService.hasWritePermission(request.getProjectId(), userId)) {
-            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"无权写入该项目\"}");
+            return ResponseEntity.status(403).body("{\"status\":\"error\", \"message\":\"" +
+                    LangText.of("无权写入该项目", "You do not have write access to this project") + "\"}");
         }
 
         log.info("Received PPT Generation Request: topic={}, editable={}", request.getTopic(), request.isExportEditable());
@@ -354,7 +367,8 @@ public class AiAgentController {
                     : brief(request.getTopic(), 30);
             // 失败时首行本来就是可读中文（「PPTX 生成失败: …」/「错误：…」），直接当显示文案
             String display = ok
-                    ? "已生成 PPT：" + label + "。文件已放入项目文件树，可以直接打开，也可以让我继续修改。"
+                    ? LangText.of("已生成 PPT：" + label + "。文件已放入项目文件树，可以直接打开，也可以让我继续修改。",
+                            "PPT generated: " + label + ". The file has been added to the project file tree — you can open it directly, or ask me to keep editing it.")
                     : outcome.split("\n", 2)[0].trim();
             messageService.saveMessage(String.valueOf(request.getProjectId()), userId,
                     request.getConversationId(), "ASSISTANT", outcome, display);

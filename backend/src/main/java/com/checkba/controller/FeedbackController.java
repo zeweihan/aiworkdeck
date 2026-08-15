@@ -6,6 +6,7 @@ import com.checkba.model.entity.UserFeedback;
 import com.checkba.repository.UserFeedbackRepository;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.AdminAccessService;
+import com.checkba.service.LangText;
 import com.checkba.service.feedback.FeedbackService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -79,7 +80,7 @@ public class FeedbackController {
             return ResponseEntity.ok(error(e.getMessage()));
         } catch (Exception e) {
             log.error("反馈提交失败", e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error("提交失败，请稍后再试"));
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error(LangText.of("提交失败，请稍后再试", "Submission failed, please try again later.")));
         }
     }
 
@@ -108,7 +109,7 @@ public class FeedbackController {
             @RequestParam(value = "status", required = false) String status,
             @RequestParam(value = "limit", required = false, defaultValue = "50") int limit) {
         if (requireAdmin(sessionId) == null) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("需要管理员权限"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("需要管理员权限", "Admin access required")));
         }
         List<Map<String, Object>> items = new ArrayList<>();
         for (UserFeedback fb : feedbackService.list(status, limit)) {
@@ -122,10 +123,10 @@ public class FeedbackController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId,
             @PathVariable Long id) {
         if (requireAdmin(sessionId) == null) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("需要管理员权限"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("需要管理员权限", "Admin access required")));
         }
         UserFeedback fb = feedbackRepository.findById(id).orElse(null);
-        if (fb == null) return ResponseEntity.ok(error("反馈不存在"));
+        if (fb == null) return ResponseEntity.ok(error(LangText.of("反馈不存在", "Feedback not found")));
         Map<String, Object> data = new LinkedHashMap<>(brief(fb));
         data.put("contextJson", fb.getContextJson());
         data.put("triageJson", fb.getTriageJson());
@@ -175,7 +176,7 @@ public class FeedbackController {
         m.put("userId", fb.getUserId());
         // 后台要能回答「哪个用户提的」；userId 对人没意义，这里解析成用户名
         m.put("username", fb.getUserId() == null ? "" : userRepository.findById(fb.getUserId())
-                .map(User::getUsername).orElse("用户 #" + fb.getUserId()));
+                .map(User::getUsername).orElse(LangText.of("用户 #", "User #") + fb.getUserId()));
         m.put("projectId", fb.getProjectId());
         m.put("kind", fb.getKind());
         m.put("text", fb.getText());
@@ -208,7 +209,7 @@ public class FeedbackController {
             return mapper.readValue(json, new TypeReference<Map<String, Object>>() {
             });
         } catch (Exception e) {
-            throw new IllegalArgumentException("提交内容格式有误");
+            throw new IllegalArgumentException(LangText.of("提交内容格式有误", "Submitted content is malformed"));
         }
     }
 

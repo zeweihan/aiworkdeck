@@ -4,6 +4,7 @@ import com.checkba.model.entity.FileVariable;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.FileVariableService;
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectMemberService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
@@ -28,7 +29,7 @@ public class FileVariableController {
         Long projectId = fileId == null ? null
                 : projectFileRepository.findById(fileId).map(ProjectFile::getProjectId).orElse(null);
         if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该资源");
+            throw new IllegalArgumentException(LangText.of("无权访问该资源", "You don't have permission to access this resource"));
         }
     }
 

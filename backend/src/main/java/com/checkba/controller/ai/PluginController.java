@@ -3,6 +3,7 @@ package com.checkba.controller.ai;
 import com.checkba.controller.AuthController;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.AdminAccessService;
+import com.checkba.service.LangText;
 import com.checkba.service.ai.PluginService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -84,7 +85,7 @@ public class PluginController {
     public ResponseEntity<Map<String, Object>> rescan(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         pluginService.rescan();
         Map<String, Object> result = ok();
@@ -122,7 +123,7 @@ public class PluginController {
             @org.springframework.web.bind.annotation.RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         try {
             String id = pluginMarketService.install(body == null ? null : body.get("id"));
@@ -141,7 +142,7 @@ public class PluginController {
             @org.springframework.web.bind.annotation.RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         try {
             String id = body == null ? null : body.get("id");
@@ -160,7 +161,7 @@ public class PluginController {
     public ResponseEntity<Map<String, Object>> syncRevoked(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         Map<String, Object> result = ok();
         result.put("disabled", revocationService.sync());
@@ -169,12 +170,12 @@ public class PluginController {
 
     private ResponseEntity<Map<String, Object>> setEnabled(String pluginId, boolean enabled, String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         try {
             pluginService.setEnabled(pluginId, enabled);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error("插件不存在: " + pluginId));
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("插件不存在: ", "Plugin not found: ") + pluginId));
         } catch (IllegalStateException e) {
             // 被平台封禁的插件不允许重新启用
             return ResponseEntity.ok(error(e.getMessage()));

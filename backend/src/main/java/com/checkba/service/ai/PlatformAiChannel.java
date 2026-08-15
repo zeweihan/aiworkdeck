@@ -1,5 +1,6 @@
 package com.checkba.service.ai;
 
+import com.checkba.service.LangText;
 import com.checkba.service.account.AccountException;
 import com.checkba.service.account.AccountService;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -176,20 +177,24 @@ public class PlatformAiChannel {
         if (perUserApplies(userId)) {
             return perUser.resolve(userId).orElseThrow(() -> new AccountException(
                     AccountException.Kind.CONFLICT,
-                    "本账号的「AI Workdeck 云端」额度尚未就绪，可在插件设置页用账户 Key 刷新额度"));
+                    LangText.of("本账号的「AI Workdeck 云端」额度尚未就绪，可在插件设置页用账户 Key 刷新额度",
+                            "This account's \"AI Workdeck Cloud\" Credits are not ready yet; refresh them with your account key on the plugin settings page")));
         }
         if (strictMultiTenant()) {
             // 多租户实例上回落机器级 key = 拿别人的额度花钱，宁可报错
             if (userId == null) {
                 throw new AccountException(AccountException.Kind.CONFLICT,
-                        "本次 AI 调用未携带用户身份，「AI Workdeck 云端」无法确定额度归属");
+                        LangText.of("本次 AI 调用未携带用户身份，「AI Workdeck 云端」无法确定额度归属",
+                                "This AI call did not carry a user identity; \"AI Workdeck Cloud\" cannot determine whose Credits to use"));
             }
             throw new AccountException(AccountException.Kind.CONFLICT,
-                    "本账号尚未通过账户 Key 完成直连，暂不能使用「AI Workdeck 云端」通道");
+                    LangText.of("本账号尚未通过账户 Key 完成直连，暂不能使用「AI Workdeck 云端」通道",
+                            "This account has not been connected via an account key yet; the \"AI Workdeck Cloud\" channel is unavailable"));
         }
         if (!accountService.isConnected()) {
             throw new AccountException(AccountException.Kind.NOT_CONNECTED,
-                    "「AI Workdeck 云端」需要连接账户，请到设置页粘贴账户 Key");
+                    LangText.of("「AI Workdeck 云端」需要连接账户，请到设置页粘贴账户 Key",
+                            "\"AI Workdeck Cloud\" requires a connected account; paste your account key on the Settings page"));
         }
         Cached cached = current();
         if (cached == null) cached = fetch();

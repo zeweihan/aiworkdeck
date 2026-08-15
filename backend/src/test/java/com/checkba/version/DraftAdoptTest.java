@@ -615,7 +615,7 @@ class DraftAdoptTest {
         assertEquals(WorkSession.Status.ACTIVE, sessions.get(draftId).getStatus(), "稿原样还在");
         assertEquals(1, svc.listDrafts(7L).size());
 
-        assertEquals("这次采纳没有完成，你的两份稿件都还在", WorkSessionService.ADOPT_ABORTED_NOTICE);
+        assertEquals("这次采纳没有完成，你的两份稿件都还在", WorkSessionService.adoptAbortedNotice());
     }
 
     /**

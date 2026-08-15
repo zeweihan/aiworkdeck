@@ -93,8 +93,8 @@ public class ClipboardService {
 
     @Transactional
     public ClipboardItem saveText(Long userId, String text) {
-        if (userId == null) throw new IllegalArgumentException("userId 不能为空");
-        if (!StringUtils.hasText(text)) throw new IllegalArgumentException("text 不能为空");
+        if (userId == null) throw new IllegalArgumentException(LangText.of("userId 不能为空", "userId must not be empty"));
+        if (!StringUtils.hasText(text)) throw new IllegalArgumentException(LangText.of("text 不能为空", "text must not be empty"));
 
         ClipboardItem item = new ClipboardItem();
         item.setUserId(userId);
@@ -106,8 +106,8 @@ public class ClipboardService {
 
     @Transactional
     public ClipboardItem saveFile(Long userId, org.springframework.web.multipart.MultipartFile file, String type) throws java.io.IOException {
-        if (userId == null) throw new IllegalArgumentException("userId 不能为空");
-        if (file == null || file.isEmpty()) throw new IllegalArgumentException("file 不能为空");
+        if (userId == null) throw new IllegalArgumentException(LangText.of("userId 不能为空", "userId must not be empty"));
+        if (file == null || file.isEmpty()) throw new IllegalArgumentException(LangText.of("file 不能为空", "file must not be empty"));
 
         String uuid = java.util.UUID.randomUUID().toString();
         // 存储路径：clipboard/{userId}/{uuid}
@@ -144,20 +144,20 @@ public class ClipboardService {
     }
     
     public org.springframework.core.io.Resource getFile(Long id, Long userId) {
-        ClipboardItem item = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("记录不存在"));
+        ClipboardItem item = repository.findById(id).orElseThrow(() -> new IllegalArgumentException(LangText.of("记录不存在", "Record not found")));
         if (!item.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权访问该记录");
+            throw new IllegalArgumentException(LangText.of("无权访问该记录", "You do not have access to this record"));
         }
-        
+
         if ("TEXT".equals(item.getType())) {
-            throw new IllegalArgumentException("该记录不是文件类型");
+            throw new IllegalArgumentException(LangText.of("该记录不是文件类型", "This record is not a file"));
         }
-        
+
         try {
             Map<String, Object> meta = new com.fasterxml.jackson.databind.ObjectMapper().readValue(item.getMeta(), Map.class);
             String path = (String) meta.get("path");
             if (!StringUtils.hasText(path)) {
-                throw new IllegalArgumentException("文件路径丢失");
+                throw new IllegalArgumentException(LangText.of("文件路径丢失", "File path is missing"));
             }
             return getStorageService().load(path);
         } catch (Exception e) {
@@ -167,9 +167,9 @@ public class ClipboardService {
 
     @Transactional
     public void delete(Long id, Long userId) {
-        ClipboardItem item = repository.findById(id).orElseThrow(() -> new IllegalArgumentException("记录不存在"));
+        ClipboardItem item = repository.findById(id).orElseThrow(() -> new IllegalArgumentException(LangText.of("记录不存在", "Record not found")));
         if (!item.getUserId().equals(userId)) {
-            throw new IllegalArgumentException("无权删除该记录");
+            throw new IllegalArgumentException(LangText.of("无权删除该记录", "You do not have permission to delete this record"));
         }
         repository.delete(item);
     }

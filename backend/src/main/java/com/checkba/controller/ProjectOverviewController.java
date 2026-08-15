@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.service.LangText;
 import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ProjectOverviewService;
@@ -73,7 +74,7 @@ public class ProjectOverviewController {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) throw new IllegalArgumentException("未登录");
         if (projectId == null || !projectMemberService.hasReadPermission(projectId, userId)) {
-            throw new IllegalArgumentException("无权访问该项目");
+            throw new IllegalArgumentException(LangText.of("无权访问该项目", "You don't have permission to access this project"));
         }
         return userId;
     }
@@ -87,7 +88,7 @@ public class ProjectOverviewController {
         if (projectId == null
                 || !projectMemberService.hasWritePermission(projectId, userId)
                 || projectMemberService.isClient(projectId, userId)) {
-            throw new IllegalArgumentException("无权修改该项目");
+            throw new IllegalArgumentException(LangText.of("无权修改该项目", "You don't have permission to modify this project"));
         }
         return userId;
     }

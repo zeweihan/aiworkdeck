@@ -29,7 +29,7 @@ public class ProjectMemberController {
         // 越权校验：此前无成员校验，可枚举任意项目的成员名单/用户名
         Long callerId = AuthController.getUserIdFromSession(sessionId);
         if (callerId == null || !projectMemberService.hasReadPermission(projectId, callerId)) {
-            throw new IllegalArgumentException("无权访问该项目成员");
+            throw new IllegalArgumentException(com.checkba.service.LangText.of("无权访问该项目成员", "You do not have access to this project's members"));
         }
 
         // Fetch project owner (implicitly an ADMIN member)
@@ -93,7 +93,7 @@ public class ProjectMemberController {
             projectMemberService.addMember(projectId, request.getUsername(), request.getRole(), userId);
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
-            result.put("message", "添加成功");
+            result.put("message", com.checkba.service.LangText.of("添加成功", "Added successfully"));
             return result;
         } catch (IllegalArgumentException e) {
             Map<String, Object> result = new HashMap<>();
@@ -120,7 +120,7 @@ public class ProjectMemberController {
             String code = clientInvitationService.inviteClient(projectId, userId, clientName);
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
-            result.put("message", "邀请码生成成功");
+            result.put("message", com.checkba.service.LangText.of("邀请码生成成功", "Invitation code generated successfully"));
             result.put("data", Map.of("accessCode", code));
             return result;
         } catch (IllegalArgumentException e) {
@@ -146,7 +146,7 @@ public class ProjectMemberController {
             projectMemberService.removeMember(projectId, userIdToRemove, requesterId);
             Map<String, Object> result = new HashMap<>();
             result.put("code", 0);
-            result.put("message", "移除成功");
+            result.put("message", com.checkba.service.LangText.of("移除成功", "Removed successfully"));
             return result;
         } catch (IllegalArgumentException e) {
             Map<String, Object> result = new HashMap<>();

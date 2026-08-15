@@ -237,7 +237,7 @@ export default {
           // abort-adopt 的路径参数在后端不参与判断（只按 projectId 找当前合并中的仓库），
           // draftId 反查落空（残局）时也用得到这条逃生门，占位传 0。
           res = await abortAdopt(this.projectId, this.draftId || 0)
-          // 与后端 WorkSessionService.ADOPT_ABORTED_NOTICE 逐字一致：正常路径显示的
+          // 与后端 WorkSessionService.adoptAbortedNotice() 中英两句逐字一致：正常路径显示的
           // 是后端那句，两处措辞不同的话只有在后端没带 message 时才会露馅，很难被发现。
           fallbackNotice = this.$t('version.abortNoticeAdopt')
         }

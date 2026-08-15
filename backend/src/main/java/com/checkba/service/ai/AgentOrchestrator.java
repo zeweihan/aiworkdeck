@@ -1342,7 +1342,7 @@ public class AgentOrchestrator {
 
     private String truncate(String s, int max) {
         if (s == null) return "";
-        return s.length() <= max ? s : s.substring(0, max) + "...(截断)";
+        return s.length() <= max ? s : s.substring(0, max) + LangText.of("...(截断)", "...(truncated)");
     }
 
     /** 工具输出在面板上的默认展示上限（历史落库存的是全文，这里只是 SSE 载荷） */

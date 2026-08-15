@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.service.LangText;
 import com.checkba.service.site.SiteProfile;
 import com.checkba.service.site.SiteProfileService;
 import com.checkba.service.site.SiteSwitchService;
@@ -66,7 +67,7 @@ public class SiteController {
             return ResponseEntity.badRequest().body(Map.of("message", e.getMessage()));
         } catch (Exception e) {
             log.warn("切换站点失败: {}", e.getMessage());
-            return ResponseEntity.badRequest().body(Map.of("message", "切换站点失败，请稍后重试"));
+            return ResponseEntity.badRequest().body(Map.of("message", LangText.of("切换站点失败，请稍后重试", "Failed to switch site, please try again later.")));
         }
     }
 

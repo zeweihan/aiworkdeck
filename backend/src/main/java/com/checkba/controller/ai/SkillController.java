@@ -3,6 +3,7 @@ package com.checkba.controller.ai;
 import com.checkba.controller.AuthController;
 import com.checkba.repository.UserRepository;
 import com.checkba.service.AdminAccessService;
+import com.checkba.service.LangText;
 import com.checkba.service.ai.skill.SkillDefinition;
 import com.checkba.service.ai.skill.SkillMarketService;
 import com.checkba.service.ai.skill.SkillRegistry;
@@ -88,17 +89,17 @@ public class SkillController {
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         String raw = body == null ? null : body.get("mode");
         SkillRegistry.ActivationMode mode = SkillRegistry.ActivationMode.parse(raw).orElse(null);
         if (mode == null) {
-            return ResponseEntity.badRequest().body(error("生效方式无效: " + raw));
+            return ResponseEntity.badRequest().body(error(LangText.of("生效方式无效: ", "Invalid activation mode: ") + raw));
         }
         try {
             skillRegistry.setActivationMode(skillId, mode);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error("Skill 不存在: " + skillId));
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("Skill 不存在: ", "Skill not found: ") + skillId));
         }
         return ResponseEntity.ok(ok());
     }
@@ -107,7 +108,7 @@ public class SkillController {
     public ResponseEntity<Map<String, Object>> rescan(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         skillRegistry.rescan();
         Map<String, Object> result = ok();
@@ -144,7 +145,7 @@ public class SkillController {
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         try {
             String id = skillMarketService.install(body == null ? null : body.get("id"));
@@ -161,7 +162,7 @@ public class SkillController {
             @RequestBody Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         try {
             skillMarketService.uninstall(body == null ? null : body.get("id"));
@@ -173,12 +174,12 @@ public class SkillController {
 
     private ResponseEntity<Map<String, Object>> setEnabled(String skillId, boolean enabled, String sessionId) {
         if (!isAdmin(sessionId)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error("仅管理员可操作"));
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(error(LangText.of("仅管理员可操作", "Administrator permission required")));
         }
         try {
             skillRegistry.setEnabled(skillId, enabled);
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error("Skill 不存在: " + skillId));
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(error(LangText.of("Skill 不存在: ", "Skill not found: ") + skillId));
         }
         telemetryService.record("skill.lifecycle",
                 Map.of("skillId", skillId, "op", enabled ? "enable" : "disable"));

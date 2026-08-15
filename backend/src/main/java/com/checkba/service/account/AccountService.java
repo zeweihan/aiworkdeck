@@ -1,5 +1,6 @@
 package com.checkba.service.account;
 
+import com.checkba.service.LangText;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -74,11 +75,13 @@ public class AccountService {
     public synchronized Map<String, Object> connect(String awdkKey) {
         String key = awdkKey == null ? "" : awdkKey.trim();
         if (key.isEmpty()) {
-            throw new AccountException(AccountException.Kind.UNAUTHORIZED, "账户 Key 不能为空");
+            throw new AccountException(AccountException.Kind.UNAUTHORIZED,
+                    LangText.of("账户 Key 不能为空", "Account key cannot be empty"));
         }
         if (!key.startsWith(KEY_PREFIX)) {
             throw new AccountException(AccountException.Kind.UNAUTHORIZED,
-                    "账户 Key 格式不正确，应以 awdk_ 开头（在官网账户页「桌面连接」生成）");
+                    LangText.of("账户 Key 格式不正确，应以 awdk_ 开头（在官网账户页「桌面连接」生成）",
+                            "Invalid account key format; it must start with awdk_ (generate one on the website account page under \"Desktop Connection\")"));
         }
         Map<String, Object> me = getJson("/api/account/me", key);
 
@@ -99,7 +102,7 @@ public class AccountService {
             Files.deleteIfExists(accountFile);
         } catch (Exception e) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "断开连接失败：本地凭据文件无法删除");
+                    LangText.of("断开连接失败：本地凭据文件无法删除", "Failed to disconnect: could not delete the local credential file"));
         }
         return status();
     }
@@ -240,24 +243,28 @@ public class AccountService {
             // 文案红线：不得含「登录」「未授权」「请先」——api.js 用这三个子串判掉线并清会话
             if ("no_credits".equals(code)) {
                 throw new AccountException(AccountException.Kind.CONFLICT,
-                        "账户 Credits 余额为空，到官网充值后即可使用平台 AI");
+                        LangText.of("账户 Credits 余额为空，到官网充值后即可使用平台 AI",
+                                "Your account has no Credits balance. Top up on the website to use the platform AI channel"));
             }
             if ("no_allocation".equals(code)) {
                 // 旧版官网才会返回；新版已无此分支
                 throw new AccountException(AccountException.Kind.CONFLICT,
-                        "官网尚未为该账户签发 AI 通道密钥，到官网账户页看一下");
+                        LangText.of("官网尚未为该账户签发 AI 通道密钥，到官网账户页看一下",
+                                "The website has not issued an AI channel key for this account yet; check the website account page"));
             }
             throw new AccountException(AccountException.Kind.CONFLICT,
-                    "官网 AI 额度状态异常（" + (code == null ? "未知" : code) + "），请到官网账户页查看");
+                    LangText.of("官网 AI 额度状态异常（", "The website reported an unexpected AI Credits status (")
+                            + (code == null ? LangText.of("未知", "unknown") : code)
+                            + LangText.of("），请到官网账户页查看", "), please check the website account page"));
         }
         if (reply.status() == 503) {
             throw new AccountException(AccountException.Kind.NETWORK,
-                    "官网 AI 额度服务暂不可用，请稍后重试");
+                    LangText.of("官网 AI 额度服务暂不可用，请稍后重试", "The website's AI Credits service is temporarily unavailable, please retry shortly"));
         }
         Map<String, Object> body = handle(reply);
         if (str(body.get("openrouterKey")) == null) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "官网返回的 AI 通道密钥为空，请稍后重试");
+                    LangText.of("官网返回的 AI 通道密钥为空，请稍后重试", "The website returned an empty AI channel key, please retry shortly"));
         }
         return body;
     }
@@ -274,7 +281,8 @@ public class AccountService {
         State state = loadState();
         if (state.key == null || state.key.isBlank()) {
             throw new AccountException(AccountException.Kind.NOT_CONNECTED,
-                    "尚未连接 AI Workdeck 账户，可在设置页「账户与用量」粘贴账户 Key");
+                    LangText.of("尚未连接 AI Workdeck 账户，可在设置页「账户与用量」粘贴账户 Key",
+                            "No AI Workdeck account connected yet. Paste your account key on the Settings page under \"Account & Usage\""));
         }
         return state.key;
     }
@@ -298,11 +306,12 @@ public class AccountService {
         }
         if (status >= 500) {
             throw new AccountException(AccountException.Kind.NETWORK,
-                    "AI Workdeck 服务器暂时不可用，请稍后重试");
+                    LangText.of("AI Workdeck 服务器暂时不可用，请稍后重试", "The AI Workdeck server is temporarily unavailable, please retry shortly"));
         }
         if (status < 200 || status >= 300) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "官网返回了预期外的状态（" + status + "），请稍后重试");
+                    LangText.of("官网返回了预期外的状态（", "The website returned an unexpected status (") + status
+                            + LangText.of("），请稍后重试", "), please retry shortly"));
         }
         return parse(reply.body());
     }
@@ -318,16 +327,19 @@ public class AccountService {
      * {@code AccountServiceTest.accountMessagesDoNotLookLikeAuthErrors}。
      */
     private String unauthorizedMessage() {
-        String base = "账户 Key 无效或已被撤销，可到官网账户页重新生成";
+        String base = LangText.of("账户 Key 无效或已被撤销，可到官网账户页重新生成",
+                "Account key is invalid or has been revoked; you can generate a new one on the website account page");
         try {
             if (!siteProfileService.multiSite()) return base;
             String others = siteProfileService.otherSites().stream()
                     .map(com.checkba.service.site.SiteProfile::displayName)
-                    .reduce((a, b) -> a + "、" + b)
+                    .reduce((a, b) -> a + LangText.of("、", ", ") + b)
                     .orElse(null);
             if (others == null) return base;
-            return base + "。当前站点是「" + siteProfileService.displayName()
-                    + "」；如果你的账户注册在「" + others + "」，切换站点后重试";
+            return base + LangText.of("。当前站点是「" + siteProfileService.displayName()
+                            + "」；如果你的账户注册在「" + others + "」，切换站点后重试",
+                    ". The current site is \"" + siteProfileService.displayName()
+                            + "\"; if your account is registered on \"" + others + "\", switch sites and try again");
         } catch (Exception e) {
             return base;
         }
@@ -335,7 +347,7 @@ public class AccountService {
 
     private static AccountException networkError() {
         return new AccountException(AccountException.Kind.NETWORK,
-                "无法连接 AI Workdeck 服务器，请检查网络后重试");
+                LangText.of("无法连接 AI Workdeck 服务器，请检查网络后重试", "Could not connect to the AI Workdeck server, please check your network and retry"));
     }
 
     private Map<String, Object> parse(String body) {
@@ -345,7 +357,7 @@ public class AccountService {
             return parsed == null ? Map.of() : parsed;
         } catch (Exception e) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "官网返回的内容无法解析，请稍后重试");
+                    LangText.of("官网返回的内容无法解析，请稍后重试", "Could not parse the website's response, please retry shortly"));
         }
     }
 
@@ -382,7 +394,7 @@ public class AccountService {
             restrictPermissions(accountFile);
         } catch (Exception e) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "账户连接状态写入失败，请检查磁盘权限");
+                    LangText.of("账户连接状态写入失败，请检查磁盘权限", "Failed to write the account connection state, please check disk permissions"));
         }
     }
 

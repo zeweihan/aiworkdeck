@@ -223,8 +223,12 @@ const toggleOutput = (idx) => {
 }
 
 // 截断标记由 AgentOrchestrator.truncate 拼在 SSE 载荷末尾（历史里存的是全文，
-// 所以历史消息通常不会命中这一条）。
-const isTruncated = (item) => outputText(item).endsWith('...(截断)')
+// 所以历史消息通常不会命中这一条）。中英双后缀兼容：历史消息与切语言场景都可能
+// 命中任一种后缀，不按当前界面语言二选一判定。
+const isTruncated = (item) => {
+    const text = outputText(item)
+    return text.endsWith('...(截断)') || text.endsWith('...(truncated)')
+}
 
 // 子任务结果解析缓存：流式中 output 每个 token 都在变，不缓存会让
 // SubtaskResultCard 每帧都收到新对象引用而整卡重建。键是 output 原文，

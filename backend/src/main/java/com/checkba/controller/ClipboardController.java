@@ -25,7 +25,7 @@ public class ClipboardController {
     ) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         return ResponseEntity.ok(clipboardService.list(userId, q, limit));
     }
@@ -37,7 +37,7 @@ public class ClipboardController {
     ) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         return ResponseEntity.ok(success(clipboardService.saveText(userId, request.getText())));
     }
@@ -50,12 +50,12 @@ public class ClipboardController {
     ) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         try {
             return ResponseEntity.ok(success(clipboardService.saveFile(userId, file, type)));
         } catch (Exception e) {
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error("保存失败: " + e.getMessage()));
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error(com.checkba.service.LangText.of("保存失败: ", "Save failed: ") + e.getMessage()));
         }
     }
 
@@ -101,12 +101,12 @@ public class ClipboardController {
     ) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
         if (userId == null) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error("请先登录"));
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error(com.checkba.service.LangText.of("请先登录", "Please sign in first")));
         }
         clipboardService.delete(id, userId);
         Map<String, Object> ok = new HashMap<>();
         ok.put("code", 0);
-        ok.put("message", "删除成功");
+        ok.put("message", com.checkba.service.LangText.of("删除成功", "Deleted successfully"));
         ok.put("data", new HashMap<>());
         return ResponseEntity.ok(ok);
     }

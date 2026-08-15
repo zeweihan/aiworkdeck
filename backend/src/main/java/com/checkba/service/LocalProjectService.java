@@ -88,7 +88,7 @@ public class LocalProjectService {
         if (existing.isPresent()) {
             project = existing.get();
             if (!projectMemberService.hasReadPermission(project.getId(), userId)) {
-                throw new IllegalArgumentException("该文件夹已被其他账号的项目使用");
+                throw new IllegalArgumentException(LangText.of("该文件夹已被其他账号的项目使用", "This folder is already in use by another account's project"));
             }
             reused = true;
         } else {
@@ -208,29 +208,29 @@ public class LocalProjectService {
     /** 校验并规范化用户选择的文件夹。 */
     private Path validateLocalRoot(String raw, boolean createFolder) {
         if (!StringUtils.hasText(raw)) {
-            throw new IllegalArgumentException("请选择一个文件夹");
+            throw new IllegalArgumentException(LangText.of("请选择一个文件夹", "Please select a folder"));
         }
         Path p = Paths.get(raw.trim());
         if (!p.isAbsolute()) {
-            throw new IllegalArgumentException("文件夹路径必须是绝对路径");
+            throw new IllegalArgumentException(LangText.of("文件夹路径必须是绝对路径", "The folder path must be absolute"));
         }
         p = p.normalize();
         if (p.getParent() == null) {
-            throw new IllegalArgumentException("不能把整个磁盘根目录作为项目");
+            throw new IllegalArgumentException(LangText.of("不能把整个磁盘根目录作为项目", "You cannot use an entire drive root as a project"));
         }
         Path global = storageResolver.globalRoot();
         if (p.startsWith(global)) {
-            throw new IllegalArgumentException("该位置是软件内部数据目录，请选择其他文件夹");
+            throw new IllegalArgumentException(LangText.of("该位置是软件内部数据目录，请选择其他文件夹", "This location is the application's internal data directory; please choose another folder"));
         }
         if (createFolder) {
             try {
                 Files.createDirectories(p);
             } catch (IOException e) {
-                throw new IllegalArgumentException("创建文件夹失败: " + e.getMessage());
+                throw new IllegalArgumentException(LangText.of("创建文件夹失败: ", "Failed to create folder: ") + e.getMessage());
             }
         }
         if (!Files.isDirectory(p)) {
-            throw new IllegalArgumentException("文件夹不存在或不是目录: " + p);
+            throw new IllegalArgumentException(LangText.of("文件夹不存在或不是目录: ", "Folder does not exist or is not a directory: ") + p);
         }
         return p;
     }
@@ -242,7 +242,8 @@ public class LocalProjectService {
             Path otherRoot = Paths.get(other.getLocalRoot());
             if (root.startsWith(otherRoot) || otherRoot.startsWith(root)) {
                 throw new IllegalArgumentException(
-                        "该文件夹与已有项目「" + other.getName() + "」的文件夹嵌套，请选择互不包含的文件夹");
+                        LangText.of("该文件夹与已有项目「", "This folder overlaps with the folder of the existing project “") + other.getName()
+                                + LangText.of("」的文件夹嵌套，请选择互不包含的文件夹", "”; please choose folders that do not contain each other"));
             }
         }
     }

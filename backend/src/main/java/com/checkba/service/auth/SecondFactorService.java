@@ -2,6 +2,7 @@ package com.checkba.service.auth;
 
 import com.checkba.model.entity.User;
 import com.checkba.repository.UserRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.mail.MailAuthService;
 import com.checkba.service.sms.SmsAuthService;
 import com.checkba.service.totp.TotpService;
@@ -85,11 +86,11 @@ public class SecondFactorService {
     private void verifyTotp(User user, String code) {
         long step = totpService.verify(user.getTotpSecret(), code);
         if (step < 0) {
-            throw new IllegalArgumentException("验证码错误或已过期");
+            throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
         Long lastUsed = user.getTotpLastUsedStep();
         if (lastUsed != null && step <= lastUsed) {
-            throw new IllegalArgumentException("该验证码已使用，请等待下一个验证码");
+            throw new IllegalArgumentException(LangText.of("该验证码已使用，请等待下一个验证码", "This verification code has already been used, please wait for the next one"));
         }
         user.setTotpLastUsedStep(step);
         userRepository.save(user);
@@ -101,7 +102,7 @@ public class SecondFactorService {
     public Setup startSetup(Long userId, String issuer) {
         User user = requireUser(userId);
         if (user.isTotpEnabled()) {
-            throw new IllegalArgumentException("认证器已绑定，请先解绑再重新绑定");
+            throw new IllegalArgumentException(LangText.of("认证器已绑定，请先解绑再重新绑定", "An authenticator is already linked; unlink it first before linking a new one"));
         }
         String secret = totpService.newSecret();
         user.setTotpSecret(secret);
@@ -115,11 +116,11 @@ public class SecondFactorService {
     public void activate(Long userId, String code) {
         User user = requireUser(userId);
         if (!StringUtils.hasText(user.getTotpSecret())) {
-            throw new IllegalArgumentException("尚未开始绑定认证器");
+            throw new IllegalArgumentException(LangText.of("尚未开始绑定认证器", "Authenticator setup has not been started yet"));
         }
         long step = totpService.verify(user.getTotpSecret(), code);
         if (step < 0) {
-            throw new IllegalArgumentException("验证码错误或已过期");
+            throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
         user.setTotpEnabled(true);
         user.setTotpLastUsedStep(step);
@@ -137,7 +138,7 @@ public class SecondFactorService {
             return;
         }
         if (totpService.verify(user.getTotpSecret(), code) < 0) {
-            throw new IllegalArgumentException("验证码错误或已过期");
+            throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
         clearTotp(user);
     }
@@ -157,7 +158,7 @@ public class SecondFactorService {
 
     private User requireUser(Long userId) {
         return userRepository.findById(userId)
-                .orElseThrow(() -> new IllegalArgumentException("用户不存在: " + userId));
+                .orElseThrow(() -> new IllegalArgumentException(LangText.of("用户不存在: ", "User does not exist: ") + userId));
     }
 
     /** 绑定所需的两样东西：手工录入的密钥、扫码用的 otpauth URI。 */

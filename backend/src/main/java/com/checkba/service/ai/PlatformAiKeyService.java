@@ -4,6 +4,7 @@ import com.checkba.model.entity.AccountBinding;
 import com.checkba.model.entity.PlatformAiKey;
 import com.checkba.repository.AccountBindingRepository;
 import com.checkba.repository.PlatformAiKeyRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.account.AccountException;
 import com.checkba.service.account.AccountService;
 import lombok.extern.slf4j.Slf4j;
@@ -142,7 +143,8 @@ public class PlatformAiKeyService {
     public void provision(Long userId, String awdkKey) {
         if (!cipher.isConfigured()) {
             throw new AccountException(AccountException.Kind.CONFLICT,
-                    "本服务器未配置平台 AI 通道密钥的存储密钥，暂无法启用该通道");
+                    LangText.of("本服务器未配置平台 AI 通道密钥的存储密钥，暂无法启用该通道",
+                            "This server has no storage secret configured for the platform AI channel key; this channel cannot be enabled yet"));
         }
         Map<String, Object> body = accountService.fetchAiKeyWith(awdkKey);
         String plaintext = String.valueOf(body.get("openrouterKey"));
@@ -170,20 +172,24 @@ public class PlatformAiKeyService {
         String key = awdkKey == null ? "" : awdkKey.trim();
         if (key.isEmpty() || !key.startsWith(KEY_PREFIX)) {
             throw new AccountException(AccountException.Kind.UNAUTHORIZED,
-                    "账户 Key 格式不正确，应以 awdk_ 开头（在官网账户页「桌面连接」生成）");
+                    LangText.of("账户 Key 格式不正确，应以 awdk_ 开头（在官网账户页「桌面连接」生成）",
+                            "Invalid account key format; it must start with awdk_ (generate one on the website account page under \"Desktop Connection\")"));
         }
         AccountBinding binding = bindingRepository.findByUserId(userId)
                 .orElseThrow(() -> new AccountException(AccountException.Kind.CONFLICT,
-                        "该账号尚未通过账户 Key 完成直连，无法刷新平台 AI 通道额度"));
+                        LangText.of("该账号尚未通过账户 Key 完成直连，无法刷新平台 AI 通道额度",
+                                "This account has not been connected via an account key yet; the platform AI channel Credits cannot be refreshed")));
         Map<String, Object> me = accountService.fetchProfileWith(key);
         Object accountId = me.get("accountId");
         if (accountId == null || String.valueOf(accountId).isBlank()) {
             throw new AccountException(AccountException.Kind.MALFORMED,
-                    "官网账户信息缺少 accountId 字段，本服务器暂无法完成额度刷新");
+                    LangText.of("官网账户信息缺少 accountId 字段，本服务器暂无法完成额度刷新",
+                            "The website account information is missing the accountId field; this server cannot refresh Credits yet"));
         }
         if (!binding.getExternalAccountId().equals(String.valueOf(accountId))) {
             throw new AccountException(AccountException.Kind.CONFLICT,
-                    "这枚账户 Key 属于另一个 AI Workdeck 账户，与本账号的直连关系不一致");
+                    LangText.of("这枚账户 Key 属于另一个 AI Workdeck 账户，与本账号的直连关系不一致",
+                            "This account key belongs to a different AI Workdeck account and does not match this account's connection"));
         }
         provision(userId, key);
     }

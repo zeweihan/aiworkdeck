@@ -1,5 +1,6 @@
 package com.checkba.controller;
 
+import com.checkba.service.LangText;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -43,11 +44,11 @@ public class BrowserProxyController {
             @RequestParam("url") String url,
             @RequestParam(value = "token", required = false) String token) {
         if (!StringUtils.hasText(url)) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("url 不能为空");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(LangText.of("url 不能为空", "url must not be empty"));
         }
         String u = url.trim();
         if (!(u.startsWith("http://") || u.startsWith("https://"))) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("仅支持 http/https");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(LangText.of("仅支持 http/https", "Only http/https is supported"));
         }
 
         try {
@@ -57,12 +58,12 @@ public class BrowserProxyController {
             for (int hop = 0; hop < 5; hop++) {
                 String scheme = uri.getScheme();
                 if (scheme == null || !(scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))) {
-                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body("仅支持 http/https");
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body(LangText.of("仅支持 http/https", "Only http/https is supported"));
                 }
                 // 网段清单统一由 SsrfGuard 维护：本控制器原先自己判断，漏了 100.64.0.0/10
                 // （阿里云实例元数据 100.100.100.200 就在其中，能换取实例 RAM 凭证）与 IPv6 ULA
                 if (com.checkba.util.SsrfGuard.rejectIfBlocked(uri.toString()) != null) {
-                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body("目标地址不被允许（已禁止本地/内网地址）");
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN).body(LangText.of("目标地址不被允许（已禁止本地/内网地址）", "Target address is not allowed (local/internal addresses are blocked)"));
                 }
                 HttpRequest req = HttpRequest.newBuilder(uri)
                         .GET()
@@ -80,7 +81,7 @@ public class BrowserProxyController {
                 break;
             }
             if (resp == null) {
-                return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("代理失败: 无响应");
+                return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(LangText.of("代理失败: 无响应", "Proxy failed: no response"));
             }
 
             String contentType = resp.headers().firstValue("content-type").orElse("application/octet-stream");
@@ -104,7 +105,7 @@ public class BrowserProxyController {
             return new ResponseEntity<>(resp.body(), headers, HttpStatus.OK);
         } catch (Exception e) {
             log.warn("BrowserProxy failed: {}", e.getMessage());
-            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body("代理失败: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(LangText.of("代理失败: ", "Proxy failed: ") + e.getMessage());
         }
     }
 

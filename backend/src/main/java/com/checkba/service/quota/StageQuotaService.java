@@ -3,6 +3,7 @@ package com.checkba.service.quota;
 import com.checkba.exception.StageQuotaExceededException;
 import com.checkba.model.entity.ProjectFile;
 import com.checkba.repository.ProjectFileRepository;
+import com.checkba.service.LangText;
 import com.checkba.service.entitlement.EntitlementService;
 import com.checkba.service.entitlement.FeatureCatalog;
 import lombok.extern.slf4j.Slf4j;
@@ -139,14 +140,20 @@ public class StageQuotaService {
 
         if (newCount > FREE_MAX_FILES) {
             throw new StageQuotaExceededException(
-                    "文件缓存区免费版最多存放 " + FREE_MAX_FILES + " 个文件，当前已有 " + count
-                            + " 个。已有文件不会被删除，可以先移出几个，或解锁无限版。",
+                    LangText.of(
+                            "文件缓存区免费版最多存放 " + FREE_MAX_FILES + " 个文件，当前已有 " + count
+                                    + " 个。已有文件不会被删除，可以先移出几个，或解锁无限版。",
+                            "The free File Staging Area holds at most " + FREE_MAX_FILES + " files; you currently have " + count
+                                    + ". Existing files won't be deleted — move some out first, or unlock the Unlimited edition."),
                     count, bytes, FREE_MAX_FILES, FREE_MAX_BYTES);
         }
         if (newBytes > FREE_MAX_BYTES) {
             throw new StageQuotaExceededException(
-                    "文件缓存区免费版总量上限 " + formatMb(FREE_MAX_BYTES) + "，当前已用 " + formatMb(bytes)
-                            + "。已有文件不会被删除，可以先移出几个，或解锁无限版。",
+                    LangText.of(
+                            "文件缓存区免费版总量上限 " + formatMb(FREE_MAX_BYTES) + "，当前已用 " + formatMb(bytes)
+                                    + "。已有文件不会被删除，可以先移出几个，或解锁无限版。",
+                            "The free File Staging Area caps total size at " + formatMb(FREE_MAX_BYTES) + "; you've used " + formatMb(bytes)
+                                    + ". Existing files won't be deleted — move some out first, or unlock the Unlimited edition."),
                     count, bytes, FREE_MAX_FILES, FREE_MAX_BYTES);
         }
     }
