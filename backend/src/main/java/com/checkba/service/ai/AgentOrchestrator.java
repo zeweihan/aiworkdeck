@@ -52,6 +52,9 @@ public class AgentOrchestrator {
 
     // 流无活动看门狗：超过该秒数没有任何 token 到达即判定本轮停滞（配合 timeout 调大后的兜底）
     private static final int STREAM_INACTIVITY_TIMEOUT_SECONDS = 180;
+    // 首字节时限：一个 token 都没到过时用这条（短得多）。停滞时限要照顾"生成长工具参数时中途静默"，
+    // 但"从头到尾零字节"没有这种正当理由，让用户干等满 180s 纯粹是白等
+    private static final int STREAM_FIRST_TOKEN_TIMEOUT_SECONDS = 60;
     private static final java.util.concurrent.ScheduledExecutorService LLM_RETRY_SCHEDULER =
             java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "llm-retry-scheduler");
@@ -1117,7 +1120,7 @@ public class AgentOrchestrator {
         }));
 
         // 无活动看门狗：timeout 调大后，"流悄悄停了但不回调"的场景由它兜底终止本轮
-        handler.armInactivityWatchdog(STREAM_INACTIVITY_TIMEOUT_SECONDS);
+        handler.armInactivityWatchdog(STREAM_FIRST_TOKEN_TIMEOUT_SECONDS, STREAM_INACTIVITY_TIMEOUT_SECONDS);
 
         // 自动 compaction：消息栈在长任务里只增不减，撑破上下文会 400 或质量塌方。
         // 原地替换（而不是换个列表实例）——递归各层与两处回调共享同一个 messages 引用

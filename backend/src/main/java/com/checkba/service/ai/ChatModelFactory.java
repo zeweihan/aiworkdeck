@@ -367,6 +367,37 @@ public class ChatModelFactory {
         });
     }
 
+    /**
+     * 两个流式通道（平台通道 / OpenRouter BYOK）共用的构建口径。
+     *
+     * <p><b>logResponses 必须为 false，这是可靠性契约不是调优。</b>openai4j 0.23 的
+     * {@code StreamingRequestExecutor$2.onFailure} 在该开关打开时，会先对 response 调
+     * {@code ResponseLoggingInterceptor.log(...)}，之后才走 errorHandler；而 okhttp-sse 的
+     * {@code RealEventSource.onFailure(call, e)} 在「连接失败/被断、压根没拿到响应」这条路径上
+     * 传的 response <b>恒为 null</b>，于是 log() 里的 {@code response.code()} 抛 NPE，
+     * 而 onFailure 只 catch IOException —— 异常掀掉 OkHttp Dispatcher 线程，
+     * <b>紧随其后的 errorHandler 那一行永远走不到</b>。
+     * 表现是本轮既不 onComplete 也不 onError：传输层错误被整条吞掉，
+     * 只能等 {@link AgentStreamHandler} 的看门狗兜底（AGENT 模式下用户干等三分钟）。
+     * 关掉后 onFailure 直接走 errorHandler，错误正常传到编排器的分类重试（IOException → TRANSIENT）。
+     *
+     * <p>顺带一提这两行 DEBUG 日志本来也没人看：全仓没有任何 logging 级别配置，
+     * {@code dev.ai4j.openai4j} 停在 Spring 默认的 INFO，一行都不会打印；
+     * 但 slf4j 的参数是提前求值的，所以 NPE 照抛。
+     *
+     * <p>非流式的 {@code OpenAiChatModel} 走 SyncRequestExecutor，没有这条路径，故不受影响。
+     */
+    static dev.langchain4j.model.openai.OpenAiStreamingChatModel.OpenAiStreamingChatModelBuilder
+            streamingBuilder(String apiKey, String baseUrl, String modelId, java.time.Duration timeout) {
+        return dev.langchain4j.model.openai.OpenAiStreamingChatModel.builder()
+                .apiKey(apiKey)
+                .baseUrl(baseUrl)
+                .modelName(modelId)
+                .timeout(timeout)
+                .logRequests(true)
+                .logResponses(false);
+    }
+
     private dev.langchain4j.model.chat.StreamingChatLanguageModel getOrCreatePlatformStreamingModel(String modelId) {
         recordModelUse("AWD_CLOUD", modelId, true);
         String apiKey = platformApiKey();
@@ -374,13 +405,7 @@ public class ChatModelFactory {
         return streamingModelCache.computeIfAbsent(cacheKey, k -> {
             log.info("Creating new AWD Cloud StreamingChatModel for: {}", modelId);
             AiModelProperties.OpenRouter config = aiModelProperties.getOpenRouter();
-            return dev.langchain4j.model.openai.OpenAiStreamingChatModel.builder()
-                    .apiKey(apiKey)
-                    .baseUrl(config.getBaseUrl())
-                    .modelName(modelId)
-                    .timeout(config.getTimeout())
-                    .logRequests(true)
-                    .logResponses(true)
+            return streamingBuilder(apiKey, config.getBaseUrl(), modelId, config.getTimeout())
                     .build();
         });
     }
@@ -439,13 +464,7 @@ public class ChatModelFactory {
             String apiKey = resolveOpenRouterApiKey();
             String baseUrl = resolveOpenRouterBaseUrl();
             
-            return dev.langchain4j.model.openai.OpenAiStreamingChatModel.builder()
-                    .apiKey(apiKey)
-                    .baseUrl(baseUrl)
-                    .modelName(modelId)
-                    .timeout(config.getTimeout())
-                    .logRequests(true)
-                    .logResponses(true)
+            return streamingBuilder(apiKey, baseUrl, modelId, config.getTimeout())
                     // .defaultRequestProperties(Map.of(
                     //         "HTTP-Referer", "https://checkba.com",
                     //         "X-Title", "Checkba AI Workdeck"

@@ -52,25 +52,40 @@ public class AgentStreamHandler implements StreamingResponseHandler<AiMessage> {
     }
 
     /**
-     * 启动无活动看门狗：连续 inactivitySeconds 无任何 token 到达则主动以超时错误终止本轮
+     * 启动流式看门狗：无任何 token 到达即主动以超时错误终止本轮
      * （走 onError 路径，可被编排器的瞬时错误重试接住）。
      * 背景：langchain4j 0.36 的单一 timeout 是整通调用墙钟上限；把它调大之后，
      * "流悄悄断了但既不 onComplete 也不 onError"的场景需要这层兜底，否则会话永久 RUNNING。
+     *
+     * <p><b>两条时限是分开的，别合成一个值</b>：
+     * <ul>
+     *   <li>{@code firstTokenSeconds} —— 一个 token 都还没到过。流式端点上零字节静默这么久基本等于已经死了，
+     *       没必要陪着等满整个停滞时限（用户体感就是"点了发送什么都没有"）。这条只在
+     *       {@link #streamedAnyToken} 为 false 时生效，而这恰好就是编排器判定"可安全重放"的条件，
+     *       所以误杀的代价上限是白跑一轮，不会让用户看到重复或半截内容。</li>
+     *   <li>{@code inactivitySeconds} —— 已经在吐了但中途断供。这条必须给足：模型生成长工具参数时
+     *       中间静默几十秒是正常的，砍短了会误杀正常轮次。</li>
+     * </ul>
      */
-    public void armInactivityWatchdog(int inactivitySeconds) {
+    public void armInactivityWatchdog(int firstTokenSeconds, int inactivitySeconds) {
         lastActivityNanos = System.nanoTime();
         watchdogFuture = WATCHDOG.scheduleWithFixedDelay(() -> {
             if (terminated.get()) return;
             long idleSec = (System.nanoTime() - lastActivityNanos) / 1_000_000_000L;
-            if (idleSec >= inactivitySeconds) {
-                log.warn("Stream inactive for {}s (limit {}s) for {}, terminating round via watchdog",
-                        idleSec, inactivitySeconds, conversationId);
-                onError(new java.util.concurrent.TimeoutException(
-                        com.checkba.service.LangText.of(
-                                "流式响应停滞超过 " + inactivitySeconds + " 秒",
-                                "Streaming response stalled for more than " + inactivitySeconds + " seconds")));
+            boolean started = streamedAnyToken;
+            int limitSec = started ? inactivitySeconds : firstTokenSeconds;
+            if (idleSec >= limitSec) {
+                log.warn("Stream {} for {}s (limit {}s) for {}, terminating round via watchdog",
+                        started ? "stalled" : "produced no token", idleSec, limitSec, conversationId);
+                onError(new java.util.concurrent.TimeoutException(started
+                        ? com.checkba.service.LangText.of(
+                                "流式响应停滞超过 " + limitSec + " 秒",
+                                "Streaming response stalled for more than " + limitSec + " seconds")
+                        : com.checkba.service.LangText.of(
+                                "模型 " + limitSec + " 秒内没有返回任何内容",
+                                "Model returned nothing within " + limitSec + " seconds")));
             }
-        }, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
+        }, 5, 5, java.util.concurrent.TimeUnit.SECONDS);
     }
 
     private void cancelWatchdog() {
