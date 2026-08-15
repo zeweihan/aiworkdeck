@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { localeValuesOf } from './_locale-text.mjs'
 
 const SRC = readFileSync(
   resolve(dirname(fileURLToPath(import.meta.url)), '../../src/components/project-home/ActivityFeed.vue'),
@@ -14,6 +15,9 @@ const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.me
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 const CODE = stripComments(SRC)
+// 文案类禁字断言要看组件实际引用的 locale 值——只查源码的话，
+// 迁移后把 locale 改成禁用词也拦不住（见 _locale-text.mjs）。
+const CODE_TEXT = CODE + '\n' + localeValuesOf(SRC)
 
 test('e2e 锚点：根节点类名是 activity-feed', () => {
   assert.ok(SRC.includes('class="activity-feed"'))
@@ -31,7 +35,7 @@ test('unavailable 走中性引导态而不是错误态', () => {
   assert.ok(ZH.includes('这份案卷还没有版本记录'), '文案已迁 locale')
   assert.ok(SRC.includes('noVersionHistoryTitle'), '组件要引用该 key')
   for (const bad of ['读取失败', '加载失败', '出错了', '请重试'])
-    assert.ok(!CODE.includes(bad), 'unavailable 不许是错误文案: ' + bad)
+    assert.ok(!CODE_TEXT.includes(bad), 'unavailable 不许是错误文案: ' + bad)
 })
 
 test('空列表另有一条空态文案，与 unavailable 分开', () => {
