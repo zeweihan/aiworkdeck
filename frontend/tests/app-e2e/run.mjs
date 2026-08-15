@@ -30,6 +30,10 @@
 //  - 页面/列表异步渲染，点击前必须 waitFor，固定 sleep 不可靠
 //  - 编辑器 LOWA 需 COOP/COEP + Electron webview，浏览器目标只验容器不验引擎
 //    （引擎键盘链路由 tests/lowa-e2e 专门覆盖）
+//  - 切语言必须整页 reload：i18n 单例的 locale 与 utils/appLanguage.js 的模块级
+//    cached 都在模块加载时定死，uni 的 hash 跳转不产生新 document，改了存储也
+//    不生效（admin 页面栈缓存同理，J11 连接步骤的注释有实证）。语言键
+//    awd_app_language 直写 localStorage 裸字符串即可（uni h5 getStorageSync 兼容）
 //
 // Env: APP_E2E_BASE / APP_E2E_BACKEND / PUPPETEER_EXECUTABLE_PATH
 
@@ -1509,6 +1513,126 @@ try {
       }
     })
   }
+
+  // ============ J12 英文走查（EN 发版门） ============
+  // 发版前的英文界面回归：切 en-US 后工作台四列关键锚点必须是英文、AI 过程卡
+  // 工具名不许漏中文。断言面刻意保持最小集（rail 的 title 属性 + .sidebar-title
+  // 文本 + .tool-name 无 CJK）——英文文案断言越多越脆，措辞微调不该红整个套件；
+  // 概览页/列表页/版本面板虽已迁移，也不进 J12 断言面。
+  // 陷阱（顶部注释同款）：切语言必须整页 reload——i18n 单例 locale 与
+  // appLanguage 的模块级 cached 都在模块加载时定死，hash 跳转/reLaunch 都不够。
+  // evaluateOnNewDocument 与当前文档两处都写：J1 在 evaluateOnNewDocument 里
+  // 钉死了 zh-CN，后注册的桩在新文档里后执行才能盖过它。
+  console.log('== J12 英文走查 ==')
+
+  await step('J12 切 en-US 并整页 reload 生效', async () => {
+    await page.evaluateOnNewDocument(() => {
+      try { localStorage.setItem('awd_app_language', 'en-US') } catch (e) { /* ignore */ }
+    })
+    await page.evaluate(() => localStorage.setItem('awd_app_language', 'en-US'))
+    await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+      { waitUntil: 'networkidle2', timeout: 30000 })
+    await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
+    await page.waitForSelector('[title="Explorer"]', { timeout: 20000 })
+  })
+
+  await step('J12 工作台四列英文锚点（rail title 属性）', async () => {
+    for (const title of ['Explorer', 'Version History', 'AI Assistant', 'Staging Area']) {
+      await page.waitForSelector('[title="' + title + '"]', { timeout: 15000 })
+    }
+  })
+
+  await step('J12 左栏面板标题是 Explorer（.sidebar-title 文本）', async () => {
+    // 左栏面板 key 跨 reload 持久（J11/J10 收尾停在版本面板），先点 rail 切回
+    // 资源管理器——顺带就是对 [title="Explorer"] 这个英文锚点的真实点击验证。
+    await mouseClickSel('[title="Explorer"]')
+    // 大小写不敏感：.sidebar-title 带 text-transform:uppercase，而 innerText 返回的是
+    // 变换后的文本（"EXPLORER"）——按原文大小写断言会永远失败。
+    await page.waitForFunction(() => {
+      const el = document.querySelector('.sidebar-title')
+      return !!el && el.innerText.trim().toLowerCase() === 'explorer'
+    }, { timeout: 15000 })
+  })
+
+  await step('J12 反向护栏：不出现工作台中文空态文案', async () => {
+    // 只钉这一个具体串（文件名等用户数据本来就含中文，不能全页禁 CJK）。
+    const t = await textOf()
+    if (t.includes('选择文件开始工作')) {
+      throw new Error('en-US 下工作台仍出现中文空态文案「选择文件开始工作」')
+    }
+  })
+  await shot('j12-en-workbench')
+
+  await step('J12 编辑区空态文案是英文', async () => {
+    // 刻意不在这里点开文档：J12 跑在 J1-J11 之后，文件树带着前序旅程留下的选中态
+    // （顶部浮出批量操作条、文件名被省略号截断），点击落点不可靠——实测点出过
+    // 重命名输入框、也被操作条吃过点击。而「能不能打开文档」中文侧 J5 已经覆盖，
+    // 与语言无关（文件名是用户数据、引擎 UI 归 lowa-e2e）。这里只钉真正属于
+    // i18n 的那一面：空态文案必须是英文。
+    await page.waitForFunction(() => {
+      const t = document.body.innerText || ''
+      return t.includes('Select a file to get started')
+    }, { timeout: 15000 })
+  })
+
+  if (process.env.AI_E2E !== '0') {
+    await step('J12 AI 面板输入区英文', async () => {
+      if (!(await page.$('.chat-input-rich'))) await mouseClickSel('[title="AI Assistant"]')
+      await page.waitForSelector('.chat-input-rich', { timeout: 10000 })
+      // 只断言输入框占位：面板里其余固定文案要么本来就是英文原文（模式名
+      // Agent/Ask/Plan、Ask anything…，中英同值、没有鉴别力），要么与用户数据
+      // 混排（历史消息含中文提问，整体禁 CJK 会误报），要么依赖会话状态才渲染
+      // （Modified/New 两个文件变更 chip 要发过消息才出现）。面板真正有鉴别力的
+      // 那一面是下一步的过程卡工具名。
+      const ph = await page.evaluate(() => {
+        const el = document.querySelector('.chat-input-rich')
+        return el ? (el.getAttribute('data-placeholder') || '') : ''
+      })
+      if (/[一-鿿]/.test(ph)) throw new Error('en-US 下 AI 输入框占位仍是中文: ' + ph)
+      await shot('j12-en-ai-panel')
+    })
+
+    await step('J12 英文指令过程卡工具名不含中文', async () => {
+      await mouseClickSel('.chat-input-rich')
+      await page.keyboard.type('List the files in this project, then reply with just: E2E OK', { delay: 10 })
+      await mouseClickSel('.send-btn')
+      // 工具名是否出现取决于模型这一轮选不选工具——这是 LLM 不确定性，不该让发版门
+      // 因此变红。所以这一步是「出现了就必须英文」：等到有工具名就断言无 CJK；
+      // 一直没有则记 skip 信号（人工按信号复看），不判失败。
+      // 已实测过一种会稳定落进 skip 的既有故障，别误判成英文特有问题：AGENT 模式
+      // 下带工具定义的流式请求会零字节停滞 180s 直到 watchdog 兜底（后端日志伴随
+      // OkHttp "Cannot invoke Response.code() because response is null" 的 NPE）。
+      // 中文模式发同样需要调工具的指令一样会停滞——语言不是变量。
+      let names = []
+      try {
+        await page.waitForFunction(() => {
+          const n = [...document.querySelectorAll('.process-card .tool-name')]
+            .map((e) => (e.innerText || '').trim()).filter(Boolean)
+          return n.length >= 1
+        }, { timeout: 120000 })
+        names = await page.evaluate(() =>
+          [...document.querySelectorAll('.process-card .tool-name')]
+            .map((e) => (e.innerText || '').trim()).filter(Boolean))
+      } catch (e) {
+        note('skip', 'J12 本轮模型未产出工具调用（' + (e && e.message ? e.message.split('\n')[0] : e) + '），过程卡工具名断言未执行')
+        return
+      }
+      const bad = names.filter((t) => /[一-鿿]/.test(t))
+      if (bad.length) throw new Error('en-US 下过程卡工具名仍含中文: ' + JSON.stringify(bad))
+      await shot('j12-en-process-card')
+    })
+  } else {
+    note('skip', 'AI_E2E=0，J12 英文 AI 过程卡断言已跳过')
+  }
+
+  await step('J12 还原 zh-CN 并整页 reload', async () => {
+    await page.evaluateOnNewDocument(() => {
+      try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ }
+    })
+    await page.evaluate(() => localStorage.setItem('awd_app_language', 'zh-CN'))
+    await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
+    await page.waitForSelector('[title="资源管理器"]', { timeout: 20000 })
+  })
 } finally {
   await browser.close()
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）
