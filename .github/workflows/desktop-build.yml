@@ -565,3 +565,65 @@ jobs:
             官网 / Website: https://www.aiworkdeck.com
 
             ---
+
+  # 发版收尾：把安装包从 runner 直接推到官网镜像。
+  #
+  # 为什么不靠服务器上的 cron（deploy/update-mirror-sync.sh 反向拉 GitHub）：
+  # 境内 ECS 从 GitHub 拉 1.4GB 安装包实测只有 12 KB/s（同一时刻本机 7.1 MB/s），
+  # 一个包要 32 小时；而卡住的那次持有 flock，之后每小时的 cron 全被「已有实例
+  # 在跑」跳过——官网下载区一直停在上一版且不会自愈（v0.16.0 实测，最后靠人工
+  # 下载再 rsync 上去才补上）。runner 在境外，上行不受这条限制。
+  #
+  # cron 那条链路保留不动：它仍负责补丁包与 manifest，也是这条推送失败时的兜底。
+  sync-mirror:
+    name: Sync installers to mirror
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built installers
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: aiworkdeck-*
+          merge-multiple: true
+      - name: Push to mirror
+        env:
+          MIRROR_HOST: ${{ secrets.MIRROR_HOST }}
+          MIRROR_SSH_KEY: ${{ secrets.MIRROR_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MIRROR_SSH_KEY:-}" ] || [ -z "${MIRROR_HOST:-}" ]; then
+            echo "::warning::未配置 MIRROR_SSH_KEY / MIRROR_HOST，跳过镜像推送（服务器 cron 会兜底，但境内拉包极慢）"
+            exit 0
+          fi
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$MIRROR_SSH_KEY" > ~/.ssh/mirror_key
+          chmod 600 ~/.ssh/mirror_key
+          ssh-keyscan -H "$MIRROR_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          ls -la artifacts
+          DEST=/www/wwwroot/update/desktop/installers
+          SSH_OPTS="-i $HOME/.ssh/mirror_key -o IdentitiesOnly=yes -o ServerAliveInterval=20"
+          # --partial --append-verify：这条链路断过（scp 传到 694MB/1437MB 掉线），
+          # 断点续传比重传整包可靠。
+          for f in artifacts/*.dmg artifacts/*.exe; do
+            [ -e "$f" ] || continue
+            want=$(stat -c%s "$f")
+            echo "→ $(basename "$f") ($want bytes)"
+            for try in 1 2 3 4 5; do
+              rsync -e "ssh $SSH_OPTS" --partial --append-verify --timeout=120 \
+                "$f" "root@$MIRROR_HOST:$DEST/" && break
+              echo "第 $try 次未传完，续传重试"; sleep 10
+            done
+            got=$(ssh $SSH_OPTS "root@$MIRROR_HOST" "stat -c%s '$DEST/$(basename "$f")' 2>/dev/null || echo 0")
+            [ "$got" = "$want" ] || { echo "::error::$(basename "$f") 传输不完整（$got/$want）"; exit 1; }
+          done
+
+          # 安装包已就位，跑一次同步脚本让它补 latest.json 与补丁包（会 skip exists）
+          ssh $SSH_OPTS "root@$MIRROR_HOST" \
+            'cd /www/wwwroot/update/desktop && bash update-mirror-sync.sh' | tail -8
+
+          echo "校验 latest.json 指向 ${GITHUB_REF_NAME}"
+          curl -fsS --max-time 20 https://www.aiworkdeck.com/update/desktop/installers/latest.json | tee /tmp/latest.json
+          grep -q "\"${GITHUB_REF_NAME}\"" /tmp/latest.json || { echo "::error::latest.json 未指向 ${GITHUB_REF_NAME}"; exit 1; }
