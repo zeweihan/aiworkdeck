@@ -7,6 +7,16 @@ const apiBaseUrl = apiBaseArg ? apiBaseArg.slice('--checkba-api-base='.length) :
 
 contextBridge.exposeInMainWorld('checkbaDesktop', {
   apiBaseUrl,
+  // 窗口外壳：无边框窗口下渲染层要自己让出交通灯/窗口控件的位置，
+  // 得知道跑在哪个平台、以及此刻是不是全屏（全屏时交通灯隐藏）。
+  chrome: {
+    platform: process.platform,
+    onState: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:chrome-state', listener)
+      return () => ipcRenderer.removeListener('checkba:chrome-state', listener)
+    }
+  },
   app: {
     onOpenInternal: (handler) => {
       const listener = (_evt, data) => handler && handler(data)

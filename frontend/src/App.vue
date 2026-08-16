@@ -5,12 +5,16 @@ import { track } from '@/utils/telemetryClient.js'
 import { host, isDesktopHost } from '@/services/host.js'
 import { mountFeedbackWidget } from '@/utils/feedbackWidget.js'
 import { mountRecordingIndicator } from '@/utils/recordingIndicator.js'
+import { initWindowChrome } from '@/utils/windowChrome.js'
 import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
 
 export default {
   onLaunch: function () {
     console.log('App Launch')
+    // 无边框窗口适配：挂平台/全屏 class + 页面级拖拽条。最早做，
+    // 免得启动页先渲染出来再跳一下（见 utils/windowChrome.js）。
+    initWindowChrome()
     // 应用语言：最早读一次（首启在此完成猜测并持久化），并把镜像写透到
     // 桌面主进程（菜单等原生文案）与后端 system_setting（prompt/文案语言）。
     // 之后语言切换（设置页 setAppLanguage）经 APP_LANGUAGE_EVENT 走同一条同步链。
@@ -167,5 +171,101 @@ uni-toast .uni-toast {
 }
 uni-toast .uni-toast__content {
     color: #fff;
+}
+
+/* ============ 无边框窗口：给系统窗口控件让位 ============
+   桌面壳去掉了系统标题栏（main.js titleBarStyle: 'hidden'），窗口控件浮在
+   网页内容上。类名由 utils/windowChrome.js 挂在 documentElement 上。
+   设计见 docs/superpowers/specs/2026-08-16-desktop-chrome-and-command-menu.md */
+
+/* 选择器一律写成 html.is-xxx：组件的 scoped 样式带 [data-v-] 属性选择器，
+   跟 `.is-mac .project-header` 同权重（0,2,0），而它注入得更晚会赢。
+   加上元素选择器变成 (0,2,1) 才压得住 project-overview.scss 的 `padding: 0 18px`。 */
+
+/* 工作台顶栏就是标题栏：空白处可拖动窗口 */
+html.is-desktop .project-header {
+    -webkit-app-region: drag;
+}
+
+/* 顶栏里每一个能点的东西都必须显式退出拖拽区。
+   漏掉一个，那个按钮就点不动——这是本段最容易出错的地方，加控件时记得同步。 */
+html.is-desktop .project-header .project-name,
+html.is-desktop .project-header .rename-container,
+html.is-desktop .project-header .rename-input,
+html.is-desktop .project-header .project-switcher,
+html.is-desktop .project-header .switcher-mask,
+html.is-desktop .project-header .switcher-menu,
+html.is-desktop .project-header .project-status-badge,
+html.is-desktop .project-header .work-status-chip,
+html.is-desktop .project-header .collab-chip,
+html.is-desktop .project-header .trial-chip,
+html.is-desktop .project-header .header-center,
+html.is-desktop .project-header .header-tools,
+html.is-desktop .project-header .top-bar-btn,
+html.is-desktop .project-header .icon-btn {
+    -webkit-app-region: no-drag;
+}
+
+/* mac：三颗交通灯占住左上角（右缘约 72px，留 16px 呼吸） */
+html.is-mac .project-header {
+    padding-left: 88px;
+}
+/* 全屏时交通灯隐藏，留白归零 */
+html.is-mac.is-fullscreen .project-header {
+    padding-left: 18px;
+}
+
+/* win：右上角原生最小化/最大化/关闭 */
+html.is-win .project-header {
+    padding-right: 148px;
+}
+
+/* 没有自己顶栏的页面（登录、项目列表、设置…）的拖拽条。
+   工作台的 .project-header（z-index 200）盖在它上面，那边不受影响。 */
+.awd-window-drag-strip {
+    display: none;
+}
+html.is-desktop .awd-window-drag-strip {
+    display: block;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 38px;
+    -webkit-app-region: drag;
+    z-index: 1;
+}
+
+/* ---- 逐页让位：只加在真机走查确认「左上角本来就有内容」的页面上 ----
+   不做全局 padding 注入——13 个页面布局差异太大，全局注入必然出回归。
+   走查方法与结论见 spec §3.4；改这几个页面的顶部结构时记得回来看一眼。
+
+   走查结论（1400x900，mac）：13 页里只有 login / variable-library /
+   plugin-market 三页的左上角压着实体内容，其余页面顶部是空白背景，
+   拖拽条覆盖率 100%。 */
+
+/* login：整条 top-nav 就是这一页的标题栏 */
+html.is-desktop .top-nav {
+    -webkit-app-region: drag;
+}
+html.is-desktop .top-nav .nav-item,
+html.is-desktop .top-nav .nav-logo {
+    -webkit-app-region: no-drag;
+}
+html.is-mac .top-nav {
+    padding-left: 96px;
+}
+html.is-win .top-nav {
+    padding-right: 160px;
+}
+
+/* variable-library：顶部卡片里的项目名紧贴左边 */
+html.is-mac .page-variable-library .header-card {
+    padding-left: 96px;
+}
+
+/* plugin-market：hero 的分类标签在最上一行 */
+html.is-desktop .page-plugin-market .hero {
+    padding-top: 38px;
 }
 </style>

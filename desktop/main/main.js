@@ -294,6 +294,16 @@ function createMainWindow() {
     width: 1400,
     height: 900,
     icon: path.join(__dirname, '../../frontend/src/static/icon.png'),
+    // 无边框：窗口控件并进渲染层已有的 .project-header（42px），系统标题栏不再单占
+    // 一条。设计见 docs/superpowers/specs/2026-08-16-desktop-chrome-and-command-menu.md。
+    titleBarStyle: 'hidden',
+    // mac：精确摆位，13 + 14/2 = 20 = 42px 顶栏的垂直中心。
+    // 不用 hiddenInset——那个按系统默认标题栏高度摆，压不准我们的 42px。
+    ...(process.platform === 'darwin' ? { trafficLightPosition: { x: 18, y: 13 } } : {}),
+    // win：原生最小化/最大化/关闭覆盖在右上角，高度对齐顶栏
+    ...(process.platform === 'win32'
+      ? { titleBarOverlay: { color: '#ffffff', symbolColor: '#3c4043', height: 42 } }
+      : {}),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       additionalArguments: ['--checkba-api-base=http://127.0.0.1:' + backendPort],
@@ -328,6 +338,23 @@ function createMainWindow() {
     }
     mainWindow.loadFile(distPath)
   }
+
+  // 无边框窗口：全屏时 mac 的交通灯会隐藏，渲染层顶栏左侧那段留白必须跟着归零，
+  // 否则全屏下项目名会莫名其妙缩进 88px。渲染层收在 windowChrome.js。
+  const sendChromeState = () => {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('checkba:chrome-state', {
+          fullscreen: mainWindow.isFullScreen(),
+        })
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+  mainWindow.on('enter-full-screen', sendChromeState)
+  mainWindow.on('leave-full-screen', sendChromeState)
+  mainWindow.webContents.on('did-finish-load', sendChromeState)
 
   // 拦截渲染进程里的 window.open（包括嵌入页/iframe 点击超链接）
   // - 内部协议 checkba://... => 交给渲染层打开“网核中心定位”
