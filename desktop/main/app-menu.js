@@ -5,8 +5,18 @@
 // 不能让菜单加速器抢走它去关整个窗口。
 // 菜单文案随应用语言（app-language.js）双语；语言切换经 onAppLanguageChange 整体重建。
 
-const { app, Menu, ipcMain } = require('electron')
+const { Menu, ipcMain } = require('electron')
 const { t, onAppLanguageChange } = require('./app-language')
+
+// 菜单里的应用名写死，**不要用 app.name**：desktop/package.json 没有顶层 productName，
+// Electron 于是拿 name 字段当 app.name，菜单会显示「关于 aiworkdeck-desktop」。
+// 而补一个顶层 productName 会连带把 app.getPath('userData') 从
+// ~/Library/Application Support/aiworkdeck-desktop 改名到「AI Workdeck」，
+// 存量用户的 Local Storage（登录态、uni 存储）当场全丢——不值得为一个显示名冒这个险。
+// 注：macOS 菜单栏最左边那个粗体应用名不由这里决定，它取自运行中 .app 包的
+// CFBundleName（打包版=AI Workdeck；dev 跑 node_modules 里的 Electron.app，
+// 见 scripts/brand-dev-electron.js）。
+const APP_DISPLAY_NAME = 'AI Workdeck'
 
 let getWindow = () => null
 let recentProjects = []
@@ -27,15 +37,15 @@ function buildTemplate() {
 
   return [
     {
-      label: app.name,
+      label: APP_DISPLAY_NAME,
       submenu: [
-        { role: 'about', label: t({ zh: '关于 ', en: 'About ' }) + app.name },
+        { role: 'about', label: t({ zh: '关于 ', en: 'About ' }) + APP_DISPLAY_NAME },
         { type: 'separator' },
-        { role: 'hide', label: t({ zh: '隐藏 ', en: 'Hide ' }) + app.name },
+        { role: 'hide', label: t({ zh: '隐藏 ', en: 'Hide ' }) + APP_DISPLAY_NAME },
         { role: 'hideOthers', label: t({ zh: '隐藏其他', en: 'Hide Others' }) },
         { role: 'unhide', label: t({ zh: '全部显示', en: 'Show All' }) },
         { type: 'separator' },
-        { role: 'quit', label: t({ zh: '退出 ', en: 'Quit ' }) + app.name },
+        { role: 'quit', label: t({ zh: '退出 ', en: 'Quit ' }) + APP_DISPLAY_NAME },
       ],
     },
     {

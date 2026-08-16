@@ -7,6 +7,7 @@
   "main": "main/main.js",
   "scripts": {
     "clean": "node scripts/clean.js",
+    "predev": "node scripts/brand-dev-electron.js",
     "dev": "cross-env AIWORKDECK_DESKTOP_DEV=1 electron .",
     "start": "electron .",
     "build": "electron-builder",

@@ -3,6 +3,7 @@ package com.checkba.service;
 import com.checkba.model.entity.Project;
 import com.checkba.repository.ProjectRepository;
 import io.methvin.watcher.DirectoryWatcher;
+import io.methvin.watcher.hashing.FileHasher;
 import jakarta.annotation.PreDestroy;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -39,6 +40,25 @@ public class LocalRootWatchService {
 
     /** 防抖窗口：编辑器保存/Finder 拷贝往往是一串事件，合并成一次对账。 */
     static final long DEBOUNCE_MILLIS = 800;
+
+    /**
+     * 监听器给每个文件算的"指纹"——**只取 mtime，绝不能用默认的内容哈希**。
+     *
+     * DirectoryWatcher 用这个指纹去重 MODIFY 事件，默认的 {@code FileHasher.DEFAULT_FILE_HASHER}
+     * 是「完整读一遍文件算 murmur3」。它在 watchAsync 建立监听时（PathUtils.initWatcherState）
+     * 就会把整棵树的每个文件从头读到尾，而且不受 MAX_IMPORT_ENTRIES 那种上限约束。
+     *
+     * 在 iCloud「优化 Mac 储存空间」的文件夹上这是灾难：被驱逐的文件在磁盘上是
+     * dataless 占位（stat 能秒回真实大小，st_blocks=0），**一旦 read 就触发下载**。
+     * 于是"打开一个项目文件夹"等于"把整个文件夹从 iCloud 拉回本地"——本机实测单个
+     * 23KB 的已驱逐文件光首次 read 就要 1.28 秒（延迟决定，与大小无关），几百个文件
+     * 就是几分钟的后台狂拉，网络和磁盘全被占住。
+     *
+     * mtime 指纹只 stat，不读内容，因此不会把文件拽下来。代价是"内容变了但 mtime 没变"
+     * 的修改不会触发事件——真实编辑不存在这种情况；何况监听回调压根不看事件内容，
+     * 只是排一次幂等的全量对账（见 {@link #scheduleReconcile}）。
+     */
+    static final FileHasher WATCH_FILE_HASHER = FileHasher.LAST_MODIFIED_TIME;
 
     private final ProjectRepository projectRepository;
     private final LocalProjectService localProjectService;
@@ -90,6 +110,7 @@ public class LocalRootWatchService {
         try {
             DirectoryWatcher watcher = DirectoryWatcher.builder()
                     .path(root)
+                    .fileHasher(WATCH_FILE_HASHER)   // 见 WATCH_FILE_HASHER：默认值会读穿整个文件夹
                     .listener(event -> scheduleReconcile(projectId))
                     .build();
             DirectoryWatcher prev = watchers.putIfAbsent(projectId, watcher);

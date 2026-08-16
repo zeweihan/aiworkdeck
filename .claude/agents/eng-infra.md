@@ -49,7 +49,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 - 一键：`./restart-all.sh`（Docker 服务 + 后端 + 前端 + 桌面）。
 - 后端：`cd backend && ./restart-backend.sh`（mvn package -DskipTests → kill 9696 → nohup java -jar，prod 配置，日志 backend/app.log）。
 - 前端：`cd frontend && npm run dev:h5`（5173；e2e 用 `npx uni --port 5174`）。**npm 不是 pnpm**。
-- 桌面：`cd desktop && npm run dev`（AIWORKDECK_DESKTOP_DEV=1 electron .；dev Electron 复用已跑的 9696 后端不另起 java）。`npm run clean` 清用户数据目录。
+- 桌面：`cd desktop && npm run dev`（AIWORKDECK_DESKTOP_DEV=1 electron .；dev Electron 复用已跑的 9696 后端不另起 java）。`npm run clean` 清用户数据目录。predev 钩子会跑 `scripts/brand-dev-electron.js` 把 node_modules 里的 Electron.app 改名（见下条）。
 - Docker 附属：`docker compose up`（mineru 8001、pptx 5001、easyvoice 9549 段已停用改 ElevenLabs）。
 
 ## 关键构建脚本（desktop/scripts/）
@@ -82,6 +82,20 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 - CI 签名→冒烟→打包顺序不可乱（PR#176）。
 - macOS CI 红要当真查（Apple 协议过期事件后恢复）；`--admin` 合并与 worktree 删分支技巧见 ci-macos 记录。
 - iCloud 驱逐会掏空本地文件（打包/测试环境两次踩）；EMFILE 用抬 ulimit 解。
+- **iCloud 上「读一下」不是免费的**：被驱逐的文件是 dataless 占位，`stat` 秒回真实大小但
+  `st_blocks=0`，**一 read 就同步触发下载**（本机实测 23KB 文件首次 read 耗 1.28 秒，延迟
+  决定、与大小无关）。所以凡是「扫用户文件夹」的代码只许 stat，绝不许顺手读内容——
+  `LocalRootWatchService.WATCH_FILE_HASHER` 就是为此把 DirectoryWatcher 的默认内容哈希
+  换成了 mtime 哈希（默认值会在建立监听时把整棵树逐字节读一遍，等于打开项目就把整个
+  文件夹从 iCloud 拉回来）。回归用例 `LocalRootWatchServiceTest`，拿命名管道当"未下载文件"。
+  已知仍会读穿全树的是版本记录的 `git add .`（JGit 必须读内容才能存 blob），但它被
+  `repoService.isInitialized` 挡着，只有开了版本记录的项目才走到。
+- **macOS 菜单栏左上角那个应用名只认 .app 包的 `CFBundleName`**，跟 `app.name`、跟菜单模板
+  第一项的 label 都无关（实测 `app.setName('AI Workdeck')` 之后菜单栏照旧写 Electron）。
+  打包版由 electron-builder 按 `build.productName` 写好；dev 跑的是 node_modules 里的
+  Electron.app，所以要靠 `scripts/brand-dev-electron.js` 就地改名（Electron 的 dist 包是
+  linker-signed adhoc，`Info.plist=not bound`，改它不破坏签名）。**做官网/README 截图前
+  务必确认这一步跑过**，否则截出来的图左上角是 Electron。
 - worktree 冷启动跑双 e2e 完整配方见 v0.7.7 发版实录；worktree merge 报 stash failed 用 cherry-pick 绕。
 - 坏 pnpm node_modules 遇到过——本项目一律 npm。
 - **worktree 的 node_modules 落后于新增依赖**（如 TOTP 带来的 `qrcode`）时，vite 会推一个盖满视口的 `vite-error-overlay`，坐标点击全被它吃掉，e2e 表现成"点了没反应"的超时而非编译错误。冷启动 worktree 跑 e2e 前先 `npm install`；desktop-e2e 的点击已加命中校验，会直接报出遮挡者和它的文案。
