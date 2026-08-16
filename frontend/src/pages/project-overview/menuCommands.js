@@ -89,10 +89,18 @@ export const menuCommandsMethods = {
     this.pushMenuState()
   },
 
+  /**
+   * 交出菜单。**必须连状态一起清掉**——只摘事件监听的话，桥里还留着
+   * page:'workbench' 和一整套 flags，用户去了项目列表/设置页，菜单依然全亮，
+   * 点下去却没有活跃实例来接 = 点了没反应。清成空页面后，所有
+   * when:['workbench'] 的条目自动置灰，「打开文件夹」这类无 when 的照常可用。
+   */
   unregisterMenuCommands() {
     if (!this._menuCmdHandler) return
     try { uni.$off(COMMAND_EVENT, this._menuCmdHandler) } catch (e) { /* ignore */ }
     this._menuCmdHandler = null
+    setMenuPage('', {})
+    this.menuBarRefreshKey++
   },
 
   // ---- 命令执行 ---------------------------------------------------------
