@@ -4,7 +4,7 @@
 // 格式刻意不扩：项目概览页也调 recordProjectVisit，但启动直达永远进工作台，
 // 不为「上次落在哪个页面」加字段（spec §5.3 决策）。
 
-import { host } from '@/services/host.js'
+import { setMenuRecent } from '@/utils/appMenuBridge.js'
 
 const LAST_KEY = 'checkba_last_project_id'
 const RECENT_KEY = 'checkba_recent_projects'
@@ -40,17 +40,18 @@ export function getLastProjectId() {
   }
 }
 
-/** 用项目全量列表把最近 id 解析成 {id, name}（改名不陈旧），推给桌面壳「最近打开」子菜单。 */
+/**
+ * 用项目全量列表把最近 id 解析成 {id, name}（改名不陈旧），交给菜单桥。
+ * 桥会把它折进整棵菜单树一起下发——「文件→打开最近」与「转到→切换项目」
+ * 两处子菜单共用这一份数据，不再单开 IPC 通道。
+ */
 export function syncRecentToMenu(projects) {
-  if (!(host.menu && host.menu.setRecentProjects)) {
-    return
-  }
   const byId = new Map((projects || []).map((p) => [Number(p.id), p]))
   const list = getRecentProjectIds()
     .map((id) => byId.get(id))
     .filter(Boolean)
     .map((p) => ({ id: Number(p.id), name: p.name }))
-  host.menu.setRecentProjects(list)
+  setMenuRecent(list)
 }
 
 /** 自取项目列表版（project-overview 等没有现成列表的调用方用）。静默失败。 */

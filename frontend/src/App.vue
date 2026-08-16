@@ -1,11 +1,12 @@
 <script>
 import { getSessionId } from '@/utils/auth.js'
-import { openFolderFlow, openFileFlow, openLocalRootPath, openLocalFilePath } from '@/utils/ideOpen.js'
+import { openLocalRootPath, openLocalFilePath } from '@/utils/ideOpen.js'
 import { track } from '@/utils/telemetryClient.js'
 import { host, isDesktopHost } from '@/services/host.js'
 import { mountFeedbackWidget } from '@/utils/feedbackWidget.js'
 import { mountRecordingIndicator } from '@/utils/recordingIndicator.js'
 import { initWindowChrome } from '@/utils/windowChrome.js'
+import { initAppMenuBridge } from '@/utils/appMenuBridge.js'
 import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
 
@@ -48,30 +49,20 @@ export default {
     ;['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'].forEach((t) => {
       try { uni.addInterceptor(t, navTrack(t)) } catch (e) { /* 静默 */ }
     })
-    // IDE 化应用菜单动作（桌面壳菜单栏 文件→打开文件夹/打开文件/新建/最近打开）。
+    // 应用菜单：命令表 → 菜单树的下发与动作派发全部收在 appMenuBridge 里。
     // App 级注册一次，天然避开 project-overview 的页面栈多实例问题。
+    initAppMenuBridge()
+    // Dock/访达「打开方式」进来的路径不是菜单命令，主进程直发，单独接。
     if (host.menu && host.menu.onAction) {
       host.menu.onAction(async (data) => {
-        const action = data && data.action
-        if (!action) return
+        if (!data || data.action !== 'open-path' || !data.path) return
         if (!getSessionId()) {
           uni.showToast({ title: this.$t('shell.pleaseLoginFirst'), icon: 'none' })
           return
         }
         try {
-          if (action === 'open-folder') {
-            await openFolderFlow()
-          } else if (action === 'open-file') {
-            await openFileFlow()
-          } else if (action === 'create-folder') {
-            uni.reLaunch({ url: '/pages/newproject/index?auto=create-folder' })
-          } else if (action === 'open-recent' && data.projectId) {
-            uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${data.projectId}` })
-          } else if (action === 'open-path' && data.path) {
-            // Dock/Finder「打开方式」进来的路径（主进程已判好目录/文件）
-            if (data.isDirectory) await openLocalRootPath(data.path)
-            else await openLocalFilePath(data.path)
-          }
+          if (data.isDirectory) await openLocalRootPath(data.path)
+          else await openLocalFilePath(data.path)
         } catch (e) {
           uni.showToast({ title: (e && e.message) || this.$t('shell.menuActionFailed'), icon: 'none' })
         }

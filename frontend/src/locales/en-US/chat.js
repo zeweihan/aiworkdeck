@@ -77,6 +77,7 @@ export default {
   modeAskDesc: 'Chat only',
   modePlanDesc: 'Plan and confirm',
   localModeNotice: 'Local models do not support tool calls. Agent and Plan require a cloud model.',
+  modeUnavailable: 'The current provider does not support this mode.',
   // ---- Skill selector ----
   skillAutoMatch: 'Auto Match',
   skillAutoMatchDesc: 'Activates when trigger words match',

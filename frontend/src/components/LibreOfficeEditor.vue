@@ -47,11 +47,13 @@
          对着一个隐藏的空白实例白跑 get_ui_state/list_styles/list_fonts。 -->
     <EditorToolbar
       v-if="ready && file && !loadingOverlayVisible && docKind === 'writer'"
+      ref="toolbar"
       :executor="executor"
       :refresh-key="uiRefreshKey"
       :review-open="reviewOpen"
       @toggle-review="reviewOpen = !reviewOpen"
       @changed="onDocModified"
+      @ui-state="$emit('menu-state')"
     />
     <view class="libre-body">
       <!-- 浮层必须钉在**画布**上而不是整个编辑器上：审阅面板是并排挤宽的，钉在
@@ -75,6 +77,7 @@
       </view>
       <ReviewPanel
         v-if="reviewOpen && ready && showsReview"
+        ref="review"
         :executor="executor"
         :refresh-key="reviewRefreshKey"
         @close="reviewOpen = false"
@@ -109,7 +112,7 @@ let seq = 0
 export default {
   name: 'LibreOfficeEditor',
   components: { ReviewPanel, EditorToolbar },
-  emits: ['close', 'ready', 'open-url'],
+  emits: ['close', 'ready', 'open-url', 'menu-state'],
   props: {
     // Track D: the Office file to load into the editor ({ id, name, fileType,
     // wpsFileId }). When set, the editor fetches its bytes (authed) and loads the
@@ -214,6 +217,11 @@ export default {
       this.startBootTrickle()
       this.finishDocLoad()
     },
+    // 菜单栏读勾选/置灰的三个信号。合并在这个 watch 里而不是另起一块——
+    // 选项对象里两个同名 key，后写的会把先写的整个覆盖掉。
+    reviewOpen() { this.$emit('menu-state') },
+    ready() { this.$emit('menu-state') },
+    docKind() { this.$emit('menu-state') },
   },
   async mounted() {
     try {
@@ -257,6 +265,63 @@ export default {
     this.executor = null
   },
   methods: {
+    // ---- 菜单栏命令入口 ----------------------------------------------------
+    // 「文档」菜单经 appMenuBridge → project-overview 的活跃编辑器 → 这里。
+    // 一律薄转发到工具栏/审阅面板已有的方法，不在这层复制业务逻辑——
+    // 菜单和工具栏点同一个按钮必须是同一条代码路径，否则两边会各自漂。
+
+    /** 这个实例现在能接命令吗（引擎起来了、装着真文档、是 Writer）。 */
+    menuReady() {
+      return !!(this.ready && this.file && this.docKind === 'writer')
+    },
+    /** 供菜单读勾选态。工具栏没挂（非 Writer / 未就绪）时全 false。 */
+    menuState() {
+      const tb = this.$refs.toolbar
+      const rec = tb && tb.state && tb.state.view ? tb.state.view.recordChanges : false
+      return { trackChanges: !!rec, reviewOpen: !!this.reviewOpen }
+    },
+    menuToggleTrackChanges() {
+      const tb = this.$refs.toolbar
+      return tb ? tb.toggleTrack() : null
+    },
+    menuToggleReviewPanel() {
+      this.reviewOpen = !this.reviewOpen
+    },
+    menuOpenFind() {
+      const tb = this.$refs.toolbar
+      if (tb && !tb.findOpen) return tb.toggleFind()
+    },
+    /**
+     * 插入批注。批注表单长在工具栏「插入」下拉里，所以要先把下拉打开再进表单，
+     * 否则 startComment() 只是改了个不可见的状态 = 点了没反应。
+     * 没选中文字时引擎不接受批注，这里把原因回给调用方去提示，别静默吞掉。
+     */
+    menuInsertComment() {
+      const tb = this.$refs.toolbar
+      if (!tb) return { ok: false, reason: 'not-ready' }
+      if (tb.noSelection) return { ok: false, reason: 'no-selection' }
+      tb.menu = 'insert'
+      tb.startComment()
+      return { ok: true }
+    },
+    menuClearFormatting() {
+      const tb = this.$refs.toolbar
+      return tb ? tb.ui('clear_formatting') : null
+    },
+    /**
+     * 接受/拒绝全部修订。ReviewPanel 是 v-if 挂载的（面板关着就不存在），
+     * 所以先把面板打开再调——顺带让用户看见改动落在哪，比默默改完更好。
+     */
+    async menuResolveAllRevisions(action) {
+      if (!this.showsReview) return null
+      if (!this.reviewOpen) {
+        this.reviewOpen = true
+        await this.$nextTick()
+      }
+      const rp = this.$refs.review
+      return rp ? rp.resolveAll(action) : null
+    },
+
     // ---- 加载进度面板 ----
     // 里程碑之间用慢速滴答填充（封顶 bootCap），避免长阶段（WASM 编译/大文档
     // 排版）看起来像卡死；真正的阶段跳变由 boot-log 里程碑驱动。

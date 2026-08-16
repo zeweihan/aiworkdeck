@@ -1456,6 +1456,19 @@ ipcMain.handle('checkba:service-ensure', async (_evt, payload) => {
 
 // 应用内更新 IPC 面（增量更新 P1）：状态查询 / 手动检查 / 重启生效。
 // 版本口径：appVersion = 壳（安装包）版本，effectiveVersion = 补丁生效版本。
+// 帮助菜单「查看日志」：在访达/资源管理器里高亮日志目录。
+// 路径固定为 ~/.aiworkdeck/logs（与 service-manager / update-service 同源），
+// 不接受渲染层传路径——那等于把任意目录揭示给渲染层。
+ipcMain.handle('checkba:reveal-logs', async () => {
+  try {
+    const dir = path.join(app.getPath('home'), '.aiworkdeck', 'logs')
+    if (!require('fs').existsSync(dir)) return { ok: false, message: '日志目录尚未生成' }
+    shell.showItemInFolder(path.join(dir, '.'))
+    return { ok: true, path: dir }
+  } catch (e) {
+    return { ok: false, message: String((e && e.message) || e) }
+  }
+})
 ipcMain.handle('checkba:update-status', async () => {
   if (!updateService) {
     return { phase: 'idle', appVersion: app.getVersion(), effectiveVersion: app.getVersion(), disabled: true }

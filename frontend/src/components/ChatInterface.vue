@@ -2187,8 +2187,40 @@ export default {
       return currentConversationId.value
     }
 
+    // ---- 菜单栏「AI」命令入口 ----
+    // 一律薄转发到面板自己已有的方法，菜单和面板上的按钮走同一条代码路径。
+    // 模式切换要过 availableModes：本地 Ollama 只支持 ASK，菜单不能绕过这条闸
+    // 让用户选到一个「一发即报错」的模式。
+    const menuSetMode = (id) => {
+      const m = availableModes.value.find((x) => x.id === id)
+      if (!m) {
+        uni.showToast({ title: localModeNotice.value || t('chat.modeUnavailable'), icon: 'none' })
+        return false
+      }
+      selectMode(m)
+      return true
+    }
+    /** 停止：取消所有在跑的后台任务。没有在跑的就什么都不做（菜单那条已置灰）。 */
+    const menuStop = async () => {
+      const list = runningTasks.value.slice()
+      for (const t of list) await handleCancelTask(t)
+      return list.length
+    }
+    /** 菜单读勾选/置灰用的状态快照。全是布尔或短枚举，不放计数器。 */
+    const menuState = () => ({
+      aiRunning: !!isStreaming.value || runningTasks.value.length > 0,
+      aiMode: currentModeId.value,
+    })
+
+    // 菜单栏的「停止当前任务」置灰与「模式」勾选跟着这两个信号走。
+    // 不轮询：变了才广播一次，宿主收到后重推菜单状态。
+    watch([isStreaming, currentModeId, runningTasks], () => emit('menu-state'))
+
     // Expose methods for parent ref access
-    expose({ addFile, loadMessages, loadConversationMetadata, sendExternalPrompt })
+    expose({
+      addFile, loadMessages, loadConversationMetadata, sendExternalPrompt,
+      startNewChat, menuSetMode, menuStop, menuState,
+    })
 
     return {
        bubbles,

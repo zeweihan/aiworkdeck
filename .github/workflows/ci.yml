@@ -62,6 +62,9 @@ jobs:
       - name: Test project-home page
         working-directory: frontend
         run: npm run test:project-home
+      - name: Test command registry (加速键归属与 when 求值)
+        working-directory: frontend
+        run: npm run test:commands
       - name: Build H5
         working-directory: frontend
         run: npm run build:h5
