@@ -3,6 +3,10 @@
     <!-- 顶部固定项目信息 -->
     <view class="project-header">
       <view class="header-left">
+        <!-- Windows 自绘菜单栏：那边没有系统全局菜单栏，无边框后原生菜单也一并
+             消失，只能自绘（spec §6.4）。读的是与 mac 完全同一份命令表数据。
+             mac 上组件内部 visible=false，不渲染。 -->
+        <AppMenuBar :refresh-key="menuBarRefreshKey" />
 
         <view class="project-info">
           <!-- Logo moved to center -->
@@ -1448,6 +1452,7 @@ import BrowserPane from '@/components/BrowserPane.vue'
 import FileTree from '@/components/FileTree.vue'
 import QuickOpenPanel from '@/components/QuickOpenPanel.vue'
 import CommandPalette from '@/components/CommandPalette.vue'
+import AppMenuBar from '@/components/AppMenuBar.vue'
 import FilePreview from '@/components/FilePreview.vue'
 import VariablePanel from '@/components/VariablePanel.vue'
 import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
@@ -1550,6 +1555,7 @@ export default {
     BrowserPane,
     QuickOpenPanel,
     CommandPalette,
+    AppMenuBar,
     FileTree,
     FilePreview,
     VariablePanel,
@@ -1758,6 +1764,7 @@ export default {
       splitMode: false,
       quickOpenVisible: false, // IDE 化 Cmd+P 快速打开
       commandPaletteVisible: false, // 命令面板（⌥⌘P），读命令注册表
+      menuBarRefreshKey: 0, // Windows 自绘菜单栏的重建信号（跟着 pushMenuState 走）
       projectSwitcherOpen: false, // IDE 化最近项目切换器
       switcherProjects: [],
       versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 顶栏工作状态点

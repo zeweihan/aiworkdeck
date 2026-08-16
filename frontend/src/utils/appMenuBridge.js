@@ -16,6 +16,7 @@
 import { host, isDesktopHost } from '@/services/host.js'
 import { COMMAND_BY_ID, COMMANDS, buildMenuPayload, isEnabled, labelOf } from '@/config/commands/index.js'
 import { getAppLanguage, setAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
+import { t } from '@/i18n'
 
 /** 工作台命令的事件名。project-overview 侧监听，自带活跃实例守卫。 */
 export const COMMAND_EVENT = 'awd:command'
@@ -129,11 +130,11 @@ async function runAppCommand(verb, arg) {
       return
     case 'checkUpdate': {
       if (!(host.update && host.update.check)) return
-      toast('正在检查更新…')
+      toast(t('shell.menuCheckingUpdate'))
       const r = await host.update.check()
       const phase = r && r.phase
-      if (phase === 'error') toast((r && r.error) || '检查更新失败')
-      else if (phase === 'idle' || phase === 'up-to-date') toast('已是最新版本')
+      if (phase === 'error') toast((r && r.error) || t('shell.menuUpdateFailed'))
+      else if (phase === 'idle' || phase === 'up-to-date') toast(t('shell.menuUpToDate'))
       // 其余阶段（下载中/待重启）由更新器自己的 UI 接管，别在这里抢话
       return
     }
@@ -149,7 +150,7 @@ async function runAppCommand(verb, arg) {
     case 'viewLogs': {
       if (!(host.shell && host.shell.revealLogs)) return
       const r = await host.shell.revealLogs()
-      if (r && r.ok === false) toast(r.message || '打不开日志目录')
+      if (r && r.ok === false) toast(r.message || t('shell.menuLogsUnavailable'))
       return
     }
     case 'showShortcuts': {
@@ -157,8 +158,8 @@ async function runAppCommand(verb, arg) {
       const body = rows.map((c) => c.accel.replace(/CmdOrCtrl/g, '⌘').replace(/Alt/g, '⌥').replace(/Shift/g, '⇧').replace(/\+/g, '') + '  ' + c.label)
       // ⌘P 是渲染层局部键位、不在命令表里（编辑器优先，见 spec §4.1），
       // 但它是最常用的一条，速查表里不能没有。
-      body.unshift('⌘P  快速打开（编辑器外生效）')
-      uni.showModal({ title: '快捷键', content: body.join('\n'), showCancel: false })
+      body.unshift('⌘P  ' + t('shell.menuShortcutQuickOpen'))
+      uni.showModal({ title: t('shell.menuShortcutsTitle'), content: body.join('\n'), showCancel: false })
       return
     }
     default:
@@ -203,7 +204,7 @@ async function handleAction(action) {
     if (ns === 'app') await runAppCommand(verb, arg)
     else uni.$emit(COMMAND_EVENT, { id: cmd.id, run: cmd.run, verb, arg })
   } catch (e) {
-    toast((e && e.message) || '操作失败')
+    toast((e && e.message) || t('shell.menuActionFailed'))
   }
 }
 

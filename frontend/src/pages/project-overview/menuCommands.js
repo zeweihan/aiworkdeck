@@ -68,6 +68,9 @@ export const menuCommandsMethods = {
       views: (this.LEFT_SIDEBAR_PLUGINS || []).map((p) => ({ key: p.key, label: p.label })),
       flags: this.buildMenuFlags(),
     })
+    // Windows 自绘菜单栏读的是同一份快照，状态推完让它重建一次。
+    // mac 上组件不渲染，这个计数器空转，代价可忽略。
+    this.menuBarRefreshKey++
   },
 
   /** onShow / mounted 时接管菜单。 */
