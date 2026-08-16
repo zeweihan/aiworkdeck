@@ -610,19 +610,31 @@ jobs:
           for f in artifacts/*.dmg artifacts/*.exe; do
             [ -e "$f" ] || continue
             want=$(stat -c%s "$f")
-            echo "→ $(basename "$f") ($want bytes)"
+            # **文件名必须换成 GitHub Release 的资产名**（空格 → 点号）。
+            # update-mirror-sync.sh 的「skip (exists)」判据是资产名，构建产物
+            # 带空格（AI Workdeck Setup 0.17.0.exe），名字对不上它就当没传过，
+            # 照样从 GitHub 重拉一遍 1.4GB——这条推送等于白做。
+            # v0.17.0 实测：包都推到了，cron 仍在重下，latest.json 卡在上一版
+            # 导致本 job 的校验步骤失败。
+            name=$(basename "$f" | tr ' ' '.')
+            echo "→ $(basename "$f") → $name ($want bytes)"
             for try in 1 2 3 4 5; do
               rsync -e "ssh $SSH_OPTS" --partial --append-verify --timeout=120 \
-                "$f" "root@$MIRROR_HOST:$DEST/" && break
+                "$f" "root@$MIRROR_HOST:$DEST/$name" && break
               echo "第 $try 次未传完，续传重试"; sleep 10
             done
-            got=$(ssh $SSH_OPTS "root@$MIRROR_HOST" "stat -c%s '$DEST/$(basename "$f")' 2>/dev/null || echo 0")
-            [ "$got" = "$want" ] || { echo "::error::$(basename "$f") 传输不完整（$got/$want）"; exit 1; }
+            got=$(ssh $SSH_OPTS "root@$MIRROR_HOST" "stat -c%s '$DEST/$name' 2>/dev/null || echo 0")
+            [ "$got" = "$want" ] || { echo "::error::$name 传输不完整（$got/$want）"; exit 1; }
           done
 
-          # 安装包已就位，跑一次同步脚本让它补 latest.json 与补丁包（会 skip exists）
+          # 安装包已就位，跑一次同步脚本让它补 latest.json 与补丁包（会 skip exists）。
+          # **先等锁再跑**：脚本自带 `flock -n`，撞上 cron 那一发就静默 exit 0，
+          # latest.json 停在上一版、下面的校验必挂（v0.17.0 实测）。
+          # `flock -w 1200 ... true` 只是「等到锁空出来就立刻放手」，随后由脚本
+          # 自己去加锁。两步之间的窗口极小，真撞上了下面的校验也会报出来。
           ssh $SSH_OPTS "root@$MIRROR_HOST" \
-            'cd /www/wwwroot/update/desktop && bash update-mirror-sync.sh' | tail -8
+            'flock -w 1200 /var/lock/awd-update-mirror-sync.lock true \
+             && cd /www/wwwroot/update/desktop && bash update-mirror-sync.sh' | tail -8
 
           echo "校验 latest.json 指向 ${GITHUB_REF_NAME}"
           curl -fsS --max-time 20 https://www.aiworkdeck.com/update/desktop/installers/latest.json | tee /tmp/latest.json
