@@ -7,6 +7,16 @@ const apiBaseUrl = apiBaseArg ? apiBaseArg.slice('--checkba-api-base='.length) :
 
 contextBridge.exposeInMainWorld('checkbaDesktop', {
   apiBaseUrl,
+  // 窗口外壳：无边框窗口下渲染层要自己让出交通灯/窗口控件的位置，
+  // 得知道跑在哪个平台、以及此刻是不是全屏（全屏时交通灯隐藏）。
+  chrome: {
+    platform: process.platform,
+    onState: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:chrome-state', listener)
+      return () => ipcRenderer.removeListener('checkba:chrome-state', listener)
+    }
+  },
   app: {
     onOpenInternal: (handler) => {
       const listener = (_evt, data) => handler && handler(data)
@@ -135,7 +145,9 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
   // 解锁页等未加载工作区浏览器的场景依赖它——window.open 会被
   // setWindowOpenHandler 转成无人消费的事件而静默失效。
   shell: {
-    openExternal: (url) => ipcRenderer.invoke('checkba:shell-open-external', { url })
+    openExternal: (url) => ipcRenderer.invoke('checkba:shell-open-external', { url }),
+    // 帮助菜单「查看日志」。路径由主进程固定为 ~/.aiworkdeck/logs，不接受传参。
+    revealLogs: () => ipcRenderer.invoke('checkba:reveal-logs')
   },
   fs: {
     // 注：readFile/writeFile 曾暴露任意路径读/写（渲染进程零调用，属死暴露，其中任意写可覆盖
@@ -153,14 +165,17 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
       return (file && file.path) || ''
     }
   },
-  // IDE 化应用菜单：动作订阅（文件菜单点击/最近打开）与「最近打开」子菜单数据推送
+  // 应用菜单：动作订阅（点了哪条命令）与整棵菜单树的下发。
+  // 菜单结构、文案、enabled/checked 全部由渲染层决定（frontend/src/utils/appMenuBridge.js），
+  // 主进程只把 JSON 渲染成 NSMenu；原先单推「最近打开」的 checkba:recent-projects
+  // 已并入 setState，不再单开一条通道。
   menu: {
     onAction: (handler) => {
       const listener = (_evt, data) => handler && handler(data)
       ipcRenderer.on('checkba:menu-action', listener)
       return () => ipcRenderer.removeListener('checkba:menu-action', listener)
     },
-    setRecentProjects: (list) => ipcRenderer.send('checkba:recent-projects', list)
+    setState: (payload) => ipcRenderer.send('checkba:menu-state', payload)
   },
   // 应用语言（zh-CN/en-US）：渲染层是权威源，启动与切换时推给主进程
   // （菜单/原生对话框文案随之重建，见 desktop/main/app-language.js）。

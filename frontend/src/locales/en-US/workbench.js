@@ -1,5 +1,12 @@
 // Workbench copy (pages/project-overview/project-overview.vue).
 export default {
+  // 菜单栏 / 命令面板
+  menuNeedsDoc: 'Open a Word document first',
+  menuSelectTextFirst: 'Select the text you want to comment on first',
+  menuAiNotReady: 'The AI panel is not ready yet',
+  menuImportHint: 'Drag files into the Explorer on the left to import',
+  commandPalettePlaceholder: 'Type a command…',
+  commandPaletteEmpty: 'No matching commands',
   // Top bar project info
   clickToRename: 'Click to rename',
   unnamedProject: 'Untitled Project',

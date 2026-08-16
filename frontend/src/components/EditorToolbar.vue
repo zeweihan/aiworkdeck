@@ -327,7 +327,7 @@ const EMPTY = () => ({ character: {}, paragraph: {}, view: {}, selection: {}, un
 
 export default {
   name: 'EditorToolbar',
-  emits: ['toggle-review', 'changed'],
+  emits: ['toggle-review', 'changed', 'ui-state'],
   props: {
     // LibreOffice executor（executeCommand(action, params)）。null 时整条静默。
     executor: { type: Object, default: null },
@@ -424,6 +424,9 @@ export default {
     async refresh() {
       const r = await this.call('get_ui_state', {})
       if (r && r.success) this.state = r
+      // 激活态变了要通知宿主：菜单栏的「修订模式」勾选读的就是这里的
+      // state.view.recordChanges，不广播的话菜单会停在上一次的状态。
+      this.$emit('ui-state')
     },
     // 命令跑完必须刷新两件事：工具栏自己的激活态，以及宿主的自动保存（改了文档）
     async after(res, changed) {

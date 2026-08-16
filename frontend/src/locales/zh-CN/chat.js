@@ -77,6 +77,7 @@ export default {
   modeAskDesc: '纯对话',
   modePlanDesc: '规划确认',
   localModeNotice: '本地模型不支持工具调用，Agent 与 Plan 需要云端模型',
+  modeUnavailable: '当前供应商不支持这个模式',
   // ---- Skill 选择 ----
   skillAutoMatch: '自动匹配',
   skillAutoMatchDesc: '命中触发词时自动生效',

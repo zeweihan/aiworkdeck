@@ -368,7 +368,9 @@ check('工作台 rail 头像仍 navigateTo 个人中心（不许顺手改）', (
 
 check('五条直达工作台的出口一条都没动', () => {
   const bad = []
-  if (!readVue('src/App.vue').includes('/pages/project-overview/project-overview?id=')) bad.push('App.vue 应用菜单「最近打开」')
+  // 2026-08-16：应用菜单的派发从 App.vue 收口进 appMenuBridge，「最近打开」与
+  // 「切换项目」两条都落在那里。行为不变（仍是 reLaunch 直达工作台），锚点跟着搬。
+  if (!readFrontend('src/utils/appMenuBridge.js').includes('/pages/project-overview/project-overview?id=')) bad.push('appMenuBridge 应用菜单「最近打开」')
   if (!readFrontend('src/utils/ideOpen.js').includes('/pages/project-overview/project-overview?')) bad.push('ideOpen.js 打开本地文件夹/文件')
   const ov = readVue('src/pages/project-overview/project-overview.vue')
   const i = ov.indexOf('switchToProject(p) {') // 方法定义；'switchToProject(p)' 会先命中模板里的 @tap 调用

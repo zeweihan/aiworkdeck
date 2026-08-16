@@ -3,6 +3,10 @@
     <!-- 顶部固定项目信息 -->
     <view class="project-header">
       <view class="header-left">
+        <!-- Windows 自绘菜单栏：那边没有系统全局菜单栏，无边框后原生菜单也一并
+             消失，只能自绘（spec §6.4）。读的是与 mac 完全同一份命令表数据。
+             mac 上组件内部 visible=false，不渲染。 -->
+        <AppMenuBar :refresh-key="menuBarRefreshKey" />
 
         <view class="project-info">
           <!-- Logo moved to center -->
@@ -783,6 +787,7 @@
                       @ready="onLibreReady($event, 'left', file.id)"
                       @close="onLibreClose"
                       @open-url="onLibreOpenUrl"
+                      @menu-state="pushMenuState"
                     />
                   </view>
                   <!-- 预热备胎实例（librePool.js）：file=null 时是后台预 boot 的
@@ -801,6 +806,7 @@
                       @ready="onLibreSpareReady(sp, $event)"
                       @close="onLibreClose"
                       @open-url="onLibreOpenUrl"
+                      @menu-state="pushMenuState"
                     />
                   </view>
                   <view v-if="activeFileLeft && !useLibreEditor(activeFileLeft)" class="pane-content">
@@ -893,6 +899,7 @@
                       @ready="onLibreReady($event, 'right', file.id)"
                       @close="onLibreClose"
                       @open-url="onLibreOpenUrl"
+                      @menu-state="pushMenuState"
                     />
                   </view>
                   <view v-if="activeFileRight && !useLibreEditor(activeFileRight)" class="pane-content">
@@ -1077,6 +1084,7 @@
               @config-assistant="openAssistantConfig"
               @client-action="handleClientAction"
               @refresh-history="fetchChatHistory"
+              @menu-state="pushMenuState"
               @artifact-open-tab="handleArtifactOpenTab"
               @open-file="handleOpenFileFromChat"
             />
@@ -1372,6 +1380,13 @@
         @close="quickOpenVisible = false"
       />
 
+      <!-- 命令面板（⌥⌘P）：与菜单栏读同一份命令表 -->
+      <CommandPalette
+        v-if="commandPaletteVisible"
+        @run="onCommandPaletteRun"
+        @close="commandPaletteVisible = false"
+      />
+
       <!-- 试用版说明弹窗 -->
       <view v-if="showTrialInfo" class="awd-dialog-mask" @tap="showTrialInfo = false">
         <view class="awd-dialog" @tap.stop>
@@ -1436,6 +1451,8 @@ import { host, isDesktopHost } from '@/services/host.js'
 import BrowserPane from '@/components/BrowserPane.vue'
 import FileTree from '@/components/FileTree.vue'
 import QuickOpenPanel from '@/components/QuickOpenPanel.vue'
+import CommandPalette from '@/components/CommandPalette.vue'
+import AppMenuBar from '@/components/AppMenuBar.vue'
 import FilePreview from '@/components/FilePreview.vue'
 import VariablePanel from '@/components/VariablePanel.vue'
 import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
@@ -1521,6 +1538,7 @@ import LitigationVisualPanel from '@/components/LitigationVisualPanel.vue'
 import DdRequestEditor from '@/components/DdRequestEditor.vue'
 import ChatInterface from '@/components/ChatInterface.vue'
 import { panelSwitchingMethods } from './panelSwitching.js'
+import { menuCommandsMethods } from './menuCommands.js'
 import { agentClientActionMethods } from './agentClientActions.js'
 import { librePoolMethods } from './librePool.js'
 import { stagingAreaMethods } from './stagingArea.js'
@@ -1536,6 +1554,8 @@ export default {
     LibreOfficeEditor,
     BrowserPane,
     QuickOpenPanel,
+    CommandPalette,
+    AppMenuBar,
     FileTree,
     FilePreview,
     VariablePanel,
@@ -1743,6 +1763,8 @@ export default {
       stagingOriginalParents: {}, // 记录文件进入暂存区前的原始 parentId: { fileId: originalParentId }
       splitMode: false,
       quickOpenVisible: false, // IDE 化 Cmd+P 快速打开
+      commandPaletteVisible: false, // 命令面板（⌥⌘P），读命令注册表
+      menuBarRefreshKey: 0, // Windows 自绘菜单栏的重建信号（跟着 pushMenuState 走）
       projectSwitcherOpen: false, // IDE 化最近项目切换器
       switcherProjects: [],
       versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 顶栏工作状态点
@@ -2094,6 +2116,8 @@ export default {
     if (typeof window !== 'undefined' && window.__checkbaActiveOverviewVm === this) {
       window.__checkbaActiveOverviewVm = null
     }
+    // 菜单栏命令订阅必须摘掉，理由同下面的广场订阅（多实例）
+    this.unregisterMenuCommands()
     // 后台任务状态轮询清理
     if (this.convStatusPollTimer) { clearInterval(this.convStatusPollTimer); this.convStatusPollTimer = null }
     this.stopCollabPolling()
@@ -2301,6 +2325,8 @@ export default {
     }
     // 重新成为活跃实例后确保有预热备胎（mounted 时可能因非活跃被跳过）
     this.scheduleLibreSpare()
+    // 菜单栏：重新接管（页面栈里可能有别的实例刚交出去）
+    this.registerMenuCommands()
 
     // 从设置页返回时刷新授权/账户 chip（用户可能刚连接或断开账户）
     this.loadLicenseMode()
@@ -2651,7 +2677,20 @@ export default {
   watch: {
     // IDE 化窗口标题：「文件名 — 项目名 — AI Workdeck」（Electron 窗口标题跟随 document.title）
     'project.name'() { this.updateWindowTitle() },
-    activeFileIdLeft() { this.updateWindowTitle() },
+    activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState() },
+    // 菜单栏的勾选/置灰跟着这些走。编辑器与 AI 面板内部的状态走 @menu-state
+    // 事件（见对应组件），这里只管工作台自己的。桥那边有浅比较+去抖，
+    // 这些 watcher 只管「叫一声」，不必自己节流。
+    'project.id'() { this.pushMenuState() },
+    activeFileIdRight() { this.pushMenuState() },
+    sidebarCollapsed() { this.pushMenuState() },
+    showToolsPanel() { this.pushMenuState() },
+    showAiPanel() { this.pushMenuState() },
+    splitMode() { this.pushMenuState() },
+    activeToolKey() { this.pushMenuState() },
+    leftPaneKey() { this.pushMenuState() },
+    isRecording() { this.pushMenuState() },
+    LEFT_SIDEBAR_PLUGINS() { this.pushMenuState() },
     // 桌面端统一守卫：弹窗/蒙层打开 → 隐藏 BrowserView；全部关闭 → 恢复并重同步 bounds
     desktopOverlayActive(open) {
       if (!this.isDesktopApp) return
@@ -2702,6 +2741,7 @@ export default {
     },
     // Phase 1 外置的方法组（纯搬移，this 即页面实例）
     ...panelSwitchingMethods,
+    ...menuCommandsMethods,
     ...agentClientActionMethods,
     ...librePoolMethods,
     // Phase 2 外置的方法组
@@ -2770,6 +2810,16 @@ export default {
     onQuickOpenFile(file) {
       this.quickOpenVisible = false
       if (file) this.openFile(file)
+    },
+    /**
+     * 命令面板选中一条：关面板，然后走和菜单栏**完全同一条**派发链
+     * （appMenuBridge.handleAction）——两个入口共用一份 when 判定与一份实现。
+     */
+    async onCommandPaletteRun(item) {
+      this.commandPaletteVisible = false
+      if (!item || !item.id) return
+      const { runCommandById } = await import('@/utils/appMenuBridge.js')
+      await runCommandById(item.id)
     },
     // 文件树右键「在访达中显示」：后端解析物理路径（localRoot 感知），桌面壳高亮
     async onRevealFile(file) {

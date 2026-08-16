@@ -45,7 +45,8 @@
     "test:desktop-e2e": "node tests/desktop-e2e/run.mjs",
     "test:feedback-e2e": "node tests/feedback-e2e/run.mjs",
     "test:meeting-e2e": "node tests/meeting-e2e/run.mjs",
-    "test:project-home": "node --test tests/project-home/*.test.mjs"
+    "test:project-home": "node --test tests/project-home/*.test.mjs",
+    "test:commands": "node --test tests/commands/commands.test.mjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-4080420251103001",

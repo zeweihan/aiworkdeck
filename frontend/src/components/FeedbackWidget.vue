@@ -273,7 +273,14 @@ export default {
       return this.$t('feedback.headDefaultTitle')
     },
   },
+  mounted() {
+    // 菜单栏的「反馈…」「报告问题…」经这条事件打开浮窗。浮窗挂在页面树之外
+    // （feedbackWidget.js 的 body 级单例），菜单派发器够不到组件实例，只能走事件。
+    this._openFromMenu = () => { if (!this.open) this.openPanel() }
+    try { uni.$on('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
+  },
   beforeUnmount() {
+    try { uni.$off('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
     this.stopRecording(true)
     this.stopPlay()
     this.revokeAll()

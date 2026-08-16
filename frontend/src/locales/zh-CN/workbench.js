@@ -1,5 +1,12 @@
 // 工作台（pages/project-overview/project-overview.vue）文案。
 export default {
+  // 菜单栏 / 命令面板
+  menuNeedsDoc: '请先打开一个 Word 文档',
+  menuSelectTextFirst: '请先选中要批注的文字',
+  menuAiNotReady: 'AI 面板尚未就绪',
+  menuImportHint: '把文件拖进左侧资源管理器即可导入',
+  commandPalettePlaceholder: '输入命令名称…',
+  commandPaletteEmpty: '没有匹配的命令',
   // 顶栏项目信息
   clickToRename: '点击重命名',
   unnamedProject: '未命名项目',
