@@ -377,13 +377,55 @@ P3b 从 P3 里拆出来单独一轮：它是全新的 UI 组件、风险最高�
 
 ---
 
+## 8.5 实施后的实测结果（2026-08-16）
+
+四期全部落地。真机验证用 CDP 逐点探测 + `osascript` 读/点真实 NSMenu
+（交通灯与菜单都是 OS 画的，不进网页截图，靠肉眼看图判断不了）：
+
+| 项 | 结果 |
+|---|---|
+| 菜单栏九项 | `Apple, Electron, File, Edit, Document, AI, View, Go, Tools, Window, Help` |
+| 菜单点击回路 | 点 View→Sidebar 真的翻转了 `sidebarCollapsed`（NSMenu→主进程→IPC→桥→when→活跃实例守卫→`toggleSidebar`） |
+| 勾选态双向 | 开着真 Word 文档点 Document→Track Changes，勾从 ✓ 变无、再点变回 ✓ |
+| 置灰 | 无文档时 Document 全灰；无项目时 Import/Reveal/Close Project 灰；无标签时 Close Tab 灰 |
+| app:* 命令 | Help→Keyboard Shortcuts 弹出 12 条加速键，英文态文案正确 |
+| 交通灯让位 | 13 页逐点探测：只有 login / variable-library / plugin-market 需让位，已改；其余 10 页拖拽覆盖率 100%；工作台顶栏 72% 面积可拖 |
+| Windows 留白 | 模拟 `is-win` 后 padL/R = 18/148，最后一个工具按钮距右边正好 148px |
+| Windows 自绘菜单栏 | 模拟 `is-win` 渲染正常，加速键转成 `Ctrl+` 写法，子菜单可展开 |
+
+回归：`test:commands` 17/17、`test:project-home` 72/72、`check:emits`（85 个 .vue）、
+`check:locales`（18 个命名空间）、`check:nav:full`、`build:h5`、`desktop npm test` 37/37、
+`app-e2e` 95/0（J11 缺 `APP_E2E_JAR` 跳过，既有）、`lowa-e2e` 391/0。后端零改动，未跑 `mvn test`。
+
+实施中自己踩到、已写进领域文档的三条：
+1. 让位规则的选择器必须写 `html.is-xxx`——组件 scoped 样式同权重且注入更晚会赢；
+2. 一个组件里两个同名 `watch:` 键，后写的把先写的整个覆盖掉（静默失效）；
+3. 读 `documentElement.classList` 这种非响应式源不能写成 computed（缓存后永不重算）。
+
 ## 9. 未解决 / 需实测
 
-- `⌃⇥` `⌃⇧⇥` 在 Writer 表格上下文的占用（§4.4）
-- 菜单加速键能否穿透 LOWA webview（§6.5）——整条 P3 的价值主张之一
-- `.uno:AcceptTrackedChange` 在本引擎（24.2.8-zhcn-r4）上的实际行为——页边修订模式
-  下是否按光标所在那一处生效（§7）
-- Windows 自绘菜单栏的键盘可达性口径（`Alt` 唤起在 Electron 下是否需要额外拦截）
+**只能人工走查的**（自动化在本机触发不了）：
+
+- **全屏进出**。`enter-full-screen`/`leave-full-screen` → `checkba:chrome-state` →
+  `is-fullscreen` class → 顶栏留白归零。CSS 侧已实测（手动加 class 时 88px→18px
+  正确切换），但真实全屏触发不了：`osascript` 点 `Toggle Full Screen` 报成功而窗口
+  尺寸不变（该 role 要求真实用户交互），注入按键又需要辅助功能权限。**发版前人工过一遍。**
+- **菜单加速键能否穿透 LOWA webview**（§6.5）。这是 P3 价值主张的一半，但同样要真
+  按键。写进发版走查清单。
+
+**仍未定的**：
+
+- `⌃⇥` `⌃⇧⇥` 在 Writer 表格上下文的占用（§4.4）。本次改用 `⌥⌘←/→` 绕开了，暂无风险。
+- Windows 真机：自绘菜单栏的 `Alt` 唤起、原生控件与 header 在小窗口下的挤压。
+  本次只在 mac 上冒充 `is-win` 验过样式与渲染。
+
+**本轮主动缩掉的**：
+
+- 「接受/拒绝**当前**修订」。`ReviewPanel` 不跟踪光标，要走 `.uno:AcceptTrackedChange`
+  并往 `ui_command` 白名单加两条；菜单里先只给「接受/拒绝**全部**」，用的是现成的
+  `resolveAll` 出口。
+- 「插入表格/图片/脚注」。要走工具栏自己的对话框流程，接线成本高而工具栏上本来就有
+  入口，价值不抵成本。
 
 ## 10. 本次不做
 

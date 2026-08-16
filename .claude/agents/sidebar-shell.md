@@ -84,6 +84,54 @@ launch（**启动页**）/ unlock / identity / login / newproject / **project-li
 **IDE 化体验对齐第二轮（2026-07-31，同分支）**：① 启动直达——login 页 `tryAutoResume()` 存储会话有效即 reLaunch 上次项目（`utils/recentProjects.js` 的 `checkba_last_project_id`），登录页只在会话失效时出现（**PR-A 去登录后这条只对浏览器访问团队服务器有效**：桌面端启动链已改为 launch 页分流，直达逻辑迁到 `launch.vue`，登录页在桌面端不再出现）；② 桌面应用菜单 `desktop/main/app-menu.js`（文件→打开文件夹 Cmd+O/打开文件/新建项目文件夹/最近打开动态子菜单；编辑菜单是 editMenu role，删了它 mac 输入框 Cmd+C/V 全灭；窗口菜单刻意无 close role——Cmd+W 留给渲染层关标签），动作经 `checkba:menu-action` 到 App.vue 全局处理器（`utils/ideOpen.js` 共用流程）；③ overview 键位 Cmd+P（`QuickOpenPanel.vue` 快速打开，document 捕获段拦键：uni input 不透传 keydown）/Cmd+W 关活跃标签，焦点在 LOWA webview 内收不到属已知边界；④ 顶栏项目名旁最近项目切换器（`.project-switcher`/`.switcher-menu`）与工作状态点（`.work-status-chip`，复用 `checkAdoptConflict` 的 /status，working/onDraft 才渲染）；⑤ 窗口标题「文件 — 项目 — AI Workdeck」（watch activeFileIdLeft/project.name）；⑥ 拖文件夹到窗口（App.vue capture 段 drop，单目录才接管，`fs.getPathForFile` preload helper）与 macOS open-file 事件（main.js `dispatchOpenPath`，窗口未就绪先存后发）都走 open-local。文件树方向键导航有意缓做（全局拦方向键与编辑器输入冲突）。
 **newproject 已 IDE 化（2026-07-31）**：桌面态三动作「打开文件夹/新建项目文件夹/打开文件」走 `window.checkbaDesktop.fs.showOpenDialog` + `POST /api/projects/open-local`（同一 localRoot 重复打开复用项目并幂等重扫导入，见 `LocalProjectService`）；浏览器降级为托管空白项目（BLANK）；成功后 reLaunch 进 overview，单文件过渡版带 `openFileId` 查询参数（`fileOpenTabs.js` 的 `openPendingLocalFile`）。项目类型选择表单已删除（`config/projectTypes.js` 仅剩 `getProjectTypeLabel` 供存量项目卡片显示）。FileTree 右键新增「在访达中显示」（`reveal-file` → overview `onRevealFile` → `/local-path` 端点 + `fs.showItemInFolder` IPC）。
 
+## 窗口外壳与菜单栏（2026-08-16）
+
+**没有系统标题栏了。** `main.js` 的 `titleBarStyle:'hidden'`：mac 用
+`trafficLightPosition:{x:18,y:13}` 把三颗交通灯精确摆进 42px 的 `.project-header`
+垂直中心（**不用 `hiddenInset`**——那个按系统默认标题栏高度摆，压不准我们的 42px）；
+Windows 用 `titleBarOverlay` 把原生控件覆盖在右上。渲染层一侧在
+`utils/windowChrome.js`：往 `documentElement` 挂 `is-desktop / is-mac / is-win /
+is-fullscreen`，并在 `<body>` 下补一条 38px 拖拽条给那些没有自己顶栏的页面。
+
+三条改这块必须记得的规矩：
+1. **让位规则的选择器一律写 `html.is-xxx`**。组件 scoped 样式带 `[data-v-]`，与
+   `.is-mac .project-header` 同权重（0,2,0）但注入更晚会赢，必须靠元素选择器抬到
+   (0,2,1) 才压得住 `project-overview.scss` 的 `padding: 0 18px`。
+2. **顶栏里每加一个可交互元素，都要在 App.vue 的 no-drag 名单里加一行**。整条
+   `.project-header` 是 `-webkit-app-region: drag`，漏一个就是一个点不动的按钮。
+3. **只有 login / variable-library / plugin-market 三页左上角压着实体内容**，已逐页
+   让位；其余 10 页顶部是空白背景、拖拽条覆盖率 100%（CDP 逐点探测得出，交通灯是
+   OS 画的不进截图，别靠肉眼看图判断）。
+
+**菜单栏的数据源在渲染层，主进程只把 JSON 渲染成 NSMenu。**
+
+```
+config/commands/{app,file,edit,document,ai,view,go,tools,help}.js  纯数据，可 JSON 序列化
+        │  index.js: MENU_ORDER / isEnabled(when) / buildMenuPayload(state, lang)
+        ├──> utils/appMenuBridge.js ──IPC checkba:menu-state──> desktop/main/app-menu.js
+        ├──> components/CommandPalette.vue（⌥⌘P）
+        └──> components/AppMenuBar.vue（Windows 自绘，mac 不渲染）
+```
+
+- 命令 `run` 只有两个命名空间：`app:*` 桥自己执行，`wb:*` 经 `uni.$emit('awd:command')`
+  交给活跃的工作台实例（`pages/project-overview/menuCommands.js`，套活跃实例守卫）。
+- **主进程恒定持有系统骨架**（应用菜单 / 编辑 roles / 视图里的重新加载与开发者工具 /
+  窗口），下发只替换业务菜单。渲染层白屏时菜单要是也没了，用户连「重新加载」都点不到。
+- 菜单里的应用名用 `APP_DISPLAY_NAME` 常量，**不要用 `app.name`**（PR#370 的结论）。
+- 文案里**不要出现 `&`**：Electron 当助记符标记吃掉（`Account & License` 会显示成
+  `Account  License`）。
+- `checkba:recent-projects` 通道已并入 `checkba:menu-state`，不要再另开单推通道。
+
+**加速键是编辑器优先**。外壳里嵌着 Word 编辑器，放进原生菜单的加速键会被永久从编辑器
+手里拿走（NSMenu 的 key equivalent 先于响应链）。裸 `⌘+字母` 只保留语义同构的
+`⌘O/⌘W/⌘F/⌘,`，其余外壳命令一律 `Alt+CmdOrCtrl+*`；`Esc/Enter/Tab` 永不做加速键；
+不碰 `Shift+Cmd+3/4/5`（系统截图，优先级高于应用菜单）。工作台原有的 `⌘P` 快速打开、
+`⌘W` 关闭标签**键位保留不动**——它们在编辑器内被 webview 吞掉正好是「编辑器优先」。
+这套口径由 `npm run test:commands` 断言，改表时它会拦你。
+
+**客户视图过滤是安全边界不是排版偏好**：`when: ['notClient']` 同时决定菜单项 enabled
+和命令能否执行，加速键在客户视图下按下去必须什么都不发生。
+
 ## 反馈浮窗与外壳的两处接缝（2026-08）
 
 右下角常驻反馈浮窗**不在页面树里**：`App.vue onLaunch` 经 `utils/feedbackWidget.js`
@@ -123,6 +171,10 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
   页面路由埋点在 App.vue onLaunch 的 uni.addInterceptor（唯一收口，别在 50 处调用点逐个埋）；
   面板切换埋点在 panelSwitching.js 的 toggleLeftPane（区分 staging/收展/切换三分支）。
 - sed 子串替换改类名会误伤（king-*→awd-* 迁移教训，PR#171）。
+- **组件里两个同名 `watch:` / `methods:` 键，后写的会把先写的整个覆盖掉**（本次在
+  LibreOfficeEditor 上真踩到，加的 watch 静默失效）。往大组件里加块之前先 grep 一遍。
+- **读非响应式源（如 `documentElement.classList`）不能写成 computed**，首次求值后一直
+  用缓存（AppMenuBar 的平台判定就这么静默失效过）。要 data + 显式刷新。
 - uni @tap 在 e2e 驱动下有陷阱（app-e2e 记录）。
 - 布局开关后不调 triggerWorkbenchResize 会导致编辑器/iframe 不重排。
 - 全站（官网侧）禁 emoji 红线不适用于本仓库 UI，但品牌截图有红线（marketing-screenshots 记录）。
@@ -131,3 +183,8 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
 
 - `cd frontend && npm run check:emits`（死绑定护栏）+ `npm run test:app-e2e`（登录→项目→上传→打开文件→独立页面全旅程）。
 - 布局/编辑器联动改动加跑 `npm run test:lowa-e2e`。
+- 改命令表/菜单加跑 `npm run test:commands`（加速键归属与 when 求值断言，已进 CI）。
+  真机验菜单不能只看代码：`osascript -e 'tell application "System Events" to tell
+  process "Electron" to get name of every menu bar item of menu bar 1'` 能直接读出
+  真实 NSMenu，`click menu item "X" of menu 1 of menu bar item "View"` 能真点。
+  **例外：`Toggle Full Screen` 点不动**（需要真实用户交互），全屏相关只能人工走查。
