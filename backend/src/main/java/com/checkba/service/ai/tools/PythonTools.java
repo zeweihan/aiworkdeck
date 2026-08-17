@@ -41,6 +41,7 @@ public class PythonTools implements AgentToolComponent {
 
     private final LegalTools legalTools;
     private final WebTools webTools;
+    private final com.checkba.service.SystemSettingService systemSettingService;
 
     private static final String DOCKER_IMAGE = "python:3.9-slim";
 
@@ -124,11 +125,14 @@ default_api = _ToolAPI()
             return "Error: code is required.";
         }
         log.info("Tool: run_python called. Code length={}", code.length());
-        
+
+        java.util.Map<String, String> credentials = resolveExternalCredentials();
         // Debug: Log API key status (masked for security)
         log.info("API Key Status - TUSHARE_TOKEN: {}, QICHACHA_KEY: {}, QICHACHA_SECRET: {}",
-            maskValue(tushareToken), maskValue(qichachaKey), maskValue(qichachaSecret));
-        
+            maskValue(credentials.get("TUSHARE_TOKEN")),
+            maskValue(credentials.get("QICHACHA_KEY")),
+            maskValue(credentials.get("QICHACHA_SECRET")));
+
         Path tempDir = null;
         Process process = null;
         try {
@@ -170,13 +174,11 @@ default_api = _ToolAPI()
             command.add("-w");
             command.add("/workspace");
             // Env Vars
-            command.add("-e");
-            command.add("TUSHARE_TOKEN=" + (tushareToken != null ? tushareToken : ""));
-            command.add("-e");
-            command.add("QICHACHA_KEY=" + (qichachaKey != null ? qichachaKey : ""));
-            command.add("-e");
-            command.add("QICHACHA_SECRET=" + (qichachaSecret != null ? qichachaSecret : ""));
-            
+            credentials.forEach((name, value) -> {
+                command.add("-e");
+                command.add(name + "=" + value);
+            });
+
             // Image & Command
             command.add(DOCKER_IMAGE);
             command.add("python");
@@ -291,6 +293,28 @@ default_api = _ToolAPI()
         }
     }
     
+    /**
+     * 注入 Python 子进程的外部服务凭证（环境变量名 -> 值）。
+     *
+     * <p><b>库优先、yml 兜底</b>，与同一批凭证的 Java 侧调用方（{@code TushareService} /
+     * {@code QichachaService}）同源。早先这里只读 {@code @Value}，而用户在
+     * 「系统管理 → 外部服务」填的凭证写进的是 {@code system_setting}——脚本因此永远拿到空值，
+     * 且不会报「未配置」，只是查不到数据，AI 据此回答「没有查到该公司的信息」。
+     *
+     * <p>取值放在每次调用时而不是启动时：设置页改完即时生效，不用重启后端。
+     */
+    java.util.Map<String, String> resolveExternalCredentials() {
+        java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+        env.put("TUSHARE_TOKEN", orEmpty(systemSettingService.get("external.tushare.token", tushareToken)));
+        env.put("QICHACHA_KEY", orEmpty(systemSettingService.get("external.qichacha.key", qichachaKey)));
+        env.put("QICHACHA_SECRET", orEmpty(systemSettingService.get("external.qichacha.secret", qichachaSecret)));
+        return env;
+    }
+
+    private static String orEmpty(String value) {
+        return value != null ? value : "";
+    }
+
     /**
      * 后台守护线程持续读取进程输出流到缓冲，防止管道写阻塞导致子进程挂死。
      */
