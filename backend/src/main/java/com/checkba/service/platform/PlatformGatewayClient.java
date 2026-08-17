@@ -108,6 +108,17 @@ public class PlatformGatewayClient {
     }
 
     /**
+     * 本月分服务消耗：{@code {month, services:[{service, cents, calls}], totalCents, balanceCents, pendingHoldCents}}。
+     *
+     * <p><b>与单价表分开两个端点是官网侧刻意的</b>：单价几乎不动、桌面端给它挂 10 分钟缓存，
+     * 用量花一笔就要变。合并会逼两种保鲜要求互相迁就——要么缓存把用量冻住十分钟
+     * （用户刚转写完看不到扣费），要么为了用量取消缓存（每次工具调用都来问一遍单价）。
+     */
+    public JsonNode getMonthlyUsage(int timeoutSeconds) {
+        return getJson("/api/gateway/usage", timeoutSeconds);
+    }
+
+    /**
      * 本机是否已连账户。platform 档的「已配置」判据就是它——用不着那 5 个供应商凭证，
      * 但没有账户 Key 就连请求都发不出去。
      */
@@ -163,6 +174,13 @@ public class PlatformGatewayClient {
                     fallback(serverMessage, LangText.of(
                             "该服务暂未开放，可在系统管理里改用自己的 Key",
                             "This service is not available yet. You can switch to your own key in System settings")));
+            // 用户自己设的单次任务上限被撞上。它与其余七档的性质不同：**任务没坏，钱也没白花**，
+            // 用户确认一句就能继续（设计 §4.9）。不认这个码的话它会落到下面按状态码分类的
+            // 409 分支，变成一句「平台服务返回了预期外的状态」——一个可恢复的确认被表达成故障。
+            case "budget_exceeded" -> new GatewayException(GatewayException.Kind.BUDGET_EXCEEDED,
+                    fallback(serverMessage, LangText.of(
+                            "本次任务的花费已达到你设定的上限，确认后可继续",
+                            "This task has reached the spending cap you set. Confirm to continue")));
             case "in_flight" -> new GatewayException(GatewayException.Kind.UPSTREAM_FAILED,
                     fallback(serverMessage, LangText.of(
                             "同一次操作仍在处理中，稍候重试",

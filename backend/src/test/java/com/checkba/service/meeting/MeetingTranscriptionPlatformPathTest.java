@@ -110,6 +110,9 @@ class MeetingTranscriptionPlatformPathTest {
 
         when(meetingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(settingService.get(anyString(), anyString())).thenReturn("");
+        // 告知闸默认布置成「这台机器已确认过」：本类验的是提交编排，不是告知本身。
+        // 不布置的话每个用例都会被那道闸挡在第一步——那正是它该干的事，另有专门用例验。
+        acknowledgeNotice(true);
         when(accountService.currentKeyOrNull()).thenReturn("awdk_test");
         when(resolver.resolve(ExternalServiceProvider.ASR)).thenReturn(ExternalServiceProvider.PLATFORM);
 
@@ -124,6 +127,14 @@ class MeetingTranscriptionPlatformPathTest {
         when(projectFileRepository.findById(11L)).thenReturn(Optional.of(pf));
         when(storageResolver.resolve(anyString())).thenReturn(audioFile.toPath());
         when(transcoder.toMp3(any(), any())).thenReturn(audioFile);
+    }
+
+    /** 布置这台机器有没有就录音处理方式确认过。 */
+    private void acknowledgeNotice(boolean acknowledged) {
+        when(settingService.get(eq(MeetingRecordingNotice.KEY_ACKNOWLEDGED_AT), anyString()))
+                .thenReturn(acknowledged ? "2026-08-17T09:00:00Z" : "");
+        when(settingService.get(eq(MeetingRecordingNotice.KEY_VERSION), anyString()))
+                .thenReturn(acknowledged ? MeetingRecordingNotice.VERSION : "");
     }
 
     private MeetingTranscriptionService service() {
@@ -325,6 +336,54 @@ class MeetingTranscriptionPlatformPathTest {
         service().refreshIfNeeded(m);
 
         assertTrue(transport.calls.isEmpty());
+    }
+
+    // ==================== 录音处理方式的一次性告知闸 ====================
+
+    @Test
+    @DisplayName("平台档欠着告知：提交被拒，一个字节都没上传")
+    void platformSubmitRefusedUntilNoticeAcknowledged() {
+        acknowledgeNotice(false);
+        meeting(MeetingRecording.STATUS_RECORDED);
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> service().startTranscription(7L));
+
+        // 界面上的那块告知只挡得住走界面的人；真正把录音交出去的是 finish 自动提交的
+        // 那一下，用户在那一刻没有任何动作。被录的是第三方，他不是我们的用户。
+        assertTrue(transport.calls.isEmpty(), "告知没确认就不许有任何出站请求");
+        verifyNoInteractions(uploader);
+        verifyNoInteractions(oss);
+        verifyNoInteractions(tingwu);
+
+        // 可读的业务错误：不含三个掉线子串，且要说清下一步（确认告知 / 改用本机转写）
+        for (String forbidden : List.of("登录", "未授权", "请先")) {
+            assertFalse(e.getMessage().contains(forbidden),
+                    "拒绝文案含「" + forbidden + "」会被 api.js 判成掉线：" + e.getMessage());
+        }
+        assertTrue(e.getMessage().contains("录音不出本机"), "要给出「不想出网怎么办」的出路");
+    }
+
+    @Test
+    @DisplayName("告知只拦平台档：byok 走用户自己的账号、local 不出本机，都没有要告知的事")
+    void noticeGateOnlyAppliesToPlatformTier() {
+        acknowledgeNotice(false);
+
+        when(resolver.resolve(ExternalServiceProvider.ASR)).thenReturn(ExternalServiceProvider.BYOK);
+        assertFalse(service().recordingNoticePending());
+
+        when(resolver.resolve(ExternalServiceProvider.ASR)).thenReturn(ExternalServiceProvider.LOCAL);
+        assertFalse(service().recordingNoticePending());
+
+        when(resolver.resolve(ExternalServiceProvider.ASR)).thenReturn(ExternalServiceProvider.PLATFORM);
+        assertTrue(service().recordingNoticePending());
+    }
+
+    @Test
+    @DisplayName("确认过就永远不再拦——这是一次性告知，不是每次硬闸")
+    void acknowledgedMachineIsNeverAskedAgain() {
+        acknowledgeNotice(true);
+        assertFalse(service().recordingNoticePending());
     }
 
     /** 把一段 JSON 文本变成 JSON 字符串字面量（网关是这么内联结果的）。 */

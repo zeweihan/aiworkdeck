@@ -56,6 +56,30 @@ export default {
   byokMissingNote: 'Fill in the credentials below before switching to your own key, otherwise this service will be unavailable.',
   saveHint: 'Credential changes need the "Save Settings" button below; tier switches apply immediately and need no save.',
 
+  // ---- This month's spend (the number next to each service) ----
+  // Unknown always renders as a dash, never as 0 -- same rule as ai-usage. A 0 states a
+  // fact we do not actually know: a user who just ran a two-hour transcription would read
+  // it as "the charge never landed".
+  usageMonthLabel: 'This month',
+  usageUnknown: '—',
+  usageCredits: '{credits} Credits',
+  usageTotal: '{credits} Credits this month ({month})',
+  usageUnavailable: "This month's spend is temporarily unreadable; that does not mean it is zero.",
+
+  // ---- Spending thresholds ----
+  budgetTitle: 'Spending alerts',
+  budgetSubtitle: 'Set either to 0 to turn it off. These decide when we ask you a question, not a hard cap.',
+  budgetTaskLimitLabel: 'Per-task spending cap',
+  budgetTaskLimitNote: 'When one task reaches this amount we ask whether to continue; confirm and it carries on. Not a prompt on every call.',
+  budgetLowBalanceLabel: 'Warn when balance drops below',
+  budgetLowBalanceNote: 'Shows a warning on this panel once the balance falls below this amount, so a transcription does not run out halfway.',
+  budgetUnit: 'Credits',
+  budgetSave: 'Save thresholds',
+  budgetSaved: 'Saved',
+  budgetSaveFailed: 'Could not save. Try again later.',
+  budgetInvalid: 'Invalid amount. Use 0 to turn the threshold off.',
+  lowBalanceNotice: 'Account balance is {credits} Credits, below the {threshold} Credits you set.',
+
   // ---- The AI row ----
   aiRowName: 'AI Chat & Writing',
   aiRowDesc: 'AI does not use this path: model requests go straight from this device to the provider you choose and never pass through AI WorkDeck servers. Provider, model, and account balance are configured under AI Settings.',

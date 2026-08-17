@@ -83,7 +83,12 @@ public class MeetingRecordingController {
         requireMemberByMeeting(sessionId, meetingId);
         MeetingRecording meeting = meetingService.finish(meetingId, dto == null ? null : dto.getDurationMs());
         boolean autoTranscribe = dto == null || !Boolean.FALSE.equals(dto.getTranscribe());
+        // 平台档欠着告知就不自动提交：**这一下才是录音真正离开本机的时刻**，
+        // 而这条路上用户没有任何动作。不上传，会议留在「未转写」，
+        // 面板上那块告知就摆在眼前，确认后点一下「开始转写」即可——
+        // 录音本身完好，什么都没丢。
         if (autoTranscribe && transcriptionService.isConfigured()
+                && !transcriptionService.recordingNoticePending()
                 && MeetingRecording.STATUS_RECORDED.equals(meeting.getStatus())) {
             meeting = transcriptionService.startTranscription(meetingId);
         }
