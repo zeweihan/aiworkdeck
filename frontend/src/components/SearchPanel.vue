@@ -2,7 +2,8 @@
   <view class="search-panel">
     <!-- Header Area -->
     <view class="search-header">
-      <!-- <text class="panel-title">搜索</text> -->
+      <!-- 面板标题由外壳的 sidebar-header 出（此前这里是一行注释掉的 panel-title，
+           属于「靠注释躲开重复标题」那一档写法，已按统一口径清掉） -->
 
       <!-- Search Input -->
       <view class="input-wrapper">
@@ -31,20 +32,61 @@
         </view>
       </view>
 
-      <!-- Tag Filters -->
-      <view class="section-label" v-if="visibleTags && visibleTags.length > 0">{{ $t('files.filterByTag') }}</view>
-      <view class="tags-container" v-if="visibleTags && visibleTags.length > 0">
+      <!-- Tag Filters
+           默认折叠。自动打标签会给项目攒出上百个词（本机实测单个项目 338 个），
+           全量平铺出来的那面标签墙会把搜索框和结果一起挤出屏幕——筛选器反而
+           成了这个面板最难用的部分。折叠 + 计数 + 过滤框 + 已选常驻，是让
+           「有几百个标签」这件事不再阻碍「找一份文件」。 -->
+      <view class="tag-sec-head" v-if="visibleTags && visibleTags.length > 0" @tap="tagsOpen = !tagsOpen">
+        <text class="tag-sec-chevron" :class="{ open: tagsOpen }">›</text>
+        <text class="tag-sec-title">{{ $t('files.filterByTag') }}</text>
+        <text class="tag-sec-count">{{ visibleTags.length }}</text>
+        <view class="tag-sec-spacer"></view>
+        <text class="tag-sec-clear" v-if="selectedTagIds.length" @tap.stop="clearTags">
+          {{ $t('files.tagClear') }}
+        </text>
+      </view>
+
+      <!-- 已选标签：折叠状态下也必须看得见，否则「搜不到东西」的原因被藏起来了 -->
+      <view class="tags-container selected-row" v-if="!tagsOpen && selectedTags.length > 0">
         <view
-          v-for="tag in visibleTags"
-          :key="tag.id"
+          v-for="tag in selectedTags"
+          :key="'sel-' + tag.id"
           class="tag-chip"
-          :class="{ selected: selectedTagIds.includes(tag.id) }"
           :style="getTagStyle(tag)"
           @tap="toggleTag(tag.id)"
         >
           <text class="tag-name">{{ tag.name }}</text>
         </view>
       </view>
+
+      <template v-if="tagsOpen && visibleTags && visibleTags.length > 0">
+        <view class="tag-filter-box" v-if="visibleTags.length > TAG_FILTER_THRESHOLD">
+          <input
+            class="tag-filter-input"
+            v-model="tagFilter"
+            :placeholder="$t('files.tagFilterPlaceholder')"
+          />
+        </view>
+        <view class="tags-container">
+          <view
+            v-for="tag in shownTags"
+            :key="tag.id"
+            class="tag-chip"
+            :class="{ selected: selectedTagIds.includes(tag.id) }"
+            :style="getTagStyle(tag)"
+            @tap="toggleTag(tag.id)"
+          >
+            <text class="tag-name">{{ tag.name }}</text>
+          </view>
+        </view>
+        <text
+          class="tag-more"
+          v-if="filteredTags.length > shownTags.length"
+          @tap="tagsExpanded = true"
+        >{{ $t('files.tagShowAll', { count: filteredTags.length }) }}</text>
+        <text class="tag-empty" v-else-if="filteredTags.length === 0">{{ $t('files.tagNoMatch') }}</text>
+      </template>
 
       <!-- Search Stats -->
       <view class="search-stats" v-if="hasSearched">
@@ -114,6 +156,11 @@
 import { searchProjectContent, getProjectTags } from '@/services/api'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
 
+// 标签超过这个数量才值得再给它一个过滤框
+const TAG_FILTER_THRESHOLD = 12
+// 展开后先只铺这么多，剩下的走「显示全部」——一个项目可能有几百个自动标签
+const TAG_MAX_COLLAPSED = 24
+
 export default {
   name: 'SearchPanel',
   components: {
@@ -146,7 +193,44 @@ export default {
       debounceTimer: null,
       allProjectTags: [], // Store all tags
       visibleTags: [],    // Tags to display
-      selectedTagIds: []
+      selectedTagIds: [],
+      // 标签筛选区默认折叠（自动打标签能攒出上百个词，平铺会淹掉整个面板）
+      tagsOpen: false,
+      tagsExpanded: false,   // 「显示全部」点过之后不再截断
+      tagFilter: '',
+      tagCounts: {}          // tagId -> 本次搜索结果里命中的文件数，用来排序
+    }
+  },
+  computed: {
+    TAG_FILTER_THRESHOLD: () => TAG_FILTER_THRESHOLD,
+    TAG_MAX_COLLAPSED: () => TAG_MAX_COLLAPSED,
+    // 折叠时用来展示「当前正在按哪几个标签筛」
+    selectedTags() {
+      return this.allProjectTags.filter(t => this.selectedTagIds.includes(t.id))
+    },
+    /**
+     * 排序口径：已选的永远在最前（否则勾过的标签会被冲到几百个之后找不回来），
+     * 其次按本次搜索结果里的命中文件数降序——没搜过就没有计数，退回按名称排。
+     */
+    filteredTags() {
+      const q = this.tagFilter.trim().toLowerCase()
+      const list = q
+        ? this.visibleTags.filter(t => (t.name || '').toLowerCase().includes(q))
+        : this.visibleTags.slice()
+      const selected = new Set(this.selectedTagIds)
+      return list.sort((a, b) => {
+        const sa = selected.has(a.id) ? 1 : 0
+        const sb = selected.has(b.id) ? 1 : 0
+        if (sa !== sb) return sb - sa
+        const ca = this.tagCounts[a.id] || 0
+        const cb = this.tagCounts[b.id] || 0
+        if (ca !== cb) return cb - ca
+        return String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN')
+      })
+    },
+    shownTags() {
+      if (this.tagsExpanded || this.tagFilter.trim()) return this.filteredTags
+      return this.filteredTags.slice(0, TAG_MAX_COLLAPSED)
     }
   },
   mounted() {
@@ -171,6 +255,11 @@ export default {
       }
       this.performSearch()
     },
+    clearTags() {
+      if (!this.selectedTagIds.length) return
+      this.selectedTagIds = []
+      this.performSearch()
+    },
     getTagStyle(tag) {
         const isSelected = this.selectedTagIds.includes(tag.id);
         const color = tag.color || '#6C757D';
@@ -191,6 +280,7 @@ export default {
     },
     updateVisibleTags(fileResults) {
         if (!fileResults || fileResults.length === 0) {
+            this.tagCounts = {}
             if (this.selectedTagIds.length > 0) {
                  this.visibleTags = this.allProjectTags.filter(t => this.selectedTagIds.includes(t.id))
             } else {
@@ -201,16 +291,23 @@ export default {
 
         // Collect all tag IDs present in the result files
         const relevantTagIds = new Set()
+        // 顺带数一遍每个标签命中了几个文件：标签区的排序靠它，没有计数就只能按名字排，
+        // 而按名字排在几百个自动标签里等于没有排序
+        const counts = {}
 
         // Also always include currently selected tags, so they don't disappear
         this.selectedTagIds.forEach(id => relevantTagIds.add(id))
 
         fileResults.forEach(file => {
             if (file.tags) {
-                file.tags.forEach(tag => relevantTagIds.add(tag.id))
+                file.tags.forEach(tag => {
+                    relevantTagIds.add(tag.id)
+                    counts[tag.id] = (counts[tag.id] || 0) + 1
+                })
             }
         })
 
+        this.tagCounts = counts
         // Filter allProjectTags
         this.visibleTags = this.allProjectTags.filter(t => relevantTagIds.has(t.id))
     },
@@ -340,33 +437,25 @@ $border-color: #E9ECEF;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
 
+/* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场） */
 .search-header {
-    padding: 16px 12px 12px;
+    padding: var(--awd-panel-gap) 0 var(--awd-panel-gap);
     background-color: $gray-pale;
     border-bottom: 1px solid transparent; /* Prepare for sticky behavior if needed */
 }
 
-.panel-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: $gray-medium;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 12px;
-    display: block;
-}
-
 .input-wrapper {
   position: relative;
-  margin-bottom: 16px;
+  margin: 0 var(--awd-panel-pad-x) var(--awd-panel-gap);
 
   .input-box {
     display: flex;
     align-items: center;
+    height: var(--awd-panel-row-h);
     background: $white;
-    border: 1px solid #CECECE;
-    border-radius: 6px;
-    padding: 6px 10px;
+    border: 1px solid var(--awd-panel-border);
+    border-radius: var(--awd-panel-radius);
+    padding: 0 8px;
     transition: all 0.2s ease;
     box-shadow: 0 1px 2px rgba(0,0,0,0.02);
 
@@ -383,7 +472,7 @@ $border-color: #E9ECEF;
 
     .search-input {
       flex: 1;
-      font-size: 13px;
+      font-size: var(--awd-panel-fs);
       color: $gray-dark;
       border: none;
       outline: none;
@@ -407,36 +496,94 @@ $border-color: #E9ECEF;
   }
 }
 
-.section-label {
-    font-size: 11px;
-    color: $gray-medium;
-    margin-bottom: 8px;
-    font-weight: 500;
+/* ---- 标签筛选（可折叠）---- */
+.tag-sec-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--awd-panel-sec-h);
+  padding: 0 var(--awd-panel-pad-x);
+  cursor: pointer;
+  user-select: none;
+
+  &:hover { background: var(--awd-panel-accent-wash); }
+}
+
+.tag-sec-chevron {
+  width: 12px;
+  font-size: 12px;
+  color: var(--awd-panel-text-3);
+  transition: transform 0.12s ease;
+  transform-origin: center;
+
+  &.open { transform: rotate(90deg); }
+}
+
+.tag-sec-title {
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--awd-panel-text-2);
+}
+
+.tag-sec-count {
+  font-size: 10px;
+  color: var(--awd-panel-text-3);
+  background: var(--awd-panel-hover);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 14px;
+}
+
+.tag-sec-spacer { flex: 1; }
+
+.tag-sec-clear {
+  font-size: 10px;
+  color: var(--awd-panel-accent);
+  cursor: pointer;
+
+  &:hover { text-decoration: underline; }
+}
+
+.tag-filter-box {
+  margin: 2px var(--awd-panel-pad-x) 4px;
+}
+
+.tag-filter-input {
+  width: 100%;
+  height: 24px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-text);
+  background: $white;
+  border: 1px solid var(--awd-panel-border);
+  border-radius: 4px;
+  outline: none;
+
+  &::placeholder { color: var(--awd-panel-text-4); }
 }
 
 .tags-container {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: 4px;
+  padding: 0 var(--awd-panel-pad-x);
+  margin-bottom: var(--awd-panel-gap);
+
+  &.selected-row { margin-bottom: 4px; }
 
   .tag-chip {
-    padding: 4px 10px;
-    border-radius: 100px; /* Pill shape */
+    padding: 1px 7px;
+    border-radius: 4px;
     border: 1px solid; /* Color coming from inline style */
     cursor: pointer;
-    transition: all 0.15s ease;
-    font-size: 11px;
+    font-size: 10px;
+    line-height: 16px;
     font-weight: 500;
+    max-width: 100%;
 
-    &:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-    }
-
-    &:active {
-        transform: translateY(0);
-    }
+    &:hover { filter: brightness(0.97); }
 
     .tag-name {
         line-height: 1.2;
@@ -444,9 +591,25 @@ $border-color: #E9ECEF;
   }
 }
 
+.tag-more,
+.tag-empty {
+  display: block;
+  padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap);
+  font-size: 10px;
+  color: var(--awd-panel-text-3);
+}
+
+.tag-more {
+  color: var(--awd-panel-accent);
+  cursor: pointer;
+
+  &:hover { text-decoration: underline; }
+}
+
 .search-stats {
-  font-size: 11px;
+  font-size: var(--awd-panel-fs-meta);
   color: $gray-medium;
+  padding: 0 var(--awd-panel-pad-x);
   display: flex;
   align-items: center;
   gap: 4px;

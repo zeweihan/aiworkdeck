@@ -1,15 +1,7 @@
 <template>
   <!-- Vue 3 多根节点：与 DdFilesPanel / ShareholderMeetingPanel 同构 -->
 
-  <view class="lv-panel-header">
-    <text class="lv-panel-title">{{ $t('panels.litTitle') }}</text>
-    <view class="lv-refresh-btn" @tap="reload" :title="$t('panels.litRefresh')">
-      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-        <path d="M21 3v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
-    </view>
-  </view>
+  <!-- 面板标题由外壳的 sidebar-header 统一出，这里不再自画一份（重复两次的老毛病） -->
 
   <!-- 环境降级提示。graphviz 缺失只挡流程图一种布局，不能说成整体不可用 -->
   <view class="lv-notice" v-if="status && !status.available">
@@ -20,17 +12,18 @@
   </view>
 
   <!-- 出图 -->
-  <view class="lv-section">
-    <text class="lv-section-title">{{ $t('panels.litNewDiagramSectionTitle') }}</text>
-
-    <view class="lv-scope" @tap="pickScope">
-      <text class="lv-scope-label">{{ $t('panels.litScopeLabel') }}</text>
-      <text class="lv-scope-value" :class="{ placeholder: !scopeLabel }">
+  <view class="lv-sec-head">
+    <text class="lv-sec-title">{{ $t('panels.litNewDiagramSectionTitle') }}</text>
+  </view>
+  <view class="lv-sec-body">
+    <view class="lv-field" @tap="pickScope">
+      <text class="lv-field-label">{{ $t('panels.litScopeLabel') }}</text>
+      <text class="lv-field-value" :class="{ placeholder: !scopeLabel }">
         {{ scopeLabel || $t('panels.litScopeDefault') }}
       </text>
+      <text class="lv-field-caret">›</text>
     </view>
 
-    <text class="lv-hint-label">{{ $t('panels.litKindsLabel') }}</text>
     <view class="lv-kinds">
       <view
         v-for="k in KINDS"
@@ -40,7 +33,7 @@
         @tap="diagramHint = diagramHint === k.value ? '' : k.value"
       >{{ k.label }}</view>
     </view>
-    <text class="lv-kind-tip">{{ $t('panels.litKindTip') }}</text>
+    <text class="lv-tip">{{ $t('panels.litKindTip') }}</text>
 
     <view class="lv-btn primary" :class="{ disabled: starting }" @tap="start">
       {{ starting ? $t('panels.litStarting') : $t('panels.litStart') }}
@@ -48,41 +41,51 @@
   </view>
 
   <!-- 图廊 -->
-  <view class="lv-section">
-    <text class="lv-section-title">{{ $t('panels.litGalleryTitle', { count: diagrams.length }) }}</text>
+  <view class="lv-sec-head">
+    <text class="lv-sec-title">{{ $t('panels.litGalleryLabel') }}</text>
+    <text class="lv-sec-count">{{ diagrams.length }}</text>
+    <view class="lv-sec-spacer"></view>
+    <view class="lv-sec-action" @tap="reload" :title="$t('panels.litRefresh')">
+      <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M21 12a9 9 0 1 1-2.64-6.36" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        <path d="M21 3v6h-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+    </view>
+  </view>
 
-    <view class="lv-empty" v-if="!loading && diagrams.length === 0">
-      <text class="lv-empty-text">{{ $t('panels.litEmptyText') }}</text>
+  <view class="lv-empty" v-if="!loading && diagrams.length === 0">
+    <text class="lv-empty-text">{{ $t('panels.litEmptyText') }}</text>
+  </view>
+
+  <!-- 行式列表（对齐插件广场的 msb-row 密度）：整行点开，动作只在悬停时露出 -->
+  <view v-for="d in diagrams" :key="d.folderId" class="lv-row">
+    <view class="lv-row-head" @tap="openDiagram(d)">
+      <view class="lv-row-main">
+        <text class="lv-row-name">{{ d.name }}</text>
+        <text class="lv-row-meta">
+          {{ layoutLabel(d.layout) }}<template v-if="d.mode"> · {{ d.mode }}</template
+          ><template v-if="d.formats && d.formats.length"> · {{ d.formats.join(' ') }}</template>
+        </text>
+      </view>
+      <text class="lv-badge draft" v-if="d.draft">{{ $t('panels.litDraftBadge') }}</text>
+      <text class="lv-badge edited" v-else-if="d.handEdited">{{ $t('panels.litHandEditedBadge') }}</text>
     </view>
 
-    <view v-for="d in diagrams" :key="d.folderId" class="lv-card">
-      <view class="lv-card-head" @tap="openDiagram(d)">
-        <view class="lv-card-main">
-          <text class="lv-card-name">{{ d.name }}</text>
-          <text class="lv-card-meta">
-            {{ layoutLabel(d.layout) }}<template v-if="d.mode"> · {{ d.mode }}</template>
-          </text>
-        </view>
-        <text class="lv-draft-badge" v-if="d.draft">{{ $t('panels.litDraftBadge') }}</text>
-        <text class="lv-edited-badge" v-else-if="d.handEdited">{{ $t('panels.litHandEditedBadge') }}</text>
-      </view>
-
-      <view class="lv-card-formats">
-        <text v-for="f in d.formats" :key="f" class="lv-format-chip">{{ f }}</text>
-      </view>
-
-      <view class="lv-card-actions">
-        <view class="lv-btn ghost" @tap="openDiagram(d)">{{ $t('panels.litOpen') }}</view>
-        <!-- 「编辑」是 .drawio 这份产物在面板里的唯一入口。没有它，可编辑版就只能
-             从文件树里翻出来，等于大多数人不知道它存在。 -->
-        <view class="lv-btn ghost" v-if="d.drawioFileId" @tap="editDiagram(d)">{{ $t('panels.litEdit') }}</view>
-        <view
+    <view class="lv-row-actions">
+      <!-- 「编辑」是 .drawio 这份产物在面板里的唯一入口。没有它，可编辑版就只能
+           从文件树里翻出来，等于大多数人不知道它存在。 -->
+      <text class="lv-link" v-if="d.drawioFileId" @tap.stop="editDiagram(d)">{{ $t('panels.litEdit') }}</text>
+      <!-- 换风格是三选一而不是三个并列按钮：它们互斥，摆成一排等权按钮会把
+           「打开/编辑」这两个真正的主动作挤到第二行去。 -->
+      <text class="lv-restyle-label">{{ $t('panels.litRestyleLabel') }}</text>
+      <view class="lv-modes">
+        <text
           v-for="m in MODES"
           :key="m"
-          class="lv-btn ghost"
-          :class="{ disabled: restylingId === d.folderId }"
-          @tap="restyle(d, m)"
-        >{{ m }}</view>
+          class="lv-mode"
+          :class="{ active: d.mode === m, disabled: restylingId === d.folderId }"
+          @tap.stop="restyle(d, m)"
+        >{{ m }}</text>
       </view>
     </view>
   </view>
@@ -256,83 +259,145 @@ export default {
 </script>
 
 <style scoped>
-.lv-panel-header {
+/* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场 MarketSidebarPanel）。
+   这个面板此前是 12-14px 边距 + 每张图一个独立卡片，260px 宽的左栏里
+   一张图就吃掉三行，五个动作按钮还要换行——现在改成行式列表。 */
+
+.lv-notice {
+  margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
+  padding: 6px 8px;
+  border-radius: var(--awd-panel-radius);
+  background: #FDF3F2;
+  border: 1px solid #F3D9D6;
+}
+.lv-notice.subtle { background: #F7F8FA; border-color: #E8EAED; }
+.lv-notice-text { font-size: var(--awd-panel-fs-meta); line-height: 1.55; color: #6B6560; }
+
+/* 分组头：与插件广场同形（26px / 11px-700 / 计数徽章 / 右侧动作） */
+.lv-sec-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px 10px;
-  border-bottom: 1px solid #ebedf0;
+  gap: 4px;
+  height: var(--awd-panel-sec-h);
+  padding: 0 var(--awd-panel-pad-x);
+  margin-top: 2px;
 }
-.lv-panel-title { font-size: 13px; font-weight: 600; color: #1f2329; letter-spacing: .02em; }
-.lv-refresh-btn {
-  width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
-  color: #8a9099; cursor: pointer; border-radius: 4px;
+.lv-sec-title {
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--awd-panel-text-2);
 }
-.lv-refresh-btn:hover { background: #f2f4f6; color: #1f2329; }
-.lv-refresh-btn svg { width: 14px; height: 14px; }
-
-.lv-notice { margin: 10px 14px 0; padding: 8px 10px; border-radius: 6px; background: #fdf3f2; border: 1px solid #f3d9d6; }
-.lv-notice.subtle { background: #f7f8fa; border-color: #e8eaed; }
-.lv-notice-text { font-size: 11px; line-height: 1.6; color: #6b6560; }
-
-.lv-section { padding: 12px 14px; border-bottom: 1px solid #f0f2f4; }
-.lv-section-title { display: block; font-size: 11px; font-weight: 600; color: #8a9099; letter-spacing: .06em; margin-bottom: 10px; }
-
-.lv-scope {
-  padding: 8px 10px; border: 1px solid #e3e6ea; border-radius: 6px; background: #fff;
-  cursor: pointer; margin-bottom: 12px;
+.lv-sec-count {
+  font-size: 10px;
+  color: var(--awd-panel-text-3);
+  background: var(--awd-panel-hover);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 14px;
+  margin-left: 2px;
 }
-.lv-scope:hover { border-color: #c9ced6; }
-.lv-scope-label { display: block; font-size: 10px; color: #9aa0a8; margin-bottom: 3px; }
-.lv-scope-value { font-size: 12px; color: #1f2329; line-height: 1.5; }
-.lv-scope-value.placeholder { color: #9aa0a8; }
+.lv-sec-spacer { flex: 1; }
+.lv-sec-action {
+  width: 20px; height: 20px; display: flex; align-items: center; justify-content: center;
+  color: var(--awd-panel-text-3); cursor: pointer; border-radius: 4px;
+}
+.lv-sec-action:hover { background: var(--awd-panel-hover); color: var(--awd-panel-text); }
+.lv-sec-action svg { width: 13px; height: 13px; }
 
-.lv-hint-label { display: block; font-size: 10px; color: #9aa0a8; margin-bottom: 6px; }
-.lv-kinds { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.lv-sec-body {
+  padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
+  border-bottom: 1px solid var(--awd-panel-border);
+}
+
+/* 「材料」收成一行：标签在左、值在右、末尾一个 ›，不再占两行 */
+.lv-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--awd-panel-row-h);
+  padding: 4px 8px;
+  border: 1px solid var(--awd-panel-border);
+  border-radius: var(--awd-panel-radius);
+  background: #fff;
+  cursor: pointer;
+  margin-bottom: var(--awd-panel-gap);
+}
+.lv-field:hover { border-color: var(--awd-panel-accent-2); }
+.lv-field-label { flex-shrink: 0; font-size: var(--awd-panel-fs-meta); color: var(--awd-panel-text-3); }
+.lv-field-value {
+  flex: 1; min-width: 0; font-size: var(--awd-panel-fs); color: var(--awd-panel-text);
+  line-height: 1.45; text-align: right;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.lv-field-value.placeholder { color: var(--awd-panel-text-4); }
+.lv-field-caret { flex-shrink: 0; font-size: 14px; color: var(--awd-panel-text-4); line-height: 1; }
+
+.lv-kinds { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
 .lv-kind {
-  padding: 4px 9px; font-size: 11px; border-radius: 4px; cursor: pointer;
-  border: 1px solid #e3e6ea; color: #4a5058; background: #fff;
+  padding: 3px 8px; font-size: var(--awd-panel-fs-meta); border-radius: 4px; cursor: pointer;
+  border: 1px solid var(--awd-panel-border); color: var(--awd-panel-text-2); background: #fff;
 }
-.lv-kind:hover { border-color: #c9ced6; }
-.lv-kind.active { border-color: #2b6a4d; color: #2b6a4d; background: #f2f8f5; }
-.lv-kind-tip { display: block; font-size: 10px; color: #9aa0a8; margin-bottom: 12px; }
+.lv-kind:hover { border-color: #C9CED6; }
+.lv-kind.active {
+  border-color: var(--awd-panel-accent); color: var(--awd-panel-accent); background: rgba(26, 83, 54, 0.06);
+}
+.lv-tip {
+  display: block; font-size: 10px; color: var(--awd-panel-text-4);
+  line-height: 1.5; margin-bottom: var(--awd-panel-gap);
+}
 
 .lv-btn {
-  display: inline-flex; align-items: center; justify-content: center;
-  padding: 6px 12px; font-size: 12px; border-radius: 5px; cursor: pointer; user-select: none;
+  display: flex; align-items: center; justify-content: center;
+  height: var(--awd-panel-row-h); font-size: var(--awd-panel-fs);
+  border-radius: var(--awd-panel-radius); cursor: pointer; user-select: none;
 }
-.lv-btn.primary { width: 100%; background: #2b6a4d; color: #fff; padding: 8px 12px; }
-.lv-btn.primary:hover { background: #245b42; }
-.lv-btn.ghost { border: 1px solid #e3e6ea; color: #4a5058; background: #fff; padding: 4px 10px; font-size: 11px; }
-.lv-btn.ghost:hover { border-color: #c9ced6; background: #fafbfc; }
+.lv-btn.primary { background: var(--awd-panel-accent); color: #fff; font-weight: 500; }
+.lv-btn.primary:hover { background: #16482E; }
 .lv-btn.disabled { opacity: .5; pointer-events: none; }
 
-.lv-empty { padding: 16px 0; text-align: center; }
-.lv-empty-text { font-size: 11px; color: #9aa0a8; }
+.lv-empty { padding: 14px var(--awd-panel-pad-x); text-align: center; }
+.lv-empty-text { font-size: var(--awd-panel-fs-meta); color: var(--awd-panel-text-4); line-height: 1.6; }
 
-.lv-card { border: 1px solid #ebedf0; border-radius: 6px; padding: 10px; margin-bottom: 8px; background: #fff; }
-.lv-card:hover { border-color: #dfe3e8; }
-.lv-card-head { display: flex; align-items: flex-start; justify-content: space-between; cursor: pointer; }
-.lv-card-main { flex: 1; min-width: 0; }
-.lv-card-name {
-  display: block; font-size: 12px; color: #1f2329; font-weight: 500; line-height: 1.4;
+/* 行式列表：整行可点＝打开；动作行悬停才浮起来，静态时只剩名字与元信息 */
+.lv-row { padding: 4px var(--awd-panel-pad-x) 6px; }
+.lv-row:hover { background: var(--awd-panel-accent-wash); }
+.lv-row-head { display: flex; align-items: flex-start; gap: 6px; cursor: pointer; }
+.lv-row-main { flex: 1; min-width: 0; }
+.lv-row-name {
+  display: block; font-size: var(--awd-panel-fs); color: var(--awd-panel-text); font-weight: 500;
+  line-height: 1.5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lv-row-meta {
+  display: block; font-size: 10px; color: var(--awd-panel-text-4); line-height: 1.5;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.lv-card-meta { display: block; font-size: 10px; color: #9aa0a8; margin-top: 2px; }
-.lv-edited-badge {
-  flex-shrink: 0; margin-left: 8px; padding: 1px 6px; font-size: 10px;
-  color: #2b6a4d; background: #f2f8f5; border: 1px solid #d6e7de; border-radius: 3px;
+.lv-badge {
+  flex-shrink: 0; padding: 0 5px; font-size: 10px; line-height: 15px; border-radius: 3px;
 }
-.lv-draft-badge {
-  flex-shrink: 0; margin-left: 8px; padding: 1px 6px; font-size: 10px;
-  color: #8a5a2b; background: #fdf6ec; border: 1px solid #f2e3cc; border-radius: 3px;
+.lv-badge.edited { color: var(--awd-panel-accent); background: rgba(26, 83, 54, 0.08); }
+.lv-badge.draft { color: #8A5A2B; background: #FDF6EC; }
+
+.lv-row-actions {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px;
+  margin-top: 3px; opacity: 0; transition: opacity 0.12s ease;
 }
+.lv-row:hover .lv-row-actions { opacity: 1; }
+.lv-link {
+  font-size: 10px; color: var(--awd-panel-accent); cursor: pointer; margin-right: 4px;
+}
+.lv-link:hover { text-decoration: underline; }
+.lv-restyle-label { font-size: 10px; color: var(--awd-panel-text-4); }
+.lv-modes { display: flex; gap: 0; border: 1px solid var(--awd-panel-border); border-radius: 4px; overflow: hidden; }
+.lv-mode {
+  padding: 1px 6px; font-size: 10px; color: var(--awd-panel-text-2); background: #fff; cursor: pointer;
+  border-right: 1px solid var(--awd-panel-border);
+}
+.lv-mode:last-child { border-right: none; }
+.lv-mode:hover { background: var(--awd-panel-hover); }
+.lv-mode.active { background: rgba(26, 83, 54, 0.08); color: var(--awd-panel-accent); font-weight: 600; }
+.lv-mode.disabled { opacity: .5; pointer-events: none; }
 
-.lv-card-formats { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
-.lv-format-chip { font-size: 10px; color: #7a8189; background: #f4f6f8; border-radius: 3px; padding: 1px 5px; }
-
-.lv-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
-
-.lv-credit { padding: 10px 14px 16px; }
-.lv-credit-text { display: block; font-size: 10px; color: #b0b5bb; text-align: center; }
+.lv-credit { padding: var(--awd-panel-gap-lg) var(--awd-panel-pad-x); }
+.lv-credit-text { display: block; font-size: 10px; color: #C4C9CE; text-align: center; line-height: 1.5; }
 </style>

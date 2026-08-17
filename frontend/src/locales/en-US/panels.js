@@ -3,13 +3,11 @@
 // plugin container, text-to-speech, clipboard, variable library.
 export default {
   // LitigationVisualPanel.vue
-  litTitle: 'Litigation Visualization',
   litRefresh: 'Refresh',
   litNoGraphvizNotice: "This machine doesn't have graphviz, so flowcharts can't be drawn for now; the other six kinds — timelines, relationship maps, ownership structure trees, and more — still work.",
   litNewDiagramSectionTitle: 'Generate a New Diagram',
   litScopeLabel: 'Materials',
   litScopeDefault: 'All materials in this project (click to choose a folder or file instead)',
-  litKindsLabel: 'Diagram Type',
   litKindTimeline: 'Fact Timeline',
   litKindPeriod: 'Limitation Period Chart',
   litKindFlowchart: 'Flowchart',
@@ -18,12 +16,12 @@ export default {
   litKindTip: 'Leave unselected to let AI decide which type fits the materials.',
   litStarting: 'Handing off to AI…',
   litStart: 'Generate Diagram',
-  litGalleryTitle: 'Diagrams in This Project ({count})',
+  litGalleryLabel: 'Diagrams in This Project',
   litEmptyText: 'No diagrams yet. Select materials above and click "Generate Diagram."',
   litDraftBadge: 'Draft',
   litHandEditedBadge: 'Hand-Edited',
-  litOpen: 'Open',
   litEdit: 'Edit',
+  litRestyleLabel: 'Restyle',
   litUnavailableFallback: 'Diagram generation is unavailable',
   litStartFailedFallback: 'Failed to start',
   litHandEditedConfirmTitle: 'This diagram was hand-edited',
@@ -44,7 +42,7 @@ export default {
   litLayoutFallback: 'Diagram',
 
   // ShareholderMeetingPanel.vue
-  smTitle: 'Shareholder Meeting Verification',
+  smListLabel: 'Verifications',
   smCreateTitle: 'New Verification',
   smCompanyNamePlaceholder: 'Company name (required)',
   smStockCodePlaceholder: 'Stock code (6 digits, optional)',
@@ -164,7 +162,7 @@ export default {
   ddDeleteFailed: 'Delete failed',
 
   // DdFilesPanel.vue
-  dfTitle: 'Due Diligence Checklists',
+  dfListLabel: 'Checklists',
   dfCreateTitle: 'New Checklist',
   dfCopy: 'Copy',
   dfRename: 'Rename',
@@ -228,8 +226,7 @@ export default {
   evSearchVoicePlaceholder: 'Search voices…',
   evNoMatchVoice: 'No matching voice',
   evRateLabel: 'Rate',
-  evPitchLabel: 'Pitch',
-  evVolumeLabel: 'Volume',
+  evNoVoicesNotice: 'The speech engine is not ready, so no voices could be loaded. Pick the local engine under Admin → Platform Services → Speech, then download the speech component under Components.',
   evGenerating: 'Generating…',
   evGenerate: 'Generate',
   evResultTitle: 'Result',

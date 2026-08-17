@@ -119,9 +119,14 @@ public class TtsService {
      * 本地 Kokoro 合成（POST /v1/audio/speech → WAV）。
      * 服务不可达 = 组件未下载/未启用，走"功能未配置"引导（前端既有机制）。
      *
-     * @param rate 语速，"1.2" / "1.2x" 皆可；pitch 与 volume 本地引擎不支持，保留参数位以免动前端契约
+     * @param rate 语速，"1.2" / "1.2x" 皆可。
+     *             <b>pitch 与 volume 两个形参已去掉</b>：本地引擎不支持，而前端那两个滑杆
+     *             同样已删（它们从来没生效过——前端把 '+0Hz'/'+0%' 写死在 payload 里，
+     *             后端也从不读）。留着形参位只会让下一个人以为「传了就能生效」。
+     *             {@code TtsController.GenerateRequest} 仍保留这两个 setter，
+     *             免得存量客户端的请求体反序列化炸掉，但不再往下传。
      */
-    public File generateAudio(String text, String voiceId, String rate, String pitch, String volume) {
+    public File generateAudio(String text, String voiceId, String rate) {
         String base = localBaseUrl();
         if (base == null || base.isBlank()) {
             throw new FeatureNotConfiguredException("tts",

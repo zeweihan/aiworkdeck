@@ -1,9 +1,11 @@
 <template>
   <!-- Vue 3 多根节点：与 DdFilesPanel 同构 -->
 
-  <!-- Header -->
-  <view class="sm-panel-header">
-    <text class="sm-panel-title">{{ $t('panels.smTitle') }}</text>
+  <!-- 功能已下线（左栏入口移除），组件保留待恢复。
+       标题由外壳的 sidebar-header 统一出，这里只留分组头。 -->
+  <view class="sm-sec-head">
+    <text class="sm-sec-title">{{ $t('panels.smListLabel') }}</text>
+    <view class="sm-sec-spacer"></view>
     <view class="sm-add-btn" @tap="showCreateForm = !showCreateForm" :title="$t('panels.smCreateTitle')">
       <text class="sm-add-icon">＋</text>
     </view>
@@ -333,18 +335,22 @@ export default {
 </script>
 
 <style scoped lang="scss">
-.sm-panel-header {
+.sm-sec-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 12px 14px 8px;
+  gap: 4px;
+  height: var(--awd-panel-sec-h);
+  padding: 0 var(--awd-panel-pad-x);
 }
 
-.sm-panel-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #333;
+.sm-sec-title {
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--awd-panel-text-2);
 }
+
+.sm-sec-spacer { flex: 1; }
 
 .sm-add-btn {
   width: 22px;
