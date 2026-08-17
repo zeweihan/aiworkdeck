@@ -178,6 +178,26 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
   LibreOfficeEditor 上真踩到，加的 watch 静默失效）。往大组件里加块之前先 grep 一遍。
 - **读非响应式源（如 `documentElement.classList`）不能写成 computed**，首次求值后一直
   用缓存（AppMenuBar 的平台判定就这么静默失效过）。要 data + 显式刷新。
+- **`rpx` 在 H5 上是会跟着视口缩放的**：uni-h5 把 rpx 编译成 `rem`（比例 10/320），
+  运行时按移动端口径设根字号——`窗口宽 <= rpxCalcMaxDeviceWidth(默认960) ? 窗口宽 : 375`
+  再除以 23.4375。桌面端窗口拖到 960 以下，根字号从 16px 一路涨到 40px，**全应用
+  rpx 尺寸整体放大到 2.5 倍**（FileTree 149 处 rpx，表现最触目：图标与计数变巨大）。
+  已在 `pages.json` 的 globalStyle 加 `rpxCalcMaxDeviceWidth: 0` 恒走 375 分支关掉，
+  **别把这一行删了**；桌面端新写的固定尺寸一律用 px，不要再引 rpx。
+  实现在 `@dcloudio/uni-h5` 的 `useRem()`。
+- **padding 简写会把「让位」整条吃掉**：交通灯/窗口控件的保留区不要写成
+  `html.is-mac .某顶栏 { padding-left: 88px }`——组件 scoped 样式里任何一条更高
+  权重的 `padding:` 简写都会盖掉它（`.compact-mode .project-header { padding: 0 16px }`
+  权重 (0,4,0)，窗口窄于 1360px 时必现，交通灯直接压在项目名上）。正确写法是
+  在**页面自己的样式表里**、紧跟自己的 padding 简写写一行
+  `padding-left: max(自己的边距, var(--awd-titlebar-safe-inline-start))`
+  （变量定义在 App.vue，非桌面/全屏/非 mac 时为 0，max() 自动退回原值）。
+  **padding 简写在哪出现，让位就得跟到哪**，包括 media query 里的那一份。
+- **不要再用 uni 的 `<picker mode="selector">` 与 `<switch>`**：前者在 H5 上弹的是
+  移动端底部抽屉（滚轮 + 取消/确定），后者尺寸写死只能靠 `transform: scale()` 硬缩。
+  统一用 `components/AwdSelect.vue`（API 与 picker 对齐：range/value，差别是 change
+  直接抛下标；菜单 fixed 定位避开 scroll-view 裁剪，下方装不下时向上开）与
+  `components/AwdSwitch.vue`（change 直接抛布尔值）。
 - uni @tap 在 e2e 驱动下有陷阱（app-e2e 记录）。
 - 布局开关后不调 triggerWorkbenchResize 会导致编辑器/iframe 不重排。
 - 全站（官网侧）禁 emoji 红线不适用于本仓库 UI，但品牌截图有红线（marketing-screenshots 记录）。
