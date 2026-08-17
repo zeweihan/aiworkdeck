@@ -93,6 +93,18 @@ server {
         types { } default_type application/octet-stream;
     }
 
+    # ---- 入口文档永不缓存 ----
+    # assets 是 hash 名可以长缓存，index.html 一旦被浏览器缓存住，用户就会一直跑在
+    # 旧包上：2026-08-17 实测过一次——旧包的 bug 是「未登录整页无限刷新」，前端修好
+    # 并铺开之后，本地缓存里的老 index.html 仍把人钉在旧包上继续刷。
+    # 本 location 内出现 add_header 即丢弃继承的 COOP/COEP，必须原样补回，
+    # 否则 LOWA 编辑器要的 SharedArrayBuffer 会失效。
+    location = /index.html {
+        add_header Cross-Origin-Opener-Policy   same-origin  always;
+        add_header Cross-Origin-Embedder-Policy require-corp always;
+        add_header Cache-Control "no-cache" always;
+    }
+
     # ---- SPA 回退 ----
     location / {
         try_files $uri $uri/ /index.html;
