@@ -370,6 +370,13 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
    （浏览器端还跳登录页）。账户未连接、未分配额度、付费项未购买全是**业务错误不是掉线**，
    必须走 code=1 信封、绝不带 4010。
    护栏：`AccountServiceTest.accountMessagesDoNotLookLikeAuthErrors`、两个 market 测试里的 `assertNotMistakenForLogout`。
+   **「跳登录页」这条链自己会喂自己**（2026-08-17 现网事故，addin.aiworkdeck.com 打开即整页无限刷新）：
+   `App.vue` 的导航拦截器给**每一次跳转**补一条 `ui.nav` 埋点，而 `/api/telemetry/event` 同样需要会话——
+   4010 → reLaunch 登录页 → 埋点 → 又 4010 → 又跳，8 秒 100 次导航。两道闸缺一不可：
+   `utils/telemetryClient.js` 的 track 在**浏览器态未登录时一条都不发**（桌面 local-mode 免登录恒可发），
+   `services/api.js` 的 4010 分支在**已经停在登录页时只清会话不再跳**。
+   护栏 `frontend/tests/auth-redirect`。往登录前的页面（launch/login/wizard）新加任何需要会话的请求，
+   或给导航拦截器再挂 fire-and-forget 调用，都要回看这条。
 2. **local-mode 与团队服务器模式行为差异是一整套，不是一个开关**。`EntitlementService` 是**按本机**的
    （数据源是 `~/.aiworkdeck` 的 license/account 状态，没有 userId 维度），团队服务器上权益恒为空集。
    因此这些地方必须「非 local-mode 一律不限制 / 恒为正式版」：`LicenseService.status/activate/deactivate`、
