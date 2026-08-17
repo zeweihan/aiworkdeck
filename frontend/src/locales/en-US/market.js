@@ -53,6 +53,8 @@ export default {
   noPluginsYet: 'No plugins published yet',
   localInstallHint: 'You can also install locally: drop a plugin directory into the server\'s plugins/ folder, then click "Rescan"',
   pluginLabel: 'Plugin',
+  panelPluginLabel: 'Panel plugin',
+  panelPluginHint: 'Adds a sidebar icon that opens a full panel',
   installingShort: 'Installing',
   pluginTrustNote: 'Plugins have the same permissions as apps on this machine — confirm the source is trustworthy before installing. All online plugins are manually reviewed and platform-signed; they are disabled by default after install and must be enabled manually under "Installed".',
 

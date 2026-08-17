@@ -233,7 +233,7 @@
           <view v-if="loading" class="empty">
             <text class="empty-title">{{ $t('market.loadingLocalPlugins') }}</text>
           </view>
-          <view v-else-if="plugins.length === 0" class="empty">
+          <view v-else-if="plugins.length === 0 && panelSkills.length === 0" class="empty">
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, i) in ICONS.blocks" :key="i" :d="d" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
@@ -275,12 +275,42 @@
             </view>
           </view>
 
+          <!-- 面板型 skill：装完是左栏一个图标 + 一整个面板，用户认知里就是插件，
+               所以放在插件区、只给启用/停用（判据是 leftSidebarPlugins 的 requiresSkill）。
+               技术上它仍是 skills/ 下的一份，启停照样走 setSkillActivation。 -->
+          <view v-if="panelSkills.length" class="card-grid">
+            <view v-for="s in panelSkills" :key="s.id" class="ed-card" :class="{ off: !s.enabled }">
+              <view class="card-head">
+                <view class="head-text">
+                  <view class="kicker">
+                    <svg class="kicker-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                      <path v-for="(d, i) in ICONS.panelLeft" :key="i" :d="d" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <text>{{ $t('market.panelPluginLabel') }}</text>
+                    <text class="kicker-sep"></text>
+                    <text :class="s.enabled ? 'kicker-on' : 'kicker-off'">{{ s.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
+                  </view>
+                  <text class="card-title">{{ s.name || s.id }}</text>
+                  <text class="card-note">{{ $t('market.panelPluginHint') }}</text>
+                </view>
+                <AwdSwitch
+                  class="plugin-switch"
+                  :checked="s.enabled"
+                  :disabled="switching"
+                  @change="onPanelSkillToggle(s, $event)"
+                />
+              </view>
+
+              <text class="card-desc">{{ s.description || $t('market.noDescription') }}</text>
+            </view>
+          </view>
+
           <!-- Skill 区块（规范见 docs/SKILL_SPEC.md） -->
           <view class="section-head">
             <text class="section-title">{{ $t('market.sectionSkillTitle') }}</text>
             <text class="section-sub">{{ $t('market.sectionSkillSub') }}</text>
           </view>
-          <view v-if="skills.length === 0" class="empty">
+          <view v-if="conversationSkills.length === 0" class="empty">
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path v-for="(d, i) in ICONS.skill" :key="i" :d="d" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round" />
             </svg>
@@ -288,7 +318,7 @@
             <text class="empty-hint">{{ $t('market.noLocalSkillsHint') }}</text>
           </view>
           <view v-else class="card-grid">
-            <view v-for="s in skills" :key="s.id" class="ed-card" :class="{ off: !s.enabled }">
+            <view v-for="s in conversationSkills" :key="s.id" class="ed-card" :class="{ off: !s.enabled }">
               <view class="card-head">
                 <view class="head-text">
                   <view class="kicker">
@@ -332,6 +362,7 @@ import { getPlugins, setPluginEnabled, rescanPlugins, getSkills, setSkillActivat
 import { paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { ICONS } from '@/config/icons.js'
+import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
 import { t } from '@/i18n'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdSwitch from '@/components/AwdSwitch.vue'
@@ -420,6 +451,15 @@ export default {
     },
     ICONS() {
       return ICONS
+    },
+    /** 面板型（长在左栏 rail 上）：广场里按插件呈现 */
+    panelSkills() {
+      // 插件携带的 skill 跟随插件启停，不在这里单列
+      return this.skills.filter((s) => isPanelSkill(s.id) && !s.sourcePluginId)
+    },
+    /** 对话型：在对话里被触发词命中的那一类，才有「生效方式三档」 */
+    conversationSkills() {
+      return this.skills.filter((s) => !isPanelSkill(s.id) || s.sourcePluginId)
     },
     installedCount() {
       return this.plugins.length + this.skills.length
@@ -622,6 +662,30 @@ export default {
         console.error('加载 Skill 列表失败:', e)
         uni.showToast({ title: this.$t('market.loadSkillListFailed'), icon: 'none' })
       }
+    },
+    // 面板型只有启用/停用两态：开 = auto（面板的 kick-off prompt 要靠触发词命中，
+    // manual 会让「生成纪要」按钮点了没反应），关 = disabled（左栏图标随之消失）
+    async onPanelSkillToggle(skill, enabled) {
+      const mode = enabled ? 'auto' : 'disabled'
+      this.switching = true
+      try {
+        await setSkillActivation(skill.id, mode)
+        skill.activationMode = mode
+        skill.enabled = enabled
+        uni.showToast({ title: enabled ? this.$t('market.enabledToast') : this.$t('market.disabledToggleToast'), icon: 'none' })
+        this.notifyMarketChanged()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('market.operationFailedNeedAdmin'), icon: 'none' })
+        await this.loadSkills()
+      } finally {
+        this.switching = false
+      }
+    },
+    // 面板型 skill 的启停直接决定左栏有没有那个图标，必须立刻通知工作台重算。
+    // 两个事件都发：广场有两个宿主（左栏列表面板、中栏详情 tab），工作台两个都订。
+    notifyMarketChanged() {
+      uni.$emit('awd:market-changed')
+      uni.$emit('awd:market-changed-from-sidebar')
     },
     activationIndex(skill) {
       const mode = skill.activationMode || (skill.enabled ? 'auto' : 'disabled')
