@@ -4,6 +4,7 @@ import com.checkba.service.ai.tools.AgentToolComponent;
 import com.checkba.service.ai.tools.DocumentEditTools;
 import com.checkba.service.ai.tools.EvidenceTools;
 import com.checkba.service.ai.tools.FileTools;
+import com.checkba.service.ai.tools.EnterpriseDataTools;
 import com.checkba.service.ai.tools.LegalTools;
 import com.checkba.service.ai.tools.LitigationVisualTools;
 import com.checkba.service.ai.tools.MeetingTools;
@@ -40,6 +41,7 @@ final class RealToolBeans {
     static List<AgentToolComponent> instantiateAll() {
         List<Class<? extends AgentToolComponent>> toolClasses = List.of(
                 DocumentEditTools.class,
+                EnterpriseDataTools.class,
                 EvidenceTools.class,
                 FileTools.class,
                 LegalTools.class,

@@ -126,16 +126,23 @@ public class ExternalProviderBackfill {
     /**
      * 判定一个没写过档位的服务该落哪一档。顺序不能换：
      * <ol>
-     *   <li>档位本身有 yml/env 默认值（今天只有 TTS 的 {@code EXTERNAL_TTS_PROVIDER=local}）→ 照它；</li>
+     *   <li>档位的 yml/env 默认值**明确要求本地档**（`EXTERNAL_TTS_PROVIDER=local`）→ 照它；</li>
      *   <li>已有非空 BYOK 凭证 → byok（<b>宁可保守</b>，切错方向会花用户的钱）；</li>
      *   <li>都没有 → platform。</li>
      * </ol>
+     *
+     * <p><b>只有 LOCAL 算「显式偏好」，这一条是踩出来的。</b>
+     * `external.tts.provider` 的 yml 默认值写的是 `${EXTERNAL_TTS_PROVIDER:elevenlabs}`——
+     * 那个 `elevenlabs` 是本改造之前的**历史默认值**（当时只有「云端 ElevenLabs / 本地 Kokoro」
+     * 两档），不是任何人做过的选择。把它当偏好会让**每一台全新安装**的 TTS 都落到 byok，
+     * 而用户根本没有 ElevenLabs 的 Key——零配置目标在这一项上当场落空。
+     * 打包态注入的 `local` 才是真实意图（捆绑 Kokoro，免费且不出本机），必须照它。
      */
     private ExternalServiceProvider decide(ExternalServiceProvider.Descriptor d) {
         String injectedProvider = injectedProviderDefaults.get(d.service());
         if (injectedProvider != null && !injectedProvider.isBlank()) {
             ExternalServiceProvider parsed = ExternalServiceProvider.parse(injectedProvider, null);
-            if (parsed != null) return parsed;
+            if (parsed == ExternalServiceProvider.LOCAL) return parsed;
         }
         return hasByokCredentials(d) ? ExternalServiceProvider.BYOK : ExternalServiceProvider.PLATFORM;
     }

@@ -73,6 +73,29 @@ public class GlobalExceptionHandler {
         return ResponseEntity.ok().body(result);
     }
 
+    /**
+     * 平台服务网关失败：<b>永远是业务错误，绝不是掉线</b>。
+     *
+     * <p>不接这条的话，网关异常会落到下面那个兜底 handler，被压成一句
+     * 「服务器内部错误」——而三类故障（未开放 / 上游挂 / 我们挂）在用户眼里
+     * 长得一样、下一步却完全不同，正是这一族错误码存在的全部理由。
+     *
+     * <p>{@code code=1} 而不是 4001「功能未配置」：平台档下用户什么都不用配，
+     * 把他导去设置页填 Key 只有在 {@code canUseOwnKey} 时才是**一条**出路，
+     * 余额不足时那是错的。具体摆哪个入口交给前端按 kind 决定。
+     */
+    @ExceptionHandler(com.checkba.service.platform.GatewayException.class)
+    public ResponseEntity<Map<String, Object>> handleGateway(
+            com.checkba.service.platform.GatewayException e) {
+        log.warn("平台服务网关失败 kind={}: {}", e.getKind(), e.getMessage());
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", 1);
+        result.put("gatewayKind", e.getKind().name());
+        result.put("canUseOwnKey", e.suggestsByok());
+        result.put("message", e.getMessage());
+        return ResponseEntity.ok().body(result);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, Object>> handleIllegalArgumentException(IllegalArgumentException e) {
         log.warn("GlobalExceptionHandler caught IllegalArgumentException: {}", e.getMessage());

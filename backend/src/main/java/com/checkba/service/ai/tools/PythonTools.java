@@ -42,6 +42,7 @@ public class PythonTools implements AgentToolComponent {
     private final LegalTools legalTools;
     private final WebTools webTools;
     private final com.checkba.service.SystemSettingService systemSettingService;
+    private final com.checkba.service.platform.ExternalProviderResolver externalProviderResolver;
 
     private static final String DOCKER_IMAGE = "python:3.9-slim";
 
@@ -119,19 +120,19 @@ default_api = _ToolAPI()
 """;
 
     @ToolMeta(displayName = "执行Python代码", category = "python")
-    @Tool("Run Python script. Use this for data analysis, Tushare stock data, or Qichacha API. You can call default_api.read_document(fileId='...') to read project files. Returns stdout/stderr.")
+    @Tool("Run Python script for data analysis and computation. For Chinese company registration records use qichacha_query, "
+            + "and for Tushare financial data use tushare_query — those go through the platform gateway and work without any local credentials. "
+            + "You can call default_api.read_document(fileId='...') to read project files. Returns stdout/stderr.")
     public String run_python(String code) {
         if (code == null || code.isBlank()) {
             return "Error: code is required.";
         }
         log.info("Tool: run_python called. Code length={}", code.length());
 
-        java.util.Map<String, String> credentials = resolveExternalCredentials();
-        // Debug: Log API key status (masked for security)
-        log.info("API Key Status - TUSHARE_TOKEN: {}, QICHACHA_KEY: {}, QICHACHA_SECRET: {}",
-            maskValue(credentials.get("TUSHARE_TOKEN")),
-            maskValue(credentials.get("QICHACHA_KEY")),
-            maskValue(credentials.get("QICHACHA_SECRET")));
+        // 只打**真正会注入**的那几项：平台代采档下一个都不注入，
+        // 照旧打三行 masked 会让人以为凭证发下去了而脚本没用上，排查时先怀疑错方向。
+        java.util.Map<String, String> credentials = injectableCredentials();
+        credentials.forEach((name, value) -> log.info("注入 Python 子进程的凭证 {}: {}", name, maskValue(value)));
 
         Path tempDir = null;
         Process process = null;
@@ -173,7 +174,7 @@ default_api = _ToolAPI()
             // Working Dir
             command.add("-w");
             command.add("/workspace");
-            // Env Vars
+            // Env Vars（平台代采档下一个都不注入，见 injectableCredentials）
             credentials.forEach((name, value) -> {
                 command.add("-e");
                 command.add(name + "=" + value);
@@ -363,8 +364,31 @@ default_api = _ToolAPI()
     }
     
     /**
-     * Mask sensitive values for logging - show only first 4 and last 4 chars.
+     * 注入给 Python 子进程的第三方凭证。
+     *
+     * <p>这是<b>唯一一条不经过 Java 的出站路径</b>（设计 §5.5）：AI 写的脚本拿着这些
+     * 环境变量从用户本机直连上游。平台代采档下没有可注入的凭证——凭证在官网，
+     * 而下发给每台机器等于把公司账号发给所有人。
+     *
+     * <p>所以平台档下<b>一个都不注入</b>，AI 改用 Java 侧的一等工具
+     * （{@code qichacha_query} / {@code tushare_query}，见 {@link EnterpriseDataTools}）。
+     * 那两个工具走网关，因此也才受任务级花费上限约束——脚本这条路是唯一一条
+     * AI 能循环打出几百次上游调用的口子。
      */
+    /**
+     * 本次真正要注入给 Python 子进程的凭证。<b>取值库优先，注入按档过滤</b>，两件事都不能少：
+     *
+     * <ul>
+     *   <li><b>库优先</b>（#383）：用户在设置页填的值写在 {@code system_setting} 里，
+     *       只读 yml/env 的话，他填了 Key 却仍拿到空值——脚本不会报「未配置」，
+     *       只会查不到数据，AI 据此告诉用户「没有该公司的信息」，比报错难查得多。</li>
+     *   <li><b>按档过滤</b>（P4）：平台代采档下凭证在官网，下发给每台机器等于把公司账号
+     *       发给所有人。那一档下 AI 改用 Java 侧的一等工具（qichacha_query / tushare_query），
+     *       它们走网关，因此也才受任务级花费上限约束——脚本这条路是唯一一条 AI 能循环
+     *       打出几百次上游调用的口子。</li>
+     * </ul>
+     */
+    /** 凭证只以掩码进日志：这行日志是排查「脚本为什么查不到数据」的第一现场，但值本身绝不能落盘。 */
     private String maskValue(String value) {
         if (value == null || value.isEmpty()) {
             return "[EMPTY]";
@@ -373,5 +397,23 @@ default_api = _ToolAPI()
             return "[SET:" + value.length() + "chars]";
         }
         return value.substring(0, 4) + "****" + value.substring(value.length() - 4);
+    }
+
+    public java.util.Map<String, String> injectableCredentials() {
+        java.util.Map<String, String> all = resolveExternalCredentials();
+        java.util.Map<String, String> env = new java.util.LinkedHashMap<>();
+        if (isByok(com.checkba.service.platform.ExternalServiceProvider.TUSHARE)) {
+            env.put("TUSHARE_TOKEN", all.get("TUSHARE_TOKEN"));
+        }
+        if (isByok(com.checkba.service.platform.ExternalServiceProvider.QICHACHA)) {
+            env.put("QICHACHA_KEY", all.get("QICHACHA_KEY"));
+            env.put("QICHACHA_SECRET", all.get("QICHACHA_SECRET"));
+        }
+        return env;
+    }
+
+    private boolean isByok(String service) {
+        return externalProviderResolver.resolve(service)
+                != com.checkba.service.platform.ExternalServiceProvider.PLATFORM;
     }
 }

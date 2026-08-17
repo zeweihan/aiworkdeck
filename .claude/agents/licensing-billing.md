@@ -572,6 +572,30 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 - `service/platform/ExternalProviderBackfill.java` — 存量回填，启动期跑一次。
 - `controller/PlatformServiceController.java` — `/api/platform-services{,/{service}/provider}`，
   机器级状态，`MachineAccountGuard` 把关。
+- `config/GlobalExceptionHandler` 的 `handleGateway` — `GatewayException` → `code=1` +
+  `gatewayKind` + `canUseOwnKey`。**不接这条的话网关异常会落到兜底 handler 被压成
+  一句「服务器内部错误」**，三类故障的区分（错误码族存在的全部理由）当场作废。
+
+**其余五家（P4）：分档一律落在各自 service 的一个缝上**
+- `service/OcrService.recognizeGeneral` — platform 档走 `ocr/recognize`，完全不碰
+  `AliyunOcrClientFactory`；两档产出同一个 `OcrResult(text, raw)`。
+- `service/TtsService` — 三档 `platform | byok | local`，判定改走 `ExternalProviderResolver`
+  （不再自己读设置字符串，否则 D5 与存量回填要在这里再实现一遍）。
+  platform 档两个 op：`tts/speech`、`tts/voices`；音色解析两档共用 `parseElevenLabsVoices`
+  ——两档必须是同一套音色 ID，否则用户选好的音色一换档就指向不存在的东西。
+- `service/QichachaService.fetchEciInfoResult` — 分档的唯一缝，`searchCompany`（DTO）与
+  `queryEciInfoJson`（给 AI 的原始 JSON）都从它取数。
+- `service/TushareService.callTushare` — 分档的唯一缝（上游本来就只有一个统一入口），
+  上面那几个解析函数一行未改。平台档失败**抛出而不是回 null**：null 在上层眼里是
+  「这家公司没数据」，会让「未开放/余额不足」伪装成一次查不到。
+- `service/ai/tools/LegalTools.callPkulaw` — 法宝的双档分发。platform 档走
+  `pkulaw/{工具名}`，**响应正文仍由 `McpResponseParser` 在桌面端解析**（两档共用一个
+  解析器，法宝改格式只会改一处）。
+- `service/ai/tools/EnterpriseDataTools`（**新**）— `qichacha_query` / `tushare_query`
+  两个一等工具，补上 `PythonTools` 停掉的那条路。它们调的是上面两个 service，
+  所以**两档都能用**，不是「平台档专用」。
+- `service/ai/tools/PythonTools.credentialEnvArgs()` — platform 档下**不注入**
+  `TUSHARE_TOKEN` / `QICHACHA_KEY` / `QICHACHA_SECRET`（见地雷 33）。
 
 **语音转写（P2）**
 - `service/meeting/MeetingTranscriptionService.java` — **分档在编排层**。platform 档
@@ -585,17 +609,23 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 - 直传是**普通 HTTP PUT**（`BinaryUploader` 接缝），OSS SDK 不引到这条路上：签名官网签好，
   客户端只负责发字节。`Content-Type` 进了 OSS 签名，必须逐字用 ticket 下发的那个值。
 
-**官网侧文件**（`aiworkdeckweb`，PR #56 = P0，#57 = P2）
-- `lib/gateway/{errors,config,pricing,idempotency,spend,adapters,asr}.ts`
+**官网侧文件**（`aiworkdeckweb`，PR #56 = P0，#57 = P2，#58 = P4）
+- `lib/gateway/{errors,config,pricing,idempotency,spend,asr}.ts`
+- `lib/gateway/adapters/`（一家一个文件 + `index.ts` 汇总）：`search / ocr / tts /
+  qichacha / tushare / pkulaw`。adapter **只做两件事**：参数 → 上游请求、上游响应 →
+  `{units, data}`；记账/幂等/定价一律在 route 里统一处理。`asr` 不在注册表里（异步长任务，走自己的三端点）
 - `app/api/gateway/[service]/[op]/route.ts`、`app/api/gateway/pricing/route.ts`、
   `app/api/gateway/asr/{ticket,submit,task/[id]}/route.ts`
 - 迁移 11：`service_pricing` / `gateway_request` / `gateway_hold` 三张表 + 重建 `wallet_ledger`
-  扩 `service_spend` kind；迁移 12：`gateway_hold.meta`（JSON，长任务自己的状态，语音存 objectKey）
+  扩 `service_spend` kind；迁移 12：`gateway_hold.meta`（JSON，长任务自己的状态，语音存 objectKey）；
+  迁移 13：五家的定价行（`INSERT OR IGNORE`，绝不覆盖线上已调过的价），
+  **企查查与法宝的 `enabled` 初值是 0**
 - 过期 hold 的回收挂在已有的 `POST /api/admin/ai/reconcile` cron 上，
   **回收前先跑 `sweepExpiredAsrObjects()` 删中转音频**（置 released 之后就查不到对象键了）
-- `ali-oss` / `@alicloud/tingwu20230930` 必须进 `next.config.ts` 的 `serverExternalPackages`：
+- `ali-oss` / `@alicloud/tingwu20230930` / `@alicloud/ocr-api20210707` / `@darabonba/typescript`
+  必须进 `next.config.ts` 的 `serverExternalPackages`：
   它们底层用运行时 require 加载可选依赖，打包器静态分析不到，直接把 build 判成失败
-- 验证 `scripts/verify-gateway.mts`（45 项，已进 CI）
+- 验证 `scripts/verify-gateway.mts`（63 项，已进 CI）
 
 ### 网关的核心契约
 
@@ -608,6 +638,18 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 | 余额不足 | `409 no_credits`，**绝不 401/403** |
 | 幂等 | 会扣费的 POST 必须带 `Idempotency-Key`（8-128 位 `[A-Za-z0-9_-]`），服务端去重回放 |
 | 语音 | 唯一的异步长任务，三步：`asr/ticket`（查余额 + 签直传凭证，不扣费不要幂等键）→ 桌面直传 OSS → `asr/submit`（预扣 + 建听悟任务）→ `asr/task/{id}`（轮询 + 结算 + 删对象）。**余额闸在 ticket**，不让用户白传两小时录音才被拒 |
+
+同步入口的 service/op 全集（人读版在官网 `doc/desktop-contract.md`，改端点两处同步）：
+
+| service/op | 计量单位与真实来源 |
+|---|---|
+| `search/web` | `call`，一次调用 = 1 |
+| `ocr/recognize` | `page`，一次调用 = 一页（RecognizeAllText 是按图片的接口，返回里没有可计费页数字段；**刻意不拿 `subImageCount` 顶替**，那是区域数会成倍多收） |
+| `tts/speech` | `kchar`，取上游 `character-cost` 响应头；缺失时按服务端数出的**实际送出文本**长度（不是另报的数字） |
+| `tts/voices` | `call`，定价 0。**必须单列一行**，落到 kchar 通配行上就是「列个音色也按合成价收钱」 |
+| `qichacha/eci_info` | `call`，一次调用 = 1 |
+| `tushare/query` | `call`，一次调用 = 1 |
+| `pkulaw/{search_article,get_article,get_law_list,law_recognition}` | `call`，一次调用 = 1。op 就是法宝的工具名，**MCP 端点写死在服务端** |
 
 ### 已知地雷（网关）
 
@@ -666,6 +708,25 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     规则的天数**必须大于** `GW_HOLD_TTL_MINUTES`，否则会在任务还能正常完成时把音频抽走。
     配置写在官网 `DEPLOY.md` §7.1。
 
+33. **企查查与 Tushare 有一条不经过 Java 的出站路径**：`PythonTools` 把
+    `TUSHARE_TOKEN` / `QICHACHA_KEY` / `QICHACHA_SECRET` 注入 Python 子进程，
+    AI 写的脚本从用户本机直连上游。platform 档下没有可注入的凭证（凭证在官网，
+    下发给每台机器等于把公司账号发给所有人），所以 `credentialEnvArgs()` **一个都不注入**，
+    改由 `EnterpriseDataTools` 的 `qichacha_query` / `tushare_query` 代它调。
+    不这么做的话，脚本拿到空 token，失败会表现成「查不到数据」而不是「未配置」。
+    顺带：脚本那条路是唯一一条 AI 能循环打出几百次上游调用的口子，收进 Java 侧才受任务级上限约束。
+    另注意 `PythonTools` 读的是 `@Value` 的 yml/env 值，**不读 `system_setting`**——
+    用户在设置页填的 Key 从来就没被注入过，这是改造前就有的既有缺陷。
+
+34. **两家上游用响应体而不是 HTTP 状态表达失败**：企查查「查无此企业」回的是
+    HTTP 200 + `Status=201`，Tushare 积分不足/限频回的是 HTTP 200 + `code=40203`。
+    网关侧只按 `res.ok` 判成功，就会给一次什么都没查到的调用收全价——
+    两家都必须看响应体，非成功一律 `upstream_failed` 且**一分不扣**。
+
+35. **新增 AI 工具组件要同步 `RealToolBeans.instantiateAll()`**（测试侧）。
+    漏了的话该组件的工具在回放评测里根本不注册，可见性断言写了也是空的；
+    护栏是 `EvalToolBeanParityTest`，会直接点名漏掉的类。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
@@ -689,7 +750,10 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   `service/ai/PlatformAiUserScopeTest`、`controller/PlatformAiKeyControllerTest`；
   白嫖闸：`service/ai/PlatformCreditsGateTest`（余额闸三条判据）、
   `service/ai/PlatformAiKeyOwnershipTest`（换账号不复用旧 key、存量文件重新绑定）；
-  平台服务网关：`service/platform/PlatformGatewayClientTest`（错误分类、幂等重试带同一个键、
+  平台服务网关：`service/platform/ExternalServiceDualTierRoutingTest`（P4 五家的双档路由：
+  平台档不碰 BYOK 实现 / BYOK 档一次网关都不打 / 平台档失败不静默回落；
+  另含 `PythonTools.credentialEnvArgs` 的注入判据与两个新工具的中文显示名）、
+  `service/platform/PlatformGatewayClientTest`（错误分类、幂等重试带同一个键、
   七种失败形态的文案都不含三个掉线子串）、`service/platform/ExternalProviderResolverTest`
   （D5 的 local-mode 闸）、`service/platform/ExternalProviderBackfillTest`（存量回填四种形态）、
   `service/meeting/MeetingTranscriptionPlatformPathTest`（platform 档不碰 OSS/听悟两个接口、

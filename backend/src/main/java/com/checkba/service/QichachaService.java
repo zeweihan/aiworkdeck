@@ -19,13 +19,28 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.beans.factory.annotation.Autowired;
 
+/**
+ * 企查查企业工商详情：平台代采（网关）与自备 Key 两档。
+ *
+ * <p>分档在这一层，两档共用同一个 {@link #mapToDTO} ——上游响应形状一致，
+ * 只换了「谁的 Key、谁出钱」。<b>平台档失败绝不静默回落 byok</b>：
+ * 回落会去花用户自己的企查查订阅额度（licensing-billing 地雷 8 / 27）。
+ */
 @Service
 public class QichachaService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(QichachaService.class);
 
+    private static final int GATEWAY_TIMEOUT_SECONDS = 30;
+
     @Autowired
     private SystemSettingService systemSettingService;
+
+    @Autowired
+    private com.checkba.service.platform.ExternalProviderResolver externalProviderResolver;
+
+    @Autowired
+    private com.checkba.service.platform.PlatformGatewayClient platformGatewayClient;
 
     @Value("${external.qichacha.key:}")
     private String defaultAppKey;
@@ -40,6 +55,25 @@ public class QichachaService {
      * 调用企查查企业工商详情接口
      */
     public CompanyBasicInfoDTO searchCompany(String searchKey, String role) {
+        return mapToDTO(fetchEciInfoResult(searchKey), role);
+    }
+
+    /**
+     * 企业工商详情的原始 {@code Result} 对象（未映射成 DTO）。
+     *
+     * <p>给 AI 侧的一等工具用：DTO 是按界面字段裁过的，模型要的是全量事实。
+     */
+    public String queryEciInfoJson(String searchKey) {
+        return fetchEciInfoResult(searchKey).toString();
+    }
+
+    /** 取一次工商详情的 {@code Result}。两档在这里分，上面两个方法都不关心谁出的钱。 */
+    private JSONObject fetchEciInfoResult(String searchKey) {
+        if (externalProviderResolver.resolve(
+                com.checkba.service.platform.ExternalServiceProvider.QICHACHA)
+                == com.checkba.service.platform.ExternalServiceProvider.PLATFORM) {
+            return fetchEciInfoViaPlatform(searchKey);
+        }
         // 如果是纯 6 位数字，视为股票代码，暂不直接传给企查查，优先按名称处理。
         // 这里保留原实现，但在上层先做一层股票代码 → 公司名称的解析。
         // 0. 获取配置（优先 DB，兜底 Env）
@@ -84,14 +118,33 @@ public class QichachaService {
             if (result == null) {
                 throw new RuntimeException("未查询到相关企业信息");
             }
-
-            // 3. 映射数据到 DTO
-            return mapToDTO(result, role);
+            return result;
 
         } catch (Exception e) {
             log.error("调用企查查接口异常", e);
             throw new RuntimeException("外部数据服务暂不可用: " + e.getMessage());
         }
+    }
+
+    /**
+     * 平台代采档：官网持凭证调企查查，按次扣 Credits。
+     *
+     * <p>网关只在上游 {@code Status=200} 时才算成功（查无此企业、限额都不扣费），
+     * 所以这里拿到的一定是有 Result 的响应；其余情形以 {@code GatewayException}
+     * 抛出，由 {@code GlobalExceptionHandler} 按 kind 落成可读的业务错误——
+     * <b>刻意不裹进上面那个 catch(Exception)</b>：裹进去 kind 就丢了，
+     * 「未开放」「余额不足」会一起变成一句「外部数据服务暂不可用」。
+     */
+    private JSONObject fetchEciInfoViaPlatform(String searchKey) {
+        com.checkba.service.platform.PlatformGatewayClient.Result result =
+                platformGatewayClient.call("qichacha", "eci_info",
+                        Map.of("searchKey", searchKey), GATEWAY_TIMEOUT_SECONDS);
+        // 网关原样透传企查查的 {Status, Message, Result}，与自备 Key 档同一形状
+        JSONObject data = JSONUtil.parseObj(result.data().toString()).getJSONObject("Result");
+        if (data == null) {
+            throw new RuntimeException("未查询到相关企业信息");
+        }
+        return data;
     }
 
     private CompanyBasicInfoDTO mapToDTO(JSONObject data, String role) {
