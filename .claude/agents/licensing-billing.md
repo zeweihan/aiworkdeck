@@ -559,6 +559,9 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 - `service/platform/PlatformGatewayClient.java` — **唯一出站出口**。记账/幂等/错误分类
   三样每接一家都要用，散出去抄到第三家必漏。网络失败**带同一幂等键**重试一次
   （换新键 = 放弃幂等 = 第一次若已扣费就是扣两次）。
+  三个入口：`call(service, op, ...)` 通用同步（响应 `{ok,data,billing}`）、
+  `postJson(path, ..., idempotent, timeout)` / `getJson(path, timeout)` 给响应形态不同的
+  端点用（今天只有语音那条异步链路）、`connected()` 供各服务判 platform 档的「已配置」。
 - `service/platform/PlatformGatewayTransport.java` + `HttpPlatformGatewayTransport.java` — 出站缝，
   超时**按服务给**（不沿用 `AccountTransport` 写死的 5 秒，OCR/TTS/听悟建任务超 5 秒是常态）。
 - `service/platform/GatewayException.java` — 八档 Kind。**刻意不复用 `AccountException.Kind`**：
@@ -570,13 +573,29 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 - `controller/PlatformServiceController.java` — `/api/platform-services{,/{service}/provider}`，
   机器级状态，`MachineAccountGuard` 把关。
 
-**官网侧文件**（`aiworkdeckweb`，PR #56）
-- `lib/gateway/{errors,config,pricing,idempotency,spend,adapters}.ts`
-- `app/api/gateway/[service]/[op]/route.ts`、`app/api/gateway/pricing/route.ts`
+**语音转写（P2）**
+- `service/meeting/MeetingTranscriptionService.java` — **分档在编排层**。platform 档
+  完全不碰 `MeetingOssClient` / `TingwuClient`（那两个实现一字未动，只服务 byok 档）。
+  不在接口内部分档：两条路的失败语义完全不同，塞一起错误分类就再也拆不开。
+- `MeetingRecording.gatewayTaskId` 是**新列**，与 `tingwuTaskId` 不是一回事，也不许合并——
+  一个查 `/api/gateway/asr/task/{id}`，一个查听悟 OpenAPI。**轮询走哪条路由由这两列决定，
+  不由当前档位设置决定**：用户转写途中切档，按设置分派就会拿网关的 taskId 去问听悟，
+  结果是永远查不到的任务 + 永远结不了的预扣。
+- `isConfigured()` 按档分：platform 档「已连账户」即算配好，byok 档仍要那 5 个凭证。
+- 直传是**普通 HTTP PUT**（`BinaryUploader` 接缝），OSS SDK 不引到这条路上：签名官网签好，
+  客户端只负责发字节。`Content-Type` 进了 OSS 签名，必须逐字用 ticket 下发的那个值。
+
+**官网侧文件**（`aiworkdeckweb`，PR #56 = P0，#57 = P2）
+- `lib/gateway/{errors,config,pricing,idempotency,spend,adapters,asr}.ts`
+- `app/api/gateway/[service]/[op]/route.ts`、`app/api/gateway/pricing/route.ts`、
+  `app/api/gateway/asr/{ticket,submit,task/[id]}/route.ts`
 - 迁移 11：`service_pricing` / `gateway_request` / `gateway_hold` 三张表 + 重建 `wallet_ledger`
-  扩 `service_spend` kind
-- 过期 hold 的回收挂在已有的 `POST /api/admin/ai/reconcile` cron 上
-- 验证 `scripts/verify-gateway.mts`（25 项，已进 CI）
+  扩 `service_spend` kind；迁移 12：`gateway_hold.meta`（JSON，长任务自己的状态，语音存 objectKey）
+- 过期 hold 的回收挂在已有的 `POST /api/admin/ai/reconcile` cron 上，
+  **回收前先跑 `sweepExpiredAsrObjects()` 删中转音频**（置 released 之后就查不到对象键了）
+- `ali-oss` / `@alicloud/tingwu20230930` 必须进 `next.config.ts` 的 `serverExternalPackages`：
+  它们底层用运行时 require 加载可选依赖，打包器静态分析不到，直接把 build 判成失败
+- 验证 `scripts/verify-gateway.mts`（45 项，已进 CI）
 
 ### 网关的核心契约
 
@@ -588,6 +607,7 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 | 预扣 | 三行账 `hold` → `hold_release` → `settle`，**②③ 同事务**；`gateway_hold` 落库 + 服务端超时回收 |
 | 余额不足 | `409 no_credits`，**绝不 401/403** |
 | 幂等 | 会扣费的 POST 必须带 `Idempotency-Key`（8-128 位 `[A-Za-z0-9_-]`），服务端去重回放 |
+| 语音 | 唯一的异步长任务，三步：`asr/ticket`（查余额 + 签直传凭证，不扣费不要幂等键）→ 桌面直传 OSS → `asr/submit`（预扣 + 建听悟任务）→ `asr/task/{id}`（轮询 + 结算 + 删对象）。**余额闸在 ticket**，不让用户白传两小时录音才被拒 |
 
 ### 已知地雷（网关）
 
@@ -626,6 +646,26 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     而真实原因往往是我们正在发版。三类故障（未开放 / 上游挂 / 我们挂）在用户眼里长得一样，
     下一步却完全不同，必须分开。护栏 `PlatformGatewayClientTest.unreachableSaysNotYourNetwork`。
 
+29. **预签名 PUT 绑不住请求体大小**。OSS 的 v1 与 v4 签名都只覆盖
+    方法 / 对象键 / Content-Type / 有效期，**没有任何字段能约束 Content-Length**，
+    所以「申报 1 分钟传两小时」这个绕过余额闸的做法只能在服务端拦：
+    `/asr/submit` 先 HEAD 一次对象、按申报时长复核体积，超了就删对象再拒。
+    ticket 下发的 `maxUploadBytes` 只是给客户端自检用的，不是闸。
+
+30. **听悟的 `GetTaskInfo` 不返回时长**。它只有 `taskStatus` 和四个结果 URL，
+    所以「计价以上游真实计量为准」这条红线在语音上的落点是
+    **从转写结果里最后一个词的 `End` 时间戳算真实分钟数**
+    （`actualMinutesFromTranscription`）。取不到时回落到预扣估算——宁可少收不可乱收。
+
+31. **听悟的 `taskStatus` 有四个值不是三个**：ONGOING / COMPLETED / FAILED / **INVALID**。
+    只按前三个写分支的话，INVALID 会一路落到「还在跑」，桌面端永远轮询下去、
+    钱一直被预扣占着直到 TTL。两侧的终态判定都要带上它。
+
+32. **platform 档下的中转音频有两道删除，两道都要**：转写完成/失败时代码删，
+    过期回收时 `sweepExpiredAsrObjects` 删，OSS 生命周期规则（前缀 `asr/`，1 天）兜底。
+    规则的天数**必须大于** `GW_HOLD_TTL_MINUTES`，否则会在任务还能正常完成时把音频抽走。
+    配置写在官网 `DEPLOY.md` §7.1。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
@@ -651,8 +691,11 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   `service/ai/PlatformAiKeyOwnershipTest`（换账号不复用旧 key、存量文件重新绑定）；
   平台服务网关：`service/platform/PlatformGatewayClientTest`（错误分类、幂等重试带同一个键、
   七种失败形态的文案都不含三个掉线子串）、`service/platform/ExternalProviderResolverTest`
-  （D5 的 local-mode 闸）、`service/platform/ExternalProviderBackfillTest`（存量回填四种形态）。
-- 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 25 项 + `contract-check.mts` 的网关段，
+  （D5 的 local-mode 闸）、`service/platform/ExternalProviderBackfillTest`（存量回填四种形态）、
+  `service/meeting/MeetingTranscriptionPlatformPathTest`（platform 档不碰 OSS/听悟两个接口、
+  失败不回落 byok、轮询路由跟落库的 taskId 走）、`service/meeting/MeetingTranscriptionServiceTest`
+  （byok 档行为不变的基线）。
+- 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 45 项 + `contract-check.mts` 的网关段，
   **必须在空目录里跑、必须用 nvm v22 全路径**（`/usr/bin/node` v20 碰库会段错误）。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`

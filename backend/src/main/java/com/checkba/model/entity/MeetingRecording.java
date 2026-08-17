@@ -43,9 +43,21 @@ public class MeetingRecording {
     /** 录音时长（毫秒），结束录音时由前端回报 */
     private Long durationMs;
 
-    /** 听悟异步任务 ID（TRANSCRIBING 期间轮询用） */
+    /** 听悟异步任务 ID（BYOK 档：TRANSCRIBING 期间直接向听悟轮询用） */
     @Column(length = 128)
     private String tingwuTaskId;
+
+    /**
+     * 平台网关的任务 ID（platform 档轮询用）。
+     *
+     * <p>与 {@link #tingwuTaskId} <b>不是一回事</b>，也刻意不复用同一列：
+     * 平台档下听悟的 TaskId 只存在于官网侧，桌面端拿到的是网关自己的 taskId，
+     * 两者一个查 {@code /api/gateway/asr/task/{id}}、一个查听悟 OpenAPI。
+     * 混存一列就无法回答「重启之后这个任务该找谁要结果」——
+     * 而这正是必须落库的理由：预扣的钱挂在网关那边，客户端不回来问就只能等超时回收。
+     */
+    @Column(length = 128)
+    private String gatewayTaskId;
 
     /** 上一次向听悟查询任务状态的时间（poll-on-read 的节流锚点） */
     private LocalDateTime lastPolledAt;

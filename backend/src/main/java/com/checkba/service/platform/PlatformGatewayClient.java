@@ -52,16 +52,28 @@ public class PlatformGatewayClient {
      * @throws GatewayException 一律带明确的 {@link GatewayException.Kind}，调用方据此决定文案与下一步
      */
     public Result call(String service, String op, Map<String, Object> params, int timeoutSeconds) {
-        String key = accountService.currentKeyOrNull();
-        if (key == null) {
-            // 不发请求。发出去只会拿回 401，而 401 在桌面端会被判成凭据失效并清空权益缓存。
-            throw new GatewayException(GatewayException.Kind.NOT_CONNECTED,
-                    LangText.of("尚未连接 AI Workdeck 账户，可在设置页「账户与用量」粘贴账户 Key",
-                            "No AI Workdeck account is connected. Paste your account key in Settings → Account & usage"));
-        }
+        JsonNode root = postJson("/api/gateway/" + service + "/" + op, params, true, timeoutSeconds);
+        JsonNode billing = root.path("billing");
+        return new Result(
+                root.path("data"),
+                billing.path("chargedCents").asInt(0),
+                billing.path("units").asDouble(0),
+                billing.path("unit").asText(""));
+    }
 
-        String url = siteProfileService.baseUrl() + "/api/gateway/" + service + "/" + op;
-        String idempotencyKey = UUID.randomUUID().toString().replace("-", "");
+    /**
+     * 打一个网关端点并原样返回响应体。
+     *
+     * <p>给响应形态不是通用 {@code {ok,data,billing}} 的端点用——今天只有语音那条
+     * 异步长任务链路（ticket / submit / task）。它必须拆成三个端点是因为几百 MB 的
+     * 音频不能进 Next.js 进程，见设计 §6.1。
+     *
+     * @param idempotent 会扣费就传 true。true 时带幂等键，且网络失败**带同一个键**
+     *                   重试一次——换新键等于放弃幂等保护：第一次若已在服务端扣过费，
+     *                   重试就是扣两次。
+     */
+    public JsonNode postJson(String path, Map<String, Object> params, boolean idempotent, int timeoutSeconds) {
+        String key = requireKey();
         String body;
         try {
             body = objectMapper.writeValueAsString(params == null ? Map.of() : params);
@@ -69,25 +81,52 @@ public class PlatformGatewayClient {
             throw new GatewayException(GatewayException.Kind.BAD_REQUEST,
                     LangText.of("请求参数无法序列化", "Request parameters could not be serialized"));
         }
+        String idempotencyKey = idempotent ? UUID.randomUUID().toString().replace("-", "") : null;
 
         PlatformGatewayTransport.Reply reply =
-                transport.send("POST", url, key, idempotencyKey, body, timeoutSeconds);
+                transport.send("POST", siteProfileService.baseUrl() + path, key, idempotencyKey, body, timeoutSeconds);
         if (reply.networkFailure()) {
-            // 带**同一个**幂等键重试一次。换新键等于放弃幂等保护。
-            reply = transport.send("POST", url, key, idempotencyKey, body, timeoutSeconds);
+            reply = transport.send("POST", siteProfileService.baseUrl() + path, key, idempotencyKey, body, timeoutSeconds);
         }
-        return handle(service, reply);
+        return handle(reply);
+    }
+
+    /** 只读 GET。不扣费，所以不占幂等键。 */
+    public JsonNode getJson(String path, int timeoutSeconds) {
+        String key = requireKey();
+        PlatformGatewayTransport.Reply reply =
+                transport.send("GET", siteProfileService.baseUrl() + path, key, null, null, timeoutSeconds);
+        if (reply.networkFailure()) {
+            reply = transport.send("GET", siteProfileService.baseUrl() + path, key, null, null, timeoutSeconds);
+        }
+        return handle(reply);
     }
 
     /** 不扣费的只读调用（当前只有单价表）。不带幂等键。 */
     public JsonNode getPricing(int timeoutSeconds) {
+        return getJson("/api/gateway/pricing", timeoutSeconds);
+    }
+
+    /**
+     * 本机是否已连账户。platform 档的「已配置」判据就是它——用不着那 5 个供应商凭证，
+     * 但没有账户 Key 就连请求都发不出去。
+     */
+    public boolean connected() {
+        return accountService.currentKeyOrNull() != null;
+    }
+
+    private String requireKey() {
         String key = accountService.currentKeyOrNull();
         if (key == null) {
+            // 不发请求。发出去只会拿回 401，而 401 在桌面端会被判成凭据失效并清空权益缓存。
             throw new GatewayException(GatewayException.Kind.NOT_CONNECTED,
-                    LangText.of("尚未连接 AI Workdeck 账户", "No AI Workdeck account is connected"));
+                    LangText.of("尚未连接 AI Workdeck 账户，可在设置页「账户与用量」粘贴账户 Key",
+                            "No AI Workdeck account is connected. Paste your account key in Settings → Account & usage"));
         }
-        String url = siteProfileService.baseUrl() + "/api/gateway/pricing";
-        PlatformGatewayTransport.Reply reply = transport.send("GET", url, key, null, null, timeoutSeconds);
+        return key;
+    }
+
+    private JsonNode handle(PlatformGatewayTransport.Reply reply) {
         if (reply.networkFailure()) {
             throw new GatewayException(GatewayException.Kind.GATEWAY_UNREACHABLE, unreachableMessage());
         }
@@ -95,22 +134,6 @@ public class PlatformGatewayClient {
             throw mapError(reply);
         }
         return parse(reply.body());
-    }
-
-    private Result handle(String service, PlatformGatewayTransport.Reply reply) {
-        if (reply.networkFailure()) {
-            throw new GatewayException(GatewayException.Kind.GATEWAY_UNREACHABLE, unreachableMessage());
-        }
-        if (reply.status() != 200) {
-            throw mapError(reply);
-        }
-        JsonNode root = parse(reply.body());
-        JsonNode billing = root.path("billing");
-        return new Result(
-                root.path("data"),
-                billing.path("chargedCents").asInt(0),
-                billing.path("units").asDouble(0),
-                billing.path("unit").asText(""));
     }
 
     /**

@@ -4,6 +4,9 @@ import com.checkba.model.entity.MeetingRecording;
 import com.checkba.repository.MeetingRecordingRepository;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.SystemSettingService;
+import com.checkba.service.platform.ExternalProviderResolver;
+import com.checkba.service.platform.ExternalServiceProvider;
+import com.checkba.service.platform.PlatformGatewayClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -47,9 +50,14 @@ class MeetingTranscriptionServiceTest {
     private MeetingTranscriptionService service(boolean configured) {
         when(settingService.get(anyString(), anyString()))
                 .thenAnswer(inv -> configured ? "x" : "");
+        // 本类整体验的是 byok 档：档位解析恒回 BYOK，网关那两个协作者一次都不该被碰
+        ExternalProviderResolver resolver = mock(ExternalProviderResolver.class);
+        when(resolver.resolve(anyString())).thenReturn(ExternalServiceProvider.BYOK);
         return new MeetingTranscriptionService(
                 meetingRepository, mock(ProjectFileRepository.class), null, settingService,
-                mock(MeetingAudioTranscoder.class), tingwu, oss, fetcher,
+                mock(MeetingAudioTranscoder.class), tingwu, oss,
+                resolver, mock(PlatformGatewayClient.class),
+                fetcher, mock(MeetingTranscriptionService.BinaryUploader.class),
                 "", "", "", "", "");
     }
 
