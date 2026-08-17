@@ -534,6 +534,75 @@ public class AuthController {
     }
 
     /**
+     * 手机号免密登录/注册：发验证码。
+     * 形状与 mail-login/send-code 完全一致，刻意不发明新范式。
+     */
+    @PostMapping("/sms-login/send-code")
+    public Map<String, Object> smsLoginSendCode(@RequestBody SmsLoginRequest request,
+                                                jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkCodeSendRate(ip);
+            smsAuthService.sendSigninCode(request.getPhone());
+            authAbuseGuard.recordCodeSend(ip);
+            result.put("code", 0);
+            result.put("message", LangText.of("验证码已发送", "Verification code sent"));
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 手机号免密登录/注册：核销验证码。
+     *
+     * 注册与登录合一——号码没见过就建号，`isNewUser` 让前端引导补昵称。
+     * 「是否新用户」只在核销成功后才透露，`send-code` 阶段对任何号码都是同样的响应。
+     */
+    @PostMapping("/sms-login/verify")
+    public Map<String, Object> smsLoginVerify(@RequestBody SmsLoginRequest request,
+                                              jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        String lockKey = request.getPhone() == null ? "" : request.getPhone().trim();
+        try {
+            authAbuseGuard.checkLoginAttempt(ip, lockKey);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        try {
+            String phone = smsAuthService.verifySigninCode(request.getPhone(), request.getCode());
+            UserService.PhoneAccount account = userService.findOrCreateByPhone(phone);
+            User user = account.user();
+            authAbuseGuard.recordLoginSuccess(ip, lockKey);
+            String newSessionId = userSessionService.issue(user.getId());
+            result.put("code", 0);
+            result.put("message", LangText.of("登录成功", "Signed in successfully"));
+            result.put("data", Map.of(
+                    "sessionId", newSessionId,
+                    "isNewUser", account.created(),
+                    "user", Map.of(
+                            "id", user.getId(),
+                            "username", user.getUsername(),
+                            "displayName", user.getDisplayName(),
+                            "avatarUrl", user.getAvatarUrl() != null ? user.getAvatarUrl() : "",
+                            "role", user.getRole(),
+                            "subscriptionType", user.getSubscriptionType()
+                    )
+            ));
+        } catch (IllegalArgumentException e) {
+            authAbuseGuard.recordLoginFailure(ip, lockKey);
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
      * 客户登录（使用访问码）
      */
     @PostMapping("/client-login")
@@ -859,6 +928,16 @@ public class AuthController {
 
         public String getEmail() { return email; }
         public void setEmail(String email) { this.email = email; }
+        public String getCode() { return code; }
+        public void setCode(String code) { this.code = code; }
+    }
+
+    static class SmsLoginRequest {
+        private String phone;
+        private String code;
+
+        public String getPhone() { return phone; }
+        public void setPhone(String phone) { this.phone = phone; }
         public String getCode() { return code; }
         public void setCode(String code) { this.code = code; }
     }
