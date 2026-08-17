@@ -212,15 +212,23 @@ $bg-white: #FFFFFF;
 }
 
 /* IDE 化：最近项目切换器 */
+/* 切换器现在包着项目名一起，是顶栏上「换项目」的主入口（启动落点改成项目列表页
+   之后这是高频动作）。给一条透明描边占位，hover 才显形——常显边框会让顶栏变吵。 */
 .project-switcher {
   display: flex;
   align-items: center;
+  gap: 6px;
+  max-width: 320px;
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  margin-left: -8px; /* 抵消 padding，让项目名的左缘仍与原来对齐 */
+  border: 1px solid transparent;
+  border-radius: 5px;
+  transition: background 0.15s, border-color 0.15s;
 
   &:hover {
-    background: rgba(26, 83, 54, 0.08);
+    background: rgba(26, 83, 54, 0.06);
+    border-color: rgba(26, 83, 54, 0.18);
   }
 }
 

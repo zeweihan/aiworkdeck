@@ -8,7 +8,7 @@ export default {
   commandPalettePlaceholder: 'Type a command…',
   commandPaletteEmpty: 'No matching commands',
   // Top bar project info
-  clickToRename: 'Click to rename',
+  renameProject: 'Rename Project…',
   unnamedProject: 'Untitled Project',
   switchRecentProject: 'Switch to a recent project',
   recentProjects: 'Recent Projects',

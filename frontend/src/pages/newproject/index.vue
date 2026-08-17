@@ -1,3 +1,11 @@
+<!--
+  新建/打开项目页。2026-08 起**不再是主入口**——「打开文件夹 / 新建项目文件夹」
+  两个动作已经内嵌在项目列表页下方（先看见有哪些案卷，再谈新建）。本页保留两个用途：
+   · 浏览器版的降级路径（没有系统文件夹对话框，只能建托管空白项目）；
+   · 应用菜单「新建项目文件夹…」带 ?auto=create-folder 进来自动拉起流程。
+  「单独打开一个文件」那条已经去掉：它造出的是个没有归属的临时项目，
+  律师下次找不到它在哪（openFileFlow 仍留给 utils/ideOpen.js 的拖拽与 open-file 事件）。
+-->
 <template>
   <view class="page-new-project">
     <view class="workbench-container">
@@ -58,13 +66,6 @@
               <view class="ide-action-text">
                 <text class="ide-action-title">{{ $t('account.createFolderTitle') }}</text>
                 <text class="ide-action-desc">{{ $t('account.createFolderDesc') }}</text>
-              </view>
-              <text class="ide-action-arrow">›</text>
-            </view>
-            <view class="ide-action" :class="{ 'is-busy': busy }" @tap="onOpenFile">
-              <view class="ide-action-text">
-                <text class="ide-action-title">{{ $t('account.openFileTitle') }}</text>
-                <text class="ide-action-desc">{{ $t('account.openFileDesc') }}</text>
               </view>
               <text class="ide-action-arrow">›</text>
             </view>
@@ -132,7 +133,7 @@
 <script>
 import { createProject } from '@/services/api.js'
 import { getCurrentUser } from '@/utils/auth.js'
-import { openFolderFlow, openFileFlow, createFolderFlow } from '@/utils/ideOpen.js'
+import { openFolderFlow, createFolderFlow } from '@/utils/ideOpen.js'
 import { host } from '@/services/host.js'
 
 export default {
@@ -203,11 +204,6 @@ export default {
       const name = this.namingName.trim()
       this.namingVisible = false
       await this.withBusy(this.$t('account.busyCreatingProject'), () => createFolderFlow(parentDir, name))
-    },
-
-    async onOpenFile() {
-      if (this.busy) return
-      await this.withBusy(this.$t('account.busyOpeningFile'), () => openFileFlow())
     },
 
     async withBusy(busyText, flow) {

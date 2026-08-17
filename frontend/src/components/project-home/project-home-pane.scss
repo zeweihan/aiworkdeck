@@ -1,0 +1,55 @@
+/* 项目概览内容本体的容器样式（一页纸卷轴）。子组件各自的样式在各自 scoped 块里。
+   外壳浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。 */
+$color-primary: #1A5336;
+$color-accent: #5BD197;
+$color-text-main: #2C3338;
+$color-border: #E9ECEF;
+$bg-pale: #F8F9FA;
+$bg-white: #FFFFFF;
+
+.project-home-pane {
+  padding: 24px;
+  box-sizing: border-box;
+  background: $bg-pale;
+  color: $color-text-main;
+}
+
+/* 嵌在工作台中栏的标签里：铺满标签内容区并自己滚动
+   （独立页那边由 body 滚，不需要这一条） */
+.project-home-pane.is-embedded {
+  height: 100%;
+  overflow-y: auto;
+}
+
+/* 一页纸卷轴：单列纵向 */
+.home-column {
+  max-width: 880px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.home-section {
+  background: $bg-white;
+  border: 1px solid $color-border;
+  border-radius: 6px;
+  padding: 16px 18px;
+}
+
+.home-section-title {
+  display: block;
+  margin-bottom: 12px;
+  padding: 0 0 8px 8px;
+  border-left: 3px solid $color-accent;
+  border-bottom: 1px solid $color-border;
+  font-size: 13px;
+  font-weight: 600;
+  color: $color-primary;
+}
+
+@media (max-width: 720px) {
+  .project-home-pane {
+    padding: 16px 12px;
+  }
+}
