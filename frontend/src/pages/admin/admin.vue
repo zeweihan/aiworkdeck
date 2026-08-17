@@ -1359,7 +1359,7 @@ import {
   getPlatformServices, setPlatformServiceProvider,
 } from '@/services/api.js'
 import {
-  platformServiceMeta, sortPlatformServices, localTierReady,
+  platformServiceMeta, sortPlatformServices, localTierReady, refreshLocalAsrReadiness,
 } from '@/config/platformServices.js'
 import { getCurrentUser, getSessionId } from '@/utils/auth.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
@@ -1567,8 +1567,9 @@ export default {
     //
     // 可切清单是**动态**拼的，不是一个固定三选项再置灰：
     //  - platformAvailable=false（团队服务器 / 云端实例）时 platform 档整个不出现（D5）；
-    //  - hasLocal 为真但本地引擎还没随包发出（asr 在 P3 之前）时 local 档也不出现，
-    //    并说明原因。摆一个能选中、真用起来才炸的档位，正是设计 §6.2.1 点名要避免的事。
+    //  - hasLocal 为真但本地引擎在这台机器上还没就绪（asr 的模型没下载）时 local 档也不
+    //    出现，并说明去哪儿下。摆一个能选中、真用起来才炸的档位，正是设计 §6.2.1
+    //    点名要避免的事。判据读 localTierReady，与会议面板的开关同一个出口。
     /**
      * 「有 N Credits 正被转写占用」的提示。
      *
@@ -2780,6 +2781,9 @@ export default {
     },
     // ---------- 平台服务 ----------
     async loadPlatformServices() {
+      // 本地档能不能选，判据在 platformServices 那个唯一出口上，由这次探测填。
+      // 与会议面板的开关同源：只在一处接探测的话，用户从另一处照样能切进一个用不了的档。
+      refreshLocalAsrReadiness()
       try {
         const s = (await getPlatformServices()) || {}
         this.platformState = {

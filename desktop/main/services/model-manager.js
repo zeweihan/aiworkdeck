@@ -42,7 +42,7 @@ function pyBin(resourcesPath) {
     : path.join(resourcesPath || '', 'python', 'bin', 'python3.11')
 }
 
-// 组件注册表：MinerU pipeline 模型 + Kokoro 语音模型
+// 组件注册表：MinerU pipeline 模型 + Kokoro 语音模型 + 本地转写模型
 const COMPONENTS = [
   {
     id: 'mineru-models',
@@ -95,6 +95,34 @@ const COMPONENTS = [
           // 打包内带 hf_xet：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS
           // (cas-server.xethub.hf.co)，镜像签发的凭证在那边必 401——大陆用户
           // 无梯子即挂。禁用 xet 走镜像的普通 HTTP 下载（真机 401 实证）。
+          HF_HUB_DISABLE_XET: '1'
+        },
+        cwd: dir
+      }
+    }
+  },
+  {
+    id: 'asr-models',
+    name: '本地转写模型（Whisper medium）',
+    sizeHint: '约 1.5GB',
+    estBytes: 1.5 * 1024 * 1024 * 1024,
+    dir: (ctx) => path.join(ctx.dataDir, 'models', 'asr'),
+    // 与 kokoro 同一条 huggingface_hub snapshot 路径；运行侧 HF_HOME 与此一致。
+    // 模型不进安装包：1.5GB 会让安装包体积翻几倍，而只有开了「录音不出本机」的用户才需要它。
+    spawnSpec: (ctx) => {
+      const dir = path.join(ctx.dataDir, 'models', 'asr')
+      return {
+        cmd: pyBin(ctx.resourcesPath),
+        args: [
+          '-c',
+          "from huggingface_hub import snapshot_download; snapshot_download('Systran/faster-whisper-medium')"
+        ],
+        env: {
+          ...process.env,
+          PYTHONPATH: pysvcPath(ctx, 'asr-service', 'lib'),
+          HF_HOME: dir,
+          HF_ENDPOINT: process.env.CHECKBA_HF_ENDPOINT || 'https://hf-mirror.com',
+          // 同 kokoro：Xet 路径绕过 HF_ENDPOINT 直连 HF 官方 CAS，镜像签发的凭证在那边必 401
           HF_HUB_DISABLE_XET: '1'
         },
         cwd: dir

@@ -61,9 +61,10 @@ export default {
   aiRowDesc: 'AI does not use this path: model requests go straight from this device to the provider you choose and never pass through AI Workdeck servers. Provider, model, and account balance are configured under AI Settings.',
   goAiSettings: 'Open AI Settings',
 
-  // ---- Local tier not ready yet (flips once P3 lands local ASR) ----
+  // ---- Local tier not ready on this machine yet ----
   // The meeting panel's toggle has its own wording inside the component: the two contexts differ
-  // (a missing dropdown option here, a disabled toggle there) and one shared sentence would read
-  // wrong in one of them.
-  localAsrPending: 'A local transcription engine is coming in a later release, so the "On this device" tier is not offered yet -- better than letting you pick it and discover after a two-hour recording that nothing can be transcribed.',
+  // (a missing dropdown option here, a toggle that downloads the model there) and one shared
+  // sentence would read wrong in one of them. The readiness test itself is shared
+  // (the probe in config/platformServices.js); only the wording differs.
+  localAsrPending: 'The on-device transcription model has not been downloaded, so the "On this device" tier is not offered yet. Turn on "Keep recordings on this device" in the meeting panel to download it there (about 1.5GB), or download it under Components.',
 }

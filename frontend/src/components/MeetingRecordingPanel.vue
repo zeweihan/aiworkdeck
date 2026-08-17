@@ -14,7 +14,7 @@
       <text class="mr-tier-value" :class="tierClass">{{ tierText }}</text>
     </view>
     <text class="mr-tier-desc">{{ tierDesc }}</text>
-    <!-- 「录音不出本机」。本地转写引擎在后续版本才随包发出，在那之前这个开关是灰的：
+    <!-- 「录音不出本机」。切换时**就地探一次**，没就绪就不许留在打开态（设计 §6.2.1）：
          做成能打开、录完两小时才发现转不了的样子，用户只剩「放弃这份录音」或
          「关掉开关传上云」两条路，后者与他打开开关的目的正好相反。 -->
     <view class="mr-tier-row mr-tier-switch">
@@ -24,9 +24,28 @@
       </view>
       <AwdSwitch
         :checked="asrProvider === 'local'"
-        :disabled="!localAsrUsable || tierBusy"
+        :disabled="tierBusy"
         @change="onToggleLocalAsr"
       />
+    </view>
+
+    <!-- 未就绪时的就地出路。**「服务没起」与「模型没下」必须分开**：
+         前者重启应用，后者要下一个 GB 级模型，合并成一句「不可用」等于让用户猜。 -->
+    <view class="mr-tier-gate" v-if="localGate">
+      <text class="mr-tier-gate-msg">{{ localGate.message }}</text>
+      <text class="mr-tier-desc">{{ localGate.nextStep }}</text>
+      <view class="mr-tier-gate-actions">
+        <template v-if="modelDownloading">
+          <text class="mr-tier-desc">正在下载模型 {{ modelPercent }}%</text>
+          <view class="mr-btn secondary" @tap="onCancelAsrModel">取消下载</view>
+        </template>
+        <template v-else>
+          <view class="mr-btn primary" v-if="canDownloadModel" @tap="onDownloadAsrModel">
+            下载模型（{{ modelSizeHint }}）
+          </view>
+          <view class="mr-btn secondary" @tap="onRecheckLocalAsr">重新检测</view>
+        </template>
+      </view>
     </view>
   </view>
 
@@ -216,7 +235,10 @@ import {
   recorderState, startRecording, stopRecording, pauseRecording, resumeRecording,
   isRecordingActive, formatSeconds
 } from '@/utils/meetingRecorder.js'
-import { localTierReady } from '@/config/platformServices.js'
+import {
+  localTierReady, localAsrProbeResult, refreshLocalAsrReadiness
+} from '@/config/platformServices.js'
+import { host } from '@/services/host.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
 
 const POLL_INTERVAL_MS = 8000
@@ -257,6 +279,15 @@ export default {
       asrPlatformAvailable: false,
       asrAccountConnected: false,
       tierBusy: false,
+      // 本机转写模型的下载状态（组件管理里那套 absent/downloading/installed 的同一条链路，
+      // 只是搬到用户真正需要它的位置——他刚点开「录音不出本机」的这一刻）
+      modelState: null,
+      modelPercent: 0,
+      modelSizeHint: '约 1.5GB',
+      // 用户点过「录音不出本机」但没成——下面那块引导只在这之后出现，
+      // 平台档用户不该每次开面板都看见一块「模型没下载」
+      localGateOpen: false,
+      _modelProgressUnsub: null,
       _player: null,
       _audioUrl: null,
       _pollTimer: null,
@@ -273,9 +304,30 @@ export default {
     tierKnown() {
       return this.asrProvider !== null
     },
-    // 本地转写引擎随后续版本发出；在那之前开关一律灰着（见模板处的注释）
+    // 本地档能不能真正用起来。**读的是 platformServices 那个唯一出口**，
+    // 与 admin 的档位下拉同源——只在一处接探测的话，用户从另一处照样能切进一个用不了的档。
     localAsrUsable() {
       return localTierReady('asr')
+    },
+    /**
+     * 未就绪时就地摆出来的那块引导。两种情况出现：
+     * 用户刚点了开关（`localGateOpen`），或者档位已经是 local 却探不通
+     * （模型被删了之类的真故障，不说他会在转写那一刻才知道）。
+     *
+     * 平台档用户从没想用本地转写，不该每次打开面板都看见一块橙色的「模型没下载」。
+     */
+    localGate() {
+      if (this.localAsrUsable) return null
+      if (!this.localGateOpen && this.asrProvider !== 'local') return null
+      const r = localAsrProbeResult()
+      return r && r.status !== 'READY' ? r : null
+    },
+    canDownloadModel() {
+      // 服务没起时给下载按钮是错的指路：模型下完了照样没人来跑它
+      return !!host.model && this.localGate && this.localGate.status === 'MODEL_MISSING'
+    },
+    modelDownloading() {
+      return this.modelState === 'downloading'
     },
     tierText() {
       if (this.asrProvider === 'local') return '本地转写'
@@ -289,15 +341,18 @@ export default {
       return 'tier-byok'
     },
     tierDesc() {
-      if (this.asrProvider === 'local') return '录音与转写都在本机完成，音频不出本机。'
+      if (this.asrProvider === 'local') {
+        return '录音与转写都在本机完成，音频不出本机。速度约为实时的一点五倍（两小时的会要跑一小时上下），没有说话人分离。'
+      }
       if (this.asrProvider === 'byok') return '用你自己的阿里云听悟账号转写，音频经你自己的 OSS 中转。'
       if (!this.asrPlatformAvailable) return '本机形态使用自备 Key，在「系统管理 - 平台服务」里填听悟凭证。'
       if (!this.asrAccountConnected) return '连接官网账户后即可直接转写，不用自己开通听悟。'
       return '由 AI Workdeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。'
     },
     localSwitchNote() {
-      if (this.localAsrUsable) return '打开后音频不上传，转写在本机完成（本地档没有说话人分离）。'
-      return '本地转写引擎将在后续版本提供，届时打开即可让录音完全不出本机。'
+      if (this.asrProvider === 'local') return '音频不上传，转写在本机完成；比云端慢，且没有说话人分离。'
+      if (this.localAsrUsable) return '打开后音频不上传，转写在本机完成（比云端慢，且没有说话人分离）。'
+      return '打开需要本机转写模型；下面可以就地下载。'
     },
     notConfiguredHint() {
       if (this.asrProvider === 'platform') {
@@ -309,14 +364,36 @@ export default {
   mounted() {
     this.loadMeetings()
     this.loadAsrTier()
+    // 装载时就探一次：面板要在**按下录音键之前**说清这段录音会不会出本机（设计 §6.2.1）
+    refreshLocalAsrReadiness()
+    this.loadModelState()
     this._pollTimer = setInterval(() => this.pollTranscribing(), POLL_INTERVAL_MS)
     // 从顶部胶囊停止录音时刷新列表
     this._onStopped = () => this.loadMeetings()
     try { uni.$on('awd:meeting-recording-stopped', this._onStopped) } catch (e) { /* ignore */ }
+    // 模型下载进度直接订阅主进程，与组件管理页同一条事件流：
+    // 用户在这里点的下载与在设置页点的是同一个下载，两处显示的进度必须一致
+    if (host.model) {
+      this._modelProgressUnsub = host.model.onProgress((evt) => {
+        if (!evt || evt.id !== 'asr-models') return
+        if (evt.phase === 'progress') {
+          this.modelState = 'downloading'
+          if (typeof evt.percent === 'number') this.modelPercent = evt.percent
+        } else {
+          // done / error：重新探一次真相，不拿事件本身当结论
+          this.loadModelState()
+          refreshLocalAsrReadiness()
+        }
+      })
+    }
   },
   beforeUnmount() {
     if (this._pollTimer) clearInterval(this._pollTimer)
     try { if (this._onStopped) uni.$off('awd:meeting-recording-stopped', this._onStopped) } catch (e) { /* ignore */ }
+    if (this._modelProgressUnsub) {
+      this._modelProgressUnsub()
+      this._modelProgressUnsub = null
+    }
     this.stopPlay()
   },
   methods: {
@@ -335,20 +412,78 @@ export default {
         console.warn('读取转写档位失败', e)
       }
     },
-    // 「录音不出本机」。切档后重新拉一次档位与会议列表：
-    // isConfigured 的判据按档分（平台档看有没有连账户，自备 Key 档看那五个凭证），
-    // 不刷新的话上面那条「未配置」提示会停在旧档的说法上。
+    /**
+     * 「录音不出本机」。
+     *
+     * 打开时**先就地探一次**，没就绪就不写档位——开关因此回到关闭态，
+     * 下面同时展开「下载模型 / 重新检测」的出路（设计 §6.2.1）。
+     * 让它留在打开态是本批要避免的那件事：律师录完两小时才发现转不了，
+     * 只剩「放弃录音」或「关掉开关传上云」，后者与他打开开关的目的正好相反。
+     *
+     * 切档后重新拉一次档位与会议列表：isConfigured 的判据按档分，
+     * 不刷新的话上面那条「未配置」提示会停在旧档的说法上。
+     */
     async onToggleLocalAsr(on) {
       if (this.tierBusy) return
       this.tierBusy = true
       try {
+        if (on) {
+          await refreshLocalAsrReadiness()
+          await this.loadModelState()
+          if (!this.localAsrUsable) {
+            this.localGateOpen = true // 未就绪：不写档位（开关自然回到关闭态），就地给出路
+            return
+          }
+        }
         await setPlatformServiceProvider('asr', on ? 'local' : 'platform')
+        this.localGateOpen = false
       } catch (e) {
         uni.showToast({ title: (e && e.message) || '切换失败，稍后重试', icon: 'none' })
       } finally {
         this.tierBusy = false
         await this.loadAsrTier()
         await this.loadMeetings()
+      }
+    },
+    async onRecheckLocalAsr() {
+      await refreshLocalAsrReadiness()
+      await this.loadModelState()
+      if (this.localAsrUsable) {
+        // 刚探到就绪：把用户点开关时想做的事补上，不让他再点一次
+        await this.onToggleLocalAsr(true)
+      }
+    },
+    // 模型组件的状态（桌面壳才有；浏览器里 host.model 为空，下载入口整块不出现）
+    async loadModelState() {
+      if (!host.model) return
+      try {
+        const res = await host.model.status()
+        const comp = ((res && res.components) || []).find(c => c.id === 'asr-models')
+        if (!comp) return
+        this.modelState = comp.state
+        if (comp.sizeHint) this.modelSizeHint = comp.sizeHint
+      } catch (e) {
+        console.warn('读取本机转写模型状态失败', e)
+      }
+    },
+    async onDownloadAsrModel() {
+      if (!host.model) return
+      try {
+        await host.model.download('asr-models')
+        this.modelState = 'downloading'
+        this.modelPercent = 0
+      } catch (e) {
+        uni.showToast({ title: '开始下载失败，稍后重试', icon: 'none' })
+      }
+    },
+    async onCancelAsrModel() {
+      if (!host.model) return
+      try {
+        await host.model.cancel('asr-models')
+      } finally {
+        this.modelState = 'absent'
+        this.modelPercent = 0
+        await this.loadModelState()
       }
     },
     async loadMeetings() {
@@ -687,6 +822,30 @@ $mr-muted: #6B7280;
   font-size: 11px;
   color: #6B7280;
   line-height: 1.5;
+}
+
+/* 未就绪时的就地出路：下载模型 / 重新检测 */
+.mr-tier-gate {
+  margin-top: 4px;
+  padding: 8px;
+  border-radius: 6px;
+  background: #FFF7ED;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.mr-tier-gate-msg {
+  font-size: 11px;
+  color: #9A3412;
+  line-height: 1.5;
+}
+
+.mr-tier-gate-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 /* ---- 录音区 ---- */

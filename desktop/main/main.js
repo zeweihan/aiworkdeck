@@ -5,6 +5,7 @@ const { createBackendDescriptor } = require('./services/backend-service')
 const { createPptxDescriptor } = require('./services/pptx-service')
 const { createMineruDescriptor } = require('./services/mineru-service')
 const { createKokoroDescriptor } = require('./services/kokoro-service')
+const { createAsrDescriptor } = require('./services/asr-service')
 const { createModelManager } = require('./services/model-manager')
 const { initLocalFileService } = require('./file-service')
 
@@ -1295,7 +1296,10 @@ ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
 // 组件 → 对应本地服务（下载完成自动拉起、「启用」按钮、删除前停服 都查这张表）
 const COMPONENT_SERVICE = {
   'mineru-models': 'mineru-service',
-  'kokoro-models': 'kokoro-service'
+  'kokoro-models': 'kokoro-service',
+  // asr-service 没模型也照常跑（就绪探测要能分清「服务没起」与「模型没下」），
+  // 这条映射在这里是为了另外两个用途：删模型前先停服务、状态页标「运行中」
+  'asr-models': 'asr-service'
 }
 
 // 打包态 pysvc 不再随 .app 携带目录，而是 Resources/pysvc.tar.gz 首启解压到
@@ -1409,6 +1413,7 @@ function createServices() {
   mgr.register(createPptxDescriptor())
   mgr.register(createMineruDescriptor(modelManager))
   mgr.register(createKokoroDescriptor(modelManager))
+  mgr.register(createAsrDescriptor())
   return mgr
 }
 

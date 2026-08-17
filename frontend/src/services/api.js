@@ -497,6 +497,25 @@ export function probeOllama(model) {
   });
 }
 
+/**
+ * 本机转写（asr-service）就绪探测。与 Ollama 那条同一个范式，理由也相同：
+ * 「录音不出本机」这一档没有密钥可校验，只能探。
+ *
+ * 响应恒为 200：
+ * { status: 'READY' | 'MODEL_MISSING' | 'SERVICE_DOWN', baseUrl, model,
+ *   diarization: boolean, message, nextStep }
+ *
+ * **MODEL_MISSING 与 SERVICE_DOWN 必须分开渲染**：前者要下一个 GB 级模型，
+ * 后者是重启应用，合并成一句「不可用」等于让律师在录完两小时之后才发现自己没有出路。
+ * diarization 从接口读、不在前端写死：本地档没有说话人分离是要写给用户看的取舍。
+ */
+export function probeLocalAsr() {
+  return request({
+    url: '/api/asr/local/probe',
+    method: 'GET'
+  });
+}
+
 // 获取可用 AI 助手列表
 export function getAssistants() {
   return request({

@@ -32,18 +32,25 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * 转写编排。两档，<b>分档发生在这一层</b>：
+ * 转写编排。三档，<b>分档发生在这一层</b>：
  *
  * <ul>
  *   <li><b>byok</b>：音频转码 → 自己的 OSS 中转 → 自己的听悟凭证建任务 → poll-on-read 收结果。
  *   <li><b>platform</b>：音频转码 → 向网关换直传凭证 → 普通 PUT 直传 → 网关建任务并预扣 Credits
  *       → poll-on-read 让网关按听悟返回的真实时长结算。
+ *   <li><b>local</b>：音频转码 → 本机 asr-service 直接转写。<b>一个字节都不出本机</b>，
+ *       也没有 taskId——整段转写就在后台执行器里跑完（见 {@link #inFlight}）。
  * </ul>
  *
  * <p>platform 档<b>完全不碰 {@link MeetingOssClient} 与 {@link TingwuClient}</b>，
- * 那两个接口的实现一字未动、只服务 byok 档。不在接口内部分档是因为两条路的失败语义
+ * 那两个接口的实现一字未动、只服务 byok 档。不在接口内部分档是因为三条路的失败语义
  * 完全不同：byok 失败是「你的凭证/网络有问题」，platform 失败还要区分「余额不够」
- * 「服务未开放」「我们的服务器挂了」，塞进同一个实现里，错误分类就再也拆不开。
+ * 「服务未开放」「我们的服务器挂了」，local 失败是「组件没装好」，
+ * 塞进同一个实现里，错误分类就再也拆不开。
+ *
+ * <p><b>本地档失败绝不回落云端。</b>用户打开「录音不出本机」的唯一理由就是这段谈话
+ * 绝对不能出网，悄悄传上云正好背叛他打开开关的目的。失败只落一条说清「什么没就绪、
+ * 下一步做什么」的 error。
  *
  * <p>提交在单线程后台执行器里跑（转码+上传一场两小时的会要分钟级），
  * 状态推进靠前端轮询 GET 触发 {@link #refreshIfNeeded}——没有常驻调度器，
@@ -95,6 +102,7 @@ public class MeetingTranscriptionService {
     private final MeetingOssClient ossClient;
     private final ExternalProviderResolver externalProviderResolver;
     private final PlatformGatewayClient platformGatewayClient;
+    private final LocalAsrClient localAsrClient;
     private final UrlFetcher urlFetcher;
     private final BinaryUploader uploader;
     private final String defaultAccessKeyId;
@@ -109,6 +117,17 @@ public class MeetingTranscriptionService {
         return t;
     });
 
+    /**
+     * 本 JVM 里还在后台跑的转写（转码/上传/本地推理都算）。
+     *
+     * <p>用来把「正跑着」与「上次运行被关机打断了」区分开。本地档必须有它：
+     * 那一档从头到尾没有 taskId，整段推理都落在这个窗口里；没有它，
+     * 一次关机就会让会议<b>永远</b>停在「转写中」——而 {@link #startTranscription}
+     * 对 TRANSCRIBING 是幂等返回，用户连「重试转写」都点不动。
+     * 云端两档的转码上传阶段同样在这个窗口内（那是本改造之前就有的同一个缺口）。
+     */
+    private final java.util.Set<Long> inFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     @org.springframework.beans.factory.annotation.Autowired
     public MeetingTranscriptionService(
             MeetingRecordingRepository meetingRepository,
@@ -120,6 +139,7 @@ public class MeetingTranscriptionService {
             MeetingOssClient ossClient,
             ExternalProviderResolver externalProviderResolver,
             PlatformGatewayClient platformGatewayClient,
+            LocalAsrClient localAsrClient,
             @Value("${meeting.asr.access-key-id:}") String defaultAccessKeyId,
             @Value("${meeting.asr.access-key-secret:}") String defaultAccessKeySecret,
             @Value("${meeting.asr.app-key:}") String defaultAppKey,
@@ -127,7 +147,7 @@ public class MeetingTranscriptionService {
             @Value("${meeting.oss.endpoint:}") String defaultOssEndpoint) {
         this(meetingRepository, projectFileRepository, storageResolver, systemSettingService,
                 transcoder, tingwuClient, ossClient, externalProviderResolver, platformGatewayClient,
-                defaultUrlFetcher(), defaultUploader(),
+                localAsrClient, defaultUrlFetcher(), defaultUploader(),
                 defaultAccessKeyId, defaultAccessKeySecret, defaultAppKey, defaultOssBucket, defaultOssEndpoint);
     }
 
@@ -141,6 +161,7 @@ public class MeetingTranscriptionService {
             MeetingOssClient ossClient,
             ExternalProviderResolver externalProviderResolver,
             PlatformGatewayClient platformGatewayClient,
+            LocalAsrClient localAsrClient,
             UrlFetcher urlFetcher,
             BinaryUploader uploader,
             String defaultAccessKeyId,
@@ -157,6 +178,7 @@ public class MeetingTranscriptionService {
         this.ossClient = ossClient;
         this.externalProviderResolver = externalProviderResolver;
         this.platformGatewayClient = platformGatewayClient;
+        this.localAsrClient = localAsrClient;
         this.urlFetcher = urlFetcher;
         this.uploader = uploader;
         this.defaultAccessKeyId = defaultAccessKeyId;
@@ -211,21 +233,23 @@ public class MeetingTranscriptionService {
     }
 
     /** 本服务当前走哪一档。非 local-mode 恒 BYOK，闸在 resolver 一处（设计决策 D5）。 */
-    private boolean platformMode() {
-        return externalProviderResolver.resolve(ExternalServiceProvider.ASR)
-                == ExternalServiceProvider.PLATFORM;
+    private ExternalServiceProvider tier() {
+        return externalProviderResolver.resolve(ExternalServiceProvider.ASR);
     }
 
     /**
      * 「转写能不能用」。<b>判据按档位分</b>：
-     * platform 档只要连了账户就算配好（那 5 个阿里云凭证是我们出的），
-     * byok 档仍然要求用户自己那 5 项齐全。
+     * platform 档只要连了账户就算配好（那 5 个阿里云凭证是我们出的）；
+     * byok 档仍然要求用户自己那 5 项齐全；
+     * local 档要求 asr-service 起着<b>且</b>模型已下载——只起了服务不算，
+     * 那样用户会在按下录音键之后才发现转不了。
      */
     public boolean isConfigured() {
-        if (platformMode()) {
-            return platformGatewayClient.connected();
-        }
-        return loadSettings().configured();
+        return switch (tier()) {
+            case LOCAL -> localAsrClient.probe().ready();
+            case PLATFORM -> platformGatewayClient.connected();
+            case BYOK -> loadSettings().configured();
+        };
     }
 
     /**
@@ -244,31 +268,46 @@ public class MeetingTranscriptionService {
             throw new IllegalArgumentException("录音尚未结束");
         }
 
-        boolean platform = platformMode();
-        MeetingAsrSettings settings = platform ? null : loadSettings();
-        if (platform) {
-            if (!platformGatewayClient.connected()) {
-                // 文案不含「登录」「未授权」「请先」——api.js 拿这三个子串判掉线并清会话。
-                // 也一并给出自备 Key 这条出路：用试用码解锁、不打算连账户的用户只有它。
-                throw new IllegalArgumentException(LangText.of(
-                        "平台转写需要连接 AI Workdeck 账户；也可到 系统管理-会议转写 改用自己的阿里云凭证",
-                        "Platform transcription needs a connected AI Workdeck account; "
-                                + "or switch to your own Aliyun credentials in System settings"));
+        ExternalServiceProvider tier = tier();
+        MeetingAsrSettings settings = tier == ExternalServiceProvider.BYOK ? loadSettings() : null;
+        switch (tier) {
+            case LOCAL -> {
+                LocalAsrClient.ProbeResult probe = localAsrClient.probe();
+                if (!probe.ready()) {
+                    // 就地说清「什么没就绪、下一步做什么」。**不回落云端**：
+                    // 悄悄把音频传上去正好背叛用户打开「录音不出本机」的目的。
+                    throw new IllegalArgumentException(probe.message() + " " + probe.nextStep());
+                }
             }
-        } else if (!settings.configured()) {
-            throw new IllegalArgumentException("未配置转写服务凭证，请到 设置-会议转写 填写阿里云凭证");
+            case PLATFORM -> {
+                if (!platformGatewayClient.connected()) {
+                    // 文案不含「登录」「未授权」「请先」——api.js 拿这三个子串判掉线并清会话。
+                    // 也一并给出自备 Key 这条出路：用试用码解锁、不打算连账户的用户只有它。
+                    throw new IllegalArgumentException(LangText.of(
+                            "平台转写需要连接 AI Workdeck 账户；也可到 系统管理-会议转写 改用自己的阿里云凭证",
+                            "Platform transcription needs a connected AI Workdeck account; "
+                                    + "or switch to your own Aliyun credentials in System settings"));
+                }
+            }
+            case BYOK -> {
+                if (!settings.configured()) {
+                    throw new IllegalArgumentException("未配置转写服务凭证，请到 设置-会议转写 填写阿里云凭证");
+                }
+            }
         }
 
         meeting.setStatus(MeetingRecording.STATUS_TRANSCRIBING);
         meeting.setError(null);
         meeting.setTingwuTaskId(null);
         meeting.setGatewayTaskId(null);
+        // 先登记再落库：中间那一瞬前端刚好来轮询的话，没有这一步会被判成「上次被打断」
+        inFlight.add(meetingId);
         MeetingRecording saved = meetingRepository.save(meeting);
 
-        if (platform) {
-            executor.submit(() -> submitViaPlatform(meetingId));
-        } else {
-            executor.submit(() -> submitToTingwu(meetingId, settings));
+        switch (tier) {
+            case LOCAL -> executor.submit(() -> transcribeLocally(meetingId));
+            case PLATFORM -> executor.submit(() -> submitViaPlatform(meetingId));
+            case BYOK -> executor.submit(() -> submitToTingwu(meetingId, settings));
         }
         return saved;
     }
@@ -342,6 +381,40 @@ public class MeetingTranscriptionService {
             failMeeting(meetingId, "转写提交失败: " + brief(e));
         } finally {
             cleanupDir(workDir);
+            inFlight.remove(meetingId);
+        }
+    }
+
+    /**
+     * 后台（local 档）：转码 → 本机 asr-service 转写 → 直接落库。<b>没有 taskId、没有轮询</b>——
+     * 整段推理就在这个方法里跑完，一场两小时的会常态要几十分钟。
+     *
+     * <p><b>失败绝不回落云端。</b>用户开这一档的唯一理由是这段谈话不能出网，
+     * 悄悄传上去正好是他要规避的事。这里只把可读的原因落到 error 上。
+     */
+    private void transcribeLocally(Long meetingId) {
+        Path workDir = null;
+        try {
+            MeetingRecording meeting = meetingRepository.findById(meetingId).orElse(null);
+            if (meeting == null) return;
+            Path audioPath = resolveAudioPath(meeting);
+
+            workDir = Files.createTempDirectory("awd-meeting-");
+            File prepared = transcoder.toMp3(audioPath.toFile(), workDir);
+            String raw = localAsrClient.transcribe(prepared);
+
+            MeetingRecording fresh = meetingRepository.findById(meetingId).orElse(null);
+            if (fresh == null) return;
+            // summaryJson 为 null：章节/摘要/待办是听悟的增值结果，本地档没有。
+            // 用户仍可用 AI 面板基于转写稿生成纪要（getMeetingMinutesPrompt 那条路两档共用）。
+            storeSegments(fresh, MeetingTranscriptParser.parseLocalSegments(raw), null);
+            log.info("本机转写完成: meetingId={}", meetingId);
+        } catch (Exception e) {
+            log.warn("本机转写失败: meetingId={}", meetingId, e);
+            failMeeting(meetingId, LangText.of("本机转写失败: ", "On-device transcription failed: ") + brief(e));
+        } finally {
+            cleanupDir(workDir);
+            inFlight.remove(meetingId);
         }
     }
 
@@ -405,6 +478,7 @@ public class MeetingTranscriptionService {
             failMeeting(meetingId, "转写提交失败: " + brief(e));
         } finally {
             cleanupDir(workDir);
+            inFlight.remove(meetingId);
         }
     }
 
@@ -422,7 +496,7 @@ public class MeetingTranscriptionService {
         }
         boolean viaPlatform = meeting.getGatewayTaskId() != null;
         if (!viaPlatform && meeting.getTingwuTaskId() == null) {
-            return meeting;
+            return interruptedOrPending(meeting);
         }
         LocalDateTime last = meeting.getLastPolledAt();
         if (last != null && last.isAfter(LocalDateTime.now().minusSeconds(POLL_THROTTLE_SECONDS))) {
@@ -432,6 +506,21 @@ public class MeetingTranscriptionService {
         meetingRepository.save(meeting);
 
         return viaPlatform ? refreshViaPlatform(meeting) : refreshViaTingwu(meeting);
+    }
+
+    /**
+     * 两个 taskId 都为空的「转写中」：要么后台任务正跑着（local 档的整段推理、
+     * 云端两档的转码上传阶段都落在这个窗口里），要么上次运行被关机/崩溃打断了。
+     * 靠 {@link #inFlight} 区分——不区分的话被打断的会议会<b>永远</b>停在「转写中」，
+     * 而 {@link #startTranscription} 对该状态是幂等返回，用户连「重试转写」都点不动。
+     */
+    private MeetingRecording interruptedOrPending(MeetingRecording meeting) {
+        if (inFlight.contains(meeting.getId())) return meeting;
+        meeting.setStatus(MeetingRecording.STATUS_FAILED);
+        meeting.setError(LangText.of(
+                "转写在上次运行中被中断，重新提交即可（录音本身完好）",
+                "Transcription was interrupted by a previous shutdown; submit it again (the recording itself is intact)"));
+        return meetingRepository.save(meeting);
     }
 
     /**
@@ -532,15 +621,23 @@ public class MeetingTranscriptionService {
         }
     }
 
-    /** 解析 + 落库，两档共用。转写正文为空一律当失败——不能让空稿冒充成功。 */
+    /** 解析 + 落库，云端两档共用。 */
     private MeetingRecording storeResults(MeetingRecording meeting, String transcriptionJson,
                                           String chapters, String summarization, String assistance) {
-        List<MeetingTranscriptParser.Segment> segments = MeetingTranscriptParser.parseSegments(transcriptionJson);
+        return storeSegments(meeting,
+                MeetingTranscriptParser.parseSegments(transcriptionJson),
+                MeetingTranscriptParser.buildSummaryJson(chapters, summarization, assistance));
+    }
+
+    /** 落库，三档共用。转写正文为空一律当失败——不能让空稿冒充成功。 */
+    private MeetingRecording storeSegments(MeetingRecording meeting,
+                                           List<MeetingTranscriptParser.Segment> segments,
+                                           String summaryJson) {
         if (segments.isEmpty()) {
             throw new IllegalStateException("转写结果为空");
         }
         meeting.setTranscriptJson(MeetingTranscriptParser.segmentsToJson(segments));
-        meeting.setSummaryJson(MeetingTranscriptParser.buildSummaryJson(chapters, summarization, assistance));
+        meeting.setSummaryJson(summaryJson);
         meeting.setStatus(MeetingRecording.STATUS_TRANSCRIBED);
         meeting.setError(null);
         return meetingRepository.save(meeting);

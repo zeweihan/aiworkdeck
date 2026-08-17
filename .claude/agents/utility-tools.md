@@ -24,7 +24,10 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 
 **语音 TTS**：`EasyVoicePane.vue`（api：getTtsVoices/generateTtsAudio）；desktop 本地 Kokoro 由 `desktop/main/services/kokoro-service.js` 管理；后端 `controller/TtsController.java`（/api/tts/voices、/generate）+ `service/TtsService.java`。**只有本机一档**：桌面捆绑 Kokoro，OpenAI 兼容 /v1，地址 `external.tts.local-base-url`（打包态由 Electron 注入动态端口），地址为空即「组件未就绪」。云端 ElevenLabs 那一档与 `external.tts.provider` 开关已整体移除。easyvoice Docker 段已停用。
 
-**录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写走通义听悟（说话人分离），详见 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
+**录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写三档 platform / byok / local，详见 `.claude/agents/licensing-billing.md`「平台服务网关」与 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
+
+**本地 ASR（`asr-service/`，P3 起）**：faster-whisper 的 OpenAI 兼容薄包装，形态与 `kokoro-service/` 同构（`app.py` + `requirements.in/lock`，进 pysvc 单包，定位走 `pysvcPath()`）。端点 `GET /health`（带 `modelReady`，不加载模型）+ `POST /v1/audio/transcriptions`。桌面侧 `desktop/main/services/asr-service.js` 分配端口并把 `EXTERNAL_ASR_LOCAL_BASE_URL` 注入后端；模型 `Systran/faster-whisper-medium`（约 1.5GB）走组件管理 `asr-models` 下载，运行时 `HF_HUB_OFFLINE=1`。后端 `service/meeting/LocalAsrClient.java` 探测 + 转写，`controller/LocalAsrProbeController.java` 出 `GET /api/asr/local/probe`（匿名窗口口径与 Ollama 探测共用 `WizardStateService`）。
+**Whisper 说普通话时稳定输出繁体**（本机实测两分钟会见录音整篇繁体），社区常用的 `initial_prompt` 偏置一个字都没纠正过来——所以在 `app.py` 里用 OpenCC 做确定性的繁转简后处理（`ASR_OUTPUT_SCRIPT=original` 可关）。
 
 **文件缓存区（左下角「文件暂存区」）**：`FileStagingArea.vue`（纯展示，用量条读 `usage` prop）+ `pages/project-overview/stagingArea.js`（方法组）。**物理形态是项目内名为 `__staging_area__` 的文件夹**，「加入缓存区」= `batchMoveFiles` 把已有项目文件移进去，没有独立的缓存区目录。
   **免费额度（PR-C）**：`service/quota/StageQuotaService.java`，未拥有 `stage.unlimited` 时上限 20 个文件 / 500MB。**实现是移入时拦截，已有文件一律不动**——`ProjectFileService.batchMove` 在循环前整体准入检查，超额抛 `StageQuotaExceededException` → GlobalExceptionHandler 转 `code=4003 + feature + usage`，前端 api.js 打 `err.quotaExceeded` 标记。移出方向永不拦截（否则用户无法自救）。跨项目 id 不参与计算（防越权探测文件大小）。**文件夹按它装的全部文件递归计数**（准入与用量同一口径）——文件树允许把整个文件夹拖进缓存区，只算 1 个条目 0 字节的话，套一层目录就能让两条额度同时失效。用量端点 `GET /api/projects/{id}/files/stage/usage?folderId=`，**folderId 是全局 id，必须 `checkFileInProject` 校验归属**（只验路径 projectId 的话能枚举他人项目任意目录的文件数与字节数）。与剪贴板同理，额度只在 local-mode 执行。
@@ -69,7 +72,8 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 - BrowserView 弹窗守卫模式与 window.open 消费者、截图假死根因见 v0.6.1 修复（desktop-interaction-bugfix 记录）；改 BrowserView 生命周期务必测全屏/黑屏恢复路径。
 - 剪贴板去重靠指纹+window 级状态，改动监听逻辑先读 PR#148/#151 教训。
 - `checkba:fs-read-file` 有敏感路径拦截，别为新功能开任意路径读写。
-- Kokoro 大陆网络 401 = hf_xet 绕镜像问题，禁 xet 修（PR#142）。
+- Kokoro 大陆网络 401 = hf_xet 绕镜像问题，禁 xet 修（PR#142）。asr-models 的下载走同一条路，同样禁 xet。
+- **asr-service 不像 kokoro 那样把服务门在模型上**：kokoro 的 descriptor 有 `enabled`（没模型不起进程），asr-service **没有**。就绪探测必须能分开「服务没起」（重启应用）与「模型没下」（下 1.5GB），不起进程就只剩前一种结论，用户照提示重启一万次也不会有模型。
 - **免费额度的红线**：剪贴板是「隐藏超出部分」、缓存区是「拒绝新增」，两者都**绝不删除或清理用户已有数据**。任何"顺手清理超额记录"的改动都是回归——用户付费后必须能看到之前被隐藏的全部内容。
 - **权益失效不等于把人锁在外面**：`applyOnStartup` 无条件应用自选存储根（权益失效后数据照常读写），因此 `GET /api/storage/location` 与「恢复默认位置」都**不设权益闸**——否则 Key 被吊销 + 外置盘拔掉的用户既看不到自己数据在哪，也换不回默认位置。付费闸只加在「改到新的自选位置」这个动作上。
 - `StorageException` 默认落到通用异常处理器会被替换成「服务器内部错误」（防路径回显）。存储位置那几条用户语言文案是在 `StorageLocationController` 里转成 `IllegalArgumentException` 才送出去的，新增可回显文案要走同一条路且确保不含路径。

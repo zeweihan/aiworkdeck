@@ -132,6 +132,12 @@ function spawnEnv(ctx) {
   if (ctx.ports['kokoro-service']) {
     env.EXTERNAL_TTS_LOCAL_BASE_URL = 'http://127.0.0.1:' + ctx.ports['kokoro-service']
   }
+  // 本地转写（faster-whisper）。**只注地址、不注档位**：本地档要先下 1.5GB 模型，
+  // 必须由用户主动打开「录音不出本机」；像 TTS 那样打包即默认会让全新安装一开箱
+  // 就转不了写（Kokoro 那边的模型只有 300MB 且组件管理里默认装）。
+  if (ctx.ports['asr-service']) {
+    env.EXTERNAL_ASR_LOCAL_BASE_URL = 'http://127.0.0.1:' + ctx.ports['asr-service']
+  }
   // 打包态资源定位。dev 态一律不注入：后端 cwd 是 backend/，自己就能按相对路径找到
   // skills/ 与 ../litviz，注入反而会把开发中的改动指到别处去。
   if (ctx.packaged) {
