@@ -130,6 +130,20 @@ public class TtsService {
         }
     }
 
+    /**
+     * TTS 未配置时的统一说法。<b>不要再单点 ElevenLabs</b>：三档里能落地的只有本地
+     * Kokoro 与平台代采，把用户往一个他多半没有、也不打算买的云服务上引，
+     * 等于把「怎么把它跑起来」这一步藏了起来。
+     */
+    private static FeatureNotConfiguredException ttsNotConfigured() {
+        return new FeatureNotConfiguredException("tts",
+                LangText.of("语音合成未就绪：请在「系统管理 → 平台服务 → 语音合成」选择本地引擎"
+                                + "（需先在「组件管理」下载语音组件），或连接账户改用平台代采。",
+                        "Text-to-speech is not ready: pick the local engine under "
+                                + "Admin → Platform Services → Speech (download the speech component first), "
+                                + "or connect an account to use the platform tier."));
+    }
+
     public List<VoiceOption> getVoices() {
         if (isLocalProvider()) {
             return getLocalVoices();
@@ -218,11 +232,12 @@ public class TtsService {
      * 
      * @param text Text to convert to speech
      * @param voiceId ElevenLabs voice ID (or voice name for backward compatibility)
-     * @param rate Unused (ElevenLabs uses different settings)
-     * @param pitch Unused (ElevenLabs uses different settings)
-     * @param volume Unused (ElevenLabs uses different settings)
+     * @param rate 语速倍率（"1.0" / "1.2x"）。<b>只有本地 Kokoro 档吃这个参数</b>，
+     *             ElevenLabs 与平台代采档没有对应的 API 字段，传了也不会生效。
+     *             此前这里还有 pitch/volume 两个形参，三档后端一个都不读——
+     *             留着只会让前端画出三个点了没反应的滑杆，已一并去掉。
      */
-    public File generateAudio(String text, String voiceId, String rate, String pitch, String volume) {
+    public File generateAudio(String text, String voiceId, String rate) {
         if (isLocalProvider()) {
             return generateLocalAudio(text, voiceId, rate);
         }
@@ -232,9 +247,7 @@ public class TtsService {
         // 未配置 TTS 密钥时直接返回"功能未配置"，前端引导去设置（#18 T5）
         String configuredApiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);
         if (configuredApiKey == null || configuredApiKey.isBlank()) {
-            throw new FeatureNotConfiguredException("tts",
-                    LangText.of("语音合成未配置：请在设置中配置 ElevenLabs TTS",
-                            "Text-to-speech is not configured: set up ElevenLabs in Settings."));
+            throw ttsNotConfigured();
         }
         try {
             String baseUrl = systemSettingService.get("external.elevenlabs.baseUrl", defaultBaseUrl);
@@ -372,6 +385,8 @@ public class TtsService {
                     LangText.of("本地语音组件未就绪：请在「系统管理 → 组件管理」下载语音组件",
                             "Local speech component is not ready: download it in Admin → Components."));
         }
+        // 端口分配了但服务没起来是常态：kokoro-service 在打包态被 modelManager
+        // 的 isInstalled('kokoro-models') 卡着，300MB 模型没下就不会启动。
         try {
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);

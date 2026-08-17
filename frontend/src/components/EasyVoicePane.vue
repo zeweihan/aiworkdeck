@@ -1,14 +1,15 @@
 <template>
   <scroll-view scroll-y class="easy-voice-pane">
     <!-- Text Input Section -->
-    <view class="section no-border">
+    <view class="section">
       <view class="section-header">
         <text class="section-title">{{ $t('panels.evTextContentTitle') }}</text>
+        <view class="section-spacer"></view>
         <view class="section-actions">
            <view class="mini-btn" @tap="importFromDoc" :title="$t('panels.evImportTitle')">
              <text>{{ $t('panels.evImport') }}</text>
            </view>
-           <view class="mini-btn" @tap="text = ''" :title="$t('panels.evClearTitle')">
+           <view class="mini-btn icon" @tap="text = ''" :title="$t('panels.evClearTitle')">
              <svg class="btn-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
            </view>
         </view>
@@ -22,8 +23,16 @@
     </view>
 
     <!-- Settings Section -->
-    <view class="section no-border">
-      <text class="section-title">{{ $t('panels.evVoiceSettingsTitle') }}</text>
+    <view class="section">
+      <view class="section-header">
+        <text class="section-title">{{ $t('panels.evVoiceSettingsTitle') }}</text>
+      </view>
+
+      <!-- 引擎未就绪时把话说在合成之前：音色列表拿不到就是引擎没起来，
+           这时候让用户填完一整段文字再报错是没道理的 -->
+      <view class="ev-notice" v-if="voicesLoaded && voices.length === 0">
+        <text>{{ $t('panels.evNoVoicesNotice') }}</text>
+      </view>
 
       <!-- Voice Selection (Custom Dropdown) -->
       <view class="form-item relative">
@@ -69,56 +78,23 @@
         <view v-if="showVoiceDropdown" class="dropdown-mask" @tap="showVoiceDropdown = false"></view>
       </view>
 
-      <!-- Rate -->
+      <!-- 语速。
+           这里以前有三个滑杆（语速/语调/音量），三个都是死的：前端把 '+0%' / '+0Hz'
+           写死在 payload 里、根本没读滑杆的值；而后端三档里 ElevenLabs 与平台代采
+           压根没有这几个参数，只有本地 Kokoro 吃一个倍率制的 speed——'+0%' 传过去
+           解析失败恒回落 1.0。语调与音量已删（没有任何一档支持，留着就是骗人），
+           语速改成倍率并真正下发。 -->
       <view class="form-item">
         <view class="slider-header">
            <text class="label">{{ $t('panels.evRateLabel') }}</text>
-           <text class="value-text">{{ rate }}%</text>
+           <text class="value-text">{{ speedText }}</text>
         </view>
-        <slider 
-          :value="rate" 
-          @change="onRateChange" 
-          min="-50" 
-          max="50" 
-          show-value 
-          block-size="12"
-          activeColor="#1A5336"
-          backgroundColor="#e5e7eb"
-          block-color="#1A5336"
-        />
-      </view>
-
-      <!-- Pitch -->
-      <view class="form-item">
-        <view class="slider-header">
-           <text class="label">{{ $t('panels.evPitchLabel') }}</text>
-           <text class="value-text">{{ pitch }}Hz</text>
-        </view>
-        <slider 
-          :value="pitch" 
-          @change="onPitchChange" 
-          min="-50" 
-          max="50" 
-          show-value 
-          block-size="12"
-          activeColor="#1A5336"
-          backgroundColor="#e5e7eb"
-          block-color="#1A5336"
-        />
-      </view>
-      
-      <!-- Volume -->
-       <view class="form-item">
-        <view class="slider-header">
-           <text class="label">{{ $t('panels.evVolumeLabel') }}</text>
-           <text class="value-text">{{ volume }}%</text>
-        </view>
-         <slider 
-          :value="volume" 
-          @change="onVolumeChange" 
-          min="-50" 
-          max="50" 
-          show-value 
+        <slider
+          :value="rate"
+          @change="onRateChange"
+          min="50"
+          max="150"
+          step="5"
           block-size="12"
           activeColor="#1A5336"
           backgroundColor="#e5e7eb"
@@ -140,7 +116,7 @@
     </view>
 
     <!-- Result Area -->
-    <view v-if="audioUrl" class="section no-border result-area">
+    <view v-if="audioUrl" class="section result-area">
       <view class="result-header">
          <text class="result-title">{{ $t('panels.evResultTitle') }}</text>
          <text class="download-link" @tap="downloadAudio">{{ $t('panels.evDownload') }}</text>
@@ -174,9 +150,9 @@ export default {
       selectedVoiceName: '',  // Display name
       voiceSearch: '',
       showVoiceDropdown: false,
-      rate: 0,
-      pitch: 0,
-      volume: 0,
+      voicesLoaded: false,
+      // 语速以「百分之几倍」存（100 = 原速），下发时除以 100 变成 Kokoro 的 speed
+      rate: 100,
       generating: false,
       audioUrl: '',
       audioInstance: null,
@@ -190,6 +166,7 @@ export default {
   },
   computed: {
     ICONS() { return ICONS },
+    speedText() { return (this.rate / 100).toFixed(2).replace(/0$/, '') + 'x' },
     selectedVoiceLabel() {
         const v = this.voices.find(v => v.voiceId === this.selectedVoiceId)
         return v ? `${v.name} (${v.gender || 'voice'})` : ''
@@ -359,16 +336,13 @@ export default {
       } catch (e) {
         console.error('[EasyVoicePane] Failed to load voices', e)
         uni.showToast({ title: this.$t('panels.evLoadVoicesFailed'), icon: 'none' })
+      } finally {
+        // 与「还没问过」区分开：空列表 = 引擎没起来，要在合成之前就说出来
+        this.voicesLoaded = true
       }
     },
     onRateChange(e) {
       this.rate = e.detail.value
-    },
-    onPitchChange(e) {
-      this.pitch = e.detail.value
-    },
-    onVolumeChange(e) {
-        this.volume = e.detail.value
     },
     async importFromDoc() {
         const callback = (content) => {
@@ -398,10 +372,10 @@ export default {
       try {
         const payload = {
             text: this.text,
-            voice: this.selectedVoiceId,  // Use voiceId for ElevenLabs API
-            rate: '+0%',  // ElevenLabs uses different settings, kept for backward compatibility
-            pitch: '+0Hz',
-            volume: '+0%'
+            voice: this.selectedVoiceId,
+            // 倍率制字符串，后端 TtsService.parseSpeed 认这个格式（"1"/"1.2"/"1.2x"）。
+            // 此前这里写死 '+0%'，解析必然失败、恒回落 1.0——滑杆等于没接。
+            rate: String(this.rate / 100)
         }
         
         console.log('[EasyVoicePane] Generating with payload:', payload)
@@ -444,72 +418,80 @@ export default {
 </script>
 
 <style scoped>
+/* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场）。
+   此前这个面板是 16px 页边距 + 24px 段间距 + 白卡片套白底，260px 宽的左栏里
+   一屏只装得下文本框和半个音色选择器。 */
 .easy-voice-pane {
   height: 100%;
-  background-color: #f9fafb;
-  padding: 16px;
+  background-color: #fff;
   box-sizing: border-box;
 }
 
 .section {
-  margin-bottom: 24px;
-  background: #fff; /* Keep background but remove border */
-  padding: 0; /* Remove internal padding if using 'gap' approach, or keep it */
-  padding: 12px;
-  border-radius: 8px;
-  /* border: 1px solid #e5e7eb; REMOVED border */
+  padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
+  background: #fff;
 }
 
-/* Optional: Add a subtle shadow instead of border, or just keep it flat as per "compact" request */
-.section.no-border {
-    border: none;
-    box-shadow: none; /* Make it very clean */
-    background: transparent; /* Or #fff if we want card style without border */
-    background: #fff;
-}
-
+/* 分组头：与插件广场同形（26px / 11px-700） */
 .section-header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  gap: 4px;
+  height: var(--awd-panel-sec-h);
 }
 
 .section-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #374151;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--awd-panel-text-2);
 }
+
+.section-spacer { flex: 1; }
 
 .section-actions {
     display: flex;
-    gap: 8px;
+    gap: 4px;
 }
 
 .mini-btn {
-    padding: 3px 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 18px;
+    padding: 0 6px;
     background: #fff;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--awd-panel-border);
     border-radius: 4px;
-    font-size: 11px;
+    font-size: 10px;
     cursor: pointer;
-    color: #4b5563;
-    transition: all 0.2s;
+    color: var(--awd-panel-text-2);
 }
+.mini-btn.icon { width: 20px; padding: 0; }
 .mini-btn:hover {
-    background: #f3f4f6;
-    border-color: #d1d5db;
+    background: var(--awd-panel-hover);
+    border-color: #D1D5DB;
+}
+.btn-glyph { width: 11px; height: 11px; }
+
+.ev-notice {
+    margin-bottom: var(--awd-panel-gap);
+    padding: 6px 8px;
+    border-radius: var(--awd-panel-radius);
+    background: #FFF8E6;
+    border: 1px solid #F2E3B3;
+    font-size: var(--awd-panel-fs-meta);
+    color: #8A6D1D;
+    line-height: 1.55;
 }
 
 .voice-textarea {
   width: 100%;
-  height: 140px;
-  border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  padding: 12px;
-  font-size: 14px;
+  height: 110px;
+  border: 1px solid var(--awd-panel-border);
+  border-radius: var(--awd-panel-radius);
+  padding: 8px;
+  font-size: var(--awd-panel-fs);
   line-height: 1.6;
   box-sizing: border-box;
   background: #ffffff;
@@ -517,21 +499,21 @@ export default {
   transition: border-color 0.2s;
 }
 .voice-textarea:focus {
-    border-color: #1A5336;
+    border-color: var(--awd-panel-accent-2);
     outline: none;
 }
 
 .form-item {
-  margin-bottom: 20px;
+  margin-bottom: var(--awd-panel-gap);
 }
 .form-item.relative {
     position: relative;
 }
 
 .label {
-  font-size: 12px;
-  color: #6b7280;
-  margin-bottom: 6px;
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-text-3);
+  margin-bottom: 4px;
   display: block;
   font-weight: 500;
 }
@@ -539,14 +521,14 @@ export default {
 /* Custom Select Trigger */
 .voice-select-trigger {
     width: 100%;
-    height: 40px;
-    border: 1px solid #d1d5db;
-    border-radius: 6px;
+    height: var(--awd-panel-row-h);
+    border: 1px solid var(--awd-panel-border);
+    border-radius: var(--awd-panel-radius);
     background: #fff;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 12px;
+    padding: 0 8px;
     box-sizing: border-box;
     cursor: pointer;
     transition: all 0.2s;
@@ -555,8 +537,11 @@ export default {
     border-color: #1A5336;
 }
 .selected-text {
-    font-size: 14px;
-    color: #111827;
+    font-size: var(--awd-panel-fs);
+    color: var(--awd-panel-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .selected-text .placeholder {
     color: #9ca3af;
@@ -612,7 +597,7 @@ export default {
 }
 
 .voice-option {
-    padding: 10px 12px;
+    padding: 5px 8px;
     border-bottom: 1px solid #f9fafb;
     cursor: pointer;
     transition: background 0.15s;
@@ -638,8 +623,8 @@ export default {
     margin-bottom: 2px;
 }
 .voice-name-text {
-    font-size: 14px;
-    color: #1f2937;
+    font-size: var(--awd-panel-fs);
+    color: var(--awd-panel-text);
 }
 .voice-gender-tag {
     font-size: 10px;
@@ -664,27 +649,28 @@ export default {
 .slider-header {
     display: flex;
     justify-content: space-between;
-    margin-bottom: 4px;
+    align-items: baseline;
+    margin-bottom: 0;
 }
 .value-text {
-    font-size: 12px;
-    color: #1A5336;
-    font-weight: 500;
+    font-size: var(--awd-panel-fs-meta);
+    color: var(--awd-panel-accent);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
 }
 
 /* Action Area */
 .action-area {
-  margin-top: 8px;
-  margin-bottom: 24px;
+  padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
 }
 
 .workdeck-btn {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 44px;
-  border-radius: 8px;
-  font-size: 14px;
+  height: 32px;
+  border-radius: var(--awd-panel-radius);
+  font-size: var(--awd-panel-fs);
   font-weight: 600;
   cursor: pointer;
   border: none;
@@ -712,27 +698,23 @@ export default {
 }
 
 /* Result Area */
-.result-area {
-    background: #f0fdf4 !important; /* Mint background */
-    border: 1px solid #bbf7d0 !important;
-}
-
 .result-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 12px;
+    height: var(--awd-panel-sec-h);
 }
 
 .result-title {
-    font-size: 13px;
-    font-weight: 600;
-    color: #14532d;
+    font-size: var(--awd-panel-fs-sec);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--awd-panel-text-2);
 }
 
 .download-link {
-    font-size: 12px;
-    color: #1A5336;
+    font-size: 10px;
+    color: var(--awd-panel-accent);
     cursor: pointer;
     font-weight: 500;
 }
@@ -740,15 +722,15 @@ export default {
 .custom-player {
     display: flex;
     align-items: center;
-    gap: 12px;
-    background: #fff;
-    padding: 10px;
-    border-radius: 8px;
-    border: 1px solid #d1d5db;
+    gap: 8px;
+    background: rgba(91, 209, 151, 0.08);
+    padding: 6px 8px;
+    border-radius: var(--awd-panel-radius);
+    border: 1px solid rgba(91, 209, 151, 0.35);
 }
 .play-btn {
-    width: 36px;
-    height: 36px;
+    width: 26px;
+    height: 26px;
     border-radius: 50%;
     background: #1A5336;
     display: flex;

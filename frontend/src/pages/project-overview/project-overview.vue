@@ -453,7 +453,12 @@
       <view class="sidebar-left" ref="sidebarLeft" :class="{ collapsed: sidebarCollapsed }" :style="{ width: sidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
         <!-- 批量菜单遮罩：用于点击空白关闭下拉（不弹中间） -->
         <view v-if="showBatchMenu" class="batch-menu-mask" @tap="closeBatchMenu"></view>
-        <view v-if="!sidebarCollapsed && leftPaneKey !== 'dd-files'" class="sidebar-header">
+        <!-- 左栏标题的唯一出处。此前各面板还各画各的 header，于是「诉讼可视化」
+             「会议录音」这类面板的标题在同一屏里出现两次，而搜索面板靠把自己那份
+             注释掉躲过去——四种写法并存。现在一律由这里出，面板自己只画分组头。
+             dd-files 曾经是个例外（它有自己的 header 带「＋」），那个按钮已经挪进
+             面板内部的分组头里，例外随之取消。 -->
+        <view v-if="!sidebarCollapsed" class="sidebar-header">
           <view class="sidebar-title-row">
             <text v-if="!fileBatchMode" class="sidebar-title">{{ leftPaneTitle }}</text>
             <view

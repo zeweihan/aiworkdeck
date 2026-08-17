@@ -12,6 +12,11 @@ category: 资本市场证券
 languages:
   - zh-CN
 
+# 已下线（2026-08-17）：左栏入口已从 leftSidebarPlugins.js 移除，本 skill 随之停做。
+# 注意 SkillRegistry 的种子化只在「第一次见到这个 id」时生效——存量安装里它仍是启用状态，
+# 需要在插件广场手动停用；这里只保证新装机器不会再出现它。
+enabled_by_default: false
+
 # 触发条件：用户输入包含任一关键词即命中（面板 kick-off prompt 以「股东大会核查」开头）
 triggers:
   - 股东大会核查

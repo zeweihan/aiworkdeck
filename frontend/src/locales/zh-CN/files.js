@@ -78,6 +78,10 @@ export default {
   // SearchPanel.vue
   searchPlaceholder: '搜索文件或内容...',
   filterByTag: '按标签筛选',
+  tagClear: '清除',
+  tagFilterPlaceholder: '过滤标签…',
+  tagShowAll: '显示全部 {count} 个',
+  tagNoMatch: '没有匹配的标签',
   searching: '正在搜索...',
   noResults: '未找到结果',
   matchesSuffix: '个匹配',

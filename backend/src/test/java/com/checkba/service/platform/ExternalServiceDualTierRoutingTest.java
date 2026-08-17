@@ -168,7 +168,7 @@ class ExternalServiceDualTierRoutingTest {
                     gatewayReturning("{\"audioBase64\":\"" + audio + "\",\"contentType\":\"audio/mpeg\"}");
 
             java.io.File file = service(ExternalServiceProvider.PLATFORM, gateway)
-                    .generateAudio("你好", null, null, null, null);
+                    .generateAudio("你好", null, null);
 
             assertTrue(file.exists() && file.length() > 0);
             verify(gateway).call(eq("tts"), eq("speech"), anyMap(), anyInt());
@@ -185,7 +185,7 @@ class ExternalServiceDualTierRoutingTest {
             PlatformGatewayClient gateway = mock(PlatformGatewayClient.class);
             assertThrows(com.checkba.exception.FeatureNotConfiguredException.class,
                     () -> service(ExternalServiceProvider.BYOK, gateway)
-                            .generateAudio("你好", null, null, null, null));
+                            .generateAudio("你好", null, null));
             verifyNoInteractions(gateway);
         }
 
@@ -196,7 +196,7 @@ class ExternalServiceDualTierRoutingTest {
             // 捆绑的 Kokoro 免费且不出本机，被切成任何一条云通道都是一次静默的功能回归
             assertThrows(com.checkba.exception.FeatureNotConfiguredException.class,
                     () -> service(ExternalServiceProvider.LOCAL, gateway)
-                            .generateAudio("你好", null, null, null, null));
+                            .generateAudio("你好", null, null));
             verifyNoInteractions(gateway);
         }
 
@@ -206,7 +206,7 @@ class ExternalServiceDualTierRoutingTest {
             PlatformGatewayClient gateway = gatewayFailing(GatewayException.Kind.NO_CREDITS);
             GatewayException e = assertThrows(GatewayException.class,
                     () -> service(ExternalServiceProvider.PLATFORM, gateway)
-                            .generateAudio("你好", null, null, null, null));
+                            .generateAudio("你好", null, null));
             assertEquals(GatewayException.Kind.NO_CREDITS, e.getKind());
         }
 

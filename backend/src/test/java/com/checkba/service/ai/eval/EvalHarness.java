@@ -107,6 +107,10 @@ public final class EvalHarness {
         // 回放用例要验证的正是"命中该 skill 时工具可见性怎么裁剪"，禁用会让它连触发匹配都进不去，
         // 白名单裁剪路径就测不到——这里显式开回去，让回放继续跑真实的裁剪逻辑。
         skillRegistry.setEnabled("litigation-visual", true);
+        // 股东大会核查已下线（左栏入口移除 + enabled_by_default:false），但
+        // skill-shareholder-meeting-dispatch-subtask-visible 这条用例守的是「长程 skill 命中时
+        // dispatch_subtask 必须可见」这条编排契约，与该业务在不在产品里无关——同样显式开回去。
+        skillRegistry.setEnabled("shareholder-meeting-verification", true);
         // 埋点：评测里用 mock 仓储的真实 TelemetryService（白名单路径被真实执行、不落库）
         com.checkba.service.telemetry.TelemetryService telemetry =
                 new com.checkba.service.telemetry.TelemetryService(

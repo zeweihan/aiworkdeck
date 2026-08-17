@@ -19,7 +19,9 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDFBox PDFTextStripper 定位涂黑）+ OcrService 辅助。无 skill。
 
-**股东大会核查**：面板 + AI 编排混合型（三层齐备）。前端 `frontend/src/components/ShareholderMeetingPanel.vue`（会话列表/五组材料槽位/巨潮拉取/开始核查，选文件用 FilePickerDialog 的 accept 过滤）；后端 `controller/ShareholderMeetingController.java`（/api/shareholder-meeting）+ `service/ShareholderMeetingService.java`（底稿夹 `股东大会核查/<公司>_<届次>/01..05` 五子目录、材料复制幂等、kick-off prompt 组装）+ `service/CninfoAnnouncementService.java`（巨潮拉取，挑选启发式移植自内核 skill 且有单测锁定）；skill `backend/skills/shareholder-meeting-verification/`。执行链路：面板 start 接口返回 prompt（以触发词「股东大会核查」开头）→ project-overview 经 `ChatInterface.sendExternalPrompt`（expose）以 AGENT 模式发送 → skill 注入 → AI 用 extract_file_text/run_python/write_docx（带 parentFolderId）产出核查底稿表与法律意见书到 04/05 子目录。**地雷**：pinnedSkillId 只裁剪工具不注入 prompt，触发词必须在 prompt 文本里；ASK 模式跳过注入。
+**股东大会核查（已下线，2026-08-17）**：维护者决定不做了。`leftSidebarPlugins.js` 里的 rail 入口已移除、skill 改成 `enabled_by_default: false`，**其余三层代码一律保留**（面板组件、controller、service、实体、api.js 端点），想恢复只需把 rail 条目加回去。存量安装里 skill 仍是启用状态（`SkillRegistry` 的种子化只在首次见到该 id 时生效），要在插件广场手动停用。下面这段是它下线前的实现地图，恢复或翻旧账时照读。
+
+面板 + AI 编排混合型（三层齐备）。前端 `frontend/src/components/ShareholderMeetingPanel.vue`（会话列表/五组材料槽位/巨潮拉取/开始核查，选文件用 FilePickerDialog 的 accept 过滤）；后端 `controller/ShareholderMeetingController.java`（/api/shareholder-meeting）+ `service/ShareholderMeetingService.java`（底稿夹 `股东大会核查/<公司>_<届次>/01..05` 五子目录、材料复制幂等、kick-off prompt 组装）+ `service/CninfoAnnouncementService.java`（巨潮拉取，挑选启发式移植自内核 skill 且有单测锁定）；skill `backend/skills/shareholder-meeting-verification/`。执行链路：面板 start 接口返回 prompt（以触发词「股东大会核查」开头）→ project-overview 经 `ChatInterface.sendExternalPrompt`（expose）以 AGENT 模式发送 → skill 注入 → AI 用 extract_file_text/run_python/write_docx（带 parentFolderId）产出核查底稿表与法律意见书到 04/05 子目录。**地雷**：pinnedSkillId 只裁剪工具不注入 prompt，触发词必须在 prompt 文本里；ASK 模式跳过注入。
 
 **上市路径选择（Skill 型）**：`backend/skills/listing-pathway/`（skill.yml + prompt.md）。无独立面板，对话触发。
 
@@ -97,6 +99,8 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 ## 已知地雷
 
 - 新增面板型插件三步缺一不可：leftSidebarPlugins.js 注册 + project-overview.vue 面板区加 v-else-if 分支 + 组件本身；漏第二步就是"加载中..."占位符（股东大会曾长期如此，现已实现）。
+- **下线一个面板型插件只删 rail 那一条就够**：`v-else-if` 分支与组件留着不会被渲染（`leftPaneKey` 永远取不到那个值），删了反而让恢复变成重写。股东大会核查就是这么下的。
+- **面板不要自画标题**：左栏标题由外壳的 `.sidebar-header` 统一出，面板里再画一份就是同屏出现两次（诉讼可视化/会议录音/股东大会核查都犯过）。面板内部只画分组头，密度用 `App.vue` 的 `--awd-panel-*` 令牌，见 sidebar-shell.md。
 - skill 的 allowed_tools 写错工具名不会报错，只是白名单零命中回退不裁剪——排查工具可见性问题时先核对 ToolRegistry 真名。**部分**写错更阴险：剩下的名字还能命中，裁剪照常生效，写错的那个工具就静默消失了。
 - `RealToolBeans.instantiateAll()`（评测用的工具 bean 清单）与生产的 `AgentToolComponent` 实现集**不是自动同步的**：`TodoTools` 就不在里面，所以 `todo_write` 在回放评测里根本没注册，评测断言不到它的可见性。新增工具组件时要顺手补进去。
 - 插件启停语义只影响可见性，不拦截历史工具调用回放。

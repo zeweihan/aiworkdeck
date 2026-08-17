@@ -2,13 +2,11 @@
 // 浏览器面板、项目收藏夹、插件容器、语音合成、剪贴板、变量库。
 export default {
   // LitigationVisualPanel.vue
-  litTitle: '诉讼可视化',
   litRefresh: '刷新',
   litNoGraphvizNotice: '这台机器没有 graphviz，流程图暂时画不了；时间轴、关系图、股权结构树等六种照常。',
   litNewDiagramSectionTitle: '出一张新图',
   litScopeLabel: '材料',
   litScopeDefault: '本项目全部材料（点击改为指定文件夹或文件）',
-  litKindsLabel: '图种',
   litKindTimeline: '事实时间轴',
   litKindPeriod: '时效期间图',
   litKindFlowchart: '流程图',
@@ -17,12 +15,13 @@ export default {
   litKindTip: '不选 = 让 AI 按材料自己判断该画哪种。',
   litStarting: '正在交给 AI…',
   litStart: '开始出图',
-  litGalleryTitle: '本项目的图（{count}）',
+  // 分组头改成「标题 + 计数徽章」两段（对齐插件广场），计数不再拼进标题里
+  litGalleryLabel: '本项目的图',
   litEmptyText: '还没有图。上面选好材料点「开始出图」。',
   litDraftBadge: '草稿',
   litHandEditedBadge: '手工改过',
-  litOpen: '打开',
   litEdit: '编辑',
+  litRestyleLabel: '换风格',
   litUnavailableFallback: '出图环境不可用',
   litStartFailedFallback: '启动失败',
   litHandEditedConfirmTitle: '这张图手工改过',
@@ -43,7 +42,7 @@ export default {
   litLayoutFallback: '图',
 
   // ShareholderMeetingPanel.vue
-  smTitle: '股东大会核查',
+  smListLabel: '核查任务',
   smCreateTitle: '新建核查',
   smCompanyNamePlaceholder: '公司名称（必填）',
   smStockCodePlaceholder: '股票代码（6 位，选填）',
@@ -163,7 +162,7 @@ export default {
   ddDeleteFailed: '删除失败',
 
   // DdFilesPanel.vue
-  dfTitle: '尽调清单',
+  dfListLabel: '清单',
   dfCreateTitle: '新建清单',
   dfCopy: '复制',
   dfRename: '重命名',
@@ -227,8 +226,8 @@ export default {
   evSearchVoicePlaceholder: '搜索语音...',
   evNoMatchVoice: '无匹配语音',
   evRateLabel: '语速',
-  evPitchLabel: '语调',
-  evVolumeLabel: '音量',
+  // 语调/音量已删：三档后端一个都不支持，留着滑杆只是让人白调（见 EasyVoicePane 注释）
+  evNoVoicesNotice: '语音引擎还没就绪，拿不到音色列表。请在「系统管理 → 平台服务 → 语音合成」选择本地引擎，并在「组件管理」下载语音组件。',
   evGenerating: '生成中...',
   evGenerate: '开始生成',
   evResultTitle: '生成结果',
