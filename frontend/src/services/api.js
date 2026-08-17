@@ -310,6 +310,13 @@ function request(options) {
             // 不再对 err.message 做中文子串匹配
             const bizErr = new Error(errorMessage);
             bizErr.code = res.data.code;
+            // 平台服务网关的失败分类。**必须原样带上来**：三类故障（未开放 / 上游挂了 /
+            // 我们挂了）在用户眼里长得一模一样，下一步却完全不同，而 canUseOwnKey 决定
+            // 要不要摆「改用自己的 Key」这个逃生门。丢在这一层等于后端白分了类。
+            if (res.data.gatewayKind) {
+              bizErr.gatewayKind = res.data.gatewayKind;
+              bizErr.canUseOwnKey = res.data.canUseOwnKey !== false;
+            }
             reject(bizErr);
           }
         } else {
@@ -359,16 +366,18 @@ function request(options) {
 //   name: '公司名称'
 // }
 //
-// **这条端点的错误信封是残缺的，别在它上面写错误分类。** `ExternalController`
-// 对 Tushare 是 `catch(Exception)` 后回落企查查，外层又用 `catch(RuntimeException)`
-// 把 message 塞进 HTTP 500 —— `GatewayException` 的 kind（未开放 / 上游挂 / 我们挂 /
-// 余额不足）和 `suggestsByok()` 到这里全没了，前端只能拿到一个 500 加一句文案。
-// 想按中文子串猜回来是死路（api.js 早年那套「登录/未授权/请先」子串判定就是这么
-// 误伤业务文案的，PR4-0 已经拆掉）。
-// 因此「改用自己的 Key」这个逃生门做成**不依赖错误分类**：系统管理「平台服务」
-// 面板每一行都常驻一个折叠入口，并支持深链 `?nav=platform&service=qichacha`
-// 直接展开那一项。等 ExternalController 改成标准信封（把 kind 与 suggestsByok
-// 透出来）之后，这里才谈得上按类型给不同文案。
+// 信封已收成标准的 `{code, data|message}`（2026-08-17）：网关失败经
+// `GlobalExceptionHandler.handleGateway` 带上 `gatewayKind`（未开放 / 上游挂 / 我们挂 /
+// 余额不足）与 `canUseOwnKey`，调用方可以据此给不同文案与不同的下一步。
+// 旧写法是 `catch(RuntimeException)` → HTTP 500 + `{error, message}`，这两样信息全丢，
+// 三类故障在企业数据这条路上长得一模一样。**别再按中文子串把分类猜回来**——
+// api.js 早年那套「登录/未授权/请先」子串判定就是这么误伤业务文案的，PR4-0 已经拆掉。
+// 「改用自己的 Key」这个逃生门仍然**不依赖**错误分类：系统管理「平台服务」面板每一行
+// 都常驻一个折叠入口，并支持深链 `?nav=platform&service=qichacha` 就地展开那一项。
+//
+// 注：**这条今天没有 UI 调用方**（只在这里导出）。企业数据实际走的是 AI 工具那条路
+// （EnterpriseDataTools 的 qichacha_query）。留着是因为它是那条路的孪生实现，
+// 删掉以后要接回来更麻烦；改它时别指望在页面里看到效果。
 export function fetchCompanyBasicInfo(payload) {
   return request({
     url: '/api/external/company/basic',
@@ -377,7 +386,7 @@ export function fetchCompanyBasicInfo(payload) {
     header: {
       'Content-Type': 'application/json',
     },
-  });
+  }).then(unwrapEnvelope);
 }
 
 // ===================== AI 助手相关 API =====================
@@ -992,7 +1001,7 @@ export function getEntitlements(refresh = false) {
 
 // 八项外部服务各自走哪一档：
 // { services: [{ service, provider, hasLocal, hasByokCredentials }],
-//   platformAvailable, accountConnected }
+//   platformAvailable, accountConnected, budget }
 //
 // provider ∈ platform | byok | local，是**后端解析后的生效值**，不是设置里存的原始值
 // （非 local-mode 下即使库里写着 platform 也回 byok，闸在 ExternalProviderResolver 一处）。
@@ -1000,9 +1009,22 @@ export function getEntitlements(refresh = false) {
 //
 // platformAvailable=false 表示这台机器不是个人桌面版（团队服务器 / 云端实例），
 // 平台档在界面上必须不可选并给出说明（设计决策 D5）。
+//
+// **这条不发任何出站请求**，所以官网挂着的时候它照样秒回——而那正是用户最需要进这一页
+// 把档位切成自备 Key 的时候。开放状态/余额/用量在 getPlatformServiceRemote()，单独取。
 export function getPlatformServices() {
   return request({
     url: '/api/platform-services',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 面板的远端那一半：{ pricingAvailable, enabled: {service: bool}, balanceCents,
+// pendingHoldCents, usage }。慢、可能取不到，所以**页面渲染完之后再取**，
+// 到了才填、没到就是「—」。失败时后端也回 code=0 + 一个「什么都不知道」的载荷。
+export function getPlatformServiceRemote() {
+  return request({
+    url: '/api/platform-services/remote',
     method: 'GET',
   }).then(unwrapEnvelope);
 }
@@ -1014,6 +1036,43 @@ export function setPlatformServiceProvider(service, provider) {
     url: `/api/platform-services/${encodeURIComponent(service)}/provider`,
     method: 'POST',
     data: { provider },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
+// 花费闸门的两个阈值（分）：单次任务上限、余额低于多少时提醒。0 = 不启用。
+// 与档位同属机器级设置，同一道 MachineAccountGuard 把关，所以走同一个控制器——
+// 放进 AdminConfigController 会撞上它有意跳过 null 字段的行为，而「0 = 关闭」
+// 正是最容易被那条规则吃掉的形状。
+export function savePlatformBudget(taskLimitCents, lowBalanceCents) {
+  return request({
+    url: '/api/platform-services/budget',
+    method: 'POST',
+    data: { taskLimitCents, lowBalanceCents },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
+// 平台档会议转写的单独告知：{ version, body, acknowledged, acknowledgedAt }。
+// 正文由服务端给，**不在前端硬编码**——文本与版本号分开放必然出现「改了文案忘了推版本」，
+// 那时全体用户的旧确认会覆盖到他们从没看过的新处理方式。
+export function getMeetingAsrNotice() {
+  return request({
+    url: '/api/platform-services/asr-notice',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 确认（或撤回）告知。每台机器一次，绝不预勾选——预先勾选的同意在个保法下无效。
+export function acknowledgeMeetingAsrNotice(acknowledged) {
+  return request({
+    url: '/api/platform-services/asr-notice',
+    method: 'POST',
+    data: { acknowledged: !!acknowledged },
     header: {
       'Content-Type': 'application/json',
     },
@@ -2281,7 +2340,11 @@ export default {
   saveAdminConfig,
   getAdminUsers,
   getPlatformServices,
+  getPlatformServiceRemote,
   setPlatformServiceProvider,
+  savePlatformBudget,
+  getMeetingAsrNotice,
+  acknowledgeMeetingAsrNotice,
   // DD Files
   getDdRequests,
   createDdRequest,

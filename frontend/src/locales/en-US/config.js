@@ -3,6 +3,7 @@ export default {
   sidebar: {
     files: 'Explorer',
     ddFiles: 'Due Diligence Files',
+    meetingRecorder: 'Meeting Recording',
     litigationVisual: 'Litigation Visualization',
     search: 'Search',
     tts: 'Text to Speech',

@@ -151,6 +151,11 @@
               <view v-if="pendingHoldNotice" class="platform-banner">
                 <text class="platform-banner-body">{{ pendingHoldNotice }}</text>
               </view>
+              <!-- 余额低于用户设定的阈值。只在**确知**余额时出现（读不到给 null，
+                   不拿「不知道」编一个数出来），阈值为 0 表示用户没启用这条提醒。 -->
+              <view v-if="lowBalanceNotice" class="platform-banner platform-banner-warn">
+                <text class="platform-banner-body">{{ lowBalanceNotice }}</text>
+              </view>
               <view v-if="platformServicesError" class="platform-banner platform-banner-warn">
                 <text class="platform-banner-body">{{ platformServicesError }}</text>
               </view>
@@ -170,7 +175,11 @@
                     <text class="provider-name">{{ svc.name }}</text>
                     <text class="platform-row-desc">{{ svc.desc }}</text>
                   </view>
-                  <text class="platform-tier" :class="svc.tierClass">{{ svc.tierLabel }}</text>
+                  <view class="platform-row-side">
+                    <text class="platform-tier" :class="svc.tierClass">{{ svc.tierLabel }}</text>
+                    <!-- 本月消耗。取不到时是破折号而不是 0——0 在陈述一个我们并不知道的事实。 -->
+                    <text class="platform-usage">{{ $t('platform.usageMonthLabel') }} {{ svc.usageText }}</text>
+                  </view>
                 </view>
 
                 <view class="form-row">
@@ -293,6 +302,52 @@
                   </template>
 
                   <text class="field-note">{{ $t('platform.saveHint') }}</text>
+                </view>
+              </view>
+
+              <!-- 花费闸门。设计 §4.9 的用户闸：超过上限时问一句「是否继续」，
+                   **是可恢复的确认而不是失败**。刻意不做「每次调用前弹确认」——
+                   与「零配置、少打扰」的产品目标冲突，设计里明确否了。
+                   两个阈值与档位同属机器级设置，所以写同一个控制器、就地生效。 -->
+              <view class="provider-card">
+                <view class="provider-header platform-row-head">
+                  <view class="platform-row-info">
+                    <text class="provider-name">{{ $t('platform.budgetTitle') }}</text>
+                    <text class="platform-row-desc">{{ $t('platform.budgetSubtitle') }}</text>
+                  </view>
+                  <text v-if="usageTotalText" class="platform-usage">{{ usageTotalText }}</text>
+                </view>
+
+                <view class="form-row">
+                  <text class="form-label">{{ $t('platform.budgetTaskLimitLabel') }}</text>
+                  <input
+                    v-model="budgetForm.taskLimit"
+                    class="form-input"
+                    type="digit"
+                    :placeholder="$t('platform.budgetUnit')"
+                  />
+                </view>
+                <text class="field-note">{{ $t('platform.budgetTaskLimitNote') }}</text>
+
+                <view class="form-row">
+                  <text class="form-label">{{ $t('platform.budgetLowBalanceLabel') }}</text>
+                  <input
+                    v-model="budgetForm.lowBalance"
+                    class="form-input"
+                    type="digit"
+                    :placeholder="$t('platform.budgetUnit')"
+                  />
+                </view>
+                <text class="field-note">{{ $t('platform.budgetLowBalanceNote') }}</text>
+
+                <text v-if="!platformRemote.pricingAvailable" class="field-note">
+                  {{ $t('platform.usageUnavailable') }}
+                </text>
+
+                <view class="platform-budget-actions">
+                  <button class="comp-btn primary" :disabled="budgetBusy" @tap="onSaveBudget">
+                    {{ $t('platform.budgetSave') }}
+                  </button>
                 </view>
               </view>
 
@@ -1356,7 +1411,7 @@ import {
   fetchAiModels,
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
   getSiteStatus, selectSite,
-  getPlatformServices, setPlatformServiceProvider,
+  getPlatformServices, getPlatformServiceRemote, setPlatformServiceProvider, savePlatformBudget,
 } from '@/services/api.js'
 import {
   platformServiceMeta, sortPlatformServices, localTierReady, refreshLocalAsrReadiness,
@@ -1480,13 +1535,26 @@ export default {
       // platform 也回 byok），界面展示与选中项一律以它为准。
       // pricingAvailable=false 时 enabled/balanceCents/pendingHoldCents 全是「不知道」，
       // 不许当成 false/0 渲染（同 ai-usage「查不到用量显示破折号不显示 0」那条）。
+      // 本地那一半：GET /api/platform-services 秒回，页面靠它整页渲染完（档位与切档
+      // 控件立刻可用）。远端那一半单独放 platformRemote，异步填，填不上就是「—」。
       platformState: {
         services: [], platformAvailable: false, accountConnected: false,
-        pricingAvailable: false, balanceCents: null, pendingHoldCents: null,
+        budget: { taskLimitCents: 0, lowBalanceCents: 0 },
+      },
+      // 远端那一半（GET /api/platform-services/remote）。三个 null 与空 enabled 表
+      // 都是「不知道」的初值，**不是** 0 / 未开放——在真值到达之前一律显示破折号。
+      platformRemote: {
+        pricingAvailable: false, enabled: {}, balanceCents: null,
+        pendingHoldCents: null, usage: null,
       },
       platformLoaded: false,
       platformServicesError: '',
       platformBusy: false,
+      // 花费闸门的两个阈值，界面上以 Credits（元）为单位编辑，存库是分。
+      // 与档位不同，它们是输入框而不是开关：跟着每个字符写库既没必要也会打断输入，
+      // 所以留一个明确的保存动作。
+      budgetForm: { taskLimit: '0', lowBalance: '0' },
+      budgetBusy: false,
       // 每项的「使用自己的 Key（高级）」是否展开。默认全收起；
       // ?nav=platform&service=ocr 这样的深链会就地展开对应那一项（错误提示的逃生门）。
       platformByokOpen: {},
@@ -1577,9 +1645,35 @@ export default {
      * （网关不可达/未连账户），那是「不知道」不是「零」，不能拿它编一个数出来。
      */
     pendingHoldNotice() {
-      const cents = this.platformState.pendingHoldCents
+      const cents = this.platformRemote.pendingHoldCents
       if (typeof cents !== 'number' || cents <= 0) return ''
       return this.$t('platform.holdNotice', { credits: (cents / 100).toFixed(2) })
+    },
+    /**
+     * 「余额已经低于你设的线」。
+     *
+     * 三个条件缺一不可：用户启用了这条提醒（阈值 > 0）、余额是**确知**的、并且确实低了。
+     * 余额读不到时给 null，那是「不知道」不是「零」——拿它去比大小会在每次网关抖动时
+     * 弹一句「余额不足」，而用户账上可能还有好几百。
+     */
+    lowBalanceNotice() {
+      const threshold = this.platformState.budget.lowBalanceCents
+      const balance = this.platformRemote.balanceCents
+      if (!threshold || threshold <= 0) return ''
+      if (typeof balance !== 'number' || balance >= threshold) return ''
+      return this.$t('platform.lowBalanceNotice', {
+        credits: (balance / 100).toFixed(2),
+        threshold: (threshold / 100).toFixed(2),
+      })
+    },
+    // 本月合计。读不到时整句不显示——摆一个「合计 —」只是在占位置。
+    usageTotalText() {
+      const usage = this.platformRemote.usage
+      if (!usage) return ''
+      return this.$t('platform.usageTotal', {
+        credits: ((usage.totalCents || 0) / 100).toFixed(2),
+        month: usage.month || '',
+      })
     },
     platformServiceRows() {
       const available = this.platformState.platformAvailable
@@ -1587,6 +1681,9 @@ export default {
       return sortPlatformServices(this.platformState.services).map((s) => {
         const meta = platformServiceMeta(s.service)
         const localUsable = s.hasLocal && localTierReady(s.service)
+        // 开放状态来自异步那一半。**undefined 是「还不知道」**（还没到 / 取不到），
+        // 与 false「未开放」是两回事——只有 false 才配显示成「未开放」。
+        const enabled = this.platformRemote.enabled[s.service]
 
         const values = []
         if (available) values.push('platform')
@@ -1603,17 +1700,17 @@ export default {
         if (s.provider === 'platform' && !connected) {
           tierLabel = this.$t('platform.tierNeedsAccount')
           tierClass = 'tier-need'
-        } else if (s.provider === 'platform' && s.enabled === false) {
+        } else if (s.provider === 'platform' && enabled === false) {
           // 平台侧还没开放这一项（合同/账号未就绪）。**必须与「出错了」分开**：
           // 未开放是产品尚未提供，用户能做的是改用自己的 Key；显示成故障会让他
-          // 反复重试一件永远不会成功的事。s.enabled 为 null 是「查不到」不是「未开放」，
+          // 反复重试一件永远不会成功的事。enabled 为 undefined 是「查不到」不是「未开放」，
           // 那种情况照常显示平台档，真调用时网关自己会给准确的信封。
           tierLabel = this.$t('platform.tierDisabled')
           tierClass = 'tier-need'
         }
 
         const notes = []
-        if (s.provider === 'platform' && s.enabled === false) {
+        if (s.provider === 'platform' && enabled === false) {
           notes.push(this.$t('platform.tierDisabledNote'))
         } else if (s.provider === 'platform') {
           notes.push(this.$t('platform.tierPlatformNote'))
@@ -1626,6 +1723,7 @@ export default {
         const idx = values.indexOf(s.provider)
         return {
           key: s.service,
+          usageText: this.serviceUsageText(s.service),
           name: meta.nameKey ? this.$t(meta.nameKey) : s.service,
           desc: meta.descKey ? this.$t(meta.descKey) : '',
           hasByokCredentials: !!s.hasByokCredentials,
@@ -2780,6 +2878,50 @@ export default {
       }
     },
     // ---------- 平台服务 ----------
+    /**
+     * 某一项服务本月花了多少。
+     *
+     * <b>「查不到」与「没花过」是两件事</b>：整段 usage 为 null 是前者（网关不可达 /
+     * 未连账户 / 官网还没上这条端点），显示破折号；usage 拿到了但表里没这一项是后者，
+     * 那是一个真实的 0。把前者显示成 0 会让刚跑完一场两小时转写的用户以为账没记上。
+     */
+    serviceUsageText(service) {
+      const usage = this.platformRemote.usage
+      if (!usage || !usage.services) return this.$t('platform.usageUnknown')
+      const cents = usage.services[service]
+      return this.$t('platform.usageCredits', {
+        credits: ((typeof cents === 'number' ? cents : 0) / 100).toFixed(2),
+      })
+    },
+    // 阈值以 Credits（元）编辑、以分存库。空串按 0（不启用）处理；
+    // 负数与非数字交给后端拒绝，不在这里静默改成 0——那等于替用户做决定。
+    creditsToCents(input) {
+      const raw = String(input === undefined || input === null ? '' : input).trim()
+      if (!raw) return 0
+      const value = Number(raw)
+      if (!Number.isFinite(value)) return -1
+      return Math.round(value * 100)
+    },
+    async onSaveBudget() {
+      if (this.budgetBusy) return
+      const taskLimitCents = this.creditsToCents(this.budgetForm.taskLimit)
+      const lowBalanceCents = this.creditsToCents(this.budgetForm.lowBalance)
+      if (taskLimitCents < 0 || lowBalanceCents < 0) {
+        uni.showToast({ title: this.$t('platform.budgetInvalid'), icon: 'none' })
+        return
+      }
+      this.budgetBusy = true
+      try {
+        await savePlatformBudget(taskLimitCents, lowBalanceCents)
+        uni.showToast({ title: this.$t('platform.budgetSaved'), icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('platform.budgetSaveFailed'), icon: 'none' })
+      } finally {
+        this.budgetBusy = false
+        // 无论成败都重拉：写失败时界面必须回到库里的真相，而不是停在用户以为的值上
+        await this.loadPlatformServices()
+      }
+    },
     async loadPlatformServices() {
       // 本地档能不能选，判据在 platformServices 那个唯一出口上，由这次探测填。
       // 与会议面板的开关同源：只在一处接探测的话，用户从另一处照样能切进一个用不了的档。
@@ -2790,18 +2932,52 @@ export default {
           services: Array.isArray(s.services) ? s.services : [],
           platformAvailable: !!s.platformAvailable,
           accountConnected: !!s.accountConnected,
-          // 这三个刻意**不**用 `!!` / `|| 0` 归一化：后端在取不到单价表时给的是 null，
-          // 而 null 的意思是「不知道」不是「未开放 / 余额为零」。归一化会把一次网络抖动
-          // 变成「七项服务全部未开放」，比不显示这个状态更糟。
-          pricingAvailable: !!s.pricingAvailable,
-          balanceCents: typeof s.balanceCents === 'number' ? s.balanceCents : null,
-          pendingHoldCents: typeof s.pendingHoldCents === 'number' ? s.pendingHoldCents : null,
+          budget: {
+            taskLimitCents: Number((s.budget && s.budget.taskLimitCents) || 0),
+            lowBalanceCents: Number((s.budget && s.budget.lowBalanceCents) || 0),
+          },
+        }
+        // 输入框跟着库里的值走。旧后端不返回 budget 时这里落成 0 = 不启用，
+        // 与后端默认值一致，不会凭空冒出一个用户没设过的阈值。
+        this.budgetForm = {
+          taskLimit: (this.platformState.budget.taskLimitCents / 100).toFixed(2),
+          lowBalance: (this.platformState.budget.lowBalanceCents / 100).toFixed(2),
         }
         this.platformServicesError = ''
       } catch (e) {
         this.platformServicesError = (e && e.message) || this.$t('platform.loadFailed')
       } finally {
         this.platformLoaded = true
+      }
+      // 远端那一半**故意不 await**：官网挂着的时候这一页照样要能打开，
+      // 而它恰恰是用户切回自备 Key 的唯一入口。取不到就一直是「—」。
+      this.loadPlatformRemote()
+    },
+    /**
+     * 开放状态 / 余额 / 预扣 / 本月用量。慢，且随时可能取不到。
+     *
+     * 失败时<b>把上一次的值原样留着还是清掉</b>是个真问题：这里选择清掉（回到「不知道」），
+     * 与余额闸那条「网络失败不保留上一次的 0」同口径——留着一个过期的余额去驱动
+     * 「余额不足」的提醒，比不提醒更糟。
+     */
+    async loadPlatformRemote() {
+      try {
+        const r = (await getPlatformServiceRemote()) || {}
+        this.platformRemote = {
+          pricingAvailable: !!r.pricingAvailable,
+          enabled: r.enabled && typeof r.enabled === 'object' ? r.enabled : {},
+          // 这几个刻意**不**用 `!!` / `|| 0` 归一化：后端取不到单价表时给的是 null，
+          // 而 null 的意思是「不知道」不是「未开放 / 余额为零」。归一化会把一次网络抖动
+          // 变成「六项服务全部未开放」，比不显示这个状态更糟。
+          balanceCents: typeof r.balanceCents === 'number' ? r.balanceCents : null,
+          pendingHoldCents: typeof r.pendingHoldCents === 'number' ? r.pendingHoldCents : null,
+          usage: r.usage && typeof r.usage === 'object' ? r.usage : null,
+        }
+      } catch (e) {
+        this.platformRemote = {
+          pricingAvailable: false, enabled: {}, balanceCents: null,
+          pendingHoldCents: null, usage: null,
+        }
       }
     },
     // 切档立刻写库（不等「保存配置」）：档位是一个开关而不是一张表单，
@@ -3936,11 +4112,32 @@ $border-color: #E9ECEF; // Gray-Light
   line-height: 1.5;
 }
 
+.platform-row-side {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
 .platform-tier {
   flex: none;
   font-size: 11px;
   padding: 2px 9px;
   border-radius: 999px;
+}
+
+/* 本月消耗：一句附注而不是一个数字块——它是参考值，不该抢档位的位置 */
+.platform-usage {
+  font-size: 11px;
+  color: $text-secondary;
+  white-space: nowrap;
+}
+
+.platform-budget-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .tier-platform {

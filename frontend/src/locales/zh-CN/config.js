@@ -3,6 +3,7 @@ export default {
   sidebar: {
     files: '资源管理器',
     ddFiles: '尽调文件',
+    meetingRecorder: '会议录音',
     litigationVisual: '诉讼可视化',
     search: '搜索',
     tts: '语音合成',

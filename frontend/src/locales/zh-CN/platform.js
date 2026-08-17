@@ -56,6 +56,31 @@ export default {
   byokMissingNote: '切到自备 Key 之前，先在下面填好这项服务的凭证，否则它会处于不可用状态。',
   saveHint: '改完凭证要点下方的「保存配置」；档位切换是即时生效的，不用保存。',
 
+  // ---- 本月消耗（每项服务旁边那个数字）----
+  // 取不到时一律显示破折号，**不显示 0**：同 ai-usage 那条既有口径。
+  // 0 是在陈述一个我们并不知道的事实——用户刚跑完一场两小时转写，
+  // 面板告诉他本月花了 0，他的下一步是来问账是不是没记上。
+  usageMonthLabel: '本月消耗',
+  usageUnknown: '—',
+  usageCredits: '{credits} Credits',
+  usageTotal: '本月合计 {credits} Credits（{month}）',
+  usageUnavailable: '本月消耗暂时读不到，不代表没有消耗。',
+
+  // ---- 花费闸门 ----
+  budgetTitle: '花费提醒',
+  budgetSubtitle: '两个阈值都填 0 表示不启用。这里管的是「什么时候问你一句」，不是硬性封顶。',
+  budgetTaskLimitLabel: '单次任务花费上限',
+  // 刻意不做「每次调用前弹确认」——与「零配置、少打扰」的产品目标冲突。
+  budgetTaskLimitNote: '一次任务累计花到这个数时问一句「是否继续」，确认后照常往下跑。不是每次调用都问。',
+  budgetLowBalanceLabel: '余额低于此值时提醒',
+  budgetLowBalanceNote: '余额掉到这个数以下时在这块面板上提醒，免得转写跑到一半才发现不够。',
+  budgetUnit: 'Credits',
+  budgetSave: '保存阈值',
+  budgetSaved: '已保存',
+  budgetSaveFailed: '保存失败，稍后重试',
+  budgetInvalid: '金额取值不合法，填 0 表示不启用',
+  lowBalanceNotice: '账户余额 {credits} Credits，已低于你设定的 {threshold} Credits。',
+
   // ---- AI 那条单列说明 ----
   aiRowName: 'AI 对话与写作',
   aiRowDesc: 'AI 不走平台服务这条通路：模型请求由本机直接发往所选供应商，不经过 AI WorkDeck 的服务器。供应商、模型与账户余额在「AI 功能设置」里配。',

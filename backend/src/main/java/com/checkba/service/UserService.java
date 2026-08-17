@@ -92,6 +92,47 @@ public class UserService {
     }
 
     /**
+     * 按手机号取账号，没有就建一个（手机号免密登录的注册与登录合一）。
+     *
+     * 三条约束：
+     * - **一号一账号**（维护者 2026-08-17 定）：靠 findByPhone 唯一命中保证，
+     *   DB 侧另有唯一约束兜底。
+     * - 用户名不用手机号：username 会在各处展示，用手机号等于到处泄露联系方式。
+     *   用随机短串，展示名用脱敏号。
+     * - 账号无密码（走 registerExternal 的外部账号形态），只能靠验证码进。
+     *
+     * @return 账号与「是否本次新建」
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public PhoneAccount findOrCreateByPhone(String phone) {
+        java.util.Optional<User> existing = userRepository.findByPhone(phone);
+        if (existing.isPresent()) {
+            return new PhoneAccount(existing.get(), false);
+        }
+        String username = allocatePhoneUsername();
+        User user = registerExternal(username, com.checkba.service.sms.SmsAuthService.maskPhone(phone));
+        user.setPhone(phone);
+        user.setUpdatedAt(LocalDateTime.now());
+        return new PhoneAccount(userRepository.save(user), true);
+    }
+
+    public record PhoneAccount(User user, boolean created) {}
+
+    /** 随机短用户名，撞了重试。10 次都撞说明随机源坏了，宁可报错也不静默降级。 */
+    private String allocatePhoneUsername() {
+        for (int i = 0; i < 10; i++) {
+            byte[] raw = new byte[6];
+            SECURE_RANDOM.nextBytes(raw);
+            String candidate = "u" + java.util.Base64.getUrlEncoder().withoutPadding()
+                    .encodeToString(raw).replaceAll("[^A-Za-z0-9]", "").toLowerCase();
+            if (userRepository.findByUsername(candidate).isEmpty()) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("无法分配用户名");
+    }
+
+    /**
      * 用户登录
      */
     public User login(String username, String password) {

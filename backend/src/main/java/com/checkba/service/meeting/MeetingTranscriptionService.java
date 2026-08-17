@@ -253,6 +253,37 @@ public class MeetingTranscriptionService {
     }
 
     /**
+     * platform 档下这台机器还欠一次录音处理方式的告知。
+     *
+     * <h3>为什么这道闸在服务端，而且只在 platform 档</h3>
+     * 真正把录音交出去的那一刻不是用户点「开始转写」，而是 {@code POST /meetings/{id}/finish}
+     * <b>自动</b>提交的那一下——常见路径里用户在上传时没有任何动作。界面上的那块告知
+     * 只挡得住走界面的人；<b>任何绕过面板的调用方（崩溃恢复补刀、未来的命令/插件）
+     * 都能不经告知就把一场会议传上来</b>，而被录的是第三方，他不是我们的用户，
+     * 没同意过任何条款。所以提交这条缝上也要查一次。
+     *
+     * <h3>为什么它不是「每次硬闸」</h3>
+     * 确认过一次就永远为 false（除非告知改版），用户一辈子只会撞到它一次；
+     * 而正常路径下他在录音开始之前就确认过了，根本撞不到。
+     * 会被拦住的只有「从没看过告知、却有东西替他上传」这一种情况——那正是要拦的。
+     * byok 档走用户自己的 OSS 与听悟账号、local 档不出本机，两者都没有要告知的事。
+     */
+    public boolean recordingNoticePending() {
+        return tier() == ExternalServiceProvider.PLATFORM
+                && !MeetingRecordingNotice.acknowledged(systemSettingService);
+    }
+
+    /** 不含「登录」「未授权」「请先」——api.js 拿这三个子串判掉线并清会话。 */
+    private String noticePendingMessage() {
+        return LangText.of(
+                "这段录音需要确认一次录音处理方式：到会议录音面板看一下「录音转写告知」，"
+                        + "确认后即可转写；不想让音频出本机的话，打开「录音不出本机」改用本机转写。",
+                "This recording needs a one-time acknowledgement of how recordings are handled: "
+                        + "open the meeting panel, read the transcription notice and confirm it. "
+                        + "If the audio must not leave this machine, turn on \"Keep recordings on this machine\" instead.");
+    }
+
+    /**
      * 提交转写。同步只做状态置位（TRANSCRIBING），耗时步骤进后台执行器。
      * RECORDED / FAILED 可提交；TRANSCRIBING/TRANSCRIBED 幂等返回。
      */
@@ -287,6 +318,9 @@ public class MeetingTranscriptionService {
                             "平台转写需要连接 AI WorkDeck 账户；也可到 系统管理-会议转写 改用自己的阿里云凭证",
                             "Platform transcription needs a connected AI WorkDeck account; "
                                     + "or switch to your own Aliyun credentials in System settings"));
+                }
+                if (recordingNoticePending()) {
+                    throw new IllegalArgumentException(noticePendingMessage());
                 }
             }
             case BYOK -> {

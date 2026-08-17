@@ -28,6 +28,11 @@ public class SmsAuthService {
 
     static final String SCENE_LOGIN = "login";
     static final String SCENE_BIND = "bind";
+    /**
+     * 手机号免密登录/注册。与 SCENE_LOGIN 分开：那个是「已知账号的第二因素」，
+     * 这个是「拿手机号直接进来」，两者的码不能互相核销。
+     */
+    static final String SCENE_SIGNIN = "signin";
 
     /** 大陆手机号（存储为 11 位裸号，历史形态）。 */
     private static final Pattern MAINLAND_PHONE = Pattern.compile("^1[3-9]\\d{9}$");
@@ -84,6 +89,33 @@ public class SmsAuthService {
         if (!codeStore.verify(SCENE_LOGIN, user.getPhone(), code)) {
             throw new IllegalArgumentException(LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
         }
+    }
+
+    /**
+     * 手机号免密登录/注册：发验证码。
+     *
+     * 与邮箱免密登录不同，这里**对未注册的号码也发**——注册与登录合一，
+     * 验证通过后没有账号就建一个。所以不存在「该号是否注册过」的枚举面，
+     * 代价是任何号码都能触发一条短信，靠 VerificationCodeStore 的冷却期与
+     * 当日配额兜住（gatewayFor 先探通道，发不出去不占冷却）。
+     */
+    public void sendSigninCode(String phone) {
+        requireActive();
+        sendWithRollback(SCENE_SIGNIN, normalizePhone(phone));
+    }
+
+    /**
+     * 核销免密登录码，返回规范化后的手机号。
+     * 错码与过期一律同一句话，不区分——区分了就是在告诉攻击者哪一步猜对了。
+     */
+    public String verifySigninCode(String phone, String code) {
+        requireActive();
+        String normalized = normalizePhone(phone);
+        if (!codeStore.verify(SCENE_SIGNIN, normalized, code)) {
+            throw new IllegalArgumentException(
+                    LangText.of("验证码错误或已过期", "Incorrect or expired verification code"));
+        }
+        return normalized;
     }
 
     /** 给待绑定的手机号发验证码（需已通过会话鉴权），返回脱敏手机号。 */
