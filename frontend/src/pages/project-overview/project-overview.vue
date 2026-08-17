@@ -2284,6 +2284,11 @@ export default {
     // Stop Activity Tracking
     this.stopActivityTracking()
 
+    // Desktop：本页的浏览器标签随页面一起消失，对应的 BrowserView 必须销毁。
+    // BrowserPane 卸载时只 detach（保活，切标签不丢内容），销毁的责任因此落在
+    // 「标签真的没了」的两处：closeFile 与这里。漏掉就是主进程里的 view 泄漏。
+    this.destroyAllBrowserViews()
+
     // Cleanup manual event listener removed
   },
   onLoad(query) {
@@ -3640,6 +3645,24 @@ export default {
     // OCR 采集与浮层生命周期方法组已外置（Phase 3c） → ./ocrCapture.js
     isBrowserTab(tab) {
       return !!tab && tab.tabType === 'web'
+    },
+    // 销毁某个浏览器标签对应的 BrowserView。BrowserPane 卸载只 detach（保活），
+    // 所以「标签关闭」必须显式销毁，否则主进程里的 view 一直留着。
+    destroyBrowserView(tabId) {
+      try {
+        const api = host.browser
+        if (api && api.destroy && tabId) {
+          Promise.resolve(api.destroy({ id: String(tabId) })).catch(() => {})
+        }
+      } catch (e) {
+        // ignore
+      }
+    },
+    destroyAllBrowserViews() {
+      const all = [...(this.leftFiles || []), ...(this.rightFiles || [])]
+      for (const t of all) {
+        if (this.isBrowserTab(t)) this.destroyBrowserView(t.id)
+      }
     },
     onBrowserUrlChange(pane, url) {
       const active = pane === 'left' ? this.activeFileLeft : this.activeFileRight

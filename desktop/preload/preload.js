@@ -31,7 +31,10 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
     setActive: (payload) => ipcRenderer.invoke('checkba:browser-set-active', payload),
     setBounds: (payload) => ipcRenderer.invoke('checkba:browser-set-bounds', payload),
     setViewsVisible: (payload) => ipcRenderer.invoke('checkba:browser-set-views-visible', payload),
+    // detach = 面板卸载（切标签），view 保活；destroy = 标签真的关了
+    detach: (payload) => ipcRenderer.invoke('checkba:browser-detach', payload),
     destroy: (payload) => ipcRenderer.invoke('checkba:browser-destroy', payload),
+    history: (payload) => ipcRenderer.invoke('checkba:browser-history', payload),
     getBounds: (payload) => ipcRenderer.invoke('checkba:browser-get-bounds', payload),
     waitReady: (payload) => ipcRenderer.invoke('checkba:browser-wait-ready', payload),
     onOpenNewTab: (handler) => {
@@ -48,6 +51,12 @@ contextBridge.exposeInMainWorld('checkbaDesktop', {
       const listener = (_evt, data) => handler && handler(data)
       ipcRenderer.on('checkba:browser-title-updated', listener)
       return () => ipcRenderer.removeListener('checkba:browser-title-updated', listener)
+    },
+    // 页内跳转后的当前地址（点链接、搜索、SPA 换路由）——标签靠它才不会停在打开时那一页
+    onUrlUpdated: (handler) => {
+      const listener = (_evt, data) => handler && handler(data)
+      ipcRenderer.on('checkba:browser-url-updated', listener)
+      return () => ipcRenderer.removeListener('checkba:browser-url-updated', listener)
     },
     getSnapshot: (payload) => ipcRenderer.invoke('checkba:browser-get-snapshot', payload),
     setUA: (payload) => ipcRenderer.invoke('checkba:browser-set-ua', payload)

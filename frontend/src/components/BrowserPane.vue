@@ -86,15 +86,23 @@ export default {
       _desktopUnsub: null,
       _desktopResizeObs: null,
       _desktopViewId: '',
+      // 桌面端：BrowserView 自己维护历史，前进/后退可用性由主进程推过来
+      _desktopReady: false,
+      viewCanGoBack: false,
+      viewCanGoForward: false,
       isMobileMode: false
     }
   },
   computed: {
     ICONS() { return ICONS },
     canGoBack() {
+      // 桌面端不看组件里那份 history：面板一卸载它就没了，而 BrowserView 是保活的，
+      // 真实历史只有主进程知道
+      if (this.isDesktopBrowser) return this.viewCanGoBack
       return this.index > 0
     },
     canGoForward() {
+      if (this.isDesktopBrowser) return this.viewCanGoForward
       return this.index >= 0 && this.index < this.history.length - 1
     },
     isDesktopBrowser() {
@@ -121,9 +129,16 @@ export default {
     url: {
       immediate: true,
       handler(val) {
-        if (val && val !== this.currentUrl) {
-          this.navigate(val, true)
+        if (!val || val === this.currentUrl) return
+        // 桌面端首帧只把初值抄进组件，不去驱动 BrowserView：切回一个保活着的标签时
+        // 重新 loadURL 就等于把用户翻到的那一页丢掉（本组件修的正是这个）。
+        // 真正的创建/复用在 setupDesktopBrowser 里，之后这个 watcher 才恢复导航职责。
+        if (this.isDesktopBrowser && !this._desktopReady) {
+          this.currentUrl = this.normalizeUrl(val)
+          this.inputUrl = this.currentUrl === 'about:blank' ? '' : this.currentUrl
+          return
         }
+        this.navigate(val, true)
       }
     }
   },
@@ -195,13 +210,23 @@ export default {
         }
       }) : null
 
-      // 创建/加载
+      // 监听页内跳转（点链接、搜索、SPA 换路由）：BrowserView 自己跳的，渲染层此前
+      // 完全不知情，标签因此一直记着「打开时那个地址」——重建时就退回了默认首页。
+      this._desktopUrlUnsub = api.onUrlUpdated ? api.onUrlUpdated((data) => {
+        if (!data) return
+        if (data.id && String(data.id) !== String(this._desktopViewId)) return
+        this.adoptViewState(data)
+      }) : null
+
+      // 创建（已有同 id 的保活 view 时是复用，主进程不会重新加载）
       try {
-        await api.create({ id: this._desktopViewId, url: this.normalizeUrl(this.currentUrl || this.url) })
+        const res = await api.create({ id: this._desktopViewId, url: this.normalizeUrl(this.currentUrl || this.url) })
+        this.adoptViewState(res)
       } catch (e) {
         // eslint-disable-next-line no-console
         console.warn('desktop browser create failed', e)
       }
+      this._desktopReady = true
 
       // 绑定尺寸变化：把 DOM 的 rect 传给主进程作为 BrowserView bounds
       const mountRef = this.$refs.desktopMount
@@ -246,14 +271,42 @@ export default {
         // ignore
       }
       this._desktopTitleUnsub = null
-
-      // MVP：组件卸载即销毁 view（后续可由“tab close”统一管理，避免丢历史）
       try {
-        const api = host.browser
-        if (api && this._desktopViewId) api.destroy({ id: this._desktopViewId })
+        if (this._desktopUrlUnsub) this._desktopUrlUnsub()
       } catch (e) {
         // ignore
       }
+      this._desktopUrlUnsub = null
+      this._desktopReady = false
+
+      // 只从窗口摘下，不销毁：切走再切回来时同一个 view 原样接着用，页内跳转、
+      // 滚动位置、填了一半的表单、页面里的登录态都还在。
+      // 真正的销毁在标签关闭时（project-overview 的 closeFile / 页面卸载）。
+      try {
+        const api = host.browser
+        if (api && this._desktopViewId) api.detach({ id: this._desktopViewId })
+      } catch (e) {
+        // ignore
+      }
+    },
+
+    // 把 BrowserView 此刻的真实状态抄回工具栏与标签（复用旧 view 时尤其重要：
+    // 组件是新的，它对这个网页一无所知，只能问主进程）
+    adoptViewState(state) {
+      if (!state) return
+      const url = state.url ? String(state.url) : ''
+      this.viewCanGoBack = !!state.canGoBack
+      this.viewCanGoForward = !!state.canGoForward
+      if (typeof state.mobile === 'boolean') this.isMobileMode = state.mobile
+      if (url && url !== 'about:blank' && url !== this.currentUrl) {
+        this.currentUrl = url
+        this.inputUrl = url
+        this.$emit('url-change', url)
+      }
+      // url-change 会把标签名退成域名（父级按 host 命名），标题随后补回来。
+      // 复用旧 view 不会重新加载，等不到 page-title-updated，所以这里要主动带上。
+      const title = state.title ? String(state.title) : ''
+      if (title) this.$emit('title-change', title)
     },
     syncDesktopBounds() {
       const api = host.browser
@@ -285,7 +338,8 @@ export default {
       this.currentUrl = next
       this.inputUrl = next === 'about:blank' ? '' : next
 
-      // Desktop：直接导航 BrowserView
+      // Desktop：直接导航 BrowserView。历史由 view 自己维护（见 goBack/goForward），
+      // 组件里那份 history 数组只服务 H5 的 iframe 模式。
       if (this.isDesktopBrowser) {
         try {
           const api = host.browser
@@ -296,6 +350,8 @@ export default {
         } catch (e) {
           // ignore
         }
+        this.$emit('url-change', next)
+        return
       }
 
       if (replace && this.index >= 0) {
@@ -311,8 +367,25 @@ export default {
 
       this.$emit('url-change', next)
     },
+    // 后退/前进/刷新：桌面端交给 BrowserView 自己的历史。
+    // 此前这三个按钮在桌面端只改了地址栏文字、从没驱动过 BrowserView（点了没反应）；
+    // 而且组件里的 history 数组会随面板卸载清空，保活之后更没法当历史用。
+    desktopHistory(action) {
+      try {
+        const api = host.browser
+        if (!api || !api.history || !this._desktopViewId) return false
+        Promise.resolve(api.history({ id: this._desktopViewId, action })).catch(() => {})
+        return true
+      } catch (e) {
+        return false
+      }
+    },
     reload() {
-      // 重新设置 src 触发刷新
+      if (this.isDesktopBrowser) {
+        this.desktopHistory('reload')
+        return
+      }
+      // H5：重新设置 src 触发刷新
       const u = this.currentUrl
       this.currentUrl = 'about:blank'
       this.$nextTick(() => {
@@ -321,6 +394,10 @@ export default {
     },
     goBack() {
       if (!this.canGoBack) return
+      if (this.isDesktopBrowser) {
+        this.desktopHistory('back')
+        return
+      }
       this.index -= 1
       this.currentUrl = this.history[this.index]
       this.inputUrl = this.currentUrl
@@ -328,6 +405,10 @@ export default {
     },
     goForward() {
       if (!this.canGoForward) return
+      if (this.isDesktopBrowser) {
+        this.desktopHistory('forward')
+        return
+      }
       this.index += 1
       this.currentUrl = this.history[this.index]
       this.inputUrl = this.currentUrl
@@ -350,9 +431,11 @@ export default {
       const desktopUA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       
       try {
+        // mobile 一并告诉主进程：view 是保活的，切回来时工具栏要照它的真实 UA 回填
         await api.setUA({
           id: this._desktopViewId,
-          ua: this.isMobileMode ? mobileUA : desktopUA
+          ua: this.isMobileMode ? mobileUA : desktopUA,
+          mobile: this.isMobileMode
         })
       } catch (e) {
         // ignore
