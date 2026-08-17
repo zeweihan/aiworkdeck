@@ -570,11 +570,17 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   语音合成不在其中：云端 ElevenLabs 已整体移除，只剩本机 Kokoro 一条路，没有档可分。
 - `service/platform/ExternalProviderResolver.java` — **档位判定的唯一出口**，D5 的闸在这里。
 - `service/platform/ExternalProviderBackfill.java` — 存量回填，启动期跑一次。
-- `controller/PlatformServiceController.java` — `/api/platform-services{,/{service}/provider}`，
-  机器级状态，`MachineAccountGuard` 把关。
+- `controller/PlatformServiceController.java` — `/api/platform-services{,/{service}/provider,
+  /budget,/asr-notice}`，机器级状态，`MachineAccountGuard` 把关。列表响应里的
+  `usage`（本月分服务消耗）与 `budget`（两个阈值）也从这里出。
+- `service/meeting/MeetingRecordingNotice.java` — 平台档转写的**单独告知**：版本号 + 正文 +
+  确认状态，都在这一个文件里（**文本与版本号必须同源**，分开放必然出现「改了文案忘了推版本」，
+  那时全体用户的旧确认会覆盖到他们从没看过的新处理方式）。
 - `config/GlobalExceptionHandler` 的 `handleGateway` — `GatewayException` → `code=1` +
   `gatewayKind` + `canUseOwnKey`。**不接这条的话网关异常会落到兜底 handler 被压成
   一句「服务器内部错误」**，三类故障的区分（错误码族存在的全部理由）当场作废。
+  前端 `api.js` 的 `request()` 也必须把这两个字段挂到 reject 出去的 Error 上，
+  否则后端分了类、调用方照样只拿到一句文案。
 
 **其余四家（P4）：分档一律落在各自 service 的一个缝上**
 - `service/OcrService.recognizeGeneral` — platform 档走 `ocr/recognize`，完全不碰
@@ -658,6 +664,8 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 | 余额不足 | `409 no_credits`，**绝不 401/403** |
 | 幂等 | 会扣费的 POST 必须带 `Idempotency-Key`（8-128 位 `[A-Za-z0-9_-]`），服务端去重回放 |
 | 语音 | 唯一的异步长任务，三步：`asr/ticket`（查余额 + 签直传凭证，不扣费不要幂等键）→ 桌面直传 OSS → `asr/submit`（预扣 + 建听悟任务）→ `asr/task/{id}`（轮询 + 结算 + 删对象）。**余额闸在 ticket**，不让用户白传两小时录音才被拒 |
+| 用量 | `GET /api/gateway/usage` 回本月分服务消耗（`{month, services:[{service,cents,calls}], totalCents, balanceCents, pendingHoldCents}`）。**与单价表刻意分成两个端点**：单价几乎不动、桌面端挂 10 分钟缓存，用量花一笔就要变，合并会逼两种保鲜要求互相迁就。取不到时桌面端整段给 null，界面显示「—」 |
+| 告知 | 平台档转写在**录音开始之前**要过一次单独告知（每机一次，版本变了重来）。落 `system_setting` 的 `meeting.recordingNotice.acknowledgedAt` / `.version`，**服务端没有任何拦截**，见地雷 40 |
 
 同步入口的 service/op 全集（人读版在官网 `doc/desktop-contract.md`，改端点两处同步）：
 
@@ -782,6 +790,31 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     上次运行被打断，落 FAILED 并说明「录音本身完好，重新提交即可」。
     云端两档的转码上传阶段同样落在这个窗口里，这条顺带补上了那个既有缺口。
 
+40. **会议录音的告知是「告知」不是「同意」，强度与跨境那条刻意不同**。
+    跨境同意（`ai.crossBorder.*`）走的是个保法第三十九条「向境外提供」，所以它在
+    `AdminConfigController` 里做成了写库前的硬拦截；会议录音走境内听悟 + 境内对象存储，
+    **不出境**，触发的是告知义务。**照抄那道硬闸的代价是律师录完两小时会、点转写时
+    被模态框拦住**——最差的打断时机。因此服务端一个拦截都没有，把关全在
+    `MeetingRecordingPanel` 的录音键与「开始转写」两处，摆在**录音开始之前**
+    （唯一一个什么都还没发生的时刻）。三条会在重构里失守的事：
+    版本机制要照抄（改文案就推 `MeetingRecordingNotice.VERSION`，旧确认作废）、
+    **绝不预勾选**（预先勾选的同意在个保法下无效，服务端缺字段也一律按未确认）、
+    告知取不到时**不拦录音**（为一次设置端点抖动把录音键焊死，比漏一次告知更坏）。
+
+41. **`budget_exceeded` 这条链今天是断的，别以为设了阈值就有闸**。
+    官网 `lib/gateway/errors.ts` 里有这个码和 409 状态，但**没有任何地方抛它**；
+    桌面端也从不给网关传 taskId 或阈值。所以「单次任务花费上限」目前只是一个
+    落库的数字 + 桌面端认得这个信封（`GatewayException.Kind.BUDGET_EXCEEDED`），
+    真正的累计与判定还没人做。要闭环得先定「一个任务是什么」——设计 §4.9 写的是
+    网关按 `meta.taskId` 累计，那就得由桌面端在每次调用上带 taskId 与阈值。
+    在那之前，**别在界面上把它说成硬性封顶**（文案已按「什么时候问你一句」写）。
+
+42. **用量取不到给 null，绝不退化成 0**（同「余额/权益查不到就放行」那条的同源判断）。
+    `GET /api/platform-services` 的 `usage` 整段为 null = 读不到，界面显示「—」；
+    拿到了但某项服务不在表里 = 本月真没花过，那是一个真实的 0。
+    两者混成 0 的后果是：刚跑完一场两小时转写的用户看到「本月 0 Credits」，
+    他的下一步是来问账是不是没记上。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
@@ -813,7 +846,11 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   （D5 的 local-mode 闸）、`service/platform/ExternalProviderBackfillTest`（存量回填四种形态）、
   `service/meeting/MeetingTranscriptionPlatformPathTest`（platform 档不碰 OSS/听悟两个接口、
   失败不回落 byok、轮询路由跟落库的 taskId 走）、`service/meeting/MeetingTranscriptionServiceTest`
-  （byok 档行为不变的基线）。
+  （byok 档行为不变的基线）、`service/meeting/MeetingRecordingNoticeTest`（告知默认未确认 /
+  版本作废 / 正文说全四件事 / 三个掉线子串与 emoji）、
+  `controller/PlatformServiceControllerTest`（另含用量 null≠0、两个阈值的往返与拒非法、
+  告知端点缺字段不算确认）、`controller/ExternalControllerEnvelopeTest`
+  （网关失败原样抛出、回落不吞掉网关原因、查无结果是 code=1 不是 4010）。
 - 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 45 项 + `contract-check.mts` 的网关段，
   **必须在空目录里跑、必须用 nvm v22 全路径**（`/usr/bin/node` v20 碰库会段错误）。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。

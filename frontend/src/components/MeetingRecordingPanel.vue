@@ -46,6 +46,31 @@
     </view>
   </view>
 
+  <!-- 平台档转写的单独告知（每台机器一次）。**摆在录音开始之前**：
+       会议录音是全产品唯一会完整落到我们磁盘上的用户内容，而且录的往往是第三方
+       （客户、对方当事人）的声音——被录的人不是我们的用户，没同意过任何条款。
+       这块必须在按下录音键之前出现，不能做成录完两小时点转写时才弹的模态框：
+       那时用户只剩「放弃这份录音」或「照传不误」两条路。
+       正文由后端给（文本与版本号同源，改文案就得推版本，旧确认随即失效）。 -->
+  <view class="mr-notice" v-if="needsAsrNotice">
+    <text class="mr-notice-title">{{ noticeCopy.title }}</text>
+    <text class="mr-notice-body">{{ asrNotice.body }}</text>
+    <!-- 绝不预勾选：预先勾选的同意在个保法下无效 -->
+    <view class="mr-notice-check" @tap="noticeChecked = !noticeChecked">
+      <view class="mr-notice-mark" :class="{ checked: noticeChecked }"></view>
+      <text class="mr-notice-check-label">{{ noticeCopy.checkLabel }}</text>
+    </view>
+    <view class="mr-notice-actions">
+      <view class="mr-btn primary" :class="{ disabled: !noticeChecked || noticeBusy }" @tap="onAcknowledgeNotice">
+        {{ noticeCopy.confirm }}
+      </view>
+      <!-- 出路是真的：本机转写已经可用，不是一句安慰 -->
+      <view class="mr-btn secondary" :class="{ disabled: tierBusy }" @tap="onToggleLocalAsr(true)">
+        {{ noticeCopy.switchLocal }}
+      </view>
+    </view>
+  </view>
+
   <!-- 未配置转写凭证的提示（录音仍可用）。下一步按档位分：
        平台代采档缺的是账户，自备 Key 档缺的才是那五个阿里云凭证。 -->
   <view class="mr-config-hint" v-if="configured === false">
@@ -232,7 +257,8 @@ import {
   getMeetingRecordings, getMeetingRecording, transcribeMeetingRecording,
   updateMeetingRecording, exportMeetingTranscript, getMeetingMinutesPrompt,
   deleteMeetingRecording, getApiBaseUrl,
-  getPlatformServices, setPlatformServiceProvider
+  getPlatformServices, setPlatformServiceProvider,
+  getMeetingAsrNotice, acknowledgeMeetingAsrNotice
 } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import {
@@ -246,6 +272,28 @@ import { host } from '@/services/host.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
 
 const POLL_INTERVAL_MS = 8000
+
+/**
+ * 告知那一块的全部可见文案，**集中在这一处**。
+ *
+ * 这个组件整体还是硬编码中文（既有欠账，另有一张卡在做整组件 i18n 迁移）。
+ * 把这几句摊到模板和方法里各处的话，迁移时很容易顺手改坏它们背后的闸门逻辑——
+ * 而那道闸拦的是「录音在用户不知情的情况下被交出去」。集中放，迁移时换成 $t 只动这一个对象。
+ *
+ * 告知正文（body）不在这里：它由后端给，与版本号同源——改文案就得推版本，
+ * 旧确认随即失效。这里只有围绕它的标题、勾选项与两个动作。
+ */
+const NOTICE_COPY = {
+  title: '录音转写告知',
+  checkLabel: '我已知悉上述处理方式',
+  confirm: '确认，继续用云端转写',
+  switchLocal: '改用本机转写',
+  saveFailed: '保存失败，稍后重试',
+  // 拦在录音开始之前，是因为那是唯一一个「什么都还没发生」的时刻
+  blockBeforeRecording: '开始录音前，看一下上方的转写告知',
+  // 覆盖「本地档录的、之后切平台档再手动转写」这条绕过开始录音那道口的路
+  blockBeforeUpload: '上传前，看一下上方的转写告知',
+}
 
 export default {
   name: 'MeetingRecordingPanel',
@@ -283,6 +331,13 @@ export default {
       asrPlatformAvailable: false,
       asrAccountConnected: false,
       tierBusy: false,
+      // 平台档转写的单独告知 { version, body, acknowledged, acknowledgedAt }。
+      // null = 还没读到 / 读不到（server 模式下非 admin 读不到这个机器级端点）。
+      // **读不到时不拦录音**：为一次设置端点抖动把录音键焊死，比漏一次告知更坏——
+      // 而 platform 档在 server 模式下本来就不可用，那里也没有要告知的事。
+      asrNotice: null,
+      noticeChecked: false,
+      noticeBusy: false,
       // 本机转写模型的下载状态（组件管理里那套 absent/downloading/installed 的同一条链路，
       // 只是搬到用户真正需要它的位置——他刚点开「录音不出本机」的这一刻）
       modelState: null,
@@ -307,6 +362,20 @@ export default {
     },
     tierKnown() {
       return this.asrProvider !== null
+    },
+    /**
+     * 要不要先把告知摆出来。
+     *
+     * 只在**平台档**下出现：自备 Key 档的音频走用户自己的 OSS 与听悟账号，
+     * 本地档根本不出本机，两者都没有「我们持有你的录音」这件事要告知。
+     * 确认过一次就不再出现（版本没变的话）——这是告知义务，不是每次都要点一遍的闸。
+     */
+    needsAsrNotice() {
+      return this.asrProvider === 'platform' && !!this.asrNotice && !this.asrNotice.acknowledged
+    },
+    // 告知那块的文案集中在模块顶部的 NOTICE_COPY 里，模板经这里读（理由见那处注释）
+    noticeCopy() {
+      return NOTICE_COPY
     },
     // 本地档能不能真正用起来。**读的是 platformServices 那个唯一出口**，
     // 与 admin 的档位下拉同源——只在一处接探测的话，用户从另一处照样能切进一个用不了的档。
@@ -368,6 +437,7 @@ export default {
   mounted() {
     this.loadMeetings()
     this.loadAsrTier()
+    this.loadAsrNotice()
     // 装载时就探一次：面板要在**按下录音键之前**说清这段录音会不会出本机（设计 §6.2.1）
     refreshLocalAsrReadiness()
     this.loadModelState()
@@ -414,6 +484,32 @@ export default {
         this.asrAccountConnected = !!s.accountConnected
       } catch (e) {
         console.warn('读取转写档位失败', e)
+      }
+    },
+    // 告知状态。读不到就保持 null（不拦录音，理由见 data 里的注释）。
+    async loadAsrNotice() {
+      try {
+        this.asrNotice = (await getMeetingAsrNotice()) || null
+        this.noticeChecked = false
+      } catch (e) {
+        console.warn('读取录音转写告知失败', e)
+      }
+    },
+    /**
+     * 确认告知（每台机器一次）。
+     *
+     * 勾选框绝不预勾选，所以这里必然是用户主动点过之后才可用。
+     * 确认失败不改本地状态：让告知块留在原地，比让用户以为确认过了要好。
+     */
+    async onAcknowledgeNotice() {
+      if (!this.noticeChecked || this.noticeBusy) return
+      this.noticeBusy = true
+      try {
+        this.asrNotice = (await acknowledgeMeetingAsrNotice(true)) || this.asrNotice
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || NOTICE_COPY.saveFailed, icon: 'none' })
+      } finally {
+        this.noticeBusy = false
       }
     },
     /**
@@ -515,6 +611,13 @@ export default {
 
     // ==================== 录音 ====================
     async onStartRecording() {
+      // 告知没确认就不开录。**拦在这一刻是刻意的**：此时什么都还没发生，
+      // 用户看完上面那段点一下就继续；换成录完两小时再拦，他只剩「放弃录音」
+      // 或「照传不误」两条路，后者正好绕过了这段告知存在的理由。
+      if (this.needsAsrNotice) {
+        uni.showToast({ title: NOTICE_COPY.blockBeforeRecording, icon: 'none' })
+        return
+      }
       try {
         await startRecording(this.projectId)
         if (recorderState.configured !== null) this.configured = recorderState.configured
@@ -567,6 +670,13 @@ export default {
 
     // ==================== 转写与纪要 ====================
     async onTranscribe(m) {
+      // 覆盖「本地档录的，之后切到平台档再手动转写」这条路——它绕过了开始录音那道口。
+      // 这里给的是一句提示 + 上方已经摆着的那块告知，不是模态框：告知块本来就在屏幕上，
+      // 确认只要一下。
+      if (this.needsAsrNotice) {
+        uni.showToast({ title: NOTICE_COPY.blockBeforeUpload, icon: 'none' })
+        return
+      }
       try {
         await transcribeMeetingRecording(m.id)
         await this.loadMeetings()
@@ -871,6 +981,66 @@ $mr-muted: #6B7280;
 .mr-tier-gate-actions {
   display: flex;
   align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---- 平台档转写的单独告知（录音开始之前）----
+   跟随 #389 定的面板密度令牌（与上面的 .mr-tier 同形），不自带一套 12px 的边距：
+   这块就摆在档位卡下面，两者用不同的节奏会让 260px 宽的左栏更挤。
+   唯一不跟的是正文行高——它是一段要读完的告知，不是一行状态。 */
+.mr-notice {
+  margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
+  padding: 8px;
+  border: 1px solid #D6E4DC;
+  border-radius: var(--awd-panel-radius);
+  background: #F4F9F6;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mr-notice-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1F2328;
+}
+
+.mr-notice-body {
+  font-size: var(--awd-panel-fs-meta);
+  color: #4B5563;
+  line-height: 1.7;
+}
+
+.mr-notice-check {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+}
+
+/* 空心方框 = 未勾选。默认必须是空的：预先勾选的同意无效 */
+.mr-notice-mark {
+  width: 13px;
+  height: 13px;
+  flex: none;
+  border: 1px solid #9CA3AF;
+  border-radius: 3px;
+  background: #FFFFFF;
+
+  &.checked {
+    border-color: $mr-primary;
+    background: $mr-primary;
+  }
+}
+
+.mr-notice-check-label {
+  font-size: var(--awd-panel-fs-meta);
+  color: #374151;
+}
+
+.mr-notice-actions {
+  display: flex;
   gap: 8px;
   flex-wrap: wrap;
 }

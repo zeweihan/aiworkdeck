@@ -21,6 +21,14 @@ public class GatewayException extends RuntimeException {
         NOT_CONNECTED,
         /** 账户 Credits 不足。**不是凭据问题**，绝不能让前端当成掉线。 */
         NO_CREDITS,
+        /**
+         * 本次任务累计花费撞上用户自己设的上限（设计 §4.9）。
+         *
+         * <p>这一档<b>是可恢复的确认，不是失败</b>：任务没坏、余额也够，只是用户想在
+         * 花到这个数的时候被问一句。上层要摆的是「已花费 N Credits，是否继续」，
+         * 不是一句错误提示。
+         */
+        BUDGET_EXCEEDED,
         /** 该服务尚未开放（合同/账号未就绪，或平台侧未配置凭证）。 */
         SERVICE_DISABLED,
         /** 上游供应商返回错误或超时。其余服务不受影响。 */
@@ -57,8 +65,13 @@ public class GatewayException extends RuntimeException {
      *
      * <p>只有 {@link Kind#UNAUTHORIZED} 不提：那里的结论已经很明确（Key 无效或被撤销），
      * 再塞第二个建议只会让用户不知道该修哪个。
+     *
+     * <p>{@link Kind#BUDGET_EXCEEDED} 同样不提，但理由相反：那不是一次故障，
+     * 是用户自己设的闸拦了自己。他要的下一步是「继续」或「把上限调高」，
+     * 这时摆一个「改用自己的 Key」是答非所问——照做还会让他绕开自己刚设的上限。
      */
     public boolean suggestsByok() {
-        return kind != Kind.UNAUTHORIZED && kind != Kind.BAD_REQUEST && kind != Kind.MALFORMED;
+        return kind != Kind.UNAUTHORIZED && kind != Kind.BAD_REQUEST && kind != Kind.MALFORMED
+                && kind != Kind.BUDGET_EXCEEDED;
     }
 }

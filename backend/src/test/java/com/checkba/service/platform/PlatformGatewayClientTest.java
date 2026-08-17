@@ -129,6 +129,20 @@ class PlatformGatewayClientTest {
     }
 
     @Test
+    @DisplayName("撞上用户自设的花费上限是可恢复的确认，不是「预期外的状态 409」")
+    void budgetExceededIsItsOwnKind() {
+        // 不认这个码的话它会落到按状态码分类的默认分支，变成 MALFORMED——
+        // 一个「确认一下就能继续」的信封被表达成故障，用户只会以为功能坏了
+        transport.reply(409, "{\"error\":\"budget_exceeded\",\"message\":\"本次任务已花费 12.00 Credits\"}");
+        GatewayException e = assertThrows(GatewayException.class,
+                () -> client.call("search", "web", Map.of(), 30));
+        assertEquals(GatewayException.Kind.BUDGET_EXCEEDED, e.getKind());
+        // 这是用户自己设的闸拦了自己，不是我们的故障：摆「改用自己的 Key」既答非所问，
+        // 照做还会让他绕开刚设的上限
+        assertFalse(e.suggestsByok());
+    }
+
+    @Test
     @DisplayName("除「Key 无效」与我们自己的 bug 外，都要摆出「改用自己的 Key」的出路")
     void byokIsOfferedWhereverItHelps() {
         // 用试用码解锁、根本不打算连账户的用户，自备 Key 是他唯一的出路——
@@ -160,6 +174,7 @@ class PlatformGatewayClientTest {
         List<PlatformGatewayTransport.Reply> cases = List.of(
                 new PlatformGatewayTransport.Reply(409, "{\"error\":\"no_credits\"}"),
                 new PlatformGatewayTransport.Reply(409, "{\"error\":\"service_disabled\"}"),
+                new PlatformGatewayTransport.Reply(409, "{\"error\":\"budget_exceeded\"}"),
                 new PlatformGatewayTransport.Reply(502, "{\"error\":\"upstream_failed\"}"),
                 new PlatformGatewayTransport.Reply(503, "{}"),
                 new PlatformGatewayTransport.Reply(401, "{}"),

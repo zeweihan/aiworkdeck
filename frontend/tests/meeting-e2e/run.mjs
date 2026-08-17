@@ -209,6 +209,23 @@ try {
     await page.waitForSelector('.mr-config-hint', { timeout: 10000 })
   })
 
+  // 平台档下，录音键在告知确认之前是不放行的。这道口刻意开在**录音开始之前**：
+  // 那是唯一一个「什么都还没发生」的时刻；换成录完两小时再拦，用户只剩
+  // 「放弃这份录音」或「照传不误」两条路，后者正好绕过了告知存在的理由。
+  // 自备 Key / 本地档没有这块（音频不经我们的手），所以这一步是条件式的。
+  await step('平台档：告知摆在录音之前，且绝不预勾选', async () => {
+    const present = await page.$('.mr-notice')
+    if (!present) {
+      console.log('    （当前不是平台档，无需告知）')
+      return
+    }
+    const preChecked = await page.$eval('.mr-notice-mark', el => el.classList.contains('checked'))
+    if (preChecked) throw new Error('告知的勾选框被预勾选了——预先勾选的同意在个保法下无效')
+    await clickSel('.mr-notice-check')
+    await clickSel('.mr-notice-actions .mr-btn.primary')
+    await page.waitForFunction(() => !document.querySelector('.mr-notice'), POLL(15000))
+  })
+
   await step('一键开录：假麦克风出真音轨，面板进入录音态', async () => {
     await clickSel('.mr-record-btn')
     await page.waitForSelector('.mr-recording-live', { timeout: 20000 })
