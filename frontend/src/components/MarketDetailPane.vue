@@ -11,7 +11,7 @@
         <view class="mdp-head-main">
           <view class="mdp-title-row">
             <text class="mdp-title">{{ display.name }}</text>
-            <text class="mdp-kind-badge">{{ spec.kind === 'plugin' ? $t('market.pluginLabel') : $t('market.kindBadgeSkill') }}</text>
+            <text class="mdp-kind-badge">{{ spec.kind === 'plugin' ? $t('market.pluginLabel') : (isPanel ? $t('market.panelPluginLabel') : $t('market.kindBadgeSkill')) }}</text>
             <text v-if="installedInfo" class="mdp-installed-badge">{{ $t('market.installedTag') }}</text>
             <text v-if="marketInfo" class="mdp-price-badge" :class="{ paid: isPaidItem }">{{ priceBadge }}</text>
           </view>
@@ -58,8 +58,15 @@
               >
                 <text>{{ busy ? $t('market.processingEllipsis') : $t('market.reinstallOrUpdate') }}</text>
               </view>
-              <picker
-                v-if="installedInfo && !installedInfo.sourcePluginId"
+              <!-- 面板型 skill（背后挂着左栏面板）按插件呈现：只有启用/停用。
+                   「生效方式三档」是对话型 skill 的概念，对面板讲不通——设成 manual
+                   会让面板里的 kick-off 按钮点了没反应。判据见 leftSidebarPlugins.js。 -->
+              <view v-if="installedInfo && !installedInfo.sourcePluginId && isPanel" class="mdp-switch-row">
+                <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
+                <AwdSwitch :checked="!!installedInfo.enabled" @change="onPanelSkillToggle" />
+              </view>
+              <AwdSelect
+                v-else-if="installedInfo && !installedInfo.sourcePluginId"
                 :range="ACTIVATION_LABELS"
                 :value="activationIndex"
                 @change="onActivationChange"
@@ -67,7 +74,7 @@
                 <view class="mdp-btn">
                   <text>{{ $t('market.activationModeLabel', { mode: ACTIVATION_LABELS[activationIndex] }) }}</text>
                 </view>
-              </picker>
+              </AwdSelect>
               <text v-if="installedInfo && installedInfo.sourcePluginId" class="mdp-action-hint">{{ $t('market.activationHintSourcePlugin') }}</text>
               <view
                 v-if="installedInfo && marketInfo && !installedInfo.sourcePluginId"
@@ -91,7 +98,7 @@
               </view>
               <view v-if="installedInfo" class="mdp-switch-row">
                 <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
-                <switch :checked="!!installedInfo.enabled" color="#1A5336" style="transform: scale(0.7);" @change="onPluginToggle" />
+                <AwdSwitch :checked="!!installedInfo.enabled" @change="onPluginToggle" />
               </view>
               <view
                 v-if="installedInfo && marketInfo"
@@ -172,10 +179,13 @@
 // 装/卸/启停后通过 uni.$emit('awd:market-changed') 通知左栏刷新。
 import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
+import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
 import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements } from '@/composables/useEntitlement.js'
 import { t } from '@/i18n'
+import AwdSelect from '@/components/AwdSelect.vue'
+import AwdSwitch from '@/components/AwdSwitch.vue'
 
 const CATEGORY_GLYPHS = {
   contract: ICONS.catContract,
@@ -209,6 +219,7 @@ const ACTIVATION_LABELS = [t('market.activationAuto'), t('market.activationManua
 
 export default {
   name: 'MarketDetailPane',
+  components: { AwdSelect, AwdSwitch },
   props: {
     spec: {
       type: Object,
@@ -293,6 +304,7 @@ export default {
       if (this.spec.kind === 'plugin') {
         return this.$t('market.kindNotePlugin')
       }
+      if (this.isPanel) return this.$t('market.panelPluginHint')
       return this.$t('market.kindNoteSkill')
     },
     /** 工具名是给机器看的；给用户压缩成能力域的人话摘要 */
@@ -329,6 +341,10 @@ export default {
       const mode = s.activationMode || (s.enabled ? 'auto' : 'disabled')
       const idx = ACTIVATION_MODES.indexOf(mode)
       return idx >= 0 ? idx : 0
+    },
+    /** 背后挂着左栏面板的 skill：详情页也按插件呈现（开关，而不是生效方式三档） */
+    isPanel() {
+      return this.spec && this.spec.kind === 'skill' && isPanelSkill(this.spec.id)
     },
     sourceText() {
       if (this.installedInfo?.sourcePluginId) return this.$t('market.sourceBuiltinPlugin', { id: this.installedInfo.sourcePluginId })
@@ -494,8 +510,8 @@ export default {
         this.busy = false
       }
     },
-    async onPluginToggle(event) {
-      const enabled = !!(event?.detail?.value)
+    // AwdSwitch 直接抛布尔值
+    async onPluginToggle(enabled) {
       try {
         await setPluginEnabled(this.spec.id, enabled)
         if (this.installedInfo) this.installedInfo.enabled = enabled
@@ -507,9 +523,25 @@ export default {
         await this.reload()
       }
     },
-    async onActivationChange(event) {
-      const idx = Number(event?.detail?.value)
-      const mode = ACTIVATION_MODES[idx]
+    // AwdSelect 直接抛下标
+    // 面板型：开 = auto（面板 kick-off prompt 要靠触发词命中），关 = disabled
+    async onPanelSkillToggle(enabled) {
+      const mode = enabled ? 'auto' : 'disabled'
+      try {
+        await setSkillActivation(this.spec.id, mode)
+        if (this.installedInfo) {
+          this.installedInfo.activationMode = mode
+          this.installedInfo.enabled = enabled
+        }
+        uni.showToast({ title: enabled ? this.$t('market.enabledToast') : this.$t('market.disabledToggleToast'), icon: 'none' })
+        this.notifyChanged()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('market.operationFailedNeedAdmin'), icon: 'none' })
+        this.reload()
+      }
+    },
+    async onActivationChange(idx) {
+      const mode = ACTIVATION_MODES[Number(idx)]
       if (!mode || !this.installedInfo || mode === ACTIVATION_MODES[this.activationIndex]) return
       try {
         await setSkillActivation(this.spec.id, mode)

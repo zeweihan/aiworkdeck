@@ -1,7 +1,7 @@
 <template>
   <view class="file-tree" tabindex="0" @keydown="handleKeyDown" @mousedown="focusTree">
 
-    <!-- AI Workdeck Style Modals System -->
+    <!-- AI WorkDeck Style Modals System -->
 
     <!-- 1. Delete Confirmation Modal -->
     <view v-if="showDeleteDialog" class="awd-dialog-mask" @tap="showDeleteDialog = false">
@@ -5013,7 +5013,7 @@ $bg-grey: $uni-bg-color-grey;
   flex-shrink: 0;
 }
 
-/* AI Workdeck Buttons */
+/* AI WorkDeck Buttons */
 .awd-btn {
   display: inline-flex;
   align-items: center;
@@ -5032,7 +5032,7 @@ $bg-grey: $uni-bg-color-grey;
   transform: translateY(1px);
 }
 
-/* Primary is now Forest Green to match AI Workdeck */
+/* Primary is now Forest Green to match AI WorkDeck */
 .awd-btn-primary {
   background-color: #1A5336; /* Forest Green */
   color: #ffffff;

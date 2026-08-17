@@ -12,4 +12,6 @@ export default {
   openFolderConfirm: 'Open "{name}" as a project?',
   open: 'Open',
   openFolderFailed: 'Failed to open',
+  // Global back control (utils/globalBack.js)
+  back: 'Back',
 }

@@ -3,9 +3,9 @@ export default {
   sidebar: {
     files: 'Explorer',
     ddFiles: 'Due Diligence Files',
-    shareholderMeeting: 'Shareholder Meeting',
     litigationVisual: 'Litigation Visualization',
     search: 'Search',
+    tts: 'Text to Speech',
     desensitize: 'File Redaction',
     version: 'Version History',
   },

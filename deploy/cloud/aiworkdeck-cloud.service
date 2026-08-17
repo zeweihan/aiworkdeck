@@ -2,7 +2,7 @@
 # 官方托管的插件云后端（addin.aiworkdeck.com）。
 # 与官网（PM2 管的 Next.js）共机，MemoryMax 兜底防止 JVM 吃垮官网。
 [Unit]
-Description=AI Workdeck Cloud Backend (addin.aiworkdeck.com)
+Description=AI WorkDeck Cloud Backend (addin.aiworkdeck.com)
 After=network.target postgresql@14-main.service
 Wants=postgresql@14-main.service
 

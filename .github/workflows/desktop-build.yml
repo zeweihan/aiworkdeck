@@ -143,6 +143,16 @@ jobs:
             --requirements kokoro-service/requirements.lock \
             --out desktop/bundled/mac-arm64
           du -sh desktop/bundled/mac-arm64/pysvc/kokoro-service/lib
+      - name: Bundle asr-service (macOS arm64)
+        if: runner.os == 'macOS'
+        run: |
+          # 本地 ASR 包装层（P3）：模型不进包（1.5GB），首启在「组件管理」下载
+          node desktop/scripts/prepare-python-service.js \
+            --service asr-service \
+            --src asr-service \
+            --requirements asr-service/requirements.lock \
+            --out desktop/bundled/mac-arm64
+          du -sh desktop/bundled/mac-arm64/pysvc/asr-service/lib
       - name: Bundle graphviz (macOS arm64)
         if: runner.os == 'macOS'
         run: |
@@ -189,6 +199,16 @@ jobs:
             --requirements kokoro-service/requirements.lock \
             --out desktop/bundled/win-x64
           du -sh desktop/bundled/win-x64/pysvc/kokoro-service/lib
+      - name: Bundle asr-service (Windows x64)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          node desktop/scripts/prepare-python-service.js \
+            --service asr-service \
+            --src asr-service \
+            --requirements asr-service/requirements.lock \
+            --out desktop/bundled/win-x64
+          du -sh desktop/bundled/win-x64/pysvc/asr-service/lib
       - name: Bundle graphviz (Windows x64)
         if: runner.os == 'Windows'
         shell: bash
@@ -338,6 +358,29 @@ jobs:
           echo "kokoro-service failed to start within 40s"
           tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
           kill $KOKORO_PID 2>/dev/null || true
+          exit 1
+      - name: Smoke test bundled asr-service (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # 无模型拉起。/health 断言 modelReady=false 是这条冒烟的重点：
+          # 「服务起着但模型没下」必须是一个能被观测到的状态，界面的下载引导全靠它
+          PY="$PWD/desktop/bundled/mac-arm64/python/bin/python3.11"
+          APP="$PWD/desktop/bundled/mac-arm64/pysvc/asr-service/app"
+          export PYTHONPATH="$PWD/desktop/bundled/mac-arm64/pysvc/asr-service/lib"
+          export HF_HOME="$RUNNER_TEMP/asr-empty-home"
+          PORT=8891 "$PY" "$APP/app.py" > "$RUNNER_TEMP/asr-smoke.log" 2>&1 &
+          ASR_PID=$!
+          for i in $(seq 1 20); do
+            sleep 2
+            if curl -sf http://127.0.0.1:8891/health | grep -q '"modelReady":false'; then
+              echo; echo "asr-service up after ~$((i*2))s"
+              kill $ASR_PID
+              exit 0
+            fi
+          done
+          echo "asr-service failed to start within 40s"
+          tail -60 "$RUNNER_TEMP/asr-smoke.log"
+          kill $ASR_PID 2>/dev/null || true
           exit 1
       - name: Pack pysvc archive (macOS)
         if: runner.os == 'macOS'
@@ -495,6 +538,28 @@ jobs:
           tail -60 "$RUNNER_TEMP/kokoro-smoke.log"
           kill $KOKORO_PID 2>/dev/null || true
           exit 1
+      - name: Smoke test bundled asr-service (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          PY="$PWD/desktop/bundled/win-x64/python/python.exe"
+          APP="$PWD/desktop/bundled/win-x64/pysvc/asr-service/app"
+          export PYTHONPATH="$PWD/desktop/bundled/win-x64/pysvc/asr-service/lib"
+          export HF_HOME="$RUNNER_TEMP/asr-empty-home"
+          PORT=8891 "$PY" "$APP/app.py" > "$RUNNER_TEMP/asr-smoke.log" 2>&1 &
+          ASR_PID=$!
+          for i in $(seq 1 20); do
+            sleep 2
+            if curl -sf http://127.0.0.1:8891/health | grep -q '"modelReady":false'; then
+              echo; echo "asr-service up after ~$((i*2))s"
+              kill $ASR_PID
+              exit 0
+            fi
+          done
+          echo "asr-service failed to start within 40s"
+          tail -60 "$RUNNER_TEMP/asr-smoke.log"
+          kill $ASR_PID 2>/dev/null || true
+          exit 1
       - name: Pack pysvc archive (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -550,15 +615,15 @@ jobs:
           # correct on every release; per-release highlights can still be edited in.
           generate_release_notes: true
           body: |
-            ## AI Workdeck — 律师的 AI 原生工作台 / The lawyer's AI-native workstation
+            ## AI WorkDeck — 律师的 AI 原生工作台 / The lawyer's AI-native workstation
 
             **中文** · 桌面版「双击即用」：安装包已捆绑后端与精简 JRE，无需预装 PostgreSQL / Java。首次启动有向导，配置一项 AI 提供商即可解锁核心功能；可选「本地 Ollama」实现数据不出本机。
 
             **English** · Desktop, double-click to run: the installer bundles the backend and a trimmed JRE — no PostgreSQL or Java setup. A first-run wizard gets you started; configure one AI provider to unlock core features. Pick local Ollama to keep all data on-device.
 
             ### 下载 / Downloads
-            - **macOS · Apple Silicon (M 系列)** — `AI Workdeck-<ver>-arm64.dmg`（已签名公证 / signed & notarized）
-            - **Windows · x64** — `AI Workdeck Setup <ver>.exe`（暂未签名，首次运行 SmartScreen 提示属正常 / not yet code-signed; a SmartScreen prompt on first run is expected）
+            - **macOS · Apple Silicon (M 系列)** — `AI WorkDeck-<ver>-arm64.dmg`（已签名公证 / signed & notarized）
+            - **Windows · x64** — `AI WorkDeck Setup <ver>.exe`（暂未签名，首次运行 SmartScreen 提示属正常 / not yet code-signed; a SmartScreen prompt on first run is expected）
 
             > 自本版本起不再提供 Intel Mac 安装包（依赖生态已停发 x86_64 预编译组件）。/ Intel mac builds are discontinued as of this release.
 
@@ -612,7 +677,7 @@ jobs:
             want=$(stat -c%s "$f")
             # **文件名必须换成 GitHub Release 的资产名**（空格 → 点号）。
             # update-mirror-sync.sh 的「skip (exists)」判据是资产名，构建产物
-            # 带空格（AI Workdeck Setup 0.17.0.exe），名字对不上它就当没传过，
+            # 带空格（AI WorkDeck Setup 0.17.0.exe），名字对不上它就当没传过，
             # 照样从 GitHub 重拉一遍 1.4GB——这条推送等于白做。
             # v0.17.0 实测：包都推到了，cron 仍在重下，latest.json 卡在上一版
             # 导致本 job 的校验步骤失败。

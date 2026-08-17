@@ -1,10 +1,10 @@
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src=".github/assets/icon.png" width="88" alt="AI Workdeck logo">
+    <img src=".github/assets/icon.png" width="88" alt="AI WorkDeck logo">
   </a>
 </p>
 
-<h1 align="center">AI Workdeck</h1>
+<h1 align="center">AI WorkDeck</h1>
 
 <p align="center">
   <strong>让法律人聚焦专业判断 — 面向法律与文档密集型工作的 AI 原生工作台</strong>
@@ -25,7 +25,7 @@
 
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src=".github/assets/workspace-ai.png" alt="AI Workdeck — 项目工作区：文件树 + 文档预览 + AI 智能体面板（真实产品截图）" width="900">
+    <img src=".github/assets/workspace-ai.png" alt="AI WorkDeck — 项目工作区：文件树 + 文档预览 + AI 智能体面板（真实产品截图）" width="900">
   </a>
 </p>
 
@@ -33,11 +33,11 @@
 
 > **VS Code** 把文件、扩展、终端、Git 和 AI 编程助手装进了开发者的同一个工作台。
 >
-> **AI Workdeck** 想为律师和文档密集型团队做同样的事：项目、文档、智能体、插件、证据与审查，尽在一处。
+> **AI WorkDeck** 想为律师和文档密集型团队做同样的事：项目、文档、智能体、插件、证据与审查，尽在一处。
 
 ## 为什么值得 Star
 
-如果你关心下面任何一个问题，欢迎为 AI Workdeck 点一颗 ⭐：
+如果你关心下面任何一个问题，欢迎为 AI WorkDeck 点一颗 ⭐：
 
 - 构建 AI 原生的法律 / 专业服务工作流
 - 从「聊天机器人外挂」进化为文件、上下文、智能体、插件真正共存的工作台
@@ -46,7 +46,7 @@
 
 ## 这是什么
 
-AI Workdeck 社区版是 AI Workdeck 的开源内核，不等于完整的商业 SaaS 产品。开源内核的目的，是让开发者、律所、法律科技团队和文档 AI 团队可以审查、私有部署、集成和扩展这套核心工作流基础设施。
+AI WorkDeck 社区版是 AI WorkDeck 的开源内核，不等于完整的商业 SaaS 产品。开源内核的目的，是让开发者、律所、法律科技团队和文档 AI 团队可以审查、私有部署、集成和扩展这套核心工作流基础设施。
 
 ## 下载即用
 
@@ -56,14 +56,14 @@ AI Workdeck 社区版是 AI Workdeck 的开源内核，不等于完整的商业 
 
 | 平台 | 安装包 | 说明 |
 |---|---|---|
-| macOS（Apple Silicon） | `AI Workdeck-<version>-arm64.dmg` | 已签名并公证 |
-| Windows | `AI Workdeck Setup <version>.exe` | 暂未代码签名，SmartScreen 可能提示，选择「仍要运行」即可 |
+| macOS（Apple Silicon） | `AI WorkDeck-<version>-arm64.dmg` | 已签名并公证 |
+| Windows | `AI WorkDeck Setup <version>.exe` | 暂未代码签名，SmartScreen 可能提示，选择「仍要运行」即可 |
 
 > Intel 芯片 Mac 的构建已停止（上游 Python 依赖不再提供 x86_64 版本），旧版本 Release 中仍保留最后一个 Intel dmg。
 
 双击安装。首次启动会有配置向导，选择一个 AI 提供方即可：填一个云端 API Key，或用 [Ollama](https://ollama.com) 跑完全本地的模型（零 Key，数据不出本机）。无需 Java、Docker 或 PostgreSQL——后端、精简版 JRE 和本地数据库都已打进安装包。
 
-> 桌面版是体验 AI Workdeck 最快的方式。想自部署完整服务栈或参与开发，请看下方[快速开始](#快速开始)。
+> 桌面版是体验 AI WorkDeck 最快的方式。想自部署完整服务栈或参与开发，请看下方[快速开始](#快速开始)。
 
 ## 获取与解锁
 
@@ -87,7 +87,7 @@ AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ
 |---|---|
 | 官网 | [aiworkdeck.com](https://www.aiworkdeck.com/zh) |
 | 产品视频 | [功能演示视频](https://www.aiworkdeck.com/videos/intro.mp4) |
-| 功能演练 | [AI Workdeck 功能演练](https://www.aiworkdeck.com/zh/showcase) |
+| 功能演练 | [AI WorkDeck 功能演练](https://www.aiworkdeck.com/zh/showcase) |
 
 ## 界面截图
 
@@ -130,7 +130,7 @@ flowchart TB
 
 ## 数据处理与隐私
 
-AI Workdeck 为**自托管、私有化部署**而设计。下图标注了哪些组件在本地处理数据、哪些走外部服务：
+AI WorkDeck 为**自托管、私有化部署**而设计。下图标注了哪些组件在本地处理数据、哪些走外部服务：
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -149,8 +149,8 @@ AI Workdeck 为**自托管、私有化部署**而设计。下图标注了哪些�
 │                                                                 │
 ├───────────────────────────── 可选外部服务 ───────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
-│  │   OCR    │  │   TTS    │  │  企业数据  │  │  Gemini /    │   │
-│  │ (阿里云)  │  │(ElevenLb)│  │ (企查查)  │  │  OpenRouter  │   │
+│  │   OCR    │  │ 会议转写  │  │  企业数据  │  │  Gemini /    │   │
+│  │ (阿里云)  │  │ (听悟)    │  │ (企查查)  │  │  OpenRouter  │   │
 │  │  外部    │  │  外部     │  │  外部     │  │   可配置      │   │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
@@ -164,13 +164,14 @@ AI Workdeck 为**自托管、私有化部署**而设计。下图标注了哪些�
 | PPTX 生成 | 本地（Docker） | ✅ 可以 | 无外部调用 |
 | 敏感信息脱敏 | 本地（正则） | ✅ 可以 | 中文 PII 模式，无外部调用 |
 | 文档存储 | 本地文件系统 | ✅ 可以 | 可配置：本地 / OSS / S3 |
-| OCR | **外部**（阿里云） | ⚠️ 无本地回退 | 可关闭 |
-| 语音合成 | **外部**（ElevenLabs） | ⚠️ 无本地回退 | 可关闭 |
-| 企业数据查询 | **外部**（企查查） | ⚠️ 无本地回退 | 可选功能 |
+| OCR | **平台代采**（经我们的服务器转阿里云） | 无本地回退 | 全新安装的默认档；可改自备 Key 直连或停用 |
+| 语音合成 | 本地引擎（随包 Kokoro） | 可以 | 只有本机一档，无云端通路 |
+| 企业数据查询 | **平台代采**（经我们的服务器转企查查） | 无本地回退 | 全新安装的默认档；可改自备 Key 直连或停用 |
+| 会议录音转写 | **平台代采**（音频经我们的对象存储中转，转写完成即删） | 后续版本随包发出本机引擎 | 全新安装的默认档；可改自备 Key 直连或停用 |
 | 云端大模型 | **外部**（Gemini/OpenRouter） | ✅ 可换 Ollama | 提供方可配置 |
 | 匿名使用统计 | 本地账本 + 每日聚合计数上报 | ✅ 可关闭 | 仅计数与枚举值，无内容；设置一键关，见 legal/PRIVACY.md |
 
-**离线 / 内网隔离部署**：Ollama + 本地存储 + MinerU + PPTX 服务的组合可以让所有文档完全不出内网。关闭 OCR、TTS 与云端模型后，核心工作区、文档编辑、智能体编排与尽调工作流均可正常使用。
+**离线 / 内网隔离部署**：Ollama + 本地存储 + MinerU + PPTX 服务的组合可以让所有文档完全不出内网。关闭 OCR、企业数据、会议转写与云端模型后，核心工作区、文档编辑、智能体编排与尽调工作流均可正常使用（语音合成本来就在本机，不必关）。
 
 ## 证据链与审计现状
 
@@ -193,9 +194,9 @@ AI Workdeck 为**自托管、私有化部署**而设计。下图标注了哪些�
 
 ## 律所使用许可 FAQ
 
-### 律所内部使用 AI Workdeck，需要公开我们的修改吗？
+### 律所内部使用 AI WorkDeck，需要公开我们的修改吗？
 
-**通常不需要——但有一个值得理解的细节。** AGPLv3 保障你运行软件、以及为自用而修改软件的权利。内部运行*未修改*的副本不产生任何源码披露义务。如果你*修改*了 AI Workdeck，并通过网络把修改版提供给他人使用——这可能包括你所内律师和员工把它当内部 Web 应用使用——AGPLv3 第 13 条可能要求你向**这些用户**提供修改版的对应源码。这些源码留在所内即可：你不需要向公众或向我们公开。如果你希望修改、插件或集成保持专有、完全不受 AGPLv3 约束，商业许可可以彻底移除 copyleft 义务。
+**通常不需要——但有一个值得理解的细节。** AGPLv3 保障你运行软件、以及为自用而修改软件的权利。内部运行*未修改*的副本不产生任何源码披露义务。如果你*修改*了 AI WorkDeck，并通过网络把修改版提供给他人使用——这可能包括你所内律师和员工把它当内部 Web 应用使用——AGPLv3 第 13 条可能要求你向**这些用户**提供修改版的对应源码。这些源码留在所内即可：你不需要向公众或向我们公开。如果你希望修改、插件或集成保持专有、完全不受 AGPLv3 约束，商业许可可以彻底移除 copyleft 义务。
 
 ### 网络使用条款（AGPLv3 第 13 条）怎么理解？
 
@@ -209,13 +210,19 @@ AI Workdeck 为**自托管、私有化部署**而设计。下图标注了哪些�
 当前架构中插件在进程内运行。在 AGPLv3 下，copyleft *可能*延伸到专有插件。如果贵所计划构建专有工作流扩展，**商业许可**为以下场景提供干净的法律基础：
 - 闭源插件与集成
 - 不披露源码的专有本地化部署
-- 基于 AI Workdeck 内核构建的商业 SaaS 产品
+- 基于 AI WorkDeck 内核构建的商业 SaaS 产品
 
 详见 [`legal/COMMERCIAL-LICENSE.md`](legal/COMMERCIAL-LICENSE.md)，或联系 [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com)。
 
 ### 我们的数据去哪了？
 
-在 Ollama + 本地存储 + Docker 服务的自托管部署中，**文档永远不离开你的网络**。文档与合同内容、AI 对话文本、文件名、项目与客户信息永远不出本机。应用默认分享匿名聚合使用统计（仅每日功能使用计数，关联随机安装标识），用于改进产品；可在设置中一键关闭，采集口径详见 [`legal/PRIVACY.md`](legal/PRIVACY.md)。可选外部服务（OCR、TTS、云端模型）均需显式配置，且可完全关闭。
+**AI 对话不经过我们的服务器。** 对话内容由你的机器直接发往所选模型提供商：选本地 Ollama 时只在本机处理，选云端提供商时发往该第三方；即便用「AI WorkDeck 云端」这一档，我们的服务器也只参与密钥签发与用量结算。因此文档与合同内容、AI 对话文本、文件名、项目与客户信息不流经我们的服务器；在 Ollama + 本地存储 + Docker 服务的自托管部署中，**它们根本不离开你的网络**。
+
+**平台代采档会经过我们的服务器。** 桌面版全新安装时，图片文字识别、联网搜索、企业工商信息、证券财务数据、法律法规检索与会议录音转写默认落在「平台代采」档——由 AI WorkDeck 统一向供应商采购、按 Credits 计费，不必自备 Key；该档下本次调用必需的内容会经我们的服务器转给对应供应商。其中只有会议录音的音频文件会在我们的对象存储中转，转写完成即删除，另有 24 小时生命周期规则兜底；其余各项只在调用当时透传，不留存请求内容。这六家供应商全部在境内。语音合成不在此列——它只有本机一档，随包的引擎在你的机器上合成，不出本机。逐项口径（经过什么、存放多久、何时删除）见 [`legal/PRIVACY.md`](legal/PRIVACY.md)。
+
+**每一项都能改档。** 「系统管理 → 平台服务」里可把任一项切成自备 Key（桌面端直连该供应商，不经过我们）或本地档，也可整项停用；已经填过自备 Key 的存量安装不会被切走。团队自建服务器部署与 Office 插件恒为自备 Key，平台代采档不对它们开放。
+
+应用默认分享匿名聚合使用统计（仅每日功能使用计数，关联随机安装标识），用于改进产品；可在设置中一键关闭，采集口径同见 [`legal/PRIVACY.md`](legal/PRIVACY.md)。
 
 ## 快速开始
 
@@ -260,7 +267,7 @@ chmod +x restart-all.sh
 | MinerU 服务 | `http://localhost:8001` |
 | EasyVoice | `http://localhost:9549` |
 
-常见可选提供方：OpenRouter、Gemini、企查查、Tushare、ElevenLabs、北大法宝与对象存储。审查代码或运行基础工作台并不要求配齐所有提供方。
+常见可选提供方：OpenRouter、Gemini、企查查、Tushare、北大法宝、阿里云（OCR 与听悟转写）与对象存储。审查代码或运行基础工作台并不要求配齐所有提供方。
 
 ## 仓库结构
 
@@ -298,7 +305,7 @@ chmod +x restart-all.sh
 
 ## 许可
 
-AI Workdeck 社区版基于 GNU Affero General Public License v3.0 发布。
+AI WorkDeck 社区版基于 GNU Affero General Public License v3.0 发布。
 
 如果你修改了本项目并将其作为网络服务提供，AGPLv3 通常要求你向该服务的用户提供对应源码。
 
@@ -311,7 +318,7 @@ AI Workdeck 社区版基于 GNU Affero General Public License v3.0 发布。
 
 详见 [LICENSE](legal/LICENSE) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md)。商业许可请联系 [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com)。
 
-**AI Workdeck®** 是中国注册商标（第 9、35、42 类）。欢迎在上述许可下基于内核构建产品，但将 **AI Workdeck** 名称或标识用于商业产品需要品牌或认证协议——见 [TRADEMARKS.md](legal/TRADEMARKS.md) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md) 中的**品牌与认证计划**。
+**AI WorkDeck™** 是我们的未注册文字商标；AI WorkDeck 标识已在中国注册（第 9 类，注册号 89857424）。欢迎在上述许可下基于内核构建产品，但将 **AI WorkDeck** 名称或标识用于商业产品需要品牌或认证协议——见 [TRADEMARKS.md](legal/TRADEMARKS.md) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md) 中的**品牌与认证计划**。
 
 ## 背景
 

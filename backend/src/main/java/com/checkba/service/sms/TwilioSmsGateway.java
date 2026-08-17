@@ -46,7 +46,7 @@ public class TwilioSmsGateway implements SmsGateway {
                             @Value("${sms.intl.api-key-sid:}") String apiKeySid,
                             @Value("${sms.intl.auth-token:}") String authToken,
                             @Value("${sms.intl.messaging-service-sid:}") String messagingServiceSid,
-                            @Value("${sms.intl.template:Your AI Workdeck verification code is {code}. It expires in 5 minutes.}")
+                            @Value("${sms.intl.template:Your AI WorkDeck verification code is {code}. It expires in 5 minutes.}")
                             String template) {
         this.transport = transport;
         this.enabled = enabled;

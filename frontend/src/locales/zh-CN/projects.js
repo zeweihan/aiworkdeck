@@ -3,13 +3,13 @@ export default {
   // project-list.vue：页头与空态
   myProjects: '我的项目',
   pullFromTeamLibrary: '从团队案件库取一份案卷',
-  newProjectBtn: '+ 新建项目',
   personalCenter: '个人中心',
   allProjects: '全部项目',
   loading: '加载中...',
   clientEmptyHint: '律师把案卷分享给你之后，会出现在这里',
-  plusSign: '+',
   newProject: '新建项目',
+  createSectionTitle: '新建',
+  emptyHint: '还没有案卷。从下面开始：打开一个已有的文件夹，或者新建一个。',
   // project-list.vue：卡片
   delete: '删除',
   managerLabel: '项目负责人: {name}',

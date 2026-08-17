@@ -477,7 +477,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* Color Config - AI Workdeck Palette */
+/* Color Config - AI WorkDeck Palette */
 $color-primary: #1A5336; // Forest Green
 $color-accent: #5BD197; // Mint Green
 $color-accent-pale: #E6F9F0;

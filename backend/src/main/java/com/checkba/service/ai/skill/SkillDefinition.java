@@ -53,7 +53,7 @@ public class SkillDefinition {
      */
     private boolean enabledByDefault = true;
 
-    /** 展示用作者名（skill.yml: author），如 "AI Workdeck" */
+    /** 展示用作者名（skill.yml: author），如 "AI WorkDeck" */
     private String author;
 
     /** 作者主页/仓库链接（skill.yml: author_url） */

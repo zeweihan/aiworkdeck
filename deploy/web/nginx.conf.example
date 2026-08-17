@@ -1,4 +1,4 @@
-# AI Workdeck Web 服务器版 nginx 配置（Phase A2，见 docs/HARMONYOS_PLAN.md）
+# AI WorkDeck Web 服务器版 nginx 配置（Phase A2，见 docs/HARMONYOS_PLAN.md）
 #
 # 三个关键点，缺一个编辑器就起不来：
 # 1) 全站 COOP/COEP —— LOWA 需要 SharedArrayBuffer，crossOriginIsolated 只能来自

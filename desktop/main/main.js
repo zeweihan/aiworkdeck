@@ -5,6 +5,7 @@ const { createBackendDescriptor } = require('./services/backend-service')
 const { createPptxDescriptor } = require('./services/pptx-service')
 const { createMineruDescriptor } = require('./services/mineru-service')
 const { createKokoroDescriptor } = require('./services/kokoro-service')
+const { createAsrDescriptor } = require('./services/asr-service')
 const { createModelManager } = require('./services/model-manager')
 const { initLocalFileService } = require('./file-service')
 
@@ -1295,7 +1296,10 @@ ipcMain.handle('checkba:ui-confirm', async (_evt, payload) => {
 // 组件 → 对应本地服务（下载完成自动拉起、「启用」按钮、删除前停服 都查这张表）
 const COMPONENT_SERVICE = {
   'mineru-models': 'mineru-service',
-  'kokoro-models': 'kokoro-service'
+  'kokoro-models': 'kokoro-service',
+  // asr-service 没模型也照常跑（就绪探测要能分清「服务没起」与「模型没下」），
+  // 这条映射在这里是为了另外两个用途：删模型前先停服务、状态页标「运行中」
+  'asr-models': 'asr-service'
 }
 
 // 打包态 pysvc 不再随 .app 携带目录，而是 Resources/pysvc.tar.gz 首启解压到
@@ -1409,6 +1413,7 @@ function createServices() {
   mgr.register(createPptxDescriptor())
   mgr.register(createMineruDescriptor(modelManager))
   mgr.register(createKokoroDescriptor(modelManager))
+  mgr.register(createAsrDescriptor())
   return mgr
 }
 
@@ -1620,7 +1625,7 @@ app.whenReady().then(() => {
               const { t: tL } = require('./app-language')
               if (evt.type === 'ready' && Notification.isSupported()) {
                 new Notification({
-                  title: tL({ zh: 'AI Workdeck 更新已就绪', en: 'AI Workdeck Update Ready' }),
+                  title: tL({ zh: 'AI WorkDeck 更新已就绪', en: 'AI WorkDeck Update Ready' }),
                   body: tL({
                     zh: `新版本 ${evt.version} 已下载完成，重启应用后生效。`,
                     en: `Version ${evt.version} has been downloaded. Restart the app to apply it.`,
@@ -1628,7 +1633,7 @@ app.whenReady().then(() => {
                 }).show()
               } else if (evt.type === 'major-available' && Notification.isSupported()) {
                 new Notification({
-                  title: tL({ zh: 'AI Workdeck 新版本发布', en: 'New AI Workdeck Release' }),
+                  title: tL({ zh: 'AI WorkDeck 新版本发布', en: 'New AI WorkDeck Release' }),
                   body: tL({
                     zh: `大版本 ${evt.major} 已发布，请前往官网下载完整安装包。`,
                     en: `Major version ${evt.major} is available. Download the full installer from the website.`,

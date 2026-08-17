@@ -25,7 +25,7 @@ public class GlobalMailGateway extends SmtpMailGateway {
             @Value("${mail.global.username:resend}") String username,
             @Value("${mail.global.password:}") String password,
             @Value("${mail.global.from:}") String from,
-            @Value("${mail.from-name:AI Workdeck}") String fromName) {
+            @Value("${mail.from-name:AI WorkDeck}") String fromName) {
         super(enabled, host, port, username, password, from, fromName);
     }
 

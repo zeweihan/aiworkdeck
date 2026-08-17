@@ -46,9 +46,10 @@ description: 侧边栏与工作台外壳领域。任务涉及左侧 rail/左栏�
 rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当前 activeFile 存 lastActiveIdsByMode[oldKey]（:3005）→ 同 key 则收/展 sidebarCollapsed（:3011），异 key 则设 leftPaneKey 并展开（:3014）→ 动态插件另在中间开 tab（openFile fileType:'plugin'，:3018）→ 恢复该模式记忆的左右 tab（:3029）→ 持久化到 uni.storage（:3055）。
 顶栏三开关都在 $nextTick 调 triggerWorkbenchResize 派发 window resize 让编辑器/iframe 重排；toggleAiPanel 打开时刷新 AI 上下文 + fetchChatHistory。
 
-## 左栏入口（frontend/src/config/leftSidebarPlugins.js，57 行）
+## 左栏入口（frontend/src/config/leftSidebarPlugins.js）
 
-固定入口：files(资源管理器→FileTree)、dd-files(尽调文件)、shareholder-meeting(股东大会)、search、easyvoice、desensitize、version(版本记录→VersionPanel，见 `.claude/agents/version-control.md`)；requiresSkill 门控入口：litigation-visual(诉讼可视化)、meeting-recorder(会议录音→MeetingRecordingPanel，skill 启用才出现在 rail；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（找不到回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。rail 齿轮对所有人可见，admin 页/接口后端 requireAdmin（用户名 admin）。
+固定入口：files(资源管理器→FileTree)、dd-files(尽调文件)、search、easyvoice(**展示名「语音合成」**——路由键仍是 `easyvoice`，那是 uni.storage 里 `leftPaneKey` 的存量值，改键要迁数据；`EasyVoice` 是早已停用的 Docker 服务代号，不再当产品名用)、desensitize、version(版本记录→VersionPanel，见 `.claude/agents/version-control.md`)；
+**shareholder-meeting(股东大会核查) 已于 2026-08-17 下线**：入口从本数组移除即等于功能隐藏，`ShareholderMeetingPanel.vue` / `api.js` 的 `/api/shareholder-meeting/*` / 后端 controller 与实体全部保留（存量案卷数据还在库里），skill 改成 `enabled_by_default: false`。注意 `SkillRegistry` 的种子化只在「第一次见到这个 id」时生效，**存量安装里它仍是启用状态**，要在插件广场手动停用。`EvalHarness` 里显式 `setEnabled(..., true)` 把它开回去——那条回放用例守的是编排契约，与业务在不在产品里无关。requiresSkill 门控入口：litigation-visual(诉讼可视化)、meeting-recorder(会议录音→MeetingRecordingPanel，skill 启用才出现在 rail；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（找不到回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。rail 齿轮对所有人可见，admin 页/接口后端 requireAdmin（用户名 admin）。
 **插件广场入口（2026-08 二改：VS Code 扩展栏形态）**：rail 广场按钮 goToPluginMarket → `toggleLeftPane('market')` 开左栏列表面板（`MarketSidebarPanel`，leftPaneKey='market'，leftPaneTitle 特判）；点列表行 → `openMarketDetail(spec)` 在中栏开详情 tab（`MarketDetailPane`，`tabType:'market-detail'`、单例、isTabVisible 常显、直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported——与浏览器 tab 同法）。独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。详见 plugin-marketplace.md。
 
 ## 协作入口（PR-E，2026-08-06）
@@ -72,16 +73,19 @@ launch（**启动页**）/ unlock / identity / login / newproject / **project-li
 
 代价是「project-overview」在代码里指工作台、在产品语言里指项目概览页。写代码时以路由为准，写文案时以术语表为准。
 
-**三级导航（2026-08）**：项目列表页 → 项目概览页 → 工作台。总规则两条——
-① **五条「直达工作台」的出口一条都不改**（启动直达 `launch.vue:97`、浏览器会话恢复 `login.vue:299`、应用菜单最近打开 `App.vue:45`、打开本地文件夹/文件 `ideOpen.js:22`、顶栏最近项目切换器 `project-overview.vue:2747`）——这些语境的用户意图是「立刻干活」，强插概览页只是多一跳；
-② **所有「去我的项目」的落点统一到项目列表页**（`launch.vue:99` 兜底、`login.vue:292` CLIENT 分支 / `:301` 会话恢复兜底 / `:394` 普通登录 / `:474` 注册成功、`newproject/index.vue:176` 返回、工作台 `goAllProjects`:2755）。
+**两级导航（2026-08 二改，原三级已收）**：项目列表页 → 工作台；**概览是工作台里的一个标签**。
+总规则三条——
+① **启动一律落项目列表页**（`launch.vue` 不再读 `checkba_last_project_id` 直达工作台）。理由是维护者的产品口径：开机先看见自己有哪些案卷。**其余四条「直达工作台」的出口一条都不改**（浏览器会话恢复 `login.vue`、应用菜单最近打开 `appMenuBridge.js`、打开本地文件夹/文件 `ideOpen.js`、顶栏最近项目切换器 `switchToProject`）——那几处的用户意图明确指向某一个项目；
+② **所有「去我的项目」的落点统一到项目列表页**（`launch.vue` 启动、`login.vue` 四处、`newproject/index.vue` 返回、工作台 `goAllProjects`）；
+③ **列表点卡片 `reLaunch` 直达工作台**，中间不再插概览页。
 
-导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|project-overview（有最近项目）|**project-list**（无最近项目）；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list navigateTo→project-home**（`goToProject`，`onCloudAccepted` 复用同一方法）；**project-home reLaunch→project-overview**（顶部「进入工作台」，`openFileId` 原样透传；点 AI 对话历史时另带 `conversationId`，**工作台侧已消费**——`onLoad` 读到 `conversationId` 后调既有 `loadHistoryChat({ conversationId })`（`project-overview.vue:4827`），它内部要 `$refs.chatInterface`，所以只能在 mounted 且 AI 面板已渲染之后调）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：列表↔概览会被反复来回点，双向 navigateTo 堆实例，而纯 redirectTo 在「列表→概览→列表」链上同样造第二个列表实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`:41，工作台参与的跳转一律 reLaunch）；**project-overview reLaunch→project-home**（在 `.switcher-all` **之前**插的 `.switcher-home`「项目概览」，是工作台通往概览页的唯一入口）；overview navigateTo userprofile/admin（**这两条保持 navigateTo 不动**——它们依赖页面栈保留实例以便 onShow 回流刷新，见 `project-overview.vue:2287` 的 onShow 重新接管全局处理器）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；退出 reLaunch login。
+导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|**project-list**（其余一律）；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list reLaunch→project-overview**（`goToProject`，`onCloudAccepted` 复用同一方法）；**概览在工作台内是标签**（rail 第一个按钮 `openProjectHomeTab`，`tabType:'project-home'`、单例、`isTabVisible` 常显，内容组件 `components/project-home/ProjectHomePane.vue`；顶栏切换器的 `.switcher-home`「项目概览」调的是同一个方法）；**project-home 薄壳页只留给直链/深链**（`goWorkbench` 仍 reLaunch 进工作台并透传 `openFileId`；点 AI 对话历史带 `conversationId`，工作台 `onLoad` 消费后调 `loadHistoryChat`——它要 `$refs.chatInterface`，只能在 AI 面板已渲染之后调；**在工作台标签里点历史对话不跳页**，走 `openConversationInPanel` 就地切会话）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：双向 navigateTo 堆实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`，工作台参与的跳转一律 reLaunch）；overview navigateTo userprofile/admin（**这两条保持 navigateTo 不动**——它们依赖页面栈保留实例以便 onShow 回流刷新）；**admin ⇄ userprofile 互跳用 redirectTo**（同级页面不压栈；两边都 navigateTo 会互相弹成死循环，来处永远够不着）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；退出 reLaunch login。
+**全局返回键**：`utils/globalBack.js`，body 级单例（同拖拽条/反馈浮窗），落在各页顶部那条 38px 拖拽条里；可见判据只有「页面栈深度 > 1」，工作台与 project-home 走豁免名单（自带左上角导航）。新页不需要各自补返回按钮。
 **启动链只用 reLaunch，不用 navigateTo**——分流页不该留在页面栈里。
 **新页 pages.json 注册必须逐条显式写 `navigationStyle: custom`**：globalStyle 里没有这一项（只有 navigationBarTextStyle / TitleText / BackgroundColor / backgroundColor），漏写会得到一个系统导航栏，与全应用自绘顶栏形制冲突。
 **个人中心配套三改（已落地，实测行号）**：`userprofile.vue:324` 的 `activeTab` 默认值是 `'work_log'`、`:326` 起的 `tabs` 数组已不含 `{ key: 'projects', label: '我的项目' }`（只剩工作记录/收藏/代办/设置四项）、`onLoad`（:379）里 `$nextTick` 直接调一次 `loadActivityLogs()`（**不是删除**，:409）——工作记录 tab 是懒加载的，另一个触发点是 `switchTab`（:547）里 `key === 'work_log'` 分支（`loadActivityLogs` 定义在 :561）；默认 tab 落在懒加载 tab 上却不在 `onLoad` 里补调一次，就会得到一个默认打开却永远空白的 tab。
 **identity（本机工作区选择，2026-08-05）**：单机免登下所有请求解析为同一个「本机用户」，老安装的库里常有多个历史账号（admin 往往是空壳，真实数据在用户自己注册的账号名下）。后端 `LocalIdentityService` 按数据量解析，多个账号都有数据时不猜，`GET /api/local-identity/status` 回 needsSelection，launch 页据此分流到 identity 页；选定经 `POST /api/local-identity/select` 持久化到 SystemSetting，之后不再出现。补救入口在 admin 页「账户与用量」的「本机工作区」卡（候选 >1 才渲染）。
-**IDE 化体验对齐第二轮（2026-07-31，同分支）**：① 启动直达——login 页 `tryAutoResume()` 存储会话有效即 reLaunch 上次项目（`utils/recentProjects.js` 的 `checkba_last_project_id`），登录页只在会话失效时出现（**PR-A 去登录后这条只对浏览器访问团队服务器有效**：桌面端启动链已改为 launch 页分流，直达逻辑迁到 `launch.vue`，登录页在桌面端不再出现）；② 桌面应用菜单 `desktop/main/app-menu.js`（文件→打开文件夹 Cmd+O/打开文件/新建项目文件夹/最近打开动态子菜单；编辑菜单是 editMenu role，删了它 mac 输入框 Cmd+C/V 全灭；窗口菜单刻意无 close role——Cmd+W 留给渲染层关标签），动作经 `checkba:menu-action` 到 App.vue 全局处理器（`utils/ideOpen.js` 共用流程）；③ overview 键位 Cmd+P（`QuickOpenPanel.vue` 快速打开，document 捕获段拦键：uni input 不透传 keydown）/Cmd+W 关活跃标签，焦点在 LOWA webview 内收不到属已知边界；④ 顶栏项目名旁最近项目切换器（`.project-switcher`/`.switcher-menu`）与工作状态点（`.work-status-chip`，复用 `checkAdoptConflict` 的 /status，working/onDraft 才渲染）；⑤ 窗口标题「文件 — 项目 — AI Workdeck」（watch activeFileIdLeft/project.name）；⑥ 拖文件夹到窗口（App.vue capture 段 drop，单目录才接管，`fs.getPathForFile` preload helper）与 macOS open-file 事件（main.js `dispatchOpenPath`，窗口未就绪先存后发）都走 open-local。文件树方向键导航有意缓做（全局拦方向键与编辑器输入冲突）。
+**IDE 化体验对齐第二轮（2026-07-31，同分支）**：① 启动直达——login 页 `tryAutoResume()` 存储会话有效即 reLaunch 上次项目（`utils/recentProjects.js` 的 `checkba_last_project_id`），登录页只在会话失效时出现（**PR-A 去登录后这条只对浏览器访问团队服务器有效**：桌面端启动链已改为 launch 页分流，直达逻辑迁到 `launch.vue`，登录页在桌面端不再出现）；② 桌面应用菜单 `desktop/main/app-menu.js`（文件→打开文件夹 Cmd+O/打开文件/新建项目文件夹/最近打开动态子菜单；编辑菜单是 editMenu role，删了它 mac 输入框 Cmd+C/V 全灭；窗口菜单刻意无 close role——Cmd+W 留给渲染层关标签），动作经 `checkba:menu-action` 到 App.vue 全局处理器（`utils/ideOpen.js` 共用流程）；③ overview 键位 Cmd+P（`QuickOpenPanel.vue` 快速打开，document 捕获段拦键：uni input 不透传 keydown）/Cmd+W 关活跃标签，焦点在 LOWA webview 内收不到属已知边界；④ 顶栏项目名旁最近项目切换器（`.project-switcher`/`.switcher-menu`）与工作状态点（`.work-status-chip`，复用 `checkAdoptConflict` 的 /status，working/onDraft 才渲染）；⑤ 窗口标题「文件 — 项目 — AI WorkDeck」（watch activeFileIdLeft/project.name）；⑥ 拖文件夹到窗口（App.vue capture 段 drop，单目录才接管，`fs.getPathForFile` preload helper）与 macOS open-file 事件（main.js `dispatchOpenPath`，窗口未就绪先存后发）都走 open-local。文件树方向键导航有意缓做（全局拦方向键与编辑器输入冲突）。
 **newproject 已 IDE 化（2026-07-31）**：桌面态三动作「打开文件夹/新建项目文件夹/打开文件」走 `window.checkbaDesktop.fs.showOpenDialog` + `POST /api/projects/open-local`（同一 localRoot 重复打开复用项目并幂等重扫导入，见 `LocalProjectService`）；浏览器降级为托管空白项目（BLANK）；成功后 reLaunch 进 overview，单文件过渡版带 `openFileId` 查询参数（`fileOpenTabs.js` 的 `openPendingLocalFile`）。项目类型选择表单已删除（`config/projectTypes.js` 仅剩 `getProjectTypeLabel` 供存量项目卡片显示）。FileTree 右键新增「在访达中显示」（`reveal-file` → overview `onRevealFile` → `/local-path` 端点 + `fs.showItemInFolder` IPC）。
 
 ## 窗口外壳与菜单栏（2026-08-16）
@@ -144,12 +148,42 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
 **页面栈地雷（本领域核心机制）**：navigateTo 反复进入 project-overview 不销毁旧实例——页面栈多实例并存，每个都持有全局监听。守卫模式：活跃实例指针 `window.__checkbaActiveOverviewVm` + isActiveOverviewInstance() 判活跃、去重状态挂 window 不挂实例、只清/接管指向自己的指针（beforeUnmount/onShow/mounted 三处配合）。切换项目用 reLaunch 避免堆叠。**外壳里新增任何全局订阅必须套用此模式**（PR#148/#151）。
 **新页同样成立**：`project-home.vue` 套同一套守卫，但**必须用自己的指针名** `window.__checkbaProjectHomeVm`——复用工作台的 `__checkbaActiveOverviewVm`（:2086/:2291/:2352 登记与清理，:3444 判活跃）会让工作台的全局事件被概览页拦掉。`project-home` 的轮询纪律：只在 onLoad 与 onShow 各刷一次，不起定时器；**绝不调 `getVersionStatus` / `/version/status`**（enabled 时会一路走到 `ProjectRepoService` 跑两次 `git add "."`，工作台已有 ≥7 处触发点在喂同一份状态，概览页再打第三次是纯浪费且会与工作台争 per-project 锁）。要「最近修改」时间取 `/version/timeline` 最新一条的 when。
 
+## 左栏面板的标题与密度（2026-08-17）
+
+**左栏标题只有一个出处**：外壳的 `.sidebar-header`（`project-overview.vue`，渲染
+`leftPaneTitle`）。此前各面板还各画各的 header，于是「诉讼可视化」「会议录音」
+「股东大会核查」的标题在同一屏里出现两次，搜索面板靠把自己那份 `panel-title`
+**注释掉**躲过去，dd-files 则让外壳整个跳过它（`leftPaneKey !== 'dd-files'`）——
+四种写法并存。现在一律：**外壳出面板标题，面板自己只画分组头**。
+dd-files 那个例外已取消，它 header 里的「＋」挪进了面板内部的分组头。
+
+**密度令牌在 `App.vue` 的 `html { --awd-panel-* }`**，基准是插件广场
+`MarketSidebarPanel`（维护者点过名的形态）：`--awd-panel-pad-x:10px` /
+`--awd-panel-sec-h:26px`（分组头行高）/ `--awd-panel-row-h:28px` /
+`--awd-panel-fs-sec:11px`(配 700 字重) / `--awd-panel-fs:12px` /
+`--awd-panel-border:#E9ECEF` / `--awd-panel-accent:#1A5336` 等。
+**用 CSS 自定义属性而不是 scss 变量**：各面板的 `<style scoped>` 有的写 scss
+有的写纯 css，自定义属性两边都能用且天然穿透 scoped。已套用：SearchPanel /
+EasyVoicePane / DesensitizePane / LitigationVisualPanel / MeetingRecordingPanel /
+DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定义边距。
+
+分组头的统一形制（各面板类名前缀不同但结构一致）：
+`26px 行高 + 11px/700 标题 + 计数徽章（圆角 999px、#F1F3F5 底）+ spacer + 右侧动作`。
+
 ## CSS 体系
 
 - **外壳形态（2026-08 IDE 布局升级；配色维持原浅色体系）**：曾整体深绿化（PR#243）但**维护者明确否决深色配色、已回退**——布局件保留：26px 底部状态条 `.status-bar`（等宽字体；左=variables/favorites/clipboard 工具入口 openToolFromStatusBar()，与底部抽屉联动；右=活跃文件/分屏/录制/版本工作状态真实信号）、顶栏/侧栏图标 SVG 化（config/icons.js ICONS + leftSidebarPlugins svgPaths，双态 PNG 不再新增）、插件广场 workbench 内嵌 tab。**配色红线：外壳保持浅色（白/#F8F9FA chrome + 森林绿 #1A5336 与 mint #5BD197 点缀），不要再做深色 chrome**。uni.scss 尾部的 `$awd-*` 令牌保留备用但外壳当前未用；project-overview.scss 头部自有浅色调色板是实际用的。
 - 全局覆盖：`frontend/src/App.vue`（:15-65 只覆盖 uni-modal/uni-toast）。
 - **awd-\* 类名约定**（King IDE 品牌清零后的通用弹窗/按钮样式，PR#171）：awd-dialog/-mask/-header/-title/-body/-footer、awd-btn/-primary/-secondary/-danger、awd-field/awd-input。**没有集中定义**——在 project-overview.vue（~:10180-10300）、ChatInterface.vue（~:2869 起）、FileTree.vue 各自 scoped 重复定义；改样式要多处同步。
 - 外壳布局类：.header-tools:6904、.rail-btn:7009、.sidebar-left:7403/7905、.workbench:7455、.bottom-panel:7283/7510、.compact-mode:7478、.is-resizing:7927。
+- **编辑器标签（`.tab-item`）在 project-overview.scss 里只有一份定义了**。此前有两份：
+  靠前那份是 VS Code 式贴合标签，被靠后那份整个覆盖成死代码，实际生效的是一排
+  10px 全圆角 + 四面描边 + `min-width:100px` 的「筛选 chip」，与下方编辑器完全断开。
+  死代码那 140 行已删（`.tab-icon` 与 close 的 hover/active 配色是其中唯一还活着的
+  片段，已折进现存那份）。现在的形制：36px 满高、方角、无四面描边、右侧 1px 分隔线、
+  激活态白底 + 2px mint 顶线、12px/500 文件名、× 悬停或激活才显形。
+  **`.tab-item` 的高度写死 36px 不用 `height:100%`**：中间隔着 uni `scroll-view`
+  的内层包裹元素，那条 100% 链断了标签会塌成 0 高。
 
 ## 相关文件
 
@@ -157,12 +191,29 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
 - `frontend/src/config/tools.js` — 底部工具面板 tab（WORKBENCH_TOOLS）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
 - `frontend/src/components/FileTree.vue`（5225 行）— 左栏文件树。
 - 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（项目 tab 已搬出，只剩工作记录/收藏/代办/设置四 tab，行数随之变动、不再登记具体数字）、variable-library.vue(543)、admin.vue(4077，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
-- **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
-- **项目概览页** `frontend/src/pages/project-home/project-home.vue` + `project-home.scss`；五个子组件在 `frontend/src/components/project-home/`：`ProfileHeader` / `OverviewStatsBar` / `ActivityFeed` / `TaskSchedule` / `ConversationList`。**九个 e2e 稳定锚点类名**：页面根 `.page-project-home`、项目列表页根 `.page-project-list`、顶部两按钮 `.btn-workbench` / `.btn-project-list`、五个组件根 `.overview-stats-bar` / `.profile-header` / `.activity-feed` / `.task-schedule` / `.conversation-list`——**改这九个名字要同步改 `frontend/tests/app-e2e/run.mjs` 的 J2/J3 段**。档案编辑刻意走行内 input、删除确认走 `uni.showModal`，因此两个新页与五个新组件**都不需要自带 awd-\* 样式副本**（awd-\* 没有集中定义，改成弹窗就必须自带一份 scoped 副本，否则渲染成无样式裸框）。
+- **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。**新建入口在列表下方**（`.create-section`，两张 `.create-card`：打开文件夹 / 新建项目文件夹，走 `utils/ideOpen.js` 的 `openFolderFlow`/`createFolderFlow`，命名弹窗同页）；「单独打开一个文件」已去掉——它造出的是没有归属的临时项目（`openFileFlow` 仍留给应用菜单与拖拽）。浏览器版没有系统文件夹对话框，降级为 navigateTo `newproject` 页填表建托管空白项目。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
+- **项目概览**：内容本体 `frontend/src/components/project-home/ProjectHomePane.vue` + 同目录 `project-home-pane.scss`（**两个宿主共用**：工作台中栏标签、`pages/project-home` 薄壳页）；五个子组件在同目录：`ProfileHeader` / `OverviewStatsBar` / `ActivityFeed` / `TaskSchedule` / `ConversationList`。薄壳页 `frontend/src/pages/project-home/project-home.vue` + `project-home.scss` 只剩顶栏与 query 处理。**十个 e2e 稳定锚点类名**：内容根 `.project-home-pane`、薄壳页根 `.page-project-home`、项目列表页根 `.page-project-list`、薄壳页两按钮 `.btn-workbench` / `.btn-project-list`、五个组件根 `.overview-stats-bar` / `.profile-header` / `.activity-feed` / `.task-schedule` / `.conversation-list`——**改这些名字要同步改 `frontend/tests/app-e2e/run.mjs` 的 J2/J3 段**。取数纪律（请求代、绝不调 `/version/status`）随内容一起搬进了 Pane。档案编辑刻意走行内 input、删除确认走 `uni.showModal`，因此两个新页与五个新组件**都不需要自带 awd-\* 样式副本**（awd-\* 没有集中定义，改成弹窗就必须自带一份 scoped 副本，否则渲染成无样式裸框）。
 - admin 的「AI 功能设置」面板（nav key `ai`）是 AI 供应商与模型的唯一设置入口：三档供应商单选、
   默认/辅助/子 Agent 三个模型下拉（清单来自 `GET /api/ai/models`，前端不许硬编码）、网络区域三选一
   （auto/境内/境外，附判定依据）、本地 Ollama 的地址与模型名。nav 结构未变，改的是该面板内容；
   契约与键名见 ai-chat.md 与 licensing-billing.md。
+- admin 的「平台服务」面板（nav key `platform`，**非 desktopOnly**）是七项外部服务的档位与凭证入口
+  （平台服务网关 P5）。**七家的 21 个 BYOK 字段已从「系统配置」搬到这里**，收在每项的
+  「使用自己的 Key（高级）」折叠区里；「系统配置 → 外部服务」只剩 OpenRouter 那两个字段
+  （它属于 AI 那条通路）。三处必须一起看的约束：
+  ① 当前档位一律读 `GET /api/platform-services` 的 `provider`（后端解析后的**生效值**），
+     不要按凭证是否为空去猜——存量机器上这两件事经常对不上；
+  ② `platformAvailable=false`（团队服务器/云端实例）时「平台代采」这个选项**整个不出现**并给说明，
+     不是摆一个置灰项（决策 D5）；
+  ③ 档位切换**立刻写库**（`POST /api/platform-services/{service}/provider`），不跟着「保存配置」按钮走；
+     凭证字段仍走 `handleSave` 的整表回传。
+  服务的展示元数据（名字/描述/本地档就不就绪）在 `frontend/src/config/platformServices.js`，
+  文案在新命名空间 `locales/{zh-CN,en-US}/platform.js`（首启向导步骤 2 与本面板共用）。
+  深链 `?nav=platform&service=ocr` 会就地展开那一项的折叠区——网关错误提示的逃生门指的就是它。
+- 首启向导（`pages/wizard/wizard.vue`）步骤 2 已从「OCR / 语音 / 企业数据」三组共 9 个输入框
+  换成「平台服务总览 + 就地连接账户」，**默认展开**（这一段的意义就是让用户看见「其余七项不用配」）。
+  它**不拦提交**：没连账户照样能完成设置，向导只拦 AI 供应商那一项（既有行为）。
+  e2e 的 J1 钉死了这个形态（`平台服务` 在、`AccessKey`/`企查查 Key`/`Tushare Token`/`北大法宝 Token` 不在）。
 
 ## 已知地雷
 
@@ -175,6 +226,26 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
   LibreOfficeEditor 上真踩到，加的 watch 静默失效）。往大组件里加块之前先 grep 一遍。
 - **读非响应式源（如 `documentElement.classList`）不能写成 computed**，首次求值后一直
   用缓存（AppMenuBar 的平台判定就这么静默失效过）。要 data + 显式刷新。
+- **`rpx` 在 H5 上是会跟着视口缩放的**：uni-h5 把 rpx 编译成 `rem`（比例 10/320），
+  运行时按移动端口径设根字号——`窗口宽 <= rpxCalcMaxDeviceWidth(默认960) ? 窗口宽 : 375`
+  再除以 23.4375。桌面端窗口拖到 960 以下，根字号从 16px 一路涨到 40px，**全应用
+  rpx 尺寸整体放大到 2.5 倍**（FileTree 149 处 rpx，表现最触目：图标与计数变巨大）。
+  已在 `pages.json` 的 globalStyle 加 `rpxCalcMaxDeviceWidth: 0` 恒走 375 分支关掉，
+  **别把这一行删了**；桌面端新写的固定尺寸一律用 px，不要再引 rpx。
+  实现在 `@dcloudio/uni-h5` 的 `useRem()`。
+- **padding 简写会把「让位」整条吃掉**：交通灯/窗口控件的保留区不要写成
+  `html.is-mac .某顶栏 { padding-left: 88px }`——组件 scoped 样式里任何一条更高
+  权重的 `padding:` 简写都会盖掉它（`.compact-mode .project-header { padding: 0 16px }`
+  权重 (0,4,0)，窗口窄于 1360px 时必现，交通灯直接压在项目名上）。正确写法是
+  在**页面自己的样式表里**、紧跟自己的 padding 简写写一行
+  `padding-left: max(自己的边距, var(--awd-titlebar-safe-inline-start))`
+  （变量定义在 App.vue，非桌面/全屏/非 mac 时为 0，max() 自动退回原值）。
+  **padding 简写在哪出现，让位就得跟到哪**，包括 media query 里的那一份。
+- **不要再用 uni 的 `<picker mode="selector">` 与 `<switch>`**：前者在 H5 上弹的是
+  移动端底部抽屉（滚轮 + 取消/确定），后者尺寸写死只能靠 `transform: scale()` 硬缩。
+  统一用 `components/AwdSelect.vue`（API 与 picker 对齐：range/value，差别是 change
+  直接抛下标；菜单 fixed 定位避开 scroll-view 裁剪，下方装不下时向上开）与
+  `components/AwdSwitch.vue`（change 直接抛布尔值）。
 - uni @tap 在 e2e 驱动下有陷阱（app-e2e 记录）。
 - 布局开关后不调 triggerWorkbenchResize 会导致编辑器/iframe 不重排。
 - 全站（官网侧）禁 emoji 红线不适用于本仓库 UI，但品牌截图有红线（marketing-screenshots 记录）。

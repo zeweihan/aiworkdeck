@@ -3,7 +3,7 @@
 		{
 			"path": "pages/launch/launch",
 			"style": {
-				"navigationBarTitleText": "AI Workdeck",
+				"navigationBarTitleText": "AI WorkDeck",
 				"navigationStyle": "custom"
 			}
 		},
@@ -94,8 +94,15 @@
 	],
 	"globalStyle": {
 		"navigationBarTextStyle": "black",
-		"navigationBarTitleText": "AI Workdeck",
+		"navigationBarTitleText": "AI WorkDeck",
 		"navigationBarBackgroundColor": "#F8F8F8",
-		"backgroundColor": "#F8F8F8"
+		"backgroundColor": "#F8F8F8",
+		// rpx 恒定按 375 基准换算（1rpx = 0.5px）。uni-h5 默认是移动端口径：
+		// 根字号取 `窗口宽 <= 960 ? 窗口宽 : 375`，再除以 23.4375。桌面端窗口一旦
+		// 拖窄到 960 以下，根字号就从 16px 一路涨到 40px，全应用 rpx 尺寸整体放大
+		// 到 2.5 倍（FileTree 用了 149 处 rpx，表现最触目）。把上限设成 0 即永远
+		// 落在 375 分支上，等价于「桌面端不做视口比例缩放」。
+		// 实现见 @dcloudio/uni-h5 的 useRem()。
+		"rpxCalcMaxDeviceWidth": 0
 	}
 }

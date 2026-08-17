@@ -18,7 +18,7 @@ const FALLBACK = {
   current: 'cn',
   baseUrl: 'https://www.aiworkdeck.com',
   accountPageUrl: 'https://www.aiworkdeck.com/zh/account',
-  displayName: 'AI Workdeck',
+  displayName: 'AI WorkDeck',
 }
 
 let cached = null

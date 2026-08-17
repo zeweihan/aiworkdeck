@@ -52,11 +52,11 @@ class SiteMismatchMessageTest {
         p.setDefaultSite("cn");
         SiteProperties.Site cn = new SiteProperties.Site();
         cn.setEnabled(true);
-        cn.setDisplayName("AI Workdeck 国内站");
+        cn.setDisplayName("AI WorkDeck 国内站");
         cn.setBaseUrl(cnBaseUrl);
         SiteProperties.Site intl = new SiteProperties.Site();
         intl.setEnabled(intlEnabled);
-        intl.setDisplayName("AI Workdeck International");
+        intl.setDisplayName("AI WorkDeck International");
         intl.setBaseUrl(INTL);
         p.getSites().put("cn", cn);
         p.getSites().put("intl", intl);
@@ -100,8 +100,8 @@ class SiteMismatchMessageTest {
 
         String message = String.valueOf(license.activate("awdk_whatever").get("message"));
 
-        assertTrue(message.contains("AI Workdeck 国内站"), message);
-        assertTrue(message.contains("AI Workdeck International"), message);
+        assertTrue(message.contains("AI WorkDeck 国内站"), message);
+        assertTrue(message.contains("AI WorkDeck International"), message);
         assertTrue(message.contains("切换站点后重试"), message);
         assertNoLogoutMarkers(message);
     }
@@ -128,8 +128,8 @@ class SiteMismatchMessageTest {
         String message = assertThrows(AccountException.class,
                 () -> account.connect("awdk_" + "x".repeat(43))).getMessage();
 
-        assertTrue(message.contains("AI Workdeck 国内站"), message);
-        assertTrue(message.contains("AI Workdeck International"), message);
+        assertTrue(message.contains("AI WorkDeck 国内站"), message);
+        assertTrue(message.contains("AI WorkDeck International"), message);
         assertNoLogoutMarkers(message);
     }
 

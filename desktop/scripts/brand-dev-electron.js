@@ -1,9 +1,9 @@
-// dev 态品牌名：把 node_modules 里那个 Electron.app 就地改名成 AI Workdeck。
+// dev 态品牌名：把 node_modules 里那个 Electron.app 就地改名成 AI WorkDeck。
 //
 // 为什么必须改包而不是改代码：macOS 菜单栏最左边那个粗体应用名由 AppKit 从**当前运行的
 // .app 包**的 Info.plist:CFBundleName 里读，跟 app.name、跟菜单模板第一项的 label 都无关。
-// 实测（Electron 30 / macOS 26）：app.setName('AI Workdeck') + 模板 label 也写 'AI Workdeck'，
-// 菜单栏照旧显示 Electron；只把包里的 CFBundleName 改掉，菜单栏立刻变成 AI Workdeck。
+// 实测（Electron 30 / macOS 26）：app.setName('AI WorkDeck') + 模板 label 也写 'AI WorkDeck'，
+// 菜单栏照旧显示 Electron；只把包里的 CFBundleName 改掉，菜单栏立刻变成 AI WorkDeck。
 // 打包版没这个问题（electron-builder 按 build.productName 写 Info.plist），只有
 // `npm run dev` 跑的是 node_modules/electron/dist/Electron.app，于是左上角写着 Electron。
 //
@@ -17,7 +17,7 @@ const { execFileSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
 
-const DISPLAY_NAME = 'AI Workdeck'
+const DISPLAY_NAME = 'AI WorkDeck'
 const PLIST = path.join(__dirname, '..', 'node_modules', 'electron', 'dist',
   'Electron.app', 'Contents', 'Info.plist')
 

@@ -437,9 +437,9 @@ try {
     JSON.stringify(cl.clauses && cl.clauses[0]))
   check('首部段落不计入条款', cl.preambleParagraphs === 1, JSON.stringify(cl.preambleParagraphs))
 
-  console.log('== 10) 修订作者署名（AI Workdeck vs 用户名） ==')
+  console.log('== 10) 修订作者署名（AI WorkDeck vs 用户名） ==')
   await reset('署名测试。', true) // rc ON：以下插入都会落成修订
-  // AI 命令：宿主 handleEditorCommand 会打 __agent 标记 → 署名 AI Workdeck
+  // AI 命令：宿主 handleEditorCommand 会打 __agent 标记 → 署名 AI WorkDeck
   await exec('insert_at_cursor', { text: 'AI改动', __agent: true })
   // 用户操作（IME 提交等）不带标记 → 署当前用户名。load_document 空字节调用
   // 只用来注入 authorName（与宿主 loadDocument 的传参路径一致）。
@@ -447,7 +447,7 @@ try {
   await exec('insert_at_cursor', { text: '用户改动' })
   const rv = await exec('debug_revisions')
   const authors = (rv.redlines || []).map((r) => r.author)
-  check('AI 修订署名 AI Workdeck', rv.success && authors.includes('AI Workdeck'), JSON.stringify(rv))
+  check('AI 修订署名 AI WorkDeck', rv.success && authors.includes('AI WorkDeck'), JSON.stringify(rv))
   check('用户修订署用户名', authors.includes('测试用户'), JSON.stringify(authors))
 
   console.log('== 11) 修订颗粒度：一字之差只标一字，不整段删增 ==')
@@ -478,8 +478,8 @@ try {
   const cm = await exec('add_comment', { anchor: ft.matches[0].anchorId, comment: '建议明确签署日期的认定方式', __agent: true })
   check('add_comment 成功且附着目标文本', cm.success && cm.annotatedText === '签署之日', JSON.stringify(cm))
   const lc = await exec('debug_list_comments')
-  check('批注可读回、署名 AI Workdeck、内容完整',
-    lc.success && lc.count === 1 && lc.comments[0].author === 'AI Workdeck' && lc.comments[0].content === '建议明确签署日期的认定方式',
+  check('批注可读回、署名 AI WorkDeck、内容完整',
+    lc.success && lc.count === 1 && lc.comments[0].author === 'AI WorkDeck' && lc.comments[0].content === '建议明确签署日期的认定方式',
     JSON.stringify(lc))
   check('批注文字不进正文', await doc() === '本合同自签署之日起生效。', await doc())
   check('缺锚点被拒绝', !(await exec('add_comment', { comment: '孤儿批注' })).success)
@@ -825,7 +825,7 @@ try {
     await exec('add_comment', { anchor: ftc.matches[0].anchorId, comment: '需确认验收标准', __agent: true })
     let lc2 = await exec('list_comments')
     check('list_comments 带作者/内容/锚定文本',
-      lc2.success && lc2.count === 1 && lc2.comments[0].author === 'AI Workdeck' &&
+      lc2.success && lc2.count === 1 && lc2.comments[0].author === 'AI WorkDeck' &&
       lc2.comments[0].content === '需确认验收标准' && lc2.comments[0].anchorText === '验收', JSON.stringify(lc2))
     check('goto_comment 成功', (await exec('goto_comment', { index: 0 })).success === true)
     check('set_comment_resolved 标记已解决', (await exec('set_comment_resolved', { index: 0, resolved: true })).resolved === true)

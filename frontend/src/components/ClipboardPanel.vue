@@ -256,7 +256,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* Unified AI Workdeck Palette */
+/* Unified AI WorkDeck Palette */
 $color-primary: #1A5336;
 $color-accent: #5BD197;
 $color-accent-pale: #E6F9F0;

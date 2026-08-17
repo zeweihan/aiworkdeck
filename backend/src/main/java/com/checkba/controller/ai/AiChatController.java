@@ -170,7 +170,7 @@ public class AiChatController {
         // Return a simple map or DTO
         Map<String, Object> config = new java.util.HashMap<>();
         config.put("activeProvider", activeProvider);
-        // 平台通道「AI Workdeck 云端」是否可选：未连接官网账户时前端不展示该供应商。
+        // 平台通道「AI WorkDeck 云端」是否可选：未连接官网账户时前端不展示该供应商。
         // server 模式多租户下密钥是 per-user 的，判据也必须按人算——机器级的答案会
         // 让没直连账户的租户看到一个选了就报错的供应商。
         config.put("platformAiAvailable",

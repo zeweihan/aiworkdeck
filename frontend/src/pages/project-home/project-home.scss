@@ -2,7 +2,6 @@
    外壳浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。 */
 $color-primary: #1A5336;
 $color-primary-light: #2D7A52;
-$color-accent: #5BD197;
 $color-text-main: #2C3338;
 $color-text-light: #6C757D;
 $color-border: #E9ECEF;
@@ -25,6 +24,11 @@ $bg-white: #FFFFFF;
   gap: 16px;
   height: 52px;
   padding: 0 24px;
+  /* 无边框窗口：这条顶栏紧贴窗口左上角，第一个元素就是「返回列表」，
+     不让位的话正好压在 mac 交通灯下面（当初逐页走查漏了本页）。
+     变量定义在 App.vue，非桌面/全屏下是 0，max() 自动退回上面那行的 24px。 */
+  padding-left: max(24px, var(--awd-titlebar-safe-inline-start));
+  padding-right: max(24px, var(--awd-titlebar-safe-inline-end));
   background: $bg-white;
   border-bottom: 1px solid $color-border;
 }
@@ -61,44 +65,16 @@ $bg-white: #FFFFFF;
   background: $color-primary-light;
 }
 
-.home-scroll {
-  padding: 24px;
-}
-
-/* 一页纸卷轴：单列纵向 */
-.home-column {
-  max-width: 880px;
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-}
-
-.home-section {
-  background: $bg-white;
-  border: 1px solid $color-border;
-  border-radius: 6px;
-  padding: 16px 18px;
-}
-
-.home-section-title {
-  display: block;
-  margin-bottom: 12px;
-  padding: 0 0 8px 8px;
-  border-left: 3px solid $color-accent;
-  border-bottom: 1px solid $color-border;
-  font-size: 13px;
-  font-weight: 600;
-  color: $color-primary;
-}
+/* 卷轴本体（.home-column / .home-section / .home-section-title）的样式已随内容一起
+   搬到 components/project-home/project-home-pane.scss——那份是两个宿主共用的。
+   本文件只剩这一页独有的顶栏。 */
 
 @media (max-width: 720px) {
   .home-topbar {
     padding: 0 12px;
+    /* 同上：padding 简写在哪出现，让位就得跟到哪 */
+    padding-left: max(12px, var(--awd-titlebar-safe-inline-start));
+    padding-right: max(12px, var(--awd-titlebar-safe-inline-end));
     gap: 10px;
-  }
-
-  .home-scroll {
-    padding: 16px 12px;
   }
 }

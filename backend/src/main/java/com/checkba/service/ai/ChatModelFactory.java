@@ -271,13 +271,13 @@ public class ChatModelFactory {
                     // Custom Headers for OpenRouter
                     // .defaultRequestProperties(Map.of(
                     //         "HTTP-Referer", "https://checkba.com", // Replace with actual URL
-                    //         "X-Title", "Checkba AI Workdeck"
+                    //         "X-Title", "Checkba AI WorkDeck"
                     // ))
                     .build();
         });
     }
 
-    // ==================== 平台通道「AI Workdeck 云端」 ====================
+    // ==================== 平台通道「AI WorkDeck 云端」 ====================
 
     /** 平台通道仍是 OpenRouter 后端，模型口径与 BYOK 一致：非白名单一律回落默认模型。 */
     private String resolvePlatformModel(String targetModel) {
@@ -313,7 +313,7 @@ public class ChatModelFactory {
      * 断开账户后把 activeProvider 从平台通道摘下来，返回切换到的供应商（本来就不是平台通道时返回 null）。
      *
      * 不做这一步的话：platformAiChannel 不可用 → 每条消息都在 {@link #platformApiKey()} 抛
-     * NOT_CONNECTED，而设置页仍把「AI Workdeck 云端」渲染成正常选中（不可选标记刻意豁免当前选项），
+     * NOT_CONNECTED，而设置页仍把「AI WorkDeck 云端」渲染成正常选中（不可选标记刻意豁免当前选项），
      * 用户看不出问题出在哪。落点按「哪个还能用」挑，避免一律摔回本地 Ollama（多数人没装）。
      */
     public String demotePlatformProvider() {
@@ -467,7 +467,7 @@ public class ChatModelFactory {
             return streamingBuilder(apiKey, baseUrl, modelId, config.getTimeout())
                     // .defaultRequestProperties(Map.of(
                     //         "HTTP-Referer", "https://checkba.com",
-                    //         "X-Title", "Checkba AI Workdeck"
+                    //         "X-Title", "Checkba AI WorkDeck"
                     // ))
                     .build();
         });

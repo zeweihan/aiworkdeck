@@ -1,9 +1,12 @@
 <template>
   <!-- Vue 3 多根节点：直接暴露内部元素，无需包裹层 -->
   
-  <!-- Header -->
-  <view class="dd-panel-header">
-    <text class="dd-panel-title">{{ $t('panels.dfTitle') }}</text>
+  <!-- 面板标题由外壳的 sidebar-header 统一出。这里只留分组头（带计数与「＋」），
+       原来那份自画 header 是全应用唯一让外壳标题让位的例外，已取消。 -->
+  <view class="dd-sec-head">
+    <text class="dd-sec-title">{{ $t('panels.dfListLabel') }}</text>
+    <text class="dd-sec-count">{{ requests.length }}</text>
+    <view class="dd-sec-spacer"></view>
     <view class="dd-add-btn" v-if="canCreateRequest" @tap="createRequest" :title="$t('panels.dfCreateTitle')">
       <text class="dd-add-icon">＋</text>
     </view>
@@ -84,7 +87,7 @@
     </view>
   </view>
 
-  <!-- Custom AI Workdeck Delete Confirm Dialog -->
+  <!-- Custom AI WorkDeck Delete Confirm Dialog -->
   <view class="dd-dialog-mask" v-if="showDeleteDialog" @tap="showDeleteDialog = false">
     <view class="dd-dialog-content" @tap.stop>
       <view class="dd-dialog-header">
@@ -223,25 +226,34 @@ export default {
 <style lang="scss" scoped>
 /* Vue 3 多根节点 - 无需包裹层 */
 
-/* Header - 直接作为 sidebar-left 的子元素 */
-.dd-panel-header {
-  height: 36px;
-  padding: 0 12px;
+/* 分组头 - 直接作为 sidebar-left 的子元素（密度令牌见 App.vue 的 --awd-panel-*） */
+.dd-sec-head {
+  height: var(--awd-panel-sec-h);
+  padding: 0 var(--awd-panel-pad-x);
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #e0e0e0;
+  gap: 4px;
   background-color: #fff;
   box-sizing: border-box;
   flex-shrink: 0;
 
-  .dd-panel-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: #999;
-    transform: scale(0.95);
-    transform-origin: left center;
+  .dd-sec-title {
+    font-size: var(--awd-panel-fs-sec);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--awd-panel-text-2);
   }
+
+  .dd-sec-count {
+    font-size: 10px;
+    color: var(--awd-panel-text-3);
+    background: var(--awd-panel-hover);
+    border-radius: 999px;
+    padding: 0 6px;
+    line-height: 14px;
+  }
+
+  .dd-sec-spacer { flex: 1; }
 
   .dd-add-btn {
     width: 22px;
@@ -271,7 +283,7 @@ export default {
 /* List - 直接作为 sidebar-left 的子元素 */
 .dd-request-list {
   flex: 1;
-  padding: 8px;
+  padding: 2px var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -284,10 +296,10 @@ export default {
 .dd-request-item {
   display: flex;
   align-items: center;
-  padding: 10px 12px;
+  padding: 6px 8px;
   background-color: #fff;
-  border-radius: 6px;
-  margin: 0 4px 8px 4px;
+  border-radius: var(--awd-panel-radius);
+  margin: 0 0 2px;
   cursor: pointer;
   border: 1px solid transparent;
   box-sizing: border-box;

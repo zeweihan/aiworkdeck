@@ -15,19 +15,49 @@ import java.util.*;
 
 import org.springframework.beans.factory.annotation.Autowired;
 
+/**
+ * Tushare 金融数据：平台代采（网关）与自备 token 两档。
+ *
+ * <p>上游只有一个统一入口（POST 一个 JSON，{@code api_name} 指哪个接口），
+ * 所以<b>分档只需要落在 {@link #callTushare} 这一个缝上</b>——上面那几个
+ * 解析函数（股东、管理层、工商信息）一行都不用改，两档产出同一个 JSON。
+ *
+ * <p><b>平台档失败绝不静默回落 byok</b>（licensing-billing 地雷 8 / 27）。
+ */
 @Service
 public class TushareService {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TushareService.class);
 
+    private static final int GATEWAY_TIMEOUT_SECONDS = 30;
+
     @Autowired
     private SystemSettingService systemSettingService;
+
+    @Autowired
+    private com.checkba.service.platform.ExternalProviderResolver externalProviderResolver;
+
+    @Autowired
+    private com.checkba.service.platform.PlatformGatewayClient platformGatewayClient;
 
     @Value("${external.tushare.base-url:http://api.tushare.pro}")
     private String defaultTushareApiUrl;
 
     @Value("${external.tushare.token:}")
     private String defaultTushareToken;
+
+    /**
+     * 任意 Tushare 接口的原始响应（JSON 文本）。
+     *
+     * <p>给 AI 侧的一等工具用：模型此前是写 Python 脚本直连 Tushare 的，
+     * 那条路在平台代采档下没有可注入的 token（设计 §5.5），改由这里代它调。
+     */
+    public String queryJson(String apiName, Map<String, Object> params, String fields) {
+        JSONObject p = new JSONObject();
+        if (params != null) params.forEach(p::set);
+        JSONObject response = callTushare(apiName, p, fields);
+        return response == null ? "" : response.toString();
+    }
 
     /**
      * Fetch listed company data and return a DTO for frontend display.
@@ -249,7 +279,20 @@ public class TushareService {
         return Collections.emptyList();
     }
 
+    /**
+     * 上游唯一的出站缝，两档在这里分。
+     *
+     * <p>平台档的失败<b>抛出去而不是回 null</b>：null 在上面几个解析函数眼里就是
+     * 「这家公司没数据」，于是「未开放」「余额不足」会伪装成一次查不到——
+     * 那正是设计 §5.5 点名要避免的表现。自备 Key 档的 null 语义一字未改。
+     */
     private JSONObject callTushare(String apiName, JSONObject params, String fields) {
+        if (externalProviderResolver.resolve(
+                com.checkba.service.platform.ExternalServiceProvider.TUSHARE)
+                == com.checkba.service.platform.ExternalServiceProvider.PLATFORM) {
+            return callTushareViaPlatform(apiName, params, fields);
+        }
+
         String token = systemSettingService.get("external.tushare.token", defaultTushareToken);
         String apiUrl = systemSettingService.get("external.tushare.baseUrl", defaultTushareApiUrl);
 
@@ -272,6 +315,18 @@ public class TushareService {
         }
     }
     
+    /** 平台代采档：官网持 token 调 Tushare，按次扣 Credits。响应形状与自备 token 档一致。 */
+    private JSONObject callTushareViaPlatform(String apiName, JSONObject params, String fields) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("apiName", apiName);
+        body.put("params", params == null ? new JSONObject() : params);
+        body.put("fields", fields == null ? "" : fields);
+
+        com.checkba.service.platform.PlatformGatewayClient.Result result =
+                platformGatewayClient.call("tushare", "query", body, GATEWAY_TIMEOUT_SECONDS);
+        return JSONUtil.parseObj(result.data().toString());
+    }
+
     private void createVar(List<ProjectVariable> variables, Long projectId, String name, String value, String group) {
         ProjectVariable var = new ProjectVariable();
         var.setProjectId(projectId);

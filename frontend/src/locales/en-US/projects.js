@@ -3,13 +3,13 @@ export default {
   // project-list.vue: header and empty states
   myProjects: 'My Projects',
   pullFromTeamLibrary: 'Pull a Case File from the Team Case Library',
-  newProjectBtn: '+ New Project',
   personalCenter: 'Profile',
   allProjects: 'All Projects',
   loading: 'Loading…',
   clientEmptyHint: 'After your lawyer shares a case file with you, it will appear here.',
-  plusSign: '+',
   newProject: 'New Project',
+  createSectionTitle: 'New',
+  emptyHint: 'No matters yet. Start below: open an existing folder, or create one.',
   // project-list.vue: cards
   delete: 'Delete',
   managerLabel: 'Lead: {name}',

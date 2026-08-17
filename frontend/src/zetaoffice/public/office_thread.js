@@ -58,7 +58,7 @@ function readConfigLocale() {
 // 统一署名 AI_AUTHOR，用户本人的操作（IME 输入、快捷键）署用户名——同一引擎里
 // 两种来源的修订在修订面板中可区分（用户需求）。execCommand 按 __agent 标记
 // 在每条命令前切换；setRedlineAuthor 有同值短路，切换才真正写配置。
-const AI_AUTHOR = 'AI Workdeck';
+const AI_AUTHOR = 'AI WorkDeck';
 let humanAuthor = '';        // load_document 时由宿主传入（当前登录用户名）
 let currentRedlineAuthor = null;
 function setRedlineAuthor(name) {
@@ -2272,7 +2272,7 @@ const EXEC = {
   // document. Two independent load strategies (MEMFS file, then private:stream)
   // so a single UNO-API quirk on a device can't blank the user's content.
   load_document(p) {
-    // 宿主随文档带来当前登录用户名：用户本人编辑的修订署名（AI 的署 AI Workdeck）
+    // 宿主随文档带来当前登录用户名：用户本人编辑的修订署名（AI 的署 AI WorkDeck）
     if (p && p.authorName != null) humanAuthor = String(p.authorName);
     const name = String(p && p.name || 'document.docx');
     const m = name.match(/\.([A-Za-z0-9]+)$/);
@@ -3283,7 +3283,7 @@ const EXEC = {
   },
   // 用户在工具栏上给**当前选区**加批注。与 add_comment 的差别有两处，所以不能
   // 复用：① 没有 anchorId（用户是选中文字直接点按钮，不走 find_text_locations）；
-  // ② 署名必须是用户本人，不是 AI Workdeck。派发路线仍是已验证的
+  // ② 署名必须是用户本人，不是 AI WorkDeck。派发路线仍是已验证的
   // `.uno:InsertAnnotation`——API 路线（addAnnotation）会抛虚假异常且只批注锚点。
   add_comment_at_selection(p) {
     if (!isWriterDoc()) return tableFail(NOT_TEXT_DOC_MSG);
@@ -3619,7 +3619,7 @@ const EXEC = {
   },
   // [diagnostic] 修订记录清单（类型/作者/文本片段）。后端 doc_debug_revisions
   // 一直派发 debug_revisions，worker 此前未实现（一律返回 not implemented）；
-  // 补上后同时作为修订署名（AI Workdeck / 用户名）的验证探针。
+  // 补上后同时作为修订署名（AI WorkDeck / 用户名）的验证探针。
   debug_revisions() {
     const out = [];
     try {
@@ -5497,7 +5497,7 @@ function execCommand(reqId, action, params) {
   let result;
   try {
     const p = params || {};
-    // 修订署名切换：AI 命令（宿主打 __agent 标记）→ AI Workdeck；其余（IME 输入
+    // 修订署名切换：AI 命令（宿主打 __agent 标记）→ AI WorkDeck；其余（IME 输入
     // 等用户本人操作）→ 用户名。失败不阻断命令本身（降级为引擎默认作者）。
     try { setRedlineAuthor(p.__agent ? AI_AUTHOR : humanAuthor); }
     catch (e) { log('修订作者设置失败 / redline author failed: ' + errStr(e)); }

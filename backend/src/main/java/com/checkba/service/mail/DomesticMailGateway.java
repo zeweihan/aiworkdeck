@@ -37,7 +37,7 @@ public class DomesticMailGateway extends SmtpMailGateway {
             @Value("${mail.domestic.username:}") String username,
             @Value("${mail.domestic.password:}") String password,
             @Value("${mail.domestic.from:}") String from,
-            @Value("${mail.from-name:AI Workdeck}") String fromName) {
+            @Value("${mail.from-name:AI WorkDeck}") String fromName) {
         super(enabled, host, port, username, password, from, fromName);
     }
 

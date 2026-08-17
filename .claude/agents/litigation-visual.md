@@ -55,6 +55,11 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 **前端**
 - `components/LitigationVisualPanel.vue` — 左栏面板：选材料 → 开始出图 → 图廊 →
   打开 / 编辑（进 draw.io）/ 换风格。
+  **面板自己不画标题**（由外壳 `.sidebar-header` 统一出，2026-08-17 起；此前同屏出现两次），
+  刷新按钮挪进「本项目的图」分组头的右侧。图廊是**行式列表不是卡片**：整行点开＝打开，
+  「编辑」与「换风格」在悬停时才浮出来，换风格是三选一的分段控件而不是三个并列按钮——
+  260px 宽的左栏里五个等权按钮必然换行，会把「打开/编辑」这两个主动作挤到第二行。
+  密度用 `App.vue` 的 `--awd-panel-*` 令牌，见 sidebar-shell.md。
 - `config/leftSidebarPlugins.js` — key `litigation-visual`。
 - `pages/project-overview/project-overview.vue` — 面板分支 + 三个 handler
   （`handleLitigationStart` / `handleLitigationOpenFile` / `handleLitigationScopeSelect`）。

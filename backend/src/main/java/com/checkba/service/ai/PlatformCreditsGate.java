@@ -42,7 +42,7 @@ public class PlatformCreditsGate {
 
     /** 文案红线：不得含「登录」「未授权」「请先」——前端 api.js 用这三个子串判掉线并清会话。 */
     private static final String EMPTY_MESSAGE =
-            "「AI Workdeck 云端」的 Credits 余额为空，到官网账户页充值后即可继续使用";
+            "「AI WorkDeck 云端」的 Credits 余额为空，到官网账户页充值后即可继续使用";
 
     private final AccountService accountService;
     private final PlatformAiChannel channel;

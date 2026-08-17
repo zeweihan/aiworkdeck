@@ -48,17 +48,15 @@ external:
   # PKULaw Configuration
   pkulaw:
     token: ${PKULAW_TOKEN:}
-  # ElevenLabs TTS 配置
-  elevenlabs:
-    api-key: ${ELEVENLABS_API_KEY:}
-    base-url: https://api.elevenlabs.io/v1
-    model-id: eleven_multilingual_v2
-    default-voice-id: JBFqnCBsd6RMkjVDRZzb
-  # 语音合成提供方：elevenlabs（云端，默认）或 local（桌面捆绑的 Kokoro 本地服务）。
-  # 桌面打包态由 Electron 注入 EXTERNAL_TTS_PROVIDER=local + 动态端口的 local-base-url
+  # 语音合成：只有本机一档（桌面捆绑的 Kokoro，OpenAI 兼容 /v1）。
+  # 桌面打包态由 Electron 注入动态端口的 local-base-url；地址为空即视为组件未就绪。
   tts:
-    provider: ${EXTERNAL_TTS_PROVIDER:elevenlabs}
     local-base-url: ${EXTERNAL_TTS_LOCAL_BASE_URL:}
+  # 会议录音转写的本地档（asr-service，faster-whisper）。地址由 Electron 按动态端口注入；
+  # 档位本身不在这里给默认值——本地档要下一个 GB 级模型，必须由用户主动打开
+  # 「录音不出本机」开关，不能像 TTS 那样打包即默认（那边的模型只有 300MB 且随组件预装）
+  asr:
+    local-base-url: ${EXTERNAL_ASR_LOCAL_BASE_URL:}
   # PPTX 生成服务配置（banana-slides Docker 容器）
   pptx-service:
     # 服务地址（Docker 容器映射端口）
@@ -121,7 +119,7 @@ sms:
     # API Key 的 secret，或账号 Auth Token（取决于上一项是否配置）
     auth-token: ${TWILIO_AUTH_TOKEN:}
     messaging-service-sid: ${TWILIO_MESSAGING_SERVICE_SID:}
-    template: ${TWILIO_SMS_TEMPLATE:Your AI Workdeck verification code is {code}. It expires in 5 minutes.}
+    template: ${TWILIO_SMS_TEMPLATE:Your AI WorkDeck verification code is {code}. It expires in 5 minutes.}
 
 # 邮件发信（按收件域名分流的两条 SMTP 通道，见 com.checkba.service.mail）。
 # 密码一律环境变量注入，与 SMS_ACCESS_KEY_* 同一模式，绝不写进任何入库文件。
@@ -129,7 +127,7 @@ sms:
 # 而国内/国外必须并存——两条各自独立开关，只配一条的部署照常工作。
 mail:
   # 发件人显示名，两条通道共用
-  from-name: ${MAIL_FROM_NAME:AI Workdeck}
+  from-name: ${MAIL_FROM_NAME:AI WorkDeck}
   # 邮箱免密登录（输邮箱→收码→直接登录，不过密码）。**独立开关且默认关**：
   # 它是一条新的匿名登录入口，攻击面与密码登录不同——邮箱被盗即账号被盗。
   # 关闭时邮箱仍可作为登录二次验证使用（那条不需要这个开关）。
@@ -172,7 +170,7 @@ ai:
     sites:
       cn:
         enabled: true
-        display-name: AI Workdeck 国内站
+        display-name: AI WorkDeck 国内站
         base-url: https://www.aiworkdeck.com
         registry-base-url: https://www.aiworkdeck.com/api/registry
         telemetry-ingest-url: https://www.aiworkdeck.com/api/telemetry
@@ -181,7 +179,7 @@ ai:
         # 国际站上线前保持 false：站点选择器只在可选站点 >= 2 时出现，
         # 置 false 时用户看不到任何与站点有关的界面变化
         enabled: false
-        display-name: AI Workdeck International
+        display-name: AI WorkDeck International
         base-url: https://www.workdeck.ai
         registry-base-url: https://www.workdeck.ai/api/registry
         telemetry-ingest-url: https://www.workdeck.ai/api/telemetry
@@ -409,7 +407,7 @@ optimizer:
     # 一条都没配时这条出口会报「不可用」并由 notify.channel=auto 落到开 Issue。
     # 发件人由通道决定，此处不设——两条通道发信域名不同，硬写 from 会让 SPF 判失败。
     to: ${OPTIMIZER_MAIL_TO:}
-    subject-prefix: "[AI Workdeck 优化者]"
+    subject-prefix: "[AI WorkDeck 优化者]"
 
 # 文件存储配置
 storage:

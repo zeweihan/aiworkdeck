@@ -929,8 +929,10 @@ export default {
         return timeStr
       }
     },
+    // 与 admin.goToUserProfile 对称：同级页面互跳用 redirectTo，不压栈。
+    // 两边都用 navigateTo 的旧写法会让 admin ⇄ 个人中心互相弹，回不到来处。
     goToAdmin() {
-      uni.navigateTo({
+      uni.redirectTo({
         url: '/pages/admin/admin',
       })
     },
@@ -939,7 +941,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* 品牌配色变量 - Updated to AI Workdeck Palette */
+/* 品牌配色变量 - Updated to AI WorkDeck Palette */
 $brand-primary: #1A5336; /* Forest Green */
 $brand-accent: #5BD197;  /* Mint Green */
 $brand-dark: #212629;    /* Dark BG */

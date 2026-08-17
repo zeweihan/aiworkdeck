@@ -13,6 +13,12 @@ export default {
   downloadFile: 'Download File',
   videoNotSupported: 'Your browser does not support video playback',
   videoLoading: 'Loading video…',
+  // Custom audio player
+  audioLoading: 'Loading audio…',
+  audioPlay: 'Play',
+  audioPause: 'Pause',
+  audioRate: 'Playback speed',
+  audioMute: 'Mute',
   entriesCount: '{count} entries',
   extract: 'Extract',
   extracting: 'Extracting…',
@@ -72,6 +78,10 @@ export default {
   // SearchPanel.vue
   searchPlaceholder: 'Search files or content...',
   filterByTag: 'Filter by Tag',
+  tagClear: 'Clear',
+  tagFilterPlaceholder: 'Filter tags…',
+  tagShowAll: 'Show all {count}',
+  tagNoMatch: 'No matching tags',
   searching: 'Searching...',
   noResults: 'No results found',
   matchesSuffix: 'matches',

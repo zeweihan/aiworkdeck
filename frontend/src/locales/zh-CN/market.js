@@ -53,6 +53,8 @@ export default {
   noPluginsYet: '还没有上架的插件',
   localInstallHint: '也可本地安装：把插件目录放进服务端 plugins/ 后点「重新扫描」',
   pluginLabel: '插件',
+  panelPluginLabel: '面板插件',
+  panelPluginHint: '启用后出现在左栏，点开是一个完整面板',
   installingShort: '安装中',
   pluginTrustNote: '插件与本机应用同等权限，安装前请确认来源可信。所有在线插件都经过人工审核与平台签名，桌面端安装时验签；安装后默认停用，需你在「已安装」里手动启用。',
 
@@ -128,7 +130,7 @@ export default {
   reinstallOrUpdate: '重新安装 / 更新',
   activationModeLabel: '生效方式：{mode} ▾',
   processingEllipsis: '处理中…',
-  needAccountHint: '这是付费项目。请先在设置的「账户与用量」中连接 AI Workdeck 账户，安装时才能校验购买记录。',
+  needAccountHint: '这是付费项目。请先在设置的「账户与用量」中连接 AI WorkDeck 账户，安装时才能校验购买记录。',
   buyHint: '这是付费项目。购买在官网完成，付款后回到本页点「我已购买，刷新」即可安装。',
 
   whenToUse: '什么时候用',

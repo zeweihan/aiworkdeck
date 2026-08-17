@@ -1148,7 +1148,7 @@ class OfficeEditToolsTest {
         assertEquals("{}", tools.office_insert_endnote("conv-1", "第一条", "参见附件一"));
         assertEquals("{}", tools.office_apply_style("conv-1", "标题", true, "标题 1"));
         assertEquals("{}", tools.office_manage_content_control("conv-1", "insert", "填空处", "field-1", "客户名称", null, null));
-        assertEquals("{}", tools.office_set_document_properties("conv-1", "尽调报告", null, "AI Workdeck", null, null, null));
+        assertEquals("{}", tools.office_set_document_properties("conv-1", "尽调报告", null, "AI WorkDeck", null, null, null));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> ccArgs = ArgumentCaptor.forClass(Map.class);

@@ -118,7 +118,7 @@ public class AwdkLoginService {
         AccountTransport.Reply reply = transport.send("GET", baseUrl + "/api/account/me", key, null);
         if (reply.networkFailure()) {
             throw new AccountException(AccountException.Kind.NETWORK,
-                    LangText.of("无法连接 AI Workdeck 服务器，请检查网络后重试", "Could not connect to the AI Workdeck server, please check your network and retry"));
+                    LangText.of("无法连接 AI WorkDeck 服务器，请检查网络后重试", "Could not connect to the AI WorkDeck server, please check your network and retry"));
         }
         int status = reply.status();
         if (status == 401 || status == 403) {
@@ -127,7 +127,7 @@ public class AwdkLoginService {
         }
         if (status >= 500) {
             throw new AccountException(AccountException.Kind.NETWORK,
-                    LangText.of("AI Workdeck 服务器暂时不可用，请稍后重试", "The AI Workdeck server is temporarily unavailable, please retry shortly"));
+                    LangText.of("AI WorkDeck 服务器暂时不可用，请稍后重试", "The AI WorkDeck server is temporarily unavailable, please retry shortly"));
         }
         if (status < 200 || status >= 300) {
             throw new AccountException(AccountException.Kind.MALFORMED,

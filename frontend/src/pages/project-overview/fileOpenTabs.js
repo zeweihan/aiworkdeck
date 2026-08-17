@@ -259,6 +259,7 @@ export const fileOpenTabsMethods = {
     getFileIconPaths(type, tabType) {
       if (tabType === 'web') return GLYPHS.web
       if (tabType === 'market-detail') return GLYPHS.blocks
+      if (tabType === 'project-home') return GLYPHS.landmark
       return fileGlyph(type)
     },
     isFileTypeSupported(file) {

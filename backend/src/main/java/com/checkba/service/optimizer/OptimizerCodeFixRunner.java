@@ -189,7 +189,7 @@ public class OptimizerCodeFixRunner {
 
     String fixPrompt(UserFeedback fb, FeedbackTriageService.TriageResult triage) {
         return """
-                你在 AI Workdeck 仓库的一棵独立 git worktree 里，任务是**修一个用户报上来的缺陷**。
+                你在 AI WorkDeck 仓库的一棵独立 git worktree 里，任务是**修一个用户报上来的缺陷**。
 
                 先读仓库根目录的 CLAUDE.md，按里面的「领域文档路由表」找到对应的 .claude/agents/<领域>.md 再动代码。
 
@@ -235,7 +235,7 @@ public class OptimizerCodeFixRunner {
         String title = triage.title() == null || triage.title().isBlank()
                 ? "修复用户反馈的问题" : triage.title().trim();
         return "fix: " + title + "（用户反馈 #" + fb.getId() + "）\n\n"
-                + "由 AI Workdeck 优化者根据一条用户反馈自动生成，未经人工审阅，不要直接合并。\n";
+                + "由 AI WorkDeck 优化者根据一条用户反馈自动生成，未经人工审阅，不要直接合并。\n";
     }
 
     String prTitle(UserFeedback fb, FeedbackTriageService.TriageResult triage) {

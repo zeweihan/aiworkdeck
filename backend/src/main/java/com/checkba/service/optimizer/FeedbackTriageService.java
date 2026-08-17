@@ -129,7 +129,7 @@ public class FeedbackTriageService {
         boolean hasAudio = attachments.stream().anyMatch(a -> FeedbackAttachment.TYPE_AUDIO.equals(a.getType()));
 
         StringBuilder sb = new StringBuilder();
-        sb.append("你是 AI Workdeck（面向法律行业的 AI 工作台，Java Spring 后端 + uni-app/Vue3 前端 + Electron 桌面壳）的维护者助手。\n")
+        sb.append("你是 AI WorkDeck（面向法律行业的 AI 工作台，Java Spring 后端 + uni-app/Vue3 前端 + Electron 桌面壳）的维护者助手。\n")
                 .append("下面是一条用户从桌面端右下角反馈浮窗提交的反馈。请判断它属于哪一类。\n\n")
                 .append("判定口径：\n")
                 .append("- BUG：描述了一个明确的、可复现或至少可定位的功能缺陷，且信息足以让人直接去改代码。\n")

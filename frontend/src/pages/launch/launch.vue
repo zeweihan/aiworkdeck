@@ -92,14 +92,16 @@ export default {
         const projects = await getMyProjects()
         const list = Array.isArray(projects) ? projects : (projects && projects.data) || []
         syncRecentToMenu(list) // 应用菜单「最近打开」子菜单
-        const lastId = Number(uni.getStorageSync('checkba_last_project_id') || 0)
-        if (lastId && list.some((p) => Number(p.id) === lastId)) {
-          uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${lastId}` })
-        } else {
-          uni.reLaunch({ url: '/pages/project-list/project-list' })
-        }
+        // 启动一律落项目列表页（2026-08 维护者定的落点）。
+        // 此前是「有最近项目就直达工作台」，为的是「立刻干活」；代价是开机永远
+        // 停在上一个项目里，手上有第二件事的人得先找到出口再切。列表页顶部有
+        // 「继续：上次的项目」一键回去，多的那一下点击换来的是每次开机都先看见
+        // 自己有哪些案子。**其余四条直达工作台的出口一条没动**（应用菜单最近打开、
+        // 打开本地文件夹/文件、顶栏切换器、浏览器态会话恢复）——那几处的用户
+        // 意图明确指向某一个项目，强插列表页才是多一跳。
+        uni.reLaunch({ url: '/pages/project-list/project-list' })
       } catch (e) {
-        console.warn('启动直达失败:', e && e.message)
+        console.warn('启动分流失败:', e && e.message)
         this.failed = true
       }
     },

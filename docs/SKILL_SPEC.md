@@ -67,7 +67,7 @@ output: |
 | `output` | string | 否 | 输出结构约定（自然语言），随 prompt 模板一起注入系统消息。 |
 | `requires` | string[] | 否 | 声明依赖的能力契约（如 `evidence.retrieve.v1`，见 `docs/EVIDENCE_CONTRACT.md`）。v1 仅声明不阻断加载：Skill 描述"需要什么能力"，插件/内置实现负责提供，实现缺失时相关工具自然不可见。 |
 | `enabled_by_default` | boolean | 否 | 默认 `true`。为 `false` 时，**只在这个 id 第一次被扫描到**（从未装过）时把它加入禁用名单；之后用户改过的启停状态不会被下一次扫描/重启打回去（"是否已种过"持久化在 `ai.skills.seeded`，做法同 `ai.skills.disabled`，见 `SkillRegistry.seedDefaultDisabledIfNeeded`）。用于"随包分发但需要用户手动打开"的 skill——如引擎体积较大的 `litigation-visual`：文件始终随包分发，"安装"就是启用、"卸载"就是禁用，不涉及下载/删除。 |
-| `author` | string | 否 | 展示用作者名，如 `AI Workdeck`。 |
+| `author` | string | 否 | 展示用作者名，如 `AI WorkDeck`。 |
 | `author_url` | string | 否 | 作者主页/仓库链接。 |
 | `version` | string | 否 | 展示用版本号，自由格式；不参与 id 覆盖判断（覆盖键始终是 `id`）。 |
 | `license` | string | 否 | 许可证标识，如 `MIT`。 |

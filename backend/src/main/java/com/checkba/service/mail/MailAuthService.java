@@ -171,7 +171,7 @@ public class MailAuthService {
         mailRouter.gatewayFor(email);
         String code = codeStore.issue(scene, email);
         try {
-            mailRouter.send(email, "AI Workdeck " + purpose,
+            mailRouter.send(email, "AI WorkDeck " + purpose,
                     LangText.of("你的验证码是：" + code + "\n\n"
                             + "5 分钟内有效，请勿转发给任何人。\n"
                             + "如果这不是你本人操作，忽略本邮件即可。\n\n"

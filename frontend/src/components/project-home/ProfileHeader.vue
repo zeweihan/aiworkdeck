@@ -11,15 +11,15 @@
       <view v-for="f in fields" :key="f.fieldKey" class="profile-field">
         <text class="profile-field-label">{{ f.label }}</text>
 
-        <picker
+        <AwdSelect
           v-if="editingKey === f.fieldKey && f.fieldKey === 'matterType'"
-          mode="selector"
           :range="matterTypes"
+          :value="matterTypeIndex"
           @change="onPickMatterType"
           @cancel="cancelEdit"
         >
           <view class="profile-field-picker">{{ draft || $t('projects.selectMatterType') }}</view>
-        </picker>
+        </AwdSelect>
 
         <input
           v-else-if="editingKey === f.fieldKey"
@@ -58,6 +58,7 @@
 import { MATTER_TYPES } from '@/config/matterTypes.js'
 import { isProfileEmpty, profileFieldHint } from '@/utils/projectHomeFormat.js'
 import { t } from '@/i18n'
+import AwdSelect from '@/components/AwdSelect.vue'
 
 // 语言切换 = 整页 reload，模块顶层调 t() 取到的静态文案是安全的（同 CONVENTIONS.md）
 const PLACEHOLDERS = {
@@ -70,6 +71,7 @@ const PLACEHOLDERS = {
 
 export default {
   name: 'ProfileHeader',
+  components: { AwdSelect },
   props: {
     projectId: { type: Number, required: true },
     projectName: { type: String, default: '' },
@@ -83,6 +85,11 @@ export default {
   computed: {
     showGuide() {
       return isProfileEmpty(this.fields) && !this.editingKey
+    },
+    // 下拉要高亮当前项；draft 不在候选里（历史自由文本、AI 猜的值）时给 -1，
+    // 那就是「一个都不高亮」，比强行落在第 0 项上诚实
+    matterTypeIndex() {
+      return this.matterTypes.indexOf(this.draft)
     },
   },
   watch: {
@@ -124,9 +131,9 @@ export default {
       if (value === beforeValue) return
       this.$emit('save', { fieldKey: fieldKey, value: value })
     },
-    onPickMatterType(e) {
-      const idx = Number(e.detail.value)
-      this.draft = this.matterTypes[idx] || ''
+    // AwdSelect 直接抛下标
+    onPickMatterType(idx) {
+      this.draft = this.matterTypes[Number(idx)] || ''
       this.commitEdit()
     },
     // commitEdit 是乐观退出：emit('save') 后立刻清空编辑态，界面退回显示旧值。

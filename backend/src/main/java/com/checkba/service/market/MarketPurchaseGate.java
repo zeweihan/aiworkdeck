@@ -111,7 +111,7 @@ public class MarketPurchaseGate {
     private static String needAccountMessage(String itemName, int priceCents) {
         String price = priceCents > 0 ? "（" + yuan(priceCents) + "）" : "";
         return "「" + itemName + "」是付费项目" + price
-                + "，需在设置的「账户与用量」中连接 AI Workdeck 账户后才能安装";
+                + "，需在设置的「账户与用量」中连接 AI WorkDeck 账户后才能安装";
     }
 
     /**

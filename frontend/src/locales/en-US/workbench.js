@@ -8,7 +8,7 @@ export default {
   commandPalettePlaceholder: 'Type a command…',
   commandPaletteEmpty: 'No matching commands',
   // Top bar project info
-  clickToRename: 'Click to rename',
+  renameProject: 'Rename Project…',
   unnamedProject: 'Untitled Project',
   switchRecentProject: 'Switch to a recent project',
   recentProjects: 'Recent Projects',
@@ -133,7 +133,7 @@ export default {
   adoptPendingText: 'Files awaiting your decision',
   goHandle: 'Resolve',
   // Trial info dialog
-  trialInfoBody: 'You are on the trial version and all features are fully available. Upgrade to the full version to connect an AI Workdeck account, sync purchased content, and use the AI Workdeck Cloud channel.',
+  trialInfoBody: 'You are on the trial version and all features are fully available. Upgrade to the full version to connect an AI WorkDeck account, sync purchased content, and use the AI WorkDeck Cloud channel.',
   gotIt: 'Got It',
   learnFullVersion: 'Learn About the Full Version',
   // Bottom status bar

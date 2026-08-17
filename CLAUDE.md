@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-AI Workdeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Spring 后端（backend/）+ uni-app/Vue3 前端（frontend/）+ Electron 桌面壳（desktop/），文档编辑器为 LibreOffice WASM（代号 LOWA/zetaoffice），另有 pptx/mineru/kokoro/easyvoice 附属服务。
+AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Spring 后端（backend/）+ uni-app/Vue3 前端（frontend/）+ Electron 桌面壳（desktop/），文档编辑器为 LibreOffice WASM（代号 LOWA/zetaoffice），另有 pptx/mineru/kokoro/easyvoice 附属服务。
 
 ## 领域文档路由表（先读文档，再动代码）
 
@@ -36,4 +36,4 @@ AI Workdeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 - 本机跑 `mvn` 必须 JDK 21（系统默认 25 会 SIGBUS）。
 - 前端包管理用 npm（不是 pnpm）。
 - 版本号单一来源是 `desktop/package.json`。
-- **三个 project-\* 路由同名不同物**：`pages/project-overview/project-overview` 在代码里指**工作台**（四列干活界面，刻意不改名）；产品语言里的「项目概览页」是 `pages/project-home/project-home`；「项目列表页」是 `pages/project-list/project-list`。写代码以路由为准，写文案以本条为准。导航总规则：凡是工作台参与的跳转一律 `reLaunch`，工作台之外的页面之间用 `navigateTo`。详见 `.claude/agents/sidebar-shell.md` 的术语表。
+- **三个 project-\* 路由同名不同物**：`pages/project-overview/project-overview` 在代码里指**工作台**（四列干活界面，刻意不改名）；产品语言里的「项目概览」现在是工作台里的一个标签（内容组件 `components/project-home/ProjectHomePane.vue`），`pages/project-home/project-home` 退成只服务直链的薄壳页；「项目列表页」是 `pages/project-list/project-list`，也是启动的唯一落点。写代码以路由为准，写文案以本条为准。导航总规则：凡是工作台参与的跳转一律 `reLaunch`，工作台之外的页面之间用 `navigateTo`（同级页面如设置⇄个人中心用 `redirectTo`，压栈会互相弹成死循环）。详见 `.claude/agents/sidebar-shell.md` 的术语表。

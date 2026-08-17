@@ -20,8 +20,8 @@ public class TtsController {
     private TtsService ttsService;
 
     /**
-     * 合成走的是账号配置里的 ElevenLabs 付费 key，匿名可调等于把它借给任何人烧额度；
-     * 口径与 OcrController/ClipboardController 一致，只要求登录，不涉及项目归属。
+     * 合成占用本机的 CPU 与临时磁盘，匿名可调等于把这台机器的算力借给任何人；
+     * 口径与 OcrController/ClipboardController 一致，只校验会话，不涉及项目归属。
      */
     private static void requireLogin(String sessionId) {
         if (AuthController.getUserIdFromSession(sessionId) == null) {
@@ -43,9 +43,7 @@ public class TtsController {
         File audioFile = ttsService.generateAudio(
                 request.getText(),
                 request.getVoice(),
-                request.getRate(),
-                request.getPitch(),
-                request.getVolume()
+                request.getRate()
         );
 
         FileSystemResource resource = new FileSystemResource(audioFile);
@@ -56,6 +54,11 @@ public class TtsController {
                 .body(resource);
     }
 
+    /**
+     * {@code pitch} / {@code volume} 两个 setter 保留但不再往下传：任何一档后端都没有
+     * 对应的 API 字段。删掉字段会让存量客户端的请求体在反序列化时炸掉，
+     * 所以只让它们停在这里，不再假装能生效。
+     */
     public static class GenerateRequest {
         private String text;
         private String voice;
@@ -67,6 +70,7 @@ public class TtsController {
         public void setText(String text) { this.text = text; }
         public String getVoice() { return voice; }
         public void setVoice(String voice) { this.voice = voice; }
+        /** 语速倍率（"1.0" / "1.2x"），只有本地 Kokoro 档会用到。 */
         public String getRate() { return rate; }
         public void setRate(String rate) { this.rate = rate; }
         public String getPitch() { return pitch; }

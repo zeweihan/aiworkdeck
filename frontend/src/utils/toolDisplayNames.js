@@ -19,6 +19,11 @@ const NAMES = {
   browse_url: { zh: '浏览网页', en: 'Browse page' },
   deep_search: { zh: '深度检索', en: 'Deep search' },
   search_knowledge_base: { zh: '搜索知识库', en: 'Search knowledge base' },
+  // 企业与金融数据。P4 起是 Java 侧一等工具（原来由 AI 写 Python 脚本直连上游，
+  // platform 档下没有可注入的凭证，失败会表现成「查不到数据」而不是「未配置」）。
+  // 文案与后端 @ToolMeta(displayName) 逐字对齐，两侧有护栏用例钉着，别改措辞。
+  qichacha_query: { zh: '查询企业工商信息', en: 'Company registry lookup' },
+  tushare_query: { zh: '查询金融数据', en: 'Financial data lookup' },
   // 法律
   law_search: { zh: '语义搜索法规', en: 'Search regulations' },
   law_search_keyword: { zh: '关键词搜索法规', en: 'Keyword law search' },

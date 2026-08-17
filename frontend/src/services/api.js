@@ -358,6 +358,17 @@ function request(options) {
 //   role: 'LISTED' | 'TARGET',
 //   name: '公司名称'
 // }
+//
+// **这条端点的错误信封是残缺的，别在它上面写错误分类。** `ExternalController`
+// 对 Tushare 是 `catch(Exception)` 后回落企查查，外层又用 `catch(RuntimeException)`
+// 把 message 塞进 HTTP 500 —— `GatewayException` 的 kind（未开放 / 上游挂 / 我们挂 /
+// 余额不足）和 `suggestsByok()` 到这里全没了，前端只能拿到一个 500 加一句文案。
+// 想按中文子串猜回来是死路（api.js 早年那套「登录/未授权/请先」子串判定就是这么
+// 误伤业务文案的，PR4-0 已经拆掉）。
+// 因此「改用自己的 Key」这个逃生门做成**不依赖错误分类**：系统管理「平台服务」
+// 面板每一行都常驻一个折叠入口，并支持深链 `?nav=platform&service=qichacha`
+// 直接展开那一项。等 ExternalController 改成标准信封（把 kind 与 suggestsByok
+// 透出来）之后，这里才谈得上按类型给不同文案。
 export function fetchCompanyBasicInfo(payload) {
   return request({
     url: '/api/external/company/basic',
@@ -483,6 +494,25 @@ export function probeOllama(model) {
     url: '/api/ai/ollama/probe',
     method: 'GET',
     data: model ? { model } : {}
+  });
+}
+
+/**
+ * 本机转写（asr-service）就绪探测。与 Ollama 那条同一个范式，理由也相同：
+ * 「录音不出本机」这一档没有密钥可校验，只能探。
+ *
+ * 响应恒为 200：
+ * { status: 'READY' | 'MODEL_MISSING' | 'SERVICE_DOWN', baseUrl, model,
+ *   diarization: boolean, message, nextStep }
+ *
+ * **MODEL_MISSING 与 SERVICE_DOWN 必须分开渲染**：前者要下一个 GB 级模型，
+ * 后者是重启应用，合并成一句「不可用」等于让律师在录完两小时之后才发现自己没有出路。
+ * diarization 从接口读、不在前端写死：本地档没有说话人分离是要写给用户看的取舍。
+ */
+export function probeLocalAsr() {
+  return request({
+    url: '/api/asr/local/probe',
+    method: 'GET'
   });
 }
 
@@ -955,6 +985,38 @@ export function getEntitlements(refresh = false) {
   return request({
     url: refresh ? '/api/entitlements?refresh=true' : '/api/entitlements',
     method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// ===================== 平台服务（外部服务的档位）=====================
+
+// 八项外部服务各自走哪一档：
+// { services: [{ service, provider, hasLocal, hasByokCredentials }],
+//   platformAvailable, accountConnected }
+//
+// provider ∈ platform | byok | local，是**后端解析后的生效值**，不是设置里存的原始值
+// （非 local-mode 下即使库里写着 platform 也回 byok，闸在 ExternalProviderResolver 一处）。
+// 界面展示当前档位一律读它，不要自己按凭证是否为空去猜。
+//
+// platformAvailable=false 表示这台机器不是个人桌面版（团队服务器 / 云端实例），
+// 平台档在界面上必须不可选并给出说明（设计决策 D5）。
+export function getPlatformServices() {
+  return request({
+    url: '/api/platform-services',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 切档。provider ∈ platform | byok | local；取值非法或该形态不允许时后端回 code=1 +
+// 可读 message（**不会**回 4010，那会被判成掉线并清会话）。
+export function setPlatformServiceProvider(service, provider) {
+  return request({
+    url: `/api/platform-services/${encodeURIComponent(service)}/provider`,
+    method: 'POST',
+    data: { provider },
+    header: {
+      'Content-Type': 'application/json',
+    },
   }).then(unwrapEnvelope);
 }
 
@@ -2218,6 +2280,8 @@ export default {
   getAdminConfig,
   saveAdminConfig,
   getAdminUsers,
+  getPlatformServices,
+  setPlatformServiceProvider,
   // DD Files
   getDdRequests,
   createDdRequest,

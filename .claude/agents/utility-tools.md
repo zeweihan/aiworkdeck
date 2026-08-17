@@ -19,12 +19,37 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 **收藏夹**：`ProjectFavoritesPanel.vue`；网页选中收藏经 `checkba:webmark`（preload ~:26）→ project-overview 订阅入库（~:2003）；后端 `controller/WebFavoriteController.java`（/api/favorites/my、/api/projects/{id}/favorites、DELETE、image）。
 
 **搜索**：`SearchPanel.vue`；后端 `controller/SearchController.java`（POST /api/projects/{id}/search）。
+标签筛选区**默认折叠**（`tagsOpen:false`）：自动打标签能给一个项目攒出上百个词，
+平铺出来的标签墙会把搜索框和结果一起挤出屏幕。展开后按「已选优先 → 本次结果命中文件数
+降序 → 名称」排（计数在 `updateVisibleTags` 里顺带数出来，没搜过就退回按名称排），
+超过 24 个截断给「显示全部 N 个」，超过 12 个再加一个过滤框；**折叠态仍常驻显示已选标签**——
+否则「搜不到东西」的原因被藏起来了。根因不在这个面板，见下面的自动打标签条目。
 
 **下载**：`DownloadList.vue` 是**孤儿组件**（全仓库无引用、未挂载）；文件下载实际走 FileController `GET /api/files/{fileId}/download`。
 
-**语音 TTS**：`EasyVoicePane.vue`（api：getTtsVoices/generateTtsAudio）；desktop 本地 Kokoro 由 `desktop/main/services/kokoro-service.js` 管理；后端 `controller/TtsController.java`（/api/tts/voices、/generate）+ `service/TtsService.java`——`external.tts.provider`：elevenlabs（云端默认）| local（桌面捆绑 Kokoro，OpenAI 兼容 /v1，base-url=`external.tts.local-base-url`）。easyvoice Docker 段已停用。
+**语音 TTS**：`EasyVoicePane.vue`（api：getTtsVoices/generateTtsAudio）；desktop 本地 Kokoro 由 `desktop/main/services/kokoro-service.js` 管理；后端 `controller/TtsController.java`（/api/tts/voices、/generate）+ `service/TtsService.java`。**只有本机一档**：桌面捆绑 Kokoro，OpenAI 兼容 /v1，地址 `external.tts.local-base-url`（打包态由 Electron 注入动态端口），地址为空即「组件未就绪」。云端 ElevenLabs 那一档与 `external.tts.provider` 开关已整体移除。easyvoice Docker 段已停用。
 
-**录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写走通义听悟（说话人分离），详见 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
+**两条改这块必须知道的事（2026-08-17 排查）**：
+1. **本机引擎只吃 `rate` 一个参数**（倍率制字符串，`TtsService.parseSpeed` 认
+   `"1.2"`/`"1.2x"`）。面板上曾有语速/语调/音量三个滑杆，**三个都是死的**：前端把
+   `'+0%'`/`'+0Hz'` 写死在 payload 里、根本没读滑杆的值，而 `'+0%'` 传给 `parseSpeed`
+   解析失败恒回落 1.0。#386 把 `rate` 接上了，本次进一步把滑杆本身改成倍率制
+   （50..150 = 0.5x..1.5x，界面直接显示 `1.3x`），并删掉语调与音量——本机引擎不支持，
+   留着就是骗人。`generateAudio` 的形参也收窄成 `(text, voiceId, rate)`；
+   `TtsController.GenerateRequest` 的 `pitch/volume` setter **保留但不再往下传**
+   （删字段会让存量客户端的请求体反序列化炸掉）。`TtsServiceTest` 有一条回归钉死
+   「百分比串是无效输入」。
+2. **`kokoro-service` 在打包态被 `modelManager.isInstalled('kokoro-models')` 卡着**——
+   那是个约 300MB 的下载组件，不随包发出。端口分配了但服务没起来是常态，表现为
+   `/api/tts/voices` 返回空数组、下拉框空着。`platformServices.js` 里
+   `LOCAL_TIER_READY.tts = true` 的注释写着「Kokoro 已随包发出」，**那句话不准确**：
+   随包的是代码，模型要另外下。面板现在会在音色列表为空时**在合成之前**就把这句话摆出来，
+   不让用户填完整段文字才撞上「未就绪」。
+
+**录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写三档 platform / byok / local，详见 `.claude/agents/licensing-billing.md`「平台服务网关」与 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
+
+**本地 ASR（`asr-service/`，P3 起）**：faster-whisper 的 OpenAI 兼容薄包装，形态与 `kokoro-service/` 同构（`app.py` + `requirements.in/lock`，进 pysvc 单包，定位走 `pysvcPath()`）。端点 `GET /health`（带 `modelReady`，不加载模型）+ `POST /v1/audio/transcriptions`。桌面侧 `desktop/main/services/asr-service.js` 分配端口并把 `EXTERNAL_ASR_LOCAL_BASE_URL` 注入后端；模型 `Systran/faster-whisper-medium`（约 1.5GB）走组件管理 `asr-models` 下载，运行时 `HF_HUB_OFFLINE=1`。后端 `service/meeting/LocalAsrClient.java` 探测 + 转写，`controller/LocalAsrProbeController.java` 出 `GET /api/asr/local/probe`（匿名窗口口径与 Ollama 探测共用 `WizardStateService`）。
+**Whisper 说普通话时稳定输出繁体**（本机实测两分钟会见录音整篇繁体），社区常用的 `initial_prompt` 偏置一个字都没纠正过来——所以在 `app.py` 里用 OpenCC 做确定性的繁转简后处理（`ASR_OUTPUT_SCRIPT=original` 可关）。
 
 **文件缓存区（左下角「文件暂存区」）**：`FileStagingArea.vue`（纯展示，用量条读 `usage` prop）+ `pages/project-overview/stagingArea.js`（方法组）。**物理形态是项目内名为 `__staging_area__` 的文件夹**，「加入缓存区」= `batchMoveFiles` 把已有项目文件移进去，没有独立的缓存区目录。
   **免费额度（PR-C）**：`service/quota/StageQuotaService.java`，未拥有 `stage.unlimited` 时上限 20 个文件 / 500MB。**实现是移入时拦截，已有文件一律不动**——`ProjectFileService.batchMove` 在循环前整体准入检查，超额抛 `StageQuotaExceededException` → GlobalExceptionHandler 转 `code=4003 + feature + usage`，前端 api.js 打 `err.quotaExceeded` 标记。移出方向永不拦截（否则用户无法自救）。跨项目 id 不参与计算（防越权探测文件大小）。**文件夹按它装的全部文件递归计数**（准入与用量同一口径）——文件树允许把整个文件夹拖进缓存区，只算 1 个条目 0 字节的话，套一层目录就能让两条额度同时失效。用量端点 `GET /api/projects/{id}/files/stage/usage?folderId=`，**folderId 是全局 id，必须 `checkFileInProject` 校验归属**（只验路径 projectId 的话能枚举他人项目任意目录的文件数与字节数）。与剪贴板同理，额度只在 local-mode 执行。
@@ -69,7 +94,20 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 - BrowserView 弹窗守卫模式与 window.open 消费者、截图假死根因见 v0.6.1 修复（desktop-interaction-bugfix 记录）；改 BrowserView 生命周期务必测全屏/黑屏恢复路径。
 - 剪贴板去重靠指纹+window 级状态，改动监听逻辑先读 PR#148/#151 教训。
 - `checkba:fs-read-file` 有敏感路径拦截，别为新功能开任意路径读写。
-- Kokoro 大陆网络 401 = hf_xet 绕镜像问题，禁 xet 修（PR#142）。
+- Kokoro 大陆网络 401 = hf_xet 绕镜像问题，禁 xet 修（PR#142）。asr-models 的下载走同一条路，同样禁 xet。
+- **asr-service 不像 kokoro 那样把服务门在模型上**：kokoro 的 descriptor 有 `enabled`（没模型不起进程），asr-service **没有**。就绪探测必须能分开「服务没起」（重启应用）与「模型没下」（下 1.5GB），不起进程就只剩前一种结论，用户照提示重启一万次也不会有模型。
+- **`POST /api/files/{id}/upload` 同时是编辑器自动保存的落点**（`LibreOfficeEditor.uploadBytes`
+  不带 `X-File-Total-Size` 头，命中 `FileController` 的 legacy 分支）。挂在那条分支上的
+  「上传完成」副作用因此在一份正在编辑的文档上**每存一次盘就跑一次**。
+  已踩过一次：`AutoTaggingService` 每次都调一遍 LLM 拿 5 个新词，而
+  `getOrCreateSystemTag` 只按精确字符串去重，标签无上限累积（实测单文件 338 个），
+  每次自动保存还白烧一次辅助模型的钱。修法是**在 AutoTaggingService 里加幂等闸**
+  （文件已有系统标签就跳过，`AutoTaggingServiceTest` 钉住），不是在 FileController
+  里按调用方分类——那要靠猜谁是自动保存。
+  **同一条分支上的 `refreshProjectKnowledgeIncremental` 不要跟着砍**：它只做
+  `retrieverCache.remove(projectId)`，几乎零成本，而且内容变了让缓存失效正是对的，
+  砍掉会让 AI 读到旧内容。往这条分支上加新副作用前，先问「一份文档存 60 次盘，
+  这件事跑 60 次可以吗」。
 - **免费额度的红线**：剪贴板是「隐藏超出部分」、缓存区是「拒绝新增」，两者都**绝不删除或清理用户已有数据**。任何"顺手清理超额记录"的改动都是回归——用户付费后必须能看到之前被隐藏的全部内容。
 - **权益失效不等于把人锁在外面**：`applyOnStartup` 无条件应用自选存储根（权益失效后数据照常读写），因此 `GET /api/storage/location` 与「恢复默认位置」都**不设权益闸**——否则 Key 被吊销 + 外置盘拔掉的用户既看不到自己数据在哪，也换不回默认位置。付费闸只加在「改到新的自选位置」这个动作上。
 - `StorageException` 默认落到通用异常处理器会被替换成「服务器内部错误」（防路径回显）。存储位置那几条用户语言文案是在 `StorageLocationController` 里转成 `IllegalArgumentException` 才送出去的，新增可回显文案要走同一条路且确保不含路径。

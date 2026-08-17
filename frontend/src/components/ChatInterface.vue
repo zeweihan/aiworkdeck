@@ -2518,7 +2518,7 @@ export default {
 }
 
 .user-bubble {
-  background: #E8F3ED; /* AI Workdeck品牌色 Lightest */
+  background: #E8F3ED; /* AI WorkDeck品牌色 Lightest */
   padding: 8px 12px;
   border-radius: 6px 6px 0 6px;
   max-width: 80%;
@@ -3238,7 +3238,7 @@ export default {
 }
 
 /* =============================================
-   AI Workdeck Style - Input Image Preview
+   AI WorkDeck Style - Input Image Preview
    ============================================= */
 .input-images-preview {
   display: flex;
@@ -3286,7 +3286,7 @@ export default {
 }
 
  /* =============================================
-    AI Workdeck Style - Inline Context Tags (Input Box)
+    AI WorkDeck Style - Inline Context Tags (Input Box)
     Transparent background + border style
     ============================================= */
  :deep(.context-tag-inline) {
@@ -3363,7 +3363,7 @@ export default {
  }
 
  /* =============================================
-    AI Workdeck Style - Inline Context Tags (User Bubble)
+    AI WorkDeck Style - Inline Context Tags (User Bubble)
     Lighter/transparent background for visibility
     ============================================= */
 .user-bubble .context-tag-inline {
@@ -3558,7 +3558,7 @@ export default {
 }
 
 /* =============================================
-   AI Workdeck Style - Upload Dialog Styles
+   AI WorkDeck Style - Upload Dialog Styles
    ============================================= */
 .awd-dialog-mask {
   position: fixed;

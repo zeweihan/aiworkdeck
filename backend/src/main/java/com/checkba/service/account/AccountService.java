@@ -92,7 +92,7 @@ public class AccountService {
         state.connectedAt = Instant.now().toString();
         state.lastSyncAt = state.connectedAt;
         saveState(state);
-        log.info("已连接 AI Workdeck 账户: {}", state.username);
+        log.info("已连接 AI WorkDeck 账户: {}", state.username);
         return status();
     }
 
@@ -281,8 +281,8 @@ public class AccountService {
         State state = loadState();
         if (state.key == null || state.key.isBlank()) {
             throw new AccountException(AccountException.Kind.NOT_CONNECTED,
-                    LangText.of("尚未连接 AI Workdeck 账户，可在设置页「账户与用量」粘贴账户 Key",
-                            "No AI Workdeck account connected yet. Paste your account key on the Settings page under \"Account & Usage\""));
+                    LangText.of("尚未连接 AI WorkDeck 账户，可在设置页「账户与用量」粘贴账户 Key",
+                            "No AI WorkDeck account connected yet. Paste your account key on the Settings page under \"Account & Usage\""));
         }
         return state.key;
     }
@@ -306,7 +306,7 @@ public class AccountService {
         }
         if (status >= 500) {
             throw new AccountException(AccountException.Kind.NETWORK,
-                    LangText.of("AI Workdeck 服务器暂时不可用，请稍后重试", "The AI Workdeck server is temporarily unavailable, please retry shortly"));
+                    LangText.of("AI WorkDeck 服务器暂时不可用，请稍后重试", "The AI WorkDeck server is temporarily unavailable, please retry shortly"));
         }
         if (status < 200 || status >= 300) {
             throw new AccountException(AccountException.Kind.MALFORMED,
@@ -347,7 +347,7 @@ public class AccountService {
 
     private static AccountException networkError() {
         return new AccountException(AccountException.Kind.NETWORK,
-                LangText.of("无法连接 AI Workdeck 服务器，请检查网络后重试", "Could not connect to the AI Workdeck server, please check your network and retry"));
+                LangText.of("无法连接 AI WorkDeck 服务器，请检查网络后重试", "Could not connect to the AI WorkDeck server, please check your network and retry"));
     }
 
     private Map<String, Object> parse(String body) {

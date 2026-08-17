@@ -41,7 +41,7 @@ public class WorkSessionService {
             DateTimeFormatter.ofPattern("MMM d", java.util.Locale.ENGLISH);
 
     /** AI 轮次自动存档的固定署名，让律师在时间线上分辨哪些改动是 AI 做的。 */
-    private static final String AI_AUTHOR_NAME = "AI Workdeck";
+    private static final String AI_AUTHOR_NAME = "AI WorkDeck";
     private static final String AI_AUTHOR_EMAIL = "ai@aiworkdeck.local";
 
     private final ProjectRepoService repoService;
@@ -399,7 +399,7 @@ public class WorkSessionService {
             if (repoService.pendingChanges(projectId).isEmpty()) return;
             manifestService.writeToWorkTree(projectId, manifestService.capture(projectId));
             repoService.commitAll(projectId, LangText.of("自动存档", "Autosave"), "auto", null,
-                    "AI Workdeck", "system@aiworkdeck.local");
+                    "AI WorkDeck", "system@aiworkdeck.local");
             log.info("push 前停靠了主线脏区: project={}", projectId);
         } catch (Exception e) {
             log.warn("push 前停靠失败（不阻断接收）: project={}", projectId, e);
@@ -483,7 +483,7 @@ public class WorkSessionService {
     }
 
     /**
-     * AI 轮次结束的落版：以 AI 身份（AI Workdeck &lt;ai@aiworkdeck.local&gt;）落一笔自动存档，
+     * AI 轮次结束的落版：以 AI 身份（AI WorkDeck &lt;ai@aiworkdeck.local&gt;）落一笔自动存档，
      * 让时间线能看出「哪些改动是 AI 做的」。无变更返回 null。
      * 稿分支（{@code draft/*}）上跳过 {@link #ensureSession}——稿不隐式开工作段，
      * 但清单写入与提交照旧，稿上的 AI 轮次也必须正常落版。

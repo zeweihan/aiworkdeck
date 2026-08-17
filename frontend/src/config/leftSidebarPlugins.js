@@ -25,18 +25,10 @@ export const LEFT_SIDEBAR_PLUGINS = [
       { d: 'M11 18h10' }
     ]
   },
-  {
-    key: 'shareholder-meeting',
-    label: t('config.sidebar.shareholderMeeting'),
-    svgPaths: [
-      { d: 'M3 22h18' },
-      { d: 'M6 18v-7' },
-      { d: 'M10 18v-7' },
-      { d: 'M14 18v-7' },
-      { d: 'M18 18v-7' },
-      { d: 'M11.1 2.2a2 2 0 0 1 1.8 0l7.9 3.85c.47.23.3.95-.23.95H3.43c-.53 0-.7-.72-.22-.95L11.1 2.2Z' }
-    ]
-  },
+  // 股东大会核查已下线（2026-08-17，维护者决定不做了）。左栏入口移除即等于功能隐藏；
+  // ShareholderMeetingPanel.vue / api.js 的 /api/shareholder-meeting/* / 后端 controller
+  // 与实体一律保留不动（存量案卷的数据还在库里），skill 也只改成默认不启用。
+  // 想恢复的话把这一项加回来即可，不需要重写任何东西。
   {
     key: 'litigation-visual',
     label: t('config.sidebar.litigationVisual'),
@@ -75,8 +67,10 @@ export const LEFT_SIDEBAR_PLUGINS = [
     ]
   },
   {
+    // 路由键仍是 easyvoice（leftPaneKey 的持久化值，改名要动 uni.storage 里的存量），
+    // 但展示名不再叫 EasyVoice——那是早就停用的 Docker 服务代号，面板做的是语音合成。
     key: 'easyvoice',
-    label: 'EasyVoice',
+    label: t('config.sidebar.tts'),
     svgPaths: [
       { d: 'M2 10v4' },
       { d: 'M6 6v12' },
@@ -126,5 +120,23 @@ export function getPluginsForUser(role) {
 export function filterPluginsByEnabledSkills(plugins, enabledSkillIds) {
   const enabled = enabledSkillIds instanceof Set ? enabledSkillIds : new Set(enabledSkillIds || [])
   return plugins.filter(p => !p.requiresSkill || enabled.has(p.requiresSkill))
+}
+
+/**
+ * 「面板型 skill」：技术上是 skills/<id>/ 那一套，但装完之后用户看到的是左栏
+ * 多了一个图标、点开是一整个面板（会议录音、诉讼可视化）。按 PR#198 定下的概念
+ * 模型，长在 Railway 上、只有启用/停用的那一档叫**插件**；「生效方式三档」是
+ * 对话型 skill 的概念，对面板型讲不通——面板的「生成纪要」按钮拼的 kick-off
+ * prompt 要靠触发词命中，设成 manual 等于按钮点了没反应。
+ *
+ * 所以广场里按插件呈现（启用/停用一个开关），判据就是这里的 requiresSkill——
+ * 不另立一张表，rail 上有没有它跟广场里怎么呈现必须是同一个事实。
+ */
+export const PANEL_SKILL_IDS = LEFT_SIDEBAR_PLUGINS
+  .filter(p => p.requiresSkill)
+  .map(p => p.requiresSkill)
+
+export function isPanelSkill(skillId) {
+  return PANEL_SKILL_IDS.includes(skillId)
 }
 

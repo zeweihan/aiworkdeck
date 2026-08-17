@@ -14,7 +14,7 @@
  *
  * 配色守浅色红线：白 / #F8F9FA 底 + 森林绿 #1A5336 + mint #5BD197 点缀，不做深色 chrome。
  */
-/* 品牌配色变量 - Updated to AI Workdeck Palette */
+/* 品牌配色变量 - Updated to AI WorkDeck Palette */
 $brand-primary: #1A5336; /* Forest Green */
 $brand-accent: #5BD197;  /* Mint Green */
 $brand-dark: #212629;    /* Dark BG */
@@ -690,4 +690,141 @@ $danger-color: #E74C3C;
   .stat-card {
     min-width: 45%;
   }
+}
+
+/* ================= 新建区（列表下方） =================
+   2026-08 从 pages/newproject/index.vue 搬来的两个入口。放在列表下方而不是页头，
+   是维护者定的形制：先看见自己有哪些案卷，再谈新建。
+   「单独打开一个文件」那条已去掉——它造出的是个没有归属的临时项目。 */
+
+.create-section {
+    margin-top: 32px;
+    padding-top: 24px;
+    border-top: 1px solid $border-color;
+}
+
+.create-section-title {
+    display: block;
+    margin-bottom: 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: $text-secondary;
+}
+
+.create-row {
+    display: flex;
+    flex-direction: row;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.create-card {
+    flex: 1 1 260px;
+    min-width: 0;
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px 18px;
+    background: $brand-white;
+    border: 1px solid $border-color;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover {
+        border-color: $brand-accent;
+        box-shadow: 0 4px 16px rgba(26, 83, 54, 0.08);
+    }
+
+    &.is-busy {
+        opacity: 0.55;
+        cursor: default;
+    }
+}
+
+.create-glyph {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    margin-top: 2px;
+    color: $brand-primary;
+}
+
+.create-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.create-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: $text-main;
+}
+
+.create-desc {
+    font-size: 12px;
+    color: $text-secondary;
+    line-height: 1.5;
+}
+
+.create-busy-hint {
+    display: block;
+    margin-top: 12px;
+    font-size: 12px;
+    color: $text-secondary;
+}
+
+/* 新建项目文件夹的命名弹窗（随流程一起从 newproject 页搬来） */
+.naming-mask {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: rgba(18, 52, 77, 0.28);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.naming-dialog {
+    width: 420px;
+    max-width: calc(100vw - 48px);
+    padding: 20px;
+    background: $brand-white;
+    border-radius: 10px;
+    box-shadow: 0 16px 44px rgba(18, 52, 77, 0.2);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.naming-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: $text-main;
+}
+
+.naming-location {
+    font-size: 12px;
+    color: $text-secondary;
+    word-break: break-all;
+}
+
+.naming-input {
+    height: 36px;
+    padding: 0 12px;
+    border: 1px solid $border-color;
+    border-radius: 6px;
+    font-size: 13px;
+    color: $text-main;
+    box-sizing: border-box;
+}
+
+.naming-actions {
+    display: flex;
+    flex-direction: row;
+    justify-content: flex-end;
+    gap: 10px;
 }

@@ -20,9 +20,12 @@
                 @blur="cancelRenameProject"
               />
             </view>
-            <text v-else class="project-name" @tap="startRenameProject" :title="$t('workbench.clickToRename')">{{ project.name || $t('workbench.unnamedProject') }}</text>
-            <!-- IDE 化：最近项目切换器（VS Code 的 Open Recent 语义） -->
-            <view class="project-switcher" @tap.stop="toggleProjectSwitcher" :title="$t('workbench.switchRecentProject')">
+            <!-- IDE 化：最近项目切换器（VS Code 的 Open Recent 语义）。
+                 整块「项目名 + ▾」都是切换器的命中区：启动落点改成项目列表页之后，
+                 「换一个项目」成了高频动作，只把一个 11px 的箭头当热区没人找得到。
+                 重命名随之移进菜单（点名字改名是隐藏交互，本来也没人知道）。 -->
+            <view v-else class="project-switcher" @tap.stop="toggleProjectSwitcher" :title="$t('workbench.switchRecentProject')">
+              <text class="project-name">{{ project.name || $t('workbench.unnamedProject') }}</text>
               <text class="switcher-arrow" :class="{ 'is-open': projectSwitcherOpen }">▾</text>
             </view>
             <view v-if="projectSwitcherOpen" class="switcher-mask" @tap.stop="projectSwitcherOpen = false"></view>
@@ -41,6 +44,9 @@
               </view>
               <view class="switcher-item switcher-home" @tap="goProjectHome">
                 <text>{{ $t('workbench.projectHome') }}</text>
+              </view>
+              <view class="switcher-item switcher-rename" @tap="startRenameFromSwitcher">
+                <text>{{ $t('workbench.renameProject') }}</text>
               </view>
               <view class="switcher-item switcher-all" @tap="goAllProjects">
                 <text>{{ $t('workbench.allProjects') }}</text>
@@ -212,6 +218,22 @@
     <view class="main-layout" :class="{ 'is-compact': isCompactLayout }">
       <!-- Cursor 风格：最左常驻栏（Activity Bar） -->
       <view class="left-rail">
+        <!-- 项目概览：2026-08 起概览不再是列表与工作台之间那一跳独立页，
+             而是工作台里的一个中栏标签（一页纸宽 880px，塞进 260px 左栏会全部重排）。
+             放在 rail 第一位——它是「这个项目的门面」，在文件树之上。 -->
+        <view
+          class="rail-btn"
+          :class="{ active: isProjectHomeTabActive }"
+          :title="$t('projects.overviewPageTitle')"
+          @tap="openProjectHomeTab"
+        >
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(d, gi) in GLYPHS.landmark" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
+        </view>
+
         <view
           v-for="p in LEFT_SIDEBAR_PLUGINS"
           :key="p.key"
@@ -362,7 +384,7 @@
         @confirm="handleFilePickerConfirm"
       />
 
-      <!-- Invite Modal (Refactored to AI Workdeck) -->
+      <!-- Invite Modal (Refactored to AI WorkDeck) -->
       <!-- Invite Member Dialog -->
       <InviteMemberDialog
         v-model:visible="showInviteModal"
@@ -431,7 +453,12 @@
       <view class="sidebar-left" ref="sidebarLeft" :class="{ collapsed: sidebarCollapsed }" :style="{ width: sidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
         <!-- 批量菜单遮罩：用于点击空白关闭下拉（不弹中间） -->
         <view v-if="showBatchMenu" class="batch-menu-mask" @tap="closeBatchMenu"></view>
-        <view v-if="!sidebarCollapsed && leftPaneKey !== 'dd-files'" class="sidebar-header">
+        <!-- 左栏标题的唯一出处。此前各面板还各画各的 header，于是「诉讼可视化」
+             「会议录音」这类面板的标题在同一屏里出现两次，而搜索面板靠把自己那份
+             注释掉躲过去——四种写法并存。现在一律由这里出，面板自己只画分组头。
+             dd-files 曾经是个例外（它有自己的 header 带「＋」），那个按钮已经挪进
+             面板内部的分组头里，例外随之取消。 -->
+        <view v-if="!sidebarCollapsed" class="sidebar-header">
           <view class="sidebar-title-row">
             <text v-if="!fileBatchMode" class="sidebar-title">{{ leftPaneTitle }}</text>
             <view
@@ -851,6 +878,16 @@
                       :spec="activeFileLeft.marketSpec"
                       @open-url="openBrowserTab($event)"
                     />
+                    <!-- 项目概览标签：与独立页共用同一个 ProjectHomePane。
+                         这里的「打开某条对话」是就地切会话（已经在工作台里了），
+                         不像独立页那样 reLaunch。 -->
+                    <ProjectHomePane
+                      v-else-if="activeFileLeft.tabType === 'project-home'"
+                      :key="activeFileLeft.id"
+                      :project-id="projectId"
+                      embedded
+                      @open-conversation="openConversationInPanel"
+                    />
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
                       :url="activeFileLeft.frontendEntry"
@@ -943,6 +980,16 @@
                       :key="activeFileRight.id"
                       :spec="activeFileRight.marketSpec"
                       @open-url="openBrowserTab($event)"
+                    />
+                    <!-- 项目概览标签：与独立页共用同一个 ProjectHomePane。
+                         这里的「打开某条对话」是就地切会话（已经在工作台里了），
+                         不像独立页那样 reLaunch。 -->
+                    <ProjectHomePane
+                      v-else-if="activeFileRight.tabType === 'project-home'"
+                      :key="activeFileRight.id"
+                      :project-id="projectId"
+                      embedded
+                      @open-conversation="openConversationInPanel"
                     />
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"
@@ -1439,7 +1486,7 @@
       <view class="status-sep"></view>
       <view class="status-item status-brand">
         <view class="status-dot mint"></view>
-        <text>AI Workdeck</text>
+        <text>AI WorkDeck</text>
       </view>
     </view>
   </view>
@@ -1463,6 +1510,7 @@ import DrawioEditor from '@/components/DrawioEditor.vue'
 // 插件广场 VS Code 形态：左栏列表面板 + 中栏详情 tab（整页 MarketPane 仅存于 admin 独立页）
 import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
 import MarketDetailPane from '@/components/MarketDetailPane.vue'
+import ProjectHomePane from '@/components/project-home/ProjectHomePane.vue'
 import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
@@ -1576,6 +1624,7 @@ export default {
     DrawioEditor,
     MarketSidebarPanel,
     MarketDetailPane,
+    ProjectHomePane,
     CompareDocDialog,
     DocDiffViewer,
     VersionCompareTab,
@@ -1844,6 +1893,11 @@ export default {
   computed: {
     GLYPHS() {
       return GLYPHS
+    },
+    /** rail 上「项目概览」按钮的高亮态：该标签是当前活跃窗格的活跃标签 */
+    isProjectHomeTabActive() {
+      const active = this.focusedPane === 'right' ? this.activeFileIdRight : this.activeFileIdLeft
+      return active === 'project-home'
     },
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
@@ -2678,7 +2732,7 @@ export default {
     }
   },
   watch: {
-    // IDE 化窗口标题：「文件名 — 项目名 — AI Workdeck」（Electron 窗口标题跟随 document.title）
+    // IDE 化窗口标题：「文件名 — 项目名 — AI WorkDeck」（Electron 窗口标题跟随 document.title）
     'project.name'() { this.updateWindowTitle() },
     activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState() },
     // 菜单栏的勾选/置灰跟着这些走。编辑器与 AI 面板内部的状态走 @menu-state
@@ -2770,7 +2824,7 @@ export default {
         const parts = []
         if (active && active.name) parts.push(active.name)
         if (this.project && this.project.name) parts.push(this.project.name)
-        parts.push('AI Workdeck')
+        parts.push('AI WorkDeck')
         document.title = parts.join(' — ')
       } catch (e) { /* 标题失败不影响功能 */ }
     },
@@ -2798,10 +2852,45 @@ export default {
       uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${p.id}` })
     },
     // 工作台通往项目概览页的唯一入口。工作台参与的跳转一律 reLaunch。
+    // 顶栏切换器里的「项目概览」：与 rail 按钮同一个动作。
+    // 2026-08 之前这里 reLaunch 到 pages/project-home 独立页——那等于把整个工作台
+    // （标签、编辑器、AI 会话）拆掉换成一页只读卷轴，回来还要重开一遍文件。
     goProjectHome() {
       this.projectSwitcherOpen = false
+      this.openProjectHomeTab()
+    },
+    /** 中栏开「项目概览」标签（单例；任一窗格已开则激活） */
+    openProjectHomeTab() {
       if (!this.projectId) return
-      uni.reLaunch({ url: `/pages/project-home/project-home?id=${this.projectId}` })
+      const tabId = 'project-home'
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find(f => f.id === tabId)
+        if (existing) {
+          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      list.push({ id: tabId, tabType: 'project-home', name: this.$t('projects.overviewPageTitle') })
+      this[targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = tabId
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
+    },
+    /** 概览标签里点某条历史对话：已经在工作台里了，就地切会话，不跳页 */
+    openConversationInPanel(conversationId) {
+      if (!conversationId) return
+      const wasOpen = this.showAiPanel
+      if (!wasOpen) this.toggleAiPanel()
+      // loadHistoryChat 要 $refs.chatInterface；面板刚打开时它还没挂上，
+      // 等一拍（与 onLoad 里消费 query.conversationId 那处同一个口径）
+      this.$nextTick(() => {
+        if (wasOpen) this.loadHistoryChat({ conversationId })
+        else setTimeout(() => this.loadHistoryChat({ conversationId }), 600)
+      })
     },
     goAllProjects() {
       this.projectSwitcherOpen = false
@@ -3212,6 +3301,11 @@ export default {
       if (file.tabType === 'market-detail') {
         return true
       }
+      // 项目概览 tab：同理常显。它的入口是 rail 上的按钮，不属于任何左栏模式，
+      // 被 v-show 藏死的话点了 rail 什么也不会发生。
+      if (file.tabType === 'project-home') {
+        return true
+      }
       // 普通文件在资源管理器、搜索或EasyVoice模式下都可见。
       // 诉讼可视化面板也要放行：图廊的「打开」是那个面板唯一的出图入口，
       // 不放行的话点了之后标签被 v-show 藏死、编辑区显示空闲态，功能等于不存在
@@ -3222,6 +3316,10 @@ export default {
     startRenameProject() {
       this.renameProjectName = this.project.name || ''
       this.isRenamingProject = true
+    },
+    startRenameFromSwitcher() {
+      this.projectSwitcherOpen = false
+      this.startRenameProject()
     },
     async confirmRenameProject() {
       if (!this.renameProjectName || !this.renameProjectName.trim()) {
@@ -4588,7 +4686,7 @@ export default {
            ? file.name.substring(0, maxLen) + '...'
            : file.name
 
-       // Use AI Workdeck brand colors for the tag
+       // Use AI WorkDeck brand colors for the tag
        const tagHtml = `<span class="ai-tag" contenteditable="false" data-file-id="${file.id || file.fileId}" data-full-name="${file.name}" title="${file.name}" style="background: linear-gradient(135deg, #1A5336 0%, #2D7A52 100%); color: #FFFFFF; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; box-shadow: 0 1px 3px rgba(26,83,54,0.2);">@${displayName}</span>&nbsp;`
 
 

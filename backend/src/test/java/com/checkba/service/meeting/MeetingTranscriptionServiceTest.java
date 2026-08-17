@@ -4,6 +4,9 @@ import com.checkba.model.entity.MeetingRecording;
 import com.checkba.repository.MeetingRecordingRepository;
 import com.checkba.repository.ProjectFileRepository;
 import com.checkba.service.SystemSettingService;
+import com.checkba.service.platform.ExternalProviderResolver;
+import com.checkba.service.platform.ExternalServiceProvider;
+import com.checkba.service.platform.PlatformGatewayClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -47,9 +50,14 @@ class MeetingTranscriptionServiceTest {
     private MeetingTranscriptionService service(boolean configured) {
         when(settingService.get(anyString(), anyString()))
                 .thenAnswer(inv -> configured ? "x" : "");
+        // 本类整体验的是 byok 档：档位解析恒回 BYOK，网关那两个协作者一次都不该被碰
+        ExternalProviderResolver resolver = mock(ExternalProviderResolver.class);
+        when(resolver.resolve(anyString())).thenReturn(ExternalServiceProvider.BYOK);
         return new MeetingTranscriptionService(
                 meetingRepository, mock(ProjectFileRepository.class), null, settingService,
-                mock(MeetingAudioTranscoder.class), tingwu, oss, fetcher,
+                mock(MeetingAudioTranscoder.class), tingwu, oss,
+                resolver, mock(PlatformGatewayClient.class), mock(LocalAsrClient.class),
+                fetcher, mock(MeetingTranscriptionService.BinaryUploader.class),
                 "", "", "", "", "");
     }
 
@@ -121,6 +129,24 @@ class MeetingTranscriptionServiceTest {
 
         assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
         assertTrue(out.getError().contains("音频损坏"));
+    }
+
+    @Test
+    @DisplayName("poll-on-read：听悟 INVALID 也是终态失败（不能一路当成还在跑），并清中转对象")
+    void refreshInvalidIsTerminalFailure() throws Exception {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setTingwuTaskId("task-1");
+        when(tingwu.getTask(any(), eq("task-1"))).thenReturn(new TingwuClient.TaskInfo(
+                "INVALID", "音频地址无法访问", null, null, null, null));
+
+        MeetingRecording out = service(true).refreshIfNeeded(m);
+
+        assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
+        // 文案要能看出是上游拒收，不是我们卡住了
+        assertTrue(out.getError().contains("未受理"), "实际文案: " + out.getError());
+        assertTrue(out.getError().contains("音频地址无法访问"));
+        // 清理只挂在完成/失败两条路径上，漏判终态就会把中转音频永远留在 OSS 里
+        verify(oss, atLeastOnce()).deleteQuietly(any(), anyString());
     }
 
     @Test
