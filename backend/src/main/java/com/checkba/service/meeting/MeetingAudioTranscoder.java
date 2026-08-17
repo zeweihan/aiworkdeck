@@ -21,7 +21,8 @@ import java.nio.file.Path;
 public class MeetingAudioTranscoder {
 
     private static final int SAMPLE_RATE = 16000;
-    private static final int BITRATE = 48_000;
+    /** 包内可见：平台档在前端没回报时长时按这个码率从产物体积反推时长。 */
+    static final int BITRATE = 48_000;
 
     /** 转成 mp3；失败时返回原文件（调用方按返回文件的扩展名决定 OSS objectKey）。 */
     public File toMp3(File input, Path workDir) {
