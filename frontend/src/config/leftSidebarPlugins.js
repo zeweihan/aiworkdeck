@@ -128,3 +128,21 @@ export function filterPluginsByEnabledSkills(plugins, enabledSkillIds) {
   return plugins.filter(p => !p.requiresSkill || enabled.has(p.requiresSkill))
 }
 
+/**
+ * 「面板型 skill」：技术上是 skills/<id>/ 那一套，但装完之后用户看到的是左栏
+ * 多了一个图标、点开是一整个面板（会议录音、诉讼可视化）。按 PR#198 定下的概念
+ * 模型，长在 Railway 上、只有启用/停用的那一档叫**插件**；「生效方式三档」是
+ * 对话型 skill 的概念，对面板型讲不通——面板的「生成纪要」按钮拼的 kick-off
+ * prompt 要靠触发词命中，设成 manual 等于按钮点了没反应。
+ *
+ * 所以广场里按插件呈现（启用/停用一个开关），判据就是这里的 requiresSkill——
+ * 不另立一张表，rail 上有没有它跟广场里怎么呈现必须是同一个事实。
+ */
+export const PANEL_SKILL_IDS = LEFT_SIDEBAR_PLUGINS
+  .filter(p => p.requiresSkill)
+  .map(p => p.requiresSkill)
+
+export function isPanelSkill(skillId) {
+  return PANEL_SKILL_IDS.includes(skillId)
+}
+

@@ -1,14 +1,20 @@
 #!/usr/bin/env node
 /**
- * 三级导航契约静态护栏（项目列表页 → 项目概览页 → 工作台）。
+ * 导航契约静态护栏（项目列表页 → 工作台；概览是工作台里的一个标签）。
  *
  * 存在理由：这套导航散在 launch / login / newproject / project-overview / 两个新页面
  * 共十来处硬编码 URL 上，改错一处不会编译报错，只会在真人走到那一步时落到空白页
  * 或者多跳一次。规则写死在这里，CI 每次跑。
  *
+ * 2026-08 改动（三级 → 两级）：概览不再是列表与工作台之间的一站独立页，而是
+ * 工作台中栏的一个标签（rail 第一个按钮，内容本体 components/project-home/
+ * ProjectHomePane.vue 两个宿主共用）。列表点卡片直接 reLaunch 进工作台；
+ * 启动一律落项目列表页，不再「有最近项目就直达工作台」。
+ * pages/project-home 薄壳保留给直链与深链。
+ *
  * 术语（同名不同物，别看串）：
  *   工作台       = pages/project-overview/project-overview（四列干活界面，不改名）
- *   项目概览页   = pages/project-home/project-home（一页纸卷轴）
+ *   项目概览     = 一页纸卷轴 ProjectHomePane，宿主是工作台标签 / project-home 薄壳页
  *   项目列表页   = pages/project-list/project-list（原个人中心的「我的项目」tab）
  *
  * 用法：cd frontend && npm run check:nav
@@ -200,17 +206,30 @@ check('项目列表页角色文案收敛到 config/memberRoles.js', () => {
   return null
 })
 
-check('项目列表页点卡片进项目概览页（navigateTo）', () => {
+check('项目列表页点卡片直达工作台（reLaunch）', () => {
   const src = readVue('src/pages/project-list/project-list.vue')
-  if (!src.includes('/pages/project-home/project-home?id=')) return 'goToProject 没有指向项目概览页'
-  if (src.includes('/pages/project-overview/project-overview')) {
-    return '不许从列表页直连工作台，必须先经概览页'
+  const body = extractMethodBody(src, 'goToProject(projectId)')
+  if (!body) return '找不到 goToProject(projectId)'
+  if (!body.includes('/pages/project-overview/project-overview?id=')) {
+    return 'goToProject 没有指向工作台（概览已收进工作台标签，中间那一跳已取消）'
   }
-  const i = src.indexOf('goToProject(projectId)')
-  if (i < 0) return '找不到 goToProject(projectId)'
-  if (!src.slice(i, i + 300).includes('navigateTo')) {
-    return '列表页→概览页两端都不是工作台，必须用 navigateTo 不是 reLaunch'
+  if (!body.includes('uni.reLaunch')) {
+    return '工作台参与的跳转一律 reLaunch：navigateTo 会把列表页留在栈里，再进另一个项目就有两个存活的工作台实例'
   }
+  if (src.includes('/pages/project-home/project-home')) {
+    return '列表页不该再指向概览独立页（那一跳已取消）'
+  }
+  return null
+})
+
+check('项目列表页自带两个新建入口，且没有「打开单个文件」', () => {
+  const src = readVue('src/pages/project-list/project-list.vue')
+  const miss = ['openFolderFlow', 'createFolderFlow'].filter((f) => !src.includes(f))
+  if (miss.length) return '缺新建入口: ' + miss.join(', ')
+  if (src.includes('openFileFlow')) {
+    return '「打开单个文件」造出的是没有归属的临时项目，已从新建入口去掉'
+  }
+  if (!src.includes('namingVisible')) return '新建项目文件夹的命名弹窗没搬过来'
   return null
 })
 
@@ -296,11 +315,13 @@ check('个人中心保住了不该删的东西', () => {
 const USERPROFILE_ROUTE = '/pages/userprofile/userprofile'
 const countOf = (s, sub) => s.split(sub).length - 1
 
-check('launch 无最近项目兜底落项目列表页', () => {
+check('launch 一律落项目列表页', () => {
   const src = readVue('src/pages/launch/launch.vue')
   if (src.includes(USERPROFILE_ROUTE)) return '还指着个人中心'
   if (!src.includes("reLaunch({ url: '/pages/project-list/project-list' })")) return '没有指向项目列表页'
-  if (!src.includes('/pages/project-overview/project-overview?id=')) return '启动直达工作台那条被改坏了'
+  if (src.includes('/pages/project-overview/project-overview')) {
+    return '启动不再直达工作台（2026-08 维护者定的落点）：开机先看见自己有哪些案卷'
+  }
   return null
 })
 
@@ -366,7 +387,7 @@ check('工作台 rail 头像仍 navigateTo 个人中心（不许顺手改）', (
   return null
 })
 
-check('五条直达工作台的出口一条都没动', () => {
+check('四条直达工作台的出口一条都没动', () => {
   const bad = []
   // 2026-08-16：应用菜单的派发从 App.vue 收口进 appMenuBridge，「最近打开」与
   // 「切换项目」两条都落在那里。行为不变（仍是 reLaunch 直达工作台），锚点跟着搬。
@@ -387,17 +408,35 @@ check('admin 切换本机工作区仍清最近项目', () => {
 
 // ==================== 工作台通往概览页的入口 ====================
 
-check('工作台切换器有通往项目概览页的入口', () => {
+check('工作台里「项目概览」是开中栏标签，不是跳页', () => {
   const src = readVue('src/pages/project-overview/project-overview.vue')
   if (!src.includes('switcher-home')) return '模板里缺 .switcher-home 一项'
   const body = extractMethodBody(src, 'goProjectHome()')
   if (!body) return 'goProjectHome 不在 methods 里'
-  if (!body.includes('/pages/project-home/project-home?id=')) return 'goProjectHome 没有指向项目概览页'
-  if (!body.includes('uni.reLaunch')) return '工作台参与的跳转一律 reLaunch'
-  if (body.includes('uni.navigateTo')) return '工作台参与的跳转一律 reLaunch，检测到误用 navigateTo'
+  if (body.includes('/pages/project-home/project-home')) {
+    return '不许再跳独立页：那等于把整个工作台（标签、编辑器、AI 会话）拆掉换成一页只读卷轴'
+  }
+  if (!body.includes('openProjectHomeTab')) return '应当调 openProjectHomeTab() 开中栏标签'
+  const tab = extractMethodBody(src, 'openProjectHomeTab()')
+  if (!tab) return '缺 openProjectHomeTab()'
+  if (!tab.includes("tabType: 'project-home'")) return '标签没有带 tabType: project-home'
   // 「项目概览」必须排在「全部项目…」之前（两者的首次出现都在模板里）
   if (src.indexOf('switcher-home') > src.indexOf('switcher-all')) {
     return '「项目概览」应当排在「全部项目…」之前'
+  }
+  return null
+})
+
+check('工作台 rail 上有项目概览入口，且该标签不被左栏模式藏死', () => {
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  if (!src.includes('@tap="openProjectHomeTab"')) return 'rail 上没有项目概览按钮'
+  if (!src.includes('<ProjectHomePane')) return '中栏没有渲染 ProjectHomePane'
+  // marker 带上左花括号：模板里 v-show="isTabVisible(file)" 会先命中，
+  // 从那里往后找第一个 { 会切出一大段模板而不是方法体
+  const vis = extractMethodBody(src, 'isTabVisible(file) {')
+  if (!vis) return '找不到 isTabVisible'
+  if (!vis.includes("file.tabType === 'project-home'")) {
+    return "isTabVisible 没放行 project-home 标签，点 rail 会开一个被 v-show 藏死的标签"
   }
   return null
 })
@@ -466,12 +505,16 @@ checkFull('概览页容器带全三个 e2e 锚点类名', () => {
   return miss.length ? '缺 e2e 锚点: ' + miss.join(', ') : null
 })
 
-checkFull('概览页挂了五个内容区块', () => {
-  const src = readVueOrNull(HOME_VUE)
+checkFull('概览的五个内容区块在 ProjectHomePane 里（两个宿主共用同一份）', () => {
+  const src = readVueOrNull('src/components/project-home/ProjectHomePane.vue')
   if (src === null) return NOT_YET
   const miss = ['<ProfileHeader', '<OverviewStatsBar', '<ActivityFeed', '<TaskSchedule', '<ConversationList']
     .filter((t) => !src.includes(t))
-  return miss.length ? '缺子组件: ' + miss.join(', ') : null
+  if (miss.length) return '缺子组件: ' + miss.join(', ')
+  const shell = readVueOrNull(HOME_VUE)
+  if (shell === null) return NOT_YET
+  if (!shell.includes('<ProjectHomePane')) return '概览薄壳页没有挂 ProjectHomePane'
+  return null
 })
 
 checkFull('概览页登记最近项目', () => {
@@ -518,8 +561,8 @@ checkFull('概览页 → 项目列表页按页面栈分流', () => {
   return null
 })
 
-checkFull('概览页轮询纪律', () => {
-  const src = readVueOrNull(HOME_VUE)
+checkFull('概览轮询纪律', () => {
+  const src = readVueOrNull('src/components/project-home/ProjectHomePane.vue')
   if (src === null) return NOT_YET
   // 禁字断言只看实际代码：概览页的注释里要写明「绝不调 /version/status」的理由，
   // 那段说明性文字不该把断言判红。

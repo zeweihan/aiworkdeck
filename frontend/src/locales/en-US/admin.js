@@ -3,7 +3,9 @@ export default {
   // Sidebar navigation
   navCardTitle: 'System Administration',
   rerunWizard: 'Rerun Setup Wizard',
-  backToProfile: 'Back to Profile',
+  // A sibling switch, not a "back": settings and profile redirectTo each other;
+  // the real back is the global control (utils/globalBack.js)
+  backToProfile: 'Profile',
   navConfig: 'System Configuration',
   navAi: 'AI Settings',
   navAccount: 'Account & Usage',

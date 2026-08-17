@@ -13,6 +13,12 @@ export default {
   downloadFile: 'Download File',
   videoNotSupported: 'Your browser does not support video playback',
   videoLoading: 'Loading video…',
+  // Custom audio player
+  audioLoading: 'Loading audio…',
+  audioPlay: 'Play',
+  audioPause: 'Pause',
+  audioRate: 'Playback speed',
+  audioMute: 'Mute',
   entriesCount: '{count} entries',
   extract: 'Extract',
   extracting: 'Extracting…',

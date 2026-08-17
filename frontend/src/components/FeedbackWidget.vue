@@ -17,13 +17,18 @@
 -->
 <template>
   <div class="awdfb">
+    <!-- 入口按钮可以在窗口里拖着走：钉死在右下角时它会挡住底部工具抽屉、
+         状态栏和编辑器右下角的控件。按下-拖动-松开由 pointer 事件自己判，
+         位移没超过阈值才算点击（所以这里不写 @click，否则拖完手一松还会开面板）。 -->
     <div
       v-if="!open"
       class="awdfb-launcher"
+      :class="{ 'is-moving': moving }"
+      :style="launcherStyle"
       role="button"
       tabindex="0"
       :title="$t('feedback.launcherTitle')"
-      @click="openPanel"
+      @pointerdown="onLauncherDown"
       @keydown.enter="openPanel"
     >
       <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
@@ -41,6 +46,7 @@
       <div
         class="awdfb-panel"
         :class="{ 'is-dragging': dragging }"
+        :style="panelStyle"
         @dragover.prevent="dragging = true"
         @dragleave="dragging = false"
         @drop.prevent="onDrop"
@@ -182,6 +188,9 @@ import { t as t$ } from '@/i18n'
 
 const MAX_IMAGES = 10
 const MAX_RECORD_SECONDS = 120
+// 入口按钮被拖到哪儿了。存起来是必须的：每次启动都弹回右下角的话，
+// 「它挡住了我要点的东西」这个问题等于没解决。
+const LAUNCHER_POS_KEY = 'awd_feedback_launcher_pos'
 
 // 状态对用户的说法：不暴露 NEW/PR_OPENED/EMAILED/SKIPPED/FAILED 这些内部枚举。
 const MINE_STATUS_LABELS = {
@@ -236,7 +245,11 @@ export default {
       playing: false,
       capturing: false,
       submitting: false,
+      // 注意：dragging 是「有文件被拖到面板上」，跟入口按钮的拖动无关，别混用
       dragging: false,
+      // 入口按钮的位置。null = 没挪过，走 CSS 里的右下角默认值
+      launcherPos: null,
+      moving: false,
       showContext: false,
       status: '',
       statusIsError: false,
@@ -272,21 +285,130 @@ export default {
       if (this.view === 'result') return this.resultOk ? this.$t('feedback.headResultOk') : this.$t('feedback.submitFailed')
       return this.$t('feedback.headDefaultTitle')
     },
+    launcherStyle() {
+      if (!this.launcherPos) return {}
+      // 挪过之后改成左上角定位，得把 CSS 里的 right/bottom 显式解掉
+      return {
+        left: this.launcherPos.left + 'px',
+        top: this.launcherPos.top + 'px',
+        right: 'auto',
+        bottom: 'auto',
+      }
+    },
+    panelStyle() {
+      if (!this.launcherPos) return {}
+      // 面板跟着入口所在的象限走：入口拖到左上角、面板还从右下角冒出来会很跳。
+      // 只认象限不做精确贴附——面板 420px 宽、最高 78vh，精确贴附在小窗口下必然出界。
+      const w = (typeof window !== 'undefined' && window.innerWidth) || 1280
+      const h = (typeof window !== 'undefined' && window.innerHeight) || 800
+      const atLeft = this.launcherPos.left + 60 < w / 2
+      const atTop = this.launcherPos.top + 14 < h / 2
+      return {
+        left: atLeft ? '16px' : 'auto',
+        right: atLeft ? 'auto' : '16px',
+        top: atTop ? '16px' : 'auto',
+        bottom: atTop ? 'auto' : '34px',
+      }
+    },
   },
   mounted() {
     // 菜单栏的「反馈…」「报告问题…」经这条事件打开浮窗。浮窗挂在页面树之外
     // （feedbackWidget.js 的 body 级单例），菜单派发器够不到组件实例，只能走事件。
     this._openFromMenu = () => { if (!this.open) this.openPanel() }
     try { uni.$on('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
+    this.restoreLauncherPos()
+    // 窗口缩小后旧坐标可能整个落到视口外，缩一次窗就再也点不到那个按钮了
+    this._onWinResize = () => { if (this.launcherPos) this.launcherPos = this.clampPos(this.launcherPos) }
+    try { window.addEventListener('resize', this._onWinResize) } catch (e) { /* ignore */ }
   },
   beforeUnmount() {
     try { uni.$off('awd:open-feedback', this._openFromMenu) } catch (e) { /* ignore */ }
+    try { window.removeEventListener('resize', this._onWinResize) } catch (e) { /* ignore */ }
+    this.detachLauncherDrag()
     this.stopRecording(true)
     this.stopPlay()
     this.revokeAll()
     setGlobalOverlay(false)
   },
   methods: {
+    // ==================== 入口按钮拖动 ====================
+    // 尺寸是量出来的（padding 会随文案长度变），别写死
+    launcherSize() {
+      const el = this.$el && this.$el.querySelector('.awdfb-launcher')
+      return { w: (el && el.offsetWidth) || 96, h: (el && el.offsetHeight) || 28 }
+    },
+    clampPos(pos) {
+      const { w, h } = this.launcherSize()
+      const vw = (typeof window !== 'undefined' && window.innerWidth) || 1280
+      const vh = (typeof window !== 'undefined' && window.innerHeight) || 800
+      const M = 8
+      return {
+        left: Math.min(Math.max(pos.left, M), Math.max(M, vw - w - M)),
+        top: Math.min(Math.max(pos.top, M), Math.max(M, vh - h - M)),
+      }
+    },
+    restoreLauncherPos() {
+      try {
+        const saved = uni.getStorageSync(LAUNCHER_POS_KEY)
+        if (saved && typeof saved.left === 'number' && typeof saved.top === 'number') {
+          this.launcherPos = this.clampPos(saved)
+        }
+      } catch (e) { /* 存储读不出来就用默认角落 */ }
+    },
+    onLauncherDown(e) {
+      if (e.button !== undefined && e.button !== 0) return
+      const el = e.currentTarget
+      const rect = el.getBoundingClientRect()
+      this._drag = {
+        dx: e.clientX - rect.left,
+        dy: e.clientY - rect.top,
+        x0: e.clientX,
+        y0: e.clientY,
+        moved: false,
+      }
+      // 监听挂在 window 上而不是按钮上：拖快了指针会跑出按钮范围，挂在按钮上
+      // 就收不到 pointerup，按钮会永远卡在「拖动中」。（setPointerCapture 能解决
+      // 这个问题，但它在 CDP 合成事件下不一定拿得到，e2e 会跟着一起坏。）
+      this._onLauncherMove = (ev) => this.onLauncherMove(ev)
+      this._onLauncherUp = (ev) => this.onLauncherUp(ev)
+      window.addEventListener('pointermove', this._onLauncherMove)
+      window.addEventListener('pointerup', this._onLauncherUp)
+      window.addEventListener('pointercancel', this._onLauncherUp)
+      void el
+    },
+    onLauncherMove(e) {
+      if (!this._drag) return
+      // 4px 阈值：手抖不该被当成拖动，否则想点开面板的人会拖出一点位移然后什么也没发生
+      if (!this._drag.moved
+        && Math.abs(e.clientX - this._drag.x0) < 4
+        && Math.abs(e.clientY - this._drag.y0) < 4) return
+      this._drag.moved = true
+      this.moving = true
+      this.launcherPos = this.clampPos({
+        left: e.clientX - this._drag.dx,
+        top: e.clientY - this._drag.dy,
+      })
+    },
+    onLauncherUp() {
+      const moved = !!(this._drag && this._drag.moved)
+      this.detachLauncherDrag()
+      this.moving = false
+      if (!moved) {
+        this.openPanel()
+        return
+      }
+      try { uni.setStorageSync(LAUNCHER_POS_KEY, this.launcherPos) } catch (e) { /* ignore */ }
+    },
+    detachLauncherDrag() {
+      if (this._onLauncherMove) window.removeEventListener('pointermove', this._onLauncherMove)
+      if (this._onLauncherUp) {
+        window.removeEventListener('pointerup', this._onLauncherUp)
+        window.removeEventListener('pointercancel', this._onLauncherUp)
+      }
+      this._onLauncherMove = null
+      this._onLauncherUp = null
+      this._drag = null
+    },
     openPanel() {
       this.open = true
       this.view = 'form'
@@ -677,11 +799,23 @@ function pickAudioMime() {
   user-select: none;
   box-shadow: 0 2px 10px rgba(18, 52, 77, 0.12);
   transition: box-shadow 0.15s ease, border-color 0.15s ease;
+  /* 拖到顶部那条 38px 拖拽条上时，别让它被当成「拖窗口」 */
+  -webkit-app-region: no-drag;
+  /* 触摸/触控板上不写这条，pointermove 会被浏览器的滚动手势抢走 */
+  touch-action: none;
 }
 
 .awdfb-launcher:hover {
   border-color: #5BD197;
   box-shadow: 0 4px 16px rgba(26, 83, 54, 0.18);
+}
+
+/* 拖动中：抬起来一点，并且关掉 transition——否则每一帧都在补间，跟手感全无 */
+.awdfb-launcher.is-moving {
+  cursor: grabbing;
+  transition: none;
+  border-color: #5BD197;
+  box-shadow: 0 8px 22px rgba(26, 83, 54, 0.26);
 }
 
 .awdfb-mask {

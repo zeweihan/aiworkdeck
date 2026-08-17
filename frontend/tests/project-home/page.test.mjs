@@ -5,7 +5,12 @@ import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../../src')
+// 2026-08：概览的内容本体与取数搬进了 ProjectHomePane（工作台标签与本页薄壳共用），
+// 薄壳页只剩顶栏、query 处理与两个导航出口。下面的断言按这条分界各查各的：
+//   SRC  = 薄壳页（导航出口、e2e 锚点、多实例守卫、最近项目登记）
+//   PANE = 内容本体（取数纪律、请求代守卫、卷轴顺序、保存失败回填）
 const SRC = readFileSync(resolve(ROOT, 'pages/project-home/project-home.vue'), 'utf8')
+const PANE = readFileSync(resolve(ROOT, 'components/project-home/ProjectHomePane.vue'), 'utf8')
 const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.meta.url), 'utf8')
 
 // 只在「实际代码」里做禁字断言：注释里必须能写清楚为什么不做某件事，
@@ -13,6 +18,7 @@ const ZH = readFileSync(new URL('../../src/locales/zh-CN/projects.js', import.me
 const stripComments = (s) =>
   s.replace(/<!--[\s\S]*?-->/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 const CODE = stripComments(SRC)
+const PANE_CODE = stripComments(PANE)
 
 // pages.json 不是纯 JSON（:2 行尾有 // 注释，注释里还带 https:// ），
 // 用逐字符扫描剥注释，别用 /\/\/.*$/ ——那会把字符串里的 URL 也砍掉。
@@ -65,15 +71,17 @@ test('e2e 锚点类名齐全', () => {
 })
 
 test('轮询纪律：不起定时器，不调 /version/status', () => {
-  assert.ok(!CODE.includes('setInterval'), 'A 期不许起轮询')
-  assert.ok(!CODE.includes('getVersionStatus'), '/version/status 会跑两次 git add')
-  assert.ok(!CODE.includes('version/status'))
+  for (const [name, code] of [['薄壳页', CODE], ['ProjectHomePane', PANE_CODE]]) {
+    assert.ok(!code.includes('setInterval'), name + ' 不许起轮询')
+    assert.ok(!code.includes('getVersionStatus'), name + ' 调 /version/status 会跑两次 git add')
+    assert.ok(!code.includes('version/status'), name)
+  }
 })
 
 test('timeline 失败落 unavailable 引导态而不是 toast', () => {
-  const i = SRC.indexOf('async loadActivity(')
+  const i = PANE.indexOf('async loadActivity(')
   assert.ok(i > 0)
-  const body = SRC.slice(i, SRC.indexOf('async loadTasks('))
+  const body = PANE.slice(i, PANE.indexOf('async loadTasks('))
   assert.match(body, /this\.activityUnavailable\s*=\s*true/)
   assert.ok(!body.includes('showToast'), 'timeline 失败不许弹 toast')
 })
@@ -90,15 +98,15 @@ test('onLoad 记最近项目', () => {
 })
 
 test('getMyProjects 按裸数组解（不许照抄 admin.vue 的 res.data）', () => {
-  const i = SRC.indexOf('async loadProjectCard(')
-  const body = SRC.slice(i, SRC.indexOf('async loadProfile('))
+  const i = PANE.indexOf('async loadProjectCard(')
+  const body = PANE.slice(i, PANE.indexOf('async loadProfile('))
   assert.match(body, /Array\.isArray\(res\)\s*\?\s*res\s*:\s*\[\]/)
 })
 
 test('信封端点一律再取一层 data', () => {
-  assert.ok(SRC.includes('res.data.fields'))
-  assert.ok(SRC.includes('res.data.versions'))
-  assert.ok(SRC.includes('res.data.tasks'))
+  assert.ok(PANE.includes('res.data.fields'))
+  assert.ok(PANE.includes('res.data.versions'))
+  assert.ok(PANE.includes('res.data.tasks'))
 })
 
 test('导航出口：工作台 reLaunch、列表按页面栈分流', () => {
@@ -111,12 +119,12 @@ test('导航出口：工作台 reLaunch、列表按页面栈分流', () => {
 })
 
 test('翻页带回复合游标的第二维', () => {
-  assert.ok(SRC.includes('nextBeforeId'), '复合游标第二维不能在前端丢掉')
+  assert.ok(PANE.includes('nextBeforeId'), '复合游标第二维不能在前端丢掉')
 })
 
 test('五个区块按卷轴顺序排列', () => {
   const order = ['ProfileHeader', 'OverviewStatsBar', 'ActivityFeed', 'TaskSchedule', 'ConversationList']
-  const tpl = SRC.slice(0, SRC.indexOf('</template>'))
+  const tpl = PANE.slice(0, PANE.indexOf('</template>'))
   let at = -1
   for (const c of order) {
     const i = tpl.indexOf('<' + c)
@@ -125,24 +133,29 @@ test('五个区块按卷轴顺序排列', () => {
   }
 })
 
-test('概览页不内嵌 ChatInterface；样式外置；禁 emoji；浅色', () => {
+test('概览不内嵌 ChatInterface；样式外置；禁 emoji；浅色', () => {
   assert.ok(!CODE.includes('ChatInterface'))
+  assert.ok(!PANE_CODE.includes('ChatInterface'), 'Pane 也不许内嵌——loadHistoryChat 是完整切换会话')
   assert.match(SRC, /<style lang="scss" scoped src="\.\/project-home\.scss"><\/style>/)
+  assert.match(PANE, /<style lang="scss" scoped src="\.\/project-home-pane\.scss"><\/style>/)
   assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(SRC))
-  const scss = readFileSync(resolve(ROOT, 'pages/project-home/project-home.scss'), 'utf8')
-  assert.ok(!scss.includes('#212629'), '外壳保持浅色')
-  assert.ok(scss.includes('#5BD197') && scss.includes('#1A5336'))
+  assert.ok(!/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(PANE))
+  for (const f of ['pages/project-home/project-home.scss', 'components/project-home/project-home-pane.scss']) {
+    const scss = readFileSync(resolve(ROOT, f), 'utf8')
+    assert.ok(!scss.includes('#212629'), '外壳保持浅色: ' + f)
+    assert.ok(scss.includes('#1A5336'), '缺森林绿: ' + f)
+  }
 })
 
 test('保存失败必须通过 ref 调 ProfileHeader.restoreEdit，否则输入静默丢失', () => {
-  const i = SRC.indexOf('async onProfileSave(')
+  const i = PANE.indexOf('async onProfileSave(')
   assert.ok(i > 0, '找不到 onProfileSave')
-  const body = SRC.slice(i, SRC.indexOf('goWorkbench('))
+  const body = PANE.slice(i)
   const catchIdx = body.indexOf('catch')
   assert.ok(catchIdx > 0, 'onProfileSave 没有 catch 分支')
   const catchBody = body.slice(catchIdx)
   assert.match(catchBody, /restoreEdit\(/, 'catch 里必须调 restoreEdit，否则保存失败时用户刚敲的字会静默消失')
-  assert.match(SRC, /<ProfileHeader[\s\S]*?ref="profileHeader"/, 'ProfileHeader 必须挂 ref 才能被父级调用 restoreEdit')
+  assert.match(PANE, /<ProfileHeader[\s\S]*?ref="profileHeader"/, 'ProfileHeader 必须挂 ref 才能被父级调用 restoreEdit')
 })
 
 // 请求代守卫：isActiveInstance() 只挡跨实例（切到别的项目）的过期写入，挡不住同一实例内
@@ -150,15 +163,15 @@ test('保存失败必须通过 ref 调 ProfileHeader.restoreEdit，否则输入�
 // 用旧数据覆盖刚刷新的新数据。下面几条断言源码里确实有「记代号 → 写回前比对代号」这一层。
 
 function methodBody(startMarker, endMarker) {
-  const i = SRC.indexOf(startMarker)
+  const i = PANE.indexOf(startMarker)
   assert.ok(i > 0, '找不到方法: ' + startMarker)
-  const end = SRC.indexOf(endMarker)
+  const end = PANE.indexOf(endMarker)
   assert.ok(end > i, '找不到方法边界: ' + startMarker + ' -> ' + endMarker)
-  return SRC.slice(i, end)
+  return PANE.slice(i, end)
 }
 
 test('loadAll 每轮自增请求代', () => {
-  assert.match(SRC, /loadGeneration:\s*0/, "data() 里缺 loadGeneration 初值")
+  assert.match(PANE, /loadGeneration:\s*0/, "data() 里缺 loadGeneration 初值")
   const body = methodBody('loadAll()', 'async loadProjectCard(')
   assert.match(body, /this\.loadGeneration\+\+/, 'loadAll 必须先自增请求代，否则同实例内两轮取数无法区分新旧')
 })
@@ -205,6 +218,6 @@ test('loadConversations：翻页不自增请求代，但仍要比对请求代丢
   assert.match(catchBody, /gen !== this\.loadGeneration/, '失败分支写回前没有比对请求代')
   // this.loadGeneration++ 只许在 loadAll 出现一次；翻页（reset=false）时自增会作废
   // 自己正常的追加结果——「代号变了就该丢」只对「别人刷新了整页」成立，不对「我自己在翻页」成立。
-  const incrCount = (CODE.match(/this\.loadGeneration\+\+/g) || []).length
+  const incrCount = (PANE_CODE.match(/this\.loadGeneration\+\+/g) || []).length
   assert.equal(incrCount, 1, 'this.loadGeneration++ 应当只在 loadAll 出现一次')
 })

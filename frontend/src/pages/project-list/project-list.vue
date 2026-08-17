@@ -8,9 +8,10 @@
                找不到任何通往个人中心的入口（登出/设置/解除授权全部不可达）。
                门控只收窄到「新建项目/取案卷」这两个写操作按钮上。 -->
           <view class="header-actions">
+            <!-- 新建入口已移到列表下方（维护者定的形制：先看见自己有哪些案卷，
+                 再谈新建）。这里只留「取案卷」与「个人中心」两个非创建动作。 -->
             <template v-if="!isClientUser && projects.length > 0">
               <button class="btn-secondary-small" @tap="openCloudAccept">{{ $t('projects.pullFromTeamLibrary') }}</button>
-              <button class="btn-primary-small" @tap="goToNewProject">{{ $t('projects.newProjectBtn') }}</button>
             </template>
             <button class="btn-secondary-small" @tap="goToUserProfile">{{ $t('projects.personalCenter') }}</button>
           </view>
@@ -40,10 +41,9 @@
               </view>
             </template>
             <template v-else>
-              <view class="empty-state-dashed" @tap="goToNewProject">
+              <view class="empty-state-dashed">
                 <view class="dashed-content">
-                  <text class="dashed-icon">{{ $t('projects.plusSign') }}</text>
-                  <text class="dashed-text">{{ $t('projects.newProject') }}</text>
+                  <text class="dashed-text">{{ $t('projects.emptyHint') }}</text>
                 </view>
               </view>
               <!-- 协作的唯一入口。CollabDialog 的邀请话术写死指向这里，别删 -->
@@ -146,6 +146,67 @@
               </view>
             </view>
           </view>
+
+          <!-- 新建：放在列表下方。桌面端就是「打开一个已有文件夹」与「新建一个项目
+               文件夹」两件事——本产品的项目 == 磁盘上的一个文件夹（localRoot），
+               所以「单独打开一个文件」那条已经去掉：它造出的是个没有归属的临时项目，
+               律师下次找不到它在哪。浏览器版没有系统文件夹对话框，降级为托管空白项目。 -->
+          <view v-if="!isClientUser" class="create-section">
+            <text class="create-section-title">{{ $t('projects.createSectionTitle') }}</text>
+            <view class="create-row">
+              <template v-if="isDesktop">
+                <view class="create-card" :class="{ 'is-busy': busy }" @tap="onOpenFolder">
+                  <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path v-for="(d, gi) in ICONS.folderOpen" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                  <view class="create-text">
+                    <text class="create-title">{{ $t('account.openFolderTitle') }}</text>
+                    <text class="create-desc">{{ $t('account.openFolderDesc') }}</text>
+                  </view>
+                </view>
+                <view class="create-card" :class="{ 'is-busy': busy }" @tap="onCreateFolder">
+                  <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path v-for="(d, gi) in ICONS.folderPlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                  <view class="create-text">
+                    <text class="create-title">{{ $t('account.createFolderTitle') }}</text>
+                    <text class="create-desc">{{ $t('account.createFolderDesc') }}</text>
+                  </view>
+                </view>
+              </template>
+              <view v-else class="create-card" @tap="goToNewProject">
+                <svg class="create-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in ICONS.folderPlus" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+                <view class="create-text">
+                  <text class="create-title">{{ $t('projects.newProject') }}</text>
+                  <text class="create-desc">{{ $t('account.webHint') }}</text>
+                </view>
+              </view>
+            </view>
+            <text v-if="busy" class="create-busy-hint">{{ busyText }}</text>
+          </view>
+        </view>
+      </view>
+    </view>
+
+    <!-- 新建项目文件夹：命名弹窗（与原 newproject 页同一套流程） -->
+    <view v-if="namingVisible" class="naming-mask" @tap.self="namingVisible = false">
+      <view class="naming-dialog">
+        <text class="naming-title">{{ $t('account.createFolderDialogTitle') }}</text>
+        <text class="naming-location">{{ $t('account.locationLabel', { path: namingParentDir }) }}</text>
+        <input
+          class="naming-input"
+          type="text"
+          :placeholder="$t('account.folderNamePlaceholder')"
+          :value="namingName"
+          :focus="namingVisible"
+          @input="e => { namingName = e.detail && e.detail.value }"
+          @confirm="confirmCreateFolder"
+        />
+        <view class="naming-actions">
+          <button class="btn-secondary-small" @tap="namingVisible = false">{{ $t('common.cancel') }}</button>
+          <button class="btn-primary-small" :disabled="!namingNameValid || busy" @tap="confirmCreateFolder">{{ $t('account.createBtn') }}</button>
         </view>
       </view>
     </view>
@@ -181,7 +242,8 @@ import { getMyProjects, deleteProject, renameProject, getProjectMembers, removeP
 import { getProjectTypeLabel } from '@/config/projectTypes.js'
 import { roleLabel, ROLE_LABELS } from '@/config/memberRoles.js'
 import { getCurrentUser, getSessionId } from '@/utils/auth.js'
-import { isDesktopHost } from '@/services/host.js'
+import { isDesktopHost, host } from '@/services/host.js'
+import { openFolderFlow, createFolderFlow } from '@/utils/ideOpen.js'
 import { ICONS } from '@/config/icons.js'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
@@ -197,7 +259,13 @@ export default {
       return ICONS
     },
     isDesktop() {
-      return isDesktopHost()
+      // 判据是「有没有系统文件夹对话框」而不是「是不是桌面壳」：新建入口用的正是它，
+      // 老版本壳没有 fs 命名空间时该降级到浏览器路径而不是给出点不动的按钮
+      return isDesktopHost() && !!(host.fs && host.fs.showOpenDialog)
+    },
+    namingNameValid() {
+      const n = (this.namingName || '').trim()
+      return !!n && !n.includes('/') && !n.includes('\\') && n !== '.' && n !== '..'
     },
     // CLIENT 看得见别人分享给他的案卷（ProjectService.getUserProjects 把成员身份的项目
     // 也算进去），但建项目/取案卷/删除/重命名/邀请全部对他隐藏。
@@ -224,6 +292,13 @@ export default {
       showInviteModal: false,
       currentInviteProjectId: null,
       showCloudAccept: false,
+
+      // 新建项目文件夹（原 newproject 页的流程，随新建入口一起搬过来）
+      busy: false,
+      busyText: '',
+      namingVisible: false,
+      namingParentDir: '',
+      namingName: '',
     }
   },
   onLoad() {
@@ -400,9 +475,13 @@ export default {
 
     // ---- 导航与写操作 ----
     // 列表页 → 概览页：两端都不是工作台，用 navigateTo（工作台参与的跳转才 reLaunch）
+    // 点卡片直接进工作台。2026-08 之前中间还隔着一页 project-home 概览——
+    // 概览现在是工作台里的一个标签（rail 第一个按钮），列表 → 概览 → 工作台
+    // 那一跳纯属多余。工作台参与的跳转一律 reLaunch（navigateTo 会把列表页
+    // 留在栈里，再进另一个项目就出现两个存活的工作台实例）。
     goToProject(projectId) {
-      uni.navigateTo({
-        url: `/pages/project-home/project-home?id=${projectId}`,
+      uni.reLaunch({
+        url: `/pages/project-overview/project-overview?id=${projectId}`,
       })
     },
     openCloudAccept() {
@@ -439,8 +518,45 @@ export default {
         },
       })
     },
+    // 浏览器降级路径：没有系统文件夹对话框，仍走 newproject 页的托管空白项目表单
     goToNewProject() {
       uni.navigateTo({ url: '/pages/newproject/index' })
+    },
+
+    // ---- 新建入口（桌面）：与 utils/ideOpen.js 共用同一套流程 ----
+    async onOpenFolder() {
+      if (this.busy) return
+      await this.withBusy(this.$t('account.busyOpeningFolder'), () => openFolderFlow())
+    },
+    async onCreateFolder() {
+      if (this.busy) return
+      const res = await host.fs.showOpenDialog({
+        title: this.$t('account.selectLocationTitle'),
+        buttonLabel: this.$t('account.selectHereBtn'),
+        properties: ['openDirectory', 'createDirectory'],
+      })
+      if (!res || res.canceled || !res.filePaths || !res.filePaths.length) return
+      this.namingParentDir = res.filePaths[0]
+      this.namingName = ''
+      this.namingVisible = true
+    },
+    async confirmCreateFolder() {
+      if (!this.namingNameValid || this.busy) return
+      const parentDir = this.namingParentDir
+      const name = this.namingName.trim()
+      this.namingVisible = false
+      await this.withBusy(this.$t('account.busyCreatingProject'), () => createFolderFlow(parentDir, name))
+    },
+    async withBusy(busyText, flow) {
+      this.busy = true
+      this.busyText = busyText || this.$t('account.busyOpeningProject')
+      try {
+        await flow()
+      } catch (err) {
+        uni.showToast({ title: (err && err.message) || this.$t('common.openProjectFailed'), icon: 'none' })
+      } finally {
+        this.busy = false
+      }
     },
     // 本页与个人中心两端都不是工作台，用 navigateTo（工作台参与的跳转才 reLaunch）
     goToUserProfile() {

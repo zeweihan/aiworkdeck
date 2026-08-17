@@ -53,6 +53,8 @@ export default {
   noPluginsYet: '还没有上架的插件',
   localInstallHint: '也可本地安装：把插件目录放进服务端 plugins/ 后点「重新扫描」',
   pluginLabel: '插件',
+  panelPluginLabel: '面板插件',
+  panelPluginHint: '启用后出现在左栏，点开是一个完整面板',
   installingShort: '安装中',
   pluginTrustNote: '插件与本机应用同等权限，安装前请确认来源可信。所有在线插件都经过人工审核与平台签名，桌面端安装时验签；安装后默认停用，需你在「已安装」里手动启用。',
 

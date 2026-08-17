@@ -8,7 +8,7 @@ export default {
   commandPalettePlaceholder: '输入命令名称…',
   commandPaletteEmpty: '没有匹配的命令',
   // 顶栏项目信息
-  clickToRename: '点击重命名',
+  renameProject: '重命名项目…',
   unnamedProject: '未命名项目',
   switchRecentProject: '切换到最近项目',
   recentProjects: '最近项目',

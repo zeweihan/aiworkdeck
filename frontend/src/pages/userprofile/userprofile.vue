@@ -929,8 +929,10 @@ export default {
         return timeStr
       }
     },
+    // 与 admin.goToUserProfile 对称：同级页面互跳用 redirectTo，不压栈。
+    // 两边都用 navigateTo 的旧写法会让 admin ⇄ 个人中心互相弹，回不到来处。
     goToAdmin() {
-      uni.navigateTo({
+      uni.redirectTo({
         url: '/pages/admin/admin',
       })
     },

@@ -38,6 +38,10 @@ $bg-white: #FFFFFF;
     .project-header {
       height: 48px;
       padding: 0 16px;
+      /* 这两行必须跟着 padding 简写走。少了它们，窗口窄于 1360px（compact 的阈值）
+         时简写就把顶栏让位整条吃掉，交通灯直接压在项目名上。 */
+      padding-left: max(16px, var(--awd-titlebar-safe-inline-start));
+      padding-right: max(16px, var(--awd-titlebar-safe-inline-end));
     }
   }
 }
@@ -51,6 +55,12 @@ $bg-white: #FFFFFF;
   align-items: center;
   justify-content: space-between;
   padding: 0 18px;
+  /* 无边框窗口：顶栏就是标题栏，得给系统窗口控件让位。变量定义在 App.vue，
+     非桌面/全屏下是 0，max() 自动退回上面这行的 18px。
+     写在这里而不是 App.vue 是刻意的——和自己的 padding 简写同处一份样式表，
+     不会被 .compact-mode 那条更高权重的简写吃掉（曾经就是这么坏的）。 */
+  padding-left: max(18px, var(--awd-titlebar-safe-inline-start));
+  padding-right: max(18px, var(--awd-titlebar-safe-inline-end));
   position: relative; // For absolute centering
   flex-shrink: 0;
   z-index: 200;
@@ -202,15 +212,23 @@ $bg-white: #FFFFFF;
 }
 
 /* IDE 化：最近项目切换器 */
+/* 切换器现在包着项目名一起，是顶栏上「换项目」的主入口（启动落点改成项目列表页
+   之后这是高频动作）。给一条透明描边占位，hover 才显形——常显边框会让顶栏变吵。 */
 .project-switcher {
   display: flex;
   align-items: center;
+  gap: 6px;
+  max-width: 320px;
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
+  padding: 2px 8px;
+  margin-left: -8px; /* 抵消 padding，让项目名的左缘仍与原来对齐 */
+  border: 1px solid transparent;
+  border-radius: 5px;
+  transition: background 0.15s, border-color 0.15s;
 
   &:hover {
-    background: rgba(26, 83, 54, 0.08);
+    background: rgba(26, 83, 54, 0.06);
+    border-color: rgba(26, 83, 54, 0.18);
   }
 }
 

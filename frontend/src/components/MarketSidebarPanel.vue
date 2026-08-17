@@ -153,6 +153,7 @@
 // 数据与安装链路复用 MarketPane 同一组 services/api.js 封装。
 import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, installMarketPlugin, rescanPlugins, rescanSkills } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
+import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
 import { canInstall, paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { t } from '@/i18n'
@@ -221,7 +222,10 @@ export default {
       const rows = []
       for (const s of this.skills) {
         const mode = s.activationMode || (s.enabled ? 'auto' : 'disabled')
-        const metaParts = [this.$t('market.skillWord')]
+        // 面板型（背后挂着左栏面板）在列表里也按插件标注：用户看到的是一个面板，
+        // 说它是「Skill · 自动触发」只会让人对不上号。判据见 leftSidebarPlugins.js。
+        const panel = isPanelSkill(s.id) && !s.sourcePluginId
+        const metaParts = [panel ? this.$t('market.panelPluginLabel') : this.$t('market.skillWord')]
         if (s.version) metaParts.push('v' + s.version)
         if (s.author) metaParts.push(s.author)
         if (s.sourcePluginId) metaParts.push(this.$t('market.fromPluginTag'))
@@ -230,9 +234,11 @@ export default {
           id: s.id,
           name: s.name || s.id,
           desc: s.description || '',
-          glyph: CATEGORY_GLYPHS[s.category] || ICONS.skill,
+          glyph: panel ? ICONS.panelLeft : (CATEGORY_GLYPHS[s.category] || ICONS.skill),
           meta: metaParts.join(' · '),
-          stateLabel: ACTIVATION_STATE[mode] || this.$t('market.activationStateAuto'),
+          stateLabel: panel
+            ? (s.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'))
+            : (ACTIVATION_STATE[mode] || this.$t('market.activationStateAuto')),
           stateClass: mode === 'disabled' ? 'off' : 'ok',
           raw: s,
         })

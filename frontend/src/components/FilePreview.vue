@@ -109,14 +109,74 @@
           <view v-else class="loading-video"><text>{{ $t('files.videoLoading') }}</text></view>
         </view>
 
-        <!-- 音频预览 -->
+        <!-- 音频预览：自绘播放器。
+             原来是 v-html 注一个裸 <audio controls>，用的是 Chromium 默认媒体控件——
+             一条深灰药丸，跟整个浅色外壳格格不入，还不认应用的配色。
+             播放器本体是 new window.Audio()：模板里写不了 <audio>，uni-h5 的编译器
+             会把这个标签替换成不存在的组件（FeedbackWidget 与会议录音面板同坑）。 -->
         <view v-else-if="isAudio" class="preview-audio">
-           <view class="audio-wrapper">
-            <svg class="audio-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in ICONS.audio" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-            <text class="audio-name">{{ file.name }}</text>
-            <view class="preview-audio-player" v-html="audioPlayerHtml"></view>
+           <view class="audio-card">
+            <view class="audio-head">
+              <svg class="audio-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path v-for="(d, gi) in ICONS.audioLines" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <text class="audio-name">{{ file.name }}</text>
+            </view>
+
+            <view v-if="!blobUrl" class="audio-loading"><text>{{ $t('files.audioLoading') }}</text></view>
+
+            <template v-else>
+              <!-- 进度条：整条都可点可拖，命中区比视觉轨道高（4px 的轨道点不准） -->
+              <view
+                ref="audioTrack"
+                class="audio-track"
+                @mousedown="onSeekDown"
+              >
+                <view class="audio-track-rail"></view>
+                <view class="audio-track-fill" :style="{ width: audioProgressPct + '%' }"></view>
+                <view class="audio-track-knob" :style="{ left: audioProgressPct + '%' }"></view>
+              </view>
+
+              <view class="audio-times">
+                <text class="audio-time">{{ formatClock(audioCurrent) }}</text>
+                <text class="audio-time">{{ formatClock(audioDuration) }}</text>
+              </view>
+
+              <view class="audio-controls">
+                <view class="audio-play" :title="audioPlaying ? $t('files.audioPause') : $t('files.audioPlay')" @tap="toggleAudioPlay">
+                  <svg class="audio-play-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path
+                      v-for="(d, gi) in (audioPlaying ? ICONS.pause : ICONS.play)"
+                      :key="gi"
+                      :d="d"
+                      :fill="audioPlaying ? 'none' : 'currentColor'"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                  </svg>
+                </view>
+
+                <view class="audio-side">
+                  <!-- 倍速：Chromium 原生控件的溢出菜单里本来就有，换成自绘不能把它弄丢 -->
+                  <view class="audio-rate" :title="$t('files.audioRate')" @tap="cycleAudioRate">
+                    <text>{{ audioRate }}x</text>
+                  </view>
+                  <view class="audio-vol">
+                    <view class="audio-vol-btn" :title="$t('files.audioMute')" @tap="toggleAudioMute">
+                      <svg class="audio-vol-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path v-for="(d, gi) in (audioMuted ? ICONS.volumeMute : ICONS.volume)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                      </svg>
+                    </view>
+                    <view ref="audioVolTrack" class="audio-vol-track" @mousedown="onVolumeDown">
+                      <view class="audio-vol-rail"></view>
+                      <view class="audio-vol-fill" :style="{ width: (audioMuted ? 0 : audioVolume * 100) + '%' }"></view>
+                    </view>
+                  </view>
+                </view>
+              </view>
+            </template>
            </view>
         </view>
 
@@ -216,7 +276,15 @@ export default {
       imagePanStartX: 0,
       imagePanStartY: 0,
       imagePanStartTx: 0,
-      imagePanStartTy: 0
+      imagePanStartTy: 0,
+      // 自绘音频播放器。实例本身（window.Audio）不进 data——它不需要响应式，
+      // 塞进 data 会被 Vue 代理一层，媒体元素被 Proxy 包住后行为不可预期。
+      audioPlaying: false,
+      audioCurrent: 0,
+      audioDuration: 0,
+      audioVolume: 1,
+      audioMuted: false,
+      audioRate: 1
     }
   },
   computed: {
@@ -265,10 +333,9 @@ export default {
        const type = this.file.fileType.toLowerCase()
        return ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'aac'].includes(type)
     },
-    audioPlayerHtml() {
-      if (!this.isAudio || !this.fileUrl) return ''
-      // Use standard HTML audio tag, bypassing UniApp component resolution
-      return `<audio src="${this.blobUrl}" controls style="width: 100%; height: 50px; outline: none;"></audio>`
+    audioProgressPct() {
+      if (!this.audioDuration) return 0
+      return Math.min(100, Math.max(0, (this.audioCurrent / this.audioDuration) * 100))
     },
     isText() {
       if (!this.file || !this.file.fileType) return false
@@ -306,6 +373,12 @@ export default {
         this.reloadPreview(newFile)
       }
     },
+    // 音频的 blob 是异步拉下来的（要带 X-Session-Id，直链拿不到），
+    // 播放器实例只能等 blobUrl 落地再建。换文件时 reloadPreview 会先清空它。
+    blobUrl(url) {
+      this.teardownAudio()
+      if (url && this.isAudio) this.setupAudio(url)
+    },
     // AI 修改文件后（pdf_highlight/pdf_redact 等）后端会更新 wpsFileId 并发 reload_file，
     // reload 处理是对既有 file 对象 Object.assign 原地更新——对象引用不变，上面的
     // file watch 不会触发。监听 wpsFileId 让预览重新拉取最新字节（编辑器同款语义）。
@@ -317,6 +390,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this.teardownAudio()
     if (this.blobUrl) {
       URL.revokeObjectURL(this.blobUrl)
     }
@@ -328,6 +402,99 @@ export default {
     console.log('FilePreview mounted, file:', this.file, 'fileUrl:', this.fileUrl)
   },
   methods: {
+    // ==================== 自绘音频播放器 ====================
+    setupAudio(url) {
+      try {
+        const a = new window.Audio(url)
+        a.preload = 'metadata'
+        a.volume = this.audioVolume
+        a.playbackRate = this.audioRate
+        a.addEventListener('loadedmetadata', () => { this.audioDuration = a.duration || 0 })
+        a.addEventListener('timeupdate', () => { this.audioCurrent = a.currentTime || 0 })
+        a.addEventListener('play', () => { this.audioPlaying = true })
+        a.addEventListener('pause', () => { this.audioPlaying = false })
+        a.addEventListener('ended', () => { this.audioPlaying = false; this.audioCurrent = 0 })
+        this._audio = a
+      } catch (e) {
+        console.warn('音频播放器创建失败:', e)
+      }
+    },
+    teardownAudio() {
+      this.detachAudioDrag()
+      if (this._audio) {
+        try { this._audio.pause() } catch (e) { /* ignore */ }
+        this._audio.src = ''
+        this._audio = null
+      }
+      this.audioPlaying = false
+      this.audioCurrent = 0
+      this.audioDuration = 0
+    },
+    toggleAudioPlay() {
+      if (!this._audio) return
+      if (this._audio.paused) this._audio.play().catch(() => {})
+      else this._audio.pause()
+    },
+    toggleAudioMute() {
+      if (!this._audio) return
+      this.audioMuted = !this.audioMuted
+      this._audio.muted = this.audioMuted
+    },
+    cycleAudioRate() {
+      const steps = [1, 1.25, 1.5, 2, 0.75]
+      this.audioRate = steps[(steps.indexOf(this.audioRate) + 1) % steps.length]
+      if (this._audio) this._audio.playbackRate = this.audioRate
+    },
+    formatClock(sec) {
+      const s = Math.max(0, Math.floor(sec || 0))
+      const m = Math.floor(s / 60)
+      return m + ':' + String(s % 60).padStart(2, '0')
+    },
+    // 进度条与音量条共用「按下即生效、按住可拖」的一套：监听挂 window，
+    // 否则拖出轨道范围就收不到 mouseup，滑块会一直粘着鼠标
+    ratioFromEvent(el, e) {
+      const rect = el.getBoundingClientRect()
+      if (!rect.width) return 0
+      return Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))
+    },
+    onSeekDown(e) {
+      if (!this._audio || !this.audioDuration) return
+      const el = this.$refs.audioTrack
+      const apply = (ev) => {
+        const t = this.ratioFromEvent(el, ev) * this.audioDuration
+        this._audio.currentTime = t
+        this.audioCurrent = t
+      }
+      apply(e)
+      this.attachAudioDrag(apply)
+    },
+    onVolumeDown(e) {
+      if (!this._audio) return
+      const el = this.$refs.audioVolTrack
+      const apply = (ev) => {
+        const v = this.ratioFromEvent(el, ev)
+        this.audioVolume = v
+        this.audioMuted = v === 0
+        this._audio.volume = v
+        this._audio.muted = this.audioMuted
+      }
+      apply(e)
+      this.attachAudioDrag(apply)
+    },
+    attachAudioDrag(apply) {
+      this.detachAudioDrag()
+      this._audioDragMove = (ev) => apply(ev)
+      this._audioDragUp = () => this.detachAudioDrag()
+      window.addEventListener('mousemove', this._audioDragMove)
+      window.addEventListener('mouseup', this._audioDragUp)
+    },
+    detachAudioDrag() {
+      if (this._audioDragMove) window.removeEventListener('mousemove', this._audioDragMove)
+      if (this._audioDragUp) window.removeEventListener('mouseup', this._audioDragUp)
+      this._audioDragMove = null
+      this._audioDragUp = null
+    },
+
     // file watch 与 wpsFileId watch 共用的加载分发（原 file watch handler 逻辑原样抽出）
     reloadPreview(newFile) {
       // 清理旧的 blobUrl
@@ -1012,6 +1179,8 @@ export default {
   font-size: 28rpx;
 }
 
+/* ---- 自绘音频播放器 ----
+   尺寸一律用 px：这块是桌面端的固定形制，不该跟着 rpx 一起做视口缩放。 */
 .preview-audio {
   width: 100%;
   height: 100%;
@@ -1021,30 +1190,191 @@ export default {
   background-color: #f8f9fa;
 }
 
-.audio-wrapper {
+.audio-card {
+  width: 100%;
+  max-width: 460px;
+  padding: 24px;
+  box-sizing: border-box;
+  background: #ffffff;
+  border: 1px solid #E6EAE8;
+  border-radius: 12px;
+  box-shadow: 0 6px 24px rgba(18, 52, 77, 0.06);
+}
+
+.audio-head {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  gap: 24rpx;
-  width: 80%;
+  gap: 10px;
+  margin-bottom: 18px;
 }
 
 .audio-icon {
-
-  width: 72rpx;
-  height: 72rpx;
+  width: 22px;
+  height: 22px;
   flex-shrink: 0;
+  color: #1A5336;
 }
 
 .audio-name {
-  font-size: 32rpx;
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
   color: #334155;
-  font-weight: 500;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-loading {
+  padding: 12px 0;
+  font-size: 12px;
+  color: #9aa5a0;
   text-align: center;
 }
 
-.preview-audio-player {
-  width: 100%;
+/* 轨道：视觉 4px，命中区 16px。4px 高的东西点不准，也拖不住 */
+.audio-track {
+  position: relative;
+  height: 16px;
+  cursor: pointer;
+}
+
+.audio-track-rail,
+.audio-track-fill {
+  position: absolute;
+  top: 6px;
+  left: 0;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.audio-track-rail {
+  right: 0;
+  background: #E6EAE8;
+}
+
+.audio-track-fill {
+  background: #1A5336;
+}
+
+.audio-track-knob {
+  position: absolute;
+  top: 3px;
+  width: 10px;
+  height: 10px;
+  margin-left: -5px;
+  border-radius: 50%;
+  background: #1A5336;
+  box-shadow: 0 1px 4px rgba(26, 83, 54, 0.4);
+}
+
+.audio-times {
+  display: flex;
+  justify-content: space-between;
+  margin: 4px 0 14px;
+}
+
+.audio-time {
+  font-size: 11px;
+  color: #8b9691;
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.audio-play {
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: #1A5336;
+  color: #ffffff;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.audio-play:hover {
+  background: #22694A;
+}
+
+.audio-play-glyph {
+  width: 18px;
+  height: 18px;
+}
+
+.audio-side {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.audio-rate {
+  min-width: 40px;
+  padding: 4px 8px;
+  border: 1px solid #E6EAE8;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #4a5751;
+  text-align: center;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+}
+
+.audio-rate:hover {
+  border-color: #5BD197;
+  color: #1A5336;
+}
+
+.audio-vol {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-vol-btn {
+  width: 20px;
+  height: 20px;
+  color: #4a5751;
+  cursor: pointer;
+}
+
+.audio-vol-glyph {
+  width: 20px;
+  height: 20px;
+}
+
+.audio-vol-track {
+  position: relative;
+  width: 72px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.audio-vol-rail,
+.audio-vol-fill {
+  position: absolute;
+  top: 6px;
+  left: 0;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.audio-vol-rail {
+  right: 0;
+  background: #E6EAE8;
+}
+
+.audio-vol-fill {
+  background: #5BD197;
 }
 
 .btn-download {

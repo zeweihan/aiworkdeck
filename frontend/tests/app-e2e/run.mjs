@@ -304,15 +304,12 @@ try {
     await page.type('.unlock-input textarea', messy)
     await sleep(250); await page.type('.unlock-input textarea', ' '); await sleep(250)
     await mouseClickSel('.unlock-btn')
-    // 解锁成功 → toast → reLaunch 回 launch 分流，三个合法落点：
+    // 解锁成功 → toast → reLaunch 回 launch 分流，两个合法落点：
     //  - 向导未初始化 → wizard
-    //  - 已初始化 + 有最近项目 → 工作台（launch.vue:97，直达语义保留不变）
-    //  - 已初始化 + 无最近项目 → 项目列表页（launch.vue:99，三级导航改造把这里
-    //    由 userprofile 改成了 project-list；全新 puppeteer profile 走的正是这条）
+    //  - 已初始化 → 项目列表页（2026-08 起启动一律落列表，不再「有最近项目就直达工作台」）
     await page.waitForFunction(() => {
       const h = location.hash
       return h.includes('pages/wizard/wizard') || h.includes('pages/project-list/project-list')
-        || h.includes('pages/project-overview/project-overview')
     }, { timeout: 30000 })
   })
 
@@ -327,22 +324,28 @@ try {
     if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
   })
 
-  await step('已解锁重启 → 直达上次项目（工作台，不经概览页）', async () => {
+  await step('已解锁重启 → 落项目列表页（即使有最近项目）', async () => {
     // uni h5 getStorageSync 兼容裸字符串
     await page.evaluate((id) => localStorage.setItem('checkba_last_project_id', String(id)), QA.projectId)
     await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
-    // 三级导航后 project-list / project-home / project-overview 三个路由并存，
-    // 一律写全路径判定：裸 'project-overview' 目前确实不是另外两个的子串，但
-    // 'project-' 前缀家族已经三个成员了，模糊匹配迟早撞上。
-    // 断言落工作台而不是概览页 = 钉死「启动直达永远进工作台」这条产品决策
-    // （spec §5.3：概览页不做启动落点，recentProjects 存储格式不扩）。
+    // project-list / project-home / project-overview 三个路由并存，一律写全路径判定：
+    // 'project-' 前缀家族已经三个成员，模糊匹配迟早撞上。
+    // 这条钉死的是 2026-08 的落点决策：**开机先看见自己有哪些案卷**，
+    // 不再因为存了 checkba_last_project_id 就直接扎进上一个项目。
+    // （应用菜单「最近打开」、拖文件夹进窗口、顶栏切换器那三条直达出口不受影响，
+    //   它们的用户意图明确指向某一个项目。）
     await page.waitForFunction(
-      () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 30000 })
-    await waitText('资源管理器', 20000)
+      () => location.hash.includes('pages/project-list/project-list'), { timeout: 30000 })
+    await page.waitForSelector('.page-project-list', { timeout: 20000 })
   })
 
   await step('project-overview 常驻试用版标识', async () => {
+    // 上一步落在项目列表页（启动落点已改），试用标识挂在工作台顶栏上，
+    // 得先真的进到工作台里
+    await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+      { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await waitText('资源管理器', 30000)
     await page.waitForSelector('.trial-chip', { timeout: 15000 })
   })
 
@@ -401,89 +404,80 @@ try {
     })
   }
 
-  // ============ J3 三级导航：项目列表页 → 项目概览页 → 工作台 ============
+  // ============ J3 两级导航：项目列表页 → 工作台（概览是工作台里的一个标签） ============
   // 术语（代码里同名不同物，别看错）：
   //   pages/project-overview/project-overview = 工作台（四列干活界面，路由不改名）
-  //   pages/project-home/project-home         = 产品语言里的「项目概览页」（新增）
-  //   pages/project-list/project-list         = 项目列表页（从 userprofile 搬出，新增）
+  //   pages/project-home/project-home         = 概览薄壳页，只留给直链/深链
+  //   pages/project-list/project-list         = 项目列表页
   // 三个路由互不是子串，但同属 'project-' 前缀家族——一律写全路径判定。
-  console.log('== J3 三级导航 ==')
+  //
+  // 2026-08 改动：概览不再是列表与工作台之间那一站独立页，而是工作台 rail 第一个
+  // 按钮开出来的中栏标签（内容本体 ProjectHomePane 两个宿主共用）。
+  console.log('== J3 两级导航 ==')
 
-  await step('列表页点卡片 → 项目概览页', async () => {
+  await step('列表页点卡片 → 直达工作台', async () => {
     await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
     await page.waitForSelector('.project-item-card', { timeout: 15000 })
     await waitText(QA.project.slice(0, 8))
     // 卡片标题绑定 @tap.stop=startRename（点名字=重命名），进入要点卡片主体
-    // —— UX 疑点已记录于 docs/QA_JOURNEYS.md
     await mouseClickSel('.project-item-card')
     await page.waitForFunction(
-      () => location.hash.includes('pages/project-home/project-home'), { timeout: 15000 })
-    await page.waitForSelector('.page-project-home', { timeout: 15000 })
+      () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 20000 })
+    await waitText('资源管理器', 30000)
+    // 中间那一跳（project-home 独立页）已经取消，路过它就是回归
+    const h = await page.evaluate(() => location.hash)
+    if (h.includes('pages/project-home/project-home')) {
+      throw new Error('列表→工作台之间又插回了概览独立页')
+    }
   })
 
-  await step('概览页五个区块齐全', async () => {
+  await step('列表页自带两个新建入口，且没有「打开文件」', async () => {
+    await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
+    await page.waitForSelector('.create-card', { timeout: 15000 })
+    const t = await textOf()
+    if (!t.includes('打开文件夹')) throw new Error('列表下方缺「打开文件夹」')
+    if (!t.includes('新建项目文件夹')) throw new Error('列表下方缺「新建项目文件夹」')
+    if (t.includes('打开文件…')) throw new Error('「单独打开文件」应当已从新建入口去掉')
+    await mouseClickSel('.project-item-card')
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 20000 })
+    await waitText('资源管理器', 30000)
+  })
+
+  await step('rail「项目概览」开中栏标签，五个区块齐全', async () => {
+    await mouseClickSel('[title="项目概览"]')
     // 组件根类名即 e2e 稳定锚点（仓里既有惯例：.cloud-bar / .adopt-dialog / .clip-panel）。
-    // 只等 .page-project-home 是不够的——子组件挂载失败时容器照样在。
-    for (const sel of ['.profile-header', '.overview-stats-bar', '.activity-feed',
-      '.task-schedule', '.conversation-list']) {
-      await page.waitForSelector(sel, { timeout: 15000 })
+    // 只等容器是不够的——子组件挂载失败时容器照样在。
+    for (const sel of ['.project-home-pane', '.profile-header', '.overview-stats-bar',
+      '.activity-feed', '.task-schedule', '.conversation-list']) {
+      await page.waitForSelector(sel, { timeout: 20000 })
     }
     const t = await textOf()
     const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
-    if (m) throw new Error('概览页文本可疑: ' + m[0])
-  })
-
-  await step('动态块不暴露版本记录的错误信封', async () => {
-    // Task 5 已让 /version/timeline 在未开仓时早退返回 {code:0,data:{versions:[]}}，
-    // 所以 QA 这个刚建的 BLANK 项目走的是 ActivityFeed 的「还没有动态」普通空态，
-    // 而不是 unavailable 引导态（unavailable 此后只剩 CLIENT 一条路径）。
-    // 这一条守的是「任何情况下都不许把版本记录的错误信封当通用错误暴露给用户」。
-    const t = await textOf()
+    if (m) throw new Error('概览标签文本可疑: ' + m[0])
+    // 任何情况下都不许把版本记录的错误信封当通用错误暴露给用户
     if (t.includes('版本记录操作失败')) {
-      throw new Error('概览页把 /version/timeline 的错误信封当通用错误暴露了')
+      throw new Error('概览把 /version/timeline 的错误信封当通用错误暴露了')
     }
   })
 
-  await shot('j3-project-home')
+  await shot('j3-project-home-tab')
 
-  await step('概览页「返回项目列表」不堆页面栈', async () => {
-    await mouseClickSel('.btn-project-list')
-    await page.waitForFunction(
-      () => location.hash.includes('pages/project-list/project-list'), { timeout: 15000 })
-    // uni h5 的页面栈在 DOM 里是并存的（navigateTo 压栈时旧页留在文档里只是隐藏），
-    // 所以根节点计数就是页面栈实例数的直接证据。goProjectList() 的规则是
-    // 「上一页是 project-list 就 navigateBack、否则 redirectTo」——两条路走对了
-    // 这里恒为 1；写成无脑 navigateTo 会变成 2，且随来回次数线性增长。
-    const n = await page.evaluate(() => document.querySelectorAll('.page-project-list').length)
-    if (n !== 1) throw new Error('项目列表页实例数 = ' + n + '（页面栈堆叠，goProjectList 的分流规则没实现对）')
-  })
-
-  await step('再次进入概览页（来回点不堆栈）', async () => {
-    await mouseClickSel('.project-item-card')
-    await page.waitForFunction(
-      () => location.hash.includes('pages/project-home/project-home'), { timeout: 15000 })
-    const n = await page.evaluate(() => document.querySelectorAll('.page-project-home').length)
-    if (n !== 1) throw new Error('概览页实例数 = ' + n + '（页面栈堆叠）')
-  })
-
-  await step('概览页手填档案「客户」→ 落库 source=user', async () => {
+  await step('概览标签里手填档案「客户」→ 落库 source=user', async () => {
     // 档案头五个字段顺序固定 client → matterType → openedAt → nextStep → counterparty，
     // 未填态渲染字面量「未填写」（ProfileHeader.vue）。openedAt 有建档时间兜底，
-    // 所以 nth=0 的「未填写」一定是 client（走行内 input，不是 matterType 那个 picker）。
-    // 这两个串是与概览页组之间的缝隙：断言红了先
-    //   grep -n "未填写\|profile-field-input" frontend/src/components/project-home/ProfileHeader.vue
+    // 所以 nth=0 的「未填写」一定是 client（走行内 input，不是 matterType 那个下拉）。
     await mouseClickText('未填写')
     // uni-app h5 的 <input> 真实输入元素是内层 .uni-input-input
     await page.waitForSelector('.profile-field-input .uni-input-input', { timeout: 10000 })
     // uni useValueSync 的 triggerInput 是 100ms throttle：连打只有首字符进 v-model。
-    // 停一拍再补一个空格，让最后一次 input 以完整值触发（后端 PUT 会 value.trim()，
-    // 这个尾随空格不会落库）。
+    // 停一拍再补一个空格，让最后一次 input 以完整值触发（后端 PUT 会 value.trim()）。
     await page.type('.profile-field-input .uni-input-input', 'QA客户公司')
     await sleep(250)
     await page.type('.profile-field-input .uni-input-input', ' ')
     await sleep(250)
     // 点统计条让输入框失焦 → @blur 提交。刻意点 .overview-stats-bar 这个
-    // e2e 锚点而不是顶栏标题文案：类名是九个锚点契约的一部分，文案不是。
+    // e2e 锚点而不是标题文案：类名是锚点契约的一部分，文案不是。
     await mouseClickSel('.overview-stats-bar')
     await waitText('QA客户公司', 15000)
     const res = await api('/api/projects/' + QA.projectId + '/profile')
@@ -495,11 +489,26 @@ try {
     }
   })
 
-  await step('概览页「进入工作台」→ 工作台', async () => {
-    await mouseClickSel('.btn-workbench')
+  await step('概览薄壳页直链仍可用，且返回列表不堆页面栈', async () => {
+    // 产品流程里不再经过这一页，但收藏/深链会落进来，薄壳必须还活着
+    await page.goto(BASE + '/#/pages/project-home/project-home?id=' + QA.projectId,
+      { waitUntil: 'networkidle2' })
+    await page.waitForSelector('.page-project-home', { timeout: 15000 })
+    await page.waitForSelector('.project-home-pane', { timeout: 15000 })
+    await mouseClickSel('.btn-project-list')
     await page.waitForFunction(
-      () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 15000 })
-    await waitText('资源管理器', 20000)
+      () => location.hash.includes('pages/project-list/project-list'), { timeout: 15000 })
+    // uni h5 的页面栈在 DOM 里是并存的（navigateTo 压栈时旧页留在文档里只是隐藏），
+    // 所以根节点计数就是页面栈实例数的直接证据。
+    const n = await page.evaluate(() => document.querySelectorAll('.page-project-list').length)
+    if (n !== 1) throw new Error('项目列表页实例数 = ' + n + '（页面栈堆叠）')
+  })
+
+  await step('回到工作台继续后续旅程', async () => {
+    await mouseClickSel('.project-item-card')
+    await page.waitForFunction(
+      () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 20000 })
+    await waitText('资源管理器', 30000)
   })
   await shot('j3-project')
 
@@ -586,6 +595,8 @@ try {
     ['插件广场', '/pages/plugin-market/plugin-market', '插件广场'],
     ['变量库', '/pages/variable-library/variable-library', '新增变量'],
     ['管理页(只读)', '/pages/admin/admin', '系统配置'],
+    // 新建项目页 2026-08 起不再是主入口（两个新建动作已内嵌在项目列表页下方），
+    // 保留给浏览器降级与应用菜单的 ?auto=create-folder，所以仍然要能打开
     ['新建项目页', '/pages/newproject/index', '新建或打开项目'],
   ]) {
     await step(name, async () => {
