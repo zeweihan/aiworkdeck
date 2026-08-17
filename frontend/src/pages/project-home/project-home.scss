@@ -25,6 +25,11 @@ $bg-white: #FFFFFF;
   gap: 16px;
   height: 52px;
   padding: 0 24px;
+  /* 无边框窗口：这条顶栏紧贴窗口左上角，第一个元素就是「返回列表」，
+     不让位的话正好压在 mac 交通灯下面（当初逐页走查漏了本页）。
+     变量定义在 App.vue，非桌面/全屏下是 0，max() 自动退回上面那行的 24px。 */
+  padding-left: max(24px, var(--awd-titlebar-safe-inline-start));
+  padding-right: max(24px, var(--awd-titlebar-safe-inline-end));
   background: $bg-white;
   border-bottom: 1px solid $color-border;
 }
@@ -95,6 +100,9 @@ $bg-white: #FFFFFF;
 @media (max-width: 720px) {
   .home-topbar {
     padding: 0 12px;
+    /* 同上：padding 简写在哪出现，让位就得跟到哪 */
+    padding-left: max(12px, var(--awd-titlebar-safe-inline-start));
+    padding-right: max(12px, var(--awd-titlebar-safe-inline-end));
     gap: 10px;
   }
 

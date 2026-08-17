@@ -6,6 +6,7 @@ import { host, isDesktopHost } from '@/services/host.js'
 import { mountFeedbackWidget } from '@/utils/feedbackWidget.js'
 import { mountRecordingIndicator } from '@/utils/recordingIndicator.js'
 import { initWindowChrome } from '@/utils/windowChrome.js'
+import { mountGlobalBack, refreshGlobalBack } from '@/utils/globalBack.js'
 import { initAppMenuBridge } from '@/utils/appMenuBridge.js'
 import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
 import { saveAppLanguageRemote } from '@/services/api.js'
@@ -34,6 +35,8 @@ export default {
     mountFeedbackWidget()
     // 会议「录音中」浮动指示器：同一模式，录音时才显形（见 utils/recordingIndicator.js）
     mountRecordingIndicator()
+    // 全局返回键：页面栈深度 > 1 时出现在顶部拖拽条里（见 utils/globalBack.js）
+    mountGlobalBack()
     // 埋点：页面路由唯一收口（全仓 50 处 navigateTo/reLaunch 直调，拦截器一处全覆盖）；
     // 只记页面路径枚举（pages.json 里的 13 个页面，2026-08-08 三级导航加了
     // project-list 与 project-home 两页），query 参数不采集
@@ -44,9 +47,12 @@ export default {
           if (page) track('ui.nav', { page, branch: routeType })
         } catch (e) { /* 静默 */ }
         return true
-      }
+      },
+      // 全局返回键的可见性跟着页面栈走，跳转完成后重算一次（含 navigateBack，
+      // 它没有 url、不参与埋点，但会改变栈深度）
+      complete() { refreshGlobalBack() },
     })
-    ;['navigateTo', 'redirectTo', 'reLaunch', 'switchTab'].forEach((t) => {
+    ;['navigateTo', 'redirectTo', 'reLaunch', 'switchTab', 'navigateBack'].forEach((t) => {
       try { uni.addInterceptor(t, navTrack(t)) } catch (e) { /* 静默 */ }
     })
     // 应用菜单：命令表 → 菜单树的下发与动作派发全部收在 appMenuBridge 里。
@@ -173,6 +179,33 @@ uni-toast .uni-toast__content {
    跟 `.is-mac .project-header` 同权重（0,2,0），而它注入得更晚会赢。
    加上元素选择器变成 (0,2,1) 才压得住 project-overview.scss 的 `padding: 0 18px`。 */
 
+/* ---- 保留区变量：给「让位」一个不打权重官司的表达 ----
+   抬权重只赢一轮。`.compact-mode .project-header { padding: 0 16px }` 是 (0,4,0)，
+   照样把上面那条 (0,2,1) 的 88px 让位整条吃掉——窗口窄于 1360px 就必然被交通灯
+   压住项目名。逐页抬权重是个追不完的坑，所以改成变量：
+     · 语义是**距窗口边缘的绝对位置**——顶栏内容的左缘不得早于这个值；
+     · 页面在**自己的样式表里**用 `padding-left: max(自己的边距, var(...))` 消费它，
+       跟自己的 padding 简写同属一处，不存在谁压谁；
+     · 非 mac / 全屏 / 浏览器版下变量是 0，max() 自动退回页面原本的边距。
+   只对「紧贴窗口左缘的顶栏」成立；带外边距的页面（admin/个人中心/项目列表都是
+   `padding: 40px 24px`）内容本来就落在交通灯下方，不需要让位。 */
+html {
+    --awd-titlebar-safe-inline-start: 0px;
+    --awd-titlebar-safe-inline-end: 0px;
+}
+/* mac：三颗交通灯占住左上角（右缘约 70px，留 18px 呼吸） */
+html.is-mac {
+    --awd-titlebar-safe-inline-start: 88px;
+}
+/* 全屏时交通灯隐藏，保留区归零 */
+html.is-mac.is-fullscreen {
+    --awd-titlebar-safe-inline-start: 0px;
+}
+/* win：右上角原生最小化/最大化/关闭 */
+html.is-win {
+    --awd-titlebar-safe-inline-end: 148px;
+}
+
 /* 工作台顶栏就是标题栏：空白处可拖动窗口 */
 html.is-desktop .project-header {
     -webkit-app-region: drag;
@@ -197,19 +230,10 @@ html.is-desktop .project-header .icon-btn {
     -webkit-app-region: no-drag;
 }
 
-/* mac：三颗交通灯占住左上角（右缘约 72px，留 16px 呼吸） */
-html.is-mac .project-header {
-    padding-left: 88px;
-}
-/* 全屏时交通灯隐藏，留白归零 */
-html.is-mac.is-fullscreen .project-header {
-    padding-left: 18px;
-}
-
-/* win：右上角原生最小化/最大化/关闭 */
-html.is-win .project-header {
-    padding-right: 148px;
-}
+/* 工作台顶栏与项目概览顶栏的让位写在各自的样式表里（消费上面那两个变量），
+   不在这里写——它们都有自己的 padding 简写，写在这里就要打权重官司。
+   见 pages/project-overview/project-overview.scss 与
+   pages/project-home/project-home.scss 里的 `max(…, var(--awd-titlebar-safe-*))`。 */
 
 /* 没有自己顶栏的页面（登录、项目列表、设置…）的拖拽条。
    工作台的 .project-header（z-index 200）盖在它上面，那边不受影响。 */
@@ -227,13 +251,48 @@ html.is-desktop .awd-window-drag-strip {
     z-index: 1;
 }
 
-/* ---- 逐页让位：只加在真机走查确认「左上角本来就有内容」的页面上 ----
+/* 全局返回键（utils/globalBack.js）。落在拖拽条这条空白带里，紧挨着保留区右缘——
+   mac 上就是交通灯右手边，Finder/Safari 里返回键该在的位置。
+   z-index 高于拖拽条一档；no-drag 必须写，否则整条带子是 drag 区、按钮点不动。
+   display 由 JS 在 inline-flex / none 之间切，这里不要写 display。 */
+.awd-global-back {
+    position: fixed;
+    top: 5px;
+    left: max(12px, var(--awd-titlebar-safe-inline-start));
+    z-index: 2;
+    align-items: center;
+    gap: 4px;
+    height: 28px;
+    padding: 0 11px 0 8px;
+    border: 1px solid #DDE3E0;
+    border-radius: 14px;
+    background: #FFFFFF;
+    color: #1A5336;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+    -webkit-app-region: no-drag;
+    box-shadow: 0 2px 10px rgba(18, 52, 77, 0.12);
+    transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.awd-global-back:hover {
+    border-color: #5BD197;
+    box-shadow: 0 4px 16px rgba(26, 83, 54, 0.18);
+}
+
+/* ---- 逐页让位 ----
    不做全局 padding 注入——13 个页面布局差异太大，全局注入必然出回归。
    走查方法与结论见 spec §3.4；改这几个页面的顶部结构时记得回来看一眼。
 
-   走查结论（1400x900，mac）：13 页里只有 login / variable-library /
-   plugin-market 三页的左上角压着实体内容，其余页面顶部是空白背景，
-   拖拽条覆盖率 100%。 */
+   走查结论（mac）：紧贴窗口左上角、会被交通灯压住的只有五处——
+   工作台 .project-header、项目概览 .home-topbar（这两处的让位写在各自的样式表
+   里，见上）、login .top-nav、variable-library .header-card、plugin-market .hero。
+   其余页面（admin / 个人中心 / 项目列表 / newproject）根容器都是
+   `padding: 40px 24px`，内容起点落在交通灯下方，不需要让位。
+   注意窄窗口：让位一律用 max(自己的边距, var(--awd-titlebar-safe-*)) 表达，
+   不要写死像素——写死的那版在全屏下会留一段莫名其妙的缩进。 */
 
 /* login：整条 top-nav 就是这一页的标题栏 */
 html.is-desktop .top-nav {
@@ -243,16 +302,14 @@ html.is-desktop .top-nav .nav-item,
 html.is-desktop .top-nav .nav-logo {
     -webkit-app-region: no-drag;
 }
-html.is-mac .top-nav {
-    padding-left: 96px;
-}
-html.is-win .top-nav {
-    padding-right: 160px;
+html.is-desktop .top-nav {
+    padding-left: max(48px, var(--awd-titlebar-safe-inline-start));
+    padding-right: max(48px, var(--awd-titlebar-safe-inline-end));
 }
 
 /* variable-library：顶部卡片里的项目名紧贴左边 */
-html.is-mac .page-variable-library .header-card {
-    padding-left: 96px;
+html.is-desktop .page-variable-library .header-card {
+    padding-left: max(8px, var(--awd-titlebar-safe-inline-start));
 }
 
 /* plugin-market：hero 的分类标签在最上一行 */

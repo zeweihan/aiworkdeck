@@ -3,7 +3,9 @@ export default {
   // 左侧导航
   navCardTitle: '系统管理',
   rerunWizard: '重新运行首次向导',
-  backToProfile: '返回个人中心',
+  // 同级切换而不是「返回」：设置页与个人中心互跳走 redirectTo，
+  // 真正的返回由全局返回键承担（utils/globalBack.js）
+  backToProfile: '个人中心',
   navConfig: '系统配置',
   navAi: 'AI 功能设置',
   navAccount: '账户与用量',

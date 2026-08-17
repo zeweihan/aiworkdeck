@@ -1889,16 +1889,12 @@ export default {
         this.loadComponents()
       }
     },
-    goBack() {
-      // 有历史就返回，否则回到个人中心
-      try {
-        uni.navigateBack()
-      } catch (e) {
-        uni.navigateTo({ url: '/pages/userprofile/userprofile' })
-      }
-    },
+    // 设置页与个人中心是**同级**的两个页面，互跳一律 redirectTo（替换本页）而不是
+    // navigateTo（往栈里再压一页）。压栈的旧写法配上个人中心那边的 navigateBack，
+    // 形成了 admin ⇄ 个人中心互相弹的死循环——从工作台点进设置的人再也回不到项目。
+    // 替换之后栈始终是 [来处, 当前设置页]，全局返回键一步就能回到来处。
     goToUserProfile() {
-      uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+      uni.redirectTo({ url: '/pages/userprofile/userprofile' })
     },
     // 重跑首次向导：重置 completed 标记后跳向导页。已有配置不清空，
     // 向导提交时按新填内容覆盖对应 key。
