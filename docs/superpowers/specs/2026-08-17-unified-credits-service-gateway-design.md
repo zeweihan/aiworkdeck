@@ -220,6 +220,21 @@
   主动查听悟任务终态——已完成按真实时长走 ②③，失败或查不到则只走 ② 释放。
 - 桌面端必须把 `taskId` 落库（`MeetingRecording` 实体加列），**重启后恢复轮询**。
 
+**修订二（P2 实施补的四条，都是设计没想到的）：**
+
+1. **`gateway_hold` 要有存放长任务服务端状态的槽**。P0 建表时没留，而 `objectKey` 在 ticket
+   那一刻生成、删它的时机在几十分钟后。加了 `meta TEXT`（JSON），与 hold 行同一条 INSERT 落库——
+   靠客户端回传 objectKey 等于「客户端不回来我们就永远不删」，而躺在里面的是客户的会议录音。
+2. **超时回收必须连 OSS 对象一起扫**。§4.5 初稿只释放 hold，而「用户合盖笔记本」这条路径下
+   代码删对象一次都不会发生，只剩生命周期规则一道——违反红线 11「两道都要」。
+   `sweepExpiredAsrObjects()` 必须排在 `reclaimExpiredHolds()` **之前**：置 released 之后就查不到对象键了。
+3. **结算时查定价不能用 `requireEnabledPricing`**。admin 在任务跑一半时把 asr 下架，
+   会让一个已经交付的转写卡在 `service_disabled` 上结不了账。改用 `findPricing`；
+   定价行整个不见了就释放 hold——**宁可不收，不能瞎收**。
+4. **轮询按落库的 taskId 分派，不按当前档位设置**。用户在转写途中切档，
+   按设置分派就会拿网关的 taskId 去问听悟，结果是一个永远查不到的任务
+   加一笔永远结不了的预扣。任务归属在提交那一刻就定死了。
+
 ### 4.6 Credits 与 AI 额度共池：双向同步（修订一新增）
 
 官网的 AI 额度是 `limit = 远端已用量 + 折算(当前余额)`，**只在 `syncAiQuota()` 被调用时才重设**。
@@ -424,8 +439,25 @@ Office 插件（`office-addin/`）走的正是 `addin.aiworkdeck.com`，因此�
 **余额闸放在 ticket 那一步**，不让用户白传两小时录音才被拒。
 `ticket` 响应带 `estimatedCredits`，超过 `HOLD_THRESHOLD_CENTS` 时桌面端在提交前显示确认。
 
-`durationSec` 受 `maxUnitsPerCall` 约束（见 §4.2）；OSS 直传凭证的大小上限必须与它挂钩，
-否则申报 1 分钟传两小时的音频就绕过了余额闸。
+`durationSec` 受 `maxUnitsPerCall` 约束（见 §4.2）。
+
+**修订二（P2 实施时发现，初稿这里写错了）：「OSS 直传凭证的大小上限与 durationSec 挂钩」做不到。**
+OSS 的 v1 与 v4 预签名都只覆盖方法 / 对象键 / Content-Type / 有效期，
+**没有任何字段能约束 Content-Length**；唯一能真正绑住体积的是 PostObject policy 的
+`content-length-range`，但那要求 multipart/form-data 而不是普通 PUT。
+实际做法：ticket 下发的 `maxUploadBytes` 只供客户端自检，**真闸在 submit**——
+先 `HEAD` 一次对象复核实际体积，超了就删对象再拒。
+这个顺序很重要：此时**还没预扣、还没建任务**，所以拒绝是零代价的。
+
+**修订二之二：听悟的 `GetTaskInfo` 不返回时长**，它只有 `taskStatus` 和四个结果 URL。
+红线 3「计价以上游真实计量为准」在语音上唯一的落点是**从转写结果里最后一个词的 `End`
+时间戳算**。这反过来约束了 task 端点的顺序：必须先把转写结果取回来才知道该收多少钱，
+所以是「取结果 → 结算 → 删对象」，取结果失败时什么都不动（下次轮询重来，
+一直失败则由 §4.5 的 hold 超时回收退钱）。
+
+**修订二之三：`taskStatus` 有四个值不是三个**——ONGOING / COMPLETED / FAILED / **INVALID**。
+网关侧按终态处理了；桌面端 BYOK 那条路的 `TingwuClient.TaskInfo.failed()` 只判 `FAILED`，
+一个 INVALID 任务会让会议永远停在「转写中」，属**既有缺陷**，另开一条修。
 
 桌面端保留现有的转码（`MeetingAudioTranscoder`）与 poll-on-read 节流。
 `MeetingTranscriptionService` 在 `platform` 档下走 `PlatformGatewayClient`，
