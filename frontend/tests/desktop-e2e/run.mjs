@@ -22,12 +22,13 @@
 // Env：DESKTOP_E2E_DEVURL（默认 http://localhost:5174）、APP_E2E_BACKEND（默认 9696；
 // 端口会经 CHECKBA_BACKEND_PORT 传给 Electron 壳，渲染层因此跟测试用同一个后端）
 
-import { spawn, execSync } from 'node:child_process'
+import { execSync } from 'node:child_process'
 import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { pickCdpPort, portFree, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput } from '../_lib/electron-cdp.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -41,27 +42,14 @@ const BACKEND = process.env.APP_E2E_BACKEND || 'http://127.0.0.1:9696'
 // CHECKBA_BACKEND_PORT 是 backend-service.js 留的显式覆盖口，同时让壳复用这个已在
 // 跑的后端（verifyReuse 探 /api/admin/wizard）而不是另起一个 java。
 const BACKEND_PORT = new URL(BACKEND).port
-// CDP 端口不能写死。9333 会被两种东西占住：① 同一台机器上并行的另一个会话
-// （维护者常年多开，5174/5175 早就被别的会话占着）；② 上一轮自己没死透的 Electron
-// ——本套件原来 spawn 的是 `npx`，`elec.kill()` 只打得到 npx，真正的 Electron 是孙子
-// 进程，收不到信号就活下来继续占着端口（实测跑完一轮之后它还在 LISTEN）。
-// 占住之后有两种死法，都真实发生过：残留还应答 CDP → 我们连上去驱动的是**别人的
-// 窗口**；残留只占端口不应答 → 我们干等 60 秒报「CDP 端点未就绪」。
-// 每轮现挑一个空闲端口，这两种都不成立。
-const portFree = (p) => {
-  try { execSync('lsof -nP -iTCP:' + p + ' -sTCP:LISTEN -t', { stdio: 'pipe' }); return false }
-  catch (e) { return true } // lsof 非零退出 = 没人在听
-}
-const pickCdpPort = () => {
-  for (let p = 9333; p < 9373; p++) if (portFree(p)) return p
-  throw new Error('9333-9372 全被占，挑不出空闲 CDP 端口')
-}
+// CDP 端口现挑、进程树整棵收、连前核身份、输入通道加固，统一在 tests/_lib/electron-cdp.mjs
+// （三套 e2e 共用；这些坑的来龙去脉见 .claude/agents/eng-infra.md）
+const CDP_PORT = pickCdpPort('DESKTOP_E2E_CDP_PORT', 9333)
 // 同样的理由（维护者常年多开）：浏览器面板那一段自起的本机测试站也得现挑端口
 const pickFreePort = (from) => {
   for (let p = from; p < from + 60; p++) if (portFree(p)) return p
   throw new Error(from + '-' + (from + 59) + ' 全被占，挑不出空闲端口')
 }
-const CDP_PORT = Number(process.env.DESKTOP_E2E_CDP_PORT) || pickCdpPort()
 const MARKER = 'QA_SAVE_MARKER_' + Date.now()
 
 let puppeteer
@@ -110,61 +98,21 @@ async function api(ep, opts = {}) {
 
 // ---- launch dev Electron with CDP ----
 console.log('启动 dev Electron（屏幕会出现窗口，结束自动关闭）...')
-// detached：让它自成进程组，收尾时能把 npx→node→Electron 整棵树一起杀掉。
-// 只 kill(elec.pid) 杀的是 npx，Electron 是孙子进程，会活下来占着 CDP 端口。
-const elec = spawn('npx', ['electron', '.', '--remote-debugging-port=' + CDP_PORT], {
-  cwd: desktopDir,
-  env: {
-    ...process.env,
-    AIWORKDECK_DESKTOP_DEV: '1',
-    CHECKBA_DEV_SERVER_URL: DEVURL,
-    CHECKBA_BACKEND_PORT: BACKEND_PORT,
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
-  detached: true,
+const { elec, killTree } = spawnElectron({
+  desktopDir,
+  cdpPort: CDP_PORT,
+  env: { AIWORKDECK_DESKTOP_DEV: '1', CHECKBA_DEV_SERVER_URL: DEVURL, CHECKBA_BACKEND_PORT: BACKEND_PORT },
 })
-// 整棵树一起收：先客气后强硬。测试进程自己被 Ctrl-C / 异常退出时也要收，
-// 否则下一轮又会撞上一个占着端口的孤儿。
-const killTree = () => {
-  for (const sig of ['SIGTERM', 'SIGKILL']) {
-    try { process.kill(-elec.pid, sig) } catch (e) { /* 组没了就算了 */ }
-  }
-}
-process.on('exit', killTree)
-process.on('SIGINT', () => { killTree(); process.exit(130) })
 const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'desktop-e2e-electron.log'))
 elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-let ws = null
-for (let i = 0; i < 60 && !ws; i++) {
-  await sleep(1000)
-  ws = await fetch('http://127.0.0.1:' + CDP_PORT + '/json/version').then((r) => r.json()).then((j) => j.webSocketDebuggerUrl).catch(() => null)
-}
+const ws = await waitForCdpWs(CDP_PORT)
 if (!ws) { console.error('CDP 端点未就绪（端口 ' + CDP_PORT + '）'); killTree(); process.exit(1) }
 
-// 连上去之前先确认：应答这个端口的，就是我们刚起的那棵进程树。
-// 万一还是撞上了别人（并行会话同时挑中同一个端口），当场报死——总比默默驱动
-// 别人的窗口、最后以"点了没反应"的形态红在某一步强。
 {
-  const kids = (root) => {
-    const out = []
-    const walk = (p) => {
-      let cs = ''
-      try { cs = execSync('pgrep -P ' + p + ' 2>/dev/null || true').toString() } catch (e) { cs = '' }
-      for (const c of cs.split('\n').map((s) => s.trim()).filter(Boolean)) { out.push(c); walk(c) }
-    }
-    walk(root)
-    return out
-  }
-  let holder = ''
-  try { holder = execSync('lsof -nP -iTCP:' + CDP_PORT + ' -sTCP:LISTEN -t 2>/dev/null || true').toString().trim().split('\n')[0] } catch (e) { holder = '?' }
-  const ours = [String(elec.pid), ...kids(elec.pid)]
-  if (holder && !ours.includes(holder)) {
-    console.error('CDP 端口 ' + CDP_PORT + ' 上应答的是 pid=' + holder + '，不是本轮起的 Electron('
-      + ours.join(',') + ')——多半有别的会话在跑同一套 e2e。换个端口重跑：DESKTOP_E2E_CDP_PORT=9400')
-    killTree(); process.exit(1)
-  }
+  const bad = cdpOwnershipError(CDP_PORT, elec)
+  if (bad) { console.error(bad + '。换个端口重跑：DESKTOP_E2E_CDP_PORT=9400'); killTree(); process.exit(1) }
 }
 
 let failed = 0
@@ -184,6 +132,7 @@ try {
     page = (await browser.pages()).find((p) => p.url().startsWith(DEVURL))
   }
   if (!page) throw new Error('找不到主渲染页')
+  await hardenPageInput(page)
 
   // 壳注入的基址若和 provision 用的后端不是同一个，后面每一步都会以"点了没反应"
   // 的形态超时（文件建在别的库里/根本建不出来）。这里当场报死，别让人去查 UI。

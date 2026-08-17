@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { pickCdpPort, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput } from '../_lib/electron-cdp.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -25,7 +26,8 @@ const desktopDir = path.resolve(frontendDir, '../desktop')
 const DEVURL = process.env.MEETING_E2E_DEVURL || 'http://localhost:5174'
 const BACKEND_PORT = 9899
 const BACKEND = 'http://127.0.0.1:' + BACKEND_PORT
-const CDP_PORT = 9337
+// 端口现挑 + 进程树整棵收 + 连前核身份 + 输入加固，见 tests/_lib/electron-cdp.mjs
+const CDP_PORT = pickCdpPort('MEETING_E2E_CDP_PORT', 9337)
 const ts = Date.now()
 
 let puppeteer
@@ -75,7 +77,7 @@ for (let i = 0; i < 150 && !backendUp; i++) {
 }
 if (!backendUp) die('后端 150s 未就绪')
 
-const QA = { sid: null }
+const QA = { sid: null, project: '' }
 async function api(ep, opts = {}) {
   const r = await fetch(BACKEND + ep, {
     method: opts.method || 'GET',
@@ -101,7 +103,8 @@ async function api(ep, opts = {}) {
     const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OLLAMA' } } })
     if (!init || init.code !== 0) die('向导初始化失败: ' + JSON.stringify(init))
   }
-  const proj = await api('/api/projects', { method: 'POST', body: { name: '会议QA_' + ts, projectType: 'BLANK' } })
+  QA.project = '会议QA_' + ts
+  const proj = await api('/api/projects', { method: 'POST', body: { name: QA.project, projectType: 'BLANK' } })
   QA.projectId = proj.id
   // 广场启停语义：enabled_by_default:false 的 skill 启用即安装，左栏 requiresSkill 过滤据此放行
   const en = await api('/api/skills/meeting-recorder/enable', { method: 'POST' })
@@ -117,31 +120,24 @@ async function api(ep, opts = {}) {
 
 // ---- dev Electron + 假麦克风 ----
 console.log('启动 dev Electron（屏幕会出现窗口，结束自动关闭）...')
-const elec = spawn('npx', ['electron', '.',
-  '--remote-debugging-port=' + CDP_PORT,
-  '--use-fake-device-for-media-stream',
-  '--use-fake-ui-for-media-stream',
-], {
-  cwd: desktopDir,
-  env: {
-    ...process.env,
-    AIWORKDECK_DESKTOP_DEV: '1',
-    CHECKBA_DEV_SERVER_URL: DEVURL,
-    CHECKBA_BACKEND_PORT: String(BACKEND_PORT),
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
+const { elec, killTree } = spawnElectron({
+  desktopDir,
+  cdpPort: CDP_PORT,
+  env: { AIWORKDECK_DESKTOP_DEV: '1', CHECKBA_DEV_SERVER_URL: DEVURL, CHECKBA_BACKEND_PORT: String(BACKEND_PORT) },
+  // 假麦克风：getUserMedia({audio}) 返回一路合成音轨，并免掉权限询问
+  extraArgs: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
 })
 {
   const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'meeting-e2e-electron.log'))
   elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 }
 
-let ws = null
-for (let i = 0; i < 60 && !ws; i++) {
-  await sleep(1000)
-  ws = await fetch('http://127.0.0.1:' + CDP_PORT + '/json/version').then(r => r.json()).then(j => j.webSocketDebuggerUrl).catch(() => null)
+const ws = await waitForCdpWs(CDP_PORT)
+if (!ws) { killTree(); die('CDP 端点未就绪（端口 ' + CDP_PORT + '）') }
+{
+  const bad = cdpOwnershipError(CDP_PORT, elec)
+  if (bad) { killTree(); die(bad + '。换个端口重跑：MEETING_E2E_CDP_PORT=9402') }
 }
-if (!ws) { try { elec.kill() } catch (e) { /* ignore */ } die('CDP 端点未就绪') }
 
 let failed = 0
 const step = async (name, fn) => {
@@ -158,6 +154,14 @@ try {
     page = (await browser.pages()).find(p => p.url().startsWith(DEVURL))
   }
   if (!page) throw new Error('找不到主渲染页')
+  await hardenPageInput(page)
+
+  // 语言必须钉死中文：本套断言全是中文字面量（rail 的 title="会议录音"、面板文案…），
+  // 而 appLanguage 对全新安装是按 navigator.language 猜的——Electron 常带 --lang=en-GB，
+  // 猜成英文之后 rail 会变成 "Meeting Recording"，所有选择器一起失配（实测就这么红过一轮，
+  // 现象是"左栏没有会议录音入口"，很容易被误当成 skill 没启用）。下面那步的 goto+reload
+  // 会让它生效；不能用 evaluateOnNewDocument——壳启动时页面已经引导过一次了。
+  await page.evaluate(() => { try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ } })
 
   {
     const injected = await page.evaluate(() => (window.checkbaDesktop || {}).apiBaseUrl || null)
@@ -186,25 +190,65 @@ try {
   page.on('console', (m) => { if (m.type() === 'error') console.log('    [console.error] ' + m.text().slice(0, 200)) })
 
   await step('进入工作台，左栏 rail 出现「会议录音」（skill 启用 → requiresSkill 放行）', async () => {
-    // 启动直达配方（app-e2e 同款）：写最近项目 → 回根路由 reload → launch 流程送进工作台。
-    // 直接 hash 跳 project-overview 会被启动逻辑弹回项目列表。
-    await page.goto(DEVURL + '/', { waitUntil: 'domcontentloaded', timeout: 120000 })
-    await page.evaluate((id) => localStorage.setItem('checkba_last_project_id', String(id)), QA.projectId)
+    // 2026-08 起**启动一律落项目列表页**：launch.vue 不再读 checkba_last_project_id
+    // 直达上次项目，所以老的"写最近项目 → reload 直达工作台"配方已经失效（本套件
+    // 因此在 master 上整轮红，10 步全挂，第一条就是这里）。改成 desktop-e2e 同款：
+    // 轮询到真进了工作台为止——在列表上就按真人走法点卡片，已经在工作台就直接出去。
+    // 点卡片主体、避开标题行（@tap.stop=startRename）与底部那排成员头像。
+    await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
+      { waitUntil: 'domcontentloaded', timeout: 120000 })
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 120000 })
+    const deadline = Date.now() + 90000
+    while (Date.now() < deadline) {
+      const where = await page.evaluate(() => ({
+        list: location.hash.includes('pages/project-list/project-list'),
+        wb: location.hash.includes('pages/project-overview/project-overview'),
+        // 别拿「资源管理器」当就绪判据：左栏面板是**记住上次**的，上一轮把它切到
+        // 「会议录音」之后，下一轮进来就永远等不到这四个字（本套件正是这样一轮好
+        // 一轮坏地交替）。工作台根节点与面板无关，才是稳的判据。
+        ready: !!document.querySelector('.page-project-overview'),
+      })).catch(() => null)
+      if (where && where.wb && where.ready) break
+      if (where && where.list) {
+        const box = await page.evaluate((name) => {
+          const cards = [...document.querySelectorAll('.project-item-card')]
+          const card = cards.find((c) => (c.innerText || '').includes(name)) || cards[0]
+          if (!card) return null
+          const r = card.getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height * 0.55 }
+        }, QA.project).catch(() => null)
+        if (box) await page.mouse.click(box.x, box.y).catch(() => {})
+      }
+      await new Promise((r) => setTimeout(r, 1500))
+    }
     try {
       await page.waitForFunction(
         () => location.hash.includes('pages/project-overview/project-overview'), POLL(60000))
-      await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), POLL(120000))
+      await page.waitForFunction(() => !!document.querySelector('.page-project-overview'), POLL(120000))
     } catch (e) {
       const url = page.url()
       const text = await page.evaluate(() => document.body.innerText.slice(0, 400)).catch(() => '(取不到)')
       throw new Error('工作台未渲染。url=' + url + ' body=' + JSON.stringify(text))
     }
-    await page.waitForSelector('.rail-btn[title="会议录音"]', { timeout: 30000 })
+    // 等不到就把左栏 rail 现在到底有哪些入口、以及后端认不认这个 skill 一并报出来，
+    // 别只丢一句选择器超时（这一步就是靠 requiresSkill 放行的，缺什么要一眼看见）。
+    try {
+      await page.waitForSelector('.rail-btn[title="会议录音"]', { timeout: 30000 })
+    } catch (e) {
+      const rail = await page.evaluate(() => [...document.querySelectorAll('.rail-btn')]
+        .map((b) => b.getAttribute('title') || b.innerText.trim().slice(0, 8))).catch(() => null)
+      const skills = await api('/api/skills/list').catch(() => null)
+      const mine = Array.isArray(skills) ? skills.filter((k) => /meeting/i.test(JSON.stringify(k))) : skills
+      throw new Error('左栏没出现「会议录音」入口。当前 rail=' + JSON.stringify(rail)
+        + ' 后端 skill=' + JSON.stringify(mine).slice(0, 300))
+    }
   })
 
   await step('打开面板：录音区与降级提示（未配听悟凭证）在场', async () => {
-    await clickSel('.rail-btn[title="会议录音"]')
+    // rail 按钮是**开关**，而左栏面板是记住上次的：上一轮跑完把「会议录音」留在打开
+    // 状态，这一轮再点一下正好把它关上，于是 .mr-record-zone 永远等不到（本套件因此
+    // 一轮好一轮坏地交替）。改成"确保打开"而不是"点一下"。
+    if (!(await page.$('.mr-record-zone'))) await clickSel('.rail-btn[title="会议录音"]')
     await page.waitForSelector('.mr-record-zone', { timeout: 15000 })
     await page.waitForSelector('.mr-config-hint', { timeout: 10000 })
   })
@@ -289,15 +333,26 @@ try {
 
   await step('无凭证提交转写给出可读错误（降级路径）', async () => {
     const res = await api('/api/meetings/' + meetingId + '/transcribe', { method: 'POST' })
-    const msg = JSON.stringify(res || {})
-    if (!msg.includes('未配置转写服务凭证')) throw new Error('返回=' + msg.slice(0, 200))
+    const msg = String((res && res.message) || JSON.stringify(res || {}))
+    // 没凭证有两条合法分支，取决于当前转写档位（MeetingTranscriptionService）：
+    //   PLATFORM → 「平台转写需要连接 AI WorkDeck 账户…」
+    //   BYOK     → 「未配置转写服务凭证，请到 设置-会议转写 填写阿里云凭证」
+    // 原来只认死 BYOK 那句，档位默认走平台之后这步就一直红。这里认"说清了缺什么、
+    // 下一步去哪"，别再钉死某一句文案。
+    const readable = /凭证|账户/.test(msg) && !/服务器内部错误/.test(msg)
+    if (!readable) throw new Error('没给出可读的降级提示，返回=' + msg.slice(0, 200))
+    // 后端那边有明确约束：这句话不能含「登录」「未授权」「请先」——api.js 拿这三个
+    // 子串判定掉线并清会话，误伤了会把用户直接踢出去。属于契约，一并守住。
+    for (const bad of ['登录', '未授权', '请先']) {
+      if (msg.includes(bad)) throw new Error('降级提示里出现了会被 api.js 判成掉线的词「' + bad + '」：' + msg.slice(0, 200))
+    }
   })
 } catch (e) {
   failed++
   console.error('致命: ' + (e.message || e))
 } finally {
   try { await browser.disconnect() } catch (e) { /* ignore */ }
-  try { elec.kill() } catch (e) { /* ignore */ }
+  killTree()
   try { backendChild.kill() } catch (e) { /* ignore */ }
 }
 
