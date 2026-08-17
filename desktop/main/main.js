@@ -1625,7 +1625,7 @@ app.whenReady().then(() => {
               const { t: tL } = require('./app-language')
               if (evt.type === 'ready' && Notification.isSupported()) {
                 new Notification({
-                  title: tL({ zh: 'AI Workdeck 更新已就绪', en: 'AI Workdeck Update Ready' }),
+                  title: tL({ zh: 'AI WorkDeck 更新已就绪', en: 'AI WorkDeck Update Ready' }),
                   body: tL({
                     zh: `新版本 ${evt.version} 已下载完成，重启应用后生效。`,
                     en: `Version ${evt.version} has been downloaded. Restart the app to apply it.`,
@@ -1633,7 +1633,7 @@ app.whenReady().then(() => {
                 }).show()
               } else if (evt.type === 'major-available' && Notification.isSupported()) {
                 new Notification({
-                  title: tL({ zh: 'AI Workdeck 新版本发布', en: 'New AI Workdeck Release' }),
+                  title: tL({ zh: 'AI WorkDeck 新版本发布', en: 'New AI WorkDeck Release' }),
                   body: tL({
                     zh: `大版本 ${evt.major} 已发布，请前往官网下载完整安装包。`,
                     en: `Major version ${evt.major} is available. Download the full installer from the website.`,

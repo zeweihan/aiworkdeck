@@ -107,7 +107,7 @@ public class EditorBridgeService {
                     "fileType", file.getFileType(),
                     "wpsFileId", file.getWpsFileId() != null ? file.getWpsFileId() : "",
                     "trackRevisions", true,
-                    "userName", "AI Workdeck"
+                    "userName", "AI WorkDeck"
             );
             sendDualNamedAction("doc_open_file", "wps_open_file", conversationId, fields);
             log.info("Sent doc_open_file action for file: {} (id={})", file.getName(), file.getId());

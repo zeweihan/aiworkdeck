@@ -354,7 +354,7 @@ export const agentClientActionMethods = {
         }
 
         try {
-            // __agent 标记：worker 据此把这条命令产生的修订署名为 AI Workdeck
+            // __agent 标记：worker 据此把这条命令产生的修订署名为 AI WorkDeck
             //（用户本人的 IME 输入等不带标记，署用户名），修订面板里可区分来源。
             const result = await this.libreOfficeExecutor.executeCommand(
                 commandAction, Object.assign({}, params, { __agent: true }))

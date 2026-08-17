@@ -3,7 +3,7 @@
 		{
 			"path": "pages/launch/launch",
 			"style": {
-				"navigationBarTitleText": "AI Workdeck",
+				"navigationBarTitleText": "AI WorkDeck",
 				"navigationStyle": "custom"
 			}
 		},
@@ -94,7 +94,7 @@
 	],
 	"globalStyle": {
 		"navigationBarTextStyle": "black",
-		"navigationBarTitleText": "AI Workdeck",
+		"navigationBarTitleText": "AI WorkDeck",
 		"navigationBarBackgroundColor": "#F8F8F8",
 		"backgroundColor": "#F8F8F8",
 		// rpx 恒定按 375 基准换算（1rpx = 0.5px）。uni-h5 默认是移动端口径：

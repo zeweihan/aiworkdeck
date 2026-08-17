@@ -106,6 +106,6 @@ public class OptimizerProperties {
         private boolean enabled = true;
         /** 收件人（维护者），逗号分隔。留空 = 邮件出口不可用，会退化成只写库并记 FAILED。 */
         private String to = "";
-        private String subjectPrefix = "[AI Workdeck 优化者]";
+        private String subjectPrefix = "[AI WorkDeck 优化者]";
     }
 }

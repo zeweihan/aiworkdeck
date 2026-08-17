@@ -99,10 +99,10 @@ class TotpServiceTest {
     @DisplayName("otpauth URI 含密钥/发行方/参数，且账号名里的空格与冒号被转义")
     void provisioningUriShape() {
         TotpService svc = new TotpService();
-        String uri = svc.provisioningUri("ABC234", "zhang san", "AI Workdeck");
-        assertTrue(uri.startsWith("otpauth://totp/AI%20Workdeck:zhang%20san?"), uri);
+        String uri = svc.provisioningUri("ABC234", "zhang san", "AI WorkDeck");
+        assertTrue(uri.startsWith("otpauth://totp/AI%20WorkDeck:zhang%20san?"), uri);
         assertTrue(uri.contains("secret=ABC234"));
-        assertTrue(uri.contains("issuer=AI%20Workdeck"));
+        assertTrue(uri.contains("issuer=AI%20WorkDeck"));
         assertTrue(uri.contains("digits=6"));
         assertTrue(uri.contains("period=30"));
     }

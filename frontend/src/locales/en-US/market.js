@@ -130,7 +130,7 @@ export default {
   reinstallOrUpdate: 'Reinstall / Update',
   activationModeLabel: 'Activation: {mode} ▾',
   processingEllipsis: 'Processing…',
-  needAccountHint: 'This is a paid item. Connect your AI Workdeck account under "Account & Usage" in Settings first — purchase records can only be verified after that.',
+  needAccountHint: 'This is a paid item. Connect your AI WorkDeck account under "Account & Usage" in Settings first — purchase records can only be verified after that.',
   buyHint: 'This is a paid item. Purchase completes on the official website; after paying, return to this page and click "I\'ve Purchased, Refresh" to install.',
 
   whenToUse: 'When to Use',

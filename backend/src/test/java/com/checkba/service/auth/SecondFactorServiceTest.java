@@ -120,7 +120,7 @@ class SecondFactorServiceTest {
     @DisplayName("绑定全流程：setup 未启用 → activate 验码后启用")
     void setupThenActivate() {
         User u = user(1);
-        var setup = service.startSetup(1L, "AI Workdeck");
+        var setup = service.startSetup(1L, "AI WorkDeck");
 
         assertEquals(setup.secret(), u.getTotpSecret());
         assertFalse(u.isTotpEnabled(), "setup 之后尚未启用");
@@ -139,14 +139,14 @@ class SecondFactorServiceTest {
         User u = user(1);
         u.setTotpEnabled(true);
         u.setTotpSecret(totp.newSecret());
-        assertThrows(IllegalArgumentException.class, () -> service.startSetup(1L, "AI Workdeck"));
+        assertThrows(IllegalArgumentException.class, () -> service.startSetup(1L, "AI WorkDeck"));
     }
 
     @Test
     @DisplayName("重放拦截：同一枚码在有效期内只能用一次")
     void replayRejected() {
         User u = user(1);
-        var setup = service.startSetup(1L, "AI Workdeck");
+        var setup = service.startSetup(1L, "AI WorkDeck");
         String code = codeFor(setup.secret());
         service.activate(1L, code);
 
@@ -159,7 +159,7 @@ class SecondFactorServiceTest {
     @DisplayName("verify：TOTP 正码放行并推进时间片；错码抛业务错误")
     void verifyTotp() {
         User u = user(1);
-        var setup = service.startSetup(1L, "AI Workdeck");
+        var setup = service.startSetup(1L, "AI WorkDeck");
         u.setTotpEnabled(true);
 
         assertThrows(IllegalArgumentException.class, () -> service.verify(u, "000000"));
@@ -185,7 +185,7 @@ class SecondFactorServiceTest {
     @DisplayName("解绑必须带当前码：错码拒绝，正码才清空密钥")
     void disableRequiresCurrentCode() {
         User u = user(1);
-        var setup = service.startSetup(1L, "AI Workdeck");
+        var setup = service.startSetup(1L, "AI WorkDeck");
         service.activate(1L, codeFor(setup.secret()));
 
         assertThrows(IllegalArgumentException.class, () -> service.disable(1L, "000000"));
@@ -210,7 +210,7 @@ class SecondFactorServiceTest {
     @DisplayName("管理员重置：无需验证码即可清除（认证器丢失的唯一出路）")
     void adminResetClears() {
         User u = user(1);
-        var setup = service.startSetup(1L, "AI Workdeck");
+        var setup = service.startSetup(1L, "AI WorkDeck");
         service.activate(1L, codeFor(setup.secret()));
 
         service.resetByAdmin(1L);

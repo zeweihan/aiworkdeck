@@ -1,4 +1,4 @@
-# AI Workdeck 法律领域 zh→en 术语表（翻译唯一基准）
+# AI WorkDeck 法律领域 zh→en 术语表（翻译唯一基准）
 
 所有 UI/文案/prompt 的中英翻译以本表为准。新增术语先加进本表再用。
 维护规则：改动产品名词的英文叫法 = 契约变更，PR 里同步更新本表与受影响的 locale 键。
@@ -8,7 +8,7 @@
 - 语体：American English。界面短标签（菜单/按钮/栏目名）用 Title Case；句子式提示、toast、错误信息用 sentence case。
 - 禁 emoji（全局红线）。
 - 法域口径：英文版是 jurisdiction-neutral 的国际商事/通用法律助手，不预设中国大陆法条；"法条" 一律译 statutory provision / legal provision，不写 "PRC law" 除非内容本身如此。
-- 品牌名不译：AI Workdeck。"AI Workdeck 云端" → AI Workdeck Cloud。
+- 品牌名不译：AI WorkDeck。"AI WorkDeck 云端" → AI WorkDeck Cloud。
 
 ## 产品结构名词
 
@@ -53,7 +53,7 @@
 | 案卷访问码 | Case File Access Code | 客户登录入口 |
 | 无限版 | Unlimited edition | 缓存区/存储容量档位；「解锁无限版」 → Unlock the Unlimited edition |
 | 额度 | Credits | 站内唯一计价单位，不译成 quota |
-| 平台通道（AI Workdeck 云端） | AI Workdeck Cloud | |
+| 平台通道（AI WorkDeck 云端） | AI WorkDeck Cloud | |
 | 自备 Key | Your Own Key (BYOK) | |
 | 网络区域 | Network Region | 境内 → Mainland China；国际 → International |
 

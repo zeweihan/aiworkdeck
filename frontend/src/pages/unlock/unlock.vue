@@ -3,7 +3,7 @@
   <view class="unlock-page">
     <view class="unlock-card">
       <image class="unlock-logo" src="/static/logo_full_v2.png" mode="heightFix" />
-      <text class="unlock-title">AI Workdeck</text>
+      <text class="unlock-title">AI WorkDeck</text>
       <text class="unlock-subtitle">{{ $t('onboarding.unlock.subtitle') }}</text>
 
       <view class="unlock-form">

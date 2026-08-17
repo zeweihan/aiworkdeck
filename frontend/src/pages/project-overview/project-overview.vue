@@ -384,7 +384,7 @@
         @confirm="handleFilePickerConfirm"
       />
 
-      <!-- Invite Modal (Refactored to AI Workdeck) -->
+      <!-- Invite Modal (Refactored to AI WorkDeck) -->
       <!-- Invite Member Dialog -->
       <InviteMemberDialog
         v-model:visible="showInviteModal"
@@ -1481,7 +1481,7 @@
       <view class="status-sep"></view>
       <view class="status-item status-brand">
         <view class="status-dot mint"></view>
-        <text>AI Workdeck</text>
+        <text>AI WorkDeck</text>
       </view>
     </view>
   </view>
@@ -2727,7 +2727,7 @@ export default {
     }
   },
   watch: {
-    // IDE 化窗口标题：「文件名 — 项目名 — AI Workdeck」（Electron 窗口标题跟随 document.title）
+    // IDE 化窗口标题：「文件名 — 项目名 — AI WorkDeck」（Electron 窗口标题跟随 document.title）
     'project.name'() { this.updateWindowTitle() },
     activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState() },
     // 菜单栏的勾选/置灰跟着这些走。编辑器与 AI 面板内部的状态走 @menu-state
@@ -2819,7 +2819,7 @@ export default {
         const parts = []
         if (active && active.name) parts.push(active.name)
         if (this.project && this.project.name) parts.push(this.project.name)
-        parts.push('AI Workdeck')
+        parts.push('AI WorkDeck')
         document.title = parts.join(' — ')
       } catch (e) { /* 标题失败不影响功能 */ }
     },
@@ -4681,7 +4681,7 @@ export default {
            ? file.name.substring(0, maxLen) + '...'
            : file.name
 
-       // Use AI Workdeck brand colors for the tag
+       // Use AI WorkDeck brand colors for the tag
        const tagHtml = `<span class="ai-tag" contenteditable="false" data-file-id="${file.id || file.fileId}" data-full-name="${file.name}" title="${file.name}" style="background: linear-gradient(135deg, #1A5336 0%, #2D7A52 100%); color: #FFFFFF; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; box-shadow: 0 1px 3px rgba(26,83,54,0.2);">@${displayName}</span>&nbsp;`
 
 

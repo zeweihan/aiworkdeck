@@ -284,8 +284,8 @@ public class MeetingTranscriptionService {
                     // 文案不含「登录」「未授权」「请先」——api.js 拿这三个子串判掉线并清会话。
                     // 也一并给出自备 Key 这条出路：用试用码解锁、不打算连账户的用户只有它。
                     throw new IllegalArgumentException(LangText.of(
-                            "平台转写需要连接 AI Workdeck 账户；也可到 系统管理-会议转写 改用自己的阿里云凭证",
-                            "Platform transcription needs a connected AI Workdeck account; "
+                            "平台转写需要连接 AI WorkDeck 账户；也可到 系统管理-会议转写 改用自己的阿里云凭证",
+                            "Platform transcription needs a connected AI WorkDeck account; "
                                     + "or switch to your own Aliyun credentials in System settings"));
                 }
             }

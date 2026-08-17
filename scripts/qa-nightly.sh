@@ -7,7 +7,7 @@
 #   2) tests/app-e2e   —— 全应用真人模拟（需桌面后端 9696 在跑；不在则跳过并注明）
 # 产出：~/aiworkdeck-qa/reports/YYYY-MM-DD.md；有失败时用 gh 开 issue（标签 qa-nightly）。
 #
-# 引擎来源：打包版 /Applications/AI Workdeck.app 内置的 lowa/ + cjk 字体（离线、稳定，
+# 引擎来源：打包版 /Applications/AI WorkDeck.app 内置的 lowa/ + cjk 字体（离线、稳定，
 # 免 CDN；build:zetaoffice 会清空 dist，故引擎复制必须在 build 之后）。
 
 set -u
@@ -16,7 +16,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PA
 QA_HOME="$HOME/aiworkdeck-qa"
 REPO="$QA_HOME/repo"
 REPORTS="$QA_HOME/reports"
-APP_RES="/Applications/AI Workdeck.app/Contents/Resources/frontend/dist/zetaoffice"
+APP_RES="/Applications/AI WorkDeck.app/Contents/Resources/frontend/dist/zetaoffice"
 DAY=$(date +%F)
 REPORT="$REPORTS/$DAY.md"
 PORT=5199
@@ -26,7 +26,7 @@ FAILED=0
 log() { echo "$(date +%T) $*" }
 section() { echo "\n## $*" >> "$REPORT" }
 
-echo "# AI Workdeck 每日 QA — $DAY" > "$REPORT"
+echo "# AI WorkDeck 每日 QA — $DAY" > "$REPORT"
 
 # ---- 更新专用克隆 ----
 if [[ ! -d "$REPO/.git" ]]; then
@@ -76,7 +76,7 @@ if nc -z 127.0.0.1 9696 2>/dev/null; then
   fi
   pkill -f "uni --port $PORT" 2>/dev/null
 else
-  echo "跳过：桌面后端 9696 未运行（打开 AI Workdeck 后自动恢复覆盖）" >> "$REPORT"
+  echo "跳过：桌面后端 9696 未运行（打开 AI WorkDeck 后自动恢复覆盖）" >> "$REPORT"
 fi
 
 # ---- 汇报 ----

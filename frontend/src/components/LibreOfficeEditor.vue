@@ -559,7 +559,7 @@ export default {
       this.appendLog('▶ load_document「' + name + '」(' + bytes.length + ' bytes) …')
       this.bootMilestone(86, 95, 'openingDoc')
       // 当前登录用户名随文档传给 worker：用户本人编辑的修订以用户名署名，
-      // AI 命令产生的修订署名 AI Workdeck（worker execCommand 按 __agent 切换）。
+      // AI 命令产生的修订署名 AI WorkDeck（worker execCommand 按 __agent 切换）。
       const u = getCurrentUser() || {}
       const authorName = String(u.name || u.nickname || u.username || '')
       const t0 = Date.now()

@@ -32,7 +32,7 @@
                   <view class="control yellow"></view>
                   <view class="control green"></view>
                 </view>
-                <text class="window-title">AI Workdeck - Professional Workspace</text>
+                <text class="window-title">AI WorkDeck - Professional Workspace</text>
               </view>
               <view class="ide-body">
                 <view class="ide-sidebar">
@@ -96,7 +96,7 @@
           <view class="card-header">
             <image class="card-logo" src="/static/iconmark_v2.png" mode="heightFix" />
             <view class="card-texts">
-              <text class="product-name">AI Workdeck</text>
+              <text class="product-name">AI WorkDeck</text>
               <text class="product-subtitle">{{ $t('account.productSubtitle') }}</text>
             </view>
           </view>

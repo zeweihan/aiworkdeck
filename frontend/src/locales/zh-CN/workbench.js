@@ -133,7 +133,7 @@ export default {
   adoptPendingText: '有文件等你做选择',
   goHandle: '去处理',
   // 试用版说明弹窗
-  trialInfoBody: '当前为试用版，全部功能均可正常使用。升级正式版可连接 AI Workdeck 账户，同步已购内容并使用平台 AI 通道。',
+  trialInfoBody: '当前为试用版，全部功能均可正常使用。升级正式版可连接 AI WorkDeck 账户，同步已购内容并使用平台 AI 通道。',
   gotIt: '知道了',
   learnFullVersion: '了解正式版',
   // 底部状态条

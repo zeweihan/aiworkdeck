@@ -806,9 +806,9 @@ public class AdminConfigController {
         }
         if (hasCrossBorderConsent(ai, settings)) return null;
         return LangText.of(
-                "「AI Workdeck 云端」会把你送入 AI 的内容发往境外的模型服务商处理。"
+                "「AI WorkDeck 云端」会把你送入 AI 的内容发往境外的模型服务商处理。"
                         + "勾选跨境传输同意后才能启用；不想让内容出境的话，可以改用本机模型或境内供应商。",
-                "\"AI Workdeck Cloud\" sends the content you give the AI to a model provider outside mainland China for processing. "
+                "\"AI WorkDeck Cloud\" sends the content you give the AI to a model provider outside mainland China for processing. "
                         + "Enable it by checking cross-border transfer consent; if you don't want content to leave mainland China, use a local model or a domestic provider instead.");
     }
 

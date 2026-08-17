@@ -143,7 +143,7 @@ class PlatformAiKeyServiceTest {
         assertTrue(rows.isEmpty());
 
         doThrow(new AccountException(AccountException.Kind.NETWORK,
-                "无法连接 AI Workdeck 服务器，请检查网络后重试"))
+                "无法连接 AI WorkDeck 服务器，请检查网络后重试"))
                 .when(accountService).fetchAiKeyWith(anyString());
         assertDoesNotThrow(() -> service.tryProvision(1L, AWDK));
 

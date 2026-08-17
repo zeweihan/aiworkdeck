@@ -143,14 +143,14 @@ public class SiteProfileService {
         if (site == null || site.getBaseUrl() == null || site.getBaseUrl().isBlank()) {
             // 站点表没配（老配置文件、单测直接 new 出来的场景）：用有效基址兜出一个站点，
             // 保证 profile() 永不返回 null，调用方不需要到处判空
-            return new SiteProfile(BUILTIN_SITE_ID, "AI Workdeck", configuredBaseUrl,
+            return new SiteProfile(BUILTIN_SITE_ID, "AI WorkDeck", configuredBaseUrl,
                     configuredBaseUrl + "/api/registry", configuredBaseUrl + "/api/telemetry",
                     configuredBaseUrl);
         }
         String base = trimTrailingSlash(site.getBaseUrl());
         return new SiteProfile(
                 siteId,
-                orDefault(site.getDisplayName(), "AI Workdeck"),
+                orDefault(site.getDisplayName(), "AI WorkDeck"),
                 base,
                 orDefault(trimTrailingSlash(site.getRegistryBaseUrl()), base + "/api/registry"),
                 orDefault(site.getTelemetryIngestUrl(), base + "/api/telemetry"),

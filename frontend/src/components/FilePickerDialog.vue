@@ -243,7 +243,7 @@ export default {
 
 .btn-confirm {
   padding: 8px 20px;
-  background: linear-gradient(135deg, #1A5336 0%, #14402a 100%); /* AI Workdeck Green */
+  background: linear-gradient(135deg, #1A5336 0%, #14402a 100%); /* AI WorkDeck Green */
   border: none;
   border-radius: 6px;
   font-size: 14px;

@@ -170,7 +170,7 @@ class MeetingTranscriptionLocalPathTest {
     @Test
     @DisplayName("服务没起与模型没下是两条不同的路：文案必须能分开，不能都说「不可用」")
     void serviceDownAndModelMissingAreDistinguishable() {
-        stubProbe(LocalAsrClient.Status.SERVICE_DOWN, "本机转写服务没有运行。", "重启 AI Workdeck 让它自动拉起。");
+        stubProbe(LocalAsrClient.Status.SERVICE_DOWN, "本机转写服务没有运行。", "重启 AI WorkDeck 让它自动拉起。");
         meeting(MeetingRecording.STATUS_RECORDED);
         String down = assertThrows(IllegalArgumentException.class,
                 () -> service().startTranscription(7L)).getMessage();

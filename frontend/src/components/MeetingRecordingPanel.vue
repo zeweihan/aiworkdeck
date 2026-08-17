@@ -347,7 +347,7 @@ export default {
       if (this.asrProvider === 'byok') return '用你自己的阿里云听悟账号转写，音频经你自己的 OSS 中转。'
       if (!this.asrPlatformAvailable) return '本机形态使用自备 Key，在「系统管理 - 平台服务」里填听悟凭证。'
       if (!this.asrAccountConnected) return '连接官网账户后即可直接转写，不用自己开通听悟。'
-      return '由 AI Workdeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。'
+      return '由 AI WorkDeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。'
     },
     localSwitchNote() {
       if (this.asrProvider === 'local') return '音频不上传，转写在本机完成；比云端慢，且没有说话人分离。'

@@ -28,7 +28,7 @@
 // 概览页动态块。主源是版本时间线，副源是后台 AI 任务。
 //
 // 两条硬约束：
-// 1) 不标注 AI/人：authorName 的 "AI Workdeck" 有两个语义相反的来源，
+// 1) 不标注 AI/人：authorName 的 "AI WorkDeck" 有两个语义相反的来源，
 //    VersionEntry 也不带 email，拿它区分只会误导。
 // 2) unavailable=true 不是防御性编程：VersionController.requireMember:562-564 在
 //    hasReadPermission 通过后还显式拒 CLIENT，客户身份进概览页一定拿到 {code:1}；

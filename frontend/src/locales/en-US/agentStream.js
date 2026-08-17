@@ -16,8 +16,8 @@ export default {
   chatRequestFailed: 'Chat request failed: HTTP {status}',
   errorWithMessage: '**Error**: {message}',
   executionInterrupted: '> **Execution interrupted**: {message}',
-  regionBlockedNotice: '> **This model is not available in your current network region**: models hosted overseas are blocked by their providers when accessed from a Mainland China network. Switch to the AI Workdeck Cloud channel in Settings, or choose a model marked as available in both regions and resend.',
-  quotaExhaustedNotice: '> **AI service credits exhausted**: the balance or quota for the current channel has been used up. With your own key, top up with your provider (such as OpenRouter); with the AI Workdeck Cloud channel, check your credit allocation on the account page.',
+  regionBlockedNotice: '> **This model is not available in your current network region**: models hosted overseas are blocked by their providers when accessed from a Mainland China network. Switch to the AI WorkDeck Cloud channel in Settings, or choose a model marked as available in both regions and resend.',
+  quotaExhaustedNotice: '> **AI service credits exhausted**: the balance or quota for the current channel has been used up. With your own key, top up with your provider (such as OpenRouter); with the AI WorkDeck Cloud channel, check your credit allocation on the account page.',
   contextOverflowNotice: '> **The conversation exceeds the model context window**: automatic compression was attempted but it still does not fit. Start a new conversation, or attach fewer or shorter files.',
   // Subtask progress rows
   subtaskStarted: 'Subtask started',

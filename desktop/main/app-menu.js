@@ -20,12 +20,12 @@ const { t, onAppLanguageChange } = require('./app-language')
 // 菜单里的应用名写死，**不要用 app.name**：desktop/package.json 没有顶层 productName，
 // Electron 于是拿 name 字段当 app.name，菜单会显示「关于 aiworkdeck-desktop」。
 // 而补一个顶层 productName 会连带把 app.getPath('userData') 从
-// ~/Library/Application Support/aiworkdeck-desktop 改名到「AI Workdeck」，
+// ~/Library/Application Support/aiworkdeck-desktop 改名到「AI WorkDeck」，
 // 存量用户的 Local Storage（登录态、uni 存储）当场全丢——不值得为一个显示名冒这个险。
 // 注：macOS 菜单栏最左边那个粗体应用名不由这里决定，它取自运行中 .app 包的
-// CFBundleName（打包版=AI Workdeck；dev 跑 node_modules 里的 Electron.app，
+// CFBundleName（打包版=AI WorkDeck；dev 跑 node_modules 里的 Electron.app，
 // 见 scripts/brand-dev-electron.js）。
-const APP_DISPLAY_NAME = 'AI Workdeck'
+const APP_DISPLAY_NAME = 'AI WorkDeck'
 
 let getWindow = () => null
 // 渲染层最近一次下发的业务菜单。null = 渲染层还没就绪，先只挂骨架。

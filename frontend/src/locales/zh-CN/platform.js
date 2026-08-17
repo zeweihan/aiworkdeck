@@ -34,7 +34,7 @@ export default {
   tierDisabled: '未开放',
   tierDisabledNote: '这项服务我们还没有开放，不是出错了。需要现在就用的话，展开下面填自己的 Key。',
   holdNotice: '有 {credits} Credits 正被一项进行中的转写任务占用，完成后按实际用量结算。',
-  tierPlatformNote: '由 AI Workdeck 统一采购，按用量折算 Credits 从账户余额扣，你不用自己去开账号。',
+  tierPlatformNote: '由 AI WorkDeck 统一采购，按用量折算 Credits 从账户余额扣，你不用自己去开账号。',
   tierLocalNote: '在本机运行，数据不出本机，不消耗 Credits。',
 
   // ---- 三种全局状态 ----
@@ -58,7 +58,7 @@ export default {
 
   // ---- AI 那条单列说明 ----
   aiRowName: 'AI 对话与写作',
-  aiRowDesc: 'AI 不走平台服务这条通路：模型请求由本机直接发往所选供应商，不经过 AI Workdeck 的服务器。供应商、模型与账户余额在「AI 功能设置」里配。',
+  aiRowDesc: 'AI 不走平台服务这条通路：模型请求由本机直接发往所选供应商，不经过 AI WorkDeck 的服务器。供应商、模型与账户余额在「AI 功能设置」里配。',
   goAiSettings: '前往 AI 功能设置',
 
   // ---- 本地档在这台机器上还没就绪 ----

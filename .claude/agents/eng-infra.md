@@ -92,7 +92,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   已知仍会读穿全树的是版本记录的 `git add .`（JGit 必须读内容才能存 blob），但它被
   `repoService.isInitialized` 挡着，只有开了版本记录的项目才走到。
 - **macOS 菜单栏左上角那个应用名只认 .app 包的 `CFBundleName`**，跟 `app.name`、跟菜单模板
-  第一项的 label 都无关（实测 `app.setName('AI Workdeck')` 之后菜单栏照旧写 Electron）。
+  第一项的 label 都无关（实测 `app.setName('AI WorkDeck')` 之后菜单栏照旧写 Electron）。
   打包版由 electron-builder 按 `build.productName` 写好；dev 跑的是 node_modules 里的
   Electron.app，所以要靠 `scripts/brand-dev-electron.js` 就地改名（Electron 的 dist 包是
   linker-signed adhoc，`Info.plist=not bound`，改它不破坏签名）。**做官网/README 截图前

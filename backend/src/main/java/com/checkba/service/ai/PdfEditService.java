@@ -229,7 +229,7 @@ public class PdfEditService {
                 hl.setQuadPoints(toQuadPoints(m));
                 hl.setRectangle(union(m));
                 hl.setColor(new PDColor(rgb, PDDeviceRGB.INSTANCE));
-                hl.setTitlePopup("AI Workdeck");
+                hl.setTitlePopup("AI WorkDeck");
                 if (note != null && !note.isBlank()) {
                     hl.setContents(note);
                 }
@@ -261,7 +261,7 @@ public class PdfEditService {
             note.setName(PDAnnotationText.NAME_COMMENT);
             note.setRectangle(new PDRectangle(last[0] + last[2] + 2, last[1], 18, 18));
             note.setContents(comment);
-            note.setTitlePopup("AI Workdeck");
+            note.setTitlePopup("AI WorkDeck");
             note.setColor(new PDColor(new float[]{1f, 0.8f, 0f}, PDDeviceRGB.INSTANCE));
             doc.getPage(m.pageIndex).getAnnotations().add(note);
             doc.save(pdfPath.toFile());

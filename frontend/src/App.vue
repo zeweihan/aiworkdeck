@@ -120,7 +120,7 @@ export default {
 </script>
 
 <style>
-/* AI Workdeck Global Overrides */
+/* AI WorkDeck Global Overrides */
 /* uni.showModal Style Override (Web/H5) */
 uni-modal .uni-modal {
     border-radius: 12px;

@@ -1,8 +1,8 @@
-# AI Workdeck 隐私说明
+# AI WorkDeck 隐私说明
 
 更新日期：2026-08-17
 
-本说明描述 AI Workdeck 桌面应用的两件事：
+本说明描述 AI WorkDeck 桌面应用的两件事：
 
 - **第一部分 · 平台服务**：哪些数据会经过我们的服务器、存放多久、何时删除；
 - **第二部分 · 使用统计**：采集什么、不采集什么、如何关闭。
@@ -19,13 +19,13 @@
 
 - **本地 Ollama**：内容只在本机处理，零外发；
 - **自备 Key**（OpenRouter 等）：你的机器直连该服务商；
-- **「AI Workdeck 云端」**：我们的服务器只参与密钥签发与用量结算，对话内容仍由你的机器直连模型服务商。
+- **「AI WorkDeck 云端」**：我们的服务器只参与密钥签发与用量结算，对话内容仍由你的机器直连模型服务商。
 
-因此文档正文、合同内容、AI 对话文本在任何一档下都不流经 AI Workdeck 的服务器。选用云端模型时内容会发往该第三方服务商，涉及执业保密义务的场合请据此判断；当前使用的模型与提供商在产品内可见，可随时更换或停用。
+因此文档正文、合同内容、AI 对话文本在任何一档下都不流经 AI WorkDeck 的服务器。选用云端模型时内容会发往该第三方服务商，涉及执业保密义务的场合请据此判断；当前使用的模型与提供商在产品内可见，可随时更换或停用。
 
 ## 二、平台代采档下会经过我们服务器的内容
 
-桌面版全新安装时，下列服务默认落在「平台代采」档：由 AI Workdeck 统一向供应商采购、按 Credits 计费，你不必自备 Key。**该档下，本次调用必需的内容会经我们的服务器转发给对应供应商**：
+桌面版全新安装时，下列服务默认落在「平台代采」档：由 AI WorkDeck 统一向供应商采购、按 Credits 计费，你不必自备 Key。**该档下，本次调用必需的内容会经我们的服务器转发给对应供应商**：
 
 | 服务 | 经我们服务器的内容 | 供应商 | 我们是否留存 | 删除时点 |
 |---|---|---|---|---|
@@ -118,15 +118,15 @@
 
 ---
 
-# AI Workdeck Privacy Note
+# AI WorkDeck Privacy Note
 
 Last updated: 2026-08-17
 
 ## Part 1 — Platform services
 
-**AI conversations never pass through our servers.** Whichever provider tier you choose, conversation content goes straight from your machine to the model provider: with local Ollama it stays on the device; with your own key you connect to that provider directly; with the "AI Workdeck cloud" tier our servers only issue the key and settle usage, while the conversation itself still goes from your machine to the model provider. Document text, contract content, and AI conversation text therefore never flow through AI Workdeck servers under any tier. Content sent to a cloud model does reach that third-party provider — judge accordingly where a duty of confidentiality applies. The model and provider in use are visible in the product and can be changed or disabled at any time.
+**AI conversations never pass through our servers.** Whichever provider tier you choose, conversation content goes straight from your machine to the model provider: with local Ollama it stays on the device; with your own key you connect to that provider directly; with the "AI WorkDeck cloud" tier our servers only issue the key and settle usage, while the conversation itself still goes from your machine to the model provider. Document text, contract content, and AI conversation text therefore never flow through AI WorkDeck servers under any tier. Content sent to a cloud model does reach that third-party provider — judge accordingly where a duty of confidentiality applies. The model and provider in use are visible in the product and can be changed or disabled at any time.
 
-**What does pass through our servers.** On a fresh desktop install the services below default to the "platform-sourced" tier: AI Workdeck buys from the vendor on your behalf and bills in Credits, so no key of your own is needed. In that tier, the content each call requires is relayed to the vendor through our servers.
+**What does pass through our servers.** On a fresh desktop install the services below default to the "platform-sourced" tier: AI WorkDeck buys from the vendor on your behalf and bills in Credits, so no key of your own is needed. In that tier, the content each call requires is relayed to the vendor through our servers.
 
 | Service | What passes through our servers | Vendor | Retained by us | Deleted |
 |---|---|---|---|---|

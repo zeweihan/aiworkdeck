@@ -1,7 +1,7 @@
 # Contributor License Agreement (CLA)
 
 ## 1. Purpose
-To maintain the sustainability of the **AI Workdeck** project and its ability to offer dual-licensing options (AGPLv3 for open source, Commercial for proprietary use), we require that all contributions be accompanied by a grant of rights. This ensures that the project maintainers have the necessary legal standing to defend the project and offer commercial licenses to enterprise users who cannot comply with the AGPLv3.
+To maintain the sustainability of the **AI WorkDeck** project and its ability to offer dual-licensing options (AGPLv3 for open source, Commercial for proprietary use), we require that all contributions be accompanied by a grant of rights. This ensures that the project maintainers have the necessary legal standing to defend the project and offer commercial licenses to enterprise users who cannot comply with the AGPLv3.
 
 ## 2. Agreement by Contribution
 By submitting a Pull Request (PR), patch, or other contribution to this repository, you (the "Contributor") agree to the terms of this policy. You acknowledge that your contribution is your original work or that you have the right to submit it under these terms.

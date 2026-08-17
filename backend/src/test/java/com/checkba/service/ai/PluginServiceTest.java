@@ -57,7 +57,7 @@ class PluginServiceTest {
               "version": "1.0.0",
               "description": "示例插件",
               "icon": "🔌",
-              "author": "AI Workdeck",
+              "author": "AI WorkDeck",
               "homepage": "https://example.com/hello-plugin",
               "permissions": ["file_read", "network"],
               "tools": [
@@ -81,7 +81,7 @@ class PluginServiceTest {
         assertEquals("hello-plugin", meta.getId());
         assertEquals("Hello 示例插件", meta.getName());
         assertEquals("1.0.0", meta.getVersion());
-        assertEquals("AI Workdeck", meta.getAuthor());
+        assertEquals("AI WorkDeck", meta.getAuthor());
         assertEquals("https://example.com/hello-plugin", meta.getHomepage());
         assertEquals(List.of("file_read", "network"), meta.getPermissions());
         assertEquals(2, meta.getTools().size());

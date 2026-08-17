@@ -110,7 +110,7 @@ export default {
       // 但为了两平台内容一致，这里原样保留成一个「应用」菜单。
       this.menus = (payload.menus || []).map((m) => ({
         ...m,
-        label: m.label || 'AI Workdeck',
+        label: m.label || 'AI WorkDeck',
       }))
     },
     toggle(id) {

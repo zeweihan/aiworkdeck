@@ -13,7 +13,7 @@ class TwilioSmsGatewayTest {
 
     private static TwilioSmsGateway gateway(SmsTransport transport) {
         return new TwilioSmsGateway(transport, true, "ACtest", "", "token123", "MGtest",
-                "Your AI Workdeck verification code is {code}. It expires in 5 minutes.");
+                "Your AI WorkDeck verification code is {code}. It expires in 5 minutes.");
     }
 
     @Test

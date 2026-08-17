@@ -1,6 +1,6 @@
-# Contributing to AI Workdeck
+# Contributing to AI WorkDeck
 
-Thank you for your interest in contributing to AI Workdeck! We welcome contributions from the community to help improve the kernel.
+Thank you for your interest in contributing to AI WorkDeck! We welcome contributions from the community to help improve the kernel.
 
 ## Licensing & CLA
 **By submitting a Pull Request, you agree to the terms in our [Contributor License Agreement (CLA)](../legal/CLA.md).**

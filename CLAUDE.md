@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-AI Workdeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Spring 后端（backend/）+ uni-app/Vue3 前端（frontend/）+ Electron 桌面壳（desktop/），文档编辑器为 LibreOffice WASM（代号 LOWA/zetaoffice），另有 pptx/mineru/kokoro/easyvoice 附属服务。
+AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Spring 后端（backend/）+ uni-app/Vue3 前端（frontend/）+ Electron 桌面壳（desktop/），文档编辑器为 LibreOffice WASM（代号 LOWA/zetaoffice），另有 pptx/mineru/kokoro/easyvoice 附属服务。
 
 ## 领域文档路由表（先读文档，再动代码）
 
