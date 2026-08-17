@@ -8,6 +8,7 @@ const { createKokoroDescriptor } = require('./services/kokoro-service')
 const { createAsrDescriptor } = require('./services/asr-service')
 const { createModelManager } = require('./services/model-manager')
 const { initLocalFileService } = require('./file-service')
+const { createBrowserViewRegistry } = require('./browser-views')
 
 
 const DEV_SERVER_URL = process.env.CHECKBA_DEV_SERVER_URL || 'http://localhost:5173'
@@ -38,17 +39,15 @@ function overlayCtx() {
   }
 }
 
-/** @type {Map<string, BrowserView>} */
-const views = new Map()
+// 内嵌浏览器面板的 BrowserView 注册表（记账与生命周期见 ./browser-views.js）。
+// 面板卸载只是 detach，标签关闭才 destroy——切标签不再把网页连根拔掉。
+const views = createBrowserViewRegistry({
+  createView: (id) => makeBrowserView(id),
+  getWindow: () => mainWindow,
+})
 
-/** @type {Map<string, {x:number,y:number,width:number,height:number}>} */
-const viewBounds = new Map()
-
-/** @type {Set<string>} */
-const attachedViewIds = new Set()
-
-// 渲染层期望 BrowserView 是否可见（用于避免弹窗/全屏切换导致 onHide/onShow 未触发时“卡死黑屏”）
-let viewsVisibleDesired = true
+/** 每个 view 当前是否用移动端 UA（面板重新挂载时要照实回填工具栏按钮） @type {Map<string, boolean>} */
+const viewMobileUA = new Map()
 
 let clipboardWatchTimer = null
 let lastClipboardText = ''
@@ -123,12 +122,7 @@ function closeOcrSelectWin() {
 
 function restoreViewsVisibility() {
   try {
-    setAllViewsVisible(viewsVisibleDesired)
-  } catch (e) {
-    // ignore
-  }
-  try {
-    layoutAllViews()
+    views.restoreVisibility()
   } catch (e) {
     // ignore
   }
@@ -400,17 +394,17 @@ function createMainWindow() {
     mainWindow = null
   })
 
-  mainWindow.on('resize', () => layoutAllViews())
-  mainWindow.on('maximize', () => layoutAllViews())
-  mainWindow.on('unmaximize', () => layoutAllViews())
+  mainWindow.on('resize', () => views.layoutAll())
+  mainWindow.on('maximize', () => views.layoutAll())
+  mainWindow.on('unmaximize', () => views.layoutAll())
   // 全屏切换在 macOS 上不会总触发 resize/maximize：这里补齐，避免 BrowserView bounds 不同步
   mainWindow.on('enter-full-screen', () => {
-    layoutAllViews()
+    views.layoutAll()
     // OCR 覆盖窗跟随（全屏时 bounds 会变化）
     syncOcrSelectWinBounds()
   })
   mainWindow.on('leave-full-screen', () => {
-    layoutAllViews()
+    views.layoutAll()
     syncOcrSelectWinBounds()
   })
   // 某些情况下（弹窗/空间切换）会出现 BrowserView 未重新 attach 导致“黑屏”，focus 时兜底恢复
@@ -451,7 +445,7 @@ ipcMain.handle('checkba:ocr-start-selection', async (_evt, payload) => {
   const viewId = payload && payload.viewId ? String(payload.viewId) : ''
   const mode = payload && payload.mode ? String(payload.mode) : ''
   const useWindow = mode === 'window' || !viewId
-  const vb = !useWindow && viewId ? (viewBounds.get(viewId) || null) : null
+  const vb = !useWindow && viewId ? views.getBounds(viewId) : null
   const view = !useWindow && viewId ? views.get(viewId) : null
   // window 模式：允许在任意内容上框选（包括两边都是文档）
   if (!useWindow && (!viewId || !vb || !view)) return { ok: false, message: 'view not found' }
@@ -683,24 +677,9 @@ ipcMain.handle('checkba:ocr-start-selection', async (_evt, payload) => {
   }
 })
 
-function layoutAllViews() {
-  if (!mainWindow) return
-  for (const [id, view] of views.entries()) {
-    const b = viewBounds.get(id)
-    if (!b) continue
-    try {
-      view.setBounds(b)
-      view.setAutoResize({ width: false, height: false })
-    } catch (e) {
-      // ignore
-    }
-  }
-}
-
-function ensureView(id) {
-  if (!mainWindow) throw new Error('mainWindow not ready')
-  if (views.has(id)) return views.get(id)
-
+// 新建一个浏览器面板 view 并接好全部事件。只由注册表在「这个 id 还没有 view」时调用，
+// 复用旧 view 的那条路不会再进来（否则事件会重复绑定）。
+function makeBrowserView(id) {
   const view = new BrowserView({
     webPreferences: {
       contextIsolation: true,
@@ -740,6 +719,29 @@ function ensureView(id) {
       // ignore
     }
   })
+
+  // 页内跳转（点链接、搜索、SPA 换路由）后把当前地址回传渲染层。
+  // 没有这条，标签记的还是「当初打开时那个地址」——地址栏与前进/后退按钮全是过期的，
+  // 而且一旦 view 需要重建（关掉再开）就会退回默认首页，正是本次要修的丢内容现象。
+  const pushUrl = () => {
+    try {
+      if (!mainWindow) return
+      const wc = view.webContents
+      mainWindow.webContents.send('checkba:browser-url-updated', {
+        id,
+        url: wc.getURL ? String(wc.getURL() || '') : '',
+        // 标题一起带上：渲染层收到 url 变化会把标签名退成域名，纯页内跳转
+        // （hash / pushState）不会再来一条 page-title-updated 把名字补回去。
+        title: wc.getTitle ? String(wc.getTitle() || '') : '',
+        canGoBack: wc.canGoBack ? wc.canGoBack() : false,
+        canGoForward: wc.canGoForward ? wc.canGoForward() : false
+      })
+    } catch (e) {
+      // ignore
+    }
+  }
+  view.webContents.on('did-navigate', pushUrl)
+  view.webContents.on('did-navigate-in-page', pushUrl)
 
   // 关键：window.open / target=_blank => 交给工作区新 tab
   view.webContents.setWindowOpenHandler(({ url }) => {
@@ -799,7 +801,7 @@ function ensureView(id) {
       ])
       // BrowserView 的 x/y 是相对 view 的；popup 需要相对 BrowserWindow 内容区坐标
       try {
-        const b = viewBounds.get(id) || { x: 0, y: 0 }
+        const b = views.getBounds(id) || { x: 0, y: 0 }
         const x = Math.max(0, Math.floor((b.x || 0) + (params.x || 0)))
         const y = Math.max(0, Math.floor((b.y || 0) + (params.y || 0)))
         menu.popup({ window: mainWindow, x, y })
@@ -830,76 +832,50 @@ function ensureView(id) {
     }
   })
 
-  views.set(id, view)
   return view
 }
 
-function attachView(id) {
-  if (!mainWindow) return
+// 面板挂载时的工具栏状态：复用旧 view 时要照它此刻的真实情况回填（地址、标题、
+// 前进后退可用性、是否移动端 UA），不能让渲染层拿组件的初值去猜。
+function viewState(id) {
   const view = views.get(id)
-  if (!view) return
-  // addBrowserView 重复 add 会抛错，因此先 remove 再 add 以确保置顶
+  if (!view) return {}
+  const wc = view.webContents
   try {
-    mainWindow.removeBrowserView(view)
+    return {
+      url: wc.getURL ? String(wc.getURL() || '') : '',
+      title: wc.getTitle ? String(wc.getTitle() || '') : '',
+      canGoBack: wc.canGoBack ? wc.canGoBack() : false,
+      canGoForward: wc.canGoForward ? wc.canGoForward() : false,
+      mobile: !!viewMobileUA.get(id)
+    }
   } catch (e) {
-    // ignore
+    return {}
   }
-  try {
-    mainWindow.addBrowserView(view)
-    attachedViewIds.add(id)
-  } catch (e) {
-    // ignore
-  }
-  layoutAllViews()
-}
-
-function setAllViewsVisible(visible) {
-  if (!mainWindow) return
-  if (visible === false) {
-    // 不依赖 attachedViewIds：某些情况下 set 可能不同步，导致 remove 不生效
-    for (const [_id, view] of views.entries()) {
-      if (!view) continue
-      try {
-        mainWindow.removeBrowserView(view)
-      } catch (e) {
-        // ignore
-      }
-    }
-    attachedViewIds.clear()
-    return
-  }
-  // visible === true：把所有 view 重新 add 回来（按最后一次的 bounds）
-  // 先 remove 再 add：重复 add 已挂载的 view 会抛错，导致 attachedViewIds 不同步
-  for (const [id, view] of views.entries()) {
-    try {
-      mainWindow.removeBrowserView(view)
-    } catch (e) {
-      // ignore
-    }
-    try {
-      mainWindow.addBrowserView(view)
-      attachedViewIds.add(id)
-    } catch (e) {
-      // ignore
-    }
-  }
-  layoutAllViews()
 }
 
 ipcMain.handle('checkba:browser-create', async (_evt, payload) => {
+  if (!mainWindow) return { ok: false, message: 'mainWindow not ready' }
   const id = payload && payload.id ? String(payload.id) : `web_${Date.now()}`
   let url = payload && payload.url ? String(payload.url) : 'about:blank'
   // 仅允许 http(s)/about，禁止 file:// 等本地 scheme 经内嵌浏览器读取本地文件后回读
   if (!/^(https?:|about:)/i.test(url)) url = 'about:blank'
-  ensureView(id)
-  attachView(id)
+  const { view, created } = views.ensure(id)
+  views.attach(id)
+
+  // 保活着的旧 view 一律不重新加载——重新加载就等于把用户翻到的那一页丢掉，
+  // 这正是本次要修的 bug。只有新建的、或上一次压根没加载成功（停在空白）的才加载。
+  const loaded = created ? '' : (view.webContents.getURL ? String(view.webContents.getURL() || '') : '')
+  const needLoad = created || !loaded || loaded === 'about:blank'
+  if (!needLoad) return { id, ok: true, reused: true, ...viewState(id) }
+
   try {
-    await views.get(id).webContents.loadURL(url)
+    await view.webContents.loadURL(url)
   } catch (e) {
     // 避免 loadURL 的 ERR_ABORTED 等成为未处理 rejection（与 navigate 行为一致）
-    return { id, ok: false, code: e && e.code ? String(e.code) : '', message: e && e.message ? String(e.message) : String(e) }
+    return { id, ok: false, reused: !created, code: e && e.code ? String(e.code) : '', message: e && e.message ? String(e.message) : String(e) }
   }
-  return { id }
+  return { id, ok: true, reused: !created, ...viewState(id) }
 })
 
 ipcMain.handle('checkba:browser-navigate', async (_evt, payload) => {
@@ -925,71 +901,80 @@ ipcMain.handle('checkba:browser-navigate', async (_evt, payload) => {
 ipcMain.handle('checkba:browser-set-active', async (_evt, payload) => {
   const id = payload && payload.id ? String(payload.id) : null
   if (!id) return { ok: false }
-  attachView(id)
+  views.attach(id)
   return { ok: true }
+})
+
+// 面板卸载（切到别的标签、离开工作台）：只从窗口摘下，view 继续活着。
+// 这一条与 destroy 的分工就是「切标签不丢内容」的全部要害，别改回卸载即销毁。
+ipcMain.handle('checkba:browser-detach', async (_evt, payload) => {
+  const id = payload && payload.id ? String(payload.id) : null
+  if (!id) return { ok: false }
+  return { ok: views.detach(id) }
 })
 
 ipcMain.handle('checkba:browser-set-bounds', async (_evt, payload) => {
   const id = payload && payload.id ? String(payload.id) : null
   const bounds = payload && payload.bounds ? payload.bounds : null
   if (!id || !bounds) return { ok: false }
-  const view = views.get(id)
-  if (!view) return { ok: false }
   const b = {
     x: Math.max(0, Math.floor(bounds.x || 0)),
     y: Math.max(0, Math.floor(bounds.y || 0)),
     width: Math.max(0, Math.floor(bounds.width || 0)),
     height: Math.max(0, Math.floor(bounds.height || 0))
   }
-  viewBounds.set(id, b)
-  // 仅更新 bounds，避免频繁 remove/add 导致导航被打断（ERR_ABORTED）
-  layoutAllViews()
-  return { ok: true }
+  return { ok: views.setBounds(id, b) }
 })
 
+// 标签真正关闭时才销毁（渲染层 closeFile / 工作台页面卸载）。
 ipcMain.handle('checkba:browser-destroy', async (_evt, payload) => {
   const id = payload && payload.id ? String(payload.id) : null
   if (!id) return { ok: false }
-  const view = views.get(id)
-  if (!view) return { ok: false }
-  if (mainWindow) {
-    try {
-      mainWindow.removeBrowserView(view)
-    } catch (e) {
-      // ignore
-    }
-  }
-  try {
-    view.webContents.destroy()
-  } catch (e) {
-    // ignore
-  }
-  views.delete(id)
-  viewBounds.delete(id)
-  attachedViewIds.delete(id)
-  return { ok: true }
+  viewMobileUA.delete(id)
+  return { ok: views.destroy(id) }
 })
 
 ipcMain.handle('checkba:browser-set-views-visible', async (_evt, payload) => {
   const visible = payload && typeof payload.visible === 'boolean' ? payload.visible : true
-  viewsVisibleDesired = visible
-  setAllViewsVisible(visible)
+  views.setAllVisible(visible)
   return { ok: true }
 })
 
 ipcMain.handle('checkba:browser-set-ua', async (_evt, payload) => {
   const id = payload && payload.id ? String(payload.id) : null
   const ua = payload && payload.ua ? String(payload.ua) : null
+  const mobile = !!(payload && payload.mobile)
   if (!id) return { ok: false }
   const view = views.get(id)
   if (!view) return { ok: false }
   try {
     if (ua) view.webContents.setUserAgent(ua)
+    viewMobileUA.set(id, mobile)
     // 自动刷新以生效
     view.webContents.reload()
     return { ok: true }
   } catch (e) {
     return { ok: false }
+  }
+})
+
+// 前进/后退/刷新：走 view 自己的历史。渲染层那份 history 数组做不到这件事——
+// 面板一卸载它就没了，而且它从来没驱动过 BrowserView（三个按钮在桌面端一直是死的）。
+ipcMain.handle('checkba:browser-history', async (_evt, payload) => {
+  const id = payload && payload.id ? String(payload.id) : null
+  const action = payload && payload.action ? String(payload.action) : ''
+  if (!id) return { ok: false }
+  const view = views.get(id)
+  if (!view) return { ok: false }
+  const wc = view.webContents
+  try {
+    if (action === 'back') { if (!wc.canGoBack()) return { ok: false }; wc.goBack() }
+    else if (action === 'forward') { if (!wc.canGoForward()) return { ok: false }; wc.goForward() }
+    else if (action === 'reload') wc.reload()
+    else return { ok: false, message: 'unknown action' }
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, message: String(e && e.message ? e.message : e) }
   }
 })
 
@@ -1016,7 +1001,7 @@ ipcMain.handle('checkba:browser-get-snapshot', async (_evt, payload) => {
 ipcMain.handle('checkba:browser-get-bounds', async (_evt, payload) => {
   const id = payload && payload.id ? String(payload.id) : null
   if (!id) return { ok: false }
-  const b = viewBounds.get(id)
+  const b = views.getBounds(id)
   if (!b) return { ok: false }
   return { ok: true, bounds: b }
 })

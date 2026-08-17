@@ -229,6 +229,14 @@ export const fileOpenTabsMethods = {
         idx = list.findIndex(f => f.id === fileId)
         if (idx === -1) return
       }
+      // 浏览器标签：BrowserPane 卸载时只把 BrowserView 摘下（保活，为的是切标签
+      // 不丢网页内容），真正销毁只发生在标签关闭——也就是这里，以及页面卸载。
+      // 跨窗格拖拽是「在另一侧也打开同一个标签」（同 id 双开，见 tabDragSplit），
+      // 所以另一侧还开着的时候不能销毁——那是把人家正看着的网页拔掉。
+      if (this.isBrowserTab(file) && !this.isOpenInOtherPane(fileId, pane)) {
+        this.destroyBrowserView(file.id)
+      }
+
       const activeId = this[idProp]
 
       // If closing the active file/tab, the activityTracker.trackActivePage in activateTab or openFile will handle the switch.

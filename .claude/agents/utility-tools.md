@@ -9,7 +9,27 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 
 ## 分组清单（前端组件 / desktop 宿主 / 后端 API 三层）
 
-**浏览器**：`frontend/src/components/BrowserPane.vue`；desktop `desktop/main/main.js`（BrowserView 创建 ~:634、重复 add 先 remove 再 add 置顶 ~:771-810、window.open 拦截转工作区新 tab ~:290/:674 → 事件 `checkba:browser-open-new-tab`、全屏/黑屏兜底恢复 ~:336/:549/:887/:1189、IPC handlers ~:819-988）；后端 `controller/BrowserProxyController.java`（GET /api/browser/proxy）。
+**浏览器**：`frontend/src/components/BrowserPane.vue`；desktop `desktop/main/browser-views.js`（BrowserView 注册表）+ `desktop/main/main.js`（`makeBrowserView` 建 view 并接事件、window.open 拦截转工作区新 tab → 事件 `checkba:browser-open-new-tab`、全屏/黑屏兜底恢复、IPC handlers）；后端 `controller/BrowserProxyController.java`（GET /api/browser/proxy）。
+
+**BrowserView 生命周期（改这块之前必读）**：**面板卸载 = detach（保活），标签关闭 = destroy**。
+切标签会把 BrowserPane 整个卸载（project-overview 里是 `v-if` + `:key=tab.id`），如果卸载即销毁，
+用户翻到的那一页（页内跳转、滚动位置、填了一半的表单、页面里的登录态）就全没了，
+切回来只能按渲染层记的旧地址重新加载——默认标签那个地址是 `https://www.baidu.com`，
+现象就是「切走再切回来变成默认地址」。销毁的责任因此落在两处，**都不能漏**：
+`fileOpenTabs.js` 的 `closeFile`（另一侧还双开着同一标签时不销毁，见下）与 project-overview
+`beforeUnmount` 的 `destroyAllBrowserViews()`。
+注册表同时记 `wanted`（哪些面板正端着它，**计数**）与 `attached`（此刻真挂在窗口上）：
+- 全局隐藏（弹窗/蒙层、离开工作台、截图框选）走 `setAllVisible(false)`；恢复时**只挂回
+  wanted 的那些**。无脑挂回全部，后台保活的标签会一起浮到最上层盖住界面。
+- 计数而不是布尔，是因为跨窗格拖拽是「在另一侧也打开同一标签」（同 id 双开，见
+  `tabDragSplit.moveTabTo`）；关掉一侧不能把另一侧正看的网页摘走。
+- `browser-create` 对已存在的 view **不重新 loadURL**，并把 view 此刻的真实状态
+  （url/title/canGoBack/canGoForward/mobile）回给渲染层，由 `adoptViewState` 回填工具栏。
+**标签地址跟随页内跳转**靠主进程的 `did-navigate`/`did-navigate-in-page` → `checkba:browser-url-updated`；
+渲染层不订阅它的话，tab.url 会永远停在打开时那个地址（BrowserPane 此前只消费了
+title-updated，把同一条消息里的 url 扔了）。
+**前进/后退/刷新走 view 自己的历史**（`checkba:browser-history`）：组件里那份 `history` 数组
+只服务 H5 iframe 模式，桌面端从来没驱动过 BrowserView（三个按钮点了没反应），保活之后更没法当历史用。
 
 **截图**：入口 `checkbaDesktop.ocr.captureScreen`；desktop main.js 透明覆盖框选窗 ~:389-571（BrowserView 模式仅限其区域内框选 ~:426）、capturePage 抓取 ~:577/:585/:709、IPC：ocr-capture-screen/desktop/window/view + ocr-start-selection。**推荐链路是 ocr-capture-view（当前 BrowserView，免 macOS 录屏权限）**；无独立后端端点，产物统一走 OCR。
 
@@ -110,6 +130,9 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 ## 已知地雷
 
 - BrowserView 弹窗守卫模式与 window.open 消费者、截图假死根因见 v0.6.1 修复（desktop-interaction-bugfix 记录）；改 BrowserView 生命周期务必测全屏/黑屏恢复路径。
+- **摘下窗口的 BrowserView 会被 Chromium 冻住渲染进程**（后台标签的正常待遇，页面状态照留）。
+  自动化里往冻着的 target 里 evaluate 会一直挂到 CDP 的 protocolTimeout，最后只落一句
+  「Runtime.callFunctionOn timed out」——desktop-e2e 那一段为此自带超时与「等它醒过来」轮询。
 - 剪贴板去重靠指纹+window 级状态，改动监听逻辑先读 PR#148/#151 教训。
 - `checkba:fs-read-file` 有敏感路径拦截，别为新功能开任意路径读写。
 - Kokoro 大陆网络 401 = hf_xet 绕镜像问题，禁 xet 修（PR#142）。asr-models 的下载走同一条路，同样禁 xet。
@@ -132,6 +155,7 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 
 ## 验证
 
-- desktop 服务栈：`cd desktop && npm test`（service-manager/model-manager/pysvc-runtime）。
+- desktop 服务栈：`cd desktop && npm test`（service-manager/model-manager/pysvc-runtime/**browser-views**）。
+  `browser-views.test.js` 钉住的就是上面那套记账：复用不重载、detach 不销毁、隐藏恢复只挂回前台、双开计数。
 - 后端相关单测：TtsServiceTest、FileControllerChunkedUploadTest、ProjectFileService*Test 等；剪贴板/收藏/搜索/OCR/浏览器代理暂无专属测试。
 - UI 链路：`cd frontend && npm run test:app-e2e`。

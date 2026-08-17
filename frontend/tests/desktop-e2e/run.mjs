@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 // 桌面宿主链路 e2e / desktop host-chain e2e (Electron + CDP).
 //
-// 覆盖浏览器目标够不到的两处：
+// 覆盖浏览器目标够不到的三处：
 //  ① 编辑器保存链路：新建 Word → 编辑器（<webview> 内真实 LOWA 引擎）boot → 宿主
 //     执行器插入文本 → 点保存按钮 → 后端落盘 → API 下载 docx 验证内容真的写进了文件。
 //  ② 需要真实桌面能力（window.checkbaDesktop.fs）才渲染的界面形态——目前是项目
 //     列表页那两张新建卡。app-e2e 的最小桌面桩不含 fs，那边只能验降级形态。
+//  ③ 浏览器面板的 BrowserView 生命周期：切走标签再切回来必须还是原来那一页（保活），
+//     关掉标签才销毁（不泄漏）。浏览器目标里根本没有 BrowserView，只有这里能验。
 //
 // 跑法（本机）：
 //   1) worktree/主仓库 frontend：`npx uni --port 5174`（dev:h5，VITE_API_BASE_URL
@@ -21,6 +23,7 @@
 // 端口会经 CHECKBA_BACKEND_PORT 传给 Electron 壳，渲染层因此跟测试用同一个后端）
 
 import { spawn, execSync } from 'node:child_process'
+import http from 'node:http'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -52,6 +55,11 @@ const portFree = (p) => {
 const pickCdpPort = () => {
   for (let p = 9333; p < 9373; p++) if (portFree(p)) return p
   throw new Error('9333-9372 全被占，挑不出空闲 CDP 端口')
+}
+// 同样的理由（维护者常年多开）：浏览器面板那一段自起的本机测试站也得现挑端口
+const pickFreePort = (from) => {
+  for (let p = from; p < from + 60; p++) if (portFree(p)) return p
+  throw new Error(from + '-' + (from + 59) + ' 全被占，挑不出空闲端口')
 }
 const CDP_PORT = Number(process.env.DESKTOP_E2E_CDP_PORT) || pickCdpPort()
 const MARKER = 'QA_SAVE_MARKER_' + Date.now()
@@ -354,6 +362,191 @@ try {
   })
   const pageErrs = []
   page.on('pageerror', (e) => pageErrs.push(String(e).slice(0, 160)))
+
+  // ---- 浏览器面板：切走标签再切回来必须还是原来那一页 ----
+  // 修复前的行为：BrowserPane 一卸载就 destroy 掉 BrowserView（切个标签就把整个网页
+  // 连根拔掉），而渲染层记的 tab.url 又从不跟随页内跳转（点链接/搜索主进程知道、
+  // 渲染层不知情）。两件事叠起来，切回来就是「退回打开时那个地址」——默认标签的
+  // 那个地址是 https://www.baidu.com，用户看到的现象正是「变成默认地址、内容没了」。
+  // 只有桌面目标能验：浏览器目标里压根没有 BrowserView。
+  // 用本机起的两页小站而不是真网站：断言不能挂在外网可达性上。
+  const SITE_PORT = pickFreePort(8811)
+  const SITE = 'http://127.0.0.1:' + SITE_PORT
+  let site = null
+  const clickTabAt = async (idx) => {
+    const box = await page.evaluate((check, i) => {
+      const el = document.querySelectorAll('.tabs-pane-left .tab-item')[i]
+      if (!el) return null
+      return eval(check + '; hitCheck(el)')
+    }, HIT_CHECK, idx)
+    await clickAt(box, '第 ' + (idx + 1) + ' 个标签')
+    await sleep(1200)
+  }
+  const webTabs = () => page.evaluate(() => {
+    const vm = window.__checkbaActiveOverviewVm
+    if (!vm) return null
+    return (vm.leftFiles || []).filter((f) => f && f.tabType === 'web').map((f) => ({ name: f.name, url: f.url }))
+  })
+  const sitePages = async () => {
+    const out = []
+    for (const t of browser.targets().filter((t) => t.url().startsWith(SITE))) {
+      const p = await t.page().catch(() => null)
+      if (p) out.push(p)
+    }
+    return out
+  }
+  // 从窗口摘下的 BrowserView，Chromium 会把它的渲染进程冻起来（后台标签的正常待遇，
+  // 页面状态照样留着）。往冻着的 target 里 evaluate 会一直挂着，最后只落一句
+  // 「Runtime.callFunctionOn timed out」——查不出是哪一步。所以对 view 的求值自带超时，
+  // 切回来之后先轮询到它重新应答为止。
+  const evalInView = (vp, fn, ms = 4000) => Promise.race([
+    vp.evaluate(fn),
+    new Promise((_, rej) => setTimeout(() => rej(new Error('view 求值超时(' + ms + 'ms)')), ms)),
+  ])
+  const evalInViewWhenAwake = async (vp, fn, tries = 12) => {
+    let last = null
+    for (let i = 0; i < tries; i++) {
+      try { return await evalInView(vp, fn) } catch (e) { last = e; await sleep(1000) }
+    }
+    throw new Error('view 一直没醒过来：' + String(last && last.message ? last.message : last))
+  }
+
+  await step('浏览器标签：切走再切回来仍是原来那一页（BrowserView 保活）', async () => {
+    site = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      if ((req.url || '/').startsWith('/b')) res.end('<html><head><title>QA-PAGE-B</title></head><body><h1>B</h1></body></html>')
+      else res.end('<html><head><title>QA-PAGE-A</title></head><body><h1>A</h1><a id="go" href="' + SITE + '/b">B</a></body></html>')
+    })
+    await new Promise((r) => site.listen(SITE_PORT, '127.0.0.1', r))
+
+    // 两个网页标签：第一个用来翻页，第二个只是「切走去别处」的落点。
+    // 顶栏图标很小、这前后界面还在重排，点空是常态（同「新建文档」那一步的教训）：
+    // 点了就验效果、不够就补点，别一次点完直接断言。
+    // 这个按钮是顶栏里 21×21 的小图标，而且它所在的 .project-header 是无边框窗口的
+    // 拖拽区（按钮自己是 no-drag）。点空是常态，所以点了就验效果、不够就补点。
+    // 失败时把「点击有没有真的落到按钮上」一起报出来——只报「标签没开出来」的话，
+    // 分不清是没点到还是点到了但处理器早退。
+    await page.evaluate(() => {
+      if (window.__awdBrowserBtnHits) return
+      window.__awdBrowserBtnHits = 0
+      document.addEventListener('click', (e) => {
+        const el = e.target && e.target.closest ? e.target.closest('[title="浏览器"]') : null
+        if (el) window.__awdBrowserBtnHits++
+      }, true)
+    })
+    let opened = []
+    for (let round = 0; round < 8 && opened.length < 2; round++) {
+      await mouseClickSel('[title="浏览器"]')
+      await sleep(1200)
+      opened = (await webTabs()) || []
+    }
+    if (opened.length < 2) {
+      const snap = await page.evaluate(() => {
+        const el = document.querySelector('[title="浏览器"]')
+        const r = el ? el.getBoundingClientRect() : null
+        return {
+          domTabs: document.querySelectorAll('.tabs-pane-left .tab-item').length,
+          btnRect: r ? [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)] : null,
+          clicksReachedBtn: window.__awdBrowserBtnHits,
+          vm: !!window.__checkbaActiveOverviewVm,
+          files: window.__checkbaActiveOverviewVm
+            ? (window.__checkbaActiveOverviewVm.leftFiles || []).map((f) => f.tabType + ':' + f.name) : null,
+        }
+      }).catch(() => null)
+      throw new Error('两个网页标签没开出来：' + JSON.stringify(snap) + '；页面错误=' + JSON.stringify(pageErrs.slice(-3)))
+    }
+    await clickTabAt(0)
+
+    // 地址栏真人输入 + 点「打开」（uni 的 <input> 外面套了一层 uni-input，要点里面那个）。
+    // 地址栏里本来就有当前地址，得先全选再打字——否则是接在后面续写，
+    // 实测会得到 "https://www.baidu.com/http://127.0.0.1:xxxx/a" 这种四不像。
+    // 全选用三连击而不是 ⌘A：CDP 打进来的 ⌘A 到不了原生菜单的 Select All role，
+    // 实测选不中，于是新地址被接在旧地址后面。三连击是纯渲染层行为，稳。
+    const addrBox = await page.evaluate((check) => {
+      const el = document.querySelector('.browser-toolbar .url-input input')
+      if (!el) return null
+      return eval(check + '; hitCheck(el)')
+    }, HIT_CHECK)
+    if (!addrBox || addrBox.blockedBy) throw new Error('地址栏点不到：' + JSON.stringify(addrBox))
+    await page.mouse.click(addrBox.x, addrBox.y, { clickCount: 3 })
+    await sleep(300)
+    await page.keyboard.type(SITE + '/a')
+    await sleep(300)
+    // 输进去没有当场就验：没验的话下面只会报「找不到 BrowserView」，
+    // 分不清是没输进去、没点开、还是保活链路坏了。
+    const typed = await page.evaluate(() => {
+      const el = document.querySelector('.browser-toolbar .url-input input')
+      return el ? { value: el.value, focused: document.activeElement === el } : null
+    })
+    if (!typed || !String(typed.value).endsWith('/a')) {
+      throw new Error('地址栏没吃到输入：' + JSON.stringify(typed))
+    }
+    await mouseClickSel('[title="打开"]')
+    let viewPages = []
+    for (let i = 0; i < 20 && !viewPages.length; i++) { await sleep(500); viewPages = await sitePages() }
+    if (!viewPages.length) {
+      const snap = await page.evaluate(() => {
+        const vm = window.__checkbaActiveOverviewVm
+        const el = document.querySelector('.browser-toolbar .url-input input')
+        return {
+          addr: el ? el.value : '(没有地址栏)',
+          tabs: vm ? (vm.leftFiles || []).map((f) => f.tabType + ':' + f.url) : '(没有实例指针)',
+        }
+      }).catch(() => null)
+      throw new Error('地址栏导航没生效：找不到指向测试站的 BrowserView；' + JSON.stringify(snap))
+    }
+
+    // 页内跳转（点页面里的链接）——这一步渲染层此前完全不知情
+    const vp = viewPages[0]
+    await vp.click('#go')
+    for (let i = 0; i < 20 && !vp.url().endsWith('/b'); i++) await sleep(300)
+    if (!vp.url().endsWith('/b')) throw new Error('页内跳转没成功：' + vp.url())
+    // 只活在这一个文档实例上的标记：重新 loadURL 会把它冲掉，据此判断"是不是同一页"
+    await evalInViewWhenAwake(vp, () => { window.__awdQaAlive = 'ALIVE'; return 'ok' })
+
+    await sleep(800)
+    const tracked = (await webTabs())[0]
+    if (!tracked || !String(tracked.url).endsWith('/b')) {
+      throw new Error('标签没跟上页内跳转（切回来就会退回旧地址）：' + JSON.stringify(tracked))
+    }
+
+    // 切到第二个标签，再切回来
+    await clickTabAt(1)
+    await clickTabAt(0)
+    await sleep(1500)
+
+    const back = await sitePages()
+    if (!back.length) throw new Error('切回来之后 BrowserView 没了（又变成卸载即销毁）')
+    const alive = await evalInViewWhenAwake(back[0], () => window.__awdQaAlive || '(页面被重新加载了)')
+      .catch((e) => '(读不到：' + String(e.message || e) + ')')
+    if (alive !== 'ALIVE') throw new Error('网页被重建了，不是原来那一页：' + alive + '；URL=' + back[0].url())
+    if (!back[0].url().endsWith('/b')) throw new Error('切回来地址变了：' + back[0].url())
+    const shown = await page.evaluate(() => {
+      const el = document.querySelector('.browser-toolbar .url-input input')
+      return el ? el.value : '(没有地址栏)'
+    })
+    if (!String(shown).endsWith('/b')) throw new Error('地址栏没跟上，显示的是 ' + shown)
+  })
+
+  await step('关闭网页标签才销毁 BrowserView（保活不等于泄漏）', async () => {
+    for (let i = 0; i < 6; i++) {
+      const n = await page.evaluate(() => document.querySelectorAll('.tabs-pane-left .tab-item').length)
+      if (!n) break
+      const box = await page.evaluate((check) => {
+        const el = document.querySelector('.tabs-pane-left .tab-item .tab-close')
+        if (!el) return null
+        return eval(check + '; hitCheck(el)')
+      }, HIT_CHECK)
+      if (!box) break
+      await clickAt(box, '标签的关闭按钮')
+      await sleep(800)
+    }
+    let left = await sitePages()
+    for (let i = 0; i < 10 && left.length; i++) { await sleep(500); left = await sitePages() }
+    if (left.length) throw new Error('标签关了但 BrowserView 还在（主进程里泄漏）：' + left.map((p) => p.url()).join(','))
+    try { site.close() } catch (e) { /* ignore */ }
+    site = null
+  })
 
   await step('新建 Word 文档并点击打开（编辑器 webview）', async () => {
     // 「新建文档」是个 18×16 的小图标，而顶栏（试用徽标/负责人行）在这前后还在
@@ -698,6 +891,7 @@ try {
     console.log('    docx ' + buf.length + ' 字节，标记命中')
   })
 } finally {
+  try { if (site) site.close() } catch {}
   try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch {}
   try { browser.disconnect() } catch {}
   killTree()
