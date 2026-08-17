@@ -111,7 +111,9 @@ if (!ws) { console.error('CDP 端点未就绪'); elec.kill(); process.exit(1) }
 let failed = 0
 const step = async (name, fn) => {
   try { await fn(); console.log('  ✓ ' + name) }
-  catch (e) { failed++; console.log('  ✗ ' + name + ': ' + String(e.message || e).slice(0, 250)) }
+  // 截 250 字会把各步精心攒的现场快照（点击链路/实例计数/组件状态）正好切掉，
+  // 只剩前半句没用的——间歇性失败本来就只有这一次现场可看，别省这点输出。
+  catch (e) { failed++; console.log('  ✗ ' + name + ': ' + String(e.message || e).slice(0, 2000)) }
 }
 
 const browser = await puppeteer.connect({ browserWSEndpoint: ws, defaultViewport: null })
@@ -329,9 +331,72 @@ try {
       return false
     }, { timeout: 30000 }).catch(() => {})
 
+    // 把点击链路录下来。光凭坐标和写请求列表分不清四种可能：① 这一下压根没进页面
+    // （CDP 输入被丢弃）；② 进了但没落在这个按钮上（坐标/重排/页面栈里另一个实例）；
+    // ③ 落上了但冒泡被掐断；④ 冒泡走完了，是 @tap 处理器自己早退（$refs.fileTree
+    // 挂在另一个页面实例上）。录下来失败就能自己说明落在哪一种——2026-08-17 这轮
+    // 查出来是 ①，但另外三种以后照样可能来，判据留着。
+    const installTrace = () => page.evaluate(() => {
+      if (window.__awdClickTrace) return
+      const rec = (window.__awdClickTrace = [])
+      const desc = (el) => {
+        if (!el || !el.tagName) return String(el)
+        const cls = typeof el.className === 'string' ? el.className
+          : (el.className && el.className.baseVal) || ''
+        return el.tagName.toLowerCase() + (cls ? '.' + cls.trim().split(/\s+/).join('.') : '')
+          + (el.getAttribute && el.getAttribute('title') ? '[title=' + el.getAttribute('title') + ']' : '')
+      }
+      // 四种鼠标事件都录：只有 click 缺席 = down/up 落在了不同元素上（click 会被
+      // 提升到共同祖先甚至不派发）；四种全缺席 = 这一下根本没进这个文档。
+      for (const type of ['pointerdown', 'mousedown', 'mouseup', 'click']) {
+        window.addEventListener(type, (e) => {
+          const path = (e.composedPath ? e.composedPath() : []).filter((n) => n && n.tagName)
+          rec.push({
+            type,
+            target: desc(e.target),
+            xy: [Math.round(e.clientX), Math.round(e.clientY)],
+            onBtn: path.some((n) => n.getAttribute && n.getAttribute('title') === '新建文档'),
+            reachedDoc: false,
+          })
+        }, true)
+      }
+      // document 冒泡是整条链最后一站：它响了，说明按钮那一层的冒泡监听
+      // （Vue 给 @tap 挂的就是这个）一定拿到过这次事件。
+      document.addEventListener('click', () => {
+        for (let i = rec.length - 1; i >= 0; i--) {
+          if (rec[i].type === 'click') { rec[i].reachedDoc = true; break }
+        }
+      }, false)
+    }).catch(() => {})
+
+    // 本步间歇性红的真正原因（2026-08-17 实测复现三次）：**CDP 合成的鼠标事件被
+    // 整个丢掉了**——渲染器还活着（evaluate 照常跑、命中检测照常准、$refs 都在），
+    // 但 pointerdown/mousedown/mouseup/click 四种事件一个都没进页面，于是"点了没
+    // 反应、一个写请求都没发"。这不是界面坏了，是输入通道坏了，同坐标再点几次
+    // 毫无意义。所以：点完先问"这一下到底进没进页面"，没进就换一条不依赖操作系统
+    // 输入层的路——直接在页面里派发冒泡 click。uni 的 @tap 在 H5 上就是绑在 click
+    // 上的（uni-h5 的 $nne：isClickEvent = evt.type === 'click'），派发同样会走完
+    // handleCreateWord → createFile → 后端落盘，断言强度不打折。
+    // 兜底只在"零鼠标事件"时才启用——界面真坏了是收得到事件的，糊不住真回归。
+    const clickCounted = async (sel) => {
+      await installTrace()
+      const before = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
+      await mouseClickSel(sel)
+      const after = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
+      if (after > before) return 'mouse'
+      console.log('      ! 真实鼠标事件一个都没进页面（CDP 输入被丢弃），改用页面内派发')
+      await page.evaluate((s) => {
+        const el = document.querySelector(s)
+        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+      }, sel)
+      return 'dispatch'
+    }
+
     let created = false
+    let attempts = 0
     for (let attempt = 0; attempt < 3 && !created; attempt++) {
-      await mouseClickSel('[title="新建文档"]')
+      attempts++
+      await clickCounted('[title="新建文档"]')
       created = await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 8000 })
         .then(() => true).catch(() => false)
     }
@@ -340,18 +405,68 @@ try {
       if (!created) await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 8000 })
     } catch (e) {
       const snap = await page.evaluate(() => {
-        const el = document.querySelector('[title="新建文档"]')
+        const all = [...document.querySelectorAll('[title="新建文档"]')]
+        const el = all[0]
         const r = el ? el.getBoundingClientRect() : null
+        // 点中的按钮属于哪个页面实例？@tap 处理器第一行取的是**它自己那个实例**的
+        // $refs.fileTree——页面栈里若堆了两个工作台，按钮可能属于没有 ref 的那个，
+        // 而从根遍历找到的却是另一个（探针据此误判过"ref 在的"）。
+        let owner = null
+        let inst = el && el.__vueParentComponent
+        for (let hop = 0; inst && hop < 30; hop++, inst = inst.parent) {
+          const p = inst.proxy
+          if (p && p.$refs && Object.prototype.hasOwnProperty.call(p.$refs, 'fileTree')) {
+            const t = p.$refs.fileTree
+            owner = {
+              hops: hop,
+              refPresent: !!t,
+              hasCreate: !!(t && typeof t.handleCreateWord === 'function'),
+              projectId: t ? t.projectId : null,
+              quickAction: typeof p.onFileTreeQuickAction,
+            }
+            break
+          }
+        }
         return {
           btnRect: r ? { x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height) } : null,
+          btnMatches: all.length,
+          // uni h5 的页面栈在 DOM 里并存（app-e2e 就用根节点计数抓这类堆叠）
+          overviewInstances: document.querySelectorAll('.page-project-overview').length,
+          listInstances: document.querySelectorAll('.page-project-list').length,
+          hash: location.hash.slice(0, 80),
+          owner,
+          clicks: window.__awdClickTrace || null,
+          // 一次鼠标事件都没收到时，要能分清"输入没进这个渲染器"和"页面被换过"
+          focus: document.hasFocus(), vis: document.visibilityState,
+          atPoint: (() => {
+            if (!r) return null
+            const h = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)
+            return h ? h.tagName.toLowerCase() : null
+          })(),
           viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
           text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 200),
         }
       }).catch(() => null)
-      throw new Error('点了新建文档但文件没出现；写请求=' + JSON.stringify(apiWrites.slice(-6))
+      throw new Error('点了新建文档但文件没出现；点击次数=' + attempts
+        + ' 写请求=' + JSON.stringify(apiWrites.slice(-6))
         + ' 页面错误=' + JSON.stringify(pageErrs.slice(0, 3)) + ' 现场=' + JSON.stringify(snap))
     }
-    await mouseClickText('newdocument')
+    // 打开文件这一下同样吃"输入被丢弃"的亏（丢了就卡在下面等 webview），一样处理
+    {
+      await installTrace()
+      const before = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
+      await mouseClickText('newdocument')
+      const after = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
+      if (after === before) {
+        console.log('      ! 打开文件那一下也没进页面，改用页面内派发')
+        await page.evaluate(() => {
+          const el = [...document.querySelectorAll('*')].find((n) => n.children.length === 0
+            && n.innerText && n.offsetParent !== null && n.innerText.trim().includes('newdocument'))
+          if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
+        })
+        await sleep(700)
+      }
+    }
     await page.waitForSelector('webview', { timeout: 30000 })
   })
 
