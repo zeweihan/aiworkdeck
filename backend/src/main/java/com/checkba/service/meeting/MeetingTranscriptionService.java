@@ -477,8 +477,7 @@ public class MeetingTranscriptionService {
             }
             if (info.failed()) {
                 meeting.setStatus(MeetingRecording.STATUS_FAILED);
-                meeting.setError("听悟转写失败: "
-                        + (info.errorMessage() == null ? "未知原因" : info.errorMessage()));
+                meeting.setError(tingwuFailureText(info));
                 cleanupOss(meeting, settings);
                 return meetingRepository.save(meeting);
             }
@@ -488,6 +487,19 @@ public class MeetingTranscriptionService {
             log.warn("听悟任务查询失败: meetingId={}, {}", meeting.getId(), e.toString());
             return meeting;
         }
+    }
+
+    /**
+     * 终态失败的文案。INVALID 与 FAILED 分开说：前者是听悟没受理（音频取不到、格式不支持、参数非法），
+     * 用户该去换音频或查凭证；后者是任务跑起来了但失败。都写成「转写失败」的话，
+     * 用户只会以为是我们这边卡住了，然后反复重试同一份必然被拒的音频。
+     */
+    private static String tingwuFailureText(TingwuClient.TaskInfo info) {
+        String reason = info.errorMessage() == null || info.errorMessage().isBlank()
+                ? "未知原因" : info.errorMessage();
+        return info.invalid()
+                ? "听悟未受理该任务（INVALID）: " + reason
+                : "听悟转写失败: " + reason;
     }
 
     private MeetingRecording completeMeeting(MeetingRecording meeting, MeetingAsrSettings settings,
