@@ -93,6 +93,15 @@ mcp:
 # 登录短信验证（阿里云 dysmsapi；仅 server 模式生效，local-mode 免登无登录环节）。
 # AK/SK 一律环境变量注入（与 OSS_ACCESS_KEY_* 同一模式），绝不写进任何入库文件。
 # 官方托管的插件云后端：SMS_AUTH_ENABLED=true + RAM 子用户密钥（仅 AliyunDysmsFullAccess）。
+# 手机号登录（大陆站强制；国际站不开——那边没有短信通道，开了等于把人全锁在门外）。
+# 开启前提是短信网关可用，否则 PhoneLoginGuard 会拒绝启动而不是静默降级。
+# 设计见 docs/superpowers/specs/2026-08-17-phone-login-design.md
+auth:
+  phone-login-required: ${AUTH_PHONE_LOGIN_REQUIRED:false}
+  # 存量用户补绑手机号的硬期限；过期未绑一律拒登，文案指向 hi@aiworkdeck.com。
+  # 写成配置而不是硬编码，要延期改这里即可。
+  phone-binding-deadline: ${AUTH_PHONE_BINDING_DEADLINE:2026-09-30}
+
 sms:
   enabled: ${SMS_AUTH_ENABLED:false}
   access-key-id: ${SMS_ACCESS_KEY_ID:}
