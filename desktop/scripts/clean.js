@@ -20,7 +20,10 @@ function removeDir(dirPath) {
     }
 }
 
-const appName = 'checkba-desktop'; // Must match name in package.json or app.name
+// 必须跟 Electron 的 app.name 一致，而 app.name 取自 package.json：有顶层 productName
+// 就用它、没有才用 name。本项目刻意不设顶层 productName（补上会连带把 userData 目录改名、
+// 丢存量用户登录态，理由见 main/app-menu.js 顶部），所以读 name 就是对的。别写死，会漂。
+const appName = require('../package.json').name;
 let userDataPath;
 
 if (process.platform === 'darwin') {
