@@ -10,6 +10,9 @@
 import { reactive } from 'vue'
 import { getApiBaseUrl, createMeetingRecording, finishMeetingRecording } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
+// 报错直接显示在会议录音面板里（recorderState.error 与 throw 出去的 message 都是），
+// 所以文案与面板同一个命名空间。非组件模块的翻译入口是 t()，且只能在函数体内取值。
+import { t } from '@/i18n'
 
 const CHUNK_TIMESLICE_MS = 5000
 const UPLOAD_TIMEOUT_MS = 60000
@@ -40,6 +43,10 @@ let uploadQueue = []
 let uploadOffset = 0
 let uploading = false
 let recordingDone = false
+// 本模块最近写进 recorderState.error 的那条「上传受阻」原文，传通之后据此清理。
+// 原先比的是文案前缀，文案进了 i18n 就不能这么判（英文版永远匹配不上）；
+// 而清空又必须只认自己写的那条，不能顺手抹掉别处的报错——留原文比对是两者兼顾的写法。
+let uploadStalledNotice = ''
 
 function pickAudioMime() {
   const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4']
@@ -63,10 +70,10 @@ export function isRecordingActive() {
  */
 export async function startRecording(projectId) {
   if (isRecordingActive()) {
-    throw new Error('已有一场录音在进行中')
+    throw new Error(t('meeting.alreadyRecording'))
   }
   if (typeof MediaRecorder === 'undefined' || !navigator.mediaDevices) {
-    throw new Error('当前环境不支持录音')
+    throw new Error(t('meeting.recordingUnsupported'))
   }
   recorderState.status = 'starting'
   recorderState.error = ''
@@ -85,6 +92,7 @@ export async function startRecording(projectId) {
     uploadOffset = 0
     uploading = false
     recordingDone = false
+    uploadStalledNotice = ''
 
     const mimeType = pickAudioMime()
     mediaRecorder = mimeType
@@ -113,7 +121,7 @@ export async function startRecording(projectId) {
     cleanupMedia()
     recorderState.status = 'idle'
     if (e && (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError')) {
-      throw new Error('拿不到麦克风权限，请在系统设置中允许本应用使用麦克风')
+      throw new Error(t('meeting.micPermissionDenied'))
     }
     throw e
   }
@@ -159,7 +167,7 @@ export async function stopRecording() {
     meeting = await finishMeetingRecording(meetingId, durationMs)
   } catch (e) {
     console.error('[meeting] finish 失败', e)
-    recorderState.error = '录音已保存，但状态回写失败：' + ((e && e.message) || e)
+    recorderState.error = t('meeting.finishWriteBackFailed', { message: (e && e.message) || e })
   }
   recorderState.status = 'idle'
   recorderState.meetingId = null
@@ -199,13 +207,15 @@ async function uploadChunkWithRetry(blob, offset, isLast) {
   for (;;) {
     try {
       await uploadChunk(blob, offset, isLast)
-      if (recorderState.error && recorderState.error.startsWith('上传受阻')) {
+      if (uploadStalledNotice && recorderState.error === uploadStalledNotice) {
         recorderState.error = ''
       }
+      uploadStalledNotice = ''
       return
     } catch (e) {
       attempt += 1
-      recorderState.error = '上传受阻，正在重试（第 ' + attempt + ' 次）'
+      uploadStalledNotice = t('meeting.uploadStalled', { attempt })
+      recorderState.error = uploadStalledNotice
       await new Promise(r => setTimeout(r, Math.min(1000 * attempt, 10000)))
     }
   }

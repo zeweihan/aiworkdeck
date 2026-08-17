@@ -1,13 +1,14 @@
 <template>
   <!-- Vue 3 多根节点：与 ShareholderMeetingPanel 同构 -->
 
-  <!-- 面板标题由外壳的 sidebar-header 统一出，这里不再自画一份 -->
+  <!-- 面板标题由外壳的 sidebar-header 统一出，这里不再自画一份
+       （标题文案因此走 config.sidebar.meetingRecorder，不在 meeting 命名空间里） -->
 
   <!-- 转写档位与就绪状态。**摆在录音开始之前**，不拖到转写那一刻才暴露：
        律师需要在按下录音键之前就知道这段录音会不会出本机（设计 §6.2.1）。 -->
   <view class="mr-tier" v-if="tierKnown">
     <view class="mr-tier-row">
-      <text class="mr-tier-label">转写方式</text>
+      <text class="mr-tier-label">{{ $t('meeting.tierLabel') }}</text>
       <text class="mr-tier-value" :class="tierClass">{{ tierText }}</text>
     </view>
     <text class="mr-tier-desc">{{ tierDesc }}</text>
@@ -16,7 +17,7 @@
          「关掉开关传上云」两条路，后者与他打开开关的目的正好相反。 -->
     <view class="mr-tier-row mr-tier-switch">
       <view class="mr-tier-switch-info">
-        <text class="mr-tier-label">录音不出本机</text>
+        <text class="mr-tier-label">{{ $t('meeting.localSwitchLabel') }}</text>
         <text class="mr-tier-desc">{{ localSwitchNote }}</text>
       </view>
       <AwdSwitch
@@ -33,14 +34,14 @@
       <text class="mr-tier-desc">{{ localGate.nextStep }}</text>
       <view class="mr-tier-gate-actions">
         <template v-if="modelDownloading">
-          <text class="mr-tier-desc">正在下载模型 {{ modelPercent }}%</text>
-          <view class="mr-btn secondary" @tap="onCancelAsrModel">取消下载</view>
+          <text class="mr-tier-desc">{{ $t('meeting.modelDownloading', { percent: modelPercent }) }}</text>
+          <view class="mr-btn secondary" @tap="onCancelAsrModel">{{ $t('meeting.cancelDownload') }}</view>
         </template>
         <template v-else>
           <view class="mr-btn primary" v-if="canDownloadModel" @tap="onDownloadAsrModel">
-            下载模型（{{ modelSizeHint }}）
+            {{ $t('meeting.downloadModel', { size: modelSizeText }) }}
           </view>
-          <view class="mr-btn secondary" @tap="onRecheckLocalAsr">重新检测</view>
+          <view class="mr-btn secondary" @tap="onRecheckLocalAsr">{{ $t('meeting.recheck') }}</view>
         </template>
       </view>
     </view>
@@ -57,45 +58,45 @@
     <template v-if="!recordingActive">
       <view class="mr-record-btn" @tap="onStartRecording">
         <view class="mr-record-dot"></view>
-        <text class="mr-record-text">开始录音</text>
+        <text class="mr-record-text">{{ $t('meeting.startRecording') }}</text>
       </view>
-      <text class="mr-record-hint">点击即开始，说话人自动区分，结束后自动转写</text>
+      <text class="mr-record-hint">{{ $t('meeting.startHint') }}</text>
     </template>
     <template v-else-if="recordingHere">
       <view class="mr-recording-live">
         <view class="mr-live-row">
           <view class="mr-live-dot" :class="{ paused: recState.status === 'paused' }"></view>
           <text class="mr-live-time">{{ formatSeconds(recState.seconds) }}</text>
-          <text class="mr-live-label">{{ recState.status === 'paused' ? '已暂停' : '录音中' }}</text>
+          <text class="mr-live-label">{{ recState.status === 'paused' ? $t('meeting.paused') : $t('meeting.recording') }}</text>
         </view>
         <view class="mr-level-track">
           <view class="mr-level-bar" :style="{ width: Math.round(recState.level * 100) + '%' }"></view>
         </view>
         <view class="mr-live-actions">
           <view class="mr-btn secondary" @tap="onTogglePause">
-            {{ recState.status === 'paused' ? '继续' : '暂停' }}
+            {{ recState.status === 'paused' ? $t('meeting.resume') : $t('meeting.pause') }}
           </view>
           <view class="mr-btn danger" :class="{ disabled: recState.status === 'stopping' }" @tap="onStopRecording">
-            {{ recState.status === 'stopping' ? '保存中...' : '结束录音' }}
+            {{ recState.status === 'stopping' ? $t('meeting.saving') : $t('meeting.stopRecording') }}
           </view>
         </view>
-        <text class="mr-record-hint">切到其他页面录音不会中断，可从顶部胶囊随时停止</text>
+        <text class="mr-record-hint">{{ $t('meeting.backgroundHint') }}</text>
         <text class="mr-record-error" v-if="recState.error">{{ recState.error }}</text>
       </view>
     </template>
     <template v-else>
-      <text class="mr-record-hint">另一个项目正在录音中，请先在顶部胶囊停止</text>
+      <text class="mr-record-hint">{{ $t('meeting.otherProjectRecording') }}</text>
     </template>
   </view>
 
   <!-- 会议列表 -->
   <view class="mr-sec-head">
-    <text class="mr-sec-title">录音记录</text>
+    <text class="mr-sec-title">{{ $t('meeting.sectionTitle') }}</text>
     <text class="mr-sec-count">{{ meetings.length }}</text>
   </view>
   <view class="mr-list">
     <view v-if="!meetings.length" class="mr-list-empty">
-      <text>还没有录音。上面点「开始录音」。</text>
+      <text>{{ $t('meeting.empty') }}</text>
     </view>
     <view v-for="m in meetings" :key="m.id" class="mr-item">
       <view class="mr-item-head" @tap="toggleExpand(m)">
@@ -110,40 +111,40 @@
       <view class="mr-detail" v-if="expandedId === m.id">
         <!-- 标题改名 -->
         <view class="mr-title-edit" v-if="editingTitleId === m.id">
-          <input class="mr-input" v-model="editingTitle" placeholder="会议标题" />
-          <view class="mr-btn secondary small" @tap="editingTitleId = null">取消</view>
-          <view class="mr-btn primary small" @tap="saveTitle(m)">保存</view>
+          <input class="mr-input" v-model="editingTitle" :placeholder="$t('meeting.titlePlaceholder')" />
+          <view class="mr-btn secondary small" @tap="editingTitleId = null">{{ $t('meeting.cancel') }}</view>
+          <view class="mr-btn primary small" @tap="saveTitle(m)">{{ $t('meeting.save') }}</view>
         </view>
         <view class="mr-detail-tools" v-else>
-          <text class="mr-link" @tap="startEditTitle(m)">改标题</text>
-          <text class="mr-link" @tap="togglePlay(m)">{{ playingId === m.id ? '停止播放' : '播放录音' }}</text>
-          <text class="mr-link danger" @tap="confirmDelete(m)">删除</text>
+          <text class="mr-link" @tap="startEditTitle(m)">{{ $t('meeting.renameTitle') }}</text>
+          <text class="mr-link" @tap="togglePlay(m)">{{ playingId === m.id ? $t('meeting.stopPlayback') : $t('meeting.playRecording') }}</text>
+          <text class="mr-link danger" @tap="confirmDelete(m)">{{ $t('meeting.delete') }}</text>
         </view>
 
         <!-- 已录音未转写 -->
         <view v-if="m.status === 'RECORDED'" class="mr-section">
-          <text class="mr-hint" v-if="configured === false">配置转写凭证后可转文字与生成纪要。</text>
-          <view v-else class="mr-btn primary" @tap="onTranscribe(m)">开始转写</view>
+          <text class="mr-hint" v-if="configured === false">{{ $t('meeting.needCredentialsHint') }}</text>
+          <view v-else class="mr-btn primary" @tap="onTranscribe(m)">{{ $t('meeting.transcribe') }}</view>
         </view>
 
         <!-- 转写中 -->
         <view v-if="m.status === 'TRANSCRIBING'" class="mr-section">
           <view class="mr-progress-row">
             <view class="mr-spinner"></view>
-            <text class="mr-hint">转写与说话人分离进行中，通常几分钟内完成，可离开此页</text>
+            <text class="mr-hint">{{ $t('meeting.transcribingHint') }}</text>
           </view>
         </view>
 
         <!-- 失败 -->
         <view v-if="m.status === 'FAILED'" class="mr-section">
-          <text class="mr-error">{{ m.error || '转写失败' }}</text>
-          <view class="mr-btn secondary" @tap="onTranscribe(m)">重试转写</view>
+          <text class="mr-error">{{ m.error || $t('meeting.transcribeFailed') }}</text>
+          <view class="mr-btn secondary" @tap="onTranscribe(m)">{{ $t('meeting.retryTranscribe') }}</view>
         </view>
 
         <!-- 已转写：说话人 + 转写稿 + 摘要 + 动作 -->
         <template v-if="m.status === 'TRANSCRIBED'">
           <view class="mr-section">
-            <text class="mr-section-title">说话人（点击改名）</text>
+            <text class="mr-section-title">{{ $t('meeting.speakersTitle') }}</text>
             <view class="mr-speakers">
               <view
                 v-for="sp in speakerIds(m)"
@@ -156,26 +157,26 @@
               </view>
             </view>
             <view class="mr-title-edit" v-if="editingSpeakerId !== null">
-              <input class="mr-input" v-model="editingSpeakerName" :placeholder="'说话人' + editingSpeakerId + ' 的名字'" />
-              <view class="mr-btn secondary small" @tap="editingSpeakerId = null">取消</view>
-              <view class="mr-btn primary small" @tap="saveSpeakerName(m)">保存</view>
+              <input class="mr-input" v-model="editingSpeakerName" :placeholder="$t('meeting.speakerNamePlaceholder', { n: editingSpeakerId })" />
+              <view class="mr-btn secondary small" @tap="editingSpeakerId = null">{{ $t('meeting.cancel') }}</view>
+              <view class="mr-btn primary small" @tap="saveSpeakerName(m)">{{ $t('meeting.save') }}</view>
             </view>
           </view>
 
           <view class="mr-section">
             <view class="mr-actions">
               <view class="mr-btn primary" :class="{ disabled: generatingId === m.id }" @tap="onGenerateMinutes(m)">
-                {{ generatingId === m.id ? '正在交给 AI...' : '生成会议纪要' }}
+                {{ generatingId === m.id ? $t('meeting.sendingToAi') : $t('meeting.generateMinutes') }}
               </view>
-              <view class="mr-btn secondary" @tap="onExport(m)">导出转写稿</view>
+              <view class="mr-btn secondary" @tap="onExport(m)">{{ $t('meeting.exportTranscript') }}</view>
             </view>
           </view>
 
           <!-- 摘要素材（听悟章节/摘要/待办） -->
           <view class="mr-section" v-if="summaryOf(m)">
             <view class="mr-fold-head" @tap="summaryOpenId = summaryOpenId === m.id ? null : m.id">
-              <text class="mr-section-title">机器速览</text>
-              <text class="mr-link">{{ summaryOpenId === m.id ? '收起' : '展开' }}</text>
+              <text class="mr-section-title">{{ $t('meeting.autoSummary') }}</text>
+              <text class="mr-link">{{ summaryOpenId === m.id ? $t('meeting.collapse') : $t('meeting.expand') }}</text>
             </view>
             <view v-if="summaryOpenId === m.id" class="mr-summary">
               <text class="mr-summary-text" v-if="summaryOf(m).summary">{{ summaryOf(m).summary }}</text>
@@ -184,7 +185,7 @@
                 <text class="mr-summary-text">{{ c.summary }}</text>
               </view>
               <view v-if="(summaryOf(m).todos || []).length" class="mr-summary-block">
-                <text class="mr-summary-strong">待办线索</text>
+                <text class="mr-summary-strong">{{ $t('meeting.todoLeads') }}</text>
                 <text class="mr-summary-text" v-for="(t, i) in summaryOf(m).todos" :key="'t' + i">- {{ t }}</text>
               </view>
             </view>
@@ -192,7 +193,7 @@
 
           <!-- 转写稿 -->
           <view class="mr-section">
-            <text class="mr-section-title">转写稿</text>
+            <text class="mr-section-title">{{ $t('meeting.transcript') }}</text>
             <view class="mr-transcript">
               <view v-for="(seg, i) in segmentsOf(m)" :key="i" class="mr-seg">
                 <view class="mr-seg-head">
@@ -206,22 +207,20 @@
         </template>
       </view>
     </view>
-
-    <view v-if="meetings.length === 0" class="mr-empty">
-      <text>暂无会议录音</text>
-    </view>
+    <!-- 空态只在列表上方那一处（.mr-list-empty）。#389 加了新的那处但漏删了这里的旧的，
+         两块的 v-if 条件相同，没有录音时同一句话会渲染两遍。 -->
   </view>
 
   <!-- 删除确认 -->
   <view class="mr-dialog-mask" v-if="showDeleteDialog" @tap="showDeleteDialog = false">
     <view class="mr-dialog-content" @tap.stop>
-      <view class="mr-dialog-header"><text class="mr-dialog-title">删除会议</text></view>
+      <view class="mr-dialog-header"><text class="mr-dialog-title">{{ $t('meeting.deleteDialogTitle') }}</text></view>
       <view class="mr-dialog-body">
-        <text>将删除该会议的转写记录与录音文件，不可恢复。确认删除？</text>
+        <text>{{ $t('meeting.deleteDialogBody') }}</text>
       </view>
       <view class="mr-dialog-footer">
-        <view class="mr-dialog-btn cancel" @tap="showDeleteDialog = false">取消</view>
-        <view class="mr-dialog-btn confirm" @tap="handleDelete">确认删除</view>
+        <view class="mr-dialog-btn cancel" @tap="showDeleteDialog = false">{{ $t('meeting.cancel') }}</view>
+        <view class="mr-dialog-btn confirm" @tap="handleDelete">{{ $t('meeting.confirmDelete') }}</view>
       </view>
     </view>
   </view>
@@ -287,7 +286,8 @@ export default {
       // 只是搬到用户真正需要它的位置——他刚点开「录音不出本机」的这一刻）
       modelState: null,
       modelPercent: 0,
-      modelSizeHint: '约 1.5GB',
+      // 桌面壳报的体积说法（'约 1.5GB' 之类）；空 = 还没问到，界面回落到 meeting.modelSizeDefault
+      modelSizeHint: '',
       // 用户点过「录音不出本机」但没成——下面那块引导只在这之后出现，
       // 平台档用户不该每次开面板都看见一块「模型没下载」
       localGateOpen: false,
@@ -333,10 +333,13 @@ export default {
     modelDownloading() {
       return this.modelState === 'downloading'
     },
+    modelSizeText() {
+      return this.modelSizeHint || this.$t('meeting.modelSizeDefault')
+    },
     tierText() {
-      if (this.asrProvider === 'local') return '本地转写'
-      if (this.asrProvider === 'byok') return '自备 Key'
-      return this.asrAccountConnected ? '平台代采' : '需要连接账户'
+      if (this.asrProvider === 'local') return this.$t('meeting.tierLocal')
+      if (this.asrProvider === 'byok') return this.$t('meeting.tierByok')
+      return this.$t(this.asrAccountConnected ? 'meeting.tierPlatform' : 'meeting.tierNeedsAccount')
     },
     // 「platform 档但还没连账户」不给绿色：那一档现在还转不了，绿色会读成「已就绪」
     tierClass() {
@@ -345,24 +348,21 @@ export default {
       return 'tier-byok'
     },
     tierDesc() {
-      if (this.asrProvider === 'local') {
-        return '录音与转写都在本机完成，音频不出本机。速度约为实时的一点五倍（两小时的会要跑一小时上下），没有说话人分离。'
-      }
-      if (this.asrProvider === 'byok') return '用你自己的阿里云听悟账号转写，音频经你自己的 OSS 中转。'
-      if (!this.asrPlatformAvailable) return '本机形态使用自备 Key，在「系统管理 - 平台服务」里填听悟凭证。'
-      if (!this.asrAccountConnected) return '连接官网账户后即可直接转写，不用自己开通听悟。'
-      return '由 AI WorkDeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。'
+      if (this.asrProvider === 'local') return this.$t('meeting.tierDescLocal')
+      if (this.asrProvider === 'byok') return this.$t('meeting.tierDescByok')
+      if (!this.asrPlatformAvailable) return this.$t('meeting.tierDescNoPlatform')
+      if (!this.asrAccountConnected) return this.$t('meeting.tierDescNotConnected')
+      return this.$t('meeting.tierDescPlatform')
     },
     localSwitchNote() {
-      if (this.asrProvider === 'local') return '音频不上传，转写在本机完成；比云端慢，且没有说话人分离。'
-      if (this.localAsrUsable) return '打开后音频不上传，转写在本机完成（比云端慢，且没有说话人分离）。'
-      return '打开需要本机转写模型；下面可以就地下载。'
+      if (this.asrProvider === 'local') return this.$t('meeting.localSwitchNoteOn')
+      if (this.localAsrUsable) return this.$t('meeting.localSwitchNoteReady')
+      return this.$t('meeting.localSwitchNoteNeedsModel')
     },
     notConfiguredHint() {
-      if (this.asrProvider === 'platform') {
-        return '转写暂不可用：录音会保存到项目文件，但不能转文字。到「系统管理 - 账户与用量」连接官网账户即可开通。'
-      }
-      return '未配置转写服务：录音会保存到项目文件，但不能转文字。管理员可在「系统管理 - 平台服务 - 会议录音转写」里填阿里云听悟凭证，或改用平台代采。'
+      return this.$t(this.asrProvider === 'platform'
+        ? 'meeting.notConfiguredPlatform'
+        : 'meeting.notConfiguredByok')
     }
   },
   mounted() {
@@ -442,7 +442,7 @@ export default {
         await setPlatformServiceProvider('asr', on ? 'local' : 'platform')
         this.localGateOpen = false
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '切换失败，稍后重试', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('meeting.switchFailed'), icon: 'none' })
       } finally {
         this.tierBusy = false
         await this.loadAsrTier()
@@ -477,7 +477,7 @@ export default {
         this.modelState = 'downloading'
         this.modelPercent = 0
       } catch (e) {
-        uni.showToast({ title: '开始下载失败，稍后重试', icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.downloadStartFailed'), icon: 'none' })
       }
     },
     async onCancelAsrModel() {
@@ -520,7 +520,7 @@ export default {
         if (recorderState.configured !== null) this.configured = recorderState.configured
         await this.loadMeetings()
       } catch (e) {
-        uni.showToast({ title: (e && e.message) || '无法开始录音', icon: 'none' })
+        uni.showToast({ title: (e && e.message) || this.$t('meeting.cannotStartRecording'), icon: 'none' })
       }
     },
     onTogglePause() {
@@ -554,11 +554,11 @@ export default {
     },
     statusText(status) {
       return {
-        RECORDING: '录音中',
-        RECORDED: '未转写',
-        TRANSCRIBING: '转写中',
-        TRANSCRIBED: '已转写',
-        FAILED: '转写失败'
+        RECORDING: this.$t('meeting.statusRecording'),
+        RECORDED: this.$t('meeting.statusRecorded'),
+        TRANSCRIBING: this.$t('meeting.statusTranscribing'),
+        TRANSCRIBED: this.$t('meeting.statusTranscribed'),
+        FAILED: this.$t('meeting.statusFailed')
       }[status] || status
     },
     formatMs(ms) {
@@ -572,7 +572,7 @@ export default {
         await this.loadMeetings()
         this.expandedId = m.id
       } catch (e) {
-        uni.showToast({ title: '提交转写失败：' + ((e && e.message) || e), icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.submitTranscribeFailed', { message: (e && e.message) || e }), icon: 'none' })
       }
     },
     async onGenerateMinutes(m) {
@@ -582,7 +582,7 @@ export default {
         const res = await getMeetingMinutesPrompt(m.id)
         this.$emit('generate-minutes', { meeting: m, prompt: res.prompt })
       } catch (e) {
-        uni.showToast({ title: '生成纪要失败：' + ((e && e.message) || e), icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.generateMinutesFailed', { message: (e && e.message) || e }), icon: 'none' })
       } finally {
         this.generatingId = null
       }
@@ -590,9 +590,10 @@ export default {
     async onExport(m) {
       try {
         const file = await exportMeetingTranscript(m.id)
-        uni.showToast({ title: `已导出：${(file && file.name) || '转写稿'}（见「会议录音」文件夹）`, icon: 'none' })
+        const name = (file && file.name) || this.$t('meeting.transcriptFallbackName')
+        uni.showToast({ title: this.$t('meeting.exported', { name }), icon: 'none' })
       } catch (e) {
-        uni.showToast({ title: '导出失败：' + ((e && e.message) || e), icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.exportFailed', { message: (e && e.message) || e }), icon: 'none' })
       }
     },
 
@@ -610,7 +611,7 @@ export default {
         await this.loadMeetings()
         this.expandedId = m.id
       } catch (e) {
-        uni.showToast({ title: '保存失败：' + ((e && e.message) || e), icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.saveFailed', { message: (e && e.message) || e }), icon: 'none' })
       }
     },
     segmentsOf(m) {
@@ -647,7 +648,7 @@ export default {
     },
     speakerName(m, sp) {
       const names = this.speakerNamesOf(m)
-      return names[sp] && names[sp].trim() ? names[sp] : '说话人' + sp
+      return names[sp] && names[sp].trim() ? names[sp] : this.$t('meeting.speakerDefaultName', { n: sp })
     },
     startEditSpeaker(m, sp) {
       this.editingSpeakerId = sp
@@ -666,7 +667,7 @@ export default {
         this.editingSpeakerId = null
         await this.refreshOne(m.id)
       } catch (e) {
-        uni.showToast({ title: '保存失败：' + ((e && e.message) || e), icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.saveFailed', { message: (e && e.message) || e }), icon: 'none' })
       }
     },
 
@@ -680,7 +681,7 @@ export default {
       }
       this.stopPlay()
       if (!m.audioFileId) {
-        uni.showToast({ title: '没有可播放的录音', icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.noAudio'), icon: 'none' })
         return
       }
       try {
@@ -696,7 +697,7 @@ export default {
         this.playingId = m.id
       } catch (e) {
         this.stopPlay()
-        uni.showToast({ title: '播放失败：' + ((e && e.message) || e), icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.playFailed', { message: (e && e.message) || e }), icon: 'none' })
       }
     },
     stopPlay() {
@@ -724,7 +725,7 @@ export default {
         if (this.expandedId === this.deletingMeeting.id) this.expandedId = null
         await this.loadMeetings()
       } catch (e) {
-        uni.showToast({ title: '删除失败：' + ((e && e.message) || e), icon: 'none' })
+        uni.showToast({ title: this.$t('meeting.deleteFailed', { message: (e && e.message) || e }), icon: 'none' })
       } finally {
         this.deletingMeeting = null
       }
@@ -1285,13 +1286,6 @@ $mr-muted: #6B7280;
   color: #1F2328;
   line-height: 1.6;
   word-break: break-word;
-}
-
-.mr-empty {
-  padding: 20px 0;
-  text-align: center;
-  font-size: 12px;
-  color: #9CA3AF;
 }
 
 /* ---- 删除对话框（自带 scoped 副本，awd-* 无集中定义） ---- */
