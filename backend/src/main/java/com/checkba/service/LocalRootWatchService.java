@@ -14,6 +14,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -99,13 +100,17 @@ public class LocalRootWatchService {
         ensureWatch(event.projectId(), event.localRoot());
     }
 
-    /** 幂等：已在监听则无事发生。失败只降级（见类注释）。 */
-    public void ensureWatch(long projectId, String localRoot) {
-        if (watchers.containsKey(projectId)) return;
+    /**
+     * 幂等：已在监听则无事发生。失败只降级（见类注释）。
+     *
+     * @return 是否真的挂上了监听。挂不上不是「慢」而是硬失败，调用方（和测试）需要能区分。
+     */
+    public boolean ensureWatch(long projectId, String localRoot) {
+        if (watchers.containsKey(projectId)) return true;
         Path root = Paths.get(localRoot);
         if (!Files.isDirectory(root)) {
             log.warn("不监听不可达的项目文件夹: project={}, root={}", projectId, root);
-            return;
+            return false;
         }
         try {
             DirectoryWatcher watcher = DirectoryWatcher.builder()
@@ -116,14 +121,36 @@ public class LocalRootWatchService {
             DirectoryWatcher prev = watchers.putIfAbsent(projectId, watcher);
             if (prev != null) {
                 watcher.close();
-                return;
+                return true;
             }
-            watcher.watchAsync(watchExecutor);
+            // watchAsync 把注册（registerPaths）**同步跑在调用线程上**，只把事件循环丢给执行器；
+            // 注册异常和事件循环中途死亡都只体现在返回的 future 上。以前把这个 future 丢掉，
+            // 于是 inotify 名额耗尽 / 权限被拒 / 目录刚好被移走，全都静默失效——日志还照打
+            // 「已监听」，用户在 Finder 里的改动从此再不同步，且没有任何线索。
+            CompletableFuture<Void> watching = watcher.watchAsync(watchExecutor);
+            watching.whenComplete((v, err) -> {
+                if (err != null) {
+                    log.warn("文件夹监听终止（降级为重开项目时重扫）: project={}, root={} ({})",
+                            projectId, root, err.toString());
+                }
+                // 摘掉自己，让下次 ensureWatch 能重建；按值移除，不会误伤已经重建的新监听
+                watchers.remove(projectId, watcher);
+            });
+            if (watching.isCompletedExceptionally()) {
+                return false;   // 注册当场就失败了，上面的 whenComplete 已打日志并摘除
+            }
             log.info("已监听项目文件夹: project={}, root={}", projectId, root);
+            return true;
         } catch (Exception e) {
             log.warn("启动文件夹监听失败（降级为重开项目时重扫）: project={}, root={} ({})",
                     projectId, root, e.getMessage());
+            return false;
         }
+    }
+
+    /** 该项目当前是否确实在监听中：注册失败或事件循环已死都是 false。 */
+    public boolean isWatching(long projectId) {
+        return watchers.containsKey(projectId);
     }
 
     public void stopWatch(long projectId) {
