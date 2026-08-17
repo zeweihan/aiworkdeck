@@ -164,6 +164,13 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   末位提醒仍是概率性的，确定性兜底在分发层：`dispatchTool` 短路"打开活跃文档本身"的 doc_open_file、
   给 doc_list_project_files 结果钉活跃文档提示（`activeDocOpenShortCircuit` / `appendActiveDocNotice`，
   PR#210）。**跨文档场景不拦截**——改这两个 helper 前先确认别把"对比另一份合同"之类的正常流程堵死。
+- **外部服务凭证有两个来源，工具侧只读一个就会静默失效**：企查查 / Tushare 的 Key 在设置页写进
+  `system_setting`（`external.qichacha.key` / `external.qichacha.secret` / `external.tushare.token`），
+  yml 只是兜底。`PythonTools` 注入 Python 子进程的那三个环境变量曾只读 `@Value`，于是用户填了 Key
+  脚本照样拿空值——还不报「未配置」，只是查不到数据，AI 据此回答「没有查到该公司的信息」。
+  取值统一走 `PythonTools.resolveExternalCredentials()`（库优先、yml 兜底、每次调用现取，
+  `PythonToolsCredentialSourceTest` 钉住）。platform 档下这三个变量刻意不注入是另一条口径
+  （设计文档 §5.5，随 P4 落地），别与本条混为一谈。
 - 排障需要后端日志时注意：桌面端复用已在跑的后端进程时不会重建日志管道，`~/.aiworkdeck/logs/backend.log`
   会停止更新（表现为日志停在几天前）。要拿新日志先彻底退出 app 让后端随之重启。
 - 防走神注入/todo_write 进度卡/文档检查点机制见 PR#161/162。
