@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -130,10 +131,19 @@ class MeetingTranscriptionLocalPathTest {
     @Test
     @DisplayName("local 档转写：音频一个字节都不出本机，段落按秒→毫秒落库，speaker 恒为 1")
     void transcribesLocallyAndNeverLeavesTheMachine() throws Exception {
-        when(localAsr.transcribe(any(File.class))).thenReturn(LOCAL_JSON);
+        // startTranscription 返回的就是这里这个可变对象本身（save 被 stub 成原样返回），
+        // 而后台线程随后会把同一个对象改成 TRANSCRIBED——不闸住它，机器快一点
+        // 就会抢在下面那句断言求值之前改完，断言读到 TRANSCRIBED 而误报。
+        // 闸在 transcribe 上：后台线程走到这里就停，够不到「置为 TRANSCRIBED」那一步。
+        CountDownLatch letBackgroundFinish = new CountDownLatch(1);
+        when(localAsr.transcribe(any(File.class))).thenAnswer(inv -> {
+            assertTrue(letBackgroundFinish.await(5, TimeUnit.SECONDS), "主线程没有及时放行");
+            return LOCAL_JSON;
+        });
 
         MeetingRecording out = meeting(MeetingRecording.STATUS_RECORDED);
         assertEquals(MeetingRecording.STATUS_TRANSCRIBING, service().startTranscription(7L).getStatus());
+        letBackgroundFinish.countDown();
         awaitUntil(() -> MeetingRecording.STATUS_TRANSCRIBED.equals(out.getStatus()));
 
         // 本批最重要的一条：录音不出本机 = 云端三条出站路径一次都不该被走到
