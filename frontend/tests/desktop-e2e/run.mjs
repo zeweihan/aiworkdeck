@@ -52,7 +52,7 @@ for (const [what, ok] of [
 ]) { if (!ok) { console.error('前置缺失: ' + what); process.exit(2) } }
 
 // ---- provision（local-mode 免登：任何请求都解析为本机用户） ----
-const QA = { sid: null }
+const QA = { sid: null, project: '', projectId: null }
 async function api(ep, opts = {}) {
   const r = await fetch(BACKEND + ep, {
     method: opts.method || 'GET',
@@ -76,7 +76,9 @@ async function api(ep, opts = {}) {
     // 三档收敛后 gemini 会被枚举校验打成 400（见 AdminConfigController.toSettingsUpdates）
     await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
   }
-  const proj = await api('/api/projects', { method: 'POST', body: { name: '桌面链路QA_' + Date.now(), projectType: 'BLANK' } })
+  // 名字记进 QA：启动落项目列表之后要靠它从卡片里认出这一轮的项目
+  QA.project = '桌面链路QA_' + Date.now()
+  const proj = await api('/api/projects', { method: 'POST', body: { name: QA.project, projectType: 'BLANK' } })
   QA.projectId = proj.id
   console.log('本机用户（免登）/ 项目 #' + QA.projectId)
 }
@@ -178,11 +180,38 @@ try {
   // 语言落了盘，随后跳工作台只是改 hash（同文档导航），钩子根本不触发。
   await page.evaluate(() => { try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ } })
 
-  await step('免登直达进入项目（PR-A 去登录：不注会话）', async () => {
+  await step('免登进入项目（启动落项目列表 → 点卡片进工作台）', async () => {
     await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId, { waitUntil: 'networkidle2' })
     // 同上：跳工作台若只是改 hash，uni 路由会把它弹回项目列表（工作台参与的跳转
     // 本该走 reLaunch）。整页重载一次，直接以工作台路由、以中文重新 boot。
     await page.reload({ waitUntil: 'networkidle2' })
+    // 2026-08 起**启动一律落项目列表页**（launch.vue 不再读 checkba_last_project_id
+    // 直达上次项目）。而壳自己的 loadURL(DEV_SERVER_URL) 是不带 hash 的，它随时可能
+    // 在上面这次导航之后才完成，把页面又带回列表——**点一次是不够的**：实测有一轮
+    // 点完之后壳的启动导航才落地，页面被拽回列表，整套 8 步全红。
+    // 所以这里轮询到真进了工作台为止：在列表上就按真人走法点卡片，已经在工作台
+    // 就直接出去。点卡片主体、避开标题行（标题绑 @tap.stop=startRename）与卡片
+    // 底部那排成员头像/加人按钮（各自也有 @tap.stop）。
+    const deadline = Date.now() + 60000
+    while (Date.now() < deadline) {
+      const where = await page.evaluate(() => ({
+        list: location.hash.includes('pages/project-list/project-list'),
+        wb: location.hash.includes('pages/project-overview/project-overview'),
+        ready: document.body.innerText.includes('资源管理器'),
+      })).catch(() => null)
+      if (where && where.wb && where.ready) break
+      if (where && where.list) {
+        const box = await page.evaluate((name) => {
+          const cards = [...document.querySelectorAll('.project-item-card')]
+          const card = cards.find((c) => (c.innerText || '').includes(name)) || cards[0]
+          if (!card) return null
+          const r = card.getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height * 0.55 }
+        }, QA.project).catch(() => null)
+        if (box) await page.mouse.click(box.x, box.y).catch(() => {})
+      }
+      await new Promise((r) => setTimeout(r, 1500))
+    }
     try {
       await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 30000 })
     } catch (e) {
