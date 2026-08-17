@@ -20,6 +20,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { pickCdpPort, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput } from '../_lib/electron-cdp.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -27,7 +28,8 @@ const desktopDir = path.resolve(frontendDir, '../desktop')
 const DEVURL = process.env.FEEDBACK_E2E_DEVURL || 'http://localhost:5174'
 const BACKEND = process.env.APP_E2E_BACKEND || 'http://127.0.0.1:9696'
 const BACKEND_PORT = new URL(BACKEND).port
-const CDP_PORT = 9334
+// 端口现挑 + 进程树整棵收 + 连前核身份 + 输入加固，见 tests/_lib/electron-cdp.mjs
+const CDP_PORT = pickCdpPort('FEEDBACK_E2E_CDP_PORT', 9334)
 const MARKER = 'QA_FEEDBACK_' + Date.now()
 
 let puppeteer
@@ -71,30 +73,23 @@ async function api(ep, opts = {}) {
 // --use-fake-device-for-media-stream 让 getUserMedia({audio}) 返回一路合成音轨，
 // --use-fake-ui-for-media-stream 免掉权限询问。没有它们这条用例只能靠人对着电脑说话。
 console.log('启动 dev Electron（屏幕会出现窗口，结束自动关闭）...')
-const elec = spawn('npx', ['electron', '.',
-  '--remote-debugging-port=' + CDP_PORT,
-  '--use-fake-device-for-media-stream',
-  '--use-fake-ui-for-media-stream',
-], {
-  cwd: desktopDir,
-  env: {
-    ...process.env,
-    AIWORKDECK_DESKTOP_DEV: '1',
-    CHECKBA_DEV_SERVER_URL: DEVURL,
-    CHECKBA_BACKEND_PORT: BACKEND_PORT,
-  },
-  stdio: ['ignore', 'pipe', 'pipe'],
+const { elec, killTree } = spawnElectron({
+  desktopDir,
+  cdpPort: CDP_PORT,
+  env: { AIWORKDECK_DESKTOP_DEV: '1', CHECKBA_DEV_SERVER_URL: DEVURL, CHECKBA_BACKEND_PORT: BACKEND_PORT },
+  // 假麦克风：getUserMedia({audio}) 返回一路合成音轨，并免掉权限询问
+  extraArgs: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
 })
 const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'feedback-e2e-electron.log'))
 elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
-let ws = null
-for (let i = 0; i < 60 && !ws; i++) {
-  await sleep(1000)
-  ws = await fetch('http://127.0.0.1:' + CDP_PORT + '/json/version').then((r) => r.json()).then((j) => j.webSocketDebuggerUrl).catch(() => null)
+const ws = await waitForCdpWs(CDP_PORT)
+if (!ws) { console.error('CDP 端点未就绪（端口 ' + CDP_PORT + '）'); killTree(); process.exit(1) }
+{
+  const bad = cdpOwnershipError(CDP_PORT, elec)
+  if (bad) { console.error(bad + '。换个端口重跑：FEEDBACK_E2E_CDP_PORT=9401'); killTree(); process.exit(1) }
 }
-if (!ws) { console.error('CDP 端点未就绪'); elec.kill(); process.exit(1) }
 
 let failed = 0
 const step = async (name, fn) => {
@@ -116,6 +111,7 @@ try {
     page = (await browser.pages()).find((p) => p.url().startsWith(DEVURL))
   }
   if (!page) throw new Error('找不到主渲染页')
+  await hardenPageInput(page)
 
   {
     const injected = await page.evaluate(() => (window.checkbaDesktop || {}).apiBaseUrl || null)
@@ -269,7 +265,7 @@ try {
 } finally {
   try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch { /* 清不掉不影响结论 */ }
   try { browser.disconnect() } catch { /* ignore */ }
-  elec.kill('SIGTERM')
+  killTree()
   await sleep(1500)
   try { elec.kill('SIGKILL') } catch { /* ignore */ }
 }

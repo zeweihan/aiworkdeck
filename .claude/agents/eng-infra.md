@@ -107,7 +107,9 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   正解三件套（desktop-e2e 已落）：① `detached: true` 起进程组 + `process.kill(-pid)` 整组收（并挂 `process.on('exit'/'SIGINT')`）；
   ② 每轮现挑一个空闲端口（`DESKTOP_E2E_CDP_PORT` 可覆盖），别写死 9333——维护者常年多开，并行会话必撞；
   ③ 连之前用 `lsof` 核一遍持端口的 pid 在不在自己那棵树里，不是就当场报死。
-  **app-e2e / lowa-e2e / feedback-e2e / meeting-e2e 同样是 spawn npx + 写死端口，还没上这三件套。**
+  这三件套 + 输入加固已收进 **`frontend/tests/_lib/electron-cdp.mjs`**，desktop / feedback / meeting
+  三套共用（以前各抄一份，同一个坑要踩三次）。**app-e2e / lowa-e2e 不受影响**——它们用
+  `puppeteer.launch()` 自己起无头 Chrome，进程由 puppeteer 管，也自带下面那三个开关。
 - **"点了没反应"先分清是输入通道坏了还是界面坏了**：`page.mouse.click()` 之后在 `window` 捕获期录
   pointerdown/mousedown/mouseup/click，**一个都没有 = 输入通道的问题**，同坐标重试没有意义。
   这一档故障的特征很干净也很反直觉：**`mouseMoved` 照常送达，`mousePressed`/`mouseReleased`/`dispatchKeyEvent`
@@ -121,6 +123,21 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   恢复不了就报死并在错误里点明"是输入通道坏了不是界面问题"。
   **不要退回"页面内 `dispatchEvent` 伪造点击"兜底**（#390 曾这么干，已撤）——桌面端就这一条真实输入的覆盖，
   换成假的之后这一步就再也挡不住真的界面回归了。
+  另加了两层**对症但未经证伪的**加固（`_lib/electron-cdp.mjs`）：起 Electron 时带
+  `--disable-backgrounding-occluded-windows` / `--disable-renderer-backgrounding` /
+  `--disable-background-timer-throttling`（puppeteer.launch 自带，手动 spawn 再 connect 就没有），
+  连上页面后开 `Emulation.setFocusEmulationEnabled`（CDP 专为"自动化非前台页面"留的开关）。
+  选它们是因为**按下/按键跟焦点绑定、而 mouseMoved 不绑定**，正好对上故障特征；但本机无法按需
+  复现该故障，也没能造出遮挡来 A/B 验证开关是否真的改变了行为——**所以这两层是有依据的加固，不是已验证的修复**。
+- **meeting-e2e 曾在 master 上整轮红（10/10），四个坑叠在一起**（2026-08-17 修复）：
+  ① 用的还是"写 `checkba_last_project_id` → reload 直达工作台"的老配方，而 2026-08 起启动一律落
+  项目列表页，于是第一步就卡死——改成 desktop-e2e 同款"轮询到真进工作台为止，在列表上就点卡片"；
+  ② 拿「资源管理器」当工作台就绪判据，但**左栏面板是记住上次的**，上一轮把它切到「会议录音」之后
+  下一轮永远等不到这四个字——改用 `.page-project-overview` 这种与面板无关的根节点；
+  ③ rail 按钮是**开关**，面板已经开着时再点一下正好关上——改成"确保打开"而不是"点一下"；
+  ④ **没钉死界面语言**，Electron 常带 `--lang=en-GB`，rail 会变成 "Meeting Recording"，
+  中文选择器全失配（现象很像"skill 没启用"，极易误判）——补上 `awd_app_language=zh-CN`。
+  ②③是同一类：**上一轮留下的状态破坏下一轮**，写这类断言前先问"上一轮跑完留下了什么"。
 - 分支保护拦 gh pr merge 时权宜 = 用户网页点 Bypass rules and merge（白名单未配成）。
 - `docs/` 在 .gitignore，入库要 `git add -f`。
 - **改跨类 `public static final String` 常量的值必须 `mvn clean test`**：这类常量在编译期被内联进
