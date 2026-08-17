@@ -597,6 +597,28 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 - `service/ai/tools/PythonTools.credentialEnvArgs()` — platform 档下**不注入**
   `TUSHARE_TOKEN` / `QICHACHA_KEY` / `QICHACHA_SECRET`（见地雷 33）。
 
+**配置面（P5，前端）**
+- `frontend/src/config/platformServices.js` — 七项服务的**展示元数据**（名字/描述 i18n 键 +
+  `LOCAL_TIER_READY`）。权威源仍是后端的 `ExternalServiceProvider.ALL`，本表只补界面叫法；
+  后端多出的服务以 key 原样显示，不静默漏掉。`LOCAL_TIER_READY.asr=false` 是**本地 ASR 未随包
+  发出**的唯一开关，P3 落地时连同「切换时就地探一次 + 下载模型」一起翻牌。
+- `frontend/src/locales/{zh-CN,en-US}/platform.js` — 新命名空间，向导与 admin 面板共用。
+- `frontend/src/pages/admin/admin.vue` 的 `platform` 面板 — 七行档位 + 每行的
+  「使用自己的 Key（高级）」折叠区（**21 个 BYOK 字段从「系统配置」搬到了这里**，
+  `config` 面板只剩 OpenRouter 那两个）。深链 `?nav=platform&service=<key>` 就地展开某一项。
+- `frontend/src/pages/wizard/wizard.vue` 步骤 2 — 从三组共 9 个输入框换成「平台服务总览 +
+  就地连账户」，默认展开，**不拦提交**（向导只拦 AI 供应商那一项）。
+- `frontend/src/components/MeetingRecordingPanel.vue` — 录音开始**之前**显示档位与就绪状态，
+  「录音不出本机」开关在本地引擎就绪前一律置灰（理由见地雷 33）。
+- `frontend/src/services/api.js` 的 `getPlatformServices` / `setPlatformServiceProvider`。
+
+界面侧的三条硬口径（改这几个文件前先看）：
+1. **档位一律读接口的 `provider`**，不按凭证是否为空推断——存量机器上这两件事经常对不上。
+2. **`platformAvailable=false` 时「平台代采」这个选项整个不出现**（不是置灰的第三项）并给说明，
+   D5 的表达在 UI 上必须是「没有这个选择」，不是「有但点不了」。
+3. **切档立刻写库，凭证字段仍走「保存配置」**。两者混在一个保存按钮下，用户点完下拉看不到
+   任何变化会以为没生效；切档失败**不改本地状态**，重拉一次让界面回到真相。
+
 **语音转写（P2）**
 - `service/meeting/MeetingTranscriptionService.java` — **分档在编排层**。platform 档
   完全不碰 `MeetingOssClient` / `TingwuClient`（那两个实现一字未动，只服务 byok 档）。
@@ -711,12 +733,14 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 33. **企查查与 Tushare 有一条不经过 Java 的出站路径**：`PythonTools` 把
     `TUSHARE_TOKEN` / `QICHACHA_KEY` / `QICHACHA_SECRET` 注入 Python 子进程，
     AI 写的脚本从用户本机直连上游。platform 档下没有可注入的凭证（凭证在官网，
-    下发给每台机器等于把公司账号发给所有人），所以 `credentialEnvArgs()` **一个都不注入**，
+    下发给每台机器等于把公司账号发给所有人），所以 `injectableCredentials()` **一个都不注入**，
     改由 `EnterpriseDataTools` 的 `qichacha_query` / `tushare_query` 代它调。
     不这么做的话，脚本拿到空 token，失败会表现成「查不到数据」而不是「未配置」。
     顺带：脚本那条路是唯一一条 AI 能循环打出几百次上游调用的口子，收进 Java 侧才受任务级上限约束。
-    另注意 `PythonTools` 读的是 `@Value` 的 yml/env 值，**不读 `system_setting`**——
-    用户在设置页填的 Key 从来就没被注入过，这是改造前就有的既有缺陷。
+    取值与过滤是**两件必须都做的事**，合在 `injectableCredentials()` 一个方法里：
+    取值走库优先（`system_setting` 有就用它，#383 修的；只读 yml 的话用户填了 Key 仍拿到空值，
+    脚本不报「未配置」只会查不到数据，比报错难查得多），注入按档过滤（platform 档一个不发）。
+    改这里务必两条一起看——只保一条就会退回其中一个 bug。
 
 34. **两家上游用响应体而不是 HTTP 状态表达失败**：企查查「查无此企业」回的是
     HTTP 200 + `Status=201`，Tushare 积分不足/限频回的是 HTTP 200 + `code=40203`。
@@ -726,6 +750,13 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 35. **新增 AI 工具组件要同步 `RealToolBeans.instantiateAll()`**（测试侧）。
     漏了的话该组件的工具在回放评测里根本不注册，可见性断言写了也是空的；
     护栏是 `EvalToolBeanParityTest`，会直接点名漏掉的类。
+36. **「录音不出本机」这类开关在引擎就绪之前不许可开**。本地 ASR 在 P3 之前根本没随包发出，
+    把开关做成「能打开、录完两小时才在转写那一刻炸」，用户只剩「放弃这份录音」或
+    「关掉开关传上云」两条路——后者与他打开开关的目的正好相反。这不是体验差，
+    是把用户推回他主动规避掉的合规风险里。判据在
+    `frontend/src/config/platformServices.js` 的 `LOCAL_TIER_READY`，
+    **admin 的档位下拉与会议面板的开关共用它**（只关一处 = 另一处仍能切进去）。
+    同理，档位与就绪状态必须摆在**录音开始之前**，不能拖到转写那一刻才暴露。
 
 ## 验证
 

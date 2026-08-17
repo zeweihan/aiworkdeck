@@ -958,6 +958,38 @@ export function getEntitlements(refresh = false) {
   }).then(unwrapEnvelope);
 }
 
+// ===================== 平台服务（外部服务的档位）=====================
+
+// 八项外部服务各自走哪一档：
+// { services: [{ service, provider, hasLocal, hasByokCredentials }],
+//   platformAvailable, accountConnected }
+//
+// provider ∈ platform | byok | local，是**后端解析后的生效值**，不是设置里存的原始值
+// （非 local-mode 下即使库里写着 platform 也回 byok，闸在 ExternalProviderResolver 一处）。
+// 界面展示当前档位一律读它，不要自己按凭证是否为空去猜。
+//
+// platformAvailable=false 表示这台机器不是个人桌面版（团队服务器 / 云端实例），
+// 平台档在界面上必须不可选并给出说明（设计决策 D5）。
+export function getPlatformServices() {
+  return request({
+    url: '/api/platform-services',
+    method: 'GET',
+  }).then(unwrapEnvelope);
+}
+
+// 切档。provider ∈ platform | byok | local；取值非法或该形态不允许时后端回 code=1 +
+// 可读 message（**不会**回 4010，那会被判成掉线并清会话）。
+export function setPlatformServiceProvider(service, provider) {
+  return request({
+    url: `/api/platform-services/${encodeURIComponent(service)}/provider`,
+    method: 'POST',
+    data: { provider },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
 // ===================== 用户认证相关 API =====================
 
 // 用户注册
@@ -2218,6 +2250,8 @@ export default {
   getAdminConfig,
   saveAdminConfig,
   getAdminUsers,
+  getPlatformServices,
+  setPlatformServiceProvider,
   // DD Files
   getDdRequests,
   createDdRequest,
