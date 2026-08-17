@@ -78,7 +78,7 @@ class SkillRegistryTest {
     @DisplayName("解析 author/author_url/version/license/credits/enabled_by_default")
     void parsesAuthorshipAndDefaultEnablementFields() throws IOException {
         writeSkill(tempDir.resolve("authored-skill"), "authored-skill", """
-                author: AI Workdeck
+                author: AI WorkDeck
                 author_url: https://www.aiworkdeck.com
                 version: 1.0.2
                 license: MIT
@@ -89,7 +89,7 @@ class SkillRegistryTest {
         SkillRegistry registry = newRegistry(tempDir, new PluginService());
         SkillDefinition skill = registry.getSkill("authored-skill").orElseThrow();
 
-        assertEquals("AI Workdeck", skill.getAuthor());
+        assertEquals("AI WorkDeck", skill.getAuthor());
         assertEquals("https://www.aiworkdeck.com", skill.getAuthorUrl());
         assertEquals("1.0.2", skill.getVersion());
         assertEquals("MIT", skill.getLicense());

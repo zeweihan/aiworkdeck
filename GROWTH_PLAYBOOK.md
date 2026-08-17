@@ -1,4 +1,4 @@
-# AI Workdeck Star Growth Playbook
+# AI WorkDeck Star Growth Playbook
 
 This playbook is for real GitHub growth only: better conversion, useful launch
 content, authentic community distribution, and targeted feedback requests. Do
@@ -17,17 +17,17 @@ Starting point: about 5 GitHub stars.
 
 Short English:
 
-> AI Workdeck is an AI-native IDE workspace for legal and document-heavy teams:
+> AI WorkDeck is an AI-native IDE workspace for legal and document-heavy teams:
 > files, document editing, agents, plugins, parsing, and audit trails in one
 > self-hostable workbench.
 
 Short Chinese:
 
-> AI Workdeck 是面向法律与文档密集型工作的 AI 原生工作台: 案件文件、文档编辑、Agent、插件、解析和操作留痕, 都在一个可私有化部署的环境里完成。
+> AI WorkDeck 是面向法律与文档密集型工作的 AI 原生工作台: 案件文件、文档编辑、Agent、插件、解析和操作留痕, 都在一个可私有化部署的环境里完成。
 
 One-line contrast:
 
-> Chatbots help with one prompt. AI Workdeck tries to own the whole work
+> Chatbots help with one prompt. AI WorkDeck tries to own the whole work
 > environment where the prompt, file, evidence, review, and final document stay
 > connected.
 
@@ -68,7 +68,7 @@ Ask 20 people for feedback, not stars. Good targets:
 Message:
 
 ```text
-我开源了 AI Workdeck 的 Community Kernel: 一个面向法律/文档工作的 AI 原生工作台。
+我开源了 AI WorkDeck 的 Community Kernel: 一个面向法律/文档工作的 AI 原生工作台。
 
 它不是普通聊天机器人, 更像法律文档工作的 VS Code: 文件树、文档编辑、Agent、插件、解析和操作留痕都在一个环境里。
 
@@ -93,9 +93,9 @@ Recommended channels:
 V2EX-style post:
 
 ```text
-标题: 我开源了一个面向法律/文档工作的 AI 原生工作台内核: AI Workdeck
+标题: 我开源了一个面向法律/文档工作的 AI 原生工作台内核: AI WorkDeck
 
-大家好, 我最近把 AI Workdeck 的 Community Kernel 开源了。
+大家好, 我最近把 AI WorkDeck 的 Community Kernel 开源了。
 
 一句话: 这是一个面向法律和文档密集型工作的 AI 原生工作台。
 我的判断是, 法律 AI 不应该只是一个悬浮在 Word 旁边的聊天框,
@@ -125,9 +125,9 @@ GitHub: https://github.com/zeweihan/aiworkdeck
 Hacker News / Reddit draft:
 
 ```text
-Show HN: AI Workdeck - an AI-native workspace kernel for legal/document workflows
+Show HN: AI WorkDeck - an AI-native workspace kernel for legal/document workflows
 
-I open-sourced the Community Kernel of AI Workdeck, an IDE-style workspace for
+I open-sourced the Community Kernel of AI WorkDeck, an IDE-style workspace for
 legal and document-heavy work.
 
 The idea: legal AI should not just be a chatbot next to Word. It should live
@@ -168,7 +168,7 @@ Required from the user:
 ## Direct Outreach Template
 
 ```text
-Hi {name}, quick ask: I just open-sourced AI Workdeck Community Kernel.
+Hi {name}, quick ask: I just open-sourced AI WorkDeck Community Kernel.
 
 It is an AI-native IDE-style workspace for legal/document-heavy workflows:
 files, document editing, agents, plugins, parsing, and audit trails in one place.

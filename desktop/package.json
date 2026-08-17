@@ -2,8 +2,8 @@
   "name": "aiworkdeck-desktop",
   "private": true,
   "version": "0.17.0",
-  "description": "AI Workdeck desktop shell (Electron)",
-  "author": "AI Workdeck contributors",
+  "description": "AI WorkDeck desktop shell (Electron)",
+  "author": "AI WorkDeck contributors",
   "main": "main/main.js",
   "scripts": {
     "clean": "node scripts/clean.js",
@@ -23,7 +23,7 @@
   },
   "build": {
     "appId": "com.aiworkdeck.desktop",
-    "productName": "AI Workdeck",
+    "productName": "AI WorkDeck",
     "directories": {
       "output": "release"
     },
@@ -108,7 +108,7 @@
       }
     },
     "dmg": {
-      "title": "AI Workdeck ${version}",
+      "title": "AI WorkDeck ${version}",
       "background": "build/background.png",
       "iconSize": 128,
       "iconTextSize": 13,

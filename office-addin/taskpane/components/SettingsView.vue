@@ -53,7 +53,7 @@
           <textarea
             v-model="token"
             rows="3"
-            placeholder="粘贴 awdt_ 设备令牌。可在 AI Workdeck 桌面版个人中心的「账号安全」中生成。"
+            placeholder="粘贴 awdt_ 设备令牌。可在 AI WorkDeck 桌面版个人中心的「账号安全」中生成。"
             spellcheck="false"
           ></textarea>
         </label>
@@ -72,7 +72,7 @@
     <section v-if="quota" class="card quota-card">
       <h2>AI 额度</h2>
       <p class="hint">
-        「AI Workdeck 云端」通道按账号计费，充值得到的 Credits 可直接用于 AI，无需另做分配。
+        「AI WorkDeck 云端」通道按账号计费，充值得到的 Credits 可直接用于 AI，无需另做分配。
       </p>
 
       <dl class="quota">

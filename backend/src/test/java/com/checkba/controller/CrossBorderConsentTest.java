@@ -19,7 +19,7 @@ import static org.mockito.Mockito.when;
 /**
  * 跨境传输的单独同意（《个人信息保护法》第三十九条）。
  *
- * 平台通道「AI Workdeck 云端」把用户送入 AI 的内容直接发往境外的 OpenRouter，
+ * 平台通道「AI WorkDeck 云端」把用户送入 AI 的内容直接发往境外的 OpenRouter，
  * 属向境外提供个人信息，必须在告知后**单独**取得同意——不能与服务条款一揽子打包，
  * 也不能预先勾选。同意点定在「把供应商切成 AWD_CLOUD」这一刻。
  *
@@ -117,7 +117,7 @@ class CrossBorderConsentTest {
     @DisplayName("拒绝文案不得命中前端的「掉线」判据，否则用户会被踢出登录态")
     void refusalMessageDoesNotLookLikeAuthError() {
         // frontend/src/services/api.js 对含这三个子串的 message 判定未登录并清会话
-        String message = "「AI Workdeck 云端」会把你送入 AI 的内容发往境外的模型服务商处理。"
+        String message = "「AI WorkDeck 云端」会把你送入 AI 的内容发往境外的模型服务商处理。"
                 + "勾选跨境传输同意后才能启用；不想让内容出境的话，可以改用本机模型或境内供应商。";
         for (String marker : new String[] {"登录", "未授权", "请先"}) {
             assertFalse(message.contains(marker), "跨境同意文案不得含「" + marker + "」");

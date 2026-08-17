@@ -13,12 +13,12 @@ class MailRouterTest {
     /** 用真网关而不是桩：选路谓词本身就是被测对象。构造 JavaMailSenderImpl 不建连接。 */
     private static DomesticMailGateway domestic(boolean enabled) {
         return new DomesticMailGateway(enabled, "smtpdm.aliyun.com", 465,
-                "optimizer@dm.aiworkdeck.com", "pw", "", "AI Workdeck");
+                "optimizer@dm.aiworkdeck.com", "pw", "", "AI WorkDeck");
     }
 
     private static GlobalMailGateway global(boolean enabled) {
         return new GlobalMailGateway(enabled, "smtp.resend.com", 465,
-                "resend", "re_x", "optimizer@send.aiworkdeck.com", "AI Workdeck");
+                "resend", "re_x", "optimizer@send.aiworkdeck.com", "AI WorkDeck");
     }
 
     private static MailRouter router(MailGateway... gateways) {
@@ -66,7 +66,7 @@ class MailRouterTest {
     @Test
     @DisplayName("Resend 未配 from 判为未配置：用户名是字面量 resend，回落会拼出非法发件人")
     void globalGatewayRequiresRealFromAddress() {
-        assertFalse(new GlobalMailGateway(true, "smtp.resend.com", 465, "resend", "re_x", "", "AI Workdeck")
+        assertFalse(new GlobalMailGateway(true, "smtp.resend.com", 465, "resend", "re_x", "", "AI WorkDeck")
                 .enabled());
         assertTrue(global(true).enabled());
     }

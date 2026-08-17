@@ -46,9 +46,10 @@ description: 侧边栏与工作台外壳领域。任务涉及左侧 rail/左栏�
 rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当前 activeFile 存 lastActiveIdsByMode[oldKey]（:3005）→ 同 key 则收/展 sidebarCollapsed（:3011），异 key 则设 leftPaneKey 并展开（:3014）→ 动态插件另在中间开 tab（openFile fileType:'plugin'，:3018）→ 恢复该模式记忆的左右 tab（:3029）→ 持久化到 uni.storage（:3055）。
 顶栏三开关都在 $nextTick 调 triggerWorkbenchResize 派发 window resize 让编辑器/iframe 重排；toggleAiPanel 打开时刷新 AI 上下文 + fetchChatHistory。
 
-## 左栏入口（frontend/src/config/leftSidebarPlugins.js，57 行）
+## 左栏入口（frontend/src/config/leftSidebarPlugins.js）
 
-固定入口：files(资源管理器→FileTree)、dd-files(尽调文件)、shareholder-meeting(股东大会)、search、easyvoice、desensitize、version(版本记录→VersionPanel，见 `.claude/agents/version-control.md`)；requiresSkill 门控入口：litigation-visual(诉讼可视化)、meeting-recorder(会议录音→MeetingRecordingPanel，skill 启用才出现在 rail；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（找不到回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。rail 齿轮对所有人可见，admin 页/接口后端 requireAdmin（用户名 admin）。
+固定入口：files(资源管理器→FileTree)、dd-files(尽调文件)、search、easyvoice(**展示名「语音合成」**——路由键仍是 `easyvoice`，那是 uni.storage 里 `leftPaneKey` 的存量值，改键要迁数据；`EasyVoice` 是早已停用的 Docker 服务代号，不再当产品名用)、desensitize、version(版本记录→VersionPanel，见 `.claude/agents/version-control.md`)；
+**shareholder-meeting(股东大会核查) 已于 2026-08-17 下线**：入口从本数组移除即等于功能隐藏，`ShareholderMeetingPanel.vue` / `api.js` 的 `/api/shareholder-meeting/*` / 后端 controller 与实体全部保留（存量案卷数据还在库里），skill 改成 `enabled_by_default: false`。注意 `SkillRegistry` 的种子化只在「第一次见到这个 id」时生效，**存量安装里它仍是启用状态**，要在插件广场手动停用。`EvalHarness` 里显式 `setEnabled(..., true)` 把它开回去——那条回放用例守的是编排契约，与业务在不在产品里无关。requiresSkill 门控入口：litigation-visual(诉讼可视化)、meeting-recorder(会议录音→MeetingRecordingPanel，skill 启用才出现在 rail；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（找不到回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。rail 齿轮对所有人可见，admin 页/接口后端 requireAdmin（用户名 admin）。
 **插件广场入口（2026-08 二改：VS Code 扩展栏形态）**：rail 广场按钮 goToPluginMarket → `toggleLeftPane('market')` 开左栏列表面板（`MarketSidebarPanel`，leftPaneKey='market'，leftPaneTitle 特判）；点列表行 → `openMarketDetail(spec)` 在中栏开详情 tab（`MarketDetailPane`，`tabType:'market-detail'`、单例、isTabVisible 常显、直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported——与浏览器 tab 同法）。独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。详见 plugin-marketplace.md。
 
 ## 协作入口（PR-E，2026-08-06）
@@ -84,7 +85,7 @@ launch（**启动页**）/ unlock / identity / login / newproject / **project-li
 **新页 pages.json 注册必须逐条显式写 `navigationStyle: custom`**：globalStyle 里没有这一项（只有 navigationBarTextStyle / TitleText / BackgroundColor / backgroundColor），漏写会得到一个系统导航栏，与全应用自绘顶栏形制冲突。
 **个人中心配套三改（已落地，实测行号）**：`userprofile.vue:324` 的 `activeTab` 默认值是 `'work_log'`、`:326` 起的 `tabs` 数组已不含 `{ key: 'projects', label: '我的项目' }`（只剩工作记录/收藏/代办/设置四项）、`onLoad`（:379）里 `$nextTick` 直接调一次 `loadActivityLogs()`（**不是删除**，:409）——工作记录 tab 是懒加载的，另一个触发点是 `switchTab`（:547）里 `key === 'work_log'` 分支（`loadActivityLogs` 定义在 :561）；默认 tab 落在懒加载 tab 上却不在 `onLoad` 里补调一次，就会得到一个默认打开却永远空白的 tab。
 **identity（本机工作区选择，2026-08-05）**：单机免登下所有请求解析为同一个「本机用户」，老安装的库里常有多个历史账号（admin 往往是空壳，真实数据在用户自己注册的账号名下）。后端 `LocalIdentityService` 按数据量解析，多个账号都有数据时不猜，`GET /api/local-identity/status` 回 needsSelection，launch 页据此分流到 identity 页；选定经 `POST /api/local-identity/select` 持久化到 SystemSetting，之后不再出现。补救入口在 admin 页「账户与用量」的「本机工作区」卡（候选 >1 才渲染）。
-**IDE 化体验对齐第二轮（2026-07-31，同分支）**：① 启动直达——login 页 `tryAutoResume()` 存储会话有效即 reLaunch 上次项目（`utils/recentProjects.js` 的 `checkba_last_project_id`），登录页只在会话失效时出现（**PR-A 去登录后这条只对浏览器访问团队服务器有效**：桌面端启动链已改为 launch 页分流，直达逻辑迁到 `launch.vue`，登录页在桌面端不再出现）；② 桌面应用菜单 `desktop/main/app-menu.js`（文件→打开文件夹 Cmd+O/打开文件/新建项目文件夹/最近打开动态子菜单；编辑菜单是 editMenu role，删了它 mac 输入框 Cmd+C/V 全灭；窗口菜单刻意无 close role——Cmd+W 留给渲染层关标签），动作经 `checkba:menu-action` 到 App.vue 全局处理器（`utils/ideOpen.js` 共用流程）；③ overview 键位 Cmd+P（`QuickOpenPanel.vue` 快速打开，document 捕获段拦键：uni input 不透传 keydown）/Cmd+W 关活跃标签，焦点在 LOWA webview 内收不到属已知边界；④ 顶栏项目名旁最近项目切换器（`.project-switcher`/`.switcher-menu`）与工作状态点（`.work-status-chip`，复用 `checkAdoptConflict` 的 /status，working/onDraft 才渲染）；⑤ 窗口标题「文件 — 项目 — AI Workdeck」（watch activeFileIdLeft/project.name）；⑥ 拖文件夹到窗口（App.vue capture 段 drop，单目录才接管，`fs.getPathForFile` preload helper）与 macOS open-file 事件（main.js `dispatchOpenPath`，窗口未就绪先存后发）都走 open-local。文件树方向键导航有意缓做（全局拦方向键与编辑器输入冲突）。
+**IDE 化体验对齐第二轮（2026-07-31，同分支）**：① 启动直达——login 页 `tryAutoResume()` 存储会话有效即 reLaunch 上次项目（`utils/recentProjects.js` 的 `checkba_last_project_id`），登录页只在会话失效时出现（**PR-A 去登录后这条只对浏览器访问团队服务器有效**：桌面端启动链已改为 launch 页分流，直达逻辑迁到 `launch.vue`，登录页在桌面端不再出现）；② 桌面应用菜单 `desktop/main/app-menu.js`（文件→打开文件夹 Cmd+O/打开文件/新建项目文件夹/最近打开动态子菜单；编辑菜单是 editMenu role，删了它 mac 输入框 Cmd+C/V 全灭；窗口菜单刻意无 close role——Cmd+W 留给渲染层关标签），动作经 `checkba:menu-action` 到 App.vue 全局处理器（`utils/ideOpen.js` 共用流程）；③ overview 键位 Cmd+P（`QuickOpenPanel.vue` 快速打开，document 捕获段拦键：uni input 不透传 keydown）/Cmd+W 关活跃标签，焦点在 LOWA webview 内收不到属已知边界；④ 顶栏项目名旁最近项目切换器（`.project-switcher`/`.switcher-menu`）与工作状态点（`.work-status-chip`，复用 `checkAdoptConflict` 的 /status，working/onDraft 才渲染）；⑤ 窗口标题「文件 — 项目 — AI WorkDeck」（watch activeFileIdLeft/project.name）；⑥ 拖文件夹到窗口（App.vue capture 段 drop，单目录才接管，`fs.getPathForFile` preload helper）与 macOS open-file 事件（main.js `dispatchOpenPath`，窗口未就绪先存后发）都走 open-local。文件树方向键导航有意缓做（全局拦方向键与编辑器输入冲突）。
 **newproject 已 IDE 化（2026-07-31）**：桌面态三动作「打开文件夹/新建项目文件夹/打开文件」走 `window.checkbaDesktop.fs.showOpenDialog` + `POST /api/projects/open-local`（同一 localRoot 重复打开复用项目并幂等重扫导入，见 `LocalProjectService`）；浏览器降级为托管空白项目（BLANK）；成功后 reLaunch 进 overview，单文件过渡版带 `openFileId` 查询参数（`fileOpenTabs.js` 的 `openPendingLocalFile`）。项目类型选择表单已删除（`config/projectTypes.js` 仅剩 `getProjectTypeLabel` 供存量项目卡片显示）。FileTree 右键新增「在访达中显示」（`reveal-file` → overview `onRevealFile` → `/local-path` 端点 + `fs.showItemInFolder` IPC）。
 
 ## 窗口外壳与菜单栏（2026-08-16）
@@ -147,12 +148,42 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
 **页面栈地雷（本领域核心机制）**：navigateTo 反复进入 project-overview 不销毁旧实例——页面栈多实例并存，每个都持有全局监听。守卫模式：活跃实例指针 `window.__checkbaActiveOverviewVm` + isActiveOverviewInstance() 判活跃、去重状态挂 window 不挂实例、只清/接管指向自己的指针（beforeUnmount/onShow/mounted 三处配合）。切换项目用 reLaunch 避免堆叠。**外壳里新增任何全局订阅必须套用此模式**（PR#148/#151）。
 **新页同样成立**：`project-home.vue` 套同一套守卫，但**必须用自己的指针名** `window.__checkbaProjectHomeVm`——复用工作台的 `__checkbaActiveOverviewVm`（:2086/:2291/:2352 登记与清理，:3444 判活跃）会让工作台的全局事件被概览页拦掉。`project-home` 的轮询纪律：只在 onLoad 与 onShow 各刷一次，不起定时器；**绝不调 `getVersionStatus` / `/version/status`**（enabled 时会一路走到 `ProjectRepoService` 跑两次 `git add "."`，工作台已有 ≥7 处触发点在喂同一份状态，概览页再打第三次是纯浪费且会与工作台争 per-project 锁）。要「最近修改」时间取 `/version/timeline` 最新一条的 when。
 
+## 左栏面板的标题与密度（2026-08-17）
+
+**左栏标题只有一个出处**：外壳的 `.sidebar-header`（`project-overview.vue`，渲染
+`leftPaneTitle`）。此前各面板还各画各的 header，于是「诉讼可视化」「会议录音」
+「股东大会核查」的标题在同一屏里出现两次，搜索面板靠把自己那份 `panel-title`
+**注释掉**躲过去，dd-files 则让外壳整个跳过它（`leftPaneKey !== 'dd-files'`）——
+四种写法并存。现在一律：**外壳出面板标题，面板自己只画分组头**。
+dd-files 那个例外已取消，它 header 里的「＋」挪进了面板内部的分组头。
+
+**密度令牌在 `App.vue` 的 `html { --awd-panel-* }`**，基准是插件广场
+`MarketSidebarPanel`（维护者点过名的形态）：`--awd-panel-pad-x:10px` /
+`--awd-panel-sec-h:26px`（分组头行高）/ `--awd-panel-row-h:28px` /
+`--awd-panel-fs-sec:11px`(配 700 字重) / `--awd-panel-fs:12px` /
+`--awd-panel-border:#E9ECEF` / `--awd-panel-accent:#1A5336` 等。
+**用 CSS 自定义属性而不是 scss 变量**：各面板的 `<style scoped>` 有的写 scss
+有的写纯 css，自定义属性两边都能用且天然穿透 scoped。已套用：SearchPanel /
+EasyVoicePane / DesensitizePane / LitigationVisualPanel / MeetingRecordingPanel /
+DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定义边距。
+
+分组头的统一形制（各面板类名前缀不同但结构一致）：
+`26px 行高 + 11px/700 标题 + 计数徽章（圆角 999px、#F1F3F5 底）+ spacer + 右侧动作`。
+
 ## CSS 体系
 
 - **外壳形态（2026-08 IDE 布局升级；配色维持原浅色体系）**：曾整体深绿化（PR#243）但**维护者明确否决深色配色、已回退**——布局件保留：26px 底部状态条 `.status-bar`（等宽字体；左=variables/favorites/clipboard 工具入口 openToolFromStatusBar()，与底部抽屉联动；右=活跃文件/分屏/录制/版本工作状态真实信号）、顶栏/侧栏图标 SVG 化（config/icons.js ICONS + leftSidebarPlugins svgPaths，双态 PNG 不再新增）、插件广场 workbench 内嵌 tab。**配色红线：外壳保持浅色（白/#F8F9FA chrome + 森林绿 #1A5336 与 mint #5BD197 点缀），不要再做深色 chrome**。uni.scss 尾部的 `$awd-*` 令牌保留备用但外壳当前未用；project-overview.scss 头部自有浅色调色板是实际用的。
 - 全局覆盖：`frontend/src/App.vue`（:15-65 只覆盖 uni-modal/uni-toast）。
 - **awd-\* 类名约定**（King IDE 品牌清零后的通用弹窗/按钮样式，PR#171）：awd-dialog/-mask/-header/-title/-body/-footer、awd-btn/-primary/-secondary/-danger、awd-field/awd-input。**没有集中定义**——在 project-overview.vue（~:10180-10300）、ChatInterface.vue（~:2869 起）、FileTree.vue 各自 scoped 重复定义；改样式要多处同步。
 - 外壳布局类：.header-tools:6904、.rail-btn:7009、.sidebar-left:7403/7905、.workbench:7455、.bottom-panel:7283/7510、.compact-mode:7478、.is-resizing:7927。
+- **编辑器标签（`.tab-item`）在 project-overview.scss 里只有一份定义了**。此前有两份：
+  靠前那份是 VS Code 式贴合标签，被靠后那份整个覆盖成死代码，实际生效的是一排
+  10px 全圆角 + 四面描边 + `min-width:100px` 的「筛选 chip」，与下方编辑器完全断开。
+  死代码那 140 行已删（`.tab-icon` 与 close 的 hover/active 配色是其中唯一还活着的
+  片段，已折进现存那份）。现在的形制：36px 满高、方角、无四面描边、右侧 1px 分隔线、
+  激活态白底 + 2px mint 顶线、12px/500 文件名、× 悬停或激活才显形。
+  **`.tab-item` 的高度写死 36px 不用 `height:100%`**：中间隔着 uni `scroll-view`
+  的内层包裹元素，那条 100% 链断了标签会塌成 0 高。
 
 ## 相关文件
 

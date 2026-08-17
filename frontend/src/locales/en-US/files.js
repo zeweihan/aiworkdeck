@@ -78,6 +78,10 @@ export default {
   // SearchPanel.vue
   searchPlaceholder: 'Search files or content...',
   filterByTag: 'Filter by Tag',
+  tagClear: 'Clear',
+  tagFilterPlaceholder: 'Filter tags…',
+  tagShowAll: 'Show all {count}',
+  tagNoMatch: 'No matching tags',
   searching: 'Searching...',
   noResults: 'No results found',
   matchesSuffix: 'matches',

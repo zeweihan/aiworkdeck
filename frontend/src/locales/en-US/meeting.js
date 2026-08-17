@@ -6,9 +6,9 @@
 //
 // The tier labels deliberately duplicate platform.js rather than share keys: there they name
 // options in a settings dropdown, here they are a status badge on the recording panel.
+// The panel title is not here: since #389 the shell's sidebar-header renders it, and its copy
+// comes from config.sidebar.meetingRecorder (the rail icon and the title must be one fact).
 export default {
-  title: 'Meeting Recording',
-
   // ---- Transcription tier and the "keep recordings on this device" toggle ----
   tierLabel: 'Transcription',
   tierPlatform: 'Platform-sourced',
@@ -18,8 +18,8 @@ export default {
   tierDescLocal: 'Recording and transcription both happen on this device, and the audio never leaves it. Expect roughly 1.5x real time (a two-hour meeting takes about an hour) and no speaker separation.',
   tierDescByok: 'Transcribed with your own Alibaba Cloud Tingwu account; the audio passes through your own OSS bucket.',
   tierDescNoPlatform: 'This deployment uses your own key. Enter the Tingwu credentials under System settings - Platform Services.',
-  tierDescNotConnected: 'Connect your AI Workdeck account and transcription works right away, with no Tingwu account of your own.',
-  tierDescPlatform: 'AI Workdeck transcribes for you and bills Credits from your account balance by duration. The audio passes through our object storage and is deleted as soon as transcription finishes, with a 24-hour sweep as a backstop.',
+  tierDescNotConnected: 'Connect your AI WorkDeck account and transcription works right away, with no Tingwu account of your own.',
+  tierDescPlatform: 'AI WorkDeck transcribes for you and bills Credits from your account balance by duration. The audio passes through our object storage and is deleted as soon as transcription finishes, with a 24-hour sweep as a backstop.',
   localSwitchLabel: 'Keep recordings on this device',
   localSwitchNoteOn: 'Audio is not uploaded and transcription runs on this device; slower than the cloud tier, with no speaker separation.',
   localSwitchNoteReady: 'Once on, audio is not uploaded and transcription runs on this device (slower than the cloud tier, with no speaker separation).',
@@ -37,7 +37,7 @@ export default {
   downloadStartFailed: 'Could not start the download. Try again later.',
 
   // ---- No transcription credentials yet (recording still works). Next step depends on tier ----
-  notConfiguredPlatform: 'Transcription is unavailable for now: recordings are still saved to project files, but cannot be turned into text. Connect your AI Workdeck account under System settings - Account & Usage to enable it.',
+  notConfiguredPlatform: 'Transcription is unavailable for now: recordings are still saved to project files, but cannot be turned into text. Connect your AI WorkDeck account under System settings - Account & Usage to enable it.',
   notConfiguredByok: 'No transcription service configured: recordings are still saved to project files, but cannot be turned into text. An administrator can enter Alibaba Cloud Tingwu credentials under System settings - Platform Services - Meeting Transcription, or switch to platform-sourced.',
 
   // ---- Recording ----
@@ -61,7 +61,8 @@ export default {
   uploadStalled: 'Upload stalled, retrying (attempt {attempt})',
 
   // ---- List and status badges ----
-  empty: 'No meeting recordings yet',
+  sectionTitle: 'Recordings',
+  empty: 'No recordings yet. Use "Start Recording" above.',
   statusRecording: 'Recording',
   statusRecorded: 'Not transcribed',
   statusTranscribing: 'Transcribing',

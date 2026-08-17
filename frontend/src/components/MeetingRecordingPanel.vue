@@ -1,10 +1,8 @@
 <template>
   <!-- Vue 3 多根节点：与 ShareholderMeetingPanel 同构 -->
 
-  <!-- Header -->
-  <view class="mr-panel-header">
-    <text class="mr-panel-title">{{ $t('meeting.title') }}</text>
-  </view>
+  <!-- 面板标题由外壳的 sidebar-header 统一出，这里不再自画一份
+       （标题文案因此走 config.sidebar.meetingRecorder，不在 meeting 命名空间里） -->
 
   <!-- 转写档位与就绪状态。**摆在录音开始之前**，不拖到转写那一刻才暴露：
        律师需要在按下录音键之前就知道这段录音会不会出本机（设计 §6.2.1）。 -->
@@ -92,7 +90,14 @@
   </view>
 
   <!-- 会议列表 -->
+  <view class="mr-sec-head">
+    <text class="mr-sec-title">{{ $t('meeting.sectionTitle') }}</text>
+    <text class="mr-sec-count">{{ meetings.length }}</text>
+  </view>
   <view class="mr-list">
+    <view v-if="!meetings.length" class="mr-list-empty">
+      <text>{{ $t('meeting.empty') }}</text>
+    </view>
     <view v-for="m in meetings" :key="m.id" class="mr-item">
       <view class="mr-item-head" @tap="toggleExpand(m)">
         <view class="mr-item-info">
@@ -202,10 +207,8 @@
         </template>
       </view>
     </view>
-
-    <view v-if="meetings.length === 0" class="mr-empty">
-      <text>{{ $t('meeting.empty') }}</text>
-    </view>
+    <!-- 空态只在列表上方那一处（.mr-list-empty）。#389 加了新的那处但漏删了这里的旧的，
+         两块的 v-if 条件相同，没有录音时同一句话会渲染两遍。 -->
   </view>
 
   <!-- 删除确认 -->
@@ -737,40 +740,63 @@ $mr-danger: #E5484D;
 $mr-border: #E5E7EB;
 $mr-muted: #6B7280;
 
-.mr-panel-header {
+/* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场）。此前这个面板在 260px
+   宽的左栏里堆了三张 12px 外边距的卡片，一屏只装得下「提示 + 一个按钮」。 */
+
+/* 分组头：与插件广场同形 */
+.mr-sec-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px 6px;
+  gap: 4px;
+  height: var(--awd-panel-sec-h);
+  padding: 0 var(--awd-panel-pad-x);
 }
 
-.mr-panel-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #1F2328;
+.mr-sec-title {
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--awd-panel-text-2);
+}
+
+.mr-sec-count {
+  font-size: 10px;
+  color: var(--awd-panel-text-3);
+  background: var(--awd-panel-hover);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 14px;
+}
+
+.mr-list-empty {
+  padding: 12px var(--awd-panel-pad-x);
+  text-align: center;
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-text-4);
+  line-height: 1.6;
 }
 
 .mr-config-hint {
-  margin: 0 12px 8px;
-  padding: 8px 10px;
+  margin: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  padding: 6px 8px;
   background: #FFF8E6;
   border: 1px solid #F2E3B3;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: var(--awd-panel-radius);
+  font-size: var(--awd-panel-fs-meta);
   color: #8A6D1D;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 /* ---- 转写档位（录音开始前就摆出来）---- */
 .mr-tier {
-  margin: 0 12px 8px;
-  padding: 10px;
+  margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
+  padding: 8px;
   border: 1px solid $mr-border;
-  border-radius: 8px;
+  border-radius: var(--awd-panel-radius);
   background: #FAFBFC;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .mr-tier-row {
@@ -830,7 +856,7 @@ $mr-muted: #6B7280;
 .mr-tier-gate {
   margin-top: 4px;
   padding: 8px;
-  border-radius: 6px;
+  border-radius: var(--awd-panel-radius);
   background: #FFF7ED;
   display: flex;
   flex-direction: column;
@@ -838,7 +864,7 @@ $mr-muted: #6B7280;
 }
 
 .mr-tier-gate-msg {
-  font-size: 11px;
+  font-size: var(--awd-panel-fs-meta);
   color: #9A3412;
   line-height: 1.5;
 }
@@ -850,25 +876,29 @@ $mr-muted: #6B7280;
   flex-wrap: wrap;
 }
 
-/* ---- 录音区 ---- */
+/* ---- 录音区 ----
+   这里刻意不跟着整体收紧：「开始录音」是这个面板唯一的主动作，把它压成
+   一行 28px 的普通按钮会让面板失去焦点。收的是它周围的边距，不是按钮本身。 */
 .mr-record-zone {
-  margin: 0 12px 10px;
-  padding: 14px 12px;
+  margin: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  padding: 10px;
   border: 1px solid $mr-border;
-  border-radius: 8px;
+  border-radius: var(--awd-panel-radius);
   background: #FAFBFC;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .mr-record-btn {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 22px;
-  border-radius: 24px;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 34px;
+  border-radius: var(--awd-panel-radius);
   background: $mr-primary;
   cursor: pointer;
 
@@ -876,22 +906,22 @@ $mr-muted: #6B7280;
 }
 
 .mr-record-dot {
-  width: 12px;
-  height: 12px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: #FFFFFF;
-  border: 3px solid rgba(255, 255, 255, 0.45);
+  border: 2px solid rgba(255, 255, 255, 0.45);
   box-sizing: content-box;
 }
 
 .mr-record-text {
   color: #FFFFFF;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
 }
 
 .mr-record-hint {
-  font-size: 11px;
+  font-size: 10px;
   color: $mr-muted;
   text-align: center;
   line-height: 1.5;
@@ -1010,25 +1040,25 @@ $mr-muted: #6B7280;
 
 /* ---- 列表 ---- */
 .mr-list {
-  padding: 0 12px 16px;
+  padding: 0 0 var(--awd-panel-gap-lg);
 }
 
+/* 一条录音一行，不再一条一张带描边的卡片：卡片在 260px 宽里只会制造
+   「边框套边框」，展开的详情才是需要视觉分区的那一层。 */
 .mr-item {
-  border: 1px solid $mr-border;
-  border-radius: 8px;
-  margin-bottom: 8px;
+  border-bottom: 1px solid #F0F1F3;
   background: #FFFFFF;
-  overflow: hidden;
 }
 
 .mr-item-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 9px 10px;
+  gap: 6px;
+  padding: 5px var(--awd-panel-pad-x);
   cursor: pointer;
 
-  &:hover { background: #F8F9FA; }
+  &:hover { background: var(--awd-panel-accent-wash); }
 }
 
 .mr-item-info {
@@ -1048,15 +1078,16 @@ $mr-muted: #6B7280;
 }
 
 .mr-item-meta {
-  font-size: 11px;
+  font-size: 10px;
   color: $mr-muted;
 }
 
 .mr-status {
   flex-shrink: 0;
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 10px;
+  font-size: 10px;
+  padding: 0 6px;
+  line-height: 15px;
+  border-radius: 999px;
   background: #F3F4F6;
   color: $mr-muted;
 
@@ -1069,10 +1100,11 @@ $mr-muted: #6B7280;
 /* ---- 详情 ---- */
 .mr-detail {
   border-top: 1px solid #F0F1F3;
-  padding: 10px;
+  padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  background: #FCFCFD;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--awd-panel-gap);
 }
 
 .mr-detail-tools {
@@ -1254,13 +1286,6 @@ $mr-muted: #6B7280;
   color: #1F2328;
   line-height: 1.6;
   word-break: break-word;
-}
-
-.mr-empty {
-  padding: 20px 0;
-  text-align: center;
-  font-size: 12px;
-  color: #9CA3AF;
 }
 
 /* ---- 删除对话框（自带 scoped 副本，awd-* 无集中定义） ---- */

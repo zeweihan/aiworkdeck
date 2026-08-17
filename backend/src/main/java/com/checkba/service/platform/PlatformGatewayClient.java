@@ -120,8 +120,8 @@ public class PlatformGatewayClient {
         if (key == null) {
             // 不发请求。发出去只会拿回 401，而 401 在桌面端会被判成凭据失效并清空权益缓存。
             throw new GatewayException(GatewayException.Kind.NOT_CONNECTED,
-                    LangText.of("尚未连接 AI Workdeck 账户，可在设置页「账户与用量」粘贴账户 Key",
-                            "No AI Workdeck account is connected. Paste your account key in Settings → Account & usage"));
+                    LangText.of("尚未连接 AI WorkDeck 账户，可在设置页「账户与用量」粘贴账户 Key",
+                            "No AI WorkDeck account is connected. Paste your account key in Settings → Account & usage"));
         }
         return key;
     }
@@ -191,13 +191,13 @@ public class PlatformGatewayClient {
 
     /**
      * 网关不可达的文案<b>必须明说这不是用户的网络问题</b>。
-     * 账户通道那句「无法连接 AI Workdeck 服务器，请检查网络后重试」会让用户去重启路由器，
+     * 账户通道那句「无法连接 AI WorkDeck 服务器，请检查网络后重试」会让用户去重启路由器，
      * 而真实原因往往是我们正在发版。
      */
     private String unreachableMessage() {
         return LangText.of(
-                "AI Workdeck 平台服务暂时不可用（不是你的网络问题），稍后重试，或在系统管理里改用自己的 Key",
-                "The AI Workdeck platform service is temporarily unavailable (not a problem with your network). "
+                "AI WorkDeck 平台服务暂时不可用（不是你的网络问题），稍后重试，或在系统管理里改用自己的 Key",
+                "The AI WorkDeck platform service is temporarily unavailable (not a problem with your network). "
                         + "Retry shortly, or switch to your own key in System settings");
     }
 

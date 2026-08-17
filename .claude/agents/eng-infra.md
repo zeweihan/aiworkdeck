@@ -92,7 +92,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   已知仍会读穿全树的是版本记录的 `git add .`（JGit 必须读内容才能存 blob），但它被
   `repoService.isInitialized` 挡着，只有开了版本记录的项目才走到。
 - **macOS 菜单栏左上角那个应用名只认 .app 包的 `CFBundleName`**，跟 `app.name`、跟菜单模板
-  第一项的 label 都无关（实测 `app.setName('AI Workdeck')` 之后菜单栏照旧写 Electron）。
+  第一项的 label 都无关（实测 `app.setName('AI WorkDeck')` 之后菜单栏照旧写 Electron）。
   打包版由 electron-builder 按 `build.productName` 写好；dev 跑的是 node_modules 里的
   Electron.app，所以要靠 `scripts/brand-dev-electron.js` 就地改名（Electron 的 dist 包是
   linker-signed adhoc，`Info.plist=not bound`，改它不破坏签名）。**做官网/README 截图前
@@ -100,6 +100,17 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 - worktree 冷启动跑双 e2e 完整配方见 v0.7.7 发版实录；worktree merge 报 stash failed 用 cherry-pick 绕。
 - 坏 pnpm node_modules 遇到过——本项目一律 npm。
 - **worktree 的 node_modules 落后于新增依赖**（如 TOTP 带来的 `qrcode`）时，vite 会推一个盖满视口的 `vite-error-overlay`，坐标点击全被它吃掉，e2e 表现成"点了没反应"的超时而非编译错误。冷启动 worktree 跑 e2e 前先 `npm install`；desktop-e2e 的点击已加命中校验，会直接报出遮挡者和它的文案。
+- **CDP 合成鼠标事件会被整个丢掉**（2026-08-17 在 desktop-e2e「新建 Word 文档」步复现三次，约 3/10）：
+  渲染器活得好好的——`page.evaluate` 照跑、`elementFromPoint` 照准、`$refs` 都在、页面栈只有一个实例——
+  但 `page.mouse.click()` 之后 pointerdown/mousedown/mouseup/click **四种事件一个都没进页面**，于是表现成
+  "点了没反应、一个写请求都没发"，还会连累后面依赖它的步骤。**排查判据**：在 `window` 捕获期录这四种
+  事件，一个都没有 = 输入通道的问题，不是界面的问题，同坐标重试没有意义（该步原本重试 3 次全废）。
+  失败现场必然带 `visibilityState: hidden`，但**隐藏本身不是原因**（实测把窗口 Cmd+H 隐藏、或最小化，
+  `vis` 同样是 hidden，点击照样送达），`page.bringToFront()` 也救不回来（Electron 下 `vis` 仍是 hidden）。
+  desktop-e2e 已就地兜底：只在"零鼠标事件"时改用页面内 `dispatchEvent(new MouseEvent('click',{bubbles:true}))`
+  ——uni 的 `@tap` 在 H5 上就绑在 click 上（uni-h5 `$nne`：`isClickEvent = evt.type === 'click'`），
+  照样走完 handleCreateWord → createFile → 后端落盘，断言强度不打折；界面真坏了是收得到事件的，糊不住真回归。
+  **其余三套 e2e（app-e2e / lowa-e2e / feedback-e2e）同样靠坐标点击，还没上这个判据**，遇到"点了没反应"先按这条排。
 - 分支保护拦 gh pr merge 时权宜 = 用户网页点 Bypass rules and merge（白名单未配成）。
 - `docs/` 在 .gitignore，入库要 `git add -f`。
 - **改跨类 `public static final String` 常量的值必须 `mvn clean test`**：这类常量在编译期被内联进

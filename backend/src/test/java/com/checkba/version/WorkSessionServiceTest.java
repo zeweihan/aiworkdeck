@@ -600,7 +600,7 @@ class WorkSessionServiceTest {
         assertEquals(1, gcCalls.get());
     }
 
-    /** AI 轮次结束落版：署名必须是 AI Workdeck，kind 是 auto。 */
+    /** AI 轮次结束落版：署名必须是 AI WorkDeck，kind 是 auto。 */
     @Test
     void commitAiRoundAttributesToAiWorkdeck() throws Exception {
         svc.onChangeSignal(7L, 1L, "韩泽伟");
@@ -609,7 +609,7 @@ class WorkSessionServiceTest {
 
         assertNotNull(sha);
         VersionEntry head = repoSvc.log(7L, "HEAD", 1).get(0);
-        assertEquals("AI Workdeck", head.authorName());
+        assertEquals("AI WorkDeck", head.authorName());
         assertEquals("auto", head.kind());
     }
 

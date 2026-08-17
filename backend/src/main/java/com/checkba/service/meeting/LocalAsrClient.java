@@ -119,8 +119,8 @@ public class LocalAsrClient {
         if (body == null) {
             return new ProbeResult(Status.SERVICE_DOWN, base, "", false,
                     LangText.of("本机转写服务没有运行。", "The on-device transcription service is not running."),
-                    LangText.of("重启 AI Workdeck 让它自动拉起；仍不行时到「系统管理 - 组件管理」查看本机转写组件。",
-                            "Restart AI Workdeck to bring it up; if it persists, check the on-device transcription component "
+                    LangText.of("重启 AI WorkDeck 让它自动拉起；仍不行时到「系统管理 - 组件管理」查看本机转写组件。",
+                            "Restart AI WorkDeck to bring it up; if it persists, check the on-device transcription component "
                                     + "under System settings - Components."));
         }
         try {
@@ -145,7 +145,7 @@ public class LocalAsrClient {
             return new ProbeResult(Status.SERVICE_DOWN, base, "", false,
                     LangText.of("本机转写服务返回了无法识别的响应。",
                             "The on-device transcription service returned an unrecognizable response."),
-                    LangText.of("重启 AI Workdeck 后重新检测。", "Restart AI Workdeck and check again."));
+                    LangText.of("重启 AI WorkDeck 后重新检测。", "Restart AI WorkDeck and check again."));
         }
     }
 

@@ -34,7 +34,7 @@ export default {
   tierDisabledNote: "We have not opened this service yet — it is not an error. "
     + 'If you need it now, expand below and use your own key.',
   holdNotice: '{credits} Credits are reserved by a transcription in progress; the final amount is settled when it finishes.',
-  tierPlatformNote: 'Sourced by AI Workdeck and billed as Credits from your account balance by usage, so you never open a vendor account yourself.',
+  tierPlatformNote: 'Sourced by AI WorkDeck and billed as Credits from your account balance by usage, so you never open a vendor account yourself.',
   tierLocalNote: 'Runs on this device. Nothing leaves the machine and no Credits are used.',
 
   // ---- The three global states ----
@@ -58,7 +58,7 @@ export default {
 
   // ---- The AI row ----
   aiRowName: 'AI Chat & Writing',
-  aiRowDesc: 'AI does not use this path: model requests go straight from this device to the provider you choose and never pass through AI Workdeck servers. Provider, model, and account balance are configured under AI Settings.',
+  aiRowDesc: 'AI does not use this path: model requests go straight from this device to the provider you choose and never pass through AI WorkDeck servers. Provider, model, and account balance are configured under AI Settings.',
   goAiSettings: 'Open AI Settings',
 
   // ---- Local tier not ready on this machine yet ----

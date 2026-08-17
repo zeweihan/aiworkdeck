@@ -17,7 +17,7 @@ public class AiModelProperties {
 
     /**
      * 模型提供商（三档，2026-08 收敛）：
-     * - AWD_CLOUD：平台通道「AI Workdeck 云端」——密钥由官网按账户 provision，
+     * - AWD_CLOUD：平台通道「AI WorkDeck 云端」——密钥由官网按账户 provision，
      *   仍走 OpenRouter，但用户不必自备 key（Spec §3）。未连接账户时不可选。
      * - OPENROUTER: OpenRouter（OpenAI 兼容），用户自备 Key
      * - OLLAMA：本地 Ollama 服务，离线/实验档，只支持 ASK 模式

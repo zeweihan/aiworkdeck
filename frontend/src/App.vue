@@ -120,7 +120,7 @@ export default {
 </script>
 
 <style>
-/* AI Workdeck Global Overrides */
+/* AI WorkDeck Global Overrides */
 /* uni.showModal Style Override (Web/H5) */
 uni-modal .uni-modal {
     border-radius: 12px;
@@ -192,6 +192,34 @@ uni-toast .uni-toast__content {
 html {
     --awd-titlebar-safe-inline-start: 0px;
     --awd-titlebar-safe-inline-end: 0px;
+}
+
+/* ---- 左栏面板密度令牌 ----
+   左栏那一列宽度只有 260px，每个面板却各写各的边距（EasyVoice 是 16px 页边距 +
+   24px 段间距 + 白卡片套白卡片，插件广场是 6-10px + 26px 分组头），并排看密度差一倍。
+   基准取插件广场（MarketSidebarPanel）那一套——它是维护者点过名的形态。
+
+   用 CSS 自定义属性而不是 scss 变量，是因为各面板的 `<style scoped>` 有的写 scss
+   有的写纯 css，自定义属性两边都能用、且天然穿透 scoped。 */
+html {
+    --awd-panel-pad-x: 10px;          /* 面板内容左右边距 */
+    --awd-panel-gap: 8px;             /* 同组元素间距 */
+    --awd-panel-gap-lg: 14px;         /* 跨组间距（不要再用 24px） */
+    --awd-panel-sec-h: 26px;          /* 分组头行高 */
+    --awd-panel-row-h: 28px;          /* 输入框/按钮等单行控件高度 */
+    --awd-panel-radius: 6px;
+    --awd-panel-fs-sec: 11px;         /* 分组头字号（配 700 字重） */
+    --awd-panel-fs: 12px;             /* 行文字号 */
+    --awd-panel-fs-meta: 11px;        /* 次要信息 */
+    --awd-panel-border: #E9ECEF;
+    --awd-panel-hover: #F1F3F5;
+    --awd-panel-text: #2C3338;
+    --awd-panel-text-2: #495057;
+    --awd-panel-text-3: #868E96;
+    --awd-panel-text-4: #ADB5BD;
+    --awd-panel-accent: #1A5336;      /* 森林绿 */
+    --awd-panel-accent-2: #5BD197;    /* mint */
+    --awd-panel-accent-wash: rgba(26, 83, 54, 0.04);
 }
 /* mac：三颗交通灯占住左上角（右缘约 70px，留 18px 呼吸） */
 html.is-mac {

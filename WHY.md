@@ -1,6 +1,6 @@
-# Why We Built AI Workdeck
+# Why We Built AI WorkDeck
 
-AI Workdeck starts from a simple observation: in legal and other
+AI WorkDeck starts from a simple observation: in legal and other
 document-heavy work, most value is produced through structured text, review,
 evidence, judgment, and collaboration. But the actual work is scattered across
 folders, Word, PDF readers, browsers, chat tools, email, spreadsheets, and
@@ -23,7 +23,7 @@ versions, evidence, comments, and review history as first-class objects.
 
 ## The Product Direction
 
-AI Workdeck is built as an IDE-style workbench for legal and document-heavy
+AI WorkDeck is built as an IDE-style workbench for legal and document-heavy
 teams:
 
 - A matter or project is the primary workspace.
@@ -50,7 +50,7 @@ inspectable, and useful to builders.
 
 ## The Long-Term View
 
-AI Workdeck aims to become infrastructure for professional document work:
+AI WorkDeck aims to become infrastructure for professional document work:
 a place where files, context, agents, plugins, review, and final deliverables
 remain connected.
 

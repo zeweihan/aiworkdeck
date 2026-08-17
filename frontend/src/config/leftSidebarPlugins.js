@@ -25,18 +25,10 @@ export const LEFT_SIDEBAR_PLUGINS = [
       { d: 'M11 18h10' }
     ]
   },
-  {
-    key: 'shareholder-meeting',
-    label: t('config.sidebar.shareholderMeeting'),
-    svgPaths: [
-      { d: 'M3 22h18' },
-      { d: 'M6 18v-7' },
-      { d: 'M10 18v-7' },
-      { d: 'M14 18v-7' },
-      { d: 'M18 18v-7' },
-      { d: 'M11.1 2.2a2 2 0 0 1 1.8 0l7.9 3.85c.47.23.3.95-.23.95H3.43c-.53 0-.7-.72-.22-.95L11.1 2.2Z' }
-    ]
-  },
+  // 股东大会核查已下线（2026-08-17，维护者决定不做了）。左栏入口移除即等于功能隐藏；
+  // ShareholderMeetingPanel.vue / api.js 的 /api/shareholder-meeting/* / 后端 controller
+  // 与实体一律保留不动（存量案卷的数据还在库里），skill 也只改成默认不启用。
+  // 想恢复的话把这一项加回来即可，不需要重写任何东西。
   {
     key: 'litigation-visual',
     label: t('config.sidebar.litigationVisual'),
@@ -75,8 +67,10 @@ export const LEFT_SIDEBAR_PLUGINS = [
     ]
   },
   {
+    // 路由键仍是 easyvoice（leftPaneKey 的持久化值，改名要动 uni.storage 里的存量），
+    // 但展示名不再叫 EasyVoice——那是早就停用的 Docker 服务代号，面板做的是语音合成。
     key: 'easyvoice',
-    label: 'EasyVoice',
+    label: t('config.sidebar.tts'),
     svgPaths: [
       { d: 'M2 10v4' },
       { d: 'M6 6v12' },

@@ -42,6 +42,15 @@ public class AutoTaggingService {
     }
 
     private void autoTagFileInScope(Long projectId, Long fileId, String storagePath, Long userId) {
+        // 一个文件只自动打一次标签。上传端点同时是编辑器自动保存的落点
+        // （FileController 的 legacy 分支），没有这道闸的话每存一次盘就再跑一次 LLM：
+        // 每轮返回 5 个措辞不同的新词，getOrCreateSystemTag 又只按精确字符串去重，
+        // 于是标签无上限累积（实测单个文件积到 338 个，搜索面板的标签墙就是这么来的），
+        // 同时每一次自动保存都白烧一次辅助模型的钱。
+        if (hasAutoTags(fileId)) {
+            log.debug("fileId={} 已有自动标签，跳过重复打标签", fileId);
+            return;
+        }
         log.info("Starting auto-tagging for fileId={}, path={}", fileId, storagePath);
         try {
             // 1. Extract text
@@ -102,6 +111,22 @@ public class AutoTaggingService {
         }
     }
     
+    /**
+     * 该文件是否已经被自动打过标签。判据是「挂着任一系统标签」——
+     * 自动标签一律由 {@code getOrCreateSystemTag} 建成 {@code isSystem=true}，
+     * 用户手工建的标签不算，所以手工打过标签的文件仍会正常走一次自动打标签。
+     */
+    private boolean hasAutoTags(Long fileId) {
+        try {
+            return fileTagService.getTagsByFileId(fileId).stream()
+                    .anyMatch(t -> Boolean.TRUE.equals(t.getIsSystem()));
+        } catch (Exception e) {
+            // 查不动就当没打过：宁可多打一次，也不要因为一次查询失败让新文件永远没有标签
+            log.warn("查询文件已有标签失败 fileId={}: {}", fileId, e.getMessage());
+            return false;
+        }
+    }
+
     /** 打标签调用的 token 记账（会话无关，conversationId 传 null）。失败绝不影响打标签。 */
     private void recordUsage(dev.langchain4j.model.output.Response<dev.langchain4j.data.message.AiMessage> response,
                             Long projectId, Long userId) {

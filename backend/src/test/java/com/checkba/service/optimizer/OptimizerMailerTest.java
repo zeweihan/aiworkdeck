@@ -96,7 +96,7 @@ class OptimizerMailerTest {
                 List.of(a), sourceRef("/data/feedback/12/voice-1.webm  (API: /api/feedback/12/attachment/3)"), "");
 
         verify(router).send(eq("me@example.com"), any(), any());
-        assertTrue(capturedSubject().startsWith("[AI Workdeck 优化者]"));
+        assertTrue(capturedSubject().startsWith("[AI WorkDeck 优化者]"));
         assertTrue(capturedSubject().contains("优化建议待定夺"));
 
         String body = capturedBody();

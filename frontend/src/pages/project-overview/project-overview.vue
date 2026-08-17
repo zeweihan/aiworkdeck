@@ -384,7 +384,7 @@
         @confirm="handleFilePickerConfirm"
       />
 
-      <!-- Invite Modal (Refactored to AI Workdeck) -->
+      <!-- Invite Modal (Refactored to AI WorkDeck) -->
       <!-- Invite Member Dialog -->
       <InviteMemberDialog
         v-model:visible="showInviteModal"
@@ -453,7 +453,12 @@
       <view class="sidebar-left" ref="sidebarLeft" :class="{ collapsed: sidebarCollapsed }" :style="{ width: sidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
         <!-- 批量菜单遮罩：用于点击空白关闭下拉（不弹中间） -->
         <view v-if="showBatchMenu" class="batch-menu-mask" @tap="closeBatchMenu"></view>
-        <view v-if="!sidebarCollapsed && leftPaneKey !== 'dd-files'" class="sidebar-header">
+        <!-- 左栏标题的唯一出处。此前各面板还各画各的 header，于是「诉讼可视化」
+             「会议录音」这类面板的标题在同一屏里出现两次，而搜索面板靠把自己那份
+             注释掉躲过去——四种写法并存。现在一律由这里出，面板自己只画分组头。
+             dd-files 曾经是个例外（它有自己的 header 带「＋」），那个按钮已经挪进
+             面板内部的分组头里，例外随之取消。 -->
+        <view v-if="!sidebarCollapsed" class="sidebar-header">
           <view class="sidebar-title-row">
             <text v-if="!fileBatchMode" class="sidebar-title">{{ leftPaneTitle }}</text>
             <view
@@ -1481,7 +1486,7 @@
       <view class="status-sep"></view>
       <view class="status-item status-brand">
         <view class="status-dot mint"></view>
-        <text>AI Workdeck</text>
+        <text>AI WorkDeck</text>
       </view>
     </view>
   </view>
@@ -2727,7 +2732,7 @@ export default {
     }
   },
   watch: {
-    // IDE 化窗口标题：「文件名 — 项目名 — AI Workdeck」（Electron 窗口标题跟随 document.title）
+    // IDE 化窗口标题：「文件名 — 项目名 — AI WorkDeck」（Electron 窗口标题跟随 document.title）
     'project.name'() { this.updateWindowTitle() },
     activeFileIdLeft() { this.updateWindowTitle(); this.pushMenuState() },
     // 菜单栏的勾选/置灰跟着这些走。编辑器与 AI 面板内部的状态走 @menu-state
@@ -2819,7 +2824,7 @@ export default {
         const parts = []
         if (active && active.name) parts.push(active.name)
         if (this.project && this.project.name) parts.push(this.project.name)
-        parts.push('AI Workdeck')
+        parts.push('AI WorkDeck')
         document.title = parts.join(' — ')
       } catch (e) { /* 标题失败不影响功能 */ }
     },
@@ -4681,7 +4686,7 @@ export default {
            ? file.name.substring(0, maxLen) + '...'
            : file.name
 
-       // Use AI Workdeck brand colors for the tag
+       // Use AI WorkDeck brand colors for the tag
        const tagHtml = `<span class="ai-tag" contenteditable="false" data-file-id="${file.id || file.fileId}" data-full-name="${file.name}" title="${file.name}" style="background: linear-gradient(135deg, #1A5336 0%, #2D7A52 100%); color: #FFFFFF; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 4px; box-shadow: 0 1px 3px rgba(26,83,54,0.2);">@${displayName}</span>&nbsp;`
 
 

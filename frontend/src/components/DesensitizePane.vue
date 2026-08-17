@@ -170,43 +170,46 @@ export default {
 </script>
 
 <style scoped>
+/* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场）。
+   原来是「灰底 + 白卡片 + 16px 内边距 + 1px 描边」三层套娃，在 260px 宽里
+   实际可用宽度只剩 196px。 */
 .desensitize-pane {
   height: 100%;
-  background-color: #f9fafb;
-  padding: 16px;
+  background-color: #fff;
   box-sizing: border-box;
 }
 
 .section {
-  margin-bottom: 24px;
+  padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
   background: #fff;
-  padding: 16px;
-  border-radius: 8px;
-  border: 1px solid #e5e7eb;
 }
 
 .section-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #374151;
-  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  height: var(--awd-panel-sec-h);
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--awd-panel-text-2);
 }
 
 .file-input-wrapper {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: var(--awd-panel-gap);
 }
 
 .path-display {
-    padding: 10px;
-    background: #f3f4f6;
-    border: 1px dashed #d1d5db;
-    border-radius: 6px;
-    font-size: 12px;
-    color: #374151;
+    padding: 6px 8px;
+    background: #F8F9FA;
+    border: 1px dashed #D1D5DB;
+    border-radius: var(--awd-panel-radius);
+    font-size: var(--awd-panel-fs);
+    color: var(--awd-panel-text);
     word-break: break-all;
-    min-height: 40px;
+    min-height: var(--awd-panel-row-h);
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     cursor: pointer;
@@ -218,17 +221,18 @@ export default {
 
 .actions-row {
     display: flex;
-    gap: 10px;
+    gap: 6px;
 }
 
 .mini-btn {
     flex: 1;
-    padding: 6px 0;
+    height: 24px;
+    line-height: 22px;
     text-align: center;
     background: #fff;
-    border: 1px solid #e5e7eb;
+    border: 1px solid var(--awd-panel-border);
     border-radius: 4px;
-    font-size: 12px;
+    font-size: var(--awd-panel-fs-meta);
     color: #4b5563;
     cursor: pointer;
     transition: all 0.2s;
@@ -241,22 +245,24 @@ export default {
 .strategies-list {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 0;
 }
 
 .strategy-item {
     display: flex;
     align-items: center;
     cursor: pointer;
-    padding: 4px 0;
+    height: 24px;
 }
+.strategy-item:hover { background: var(--awd-panel-accent-wash); }
 
 .checkbox {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
     border: 1px solid #d1d5db;
-    border-radius: 4px;
-    margin-right: 8px;
+    border-radius: 3px;
+    margin-right: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -272,21 +278,21 @@ export default {
 }
 
 .strategy-label {
-    font-size: 13px;
-    color: #1f2937;
+    font-size: var(--awd-panel-fs);
+    color: var(--awd-panel-text);
 }
 
 .action-area {
-  margin-top: 24px;
+  padding: 0 var(--awd-panel-pad-x) var(--awd-panel-gap-lg);
 }
 
 .workdeck-btn {
   display: flex;
   justify-content: center;
   align-items: center;
-  height: 40px;
-  border-radius: 6px;
-  font-size: 14px;
+  height: 32px;
+  border-radius: var(--awd-panel-radius);
+  font-size: var(--awd-panel-fs);
   font-weight: 600;
   cursor: pointer;
   border: none;
@@ -300,8 +306,9 @@ export default {
 }
 
 .info-tip {
-    margin-top: 12px;
-    font-size: 11px;
+    margin-top: 6px;
+    font-size: 10px;
+    line-height: 1.5;
     color: #6b7280;
     text-align: center;
 }

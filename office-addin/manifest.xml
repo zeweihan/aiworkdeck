@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  AI Workdeck Office 插件清单（XML add-in only 格式，开发态）。
+  AI WorkDeck Office 插件清单（XML add-in only 格式，开发态）。
   SourceLocation/图标指向本地 Vite dev server（https://localhost:3000）；
   部署到律所服务器或官方云时，把所有 localhost URL 替换为实际托管地址。
 -->
@@ -13,9 +13,9 @@
 
   <Id>5d9024e8-b355-46a1-ad19-e47aa9f12f65</Id>
   <Version>1.0.0</Version>
-  <ProviderName>AI Workdeck</ProviderName>
+  <ProviderName>AI WorkDeck</ProviderName>
   <DefaultLocale>zh-CN</DefaultLocale>
-  <DisplayName DefaultValue="AI Workdeck"/>
+  <DisplayName DefaultValue="AI WorkDeck"/>
   <Description DefaultValue="面向法律行业的 AI 工作台：在 Word/Excel/PowerPoint 任务窗格中与 AI 对话，结合当前文档与项目记忆。"/>
   <IconUrl DefaultValue="https://localhost:3000/icon-32.png"/>
   <HighResolutionIconUrl DefaultValue="https://localhost:3000/icon-80.png"/>
@@ -162,13 +162,13 @@
         <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3000/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
-        <bt:String id="GetStarted.Title" DefaultValue="AI Workdeck 已就绪"/>
-        <bt:String id="AwdGroup.Label" DefaultValue="AI Workdeck"/>
-        <bt:String id="TaskpaneButton.Label" DefaultValue="打开 AI Workdeck"/>
+        <bt:String id="GetStarted.Title" DefaultValue="AI WorkDeck 已就绪"/>
+        <bt:String id="AwdGroup.Label" DefaultValue="AI WorkDeck"/>
+        <bt:String id="TaskpaneButton.Label" DefaultValue="打开 AI WorkDeck"/>
       </bt:ShortStrings>
       <bt:LongStrings>
-        <bt:String id="GetStarted.Description" DefaultValue="在开始选项卡点击「打开 AI Workdeck」，在任务窗格中与 AI 对话。"/>
-        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="打开 AI Workdeck 任务窗格，与 AI 讨论当前文档"/>
+        <bt:String id="GetStarted.Description" DefaultValue="在开始选项卡点击「打开 AI WorkDeck」，在任务窗格中与 AI 对话。"/>
+        <bt:String id="TaskpaneButton.Tooltip" DefaultValue="打开 AI WorkDeck 任务窗格，与 AI 讨论当前文档"/>
       </bt:LongStrings>
     </Resources>
   </VersionOverrides>

@@ -248,7 +248,7 @@ class ChatModelFactoryTest {
         verify(systemSettingService, never()).set(eq("ai.activeProvider"), anyString());
     }
 
-    // ==================== 平台通道「AI Workdeck 云端」（PR-B） ====================
+    // ==================== 平台通道「AI WorkDeck 云端」（PR-B） ====================
 
     @Test
     @DisplayName("AWD_CLOUD：即便是白名单模型也走平台密钥，不能落到 BYOK 的 OpenRouter key")
@@ -270,7 +270,7 @@ class ChatModelFactoryTest {
         setDbProvider("AWD_CLOUD");
         when(platformAiChannel.apiKey()).thenThrow(new com.checkba.service.account.AccountException(
                 com.checkba.service.account.AccountException.Kind.NOT_CONNECTED,
-                "「AI Workdeck 云端」需要连接账户，请到设置页粘贴账户 Key"));
+                "「AI WorkDeck 云端」需要连接账户，请到设置页粘贴账户 Key"));
 
         var e = assertThrows(com.checkba.service.account.AccountException.class,
                 () -> factory.getChatModel("deepseek/deepseek-v4-flash"));
@@ -369,7 +369,7 @@ class ChatModelFactoryTest {
         setDbProvider("AWD_CLOUD");
         when(platformAiChannel.apiKey()).thenThrow(new com.checkba.service.account.AccountException(
                 com.checkba.service.account.AccountException.Kind.CONFLICT,
-                "本次 AI 调用未携带用户身份，「AI Workdeck 云端」无法确定额度归属"));
+                "本次 AI 调用未携带用户身份，「AI WorkDeck 云端」无法确定额度归属"));
 
         var e = assertThrows(com.checkba.service.account.AccountException.class,
                 () -> factory.getChatModel("anthropic/claude-sonnet-5"));

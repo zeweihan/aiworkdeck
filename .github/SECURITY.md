@@ -1,7 +1,7 @@
 # Security Policy
 
 ## Reporting a Vulnerability
-We take security seriously. If you discover a security vulnerability in AI Workdeck Kernel, please **DO NOT** create a public GitHub issue.
+We take security seriously. If you discover a security vulnerability in AI WorkDeck Kernel, please **DO NOT** create a public GitHub issue.
 
 Instead, please report it privately:
 

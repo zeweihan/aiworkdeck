@@ -101,7 +101,7 @@ description: 项目级版本记录领域。任务涉及版本记录/工作段（
 
 **对比方向**：两处入口方向不同，不要混淆。① `VersionNodeDetail` 的「和上一版对比」：`fileOpenTabs.js` 的 `onVersionCompareFile({path, sha})` 里 `newRef = sha`（当前打开的这个版本，「这一版」）、`oldRef = sha + '^'`（它的直接父提交，「上一版」）——**永远是「点开的版本」对「它的上一版」**，不是「点开的版本」对「当前 HEAD」。② `AdoptConflictDialog` 的「对比」（采纳冲突场景）：方向是**主线 → 稿**，即 `oldRef = mainlineTip`（基线，标签「主线上的」）、`newRef = draftTip`（增量，标签「这一稿的」）——这里没有「先后版本」的概念，两边是平行分叉，选定「主线是基线、稿是在此之上的改动」这个方向纯粹是为了跟「用主线的/用这一稿的/两份都留」三选一的措辞顺序保持一致，早期实现一度把方向搞反过（见提交历史「翻转冲突对比弹窗方向」）。`VersionCompareTab.vue` 用 `newRef` 走 `load_document`、`oldRef` 走 `compare_document` 的 `baseBytes`；`DocDiffViewer.vue` 的降级分支同样按 `oldLabel`/`newLabel` 渲染工具栏副标题（见 `openVersionTextDiffTab`）。
 
-**比较修订署名统一为「版本对比」**：`office_thread.js` 的 `compare_document` 在派发 `.uno:CompareDocuments` 前显式 `setRedlineAuthor('版本对比')`；不会泄漏成上一次操作者的真名，是因为 `execCommand()`（office_thread.js）**每次派发任何命令前都会先重设一次作者**（`p.__agent` 为真→AI Workdeck，否则→人工用户名），`compare_document` 内部的显式设置是在这个通用重设之后再覆盖一次——两层保险，不依赖调用顺序。
+**比较修订署名统一为「版本对比」**：`office_thread.js` 的 `compare_document` 在派发 `.uno:CompareDocuments` 前显式 `setRedlineAuthor('版本对比')`；不会泄漏成上一次操作者的真名，是因为 `execCommand()`（office_thread.js）**每次派发任何命令前都会先重设一次作者**（`p.__agent` 为真→AI WorkDeck，否则→人工用户名），`compare_document` 内部的显式设置是在这个通用重设之后再覆盖一次——两层保险，不依赖调用顺序。
 
 **里程碑（重要版本）**：`ProjectRepoService.tagMilestone()` 打一个**附注标签**（annotated tag），标签名固定 `refs/tags/awd/milestone/{sha 前 12 位}`，标签名字里的自由文本不放在 tag name（Git ref 名字符集受限），而是放在 **tag message** 里；`setForceUpdate(true)` 使得对同一版本重新命名 = 直接覆盖旧标签，不产生历史标签垃圾。反向查询 `listMilestones()`/`milestonesIn()` 按**完整 sha**（`walk.peel(tag).getName()`）建 map 回填到 `VersionEntry.milestone`，`VersionTimeline.vue` 据此在节点标题前置「重要版本」flag 并整个替换掉原标题。
 

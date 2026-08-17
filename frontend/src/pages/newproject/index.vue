@@ -241,7 +241,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* 品牌配色变量 - AI Workdeck Palette */
+/* 品牌配色变量 - AI WorkDeck Palette */
 $brand-primary: #1A5336; /* Forest Green */
 $brand-accent: #5BD197;  /* Mint Green */
 $brand-dark: #212629;    /* Dark BG */

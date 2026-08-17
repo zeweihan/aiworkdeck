@@ -1,4 +1,4 @@
-/* Color Config - AI Workdeck Palette */
+/* Color Config - AI WorkDeck Palette */
 $color-primary: #1A5336; // Forest Green
 $color-primary-light: #2D7A52; // Hover
 $color-primary-dark: #123A26; // Active
@@ -504,7 +504,7 @@ $bg-white: #FFFFFF;
 /* Left Rail (Activity Bar) - Match Doc Dark BG */
 .left-rail {
   width: 50px;
-  background-color: #F8F9FA; // AI Workdeck Gray-Pale (Light Mode)
+  background-color: #F8F9FA; // AI WorkDeck Gray-Pale (Light Mode)
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -573,146 +573,6 @@ $bg-white: #FFFFFF;
 
 .rail-icon {
   font-size: 20px;
-}
-
-/* ================= Tabs Bar ================= */
-.tabs-bar {
-  height: 36px;
-  background: $bg-pale; // Match sidebar/bg
-  border-bottom: 1px solid $color-border;
-  display: flex;
-  flex-shrink: 0;
-
-  /* Remove old shadow/z-index if present */
-  box-shadow: none;
-}
-
-.tabs-pane {
-  flex: 1;
-  display: flex;
-  align-items: flex-end; // Align tabs with bottom border
-  min-width: 0;
-  border-right: 1px solid transparent;
-
-  &.half-width {
-    width: 50%;
-    border-right: 1px solid $color-border;
-  }
-}
-
-.tabs-scroll {
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  height: 100%;
-}
-
-.tabs-list {
-  display: flex;
-  height: 100%;
-  align-items: flex-end; // Tabs sit on the bottom line
-  padding-left: 8px; // Slight offset
-}
-
-.tab-item {
-  height: 32px; // slightly shorter than bar
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  max-width: 180px;
-  background: transparent;
-  border-top-left-radius: 6px;
-  border-top-right-radius: 6px;
-  cursor: pointer;
-  color: $color-text-light;
-  font-size: 12px;
-  transition: all 0.2s;
-  border: 1px solid transparent;
-  border-bottom: none;
-  margin-right: 2px;
-  position: relative;
-
-  &:hover {
-    background: darken($bg-pale, 3%);
-    color: $color-text-main;
-  }
-
-  &.active {
-    background: $bg-white;
-    color: $color-primary; // Forest Green for active text
-    font-weight: 500;
-    border-color: $color-border;
-    border-bottom: 1px solid $bg-white; // Merge with content below
-    margin-bottom: -1px; // Push down to cover border
-    z-index: 10;
-
-    // Top highlight line for active tab
-    &::after {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: 2px;
-      right: 2px;
-      height: 2px;
-      background: $color-accent; // Mint Green highlight
-      border-top-left-radius: 6px;
-      border-top-right-radius: 6px;
-    }
-  }
-
-  &.tab-drag-over {
-    background: $color-accent-pale;
-  }
-}
-
-.tab-icon {
-  margin-right: 6px;
-  width: 14px;
-  height: 14px;
-  flex-shrink: 0;
-  opacity: 0.8;
-}
-
-.tab-name {
-  @include text-ellipsis;
-  flex: 1;
-}
-
-.tab-close {
-  margin-left: 8px;
-  font-size: 14px;
-  width: 16px;
-  height: 16px;
-  @include flex-center;
-  border-radius: 50%;
-  color: transparent; // Hidden by default
-
-  &:hover {
-    background: rgba(0,0,0,0.1);
-    color: $color-text-main;
-  }
-}
-
-.tab-item:hover .tab-close,
-.tab-item.active .tab-close {
-  color: $color-text-light; // Show on hover/active
-}
-
-.tabs-plus {
-  width: 32px;
-  height: 100%;
-  @include flex-center;
-  cursor: pointer;
-  color: $color-text-light;
-  transition: color 0.2s;
-
-  &:hover {
-    color: $color-primary;
-  }
-}
-
-.tabs-plus-icon {
-  font-size: 16px;
 }
 
 /* ================= Editors Grid ================= */
@@ -1770,26 +1630,26 @@ $bg-white: #FFFFFF;
   flex: 0 0 auto;
   width: 28px;
   height: 28px;
-  margin: 0 8px 0 0;
+  margin: 0 6px 0 2px;
   align-self: center;
-  border-radius: 10px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: rgba(15, 23, 42, 0.02);
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  color: $color-text-light;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .tabs-plus:hover {
-  background-color: rgba(255, 255, 255, 0.8);
-  border-color: rgba(200, 164, 93, 0.4);
+  background-color: rgba(26, 83, 54, 0.07);
+  color: $color-primary;
 }
 
 .tabs-plus-icon {
-  font-size: 16px;
-  font-weight: 800;
-  color: $color-primary;
+  font-size: 15px;
+  font-weight: 600;
+  color: inherit;
   line-height: 1;
 }
 
@@ -1803,7 +1663,7 @@ $bg-white: #FFFFFF;
   flex-direction: row;
   height: 100%;
   padding: 0;
-  align-items: center;
+  align-items: stretch; /* 标签填满整条 36px，才谈得上「贴合」 */
 }
 
 /* tabs-tools 仍可能存在旧样式：隐藏（按钮已上移至 header-tools） */
@@ -1829,31 +1689,44 @@ $bg-white: #FFFFFF;
   min-width: 72px;
 }
 
+/* 编辑器标签：IDE 形制（方角、齐边、贴着内容区），不是筛选 chip。
+   曾经这个选择器在本文件里定义过两次，靠后的那份把前面一整套 VS Code 式
+   贴合标签整个覆盖成死代码，留下的就是一排浮在工具栏上的圆角药丸。
+   现在只有这一份，改样式不必再找第二处。 */
 .tab-item {
   position: relative;
-  height: 28px;
-  padding: 0 10px;
+  /* 与 .tabs-bar 同高写死，不走 height:100%：中间隔着 uni 的 scroll-view
+     内层包裹元素，那条 100% 链断了标签会塌成 0 高。 */
+  height: 36px;
+  padding: 0 8px 0 12px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  background: rgba(15, 23, 42, 0.02);
-  border-radius: 10px;
-  margin-right: 6px;
+  gap: 6px;
+  background: transparent;
+  border-right: 1px solid rgba(18, 52, 77, 0.08);
   cursor: pointer;
-  min-width: 100px;
-  max-width: 180px;
+  max-width: 200px;
   user-select: none;
-  border: 1px solid rgba(15, 23, 42, 0.06);
-  transition: background-color 0.18s ease, border-color 0.18s ease;
+  transition: background-color 0.15s ease;
 
   &:hover {
-    border-color: rgba(200, 164, 93, 0.55);
-    background: rgba(200, 164, 93, 0.06);
+    background: rgba(26, 83, 54, 0.05);
+
+    .tab-close { color: $color-text-light; }
+  }
+
+  .tab-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    opacity: 0.75;
   }
 
   .tab-name {
     flex: 1;
-    font-size: 13px;
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1;
     color: $color-text-light;
     white-space: nowrap;
     overflow: hidden;
@@ -1861,53 +1734,61 @@ $bg-white: #FFFFFF;
   }
 
   .tab-close {
-    font-size: 16px;
-    color: #999;
+    flex-shrink: 0;
+    font-size: 14px;
+    line-height: 1;
+    color: transparent; /* 悬停/激活才显形，静态时不抢视线 */
     width: 16px;
     height: 16px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: 50%;
+    border-radius: 4px;
+    transition: background-color 0.12s ease;
 
     &:hover {
-      background: rgba(0,0,0,0.1);
-      color: #333;
+      background: rgba(18, 52, 77, 0.1);
+      color: $color-text-main;
     }
   }
 
   &.active {
-    background: rgba(18, 52, 77, 0.06);
-    border-color: rgba(18, 52, 77, 0.18);
-    box-shadow: inset 0 -2px 0 rgba($color-accent, 0.8);
+    background: $bg-white;
 
-    .tab-name { color: $color-text-main; font-weight: 600; }
+    .tab-icon { opacity: 1; color: $color-primary; }
+    .tab-name { color: $color-text-main; font-weight: 500; }
+    .tab-close { color: $color-text-light; }
+
+    /* 顶部 mint 提示线：激活态的唯一强信号，不再叠描边+内阴影 */
+    &::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: $color-accent;
+    }
   }
 }
 
 .tab-item.tab-drag-over {
-  border-color: rgba(200, 164, 93, 0.55);
-  background: rgba(200, 164, 93, 0.08);
-}
-
-.tab-item.tab-dual-open {
-  position: relative;
+  background: rgba(91, 209, 151, 0.14);
 }
 
 .tab-item.tab-dual-open::after {
   content: '';
   position: absolute;
-  right: 8px;
-  bottom: 6px;
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: rgba(37, 99, 235, 0.75);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  background: rgba(37, 99, 235, 0.55);
 }
 
 .page-project-overview.compact-mode .tab-item {
-  min-width: 88px;
-  padding: 0 10px;
+  max-width: 150px;
+  padding: 0 6px 0 10px;
 }
 
 .tabs-tools {
@@ -2646,7 +2527,7 @@ $bg-white: #FFFFFF;
   display: block;
 }
 
-/* Inline Tag Style - AI Workdeck Brand Colors */
+/* Inline Tag Style - AI WorkDeck Brand Colors */
 .ai-tag {
   display: inline-flex;
   align-items: center;
@@ -3440,7 +3321,7 @@ $bg-white: #FFFFFF;
 }
 .upload-label {
   font-size: 26rpx;
-  color: #12344D; /* AI Workdeck Dark Blue/Gray */
+  color: #12344D; /* AI WorkDeck Dark Blue/Gray */
   font-weight: 600;
   margin-bottom: 12rpx;
   display: block;
@@ -3698,7 +3579,7 @@ $bg-white: #FFFFFF;
   justify-content: center;
 }
 
-/* AI Workdeck Dialog System (Copied for project-overview.vue usage) */
+/* AI WorkDeck Dialog System (Copied for project-overview.vue usage) */
 .awd-dialog-mask {
   position: fixed;
   top: 0;
@@ -3981,7 +3862,7 @@ $bg-white: #FFFFFF;
   flex: 1; /* Allow taking space left of search */
 }
 
-/* AI Workdeck Style Tabs */
+/* AI WorkDeck Style Tabs */
 .panel-tabs.awd-style {
   background: transparent;
   padding: 0;
@@ -4082,7 +3963,7 @@ $bg-white: #FFFFFF;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  background-color: rgba(44, 51, 56, 0.9); /* AI Workdeck Gray-Dark with opacity */
+  background-color: rgba(44, 51, 56, 0.9); /* AI WorkDeck Gray-Dark with opacity */
   color: #fff;
   padding: 12px 24px;
   border-radius: 8px;

@@ -188,8 +188,8 @@ public class PlatformAiKeyService {
         }
         if (!binding.getExternalAccountId().equals(String.valueOf(accountId))) {
             throw new AccountException(AccountException.Kind.CONFLICT,
-                    LangText.of("这枚账户 Key 属于另一个 AI Workdeck 账户，与本账号的直连关系不一致",
-                            "This account key belongs to a different AI Workdeck account and does not match this account's connection"));
+                    LangText.of("这枚账户 Key 属于另一个 AI WorkDeck 账户，与本账号的直连关系不一致",
+                            "This account key belongs to a different AI WorkDeck account and does not match this account's connection"));
         }
         provision(userId, key);
     }

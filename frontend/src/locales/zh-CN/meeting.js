@@ -10,9 +10,9 @@
 // 档位那几个短标签与 platform.js 的 tier* 各写一份，不共用：那边是设置页下拉里的档位名，
 // 这边是录音面板的状态徽标——本地档在那边叫「本地」（一个下拉选项），在这边叫「本地转写」
 // （回答「这段录音怎么转」）。共用一句必然有一处读起来是错的。
+// 面板标题不在这里：#389 之后标题由外壳的 sidebar-header 统一出，文案走
+// config.sidebar.meetingRecorder（左栏图标的名字与标题必须是同一个事实）。
 export default {
-  title: '会议录音',
-
   // ---- 转写档位与「录音不出本机」 ----
   tierLabel: '转写方式',
   tierPlatform: '平台代采',
@@ -23,7 +23,7 @@ export default {
   tierDescByok: '用你自己的阿里云听悟账号转写，音频经你自己的 OSS 中转。',
   tierDescNoPlatform: '本机形态使用自备 Key，在「系统管理 - 平台服务」里填听悟凭证。',
   tierDescNotConnected: '连接官网账户后即可直接转写，不用自己开通听悟。',
-  tierDescPlatform: '由 AI Workdeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。',
+  tierDescPlatform: '由 AI WorkDeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。',
   localSwitchLabel: '录音不出本机',
   localSwitchNoteOn: '音频不上传，转写在本机完成；比云端慢，且没有说话人分离。',
   localSwitchNoteReady: '打开后音频不上传，转写在本机完成（比云端慢，且没有说话人分离）。',
@@ -64,7 +64,8 @@ export default {
   uploadStalled: '上传受阻，正在重试（第 {attempt} 次）',
 
   // ---- 列表与状态徽标 ----
-  empty: '暂无会议录音',
+  sectionTitle: '录音记录',
+  empty: '还没有录音。上面点「开始录音」。',
   statusRecording: '录音中',
   statusRecorded: '未转写',
   statusTranscribing: '转写中',

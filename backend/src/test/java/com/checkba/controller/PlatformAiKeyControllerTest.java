@@ -112,7 +112,7 @@ class PlatformAiKeyControllerTest {
     void accountExceptionBecomesBusinessEnvelope() {
         var response = controller.handleAccountException(new com.checkba.service.account.AccountException(
                 com.checkba.service.account.AccountException.Kind.CONFLICT,
-                "这枚账户 Key 属于另一个 AI Workdeck 账户，与本账号的直连关系不一致"));
+                "这枚账户 Key 属于另一个 AI WorkDeck 账户，与本账号的直连关系不一致"));
 
         Map<String, Object> body = response.getBody();
         assertNotNull(body);
