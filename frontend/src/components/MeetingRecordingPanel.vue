@@ -39,7 +39,7 @@
         </template>
         <template v-else>
           <view class="mr-btn primary" v-if="canDownloadModel" @tap="onDownloadAsrModel">
-            {{ $t('meeting.downloadModel', { size: modelSizeText }) }}
+            {{ $t('meeting.downloadModel', { size: modelSizeHint }) }}
           </view>
           <view class="mr-btn secondary" @tap="onRecheckLocalAsr">{{ $t('meeting.recheck') }}</view>
         </template>
@@ -343,9 +343,10 @@ export default {
       modelPercent: 0,
       // 桌面壳报的体积（model-manager 的 sizeHint，形如 '1.5 GB'——**不带语言**，
       // 「约 / about」归 meeting.downloadModel 这类双语串，别把它加回 descriptor 里去：
-      // 那个值同时喂给 admin 的下载/删除确认文案，中文修饰词会原样出现在英文界面上）；
-      // 空 = 还没问到，界面回落到 meeting.modelSizeDefault
-      modelSizeHint: '',
+      // 那个值同时喂给 admin 的下载/删除确认文案，中文修饰词会原样出现在英文界面上）。
+      // 初值就写死同一个中立字面量（与 EasyVoicePane 同形）：浏览器里没有 host.model
+      // 问不到值，而这个数不需要翻译，没必要为它建一个 locale 键。
+      modelSizeHint: '1.5 GB',
       // 用户点过「录音不出本机」但没成——下面那块引导只在这之后出现，
       // 平台档用户不该每次开面板都看见一块「模型没下载」
       localGateOpen: false,
@@ -404,9 +405,6 @@ export default {
     },
     modelDownloading() {
       return this.modelState === 'downloading'
-    },
-    modelSizeText() {
-      return this.modelSizeHint || this.$t('meeting.modelSizeDefault')
     },
     tierText() {
       if (this.asrProvider === 'local') return this.$t('meeting.tierLocal')
@@ -702,9 +700,12 @@ export default {
     },
     async onExport(m) {
       try {
-        const file = await exportMeetingTranscript(m.id)
-        const name = (file && file.name) || this.$t('meeting.transcriptFallbackName')
-        uni.showToast({ title: this.$t('meeting.exported', { name }), icon: 'none' })
+        // 回的是 {file, folderName}：文件夹名必须用后端给的实际名字，不能按当前语言自己拼——
+        // 它按建档时的语言二选一，存量项目里很可能是另一种（见后端 FOLDER_NAME 注释）
+        const res = await exportMeetingTranscript(m.id)
+        const name = (res && res.file && res.file.name) || this.$t('meeting.transcriptFallbackName')
+        const folder = (res && res.folderName) || ''
+        uni.showToast({ title: this.$t('meeting.exported', { name, folder }), icon: 'none' })
       } catch (e) {
         uni.showToast({ title: this.$t('meeting.exportFailed', { message: (e && e.message) || e }), icon: 'none' })
       }

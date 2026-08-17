@@ -35,6 +35,7 @@ function dirSize(root) {
 }
 
 const { pysvcPath } = require('./pysvc-runtime')
+const { t } = require('../app-language')
 
 function pyBin(resourcesPath) {
   return process.platform === 'win32'
@@ -43,13 +44,18 @@ function pyBin(resourcesPath) {
 }
 
 // 组件注册表：MinerU pipeline 模型 + Kokoro 语音模型 + 本地转写模型
+//
+// name 写成 { zh, en } 对，由 status() 用 app-language 的 t() 取值——**必须在 status() 里取，
+// 不能在这张表上取**：模块加载发生在渲染层把语言同步过来之前，那样会把语言冻死在首启猜测上。
+// 这个 name 一路出现在 admin「组件管理」列表、下载/删除确认文案里，英文界面下不能是中文。
+//
 // sizeHint 只写数值与单位、**不带任何语言**（不要写「约」）：它会被塞进
 // admin 的下载/删除确认文案与语音面板的按钮里，那些串是双语的，
 // 「约」写在这里就会原样出现在英文界面上。修饰词归各处的 i18n 串。
 const COMPONENTS = [
   {
     id: 'mineru-models',
-    name: '文档解析模型（MinerU）',
+    name: { zh: '文档解析模型（MinerU）', en: 'Document Parsing Model (MinerU)' },
     sizeHint: '3 GB',
     estBytes: 3.0 * 1024 * 1024 * 1024, // 整体进度分母（估计值，进度封顶 99% 直到进程成功退出）
     // 模型根目录（相对 dataDir）
@@ -77,7 +83,7 @@ const COMPONENTS = [
   },
   {
     id: 'kokoro-models',
-    name: '语音合成模型（Kokoro）',
+    name: { zh: '语音合成模型（Kokoro）', en: 'Speech Synthesis Model (Kokoro)' },
     sizeHint: '300 MB',
     estBytes: 300 * 1024 * 1024,
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'kokoro'),
@@ -106,7 +112,7 @@ const COMPONENTS = [
   },
   {
     id: 'asr-models',
-    name: '本地转写模型（Whisper medium）',
+    name: { zh: '本地转写模型（Whisper medium）', en: 'On-device Transcription Model (Whisper medium)' },
     sizeHint: '1.5 GB',
     estBytes: 1.5 * 1024 * 1024 * 1024,
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'asr'),
@@ -173,7 +179,8 @@ class ModelManager {
   status() {
     return COMPONENTS.map((c) => ({
       id: c.id,
-      name: c.name,
+      // 每次调用都重新取语言：切语言不重启主进程，缓存下来会一直报旧语言的名字
+      name: t(c.name),
       sizeHint: c.sizeHint,
       state: this.stateOf(c.id),
       message: this.errors.get(c.id) || null

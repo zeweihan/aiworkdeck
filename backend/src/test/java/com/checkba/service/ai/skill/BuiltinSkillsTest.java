@@ -137,6 +137,18 @@ class BuiltinSkillsTest {
         assertFalse(s.getPromptTemplate().isBlank(), "prompt.md 应有内容");
         assertTrue(s.getPromptTemplate().contains("meeting_get_transcript"),
                 "prompt 必须交代先读转写稿再写纪要");
+
+        // 英文侧：面板已双语，skill 侧缺一项就是「按钮点了产出不是纪要」
+        assertTrue(s.getLanguages().contains("en-US"),
+                "会议录音不绑法域，必须声明 en-US；缺了英文版下 SkillRouter 永远命不中它");
+        assertTrue(s.getTriggersEn().contains("meeting minutes"),
+                "MeetingRecordingService.buildMinutesKickoffPrompt 的英文开头就是它，"
+                        + "两处必须一致：" + s.getTriggersEn());
+        assertTrue(s.getPromptTemplateEn() != null
+                        && s.getPromptTemplateEn().contains("meeting_get_transcript"),
+                "prompt.en.md 应被加载且同样交代先读转写稿");
+        assertFalse(s.getOutputEn() == null || s.getOutputEn().isBlank(),
+                "output_en 缺失会让英文模式注入中文产出约定");
     }
 
     @Test
@@ -189,6 +201,36 @@ class BuiltinSkillsTest {
         assertEquals("litigation-visual",
                 enRouter.match("Please draw a case timeline of the dispute").orElseThrow().getId(),
                 "英文触发词应命中诉讼可视化");
+    }
+
+    /**
+     * 英文模式下「生成会议纪要」按钮的整条链路。
+     *
+     * <p>这里用的字面量就是 {@code MeetingRecordingService.buildMinutesKickoffPrompt} 英文分支的
+     * 开头（那边有对应的单测断言 prompt 以它开头）。两端各锁一半：那边保证发出去的是这句话，
+     * 这边保证这句话能命中本 skill。缺任一半，按钮在英文版下就是「有反应、产出不对」。
+     */
+    @Test
+    @DisplayName("英文模式：会议录音可用，面板 kick-off prompt 的英文开头能命中它")
+    void englishModeKeepsMeetingRecorderReachable() {
+        com.checkba.service.AppLanguageService en =
+                org.mockito.Mockito.mock(com.checkba.service.AppLanguageService.class);
+        org.mockito.Mockito.when(en.language()).thenReturn(com.checkba.service.AppLanguageService.EN_US);
+        org.mockito.Mockito.when(en.isEnglish()).thenReturn(true);
+
+        SkillProperties props = new SkillProperties();
+        props.setDir(SKILLS_DIR.toString());
+        SkillRegistry enRegistry = new SkillRegistry(props, null, new PluginService(), en);
+        enRegistry.init();
+        enRegistry.setEnabled("meeting-recorder", true); // 默认不安装，这里只测语言过滤
+
+        assertTrue(enRegistry.isAvailable(enRegistry.getSkill("meeting-recorder").orElseThrow()),
+                "会议录音声明了 en-US，英文版应可用");
+
+        SkillRouter enRouter = new SkillRouter(enRegistry, props, null, en);
+        assertEquals("meeting-recorder",
+                enRouter.match("Meeting minutes generation task.").orElseThrow().getId(),
+                "面板拼出的英文 kick-off prompt 必须命中会议录音 skill");
     }
 
     @Test

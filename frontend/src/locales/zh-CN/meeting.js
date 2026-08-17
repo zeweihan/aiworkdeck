@@ -33,9 +33,9 @@ export default {
   // ---- 本机转写模型（就地下载） ----
   modelDownloading: '正在下载模型 {percent}%',
   cancelDownload: '取消下载',
-  downloadModel: '下载模型（{size}）',
-  // 桌面壳会用主进程报的 sizeHint 覆盖这一句；浏览器里没有 host.model，用这个兜底
-  modelSizeDefault: '约 1.5GB',
+  // 「约」在这里、不在 {size} 里：{size} 是 model-manager 的 sizeHint（形如 '1.5 GB'，
+  // 语言中立），同一个值还要喂给 admin 的确认文案，修饰词写进那边会漏到英文界面上
+  downloadModel: '下载模型（约 {size}）',
   recheck: '重新检测',
   downloadStartFailed: '开始下载失败，稍后重试',
 
@@ -102,7 +102,9 @@ export default {
   sendingToAi: '正在交给 AI...',
   generateMinutesFailed: '生成纪要失败：{message}',
   exportTranscript: '导出转写稿',
-  exported: '已导出：{name}（见「会议录音」文件夹）',
+  // {folder} 是后端回的**实际**文件夹名，不要写死：那个文件夹按建档时的界面语言叫
+  // 「会议录音」或 Meeting Recordings，写死一个必然有一种语境下指错地方
+  exported: '已导出：{name}（见「{folder}」文件夹）',
   transcriptFallbackName: '转写稿',
   exportFailed: '导出失败：{message}',
 
