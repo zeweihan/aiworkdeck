@@ -8,6 +8,7 @@ export default {
   backToProfile: '个人中心',
   navConfig: '系统配置',
   navAi: 'AI 功能设置',
+  navPlatform: '平台服务',
   navAccount: '账户与用量',
   navComponents: '组件管理',
   navUpdates: '软件更新',
@@ -17,27 +18,33 @@ export default {
   navFeedback: '用户反馈',
   navPlugins: '插件广场',
 
-  // 外部服务
-  externalTitle: '外部服务供应商',
-  externalSubtitle: '配置 OpenRouter、企查查、Tushare 等外部服务的接入参数',
+  // 外部服务（只剩 OpenRouter；其余七家的凭证在「平台服务」分区各自的折叠区里）
+  externalTitle: 'AI 供应商接入参数',
+  externalSubtitle: 'OpenRouter 的 Key 与地址。它属于 AI 那条通路：请求由本机直连供应商，不经过 AI Workdeck 的服务器',
+  externalMovedNote: '会议录音转写、图片文字识别、联网搜索、语音合成、企查查、Tushare、北大法宝的凭证已移到左侧「平台服务」，在各项的「使用自己的 Key（高级）」里填。',
   openRouterKeyPlaceholder: '请输入 OpenRouter API Key',
   apiBaseUrlLabel: 'API 地址',
-  providerQichacha: '企查查',
   enterKeyPlaceholder: '请输入 key',
   enterSecretPlaceholder: '请输入 secret',
   enterTokenPlaceholder: '请输入 Token',
-  providerAliyunOcr: '阿里云 OCR',
   ocrKeyIdPlaceholder: '请输入 AccessKey ID',
   ocrKeySecretPlaceholder: '请输入 AccessKey Secret（将保存到系统配置）',
   ocrEndpointPlaceholder: '例如：ocr-api.cn-hangzhou.aliyuncs.com',
   ocrRegionPlaceholder: '例如：cn-hangzhou',
   publicBaseUrlLabel: '公网 Base URL',
   ocrPublicBaseUrlPlaceholder: '例如：https://你的域名（用于 /api/ocr/temp 供阿里云拉图）',
-  providerPkulaw: '北大法宝 (PKULam)',
   pkulawTokenPlaceholder: '请输入 PKULaw Access Token',
-  providerBocha: '博查搜索 (Bocha AI)',
   bochaKeyPlaceholder: 'AI 助手「网络搜索」所需，bochaai.com 申请',
+  tingwuKeyIdPlaceholder: '阿里云 RAM AccessKeyId（需听悟与 OSS 权限）',
+  tingwuKeySecretPlaceholder: '阿里云 RAM AccessKeySecret',
+  tingwuAppKeyLabel: '听悟 AppKey',
+  tingwuAppKeyPlaceholder: '通义听悟控制台创建项目后获得',
+  tingwuBucketPlaceholder: '私有 bucket 名（音频中转，转写完即删）',
+  tingwuEndpointPlaceholder: '如 oss-cn-beijing.aliyuncs.com',
   saveConfigButton: '保存配置',
+
+  // 平台服务
+  platformSubtitle: '每项外部服务由谁出凭证、由谁付钱。默认由 AI Workdeck 统一采购，按用量折算 Credits 从账户余额扣；也可以逐项改回自己的 Key 或本地引擎',
 
   // AI 服务配置
   aiSectionTitle: 'AI 服务配置',

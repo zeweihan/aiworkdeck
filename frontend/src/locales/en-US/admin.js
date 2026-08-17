@@ -8,6 +8,7 @@ export default {
   backToProfile: 'Profile',
   navConfig: 'System Configuration',
   navAi: 'AI Settings',
+  navPlatform: 'Platform Services',
   navAccount: 'Account & Usage',
   navComponents: 'Components',
   navUpdates: 'Software Update',
@@ -17,27 +18,33 @@ export default {
   navFeedback: 'User Feedback',
   navPlugins: 'Plugin Marketplace',
 
-  // External services
-  externalTitle: 'External Service Providers',
-  externalSubtitle: 'Configure access credentials for external services such as OpenRouter, Qichacha, and Tushare',
+  // External services (only OpenRouter is left here; the other seven live under Platform Services)
+  externalTitle: 'AI Provider Credentials',
+  externalSubtitle: 'OpenRouter key and address. This belongs to the AI path: requests go straight from this device to the provider and never pass through AI Workdeck servers',
+  externalMovedNote: 'Credentials for meeting transcription, image text recognition, web search, speech synthesis, Qichacha, Tushare, and PKULaw have moved to Platform Services on the left; enter them under each service\'s "Use your own key (advanced)".',
   openRouterKeyPlaceholder: 'Enter your OpenRouter API Key',
   apiBaseUrlLabel: 'API Base URL',
-  providerQichacha: 'Qichacha',
   enterKeyPlaceholder: 'Enter key',
   enterSecretPlaceholder: 'Enter secret',
   enterTokenPlaceholder: 'Enter token',
-  providerAliyunOcr: 'Alibaba Cloud OCR',
   ocrKeyIdPlaceholder: 'Enter AccessKey ID',
   ocrKeySecretPlaceholder: 'Enter AccessKey Secret (saved to system settings)',
   ocrEndpointPlaceholder: 'e.g. ocr-api.cn-hangzhou.aliyuncs.com',
   ocrRegionPlaceholder: 'e.g. cn-hangzhou',
   publicBaseUrlLabel: 'Public Base URL',
   ocrPublicBaseUrlPlaceholder: 'e.g. https://your-domain (used by /api/ocr/temp so Alibaba Cloud can fetch images)',
-  providerPkulaw: 'PKULaw',
   pkulawTokenPlaceholder: 'Enter PKULaw Access Token',
-  providerBocha: 'Bocha Search (Bocha AI)',
   bochaKeyPlaceholder: 'Required by the AI assistant Web Search tool; apply at bochaai.com',
+  tingwuKeyIdPlaceholder: 'Alibaba Cloud RAM AccessKeyId (needs Tingwu and OSS permissions)',
+  tingwuKeySecretPlaceholder: 'Alibaba Cloud RAM AccessKeySecret',
+  tingwuAppKeyLabel: 'Tingwu AppKey',
+  tingwuAppKeyPlaceholder: 'Obtained after creating a project in the Tingwu console',
+  tingwuBucketPlaceholder: 'Private bucket name (audio relay, deleted once transcribed)',
+  tingwuEndpointPlaceholder: 'e.g. oss-cn-beijing.aliyuncs.com',
   saveConfigButton: 'Save Settings',
+
+  // Platform services
+  platformSubtitle: 'Who supplies the credentials and who pays, for each external service. By default AI Workdeck sources them and bills Credits from your account balance by usage; each one can be switched back to your own key or a local engine',
 
   // AI service settings
   aiSectionTitle: 'AI Service Settings',

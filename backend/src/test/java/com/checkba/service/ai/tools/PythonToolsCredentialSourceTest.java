@@ -37,7 +37,10 @@ class PythonToolsCredentialSourceTest {
             String key = inv.getArgument(0);
             return rows.containsKey(key) ? rows.get(key) : inv.getArgument(1);
         });
-        PythonTools tools = new PythonTools(null, null, settings);
+        // 档位解析恒回 byok：本类验的是**取值来源**（库优先），与档位过滤是两件事。
+        com.checkba.service.platform.ExternalProviderResolver resolver =
+                new com.checkba.service.platform.ExternalProviderResolver(settings, true);
+        PythonTools tools = new PythonTools(null, null, settings, resolver);
         ReflectionTestUtils.setField(tools, "tushareToken", ymlTushareToken);
         ReflectionTestUtils.setField(tools, "qichachaKey", ymlQichachaKey);
         ReflectionTestUtils.setField(tools, "qichachaSecret", ymlQichachaSecret);

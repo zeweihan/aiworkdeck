@@ -112,11 +112,15 @@ public class ExternalProviderBackfill {
      * 判定一个没写过档位的服务该落哪一档：已有非空 BYOK 凭证 → byok
      * （<b>宁可保守</b>，切错方向会花用户的钱）；都没有 → platform。
      *
-     * <p>曾经还有一步「先看档位自身的 yml/env 默认值」，那一步只为 TTS 存在
-     * （打包态注入 {@code EXTERNAL_TTS_PROVIDER=local}）。语音合成移除云端档之后
-     * 不再有服务需要它，连同那个注入一起删掉了。<b>将来若有服务再引入 env 级档位默认值，
-     * 这一步要连同它一起加回来</b>——否则会重演当年那次静默回归：
-     * 按凭证推断成 platform，本地引擎当场失效。
+     * <p>曾经还有一步「先看档位自身的 yml/env 默认值，且<b>只有 LOCAL 算显式偏好</b>」，
+     * 那一步只为 TTS 存在（打包态注入 {@code EXTERNAL_TTS_PROVIDER=local}）。
+     * 语音合成移除云端档之后不再有服务需要它，连同那个注入一起删掉了。
+     *
+     * <p><b>将来若有服务再引入 env 级档位默认值，这一步要连同它的两条教训一起加回来</b>：
+     * ① 不加这一步，打包态注入的 local 会被凭证推断盖成 platform，本地引擎当场失效；
+     * ② 加了也只能认 LOCAL——`${EXTERNAL_TTS_PROVIDER:elevenlabs}` 里那个 elevenlabs 是
+     * 历史默认值而非任何人做过的选择，把它当偏好会让每一台全新安装都落到 byok，
+     * 而用户根本没有那把 Key，零配置目标当场落空。
      */
     private ExternalServiceProvider decide(ExternalServiceProvider.Descriptor d) {
         return hasByokCredentials(d) ? ExternalServiceProvider.BYOK : ExternalServiceProvider.PLATFORM;

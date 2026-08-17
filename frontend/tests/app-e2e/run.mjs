@@ -317,6 +317,16 @@ try {
     if (!page.url().includes('pages/wizard/wizard')) return // 已初始化后端：此腿天然不出现
     const t = await textOf()
     if (t.includes('admin') && t.includes('123')) throw new Error('wizard 页仍含 admin/123 提示')
+
+    // P5 配置面收敛：步骤 2 从「OCR / 语音 / 企业数据」三组共 9 个输入框，换成
+    // 「连接账户 + 平台服务总览」，并且默认展开（这一段的全部意义就是让用户看见
+    // 「其余七项不用你配」，收起来等于没做）。
+    // 钉死两件事：新形态在、旧的凭证字段不在——把 23 个字段搬回首启页是本批的核心回归。
+    if (!t.includes('平台服务')) throw new Error('wizard 步骤 2 未渲染「平台服务」总览')
+    for (const gone of ['AccessKey', '企查查 Key', 'Tushare Token', '北大法宝 Token']) {
+      if (t.includes(gone)) throw new Error('wizard 页仍含已撤走的第三方凭证字段：' + gone)
+    }
+
     // API 置初始化（与向导 UI 等价的后端出口；向导 UI 自身的交互不在本套件覆盖面）
     // 供应商必须是收敛后的三档之一（AWD_CLOUD / OPENROUTER / OLLAMA）：
     // 已下线的 gemini 现在会被 toSettingsUpdates 的枚举校验打成 400。

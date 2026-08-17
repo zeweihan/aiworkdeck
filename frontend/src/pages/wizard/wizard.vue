@@ -130,49 +130,67 @@
         </view>
       </view>
 
-      <!-- Step 2: advanced (collapsed) -->
+      <!-- Step 2: 平台服务总览。
+           改造前这里是 OCR / 语音 / 企业数据三组共 9 个输入框，全部撤走——首次开机就被要求
+           去 8 家供应商开账号填 23 个字段，没有律师会去做，结果是绝大多数功能对绝大多数人
+           根本不存在。**不是净删除**：这些服务一项没少，只是默认由我们统一代采、按用量折算
+           Credits 从同一个账户余额扣；BYOK 通道原样保留，挪进「系统管理 → 平台服务」的
+           「使用自己的 Key（高级）」折叠区（自建团队服务器与自有订阅的律所都还要用它）。 -->
       <view class="section">
-        <view class="section-title collapsible" @tap="showAdvanced = !showAdvanced">
+        <view class="section-title collapsible" @tap="showServices = !showServices">
           <text class="step-badge">2</text>
           <text class="title-text">{{ $t('onboarding.wizard.step2Title') }}</text>
           <text class="optional-tag">{{ $t('onboarding.wizard.optional') }}</text>
-          <text class="collapse-arrow">{{ showAdvanced ? $t('onboarding.wizard.collapse') : $t('onboarding.wizard.expand') }}</text>
+          <text class="collapse-arrow">{{ showServices ? $t('onboarding.wizard.collapse') : $t('onboarding.wizard.expand') }}</text>
         </view>
-        <view v-if="showAdvanced" class="advanced-body">
-          <view class="adv-group">
-            <text class="adv-group-title">{{ $t('onboarding.wizard.ocrGroup') }}</text>
-            <view class="form-grid">
-              <view class="form-item">
-                <text class="form-label">AccessKey ID</text>
-                <input class="text-input" v-model="form.external.aliyunOcr.accessKeyId" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
+        <view v-if="showServices" class="advanced-body">
+          <text class="section-hint">{{ $t('onboarding.wizard.step2Intro') }}</text>
+
+          <text v-if="servicesError" class="svc-banner svc-banner-warn">{{ servicesError }}</text>
+          <text
+            v-else-if="!isDesktop || (servicesLoaded && !platformState.platformAvailable)"
+            class="svc-banner"
+          >{{ $t('platform.serverModeBody') }}</text>
+
+          <view v-if="serviceRows.length" class="svc-list">
+            <view v-for="row in serviceRows" :key="row.key" class="svc-row">
+              <view class="svc-row-main">
+                <text class="svc-name">{{ row.name }}</text>
+                <text class="svc-desc">{{ row.desc }}</text>
               </view>
-              <view class="form-item">
-                <text class="form-label">AccessKey Secret</text>
-                <input class="text-input" :password="true" v-model="form.external.aliyunOcr.accessKeySecret" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
-              </view>
+              <text class="svc-tier" :class="row.tierClass">{{ row.tierLabel }}</text>
             </view>
           </view>
-          <view class="adv-group">
-            <text class="adv-group-title">{{ $t('onboarding.wizard.dataGroup') }}</text>
-            <view class="form-grid">
-              <view class="form-item">
-                <text class="form-label">{{ $t('onboarding.wizard.qichachaKey') }}</text>
-                <input class="text-input" v-model="form.external.qichacha.key" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
+
+          <!-- 未连账户时就地给连接入口：向导里每条「下一步」都必须能在向导里做完（地雷 15）。
+               但这不是必答题——handleSubmit 不因为没连账户拦人，用户可以先跳过，
+               进产品后在「系统管理 → 平台服务」再连。 -->
+          <template v-if="servicesNeedAccount">
+            <text v-if="step1ConnectVisible" class="account-line">
+              {{ $t('onboarding.wizard.servicesConnectAbove') }}
+            </text>
+            <view v-else class="provider-account svc-connect">
+              <text class="account-line">{{ $t('onboarding.wizard.servicesNeedAccount') }}</text>
+              <view class="account-actions">
+                <text class="account-link" @tap="openAccountSite">{{ $t('onboarding.wizard.goGetKey') }}</text>
               </view>
-              <view class="form-item">
-                <text class="form-label">{{ $t('onboarding.wizard.qichachaSecret') }}</text>
-                <input class="text-input" :password="true" v-model="form.external.qichacha.secret" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
-              </view>
-              <view class="form-item">
-                <text class="form-label">Tushare Token</text>
-                <input class="text-input" :password="true" v-model="form.external.tushare.token" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
-              </view>
-              <view class="form-item">
-                <text class="form-label">{{ $t('onboarding.wizard.pkulawToken') }}</text>
-                <input class="text-input" :password="true" v-model="form.external.pkulaw.token" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
-              </view>
+              <input
+                class="text-input"
+                v-model="accountKey"
+                :placeholder="$t('onboarding.wizard.accountKeyPlaceholder')"
+              />
+              <button class="account-btn" :disabled="connectingAccount" @tap="handleConnectAccount">
+                {{ connectingAccount ? $t('onboarding.wizard.connecting') : $t('onboarding.wizard.connectAccount') }}
+              </button>
+              <text v-if="accountError" class="account-error">{{ accountError }}</text>
             </view>
-          </view>
+          </template>
+          <text
+            v-else-if="servicesLoaded && platformState.accountConnected"
+            class="account-line account-ok"
+          >{{ $t('onboarding.wizard.servicesReady') }}</text>
+
+          <text class="section-hint svc-foot">{{ $t('onboarding.wizard.servicesAdvancedHint') }}</text>
         </view>
       </view>
 
@@ -195,10 +213,12 @@ import {
   getAccountUsage,
   connectAccount,
   probeOllama,
+  getPlatformServices,
 } from '@/services/api.js'
 import { refreshEntitlements } from '@/composables/useEntitlement.js'
 import { isDesktopHost } from '@/services/host.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
+import { platformServiceMeta, sortPlatformServices } from '@/config/platformServices.js'
 
 // 官网账户页：生成账户 Key、充值都在这里（与 admin 页同一地址）。Credits 重构后没有「分配额度」这一步了
 const ACCOUNT_SITE_URL = 'https://www.aiworkdeck.com/zh/account'
@@ -208,8 +228,15 @@ export default {
   data() {
     return {
       submitting: false,
-      showAdvanced: false,
+      // 默认展开：这一段的全部意义就是让用户**看见**「其余七项服务不用你配」。
+      // 收起来就等于没做——他仍然以为要自己去开一堆账号。
+      showServices: true,
       isDesktop: isDesktopHost(),
+      // 七项外部服务的档位快照（GET /api/platform-services）。
+      // provider 一律读接口给的生效值，不自己按凭证是否为空去猜。
+      platformState: { services: [], platformAvailable: false, accountConnected: false },
+      servicesLoaded: false,
+      servicesError: '',
       // 平台通道「AI Workdeck 云端」的两个前置条件，与 admin 页同一判据：
       // 已连接账户（本地读盘）+ 账户有 Credits（用量接口的 creditsCents）。
       platformAiAvailable: false,
@@ -268,12 +295,6 @@ export default {
           // 会到发第一条消息才收到 Connection refused。必须让用户显式选一个。
           activeProvider: '',
         },
-        external: {
-          aliyunOcr: { accessKeyId: '', accessKeySecret: '' },
-          qichacha: { key: '', secret: '' },
-          tushare: { token: '' },
-          pkulaw: { token: '' },
-        },
       },
     }
   },
@@ -299,11 +320,51 @@ export default {
     accountLabel() {
       return this.accountName ? this.$t('onboarding.wizard.accountLabel', { name: this.accountName }) : ''
     },
+    // 步骤 2 的服务状态行。档位标签**只由接口的 provider 决定**，
+    // 「platform 档但还没连账户」单独成一态——那不是故障，是新用户的必经状态（设计 §7.1）。
+    serviceRows() {
+      const connected = this.platformState.accountConnected
+      return sortPlatformServices(this.platformState.services).map((s) => {
+        const meta = platformServiceMeta(s.service)
+        let tierLabel = this.$t('platform.tierPlatform')
+        let tierClass = 'tier-platform'
+        if (s.provider === 'local') {
+          tierLabel = this.$t('platform.tierLocal')
+          tierClass = 'tier-local'
+        } else if (s.provider === 'byok') {
+          tierLabel = this.$t('platform.tierByok')
+          tierClass = 'tier-byok'
+        } else if (!connected) {
+          tierLabel = this.$t('platform.tierNeedsAccount')
+          tierClass = 'tier-need'
+        }
+        return {
+          key: s.service,
+          name: meta.nameKey ? this.$t(meta.nameKey) : s.service,
+          desc: meta.descKey ? this.$t(meta.descKey) : '',
+          tierLabel,
+          tierClass,
+        }
+      })
+    },
+    // 有服务停在 platform 档却还没连账户 → 步骤 2 里需要一个连接入口
+    servicesNeedAccount() {
+      if (!this.servicesLoaded || !this.platformState.platformAvailable) return false
+      if (this.platformState.accountConnected) return false
+      return (this.platformState.services || []).some((s) => s.provider === 'platform')
+    },
+    // 步骤 1 选了「AI Workdeck 云端」且尚未连接时，那里已经有一个连接块了。
+    // 两块同时渲染会得到两个绑同一个 v-model 的输入框（互相镜像，看着像 bug），
+    // 所以步骤 2 这时改成一句指路。
+    step1ConnectVisible() {
+      return this.isDesktop && this.form.ai.activeProvider === 'AWD_CLOUD' && !this.platformAiAvailable
+    },
   },
   onLoad() {
     this.checkStatus()
     if (this.isDesktop) {
       this.loadPlatformAi()
+      this.loadPlatformServices()
     }
   },
   methods: {
@@ -334,6 +395,23 @@ export default {
       }
       if (!this.platformNeedsAllocation && !this.form.ai.activeProvider) {
         this.form.ai.activeProvider = 'AWD_CLOUD'
+      }
+    },
+    // 七项外部服务的档位快照。读失败时说清是「没读到状态」而不是「服务不可用」，
+    // 并且**不拦提交**——这一段是告知，不是必答题。
+    async loadPlatformServices() {
+      try {
+        const s = (await getPlatformServices()) || {}
+        this.platformState = {
+          services: Array.isArray(s.services) ? s.services : [],
+          platformAvailable: !!s.platformAvailable,
+          accountConnected: !!s.accountConnected,
+        }
+        this.servicesError = ''
+      } catch (e) {
+        this.servicesError = (e && e.message) || this.$t('platform.loadFailed')
+      } finally {
+        this.servicesLoaded = true
       }
     },
     pickProvider(opt) {
@@ -387,6 +465,9 @@ export default {
         await connectAccount(key)
         this.accountKey = ''
         await this.loadPlatformAi()
+        // 平台服务的可用性同样随账户走：连上之后步骤 2 那七行要立刻从
+        // 「需要连接账户」翻成「平台代采」，否则用户不知道自己刚才做的事生效了没有
+        await this.loadPlatformServices()
         // 已购功能解锁随账户走，连接后必须让权益缓存失效重取
         await refreshEntitlements(true)
         uni.showToast({ title: this.$t('onboarding.wizard.accountConnectedToast'), icon: 'none' })
@@ -403,6 +484,7 @@ export default {
       this.recheckingAccount = true
       try {
         await this.loadPlatformAi()
+        await this.loadPlatformServices()
         if (this.platformNeedsAllocation) {
           this.accountError = this.$t('onboarding.wizard.creditsNotFoundYet')
         }
@@ -431,23 +513,11 @@ export default {
       }
       const external = {}
 
+      // 向导只写 AI 那一档的 Key。其余七家的 BYOK 凭证不在这里出现了——
+      // 它们挪进「系统管理 → 平台服务」的「使用自己的 Key（高级）」，
+      // 向导里带一份等于又把 23 个字段搬回首启页。
       if (provider === 'OPENROUTER' && trim(this.apiKeys.OPENROUTER)) {
         external.openRouter = { apiKey: trim(this.apiKeys.OPENROUTER) }
-      }
-
-      const ocr = this.form.external.aliyunOcr
-      if (trim(ocr.accessKeyId) || trim(ocr.accessKeySecret)) {
-        external.aliyunOcr = { accessKeyId: trim(ocr.accessKeyId), accessKeySecret: trim(ocr.accessKeySecret) }
-      }
-      const qcc = this.form.external.qichacha
-      if (trim(qcc.key) || trim(qcc.secret)) {
-        external.qichacha = { key: trim(qcc.key), secret: trim(qcc.secret) }
-      }
-      if (trim(this.form.external.tushare.token)) {
-        external.tushare = { token: trim(this.form.external.tushare.token) }
-      }
-      if (trim(this.form.external.pkulaw.token)) {
-        external.pkulaw = { token: trim(this.form.external.pkulaw.token) }
       }
 
       if (Object.keys(external).length > 0) {
@@ -897,23 +967,6 @@ export default {
   line-height: 1.7;
 }
 
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px 14px;
-}
-
-.form-item {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.form-label {
-  font-size: 12px;
-  color: #475569;
-}
-
 .text-input {
   height: 36px;
   padding: 0 12px;
@@ -924,16 +977,97 @@ export default {
   box-sizing: border-box;
 }
 
-.adv-group {
-  margin-bottom: 14px;
+/* 步骤 2：平台服务状态列表。单位与配色跟随本页（px + slate 系）。 */
+.svc-banner {
+  display: block;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px dashed rgba(148, 163, 184, 0.4);
+  font-size: 12px;
+  color: #64748b;
+  line-height: 1.7;
 }
 
-.adv-group-title {
-  display: block;
+.svc-banner-warn {
+  color: #b45309;
+  border-color: rgba(180, 83, 9, 0.35);
+}
+
+.svc-list {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.svc-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.svc-row:last-child {
+  border-bottom: none;
+}
+
+.svc-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.svc-name {
   font-size: 13px;
-  font-weight: 600;
-  color: #334155;
-  margin-bottom: 8px;
+  color: #0f172a;
+}
+
+.svc-desc {
+  font-size: 12px;
+  color: #94a3b8;
+  line-height: 1.5;
+}
+
+.svc-tier {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+
+.tier-platform {
+  color: #166534;
+  background: #dcfce7;
+}
+
+.tier-byok {
+  color: #475569;
+  background: #f1f5f9;
+}
+
+.tier-local {
+  color: #1d4ed8;
+  background: #dbeafe;
+}
+
+.tier-need {
+  color: #9a3412;
+  background: #ffedd5;
+}
+
+.svc-connect {
+  margin-top: 12px;
+}
+
+.svc-foot {
+  margin-top: 10px;
+  margin-bottom: 0;
 }
 
 .footer {
@@ -967,10 +1101,6 @@ export default {
 @media (max-width: 560px) {
   .wizard-card {
     padding: 24px 18px;
-  }
-
-  .form-grid {
-    grid-template-columns: 1fr;
   }
 }
 </style>

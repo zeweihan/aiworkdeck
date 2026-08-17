@@ -6,9 +6,34 @@
     <text class="mr-panel-title">会议录音</text>
   </view>
 
-  <!-- 未配置转写凭证的提示（录音仍可用） -->
+  <!-- 转写档位与就绪状态。**摆在录音开始之前**，不拖到转写那一刻才暴露：
+       律师需要在按下录音键之前就知道这段录音会不会出本机（设计 §6.2.1）。 -->
+  <view class="mr-tier" v-if="tierKnown">
+    <view class="mr-tier-row">
+      <text class="mr-tier-label">转写方式</text>
+      <text class="mr-tier-value" :class="tierClass">{{ tierText }}</text>
+    </view>
+    <text class="mr-tier-desc">{{ tierDesc }}</text>
+    <!-- 「录音不出本机」。本地转写引擎在后续版本才随包发出，在那之前这个开关是灰的：
+         做成能打开、录完两小时才发现转不了的样子，用户只剩「放弃这份录音」或
+         「关掉开关传上云」两条路，后者与他打开开关的目的正好相反。 -->
+    <view class="mr-tier-row mr-tier-switch">
+      <view class="mr-tier-switch-info">
+        <text class="mr-tier-label">录音不出本机</text>
+        <text class="mr-tier-desc">{{ localSwitchNote }}</text>
+      </view>
+      <AwdSwitch
+        :checked="asrProvider === 'local'"
+        :disabled="!localAsrUsable || tierBusy"
+        @change="onToggleLocalAsr"
+      />
+    </view>
+  </view>
+
+  <!-- 未配置转写凭证的提示（录音仍可用）。下一步按档位分：
+       平台代采档缺的是账户，自备 Key 档缺的才是那五个阿里云凭证。 -->
   <view class="mr-config-hint" v-if="configured === false">
-    <text>未配置转写服务：录音会保存到项目文件，但不能转文字。请管理员在 设置 - 会议转写 填写阿里云听悟凭证。</text>
+    <text>{{ notConfiguredHint }}</text>
   </view>
 
   <!-- 录音区：开会点一下就开录，录前零表单 -->
@@ -183,18 +208,22 @@
 import {
   getMeetingRecordings, getMeetingRecording, transcribeMeetingRecording,
   updateMeetingRecording, exportMeetingTranscript, getMeetingMinutesPrompt,
-  deleteMeetingRecording, getApiBaseUrl
+  deleteMeetingRecording, getApiBaseUrl,
+  getPlatformServices, setPlatformServiceProvider
 } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
 import {
   recorderState, startRecording, stopRecording, pauseRecording, resumeRecording,
   isRecordingActive, formatSeconds
 } from '@/utils/meetingRecorder.js'
+import { localTierReady } from '@/config/platformServices.js'
+import AwdSwitch from '@/components/AwdSwitch.vue'
 
 const POLL_INTERVAL_MS = 8000
 
 export default {
   name: 'MeetingRecordingPanel',
+  components: { AwdSwitch },
   props: {
     projectId: {
       type: [String, Number],
@@ -221,6 +250,13 @@ export default {
       showDeleteDialog: false,
       deletingMeeting: null,
       playingId: null,
+      // 转写档位（GET /api/platform-services 的 asr 那一项）。
+      // null = 还没读到 / 读不到（server 模式下非 admin 就会读不到），此时整块不渲染——
+      // 摆一个「未知」比不摆更让人不安。
+      asrProvider: null,
+      asrPlatformAvailable: false,
+      asrAccountConnected: false,
+      tierBusy: false,
       _player: null,
       _audioUrl: null,
       _pollTimer: null,
@@ -233,10 +269,46 @@ export default {
     },
     recordingHere() {
       return this.recordingActive && String(this.recState.projectId) === String(this.projectId)
+    },
+    tierKnown() {
+      return this.asrProvider !== null
+    },
+    // 本地转写引擎随后续版本发出；在那之前开关一律灰着（见模板处的注释）
+    localAsrUsable() {
+      return localTierReady('asr')
+    },
+    tierText() {
+      if (this.asrProvider === 'local') return '本地转写'
+      if (this.asrProvider === 'byok') return '自备 Key'
+      return this.asrAccountConnected ? '平台代采' : '需要连接账户'
+    },
+    // 「platform 档但还没连账户」不给绿色：那一档现在还转不了，绿色会读成「已就绪」
+    tierClass() {
+      if (this.asrProvider === 'local') return 'tier-local'
+      if (this.asrProvider === 'platform' && this.asrAccountConnected) return 'tier-platform'
+      return 'tier-byok'
+    },
+    tierDesc() {
+      if (this.asrProvider === 'local') return '录音与转写都在本机完成，音频不出本机。'
+      if (this.asrProvider === 'byok') return '用你自己的阿里云听悟账号转写，音频经你自己的 OSS 中转。'
+      if (!this.asrPlatformAvailable) return '本机形态使用自备 Key，在「系统管理 - 平台服务」里填听悟凭证。'
+      if (!this.asrAccountConnected) return '连接官网账户后即可直接转写，不用自己开通听悟。'
+      return '由 AI Workdeck 代为转写，按时长折算 Credits 从账户余额扣。音频经我们的对象存储中转，转写完成即删除，另有 24 小时兜底清理。'
+    },
+    localSwitchNote() {
+      if (this.localAsrUsable) return '打开后音频不上传，转写在本机完成（本地档没有说话人分离）。'
+      return '本地转写引擎将在后续版本提供，届时打开即可让录音完全不出本机。'
+    },
+    notConfiguredHint() {
+      if (this.asrProvider === 'platform') {
+        return '转写暂不可用：录音会保存到项目文件，但不能转文字。到「系统管理 - 账户与用量」连接官网账户即可开通。'
+      }
+      return '未配置转写服务：录音会保存到项目文件，但不能转文字。管理员可在「系统管理 - 平台服务 - 会议录音转写」里填阿里云听悟凭证，或改用平台代采。'
     }
   },
   mounted() {
     this.loadMeetings()
+    this.loadAsrTier()
     this._pollTimer = setInterval(() => this.pollTranscribing(), POLL_INTERVAL_MS)
     // 从顶部胶囊停止录音时刷新列表
     this._onStopped = () => this.loadMeetings()
@@ -249,6 +321,36 @@ export default {
   },
   methods: {
     formatSeconds,
+    // 转写档位。读不到就整块不渲染（asrProvider 保持 null）：
+    // 这个端点是机器级的，server 模式下普通租户本来就无权读，那不是错误。
+    async loadAsrTier() {
+      try {
+        const s = (await getPlatformServices()) || {}
+        const asr = (s.services || []).find(x => x.service === 'asr')
+        if (!asr) return
+        this.asrProvider = asr.provider
+        this.asrPlatformAvailable = !!s.platformAvailable
+        this.asrAccountConnected = !!s.accountConnected
+      } catch (e) {
+        console.warn('读取转写档位失败', e)
+      }
+    },
+    // 「录音不出本机」。切档后重新拉一次档位与会议列表：
+    // isConfigured 的判据按档分（平台档看有没有连账户，自备 Key 档看那五个凭证），
+    // 不刷新的话上面那条「未配置」提示会停在旧档的说法上。
+    async onToggleLocalAsr(on) {
+      if (this.tierBusy) return
+      this.tierBusy = true
+      try {
+        await setPlatformServiceProvider('asr', on ? 'local' : 'platform')
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || '切换失败，稍后重试', icon: 'none' })
+      } finally {
+        this.tierBusy = false
+        await this.loadAsrTier()
+        await this.loadMeetings()
+      }
+    },
     async loadMeetings() {
       try {
         const res = await getMeetingRecordings(this.projectId)
@@ -519,6 +621,71 @@ $mr-muted: #6B7280;
   border-radius: 6px;
   font-size: 12px;
   color: #8A6D1D;
+  line-height: 1.5;
+}
+
+/* ---- 转写档位（录音开始前就摆出来）---- */
+.mr-tier {
+  margin: 0 12px 8px;
+  padding: 10px;
+  border: 1px solid $mr-border;
+  border-radius: 8px;
+  background: #FAFBFC;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mr-tier-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.mr-tier-switch {
+  align-items: flex-start;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid $mr-border;
+}
+
+.mr-tier-switch-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.mr-tier-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1F2328;
+}
+
+.mr-tier-value {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  color: #4B5563;
+  background: #EEF1F0;
+}
+
+.mr-tier-value.tier-platform {
+  color: #1A5336;
+  background: #DEF3E7;
+}
+
+.mr-tier-value.tier-local {
+  color: #1D4ED8;
+  background: #DBEAFE;
+}
+
+.mr-tier-desc {
+  font-size: 11px;
+  color: #6B7280;
   line-height: 1.5;
 }
 
