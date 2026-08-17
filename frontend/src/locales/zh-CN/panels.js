@@ -227,7 +227,18 @@ export default {
   evNoMatchVoice: '无匹配语音',
   evRateLabel: '语速',
   // 语调/音量已删：三档后端一个都不支持，留着滑杆只是让人白调（见 EasyVoicePane 注释）
-  evNoVoicesNotice: '语音引擎还没就绪，拿不到音色列表。请在「系统管理 → 平台服务 → 语音合成」选择本地引擎，并在「组件管理」下载语音组件。',
+  // 引擎未就绪的三种说法：模型没下 / 下好了但服务没起 / 浏览器版根本没有本机引擎。
+  // 合并成一句「不可用」等于让用户猜，而这三种的下一步完全不同。
+  evModelMissing: '本机语音引擎还没装。装完即可离线合成，声音不出本机。',
+  evEngineNotRunning: '语音组件已装好，但引擎这会儿没跑起来。点「重新检测」拉一次；仍不行就重启一次应用。',
+  evNoVoicesNoticeWeb: '浏览器版没有本机语音引擎，语音合成请在桌面端使用。',
+  evDownloadModel: '下载语音组件（约 {size}）',
+  evModelDownloading: '正在下载 {percent}%',
+  evCancelDownload: '取消下载',
+  evRecheck: '重新检测',
+  evRechecking: '检测中…',
+  evEngineReady: '语音引擎已就绪',
+  evDownloadStartFailed: '开始下载失败，稍后重试',
   evGenerating: '生成中...',
   evGenerate: '开始生成',
   evResultTitle: '生成结果',

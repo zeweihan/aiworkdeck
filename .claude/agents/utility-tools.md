@@ -19,6 +19,15 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 **收藏夹**：`ProjectFavoritesPanel.vue`；网页选中收藏经 `checkba:webmark`（preload ~:26）→ project-overview 订阅入库（~:2003）；后端 `controller/WebFavoriteController.java`（/api/favorites/my、/api/projects/{id}/favorites、DELETE、image）。
 
 **搜索**：`SearchPanel.vue`；后端 `controller/SearchController.java`（POST /api/projects/{id}/search）。
+标签筛选区默认折叠、按命中频次排序——**那不是排版偏好，是给一个数据 bug 兜底**：
+`/api/files/{id}/upload` 同时是编辑器自动保存的落点，挂在 legacy 分支上的
+`AutoTaggingService.autoTagFile` 因此每存一次盘就跑一次 LLM，每轮 5 个措辞不同的新词，
+而 `getOrCreateSystemTag` 只按精确字符串去重（实测单个文件积到 338 个标签）。
+生成侧的闸在 `AutoTaggingService`（已有系统标签就跳过），存量数据由
+`service/maintenance/DuplicateAutoTagCleanup` 一次性修（`ApplicationReadyEvent` +
+`maintenance.autoTagDedup.done` 标志）：**按文件保留最早 5 条自动标签关联、删掉后续重复批次，
+自动标签不超过 5 个的文件一行不动**（健康安装零变化），再清掉零引用的自动标签；
+手工标签一律不碰。改这段前先读它的 javadoc——那是一段会在每台存量机器上自动跑一次的删数据代码。
 标签筛选区**默认折叠**（`tagsOpen:false`）：自动打标签能给一个项目攒出上百个词，
 平铺出来的标签墙会把搜索框和结果一起挤出屏幕。展开后按「已选优先 → 本次结果命中文件数
 降序 → 名称」排（计数在 `updateVisibleTags` 里顺带数出来，没搜过就退回按名称排），
@@ -40,11 +49,20 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
    （删字段会让存量客户端的请求体反序列化炸掉）。`TtsServiceTest` 有一条回归钉死
    「百分比串是无效输入」。
 2. **`kokoro-service` 在打包态被 `modelManager.isInstalled('kokoro-models')` 卡着**——
-   那是个约 300MB 的下载组件，不随包发出。端口分配了但服务没起来是常态，表现为
-   `/api/tts/voices` 返回空数组、下拉框空着。`platformServices.js` 里
-   `LOCAL_TIER_READY.tts = true` 的注释写着「Kokoro 已随包发出」，**那句话不准确**：
-   随包的是代码，模型要另外下。面板现在会在音色列表为空时**在合成之前**就把这句话摆出来，
-   不让用户填完整段文字才撞上「未就绪」。
+   那是个约 300MB 的下载组件，不随包发出（随包的是代码）。端口分配了但服务没起来是常态，
+   表现为 `/api/tts/voices` 返回空数组、下拉框空着。`platformServices.js` 里那条
+   `LOCAL_TIER_READY.tts` 已随「TTS 去掉档位」一起删干净，不用再管。
+   **面板不止把这件事说在合成之前，还给了就地出路**（形制照搬会议录音的 `.mr-tier-gate`）：
+   `.ev-gate` 在音色列表为空时出现，按三种情形分说——模型没下（给「下载语音组件」，
+   走 `host.model.download('kokoro-models')` + `onProgress` 订阅）/ 模型下好了但引擎没跑
+   （只给「重新检测」）/ 浏览器版根本没有本机引擎（只说明，不给下载入口，`host.model` 缺席）。
+   **下完必须显式 `host.services.ensure('kokoro-service')`**：那个 descriptor 的 `enabled`
+   门在模型上，不主动拉一把就要等到下次启动应用才会起来，用户会以为下载白做了
+   （`service-manager._start` 每次重新求值 `enabled`，此刻求值必然为真）。
+3. **组件的 `sizeHint` 不带语言**（写 `'300 MB'` 不写 `'约 300MB'`）：它会被塞进 admin 的
+   下载/删除确认文案与语音面板的按钮，那些串是双语的，「约」写在 descriptor 里就会
+   原样出现在英文界面上。修饰词归各处的 i18n 串。**注意 `MeetingRecordingPanel` 整个面板
+   仍是硬编码中文、没做 i18n**，英文版下那一片本来就是中文——这是既有欠账，不是本条引入的。
 
 **录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写三档 platform / byok / local，详见 `.claude/agents/licensing-billing.md`「平台服务网关」与 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
 

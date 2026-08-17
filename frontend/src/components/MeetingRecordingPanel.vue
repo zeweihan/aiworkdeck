@@ -341,7 +341,10 @@ export default {
       // 只是搬到用户真正需要它的位置——他刚点开「录音不出本机」的这一刻）
       modelState: null,
       modelPercent: 0,
-      // 桌面壳报的体积说法（'约 1.5GB' 之类）；空 = 还没问到，界面回落到 meeting.modelSizeDefault
+      // 桌面壳报的体积（model-manager 的 sizeHint，形如 '1.5 GB'——**不带语言**，
+      // 「约 / about」归 meeting.downloadModel 这类双语串，别把它加回 descriptor 里去：
+      // 那个值同时喂给 admin 的下载/删除确认文案，中文修饰词会原样出现在英文界面上）；
+      // 空 = 还没问到，界面回落到 meeting.modelSizeDefault
       modelSizeHint: '',
       // 用户点过「录音不出本机」但没成——下面那块引导只在这之后出现，
       // 平台档用户不该每次开面板都看见一块「模型没下载」
