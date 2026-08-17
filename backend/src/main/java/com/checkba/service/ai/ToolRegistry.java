@@ -1,5 +1,6 @@
 package com.checkba.service.ai;
 
+import com.checkba.service.LangText;
 import com.checkba.service.ai.context.ProjectContextHolder;
 import com.checkba.service.ai.tools.AgentToolComponent;
 import com.checkba.service.ai.tools.ToolContext;
@@ -82,11 +83,21 @@ public class ToolRegistry {
      */
     public record RegisteredTool(Object bean, Method method, ToolSpecification spec, ToolMeta meta, boolean fromPlugin) {
 
+        /**
+         * 兜底展示名。**用户实际看到的工具名不在这里**：过程卡按工具代号查前端的
+         * `utils/toolDisplayNames.js`（工具元数据不随 SSE 下发，前端自备一份，
+         * 完整性由 ToolDisplayNameCoverageTest 钉着）。这里的值只进 `<process name>`
+         * 写入历史，以及前端解析不出工具代号时的回退。
+         *
+         * <p>回退串走 LangText 而不是硬写中文：同一条链路下游的 AgentOrchestrator
+         * 早就是 {@code LangText.of("工具执行", "Tool execution")}，这里漏了就成了
+         * 英文会话里唯一冒中文的那一处。
+         */
         public String displayName() {
             if (meta != null && !meta.displayName().isEmpty()) {
                 return meta.displayName();
             }
-            return "工具执行";
+            return LangText.of("工具执行", "Tool execution");
         }
     }
 
