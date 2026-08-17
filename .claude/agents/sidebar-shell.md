@@ -166,6 +166,23 @@ BrowserView 显隐）；② admin 页新增 nav key `feedback`（用户反馈看
   默认/辅助/子 Agent 三个模型下拉（清单来自 `GET /api/ai/models`，前端不许硬编码）、网络区域三选一
   （auto/境内/境外，附判定依据）、本地 Ollama 的地址与模型名。nav 结构未变，改的是该面板内容；
   契约与键名见 ai-chat.md 与 licensing-billing.md。
+- admin 的「平台服务」面板（nav key `platform`，**非 desktopOnly**）是七项外部服务的档位与凭证入口
+  （平台服务网关 P5）。**七家的 21 个 BYOK 字段已从「系统配置」搬到这里**，收在每项的
+  「使用自己的 Key（高级）」折叠区里；「系统配置 → 外部服务」只剩 OpenRouter 那两个字段
+  （它属于 AI 那条通路）。三处必须一起看的约束：
+  ① 当前档位一律读 `GET /api/platform-services` 的 `provider`（后端解析后的**生效值**），
+     不要按凭证是否为空去猜——存量机器上这两件事经常对不上；
+  ② `platformAvailable=false`（团队服务器/云端实例）时「平台代采」这个选项**整个不出现**并给说明，
+     不是摆一个置灰项（决策 D5）；
+  ③ 档位切换**立刻写库**（`POST /api/platform-services/{service}/provider`），不跟着「保存配置」按钮走；
+     凭证字段仍走 `handleSave` 的整表回传。
+  服务的展示元数据（名字/描述/本地档就不就绪）在 `frontend/src/config/platformServices.js`，
+  文案在新命名空间 `locales/{zh-CN,en-US}/platform.js`（首启向导步骤 2 与本面板共用）。
+  深链 `?nav=platform&service=ocr` 会就地展开那一项的折叠区——网关错误提示的逃生门指的就是它。
+- 首启向导（`pages/wizard/wizard.vue`）步骤 2 已从「OCR / 语音 / 企业数据」三组共 9 个输入框
+  换成「平台服务总览 + 就地连接账户」，**默认展开**（这一段的意义就是让用户看见「其余七项不用配」）。
+  它**不拦提交**：没连账户照样能完成设置，向导只拦 AI 供应商那一项（既有行为）。
+  e2e 的 J1 钉死了这个形态（`平台服务` 在、`AccessKey`/`企查查 Key`/`Tushare Token`/`北大法宝 Token` 不在）。
 
 ## 已知地雷
 

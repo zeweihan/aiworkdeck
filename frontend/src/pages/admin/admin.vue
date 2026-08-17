@@ -74,7 +74,10 @@
             </view>
           </view>
 
-          <!-- 外部服务 -->
+          <!-- 外部服务。
+               这里只剩 OpenRouter：其余七家的凭证已随「平台服务」分区搬走，收进各自的
+               「使用自己的 Key（高级）」折叠区（默认由我们代采，用户不必再填 23 个字段）。
+               OpenRouter 留在这里是因为它属于 AI 那条通路——凭证下发 + 本机直连，不经网关。 -->
           <view class="section-card">
             <view class="section-header">
               <text class="section-title">{{ $t('admin.externalTitle') }}</text>
@@ -107,230 +110,225 @@
                   />
                 </view>
               </view>
-
-              <!-- 企查查 -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">{{ $t('admin.providerQichacha') }}</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">Base URL</text>
-                  <input
-                    v-model="form.external.qichacha.baseUrl"
-                    class="form-input"
-                    placeholder="https://api.qichacha.com"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">Key</text>
-                  <input
-                    v-model="form.external.qichacha.key"
-                    class="form-input"
-                    :placeholder="$t('admin.enterKeyPlaceholder')"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">Secret</text>
-                  <input
-                    v-model="form.external.qichacha.secret"
-                    class="form-input"
-                    :placeholder="$t('admin.enterSecretPlaceholder')"
-                  />
-                </view>
-              </view>
-
-              <!-- Tushare -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">Tushare</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">Base URL</text>
-                  <input
-                    v-model="form.external.tushare.baseUrl"
-                    class="form-input"
-                    placeholder="http://api.tushare.pro"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">Token</text>
-                  <input
-                    v-model="form.external.tushare.token"
-                    class="form-input"
-                    :placeholder="$t('admin.enterTokenPlaceholder')"
-                  />
-                </view>
-              </view>
-
-              <!-- 阿里云 OCR -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">{{ $t('admin.providerAliyunOcr') }}</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">AccessKey ID</text>
-                  <input
-                    v-model="form.external.aliyunOcr.accessKeyId"
-                    class="form-input"
-                    :placeholder="$t('admin.ocrKeyIdPlaceholder')"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">AccessKey Secret</text>
-                  <input
-                    v-model="form.external.aliyunOcr.accessKeySecret"
-                    class="form-input"
-                    :placeholder="$t('admin.ocrKeySecretPlaceholder')"
-                    password
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">Endpoint</text>
-                  <input
-                    v-model="form.external.aliyunOcr.endpoint"
-                    class="form-input"
-                    :placeholder="$t('admin.ocrEndpointPlaceholder')"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">RegionId</text>
-                  <input
-                    v-model="form.external.aliyunOcr.regionId"
-                    class="form-input"
-                    :placeholder="$t('admin.ocrRegionPlaceholder')"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.publicBaseUrlLabel') }}</text>
-                  <input
-                    v-model="form.external.aliyunOcr.publicBaseUrl"
-                    class="form-input"
-                    :placeholder="$t('admin.ocrPublicBaseUrlPlaceholder')"
-                  />
-                </view>
-              </view>
-
-
-              <!-- PKULaw -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">{{ $t('admin.providerPkulaw') }}</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">Token</text>
-                  <input
-                    v-model="form.external.pkulaw.token"
-                    class="form-input"
-                    :placeholder="$t('admin.pkulawTokenPlaceholder')"
-                  />
-                </view>
-              </view>
-
-              <!-- 博查搜索（AI 网络搜索工具） -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">{{ $t('admin.providerBocha') }}</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">API Key</text>
-                  <input
-                    v-model="form.external.bocha.apiKey"
-                    class="form-input"
-                    :placeholder="$t('admin.bochaKeyPlaceholder')"
-                  />
-                </view>
-              </view>
-
-              <!-- 会议转写（通义听悟 + OSS 中转，会议录音插件使用） -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">会议转写（通义听悟）</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">AccessKey ID</text>
-                  <input
-                    v-model="form.external.tingwu.accessKeyId"
-                    class="form-input"
-                    placeholder="阿里云 RAM AccessKeyId（需听悟与 OSS 权限）"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">AccessKey Secret</text>
-                  <input
-                    v-model="form.external.tingwu.accessKeySecret"
-                    class="form-input"
-                    password
-                    placeholder="阿里云 RAM AccessKeySecret"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">听悟 AppKey</text>
-                  <input
-                    v-model="form.external.tingwu.appKey"
-                    class="form-input"
-                    placeholder="通义听悟控制台创建项目后获得"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">OSS Bucket</text>
-                  <input
-                    v-model="form.external.tingwu.ossBucket"
-                    class="form-input"
-                    placeholder="私有 bucket 名（音频中转，转写完即删）"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">OSS Endpoint</text>
-                  <input
-                    v-model="form.external.tingwu.ossEndpoint"
-                    class="form-input"
-                    placeholder="如 oss-cn-beijing.aliyuncs.com"
-                  />
-                </view>
-              </view>
-
-              <!-- ElevenLabs -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">ElevenLabs (TTS)</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">API Key</text>
-                  <input
-                    v-model="form.external.elevenLabs.apiKey"
-                    class="form-input"
-                    :placeholder="$t('admin.elevenKeyPlaceholder')"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.apiBaseUrlLabel') }}</text>
-                  <input
-                    v-model="form.external.elevenLabs.baseUrl"
-                    class="form-input"
-                    placeholder="https://api.elevenlabs.io/v1"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.modelIdLabel') }}</text>
-                  <input
-                    v-model="form.external.elevenLabs.modelId"
-                    class="form-input"
-                    placeholder="eleven_multilingual_v2"
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.defaultVoiceIdLabel') }}</text>
-                  <input
-                    v-model="form.external.elevenLabs.defaultVoiceId"
-                    class="form-input"
-                    :placeholder="$t('admin.voiceIdPlaceholder')"
-                  />
-                </view>
-              </view>
+              <text class="field-note">{{ $t('admin.externalMovedNote') }}</text>
             </view>
           </view>
 
+          <!-- 保存按钮 -->
+          <view class="fixed-footer">
+            <button
+              class="btn-save"
+              type="primary"
+              :loading="saving"
+              @tap="handleSave"
+            >
+              {{ $t('admin.saveConfigButton') }}
+            </button>
+          </view>
+        </scroll-view>
 
+        <!-- 平台服务（P5：配置面收敛）。
+             七项外部服务各自走哪一档，以及自备 Key 时的全部凭证字段。
+             当前档位一律读 GET /api/platform-services 的 provider（后端解析后的生效值），
+             绝不自己按凭证是否为空去猜——存量机器上这两件事经常对不上。 -->
+        <scroll-view
+          v-else-if="activeNav === 'platform'"
+          scroll-y
+          class="config-scroll"
+        >
+          <view class="section-card">
+            <view class="section-header">
+              <text class="section-title">{{ $t('admin.navPlatform') }}</text>
+              <text class="section-subtitle">{{ $t('admin.platformSubtitle') }}</text>
+            </view>
+            <view class="section-body">
+              <!-- 三种全局状态，互斥。none 之外的两种都要给出下一步。 -->
+              <!--
+                未结算的预扣。设计 §4.6 要求这笔钱「必须可解释」：一场两小时录音的预扣
+                会把余额压低、进而让余额闸拦住 AI 对话——用户会同时发现转写和对话都停了，
+                没有这一行他无从知道是转写占住的。
+              -->
+              <view v-if="pendingHoldNotice" class="platform-banner">
+                <text class="platform-banner-body">{{ pendingHoldNotice }}</text>
+              </view>
+              <view v-if="platformServicesError" class="platform-banner platform-banner-warn">
+                <text class="platform-banner-body">{{ platformServicesError }}</text>
+              </view>
+              <view v-else-if="platformLoaded && !platformState.platformAvailable" class="platform-banner">
+                <text class="platform-banner-title">{{ $t('platform.serverModeTitle') }}</text>
+                <text class="platform-banner-body">{{ $t('platform.serverModeBody') }}</text>
+              </view>
+              <view v-else-if="platformLoaded && !platformState.accountConnected" class="platform-banner">
+                <text class="platform-banner-title">{{ $t('platform.notConnectedTitle') }}</text>
+                <text class="platform-banner-body">{{ $t('platform.notConnectedBody') }}</text>
+                <text class="platform-link" @tap="onNavTap({ key: 'account' })">{{ $t('platform.goConnect') }}</text>
+              </view>
+
+              <view v-for="svc in platformServiceRows" :key="svc.key" class="provider-card">
+                <view class="provider-header platform-row-head">
+                  <view class="platform-row-info">
+                    <text class="provider-name">{{ svc.name }}</text>
+                    <text class="platform-row-desc">{{ svc.desc }}</text>
+                  </view>
+                  <text class="platform-tier" :class="svc.tierClass">{{ svc.tierLabel }}</text>
+                </view>
+
+                <view class="form-row">
+                  <text class="form-label">{{ $t('platform.tierLabel') }}</text>
+                  <AwdSelect
+                    class="mode-picker"
+                    :range="svc.optionLabels"
+                    :value="svc.optionIndex"
+                    :disabled="platformBusy"
+                    @change="onPlatformTierPick(svc, $event)"
+                  />
+                </view>
+                <text v-for="(note, i) in svc.notes" :key="'n' + i" class="field-note">{{ note }}</text>
+
+                <!-- 「改用自己的 Key」的逃生门。网关的每一类失败（未开放 / 上游挂 / 我们挂）
+                     都要能指到这里，所以它是一个可以被深链就地展开的固定入口
+                     （?nav=platform&service=ocr），不是藏在别处的高级设置。 -->
+                <view class="platform-fold-head" @tap="togglePlatformByok(svc.key)">
+                  <text class="platform-fold-title">{{ $t('platform.useOwnKey') }}</text>
+                  <text class="platform-fold-arrow">
+                    {{ platformByokOpen[svc.key] ? $t('platform.collapse') : $t('platform.expand') }}
+                  </text>
+                </view>
+
+                <view v-if="platformByokOpen[svc.key]" class="platform-byok-body">
+                  <text class="field-note">
+                    {{ svc.hasByokCredentials ? $t('platform.byokPresentNote') : $t('platform.byokMissingNote') }}
+                  </text>
+
+                  <!-- 会议录音转写（通义听悟 + OSS 中转） -->
+                  <template v-if="svc.key === 'asr'">
+                    <view class="form-row">
+                      <text class="form-label">AccessKey ID</text>
+                      <input v-model="form.external.tingwu.accessKeyId" class="form-input" :placeholder="$t('admin.tingwuKeyIdPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">AccessKey Secret</text>
+                      <input v-model="form.external.tingwu.accessKeySecret" class="form-input" password :placeholder="$t('admin.tingwuKeySecretPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">{{ $t('admin.tingwuAppKeyLabel') }}</text>
+                      <input v-model="form.external.tingwu.appKey" class="form-input" :placeholder="$t('admin.tingwuAppKeyPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">OSS Bucket</text>
+                      <input v-model="form.external.tingwu.ossBucket" class="form-input" :placeholder="$t('admin.tingwuBucketPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">OSS Endpoint</text>
+                      <input v-model="form.external.tingwu.ossEndpoint" class="form-input" :placeholder="$t('admin.tingwuEndpointPlaceholder')" />
+                    </view>
+                  </template>
+
+                  <!-- 图片文字识别（阿里云 OCR） -->
+                  <template v-else-if="svc.key === 'ocr'">
+                    <view class="form-row">
+                      <text class="form-label">AccessKey ID</text>
+                      <input v-model="form.external.aliyunOcr.accessKeyId" class="form-input" :placeholder="$t('admin.ocrKeyIdPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">AccessKey Secret</text>
+                      <input v-model="form.external.aliyunOcr.accessKeySecret" class="form-input" password :placeholder="$t('admin.ocrKeySecretPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">Endpoint</text>
+                      <input v-model="form.external.aliyunOcr.endpoint" class="form-input" :placeholder="$t('admin.ocrEndpointPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">RegionId</text>
+                      <input v-model="form.external.aliyunOcr.regionId" class="form-input" :placeholder="$t('admin.ocrRegionPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">{{ $t('admin.publicBaseUrlLabel') }}</text>
+                      <input v-model="form.external.aliyunOcr.publicBaseUrl" class="form-input" :placeholder="$t('admin.ocrPublicBaseUrlPlaceholder')" />
+                    </view>
+                  </template>
+
+                  <!-- 联网搜索（博查） -->
+                  <template v-else-if="svc.key === 'search'">
+                    <view class="form-row">
+                      <text class="form-label">API Key</text>
+                      <input v-model="form.external.bocha.apiKey" class="form-input" :placeholder="$t('admin.bochaKeyPlaceholder')" />
+                    </view>
+                  </template>
+
+                  <!-- 语音合成（ElevenLabs） -->
+                  <template v-else-if="svc.key === 'tts'">
+                    <view class="form-row">
+                      <text class="form-label">API Key</text>
+                      <input v-model="form.external.elevenLabs.apiKey" class="form-input" :placeholder="$t('admin.elevenKeyPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">{{ $t('admin.apiBaseUrlLabel') }}</text>
+                      <input v-model="form.external.elevenLabs.baseUrl" class="form-input" placeholder="https://api.elevenlabs.io/v1" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">{{ $t('admin.modelIdLabel') }}</text>
+                      <input v-model="form.external.elevenLabs.modelId" class="form-input" placeholder="eleven_multilingual_v2" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">{{ $t('admin.defaultVoiceIdLabel') }}</text>
+                      <input v-model="form.external.elevenLabs.defaultVoiceId" class="form-input" :placeholder="$t('admin.voiceIdPlaceholder')" />
+                    </view>
+                  </template>
+
+                  <!-- 企业工商信息（企查查） -->
+                  <template v-else-if="svc.key === 'qichacha'">
+                    <view class="form-row">
+                      <text class="form-label">Base URL</text>
+                      <input v-model="form.external.qichacha.baseUrl" class="form-input" placeholder="https://api.qichacha.com" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">Key</text>
+                      <input v-model="form.external.qichacha.key" class="form-input" :placeholder="$t('admin.enterKeyPlaceholder')" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">Secret</text>
+                      <input v-model="form.external.qichacha.secret" class="form-input" :placeholder="$t('admin.enterSecretPlaceholder')" />
+                    </view>
+                  </template>
+
+                  <!-- 证券与财务数据（Tushare） -->
+                  <template v-else-if="svc.key === 'tushare'">
+                    <view class="form-row">
+                      <text class="form-label">Base URL</text>
+                      <input v-model="form.external.tushare.baseUrl" class="form-input" placeholder="http://api.tushare.pro" />
+                    </view>
+                    <view class="form-row">
+                      <text class="form-label">Token</text>
+                      <input v-model="form.external.tushare.token" class="form-input" :placeholder="$t('admin.enterTokenPlaceholder')" />
+                    </view>
+                  </template>
+
+                  <!-- 法律法规与案例（北大法宝） -->
+                  <template v-else-if="svc.key === 'pkulaw'">
+                    <view class="form-row">
+                      <text class="form-label">Token</text>
+                      <input v-model="form.external.pkulaw.token" class="form-input" :placeholder="$t('admin.pkulawTokenPlaceholder')" />
+                    </view>
+                  </template>
+
+                  <text class="field-note">{{ $t('platform.saveHint') }}</text>
+                </view>
+              </view>
+
+              <!-- AI 单列说明：它不是这七项里的一项，通路完全不同，
+                   摆在这里是为了回答「那 AI 的钱走哪条路」这个必然会被问到的问题。 -->
+              <view class="provider-card">
+                <view class="provider-header platform-row-head">
+                  <view class="platform-row-info">
+                    <text class="provider-name">{{ $t('platform.aiRowName') }}</text>
+                    <text class="platform-row-desc">{{ $t('platform.aiRowDesc') }}</text>
+                  </view>
+                </view>
+                <text class="platform-link" @tap="onNavTap({ key: 'ai' })">{{ $t('platform.goAiSettings') }}</text>
+              </view>
+            </view>
+          </view>
 
           <!-- 保存按钮 -->
           <view class="fixed-footer">
@@ -1378,7 +1376,11 @@ import {
   fetchAiModels,
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
   getSiteStatus, selectSite,
+  getPlatformServices, setPlatformServiceProvider,
 } from '@/services/api.js'
+import {
+  platformServiceMeta, sortPlatformServices, localTierReady,
+} from '@/config/platformServices.js'
 import { getCurrentUser, getSessionId } from '@/utils/auth.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
@@ -1410,6 +1412,9 @@ export default {
       navItems: [
         { key: 'config', label: this.$t('admin.navConfig') },
         { key: 'ai', label: this.$t('admin.navAi') },
+        // 平台服务对团队服务器同样要可见：平台档在那里不可选，但那 21 个 BYOK 凭证字段
+        // 已经搬进这个面板，标成 desktopOnly 会让自建服务器的管理员没地方填。
+        { key: 'platform', label: this.$t('admin.navPlatform') },
         { key: 'account', label: this.$t('admin.navAccount'), desktopOnly: true },
         { key: 'components', label: this.$t('admin.navComponents'), desktopOnly: true },
         { key: 'updates', label: this.$t('admin.navUpdates'), desktopOnly: true },
@@ -1491,6 +1496,21 @@ export default {
       ],
       // 平台 AI 通道是否可选（= 是否已连接账户），来自 /api/account/status
       platformAiAvailable: false,
+      // 「平台服务」分区（GET /api/platform-services）。
+      // services 里的 provider 是后端解析后的**生效值**（非 local-mode 下即使库里写着
+      // platform 也回 byok），界面展示与选中项一律以它为准。
+      // pricingAvailable=false 时 enabled/balanceCents/pendingHoldCents 全是「不知道」，
+      // 不许当成 false/0 渲染（同 ai-usage「查不到用量显示破折号不显示 0」那条）。
+      platformState: {
+        services: [], platformAvailable: false, accountConnected: false,
+        pricingAvailable: false, balanceCents: null, pendingHoldCents: null,
+      },
+      platformLoaded: false,
+      platformServicesError: '',
+      platformBusy: false,
+      // 每项的「使用自己的 Key（高级）」是否展开。默认全收起；
+      // ?nav=platform&service=ocr 这样的深链会就地展开对应那一项（错误提示的逃生门）。
+      platformByokOpen: {},
       // Helpers
       defaultAssistants: [
         { id: 'default', name: '默认助手', tools: [], systemPrompt: '你是一个专业的助手。', description: 'Generic Assistant' },
@@ -1563,6 +1583,81 @@ export default {
     },
     visibleNavItems() {
       return this.navItems.filter((n) => !n.desktopOnly || this.isDesktop)
+    },
+    // 「平台服务」的每一行：当前档位标签 + 可切的档位清单 + 说明。
+    //
+    // 可切清单是**动态**拼的，不是一个固定三选项再置灰：
+    //  - platformAvailable=false（团队服务器 / 云端实例）时 platform 档整个不出现（D5）；
+    //  - hasLocal 为真但本地引擎还没随包发出（asr 在 P3 之前）时 local 档也不出现，
+    //    并说明原因。摆一个能选中、真用起来才炸的档位，正是设计 §6.2.1 点名要避免的事。
+    /**
+     * 「有 N Credits 正被转写占用」的提示。
+     *
+     * 只在**确知**有未结算预扣时出现：`pendingHoldCents` 为 null 表示单价表没取到
+     * （网关不可达/未连账户），那是「不知道」不是「零」，不能拿它编一个数出来。
+     */
+    pendingHoldNotice() {
+      const cents = this.platformState.pendingHoldCents
+      if (typeof cents !== 'number' || cents <= 0) return ''
+      return this.$t('platform.holdNotice', { credits: (cents / 100).toFixed(2) })
+    },
+    platformServiceRows() {
+      const available = this.platformState.platformAvailable
+      const connected = this.platformState.accountConnected
+      return sortPlatformServices(this.platformState.services).map((s) => {
+        const meta = platformServiceMeta(s.service)
+        const localUsable = s.hasLocal && localTierReady(s.service)
+
+        const values = []
+        if (available) values.push('platform')
+        values.push('byok')
+        if (localUsable) values.push('local')
+        const labelOf = {
+          platform: this.$t('platform.tierPlatform'),
+          byok: this.$t('platform.tierByok'),
+          local: this.$t('platform.tierLocal'),
+        }
+
+        let tierLabel = labelOf[s.provider] || s.provider
+        let tierClass = 'tier-' + s.provider
+        if (s.provider === 'platform' && !connected) {
+          tierLabel = this.$t('platform.tierNeedsAccount')
+          tierClass = 'tier-need'
+        } else if (s.provider === 'platform' && s.enabled === false) {
+          // 平台侧还没开放这一项（合同/账号未就绪）。**必须与「出错了」分开**：
+          // 未开放是产品尚未提供，用户能做的是改用自己的 Key；显示成故障会让他
+          // 反复重试一件永远不会成功的事。s.enabled 为 null 是「查不到」不是「未开放」，
+          // 那种情况照常显示平台档，真调用时网关自己会给准确的信封。
+          tierLabel = this.$t('platform.tierDisabled')
+          tierClass = 'tier-need'
+        }
+
+        const notes = []
+        if (s.provider === 'platform' && s.enabled === false) {
+          notes.push(this.$t('platform.tierDisabledNote'))
+        } else if (s.provider === 'platform') {
+          notes.push(this.$t('platform.tierPlatformNote'))
+        }
+        if (s.provider === 'local') notes.push(this.$t('platform.tierLocalNote'))
+        if (s.hasLocal && !localUsable) notes.push(this.$t('platform.localAsrPending'))
+
+        // 生效值不在可切清单里（例如非 local-mode 下后端已把 platform 解析成 byok）
+        // 时选中项落在 byok 上——下拉显示的必须是**正在生效**的那一档。
+        const idx = values.indexOf(s.provider)
+        return {
+          key: s.service,
+          name: meta.nameKey ? this.$t(meta.nameKey) : s.service,
+          desc: meta.descKey ? this.$t(meta.descKey) : '',
+          hasByokCredentials: !!s.hasByokCredentials,
+          provider: s.provider,
+          tierLabel,
+          tierClass,
+          notes,
+          optionValues: values,
+          optionLabels: values.map((v) => labelOf[v]),
+          optionIndex: idx < 0 ? values.indexOf('byok') : idx,
+        }
+      })
     },
     // 未加密地址提醒：仅按前缀判断，不做完整 URL 校验（连接失败自会有报错）。
     cloudServerUrlIsHttp() {
@@ -1673,6 +1768,12 @@ export default {
     const nav = query && query.nav
     if (nav && this.visibleNavItems.some((n) => n.key === nav)) {
       this.onNavTap({ key: nav })
+    }
+    // ?nav=platform&service=ocr：就地展开那一项的「使用自己的 Key（高级）」。
+    // 网关的失败提示要能一步指到逃生门，中间不能再让用户自己去找哪一项。
+    const svc = query && query.service
+    if (nav === 'platform' && svc) {
+      this.platformByokOpen = { ...this.platformByokOpen, [svc]: true }
     }
     this.loadConfig()
     this.loadModelCatalog()
@@ -1913,6 +2014,9 @@ export default {
       this.activeNav = nav.key
       if (nav.key === 'cloud') {
         this.loadCloudConnections()
+      }
+      if (nav.key === 'platform') {
+        this.loadPlatformServices()
       }
       if (nav.key === 'account') {
         this.loadSite()
@@ -2694,6 +2798,49 @@ export default {
       } catch (e) {
         uni.showToast({ title: e.message || this.$t('common.failed'), icon: 'none' })
       }
+    },
+    // ---------- 平台服务 ----------
+    async loadPlatformServices() {
+      try {
+        const s = (await getPlatformServices()) || {}
+        this.platformState = {
+          services: Array.isArray(s.services) ? s.services : [],
+          platformAvailable: !!s.platformAvailable,
+          accountConnected: !!s.accountConnected,
+          // 这三个刻意**不**用 `!!` / `|| 0` 归一化：后端在取不到单价表时给的是 null，
+          // 而 null 的意思是「不知道」不是「未开放 / 余额为零」。归一化会把一次网络抖动
+          // 变成「七项服务全部未开放」，比不显示这个状态更糟。
+          pricingAvailable: !!s.pricingAvailable,
+          balanceCents: typeof s.balanceCents === 'number' ? s.balanceCents : null,
+          pendingHoldCents: typeof s.pendingHoldCents === 'number' ? s.pendingHoldCents : null,
+        }
+        this.platformServicesError = ''
+      } catch (e) {
+        this.platformServicesError = (e && e.message) || this.$t('platform.loadFailed')
+      } finally {
+        this.platformLoaded = true
+      }
+    },
+    // 切档立刻写库（不等「保存配置」）：档位是一个开关而不是一张表单，
+    // 让它跟着凭证字段一起等保存，用户点完下拉看不到任何变化会以为没生效。
+    // 写失败**不改本地状态**，重新拉一次让界面回到真相——静默留在用户以为的那一档
+    // 比报错更糟（他会以为已经切走了）。
+    async onPlatformTierPick(svc, index) {
+      const target = svc.optionValues[index]
+      if (!target || target === svc.provider) return
+      this.platformBusy = true
+      try {
+        await setPlatformServiceProvider(svc.key, target)
+        uni.showToast({ title: this.$t('platform.switched'), icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('platform.switchFailed'), icon: 'none' })
+      } finally {
+        this.platformBusy = false
+        await this.loadPlatformServices()
+      }
+    },
+    togglePlatformByok(key) {
+      this.platformByokOpen = { ...this.platformByokOpen, [key]: !this.platformByokOpen[key] }
     },
     async loadConfig() {
       try {
@@ -3748,6 +3895,120 @@ $border-color: #E9ECEF; // Gray-Light
 .usage-cost {
   font-size: 13px;
   font-weight: 600;
+}
+
+/* 平台服务（P5 配置面收敛） */
+.platform-banner {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: #F4F7F5;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.platform-banner-warn {
+  background: #FDF6EC;
+}
+
+.platform-banner-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1A5336;
+}
+
+.platform-banner-warn .platform-banner-title {
+  color: #B45309;
+}
+
+.platform-banner-body {
+  font-size: 12px;
+  color: $text-secondary;
+  line-height: 1.7;
+}
+
+.platform-link {
+  align-self: flex-start;
+  font-size: 12px;
+  color: #1A5336;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+.platform-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.platform-row-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.platform-row-desc {
+  font-size: 12px;
+  color: $text-secondary;
+  line-height: 1.5;
+}
+
+.platform-tier {
+  flex: none;
+  font-size: 11px;
+  padding: 2px 9px;
+  border-radius: 999px;
+}
+
+.tier-platform {
+  color: #1A5336;
+  background: #DEF3E7;
+}
+
+.tier-byok {
+  color: #4B5563;
+  background: #EEF1F0;
+}
+
+.tier-local {
+  color: #1D4ED8;
+  background: #DBEAFE;
+}
+
+.tier-need {
+  color: #B45309;
+  background: #FDF0DC;
+}
+
+/* 折叠头本身就是「改用自己的 Key」的入口，做成一行可点的分隔条 */
+.platform-fold-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px solid $border-color;
+  cursor: pointer;
+}
+
+.platform-fold-title {
+  font-size: 12px;
+  color: $text-secondary;
+}
+
+.platform-fold-arrow {
+  font-size: 12px;
+  color: #1A5336;
+}
+
+.platform-byok-body {
+  margin-top: 14px;
 }
 
 /* 数据统计 */
