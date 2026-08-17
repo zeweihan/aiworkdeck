@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 // 桌面宿主链路 e2e / desktop host-chain e2e (Electron + CDP).
 //
-// 覆盖浏览器目标够不到的一条关键链：新建 Word → 编辑器（<webview> 内真实 LOWA
-// 引擎）boot → 宿主执行器插入文本 → 点保存按钮 → 后端落盘 → API 下载 docx 验证
-// 内容真的写进了文件。这是"编辑器保存链路"的端到端证明。
+// 覆盖浏览器目标够不到的两处：
+//  ① 编辑器保存链路：新建 Word → 编辑器（<webview> 内真实 LOWA 引擎）boot → 宿主
+//     执行器插入文本 → 点保存按钮 → 后端落盘 → API 下载 docx 验证内容真的写进了文件。
+//  ② 需要真实桌面能力（window.checkbaDesktop.fs）才渲染的界面形态——目前是项目
+//     列表页那两张新建卡。app-e2e 的最小桌面桩不含 fs，那边只能验降级形态。
 //
 // 跑法（本机）：
 //   1) worktree/主仓库 frontend：`npx uni --port 5174`（dev:h5，VITE_API_BASE_URL
@@ -179,6 +181,62 @@ try {
   // 注意不能用 evaluateOnNewDocument：壳启动时已经把页面引导到项目列表并按环境
   // 语言落了盘，随后跳工作台只是改 hash（同文档导航），钩子根本不触发。
   await page.evaluate(() => { try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ } })
+
+  // 列表页的新建入口有两种合法形态，桌面那一种只有这里能验。app-e2e 的浏览器目标
+  // 注入的最小桌面桩故意不含 fs（补 fs 会把全应用每个 `host.fs && …` 守卫一起从
+  // false 翻成真，让所有页面拿着一个只有 showOpenDialog 的假 fs 走桌面分支，把
+  // "最小桩不引爆任何页面"那次全仓审计整个作废），所以列表页 isDesktop 在那边恒假、
+  // 只渲染一张降级卡。而真实律师在列表页看到的恰恰是这两张（打开文件夹 / 新建项目
+  // 文件夹）——此前它们只有 check-navigation-contract 的静态断言守着"方法接上了"，
+  // 没有任何运行时证据证明它们真的渲染得出来。
+  await step('列表页桌面形态：两张新建卡真的渲染（浏览器目标够不到）', async () => {
+    await page.goto(DEVURL + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
+    // 接着上面钉中文那段：壳启动时已经按环境语言 boot 过一次（Electron 常带
+    // --lang=en-GB），appLanguage.js 的模块级 cached 和 i18n 单例都在那次加载时定死。
+    // 只改 hash 是**同文档导航**，模块不会重来，写进 localStorage 的 zh-CN 也就不生效。
+    // 必须整页重载一次让新文档重新读盘。**这一步现场踩过**：不 reload 时两张卡确实
+    // 渲染出来了、数量也对，但标题是 "Open Folder… | New Project Folder…"，中文断言全红。
+    await page.reload({ waitUntil: 'networkidle2' })
+    // 壳自己的 loadURL(DEV_SERVER_URL) 随时可能在这次导航之后才落地（#379 的教训），
+    // 但 2026-08 起它的落点也是项目列表页，所以这里只要轮询到「列表路由 + 新建区
+    // 已挂」为止，谁先谁后都不影响结论（它带来的也是新文档，同样读到 zh-CN）。
+    const deadline = Date.now() + 60000
+    let snap = null
+    while (Date.now() < deadline) {
+      snap = await page.evaluate(() => {
+        if (!location.hash.includes('pages/project-list/project-list')) return null
+        const sec = document.querySelector('.create-section')
+        if (!sec) return null
+        const host = window.checkbaDesktop || {}
+        return {
+          hasDialog: !!(host.fs && host.fs.showOpenDialog),
+          cards: sec.querySelectorAll('.create-card').length,
+          titles: [...sec.querySelectorAll('.create-title')].map((el) => (el.innerText || '').trim()),
+        }
+      }).catch(() => null)
+      if (snap) break
+      await sleep(1500)
+    }
+    if (!snap) throw new Error('等不到项目列表页的新建区（.create-section）')
+    // isDesktop 判据是「有没有系统文件夹对话框」而不是「是不是桌面壳」（老版本壳没有
+    // fs 命名空间时该降级而不是给出点不动的按钮）。这条先断言：否则壳哪天漏了 fs，
+    // 现象会是"卡数不对"而不是"桌面能力没暴露到渲染层"，白查一轮。
+    if (!snap.hasDialog) {
+      throw new Error('壳没把 fs.showOpenDialog 暴露到渲染层，列表页会整体降级成浏览器形态')
+    }
+    if (snap.cards !== 2) {
+      throw new Error('桌面形态应当两张新建卡，实际 ' + snap.cards + ' 张：' + JSON.stringify(snap.titles))
+    }
+    const joined = snap.titles.join(' | ')
+    if (!joined.includes('打开文件夹')) throw new Error('缺「打开文件夹」卡：' + joined)
+    if (!joined.includes('新建项目文件夹')) throw new Error('缺「新建项目文件夹」卡：' + joined)
+    // 「单独打开一个文件」造出的是没有归属的临时项目（律师下次找不到它在哪），已从
+    // 新建入口去掉。它原本就住在这个桌面分支里，所以这条负向断言也只有在桌面目标
+    // 下才有牙——浏览器目标压根不渲染这个分支。
+    if (snap.titles.some((t) => /^打开文件(?!夹)/.test(t))) {
+      throw new Error('「单独打开文件」又回到新建入口了：' + joined)
+    }
+  })
 
   await step('免登进入项目（启动落项目列表 → 点卡片进工作台）', async () => {
     await page.goto(DEVURL + '/#/pages/project-overview/project-overview?id=' + QA.projectId, { waitUntil: 'networkidle2' })
