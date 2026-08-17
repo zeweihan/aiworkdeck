@@ -58,7 +58,7 @@
               >
                 <text>{{ busy ? $t('market.processingEllipsis') : $t('market.reinstallOrUpdate') }}</text>
               </view>
-              <picker
+              <AwdSelect
                 v-if="installedInfo && !installedInfo.sourcePluginId"
                 :range="ACTIVATION_LABELS"
                 :value="activationIndex"
@@ -67,7 +67,7 @@
                 <view class="mdp-btn">
                   <text>{{ $t('market.activationModeLabel', { mode: ACTIVATION_LABELS[activationIndex] }) }}</text>
                 </view>
-              </picker>
+              </AwdSelect>
               <text v-if="installedInfo && installedInfo.sourcePluginId" class="mdp-action-hint">{{ $t('market.activationHintSourcePlugin') }}</text>
               <view
                 v-if="installedInfo && marketInfo && !installedInfo.sourcePluginId"
@@ -91,7 +91,7 @@
               </view>
               <view v-if="installedInfo" class="mdp-switch-row">
                 <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
-                <switch :checked="!!installedInfo.enabled" color="#1A5336" style="transform: scale(0.7);" @change="onPluginToggle" />
+                <AwdSwitch :checked="!!installedInfo.enabled" @change="onPluginToggle" />
               </view>
               <view
                 v-if="installedInfo && marketInfo"
@@ -176,6 +176,8 @@ import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl }
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { refreshEntitlements } from '@/composables/useEntitlement.js'
 import { t } from '@/i18n'
+import AwdSelect from '@/components/AwdSelect.vue'
+import AwdSwitch from '@/components/AwdSwitch.vue'
 
 const CATEGORY_GLYPHS = {
   contract: ICONS.catContract,
@@ -209,6 +211,7 @@ const ACTIVATION_LABELS = [t('market.activationAuto'), t('market.activationManua
 
 export default {
   name: 'MarketDetailPane',
+  components: { AwdSelect, AwdSwitch },
   props: {
     spec: {
       type: Object,
@@ -494,8 +497,8 @@ export default {
         this.busy = false
       }
     },
-    async onPluginToggle(event) {
-      const enabled = !!(event?.detail?.value)
+    // AwdSwitch 直接抛布尔值
+    async onPluginToggle(enabled) {
       try {
         await setPluginEnabled(this.spec.id, enabled)
         if (this.installedInfo) this.installedInfo.enabled = enabled
@@ -507,9 +510,9 @@ export default {
         await this.reload()
       }
     },
-    async onActivationChange(event) {
-      const idx = Number(event?.detail?.value)
-      const mode = ACTIVATION_MODES[idx]
+    // AwdSelect 直接抛下标
+    async onActivationChange(idx) {
+      const mode = ACTIVATION_MODES[Number(idx)]
       if (!mode || !this.installedInfo || mode === ACTIVATION_MODES[this.activationIndex]) return
       try {
         await setSkillActivation(this.spec.id, mode)

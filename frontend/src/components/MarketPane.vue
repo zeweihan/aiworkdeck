@@ -255,9 +255,8 @@
                   <text class="card-title">{{ p.name || p.id }}</text>
                   <text class="card-id">{{ p.id }}<template v-if="p.version"> · v{{ p.version }}</template><template v-if="p.author"> · {{ p.author }}</template></text>
                 </view>
-                <switch
+                <AwdSwitch
                   class="plugin-switch"
-                  color="#1A5336"
                   :checked="p.enabled"
                   :disabled="switching"
                   @change="onToggle(p, $event)"
@@ -306,21 +305,15 @@
                   <text class="card-note">{{ activationHint(s) }}</text>
                 </view>
                 <!-- 插件携带的 Skill 跟随插件启停，不单独设生效方式 -->
-                <picker
+                <AwdSelect
                   v-if="!s.sourcePluginId"
                   class="mode-picker"
-                  mode="selector"
                   :range="ACTIVATION_LABELS"
                   :value="activationIndex(s)"
                   :disabled="switching"
                   @change="onActivationChange(s, $event)"
-                >
-                  <view class="mode-value">
-                    <text>{{ ACTIVATION_LABELS[activationIndex(s)] }}</text>
-                    <text class="mode-caret">▾</text>
-                  </view>
-                </picker>
-                <switch v-else class="plugin-switch" color="#1A5336" :checked="s.enabled" disabled />
+                />
+                <AwdSwitch v-else class="plugin-switch" :checked="s.enabled" disabled />
               </view>
 
               <text class="card-desc">{{ s.description || $t('market.noDescription') }}</text>
@@ -340,6 +333,8 @@ import { paidState, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { ICONS } from '@/config/icons.js'
 import { t } from '@/i18n'
+import AwdSelect from '@/components/AwdSelect.vue'
+import AwdSwitch from '@/components/AwdSwitch.vue'
 
 const PERMISSION_LABELS = {
   file_read: t('market.permFileRead'),
@@ -386,6 +381,7 @@ const TRIGGER_PREVIEW = 3
 
 export default {
   name: 'MarketPane',
+  components: { AwdSelect, AwdSwitch },
   props: {
     /** true=独立页面（渲染返回按钮，返回走 uni.navigateBack）；false=嵌入 workbench 窗格 */
     standalone: {
@@ -601,8 +597,8 @@ export default {
         this.loading = false
       }
     },
-    async onToggle(plugin, event) {
-      const enabled = !!(event?.detail?.value)
+    // AwdSwitch 直接抛布尔值
+    async onToggle(plugin, enabled) {
       this.switching = true
       try {
         await setPluginEnabled(plugin.id, enabled)
@@ -639,9 +635,9 @@ export default {
       if (mode === 'disabled') return this.$t('market.disabledTag')
       return this.$t('market.activationHintAuto')
     },
-    async onActivationChange(skill, event) {
-      const idx = Number(event?.detail?.value)
-      const mode = ACTIVATION_MODES[idx]
+    // AwdSelect 直接抛下标
+    async onActivationChange(skill, idx) {
+      const mode = ACTIVATION_MODES[Number(idx)]
       if (!mode || mode === ACTIVATION_MODES[this.activationIndex(skill)]) return
       const previous = skill.activationMode
       this.switching = true
@@ -1369,41 +1365,14 @@ $gray-pale: #F8F9FA;
   height: 13px;
 }
 
-/* 已安装卡片上的控件 */
+/* 已安装卡片上的控件。AwdSwitch 自己就是小尺寸，不再需要 transform: scale
+   （缩放会把描边和圆角一起缩变形，跟旁边的按钮对不齐）。 */
 .plugin-switch {
-  transform: scale(0.78);
-  transform-origin: right center;
   flex-shrink: 0;
 }
 
 .mode-picker {
   flex-shrink: 0;
-}
-
-.mode-value {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: $gray-dark;
-  background: #fff;
-  border: 1px solid $gray-light;
-  border-radius: 6px;
-  padding: 5px 10px;
-  cursor: pointer;
-  transition: all 0.2s;
-  white-space: nowrap;
-
-  &:hover {
-    color: $forest;
-    border-color: $mint;
-  }
-}
-
-.mode-caret {
-  font-size: 10px;
-  color: #94A3B8;
 }
 
 /* 工具清单 */

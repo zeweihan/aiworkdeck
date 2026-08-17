@@ -13,6 +13,12 @@ export default {
   downloadFile: '下载文件',
   videoNotSupported: '您的浏览器不支持视频播放',
   videoLoading: '视频加载中…',
+  // 自绘音频播放器
+  audioLoading: '音频加载中…',
+  audioPlay: '播放',
+  audioPause: '暂停',
+  audioRate: '播放速度',
+  audioMute: '静音',
   entriesCount: '{count} 个条目',
   extract: '解压',
   extracting: '解压中…',

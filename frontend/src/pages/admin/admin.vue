@@ -406,54 +406,36 @@
               <text v-if="modelCatalogError" class="field-note field-note-warn">{{ modelCatalogError }}</text>
               <view class="form-row">
                 <text class="form-label">{{ $t('admin.defaultModelLabel') }}</text>
-                <picker
+                <AwdSelect
                   class="mode-picker"
-                  mode="selector"
                   :range="modelLabels('defaultModel')"
                   :value="modelIndex('defaultModel')"
                   @change="onModelPick('defaultModel', $event)"
-                >
-                  <view class="mode-value">
-                    <text>{{ modelLabels('defaultModel')[modelIndex('defaultModel')] }}</text>
-                    <text class="mode-caret">▾</text>
-                  </view>
-                </picker>
+                />
               </view>
               <text v-if="catalogDefaultModel" class="field-note">
                 {{ $t('admin.effectiveDefaultModel', { model: catalogDefaultModel }) }}
               </text>
               <view class="form-row">
                 <text class="form-label">{{ $t('admin.auxModelLabel') }}</text>
-                <picker
+                <AwdSelect
                   class="mode-picker"
-                  mode="selector"
                   :range="modelLabels('auxModel')"
                   :value="modelIndex('auxModel')"
                   @change="onModelPick('auxModel', $event)"
-                >
-                  <view class="mode-value">
-                    <text>{{ modelLabels('auxModel')[modelIndex('auxModel')] }}</text>
-                    <text class="mode-caret">▾</text>
-                  </view>
-                </picker>
+                />
               </view>
               <text class="field-note">
                 {{ $t('admin.auxModelNote') }}
               </text>
               <view class="form-row">
                 <text class="form-label">{{ $t('admin.subagentModelLabel') }}</text>
-                <picker
+                <AwdSelect
                   class="mode-picker"
-                  mode="selector"
                   :range="modelLabels('subagentModel')"
                   :value="modelIndex('subagentModel')"
                   @change="onModelPick('subagentModel', $event)"
-                >
-                  <view class="mode-value">
-                    <text>{{ modelLabels('subagentModel')[modelIndex('subagentModel')] }}</text>
-                    <text class="mode-caret">▾</text>
-                  </view>
-                </picker>
+                />
               </view>
               <text class="field-note">{{ $t('admin.subagentModelNote') }}</text>
 
@@ -1137,9 +1119,8 @@
                       {{ $t('admin.telemetryRollupDesc') }}
                     </text>
                   </view>
-                  <switch
+                  <AwdSwitch
                     :checked="telemetrySettings.rollupEnabled"
-                    color="#1A5336"
                     :disabled="telemetryBusy"
                     @change="onToggleTelemetry('rollupEnabled', $event)"
                   />
@@ -1153,9 +1134,8 @@
                       {{ $t('admin.telemetryEventsDesc') }}
                     </text>
                   </view>
-                  <switch
+                  <AwdSwitch
                     :checked="telemetrySettings.eventsEnabled"
-                    color="#1A5336"
                     :disabled="telemetryBusy"
                     @change="onToggleTelemetry('eventsEnabled', $event)"
                   />
@@ -1408,10 +1388,12 @@ import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntit
 import { getAppLanguage, setAppLanguage } from '@/utils/appLanguage.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import MarketPane from '@/components/MarketPane.vue'
+import AwdSelect from '@/components/AwdSelect.vue'
+import AwdSwitch from '@/components/AwdSwitch.vue'
 
 export default {
   name: 'AdminPage',
-  components: { UnlockHint, MarketPane },
+  components: { UnlockHint, MarketPane, AwdSelect, AwdSwitch },
   data() {
     return {
       userDisplayName: this.$t('admin.userFallbackName'),
@@ -1771,8 +1753,8 @@ export default {
       this.telemetryDays = d
       this.loadTelemetrySummary()
     },
-    async onToggleTelemetry(key, evt) {
-      const value = !!(evt && evt.detail && evt.detail.value)
+    // AwdSwitch 直接抛布尔值
+    async onToggleTelemetry(key, value) {
       this.telemetryBusy = true
       try {
         const r = await updateTelemetrySettings({ [key]: value })
@@ -2346,9 +2328,9 @@ export default {
       const idx = this.modelOptionsFor(field).findIndex((o) => o.value === current)
       return idx < 0 ? 0 : idx
     },
-    onModelPick(field, evt) {
-      const idx = Number(evt && evt.detail && evt.detail.value)
-      const opt = this.modelOptionsFor(field)[idx]
+    // AwdSelect 直接抛下标（不是 uni picker 那个 event.detail.value 的形状）
+    onModelPick(field, idx) {
+      const opt = this.modelOptionsFor(field)[Number(idx)]
       if (opt) this.form.ai[field] = opt.value
     },
     // 供应商单选：不可选项给出下一步，而不是静默不响应
@@ -3122,30 +3104,12 @@ $border-color: #E9ECEF; // Gray-Light
   color: #B45309;
 }
 
-/* 模型下拉：与插件广场的生效方式下拉同一形态 */
+/* 模型下拉：形制在 AwdSelect 里，这里只管它在表单行里占多宽
+   （原来那份 .mode-value/.mode-caret 是给 uni <picker> 的收起态用的，
+   换成自绘下拉后没人引用了，一并删掉） */
 .mode-picker {
   flex: 1;
   min-width: 0;
-}
-
-.mode-value {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid $border-color;
-  border-radius: 6px;
-  background-color: #fff;
-  font-size: 13px;
-  color: $text-main;
-  box-sizing: border-box;
-}
-
-.mode-caret {
-  color: $text-secondary;
-  font-size: 12px;
 }
 
 .provider-radio-group {
