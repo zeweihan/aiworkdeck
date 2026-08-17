@@ -56,7 +56,7 @@ class MeetingTranscriptionServiceTest {
         return new MeetingTranscriptionService(
                 meetingRepository, mock(ProjectFileRepository.class), null, settingService,
                 mock(MeetingAudioTranscoder.class), tingwu, oss,
-                resolver, mock(PlatformGatewayClient.class),
+                resolver, mock(PlatformGatewayClient.class), mock(LocalAsrClient.class),
                 fetcher, mock(MeetingTranscriptionService.BinaryUploader.class),
                 "", "", "", "", "");
     }

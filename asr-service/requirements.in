@@ -1,0 +1,7 @@
+faster-whisper>=1.1
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+# 繁转简后处理：Whisper 说普通话时稳定输出繁体，见 app.py 顶部 OUTPUT_SCRIPT 的说明。
+# 用纯 Python 的 reimplemented 版本，官方 OpenCC 要编 C++（与另外三个纯 wheel 服务的打包路径不一致）
+opencc-python-reimplemented>=0.1.7

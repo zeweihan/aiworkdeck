@@ -132,7 +132,7 @@ class MeetingTranscriptionPlatformPathTest {
         PlatformGatewayClient gateway = new PlatformGatewayClient(transport, accountService, site);
         return new MeetingTranscriptionService(
                 meetingRepository, projectFileRepository, storageResolver, settingService,
-                transcoder, tingwu, oss, resolver, gateway,
+                transcoder, tingwu, oss, resolver, gateway, mock(LocalAsrClient.class),
                 mock(MeetingTranscriptionService.UrlFetcher.class), uploader,
                 "", "", "", "", "");
     }
