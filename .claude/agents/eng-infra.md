@@ -100,17 +100,27 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 - worktree 冷启动跑双 e2e 完整配方见 v0.7.7 发版实录；worktree merge 报 stash failed 用 cherry-pick 绕。
 - 坏 pnpm node_modules 遇到过——本项目一律 npm。
 - **worktree 的 node_modules 落后于新增依赖**（如 TOTP 带来的 `qrcode`）时，vite 会推一个盖满视口的 `vite-error-overlay`，坐标点击全被它吃掉，e2e 表现成"点了没反应"的超时而非编译错误。冷启动 worktree 跑 e2e 前先 `npm install`；desktop-e2e 的点击已加命中校验，会直接报出遮挡者和它的文案。
-- **CDP 合成鼠标事件会被整个丢掉**（2026-08-17 在 desktop-e2e「新建 Word 文档」步复现三次，约 3/10）：
-  渲染器活得好好的——`page.evaluate` 照跑、`elementFromPoint` 照准、`$refs` 都在、页面栈只有一个实例——
-  但 `page.mouse.click()` 之后 pointerdown/mousedown/mouseup/click **四种事件一个都没进页面**，于是表现成
-  "点了没反应、一个写请求都没发"，还会连累后面依赖它的步骤。**排查判据**：在 `window` 捕获期录这四种
-  事件，一个都没有 = 输入通道的问题，不是界面的问题，同坐标重试没有意义（该步原本重试 3 次全废）。
-  失败现场必然带 `visibilityState: hidden`，但**隐藏本身不是原因**（实测把窗口 Cmd+H 隐藏、或最小化，
-  `vis` 同样是 hidden，点击照样送达），`page.bringToFront()` 也救不回来（Electron 下 `vis` 仍是 hidden）。
-  desktop-e2e 已就地兜底：只在"零鼠标事件"时改用页面内 `dispatchEvent(new MouseEvent('click',{bubbles:true}))`
-  ——uni 的 `@tap` 在 H5 上就绑在 click 上（uni-h5 `$nne`：`isClickEvent = evt.type === 'click'`），
-  照样走完 handleCreateWord → createFile → 后端落盘，断言强度不打折；界面真坏了是收得到事件的，糊不住真回归。
-  **其余三套 e2e（app-e2e / lowa-e2e / feedback-e2e）同样靠坐标点击，还没上这个判据**，遇到"点了没反应"先按这条排。
+- **e2e 起 Electron 必须整棵进程树一起收，CDP 端口不能写死**（2026-08-17 定位）：
+  `spawn('npx', ['electron', ...])` 之后 `elec.kill()` 只打得到 npx，真正的 Electron 是**孙子进程**，
+  收不到信号会活下来继续占着 CDP 端口（实测跑完一轮之后它还在 LISTEN，端口不释放）。下一轮撞上它有两种死法：
+  残留还应答 CDP → 你连上去驱动的是**上一轮那个窗口**；残留只占端口不应答 → 干等 60 秒报「CDP 端点未就绪」。
+  正解三件套（desktop-e2e 已落）：① `detached: true` 起进程组 + `process.kill(-pid)` 整组收（并挂 `process.on('exit'/'SIGINT')`）；
+  ② 每轮现挑一个空闲端口（`DESKTOP_E2E_CDP_PORT` 可覆盖），别写死 9333——维护者常年多开，并行会话必撞；
+  ③ 连之前用 `lsof` 核一遍持端口的 pid 在不在自己那棵树里，不是就当场报死。
+  **app-e2e / lowa-e2e / feedback-e2e / meeting-e2e 同样是 spawn npx + 写死端口，还没上这三件套。**
+- **"点了没反应"先分清是输入通道坏了还是界面坏了**：`page.mouse.click()` 之后在 `window` 捕获期录
+  pointerdown/mousedown/mouseup/click，**一个都没有 = 输入通道的问题**，同坐标重试没有意义。
+  这一档故障的特征很干净也很反直觉：**`mouseMoved` 照常送达，`mousePressed`/`mouseReleased`/`dispatchKeyEvent`
+  被静默丢弃**，而渲染器一切正常（evaluate、布局度量、elementFromPoint、`$refs`、页面栈全对），且一旦坏了整轮不恢复。
+  已逐条实测排除：窗口被遮挡/隐藏、别的 App 抢焦点、无边框标题栏的 app-region 拖拽带、页面栈堆两个工作台、
+  坐标重排点空、OOPIF/webview 盖住、连错了别人的 Electron。
+  **`visibilityState: hidden` 不是故障信号**——这台机器上窗口本来常年 hidden（被终端盖着），通过的轮次同样是 hidden，
+  别再拿它当线索（上一版这条记错了，害人查了一轮窗口可见性）。
+  主因就是上面那条进程泄漏：修掉之后失败率从 **6/36 掉到 1/61**；剩下的极少数还没定位到 Chromium 内部机制。
+  desktop-e2e 的处置是**一次诚实的恢复**：整页重载让浏览器重建这一页的输入路径，然后仍旧用真实鼠标重点一次，
+  恢复不了就报死并在错误里点明"是输入通道坏了不是界面问题"。
+  **不要退回"页面内 `dispatchEvent` 伪造点击"兜底**（#390 曾这么干，已撤）——桌面端就这一条真实输入的覆盖，
+  换成假的之后这一步就再也挡不住真的界面回归了。
 - 分支保护拦 gh pr merge 时权宜 = 用户网页点 Bypass rules and merge（白名单未配成）。
 - `docs/` 在 .gitignore，入库要 `git add -f`。
 - **改跨类 `public static final String` 常量的值必须 `mvn clean test`**：这类常量在编译期被内联进
