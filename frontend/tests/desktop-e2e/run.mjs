@@ -38,7 +38,22 @@ const BACKEND = process.env.APP_E2E_BACKEND || 'http://127.0.0.1:9696'
 // CHECKBA_BACKEND_PORT 是 backend-service.js 留的显式覆盖口，同时让壳复用这个已在
 // 跑的后端（verifyReuse 探 /api/admin/wizard）而不是另起一个 java。
 const BACKEND_PORT = new URL(BACKEND).port
-const CDP_PORT = 9333
+// CDP 端口不能写死。9333 会被两种东西占住：① 同一台机器上并行的另一个会话
+// （维护者常年多开，5174/5175 早就被别的会话占着）；② 上一轮自己没死透的 Electron
+// ——本套件原来 spawn 的是 `npx`，`elec.kill()` 只打得到 npx，真正的 Electron 是孙子
+// 进程，收不到信号就活下来继续占着端口（实测跑完一轮之后它还在 LISTEN）。
+// 占住之后有两种死法，都真实发生过：残留还应答 CDP → 我们连上去驱动的是**别人的
+// 窗口**；残留只占端口不应答 → 我们干等 60 秒报「CDP 端点未就绪」。
+// 每轮现挑一个空闲端口，这两种都不成立。
+const portFree = (p) => {
+  try { execSync('lsof -nP -iTCP:' + p + ' -sTCP:LISTEN -t', { stdio: 'pipe' }); return false }
+  catch (e) { return true } // lsof 非零退出 = 没人在听
+}
+const pickCdpPort = () => {
+  for (let p = 9333; p < 9373; p++) if (portFree(p)) return p
+  throw new Error('9333-9372 全被占，挑不出空闲 CDP 端口')
+}
+const CDP_PORT = Number(process.env.DESKTOP_E2E_CDP_PORT) || pickCdpPort()
 const MARKER = 'QA_SAVE_MARKER_' + Date.now()
 
 let puppeteer
@@ -87,6 +102,8 @@ async function api(ep, opts = {}) {
 
 // ---- launch dev Electron with CDP ----
 console.log('启动 dev Electron（屏幕会出现窗口，结束自动关闭）...')
+// detached：让它自成进程组，收尾时能把 npx→node→Electron 整棵树一起杀掉。
+// 只 kill(elec.pid) 杀的是 npx，Electron 是孙子进程，会活下来占着 CDP 端口。
 const elec = spawn('npx', ['electron', '.', '--remote-debugging-port=' + CDP_PORT], {
   cwd: desktopDir,
   env: {
@@ -96,7 +113,17 @@ const elec = spawn('npx', ['electron', '.', '--remote-debugging-port=' + CDP_POR
     CHECKBA_BACKEND_PORT: BACKEND_PORT,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
+  detached: true,
 })
+// 整棵树一起收：先客气后强硬。测试进程自己被 Ctrl-C / 异常退出时也要收，
+// 否则下一轮又会撞上一个占着端口的孤儿。
+const killTree = () => {
+  for (const sig of ['SIGTERM', 'SIGKILL']) {
+    try { process.kill(-elec.pid, sig) } catch (e) { /* 组没了就算了 */ }
+  }
+}
+process.on('exit', killTree)
+process.on('SIGINT', () => { killTree(); process.exit(130) })
 const elecLog = fs.createWriteStream(path.join(os.tmpdir(), 'desktop-e2e-electron.log'))
 elec.stdout.pipe(elecLog); elec.stderr.pipe(elecLog)
 
@@ -106,7 +133,31 @@ for (let i = 0; i < 60 && !ws; i++) {
   await sleep(1000)
   ws = await fetch('http://127.0.0.1:' + CDP_PORT + '/json/version').then((r) => r.json()).then((j) => j.webSocketDebuggerUrl).catch(() => null)
 }
-if (!ws) { console.error('CDP 端点未就绪'); elec.kill(); process.exit(1) }
+if (!ws) { console.error('CDP 端点未就绪（端口 ' + CDP_PORT + '）'); killTree(); process.exit(1) }
+
+// 连上去之前先确认：应答这个端口的，就是我们刚起的那棵进程树。
+// 万一还是撞上了别人（并行会话同时挑中同一个端口），当场报死——总比默默驱动
+// 别人的窗口、最后以"点了没反应"的形态红在某一步强。
+{
+  const kids = (root) => {
+    const out = []
+    const walk = (p) => {
+      let cs = ''
+      try { cs = execSync('pgrep -P ' + p + ' 2>/dev/null || true').toString() } catch (e) { cs = '' }
+      for (const c of cs.split('\n').map((s) => s.trim()).filter(Boolean)) { out.push(c); walk(c) }
+    }
+    walk(root)
+    return out
+  }
+  let holder = ''
+  try { holder = execSync('lsof -nP -iTCP:' + CDP_PORT + ' -sTCP:LISTEN -t 2>/dev/null || true').toString().trim().split('\n')[0] } catch (e) { holder = '?' }
+  const ours = [String(elec.pid), ...kids(elec.pid)]
+  if (holder && !ours.includes(holder)) {
+    console.error('CDP 端口 ' + CDP_PORT + ' 上应答的是 pid=' + holder + '，不是本轮起的 Electron('
+      + ours.join(',') + ')——多半有别的会话在跑同一套 e2e。换个端口重跑：DESKTOP_E2E_CDP_PORT=9400')
+    killTree(); process.exit(1)
+  }
+}
 
 let failed = 0
 const step = async (name, fn) => {
@@ -369,34 +420,53 @@ try {
       }, false)
     }).catch(() => {})
 
-    // 本步间歇性红的真正原因（2026-08-17 实测复现三次）：**CDP 合成的鼠标事件被
-    // 整个丢掉了**——渲染器还活着（evaluate 照常跑、命中检测照常准、$refs 都在），
-    // 但 pointerdown/mousedown/mouseup/click 四种事件一个都没进页面，于是"点了没
-    // 反应、一个写请求都没发"。这不是界面坏了，是输入通道坏了，同坐标再点几次
-    // 毫无意义。所以：点完先问"这一下到底进没进页面"，没进就换一条不依赖操作系统
-    // 输入层的路——直接在页面里派发冒泡 click。uni 的 @tap 在 H5 上就是绑在 click
-    // 上的（uni-h5 的 $nne：isClickEvent = evt.type === 'click'），派发同样会走完
-    // handleCreateWord → createFile → 后端落盘，断言强度不打折。
-    // 兜底只在"零鼠标事件"时才启用——界面真坏了是收得到事件的，糊不住真回归。
-    const clickCounted = async (sel) => {
+    // 本步间歇性红的真正原因（2026-08-17 逐层夹出来的）：**这一轮的 CDP 输入通道
+    // 坏了**，不是界面坏了。特征很干净、也很反直觉：
+    //   · mouseMoved 照常送达；mousePressed / mouseReleased / dispatchKeyEvent 被静默丢弃；
+    //   · 渲染器一切正常——evaluate、布局度量、elementFromPoint、$refs、页面栈全对；
+    //   · 一旦坏了就整轮不恢复，同坐标再点几次毫无意义。
+    // 已排除（各有一次实测）：窗口被遮挡/隐藏（这台机器上窗口本来常年 hidden，照样
+    // 能点）、别的 App 抢焦点、无边框标题栏的 app-region 拖拽带、页面栈堆两个工作台、
+    // 坐标重排点空、OOPIF/webview 盖住、连错了别人的 Electron。
+    // 主因是进程泄漏（见文件开头 CDP 端口那段）：修掉之后失败率从 6/36 掉到 1/61。
+    // 残留的极少数仍未定位到 Chromium 内部机制，所以这里只做**一次诚实的恢复**：
+    // 整页重载让浏览器把这一页的输入路径重建一遍，然后仍旧用真实鼠标重点一次；
+    // 恢复不了就当场报死，并在报错里点明是输入通道坏了。
+    // 绝不退回"页面内 dispatchEvent 伪造点击"——桌面端就这一条真实输入的覆盖，
+    // 换成假的之后这一步以后就再也挡不住真的界面回归了。
+    const pressChannelLive = async () => {
+      try {
+        await page.evaluate(() => {
+          window.__pcl = 0
+          if (!window.__pclBound) { window.__pclBound = 1; window.addEventListener('mousedown', () => { window.__pcl++ }, true) }
+        })
+        await page.mouse.move(700, 500)
+        await page.mouse.down(); await page.mouse.up()
+        await sleep(200)
+        return (await page.evaluate(() => window.__pcl)) > 0
+      } catch (e) { return false }
+    }
+    const clickCounted = async (what, clickFn) => {
       await installTrace()
       const before = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
-      await mouseClickSel(sel)
-      const after = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
-      if (after > before) return 'mouse'
-      console.log('      ! 真实鼠标事件一个都没进页面（CDP 输入被丢弃），改用页面内派发')
-      await page.evaluate((s) => {
-        const el = document.querySelector(s)
-        if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
-      }, sel)
-      return 'dispatch'
+      await clickFn()
+      if ((await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)) > before) return true
+      console.log('      ! ' + what + '：真实鼠标点了但一个事件都没进页面（本轮 CDP 输入通道坏了），重载页面重试一次')
+      await page.reload({ waitUntil: 'networkidle2' }).catch(() => {})
+      await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 30000 }).catch(() => {})
+      if (!(await pressChannelLive())) { console.log('      ! 重载之后按下通道仍然是死的'); return false }
+      await installTrace()
+      const b2 = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
+      await clickFn()
+      return (await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)) > b2
     }
 
     let created = false
     let attempts = 0
+    let inputOk = true
     for (let attempt = 0; attempt < 3 && !created; attempt++) {
       attempts++
-      await clickCounted('[title="新建文档"]')
+      inputOk = await clickCounted('新建文档', () => mouseClickSel('[title="新建文档"]'))
       created = await page.waitForFunction(() => document.body.innerText.includes('newdocument'), { timeout: 8000 })
         .then(() => true).catch(() => false)
     }
@@ -447,25 +517,18 @@ try {
           text: document.body.innerText.replace(/\s+/g, ' ').slice(0, 200),
         }
       }).catch(() => null)
-      throw new Error('点了新建文档但文件没出现；点击次数=' + attempts
+      // 两种红要一眼分得开：inputOk=false 是"这一轮的 CDP 输入通道坏了"（环境问题，
+      // 重跑通常就好），不是界面回归——别再让人拿着这条去查 UI（本套件为此栽过一轮）。
+      throw new Error((inputOk
+        ? '点了新建文档但文件没出现'
+        : '真实鼠标事件进不了页面且重载后未恢复：本轮 CDP 输入通道坏了，不是界面问题（重跑一次通常即可）')
+        + '；点击次数=' + attempts
         + ' 写请求=' + JSON.stringify(apiWrites.slice(-6))
         + ' 页面错误=' + JSON.stringify(pageErrs.slice(0, 3)) + ' 现场=' + JSON.stringify(snap))
     }
-    // 打开文件这一下同样吃"输入被丢弃"的亏（丢了就卡在下面等 webview），一样处理
-    {
-      await installTrace()
-      const before = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
-      await mouseClickText('newdocument')
-      const after = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
-      if (after === before) {
-        console.log('      ! 打开文件那一下也没进页面，改用页面内派发')
-        await page.evaluate(() => {
-          const el = [...document.querySelectorAll('*')].find((n) => n.children.length === 0
-            && n.innerText && n.offsetParent !== null && n.innerText.trim().includes('newdocument'))
-          if (el) el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }))
-        })
-        await sleep(700)
-      }
+    // 打开文件这一下同样吃"输入被丢弃"的亏（丢了就卡在下面等 webview），同样处理
+    if (!(await clickCounted('打开 newdocument', () => mouseClickText('newdocument')))) {
+      throw new Error('打开文件那一下真实鼠标事件没进页面，且重载后仍未恢复（CDP 输入通道坏了，不是界面问题）')
     }
     await page.waitForSelector('webview', { timeout: 30000 })
   })
@@ -637,9 +700,8 @@ try {
 } finally {
   try { await api('/api/projects/' + QA.projectId, { method: 'DELETE' }) } catch {}
   try { browser.disconnect() } catch {}
-  elec.kill('SIGTERM')
+  killTree()
   await sleep(1500)
-  try { elec.kill('SIGKILL') } catch {}
 }
 console.log(failed ? '\n结果：' + failed + ' 步失败' : '\n结果：桌面保存链路全通')
 process.exit(failed ? 1 : 0)
