@@ -22,4 +22,10 @@ public interface TagRepository extends JpaRepository<Tag, Long> {
      * Finds a tag by project ID and name.
      */
     Optional<Tag> findByProjectIdAndName(Long projectId, String name);
+
+    /**
+     * 全部自动标签（{@code getOrCreateSystemTag} 建的那些）。
+     * 供 {@link com.checkba.service.maintenance.DuplicateAutoTagCleanup} 的一次性去重使用。
+     */
+    List<Tag> findByIsSystemTrue();
 }

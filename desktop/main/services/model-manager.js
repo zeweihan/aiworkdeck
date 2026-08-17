@@ -43,11 +43,14 @@ function pyBin(resourcesPath) {
 }
 
 // 组件注册表：MinerU pipeline 模型 + Kokoro 语音模型 + 本地转写模型
+// sizeHint 只写数值与单位、**不带任何语言**（不要写「约」）：它会被塞进
+// admin 的下载/删除确认文案与语音面板的按钮里，那些串是双语的，
+// 「约」写在这里就会原样出现在英文界面上。修饰词归各处的 i18n 串。
 const COMPONENTS = [
   {
     id: 'mineru-models',
     name: '文档解析模型（MinerU）',
-    sizeHint: '约 3GB',
+    sizeHint: '3 GB',
     estBytes: 3.0 * 1024 * 1024 * 1024, // 整体进度分母（估计值，进度封顶 99% 直到进程成功退出）
     // 模型根目录（相对 dataDir）
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'mineru'),
@@ -75,7 +78,7 @@ const COMPONENTS = [
   {
     id: 'kokoro-models',
     name: '语音合成模型（Kokoro）',
-    sizeHint: '约 300MB',
+    sizeHint: '300 MB',
     estBytes: 300 * 1024 * 1024,
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'kokoro'),
     // huggingface_hub snapshot（走国内镜像，env 可覆盖）；运行侧 HF_HOME 与此一致
@@ -104,7 +107,7 @@ const COMPONENTS = [
   {
     id: 'asr-models',
     name: '本地转写模型（Whisper medium）',
-    sizeHint: '约 1.5GB',
+    sizeHint: '1.5 GB',
     estBytes: 1.5 * 1024 * 1024 * 1024,
     dir: (ctx) => path.join(ctx.dataDir, 'models', 'asr'),
     // 与 kokoro 同一条 huggingface_hub snapshot 路径；运行侧 HF_HOME 与此一致。

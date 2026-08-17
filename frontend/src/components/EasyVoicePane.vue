@@ -29,9 +29,25 @@
       </view>
 
       <!-- 引擎未就绪时把话说在合成之前：音色列表拿不到就是引擎没起来，
-           这时候让用户填完一整段文字再报错是没道理的 -->
-      <view class="ev-notice" v-if="voicesLoaded && voices.length === 0">
-        <text>{{ $t('panels.evNoVoicesNotice') }}</text>
+           这时候让用户填完一整段文字再报错是没道理的。
+           **不止是说，还要给出路**——照会议录音那条 ASR gate 的形制（#385）：
+           模型没下就在这里下，下完就地把服务拉起来，不用去「组件管理」绕一圈。 -->
+      <view class="ev-gate" v-if="engineGateVisible">
+        <text class="ev-gate-msg">{{ gateMessage }}</text>
+        <view class="ev-gate-actions">
+          <template v-if="modelDownloading">
+            <text class="ev-gate-hint">{{ $t('panels.evModelDownloading', { percent: modelPercent }) }}</text>
+            <view class="ev-gate-btn secondary" @tap="onCancelModel">{{ $t('panels.evCancelDownload') }}</view>
+          </template>
+          <template v-else>
+            <view class="ev-gate-btn primary" v-if="canDownloadModel" @tap="onDownloadModel">
+              {{ $t('panels.evDownloadModel', { size: modelSizeHint }) }}
+            </view>
+            <view class="ev-gate-btn secondary" :class="{ disabled: rechecking }" @tap="onRecheck">
+              {{ rechecking ? $t('panels.evRechecking') : $t('panels.evRecheck') }}
+            </view>
+          </template>
+        </view>
       </view>
 
       <!-- Voice Selection (Custom Dropdown) -->
@@ -139,6 +155,12 @@
 <script>
 import { getTtsVoices, generateTtsAudio, promptFeatureNotConfigured } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
+import { host } from '@/services/host.js'
+
+// 本机语音引擎的模型组件 id（desktop/main/services/model-manager.js）。
+// kokoro-service 的 descriptor 把 enabled 门在这个组件上——模型没下，服务根本不启动，
+// 于是 /api/tts/voices 恒返回空数组。
+const TTS_MODEL_ID = 'kokoro-models'
 
 export default {
   name: 'EasyVoicePane',
@@ -151,6 +173,11 @@ export default {
       voiceSearch: '',
       showVoiceDropdown: false,
       voicesLoaded: false,
+      // 本机语音组件的状态：absent / downloading / installed（读自 host.model.status）
+      modelState: '',
+      modelPercent: 0,
+      modelSizeHint: '300 MB',
+      rechecking: false,
       // 语速以「百分之几倍」存（100 = 原速），下发时除以 100 变成 Kokoro 的 speed
       rate: 100,
       generating: false,
@@ -167,6 +194,26 @@ export default {
   computed: {
     ICONS() { return ICONS },
     speedText() { return (this.rate / 100).toFixed(2).replace(/0$/, '') + 'x' },
+    /** 拿不到音色 = 引擎没就绪。问过之后才判，免得加载中先闪一下红字。 */
+    engineGateVisible() {
+      return this.voicesLoaded && this.voices.length === 0
+    },
+    /** 浏览器态没有 host.model，下载入口整块不出现（那儿也没有本机引擎可言）。 */
+    canDownloadModel() {
+      return !!host.model && this.modelState !== 'installed'
+    },
+    modelDownloading() {
+      return this.modelState === 'downloading'
+    },
+    /**
+     * 「模型没下」与「模型下好了但服务没起」是两回事，下一步完全不同
+     *（前者下 300MB，后者点一下重新检测就够），不能合并成一句「不可用」让用户猜。
+     */
+    gateMessage() {
+      if (!host.model) return this.$t('panels.evNoVoicesNoticeWeb')
+      if (this.modelState === 'installed') return this.$t('panels.evEngineNotRunning')
+      return this.$t('panels.evModelMissing')
+    },
     selectedVoiceLabel() {
         const v = this.voices.find(v => v.voiceId === this.selectedVoiceId)
         return v ? `${v.name} (${v.gender || 'voice'})` : ''
@@ -183,9 +230,29 @@ export default {
   },
   mounted() {
     this.fetchVoices()
+    this.loadModelState()
+    // 下载进度直接订阅主进程，与「组件管理」页同一条事件流：
+    // 用户在这里点的下载与在设置页点的是同一个下载，两处进度必须一致
+    if (host.model) {
+      this._modelProgressUnsub = host.model.onProgress((evt) => {
+        if (!evt || evt.id !== TTS_MODEL_ID) return
+        if (evt.phase === 'progress') {
+          this.modelState = 'downloading'
+          if (typeof evt.percent === 'number') this.modelPercent = evt.percent
+        } else {
+          // done / error：重新探一次真相，不拿事件本身当结论
+          this.loadModelState()
+          if (evt.phase === 'done') this.startEngineThenRefresh()
+        }
+      })
+    }
   },
   beforeUnmount() {
     this.stopAudio()
+    if (this._modelProgressUnsub) {
+      this._modelProgressUnsub()
+      this._modelProgressUnsub = null
+    }
   },
   methods: {
     // ==================== Karaoke Highlighting ====================
@@ -344,6 +411,66 @@ export default {
     onRateChange(e) {
       this.rate = e.detail.value
     },
+
+    // ==================== 本机语音组件 ====================
+    async loadModelState() {
+      if (!host.model) return
+      try {
+        const res = await host.model.status()
+        const comp = ((res && res.components) || []).find(c => c.id === TTS_MODEL_ID)
+        if (!comp) return
+        this.modelState = comp.state
+        if (comp.sizeHint) this.modelSizeHint = comp.sizeHint
+      } catch (e) {
+        console.warn('[EasyVoicePane] 读取语音模型状态失败', e)
+      }
+    },
+    async onDownloadModel() {
+      if (!host.model) return
+      try {
+        await host.model.download(TTS_MODEL_ID)
+        this.modelState = 'downloading'
+        this.modelPercent = 0
+      } catch (e) {
+        uni.showToast({ title: this.$t('panels.evDownloadStartFailed'), icon: 'none' })
+      }
+    },
+    async onCancelModel() {
+      if (!host.model) return
+      try {
+        await host.model.cancel(TTS_MODEL_ID)
+      } finally {
+        this.modelState = 'absent'
+        this.modelPercent = 0
+        await this.loadModelState()
+      }
+    },
+    /**
+     * kokoro-service 的 descriptor 把 enabled 门在模型上，所以**模型下完之后
+     * 还要显式拉一次服务**——否则要等到下次启动应用才会起来，用户会以为下载没用。
+     * service-manager 的 start() 每次都重新求值 enabled，此刻求值必然为真。
+     */
+    async startEngineThenRefresh() {
+      try {
+        if (host.services && host.services.ensure) await host.services.ensure('kokoro-service')
+      } catch (e) {
+        console.warn('[EasyVoicePane] 拉起本机语音服务失败', e)
+      }
+      await this.fetchVoices()
+    },
+    async onRecheck() {
+      if (this.rechecking) return
+      this.rechecking = true
+      try {
+        await this.loadModelState()
+        await this.startEngineThenRefresh()
+        if (this.voices.length) {
+          uni.showToast({ title: this.$t('panels.evEngineReady'), icon: 'success' })
+        }
+      } finally {
+        this.rechecking = false
+      }
+    },
     async importFromDoc() {
         const callback = (content) => {
             if (content) {
@@ -479,16 +606,63 @@ export default {
 }
 .btn-glyph { width: 11px; height: 11px; }
 
-.ev-notice {
+/* 引擎未就绪时的就地出路（形制与会议录音的 .mr-tier-gate 同源） */
+.ev-gate {
     margin-bottom: var(--awd-panel-gap);
-    padding: 6px 8px;
+    padding: 8px;
     border-radius: var(--awd-panel-radius);
-    background: #FFF8E6;
-    border: 1px solid #F2E3B3;
+    background: #FFF7ED;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.ev-gate-msg {
     font-size: var(--awd-panel-fs-meta);
-    color: #8A6D1D;
+    color: #9A3412;
     line-height: 1.55;
 }
+
+.ev-gate-hint {
+    font-size: var(--awd-panel-fs-meta);
+    color: #8A6D1D;
+    font-variant-numeric: tabular-nums;
+}
+
+.ev-gate-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.ev-gate-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 24px;
+    padding: 0 10px;
+    border-radius: 4px;
+    font-size: var(--awd-panel-fs-meta);
+    cursor: pointer;
+    user-select: none;
+}
+
+.ev-gate-btn.primary {
+    background: var(--awd-panel-accent);
+    color: #fff;
+    font-weight: 500;
+}
+.ev-gate-btn.primary:hover { background: #16482E; }
+
+.ev-gate-btn.secondary {
+    background: #fff;
+    border: 1px solid #D1D5DB;
+    color: var(--awd-panel-text-2);
+}
+.ev-gate-btn.secondary:hover { background: var(--awd-panel-hover); }
+
+.ev-gate-btn.disabled { opacity: .55; pointer-events: none; }
 
 .voice-textarea {
   width: 100%;
