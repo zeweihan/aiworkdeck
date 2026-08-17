@@ -53,16 +53,40 @@ class ExternalProviderBackfillTest {
                 injected.getOrDefault("pkulaw", ""));
     }
 
+    /**
+     * application.yml 里 {@code external.tts.provider} 的真实默认值。
+     *
+     * <p>测试必须传它而不是空串：传空串等于假设 yml 没给默认值，
+     * 而正是这个非空的历史默认值把全新安装的 TTS 推到了 byok（见下面那条用例）。
+     */
+    private static final String TTS_YML_DEFAULT = "elevenlabs";
+
     @Test
     @DisplayName("全新安装：一个凭证都没有，七项全部落 platform")
     void freshInstallGoesAllPlatform() {
         Map<String, String> rows = new HashMap<>();
-        backfill(settingsWith(rows), Map.of(), "").backfill();
+        backfill(settingsWith(rows), Map.of(), TTS_YML_DEFAULT).backfill();
 
         for (ExternalServiceProvider.Descriptor d : ExternalServiceProvider.ALL) {
             assertEquals("platform", rows.get(ExternalProviderResolver.providerKey(d.service())),
                     d.service() + " 在全新安装上应落 platform");
         }
+    }
+
+    @Test
+    @DisplayName("yml 的历史默认值 elevenlabs 不算「显式偏好」——否则每台全新安装的 TTS 都落 byok")
+    void legacyYmlDefaultIsNotAPreference() {
+        Map<String, String> rows = new HashMap<>();
+        // `${EXTERNAL_TTS_PROVIDER:elevenlabs}` 里的 elevenlabs 是本改造之前的默认值
+        // （当时只有「云端 ElevenLabs / 本地 Kokoro」两档），不是谁做过的选择。
+        // 当成偏好的话，用户根本没有 ElevenLabs Key 却被落到 byok，零配置在这一项上当场落空。
+        backfill(settingsWith(rows), Map.of(), TTS_YML_DEFAULT).backfill();
+        assertEquals("platform", rows.get("external.tts.provider"));
+
+        // 打包态注入的 local 才是真实意图，必须照它
+        Map<String, String> packaged = new HashMap<>();
+        backfill(settingsWith(packaged), Map.of(), "local").backfill();
+        assertEquals("local", packaged.get("external.tts.provider"));
     }
 
     @Test
