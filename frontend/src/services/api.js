@@ -155,6 +155,21 @@ export function getApiBaseUrl() {
   return cachedApiBaseUrl;
 }
 
+// 当前是否已经停在登录页。4010 的兜底动作是 reLaunch 登录页，而 reLaunch 会重挂
+// 登录页 → onLoad 再打一轮请求；只要那一轮里还有需要会话的接口，就又是一次 4010，
+// 「跳登录页」本身成了产生 4010 的原因，浏览器端表现为整页无限刷新。
+// 已经在登录页时清掉会话就够了，不必再跳一次。
+function isOnLoginPage() {
+  try {
+    const pages = typeof getCurrentPages === 'function' ? getCurrentPages() : [];
+    const current = pages.length ? pages[pages.length - 1] : null;
+    const route = (current && (current.route || (current.$page && current.$page.route))) || '';
+    return route.indexOf('pages/login/login') !== -1;
+  } catch (e) {
+    return false;
+  }
+}
+
 function request(options) {
   const baseUrl = getApiBaseUrl();
   const url = options.url.startsWith('http')
@@ -287,6 +302,10 @@ function request(options) {
                   icon: 'none',
                   duration: 2000
                 });
+              } else if (isOnLoginPage()) {
+                // 已经在登录页：会话清掉即可，再 reLaunch 一次只会重挂本页并重跑
+                // onLoad 的请求，构成自激循环（见 isOnLoginPage 上方注释）
+                console.warn('未登录，且已在登录页，跳过跳转');
               } else {
                 console.warn('检测到未登录状态，准备跳转到登录页');
                 uni.reLaunch({
