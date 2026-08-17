@@ -130,10 +130,18 @@ class MeetingTranscriptionLocalPathTest {
     @Test
     @DisplayName("local 档转写：音频一个字节都不出本机，段落按秒→毫秒落库，speaker 恒为 1")
     void transcribesLocallyAndNeverLeavesTheMachine() throws Exception {
-        when(localAsr.transcribe(any(File.class))).thenReturn(LOCAL_JSON);
+        // save 原样返回入参，startTranscription 的返回值与 out 是同一个可变实例；
+        // 不卡住后台推理的话，它可能赶在下面读 status 之前就把这个实例改成 TRANSCRIBED，
+        // 断言的成败就成了 runner 的调度运气。断完 TRANSCRIBING 再放行。
+        java.util.concurrent.CountDownLatch hold = new java.util.concurrent.CountDownLatch(1);
+        when(localAsr.transcribe(any(File.class))).thenAnswer(inv -> {
+            hold.await(3, TimeUnit.SECONDS);
+            return LOCAL_JSON;
+        });
 
         MeetingRecording out = meeting(MeetingRecording.STATUS_RECORDED);
         assertEquals(MeetingRecording.STATUS_TRANSCRIBING, service().startTranscription(7L).getStatus());
+        hold.countDown();
         awaitUntil(() -> MeetingRecording.STATUS_TRANSCRIBED.equals(out.getStatus()));
 
         // 本批最重要的一条：录音不出本机 = 云端三条出站路径一次都不该被走到
