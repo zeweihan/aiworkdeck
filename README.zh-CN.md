@@ -318,7 +318,7 @@ AI WorkDeck 社区版基于 GNU Affero General Public License v3.0 发布。
 
 详见 [LICENSE](legal/LICENSE) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md)。商业许可请联系 [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com)。
 
-**AI WorkDeck™** 是我们的商标。欢迎在上述许可下基于内核构建产品，但将 **AI WorkDeck** 名称或标识用于商业产品需要品牌或认证协议——见 [TRADEMARKS.md](legal/TRADEMARKS.md) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md) 中的**品牌与认证计划**。
+**AI WorkDeck™** 是我们的未注册文字商标；AI WorkDeck 标识已在中国注册（第 9 类，注册号 89857424）。欢迎在上述许可下基于内核构建产品，但将 **AI WorkDeck** 名称或标识用于商业产品需要品牌或认证协议——见 [TRADEMARKS.md](legal/TRADEMARKS.md) 与 [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md) 中的**品牌与认证计划**。
 
 ## 背景
 

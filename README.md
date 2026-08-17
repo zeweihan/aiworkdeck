@@ -321,7 +321,7 @@ Commercial licensing is available for:
 
 See [LICENSE](legal/LICENSE) and [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md). For commercial licensing, contact [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com).
 
-**AI WorkDeck™** is a trademark of the project maintainers. Building on the kernel is welcome under the licenses above, but using the **AI WorkDeck** name or logo for a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
+**AI WorkDeck™** is our unregistered word mark; the AI WorkDeck logo is a registered trademark in China (Class 9, reg. no. 89857424). Building on the kernel is welcome under the licenses above, but using the **AI WorkDeck** name or logo for a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
 
 ## Background
 
