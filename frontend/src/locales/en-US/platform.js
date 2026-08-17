@@ -32,6 +32,10 @@ export default {
   tierByok: 'Your own key',
   tierLocal: 'On this device',
   tierNeedsAccount: 'Account needed',
+  tierDisabled: 'Not available yet',
+  tierDisabledNote: "We have not opened this service yet — it is not an error. "
+    + 'If you need it now, expand below and use your own key.',
+  holdNotice: '{credits} Credits are reserved by a transcription in progress; the final amount is settled when it finishes.',
   tierPlatformNote: 'Sourced by AI Workdeck and billed as Credits from your account balance by usage, so you never open a vendor account yourself.',
   tierLocalNote: 'Runs on this device. Nothing leaves the machine and no Credits are used.',
 

@@ -143,6 +143,14 @@
             </view>
             <view class="section-body">
               <!-- 三种全局状态，互斥。none 之外的两种都要给出下一步。 -->
+              <!--
+                未结算的预扣。设计 §4.6 要求这笔钱「必须可解释」：一场两小时录音的预扣
+                会把余额压低、进而让余额闸拦住 AI 对话——用户会同时发现转写和对话都停了，
+                没有这一行他无从知道是转写占住的。
+              -->
+              <view v-if="pendingHoldNotice" class="platform-banner">
+                <text class="platform-banner-body">{{ pendingHoldNotice }}</text>
+              </view>
               <view v-if="platformServicesError" class="platform-banner platform-banner-warn">
                 <text class="platform-banner-body">{{ platformServicesError }}</text>
               </view>
@@ -1491,7 +1499,12 @@ export default {
       // 「平台服务」分区（GET /api/platform-services）。
       // services 里的 provider 是后端解析后的**生效值**（非 local-mode 下即使库里写着
       // platform 也回 byok），界面展示与选中项一律以它为准。
-      platformState: { services: [], platformAvailable: false, accountConnected: false },
+      // pricingAvailable=false 时 enabled/balanceCents/pendingHoldCents 全是「不知道」，
+      // 不许当成 false/0 渲染（同 ai-usage「查不到用量显示破折号不显示 0」那条）。
+      platformState: {
+        services: [], platformAvailable: false, accountConnected: false,
+        pricingAvailable: false, balanceCents: null, pendingHoldCents: null,
+      },
       platformLoaded: false,
       platformServicesError: '',
       platformBusy: false,
@@ -1577,6 +1590,17 @@ export default {
     //  - platformAvailable=false（团队服务器 / 云端实例）时 platform 档整个不出现（D5）；
     //  - hasLocal 为真但本地引擎还没随包发出（asr 在 P3 之前）时 local 档也不出现，
     //    并说明原因。摆一个能选中、真用起来才炸的档位，正是设计 §6.2.1 点名要避免的事。
+    /**
+     * 「有 N Credits 正被转写占用」的提示。
+     *
+     * 只在**确知**有未结算预扣时出现：`pendingHoldCents` 为 null 表示单价表没取到
+     * （网关不可达/未连账户），那是「不知道」不是「零」，不能拿它编一个数出来。
+     */
+    pendingHoldNotice() {
+      const cents = this.platformState.pendingHoldCents
+      if (typeof cents !== 'number' || cents <= 0) return ''
+      return this.$t('platform.holdNotice', { credits: (cents / 100).toFixed(2) })
+    },
     platformServiceRows() {
       const available = this.platformState.platformAvailable
       const connected = this.platformState.accountConnected
@@ -1599,10 +1623,21 @@ export default {
         if (s.provider === 'platform' && !connected) {
           tierLabel = this.$t('platform.tierNeedsAccount')
           tierClass = 'tier-need'
+        } else if (s.provider === 'platform' && s.enabled === false) {
+          // 平台侧还没开放这一项（合同/账号未就绪）。**必须与「出错了」分开**：
+          // 未开放是产品尚未提供，用户能做的是改用自己的 Key；显示成故障会让他
+          // 反复重试一件永远不会成功的事。s.enabled 为 null 是「查不到」不是「未开放」，
+          // 那种情况照常显示平台档，真调用时网关自己会给准确的信封。
+          tierLabel = this.$t('platform.tierDisabled')
+          tierClass = 'tier-need'
         }
 
         const notes = []
-        if (s.provider === 'platform') notes.push(this.$t('platform.tierPlatformNote'))
+        if (s.provider === 'platform' && s.enabled === false) {
+          notes.push(this.$t('platform.tierDisabledNote'))
+        } else if (s.provider === 'platform') {
+          notes.push(this.$t('platform.tierPlatformNote'))
+        }
         if (s.provider === 'local') notes.push(this.$t('platform.tierLocalNote'))
         if (s.hasLocal && !localUsable) notes.push(this.$t('platform.localAsrPending'))
 
@@ -2772,6 +2807,12 @@ export default {
           services: Array.isArray(s.services) ? s.services : [],
           platformAvailable: !!s.platformAvailable,
           accountConnected: !!s.accountConnected,
+          // 这三个刻意**不**用 `!!` / `|| 0` 归一化：后端在取不到单价表时给的是 null，
+          // 而 null 的意思是「不知道」不是「未开放 / 余额为零」。归一化会把一次网络抖动
+          // 变成「七项服务全部未开放」，比不显示这个状态更糟。
+          pricingAvailable: !!s.pricingAvailable,
+          balanceCents: typeof s.balanceCents === 'number' ? s.balanceCents : null,
+          pendingHoldCents: typeof s.pendingHoldCents === 'number' ? s.pendingHoldCents : null,
         }
         this.platformServicesError = ''
       } catch (e) {

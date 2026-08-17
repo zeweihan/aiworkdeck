@@ -31,6 +31,11 @@ export default {
   tierByok: '自备 Key',
   tierLocal: '本地',
   tierNeedsAccount: '需要连接账户',
+  // 平台侧尚未开放这一项（合同/账号未就绪）。**不是故障**——说成故障会让用户
+  // 反复重试一件永远不会成功的事，而他真正能做的是改用自己的 Key。
+  tierDisabled: '未开放',
+  tierDisabledNote: '这项服务我们还没有开放，不是出错了。需要现在就用的话，展开下面填自己的 Key。',
+  holdNotice: '有 {credits} Credits 正被一项进行中的转写任务占用，完成后按实际用量结算。',
   tierPlatformNote: '由 AI Workdeck 统一采购，按用量折算 Credits 从账户余额扣，你不用自己去开账号。',
   tierLocalNote: '在本机运行，数据不出本机，不消耗 Credits。',
 

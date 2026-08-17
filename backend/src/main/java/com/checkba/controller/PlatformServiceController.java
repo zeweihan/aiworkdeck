@@ -6,6 +6,9 @@ import com.checkba.service.account.AccountService;
 import com.checkba.service.account.MachineAccountGuard;
 import com.checkba.service.platform.ExternalProviderResolver;
 import com.checkba.service.platform.ExternalServiceProvider;
+import com.checkba.service.platform.PlatformGatewayClient;
+import com.fasterxml.jackson.databind.JsonNode;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.ArrayList;
@@ -23,26 +26,32 @@ import java.util.Map;
  * 否则团队服务器上任何一个租户都能把全服的搜索切走。local-mode 恒放行。
  */
 @RestController
+@Slf4j
 public class PlatformServiceController {
 
     private final ExternalProviderResolver resolver;
     private final SystemSettingService systemSettingService;
     private final AccountService accountService;
     private final MachineAccountGuard machineAccountGuard;
+    private final PlatformGatewayClient platformGatewayClient;
 
     public PlatformServiceController(ExternalProviderResolver resolver,
                                      SystemSettingService systemSettingService,
                                      AccountService accountService,
-                                     MachineAccountGuard machineAccountGuard) {
+                                     MachineAccountGuard machineAccountGuard,
+                                     PlatformGatewayClient platformGatewayClient) {
         this.resolver = resolver;
         this.systemSettingService = systemSettingService;
         this.accountService = accountService;
         this.machineAccountGuard = machineAccountGuard;
+        this.platformGatewayClient = platformGatewayClient;
     }
 
     @GetMapping("/api/platform-services")
     public Map<String, Object> list(@RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         machineAccountGuard.requireMachineScope(sessionId);
+
+        PlatformPricing pricing = fetchPricingQuietly();
 
         List<Map<String, Object>> services = new ArrayList<>();
         for (ExternalServiceProvider.Descriptor d : ExternalServiceProvider.ALL) {
@@ -51,6 +60,11 @@ public class PlatformServiceController {
             item.put("provider", resolver.resolve(d.service()).settingValue());
             item.put("hasLocal", d.hasLocal());
             item.put("hasByokCredentials", hasByokCredentials(d));
+            // 「这项服务平台侧开放了没有」只有官网知道（service_pricing.enabled）。
+            // 拿不到时给 null 而不是 false：**「不知道」不等于「未开放」**——
+            // 一次网络抖动就把七项全标成未开放，比不显示这个状态更糟。
+            // 前端对 null 应显示「—」，与 ai-usage 那条「查不到用量显示破折号不显示 0」同口径。
+            item.put("enabled", pricing == null ? null : pricing.enabled().get(d.service()));
             services.add(item);
         }
 
@@ -60,6 +74,13 @@ public class PlatformServiceController {
         // 是展示为不可选 + 说明，还是整个不出现。
         data.put("platformAvailable", resolver.platformAvailable());
         data.put("accountConnected", accountService.currentKeyOrNull() != null);
+        // pricingAvailable=false 时前端不许把 enabled/余额当成真值，显示「—」。
+        data.put("pricingAvailable", pricing != null);
+        data.put("balanceCents", pricing == null ? null : pricing.balanceCents());
+        // 未结算的预扣。设计 §4.6 要求这笔钱「必须可解释」：一场两小时录音的预扣
+        // 会把余额压低、进而让 PlatformCreditsGate 拦住 AI 对话——用户会同时发现
+        // 转写和对话都停了，而没有这个数字他无从知道是转写占住的。
+        data.put("pendingHoldCents", pricing == null ? null : pricing.pendingHoldCents());
 
         Map<String, Object> result = new HashMap<>();
         result.put("code", 0);
@@ -107,6 +128,44 @@ public class PlatformServiceController {
         result.put("code", 0);
         result.put("data", Map.of("service", service, "provider", target.settingValue()));
         return result;
+    }
+
+    /** 官网单价表的一次快照：哪几家开放了、余额多少、有多少钱被未结算的预扣占着。 */
+    private record PlatformPricing(Map<String, Boolean> enabled, Integer balanceCents, Integer pendingHoldCents) {}
+
+    /** 单价表的取数超时。这是设置页的一次装载，用户在等着，不值得为它挂很久。 */
+    private static final int PRICING_TIMEOUT_SECONDS = 8;
+
+    /**
+     * 取一次官网单价表；<b>任何失败都只降级这一段，绝不让整个设置页打不开</b>。
+     *
+     * <p>同 licensing-billing 地雷 6 的口径：权益/额度类信息取不到时给「不知道」，
+     * 而不是把用户锁在外面。未连账户、非 local-mode、网关不可达、官网正在发版，
+     * 这几种都只是「这一段显示不出来」，不该连档位切换都用不了——
+     * 而档位切换恰恰是用户在网关出问题时唯一的自救手段。
+     */
+    private PlatformPricing fetchPricingQuietly() {
+        if (!resolver.platformAvailable() || accountService.currentKeyOrNull() == null) {
+            return null;
+        }
+        try {
+            JsonNode root = platformGatewayClient.getPricing(PRICING_TIMEOUT_SECONDS);
+            Map<String, Boolean> enabled = new HashMap<>();
+            for (JsonNode row : root.path("pricing")) {
+                String service = row.path("service").asText("");
+                if (service.isEmpty()) continue;
+                // 同一服务可能有多行（通配 + 精确 op）。只要有一行开着就算这项服务可用——
+                // 用户在设置页关心的是「这项功能能不能用」，不是某个具体 op 的开关。
+                enabled.merge(service, row.path("enabled").asBoolean(false), (a, b) -> a || b);
+            }
+            return new PlatformPricing(
+                    enabled,
+                    root.hasNonNull("balanceCents") ? root.get("balanceCents").asInt() : null,
+                    root.hasNonNull("pendingHoldCents") ? root.get("pendingHoldCents").asInt() : null);
+        } catch (RuntimeException e) {
+            log.debug("取单价表失败，平台服务页降级显示: {}", e.toString());
+            return null;
+        }
     }
 
     private boolean hasByokCredentials(ExternalServiceProvider.Descriptor d) {
