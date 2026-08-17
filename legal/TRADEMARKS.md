@@ -4,7 +4,7 @@
 The purpose of this policy is to balance the interests of the open-source community with the need to protect the **AI WorkDeck** brand and reputation. We want you to feel free to hack on the code, but we must prevent confusion in the marketplace.
 
 ## 2. Product Name
-**AI WorkDeck®** and **AI WorkDeck Kernel** are registered trademarks of the project maintainers in the People's Republic of China, including Nice Classification classes 9 (software), 35 (business services), and 42 (SaaS / software services). Unauthorized commercial use of these marks may infringe our registered trademark rights.
+**AI WorkDeck™** and **AI WorkDeck Kernel™** are trademarks of the project maintainers, used in commerce to identify this software and the related services we provide. Unauthorized commercial use of these marks may infringe our trademark rights.
 
 ## 3. Trade Dress & Look and Feel
 In addition to the name, the **distinctive visual appearance and user experience (UX/UI) flow** of the AI WorkDeck IDE constitutes our **Trade Dress**.

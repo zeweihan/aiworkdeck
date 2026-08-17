@@ -26,7 +26,7 @@ Please contact our licensing team to discuss your specific use case and pricing:
 - **Website:** [www.aiworkdeck.com](https://www.aiworkdeck.com)
 
 ## Brand & Certification Programs
-**AI WorkDeck®** is a registered trademark (see [`TRADEMARKS.md`](TRADEMARKS.md)). We license the brand to partners who meet our quality bar, so customers can trust that a deployment, plugin, or integration is genuinely compatible and supported.
+**AI WorkDeck™** is our trademark (see [`TRADEMARKS.md`](TRADEMARKS.md)). We license the brand to partners who meet our quality bar, so customers can trust that a deployment, plugin, or integration is genuinely compatible and supported.
 
 | Program | What you get |
 |---|---|
@@ -36,7 +36,7 @@ Please contact our licensing team to discuss your specific use case and pricing:
 
 > For program details and pricing, email **hi@aiworkdeck.com** with your use case, deployment size, and target customers.
 
-Use of the **AI WorkDeck®** name or logo in connection with a commercial offering requires one of these programs or a written agreement. See [`TRADEMARKS.md`](TRADEMARKS.md) for permitted nominative use.
+Use of the **AI WorkDeck™** name or logo in connection with a commercial offering requires one of these programs or a written agreement. See [`TRADEMARKS.md`](TRADEMARKS.md) for permitted nominative use.
 
 ## FAQ
 **Q: Can I use the Community Edition for internal company tools?**
