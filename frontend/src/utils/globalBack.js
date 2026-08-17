@@ -44,16 +44,25 @@ function shouldShow() {
   return !SELF_NAV_ROUTES.has(route)
 }
 
+function apply() {
+  if (!el) return
+  el.style.display = shouldShow() ? 'inline-flex' : 'none'
+}
+
 /**
- * 重算可见性。导航是异步的——拦截器的 invoke 跑在跳转之前，此时
- * getCurrentPages() 还是旧的，所以一律排到下一帧再读。
+ * 重算可见性。
+ *
+ * 导航是异步的，而且**页面栈的更新时机不止一个**：拦截器的 invoke 跑在跳转之前，
+ * complete 之后 uni 还要再摘一次栈——navigateBack 尤其明显（实测：从设置页退回
+ * 工作台时，只在下一帧读，读到的仍是包含设置页的旧栈，于是返回键留在了工作台上，
+ * 而工作台恰恰在豁免名单里）。所以补算几次，不赌某一个时机。
+ * 这是个纯展示控件，晚几百毫秒纠正一次没有副作用；漏纠正才是坏的。
  */
 export function refreshGlobalBack() {
   if (!el) return
-  requestAnimationFrame(() => {
-    if (!el) return
-    el.style.display = shouldShow() ? 'inline-flex' : 'none'
-  })
+  requestAnimationFrame(apply)
+  setTimeout(apply, 150)
+  setTimeout(apply, 450)
 }
 
 function onTap() {
@@ -87,8 +96,10 @@ export function mountGlobalBack() {
     })
     document.body.appendChild(el)
 
-    // 浏览器/壳的前进后退不走 uni 的路由 API，单独接一条
+    // 浏览器/壳的前进后退不走 uni 的路由 API，单独接一条；
+    // hashchange 兜住任何绕开 uni 路由 API 的地址栏跳转（e2e 与深链常这么走）
     window.addEventListener('popstate', refreshGlobalBack)
+    window.addEventListener('hashchange', refreshGlobalBack)
     refreshGlobalBack()
   } catch (e) {
     // 返回键挂不上不能影响应用本身
