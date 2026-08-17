@@ -50,10 +50,28 @@ public class WebTools implements AgentToolComponent {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.service.platform.ExternalProviderResolver externalProviderResolver;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    private com.checkba.service.platform.PlatformGatewayClient platformGatewayClient;
+
+    /** 搜索的上游超时。**不沿用账户通道的 5 秒**——博查返回 10 条带摘要的结果经常要十几秒。 */
+    private static final int SEARCH_TIMEOUT_SECONDS = 30;
+
     @ToolMeta(displayName = "网络搜索", category = "web")
     @Tool("Search the web using Bocha AI. Useful for finding latest news, regulations, or legal cases. Returns a summary of search results.")
     public String search_web(String query) {
         log.info("Tool: search_web called for query='{}'", query);
+
+        // 平台代采档：走网关，成本折算 Credits。失败**绝不静默回落 BYOK**——
+        // 那会去花用户自己的 Key（同 licensing-billing 地雷 8）。
+        if (externalProviderResolver.resolve(
+                com.checkba.service.platform.ExternalServiceProvider.SEARCH)
+                == com.checkba.service.platform.ExternalServiceProvider.PLATFORM) {
+            return searchViaPlatform(query);
+        }
+
         String apiKey = systemSettingService.get("external.bocha.apiKey", bochaApiKey);
         if (apiKey == null || apiKey.isBlank()) {
             return "网络搜索未配置：缺少博查（Bocha AI）搜索的 API Key。请管理员在「设置 → 外部服务」中填写博查 API Key"
@@ -95,50 +113,82 @@ public class WebTools implements AgentToolComponent {
                     return "Error searching web: " + errorMsg;
                 }
 
-                // Parse web pages from response
-                // Response structure: { "data": { "webPages": { "value": [...] } } }
-                JsonNode webPages = root.path("data").path("webPages").path("value");
-                
-                if (webPages.isMissingNode() || !webPages.isArray() || webPages.size() == 0) {
-                    return "No search results found for: " + query;
-                }
-
-                StringBuilder summary = new StringBuilder("Search Results for '" + query + "':\n\n");
-                int count = 0;
-                for (JsonNode page : webPages) {
-                    if (count >= 5) break;
-
-                    String title = page.path("name").asText("No Title");
-                    String url = page.path("url").asText("");
-                    String snippet = page.path("snippet").asText("");
-                    String siteName = page.path("siteName").asText("");
-                    String datePublished = page.path("datePublished").asText("");
-
-                    // Limit snippet length
-                    if (snippet.length() > 300) {
-                        snippet = snippet.substring(0, 300) + "...";
-                    }
-
-                    summary.append(count + 1).append(". ").append(title);
-                    if (!siteName.isEmpty()) {
-                        summary.append(" [").append(siteName).append("]");
-                    }
-                    summary.append("\n");
-                    summary.append("   Link: ").append(url).append("\n");
-                    if (!datePublished.isEmpty()) {
-                        summary.append("   Published: ").append(datePublished).append("\n");
-                    }
-                    summary.append("   Snippet: ").append(snippet).append("\n\n");
-                    count++;
-                }
-
-                return summary.toString();
+                return formatSearchResults(root, query);
             }
 
         } catch (Exception e) {
             log.error("Failed to search web via Bocha API", e);
             return "Error searching web: " + e.getMessage();
         }
+    }
+
+    /**
+     * 平台代采档：把搜索交给网关，官网持凭证调博查并按次扣 Credits。
+     *
+     * <p>返回的是**给模型看的文本**，所以失败时不能抛异常打断整轮对话——
+     * 与「未配置」那条既有分支同一口径：说清楚发生了什么、下一步是什么，
+     * 然后让模型基于已有信息继续。抛异常会让一次搜索失败变成一次对话失败。
+     */
+    private String searchViaPlatform(String query) {
+        try {
+            com.checkba.service.platform.PlatformGatewayClient.Result result =
+                    platformGatewayClient.call("search", "web",
+                            java.util.Map.of("query", query, "count", 10),
+                            SEARCH_TIMEOUT_SECONDS);
+            return formatSearchResults(result.data(), query);
+        } catch (com.checkba.service.platform.GatewayException e) {
+            log.warn("平台搜索失败 kind={}: {}", e.getKind(), e.getMessage());
+            String hint = e.suggestsByok()
+                    ? "如需继续使用，可在「系统管理 → 平台服务」把网络搜索改为自备 Key。"
+                    : "";
+            return "网络搜索本次不可用：" + e.getMessage() + hint
+                    + " 本次已跳过网络搜索，请基于已有信息继续完成任务。";
+        }
+    }
+
+    /** 博查响应 → 给模型看的摘要文本。两条档位共用，避免格式漂移。 */
+    private String formatSearchResults(JsonNode root, String query) {
+        // Response structure: { "data": { "webPages": { "value": [...] } } }
+        // 网关档下 root 已经是 data 那一层，所以两种形态都试一次。
+        JsonNode webPages = root.path("data").path("webPages").path("value");
+        if (webPages.isMissingNode() || !webPages.isArray() || webPages.size() == 0) {
+            webPages = root.path("webPages").path("value");
+        }
+
+        if (webPages.isMissingNode() || !webPages.isArray() || webPages.size() == 0) {
+            return "No search results found for: " + query;
+        }
+
+        StringBuilder summary = new StringBuilder("Search Results for '" + query + "':\n\n");
+        int count = 0;
+        for (JsonNode page : webPages) {
+            if (count >= 5) break;
+
+            String title = page.path("name").asText("No Title");
+            String url = page.path("url").asText("");
+            String snippet = page.path("snippet").asText("");
+            String siteName = page.path("siteName").asText("");
+            String datePublished = page.path("datePublished").asText("");
+
+            // Limit snippet length
+            if (snippet.length() > 300) {
+                snippet = snippet.substring(0, 300) + "...";
+            }
+
+            summary.append(count + 1).append(". ").append(title);
+            if (!siteName.isEmpty()) {
+                summary.append(" [").append(siteName).append("]");
+            }
+            summary.append("\n");
+            summary.append("   Link: ").append(url).append("\n");
+            if (!datePublished.isEmpty()) {
+                summary.append("   Published: ").append(datePublished).append("\n");
+            }
+            summary.append("   Snippet: ").append(snippet).append("\n\n");
+            count++;
+        }
+
+        return summary.toString();
     }
 
     @ToolMeta(displayName = "浏览网页", category = "web")

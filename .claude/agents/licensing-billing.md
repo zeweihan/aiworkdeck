@@ -541,6 +541,91 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     所以第一次不能异步；之后不给每条消息加一次官网往返。
     文案照旧不得含「登录」「未授权」「请先」（地雷 1）。护栏：`PlatformCreditsGateTest`。
 
+## 平台服务网关（2026-08-17 起，分六批 P0-P5）
+
+把「用户自己去 8 家供应商开账号填 23 个字段」收敛成「只填一把官网 `awdk_`」。
+设计文档 `docs/superpowers/specs/2026-08-17-unified-credits-service-gateway-design.md`
+（含四视角审阅后的修订一，**与实现有出入以代码为准**）。
+
+**通路分三条，不是一条**（改这块前先读设计 §3）：
+- **AI/OpenRouter 保持凭证下发 + 桌面直连**，不进网关。那条「所有 OpenRouter 请求从
+  用户本机出口发出」的红线不能破——改成从 ECS 代理，第一步就连不上，还会把全体用户的
+  模型可用性锁死在我们机房的位置。
+- **其余七家走网关代理**（`POST {site}/api/gateway/{service}/{op}`）。它们没有一家支持
+  「给终端用户签发带限额的子密钥」，凭证下发等于把公司账号发给所有人。
+- **本地模型**（ASR 新增、TTS 的 Kokoro 已有）作隐私档。
+
+**桌面侧文件**
+- `service/platform/PlatformGatewayClient.java` — **唯一出站出口**。记账/幂等/错误分类
+  三样每接一家都要用，散出去抄到第三家必漏。网络失败**带同一幂等键**重试一次
+  （换新键 = 放弃幂等 = 第一次若已扣费就是扣两次）。
+- `service/platform/PlatformGatewayTransport.java` + `HttpPlatformGatewayTransport.java` — 出站缝，
+  超时**按服务给**（不沿用 `AccountTransport` 写死的 5 秒，OCR/TTS/听悟建任务超 5 秒是常态）。
+- `service/platform/GatewayException.java` — 八档 Kind。**刻意不复用 `AccountException.Kind`**：
+  那个把 5xx 一律归 NETWORK、文案「请检查网络后重试」，把我们的故障说成用户的网络问题。
+- `service/platform/ExternalServiceProvider.java` — 七家服务的描述表 + 档位枚举。
+  `parse()` 把存量值 `elevenlabs` 映射成 BYOK（语义就是「用自己的 Key」）。
+- `service/platform/ExternalProviderResolver.java` — **档位判定的唯一出口**，D5 的闸在这里。
+- `service/platform/ExternalProviderBackfill.java` — 存量回填，启动期跑一次。
+- `controller/PlatformServiceController.java` — `/api/platform-services{,/{service}/provider}`，
+  机器级状态，`MachineAccountGuard` 把关。
+
+**官网侧文件**（`aiworkdeckweb`，PR #56）
+- `lib/gateway/{errors,config,pricing,idempotency,spend,adapters}.ts`
+- `app/api/gateway/[service]/[op]/route.ts`、`app/api/gateway/pricing/route.ts`
+- 迁移 11：`service_pricing` / `gateway_request` / `gateway_hold` 三张表 + 重建 `wallet_ledger`
+  扩 `service_spend` kind
+- 过期 hold 的回收挂在已有的 `POST /api/admin/ai/reconcile` cron 上
+- 验证 `scripts/verify-gateway.mts`（25 项，已进 CI）
+
+### 网关的核心契约
+
+| 事项 | 规则 |
+|---|---|
+| ledger kind | **只加一个 `service_spend`**，服务名进 `meta.service`。加 kind 要同步改三处，而服务会一直加 |
+| 计价 | `service_pricing` 是唯一权威。**客户端既不传价格也不传计量**——申报值只用于预扣估算与余额闸，受 `maxUnitsPerCall` 约束 |
+| 扣费时机 | 同步调用「预检余额 → 按上游真实计量事后扣」；预扣只用于异步长任务（今天只有 asr） |
+| 预扣 | 三行账 `hold` → `hold_release` → `settle`，**②③ 同事务**；`gateway_hold` 落库 + 服务端超时回收 |
+| 余额不足 | `409 no_credits`，**绝不 401/403** |
+| 幂等 | 会扣费的 POST 必须带 `Idempotency-Key`（8-128 位 `[A-Za-z0-9_-]`），服务端去重回放 |
+
+### 已知地雷（网关）
+
+24. **平台网关只在 local-mode 开放（D5），不是遗漏**。非 local-mode（团队自建服务器、
+    `addin.aiworkdeck.com` 云实例、Office 插件）恒 `byok`，与改造前逐字一致。
+    原因：`awdk_` 明文永不落库，server 侧对已桥接用户根本没有可打网关的 Bearer 凭据
+    （`PlatformAiUserScope` 给的是 userId 不是凭据）；AI 能做 per-user 是因为 OpenRouter
+    支持签发子密钥，而其余七家没有。硬用机器级 Key 顶上 = 全体租户共花公司账户的 Credits，
+    一个租户写脚本刷就是刷我们自己的钱。闸在 `ExternalProviderResolver.resolve` 一处，
+    不要在调用点各判一遍。
+
+25. **存量档位必须显式回填，不能靠默认值**。`SystemSettingService.get(key, default)` 只在行
+    不存在时回落，存量库里没有 `external.<service>.provider` 这一行，升级后一律静默取
+    新默认值 `platform`——而用户填过的 23 个字段一个没丢，就在库里躺着却不再被用。
+    两类用户同时坏：自带阿里云 OCR/Tushare 订阅的律所**为同一项服务付两遍钱**；
+    从未连账户的用户看到「昨天好好的」变成「余额不足」。
+    `ExternalProviderBackfill` 在启动期跑一次，判定顺序**不能换**：
+    ① 档位本身的 yml/env 默认值优先 → ② 已有非空 BYOK 凭证 → byok → ③ 都没有 → platform。
+
+26. **第一条判定顺序是踩出来的：桌面打包态注入 `EXTERNAL_TTS_PROVIDER=local`**
+    （捆绑 Kokoro，免费且不出本机），而 `system_setting` 里没有这一行。只按凭证推断的话
+    「没有 ElevenLabs Key → 写 platform」，于是 `TtsService.isLocal()` 读到 platform 当场返 false，
+    本地引擎失效、转去调一个没配 Key 的云服务——一次静默的功能回归。
+    护栏 `ExternalProviderBackfillTest.packagedDesktopKeepsLocalTts`。
+
+27. **平台档失败绝不静默回落 BYOK**（同地雷 8）。回落会去花用户自己的 Key。
+    正确做法是给出可读的失败原因 + 「改用自己的 Key」的指路。
+    `GatewayException.suggestsByok()` 决定要不要摆这个入口，**除「Key 无效」与我们自己的
+    参数 bug 外一律摆**——尤其 `NOT_CONNECTED`：用试用码解锁、根本不打算连账户的用户
+    （README 公开试用码是主要获客入口），自备 Key 是他唯一的出路，只提示「去连账户」等于把他堵死。
+    AI 工具里的网关调用**不抛异常打断整轮对话**：返回一段说明文本让模型基于已有信息继续，
+    与「未配置」那条既有分支同一口径。
+
+28. **网关不可达的文案必须明说「不是你的网络问题」**。账户通道那句
+    「无法连接 AI Workdeck 服务器，请检查网络后重试」会让用户去重启路由器，
+    而真实原因往往是我们正在发版。三类故障（未开放 / 上游挂 / 我们挂）在用户眼里长得一样，
+    下一步却完全不同，必须分开。护栏 `PlatformGatewayClientTest.unreachableSaysNotYourNetwork`。
+
 ## 验证
 
 - 后端：`cd backend && mvn test`（**JDK 21，系统默认 25 会 SIGBUS**）。本领域相关用例：
@@ -563,7 +648,12 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   `service/ai/PlatformAiChannelRoutingTest`（四种形态的取 key 路由）、
   `service/ai/PlatformAiUserScopeTest`、`controller/PlatformAiKeyControllerTest`；
   白嫖闸：`service/ai/PlatformCreditsGateTest`（余额闸三条判据）、
-  `service/ai/PlatformAiKeyOwnershipTest`（换账号不复用旧 key、存量文件重新绑定）。
+  `service/ai/PlatformAiKeyOwnershipTest`（换账号不复用旧 key、存量文件重新绑定）；
+  平台服务网关：`service/platform/PlatformGatewayClientTest`（错误分类、幂等重试带同一个键、
+  七种失败形态的文案都不含三个掉线子串）、`service/platform/ExternalProviderResolverTest`
+  （D5 的 local-mode 闸）、`service/platform/ExternalProviderBackfillTest`（存量回填四种形态）。
+- 官网侧（`aiworkdeckweb`）：`scripts/verify-gateway.mts` 25 项 + `contract-check.mts` 的网关段，
+  **必须在空目录里跑、必须用 nvm v22 全路径**（`/usr/bin/node` v20 碰库会段错误）。
 - 前端：`cd frontend && npm run check:emits` + `npm run build:h5`。
 - 端到端（同样在 `frontend/` 下跑）：`cd frontend && npm run test:app-e2e`
   （**J1 就是首启解锁门旅程**，用试用码解锁；其余旅程 local-mode 免登直达）。
