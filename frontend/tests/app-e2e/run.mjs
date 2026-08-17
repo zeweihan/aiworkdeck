@@ -431,12 +431,19 @@ try {
     }
   })
 
-  await step('列表页自带两个新建入口，且没有「打开文件」', async () => {
+  await step('列表页下方有新建入口，且没有「打开文件」', async () => {
     await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
-    await page.waitForSelector('.create-card', { timeout: 15000 })
+    await page.waitForSelector('.create-section', { timeout: 15000 })
     const t = await textOf()
-    if (!t.includes('打开文件夹')) throw new Error('列表下方缺「打开文件夹」')
-    if (!t.includes('新建项目文件夹')) throw new Error('列表下方缺「新建项目文件夹」')
+    // 浏览器目标注入的是最小桌面桩（只有 shell.openExternal，没有 fs），列表页的
+    // isDesktop 判据正是「有没有系统文件夹对话框」，所以这里必然走浏览器降级分支：
+    // 只渲染一张「新建项目」卡，点进去是 newproject 页的托管空白项目表单。
+    // 桌面版那两张（打开文件夹 / 新建项目文件夹）在这个目标下渲染不出来，
+    // 由 check-navigation-contract 的静态断言守（校验 openFolderFlow /
+    // createFolderFlow / 命名弹窗真的接在页面上），别在这里断言它们。
+    const cards = await page.evaluate(() => document.querySelectorAll('.create-card').length)
+    if (cards !== 1) throw new Error('浏览器降级下新建卡应当恰好 1 张，实际 ' + cards)
+    if (!t.includes('新建项目')) throw new Error('列表下方缺新建入口')
     if (t.includes('打开文件…')) throw new Error('「单独打开文件」应当已从新建入口去掉')
     await mouseClickSel('.project-item-card')
     await page.waitForFunction(
