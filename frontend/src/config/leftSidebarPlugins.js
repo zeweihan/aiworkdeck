@@ -55,7 +55,7 @@ export const LEFT_SIDEBAR_PLUGINS = [
   },
   {
     key: 'meeting-recorder',
-    label: '会议录音',
+    label: t('config.sidebar.meetingRecorder'),
     // 对应 skill.yml 的 enabled_by_default:false——默认不装，广场启用后才出现在左栏。
     requiresSkill: 'meeting-recorder',
     // 麦克风

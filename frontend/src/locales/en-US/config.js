@@ -4,6 +4,7 @@ export default {
     files: 'Explorer',
     ddFiles: 'Due Diligence Files',
     shareholderMeeting: 'Shareholder Meeting',
+    meetingRecorder: 'Meeting Recording',
     litigationVisual: 'Litigation Visualization',
     search: 'Search',
     desensitize: 'File Redaction',

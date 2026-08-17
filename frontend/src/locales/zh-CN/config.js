@@ -4,6 +4,7 @@ export default {
     files: '资源管理器',
     ddFiles: '尽调文件',
     shareholderMeeting: '股东大会',
+    meetingRecorder: '会议录音',
     litigationVisual: '诉讼可视化',
     search: '搜索',
     desensitize: '文件脱敏',
