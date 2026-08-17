@@ -56,7 +56,7 @@ node desktop/scripts/pack-pysvc.js --bundle desktop/bundled/mac-arm64
 cd desktop && CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --publish never
 ```
 
-打包态由 ServiceManager（`main/services/`）统一拉起本地服务：Java 后端固定 9696，pptx / mineru / kokoro 动态端口（`EXTERNAL_PPTX_SERVICE_BASE_URL` 注入后端、`MINERU_LOCAL_URL` 注入 pptx、`EXTERNAL_TTS_PROVIDER=local`+`EXTERNAL_TTS_LOCAL_BASE_URL` 注入后端）。mineru / kokoro 为条件启动：模型未下载则跳过，在「系统管理 → 组件管理」下载（落 `~/.aiworkdeck/models/{mineru,kokoro}/`）后自动拉起；云端 MinerU 兜底默认关闭（`CHECKBA_MINERU_FORCE_CLOUD=1` 可放开）；kokoro 运行时 `HF_HUB_OFFLINE=1` 零出网。数据落 `~/.aiworkdeck/`，日志落 `~/.aiworkdeck/logs/<service>.log`。
+打包态由 ServiceManager（`main/services/`）统一拉起本地服务：Java 后端固定 9696，pptx / mineru / kokoro 动态端口（`EXTERNAL_PPTX_SERVICE_BASE_URL` 注入后端、`MINERU_LOCAL_URL` 注入 pptx、`EXTERNAL_TTS_LOCAL_BASE_URL` 注入后端）。mineru / kokoro 为条件启动：模型未下载则跳过，在「系统管理 → 组件管理」下载（落 `~/.aiworkdeck/models/{mineru,kokoro}/`）后自动拉起；云端 MinerU 兜底默认关闭（`CHECKBA_MINERU_FORCE_CLOUD=1` 可放开）；kokoro 运行时 `HF_HUB_OFFLINE=1` 零出网。数据落 `~/.aiworkdeck/`，日志落 `~/.aiworkdeck/logs/<service>.log`。
 
 ## Notes
 

@@ -170,7 +170,7 @@ export default {
     return {
       text: '',
       voices: [],
-      selectedVoiceId: '',  // ElevenLabs voice ID
+      selectedVoiceId: '',  // 本机 Kokoro 的 voiceId
       selectedVoiceName: '',  // Display name
       voiceSearch: '',
       showVoiceDropdown: false,
@@ -347,7 +347,7 @@ export default {
         
         if (res && Array.isArray(res)) {
             this.voices = res
-            // Default to first available voice (ElevenLabs voices)
+            // Default to first available voice
             const defaultVoice = this.voices[0]
             if (defaultVoice) {
                 this.selectedVoiceId = defaultVoice.voiceId
@@ -398,8 +398,10 @@ export default {
       try {
         const payload = {
             text: this.text,
-            voice: this.selectedVoiceId,  // Use voiceId for ElevenLabs API
-            rate: '+0%',  // ElevenLabs uses different settings, kept for backward compatibility
+            voice: this.selectedVoiceId,
+            // 语速滑块是 -50..+50 的百分比，后端 parseSpeed 要的是 0.5..2.0 的倍率
+            rate: String(1 + this.rate / 100),
+            // pitch / volume 本机引擎不支持，保留字段位以免动 /api/tts/generate 的契约
             pitch: '+0Hz',
             volume: '+0%'
         }

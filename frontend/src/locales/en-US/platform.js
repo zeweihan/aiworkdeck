@@ -17,8 +17,6 @@ export default {
   svcOcrDesc: 'Pull text out of screenshots, scans, and photos',
   svcSearchName: 'Web Search',
   svcSearchDesc: 'Let the AI consult public web pages while answering',
-  svcTtsName: 'Speech Synthesis',
-  svcTtsDesc: 'Read text aloud',
   svcQichachaName: 'Company Registry Data',
   svcQichachaDesc: 'Look up company registration, shareholders, and affiliations',
   svcTushareName: 'Securities & Financial Data',

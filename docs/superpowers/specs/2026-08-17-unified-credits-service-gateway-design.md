@@ -43,12 +43,13 @@
 
 | # | 决策 | Why |
 |---|---|---|
-| D1 | **8 家全部由公司统一代采**，含企查查与北大法宝 | 维护者的商业选择。风险见 §9——这两家是机构订阅制，按量分销需要单独授权，**合同没谈成之前 `enabled=false`** |
+| D1 | **全部由公司统一代采**，含企查查与北大法宝（语音合成后被 D7 移出，实际六家） | 维护者的商业选择。风险见 §9——这两家是机构订阅制，按量分销需要单独授权，**合同没谈成之前 `enabled=false`** |
 | D2 | **会议录音：云端听悟为主 + 本地模型作隐私选项** | 云端质量好、有说话人分离；本地档给敏感案件一条「录音不出本机」的出路。两条都零配置 |
 | D3 | **本轮全量交付**：网关框架 + 8 家全接 + 本地 ASR，分六批 PR | 只做一条链路解决不了「配置太夸张」这个用户可感知的问题 |
 | D4 | **加价率按服务分档**，不是全局一档 | 各家成本结构差异大（企查查按次昂贵、听悟按秒便宜），一档会让某些服务亏本或贵得离谱 |
 | **D5** | **平台网关只在 local-mode 开放**；非 local-mode（团队自建服务器、`addin.aiworkdeck.com` 云实例）恒 `byok` | 修订一新增，理由见 §5.3。这是本轮的明确**非目标**，不是遗漏 |
 | **D6** | **新用户赠额待维护者决定**：代码支持（admin 可配 `signupGrantCents`，落 `reward` 批次），**默认 0 = 不赠** | 修订一新增。花钱的决定不由实现方替维护者做；但没有它「解锁即可用」就不成立，所以能力先留好 |
+| **D7** | **语音合成整项退出平台代采**（2026-08-17 追加）：云端 ElevenLabs 从产品中整体移除，只剩桌面包内置的 Kokoro 本机引擎 | 打包态本来就默认本机、云端档从未默认生效；把它放进平台代采等于转售第三方语音合成（§9 原本就标了其条款对转售的约定）。连带结果：平台代采从七家变六家，且**六家全部在境内**，对律师客户是更干净的口径 |
 
 ---
 
@@ -111,7 +112,7 @@
 
 | 端点 | 鉴权 | 幂等键 | 说明 |
 |---|---|---|---|
-| `POST /api/gateway/{service}/{op}` | Bearer `awdk_` | **必需** | 通用代理入口。`service` ∈ {ocr, search, tts, qichacha, tushare, pkulaw} |
+| `POST /api/gateway/{service}/{op}` | Bearer `awdk_` | **必需** | 通用代理入口。`service` ∈ {ocr, search, qichacha, tushare, pkulaw} |
 | `POST /api/gateway/asr/ticket` | Bearer `awdk_` | 不需要（不扣费） | 查余额、签发 OSS 直传凭证 |
 | `POST /api/gateway/asr/submit` | Bearer `awdk_` | **必需** | 预扣 + 建听悟任务 |
 | `GET /api/gateway/asr/task/{id}` | Bearer `awdk_` | 不适用 | 轮询 + 完成时结算 + 删 OSS 对象 |
@@ -125,7 +126,7 @@
 
 | 列 | 说明 |
 |---|---|
-| `service` | `asr` / `ocr` / `search` / `tts` / `qichacha` / `tushare` / `pkulaw` |
+| `service` | `asr` / `ocr` / `search` / `qichacha` / `tushare` / `pkulaw` |
 | `op` | 同一服务的分档（企查查的贵接口单列一行）；`*` 表示该服务全部操作 |
 | `unit` | `minute` / `page` / `call` / `kchar` |
 | `costCentsPerUnit` | 我们的采购成本（对账用，不直接计价） |
@@ -450,10 +451,17 @@ OSS 的 v1 与 v4 预签名都只覆盖方法 / 对象键 / Content-Type / 有�
 这个顺序很重要：此时**还没预扣、还没建任务**，所以拒绝是零代价的。
 
 **修订二之二：听悟的 `GetTaskInfo` 不返回时长**，它只有 `taskStatus` 和四个结果 URL。
-红线 3「计价以上游真实计量为准」在语音上唯一的落点是**从转写结果里最后一个词的 `End`
-时间戳算**。这反过来约束了 task 端点的顺序：必须先把转写结果取回来才知道该收多少钱，
+这约束了 task 端点的顺序：必须先把转写结果取回来才知道该收多少钱，
 所以是「取结果 → 结算 → 删对象」，取结果失败时什么都不动（下次轮询重来，
 一直失败则由 §4.5 的 hold 超时回收退钱）。
+
+**修订三（2026-08-17 真机实测更正）：计价取转写结果里的 `Transcription.AudioInfo.Duration`，
+不是「最后一个词的 `End` 时间戳」。** 初稿写后者是因为以为结果里没有时长，实际有：
+结果 JSON 顶层就是 `{TaskId, Transcription:{AudioInfo:{Size, Duration, SampleRate, Language},
+Paragraphs, AudioSegments}}`。16.46 秒的样例里 `AudioInfo.Duration=16461`ms，
+而最后一个词的 `End=16420`ms——**差的是尾部静音**。听悟按音频时长对我们计费，
+用最后一个词的 End 会系统性少收，差额由平台吃掉；两小时录音结尾若有长静音，差额不小。
+仍然满足红线 3：`AudioInfo.Duration` 同样是上游返回的真实计量，不是客户端申报值。
 
 **修订二之三：`taskStatus` 有四个值不是三个**——ONGOING / COMPLETED / FAILED / **INVALID**。
 网关侧按终态处理了；桌面端 BYOK 那条路的 `TingwuClient.TaskInfo.failed()` 只判 `FAILED`，
@@ -530,7 +538,7 @@ whisper.cpp 或 faster-whisper，OpenAI 兼容 `POST /v1/audio/transcriptions` �
 | **P1** | 桌面地基：`PlatformGatewayClient` + 双档框架 + 存量回填 + 余额闸 + 错误信封与逃生门指路；接**博查搜索**贯通验证 | 是（一次调用最简单，用来验证扣费/退款/幂等/余额闸整套账） |
 | **P2** | 语音云端路：OSS 直传 ticket + 听悟建任务 + 按时长预扣结算 + taskId 落库与恢复轮询 + 删对象 | 是 |
 | **P3** | 本地 ASR：`asr-service` 进 pysvc 单包 + 组件管理下载 + `local` 档 + 开关就绪判定（阻塞项） | 是 |
-| **P4** | 其余五家：OCR / TTS / 企查查 / Tushare / 法宝；企查查与 Tushare 增 Java 侧一等工具、`PythonTools` 停止注入其凭证 | 是 |
+| **P4** | 其余四家：OCR / 企查查 / Tushare / 法宝；企查查与 Tushare 增 Java 侧一等工具、`PythonTools` 停止注入其凭证 | 是 |
 | **P5** | 配置面收敛：向导步骤 2 改造、「平台服务」面板、用量展示与 hold 占用提示、任务级上限设置项、README / 隐私政策 / 跨境告知同步 | 是 |
 
 **P1 排在 P2 之前**是有意的：博查搜索是最简单的一次调用，
@@ -557,12 +565,11 @@ whisper.cpp 或 faster-whisper，OpenAI 兼容 `POST /v1/audio/transcriptions` �
 
 | 供应商 | 需要 |
 |---|---|
-| 阿里云听悟 + OSS | 企业账号开通、充值、RAM 子用户（最小权限）、OSS bucket + 生命周期规则 |
-| 阿里云 OCR | 同上，可复用同一账号不同 RAM 子用户 |
-| 博查搜索 | 商用账号 + 充值 |
-| ElevenLabs | 商用套餐（注意其条款对「转售」的约定） |
-| **企查查** | **按量分销授权**——机构订阅制，共用一个 token 服务全部终端用户可能违约 |
-| **北大法宝** | **同上**，且其 MCP token 通常绑定订阅主体 |
+| 阿里云听悟 + OSS | **已就绪（2026-08-17）**：服务已开通、项目 AI WorkDeck 已建（回调选「不设置回调，主动轮询」）、RAM 子用户 `awd-gateway-asr`、桶 `awd-meeting-audio`（cn-beijing/Standard/private）+ 24 小时生命周期规则。端到端实测通过 |
+| 阿里云 OCR | **已就绪**：服务已开通、RAM 子用户 `awd-gateway-ocr`（仅 `ocr:*`） |
+| 博查搜索 | **已就绪**：key 有效、已充值，实测返回结果 |
+| **企查查** | **按量分销授权**——机构订阅制，共用一个 token 服务全部终端用户可能违约。key 有效但账户额度已尽，充值沟通中 |
+| **北大法宝** | **同上**，且其 MCP token 通常绑定订阅主体。token 可握手、`tools/list` 正常，但真实调用回 401「剩余点数」，需补点数 |
 
 **运维前置**：官网今天发版是 `npm install && npm run build && pm2 restart`，**无 draining**。
 网关上线后，一次发版重启的几分钟里 7 家服务同时挂掉。

@@ -81,11 +81,11 @@ class PlatformServiceControllerTest {
         Map<String, Object> res = f.controller().list(null);
 
         assertEquals(0, res.get("code"));
-        assertEquals(7, services(res).size(), "七项服务一个都不能少");
+        assertEquals(6, services(res).size(), "六项服务一个都不能少");
         assertEquals(Boolean.FALSE, data(res).get("pricingAvailable"));
         assertNull(data(res).get("balanceCents"));
         assertNull(data(res).get("pendingHoldCents"));
-        // 「不知道」不等于「未开放」：一次网络抖动把七项全标成未开放，比不显示这个状态更糟
+        // 「不知道」不等于「未开放」：一次网络抖动把六项全标成未开放，比不显示这个状态更糟
         for (Map<String, Object> s : services(res)) {
             assertNull(s.get("enabled"), s.get("service") + " 的 enabled 应为 null 而不是 false");
             assertNotNull(s.get("provider"), "档位必须照常给出——它是网关挂掉时唯一的自救手段");
@@ -113,8 +113,8 @@ class PlatformServiceControllerTest {
         Fixture f = fixture(true, true);
         when(f.gateway().getPricing(anyInt())).thenReturn(MAPPER.readTree("""
                 {"pricing":[
-                  {"service":"tts","op":"speech","enabled":false},
-                  {"service":"tts","op":"voices","enabled":true},
+                  {"service":"ocr","op":"recognize","enabled":false},
+                  {"service":"ocr","op":"advanced","enabled":true},
                   {"service":"qichacha","op":"eci_info","enabled":false},
                   {"service":"search","op":"web","enabled":true}
                 ],"balanceCents":12345,"pendingHoldCents":600}"""));
@@ -126,7 +126,7 @@ class PlatformServiceControllerTest {
         // 设计 §4.6：这笔被预扣占住的钱必须可解释，否则用户会同时发现转写与 AI 对话都停了
         assertEquals(600, data(res).get("pendingHoldCents"));
         // 用户关心的是「这项功能能不能用」，不是某个具体 op 的开关
-        assertEquals(Boolean.TRUE, serviceRow(res, "tts").get("enabled"));
+        assertEquals(Boolean.TRUE, serviceRow(res, "ocr").get("enabled"));
         assertEquals(Boolean.FALSE, serviceRow(res, "qichacha").get("enabled"));
         assertEquals(Boolean.TRUE, serviceRow(res, "search").get("enabled"));
         // 定价表里压根没提的服务同样是「不知道」，不是「未开放」

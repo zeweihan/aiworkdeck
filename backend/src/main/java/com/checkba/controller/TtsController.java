@@ -20,8 +20,8 @@ public class TtsController {
     private TtsService ttsService;
 
     /**
-     * 合成走的是账号配置里的 ElevenLabs 付费 key，匿名可调等于把它借给任何人烧额度；
-     * 口径与 OcrController/ClipboardController 一致，只要求登录，不涉及项目归属。
+     * 合成占用本机的 CPU 与临时磁盘，匿名可调等于把这台机器的算力借给任何人；
+     * 口径与 OcrController/ClipboardController 一致，只校验会话，不涉及项目归属。
      */
     private static void requireLogin(String sessionId) {
         if (AuthController.getUserIdFromSession(sessionId) == null) {

@@ -256,26 +256,6 @@
                     </view>
                   </template>
 
-                  <!-- 语音合成（ElevenLabs） -->
-                  <template v-else-if="svc.key === 'tts'">
-                    <view class="form-row">
-                      <text class="form-label">API Key</text>
-                      <input v-model="form.external.elevenLabs.apiKey" class="form-input" :placeholder="$t('admin.elevenKeyPlaceholder')" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">{{ $t('admin.apiBaseUrlLabel') }}</text>
-                      <input v-model="form.external.elevenLabs.baseUrl" class="form-input" placeholder="https://api.elevenlabs.io/v1" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">{{ $t('admin.modelIdLabel') }}</text>
-                      <input v-model="form.external.elevenLabs.modelId" class="form-input" placeholder="eleven_multilingual_v2" />
-                    </view>
-                    <view class="form-row">
-                      <text class="form-label">{{ $t('admin.defaultVoiceIdLabel') }}</text>
-                      <input v-model="form.external.elevenLabs.defaultVoiceId" class="form-input" :placeholder="$t('admin.voiceIdPlaceholder')" />
-                    </view>
-                  </template>
-
                   <!-- 企业工商信息（企查查） -->
                   <template v-else-if="svc.key === 'qichacha'">
                     <view class="form-row">
@@ -1468,7 +1448,6 @@ export default {
           pkulaw: { token: '' },
           bocha: { apiKey: '' },
           tingwu: { accessKeyId: '', accessKeySecret: '', appKey: '', ossBucket: '', ossEndpoint: '' },
-          elevenLabs: { apiKey: '', baseUrl: '', modelId: '', defaultVoiceId: '' },
         },
         ai: {
           activeProvider: 'OLLAMA',
@@ -2879,12 +2858,6 @@ export default {
               appKey: data.external.tingwu?.appKey || '',
               ossBucket: data.external.tingwu?.ossBucket || '',
               ossEndpoint: data.external.tingwu?.ossEndpoint || '',
-            },
-            elevenLabs: {
-              apiKey: data.external.elevenLabs?.apiKey || '',
-              baseUrl: data.external.elevenLabs?.baseUrl || '',
-              modelId: data.external.elevenLabs?.modelId || '',
-              defaultVoiceId: data.external.elevenLabs?.defaultVoiceId || '',
             },
           }
         }

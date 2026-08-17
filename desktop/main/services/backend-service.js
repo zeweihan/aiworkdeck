@@ -128,9 +128,8 @@ function spawnEnv(ctx) {
   if (ctx.ports['pptx-service']) {
     env.EXTERNAL_PPTX_SERVICE_BASE_URL = 'http://127.0.0.1:' + ctx.ports['pptx-service']
   }
-  // 桌面默认本地语音（Kokoro）；ElevenLabs 可在系统管理里切回（Phase 3）
+  // 语音合成只有本机 Kokoro 一条路；地址为空后端就报「组件未就绪」
   if (ctx.ports['kokoro-service']) {
-    if (!env.EXTERNAL_TTS_PROVIDER) env.EXTERNAL_TTS_PROVIDER = 'local'
     env.EXTERNAL_TTS_LOCAL_BASE_URL = 'http://127.0.0.1:' + ctx.ports['kokoro-service']
   }
   // 打包态资源定位。dev 态一律不注入：后端 cwd 是 backend/，自己就能按相对路径找到

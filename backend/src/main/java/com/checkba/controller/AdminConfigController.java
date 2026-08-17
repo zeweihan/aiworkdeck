@@ -120,19 +120,6 @@ public class AdminConfigController {
     @Value("${meeting.oss.endpoint:}")
     private String defaultMeetingOssEndpoint;
 
-    // ElevenLabs 默认值
-    @Value("${external.elevenlabs.api-key:}")
-    private String defaultElevenLabsApiKey;
-
-    @Value("${external.elevenlabs.base-url:https://api.elevenlabs.io/v1}")
-    private String defaultElevenLabsBaseUrl;
-
-    @Value("${external.elevenlabs.model-id:eleven_multilingual_v2}")
-    private String defaultElevenLabsModelId;
-
-    @Value("${external.elevenlabs.default-voice-id:JBFqnCBsd6RMkjVDRZzb}")
-    private String defaultElevenLabsDefaultVoiceId;
-
     // OpenRouter 默认值
     @Value("${ai.model.open-router.api-key:}")
     private String defaultOpenRouterApiKey;
@@ -208,12 +195,6 @@ public class AdminConfigController {
     private static final String KEY_MEETING_OSS_BUCKET = com.checkba.service.meeting.MeetingTranscriptionService.KEY_OSS_BUCKET;
     private static final String KEY_MEETING_OSS_ENDPOINT = com.checkba.service.meeting.MeetingTranscriptionService.KEY_OSS_ENDPOINT;
 
-    // ElevenLabs
-    private static final String KEY_ELEVENLABS_API_KEY = "external.elevenlabs.apiKey";
-    private static final String KEY_ELEVENLABS_BASE_URL = "external.elevenlabs.baseUrl";
-    private static final String KEY_ELEVENLABS_MODEL_ID = "external.elevenlabs.modelId";
-    private static final String KEY_ELEVENLABS_DEFAULT_VOICE_ID = "external.elevenlabs.defaultVoiceId";
-
     // OpenRouter
     private static final String KEY_OPENROUTER_API_KEY = "external.openrouter.apiKey";
     private static final String KEY_OPENROUTER_BASE_URL = "external.openrouter.baseUrl";
@@ -262,12 +243,6 @@ public class AdminConfigController {
         defaults.put(KEY_MEETING_APP_KEY, defaultMeetingAppKey);
         defaults.put(KEY_MEETING_OSS_BUCKET, defaultMeetingOssBucket);
         defaults.put(KEY_MEETING_OSS_ENDPOINT, defaultMeetingOssEndpoint);
-
-        // ElevenLabs
-        defaults.put(KEY_ELEVENLABS_API_KEY, defaultElevenLabsApiKey);
-        defaults.put(KEY_ELEVENLABS_BASE_URL, defaultElevenLabsBaseUrl);
-        defaults.put(KEY_ELEVENLABS_MODEL_ID, defaultElevenLabsModelId);
-        defaults.put(KEY_ELEVENLABS_DEFAULT_VOICE_ID, defaultElevenLabsDefaultVoiceId);
 
         // OpenRouter
         defaults.put(KEY_OPENROUTER_API_KEY, defaultOpenRouterApiKey);
@@ -329,12 +304,6 @@ public class AdminConfigController {
                 all.get(KEY_MEETING_APP_KEY),
                 all.get(KEY_MEETING_OSS_BUCKET),
                 all.get(KEY_MEETING_OSS_ENDPOINT)
-        ));
-        external.setElevenLabs(new ElevenLabsConfig(
-                all.get(KEY_ELEVENLABS_API_KEY),
-                all.get(KEY_ELEVENLABS_BASE_URL),
-                all.get(KEY_ELEVENLABS_MODEL_ID),
-                all.get(KEY_ELEVENLABS_DEFAULT_VOICE_ID)
         ));
         resp.setExternal(external);
 
@@ -457,7 +426,7 @@ public class AdminConfigController {
      * 字段有值，其余字段会被 {@code safe(null)} 变成空串落库；而 {@code SystemSettingService}
      * 的读取（{@code get} / {@code getMany}）只在**行不存在**时回退默认值，
      * 「行存在但值为空」返回的就是空串，于是 baseUrl 被清空后 QichachaService 的 url 变成
-     * {@code /ECIInfoVerify/GetInfo}、TushareService 往空串 post、TtsService 的 url 变成 {@code /voices}。
+     * {@code /ECIInfoVerify/GetInfo}、TushareService 往空串 post。
      * 两种真正从可用变不可用的场景：baseUrl/secret 由环境变量提供的部署；管理员走
      * {@code /api/admin/wizard/reset} 重跑向导，只填一个 key 就把原本正确的 baseUrl 清空。
      *
@@ -506,12 +475,6 @@ public class AdminConfigController {
                 putIfPresent(updates, KEY_MEETING_APP_KEY, ext.getTingwu().getAppKey());
                 putIfPresent(updates, KEY_MEETING_OSS_BUCKET, ext.getTingwu().getOssBucket());
                 putIfPresent(updates, KEY_MEETING_OSS_ENDPOINT, ext.getTingwu().getOssEndpoint());
-            }
-            if (ext.getElevenLabs() != null) {
-                putIfPresent(updates, KEY_ELEVENLABS_API_KEY, ext.getElevenLabs().getApiKey());
-                putIfPresent(updates, KEY_ELEVENLABS_BASE_URL, ext.getElevenLabs().getBaseUrl());
-                putIfPresent(updates, KEY_ELEVENLABS_MODEL_ID, ext.getElevenLabs().getModelId());
-                putIfPresent(updates, KEY_ELEVENLABS_DEFAULT_VOICE_ID, ext.getElevenLabs().getDefaultVoiceId());
             }
         }
 
@@ -660,7 +623,6 @@ public class AdminConfigController {
         private PkulawConfig pkulaw;
         private BochaConfig bocha;
         private TingwuConfig tingwu;
-        private ElevenLabsConfig elevenLabs;
 
         public OpenRouterConfig getOpenRouter() { return openRouter; }
         public void setOpenRouter(OpenRouterConfig openRouter) { this.openRouter = openRouter; }
@@ -676,8 +638,6 @@ public class AdminConfigController {
         public void setBocha(BochaConfig bocha) { this.bocha = bocha; }
         public TingwuConfig getTingwu() { return tingwu; }
         public void setTingwu(TingwuConfig tingwu) { this.tingwu = tingwu; }
-        public ElevenLabsConfig getElevenLabs() { return elevenLabs; }
-        public void setElevenLabs(ElevenLabsConfig elevenLabs) { this.elevenLabs = elevenLabs; }
     }
 
     /** 会议转写（通义听悟 + OSS 中转）凭证五件套 */
@@ -794,29 +754,6 @@ public class AdminConfigController {
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
     }
 
-    public static class ElevenLabsConfig {
-        private String apiKey;
-        private String baseUrl;
-        private String modelId;
-        private String defaultVoiceId;
-
-        public ElevenLabsConfig() {}
-        public ElevenLabsConfig(String apiKey, String baseUrl, String modelId, String defaultVoiceId) {
-            this.apiKey = apiKey;
-            this.baseUrl = baseUrl;
-            this.modelId = modelId;
-            this.defaultVoiceId = defaultVoiceId;
-        }
-
-        public String getApiKey() { return apiKey; }
-        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
-        public String getBaseUrl() { return baseUrl; }
-        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
-        public String getModelId() { return modelId; }
-        public void setModelId(String modelId) { this.modelId = modelId; }
-        public String getDefaultVoiceId() { return defaultVoiceId; }
-        public void setDefaultVoiceId(String defaultVoiceId) { this.defaultVoiceId = defaultVoiceId; }
-    }
 
     public static class OpenRouterConfig {
         private String apiKey;

@@ -26,14 +26,12 @@
  */
 const LOCAL_TIER_READY = {
   asr: false,
-  tts: true, // Kokoro 已随包发出，本地语音合成一直可用
 }
 
 export const PLATFORM_SERVICES = [
   { key: 'asr', nameKey: 'platform.svcAsrName', descKey: 'platform.svcAsrDesc' },
   { key: 'ocr', nameKey: 'platform.svcOcrName', descKey: 'platform.svcOcrDesc' },
   { key: 'search', nameKey: 'platform.svcSearchName', descKey: 'platform.svcSearchDesc' },
-  { key: 'tts', nameKey: 'platform.svcTtsName', descKey: 'platform.svcTtsDesc' },
   { key: 'qichacha', nameKey: 'platform.svcQichachaName', descKey: 'platform.svcQichachaDesc' },
   { key: 'tushare', nameKey: 'platform.svcTushareName', descKey: 'platform.svcTushareDesc' },
   { key: 'pkulaw', nameKey: 'platform.svcPkulawName', descKey: 'platform.svcPkulawDesc' },

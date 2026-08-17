@@ -52,25 +52,12 @@ public class ExternalProviderBackfill {
      */
     private final Map<String, String> injectedDefaults = new HashMap<>();
 
-    /**
-     * 档位本身的 yml/env 默认值，<b>优先于凭证推断</b>。
-     *
-     * <p>今天只有 TTS 有一个：桌面打包态由 Electron 注入 {@code EXTERNAL_TTS_PROVIDER=local}
-     * （捆绑的 Kokoro，免费且不出本机），而 {@code system_setting} 里没有这一行。
-     * 不看这个值就会推断成「没有 ElevenLabs Key → 写 platform」，
-     * 于是 {@code TtsService.isLocal()} 读到 platform 当场返 false，
-     * 本地引擎失效、转去调一个没配 Key 的云服务——一次静默的功能回归。
-     */
-    private final Map<String, String> injectedProviderDefaults = new HashMap<>();
-
     public ExternalProviderBackfill(
             SystemSettingService systemSettingService,
             ExternalProviderResolver resolver,
-            @Value("${external.tts.provider:}") String ttsProviderDefault,
             @Value("${bocha.api.key:}") String bochaKey,
             @Value("${external.aliyun-ocr.access-key-id:}") String ocrAk,
             @Value("${external.aliyun-ocr.access-key-secret:}") String ocrSk,
-            @Value("${external.elevenlabs.api-key:}") String elevenLabsKey,
             @Value("${meeting.asr.access-key-id:}") String asrAk,
             @Value("${meeting.asr.app-key:}") String asrAppKey,
             @Value("${meeting.oss.bucket:}") String ossBucket,
@@ -80,11 +67,9 @@ public class ExternalProviderBackfill {
             @Value("${external.pkulaw.token:}") String pkulawToken) {
         this.systemSettingService = systemSettingService;
         this.resolver = resolver;
-        injectedProviderDefaults.put(ExternalServiceProvider.TTS, ttsProviderDefault);
         injectedDefaults.put("external.bocha.apiKey", bochaKey);
         injectedDefaults.put("external.aliyunOcr.accessKeyId", ocrAk);
         injectedDefaults.put("external.aliyunOcr.accessKeySecret", ocrSk);
-        injectedDefaults.put("external.elevenlabs.apiKey", elevenLabsKey);
         injectedDefaults.put("meeting.asr.access-key-id", asrAk);
         injectedDefaults.put("meeting.asr.app-key", asrAppKey);
         injectedDefaults.put("meeting.oss.bucket", ossBucket);
@@ -124,26 +109,20 @@ public class ExternalProviderBackfill {
     }
 
     /**
-     * 判定一个没写过档位的服务该落哪一档。顺序不能换：
-     * <ol>
-     *   <li>档位的 yml/env 默认值**明确要求本地档**（`EXTERNAL_TTS_PROVIDER=local`）→ 照它；</li>
-     *   <li>已有非空 BYOK 凭证 → byok（<b>宁可保守</b>，切错方向会花用户的钱）；</li>
-     *   <li>都没有 → platform。</li>
-     * </ol>
+     * 判定一个没写过档位的服务该落哪一档：已有非空 BYOK 凭证 → byok
+     * （<b>宁可保守</b>，切错方向会花用户的钱）；都没有 → platform。
      *
-     * <p><b>只有 LOCAL 算「显式偏好」，这一条是踩出来的。</b>
-     * `external.tts.provider` 的 yml 默认值写的是 `${EXTERNAL_TTS_PROVIDER:elevenlabs}`——
-     * 那个 `elevenlabs` 是本改造之前的**历史默认值**（当时只有「云端 ElevenLabs / 本地 Kokoro」
-     * 两档），不是任何人做过的选择。把它当偏好会让**每一台全新安装**的 TTS 都落到 byok，
-     * 而用户根本没有 ElevenLabs 的 Key——零配置目标在这一项上当场落空。
-     * 打包态注入的 `local` 才是真实意图（捆绑 Kokoro，免费且不出本机），必须照它。
+     * <p>曾经还有一步「先看档位自身的 yml/env 默认值，且<b>只有 LOCAL 算显式偏好</b>」，
+     * 那一步只为 TTS 存在（打包态注入 {@code EXTERNAL_TTS_PROVIDER=local}）。
+     * 语音合成移除云端档之后不再有服务需要它，连同那个注入一起删掉了。
+     *
+     * <p><b>将来若有服务再引入 env 级档位默认值，这一步要连同它的两条教训一起加回来</b>：
+     * ① 不加这一步，打包态注入的 local 会被凭证推断盖成 platform，本地引擎当场失效；
+     * ② 加了也只能认 LOCAL——`${EXTERNAL_TTS_PROVIDER:elevenlabs}` 里那个 elevenlabs 是
+     * 历史默认值而非任何人做过的选择，把它当偏好会让每一台全新安装都落到 byok，
+     * 而用户根本没有那把 Key，零配置目标当场落空。
      */
     private ExternalServiceProvider decide(ExternalServiceProvider.Descriptor d) {
-        String injectedProvider = injectedProviderDefaults.get(d.service());
-        if (injectedProvider != null && !injectedProvider.isBlank()) {
-            ExternalServiceProvider parsed = ExternalServiceProvider.parse(injectedProvider, null);
-            if (parsed == ExternalServiceProvider.LOCAL) return parsed;
-        }
         return hasByokCredentials(d) ? ExternalServiceProvider.BYOK : ExternalServiceProvider.PLATFORM;
     }
 

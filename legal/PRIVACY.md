@@ -35,13 +35,14 @@
 | 企业工商信息 | 公司名称或统一社会信用代码 | 企查查 | 否 | 调用结束即无 |
 | 证券财务数据 | 证券代码与所查字段 | Tushare | 否 | 调用结束即无 |
 | 法律法规检索 | 检索词 | 北大法宝 | 否 | 调用结束即无 |
-| 语音合成 | 待合成的文本 | ElevenLabs（境外） | 否 | 调用结束即无 |
 
 **只有会议录音这一项会在我们这里落盘。** 音频文件由桌面端直传我们的对象存储（不经过应用服务器），转写完成后由代码删除该对象；同时对象存储配有 24 小时生命周期规则，代码漏删时兜底清理。转写结果回传桌面端后不在我们这里保留。
 
 **其余各项只在调用发生的那一刻透传**：请求内容不写日志、不入库、不用于任何模型训练。
 
-**语音合成默认不走这一档**：桌面版随包内置本地语音引擎，默认在本机合成，不出本机。
+**这六家供应商全部在境内**，平台代采不涉及向境外提供个人信息。
+
+**语音合成不在这张表里**：它只有本机一档，随包内置的引擎在你的机器上合成，不出本机，也没有云端通路。
 
 ## 三、会留下的记录：账务流水
 
@@ -57,7 +58,7 @@
 「系统管理 → 平台服务」里每一项都可以改档，改完立即生效：
 
 - **自备 Key**：填入你自己的供应商 Key，桌面端直连该供应商，不经过我们的服务器；
-- **本地档**：在本机完成，不出本机（语音合成已有；录音转写的本机引擎在后续版本随包发出）；
+- **本地档**：在本机完成，不出本机（录音转写的本机引擎在后续版本随包发出）；
 - **停用**：不使用该项能力，其余功能不受影响。
 
 升级到平台代采档框架的存量安装，凡是已经填过自备 Key 的服务都会保持「自备 Key」，不会被切走。团队自建服务器部署与 Office 插件恒为自备 Key，平台代采档不对它们开放。
@@ -135,13 +136,12 @@ Last updated: 2026-08-17
 | Company registry data | Company name or unified social credit code | Qichacha | No | Nothing kept past the call |
 | Securities and financial data | Ticker and requested fields | Tushare | No | Nothing kept past the call |
 | Statute and case law search | The query | PKULaw | No | Nothing kept past the call |
-| Speech synthesis | The text to synthesize | ElevenLabs (outside mainland China) | No | Nothing kept past the call |
 
-**Meeting audio is the only item written to disk on our side.** The desktop app uploads it directly to our object storage (bypassing the application server); the object is deleted by code once transcription finishes or the task fails, and a 24-hour lifecycle rule on the bucket clears anything the code misses. The transcript is not retained after it is returned to the desktop app. Every other service passes content through only at call time: request content is not logged, not stored, and not used to train any model. Speech synthesis does not use this tier by default — the desktop build ships a local speech engine and synthesizes on-device.
+**Meeting audio is the only item written to disk on our side.** The desktop app uploads it directly to our object storage (bypassing the application server); the object is deleted by code once transcription finishes or the task fails, and a 24-hour lifecycle rule on the bucket clears anything the code misses. The transcript is not retained after it is returned to the desktop app. Every other service passes content through only at call time: request content is not logged, not stored, and not used to train any model. All six vendors are inside mainland China, so the platform-sourced tier involves no transfer of personal information abroad. Speech synthesis is absent from the table: it has an on-device tier only, synthesizing in the bundled engine with no cloud path at all.
 
 **What is kept: billing entries.** Each platform-sourced call leaves one ledger entry under your account recording the service name, operation, quantity (minutes / pages / calls / thousand characters), amount charged, timestamp, and idempotency key. It contains no request content, no result content, and no file names. These are financial records, kept for the life of the account, and visible to you under Settings → Account and Usage.
 
-**How to keep it off our servers.** Under Settings → Platform Services each item can be switched to your own key (the desktop app then connects to that vendor directly), to an on-device tier where one exists (speech synthesis today; on-device meeting transcription ships in a later version), or disabled entirely. Existing installs that already have a vendor key configured stay on their own key and are not moved. Team-hosted server deployments and the Office add-in are always own-key; the platform-sourced tier is not offered to them.
+**How to keep it off our servers.** Under Settings → Platform Services each item can be switched to your own key (the desktop app then connects to that vendor directly), to an on-device tier where one exists (on-device meeting transcription ships in a later version), or disabled entirely. Existing installs that already have a vendor key configured stay on their own key and are not moved. Team-hosted server deployments and the Office add-in are always own-key; the platform-sourced tier is not offered to them.
 
 ## Part 2 — Usage statistics
 

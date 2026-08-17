@@ -16,8 +16,6 @@ export default {
   svcOcrDesc: '从截图、扫描件与照片里提取文字',
   svcSearchName: '联网搜索',
   svcSearchDesc: 'AI 回答问题时查阅公开网页',
-  svcTtsName: '语音合成',
-  svcTtsDesc: '把文字读成语音',
   svcQichachaName: '企业工商信息',
   svcQichachaDesc: '查询公司登记、股东与关联关系',
   svcTushareName: '证券与财务数据',

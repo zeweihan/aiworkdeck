@@ -51,7 +51,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 - 后端：`cd backend && ./restart-backend.sh`（mvn package -DskipTests → kill 9696 → nohup java -jar，prod 配置，日志 backend/app.log）。
 - 前端：`cd frontend && npm run dev:h5`（5173；e2e 用 `npx uni --port 5174`）。**npm 不是 pnpm**。
 - 桌面：`cd desktop && npm run dev`（AIWORKDECK_DESKTOP_DEV=1 electron .；dev Electron 复用已跑的 9696 后端不另起 java）。`npm run clean` 清用户数据目录。predev 钩子会跑 `scripts/brand-dev-electron.js` 把 node_modules 里的 Electron.app 改名（见下条）。
-- Docker 附属：`docker compose up`（mineru 8001、pptx 5001、easyvoice 9549 段已停用改 ElevenLabs）。
+- Docker 附属：`docker compose up`（mineru 8001、pptx 5001；easyvoice 9549 段已停用，语音合成改走桌面捆绑的 Kokoro）。
 
 ## 关键构建脚本（desktop/scripts/）
 
