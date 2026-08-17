@@ -34,13 +34,13 @@ class ExternalProviderResolverTest {
     void localModeHonoursSetting() {
         Map<String, String> rows = new HashMap<>();
         rows.put("external.search.provider", "platform");
-        rows.put("external.tts.provider", "local");
+        rows.put("external.asr.provider", "local");
         rows.put("external.ocr.provider", "byok");
         ExternalProviderResolver r = new ExternalProviderResolver(settingsWith(rows), true);
 
         assertTrue(r.platformAvailable());
         assertEquals(ExternalServiceProvider.PLATFORM, r.resolve("search"));
-        assertEquals(ExternalServiceProvider.LOCAL, r.resolve("tts"));
+        assertEquals(ExternalServiceProvider.LOCAL, r.resolve("asr"));
         assertEquals(ExternalServiceProvider.BYOK, r.resolve("ocr"));
     }
 
@@ -63,9 +63,9 @@ class ExternalProviderResolverTest {
     @DisplayName("非 local-mode：local 档不受影响（本地模型与账户无关）")
     void serverModeKeepsLocalMode() {
         Map<String, String> rows = new HashMap<>();
-        rows.put("external.tts.provider", "local");
+        rows.put("external.asr.provider", "local");
         ExternalProviderResolver r = new ExternalProviderResolver(settingsWith(rows), false);
-        assertEquals(ExternalServiceProvider.LOCAL, r.resolve("tts"));
+        assertEquals(ExternalServiceProvider.LOCAL, r.resolve("asr"));
     }
 
     @Test
@@ -87,17 +87,18 @@ class ExternalProviderResolverTest {
     }
 
     @Test
-    @DisplayName("七家服务的描述表完整，且 AI 不在其中")
+    @DisplayName("六家服务的描述表完整，且 AI 与语音合成不在其中")
     void descriptorTableIsComplete() {
-        assertEquals(7, ExternalServiceProvider.ALL.size());
+        assertEquals(6, ExternalServiceProvider.ALL.size());
         for (ExternalServiceProvider.Descriptor d : ExternalServiceProvider.ALL) {
             assertFalse(d.byokCredentialKeys().isEmpty(),
                     d.service() + " 缺少 BYOK 凭证键，回填会把它误判成空配置");
         }
         // AI 走的是「凭证下发 + 桌面直连」那条通路，不能改成网关代理（设计 §3 通路 A）
         assertTrue(ExternalServiceProvider.ALL.stream().noneMatch(d -> d.service().equals("ai")));
-        assertTrue(ExternalServiceProvider.descriptor("tts").hasLocal());
         assertTrue(ExternalServiceProvider.descriptor("asr").hasLocal());
+        // 语音合成已整体移到本机一条路，不再进档位框架
+        assertTrue(ExternalServiceProvider.ALL.stream().noneMatch(d -> d.service().equals("tts")));
         assertFalse(ExternalServiceProvider.descriptor("search").hasLocal());
     }
 }

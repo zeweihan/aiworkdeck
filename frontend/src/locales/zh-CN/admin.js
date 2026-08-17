@@ -37,10 +37,6 @@ export default {
   pkulawTokenPlaceholder: '请输入 PKULaw Access Token',
   providerBocha: '博查搜索 (Bocha AI)',
   bochaKeyPlaceholder: 'AI 助手「网络搜索」所需，bochaai.com 申请',
-  elevenKeyPlaceholder: '请输入 ElevenLabs API Key',
-  modelIdLabel: '模型 ID',
-  defaultVoiceIdLabel: '默认 Voice ID',
-  voiceIdPlaceholder: '例如: JBFqnCBsd6RMkjVDRZzb',
   saveConfigButton: '保存配置',
 
   // AI 服务配置

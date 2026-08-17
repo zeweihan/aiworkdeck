@@ -32,7 +32,6 @@ export default {
     collapse: '▲ Collapse',
     expand: '▼ Expand',
     ocrGroup: 'OCR Recognition (Alibaba Cloud)',
-    ttsGroup: 'Speech Synthesis (optional cloud ElevenLabs—the local engine is used by default, no setup needed)',
     dataGroup: 'Business & Legal Data',
     qichachaKey: 'Qichacha Key',
     qichachaSecret: 'Qichacha SecretKey',

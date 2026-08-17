@@ -153,15 +153,6 @@
             </view>
           </view>
           <view class="adv-group">
-            <text class="adv-group-title">{{ $t('onboarding.wizard.ttsGroup') }}</text>
-            <view class="form-grid">
-              <view class="form-item">
-                <text class="form-label">API Key</text>
-                <input class="text-input" :password="true" v-model="form.external.elevenLabs.apiKey" :placeholder="$t('onboarding.wizard.optionalPlaceholder')" />
-              </view>
-            </view>
-          </view>
-          <view class="adv-group">
             <text class="adv-group-title">{{ $t('onboarding.wizard.dataGroup') }}</text>
             <view class="form-grid">
               <view class="form-item">
@@ -279,7 +270,6 @@ export default {
         },
         external: {
           aliyunOcr: { accessKeyId: '', accessKeySecret: '' },
-          elevenLabs: { apiKey: '' },
           qichacha: { key: '', secret: '' },
           tushare: { token: '' },
           pkulaw: { token: '' },
@@ -448,9 +438,6 @@ export default {
       const ocr = this.form.external.aliyunOcr
       if (trim(ocr.accessKeyId) || trim(ocr.accessKeySecret)) {
         external.aliyunOcr = { accessKeyId: trim(ocr.accessKeyId), accessKeySecret: trim(ocr.accessKeySecret) }
-      }
-      if (trim(this.form.external.elevenLabs.apiKey)) {
-        external.elevenLabs = { apiKey: trim(this.form.external.elevenLabs.apiKey) }
       }
       const qcc = this.form.external.qichacha
       if (trim(qcc.key) || trim(qcc.secret)) {

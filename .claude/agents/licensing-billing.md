@@ -566,8 +566,8 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   超时**按服务给**（不沿用 `AccountTransport` 写死的 5 秒，OCR/TTS/听悟建任务超 5 秒是常态）。
 - `service/platform/GatewayException.java` — 八档 Kind。**刻意不复用 `AccountException.Kind`**：
   那个把 5xx 一律归 NETWORK、文案「请检查网络后重试」，把我们的故障说成用户的网络问题。
-- `service/platform/ExternalServiceProvider.java` — 七家服务的描述表 + 档位枚举。
-  `parse()` 把存量值 `elevenlabs` 映射成 BYOK（语义就是「用自己的 Key」）。
+- `service/platform/ExternalServiceProvider.java` — 六家服务的描述表 + 档位枚举。
+  语音合成不在其中：云端 ElevenLabs 已整体移除，只剩本机 Kokoro 一条路，没有档可分。
 - `service/platform/ExternalProviderResolver.java` — **档位判定的唯一出口**，D5 的闸在这里。
 - `service/platform/ExternalProviderBackfill.java` — 存量回填，启动期跑一次。
 - `controller/PlatformServiceController.java` — `/api/platform-services{,/{service}/provider}`，
@@ -624,14 +624,13 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     新默认值 `platform`——而用户填过的 23 个字段一个没丢，就在库里躺着却不再被用。
     两类用户同时坏：自带阿里云 OCR/Tushare 订阅的律所**为同一项服务付两遍钱**；
     从未连账户的用户看到「昨天好好的」变成「余额不足」。
-    `ExternalProviderBackfill` 在启动期跑一次，判定顺序**不能换**：
-    ① 档位本身的 yml/env 默认值优先 → ② 已有非空 BYOK 凭证 → byok → ③ 都没有 → platform。
+    `ExternalProviderBackfill` 在启动期跑一次：已有非空 BYOK 凭证 → byok；都没有 → platform。
 
-26. **第一条判定顺序是踩出来的：桌面打包态注入 `EXTERNAL_TTS_PROVIDER=local`**
-    （捆绑 Kokoro，免费且不出本机），而 `system_setting` 里没有这一行。只按凭证推断的话
-    「没有 ElevenLabs Key → 写 platform」，于是 `TtsService.isLocal()` 读到 platform 当场返 false，
-    本地引擎失效、转去调一个没配 Key 的云服务——一次静默的功能回归。
-    护栏 `ExternalProviderBackfillTest.packagedDesktopKeepsLocalTts`。
+26. **曾经还有一步「档位自身的 yml/env 默认值优先」，那一步只为 TTS 存在**
+    （打包态注入 `EXTERNAL_TTS_PROVIDER=local`，而 `system_setting` 里没有这一行；
+    只按凭证推断会写成 platform，本地引擎当场失效——一次静默的功能回归）。
+    语音合成移除云端档后没有服务再需要它，已连同那个注入一起删除。
+    **将来若有服务再引入 env 级档位默认值，这一步要连同它一起加回来**，否则会重演那次回归。
 
 27. **平台档失败绝不静默回落 BYOK**（同地雷 8）。回落会去花用户自己的 Key。
     正确做法是给出可读的失败原因 + 「改用自己的 Key」的指路。

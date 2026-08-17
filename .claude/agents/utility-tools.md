@@ -22,7 +22,7 @@ description: 辅助小工具领域。任务涉及浏览器面板、截图/OCR、
 
 **下载**：`DownloadList.vue` 是**孤儿组件**（全仓库无引用、未挂载）；文件下载实际走 FileController `GET /api/files/{fileId}/download`。
 
-**语音 TTS**：`EasyVoicePane.vue`（api：getTtsVoices/generateTtsAudio）；desktop 本地 Kokoro 由 `desktop/main/services/kokoro-service.js` 管理；后端 `controller/TtsController.java`（/api/tts/voices、/generate）+ `service/TtsService.java`——`external.tts.provider`：elevenlabs（云端默认）| local（桌面捆绑 Kokoro，OpenAI 兼容 /v1，base-url=`external.tts.local-base-url`）。easyvoice Docker 段已停用。
+**语音 TTS**：`EasyVoicePane.vue`（api：getTtsVoices/generateTtsAudio）；desktop 本地 Kokoro 由 `desktop/main/services/kokoro-service.js` 管理；后端 `controller/TtsController.java`（/api/tts/voices、/generate）+ `service/TtsService.java`。**只有本机一档**：桌面捆绑 Kokoro，OpenAI 兼容 /v1，地址 `external.tts.local-base-url`（打包态由 Electron 注入动态端口），地址为空即「组件未就绪」。云端 ElevenLabs 那一档与 `external.tts.provider` 开关已整体移除。easyvoice Docker 段已停用。
 
 **录音（ASR 方向）**：会议录音插件的录音单例 `frontend/src/utils/meetingRecorder.js`（getUserMedia+MediaRecorder 配方源自 FeedbackWidget；分片追加上传走 /api/files/{id}/upload 的 X-File-Offset 协议；轨道必须 stop 否则 macOS 录音灯常亮）；转写走通义听悟（说话人分离），详见 `.claude/agents/plugin-system.md` 会议录音条目。反馈浮窗的 `VoiceTranscriptionService`（OpenAI 兼容接口位）与它无关、各管各的。macOS 麦克风 entitlement 与 NSMicrophoneUsageDescription 已覆盖两个用途（desktop/package.json:103），**权限问题只在签名包暴露，dev 态测不出**。
 

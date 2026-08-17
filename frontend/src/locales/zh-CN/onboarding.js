@@ -32,7 +32,6 @@ export default {
     collapse: '▲ 收起',
     expand: '▼ 展开',
     ocrGroup: 'OCR 识别（阿里云）',
-    ttsGroup: '语音合成（可选云端 ElevenLabs——默认使用本地引擎，无需配置）',
     dataGroup: '企业与法律数据',
     qichachaKey: '企查查 Key',
     qichachaSecret: '企查查 SecretKey',

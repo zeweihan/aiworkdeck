@@ -1,7 +1,6 @@
 package com.checkba.service;
 
 import com.checkba.exception.FeatureNotConfiguredException;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -16,35 +15,19 @@ import java.io.FileOutputStream;
 import java.util.*;
 
 /**
- * TTS Service using ElevenLabs API
- * API Documentation: https://elevenlabs.io/docs/api-reference
+ * 语音合成，只有本机一档：桌面包内置的 Kokoro 服务（OpenAI 兼容 /v1）。
+ *
+ * <p>云端 ElevenLabs 那一档已整体移除：打包态本来就默认走本机引擎，云端档从没有默认生效过；
+ * 而把它放进平台代采意味着转售第三方语音合成，其商用条款对转售另有约定。本机引擎免费、
+ * 不出本机，对律师用户是更干净的口径，没有保留一条云端通路的理由。
  */
-import org.springframework.beans.factory.annotation.Autowired;
-
 @Service
 public class TtsService {
 
     private static final Logger logger = LoggerFactory.getLogger(TtsService.class);
-    private static final String TEMP_AUDIO_DIR = System.getProperty("java.io.tmpdir") + File.separator + "elevenlabs_audio";
-    
-    @Autowired
-    private SystemSettingService systemSettingService;
+    private static final String TEMP_AUDIO_DIR = System.getProperty("java.io.tmpdir") + File.separator + "awd_tts_audio";
 
-    @Value("${external.elevenlabs.api-key}")
-    private String defaultApiKey;
-    
-    @Value("${external.elevenlabs.base-url}")
-    private String defaultBaseUrl;
-    
-    @Value("${external.elevenlabs.model-id}")
-    private String defaultModelId;
-    
-    @Value("${external.elevenlabs.default-voice-id}")
-    private String defaultDefaultVoiceId;
-
-    // 语音提供方：elevenlabs（云端，默认）| local（桌面捆绑 Kokoro，OpenAI 兼容 /v1）
-    @Value("${external.tts.provider:elevenlabs}")
-    private String defaultTtsProvider;
+    private final SystemSettingService systemSettingService;
 
     @Value("${external.tts.local-base-url:}")
     private String defaultLocalBaseUrl;
@@ -52,9 +35,14 @@ public class TtsService {
     private final RestTemplate restTemplate = buildRestTemplate();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    public TtsService(SystemSettingService systemSettingService) {
+        this.systemSettingService = systemSettingService;
+        new File(TEMP_AUDIO_DIR).mkdirs();
+    }
+
     private static RestTemplate buildRestTemplate() {
-        // 显式超时：此前无 connect/read timeout，ElevenLabs 或本地 Kokoro 网络卡死会无限期
-        // 挂起并占满请求线程。TTS 合成可能较慢，read 超时给宽松值。
+        // 显式超时：此前无 connect/read timeout，本地 Kokoro 网络卡死会无限期挂起并占满请求线程。
+        // TTS 合成可能较慢，read 超时给宽松值。
         org.springframework.http.client.SimpleClientHttpRequestFactory factory =
                 new org.springframework.http.client.SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(10_000);
@@ -62,12 +50,8 @@ public class TtsService {
         return new RestTemplate(factory);
     }
 
-    public TtsService() {
-        new File(TEMP_AUDIO_DIR).mkdirs();
-    }
-
     /**
-     * 定时清理临时音频目录：合成的 mp3/wav 写入 TEMP_AUDIO_DIR 后返回 File，此前无任何清理，
+     * 定时清理临时音频目录：合成的 wav 写入 TEMP_AUDIO_DIR 后返回 File，此前无任何清理，
      * 长期运行会撑满系统临时目录。每小时清理超过 1 小时未修改的文件（保留最近文件供下载/播放）。
      */
     @org.springframework.scheduling.annotation.Scheduled(fixedRate = 60 * 60 * 1000)
@@ -82,15 +66,7 @@ public class TtsService {
         }
     }
 
-    /**
-     * Get available voices from ElevenLabs API
-     * GET /voices
-     */
     // settings（系统管理可改）> env/yml 默认
-    private boolean isLocalProvider() {
-        return "local".equalsIgnoreCase(systemSettingService.get("external.tts.provider", defaultTtsProvider));
-    }
-
     private String localBaseUrl() {
         return systemSettingService.get("external.tts.localBaseUrl", defaultLocalBaseUrl);
     }
@@ -106,147 +82,13 @@ public class TtsService {
         }
     }
 
-    public List<VoiceOption> getVoices() {
-        if (isLocalProvider()) {
-            return getLocalVoices();
-        }
-        try {
-            String baseUrl = systemSettingService.get("external.elevenlabs.baseUrl", defaultBaseUrl);
-            String apiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);
-
-            String url = baseUrl + "/voices";
-            
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("xi-api-key", apiKey);
-            headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
-            
-            HttpEntity<Void> entity = new HttpEntity<>(headers);
-            ResponseEntity<String> response = restTemplate.exchange(url, HttpMethod.GET, entity, String.class);
-            
-            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                JsonNode root = objectMapper.readTree(response.getBody());
-                JsonNode voicesNode = root.get("voices");
-                
-                List<VoiceOption> result = new ArrayList<>();
-                if (voicesNode != null && voicesNode.isArray()) {
-                    for (JsonNode voiceNode : voicesNode) {
-                        VoiceOption vo = new VoiceOption();
-                        vo.setVoiceId(voiceNode.path("voice_id").asText());
-                        vo.setName(voiceNode.path("name").asText());
-                        
-                        // Extract gender and locale from labels
-                        JsonNode labels = voiceNode.get("labels");
-                        if (labels != null) {
-                            vo.setGender(labels.path("gender").asText("unknown"));
-                            vo.setLocale(labels.path("accent").asText(""));
-                        } else {
-                            vo.setGender("unknown");
-                            vo.setLocale("");
-                        }
-                        
-                        result.add(vo);
-                    }
-                }
-                
-                logger.info("Loaded {} voices from ElevenLabs", result.size());
-                return result;
-            }
-            
-            logger.warn("Voice list response unsuccessful: {}", response.getStatusCode());
-            return new ArrayList<>();
-        } catch (Exception e) {
-            logger.error("Failed to list voices from ElevenLabs API", e);
-            return new ArrayList<>();
-        }
-    }
-
-    /**
-     * Generate audio from text using ElevenLabs TTS API
-     * POST /text-to-speech/{voice_id}
-     * 
-     * @param text Text to convert to speech
-     * @param voiceId ElevenLabs voice ID (or voice name for backward compatibility)
-     * @param rate Unused (ElevenLabs uses different settings)
-     * @param pitch Unused (ElevenLabs uses different settings)
-     * @param volume Unused (ElevenLabs uses different settings)
-     */
-    public File generateAudio(String text, String voiceId, String rate, String pitch, String volume) {
-        if (isLocalProvider()) {
-            return generateLocalAudio(text, voiceId, rate);
-        }
-        // 未配置 TTS 密钥时直接返回"功能未配置"，前端引导去设置（#18 T5）
-        String configuredApiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);
-        if (configuredApiKey == null || configuredApiKey.isBlank()) {
-            throw new FeatureNotConfiguredException("tts",
-                    LangText.of("语音合成未配置：请在设置中配置 ElevenLabs TTS",
-                            "Text-to-speech is not configured: set up ElevenLabs in Settings."));
-        }
-        try {
-            String baseUrl = systemSettingService.get("external.elevenlabs.baseUrl", defaultBaseUrl);
-            String apiKey = systemSettingService.get("external.elevenlabs.apiKey", defaultApiKey);
-            String modelId = systemSettingService.get("external.elevenlabs.modelId", defaultModelId);
-            String defaultVoiceId = systemSettingService.get("external.elevenlabs.defaultVoiceId", defaultDefaultVoiceId);
-
-            // Use default voice if not specified
-            if (voiceId == null || voiceId.isEmpty()) {
-                voiceId = defaultVoiceId;
-            }
-            
-            String url = baseUrl + "/text-to-speech/" + voiceId;
-            
-            HttpHeaders headers = new HttpHeaders();
-            headers.set("xi-api-key", apiKey);
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setAccept(Collections.singletonList(MediaType.parseMediaType("audio/mpeg")));
-            
-            // Build request body
-            Map<String, Object> body = new HashMap<>();
-            body.put("text", text);
-            body.put("model_id", modelId);
-            
-            // Voice settings (use defaults for natural sound)
-            Map<String, Object> voiceSettings = new HashMap<>();
-            voiceSettings.put("stability", 0.5);
-            voiceSettings.put("similarity_boost", 0.75);
-            voiceSettings.put("style", 0.0);
-            voiceSettings.put("use_speaker_boost", true);
-            body.put("voice_settings", voiceSettings);
-            
-            logger.info("Generating TTS via ElevenLabs: voice={}, text length={}", voiceId, text.length());
-            
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(body, headers);
-            ResponseEntity<byte[]> response = restTemplate.exchange(url, HttpMethod.POST, entity, byte[].class);
-            
-            if (!response.getStatusCode().is2xxSuccessful() || response.getBody() == null) {
-                throw new RuntimeException("TTS generation failed: " + response.getStatusCode());
-            }
-            
-            byte[] audioData = response.getBody();
-            logger.info("Received audio data: {} bytes", audioData.length);
-            
-            // Save to temp file
-            String outName = UUID.randomUUID().toString() + ".mp3";
-            File outputFile = new File(TEMP_AUDIO_DIR, outName);
-            try (FileOutputStream fos = new FileOutputStream(outputFile)) {
-                fos.write(audioData);
-            }
-            
-            logger.info("Saved audio to: {}", outputFile.getAbsolutePath());
-            return outputFile;
-
-        } catch (Exception e) {
-            logger.error("Failed to generate audio via ElevenLabs", e);
-            throw new RuntimeException("Failed to generate audio: " + e.getMessage(), e);
-        }
-    }
-
     /**
      * 本地 Kokoro 服务的音色列表（GET /v1/audio/voices，OpenAI 风格包装层）
      */
-    private List<VoiceOption> getLocalVoices() {
+    public List<VoiceOption> getVoices() {
         String base = localBaseUrl();
         if (base == null || base.isBlank()) {
-            logger.warn("TTS provider=local but external.tts.local-base-url is empty");
+            logger.warn("TTS local base url is empty; speech component is not ready");
             return new ArrayList<>();
         }
         try {
@@ -276,8 +118,10 @@ public class TtsService {
     /**
      * 本地 Kokoro 合成（POST /v1/audio/speech → WAV）。
      * 服务不可达 = 组件未下载/未启用，走"功能未配置"引导（前端既有机制）。
+     *
+     * @param rate 语速，"1.2" / "1.2x" 皆可；pitch 与 volume 本地引擎不支持，保留参数位以免动前端契约
      */
-    private File generateLocalAudio(String text, String voiceId, String rate) {
+    public File generateAudio(String text, String voiceId, String rate, String pitch, String volume) {
         String base = localBaseUrl();
         if (base == null || base.isBlank()) {
             throw new FeatureNotConfiguredException("tts",
@@ -321,7 +165,7 @@ public class TtsService {
 
     // Response DTOs
     public static class VoiceOption {
-        private String voiceId;  // ElevenLabs voice ID
+        private String voiceId;
         private String name;
         private String gender;
         private String locale;

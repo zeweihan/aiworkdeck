@@ -37,10 +37,6 @@ export default {
   pkulawTokenPlaceholder: 'Enter PKULaw Access Token',
   providerBocha: 'Bocha Search (Bocha AI)',
   bochaKeyPlaceholder: 'Required by the AI assistant Web Search tool; apply at bochaai.com',
-  elevenKeyPlaceholder: 'Enter ElevenLabs API Key',
-  modelIdLabel: 'Model ID',
-  defaultVoiceIdLabel: 'Default Voice ID',
-  voiceIdPlaceholder: 'e.g. JBFqnCBsd6RMkjVDRZzb',
   saveConfigButton: 'Save Settings',
 
   // AI service settings
