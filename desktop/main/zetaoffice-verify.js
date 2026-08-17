@@ -31,7 +31,7 @@ async function openZetaOfficeVerifyWindow() {
   verifyWin = new BrowserWindow({
     width: 1280,
     height: 860,
-    title: 'AI Workdeck · LibreOffice 验证 (experimental)',
+    title: 'AI WorkDeck · LibreOffice 验证 (experimental)',
     webPreferences: {
       partition: ZETAOFFICE_PARTITION,
       contextIsolation: true,

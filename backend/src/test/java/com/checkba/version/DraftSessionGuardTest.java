@@ -125,6 +125,6 @@ class DraftSessionGuardTest {
         assertNotNull(sha, "AI 轮次结束在稿上也要落版");
         assertEquals("draft/1001", repoSvc.currentBranch(7L), "不得被切走");
         assertTrue(svc.activeSession(7L).isEmpty(), "稿上 AI 轮次也不隐式开工作段");
-        assertEquals("AI Workdeck", repoSvc.log(7L, "HEAD", 1).get(0).authorName(), "AI 署名");
+        assertEquals("AI WorkDeck", repoSvc.log(7L, "HEAD", 1).get(0).authorName(), "AI 署名");
     }
 }

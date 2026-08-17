@@ -37,7 +37,7 @@ plugins/
   "version": "1.0.0",
   "description": "演示插件规范 v1 的最小示例：提供文本回显与字数统计两个 AI 工具。",
   "icon": "🔌",
-  "author": "AI Workdeck",
+  "author": "AI WorkDeck",
   "homepage": "https://github.com/zeweihan/checkba_cloud",
   "permissions": ["network"],
   "tools": [

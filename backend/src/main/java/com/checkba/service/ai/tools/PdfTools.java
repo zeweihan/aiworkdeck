@@ -123,7 +123,7 @@ public class PdfTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "添加PDF批注", category = "pdf", fileEffect = "MODIFIED")
     @Tool("在 PDF 的指定文本旁添加便签批注（锚定第一处匹配）。批注以标准 PDF 注释写入，" +
-          "预览中显示为可点开的便签图标，署名 AI Workdeck。anchorText 必须与原文逐字一致。")
+          "预览中显示为可点开的便签图标，署名 AI WorkDeck。anchorText 必须与原文逐字一致。")
     public String pdf_annotate(
             @P("文件 ID") Long fileId,
             @P("锚点原文文本（批注加在它旁边，需与原文逐字一致）") String anchorText,

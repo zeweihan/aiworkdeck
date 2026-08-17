@@ -20,7 +20,7 @@ export default {
   audioHint: '没配转写服务时，这段录音会原样留给维护者听，不会被丢掉。',
   contextToggleExpand: '查看随反馈一起发送的现场信息（{summary}）',
   contextToggleCollapse: '收起随反馈一起发送的现场信息（{summary}）',
-  submitHint: '提交后会发给 AI Workdeck 维护者；本机也会留一份，在「系统管理 → 用户反馈」里能查。',
+  submitHint: '提交后会发给 AI WorkDeck 维护者；本机也会留一份，在「系统管理 → 用户反馈」里能查。',
   viewProgress: '查看进度',
   retry: '重试',
   loading: '加载中…',

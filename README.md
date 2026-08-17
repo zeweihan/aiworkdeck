@@ -1,10 +1,10 @@
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src=".github/assets/icon.png" width="88" alt="AI Workdeck logo">
+    <img src=".github/assets/icon.png" width="88" alt="AI WorkDeck logo">
   </a>
 </p>
 
-<h1 align="center">AI Workdeck</h1>
+<h1 align="center">AI WorkDeck</h1>
 
 <p align="center">
   <strong>The AI-native workspace for legal and document-heavy work.</strong><br>
@@ -26,7 +26,7 @@
 
 <p align="center">
   <a href="https://www.aiworkdeck.com">
-    <img src=".github/assets/workspace-ai.png" alt="AI Workdeck — project workspace with document preview and AI agent panel (real product screenshot)" width="900">
+    <img src=".github/assets/workspace-ai.png" alt="AI WorkDeck — project workspace with document preview and AI agent panel (real product screenshot)" width="900">
   </a>
 </p>
 
@@ -34,11 +34,11 @@
 
 > **VS Code** gives developers one place for files, extensions, terminals, Git, and AI coding assistants.
 >
-> **AI Workdeck** aims to give lawyers and document-heavy teams one place for matters, documents, agents, plugins, evidence, and review.
+> **AI WorkDeck** aims to give lawyers and document-heavy teams one place for matters, documents, agents, plugins, evidence, and review.
 
 ## Why Star This Repo
 
-Star AI Workdeck if you care about any of these problems:
+Star AI WorkDeck if you care about any of these problems:
 
 - Building AI-native legal or professional-service workflows
 - Moving from chatbot add-ons to a real workspace where files, context, agents, and plugins live together
@@ -47,7 +47,7 @@ Star AI Workdeck if you care about any of these problems:
 
 ## What It Is
 
-AI Workdeck Community Edition is the open-source kernel of AI Workdeck. It is not the full commercial SaaS product. The kernel is published so developers, law firms, legal-tech builders, and document-AI teams can inspect, self-host, integrate, and extend the core workflow infrastructure.
+AI WorkDeck Community Edition is the open-source kernel of AI WorkDeck. It is not the full commercial SaaS product. The kernel is published so developers, law firms, legal-tech builders, and document-AI teams can inspect, self-host, integrate, and extend the core workflow infrastructure.
 
 ## Download & Run
 
@@ -57,14 +57,14 @@ Just want to try it? You don't need to build from source.
 
 | Platform | Installer | Notes |
 |---|---|---|
-| macOS (Apple Silicon) | `AI Workdeck-<version>-arm64.dmg` | Signed and notarized |
-| Windows | `AI Workdeck Setup <version>.exe` | Not yet code-signed; SmartScreen may warn |
+| macOS (Apple Silicon) | `AI WorkDeck-<version>-arm64.dmg` | Signed and notarized |
+| Windows | `AI WorkDeck Setup <version>.exe` | Not yet code-signed; SmartScreen may warn |
 
 > Intel mac builds are discontinued (upstream Python dependencies no longer ship x86_64 wheels). The last Intel dmg remains available in older releases.
 
 Double-click to install. On first launch, a setup wizard lets you pick one AI provider — a cloud API key, or a fully local model via [Ollama](https://ollama.com) (zero key, data never leaves your machine). No Java, Docker, or PostgreSQL required: the backend, a trimmed JRE, and a local database are bundled in.
 
-> The desktop build is the fastest way to evaluate AI Workdeck. To self-host the full stack or contribute code, see [Quick Start](#quick-start) below.
+> The desktop build is the fastest way to evaluate AI WorkDeck. To self-host the full stack or contribute code, see [Quick Start](#quick-start) below.
 
 ## Access & Unlock
 
@@ -88,7 +88,7 @@ Two notes for firms evaluating deployment: unlocking is per machine and is store
 |---|---|
 | Website | [aiworkdeck.com](https://www.aiworkdeck.com) |
 | Product walkthrough | [Intro video](https://www.aiworkdeck.com/videos/intro.mp4) |
-| Feature showcase | [AI Workdeck Showcase](https://www.aiworkdeck.com/zh/showcase) |
+| Feature showcase | [AI WorkDeck Showcase](https://www.aiworkdeck.com/zh/showcase) |
 
 ## Screenshots
 
@@ -133,7 +133,7 @@ flowchart TB
 
 ## Data Processing & Privacy
 
-AI Workdeck is designed for **self-hosted, private deployment**. The following diagram shows which components process data locally vs. externally:
+AI WorkDeck is designed for **self-hosted, private deployment**. The following diagram shows which components process data locally vs. externally:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -197,9 +197,9 @@ The architecture's plugin surface is designed to accommodate these features. If 
 
 ## Licensing FAQ for Law Firms
 
-### Can our firm use AI Workdeck internally without disclosing our modifications?
+### Can our firm use AI WorkDeck internally without disclosing our modifications?
 
-**Usually yes — with one nuance worth understanding.** AGPLv3 affirms your right to run the software and to modify it for your own use. Running an *unmodified* copy internally creates no source-disclosure obligation. If you *modify* AI Workdeck and then make the modified version available to people over a network — which can include your own lawyers and staff using it as an internal web application — AGPLv3 Section 13 can require you to offer **those users** the corresponding source code of your modified version. That source stays within your firm: you are not required to publish it to the public or to us. If you would rather keep your modifications, plugins, or integrations proprietary and free of any AGPLv3 obligation, a commercial license removes the copyleft requirement entirely.
+**Usually yes — with one nuance worth understanding.** AGPLv3 affirms your right to run the software and to modify it for your own use. Running an *unmodified* copy internally creates no source-disclosure obligation. If you *modify* AI WorkDeck and then make the modified version available to people over a network — which can include your own lawyers and staff using it as an internal web application — AGPLv3 Section 13 can require you to offer **those users** the corresponding source code of your modified version. That source stays within your firm: you are not required to publish it to the public or to us. If you would rather keep your modifications, plugins, or integrations proprietary and free of any AGPLv3 obligation, a commercial license removes the copyleft requirement entirely.
 
 ### What about the network-use clause (AGPLv3 Section 13)?
 
@@ -213,15 +213,15 @@ Section 13 is triggered by **network interaction with a modified version**, and 
 The current architecture runs plugins in-process. Under AGPLv3, this means the copyleft *may* extend to proprietary plugins. If your firm plans to build proprietary workflow extensions, the **commercial license** provides a clean legal basis for:
 - Closed-source plugins and integrations
 - Proprietary on-premise deployment without source disclosure
-- Commercial SaaS products built on the AI Workdeck kernel
+- Commercial SaaS products built on the AI WorkDeck kernel
 
 See [`legal/COMMERCIAL-LICENSE.md`](legal/COMMERCIAL-LICENSE.md) or contact [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com).
 
 ### Where does our data go?
 
-**AI conversations do not pass through our servers.** Conversation content goes straight from your machine to the model provider you selected: with local Ollama it is processed on the device only; with a cloud provider it goes to that third party; and even on the "AI Workdeck cloud" tier our servers only issue the key and settle usage. Documents and contract text, AI conversation text, file names, and project and client information therefore never flow through our servers — and in a self-hosted deployment with Ollama + local storage + Docker services, **they never leave your network at all**.
+**AI conversations do not pass through our servers.** Conversation content goes straight from your machine to the model provider you selected: with local Ollama it is processed on the device only; with a cloud provider it goes to that third party; and even on the "AI WorkDeck cloud" tier our servers only issue the key and settle usage. Documents and contract text, AI conversation text, file names, and project and client information therefore never flow through our servers — and in a self-hosted deployment with Ollama + local storage + Docker services, **they never leave your network at all**.
 
-**The platform-sourced tier does pass through our servers.** On a fresh desktop install, image text recognition, web search, company registry data, securities and financial data, statute and case law search, and meeting transcription default to the "platform-sourced" tier: AI Workdeck buys from the vendor on your behalf and bills in Credits, so no key of your own is needed, and the content each call requires is relayed to the vendor through our servers. Meeting audio is the only item staged in our object storage — deleted as soon as transcription finishes, with a 24-hour lifecycle rule as a backstop; every other service passes content through only at call time and retains no request content. All six vendors are inside mainland China. Speech synthesis is not among them: it has an on-device tier only, synthesizing locally in the bundled engine. The per-service breakdown (what passes through, how long it is kept, when it is deleted) is in [`legal/PRIVACY.md`](legal/PRIVACY.md).
+**The platform-sourced tier does pass through our servers.** On a fresh desktop install, image text recognition, web search, company registry data, securities and financial data, statute and case law search, and meeting transcription default to the "platform-sourced" tier: AI WorkDeck buys from the vendor on your behalf and bills in Credits, so no key of your own is needed, and the content each call requires is relayed to the vendor through our servers. Meeting audio is the only item staged in our object storage — deleted as soon as transcription finishes, with a 24-hour lifecycle rule as a backstop; every other service passes content through only at call time and retains no request content. All six vendors are inside mainland China. Speech synthesis is not among them: it has an on-device tier only, synthesizing locally in the bundled engine. The per-service breakdown (what passes through, how long it is kept, when it is deleted) is in [`legal/PRIVACY.md`](legal/PRIVACY.md).
 
 **Every item can be switched.** Under Settings → Platform Services any of them can be moved to your own key (the desktop app then connects to that vendor directly, bypassing us) or to an on-device tier, or disabled entirely; existing installs that already have a vendor key configured are not moved. Team-hosted server deployments and the Office add-in are always own-key — the platform-sourced tier is not offered to them.
 
@@ -308,7 +308,7 @@ Useful first contributions:
 
 ## Licensing
 
-AI Workdeck Community Edition is released under the GNU Affero General Public License v3.0.
+AI WorkDeck Community Edition is released under the GNU Affero General Public License v3.0.
 
 If you modify this project and provide it as a network service, AGPLv3 generally requires that you provide the corresponding source code to users of that service.
 
@@ -321,7 +321,7 @@ Commercial licensing is available for:
 
 See [LICENSE](legal/LICENSE) and [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md). For commercial licensing, contact [hi@aiworkdeck.com](mailto:hi@aiworkdeck.com).
 
-**AI Workdeck®** is a registered trademark in China (classes 9, 35, 42). Building on the kernel is welcome under the licenses above, but using the **AI Workdeck** name or logo for a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
+**AI WorkDeck™** is a trademark of the project maintainers. Building on the kernel is welcome under the licenses above, but using the **AI WorkDeck** name or logo for a commercial offering requires a brand or certification agreement — see [TRADEMARKS.md](legal/TRADEMARKS.md) and the **Brand & Certification Programs** in [COMMERCIAL-LICENSE.md](legal/COMMERCIAL-LICENSE.md).
 
 ## Background
 

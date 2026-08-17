@@ -33,7 +33,7 @@
 ## model_config：模型与密钥由主后端下发（最容易在 re-vendor 时丢的一项）
 
 **为什么必须有这层定制**：本服务自己那套 AI 配置（`GOOGLE_API_KEY` / `AI_PROVIDER_FORMAT` / `TEXT_MODEL`）
-在 AI Workdeck 里**没有任何配置入口**——桌面端不写 `.env`，写设置的接口 `POST /api/settings/*` 又要求
+在 AI WorkDeck 里**没有任何配置入口**——桌面端不写 `.env`，写设置的接口 `POST /api/settings/*` 又要求
 `PPTX_SETTINGS_TOKEN`，而全仓从不设置这个变量（等于恒 403）。所以模型与密钥只能由主后端
 （`backend/.../service/ai/tools/PptxTools.java` 的 `buildModelConfig`）在**每次请求的 body 里下发**，
 键名 `model_config`：
@@ -43,7 +43,7 @@
  "text_model": "deepseek/deepseek-v4-flash", "image_model": "google/gemini-3-pro-image-preview"}
 ```
 
-`provider` 是本服务侧的 SDK 格式标识（`openai` = OpenAI 兼容，OpenRouter 与 AI Workdeck 云端平台通道都走它），
+`provider` 是本服务侧的 SDK 格式标识（`openai` = OpenAI 兼容，OpenRouter 与 AI WorkDeck 云端平台通道都走它），
 不是主后端的 `ai.activeProvider`。
 
 **消费端落点（re-vendor 后逐项核对，代码内均有 `[checkba]` 标记）**：
@@ -87,10 +87,10 @@
    ```
    期望：返回 `data.pages` 非空；服务日志出现 `[checkba] creating AIService from model_config`，
    **不得**出现 `GOOGLE_API_KEY ... is required`。
-4. 产品内端到端：桌面端在设置页分别选「AI Workdeck 云端」与 OpenRouter，各让 AI 生成一份 PPT
+4. 产品内端到端：桌面端在设置页分别选「AI WorkDeck 云端」与 OpenRouter，各让 AI 生成一份 PPT
    （AI 面板说「做一份关于 X 的 PPT」→ 配置卡选可编辑版），确认大纲/配图/可编辑导出三段都成。
    切到本地 Ollama 时应立刻收到中文提示「AI PPT 需要云端模型」，而不是跑到一半失败。
-5. 平台通道负例：账户未连接/额度未就绪时选「AI Workdeck 云端」生成 PPT，
+5. 平台通道负例：账户未连接/额度未就绪时选「AI WorkDeck 云端」生成 PPT，
    必须报账户侧的中文业务错误，**不能**悄悄用上用户自己填的 OpenRouter key（看后端日志里的 provider/key 指纹）。
 
 **已知缺口**：图像生成（幻灯片图、干净背景图）按张计费，模型 ID 是 `PptxServiceClient.IMAGE_MODEL`

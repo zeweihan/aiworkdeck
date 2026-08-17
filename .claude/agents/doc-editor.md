@@ -102,7 +102,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - **触控板捏合必须在 canvas 上 `preventDefault`**：Chromium 把捏合报成 `ctrl+wheel`，不拦就是浏览器缩放整个 webview 页面（工具栏跟着放大、画布发糊、IME 像素映射基准作废）。拦下来改派 `set_zoom`（`ViewSettings.ZoomValue`，先切 `ZoomType=BY_VALUE` 否则自动模式会把值算回去；两个属性都是 sal_Int16，必须 `shortAny()`）。
 - **保存状态胶囊只在「慢」和「失败」时出声**：成功保存不报「已保存」（维护者反馈：经常闪变、打扰）。浮层要钉在**画布**上而不是编辑器外层——审阅面板是并排挤宽的，钉外层会压住面板标题行。
 - `npm run build:zetaoffice` 会清空 dist 并删掉已 fetch 的引擎——本地反复跑 e2e 用 `LOWA_ENGINE_DIR` 规避，或从兄弟 worktree 复制引擎（CDN 挂时的配方）。
-- 修订作者：params 带 `__agent:true` → 署名 "AI Workdeck"。
+- 修订作者：params 带 `__agent:true` → 署名 "AI WorkDeck"。
 - **ShowChangesInMargin 依赖自建引擎 ≥24.2.8-zhcn-r3**：原生 LO 把页边删除文本画在锚点所在 frame 左侧，表格内 frame=单元格会叠画左邻格正文；r3 焙入 frmpaint.cxx 表格锚点补丁（`desktop/lowa-build/patches`，锚 FindTabFrame 整表左缘）后才能开。页边模式非纯视图设置：开=删除文本移入 redline 对象（getString 可取、正文不含），关=留正文流且 redline getString 抛异常——debug_revisions 已带 RedlineText/区间双路取回，两种模式都能读。已知残留局限：同一表格行多格删除会在页边同 Y 相互叠（上游按行画、无跨格协调）。批注侧栏与此设置无关。
 - **审阅面板原语的光标摆位是硬约束**（`resolve_revision`，真机逐个试出来）：插入型修订必须**跨选**整个 redline 区间才被 `.uno:AcceptTrackedChange` 命中；删除型（页边模式下文本不在正文流）必须**塌陷**到区间起点，跨选反而打空。摆错不报错——dispatch 静默失效甚至凭空多一条空插入修订，所以处置一律用 redline 条数变化复核，别信 dispatch 的返回。
 - **批注删除三个前提**（`delete_comment`）：`.uno:DeleteComment` 必须带 `Id`（批注的 `Name` 属性）；文档必须**可见**（Hidden 打开的文档没有批注窗口，按 Id 找不到）；已解决（Resolved）的批注要先取消解决态。API 路线 `dispose()` / `removeTextContent()` 在有些上下文里是「不抛异常也不生效」的假成功，不能据其返回值报成功。

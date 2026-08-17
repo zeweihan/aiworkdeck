@@ -5,7 +5,7 @@ package com.checkba.service.platform;
  *
  * <p>刻意与 {@link com.checkba.service.account.AccountException} 分开，而不是往它的 Kind 里塞：
  * 那个类的 Kind 只有 NETWORK / UNAUTHORIZED / CONFLICT / NOT_CONNECTED / MALFORMED 五档，
- * 5xx 一律归 NETWORK、文案是「无法连接 AI Workdeck 服务器，请检查网络后重试」——
+ * 5xx 一律归 NETWORK、文案是「无法连接 AI WorkDeck 服务器，请检查网络后重试」——
  * <b>把我们自己的故障说成用户的网络问题</b>，用户会去重启路由器。
  *
  * <p>网关必须能区分三件在用户眼里长得一样、下一步却完全不同的事：

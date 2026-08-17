@@ -316,7 +316,7 @@ class SkillMarketServiceTest {
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> service.install("due-diligence"));
-        assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
+        assertTrue(e.getMessage().contains("连接 AI WorkDeck 账户"), e.getMessage());
         assertTrue(e.getMessage().contains("¥19.90"), "价格要写进引导文案: " + e.getMessage());
         assertNotMistakenForLogout(e.getMessage());
         assertEquals(List.of(REGISTRY_URL), service.requestedUrls, "只查了元数据，不该再打 bundle 端点");
@@ -399,7 +399,7 @@ class SkillMarketServiceTest {
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> service.install("due-diligence"));
-        assertTrue(e.getMessage().contains("连接 AI Workdeck 账户"), e.getMessage());
+        assertTrue(e.getMessage().contains("连接 AI WorkDeck 账户"), e.getMessage());
         assertFalse(e.getMessage().contains("需购买后安装"),
                 "本机没连账户，官网无从查购买记录：402 不等于用户没买过 —— " + e.getMessage());
         assertNotMistakenForLogout(e.getMessage());

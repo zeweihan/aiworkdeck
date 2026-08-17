@@ -237,7 +237,7 @@ export default {
       platformState: { services: [], platformAvailable: false, accountConnected: false },
       servicesLoaded: false,
       servicesError: '',
-      // 平台通道「AI Workdeck 云端」的两个前置条件，与 admin 页同一判据：
+      // 平台通道「AI WorkDeck 云端」的两个前置条件，与 admin 页同一判据：
       // 已连接账户（本地读盘）+ 账户有 Credits（用量接口的 creditsCents）。
       platformAiAvailable: false,
       platformNeedsAllocation: false,
@@ -299,7 +299,7 @@ export default {
     }
   },
   computed: {
-    // 「AI Workdeck 云端」置顶：用账户 Key 解锁的用户买的就是这条通道，
+    // 「AI WorkDeck 云端」置顶：用账户 Key 解锁的用户买的就是这条通道，
     // 不列出来他会被引导去再配一家别的 Key。选中即就地展开连接块——
     // 前置条件不满足时**不能只给一句「进入产品后再去设置里连」**，那是死路：
     // 用户在向导里没有任何办法把它变成可用，只能先选一家别的凑合。
@@ -353,7 +353,7 @@ export default {
       if (this.platformState.accountConnected) return false
       return (this.platformState.services || []).some((s) => s.provider === 'platform')
     },
-    // 步骤 1 选了「AI Workdeck 云端」且尚未连接时，那里已经有一个连接块了。
+    // 步骤 1 选了「AI WorkDeck 云端」且尚未连接时，那里已经有一个连接块了。
     // 两块同时渲染会得到两个绑同一个 v-model 的输入框（互相镜像，看着像 bug），
     // 所以步骤 2 这时改成一句指路。
     step1ConnectVisible() {

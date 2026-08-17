@@ -20,7 +20,7 @@ export default {
   audioHint: "If no transcription service is configured, this recording is kept as-is for maintainers to listen to — it won't be discarded.",
   contextToggleExpand: 'View the context info sent with this feedback ({summary})',
   contextToggleCollapse: 'Hide the context info sent with this feedback ({summary})',
-  submitHint: "After submitting, this goes to the AI Workdeck maintainers; a local copy is also kept and can be found under Settings → User Feedback.",
+  submitHint: "After submitting, this goes to the AI WorkDeck maintainers; a local copy is also kept and can be found under Settings → User Feedback.",
   viewProgress: 'View Progress',
   retry: 'Retry',
   loading: 'Loading…',

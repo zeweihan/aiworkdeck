@@ -2,7 +2,7 @@
   "name": "aiworkdeck-office-addin",
   "private": true,
   "version": "0.1.0",
-  "description": "AI Workdeck Office 插件（Word 任务窗格，Vue3 + Vite）",
+  "description": "AI WorkDeck Office 插件（Word 任务窗格，Vue3 + Vite）",
   "type": "module",
   "scripts": {
     "dev": "vite",

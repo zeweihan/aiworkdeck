@@ -130,7 +130,7 @@ export default {
   reinstallOrUpdate: '重新安装 / 更新',
   activationModeLabel: '生效方式：{mode} ▾',
   processingEllipsis: '处理中…',
-  needAccountHint: '这是付费项目。请先在设置的「账户与用量」中连接 AI Workdeck 账户，安装时才能校验购买记录。',
+  needAccountHint: '这是付费项目。请先在设置的「账户与用量」中连接 AI WorkDeck 账户，安装时才能校验购买记录。',
   buyHint: '这是付费项目。购买在官网完成，付款后回到本页点「我已购买，刷新」即可安装。',
 
   whenToUse: '什么时候用',

@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible problem in AI Workdeck
+about: Report a reproducible problem in AI WorkDeck
 title: "[Bug]: "
 labels: bug
 assignees: ""

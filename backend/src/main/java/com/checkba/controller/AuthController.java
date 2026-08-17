@@ -38,7 +38,7 @@ public class AuthController {
     static final int CODE_SMS_REQUIRED = 4005;
 
     /** 认证器 App 里显示的服务名。 */
-    private static final String TOTP_ISSUER = "AI Workdeck";
+    private static final String TOTP_ISSUER = "AI WorkDeck";
 
     /**
      * awdk 桥接限速的用户名维度占位：与真实用户名共用一套失败锁定，

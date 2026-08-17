@@ -1,4 +1,4 @@
-# AI Workdeck Office 插件（Word/Excel/PowerPoint 任务窗格）
+# AI WorkDeck Office 插件（Word/Excel/PowerPoint 任务窗格）
 
 Microsoft Office Add-in（spec Phase B/C）。任务窗格 = Vue3 + Vite；
 office.js 从微软官方 CDN 以 script 标签引入，不打包进 bundle。
@@ -53,7 +53,7 @@ cp manifest.xml ~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/wef
 ```
 
 目录不存在则先 `mkdir -p` 创建。然后完全退出并重开对应宿主，
-菜单「插入 → 加载项（Add-ins）→ 我的加载项 → 开发人员加载项」里选择 AI Workdeck。
+菜单「插入 → 加载项（Add-ins）→ 我的加载项 → 开发人员加载项」里选择 AI WorkDeck。
 更新 manifest 后需删掉重拷并重启宿主。
 
 ### Windows（网络共享目录方式）
@@ -62,7 +62,7 @@ cp manifest.xml ~/Library/Containers/com.microsoft.Powerpoint/Data/Documents/wef
 2. 把 `manifest.xml` 拷入该文件夹。
 3. Word →「文件 → 选项 → 信任中心 → 信任中心设置 → 受信任的加载项目录」，
    把网络路径添加到目录 URL 并勾选「在菜单中显示」，确定后重启 Word。
-4. 「插入 → 获取加载项 → 共享文件夹」里选择 AI Workdeck。
+4. 「插入 → 获取加载项 → 共享文件夹」里选择 AI WorkDeck。
 
 ### Windows（注册表方式，仅经典 Office）
 
@@ -219,7 +219,7 @@ npx office-addin-manifest validate dist-deploy/manifest.xml    # 校验生产 ma
 35. 让 AI「在'客户名称：'后面插一个内容控件标记，tag 叫 field-1」→ 出现「管理内容控件」chip，
     该段落被内容控件包裹（Word 界面显示灰底边框）；再让它「读一下 field-1 里的内容」
     →「set_text 改成'张三'」→「删掉这个控件」→ 依次出现对应 chip，最终控件消失。
-36. 让 AI「把文档标题设成'尽调报告'、作者设成'AI Workdeck'」→ 出现「设置文档属性」chip，
+36. 让 AI「把文档标题设成'尽调报告'、作者设成'AI WorkDeck'」→ 出现「设置文档属性」chip，
     Word 文件 → 信息面板里对应属性更新。
 37. 在 Excel 里让 AI「在 B2 加个批注说这个数字要核实」→ 出现「添加批注」chip，单元格出现
     批注标记；「看看这张表都有什么批注」→「读取批注」chip 列出内容；「回复说已核实」

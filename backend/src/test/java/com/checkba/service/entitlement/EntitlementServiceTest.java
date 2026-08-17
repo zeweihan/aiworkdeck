@@ -57,7 +57,7 @@ class EntitlementServiceTest {
     /** 缓存陈旧时快照会顺手起一次后台刷新；单测里让它确定性失败，免得干扰断言。 */
     private void networkDown() {
         when(accountService.fetchEntitlements())
-                .thenThrow(new AccountException(AccountException.Kind.NETWORK, "无法连接 AI Workdeck 服务器"));
+                .thenThrow(new AccountException(AccountException.Kind.NETWORK, "无法连接 AI WorkDeck 服务器"));
     }
 
     // ==================== 合并 ====================

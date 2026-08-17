@@ -505,7 +505,7 @@
           </view>
         </scroll-view>
 
-        <!-- 账户与用量（仅桌面端：连接 AI Workdeck 账户、余额与 AI 额度） -->
+        <!-- 账户与用量（仅桌面端：连接 AI WorkDeck 账户、余额与 AI 额度） -->
         <scroll-view
           v-else-if="activeNav === 'account'"
           scroll-y
@@ -1643,7 +1643,7 @@ export default {
     cloudServerUrlIsHttp() {
       return /^http:\/\//i.test((this.cloudForm.serverUrl || '').trim())
     },
-    // 供应商单选项。「AI Workdeck 云端」是平台计费通道，条件不满足时展示但不可选——
+    // 供应商单选项。「AI WorkDeck 云端」是平台计费通道，条件不满足时展示但不可选——
     // 隐藏它会让用户根本发现不了这个选项，直接可选又会在发消息时才报错。
     // 两个前置条件都要单独判：连接账户 → 账户里有 Credits。
     // 缺后者时官网 /api/account/ai-key 返回 409 no_allocation，只在发消息那一刻才炸。
@@ -1763,7 +1763,7 @@ export default {
     // 不预热时第一次点击只能拿到兜底站点，国际站用户会被送到没有他账户的站
     loadSiteLinks()
     if (this.isDesktop) {
-      // AI 面板的「AI Workdeck 云端」选项是否可选，取决于是否已连接账户。
+      // AI 面板的「AI WorkDeck 云端」选项是否可选，取决于是否已连接账户。
       // status 是后端纯本地读盘，不打官网，可以随页面加载
       this.loadPlatformAiAvailability()
       this.loadComponents()
@@ -2972,7 +2972,7 @@ export default {
 </script>
 
 <style lang="scss" scoped>
-/* AI Workdeck Color System */
+/* AI WorkDeck Color System */
 $brand-forest: #1A5336;
 $brand-mint: #5BD197;
 $brand-mint-light: #E6F9F0;
@@ -2988,7 +2988,7 @@ $border-color: #E9ECEF; // Gray-Light
 
 .page-admin {
   min-height: 100vh;
-  /* AI Workdeck Palette Background */
+  /* AI WorkDeck Palette Background */
   background: linear-gradient(135deg, #F8F9FA 0%, #E8F3ED 100%);
   display: flex;
   flex-direction: column;
@@ -3263,7 +3263,7 @@ $border-color: #E9ECEF; // Gray-Light
   background: $brand-mint-light;
 }
 
-// 前置条件未满足（未连接账户 / Credits 为空）的「AI Workdeck 云端」：
+// 前置条件未满足（未连接账户 / Credits 为空）的「AI WorkDeck 云端」：
 // 可见但压低，点击给出下一步而不是静默失败
 .radio-item.unavailable {
   opacity: 0.55;

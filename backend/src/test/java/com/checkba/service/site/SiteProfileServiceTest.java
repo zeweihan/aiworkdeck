@@ -29,14 +29,14 @@ class SiteProfileServiceTest {
         p.setDefaultSite("cn");
         SiteProperties.Site cn = new SiteProperties.Site();
         cn.setEnabled(true);
-        cn.setDisplayName("AI Workdeck 国内站");
+        cn.setDisplayName("AI WorkDeck 国内站");
         cn.setBaseUrl(CN);
         cn.setRegistryBaseUrl(CN + "/api/registry");
         cn.setTelemetryIngestUrl(CN + "/api/telemetry");
         cn.setAccountPageUrl(CN + "/zh/account");
         SiteProperties.Site intl = new SiteProperties.Site();
         intl.setEnabled(intlEnabled);
-        intl.setDisplayName("AI Workdeck International");
+        intl.setDisplayName("AI WorkDeck International");
         intl.setBaseUrl(INTL);
         intl.setRegistryBaseUrl(INTL + "/api/registry");
         intl.setTelemetryIngestUrl(INTL + "/api/telemetry");
@@ -70,7 +70,7 @@ class SiteProfileServiceTest {
         SiteProfileService svc = service(true, INTL, "intl", true);
         assertEquals("intl", svc.currentSite());
         assertEquals(INTL, svc.baseUrl());
-        assertEquals("AI Workdeck International", svc.displayName());
+        assertEquals("AI WorkDeck International", svc.displayName());
         assertFalse(svc.isPinned());
     }
 
@@ -110,7 +110,7 @@ class SiteProfileServiceTest {
         SiteProfileService svc = service(true, CN, "cn", true);
         assertTrue(svc.multiSite());
         assertEquals(List.of("intl"), svc.otherSites().stream().map(SiteProfile::id).toList());
-        assertEquals("AI Workdeck International", svc.otherSites().get(0).displayName());
+        assertEquals("AI WorkDeck International", svc.otherSites().get(0).displayName());
     }
 
     @Test

@@ -943,7 +943,7 @@ public class PptxTools implements AgentToolComponent {
             // OLLAMA 是离线/实验档：本地模型没有 OpenAI 兼容的图像生成接口，PPT 的图片阶段跑不了
             throw new com.checkba.exception.FeatureNotConfiguredException("ai-ppt",
                     "当前 AI 供应商是本地 Ollama（离线实验档），AI PPT 需要云端模型；"
-                            + "到设置页切换为「AI Workdeck 云端」或 OpenRouter 后可重试");
+                            + "到设置页切换为「AI WorkDeck 云端」或 OpenRouter 后可重试");
         }
 
         log.info("Building PPT model config: provider={}, textModel={} (requested={}), imageModel={}",

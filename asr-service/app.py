@@ -41,7 +41,7 @@ BEAM_SIZE = int(os.getenv("ASR_BEAM_SIZE", "5"))
 # 想保留繁体的用户把 ASR_OUTPUT_SCRIPT 设成 original。
 OUTPUT_SCRIPT = os.getenv("ASR_OUTPUT_SCRIPT", "simplified")
 
-app = FastAPI(title="AI Workdeck Local ASR", version="1.0.0")
+app = FastAPI(title="AI WorkDeck Local ASR", version="1.0.0")
 
 _model = None
 _converter = None

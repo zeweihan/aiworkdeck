@@ -114,7 +114,7 @@ class JGitAddBehaviorProbeTest {
                 git.add().addFilepattern(".").call();
                 RevCommit c = git.commit()
                         .setMessage("初始版本\n\nX-AWD-Kind: session")
-                        .setAuthor("AI Workdeck", "ai@aiworkdeck.local")
+                        .setAuthor("AI WorkDeck", "ai@aiworkdeck.local")
                         .setAllowEmpty(true)
                         .call();
                 tree = flattenTree(repo, c.getId());
@@ -222,7 +222,7 @@ class JGitAddBehaviorProbeTest {
                 git.add().addFilepattern(".").call();
                 RevCommit c = git.commit()
                         .setMessage("初始版本\n\nX-AWD-Kind: session")
-                        .setAuthor("AI Workdeck", "ai@aiworkdeck.local")
+                        .setAuthor("AI WorkDeck", "ai@aiworkdeck.local")
                         .setAllowEmpty(true)
                         .call();
                 tree = flattenTree(repo, c.getId());
