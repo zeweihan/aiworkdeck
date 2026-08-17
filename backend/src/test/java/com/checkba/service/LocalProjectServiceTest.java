@@ -17,7 +17,10 @@ import org.springframework.test.context.TestPropertySource;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -228,6 +231,13 @@ class LocalProjectServiceTest {
     /**
      * 全链路冒烟：文件系统事件 → 防抖 → reconcileProject → 落库。
      * NOT_SUPPORTED：默认测试事务不提交，watcher 线程的新事务看不见项目行，链路必假。
+     *
+     * 这条用例**不赌墙上时间**：
+     * - 挂载不用 sleep 等：watchAsync 把注册同步跑在调用线程上，返回即已在监听，
+     *   ensureWatch 的返回值就是权威信号，挂不上直接断言失败（而不是白等一整个死线）；
+     * - 死线只是兜底（正常路径约 1 秒：防抖 800ms + 落库），超时不只是报「没等到」，
+     *   而是把链路每一环的状态一起打出来：监听还活着吗、对账跑了几次、对账抛了什么、
+     *   文件在磁盘上吗、库里到底有哪些行。下次再红能一眼看出卡在哪一段。
      */
     @Test
     @org.springframework.transaction.annotation.Transactional(
@@ -236,21 +246,45 @@ class LocalProjectServiceTest {
         Files.writeString(folder.resolve("a.txt"), "1");
         Long projectId = svc.openLocalFolder(folder.toString(), false, null, null, 1L).project().getId();
 
-        LocalRootWatchService watch = new LocalRootWatchService(projectRepository, svc);
+        // 探针：记录对账真的被调用了几次、抛了什么。用来区分「事件根本没到」与「对账炸了」。
+        AtomicInteger reconciles = new AtomicInteger();
+        List<String> reconcileErrors = Collections.synchronizedList(new ArrayList<>());
+        LocalProjectService probed = spy(svc);
+        doAnswer(inv -> {
+            reconciles.incrementAndGet();
+            try {
+                return inv.callRealMethod();
+            } catch (Throwable t) {
+                reconcileErrors.add(t.toString());
+                throw t;
+            }
+        }).when(probed).reconcileProject(anyLong());
+
+        LocalRootWatchService watch = new LocalRootWatchService(projectRepository, probed);
         try {
-            watch.ensureWatch(projectId, folder.normalize().toString());
-            Thread.sleep(800); // 等 watcher 挂载完成
+            assertTrue(watch.ensureWatch(projectId, folder.normalize().toString()),
+                    "watcher 必须真的挂上项目文件夹（挂不上是硬失败，不是慢）");
+
             Files.writeString(folder.resolve("b.txt"), "2");
 
-            long deadline = System.currentTimeMillis() + 15000;
+            long start = System.currentTimeMillis();
+            long deadline = start + 30000;
             boolean found = false;
             while (System.currentTimeMillis() < deadline) {
                 found = projectFileRepository.findByProjectId(projectId).stream()
                         .anyMatch(f -> "b.txt".equals(f.getName()) && !Boolean.TRUE.equals(f.getIsDeleted()));
                 if (found) break;
-                Thread.sleep(200);
+                Thread.sleep(100);
             }
-            assertTrue(found, "watcher 应在外部新增文件后自动把它导入数据库");
+            assertTrue(found, () -> "watcher 应在外部新增文件后自动把它导入数据库"
+                    + "；耗时=" + (System.currentTimeMillis() - start) + "ms"
+                    + "，监听仍存活=" + watch.isWatching(projectId)
+                    + "，对账执行次数=" + reconciles.get()
+                    + "，对账异常=" + reconcileErrors
+                    + "，b.txt 在磁盘上=" + Files.exists(folder.resolve("b.txt"))
+                    + "，库内行=" + projectFileRepository.findByProjectId(projectId).stream()
+                            .map(f -> f.getName() + (Boolean.TRUE.equals(f.getIsDeleted()) ? "(已删)" : ""))
+                            .toList());
         } finally {
             watch.shutdown();
         }
