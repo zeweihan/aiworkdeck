@@ -289,14 +289,16 @@ public class MeetingTranscriptionService {
      */
     public MeetingRecording startTranscription(Long meetingId) {
         MeetingRecording meeting = meetingRepository.findById(meetingId)
-                .orElseThrow(() -> new IllegalArgumentException("会议不存在: " + meetingId));
+                .orElseThrow(() -> new IllegalArgumentException(
+                        LangText.of("会议不存在: ", "Meeting not found: ") + meetingId));
         if (MeetingRecording.STATUS_TRANSCRIBING.equals(meeting.getStatus())
                 || MeetingRecording.STATUS_TRANSCRIBED.equals(meeting.getStatus())) {
             return meeting;
         }
         // IllegalArgumentException：GlobalExceptionHandler 只对它透传 message，其余异常一律「服务器内部错误」
         if (MeetingRecording.STATUS_RECORDING.equals(meeting.getStatus())) {
-            throw new IllegalArgumentException("录音尚未结束");
+            throw new IllegalArgumentException(LangText.of(
+                    "录音尚未结束", "The recording has not finished yet"));
         }
 
         ExternalServiceProvider tier = tier();
@@ -325,7 +327,10 @@ public class MeetingTranscriptionService {
             }
             case BYOK -> {
                 if (!settings.configured()) {
-                    throw new IllegalArgumentException("未配置转写服务凭证，请到 设置-会议转写 填写阿里云凭证");
+                    throw new IllegalArgumentException(LangText.of(
+                            "未配置转写服务凭证，请到 设置-会议转写 填写阿里云凭证",
+                            "No transcription credentials configured. Enter your Aliyun credentials "
+                                    + "under System settings - Platform Services."));
                 }
             }
         }

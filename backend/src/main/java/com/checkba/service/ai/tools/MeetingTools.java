@@ -1,6 +1,7 @@
 package com.checkba.service.ai.tools;
 
 import com.checkba.model.entity.MeetingRecording;
+import com.checkba.service.LangText;
 import com.checkba.service.meeting.MeetingRecordingService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.langchain4j.agent.tool.P;
@@ -14,6 +15,10 @@ import java.util.Map;
 /**
  * 会议录音工具：给 AI 编排读会议转写稿与摘要素材（生成纪要的 skill 用）。
  * projectId 由 ToolRegistry 从 ToolContext 强制注入，LLM 报的值不生效。
+ *
+ * <p>返回文本双语（LangText）：这些串是喂给模型的脚手架，英文会话里塞中文小标题
+ * （「转写稿」「机器摘要素材」）等于要求模型跨语言理解自己的输入格式，也会漏进过程卡。
+ * 转写内容本身是用户数据，一律原样不动。
  */
 @Component
 @RequiredArgsConstructor
@@ -28,15 +33,20 @@ public class MeetingTools implements AgentToolComponent {
     public String meeting_list_recordings(@P("Project id (injected by runtime)") Long projectId) {
         List<MeetingRecording> meetings = meetingService.list(projectId);
         if (meetings.isEmpty()) {
-            return "本项目还没有会议录音。请用户先在左栏「会议录音」面板录制。";
+            return LangText.of(
+                    "本项目还没有会议录音。请用户先在左栏「会议录音」面板录制。",
+                    "This project has no meeting recordings yet. Ask the user to record one in the "
+                            + "Meeting Recording panel in the sidebar.");
         }
-        StringBuilder sb = new StringBuilder("本项目的会议录音：\n");
+        StringBuilder sb = new StringBuilder(LangText.of(
+                "本项目的会议录音：\n", "Meeting recordings in this project:\n"));
         for (MeetingRecording m : meetings) {
             sb.append("- meetingId=").append(m.getId())
                     .append(" | ").append(m.getTitle())
-                    .append(" | 时长 ").append(m.getDurationMs() != null
-                            ? MeetingRecordingService.formatMs(m.getDurationMs()) : "未知")
-                    .append(" | 状态 ").append(statusLabel(m.getStatus()))
+                    .append(LangText.of(" | 时长 ", " | duration ")).append(m.getDurationMs() != null
+                            ? MeetingRecordingService.formatMs(m.getDurationMs())
+                            : LangText.of("未知", "unknown"))
+                    .append(LangText.of(" | 状态 ", " | status ")).append(statusLabel(m.getStatus()))
                     .append('\n');
         }
         return sb.toString();
@@ -51,18 +61,26 @@ public class MeetingTools implements AgentToolComponent {
             @P("Meeting recording id") Long meetingId) {
         MeetingRecording meeting = meetingService.get(meetingId);
         if (!projectId.equals(meeting.getProjectId())) {
-            return "该会议不属于当前项目。";
+            return LangText.of("该会议不属于当前项目。",
+                    "That meeting does not belong to the current project.");
         }
         if (!MeetingRecording.STATUS_TRANSCRIBED.equals(meeting.getStatus())) {
-            return "该会议尚未完成转写（当前状态：" + statusLabel(meeting.getStatus())
-                    + "）。请用户在「会议录音」面板完成转写后再生成纪要。";
+            return LangText.of(
+                    "该会议尚未完成转写（当前状态：" + statusLabel(meeting.getStatus())
+                            + "）。请用户在「会议录音」面板完成转写后再生成纪要。",
+                    "That meeting has not finished transcription (current status: "
+                            + statusLabel(meeting.getStatus()) + "). Ask the user to finish "
+                            + "transcription in the Meeting Recording panel before generating minutes.");
         }
         StringBuilder sb = new StringBuilder();
-        sb.append("会议：").append(meeting.getTitle());
+        sb.append(LangText.of("会议：", "Meeting: ")).append(meeting.getTitle());
         if (meeting.getDurationMs() != null) {
-            sb.append("（时长 ").append(MeetingRecordingService.formatMs(meeting.getDurationMs())).append("）");
+            sb.append(LangText.of("（时长 ", " (duration "))
+                    .append(MeetingRecordingService.formatMs(meeting.getDurationMs()))
+                    .append(LangText.of("）", ")"));
         }
-        sb.append("\n\n=== 转写稿（[时间] 说话人：内容）===\n");
+        sb.append(LangText.of("\n\n=== 转写稿（[时间] 说话人：内容）===\n",
+                "\n\n=== Transcript ([time] speaker: text) ===\n"));
         sb.append(meetingService.renderTranscriptText(meeting));
         appendSummary(sb, meeting);
         return sb.toString();
@@ -73,38 +91,44 @@ public class MeetingTools implements AgentToolComponent {
         if (meeting.getSummaryJson() == null || meeting.getSummaryJson().isBlank()) return;
         try {
             Map<?, ?> summary = objectMapper.readValue(meeting.getSummaryJson(), Map.class);
-            sb.append("\n=== 机器摘要素材（仅供参考，以转写稿原文为准）===\n");
+            sb.append(LangText.of("\n=== 机器摘要素材（仅供参考，以转写稿原文为准）===\n",
+                    "\n=== Machine summary material (reference only; the transcript is authoritative) ===\n"));
+            String colon = LangText.of("：", ": ");
             Object chapters = summary.get("chapters");
             if (chapters instanceof List<?> list && !list.isEmpty()) {
-                sb.append("章节速览：\n");
+                sb.append(LangText.of("章节速览：\n", "Chapters:\n"));
                 for (Object c : list) {
                     if (c instanceof Map<?, ?> m) {
-                        sb.append("- ").append(m.get("title")).append("：").append(m.get("summary")).append('\n');
+                        sb.append("- ").append(m.get("title")).append(colon).append(m.get("summary")).append('\n');
                     }
                 }
             }
             if (summary.get("summary") instanceof String s && !s.isBlank()) {
-                sb.append("全文摘要：").append(s).append('\n');
+                sb.append(LangText.of("全文摘要：", "Overall summary: ")).append(s).append('\n');
             }
             if (summary.get("todos") instanceof List<?> todos && !todos.isEmpty()) {
-                sb.append("待办线索：\n");
+                sb.append(LangText.of("待办线索：\n", "To-do leads:\n"));
                 todos.forEach(t -> sb.append("- ").append(t).append('\n'));
             }
             if (summary.get("keywords") instanceof List<?> kw && !kw.isEmpty()) {
-                sb.append("关键词：").append(String.join("、", kw.stream().map(String::valueOf).toList())).append('\n');
+                sb.append(LangText.of("关键词：", "Keywords: "))
+                        .append(String.join(LangText.of("、", ", "),
+                                kw.stream().map(String::valueOf).toList()))
+                        .append('\n');
             }
         } catch (Exception ignored) {
             // 摘要素材损坏不影响转写稿主体
         }
     }
 
+    /** 与面板的 meeting.status* 同口径（那边是给人看的徽标，这里是给模型读的字面）。 */
     private String statusLabel(String status) {
         return switch (status) {
-            case MeetingRecording.STATUS_RECORDING -> "录音中";
-            case MeetingRecording.STATUS_RECORDED -> "已录音（未转写）";
-            case MeetingRecording.STATUS_TRANSCRIBING -> "转写中";
-            case MeetingRecording.STATUS_TRANSCRIBED -> "已转写";
-            case MeetingRecording.STATUS_FAILED -> "转写失败";
+            case MeetingRecording.STATUS_RECORDING -> LangText.of("录音中", "recording");
+            case MeetingRecording.STATUS_RECORDED -> LangText.of("已录音（未转写）", "recorded (not transcribed)");
+            case MeetingRecording.STATUS_TRANSCRIBING -> LangText.of("转写中", "transcribing");
+            case MeetingRecording.STATUS_TRANSCRIBED -> LangText.of("已转写", "transcribed");
+            case MeetingRecording.STATUS_FAILED -> LangText.of("转写失败", "transcription failed");
             default -> status;
         };
     }

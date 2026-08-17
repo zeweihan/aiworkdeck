@@ -29,10 +29,9 @@ export default {
   // ---- On-device transcription model (downloadable in place) ----
   modelDownloading: 'Downloading model {percent}%',
   cancelDownload: 'Cancel Download',
-  downloadModel: 'Download Model ({size})',
-  // The desktop shell overrides this with the size the main process reports; browsers have no
-  // host.model, so this is the fallback.
-  modelSizeDefault: 'about 1.5GB',
+  // The "~" belongs here, not in {size}: {size} is model-manager's sizeHint (like "1.5 GB",
+  // language-neutral) and the same value also feeds the admin confirm copy.
+  downloadModel: 'Download Model (~{size})',
   recheck: 'Check Again',
   downloadStartFailed: 'Could not start the download. Try again later.',
 
@@ -99,10 +98,9 @@ export default {
   sendingToAi: 'Handing off to AI...',
   generateMinutesFailed: 'Could not generate minutes: {message}',
   exportTranscript: 'Export Transcript',
-  // The folder name stays Chinese on purpose: MeetingRecordingService.FOLDER_NAME is a fixed
-  // backend constant (localizing it would fork one folder into two and orphan existing files),
-  // so this is the name the user actually sees in Explorer. Do not "translate" it.
-  exported: 'Exported: {name} (see the "会议录音" folder in Explorer)',
+  // {folder} is the ACTUAL folder name reported by the backend - never hardcode it: the folder is
+  // named in whichever language created it, so a hardcoded name points somewhere wrong half the time
+  exported: 'Exported: {name} (see the "{folder}" folder in Explorer)',
   transcriptFallbackName: 'transcript',
   exportFailed: 'Could not export: {message}',
 

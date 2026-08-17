@@ -1,7 +1,6 @@
 package com.checkba.controller;
 
 import com.checkba.model.entity.MeetingRecording;
-import com.checkba.model.entity.ProjectFile;
 import com.checkba.service.LangText;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.meeting.MeetingRecordingService;
@@ -121,9 +120,15 @@ public class MeetingRecordingController {
         return meeting;
     }
 
-    /** 导出转写稿 docx 到项目「会议录音」文件夹。 */
+    /**
+     * 导出转写稿 docx 到项目的录音文件夹。
+     *
+     * <p>回 {@code {file, folderName}} 而不是裸 ProjectFile：文件夹名按语言二选一、也可能是
+     * 存量安装里早就建好的那一个，界面上「见 X 文件夹」那句话只能用实际名字
+     * （见 MeetingRecordingService.FOLDER_NAME 的注释）。
+     */
     @PostMapping("/{meetingId}/export")
-    public ProjectFile export(
+    public MeetingRecordingService.ExportResult export(
             @PathVariable Long meetingId,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         Long userId = requireMemberByMeeting(sessionId, meetingId);
