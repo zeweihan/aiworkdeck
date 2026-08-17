@@ -358,6 +358,17 @@ function request(options) {
 //   role: 'LISTED' | 'TARGET',
 //   name: '公司名称'
 // }
+//
+// **这条端点的错误信封是残缺的，别在它上面写错误分类。** `ExternalController`
+// 对 Tushare 是 `catch(Exception)` 后回落企查查，外层又用 `catch(RuntimeException)`
+// 把 message 塞进 HTTP 500 —— `GatewayException` 的 kind（未开放 / 上游挂 / 我们挂 /
+// 余额不足）和 `suggestsByok()` 到这里全没了，前端只能拿到一个 500 加一句文案。
+// 想按中文子串猜回来是死路（api.js 早年那套「登录/未授权/请先」子串判定就是这么
+// 误伤业务文案的，PR4-0 已经拆掉）。
+// 因此「改用自己的 Key」这个逃生门做成**不依赖错误分类**：系统管理「平台服务」
+// 面板每一行都常驻一个折叠入口，并支持深链 `?nav=platform&service=qichacha`
+// 直接展开那一项。等 ExternalController 改成标准信封（把 kind 与 suggestsByok
+// 透出来）之后，这里才谈得上按类型给不同文案。
 export function fetchCompanyBasicInfo(payload) {
   return request({
     url: '/api/external/company/basic',
