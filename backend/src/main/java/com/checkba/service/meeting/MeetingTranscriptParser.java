@@ -57,6 +57,39 @@ public final class MeetingTranscriptParser {
         return segments;
     }
 
+    /**
+     * 解析本机 asr-service 的 OpenAI 兼容响应：{@code {"segments":[{start,end,text}]}}，
+     * 时间戳是<b>秒（浮点）</b>，转成与听悟一致的毫秒。
+     *
+     * <p><b>speaker 恒为 "1"</b>：faster-whisper 没有说话人分离，本地档就是没有这个能力
+     * （引 pyannote 要 HF token + 许可协议 + 额外几百 MB 模型，与零配置冲突）。
+     * 界面上必须写明这条取舍，不能让用户以为两档等价。
+     *
+     * <p>没有 segments 字段但有 text 时退化成一整段——上游换了形态也不至于把整份转写丢掉。
+     */
+    public static List<Segment> parseLocalSegments(String json) {
+        List<Segment> segments = new ArrayList<>();
+        JsonNode root = readTree(json);
+        if (root == null) return segments;
+        JsonNode arr = root.path("segments");
+        if (arr.isArray()) {
+            for (JsonNode s : arr) {
+                String text = s.path("text").asText("").trim();
+                if (text.isEmpty()) continue;
+                segments.add(new Segment("1",
+                        Math.round(s.path("start").asDouble(0) * 1000),
+                        Math.round(s.path("end").asDouble(0) * 1000),
+                        text));
+            }
+            if (!segments.isEmpty()) return segments;
+        }
+        String whole = root.path("text").asText("").trim();
+        if (!whole.isEmpty()) {
+            segments.add(new Segment("1", 0, Math.round(root.path("duration").asDouble(0) * 1000), whole));
+        }
+        return segments;
+    }
+
     /** 段落列表 → 落库 JSON（[{"speaker","start","end","text"}]）。 */
     public static String segmentsToJson(List<Segment> segments) {
         ArrayNode arr = MAPPER.createArrayNode();

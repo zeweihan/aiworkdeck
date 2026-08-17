@@ -48,17 +48,15 @@ external:
   # PKULaw Configuration
   pkulaw:
     token: ${PKULAW_TOKEN:}
-  # ElevenLabs TTS 配置
-  elevenlabs:
-    api-key: ${ELEVENLABS_API_KEY:}
-    base-url: https://api.elevenlabs.io/v1
-    model-id: eleven_multilingual_v2
-    default-voice-id: JBFqnCBsd6RMkjVDRZzb
-  # 语音合成提供方：elevenlabs（云端，默认）或 local（桌面捆绑的 Kokoro 本地服务）。
-  # 桌面打包态由 Electron 注入 EXTERNAL_TTS_PROVIDER=local + 动态端口的 local-base-url
+  # 语音合成：只有本机一档（桌面捆绑的 Kokoro，OpenAI 兼容 /v1）。
+  # 桌面打包态由 Electron 注入动态端口的 local-base-url；地址为空即视为组件未就绪。
   tts:
-    provider: ${EXTERNAL_TTS_PROVIDER:elevenlabs}
     local-base-url: ${EXTERNAL_TTS_LOCAL_BASE_URL:}
+  # 会议录音转写的本地档（asr-service，faster-whisper）。地址由 Electron 按动态端口注入；
+  # 档位本身不在这里给默认值——本地档要下一个 GB 级模型，必须由用户主动打开
+  # 「录音不出本机」开关，不能像 TTS 那样打包即默认（那边的模型只有 300MB 且随组件预装）
+  asr:
+    local-base-url: ${EXTERNAL_ASR_LOCAL_BASE_URL:}
   # PPTX 生成服务配置（banana-slides Docker 容器）
   pptx-service:
     # 服务地址（Docker 容器映射端口）

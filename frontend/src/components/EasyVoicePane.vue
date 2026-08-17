@@ -146,7 +146,7 @@ export default {
     return {
       text: '',
       voices: [],
-      selectedVoiceId: '',  // ElevenLabs voice ID
+      selectedVoiceId: '',  // 本机 Kokoro 的 voiceId
       selectedVoiceName: '',  // Display name
       voiceSearch: '',
       showVoiceDropdown: false,
@@ -324,7 +324,7 @@ export default {
         
         if (res && Array.isArray(res)) {
             this.voices = res
-            // Default to first available voice (ElevenLabs voices)
+            // Default to first available voice
             const defaultVoice = this.voices[0]
             if (defaultVoice) {
                 this.selectedVoiceId = defaultVoice.voiceId
@@ -375,6 +375,11 @@ export default {
             voice: this.selectedVoiceId,
             // 倍率制字符串，后端 TtsService.parseSpeed 认这个格式（"1"/"1.2"/"1.2x"）。
             // 此前这里写死 '+0%'，解析必然失败、恒回落 1.0——滑杆等于没接。
+            // #386 已把它接上（当时滑杆还是 -50..+50，换算成 1 + rate/100）；
+            // 这里进一步把滑杆本身改成倍率制（50..150 = 0.5x..1.5x），
+            // 界面上直接显示 "1.3x"，不再让用户在百分比与倍率之间脑内换算。
+            // pitch / volume 不再随请求发出：本机引擎不支持、面板上那两个滑杆也已删，
+            // 发一个恒定的假值只会让人以为它有用（DTO 侧的 setter 仍在，存量客户端不受影响）。
             rate: String(this.rate / 100)
         }
         

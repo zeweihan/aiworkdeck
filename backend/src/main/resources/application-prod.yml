@@ -26,12 +26,6 @@ external:
   # PKULaw
   pkulaw:
     token: ${PKULAW_TOKEN:}
-  # ElevenLabs
-  elevenlabs:
-    api-key: ${ELEVENLABS_API_KEY:}
-    base-url: https://api.elevenlabs.io/v1
-    model-id: eleven_multilingual_v2
-    default-voice-id: JBFqnCBsd6RMkjVDRZzb
 
 # AI 大模型配置（生产环境建议全部走环境变量）
 ai:

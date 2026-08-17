@@ -71,7 +71,7 @@ else
 fi
 
 # ==========================================
-# 1.8 停止 EasyVoice 服务 (Docker) -> Skipped (Using ElevenLabs)
+# 1.8 停止 EasyVoice 服务 (Docker) -> Skipped (语音合成走桌面捆绑的 Kokoro)
 # ==========================================
 # echo ""
 # echo ">>> [1.8/6] 停止 EasyVoice 服务 (Docker)..."
@@ -245,7 +245,7 @@ else
 fi
 
 # ==========================================
-# 1.8 启动 EasyVoice 服务 (Docker) -> Skipped (Using ElevenLabs)
+# 1.8 启动 EasyVoice 服务 (Docker) -> Skipped (语音合成走桌面捆绑的 Kokoro)
 # ==========================================
 # echo ""
 # echo ">>> [启动 1.8/5] 启动 EasyVoice 服务 (Docker)..."
@@ -402,7 +402,7 @@ if [ "$DOCKER_AVAILABLE" = true ]; then
     # else
     #     echo "✗ EasyVoice 服务:   未启动 (端口 9549)"
     # fi
-    echo "✓ TTS 服务:         ElevenLabs Cloud API (Enabled)"
+    echo "- TTS 服务:         本机 Kokoro（桌面包内置，dev 态需单独起）"
 else
     echo "- MinerU 服务:      Docker 不可用"
 fi

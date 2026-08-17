@@ -14,26 +14,32 @@
  * （设计 §3 通路 A）。界面上单列一行说明，指向「AI 功能设置」。
  */
 
+import { reactive } from 'vue'
+import { probeLocalAsr } from '@/services/api.js'
+
 /**
- * 本地档是否真的能用。
+ * 本地档是否真的能用——**admin 档位下拉与会议面板开关共用的唯一出口**。
  *
  * 后端的 `hasLocal` 说的是「这个服务在模型上有本地档这个位置」，
- * 不等于「本地引擎已经随包发出去了」。asr 的本地引擎（asr-service）在 P3 才落地，
- * 在那之前把本地档摆成可选，就是把律师推回他主动规避掉的合规风险里：
- * 他为保密才开这一档，录完两小时才发现转不了，只剩「放弃录音」或「传上云」两条路。
+ * 不等于「本地引擎在这台机器上现在能跑」。摆一个能选中、真用起来才炸的档位，
+ * 正是设计 §6.2.1 点名要避免的事：律师为保密才开这一档，
+ * 录完两小时才发现转不了，只剩「放弃录音」或「传上云」两条路，后者与他的目的正好相反。
  *
- * P3 合入时把 asr 改成 true，并按设计 §6.2.1 补上「切换时就地探一次 + 下载模型」的探测。
+ * 今天只有 `asr` 一项：语音合成随 D7 去掉了档位（云端 ElevenLabs 下线，只剩本机 Kokoro，
+ * 没有可选的东西了）。asr 的模型 1.5GB 不进包，**必须探**（`GET /api/asr/local/probe`）。
+ *   初值 false 是保守起点：没探过就不摆这一档，宁可少一个选项也不给一个会炸的选项。
+ *
+ * 用 `reactive` 而不是普通对象：两个界面都是在 computed 里读它的，
+ * 探测是异步的，非响应式对象改了不会触发重算——那样探测结果只在下次进页面才生效。
  */
-const LOCAL_TIER_READY = {
+const LOCAL_TIER_READY = reactive({
   asr: false,
-  tts: true, // Kokoro 已随包发出，本地语音合成一直可用
-}
+})
 
 export const PLATFORM_SERVICES = [
   { key: 'asr', nameKey: 'platform.svcAsrName', descKey: 'platform.svcAsrDesc' },
   { key: 'ocr', nameKey: 'platform.svcOcrName', descKey: 'platform.svcOcrDesc' },
   { key: 'search', nameKey: 'platform.svcSearchName', descKey: 'platform.svcSearchDesc' },
-  { key: 'tts', nameKey: 'platform.svcTtsName', descKey: 'platform.svcTtsDesc' },
   { key: 'qichacha', nameKey: 'platform.svcQichachaName', descKey: 'platform.svcQichachaDesc' },
   { key: 'tushare', nameKey: 'platform.svcTushareName', descKey: 'platform.svcTushareDesc' },
   { key: 'pkulaw', nameKey: 'platform.svcPkulawName', descKey: 'platform.svcPkulawDesc' },
@@ -47,6 +53,37 @@ export function platformServiceMeta(key) {
 /** 该服务的本地档现在能不能真正用起来（`hasLocal` 为真只是「模型上有这个位置」）。 */
 export function localTierReady(key) {
   return LOCAL_TIER_READY[key] === true
+}
+
+/**
+ * 最近一次本机转写探测的原文（`{status, model, diarization, message, nextStep}`），
+ * 未探过时为 null。界面用它渲染「下一步该做什么」——
+ * `MODEL_MISSING` 要给下载入口，`SERVICE_DOWN` 要给重启指路，两者不能合并。
+ */
+const localAsrProbe = reactive({ result: null })
+
+export function localAsrProbeResult() {
+  return localAsrProbe.result
+}
+
+/**
+ * 探一次本机转写并把结论写回上面那张唯一的就绪表。
+ *
+ * <b>写入口和读出口放在同一个文件里是有意的</b>：admin 的档位下拉与会议面板的开关
+ * 共用 `localTierReady`，只要有一处自己缓存一份判断，另一处就能把用户切进一个用不了的档，
+ * 而他会在录完之后才发现。探测失败一律按「没就绪」处理——宁可少一个选项，
+ * 也不给一个真用起来才炸的选项。
+ */
+export async function refreshLocalAsrReadiness() {
+  try {
+    const r = await probeLocalAsr()
+    localAsrProbe.result = r || null
+    LOCAL_TIER_READY.asr = !!r && r.status === 'READY'
+  } catch (e) {
+    localAsrProbe.result = null
+    LOCAL_TIER_READY.asr = false
+  }
+  return localAsrProbe.result
 }
 
 /** 后端服务清单的稳定排序：本表里的先按本表顺序，本表没有的排在后面。 */

@@ -62,7 +62,7 @@ public class PlatformServiceController {
             item.put("hasByokCredentials", hasByokCredentials(d));
             // 「这项服务平台侧开放了没有」只有官网知道（service_pricing.enabled）。
             // 拿不到时给 null 而不是 false：**「不知道」不等于「未开放」**——
-            // 一次网络抖动就把七项全标成未开放，比不显示这个状态更糟。
+            // 一次网络抖动就把六项全标成未开放，比不显示这个状态更糟。
             // 前端对 null 应显示「—」，与 ai-usage 那条「查不到用量显示破折号不显示 0」同口径。
             item.put("enabled", pricing == null ? null : pricing.enabled().get(d.service()));
             services.add(item);

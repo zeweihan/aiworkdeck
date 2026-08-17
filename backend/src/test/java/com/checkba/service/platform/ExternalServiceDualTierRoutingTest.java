@@ -3,7 +3,6 @@ package com.checkba.service.platform;
 import com.checkba.service.OcrService;
 import com.checkba.service.QichachaService;
 import com.checkba.service.SystemSettingService;
-import com.checkba.service.TtsService;
 import com.checkba.service.TushareService;
 import com.checkba.service.ai.mcp.McpClientService;
 import com.checkba.service.ai.tools.EnterpriseDataTools;
@@ -135,94 +134,6 @@ class ExternalServiceDualTierRoutingTest {
             assertEquals(GatewayException.Kind.SERVICE_DISABLED, e.getKind());
             // 回落会拿用户自己的阿里云账号去跑，账单落在他那边而界面上看不出来
             verify(settings, never()).get(eq("external.aliyunOcr.accessKeyId"), any());
-        }
-    }
-
-    // =======================================================================
-    @Nested
-    @DisplayName("TTS（三档：platform / byok / local）")
-    class Tts {
-
-        private TtsService service(ExternalServiceProvider tier, PlatformGatewayClient gateway) {
-            TtsService svc = new TtsService();
-            SystemSettingService settings = mock(SystemSettingService.class);
-            when(settings.get(anyString(), any())).thenAnswer(inv -> inv.getArgument(1));
-            ReflectionTestUtils.setField(svc, "systemSettingService", settings);
-            ReflectionTestUtils.setField(svc, "externalProviderResolver",
-                    resolverWith(ExternalServiceProvider.TTS, tier));
-            ReflectionTestUtils.setField(svc, "platformGatewayClient", gateway);
-            // 本地档要的 base-url 留空，正好用来验「local 档不走网关也不走 ElevenLabs」
-            ReflectionTestUtils.setField(svc, "defaultLocalBaseUrl", "");
-            ReflectionTestUtils.setField(svc, "defaultApiKey", "");
-            ReflectionTestUtils.setField(svc, "defaultBaseUrl", "https://api.elevenlabs.io/v1");
-            ReflectionTestUtils.setField(svc, "defaultModelId", "eleven_multilingual_v2");
-            ReflectionTestUtils.setField(svc, "defaultDefaultVoiceId", "voice-1");
-            return svc;
-        }
-
-        @Test
-        @DisplayName("平台档：走网关的 tts/speech，音频落成本地文件")
-        void platformSynthesizesViaGateway() {
-            String audio = java.util.Base64.getEncoder().encodeToString("ID3fake".getBytes());
-            PlatformGatewayClient gateway =
-                    gatewayReturning("{\"audioBase64\":\"" + audio + "\",\"contentType\":\"audio/mpeg\"}");
-
-            java.io.File file = service(ExternalServiceProvider.PLATFORM, gateway)
-                    .generateAudio("你好", null, null);
-
-            assertTrue(file.exists() && file.length() > 0);
-            verify(gateway).call(eq("tts"), eq("speech"), anyMap(), anyInt());
-            assertTrue(file.delete());
-        }
-
-        @Test
-        @DisplayName("存量取值 elevenlabs 仍是自备 Key 档：不打网关，走「未配置」引导")
-        void legacyElevenlabsValueStaysByok() {
-            // 存量库里 external.tts.provider 就是这个值，解析成 BYOK 才不会让用户填好的 Key 静默失效
-            assertEquals(ExternalServiceProvider.BYOK,
-                    ExternalServiceProvider.parse("elevenlabs", ExternalServiceProvider.PLATFORM));
-
-            PlatformGatewayClient gateway = mock(PlatformGatewayClient.class);
-            assertThrows(com.checkba.exception.FeatureNotConfiguredException.class,
-                    () -> service(ExternalServiceProvider.BYOK, gateway)
-                            .generateAudio("你好", null, null));
-            verifyNoInteractions(gateway);
-        }
-
-        @Test
-        @DisplayName("打包态的 local 档：既不走网关也不走 ElevenLabs，指向组件管理")
-        void localTierUntouched() {
-            PlatformGatewayClient gateway = mock(PlatformGatewayClient.class);
-            // 捆绑的 Kokoro 免费且不出本机，被切成任何一条云通道都是一次静默的功能回归
-            assertThrows(com.checkba.exception.FeatureNotConfiguredException.class,
-                    () -> service(ExternalServiceProvider.LOCAL, gateway)
-                            .generateAudio("你好", null, null));
-            verifyNoInteractions(gateway);
-        }
-
-        @Test
-        @DisplayName("平台档合成失败：原样抛 GatewayException，不改用用户的 ElevenLabs Key")
-        void platformFailureDoesNotFallBack() {
-            PlatformGatewayClient gateway = gatewayFailing(GatewayException.Kind.NO_CREDITS);
-            GatewayException e = assertThrows(GatewayException.class,
-                    () -> service(ExternalServiceProvider.PLATFORM, gateway)
-                            .generateAudio("你好", null, null));
-            assertEquals(GatewayException.Kind.NO_CREDITS, e.getKind());
-        }
-
-        @Test
-        @DisplayName("平台档音色列表：走网关的 tts/voices，解析与自备 Key 档共用一份")
-        void platformVoicesShareParsing() {
-            PlatformGatewayClient gateway = gatewayReturning(
-                    "{\"voices\":[{\"voice_id\":\"v1\",\"name\":\"Alice\",\"labels\":{\"gender\":\"female\",\"accent\":\"american\"}}]}");
-
-            List<TtsService.VoiceOption> voices = service(ExternalServiceProvider.PLATFORM, gateway).getVoices();
-
-            assertEquals(1, voices.size());
-            // 两档必须是同一套音色 ID，否则用户选好的音色一换档就指向不存在的东西
-            assertEquals("v1", voices.get(0).getVoiceId());
-            assertEquals("female", voices.get(0).getGender());
-            verify(gateway).call(eq("tts"), eq("voices"), anyMap(), anyInt());
         }
     }
 

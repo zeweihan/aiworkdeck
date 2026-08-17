@@ -83,4 +83,36 @@ class MeetingTranscriptParserTest {
         assertNull(MeetingTranscriptParser.buildSummaryJson(null, null, null));
         assertNull(MeetingTranscriptParser.buildSummaryJson("bad", "", null));
     }
+
+    @Test
+    @DisplayName("本机 asr-service 结果：秒转毫秒、speaker 恒为 1（本地档没有说话人分离）")
+    void parseLocalSegments() {
+        List<MeetingTranscriptParser.Segment> segments = MeetingTranscriptParser.parseLocalSegments("""
+                {"language":"zh","duration":8.4,"text":"合并全文",
+                 "segments":[{"id":0,"start":0.0,"end":4.25,"text":" 各位下午好 "},
+                             {"id":1,"start":4.25,"end":8.4,"text":"我们先过一下合同条款"},
+                             {"id":2,"start":8.4,"end":8.4,"text":"   "}]}""");
+
+        assertEquals(2, segments.size(), "纯空白的段落应被跳过");
+        assertEquals("1", segments.get(0).speaker());
+        assertEquals(0, segments.get(0).start());
+        assertEquals(4250, segments.get(0).end(), "0.  秒要按四舍五入转毫秒");
+        assertEquals("各位下午好", segments.get(0).text(), "前后空白要去掉");
+        assertEquals(8400, segments.get(1).end());
+    }
+
+    @Test
+    @DisplayName("本机结果缺 segments 时退化成一整段，不把整份转写丢掉")
+    void parseLocalSegmentsFallsBackToWholeText() {
+        List<MeetingTranscriptParser.Segment> segments =
+                MeetingTranscriptParser.parseLocalSegments("{\"text\":\"整段转写\",\"duration\":12.0}");
+
+        assertEquals(1, segments.size());
+        assertEquals("整段转写", segments.get(0).text());
+        assertEquals(12000, segments.get(0).end());
+
+        assertTrue(MeetingTranscriptParser.parseLocalSegments("坏 JSON").isEmpty());
+        assertTrue(MeetingTranscriptParser.parseLocalSegments("{\"text\":\"\"}").isEmpty(),
+                "空正文不能冒充成功");
+    }
 }

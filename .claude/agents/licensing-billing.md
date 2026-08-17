@@ -566,8 +566,8 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   超时**按服务给**（不沿用 `AccountTransport` 写死的 5 秒，OCR/TTS/听悟建任务超 5 秒是常态）。
 - `service/platform/GatewayException.java` — 八档 Kind。**刻意不复用 `AccountException.Kind`**：
   那个把 5xx 一律归 NETWORK、文案「请检查网络后重试」，把我们的故障说成用户的网络问题。
-- `service/platform/ExternalServiceProvider.java` — 七家服务的描述表 + 档位枚举。
-  `parse()` 把存量值 `elevenlabs` 映射成 BYOK（语义就是「用自己的 Key」）。
+- `service/platform/ExternalServiceProvider.java` — 六家服务的描述表 + 档位枚举。
+  语音合成不在其中：云端 ElevenLabs 已整体移除，只剩本机 Kokoro 一条路，没有档可分。
 - `service/platform/ExternalProviderResolver.java` — **档位判定的唯一出口**，D5 的闸在这里。
 - `service/platform/ExternalProviderBackfill.java` — 存量回填，启动期跑一次。
 - `controller/PlatformServiceController.java` — `/api/platform-services{,/{service}/provider}`，
@@ -576,13 +576,11 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
   `gatewayKind` + `canUseOwnKey`。**不接这条的话网关异常会落到兜底 handler 被压成
   一句「服务器内部错误」**，三类故障的区分（错误码族存在的全部理由）当场作废。
 
-**其余五家（P4）：分档一律落在各自 service 的一个缝上**
+**其余四家（P4）：分档一律落在各自 service 的一个缝上**
 - `service/OcrService.recognizeGeneral` — platform 档走 `ocr/recognize`，完全不碰
   `AliyunOcrClientFactory`；两档产出同一个 `OcrResult(text, raw)`。
-- `service/TtsService` — 三档 `platform | byok | local`，判定改走 `ExternalProviderResolver`
-  （不再自己读设置字符串，否则 D5 与存量回填要在这里再实现一遍）。
-  platform 档两个 op：`tts/speech`、`tts/voices`；音色解析两档共用 `parseElevenLabsVoices`
-  ——两档必须是同一套音色 ID，否则用户选好的音色一换档就指向不存在的东西。
+- `service/TtsService` — **不分档**：语音合成只有本机 Kokoro 一条路（D7）。
+  P4 曾给它接过 `platform | byok | local` 三档，随 ElevenLabs 整体移除一并撤掉。
 - `service/QichachaService.fetchEciInfoResult` — 分档的唯一缝，`searchCompany`（DTO）与
   `queryEciInfoJson`（给 AI 的原始 JSON）都从它取数。
 - `service/TushareService.callTushare` — 分档的唯一缝（上游本来就只有一个统一入口），
@@ -688,14 +686,13 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
     新默认值 `platform`——而用户填过的 23 个字段一个没丢，就在库里躺着却不再被用。
     两类用户同时坏：自带阿里云 OCR/Tushare 订阅的律所**为同一项服务付两遍钱**；
     从未连账户的用户看到「昨天好好的」变成「余额不足」。
-    `ExternalProviderBackfill` 在启动期跑一次，判定顺序**不能换**：
-    ① 档位本身的 yml/env 默认值优先 → ② 已有非空 BYOK 凭证 → byok → ③ 都没有 → platform。
+    `ExternalProviderBackfill` 在启动期跑一次：已有非空 BYOK 凭证 → byok；都没有 → platform。
 
-26. **第一条判定顺序是踩出来的：桌面打包态注入 `EXTERNAL_TTS_PROVIDER=local`**
-    （捆绑 Kokoro，免费且不出本机），而 `system_setting` 里没有这一行。只按凭证推断的话
-    「没有 ElevenLabs Key → 写 platform」，于是 `TtsService.isLocal()` 读到 platform 当场返 false，
-    本地引擎失效、转去调一个没配 Key 的云服务——一次静默的功能回归。
-    护栏 `ExternalProviderBackfillTest.packagedDesktopKeepsLocalTts`。
+26. **曾经还有一步「档位自身的 yml/env 默认值优先」，那一步只为 TTS 存在**
+    （打包态注入 `EXTERNAL_TTS_PROVIDER=local`，而 `system_setting` 里没有这一行；
+    只按凭证推断会写成 platform，本地引擎当场失效——一次静默的功能回归）。
+    语音合成移除云端档后没有服务再需要它，已连同那个注入一起删除。
+    **将来若有服务再引入 env 级档位默认值，这一步要连同它一起加回来**，否则会重演那次回归。
 
 27. **平台档失败绝不静默回落 BYOK**（同地雷 8）。回落会去花用户自己的 Key。
     正确做法是给出可读的失败原因 + 「改用自己的 Key」的指路。
@@ -750,13 +747,40 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 35. **新增 AI 工具组件要同步 `RealToolBeans.instantiateAll()`**（测试侧）。
     漏了的话该组件的工具在回放评测里根本不注册，可见性断言写了也是空的；
     护栏是 `EvalToolBeanParityTest`，会直接点名漏掉的类。
-36. **「录音不出本机」这类开关在引擎就绪之前不许可开**。本地 ASR 在 P3 之前根本没随包发出，
+36. **「录音不出本机」这类开关在引擎就绪之前不许留在打开态**。
     把开关做成「能打开、录完两小时才在转写那一刻炸」，用户只剩「放弃这份录音」或
     「关掉开关传上云」两条路——后者与他打开开关的目的正好相反。这不是体验差，
     是把用户推回他主动规避掉的合规风险里。判据在
     `frontend/src/config/platformServices.js` 的 `LOCAL_TIER_READY`，
     **admin 的档位下拉与会议面板的开关共用它**（只关一处 = 另一处仍能切进去）。
+    P3 起它不再是写死的常量：`refreshLocalAsrReadiness()` 打
+    `GET /api/asr/local/probe` 回填，用 `reactive` 装着——普通对象改了不触发 computed
+    重算，探测结果会拖到下次进页面才生效。切换时**就地探一次**，未就绪就不写档位
+    （开关自然回到关闭态）并就地给下载入口。
     同理，档位与就绪状态必须摆在**录音开始之前**，不能拖到转写那一刻才暴露。
+
+37. **本地 ASR 的探测必须能分开「服务没起」与「模型没下」**。两者的下一步毫无共同点：
+    前者重启应用，后者要下 1.5GB 模型。合并成一句「不可用」等于让律师猜。
+    为此 `asr-service` 与 kokoro 有一处**刻意的不同**：kokoro 的 descriptor 用
+    `enabled` 把服务门在模型上（没模型不起进程），而 asr-service **无论有没有模型都启动**
+    ——不起进程的话探测只剩「服务没起」一种结论，用户照提示重启一万次也不会有模型。
+    模型懒加载，空跑一个 FastAPI 进程只占几十 MB。
+
+38. **本地转写没有说话人分离，而且慢**。faster-whisper 不提供分离能力
+    （pyannote 要 HF token + 许可协议 + 额外几百 MB 模型，与零配置直接冲突），
+    所有段落 `speaker="1"`。速度实测约实时的 1.5 倍（M 系列 CPU、medium int8 + VAD，
+    两小时的会要跑一小时上下）。两条都必须写在界面上——让用户以为两档等价，
+    他会拿本地档去录一场需要区分发言人的听证会。
+    `LocalAsrClient.ProbeResult.diarization` 从 `/health` 读而不是前端写死，
+    换引擎时界面自动跟上。
+
+39. **local 档全程没有 taskId，所以「被关机打断」必须另有判据**。
+    云端两档靠 `gatewayTaskId` / `tingwuTaskId` 恢复轮询，本地档整段推理就在
+    `MeetingTranscriptionService` 的后台执行器里跑完，重启后库里只剩一个「转写中」。
+    而 `startTranscription` 对 TRANSCRIBING 是幂等返回——用户连「重试转写」都点不动，
+    会议永远挂着。判据是进程内的 `inFlight` 集合：两个 taskId 都为空且不在集合里 =
+    上次运行被打断，落 FAILED 并说明「录音本身完好，重新提交即可」。
+    云端两档的转码上传阶段同样落在这个窗口里，这条顺带补上了那个既有缺口。
 
 ## 验证
 

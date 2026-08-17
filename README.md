@@ -152,8 +152,8 @@ AI Workdeck is designed for **self-hosted, private deployment**. The following d
 │                                                                 │
 ├────────────────────────── Optional External ────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────────┐   │
-│  │   OCR    │  │   TTS    │  │ Company  │  │  Gemini /    │   │
-│  │ (Aliyun) │  │(ElevenLb)|  │(Qichacha)│  │  OpenRouter  │   │
+│  │   OCR    │  │ Meeting  │  │ Company  │  │  Gemini /    │   │
+│  │ (Aliyun) │  │ (Tingwu) │  │(Qichacha)│  │  OpenRouter  │   │
 │  │ EXTERNAL │  │ EXTERNAL │  │ EXTERNAL │  │  CONFIGURABLE│   │
 │  └──────────┘  └──────────┘  └──────────┘  └──────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
@@ -168,13 +168,13 @@ AI Workdeck is designed for **self-hosted, private deployment**. The following d
 | Sensitive data masking | Local (regex) | ✅ Yes | Chinese PII patterns, no external call |
 | Document storage | Local filesystem | ✅ Yes | Configurable: local / OSS / S3 |
 | OCR | **Platform-sourced** (relayed to Aliyun through our servers) | No local fallback | Default on fresh installs; switchable to your own key or disabled |
-| Text-to-speech | Local engine (bundled Kokoro) | Yes | Synthesizes on-device by default; switchable to ElevenLabs with your own key |
+| Text-to-speech | Local engine (bundled Kokoro) | Yes | On-device only; there is no cloud path |
 | Company data lookup | **Platform-sourced** (relayed to Qichacha through our servers) | No local fallback | Default on fresh installs; switchable to your own key or disabled |
 | Meeting transcription | **Platform-sourced** (audio staged in our object storage, deleted on completion) | On-device engine ships in a later version | Default on fresh installs; switchable to your own key or disabled |
 | AI model (cloud) | **External** (Gemini/OpenRouter) | ✅ Use Ollama | Configurable provider |
 | Anonymous usage stats | Local ledger + daily aggregated counts | ✅ Can be disabled | Counts and enum values only, no content; one switch in Settings, see legal/PRIVACY.md |
 
-**For air-gapped deployments**: Ollama + local storage + MinerU + PPTX service keeps all documents entirely within your network. Disable OCR, TTS, and cloud AI providers — the core workspace, document editing, agent orchestration, and due-diligence workflows function without external services.
+**For air-gapped deployments**: Ollama + local storage + MinerU + PPTX service keeps all documents entirely within your network. Disable OCR, company data, meeting transcription, and cloud AI providers — the core workspace, document editing, agent orchestration, and due-diligence workflows function without external services. Speech synthesis needs no disabling: it is on-device already.
 
 ## Evidence Chain & Audit Status
 
@@ -221,7 +221,7 @@ See [`legal/COMMERCIAL-LICENSE.md`](legal/COMMERCIAL-LICENSE.md) or contact [hi@
 
 **AI conversations do not pass through our servers.** Conversation content goes straight from your machine to the model provider you selected: with local Ollama it is processed on the device only; with a cloud provider it goes to that third party; and even on the "AI Workdeck cloud" tier our servers only issue the key and settle usage. Documents and contract text, AI conversation text, file names, and project and client information therefore never flow through our servers — and in a self-hosted deployment with Ollama + local storage + Docker services, **they never leave your network at all**.
 
-**The platform-sourced tier does pass through our servers.** On a fresh desktop install, image text recognition, web search, company registry data, securities and financial data, statute and case law search, and meeting transcription default to the "platform-sourced" tier: AI Workdeck buys from the vendor on your behalf and bills in Credits, so no key of your own is needed, and the content each call requires is relayed to the vendor through our servers. Meeting audio is the only item staged in our object storage — deleted as soon as transcription finishes, with a 24-hour lifecycle rule as a backstop; every other service passes content through only at call time and retains no request content. Speech synthesis defaults to the local engine shipped in the build and stays on the device. The per-service breakdown (what passes through, how long it is kept, when it is deleted) is in [`legal/PRIVACY.md`](legal/PRIVACY.md).
+**The platform-sourced tier does pass through our servers.** On a fresh desktop install, image text recognition, web search, company registry data, securities and financial data, statute and case law search, and meeting transcription default to the "platform-sourced" tier: AI Workdeck buys from the vendor on your behalf and bills in Credits, so no key of your own is needed, and the content each call requires is relayed to the vendor through our servers. Meeting audio is the only item staged in our object storage — deleted as soon as transcription finishes, with a 24-hour lifecycle rule as a backstop; every other service passes content through only at call time and retains no request content. All six vendors are inside mainland China. Speech synthesis is not among them: it has an on-device tier only, synthesizing locally in the bundled engine. The per-service breakdown (what passes through, how long it is kept, when it is deleted) is in [`legal/PRIVACY.md`](legal/PRIVACY.md).
 
 **Every item can be switched.** Under Settings → Platform Services any of them can be moved to your own key (the desktop app then connects to that vendor directly, bypassing us) or to an on-device tier, or disabled entirely; existing installs that already have a vendor key configured are not moved. Team-hosted server deployments and the Office add-in are always own-key — the platform-sourced tier is not offered to them.
 
@@ -270,7 +270,7 @@ chmod +x restart-all.sh
 | MinerU service | `http://localhost:8001` |
 | EasyVoice | `http://localhost:9549` |
 
-Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, ElevenLabs, PKULaw, and object storage. Not every provider is required to inspect the code or run the basic workbench.
+Common optional providers: OpenRouter, Gemini, Qichacha, Tushare, PKULaw, Aliyun (OCR and Tingwu transcription), and object storage. Not every provider is required to inspect the code or run the basic workbench.
 
 ## Repository Map
 
