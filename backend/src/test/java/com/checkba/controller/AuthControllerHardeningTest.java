@@ -179,9 +179,10 @@ class AuthControllerHardeningTest {
 
     // ==================== 账户登录（手机号/邮箱，匿名端点） ====================
 
+    /** phoneLoginGuard 传 null：手机号补绑闸只管密码/邮箱那三条入口，账户登录不走它。 */
     private static AuthController controller(AwdkLoginService awdkLoginService, AuthAbuseGuard guard) {
         return new AuthController(
-                null, null, null, null, guard, awdkLoginService, null, null, null, sessions(), false);
+                null, null, null, null, guard, awdkLoginService, null, null, null, sessions(), false, null);
     }
 
     @Test
