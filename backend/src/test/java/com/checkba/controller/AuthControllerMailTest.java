@@ -47,7 +47,7 @@ class AuthControllerMailTest {
     private static AuthController controller(UserService userService, AuthAbuseGuard guard,
                                              MailAuthService mailAuthService) {
         return new AuthController(userService, null, null, null, guard, null, null,
-                mailAuthService, null, sessions(), false);
+                mailAuthService, null, sessions(), false, null);
     }
 
     private static AuthController.MailSendCodeRequest sendCodeRequest(String scene, String email) {

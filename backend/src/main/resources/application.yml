@@ -95,9 +95,16 @@ mcp:
 # 开启前提是短信网关可用，否则 PhoneLoginGuard 会拒绝启动而不是静默降级。
 # 设计见 docs/superpowers/specs/2026-08-17-phone-login-design.md
 auth:
+  # 打开＝启用 PhoneLoginGuard 的三态闸（spec §5），**不是**「关掉密码登录」：
+  # 已绑号放行 / 期限内未绑号放行但回 mustBindPhone 让客户端强制补绑 /
+  # 期限后未绑号在签发会话之前拒登（code 4006）。接线在 AuthController 的
+  # /login、/device-token、/mail-login/verify 三条会签发凭据的路径上。
+  # awdk_ 桥（/awdk-login）不受这条闸管——它不走密码也不走手机号。
   phone-login-required: ${AUTH_PHONE_LOGIN_REQUIRED:false}
   # 存量用户补绑手机号的硬期限；过期未绑一律拒登，文案指向 hi@aiworkdeck.com。
-  # 写成配置而不是硬编码，要延期改这里即可。
+  # 写成配置而不是硬编码，要延期改这里即可。当天仍算期限内（次日 0 点起才拒）。
+  # 格式非法会回落默认值而不是无限期放行——配错就静默延期是最难发现的失效。
+  # **与官网 lib/phone-policy.ts 的 DEFAULT_BINDING_DEADLINE 同值，改一边就要改另一边。**
   phone-binding-deadline: ${AUTH_PHONE_BINDING_DEADLINE:2026-09-30}
 
 sms:

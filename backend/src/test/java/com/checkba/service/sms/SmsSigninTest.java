@@ -100,7 +100,7 @@ class SmsSigninTest {
         assertFalse(inactive.active());
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> new PhoneLoginGuard(inactive, true, false));
+                () -> new PhoneLoginGuard(inactive, true, false, "2026-09-30"));
         assertTrue(e.getMessage().contains("短信网关必须可用"),
                 "报错要说清楚是网关的问题，别让人去查前端");
     }
@@ -109,15 +109,15 @@ class SmsSigninTest {
     @DisplayName("网关可用时正常启动；local-mode 与未开启时这条闸不适用")
     void guardPassesWhenSane() {
         SmsAuthService active = svc(OK);
-        assertDoesNotThrow(() -> new PhoneLoginGuard(active, true, false));
+        assertDoesNotThrow(() -> new PhoneLoginGuard(active, true, false, "2026-09-30"));
 
         SmsService dark = new SmsService(OK, false, "", "", "sign", "tpl");
         SmsAuthService inactive = new SmsAuthService(List.of(dark), new VerificationCodeStore(),
                 mock(UserRepository.class), false);
         // 没开强制：网关暗着也该正常启动
-        assertDoesNotThrow(() -> new PhoneLoginGuard(inactive, false, false));
+        assertDoesNotThrow(() -> new PhoneLoginGuard(inactive, false, false, "2026-09-30"));
         // local-mode 根本没有登录环节
-        assertDoesNotThrow(() -> new PhoneLoginGuard(inactive, true, true));
-        assertFalse(new PhoneLoginGuard(inactive, true, true).isRequired());
+        assertDoesNotThrow(() -> new PhoneLoginGuard(inactive, true, true, "2026-09-30"));
+        assertFalse(new PhoneLoginGuard(inactive, true, true, "2026-09-30").isRequired());
     }
 }
