@@ -981,15 +981,23 @@ export function connectAccount(key) {
 // 与 connectAccount 的关系：两条路殊途同归，都是让本机持有一枚 awdk_ Key。
 // connectAccount 收用户手工粘贴的 Key（团队服务器与私有部署仍要用），
 // 这条与 loginAccount 让用户直接用手机号登录，Key 由官网签发、本机保存，用户看不到它。
-export function sendAccountLoginCode(phone) {
+export function sendAccountLoginCode(phone, captchaToken) {
   return request({
     url: '/api/account/login/send-code',
     method: 'POST',
-    data: { phone },
+    // captchaToken 必须一路传到官网：官网启用人机验证后不带就是 403，
+    // 而它无法区分「桌面端转发」与「攻击者直接 POST」，所以不存在「桌面端豁免」这条路。
+    data: { phone, captchaToken: captchaToken || '' },
     header: {
       'Content-Type': 'application/json',
     },
   }).then(unwrapEnvelope);
+}
+
+// 官网人机验证的公开配置（只有公开参数，没有密钥）。未启用时 provider 为空，
+// 调用方据此跳过控件直接发码——与官网此刻确实不校验是同一个判断。
+export function getAccountCaptchaConfig() {
+  return request({ url: '/api/account/captcha-config', method: 'GET' }).then(unwrapEnvelope);
 }
 
 // 账户登录：{ phone, code }（大陆站）或 { account, password }（国际站）。

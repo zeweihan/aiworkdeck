@@ -72,6 +72,7 @@ export default {
     sendCode: 'Send code',
     sendingCode: 'Sending',
     resendIn: 'Resend in {n}s',
+    captchaFailed: 'Please complete the security check and try again',
     accountPlaceholder: 'Email or username',
     passwordPlaceholder: 'Password',
     login: 'Sign in',

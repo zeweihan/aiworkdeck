@@ -116,8 +116,21 @@ public class AccountController {
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireUser(sessionId);
-        accountService.sendLoginCode(body == null ? null : body.get("phone"));
+        accountService.sendLoginCode(
+                body == null ? null : body.get("phone"),
+                body == null ? null : body.get("captchaToken"));
         return ok(Map.of("sent", true));
+    }
+
+    /**
+     * 官网人机验证的公开配置，供桌面端渲染控件用。只有公开参数，没有密钥。
+     * 未启用时官网回 {@code {"provider": null}}，桌面端据此跳过控件直接发码。
+     */
+    @GetMapping("/captcha-config")
+    public Map<String, Object> captchaConfig(
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        return ok(accountService.captchaConfig());
     }
 
     /**

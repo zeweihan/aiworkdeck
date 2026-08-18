@@ -296,10 +296,34 @@ public class AccountService {
      * 那三步人肉操作。{@code awdk_} Key 本身**保留不动**——权益同步、平台 AI 取 key、
      * {@link #accountFingerprintOrNull()}、流水全挂在它上面，只是用户不再需要亲眼见到它。
      */
-    public void sendLoginCode(String phone) {
+    public void sendLoginCode(String phone, String captchaToken) {
         Map<String, Object> body = new HashMap<>();
         body.put("phone", phone == null ? "" : phone.trim());
+        // 人机验证 token 必须原样透传：官网启用后不带就是 403，而这个请求体是这里拼的，
+        // 桌面端填了也传不过去——2026-08-18 接验证码时正是在这一行断的链。
+        body.put("captchaToken", captchaToken == null ? "" : captchaToken.trim());
         postLogin("/api/auth/sms-login/send-code", body);
+    }
+
+    /**
+     * 官网人机验证的公开配置，原样转给桌面端。
+     *
+     * **为什么要经我们转一手**：里面只有公开参数（site key / 场景 ID / 身份标），
+     * 桌面端直连官网也拿得到。但桌面端本来就只认本机后端一个出口
+     * （站点选择、代理、离线判定都在这条链上），让它为了一个配置另开一条直连，
+     * 等于多一处要各自维护的网络路径。
+     *
+     * 官网不可达时返回「未启用」而不是抛错：拿不到配置就渲染不出控件，
+     * 而发码本身还有 Layer 1 的限流兜着——为了一个配置读不到就让人登不进来，不划算。
+     */
+    public Map<String, Object> captchaConfig() {
+        AccountTransport.Reply reply = transport.send("GET", baseUrl() + "/api/auth/captcha-config", null, null);
+        if (reply.networkFailure() || reply.status() < 200 || reply.status() >= 300) {
+            Map<String, Object> off = new HashMap<>();
+            off.put("provider", null);
+            return off;
+        }
+        return parse(reply.body());
     }
 
     /** 官网登录：手机号 + 验证码换 Key 并连接（大陆站主路径）。 */
@@ -369,9 +393,13 @@ public class AccountService {
         }
         // 403 phone_binding_required 是「过了补绑硬期限」，属于业务冲突不是凭据失效——
         // 归到 UNAUTHORIZED 会让上层去清本地连接，而这时候根本还没有连接可清。
-        AccountException.Kind kind = "phone_binding_required".equals(code)
-                ? AccountException.Kind.CONFLICT
-                : AccountException.Kind.UNAUTHORIZED;
+        // 403 phone_binding_required / captcha_failed / 429 too_many_requests 都是业务态，
+        // 不是凭据失效——归到 UNAUTHORIZED 会让上层去清本地连接，而这时候根本还没有连接可清。
+        AccountException.Kind kind =
+                ("phone_binding_required".equals(code) || "captcha_failed".equals(code)
+                        || "too_many_requests".equals(code))
+                        ? AccountException.Kind.CONFLICT
+                        : AccountException.Kind.UNAUTHORIZED;
         throw new AccountException(kind, message);
     }
 

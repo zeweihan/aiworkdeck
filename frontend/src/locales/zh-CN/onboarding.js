@@ -72,6 +72,7 @@ export default {
     sendCode: '获取验证码',
     sendingCode: '发送中',
     resendIn: '{n} 秒后重发',
+    captchaFailed: '请先完成安全验证后再试',
     accountPlaceholder: '邮箱或用户名',
     passwordPlaceholder: '密码',
     login: '登录',

@@ -84,10 +84,36 @@ class AccountServiceTest {
     @DisplayName("发验证码：转发到官网 sms-login/send-code，且不带 Bearer（登录阶段还没有 Key）")
     void loginSendCodeForwards() {
         transport = new StubTransport().enqueue(200, "{\"ok\":true}");
-        service().sendLoginCode("13800138000");
+        service().sendLoginCode("13800138000", null);
         assertEquals("POST https://www.aiworkdeck.com/api/auth/sms-login/send-code", transport.calls.get(0));
         assertTrue(transport.bodies.get(0).contains("13800138000"), transport.bodies.get(0));
         assertNull(transport.lastBearer, "登录阶段还没有 Key，不该带 Authorization");
+    }
+
+    @Test
+    @DisplayName("人机验证 token 必须原样透传——这个请求体是本类拼的，漏掉它桌面端就永远过不了官网那道闸")
+    void loginSendCodeForwardsCaptchaToken() {
+        transport = new StubTransport().enqueue(200, "{\"ok\":true}");
+        service().sendLoginCode("13800138000", "the-captcha-token");
+        assertTrue(transport.bodies.get(0).contains("the-captcha-token"),
+                "官网启用人机验证后，不带 token 就是 403：" + transport.bodies.get(0));
+    }
+
+    @Test
+    @DisplayName("官网拒绝人机验证时归为 CONFLICT，不是 UNAUTHORIZED——后者会让上层去清一个还不存在的连接")
+    void captchaFailureIsConflictNotUnauthorized() {
+        transport = new StubTransport().enqueue(403, "{\"error\":\"captcha_failed\",\"message\":\"nope\"}");
+        AccountException e = assertThrows(AccountException.class,
+                () -> service().sendLoginCode("13800138000", "bad"));
+        assertEquals(AccountException.Kind.CONFLICT, e.getKind());
+    }
+
+    @Test
+    @DisplayName("拿不到官网的人机验证配置时按「未启用」处理，而不是让人登不进去")
+    void captchaConfigFallsBackToDisabled() {
+        transport = new StubTransport().enqueue(500, "boom");
+        assertNull(service().captchaConfig().get("provider"),
+                "配置读不到就渲染不出控件；为此把人挡在门外不划算，发码本身还有限流兜着");
     }
 
     @Test
