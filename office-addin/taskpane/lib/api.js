@@ -4,8 +4,10 @@ import { normalizeBaseUrl } from './settings.js'
  * 后端 REST 访问。鉴权统一走 X-Session-Id 请求头携带 awdt_ 设备令牌
  * （后端 getUserIdFromSession 支持前缀解析）。
  *
- * 注意：错误文案不得含「登录/未授权/请先」子串——主前端以这三个子串判定
- * 未登录并清会话，这里沿用同一红线，统一说「连接未就绪/令牌无效」。
+ * 错误文案：本文件自造的文案统一说「连接未就绪/令牌无效」，不写「登录/未授权/请先」——
+ * 主前端早年靠这三个子串判掉线（PR4-0 起已改成只认 code=4010），沿用它做措辞基线，
+ * 也让插件的提示与桌面端保持一个口径。**唯一的例外是账户登录那两条**：
+ * 服务端的「验证码错误或已过期」之类是用户唯一能据此改正的信息，必须透传（见 postAnonymous）。
  */
 
 function headers(token) {
@@ -76,6 +78,67 @@ export async function fetchConversationHistory({ serverUrl, token }, conversatio
     // 静默降级：当作空会话
   }
   return []
+}
+
+/**
+ * 账户登录：给手机号发验证码（匿名端点 POST /api/auth/account-login/send-code）。
+ * 后端只是转发官网，真正的冷却与日配额在官网侧。
+ */
+export async function postAccountLoginSendCode({ serverUrl }, phone) {
+  await postAnonymous(serverUrl, '/api/auth/account-login/send-code', { phone: (phone || '').trim() })
+}
+
+/**
+ * 账户登录：手机号+验证码 或 邮箱+口令 换取本服务器的 awdt_ 设备令牌
+ * （匿名端点 POST /api/auth/account-login）。凭据用完即弃，只有换回的令牌被保存。
+ *
+ * @param credentials {phone, code} 或 {account, password}
+ * @returns awdt_ 令牌字符串
+ */
+export async function postAccountLogin({ serverUrl }, credentials) {
+  const data = await postAnonymous(serverUrl, '/api/auth/account-login', credentials || {})
+  if (data && data.data && data.data.token) return data.data.token
+  throw new Error('账户校验未通过，请重试')
+}
+
+/**
+ * 两个匿名登录端点共用的出站与信封解析。
+ *
+ * 与 postAwdkLogin 的一处刻意不同：**这里透传服务端 message**。
+ * 「验证码错误或已过期」与「账号或密码不正确」是用户唯一能据此改正的信息，
+ * 换成一句自造的通用文案等于把界面做成哑巴。信封本身照旧只认 code=0/1，
+ * 绝不会出现 code=4010（后端护栏 AuthControllerHardeningTest）。
+ */
+async function postAnonymous(serverUrl, path, body) {
+  const base = normalizeBaseUrl(serverUrl)
+  if (!base) throw new Error('连接未就绪：后端地址为空')
+  let resp
+  try {
+    resp = await fetch(`${base}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+  } catch (e) {
+    throw new Error('后端不可达：请检查地址、网络与 HTTPS/证书')
+  }
+  if (resp.status === 404) {
+    // 旧版本后端没有这两个端点
+    throw new Error('该服务器不支持账户直接连接，请在「高级设置」中改用 API Key 或设备令牌')
+  }
+  if (!resp.ok) throw new Error(`账户连接失败（HTTP ${resp.status}）`)
+  let data
+  try {
+    data = await resp.json()
+  } catch (e) {
+    throw new Error('后端响应格式异常')
+  }
+  if (data && data.code === 0) return data
+  const message = data && data.message ? String(data.message) : ''
+  if (message.includes('未开启账户桥接')) {
+    throw new Error('该服务器未开启账户直连，请在「高级设置」中改用 API Key 或设备令牌')
+  }
+  throw new Error(message || '账户连接失败，请稍后重试')
 }
 
 /**
