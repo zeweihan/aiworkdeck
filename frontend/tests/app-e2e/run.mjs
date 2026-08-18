@@ -38,6 +38,7 @@
 // Env: APP_E2E_BASE / APP_E2E_BACKEND / PUPPETEER_EXECUTABLE_PATH
 
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -598,6 +599,234 @@ try {
     await page.waitForSelector('.clip-panel', { timeout: 10000 })
   })
   await shot('j6.6-clipboard')
+
+  // ============ J6.7 浏览器面板：切走标签再切回来（Web/H5 iframe 链路） ============
+  // 桌面端（BrowserView）那一半由 desktop-e2e 覆盖（PR#401）。Web/H5 是另一条链路：
+  // BrowserPane 渲染 <iframe :src=后端代理地址>，切标签会把整个组件卸载，两个病与桌面端
+  // 同源——① 组件一卸载 iframe 就整个重载，用户翻到的那一页（页内跳转、滚动位置、填了
+  // 一半的表单）全没了；② tab.url 从不跟随 iframe 内的导航，切回来退回打开时那个地址
+  // （新建标签的默认地址是 https://www.baidu.com）。
+  //
+  // 用本机起的两页小站而不是真网站：断言不能挂在外网可达性上。代价是后端的 SsrfGuard
+  // 按解析后的 IP 拦回环/内网，必须给这台测试站开例外——见下面 siteReachable 的说明。
+  console.log('== J6.7 浏览器面板 ==')
+  let site = null
+  let SITE = ''
+  {
+    // 端口取 0 让内核分配：维护者常年多开并行会话，写死端口必撞。
+    site = http.createServer((req, res) => {
+      const p = (req.url || '/').split('?')[0]
+      if (p === '/a') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end('<html><head><title>QA-WEB-A</title></head><body><h1>QA-WEB-A</h1>'
+          + '<a id="go" href="/b">去第二页</a></body></html>')
+      } else if (p === '/b') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end('<html><head><title>QA-WEB-B</title></head><body><h1>QA-WEB-B</h1></body></html>')
+      } else {
+        // 其余路径一律 404：修复前注入脚本的同标签跳转会把地址解析到测试站自己头上
+        // （<base href> 的锅），落在这里才看得出「跳错地方了」，而不是碰巧还显示 A 页
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+        res.end('QA-WEB-404 ' + p)
+      }
+    })
+    await new Promise((r) => site.listen(0, '127.0.0.1', r))
+    SITE = 'http://127.0.0.1:' + site.address().port
+  }
+  // 后端能不能抓这台测试站：SsrfGuard 默认拦回环，需要后端带
+  // SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS=127.0.0.1 起。没开就显式 skip，不静默假绿。
+  const siteReachable = await (async () => {
+    try {
+      const r = await fetch(BACKEND + '/api/browser/proxy?url=' + encodeURIComponent(SITE + '/a') + '&token=probe')
+      return r.status === 200
+    } catch (e) { return false }
+  })()
+
+  if (!siteReachable) {
+    note('skip', 'J6.7 浏览器面板已跳过：后端未放行本机测试站，'
+      + '需以 SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS=127.0.0.1 起后端（默认空=照常拦内网）')
+  } else {
+    // 网页标签只在资源管理器模式下可见（isTabVisible），J6/J6.6 可能停在别处
+    await mouseClickSel('[title="资源管理器"]')
+
+    const webTabs = () => page.evaluate(() => {
+      const vm = window.__checkbaActiveOverviewVm
+      if (!vm) return null
+      return (vm.leftFiles || []).filter((f) => f && f.tabType === 'web').map((f) => ({ name: f.name, url: f.url }))
+    })
+    // 标签条是对 leftFiles 的 v-for，此刻里面还躺着前面旅程开的文件标签——
+    // 按「第 N 个 .tab-item」点会点到 qa-small.txt 上去（首版就这么写，红在了地址栏找不到）。
+    // 所以先问实例指针要网页标签在 leftFiles 里的下标。
+    const webTabIndices = () => page.evaluate(() => {
+      const vm = window.__checkbaActiveOverviewVm
+      if (!vm) return []
+      return (vm.leftFiles || []).map((f, i) => (f && f.tabType === 'web' ? i : -1)).filter((i) => i >= 0)
+    })
+    // 代理过的文档是不透明源（sandbox 不带 allow-same-origin，绝不能加），
+    // 但 CDP 照样能在里面求值——探针实测过，父页拿不到它的 location 不影响这里。
+    //
+    // 按「当前可见的那个 .browser-iframe」找，不按 URL 里有没有 /api/browser/proxy 找：
+    // 注入脚本坏掉时点链接是普通跳转（直接落到站点上、不经代理），按 URL 找会报
+    // 「没有代理 iframe」，把「跳转没走代理」说成「iframe 没了」。保活之后同时还会有
+    // 多个 .browser-iframe 挂着（隐藏的那些 boundingBox 为 null）。
+    const activeFrame = async () => {
+      for (const h of await page.$$('.browser-iframe')) {
+        const box = await h.boundingBox()
+        if (box && box.width > 0) return { frame: await h.contentFrame(), box }
+      }
+      return null
+    }
+    const frameText = async (f) => f.evaluate(() => document.body.innerText.trim().slice(0, 60)).catch((e) => '(读不到:' + e.message + ')')
+    const activeFrameText = async () => {
+      const cur = await activeFrame()
+      if (!cur || !cur.frame) return '(没有可见的浏览器 iframe)'
+      return (await frameText(cur.frame)) + ' @ ' + cur.frame.url().slice(0, 120)
+    }
+    const clickTabAt = async (idx) => {
+      const box = await page.evaluate((i) => {
+        const el = document.querySelectorAll('.tabs-pane-left .tab-item')[i]
+        if (!el) return null
+        const r = el.getBoundingClientRect()
+        if (!r.width || !r.height) return null
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      }, idx)
+      if (!box) throw new Error('点不到第 ' + idx + ' 号标签（不存在或被隐藏）')
+      await page.mouse.click(box.x, box.y)
+      await sleep(900)
+    }
+
+    await step('开两个网页标签并把第一个导航到测试站', async () => {
+      let opened = []
+      for (let round = 0; round < 6 && opened.length < 2; round++) {
+        await mouseClickSel('[title="浏览器"]')
+        await sleep(600)
+        opened = (await webTabs()) || []
+      }
+      if (opened.length < 2) throw new Error('两个网页标签没开出来：' + JSON.stringify(opened))
+      await clickTabAt((await webTabIndices())[0])
+
+      // 地址栏真人输入：uni 的 <input> 外面套了一层 uni-input，要点里面那个；
+      // 里面本来就有默认地址，先三连击全选再打字，否则是接在后面续写。
+      await mouseClickSel('.browser-toolbar .url-input input')
+      const addr = await page.evaluate(() => {
+        const el = document.querySelector('.browser-toolbar .url-input input')
+        const r = el.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })
+      // 打字要带 delay 并当场回读：uni 的 <input> 去抖会吃掉快速连打的字符
+      // （issue #200 登录密码被截断是同一个坑）。不回读的话下面只会报「A 页没渲染
+      // 出来」，分不清是没输进去、没点开、还是代理链路坏了——实测被截成过 "h"，
+      // 于是打开的是 https://h。
+      let typed = null
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await page.mouse.click(addr.x, addr.y, { clickCount: 3 })
+        await page.keyboard.type(SITE + '/a', { delay: 25 })
+        await sleep(300)
+        typed = await page.evaluate(() => {
+          const el = document.querySelector('.browser-toolbar .url-input input')
+          return el ? el.value : null
+        })
+        if (typed === SITE + '/a') break
+      }
+      if (typed !== SITE + '/a') throw new Error('地址栏没吃到完整输入，实际是：' + JSON.stringify(typed))
+      await mouseClickSel('[title="打开"]')
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('iframe')].some((f) => (f.src || '').includes('%2Fa')),
+        { timeout: 15000 })
+      // 真的把 A 页渲染出来了才算导航成功（只看 src 会把 403/404 当成功）
+      for (let i = 0; i < 20; i++) {
+        if ((await activeFrameText()).includes('QA-WEB-A')) return
+        await sleep(500)
+      }
+      throw new Error('测试站 A 页没渲染出来：' + (await activeFrameText()))
+    })
+
+    await step('页内点链接跳到第二页，标签地址跟着走', async () => {
+      const cur = await activeFrame()
+      if (!cur || !cur.frame) throw new Error('找不到浏览器 iframe')
+      // 真实鼠标：iframe 元素在父页的位置 + 链接在 iframe 内的位置
+      const linkBox = await cur.frame.evaluate(() => {
+        const el = document.getElementById('go'); if (!el) return null
+        const r = el.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })
+      if (!linkBox) throw new Error('A 页里找不到链接，iframe 里是：' + (await activeFrameText()))
+      await page.mouse.click(cur.box.x + linkBox.x, cur.box.y + linkBox.y)
+
+      // 先确认 iframe 真的跳到了 B 页（跳错地方时这里就报出来，不会拖到下一步）
+      let landed = ''
+      for (let i = 0; i < 24; i++) {
+        landed = await activeFrameText()
+        if (landed.includes('QA-WEB-B')) break
+        await sleep(500)
+      }
+      if (!landed.includes('QA-WEB-B')) throw new Error('页内跳转没落到第二页：' + landed)
+      // 跳转必须仍走代理：直接落到站点上就等于跳出了工作区，后续页面再也拦不住
+      // _blank/window.open（注入脚本坏掉时正是这个形态）
+      if (!landed.includes('/api/browser/proxy')) throw new Error('页内跳转绕过了代理：' + landed)
+      // 标签必须跟上——不跟上就是「切回来退回打开时那个地址」的根因
+      let tracked = null
+      for (let i = 0; i < 20; i++) {
+        tracked = (await webTabs())[0]
+        if (tracked && String(tracked.url).endsWith('/b')) return
+        await sleep(400)
+      }
+      throw new Error('标签地址没跟上页内跳转：' + JSON.stringify(tracked))
+    })
+
+    await step('切走再切回来仍是同一个文档实例（没被重新加载）', async () => {
+      // 只活在这一个文档实例上的标记：iframe 一重载就没了，据此判断"是不是同一页"
+      const cur = await activeFrame()
+      if (!cur || !cur.frame) throw new Error('找不到浏览器 iframe')
+      await cur.frame.evaluate(() => { window.__awdQaAlive = 'ALIVE' })
+
+      const idxs = await webTabIndices()
+      await clickTabAt(idxs[1])
+      await sleep(600)
+      await clickTabAt(idxs[0])
+      await sleep(1200)
+
+      const back = await activeFrame()
+      if (!back || !back.frame) throw new Error('切回来之后浏览器 iframe 没了')
+      const alive = await back.frame.evaluate(() => window.__awdQaAlive || '(页面被重新加载了)')
+        .catch((e) => '(读不到：' + String(e.message || e) + ')')
+      if (alive !== 'ALIVE') {
+        throw new Error('网页被重建了，不是原来那一页：' + alive + '；' + (await activeFrameText()))
+      }
+      const text = await frameText(back.frame)
+      if (!text.includes('QA-WEB-B')) throw new Error('切回来内容变了：' + JSON.stringify(text))
+      const shown = await page.evaluate(() => {
+        const el = document.querySelector('.browser-toolbar .url-input input')
+        return el ? el.value : '(没有地址栏)'
+      })
+      if (!String(shown).endsWith('/b')) throw new Error('地址栏没跟上，显示的是 ' + shown)
+    })
+
+    await step('关掉两个网页标签收尾', async () => {
+      for (let i = 0; i < 6; i++) {
+        const idxs = await webTabIndices()
+        if (!idxs.length) break
+        const box = await page.evaluate((idx) => {
+          const tab = document.querySelectorAll('.tabs-pane-left .tab-item')[idx]
+          const el = tab && tab.querySelector('.tab-close')
+          if (!el) return null
+          const r = el.getBoundingClientRect()
+          if (!r.width || !r.height) return null
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        }, idxs[0])
+        if (!box) break
+        await page.mouse.click(box.x, box.y)
+        await sleep(500)
+      }
+      const left = (await webTabs()) || []
+      if (left.length) throw new Error('网页标签没关干净：' + JSON.stringify(left))
+    })
+    await shot('j6.7-browser')
+  }
+  // 后端的 HttpClient 会跟测试站保持 keep-alive 连接，光 close() 是"不再收新连接"，
+  // 老连接还挂着 —— Node 因此不肯退出，整套跑完停在最后一行不打报告（实测卡了 4 分钟才发现）
+  try { site.closeAllConnections() } catch (e) { /* Node < 18.2 没有这个方法 */ }
+  try { site.close() } catch (e) { /* ignore */ }
 
   // ============ J6.5 AI 对话（真 UI 打字发送；默认模型 deepseek-v4-flash，
   // $0.09/M tokens，一条消息成本可忽略；AI_E2E=0 跳过） ============

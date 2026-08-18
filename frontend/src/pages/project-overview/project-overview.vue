@@ -836,18 +836,28 @@
                       @menu-state="pushMenuState"
                     />
                   </view>
-                  <view v-if="activeFileLeft && !useLibreEditor(activeFileLeft)" class="pane-content">
+                  <!-- 网页标签保活池（Web/H5）：与上面的编辑器保活池同形制——按标签建实例、
+                       v-show 藏。BrowserPane 在 Web 下渲染的是 <iframe>，组件一卸载文档就
+                       整个没了，切回来按 tab.url 重新加载（页内跳转、滚动位置、填了一半的
+                       表单全丢）。桌面端这个池只留当前激活的那一个，保活由 BrowserView
+                       detach 负责，见 webKeepAliveEnabled。 -->
+                  <view
+                    v-for="tab in leftWebTabs"
+                    :key="'web-left-' + tab.id"
+                    v-show="activeFileLeft && activeFileLeft.id === tab.id"
+                    class="pane-content"
+                  >
                     <BrowserPane
-                      v-if="isBrowserTab(activeFileLeft)"
-                      :key="activeFileLeft.id"
-                      :tab-id="activeFileLeft.id"
-                      :url="activeFileLeft.url"
-                      @url-change="onBrowserUrlChange('left', $event)"
-                      @title-change="onBrowserTitleChange('left', $event)"
+                      :tab-id="tab.id"
+                      :url="tab.url"
+                      @url-change="onBrowserUrlChange('left', tab.id, $event)"
+                      @title-change="onBrowserTitleChange('left', tab.id, $event)"
                       @open-new-tab="openBrowserTab($event)"
                     />
+                  </view>
+                  <view v-if="activeFileLeft && !useLibreEditor(activeFileLeft) && !isBrowserTab(activeFileLeft)" class="pane-content">
                     <MarkdownPreview
-                      v-else-if="isMarkdownTab(activeFileLeft)"
+                      v-if="isMarkdownTab(activeFileLeft)"
                       :content="activeFileLeft.content"
                       :file="activeFileLeft"
                     />
@@ -939,18 +949,26 @@
                       @menu-state="pushMenuState"
                     />
                   </view>
-                  <view v-if="activeFileRight && !useLibreEditor(activeFileRight)" class="pane-content">
+                  <!-- 网页标签保活池（见左窗格同名注释）。跨窗格拖拽是"在另一侧也打开同一
+                       标签"（同 id、但 tabDragSplit 复制了对象），所以左右各有自己的实例
+                       与自己的 tab.url，互不干扰。 -->
+                  <view
+                    v-for="tab in rightWebTabs"
+                    :key="'web-right-' + tab.id"
+                    v-show="activeFileRight && activeFileRight.id === tab.id"
+                    class="pane-content"
+                  >
                     <BrowserPane
-                      v-if="isBrowserTab(activeFileRight)"
-                      :key="activeFileRight.id"
-                      :tab-id="activeFileRight.id"
-                      :url="activeFileRight.url"
-                      @url-change="onBrowserUrlChange('right', $event)"
-                      @title-change="onBrowserTitleChange('right', $event)"
+                      :tab-id="tab.id"
+                      :url="tab.url"
+                      @url-change="onBrowserUrlChange('right', tab.id, $event)"
+                      @title-change="onBrowserTitleChange('right', tab.id, $event)"
                       @open-new-tab="openBrowserTab($event)"
                     />
+                  </view>
+                  <view v-if="activeFileRight && !useLibreEditor(activeFileRight) && !isBrowserTab(activeFileRight)" class="pane-content">
                     <MarkdownPreview
-                      v-else-if="isMarkdownTab(activeFileRight)"
+                      v-if="isMarkdownTab(activeFileRight)"
                       :content="activeFileRight.content"
                       :file="activeFileRight"
                     />
@@ -1596,6 +1614,12 @@ import { clipboardBridgeMethods } from './clipboardBridge.js'
 import { ocrActionMethods } from './ocrActions.js'
 import { ocrCaptureMethods } from './ocrCapture.js'
 
+// 网页标签保活上限（只在 Web/H5 生效，桌面端保活是 BrowserView 的活，见 leftWebTabs）。
+// 为什么要有上限、而桌面端可以不要：从窗口摘下的 BrowserView 会被 Chromium 冻住渲染进程，
+// 藏起来的 iframe 不会——它们跟前台页共用同一个渲染进程，定时器照跑、音视频照放。
+// 5 = 一件案子同时对着看的参考页大致就这么多；再往后的尾巴是冷的，被淘汰时重新加载
+// 也能回到正确的那一页（地址已经跟着导航走了），不会退回默认首页。
+const WEB_KEEPALIVE_MAX = 5
 
 export default {
   components: {
@@ -1848,6 +1872,9 @@ export default {
       // 预热备胎实例（librePool.js）：{key, file}。file=null 是后台预 boot 的
       // 空白备胎；过继后 file 为真实文档、实例转正（渲染仍在此数组）。
       libreSpares: [],
+      // 网页标签保活 LRU：'pane:tabId'，最近激活在前（同 libreLruKeys 的形制）。
+      // 只在 Web/H5 用得上——见 leftWebTabs 与 WEB_KEEPALIVE_MAX。
+      webKeepAliveKeys: [],
       // 后端 doc_stream_data（旧名 wps_stream_data）流式写入的本地缓冲（#79：LibreOffice 消费端）
       _docStreamBuffer: '',
       _docStreamTimer: null,
@@ -2056,6 +2083,37 @@ export default {
     rightLibreFiles() {
       return this.rightFiles.filter(f => this.useLibreEditor(f) &&
         (f.id === this.activeFileIdRight || this.libreLruKeys.includes('right:' + f.id)))
+    },
+    // 网页标签保活池只在没有 BrowserView 能力的宿主（Web/H5）里开。
+    // 桌面端**绝不能**开：那边 BrowserPane 挂载即 browser-create，一次挂 5 个
+    // 就是 5 个 BrowserView 同时挂到窗口上（后台那几个会浮到最上层盖住界面，
+    // 正是 utility-tools.md「无脑挂回全部」那条地雷），而桌面端的保活早已由
+    // BrowserView detach 解决了（PR#401），本来就不需要池。
+    webKeepAliveEnabled() {
+      try {
+        return !host.browser
+      } catch (e) {
+        return true
+      }
+    },
+    // 与 leftLibreFiles 同形制：当前激活的网页标签必进池，其余按 LRU 保活，
+    // 都用 v-show 藏而不是卸载——BrowserPane 在 Web 下是个 <iframe>，组件一卸载
+    // 文档就没了，切回来只能按 tab.url 重新加载（那正是「切走再切回来丢内容」）。
+    leftWebTabs() {
+      if (!this.webKeepAliveEnabled) {
+        const active = this.activeFileLeft
+        return (active && this.isBrowserTab(active)) ? [active] : []
+      }
+      return this.leftFiles.filter(f => this.isBrowserTab(f) &&
+        (f.id === this.activeFileIdLeft || this.webKeepAliveKeys.includes('left:' + f.id)))
+    },
+    rightWebTabs() {
+      if (!this.webKeepAliveEnabled) {
+        const active = this.activeFileRight
+        return (active && this.isBrowserTab(active)) ? [active] : []
+      }
+      return this.rightFiles.filter(f => this.isBrowserTab(f) &&
+        (f.id === this.activeFileIdRight || this.webKeepAliveKeys.includes('right:' + f.id)))
     },
     // NEW: Current active tab for AI context (prioritizes focused pane)
     currentActiveTab() {
@@ -2771,8 +2829,8 @@ export default {
     // 内嵌 LibreOffice 多实例保活：激活的 Office 标签记入 LRU（超上限触发
     // 淘汰），并把 AI 指令路由指针同步到当前活动实例（活跃实例指针，同
     // PR#151 WPS 编辑器模式）。
-    activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f) },
-    activeFileRight(f) { this.onActiveOfficeFileChanged('right', f) },
+    activeFileLeft(f) { this.onActiveOfficeFileChanged('left', f); this.touchWebKeepAlive('left', f) },
+    activeFileRight(f) { this.onActiveOfficeFileChanged('right', f); this.touchWebKeepAlive('right', f) },
     focusedPane() { this.syncLibreExecutor() },
     // 关闭 tab 后清掉文件已不在左列表的过继备胎条目（closeFile 已 flush）
     'leftFiles.length'() { this.pruneClosedLibreSpares() },
@@ -3664,27 +3722,40 @@ export default {
         if (this.isBrowserTab(t)) this.destroyBrowserView(t.id)
       }
     },
-    onBrowserUrlChange(pane, url) {
-      const active = pane === 'left' ? this.activeFileLeft : this.activeFileRight
-      if (active && this.isBrowserTab(active)) {
-        active.url = url
-        // 标签名称：尽量短（host）
-        try {
-          const u = new URL(url)
-          active.name = u.host || url
-        } catch (e) {
-          active.name = url
-        }
-        this.$forceUpdate()
-
-        // Track URL Session (flush previous, start new)
-        const meta = this.project && this.project.name ? `Project: ${this.project.name}` : ''
-        activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
-      }
+    // 网页标签保活之后，后台那些标签的 BrowserPane 也活着（站点自己 302、SPA 换路由
+    // 都会报上来），所以这两个回调必须认 tabId——按"当前激活的那个标签"收，会把
+    // 后台标签的地址写到用户正看着的标签上。
+    findBrowserTab(pane, tabId) {
+      const list = pane === 'left' ? this.leftFiles : this.rightFiles
+      const tab = (list || []).find(f => String(f.id) === String(tabId))
+      return (tab && this.isBrowserTab(tab)) ? tab : null
     },
-    onBrowserTitleChange(pane, title) {
-      const active = pane === 'left' ? this.activeFileLeft : this.activeFileRight
-      if (!active || !this.isBrowserTab(active)) return
+    isActiveBrowserTab(pane, tabId) {
+      const activeId = pane === 'left' ? this.activeFileIdLeft : this.activeFileIdRight
+      return String(activeId) === String(tabId)
+    },
+    onBrowserUrlChange(pane, tabId, url) {
+      const tab = this.findBrowserTab(pane, tabId)
+      if (!tab) return
+      tab.url = url
+      // 标签名称：尽量短（host）
+      try {
+        const u = new URL(url)
+        tab.name = u.host || url
+      } catch (e) {
+        tab.name = url
+      }
+      this.$forceUpdate()
+
+      // 工作记录只跟"用户正在看的那一页"：后台标签自己跳走不该被记成浏览行为
+      if (!this.isActiveBrowserTab(pane, tabId)) return
+      // Track URL Session (flush previous, start new)
+      const meta = this.project && this.project.name ? `Project: ${this.project.name}` : ''
+      activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
+    },
+    onBrowserTitleChange(pane, tabId, title) {
+      const active = this.findBrowserTab(pane, tabId)
+      if (!active) return
       const t = String(title || '').trim()
       if (!t) return
 
@@ -3696,7 +3767,8 @@ export default {
 
       const url = active.url || ''
       const meta = (this.project && this.project.name ? `Project: ${this.project.name}. ` : '') + `Title: ${t}`
-      if (url) {
+      // 同 onBrowserUrlChange：后台标签换标题不算浏览行为
+      if (url && this.isActiveBrowserTab(pane, tabId)) {
           // Restart session to capture title in the new segment
           activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
       }
@@ -3704,6 +3776,21 @@ export default {
       // 避免过长：保留前 18 字符
       active.name = t.length > 18 ? (t.slice(0, 18) + '…') : t
       this.$forceUpdate()
+    },
+    // 激活的网页标签变化：记进保活 LRU（超上限的尾巴直接出池 = 组件卸载 = iframe 收掉，
+    // 不像编辑器那样需要先落盘，网页没有我们负责保存的状态）。顺带清掉已关标签的残留记账。
+    touchWebKeepAlive(pane, file) {
+      if (!this.webKeepAliveEnabled || !file || !this.isBrowserTab(file)) return
+      const key = pane + ':' + file.id
+      const stillOpen = (k) => {
+        const sep = k.indexOf(':')
+        const list = k.slice(0, sep) === 'right' ? this.rightFiles : this.leftFiles
+        const id = k.slice(sep + 1)
+        return (list || []).some(f => this.isBrowserTab(f) && String(f.id) === id)
+      }
+      this.webKeepAliveKeys = [key]
+        .concat(this.webKeepAliveKeys.filter(k => k !== key && stillOpen(k)))
+        .slice(0, WEB_KEEPALIVE_MAX)
     },
     openBrowserTab(url = 'https://www.baidu.com', pane = null) {
       // 默认在当前聚焦窗格打开；未分屏则左侧
