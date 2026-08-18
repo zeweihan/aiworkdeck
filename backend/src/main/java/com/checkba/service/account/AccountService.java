@@ -334,7 +334,33 @@ public class AccountService {
         return exchangeAndConnect(credentials);
     }
 
-    /** 官网登录：账号 + 口令换 Key 并连接（国际站主路径，及大陆站补绑期内的存量账号）。 */
+    /**
+     * 官网登录：给邮箱发验证码（国际站主路径）。
+     *
+     * <p>与 {@link #sendLoginCode} 是同一条分叉的两半：cn 用手机号、intl 用邮箱。
+     */
+    public void sendLoginCodeByEmail(String email, String captchaToken) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("email", email == null ? "" : email.trim());
+        body.put("captchaToken", captchaToken == null ? "" : captchaToken.trim());
+        postLogin("/api/auth/mail-login/send-code", body);
+    }
+
+    /**
+     * 官网登录：邮箱 + 验证码换 Key 并连接（国际站主路径）。
+     *
+     * <p><b>这条不是可选项</b>：国际站的邮箱验证码注册建出来的账号没有口令
+     * （{@code passwordHash} 是空串），而口令注册已随邮箱验证码上线一起关掉。
+     * 少了这条，新国际站用户在官网注册完就再也连不上桌面端——下面那条口令路对他无效。
+     */
+    public synchronized Map<String, Object> loginWithEmailCode(String email, String code) {
+        Map<String, Object> credentials = new HashMap<>();
+        credentials.put("email", email == null ? "" : email.trim());
+        credentials.put("code", code == null ? "" : code.trim());
+        return exchangeAndConnect(credentials);
+    }
+
+    /** 官网登录：账号 + 口令换 Key 并连接（两站的存量口令账号）。 */
     public synchronized Map<String, Object> loginWithPassword(String account, String password) {
         Map<String, Object> credentials = new HashMap<>();
         credentials.put("account", account == null ? "" : account.trim());
