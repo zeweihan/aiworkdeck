@@ -25,6 +25,12 @@ export const APP_COMMANDS = [
     run: 'app:openAccount',
   },
   {
+    id: 'app.logout',
+    label: { zh: '退出登录…', en: 'Log Out…' },
+    menu: 'app', group: 2,
+    run: 'app:logout',
+  },
+  {
     id: 'app.langZh',
     label: { zh: '语言：中文', en: 'Language: 中文' },
     menu: 'app', group: 3,

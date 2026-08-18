@@ -301,7 +301,12 @@
                 <text v-if="!deviceTokens.length" class="bind-tip">{{ $t('account.noTokensYet') }}</text>
               </view>
 
-              <view v-if="!isDesktop" class="form-group">
+              <!-- 退出登录。**桌面端也要有**：此前这一块写着 v-if="!isDesktop"，
+                   于是桌面端全应用没有一个登出入口，想换账号只能去设置页把
+                   「断开连接」和「解除授权」各点一遍。两件事已收进 utils/signOut.js。 -->
+              <view class="form-group">
+                  <text class="group-title">{{ $t('account.logoutGroupTitle') }}</text>
+                  <text class="bind-tip">{{ $t('account.logoutGroupHint') }}</text>
                   <button class="btn-logout-settings" @tap="handleLogout">{{ $t('account.logoutBtn') }}</button>
               </view>
             </view>
@@ -317,7 +322,8 @@
 <script>
 import { getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, addProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, sendMailCode, bindEmail, totpSetup, totpActivate, totpDisable, issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken } from '@/services/api.js'
 import { host, isDesktopHost } from '@/services/host.js'
- import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
+ import { getCurrentUser, isLoggedIn, getSessionId, setSessionUser } from '@/utils/auth.js'
+import { signOut } from '@/utils/signOut.js'
 import { ICONS } from '@/config/icons.js'
 
 export default {
@@ -550,22 +556,10 @@ export default {
         }
       })
     },
+    // 桌面端要多退一层（账户连接 + 授权票据），流程收在 utils/signOut.js，
+    // 与应用菜单「退出登录…」共用一份，别在这里另写一条会漂的。
     handleLogout() {
-      uni.showModal({
-        title: this.$t('account.logoutConfirmTitle'),
-        content: this.$t('account.logoutConfirmContent'),
-        cancelText: this.$t('common.cancel'),
-        confirmText: this.$t('account.confirmBtn'),
-        success: (res) => {
-          if (!res.confirm) return
-          try {
-            clearSession()
-          } catch (e) {
-            // ignore
-          }
-          uni.reLaunch({ url: '/pages/login/login' })
-        }
-      })
+      signOut()
     },
     switchTab(key) {
       if (key === 'system_admin') {

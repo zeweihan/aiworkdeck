@@ -19,8 +19,8 @@ export default {
   navPlugins: 'Plugin Marketplace',
 
   // External services (only OpenRouter is left here; the other seven live under Platform Services)
-  externalTitle: 'AI Provider Credentials',
-  externalSubtitle: 'OpenRouter key and address. This belongs to the AI path: requests go straight from this device to the provider and never pass through AI WorkDeck servers',
+  externalTitle: 'OpenRouter Credentials',
+  externalSubtitle: 'Only needed when you bring your own key. Requests go straight from this device to OpenRouter and never pass through AI WorkDeck servers',
   externalMovedNote: 'Credentials for meeting transcription, image text recognition, web search, speech synthesis, Qichacha, Tushare, and PKULaw have moved to Platform Services on the left; enter them under each service\'s "Use your own key (advanced)".',
   openRouterKeyPlaceholder: 'Enter your OpenRouter API Key',
   apiBaseUrlLabel: 'API Base URL',

@@ -18,9 +18,9 @@ export default {
   navFeedback: '用户反馈',
   navPlugins: '插件广场',
 
-  // 外部服务（只剩 OpenRouter；其余七家的凭证在「平台服务」分区各自的折叠区里）
-  externalTitle: 'AI 供应商接入参数',
-  externalSubtitle: 'OpenRouter 的 Key 与地址。它属于 AI 那条通路：请求由本机直连供应商，不经过 AI WorkDeck 的服务器',
+  // 自备 Key 的接入参数（在「AI 功能设置」里，选中 OpenRouter 那一档才出现）
+  externalTitle: 'OpenRouter 接入参数',
+  externalSubtitle: '自备 Key 时才需要填。请求由本机直连 OpenRouter，不经过 AI WorkDeck 的服务器',
   externalMovedNote: '会议录音转写、图片文字识别、联网搜索、语音合成、企查查、Tushare、北大法宝的凭证已移到左侧「平台服务」，在各项的「使用自己的 Key（高级）」里填。',
   openRouterKeyPlaceholder: '请输入 OpenRouter API Key',
   apiBaseUrlLabel: 'API 地址',

@@ -74,57 +74,13 @@
             </view>
           </view>
 
-          <!-- 外部服务。
-               这里只剩 OpenRouter：其余七家的凭证已随「平台服务」分区搬走，收进各自的
-               「使用自己的 Key（高级）」折叠区（默认由我们代采，用户不必再填 23 个字段）。
-               OpenRouter 留在这里是因为它属于 AI 那条通路——凭证下发 + 本机直连，不经网关。 -->
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ $t('admin.externalTitle') }}</text>
-              <text class="section-subtitle">
-                {{ $t('admin.externalSubtitle') }}
-              </text>
-            </view>
-            <view class="section-body">
-              <!-- OpenRouter。Google（Gemini）那三个字段随 GEMINI 供应商下线一起删除：
-                   Gemini 系列模型仍可用，走 OpenRouter 的 google/* 即可。 -->
-              <view class="provider-card">
-                <view class="provider-header">
-                  <text class="provider-name">OpenRouter</text>
-                </view>
-                <view class="form-row">
-                  <text class="form-label">API Key</text>
-                  <input
-                    v-model="form.external.openRouter.apiKey"
-                    class="form-input"
-                    :placeholder="$t('admin.openRouterKeyPlaceholder')"
-                    password
-                  />
-                </view>
-                <view class="form-row">
-                  <text class="form-label">{{ $t('admin.apiBaseUrlLabel') }}</text>
-                  <input
-                    v-model="form.external.openRouter.baseUrl"
-                    class="form-input"
-                    placeholder="https://openrouter.ai/api/v1"
-                  />
-                </view>
-              </view>
-              <text class="field-note">{{ $t('admin.externalMovedNote') }}</text>
-            </view>
-          </view>
-
-          <!-- 保存按钮 -->
-          <view class="fixed-footer">
-            <button
-              class="btn-save"
-              type="primary"
-              :loading="saving"
-              @tap="handleSave"
-            >
-              {{ $t('admin.saveConfigButton') }}
-            </button>
-          </view>
+          <!-- 这一页此前还有一张「AI 供应商接入参数」卡（OpenRouter 的 Key 与地址）。
+               2026-08-18 移进「AI 功能设置」：官方桌面版是账户登录 + 平台代采，
+               自备 Key 是少数人的旁路，摆在顶层分区会让人以为「不填就用不了」。
+               它现在跟在供应商单选下面，**选中 OpenRouter 那一档才出现**——
+               需要它的人正在那一步，不需要的人不必看见。
+               这一页因此只剩「语言」，而语言是独立保存链（setAppLanguage 直写），
+               所以底部的「保存配置」按钮一并去掉：留着会存一份没人改过的表单。 -->
         </scroll-view>
 
         <!-- 平台服务（P5：配置面收敛）。
@@ -424,6 +380,37 @@
                 </view>
               </view>
 
+              <!-- 自备 Key 的接入参数。从「系统配置 → AI 供应商接入参数」搬到这里：
+                   它是供应商选择的一部分，不是一个独立的系统级设置。
+                   与上面那块跨境同意同一形制——只在选中对应档位时出现。
+                   Google（Gemini）那三个字段随 GEMINI 供应商下线一起删了：
+                   Gemini 系列模型仍可用，走 OpenRouter 的 google/* 即可。 -->
+              <view v-if="form.ai.activeProvider === 'OPENROUTER'" class="form-row">
+                <view class="provider-card">
+                  <view class="provider-header">
+                    <text class="provider-name">{{ $t('admin.externalTitle') }}</text>
+                  </view>
+                  <text class="field-note">{{ $t('admin.externalSubtitle') }}</text>
+                  <view class="form-row">
+                    <text class="form-label">API Key</text>
+                    <input
+                      v-model="form.external.openRouter.apiKey"
+                      class="form-input"
+                      :placeholder="$t('admin.openRouterKeyPlaceholder')"
+                      password
+                    />
+                  </view>
+                  <view class="form-row">
+                    <text class="form-label">{{ $t('admin.apiBaseUrlLabel') }}</text>
+                    <input
+                      v-model="form.external.openRouter.baseUrl"
+                      class="form-input"
+                      placeholder="https://openrouter.ai/api/v1"
+                    />
+                  </view>
+                </view>
+              </view>
+
               <!-- 模型选择。清单唯一来源是后端模型目录（GET /api/ai/models）——
                    历史上前端硬编码过两份互不同步的清单，结果是「后端加模型用户看不到、
                    前端加模型被工厂静默回落默认模型」。
@@ -523,6 +510,8 @@
                   :placeholder="$t('admin.ollamaModelPlaceholder')"
                 />
               </view>
+
+              <text class="field-note">{{ $t('admin.externalMovedNote') }}</text>
 
               <!-- Assistant Management Section -->
               <view class="section-divider"></view>

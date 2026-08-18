@@ -10,6 +10,16 @@ export default {
   newProject: '新建项目',
   createSectionTitle: '新建',
   emptyHint: '还没有案卷。从下面开始：打开一个已有的文件夹，或者新建一个。',
+  // project-list.vue：视图切换与列表视图列名
+  gridView: '方块视图',
+  listView: '列表视图',
+  nameColumn: '名称',
+  clientColumn: '客户',
+  createdColumn: '创建时间',
+  updatedColumn: '最近修改',
+  membersColumn: '成员',
+  createdAtShort: '创建于 {time}',
+  rename: '重命名',
   // project-list.vue：卡片
   delete: '删除',
   managerLabel: '项目负责人: {name}',
@@ -19,7 +29,6 @@ export default {
   clientInitial: '客',
   listedCompany: '上市公司',
   targetCompany: '标的公司',
-  blankWorkspace: '通用项目工作区',
   // project-list.vue：成员移除
   removeConfirmTitle: '确认移除',
   removeConfirmContent: '确定要移除该成员吗？',

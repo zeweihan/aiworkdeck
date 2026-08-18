@@ -180,8 +180,10 @@ class AuthControllerHardeningTest {
     // ==================== 账户登录（手机号/邮箱，匿名端点） ====================
 
     private static AuthController controller(AwdkLoginService awdkLoginService, AuthAbuseGuard guard) {
+        // 末位 PhoneLoginGuard 传 null：AuthController.phoneGate() 对 null 显式回落成 OK，
+        // 这几条用例守的是账户登录信封与防爆破，不涉及手机号强制闸。
         return new AuthController(
-                null, null, null, null, guard, awdkLoginService, null, null, null, sessions(), false);
+                null, null, null, null, guard, awdkLoginService, null, null, null, sessions(), false, null);
     }
 
     @Test

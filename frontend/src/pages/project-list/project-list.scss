@@ -340,18 +340,6 @@ $danger-color: #E74C3C;
     text-overflow: ellipsis;
 }
 
-.blank-placeholder {
-    height: 40px;
-    display: flex;
-    align-items: center;
-    
-    .placeholder-text {
-        font-size: 13px;
-        color: #ccc;
-        font-style: italic;
-    }
-}
-
 /* Footer */
 .card-footer-new {
     padding: 12px 20px;
@@ -706,9 +694,9 @@ $danger-color: #E74C3C;
 .create-section-title {
     display: block;
     margin-bottom: 12px;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 600;
-    color: $text-secondary;
+    color: $text-main;
 }
 
 .create-row {
@@ -725,16 +713,20 @@ $danger-color: #E74C3C;
     flex-direction: row;
     align-items: flex-start;
     gap: 12px;
-    padding: 16px 18px;
+    padding: 18px 20px;
     background: $brand-white;
-    border: 1px solid $border-color;
-    border-radius: 8px;
+    /* 实线绿描边 + 淡绿底：这两张卡是这一页除了「打开某个案卷」之外最重的动作，
+       原先与页面其它容器同灰度，扫过去根本不像可以点的东西 */
+    border: 1px solid rgba(26, 83, 54, 0.22);
+    background: linear-gradient(180deg, rgba(91, 209, 151, 0.05) 0%, $brand-white 60%);
+    border-radius: 10px;
     cursor: pointer;
     transition: all 0.2s;
 
     &:hover {
-        border-color: $brand-accent;
-        box-shadow: 0 4px 16px rgba(26, 83, 54, 0.08);
+        border-color: $brand-primary;
+        box-shadow: 0 6px 20px rgba(26, 83, 54, 0.12);
+        transform: translateY(-2px);
     }
 
     &.is-busy {
@@ -827,4 +819,180 @@ $danger-color: #E74C3C;
     flex-direction: row;
     justify-content: flex-end;
     gap: 10px;
+}
+
+/* ===================== 视图切换与列表视图（2026-08-18） =====================
+ * 方块视图信息密度太低：一屏放不下几张卡，每张卡上真正有用的字段只有名字。
+ * 加一个列表视图，两个视图承载同一批字段（名称/客户/创建/最近修改/成员），
+ * 没有哪一个视图独占信息——切视图只换排布，不换能看到什么。
+ */
+.view-toggle {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    background: $brand-bg;
+    border: 1px solid $border-color;
+    border-radius: 8px;
+}
+
+.view-toggle-btn {
+    width: 28px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    cursor: pointer;
+    color: $text-light;
+    transition: all 0.15s;
+
+    &:hover { color: $brand-primary; }
+
+    &.active {
+        background: $brand-white;
+        color: $brand-primary;
+        box-shadow: 0 1px 2px rgba(18, 52, 77, 0.08);
+    }
+}
+
+.view-toggle-glyph {
+    width: 16px;
+    height: 16px;
+}
+
+/* 新建：唯一的实心主按钮。此前这一页最重的动作藏在列表底部两张同灰度的卡里，
+   页头只有两个同款次要按钮，「从哪儿开一个新案卷」得先找一遍。 */
+.btn-create-primary {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    background: $brand-primary;
+    color: $brand-white;
+    font-size: 13px;
+    font-weight: 600;
+    padding: 7px 16px;
+    border-radius: 6px;
+    border: 1px solid $brand-primary;
+    cursor: pointer;
+    line-height: 1.5;
+    transition: all 0.2s;
+
+    &:hover {
+        background: #14432b;
+        border-color: #14432b;
+    }
+
+    &[disabled] {
+        opacity: 0.6;
+        cursor: default;
+    }
+}
+
+.btn-create-plus {
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1;
+}
+
+/* 卡片顶行：BLANK 项目不再渲染类型标签，留一个占位把删除键顶到右边 */
+.card-top-spacer {
+    flex: 1;
+}
+
+/* ---- 列表视图 ---- */
+.project-table {
+    background: $brand-white;
+    border: 1px solid $border-color;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(18, 52, 77, 0.04);
+}
+
+.ptable-head,
+.ptable-row {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 16px;
+    padding: 0 20px;
+}
+
+.ptable-head {
+    height: 38px;
+    background: $brand-bg;
+    border-bottom: 1px solid $border-color;
+}
+
+.ptable-row {
+    min-height: 56px;
+    border-bottom: 1px solid #F4F6F5;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:last-child { border-bottom: none; }
+    &:hover { background: rgba(26, 83, 54, 0.03); }
+}
+
+.ptable-col {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    font-size: 13px;
+    color: $text-main;
+}
+
+.ptable-head .ptable-col {
+    font-size: 12px;
+    font-weight: 600;
+    color: $text-secondary;
+}
+
+.col-name { flex: 2.2 1 0; }
+.col-client { flex: 1.4 1 0; }
+.col-time { flex: 0 0 100px; }
+.col-members { flex: 0 0 150px; }
+.col-ops { flex: 0 0 68px; justify-content: flex-end; }
+
+.ptable-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ptable-sub {
+    color: $text-secondary;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+}
+
+/* 成员格：头像小一号，行高 56px 放不下卡片视图那套 28px 的堆叠 */
+.col-members .manager-avatar-wrapper,
+.col-members .member-avatar-new {
+    width: 24px;
+    height: 24px;
+    margin: 0;
+}
+
+.col-members .add-member-btn-new {
+    width: 22px;
+    height: 22px;
+    line-height: 20px;
+    font-size: 13px;
+}
+
+/* 窄窗口（桌面端窗口常被拖到 1100 以下）：先丢时间列，再丢客户列 */
+@media (max-width: 1080px) {
+    .col-client { display: none; }
+}
+
+@media (max-width: 900px) {
+    /* 两个日期只留「最近修改」——找案卷时它比创建日期有用 */
+    .col-created { display: none; }
 }
