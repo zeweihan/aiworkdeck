@@ -73,6 +73,8 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   而页面缓存里还是旧文件名，用户点下载就是 404（2026-08-18 发 v0.18.0 实测到）；
   留一版也给「已经点了下载、1.4GB 正在传」的用户留余地。改动这段先跑
   `bash deploy/update-mirror-sync_prune_test.sh`（纯本地，不碰网络与真镜像目录）。
+  **服务器上跑的是一份副本**（`/www/wwwroot/update/desktop/update-mirror-sync.sh`，cron 每小时 :17），
+  合并 PR 不会让它生效，要 scp 覆盖过去。
 - **`deploy/publish-lowa-engine.sh` — 换 LOWA 引擎必须走它，别手工传**（issue #310）。
   `check-build <目录>` 只在本地验产物；`publish <目录> <版本号>` 发到两台机；`verify <版本号>` 切指针前必跑。
   它把三件必须同时做对的事绑在一起：按形态判定该压不该压、**两台机都同步**（新加坡是本地镜像直出、
