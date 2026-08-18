@@ -7,7 +7,11 @@
       <text class="unlock-subtitle">{{ $t('onboarding.unlock.subtitle') }}</text>
 
       <!-- 账户登录是新的主路径；试用码 / 手工粘 Key 保留给离线试用、团队服务器与私有部署 -->
-      <view class="unlock-tabs">
+      <!-- 官方版只有账户登录这一条路：账户 Key 已经由登录自动签发，用户看不到也不需要粘。
+           **但 trialCodeEnabled 为真时整块要留着**——那是商业版 / 私有部署 / 自行构建的
+           试用码入口（application-desktop.yml 刻意留的开关），砍掉等于把那条路堵死。
+           只剩一个页签时不渲染整条 tab 栏：一个孤零零的页签不是选择，是噪音。 -->
+      <view v-if="trialCodeEnabled" class="unlock-tabs">
         <text class="unlock-tab" :class="{ 'is-active': mode === 'login' }" @tap="switchMode('login')">
           {{ $t('onboarding.unlock.loginTab') }}
         </text>
@@ -76,9 +80,6 @@
           />
         </template>
 
-        <text class="unlock-link unlock-login-switch" @tap="toggleLoginKind">
-          {{ loginKind === 'code' ? $t('onboarding.unlock.usePassword') : $t('onboarding.unlock.useCode') }}
-        </text>
         <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
         <button
           class="unlock-btn"
@@ -88,6 +89,9 @@
         >
           {{ loggingIn ? $t('onboarding.unlock.loggingIn') : $t('onboarding.unlock.login') }}
         </button>
+        <text class="unlock-link unlock-login-switch" @tap="toggleLoginKind">
+          {{ loginKind === 'code' ? $t('onboarding.unlock.usePassword') : $t('onboarding.unlock.useCode') }}
+        </text>
       </view>
 
       <view v-else class="unlock-form">
@@ -279,6 +283,9 @@ export default {
       try {
         const s = await getLicenseStatus()
         this.trialCodeEnabled = !(s && s.trialCodeEnabled === false)
+        // 页签整条被隐藏时，mode 必须回到 login——否则残留状态会把人卡在一个
+        // 已经没有入口可切回来的表单上
+        if (!this.trialCodeEnabled) this.mode = 'login'
       } catch (e) {
         console.warn('读取解锁门配置失败（按试用码可用渲染）:', e && e.message)
       }
@@ -544,6 +551,12 @@ export default {
 <style lang="scss" scoped>
 /* 触发元素必须存在且可被 click()，所以用 0 尺寸而不是 display:none——
    display:none 的元素 SDK 挂不上事件，控件永远弹不出来。 */
+.unlock-login-switch {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 12px;
+}
+
 .unlock-captcha-trigger {
   width: 0;
   height: 0;
@@ -600,6 +613,9 @@ export default {
 }
 
 .unlock-tabs {
+  /* .unlock-card 是 align-items:center，子元素默认收缩到内容宽度——不写这行，
+     页签会被挤窄到「账户登录」四个字都放不下而换行（.unlock-form 早就写了同一行补偿）。 */
+  width: 100%;
   display: flex;
   gap: 4px;
   margin-bottom: 16px;
@@ -611,6 +627,7 @@ export default {
 .unlock-tab {
   flex: 1;
   text-align: center;
+  white-space: nowrap;
   padding: 8px 0;
   font-size: 13px;
   color: #64748b;

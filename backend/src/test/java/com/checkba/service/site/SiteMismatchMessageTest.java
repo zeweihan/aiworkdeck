@@ -123,7 +123,7 @@ class SiteMismatchMessageTest {
     @DisplayName("账户端点 401：多站形态下同样点名站点")
     void accountUnauthorizedNamesBothSites() {
         AccountService account = new AccountService(sites(true, CN), tempDir.toString(),
-                (method, url, bearer, body) -> new AccountTransport.Reply(401, "{}"));
+                (method, url, bearer, body) -> new AccountTransport.Reply(401, "{}"), null);
 
         String message = assertThrows(AccountException.class,
                 () -> account.connect("awdk_" + "x".repeat(43))).getMessage();
@@ -137,7 +137,7 @@ class SiteMismatchMessageTest {
     @DisplayName("账户端点 401：单站形态保持原样")
     void accountUnauthorizedSingleSite() {
         AccountService account = new AccountService(sites(false, CN), tempDir.toString(),
-                (method, url, bearer, body) -> new AccountTransport.Reply(401, "{}"));
+                (method, url, bearer, body) -> new AccountTransport.Reply(401, "{}"), null);
 
         String message = assertThrows(AccountException.class,
                 () -> account.connect("awdk_" + "x".repeat(43))).getMessage();
@@ -156,7 +156,7 @@ class SiteMismatchMessageTest {
                     seen.setLength(0);
                     seen.append(url);
                     return new AccountTransport.Reply(401, "{}");
-                });
+                }, null);
 
         assertThrows(AccountException.class, () -> account.connect("awdk_" + "x".repeat(43)));
         assertTrue(seen.toString().startsWith(CN), seen.toString());
