@@ -31,6 +31,57 @@ title-updated，把同一条消息里的 url 扔了）。
 **前进/后退/刷新走 view 自己的历史**（`checkba:browser-history`）：组件里那份 `history` 数组
 只服务 H5 iframe 模式，桌面端从来没驱动过 BrowserView（三个按钮点了没反应），保活之后更没法当历史用。
 
+**Web/H5 的那一半（iframe + 后端代理，改这块之前必读）**：没有 BrowserView 时 BrowserPane
+渲染 `<iframe :src=代理地址>`，src 由 `GET /api/browser/proxy?url=…&token=…` 拼出。桌面端那两个病
+（切走再切回来丢内容 / 地址不跟随页内跳转）在这条链路上是各自独立的根因，**都要修**：
+- **保活**靠组件不卸载：`leftWebTabs`/`rightWebTabs` 是与 `leftLibreFiles` 同形制的池
+  （按标签建实例 + `v-show` 藏 + LRU `WEB_KEEPALIVE_MAX=5`）。`v-show` 的 `display:none`
+  **不会**丢掉 iframe 文档（滚动位置也在，实测过），换 `src` 才会。
+  **这个池只在 Web 开**（`webKeepAliveEnabled = !host.browser`）：桌面端一次挂 5 个
+  BrowserPane 就是 5 个 BrowserView 同时挂到窗口上，后台那几个会浮上来盖住界面
+  （即下面「无脑挂回全部」那条地雷），而桌面端的保活早由 detach 解决了。
+  上限存在的理由：摘下的 BrowserView 会被 Chromium 冻住，藏起来的 iframe **不会**——
+  它们跟前台页共用同一个渲染进程，定时器照跑。
+- **地址**靠代理注入脚本回报 `postMessage({type:'URL_CHANGED', url})`。iframe 是不透明源
+  （`sandbox` 不带 `allow-same-origin`，**绝不能加**：与 `allow-scripts` 同时出现时沙箱失效，
+  被访问站点就能读本应用 origin 下的会话凭证），父窗口读不到它的 location，只能等页面自己报。
+  postMessage 这条通道在不透明源下照常可用（`event.origin` 是 `"null"`，鉴别靠 token）。
+- **`currentUrl` 与 `iframeUrl` 必须分开记**：前者是地址栏/标签显示的地址，跟随页内跳转；
+  后者是「iframe 被要求加载的地址」。把跟随来的新地址回写进 src，等于每跳一次就把
+  刚打开的那一页重新加载一遍——保活白做。
+- **保活之后后台标签也会报事件**（站点自己 302、SPA 换路由），所以
+  `onBrowserUrlChange/onBrowserTitleChange` 收 `(pane, tabId, value)`，按 id 找标签；
+  按「当前激活的那个」收会把后台标签的地址写到用户正看着的标签上。activityTracker
+  只记激活标签。
+- 跨窗格双开在 Web 下是**两个独立 iframe**（`tabDragSplit.moveTabTo` 跨窗格复制了 tab 对象，
+  左右各有自己的 `tab.url`），与桌面端「一个 BrowserView、`wanted` 计数」不是一回事。
+
+**注入脚本的三条硬规则**（`BrowserProxyController.inject`，`BrowserProxyControllerTest` 钉住）：
+1. **整段拼成一行，里面绝不能出现 `//` 行注释**——它会把后面全部代码一起注释掉。
+   这个 bug 从写下那天一直活到 2026-08：页面上只留一句
+   `SyntaxError: Unexpected end of input`，`_blank`/`window.open` 拦截、同标签跳转、
+   `OPEN_NEW_TAB` 回传三件事**全部静默失效**（现象是「点了没反应」，极易误判成 CSP 拦截）。
+   要写注释只能用 `/* */`，且写成 Java 侧拼接之间的块注释（不进产物）。
+2. **`proxify` 必须拼绝对地址**：页面里有我们注入的 `<base href=真站点>`，
+   `location.href = '/api/browser/proxy?…'` 会按文档 base 解析到**被访问站点**头上
+   （实测跳成 `http://被访站/api/browser/proxy?url=…`，站点回 404）。
+   做法是拿当前文档地址换 query（`new URL(location.href)` + `u.search=…`），
+   这样不依赖后端知道前端的 origin/子路径。
+3. **塞进 JS 字面量的值要过 `escapeJsString`**：页面地址是被访问站点能控的（302 到任意 URL），
+   带 `</script>` 或单引号就能跳出脚本。反斜杠必须先转，`<` 转 `\x3C`。
+
+**代理回的 HTML 必须带 charset**：以前是「按 UTF-8 解码、回 `text/html` 不带 charset」，
+浏览器拿默认编码（windows-1252）去解 UTF-8 字节，**中文页面在面板里整页乱码**。
+现在按上游 Content-Type 的 charset 解码、统一以 `text/html;charset=utf-8` 回。
+没覆盖的一档：只在 `<meta charset>` 里声明、响应头不带的 GBK 页面。
+
+**SSRF 例外名单（`security.browser-proxy.e2e-allowed-hosts`，默认空）**：`SsrfGuard` 按解析后的
+IP 拦回环/内网，而 app-e2e 要用本机起的两页小站验这条链路（断言不能挂在外网可达性上）。
+名单默认空、**刻意不写进任何 application*.yml**，只有显式传
+`SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS` 的进程才放行，发行版拿不到；精确主机名匹配，
+不认通配。别为了省事填成通配——放行的是「服务端替你去抓这个地址」，
+local-mode 下本机后端把每个请求都当本机用户，等于把本机管理端口暴露给被访问的网页。
+
 **截图**：入口 `checkbaDesktop.ocr.captureScreen`；desktop main.js 透明覆盖框选窗 ~:389-571（BrowserView 模式仅限其区域内框选 ~:426）、capturePage 抓取 ~:577/:585/:709、IPC：ocr-capture-screen/desktop/window/view + ocr-start-selection。**推荐链路是 ocr-capture-view（当前 BrowserView，免 macOS 录屏权限）**；无独立后端端点，产物统一走 OCR。
 
 **剪贴板**：`ClipboardPanel.vue`；desktop main.js 轮询监听 clipboardWatchTimer ~:117-232（指纹去重 ~:110，首 tick 只记指纹）、推送 `checkba:clipboard-copied`；后端 `controller/ClipboardController.java`（/api/clipboard：GET /、POST /text、POST /file、GET /{id}/file、DELETE /{id}）。
@@ -133,6 +184,11 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 - **摘下窗口的 BrowserView 会被 Chromium 冻住渲染进程**（后台标签的正常待遇，页面状态照留）。
   自动化里往冻着的 target 里 evaluate 会一直挂到 CDP 的 protocolTimeout，最后只落一句
   「Runtime.callFunctionOn timed out」——desktop-e2e 那一段为此自带超时与「等它醒过来」轮询。
+- **浏览器面板的注入脚本是一行**：加代码时别顺手写 `//` 注释，整段会当场死掉且只在页面控制台
+  留一句 SyntaxError（详见上面「注入脚本的三条硬规则」）。app-e2e 的 J6.7 与
+  `BrowserProxyControllerTest` 都能拦住。
+- **给网页标签加保活池要分宿主**：Web 走组件池，桌面走 BrowserView detach；两边都开等于
+  桌面端把多个 BrowserView 同时挂上窗口。
 - 剪贴板去重靠指纹+window 级状态，改动监听逻辑先读 PR#148/#151 教训。
 - `checkba:fs-read-file` 有敏感路径拦截，别为新功能开任意路径读写。
 - Kokoro 大陆网络 401 = hf_xet 绕镜像问题，禁 xet 修（PR#142）。asr-models 的下载走同一条路，同样禁 xet。
@@ -157,5 +213,11 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 
 - desktop 服务栈：`cd desktop && npm test`（service-manager/model-manager/pysvc-runtime/**browser-views**）。
   `browser-views.test.js` 钉住的就是上面那套记账：复用不重载、detach 不销毁、隐藏恢复只挂回前台、双开计数。
-- 后端相关单测：TtsServiceTest、FileControllerChunkedUploadTest、ProjectFileService*Test 等；剪贴板/收藏/搜索/OCR/浏览器代理暂无专属测试。
-- UI 链路：`cd frontend && npm run test:app-e2e`。
+- 后端相关单测：TtsServiceTest、FileControllerChunkedUploadTest、ProjectFileService*Test、
+  **BrowserProxyControllerTest**（SSRF 例外名单默认关、注入脚本能解析、proxify 绝对地址 +
+  URL_CHANGED、JS 字面量转义、HTML 带 charset）等；剪贴板/收藏/搜索/OCR 暂无专属测试。
+- UI 链路：`cd frontend && npm run test:app-e2e`。其中 **J6.7 浏览器面板**覆盖 Web/H5 这条链路
+  （harness 自起两页小站 → 开两个网页标签 → 页内点链接跳第二页 → 切走再切回来断言仍是同一个
+  文档实例 + 地址正确）。跑它要给后端加
+  `SECURITY_BROWSER_PROXY_E2E_ALLOWED_HOSTS=127.0.0.1`，否则这一段会显式 skip（不假绿）。
+  桌面端（BrowserView）那一半在 `npm run test:desktop-e2e`。

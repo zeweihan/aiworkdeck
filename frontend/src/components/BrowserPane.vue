@@ -79,7 +79,15 @@ export default {
     return {
       history: [],
       index: -1,
+      // currentUrl = 地址栏/标签显示的地址；iframeUrl = iframe 真正被要求加载的地址。
+      // 两个必须分开：页内跳转之后 currentUrl 要跟着走（否则切回来退回打开时那个地址），
+      // 但 iframe 已经站在那一页上了，把新地址回写进 src 会让它整个重新加载一遍——
+      // 页面状态、滚动位置、填了一半的表单全没，正是这次要修的病。
       currentUrl: 'about:blank',
+      iframeUrl: 'about:blank',
+      // 这一次加载是我们自己发起的（地址栏/前进后退），用来区分「站点自己重定向」
+      // 和「用户点了链接」：前者该替换历史栈顶，后者该新增一条
+      _pendingNav: false,
       inputUrl: '',
       iframeToken: `br_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       _messageHandler: null,
@@ -114,9 +122,11 @@ export default {
       }
     },
     iframeSrc() {
-      // iframe 永远加载 proxy 地址（保证可拦截 _blank / window.open，且导航保持在工作区内）
-      if (!this.currentUrl || this.currentUrl === 'about:blank') return 'about:blank'
-      const raw = String(this.currentUrl).trim()
+      // iframe 永远加载 proxy 地址（保证可拦截 _blank / window.open，且导航保持在工作区内）。
+      // 读 iframeUrl 而不是 currentUrl：页内跳转只动 currentUrl，这里不能跟着变，
+      // 否则每跳一次都会被 Vue 改一次 src、把刚打开的那一页重新加载掉。
+      if (!this.iframeUrl || this.iframeUrl === 'about:blank') return 'about:blank'
+      const raw = String(this.iframeUrl).trim()
       if (!raw || raw.startsWith('about:')) return 'about:blank'
       if (raw.startsWith('http://') || raw.startsWith('https://')) {
         const base = getApiBaseUrl().replace(/\/$/, '')
@@ -155,6 +165,12 @@ export default {
       if (data.token !== this.iframeToken) return
       if (data.type === 'OPEN_NEW_TAB' && data.url) {
         this.$emit('open-new-tab', String(data.url))
+      }
+      if (data.type === 'URL_CHANGED' && data.url) {
+        // 代理注入的脚本在每次文档加载时回报真实地址（页内点链接、站点自己 302）。
+        // 这是 Web/H5 下标签地址跟随导航的唯一来源——iframe 是不透明源，父窗口
+        // 读不到它的 location（sandbox 不带 allow-same-origin，也绝不能带）。
+        this.adoptPageUrl(String(data.url))
       }
       if (data.type === 'DEBUG' && data.url) {
         // 打点：用于排查“点了没反应”（例如 CSP 禁止注入 / 链接不是 <a target=_blank> / window.open 被覆盖）
@@ -308,6 +324,29 @@ export default {
       const title = state.title ? String(state.title) : ''
       if (title) this.$emit('title-change', title)
     },
+    // H5：iframe 里的文档换了一页（点链接 / 站点自己重定向）。只更新"显示与记账"那一侧，
+    // 绝不回写 iframeUrl —— 那会让已经站在新页上的 iframe 再加载一次。
+    // 与桌面端的 adoptViewState 是同一件事的两种实现（那边问主进程，这边等页面回报）。
+    adoptPageUrl(url) {
+      const next = String(url || '').trim()
+      if (!next || next === this.currentUrl) {
+        this._pendingNav = false
+        return
+      }
+      this.currentUrl = next
+      this.inputUrl = next
+      if (this._pendingNav && this.index >= 0) {
+        // 我们刚要求加载的那一页被站点重定向走了：替换栈顶而不是新增一条，
+        // 否则「后退」会回到那个只会再跳一次的地址，按钮看着能用其实在原地打转
+        this.history.splice(this.index, 1, next)
+      } else {
+        if (this.index < this.history.length - 1) this.history = this.history.slice(0, this.index + 1)
+        this.history.push(next)
+        this.index = this.history.length - 1
+      }
+      this._pendingNav = false
+      this.$emit('url-change', next)
+    },
     syncDesktopBounds() {
       const api = host.browser
       const mountRef = this.$refs.desktopMount
@@ -354,6 +393,10 @@ export default {
         return
       }
 
+      // H5：这一条才是真正让 iframe 去加载
+      this.iframeUrl = next
+      this._pendingNav = true
+
       if (replace && this.index >= 0) {
         this.history.splice(this.index, 1, next)
       } else {
@@ -385,11 +428,13 @@ export default {
         this.desktopHistory('reload')
         return
       }
-      // H5：重新设置 src 触发刷新
+      // H5：重新设置 src 触发刷新。刷的是 currentUrl（用户此刻看的这一页），
+      // 不是 iframe 当初被要求加载的那一页——页内跳转之后两者已经不是一回事了
       const u = this.currentUrl
-      this.currentUrl = 'about:blank'
+      this.iframeUrl = 'about:blank'
       this.$nextTick(() => {
-        this.currentUrl = u
+        this.iframeUrl = u
+        this._pendingNav = true
       })
     },
     goBack() {
@@ -399,9 +444,7 @@ export default {
         return
       }
       this.index -= 1
-      this.currentUrl = this.history[this.index]
-      this.inputUrl = this.currentUrl
-      this.$emit('url-change', this.currentUrl)
+      this.goToHistoryEntry()
     },
     goForward() {
       if (!this.canGoForward) return
@@ -410,8 +453,14 @@ export default {
         return
       }
       this.index += 1
+      this.goToHistoryEntry()
+    },
+    // H5 前进/后退：history 里那一条既要显示出来，也要真的让 iframe 去加载
+    goToHistoryEntry() {
       this.currentUrl = this.history[this.index]
       this.inputUrl = this.currentUrl
+      this.iframeUrl = this.currentUrl
+      this._pendingNav = true
       this.$emit('url-change', this.currentUrl)
     },
     openInAppNewTab() {
