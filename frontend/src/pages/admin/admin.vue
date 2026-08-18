@@ -560,7 +560,7 @@
           </view>
         </scroll-view>
 
-        <!-- 账户与用量（仅桌面端：连接 AI WorkDeck 账户、余额与 AI 额度） -->
+        <!-- 账户与用量（仅桌面端：连接 AI WorkDeck 账户、余额） -->
         <scroll-view
           v-else-if="activeNav === 'account'"
           scroll-y
@@ -637,7 +637,7 @@
             </view>
           </view>
 
-          <!-- 已连接：账户信息 + AI 额度 + 本地用量明细 -->
+          <!-- 已连接：账户信息 + 余额 + 本地用量明细 -->
           <template v-else>
             <view class="section-card">
               <view class="section-header">
@@ -663,30 +663,8 @@
                         <text class="account-metric-label">{{ $t('admin.walletBalanceLabel') }}</text>
                         <text class="account-metric-value">{{ $t('admin.balanceYuan', { amount: accountBalanceYuan }) }}</text>
                       </view>
-                      <view class="account-metric">
-                        <text class="account-metric-label">{{ $t('admin.quotaUsedLabel') }}</text>
-                        <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.usageUsd) }}</text>
-                      </view>
-                      <view class="account-metric">
-                        <text class="account-metric-label">{{ $t('admin.quotaRemainingLabel') }}</text>
-                        <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.remainingUsd) }}</text>
-                      </view>
-                      <view class="account-metric">
-                        <text class="account-metric-label">{{ $t('admin.quotaLimitLabel') }}</text>
-                        <text class="account-metric-value">{{ quotaText(accountPlatform && accountPlatform.limitUsd) }}</text>
-                      </view>
                     </view>
-                    <!-- 已连账户但没分配过额度：平台 AI 通道此时不可用，给明确的下一步 -->
-                    <text v-if="accountNeedsAllocation" class="account-note">
-                      {{ $t('admin.needsAllocationNote') }}
-                    </text>
-                    <text v-else-if="!accountQuotaAvailable" class="account-note">
-                      {{ $t('admin.quotaUnavailableNote') }}
-                    </text>
                   </template>
-                  <text class="account-note">
-                    {{ $t('admin.balanceExplainNote') }}
-                  </text>
                   <!-- 购买在官网完成，桌面端拉一次即可看到新解锁的功能 -->
                   <view class="account-refresh-row">
                     <button class="comp-btn" :disabled="entitlementBusy" @tap="onRefreshEntitlements">
@@ -1754,7 +1732,7 @@ export default {
       if (this.isDesktop) {
         let hint = ''
         if (!this.platformAiAvailable) hint = this.$t('admin.hintConnectFirst')
-        else if (this.accountNeedsAllocation) hint = this.$t('admin.hintTopUp')
+        else if (this.accountOutOfCredits) hint = this.$t('admin.hintTopUp')
         options.push({
           value: 'AWD_CLOUD',
           label: this.$t('admin.providerAwdCloud'),
@@ -1793,16 +1771,15 @@ export default {
       if (plan === 'free') return this.$t('admin.freePlan')
       return ''
     },
-    // 额度三个数只在实时口径拿得到时才展示——拿不到时显示「暂不可用」，
-    // 而不是把 0 当成真实剩余额度让用户以为额度用光了
+    // 实时用量口径是否可得。现在只用于判断余额兜底路径。
     accountQuotaAvailable() {
       return !!(this.accountPlatform && this.accountPlatform.quotaAvailable)
     },
-    // 已连账户但从未分配过 AI 额度：面板要给出「去官网分配」的引导
-    // Credits 重构后判据是余额，不是「官网库里有没有 key 行」。
-    // 后端 hasAiQuota 已由 creditsCents 算出；这里沿用它，语义变成「有没有 Credits」。
-    // 注意 quotaAvailable=false 只表示用量查不到，不代表没 Credits，所以不能据此判缺额度。
-    accountNeedsAllocation() {
+    // 余额为空：平台 AI 通道此时不可选，面板要给出「去官网充值」的引导。
+    // 判据是 Credits 余额——「分配额度」这个动作在 Credits 重构时就删了，
+    // 后端 hasAiQuota 也已由 creditsCents 算出，这里只是沿用那个字段。
+    // 注意 quotaAvailable=false 只表示用量查不到，不代表没 Credits。
+    accountOutOfCredits() {
       if (!this.accountPlatform) return false
       const credits = this.accountPlatform.creditsCents
       if (typeof credits === 'number') return credits <= 0
@@ -2623,7 +2600,7 @@ export default {
         this.accountUsage = null
       }
     },
-    // 官网账户页：生成账户 Key、充值、分配 AI 额度都在这里。
+    // 官网账户页：生成账户 Key 与充值都在这里。
     // 地址在点击时才取——siteLinks 首帧可能还是兜底值，固化成常量就纠正不回来了
     openAccountSite() {
       openExternalUrl(accountPageUrl())
@@ -2806,13 +2783,6 @@ export default {
     formatUsd(v) {
       const n = Number(v)
       return '$' + (Number.isFinite(n) ? n : 0).toFixed(2)
-    },
-    // 额度数字：实时口径拿不到时显示「—」。
-    // 这里不能沿用 formatUsd 的 0 兜底——$0.00 会被读成「额度已用光」
-    quotaText(v) {
-      if (!this.accountQuotaAvailable) return '—'
-      const n = Number(v)
-      return Number.isFinite(n) ? this.formatUsd(n) : '—'
     },
     // 费用口径标注（Spec §3：本地估算与平台结算两套数字必须分得开）
     usageSourceLabel(row) {
