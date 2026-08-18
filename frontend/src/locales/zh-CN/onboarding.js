@@ -84,7 +84,7 @@ export default {
     accountNoticeTitle: '账户连接未完成',
     gotIt: '知道了',
     switchSiteTitle: '切换站点',
-    switchSiteContent: '切换到「{name}」会清掉本机与当前站点相关的数据：账户连接、已购权益缓存、平台 AI 额度，以及用账户 Key 解锁的授权（试用码解锁不受影响）。',
+    switchSiteContent: '切换到「{name}」会清掉本机与当前站点相关的数据：账户连接、已购权益缓存、平台 AI 密钥，以及用账户 Key 解锁的授权（试用码解锁不受影响）。',
     switch: '切换',
     cancel: '取消',
     switchedTo: '已切换到{name}',
