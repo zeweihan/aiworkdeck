@@ -301,7 +301,37 @@
                 <text v-if="!deviceTokens.length" class="bind-tip">{{ $t('account.noTokensYet') }}</text>
               </view>
 
-              <view v-if="!isDesktop" class="form-group">
+              <!-- 界面语言。2026-08-18 从设置页「系统配置」搬来：语言是每个人自己的
+                   偏好（storage 权威源、人人可改、不要 admin 权限），摆在「系统管理」
+                   下面本身就是错的分类；那个分区搬空后已整体撤掉。
+                   独立保存链（setAppLanguage 直写），与本页其它字段无关。 -->
+              <view class="form-group">
+                <text class="group-title">{{ appLanguage === 'en-US' ? 'Language' : '语言 / Language' }}</text>
+                <text class="bind-tip">
+                  {{ appLanguage === 'en-US'
+                    ? 'Applies to the interface, document editor, and AI replies. Newly opened editors use the new language; restart the app for full effect.'
+                    : '作用于界面、文档编辑器与 AI 回复。新打开的编辑器使用新语言，重启应用后完全生效。' }}
+                </text>
+                <view class="lang-row">
+                  <view
+                    v-for="opt in appLanguageOptions"
+                    :key="opt.value"
+                    class="lang-item"
+                    :class="{ checked: appLanguage === opt.value }"
+                    @tap="onAppLanguagePick(opt.value)"
+                  >
+                    <view class="lang-dot"></view>
+                    <text class="lang-label">{{ opt.label }}</text>
+                  </view>
+                </view>
+              </view>
+
+              <!-- 退出登录。**桌面端也要有**：此前这一块写着 v-if="!isDesktop"，
+                   于是桌面端全应用没有一个登出入口，想换账号只能去设置页把
+                   「断开连接」和「解除授权」各点一遍。两件事已收进 utils/signOut.js。 -->
+              <view class="form-group">
+                  <text class="group-title">{{ $t('account.logoutGroupTitle') }}</text>
+                  <text class="bind-tip">{{ $t('account.logoutGroupHint') }}</text>
                   <button class="btn-logout-settings" @tap="handleLogout">{{ $t('account.logoutBtn') }}</button>
               </view>
             </view>
@@ -317,7 +347,9 @@
 <script>
 import { getCurrentUser as getCurrentUserApi, getMyFavorites, deleteFavorite, getFavoriteImageUrl, addProjectMember, getUserActivityHistory, inviteClient, uploadAvatar, getLicenseStatus, deactivateLicense, sendSmsCode, bindPhone, sendMailCode, bindEmail, totpSetup, totpActivate, totpDisable, issueLocalDeviceToken, listDeviceTokens, revokeDeviceToken } from '@/services/api.js'
 import { host, isDesktopHost } from '@/services/host.js'
- import { getCurrentUser, isLoggedIn, getSessionId, clearSession, setSessionUser } from '@/utils/auth.js'
+ import { getCurrentUser, isLoggedIn, getSessionId, setSessionUser } from '@/utils/auth.js'
+import { signOut } from '@/utils/signOut.js'
+import { getAppLanguage, setAppLanguage } from '@/utils/appLanguage.js'
 import { ICONS } from '@/config/icons.js'
 
 export default {
@@ -357,6 +389,13 @@ export default {
       // 插件访问令牌（桌面端）：明文只在生成时返回一次，这里只留列表元信息
       deviceTokens: [],
       tokenNameInput: '',
+      // 界面语言：读写走 utils/appLanguage.js（storage 权威源 + App.vue 镜像同步）。
+      // 选项标签用各自母语，刻意不随语言翻译。
+      appLanguage: getAppLanguage(),
+      appLanguageOptions: [
+        { value: 'zh-CN', label: '简体中文' },
+        { value: 'en-US', label: 'English' },
+      ],
       tokenIssuing: false,
 
       // 认证器（TOTP）绑定
@@ -550,22 +589,24 @@ export default {
         }
       })
     },
+    // 桌面端要多退一层（账户连接 + 授权票据），流程收在 utils/signOut.js，
+    // 与应用菜单「退出登录…」共用一份，别在这里另写一条会漂的。
     handleLogout() {
-      uni.showModal({
-        title: this.$t('account.logoutConfirmTitle'),
-        content: this.$t('account.logoutConfirmContent'),
-        cancelText: this.$t('common.cancel'),
-        confirmText: this.$t('account.confirmBtn'),
-        success: (res) => {
-          if (!res.confirm) return
-          try {
-            clearSession()
-          } catch (e) {
-            // ignore
-          }
-          uni.reLaunch({ url: '/pages/login/login' })
-        }
+      signOut()
+    },
+    onAppLanguagePick(value) {
+      if (value === this.appLanguage) return
+      this.appLanguage = setAppLanguage(value)
+      uni.showToast({
+        title: this.appLanguage === 'en-US' ? 'Switching to English…' : '正在切换为简体中文…',
+        icon: 'none',
       })
+      // 整页 reload：i18n 单例的 locale、config 模块顶层取值的静态 label、
+      // LOWA 编辑器 uilang 全部随之重建。延迟给 App.vue 的镜像同步
+      //（主进程 IPC + 后端 POST）留出发出的窗口。
+      setTimeout(() => {
+        try { window.location.reload() } catch (e) { /* 非浏览器环境忽略 */ }
+      }, 600)
     },
     switchTab(key) {
       if (key === 'system_admin') {
@@ -1352,6 +1393,55 @@ $danger-color: #E74C3C;
 }
 
 /* Settings Logout Button */
+/* 界面语言（从设置页「系统配置」搬来）。单选样式独立写一份：admin 那套
+   .radio-item 是那一页 scoped 的，跨页面用不了。 */
+.lang-row {
+    display: flex;
+    flex-direction: row;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+
+.lang-item {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border: 1px solid $border-color;
+    border-radius: 999px;
+    background: #fff;
+    cursor: pointer;
+    transition: all 0.2s;
+
+    &:hover { border-color: $brand-primary; }
+
+    &.checked {
+        border-color: $brand-primary;
+        background: rgba(26, 83, 54, 0.06);
+    }
+}
+
+.lang-dot {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 1px solid #c8d0cc;
+    box-sizing: border-box;
+    flex-shrink: 0;
+}
+
+.lang-item.checked .lang-dot {
+    border: 4px solid $brand-primary;
+    background: #fff;
+}
+
+.lang-label {
+    font-size: 14px;
+    color: $text-main;
+}
+
 .btn-logout-settings {
     background: #fff;
     border: 1px solid $border-color;

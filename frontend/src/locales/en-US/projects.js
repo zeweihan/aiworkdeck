@@ -10,6 +10,16 @@ export default {
   newProject: 'New Project',
   createSectionTitle: 'New',
   emptyHint: 'No matters yet. Start below: open an existing folder, or create one.',
+  // project-list.vue: view toggle and list-view column headers
+  gridView: 'Grid view',
+  listView: 'List view',
+  nameColumn: 'Name',
+  clientColumn: 'Client',
+  createdColumn: 'Created',
+  updatedColumn: 'Last modified',
+  membersColumn: 'Members',
+  createdAtShort: 'Created {time}',
+  rename: 'Rename',
   // project-list.vue: cards
   delete: 'Delete',
   managerLabel: 'Lead: {name}',
@@ -19,7 +29,6 @@ export default {
   clientInitial: 'C',
   listedCompany: 'Listed Company',
   targetCompany: 'Target Company',
-  blankWorkspace: 'General Project Workspace',
   // project-list.vue: remove member
   removeConfirmTitle: 'Confirm Removal',
   removeConfirmContent: 'Are you sure you want to remove this member?',

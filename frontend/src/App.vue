@@ -5,7 +5,7 @@ import { track } from '@/utils/telemetryClient.js'
 import { host, isDesktopHost } from '@/services/host.js'
 import { mountFeedbackWidget } from '@/utils/feedbackWidget.js'
 import { mountRecordingIndicator } from '@/utils/recordingIndicator.js'
-import { initWindowChrome } from '@/utils/windowChrome.js'
+import { initWindowChrome, refreshDragStrip } from '@/utils/windowChrome.js'
 import { mountGlobalBack, refreshGlobalBack } from '@/utils/globalBack.js'
 import { initAppMenuBridge } from '@/utils/appMenuBridge.js'
 import { getAppLanguage, APP_LANGUAGE_EVENT } from '@/utils/appLanguage.js'
@@ -49,8 +49,10 @@ export default {
         return true
       },
       // 全局返回键的可见性跟着页面栈走，跳转完成后重算一次（含 navigateBack，
-      // 它没有 url、不参与埋点，但会改变栈深度）
-      complete() { refreshGlobalBack() },
+      // 它没有 url、不参与埋点，但会改变栈深度）。
+      // 无边框窗口的拖拽条同理：自带顶栏的页面要整条让开，否则那一页顶栏里的
+      // 按钮全部点不动（见 utils/windowChrome.js 的 OWN_TITLEBAR_ROUTES）。
+      complete() { refreshGlobalBack(); refreshDragStrip() },
     })
     ;['navigateTo', 'redirectTo', 'reLaunch', 'switchTab', 'navigateBack'].forEach((t) => {
       try { uni.addInterceptor(t, navTrack(t)) } catch (e) { /* 静默 */ }
@@ -263,8 +265,13 @@ html.is-desktop .project-header .icon-btn {
    见 pages/project-overview/project-overview.scss 与
    pages/project-home/project-home.scss 里的 `max(…, var(--awd-titlebar-safe-*))`。 */
 
-/* 没有自己顶栏的页面（登录、项目列表、设置…）的拖拽条。
-   工作台的 .project-header（z-index 200）盖在它上面，那边不受影响。 */
+/* 没有自己顶栏的页面（项目列表、设置、个人中心…）的拖拽条。
+
+   **自带顶栏的几页由 JS 把它整条藏掉**（utils/windowChrome.js 的
+   OWN_TITLEBAR_ROUTES）。原先靠 z-index 让工作台顶栏「盖在它上面」是错的：
+   z-index 只管画谁在上面和 DOM 事件命中，而窗口拖拽区是壳按 app-region 另算
+   的一套，fixed 的这条带子永远最后合成，会把它底下所有 no-drag 抠洞盖回成
+   可拖，于是顶栏里的按钮一个都点不动（v0.18.0 的顶栏死区）。 */
 .awd-window-drag-strip {
     display: none;
 }
@@ -333,6 +340,17 @@ html.is-desktop .top-nav .nav-logo {
 html.is-desktop .top-nav {
     padding-left: max(48px, var(--awd-titlebar-safe-inline-start));
     padding-right: max(48px, var(--awd-titlebar-safe-inline-end));
+}
+
+/* project-home 薄壳页：这条 52px 顶栏就是这一页的标题栏。
+   它在 OWN_TITLEBAR_ROUTES 里，body 级拖拽条会让开，拖拽由它自己承担；
+   两个出口按钮照例要显式退出拖拽区，否则又是一对点不动的按钮。 */
+html.is-desktop .home-topbar {
+    -webkit-app-region: drag;
+}
+html.is-desktop .home-topbar .home-back,
+html.is-desktop .home-topbar .home-enter {
+    -webkit-app-region: no-drag;
 }
 
 /* variable-library：顶部卡片里的项目名紧贴左边 */

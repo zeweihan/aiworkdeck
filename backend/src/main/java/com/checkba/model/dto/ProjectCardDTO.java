@@ -14,6 +14,14 @@ public class ProjectCardDTO {
     private Long userId; // Creator ID
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    /**
+     * 最近一次文件活动时间：项目下未删除文件的 MAX(updatedAt)，没有文件时回落到
+     * {@link #updatedAt}。项目列表的「最近修改」列读这个。
+     *
+     * <p>为什么不直接用 {@code updatedAt}：那一列只在建项目与改项目名时写过，
+     * 拿来当修改时间就是一个恒等于创建日期的假列。
+     */
+    private LocalDateTime lastActivityAt;
 
     // Enhanced fields
     private String myRole; // OWNER, ADMIN, MEMBER, CLIENT...
@@ -83,6 +91,14 @@ public class ProjectCardDTO {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public LocalDateTime getLastActivityAt() {
+        return lastActivityAt;
+    }
+
+    public void setLastActivityAt(LocalDateTime lastActivityAt) {
+        this.lastActivityAt = lastActivityAt;
     }
 
     public String getMyRole() {

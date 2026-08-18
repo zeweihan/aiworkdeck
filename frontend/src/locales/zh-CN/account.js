@@ -119,10 +119,19 @@ export default {
   revokedToast: '已撤销',
   revokeFailed: '撤销失败',
 
-  // ---- userprofile.vue：退出登录 ----
+  // ---- 退出登录（utils/signOut.js；个人中心与应用菜单共用）----
   logoutBtn: '退出登录',
-  logoutConfirmTitle: '确认注销',
+  logoutConfirmTitle: '退出登录',
   logoutConfirmContent: '确定要退出登录吗？',
+  // 桌面端要说破两件事：会断开账户连接，以及本机数据不受影响（不然没人敢点）
+  logoutConfirmDesktop: '将断开本机与 AI WorkDeck 账户的连接，回到登录页。本机的项目与文件不受影响，重新登录即可继续。',
+  // 试用码解锁的机器：只摘账户，不动授权（官方版试用码解锁路已关，清了回不来）
+  logoutConfirmTrial: '将断开本机与 AI WorkDeck 账户的连接。本机仍以试用码保持解锁，项目与文件不受影响。',
+  logoutNothingTitle: '当前没有登录账户',
+  logoutNothingContent: '本机是用试用码解锁的，还没有连接 AI WorkDeck 账户，没有可退出的登录。要回到未解锁状态，用下面「授权」里的「解除授权」。',
+  logoutFailed: '退出登录失败，请重试',
+  logoutGroupTitle: '登录',
+  logoutGroupHint: '退出后回到登录页，可换一个账户登录。本机的项目与文件保留在原处。',
 
   // ---- login.vue：顶部导航 / 3D 展示区装饰文案 ----
   guideNav: '使用指引',

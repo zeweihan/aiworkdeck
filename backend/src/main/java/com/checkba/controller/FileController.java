@@ -492,6 +492,23 @@ public class FileController {
             if (uploadComplete && projectFileOpt.isPresent()) {
                 String sid = StringUtils.hasText(sessionHeader) ? sessionHeader : token;
                 signalChange(projectFileOpt.get().getProjectId(), AuthController.getUserIdFromSession(sid), AuthController.getUsernameFromSession(sid));
+                // 覆盖保存也是修改：此前这条路径只写字节、不动文件行，于是编辑器自动保存
+                // 一整天，ProjectFile.updatedAt 仍停在建文件那一刻——项目列表的「最近修改」
+                // 因此永远等于创建日期。挂在 uploadComplete 上而不是每一片，分片上传只写一次。
+                try {
+                    ProjectFile touched = projectFileOpt.get();
+                    touched.setUpdatedAt(java.time.LocalDateTime.now());
+                    try {
+                        long size = getStorageService().getSize(savedPath);
+                        if (size > 0) touched.setFileSize(size);
+                    } catch (Exception ignored) {
+                        // 取不到大小不影响「改过了」这件事，时间照写
+                    }
+                    projectFileRepository.save(touched);
+                } catch (Exception e) {
+                    // 字节已经落盘，元数据没记上不该让整个上传报失败
+                    log.warn("上传完成后回写文件修改时间失败: fileId={}", fileId, e);
+                }
             }
 
             Map<String, Object> result = new HashMap<>();

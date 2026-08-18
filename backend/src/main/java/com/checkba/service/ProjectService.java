@@ -17,8 +17,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -29,6 +31,7 @@ public class ProjectService {
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
     private final UserRepository userRepository;
+    private final com.checkba.repository.ProjectFileRepository projectFileRepository;
     private final TushareService tushareService;
     private final ProjectVariableService projectVariableService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
@@ -163,11 +166,25 @@ public class ProjectService {
      */
     public List<ProjectCardDTO> getUserProjectCardDTOs(Long userId) {
         List<Project> projects = getUserProjects(userId);
-        
+
+        // 「最近修改」：一次 group by 拿全部项目的最近文件活动时间。
+        // 不能用 Project.updatedAt——那一列只在建项目与改项目名时写过（见 DTO 注释）。
+        Map<Long, LocalDateTime> lastActivity = new HashMap<>();
+        if (!projects.isEmpty()) {
+            List<Long> ids = projects.stream().map(Project::getId).collect(Collectors.toList());
+            for (Object[] row : projectFileRepository.findLastActivityByProjectIds(ids)) {
+                if (row != null && row.length >= 2 && row[0] != null && row[1] != null) {
+                    lastActivity.put((Long) row[0], (LocalDateTime) row[1]);
+                }
+            }
+        }
+
         // Batch fetch managers to avoid N+1 (optimization for later, simple loop for now)
         return projects.stream().map(p -> {
             ProjectCardDTO dto = new ProjectCardDTO();
             BeanUtils.copyProperties(p, dto);
+            // 一个文件都没有的空项目回落到项目自身的 updatedAt，不留空
+            dto.setLastActivityAt(lastActivity.getOrDefault(p.getId(), p.getUpdatedAt()));
             
             // Determine Role
             // 1. Check if owner

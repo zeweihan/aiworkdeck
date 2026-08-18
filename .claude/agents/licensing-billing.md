@@ -298,6 +298,26 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 
 ## 核心契约
 
+### 「退出登录」是两层，条件不同（`frontend/src/utils/signOut.js`，2026-08-18）
+
+桌面端此前**全应用没有登出入口**：个人中心那个按钮写着 `v-if="!isDesktop"`，桌面端不渲染；
+能找到的两个近亲各只做一半，且都藏在设置页深处——「系统设置 → 账户与用量 → 断开连接」
+只摘账户，「个人中心 → 设置 → 授权 → 解除授权」只清授权票据。现在收成一个动作，
+入口两处：**个人中心 → 设置 →「登录」组**，以及**应用菜单 `app.logout`（`app:logout`）**。
+
+两层必须分开判，合成一刀会把人关在自己数据外面：
+
+| 本机状态 | 动作 |
+|---|---|
+| 连着账户 + `mode=account` | `disconnectAccount()` 然后 `deactivateLicense()` → 回解锁门 |
+| 连着账户 + `mode=trial`（存量试用码机器） | **只** `disconnectAccount()`，授权不动 |
+| 没连账户 + `mode=trial` | 什么都不做，弹一句说明并指向「解除授权」 |
+
+`mode=trial` 时**绝不能**调 `deactivateLicense()`：官方发布版
+`security.license.trial-code.enabled=false`，解锁门只认账户凭据，清掉试用授权的机器
+再也解锁不回来。收尾一律 `reLaunch` 回 `pages/launch/launch` 重跑分流，
+不自己跳解锁门——解锁与否的判据只有 launch 一处。
+
 ### 试用码格式与验签
 
 `AWD-T-` + RFC4648 大写 base32（无 padding；连字符只作分组，解析时连同空白一起剥掉，大小写不敏感）。
