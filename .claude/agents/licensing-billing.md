@@ -23,6 +23,8 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/service/LicenseService.java` — 授权状态机与落盘。两条解锁路
   （试用码离线验签 / 账户 Key 在线校验）、`~/.aiworkdeck/license.json`（0600）、30 天离线宽限、
   启动期机会性复验（`reverifyOnStartup`，后台线程，失败静默）。
+  **2026-08-18 起官方版关掉试用码那条路**（`security.license.trial-code.enabled`），
+  只剩账户凭据；存量票据有过渡期。见下方「必须账户登录」一节。
 - `backend/src/main/java/com/checkba/service/TrialCodeVerifier.java` — 试用码纯函数验签（无 Spring 依赖）。
 - `backend/src/main/resources/license/trial-public-key.pem` — 内置 Ed25519 公钥
   （**与插件 registry 签名是两套独立密钥对**，别混用）。
@@ -277,10 +279,12 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 解码后**恰为 70 字节** = `payload(6B)` + `Ed25519 签名(64B，对 payload 签)`；
 `payload = [0x01 版本, 0x01 类型 trial, iat_u32_BE 签发秒级时间戳]`。
 公钥内置于 backend resources，**离线验签，解锁全程不联网**。
-验签只校验签名与结构，**不校验 iat 过期**——试用码目前是永久有效的公开码（README「获取与解锁」一节公布），
-解锁页「获取试用码」按钮（`unlock.vue` 的 `TRIAL_CODE_URL`）指向 `https://github.com/zeweihan/aiworkdeck#readme`，
-是整篇 README 的锚点而非节锚点：挪动章节位置不影响它，但**删改 README 里的这枚码，等于弄坏产品里的一个按钮**。
-签发脚本在官网仓（PR-W4），改格式必须两仓同步。
+验签只校验签名与结构，**不校验 iat 过期**——码本身永久有效。
+
+**2026-08-18 起官方发布版不再受理试用码**（见下节「必须账户登录」）：README 里那枚公开码已撤下，
+解锁页的「获取试用码」外链随 `trialCodeEnabled=false` 一并隐藏（原先指向 README 锚点，
+撤码等于弄坏那个按钮，两件事必须同一个 PR 做完）。
+验签实现（`TrialCodeVerifier`）与签发脚本（官网仓 PR-W4）都原样保留，改格式仍要两仓同步。
 
 ### 账户 Key（awdk_）
 
@@ -293,9 +297,38 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 
 | 模式 | 判定 | 宽限 |
 |---|---|---|
-| `trial` | 离线验签通过即解锁，无到期 | 不需要（本就离线） |
-| `account` | `POST {base}/api/license/verify-key` 回 `valid:true` 即解锁 | 30 天未联网复验则 `unlocked:false`，提示联网重验 |
-| 非 local-mode | 团队服务器部署**不设解锁门** | `status()` 恒 `{unlocked:true, mode:"account", plan:"paid"}` |
+| `trial`（`trialCodeEnabled=true`） | 离线验签通过即解锁，无到期 | 不需要（本就离线） |
+| `trial`（`trialCodeEnabled=false`） | **存量票据**：`legacy-grace-until` 未到即解锁 | 到期整体回落 `unlocked:false`；期内带 `graceKind=legacyTrial` + `daysRemaining` |
+| `account` | `POST {base}/api/license/verify-key` 回 `valid:true` 即解锁 | 30 天未联网复验则 `unlocked:false`，提示联网重验；剩 ≤7 天带 `graceKind=offlineReverify` + `daysRemaining` |
+| 非 local-mode | 团队服务器部署**不设解锁门** | `status()` 恒 `{unlocked:true, mode:"account", plan:"paid"}`，不带上面三个字段 |
+
+### 必须账户登录（2026-08-18）
+
+官方发布的桌面版把试用码这条解锁路关掉，解锁门只接受账户凭据（手机号/邮箱登录，或手工粘 `awdk_` Key）。
+配置项在 `application-desktop.yml`：
+
+```yaml
+security.license.trial-code.enabled: false            # 代码里的默认值仍是 true
+security.license.trial-code.legacy-grace-until: "2026-09-30"
+```
+
+四条硬规则：
+
+1. **闸是默认值不是 DRM。** 商业版 / 私有部署 / 自行构建改回 `true` 即完全恢复，刻意不做防篡改。
+   README 有一节告诉自行构建者改哪一行——AGPL 项目不能只把门关上不给钥匙。
+2. **不要改用 `security.local-mode: false` 来达成同一目的。** 那一位是「这是单机桌面版」的判别位，
+   翻它会连带关掉解锁门本身、免费额度、平台 AI 通道、本机设备令牌与切站能力，并让
+   `/api/account/login` 自己锁死（走 `MachineAccountGuard`，非 local-mode 要求先有 session）。
+   完整论证见 `docs/superpowers/specs/2026-08-18-desktop-account-required-design.md` §1。
+3. **`legacy-grace-until` 留空或格式非法一律按已到期处理**，硬期限当天也算到期。安全侧默认：
+   配错一个日期不会变成永久宽限。
+4. **`daysRemaining` / `graceKind` 只在需要提醒时下发**，不需要时 `status()` 的形状与过去一模一样。
+   顶栏 chip（`project-overview.vue` 的 `.trial-chip.grace-chip`）与 unlock 页都只读这两个字段，
+   不自己算日期。
+
+**app-e2e 的连带约束**：发版默认值下全新 `user.home` 起来的后端是 `mode=none`，套件没有任何办法
+解锁它。冷启动跑法要往隔离 `user.home` 播一份存量 `mode=trial` 票据作起点（真实存在的过渡期状态），
+**不要改用 `trial-code.enabled=true`**——那会让发版默认值反而没人测。配方在 `run.mjs` 头部。
 
 在线校验的状态码分类是**跨两个服务共用的一条判据**（`LicenseService.callVerifyKey` 与 `AccountService.handle`）：
 4xx = 明确拒绝（清除本地授权 / UNAUTHORIZED），**5xx 与超时 = 不可达**（保留授权，走宽限）。

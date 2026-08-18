@@ -445,13 +445,24 @@ try {
     await page.waitForSelector('.page-project-list', { timeout: 20000 })
   })
 
-  await step('project-overview 常驻试用版标识', async () => {
-    // 上一步落在项目列表页（启动落点已改），试用标识挂在工作台顶栏上，
+  await step('project-overview 常驻授权标识（宽限期内带倒计时）', async () => {
+    // 上一步落在项目列表页（启动落点已改），授权标识挂在工作台顶栏上，
     // 得先真的进到工作台里
     await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
       { waitUntil: 'domcontentloaded', timeout: 30000 })
     await waitText('资源管理器', 30000)
     await page.waitForSelector('.trial-chip', { timeout: 15000 })
+    // 宽限期内 chip 必须真的把剩余天数写出来——这是「不处理就会被挡在门外」的唯一提示，
+    // 只断言 chip 在不在等于没验（三种状态共用 .trial-chip 这个类）。
+    if (lic0 && lic0.graceKind) {
+      const days = Number(lic0.daysRemaining || 0)
+      await page.waitForFunction((n) => {
+        const el = document.querySelector('.trial-chip .trial-chip-text')
+        return !!el && el.textContent.includes('剩 ' + n + ' 天')
+      }, { timeout: 15000 }, days)
+      const cls = await page.$eval('.trial-chip', (e) => e.className)
+      if (!cls.includes('grace-chip')) throw new Error('宽限态 chip 缺 grace-chip 类（配色不会生效）：' + cls)
+    }
   })
 
   // ============ J2 项目列表页 + 个人中心四 tab ============
