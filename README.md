@@ -68,19 +68,26 @@ Double-click to install. On first launch, a setup wizard lets you pick one AI pr
 
 ## Access & Unlock
 
-The desktop app asks for an unlock code on first launch. There is no account to create and no sign-in: the code is entered once, on this machine, and the workspace opens directly from then on.
+The desktop app asks you to sign in on first launch. Create an account at [aiworkdeck.com](https://www.aiworkdeck.com/start) — on the China site a mobile number and an SMS code is all it takes, and there is no separate registration step: an unrecognised number simply creates the account.
 
-**Public trial code** — copy the whole string, hyphens included:
+After signing in, the desktop app stores an account key on this machine and opens straight into the workspace from then on. **It does not need to be online every time**: authorisation carries a 30-day offline grace period, and any single online start within that window renews it. Aeroplanes and firm intranets are fine — documents open, edit and save as usual.
 
+**If you already hold an account key** (team server, self-hosted deployment, or one you generated yourself on the account page with the `awdk_` prefix), switch to the "Account key" tab on the unlock screen and paste it. That path is unchanged.
+
+Two notes for firms evaluating deployment: authorisation is per machine and is stored locally at `~/.aiworkdeck/`; a self-hosted team deployment (browser access to a shared server) has no unlock gate at all.
+
+### Building it yourself: re-enabling offline trial codes
+
+The offline trial-code path is still in the source; official binaries simply ship with it turned off. When building your own, change
+
+```yaml
+security:
+  license:
+    trial-code:
+      enabled: false
 ```
-AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ-ZQSZ-YY6K-N2H4-6WGB-SDOG-2LM7-JO62-PJDO-ASKY-NYR2-TLGR-YKUE-HYIK
-```
 
-The trial code is verified offline against a public key built into the application, so unlocking works without network access and without sending anything about your machine anywhere. Every feature is available in the trial; the workspace simply carries a discreet "trial" marker in the top bar.
-
-**Full version.** Create an account at [aiworkdeck.com](https://www.aiworkdeck.com), generate an account key (prefix `awdk_`) on the account page, and paste it into the same unlock field. The key is verified online, removes the trial marker, and at the same time connects the desktop app to your account — synchronising anything you have purchased and enabling the hosted AI channel. You can disconnect at any time from the settings page, section 「账户与用量」 (Account & usage).
-
-Two notes for firms evaluating deployment: unlocking is per machine and is stored locally at `~/.aiworkdeck/`; a self-hosted team deployment (browser access to a shared server) has no unlock gate at all.
+in `backend/src/main/resources/application-desktop.yml` to `true` and the previous behaviour returns in full (offline signature verification, no network, nothing about your machine reported anywhere). This is a default value, not a tamper-protection mechanism.
 
 ## Demo
 

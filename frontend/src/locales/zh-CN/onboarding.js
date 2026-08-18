@@ -86,6 +86,10 @@ export default {
     mustBindBody: '你的账户还没有绑定手机号。请到官网账户页完成绑定，之后统一用手机号登录。',
     openWebsite: '前往官网',
     subtitle: '面向法律工作者的 AI 工作台',
+    // 官方版关掉试用码后，这个标签只收账户 Key，三条文案跟着改口
+    keyTab: '账户 Key',
+    keyPlaceholder: '粘贴 awdk_ 开头的账户 Key',
+    keyPasteFirst: '请先粘贴账户 Key',
     codePlaceholder: '粘贴试用码或账户 Key',
     rescueSwitching: '正在切换站点并重试',
     unlocking: '正在解锁',

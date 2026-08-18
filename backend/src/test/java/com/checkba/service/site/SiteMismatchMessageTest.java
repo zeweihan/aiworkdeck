@@ -83,7 +83,7 @@ class SiteMismatchMessageTest {
     @DisplayName("单站形态：文案保持原样，不提站点（说了只会让人困惑）")
     void singleSiteMessageStaysPlain() throws Exception {
         String base = startVerifyKeyStub("{\"valid\":false}");
-        LicenseService license = new LicenseService(true, sites(false, base), tempDir.toString());
+        LicenseService license = new LicenseService(true, sites(false, base), tempDir.toString(), true, "");
 
         String message = String.valueOf(license.activate("awdk_whatever").get("message"));
 
@@ -96,7 +96,7 @@ class SiteMismatchMessageTest {
     @DisplayName("多站形态：点名当前站点与另一站，把「Key 坏了」的指控换成可执行的下一步")
     void multiSiteMessageNamesBothSites() throws Exception {
         String base = startVerifyKeyStub("{\"valid\":false}");
-        LicenseService license = new LicenseService(true, sites(true, base), tempDir.toString());
+        LicenseService license = new LicenseService(true, sites(true, base), tempDir.toString(), true, "");
 
         String message = String.valueOf(license.activate("awdk_whatever").get("message"));
 
@@ -109,7 +109,7 @@ class SiteMismatchMessageTest {
     @Test
     @DisplayName("试用码的错误文案不受站点影响：离线验签与站点无关")
     void trialCodeMessageIsUnaffected() {
-        LicenseService license = new LicenseService(true, sites(true, CN), tempDir.toString());
+        LicenseService license = new LicenseService(true, sites(true, CN), tempDir.toString(), true, "");
 
         String message = String.valueOf(license.activate("AWD-T-NOT-A-REAL-CODE").get("message"));
 
@@ -171,7 +171,7 @@ class SiteMismatchMessageTest {
     @Test
     @DisplayName("deactivateAccountMode：account 票据清掉，trial 票据原样保留")
     void deactivateAccountModeKeepsTrialTicket() throws Exception {
-        LicenseService license = new LicenseService(true, sites(true, CN), tempDir.toString());
+        LicenseService license = new LicenseService(true, sites(true, CN), tempDir.toString(), true, "");
 
         java.nio.file.Files.writeString(tempDir.resolve("license.json"),
                 "{\"mode\":\"trial\",\"code\":\"AWD-T-x\",\"activatedAt\":\"2026-08-08T00:00:00Z\","

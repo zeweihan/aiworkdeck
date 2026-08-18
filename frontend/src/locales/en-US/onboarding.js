@@ -86,6 +86,10 @@ export default {
     mustBindBody: 'Your account has no mobile number linked. Please link one on the website account page; it becomes the sign-in method afterwards.',
     openWebsite: 'Open website',
     subtitle: 'The AI workbench for legal professionals',
+    // Official builds disable trial codes; this tab then only accepts account keys
+    keyTab: 'Account key',
+    keyPlaceholder: 'Paste an account key starting with awdk_',
+    keyPasteFirst: 'Please paste your account key first',
     codePlaceholder: 'Paste a trial code or account key',
     rescueSwitching: 'Switching site and retrying',
     unlocking: 'Unlocking',

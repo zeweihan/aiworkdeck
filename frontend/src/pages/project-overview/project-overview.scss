@@ -374,6 +374,22 @@ $bg-white: #FFFFFF;
     color: #8a6d2f;
   }
 
+  // 宽限预警：同一形状，比「试用版」再暖一档并加重字重。
+  // 刻意不用红——这不是错误，是一条有剩余时间的提醒；红色会让用户以为文档出了事。
+  &.grace-chip {
+    background: #fdefe0;
+    border-color: #eec9a0;
+
+    &:hover {
+      border-color: #d9a967;
+    }
+
+    .trial-chip-text {
+      color: #97551a;
+      font-weight: 600;
+    }
+  }
+
   // 已连接账户：同一形状换绿系，与「试用版」的暖色区分开
   &.account-chip {
     background: $color-accent-pale;

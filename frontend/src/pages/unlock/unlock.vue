@@ -12,7 +12,7 @@
           {{ $t('onboarding.unlock.loginTab') }}
         </text>
         <text class="unlock-tab" :class="{ 'is-active': mode === 'code' }" @tap="switchMode('code')">
-          {{ $t('onboarding.unlock.codeTab') }}
+          {{ codeTabLabel }}
         </text>
       </view>
 
@@ -73,7 +73,7 @@
         <textarea
           class="unlock-input"
           v-model="code"
-          :placeholder="$t('onboarding.unlock.codePlaceholder')"
+          :placeholder="codePlaceholder"
           placeholder-class="unlock-placeholder"
           :maxlength="-1"
         />
@@ -102,8 +102,10 @@
       </view>
 
       <view class="unlock-links">
-        <text class="unlock-link" @tap="openTrialCodePage">{{ $t('onboarding.unlock.getTrialCode') }}</text>
-        <text class="unlock-link-sep">|</text>
+        <template v-if="trialCodeEnabled">
+          <text class="unlock-link" @tap="openTrialCodePage">{{ $t('onboarding.unlock.getTrialCode') }}</text>
+          <text class="unlock-link-sep">|</text>
+        </template>
         <text class="unlock-link" @tap="openOfficialSite">{{ $t('onboarding.unlock.getFullVersion') }}</text>
         <!-- 单站形态（multiSite=false）下整段不渲染，用户看不到任何变化 -->
         <template v-if="showSiteRow">
@@ -117,7 +119,7 @@
 </template>
 
 <script>
-import { activateLicense, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount } from '@/services/api.js'
+import { activateLicense, getLicenseStatus, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js'
 
@@ -131,6 +133,10 @@ export default {
       code: '',
       errorMsg: '',
       unlocking: false,
+      // 官方发布版关掉了试用码这条解锁路（后端 security.license.trial-code.enabled）。
+      // 判据只有后端一处，前端不自己猜；查不到时按 true 渲染——老后端与查询失败
+      // 都不该把「试用码 / Key」这一整页藏掉，那会让手工粘 Key 的人无路可走。
+      trialCodeEnabled: true,
       // 站点第一次真正生效就是解锁请求，所以站点选择必须落在这一页：
       // 启动分流页不承载业务 UI，首启向导与设置页都在解锁之后
       siteStatus: { current: '', pinned: false, multiSite: false, sites: [] },
@@ -196,13 +202,39 @@ export default {
     normalizedCode() {
       return (this.code || '').replace(/\s+/g, '')
     },
+    /** 关掉试用码之后这个标签事实上只收账户 Key，名字与提示都要跟着改口。 */
+    codeTabLabel() {
+      return this.trialCodeEnabled
+        ? this.$t('onboarding.unlock.codeTab')
+        : this.$t('onboarding.unlock.keyTab')
+    },
+    codePlaceholder() {
+      return this.trialCodeEnabled
+        ? this.$t('onboarding.unlock.codePlaceholder')
+        : this.$t('onboarding.unlock.keyPlaceholder')
+    },
+    emptyInputHint() {
+      return this.trialCodeEnabled
+        ? this.$t('onboarding.unlock.pasteFirst')
+        : this.$t('onboarding.unlock.keyPasteFirst')
+    },
   },
   onLoad() {
     // 两个请求都不能阻塞解锁：失败一律按单站处理
     loadSiteLinks()
     this.refreshSiteStatus()
+    this.refreshTrialGate()
   },
   methods: {
+    /** 试用码这条路还开不开。失败一律按「开着」处理，不拦路（见 data 里的注释）。 */
+    async refreshTrialGate() {
+      try {
+        const s = await getLicenseStatus()
+        this.trialCodeEnabled = !(s && s.trialCodeEnabled === false)
+      } catch (e) {
+        console.warn('读取解锁门配置失败（按试用码可用渲染）:', e && e.message)
+      }
+    },
     async refreshSiteStatus() {
       try {
         const s = await getSiteStatus()
@@ -315,7 +347,7 @@ export default {
     async handleUnlock() {
       const code = this.normalizedCode
       if (!code) {
-        this.errorMsg = this.$t('onboarding.unlock.pasteFirst')
+        this.errorMsg = this.emptyInputHint
         return
       }
       this.errorMsg = ''

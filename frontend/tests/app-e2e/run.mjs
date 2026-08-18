@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 全应用"真人模拟"e2e / whole-app human-simulation e2e (browser target).
 //
-// 从桌面首启解锁门（launch → unlock，试用码真实打字解锁）开始，以真实鼠标点击
+// 从桌面首启解锁门（launch → unlock）开始，以真实鼠标点击
 // 走完核心用户旅程：项目列表页、个人中心四 tab、三级导航（列表→概览页→工作台，
 // 含概览页档案手填落库）、上传文件（含 >5MB 分片路径回归）、
 // 打开文件、左栏功能区、独立页面——全程收集控制台错误 / 失败 API / 可疑文案，
@@ -12,11 +12,30 @@
 //       PR-A（商业化改造去登录）之后的 local-mode 桌面后端——默认 9696
 //       （打包版常驻即可）；冷启动联调可用新 jar 在 9797 顶班
 //       （SPRING_PROFILES_ACTIVE=desktop + 隔离 user.home/H2/cwd）。
+//
+//       **冷启动的新后端必须先有解锁起点**（2026-08 官方版必须账户登录之后的新约束）：
+//       发版默认值关掉了试用码，全新 user.home 起来的后端是 mode=none，而本套件
+//       没有任何办法把它解锁——唯一的路是账户凭据，要真实手机号与官网。
+//       正确做法是往隔离 user.home 里播一份**存量 trial 票据**（这是真实存在的
+//       过渡期状态，不是绕过闸）：
+//
+//         mkdir -p $HOME_E2E/.aiworkdeck && cat > $HOME_E2E/.aiworkdeck/license.json <<'EOF'
+//         { "mode":"trial", "code":"AWD-T-SEEDED-FOR-E2E",
+//           "activatedAt":"<ISO8601 now>", "lastVerifiedAt":"<ISO8601 now>" }
+//         EOF
+//
+//       只要今天早于 application-desktop.yml 里的 legacy-grace-until（默认 2026-09-30），
+//       后端就是已解锁状态，顺带让 J1 的顶栏 chip 断言覆盖到「试用版 · 剩 N 天」。
+//       **不要改用 -Dsecurity.license.trial-code.enabled=true 来解锁**——那会让 J1
+//       走回旧分支，发版默认值反而没人测。
 // 自包含：local-mode 免登（任何请求都解析为本机用户，qa_bot 注册已随登录一起
 //       消亡），自建 BLANK 项目；只读 admin 页面，绝不保存全局配置、绝不触发
-//       向导重置。注意：J1 需要「未解锁」起点，若后端已解锁会先 deactivate，
-//       跑完停留在试用版状态——对着真实长驻后端跑时若原状态是账户模式，
-//       会在报告里给出无法自动还原的警告。
+//       向导重置。J1 按后端的 trialCodeEnabled 分两条走（2026-08 官方版必须账户登录）：
+//       试用码仍开着（fork / 本地构建 / 旧打包后端）走原来的「deactivate → 真码解锁」
+//       全链路；试用码已关（发版默认值）则**完全不动后端状态**，直接进 unlock 页
+//       断言门的形态与拒绝文案，跑完后端仍是原样。
+//       另外 deactivate 只在原状态是 trial 时才做——原先对账户模式也照 deactivate，
+//       而那是还原不回去的（run.mjs 自己在报告里道歉），现在直接不碰。
 //
 // 桌面环境假冒：launch/unlock/userprofile 等页面用 window.checkbaDesktop 存在性
 // 判定桌面（免登）语境，浏览器目标全程注入一个最小桩（shell.openExternal）。
@@ -262,14 +281,87 @@ try {
     try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* ignore */ }
   })
 
-  // J1 需要「未解锁」起点。对着已解锁的长驻后端跑时先 deactivate（跑完停在
-  // 试用版）；原状态若是账户模式无法自动还原，如实警告。
-  {
-    const lic0 = await api('/api/license/status')
-    if (lic0 && lic0.unlocked) {
-      if (lic0.mode && lic0.mode !== 'trial') {
-        note('warn', '后端原授权模式为 ' + lic0.mode + '，J1 将 deactivate 且只能还原为 trial，需手工重连账户')
+  // 后端的解锁门形态。trialCodeEnabled=false 是发版默认值（官方版必须账户登录）；
+  // 缺字段 = 旧后端，按 true 处理，与改动前行为一致。
+  const lic0 = await api('/api/license/status')
+  const trialGateOpen = !(lic0 && lic0.trialCodeEnabled === false)
+  // 破坏性链路（deactivate → 重新解锁）只在两个条件同时成立时才跑：
+  //  1. 试用码这条路还开着——否则解锁不回来，长驻后端会被打成砖；
+  //  2. 原状态不是账户模式——那种 deactivate 之后还原不回去（要用户手工重连）。
+  const accountMode = !!(lic0 && lic0.unlocked && lic0.mode && lic0.mode !== 'trial')
+  const canRunUnlockChain = trialGateOpen && !accountMode
+
+  if (!canRunUnlockChain) {
+    // ---- 发版默认值：试用码这条解锁路已关 ----
+    // 这里刻意不 deactivate：关掉试用码之后本套件没有任何办法把后端再解锁回来
+    // （唯一的路是账户凭据，要真实手机号与官网），deactivate 一下就等于把长驻
+    // 后端打成砖，后面 J2-J12 全部陪葬。unlock 页本身是一个普通页面，直接进去
+    // 就能验门的形态，不需要先把机器锁上。
+    note('info', trialGateOpen
+      ? '后端原授权模式为 ' + (lic0 && lic0.mode) + '（deactivate 后还原不回来），J1 走非破坏性分支'
+      : '后端已关闭试用码解锁（发版默认值），J1 走非破坏性分支，不改动后端授权状态')
+    if (trialGateOpen) {
+      note('skip', 'J1 破坏性解锁链路（坏码报错 / 真码解锁 / 向导巡检）本轮未覆盖')
+    }
+
+    await step('unlock 页给得出解锁门的出路', async () => {
+      await page.goto(BASE + '/#/pages/unlock/unlock', { waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.waitForSelector('.unlock-tabs', { timeout: 20000 })
+      if (!trialGateOpen) {
+        // 等 trialCodeEnabled 拉回来（异步），第二个标签从「试用码 / Key」换成「账户 Key」
+        await page.waitForFunction(() => {
+          const tabs = Array.from(document.querySelectorAll('.unlock-tab')).map((t) => t.textContent.trim())
+          return tabs.length === 2 && tabs[1].includes('账户 Key')
+        }, { timeout: 15000 })
       }
+      const tabs = await page.$$eval('.unlock-tab', (els) => els.map((e) => ({
+        text: e.textContent.trim(), active: e.className.includes('is-active'),
+      })))
+      // 这两条是 PR#408 的契约，与试用码开关无关：账户登录必须在、且是默认落点
+      if (!tabs[0].text.includes('账户登录')) throw new Error('第一个标签不是「账户登录」：' + tabs[0].text)
+      if (!tabs[0].active) throw new Error('「账户登录」必须是默认标签，否则新用户进来先看到的是一条走不通的路')
+      if (!trialGateOpen) {
+        if (tabs[1].text.includes('试用码')) throw new Error('试用码已关闭，标签不该还叫「试用码」：' + tabs[1].text)
+        // 「获取试用码」外链指向 README 里已经撤掉的那枚码，必须一并消失
+        const t = await textOf()
+        if (t.includes('获取试用码')) throw new Error('试用码已关闭，页面仍留着「获取试用码」外链')
+      }
+    })
+
+    if (!trialGateOpen) await step('粘试用码被拒且报错说清还剩哪条路', async () => {
+      await mouseClickSel('.unlock-tab:nth-child(2)')
+      await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+      await page.type('.unlock-input textarea', TRIAL_CODE.slice(0, 40))
+      await sleep(250); await page.type('.unlock-input textarea', TRIAL_CODE.slice(40)); await sleep(250)
+      await mouseClickSel('.unlock-btn')
+      await page.waitForFunction(() => {
+        const el = document.querySelector('.unlock-error')
+        return !!el && el.textContent.includes('试用码已停用')
+      }, { timeout: 15000 })
+      const err = await page.$eval('.unlock-error', (e) => e.textContent)
+      if (!err.includes('awdk_')) throw new Error('拒绝文案没给出剩下那条路（awdk_ 账户 Key）：' + err)
+    })
+
+    await step('后端授权状态未被 J1 改动', async () => {
+      const after = await api('/api/license/status')
+      if (JSON.stringify(after && after.mode) !== JSON.stringify(lic0 && lic0.mode)) {
+        throw new Error('J1 改动了后端授权模式：' + (lic0 && lic0.mode) + ' -> ' + (after && after.mode))
+      }
+    })
+
+    // 回到正常起点，J2 起照常
+    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForFunction(() => !location.hash.includes('pages/unlock/unlock'), { timeout: 30000 })
+  } else {
+
+  // ---- 试用码仍开着（fork / 本地构建 / 旧打包后端）：原全链路一字未改 ----
+  // J1 需要「未解锁」起点。只在原状态是 trial 时 deactivate——账户模式还原不回来，
+  // 不碰它，改跑上面那条非破坏性断言。
+  {
+    if (lic0 && lic0.unlocked && lic0.mode && lic0.mode !== 'trial') {
+      note('skip', '后端原授权模式为 ' + lic0.mode + '（deactivate 后无法自动还原），跳过 J1 破坏性解锁链路')
+    } else if (lic0 && lic0.unlocked) {
       await api('/api/license/deactivate', { method: 'POST' })
     }
   }
@@ -335,6 +427,8 @@ try {
     if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
   })
 
+  } // ---- J1 两条分支到此合流：下面两步在两种形态下都要成立 ----
+
   await step('已解锁重启 → 落项目列表页（即使有最近项目）', async () => {
     // uni h5 getStorageSync 兼容裸字符串
     await page.evaluate((id) => localStorage.setItem('checkba_last_project_id', String(id)), QA.projectId)
@@ -351,13 +445,24 @@ try {
     await page.waitForSelector('.page-project-list', { timeout: 20000 })
   })
 
-  await step('project-overview 常驻试用版标识', async () => {
-    // 上一步落在项目列表页（启动落点已改），试用标识挂在工作台顶栏上，
+  await step('project-overview 常驻授权标识（宽限期内带倒计时）', async () => {
+    // 上一步落在项目列表页（启动落点已改），授权标识挂在工作台顶栏上，
     // 得先真的进到工作台里
     await page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + QA.projectId,
       { waitUntil: 'domcontentloaded', timeout: 30000 })
     await waitText('资源管理器', 30000)
     await page.waitForSelector('.trial-chip', { timeout: 15000 })
+    // 宽限期内 chip 必须真的把剩余天数写出来——这是「不处理就会被挡在门外」的唯一提示，
+    // 只断言 chip 在不在等于没验（三种状态共用 .trial-chip 这个类）。
+    if (lic0 && lic0.graceKind) {
+      const days = Number(lic0.daysRemaining || 0)
+      await page.waitForFunction((n) => {
+        const el = document.querySelector('.trial-chip .trial-chip-text')
+        return !!el && el.textContent.includes('剩 ' + n + ' 天')
+      }, { timeout: 15000 }, days)
+      const cls = await page.$eval('.trial-chip', (e) => e.className)
+      if (!cls.includes('grace-chip')) throw new Error('宽限态 chip 缺 grace-chip 类（配色不会生效）：' + cls)
+    }
   })
 
   // ============ J2 项目列表页 + 个人中心四 tab ============
