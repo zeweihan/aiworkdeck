@@ -39,6 +39,21 @@ security:
     # 单机本地默认口令，与向导页提示一致。云端 profile 不设此项：
     # DataInitializer 届时随机生成一次性强口令，避免服务器出现众所周知的默认口令。
     initial-password: "123"
+  # 官方发布的桌面版：解锁门只接受账户凭据（手机号/邮箱登录，或手工粘 awdk_ Key），
+  # 试用码这条离线解锁路关闭。**这是默认值不是 DRM**——商业版、私有部署、自行 fork
+  # 把 enabled 改回 true 即完全恢复原行为，刻意不做防篡改。
+  #
+  # 之所以关这一项而不是翻 security.local-mode（立项书原方案）：那一位是「这是单机桌面版」
+  # 的判别位，不是「要不要登录」的开关。翻它会连带关掉解锁门本身、剪贴板/缓存区免费额度、
+  # 平台 AI 通道、本机设备令牌与切站能力，并让 /api/account/login 自己把自己锁死。
+  # 完整论证见 docs/superpowers/specs/2026-08-18-desktop-account-required-design.md §1。
+  license:
+    trial-code:
+      enabled: false
+      # 存量用试用码解锁的机器的过渡期硬期限：期内照常可用并倒计时提醒，到期才落回未解锁。
+      # 与官网手机号补绑同一天（docs/.../2026-08-17-phone-login-design.md §5），
+      # 让老用户只被打扰一次。留空或写错格式一律按「已到期」处理（安全侧默认）。
+      legacy-grace-until: "2026-09-30"
   # IDE 化「打开本机文件夹作为项目」。单机版的「服务器」就是用户自己的电脑，读自己的磁盘正是本意；
   # 共享部署里同一个接口等于让任意租户挂载任意绝对路径当项目根，故云端 profile 不设此项（默认 false）。
   local-folder-projects:

@@ -161,7 +161,7 @@ trialEnabled          -> unlockedStatus("trial","trial",...)          （fork/�
 - 删 `README.md` 的公开试用码段（当前 :73-79），换成「注册账号（手机号）即可使用」+ 指向官网 `/start`。
 - 加一节告诉自行构建者：改 `security.license.trial-code.enabled` 一行即恢复离线试用。
   AGPL 项目不能只把门关上不给钥匙。
-- `README_EN.md` 同步。
+- `README.zh-CN.md` 同步（英文是 `README.md`，中文是 `README.zh-CN.md`）。
 
 ## 10. 上线顺序（硬约束）
 
@@ -208,8 +208,20 @@ trialEnabled          -> unlockedStatus("trial","trial",...)          （fork/�
 
 J2-J12 继续跑在原后端上，**不再被 deactivate**。
 
+实际落地时把「自起隔离后端」这一步省掉了：unlock 页是一个普通页面，直接导航进去
+就能验门的形态，不需要先把机器锁上。破坏性链路（deactivate → 重新解锁）改为只在
+**两个条件同时成立**时才跑——试用码这条路还开着（否则解锁不回来，长驻后端会被打成砖），
+且原状态不是账户模式（那种 deactivate 之后还原不回去）。两条都不成立时走非破坏性
+分支并 `note('skip')`，不静默假绿。
+
 **不用 `trial-code.enabled=true` 糊绿 e2e。** 那等于被测对象唯一覆盖的那个默认值反而没人测
 （见记忆 `feedback-no-bypass-for-flaky-gates`）。
+
+**实现时发现的新约束**：发版默认值下，全新 `user.home` 起来的后端是 `mode=none`，
+而本套件没有任何办法解锁它（唯一的路是账户凭据，要真实手机号与官网）。
+冷启动跑法必须先往隔离 `user.home` 里播一份**存量 trial 票据**——那是真实存在的
+过渡期状态，不是绕过闸，且顺带让顶栏 chip 断言覆盖到「试用版 · 剩 N 天」。
+配方已写进 `frontend/tests/app-e2e/run.mjs` 头部。
 
 **其余**：`check:emits`、`check:locales`（新增文案两语言）、`build:h5`。
 

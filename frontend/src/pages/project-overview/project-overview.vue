@@ -100,10 +100,19 @@
       </view>
 
       <view class="header-right">
-        <!-- 授权标识（低调 chip）：已连接账户优先于试用版——
-             试用码解锁后再连账户的用户，此时该看到的是账户状态 -->
+        <!-- 授权标识（低调 chip）。优先级：宽限预警 > 已连接账户 > 试用版。
+             预警排最前是因为它是三者里唯一「不处理就会被挡在门外」的一条；
+             另外两个都只是状态标注（试用码解锁后再连账户的用户该看到账户状态）。 -->
         <view
-          v-if="accountConnected"
+          v-if="graceKind"
+          class="trial-chip grace-chip"
+          @tap.stop="showTrialInfo = true"
+          :title="graceTitle"
+        >
+          <text class="trial-chip-text">{{ graceChipText }}</text>
+        </view>
+        <view
+          v-else-if="accountConnected"
           class="trial-chip account-chip"
           @tap.stop="goToAccountPanel"
           :title="$t('workbench.accountUsage')"
@@ -1452,18 +1461,18 @@
         @close="commandPaletteVisible = false"
       />
 
-      <!-- 试用版说明弹窗 -->
+      <!-- 试用版 / 宽限预警说明弹窗（同一个壳，文案与主按钮随 graceKind 切换） -->
       <view v-if="showTrialInfo" class="awd-dialog-mask" @tap="showTrialInfo = false">
         <view class="awd-dialog" @tap.stop>
           <view class="awd-dialog-header">
-            <text class="awd-dialog-title">{{ $t('workbench.trialBadge') }}</text>
+            <text class="awd-dialog-title">{{ graceTitle }}</text>
           </view>
           <view class="awd-dialog-body">
-            <text class="awd-dialog-text">{{ $t('workbench.trialInfoBody') }}</text>
+            <text class="awd-dialog-text">{{ graceBody }}</text>
           </view>
           <view class="awd-dialog-footer">
             <button class="awd-btn awd-btn-secondary" @tap="showTrialInfo = false">{{ $t('workbench.gotIt') }}</button>
-            <button class="awd-btn awd-btn-primary" @tap="openUpgradeSite">{{ $t('workbench.learnFullVersion') }}</button>
+            <button class="awd-btn awd-btn-primary" @tap="graceAction">{{ graceActionLabel }}</button>
           </view>
         </view>
       </view>
@@ -1688,6 +1697,9 @@ export default {
       showTrialInfo: false,
       // 账户连接状态（商业化 PR-B）：已连接时 chip 改显「已连接账户」
       accountConnected: false,
+      // 宽限预警（2026-08 官方版必须账户登录）：'legacyTrial' | 'offlineReverify' | ''
+      graceKind: '',
+      graceDays: 0,
 
       // 布局状态
       sidebarWidth: 260, // 侧边栏宽度
@@ -1920,6 +1932,37 @@ export default {
   computed: {
     GLYPHS() {
       return GLYPHS
+    },
+    /**
+     * 顶栏宽限 chip 与说明弹窗的文案。两种宽限共用一个壳，只有文案与主按钮不同：
+     * - legacyTrial：存量试用票据的过渡期，出路是登录账户（去官网注册）；
+     * - offlineReverify：账户授权快到 30 天未复验，出路是联网启动一次（或找人工）。
+     * graceKind 为空时这些值不会被渲染，但仍要给出合法回退——弹窗壳是共用的，
+     * 试用版 chip 点开走的也是同一个弹窗。
+     */
+    graceChipText() {
+      if (this.graceKind === 'legacyTrial') {
+        return this.$t('workbench.trialCountdown', { n: this.graceDays })
+      }
+      return this.$t('workbench.reverifyCountdown', { n: this.graceDays })
+    },
+    graceTitle() {
+      if (this.graceKind === 'legacyTrial') return this.$t('workbench.graceLegacyTitle')
+      if (this.graceKind === 'offlineReverify') return this.$t('workbench.graceReverifyTitle')
+      return this.$t('workbench.trialBadge')
+    },
+    graceBody() {
+      if (this.graceKind === 'legacyTrial') {
+        return this.$t('workbench.graceLegacyBody', { n: this.graceDays })
+      }
+      if (this.graceKind === 'offlineReverify') {
+        return this.$t('workbench.graceReverifyBody', { n: this.graceDays })
+      }
+      return this.$t('workbench.trialInfoBody')
+    },
+    graceActionLabel() {
+      if (this.graceKind === 'offlineReverify') return this.$t('workbench.openAccountPanel')
+      return this.$t('workbench.learnFullVersion')
     },
     /** rail 上「项目概览」按钮的高亮态：该标签是当前活跃窗格的活跃标签 */
     isProjectHomeTabActive() {
@@ -2846,10 +2889,24 @@ export default {
         this.licenseMode = (status && status.mode) || ''
         // 旧后端没有该字段：按未连接处理，与改动前查不到账户状态时的行为一致
         this.accountConnected = !!(status && status.accountConnected)
+        // 宽限预警：后端只在真的需要提醒时才下发这两个字段（存量试用倒计时 /
+        // 账户离线复验剩 ≤7 天），不需要提醒时形状与过去一模一样。
+        this.graceKind = (status && status.graceKind) || ''
+        this.graceDays = Number((status && status.daysRemaining) || 0)
       } catch (e) {
         // 服务器模式/旧后端没有该端点：静默忽略
         this.accountConnected = false
+        this.graceKind = ''
       }
+    },
+    /** 宽限弹窗的主按钮：联网复验那条去账户设置，其余去官网。 */
+    graceAction() {
+      if (this.graceKind === 'offlineReverify') {
+        this.showTrialInfo = false
+        this.goToAccountPanel()
+        return
+      }
+      this.openUpgradeSite()
     },
     // chip 点击直达设置页「账户与用量」面板
     goToAccountPanel() {

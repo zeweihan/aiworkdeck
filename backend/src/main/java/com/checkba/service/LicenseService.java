@@ -17,6 +17,9 @@ import java.nio.file.Path;
 import java.security.PublicKey;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -31,15 +34,39 @@ import java.util.Map;
  * account 模式启动时机会性复验；断网 30 天宽限，超期 status 回落未解锁并提示联网复验。
  *
  * 非 local-mode（团队服务器）部署不设解锁门：status 恒为已解锁正式版。
+ *
+ * <h3>官方版必须账户登录（2026-08-18）</h3>
+ * 官方发布的桌面版把试用码这条解锁路关掉（{@code security.license.trial-code.enabled=false}，
+ * 见 application-desktop.yml），解锁门只接受账户凭据——手机号/邮箱登录，或手工粘 {@code awdk_} Key。
+ * 商业版 / 私有部署 / 自行 fork 把该项改回 {@code true} 即完全恢复原行为。
+ *
+ * <p><b>这个闸是默认值不是 DRM</b>：代码里的默认值仍是 {@code true}，
+ * 关闭只发生在 desktop profile 的那一行 yml 上，刻意不做防篡改。
+ * 之所以不改 {@code security.local-mode}（立项书原方案），是因为那一位是
+ * 「这是单机桌面版」的判别位而非「要不要登录」的开关——翻它会连带关掉解锁门本身、
+ * 免费额度、平台 AI 通道、本机设备令牌与切站能力，还会让 {@code /api/account/login}
+ * 自己把自己锁死（该端点走 MachineAccountGuard，非 local-mode 要求先有 session）。
+ * 完整论证见 docs/superpowers/specs/2026-08-18-desktop-account-required-design.md §1。
+ *
+ * <p>存量用试用码解锁的机器有一段过渡期（{@code legacy-grace-until}，默认与官网手机号
+ * 补绑同一天），期内照常可用并倒计时提醒，到期才落回未解锁。数据始终在本机 H2 库里，
+ * 被挡住的用户一条也没丢。
  */
 @Service
 @Slf4j
 public class LicenseService {
 
     static final Duration OFFLINE_GRACE = Duration.ofDays(30);
+
+    /** 离线宽限剩余不足这么多天时，status 开始附 graceKind/daysRemaining 供顶栏预警。 */
+    static final long GRACE_WARNING_DAYS = 7;
+
     private static final Duration VERIFY_TIMEOUT = Duration.ofSeconds(5);
 
     private final boolean localMode;
+    private final boolean trialCodeEnabled;
+    /** 存量 trial 票据的宽限硬期限；null = 无宽限（缺省或配置非法时按已到期处理）。 */
+    private final LocalDate legacyTrialGraceUntil;
     private final com.checkba.service.site.SiteProfileService siteProfileService;
     private final Path licenseFile;
     // 解析失败的异常 message 不许带原文——license.json 里存着明文 awdk_ 账户 Key
@@ -50,8 +77,12 @@ public class LicenseService {
     public LicenseService(
             @Value("${security.local-mode:false}") boolean localMode,
             com.checkba.service.site.SiteProfileService siteProfileService,
-            @Value("${security.license.dir:${user.home}/.aiworkdeck}") String licenseDir) {
+            @Value("${security.license.dir:${user.home}/.aiworkdeck}") String licenseDir,
+            @Value("${security.license.trial-code.enabled:true}") boolean trialCodeEnabled,
+            @Value("${security.license.trial-code.legacy-grace-until:}") String legacyGraceUntil) {
         this.localMode = localMode;
+        this.trialCodeEnabled = trialCodeEnabled;
+        this.legacyTrialGraceUntil = parseGraceDate(legacyGraceUntil);
         // 授权服务器地址由站点决定（协议校验在 SiteProfileService 里，与 AccountService 共用
         // AccountEndpoint 那一份实现：https，回环 http 例外）。切站后当场改指向。
         this.siteProfileService = siteProfileService;
@@ -114,23 +145,59 @@ public class LicenseService {
             // 团队服务器部署不设解锁门
             return Map.of("unlocked", true, "mode", "account", "plan", "paid");
         }
-        State state = loadState();
+        Map<String, Object> result = statusOf(loadState());
+        // 解锁页据此决定还要不要渲染「试用码」标签：判据只有后端一处，前端不自己猜
+        result.put("trialCodeEnabled", trialCodeEnabled);
+        return result;
+    }
+
+    /** local-mode 下按票据模式分派。 */
+    private Map<String, Object> statusOf(State state) {
         switch (state.mode == null ? "none" : state.mode) {
-            case "trial":
-                return unlockedStatus("trial", "trial", state.activatedAt);
-            case "account": {
-                if (withinOfflineGrace(state)) {
-                    return unlockedStatus("account", "paid", state.activatedAt);
+            case "trial": {
+                if (trialCodeEnabled) {
+                    return unlockedStatus("trial", "trial", state.activatedAt);
                 }
-                Map<String, Object> result = new HashMap<>();
-                result.put("unlocked", false);
-                result.put("mode", "account");
-                result.put("plan", "paid");
-                result.put("message", "账户授权已超过 30 天未联网复验，需联网重新验证");
-                return result;
+                // 官方版关掉试用码之后，存量票据走过渡期：期内照常可用 + 倒计时
+                long days = legacyTrialDaysRemaining();
+                if (days <= 0) {
+                    Map<String, Object> expired = new HashMap<>();
+                    expired.put("unlocked", false);
+                    expired.put("mode", "trial");
+                    expired.put("plan", "trial");
+                    expired.put("message", legacyTrialExpiredMessage());
+                    return expired;
+                }
+                Map<String, Object> ok = unlockedStatus("trial", "trial", state.activatedAt);
+                ok.put("graceKind", "legacyTrial");
+                ok.put("daysRemaining", days);
+                return ok;
             }
-            default:
-                return Map.of("unlocked", false, "mode", "none", "plan", "none");
+            case "account": {
+                long days = offlineGraceDaysRemaining(state);
+                if (days > 0) {
+                    Map<String, Object> ok = unlockedStatus("account", "paid", state.activatedAt);
+                    // 只在临门几天才带这两个字段：不需要提醒时前端拿到的形状和过去一模一样
+                    if (days <= GRACE_WARNING_DAYS) {
+                        ok.put("graceKind", "offlineReverify");
+                        ok.put("daysRemaining", days);
+                    }
+                    return ok;
+                }
+                Map<String, Object> expired = new HashMap<>();
+                expired.put("unlocked", false);
+                expired.put("mode", "account");
+                expired.put("plan", "paid");
+                expired.put("message", offlineGraceExpiredMessage());
+                return expired;
+            }
+            default: {
+                Map<String, Object> none = new HashMap<>();
+                none.put("unlocked", false);
+                none.put("mode", "none");
+                none.put("plan", "none");
+                return none;
+            }
         }
     }
 
@@ -146,6 +213,11 @@ public class LicenseService {
         String trimmed = code.trim();
         if (trimmed.startsWith("awdk_")) {
             return activateAccountKey(trimmed);
+        }
+        // 官方版：试用码不再是解锁路。这里兜住的是「非 awdk_ 的一切输入」而不只是 AWD-T-，
+        // 因为关掉之后这个输入框事实上只收账户 Key，文案要把两条可用的路都说清楚。
+        if (!trialCodeEnabled) {
+            return failure(trialDisabledMessage());
         }
         return activateTrialCode(trimmed);
     }
@@ -291,14 +363,77 @@ public class LicenseService {
 
     // ==================== 状态与工具 ====================
 
-    private boolean withinOfflineGrace(State state) {
+    /**
+     * 离线宽限还剩几天（向上取整；0 表示已耗尽）。
+     *
+     * <p>向上取整是为了让文案不说谎：还剩 6 天零 3 小时时显示「剩 7 天」偏保守，
+     * 显示「剩 6 天」则会在用户眼里提前一天到期。锚点缺失或格式非法一律按已耗尽处理
+     * （安全侧默认：坏掉的票据不该换来无限宽限）。
+     */
+    private long offlineGraceDaysRemaining(State state) {
         String anchor = state.lastVerifiedAt != null ? state.lastVerifiedAt : state.activatedAt;
-        if (anchor == null) return false;
+        if (anchor == null) return 0;
         try {
-            return Instant.parse(anchor).plus(OFFLINE_GRACE).isAfter(Instant.now());
+            Instant deadline = Instant.parse(anchor).plus(OFFLINE_GRACE);
+            long seconds = Duration.between(Instant.now(), deadline).getSeconds();
+            if (seconds <= 0) return 0;
+            return (long) Math.ceil(seconds / 86400.0);
         } catch (Exception e) {
-            return false;
+            return 0;
         }
+    }
+
+    /**
+     * 存量 trial 票据的过渡期还剩几天（0 表示已到期）。
+     *
+     * <p>{@code legacy-grace-until} 缺省或格式非法时返回 0——安全侧默认，
+     * 配错一个日期不会变成永久宽限。硬期限当天也算到期（那一天已经用完了）。
+     */
+    private long legacyTrialDaysRemaining() {
+        if (legacyTrialGraceUntil == null) return 0;
+        long days = ChronoUnit.DAYS.between(LocalDate.now(), legacyTrialGraceUntil);
+        return Math.max(0, days);
+    }
+
+    /** 配置里的宽限硬期限；空串是「没配」，非法值要吼一声再按没配处理。 */
+    private static LocalDate parseGraceDate(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return LocalDate.parse(raw.trim());
+        } catch (DateTimeParseException e) {
+            log.warn("security.license.trial-code.legacy-grace-until 格式非法（{}），"
+                    + "存量试用票据按已到期处理", raw);
+            return null;
+        }
+    }
+
+    // ==================== 文案 ====================
+    // 这三条会出现在被挡在门外的用户眼前，是他们唯一的信息来源，必须给出路。
+    // 用 LangText 双语：解锁页在 EN 版同样会显示它们。
+
+    private String trialDisabledMessage() {
+        return LangText.of(
+                "试用码已停用。用手机号登录账户即可继续使用，或粘贴 awdk_ 开头的账户 Key。",
+                "Trial codes are no longer accepted. Sign in with your phone number to continue, "
+                        + "or paste an account key starting with awdk_.");
+    }
+
+    private String legacyTrialExpiredMessage() {
+        return LangText.of(
+                "试用期已结束。你的项目和文件都还在这台电脑上，一条都没有丢失——"
+                        + "登录账户后即可照常打开。遇到问题联系 hi@aiworkdeck.com。",
+                "Your trial has ended. Every project and file is still on this computer and "
+                        + "nothing has been lost - sign in to your account to open them as usual. "
+                        + "Contact hi@aiworkdeck.com if you need help.");
+    }
+
+    private String offlineGraceExpiredMessage() {
+        return LangText.of(
+                "账户授权已超过 30 天未联网复验，需联网重新验证。"
+                        + "如果这台电脑长期无法访问外网，联系 hi@aiworkdeck.com 申请离线授权。",
+                "This account has not been re-verified online for over 30 days and needs to "
+                        + "reconnect. If this computer has no internet access, contact "
+                        + "hi@aiworkdeck.com for an offline licence.");
     }
 
     State loadState() {
