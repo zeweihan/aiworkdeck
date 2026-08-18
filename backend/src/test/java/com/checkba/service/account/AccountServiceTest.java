@@ -91,6 +91,28 @@ class AccountServiceTest {
     }
 
     @Test
+    @DisplayName("邮箱验证码登录：intl 的验证码账号没有口令，少了这条路他们永远连不上桌面端")
+    void emailCodeLoginExchangesKey() {
+        transport = new StubTransport()
+                .enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":false}")
+                .enqueue(200, ME);
+        AccountService service = service();
+        service.loginWithEmailCode("alice@example.com", "123456");
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/exchange-key", transport.calls.get(0));
+        assertTrue(transport.bodies.get(0).contains("alice@example.com"), transport.bodies.get(0));
+        assertTrue(transport.bodies.get(0).contains("123456"), transport.bodies.get(0));
+    }
+
+    @Test
+    @DisplayName("邮箱发码走 mail-login/send-code，且同样透传人机验证 token")
+    void emailSendCodeForwards() {
+        transport = new StubTransport().enqueue(200, "{\"ok\":true}");
+        service().sendLoginCodeByEmail("alice@example.com", "tok-1");
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/mail-login/send-code", transport.calls.get(0));
+        assertTrue(transport.bodies.get(0).contains("tok-1"), transport.bodies.get(0));
+    }
+
+    @Test
     @DisplayName("人机验证 token 必须原样透传——这个请求体是本类拼的，漏掉它桌面端就永远过不了官网那道闸")
     void loginSendCodeForwardsCaptchaToken() {
         transport = new StubTransport().enqueue(200, "{\"ok\":true}");

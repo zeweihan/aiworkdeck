@@ -116,9 +116,16 @@ public class AccountController {
             @RequestBody(required = false) Map<String, String> body,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireUser(sessionId);
-        accountService.sendLoginCode(
-                body == null ? null : body.get("phone"),
-                body == null ? null : body.get("captchaToken"));
+        String phone = body == null ? null : body.get("phone");
+        String email = body == null ? null : body.get("email");
+        String captchaToken = body == null ? null : body.get("captchaToken");
+        // 按填了什么分叉，不判站点——判站点的是官网（它才知道自己有没有对应通道），
+        // 本机只负责转发。与下面 login 的口径一致。
+        if (email != null && !email.isBlank()) {
+            accountService.sendLoginCodeByEmail(email, captchaToken);
+        } else {
+            accountService.sendLoginCode(phone, captchaToken);
+        }
         return ok(Map.of("sent", true));
     }
 
@@ -145,12 +152,21 @@ public class AccountController {
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireUser(sessionId);
         String phone = body == null ? null : body.get("phone");
+        String email = body == null ? null : body.get("email");
         String code = body == null ? null : body.get("code");
-        Map<String, Object> status = (phone != null && !phone.isBlank())
-                ? accountService.loginWithPhone(phone, code)
-                : accountService.loginWithPassword(
-                        body == null ? null : body.get("account"),
-                        body == null ? null : body.get("password"));
+        // 三种凭据形状：手机号+码（cn）、邮箱+码（intl）、账号+口令（两站的存量口令账号）。
+        // 邮箱那条不是可选项——intl 的验证码注册建出来的账号没有口令，
+        // 少了它新用户在官网注册完就连不上桌面端。
+        Map<String, Object> status;
+        if (phone != null && !phone.isBlank()) {
+            status = accountService.loginWithPhone(phone, code);
+        } else if (email != null && !email.isBlank()) {
+            status = accountService.loginWithEmailCode(email, code);
+        } else {
+            status = accountService.loginWithPassword(
+                    body == null ? null : body.get("account"),
+                    body == null ? null : body.get("password"));
+        }
         // 与 /connect 同一条：换账户后旧账户的权益、平台密钥、余额判定与用量基线立刻作废
         accountSwitchCleanup.afterConnect();
         return ok(status);

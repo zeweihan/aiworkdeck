@@ -17,12 +17,22 @@
       </view>
 
       <view v-if="mode === 'login'" class="unlock-form">
-        <template v-if="isPhoneSite">
+        <template v-if="loginKind === 'code'">
+          <!-- 标识符按站点取：cn 是手机号，intl 是邮箱。两站都是「验证码即登录」，
+               只是通道不同——与官网 AuthForms 的 channel 分叉是同一套口径。 -->
           <input
+            v-if="isPhoneSite"
             class="unlock-field"
             v-model="phone"
             type="number"
             :placeholder="$t('onboarding.unlock.phonePlaceholder')"
+            placeholder-class="unlock-placeholder"
+          />
+          <input
+            v-else
+            class="unlock-field"
+            v-model="email"
+            :placeholder="$t('onboarding.unlock.emailPlaceholder')"
             placeholder-class="unlock-placeholder"
           />
           <view class="unlock-code-row">
@@ -35,7 +45,7 @@
             />
             <button
               class="unlock-code-btn"
-              :disabled="sendingCode || cooldown > 0 || !phone"
+              :disabled="sendingCode || cooldown > 0 || !codeIdentifier"
               @tap="handleSendCode"
             >
               {{ codeBtnLabel }}
@@ -50,6 +60,7 @@
           </view>
         </template>
         <template v-else>
+          <text class="unlock-hint">{{ $t('onboarding.unlock.passwordOnlyLegacy') }}</text>
           <input
             class="unlock-field"
             v-model="account"
@@ -65,6 +76,9 @@
           />
         </template>
 
+        <text class="unlock-link unlock-login-switch" @tap="toggleLoginKind">
+          {{ loginKind === 'code' ? $t('onboarding.unlock.usePassword') : $t('onboarding.unlock.useCode') }}
+        </text>
         <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
         <button
           class="unlock-btn"
@@ -152,7 +166,12 @@ export default {
       rescueBusy: false,
       // 账户登录（新的主路径）
       mode: 'login',
+      // 'code' = 验证码登录（cn 手机号 / intl 邮箱，两站的主路径）；
+      // 'password' = 存量口令账号。**intl 必须有 code 这条**：那边验证码注册出来的
+      // 账号没有口令，只留口令路等于新用户永远连不上桌面端。
+      loginKind: 'code',
       phone: '',
+      email: '',
       smsCode: '',
       account: '',
       password: '',
@@ -175,6 +194,10 @@ export default {
      */
     isPhoneSite() {
       return this.siteStatus.current !== 'intl'
+    },
+    /** 本站验证码登录用的标识符：cn 是手机号，intl 是邮箱。 */
+    codeIdentifier() {
+      return this.isPhoneSite ? (this.phone || '').trim() : (this.email || '').trim()
     },
     codeBtnLabel() {
       if (this.cooldown > 0) return this.$t('onboarding.unlock.resendIn', { n: this.cooldown })
@@ -280,9 +303,11 @@ export default {
     },
     async handleSendCode() {
       if (this.sendingCode || this.cooldown > 0) return
-      const phone = (this.phone || '').trim()
-      if (!phone) {
-        this.errorMsg = this.$t('onboarding.unlock.phoneFirst')
+      const identifier = this.codeIdentifier
+      if (!identifier) {
+        this.errorMsg = this.isPhoneSite
+          ? this.$t('onboarding.unlock.phoneFirst')
+          : this.$t('onboarding.unlock.emailFirst')
         return
       }
       this.errorMsg = ''
@@ -298,7 +323,7 @@ export default {
             return
           }
         }
-        await sendAccountLoginCode(phone, captchaToken)
+        await sendAccountLoginCode(identifier, captchaToken, this.isPhoneSite)
         uni.showToast({ title: this.$t('onboarding.unlock.codeSent'), icon: 'none', duration: 1600 })
         this.startCooldown(60)
       } catch (e) {
@@ -306,6 +331,10 @@ export default {
       } finally {
         this.sendingCode = false
       }
+    },
+    toggleLoginKind() {
+      this.loginKind = this.loginKind === 'code' ? 'password' : 'code'
+      this.errorMsg = ''
     },
     startCooldown(seconds) {
       this.cooldown = seconds
@@ -321,18 +350,23 @@ export default {
     },
     async handleLogin() {
       let payload
-      if (this.isPhoneSite) {
-        const phone = (this.phone || '').trim()
+      if (this.loginKind === 'code') {
+        const identifier = this.codeIdentifier
         const smsCode = (this.smsCode || '').trim()
-        if (!phone) {
-          this.errorMsg = this.$t('onboarding.unlock.phoneFirst')
+        if (!identifier) {
+          this.errorMsg = this.isPhoneSite
+            ? this.$t('onboarding.unlock.phoneFirst')
+            : this.$t('onboarding.unlock.emailFirst')
           return
         }
         if (!smsCode) {
           this.errorMsg = this.$t('onboarding.unlock.smsCodeFirst')
           return
         }
-        payload = { phone, code: smsCode }
+        // 字段名按站点分：cn 是 phone，intl 是 email
+        payload = this.isPhoneSite
+          ? { phone: identifier, code: smsCode }
+          : { email: identifier, code: smsCode }
       } else {
         const account = (this.account || '').trim()
         if (!account || !this.password) {
