@@ -28,7 +28,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { pickCdpPort, portFree, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput } from '../_lib/electron-cdp.mjs'
+import { pickCdpPort, portFree, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput, reassertFocusEmulation } from '../_lib/electron-cdp.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -497,6 +497,10 @@ try {
     site = null
   })
 
+  // 焦点仿真是挂在 CDP 会话上的，而上面那步做了 goto + reload + reLaunch 好几次导航。
+  // 它是幂等的、也不要钱，进这一步之前再压一次，省得赌"导航之后还在不在"。
+  await reassertFocusEmulation(page)
+
   await step('新建 Word 文档并点击打开（编辑器 webview）', async () => {
     // 「新建文档」是个 18×16 的小图标，而顶栏（试用徽标/负责人行）在这前后还在
     // 重排——命中检查算出坐标、真正点下去之间元素会挪几像素，于是点空。表现是
@@ -593,10 +597,17 @@ try {
       const before = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
       await clickFn()
       if ((await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)) > before) return true
-      console.log('      ! ' + what + '：真实鼠标点了但一个事件都没进页面（本轮 CDP 输入通道坏了），重载页面重试一次')
-      await page.reload({ waitUntil: 'networkidle2' }).catch(() => {})
-      await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 30000 }).catch(() => {})
-      if (!(await pressChannelLive())) { console.log('      ! 重载之后按下通道仍然是死的'); return false }
+      // 先补焦点仿真——实测这才是这一档的解药（重载救不回来，2026-08-18 现场三次一致）
+      console.log('      ! ' + what + '：真实鼠标点了但一个事件都没进页面，补一次焦点仿真再试')
+      await reassertFocusEmulation(page)
+      if (!(await pressChannelLive())) {
+        // 真不是焦点门的话再试重载，属于兜底的兜底
+        console.log('      ! 补焦点仿真无效，再试整页重载')
+        await page.reload({ waitUntil: 'networkidle2' }).catch(() => {})
+        await page.waitForFunction(() => document.body.innerText.includes('资源管理器'), { timeout: 30000 }).catch(() => {})
+        await reassertFocusEmulation(page)
+        if (!(await pressChannelLive())) { console.log('      ! 重载之后按下通道仍然是死的'); return false }
+      }
       await installTrace()
       const b2 = await page.evaluate(() => (window.__awdClickTrace || []).length).catch(() => 0)
       await clickFn()

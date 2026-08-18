@@ -497,12 +497,21 @@ try {
     // e2e 锚点而不是标题文案：类名是锚点契约的一部分，文案不是。
     await mouseClickSel('.overview-stats-bar')
     await waitText('QA客户公司', 15000)
-    const res = await api('/api/projects/' + QA.projectId + '/profile')
-    const fields = (res && res.data && res.data.fields) || []
+    // 界面上出现 ≠ 已经落库：@blur 提交的 PUT 还在飞，而 ProfileHeader 是乐观更新的，
+    // 所以 waitText 一过就立刻读接口，会读到一条全 null 的 client（实测间歇性红）。
+    // 轮询到后端真认了为止，别赌这一拍。
+    let client = null
+    let fields = []
+    for (let i = 0; i < 20; i++) {
+      const res = await api('/api/projects/' + QA.projectId + '/profile')
+      fields = (res && res.data && res.data.fields) || []
+      client = fields.find((f) => f.fieldKey === 'client')
+      if (client && client.fieldValue === 'QA客户公司' && client.source === 'user') break
+      await sleep(500)
+    }
     if (fields.length !== 5) throw new Error('档案字段不是恒 5 条: ' + fields.length)
-    const client = fields.find((f) => f.fieldKey === 'client')
     if (!client || client.fieldValue !== 'QA客户公司' || client.source !== 'user') {
-      throw new Error('档案未按 source=user 落库: ' + JSON.stringify(client))
+      throw new Error('档案未按 source=user 落库（等了 10s）: ' + JSON.stringify(client))
     }
   })
 
@@ -562,7 +571,10 @@ try {
 
   // ============ J6 左栏功能区（title 定位图标） ============
   console.log('== J6 左栏功能区 ==')
-  for (const title of ['搜索', '文件脱敏', 'EasyVoice', '文件暂存区', '资源管理器']) {
+  // 标题取自 config/leftSidebarPlugins.js 的 label（i18n 键 config.sidebar.*）——
+  // 改名会让这一步整条失配。「EasyVoice」在 #389 已改成「语音合成」，这里跟着改；
+  // 以后再改名，先看这一行。
+  for (const title of ['搜索', '文件脱敏', '语音合成', '文件暂存区', '资源管理器']) {
     await step('左栏 ' + title, () => mouseClickSel('[title="' + title + '"]'))
   }
   await shot('j6-rails')

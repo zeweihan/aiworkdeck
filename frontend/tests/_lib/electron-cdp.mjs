@@ -92,17 +92,33 @@ export const cdpOwnershipError = (cdpPort, elec) => {
   return null
 }
 
-// 光有命令行开关还不够：窗口不是"活动窗口"时，渲染器仍可能把这一页当成非活动页，
-// 于是 mousePressed / keyDown 被丢。CDP 专门为"自动化一个不在前台的页面"留了这个
-// 开关，让渲染器一直把它当成有焦点且活动的页面。失败了不致命（老版本可能没有），
-// 但要把话说出来，别让人以为加了就一定生效。
+// 光有命令行开关还不够：窗口不是"活动窗口"时，渲染器会把这一页当成非活动页，于是
+// **跟焦点绑定的输入被丢**（mousePressed / mouseReleased / keyDown），而按命中测试
+// 投递的 mouseMoved 照送。CDP 专门为"自动化一个不在前台的页面"留了这个开关。
+//
+// 2026-08-18 实测坐实（desktop-e2e 去掉加固后跑出来的现场，同一轮三次一致）：
+//   掉事件时 press=false → 开 setFocusEmulationEnabled → press=true
+// 所以这不是"可能有用的加固"，是这一档故障的对症解。**同一现场还证明整页重载
+// 救不回来**（重载三次仍然是死的），所以恢复路径要先补这一刀，别指望重载。
+//
+// 会话要拿住：emulation 是挂在这条 CDP 会话上的，会话没了设置也就没了。
 export const hardenPageInput = async (page) => {
   try {
-    const cdp = await page.target().createCDPSession()
+    const cdp = page.__awdCdp || (page.__awdCdp = await page.target().createCDPSession())
     await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
     return true
   } catch (e) {
     console.log('  ! 焦点仿真没开成（' + String(e.message || e).slice(0, 60) + '），输入通道少一层保险')
     return false
   }
+}
+
+// 掉事件之后就地补刀：重新压一次焦点仿真。导航/会话重建都可能把它丢掉，
+// 而它恰恰是唯一验证过管用的解药。
+export const reassertFocusEmulation = async (page) => {
+  try {
+    const cdp = await page.target().createCDPSession()
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true })
+    return true
+  } catch (e) { return false }
 }

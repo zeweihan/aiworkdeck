@@ -123,12 +123,18 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   恢复不了就报死并在错误里点明"是输入通道坏了不是界面问题"。
   **不要退回"页面内 `dispatchEvent` 伪造点击"兜底**（#390 曾这么干，已撤）——桌面端就这一条真实输入的覆盖，
   换成假的之后这一步就再也挡不住真的界面回归了。
-  另加了两层**对症但未经证伪的**加固（`_lib/electron-cdp.mjs`）：起 Electron 时带
+  **根因已坐实（2026-08-18）**：是"这一页没被当成有焦点/活动窗口"。把加固摘掉重跑 120 轮，
+  复现 3 轮、共 8 次判定，**每一次都是**：掉事件时 press=false → 开
+  `Emulation.setFocusEmulationEnabled` → press=true。按下与按键跟焦点绑定、`mouseMoved` 不绑定，
+  所以现象才是"移动送得到、点击和按键送不到"。
+  解药两层，都在 `_lib/electron-cdp.mjs`：起 Electron 带
   `--disable-backgrounding-occluded-windows` / `--disable-renderer-backgrounding` /
-  `--disable-background-timer-throttling`（puppeteer.launch 自带，手动 spawn 再 connect 就没有），
-  连上页面后开 `Emulation.setFocusEmulationEnabled`（CDP 专为"自动化非前台页面"留的开关）。
-  选它们是因为**按下/按键跟焦点绑定、而 mouseMoved 不绑定**，正好对上故障特征；但本机无法按需
-  复现该故障，也没能造出遮挡来 A/B 验证开关是否真的改变了行为——**所以这两层是有依据的加固，不是已验证的修复**。
+  `--disable-background-timer-throttling`（`puppeteer.launch` 自带，手动 spawn 再 connect 就没有），
+  连上页面后开 `hardenPageInput`（即焦点仿真），导航多的地方用 `reassertFocusEmulation` 再压一次
+  （emulation 挂在 CDP 会话上，会话/导航都可能把它丢掉）。
+  **同一批现场还证伪了「整页重载」这个解药**：重载三次按下通道仍然是死的，那一轮照红不误。
+  所以恢复路径必须先补焦点仿真，重载只能算兜底的兜底——别再把重载当主力。
+
 - **meeting-e2e 曾在 master 上整轮红（10/10），四个坑叠在一起**（2026-08-17 修复）：
   ① 用的还是"写 `checkba_last_project_id` → reload 直达工作台"的老配方，而 2026-08 起启动一律落
   项目列表页，于是第一步就卡死——改成 desktop-e2e 同款"轮询到真进工作台为止，在列表上就点卡片"；
@@ -138,6 +144,14 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   ④ **没钉死界面语言**，Electron 常带 `--lang=en-GB`，rail 会变成 "Meeting Recording"，
   中文选择器全失配（现象很像"skill 没启用"，极易误判）——补上 `awd_app_language=zh-CN`。
   ②③是同一类：**上一轮留下的状态破坏下一轮**，写这类断言前先问"上一轮跑完留下了什么"。
+- **app-e2e 的两类陈旧断言**（2026-08-18 扫出来的，各红过一轮）：
+  ① **左栏 rail 的标题直接抄了 i18n 文案**，而文案会改——「EasyVoice」在 #389 改成「语音合成」，
+  J6 那条 `[title="EasyVoice"]` 就一直等不到。改文案时记得回看 J6 那一行；标题的真源是
+  `src/config/leftSidebarPlugins.js` 的 `label`（i18n 键 `config.sidebar.*`）。
+  ② **界面上出现 ≠ 已经落库**：概览档案那步 `waitText` 一过就立刻读 `/profile` 接口，
+  可 @blur 触发的 PUT 还在飞、ProfileHeader 又是乐观更新的，于是间歇性读到一条全 null 的记录。
+  凡是"改了界面再回接口对账"的断言，都要轮询到后端认账为止，别赌那一拍。
+  （这一类和 #403「不再赌时间」是同一个毛病，写新断言前先问一句：我等的是渲染还是持久化？）
 - 分支保护拦 gh pr merge 时权宜 = 用户网页点 Bypass rules and merge（白名单未配成）。
 - `docs/` 在 .gitignore，入库要 `git add -f`。
 - **改跨类 `public static final String` 常量的值必须 `mvn clean test`**：这类常量在编译期被内联进
