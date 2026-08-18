@@ -120,10 +120,17 @@ export default {
   revokedToast: 'Revoked',
   revokeFailed: 'Revoke failed',
 
-  // ---- userprofile.vue: log out ----
+  // ---- Log out (utils/signOut.js; shared by the profile page and the app menu) ----
   logoutBtn: 'Log Out',
-  logoutConfirmTitle: 'Confirm Logout',
+  logoutConfirmTitle: 'Log Out',
   logoutConfirmContent: 'Log out of your account?',
+  logoutConfirmDesktop: 'This disconnects this machine from your AI WorkDeck account and returns to the sign-in screen. Your local projects and files are untouched — sign back in to continue.',
+  logoutConfirmTrial: 'This disconnects this machine from your AI WorkDeck account. The machine stays unlocked by its trial code, and your projects and files are untouched.',
+  logoutNothingTitle: 'Not signed in',
+  logoutNothingContent: 'This machine is unlocked by a trial code and is not connected to an AI WorkDeck account, so there is no sign-in to leave. To return to the locked state, use "Deactivate License" under License below.',
+  logoutFailed: 'Log out failed, please try again',
+  logoutGroupTitle: 'Sign-in',
+  logoutGroupHint: 'Returns to the sign-in screen so you can use a different account. Your local projects and files stay where they are.',
 
   // ---- login.vue: top nav / 3D showcase decorative copy ----
   guideNav: 'Guide',

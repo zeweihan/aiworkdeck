@@ -176,4 +176,125 @@ class AuthControllerHardeningTest {
         assertTrue(String.valueOf(locked.get("message")).contains("临时锁定"));
         verify(awdkLoginService, times(5)).login(anyString());
     }
+
+    // ==================== 账户登录（手机号/邮箱，匿名端点） ====================
+
+    /** phoneLoginGuard 传 null：手机号补绑闸只管密码/邮箱那三条入口，账户登录不走它。 */
+    private static AuthController controller(AwdkLoginService awdkLoginService, AuthAbuseGuard guard) {
+        return new AuthController(
+                null, null, null, null, guard, awdkLoginService, null, null, null, sessions(), false, null);
+    }
+
+    @Test
+    @DisplayName("手机号登录成功：与 awdk-login 同一个 token/userId/username 信封")
+    void accountLoginPhoneSuccessEnvelope() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.loginWithPhone("13800138000", "123456"))
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_x", 7L, "awd_hanzewei"));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLogin(
+                Map.of("phone", "13800138000", "code", "123456"), http());
+
+        assertEquals(0, result.get("code"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> data = (Map<String, Object>) result.get("data");
+        assertEquals("awdt_x", data.get("token"));
+        assertEquals(7L, data.get("userId"));
+        assertEquals("awd_hanzewei", data.get("username"));
+        verify(awdkLoginService, never()).loginWithPassword(any(), any());
+    }
+
+    @Test
+    @DisplayName("没填手机号即走口令分支（国际站/存量账号）")
+    void accountLoginFallsBackToPasswordBranch() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.loginWithPassword("hi@example.com", "pw12345678"))
+                .thenReturn(new AwdkLoginService.BridgeSession("awdt_y", 8L, "awd_hi"));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLogin(
+                Map.of("account", "hi@example.com", "password", "pw12345678"), http());
+
+        assertEquals(0, result.get("code"));
+        verify(awdkLoginService, never()).loginWithPhone(any(), any());
+    }
+
+    @Test
+    @DisplayName("验证码连续错 5 次后锁定：第 6 次不再出站到官网")
+    void accountLoginLockoutAfterFiveWrongCodes() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.loginWithPhone(anyString(), anyString())).thenThrow(
+                new AccountException(AccountException.Kind.UNAUTHORIZED, "验证码错误或已过期"));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+        Map<String, String> body = Map.of("phone", "13800138000", "code", "000000");
+
+        for (int i = 0; i < 5; i++) {
+            assertEquals(1, controller.accountLogin(body, http()).get("code"));
+        }
+        Map<String, Object> locked = controller.accountLogin(body, http());
+        assertEquals(1, locked.get("code"));
+        assertTrue(String.valueOf(locked.get("message")).contains("临时锁定"));
+        verify(awdkLoginService, times(5)).loginWithPhone(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("补绑期已过（CONFLICT）不计失败：凭据本来就是对的，不该被锁在门外")
+    void accountLoginConflictDoesNotCountAsFailure() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.loginWithPassword(anyString(), anyString())).thenThrow(
+                new AccountException(AccountException.Kind.CONFLICT, "该账户尚未绑定手机号，且已超过绑定期限"));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+        Map<String, String> body = Map.of("account", "hi@example.com", "password", "pw12345678");
+
+        for (int i = 0; i < 8; i++) {
+            assertEquals(1, controller.accountLogin(body, http()).get("code"));
+        }
+        verify(awdkLoginService, times(8)).loginWithPassword(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("账户登录信封绝不带 4010（那是前端判定会话失效的专用码）")
+    void accountLoginNeverEmits4010() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        when(awdkLoginService.loginWithPhone(anyString(), anyString()))
+                .thenThrow(new IllegalArgumentException("本服务器未开启账户桥接功能"));
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLogin(
+                Map.of("phone", "13800138000", "code", "123456"), http());
+
+        assertEquals(1, result.get("code"));
+        assertTrue(String.valueOf(result.get("message")).contains("未开启账户桥接"));
+    }
+
+    @Test
+    @DisplayName("发验证码：失败也计入 IP 额度，否则无效手机号可以免费换来等量对官网出站")
+    void accountLoginSendCodeCountsAttemptsNotOnlySuccesses() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        doThrow(new AccountException(AccountException.Kind.UNAUTHORIZED, "手机号格式不正确"))
+                .when(awdkLoginService).sendLoginCode(anyString(), any());
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+        Map<String, String> body = Map.of("phone", "not-a-phone");
+
+        for (int i = 0; i < 20; i++) {
+            assertEquals(1, controller.accountLoginSendCode(body, http()).get("code"));
+        }
+        Map<String, Object> throttled = controller.accountLoginSendCode(body, http());
+        assertEquals(1, throttled.get("code"));
+        assertTrue(String.valueOf(throttled.get("message")).contains("过于频繁"));
+        verify(awdkLoginService, times(20)).sendLoginCode(anyString(), any());
+    }
+
+    @Test
+    @DisplayName("发验证码成功：code=0 信封")
+    void accountLoginSendCodeSuccessEnvelope() {
+        AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
+        AuthController controller = controller(awdkLoginService, serverGuard("open"));
+
+        Map<String, Object> result = controller.accountLoginSendCode(Map.of("phone", "13800138000"), http());
+
+        assertEquals(0, result.get("code"));
+        verify(awdkLoginService).sendLoginCode("13800138000", null);
+    }
 }

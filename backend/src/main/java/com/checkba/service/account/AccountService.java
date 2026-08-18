@@ -359,68 +359,15 @@ public class AccountService {
     }
 
     /**
-     * 登录类请求的出站与状态码分类。
+     * 登录类请求的出站与状态码分类，实现在 {@link AccountLoginExchange}——
+     * 插件云后端的 {@link AwdkLoginService} 走同一条契约（同样的路径、同样的 error code 表），
+     * 两边各写一份必然漂。
      *
-     * 与 {@link #handle} 分开的原因：那个是给「带 Key 的业务请求」用的，401 一律解释成
-     * 「Key 无效或已被吊销」。登录阶段还没有 Key，401 的真实含义是验证码错/口令错，
-     * 套用那句文案会把用户引到完全错误的方向。这里改为**优先透传官网给出的 message**。
+     * <p>与 {@link #handle} 分开的原因：那个是给「带 Key 的业务请求」用的，401 一律解释成
+     * 「Key 无效或已被吊销」。登录阶段还没有 Key，401 的真实含义是验证码错/口令错。
      */
     private Map<String, Object> postLogin(String path, Map<String, Object> body) {
-        String json;
-        try {
-            json = objectMapper.writeValueAsString(body);
-        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
-            throw new IllegalStateException(e); // 入参都是 String，序列化不会失败
-        }
-        AccountTransport.Reply reply = transport.send("POST", baseUrl() + path, null, json);
-        if (reply.networkFailure()) {
-            throw networkError();
-        }
-        int status = reply.status();
-        if (status >= 500) {
-            throw new AccountException(AccountException.Kind.NETWORK,
-                    LangText.of("AI WorkDeck 服务器暂时不可用，请稍后重试",
-                            "The AI WorkDeck server is temporarily unavailable, please retry shortly"));
-        }
-        Map<String, Object> parsed = parse(reply.body());
-        if (status >= 200 && status < 300) {
-            return parsed;
-        }
-        String message = str(parsed.get("message"));
-        String code = str(parsed.get("error"));
-        if (message == null || message.isBlank()) {
-            message = loginErrorMessage(code);
-        }
-        // 403 phone_binding_required 是「过了补绑硬期限」，属于业务冲突不是凭据失效——
-        // 归到 UNAUTHORIZED 会让上层去清本地连接，而这时候根本还没有连接可清。
-        // 403 phone_binding_required / captcha_failed / 429 too_many_requests 都是业务态，
-        // 不是凭据失效——归到 UNAUTHORIZED 会让上层去清本地连接，而这时候根本还没有连接可清。
-        AccountException.Kind kind =
-                ("phone_binding_required".equals(code) || "captcha_failed".equals(code)
-                        || "too_many_requests".equals(code))
-                        ? AccountException.Kind.CONFLICT
-                        : AccountException.Kind.UNAUTHORIZED;
-        throw new AccountException(kind, message);
-    }
-
-    /** 官网没给 message 时的兜底文案（按 error code 分，别一律「操作失败」）。 */
-    private static String loginErrorMessage(String code) {
-        if (code == null) {
-            return LangText.of("登录失败，请稍后重试", "Sign-in failed, please retry shortly");
-        }
-        return switch (code) {
-            case "invalid_code" -> LangText.of("验证码错误或已过期", "Incorrect or expired verification code");
-            case "invalid_credentials" -> LangText.of("账号或密码不正确", "Incorrect account or password");
-            case "sms_not_supported_on_site" -> LangText.of("当前站点不支持手机号方式，请改用邮箱",
-                    "This site does not support mobile numbers, please use email instead");
-            case "sms_not_configured" -> LangText.of("短信服务暂不可用，请稍后重试",
-                    "SMS is temporarily unavailable, please retry shortly");
-            case "phone_binding_required" -> LangText.of(
-                    "该账户尚未绑定手机号，且已超过绑定期限。请邮件联系 hi@aiworkdeck.com 处理",
-                    "This account has no linked mobile number and the deadline has passed. Please email hi@aiworkdeck.com");
-            case "missing_fields" -> LangText.of("请填写完整", "Please fill in all fields");
-            default -> LangText.of("登录失败，请稍后重试", "Sign-in failed, please retry shortly");
-        };
+        return AccountLoginExchange.post(transport, objectMapper, baseUrl(), path, body);
     }
 
     private Map<String, Object> getJson(String path, String key) {

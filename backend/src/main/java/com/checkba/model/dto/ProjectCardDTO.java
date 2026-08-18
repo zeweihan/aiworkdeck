@@ -1,6 +1,7 @@
 package com.checkba.model.dto;
 
 import java.time.LocalDateTime;
+import java.util.Map;
 
 public class ProjectCardDTO {
     private Long id;
@@ -14,6 +15,26 @@ public class ProjectCardDTO {
     private Long userId; // Creator ID
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    /**
+     * 最近一次文件活动时间：项目下未删除文件的 MAX(updatedAt)，没有文件时回落到
+     * {@link #updatedAt}。项目列表的「最近修改」列读这个。
+     *
+     * <p>为什么不直接用 {@code updatedAt}：那一列只在建项目与改项目名时写过，
+     * 拿来当修改时间就是一个恒等于创建日期的假列。
+     */
+    private LocalDateTime lastActivityAt;
+    /**
+     * 项目档案（project_profile_field）里已填的字段，fieldKey → 值，**只含非空**。
+     * 键就是 {@code ProjectProfileService.FIELD_KEYS}：
+     * client / matterType / openedAt / nextStep / counterparty。
+     *
+     * <p>列表页把 {@code client} 当一等列，其余四项收在「详情」开关后面。
+     * 没填过的键直接不出现——前端据此决定是回落到推断值（客户列）还是整条不渲染。
+     *
+     * <p>推断值绝不回写这里：档案字段的语义是「谁说的算」（写入即锁 source='user'，
+     * AI 抽取只写 pending 永不覆盖），把猜的混进去会稀释掉那把锁。
+     */
+    private Map<String, String> profile;
 
     // Enhanced fields
     private String myRole; // OWNER, ADMIN, MEMBER, CLIENT...
@@ -83,6 +104,22 @@ public class ProjectCardDTO {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public LocalDateTime getLastActivityAt() {
+        return lastActivityAt;
+    }
+
+    public void setLastActivityAt(LocalDateTime lastActivityAt) {
+        this.lastActivityAt = lastActivityAt;
+    }
+
+    public Map<String, String> getProfile() {
+        return profile;
+    }
+
+    public void setProfile(Map<String, String> profile) {
+        this.profile = profile;
     }
 
     public String getMyRole() {

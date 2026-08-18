@@ -61,10 +61,14 @@
 - 删掉 env 里的 AWD_PLATFORM_KEY_SECRET 重启一次，服务必须**拒绝启动**
   （PlatformAiKeyCipher 强不变式），恢复后再启。
 - 公网 `POST /api/auth/awdk-login`（真实 awdk_）换 awdt_，再 `GET /api/projects/my` 通。
+- 公网 `POST /api/auth/account-login/send-code`（真实手机号）收到短信；
+  `POST /api/auth/account-login`（`{phone, code}`）换 awdt_ 通，错码回 code=1 且**不带 4010**。
+  这两条与 awdk-login 共用 `security.awdk-login-enabled`，没有单独的开关。
 - `GET /api/platform-ai/key/status` 回本账号额度（未分配额度=业务错误，不是 500）。
 - `POST /api/auth/register` 被注册闸拒绝。
 - 非 admin 的 awdt_ 访问 `/api/account/status` 被 MachineAccountGuard 挡下。
-- Office 插件真机：设置页填 https://addin.aiworkdeck.com + awdk_ 一键连接，发消息收到流式回复。
+- Office 插件真机：设置页用手机号+验证码登录（默认地址已内置），发消息收到流式回复；
+  「高级设置」里的 awdk_ Key 与设备令牌两条兜底路径也各走一遍。
 
 ## 日常运维
 

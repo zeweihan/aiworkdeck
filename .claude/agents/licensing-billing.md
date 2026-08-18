@@ -117,7 +117,11 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 
 **server 模式加固（插件云后端，2026-08-06）**
 - `backend/src/main/java/com/checkba/service/AuthAbuseGuard.java` — 注册闸（`security.registration-mode: open|closed`，默认 open）+ 登录失败锁定（IP+用户名 5 次失败锁 10 分钟）+ 注册按 IP 限频（10/小时）。进程内内存计数，**多实例部署必须前置 nginx limit_req**；local-mode 全部旁路。
-- `backend/src/main/java/com/checkba/service/account/AwdkLoginService.java` — `POST /api/auth/awdk-login`（匿名端点，AuthController）：awdk_ Key 调官网 `/api/account/me` 实时校验 → `account_binding` 映射（键是官网稳定 `accountId`，官网侧已实施并进了权威契约与 contract-check）→ 首登 `UserService.registerExternal` 建无密码用户（`awd_` 前缀）→ `DeviceTokenService.issue` 签发 awdt_ → **顺手为该用户取一把 per-user 平台 AI key**（`PlatformAiKeyService.tryProvision`，失败绝不拖垮桥接）。开关 `security.awdk-login-enabled` 默认 false。
+- `backend/src/main/java/com/checkba/service/account/AwdkLoginService.java` — 官网账户 → server 会话桥。核心一段：awdk_ Key 调官网 `/api/account/me` 实时校验 → `account_binding` 映射（键是官网稳定 `accountId`，官网侧已实施并进了权威契约与 contract-check）→ 首登 `UserService.registerExternal` 建无密码用户（`awd_` 前缀）→ `DeviceTokenService.issue` 签发 awdt_ → **顺手为该用户取一把 per-user 平台 AI key**（`PlatformAiKeyService.tryProvision`，失败绝不拖垮桥接）。
+  Key 有两种来源，桥接之后完全相同：**账户登录**（`loginWithPhone`/`loginWithPassword`，先调官网 `/api/auth/exchange-key` 换出 Key，用户看不见它；配套 `sendLoginCode`）与**手工粘贴**（`login(key)`，私有部署与团队服务器）。两者共用开关 `security.awdk-login-enabled`（默认 false）——同一条桥的两个入口，**刻意不拆成两个开关**，否则会出现「登录能用但桥是关的」这种自相矛盾的配置。
+  端点全在 `AuthController`，全部匿名：`POST /api/auth/awdk-login`、`POST /api/auth/account-login`、`POST /api/auth/account-login/send-code`。
+  与官网的出站在 `AccountLoginExchange`（桌面 `AccountService` 与云端 `AwdkLoginService` 共用一份 error code 表——`invalid_code`/`invalid_credentials`/`sms_not_supported_on_site`/`phone_binding_required` 等是与官网仓约定的字面量，写两份必漂）。
+  **云侧不能复用 `/api/account/login`**：那条开头就 `requireUser(sessionId)`，local-mode 会自动解析成本机用户所以桌面端没事，`local-mode=false` 下「登录前得先有会话」是死循环。
 - `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
 - `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
 - `service/UserSessionService.java` + `model/entity/UserSession.java` — 浏览器登录会话 DB 落库（2026-08-07，
@@ -293,6 +297,26 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   **认证器（TOTP）不需要任何配置**，server 模式恒可用，是国际用户的推荐路径。
 
 ## 核心契约
+
+### 「退出登录」是两层，条件不同（`frontend/src/utils/signOut.js`，2026-08-18）
+
+桌面端此前**全应用没有登出入口**：个人中心那个按钮写着 `v-if="!isDesktop"`，桌面端不渲染；
+能找到的两个近亲各只做一半，且都藏在设置页深处——「系统设置 → 账户与用量 → 断开连接」
+只摘账户，「个人中心 → 设置 → 授权 → 解除授权」只清授权票据。现在收成一个动作，
+入口两处：**个人中心 → 设置 →「登录」组**，以及**应用菜单 `app.logout`（`app:logout`）**。
+
+两层必须分开判，合成一刀会把人关在自己数据外面：
+
+| 本机状态 | 动作 |
+|---|---|
+| 连着账户 + `mode=account` | `disconnectAccount()` 然后 `deactivateLicense()` → 回解锁门 |
+| 连着账户 + `mode=trial`（存量试用码机器） | **只** `disconnectAccount()`，授权不动 |
+| 没连账户 + `mode=trial` | 什么都不做，弹一句说明并指向「解除授权」 |
+
+`mode=trial` 时**绝不能**调 `deactivateLicense()`：官方发布版
+`security.license.trial-code.enabled=false`，解锁门只认账户凭据，清掉试用授权的机器
+再也解锁不回来。收尾一律 `reLaunch` 回 `pages/launch/launch` 重跑分流，
+不自己跳解锁门——解锁与否的判据只有 launch 一处。
 
 ### 试用码格式与验签
 
@@ -498,6 +522,13 @@ cost 为 null 原样保留 —— 对账未完成时显示「待结算」，绝�
 13. **锁定拒绝不计入失败计数**。AuthController 里锁定检查（`checkLoginAttempt`）与凭据校验
     分属两个 try：锁定期内的轮询若也 `recordLoginFailure` 会把锁无限续期。同理 awdk-login
     只有官网明确 401/403（UNAUTHORIZED）才计失败，网络不可达不消耗尝试次数。
+    `account-login` 同款，并且**多排除一类**：`CONFLICT`（`phone_binding_required`，过了补绑硬期限）
+    的用户凭据本来就是对的，锁他没有意义。
+    这两条匿名端点的限速维度是**整条桥 + IP**（`ACCOUNT_LOGIN_RATE_KEY`），刻意不按手机号/邮箱分桶：
+    云后端只是转发器，官网看到的来源 IP 恒为这台机器，按身份分桶等于允许一个 IP 换着号码无限试，
+    失败会原样打到官网的按 IP 计数（15 分钟 30 次即锁）上，最后被锁在门外的是本服务器的全体用户。
+    `account-login/send-code` 还把「尝试」记在出站之前（与 `/sms/send-code?scene=login` 相反——
+    那条身后有用户名口令挡着），否则一串无效手机号就能免费换来等量对官网出站，IP 额度永远耗不尽。
 
 14. **首启向导不预选 AI 供应商**。曾经预选「本地 Ollama」，没装 Ollama 的用户一路点「完成设置」，
     要到发第一条消息才收到 Connection refused（`ChatModelFactory` 只在 OPENROUTER 下防回退 Ollama，

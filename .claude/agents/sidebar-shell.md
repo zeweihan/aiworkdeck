@@ -107,6 +107,29 @@ is-fullscreen`，并在 `<body>` 下补一条 38px 拖拽条给那些没有自�
    让位；其余 10 页顶部是空白背景、拖拽条覆盖率 100%（CDP 逐点探测得出，交通灯是
    OS 画的不进截图，别靠肉眼看图判断）。
 
+**拖拽区是壳另算的一套，不受 z-index 与 DOM 顺序管（v0.18.0 顶栏死区的根因，2026-08-18）**：
+渲染层把所有带 `-webkit-app-region` 的元素按**布局树**顺序交给壳，壳按顺序
+`union(drag)` / `difference(no-drag)` 叠出可拖区域——**后来的覆盖先前的**。
+`.awd-window-drag-strip` 是 `position:fixed`，fixed 盒子在布局树里恒挂在 LayoutView 下、
+排在所有常规流内容之后，于是它那块 38px 全宽 drag **永远最后合成**，把底下顶栏里所有
+no-drag 抠洞整片盖回可拖：v0.18.0 工作台顶栏「项目名切换器 + 右上角面板/截图/AI 七个键」
+整条点不动，鼠标事件根本进不了页面。三条实测结论：
+- **`z-index` 与 `elementFromPoint` 都会骗人**：顶栏 z-index 200 确实盖在拖拽条上，
+  `elementFromPoint` 返回的也确实是按钮本身，可 OS 仍把点击当成拖窗口。判「会不会挡住点击」
+  只能看 app-region。
+- **改 DOM 顺序没用**（`insertBefore` 到 body 最前面实测同样死），只有让它**不存在**才行。
+- **fixed 的 no-drag 排在拖拽条之后能赢**——`.awd-global-back` 同为 body 级 fixed、
+  在拖拽条之后 append，一直是好的；别照着它推断顶栏里的常规流按钮也没事。
+
+修法在 `utils/windowChrome.js` 的 `OWN_TITLEBAR_ROUTES` + `refreshDragStrip()`：
+自带顶栏的三页（工作台 `.project-header` / 项目概览薄壳页 `.home-topbar` / 登录页 `.top-nav`）
+把整条拖拽条 `display:none`，拖窗口交给各自的顶栏。判定**以 DOM 为准**
+（`OWN_TITLEBAR_SELECTOR` + `getClientRects().length > 0`），路由名单只当快路径——
+`getCurrentPages()` 在 hash 直跳（深链/刷新/e2e goto）时滞后一拍，只信它会让让位整整
+错开一次导航；`getClientRects` 那一刀同时排掉页面栈里被 `display:none` 压住的旧实例。
+重算挂在 App.vue 路由拦截器的 `complete()`（与 `refreshGlobalBack` 同处）+ popstate/hashchange，
+补算窗口 rAF/150/450/900/1600ms。**新增任何自带顶栏的页面，要同时进这两处名单。**
+
 **菜单栏的数据源在渲染层，主进程只把 JSON 渲染成 NSMenu。**
 
 ```
@@ -192,7 +215,62 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - `frontend/src/components/FileTree.vue`（5225 行）— 左栏文件树。
 - 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（项目 tab 已搬出，只剩工作记录/收藏/代办/设置四 tab，行数随之变动、不再登记具体数字）、variable-library.vue(543)、admin.vue(4077，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
 - **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。**新建入口在列表下方**（`.create-section`，两张 `.create-card`：打开文件夹 / 新建项目文件夹，走 `utils/ideOpen.js` 的 `openFolderFlow`/`createFolderFlow`，命名弹窗同页）；「单独打开一个文件」已去掉——它造出的是没有归属的临时项目（`openFileFlow` 仍留给应用菜单与拖拽）。浏览器版没有系统文件夹对话框，降级为 navigateTo `newproject` 页填表建托管空白项目。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
+**双视图（2026-08-18）**：页头右侧 `.view-toggle` 两个按钮切 `viewMode`（`'grid'`/`'list'`），
+选择记在 `uni.storage` 的 `checkba_project_list_view`（本机习惯，不进后端）。默认仍是 grid，
+`.project-item-card` 因此一直在——**app-e2e 的 J2 就钉在这个类名上，改默认视图会让它红**。
+列表视图根 `.project-table`，行 `.ptable-row`，列 `.col-name/.col-client/.col-created/.col-updated/.col-members/.col-ops`。
+两个视图承载同一批字段（名称/客户/创建时间/最近修改/成员），没有哪个视图独占信息。
+卡片上**「空白项目」标签已不渲染**（`projectType === 'BLANK'` 时留 `.card-top-spacer` 占位，
+非 BLANK 的历史项目照旧显示类型），原来那句「通用项目工作区」占位与
+`projects.blankWorkspace` 文案一并删除。
+**项目档案接进列表了（2026-08-18 二改）**：`ProjectCardDTO.profile` 是
+`fieldKey → 值` 的 map，**只含已填的**，键就是 `ProjectProfileService.FIELD_KEYS`
+（client / matterType / openedAt / nextStep / counterparty）。取数是
+`ProjectProfileFieldRepository.findByProjectIdIn` 一次 IN 后在内存分组——
+**别改成逐项目调 `ProjectProfileService.getProfile`**，那条是概览页档案头用的、
+每次查五个字段，列表页 N 个项目照着调等于给已经 N+1 的页面再加一层。
+（此前这里写着「Project 实体没有客户字段、要另立一件事」——**那句是错的**，
+客户一直是既有的档案字段，缺的只是列表没去读它。）
+- **客户是一等列，常显**；`clientText()` 先读 `profile.client`（律师手填、`source='user'`
+  锁定、AI 抽取只写 pending 永不覆盖），**没填过才**回落到推断：① CLIENT 系角色成员
+  ② listedCompanyName ③ targetCompanyName ④ `—`。列表视图给推断值加灰字 +「推断」小标，
+  免得律师以为那是自己填的（`clientIsInferred()`）；方块视图里手填值一定显示，
+  推断值才被「已单列上市公司」那条躲开（`showClientRow()`）。
+- **推断值绝不回写档案**：档案字段的语义是「谁说的算」，把猜的混进去会稀释掉那把手填锁。
+- 其余四项收在**页头的「详情」开关**后面（`.detail-toggle`，`checkba_project_list_detail`，
+  默认关，两个视图共用同一个开关）。列表视图渲染成主行下面的第二行（`.ptable-detail`，
+  因此 `v-for` 挂在外层 `.ptable-item` 上、边框与悬停也上提到那一层，主行只剩高度）；
+  方块视图追加成卡片里的 info-row。**一项没填的案卷整条详情行不渲染**——空行只占地方。
+  显示顺序是「事项类型 / 对方 / 立项时间 / 下一步」，不照搬 FIELD_KEYS（那是档案头的排版序）：
+  先认这是哪一类活、跟谁打，`nextStep` 常常是一整句话，放末位才不会把前面几项挤没。
+- 想再加字段：后端不用动（map 是全量的），前端在 `detailFields()` 里加一行 + 补两条 locale。
+**「最近修改」读 `lastActivityAt`，不是 `updatedAt`**：`Project.updatedAt` 只在建项目与改项目名时
+写过（`ProjectService` 两处），拿它当修改时间会得到一个恒等于创建日期的假列。本次在后端加了
+`ProjectCardDTO.lastActivityAt` = 项目下未删除文件的 `MAX(ProjectFile.updatedAt)`
+（`ProjectFileRepository.findLastActivityByProjectIds`，一次 group by，不给已经 N+1 的列表页再加一层），
+没有文件时回落到 `Project.updatedAt`。**同时补了一处真正的漏记**：
+`FileController.uploadFile` 此前只写字节不动文件行，编辑器自动保存一整天 `ProjectFile.updatedAt`
+仍停在建文件那一刻——现在挂在 `uploadComplete` 上回写一次（分片上传只写一次，失败只 warn 不影响上传）。
+**新建入口现在有两处**：页头主按钮 `.btn-create-primary`（桌面端 `uni.showActionSheet` 两选一：
+打开文件夹 / 新建项目文件夹；浏览器端直接进 newproject），列表下方 `.create-section` 两张卡保留
+（零项目新用户的落点）。**`.create-card` 的张数是 app-e2e 断言的**（浏览器降级恰好 1 张），
+页头那个是 `<button>` 不是 `.create-card`，不影响计数。
 - **项目概览**：内容本体 `frontend/src/components/project-home/ProjectHomePane.vue` + 同目录 `project-home-pane.scss`（**两个宿主共用**：工作台中栏标签、`pages/project-home` 薄壳页）；五个子组件在同目录：`ProfileHeader` / `OverviewStatsBar` / `ActivityFeed` / `TaskSchedule` / `ConversationList`。薄壳页 `frontend/src/pages/project-home/project-home.vue` + `project-home.scss` 只剩顶栏与 query 处理。**十个 e2e 稳定锚点类名**：内容根 `.project-home-pane`、薄壳页根 `.page-project-home`、项目列表页根 `.page-project-list`、薄壳页两按钮 `.btn-workbench` / `.btn-project-list`、五个组件根 `.overview-stats-bar` / `.profile-header` / `.activity-feed` / `.task-schedule` / `.conversation-list`——**改这些名字要同步改 `frontend/tests/app-e2e/run.mjs` 的 J2/J3 段**。取数纪律（请求代、绝不调 `/version/status`）随内容一起搬进了 Pane。档案编辑刻意走行内 input、删除确认走 `uni.showModal`，因此两个新页与五个新组件**都不需要自带 awd-\* 样式副本**（awd-\* 没有集中定义，改成弹窗就必须自带一份 scoped 副本，否则渲染成无样式裸框）。
+- **admin 的「系统配置」分区（nav key `config`）已整体撤掉**（2026-08-18）。它到最后只剩两样东西，
+  各自都有更该待的地方：① OpenRouter 的 Key 与地址 → 「AI 功能设置」的供应商单选下面、
+  **选中 OpenRouter 那一档才渲染**（形制同跨境同意块）；② 界面语言 → **个人中心「设置」**
+  （语言是每个人自己的偏好：storage 权威源、人人可改、不要 admin 权限，摆在「系统管理」下面
+  本身就是错的分类）。`admin.externalTitle` 文案随之改成「OpenRouter 接入参数」，
+  七家非 AI 服务的指路条 `externalMovedNote` 挪到 AI 面板底部，`admin.navConfig` 键已删。
+  **撤这个分区要一起改的三处**：`navItems` 去掉那一项、`activeNav` 默认值改成 `'ai'`
+  （原默认就是 `'config'`，不改会得到一个默认打开却空白的页），以及**把 `v-if` 链头接上**——
+  面板是一条 `v-if`/`v-else-if` 长链，删掉链头那块会让编译期直接报
+  「v-else/v-else-if has no adjacent v-if」，现在链头是 `platform`。
+  app-e2e J7 的 admin 断言文案也从「系统配置」改成了「系统管理」（左侧导航卡标题，不随分区增减变化）。
+- admin 的「团队案件库」面板（nav key `cloud`）在**没有任何连接时**多渲染一张说明卡
+  （`.cloud-help-card`，`admin.cloudNoServerTitle` 起五条文案）：说清案件库是律所自建的一台
+  服务器、三个框分别填什么、账号不是 aiworkdeck.com 那个、以及本机只存令牌不存密码。
+  在此之前界面对这些只字未提，没部署过服务器的人打开只会发呆（维护者 2026-08-18 亲自问到）。
 - admin 的「AI 功能设置」面板（nav key `ai`）是 AI 供应商与模型的唯一设置入口：三档供应商单选、
   默认/辅助/子 Agent 三个模型下拉（清单来自 `GET /api/ai/models`，前端不许硬编码）、网络区域三选一
   （auto/境内/境外，附判定依据）、本地 Ollama 的地址与模型名。nav 结构未变，改的是该面板内容；

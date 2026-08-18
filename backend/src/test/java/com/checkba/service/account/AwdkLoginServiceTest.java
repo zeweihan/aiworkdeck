@@ -37,6 +37,9 @@ import static org.mockito.Mockito.when;
  * - 官网响应缺 accountId：MALFORMED 拒绝（不回落 username 做映射键）;
  * - awdk_ 明文不落库；
  * - 所有失败文案不含「登录」「未授权」「请先」子串。
+ *
+ * 账户登录（手机号/邮箱直登）那一组在文件末尾：换 Key → 复用同一条桥，
+ * 两个入口落到同一个 server 用户，以及开关关闭时一条出站都不发。
  */
 class AwdkLoginServiceTest {
 
@@ -49,6 +52,8 @@ class AwdkLoginServiceTest {
     static class StubTransport implements AccountTransport {
         final Deque<Reply> replies = new ArrayDeque<>();
         final List<String> calls = new ArrayList<>();
+        final List<String> bodies = new ArrayList<>();
+        final List<String> bearers = new ArrayList<>();
         String lastBearer;
 
         StubTransport enqueue(int status, String body) {
@@ -64,6 +69,8 @@ class AwdkLoginServiceTest {
         @Override
         public Reply send(String method, String url, String bearerKey, String jsonBody) {
             calls.add(method + " " + url);
+            bodies.add(jsonBody);
+            bearers.add(bearerKey);
             lastBearer = bearerKey;
             if (replies.isEmpty()) {
                 throw new AssertionError("桩没有为 " + method + " " + url + " 准备响应");
@@ -290,5 +297,129 @@ class AwdkLoginServiceTest {
 
         org.mockito.Mockito.verify(platformAiKeyService, org.mockito.Mockito.never())
                 .tryProvision(anyLong(), anyString());
+    }
+
+    // ==================== 账户登录（手机号/邮箱直登，用户看不见 Key） ====================
+
+    @Test
+    @DisplayName("手机号登录：换 Key 后走同一条桥，用户全程看不到 Key")
+    void phoneLoginExchangesKeyThenBridges() {
+        transport.enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":true}").enqueue(200, ME_OK);
+
+        AwdkLoginService.BridgeSession session = service(true).loginWithPhone("13800138000", "123456");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/exchange-key", transport.calls.get(0));
+        assertNull(transport.bearers.get(0), "登录阶段还没有 Key，不该带 Authorization");
+        assertTrue(transport.bodies.get(0).contains("13800138000"));
+        // 换到 Key 之后必须复用既有桥接：me 拿 accountId 才有映射键
+        assertEquals("GET https://www.aiworkdeck.com/api/account/me", transport.calls.get(1));
+        assertEquals(KEY, transport.bearers.get(1));
+
+        assertTrue(session.token().startsWith(DeviceTokenService.TOKEN_PREFIX));
+        assertEquals(session.userId(), deviceTokenService.resolveUserId(session.token()));
+        assertEquals("awd_hanzewei", session.username());
+        assertNotNull(bindingsByAccountId.get("acc_9f3a"));
+    }
+
+    @Test
+    @DisplayName("口令登录：国际站主路径，凭据形状不同但桥接结果一样")
+    void passwordLoginExchangesKeyThenBridges() {
+        transport.enqueue(200, "{\"key\":\"" + KEY + "\"}").enqueue(200, ME_OK);
+
+        AwdkLoginService.BridgeSession session = service(true).loginWithPassword("hi@example.com", "pw12345678");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/exchange-key", transport.calls.get(0));
+        assertTrue(transport.bodies.get(0).contains("hi@example.com"));
+        assertFalse(transport.bodies.get(0).contains("13800138000"));
+        assertEquals(session.userId(), deviceTokenService.resolveUserId(session.token()));
+    }
+
+    @Test
+    @DisplayName("同一个官网账户，两条入口（手机号登录 / 手工粘 Key）落到同一个 server 用户")
+    void phoneLoginAndPastedKeyShareOneUser() {
+        transport.enqueue(200, "{\"key\":\"" + KEY + "\"}").enqueue(200, ME_OK).enqueue(200, ME_OK);
+        AwdkLoginService svc = service(true);
+
+        AwdkLoginService.BridgeSession viaPhone = svc.loginWithPhone("13800138000", "123456");
+        AwdkLoginService.BridgeSession viaKey = svc.login(KEY);
+
+        assertEquals(viaPhone.userId(), viaKey.userId());
+        assertEquals(1, usersByName.size(), "同一个 accountId 不得建出两个用户");
+    }
+
+    @Test
+    @DisplayName("验证码错误：UNAUTHORIZED 且透传官网文案（不能套用「Key 无效」那句）")
+    void wrongCodeSurfacesWebsiteMessage() {
+        transport.enqueue(401, "{\"error\":\"invalid_code\",\"message\":\"验证码错误或已过期\"}");
+
+        AccountException e = assertThrows(AccountException.class,
+                () -> service(true).loginWithPhone("13800138000", "000000"));
+
+        assertEquals(AccountException.Kind.UNAUTHORIZED, e.getKind());
+        assertEquals("验证码错误或已过期", e.getMessage());
+        assertTrue(usersByName.isEmpty());
+        assertTrue(bindingsByAccountId.isEmpty());
+    }
+
+    @Test
+    @DisplayName("补绑期已过（phone_binding_required）：CONFLICT，调用方据此不计入失败锁定")
+    void bindingDeadlinePassedIsConflictNotCredentialFailure() {
+        transport.enqueue(403, "{\"error\":\"phone_binding_required\"}");
+
+        AccountException e = assertThrows(AccountException.class,
+                () -> service(true).loginWithPassword("hi@example.com", "pw12345678"));
+
+        assertEquals(AccountException.Kind.CONFLICT, e.getKind());
+        assertTrue(e.getMessage().contains("hi@aiworkdeck.com"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("官网没返回 key：MALFORMED，且文案不提「粘贴 Key」（这条路的用户没见过 Key）")
+    void missingKeyInExchangeReplyIsMalformed() {
+        transport.enqueue(200, "{\"isNewUser\":true}");
+
+        AccountException e = assertThrows(AccountException.class,
+                () -> service(true).loginWithPhone("13800138000", "123456"));
+
+        assertEquals(AccountException.Kind.MALFORMED, e.getKind());
+        assertFalse(e.getMessage().contains("awdk_"), e.getMessage());
+        assertEquals(1, transport.calls.size(), "拿不到 Key 就不该再去调 me");
+    }
+
+    @Test
+    @DisplayName("开关关闭：账户登录与发验证码都不出站（关着的桥不该变成短信/口令转发口）")
+    void disabledBlocksAccountLoginAndCodeSend() {
+        AwdkLoginService svc = service(false);
+
+        assertThrows(IllegalArgumentException.class, () -> svc.sendLoginCode("13800138000", null));
+        assertThrows(IllegalArgumentException.class, () -> svc.loginWithPhone("13800138000", "123456"));
+        assertThrows(IllegalArgumentException.class, () -> svc.loginWithPassword("a@b.com", "pw12345678"));
+
+        assertTrue(transport.calls.isEmpty(), "开关关闭时一条出站都不许发");
+    }
+
+    @Test
+    @DisplayName("发验证码：转发官网 sms-login/send-code，不带 Authorization")
+    void sendLoginCodeForwardsToWebsite() {
+        transport.enqueue(200, "{\"sent\":true}");
+
+        service(true).sendLoginCode(" 13800138000 ", "tok-abc");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/sms-login/send-code", transport.calls.get(0));
+        assertNull(transport.bearers.get(0));
+        assertTrue(transport.bodies.get(0).contains("13800138000"));
+        assertFalse(transport.bodies.get(0).contains(" 13800138000 "), "手机号应已 trim");
+        // 这是到官网 send-code 的第二条转发链（另一条在 AccountService）。官网启用人机验证后
+        // 漏掉 token 这条链就整条断，而且只有插件用户会踩到——那是最难被发现的一类回归。
+        assertTrue(transport.bodies.get(0).contains("tok-abc"), "人机验证 token 必须原样透传");
+    }
+
+    @Test
+    @DisplayName("发验证码时官网不可达：NETWORK（调用方据此不计入失败锁定）")
+    void sendLoginCodeNetworkFailure() {
+        transport.enqueueNetworkFailure();
+        AccountException e = assertThrows(AccountException.class,
+                () -> service(true).sendLoginCode("13800138000", null));
+        assertEquals(AccountException.Kind.NETWORK, e.getKind());
     }
 }

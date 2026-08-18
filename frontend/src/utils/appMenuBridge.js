@@ -128,6 +128,12 @@ async function runAppCommand(verb, arg) {
     case 'openAccount':
       uni.navigateTo({ url: '/pages/userprofile/userprofile' })
       return
+    case 'logout': {
+      // 自带确认框；退出后 reLaunch 回启动页重跑分流（见 utils/signOut.js）
+      const { signOut } = await import('@/utils/signOut.js')
+      await signOut()
+      return
+    }
     case 'checkUpdate': {
       if (!(host.update && host.update.check)) return
       toast(t('shell.menuCheckingUpdate'))

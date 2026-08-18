@@ -72,6 +72,18 @@ public interface ProjectFileRepository extends JpaRepository<ProjectFile, Long> 
     Optional<ProjectFile> findByProjectIdAndParentIdAndName(Long projectId, Long parentId, String name);
 
     /**
+     * 一批项目各自的「最近一次文件活动时间」（排除已删除），返回 [projectId, maxUpdatedAt]。
+     *
+     * 项目列表要显示「最近修改」，而 Project.updatedAt 只在建项目与改项目名时写过，
+     * 拿它当修改时间会得到一个永远等于创建日期的列（假数据）。真正的活动落在文件行上：
+     * 新建/改名/移动/删除/覆盖保存都会写 ProjectFile.updatedAt。
+     *
+     * 一次 group by 拿全部，不给已经是 N+1 的列表页再加一层每项一查。
+     */
+    @org.springframework.data.jpa.repository.Query("SELECT pf.projectId, MAX(pf.updatedAt) FROM ProjectFile pf WHERE pf.projectId IN :projectIds AND pf.isDeleted = false GROUP BY pf.projectId")
+    List<Object[]> findLastActivityByProjectIds(List<Long> projectIds);
+
+    /**
      * 计算项目文件总大小（排除已删除）
      */
     @org.springframework.data.jpa.repository.Query("SELECT SUM(pf.fileSize) FROM ProjectFile pf WHERE pf.projectId = :projectId AND pf.isDeleted = false")

@@ -6,7 +6,6 @@ export default {
   // A sibling switch, not a "back": settings and profile redirectTo each other;
   // the real back is the global control (utils/globalBack.js)
   backToProfile: 'Profile',
-  navConfig: 'System Configuration',
   navAi: 'AI Settings',
   navPlatform: 'Platform Services',
   navAccount: 'Account & Usage',
@@ -19,8 +18,8 @@ export default {
   navPlugins: 'Plugin Marketplace',
 
   // External services (only OpenRouter is left here; the other seven live under Platform Services)
-  externalTitle: 'AI Provider Credentials',
-  externalSubtitle: 'OpenRouter key and address. This belongs to the AI path: requests go straight from this device to the provider and never pass through AI WorkDeck servers',
+  externalTitle: 'OpenRouter Credentials',
+  externalSubtitle: 'Only needed when you bring your own key. Requests go straight from this device to OpenRouter and never pass through AI WorkDeck servers',
   externalMovedNote: 'Credentials for meeting transcription, image text recognition, web search, speech synthesis, Qichacha, Tushare, and PKULaw have moved to Platform Services on the left; enter them under each service\'s "Use your own key (advanced)".',
   openRouterKeyPlaceholder: 'Enter your OpenRouter API Key',
   apiBaseUrlLabel: 'API Base URL',
@@ -255,6 +254,13 @@ export default {
   // Team case library
   cloudSubtitle: 'A Team Case Library is a server your firm runs. Once connected, case files can be placed in it; colleagues each take a copy to work on locally, edit independently, and merge when submitting drafts',
   cloudDisconnectButton: 'Leave This Library',
+  cloudNoServerTitle: "Don't have a Team Case Library yet?",
+  cloudNoServerBody: 'The Team Case Library is not a service we host — it is a server your firm runs itself (on the office network or on a cloud host). Working alone you never need it; it only matters when colleagues work the same matter with you.',
+  cloudFieldsTitle: 'What goes in these three fields',
+  cloudFieldsAddress: 'Library address: the URL of your firm\'s server, e.g. https://team.yourfirm.com, or http://192.168.x.x on the office network.',
+  cloudFieldsAccount: 'Username / password: an account on that server, issued by whoever runs it. Note this is not your aiworkdeck.com account — that one is for billing and will not work here.',
+  cloudFieldsToken: 'Once connected this machine stores only a long-lived token, never the password; disconnecting revokes that token on the server.',
+  cloudDeployHint: 'To stand one up: deploy/web/README.md in the repository has the full steps (nginx + backend prod profile). On first start the server creates an admin account whose random initial password is printed once in the startup log — take it, change it, then create accounts for colleagues.',
   cloudConnectTitle: 'Connect a Team Case Library',
   cloudServerLabel: 'Library Address',
   cloudServerPlaceholder: 'e.g. https://team.example.com',
