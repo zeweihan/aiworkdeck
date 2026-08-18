@@ -76,9 +76,6 @@
           />
         </template>
 
-        <text class="unlock-link unlock-login-switch" @tap="toggleLoginKind">
-          {{ loginKind === 'code' ? $t('onboarding.unlock.usePassword') : $t('onboarding.unlock.useCode') }}
-        </text>
         <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
         <button
           class="unlock-btn"
@@ -88,6 +85,9 @@
         >
           {{ loggingIn ? $t('onboarding.unlock.loggingIn') : $t('onboarding.unlock.login') }}
         </button>
+        <text class="unlock-link unlock-login-switch" @tap="toggleLoginKind">
+          {{ loginKind === 'code' ? $t('onboarding.unlock.usePassword') : $t('onboarding.unlock.useCode') }}
+        </text>
       </view>
 
       <view v-else class="unlock-form">
@@ -544,6 +544,12 @@ export default {
 <style lang="scss" scoped>
 /* 触发元素必须存在且可被 click()，所以用 0 尺寸而不是 display:none——
    display:none 的元素 SDK 挂不上事件，控件永远弹不出来。 */
+.unlock-login-switch {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 12px;
+}
+
 .unlock-captcha-trigger {
   width: 0;
   height: 0;
@@ -600,6 +606,9 @@ export default {
 }
 
 .unlock-tabs {
+  /* .unlock-card 是 align-items:center，子元素默认收缩到内容宽度——不写这行，
+     页签会被挤窄到「账户登录」四个字都放不下而换行（.unlock-form 早就写了同一行补偿）。 */
+  width: 100%;
   display: flex;
   gap: 4px;
   margin-bottom: 16px;
@@ -611,6 +620,7 @@ export default {
 .unlock-tab {
   flex: 1;
   text-align: center;
+  white-space: nowrap;
   padding: 8px 0;
   font-size: 13px;
   color: #64748b;

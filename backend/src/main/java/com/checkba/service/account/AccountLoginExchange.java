@@ -64,7 +64,11 @@ final class AccountLoginExchange {
         }
         String message = str(parsed.get("message"));
         String code = str(parsed.get("error"));
-        if (message == null || message.isBlank()) {
+        // 官网的 message 优先——它常带本地判断不出来的具体信息（还要等几秒、地址被拒的原因）。
+        // **但人机验证那两条例外**：官网只有英文文案，原样显示会让中文界面上冒出
+        // 「Verification failed, please try again」（2026-08-18 真机踩到）。
+        // 这两个 code 语义固定，本地双语文案的信息量不比英文原文少。
+        if (message == null || message.isBlank() || LOCALIZED_OVER_UPSTREAM.contains(code)) {
             message = errorMessage(code);
         }
         // 403 phone_binding_required（过了补绑硬期限）/ captcha_failed（人机验证没过）、
@@ -80,6 +84,10 @@ final class AccountLoginExchange {
     }
 
     /** 官网没给 message 时的兜底文案（按 error code 分，别一律「操作失败」）。 */
+    /** 这几个 code 一律用本地双语文案，不用官网回的（那边是纯英文）。 */
+    private static final java.util.Set<String> LOCALIZED_OVER_UPSTREAM =
+            java.util.Set.of("captcha_failed", "too_many_requests");
+
     static String errorMessage(String code) {
         if (code == null) {
             return LangText.of("登录失败，请稍后重试", "Sign-in failed, please retry shortly");

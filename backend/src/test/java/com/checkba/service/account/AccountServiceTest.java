@@ -122,6 +122,19 @@ class AccountServiceTest {
     }
 
     @Test
+    @DisplayName("人机验证的文案用本地双语，不用官网那句英文——否则中文界面上会冒出英文")
+    void captchaMessageIsLocalizedNotUpstreamEnglish() {
+        transport = new StubTransport().enqueue(403,
+                "{\"error\":\"captcha_failed\",\"message\":\"Verification failed, please try again\"}");
+        AccountException e = assertThrows(AccountException.class,
+                () -> service().sendLoginCode("13800138000", "bad"));
+        assertNotEquals("Verification failed, please try again", e.getMessage(),
+                "官网只有英文文案，原样透出去就是中文界面上的英文句子");
+        assertTrue(e.getMessage().contains("安全验证") || e.getMessage().contains("security"),
+                "应当是本地双语文案：" + e.getMessage());
+    }
+
+    @Test
     @DisplayName("官网拒绝人机验证时归为 CONFLICT，不是 UNAUTHORIZED——后者会让上层去清一个还不存在的连接")
     void captchaFailureIsConflictNotUnauthorized() {
         transport = new StubTransport().enqueue(403, "{\"error\":\"captcha_failed\",\"message\":\"nope\"}");
