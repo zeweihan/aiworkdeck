@@ -229,6 +229,27 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   **签名的运营商报备状态是外部前置条件**：2026-08-07 实测联通已通（真机送达），移动/电信报备中，
   未通的运营商发送会 PORT_NOT_REGISTERED；报备状态用 `GetSmsSign` API 可查。
 
+**手机号强制登录与补绑期（2026-08-18）**
+- 设计 `docs/superpowers/specs/2026-08-17-phone-login-design.md` §5。官网侧同一口径的参照实现是
+  `aiworkdeck_website` 的 `lib/phone-policy.ts`（`gateForUser()`）+ `app/api/auth/login/route.ts`。
+- `config/PhoneLoginGuard.java` 一个类兼两职：**启动期**断言（开了强制但短信网关是暗的 → 拒绝启动，
+  不静默降级成谁都进不来）＋**运行期**三态闸 `gateFor(user)` → `OK` / `MUST_BIND` / `BLOCKED`。
+  `required = phone-login-required && !local-mode`——local-mode 免登没有登录环节，闸恒不生效。
+- 接线在 `AuthController` 的**三条**会签发凭据的路径：`/login`、`/device-token`、`/mail-login/verify`。
+  只护住 `/login` 是假闸——换个端点就绕过去了，而 `/device-token` 发的还是**长期**凭据。
+  `/awdk-login`（awdk_ 桥）刻意不管，它不走密码也不走手机号；`/sms-login/verify` 天然已绑号。
+- **拒登必须落在 `issue()` 之前**：先签发再拒等于已经把一个能用的凭据交出去了。用例
+  `AuthControllerPhoneGateTest` 用 `verify(sessions, never()).issue(...)` 钉住这条。
+- **拒登码是 4006，绝不能用 4010**：4010 是前端 `api.js:288` 认定的「会话失效」专用码，
+  回它会让客户端清掉本地会话并弹回登录页，文案也一起被冲掉，被锁的人就不知道该去发邮件。
+- 放行时回包带 `data.mustBindPhone`（`/login`、`/device-token`、`/mail-login/verify` 三处），
+  客户端据此弹**不可跳过**的强制补绑，走现成的 `POST /api/auth/sms/bind`。
+- 期限默认 `2026-09-30`，**与官网 `DEFAULT_BINDING_DEADLINE` 同值，改一边必须改另一边**，
+  否则会出现「官网说还能用到 X 日、后端 X-30 日就把人拒了」。当天仍算期限内；格式配错回落默认值。
+- **已知未闭合的边**：`/register` 没接这条闸。`security.registration-mode` 代码默认 `open`
+  （cloud profile 显式 `closed`），所以只有「开了强制手机号 + 又开着注册」的部署才踩得到：
+  期限后新注册仍会拿到一个能用的会话，直到下次登录才被拒。要不要一并关掉是待定的策略问题。
+
 **站点（双主站，2026-08-08）**
 - 设计文档 `docs/superpowers/specs/2026-08-08-dual-site-architecture.md`（含实施记录一节，与设计有出入以那节为准）。
 - 两个站分的是**商业与合规**：币种、支付通道、发票、适用法、ICP 备案、默认语言、

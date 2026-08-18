@@ -1,6 +1,7 @@
 package com.checkba.controller;
 
 import com.checkba.config.GlobalExceptionHandler;
+import com.checkba.config.PhoneLoginGuard;
 import com.checkba.model.entity.ProjectInvitation;
 import com.checkba.model.entity.User;
 import com.checkba.service.ClientInvitationService;
@@ -29,6 +30,8 @@ public class AuthController {
     private final com.checkba.service.UserSessionService userSessionService;
     /** 单机免登模式。设备令牌的会话签发路径只在这一模式下存在（见 issueLocalDeviceToken）。 */
     private final boolean localMode;
+    /** 存量账号补绑手机号的三态闸；未接线的调用方传 null 表示不设闸。 */
+    private final PhoneLoginGuard phoneLoginGuard;
 
     /**
      * 密码校验通过但还缺二次验证码时的响应 code（前端 api.js 据此弹验证码输入步骤，
@@ -36,6 +39,15 @@ public class AuthController {
      * data 里的 {@code method} 区分 totp / sms。
      */
     static final int CODE_SMS_REQUIRED = 4005;
+
+    /**
+     * 补绑期已过、账号仍未绑手机号时的拒登 code。
+     *
+     * <p><b>刻意不用 4010</b>：那是前端 {@code api.js} 认定的「会话失效」专用码，
+     * 收到它会清掉本地会话并弹回登录页。这里的语义是「账号缺一次补绑」而不是「你掉线了」，
+     * 回 4010 会让客户端把用户的会话一起清掉，还会把文案冲掉，人就不知道该去发邮件了。
+     */
+    static final int CODE_PHONE_BINDING_REQUIRED = 4006;
 
     /** 认证器 App 里显示的服务名。 */
     private static final String TOTP_ISSUER = "AI WorkDeck";
@@ -76,7 +88,8 @@ public class AuthController {
                           com.checkba.service.auth.SecondFactorService secondFactorService,
                           com.checkba.service.UserSessionService userSessionService,
                           @org.springframework.beans.factory.annotation.Value("${security.local-mode:false}")
-                          boolean localMode) {
+                          boolean localMode,
+                          PhoneLoginGuard phoneLoginGuard) {
         this.userService = userService;
         this.clientInvitationService = clientInvitationService;
         this.adminAccessService = adminAccessService;
@@ -88,7 +101,35 @@ public class AuthController {
         this.secondFactorService = secondFactorService;
         this.userSessionService = userSessionService;
         this.localMode = localMode;
+        this.phoneLoginGuard = phoneLoginGuard;
         staticUserService = userService;
+    }
+
+    /** 本次登录的手机号闸判定；未接线（null）一律放行，不把既有链路连坐。 */
+    private PhoneLoginGuard.PhoneGate phoneGate(User user) {
+        return phoneLoginGuard == null ? PhoneLoginGuard.PhoneGate.OK : phoneLoginGuard.gateFor(user);
+    }
+
+    /**
+     * 补绑期已过、账号仍未绑手机号时的拒登信封（spec §5）。
+     *
+     * <p>调用点必须落在**签发会话/设备令牌之前**——先签发再拒等于已经给出了一个能用的凭据，
+     * 客户端存下来照样能用。文案指向 {@code hi@aiworkdeck.com}：被锁在门外的人只剩这一个出口。
+     *
+     * @return 需要拒登时返回 4006 信封；返回 null 表示放行，调用方据
+     *         {@link PhoneLoginGuard.PhoneGate#MUST_BIND} 决定是否让客户端弹强制补绑。
+     */
+    private Map<String, Object> phoneBindingRefusal(PhoneLoginGuard.PhoneGate gate) {
+        if (gate != PhoneLoginGuard.PhoneGate.BLOCKED) return null;
+        String deadline = phoneLoginGuard.bindingDeadline().toString();
+        Map<String, Object> result = new HashMap<>();
+        result.put("code", CODE_PHONE_BINDING_REQUIRED);
+        result.put("message", LangText.of(
+                "该账号未绑定手机号，补绑期已于 " + deadline + " 结束。"
+                        + "请发邮件到 " + PhoneLoginGuard.SUPPORT_EMAIL + " 申请人工代绑。",
+                "This account has no phone number linked, and the grace period ended on " + deadline
+                        + ". Please email " + PhoneLoginGuard.SUPPORT_EMAIL + " to have it linked manually."));
+        return result;
     }
 
     /**
@@ -186,6 +227,14 @@ public class AuthController {
             }
             authAbuseGuard.recordLoginSuccess(ip, request.getUsername());
 
+            // 手机号补绑闸：期限后未绑号拒在这里——**必须早于下面的 issue()**，
+            // 先签发再拒等于已经把一个能用的会话交出去了。凭据是对的，因此不计失败。
+            PhoneLoginGuard.PhoneGate gate = phoneGate(user);
+            Map<String, Object> refusal = phoneBindingRefusal(gate);
+            if (refusal != null) {
+                return refusal;
+            }
+
             String sessionId = userSessionService.issue(user.getId());
 
             Map<String, Object> result = new HashMap<>();
@@ -193,6 +242,8 @@ public class AuthController {
             result.put("message", LangText.of("登录成功", "Signed in successfully"));
             result.put("data", Map.of(
                     "sessionId", sessionId,
+                    // 期限内未绑号：放行但让客户端立刻弹不可跳过的强制补绑（走现成的 /sms/bind）
+                    "mustBindPhone", gate == PhoneLoginGuard.PhoneGate.MUST_BIND,
                     "user", Map.of(
                             "id", user.getId(),
                             "username", user.getUsername(),
@@ -511,11 +562,19 @@ public class AuthController {
         try {
             User user = mailAuthService.verifySigninCode(request.getEmail(), request.getCode());
             authAbuseGuard.recordLoginSuccess(ip, lockKey);
+            // 同 /login 的手机号补绑闸：这条也是一次给未绑号账号发会话的入口，
+            // 只护住密码那条等于换个端点就绕过去了。
+            PhoneLoginGuard.PhoneGate gate = phoneGate(user);
+            Map<String, Object> refusal = phoneBindingRefusal(gate);
+            if (refusal != null) {
+                return refusal;
+            }
             String newSessionId = userSessionService.issue(user.getId());
             result.put("code", 0);
             result.put("message", LangText.of("登录成功", "Signed in successfully"));
             result.put("data", Map.of(
                     "sessionId", newSessionId,
+                    "mustBindPhone", gate == PhoneLoginGuard.PhoneGate.MUST_BIND,
                     "user", Map.of(
                             "id", user.getId(),
                             "username", user.getUsername(),
@@ -776,11 +835,19 @@ public class AuthController {
                 return challenge;
             }
             authAbuseGuard.recordLoginSuccess(ip, body.get("username"));
+            // 同 /login 的手机号补绑闸：换令牌也是一次密码登录，而且发出去的是**长期**凭据，
+            // 留了旁路等于补绑期一到就有条比会话还好用的后门。
+            PhoneLoginGuard.PhoneGate gate = phoneGate(user);
+            Map<String, Object> refusal = phoneBindingRefusal(gate);
+            if (refusal != null) {
+                return refusal;
+            }
             var issued = deviceTokenService.issue(user.getId(), body.get("name"));
             result.put("code", 0);
             result.put("data", Map.of(
                     "tokenId", issued.id(),
                     "token", issued.plaintext(),
+                    "mustBindPhone", gate == PhoneLoginGuard.PhoneGate.MUST_BIND,
                     "userId", user.getId(),
                     "username", user.getUsername(),
                     "displayName", user.getDisplayName() == null ? user.getUsername() : user.getDisplayName()));
