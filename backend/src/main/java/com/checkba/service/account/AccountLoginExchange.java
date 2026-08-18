@@ -35,7 +35,8 @@ final class AccountLoginExchange {
      * @param path    以 / 开头的路径
      * @return 2xx 时的解析结果（空体按空 Map）
      * @throws AccountException NETWORK（不可达/5xx）、UNAUTHORIZED（验证码或口令不对）、
-     *                          CONFLICT（{@code phone_binding_required}）、MALFORMED（非 JSON）
+     *                          CONFLICT（{@code phone_binding_required} / {@code captcha_failed} /
+     *                          {@code too_many_requests}）、MALFORMED（非 JSON）
      */
     static Map<String, Object> post(AccountTransport transport, ObjectMapper objectMapper,
                                     String baseUrl, String path, Map<String, Object> body) {
@@ -66,12 +67,15 @@ final class AccountLoginExchange {
         if (message == null || message.isBlank()) {
             message = errorMessage(code);
         }
-        // 403 phone_binding_required 是「过了补绑硬期限」，属于业务冲突不是凭据失效——
+        // 403 phone_binding_required（过了补绑硬期限）/ captcha_failed（人机验证没过）、
+        // 429 too_many_requests（发码太频繁）都是业务态，不是凭据失效——
         // 归到 UNAUTHORIZED 会让上层去清本地连接（桌面端）或计入失败锁定（云后端），
         // 而这两件对一个凭据本来就正确的用户都是错的。
-        AccountException.Kind kind = "phone_binding_required".equals(code)
-                ? AccountException.Kind.CONFLICT
-                : AccountException.Kind.UNAUTHORIZED;
+        AccountException.Kind kind =
+                ("phone_binding_required".equals(code) || "captcha_failed".equals(code)
+                        || "too_many_requests".equals(code))
+                        ? AccountException.Kind.CONFLICT
+                        : AccountException.Kind.UNAUTHORIZED;
         throw new AccountException(kind, message);
     }
 
@@ -90,12 +94,16 @@ final class AccountLoginExchange {
             case "phone_binding_required" -> LangText.of(
                     "该账户尚未绑定手机号，且已超过绑定期限。请邮件联系 hi@aiworkdeck.com 处理",
                     "This account has no linked mobile number and the deadline has passed. Please email hi@aiworkdeck.com");
+            case "captcha_failed" -> LangText.of("请先完成安全验证后再试",
+                    "Please complete the security check and try again");
+            case "too_many_requests" -> LangText.of("验证码请求过于频繁，请稍后再试",
+                    "Too many verification code requests, please try again later");
             case "missing_fields" -> LangText.of("请填写完整", "Please fill in all fields");
             default -> LangText.of("登录失败，请稍后重试", "Sign-in failed, please retry shortly");
         };
     }
 
-    private static Map<String, Object> parse(ObjectMapper objectMapper, String body) {
+    static Map<String, Object> parse(ObjectMapper objectMapper, String body) {
         if (body == null || body.isBlank()) return Map.of();
         try {
             Map<String, Object> parsed = objectMapper.readValue(body, new TypeReference<>() {});

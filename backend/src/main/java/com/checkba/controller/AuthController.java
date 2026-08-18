@@ -335,7 +335,9 @@ public class AuthController {
         try {
             authAbuseGuard.checkCodeSendRate(ip);
             authAbuseGuard.recordCodeSend(ip);
-            awdkLoginService.sendLoginCode(body == null ? null : body.get("phone"));
+            awdkLoginService.sendLoginCode(
+                    body == null ? null : body.get("phone"),
+                    body == null ? null : body.get("captchaToken"));
             result.put("code", 0);
             result.put("message", LangText.of("验证码已发送", "Verification code sent"));
             result.put("data", Map.of("sent", true));

@@ -41,6 +41,13 @@
               {{ codeBtnLabel }}
             </button>
           </view>
+          <!-- 人机验证控件挂点。Turnstile 是隐形的、阿里云是点了才弹拼图，
+               所以平时这里不占版面；未启用时整块不渲染。 -->
+          <view v-show="captcha" class="unlock-captcha-holder">
+            <view id="unlock-captcha"></view>
+            <!-- 阿里云 SDK 要一个它能挂点击事件的元素；Turnstile 用不到但留着无害 -->
+            <button id="unlock-captcha-trigger" class="unlock-captcha-trigger" type="button"></button>
+          </view>
         </template>
         <template v-else>
           <input
@@ -119,7 +126,8 @@
 </template>
 
 <script>
-import { activateLicense, getLicenseStatus, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount } from '@/services/api.js'
+import { activateLicense, getLicenseStatus, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount, getAccountCaptchaConfig } from '@/services/api.js'
+import { setupCaptcha } from '@/utils/captcha.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js'
 
@@ -152,6 +160,8 @@ export default {
       loggingIn: false,
       cooldown: 0,
       cooldownTimer: null,
+      // 人机验证控件。null = 本站未启用或装配失败，此时照常发码（官网那边也不会校验）
+      captcha: null,
     }
   },
   beforeUnmount() {
@@ -224,8 +234,23 @@ export default {
     loadSiteLinks()
     this.refreshSiteStatus()
     this.refreshTrialGate()
+    this.setupCaptchaWidget()
   },
   methods: {
+    /**
+     * 装配人机验证控件。**任何一步失败都只是不装**，不拦路——
+     * 官网没启用时本来就不校验，而配置读不到时为此把人挡在门外不划算
+     * （发码本身还有官网的 IP 限流与全局熔断兜着）。
+     */
+    async setupCaptchaWidget() {
+      try {
+        const config = await getAccountCaptchaConfig()
+        this.captcha = await setupCaptcha(config, 'unlock-captcha')
+      } catch (e) {
+        console.warn('人机验证控件装配失败（按未启用处理）:', e && e.message)
+        this.captcha = null
+      }
+    },
     /** 试用码这条路还开不开。失败一律按「开着」处理，不拦路（见 data 里的注释）。 */
     async refreshTrialGate() {
       try {
@@ -263,7 +288,17 @@ export default {
       this.errorMsg = ''
       this.sendingCode = true
       try {
-        await sendAccountLoginCode(phone)
+        // 先取人机验证 token 再发。拿不到就别发——发了必被官网 403，白让用户等一轮。
+        let captchaToken = ''
+        if (this.captcha) {
+          captchaToken = await this.captcha.getToken()
+          if (!captchaToken) {
+            this.errorMsg = this.$t('onboarding.unlock.captchaFailed')
+            this.sendingCode = false
+            return
+          }
+        }
+        await sendAccountLoginCode(phone, captchaToken)
         uni.showToast({ title: this.$t('onboarding.unlock.codeSent'), icon: 'none', duration: 1600 })
         this.startCooldown(60)
       } catch (e) {
@@ -473,6 +508,16 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+/* 触发元素必须存在且可被 click()，所以用 0 尺寸而不是 display:none——
+   display:none 的元素 SDK 挂不上事件，控件永远弹不出来。 */
+.unlock-captcha-trigger {
+  width: 0;
+  height: 0;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  position: absolute;
+}
 .unlock-page {
   width: 100vw;
   height: 100vh;

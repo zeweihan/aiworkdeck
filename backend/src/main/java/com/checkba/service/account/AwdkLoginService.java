@@ -136,11 +136,26 @@ public class AwdkLoginService {
      * @throws IllegalArgumentException 开关关闭
      * @throws AccountException NETWORK / UNAUTHORIZED（手机号不合法等）/ MALFORMED
      */
-    public void sendLoginCode(String phone) {
+    public void sendLoginCode(String phone, String captchaToken) {
         requireEnabled();
         Map<String, Object> body = new HashMap<>();
         body.put("phone", phone == null ? "" : phone.trim());
+        // 人机验证 token 必须原样透传。官网启用后不带就是 403，而请求体是这里拼的——
+        // 插件端填了也传不过去。这是到官网 send-code 的**第二条**转发链
+        // （另一条在 AccountService，桌面端用），漏掉任何一条那条闸都是摆设。
+        body.put("captchaToken", captchaToken == null ? "" : captchaToken.trim());
         AccountLoginExchange.post(transport, objectMapper, baseUrl, "/api/auth/sms-login/send-code", body);
+    }
+
+    /** 官网人机验证的公开配置，原样转给插件端（只有公开参数，没有密钥）。 */
+    public Map<String, Object> captchaConfig() {
+        AccountTransport.Reply reply = transport.send("GET", baseUrl + "/api/auth/captcha-config", null, null);
+        if (reply.networkFailure() || reply.status() < 200 || reply.status() >= 300) {
+            Map<String, Object> off = new HashMap<>();
+            off.put("provider", null);
+            return off;
+        }
+        return AccountLoginExchange.parse(objectMapper, reply.body());
     }
 
     /** 官网登录：手机号 + 验证码换 Key 再桥接（大陆站主路径）。 */

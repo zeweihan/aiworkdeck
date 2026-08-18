@@ -391,7 +391,7 @@ class AwdkLoginServiceTest {
     void disabledBlocksAccountLoginAndCodeSend() {
         AwdkLoginService svc = service(false);
 
-        assertThrows(IllegalArgumentException.class, () -> svc.sendLoginCode("13800138000"));
+        assertThrows(IllegalArgumentException.class, () -> svc.sendLoginCode("13800138000", null));
         assertThrows(IllegalArgumentException.class, () -> svc.loginWithPhone("13800138000", "123456"));
         assertThrows(IllegalArgumentException.class, () -> svc.loginWithPassword("a@b.com", "pw12345678"));
 
@@ -403,12 +403,15 @@ class AwdkLoginServiceTest {
     void sendLoginCodeForwardsToWebsite() {
         transport.enqueue(200, "{\"sent\":true}");
 
-        service(true).sendLoginCode(" 13800138000 ");
+        service(true).sendLoginCode(" 13800138000 ", "tok-abc");
 
         assertEquals("POST https://www.aiworkdeck.com/api/auth/sms-login/send-code", transport.calls.get(0));
         assertNull(transport.bearers.get(0));
         assertTrue(transport.bodies.get(0).contains("13800138000"));
         assertFalse(transport.bodies.get(0).contains(" 13800138000 "), "手机号应已 trim");
+        // 这是到官网 send-code 的第二条转发链（另一条在 AccountService）。官网启用人机验证后
+        // 漏掉 token 这条链就整条断，而且只有插件用户会踩到——那是最难被发现的一类回归。
+        assertTrue(transport.bodies.get(0).contains("tok-abc"), "人机验证 token 必须原样透传");
     }
 
     @Test
@@ -416,7 +419,7 @@ class AwdkLoginServiceTest {
     void sendLoginCodeNetworkFailure() {
         transport.enqueueNetworkFailure();
         AccountException e = assertThrows(AccountException.class,
-                () -> service(true).sendLoginCode("13800138000"));
+                () -> service(true).sendLoginCode("13800138000", null));
         assertEquals(AccountException.Kind.NETWORK, e.getKind());
     }
 }

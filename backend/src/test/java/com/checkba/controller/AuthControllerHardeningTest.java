@@ -273,7 +273,7 @@ class AuthControllerHardeningTest {
     void accountLoginSendCodeCountsAttemptsNotOnlySuccesses() {
         AwdkLoginService awdkLoginService = mock(AwdkLoginService.class);
         doThrow(new AccountException(AccountException.Kind.UNAUTHORIZED, "手机号格式不正确"))
-                .when(awdkLoginService).sendLoginCode(anyString());
+                .when(awdkLoginService).sendLoginCode(anyString(), any());
         AuthController controller = controller(awdkLoginService, serverGuard("open"));
         Map<String, String> body = Map.of("phone", "not-a-phone");
 
@@ -283,7 +283,7 @@ class AuthControllerHardeningTest {
         Map<String, Object> throttled = controller.accountLoginSendCode(body, http());
         assertEquals(1, throttled.get("code"));
         assertTrue(String.valueOf(throttled.get("message")).contains("过于频繁"));
-        verify(awdkLoginService, times(20)).sendLoginCode(anyString());
+        verify(awdkLoginService, times(20)).sendLoginCode(anyString(), any());
     }
 
     @Test
@@ -295,6 +295,6 @@ class AuthControllerHardeningTest {
         Map<String, Object> result = controller.accountLoginSendCode(Map.of("phone", "13800138000"), http());
 
         assertEquals(0, result.get("code"));
-        verify(awdkLoginService).sendLoginCode("13800138000");
+        verify(awdkLoginService).sendLoginCode("13800138000", null);
     }
 }
