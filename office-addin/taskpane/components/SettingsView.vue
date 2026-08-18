@@ -8,34 +8,59 @@
       </p>
 
       <p class="hint">
-        填入官网账户页生成的 API Key 即可连接。Key 仅用于本次换取设备令牌，不保存在本机。
+        用 AI WorkDeck 账户登录即可连接，与桌面版是同一个账户。
       </p>
 
-      <label class="field">
-        <span class="label">官网 API Key（awdk_ 开头）</span>
-        <input
-          v-model="awdkKey"
-          type="password"
-          placeholder="粘贴 awdk_ 开头的 API Key"
-          spellcheck="false"
-          autocomplete="off"
-        />
-      </label>
+      <!-- 手机号是大陆站主路径；国际站与存量账号走邮箱口令 -->
+      <div class="tabs">
+        <button class="tab" :class="{ 'is-active': mode === 'phone' }" @click="switchMode('phone')">手机号</button>
+        <button class="tab" :class="{ 'is-active': mode === 'email' }" @click="switchMode('email')">邮箱</button>
+      </div>
+
+      <template v-if="mode === 'phone'">
+        <label class="field">
+          <span class="label">手机号</span>
+          <input v-model="phone" type="tel" placeholder="11 位手机号" spellcheck="false" autocomplete="tel" />
+        </label>
+
+        <!-- 不用 label 包住整行：label 的激活行为会把点在按钮上的一次点击转发给里面的 input -->
+        <div class="field">
+          <span class="label">验证码</span>
+          <div class="code-row">
+            <input v-model="smsCode" type="text" placeholder="6 位验证码" spellcheck="false" autocomplete="one-time-code" />
+            <button class="btn secondary code-btn" :disabled="sendingCode || cooldown > 0 || !phone.trim()" @click="sendCode">
+              {{ codeBtnLabel }}
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <template v-else>
+        <label class="field">
+          <span class="label">邮箱</span>
+          <input v-model="account" type="email" placeholder="注册时使用的邮箱" spellcheck="false" autocomplete="username" />
+        </label>
+
+        <label class="field">
+          <span class="label">口令</span>
+          <input v-model="password" type="password" placeholder="账户口令" spellcheck="false" autocomplete="current-password" />
+        </label>
+      </template>
 
       <div class="actions">
-        <button class="btn primary" :disabled="connecting" @click="connectWithKey">
-          {{ connecting ? '连接中...' : '连接' }}
+        <button class="btn primary" :disabled="connecting" @click="connectWithAccount">
+          {{ connecting ? '连接中...' : '登录并连接' }}
         </button>
       </div>
 
-      <p v-if="keyStatus" class="status" :class="keyStatusKind">{{ keyStatus }}</p>
+      <p v-if="loginStatus" class="status" :class="loginStatusKind">{{ loginStatus }}</p>
 
       <details class="advanced">
         <summary>高级设置</summary>
 
         <p class="hint">
-          自建服务器场景：可填律所自建后端地址，或同机桌面版的 http://127.0.0.1:5269，
-          并手工粘贴设备令牌。
+          私有部署与团队服务器场景：可填律所自建后端地址，或同机桌面版的 http://127.0.0.1:5269，
+          再用官网 API Key 或手工粘贴的设备令牌连接。
         </p>
 
         <label class="field">
@@ -47,6 +72,25 @@
             spellcheck="false"
           />
         </label>
+
+        <label class="field">
+          <span class="label">官网 API Key（awdk_ 开头）</span>
+          <input
+            v-model="awdkKey"
+            type="password"
+            placeholder="粘贴 awdk_ 开头的 API Key"
+            spellcheck="false"
+            autocomplete="off"
+          />
+        </label>
+
+        <div class="actions">
+          <button class="btn secondary" :disabled="connecting" @click="connectWithKey">
+            {{ connecting ? '连接中...' : '用 Key 连接' }}
+          </button>
+        </div>
+
+        <p v-if="keyStatus" class="status" :class="keyStatusKind">{{ keyStatus }}</p>
 
         <label class="field">
           <span class="label">设备令牌（awdt_ 开头）</span>
@@ -73,9 +117,11 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref } from 'vue'
 import {
   fetchMyProjects,
+  postAccountLogin,
+  postAccountLoginSendCode,
   postAwdkLogin
 } from '../lib/api.js'
 import { saveSettings, normalizeBaseUrl, DEFAULT_SERVER_URL } from '../lib/settings.js'
@@ -95,12 +141,149 @@ const awdkKey = ref('')
 const connecting = ref(false)
 const keyStatus = ref('')
 const keyStatusKind = ref('ok')
-/** 平台 AI 通道额度；null = 该后端没有这条能力（旧版本/单机形态），整块不展示 */
+
+// 账户登录（主路径）
+const mode = ref('phone')
+const phone = ref('')
+const smsCode = ref('')
+const account = ref('')
+const password = ref('')
+const sendingCode = ref(false)
+const cooldown = ref(0)
+const loginStatus = ref('')
+const loginStatusKind = ref('ok')
+
+let cooldownTimer = null
 
 /** 当前连接状态摘要：只读本地设置，不发请求 */
 const displayServerUrl = computed(() => normalizeBaseUrl(serverUrl.value) || '（未设置地址）')
 
-/** 金额与时间都可能是 null（用量拿不到时不许把 0 当成剩余额度），统一显示为「—」 */
+const codeBtnLabel = computed(() => {
+  if (cooldown.value > 0) return `${cooldown.value} 秒后重发`
+  return sendingCode.value ? '发送中...' : '获取验证码'
+})
+
+// 任务窗格切视图会卸载本组件，倒计时的定时器必须跟着停，否则回来时还在跑
+onBeforeUnmount(stopCooldown)
+
+function stopCooldown() {
+  if (cooldownTimer) {
+    clearInterval(cooldownTimer)
+    cooldownTimer = null
+  }
+}
+
+function startCooldown() {
+  stopCooldown()
+  cooldown.value = 60
+  cooldownTimer = setInterval(() => {
+    cooldown.value -= 1
+    if (cooldown.value <= 0) stopCooldown()
+  }, 1000)
+}
+
+function switchMode(next) {
+  mode.value = next
+  loginStatus.value = ''
+}
+
+async function sendCode() {
+  loginStatus.value = ''
+  if (!serverUrl.value.trim()) {
+    loginStatusKind.value = 'error'
+    loginStatus.value = '连接未就绪：后端地址为空，可在「高级设置」中填写'
+    return
+  }
+  sendingCode.value = true
+  try {
+    await postAccountLoginSendCode({ serverUrl: serverUrl.value }, phone.value)
+    loginStatusKind.value = 'ok'
+    loginStatus.value = '验证码已发送，请查收短信'
+    startCooldown()
+  } catch (e) {
+    loginStatusKind.value = 'error'
+    loginStatus.value = e.message || '验证码发送失败'
+  } finally {
+    sendingCode.value = false
+  }
+}
+
+/**
+ * 账户登录：手机号+验证码 或 邮箱+口令换取 awdt_ 设备令牌后保存并进入对话视图。
+ * 凭据用完即弃（不落 localStorage，只有换回的 awdt_ 令牌被保存）。
+ */
+async function connectWithAccount() {
+  loginStatus.value = ''
+  if (!serverUrl.value.trim()) {
+    loginStatusKind.value = 'error'
+    loginStatus.value = '连接未就绪：后端地址为空，可在「高级设置」中填写'
+    return
+  }
+  const credentials = mode.value === 'phone'
+    ? { phone: phone.value.trim(), code: smsCode.value.trim() }
+    : { account: account.value.trim(), password: password.value }
+  const filled = mode.value === 'phone'
+    ? credentials.phone && credentials.code
+    : credentials.account && credentials.password
+  if (!filled) {
+    loginStatusKind.value = 'error'
+    loginStatus.value = mode.value === 'phone' ? '请填写手机号与验证码' : '请填写邮箱与口令'
+    return
+  }
+  connecting.value = true
+  try {
+    const awdtToken = await postAccountLogin({ serverUrl: serverUrl.value }, credentials)
+    smsCode.value = ''
+    password.value = ''
+    applyToken(awdtToken)
+    loginStatusKind.value = 'ok'
+    loginStatus.value = '连接成功'
+  } catch (e) {
+    loginStatusKind.value = 'error'
+    loginStatus.value = e.message || '账户连接失败'
+  } finally {
+    connecting.value = false
+  }
+}
+
+/**
+ * awdk_ 账户 Key 连接（高级设置）：私有部署与团队服务器仍要用这条。
+ * Key 本身用完即弃（不落 localStorage，只有换回的 awdt_ 令牌被保存）。
+ */
+async function connectWithKey() {
+  keyStatus.value = ''
+  if (!serverUrl.value.trim()) {
+    keyStatusKind.value = 'error'
+    keyStatus.value = '连接未就绪：后端地址为空'
+    return
+  }
+  const key = awdkKey.value.trim()
+  if (!key) {
+    keyStatusKind.value = 'error'
+    keyStatus.value = '连接未就绪：请粘贴 awdk_ 开头的 API Key'
+    return
+  }
+  connecting.value = true
+  try {
+    const awdtToken = await postAwdkLogin({ serverUrl: serverUrl.value }, key)
+    awdkKey.value = ''
+    applyToken(awdtToken)
+    keyStatusKind.value = 'ok'
+    keyStatus.value = '连接成功：已换取设备令牌'
+  } catch (e) {
+    keyStatusKind.value = 'error'
+    keyStatus.value = e.message || '账户直连失败'
+  } finally {
+    connecting.value = false
+  }
+}
+
+/** 两条换令牌的路径共用的收尾：落盘 + 通知外层切到对话视图。 */
+function applyToken(awdtToken) {
+  token.value = awdtToken
+  saveSettings({ serverUrl: serverUrl.value, token: awdtToken })
+  emit('saved', { serverUrl: normalizeBaseUrl(serverUrl.value), token: awdtToken })
+}
 
 async function testConnection() {
   status.value = ''
@@ -131,42 +314,6 @@ function save() {
   saveSettings({ serverUrl: serverUrl.value, token: token.value })
   emit('saved', { serverUrl: normalizeBaseUrl(serverUrl.value), token: token.value.trim() })
 }
-
-/**
- * awdk_ 账户 Key 一键连接：换取 awdt_ 设备令牌后立即保存并进入对话视图。
- * Key 本身用完即弃（不落 localStorage，只有换回的 awdt_ 令牌被保存）。
- */
-async function connectWithKey() {
-  keyStatus.value = ''
-  if (!serverUrl.value.trim()) {
-    keyStatusKind.value = 'error'
-    keyStatus.value = '连接未就绪：后端地址为空，可在「高级设置」中填写'
-    return
-  }
-  const key = awdkKey.value.trim()
-  if (!key) {
-    keyStatusKind.value = 'error'
-    keyStatus.value = '连接未就绪：请粘贴 awdk_ 开头的 API Key'
-    return
-  }
-  connecting.value = true
-  try {
-    const awdtToken = await postAwdkLogin({ serverUrl: serverUrl.value }, key)
-    awdkKey.value = ''
-    token.value = awdtToken
-    saveSettings({ serverUrl: serverUrl.value, token: awdtToken })
-    keyStatusKind.value = 'ok'
-    keyStatus.value = '连接成功：已换取设备令牌'
-    // 桥接同时会为本账号取一把平台 AI 密钥，这里顺手把额度显示出来
-    await loadQuota()
-    emit('saved', { serverUrl: normalizeBaseUrl(serverUrl.value), token: awdtToken })
-  } catch (e) {
-    keyStatusKind.value = 'error'
-    keyStatus.value = e.message || '账户直连失败'
-  } finally {
-    connecting.value = false
-  }
-}
 </script>
 
 <style scoped>
@@ -190,6 +337,39 @@ async function connectWithKey() {
   word-break: break-all;
 }
 
+.tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.tab {
+  padding: 5px 12px;
+  font-size: 12px;
+  border: 1px solid var(--awd-border);
+  border-radius: 4px;
+  background: var(--awd-surface);
+  color: var(--awd-text-secondary);
+  cursor: pointer;
+}
+
+.tab.is-active {
+  border-color: var(--awd-primary);
+  color: var(--awd-primary);
+}
+
+.code-row {
+  display: flex;
+  gap: 8px;
+}
+
+.code-row input { flex: 1; }
+
+.code-btn {
+  flex: none;
+  white-space: nowrap;
+}
+
 .advanced {
   margin-top: 14px;
   padding-top: 12px;
@@ -206,7 +386,6 @@ async function connectWithKey() {
 .advanced > summary:hover { color: var(--awd-primary); }
 
 .advanced .hint { margin-top: 10px; }
-
 
 
 

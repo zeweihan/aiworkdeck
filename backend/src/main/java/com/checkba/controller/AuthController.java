@@ -58,6 +58,17 @@ public class AuthController {
      */
     private static final String AWDK_BRIDGE_RATE_KEY = "::awdk-bridge";
 
+    /**
+     * 账户登录（手机号/邮箱）的限速维度，同上带冒号避开真实用户名空间。
+     *
+     * <p>刻意<b>不</b>按手机号/邮箱分桶，而是整条桥共用一个：本服务器只是个转发器，
+     * 真正的凭据校验在官网，官网那边看到的来源 IP 恒为本机。按手机号分桶意味着
+     * 一个 IP 可以换着手机号无限试，失败全部原样打到官网的按 IP 计数上
+     * （15 分钟 30 次即锁），最后被锁在门外的是本服务器的全体用户。
+     * 按 IP 计的这一档必须比官网那一档更紧。
+     */
+    private static final String ACCOUNT_LOGIN_RATE_KEY = "::account-login";
+
     private static UserService staticUserService;
     private static com.checkba.service.DeviceTokenService staticDeviceTokenService;
     private static com.checkba.service.LocalIdentityService staticLocalIdentityService;
@@ -292,6 +303,90 @@ public class AuthController {
             // 只有官网明确拒绝（Key 无效）才计失败；网络不可达不该消耗尝试次数
             if (e.getKind() == com.checkba.service.account.AccountException.Kind.UNAUTHORIZED) {
                 authAbuseGuard.recordLoginFailure(ip, AWDK_BRIDGE_RATE_KEY);
+            }
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        } catch (IllegalArgumentException e) {
+            // 开关关闭等业务态
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 账户登录：给手机号发验证码（匿名，转发官网 {@code /api/auth/sms-login/send-code}）。
+     *
+     * <p>与下面的 {@code /account-login} 一起，让 Office 插件用户直接用手机号/邮箱登录，
+     * 不必再去官网账户页生成 awdk_ Key 手工搬运。受同一个
+     * {@code security.awdk-login-enabled} 开关约束（见 AwdkLoginService）。
+     *
+     * <p><b>与 {@code /sms/send-code?scene=login} 的两处刻意不同</b>：
+     * 那条要求先给出正确的用户名密码（本服务器自己的账号体系，端点直通短信网关）；
+     * 这条是纯转发，真正的手机号维度冷却/日配额在官网。因此这里的闸只有 IP 维度，
+     * 且<b>把尝试记在出站之前</b>——只记成功的话，拿一串无效手机号刷本服务器
+     * 就能免费换来等量的对官网出站请求，IP 额度永远不会耗尽。
+     */
+    @PostMapping("/account-login/send-code")
+    public Map<String, Object> accountLoginSendCode(@RequestBody(required = false) Map<String, String> body,
+                                                    jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkCodeSendRate(ip);
+            authAbuseGuard.recordCodeSend(ip);
+            awdkLoginService.sendLoginCode(body == null ? null : body.get("phone"));
+            result.put("code", 0);
+            result.put("message", LangText.of("验证码已发送", "Verification code sent"));
+            result.put("data", Map.of("sent", true));
+        } catch (com.checkba.service.account.AccountException | IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 账户登录：手机号+验证码 或 账号+口令 → 本服务器的 awdt_ 设备令牌（匿名端点）。
+     *
+     * <p>与 {@code /awdk-login} 是同一条桥的两个入口，信封与限速形状刻意保持一致。
+     * 两种凭据形状按站点分（大陆站手机号、国际站邮箱），这里不判站点——判站点的是官网，
+     * 本服务器按用户填了什么转发即可。
+     *
+     * <p>注意不能复用 {@code /api/account/login}：那条开头就要 {@code requireUser(sessionId)}，
+     * 在 local-mode 的桌面端会自动解析成本机用户所以没事，云后端 {@code local-mode=false}
+     * 下「登录前得先有会话」是个死循环。
+     */
+    @PostMapping("/account-login")
+    public Map<String, Object> accountLogin(@RequestBody(required = false) Map<String, String> body,
+                                            jakarta.servlet.http.HttpServletRequest http) {
+        String ip = http.getRemoteAddr();
+        Map<String, Object> result = new HashMap<>();
+        try {
+            authAbuseGuard.checkLoginAttempt(ip, ACCOUNT_LOGIN_RATE_KEY);
+        } catch (IllegalArgumentException e) {
+            result.put("code", 1);
+            result.put("message", e.getMessage());
+            return result;
+        }
+        String phone = body == null ? null : body.get("phone");
+        try {
+            var session = (phone != null && !phone.isBlank())
+                    ? awdkLoginService.loginWithPhone(phone, body.get("code"))
+                    : awdkLoginService.loginWithPassword(
+                            body == null ? null : body.get("account"),
+                            body == null ? null : body.get("password"));
+            authAbuseGuard.recordLoginSuccess(ip, ACCOUNT_LOGIN_RATE_KEY);
+            result.put("code", 0);
+            result.put("data", Map.of(
+                    "token", session.token(),
+                    "userId", session.userId(),
+                    "username", session.username()));
+        } catch (com.checkba.service.account.AccountException e) {
+            // 只有官网明确拒绝凭据（验证码错/口令错）才计失败。网络不可达不该消耗尝试次数；
+            // CONFLICT（补绑期已过）也不该——那个用户的凭据本来就是对的，锁他没有意义。
+            if (e.getKind() == com.checkba.service.account.AccountException.Kind.UNAUTHORIZED) {
+                authAbuseGuard.recordLoginFailure(ip, ACCOUNT_LOGIN_RATE_KEY);
             }
             result.put("code", 1);
             result.put("message", e.getMessage());
