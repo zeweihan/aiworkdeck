@@ -977,6 +977,34 @@ export function connectAccount(key) {
   }).then(unwrapEnvelope);
 }
 
+// 账户登录：给手机号发验证码（本机后端转发官网）。
+// 与 connectAccount 的关系：两条路殊途同归，都是让本机持有一枚 awdk_ Key。
+// connectAccount 收用户手工粘贴的 Key（团队服务器与私有部署仍要用），
+// 这条与 loginAccount 让用户直接用手机号登录，Key 由官网签发、本机保存，用户看不到它。
+export function sendAccountLoginCode(phone) {
+  return request({
+    url: '/api/account/login/send-code',
+    method: 'POST',
+    data: { phone },
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
+// 账户登录：{ phone, code }（大陆站）或 { account, password }（国际站）。
+// 成功后本机已连接账户，返回体同 getAccountStatus 再加 isNewUser / mustBindPhone。
+export function loginAccount(payload) {
+  return request({
+    url: '/api/account/login',
+    method: 'POST',
+    data: payload,
+    header: {
+      'Content-Type': 'application/json',
+    },
+  }).then(unwrapEnvelope);
+}
+
 // 断开账户连接：清除本机保存的账户 Key
 export function disconnectAccount() {
   return request({

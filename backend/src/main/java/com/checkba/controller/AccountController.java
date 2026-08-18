@@ -103,6 +103,46 @@ public class AccountController {
         return ok(status);
     }
 
+    /**
+     * 账户登录：给手机号发验证码（转发官网）。
+     *
+     * 与 {@code /connect} 的关系：两条路殊途同归，都是让本机持有一枚 {@code awdk_} Key。
+     * {@code /connect} 收用户手工粘贴的 Key（团队服务器与私有部署仍要用），
+     * 这条与 {@code /login} 则让用户直接用手机号/邮箱登录，Key 由官网签发、本机保存，
+     * 用户不再需要亲眼见到它。
+     */
+    @PostMapping("/login/send-code")
+    public Map<String, Object> loginSendCode(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        accountService.sendLoginCode(body == null ? null : body.get("phone"));
+        return ok(Map.of("sent", true));
+    }
+
+    /**
+     * 账户登录：手机号+验证码 或 账号+口令，换 Key 并连接。
+     *
+     * 两种凭据形状按站点分：大陆站手机号，国际站邮箱口令。这里不判站点——
+     * 判站点的是官网（它才知道自己有没有短信通道），本机按用户填了什么转发即可。
+     */
+    @PostMapping("/login")
+    public Map<String, Object> login(
+            @RequestBody(required = false) Map<String, String> body,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireUser(sessionId);
+        String phone = body == null ? null : body.get("phone");
+        String code = body == null ? null : body.get("code");
+        Map<String, Object> status = (phone != null && !phone.isBlank())
+                ? accountService.loginWithPhone(phone, code)
+                : accountService.loginWithPassword(
+                        body == null ? null : body.get("account"),
+                        body == null ? null : body.get("password"));
+        // 与 /connect 同一条：换账户后旧账户的权益、平台密钥、余额判定与用量基线立刻作废
+        accountSwitchCleanup.afterConnect();
+        return ok(status);
+    }
+
     @PostMapping("/disconnect")
     public Map<String, Object> disconnect(
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {

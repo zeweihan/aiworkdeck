@@ -6,7 +6,70 @@
       <text class="unlock-title">AI WorkDeck</text>
       <text class="unlock-subtitle">{{ $t('onboarding.unlock.subtitle') }}</text>
 
-      <view class="unlock-form">
+      <!-- 账户登录是新的主路径；试用码 / 手工粘 Key 保留给离线试用、团队服务器与私有部署 -->
+      <view class="unlock-tabs">
+        <text class="unlock-tab" :class="{ 'is-active': mode === 'login' }" @tap="switchMode('login')">
+          {{ $t('onboarding.unlock.loginTab') }}
+        </text>
+        <text class="unlock-tab" :class="{ 'is-active': mode === 'code' }" @tap="switchMode('code')">
+          {{ $t('onboarding.unlock.codeTab') }}
+        </text>
+      </view>
+
+      <view v-if="mode === 'login'" class="unlock-form">
+        <template v-if="isPhoneSite">
+          <input
+            class="unlock-field"
+            v-model="phone"
+            type="number"
+            :placeholder="$t('onboarding.unlock.phonePlaceholder')"
+            placeholder-class="unlock-placeholder"
+          />
+          <view class="unlock-code-row">
+            <input
+              class="unlock-field unlock-field-inline"
+              v-model="smsCode"
+              type="number"
+              :placeholder="$t('onboarding.unlock.smsPlaceholder')"
+              placeholder-class="unlock-placeholder"
+            />
+            <button
+              class="unlock-code-btn"
+              :disabled="sendingCode || cooldown > 0 || !phone"
+              @tap="handleSendCode"
+            >
+              {{ codeBtnLabel }}
+            </button>
+          </view>
+        </template>
+        <template v-else>
+          <input
+            class="unlock-field"
+            v-model="account"
+            :placeholder="$t('onboarding.unlock.accountPlaceholder')"
+            placeholder-class="unlock-placeholder"
+          />
+          <input
+            class="unlock-field"
+            v-model="password"
+            password
+            :placeholder="$t('onboarding.unlock.passwordPlaceholder')"
+            placeholder-class="unlock-placeholder"
+          />
+        </template>
+
+        <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
+        <button
+          class="unlock-btn"
+          :class="{ 'is-busy': loggingIn }"
+          :disabled="loggingIn"
+          @tap="handleLogin"
+        >
+          {{ loggingIn ? $t('onboarding.unlock.loggingIn') : $t('onboarding.unlock.login') }}
+        </button>
+      </view>
+
+      <view v-else class="unlock-form">
         <textarea
           class="unlock-input"
           v-model="code"
@@ -54,7 +117,7 @@
 </template>
 
 <script>
-import { activateLicense, getSiteStatus, selectSite } from '@/services/api.js'
+import { activateLicense, getSiteStatus, selectSite, sendAccountLoginCode, loginAccount } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js'
 
@@ -73,9 +136,34 @@ export default {
       siteStatus: { current: '', pinned: false, multiSite: false, sites: [] },
       siteBusy: false,
       rescueBusy: false,
+      // 账户登录（新的主路径）
+      mode: 'login',
+      phone: '',
+      smsCode: '',
+      account: '',
+      password: '',
+      sendingCode: false,
+      loggingIn: false,
+      cooldown: 0,
+      cooldownTimer: null,
     }
   },
+  beforeUnmount() {
+    // 不清的话切走这一页还留着一个每秒跑的定时器
+    if (this.cooldownTimer) clearInterval(this.cooldownTimer)
+  },
   computed: {
+    /**
+     * 大陆站用手机号+验证码，国际站用邮箱+口令。
+     * 站点未知时按手机号渲染：内置站点就是 cn，且万一判错用户还能切到「试用码 / Key」页自救。
+     */
+    isPhoneSite() {
+      return this.siteStatus.current !== 'intl'
+    },
+    codeBtnLabel() {
+      if (this.cooldown > 0) return this.$t('onboarding.unlock.resendIn', { n: this.cooldown })
+      return this.sendingCode ? this.$t('onboarding.unlock.sendingCode') : this.$t('onboarding.unlock.sendCode')
+    },
     currentSite() {
       const sites = this.siteStatus.sites || []
       return sites.find((s) => s && s.id === this.siteStatus.current) || null
@@ -127,6 +215,102 @@ export default {
       } catch (e) {
         // 拿不到就当单站，站点入口不渲染
       }
+    },
+    switchMode(next) {
+      if (this.mode === next) return
+      this.mode = next
+      this.errorMsg = ''
+    },
+    async handleSendCode() {
+      if (this.sendingCode || this.cooldown > 0) return
+      const phone = (this.phone || '').trim()
+      if (!phone) {
+        this.errorMsg = this.$t('onboarding.unlock.phoneFirst')
+        return
+      }
+      this.errorMsg = ''
+      this.sendingCode = true
+      try {
+        await sendAccountLoginCode(phone)
+        uni.showToast({ title: this.$t('onboarding.unlock.codeSent'), icon: 'none', duration: 1600 })
+        this.startCooldown(60)
+      } catch (e) {
+        this.errorMsg = (e && e.message) || this.$t('onboarding.unlock.loginFailed')
+      } finally {
+        this.sendingCode = false
+      }
+    },
+    startCooldown(seconds) {
+      this.cooldown = seconds
+      if (this.cooldownTimer) clearInterval(this.cooldownTimer)
+      this.cooldownTimer = setInterval(() => {
+        this.cooldown -= 1
+        if (this.cooldown <= 0) {
+          clearInterval(this.cooldownTimer)
+          this.cooldownTimer = null
+          this.cooldown = 0
+        }
+      }, 1000)
+    },
+    async handleLogin() {
+      let payload
+      if (this.isPhoneSite) {
+        const phone = (this.phone || '').trim()
+        const smsCode = (this.smsCode || '').trim()
+        if (!phone) {
+          this.errorMsg = this.$t('onboarding.unlock.phoneFirst')
+          return
+        }
+        if (!smsCode) {
+          this.errorMsg = this.$t('onboarding.unlock.smsCodeFirst')
+          return
+        }
+        payload = { phone, code: smsCode }
+      } else {
+        const account = (this.account || '').trim()
+        if (!account || !this.password) {
+          this.errorMsg = this.$t('onboarding.unlock.credentialsFirst')
+          return
+        }
+        payload = { account, password: this.password }
+      }
+      this.errorMsg = ''
+      this.loggingIn = true
+      try {
+        const res = await loginAccount(payload)
+        this.applyLoginResult(res)
+      } catch (e) {
+        this.errorMsg = (e && e.message) || this.$t('onboarding.unlock.loginFailed')
+      } finally {
+        this.loggingIn = false
+      }
+    },
+    applyLoginResult(res) {
+      uni.showToast({
+        title: this.$t('onboarding.unlock.loggedIn'),
+        icon: 'success',
+        duration: 1600,
+      })
+      // 存量账号还没绑手机号：提示去官网绑定。**不阻断进入产品**——补绑硬期限之前
+      // 他们照常能用，到期后官网那侧会直接拒发 Key，那时才是真的进不来。
+      if (res && res.mustBindPhone) {
+        setTimeout(() => {
+          uni.showModal({
+            title: this.$t('onboarding.unlock.mustBindTitle'),
+            content: this.$t('onboarding.unlock.mustBindBody'),
+            confirmText: this.$t('onboarding.unlock.openWebsite'),
+            cancelText: this.$t('onboarding.unlock.gotIt'),
+            success: (r) => {
+              if (r.confirm) this.openOfficialSite()
+            },
+            complete: () => uni.reLaunch({ url: '/pages/launch/launch' }),
+          })
+        }, 900)
+        return
+      }
+      setTimeout(() => {
+        uni.reLaunch({ url: '/pages/launch/launch' })
+      }, 800)
     },
     async handleUnlock() {
       const code = this.normalizedCode
@@ -302,6 +486,86 @@ export default {
   margin-top: 28px;
   display: flex;
   flex-direction: column;
+}
+
+.unlock-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  padding: 4px;
+  background: #f1f5f9;
+  border-radius: 8px;
+}
+
+.unlock-tab {
+  flex: 1;
+  text-align: center;
+  padding: 8px 0;
+  font-size: 13px;
+  color: #64748b;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+
+  &.is-active {
+    background: #ffffff;
+    color: #1a5336;
+    font-weight: 500;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+}
+
+/* 登录字段：与 .unlock-input 同一套边框语言，但单行且用正文字体
+   （手机号与验证码不是代码，等宽字体在这里只会显得生硬） */
+.unlock-field {
+  width: 100%;
+  height: 40px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  margin-bottom: 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 14px;
+  color: #0f172a;
+  background: #ffffff;
+
+  &:focus {
+    border-color: #1a5336;
+    box-shadow: 0 0 0 3px rgba(26, 83, 54, 0.1);
+  }
+}
+
+.unlock-code-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.unlock-field-inline {
+  flex: 1;
+}
+
+.unlock-code-btn {
+  flex-shrink: 0;
+  height: 40px;
+  line-height: 40px;
+  padding: 0 14px;
+  background: #ffffff;
+  color: #1a5336;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.2s, color 0.2s;
+
+  &:hover:not([disabled]) {
+    border-color: #1a5336;
+  }
+
+  &[disabled] {
+    color: #94a3b8;
+    cursor: default;
+  }
 }
 
 .unlock-input {

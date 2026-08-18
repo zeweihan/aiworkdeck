@@ -287,6 +287,114 @@ public class AccountService {
         return state.key;
     }
 
+    // ==================== 账户登录（手机号/邮箱直登，无需人肉搬运 Key） ====================
+
+    /**
+     * 官网登录：给手机号发验证码。
+     *
+     * 这条与下面两个 login 方法一起，替掉了「去官网账户页生成 Key、复制、粘进设置页」
+     * 那三步人肉操作。{@code awdk_} Key 本身**保留不动**——权益同步、平台 AI 取 key、
+     * {@link #accountFingerprintOrNull()}、流水全挂在它上面，只是用户不再需要亲眼见到它。
+     */
+    public void sendLoginCode(String phone) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("phone", phone == null ? "" : phone.trim());
+        postLogin("/api/auth/sms-login/send-code", body);
+    }
+
+    /** 官网登录：手机号 + 验证码换 Key 并连接（大陆站主路径）。 */
+    public synchronized Map<String, Object> loginWithPhone(String phone, String code) {
+        Map<String, Object> credentials = new HashMap<>();
+        credentials.put("phone", phone == null ? "" : phone.trim());
+        credentials.put("code", code == null ? "" : code.trim());
+        return exchangeAndConnect(credentials);
+    }
+
+    /** 官网登录：账号 + 口令换 Key 并连接（国际站主路径，及大陆站补绑期内的存量账号）。 */
+    public synchronized Map<String, Object> loginWithPassword(String account, String password) {
+        Map<String, Object> credentials = new HashMap<>();
+        credentials.put("account", account == null ? "" : account.trim());
+        credentials.put("password", password == null ? "" : password);
+        return exchangeAndConnect(credentials);
+    }
+
+    private Map<String, Object> exchangeAndConnect(Map<String, Object> credentials) {
+        Map<String, Object> payload = postLogin("/api/auth/exchange-key", credentials);
+        String key = str(payload.get("key"));
+        if (key == null || key.isBlank()) {
+            throw new AccountException(AccountException.Kind.MALFORMED,
+                    LangText.of("官网没有返回账户凭据，请稍后重试",
+                            "The website did not return an account credential, please retry shortly"));
+        }
+        // 复用 connect：它会拉一次 /api/account/me 校验 Key 并落 username/displayName，
+        // 在这里另写一份落盘逻辑只会多一处会漂的状态写入。
+        Map<String, Object> result = new HashMap<>(connect(key));
+        result.put("isNewUser", Boolean.TRUE.equals(payload.get("isNewUser")));
+        result.put("mustBindPhone", Boolean.TRUE.equals(payload.get("mustBindPhone")));
+        return result;
+    }
+
+    /**
+     * 登录类请求的出站与状态码分类。
+     *
+     * 与 {@link #handle} 分开的原因：那个是给「带 Key 的业务请求」用的，401 一律解释成
+     * 「Key 无效或已被吊销」。登录阶段还没有 Key，401 的真实含义是验证码错/口令错，
+     * 套用那句文案会把用户引到完全错误的方向。这里改为**优先透传官网给出的 message**。
+     */
+    private Map<String, Object> postLogin(String path, Map<String, Object> body) {
+        String json;
+        try {
+            json = objectMapper.writeValueAsString(body);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+            throw new IllegalStateException(e); // 入参都是 String，序列化不会失败
+        }
+        AccountTransport.Reply reply = transport.send("POST", baseUrl() + path, null, json);
+        if (reply.networkFailure()) {
+            throw networkError();
+        }
+        int status = reply.status();
+        if (status >= 500) {
+            throw new AccountException(AccountException.Kind.NETWORK,
+                    LangText.of("AI WorkDeck 服务器暂时不可用，请稍后重试",
+                            "The AI WorkDeck server is temporarily unavailable, please retry shortly"));
+        }
+        Map<String, Object> parsed = parse(reply.body());
+        if (status >= 200 && status < 300) {
+            return parsed;
+        }
+        String message = str(parsed.get("message"));
+        String code = str(parsed.get("error"));
+        if (message == null || message.isBlank()) {
+            message = loginErrorMessage(code);
+        }
+        // 403 phone_binding_required 是「过了补绑硬期限」，属于业务冲突不是凭据失效——
+        // 归到 UNAUTHORIZED 会让上层去清本地连接，而这时候根本还没有连接可清。
+        AccountException.Kind kind = "phone_binding_required".equals(code)
+                ? AccountException.Kind.CONFLICT
+                : AccountException.Kind.UNAUTHORIZED;
+        throw new AccountException(kind, message);
+    }
+
+    /** 官网没给 message 时的兜底文案（按 error code 分，别一律「操作失败」）。 */
+    private static String loginErrorMessage(String code) {
+        if (code == null) {
+            return LangText.of("登录失败，请稍后重试", "Sign-in failed, please retry shortly");
+        }
+        return switch (code) {
+            case "invalid_code" -> LangText.of("验证码错误或已过期", "Incorrect or expired verification code");
+            case "invalid_credentials" -> LangText.of("账号或密码不正确", "Incorrect account or password");
+            case "sms_not_supported_on_site" -> LangText.of("当前站点不支持手机号方式，请改用邮箱",
+                    "This site does not support mobile numbers, please use email instead");
+            case "sms_not_configured" -> LangText.of("短信服务暂不可用，请稍后重试",
+                    "SMS is temporarily unavailable, please retry shortly");
+            case "phone_binding_required" -> LangText.of(
+                    "该账户尚未绑定手机号，且已超过绑定期限。请邮件联系 hi@aiworkdeck.com 处理",
+                    "This account has no linked mobile number and the deadline has passed. Please email hi@aiworkdeck.com");
+            case "missing_fields" -> LangText.of("请填写完整", "Please fill in all fields");
+            default -> LangText.of("登录失败，请稍后重试", "Sign-in failed, please retry shortly");
+        };
+    }
+
     private Map<String, Object> getJson(String path, String key) {
         AccountTransport.Reply reply = transport.send("GET", baseUrl() + path, key, null);
         if (reply.networkFailure()) {
