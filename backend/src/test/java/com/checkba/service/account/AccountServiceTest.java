@@ -35,6 +35,7 @@ class AccountServiceTest {
     static class StubTransport implements AccountTransport {
         final Deque<Reply> replies = new ArrayDeque<>();
         final List<String> calls = new ArrayList<>();
+        final List<String> bodies = new ArrayList<>();
         String lastBearer;
 
         StubTransport enqueue(int status, String body) {
@@ -50,6 +51,7 @@ class AccountServiceTest {
         @Override
         public Reply send(String method, String url, String bearerKey, String jsonBody) {
             calls.add(method + " " + url);
+            bodies.add(jsonBody == null ? "" : jsonBody);
             lastBearer = bearerKey;
             if (replies.isEmpty()) {
                 throw new AssertionError("桩没有为 " + method + " " + url + " 准备响应");
@@ -72,6 +74,110 @@ class AccountServiceTest {
         AccountService service = service();
         service.connect(KEY);
         return service;
+    }
+
+    // ==================== 账户登录（手机号/邮箱直登） ====================
+
+    private static final String ME = "{\"username\":\"hanzewei\",\"displayName\":\"韩泽伟\"}";
+
+    @Test
+    @DisplayName("发验证码：转发到官网 sms-login/send-code，且不带 Bearer（登录阶段还没有 Key）")
+    void loginSendCodeForwards() {
+        transport = new StubTransport().enqueue(200, "{\"ok\":true}");
+        service().sendLoginCode("13800138000");
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/sms-login/send-code", transport.calls.get(0));
+        assertTrue(transport.bodies.get(0).contains("13800138000"), transport.bodies.get(0));
+        assertNull(transport.lastBearer, "登录阶段还没有 Key，不该带 Authorization");
+    }
+
+    @Test
+    @DisplayName("手机号登录：换 Key 后自动连接并落盘，用户全程看不到 Key")
+    void phoneLoginExchangesKeyAndConnects() {
+        transport = new StubTransport()
+                .enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":true,\"mustBindPhone\":false}")
+                .enqueue(200, ME);
+        AccountService service = service();
+        Map<String, Object> result = service.loginWithPhone("13800138000", "123456");
+
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/exchange-key", transport.calls.get(0));
+        assertEquals("GET https://www.aiworkdeck.com/api/account/me", transport.calls.get(1),
+                "换到 Key 之后必须复用 connect 去校验，而不是直接落盘");
+        assertEquals(true, result.get("connected"));
+        assertEquals(true, result.get("isNewUser"));
+        assertEquals("hanzewei", result.get("username"));
+        assertFalse(result.toString().contains(KEY), "返回体不允许出现 Key 明文: " + result);
+        assertTrue(Files.exists(tempDir.resolve("account.json")));
+        assertTrue(service.isConnected());
+    }
+
+    @Test
+    @DisplayName("口令登录：国际站主路径，同样换 Key 并连接")
+    void passwordLoginExchangesKey() {
+        transport = new StubTransport()
+                .enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":false}")
+                .enqueue(200, ME);
+        Map<String, Object> result = service().loginWithPassword("hanzewei", "pw12345678");
+        assertEquals("POST https://www.aiworkdeck.com/api/auth/exchange-key", transport.calls.get(0));
+        assertTrue(transport.bodies.get(0).contains("hanzewei"));
+        assertFalse(transport.bodies.get(0).contains("13800138000"));
+        assertEquals(true, result.get("connected"));
+        assertEquals(false, result.get("isNewUser"));
+    }
+
+    @Test
+    @DisplayName("验证码错误：透传官网文案，且绝不落盘")
+    void loginFailureSurfacesWebsiteMessageAndPersistsNothing() {
+        transport = new StubTransport()
+                .enqueue(401, "{\"error\":\"invalid_code\",\"message\":\"验证码错误或已过期\"}");
+        AccountService service = service();
+        AccountException e = assertThrows(AccountException.class,
+                () -> service.loginWithPhone("13800138000", "000000"));
+        assertEquals(AccountException.Kind.UNAUTHORIZED, e.getKind());
+        assertEquals("验证码错误或已过期", e.getMessage(),
+                "登录阶段的 401 是验证码错，不能套用「Key 无效或已被吊销」那句");
+        assertFalse(Files.exists(tempDir.resolve("account.json")), "登录失败不得落盘");
+        assertFalse(service.isConnected());
+    }
+
+    @Test
+    @DisplayName("官网没给 message：按 error code 出兜底文案，不是一律「操作失败」")
+    void loginFailureFallsBackByErrorCode() {
+        transport = new StubTransport().enqueue(401, "{\"error\":\"invalid_credentials\"}");
+        AccountException e = assertThrows(AccountException.class,
+                () -> service().loginWithPassword("hanzewei", "wrong"));
+        assertTrue(e.getMessage().contains("账号或密码"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("超过补绑硬期限：归 CONFLICT 不是 UNAUTHORIZED，且文案给出人工通道")
+    void loginBlockedByBindingDeadlineIsConflict() {
+        transport = new StubTransport().enqueue(403,
+                "{\"error\":\"phone_binding_required\",\"message\":\"该账户尚未绑定手机号，且已超过绑定期限。请邮件联系 hi@aiworkdeck.com 处理\"}");
+        AccountException e = assertThrows(AccountException.class,
+                () -> service().loginWithPassword("olduser", "pw12345678"));
+        // UNAUTHORIZED 会让上层去清本地连接，而这时候根本还没有连接可清
+        assertEquals(AccountException.Kind.CONFLICT, e.getKind());
+        assertTrue(e.getMessage().contains("hi@aiworkdeck.com"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("登录时断网：归 NETWORK，不留下半连接状态")
+    void loginNetworkFailureIsNetworkKind() {
+        transport = new StubTransport().enqueueNetworkFailure();
+        AccountService service = service();
+        AccountException e = assertThrows(AccountException.class,
+                () -> service.loginWithPhone("13800138000", "123456"));
+        assertEquals(AccountException.Kind.NETWORK, e.getKind());
+        assertFalse(service.isConnected());
+    }
+
+    @Test
+    @DisplayName("官网回 200 但没带 key：判 MALFORMED，不能当成功")
+    void loginWithoutKeyIsMalformed() {
+        transport = new StubTransport().enqueue(200, "{\"isNewUser\":true}");
+        AccountException e = assertThrows(AccountException.class,
+                () -> service().loginWithPhone("13800138000", "123456"));
+        assertEquals(AccountException.Kind.MALFORMED, e.getKind());
     }
 
     // ==================== connect ====================
