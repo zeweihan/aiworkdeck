@@ -39,56 +39,21 @@
       <!-- 右侧内容 -->
       <view class="admin-main">
         <!-- 配置管理 -->
-        <scroll-view
-          v-if="activeNav === 'config'"
-          scroll-y
-          class="config-scroll"
-        >
-          <!-- 应用语言：立即生效、独立保存链（setAppLanguage 直写，不走 handleSave
-               的 /api/admin/config——那条要求 admin 权限，语言是人人可改的设置）。 -->
-          <view class="section-card">
-            <view class="section-header">
-              <text class="section-title">{{ appLanguage === 'en-US' ? 'Language' : '语言 / Language' }}</text>
-              <text class="section-subtitle">
-                {{ appLanguage === 'en-US'
-                  ? 'Applies to the interface, document editor, and AI replies. Newly opened editors use the new language; restart the app for full effect.'
-                  : '作用于界面、文档编辑器与 AI 回复。新打开的编辑器使用新语言，重启应用后完全生效。' }}
-              </text>
-            </view>
-            <view class="section-body">
-              <view class="form-row">
-                <text class="form-label">{{ appLanguage === 'en-US' ? 'Language' : '界面语言' }}</text>
-                <view class="provider-radio-group">
-                  <view
-                    v-for="opt in appLanguageOptions"
-                    :key="opt.value"
-                    class="radio-item"
-                    :class="{ checked: appLanguage === opt.value }"
-                    @tap="onAppLanguagePick(opt.value)"
-                  >
-                    <view class="radio-dot"></view>
-                    <text class="radio-label">{{ opt.label }}</text>
-                  </view>
-                </view>
-              </view>
-            </view>
-          </view>
-
-          <!-- 这一页此前还有一张「AI 供应商接入参数」卡（OpenRouter 的 Key 与地址）。
-               2026-08-18 移进「AI 功能设置」：官方桌面版是账户登录 + 平台代采，
-               自备 Key 是少数人的旁路，摆在顶层分区会让人以为「不填就用不了」。
-               它现在跟在供应商单选下面，**选中 OpenRouter 那一档才出现**——
-               需要它的人正在那一步，不需要的人不必看见。
-               这一页因此只剩「语言」，而语言是独立保存链（setAppLanguage 直写），
-               所以底部的「保存配置」按钮一并去掉：留着会存一份没人改过的表单。 -->
-        </scroll-view>
+        <!-- 「系统配置」这个分区已整体撤掉（2026-08-18）。它到最后只剩两样东西，
+             各自都有更该待的地方：
+             ① OpenRouter 的 Key 与地址 → 「AI 功能设置」的供应商单选下面（选中那一档才出现）；
+             ② 界面语言 → 个人中心「设置」。语言是**每个人自己的偏好**（storage 权威源，
+                人人可改、不要 admin 权限），摆在「系统管理」下面本身就是错的分类。
+             留一个只剩一项、还配着一个存不了任何东西的「保存配置」按钮的分区，
+             比没有这个分区更让人困惑。 -->
 
         <!-- 平台服务（P5：配置面收敛）。
              七项外部服务各自走哪一档，以及自备 Key 时的全部凭证字段。
              当前档位一律读 GET /api/platform-services 的 provider（后端解析后的生效值），
              绝不自己按凭证是否为空去猜——存量机器上这两件事经常对不上。 -->
+        <!-- 链头：原来是「系统配置」那块 v-if，它撤掉后由平台服务接上 -->
         <scroll-view
-          v-else-if="activeNav === 'platform'"
+          v-if="activeNav === 'platform'"
           scroll-y
           class="config-scroll"
         >
@@ -964,6 +929,21 @@
                 </view>
               </view>
 
+              <!-- 「这三个框到底填什么」。没部署过服务器的人打开这一页只会发呆——
+                   地址不是我们的域名、账号不是 aiworkdeck.com 那个，而界面上此前
+                   一个字都没说。**没有连接时才展开**：已经连上的人不需要再看一遍。 -->
+              <view v-if="!cloudConnections.length" class="provider-card cloud-help-card">
+                <view class="provider-header">
+                  <text class="provider-name">{{ $t('admin.cloudNoServerTitle') }}</text>
+                </view>
+                <text class="cloud-help-body">{{ $t('admin.cloudNoServerBody') }}</text>
+                <text class="cloud-help-sub">{{ $t('admin.cloudFieldsTitle') }}</text>
+                <text class="cloud-help-li">{{ $t('admin.cloudFieldsAddress') }}</text>
+                <text class="cloud-help-li">{{ $t('admin.cloudFieldsAccount') }}</text>
+                <text class="cloud-help-li">{{ $t('admin.cloudFieldsToken') }}</text>
+                <text class="cloud-help-note">{{ $t('admin.cloudDeployHint') }}</text>
+              </view>
+
               <view class="provider-card">
                 <view class="provider-header">
                   <text class="provider-name">{{ $t('admin.cloudConnectTitle') }}</text>
@@ -1389,7 +1369,6 @@ import { openExternalUrl } from '@/utils/externalLink.js'
 import { accountPageUrl, siteBaseUrl, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
 import { host } from '@/services/host.js'
 import { refreshEntitlements, isEnabled, FEATURES } from '@/composables/useEntitlement.js'
-import { getAppLanguage, setAppLanguage } from '@/utils/appLanguage.js'
 import UnlockHint from '@/components/UnlockHint.vue'
 import MarketPane from '@/components/MarketPane.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
@@ -1401,18 +1380,11 @@ export default {
   data() {
     return {
       userDisplayName: this.$t('admin.userFallbackName'),
-      activeNav: 'config',
-      // 应用语言：读写走 utils/appLanguage.js（storage 权威源 + App.vue 镜像同步），
-      // 与 form/handleSave 无关。选项标签用各自母语，刻意不随语言翻译。
-      appLanguage: getAppLanguage(),
-      appLanguageOptions: [
-        { value: 'zh-CN', label: '简体中文' },
-        { value: 'en-US', label: 'English' },
-      ],
+      activeNav: 'ai',
       /** 服务端记录的同意时间戳；空 = 未同意或告知文本已改版需重新征求 */
       crossBorderConsentAt: '',
       navItems: [
-        { key: 'config', label: this.$t('admin.navConfig') },
+        // 'config'（系统配置）已撤，内容分别并入 'ai' 与个人中心「设置」
         { key: 'ai', label: this.$t('admin.navAi') },
         // 平台服务对团队服务器同样要可见：平台档在那里不可选，但那 21 个 BYOK 凭证字段
         // 已经搬进这个面板，标成 desktopOnly 会让自建服务器的管理员没地方填。
@@ -2039,20 +2011,6 @@ export default {
           }
         },
       })
-    },
-    onAppLanguagePick(value) {
-      if (value === this.appLanguage) return
-      this.appLanguage = setAppLanguage(value)
-      uni.showToast({
-        title: this.appLanguage === 'en-US' ? 'Switching to English…' : '正在切换为简体中文…',
-        icon: 'none',
-      })
-      // 整页 reload：i18n 单例的 locale、config 模块顶层取值的静态 label、
-      // LOWA 编辑器 uilang 全部随之重建。延迟给 App.vue 的镜像同步
-      //（主进程 IPC + 后端 POST）留出发出的窗口。
-      setTimeout(() => {
-        try { window.location.reload() } catch (e) { /* 非浏览器环境忽略 */ }
-      }, 600)
     },
     onNavTap(nav) {
       this.activeNav = nav.key
@@ -3787,6 +3745,46 @@ $border-color: #E9ECEF; // Gray-Light
   margin: -8px 0 16px;
   font-size: 12px;
   color: #b45309;
+}
+
+/* 「还没有团队案件库？」说明卡：只在没有任何连接时出现 */
+.cloud-help-card {
+  background: #FAFBFA;
+  border: 1px solid #E4EAE6;
+}
+
+.cloud-help-body {
+  display: block;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #495057;
+}
+
+.cloud-help-sub {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2C3338;
+}
+
+.cloud-help-li {
+  display: block;
+  margin-bottom: 6px;
+  padding-left: 12px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #495057;
+  border-left: 2px solid #DDE3E0;
+}
+
+.cloud-help-note {
+  display: block;
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: #868E96;
 }
 
 .cloud-connect-actions {

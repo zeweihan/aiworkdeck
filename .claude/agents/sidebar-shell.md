@@ -239,11 +239,21 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 （零项目新用户的落点）。**`.create-card` 的张数是 app-e2e 断言的**（浏览器降级恰好 1 张），
 页头那个是 `<button>` 不是 `.create-card`，不影响计数。
 - **项目概览**：内容本体 `frontend/src/components/project-home/ProjectHomePane.vue` + 同目录 `project-home-pane.scss`（**两个宿主共用**：工作台中栏标签、`pages/project-home` 薄壳页）；五个子组件在同目录：`ProfileHeader` / `OverviewStatsBar` / `ActivityFeed` / `TaskSchedule` / `ConversationList`。薄壳页 `frontend/src/pages/project-home/project-home.vue` + `project-home.scss` 只剩顶栏与 query 处理。**十个 e2e 稳定锚点类名**：内容根 `.project-home-pane`、薄壳页根 `.page-project-home`、项目列表页根 `.page-project-list`、薄壳页两按钮 `.btn-workbench` / `.btn-project-list`、五个组件根 `.overview-stats-bar` / `.profile-header` / `.activity-feed` / `.task-schedule` / `.conversation-list`——**改这些名字要同步改 `frontend/tests/app-e2e/run.mjs` 的 J2/J3 段**。取数纪律（请求代、绝不调 `/version/status`）随内容一起搬进了 Pane。档案编辑刻意走行内 input、删除确认走 `uni.showModal`，因此两个新页与五个新组件**都不需要自带 awd-\* 样式副本**（awd-\* 没有集中定义，改成弹窗就必须自带一份 scoped 副本，否则渲染成无样式裸框）。
-- admin 的「系统配置」面板（nav key `config`）**只剩「语言」一项**（2026-08-18）：原先那张
-  「AI 供应商接入参数」卡（OpenRouter 的 Key 与地址）已并进「AI 功能设置」，跟在供应商单选下面、
-  **选中 OpenRouter 那一档才渲染**（形制同跨境同意块）。语言是独立保存链（`setAppLanguage` 直写），
-  所以这一页底部的「保存配置」按钮也一并去掉了。`admin.externalTitle` 文案随之改成
-  「OpenRouter 接入参数」，那七家非 AI 服务的指路条 `externalMovedNote` 挪到 AI 面板底部。
+- **admin 的「系统配置」分区（nav key `config`）已整体撤掉**（2026-08-18）。它到最后只剩两样东西，
+  各自都有更该待的地方：① OpenRouter 的 Key 与地址 → 「AI 功能设置」的供应商单选下面、
+  **选中 OpenRouter 那一档才渲染**（形制同跨境同意块）；② 界面语言 → **个人中心「设置」**
+  （语言是每个人自己的偏好：storage 权威源、人人可改、不要 admin 权限，摆在「系统管理」下面
+  本身就是错的分类）。`admin.externalTitle` 文案随之改成「OpenRouter 接入参数」，
+  七家非 AI 服务的指路条 `externalMovedNote` 挪到 AI 面板底部，`admin.navConfig` 键已删。
+  **撤这个分区要一起改的三处**：`navItems` 去掉那一项、`activeNav` 默认值改成 `'ai'`
+  （原默认就是 `'config'`，不改会得到一个默认打开却空白的页），以及**把 `v-if` 链头接上**——
+  面板是一条 `v-if`/`v-else-if` 长链，删掉链头那块会让编译期直接报
+  「v-else/v-else-if has no adjacent v-if」，现在链头是 `platform`。
+  app-e2e J7 的 admin 断言文案也从「系统配置」改成了「系统管理」（左侧导航卡标题，不随分区增减变化）。
+- admin 的「团队案件库」面板（nav key `cloud`）在**没有任何连接时**多渲染一张说明卡
+  （`.cloud-help-card`，`admin.cloudNoServerTitle` 起五条文案）：说清案件库是律所自建的一台
+  服务器、三个框分别填什么、账号不是 aiworkdeck.com 那个、以及本机只存令牌不存密码。
+  在此之前界面对这些只字未提，没部署过服务器的人打开只会发呆（维护者 2026-08-18 亲自问到）。
 - admin 的「AI 功能设置」面板（nav key `ai`）是 AI 供应商与模型的唯一设置入口：三档供应商单选、
   默认/辅助/子 Agent 三个模型下拉（清单来自 `GET /api/ai/models`，前端不许硬编码）、网络区域三选一
   （auto/境内/境外，附判定依据）、本地 Ollama 的地址与模型名。nav 结构未变，改的是该面板内容；

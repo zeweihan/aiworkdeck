@@ -6,7 +6,6 @@ export default {
   // A sibling switch, not a "back": settings and profile redirectTo each other;
   // the real back is the global control (utils/globalBack.js)
   backToProfile: 'Profile',
-  navConfig: 'System Configuration',
   navAi: 'AI Settings',
   navPlatform: 'Platform Services',
   navAccount: 'Account & Usage',
@@ -255,6 +254,13 @@ export default {
   // Team case library
   cloudSubtitle: 'A Team Case Library is a server your firm runs. Once connected, case files can be placed in it; colleagues each take a copy to work on locally, edit independently, and merge when submitting drafts',
   cloudDisconnectButton: 'Leave This Library',
+  cloudNoServerTitle: "Don't have a Team Case Library yet?",
+  cloudNoServerBody: 'The Team Case Library is not a service we host — it is a server your firm runs itself (on the office network or on a cloud host). Working alone you never need it; it only matters when colleagues work the same matter with you.',
+  cloudFieldsTitle: 'What goes in these three fields',
+  cloudFieldsAddress: 'Library address: the URL of your firm\'s server, e.g. https://team.yourfirm.com, or http://192.168.x.x on the office network.',
+  cloudFieldsAccount: 'Username / password: an account on that server, issued by whoever runs it. Note this is not your aiworkdeck.com account — that one is for billing and will not work here.',
+  cloudFieldsToken: 'Once connected this machine stores only a long-lived token, never the password; disconnecting revokes that token on the server.',
+  cloudDeployHint: 'To stand one up: deploy/web/README.md in the repository has the full steps (nginx + backend prod profile). On first start the server creates an admin account whose random initial password is printed once in the startup log — take it, change it, then create accounts for colleagues.',
   cloudConnectTitle: 'Connect a Team Case Library',
   cloudServerLabel: 'Library Address',
   cloudServerPlaceholder: 'e.g. https://team.example.com',

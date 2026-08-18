@@ -957,7 +957,9 @@ try {
   for (const [name, route, expectText] of [
     ['插件广场', '/pages/plugin-market/plugin-market', '插件广场'],
     ['变量库', '/pages/variable-library/variable-library', '新增变量'],
-    ['管理页(只读)', '/pages/admin/admin', '系统配置'],
+    // 「系统配置」分区 2026-08-18 已整体撤掉（OpenRouter 并入 AI 功能设置、
+    // 语言搬去个人中心），改断言左侧导航卡的标题——它不随分区增减变化
+    ['管理页(只读)', '/pages/admin/admin', '系统管理'],
     // 新建项目页 2026-08 起不再是主入口（两个新建动作已内嵌在项目列表页下方），
     // 保留给浏览器降级与应用菜单的 ?auto=create-folder，所以仍然要能打开
     ['新建项目页', '/pages/newproject/index', '新建或打开项目'],

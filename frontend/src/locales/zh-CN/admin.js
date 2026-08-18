@@ -6,7 +6,6 @@ export default {
   // 同级切换而不是「返回」：设置页与个人中心互跳走 redirectTo，
   // 真正的返回由全局返回键承担（utils/globalBack.js）
   backToProfile: '个人中心',
-  navConfig: '系统配置',
   navAi: 'AI 功能设置',
   navPlatform: '平台服务',
   navAccount: '账户与用量',
@@ -255,6 +254,14 @@ export default {
   // 团队案件库
   cloudSubtitle: '团队案件库是律所自己的一台服务器。连上之后，案卷可以放进去，所里同事各自取一份到本机办，各自改各自的，交稿时再合到一起',
   cloudDisconnectButton: '退出这个案件库',
+  // 「这三个框到底填什么」——不写清楚的话，没部署过服务器的人只会对着它发呆
+  cloudNoServerTitle: '还没有团队案件库？',
+  cloudNoServerBody: '团队案件库不是我们托管的服务，是律所自己立的一台 AI WorkDeck 服务器（可以在办公室内网，也可以放到云主机）。一个人办案完全不需要它——只有要和同事同办一份案卷时才用得上。',
+  cloudFieldsTitle: '三个框分别填什么',
+  cloudFieldsAddress: '案件库地址：所里那台服务器的网址，例如 https://team.你所里.com，内网就是 http://192.168.x.x。',
+  cloudFieldsAccount: '账号 / 密码：那台服务器上的账号，由架设它的人开给你。注意不是 aiworkdeck.com 的账号——那边是账户与充值，凭据在这里用不了。',
+  cloudFieldsToken: '连上之后本机只保存一枚长期令牌，不保存密码；断开连接时会回服务器把令牌作废。',
+  cloudDeployHint: '要自己架一台：仓库 deploy/web/README.md 有完整步骤（nginx + 后端 prod 档）。服务器首次启动会建一个 admin 账号，随机初始口令只在启动日志里出现一次，取走改密后再给同事开账号。',
   cloudConnectTitle: '连接团队案件库',
   cloudServerLabel: '案件库地址',
   cloudServerPlaceholder: '例如 https://team.example.com',
