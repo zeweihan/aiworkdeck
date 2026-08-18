@@ -6,7 +6,8 @@
 # 同步两类产物：
 #   1. 补丁产物 patch-*.tar.gz + manifest.json(.sig) → $WEB_ROOT/assets/（应用内增量更新）
 #   2. 安装包 .dmg / .exe → $WEB_ROOT/installers/ + latest.json（官网下载直链，
-#      大陆用户打不开 GitHub，官网必须自己发包；只留最新一版，旧安装包同步后清掉）
+#      大陆用户打不开 GitHub，官网必须自己发包；留最新两版，更老的同步后清掉——
+#      为什么不是只留一版见 prune_old_installers 的注释）
 #
 #   bash deploy/update-mirror-sync.sh
 #
@@ -22,6 +23,49 @@ set -euo pipefail
 REPO="${REPO:-zeweihan/aiworkdeck}"
 WEB_ROOT="${WEB_ROOT:-/www/wwwroot/update/desktop}"
 API="https://api.github.com/repos/${REPO}/releases/latest"
+
+# 清理旧安装包：只删「比上一版更老的」，当前版与上一版都留着。
+#
+# 为什么不能一换 latest.json 就把旧包全删——2026-08-18 发 v0.18.0 时实测到的 404 窗口：
+# 官网 /start 的下载按钮是服务端渲染的，数据源 aiworkdeck_website 的 lib/latest-release.ts
+# 对本清单用了 `revalidate: 300`。latest.json 已指向新版、旧包已被删，而页面缓存里还是
+# 旧版文件名，用户点下载直接 404（stale-while-revalidate 还会让过期后的第一个访客继续
+# 拿到旧页面，真实窗口比 300 秒更长）。
+# 留一版旧包同时也照顾到「已经点了下载、正在传」的用户：安装包 1.4GB，大陆常要传很久，
+# 传到一半文件没了就是断流——这个比 404 更隐蔽。
+#
+# 入参：$1 = 本版版本号（如 0.18.0），$2 = 本版资产清单 tsv
+prune_old_installers() {
+  local cur_ver="$1" tsv="$2"
+  local prev_ver f base stem
+
+  # 上一版 = 盘上除本版外最高的那个版本号。版本号从文件名里取
+  #（AI.WorkDeck-0.18.0-arm64.dmg / AI.WorkDeck.Setup.0.18.0.exe），不认品牌大小写
+  # ——0.18.0 起 Workdeck 改成了 WorkDeck，按名字前缀比对会在改名那一版失手。
+  # 必须 sort -V：字典序会把 0.9.0 判得比 0.18.0 新。
+  prev_ver=$(find "$WEB_ROOT/installers" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.exe' \) \
+    | sed 's#.*/##' | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sort -uV | grep -vFx "$cur_ver" | tail -1 || true)
+  [ -n "$prev_ver" ] && echo "[mirror-sync] keep previous installer: $prev_ver"
+
+  while IFS= read -r -d '' f; do
+    base="$(basename "$f")"
+    stem="${base#.}"; stem="${stem%.part}"
+    # 本版的（含正在续传的半成品）：留
+    if grep -qF "$stem" "$tsv"; then continue; fi
+    # 上一版的成品安装包：留。半成品不留——`.part` 只对还在下的那一版有意义，
+    # 旧版的半成品没人会再续传，是纯占盘。
+    if [ -n "$prev_ver" ]; then
+      case "$base" in
+        *"$prev_ver"*.dmg|*"$prev_ver"*.exe) continue ;;
+      esac
+    fi
+    echo "[mirror-sync] prune old installer: $base"
+    rm -f "$f"
+  done < <(find "$WEB_ROOT/installers" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.exe' -o -name '.*.part' \) -print0)
+}
+
+# 测试只想拿上面的函数，不要跑同步本身（deploy/update-mirror-sync_prune_test.sh）
+[ "${MIRROR_SYNC_SOURCE_ONLY:-0}" = "1" ] && return 0
 
 # 全局互斥锁：安装包是 GB 级、大陆拉 GitHub 可能一跑数小时，cron 每小时一发，
 # 不加锁必然叠车——2026-08-14 实测三个并发实例互分带宽，每个只剩 ~15KB/s，
@@ -124,7 +168,7 @@ fi
 
 # ---- 安装包镜像（官网下载直链）----------------------------------------------
 # 全部就位才写 latest.json（原子替换，官网只信这份清单，绝不指向缺失文件）；
-# 写完再清理不属于本版的旧安装包（1.4GB 级别，只留最新一版省磁盘）。
+# 写完再清理更老的安装包（1.4GB 级别，留最新两版，更老的省磁盘）。
 # 任一下载失败则保留旧 latest.json 与旧安装包——官网继续发上一版，不发半套。
 INSTALLERS_FAILED=0
 if [ -s "$TMP/installers.tsv" ]; then
@@ -165,14 +209,7 @@ EOF
     echo "[mirror-sync] installers/latest.json updated -> $TAG"
 
     # 清理旧安装包与过期半成品（只删 .dmg/.exe/.part，不碰 latest.json）
-    while IFS= read -r -d '' f; do
-      base="$(basename "$f")"
-      stem="${base#.}"; stem="${stem%.part}"
-      if ! grep -qF "$stem" "$TMP/installers.tsv"; then
-        echo "[mirror-sync] prune old installer: $base"
-        rm -f "$f"
-      fi
-    done < <(find "$WEB_ROOT/installers" -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.exe' -o -name '.*.part' \) -print0)
+    prune_old_installers "${TAG#v}" "$TMP/installers.tsv"
   else
     echo "[mirror-sync] 安装包未全部就位，latest.json 不更新（官网继续发上一版）；重跑本脚本可续传补齐" >&2
   fi
