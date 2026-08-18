@@ -29,6 +29,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { pickCdpPort, portFree, spawnElectron, waitForCdpWs, cdpOwnershipError, hardenPageInput, reassertFocusEmulation } from '../_lib/electron-cdp.mjs'
+import { ensureUnlocked } from '../_lib/license-gate.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontendDir = path.resolve(here, '../..')
@@ -77,13 +78,8 @@ async function api(ep, opts = {}) {
 {
   // 冷启动后端可能还锁着/未过向导：解锁门与向导分流由 app-e2e J1 专门覆盖，
   // 这里只把状态铺平，让 Electron 启动链不停在 unlock/wizard 页。
-  const lic = await api('/api/license/status')
-  if (lic && !lic.unlocked) {
-    const code = process.env.APP_E2E_TRIAL_CODE
-      || 'AWD-T-AEAW-U4WW-LCW4-T7RX-BLHO-V5DL-GZXB-QYKD-MX3O-4A7P-WFXU-6QVT-IE5Y-NL4X-PMIJ-ZQSZ-YY6K-N2H4-6WGB-SDOG-2LM7-JO62-PJDO-ASKY-NYR2-TLGR-YKUE-HYIK'
-    const act = await api('/api/license/activate', { method: 'POST', body: { code } })
-    if (!act || act.unlocked !== true) { console.error('试用码解锁失败: ' + JSON.stringify(act).slice(0, 150)); process.exit(2) }
-  }
+  // 解锁起点收进共享模块（发版默认值关掉试用码之后这段三处都要改，抄三份必漏）
+  try { await ensureUnlocked(api) } catch (e) { console.error(e.message); process.exit(2) }
   const wiz = await api('/api/admin/wizard')
   if (wiz && wiz.initialized === false) {
     // 三档收敛后 gemini 会被枚举校验打成 400（见 AdminConfigController.toSettingsUpdates）
