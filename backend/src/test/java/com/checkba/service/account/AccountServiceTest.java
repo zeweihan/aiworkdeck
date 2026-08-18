@@ -65,7 +65,7 @@ class AccountServiceTest {
     private AccountService service() {
         return new AccountService(
                 com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
-                tempDir.toString(), transport);
+                tempDir.toString(), transport, null);
     }
 
     private AccountService connected() {
@@ -455,22 +455,39 @@ class AccountServiceTest {
     @DisplayName("base-url 配成 http 直接拒绝：明文 Key 不允许走未加密通道")
     void httpBaseUrlRejected() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://www.aiworkdeck.com"), tempDir.toString(), new StubTransport()));
+                () -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://www.aiworkdeck.com"), tempDir.toString(), new StubTransport(), null));
         assertTrue(e.getMessage().contains("https"), e.getMessage());
+    }
+
+    @Test
+    @DisplayName("连上账户必须一并落解锁票据——不落的话「登录成功」但 launch 页会把人原地弹回解锁页")
+    void connectAlsoMarksLicenseUnlocked() {
+        java.util.concurrent.atomic.AtomicReference<String> marked = new java.util.concurrent.atomic.AtomicReference<>();
+        com.checkba.service.LicenseService license =
+                org.mockito.Mockito.mock(com.checkba.service.LicenseService.class);
+        org.mockito.Mockito.doAnswer(inv -> { marked.set(inv.getArgument(0)); return null; })
+                .when(license).markAccountUnlocked(org.mockito.ArgumentMatchers.anyString());
+
+        transport = new StubTransport().enqueue(200, "{\"username\":\"u\"}");
+        new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com"),
+                tempDir.toString(), transport, license).connect(KEY);
+
+        assertEquals(KEY, marked.get(),
+                "解锁状态的唯一数据源是 license 票据；只写账户状态等于登录了却仍是未解锁");
     }
 
     @Test
     @DisplayName("回环 http 放行：本地起官网联调用，流量不出本机网卡")
     void loopbackHttpAllowed() {
-        assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://localhost:3000"), tempDir.toString(), new StubTransport()));
-        assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://127.0.0.1:3000"), tempDir.toString(), new StubTransport()));
+        assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://localhost:3000"), tempDir.toString(), new StubTransport(), null));
+        assertDoesNotThrow(() -> new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("http://127.0.0.1:3000"), tempDir.toString(), new StubTransport(), null));
     }
 
     @Test
     @DisplayName("尾部斜杠归一化：不能拼出 //api/account/me")
     void trailingSlashStripped() {
         transport = new StubTransport().enqueue(200, "{\"username\":\"u\"}");
-        new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com/"), tempDir.toString(), transport).connect(KEY);
+        new AccountService(com.checkba.service.site.SiteProfileService.pinnedTo("https://www.aiworkdeck.com/"), tempDir.toString(), transport, null).connect(KEY);
         assertEquals("GET https://www.aiworkdeck.com/api/account/me", transport.calls.get(0));
     }
 }

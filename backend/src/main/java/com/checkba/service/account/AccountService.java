@@ -37,17 +37,26 @@ public class AccountService {
     private final com.checkba.service.site.SiteProfileService siteProfileService;
     private final Path accountFile;
     private final AccountTransport transport;
+    /**
+     * 解锁票据的写入口。**用 @Lazy 注入**：LicenseService 那边为了复用 State 的 JSON 形状
+     * 引用了本类的静态 stateMapper()，直接注入会在启动期形成构造循环。
+     * 允许为 null——单测里构造本类时不关心解锁票据。
+     */
+    private final com.checkba.service.LicenseService licenseService;
     private final ObjectMapper objectMapper = stateMapper();
 
     public AccountService(
             com.checkba.service.site.SiteProfileService siteProfileService,
             @Value("${security.license.dir:${user.home}/.aiworkdeck}") String accountDir,
-            AccountTransport transport) {
+            AccountTransport transport,
+            @org.springframework.context.annotation.Lazy
+            com.checkba.service.LicenseService licenseService) {
         // 基址由站点决定；协议校验（https，回环 http 例外，见 AccountEndpoint）
         // 在 SiteProfileService 的构造器里对全部站点做过一遍，与 PR-A 的 LicenseService 同源
         this.siteProfileService = siteProfileService;
         this.accountFile = Path.of(accountDir, "account.json");
         this.transport = transport;
+        this.licenseService = licenseService;
     }
 
     /** 当前站点的账户服务基址。切站后当场改指向。 */
@@ -92,6 +101,14 @@ public class AccountService {
         state.connectedAt = Instant.now().toString();
         state.lastSyncAt = state.connectedAt;
         saveState(state);
+        // 账户连上了就要一并落解锁票据：解锁状态的唯一数据源是 LicenseService 的票据，
+        // 而这里只写账户状态。不落的话「登录成功」但 status().unlocked 仍为 false，
+        // launch 页会把人原地弹回解锁页——表现为「弹了个已解锁的提示，然后什么都没发生」。
+        // 放在 connect() 而不是各个调用方：账户登录与设置页粘 Key 都经过这里，
+        // 挂在调用方上迟早漏掉一条（2026-08-18 真机踩到的正是登录那条）。
+        if (licenseService != null) {
+            licenseService.markAccountUnlocked(key);
+        }
         log.info("已连接 AI WorkDeck 账户: {}", state.username);
         return status();
     }

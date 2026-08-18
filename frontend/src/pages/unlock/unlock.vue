@@ -7,7 +7,11 @@
       <text class="unlock-subtitle">{{ $t('onboarding.unlock.subtitle') }}</text>
 
       <!-- 账户登录是新的主路径；试用码 / 手工粘 Key 保留给离线试用、团队服务器与私有部署 -->
-      <view class="unlock-tabs">
+      <!-- 官方版只有账户登录这一条路：账户 Key 已经由登录自动签发，用户看不到也不需要粘。
+           **但 trialCodeEnabled 为真时整块要留着**——那是商业版 / 私有部署 / 自行构建的
+           试用码入口（application-desktop.yml 刻意留的开关），砍掉等于把那条路堵死。
+           只剩一个页签时不渲染整条 tab 栏：一个孤零零的页签不是选择，是噪音。 -->
+      <view v-if="trialCodeEnabled" class="unlock-tabs">
         <text class="unlock-tab" :class="{ 'is-active': mode === 'login' }" @tap="switchMode('login')">
           {{ $t('onboarding.unlock.loginTab') }}
         </text>
@@ -279,6 +283,9 @@ export default {
       try {
         const s = await getLicenseStatus()
         this.trialCodeEnabled = !(s && s.trialCodeEnabled === false)
+        // 页签整条被隐藏时，mode 必须回到 login——否则残留状态会把人卡在一个
+        // 已经没有入口可切回来的表单上
+        if (!this.trialCodeEnabled) this.mode = 'login'
       } catch (e) {
         console.warn('读取解锁门配置失败（按试用码可用渲染）:', e && e.message)
       }

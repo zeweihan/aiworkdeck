@@ -78,6 +78,7 @@ export async function setupCaptcha(config, holderId) {
   if (!window.initAliyunCaptcha) return null
 
   let pending = null
+  let instance = null
   window.initAliyunCaptcha({
     SceneId: config.sceneId,
     mode: 'popup',
@@ -90,7 +91,10 @@ export async function setupCaptcha(config, holderId) {
       return { captchaResult: true, bizResult: true }
     },
     onBizResultCallback: () => { /* 业务结果由发码流程处理 */ },
-    getInstance: () => {},
+    // **必须存下实例**：校验参数是一次性的，下一次取之前要 refresh() 换一枚。
+    // 丢掉实例就没法刷新，第二次滑完拿到的还是上一枚已用过的参数，
+    // 服务端会判重复提交（2026-08-18 真机：第一次成功、之后每次都失败）。
+    getInstance: (i) => { instance = i },
     slideStyle: { width: 320, height: 40 },
     language: 'cn',
     onError: (e) => console.warn('[captcha] 阿里云控件初始化失败:', e),
@@ -100,6 +104,8 @@ export async function setupCaptcha(config, holderId) {
     provider: 'aliyun',
     getToken: () => new Promise((resolve) => {
       pending = resolve
+      // 一次性参数：每次取之前先刷新，否则拿到的是上一枚已核销的
+      try { if (instance && instance.refresh) instance.refresh() } catch (e) { /* 未就绪时忽略 */ }
       const trigger = document.getElementById(holderId + '-trigger')
       if (!trigger) return resolve('')
       trigger.click()

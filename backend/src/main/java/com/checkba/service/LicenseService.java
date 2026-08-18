@@ -222,6 +222,29 @@ public class LicenseService {
         return activateTrialCode(trimmed);
     }
 
+    /**
+     * 账户已在别处校验通过，只把解锁票据落下来（不再打一次官网）。
+     *
+     * <p><b>为什么必须有这条</b>：解锁状态的唯一数据源是 license 票据（{@link #statusOf}），
+     * 而桌面端的账户登录走的是 {@code AccountService}——它只写账户状态，从不碰票据。
+     * 结果是「登录成功」但 {@code status().unlocked} 仍为 false，launch 页把人原地弹回解锁页，
+     * 表现为「弹了个已解锁的提示，然后什么都没发生」。2026-08-18 真机踩到，
+     * 自 PR#408 引入账户登录起就一直如此。
+     *
+     * <p>与 {@link #activateAccountKey} 的区别只有一处：那条要自己打官网验 Key，
+     * 这条的调用方（{@code AccountService.connect}）已经拉过 {@code /api/account/me} 验过了，
+     * 再验一次既多一次往返，也会让「网络刚好抖一下」把一次成功的登录变成失败。
+     */
+    public synchronized void markAccountUnlocked(String key) {
+        if (!localMode || key == null || key.isBlank()) return;
+        State state = new State();
+        state.mode = "account";
+        state.code = key;
+        state.activatedAt = Instant.now().toString();
+        state.lastVerifiedAt = state.activatedAt;
+        saveState(state);
+    }
+
     /** POST /api/license/deactivate。 */
     public synchronized Map<String, Object> deactivate() {
         if (!localMode) {
