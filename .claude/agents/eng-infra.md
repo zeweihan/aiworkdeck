@@ -100,6 +100,22 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 - worktree 冷启动跑双 e2e 完整配方见 v0.7.7 发版实录；worktree merge 报 stash failed 用 cherry-pick 绕。
 - 坏 pnpm node_modules 遇到过——本项目一律 npm。
 - **worktree 的 node_modules 落后于新增依赖**（如 TOTP 带来的 `qrcode`）时，vite 会推一个盖满视口的 `vite-error-overlay`，坐标点击全被它吃掉，e2e 表现成"点了没反应"的超时而非编译错误。冷启动 worktree 跑 e2e 前先 `npm install`；desktop-e2e 的点击已加命中校验，会直接报出遮挡者和它的文案。
+- **`dist/zetaoffice` 里的 glue 会随 master 前进而过期，且会伪装成产品回归**（2026-08-18 实测踩到）：
+  `office_thread.js` / `zeta.js` 是 `src/zetaoffice/public/` 的构建产物，构建一次就躺在 dist 里不动了。
+  worktree 活得久一点、master 又改过那份源码，跑出来的就是**旧引擎行为**。这次的现象是 lowa-e2e
+  三条署名断言红：期望 `AI WorkDeck` 实际 `AI Workdeck`——看着像"品牌统一漏改、还会写进用户的 Word
+  修订署名"，一查源码一处小写都没有，纯粹是 dist 旧。重建后 391 通过 0 失败。
+  **判据**：断言值和源码里的常量对不上、而源码明明是对的 → 先重建 glue，别急着开 bug。
+  重建配方（`emptyOutDir: true` 会清空整个目录）：先把 `lowa/` 与 cjk 字体挪走 → `npm run build:zetaoffice`
+  → 再挪回来。只借兄弟 worktree 的 `lowa/`+字体，glue 一律本树构建（见记忆「引擎 glue 与载荷之分」）。
+- **`dist/zetaoffice` 里的 glue 会随 master 前进而过期，且会伪装成产品回归**（2026-08-18 实测踩到）：
+  `office_thread.js` / `zeta.js` 是 `src/zetaoffice/public/` 的构建产物，构建一次就躺在 dist 里不动了。
+  worktree 活得久一点、master 又改过那份源码，跑出来的就是**旧引擎行为**。这次的现象是 lowa-e2e
+  三条署名断言红：期望 `AI WorkDeck` 实际 `AI Workdeck`——看着像"品牌统一漏改、而且会写进用户的 Word
+  修订署名"，一查源码一处小写都没有，纯粹是 dist 旧。重建后 391 通过 0 失败。
+  **判据**：断言值和源码里的常量对不上、而源码明明是对的 → 先重建 glue，别急着开 bug。
+  重建配方（`emptyOutDir: true` 会清空整个目录）：先把 `lowa/` 与 cjk 字体挪走 → `npm run build:zetaoffice`
+  → 再挪回来。只借兄弟 worktree 的 `lowa/`+字体，glue 一律本树构建。
 - **e2e 起 Electron 必须整棵进程树一起收，CDP 端口不能写死**（2026-08-17 定位）：
   `spawn('npx', ['electron', ...])` 之后 `elec.kill()` 只打得到 npx，真正的 Electron 是**孙子进程**，
   收不到信号会活下来继续占着 CDP 端口（实测跑完一轮之后它还在 LISTEN，端口不释放）。下一轮撞上它有两种死法：
