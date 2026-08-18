@@ -223,10 +223,27 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 卡片上**「空白项目」标签已不渲染**（`projectType === 'BLANK'` 时留 `.card-top-spacer` 占位，
 非 BLANK 的历史项目照旧显示类型），原来那句「通用项目工作区」占位与
 `projects.blankWorkspace` 文案一并删除。
-**「客户」是推出来的不是存出来的**：Project 实体没有客户字段，`clientText()` 依次取
-① CLIENT 系角色成员 ② listedCompanyName ③ targetCompanyName ④ `—`；方块视图里
-`showClientRow()` 会在已单列「上市公司」时藏掉客户行免得两行一模一样。
-要一个可自己填的客户字段得动后端与档案页，另立一件事。
+**项目档案接进列表了（2026-08-18 二改）**：`ProjectCardDTO.profile` 是
+`fieldKey → 值` 的 map，**只含已填的**，键就是 `ProjectProfileService.FIELD_KEYS`
+（client / matterType / openedAt / nextStep / counterparty）。取数是
+`ProjectProfileFieldRepository.findByProjectIdIn` 一次 IN 后在内存分组——
+**别改成逐项目调 `ProjectProfileService.getProfile`**，那条是概览页档案头用的、
+每次查五个字段，列表页 N 个项目照着调等于给已经 N+1 的页面再加一层。
+（此前这里写着「Project 实体没有客户字段、要另立一件事」——**那句是错的**，
+客户一直是既有的档案字段，缺的只是列表没去读它。）
+- **客户是一等列，常显**；`clientText()` 先读 `profile.client`（律师手填、`source='user'`
+  锁定、AI 抽取只写 pending 永不覆盖），**没填过才**回落到推断：① CLIENT 系角色成员
+  ② listedCompanyName ③ targetCompanyName ④ `—`。列表视图给推断值加灰字 +「推断」小标，
+  免得律师以为那是自己填的（`clientIsInferred()`）；方块视图里手填值一定显示，
+  推断值才被「已单列上市公司」那条躲开（`showClientRow()`）。
+- **推断值绝不回写档案**：档案字段的语义是「谁说的算」，把猜的混进去会稀释掉那把手填锁。
+- 其余四项收在**页头的「详情」开关**后面（`.detail-toggle`，`checkba_project_list_detail`，
+  默认关，两个视图共用同一个开关）。列表视图渲染成主行下面的第二行（`.ptable-detail`，
+  因此 `v-for` 挂在外层 `.ptable-item` 上、边框与悬停也上提到那一层，主行只剩高度）；
+  方块视图追加成卡片里的 info-row。**一项没填的案卷整条详情行不渲染**——空行只占地方。
+  显示顺序是「事项类型 / 对方 / 立项时间 / 下一步」，不照搬 FIELD_KEYS（那是档案头的排版序）：
+  先认这是哪一类活、跟谁打，`nextStep` 常常是一整句话，放末位才不会把前面几项挤没。
+- 想再加字段：后端不用动（map 是全量的），前端在 `detailFields()` 里加一行 + 补两条 locale。
 **「最近修改」读 `lastActivityAt`，不是 `updatedAt`**：`Project.updatedAt` 只在建项目与改项目名时
 写过（`ProjectService` 两处），拿它当修改时间会得到一个恒等于创建日期的假列。本次在后端加了
 `ProjectCardDTO.lastActivityAt` = 项目下未删除文件的 `MAX(ProjectFile.updatedAt)`
