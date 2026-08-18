@@ -15,6 +15,15 @@ export default {
   listView: '列表视图',
   nameColumn: '名称',
   clientColumn: '客户',
+  // 档案里没填客户时，列表显示的是推断值（客户成员/上市公司），得让人看得出区别
+  clientInferred: '推断',
+  // 「详情」开关：把档案里其余四项补出来（客户是一等列、常显，不在这里）
+  detailToggle: '详情',
+  detailToggleHint: '显示项目档案里的事项类型、对方、立项时间与下一步（在项目概览里填）',
+  matterTypeField: '事项类型',
+  counterpartyField: '对方',
+  openedAtField: '立项时间',
+  nextStepField: '下一步',
   createdColumn: '创建时间',
   updatedColumn: '最近修改',
   membersColumn: '成员',

@@ -925,14 +925,10 @@ $danger-color: #E74C3C;
     border-bottom: 1px solid $border-color;
 }
 
+/* 边框与悬停已上提到 .ptable-item（主行 + 详情行要连成一体），这里只管高度 */
 .ptable-row {
     min-height: 56px;
-    border-bottom: 1px solid #F4F6F5;
     cursor: pointer;
-    transition: background 0.15s;
-
-    &:last-child { border-bottom: none; }
-    &:hover { background: rgba(26, 83, 54, 0.03); }
 }
 
 .ptable-col {
@@ -995,4 +991,98 @@ $danger-color: #E74C3C;
 @media (max-width: 900px) {
     /* 两个日期只留「最近修改」——找案卷时它比创建日期有用 */
     .col-created { display: none; }
+}
+
+/* 客户列：档案里没填时显示的是推断值（客户成员 / 上市公司），得看得出区别，
+   否则律师会以为那是自己填过的。填过的那份是普通样式，不加任何标记。 */
+.ptable-sub.is-inferred {
+    color: $text-light;
+}
+
+.inferred-tag {
+    flex-shrink: 0;
+    padding: 1px 6px;
+    border: 1px solid $border-color;
+    border-radius: 999px;
+    font-size: 10px;
+    line-height: 1.6;
+    color: $text-light;
+}
+
+/* ---- 「详情」：档案里其余四项 ---- */
+.detail-toggle {
+    display: flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 12px;
+    border: 1px solid $border-color;
+    border-radius: 8px;
+    background: $brand-white;
+    cursor: pointer;
+    transition: all 0.15s;
+
+    &:hover { border-color: $brand-primary; }
+
+    &.active {
+        border-color: $brand-primary;
+        background: rgba(26, 83, 54, 0.06);
+    }
+}
+
+.detail-toggle-text {
+    font-size: 13px;
+    font-weight: 500;
+    color: $text-secondary;
+}
+
+.detail-toggle.active .detail-toggle-text {
+    color: $brand-primary;
+}
+
+/* 一行案卷 = 主行 + 可选详情行；边框与悬停挂在外层，两行才连成一体 */
+.ptable-item {
+    border-bottom: 1px solid #F4F6F5;
+    cursor: pointer;
+    transition: background 0.15s;
+
+    &:last-child { border-bottom: none; }
+    &:hover { background: rgba(26, 83, 54, 0.03); }
+}
+
+.ptable-detail {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 18px;
+    padding: 0 20px 12px;
+    /* 与主行的名称列左缘对齐：扫读时详情是「这一行的补充」，不是新的一列 */
+    margin-top: -4px;
+}
+
+.detail-chip {
+    display: flex;
+    flex-direction: row;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+}
+
+.detail-chip-label {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: $text-light;
+}
+
+.detail-chip-value {
+    font-size: 12px;
+    color: $text-secondary;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* 「下一步」常常是一整句话：让它吃掉整行剩余宽度，别把前面几项挤没 */
+.detail-chip:last-child .detail-chip-value {
+    max-width: 520px;
 }

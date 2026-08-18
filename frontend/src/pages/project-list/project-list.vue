@@ -32,6 +32,17 @@
                 </svg>
               </view>
             </view>
+            <!-- 「详情」：把档案里其余四项补出来。做成开关而不是逐行展开，是为了
+                 让每一行等高、整列能对齐扫读——逐行展开的表格扫起来最费眼。 -->
+            <view
+              v-if="projects.length > 0"
+              class="detail-toggle"
+              :class="{ active: showDetail }"
+              :title="$t('projects.detailToggleHint')"
+              @tap="setShowDetail(!showDetail)"
+            >
+              <text class="detail-toggle-text">{{ $t('projects.detailToggle') }}</text>
+            </view>
             <!-- 新建：页头一个主按钮（桌面端弹「打开文件夹 / 新建项目文件夹」两选一），
                  列表下方那两张卡片保留——那里是零项目新用户的落点，页头这个是
                  「已经有一堆案卷、想再开一个」的人的落点，两处服务的不是同一刻。 -->
@@ -142,6 +153,11 @@
                     <text class="info-label-new">{{ $t('projects.updatedColumn') }}</text>
                     <text class="info-val-new">{{ formatTime(project.lastActivityAt) || '—' }}</text>
                   </view>
+                  <!-- 档案其余四项：开了「详情」且这一项真填过才出现 -->
+                  <view v-if="showDetail" v-for="f in detailFields(project)" :key="f.key" class="info-row-new">
+                    <text class="info-label-new">{{ f.label }}</text>
+                    <text class="info-val-new">{{ f.value }}</text>
+                  </view>
                 </view>
               </view>
 
@@ -198,12 +214,14 @@
               <text class="ptable-col col-members">{{ $t('projects.membersColumn') }}</text>
               <text class="ptable-col col-ops"></text>
             </view>
+            <!-- 一行案卷 = 主行（常显字段）+ 可选的详情行。v-for 挂在外层 .ptable-item
+                 上而不是主行上，两行才能共用同一次悬停与同一条下边框。 -->
             <view
               v-for="project in projects"
               :key="project.id"
-              class="ptable-row"
-              @tap="goToProject(project.id)"
+              class="ptable-item"
             >
+            <view class="ptable-row" @tap="goToProject(project.id)">
               <view class="ptable-col col-name">
                 <view v-if="renamingProjectId === project.id" class="rename-box" @tap.stop>
                   <input
@@ -224,7 +242,10 @@
                   </view>
                 </template>
               </view>
-              <text class="ptable-col col-client ptable-sub">{{ clientText(project) }}</text>
+              <view class="ptable-col col-client">
+                <text class="ptable-sub" :class="{ 'is-inferred': clientIsInferred(project) }">{{ clientText(project) }}</text>
+                <text v-if="clientIsInferred(project)" class="inferred-tag">{{ $t('projects.clientInferred') }}</text>
+              </view>
               <text class="ptable-col col-time col-created ptable-sub">{{ formatTime(project.createdAt) || '—' }}</text>
               <text class="ptable-col col-time col-updated ptable-sub">{{ formatTime(project.lastActivityAt) || '—' }}</text>
               <view class="ptable-col col-members">
@@ -253,6 +274,19 @@
                   <svg class="act-glyph" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path v-for="(d, gi) in ICONS.trash" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" /></svg>
                 </view>
               </view>
+            </view>
+            <!-- 详情行：开了开关、且这份案卷的档案里真有东西才出现。
+                 一项没填的案卷不留空行——那只会让列表高低不齐还什么都没说。 -->
+            <view
+              v-if="showDetail && detailFields(project).length"
+              class="ptable-detail"
+              @tap="goToProject(project.id)"
+            >
+              <view v-for="f in detailFields(project)" :key="f.key" class="detail-chip">
+                <text class="detail-chip-label">{{ f.label }}</text>
+                <text class="detail-chip-value">{{ f.value }}</text>
+              </view>
+            </view>
             </view>
           </view>
 
@@ -358,6 +392,7 @@ import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CloudAcceptDialog from '@/components/CloudAcceptDialog.vue'
 
 const VIEW_MODE_KEY = 'checkba_project_list_view'
+const DETAIL_KEY = 'checkba_project_list_detail'
 
 export default {
   name: 'ProjectList',
@@ -407,6 +442,11 @@ export default {
       // 视图模式：'grid' 方块 / 'list' 列表。默认方块（与改造前形态一致），
       // 选择记在本机，不进后端——它是这台机器上这个人的习惯，不是账户设置。
       viewMode: 'grid',
+
+      // 「详情」：把档案里其余四项（事项类型/对方/立项时间/下一步）补出来。
+      // 默认关——绝大多数案卷这四项是空的，常显只会让列表变松散；
+      // 两个视图共用这一个开关，同样记本机。
+      showDetail: false,
 
       // 新建项目文件夹（原 newproject 页的流程，随新建入口一起搬过来）
       busy: false,
@@ -498,6 +538,7 @@ export default {
       try {
         const saved = uni.getStorageSync(VIEW_MODE_KEY)
         if (saved === 'grid' || saved === 'list') this.viewMode = saved
+        this.showDetail = uni.getStorageSync(DETAIL_KEY) === '1'
       } catch (e) { /* 存储不可用就用默认值，不拦路 */ }
     },
     setViewMode(mode) {
@@ -567,11 +608,15 @@ export default {
       return project.members.filter((m) => ['CLIENT', 'CLIENT_NAMED', 'CLIENT_GENERIC'].includes(m.role))
     },
     /**
-     * 「客户」列。Project 实体上**没有**客户字段，所以这里是按现有数据推的，优先级：
-     *   ① 项目里 CLIENT 系角色的成员（真的把客户拉进来协作了，这就是客户）
+     * 「客户」列。**权威来源是项目档案的 client 字段**——概览页档案头里律师手填的那个
+     * （project_profile_field，写入即锁 source='user'，AI 抽取只写 pending 永不覆盖）。
+     * 后端在 ProjectCardDTO.clientName 里一次批量带出来。
+     *
+     * 没填过才回落到推断，优先级：
+     *   ① 项目里 CLIENT 系角色的成员（真把客户拉进来协作了，那就是客户）
      *   ② 上市公司 / 标的公司（重组时代的旧项目类型才有）
-     *   ③ 没有就是没有，显示 — 而不是编一个
-     * 要一个独立的、可自己填的客户字段得动后端 Project 与档案页，另立一件事。
+     *   ③ 都没有就显示 —，不编一个
+     * **推断值不写回档案**：档案字段的语义是「谁说的算」，把猜的混进去会稀释掉手填锁。
      */
     /**
      * 方块视图要不要单列一行「客户」。列表视图没有上市/标的公司那两行，永远显示。
@@ -579,10 +624,47 @@ export default {
      * clientText 在没有客户成员时正好回落到同一个名字，两行会一模一样。
      */
     showClientRow(project) {
+      // 律师自己填过就一定显示，哪怕上面已经列了上市公司——那是他指定的客户
+      if (this.profileValue(project, 'client')) return true
       if (this.getClientMembers(project).length) return true
+      // 剩下的是推断值，已单列上市公司时不再重复一遍
       return !this.shouldShowListedCompany(project.projectType)
     },
+    /** 这一行的客户是律师自己填的，还是我们推出来的——列表视图据此给个弱提示 */
+    clientIsInferred(project) {
+      return !this.profileValue(project, 'client') && this.clientText(project) !== '—'
+    },
+    /** 档案里某个键的值；未填/空白一律回空串，调用处只需判真假 */
+    profileValue(project, key) {
+      const p = project && project.profile
+      return ((p && p[key]) || '').trim()
+    },
+    /**
+     * 「详情」开关打开时补充显示的档案字段。客户不在这里——它是一等列，常显。
+     *
+     * 顺序不照搬后端的 FIELD_KEYS：那是档案头的排版顺序。列表里按「扫一眼要什么」
+     * 排——先认事项与对方（这是哪一类活、跟谁打），再看立项时间，最后是下一步
+     * （可能是一整句话，放末位才不会把前面几项挤没）。
+     * 未填的键整条不渲染：一行「下一步 —」除了占地方什么也没说。
+     */
+    detailFields(project) {
+      return [
+        ['matterType', this.$t('projects.matterTypeField')],
+        ['counterparty', this.$t('projects.counterpartyField')],
+        ['openedAt', this.$t('projects.openedAtField')],
+        ['nextStep', this.$t('projects.nextStepField')],
+      ]
+        .map(([key, label]) => ({ key, label, value: this.profileValue(project, key) }))
+        .filter((f) => !!f.value)
+    },
+    setShowDetail(v) {
+      this.showDetail = !!v
+      try { uni.setStorageSync(DETAIL_KEY, this.showDetail ? '1' : '0') } catch (e) { /* ignore */ }
+    },
     clientText(project) {
+      // 权威来源是档案的 client 字段（下同）
+      const filled = this.profileValue(project, 'client')
+      if (filled) return filled
       const names = this.getClientMembers(project)
         .map((m) => m.displayName || m.username)
         .filter(Boolean)

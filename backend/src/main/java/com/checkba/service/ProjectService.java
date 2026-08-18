@@ -32,6 +32,7 @@ public class ProjectService {
     private final ProjectMemberRepository projectMemberRepository;
     private final UserRepository userRepository;
     private final com.checkba.repository.ProjectFileRepository projectFileRepository;
+    private final com.checkba.repository.ProjectProfileFieldRepository profileFieldRepository;
     private final TushareService tushareService;
     private final ProjectVariableService projectVariableService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
@@ -179,12 +180,27 @@ public class ProjectService {
             }
         }
 
+        // 项目档案：一次 IN 取完，内存里按项目分组。列表页的「客户」列与「详情」
+        // 开关里那四项都从这里来。逐项目调 ProjectProfileService.getProfile 会把
+        // 五个字段各查一遍，给已经 N+1 的列表页再加一层。
+        Map<Long, Map<String, String>> profiles = new HashMap<>();
+        if (!projects.isEmpty()) {
+            List<Long> ids = projects.stream().map(Project::getId).collect(Collectors.toList());
+            for (com.checkba.model.entity.ProjectProfileField row : profileFieldRepository.findByProjectIdIn(ids)) {
+                String v = row.getFieldValue();
+                if (v == null || v.isBlank()) continue;   // 只带已填的，未填的键直接不出现
+                profiles.computeIfAbsent(row.getProjectId(), k -> new HashMap<>()).put(row.getFieldKey(), v);
+            }
+        }
+
         // Batch fetch managers to avoid N+1 (optimization for later, simple loop for now)
         return projects.stream().map(p -> {
             ProjectCardDTO dto = new ProjectCardDTO();
             BeanUtils.copyProperties(p, dto);
             // 一个文件都没有的空项目回落到项目自身的 updatedAt，不留空
             dto.setLastActivityAt(lastActivity.getOrDefault(p.getId(), p.getUpdatedAt()));
+            // 一个字段都没填过就是空 map，由前端决定回落到推断值还是整条不渲染
+            dto.setProfile(profiles.getOrDefault(p.getId(), Map.of()));
             
             // Determine Role
             // 1. Check if owner
