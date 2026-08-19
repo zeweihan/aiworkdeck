@@ -20,6 +20,15 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 2. `git tag v<ver> && git push origin v<ver>` → 触发 desktop-build 双平台。auto 模式下 tag 推送不被分支保护拦；可用 Monitor 等 PR 合并后自动打 tag（v0.8.0 配方）。
 3. 产物：mac 仅 dmg（**arm64 only**，已放弃 Intel）；win 仅 nsis exe（x64）。electron-builder 配置在 desktop/package.json "build" 字段（appId com.aiworkdeck.desktop、extraResources 打入 frontend/dist、backend.jar、jre、python、pysvc.tar.gz+meta、**graphviz、skills（随包内置 skill，v0.11.1 以前漏打）、litviz（诉讼可视化引擎）**；notarize teamId X9B97KVA84；entitlements desktop/build/entitlements.mac.plist）。
 4. 签名抖动：Apple 时间戳抖动 = rerun 即可（连挂两次也 rerun）；公证轮询抖动排查见 ci-macos 记录。
+4.5. **Office 插件安装器是发版硬步骤（2026-08-19 维护者定，自 v0.21.0 之后的发版起强制）**：
+   每次发版都要重建并上架插件的 pkg+exe——在维护者 Mac 上
+   `cd office-addin/installer && npm run build:installers`（版本自动取
+   desktop/package.json；pkg 走本机钥匙串 Developer ID Installer 签名，给齐
+   NOTARY_* 三变量自动公证装订，配方见 installer/README.md），产物上传
+   addin 服务器 `/opt/aiworkdeck/cloud/web/office-addin/dl/` 并切稳定名软链
+   （`AI-WorkDeck-Office-Addin.pkg/.exe`）。安装器只带 manifest，但版本号要与
+   桌面端同步，用户侧才对得上号。不做这步 = 发版没发插件端，维护者原话
+   「不然用户不会弄」。
 5. **EN 走查（打 tag 前必过）**：① 以英文语言设置跑 app-e2e 全量（含 J12 英文旅程：切 en-US 断言工作台四列英文锚点 + AI 过程卡工具名无中文，语言键 `awd_app_language`，切语言必须整页 reload）；② 编辑器 boot 用 `?uilang=en-US` 并以 office_thread.js 的 ooLocale 诊断确认 en-US 生效（issue #66 的诊断口径）；③ 人工过一遍英文主界面截图（工作台/设置/AI 面板）。
 6. DMG 安装窗口视觉（PR#204）：`build.dmg` 里的 `contents` 坐标是**图标中心、原点在窗口内容区左上角（不含标题栏）**；窗口尺寸由背景图 1x 像素尺寸决定（660x420），所以没写 `window`。背景图 `desktop/build/background.png` + `background@2x.png` 由 electron-builder 自动合成 hidpi TIFF，源文件是 `desktop/build/dmg-background.html`（顶部注释有 headless Chrome 重新生成命令）。改图标落位必须同步改 HTML 里的光晕/箭头位置，否则错位。
 
