@@ -121,6 +121,7 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
   Key 有两种来源，桥接之后完全相同：**账户登录**（`loginWithPhone`/`loginWithPassword`，先调官网 `/api/auth/exchange-key` 换出 Key，用户看不见它；配套 `sendLoginCode`）与**手工粘贴**（`login(key)`，私有部署与团队服务器）。两者共用开关 `security.awdk-login-enabled`（默认 false）——同一条桥的两个入口，**刻意不拆成两个开关**，否则会出现「登录能用但桥是关的」这种自相矛盾的配置。
   端点全在 `AuthController`，全部匿名：`POST /api/auth/awdk-login`、`POST /api/auth/account-login`、`POST /api/auth/account-login/send-code`。
   与官网的出站在 `AccountLoginExchange`（桌面 `AccountService` 与云端 `AwdkLoginService` 共用一份 error code 表——`invalid_code`/`invalid_credentials`/`sms_not_supported_on_site`/`phone_binding_required` 等是与官网仓约定的字面量，写两份必漂）。
+  换 Key 请求随凭据带可选 `deviceName`（2026-08-19，官网 PR#77/桌面 PR#429）：桌面端上报「主机名 (Mac/Windows)」（`AccountService.deviceName()`，截 64 字符），云端桥固定「Office 插件 / Office Add-in（按 baseUrl 分站）」；官网存进 `api_keys.label`，账户页「已连接的设备」按它显示。字段可选，不带时行为不变。
   **云侧不能复用 `/api/account/login`**：那条开头就 `requireUser(sessionId)`，local-mode 会自动解析成本机用户所以桌面端没事，`local-mode=false` 下「登录前得先有会话」是死循环。
 - `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
 - `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
