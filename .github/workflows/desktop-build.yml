@@ -116,8 +116,35 @@ jobs:
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/mac-arm64
-      - name: Bundle pptx-service (macOS arm64)
+      # ──────────────────────────────────────────────────────────────
+      # Python 运行时 / 各 pysvc / graphviz 的缓存。
+      #
+      # 这几样只由 requirements.lock 与打包脚本决定，与本次提交的代码无关，
+      # 但过去每个 PR 都从零重装一遍（实测 Windows 上 mineru 111s + kokoro 98s +
+      # pptx 60s + asr 22s + graphviz 43s ≈ 5.6 分钟纯浪费）。
+      #
+      # **必须放在「Bundle backend」之后**：prepare-backend.js 会
+      # `rmSync(outDir, {recursive:true})` 清空整个 bundled/<plat>，
+      # 放在它之前恢复的缓存会被当场抹掉。
+      #
+      # key 里带打包脚本自身的哈希：脚本改了（比如换 Python 版本）就该重装。
+      # 开头的 v1 是人工盐——graphviz 来自 choco/brew，上游版本不体现在任何文件哈希里，
+      # 想强制取新版就把它 +1。
+      # ──────────────────────────────────────────────────────────────
+      - name: Cache python runtime / pysvc / graphviz (mac-arm64)
+        id: cache-pybundle-mac
         if: runner.os == 'macOS'
+        uses: actions/cache@v4
+        with:
+          path: |
+            desktop/bundled/mac-arm64/python
+            desktop/bundled/mac-arm64/pysvc
+            desktop/bundled/mac-arm64/graphviz
+          key: v1-mac-arm64-pybundle-${{ hashFiles('*/requirements.lock', 'desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
+
+      - name: Bundle pptx-service (macOS arm64)
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
         run: |
           node desktop/scripts/prepare-python-service.js \
             --service pptx-service \
@@ -125,7 +152,8 @@ jobs:
             --requirements pptx-service/requirements.lock \
             --out desktop/bundled/mac-arm64
       - name: Bundle mineru-service (macOS arm64)
-        if: runner.os == 'macOS'
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
         run: |
           # 纯 pip 包服务（无 --src）；模型不进包，首启在「组件管理」下载
           node desktop/scripts/prepare-python-service.js \
@@ -134,7 +162,8 @@ jobs:
             --out desktop/bundled/mac-arm64
           du -sh desktop/bundled/mac-arm64/pysvc/mineru-service/lib
       - name: Bundle kokoro-service (macOS arm64)
-        if: runner.os == 'macOS'
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
         run: |
           # 本地 TTS 包装层（Phase 3）：模型不进包，首启在「组件管理」下载
           node desktop/scripts/prepare-python-service.js \
@@ -144,7 +173,8 @@ jobs:
             --out desktop/bundled/mac-arm64
           du -sh desktop/bundled/mac-arm64/pysvc/kokoro-service/lib
       - name: Bundle asr-service (macOS arm64)
-        if: runner.os == 'macOS'
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
         run: |
           # 本地 ASR 包装层（P3）：模型不进包（1.5GB），首启在「组件管理」下载
           node desktop/scripts/prepare-python-service.js \
@@ -154,7 +184,8 @@ jobs:
             --out desktop/bundled/mac-arm64
           du -sh desktop/bundled/mac-arm64/pysvc/asr-service/lib
       - name: Bundle graphviz (macOS arm64)
-        if: runner.os == 'macOS'
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'macOS' && steps.cache-pybundle-mac.outputs.cache-hit != 'true'
         run: |
           # 诉讼可视化的流程图布局要 graphviz 的 dot（其余六种布局零原生依赖）。
           # 只带布局引擎、不带任何渲染后端（我们只用 -Tplain），闭包约 4 MB。
@@ -171,8 +202,35 @@ jobs:
           node desktop/scripts/prepare-backend.js \
             --jar backend/target/backend-0.0.1-SNAPSHOT.jar \
             --out desktop/bundled/win-x64
-      - name: Bundle pptx-service (Windows x64)
+      # ──────────────────────────────────────────────────────────────
+      # Python 运行时 / 各 pysvc / graphviz 的缓存。
+      #
+      # 这几样只由 requirements.lock 与打包脚本决定，与本次提交的代码无关，
+      # 但过去每个 PR 都从零重装一遍（实测 Windows 上 mineru 111s + kokoro 98s +
+      # pptx 60s + asr 22s + graphviz 43s ≈ 5.6 分钟纯浪费）。
+      #
+      # **必须放在「Bundle backend」之后**：prepare-backend.js 会
+      # `rmSync(outDir, {recursive:true})` 清空整个 bundled/<plat>，
+      # 放在它之前恢复的缓存会被当场抹掉。
+      #
+      # key 里带打包脚本自身的哈希：脚本改了（比如换 Python 版本）就该重装。
+      # 开头的 v1 是人工盐——graphviz 来自 choco/brew，上游版本不体现在任何文件哈希里，
+      # 想强制取新版就把它 +1。
+      # ──────────────────────────────────────────────────────────────
+      - name: Cache python runtime / pysvc / graphviz (win-x64)
+        id: cache-pybundle-win
         if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: |
+            desktop/bundled/win-x64/python
+            desktop/bundled/win-x64/pysvc
+            desktop/bundled/win-x64/graphviz
+          key: v1-win-x64-pybundle-${{ hashFiles('*/requirements.lock', 'desktop/scripts/prepare-python-service.js', 'desktop/scripts/prepare-graphviz.js') }}
+
+      - name: Bundle pptx-service (Windows x64)
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
         shell: bash
         run: |
           node desktop/scripts/prepare-python-service.js \
@@ -181,7 +239,8 @@ jobs:
             --requirements pptx-service/requirements.lock \
             --out desktop/bundled/win-x64
       - name: Bundle mineru-service (Windows x64)
-        if: runner.os == 'Windows'
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
         shell: bash
         run: |
           node desktop/scripts/prepare-python-service.js \
@@ -190,7 +249,8 @@ jobs:
             --out desktop/bundled/win-x64
           du -sh desktop/bundled/win-x64/pysvc/mineru-service/lib
       - name: Bundle kokoro-service (Windows x64)
-        if: runner.os == 'Windows'
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
         shell: bash
         run: |
           node desktop/scripts/prepare-python-service.js \
@@ -200,7 +260,8 @@ jobs:
             --out desktop/bundled/win-x64
           du -sh desktop/bundled/win-x64/pysvc/kokoro-service/lib
       - name: Bundle asr-service (Windows x64)
-        if: runner.os == 'Windows'
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
         shell: bash
         run: |
           node desktop/scripts/prepare-python-service.js \
@@ -210,7 +271,8 @@ jobs:
             --out desktop/bundled/win-x64
           du -sh desktop/bundled/win-x64/pysvc/asr-service/lib
       - name: Bundle graphviz (Windows x64)
-        if: runner.os == 'Windows'
+        # 缓存命中就整步跳过——产物只由 requirements.lock / 打包脚本决定，见上面那条 cache
+        if: runner.os == 'Windows' && steps.cache-pybundle-win.outputs.cache-hit != 'true'
         shell: bash
         run: |
           # 同 macOS 那步。Windows 上 DLL 在 exe 同目录解析，不需要重定位，
