@@ -295,6 +295,9 @@ models/ 已验证过这一点），pack 同享此保障。
   litviz/drawio 平台无关组件单 runner 产出；汇总 job 生成 manifest、
   用 CI secret 里的签名私钥出 `.sig`、把全部产物挂上 GitHub Release
   （tag `pack-<id>-v<version>`，与应用 `v*` tag 井水不犯河水，不触发 desktop-build）。
+  **release 必须标 prerelease**：GitHub `releases/latest` 是仓库级的，正式 pack
+  release 会顶掉应用版——2026-08-19 实测污染镜像同步脚本与官网 fromGithub 达
+  2.5 小时（镜像停更、/start 发旧版）。prerelease 不影响资产直链下载。
 - 发布脚本 `deploy/publish-pack.sh`（照 `publish-lowa-engine.sh` 的骨架）：
   从 GitHub Release 拉产物（或本机中转）→ 验签验哈希 → 推北京 + 新加坡两台
   `/www/wwwroot/plugin-packs/<id>/<version>/` → 终验（两站各 curl 首尾字节 +

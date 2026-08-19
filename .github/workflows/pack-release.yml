@@ -141,6 +141,12 @@ jobs:
           tag_name: pack-${{ env.PACK_ID }}-v${{ inputs.version }}
           name: 'native pack: ${{ env.PACK_ID }} v${{ inputs.version }}'
           # 与应用的 v* tag 井水不犯河水（前缀不同），不会触发 desktop-build.yml。
+          # 必须标 prerelease：GitHub 的 releases/latest 是仓库级的，正式 release
+          # 一律算数。2026-08-19 实测 pack 上架后 releases/latest 返回本 release
+          # 达 2.5 小时，镜像同步脚本连挂三轮、两个官网的 fromGithub 也被污染。
+          # prerelease 不影响资产直链下载，pack 分发链路（mirror 优先 + GitHub
+          # 按 tag 直链兜底）完全不受影响。
+          prerelease: true
           body: |
             native pack `${{ env.PACK_ID }}` v${{ inputs.version }}（未签名产物）。
 

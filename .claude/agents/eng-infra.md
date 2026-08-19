@@ -86,6 +86,12 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   `bash deploy/update-mirror-sync_prune_test.sh`（纯本地，不碰网络与真镜像目录）。
   **服务器上跑的是一份副本**（`/www/wwwroot/update/desktop/update-mirror-sync.sh`，cron 每小时 :17），
   合并 PR 不会让它生效，要 scp 覆盖过去。
+  **选版不用 `releases/latest`**：那是仓库级「最新」，正式 pack release 也算数
+  （2026-08-19 实测顶掉应用版 2.5 小时，脚本连挂三轮、镜像停更）。脚本从
+  `/releases` 列表挑 tag 形如 `v<数字>` 的正式版；pack-release.yml 那边同时标
+  `prerelease: true` 双保险。latest.json 落地后会回调官网 `/api/revalidate-release`
+  （配置在服务器 `/etc/aiworkdeck/mirror-sync.env`，token 与官网 env 同值），
+  让 /start 下载链立即刷新；没配置/回调失败靠页面 `revalidate: 300` 兜底。
 - `deploy/publish-pack.sh` — 原生资源包（native pack）上架：check 本地验产物 /
   sign 在官网机上用 env 私钥签 manifest（私钥不落本机）/ publish 双机上架
   `/www/wwwroot/plugin-packs/` 暂存校验后换入、双机验证后才切 manifest 指针 /

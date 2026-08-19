@@ -22,7 +22,32 @@ set -euo pipefail
 
 REPO="${REPO:-zeweihan/aiworkdeck}"
 WEB_ROOT="${WEB_ROOT:-/www/wwwroot/update/desktop}"
-API="https://api.github.com/repos/${REPO}/releases/latest"
+# 不能用 releases/latest：它是仓库级「最新」，native pack 的 release
+# （tag pack-*-v*，见 pack-release.yml）也算数。2026-08-19 实测：pack 上架后到
+# 下一个应用版发布前的 2.5 小时里，releases/latest 一直返回 pack release，
+# 本脚本连挂三轮 cron（pack 带 manifest.json 却没有 .sig，mv 直接炸），
+# 镜像停更、官网 /start 发旧版。改为列出 releases 后只认 tag 形如 v<数字> 的
+# 正式应用版。per_page=15 足够：应用版最密一天三发，15 条怎么也罩得住。
+API="https://api.github.com/repos/${REPO}/releases?per_page=15"
+
+# 回调官网 revalidate 端点用的配置（AWD_REVALIDATE_URLS / AWD_REVALIDATE_TOKEN）。
+# 不能放 WEB_ROOT 下：nginx 那个 location 只 deny .sh/.py，其它文件名公网可下载。
+if [ -f /etc/aiworkdeck/mirror-sync.env ]; then . /etc/aiworkdeck/mirror-sync.env; fi
+
+# latest.json 落地后回调官网，立即作废 /start 下载链的 fetch 缓存
+# （官网仓 app/api/revalidate-release，tag 'latest-release'）。没配置就跳过；
+# 回调失败只记日志——官网自身 revalidate:300 兜底，最迟 5 分钟自愈。
+notify_website() {
+  [ -n "${AWD_REVALIDATE_URLS:-}" ] || return 0
+  local u
+  for u in $AWD_REVALIDATE_URLS; do
+    if curl -sf -m 10 -X POST -H "authorization: Bearer ${AWD_REVALIDATE_TOKEN:-}" "$u" >/dev/null; then
+      echo "[mirror-sync] revalidate 回调成功: $u"
+    else
+      echo "[mirror-sync] revalidate 回调失败（忽略，页面最迟 5 分钟自行刷新）: $u" >&2
+    fi
+  done
+}
 
 # 清理旧安装包：只删「比上一版更老的」，当前版与上一版都留着。
 #
@@ -77,8 +102,23 @@ mkdir -p "$WEB_ROOT/assets" "$WEB_ROOT/installers"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# cron 重定向进同一个日志文件，没有时间戳就没法做事后取证
+#（2026-08-19 复盘时全靠文件 mtime 反推时间线）
+echo "[mirror-sync] run at $(date '+%F %T')"
 echo "[mirror-sync] fetching latest release metadata: $REPO"
-curl -sfL "$API" -o "$TMP/release.json"
+curl -sfL "$API" -o "$TMP/releases.json"
+# 列表按 created_at 倒序；挑第一个非草稿、非预发布、tag 形如 v<数字> 的应用版
+python3 - "$TMP/releases.json" <<'EOF' > "$TMP/release.json"
+import json, re, sys
+for r in json.load(open(sys.argv[1])):
+    if r.get('draft') or r.get('prerelease'):
+        continue
+    if re.match(r'^v\d', r.get('tag_name', '')):
+        json.dump(r, sys.stdout)
+        break
+else:
+    sys.exit('[mirror-sync] 列表里没有 tag 形如 v<数字> 的应用 release，放弃本次同步')
+EOF
 TAG=$(python3 -c "import json;print(json.load(open('$TMP/release.json'))['tag_name'])")
 echo "[mirror-sync] latest release: $TAG"
 
@@ -159,8 +199,11 @@ if [ "$FAILED" = "1" ]; then
 fi
 
 # assets 全部就位后再原子换 manifest（+签名，先 sig 后 manifest 也无妨，
-# 客户端总是成对拉取并验签）
-if [ "$FAILED" = "0" ] && [ "$MANIFEST_READY" = "1" ]; then
+# 客户端总是成对拉取并验签）。两个文件必须都在才动手——2026-08-19 pack release
+# 恰好带一个（pack 契约的）manifest.json 而没有 .sig，单腿落地会把桌面端
+# 更新通道的 manifest 换成 pack 的；当时全靠 mv sig 在前先炸救了一命。
+if [ "$FAILED" = "0" ] && [ "$MANIFEST_READY" = "1" ] \
+   && [ -f "$TMP/manifest.json" ] && [ -f "$TMP/manifest.json.sig" ]; then
   mv "$TMP/manifest.json.sig" "$WEB_ROOT/manifest.json.sig"
   mv "$TMP/manifest.json" "$WEB_ROOT/manifest.json"
   echo "[mirror-sync] manifest updated"
@@ -207,6 +250,7 @@ json.dump(out, sys.stdout, ensure_ascii=False)
 EOF
     mv "$TMP/latest.json" "$WEB_ROOT/installers/latest.json"
     echo "[mirror-sync] installers/latest.json updated -> $TAG"
+    notify_website
 
     # 清理旧安装包与过期半成品（只删 .dmg/.exe/.part，不碰 latest.json）
     prune_old_installers "${TAG#v}" "$TMP/installers.tsv"
