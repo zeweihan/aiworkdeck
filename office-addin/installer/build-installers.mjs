@@ -75,6 +75,33 @@ if (!args.skipMac) {
     '--scripts', scriptsDir,
     pkgOut,
   ], { stdio: 'inherit' })
+
+  // 钥匙串里有 Developer ID Installer 身份就签名（维护者机器 2026-08-19 起有，
+  // 证书文件在 5-Tech/DeveloperID_Installer_X9B97KVA84.cer）；没有则保持未签名并告警
+  let identity = ''
+  try {
+    identity = (execFileSync('security', ['find-identity', '-v'], { encoding: 'utf8' })
+      .split('\n').find(l => l.includes('Developer ID Installer')) || '').match(/"([^"]+)"/)?.[1] || ''
+  } catch { /* 非 mac 或无 security，保持未签名 */ }
+  if (identity) {
+    const signedTmp = pkgOut.replace(/\.pkg$/, '.signed.pkg')
+    execFileSync('productsign', ['--sign', identity, pkgOut, signedTmp], { stdio: 'inherit' })
+    fs.renameSync(signedTmp, pkgOut)
+    // 公证（可选）：环境变量给齐 ASC API key 三件套才做。维护者本机来源：
+    //   5-Tech/5-BQT_Global/fastlane/.env（ASC_KEY_ID / ASC_ISSUER_ID / ASCKey.p8）
+    const { NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER_ID } = process.env
+    if (NOTARY_KEY_PATH && NOTARY_KEY_ID && NOTARY_ISSUER_ID) {
+      execFileSync('xcrun', ['notarytool', 'submit', pkgOut,
+        '--key', NOTARY_KEY_PATH, '--key-id', NOTARY_KEY_ID, '--issuer', NOTARY_ISSUER_ID,
+        '--wait'], { stdio: 'inherit' })
+      execFileSync('xcrun', ['stapler', 'staple', pkgOut], { stdio: 'inherit' })
+      console.log('[installer] pkg 已签名并公证装订')
+    } else {
+      console.warn('[installer] pkg 已签名但未公证（缺 NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID）')
+    }
+  } else {
+    console.warn('[installer] 未找到 Developer ID Installer 身份，pkg 未签名')
+  }
   made.push(pkgOut)
 }
 
