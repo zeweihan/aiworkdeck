@@ -92,6 +92,7 @@
 | 网页 tab（打开/关闭/导航） | ❌(A 可补) | 桌面版是 BrowserView，验证要读 leftFiles/rightFiles 状态非 DOM |
 | API 烟测（9 个只读端点） | A ✅ | |
 | 英文走查（J12：切 en-US → 工作台四列英文锚点/.sidebar-title → 反向护栏无中文空态 → 打开文档 → AI 过程卡工具名无 CJK → 还原 zh-CN） | A ✅ | 发版前 EN 走查门；断言面刻意最小，工具名断言写性质（无 [一-鿿]）不写具体名；切语言必须整页 reload（陷阱见 run.mjs 头注释） |
+| 广场安装带资源包的插件（J13：诉讼可视化 →（本地桩 pack 源）安装 → 下载进度 → ready 自动启用 → rail 出现 → 卸载 → rail 消失） | A ✅ | 规范 docs/NATIVE_PACK_DISTRIBUTION.md §4/§7.1；需 `APP_E2E_JAR`，另起隔离后端注入 `ai.packs.base-urls`/`ai.plugins.registry-public-key` 指向测试桩，主后端跑不了这条（配置在启动时定死）；隔离后端缺 `APP_E2E_JAR` 时整段 skip 并打印原因 |
 | 桌面打包版首启向导/组件下载 | 真机 | PR#142 领域 |
 
 ## 每日定时 QA

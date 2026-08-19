@@ -62,6 +62,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
+import { startPackStub } from '../_lib/pack-stub.mjs'
 
 const BASE = process.env.APP_E2E_BASE || 'http://127.0.0.1:5174'
 const BACKEND = process.env.APP_E2E_BACKEND || 'http://127.0.0.1:9696'
@@ -2133,6 +2134,189 @@ try {
     await page.reload({ waitUntil: 'networkidle2', timeout: 30000 })
     await page.waitForSelector('[title="资源管理器"]', { timeout: 20000 })
   })
+
+  // ============ J13 广场安装带资源包的插件（诉讼可视化 + 桩 pack 源） ============
+  // 规范 docs/NATIVE_PACK_DISTRIBUTION.md §4/§7.1，契约在 NativePackService/PackController；
+  // UI 状态机在 MarketDetailPane.vue（packId/packReady/packDownloading 三态)。
+  //
+  // 为什么不能复用本文件全程驱动的主后端（BACKEND，默认 9696/9797）：
+  // 广场装 pack 要后端把 ai.packs.base-urls 指向一个真会应答签了名 manifest 的源、
+  // ai.plugins.registry-public-key 换成那把测试公钥——这两项在主后端启动时就已经
+  // 定死，run.mjs 没有任何手段事后改它。只能照 J11 的路子另起一个隔离后端，
+  // 命令行参数直传 Spring（`--ai.packs.base-urls[0]=...` 这类 index 写法本轮实测
+  // 走得通，见 pack-stub.mjs 头注释）。
+  //
+  // 隔离后端的 cwd 刻意不用仓库内任何路径：LitigationVisualService.resolveLitvizDir
+  // 会顺着 cwd 向上爬两级找 ../litviz 或 ../../litviz——J11 的 spawnBackend 沿用
+  // 「不以 backend 结尾即天然隔离」的写法凑巧把 cwd 放在系统临时目录，爬不到仓库
+  // 里的 litviz/，packReady 因此在装包前老实为 false，装包这条链路才有得测；
+  // 若 cwd 选在仓库树里，字面上会把「pack 已就绪」的场景测成了「安装=纯启用」——
+  // 两种场景哪个更像用户会遇到的，取决于爬升能不能命中，本轮实测走的是前者。
+  // ai.skills.dir 必须显式指向 backend/skills 的一份拷贝（不是原路径）：那个目录
+  // 本来靠 cwd=backend/ 的相对路径解析，隔离后端的 cwd 不是 backend/，不显式给
+  // 绝对路径会导致连诉讼可视化这个内置 skill 都加载不出来；拷贝而不是原样指是防
+  // 万一广场那侧动了写操作（如启停）反噬仓库里的真文件——虽然实测启停只写内存/DB，
+  // 不改 skill.yml，但拷贝的代价几乎为零，不值得赌这条不变式以后不会变。
+  console.log('== J13 广场安装带资源包的插件 ==')
+  if (!J11_JAR) {
+    note('skip', 'J13 需要 APP_E2E_JAR（backend/target/*.jar 绝对路径）未提供，已跳过资源包安装旅程')
+  } else {
+    const j13Home = path.join(OUT, 'j13-pack-' + ts)
+    const j13Cwd = path.join(j13Home, 'cwd')
+    fs.mkdirSync(j13Cwd, { recursive: true })
+    const repoRoot = path.resolve(fileURLToPath(new URL('.', import.meta.url)), '../../..')
+    const j13SkillsDir = path.join(j13Home, 'skills-copy')
+    fs.cpSync(path.join(repoRoot, 'backend/skills'), j13SkillsDir, { recursive: true })
+
+    const j13Stub = await startPackStub(path.join(j13Home, 'pack-src'), { id: 'litigation-visual', version: '9.9.9' })
+    const j13Port = 9703 // J11 占了 9701(S)/9702(B)，这里另取一个
+    const j13Backend = 'http://127.0.0.1:' + j13Port
+    const j13Args = [
+      '-Duser.home=' + j13Home, '-jar', J11_JAR,
+      '--server.port=' + j13Port,
+      '--spring.profiles.active=desktop',
+      '--spring.datasource.url=jdbc:h2:file:' + path.join(j13Home, 'db') + ';MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DEFAULT_NULL_ORDERING=HIGH;NON_KEYWORDS=VALUE',
+      '--ai.skills.dir=' + j13SkillsDir,
+      '--ai.packs.base-urls[0]=' + j13Stub.url,
+      '--ai.plugins.registry-public-key=' + j13Stub.publicKeyPem,
+    ]
+    const j13Child = spawn(process.env.JAVA_HOME + '/bin/java', j13Args, { cwd: j13Cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    const j13LogFile = fs.createWriteStream(path.join(j13Home, 'stdout.log'))
+    j13Child.stdout.pipe(j13LogFile); j13Child.stderr.pipe(j13LogFile)
+    let j13Page = null
+    try {
+      let j13Ready = false
+      for (let i = 0; i < 90; i++) {
+        try { const r = await fetch(j13Backend + '/api/auth/me'); if (r.status === 200) { j13Ready = true; break } } catch (e) { /* 未就绪 */ }
+        await sleep(1000)
+      }
+      if (!j13Ready) {
+        note('skip', 'J13 隔离后端未在 90s 内就绪，日志见 ' + path.join(j13Home, 'stdout.log') + '，已跳过资源包安装旅程')
+      } else {
+        const j13Api = mkApi(j13Backend)
+        const j13Proj = await j13Api('/api/projects', { method: 'POST', body: { name: 'J13资源包安装', projectType: 'BLANK' } })
+        if (!j13Proj || !j13Proj.id) throw new Error('J13 隔离后端建项目失败: ' + JSON.stringify(j13Proj).slice(0, 200))
+        const j13ProjectId = j13Proj.id
+
+        j13Page = await browser.newPage()
+        // 桌面壳假冒 + apiBaseUrl 覆盖：host.js 的 getApiBaseUrl() 最先认
+        // window.checkbaDesktop.apiBaseUrl，借这条把这一页的全部 API 请求
+        // 定向到隔离后端，不需要另起一份 dev server（真实 Electron 壳换后端
+        // 端口就是这么注入的，同一套机制）。
+        await j13Page.evaluateOnNewDocument((apiBase) => {
+          window.checkbaDesktop = { apiBaseUrl: apiBase, shell: { openExternal: () => Promise.resolve() } }
+          try { localStorage.setItem('awd_app_language', 'zh-CN') } catch (e) { /* 全新页面没有「已有痕迹」，不设置会按 navigator.language 猜成 en-US */ }
+        }, j13Backend)
+
+        const j13WaitText = async (t, ms = 15000) => j13Page.waitForFunction((x) => document.body.innerText.includes(x), { timeout: ms }, t)
+        const j13ClickSel = async (sel) => {
+          await j13Page.waitForSelector(sel, { timeout: 10000 })
+          const box = await j13Page.evaluate((s) => {
+            const el = document.querySelector(s); if (!el) return null
+            const r = el.getBoundingClientRect()
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+          }, sel)
+          if (!box) throw new Error('找不到选择器: ' + sel)
+          await j13Page.mouse.click(box.x, box.y)
+          await sleep(500)
+        }
+        // 限定容器的文本点击：左栏 Skill 广场里一堆未安装项也叫「安装」，
+        // 不加限定会点到同名的错误按钮（本轮调试实测踩过）。
+        const j13ClickTextIn = async (containerSel, label) => {
+          const box = await j13Page.evaluate((containerSel, lbl) => {
+            const container = document.querySelector(containerSel)
+            if (!container) return null
+            const el = [...container.querySelectorAll('*')].find((e) =>
+              e.children.length === 0 && e.offsetParent !== null && e.innerText && e.innerText.trim() === lbl)
+            if (!el) return null
+            const r = el.getBoundingClientRect()
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+          }, containerSel, label)
+          if (!box) throw new Error(`找不到文本(${containerSel} 内): ` + label)
+          await j13Page.mouse.click(box.x, box.y)
+          await sleep(500)
+        }
+        const step13 = async (name, fn) => {
+          try { await fn(); passed++; console.log('  ✓ ' + name); return true }
+          catch (e) {
+            stepFails++; note('step-fail', name + ': ' + String(e.message || e).slice(0, 180))
+            try { await j13Page.screenshot({ path: path.join(OUT, 'FAIL-' + name.replace(/[^\w一-龥]/g, '_') + '.png') }) } catch (e2) { /* ignore */ }
+            return false
+          }
+        }
+
+        await step13('J13 打开工作台', async () => {
+          // 同一个 BASE（dev:h5 前端）开新 tab，靠 apiBaseUrl 注入定向到隔离后端——
+          // 不需要另起一份 dev server。
+          await j13Page.goto(BASE + '/#/pages/project-overview/project-overview?id=' + j13ProjectId,
+            { waitUntil: 'domcontentloaded', timeout: 30000 })
+          await j13WaitText('资源管理器', 30000)
+        })
+
+        await step13('J13 rail 点开插件中心，诉讼可视化显示待安装', async () => {
+          await j13ClickSel('[title="插件中心"]')
+          await j13WaitText('诉讼可视化', 15000)
+        })
+
+        await step13('J13 详情面板显示需下载资源包的安装按钮', async () => {
+          await j13ClickTextIn('.msb', '诉讼可视化')
+          await j13WaitText('需下载资源包', 15000)
+        })
+
+        await step13('J13 点安装后出现下载进度（bytesTotal>0）', async () => {
+          await j13ClickSel('.mdp .mdp-btn.primary')
+          let sawBytesTotal = false
+          for (let i = 0; i < 30; i++) {
+            const st = await j13Api('/api/packs/litigation-visual/status')
+            if (st && st.status && st.status.bytesTotal > 0) { sawBytesTotal = true; break }
+            if (st && st.status && st.status.state === 'ready') { sawBytesTotal = st.status.bytesTotal > 0; break }
+            await sleep(200)
+          }
+          if (!sawBytesTotal) throw new Error('未观察到 bytesTotal>0 的下载进度')
+        })
+
+        await step13('J13 轮询到 ready 且 skill 自动启用', async () => {
+          await j13WaitText('已启用', 20000)
+          const st = await j13Api('/api/packs/litigation-visual/status')
+          if (!st || !st.status || st.status.state !== 'ready') throw new Error('后端状态未到 ready: ' + JSON.stringify(st))
+        })
+
+        await step13('J13 左栏 rail 出现诉讼可视化入口', async () => {
+          await j13Page.waitForSelector('[title="诉讼可视化"]', { timeout: 15000 })
+        })
+
+        await step13('J13 卸载：确认框 + rail 入口消失', async () => {
+          await j13ClickTextIn('.msb', '诉讼可视化')
+          await j13WaitText('已启用', 15000)
+          await j13ClickSel('.mdp .mdp-btn.danger')
+          // uni.showModal 在 H5 目标下渲染成 .uni-modal，确认按钮是 .uni-modal__btn_primary
+          // （不是文案「卸载」本身——那个词在卸载按钮与确认按钮上各出现一次，
+          // 覆盖态下用文本点击会点到底下被遮住的原按钮，本轮调试实测踩过）。
+          await j13ClickSel('.uni-modal__btn_primary')
+          let railGone = false
+          for (let i = 0; i < 15; i++) {
+            if (!(await j13Page.$('[title="诉讼可视化"]'))) { railGone = true; break }
+            await sleep(300)
+          }
+          if (!railGone) throw new Error('卸载后 rail 入口未消失')
+        })
+
+        await step13('J13 卸载后端状态回到 not_installed', async () => {
+          let st = null
+          for (let i = 0; i < 15; i++) {
+            st = await j13Api('/api/packs/litigation-visual/status')
+            if (st && st.status && st.status.state === 'not_installed') break
+            await sleep(300)
+          }
+          if (!st || !st.status || st.status.state !== 'not_installed') throw new Error('卸载后状态未回到 not_installed: ' + JSON.stringify(st))
+        })
+      }
+    } finally {
+      if (j13Page) { try { await j13Page.close() } catch (e) { /* ignore */ } }
+      try { j13Child.kill('SIGKILL') } catch (e) { /* ignore */ }
+      try { await j13Stub.close() } catch (e) { /* ignore */ }
+    }
+  }
 } finally {
   await browser.close()
   // 清理：删除本次运行的 QA 项目（账号无删除接口，qa_bot_* 会留存，可在管理页清）
