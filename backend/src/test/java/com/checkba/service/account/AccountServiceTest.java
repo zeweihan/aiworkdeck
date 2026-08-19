@@ -172,6 +172,27 @@ class AccountServiceTest {
     }
 
     @Test
+    @DisplayName("换 Key 请求带上设备名：官网账户页「已连接的设备」靠它显示")
+    void exchangeKeyRequestIncludesDeviceName() {
+        transport = new StubTransport()
+                .enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":true}")
+                .enqueue(200, ME);
+        service().loginWithPhone("13800138000", "123456");
+        assertTrue(transport.bodies.get(0).contains("\"deviceName\""), transport.bodies.get(0));
+    }
+
+    @Test
+    @DisplayName("deviceName()：非空、不超 64 字符、带 os 标签")
+    void deviceNameIsWellFormed() {
+        String name = AccountService.deviceName();
+        assertNotNull(name);
+        assertFalse(name.isBlank());
+        assertTrue(name.length() <= 64, name);
+        assertTrue(name.contains("Mac") || name.contains("Windows") || name.contains("Linux") || name.contains("Desktop"),
+                name);
+    }
+
+    @Test
     @DisplayName("口令登录：国际站主路径，同样换 Key 并连接")
     void passwordLoginExchangesKey() {
         transport = new StubTransport()
