@@ -32,13 +32,32 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 **会议录音**：面板 + skill + 专用工具三层齐备（2026-08-14）。前端 `frontend/src/components/MeetingRecordingPanel.vue`（一键录音/列表/转写稿/说话人改名/生成纪要）+ **模块级录音单例** `frontend/src/utils/meetingRecorder.js`（MediaRecorder 5s 分片边录边追加上传，页面跳转不断录）+ 跨页面浮动指示器 `utils/recordingIndicator.js`→`MeetingRecordingIndicator.vue`（body 级挂载，feedbackWidget 同模式）；后端 `controller/MeetingRecordingController.java`（/api/meetings）+ `service/meeting/`（MeetingRecordingService 生命周期、MeetingTranscriptionService 转写编排：JavaCV 转码 mp3 → OSS 签名 URL → 通义听悟 CreateTask（说话人分离 SpeakerCount=0 + 章节/摘要/待办）→ **poll-on-read** 收结果、TingwuClient/MeetingOssClient 接口+SDK 实现、MeetingTranscriptParser 纯函数解析）；工具 `service/ai/tools/MeetingTools.java`（meeting_list_recordings/meeting_get_transcript）；skill `backend/skills/meeting-recorder/`（`enabled_by_default:false`，广场启停，触发词「会议纪要」）。凭证五件套（AK/SK/听悟 AppKey/OSS bucket/endpoint）存 system_setting `meeting.asr.*`/`meeting.oss.*`，admin 页「会议转写」卡片可改（AdminConfigController TingwuConfig）；未配置时录音存档可用、转写降级提示。转写三档（`external.asr.provider` = platform | byok | local，分档在 `MeetingTranscriptionService` 编排层）：platform 走网关、byok 用自己的听悟凭证、**local 走本机 `asr-service`（faster-whisper，音频零出网，没有说话人分离）**，档位与就绪判定见 `.claude/agents/licensing-billing.md` 地雷 36-39。**地雷**：听悟只收公网 URL（必须 OSS 中转，转写完即删）；kick-off prompt 以「会议纪要」开头；录音单例绝不能搬进页面组件（reLaunch 即断录）；local 档全程没有 taskId，「转写中」的自愈判据是进程内 `inFlight` 集合而不是 taskId。
 
-**动态 JAR**：前端 `frontend/src/components/PluginPane.vue`（纯 iframe 壳：props url/pluginId，url 空则报"未配置入口地址"；加载哪个插件由父页面按 leftPaneKey + dynamicPlugins[].frontendEntry 决定）；后端 `service/ai/PluginService.java` + `controller/ai/PluginController.java`（/api/plugins）。
+**动态 JAR / Web 插件**：前端 `frontend/src/components/PluginPane.vue`（props url/pluginId/permissions/projectId，url 空则报"未配置入口地址"；加载哪个插件由父页面按 leftPaneKey + dynamicPlugins[].frontendEntry 决定）；后端 `service/ai/PluginService.java` + `controller/ai/PluginController.java`（/api/plugins）+ `controller/ai/PluginWebController.java`（/api/plugin-web，见下）。
+
+### 三方 Web 插件（规范 v2.3，docs/PLUGIN_SPEC.md §8）
+
+`manifest.frontendEntry` 从「预留」激活。两种形态在 PluginPane 里**行为刻意不同**：
+
+- **`web/` 相对路径** = Web 插件。后端 `GET /api/plugin-web/{id}/**` 静态服务 `plugins/<id>/web/`；PluginPane 给 iframe 加 `sandbox="allow-scripts allow-forms"`，与插件只走 postMessage 桥。
+- **`http(s)://` 绝对 URL** = 旧形态。不加 sandbox、不发握手、不响应桥调用——改它只会打断存量插件。判据是 URL 里有没有 `/api/plugin-web/`（`PluginPane.isWebPlugin`）。
+
+**绝不给 sandbox 加 `allow-same-origin`。** 同源的 iframe 能读 localStorage 里的 `X-Session-Id` 并打全部 `/api/*`，等于白送宿主权限。
+
+桥协议（`PluginPane.vue` 宿主端 / `sdk/plugin-sdk/awd-plugin-sdk.js` 插件端 / 官网模板与宿主模拟器，**三处同一份契约**）：`init` 握手 → `call{seq,method,params}` → `result{seq,ok,result|error}`；双向来源校验（宿主认 `event.source === iframe.contentWindow`，插件认 `window.parent`），targetOrigin 只能 `'*'`（opaque origin）。v1 方法：`context.get` / `files.list` / `files.read` / `ui.toast` / `storage.get` / `storage.set`；错误码 `permission_denied` / `unknown_method` / `quota_exceeded` / `not_found`。
+
+**这是 manifest permissions 第一次成为真实边界**：缺 `file_read` 时 `files.*` 直接 `permission_denied`；`network` 决定 PluginWebController 下发的 CSP 是 `connect-src 'none'` 还是 `connect-src https:`。JAR 插件同 JVM 同权限，做不到这一点。
+
+插件级 KV 存宿主 `localStorage` 的 `awd_plugin_kv_<pluginId>`，总量 64 KB；`files.read` 文本上限 5 MB（超限截断且 `truncated:true`，不报错），扩展名不在可抽取文本白名单里的按二进制拒绝。
+
+`manifest.packs: ["<packId>"]`（v2.3）：在线安装成功后 `PluginMarketService` 逐个 `NativePackService.installAsync`，**装不上不回滚插件只记 WARN**。
+
+示例：`examples/hello-web-plugin/`；SDK 源头 `sdk/plugin-sdk/`（官网模板里那份是分发副本，必须逐字节一致）。
 
 ## 注册与加载链路
 
 1. 静态注册：`frontend/src/config/leftSidebarPlugins.js` 导出 LEFT_SIDEBAR_PLUGINS + `getPluginsForUser(role)`。
 2. project-overview.vue 计算属性（~:1581）合并静态列表与 dynamicPlugins。
-3. 动态插件：`loadDynamicPlugins()`（~:6261）调 `GET /api/plugins/list`，映射成 `{key:'plugin-<id>', label, icon, isDynamic, frontendEntry}`。
+3. 动态插件：`loadDynamicPlugins()`（~:6261）调 `GET /api/plugins/list`，映射成 `{key:'plugin-<id>', pluginId, label, icon, isDynamic, permissions, frontendEntry}`。`frontendEntry` 经 `api.js` 的 `resolvePluginEntryUrl(id, entry)`：相对路径 → `<apiBase>/api/plugin-web/<id>/<entry>`，绝对 URL 原样。**`key` 是 `plugin-<id>`，`pluginId` 才是原始 id**——桥的握手上下文与 KV 分区键用后者，混用会让插件存储串到别的键上。
 4. 面板分发（~:531-563）按 leftPaneKey：dd-files→DdFilesPanel、desensitize→DesensitizePane、easyvoice→EasyVoicePane、search→SearchPanel、files→文件树、动态→PluginPane、其余→占位符。
 5. 后端 PluginService：@PostConstruct 扫 `plugins/`（可配 `ai.plugins.dir`），读 manifest.json → PluginMetadata；有 backendJars 时独立 URLClassLoader 加载，扫 langchain4j @Tool 类注册进 ToolRegistry。`POST /api/plugins/rescan` 热重扫。
 
@@ -113,6 +132,8 @@ manifest.json 要点：id（必需）/name/version/icon/author/permissions（fil
 - skill 的 allowed_tools 写错工具名不会报错，只是白名单零命中回退不裁剪——排查工具可见性问题时先核对 ToolRegistry 真名。**部分**写错更阴险：剩下的名字还能命中，裁剪照常生效，写错的那个工具就静默消失了。
 - `RealToolBeans.instantiateAll()`（评测用的工具 bean 清单）与生产的 `AgentToolComponent` 实现集**不是自动同步的**：`TodoTools` 就不在里面，所以 `todo_write` 在回放评测里根本没注册，评测断言不到它的可见性。新增工具组件时要顺手补进去。
 - 插件启停语义只影响可见性，不拦截历史工具调用回放。
+- **Web 插件的 `frontendEntry` 校验失败是静默降级**：指到 `web/` 之外或文件不存在时 `PluginService` 把它置空并记 WARN，前端表现为「未配置入口地址」的空面板——面板空白先查后端日志的这条 WARN，别去前端找。
+- **`/api/plugin-web` 不要加登录闸**：iframe 是 opaque origin，带不出凭据，加了只会让面板白屏；那里也没有用户数据。禁用/未安装/被封禁一律 404（不是 403，不泄露 id 存在性）。
 - 改 AgentOrchestrator 构造器（如注入新服务）必须同步 EvalHarness（踩过两次）。
 - **「先落中间态再 `executor.submit`」的服务（会议转写就是），测试里断中间态必须先卡住后台线程**：`save` mock 成原样返回入参时，方法返回的对象与测试持有的是同一个可变实例，后台那个瞬间返回的 mock 会抢先把它改成终态，断言成败取决于 runner 调度（#394 修的就是这个间歇红）。用 `CountDownLatch` 卡住后台调用的那个 mock，断完中间态再 `countDown` 放行。
 - SubAgentTools 曾因循环依赖断启动，用 @Lazy 解决（PR#98），插件/工具类注入编排器时注意。

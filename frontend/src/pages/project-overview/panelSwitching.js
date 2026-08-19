@@ -47,10 +47,14 @@ export const panelSwitchingMethods = {
         // Check if it's a dynamic plugin and open its tab
         const plugin = this.dynamicPlugins.find(p => p.key === key)
         if (plugin) {
+          // pluginId / permissions 随标签一起带过去：PluginPane 的 postMessage 桥
+          // 要用原始插件 id（标签 id 是 plugin-<id> 的面板 key）与 manifest 权限声明
           this.openFile({
             id: plugin.key,
             name: plugin.label,
             fileType: 'plugin',
+            pluginId: plugin.pluginId,
+            permissions: plugin.permissions || [],
             frontendEntry: plugin.frontendEntry
           })
         }

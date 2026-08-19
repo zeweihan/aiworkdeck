@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hello Web 插件</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    margin: 0; padding: 20px;
+    font: 14px/1.7 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #1f2421; background: #fff;
+  }
+  h1 { margin: 0 0 4px; font-size: 16px; font-weight: 600; }
+  p.sub { margin: 0 0 18px; color: #6b7280; font-size: 12px; }
+  section { margin-bottom: 18px; }
+  h2 { margin: 0 0 8px; font-size: 12px; font-weight: 600; letter-spacing: .06em; color: #6b7280; }
+  dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+  dt { color: #6b7280; }
+  dd { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+  ul { margin: 0; padding: 0; list-style: none; }
+  li { padding: 6px 0; border-bottom: 1px solid #eef0ef; display: flex; gap: 10px; }
+  li:last-child { border-bottom: 0; }
+  li .name { flex: 1; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+  li .size { color: #9ca3af; font-variant-numeric: tabular-nums; }
+  button {
+    font: inherit; padding: 6px 14px; border-radius: 6px;
+    border: 1px solid #d3d8d5; background: #fff; color: #1f2421; cursor: pointer;
+  }
+  button:hover { border-color: #1f4c3a; color: #1f4c3a; }
+  pre {
+    margin: 10px 0 0; padding: 10px; max-height: 180px; overflow: auto;
+    background: #f6f7f7; border-radius: 6px; font-size: 12px; white-space: pre-wrap;
+  }
+  .empty { color: #9ca3af; }
+</style>
+</head>
+<body>
+  <h1>Hello Web 插件</h1>
+  <p class="sub">最小面板：握手上下文、项目文件、toast、插件级存储各演示一次。</p>
+
+  <section>
+    <h2>上下文</h2>
+    <dl id="ctx"><dd class="empty">等待宿主握手…</dd></dl>
+  </section>
+
+  <section>
+    <h2>项目文件</h2>
+    <ul id="files"><li class="empty">等待宿主握手…</li></ul>
+    <pre id="preview" hidden></pre>
+  </section>
+
+  <section>
+    <h2>动作</h2>
+    <button id="toast">发一条 toast</button>
+    <button id="count">记一次点击（storage）</button>
+  </section>
+
+  <!-- SDK 必须同步引入且排在业务脚本之前：宿主在 iframe load 后立刻发 init，
+       晚注册监听会错过握手，ready() 将永远挂起。 -->
+  <script src="awd-plugin-sdk.js"></script>
+  <script>
+    (async function () {
+      var ctxEl = document.getElementById('ctx');
+      var filesEl = document.getElementById('files');
+      var previewEl = document.getElementById('preview');
+
+      var ctx = await awd.ready();
+
+      ctxEl.innerHTML = '';
+      Object.keys(ctx).forEach(function (k) {
+        var dt = document.createElement('dt'); dt.textContent = k;
+        var dd = document.createElement('dd'); dd.textContent = String(ctx[k]);
+        ctxEl.appendChild(dt); ctxEl.appendChild(dd);
+      });
+
+      // files.* 需要 manifest.permissions 含 file_read，未声明会抛 permission_denied
+      try {
+        var files = await awd.files.list();
+        filesEl.innerHTML = '';
+        if (!files.length) {
+          filesEl.innerHTML = '<li class="empty">项目里还没有文件</li>';
+        }
+        files.forEach(function (f) {
+          var li = document.createElement('li');
+          var name = document.createElement('span');
+          name.className = 'name';
+          name.textContent = f.name || f.path;
+          name.onclick = async function () {
+            try {
+              var doc = await awd.files.read(f.path);
+              previewEl.hidden = false;
+              previewEl.textContent = doc.content.slice(0, 2000) + (doc.truncated ? '\n…（已截断）' : '');
+            } catch (e) {
+              previewEl.hidden = false;
+              previewEl.textContent = '读取失败：' + (e.code || '') + ' ' + e.message;
+            }
+          };
+          var size = document.createElement('span');
+          size.className = 'size';
+          size.textContent = ((f.size || 0) / 1024).toFixed(1) + ' KB';
+          li.appendChild(name); li.appendChild(size);
+          filesEl.appendChild(li);
+        });
+      } catch (e) {
+        filesEl.innerHTML = '<li class="empty">读取文件失败：' + (e.code || '') + ' ' + e.message + '</li>';
+      }
+
+      document.getElementById('toast').onclick = function () {
+        awd.ui.toast('来自 ' + (ctx.pluginId || '插件') + ' 的问候');
+      };
+
+      document.getElementById('count').onclick = async function () {
+        var n = (await awd.storage.get('clicks')) || 0;
+        n = Number(n) + 1;
+        await awd.storage.set('clicks', n);
+        await awd.ui.toast('累计点击 ' + n + ' 次');
+      };
+    })();
+  </script>
+</body>
+</html>

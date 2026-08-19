@@ -662,7 +662,9 @@
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
             :url="dynamicPlugins.find(p => p.key === leftPaneKey)?.frontendEntry"
-            :plugin-id="leftPaneKey"
+            :plugin-id="dynamicPlugins.find(p => p.key === leftPaneKey)?.pluginId || ''"
+            :permissions="dynamicPlugins.find(p => p.key === leftPaneKey)?.permissions || []"
+            :project-id="projectId"
           />
           <view v-else class="sidebar-plugin-placeholder">
             <text class="placeholder-title">{{ leftPaneTitle }}</text>
@@ -918,7 +920,9 @@
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
                       :url="activeFileLeft.frontendEntry"
-                      :plugin-id="activeFileLeft.id"
+                      :plugin-id="activeFileLeft.pluginId || ''"
+                      :permissions="activeFileLeft.permissions || []"
+                      :project-id="projectId"
                     />
                     <!-- .drawio：诉讼可视化四份产物里唯一的可继续编辑版，走内嵌
                          draw.io。没有这条分支它会落进 FilePreview 的「暂不支持
@@ -1033,7 +1037,9 @@
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"
                       :url="activeFileRight.frontendEntry"
-                      :plugin-id="activeFileRight.id"
+                      :plugin-id="activeFileRight.pluginId || ''"
+                      :permissions="activeFileRight.permissions || []"
+                      :project-id="projectId"
                     />
                     <DrawioEditor
                       v-else-if="isDrawioFile(activeFileRight)"
@@ -1586,6 +1592,7 @@ import {
 
   getAiConversations,
   getPlugins, // Added
+  resolvePluginEntryUrl,
   getSkills,
   getFileText,
   getVersionStatus, // 版本面板之外也要知道「有没有采纳等待处理」
@@ -5025,11 +5032,17 @@ export default {
           // Map backend PluginMetadata to frontend plugin structure
           this.dynamicPlugins = res.data.map(p => ({
             key: `plugin-${p.id}`,
+            // 左栏面板 key 是 plugin-<id>，桥要的是原始 id（握手上下文 + KV 分区键），
+            // 两者别混用
+            pluginId: p.id,
             label: p.name,
             icon: p.icon || '/static/plugin_default.png',
             activeIcon: p.icon || '/static/plugin_default.png',
             isDynamic: true,
-            frontendEntry: p.frontendEntry
+            // manifest.permissions：PluginPane 的桥按它逐调用裁剪能力
+            permissions: p.permissions || [],
+            // web/ 相对路径映射成后端静态服务地址；绝对 URL 原样保留（旧形态）
+            frontendEntry: resolvePluginEntryUrl(p.id, p.frontendEntry)
           }))
           console.log('Dynamic plugins loaded:', this.dynamicPlugins)
         }

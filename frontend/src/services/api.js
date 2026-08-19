@@ -1624,6 +1624,20 @@ export function getFileUploadUrl(fileId) {
   return `${baseUrl}/api/files/${fileId}/upload`
 }
 
+// Web 插件面板入口 URL（插件规范 v2.3）。
+// - 绝对 http(s) URL：旧形态，原样返回，宿主 iframe 直接打开外部页面（行为不变）
+// - web/ 之下的相对路径：映射到后端静态服务 <apiBase>/api/plugin-web/<id>/<entry>
+// apiBase 走 getApiBaseUrl()（桌面壳注入优先），生产同源时它是空串，返回相对路径同样可用。
+export function resolvePluginEntryUrl(pluginId, entry) {
+  if (!entry) return ''
+  const raw = String(entry)
+  if (/^https?:\/\//i.test(raw)) return raw
+  const baseUrl = getApiBaseUrl() || ''
+  const rel = raw.replace(/^\/+/, '').split('/').filter(Boolean).map(encodeURIComponent).join('/')
+  if (!rel) return ''
+  return `${baseUrl.replace(/\/$/, '')}/api/plugin-web/${encodeURIComponent(pluginId)}/${rel}`
+}
+
 // 获取文件文本内容
 export function getFileText(fileId) {
   return request({

@@ -62,6 +62,18 @@ public class PluginMarketService {
     private final PluginService pluginService;
     private final MarketPurchaseGate purchaseGate;
 
+    /**
+     * 插件 manifest 声明的 pack 依赖由它去装。setter 注入而非构造器参数：
+     * pack 联动是安装后的可选副作用，缺了它安装链路必须照常工作（既有单测直接
+     * {@code new PluginMarketService(...)}，不该被迫编造一个 pack 服务）。
+     */
+    private com.checkba.service.pack.NativePackService nativePackService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setNativePackService(com.checkba.service.pack.NativePackService nativePackService) {
+        this.nativePackService = nativePackService;
+    }
+
     public PluginMarketService(
             @Value("${ai.plugins.registry-url:https://www.aiworkdeck.com/api/registry/plugins}") String registryUrl,
             @Value("${ai.plugins.registry-public-key:}") String publicKeyPem,
@@ -247,7 +259,36 @@ public class PluginMarketService {
         pluginService.markDisabledBeforeLoad(id);
         pluginService.rescan();
         log.info("Installed market plugin '{}' v{} (disabled until user confirms)", id, version);
+        installDeclaredPacks(id);
         return id;
+    }
+
+    /**
+     * 装完插件后补装它声明的原生资源包（manifest.packs，见
+     * docs/NATIVE_PACK_DISTRIBUTION.md §11.4）。
+     *
+     * <p>刻意**不回滚插件**：pack 是独立分发物，有自己的状态机、进度条与重试面
+     * （{@code /api/packs/{id}/status}）。这里下不动网就把插件也删掉，等于让一次
+     * 网络抖动吃掉用户刚装好的插件——记 WARN，把重试留给 pack 自己那套。
+     */
+    private void installDeclaredPacks(String pluginId) {
+        if (nativePackService == null) {
+            return;
+        }
+        PluginService.PluginMetadata meta = pluginService.getPlugin(pluginId);
+        List<String> packs = meta == null ? null : meta.getPacks();
+        if (packs == null || packs.isEmpty()) {
+            return;
+        }
+        for (String packId : packs) {
+            try {
+                nativePackService.installAsync(packId);
+                log.info("Plugin {} declares pack '{}', install queued", pluginId, packId);
+            } catch (Exception e) {
+                log.warn("Plugin {} declares pack '{}' but queuing its install failed: {}",
+                        pluginId, packId, e.getMessage());
+            }
+        }
     }
 
     /** 卸载：删除 plugins/<id>/ 并 rescan */
