@@ -34,6 +34,9 @@ spring:
 security:
   # server 模式（多租户）：local-mode 的免登/回环闸整套不生效
   local-mode: false
+  # 浏览器登录会话滑动过期保持 7 天（已上线契约，见 deploy/cloud/README.md）。
+  # 代码默认值已改为 365（桌面「常驻」语义），这里显式钉住 7，绝不跟默认值漂移。
+  session-idle-days: 7
   # 公网生产姿态：关闭自助注册，账号只经 awdk_ 桥接建立
   registration-mode: closed
   # 官网账户 Key（awdk_）一键桥接开关——插件云后端的核心登录方式

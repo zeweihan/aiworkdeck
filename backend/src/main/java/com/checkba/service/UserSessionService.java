@@ -5,6 +5,7 @@ import com.checkba.model.entity.UserSession;
 import com.checkba.repository.UserSessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
@@ -28,8 +29,15 @@ public class UserSessionService {
 
     public static final String SESSION_PREFIX = "session_";
 
-    /** 滑动过期：距最后一次使用超过该时长即失效。 */
-    static final Duration IDLE_TTL = Duration.ofDays(7);
+    /**
+     * 滑动过期天数的代码默认值：一年，即「常驻」语义（桌面端与团队服务器用）。
+     * 官方云后端 addin.aiworkdeck.com 的「7 天滑动过期」是已上线契约，
+     * 由 application-cloud.yml 显式配 security.session-idle-days: 7 钉住，绝不跟默认值漂移。
+     */
+    static final long DEFAULT_IDLE_DAYS = 365;
+
+    /** 滑动过期：距最后一次使用超过该时长即失效。天数来自 security.session-idle-days。 */
+    private final Duration idleTtl;
 
     /** lastUsedAt 写回节流：一分钟内的重复请求不再落盘（每请求一写没有意义）。 */
     static final Duration TOUCH_INTERVAL = Duration.ofMinutes(1);
@@ -43,8 +51,10 @@ public class UserSessionService {
 
     private final UserSessionRepository repository;
 
-    public UserSessionService(UserSessionRepository repository) {
+    public UserSessionService(UserSessionRepository repository,
+                              @Value("${security.session-idle-days:365}") long sessionIdleDays) {
         this.repository = repository;
+        this.idleTtl = Duration.ofDays(sessionIdleDays);
         AuthController.registerUserSessionService(this);
     }
 
@@ -70,7 +80,7 @@ public class UserSessionService {
         return repository.findByTokenHash(sha256(plaintext))
                 .map(s -> {
                     LocalDateTime now = LocalDateTime.now();
-                    if (s.getLastUsedAt().plus(IDLE_TTL).isBefore(now)) {
+                    if (s.getLastUsedAt().plus(idleTtl).isBefore(now)) {
                         repository.delete(s);
                         return null;
                     }
@@ -92,7 +102,7 @@ public class UserSessionService {
     /** 每日清理过期会话（滑动过期在读路径已兜住，这里只是让表不积灰）。 */
     @Scheduled(fixedDelay = 24 * 60 * 60 * 1000, initialDelay = 10 * 60 * 1000)
     public void purgeExpired() {
-        long removed = repository.deleteByLastUsedAtBefore(LocalDateTime.now().minus(IDLE_TTL));
+        long removed = repository.deleteByLastUsedAtBefore(LocalDateTime.now().minus(idleTtl));
         if (removed > 0) {
             log.info("清理过期登录会话 {} 条", removed);
         }

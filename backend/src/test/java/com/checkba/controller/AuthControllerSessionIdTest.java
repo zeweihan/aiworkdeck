@@ -22,7 +22,7 @@ class AuthControllerSessionIdTest {
 
     @Test
     void sessionIdIsUnpredictable() {
-        UserSessionService service = new UserSessionService(mock(UserSessionRepository.class));
+        UserSessionService service = new UserSessionService(mock(UserSessionRepository.class), 365);
 
         long before = System.currentTimeMillis();
         Set<String> seen = new HashSet<>();

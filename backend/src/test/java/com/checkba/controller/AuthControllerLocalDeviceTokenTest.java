@@ -49,7 +49,7 @@ class AuthControllerLocalDeviceTokenTest {
                                              boolean localMode) {
         // 会话服务（repository 打桩）：本端点走 local-mode 身份解析不碰它，构造器补位而已
         com.checkba.service.UserSessionService sessions = new com.checkba.service.UserSessionService(
-                org.mockito.Mockito.mock(com.checkba.repository.UserSessionRepository.class));
+                org.mockito.Mockito.mock(com.checkba.repository.UserSessionRepository.class), 365);
         return new AuthController(userService, null, null, deviceTokenService,
                 null, null, null, null, null, sessions, localMode, null);
     }
