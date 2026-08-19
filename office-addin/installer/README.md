@@ -29,12 +29,23 @@ scp installer/dist/AI-WorkDeck-Office-Addin-*.{pkg,exe} root@8.152.169.44:/opt/a
 
 下载地址：`https://addin.aiworkdeck.com/office-addin/dl/<文件名>`。
 
+## 签名与公证（macOS）
+
+2026-08-19 起 pkg 走 Developer ID Installer 签名 + Apple 公证，Gatekeeper 直接放行。
+构建脚本自动处理：钥匙串里有 `Developer ID Installer: Zhen Shan Mei Grace Legacy Limited`
+身份即签名（证书备份在 `5-Tech/DeveloperID_Installer_X9B97KVA84.cer`，私钥只在维护者
+钥匙串里）；再给齐三个环境变量即公证+装订：
+
+```bash
+NOTARY_KEY_PATH=/Users/zewei/Documents/2024-2044/5-Tech/5-BQT_Global/fastlane/ASCKey.p8 \
+NOTARY_KEY_ID=<ASC_KEY_ID> NOTARY_ISSUER_ID=<ASC_ISSUER_ID> npm run build:installers
+```
+
+（两个 ID 的值在 `5-BQT_Global/fastlane/.env`。）验证：`spctl --assess --type install -v <pkg>`
+应输出 `source=Notarized Developer ID`。
+
 ## 已知限制
 
-- **pkg 未签名**（本机与 CI 均无 Developer ID Installer 证书；桌面端签名用的是
-  Developer ID Application，签不了 pkg）。用户首次打开需右键 → 打开，或在
-  系统设置 → 隐私与安全性里放行。要消除此摩擦需在 Apple Developer 后台补一张
-  Developer ID Installer 证书，之后 `productsign` + 公证接入即可。
 - **exe 未签名**，SmartScreen 会出「未知发布者」提示（与桌面端 Windows 包同等待遇）。
 - Windows 的 `WEF\Developer` 键在 Office 「我的加载项」对话框里会归到开发者分组，
   功能区按钮不受影响。
