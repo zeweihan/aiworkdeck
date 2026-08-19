@@ -15,6 +15,10 @@
     <description>Backend for Checkba</description>
     <properties>
         <java.version>17</java.version> <!-- Compatible with 21 too -->
+        <!-- Spring Boot 3.2 BOM 钉 3.13，但 commons-compress 1.26+ 的 BinaryTree（zip
+             imploded 条目解码）与 TarArchiveOutputStream 用到 3.14 才有的 ArrayFill，
+             不覆盖会在运行期 NoClassDefFoundError -->
+        <commons-lang3.version>3.14.0</commons-lang3.version>
     </properties>
     <dependencies>
         <dependency>

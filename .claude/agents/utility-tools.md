@@ -185,6 +185,12 @@ FilePickerDialog :298 / EasyVoicePane :537 / DesensitizePane :543 / SearchPanel 
 
 ## 已知地雷
 
+- **commons-compress 1.26+ 依赖 commons-lang3 ≥3.14（ArrayFill），而 Spring Boot 3.2 BOM 钉 3.13**：
+  pom 已属性覆盖 `<commons-lang3.version>3.14.0</commons-lang3.version>`（PR#435），别删。缺了它，
+  压缩包预览/解压遇到老 PKZIP imploded 条目（`BinaryTree` 解码）与 tar 写路径会
+  `NoClassDefFoundError`——且是 Error，`walkArchive` 外层 `catch (Exception)` 兜不住，直接 500。
+  回归用例 `extractZipWithImplodedEntryDecodesContent`（fixture `imploding-8Kdict-3trees.zip`）。
+  升级 Boot 或 commons-compress 时重新核对这对版本。
 - BrowserView 弹窗守卫模式与 window.open 消费者、截图假死根因见 v0.6.1 修复（desktop-interaction-bugfix 记录）；改 BrowserView 生命周期务必测全屏/黑屏恢复路径。
 - **摘下窗口的 BrowserView 会被 Chromium 冻住渲染进程**（后台标签的正常待遇，页面状态照留）。
   自动化里往冻着的 target 里 evaluate 会一直挂到 CDP 的 protocolTimeout，最后只落一句

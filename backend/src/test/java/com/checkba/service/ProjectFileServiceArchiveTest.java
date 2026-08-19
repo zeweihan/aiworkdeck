@@ -235,4 +235,38 @@ class ProjectFileServiceArchiveTest {
         assertEquals("hello 合同".getBytes(StandardCharsets.UTF_8).length, contract.getFileSize());
         assertNotNull(contract.getWpsFileId());
     }
+
+    @Test
+    void extractZipWithImplodedEntryDecodesContent() throws Exception {
+        // 老 PKZIP 的 Implode(方法 6) 条目：解码走 commons-compress 的 BinaryTree，
+        // 其内部调用 commons-lang3 的 ArrayFill(3.14 才有)。Spring Boot BOM 若把
+        // lang3 钉回 3.13 会 NoClassDefFoundError（Error 不进 catch(Exception)，
+        // 直接裸奔成 500）。样本取自 commons-compress 官方测试资源。
+        byte[] zip;
+        try (java.io.InputStream in = getClass().getResourceAsStream("/imploding-8Kdict-3trees.zip")) {
+            zip = in.readAllBytes();
+        }
+        stubArchive("legacy.zip", "zip", zip);
+
+        AtomicLong ids = new AtomicLong(100);
+        List<ProjectFile> saved = new ArrayList<>();
+        when(projectFileRepository.existsByProjectIdAndParentIdAndNameAndIdNot(anyLong(), any(), any(), anyLong()))
+                .thenReturn(false);
+        when(projectFileRepository.findByProjectIdAndParentIdOrderBySortOrderAsc(anyLong(), any()))
+                .thenReturn(List.of());
+        when(projectFileRepository.findByProjectIdAndParentIdAndNameAndIsDeletedFalse(anyLong(), any(), any()))
+                .thenReturn(Optional.empty());
+        when(projectFileRepository.save(any(ProjectFile.class))).thenAnswer(inv -> {
+            ProjectFile f = inv.getArgument(0);
+            if (f.getId() == null) f.setId(ids.incrementAndGet());
+            saved.add(f);
+            return f;
+        });
+        lenient().when(storageService.save(any(), any(java.io.InputStream.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        projectFileService.extractArchive(PROJECT_ID, ARCHIVE_ID, 42L);
+
+        ProjectFile license = saved.stream().filter(f -> "LICENSE.TXT".equals(f.getName())).findFirst().orElseThrow();
+        assertEquals(11560L, license.getFileSize(), "imploded 条目应完整解码");
+    }
 }
