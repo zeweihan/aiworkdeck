@@ -51,6 +51,12 @@ export default {
   clientInitial: 'C',
   addMember: 'Add Member',
   profile: 'Profile',
+  // Top-right avatar dropdown (moved up from the rail bottom, 2026-08-19)
+  accountMenu: 'Account and Settings',
+  settingsTabName: 'Settings',
+  // The two tabs inside the "Voice" panel
+  voiceTts: 'Text to Speech',
+  voiceRecorder: 'Meeting Recording',
   // Assistant config dialog
   configAssistant: 'Configure Assistant',
   assistantNameLabel: 'Assistant Name (System)',

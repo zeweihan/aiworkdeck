@@ -163,11 +163,20 @@ public class ContextAssemblerService {
         systemText.append(english ? getModeConstraintsEn(agentMode) : getModeConstraints(agentMode));
 
         // [Injection] Skill（Phase 3B，规范见 docs/SKILL_SPEC.md）：
-        // 用户输入命中触发词时把 skill 的 prompt 模板注入本轮系统消息。
-        // ASK 模式跳过（skill 指引以工具流程为主，与 ASK 禁用工具的约束冲突）；未命中不注入（行为保持）。
+        // 把本轮生效的每个 skill 的 prompt 模板注入系统消息。
+        //
+        // **读的是编排器 activateForTurn 登记下来的生效集合，不是在这里重新 match(userPrompt)**：
+        // 重新匹配等于只认触发词，用户手动选的 skill 会被裁了工具却拿不到 prompt——
+        // 这正是旧 pinnedSkillId 的那个静默 bug（工具可见性与 prompt 注入走了两条不同的判据）。
+        // 生效集合的口径唯一收敛在 SkillRouter.activateForTurn。
+        //
+        // ASK 模式跳过（skill 指引以工具流程为主，与 ASK 禁用工具的约束冲突）；
+        // 一个都不生效时不注入（行为保持）。
         if (agentMode != AgentMode.ASK) {
-            skillRouter.match(userPrompt)
-                    .ifPresent(skill -> systemText.append(skillRouter.promptInjectionFor(skill)));
+            for (com.checkba.service.ai.skill.SkillRouter.ActiveSkill active
+                    : skillRouter.activeSkills(conversationId)) {
+                systemText.append(skillRouter.promptInjectionFor(active.definition()));
+            }
         }
 
         // [Injection] State with Phase

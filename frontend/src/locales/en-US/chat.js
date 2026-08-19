@@ -78,14 +78,16 @@ export default {
   modePlanDesc: 'Plan and confirm',
   localModeNotice: 'Local models do not support tool calls. Agent and Plan require a cloud model.',
   modeUnavailable: 'The current provider does not support this mode.',
-  // ---- Skill selector ----
-  skillAutoMatch: 'Auto Match',
-  skillAutoMatchDesc: 'Activates when trigger words match',
+  // ---- Skill selector and active-skill list ----
   skillManualOnly: 'Manual only',
   skillNoTriggers: 'No trigger words',
   skillManage: 'Manage Installed Skills',
-  skillPinnedTitle: 'Pinned Skill: {name}',
-  skillDefaultTitle: 'Skill (auto-matches trigger words by default)',
+  skillDefaultTitle: 'Skills (trigger-word matching is always on)',
+  skillPickerTitle: 'Load skills manually',
+  skillPickerHint: 'Checked skills are forced on for this turn, in addition to trigger-word matches.',
+  skillAskDisabled: 'Skills do not load in Ask mode',
+  skillNoneInstalled: 'No skills available',
+  skillAutoLoadedToast: 'Skill loaded: {name}',
   // ---- Send / abort / resume ----
   emptyMessageToast: 'Please enter a message',
   imageNeedsCaptionTitle: 'Add a note to your image',
@@ -130,6 +132,7 @@ export default {
   exportAsWord: 'Export as Word',
   stepN: 'Step {n}',
   stepsGroup: 'Steps',
+  approvalNeededFlag: 'Action Needed',
   // ---- ProcessCard ----
   statusError: 'Error',
   statusSuccess: 'Success',

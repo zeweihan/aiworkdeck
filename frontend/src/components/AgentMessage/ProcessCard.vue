@@ -33,8 +33,8 @@
 
     <div class="process-body" v-if="isExpanded || isHeadless">
       <!-- Items List -->
-      <div class="items-list" v-if="process.items && process.items.length > 0">
-        <div v-for="(item, idx) in process.items" :key="idx" class="process-item">
+      <div class="items-list" v-if="renderItems.length > 0">
+        <div v-for="(item, idx) in renderItems" :key="idx" class="process-item">
 
             <!-- CASE 1: Normal Step or File Attachment -->
             <div v-if="item.type === 'step'" class="step-container">
@@ -272,6 +272,66 @@ const isSecondaryContent = (text) => {
     if (!text) return false
     return text.includes('主要内容') || text.includes('摘要')
 }
+
+// ---- 单子项去重折叠（对齐 Claude 桌面端：一行工具调用 + 一条轻量思考折叠） ----
+// 步骤展开后经常还有一层：一行「进度文案」（type: step，模型边做边述的过程文字）
+// 复述的内容跟 process 自己的标题（如「读取材料并查阅规范」）大意相同（如「查阅制图
+// 规范」）。这层子列表不提供标题之外的新信息，默认折叠掉，只留步骤行（本卡头部）+
+// 思考过程折叠入口。纯展示层判定，不改 process.items 数据结构本身。
+
+// 状态尾缀（已完成/成功/进行中…）与「正在/已」前缀只是噪声，参与语义比较前先剥掉
+const STATUS_SUFFIX_RE = /[-—–:：]?\s*(已完成|已核对|完成|已就绪|成功|进行中|处理中|done|success|completed|finished|in progress)[。.]?\s*$/i
+const normalizeLabel = (text) => {
+    if (!text) return ''
+    let s = String(text).trim()
+    s = s.replace(STATUS_SUFFIX_RE, '')
+    s = s.replace(/[。.…]+\s*$/, '')
+    s = s.replace(/^(正在|开始|已|正)/, '')
+    return s.trim()
+}
+
+const charBigrams = (s) => {
+    const grams = new Set()
+    if (!s) return grams
+    if (s.length < 2) { grams.add(s); return grams }
+    for (let i = 0; i < s.length - 1; i++) grams.add(s.substr(i, 2))
+    return grams
+}
+
+// 字符级二元组 Jaccard 相似度（对中文短语比分词简单可靠）+ 互相包含的强信号兜底。
+// 阈值 0.34 是经验值——「查阅制图规范」与「读取材料并查阅规范」的重叠度在这附近。
+// 纯展示层判定，误判代价只是多显示/少显示一行文字，不影响数据。
+const labelsSimilar = (a, b) => {
+    const na = normalizeLabel(a)
+    const nb = normalizeLabel(b)
+    if (!na || !nb) return false
+    if (na === nb || na.includes(nb) || nb.includes(na)) return true
+    const A = charBigrams(na)
+    const B = charBigrams(nb)
+    let inter = 0
+    A.forEach(g => { if (B.has(g)) inter++ })
+    const union = A.size + B.size - inter
+    return union > 0 && (inter / union) >= 0.34
+}
+
+// 折叠命中条件：process.items 里除 thinking 外只剩一条内容条目，且它是纯文字的
+// 「进度文案」（type: step）。type: tool 永远不参与折叠——那是用户点开核验
+// 参数/输出的唯一入口，绝不能因为语义撞了标题就被藏起来。出错条目、文件附件
+// 卡片同样永不折叠（前者要求永远可见，后者是有信息量的独立展示，不是文字复述）。
+const shouldCollapseSoleItem = computed(() => {
+    const contentItems = (props.process.items || []).filter(i => i.type === 'step' || i.type === 'tool')
+    if (contentItems.length !== 1) return false
+    const only = contentItems[0]
+    if (only.type !== 'step' || only.status === 'error' || detectFile(only.text)) return false
+    return labelsSimilar(only.text, processTitle.value)
+})
+
+// 折叠命中时只保留 thinking 条目（思考过程的展开入口不受影响）；未命中原样返回
+// process.items 本身的引用与下标，不打乱「items 只追加不重排、按下标记开合」的既有契约。
+const renderItems = computed(() => {
+    if (!shouldCollapseSoleItem.value) return props.process.items || []
+    return (props.process.items || []).filter(i => i.type === 'thinking')
+})
 </script>
 
 <style scoped>

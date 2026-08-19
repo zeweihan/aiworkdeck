@@ -442,7 +442,21 @@ public class AiAgentController {
         private java.util.List<String> fileIds; // Legacy: Context files to inject 
         private java.util.List<ContextItem> contextItems; // New: Full context metadata
         private ContextItem activeContext; // NEW: Auto-detected active tab (current document)
-        private String pinnedSkillId; // 用户在对话中钉选的 Skill；为空则走触发词自动匹配
+        /**
+         * @deprecated 单选时代的字段，已收编为「只有一项的 {@link #skillIds}」。
+         * 保留只为兼容不发 skillIds 的存量客户端；新客户端一律用 skillIds。
+         */
+        @Deprecated
+        private String pinnedSkillId;
+        /**
+         * 可选：用户在对话面板里主动选择的 Skill id 列表，本轮<b>强制生效</b>——
+         * 同时注入 prompt 与参与工具可见性（两者口径同源，见 SkillRouter.activateForTurn）。
+         *
+         * <p>与触发词自动命中取<b>并集</b>；无效 id（不存在/已停用/当前语言不可用）静默忽略。
+         * <b>无状态</b>：后端不持久化，前端每次请求携带——用户勾掉一个，下一条消息就真的不带它。
+         * ASK 模式下整体不生效（该模式不传工具、也不注入 skill 指引）。
+         */
+        private java.util.List<String> skillIds;
         /**
          * 可选：客户端文档编辑能力（lowa / office / none，Phase C）。
          * 缺省按 lowa 处理，兼容不发送该字段的存量主前端。
@@ -477,8 +491,12 @@ public class AiAgentController {
         public void setContextItems(java.util.List<ContextItem> contextItems) { this.contextItems = contextItems; }
         public ContextItem getActiveContext() { return activeContext; }
         public void setActiveContext(ContextItem activeContext) { this.activeContext = activeContext; }
+        @Deprecated
         public String getPinnedSkillId() { return pinnedSkillId; }
+        @Deprecated
         public void setPinnedSkillId(String pinnedSkillId) { this.pinnedSkillId = pinnedSkillId; }
+        public java.util.List<String> getSkillIds() { return skillIds; }
+        public void setSkillIds(java.util.List<String> skillIds) { this.skillIds = skillIds; }
         public String getClientCapability() { return clientCapability; }
         public void setClientCapability(String clientCapability) { this.clientCapability = clientCapability; }
         public String getOfficeHost() { return officeHost; }

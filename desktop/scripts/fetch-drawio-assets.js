@@ -261,6 +261,17 @@ async function main() {
       '\n（升级 draw.io 后要重新核对 DIR_PREFIXES / EXACT_FILES / PATTERNS）'
     );
   }
+  // DrawioEditor.vue 在挂 iframe 之前会 GET 这个 index.html 并认 geEditor 这个标记，
+  // 用来把「draw.io 真的在这个 origin 上」与「Web 部署的 SPA 兜底对任何路径都回 200 +
+  // 本应用首页」区分开。上游哪天改了 body class，这里先红，好过运行期悄悄退回
+  // 「当前环境没有内置图形编辑器」。
+  const indexHtml = fs.readFileSync(path.join(OUT_DIR, 'index.html'), 'utf8');
+  if (!indexHtml.includes('geEditor')) {
+    throw new Error(
+      'index.html 里没有 geEditor 标记：渲染层的编辑器可达性探测认的就是它' +
+      '（DrawioEditor.vue probeEditor），上游改了标记就要同步改那一处'
+    );
+  }
   const size = dirSize(OUT_DIR);
   if (size < MIN_OUT_BYTES) {
     throw new Error(`裁剪后只有 ${(size / 1048576).toFixed(1)} MB，低于下限，白名单大概率没匹配上`);

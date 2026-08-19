@@ -434,6 +434,67 @@ $bg-white: #FFFFFF;
   border-right: none;
 }
 
+/* 右上角头像与它的下拉。独立成一格（不进 .header-tools）是因为它对客户视图
+   也渲染，而整片工具区在客户视图里是收起来的。position:relative 给菜单定位。 */
+.header-account {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+/* 右上角头像（2026-08-19 从 rail 底部搬上来）：个人中心 / 系统设置的入口。
+   比 .top-bar-btn 大一圈——它是一个人的身份标识，不是又一个开关。 */
+.avatar-btn {
+  width: 26px;
+  height: 26px;
+  margin-left: 6px;
+  border-radius: 50%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: $color-primary;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.2s;
+
+  &:hover {
+    border-color: $color-accent;
+  }
+}
+
+.avatar-menu-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1999;
+}
+
+.avatar-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  min-width: 150px;
+  background: #fff;
+  border: 1px solid #e9ecef;
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+  z-index: 2000;
+  padding: 6px 0;
+}
+
+.avatar-menu-item {
+  padding: 8px 14px;
+  cursor: pointer;
+  display: flex;
+  font-size: 13px;
+  color: #2c3338;
+  white-space: nowrap;
+
+  &:hover {
+    background: rgba(91, 209, 151, 0.1);
+  }
+}
+
 .top-bar-btn {
   width: 19.2px; /* Resized to 4/5 of 24px */
   height: 19.2px;
@@ -762,22 +823,8 @@ $bg-white: #FFFFFF;
   }
 }
 
-.rail-user-avatar {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: rgba(255,255,255,0.1);
-  @include flex-center;
-  cursor: pointer;
-  margin-top: 8px;
-  border: 2px solid transparent;
-  transition: border-color 0.2s;
-
-  &:hover {
-    border-color: $color-accent;
-  }
-}
-
+/* .rail-user-avatar 已随头像搬到顶栏而删除（2026-08-19）。
+   .avatar-img / .avatar-text 保留：顶栏头像与 rail 上的成员堆叠都在用。 */
 .avatar-img {
   width: 100%; height: 100%; border-radius: 50%;
 }
@@ -1586,6 +1633,50 @@ $bg-white: #FFFFFF;
       background: #64748B;
     }
   }
+}
+
+/* 「语音」面板的宿主：语音合成 / 会议录音两个 tab（2026-08-19 合并）。
+   密度跟着 App.vue 的 --awd-panel-* 令牌走，与其余左栏面板同一套。
+   面板标题仍由外壳的 .sidebar-header 出，这里只是 tab 条。 */
+.voice-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.voice-tabs {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid var(--awd-panel-border, #E9ECEF);
+  padding: 0 var(--awd-panel-pad-x, 10px);
+  flex-shrink: 0;
+}
+
+.voice-tab {
+  height: var(--awd-panel-sec-h, 26px);
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: var(--awd-panel-fs, 12px);
+  color: #6C757D;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+
+  &:hover {
+    color: #2C3338;
+  }
+
+  &.active {
+    color: var(--awd-panel-accent, #1A5336);
+    font-weight: 600;
+    border-bottom-color: var(--awd-panel-accent, #1A5336);
+  }
+}
+
+.voice-tab-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .resize-handle {
@@ -3831,40 +3922,6 @@ $bg-white: #FFFFFF;
 }
 
 
-/* Rail User Avatar (Bottom) */
-/* Rail User Avatar (Bottom) */
-.rail-user-avatar {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px; /* Match rail-btn container */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  margin-bottom: 8px; /* Consistent margin */
-  transition: all 0.2s;
-
-  &:hover {
-    background-color: #f1f5f9; /* Match rail-btn hover */
-  }
-}
-
-.rail-user-avatar-inner {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: #0f172a;
-  color: white;
-  font-size: 14px;
-}
-
-.rail-user-avatar:hover {
-  transform: scale(1.05);
-}
 /* --- Refined Resource Manager Header Styles --- */
 .panel-header-tools {
   position: relative; /* For absolute search centering */

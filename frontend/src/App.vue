@@ -256,7 +256,13 @@ html.is-desktop .project-header .trial-chip,
 html.is-desktop .project-header .header-center,
 html.is-desktop .project-header .header-tools,
 html.is-desktop .project-header .top-bar-btn,
-html.is-desktop .project-header .icon-btn {
+html.is-desktop .project-header .icon-btn,
+/* 右上角头像与它的下拉（2026-08-19 从 rail 底部搬上来）。菜单是绝对定位的，
+   一部分会画到 .header-account 之外，所以四条都要显式写，靠祖先盖不住。 */
+html.is-desktop .project-header .header-account,
+html.is-desktop .project-header .avatar-btn,
+html.is-desktop .project-header .avatar-menu-mask,
+html.is-desktop .project-header .avatar-menu {
     -webkit-app-region: no-drag;
 }
 

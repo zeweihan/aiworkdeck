@@ -1,143 +1,200 @@
 <template>
-  <!-- 解锁门：桌面首启的唯一关卡。浅色单卡片居中，试用码（离线）或账户 Key（在线）二选一 -->
-  <view class="unlock-page">
-    <view class="unlock-card">
-      <image class="unlock-logo" src="/static/logo_full_v2.png" mode="heightFix" />
-      <text class="unlock-title">AI WorkDeck</text>
-      <text class="unlock-subtitle">{{ $t('onboarding.unlock.subtitle') }}</text>
-
-      <!-- 账户登录是新的主路径；试用码 / 手工粘 Key 保留给离线试用、团队服务器与私有部署 -->
-      <!-- 官方版只有账户登录这一条路：账户 Key 已经由登录自动签发，用户看不到也不需要粘。
-           **但 trialCodeEnabled 为真时整块要留着**——那是商业版 / 私有部署 / 自行构建的
-           试用码入口（application-desktop.yml 刻意留的开关），砍掉等于把那条路堵死。
-           只剩一个页签时不渲染整条 tab 栏：一个孤零零的页签不是选择，是噪音。 -->
-      <view v-if="trialCodeEnabled" class="unlock-tabs">
-        <text class="unlock-tab" :class="{ 'is-active': mode === 'login' }" @tap="switchMode('login')">
-          {{ $t('onboarding.unlock.loginTab') }}
-        </text>
-        <text class="unlock-tab" :class="{ 'is-active': mode === 'code' }" @tap="switchMode('code')">
-          {{ codeTabLabel }}
-        </text>
+  <!-- 解锁门：桌面首启的唯一关卡。浅色双栏——左侧品牌视觉区（跟随鼠标的产品 mockup），
+       右侧账户卡。窄窗口收成单栏、视觉区整块不渲染。 -->
+  <view class="unlock-page" @mousemove="handleMouseMove">
+    <view class="unlock-stage">
+      <!-- 品牌视觉区。纯装饰：里面一个字都没有，只有线框与水印——
+           登录页不该出现任何需要单独维护、且可能与产品实际能力对不上的宣传语。 -->
+      <view class="unlock-showcase">
+        <view class="showcase-glow showcase-glow-a"></view>
+        <view class="showcase-glow showcase-glow-b"></view>
+        <view class="showcase-stage" :style="{ transform: showcaseTransform }">
+          <view class="mock-window">
+            <view class="mock-titlebar">
+              <view class="mock-dot"></view>
+              <view class="mock-dot"></view>
+              <view class="mock-dot"></view>
+            </view>
+            <view class="mock-body">
+              <view class="mock-rail">
+                <view class="mock-rail-item is-active"></view>
+                <view class="mock-rail-item"></view>
+                <view class="mock-rail-item"></view>
+                <view class="mock-rail-item"></view>
+              </view>
+              <view class="mock-sidebar">
+                <view class="mock-line" style="width: 78%"></view>
+                <view class="mock-line mock-line-indent" style="width: 62%"></view>
+                <view class="mock-line mock-line-indent is-active" style="width: 70%"></view>
+                <view class="mock-line mock-line-indent" style="width: 54%"></view>
+                <view class="mock-line" style="width: 66%"></view>
+                <view class="mock-line mock-line-indent" style="width: 58%"></view>
+              </view>
+              <view class="mock-editor">
+                <view class="mock-tabs">
+                  <view class="mock-tab is-active"></view>
+                  <view class="mock-tab"></view>
+                </view>
+                <view class="mock-doc">
+                  <view class="mock-doc-title"></view>
+                  <view class="mock-doc-line" style="width: 94%"></view>
+                  <view class="mock-doc-line" style="width: 88%"></view>
+                  <view class="mock-doc-line mock-doc-line-mark" style="width: 72%"></view>
+                  <view class="mock-doc-line" style="width: 91%"></view>
+                  <view class="mock-doc-line" style="width: 64%"></view>
+                </view>
+                <image class="mock-watermark" src="/static/monochrome.png" mode="aspectFit" />
+              </view>
+              <view class="mock-ai">
+                <view class="mock-bubble"></view>
+                <view class="mock-bubble is-user"></view>
+                <view class="mock-bubble"></view>
+              </view>
+            </view>
+          </view>
+        </view>
       </view>
 
-      <view v-if="mode === 'login'" class="unlock-form">
-        <template v-if="loginKind === 'code'">
-          <!-- 标识符按站点取：cn 是手机号，intl 是邮箱。两站都是「验证码即登录」，
-               只是通道不同——与官网 AuthForms 的 channel 分叉是同一套口径。 -->
-          <input
-            v-if="isPhoneSite"
-            class="unlock-field"
-            v-model="phone"
-            type="number"
-            :placeholder="$t('onboarding.unlock.phonePlaceholder')"
-            placeholder-class="unlock-placeholder"
-          />
-          <input
-            v-else
-            class="unlock-field"
-            v-model="email"
-            :placeholder="$t('onboarding.unlock.emailPlaceholder')"
-            placeholder-class="unlock-placeholder"
-          />
-          <view class="unlock-code-row">
+      <view class="unlock-panel">
+        <view class="unlock-card">
+          <!-- Logo 图片自带 AI WorkDeck 字标，下面不再重复写一行文字标题 -->
+          <image class="unlock-logo" src="/static/logo_full_v2.png" mode="heightFix" />
+          <text class="unlock-subtitle">{{ $t('onboarding.unlock.subtitle') }}</text>
+
+          <!-- 登录与注册走的是同一条链路（官网验证码端点「不存在即注册」），
+               这里切的只是文案与强调，接口一行不换。
+               第三个页签是试用码 / 手工粘 Key：**trialCodeEnabled 为真时才有**——
+               那是商业版 / 私有部署 / 自行构建的入口（application-desktop.yml 刻意留的开关），
+               砍掉等于把那条路堵死；官方发布版关着它，页签就只剩登录与注册两个。 -->
+          <view class="unlock-tabs">
+            <text class="unlock-tab" :class="{ 'is-active': mode === 'login' }" @tap="switchMode('login')">
+              {{ $t('onboarding.unlock.loginTab') }}
+            </text>
+            <text class="unlock-tab" :class="{ 'is-active': mode === 'register' }" @tap="switchMode('register')">
+              {{ $t('onboarding.unlock.registerTab') }}
+            </text>
+            <text
+              v-if="trialCodeEnabled"
+              class="unlock-tab"
+              :class="{ 'is-active': mode === 'code' }"
+              @tap="switchMode('code')"
+            >
+              {{ codeTabLabel }}
+            </text>
+          </view>
+
+          <!-- 共创开发者计划。窗口一过（北京时间 2026-10-01 起）这条就会失真，
+               所以按本机时间直接不渲染，不留一句过期的承诺在登录页上。
+               只在大陆站展示：赠金是官网 cn 侧配的，金额也是人民币。 -->
+          <view v-if="promoActive && mode !== 'code'" class="unlock-promo" :class="{ 'is-strong': mode === 'register' }">
+            <text class="unlock-promo-title">{{ $t('onboarding.unlock.promoTitle') }}</text>
+            <text class="unlock-promo-body">
+              {{ mode === 'register' ? $t('onboarding.unlock.promoBodyRegister') : $t('onboarding.unlock.promoBody') }}
+            </text>
+          </view>
+
+          <view v-if="mode !== 'code'" class="unlock-form">
+            <!-- 标识符按站点取：cn 是手机号，intl 是邮箱。两站都是「验证码即登录」，
+                 只是通道不同——与官网 AuthForms 的 channel 分叉是同一套口径。 -->
             <input
-              class="unlock-field unlock-field-inline"
-              v-model="smsCode"
+              v-if="isPhoneSite"
+              class="unlock-field"
+              v-model="phone"
               type="number"
-              :placeholder="$t('onboarding.unlock.smsPlaceholder')"
+              :placeholder="$t('onboarding.unlock.phonePlaceholder')"
               placeholder-class="unlock-placeholder"
             />
+            <input
+              v-else
+              class="unlock-field"
+              v-model="email"
+              :placeholder="$t('onboarding.unlock.emailPlaceholder')"
+              placeholder-class="unlock-placeholder"
+            />
+            <view class="unlock-code-row">
+              <input
+                class="unlock-field unlock-field-inline"
+                v-model="smsCode"
+                type="number"
+                :placeholder="$t('onboarding.unlock.smsPlaceholder')"
+                placeholder-class="unlock-placeholder"
+              />
+              <button
+                class="unlock-code-btn"
+                :disabled="sendingCode || cooldown > 0 || !codeIdentifier"
+                @tap="handleSendCode"
+              >
+                {{ codeBtnLabel }}
+              </button>
+            </view>
+            <!-- 人机验证控件挂点。Turnstile 是隐形的、阿里云是点了才弹拼图，
+                 所以平时这里不占版面；未启用时整块不渲染。 -->
+            <view v-show="captcha" class="unlock-captcha-holder">
+              <view id="unlock-captcha"></view>
+              <!-- 阿里云 SDK 要一个它能挂点击事件的元素；Turnstile 用不到但留着无害 -->
+              <button id="unlock-captcha-trigger" class="unlock-captcha-trigger" type="button"></button>
+            </view>
+
+            <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
             <button
-              class="unlock-code-btn"
-              :disabled="sendingCode || cooldown > 0 || !codeIdentifier"
-              @tap="handleSendCode"
+              class="unlock-btn"
+              :class="{ 'is-busy': loggingIn }"
+              :disabled="loggingIn"
+              @tap="handleLogin"
             >
-              {{ codeBtnLabel }}
+              {{ primaryLabel }}
+            </button>
+            <text v-if="mode === 'register'" class="unlock-hint unlock-register-hint">
+              {{ isPhoneSite ? $t('onboarding.unlock.registerHintPhone') : $t('onboarding.unlock.registerHintEmail') }}
+            </text>
+          </view>
+
+          <view v-else class="unlock-form">
+            <textarea
+              class="unlock-input"
+              v-model="code"
+              :placeholder="codePlaceholder"
+              placeholder-class="unlock-placeholder"
+              :maxlength="-1"
+            />
+            <!-- 注意：不要在 textarea 上挂 @input 清 errorMsg——uni-textarea 在错误文案渲染
+                 引发布局变化时会补发一次 input 事件，错误提示会被立刻清掉（联调实测）。
+                 errorMsg 在每次点击解锁时重置，足够。 -->
+            <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
+            <!-- 站点错配救济：国际站账户的 Key 粘到国内站会被判「Key 无效」，
+                 而 Key 本身是好的。这里给一条一键切站重试的出路，省得用户跑去
+                 官网重新生成 Key 再撞一次同样的墙。 -->
+            <text
+              v-if="canRescue"
+              class="unlock-link unlock-rescue"
+              @tap="handleRescue"
+            >
+              {{ rescueBusy ? $t('onboarding.unlock.rescueSwitching') : rescueLabel }}
+            </text>
+            <button
+              class="unlock-btn"
+              :class="{ 'is-busy': unlocking }"
+              :disabled="unlocking"
+              @tap="handleUnlock"
+            >
+              {{ unlocking ? $t('onboarding.unlock.unlocking') : $t('onboarding.unlock.unlock') }}
             </button>
           </view>
-          <!-- 人机验证控件挂点。Turnstile 是隐形的、阿里云是点了才弹拼图，
-               所以平时这里不占版面；未启用时整块不渲染。 -->
-          <view v-show="captcha" class="unlock-captcha-holder">
-            <view id="unlock-captcha"></view>
-            <!-- 阿里云 SDK 要一个它能挂点击事件的元素；Turnstile 用不到但留着无害 -->
-            <button id="unlock-captcha-trigger" class="unlock-captcha-trigger" type="button"></button>
+
+          <!-- 两条外链都已撤：「获取正式版」在「注册即正式版」之后是错的指路，
+               「获取试用码」只跟着试用码这条路一起存在。整行可能一项都不剩，所以整体条件渲染。 -->
+          <view v-if="trialCodeEnabled || showSiteRow" class="unlock-links">
+            <text v-if="trialCodeEnabled" class="unlock-link" @tap="openTrialCodePage">
+              {{ $t('onboarding.unlock.getTrialCode') }}
+            </text>
+            <text v-if="trialCodeEnabled && showSiteRow" class="unlock-link-sep">|</text>
+            <!-- 单站形态（multiSite=false）下整段不渲染，用户看不到任何变化 -->
+            <template v-if="showSiteRow">
+              <text v-if="siteStatus.pinned" class="unlock-site-fixed">{{ $t('onboarding.unlock.siteLabel', { name: currentSiteName }) }}</text>
+              <text v-else class="unlock-link" @tap="openSitePicker">{{ siteLinkLabel }}</text>
+            </template>
           </view>
-        </template>
-        <template v-else>
-          <text class="unlock-hint">{{ $t('onboarding.unlock.passwordOnlyLegacy') }}</text>
-          <input
-            class="unlock-field"
-            v-model="account"
-            :placeholder="$t('onboarding.unlock.accountPlaceholder')"
-            placeholder-class="unlock-placeholder"
-          />
-          <input
-            class="unlock-field"
-            v-model="password"
-            password
-            :placeholder="$t('onboarding.unlock.passwordPlaceholder')"
-            placeholder-class="unlock-placeholder"
-          />
-        </template>
-
-        <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
-        <button
-          class="unlock-btn"
-          :class="{ 'is-busy': loggingIn }"
-          :disabled="loggingIn"
-          @tap="handleLogin"
-        >
-          {{ loggingIn ? $t('onboarding.unlock.loggingIn') : $t('onboarding.unlock.login') }}
-        </button>
-        <text class="unlock-link unlock-login-switch" @tap="toggleLoginKind">
-          {{ loginKind === 'code' ? $t('onboarding.unlock.usePassword') : $t('onboarding.unlock.useCode') }}
-        </text>
-      </view>
-
-      <view v-else class="unlock-form">
-        <textarea
-          class="unlock-input"
-          v-model="code"
-          :placeholder="codePlaceholder"
-          placeholder-class="unlock-placeholder"
-          :maxlength="-1"
-        />
-        <!-- 注意：不要在 textarea 上挂 @input 清 errorMsg——uni-textarea 在错误文案渲染
-             引发布局变化时会补发一次 input 事件，错误提示会被立刻清掉（联调实测）。
-             errorMsg 在每次点击解锁时重置，足够。 -->
-        <text v-if="errorMsg" class="unlock-error">{{ errorMsg }}</text>
-        <!-- 站点错配救济：国际站账户的 Key 粘到国内站会被判「Key 无效」，
-             而 Key 本身是好的。这里给一条一键切站重试的出路，省得用户跑去
-             官网重新生成 Key 再撞一次同样的墙。 -->
-        <text
-          v-if="canRescue"
-          class="unlock-link unlock-rescue"
-          @tap="handleRescue"
-        >
-          {{ rescueBusy ? $t('onboarding.unlock.rescueSwitching') : rescueLabel }}
-        </text>
-        <button
-          class="unlock-btn"
-          :class="{ 'is-busy': unlocking }"
-          :disabled="unlocking"
-          @tap="handleUnlock"
-        >
-          {{ unlocking ? $t('onboarding.unlock.unlocking') : $t('onboarding.unlock.unlock') }}
-        </button>
-      </view>
-
-      <view class="unlock-links">
-        <template v-if="trialCodeEnabled">
-          <text class="unlock-link" @tap="openTrialCodePage">{{ $t('onboarding.unlock.getTrialCode') }}</text>
-          <text class="unlock-link-sep">|</text>
-        </template>
-        <text class="unlock-link" @tap="openOfficialSite">{{ $t('onboarding.unlock.getFullVersion') }}</text>
-        <!-- 单站形态（multiSite=false）下整段不渲染，用户看不到任何变化 -->
-        <template v-if="showSiteRow">
-          <text class="unlock-link-sep">|</text>
-          <text v-if="siteStatus.pinned" class="unlock-site-fixed">{{ $t('onboarding.unlock.siteLabel', { name: currentSiteName }) }}</text>
-          <text v-else class="unlock-link" @tap="openSitePicker">{{ siteLinkLabel }}</text>
-        </template>
+        </view>
       </view>
     </view>
   </view>
@@ -151,6 +208,10 @@ import { loadSiteLinks, siteBaseUrl, resetSiteLinks } from '@/utils/siteLinks.js
 
 // 与站点无关（GitHub README），不走 siteBaseUrl()
 const TRIAL_CODE_URL = 'https://github.com/zeweihan/aiworkdeck#readme'
+
+// 共创开发者计划注册赠金的窗口末端：北京时间 2026-10-01 00:00（= 2026-09-30 16:00 UTC）。
+// 到点之后推广位整块不渲染——服务端那边的窗口也在同一时刻关。
+const PROMO_END_TS = Date.parse('2026-09-30T16:00:00Z')
 
 export default {
   name: 'UnlockPage',
@@ -168,23 +229,23 @@ export default {
       siteStatus: { current: '', pinned: false, multiSite: false, sites: [] },
       siteBusy: false,
       rescueBusy: false,
-      // 账户登录（新的主路径）
+      // 'login' / 'register' 是同一条链路的两副文案（见 handleLogin 的注释），
+      // 'code' 是试用码 / 手工粘 Key 那条路
       mode: 'login',
-      // 'code' = 验证码登录（cn 手机号 / intl 邮箱，两站的主路径）；
-      // 'password' = 存量口令账号。**intl 必须有 code 这条**：那边验证码注册出来的
-      // 账号没有口令，只留口令路等于新用户永远连不上桌面端。
-      loginKind: 'code',
       phone: '',
       email: '',
       smsCode: '',
-      account: '',
-      password: '',
       sendingCode: false,
       loggingIn: false,
       cooldown: 0,
       cooldownTimer: null,
       // 人机验证控件。null = 本站未启用或装配失败，此时照常发码（官网那边也不会校验）
       captcha: null,
+      // 视觉区的鼠标视差。0..1 的归一化位置；motionOn=false 时整块不动
+      // （系统「减少动态效果」开着，或非 H5 环境拿不到鼠标）
+      pointerX: 0,
+      pointerY: 0.5,
+      motionOn: true,
     }
   },
   beforeUnmount() {
@@ -193,8 +254,8 @@ export default {
   },
   computed: {
     /**
-     * 大陆站用手机号+验证码，国际站用邮箱+口令。
-     * 站点未知时按手机号渲染：内置站点就是 cn，且万一判错用户还能切到「试用码 / Key」页自救。
+     * 大陆站用手机号+验证码，国际站用邮箱+验证码。
+     * 站点未知时按手机号渲染：内置站点就是 cn。
      */
     isPhoneSite() {
       return this.siteStatus.current !== 'intl'
@@ -203,9 +264,42 @@ export default {
     codeIdentifier() {
       return this.isPhoneSite ? (this.phone || '').trim() : (this.email || '').trim()
     },
+    /**
+     * 注册赠金推广位还在不在窗口内。
+     * 只在大陆站展示：赠金是官网 cn 侧配的、金额也是人民币，
+     * 摆到国际站上就是一句本站兑现不了的承诺。
+     */
+    promoActive() {
+      return this.isPhoneSite && Date.now() < PROMO_END_TS
+    },
+    /** 主按钮文案：注册态换口径，赠金窗口内再点名赠金。 */
+    primaryLabel() {
+      if (this.mode === 'register') {
+        if (this.loggingIn) return this.$t('onboarding.unlock.registering')
+        return this.promoActive
+          ? this.$t('onboarding.unlock.registerWithGrant')
+          : this.$t('onboarding.unlock.register')
+      }
+      return this.loggingIn ? this.$t('onboarding.unlock.loggingIn') : this.$t('onboarding.unlock.login')
+    },
     codeBtnLabel() {
       if (this.cooldown > 0) return this.$t('onboarding.unlock.resendIn', { n: this.cooldown })
       return this.sendingCode ? this.$t('onboarding.unlock.sendingCode') : this.$t('onboarding.unlock.sendCode')
+    },
+    /**
+     * 视觉区跟随鼠标的等比例旋转，与 pages/login/login.vue 同一套口径：
+     * 鼠标在左边缘时侧转，移到登录卡（约 60% 宽）时正面朝前。
+     * 竖直方向另给一点轻微俯仰，幅度刻意小——大了会晃眼。
+     */
+    showcaseTransform() {
+      if (!this.motionOn) return 'none'
+      const threshold = 0.6
+      const p = Math.min(Math.max(this.pointerX / threshold, 0), 1)
+      const rotY = 22 * (1 - p)
+      const rotX = 8 * (1 - p) + (0.5 - this.pointerY) * 5
+      const scale = 0.95 + 0.05 * p
+      const translateX = -40 * (1 - p)
+      return `perspective(1800px) rotateY(${rotY}deg) rotateX(${rotX}deg) scale(${scale}) translateX(${translateX}px)`
     },
     currentSite() {
       const sites = this.siteStatus.sites || []
@@ -262,8 +356,28 @@ export default {
     this.refreshSiteStatus()
     this.refreshTrialGate()
     this.setupCaptchaWidget()
+    this.detectMotionPreference()
   },
   methods: {
+    /** 系统「减少动态效果」开着就不做视差——这类偏好设置一律尊重，不给开关。 */
+    detectMotionPreference() {
+      // #ifdef H5
+      try {
+        this.motionOn = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      } catch (e) {
+        this.motionOn = true
+      }
+      // #endif
+    },
+    handleMouseMove(e) {
+      // #ifdef H5
+      if (!this.motionOn) return
+      const w = window.innerWidth || 1
+      const h = window.innerHeight || 1
+      this.pointerX = Math.min(Math.max((e.clientX || 0) / w, 0), 1)
+      this.pointerY = Math.min(Math.max((e.clientY || 0) / h, 0), 1)
+      // #endif
+    },
     /**
      * 装配人机验证控件。**任何一步失败都只是不装**，不拦路——
      * 官网没启用时本来就不校验，而配置读不到时为此把人挡在门外不划算
@@ -283,9 +397,9 @@ export default {
       try {
         const s = await getLicenseStatus()
         this.trialCodeEnabled = !(s && s.trialCodeEnabled === false)
-        // 页签整条被隐藏时，mode 必须回到 login——否则残留状态会把人卡在一个
+        // 页签被撤时 mode 必须回到 login——否则残留状态会把人卡在一个
         // 已经没有入口可切回来的表单上
-        if (!this.trialCodeEnabled) this.mode = 'login'
+        if (!this.trialCodeEnabled && this.mode === 'code') this.mode = 'login'
       } catch (e) {
         console.warn('读取解锁门配置失败（按试用码可用渲染）:', e && e.message)
       }
@@ -339,10 +453,6 @@ export default {
         this.sendingCode = false
       }
     },
-    toggleLoginKind() {
-      this.loginKind = this.loginKind === 'code' ? 'password' : 'code'
-      this.errorMsg = ''
-    },
     startCooldown(seconds) {
       this.cooldown = seconds
       if (this.cooldownTimer) clearInterval(this.cooldownTimer)
@@ -355,33 +465,28 @@ export default {
         }
       }, 1000)
     },
+    /**
+     * 登录与注册是同一个动作：官网的验证码校验端点对没见过的手机号/邮箱是
+     * 「不存在即注册」（返回体带 isNewUser），所以这里**不按 mode 分链路**，
+     * 只按 mode 换文案。分成两条链路等于凭空造一条服务端没有的路。
+     */
     async handleLogin() {
-      let payload
-      if (this.loginKind === 'code') {
-        const identifier = this.codeIdentifier
-        const smsCode = (this.smsCode || '').trim()
-        if (!identifier) {
-          this.errorMsg = this.isPhoneSite
-            ? this.$t('onboarding.unlock.phoneFirst')
-            : this.$t('onboarding.unlock.emailFirst')
-          return
-        }
-        if (!smsCode) {
-          this.errorMsg = this.$t('onboarding.unlock.smsCodeFirst')
-          return
-        }
-        // 字段名按站点分：cn 是 phone，intl 是 email
-        payload = this.isPhoneSite
-          ? { phone: identifier, code: smsCode }
-          : { email: identifier, code: smsCode }
-      } else {
-        const account = (this.account || '').trim()
-        if (!account || !this.password) {
-          this.errorMsg = this.$t('onboarding.unlock.credentialsFirst')
-          return
-        }
-        payload = { account, password: this.password }
+      const identifier = this.codeIdentifier
+      const smsCode = (this.smsCode || '').trim()
+      if (!identifier) {
+        this.errorMsg = this.isPhoneSite
+          ? this.$t('onboarding.unlock.phoneFirst')
+          : this.$t('onboarding.unlock.emailFirst')
+        return
       }
+      if (!smsCode) {
+        this.errorMsg = this.$t('onboarding.unlock.smsCodeFirst')
+        return
+      }
+      // 字段名按站点分：cn 是 phone，intl 是 email
+      const payload = this.isPhoneSite
+        ? { phone: identifier, code: smsCode }
+        : { email: identifier, code: smsCode }
       this.errorMsg = ''
       this.loggingIn = true
       try {
@@ -395,7 +500,11 @@ export default {
     },
     applyLoginResult(res) {
       uni.showToast({
-        title: this.$t('onboarding.unlock.loggedIn'),
+        // 是不是新账户由服务端说了算（isNewUser），不看用户点的是哪个页签——
+        // 在「登录」页签下第一次用一个新号码进来的人，看到的也该是注册成功的口径
+        title: res && res.isNewUser
+          ? this.$t('onboarding.unlock.registered')
+          : this.$t('onboarding.unlock.loggedIn'),
         icon: 'success',
         duration: 1600,
       })
@@ -541,6 +650,7 @@ export default {
     openTrialCodePage() {
       openExternalUrl(TRIAL_CODE_URL)
     },
+    /** 仍留着：未绑手机号的弹窗要把人送到官网账户页 */
     openOfficialSite() {
       openExternalUrl(siteBaseUrl())
     },
@@ -551,12 +661,6 @@ export default {
 <style lang="scss" scoped>
 /* 触发元素必须存在且可被 click()，所以用 0 尺寸而不是 display:none——
    display:none 的元素 SDK 挂不上事件，控件永远弹不出来。 */
-.unlock-login-switch {
-  margin-top: 12px;
-  text-align: center;
-  font-size: 12px;
-}
-
 .unlock-captcha-trigger {
   width: 0;
   height: 0;
@@ -565,12 +669,255 @@ export default {
   opacity: 0;
   position: absolute;
 }
+
 .unlock-page {
   width: 100vw;
-  height: 100vh;
-  background: #f8f9fa;
+  min-height: 100vh;
+  box-sizing: border-box;
+  padding: 40px 32px;
+  background:
+    radial-gradient(900px 520px at 12% 18%, rgba(91, 209, 151, 0.16), transparent 62%),
+    radial-gradient(720px 480px at 88% 84%, rgba(26, 83, 54, 0.09), transparent 66%),
+    #f8f9fa;
   display: flex;
   align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.unlock-stage {
+  width: 100%;
+  max-width: 1160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 64px;
+}
+
+/* ---------- 左侧品牌视觉区 ---------- */
+
+.unlock-showcase {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 460px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 透视容器与被转的元素必须分开：perspective 挂在这里，transform 挂在 .showcase-stage */
+  perspective: 1800px;
+}
+
+.showcase-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  pointer-events: none;
+}
+
+.showcase-glow-a {
+  width: 340px;
+  height: 340px;
+  top: -40px;
+  left: 4%;
+  background: rgba(91, 209, 151, 0.32);
+}
+
+.showcase-glow-b {
+  width: 300px;
+  height: 300px;
+  bottom: -30px;
+  right: 6%;
+  background: rgba(26, 83, 54, 0.16);
+}
+
+.showcase-stage {
+  position: relative;
+  width: 100%;
+  max-width: 600px;
+  transform-style: preserve-3d;
+  transition: transform 0.12s linear;
+}
+
+.mock-window {
+  width: 100%;
+  height: 380px;
+  background: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 14px;
+  box-shadow: 0 30px 60px rgba(15, 23, 42, 0.14);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mock-titlebar {
+  height: 30px;
+  flex-shrink: 0;
+  background: #f1f5f9;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 12px;
+}
+
+.mock-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+
+.mock-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.mock-rail {
+  width: 40px;
+  flex-shrink: 0;
+  background: #1a5336;
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.mock-rail-item {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.18);
+
+  &.is-active {
+    background: #5bd197;
+  }
+}
+
+.mock-sidebar {
+  width: 130px;
+  flex-shrink: 0;
+  background: #f8fafc;
+  border-right: 1px solid #e2e8f0;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mock-line {
+  height: 7px;
+  border-radius: 4px;
+  background: #dbe3ec;
+
+  &.mock-line-indent {
+    margin-left: 12px;
+  }
+
+  &.is-active {
+    background: #5bd197;
+  }
+}
+
+.mock-editor {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+}
+
+.mock-tabs {
+  height: 28px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+}
+
+.mock-tab {
+  width: 62px;
+  height: 8px;
+  border-radius: 4px;
+  background: #e2e8f0;
+
+  &.is-active {
+    background: #1a5336;
+    opacity: 0.55;
+  }
+}
+
+.mock-doc {
+  flex: 1;
+  padding: 20px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+
+.mock-doc-title {
+  width: 46%;
+  height: 12px;
+  border-radius: 4px;
+  background: #0f172a;
+  opacity: 0.72;
+  margin-bottom: 6px;
+}
+
+.mock-doc-line {
+  height: 7px;
+  border-radius: 4px;
+  background: #e6ecf2;
+
+  /* 一条被 AI 改过的行：品牌 mint，暗示修订 */
+  &.mock-doc-line-mark {
+    background: rgba(91, 209, 151, 0.55);
+  }
+}
+
+.mock-watermark {
+  position: absolute;
+  right: 14px;
+  bottom: 12px;
+  width: 54px;
+  height: 54px;
+  opacity: 0.06;
+}
+
+.mock-ai {
+  width: 108px;
+  flex-shrink: 0;
+  border-left: 1px solid #e2e8f0;
+  background: #fbfdfc;
+  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mock-bubble {
+  height: 26px;
+  border-radius: 8px;
+  background: #eef3f0;
+
+  &.is-user {
+    background: rgba(26, 83, 54, 0.14);
+    margin-left: 16px;
+    height: 18px;
+  }
+}
+
+/* ---------- 右侧账户卡 ---------- */
+
+.unlock-panel {
+  flex: 0 0 auto;
+  display: flex;
   justify-content: center;
 }
 
@@ -589,25 +936,19 @@ export default {
 
 .unlock-logo {
   height: 40px;
-  margin-bottom: 20px;
-}
-
-.unlock-title {
-  font-size: 22px;
-  font-weight: 600;
-  color: #0f172a;
-  letter-spacing: 0.5px;
+  margin-bottom: 14px;
 }
 
 .unlock-subtitle {
-  margin-top: 8px;
   font-size: 13px;
   color: #64748b;
+  margin-bottom: 24px;
+  text-align: center;
 }
 
 .unlock-form {
   width: 100%;
-  margin-top: 28px;
+  margin-top: 18px;
   display: flex;
   flex-direction: column;
 }
@@ -618,7 +959,6 @@ export default {
   width: 100%;
   display: flex;
   gap: 4px;
-  margin-bottom: 16px;
   padding: 4px;
   background: #f1f5f9;
   border-radius: 8px;
@@ -641,6 +981,39 @@ export default {
     font-weight: 500;
     box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
   }
+}
+
+.unlock-promo {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(91, 209, 151, 0.5);
+  border-radius: 8px;
+  background: rgba(91, 209, 151, 0.09);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+
+  /* 注册页签下这条是主角，给足对比度 */
+  &.is-strong {
+    border-color: #5bd197;
+    background: rgba(91, 209, 151, 0.16);
+  }
+}
+
+.unlock-promo-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1a5336;
+  font-family: 'Songti SC', 'Source Han Serif SC', 'Noto Serif SC', Georgia, serif;
+  letter-spacing: 0.3px;
+}
+
+.unlock-promo-body {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #33694c;
 }
 
 /* 登录字段：与 .unlock-input 同一套边框语言，但单行且用正文字体
@@ -726,6 +1099,17 @@ export default {
   color: #dc2626;
 }
 
+.unlock-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #64748b;
+}
+
+.unlock-register-hint {
+  margin-top: 12px;
+  text-align: center;
+}
+
 .unlock-btn {
   margin-top: 18px;
   width: 100%;
@@ -779,5 +1163,24 @@ export default {
 .unlock-rescue {
   align-self: flex-start;
   margin-top: 8px;
+}
+
+/* 窄窗口降级：视觉区整块不渲染，收成原来的单卡居中。
+   1080px 是「600 的视觉区 + 420 的卡 + 间距」放不下的临界点。 */
+@media (max-width: 1080px) {
+  .unlock-showcase {
+    display: none;
+  }
+
+  .unlock-stage {
+    gap: 0;
+  }
+}
+
+/* 系统「减少动态效果」：JS 那边已经把 transform 停在 none，这里连过渡也一并去掉 */
+@media (prefers-reduced-motion: reduce) {
+  .showcase-stage {
+    transition: none;
+  }
 }
 </style>

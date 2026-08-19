@@ -55,11 +55,31 @@ export const fileOpenTabsMethods = {
         console.log('[project-overview] Got files for search:', files.length)
 
         // Find file by name (case-insensitive, match basename)
-        const targetFile = files.find(f => {
+        let targetFile = files.find(f => {
           if (f.isFolder) return false
           // Match exact name or name without extension
           return f.name === name || f.name.toLowerCase() === name.toLowerCase()
         })
+
+        // 精确名找不到时按「基名 + 扩展名」再找一轮。
+        // 有些工具报上来的"变更文件名"其实是一组产物的基名而不是某一个文件：
+        // 诉讼可视化的 file_change 带的是图名（litigation_render 的 diagramName），
+        // 项目里真正存在的是同名文件夹下的 <图名>.drawio / .svg / .png。
+        // 没有这条兜底，对话里的文件卡点了只会弹"文件不存在"——一个死掉的入口。
+        // 也认 -draft：语义地图未确认时引擎按设计给产物加这个后缀（草稿闸），
+        // 而工具报上来的名字里没有它——第一次出图必然走这一支。
+        if (!targetFile) {
+          const bases = [name.toLowerCase() + '.', name.toLowerCase() + '-draft.']
+          const candidates = files.filter(f =>
+            !f.isFolder && bases.some(b => f.name.toLowerCase().startsWith(b)))
+          // 一组产物里优先给可继续编辑的那份，其次是能看的母版。
+          const rank = ['drawio', 'svg', 'png']
+          targetFile = candidates.sort((a, b) => {
+            const ra = rank.indexOf((a.fileType || '').toLowerCase())
+            const rb = rank.indexOf((b.fileType || '').toLowerCase())
+            return (ra < 0 ? rank.length : ra) - (rb < 0 ? rank.length : rb)
+          })[0]
+        }
 
         if (targetFile) {
           console.log('[project-overview] Found file:', targetFile.id, targetFile.name)
@@ -267,7 +287,8 @@ export const fileOpenTabsMethods = {
     getFileIconPaths(type, tabType) {
       if (tabType === 'web') return GLYPHS.web
       if (tabType === 'market-detail') return GLYPHS.blocks
-      if (tabType === 'project-home') return GLYPHS.landmark
+      // 项目概览 2026-08-19 起在左栏展示，不再有 project-home 标签
+      if (tabType === 'admin-settings') return GLYPHS.settings
       return fileGlyph(type)
     },
     isFileTypeSupported(file) {

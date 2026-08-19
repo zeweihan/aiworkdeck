@@ -4,14 +4,18 @@
       <text class="drawio-status-text">{{ $t('editor.drawio.opening') }}</text>
     </view>
 
-    <!-- 这次构建没烙 draw.io 资源（Web 部署未放 dist/drawio，或壳层版本旧）。
-         说清楚比挂一个永远转圈的 iframe 诚实。 -->
+    <!-- 这次构建没烙 draw.io 资源（Web 部署未放 dist/drawio、壳层版本旧），
+         或者资源在但那个 origin 探不通。说清楚比挂一个永远转圈的 iframe、
+         或者让浏览器的 404 页占满整个编辑区诚实。 -->
     <view v-else-if="phase === 'unavailable'" class="drawio-status">
       <text class="drawio-status-text">{{ $t('editor.drawio.unavailable') }}</text>
       <text class="drawio-status-hint">
         {{ $t('editor.drawio.downloadHint', { name: (file && file.name) || '' }) }}
       </text>
-      <view class="drawio-btn" role="button" @tap="download">{{ $t('editor.drawio.downloadFile') }}</view>
+      <view class="drawio-actions">
+        <view class="drawio-btn" role="button" @tap="download">{{ $t('editor.drawio.downloadFile') }}</view>
+        <view class="drawio-btn" role="button" @tap="boot">{{ $t('editor.drawio.retry') }}</view>
+      </view>
     </view>
 
     <view v-else-if="phase === 'error'" class="drawio-status">
@@ -104,7 +108,16 @@ export default {
           return
         }
         const info = await api.getEditor()
-        if (!info || !info.available) {
+        if (!info || !info.available || !info.url) {
+          this.phase = 'unavailable'
+          return
+        }
+        // 先探一下这个 URL 真的能取到再挂 iframe。宿主只回答了"资源目录里有
+        // index.html"，回答不了"这个 origin 现在真的在服务它"：端口被别的进程占住、
+        // 资产被前端构建清掉、Web 部署没放 dist/drawio，任何一种都会让 iframe 直接
+        // 渲染一张裸 404 页占满整个编辑区——用户看到的是浏览器的错误页，
+        // 而不是"这里没有编辑器"。探不通就走 unavailable 那条诚实的路。
+        if (!(await this.probeEditor(info.url))) {
           this.phase = 'unavailable'
           return
         }
@@ -117,11 +130,38 @@ export default {
       }
     },
 
+    // 编辑器 URL 可达性探测。三点都是必要的：
+    // - 探 iframe 真正要加载的那个 URL，不是别的路径；
+    // - 用 GET 而不是 HEAD：静态服务未必实现 HEAD；
+    // - 认一眼内容。Web 部署常见的 SPA 兜底（try_files … /index.html）会对任何
+    //   不存在的路径回 200 + 本应用的首页，只看状态码会把"没部署 draw.io"判成可用，
+    //   于是 iframe 里套一个自己。draw.io 的 index.html 必有 geEditor 这个容器 id。
+    async probeEditor(url) {
+      try {
+        const res = await fetch(url, { method: 'GET', cache: 'no-store' })
+        if (!res || !res.ok) return false
+        const body = await res.text()
+        return body.includes('geEditor')
+      } catch (e) {
+        return false
+      }
+    },
+
+    // 下载用的文件标识。**优先数字主键**：wpsFileId 只是"这个文件是谁造的"的自由
+    // 字段，同一次出图的几个产物历史上共享过同一个前缀+毫秒时间戳，而后端在按数字
+    // 查不到时会退回 findByWpsFileId(...).findFirst()——撞号时"打开 .drawio"会
+    // 取到同一张图的 .svg。数字 id 没有这个歧义。
+    fileRef() {
+      const f = this.file
+      if (!f) return null
+      return f.id != null ? f.id : (f.wpsFileId || null)
+    },
+
     // 直接取原始字节读成文本。**不能走 /api/files/{id}/text** —— 那条路会过
     // Tika 抽取，对 .drawio 这种未知扩展名可能把 XML 揉成纯文本，喂回编辑器就是
     // 一张空白图。
     async loadXml() {
-      const id = this.file && (this.file.wpsFileId || this.file.id)
+      const id = this.fileRef()
       if (!id) throw new Error(this.$t('editor.drawio.fileMissing'))
       const res = await fetch(getFileDownloadUrl(id), { headers: getAuthHeaders() || {} })
       if (!res.ok) throw new Error(this.$t('editor.drawio.readFailed', { status: res.status }))
@@ -226,7 +266,7 @@ export default {
     },
 
     download() {
-      const id = this.file && (this.file.wpsFileId || this.file.id)
+      const id = this.fileRef()
       if (!id) return
       if (host.shell && typeof host.shell.openExternal === 'function') {
         host.shell.openExternal(getFileDownloadUrl(id))
@@ -277,6 +317,7 @@ export default {
 }
 .drawio-status-text { font-size: 13px; color: #4a5058; }
 .drawio-status-hint { font-size: 12px; color: #9aa0a8; text-align: center; line-height: 1.6; }
+.drawio-actions { display: flex; gap: 8px; }
 .drawio-btn {
   padding: 6px 16px;
   font-size: 12px;

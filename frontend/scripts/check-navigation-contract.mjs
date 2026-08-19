@@ -400,15 +400,48 @@ check('四条直达工作台的出口一条都没动', () => {
 })
 
 check('admin 切换本机工作区仍清最近项目', () => {
-  const src = readVue('src/pages/admin/admin.vue')
+  // 设置的实体 2026-08-19 搬进 components/admin/AdminPane.vue（pages/admin 退成薄壳），
+  // 断言跟着搬。
+  const src = readVue('src/components/admin/AdminPane.vue')
   return src.includes("removeStorageSync('checkba_last_project_id')")
     ? null
     : '删了这行会让切身份之后仍直达上一个身份的项目'
 })
 
+check('系统设置在工作台里是中栏标签，不是跳页', () => {
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  const body = extractMethodBody(src, 'goToSystemSettings(opts)')
+  if (!body) return '找不到 goToSystemSettings'
+  if (body.includes('/pages/admin/admin')) {
+    return '不许再跳独立页：那等于把整个工作台（标签、编辑器、AI 会话）换成一页设置'
+  }
+  if (!body.includes('openSettingsTab')) return '应当调 openSettingsTab() 开中栏标签'
+  const tab = extractMethodBody(src, 'openSettingsTab(opts)')
+  if (!tab) return '缺 openSettingsTab()'
+  if (!tab.includes("tabType: 'admin-settings'")) return '标签没有带 tabType: admin-settings'
+  // 深链（nav / service）在 tab 形态下要有等价物：网关错误提示的逃生门指着它
+  if (!tab.includes('opts.nav') || !tab.includes('opts.service')) {
+    return 'openSettingsTab 没有接 nav/service，?nav=platform&service=ocr 的逃生门在工作台里就断了'
+  }
+  const vis = extractMethodBody(src, 'isTabVisible(file) {')
+  if (!vis || !vis.includes("file.tabType === 'admin-settings'")) {
+    return "isTabVisible 没放行 admin-settings 标签，点菜单会开一个被 v-show 藏死的标签"
+  }
+  return null
+})
+
+check('pages/admin 薄壳页仍在，且把 query 透给 AdminPane', () => {
+  const src = readVue('src/pages/admin/admin.vue')
+  if (!src.includes('<AdminPane')) return '薄壳页没有挂 AdminPane'
+  if (!src.includes('query.nav') || !src.includes('query.service')) {
+    return '薄壳页没有透传 ?nav= / ?service=，仓里十来处深链会全部落在默认面板上'
+  }
+  return null
+})
+
 // ==================== 工作台通往概览页的入口 ====================
 
-check('工作台里「项目概览」是开中栏标签，不是跳页', () => {
+check('工作台里「项目概览」是开左栏面板，不是跳页也不是中栏标签', () => {
   const src = readVue('src/pages/project-overview/project-overview.vue')
   if (!src.includes('switcher-home')) return '模板里缺 .switcher-home 一项'
   const body = extractMethodBody(src, 'goProjectHome()')
@@ -416,10 +449,11 @@ check('工作台里「项目概览」是开中栏标签，不是跳页', () => {
   if (body.includes('/pages/project-home/project-home')) {
     return '不许再跳独立页：那等于把整个工作台（标签、编辑器、AI 会话）拆掉换成一页只读卷轴'
   }
-  if (!body.includes('openProjectHomeTab')) return '应当调 openProjectHomeTab() 开中栏标签'
-  const tab = extractMethodBody(src, 'openProjectHomeTab()')
-  if (!tab) return '缺 openProjectHomeTab()'
-  if (!tab.includes("tabType: 'project-home'")) return '标签没有带 tabType: project-home'
+  // 2026-08-19：概览从中栏标签改成左栏面板——rail 上的按钮点了应该开左栏，
+  // 这是 rail 其余每一项的语义，概览不该例外。
+  if (!body.includes("toggleLeftPane('home')")) {
+    return "应当调 toggleLeftPane('home') 打开左栏概览面板"
+  }
   // 「项目概览」必须排在「全部项目…」之前（两者的首次出现都在模板里）
   if (src.indexOf('switcher-home') > src.indexOf('switcher-all')) {
     return '「项目概览」应当排在「全部项目…」之前'
@@ -427,18 +461,34 @@ check('工作台里「项目概览」是开中栏标签，不是跳页', () => {
   return null
 })
 
-check('工作台 rail 上有项目概览入口，且该标签不被左栏模式藏死', () => {
+check('rail 第一项是项目概览，左栏渲染 ProjectHomePane', () => {
+  const rail = readFrontend('src/config/leftSidebarPlugins.js')
+  const i = rail.indexOf('LEFT_SIDEBAR_PLUGINS = [')
+  if (i < 0) return '找不到 LEFT_SIDEBAR_PLUGINS'
+  const firstKey = rail.slice(i).match(/key:\s*'([^']+)'/)
+  if (!firstKey || firstKey[1] !== 'home') {
+    return 'rail 第一项应当是项目概览（key: home），实际是 ' + (firstKey ? firstKey[1] : '空')
+  }
   const src = readVue('src/pages/project-overview/project-overview.vue')
-  if (!src.includes('@tap="openProjectHomeTab"')) return 'rail 上没有项目概览按钮'
-  if (!src.includes('<ProjectHomePane')) return '中栏没有渲染 ProjectHomePane'
-  // marker 带上左花括号：模板里 v-show="isTabVisible(file)" 会先命中，
-  // 从那里往后找第一个 { 会切出一大段模板而不是方法体
-  const vis = extractMethodBody(src, 'isTabVisible(file) {')
-  if (!vis) return '找不到 isTabVisible'
-  if (!vis.includes("file.tabType === 'project-home'")) {
-    return "isTabVisible 没放行 project-home 标签，点 rail 会开一个被 v-show 藏死的标签"
+  if (!src.includes('<ProjectHomePane')) return '左栏没有渲染 ProjectHomePane'
+  if (!src.includes("leftPaneKey === 'home'")) {
+    return "左栏没有 leftPaneKey === 'home' 这条分支，点 rail 会落到「加载中…」占位符"
   }
   return null
+})
+
+check('leftPaneKey 存量值有迁移兜底', () => {
+  const cfg = readFrontend('src/config/leftSidebarPlugins.js')
+  if (!cfg.includes('migrateLeftPaneKey')) return '缺 migrateLeftPaneKey'
+  // 语音两项合并（easyvoice / meeting-recorder → voice）后，存量 storage 里的
+  // 旧 key 必须映射得到；不映射就会落在一个没有面板分支命中的 key 上
+  for (const k of ['easyvoice', 'meeting-recorder']) {
+    if (!cfg.includes(`'${k}'`) && !cfg.includes(`${k}:`)) return '迁移表里没有 ' + k
+  }
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  return src.includes('migrateLeftPaneKey(savedKey)')
+    ? null
+    : '工作台恢复 leftPaneKey 时没有过迁移表'
 })
 
 check('switcher-home 有对应样式', () => {

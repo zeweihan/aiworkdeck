@@ -20,7 +20,7 @@ export default {
   litEmptyText: '还没有图。上面选好材料点「开始出图」。',
   litDraftBadge: '草稿',
   litHandEditedBadge: '手工改过',
-  litEdit: '编辑',
+  litViewMaster: '看母版',
   litRestyleLabel: '换风格',
   litUnavailableFallback: '出图环境不可用',
   litStartFailedFallback: '启动失败',

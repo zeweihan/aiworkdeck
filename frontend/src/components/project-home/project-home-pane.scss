@@ -14,11 +14,57 @@ $bg-white: #FFFFFF;
   color: $color-text-main;
 }
 
-/* 嵌在工作台中栏的标签里：铺满标签内容区并自己滚动
-   （独立页那边由 body 滚，不需要这一条） */
-.project-home-pane.is-embedded {
+/* 嵌在工作台**左栏**里：铺满并自己滚动（独立页那边由 body 滚，不需要这一条）。
+   左栏最窄 260px，一页纸那套两列布局在这个宽度下全部会折行，所以统一收成
+   单列并压掉一档字号与间距——密度对齐 App.vue 的 --awd-panel-* 令牌。
+
+   子组件的样式各自 scoped，父层要伸手进去只能走 :deep()。改的都是「窄栏下
+   必须让开」的两件事：flex-basis/min-width（不让开就横向溢出）与内边距。 */
+.project-home-pane.is-compact {
   height: 100%;
   overflow-y: auto;
+  padding: 10px var(--awd-panel-pad-x, 10px);
+  background: $bg-white;
+}
+
+.project-home-pane.is-compact .home-column {
+  max-width: none;
+  gap: 10px;
+}
+
+.project-home-pane.is-compact .home-section {
+  padding: 10px 12px;
+  border-radius: 4px;
+}
+
+.project-home-pane.is-compact .home-section-title {
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  font-size: var(--awd-panel-fs-sec, 11px);
+  font-weight: 700;
+}
+
+.project-home-pane.is-compact :deep(.profile-header),
+.project-home-pane.is-compact :deep(.overview-stats-bar) {
+  padding: 10px 12px;
+  border-radius: 4px;
+}
+
+.project-home-pane.is-compact :deep(.profile-project-name) {
+  font-size: 15px;
+  line-height: 22px;
+}
+
+.project-home-pane.is-compact :deep(.profile-fields) {
+  gap: 8px 12px;
+  margin-top: 10px;
+}
+
+/* 单列：min-width 是这两处横向溢出的直接原因（180 / 140），必须归零 */
+.project-home-pane.is-compact :deep(.profile-field),
+.project-home-pane.is-compact :deep(.stat-tile) {
+  flex: 1 1 100%;
+  min-width: 0;
 }
 
 /* 一页纸卷轴：单列纵向 */

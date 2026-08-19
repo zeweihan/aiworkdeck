@@ -61,6 +61,57 @@ public class LitigationVisualTools implements AgentToolComponent {
     public static final String MARKER_ARTIFACT = "project_litviz_";
     public static final String MARKER_MAP = "project_litvizmap_";
 
+    /**
+     * 产物 wpsFileId 的进程内序号。
+     *
+     * <p>原来只用 {@code System.currentTimeMillis()}：一次出图的四五个文件在同一个
+     * for 循环里登记，毫秒级完全撞得上，于是它们共享同一个 wpsFileId。
+     * {@code /api/files/{id}/download} 在按数字 id 查不到时会退回
+     * {@code findByWpsFileId(...).findFirst()}——撞号意味着"按 wpsFileId 下载 .drawio"
+     * 可能拿到同一张图的 .svg 或 .map.json。加一个单调序号把身份还原成唯一。
+     */
+    private static final java.util.concurrent.atomic.AtomicLong MARKER_SEQ =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /** 生成一个唯一的产物身份标记（见 {@link #MARKER_SEQ}）。 */
+    public static String newMarker(String prefix, Long projectId) {
+        return prefix + projectId + "_" + System.currentTimeMillis()
+                + "_" + MARKER_SEQ.incrementAndGet();
+    }
+
+    /**
+     * 会话级流程状态。
+     *
+     * <p>为什么需要它：skill 的 prompt 注入与工具白名单是<b>按轮</b>生效的
+     * （SkillRouter.activateForTurn 每条用户消息重算一次）。用户那句"确认，就这样"
+     * 里没有任何触发词，于是恰恰在"回填 checkpoint 然后出图"这一步，整份诉讼可视化
+     * 指引从上下文里消失了。真机表现就是：确认后模型改去 write_file 存地图、
+     * 忘了调 litigation_render，或者连着渲染两次。
+     *
+     * <p>工具返回文本是留在对话历史里的，不随 skill 失活而消失——所以"下一步做什么"
+     * 的确定性引导挂在这里，而不是只写进 prompt。状态本身再兜一层：重复的
+     * checkpoint 不重新跑脚本，重复的 render 不重复出图。
+     */
+    private static final class TurnState {
+        String pendingCheckpointFingerprint;
+        String pendingCheckpointQuestions;
+        int checkpointCalls;
+        String lastRenderFingerprint;
+        String lastRenderNote;
+    }
+
+    /**
+     * conversationId -> 流程状态。容量封顶的 LRU：条目只是几个短字符串，
+     * 但没有生命周期钩子来清理，不封顶就是一处慢性泄漏。
+     */
+    private static final Map<String, TurnState> TURN_STATES = java.util.Collections.synchronizedMap(
+            new LinkedHashMap<>(64, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, TurnState> eldest) {
+                    return size() > 200;
+                }
+            });
+
     /** 参考文档的白名单别名。LLM 只能报这些名字，不能自己拼路径。 */
     private static final Map<String, String> REFERENCES = new LinkedHashMap<>();
     static {
@@ -115,21 +166,43 @@ public class LitigationVisualTools implements AgentToolComponent {
 
     @ToolMeta(displayName = "出图前确认", category = "litigation-visual")
     @Tool("Generate the three pre-render confirmation questions (structure / style / emphasis) for a "
-            + "semantic map. Show the returned text to the user VERBATIM and wait for their answer — do "
-            + "NOT rewrite, shorten or re-order it. The questions are generated deterministically on "
-            + "purpose: the consequences of these three answers are enforced by the renderer, so the "
-            + "asking must not be left to the model. Then set checkpoint.confirmed / "
-            + "checkpoint.emphasis_source in the map and call litigation_render.")
+            + "semantic map. Pass the map INLINE as a JSON string — never save it to a project file "
+            + "with write_file and never re-read it with read_file; it stays in this conversation. "
+            + "Show the question block to the user VERBATIM and wait for their answer — do NOT rewrite, "
+            + "shorten or re-order it. The questions are generated deterministically on purpose: the "
+            + "consequences of these three answers are enforced by the renderer, so the asking must not "
+            + "be left to the model. Call this ONCE per confirmation round; calling it again before the "
+            + "user has replied returns the same questions and nothing else. Then set "
+            + "checkpoint.confirmed / checkpoint.emphasis_source in the same JSON and call "
+            + "litigation_render exactly once.")
     public String litigation_checkpoint(
             @P("The semantic map, as a JSON object string") String semanticMapJson,
             @P(value = "Element id you propose to mark deep red (optional)", required = false) String suggest
     ) {
+        TurnState st = turnState();
         Path tmp = null;
         try {
             tmp = writeTempMap(semanticMapJson);
+            String fingerprint = fingerprint(Files.readString(tmp, StandardCharsets.UTF_8));
+
+            // 幂等：三问已经发出、用户还没回话时，重复调用不重新跑脚本，也不产生新问题。
+            // 真机上这个工具在同一轮里被连调了三次——问题本身是确定性生成的，
+            // 第二次之后除了消耗步数预算什么都没发生。
+            if (st != null && fingerprint.equals(st.pendingCheckpointFingerprint)
+                    && st.pendingCheckpointQuestions != null) {
+                st.checkpointCalls++;
+                return st.pendingCheckpointQuestions + repeatedCheckpointNotice(st.checkpointCalls);
+            }
+
             LitigationVisualService.Result r = litviz.checkpoint(tmp, suggest);
             if (!r.ok()) return "生成确认问题失败：" + r.error();
-            return r.raw().getStr("questions", "");
+            String questions = r.raw().getStr("questions", "");
+            if (st != null) {
+                st.pendingCheckpointFingerprint = fingerprint;
+                st.pendingCheckpointQuestions = questions;
+                st.checkpointCalls = 1;
+            }
+            return questions + CHECKPOINT_NEXT_STEPS;
         } catch (IllegalArgumentException e) {
             return "语义地图不是合法 JSON：" + e.getMessage();
         } catch (Exception e) {
@@ -138,6 +211,48 @@ public class LitigationVisualTools implements AgentToolComponent {
         } finally {
             deleteQuietly(tmp);
         }
+    }
+
+    /**
+     * 分隔线以下是给模型看的执行指引，不属于要原样转述给用户的三问。
+     *
+     * <p>为什么挂在工具返回文本里而不是只写进 skill prompt：skill 是按轮生效的，
+     * 用户那句"确认"里没有触发词，指引在最关键的一步反而不在上下文里。
+     * 工具结果留在历史里，所以这段话在确认后的那一轮依然看得见——与仓内
+     * 「约束要挂消息末位」是同一条经验的另一个落点。
+     */
+    private static final String CHECKPOINT_NEXT_STEPS = """
+
+
+            ────────── 以下是给你（AI）的执行指引，不要发给用户 ──────────
+            1. 把分隔线以上的三问原样发给用户，然后停下等回复。本轮不要再调用 \
+            litigation_checkpoint——问题是确定性生成的，再调一次不会有新内容。
+            2. 语义地图全程以 JSON 字符串内联传参。**不要用 write_file 把它存成项目文件，\
+            也不要用 read_file 读回来**——它已经在本次对话里，落成文件只会让你在下一步找不到它。
+            3. 用户回复后，把答复回填进同一份 JSON 的 checkpoint 字段
+            （confirmed: true/false、emphasis_source: user/model/none），\
+            然后**必须调用一次 litigation_render**，把同一份 JSON 作为 semanticMapJson 传进去。只调一次。
+            4. 在 litigation_render 成功返回之前，不要对用户说"图已经生成"——那一步没跑，项目里就没有图。""";
+
+    private static String repeatedCheckpointNotice(int calls) {
+        return """
+
+
+                ────────── 以下是给你（AI）的执行指引，不要发给用户 ──────────
+                [重复调用第 %d 次] 这一轮的确认问题已经发出过了，上面是同一份，没有重新生成。
+                停止调用 litigation_checkpoint：把三问原样发给用户，结束本轮，等用户回复。
+                收到回复后回填 checkpoint 字段并调用一次 litigation_render 出图。""".formatted(calls);
+    }
+
+    /** 取本会话的流程状态；拿不到 conversationId（评测/直调）时返回 null，行为退回无状态。 */
+    private static TurnState turnState() {
+        String cid = com.checkba.service.ai.context.ProjectContextHolder.getConversationId();
+        if (cid == null || cid.isBlank()) return null;
+        return TURN_STATES.computeIfAbsent(cid, k -> new TurnState());
+    }
+
+    private static String fingerprint(String s) {
+        return Integer.toHexString(s.hashCode()) + ":" + s.length();
     }
 
     // ==================== 出图 ====================
@@ -151,8 +266,11 @@ public class LitigationVisualTools implements AgentToolComponent {
             + "proportional_gantt (periods that overlap, e.g. 诉讼时效/保证期间), graphviz_flow (procedure "
             + "with decisions), graphviz_relation (free-form party network), relation_tree (top-down "
             + "hierarchy, e.g. 股权/控制结构), comparison_table (A vs B). Text must be VERBATIM from the "
-            + "source — never reorder events, merge items or invent a date. Call litigation_checkpoint "
-            + "first; an unconfirmed map is written as a *-draft on purpose.")
+            + "source — never reorder events, merge items or invent a date. Pass the map INLINE as a "
+            + "JSON string — never stage it through write_file/read_file. Call litigation_checkpoint "
+            + "first; an unconfirmed map is written as a *-draft on purpose. After the user confirms, "
+            + "call this exactly ONCE — this tool is what actually puts the figure in the project, and "
+            + "a second identical call produces nothing new.")
     public String litigation_render(
             @P("The semantic map, as a JSON object string (see litigation_reference 'schema')") String semanticMapJson,
             @P("Diagram name, used for the output folder and file names (e.g. '担保纠纷事实经过时间轴')") String diagramName,
@@ -167,10 +285,25 @@ public class LitigationVisualTools implements AgentToolComponent {
         String why = litviz.unavailableReason();
         if (why != null) return "诉讼可视化不可用：" + why;
 
+        TurnState st = turnState();
         Path tmpMap = null;
         Path work = null;
         try {
             tmpMap = writeTempMap(semanticMapJson);
+
+            // 同一份地图、同一个图名/位置/模式连着出两次，只是把同一批文件重写一遍。
+            // 真机上出现过"连续渲染两次"，第二次纯属浪费，还会让交付说明重复一遍。
+            // 指纹带上模式与落点：换风格、换位置都是真的要再出一版，不会被短路。
+            String renderFingerprint = fingerprint(
+                    Files.readString(tmpMap, StandardCharsets.UTF_8)
+                            + "|" + diagramName + "|" + parentFolderId + "|" + mode + "|" + formats);
+            if (st != null && renderFingerprint.equals(st.lastRenderFingerprint)
+                    && st.lastRenderNote != null) {
+                return st.lastRenderNote
+                        + "\n\n[本次调用没有重新出图] 这张图刚刚已经用同一份语义地图出过了，"
+                        + "文件都在上面那个文件夹里。不要再调用 litigation_render；"
+                        + "直接把交付说明讲给用户即可。";
+            }
 
             String safeName = sanitize(diagramName, "诉讼图");
             work = Files.createTempDirectory("litviz-out-");
@@ -208,6 +341,7 @@ public class LitigationVisualTools implements AgentToolComponent {
 
             List<String> registered = new ArrayList<>();
             ProjectFile svg = null;
+            ProjectFile drawio = null;
             for (int i = 0; i < files.size(); i++) {
                 JSONObject f = files.getJSONObject(i);
                 Path src = Path.of(f.getStr("path"));
@@ -216,6 +350,9 @@ public class LitigationVisualTools implements AgentToolComponent {
                 registered.add(pf.getName());
                 if (svg == null && pf.getName().endsWith(".svg") && !pf.getName().endsWith(".drawio.svg")) {
                     svg = pf;
+                }
+                if (drawio == null && pf.getName().endsWith(".drawio")) {
+                    drawio = pf;
                 }
             }
             if (registered.isEmpty()) return "出图失败：产物未能写入项目。";
@@ -227,10 +364,22 @@ public class LitigationVisualTools implements AgentToolComponent {
             registerArtifact(projectId, folder.getId(), mapCopy, MARKER_MAP);
 
             editorBridgeService.sendRefreshFilesAction();
-            // SVG 是母版，也是浏览器能原生渲染的那个——自动打开它，用户不必自己去点。
-            if (svg != null) editorBridgeService.sendOpenFileAction(svg);
+            // 默认打开可继续编辑的那份（.drawio → 内嵌 draw.io）。SVG 是母版、能看能打印，
+            // 但打开即到头；律师拿到图后的下一个动作多半是"这里挪一下、那个字改一下"，
+            // 落在只读预览上就得先自己去文件树里找可编辑版。没出 .drawio 时退回 SVG。
+            ProjectFile openTarget = drawio != null ? drawio : svg;
+            if (openTarget != null) editorBridgeService.sendOpenFileAction(openTarget);
 
-            return buildDeliveryNote(r.raw(), folder, registered, draft);
+            String note = buildDeliveryNote(r.raw(), folder, registered, draft);
+            if (st != null) {
+                st.lastRenderFingerprint = renderFingerprint;
+                st.lastRenderNote = note;
+                // 这一轮的确认已经消费掉了：下一张图要重新走一次三问。
+                st.pendingCheckpointFingerprint = null;
+                st.pendingCheckpointQuestions = null;
+                st.checkpointCalls = 0;
+            }
+            return note;
 
         } catch (IllegalArgumentException e) {
             return "语义地图不是合法 JSON：" + e.getMessage();
@@ -259,8 +408,11 @@ public class LitigationVisualTools implements AgentToolComponent {
         sb.append("视觉模式：").append(raw.getStr("mode", "")).append("；")
           .append("布局：").append(raw.getStr("layout", "")).append("。\n");
         sb.append("交付文件：").append(String.join("、", files)).append("\n");
-        sb.append("其中 .svg 是母版（已在编辑器打开），.drawio 是可以接着改的源文件"
-                + "（draw.io、ProcessOn 都能开）。\n");
+        boolean editable = files.stream().anyMatch(n -> n.endsWith(".drawio"));
+        sb.append(editable
+                ? "其中 .drawio 是可以接着改的源文件，已在编辑器里打开（应用内嵌了 draw.io，"
+                        + "也可以用 draw.io、ProcessOn 打开）；.svg 是母版，看和打印用。\n"
+                : "其中 .svg 是母版（已在编辑器打开）。\n");
         // PNG 是插进文书用的那一份：doc_insert_image 只收位图，不收 svg。
         // 引擎的 PNG 依赖外部光栅器（桌面端不带），所以服务端用 Batik 兜底补上；
         // 真的一张都没有时说清楚，别让用户对着少掉的文件猜。
@@ -279,6 +431,13 @@ public class LitigationVisualTools implements AgentToolComponent {
         String audit = raw.getStr("audit", "");
         if (!audit.isBlank()) {
             sb.append("\n引擎审计摘要：\n").append(tail(audit, 900));
+        }
+        if (!draft) {
+            // 出图是这条链的终点。不写死这一句的话，真机上出现过"渲染完又渲染一次"。
+            // 语义地图那句是给 write_file 冲动的另一道闸：它已经随图落盘了。
+            sb.append("\n[本图已交付] 不要再调用 litigation_render（除非用户要求改内容或换风格）。"
+                    + "语义地图已随图存为 ").append(folder.getName()).append(".map.json，"
+                    + "不需要你另外用 write_file 保存一份。现在把上面的交付说明讲给用户即可。\n");
         }
         return sb.toString();
     }
@@ -304,7 +463,7 @@ public class LitigationVisualTools implements AgentToolComponent {
             String ext = name.contains(".") ? name.substring(name.lastIndexOf('.') + 1) : "";
             ProjectFile pf = projectFileService.createFile(
                     projectId, folderId, name, ext, Files.size(src), null,
-                    marker + projectId + "_" + System.currentTimeMillis(), AGENT_USER_ID);
+                    newMarker(marker, projectId), AGENT_USER_ID);
             Path target = storageResolver.resolve(pf.getFilePath());
             Files.createDirectories(target.getParent());
             Files.move(src, target, StandardCopyOption.REPLACE_EXISTING);

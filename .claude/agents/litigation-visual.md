@@ -54,7 +54,7 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 
 **前端**
 - `components/LitigationVisualPanel.vue` — 左栏面板：选材料 → 开始出图 → 图廊 →
-  打开 / 编辑（进 draw.io）/ 换风格。
+  打开（整行点开＝进 draw.io 的可编辑版）/ 看母版（.svg）/ 换风格。
   **面板自己不画标题**（由外壳 `.sidebar-header` 统一出，2026-08-17 起；此前同屏出现两次），
   刷新按钮挪进「本项目的图」分组头的右侧。图廊是**行式列表不是卡片**：整行点开＝打开，
   「编辑」与「换风格」在悬停时才浮出来，换风格是三选一的分段控件而不是三个并列按钮——
@@ -80,6 +80,27 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 `proportional_gantt` / `graphviz_flow` / `graphviz_relation` / `relation_tree` /
 `comparison_table`。
 
+**语义地图是内联参数，不落文件**：`litigation_checkpoint` / `litigation_render` 的第一个
+参数就是那段 JSON 字符串。模型不该用 `write_file`/`read_file` 中转（真机上走过这条岔路，
+`read_file` 报 "File does not exist."）。落盘只发生在 render 成功之后，由引擎存成
+`<图名>.map.json`。禁令写在**三处**：prompt.md/prompt.en.md、两个工具的 `@Tool` 描述、
+`LitigationVisualPanelService.buildKickoffPrompt`。
+
+**流程引导挂在工具返回文本里，不能只写 prompt**：skill 是**按轮**生效的
+（`SkillRouter.activateForTurn` 每条用户消息重算）。用户那句「确认，就这样」里没有触发词，
+于是**恰好在「回填 checkpoint 然后出图」这一步，整份诉讼可视化指引从上下文里消失**——
+真机三个症状（改用 write_file 存地图、忘了调 `litigation_render` 就说图好了、连着渲染两次）
+都是这一个根因。工具结果留在对话历史里、不随 skill 失活而消失，所以「下一步做什么」
+写在 `litigation_checkpoint` 返回文本的分隔线之下（明确标注「不要发给用户」，三问仍原样在上）
+以及 `buildDeliveryNote` 的收尾句里。这是仓内「约束要挂消息末位」的同一条经验。
+**改 skill/工具时别把这两段话当文案删掉，它们是契约**，由
+`backend/src/test/java/com/checkba/service/ai/tools/LitigationVisualFlowTest.java` 钉住。
+
+**会话级幂等**：`LitigationVisualTools.TURN_STATES`（conversationId → TurnState，LRU 封顶 200）。
+同一份地图重复调 checkpoint 不重跑脚本、返回同一份三问并计次提示；同一指纹
+（地图+图名+落点+模式+格式）重复调 render 直接回上次的交付说明、不重复出图。
+render 成功后清掉 pending checkpoint（下一张图重新走三问）。
+
 **草稿闸**：`checkpoint.confirmed` 不为 true → 产物一律 `*-draft.*`。这是上游的安全
 设计（未经确认的读法不许当终稿归档），**包装层不许抹平**。
 
@@ -90,7 +111,15 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 （语义地图，留着才能「换风格」不重新问模型）。曾经默认还出 pptx/vsdx，PR 用户
 反馈「版本太多、留一个可编辑的就行」后收窄（`LitigationVisualTools.DEFAULT_FORMATS`）；
 引擎本身仍支持这两种格式，只是产品不再默认交付。身份靠 `wpsFileId` 前缀
-`project_litviz_` / `project_litvizmap_`。
+`project_litviz_` / `project_litvizmap_`，**必须走 `LitigationVisualTools.newMarker()`**
+（见「已知地雷」里撞号那条）。
+
+**默认打开可编辑版（.drawio）**：出图后自动打开的是 `.drawio`（`sendOpenFileAction`，
+没出 drawio 才退回 svg），面板图廊整行点开也是 `.drawio`（`openDiagram`），
+`.svg` 退成悬停里的「看母版」（`openMaster`）。理由是律师拿到图后的下一个动作多半是
+「这里挪一下」，落在只读预览上就得自己去文件树翻可编辑版。改这条要同步四处：
+`LitigationVisualTools`（自动打开 + 交付说明）、`LitigationVisualPanel.vue`、
+skill.yml 的 `output`/`output_en`、两份 prompt。
 
 ## 依赖矩阵（实测，别凭名字猜）
 
@@ -142,6 +171,23 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
   绕过去标题在干净的 Windows 上就是方块——与下面 PNG 那条是同一个坑。
 - **`stealth=1` 是红线不是可选参数**：删了它 draw.io 会开始往外发请求，功能却完全正常，
   没有测试就没人会发现。`desktop/tests/drawio-server.test.js` 钉住了它。
+- **挂 draw.io 的 iframe 之前必须先探那个 URL**（`DrawioEditor.probeEditor`）。宿主的
+  `getEditor()` 只回答「资源目录里有 index.html」，回答不了「这个 origin 现在真的在服务它」：
+  dev 树没跑过 fetch 脚本、Web 部署没放 `dist/drawio`、端口被别的进程占住，任何一种都会让
+  **浏览器的裸 404 页占满整个编辑区**（真机报过 "Error: Not Found"）。探测用 GET 不用 HEAD
+  （静态服务未必实现 HEAD），并且**要认内容**——Web 常见的 SPA 兜底 `try_files … /index.html`
+  对任何不存在的路径都回 200 + 本应用首页，只看状态码会在 iframe 里套一个自己。
+  认的标记是 draw.io index.html 的 `geEditor`（body class），`fetch-drawio-assets.js`
+  解包后有一条对应断言，上游改了标记先在那里红。
+- **产物 `wpsFileId` 不能只用毫秒时间戳**：一次出图的四五个文件在同一个循环里登记，
+  毫秒撞得上；`/api/files/{id}/download` 在按数字主键查不到时会退回
+  `findByWpsFileId(...).findFirst()`，撞号就意味着「打开 .drawio」可能取到同一张图的 `.svg`。
+  统一走 `LitigationVisualTools.newMarker()`（时间戳 + 进程内单调序号），
+  前端 `DrawioEditor.fileRef()` 也改成优先用数字主键。
+- **对话里的文件卡按「基名」兜底**：`@ToolMeta(fileArg = "diagramName")` 报给
+  `file_change` 的是**图名**（也是文件夹名），项目里真正存在的是 `<图名>.drawio` 等。
+  `fileOpenTabs.handleOpenFileFromChat` 精确名找不到时再按 `图名.` 前缀找一轮，
+  并按 drawio > svg > png 排序；没有这条兜底，对话里的文件卡点了只会弹「文件不存在」。
 - **手工改过的图再「换风格」会被语义地图覆盖**。判据是 `.drawio` 比 `.map.json` 新
   （`DiagramView.handEdited`），面板据此先弹确认框。
 - **触发词必须原样出现在 prompt 正文里**才命中 skill 注入（pinnedSkillId 只裁工具
@@ -161,7 +207,7 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 
 ```bash
 python3 litviz/tests/test_cli.py                       # 契约 + 上游 149 项（预期 146/149）
-cd backend && mvn test -Dtest='Litigation*,BuiltinSkillsTest,SkillRegistryTest'
+cd backend && mvn test -Dtest='Litigation*,BuiltinSkillsTest,SkillRegistryTest,SkillRouterTest'
 node desktop/scripts/prepare-graphviz.js --from "$(brew --prefix graphviz)" --out /tmp/gv
 node desktop/scripts/fetch-drawio-assets.js            # 幂等；已就位会跳过
 cd desktop && npm test                                 # 含 drawio-server 的 stealth 与穿越守卫

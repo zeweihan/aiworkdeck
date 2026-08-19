@@ -219,7 +219,31 @@
                </view>
             </view>
         </view>
-        <!-- User Avatar moved to Left Rail -->
+
+        <!-- 用户头像 + 下拉（2026-08-19 从 rail 底部搬上来）。
+             刻意放在 isClientView 分支之外：rail 上那个头像本来就对客户也渲染，
+             收进下拉时不能顺手把客户的「个人中心」入口砍掉。系统设置那一项才是
+             律师专有的（客户视图里整片工具区都收起来了）。
+
+             「个人中心」仍是整页 navigateTo（它依赖页面栈保留工作台实例以便
+             onShow 回流刷新）；「系统设置」改成中栏标签，不再把工作台整个换掉。
+             顶栏里每一个能点的东西都必须在 App.vue 的 no-drag 名单里，
+             下拉菜单本身也要——它画在 .project-header 这条 drag 区之内。 -->
+        <view class="header-account">
+          <view class="avatar-btn" @tap.stop="toggleAvatarMenu" :title="$t('workbench.accountMenu')">
+            <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
+            <text v-else class="avatar-text">{{ (userDisplayName || currentUser?.displayName)?.charAt(0) || 'U' }}</text>
+          </view>
+          <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
+          <view v-if="avatarMenuOpen" class="avatar-menu" @tap.stop>
+            <view class="avatar-menu-item" @tap="goToUserProfile">
+              <text>{{ $t('workbench.profile') }}</text>
+            </view>
+            <view v-if="!isClientView" class="avatar-menu-item" @tap="goToSystemSettings">
+              <text>{{ $t('workbench.settingsTabName') }}</text>
+            </view>
+          </view>
+        </view>
       </view>
     </view>
 
@@ -227,22 +251,10 @@
     <view class="main-layout" :class="{ 'is-compact': isCompactLayout }">
       <!-- Cursor 风格：最左常驻栏（Activity Bar） -->
       <view class="left-rail">
-        <!-- 项目概览：2026-08 起概览不再是列表与工作台之间那一跳独立页，
-             而是工作台里的一个中栏标签（一页纸宽 880px，塞进 260px 左栏会全部重排）。
-             放在 rail 第一位——它是「这个项目的门面」，在文件树之上。 -->
-        <view
-          class="rail-btn"
-          :class="{ active: isProjectHomeTabActive }"
-          :title="$t('projects.overviewPageTitle')"
-          @tap="openProjectHomeTab"
-        >
-          <view class="rail-icon-wrapper">
-            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in GLYPHS.landmark" :key="gi" :d="d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-            </svg>
-          </view>
-        </view>
-
+        <!-- rail 的顺序就是 config/leftSidebarPlugins.js 里数组的顺序（项目概览 →
+             资源管理器 → 搜索 → 插件中心 → 语音 → 脱敏 → 门控项）。
+             2026-08-19 起「项目概览」和「插件中心」也在这个数组里：它们走的都是
+             普通的 toggleLeftPane 语义，单独硬编码成 rail 按钮只会让顺序有两个出处。 -->
         <view
           v-for="p in LEFT_SIDEBAR_PLUGINS"
           :key="p.key"
@@ -291,33 +303,9 @@
           </view>
         </view>
 
-        <!-- 插件广场：IDE 扩展市场式直达入口（浏览/安装不该藏在系统设置两跳之下） -->
-        <view
-          class="rail-btn"
-          :class="{ active: leftPaneKey === 'market' && !sidebarCollapsed }"
-          :title="$t('workbench.pluginMarket')"
-          @tap="goToPluginMarket"
-        >
-          <view class="rail-icon-wrapper">
-            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4 4h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-              <path d="M4 13h7v7H4z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-              <path d="M13 13h7v7h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-              <path d="M14.5 2.5h7v7h-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-            </svg>
-          </view>
-        </view>
-
-        <!-- 系统设置：AI 提供商 / API Key 等随时可改（不再只藏在首次向导里）。
-             页面与接口仅管理员可用（后端 requireAdmin），入口对所有人可见便于发现。 -->
-        <view class="rail-btn" :title="$t('workbench.systemSettings')" @tap="goToSystemSettings">
-          <view class="rail-icon-wrapper">
-            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.01a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h.01a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.01a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
-            </svg>
-          </view>
-        </view>
+        <!-- 插件中心与系统设置都不在 rail 底部了（2026-08-19）：前者升成 rail 数组
+             里的一项（排在搜索之后），后者与个人中心一起收进顶栏右上角的头像下拉。
+             rail 底部只留「暂存区」与「成员堆叠（协作）」这两件跟当前案卷有关的东西。 -->
 
         <!-- Project Members Stack -->
         <view class="rail-members-container" v-if="projectMembers && projectMembers.length > 0">
@@ -373,14 +361,7 @@
            </view>
         </view>
 
-        <!-- User Avatar (Bottom) -->
-        <!-- User Avatar (Bottom) -->
-        <view class="rail-user-avatar" @tap="goToUserProfile" :title="$t('workbench.profile')">
-           <view class="rail-user-avatar-inner">
-               <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
-               <text v-else class="avatar-text">{{ (userDisplayName || currentUser?.displayName)?.charAt(0) || 'U' }}</text>
-           </view>
-        </view>
+        <!-- 用户头像已搬到顶栏右上角（个人中心 / 系统设置的下拉入口）。 -->
       </view>
 
       <!-- File Picker Dialog (for EasyVoice Import) -->
@@ -618,18 +599,51 @@
             @open-file="handleLitigationOpenFile"
             @request-scope-select="handleLitigationScopeSelect"
           />
-          <MeetingRecordingPanel
-            v-else-if="leftPaneKey === 'meeting-recorder'"
-            :project-id="projectId"
-            :current-user="currentUser"
-            @generate-minutes="handleMeetingMinutesStart"
+          <!-- 项目概览：2026-08-19 起在左栏展示（此前是中栏标签）。
+               同一个 ProjectHomePane，薄壳页那个宿主一行没改。 -->
+          <ProjectHomePane
+            v-else-if="leftPaneKey === 'home'"
+            :project-id="Number(projectId)"
+            compact
+            @open-conversation="openConversationInPanel"
           />
-          <EasyVoicePane
-             v-else-if="leftPaneKey === 'easyvoice'"
-             @request-doc-text="handleEasyVoiceDocRequest"
-             @highlight-sentence="handleTtsHighlight"
-             @clear-highlight="handleTtsClearHighlight"
-          />
+          <!-- 语音：语音合成 + 会议录音合并成一个入口，面板内部两个 tab。
+               两个组件本身一行没改，这里只做宿主（tab 条 + v-if）。
+               「会议录音」tab 仅在 meeting-recorder skill 启用时出现——门控从
+               rail 位挪到了这里，判据仍是同一份 enabledSkillIds。 -->
+          <view v-else-if="leftPaneKey === 'voice'" class="voice-pane">
+            <view class="voice-tabs">
+              <view
+                class="voice-tab"
+                :class="{ active: voiceTab === 'tts' }"
+                @tap="voiceTab = 'tts'"
+              >
+                <text>{{ $t('workbench.voiceTts') }}</text>
+              </view>
+              <view
+                v-if="meetingRecorderEnabled"
+                class="voice-tab"
+                :class="{ active: voiceTab === 'recorder' }"
+                @tap="voiceTab = 'recorder'"
+              >
+                <text>{{ $t('workbench.voiceRecorder') }}</text>
+              </view>
+            </view>
+            <view class="voice-tab-body">
+              <MeetingRecordingPanel
+                v-if="voiceTab === 'recorder' && meetingRecorderEnabled"
+                :project-id="projectId"
+                :current-user="currentUser"
+                @generate-minutes="handleMeetingMinutesStart"
+              />
+              <EasyVoicePane
+                v-else
+                @request-doc-text="handleEasyVoiceDocRequest"
+                @highlight-sentence="handleTtsHighlight"
+                @clear-highlight="handleTtsClearHighlight"
+              />
+            </view>
+          </view>
           <DesensitizePane
              v-else-if="leftPaneKey === 'desensitize'"
              :project-id="projectId"
@@ -897,15 +911,14 @@
                       :spec="activeFileLeft.marketSpec"
                       @open-url="openBrowserTab($event)"
                     />
-                    <!-- 项目概览标签：与独立页共用同一个 ProjectHomePane。
-                         这里的「打开某条对话」是就地切会话（已经在工作台里了），
-                         不像独立页那样 reLaunch。 -->
-                    <ProjectHomePane
-                      v-else-if="activeFileLeft.tabType === 'project-home'"
+                    <!-- 系统设置标签：与 pages/admin 薄壳页共用同一个 AdminPane
+                         （照插件广场 market-detail 那套 tab 形制）。 -->
+                    <AdminPane
+                      v-else-if="activeFileLeft.tabType === 'admin-settings'"
                       :key="activeFileLeft.id"
-                      :project-id="projectId"
                       embedded
-                      @open-conversation="openConversationInPanel"
+                      :initial-nav="activeFileLeft.adminNav || ''"
+                      :initial-service="activeFileLeft.adminService || ''"
                     />
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
@@ -1008,15 +1021,13 @@
                       :spec="activeFileRight.marketSpec"
                       @open-url="openBrowserTab($event)"
                     />
-                    <!-- 项目概览标签：与独立页共用同一个 ProjectHomePane。
-                         这里的「打开某条对话」是就地切会话（已经在工作台里了），
-                         不像独立页那样 reLaunch。 -->
-                    <ProjectHomePane
-                      v-else-if="activeFileRight.tabType === 'project-home'"
+                    <!-- 系统设置标签：见左窗格同名注释 -->
+                    <AdminPane
+                      v-else-if="activeFileRight.tabType === 'admin-settings'"
                       :key="activeFileRight.id"
-                      :project-id="projectId"
                       embedded
-                      @open-conversation="openConversationInPanel"
+                      :initial-nav="activeFileRight.adminNav || ''"
+                      :initial-service="activeFileRight.adminService || ''"
                     />
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"
@@ -1538,6 +1549,7 @@ import DrawioEditor from '@/components/DrawioEditor.vue'
 import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
 import MarketDetailPane from '@/components/MarketDetailPane.vue'
 import ProjectHomePane from '@/components/project-home/ProjectHomePane.vue'
+import AdminPane from '@/components/admin/AdminPane.vue'
 import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
@@ -1600,7 +1612,8 @@ import {
   LEFT_SIDEBAR_PLUGINS,
   filterPluginsByEnabledSkills,
   getLeftSidebarPlugin,
-  getPluginsForUser
+  getPluginsForUser,
+  migrateLeftPaneKey
 } from '@/config/leftSidebarPlugins.js'
 
 import { activityTracker } from '@/utils/activityTracker.js'
@@ -1658,6 +1671,7 @@ export default {
     MarketSidebarPanel,
     MarketDetailPane,
     ProjectHomePane,
+    AdminPane,
     CompareDocDialog,
     DocDiffViewer,
     VersionCompareTab,
@@ -1706,6 +1720,12 @@ export default {
       sidebarCollapsed: false,
       isCompactLayout: false,
       leftPaneKey: null, // Initialize to null to prevent premature loading
+      // 「语音」面板内部的 tab（语音合成 / 会议录音）。刻意不持久化：
+      // 会议录音那个 tab 是 skill 门控的，记住它会让停用 skill 之后再进来落在
+      // 一个不渲染的 tab 上（v-else 兜底能救，但 tab 条上没有高亮项，看着像坏了）。
+      voiceTab: 'tts',
+      // 顶栏右上角头像下拉（个人中心 / 系统设置）
+      avatarMenuOpen: false,
       // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
       versionFileFilter: null,
       // 有一次采纳停在待裁决状态（/status 的 adoptConflict）。版本面板之外也要提示，
@@ -1964,10 +1984,16 @@ export default {
       if (this.graceKind === 'offlineReverify') return this.$t('workbench.openAccountPanel')
       return this.$t('workbench.learnFullVersion')
     },
-    /** rail 上「项目概览」按钮的高亮态：该标签是当前活跃窗格的活跃标签 */
-    isProjectHomeTabActive() {
-      const active = this.focusedPane === 'right' ? this.activeFileIdRight : this.activeFileIdLeft
-      return active === 'project-home'
+    /**
+     * 「语音」面板里的「会议录音」tab 显不显示。语音两项合并后门控从 rail 位挪到
+     * 了这里，判据仍是同一份 enabledSkillIds——**null（还没拉到）按启用处理**，
+     * 与 LEFT_SIDEBAR_PLUGINS 那处同一个口径：宁可多显示一瞬，也不要让用户
+     * 以为功能没了。
+     */
+    meetingRecorderEnabled() {
+      // enabledSkillIds 是**数组**（loadEnabledSkills 里 .map 出来的），不是 Set
+      if (this.enabledSkillIds === null) return true
+      return this.enabledSkillIds.includes('meeting-recorder')
     },
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
@@ -2446,8 +2472,16 @@ export default {
     // 占位符（app-e2e J4 抓到：文件树/工具行不渲染，直到手动点一次左栏图标）。
     // CLIENT 角色默认 dd-files 的分支只对浏览器登录态（客户访问码）有意义，保留。
     const savedKey = uni.getStorageSync(`project_${this.projectId}_leftPaneKey`)
-    if (savedKey) {
+    if (savedKey && user && user.role === 'CLIENT') {
+        // CLIENT 只有 dd-files 这一个面板，存量值原样用（migrate 会把它映射成
+        // files，那对客户是错的——他看不到资源管理器）
         this.leftPaneKey = savedKey
+    } else if (savedKey) {
+        // 存量值可能指向已经不存在的 key（语音合并前的 easyvoice /
+        // meeting-recorder、已下线的 shareholder-meeting、对律师隐藏的 dd-files）。
+        // 不映射就会落在一个没有面板分支命中的 key 上：左栏是「加载中…」占位符、
+        // rail 上一个高亮的按钮都没有，看上去就是坏了。
+        this.leftPaneKey = migrateLeftPaneKey(savedKey)
     } else if (user && user.role === 'CLIENT') {
         this.leftPaneKey = 'dd-files'
     } else {
@@ -2908,9 +2942,10 @@ export default {
       }
       this.openUpgradeSite()
     },
-    // chip 点击直达设置页「账户与用量」面板
+    // chip 点击直达设置「账户与用量」面板。设置在工作台里是中栏标签，
+    // 深链等价物就是 openSettingsTab 的 nav 参数。
     goToAccountPanel() {
-      uni.navigateTo({ url: '/pages/admin/admin?nav=account' })
+      this.openSettingsTab({ nav: 'account' })
     },
     openUpgradeSite() {
       this.showTrialInfo = false
@@ -2971,34 +3006,15 @@ export default {
       // reLaunch：切项目不叠页面栈（多实例地雷）
       uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${p.id}` })
     },
-    // 工作台通往项目概览页的唯一入口。工作台参与的跳转一律 reLaunch。
-    // 顶栏切换器里的「项目概览」：与 rail 按钮同一个动作。
-    // 2026-08 之前这里 reLaunch 到 pages/project-home 独立页——那等于把整个工作台
-    // （标签、编辑器、AI 会话）拆掉换成一页只读卷轴，回来还要重开一遍文件。
+    // 工作台里的「项目概览」= 打开左栏的 home 面板。
+    // 顶栏切换器里那一项与 rail 第一个按钮是同一个动作。
+    //
+    // 沿革：最早这里 reLaunch 到 pages/project-home 独立页（等于把整个工作台
+    // 拆掉换成一页只读卷轴）；2026-08 改成中栏标签；2026-08-19 再改成左栏面板——
+    // rail 上的按钮点了应该开左栏，这是 rail 其余每一项的语义，概览不该例外。
     goProjectHome() {
       this.projectSwitcherOpen = false
-      this.openProjectHomeTab()
-    },
-    /** 中栏开「项目概览」标签（单例；任一窗格已开则激活） */
-    openProjectHomeTab() {
-      if (!this.projectId) return
-      const tabId = 'project-home'
-      for (const pane of ['left', 'right']) {
-        const list = pane === 'left' ? this.leftFiles : this.rightFiles
-        const existing = list.find(f => f.id === tabId)
-        if (existing) {
-          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
-          this.focusedPane = pane
-          this.$nextTick(() => this.triggerWorkbenchResize())
-          return
-        }
-      }
-      const targetPane = this.splitMode ? this.focusedPane : 'left'
-      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
-      list.push({ id: tabId, tabType: 'project-home', name: this.$t('projects.overviewPageTitle') })
-      this[targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = tabId
-      this.focusedPane = targetPane
-      this.$nextTick(() => this.triggerWorkbenchResize())
+      this.toggleLeftPane('home')
     },
     /** 概览标签里点某条历史对话：已经在工作台里了，就地切会话，不跳页 */
     openConversationInPanel(conversationId) {
@@ -3336,14 +3352,38 @@ export default {
       }
       this.openFile(file)
     },
+    /**
+     * 左栏面板要往 AI 面板发一句 kick-off prompt 时的统一前置。
+     *
+     * 此前三个面板（股东大会核查 / 会议纪要 / 诉讼可视化）各自写
+     * `if (!$refs.chatInterface) toast('AI 面板未就绪')` —— 而 AI 面板默认是收起的，
+     * 于是律师在面板里点「开始核查」，绝大多数情况下拿到的就是这句 toast，
+     * 而且它不告诉人该怎么办。面板收着就先替他打开：
+     *   1. showAiPanel 为 false 时走既有的 toggleAiPanel()（它顺带刷 AI 上下文 +
+     *      拉历史，不能绕过去直接改标志位）；
+     *   2. 有界轮询等 ChatInterface 挂上并暴露 sendExternalPrompt（$refs 要等一次
+     *      渲染，组件内部还要初始化，$nextTick 一拍不够——实测这条路径上
+     *      openConversationInPanel 用的是 600ms 的固定等待）；
+     *   3. 真等不到才 toast 兜底。
+     *
+     * 上限 ~3s（30 × 100ms）：比固定 600ms 宽容，又不会在真出问题时把人挂住。
+     */
+    async resolveChatInterface() {
+      if (!this.showAiPanel) this.toggleAiPanel()
+      for (let i = 0; i < 30; i++) {
+        await this.$nextTick()
+        const chat = this.$refs.chatInterface
+        if (chat && chat.sendExternalPrompt) return chat
+        await new Promise((r) => setTimeout(r, 100))
+      }
+      uni.showToast({ title: this.$t('workbench.aiPanelNotReady'), icon: 'none' })
+      return null
+    },
     // 股东大会核查「开始核查」：把 kick-off prompt 交给 AI 面板以 AGENT 模式发送，
     // 并把返回的会话 ID 绑定回核查会话（面板据此展示 RUNNING 状态）
     async handleShareholderMeetingStart({ check, prompt }) {
-      const chat = this.$refs.chatInterface
-      if (!chat || !chat.sendExternalPrompt) {
-        uni.showToast({ title: this.$t('workbench.aiPanelNotReady'), icon: 'none' })
-        return
-      }
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
       const conversationId = await chat.sendExternalPrompt(prompt)
       if (conversationId && check && check.id) {
         try {
@@ -3357,11 +3397,8 @@ export default {
     // 会议录音「生成纪要」：prompt 由服务端拼好（触发词「会议纪要」开头才命中 skill 注入），
     // 这里只负责以 AGENT 模式发出去——与股东大会核查同一条路。
     async handleMeetingMinutesStart({ prompt }) {
-      const chat = this.$refs.chatInterface
-      if (!chat || !chat.sendExternalPrompt) {
-        uni.showToast({ title: 'AI 面板未就绪，请稍后重试', icon: 'none' })
-        return
-      }
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
       await chat.sendExternalPrompt(prompt)
     },
 
@@ -3370,11 +3407,8 @@ export default {
     // 出图那句话由服务端拼好（触发词必须原样在正文里才命中 skill 注入），
     // 这里只负责以 AGENT 模式发出去——与股东大会核查同一条路。
     async handleLitigationStart({ prompt }) {
-      const chat = this.$refs.chatInterface
-      if (!chat || !chat.sendExternalPrompt) {
-        uni.showToast({ title: this.$t('workbench.aiPanelNotReady'), icon: 'none' })
-        return
-      }
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
       await chat.sendExternalPrompt(prompt)
     },
 
@@ -3421,17 +3455,18 @@ export default {
       if (file.tabType === 'market-detail') {
         return true
       }
-      // 项目概览 tab：同理常显。它的入口是 rail 上的按钮，不属于任何左栏模式，
-      // 被 v-show 藏死的话点了 rail 什么也不会发生。
-      if (file.tabType === 'project-home') {
+      // 系统设置 tab：同理常显。它的入口是顶栏头像下拉，不属于任何左栏模式，
+      // 被 v-show 藏死的话点了菜单什么也不会发生。
+      if (file.tabType === 'admin-settings') {
         return true
       }
-      // 普通文件在资源管理器、搜索或EasyVoice模式下都可见。
+      // 普通文件在资源管理器、搜索或语音模式下都可见（语音合成要在编辑器里
+      // 取正文，看不见文档就没法用）。
       // 诉讼可视化面板也要放行：图廊的「打开」是那个面板唯一的出图入口，
       // 不放行的话点了之后标签被 v-show 藏死、编辑区显示空闲态，功能等于不存在
       // （与上面版本对比标签同一类问题）。
       return this.leftPaneKey === 'files' || this.leftPaneKey === 'search'
-        || this.leftPaneKey === 'easyvoice' || this.leftPaneKey === 'litigation-visual'
+        || this.leftPaneKey === 'voice' || this.leftPaneKey === 'litigation-visual'
     },
     startRenameProject() {
       this.renameProjectName = this.project.name || ''
@@ -4159,11 +4194,57 @@ export default {
     goBack() {
       uni.navigateBack()
     },
+    toggleAvatarMenu() {
+      this.avatarMenuOpen = !this.avatarMenuOpen
+    },
     goToUserProfile() {
+      this.avatarMenuOpen = false
       uni.navigateTo({ url: '/pages/userprofile/userprofile' })
     },
-    goToSystemSettings() {
-      uni.navigateTo({ url: '/pages/admin/admin' })
+    /**
+     * 系统设置：中栏开标签，不再整页跳转（2026-08-19）。
+     * 整页跳转会把工作台（标签、编辑器、AI 会话）整个换掉，改个 API Key 的代价
+     * 是回来重开一遍文件——照插件广场详情 tab 那套形制改成标签。
+     * pages/admin 薄壳页仍在，直链与浏览器端走那条。
+     */
+    goToSystemSettings(opts) {
+      this.avatarMenuOpen = false
+      this.openSettingsTab(opts)
+    },
+    /**
+     * 中栏开「系统设置」标签（单例；任一窗格已开则激活）。
+     * opts.nav / opts.service 等价于薄壳页的 ?nav=xxx&service=yyy 深链——
+     * 网关错误提示的逃生门指着它，tab 形态下必须一样能一步定位到那一项。
+     * 已开着的标签再带深链进来时就地改 props（key 不变，组件不重建）。
+     */
+    openSettingsTab(opts) {
+      const nav = (opts && opts.nav) || ''
+      const service = (opts && opts.service) || ''
+      const tabId = 'admin-settings'
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find(f => f.id === tabId)
+        if (existing) {
+          if (nav) existing.adminNav = nav
+          if (service) existing.adminService = service
+          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      list.push({
+        id: tabId,
+        tabType: 'admin-settings',
+        name: this.$t('workbench.settingsTabName'),
+        adminNav: nav,
+        adminService: service,
+      })
+      this[targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = tabId
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
     },
     goToPluginMarket() {
       // VS Code 扩展栏形态：rail 按钮开左栏列表面板（保留标签页与编辑区），

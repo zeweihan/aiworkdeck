@@ -51,6 +51,12 @@ export default {
   clientInitial: '客',
   addMember: '加人',
   profile: '个人中心',
+  // 顶栏右上角的头像下拉（2026-08-19 从 rail 底部搬上来）
+  accountMenu: '账户与设置',
+  settingsTabName: '系统设置',
+  // 「语音」面板内部的两个 tab
+  voiceTts: '语音合成',
+  voiceRecorder: '会议录音',
   // 助手配置弹窗
   configAssistant: '配置助手',
   assistantNameLabel: '助手名称 (System)',

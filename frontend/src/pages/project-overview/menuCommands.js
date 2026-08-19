@@ -136,6 +136,9 @@ export const menuCommandsMethods = {
         break
       case 'openVersionPanel': this.toggleLeftPane('version'); break
       case 'openPluginMarket': this.goToPluginMarket(); break
+      // 应用菜单的「设置…」（⌘,）：在工作台里开中栏标签，不跳页。
+      // 桥那边按 state.page 分流，工作台之外仍走 pages/admin 薄壳页。
+      case 'openSettings': this.openSettingsTab(); break
 
       // —— 文件 / 标签
       case 'closeTab':

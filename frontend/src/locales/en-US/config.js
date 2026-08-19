@@ -1,8 +1,12 @@
 // config/ directory strings (sidebar plugins / tools / file actions / OCR actions / project types / member roles / clipboard / variable library)
 export default {
   sidebar: {
+    projectHome: 'Project Overview',
     files: 'Explorer',
     ddFiles: 'Due Diligence Files',
+    market: 'Extensions',
+    // "Voice" merges text-to-speech and meeting recording; the two below are its tabs
+    voice: 'Voice',
     meetingRecorder: 'Meeting Recording',
     litigationVisual: 'Litigation Visualization',
     search: 'Search',

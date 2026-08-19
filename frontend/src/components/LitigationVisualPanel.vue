@@ -72,9 +72,10 @@
     </view>
 
     <view class="lv-row-actions">
-      <!-- 「编辑」是 .drawio 这份产物在面板里的唯一入口。没有它，可编辑版就只能
-           从文件树里翻出来，等于大多数人不知道它存在。 -->
-      <text class="lv-link" v-if="d.drawioFileId" @tap.stop="editDiagram(d)">{{ $t('panels.litEdit') }}</text>
+      <!-- 整行点开已经是「可编辑版」（.drawio）。这里留的是只读母版那条路：
+           打印、核对，以及内嵌 draw.io 起不来时的退路。没有 .drawio 的老图
+           整行点开本来就是母版，这个入口就没必要重复出现。 -->
+      <text class="lv-link" v-if="d.drawioFileId && d.svgFileId" @tap.stop="openMaster(d)">{{ $t('panels.litViewMaster') }}</text>
       <!-- 换风格是三选一而不是三个并列按钮：它们互斥，摆成一排等权按钮会把
            「打开/编辑」这两个真正的主动作挤到第二行去。 -->
       <text class="lv-restyle-label">{{ $t('panels.litRestyleLabel') }}</text>
@@ -211,15 +212,20 @@ export default {
       }
     },
 
+    // 整行点开 = 打开可继续编辑的那份（.drawio，走内嵌 draw.io）。
+    // 律师拿到图后的下一个动作多半是"这里挪一下、那个字改一下"，落在只读的 SVG 上
+    // 就得先自己去文件树里翻可编辑版。没有 .drawio（老图/只出了 svg）时退回母版。
     openDiagram(d) {
-      if (!d || !d.svgFileId) return
-      this.$emit('open-file', { fileId: d.svgFileId, name: d.name })
+      if (!d) return
+      const fileId = d.drawioFileId || d.svgFileId
+      if (!fileId) return
+      this.$emit('open-file', { fileId, name: d.name })
     },
 
-    // 打开可继续编辑的那份（.drawio，走内嵌 draw.io）
-    editDiagram(d) {
-      if (!d || !d.drawioFileId) return
-      this.$emit('open-file', { fileId: d.drawioFileId, name: d.name })
+    // 只读母版（.svg）。仍留一个入口：打印、核对、以及 draw.io 起不来时的退路。
+    openMaster(d) {
+      if (!d || !d.svgFileId) return
+      this.$emit('open-file', { fileId: d.svgFileId, name: d.name })
     },
 
     async restyle(d, mode) {

@@ -48,6 +48,8 @@ public class SkillController {
     public static class SkillView {
         private String id;
         private String name;
+        /** 英文展示名（skill.yml: name_en），英文界面下前端优先用它；缺省回退 name */
+        private String nameEn;
         private String description;
         private List<String> triggers;
         private List<String> allowedTools;
@@ -61,6 +63,14 @@ public class SkillController {
         private String license;
         /** 随 skill 分发的第三方内容署名（如 vendor 引擎），前端「详细信息」区原样展示 */
         private List<String> credits;
+        /**
+         * 当前是否真的能生效（SkillRegistry.isAvailable：未停用 + 所属插件启用 + 当前应用语言可用）。
+         *
+         * <p>本列表刻意<b>不做</b>语言过滤（管理面要能看到全部已安装的 skill），
+         * 于是对话面板里那个「主动选择 Skill」的选择器必须靠这个字段自己滤一道——
+         * 否则英文界面下用户能勾中一个 zh-only 的 skill，勾了却永远不生效，也没有任何提示。
+         */
+        private boolean available;
     }
 
     @GetMapping("/list")
@@ -190,6 +200,7 @@ public class SkillController {
         SkillView view = new SkillView();
         view.setId(skill.getId());
         view.setName(skill.getName());
+        view.setNameEn(skill.getNameEn());
         view.setDescription(skill.getDescription());
         view.setTriggers(skill.getTriggers());
         view.setAllowedTools(skill.getAllowedTools());
@@ -201,6 +212,7 @@ public class SkillController {
         view.setVersion(skill.getVersion());
         view.setLicense(skill.getLicense());
         view.setCredits(skill.getCredits());
+        view.setAvailable(skillRegistry.isAvailable(skill));
         return view;
     }
 

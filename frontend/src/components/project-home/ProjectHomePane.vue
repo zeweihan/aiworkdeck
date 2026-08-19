@@ -2,9 +2,12 @@
   项目概览的内容本体（一页纸卷轴：档案头 / 统计条 / 动态 / 日程 / 对话）。
 
   从 pages/project-home/project-home.vue 整体抽出来，为的是**同一份内容有两个宿主**：
-   · 工作台中栏的「项目概览」标签（主用法，rail 上的入口，照插件广场 market-detail
-     那套 tab 形制）；
+   · 工作台**左栏**的「项目概览」面板（主用法，rail 第一个按钮；2026-08-19 之前
+     是中栏标签，维护者认为「rail 点了开中栏标签」与其余 rail 项语义不一致）；
    · pages/project-home 独立页（只留给直链与深链，产品流程里不再经过）。
+
+  左栏那个宿主传 compact：260px 起步的窄栏，一页纸的两列布局在那里全会折行，
+  统一收成单列并压掉一档字号与间距（样式在 project-home-pane.scss）。
 
   取数与轮询纪律原样搬来，一条没改：只在挂载与宿主显式调 refresh() 时各刷一次，
   不起定时器；**绝不调 /version/status** —— 它在 enabled 时会一路跑两次 git add，
@@ -14,7 +17,7 @@
   就地切会话。组件只 emit，宿主自己接。
 -->
 <template>
-  <view class="project-home-pane" :class="{ 'is-embedded': embedded }">
+  <view class="project-home-pane" :class="{ 'is-compact': compact }">
     <view class="home-column">
       <ProfileHeader
         ref="profileHeader"
@@ -78,8 +81,8 @@ export default {
   components: { ProfileHeader, OverviewStatsBar, ActivityFeed, TaskSchedule, ConversationList },
   props: {
     projectId: { type: Number, required: true },
-    /** true = 嵌在工作台中栏的标签里（去掉整页的外边距，跟着 tab 内容区铺满） */
-    embedded: { type: Boolean, default: false },
+    /** true = 嵌在工作台左栏里（窄栏形态：铺满并自己滚动，内容收成单列） */
+    compact: { type: Boolean, default: false },
   },
   emits: ['open-conversation'],
   data() {

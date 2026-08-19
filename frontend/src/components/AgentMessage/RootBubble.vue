@@ -63,9 +63,23 @@
                </template>
             </div>
 
-            <!-- 4. Artifacts（计划卡只在最新一条助手消息里可操作） -->
+            <!-- 4. Artifacts（计划卡只在最新一条助手消息里可操作）。
+                 需要用户点按的审批卡（task_list/plan/implementation_plan 的 draft 态）
+                 与普通过程卡长得太像，用户反馈容易被夹在中间漏看。approve/revise 的
+                 回喂逻辑在 ArtifactCard.vue 内部，本卡不碰；这里只在外层套一层视觉
+                 强调（独立卡片/顶部色条/待确认标识），判据与 ArtifactCard 内部
+                 showApprovalBar 完全一致（isPlanType && actionable && status draft）。 -->
             <div class="artifacts-stream" v-if="bubble.artifacts.length > 0">
-               <div v-for="art in bubble.artifacts" :key="art.id" class="artifact-wrapper">
+               <div
+                 v-for="art in bubble.artifacts"
+                 :key="art.id"
+                 class="artifact-wrapper"
+                 :class="{ 'artifact-wrapper--approval': isApprovalPending(art) }"
+               >
+                  <div v-if="isApprovalPending(art)" class="approval-flag">
+                     <span class="approval-flag-dot"></span>
+                     <span class="approval-flag-text">{{ $t('chat.approvalNeededFlag') }}</span>
+                  </div>
                   <ArtifactCard
                     :artifact="art"
                     :id="art.id"
@@ -194,6 +208,15 @@ const isGroupDone = (g) => g.procs.every(p =>
 )
 const groupHasError = (g) => g.procs.some(p => (p.items || []).some(it => it.status === 'error'))
 
+// ---- 审批卡视觉强调 ----
+// 判据刻意跟 ArtifactCard.showApprovalBar 完全对齐（isPlanType && actionable &&
+// effectiveStatus === 'draft'）：只有「确实弹出了按此推进/修订按钮」的那一张才
+// 值得强调，历史消息里已解决/不可操作的计划卡保持普通样式，不制造假的紧迫感。
+const APPROVAL_ARTIFACT_TYPES = ['task_list', 'plan', 'implementation_plan']
+function isApprovalPending(art) {
+  return APPROVAL_ARTIFACT_TYPES.includes(art.type) && art.status === 'draft' && props.isLatest && !props.bubble.isStreaming
+}
+
 const hasPlan = computed(() => !!(props.bubble.planTodos && props.bubble.planTodos.length > 0))
 
 // 反问也算「有可见产出」：模型可以只输出一个 <question> 就停机（这正是反问的常见形态），
@@ -265,6 +288,49 @@ const hasContent = computed(() => {
 
 .artifact-wrapper:last-child {
     border-bottom: none;
+}
+
+/* ---- 审批卡（需要用户点按的 task_list/plan/implementation_plan draft） ----
+   与普通过程卡/已确认的产出卡明显区分：独立卡片 + 留白 + 强调边框 + 顶部色条 +
+   「待确认」标识，一眼能看出这里需要点按，不再被夹在执行过程和正文之间漏看。 */
+.artifact-wrapper.artifact-wrapper--approval {
+  border-bottom: none;
+  margin: 10px 12px 12px;
+  border: 1.5px solid #5BD197; /* Mint Green */
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(26, 83, 54, 0.10);
+}
+
+/* 顶部色条：森林绿→薄荷绿，视觉上先声夺人 */
+.artifact-wrapper--approval::before {
+  content: '';
+  display: block;
+  height: 4px;
+  background: linear-gradient(90deg, #1A5336, #5BD197);
+}
+
+.approval-flag {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px 0;
+  background: #ffffff;
+}
+
+.approval-flag-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #5BD197; /* Mint Green */
+  flex-shrink: 0;
+}
+
+.approval-flag-text {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1A5336; /* Forest Green */
+  letter-spacing: 0.3px;
 }
 
 .main-content {
