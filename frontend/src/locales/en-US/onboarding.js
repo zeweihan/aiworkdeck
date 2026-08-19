@@ -87,8 +87,8 @@ export default {
     registerHintEmail: 'An email address that is not registered yet gets an account created and signed in once the code checks out. Signing up gives you the full version.',
     // Co-creation developer programme (sign-up grant; hidden from 2026-10-01 Beijing time)
     promoTitle: 'Join the co-creation developer programme',
-    promoBody: 'Sign up before 30 September 2026 to receive ¥99.99 in Credits.',
-    promoBodyRegister: 'Sign up before 30 September 2026 and ¥99.99 in Credits lands in your account automatically, usable for platform AI and every other service.',
+    promoBody: 'Sign up before 30 September 2026 to receive {amount} in Credits.',
+    promoBodyRegister: 'Sign up before 30 September 2026 and {amount} in Credits lands in your account automatically, usable for platform AI and every other service.',
     phoneFirst: 'Please enter your mobile number',
     smsCodeFirst: 'Please enter the SMS code',
     codeSent: 'Verification code sent',
