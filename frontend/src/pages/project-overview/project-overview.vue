@@ -232,7 +232,7 @@
         <view class="header-account">
           <view class="avatar-btn" @tap.stop="toggleAvatarMenu" :title="$t('workbench.accountMenu')">
             <image v-if="currentUser && currentUser.avatarUrl" :src="currentUser.avatarUrl" class="avatar-img" />
-            <text v-else class="avatar-text">{{ (userDisplayName || currentUser?.displayName)?.charAt(0) || 'U' }}</text>
+            <text v-else class="avatar-text">{{ getInitial(userDisplayName || currentUser?.displayName) || 'U' }}</text>
           </view>
           <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
           <view v-if="avatarMenuOpen" class="avatar-menu" @tap.stop>
@@ -305,7 +305,24 @@
 
         <!-- 插件中心与系统设置都不在 rail 底部了（2026-08-19）：前者升成 rail 数组
              里的一项（排在搜索之后），后者与个人中心一起收进顶栏右上角的头像下拉。
-             rail 底部只留「暂存区」与「成员堆叠（协作）」这两件跟当前案卷有关的东西。 -->
+             rail 底部现在是「暂存区」「版本记录」「成员堆叠（协作）」三件跟当前
+             案卷有关的东西——版本记录挪到这里（原先在 rail 数组里，见
+             config/leftSidebarPlugins.js 的 VERSION_PLUGIN），视觉上放在项目成员
+             与暂存区之间。 -->
+
+        <!-- Version History -->
+        <view
+          class="rail-btn"
+          :class="{ active: leftPaneKey === 'version' && !sidebarCollapsed }"
+          :title="VERSION_PLUGIN.label"
+          @tap="toggleLeftPane('version')"
+        >
+          <view class="rail-icon-wrapper">
+            <svg class="rail-icon-svg" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path v-for="(path, idx) in VERSION_PLUGIN.svgPaths" :key="idx" :d="path.d" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="rail-icon-path" />
+            </svg>
+          </view>
+        </view>
 
         <!-- Project Members Stack -->
         <view class="rail-members-container" v-if="projectMembers && projectMembers.length > 0">
@@ -323,7 +340,7 @@
                       }"
                    >
                       <image v-if="member.avatarUrl" :src="member.avatarUrl" class="avatar-img" />
-                      <view v-else class="avatar-placeholder">{{ member.displayName?.charAt(0) || 'U' }}</view>
+                      <view v-else class="avatar-placeholder">{{ getInitial(member.displayName) || 'U' }}</view>
                    </view>
               </view>
 
@@ -338,7 +355,7 @@
                                    <view class="member-avatar-wrapper">
                                      <image v-if="member.avatarUrl" :src="member.avatarUrl" class="member-avatar-grid" />
                                      <view v-else class="member-avatar-placeholder-grid" :class="{ 'is-client': member.role === 'CLIENT' }">
-                                       {{ member.role === 'CLIENT' ? $t('workbench.clientInitial') : (member.displayName?.charAt(0) || 'U') }}
+                                       {{ member.role === 'CLIENT' ? $t('workbench.clientInitial') : (getInitial(member.displayName) || 'U') }}
                                      </view>
                                    </view>
                               </view>
@@ -409,35 +426,6 @@
     <view class="recording-toast" :class="{ visible: showRecordingToast }">
       <text>{{ recordingToastMessage }}</text>
     </view>
-
-      <!-- Assistant Config Dialog Overlay (Moved to Root) -->
-      <view v-if="showAssistantConfigDialog" class="dialog-overlay" style="z-index: 9999;" @tap="closeAssistantConfigDialog">
-         <view class="config-dialog" @tap.stop>
-            <view class="dialog-header">
-               <text class="dialog-title">{{ $t('workbench.configAssistant') }}</text>
-               <text class="dialog-close" @tap="closeAssistantConfigDialog">×</text>
-            </view>
-            <view class="dialog-content">
-               <view class="form-item">
-                  <text class="label">{{ $t('workbench.assistantNameLabel') }}</text>
-                  <input class="input readonly" :value="editingAssistant.name" disabled />
-               </view>
-               <view class="form-item">
-                  <text class="label">{{ $t('workbench.presetPromptLabel') }}</text>
-                  <textarea class="textarea readonly" :value="editingAssistant.systemPrompt" disabled></textarea>
-               </view>
-               <view class="form-item">
-                  <text class="label">{{ $t('workbench.userPromptLabel') }}</text>
-                  <textarea class="textarea" v-model="editingAssistant.userPrompt" :placeholder="$t('workbench.userPromptPlaceholder')"></textarea>
-                  <text class="hint">{{ $t('workbench.userPromptHint') }}</text>
-               </view>
-            </view>
-            <view class="dialog-footer">
-               <button class="btn-cancel" @tap="closeAssistantConfigDialog">{{ $t('common.cancel') }}</button>
-               <button class="btn-save" @tap="saveAssistantConfig">{{ $t('common.save') }}</button>
-            </view>
-         </view>
-      </view>
 
       <!-- 左侧文件树（可收起） -->
       <view class="sidebar-left" ref="sidebarLeft" :class="{ collapsed: sidebarCollapsed }" :style="{ width: sidebarCollapsed ? '0px' : sidebarWidth + 'px' }">
@@ -920,6 +908,13 @@
                       :initial-nav="activeFileLeft.adminNav || ''"
                       :initial-service="activeFileLeft.adminService || ''"
                     />
+                    <!-- 个人中心标签：与 pages/userprofile 薄壳页共用同一个 UserProfilePane
+                         （同上，照插件广场 market-detail 那套 tab 形制）。 -->
+                    <UserProfilePane
+                      v-else-if="activeFileLeft.tabType === 'user-profile'"
+                      :key="activeFileLeft.id"
+                      embedded
+                    />
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
                       :url="activeFileLeft.frontendEntry"
@@ -1028,6 +1023,12 @@
                       embedded
                       :initial-nav="activeFileRight.adminNav || ''"
                       :initial-service="activeFileRight.adminService || ''"
+                    />
+                    <!-- 个人中心标签：见左窗格同名注释 -->
+                    <UserProfilePane
+                      v-else-if="activeFileRight.tabType === 'user-profile'"
+                      :key="activeFileRight.id"
+                      embedded
                     />
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"
@@ -1157,8 +1158,6 @@
               :project-name="project.name"
               :recent-history="chatHistoryList.slice(0, 3)"
               :history-badge="historyBadge"
-              :assistants="assistants"
-              v-model:current-assistant-id="currentAssistantId"
               :active-tab="currentActiveTab"
               :active-tab-pane="focusedPane"
               @close="toggleAiPanel"
@@ -1166,7 +1165,6 @@
               @new-chat="startNewChat"
               @load-history="loadHistoryChat"
               @message-action="handleChatInterfaceAction"
-              @config-assistant="openAssistantConfig"
               @client-action="handleClientAction"
               @refresh-history="fetchChatHistory"
               @menu-state="pushMenuState"
@@ -1550,6 +1548,7 @@ import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
 import MarketDetailPane from '@/components/MarketDetailPane.vue'
 import ProjectHomePane from '@/components/project-home/ProjectHomePane.vue'
 import AdminPane from '@/components/admin/AdminPane.vue'
+import UserProfilePane from '@/components/userprofile/UserProfilePane.vue'
 import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
@@ -1586,7 +1585,6 @@ import {
   getAiHistory,
 
   getAiConversations,
-  getAssistants, // Added
   getPlugins, // Added
   getSkills,
   getFileText,
@@ -1598,11 +1596,13 @@ import {
   bindShareholderMeetingConversation, // 股东大会核查：会话绑定
   getLicenseStatus, // 试用版/正式版标识（含 accountConnected 组合口径）
   getCloudStatus, // 协作 chip：这份案卷有没有放进团队案件库、状态如何
-  checkCloud // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
+  checkCloud, // 协作 chip 的联网刷新（cloudStatus 是不联网的本地快照）
+  getCurrentUser as getCurrentUserApi // 顶栏头像：补一次真实接口，本地缓存只是首屏兜底
 } from '@/services/api.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { loadSiteLinks, siteBaseUrl } from '@/utils/siteLinks.js'
 import { getCurrentUser } from '@/utils/auth.js'
+import { getInitial } from '@/utils/textInitial.js'
 import { recordProjectVisit, getRecentProjectIds, syncRecentToMenuFetching } from '@/utils/recentProjects.js'
 import { markdownToPlainText } from '@/utils/markdownPlain.js'
 import { FILE_BATCH_ACTIONS, FILE_TREE_QUICK_ACTIONS } from '@/config/fileActions.js'
@@ -1610,6 +1610,7 @@ import { WORKBENCH_TOOLS } from '@/config/tools.js'
 import { OCR_ACTION_LABELS, INTERNAL_LINK_SCHEMES, WPS_INTERNAL_HTTP_LINK_BASE } from '@/config/workbenchActions.js'
 import {
   LEFT_SIDEBAR_PLUGINS,
+  VERSION_PLUGIN,
   filterPluginsByEnabledSkills,
   getLeftSidebarPlugin,
   getPluginsForUser,
@@ -1672,6 +1673,7 @@ export default {
     MarketDetailPane,
     ProjectHomePane,
     AdminPane,
+    UserProfilePane,
     CompareDocDialog,
     DocDiffViewer,
     VersionCompareTab,
@@ -1792,11 +1794,6 @@ export default {
       convStatusSnapshot: {},
       unreadConversations: [],
       convStatusPollTimer: null,
-      showAssistantMenu: false,
-      currentAssistantId: 'default',
-      showAssistantConfigDialog: false,
-      editingAssistant: null,
-      assistants: [], // Dynamic now
       selectedContextNode: null, // Picker 中临时选中的节点
       // AI 导出 Word 相关（后端生成 docx）
       showExportDialog: false,
@@ -2015,7 +2012,6 @@ export default {
         this.showOcrOverlay ||
         this.showScreenshotSaveDialog ||
         this.showExportDialog ||
-        this.showAssistantConfigDialog ||
         this.showCompareDialog ||
         this.showFilePicker ||
         this.showInviteModal ||
@@ -2036,6 +2032,11 @@ export default {
       // 宁可多显示一瞬，也不要让用户以为功能没了。
       if (this.enabledSkillIds === null) return base
       return filterPluginsByEnabledSkills(base, this.enabledSkillIds)
+    },
+    // 版本记录 2026-08-19 挪出 rail 数组、独立渲染在「项目成员」与「暂存区」之间，
+    // 模板拿不到裸导入的 VERSION_PLUGIN，包一层 computed 才能在模板里用它的 svgPaths。
+    VERSION_PLUGIN() {
+      return VERSION_PLUGIN
     },
     toolsSearchPlaceholder() {
       if (this.activeToolKey === 'variables') return this.$t('workbench.searchVariables')
@@ -2466,6 +2467,10 @@ export default {
       this.userDisplayName = user.displayName || user.username
       this.currentUser = user
     }
+    // 本地缓存只是首屏兜底：local-mode 免登下 checkba_user 永远为空，头像会
+    // 一直停在首字母占位符。照 project-list.vue 的 loadUserInfo 写法补一次真实接口，
+    // 失败静默回退本地缓存，不阻塞首屏。
+    this.loadRealUserInfo()
 
     // 面板初始化不能挂在登录态上：桌面免登（PR-A 去登录）后本地存储里没有
     // checkba_user，user 为 null——原先整段包在 if (user) 里，进项目左栏永远停在
@@ -2499,7 +2504,6 @@ export default {
     // 登录态下启用剪贴板记录（仅记录本应用能感知到的 paste / 复制按钮）
     this.bindClipboardListener()
 
-    this.loadAssistants() // Fetch assistants
     this.loadDynamicPlugins() // Fetch dynamic plugins
     this.loadEnabledSkills() // 左栏插件位按 skill 启停过滤（诉讼可视化默认不安装）
 
@@ -2913,6 +2917,24 @@ export default {
     'leftFiles.length'() { this.pruneClosedLibreSpares() },
   },
   methods: {
+    // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 getInitial(...) 调用
+    getInitial,
+    // 顶栏头像：本地缓存（getCurrentUser，utils/auth.js）只是首屏兜底，
+    // local-mode 免登下 checkba_user 永远为空。照 project-list.vue:477-490
+    // loadUserInfo 的写法补一次真实接口，成功后与本地缓存合并（接口字段更全），
+    // 失败静默回退本地缓存那份，绝不阻塞首屏、绝不 toast 报错。
+    async loadRealUserInfo() {
+      try {
+        const res = await getCurrentUserApi()
+        if (res && res.code === 0 && res.data) {
+          this.currentUser = { ...this.currentUser, ...res.data }
+          this.userDisplayName = this.currentUser.displayName || this.currentUser.username || this.userDisplayName
+        }
+      } catch (e) {
+        // 拿不到就用本地缓存那份，不拦路
+        console.error('获取用户信息失败:', e)
+      }
+    },
     // 授权标识：桌面端查授权模式与账户连接状态
     // （已连接账户 → 「已连接账户」chip；否则 mode=trial → 「试用版」chip）
     async loadLicenseMode() {
@@ -3458,6 +3480,10 @@ export default {
       // 系统设置 tab：同理常显。它的入口是顶栏头像下拉，不属于任何左栏模式，
       // 被 v-show 藏死的话点了菜单什么也不会发生。
       if (file.tabType === 'admin-settings') {
+        return true
+      }
+      // 个人中心 tab：同理常显，入口同样是顶栏头像下拉。
+      if (file.tabType === 'user-profile') {
         return true
       }
       // 普通文件在资源管理器、搜索或语音模式下都可见（语音合成要在编辑器里
@@ -4199,7 +4225,35 @@ export default {
     },
     goToUserProfile() {
       this.avatarMenuOpen = false
-      uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+      this.openUserProfileTab()
+    },
+    /**
+     * 中栏开「个人中心」标签（单例；任一窗格已开则激活）。照 openSettingsTab 的形制——
+     * 整页跳转会把工作台（标签、编辑器、AI 会话）整个换掉，改个头像/工作记录的代价
+     * 是回来重开一遍文件。pages/userprofile 薄壳页仍在，直链与浏览器端走那条。
+     */
+    openUserProfileTab() {
+      const tabId = 'user-profile'
+      for (const pane of ['left', 'right']) {
+        const list = pane === 'left' ? this.leftFiles : this.rightFiles
+        const existing = list.find(f => f.id === tabId)
+        if (existing) {
+          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
+          this.focusedPane = pane
+          this.$nextTick(() => this.triggerWorkbenchResize())
+          return
+        }
+      }
+      const targetPane = this.splitMode ? this.focusedPane : 'left'
+      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
+      list.push({
+        id: tabId,
+        tabType: 'user-profile',
+        name: this.$t('workbench.profile'),
+      })
+      this[targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = tabId
+      this.focusedPane = targetPane
+      this.$nextTick(() => this.triggerWorkbenchResize())
     },
     /**
      * 系统设置：中栏开标签，不再整页跳转（2026-08-19）。
@@ -4964,24 +5018,6 @@ export default {
        }
        this.pastedImages = [] // Clear images too
     },
-    async loadAssistants() {
-      try {
-          const list = await getAssistants()
-          if (Array.isArray(list) && list.length > 0) {
-              this.assistants = list
-          } else {
-              // Fallback default if needed, or keep empty
-              this.assistants = [
-                  { id: 'default', name: this.$t('workbench.defaultAssistantName'), systemPrompt: this.$t('workbench.defaultAssistantPrompt') }
-              ]
-          }
-      } catch (e) {
-          console.error('Failed to load assistants', e)
-          this.assistants = [
-              { id: 'default', name: this.$t('workbench.defaultAssistantName'), systemPrompt: this.$t('workbench.defaultAssistantPrompt') }
-          ]
-      }
-  },
     async loadDynamicPlugins() {
       try {
         const res = await getPlugins()
@@ -5307,50 +5343,6 @@ export default {
         if (chat.runStatus === 'ERROR') return this.$t('workbench.statusError')
         if (chat.unread) return this.$t('workbench.statusDone')
         return ''
-    },
-    toggleAssistantMenu() {
-        this.showAssistantMenu = !this.showAssistantMenu
-    },
-    switchAssistant(id) {
-        this.currentAssistantId = id
-        this.showAssistantMenu = false
-        const ast = this.assistants.find(a => a.id === id)
-        if (ast) {
-             uni.showToast({ title: this.$t('workbench.assistantSwitchedToast', { name: ast.name }), icon: 'none' })
-             // Inject system prompt notification (hidden or visible)
-             this.aiMessages.push({
-                 id: Date.now(),
-                 role: 'system', // Display as special notice
-                 content: this.$t('workbench.assistantSwitchedMsg', { name: ast.name })
-             })
-        }
-    },
-    // Helper for icons
-    getAssistantIcon(id) {
-        // User requested to remove emoji icons
-        return ''
-    },
-    openAssistantConfig(assistant) {
-        if (!assistant) return
-        this.editingAssistant = JSON.parse(JSON.stringify(assistant)) // Deep copy
-        this.showAssistantMenu = false // Close menu when opening dialog
-        this.showAssistantConfigDialog = true
-    },
-    closeAssistantConfigDialog() {
-        this.showAssistantConfigDialog = false
-        this.editingAssistant = null
-    },
-    saveAssistantConfig() {
-        if (!this.editingAssistant) return
-
-        // Update local list
-        const idx = this.assistants.findIndex(a => a.id === this.editingAssistant.id)
-        if (idx !== -1) {
-             this.assistants.splice(idx, 1, this.editingAssistant)
-             // Sync to backend would happen here
-             uni.showToast({ title: this.$t('workbench.configSaved'), icon: 'success' })
-        }
-        this.closeAssistantConfigDialog()
     },
   }
 }

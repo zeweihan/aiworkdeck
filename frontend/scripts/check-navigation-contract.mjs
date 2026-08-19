@@ -269,25 +269,29 @@ check('项目列表页别把裸数组当信封解', () => {
 })
 
 // ==================== 个人中心瘦身 ====================
+// 2026-08-19 起个人中心内容本体已搬进 components/userprofile/UserProfilePane.vue
+// （工作台中栏标签 + pages/userprofile 薄壳页共用同一份，照 AdminPane 的先例）。
+// 下面五条断言的目标文件跟着搬——断言强度不变，只是内容不再长在薄壳页里。
 
 check('个人中心默认 tab 不再是被搬走的 projects', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
+  const src = readVue('src/components/userprofile/UserProfilePane.vue')
   if (!/activeTab:\s*'work_log'/.test(src)) return "activeTab 默认值必须是 'work_log'"
   if (/key:\s*'projects'/.test(src)) return 'tabs 数组里还留着 projects 项'
   return null
 })
 
 check('个人中心默认 tab 有人给它加载数据', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
-  // 工作记录是懒加载的（只在 switchTab 里触发），默认落它就必须在 onLoad 里补一次
-  const onLoad = src.slice(src.indexOf('onLoad()'), src.indexOf('methods:'))
-  return onLoad.includes('this.loadActivityLogs()')
+  const src = readVue('src/components/userprofile/UserProfilePane.vue')
+  // 工作记录是懒加载的（只在 switchTab 里触发），默认落它就必须在 mounted 里补一次
+  // （原页面 onLoad() 已随薄壳化改成组件的 mounted()）
+  const mounted = src.slice(src.indexOf('mounted()'), src.indexOf('methods:'))
+  return mounted.includes('this.loadActivityLogs()')
     ? null
-    : 'onLoad 里没有 loadActivityLogs()，默认 tab 会永远空白'
+    : 'mounted 里没有 loadActivityLogs()，默认 tab 会永远空白'
 })
 
 check('个人中心已清空项目相关的模板与方法', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
+  const src = readVue('src/components/userprofile/UserProfilePane.vue')
   const left = [
     'project-item-card', 'panel-projects', 'projects-stats-row',
     'loadProjects', 'goToProject', 'handleDeleteProject', 'confirmRename',
@@ -297,14 +301,14 @@ check('个人中心已清空项目相关的模板与方法', () => {
 })
 
 check('个人中心已摘掉被搬迁搞成孤儿的导入', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
+  const src = readVue('src/components/userprofile/UserProfilePane.vue')
   const orphan = ['getMyProjects', 'deleteProject', 'renameProject', 'getProjectMembers', 'removeProjectMember', 'getProjectTypeLabel']
     .filter((s) => src.includes(s))
   return orphan.length ? '孤儿导入: ' + orphan.join(', ') : null
 })
 
 check('个人中心保住了不该删的东西', () => {
-  const src = readVue('src/pages/userprofile/userprofile.vue')
+  const src = readVue('src/components/userprofile/UserProfilePane.vue')
   const gone = ['formatTime(', 'formatDateTime(', '.role-text', '.empty-icon', 'loadActivityLogs', 'loadFavorites', 'addProjectMember', 'inviteClient']
     .filter((s) => !src.includes(s))
   return gone.length ? '误删: ' + gone.join(', ') : null
@@ -377,13 +381,15 @@ check('工作台「全部项目」用 reLaunch 去项目列表页', () => {
   return null
 })
 
-check('工作台 rail 头像仍 navigateTo 个人中心（不许顺手改）', () => {
+check('顶栏头像「个人中心」中栏开标签，不再整页跳转（2026-08-19 新契约）', () => {
+  // 与「系统设置」同款改造：整页 navigateTo 会把工作台（标签、编辑器、AI 会话）
+  // 整个换掉，回来还要重开一遍文件。goToUserProfile 现在薄转发到 openUserProfileTab，
+  // 真正开标签的逻辑照 openSettingsTab 的形制单独测；这里只守「不许再退回 navigateTo」。
   const src = readVue('src/pages/project-overview/project-overview.vue')
   const body = extractMethodBody(src, 'goToUserProfile()')
   if (!body) return '找不到 goToUserProfile'
-  if (!body.includes(USERPROFILE_ROUTE) || !body.includes('navigateTo')) {
-    return '它依赖页面栈保留实例以便 onShow 回流刷新，本次不改'
-  }
+  if (!body.includes('openUserProfileTab')) return 'goToUserProfile 必须转发到 openUserProfileTab'
+  if (body.includes('navigateTo')) return 'goToUserProfile 不应再直接 navigateTo（个人中心已标签化）'
   return null
 })
 
@@ -436,6 +442,30 @@ check('pages/admin 薄壳页仍在，且把 query 透给 AdminPane', () => {
   if (!src.includes('query.nav') || !src.includes('query.service')) {
     return '薄壳页没有透传 ?nav= / ?service=，仓里十来处深链会全部落在默认面板上'
   }
+  return null
+})
+
+check('个人中心在工作台里是中栏标签，不是跳页（同系统设置形制）', () => {
+  const src = readVue('src/pages/project-overview/project-overview.vue')
+  const body = extractMethodBody(src, 'goToUserProfile()')
+  if (!body) return '找不到 goToUserProfile'
+  if (body.includes(USERPROFILE_ROUTE)) {
+    return '不许再跳独立页：那等于把整个工作台（标签、编辑器、AI 会话）换成一页个人中心'
+  }
+  if (!body.includes('openUserProfileTab')) return '应当调 openUserProfileTab() 开中栏标签'
+  const tab = extractMethodBody(src, 'openUserProfileTab()')
+  if (!tab) return '缺 openUserProfileTab()'
+  if (!tab.includes("tabType: 'user-profile'")) return '标签没有带 tabType: user-profile'
+  const vis = extractMethodBody(src, 'isTabVisible(file) {')
+  if (!vis || !vis.includes("file.tabType === 'user-profile'")) {
+    return "isTabVisible 没放行 user-profile 标签，点菜单会开一个被 v-show 藏死的标签"
+  }
+  return null
+})
+
+check('pages/userprofile 薄壳页仍在，且挂了 UserProfilePane', () => {
+  const src = readVue('src/pages/userprofile/userprofile.vue')
+  if (!src.includes('<UserProfilePane')) return '薄壳页没有挂 UserProfilePane'
   return null
 })
 

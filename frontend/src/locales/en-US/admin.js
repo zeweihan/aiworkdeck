@@ -95,26 +95,6 @@ export default {
   serverAddressLabel: 'Server Address',
   modelNameLabel: 'Model Name',
   ollamaModelPlaceholder: 'e.g. qwen3-vl:8b',
-  assistantMgmtTitle: 'AI Assistant Management',
-  addAssistantButton: '+ New Assistant',
-  edit: 'Edit',
-  noDescription: 'No description yet',
-
-  // Assistant modal
-  editAssistantTitle: 'Edit Assistant',
-  newAssistantTitle: 'New Assistant',
-  assistantIdLabel: 'ID (unique identifier)',
-  assistantIdPlaceholder: 'e.g. code-reviewer',
-  assistantNameLabel: 'Assistant Name',
-  assistantNamePlaceholder: 'e.g. Code Review Expert',
-  descriptionLabel: 'Description',
-  assistantDescPlaceholder: 'Briefly describe what it does',
-  systemPromptLabel: 'System Prompt',
-  systemPromptPlaceholder: "Define the assistant's role and behavior...",
-  confirmDeleteTitle: 'Confirm Deletion',
-  confirmDeleteAssistant: 'Delete this assistant?',
-  idNameRequired: 'ID and name cannot be empty',
-  idExists: 'ID already exists',
 
   // Current site
   siteSectionTitle: 'Current Site',

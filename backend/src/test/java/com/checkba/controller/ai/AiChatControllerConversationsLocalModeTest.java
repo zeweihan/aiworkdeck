@@ -66,7 +66,6 @@ class AiChatControllerConversationsLocalModeTest {
         when(agentRunStateService.statusName(any())).thenReturn(null);
 
         AiChatController controller = new AiChatController(
-                mock(com.checkba.service.ai.AiAssistantService.class),
                 projectAiMessageService,
                 mock(com.checkba.service.ai.AiDocxExportService.class),
                 mock(com.checkba.service.ai.ChatModelFactory.class),

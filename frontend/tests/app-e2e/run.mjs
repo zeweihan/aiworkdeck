@@ -756,6 +756,17 @@ try {
       if (!t.includes(s)) throw new Error('头像下拉里缺「' + s + '」')
     }
   })
+  await step('点「个人中心」开中栏标签而不是跳页（2026-08-19 前是整页 navigateTo）', async () => {
+    await mouseClickSel('.avatar-btn')
+    await page.waitForSelector('.avatar-menu', { timeout: 8000 })
+    await mouseClickText('个人中心')
+    await page.waitForSelector('.page-userprofile.is-embedded', { timeout: 15000 })
+    const h = await page.evaluate(() => location.hash)
+    if (h.includes('pages/userprofile/userprofile')) throw new Error('个人中心又变回整页跳转了')
+    await waitText('工作记录', 10000)
+    // 关掉这个标签，别把后面的旅程都压在个人中心页上
+    await mouseClickSel('.tab-item.active .tab-close')
+  })
   await step('点「系统设置」开中栏标签而不是跳页', async () => {
     await mouseClickText('系统设置')
     await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
@@ -1057,7 +1068,7 @@ try {
 
   // ============ J8 API 烟测 ============
   console.log('== J8 API 烟测 ==')
-  for (const ep of ['/api/projects/my', '/api/ai/assistants', '/api/ai/config', '/api/skills/list',
+  for (const ep of ['/api/projects/my', '/api/ai/config', '/api/skills/list',
     '/api/plugins/list', '/api/sensitive/options', '/api/variables/user', '/api/favorites/my', '/api/auth/me']) {
     await step('GET ' + ep, async () => {
       const r = await fetch(BACKEND + ep, { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })

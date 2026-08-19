@@ -62,17 +62,30 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 2026-08-19 起「项目概览」与「插件中心」也收进了数组——它们走的都是普通的
 `toggleLeftPane` 语义，单独硬编码成 rail 按钮只会让顺序有两个出处。
 当前顺序：**home(项目概览) → files(资源管理器) → search(搜索) → market(插件中心) →
-voice(语音) → desensitize(文件脱敏) → litigation-visual(门控) → version(版本)**。
-rail 底部（spacer 之后由模板单独渲染）只剩暂存区与成员堆叠。
+voice(语音) → desensitize(文件脱敏) → litigation-visual(门控)**。
+**版本记录同一天又挪出了这个数组**（一进一出）：维护者认为它视觉上该挨着
+「暂存区」（都是围绕本机改动/存档的动作），不该跟文件树/搜索这类常驻浏览面板
+混排。定义照 `DD_FILES_PLUGIN` 的先例独立导出成 `VERSION_PLUGIN`，进
+`OFF_RAIL_PLUGINS`（`getLeftSidebarPlugin('version')` 与 `leftPaneTitle` 兜底照常能查到），
+rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版本记录 → 成员堆叠**三项，
+版本记录夹在中间；`toggleLeftPane('version')` 语义、面板本身一行未动。
 
 - **home（项目概览）**：内容是 `components/project-home/ProjectHomePane.vue`，传 `compact`。
   此前它是中栏标签（`tabType:'project-home'`），维护者认为「rail 点了开中栏标签」
   与 rail 其余每一项的语义不一致——**`openProjectHomeTab` / `isProjectHomeTabActive`
   已删，`isTabVisible` 里那条 project-home 分支也没了**。顶栏切换器的 `.switcher-home`
   与 rail 第一个按钮是同一个动作（`goProjectHome` → `toggleLeftPane('home')`）。
-  窄栏样式在 `project-home-pane.scss` 的 `.is-compact`：子组件的
-  `.profile-field`(min-width 180) 与 `.stat-tile`(140) **必须靠 `:deep()` 归零**，
-  否则 260px 的左栏里横向溢出。
+  **密度机制已改成容器查询三档断点**（前序改动，此前的静态 `.is-compact`
+  布尔值 + 子组件 `.profile-field`/`.stat-tile` 靠 `:deep()` 强制归零 min-width
+  的写法已作废，仓里搜不到那些 `:deep()` 覆盖了）：`project-home-pane.scss` 给
+  `.project-home-pane` 开 `container-type: inline-size; container-name: home-pane`，
+  `.is-compact` 现在只管「哪个宿主」的结构性差异（左栏铺满 vs 独立页居中卷轴），
+  真正的密度/字号/间距按 `@container home-pane` 的实际渲染宽度分三档——
+  微窄 `≤359px`（单列最紧凑）/ 窄中 `360~559px`（两列起步，拖左栏最常落的区间）/
+  常规 `>560px`（不写规则，落回默认宽松样式）。子组件（`ProfileHeader.vue`、
+  `OverviewStatsBar.vue` 等）各自在自己的 scoped 样式里跟着同一个 `home-pane`
+  容器写断点，不再需要外壳 `:deep()` 穿透。两个宿主（工作台左栏、`project-home`
+  独立页）共用同一套断点，独立页正常宽度下天然落在「常规」档。
 - **voice（语音）**：语音合成 + 会议录音的合并入口。宿主是 `project-overview.vue`
   模板里一段内联的 `.voice-pane`（tab 条 + v-if），**两个面板组件本身一行没改**
   （不做包装组件是为了免掉五个事件的转发与 check:emits 的连带风险）。
@@ -108,7 +121,14 @@ rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活�
 `.header-account` 挂在 `isClientView` 分支**之外**（rail 那个头像本来就对客户渲染），
 「系统设置」那一项才 `v-if="!isClientView"`。
 
-- **个人中心**：`goToUserProfile` 仍是 `uni.navigateTo`，一个字没改（check:nav 有断言守着）。
+- **个人中心**（2026-08-19 二改）：`goToUserProfile` 从 `uni.navigateTo` 改薄转发到
+  `openUserProfileTab()`——与「系统设置」同一套形制，中栏开单例标签
+  （`tabType:'user-profile'`、`isTabVisible` 常显、直接 push 进 leftFiles 绕过
+  `isFileTypeSupported`）。`check-navigation-contract.mjs` 的断言跟着倒转：现在守的是
+  「必须调 openUserProfileTab 且不许再 navigateTo」，不是反过来。**`pages/admin/admin.vue`
+  内部设置页链到个人中心的那条 `goToUserProfile`（AdminPane.vue 自己的方法，走的是
+  设置页 ⇄ 个人中心互跳，embedded 下 navigateTo / 非 embedded 下 redirectTo）没有动**——
+  它是另一个入口，与顶栏头像下拉的这条各自独立。
 - **系统设置**：`goToSystemSettings(opts)` → `openSettingsTab(opts)`，中栏开单例标签
   （`tabType:'admin-settings'`、`isTabVisible` 常显、直接 push 进 leftFiles 绕过
   `isFileTypeSupported`——与 market-detail / 浏览器 tab 同法）。整页跳转会把标签、
@@ -135,6 +155,19 @@ root 加 `is-embedded` class、`goToUserProfile` 在 embedded 下改 navigateTo
 仓里十来处 `navigateTo '/pages/admin/admin?nav=...'`（MarketPane / MarketDetailPane /
 MarketSidebarPanel / CloudAcceptDialog / userprofile / api.js 的 401 兜底）
 **全部原样保留**，它们走薄壳页那条路。
+
+**个人中心同一天照抄了这套搬法**：实体抽成 `frontend/src/components/userprofile/UserProfilePane.vue`
+（931 行整体搬移），`pages/userprofile/userprofile.vue` 退成几行薄壳，只挂
+`<UserProfilePane />`（没有 query 要转，个人中心不吃深链参数）。搬移改了四处：
+`onLoad()`→`mounted()`、新增 `embedded` prop 与 `is-embedded` class、
+`host.browser.setViewsVisible({visible:false})` 只在非 embedded 时调用（embedded 时
+工作台自有 `desktopOverlayActive` watcher 管 BrowserView 显隐，照抄会把用户开着的
+浏览器标签隐藏掉）、「返回项目列表」出口（`goBackToList`）embedded 下不渲染（标签
+靠自身关闭按钮退出，没有页面栈可退）。原页面没有 `onUnload`，新增的 `beforeUnmount()`
+只清两个绑定验证码的倒计时定时器（标签常驻工作台不会像整页那样随导航销毁重建）。
+仓里既有的 `navigateTo '/pages/userprofile/userprofile'`（AdminPane 自己的
+`goToUserProfile`、项目列表页 `goToUserProfile`、应用菜单 `appMenuBridge.js` 的
+`case 'openAccount'`）**全部原样保留**，走薄壳页那条路。
 
 ## 协作入口（PR-E，2026-08-06）
 

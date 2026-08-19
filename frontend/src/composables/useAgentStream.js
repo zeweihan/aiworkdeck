@@ -391,7 +391,7 @@ export function useAgentStream() {
     // 缺省 null 时行为与此前完全一致。
     // skillIds（可选）：用户在面板里主动选择的 Skill，本轮强制生效（与触发词自动命中取并集）。
     // 无状态——每次请求都要带，后端不持久化。
-    const sendMessage = async ({ prompt, displayText = '', contentHtml = '', fileList = [], projectId, modelId = 'default', assistantId, mode = 'AGENT', activeContext = null, skillIds = [], _userImages = [], _userContextFiles = [] }) => {
+    const sendMessage = async ({ prompt, displayText = '', contentHtml = '', fileList = [], projectId, modelId = 'default', mode = 'AGENT', activeContext = null, skillIds = [], _userImages = [], _userContextFiles = [] }) => {
         // 防重入：流式进行中再触发发送（回车/连点）会产生重复气泡和并发请求。
         // 必须给用户可见反馈——静默吞掉就是"点了发送什么都没发生"（F-07）
         if (isStreaming.value) {

@@ -148,7 +148,10 @@ public class AdminConfigController {
     // 唯一读者是已删的 AiChatService，且它按模型名字符串而非 provider 选 key，
     // 对四条通道本来就全部失效。今天真正生效的 system prompt 由 ContextAssemblerService 拼装，
     // provider 无关、admin 无入口。
-    private static final String KEY_AI_ASSISTANTS = "ai.assistants";
+    // ai.assistants 键（KEY_AI_ASSISTANTS）已随「智慧助手」功能整体移除（2026-08-19）：
+    // 该功能从未真正生效——assistantId 在前端组装 payload 时就被丢弃，后端从不消费；
+    // 生产库里只有四条从未被真配置过的远古脚手架默认值。system_setting 里遗留的
+    // ai.assistants 行不清理，反正不读不写即废弃。
     // 三个模型选择键：留空一律表示「跟随内置默认」（工厂侧空白视为未配置，回退 yml）。
     // ai.subagentModel 留空是「继承 ai.auxModel」，不是「继承主会话模型」。
     private static final String KEY_AI_DEFAULT_MODEL = "ai.defaultModel";
@@ -326,19 +329,6 @@ public class AdminConfigController {
                         : "");
         ai.setCrossBorderNoticeVersion(CROSS_BORDER_NOTICE_VERSION);
 
-
-        // Assistants logic: DB only, no fallback
-        String assistantsJson = systemSettingService.get(KEY_AI_ASSISTANTS, null);
-        if (assistantsJson != null && !assistantsJson.isBlank()) {
-            try {
-                List<com.checkba.model.ai.AiAssistantConfig> list = objectMapper.readValue(assistantsJson, new com.fasterxml.jackson.core.type.TypeReference<List<com.checkba.model.ai.AiAssistantConfig>>() {});
-                ai.setAssistants(list);
-            } catch (Exception e) {
-                // Log error but return empty list (or handle appropriately)
-                e.printStackTrace();
-            }
-        }
-
         resp.setAi(ai);
 
         return ResponseEntity.ok(resp);
@@ -434,7 +424,7 @@ public class AdminConfigController {
      * 「把某个字段清空」这个操作从此需要显式空串（前端传 {@code ""} 而不是不传/传 null）。
      * 这是刻意的取舍——静默清掉别人的配置比少一个清空动作危险得多。
      *
-     * @throws IllegalArgumentException assistants 序列化失败、模型 id 不在白名单、
+     * @throws IllegalArgumentException 模型 id 不在白名单、
      *                                  或网络区域取值非法时抛出（调用方转 400）
      */
     static Map<String, String> toSettingsUpdates(AdminConfigUpdateRequest request,
@@ -530,14 +520,6 @@ public class AdminConfigController {
             // Ollama 的地址与模型名是自由文本：本地模型名不在白名单内（白名单是 OpenRouter 的目录）
             putIfPresent(updates, KEY_AI_OLLAMA_BASE_URL, ai.getOllamaBaseUrl());
             putIfPresent(updates, KEY_AI_OLLAMA_MODEL_NAME, ai.getOllamaModelName());
-            if (ai.getAssistants() != null) {
-                try {
-                    String json = objectMapper.writeValueAsString(ai.getAssistants());
-                    updates.put(KEY_AI_ASSISTANTS, json);
-                } catch (Exception e) {
-                    throw new IllegalArgumentException("Assistants JSON serialization failed", e);
-                }
-            }
         }
 
         return updates;
@@ -824,7 +806,6 @@ public class AdminConfigController {
         private String networkRegion;
         private String ollamaBaseUrl;
         private String ollamaModelName;
-        private List<com.checkba.model.ai.AiAssistantConfig> assistants;
         /** 读：已同意的时间戳（空 = 未同意）。写：本次是否勾选了跨境同意 */
         private String crossBorderConsentAt;
         private Boolean crossBorderConsent;
@@ -851,8 +832,6 @@ public class AdminConfigController {
         public void setCrossBorderConsent(Boolean crossBorderConsent) { this.crossBorderConsent = crossBorderConsent; }
         public String getCrossBorderNoticeVersion() { return crossBorderNoticeVersion; }
         public void setCrossBorderNoticeVersion(String crossBorderNoticeVersion) { this.crossBorderNoticeVersion = crossBorderNoticeVersion; }
-        public List<com.checkba.model.ai.AiAssistantConfig> getAssistants() { return assistants; }
-        public void setAssistants(List<com.checkba.model.ai.AiAssistantConfig> assistants) { this.assistants = assistants; }
     }
 
     public static class UserSummary {

@@ -544,14 +544,6 @@ export function probeLocalAsr() {
   });
 }
 
-// 获取可用 AI 助手列表
-export function getAssistants() {
-  return request({
-    url: '/api/ai/assistants',
-    method: 'GET'
-  });
-}
-
 // 获取插件列表
 export function getPlugins() {
   return request({

@@ -95,26 +95,6 @@ export default {
   serverAddressLabel: '服务地址',
   modelNameLabel: '模型名称',
   ollamaModelPlaceholder: '例如：qwen3-vl:8b',
-  assistantMgmtTitle: 'AI 助手管理',
-  addAssistantButton: '+ 新增助手',
-  edit: '编辑',
-  noDescription: '暂无描述',
-
-  // 助手弹窗
-  editAssistantTitle: '编辑助手',
-  newAssistantTitle: '新增助手',
-  assistantIdLabel: 'ID (唯一标识)',
-  assistantIdPlaceholder: '例如: code-reviewer',
-  assistantNameLabel: '助手名称',
-  assistantNamePlaceholder: '例如: 代码评审专家',
-  descriptionLabel: '描述',
-  assistantDescPlaceholder: '简短描述功能',
-  systemPromptLabel: '系统提示词',
-  systemPromptPlaceholder: '设定助手的角色和行为...',
-  confirmDeleteTitle: '确认删除',
-  confirmDeleteAssistant: '确定要删除这个助手吗？',
-  idNameRequired: 'ID和名称不能为空',
-  idExists: 'ID 已存在',
 
   // 当前站点
   siteSectionTitle: '当前站点',

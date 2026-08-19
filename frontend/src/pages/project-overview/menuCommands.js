@@ -65,7 +65,12 @@ export const menuCommandsMethods = {
       role: this.isClientView ? 'CLIENT' : 'LAWYER',
       projectId: (this.project && this.project.id) || null,
       activeView: this.sidebarCollapsed ? null : this.leftPaneKey,
-      views: (this.LEFT_SIDEBAR_PLUGINS || []).map((p) => ({ key: p.key, label: p.label })),
+      // 版本记录 2026-08-19 挪出 LEFT_SIDEBAR_PLUGINS 数组、独立渲染在 rail 底部
+      // （config/leftSidebarPlugins.js 的 VERSION_PLUGIN），命令面板「跳转到面板」
+      // 要手动把它补回来，否则版本记录会从这份清单里消失。
+      views: (this.LEFT_SIDEBAR_PLUGINS || [])
+        .map((p) => ({ key: p.key, label: p.label }))
+        .concat(this.VERSION_PLUGIN ? [{ key: this.VERSION_PLUGIN.key, label: this.VERSION_PLUGIN.label }] : []),
       flags: this.buildMenuFlags(),
     })
     // Windows 自绘菜单栏读的是同一份快照，状态推完让它重建一次。

@@ -57,13 +57,6 @@ export default {
   // 「语音」面板内部的两个 tab
   voiceTts: '语音合成',
   voiceRecorder: '会议录音',
-  // 助手配置弹窗
-  configAssistant: '配置助手',
-  assistantNameLabel: '助手名称 (System)',
-  presetPromptLabel: '预设 Prompt (System)',
-  userPromptLabel: '用户自定义 Prompt',
-  userPromptPlaceholder: '输入自定义指令...',
-  userPromptHint: '注意：如果设置了自定义 Prompt，预设 Prompt 将被忽略（User Prompt Prevails）。',
   // 左栏文件树工具行
   selectAll: '选择全部',
   newDoc: '新建文档',
@@ -215,9 +208,4 @@ export default {
   folderTooManyFiles: '文件夹含{count}个文件(超出10个限制)，请减少数量',
   fileAdded: '已添加: {name}',
   noDragData: '未获取到拖拽数据',
-  defaultAssistantName: '默认助手',
-  defaultAssistantPrompt: '你是一个专业的助手。',
-  assistantSwitchedToast: '已切换为：{name}',
-  assistantSwitchedMsg: '助手切换为：{name}',
-  configSaved: '配置已保存',
 }

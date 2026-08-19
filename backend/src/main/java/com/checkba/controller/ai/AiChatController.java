@@ -4,7 +4,6 @@ import com.checkba.controller.AuthController;
 import com.checkba.service.LangText;
 import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ai.AiDocxExportService;
-import com.checkba.service.ai.AiAssistantService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.util.StringUtils;
@@ -12,7 +11,7 @@ import org.springframework.util.StringUtils;
 import java.util.Map;
 
 /**
- * AI Chat 周边 HTTP 接入层（历史会话、助手清单、公共配置、导出 Word）。
+ * AI Chat 周边 HTTP 接入层（历史会话、公共配置、导出 Word）。
  *
  * 只负责 HTTP 出入口、鉴权（session → userId）与 DTO 定义。
  *
@@ -21,6 +20,10 @@ import java.util.Map;
  * 换成 ChatInterface 组件后模板里已无任何绑定，且请求体还漏传了 contexts 与
  * assistantId——即双重死代码，本次供应商体系改造中一并移除，连带 AiChatService、
  * MultiModalContentService 与两个 Gemini 类。
+ *
+ * 「智慧助手」（GET /assistants，AiAssistantConfig/AiAssistantService）已于
+ * 2026-08-19 整体移除：assistantId 在前端组装 payload 时就被丢弃，后端从不消费，
+ * 生产库 ai.assistants 只有四条从未被真配置过的远古脚手架默认值。
  */
 @RestController
 @RequestMapping("/api/ai")
@@ -28,7 +31,6 @@ public class AiChatController {
 
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(AiChatController.class);
 
-    private final AiAssistantService aiAssistantService;
     private final ProjectAiMessageService projectAiMessageService;
     private final AiDocxExportService aiDocxExportService;
     private final com.checkba.service.ai.ChatModelFactory chatModelFactory;
@@ -38,7 +40,6 @@ public class AiChatController {
     private final com.checkba.service.ai.PlatformAiChannel platformAiChannel;
 
     public AiChatController(
-            AiAssistantService aiAssistantService,
             ProjectAiMessageService projectAiMessageService,
             AiDocxExportService aiDocxExportService,
             com.checkba.service.ai.ChatModelFactory chatModelFactory,
@@ -46,7 +47,6 @@ public class AiChatController {
             com.checkba.repository.TokenUsageRepository tokenUsageRepository,
             com.checkba.service.ai.AgentRunStateService agentRunStateService,
             com.checkba.service.ai.PlatformAiChannel platformAiChannel) {
-        this.aiAssistantService = aiAssistantService;
         this.projectAiMessageService = projectAiMessageService;
         this.aiDocxExportService = aiDocxExportService;
         this.chatModelFactory = chatModelFactory;
@@ -142,11 +142,6 @@ public class AiChatController {
             log.error("Failed to get conversation metadata", e);
             return ResponseEntity.status(500).body("Failed to get metadata: " + e.getMessage());
         }
-    }
-
-    @GetMapping("/assistants")
-    public java.util.Collection<com.checkba.model.ai.AiAssistantConfig> getAssistants() {
-        return aiAssistantService.loadAssistants().values();
     }
 
     /**
