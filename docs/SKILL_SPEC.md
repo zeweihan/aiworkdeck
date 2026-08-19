@@ -72,6 +72,7 @@ output: |
 | `version` | string | 否 | 展示用版本号，自由格式；不参与 id 覆盖判断（覆盖键始终是 `id`）。 |
 | `license` | string | 否 | 许可证标识，如 `MIT`。 |
 | `credits` | string[] | 否 | 随 skill 分发的第三方内容署名（如 vendor 引擎），用于满足 MIT 等许可证的版权声明保留要求；每条一行自由文本，前端原样展示在「详细信息」区。 |
+| `requires_pack` | string | 否 | 该 skill 依赖的原生资源包 id（见 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md)）。声明后 `/api/skills/list` 附带 `packId` 与 `packReady`；广场「安装」会先下载资源包再启用。旧版本应用忽略此字段（未知字段向前兼容），随包内置资源在场时视同就绪、不触发下载。 |
 
 未知字段被忽略（向前兼容）。
 

@@ -1,0 +1,156 @@
+name: Pack Release
+
+# 构建「诉讼可视化」native pack（docs/NATIVE_PACK_DISTRIBUTION.md）并发布到
+# GitHub Release，供 deploy/publish-pack.sh 拉取、签名、推两台镜像。
+#
+# 与 desktop-build.yml 的 tag v* 触发**互不相干**（tag 前缀不同：pack-litigation-visual-v*
+# vs v*），不会互相触发对方的 workflow。
+#
+# 只手动触发（workflow_dispatch）：native pack 不随每次代码改动重发，只在
+# litviz/drawio/graphviz 三者之一真的需要出新版本时才手动跑一次。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'pack 版本号（语义化版本，如 1.0.0；与应用版本号 desktop/package.json 无关）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  PACK_ID: litigation-visual
+
+jobs:
+  # mac：litviz / drawio 是平台无关组件，随便挑一台机器产就行，图省事和
+  # desktop-build.yml 一样放在 macOS runner；graphviz(mac) 也在这台机产。
+  mac:
+    name: Build pack components (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Bake draw.io editor (offline, 裁剪版)
+        run: |
+          # 只需要这一步产出 frontend/dist/drawio 供 build-pack.js 打包；
+          # 不需要 build:h5 / build:zetaoffice——pack 不含前端应用本身。
+          node desktop/scripts/fetch-drawio-assets.js
+          ls -la frontend/dist/drawio/index.html frontend/dist/drawio/js/app.min.js
+      - name: Install graphviz (brew) and prepare mac-arm64 bundle
+        run: |
+          # 同 desktop-build.yml「Bundle graphviz (macOS arm64)」那一步：只要布局引擎，
+          # 不带任何渲染后端，闭包约 4 MB。不传 --from，脚本从 PATH 上找 dot 反推安装根。
+          brew install graphviz
+          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/mac-arm64
+      - name: Build pack (litviz + drawio + graphviz-mac)
+        run: |
+          node desktop/scripts/build-pack.js \
+            --id "$PACK_ID" \
+            --version "${{ inputs.version }}" \
+            --out pack-out/mac \
+            --components litviz,drawio,graphviz
+          ls -la pack-out/mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-mac
+          path: pack-out/mac/*
+          if-no-files-found: error
+
+  # win：graphviz 的 Windows 闭包（19.7 MB，DLL 依赖算不出来）只能在 win 上出，
+  # 见 .claude/agents/litigation-visual.md「已知地雷」。这台机只产这一个组件。
+  win:
+    name: Build pack components (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install graphviz (choco) and prepare win-x64 bundle
+        shell: bash
+        run: |
+          # choco 社区源限流严重，带退避重试（同 desktop-build.yml 那一步）。
+          for attempt in 1 2 3 4 5; do
+            choco install graphviz --no-progress -y && break
+            [ "$attempt" = "5" ] && { echo "choco 重试耗尽"; exit 1; }
+            echo "choco install 第 $attempt 次失败（多半是社区源 503），$((attempt * 30))s 后重试"
+            sleep $((attempt * 30))
+          done
+          # choco 装完不刷新当前 shell 的 PATH；不写 git-bash 风格路径
+          # （Node 在 Windows 上不认，会解析成 C:\c\Program Files\...）。
+          export PATH="/c/Program Files/Graphviz/bin:$PATH"
+          node desktop/scripts/prepare-graphviz.js --out desktop/bundled/win-x64
+      - name: Build pack (graphviz-win only)
+        shell: bash
+        run: |
+          node desktop/scripts/build-pack.js \
+            --id "$PACK_ID" \
+            --version "${{ inputs.version }}" \
+            --out pack-out/win \
+            --components graphviz
+          ls -la pack-out/win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-win
+          path: pack-out/win/*
+          if-no-files-found: error
+
+  # 汇总：合并 mac 与 win 两份半成品 manifest 成一份全量 manifest，连同全部产物
+  # 一起挂上 GitHub Release。manifest 在这里**不签名**——私钥只存在于官网服务器，
+  # 从不进 CI；签名在发布脚本 deploy/publish-pack.sh 的 sign 子命令里，在服务器
+  # 侧用 AWD_PLUGIN_SIGNING_KEY 完成。
+  release:
+    name: Merge manifest and publish GitHub Release
+    needs: [mac, win]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pack-mac
+          path: pack-in/mac
+      - uses: actions/download-artifact@v4
+        with:
+          name: pack-win
+          path: pack-in/win
+      - name: Merge manifest + collect archives
+        run: |
+          mkdir -p pack-out/final
+          node desktop/scripts/build-pack.js \
+            --id "$PACK_ID" \
+            --version "${{ inputs.version }}" \
+            --out pack-out/final \
+            --merge pack-in/mac/manifest.json,pack-in/win/manifest.json
+          # 合并只产出 manifest.json；实际压缩包分散在 mac/win 两份产物里，
+          # 一并收进最终发布目录（manifest.json.sig 有意不在这里生成，见上方注释）。
+          cp pack-in/mac/*.tar.gz pack-out/final/
+          cp pack-in/win/*.tar.gz pack-out/final/
+          echo "=== 最终产物 ==="
+          ls -la pack-out/final
+          echo "=== manifest.json ==="
+          cat pack-out/final/manifest.json
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: pack-${{ env.PACK_ID }}-v${{ inputs.version }}
+          name: 'native pack: ${{ env.PACK_ID }} v${{ inputs.version }}'
+          # 与应用的 v* tag 井水不犯河水（前缀不同），不会触发 desktop-build.yml。
+          body: |
+            native pack `${{ env.PACK_ID }}` v${{ inputs.version }}（未签名产物）。
+
+            发布到镜像前必须先跑：
+            ```
+            bash deploy/publish-pack.sh check   <本地下载目录>
+            bash deploy/publish-pack.sh sign    <本地下载目录>
+            bash deploy/publish-pack.sh publish <本地下载目录> ${{ env.PACK_ID }} ${{ inputs.version }}
+            ```
+          files: |
+            pack-out/final/*.tar.gz
+            pack-out/final/manifest.json
+          generate_release_notes: false

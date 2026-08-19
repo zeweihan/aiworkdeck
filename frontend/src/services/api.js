@@ -664,6 +664,40 @@ export function uninstallMarketSkill(skillId) {
   });
 }
 
+// 原生资源包（native pack）：重资源功能的运行时下载安装，规范见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3
+
+// 查询安装状态（登录即可）：{state, installedVersion, bytesDownloaded, bytesTotal, error}
+export function packStatus(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/status`,
+    method: 'GET'
+  });
+}
+
+// 查询最新版本与总体积（登录即可）：{latestVersion, totalSize}，装前的大小提示用
+export function packInfo(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/info`,
+    method: 'GET'
+  });
+}
+
+// 安装（仅管理员）：后端异步启动下载，已在装则幂等返回当前进度，前端轮询 packStatus 展示
+export function packInstall(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/install`,
+    method: 'POST'
+  });
+}
+
+// 卸载（仅管理员）：删除本机已下载的资源包目录
+export function packUninstall(packId) {
+  return request({
+    url: `/api/packs/${encodeURIComponent(packId)}/uninstall`,
+    method: 'POST'
+  });
+}
+
 /**
  * 将一段 AI 文本（markdown）导出为 Word 文档并落地到项目文件树中（后端生成 docx）
  * payload: { projectId, parentId, fileName, markdown | content }

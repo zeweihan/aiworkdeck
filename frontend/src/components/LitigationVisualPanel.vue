@@ -3,6 +3,21 @@
 
   <!-- 面板标题由外壳的 sidebar-header 统一出，这里不再自画一份（重复两次的老毛病） -->
 
+  <!-- 原生资源包（native pack）状态条：skill 已启用（面板打得开=已启用）但资源
+       还没就绪时显示；ready 或没有 packId（旧后端/自检失败）都不渲染一个字节。
+       见 docs/NATIVE_PACK_DISTRIBUTION.md §5/§7.1。 -->
+  <view class="lv-pack-bar" :class="{ failed: litPackStatus && litPackStatus.state === 'failed' }" v-if="showPackBar">
+    <text class="lv-pack-text">{{ packBarText }}</text>
+    <view
+      v-if="litPackStatus && litPackStatus.state === 'failed'"
+      class="lv-pack-retry"
+      :class="{ disabled: litPackRetrying }"
+      @tap="retryPackInstall"
+    >
+      <text>{{ litPackRetrying ? $t('panels.litPackRetrying') : $t('common.retry') }}</text>
+    </view>
+  </view>
+
   <!-- 环境降级提示。graphviz 缺失只挡流程图一种布局，不能说成整体不可用 -->
   <view class="lv-notice" v-if="status && !status.available">
     <text class="lv-notice-text">{{ status.reason }}</text>
@@ -102,9 +117,14 @@ import {
   getLitigationVisualStatus,
   getLitigationDiagrams,
   restyleLitigationDiagram,
-  getLitigationKickoffPrompt
+  getLitigationKickoffPrompt,
+  packStatus,
+  packInstall
 } from '@/services/api.js'
 import { t } from '@/i18n'
+
+// 这个面板只服务诉讼可视化一个功能，资源包 id 与 skill id 同名，见 skill.yml 的 requires_pack
+const PACK_ID = 'litigation-visual'
 
 // 与引擎的三种视觉模式一一对应（litviz/engine/references/visual-style.md）
 const MODES = ['奇川风', '歸藏风', '白描']
@@ -148,12 +168,32 @@ export default {
       starting: false,
       restylingId: null,
       diagramHint: '',
-      scope: null            // { label, description } —— 由父页面的文件选择器回填
+      scope: null,            // { label, description } —— 由父页面的文件选择器回填
+      // 原生资源包状态条：见 docs/NATIVE_PACK_DISTRIBUTION.md §5/§7.1
+      litPackStatus: null,   // packStatus() 结果 {state, bytesDownloaded, bytesTotal, error}；null=未知/无 pack
+      litPackTimer: null,
+      litPackRetrying: false
     }
   },
   computed: {
     scopeLabel() {
       return this.scope ? this.scope.label : ''
+    },
+    showPackBar() {
+      return !!this.litPackStatus && this.litPackStatus.state !== 'ready'
+    },
+    packBarText() {
+      const s = this.litPackStatus
+      if (!s) return ''
+      if (s.state === 'failed') return s.error || this.$t('panels.litPackFailedText')
+      const total = s.bytesTotal || 0
+      if (total > 0) {
+        return this.$t('panels.litPackDownloadingProgress', {
+          downloaded: ((s.bytesDownloaded || 0) / (1024 * 1024)).toFixed(1),
+          total: (total / (1024 * 1024)).toFixed(1)
+        })
+      }
+      return this.$t('panels.litPackDownloading')
     }
   },
   watch: {
@@ -162,7 +202,50 @@ export default {
       handler() { this.reload() }
     }
   },
+  mounted() {
+    this.refreshPackStatus()
+  },
+  beforeUnmount() {
+    this.stopPackPoll()
+  },
   methods: {
+    // ---- 原生资源包（native pack）状态条 ----
+    async refreshPackStatus() {
+      try {
+        const res = await packStatus(PACK_ID)
+        this.litPackStatus = (res && res.status) || null
+      } catch (e) {
+        // 拉不到状态：旧后端没有这个端点，或本机压根没有这个 pack——按「不渲染」处理
+        this.litPackStatus = null
+        this.stopPackPoll()
+        return
+      }
+      const state = this.litPackStatus && this.litPackStatus.state
+      if (state === 'ready' || state === 'failed') {
+        this.stopPackPoll()
+      } else if (state && !this.litPackTimer) {
+        this.startPackPoll()
+      }
+    },
+    startPackPoll() {
+      this.stopPackPoll()
+      this.litPackTimer = setInterval(() => { this.refreshPackStatus() }, 1000)
+    },
+    stopPackPoll() {
+      if (this.litPackTimer) { clearInterval(this.litPackTimer); this.litPackTimer = null }
+    },
+    async retryPackInstall() {
+      if (this.litPackRetrying) return
+      this.litPackRetrying = true
+      try {
+        await packInstall(PACK_ID)
+        await this.refreshPackStatus()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('panels.litPackRetryFailedFallback'), icon: 'none' })
+      } finally {
+        this.litPackRetrying = false
+      }
+    },
     layoutLabel(layout) {
       const key = LAYOUT_LABEL_KEYS[layout]
       return key ? this.$t(`panels.${key}`) : this.$t('panels.litLayoutFallback')
@@ -278,6 +361,34 @@ export default {
 }
 .lv-notice.subtle { background: #F7F8FA; border-color: #E8EAED; }
 .lv-notice-text { font-size: var(--awd-panel-fs-meta); line-height: 1.55; color: #6B6560; }
+
+/* 原生资源包状态条：常态是中性下载提示，失败态借用 .lv-notice 同一套暖红 */
+.lv-pack-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px var(--awd-panel-pad-x);
+  background: var(--awd-panel-hover);
+  border-bottom: 1px solid var(--awd-panel-border);
+}
+.lv-pack-bar.failed { background: #FDF3F2; border-color: #F3D9D6; }
+.lv-pack-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-text-2);
+  line-height: 1.5;
+}
+.lv-pack-bar.failed .lv-pack-text { color: #6B6560; }
+.lv-pack-retry {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: var(--awd-panel-radius);
+  background: var(--awd-panel-accent);
+  cursor: pointer;
+}
+.lv-pack-retry text { font-size: 10px; color: #fff; font-weight: 600; }
+.lv-pack-retry.disabled { opacity: .5; pointer-events: none; }
 
 /* 分组头：与插件广场同形（26px / 11px-700 / 计数徽章 / 右侧动作） */
 .lv-sec-head {

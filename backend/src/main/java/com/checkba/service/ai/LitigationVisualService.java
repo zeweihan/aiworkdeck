@@ -44,6 +44,16 @@ public class LitigationVisualService {
     /** 引擎最低可用的 Python。低于此版本 import 期就会 SyntaxError，不如提前说清楚。 */
     private static final int MIN_MINOR = 11;
 
+    /** 承载 litviz / graphviz / drawio 的原生资源包 id（docs/NATIVE_PACK_DISTRIBUTION.md） */
+    public static final String PACK_ID = "litigation-visual";
+
+    /**
+     * 原生资源包服务。**可选注入**：单测与评测直接 {@code new LitigationVisualService()}，
+     * 那些场景下资源解析链只走「显式配置 → 随包内置 → dev 目录爬升」三步。
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.checkba.service.pack.NativePackService packService;
+
     @Value("${litviz.dir:}")
     private String configuredDir;
 
@@ -85,8 +95,27 @@ public class LitigationVisualService {
         resolved = null;
     }
 
+    /**
+     * 向 pack 服务登记「随包内置资源在场」探针：广场的 packReady 与自动补下载
+     * 都靠它区分「资源真缺」与「老版本随包资源还在」。
+     */
+    @jakarta.annotation.PostConstruct
+    void registerPackProbe() {
+        if (packService != null) {
+            packService.registerBuiltinProbe(PACK_ID, this::isEngineAvailableWithoutPack);
+        }
+    }
+
+    /**
+     * 不借助资源包时引擎是否可用（显式配置 / 随包内置 / dev 目录爬升三步）。
+     * 供 packReady 判定复用——随包内置优先于 pack，老用户不该被逼着重下一遍。
+     */
+    public boolean isEngineAvailableWithoutPack() {
+        return resolveLitvizDir(false) != null;
+    }
+
     private Runtime resolveRuntime() {
-        Path dir = resolveLitvizDir();
+        Path dir = resolveLitvizDir(true);
         String python = resolvePython();
         String version = python == null ? "" : probeVersion(python);
         String gv = firstNonBlank(configuredGraphvizDir, System.getenv("LITVIZ_GRAPHVIZ_DIR"));
@@ -94,6 +123,12 @@ public class LitigationVisualService {
             // 打包态的约定位置：litviz 目录旁边的 graphviz/bin
             Path sibling = dir.resolveSibling("graphviz").resolve("bin");
             if (Files.isDirectory(sibling)) gv = sibling.toString();
+        }
+        if (gv == null && packService != null) {
+            // 末位：资源包里的 graphviz/bin
+            Path packBin = packService.componentDir(PACK_ID, "graphviz")
+                    .map(p -> p.resolve("bin")).filter(Files::isDirectory).orElse(null);
+            if (packBin != null) gv = packBin.toString();
         }
         log.info("litviz runtime: dir={} python={} ({}) graphviz={}", dir, python, version, gv);
         return new Runtime(dir, python, version, gv);
@@ -104,9 +139,11 @@ public class LitigationVisualService {
      *
      * <p>最后一条覆盖两种真实布局：dev 态后端 cwd 是 {@code backend/}，litviz 在
      * {@code ../litviz}；打包态 cwd 是用户数据目录，靠 Electron 注入 LITVIZ_DIR，
-     * 走不到这一条。
+     * 走不到这一条。**末位是原生资源包**（规范 §5 的优先级：随包内置优先于 pack）。
+     *
+     * @param includePack false = 跳过资源包这一步（isEngineAvailableWithoutPack 用）
      */
-    private Path resolveLitvizDir() {
+    private Path resolveLitvizDir(boolean includePack) {
         for (String candidate : new String[]{configuredDir, System.getenv("LITVIZ_DIR")}) {
             if (candidate != null && !candidate.isBlank()) {
                 Path p = Paths.get(candidate).toAbsolutePath().normalize();
@@ -119,6 +156,10 @@ public class LitigationVisualService {
             if (base == null) continue;
             Path p = base.resolve("litviz");
             if (Files.isRegularFile(p.resolve("cli.py"))) return p.normalize();
+        }
+        if (includePack && packService != null) {
+            Path packDir = packService.componentDir(PACK_ID, "litviz").orElse(null);
+            if (packDir != null && Files.isRegularFile(packDir.resolve("cli.py"))) return packDir;
         }
         return null;
     }

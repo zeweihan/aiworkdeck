@@ -196,4 +196,16 @@ export default {
   purchased: '已购买',
   onetimePurchase: '（一次性买断）',
   purchasedSuffix: ' · 已购买',
+
+  // ---- 原生资源包（native pack），见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3/§7.1 ----
+  installNeedsPackSized: '安装（需下载资源包 {size} MB）',
+  installNeedsPackNoSize: '安装（需下载资源包）',
+  packDownloadingProgress: '下载中 {downloaded} / {total} MB',
+  packDownloadingEllipsis: '下载中…',
+  packDownloadingShort: '下载中',
+  packInstallFailedShort: '资源包下载失败',
+  packRevokedNotice: '该资源包已被平台下架',
+  confirmUninstallPackTitle: '确认卸载',
+  uninstallPackConfirmSized: '停用后将删除已下载的资源包（约 {size} MB）。继续吗？',
+  uninstallPackConfirmPlain: '停用后将删除已下载的资源包。继续吗？',
 }

@@ -196,4 +196,16 @@ export default {
   purchased: 'Purchased',
   onetimePurchase: ' (one-time purchase)',
   purchasedSuffix: ' · Purchased',
+
+  // ---- Native pack, see docs/NATIVE_PACK_DISTRIBUTION.md §4.3/§7.1 ----
+  installNeedsPackSized: 'Install (downloads a {size} MB resource pack)',
+  installNeedsPackNoSize: 'Install (downloads a resource pack)',
+  packDownloadingProgress: 'Downloading {downloaded} / {total} MB',
+  packDownloadingEllipsis: 'Downloading…',
+  packDownloadingShort: 'Downloading',
+  packInstallFailedShort: 'Resource pack download failed',
+  packRevokedNotice: 'This resource pack has been delisted by the platform',
+  confirmUninstallPackTitle: 'Confirm Uninstall',
+  uninstallPackConfirmSized: 'This will disable the feature and delete the downloaded resource pack (about {size} MB). Continue?',
+  uninstallPackConfirmPlain: 'This will disable the feature and delete the downloaded resource pack. Continue?',
 }

@@ -64,11 +64,22 @@ JSON 对不对，不取决于模型对像素多聪明——这是上游的核心
 - `pages/project-overview/project-overview.vue` — 面板分支 + 三个 handler
   （`handleLitigationStart` / `handleLitigationOpenFile` / `handleLitigationScopeSelect`）。
 
-**打包**
-- `desktop/scripts/prepare-graphviz.js` — 烙最小 graphviz（约 4MB）。
-- `desktop/package.json` extraResources — `graphviz` / `skills` / `litviz` 三项。
-- `desktop/main/services/backend-service.js` — 打包态注入 `LITVIZ_DIR` /
-  `AWD_PYTHON_HOME` / `LITVIZ_GRAPHVIZ_DIR` / `AI_SKILLS_BUILTIN_DIR`。
+**打包与分发（2026-08 起转原生资源包，规范 docs/NATIVE_PACK_DISTRIBUTION.md）**
+- litviz / graphviz / drawio 三类重资源改走 native pack 运行时下载
+  （`~/.aiworkdeck/packs/litigation-visual/`），skill.yml 声明
+  `requires_pack: litigation-visual`。资源解析优先级：显式 env/config →
+  随包内置（若在场）→ dev 目录爬升 → pack current 目录；老版本随包资源优先，
+  不强迫重下。extraResources 摘除在 pack 上架双镜像验证后单独出 PR（随 v0.21.0）。
+- `desktop/scripts/prepare-graphviz.js` — 烙最小 graphviz（约 4MB）；现服务于
+  pack 构建（`desktop/scripts/build-pack.js`，workflow `pack-release.yml`）。
+- `desktop/package.json` extraResources — 摘除前仍含 `graphviz` / `skills` /
+  `litviz` 三项（`skills` 永久保留，文本很小）。
+- `desktop/main/services/backend-service.js` — 打包态注入 `LITVIZ_DIR`（有
+  existsSync 守卫，目录不在不注入）/ `AWD_PYTHON_HOME` / `LITVIZ_GRAPHVIZ_DIR` /
+  `AI_SKILLS_BUILTIN_DIR`。python 运行时不进 pack（pysvc 还要用，永远随包）。
+- `desktop/main/drawio-server.js` — 多根查找：env 覆盖 → 内置 Resources →
+  pack current（读 current.json，revoked / 无 .pack-complete 不参与），
+  装完即生效不重启。
 
 ## 核心契约
 

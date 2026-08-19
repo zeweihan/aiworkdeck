@@ -363,6 +363,8 @@ public class SkillRegistry {
         skill.setVersion(asString(raw.get("version")));
         skill.setLicense(asString(raw.get("license")));
         skill.setCredits(asStringList(raw.get("credits")));
+        // 依赖的原生资源包（规范 docs/NATIVE_PACK_DISTRIBUTION.md §7.1，可选）
+        skill.setRequiresPack(asString(raw.get("requires_pack")));
         // 应用语言相关的可选字段（EN 版 PR5）：缺省时全部为空，语义 = 只在 zh-CN 可用
         skill.setLanguages(asStringList(raw.get("languages")));
         skill.setNameEn(asString(raw.get("name_en")));

@@ -151,7 +151,11 @@ function spawnEnv(ctx) {
     }
     // 诉讼可视化引擎（litviz）与它要用的解释器。引擎是纯 stdlib，
     // 直接复用已经为 pysvc 打进来的那个 Python 3.11，不额外带运行时。
-    if (!env.LITVIZ_DIR) env.LITVIZ_DIR = path.join(res, 'litviz')
+    // litviz 摘出安装包后（native pack，见 docs/NATIVE_PACK_DISTRIBUTION.md）
+    // Resources/litviz 不一定存在，加 existsSync 守卫与 graphviz 那条对齐——
+    // 目录不存在就不注入，让后端走自己的解析链（pack 目录等）。
+    const litvizDir = path.join(res, 'litviz')
+    if (!env.LITVIZ_DIR && fs.existsSync(litvizDir)) env.LITVIZ_DIR = litvizDir
     if (!env.AWD_PYTHON_HOME) env.AWD_PYTHON_HOME = path.join(res, 'python')
     // graphviz 只有流程图布局要用；没打进来时留空，后端会如实降级报缺。
     const gvBin = path.join(res, 'graphviz', 'bin')

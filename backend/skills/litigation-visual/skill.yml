@@ -22,6 +22,10 @@ credits:
 # 用户在插件广场手动启用（= 安装），停用（= 卸载）不影响随包文件，见 SkillRegistry/SkillMarketService。
 enabled_by_default: false
 
+# 依赖的原生资源包（litviz 引擎 + graphviz + draw.io 静态资源，规范见
+# docs/NATIVE_PACK_DISTRIBUTION.md）。随包内置资源还在的老版本不会触发下载。
+requires_pack: litigation-visual
+
 # 法律事项类别（匿名统计用，枚举见 MatterCategory）
 category: 争议解决
 

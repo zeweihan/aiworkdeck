@@ -40,6 +40,12 @@ export default {
   litLayoutTree: 'Hierarchy Tree',
   litLayoutComparison: 'Comparison Table',
   litLayoutFallback: 'Diagram',
+  // Native pack status bar, see docs/NATIVE_PACK_DISTRIBUTION.md §5
+  litPackDownloading: 'Downloading the litigation visualization resource pack…',
+  litPackDownloadingProgress: 'Downloading the litigation visualization resource pack…{downloaded} / {total} MB',
+  litPackFailedText: 'Resource pack download failed',
+  litPackRetrying: 'Retrying…',
+  litPackRetryFailedFallback: 'Retry failed',
 
   // ShareholderMeetingPanel.vue
   smListLabel: 'Verifications',

@@ -40,6 +40,12 @@ export default {
   litLayoutTree: '层级结构树',
   litLayoutComparison: '对比表',
   litLayoutFallback: '图',
+  // 原生资源包状态条，见 docs/NATIVE_PACK_DISTRIBUTION.md §5
+  litPackDownloading: '正在下载诉讼可视化资源包…',
+  litPackDownloadingProgress: '正在下载诉讼可视化资源包…{downloaded} / {total} MB',
+  litPackFailedText: '资源包下载失败',
+  litPackRetrying: '重试中…',
+  litPackRetryFailedFallback: '重试失败',
 
   // ShareholderMeetingPanel.vue
   smListLabel: '核查任务',

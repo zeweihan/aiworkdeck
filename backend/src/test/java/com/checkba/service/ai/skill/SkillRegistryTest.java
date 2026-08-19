@@ -98,6 +98,17 @@ class SkillRegistryTest {
         assertFalse(registry.isEnabled("authored-skill"), "enabled_by_default:false 首次扫描即默认禁用");
     }
 
+    @Test
+    @DisplayName("解析 requires_pack（原生资源包依赖，可选字段）")
+    void parsesRequiresPack() throws IOException {
+        writeSkill(tempDir.resolve("packed-skill"), "packed-skill", "requires_pack: litigation-visual\n");
+        writeSkill(tempDir.resolve("plain-skill"), "plain-skill", null);
+        SkillRegistry registry = newRegistry(tempDir, new PluginService());
+
+        assertEquals("litigation-visual", registry.getSkill("packed-skill").orElseThrow().getRequiresPack());
+        assertNull(registry.getSkill("plain-skill").orElseThrow().getRequiresPack(), "缺省即不依赖资源包");
+    }
+
     /**
      * 极简内存版 SystemSettingService：只覆盖 get/set，用来验证禁用/种子名单能跨"重启"
      * （新的 SkillRegistry 实例、同一份存储）持久化。父类真正依赖的仓储用不到，传 null。

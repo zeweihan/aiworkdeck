@@ -229,6 +229,11 @@ export default {
         if (s.version) metaParts.push('v' + s.version)
         if (s.author) metaParts.push(s.author)
         if (s.sourcePluginId) metaParts.push(this.$t('market.fromPluginTag'))
+        // 挂着原生资源包的面板型 skill：已启用但包还没就绪（老版本升级后端自动
+        // 补下载的过渡态，见 docs/NATIVE_PACK_DISTRIBUTION.md §5）——如实标「下载中」，
+        // 不能显示「已启用」误导用户以为功能已经能用。装未装的初始态不受影响，
+        // 那条走 MarketDetailPane 的安装按钮，本行列表不加轮询。
+        const packPending = panel && s.packId && s.enabled && s.packReady === false
         rows.push({
           kind: 'skill',
           id: s.id,
@@ -236,10 +241,12 @@ export default {
           desc: s.description || '',
           glyph: panel ? ICONS.panelLeft : (CATEGORY_GLYPHS[s.category] || ICONS.skill),
           meta: metaParts.join(' · '),
-          stateLabel: panel
-            ? (s.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'))
-            : (ACTIVATION_STATE[mode] || this.$t('market.activationStateAuto')),
-          stateClass: mode === 'disabled' ? 'off' : 'ok',
+          stateLabel: packPending
+            ? this.$t('market.packDownloadingShort')
+            : panel
+              ? (s.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'))
+              : (ACTIVATION_STATE[mode] || this.$t('market.activationStateAuto')),
+          stateClass: packPending ? 'downloading' : (mode === 'disabled' ? 'off' : 'ok'),
           raw: s,
         })
       }
@@ -754,6 +761,16 @@ export default {
 
     &:hover {
       background: #F7EBD5;
+    }
+  }
+
+  /* 资源包下载中：与 .need 同一族暖色（都是「还没就绪」），不可点 */
+  &.downloading {
+    background: #FDF7EC;
+
+    text {
+      color: #8A6D2F;
+      font-size: 10px;
     }
   }
 }
