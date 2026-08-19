@@ -1,19 +1,15 @@
 package com.checkba.service.ai;
 
 import com.checkba.model.entity.Tag;
+import com.checkba.service.DocumentTextService;
 import com.checkba.service.FileTagService;
 import com.checkba.service.TagService;
-import com.checkba.storage.StorageService;
-import com.checkba.storage.StorageServiceFactory;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.tika.Tika;
-import org.springframework.core.io.Resource;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
-import java.io.InputStream;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -28,7 +24,7 @@ public class AutoTaggingService {
     private final ChatModelFactory chatModelFactory;
     private final TagService tagService;
     private final FileTagService fileTagService;
-    private final StorageServiceFactory storageServiceFactory;
+    private final DocumentTextService documentTextService;
     // 自动打标签走辅助模型（便宜档）并落账：每次上传都会跑一次，此前用默认模型且一行账不记
     private final AuxModelResolver auxModelResolver;
     private final TokenUsageService tokenUsageService;
@@ -141,14 +137,17 @@ public class AutoTaggingService {
         }
     }
 
+    /**
+     * 委托 {@link DocumentTextService}，PDF 走 PDFBox3 原生 API——同款不再自建
+     * Tika 解析 PDF（Tika 2.9.1 调 PDFBox2 已删除的 API 会 NoSuchMethodError，
+     * PDF 因此静默打标签失败）。静默失败语义不变：抽取失败照旧返回 null。
+     */
     private String extractText(String storagePath) {
         try {
-            StorageService storageService = storageServiceFactory.getStorageService();
-            Resource resource = storageService.load(storagePath);
-            try (InputStream is = resource.getInputStream()) {
-                Tika tika = new Tika();
-                return tika.parseToString(is);
-            }
+            com.checkba.model.entity.ProjectFile stub = new com.checkba.model.entity.ProjectFile();
+            stub.setFilePath(storagePath);
+            stub.setName(storagePath);
+            return documentTextService.extractText(stub);
         } catch (Exception e) {
             log.warn("Failed to extract text from storagePath={}", storagePath, e);
             return null;

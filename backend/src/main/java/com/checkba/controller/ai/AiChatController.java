@@ -90,10 +90,7 @@ public class AiChatController {
 
     @GetMapping("/conversations")
     public java.util.List<Map<String, Object>> getConversations(@RequestParam Long projectId, @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
-        Long userId = null;
-        if (sessionId != null) {
-            userId = AuthController.getUserIdFromSession(sessionId);
-        }
+        Long userId = AuthController.getUserIdFromSession(sessionId);
         java.util.List<Map<String, Object>> conversations = projectAiMessageService.listConversations(projectId, userId);
         // 合并 Agent 运行状态（RUNNING/PAUSED/AWAITING_APPROVAL/…，null=本进程内没跑过），
         // 历史列表的状态提示点靠它；在控制层合并，持久层不感知 AI 运行时。

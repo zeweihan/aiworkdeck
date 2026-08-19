@@ -70,6 +70,7 @@ export default {
   statusRecorded: '未转写',
   statusTranscribing: '转写中',
   statusTranscribed: '已转写',
+  statusEmpty: '未识别到人声',
   statusFailed: '转写失败',
 
   // ---- 详情动作 ----
@@ -91,6 +92,7 @@ export default {
   transcribingHint: '转写与说话人分离进行中，通常几分钟内完成，可离开此页',
   transcribeFailed: '转写失败',
   submitTranscribeFailed: '提交转写失败：{message}',
+  emptyTranscriptHint: '这段录音已转写完成，但没有识别到有效的人声内容，可能是录音过短或几乎无人说话。如果确认录音中有对话，可以重新转写。',
 
   // ---- 说话人 ----
   speakersTitle: '说话人（点击改名）',
