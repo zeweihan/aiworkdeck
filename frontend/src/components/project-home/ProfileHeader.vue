@@ -252,4 +252,73 @@ export default {
   font-size: 11px;
   color: #ADB5BD;
 }
+
+/* 响应祖先 .project-home-pane 的实际渲染宽度（container-name: home-pane，
+   定义在 project-home-pane.scss），不是靠 compact 布尔值。三档见该文件的注释。 */
+@container home-pane (max-width: 359px) {
+  .profile-header {
+    padding: 10px 12px;
+  }
+
+  .profile-project-name {
+    font-size: 15px;
+    line-height: 22px;
+  }
+
+  .profile-guide {
+    margin-top: 10px;
+    padding: 10px 12px;
+  }
+
+  .profile-fields {
+    gap: 8px 0;
+    margin-top: 10px;
+  }
+
+  /* 单列：min-width 是横向溢出的直接原因，必须归零 */
+  .profile-field {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+
+  .profile-field-label {
+    font-size: 10px;
+  }
+
+  .profile-field-value,
+  .profile-field-input,
+  .profile-field-picker {
+    font-size: 12px;
+    line-height: 18px;
+  }
+}
+
+@container home-pane (min-width: 360px) and (max-width: 559px) {
+  .profile-header {
+    padding: 14px 16px;
+  }
+
+  .profile-project-name {
+    font-size: 17px;
+    line-height: 24px;
+  }
+
+  .profile-fields {
+    gap: 10px 12px;
+    margin-top: 12px;
+  }
+
+  /* 两列：每格留一半 gap 的宽度 */
+  .profile-field {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 0;
+  }
+
+  .profile-field-value,
+  .profile-field-input,
+  .profile-field-picker {
+    font-size: 13px;
+    line-height: 20px;
+  }
+}
 </style>

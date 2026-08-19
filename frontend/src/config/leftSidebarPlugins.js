@@ -95,6 +95,9 @@ export const LEFT_SIDEBAR_PLUGINS = [
   {
     key: 'desensitize',
     label: t('config.sidebar.desensitize'),
+    // 对应 skill.yml 的 enabled_by_default:false——默认不装，装了才出现在左栏。
+    // 见 filterPluginsByEnabledSkills。
+    requiresSkill: 'desensitize',
     svgPaths: [
       { d: "M12 22C12 22 20 18 20 12V5L12 2L4 5V12C4 18 12 22 12 22Z" }
     ]

@@ -13,11 +13,13 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 2. **Skill 型**：后端 prompt 包（skill.yml + prompt.md），对话关键词触发。
 3. **动态 JAR 插件**：plugins/ 目录下 manifest.json + JAR，前端用 PluginPane iframe 承载。
 
+**「面板型插件在广场里启停」是体验对齐，不是真下载分发（2026-08-19）**：诉讼可视化、会议录音、脱敏这几个挂在左栏的面板，字节早已随安装包分发在本地（`backend/skills/<id>/`），广场里点「安装」实际做的是 `POST /api/skills/{id}/enable` 翻转 `SkillRegistry` 的启用位，立即可用，不联网、不下载任何东西。这是为了让用户心智上体验到「广场装插件」的交互一致性。**真正意义上的运行时下载分发**（不随安装包走、按需从网络拉取原生资源/可执行内容的插件形态）是独立的后续立项，目前只有「动态 JAR 插件」那条链路（见下文与 `docs/PLUGIN_DISTRIBUTION.md`）沾边，且仍要求人工审核 + 签名 + 装后默认禁用，二者不要混为一谈。
+
 ## 现有插件清单
 
 **尽调（DD）**：前端 `frontend/src/components/DdFilesPanel.vue` + `DdRequestEditor.vue`；后端 `controller/DdController.java`（/api/dd）+ `service/DdService.java`；实体 DdRequest/DdItem/DdComment + 对应 Repository。无 skill。
 
-**脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDFBox PDFTextStripper 定位涂黑）+ OcrService 辅助。无 skill。
+**脱敏**：前端 `frontend/src/components/DesensitizePane.vue`；后端 `controller/SensitiveController.java`（/api/sensitive：GET /options、POST /desensitize）+ `service/SensitiveService.java`（PDF 走 PDFBox PDFTextStripper 定位坐标涂黑，Word 走 XWPFDocument 段落级文本遮蔽）+ OcrService 辅助。**skill 型门控（2026-08-19）**：`backend/skills/desensitize/`（`enabled_by_default:false`，广场启停），`leftSidebarPlugins.js` 的 `desensitize` 条目带 `requiresSkill: 'desensitize'`——照搬诉讼可视化那套模式，装了才在左栏出现。**这个 skill 背后没有 AI 编排注入的能力**（无 `allowed_tools`）：命中触发词「脱敏」时 prompt.md 只引导模型把用户指向面板手动操作，不假装能在对话里完成脱敏；面板本身仍是直连 `/api/sensitive` 的老路径，和 AI 编排无关。`languages` 只给 `zh-CN`——`DesensitizePane.vue` 本身已 i18n 化，但策略勾选项文案来自 `SensitiveType` 枚举（label/description 只有中文，`SensitiveController` 直接拼 `"label (example)"` 无语言分支），面板核心内容英文版下会露出中文，等 `SensitiveType` 补英文文案（需要改 `.java`）再解禁双语。
 
 **股东大会核查（已下线，2026-08-17）**：维护者决定不做了。`leftSidebarPlugins.js` 里的 rail 入口已移除、skill 改成 `enabled_by_default: false`，**其余三层代码一律保留**（面板组件、controller、service、实体、api.js 端点），想恢复只需把 rail 条目加回去。存量安装里 skill 仍是启用状态（`SkillRegistry` 的种子化只在首次见到该 id 时生效），要在插件广场手动停用。下面这段是它下线前的实现地图，恢复或翻旧账时照读。
 

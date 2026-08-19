@@ -141,4 +141,21 @@ export default {
   font-size: 11px;
   color: #6C757D;
 }
+
+/* 响应祖先 .project-home-pane 的实际渲染宽度，见 project-home-pane.scss 的注释 */
+@container home-pane (max-width: 359px) {
+  .activity-row {
+    gap: 8px;
+    padding: 6px 0;
+  }
+
+  .activity-title {
+    font-size: 12px;
+    line-height: 18px;
+  }
+
+  .activity-time {
+    font-size: 10px;
+  }
+}
 </style>
