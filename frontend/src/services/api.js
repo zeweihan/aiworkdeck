@@ -2699,6 +2699,16 @@ export function abandonDraft(projectId, draftId) {
   });
 }
 
+// 某一份进行中稿自己的时间线（VersionTimeline 的分叉线用，Phase B）。响应形状与
+// /timeline 一致（含 parents），后端并行开发中——调用方需自行处理 404/失败降级，
+// 不要假设这个端点一定存在。
+export function getDraftTimeline(projectId, draftId, limit = 50) {
+  return request({
+    url: `/api/projects/${projectId}/version/drafts/${draftId}/timeline?limit=${limit}`,
+    method: 'GET'
+  });
+}
+
 // ==================== 云端协作（v2）====================
 // 术语：push=上传到云端 pull=从云端更新 clone=从云端接一个项目。界面零 Git 术语。
 
