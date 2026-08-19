@@ -87,8 +87,8 @@ export default {
     registerHintEmail: '未注册过的邮箱，验证码通过即创建账户并登录，注册后就是正式版。',
     // 共创开发者计划（注册赠金，北京时间 2026-10-01 起前端不再渲染这两条）
     promoTitle: '加入共创开发者计划',
-    promoBody: '2026 年 9 月 30 日前注册，账户可获 ¥99.99 Credits 赠金。',
-    promoBodyRegister: '2026 年 9 月 30 日前注册，账户自动到账 ¥99.99 Credits 赠金，可直接用于平台 AI 与各项服务。',
+    promoBody: '2026 年 9 月 30 日前注册，账户可获 {amount} Credits 赠金。',
+    promoBodyRegister: '2026 年 9 月 30 日前注册，账户自动到账 {amount} Credits 赠金，可直接用于平台 AI 与各项服务。',
     phoneFirst: '请输入手机号',
     smsCodeFirst: '请输入短信验证码',
     codeSent: '验证码已发送',

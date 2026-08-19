@@ -89,7 +89,7 @@
           <view v-if="promoActive && mode !== 'code'" class="unlock-promo" :class="{ 'is-strong': mode === 'register' }">
             <text class="unlock-promo-title">{{ $t('onboarding.unlock.promoTitle') }}</text>
             <text class="unlock-promo-body">
-              {{ mode === 'register' ? $t('onboarding.unlock.promoBodyRegister') : $t('onboarding.unlock.promoBody') }}
+              {{ mode === 'register' ? $t('onboarding.unlock.promoBodyRegister', { amount: promoAmount }) : $t('onboarding.unlock.promoBody', { amount: promoAmount }) }}
             </text>
           </view>
 
@@ -265,12 +265,15 @@ export default {
       return this.isPhoneSite ? (this.phone || '').trim() : (this.email || '').trim()
     },
     /**
-     * 注册赠金推广位还在不在窗口内。
-     * 只在大陆站展示：赠金是官网 cn 侧配的、金额也是人民币，
-     * 摆到国际站上就是一句本站兑现不了的承诺。
+     * 注册赠金推广位还在不在窗口内。两站都有赠金（2026-08-19 维护者拍板），
+     * 金额按站点分流：cn ¥99.99 / intl $9.90——都是各自官网侧真配了的数，
+     * 改金额要连服务器 data/gateway-config.json 的 signupGrantCents 一起改。
      */
     promoActive() {
-      return this.isPhoneSite && Date.now() < PROMO_END_TS
+      return Date.now() < PROMO_END_TS
+    },
+    promoAmount() {
+      return this.isPhoneSite ? '¥99.99' : '$9.90'
     },
     /** 主按钮文案：注册态换口径，赠金窗口内再点名赠金。 */
     primaryLabel() {
