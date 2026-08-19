@@ -386,6 +386,7 @@ public class AccountService {
     }
 
     private Map<String, Object> exchangeAndConnect(Map<String, Object> credentials) {
+        credentials.put("deviceName", deviceName());
         Map<String, Object> payload = postLogin("/api/auth/exchange-key", credentials);
         String key = str(payload.get("key"));
         if (key == null || key.isBlank()) {
@@ -562,5 +563,20 @@ public class AccountService {
 
     private static String str(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    /** 登录换 Key 时上报的设备名，官网账户页「已连接的设备」按它显示，形如「Zeweis-MacBook-Pro (Mac)」。 */
+    static String deviceName() {
+        String os = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
+        String osLabel = os.contains("mac") ? "Mac" : os.contains("win") ? "Windows" : os.contains("linux") ? "Linux" : "Desktop";
+        String host = "";
+        try {
+            host = java.net.InetAddress.getLocalHost().getHostName();
+        } catch (Exception ignored) {
+        }
+        if (host == null) host = "";
+        host = host.replaceAll("\\.local$", "").trim();
+        String name = host.isEmpty() ? osLabel : host + " (" + osLabel + ")";
+        return name.length() > 64 ? name.substring(0, 64) : name;
     }
 }

@@ -322,6 +322,16 @@ class AwdkLoginServiceTest {
     }
 
     @Test
+    @DisplayName("换 Key 请求带上设备名，固定为「Office 插件」（默认站点 aiworkdeck.com）")
+    void exchangeKeyRequestIncludesFixedDeviceName() {
+        transport.enqueue(200, "{\"key\":\"" + KEY + "\",\"isNewUser\":true}").enqueue(200, ME_OK);
+
+        service(true).loginWithPhone("13800138000", "123456");
+
+        assertTrue(transport.bodies.get(0).contains("\"deviceName\":\"Office 插件\""), transport.bodies.get(0));
+    }
+
+    @Test
     @DisplayName("口令登录：国际站主路径，凭据形状不同但桥接结果一样")
     void passwordLoginExchangesKeyThenBridges() {
         transport.enqueue(200, "{\"key\":\"" + KEY + "\"}").enqueue(200, ME_OK);

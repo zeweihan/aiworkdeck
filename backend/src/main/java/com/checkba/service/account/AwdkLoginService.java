@@ -185,6 +185,9 @@ public class AwdkLoginService {
      */
     private BridgeSession exchangeAndBridge(Map<String, Object> credentials) {
         requireEnabled();
+        // 这条服务本身就是「Office 插件」的桥接口，设备名固定为插件口径（不像桌面端那样按主机名取）；
+        // 按 baseUrl 分站，因为国际站账户页文案是英文。
+        credentials.put("deviceName", baseUrl.contains("workdeck.ai") ? "Office Add-in" : "Office 插件");
         Map<String, Object> payload =
                 AccountLoginExchange.post(transport, objectMapper, baseUrl, "/api/auth/exchange-key", credentials);
         String key = str(payload.get("key"));
