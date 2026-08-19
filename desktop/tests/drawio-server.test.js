@@ -78,7 +78,7 @@ test('烙好之后能起、能取文件、挡得住路径穿越', async (t) => {
     // 不关服务的话 node --test 的事件循环永远不空，测试跑完也不退出
     await stopDrawioServer()
     fs.rmSync(outside, { force: true })
-    fs.rmSync(root, { recursive: true, force: true })
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
 
   assert.strictEqual(await isAvailable(), true)
@@ -109,8 +109,8 @@ test('pack 根命中：内置资源缺失时从 pack 提供文件', async (t) =>
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(async () => {
     await stopDrawioServer()
-    fs.rmSync(emptyBuiltin, { recursive: true, force: true })
-    fs.rmSync(packsDir, { recursive: true, force: true })
+    fs.rmSync(emptyBuiltin, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
 
   assert.strictEqual(await isAvailable(), true, '内置根没有 index.html，应当落到 pack 根')
@@ -128,8 +128,8 @@ test('revoked:true 的 pack 版本不参与解析', async (t) => {
   process.env.AIWORKDECK_DRAWIO_DIR = emptyBuiltin
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(() => {
-    fs.rmSync(emptyBuiltin, { recursive: true, force: true })
-    fs.rmSync(packsDir, { recursive: true, force: true })
+    fs.rmSync(emptyBuiltin, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
 
   assert.strictEqual(await isAvailable(), false, 'current.json 标了 revoked，pack 根不该被当成可用')
@@ -143,8 +143,8 @@ test('版本目录缺 .pack-complete 时不参与解析', async (t) => {
   process.env.AIWORKDECK_DRAWIO_DIR = emptyBuiltin
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(() => {
-    fs.rmSync(emptyBuiltin, { recursive: true, force: true })
-    fs.rmSync(packsDir, { recursive: true, force: true })
+    fs.rmSync(emptyBuiltin, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
 
   assert.strictEqual(await isAvailable(), false, '没有 .pack-complete 说明安装事务未完成，不该被当成可用')
@@ -160,8 +160,8 @@ test('内置根优先于 pack 根', async (t) => {
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(async () => {
     await stopDrawioServer()
-    fs.rmSync(builtinDir, { recursive: true, force: true })
-    fs.rmSync(packsDir, { recursive: true, force: true })
+    fs.rmSync(builtinDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
   })
 
   const { origin } = await startDrawioServer()
