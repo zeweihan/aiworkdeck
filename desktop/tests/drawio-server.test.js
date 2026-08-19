@@ -37,6 +37,17 @@ function seedPack(packsDir, opts = {}) {
   fs.writeFileSync(path.join(packsDir, 'litigation-visual', 'current.json'), JSON.stringify(current))
 }
 
+// teardown 删临时目录统一走这里：Windows 上刚被读流/杀毒扫描碰过的文件有
+// delete-pending 窗口，目录里的 unlink 已成功但句柄未释放，紧跟着的 rmdir 会
+// 报 ENOTEMPTY（CI windows-latest 间歇复现，run 32236896837）。
+// 必须用异步 rm 而不是 rmSync：rmSync 的 maxRetries 是同步忙等，会把事件循环
+// 一起卡死——当句柄正是本进程读流 autoClose 排队待跑的 fs.close 时，同步重试
+// 给多大预算都永远等不到释放（run 32237671073 实测 5.6s 预算整段跑穿）。
+// fs.promises.rm 的重试间隔走 setTimeout，让出事件循环，挂起的 close 才有机会执行。
+function rmrf(dir) {
+  return fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+}
+
 function get(origin, urlPath) {
   return new Promise((resolve, reject) => {
     http
@@ -78,7 +89,7 @@ test('烙好之后能起、能取文件、挡得住路径穿越', async (t) => {
     // 不关服务的话 node --test 的事件循环永远不空，测试跑完也不退出
     await stopDrawioServer()
     fs.rmSync(outside, { force: true })
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await rmrf(root)
   })
 
   assert.strictEqual(await isAvailable(), true)
@@ -109,8 +120,8 @@ test('pack 根命中：内置资源缺失时从 pack 提供文件', async (t) =>
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(async () => {
     await stopDrawioServer()
-    fs.rmSync(emptyBuiltin, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await rmrf(emptyBuiltin)
+    await rmrf(packsDir)
   })
 
   assert.strictEqual(await isAvailable(), true, '内置根没有 index.html，应当落到 pack 根')
@@ -127,9 +138,9 @@ test('revoked:true 的 pack 版本不参与解析', async (t) => {
 
   process.env.AIWORKDECK_DRAWIO_DIR = emptyBuiltin
   process.env.AIWORKDECK_PACKS_DIR = packsDir
-  t.after(() => {
-    fs.rmSync(emptyBuiltin, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  t.after(async () => {
+    await rmrf(emptyBuiltin)
+    await rmrf(packsDir)
   })
 
   assert.strictEqual(await isAvailable(), false, 'current.json 标了 revoked，pack 根不该被当成可用')
@@ -142,9 +153,9 @@ test('版本目录缺 .pack-complete 时不参与解析', async (t) => {
 
   process.env.AIWORKDECK_DRAWIO_DIR = emptyBuiltin
   process.env.AIWORKDECK_PACKS_DIR = packsDir
-  t.after(() => {
-    fs.rmSync(emptyBuiltin, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  t.after(async () => {
+    await rmrf(emptyBuiltin)
+    await rmrf(packsDir)
   })
 
   assert.strictEqual(await isAvailable(), false, '没有 .pack-complete 说明安装事务未完成，不该被当成可用')
@@ -160,8 +171,8 @@ test('内置根优先于 pack 根', async (t) => {
   process.env.AIWORKDECK_PACKS_DIR = packsDir
   t.after(async () => {
     await stopDrawioServer()
-    fs.rmSync(builtinDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-    fs.rmSync(packsDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    await rmrf(builtinDir)
+    await rmrf(packsDir)
   })
 
   const { origin } = await startDrawioServer()
