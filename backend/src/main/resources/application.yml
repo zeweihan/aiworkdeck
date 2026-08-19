@@ -448,6 +448,12 @@ storage:
     cdn-domain:
 
 security:
+  # 登录会话空闲有效期（天，滑动过期：距最后一次使用超过该天数即失效）。
+  # 代码默认 365 = 「常驻」语义（滑动窗口一年，等效不掉线），给桌面端与团队服务器用——
+  # 短信/邮箱验证码登录每次都有真实成本，7 天一断线会逼用户反复走验证码。
+  # 官方云后端（application-cloud.yml）显式配 7，保持已上线的「7 天滑动过期」契约逐字不变。
+  # local-mode 免登与 awdt_ 设备令牌不走登录会话，不受本项影响。
+  session-idle-days: 365
   # conversationId 服务端签发强制开关（公网多租户/官方云置 true）：
   # 开启后（且非 local-mode），尚无消息的会话必须先经 POST /api/agent/conversations 签发，
   # 客户端自造的 conv-<毫秒> ID 会被拒绝；已有消息的会话仍按 DB 归属判定。

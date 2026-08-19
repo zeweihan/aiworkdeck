@@ -30,7 +30,7 @@ class AuthControllerHardeningTest {
     /** DB 会话服务（repository 打桩）：注册/登录成功路径要经它签发 sessionId。 */
     private static com.checkba.service.UserSessionService sessions() {
         return new com.checkba.service.UserSessionService(
-                mock(com.checkba.repository.UserSessionRepository.class));
+                mock(com.checkba.repository.UserSessionRepository.class), 365);
     }
 
     private static MockHttpServletRequest http() {

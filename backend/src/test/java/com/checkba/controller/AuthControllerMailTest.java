@@ -41,7 +41,7 @@ class AuthControllerMailTest {
     }
 
     private static UserSessionService sessions() {
-        return new UserSessionService(mock(UserSessionRepository.class));
+        return new UserSessionService(mock(UserSessionRepository.class), 365);
     }
 
     private static AuthController controller(UserService userService, AuthAbuseGuard guard,

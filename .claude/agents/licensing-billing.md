@@ -126,8 +126,12 @@ description: 授权与计费领域。任务涉及解锁门（试用码/账户 Ke
 - `backend/src/main/java/com/checkba/service/account/MachineAccountGuard.java` — server 模式下 `AccountController` 全部端点与 `GET /api/entitlements` 仅 admin 可用（账户连接/权益缓存是机器级状态，普通租户 disconnect 一下全服平台 AI 通道就断）；local-mode 恒放行一字不动。
 - `model/entity/AccountBinding.java` + `repository/AccountBindingRepository.java` — 官网账户 → server 用户映射表；awdk_ 明文**不落库**（每次桥接重验官网）。
 - `service/UserSessionService.java` + `model/entity/UserSession.java` — 浏览器登录会话 DB 落库（2026-08-07，
-  替代 AuthController 进程内 SESSION_STORE）：哈希落库、7 天滑动过期、lastUsedAt 写回节流（1 分钟）、
+  替代 AuthController 进程内 SESSION_STORE）：哈希落库、滑动过期、lastUsedAt 写回节流（1 分钟）、
   每日定时清理；重启不掉线。awdt_ 设备令牌与 local-mode 免登不走这条路，行为一字未变。
+  滑动过期天数自 2026-08-19 起可配（`security.session-idle-days`）：**代码默认 365 天**（「常驻」语义——
+  短信/邮箱验证码登录每条有真实成本，7 天一断线逼用户反复走验证码），
+  **官方云后端在 `application-cloud.yml` 显式配 7**，已上线的「7 天滑动过期」契约逐字不变；
+  改默认值或动 cloud 配置前先看 `UserSessionServiceTest.cloudProfilePinsSevenDays`。
 
 **per-user 平台 AI key（2026-08-07，多租户计费隔离）**
 - 设计文档 `docs/superpowers/specs/2026-08-07-per-user-platform-ai-key.md`（含三方案的安全边界比较与已确认决策）。
