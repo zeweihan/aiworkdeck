@@ -1,7 +1,7 @@
 {
   "name": "aiworkdeck-desktop",
   "private": true,
-  "version": "0.20.0",
+  "version": "0.21.0",
   "description": "AI WorkDeck desktop shell (Electron)",
   "author": "AI WorkDeck contributors",
   "main": "main/main.js",
@@ -41,10 +41,6 @@
         "to": "frontend/dist/zetaoffice"
       },
       {
-        "from": "../frontend/dist/drawio",
-        "to": "frontend/dist/drawio"
-      },
-      {
         "from": "bundled/${os}-${arch}/backend",
         "to": "backend"
       },
@@ -65,24 +61,11 @@
         "to": "pysvc.meta.json"
       },
       {
-        "from": "bundled/${os}-${arch}/graphviz",
-        "to": "graphviz"
-      },
-      {
         "from": "../backend/skills",
         "to": "skills",
         "filter": [
           "**/*",
           "!**/__pycache__/**"
-        ]
-      },
-      {
-        "from": "../litviz",
-        "to": "litviz",
-        "filter": [
-          "**/*",
-          "!**/__pycache__/**",
-          "!**/*.pyc"
         ]
       }
     ],
