@@ -43,6 +43,7 @@ public class SkillController {
     private final UserRepository userRepository;
     private final AdminAccessService adminAccessService;
     private final com.checkba.service.telemetry.TelemetryService telemetryService;
+    private final com.checkba.service.pack.NativePackService nativePackService;
 
     @lombok.Data
     public static class SkillView {
@@ -71,6 +72,14 @@ public class SkillController {
          * 否则英文界面下用户能勾中一个 zh-only 的 skill，勾了却永远不生效，也没有任何提示。
          */
         private boolean available;
+        /** 依赖的原生资源包 id（skill.yml: requires_pack）；不依赖资源包时为 null */
+        private String packId;
+        /**
+         * 资源是否已就位。**无 requires_pack 时恒 true**；声明了的话 =
+         * 「pack 已装」或「随包内置资源在场」（老版本用户的随包资源仍在，不该被逼着重下）。
+         * 随列表一起给，省得前端为每行再打一次 /api/packs/{id}/status。
+         */
+        private boolean packReady = true;
     }
 
     @GetMapping("/list")
@@ -213,6 +222,11 @@ public class SkillController {
         view.setLicense(skill.getLicense());
         view.setCredits(skill.getCredits());
         view.setAvailable(skillRegistry.isAvailable(skill));
+        String packId = skill.getRequiresPack();
+        if (packId != null && !packId.isBlank()) {
+            view.setPackId(packId);
+            view.setPackReady(nativePackService.resourceReady(packId));
+        }
         return view;
     }
 

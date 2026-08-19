@@ -60,11 +60,28 @@
               </view>
               <!-- 面板型 skill（背后挂着左栏面板）按插件呈现：只有启用/停用。
                    「生效方式三档」是对话型 skill 的概念，对面板讲不通——设成 manual
-                   会让面板里的 kick-off 按钮点了没反应。判据见 leftSidebarPlugins.js。 -->
-              <view v-if="installedInfo && !installedInfo.sourcePluginId && isPanel" class="mdp-switch-row">
-                <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
-                <AwdSwitch :checked="!!installedInfo.enabled" @change="onPanelSkillToggle" />
-              </view>
+                   会让面板里的 kick-off 按钮点了没反应。判据见 leftSidebarPlugins.js。
+                   挂着原生资源包（packId 非空）的再加一层：包没就绪前不给开关，
+                   见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3/§7.1。 -->
+              <template v-if="installedInfo && !installedInfo.sourcePluginId && isPanel">
+                <text v-if="packRevokedState" class="mdp-pack-revoked">{{ $t('market.packRevokedNotice') }}</text>
+                <view v-else-if="packId && packDownloading" class="mdp-pack-progress">
+                  <text>{{ packProgressText }}</text>
+                </view>
+                <template v-else-if="packId && packFailed">
+                  <text class="mdp-pack-error">{{ (packStatusInfo && packStatusInfo.error) || $t('market.packInstallFailedShort') }}</text>
+                  <view class="mdp-btn" :class="{ busy: packBusy }" @tap="doInstallPack">
+                    <text>{{ $t('common.retry') }}</text>
+                  </view>
+                </template>
+                <view v-else-if="packId && !packReady" class="mdp-btn primary" :class="{ busy: packBusy }" @tap="doInstallPack">
+                  <text>{{ packBusy ? $t('market.installingEllipsis') : packInstallLabel }}</text>
+                </view>
+                <view v-else class="mdp-switch-row">
+                  <text class="mdp-switch-label">{{ installedInfo.enabled ? $t('market.enabledTag') : $t('market.disabledTag') }}</text>
+                  <AwdSwitch :checked="!!installedInfo.enabled" @change="onPanelSkillToggle" />
+                </view>
+              </template>
               <AwdSelect
                 v-else-if="installedInfo && !installedInfo.sourcePluginId"
                 :range="ACTIVATION_LABELS"
@@ -81,6 +98,14 @@
                 class="mdp-btn danger"
                 :class="{ busy }"
                 @tap="doUninstallSkill"
+              >
+                <text>{{ $t('market.uninstallBtn') }}</text>
+              </view>
+              <view
+                v-else-if="installedInfo && packId && !installedInfo.sourcePluginId"
+                class="mdp-btn danger"
+                :class="{ busy }"
+                @tap="doUninstallPack"
               >
                 <text>{{ $t('market.uninstallBtn') }}</text>
               </view>
@@ -177,7 +202,7 @@
 // 插件广场详情 tab（VS Code 扩展详情页形态）。spec = { kind: 'skill'|'plugin', id, name }
 // 由左栏 MarketSidebarPanel 点行打开。自行拉取市场与已安装两份数据合成视图，
 // 装/卸/启停后通过 uni.$emit('awd:market-changed') 通知左栏刷新。
-import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation } from '@/services/api.js'
+import { getPlugins, getSkills, getSkillMarket, getPluginMarket, installMarketSkill, uninstallMarketSkill, installMarketPlugin, uninstallMarketPlugin, setPluginEnabled, setSkillActivation, packStatus, packInfo, packInstall, packUninstall } from '@/services/api.js'
 import { ICONS } from '@/config/icons.js'
 import { isPanelSkill } from '@/config/leftSidebarPlugins.js'
 import { formatPrice, isPaid, paidState, priceCentsOf, priceLabel, purchaseUrl } from '@/utils/marketPricing.js'
@@ -236,6 +261,11 @@ export default {
       busy: false,
       // 是否已连接官网账户；随广场列表响应下发（付费未购项据此在「购买」与「需连接账户」之间选）
       accountConnected: false,
+      // 原生资源包（native pack）状态，见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3
+      packMeta: null,       // packInfo() 结果 {latestVersion, totalSize}，懒加载
+      packStatusInfo: null, // packStatus() 结果 {state, bytesDownloaded, bytesTotal, error}
+      packBusy: false,
+      packTimer: null,
     }
   },
   computed: {
@@ -346,6 +376,51 @@ export default {
     isPanel() {
       return this.spec && this.spec.kind === 'skill' && isPanelSkill(this.spec.id)
     },
+    /** 该 skill 挂着的原生资源包 id；来自 /api/skills/list 的 packId 字段，没有就是普通 skill */
+    packId() {
+      return (this.installedInfo && this.installedInfo.packId) || (this.marketInfo && this.marketInfo.packId) || null
+    },
+    packReady() {
+      return !!(this.installedInfo && this.installedInfo.packReady)
+    },
+    packDownloading() {
+      const state = this.packStatusInfo && this.packStatusInfo.state
+      return state === 'downloading' || state === 'verifying' || state === 'installing'
+    },
+    packFailed() {
+      return !!this.packStatusInfo && this.packStatusInfo.state === 'failed'
+    },
+    packRevokedState() {
+      return !!this.packStatusInfo && this.packStatusInfo.state === 'revoked'
+    },
+    /** 资源包体积（MB，一位小数），来自懒加载的 packInfo 或已有的 status 快照；两边都没有就留空 */
+    packSizeMB() {
+      const bytes = (this.packMeta && this.packMeta.totalSize) || (this.packStatusInfo && this.packStatusInfo.bytesTotal) || 0
+      if (!bytes) return ''
+      return (bytes / (1024 * 1024)).toFixed(1)
+    },
+    packInstallLabel() {
+      return this.packSizeMB
+        ? this.$t('market.installNeedsPackSized', { size: this.packSizeMB })
+        : this.$t('market.installNeedsPackNoSize')
+    },
+    packProgressText() {
+      const s = this.packStatusInfo
+      if (!s) return ''
+      const total = s.bytesTotal || 0
+      if (total > 0) {
+        return this.$t('market.packDownloadingProgress', {
+          downloaded: ((s.bytesDownloaded || 0) / (1024 * 1024)).toFixed(1),
+          total: (total / (1024 * 1024)).toFixed(1),
+        })
+      }
+      return this.$t('market.packDownloadingEllipsis')
+    },
+    uninstallPackHint() {
+      return this.packSizeMB
+        ? this.$t('market.uninstallPackConfirmSized', { size: this.packSizeMB })
+        : this.$t('market.uninstallPackConfirmPlain')
+    },
     sourceText() {
       if (this.installedInfo?.sourcePluginId) return this.$t('market.sourceBuiltinPlugin', { id: this.installedInfo.sourcePluginId })
       if (this.marketInfo) return this.$t('market.sourceOfficialMarket')
@@ -358,6 +433,7 @@ export default {
   },
   beforeUnmount() {
     uni.$off('awd:market-changed-from-sidebar', this.reload)
+    this.stopPackPoll()
   },
   methods: {
     async reload() {
@@ -399,9 +475,109 @@ export default {
       } finally {
         this.loading = false
       }
+      // 挂着资源包的面板型 skill：拉一次现状——可能是用户上次没装完，也可能是
+      // 老版本升级后端自动补下载中，两种都要接着轮询而不是回到「安装」按钮
+      if (this.packId) {
+        await this.refreshPackStatus()
+        const state = this.packStatusInfo && this.packStatusInfo.state
+        if (state === 'downloading' || state === 'verifying' || state === 'installing') {
+          this.packBusy = true
+          this.startPackPoll()
+        } else if (!this.packReady && state !== 'revoked' && !this.packMeta) {
+          this.loadPackMetaLazy()
+        }
+      } else {
+        this.stopPackPoll()
+      }
     },
     notifyChanged() {
       uni.$emit('awd:market-changed')
+    },
+    // ---- 原生资源包（native pack）：见 docs/NATIVE_PACK_DISTRIBUTION.md §4.3 ----
+    async loadPackMetaLazy() {
+      if (this.packMeta || !this.packId) return
+      try {
+        const res = await packInfo(this.packId)
+        if (res) this.packMeta = res
+      } catch (e) {
+        // 静默失败：安装按钮文案退化为不带大小的版本
+      }
+    },
+    async refreshPackStatus() {
+      if (!this.packId) return
+      try {
+        const res = await packStatus(this.packId)
+        this.packStatusInfo = (res && res.status) || null
+      } catch (e) {
+        // 轮询途中网络抖动很常见，不中止——下一拍再试
+        return
+      }
+      const state = this.packStatusInfo && this.packStatusInfo.state
+      if (state === 'ready') {
+        this.stopPackPoll()
+        this.packBusy = false
+        if (this.installedInfo) this.installedInfo.packReady = true
+        // 到 ready 才走现有 enable 流程；已经启用（如老版本升级自动补下载）则不重复调用
+        if (this.installedInfo && !this.installedInfo.enabled) {
+          await this.onPanelSkillToggle(true)
+        }
+      } else if (state === 'failed' || state === 'revoked') {
+        this.stopPackPoll()
+        this.packBusy = false
+      }
+    },
+    startPackPoll() {
+      this.stopPackPoll()
+      this.packTimer = setInterval(() => { this.refreshPackStatus() }, 1000)
+    },
+    stopPackPoll() {
+      if (this.packTimer) { clearInterval(this.packTimer); this.packTimer = null }
+    },
+    async doInstallPack() {
+      if (this.packBusy || !this.packId) return
+      this.packBusy = true
+      this.packStatusInfo = null
+      try {
+        await packInstall(this.packId)
+        await this.refreshPackStatus()
+        const state = this.packStatusInfo && this.packStatusInfo.state
+        if (state && state !== 'ready' && state !== 'failed') this.startPackPoll()
+      } catch (e) {
+        this.packBusy = false
+        console.error('安装资源包失败:', e)
+        uni.showToast({ title: e?.message || this.$t('market.installFailedNeedAdmin'), icon: 'none' })
+      }
+    },
+    async doUninstallPack() {
+      if (this.busy || !this.packId) return
+      if (!this.packMeta) await this.loadPackMetaLazy()
+      const ok = await new Promise(resolve => {
+        uni.showModal({
+          title: this.$t('market.confirmUninstallPackTitle'),
+          content: this.uninstallPackHint,
+          confirmText: this.$t('market.uninstallBtn'),
+          cancelText: this.$t('market.cancelBtn'),
+          success: r => resolve(r.confirm),
+          fail: () => resolve(false),
+        })
+      })
+      if (!ok) return
+      this.busy = true
+      try {
+        // 先走现有停用流程，再删资源包目录（§6：卸载 = 停用 + 删 packs/<id>/）
+        await setSkillActivation(this.spec.id, 'disabled')
+        await packUninstall(this.packId)
+        this.stopPackPoll()
+        this.packStatusInfo = null
+        uni.showToast({ title: this.$t('market.uninstalledToast'), icon: 'none' })
+        await this.reload()
+        this.notifyChanged()
+      } catch (e) {
+        console.error('卸载资源包失败:', e)
+        uni.showToast({ title: e?.message || this.$t('market.uninstallFailedNeedAdmin'), icon: 'none' })
+      } finally {
+        this.busy = false
+      }
     },
     // 购买走系统浏览器：支付要用用户已登录的浏览器会话，内嵌 tab 里付不了
     openPurchase() {
@@ -789,6 +965,28 @@ export default {
 .mdp-action-hint {
   font-size: 11px;
   color: #ADB5BD;
+}
+
+/* 原生资源包状态：下架标红、下载中用中性进度条、失败态错误文案 + 重试按钮 */
+.mdp-pack-revoked {
+  font-size: 12px;
+  font-weight: 600;
+  color: #C0392B;
+}
+
+.mdp-pack-progress {
+  height: 28px;
+  line-height: 28px;
+  padding: 0 12px;
+  border-radius: 6px;
+  background: #F1F3F5;
+  font-size: 12px;
+  color: #495057;
+}
+
+.mdp-pack-error {
+  font-size: 12px;
+  color: #C0392B;
 }
 
 .mdp-divider {

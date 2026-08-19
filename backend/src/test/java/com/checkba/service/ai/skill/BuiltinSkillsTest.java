@@ -119,6 +119,8 @@ class BuiltinSkillsTest {
                 "出图三件套必须都在白名单里，缺一个模型就调不到：" + s.getAllowedTools());
         assertTrue(s.getAllowedTools().contains("extract_file_text"),
                 "抽取阶段要通读文件夹里的材料，缺了它就只能凭对话内容画");
+        assertEquals("litigation-visual", s.getRequiresPack(),
+                "出图资源（litviz/graphviz/drawio）走原生资源包分发，缺了这行广场就不会去下载");
         assertFalse(s.getPromptTemplate().isBlank(), "prompt.md 应有内容");
     }
 

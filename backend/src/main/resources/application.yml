@@ -305,6 +305,21 @@ ai:
       MCowBQYDK2VwAyEAjAbnyl44SiQF/CTyn59/uHAXCeRTEI0h0Bn5HEv7T4Y=
       -----END PUBLIC KEY-----
 
+  # 原生资源包（native pack）配置（对应 PackProperties，规范见 docs/NATIVE_PACK_DISTRIBUTION.md）
+  # 验签沿用上面 ai.plugins.registry-public-key 那把公钥（pack 与 JAR 插件同属
+  # 「广场分发的可执行内容」这一信任层级），公钥留空同样是拒绝一切安装。
+  packs:
+    # 资源包落盘目录（相对服务端工作目录，惯例同 ai.plugins.dir；打包态在 ~/.aiworkdeck/packs/）
+    dir: packs
+    # 下载源，按序降级。镜像必须排在 GitHub 之前：境内直连 GitHub 实测 12 KB/s。
+    base-urls:
+      - https://www.aiworkdeck.com/plugin-packs
+      - https://workdeck.ai/plugin-packs
+    # 总开关：false 时安装、自动补下载、封禁同步全部旁路（离线部署形态用）
+    enabled: true
+    # 平台封禁表（形制同插件封禁表）；端点不可达时静默跳过
+    revoked-url: https://www.aiworkdeck.com/api/registry/packs/revoked
+
   # Skill 体系配置（对应 SkillProperties，规范见 docs/SKILL_SPEC.md）
   skills:
     # 可写 skill 目录（相对服务端工作目录，做法同 ai.plugins.dir）。广场安装落这里。

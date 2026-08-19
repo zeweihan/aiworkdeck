@@ -182,7 +182,12 @@ AI provider 的 API key 后窃取、装 JVM 全局 TrustManager 关掉 TLS 校�
 
 ## 9. 分期
 
-- **Phase 1**（当前）：官网提交 + 人工审核 + 自动扫描报告 + 签名 + registry 四个接口。
-- **Phase 2**：桌面端安装（验签 + 逐文件哈希校验 + 信任确认）+ 封禁拉取与强制禁用。
+- **Phase 1**：官网提交 + 人工审核 + 自动扫描报告 + 签名 + registry 四个接口。（已落地）
+- **Phase 2**：桌面端安装（验签 + 逐文件哈希校验 + 信任确认）+ 封禁拉取与强制禁用。（已落地）
+- **Phase 2.5（2026-08 立项）**：第四种分发形态「原生资源包（native pack）」——
+  重资源（脚本运行时 / 平台二进制 / 静态资产）不随安装包、不进 registry 应用层，
+  走签名 manifest + 静态镜像的运行时下载；含三方 pack 提交审核与三方 Web 插件 SDK。
+  规范整体在 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md)，本文的
+  状态机 / 签名密钥 / 封禁语义被它沿用。
 - **Phase 3**（未排期）：进程外插件形态（MCP server），为不需要独立 UI 的插件提供
   真正的隔离边界；届时在线渠道优先推荐该形态，JAR 保留给必须有自己界面的插件。

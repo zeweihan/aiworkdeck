@@ -49,6 +49,16 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
   `lib/plugin-signing.ts`（签名）、`lib/plugin-scan.ts`（常量池扫描 + permissions 交叉验证）、
   `app/[lang]/plugins/submit`（提交页）、`app/[lang]/admin/PluginReview.tsx`（审核台）。
 
+## 原生资源包（native pack）分发（2026-08）
+
+**规范：`docs/NATIVE_PACK_DISTRIBUTION.md`（第四种分发形态的权威定义）。**
+
+- 后端 `service/pack/NativePackService` + `controller/PackController`（/api/packs：list、{id}/status、{id}/info、{id}/install、{id}/uninstall）。签名沿用插件 registry 密钥对（`ai.plugins.registry-public-key`，未配置即拒装），但盖在 manifest **原始字节**上（旁挂 .sig），不走 canonical JSON。
+- 下载**不经官网应用层**：镜像静态直出 `https://{www.aiworkdeck.com|workdeck.ai}/plugin-packs/<id>/…`（`ai.packs.base-urls`），断点续传（.part + Range）+ 压缩包哈希 + 包内 `contents.sha256` 逐文件复核 + 原子指针切换。
+- 前端：MarketSidebarPanel / MarketDetailPane 对 `packId` 非空且 `packReady:false` 的面板 skill 显示「需下载资源包」与字节级进度；LitigationVisualPanel 顶部有下载状态条。
+- 三方 pack 提交/审核/签名在官网仓（`lib/packs-store.ts`、admin PackReview、`GET /api/registry/packs/revoked`），发布件出到 outbox 后由服务器侧脚本上架静态目录，新加坡镜像 SG 侧拉取。
+- pack 发布链：`.github/workflows/pack-release.yml`（tag `pack-<id>-v<ver>`）出未签名产物，`deploy/publish-pack.sh` 负责服务器侧签名（私钥不离开官网机）、双机上架与指针切换。
+
 ## 官网 registry 契约
 
 - **列表**：`GET {registryUrl}` → skill 元数据 JSON 数组，字段对应 MarketSkillView：id/name/description/icon/version/author/authorDisplayName/triggers[]/allowedTools[]/downloads/updatedAt/homepage/**priceCents/pricingModel**（`installed`、`purchased` 由本地判定）。

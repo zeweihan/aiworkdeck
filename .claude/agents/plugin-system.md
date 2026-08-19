@@ -7,13 +7,14 @@ description: 插件系统领域（具体插件实现）。任务涉及尽调/脱
 
 职责边界：各具体业务插件与插件/skill 运行机制。不含插件市场页与 registry 同步（plugin-marketplace 领域），不含左栏 UI 本身（sidebar-shell 领域）。
 
-## 三类插件形态
+## 四类插件形态
 
 1. **内置面板型**：前端组件直接内嵌 project-overview.vue 面板区，无启停开关，靠 `leftSidebarPlugins.js` 静态配置 + 角色过滤（`getPluginsForUser`，CLIENT 角色只见 dd-files）。
 2. **Skill 型**：后端 prompt 包（skill.yml + prompt.md），对话关键词触发。
 3. **动态 JAR 插件**：plugins/ 目录下 manifest.json + JAR，前端用 PluginPane iframe 承载。
+4. **原生资源包（native pack，2026-08 立项）**：重资源（脚本运行时/平台二进制/静态资产）的运行时下载分发，规范 `docs/NATIVE_PACK_DISTRIBUTION.md`。后端 `service/pack/NativePackService` + `/api/packs`；skill.yml 用 `requires_pack: <packId>` 声明依赖；落盘 `~/.aiworkdeck/packs/<id>/<version>/` + `current.json` 原子指针。首个对象是诉讼可视化（litviz+graphviz+drawio）。
 
-**「面板型插件在广场里启停」是体验对齐，不是真下载分发（2026-08-19）**：诉讼可视化、会议录音、脱敏这几个挂在左栏的面板，字节早已随安装包分发在本地（`backend/skills/<id>/`），广场里点「安装」实际做的是 `POST /api/skills/{id}/enable` 翻转 `SkillRegistry` 的启用位，立即可用，不联网、不下载任何东西。这是为了让用户心智上体验到「广场装插件」的交互一致性。**真正意义上的运行时下载分发**（不随安装包走、按需从网络拉取原生资源/可执行内容的插件形态）是独立的后续立项，目前只有「动态 JAR 插件」那条链路（见下文与 `docs/PLUGIN_DISTRIBUTION.md`）沾边，且仍要求人工审核 + 签名 + 装后默认禁用，二者不要混为一谈。
+**「面板型插件在广场里启停」的体验对齐（2026-08-19，PR#433）与真下载分发的关系**：诉讼可视化、会议录音、脱敏这几个左栏面板靠 `enabled_by_default:false` + `requiresSkill` 门控在广场呈现「安装/卸载」。资源随包在场时，「安装」仍只是 `POST /api/skills/{id}/enable` 翻启用位（不联网）；skill 声明了 `requires_pack` 且资源不在场（新版本已从安装包摘除、或老用户升级后资源随 .app 替换消失）时，「安装」会先走 `/api/packs/{id}/install` 下载资源包（字节级进度）再启用，后端启动时对「已启用但资源缺失」的 skill 自动补下载。随包资源优先于 pack（老用户不强迫重下）。
 
 ## 现有插件清单
 
