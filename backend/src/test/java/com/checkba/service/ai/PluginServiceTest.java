@@ -311,6 +311,122 @@ class PluginServiceTest {
 
     // ==== 禁用插件不加载 ====
 
+    // ==== 规范 v2.3：frontendEntry 校验 ====
+
+    /** 写一个带 web/index.html 的插件目录，frontendEntry 由调用方指定（null = 不写该字段） */
+    private void writeWebPlugin(String id, String frontendEntry) throws IOException {
+        Path dir = pluginsDir.resolve(id);
+        Files.createDirectories(dir.resolve("web"));
+        Files.writeString(dir.resolve("web").resolve("index.html"), "<h1>hi</h1>", StandardCharsets.UTF_8);
+        Files.writeString(dir.resolve("outside.html"), "<h1>out</h1>", StandardCharsets.UTF_8);
+        String entryJson = frontendEntry == null ? "null" : "\"" + frontendEntry + "\"";
+        writeManifest(id, "{\"id\": \"" + id + "\", \"name\": \"W\", \"frontendEntry\": " + entryJson + "}");
+    }
+
+    @Test
+    @DisplayName("frontendEntry 指向 web/ 内真实文件时保留，并识别为 Web 插件")
+    void validFrontendEntryIsKept() throws IOException {
+        writeWebPlugin("web-plugin", "web/index.html");
+        service.init();
+
+        assertEquals("web/index.html", service.getPlugins().get(0).getFrontendEntry());
+        assertTrue(service.hasWebEntry("web-plugin"));
+        assertNotNull(service.getPluginDir("web-plugin"));
+    }
+
+    @Test
+    @DisplayName("frontendEntry 指向 web/ 之外、或文件不存在时置空并当作无前端入口")
+    void invalidFrontendEntryIsDropped() throws IOException {
+        writeWebPlugin("escape-plugin", "../outside.html");
+        writeWebPlugin("outside-web", "outside.html");
+        writeWebPlugin("missing-file", "web/missing.html");
+        writeWebPlugin("escape-inside-web", "web/../outside.html");
+        service.init();
+
+        for (String id : List.of("escape-plugin", "outside-web", "missing-file", "escape-inside-web")) {
+            assertNull(service.getPlugin(id).getFrontendEntry(), id + " 的非法入口应被置空");
+            assertFalse(service.hasWebEntry(id), id);
+        }
+    }
+
+    @Test
+    @DisplayName("frontendEntry 是绝对 http(s) URL 时原样保留，且不算 Web 插件（旧形态不变）")
+    void absoluteUrlFrontendEntryIsPassedThrough() throws IOException {
+        writeManifest("legacy", "{\"id\": \"legacy\", \"name\": \"L\", "
+                + "\"frontendEntry\": \"https://example.com/panel\"}");
+        service.init();
+
+        assertEquals("https://example.com/panel", service.getPlugin("legacy").getFrontendEntry());
+        assertFalse(service.hasWebEntry("legacy"), "绝对 URL 不经 PluginWebController，也不走桥");
+    }
+
+    @Test
+    @DisplayName("resolveWebFile：web/ 内放行，穿越与目录一律 null")
+    void resolveWebFileGuards() throws IOException {
+        writeWebPlugin("web-plugin", "web/index.html");
+        service.init();
+        java.io.File dir = service.getPluginDir("web-plugin");
+
+        assertNotNull(service.resolveWebFile(dir, "index.html"));
+        assertNull(service.resolveWebFile(dir, "../outside.html"));
+        assertNull(service.resolveWebFile(dir, "../../"));
+        assertNull(service.resolveWebFile(dir, "missing.html"));
+        assertNull(service.resolveWebFile(dir, ""));
+        assertNull(service.resolveWebFile(dir, null));
+        assertNull(service.resolveWebFile(null, "index.html"));
+    }
+
+    // ==== 规范 v2.3：packs ====
+
+    @Test
+    @DisplayName("examples/hello-web-plugin 是一个能真正加载起来的 Web 插件")
+    void bundledWebPluginExampleIsValid() throws IOException {
+        // 示例插件是三方作者照抄的样板，坏了没人会发现——扫描口径变化时这条先红
+        Path example = Path.of("..", "examples", "hello-web-plugin");
+        assertTrue(Files.isDirectory(example), "示例插件目录不存在：" + example.toAbsolutePath());
+        Path dest = pluginsDir.resolve("hello-web-plugin");
+        try (var walk = Files.walk(example)) {
+            for (Path src : walk.toList()) {
+                Path target = dest.resolve(example.relativize(src).toString());
+                if (Files.isDirectory(src)) {
+                    Files.createDirectories(target);
+                } else {
+                    Files.createDirectories(target.getParent());
+                    Files.copy(src, target);
+                }
+            }
+        }
+        service.init();
+
+        PluginService.PluginMetadata meta = service.getPlugin("hello-web-plugin");
+        assertNotNull(meta, "示例插件应被扫描到");
+        assertEquals("web/index.html", meta.getFrontendEntry(),
+                "frontendEntry 被置空说明 web/index.html 缺失或路径写错");
+        assertTrue(service.hasWebEntry("hello-web-plugin"));
+        assertEquals(List.of("file_read"), meta.getPermissions());
+        assertNotNull(service.resolveWebFile(service.getPluginDir("hello-web-plugin"), "awd-plugin-sdk.js"),
+                "index.html 同步引入的 SDK 副本必须在包内");
+    }
+
+    @Test
+    @DisplayName("packs 字段解析；非法 id 被丢弃（会被拼进注册表 URL 与磁盘路径）")
+    void parsesPacksAndDropsInvalidIds() throws IOException {
+        writeManifest("with-packs", "{\"id\": \"with-packs\", \"name\": \"P\", "
+                + "\"packs\": [\"litviz-fonts\", \"BAD-ID\", \"../escape\", \"\", \"ok2\"]}");
+        service.init();
+
+        assertEquals(List.of("litviz-fonts", "ok2"), service.getPlugin("with-packs").getPacks());
+    }
+
+    @Test
+    @DisplayName("未声明 packs 时为 null（v1/v2 兼容）")
+    void packsAbsentStaysNull() throws IOException {
+        writeManifest("no-packs", "{\"id\": \"no-packs\", \"name\": \"P\"}");
+        service.init();
+
+        assertNull(service.getPlugin("no-packs").getPacks());
+    }
+
     @Test
     @DisplayName("启动时被禁用的插件仍登记元数据，但不加载其 JAR")
     void disabledPluginIsRegisteredButJarNotLoaded() throws IOException {

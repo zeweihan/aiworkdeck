@@ -222,6 +222,71 @@ class PluginMarketServiceTest {
         assertFalse(downloaded[0], "验签失败必须在下载任何文件之前中止");
     }
 
+    // ==== manifest.packs 联动（规范 v2.3 / NATIVE_PACK_DISTRIBUTION §11.4） ====
+
+    /** 装一个 manifest 声明了 packs 的插件，返回打桩过的 service（pack 服务由调用方注入） */
+    private PluginMarketService stubbedWithManifest(String manifest) throws Exception {
+        byte[] manifestBytes = manifest.getBytes(StandardCharsets.UTF_8);
+        Map<String, String> files = new TreeMap<>();
+        files.put("manifest.json", PluginMarketService.sha256Hex(manifestBytes));
+        String sig = sign(canonical("demo", "1.0.0", "2026-07-27T00:00:00Z", files));
+        return stubbed(publicKeyPem, files, sig, manifestBytes, null);
+    }
+
+    @Test
+    @DisplayName("安装成功后按 manifest.packs 逐个异步安装依赖的资源包")
+    void installQueuesDeclaredPacks() throws Exception {
+        PluginMarketService svc = stubbedWithManifest(
+                "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\","
+                        + "\"packs\":[\"litviz-fonts\",\"demo-pack\"]}");
+        com.checkba.service.pack.NativePackService packs =
+                mock(com.checkba.service.pack.NativePackService.class);
+        svc.setNativePackService(packs);
+
+        assertEquals("demo", svc.install("demo"));
+
+        verify(packs).installAsync("litviz-fonts");
+        verify(packs).installAsync("demo-pack");
+        verifyNoMoreInteractions(packs);
+    }
+
+    @Test
+    @DisplayName("pack 排队失败不回滚插件——pack 有自己的状态机与重试面")
+    void packInstallFailureDoesNotRollbackPlugin() throws Exception {
+        PluginMarketService svc = stubbedWithManifest(
+                "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\",\"packs\":[\"demo-pack\"]}");
+        com.checkba.service.pack.NativePackService packs =
+                mock(com.checkba.service.pack.NativePackService.class);
+        doThrow(new IllegalStateException("注册表不可达")).when(packs).installAsync(anyString());
+        svc.setNativePackService(packs);
+
+        assertEquals("demo", svc.install("demo"), "pack 装不上不该让插件安装失败");
+        assertTrue(Files.exists(pluginsDir.resolve("demo").resolve("manifest.json")));
+    }
+
+    @Test
+    @DisplayName("未声明 packs 的插件不触碰 pack 服务")
+    void installWithoutPacksDoesNotTouchPackService() throws Exception {
+        PluginMarketService svc = stubbedWithManifest(
+                "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\"}");
+        com.checkba.service.pack.NativePackService packs =
+                mock(com.checkba.service.pack.NativePackService.class);
+        svc.setNativePackService(packs);
+
+        assertEquals("demo", svc.install("demo"));
+        verifyNoInteractions(packs);
+    }
+
+    @Test
+    @DisplayName("未注入 pack 服务时安装链路照常工作（单机/单测形态）")
+    void installWorksWithoutPackService() throws Exception {
+        PluginMarketService svc = stubbedWithManifest(
+                "{\"id\":\"demo\",\"name\":\"演示\",\"version\":\"1.0.0\",\"packs\":[\"demo-pack\"]}");
+
+        assertEquals("demo", svc.install("demo"));
+        assertTrue(Files.exists(pluginsDir.resolve("demo").resolve("manifest.json")));
+    }
+
     @Test
     @DisplayName("封禁的插件不允许被重新启用")
     void revokedPluginCannotBeEnabled() throws Exception {

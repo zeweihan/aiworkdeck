@@ -49,6 +49,22 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
   `lib/plugin-signing.ts`（签名）、`lib/plugin-scan.ts`（常量池扫描 + permissions 交叉验证）、
   `app/[lang]/plugins/submit`（提交页）、`app/[lang]/admin/PluginReview.tsx`（审核台）。
 
+### 三方 Web 插件（Phase B，2026-08-19）
+
+提交包新增 `web/` 目录，`manifest.frontendEntry` 指向其中（`web/index.html`）。
+**纯 web 插件可以没有 JAR**——不进 JVM，风险量级低一档；`web/` 下的文件与 JAR 一样进
+`files` 哈希表、被同一个签名覆盖。JS 没有常量池，自动扫描降级为「外联 URL 字面量提取 +
+权限交叉验证」，以人工审核为主。
+
+客户端侧：`controller/ai/PluginWebController`（`GET /api/plugin-web/{id}/**`，服务
+`plugins/<id>/web/`，只服务已启用插件，CSP 按 manifest `network` 权限放开
+`connect-src`）+ `PluginPane.vue` 的 sandbox iframe 与 postMessage 桥。
+形态、协议与 SDK 契约见 `docs/PLUGIN_SPEC.md` §8 与 `.claude/agents/plugin-system.md`。
+
+`manifest.packs: ["<packId>"]`：`PluginMarketService.install` 成功后逐个
+`NativePackService.installAsync`；**装不上不回滚插件只记 WARN**——pack 有自己的状态机与重试面，
+一次网络抖动不该吃掉刚装好的插件。三方插件要带重资源走这条路，不撑大 registry 的 20 MB 受理线。
+
 ## 原生资源包（native pack）分发（2026-08）
 
 **规范：`docs/NATIVE_PACK_DISTRIBUTION.md`（第四种分发形态的权威定义）。**
@@ -133,6 +149,7 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 - 分类筛选依赖后端 `MarketSkillView.category`，该字段 #198 才加。**跑在旧后端（≤ v0.8.0）上时分类会全归「其他」，这是后端版本旧，不是前端 bug**；排查前先 `curl /api/skills/market/list` 看响应里有没有 category。
 - 桌面端 9696 是真实后端端口，测试市场功能别 mock 错对象。
 - bundle files 白名单意味着官网新增文件类型（如图标文件）需要同时改 BUNDLE_FILES 和官网打包端。
+- **Web 插件的 SDK 有三份副本**：源头 `sdk/plugin-sdk/awd-plugin-sdk.js`、官网模板 `lib/plugin-template.ts` 的 `WEB_SDK_JS`、示例 `examples/hello-web-plugin/web/awd-plugin-sdk.js`，必须逐字节一致；桥协议还有第四处实现（`PluginPane.vue` 宿主端）。改协议是四处同批次的事，单改一处的表现是插件卡在「等待宿主握手」。
 - **本仓 `skills/<id>/skill.yml` 里的 `category` 字段，和这里说的 `MarketSkillView.category`（contract/litigation/compliance/… 七类 + icons.js/CategoryIcon.tsx 图标映射）是两套完全不同的东西，只是字段名撞了**：前者是 `SkillDefinition.category`，取值来自 `MatterCategory` 枚举的中文 display（如「合规监管」「争议解决」），只在命中触发词时喂 `matter.classified` 埋点用（见 `SkillRouter.java`），`SkillController.SkillView` 压根不把它序列化进 `/api/skills/list` 响应；后者是**在线 registry**（网站提交时选的 category）才有的字段，只出现在 `GET /api/skills/market/list` 的 `MarketSkillView` 里。随包本地内置的 skill（诉讼可视化、会议录音、脱敏这类，从未经过官网提交流程）在市场面板「已安装」列表里的图标走的是 `isPanelSkill` 判定出的 `ICONS.panelLeft`，根本不读 `category`——本地 skill.yml 的 `category` 值不需要、也不应该对着 icons.js 的七个英文 key 去选，对着 `MatterCategory.java` 的中文枚举值选就对了（2026-08-19 脱敏改造踩过这个概念混淆，核实后确认两者无关联）。
 
 ## 验证

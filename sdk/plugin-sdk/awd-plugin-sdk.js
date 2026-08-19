@@ -1,0 +1,104 @@
+/**
+ * AI WorkDeck 插件 SDK v1 —— postMessage 桥。
+ *
+ * 源头在桌面仓 sdk/plugin-sdk/，此为随模板分发的副本。
+ * 契约（桌面端宿主按同一份实现，勿单方面改动）：
+ *
+ *   握手  宿主 -> 插件   { awd: 1, type: "init", context: {...} }
+ *   请求  插件 -> 宿主   { awd: 1, type: "call", seq, method, params }
+ *   响应  宿主 -> 插件   { awd: 1, type: "result", seq, ok, result | error: { code, message } }
+ *
+ * v1 方法：
+ *   context.get   {}                  -> { pluginId, projectId, language, theme }
+ *   files.list    {}                  -> { files: [{ path, name, size }] }   需 file_read
+ *   files.read    { path }            -> { path, content, truncated }        需 file_read，文本上限 5 MB
+ *   ui.toast      { message }         -> {}
+ *   storage.get   { key }             -> { key, value }    插件级 KV，value 为 null 表示不存在
+ *   storage.set   { key, value }      -> {}                插件级 KV，总量上限 64 KB
+ *
+ * 错误码：permission_denied（manifest 未声明所需权限）、unknown_method（宿主不认识的方法）。
+ *
+ * 重要：本文件必须用普通同步 <script> 引入，且排在业务脚本之前——
+ * 宿主在 iframe load 后立刻发 init，晚注册监听会错过握手，ready() 将永远挂起。
+ */
+(function (global) {
+  'use strict';
+
+  var PROTOCOL = 1;
+  var seq = 0;
+  var pending = {};
+  var resolveReady;
+  var readyPromise = new Promise(function (resolve) { resolveReady = resolve; });
+
+  function post(msg) {
+    // 插件运行在 opaque origin 的 sandbox iframe 里，拿不到宿主的真实 origin，
+    // 只能用 '*'；反向的来源校验由宿主端（校验 event.source 是本 iframe）负责。
+    global.parent.postMessage(msg, '*');
+  }
+
+  global.addEventListener('message', function (event) {
+    if (event.source !== global.parent) return;
+    var msg = event.data;
+    if (!msg || msg.awd !== PROTOCOL) return;
+
+    if (msg.type === 'init') {
+      awd.context = msg.context || {};
+      resolveReady(awd.context);
+      return;
+    }
+
+    if (msg.type === 'result') {
+      var entry = pending[msg.seq];
+      if (!entry) return;
+      delete pending[msg.seq];
+      if (msg.ok) {
+        entry.resolve(msg.result);
+      } else {
+        var err = new Error((msg.error && msg.error.message) || '调用失败');
+        err.code = (msg.error && msg.error.code) || 'unknown_error';
+        entry.reject(err);
+      }
+    }
+  });
+
+  function call(method, params) {
+    return new Promise(function (resolve, reject) {
+      var id = ++seq;
+      pending[id] = { resolve: resolve, reject: reject };
+      post({ awd: PROTOCOL, type: 'call', seq: id, method: method, params: params || {} });
+    });
+  }
+
+  var awd = {
+    /** SDK 版本，与桥协议版本无关 */
+    version: '1.0.0',
+    /** 握手拿到的上下文；ready() 之前为 null */
+    context: null,
+    /** 等待宿主握手，resolve 值即 awd.context */
+    ready: function () { return readyPromise; },
+    /** 原样调用任意 v1 方法，返回宿主的 result */
+    call: call,
+    files: {
+      /** -> Array<{ path, name, size }> */
+      list: function () {
+        return call('files.list', {}).then(function (r) { return (r && r.files) || []; });
+      },
+      /** -> { path, content, truncated } */
+      read: function (path) { return call('files.read', { path: path }); }
+    },
+    ui: {
+      toast: function (message) { return call('ui.toast', { message: message }); }
+    },
+    storage: {
+      /** -> 存过的值，没有则 null */
+      get: function (key) {
+        return call('storage.get', { key: key }).then(function (r) {
+          return r && r.value !== undefined ? r.value : null;
+        });
+      },
+      set: function (key, value) { return call('storage.set', { key: key, value: value }); }
+    }
+  };
+
+  global.awd = awd;
+})(window);

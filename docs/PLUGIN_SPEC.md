@@ -1,8 +1,13 @@
-# 插件规范 v2.1（Plugin Spec v2.1）
+# 插件规范 v2.3（Plugin Spec v2.3）
 
-> 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B。示例插件见 [examples/hello-plugin/](../examples/hello-plugin/)。
-> 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）；
-> 前端管理页：`frontend/src/pages/plugin-market/plugin-market.vue`（插件广场，入口在系统管理侧边栏）。
+> 适用版本：v1 自 0.4.x；v2（权限执行 + 启停过滤）自 Phase 3A；v2.1（插件携带 Skill）自 Phase 3B；
+> v2.3（Web 插件 + `packs` 依赖）自 native pack Phase B。
+> 示例插件：[examples/hello-plugin/](../examples/hello-plugin/)（JAR 工具）、
+> [examples/hello-web-plugin/](../examples/hello-web-plugin/)（纯前端）。
+> 后端实现：`PluginService`（扫描/解析/启停）、`PluginController`（HTTP API）、
+> `PluginWebController`（Web 插件静态服务）；
+> 前端管理页：`frontend/src/pages/plugin-market/plugin-market.vue`（插件广场，入口在系统管理侧边栏）；
+> Web 插件宿主桥：`frontend/src/components/PluginPane.vue`；SDK 源头：[sdk/plugin-sdk/](../sdk/plugin-sdk/)。
 
 ## 1. 目录结构
 
@@ -12,7 +17,9 @@
 plugins/
 └── hello-plugin/
     ├── manifest.json          # 必需，插件元数据（本规范核心）
-    └── hello-plugin-1.0.0.jar # 可选，后端工具 JAR（manifest.backendJars 声明）
+    ├── hello-plugin-1.0.0.jar # 可选，后端工具 JAR（manifest.backendJars 声明）
+    └── web/                   # 可选，Web 插件的静态资源（frontendEntry 指向其中，见 §8）
+        └── index.html
 ```
 
 `ai.plugins.dir` 默认是相对路径 `plugins`，**实际落点由后端进程的工作目录决定**：
@@ -60,9 +67,10 @@ plugins/
 | `homepage` | string | 否 | 主页或仓库 URL。 |
 | `permissions` | string[] | 否 | 插件**自行声明**会用到的能力，见 §3。缺省视为不需要任何敏感能力。注意这是作者的自述，不是运行时授权。 |
 | `tools` | object[] | 否 | 工具清单（`name` + 中文 `description` + 可选 `permissions`），用于插件广场展示、人工审查与 v2 权限校验。`name` 应与 JAR 中 `@Tool` 方法名一致；`permissions` 声明**该工具运行所需**的能力（v2 新增，见 §3）。 |
-| `frontendEntry` | string | 否 | 前端入口（预留，v1 不加载）。 |
+| `frontendEntry` | string | 否 | **v2.3 起激活**：`web/index.html` 这样的相对路径 = Web 插件（见 §8）；`http(s)://` 绝对 URL = 旧形态，宿主直接 iframe 打开外部页面。 |
 | `backendJars` | string[] | 否 | 相对插件目录的 JAR 文件名列表，启动/重扫时加载其中带 `@Tool` 注解的类。 |
 | `skills` | string[] | 否 | **v2.1 新增**：插件携带的 Skill 子目录名列表（相对插件目录），见 §7。 |
+| `packs` | string[] | 否 | **v2.3 新增**：依赖的原生资源包 id 列表，见 §9 与 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md)。 |
 
 未知字段被忽略（向前兼容）；`permissions` 中出现 v1 未定义的值仅记录 WARN，不拒绝加载。
 
@@ -87,6 +95,12 @@ plugins/
 >
 > 它的真实价值：帮**诚实的**作者暴露"忘了声明"的疏漏，以及给人工审查提供一份可读的
 > 能力自述。对恶意插件零防御力。
+
+> **Web 插件（§8）是例外，也是这套声明第一次真正落地的地方。** 那类插件不进 JVM，
+> 跑在 opaque origin 的 sandbox iframe 里，唯一的出口是 postMessage 桥；桥的宿主端
+> 逐调用比对 `permissions`（缺 `file_read` 时 `files.*` 直接返回 `permission_denied`），
+> `network` 还会改写静态响应的 CSP `connect-src`。同一串字符串，在 JAR 插件上是自述，
+> 在 Web 插件上是**由浏览器与宿主共同执行的边界**。
 
 两级声明 + 分发时校验（实现在 `PluginService.missingPermissionsForTool()` +
 `ToolRegistry.execute()`）：
@@ -156,6 +170,7 @@ Java 侧没有进程内沙箱可用（`SecurityManager` 已于 JEP 411 废弃、
 | POST | `/api/plugins/{id}/enable` | admin | 启用插件 |
 | POST | `/api/plugins/{id}/disable` | admin | 禁用插件 |
 | POST | `/api/plugins/rescan` | admin | 重新扫描 plugins/ 目录，返回 `{ code, pluginCount, toolCount }` |
+| GET | `/api/plugin-web/{id}/**` | 无 | Web 插件静态资源（`plugins/<id>/web/` 之下），见 §8.2 |
 
 管理接口鉴权与 AdminConfigController 一致：`X-Session-Id` 请求头 → session 用户名为 `admin`。
 
@@ -178,16 +193,153 @@ plugins/
 - **插件被禁用时，其携带的 skill 不参与触发匹配**（管理页仍可见）；插件重新启用即恢复。
 - skill 自身的启停独立持久化（`ai.skills.disabled`），与插件启停叠加生效。
 
-## 8. 版本演进
+## 8. Web 插件（v2.3）
+
+`frontendEntry` 从「预留，v1 不加载」正式激活。一个只会写 HTML/JS 的开发者由此能造出
+看得见的东西——不需要 Java，不需要编译，`web/index.html` 就是全部。
+
+```
+plugins/
+└── my-web-plugin/
+    ├── manifest.json        # "frontendEntry": "web/index.html", "permissions": ["file_read"]
+    └── web/
+        ├── index.html
+        └── awd-plugin-sdk.js
+```
+
+纯 Web 插件**可以没有任何 JAR**（`backendJars` 留空或不写）：这类插件不进 JVM，
+风险量级比 JAR 低一整档。
+
+### 8.1 frontendEntry 的两种形态
+
+| 形态 | 例子 | 行为 |
+|---|---|---|
+| `web/` 之下的相对路径 | `web/index.html` | Web 插件：后端静态服务 + sandbox iframe + postMessage 桥 |
+| `http(s)://` 绝对 URL | `https://example.com/panel` | 旧形态：iframe 直接打开外部页面，不加 sandbox、不握手、不响应桥调用 |
+
+扫描时校验相对路径：必须以 `web/` 开头、canonical path 落在 `<pluginDir>/web/` 之下、
+且文件存在。任一不满足则**置空并记 WARN**，当作没有前端入口——宁可这个插件在左栏显示
+空面板，也不能让一个指到 `../../` 的入口把插件目录之外的文件服务出去。
+
+### 8.2 静态服务与 CSP
+
+`PluginWebController`（`GET /api/plugin-web/{id}/**`）把 `plugins/<id>/web/` 服务出来。
+
+**不需要登录态**：这里只有插件包自带的静态资产，没有任何用户数据；而承载它的 iframe
+是 opaque origin，本来也带不出任何凭据。要登录既没有安全收益，还会让 iframe 直接白屏。
+
+四道守卫：
+
+1. id 必须过 `^[a-z0-9][a-z0-9-]{1,49}$`；
+2. 目标文件 canonical path 必须落在 `<pluginDir>/web/` 之下（同时挡 `../` 与符号链接）；
+3. 只服务**已启用**插件——未安装 / 已禁用 / 被平台封禁一律 404（不是 403：不泄露
+   「这个 id 存在但被禁用了」），与「禁用即不加载 JAR」同一口径；
+4. 响应头：
+
+| 头 | 值 |
+|---|---|
+| `Content-Security-Policy` | `default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'` |
+| 同上，manifest 声明了 `network` 时 | 末段换成 `connect-src https:` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Cache-Control` | `no-cache` |
+| `Content-Type` | 按扩展名（html/js/css/json/svg/png/jpg/gif/webp/ico/woff/woff2/ttf/otf/txt/map），其余 `application/octet-stream` |
+
+### 8.3 sandbox 与桥
+
+宿主端在 `PluginPane.vue`：iframe 带 `sandbox="allow-scripts allow-forms"`，
+**绝不含 `allow-same-origin`**。
+
+> 这一条是整个模型的地基。iframe 一旦与应用同源，插件脚本就能读到 localStorage 里的
+> `X-Session-Id` 并打全部 `/api/*`，等于把宿主的全部权限白送出去。没有它，iframe 是
+> opaque origin，除了 postMessage 桥没有第二条路。
+
+协议（宿主端、SDK、官网模板与宿主模拟器共用同一份契约，任何一方单独改动都会让插件跑不起来）：
+
+```
+握手  宿主 -> 插件   { awd: 1, type: "init", context: { pluginId, projectId, language, theme } }
+请求  插件 -> 宿主   { awd: 1, type: "call", seq, method, params }
+响应  宿主 -> 插件   { awd: 1, type: "result", seq, ok, result | error: { code, message } }
+```
+
+来源校验是双向的：宿主校验 `event.source === iframe.contentWindow`，插件校验
+`event.source === window.parent`。两侧 `postMessage` 的 targetOrigin 都只能是 `'*'`——
+opaque origin 使然，不能靠 `event.origin` 判断。
+
+握手时机：宿主在 iframe `load` 之后立刻发 `init`。**SDK 必须用同步 `<script>` 引入且
+排在业务脚本之前**，晚注册监听会错过握手，`ready()` 将永远挂起。
+
+### 8.4 v1 方法表
+
+| 方法 | 参数 | 返回 | 权限 |
+|---|---|---|---|
+| `context.get` | `{}` | context 对象本身（不包层） | — |
+| `files.list` | `{}` | `{ files: [{ path, name, size }] }`，`path` 是项目内相对路径 | `file_read` |
+| `files.read` | `{ path }` | `{ path, content, truncated }`，文本上限 5 MB，超限截断且 `truncated: true`（不报错） | `file_read` |
+| `ui.toast` | `{ message }` | `{}` | — |
+| `storage.get` | `{ key }` | `{ key, value }`，不存在时 `value: null` | — |
+| `storage.set` | `{ key, value }` | `{}` | — |
+
+错误码：`permission_denied`（manifest 未声明所需权限，或读的不是可抽取文本的格式）、
+`unknown_method`、`quota_exceeded`（插件级 KV 超 64 KB）、`not_found`（文件不存在）。
+
+插件级 KV 存在宿主的 `localStorage`，键为 `awd_plugin_kv_<pluginId>`，
+每个插件总量上限 64 KB。
+
+### 8.5 SDK 表面
+
+源头在 [sdk/plugin-sdk/awd-plugin-sdk.js](../sdk/plugin-sdk/awd-plugin-sdk.js)；
+官网插件模板 zip 里的那份是**逐字节一致的分发副本**。
+
+```html
+<script src="awd-plugin-sdk.js"></script>
+<script>
+  const ctx = await awd.ready();      // resolve 值即 awd.context
+  const files = await awd.files.list();   // 糖衣：直接是数组
+  const doc = await awd.files.read(files[0].path);  // 原始 result
+  const n = await awd.storage.get('clicks');        // 糖衣：直接是值
+  await awd.storage.set('clicks', (n || 0) + 1);
+  await awd.ui.toast('你好');
+</script>
+```
+
+`awd.call(method, params)` 原样调用任意 v1 方法并返回宿主的 `result`；
+只有 `files.list()` 与 `storage.get()` 做了解包糖衣，`files.read()` 与 `call()` 返回原始 result。
+
+### 8.6 开发工作流
+
+官网插件模板 zip 带一份 `dev/host-simulator.html`——一个假扮宿主桥的静态页，
+起个本地静态服务就能在浏览器里开发调试，不必装桌面端。模拟器的 sandbox 属性与桌面端
+一致（同样没有 `allow-same-origin`）：调试时为了方便加上它，装进桌面端会立刻失败。
+
+## 9. 插件依赖原生资源包（packs，v2.3）
+
+```json
+{ "id": "my-plugin", "packs": ["litviz-fonts"] }
+```
+
+- 每项必须过与插件 id 同一套正则，非法项在解析时丢弃并记 WARN——这串字符会被拼进
+  注册表 URL 与磁盘路径。
+- **在线安装该插件成功后**，`PluginMarketService` 对每个 packId 调
+  `NativePackService.installAsync()`。
+- **装不上不回滚插件，只记 WARN**：pack 是独立分发物，有自己的状态机、进度条与重试面
+  （`/api/packs/{id}/status`）。一次网络抖动不该吃掉用户刚装好的插件。
+
+用途见 [NATIVE_PACK_DISTRIBUTION.md](NATIVE_PACK_DISTRIBUTION.md) §11.4：三方插件要带重资源时
+声明 pack 依赖，不把 registry 的 20 MB 受理线撑大。
+
+## 10. 版本演进
 
 - **v1（0.4.x）**：声明式 manifest + 启停持久化 + 插件广场展示。
 - **v2（Phase 3A）**：ToolRegistry 按启停过滤三处消费点 + `tools[].permissions`
   分发前权限校验（诚实声明模型）+ 启停缓存 TTL。
 - **v2.1（Phase 3B）**：manifest 新增 `skills` 字段，插件可携带 Skill（见 §7 与
   docs/SKILL_SPEC.md）。
-- **v2.2（当前）**：加载期收口——禁用即不加载 JAR（§5）、`backendJars` 路径逃逸校验（§4）；
+- **v2.2**：加载期收口——禁用即不加载 JAR（§5）、`backendJars` 路径逃逸校验（§4）；
   在线分发落地：平台 Ed25519 签名 + 人工审核 + 客户端验签 + 远程封禁，见
   [docs/PLUGIN_DISTRIBUTION.md](PLUGIN_DISTRIBUTION.md)。
-- 规划中：进程外插件形态（MCP server）为不需要独立 UI 的插件提供真正的隔离边界；
-  frontendEntry 动态加载。**进程内沙箱不在规划中**——Java 侧无此能力（§3），
-  不要再把它列为待办。
+- **v2.3（当前）**：`frontendEntry` 从「预留」激活为 Web 插件形态（§8）——`web/` 静态服务、
+  sandbox iframe、postMessage 桥、CSP；**permissions 在 Web 插件上第一次成为真实的执行边界**。
+  manifest 新增 `packs` 字段（§9）。
+- 规划中：进程外插件形态（MCP server）为不需要独立 UI 的插件提供真正的隔离边界。
+  **进程内沙箱不在规划中**——Java 侧无此能力（§3），不要再把它列为待办；
+  Web 插件那条路已经用「不同源 + 桥」拿到了同等效果，代价是能力必须逐个显式开放。

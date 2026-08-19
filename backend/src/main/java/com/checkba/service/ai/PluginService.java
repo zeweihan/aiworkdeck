@@ -37,6 +37,10 @@ public class PluginService {
     private static final Set<String> KNOWN_PERMISSIONS =
             Set.of("file_read", "file_write", "network", "editor");
 
+    /** manifest.packs 里的 pack id 规则，与 NativePackService / PluginMarketService 同一套 */
+    private static final java.util.regex.Pattern PACK_ID =
+            java.util.regex.Pattern.compile("^[a-z0-9][a-z0-9-]{1,49}$");
+
     // 并发安全：rescan() 会 clear()+重填这些集合，而 ToolRegistry 在高频请求线程上无同步地遍历读取，
     // 普通 ArrayList/HashMap 会抛 ConcurrentModificationException / 读到半空状态。
     @Getter
@@ -97,8 +101,21 @@ public class PluginService {
         private String icon;
         private String author;
         private String homepage;
+        /**
+         * 前端入口（规范 v2.3 激活）：
+         * <ul>
+         *   <li>{@code web/index.html} 这样的相对路径 = Web 插件，由 PluginWebController 静态服务；
+         *       扫描时校验必须落在插件目录的 {@code web/} 之下且文件存在，否则置空并记 WARN。</li>
+         *   <li>{@code http(s)://} 绝对 URL = 旧形态，原样透传给前端 iframe（不校验、不改行为）。</li>
+         * </ul>
+         */
         private String frontendEntry;
         private List<String> backendJars;
+        /**
+         * 依赖的原生资源包 id 列表（规范 v2.3，见 docs/NATIVE_PACK_DISTRIBUTION.md §11.4）。
+         * 在线安装该插件成功后逐个异步安装；pack 自己有状态与重试面，装失败不回滚插件。
+         */
+        private List<String> packs;
         /** 声明需要的能力：file_read / file_write / network / editor */
         private List<String> permissions;
         /** 插件提供的工具清单（名称 + 中文描述） */
@@ -307,6 +324,98 @@ public class PluginService {
         return toolToPluginId.get(toolName);
     }
 
+    /** 已加载的插件元数据；未知 id 返回 null */
+    public PluginMetadata getPlugin(String pluginId) {
+        return plugins.stream()
+                .filter(p -> Objects.equals(p.getId(), pluginId))
+                .findFirst().orElse(null);
+    }
+
+    /** 插件所在目录；未知 id 返回 null（供 PluginWebController 定位 web/ 静态资源） */
+    public File getPluginDir(String pluginId) {
+        return pluginDirById.get(pluginId);
+    }
+
+    /**
+     * 该插件是否带 Web 前端（frontendEntry 为校验通过的 {@code web/} 内相对路径）。
+     * 绝对 URL 形态返回 false——那种插件不经 PluginWebController，也不走 postMessage 桥。
+     */
+    public boolean hasWebEntry(String pluginId) {
+        PluginMetadata meta = getPlugin(pluginId);
+        return meta != null && meta.getFrontendEntry() != null && !isAbsoluteUrl(meta.getFrontendEntry());
+    }
+
+    private static boolean isAbsoluteUrl(String entry) {
+        String lower = entry.toLowerCase(Locale.ROOT);
+        return lower.startsWith("http://") || lower.startsWith("https://");
+    }
+
+    /**
+     * 校验 manifest.frontendEntry（规范 v2.3）。
+     *
+     * <p>绝对 http(s) URL 原样保留（旧形态，宿主直接 iframe 打开，本服务不介入）。
+     * 相对路径必须落在插件目录的 {@code web/} 之下且文件存在——否则**置空并记 WARN**，
+     * 当作没有前端入口：宁可这个插件在左栏显示空面板，也不能让一个指到
+     * {@code ../../} 的入口把插件目录之外的文件静态服务出去。
+     */
+    void validateFrontendEntry(File pluginDir, PluginMetadata meta) {
+        String entry = meta.getFrontendEntry();
+        if (entry == null || entry.isBlank()) {
+            meta.setFrontendEntry(null);
+            return;
+        }
+        entry = entry.trim();
+        if (isAbsoluteUrl(entry)) {
+            meta.setFrontendEntry(entry);
+            return;
+        }
+        String normalized = entry.replace('\\', '/');
+        while (normalized.startsWith("./")) {
+            normalized = normalized.substring(2);
+        }
+        if (!normalized.startsWith("web/")) {
+            log.warn("Plugin {} declares frontendEntry '{}' outside web/, treated as no web entry",
+                    meta.getId(), entry);
+            meta.setFrontendEntry(null);
+            return;
+        }
+        File target = resolveWebFile(pluginDir, normalized.substring("web/".length()));
+        if (target == null) {
+            log.warn("Plugin {} declares frontendEntry '{}' but the file is missing or escapes web/, "
+                    + "treated as no web entry", meta.getId(), entry);
+            meta.setFrontendEntry(null);
+            return;
+        }
+        meta.setFrontendEntry(normalized);
+    }
+
+    /**
+     * 把 {@code web/} 之下的相对子路径解析成真实文件。
+     *
+     * <p>用 canonical path 判定目标必须位于 {@code <pluginDir>/web/} 正下方——同时挡掉
+     * {@code ../} 穿越与符号链接绕行。这是 Web 插件静态服务的唯一定位入口。
+     *
+     * @param subPath 相对 {@code web/} 的路径，如 {@code index.html}、{@code assets/app.js}
+     * @return 校验通过且存在的普通文件；非法 / 不存在 / 是目录时返回 null
+     */
+    public File resolveWebFile(File pluginDir, String subPath) {
+        if (pluginDir == null || subPath == null || subPath.isBlank()) {
+            return null;
+        }
+        try {
+            File webRoot = new File(pluginDir, "web");
+            File target = new File(webRoot, subPath);
+            String base = webRoot.getCanonicalPath() + File.separator;
+            if (!target.getCanonicalPath().startsWith(base)) {
+                return null;
+            }
+            return target.isFile() ? target : null;
+        } catch (IOException e) {
+            log.warn("Plugin web path check failed for '{}': {}", subPath, e.getMessage());
+            return null;
+        }
+    }
+
     private void loadDisabledState() {
         disabledPluginIds.clear();
         if (systemSettingService == null) {
@@ -355,6 +464,7 @@ public class PluginService {
                     log.warn("Duplicate plugin id '{}', skip plugin dir: {}", meta.getId(), pluginDir.getName());
                     continue;
                 }
+                validateFrontendEntry(pluginDir, meta);
                 plugins.add(meta);
                 pluginDirById.put(meta.getId(), pluginDir);
 
@@ -441,6 +551,19 @@ public class PluginService {
                             meta.getId(), p, KNOWN_PERMISSIONS);
                 }
             }
+        }
+        // packs（规范 v2.3）：id 必须过与 pack / 插件同一套正则，非法项丢弃并告警——
+        // 这串字符会被拼进注册表 URL 与磁盘路径，不能放行任意输入。
+        if (meta.getPacks() != null) {
+            List<String> valid = new ArrayList<>();
+            for (String packId : meta.getPacks()) {
+                if (packId != null && PACK_ID.matcher(packId).matches()) {
+                    valid.add(packId);
+                } else {
+                    log.warn("Plugin {} declares invalid pack id '{}', ignored", meta.getId(), packId);
+                }
+            }
+            meta.setPacks(valid);
         }
         return meta;
     }
