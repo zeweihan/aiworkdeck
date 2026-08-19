@@ -96,6 +96,11 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 ## 已知地雷
 
 - CI 签名→冒烟→打包顺序不可乱（PR#176）。
+- **Windows 上 node:test 的 teardown 删「被本进程 HTTP 服务读流碰过的」临时目录，必须用异步
+  `fs.promises.rm(dir, {recursive, force, maxRetries, retryDelay})`，不能用 rmSync**（PR#436，
+  drawio-server.test.js 的 rmrf 帮手是范本）：读流 autoClose 的 fs.close 回调可能还排在事件
+  循环里，rmSync 的 maxRetries 是同步忙等、会把事件循环连同那个 close 一起卡死，给多大预算
+  都是 ENOTEMPTY 跑穿（run 32237671073 实测证伪过 rmSync 重试版）。纯文件读写的测试不受影响。
 - 发版有个跨仓的时间差：镜像脚本删旧包 vs 官网页面 ISR 缓存。两边任何一边改保留策略/缓存时长前，先看 `deploy/update-mirror-sync.sh` 里 prune_old_installers 的注释。
 - macOS CI 红要当真查（Apple 协议过期事件后恢复）；`--admin` 合并与 worktree 删分支技巧见 ci-macos 记录。
 - iCloud 驱逐会掏空本地文件（打包/测试环境两次踩）；EMFILE 用抬 ulimit 解。
