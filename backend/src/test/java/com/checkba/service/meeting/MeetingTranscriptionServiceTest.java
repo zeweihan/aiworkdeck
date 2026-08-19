@@ -184,7 +184,7 @@ class MeetingTranscriptionServiceTest {
     }
 
     @Test
-    @DisplayName("COMPLETED 但转写结果为空 → FAILED（不能让空稿冒充成功）")
+    @DisplayName("COMPLETED 但转写结果为空 → EMPTY（合法终态，不是失败）")
     void refreshEmptyTranscriptFails() throws Exception {
         MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
         m.setTingwuTaskId("task-1");
@@ -194,6 +194,7 @@ class MeetingTranscriptionServiceTest {
 
         MeetingRecording out = service(true).refreshIfNeeded(m);
 
-        assertEquals(MeetingRecording.STATUS_FAILED, out.getStatus());
+        assertEquals(MeetingRecording.STATUS_EMPTY, out.getStatus());
+        assertNull(out.getError());
     }
 }

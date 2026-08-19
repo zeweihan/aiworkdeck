@@ -166,6 +166,12 @@
           <view class="mr-btn secondary" @tap="onTranscribe(m)">{{ $t('meeting.retryTranscribe') }}</view>
         </view>
 
+        <!-- 未识别到人声：不是失败，用中性提示而非报错样式 -->
+        <view v-if="m.status === 'EMPTY'" class="mr-section">
+          <text class="mr-hint">{{ $t('meeting.emptyTranscriptHint') }}</text>
+          <view class="mr-btn secondary" @tap="onTranscribe(m)">{{ $t('meeting.retryTranscribe') }}</view>
+        </view>
+
         <!-- 已转写：说话人 + 转写稿 + 摘要 + 动作 -->
         <template v-if="m.status === 'TRANSCRIBED'">
           <view class="mr-section">
@@ -662,6 +668,7 @@ export default {
         RECORDED: this.$t('meeting.statusRecorded'),
         TRANSCRIBING: this.$t('meeting.statusTranscribing'),
         TRANSCRIBED: this.$t('meeting.statusTranscribed'),
+        EMPTY: this.$t('meeting.statusEmpty'),
         FAILED: this.$t('meeting.statusFailed')
       }[status] || status
     },

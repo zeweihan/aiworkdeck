@@ -90,6 +90,11 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
 **收藏夹**：`ProjectFavoritesPanel.vue`；网页选中收藏经 `checkba:webmark`（preload ~:26）→ project-overview 订阅入库（~:2003）；后端 `controller/WebFavoriteController.java`（/api/favorites/my、/api/projects/{id}/favorites、DELETE、image）。
 
 **搜索**：`SearchPanel.vue`；后端 `controller/SearchController.java`（POST /api/projects/{id}/search）。
+`ContentSearchService` 的全文抽取已改为复用 `DocumentTextService`（PDF 走 PDFBox3 原生
+API），不再自建 `new Tika()` 解析 PDF——项目 classpath 锁 PDFBox 3.0.1，Tika 2.9.1 的
+PDFParser 调 PDFBox2 已删除的 `PDDocument.load` 会抛 `NoSuchMethodError`（Error，能穿透
+`catch(Exception)`），一个 PDF 曾经就能把整个搜索请求打挂；`AutoTaggingService` 的自动打标签
+抽取同款同因，一并改掉了。逐文件循环的 catch 也收紧为 `catch(Throwable)` 做防御。
 标签筛选区默认折叠、按命中频次排序——**那不是排版偏好，是给一个数据 bug 兜底**：
 `/api/files/{id}/upload` 同时是编辑器自动保存的落点，挂在 legacy 分支上的
 `AutoTaggingService.autoTagFile` 因此每存一次盘就跑一次 LLM，每轮 5 个措辞不同的新词，

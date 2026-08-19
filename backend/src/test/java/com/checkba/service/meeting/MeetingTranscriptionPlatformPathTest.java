@@ -277,6 +277,26 @@ class MeetingTranscriptionPlatformPathTest {
     }
 
     @Test
+    @DisplayName("轮询完成但 Paragraphs 为空：落 EMPTY，不是 FAILED（真实故障就是这条触发的）")
+    void pollCompletesWithEmptyTranscriptionFallsToEmpty() {
+        MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);
+        m.setGatewayTaskId("asr_abc");
+        String emptyTranscription = "{\"Transcription\":{\"Paragraphs\":[]}}";
+        transport.task.add(new PlatformGatewayTransport.Reply(200, """
+                {"status":"completed","taskId":"asr_abc",
+                 "transcription":%s,"autoChapters":null,"summarization":null,"meetingAssistance":null,
+                 "billing":{"service":"asr","op":"transcribe","units":42,"unit":"minute","chargedCents":420}}"""
+                .formatted(quote(emptyTranscription))));
+
+        MeetingRecording out = service().refreshIfNeeded(m);
+
+        assertEquals(MeetingRecording.STATUS_EMPTY, out.getStatus());
+        assertNull(out.getError());
+        verifyNoInteractions(oss);
+        verifyNoInteractions(tingwu);
+    }
+
+    @Test
     @DisplayName("轮询失败：落 FAILED 带网关给的原因，一分钱不扣由服务端保证")
     void pollFailedIsTerminal() {
         MeetingRecording m = meeting(MeetingRecording.STATUS_TRANSCRIBING);

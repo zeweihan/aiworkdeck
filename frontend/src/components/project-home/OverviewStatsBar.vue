@@ -107,4 +107,54 @@ export default {
   color: #6C757D;
   line-height: 16px;
 }
+
+/* 响应祖先 .project-home-pane 的实际渲染宽度（container-name: home-pane，
+   定义在 project-home-pane.scss），不是靠 compact 布尔值。三档见该文件的注释。 */
+@container home-pane (max-width: 359px) {
+  .overview-stats-bar {
+    padding: 10px 12px;
+  }
+
+  .stats-tiles {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .stat-tile {
+    flex: none;
+    min-width: 0;
+    padding: 8px 10px;
+  }
+
+  .stat-value {
+    font-size: 13px;
+    line-height: 19px;
+  }
+
+  .stat-caption {
+    font-size: 10px;
+  }
+}
+
+@container home-pane (min-width: 360px) and (max-width: 559px) {
+  .overview-stats-bar {
+    padding: 14px 16px;
+  }
+
+  .stats-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 12px;
+  }
+
+  .stat-tile {
+    min-width: 0;
+    padding: 10px 12px;
+  }
+
+  .stat-value {
+    font-size: 14px;
+  }
+}
 </style>

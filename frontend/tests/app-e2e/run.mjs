@@ -730,9 +730,33 @@ try {
   // 改名会让这一步整条失配。「EasyVoice」在 #389 已改成「语音合成」；2026-08-19
   // 语音合成与会议录音合并成一个 rail 入口「语音」（合成成了面板内的一个 tab），
   // rail 标题跟着改。以后再改名，先看这一行。
-  for (const title of ['搜索', '文件脱敏', '语音', '文件暂存区', '资源管理器']) {
+  // 「文件脱敏」自 2026-08-19 起是门控面板（skill desensitize 默认不装），
+  // 不再常显，单独走下面的安装/卸载全周期断言。
+  for (const title of ['搜索', '语音', '文件暂存区', '资源管理器']) {
     await step('左栏 ' + title, () => mouseClickSel('[title="' + title + '"]'))
   }
+  await step('脱敏默认不装：rail 无入口', async () => {
+    if (await page.$('[title="文件脱敏"]')) {
+      throw new Error('desensitize 未启用时 rail 不该出现「文件脱敏」入口')
+    }
+  })
+  await step('广场安装（启用）脱敏后入口出现，卸载后消失', async () => {
+    // 与广场「安装」同一条后端路径；enabledSkillIds 是挂载时拉取的，翻转后整页刷新再断言
+    await api('/api/skills/desensitize/enable', { method: 'POST' })
+    try {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
+      await page.waitForSelector('[title="文件脱敏"]', { timeout: 15000 })
+      await mouseClickSel('[title="文件脱敏"]')
+    } finally {
+      // 还原到默认态（长驻后端不能被 e2e 改状态）
+      await api('/api/skills/desensitize/disable', { method: 'POST' })
+    }
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForFunction(
+      () => !document.querySelector('[title="文件脱敏"]'),
+      { timeout: 15000 },
+    )
+  })
   await step('「语音」面板里是两个 tab 而不是两个 rail 入口', async () => {
     await mouseClickSel('[title="语音"]')
     await page.waitForSelector('.voice-tabs', { timeout: 10000 })
@@ -748,15 +772,33 @@ try {
   // 2026-08-19：rail 底部的齿轮与头像撤掉，改成顶栏右上角头像的下拉；
   // 「系统设置」不再整页跳转，而是中栏的一个标签（薄壳页仍在，J7 单独覆盖）。
   console.log('== J6.3 头像下拉与设置标签 ==')
+  // .avatar-btn 是开关（toggleAvatarMenu），菜单开着再点会关掉；且点任一菜单项后
+  // 菜单自动收起。所以每一步都要「不在开着才点」，不能盲点。
+  const openAvatarMenu = async () => {
+    if (!(await page.$('.avatar-menu'))) {
+      await mouseClickSel('.avatar-btn')
+      await page.waitForSelector('.avatar-menu', { timeout: 8000 })
+    }
+  }
   await step('头像下拉里有个人中心与系统设置', async () => {
-    await mouseClickSel('.avatar-btn')
-    await page.waitForSelector('.avatar-menu', { timeout: 8000 })
+    await openAvatarMenu()
     const t = await textOf()
     for (const s of ['个人中心', '系统设置']) {
       if (!t.includes(s)) throw new Error('头像下拉里缺「' + s + '」')
     }
   })
+  await step('点「个人中心」开中栏标签而不是跳页（2026-08-19 前是整页 navigateTo）', async () => {
+    await openAvatarMenu()
+    await mouseClickText('个人中心')
+    await page.waitForSelector('.page-userprofile.is-embedded', { timeout: 15000 })
+    const h = await page.evaluate(() => location.hash)
+    if (h.includes('pages/userprofile/userprofile')) throw new Error('个人中心又变回整页跳转了')
+    await waitText('工作记录', 10000)
+    // 关掉这个标签，别把后面的旅程都压在个人中心页上
+    await mouseClickSel('.tab-item.active .tab-close')
+  })
   await step('点「系统设置」开中栏标签而不是跳页', async () => {
+    await openAvatarMenu()
     await mouseClickText('系统设置')
     await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
     const h = await page.evaluate(() => location.hash)
@@ -1057,7 +1099,7 @@ try {
 
   // ============ J8 API 烟测 ============
   console.log('== J8 API 烟测 ==')
-  for (const ep of ['/api/projects/my', '/api/ai/assistants', '/api/ai/config', '/api/skills/list',
+  for (const ep of ['/api/projects/my', '/api/ai/config', '/api/skills/list',
     '/api/plugins/list', '/api/sensitive/options', '/api/variables/user', '/api/favorites/my', '/api/auth/me']) {
     await step('GET ' + ep, async () => {
       const r = await fetch(BACKEND + ep, { headers: QA.sid ? { 'X-Session-Id': QA.sid } : {} })

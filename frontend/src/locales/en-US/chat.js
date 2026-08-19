@@ -52,7 +52,6 @@ export default {
   pptVariantImage: 'HD image',
   pptStartFailed: 'Failed to start generation',
   // ---- Header / empty state ----
-  assistantMenuHeader: 'Assistants',
   welcome: 'How can I help you?',
   welcomeSubtitle: 'Ask questions, draft documents, or analyze data anytime.',
   inputPlaceholderEmpty: 'Ask a question, drag files or folders here, or paste contract text...',

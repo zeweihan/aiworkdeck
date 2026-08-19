@@ -668,16 +668,16 @@ public class MeetingTranscriptionService {
                 MeetingTranscriptParser.buildSummaryJson(chapters, summarization, assistance));
     }
 
-    /** 落库，三档共用。转写正文为空一律当失败——不能让空稿冒充成功。 */
+    /**
+     * 落库，三档共用。转写正文为空不是失败——听悟对无人声/极短音频的合法返回就是空
+     * segments，落 STATUS_EMPTY（与 TRANSCRIBED 同级终态），而不是当异常抛出。
+     */
     private MeetingRecording storeSegments(MeetingRecording meeting,
                                            List<MeetingTranscriptParser.Segment> segments,
                                            String summaryJson) {
-        if (segments.isEmpty()) {
-            throw new IllegalStateException("转写结果为空");
-        }
         meeting.setTranscriptJson(MeetingTranscriptParser.segmentsToJson(segments));
         meeting.setSummaryJson(summaryJson);
-        meeting.setStatus(MeetingRecording.STATUS_TRANSCRIBED);
+        meeting.setStatus(segments.isEmpty() ? MeetingRecording.STATUS_EMPTY : MeetingRecording.STATUS_TRANSCRIBED);
         meeting.setError(null);
         return meetingRepository.save(meeting);
     }

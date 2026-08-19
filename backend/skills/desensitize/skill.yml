@@ -1,0 +1,37 @@
+# 脱敏 Skill（打包格式见 docs/SKILL_SPEC.md）
+#
+# 本 skill 背后没有可执行的工具：文档脱敏的实际操作在左栏「脱敏」面板里完成
+# （DesensitizePane.vue：选文件、勾策略、点生成），面板直连 /api/sensitive，
+# 不经过 AI 编排，也没有对应的 langchain4j @Tool。这个 skill 存在的唯一作用是——
+# 命中触发词时把用户引导去用那个面板，而不是假装能在对话里直接完成脱敏。
+id: desensitize
+name: 脱敏
+description: 文档脱敏：定位并涂黑身份证号、手机号、银行卡号、中文姓名等敏感信息，支持 PDF 与 Word（.docx）文档，可按类型自由勾选脱敏策略，一键生成脱敏后的新文件。
+
+author: AI Workdeck
+author_url: https://www.aiworkdeck.com
+version: 1.0.0
+license: MIT
+
+# 默认不安装：随包分发但默认关闭，用户在插件广场手动启用（= 安装）后才在左栏出现，
+# 见 leftSidebarPlugins.js 的 requiresSkill 门控与 SkillRegistry/SkillMarketService。
+# 这是「体验对齐」：随包分发 + 门控启停，安装即翻转启用位、立即可用；不下载任何字节。
+enabled_by_default: false
+
+# 法律事项类别（匿名统计用，枚举见 MatterCategory）
+category: 合规监管
+
+# 可用语言：脱敏面板（DesensitizePane.vue）本身已 i18n 化，但策略勾选项的文案来自
+# 后端 SensitiveType 枚举的 label/description，只有中文、没有英文变体
+# （SensitiveController /api/sensitive/options 直接拼 "label (example)"，无语言分支）。
+# 策略清单是这个面板的核心可操作内容，英文界面下会整块露出中文，所以先只给 zh-CN。
+# 等 SensitiveType 补上英文文案（需要改 .java，不在本次改动范围）再补
+# languages: [zh-CN, en-US] + name_en/triggers_en。
+languages:
+  - zh-CN
+
+# 触发条件：用户输入包含任一关键词即命中（不区分大小写）
+triggers:
+  - 脱敏
+
+prompt: prompt.md

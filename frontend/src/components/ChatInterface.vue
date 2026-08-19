@@ -223,10 +223,6 @@
           <text class="project-name-display">{{ projectName }}</text>
        </view>
        <view class="header-actions">
-          <view class="icon-btn" @tap="toggleAssistantMenu" :class="{ active: showAssistantMenu }" title="Assistants">
-             <image class="btn-icon default" src="/static/assistant.png" />
-             <image class="btn-icon hover" src="/static/assistant_hover.png" />
-          </view>
           <view class="icon-btn" @tap="$emit('toggle-history')" title="History">
              <image class="btn-icon default" src="/static/history.png" />
              <image class="btn-icon hover" src="/static/history_hover.png" />
@@ -242,25 +238,6 @@
           </view>
        </view>
     </view>
-
-    <!-- Assistant Dropdown Panel - positioned relative to chat-interface like history drawer -->
-    <view v-if="showAssistantMenu" class="assistant-dropdown-panel" @tap.stop>
-       <view class="assistant-menu-header">{{ $t('chat.assistantMenuHeader') }}</view>
-       <view
-         v-for="ast in assistants"
-         :key="ast.id"
-         class="assistant-menu-item"
-         :class="{ active: currentAssistantId === ast.id }"
-         @tap="selectAssistant(ast)"
-       >
-          <text class="assistant-item-name">{{ ast.name }}</text>
-          <view class="setting-icon-wrapper" @tap.stop="$emit('config-assistant', ast)">
-             <image class="setting-icon default" src="/static/setting.png" mode="aspectFit" />
-             <image class="setting-icon hover" src="/static/setting_hoving.png" mode="aspectFit" />
-          </view>
-       </view>
-    </view>
-    <view v-if="showAssistantMenu" class="dropdown-mask" @tap="showAssistantMenu = false"></view>
 
     <!-- 2. Message List (Single Source of Truth: bubbles) -->
     <scroll-view
@@ -416,7 +393,9 @@
                     </view>
                     <!-- Skill Selector：触发词自动匹配始终生效，这里是「额外主动加载」的多选入口 -->
                     <view class="skill-selector" :class="{ pinned: selectedSkillIds.length > 0, muted: skillDisabledByMode }" :title="skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
-                       <text class="skill-glyph">◲</text>
+                       <svg class="skill-glyph-svg" viewBox="0 0 24 24" fill="none">
+                          <path v-for="(d, gi) in ICONS.skill" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                       </svg>
                        <text v-if="selectedSkillIds.length && !skillDisabledByMode" class="skill-count">{{ selectedSkillIds.length }}</text>
                        <view v-if="showSkillDropdown" class="skill-dropdown down">
                           <view class="skill-dropdown-head">
@@ -616,7 +595,9 @@
                 </view>
                 <!-- Skill Selector：触发词自动匹配始终生效，这里是「额外主动加载」的多选入口 -->
                 <view class="skill-selector" :class="{ pinned: selectedSkillIds.length > 0, muted: skillDisabledByMode }" :title="skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
-                   <text class="skill-glyph">◲</text>
+                   <svg class="skill-glyph-svg" viewBox="0 0 24 24" fill="none">
+                      <path v-for="(d, gi) in ICONS.skill" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                   </svg>
                    <text v-if="selectedSkillIds.length && !skillDisabledByMode" class="skill-count">{{ selectedSkillIds.length }}</text>
                    <view v-if="showSkillDropdown" class="skill-dropdown up">
                       <view class="skill-dropdown-head">
@@ -672,6 +653,7 @@ import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, perfo
 import { getAuthHeaders } from '@/utils/auth.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
+import { ICONS } from '@/config/icons.js'
 
 export default {
   name: 'ChatInterface',
@@ -688,11 +670,6 @@ export default {
       type: String,
       default: ''
     },
-    assistants: {
-        type: Array,
-        default: () => []
-    },
-    currentAssistantId: String,
     // NEW: Current active tab for auto-context injection
     activeTab: {
       type: Object,
@@ -1039,8 +1016,6 @@ export default {
     const rollbackTargetIndex = ref(-1)
     const rollbackTargetContent = ref('')
     const rollbackTargetId = ref(null)
-
-    const showAssistantMenu = ref(false)
 
     // Upload Dialog State
     const showUploadDialog = ref(false)
@@ -1408,7 +1383,6 @@ export default {
         projectId: props.projectId,
         modelId: currentModelId.value,
         mode: currentModeId.value, // Agent 模式: ASK, PLAN, AGENT
-        assistantId: props.currentAssistantId,
         activeContext, // NEW: Auto-detected active tab context
         // ASK 模式下 skill 不生效，一律不带——省得后端与面板的状态各说各话
         skillIds: currentSkillIds(),
@@ -1482,7 +1456,6 @@ export default {
         projectId: props.projectId,
         modelId: currentModelId.value,
         mode: currentModeId.value,
-        assistantId: props.currentAssistantId,
         skillIds: currentSkillIds()
       })
       scrollToBottom()
@@ -2264,7 +2237,6 @@ export default {
         projectId: props.projectId,
         modelId: currentModelId.value,
         mode: 'AGENT',
-        assistantId: props.currentAssistantId,
         skillIds: currentSkillIds()
       })
       scrollToBottom()
@@ -2340,10 +2312,6 @@ export default {
        openRollbackDialog,
        cancelRollback,
        confirmRollback,
-       // Menu
-       showAssistantMenu,
-       toggleAssistantMenu: () => showAssistantMenu.value = !showAssistantMenu.value,
-       selectAssistant: (a) => emit('update:currentAssistantId', a.id),
        // Model
        currentModelId,
        currentModelName,
@@ -2366,6 +2334,7 @@ export default {
        availableModes,
        localModeNotice,
        // Skill 选择与本轮生效清单
+       ICONS,
        showSkillDropdown,
        availableSkills,
        selectedSkillIds,
@@ -2396,7 +2365,6 @@ export default {
              projectId: props.projectId,
              modelId: currentModelId.value,
              mode: 'AGENT', // 审批后使用 Agent 模式执行
-             assistantId: props.currentAssistantId,
              skillIds: currentSkillIds()
           })
           scrollToBottom()
@@ -2413,7 +2381,6 @@ export default {
              projectId: props.projectId,
              modelId: currentModelId.value,
              mode: currentModeId.value,
-             assistantId: props.currentAssistantId,
              skillIds: currentSkillIds()
           })
           scrollToBottom()
@@ -3004,66 +2971,6 @@ export default {
   margin-top: 4px;
 }
 
-/* Assistant Dropdown Panel - matches history drawer positioning */
-.assistant-dropdown-panel {
-  position: absolute;
-  top: 36px; /* Exactly below header */
-  left: 0;
-  right: 0;
-  background: #fff;
-  border-bottom: 1px solid #e2e8f0;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-  z-index: 1001;
-  display: flex;
-  flex-direction: column;
-  max-height: 400px;
-  overflow-y: auto;
-  animation: slideDown 0.15s ease-out;
-  border-radius: 0 0 8px 8px;
-}
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-5px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.assistant-menu-header {
-  padding: 6px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #64748b;
-  background: #f8f9fa;
-  border-bottom: 1px solid #f1f5f9;
-}
-
-.assistant-menu-item {
-  display: flex;
-  align-items: center;
-  padding: 10px 12px;
-  font-size: 13px;
-  color: #334155;
-  cursor: pointer;
-  border-bottom: 1px solid #f8f9fa;
-  transition: all 0.15s ease;
-}
-
-.assistant-menu-item:hover {
-  background: #f1f5f9;
-}
-
-.assistant-menu-item.active {
-  background: rgba(26, 83, 54, 0.08);
-  color: #1A5336;
-  font-weight: 500;
-}
-
-.assistant-item-name {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 @keyframes dropdownFadeIn {
   from {
     opacity: 0;
@@ -3111,41 +3018,6 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-/* Setting icon wrapper with hover effect */
-.setting-icon-wrapper {
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.15s ease;
-  flex-shrink: 0;
-  margin-left: 8px;
-}
-
-.setting-icon-wrapper:hover {
-  background: rgba(26, 83, 54, 0.08);
-}
-
-.setting-icon {
-  width: 16px;
-  height: 16px;
-}
-
-.setting-icon.hover {
-  display: none;
-}
-
-.setting-icon-wrapper:hover .setting-icon.default {
-  display: none;
-}
-
-.setting-icon-wrapper:hover .setting-icon.hover {
-  display: block;
 }
 
 .dropdown-mask {
@@ -3605,7 +3477,7 @@ export default {
   min-width: 24px;
   height: 24px;
   padding: 0 3px;
-  border-radius: 4px;
+  border-radius: 2px;
   transition: background 0.15s ease;
   flex-shrink: 0;
 }
@@ -3617,11 +3489,11 @@ export default {
 .skill-selector.pinned {
   background: rgba(91, 209, 151, 0.18);
 }
-.skill-selector.pinned .skill-glyph {
+.skill-selector.pinned .skill-glyph-svg {
   color: #1A5336;
 }
 /* ASK 模式下 skill 不生效，按钮压暗——下拉仍可打开，里面会说明为什么不能选 */
-.skill-selector.muted .skill-glyph {
+.skill-selector.muted .skill-glyph-svg {
   opacity: 0.45;
 }
 
@@ -3632,13 +3504,14 @@ export default {
   font-weight: 600;
 }
 
-.skill-glyph {
-  font-size: 14px;
-  color: #999;
-  line-height: 1;
-}
-.skill-selector:hover .skill-glyph {
+.skill-glyph-svg {
+  width: 16px;
+  height: 16px;
   color: #666;
+  flex-shrink: 0;
+}
+.skill-selector:hover .skill-glyph-svg {
+  color: #333;
 }
 
 .skill-dropdown {

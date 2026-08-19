@@ -123,6 +123,7 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 - 分类筛选依赖后端 `MarketSkillView.category`，该字段 #198 才加。**跑在旧后端（≤ v0.8.0）上时分类会全归「其他」，这是后端版本旧，不是前端 bug**；排查前先 `curl /api/skills/market/list` 看响应里有没有 category。
 - 桌面端 9696 是真实后端端口，测试市场功能别 mock 错对象。
 - bundle files 白名单意味着官网新增文件类型（如图标文件）需要同时改 BUNDLE_FILES 和官网打包端。
+- **本仓 `skills/<id>/skill.yml` 里的 `category` 字段，和这里说的 `MarketSkillView.category`（contract/litigation/compliance/… 七类 + icons.js/CategoryIcon.tsx 图标映射）是两套完全不同的东西，只是字段名撞了**：前者是 `SkillDefinition.category`，取值来自 `MatterCategory` 枚举的中文 display（如「合规监管」「争议解决」），只在命中触发词时喂 `matter.classified` 埋点用（见 `SkillRouter.java`），`SkillController.SkillView` 压根不把它序列化进 `/api/skills/list` 响应；后者是**在线 registry**（网站提交时选的 category）才有的字段，只出现在 `GET /api/skills/market/list` 的 `MarketSkillView` 里。随包本地内置的 skill（诉讼可视化、会议录音、脱敏这类，从未经过官网提交流程）在市场面板「已安装」列表里的图标走的是 `isPanelSkill` 判定出的 `ICONS.panelLeft`，根本不读 `category`——本地 skill.yml 的 `category` 值不需要、也不应该对着 icons.js 的七个英文 key 去选，对着 `MatterCategory.java` 的中文枚举值选就对了（2026-08-19 脱敏改造踩过这个概念混淆，核实后确认两者无关联）。
 
 ## 验证
 

@@ -66,6 +66,7 @@ export default {
   statusRecorded: 'Not transcribed',
   statusTranscribing: 'Transcribing',
   statusTranscribed: 'Transcribed',
+  statusEmpty: 'No speech detected',
   statusFailed: 'Transcription failed',
 
   // ---- Detail actions ----
@@ -87,6 +88,7 @@ export default {
   transcribingHint: 'Transcription and speaker separation are running. This usually takes a few minutes, and you can leave this page.',
   transcribeFailed: 'Transcription failed',
   submitTranscribeFailed: 'Could not submit for transcription: {message}',
+  emptyTranscriptHint: "This recording finished processing, but no speech was detected - it may be too short or largely silent. If you're sure it contains conversation, you can retry transcription.",
 
   // ---- Speakers ----
   speakersTitle: 'Speakers (tap to rename)',

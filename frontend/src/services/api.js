@@ -544,14 +544,6 @@ export function probeLocalAsr() {
   });
 }
 
-// 获取可用 AI 助手列表
-export function getAssistants() {
-  return request({
-    url: '/api/ai/assistants',
-    method: 'GET'
-  });
-}
-
 // 获取插件列表
 export function getPlugins() {
   return request({
@@ -2696,6 +2688,16 @@ export function abandonDraft(projectId, draftId) {
   return request({
     url: `/api/projects/${projectId}/version/draft/${draftId}/abandon`,
     method: 'POST'
+  });
+}
+
+// 某一份进行中稿自己的时间线（VersionTimeline 的分叉线用，Phase B）。响应形状与
+// /timeline 一致（含 parents），后端并行开发中——调用方需自行处理 404/失败降级，
+// 不要假设这个端点一定存在。
+export function getDraftTimeline(projectId, draftId, limit = 50) {
+  return request({
+    url: `/api/projects/${projectId}/version/drafts/${draftId}/timeline?limit=${limit}`,
+    method: 'GET'
   });
 }
 

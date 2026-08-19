@@ -47,6 +47,7 @@
       <VersionTimeline
         :project-id="projectId"
         :file-filter="fileFilter"
+        :drafts="drafts"
         :key="timelineKey"
         @reload-files="onReload"
         @compare-file="$emit('compare-file', $event)"

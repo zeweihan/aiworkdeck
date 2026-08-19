@@ -1,14 +1,15 @@
 package com.checkba.service.ai;
 
 import com.checkba.model.entity.Tag;
+import com.checkba.service.DocumentTextService;
 import com.checkba.service.FileTagService;
 import com.checkba.service.TagService;
-import com.checkba.storage.StorageServiceFactory;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
 /**
@@ -25,17 +26,17 @@ import static org.mockito.Mockito.*;
 class AutoTaggingServiceTest {
 
     /**
-     * 观测点选的是 {@link StorageServiceFactory}，不是 {@code ChatModelFactory}：
-     * 幂等闸的下一步是取文本（{@code extractText} → {@code getStorageService()}），
-     * 而取文本在本用例里必然失败（存储是 mock），执行到不了模型那一步。
+     * 观测点选的是 {@link DocumentTextService}，不是 {@code ChatModelFactory}：
+     * 幂等闸的下一步是取文本（{@code extractText}），而取文本在本用例里必然失败
+     * （抽取服务是 mock，unstub 调用返回 null），执行到不了模型那一步。
      * 拿模型当探针会得到「三条用例全绿或全红」的假信号——它压根不在被测路径上。
      */
-    private AutoTaggingService service(FileTagService fileTagService, StorageServiceFactory storage) {
+    private AutoTaggingService service(FileTagService fileTagService, DocumentTextService documentTextService) {
         return new AutoTaggingService(
                 mock(ChatModelFactory.class),
                 mock(TagService.class),
                 fileTagService,
-                storage,
+                documentTextService,
                 mock(AuxModelResolver.class),
                 mock(TokenUsageService.class));
     }
@@ -61,38 +62,38 @@ class AutoTaggingServiceTest {
     void skipsFileThatAlreadyHasAutoTags() {
         FileTagService fileTags = mock(FileTagService.class);
         when(fileTags.getTagsByFileId(7L)).thenReturn(List.of(systemTag()));
-        StorageServiceFactory storage = mock(StorageServiceFactory.class);
+        DocumentTextService documentTextService = mock(DocumentTextService.class);
 
-        service(fileTags, storage).autoTagFile(1L, 7L, "some/path.docx", 42L);
+        service(fileTags, documentTextService).autoTagFile(1L, 7L, "some/path.docx", 42L);
 
-        // 闸必须在取文本之前就拦住：不然每次自动保存还是要白跑一遍 Tika 解析
-        verifyNoInteractions(storage);
+        // 闸必须在取文本之前就拦住：不然每次自动保存还是要白跑一遍抽取
+        verifyNoInteractions(documentTextService);
         verify(fileTags, never()).addTagToFile(anyLong(), anyLong(), anyLong());
     }
 
     @Test
     @DisplayName("只有手工标签的文件不算打过：仍然要走一次自动打标签")
-    void manualTagsDoNotCountAsAlreadyTagged() {
+    void manualTagsDoNotCountAsAlreadyTagged() throws Exception {
         FileTagService fileTags = mock(FileTagService.class);
         when(fileTags.getTagsByFileId(8L)).thenReturn(List.of(manualTag()));
-        StorageServiceFactory storage = mock(StorageServiceFactory.class);
+        DocumentTextService documentTextService = mock(DocumentTextService.class);
 
-        service(fileTags, storage).autoTagFile(1L, 8L, "some/path.docx", 42L);
+        service(fileTags, documentTextService).autoTagFile(1L, 8L, "some/path.docx", 42L);
 
         // 判据是「有没有系统标签」而不是「有没有标签」——用户自己打过标签的文件
         // 不该因此永远拿不到自动标签
-        verify(storage).getStorageService();
+        verify(documentTextService).extractText(any());
     }
 
     @Test
     @DisplayName("查已有标签失败：当成没打过继续走，不能因为一次查询失败让文件永远没标签")
-    void treatsLookupFailureAsNotTagged() {
+    void treatsLookupFailureAsNotTagged() throws Exception {
         FileTagService fileTags = mock(FileTagService.class);
         when(fileTags.getTagsByFileId(9L)).thenThrow(new RuntimeException("db down"));
-        StorageServiceFactory storage = mock(StorageServiceFactory.class);
+        DocumentTextService documentTextService = mock(DocumentTextService.class);
 
-        service(fileTags, storage).autoTagFile(1L, 9L, "some/path.docx", 42L);
+        service(fileTags, documentTextService).autoTagFile(1L, 9L, "some/path.docx", 42L);
 
-        verify(storage).getStorageService();
+        verify(documentTextService).extractText(any());
     }
 }

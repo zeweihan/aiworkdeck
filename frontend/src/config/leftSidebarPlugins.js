@@ -24,8 +24,25 @@ export const DD_FILES_PLUGIN = {
 }
 
 /**
+ * 版本记录：2026-08-19 从 rail 数组挪到左下角（项目成员与暂存区之间），
+ * 与「项目概览」当初挪进数组正好相反——维护者认为版本记录的视觉位置应该
+ * 挨着「暂存区」（都是围绕本机改动/存档的动作），不该跟文件树/搜索这类
+ * 常驻浏览面板混在一起排。挪法照 DD_FILES_PLUGIN 的先例：定义留在这里独立导出，
+ * 只是不进 LEFT_SIDEBAR_PLUGINS 数组，toggleLeftPane('version') 语义不变，
+ * getLeftSidebarPlugin 仍能从 OFF_RAIL_PLUGINS 里查到它、leftPaneTitle 兜底不受影响。
+ */
+export const VERSION_PLUGIN = {
+  key: 'version',
+  label: t('config.sidebar.version'),
+  svgPaths: [
+    { d: "M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" },
+    { d: "M12 7V12L15.5 14" }
+  ]
+}
+
+/**
  * rail 从上到下的顺序就是这个数组的顺序（项目概览在最前，它是这个项目的门面）。
- * 底部那一组（暂存区、成员堆叠）不在这里，它们由模板在 spacer 之后单独渲染。
+ * 底部那一组（暂存区、版本记录、成员堆叠）不在这里，它们由模板在 spacer 之后单独渲染。
  */
 export const LEFT_SIDEBAR_PLUGINS = [
   {
@@ -95,6 +112,9 @@ export const LEFT_SIDEBAR_PLUGINS = [
   {
     key: 'desensitize',
     label: t('config.sidebar.desensitize'),
+    // 对应 skill.yml 的 enabled_by_default:false——默认不装，装了才出现在左栏。
+    // 见 filterPluginsByEnabledSkills。
+    requiresSkill: 'desensitize',
     svgPaths: [
       { d: "M12 22C12 22 20 18 20 12V5L12 2L4 5V12C4 18 12 22 12 22Z" }
     ]
@@ -118,19 +138,11 @@ export const LEFT_SIDEBAR_PLUGINS = [
       { d: 'M7 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' },
       { d: 'M17 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' }
     ]
-  },
-  {
-    key: 'version',
-    label: t('config.sidebar.version'),
-    svgPaths: [
-      { d: "M12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22Z" },
-      { d: "M12 7V12L15.5 14" }
-    ]
   }
 ]
 
-/** 不在 rail 数组里、但仍要能按 key 查到 label 的面板（CLIENT 的尽调文件） */
-const OFF_RAIL_PLUGINS = [DD_FILES_PLUGIN]
+/** 不在 rail 数组里、但仍要能按 key 查到 label 的面板（CLIENT 的尽调文件、版本记录） */
+const OFF_RAIL_PLUGINS = [DD_FILES_PLUGIN, VERSION_PLUGIN]
 
 export function getLeftSidebarPlugin(key) {
   return LEFT_SIDEBAR_PLUGINS.find(p => p.key === key)

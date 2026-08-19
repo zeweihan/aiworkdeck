@@ -155,4 +155,24 @@ export default {
   color: #1A5336;
   cursor: pointer;
 }
+
+/* 响应祖先 .project-home-pane 的实际渲染宽度，见 project-home-pane.scss 的注释 */
+@container home-pane (max-width: 359px) {
+  .conv-card {
+    padding: 8px 10px;
+  }
+
+  .conv-title {
+    font-size: 12px;
+  }
+
+  .conv-preview {
+    font-size: 11px;
+  }
+
+  .conv-meta,
+  .conv-status {
+    font-size: 10px;
+  }
+}
 </style>

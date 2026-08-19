@@ -57,13 +57,6 @@ export default {
   // The two tabs inside the "Voice" panel
   voiceTts: 'Text to Speech',
   voiceRecorder: 'Meeting Recording',
-  // Assistant config dialog
-  configAssistant: 'Configure Assistant',
-  assistantNameLabel: 'Assistant Name (System)',
-  presetPromptLabel: 'Preset Prompt (System)',
-  userPromptLabel: 'Custom Prompt',
-  userPromptPlaceholder: 'Enter custom instructions...',
-  userPromptHint: 'Note: if a custom prompt is set, the preset prompt will be ignored (User Prompt Prevails).',
   // Sidebar file tree action row
   selectAll: 'Select All',
   newDoc: 'New Document',
@@ -215,9 +208,4 @@ export default {
   folderTooManyFiles: 'Folder contains {count} files (over the 10-file limit), please remove some',
   fileAdded: 'Added: {name}',
   noDragData: 'No drag data received',
-  defaultAssistantName: 'Default Assistant',
-  defaultAssistantPrompt: 'You are a professional assistant.',
-  assistantSwitchedToast: 'Switched to: {name}',
-  assistantSwitchedMsg: 'Assistant switched to: {name}',
-  configSaved: 'Configuration saved',
 }

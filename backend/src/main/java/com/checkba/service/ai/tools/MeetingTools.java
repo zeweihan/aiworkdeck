@@ -128,6 +128,7 @@ public class MeetingTools implements AgentToolComponent {
             case MeetingRecording.STATUS_RECORDED -> LangText.of("已录音（未转写）", "recorded (not transcribed)");
             case MeetingRecording.STATUS_TRANSCRIBING -> LangText.of("转写中", "transcribing");
             case MeetingRecording.STATUS_TRANSCRIBED -> LangText.of("已转写", "transcribed");
+            case MeetingRecording.STATUS_EMPTY -> LangText.of("未识别到人声", "no speech detected");
             case MeetingRecording.STATUS_FAILED -> LangText.of("转写失败", "transcription failed");
             default -> status;
         };

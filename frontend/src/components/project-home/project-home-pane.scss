@@ -8,6 +8,8 @@ $bg-pale: #F8F9FA;
 $bg-white: #FFFFFF;
 
 .project-home-pane {
+  container-type: inline-size;
+  container-name: home-pane;
   padding: 24px;
   box-sizing: border-box;
   background: $bg-pale;
@@ -15,56 +17,18 @@ $bg-white: #FFFFFF;
 }
 
 /* 嵌在工作台**左栏**里：铺满并自己滚动（独立页那边由 body 滚，不需要这一条）。
-   左栏最窄 260px，一页纸那套两列布局在这个宽度下全部会折行，所以统一收成
-   单列并压掉一档字号与间距——密度对齐 App.vue 的 --awd-panel-* 令牌。
-
-   子组件的样式各自 scoped，父层要伸手进去只能走 :deep()。改的都是「窄栏下
-   必须让开」的两件事：flex-basis/min-width（不让开就横向溢出）与内边距。 */
+   这里只留「与实际渲染宽度无关」的宿主结构性差异——密度/列数一律交给下面
+   的 @container 断点，不许再在这里按 compact 布尔值无条件收窄。 */
 .project-home-pane.is-compact {
   height: 100%;
   overflow-y: auto;
-  padding: 10px var(--awd-panel-pad-x, 10px);
   background: $bg-white;
 }
 
 .project-home-pane.is-compact .home-column {
+  /* 独立页要居中卷轴（max-width:880 + auto margin）；嵌在左栏里则要铺满，
+     不然拖宽左栏后两侧会空出大段留白。与宽度无关，纯粹是「哪个宿主」的差异。 */
   max-width: none;
-  gap: 10px;
-}
-
-.project-home-pane.is-compact .home-section {
-  padding: 10px 12px;
-  border-radius: 4px;
-}
-
-.project-home-pane.is-compact .home-section-title {
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  font-size: var(--awd-panel-fs-sec, 11px);
-  font-weight: 700;
-}
-
-.project-home-pane.is-compact :deep(.profile-header),
-.project-home-pane.is-compact :deep(.overview-stats-bar) {
-  padding: 10px 12px;
-  border-radius: 4px;
-}
-
-.project-home-pane.is-compact :deep(.profile-project-name) {
-  font-size: 15px;
-  line-height: 22px;
-}
-
-.project-home-pane.is-compact :deep(.profile-fields) {
-  gap: 8px 12px;
-  margin-top: 10px;
-}
-
-/* 单列：min-width 是这两处横向溢出的直接原因（180 / 140），必须归零 */
-.project-home-pane.is-compact :deep(.profile-field),
-.project-home-pane.is-compact :deep(.stat-tile) {
-  flex: 1 1 100%;
-  min-width: 0;
 }
 
 /* 一页纸卷轴：单列纵向 */
@@ -99,3 +63,53 @@ $bg-white: #FFFFFF;
     padding: 16px 12px;
   }
 }
+
+/* ---- 响应真实渲染宽度的三档密度（左栏可拖 160px~75vw，compact 早先是静态布尔值，
+   摁死单列不管实际拖出来多宽）。断点按 .project-home-pane 自身容器宽度算，两个
+   宿主（左栏 / 独立页）共用同一套：独立页正常宽度下天然落在「常规」档，不需要
+   额外样式。子组件自己的密度（档案字段、统计卡等）在各自 scoped 样式里跟着同一个
+   home-pane 容器写，见 ProfileHeader.vue / OverviewStatsBar.vue。 */
+
+/* 微窄：单列、最紧凑密度 */
+@container home-pane (max-width: 359px) {
+  .project-home-pane {
+    padding: 10px 12px;
+  }
+
+  .home-column {
+    gap: 10px;
+  }
+
+  .home-section {
+    padding: 10px 12px;
+  }
+
+  .home-section-title {
+    margin-bottom: 8px;
+    padding-bottom: 6px;
+    font-size: 11px;
+  }
+}
+
+/* 窄中：两列起步，字号/间距升一档——拖左栏最常落的区间，重点打磨 */
+@container home-pane (min-width: 360px) and (max-width: 559px) {
+  .project-home-pane {
+    padding: 14px 16px;
+  }
+
+  .home-column {
+    gap: 14px;
+  }
+
+  .home-section {
+    padding: 12px 14px;
+  }
+
+  .home-section-title {
+    margin-bottom: 10px;
+    padding-bottom: 7px;
+    font-size: 12px;
+  }
+}
+
+/* 常规（>560px）：不写规则，落回上面已有的宽松默认样式 */

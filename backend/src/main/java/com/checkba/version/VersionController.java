@@ -447,6 +447,34 @@ public class VersionController {
         return ok(Map.of("drafts", drafts));
     }
 
+    /**
+     * 单独一稿自己的历史（沿这一稿的分支 walk，不是主线 HEAD）。
+     * 响应体结构与 {@code /timeline} 完全一致（含 parents，供前端画分叉/双亲关系）。
+     * draftId 不存在或已不是 ACTIVE 状态（已采纳/已放弃）：与 {@code /drafts} 同一套
+     * 软降级口径——不抛异常、不用 404，直接给空列表，前端不需要为「稿突然消失」
+     * 单独写一套错误处理。
+     */
+    @GetMapping("/drafts/{draftId}/timeline")
+    public ResponseEntity<Map<String, Object>> draftTimeline(
+            @PathVariable Long projectId,
+            @PathVariable Long draftId,
+            @RequestParam(defaultValue = "50") int limit,
+            @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
+        requireMember(projectId, sessionId);
+        if (!repoService.isInitialized(projectId)) {
+            return ok(Map.of("versions", List.of()));
+        }
+        WorkSession draft = sessionService.listDrafts(projectId).stream()
+                .filter(d -> d.getId().equals(draftId))
+                .findFirst()
+                .orElse(null);
+        if (draft == null) {
+            return ok(Map.of("versions", List.of()));
+        }
+        List<VersionEntry> entries = repoService.log(projectId, draft.getBranchName(), limit);
+        return ok(Map.of("versions", entries));
+    }
+
     @PostMapping("/draft/{id}/switch")
     public ResponseEntity<Map<String, Object>> switchToDraft(
             @PathVariable Long projectId, @PathVariable("id") Long draftId,

@@ -11,16 +11,8 @@ import com.checkba.repository.FileTagRepository;
 import com.checkba.repository.ProjectFileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.tika.Tika;
-import org.apache.tika.exception.TikaException;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -28,8 +20,8 @@ import java.util.stream.Collectors;
 
 /**
  * 内容搜索服务
- * 
- * 使用 Apache Tika 提取文档内容进行全文搜索
+ *
+ * 复用 {@link DocumentTextService} 提取文档内容进行全文搜索
  * 支持: DOCX, PDF, PPTX, XLSX, TXT, MD
  */
 @Slf4j
@@ -40,8 +32,7 @@ public class ContentSearchService {
     private final ProjectFileRepository projectFileRepository;
     private final FileTagRepository fileTagRepository;
     private final com.checkba.repository.TagRepository tagRepository;
-    private final com.checkba.storage.StorageServiceFactory storageServiceFactory;
-    private final Tika tika = new Tika();
+    private final DocumentTextService documentTextService;
 
     private static final Set<String> SEARCHABLE_TYPES = Set.of(
         "docx", "doc", "pdf", "pptx", "ppt", "xlsx", "xls", "txt", "md", "csv"
@@ -189,7 +180,10 @@ public class ContentSearchService {
                         log.info("[Search] File {} matched by filename only", file.getName());
                     }
                 }
-            } catch (Exception e) {
+            } catch (Throwable e) {
+                // Throwable 而非 Exception：某些格式解析库在 classpath 不兼容时抛的是
+                // Error（如 NoSuchMethodError），一旦漏挡就会打断整个搜索请求、
+                // 连带丢掉本该找到的其它文件命中。
                 log.warn("Failed to search file {}: {}", file.getName(), e.getMessage(), e);
             }
         }
@@ -205,7 +199,10 @@ public class ContentSearchService {
     }
 
     /**
-     * 提取文件内容
+     * 提取文件内容。委托 {@link DocumentTextService}：PDF 走 PDFBox3 原生 API，
+     * 不再自建 Tika 直接解析 PDF——Tika 2.9.1 的 PDFParser 调 PDFBox2 已删除的
+     * PDDocument.load 会抛 NoSuchMethodError（Error，非 Exception），
+     * 曾经穿透这里的 catch 把整个搜索请求打挂。
      */
     private String extractContent(ProjectFile file) {
         String filePath = file.getFilePath();
@@ -214,18 +211,10 @@ public class ContentSearchService {
         }
 
         try {
-            org.springframework.core.io.Resource resource = storageServiceFactory.getStorageService().load(filePath);
-            if (!resource.exists()) {
-                log.warn("File not found via StorageService: {}", filePath);
-                return null;
-            }
-            
-            try (java.io.InputStream is = resource.getInputStream()) {
-                String extracted = tika.parseToString(is);
-                log.info("[Search] Tika extracted {} chars from {}", 
-                    extracted != null ? extracted.length() : 0, filePath);
-                return extracted;
-            }
+            String extracted = documentTextService.extractText(file);
+            log.info("[Search] extracted {} chars from {}",
+                extracted != null ? extracted.length() : 0, filePath);
+            return extracted;
         } catch (Exception e) {
             log.warn("Failed to extract content from {}: {}", file.getName(), e.getMessage());
             return null;

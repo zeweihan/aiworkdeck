@@ -52,7 +52,6 @@ export default {
   pptVariantImage: '高清图片版',
   pptStartFailed: '启动生成失败',
   // ---- 头部 / 空态 ----
-  assistantMenuHeader: '智慧助手',
   welcome: '有什么可以帮您？',
   welcomeSubtitle: '随时为您解答疑问、起草文档或分析数据。',
   inputPlaceholderEmpty: '请输入问题、拖拽文件/文件夹至此、粘贴合同文本或描述案情...',

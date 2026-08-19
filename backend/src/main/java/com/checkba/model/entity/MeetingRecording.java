@@ -16,12 +16,17 @@ import java.time.LocalDateTime;
 @Table(name = "meeting_recording")
 public class MeetingRecording {
 
-    /** 状态流转（只前进不回退，FAILED 可经 transcribe 重回 TRANSCRIBING） */
+    /**
+     * 状态流转（只前进不回退，FAILED/EMPTY 均可经 transcribe 重回 TRANSCRIBING）。
+     * EMPTY 与 FAILED 同级终态：任务本身跑完了，但没识别到人声（无人说话/录音过短），
+     * 不是失败——听悟对这类音频的合法返回就是空 segments。
+     */
     public static final String STATUS_RECORDING = "RECORDING";
     public static final String STATUS_RECORDED = "RECORDED";
     public static final String STATUS_TRANSCRIBING = "TRANSCRIBING";
     public static final String STATUS_TRANSCRIBED = "TRANSCRIBED";
     public static final String STATUS_FAILED = "FAILED";
+    public static final String STATUS_EMPTY = "EMPTY";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

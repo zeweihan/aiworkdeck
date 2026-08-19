@@ -34,6 +34,7 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 | `npm run test:commands` | frontend/ | 命令注册表守卫（tests/commands/，17 条）：加速键查重、编辑器保留键黑名单、Esc/Enter/Tab、macOS 系统截图键、客户视图过滤、菜单树可序列化。**已进 CI**，改 config/commands/ 会被它拦 |
 | `npm run test:lowa-e2e` | frontend/ | LOWA 真引擎+键盘链路（tests/lowa-e2e/run.mjs，puppeteer-core 无头，基线 19 组 169 断言；不经应用页面，天然无登录前置） |
 | `npm run test:app-e2e` | frontend/ | 全应用真人模拟（tests/app-e2e/run.mjs；PR-A 去登录后 J1=首启解锁门（试用码），其余旅程 local-mode 免登直达，不再注册 qa_bot_*；需 dev:h5 **5174** + local-mode 后端（默认 9696，冷启动可用新 jar 9797 顶班 + 隔离 user.home/H2/cwd，APP_E2E_JAR 供 J11）。**发版前必跑**（含 J12 英文旅程） |
+  - **冷启动全配方（2026-08-19 实测走通）**：① 隔离后端起法必须 `cd backend/` 再起 jar——`ai.skills.dir: skills` 是相对 cwd 的，cwd 落在仓库根会把内置 skill 全丢掉（症状：`Skill 不存在: desensitize`）；② 全新 H2 未解锁会让套件卡死在解锁门，按 `tests/_lib/license-gate.mjs` 的 SEED_RECIPE 往隔离 `user.home/.aiworkdeck/license.json` 播存量 trial 票据（宽限期内合法，别开 trial-code 开关）；③ 5174 可能被别的 worktree 的旧 dev 服务占着（症状：断言全打在旧代码上），自起专用端口并设 `APP_E2E_BASE`；④ `APP_E2E_JAR` 一律绝对路径（runner 在临时目录 spawn，相对路径必挂 J11）。
 | `npm run test:feedback-e2e` | frontend/ | 反馈浮窗全链路（dev Electron + CDP：真走主进程框选截图、Chromium 假麦克风录音、提交后从 API 回读附件字节）。需 dev:h5 + local-mode 后端，同 desktop-e2e 的端口约定 |
 | `npm run test:desktop-e2e` | frontend/ | 桌面保存链路（弹 dev Electron 窗口，webview 真 LOWA 插文本→保存→API 下载验内容；PR-A 后免登直达，provision 会自动用试用码解锁+置向导）。`APP_E2E_BACKEND` 的端口会经 `CHECKBA_BACKEND_PORT` 传给 Electron 壳——渲染层的基址是壳注入的，只改 `VITE_API_BASE_URL` 对它无效 |
 

@@ -7,7 +7,7 @@ import java.util.concurrent.Callable;
  *
  * <h3>为什么不是把 userId 一路当参数传</h3>
  * {@code ChatModelFactory.getChatModel} 在全仓有十余个调用点，其中
- * MemCellExtractor / ConversationSummarizer / AgenticRetriever / AiAssistantService
+ * MemCellExtractor / ConversationSummarizer / AgenticRetriever
  * 的方法签名里根本没有 userId，穿参要改动整个 AI 编排领域的调用链。
  * 这里改用显式作用域：在少数几个手边就有 userId 的入口设置，同线程的后续调用自动继承。
  *

@@ -492,26 +492,6 @@
 
               <text class="field-note">{{ $t('admin.externalMovedNote') }}</text>
 
-              <!-- Assistant Management Section -->
-              <view class="section-divider"></view>
-              <view class="section-header-inline">
-                  <text class="section-title-sm">{{ $t('admin.assistantMgmtTitle') }}</text>
-                  <view class="admin-ai-add-btn" @tap="handleAddAssistant">{{ $t('admin.addAssistantButton') }}</view>
-              </view>
-
-              <view class="assistant-list">
-                  <view v-for="(ast, index) in form.ai.assistants" :key="ast.id" class="assistant-card">
-                      <view class="ast-header">
-                          <text class="ast-name">{{ ast.name }} <text class="ast-id">({{ ast.id }})</text></text>
-                          <view class="ast-actions">
-                              <text class="action-btn" @tap="handleEditAssistant(index)">{{ $t('admin.edit') }}</text>
-                              <text class="action-btn delete" @tap="handleDeleteAssistant(index)">{{ $t('common.delete') }}</text>
-                          </view>
-                      </view>
-                      <text class="ast-desc">{{ ast.description || $t('admin.noDescription') }}</text>
-                  </view>
-              </view>
-
             </view>
           </view>
 
@@ -1323,39 +1303,6 @@
       </view>
     </view>
 
-    <!-- Assistant Edit Modal (Custom Overlay) -->
-    <view v-if="showAssistantModal" class="modal-overlay" @tap.stop>
-        <view class="modal-content">
-            <view class="modal-header">
-                <text class="modal-title">{{ isEditing ? $t('admin.editAssistantTitle') : $t('admin.newAssistantTitle') }}</text>
-                <text class="modal-close" @tap="closeAssistantModal">×</text>
-            </view>
-            <scroll-view scroll-y class="modal-body">
-                <view class="modal-body-inner">
-                    <view class="modal-field">
-                        <text class="form-label">{{ $t('admin.assistantIdLabel') }}</text>
-                        <input class="modal-input" v-model="editingAssistant.id" :disabled="isEditing" :placeholder="$t('admin.assistantIdPlaceholder')"/>
-                    </view>
-                     <view class="modal-field">
-                        <text class="form-label">{{ $t('admin.assistantNameLabel') }}</text>
-                        <input class="modal-input" v-model="editingAssistant.name" :placeholder="$t('admin.assistantNamePlaceholder')"/>
-                    </view>
-                     <view class="modal-field">
-                        <text class="form-label">{{ $t('admin.descriptionLabel') }}</text>
-                        <input class="modal-input" v-model="editingAssistant.description" :placeholder="$t('admin.assistantDescPlaceholder')"/>
-                    </view>
-                     <view class="modal-field">
-                        <text class="form-label">{{ $t('admin.systemPromptLabel') }}</text>
-                        <textarea class="modal-textarea" v-model="editingAssistant.systemPrompt" :placeholder="$t('admin.systemPromptPlaceholder')" maxlength="-1" auto-height/>
-                    </view>
-                </view>
-            </scroll-view>
-            <view class="modal-footer">
-                <button class="btn-cancel" @tap="closeAssistantModal">{{ $t('common.cancel') }}</button>
-                <button class="btn-primary" @tap="saveAssistantModal">{{ $t('common.confirm') }}</button>
-            </view>
-        </view>
-    </view>
   </view>
 </template>
 
@@ -1478,7 +1425,6 @@ export default {
           // 跨境单独同意：null = 本次未动，true/false = 本次勾选/撤回。
           // 绝不初始化为 true——预勾选的同意在个保法下无效。
           crossBorderConsent: null,
-          assistants: [],
         },
       },
       // 模型目录（GET /api/ai/models）：模型清单 + 区域判定结果与依据。
@@ -1520,23 +1466,6 @@ export default {
       // 每项的「使用自己的 Key（高级）」是否展开。默认全收起；
       // ?nav=platform&service=ocr 这样的深链会就地展开对应那一项（错误提示的逃生门）。
       platformByokOpen: {},
-      // Helpers
-      defaultAssistants: [
-        { id: 'default', name: '默认助手', tools: [], systemPrompt: '你是一个专业的助手。', description: 'Generic Assistant' },
-        { id: 'rename', name: '重命名助手', tools: ['renameFile', 'listFiles'], systemPrompt: '你是一个由Google Deepmind开发的文件管理专家。用户会提供文件目录信息或重命名请求，你需要使用工具对文件进行批量重命名。注意：在执行重命名前，最好列出计划，但如果用户非常明确，可以直接调用工具。', description: 'Rename Assistant' },
-        { id: 'info-extract', name: '信息抽取助手', tools: [], systemPrompt: '你负责从文档中提取关键信息。请以JSON格式输出提取结果。', description: 'Info Extractor' },
-        { id: 'desensitization', name: '脱敏助手', tools: [], systemPrompt: '你负责识别并脱敏文档中的敏感信息。将敏感信息替换为[脱敏]。', description: 'De-identification' },
-      ],
-      // Modal State
-      showAssistantModal: false,
-      editingAssistant: {
-          id: '',
-          name: '',
-          systemPrompt: '',
-          description: '',
-          tools: []
-      },
-      isEditing: false, // true if editing existing, false if adding new
       saving: false,
       cloudConnections: [],
       cloudForm: { serverUrl: '', username: '', password: '' },
@@ -1799,17 +1728,6 @@ export default {
     },
   },
   watch: {
-    /*
-     * 助手编辑弹窗是全屏 overlay。嵌在工作台标签里时，桌面端的 BrowserView 是原生层、
-     * 永远盖在 DOM 之上——不把它藏起来，用户开着浏览器标签时点「编辑助手」会得到一个
-     * 被网页挡住的、点了没反应的弹窗。走既有的单一真相（utils/overlayState.js）：
-     * 只置这个 ref，由 project-overview 的 desktopOverlayActive watcher 统一控制显隐，
-     * 别自己去调 setViewsVisible（会和那个 watcher 互相打架）。
-     * 独立页那边没有 BrowserView，置了也无害。
-     */
-    showAssistantModal(v) {
-      setGlobalOverlay(!!v)
-    },
     /*
      * 工作台里的「系统设置」标签是单例：已经开着时再从别处带深链进来（顶栏
      * 「已连接账户」chip → nav=account、网关错误提示 → nav=platform&service=ocr），
@@ -3030,14 +2948,6 @@ export default {
           this.form.ai.ollamaModelName = data.ai.ollamaModelName || ''
           this.crossBorderConsentAt = data.ai.crossBorderConsentAt || ''
           this.form.ai.crossBorderConsent = null
-
-
-          if (data.ai.assistants && data.ai.assistants.length > 0) {
-              this.form.ai.assistants = data.ai.assistants;
-          } else {
-              // Initialize with defaults if empty (first time migration)
-              this.form.ai.assistants = JSON.parse(JSON.stringify(this.defaultAssistants));
-          }
         }
       } catch (e) {
         console.error('加载后台配置失败', e)
@@ -3063,64 +2973,6 @@ export default {
         this.saving = false
       }
     },
-    // Assistant Methods
-    handleAddAssistant() {
-        this.isEditing = false;
-        this.editingAssistant = {
-            id: '',
-            name: '',
-            systemPrompt: '',
-            description: '',
-            tools: [] // Future: select tools
-        };
-        this.showAssistantModal = true;
-    },
-    handleEditAssistant(index) {
-        this.isEditing = true;
-        // Deep copy to disconnect reference
-        this.editingAssistant = JSON.parse(JSON.stringify(this.form.ai.assistants[index]));
-        this.editingIndex = index;
-        this.showAssistantModal = true;
-    },
-    handleDeleteAssistant(index) {
-        uni.showModal({
-            title: this.$t('admin.confirmDeleteTitle'),
-            content: this.$t('admin.confirmDeleteAssistant'),
-            confirmText: this.$t('common.delete'),
-            confirmColor: '#ff4d4f',
-            success: (res) => {
-                if (res.confirm) {
-                    this.form.ai.assistants.splice(index, 1);
-                }
-            }
-        });
-    },
-    closeAssistantModal() {
-        this.showAssistantModal = false;
-    },
-    saveAssistantModal() {
-        if (!this.editingAssistant.id || !this.editingAssistant.name) {
-            uni.showToast({ title: this.$t('admin.idNameRequired'), icon: 'none' });
-            return;
-        }
-        
-        // Check ID uniqueness if adding
-        if (!this.isEditing) {
-            const exists = this.form.ai.assistants.find(a => a.id === this.editingAssistant.id);
-            if (exists) {
-                uni.showToast({ title: this.$t('admin.idExists'), icon: 'none' });
-                return;
-            }
-            this.form.ai.assistants.push(this.editingAssistant);
-        } else {
-            // Update existing
-            // If ID changed, check unique? Usually ID shouldn't change, but let's allow it for now if needed, or check validity.
-            // Simplified: direct overwrite
-            this.form.ai.assistants.splice(this.editingIndex, 1, this.editingAssistant);
-        }
-        
-        this.showAssistantModal = false;
-    }
   },
 }
 </script>
@@ -3453,7 +3305,6 @@ $border-color: #E9ECEF; // Gray-Light
   margin-right: 8px;
 }
 
-// Assistant & Modal Styles
 .section-header-inline {
     display: flex;
     flex-direction: row; /* Ensure row layout */
@@ -3468,202 +3319,12 @@ $border-color: #E9ECEF; // Gray-Light
     color: $text-main;
 }
 
-/* Explicit new class for the button to avoid native button styles */
-.admin-ai-add-btn {
-    font-size: 12px;
-    background-color: #fff;
-    color: $text-secondary;
-    padding: 4px 12px;
-    border-radius: 4px;
-    border: 1px solid $border-color;
-    line-height: 1.5;
-    cursor: pointer;
-    transition: all 0.2s;
-    display: inline-flex; /* Use inline-flex */
-    align-items: center;
-    justify-content: center;
-    
-    &:hover {
-        color: $brand-primary;
-        border-color: $brand-primary;
-        background: $brand-mint-light;
-    }
-}
-
-/* Clean Modal Styles - No reuse of .form-row */
-.modal-field {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    width: 100%;
-    margin-bottom: 16px;
-    box-sizing: border-box;
-}
-
-.modal-input {
-    width: 100%;
-    flex: none; /* Disable flex scaling */
-    height: 38px;
-    padding: 0 12px;
-    border-radius: 6px;
-    border: 1px solid $border-color;
-    font-size: 13px;
-    background-color: #fff;
-    box-sizing: border-box; /* Strict box model */
-    transition: border-color 0.2s;
-}
-
-.modal-input:focus {
-    border-color: $brand-primary;
-    outline: none;
-}
-
-.modal-textarea {
-    width: 100%;
-    flex: none;
-    min-height: 120px;
-    padding: 12px;
-    border-radius: 6px;
-    border: 1px solid $border-color;
-    font-size: 13px;
-    background-color: #fff;
-    box-sizing: border-box;
-    line-height: 1.5;
-}
-
-.modal-textarea:focus {
-    border-color: $brand-primary;
-    outline: none;
-}
-
 .section-divider {
     height: 1px;
     background: $border-color;
     margin: 24px 0;
 }
-.assistant-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-.assistant-card {
-    background: #FAFAFA;
-    border: 1px solid $border-color;
-    border-radius: 8px;
-    padding: 16px;
-    transition: all 0.2s;
-    &:hover {
-        border-color: $brand-primary;
-    }
-}
-.ast-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-}
-.ast-name {
-    font-size: 14px;
-    font-weight: 600;
-    color: $text-main;
-}
-.ast-id {
-    font-size: 12px;
-    color: $text-secondary;
-    font-weight: 400;
-    margin-left: 6px;
-}
-.ast-actions {
-    display: flex;
-    gap: 12px;
-}
-.action-btn {
-    font-size: 12px;
-    color: $brand-primary;
-    cursor: pointer;
-    &:hover { opacity: 0.8; }
-}
-.action-btn.delete {
-    color: #ff4d4f;
-}
-.ast-desc {
-    font-size: 12px;
-    color: $text-secondary;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-    overflow: hidden;
-}
 
-// Modal
-.modal-overlay {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(0,0,0,0.5);
-    z-index: 1000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-.modal-content {
-    width: 500px;
-    max-width: 90vw;
-    background: #fff;
-    border-radius: 12px;
-    display: flex;
-    flex-direction: column;
-    max-height: 85vh;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-}
-.modal-header {
-    padding: 16px 24px;
-    border-bottom: 1px solid $border-color;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-}
-.modal-title {
-    font-size: 16px;
-    font-weight: 600;
-    color: $text-main;
-}
-.modal-close {
-    font-size: 24px;
-    color: $text-secondary;
-    cursor: pointer;
-    line-height: 1;
-    &:hover { color: $text-main; }
-}
-.modal-body {
-    flex: 1;
-    overflow-y: auto;
-    min-height: 0; /* Important for flex child scroll */
-}
-.modal-body-inner {
-    padding: 24px;
-    box-sizing: border-box;
-    width: 100%;
-}
-.modal-footer {
-    padding: 16px 24px;
-    border-top: 1px solid $border-color;
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-}
-.btn-cancel {
-    font-size: 14px;
-    background: #fff;
-    border: 1px solid $border-color;
-    color: $text-main;
-    padding: 6px 16px;
-    border-radius: 6px;
-    line-height: 1.5;
-    &:after { border: none; }
-}
 .btn-primary {
     font-size: 14px;
     background: $brand-primary;
