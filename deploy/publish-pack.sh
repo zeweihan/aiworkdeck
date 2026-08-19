@@ -162,22 +162,22 @@ cmd_sign() {
 set -euo pipefail
 remote_tmp="$1"; env_file="$2"
 [ -f "$env_file" ] || { echo "官网 env 文件不存在：$env_file" >&2; exit 1; }
-key_line=$(grep -m1 '^AWD_PLUGIN_SIGNING_KEY=' "$env_file" || true)
-[ -n "$key_line" ] || { echo "$env_file 里没有 AWD_PLUGIN_SIGNING_KEY" >&2; exit 1; }
-key_value="${key_line#AWD_PLUGIN_SIGNING_KEY=}"
-# 去掉包裹的引号（Next.js env 文件常见写法）
-key_value="${key_value%\"}"; key_value="${key_value#\"}"
-key_value="${key_value%\'}"; key_value="${key_value#\'}"
+# 私钥绝不经过 shell 变量/argv（多行 PEM 会被拆参、还可能进 ps 输出）：
+# node 自己读 env 文件，跨行解析三种常见形态——双引号多行块 / 单引号多行块 /
+# 单行 \n 转义。北京官网机实测是「双引号 + 真换行 PEM」（2026-08-19）。
 node -e '
   const crypto = require("crypto");
   const fs = require("fs");
-  // 多行 PEM 若以 \n 转义存成单行，这里转回真换行；已是真换行的 PEM 不受影响。
-  const keyPem = process.argv[1].replace(/\\n/g, "\n");
+  const envText = fs.readFileSync(process.argv[1], "utf8");
+  const m = envText.match(/^AWD_PLUGIN_SIGNING_KEY=("([\s\S]*?)"|\x27([\s\S]*?)\x27|(.*))$/m);
+  if (!m) { console.error("env 文件里没有 AWD_PLUGIN_SIGNING_KEY"); process.exit(1); }
+  const raw = m[2] !== undefined ? m[2] : (m[3] !== undefined ? m[3] : m[4]);
+  const keyPem = raw.replace(/\\n/g, "\n").trim();
   const privateKey = crypto.createPrivateKey(keyPem);
   const bytes = fs.readFileSync(process.argv[2]);
   const sig = crypto.sign(null, bytes, privateKey);
   process.stdout.write(sig.toString("base64"));
-' "$key_value" "$remote_tmp/manifest.json"
+' "$env_file" "$remote_tmp/manifest.json"
 REMOTE
 )
   local rc=$?
