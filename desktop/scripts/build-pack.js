@@ -107,10 +107,17 @@ function tarPack(srcDir, relFiles, archivePath, topName) {
   const listPath = path.join(linkParent, '.tar-filelist')
   try {
     fs.symlinkSync(srcDir, linkPath, 'dir')
-    fs.writeFileSync(listPath, relFiles.map((rel) => `${topName}/${rel}`).join('\n') + '\n')
+    // 清单路径一律正斜杠：Windows 下 path.relative 产出反斜杠，tar 不认
+    fs.writeFileSync(listPath, relFiles.map((rel) => `${topName}/${rel.split(path.sep).join('/')}`).join('\n') + '\n')
     const env = { ...process.env }
     if (process.platform === 'darwin') env.COPYFILE_DISABLE = '1' // 防 AppleDouble（._ 文件）
-    execFileSync('tar', ['-czhf', archivePath, '-C', linkParent, '-T', listPath], { stdio: 'inherit', env })
+    // Windows 上（Git for Windows 的 GNU tar）带盘符的路径 D:\... 会被当成
+    // 远程主机（rsh 语法）报 "Cannot connect to D"。所以 cwd 钉在 linkParent、
+    // 全用相对路径出包，再把成品搬到目标位置（copy 而非 rename，兼容跨盘符）。
+    const tmpArchive = '.out.tar.gz'
+    execFileSync('tar', ['-czhf', tmpArchive, '-T', '.tar-filelist'], { stdio: 'inherit', env, cwd: linkParent })
+    fs.mkdirSync(path.dirname(archivePath), { recursive: true })
+    fs.copyFileSync(path.join(linkParent, tmpArchive), archivePath)
   } finally {
     fs.rmSync(linkParent, { recursive: true, force: true })
   }
