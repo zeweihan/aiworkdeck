@@ -1,8 +1,12 @@
 // config/ 目录（左栏插件位/底部工具/文件操作/OCR 动作/项目类型/成员角色/剪贴板/变量库）文案
 export default {
   sidebar: {
+    projectHome: '项目概览',
     files: '资源管理器',
     ddFiles: '尽调文件',
+    market: '插件中心',
+    // 「语音」是语音合成 + 会议录音的合并入口；下面两条是面板内部两个 tab 的名字
+    voice: '语音',
     meetingRecorder: '会议录音',
     litigationVisual: '诉讼可视化',
     search: '搜索',

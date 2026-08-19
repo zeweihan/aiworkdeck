@@ -228,6 +228,94 @@ class ContextAssemblerServiceTest {
         assertTrue(lastUser.contains("doc_list_project_files"), "应点名禁用 doc_list_project_files");
     }
 
+    // ==== Skill 注入（手动选择 / 自动命中）====
+    // 守的是"工具裁剪与 prompt 注入必须同源"：这里改成读 SkillRouter 登记的生效集合之前，
+    // 组装器是自己重新 match(userPrompt) 的，于是用户手动选的 skill 被裁了工具却拿不到 prompt。
+
+    /** 建一个带真实 SkillRouter（temp skills 目录）的组装器，返回 [assembler, router] */
+    private Object[] assemblerWithRealSkills(java.nio.file.Path skillsDir) throws java.io.IOException {
+        java.nio.file.Path dir = skillsDir.resolve("manual-skill");
+        java.nio.file.Files.createDirectories(dir);
+        java.nio.file.Files.writeString(dir.resolve("skill.yml"),
+                "id: manual-skill\nname: 手动技能\ntriggers: [绝不会出现的触发词]\nallowed_tools: [law_search]\n");
+        java.nio.file.Files.writeString(dir.resolve("prompt.md"), "手动技能模板正文MANUAL");
+
+        java.nio.file.Path autoDir = skillsDir.resolve("auto-skill");
+        java.nio.file.Files.createDirectories(autoDir);
+        java.nio.file.Files.writeString(autoDir.resolve("skill.yml"),
+                "id: auto-skill\nname: 自动技能\ntriggers: [修订]\nallowed_tools: [law_search]\n");
+        java.nio.file.Files.writeString(autoDir.resolve("prompt.md"), "自动技能模板正文AUTO");
+
+        com.checkba.service.ai.skill.SkillProperties skillProps =
+                new com.checkba.service.ai.skill.SkillProperties();
+        skillProps.setDir(skillsDir.toString());
+        com.checkba.service.ai.skill.SkillRegistry registry =
+                new com.checkba.service.ai.skill.SkillRegistry(
+                        skillProps, null, new com.checkba.service.ai.PluginService(), null);
+        registry.init();
+        SkillRouter realRouter = new SkillRouter(registry, skillProps,
+                mock(com.checkba.service.telemetry.TelemetryService.class), null);
+        ContextAssemblerService realAssembler = new ContextAssemblerService(
+                legalTools, mockedMessageService(), mock(FileContextLoader.class),
+                new AiContextProperties(), realRouter, new ClientCapabilityService(),
+                new InlineContentCache(), mockedMemoryManager(), mockedCompressor(),
+                mock(com.checkba.service.AppLanguageService.class));
+        return new Object[]{realAssembler, realRouter};
+    }
+
+    @Test
+    @DisplayName("手动选择的 skill 必须注入 prompt（不能只裁工具——旧 pinnedSkillId 的静默 bug）")
+    void manuallySelectedSkillIsInjectedIntoPrompt(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp)
+            throws java.io.IOException {
+        Object[] parts = assemblerWithRealSkills(tmp);
+        ContextAssemblerService realAssembler = (ContextAssemblerService) parts[0];
+        SkillRouter realRouter = (SkillRouter) parts[1];
+
+        // 用户这句话不含 manual-skill 的任何触发词，纯靠手动勾选
+        realRouter.activateForTurn("conv-skill", "帮我看看这个", null, List.of("manual-skill"));
+        String systemText = ((SystemMessage) realAssembler.assemble(
+                "conv-skill", "帮我看看这个", null, null, null, null, "88",
+                AgentMode.AGENT, 1L, null).get(0)).text();
+
+        assertTrue(systemText.contains("手动技能模板正文MANUAL"),
+                "手动选择的 skill 必须真的注入 prompt");
+    }
+
+    @Test
+    @DisplayName("手动 + 自动同时生效：两段 prompt 都注入")
+    void manualAndAutoSkillsBothInjected(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp)
+            throws java.io.IOException {
+        Object[] parts = assemblerWithRealSkills(tmp);
+        ContextAssemblerService realAssembler = (ContextAssemblerService) parts[0];
+        SkillRouter realRouter = (SkillRouter) parts[1];
+
+        // "帮我修订一下" 命中 auto-skill 的触发词「修订」，同时手动勾了 manual-skill
+        realRouter.activateForTurn("conv-both", "帮我修订一下", null, List.of("manual-skill"));
+        String systemText = ((SystemMessage) realAssembler.assemble(
+                "conv-both", "帮我修订一下", null, null, null, null, "88",
+                AgentMode.AGENT, 1L, null).get(0)).text();
+
+        assertTrue(systemText.contains("手动技能模板正文MANUAL"), "手动选择的 skill 应注入");
+        assertTrue(systemText.contains("自动技能模板正文AUTO"), "自动命中的 skill 也应注入");
+    }
+
+    @Test
+    @DisplayName("ASK 模式跳过 skill 注入（含手动选择——该模式本来就不传工具）")
+    void askModeSkipsSkillInjection(@org.junit.jupiter.api.io.TempDir java.nio.file.Path tmp)
+            throws java.io.IOException {
+        Object[] parts = assemblerWithRealSkills(tmp);
+        ContextAssemblerService realAssembler = (ContextAssemblerService) parts[0];
+        SkillRouter realRouter = (SkillRouter) parts[1];
+
+        realRouter.activateForTurn("conv-ask", "帮我修订一下", null, List.of("manual-skill"));
+        String systemText = ((SystemMessage) realAssembler.assemble(
+                "conv-ask", "帮我修订一下", null, null, null, null, "88",
+                AgentMode.ASK, 1L, null).get(0)).text();
+
+        assertFalse(systemText.contains("手动技能模板正文MANUAL"));
+        assertFalse(systemText.contains("自动技能模板正文AUTO"));
+    }
+
     // ==== 正文省传（inlineContentHash + InlineContentCache）====
     // 同一会话里文档没变时，插件只上送内容哈希，不再重传整篇正文（20 万字符上限）。
 

@@ -43,6 +43,18 @@ export function useAgentStream() {
     // STATE: Agent 任务清单（todo_write 驱动的常驻进度卡），plan_update 事件整表覆写
     const planTodos = ref([]) // Array of { content, activeForm, status }
 
+    // STATE: 本轮生效的 Skill（skill_update 事件整表覆写）
+    // Array of { id, name, source: 'auto' | 'manual', justActivated: boolean }
+    // 后端每轮必发、空也发——整表覆写是刻意的，增量合并会让上一轮的技能一直挂着。
+    const activeSkills = ref([])
+    // 自动命中的新技能提示：{ id, name, at }。ChatInterface watch 它弹一句轻提示，
+    // 几秒后自己置空。用户按触发词说了句话就被加载了一个技能，不告诉他就是黑箱。
+    const skillNotice = ref(null)
+    let skillFlashTimer = null
+    const clearSkillFlash = () => {
+        if (skillFlashTimer) { clearTimeout(skillFlashTimer); skillFlashTimer = null }
+    }
+
     // STATE: 任务待续跑——步数超限暂停（bubble_end status=paused）或上次进程被杀
     // （run_state status=INTERRUPTED）。前端据此渲染一键「继续」按钮
     const agentPaused = ref(null) // null | { reason: 'max_depth' | 'process_interrupted' | ... }
@@ -190,6 +202,10 @@ export function useAgentStream() {
         tokenUsage.value = { promptTokens: 0, completionTokens: 0, totalTokens: 0 }
         // 切换会话时清空任务清单进度卡（重连后由后端 plan_update 恢复）
         planTodos.value = []
+        // Skill chip 同理：技能是按轮生效的，上一个会话的技能不该挂在新会话的输入区上
+        clearSkillFlash()
+        activeSkills.value = []
+        skillNotice.value = null
         agentPaused.value = null
         agentRunStatus.value = null
         agentAwaitingInput.value = false
@@ -373,7 +389,9 @@ export function useAgentStream() {
     // displayText（可选，契约 D）：模型收到 prompt，用户气泡里显示 displayText。
     // 用于「点一个按钮却要回喂一大段细节给模型」的场景（计划审批卡、反问选项）——
     // 缺省 null 时行为与此前完全一致。
-    const sendMessage = async ({ prompt, displayText = '', contentHtml = '', fileList = [], projectId, modelId = 'default', assistantId, mode = 'AGENT', activeContext = null, pinnedSkillId = '', _userImages = [], _userContextFiles = [] }) => {
+    // skillIds（可选）：用户在面板里主动选择的 Skill，本轮强制生效（与触发词自动命中取并集）。
+    // 无状态——每次请求都要带，后端不持久化。
+    const sendMessage = async ({ prompt, displayText = '', contentHtml = '', fileList = [], projectId, modelId = 'default', assistantId, mode = 'AGENT', activeContext = null, skillIds = [], _userImages = [], _userContextFiles = [] }) => {
         // 防重入：流式进行中再触发发送（回车/连点）会产生重复气泡和并发请求。
         // 必须给用户可见反馈——静默吞掉就是"点了发送什么都没发生"（F-07）
         if (isStreaming.value) {
@@ -447,8 +465,8 @@ export function useAgentStream() {
                     fileType: activeContext.fileType || '',
                     wpsFileId: activeContext.wpsFileId || null
                 } : null,
-                // 用户钉选的 Skill；为空则后端走触发词自动匹配
-                pinnedSkillId: pinnedSkillId || null
+                // 用户主动选择的 Skill；为空则后端只走触发词自动匹配
+                skillIds: Array.isArray(skillIds) && skillIds.length ? skillIds : null
             }
 
             const chatResp = await fetch(`${getApiBaseUrl()}/api/agent/chat`, {
@@ -545,6 +563,40 @@ export function useAgentStream() {
                 if (target) target.planTodos = [...planTodos.value]
             } catch (e) {
                 console.error('Failed to parse plan_update', e)
+            }
+            return
+        }
+
+        // 本轮生效的 Skill：与 plan_update 同理放在气泡守卫之前——切回会话/重连时
+        // 气泡指针为 null，挂在守卫后面就再也收不到了。
+        if (evt === 'skill_update') {
+            try {
+                const d = JSON.parse(dataStr)
+                const incoming = Array.isArray(d.skills) ? d.skills : []
+                // 「新出现的自动命中技能」才闪：手动选的是用户自己点的，不需要提醒他自己；
+                // 连续几轮都命中同一个技能也不该每轮闪一次（那是噪音，不是信息）。
+                const knownAutoIds = new Set(
+                    activeSkills.value.filter(s => s.source === 'auto').map(s => s.id)
+                )
+                const freshAuto = incoming.filter(s => s.source === 'auto' && !knownAutoIds.has(s.id))
+                activeSkills.value = incoming.map(s => ({
+                    id: s.id,
+                    name: s.name || s.id,
+                    source: s.source === 'manual' ? 'manual' : 'auto',
+                    justActivated: freshAuto.some(f => f.id === s.id)
+                }))
+                if (freshAuto.length) {
+                    skillNotice.value = { id: freshAuto[0].id, name: freshAuto[0].name || freshAuto[0].id, at: Date.now() }
+                    clearSkillFlash()
+                    // 高亮只持续几秒：chip 本身留着（它这轮确实生效着），闪的只是"刚加载"这件事
+                    skillFlashTimer = setTimeout(() => {
+                        activeSkills.value = activeSkills.value.map(s => ({ ...s, justActivated: false }))
+                        skillNotice.value = null
+                        skillFlashTimer = null
+                    }, 4000)
+                }
+            } catch (e) {
+                console.error('Failed to parse skill_update', e)
             }
             return
         }
@@ -1482,6 +1534,9 @@ export function useAgentStream() {
         agentPaused,
         agentRunStatus,
         agentAwaitingInput,
+        // 本轮生效的 Skill 与「刚自动加载了一个技能」的轻提示
+        activeSkills,
+        skillNotice,
         // 已结束的后台任务不再自动销毁（完成态要保留可查），供任务面板做「关闭」按钮
         dismissBackgroundTask: (taskId) => {
             if (taskId && backgroundTasks.value[taskId]) delete backgroundTasks.value[taskId]

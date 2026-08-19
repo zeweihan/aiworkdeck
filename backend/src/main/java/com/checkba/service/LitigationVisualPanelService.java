@@ -231,7 +231,7 @@ public class LitigationVisualPanelService {
                     // 这次多出来的格式（比如上次只出了 svg），补登记
                     target = projectFileService.createFile(projectId, folderId, name,
                             extOf(name), Files.size(src), null,
-                            LitigationVisualTools.MARKER_ARTIFACT + projectId + "_" + System.currentTimeMillis(),
+                            LitigationVisualTools.newMarker(LitigationVisualTools.MARKER_ARTIFACT, projectId),
                             AGENT_USER_ID);
                 }
                 Path dest = storageResolver.resolve(target.getFilePath());
@@ -321,7 +321,7 @@ public class LitigationVisualPanelService {
                 if (pngFile == null) {
                     pngFile = projectFileService.createFile(projectId, drawio.getParentId(), base + ".png",
                             "png", Files.size(png), null,
-                            LitigationVisualTools.MARKER_ARTIFACT + projectId + "_" + System.currentTimeMillis(),
+                            LitigationVisualTools.newMarker(LitigationVisualTools.MARKER_ARTIFACT, projectId),
                             AGENT_USER_ID);
                 }
                 Path dest = storageResolver.resolve(pngFile.getFilePath());
@@ -361,9 +361,19 @@ public class LitigationVisualPanelService {
         }
         sb.append("材料范围：").append(
                 scopeDescription == null || scopeDescription.isBlank() ? "本项目全部材料" : scopeDescription.trim());
-        sb.append("\n\n请按流程来：先通读材料做抽取，写出语义地图；");
-        sb.append("然后调 litigation_checkpoint 把三个确认问题原样发给我，等我回复；");
-        sb.append("我确认后再出图。原文逐字保留，不要改动任何表述。");
+        // 工具链写成确定性的四步。这里不是啰嗦：真机上模型走过
+        // 「write_file 存地图 → read_file 读回来（报文件不存在）」的岔路，
+        // 也出现过确认完只更新地图、忘了调 litigation_render 就说"图好了"。
+        // 语义地图本来就是两个工具的内联参数，用不着落文件。
+        sb.append("\n\n请按这条工具链来，不要改顺序：");
+        sb.append("\n1. 通读材料做抽取，在心里/回复里写出语义地图 JSON。");
+        sb.append("\n2. 调 litigation_checkpoint（语义地图作参数直接传进去），");
+        sb.append("把它返回的三个确认问题原样发给我，然后停下等我回复。");
+        sb.append("\n3. 我回复后，把答复回填进同一份 JSON 的 checkpoint 字段，");
+        sb.append("**必须再调用一次 litigation_render 出图**——没调这一步，项目里就没有图。");
+        sb.append("\n4. 出图成功后再向我交付说明。");
+        sb.append("\n\n语义地图全程作为工具参数内联传递：不要用 write_file 把它存成项目文件，");
+        sb.append("也不要用 read_file 读回来。原文逐字保留，不要改动任何表述。");
         return sb.toString();
     }
 

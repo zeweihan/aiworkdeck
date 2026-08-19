@@ -354,6 +354,16 @@
                 :data-placeholder="$t('chat.inputPlaceholderEmpty')"
               ></div>
               <!-- Note: Context files are now shown as inline tags inside the rich input -->
+              <!-- 本轮生效的 Skill：手动选的带 × 可移除，自动命中的新出现时闪一下 -->
+              <view v-if="skillChips.length" class="skill-chip-row">
+                 <view v-for="chip in skillChips" :key="chip.id"
+                       class="skill-chip"
+                       :class="{ auto: chip.source === 'auto', flash: chip.justActivated }">
+                    <text class="skill-chip-name">{{ chip.name }}</text>
+                    <text v-if="chip.source === 'manual'" class="skill-chip-remove"
+                          @tap.stop="removeSelectedSkill(chip.id)">×</text>
+                 </view>
+              </view>
               <view class="input-footer">
                  <view class="action-bar-left">
                     <view class="icon-btn mini file-add-btn" @tap="triggerFileSelect" title="Add File">
@@ -404,26 +414,27 @@
                           <view v-if="networkRegionBasis" class="model-region-basis">{{ $t('chat.networkBasis', { basis: networkRegionBasis }) }}</view>
                        </view>
                     </view>
-                    <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
-                    <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? $t('chat.skillPinnedTitle', { name: skillChipLabel }) : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
+                    <!-- Skill Selector：触发词自动匹配始终生效，这里是「额外主动加载」的多选入口 -->
+                    <view class="skill-selector" :class="{ pinned: selectedSkillIds.length > 0, muted: skillDisabledByMode }" :title="skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
                        <text class="skill-glyph">◲</text>
+                       <text v-if="selectedSkillIds.length && !skillDisabledByMode" class="skill-count">{{ selectedSkillIds.length }}</text>
                        <view v-if="showSkillDropdown" class="skill-dropdown down">
-                          <view class="skill-option" :class="{ active: !pinnedSkillId }" @tap.stop="selectSkill('')">
-                             <view class="skill-option-text">
-                                <text class="skill-option-name">{{ $t('chat.skillAutoMatch') }}</text>
-                                <text class="skill-option-desc">{{ $t('chat.skillAutoMatchDesc') }}</text>
-                             </view>
+                          <view class="skill-dropdown-head">
+                             <text class="skill-dropdown-title">{{ $t('chat.skillPickerTitle') }}</text>
+                             <text class="skill-dropdown-hint">{{ skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillPickerHint') }}</text>
                           </view>
                           <view v-if="availableSkills.length" class="skill-divider"></view>
                           <view v-for="s in availableSkills" :key="s.id"
                                 class="skill-option"
-                                :class="{ active: pinnedSkillId === s.id }"
-                                @tap.stop="selectSkill(s.id)">
+                                :class="{ active: selectedSkillIds.includes(s.id), muted: skillDisabledByMode }"
+                                @tap.stop="skillDisabledByMode ? null : toggleSkillSelection(s.id)">
+                             <text class="skill-check">{{ selectedSkillIds.includes(s.id) ? '✓' : '' }}</text>
                              <view class="skill-option-text">
-                                <text class="skill-option-name">{{ s.name || s.id }}</text>
+                                <text class="skill-option-name">{{ skillDisplayName(s) }}</text>
                                 <text class="skill-option-desc">{{ s.activationMode === 'manual' ? $t('chat.skillManualOnly') : (s.triggers || []).join(' / ') || $t('chat.skillNoTriggers') }}</text>
                              </view>
                           </view>
+                          <view v-if="!availableSkills.length" class="skill-empty">{{ $t('chat.skillNoneInstalled') }}</view>
                           <view class="skill-divider"></view>
                           <view class="skill-manage" @tap.stop="goToSkillManagement">{{ $t('chat.skillManage') }}</view>
                        </view>
@@ -543,6 +554,16 @@
             data-placeholder="Ask anything..."
           ></div>
           <!-- Note: Context files are now shown as inline tags inside the rich input -->
+          <!-- 本轮生效的 Skill：手动选的带 × 可移除，自动命中的新出现时闪一下 -->
+          <view v-if="skillChips.length" class="skill-chip-row">
+             <view v-for="chip in skillChips" :key="chip.id"
+                   class="skill-chip"
+                   :class="{ auto: chip.source === 'auto', flash: chip.justActivated }">
+                <text class="skill-chip-name">{{ chip.name }}</text>
+                <text v-if="chip.source === 'manual'" class="skill-chip-remove"
+                      @tap.stop="removeSelectedSkill(chip.id)">×</text>
+             </view>
+          </view>
           <view class="input-footer">
              <view class="action-bar-left">
                 <view class="icon-btn mini" @tap="triggerFileSelect" title="Add File">
@@ -593,26 +614,27 @@
                       <view v-if="networkRegionBasis" class="model-region-basis">{{ $t('chat.networkBasis', { basis: networkRegionBasis }) }}</view>
                    </view>
                 </view>
-                <!-- Skill Selector：默认自动匹配触发词，可钉选固定使用某个 Skill -->
-                <view class="skill-selector" :class="{ pinned: !!pinnedSkillId }" :title="pinnedSkillId ? $t('chat.skillPinnedTitle', { name: skillChipLabel }) : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
+                <!-- Skill Selector：触发词自动匹配始终生效，这里是「额外主动加载」的多选入口 -->
+                <view class="skill-selector" :class="{ pinned: selectedSkillIds.length > 0, muted: skillDisabledByMode }" :title="skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillDefaultTitle')" @tap="toggleSkillDropdown">
                    <text class="skill-glyph">◲</text>
+                   <text v-if="selectedSkillIds.length && !skillDisabledByMode" class="skill-count">{{ selectedSkillIds.length }}</text>
                    <view v-if="showSkillDropdown" class="skill-dropdown up">
-                      <view class="skill-option" :class="{ active: !pinnedSkillId }" @tap.stop="selectSkill('')">
-                         <view class="skill-option-text">
-                            <text class="skill-option-name">{{ $t('chat.skillAutoMatch') }}</text>
-                            <text class="skill-option-desc">{{ $t('chat.skillAutoMatchDesc') }}</text>
-                         </view>
+                      <view class="skill-dropdown-head">
+                         <text class="skill-dropdown-title">{{ $t('chat.skillPickerTitle') }}</text>
+                         <text class="skill-dropdown-hint">{{ skillDisabledByMode ? $t('chat.skillAskDisabled') : $t('chat.skillPickerHint') }}</text>
                       </view>
                       <view v-if="availableSkills.length" class="skill-divider"></view>
                       <view v-for="s in availableSkills" :key="s.id"
                             class="skill-option"
-                            :class="{ active: pinnedSkillId === s.id }"
-                            @tap.stop="selectSkill(s.id)">
+                            :class="{ active: selectedSkillIds.includes(s.id), muted: skillDisabledByMode }"
+                            @tap.stop="skillDisabledByMode ? null : toggleSkillSelection(s.id)">
+                         <text class="skill-check">{{ selectedSkillIds.includes(s.id) ? '✓' : '' }}</text>
                          <view class="skill-option-text">
-                            <text class="skill-option-name">{{ s.name || s.id }}</text>
+                            <text class="skill-option-name">{{ skillDisplayName(s) }}</text>
                             <text class="skill-option-desc">{{ s.activationMode === 'manual' ? $t('chat.skillManualOnly') : (s.triggers || []).join(' / ') || $t('chat.skillNoTriggers') }}</text>
                          </view>
                       </view>
+                      <view v-if="!availableSkills.length" class="skill-empty">{{ $t('chat.skillNoneInstalled') }}</view>
                       <view class="skill-divider"></view>
                       <view class="skill-manage" @tap.stop="goToSkillManagement">{{ $t('chat.skillManage') }}</view>
                    </view>
@@ -648,6 +670,7 @@ import { parseToolBlock } from '@/composables/agentTagProtocol.mjs'
 import { ref, watch, onMounted, nextTick, getCurrentInstance, computed } from 'vue'
 import { createFile, getProjectFiles, getApiBaseUrl, rollbackConversation, performPptGeneration, getSkills, fetchAiModels, getAiConfig, cancelBackgroundTask } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
+import { getAppLanguage } from '@/utils/appLanguage.js'
 import { t } from '@/i18n'
 
 export default {
@@ -697,6 +720,8 @@ export default {
       fileChanges,
       agentPaused,
       agentRunStatus,
+      activeSkills,
+      skillNotice,
       reattachSSE,
       rollbackToMessage,
       currentConversationId,
@@ -911,23 +936,56 @@ export default {
       }
     }
 
-    // Skill 选择（默认自动匹配触发词；钉选后本会话固定使用该 Skill）
+    // ---- Skill：本轮生效清单 + 主动选择 ----
+    // 两个来源刻意分开：
+    // - 手动选的（selectedSkillIds）是本地状态，勾上立刻可见、可以 × 掉，不必等发完消息；
+    // - 自动命中的（activeSkills 里 source==='auto'）只能由后端在轮次开始时告诉我们，
+    //   前端没有触发词表也不该有第二份（那是又一份会漂移的副本）。
+    // 后端 skill_update 里的 manual 条目只是回执，渲染仍以本地选择为准——否则第一条消息发出去
+    // 之前，用户勾了却什么都看不见。
     const showSkillDropdown = ref(false)
     const availableSkills = ref([])
-    const pinnedSkillId = ref('')
+    const selectedSkillIds = ref([])
 
-    const pinnedSkill = computed(() =>
-      availableSkills.value.find(s => s.id === pinnedSkillId.value) || null
+    // ASK 模式下 skill 整体不生效（不传工具、也不注入指引），选择器禁用并给出说明，
+    // 而不是让用户勾一堆东西然后什么都不发生。
+    const skillDisabledByMode = computed(() => currentModeId.value === 'ASK')
+
+    // 英文界面优先 name_en：/api/skills/list 不做语言过滤，展示名要自己按语言挑
+    const skillDisplayName = (s) => {
+      if (!s) return ''
+      return (getAppLanguage() === 'en-US' && s.nameEn) || s.name || s.id
+    }
+
+    const selectedSkills = computed(() =>
+      selectedSkillIds.value
+        .map(id => availableSkills.value.find(s => s.id === id) || { id, name: id })
+        .map(s => ({ id: s.id, name: skillDisplayName(s), source: 'manual', justActivated: false }))
     )
-    // 未钉选时只显示 "Skill"：AI 面板窄，默认态不该占掉模型选择器的位置
-    const skillChipLabel = computed(() => pinnedSkill.value ? pinnedSkill.value.name : 'Skill')
+    // 自动命中的技能：手动已选的不重复出条（后端也会把重叠的那枚标成 manual）
+    const autoSkills = computed(() =>
+      (activeSkills.value || []).filter(
+        s => s.source === 'auto' && !selectedSkillIds.value.includes(s.id)
+      )
+    )
+    // chip 行：手动在前（可移除），自动在后（新出现的会闪一下）
+    const skillChips = computed(() =>
+      skillDisabledByMode.value ? [] : [...selectedSkills.value, ...autoSkills.value]
+    )
 
-    // 已安装 Skill 为 0 时不显示选择器，避免输入区堆无用控件
+    // 已安装 Skill 为 0 时不显示选择器，避免输入区堆无用控件。
+    // available=false 的一律不列：那些在当前应用语言下永远不会生效，能勾但不生效比看不见更糟。
     const loadAvailableSkills = async () => {
       try {
         const res = await getSkills()
         const list = Array.isArray(res) ? res : (res?.data || [])
-        availableSkills.value = list.filter(s => s.activationMode !== 'disabled' && s.enabled !== false)
+        availableSkills.value = list.filter(
+          s => s.activationMode !== 'disabled' && s.enabled !== false && s.available !== false
+        )
+        // 列表变了（管理员停用/卸载）就把选不中的清掉，别留一个永远不生效的 chip
+        selectedSkillIds.value = selectedSkillIds.value.filter(
+          id => availableSkills.value.some(s => s.id === id)
+        )
       } catch (e) {
         // Skill 列表拉取失败不该影响对话，静默降级为"无可选 Skill"
         console.warn('[ChatInterface] 加载 Skill 列表失败:', e)
@@ -935,10 +993,20 @@ export default {
       }
     }
 
-    const selectSkill = (skillId) => {
-      // 钉选状态跟随会话，切换 Skill 后下一条消息即生效
-      pinnedSkillId.value = pinnedSkillId.value === skillId ? '' : skillId
-      showSkillDropdown.value = false
+    // 每个 sendMessage 出口都要带上它。「继续」「按此推进」「点选项」都是同一件任务的后续轮次，
+    // 漏带的话用户选的技能会在这些路径上静默掉线（旧的 pinnedSkillId 就只有主发送路径带）。
+    const currentSkillIds = () => (skillDisabledByMode.value ? [] : [...selectedSkillIds.value])
+
+    const toggleSkillSelection = (skillId) => {
+      if (!skillId) return
+      const idx = selectedSkillIds.value.indexOf(skillId)
+      if (idx >= 0) selectedSkillIds.value.splice(idx, 1)
+      else selectedSkillIds.value.push(skillId)
+    }
+
+    const removeSelectedSkill = (skillId) => {
+      const idx = selectedSkillIds.value.indexOf(skillId)
+      if (idx >= 0) selectedSkillIds.value.splice(idx, 1)
     }
 
     const toggleSkillDropdown = () => {
@@ -949,6 +1017,17 @@ export default {
         loadAvailableSkills()
       }
     }
+
+    // 自动命中新技能时给一句轻提示：用户只是说了句话就被加载了一个技能，
+    // 不吭声就是黑箱（chip 上的闪现动画是同一件事的视觉表达）。
+    watch(skillNotice, (n) => {
+      if (!n) return
+      try {
+        if (typeof uni !== 'undefined' && uni.showToast) {
+          uni.showToast({ title: t('chat.skillAutoLoadedToast', { name: n.name }), icon: 'none', duration: 2500 })
+        }
+      } catch (e) { /* toast 失败不影响对话 */ }
+    })
 
     const goToSkillManagement = () => {
       showSkillDropdown.value = false
@@ -1206,6 +1285,7 @@ export default {
     const startNewChat = () => {
       setConversationId(null)  // This now triggers resetSSE internally
       clearBubbles()           // Use composable method
+      selectedSkillIds.value = [] // 手动选的技能属于这一段对话，新会话从干净状态开始
       emit('new-chat')
     }
 
@@ -1330,7 +1410,8 @@ export default {
         mode: currentModeId.value, // Agent 模式: ASK, PLAN, AGENT
         assistantId: props.currentAssistantId,
         activeContext, // NEW: Auto-detected active tab context
-        pinnedSkillId: pinnedSkillId.value,
+        // ASK 模式下 skill 不生效，一律不带——省得后端与面板的状态各说各话
+        skillIds: currentSkillIds(),
         // Pass for user bubble display
         _userImages: imagesToShow,
         _userContextFiles: contextFilesToShow
@@ -1401,7 +1482,8 @@ export default {
         projectId: props.projectId,
         modelId: currentModelId.value,
         mode: currentModeId.value,
-        assistantId: props.currentAssistantId
+        assistantId: props.currentAssistantId,
+        skillIds: currentSkillIds()
       })
       scrollToBottom()
     }
@@ -1411,6 +1493,7 @@ export default {
        console.log('[ChatInterface] Loading history...', loadedMsgs.length)
        setConversationId(conversationId)  // This triggers resetSSE internally
        clearBubbles()  // Clear existing using composable method
+       selectedSkillIds.value = [] // 切会话即重置手动选择：技能是按轮携带的，不该跨会话粘住
 
        loadedMsgs.forEach(msg => {
           const role = msg.role?.toUpperCase() || 'USER'
@@ -2181,7 +2264,8 @@ export default {
         projectId: props.projectId,
         modelId: currentModelId.value,
         mode: 'AGENT',
-        assistantId: props.currentAssistantId
+        assistantId: props.currentAssistantId,
+        skillIds: currentSkillIds()
       })
       scrollToBottom()
       return currentConversationId.value
@@ -2281,13 +2365,16 @@ export default {
        showModeDropdown,
        availableModes,
        localModeNotice,
-       // Skill 选择
+       // Skill 选择与本轮生效清单
        showSkillDropdown,
        availableSkills,
-       pinnedSkillId,
-       skillChipLabel,
+       selectedSkillIds,
+       skillChips,
+       skillDisabledByMode,
+       skillDisplayName,
        toggleSkillDropdown,
-       selectSkill,
+       toggleSkillSelection,
+       removeSelectedSkill,
        goToSkillManagement,
        // Artifact
        handleArtifactOpenTab: (art) => emit('artifact-open-tab', art),
@@ -2309,7 +2396,8 @@ export default {
              projectId: props.projectId,
              modelId: currentModelId.value,
              mode: 'AGENT', // 审批后使用 Agent 模式执行
-             assistantId: props.currentAssistantId
+             assistantId: props.currentAssistantId,
+             skillIds: currentSkillIds()
           })
           scrollToBottom()
        },
@@ -2325,7 +2413,8 @@ export default {
              projectId: props.projectId,
              modelId: currentModelId.value,
              mode: currentModeId.value,
-             assistantId: props.currentAssistantId
+             assistantId: props.currentAssistantId,
+             skillIds: currentSkillIds()
           })
           scrollToBottom()
        },
@@ -3434,18 +3523,88 @@ export default {
 }
 
 /* =============================================
-   Skill Selector（对话内钉选，默认自动匹配触发词）
+   Skill：本轮生效清单（chip 行）+ 主动选择（多选下拉）
    ============================================= */
+/* chip 行占一行、不换行、横向滚动——输入框的高度是稀缺资源，
+   装了六个技能也不该把输入区顶掉半屏 */
+.skill-chip-row {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  column-gap: 6px;
+  overflow-x: auto;
+  padding: 2px 2px 4px;
+  /* 滚动条在这一行里比内容还高，藏掉 */
+  scrollbar-width: none;
+}
+.skill-chip-row::-webkit-scrollbar {
+  display: none;
+}
+
+.skill-chip {
+  display: flex;
+  align-items: center;
+  column-gap: 4px;
+  flex-shrink: 0;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 10px;
+  background: rgba(26, 83, 54, 0.08);
+  border: 1px solid rgba(26, 83, 54, 0.16);
+}
+/* 自动命中的用描边 + 更浅的底：与"我自己选的"在一行里要能一眼分开 */
+.skill-chip.auto {
+  background: transparent;
+  border-style: dashed;
+  border-color: rgba(26, 83, 54, 0.3);
+}
+
+.skill-chip-name {
+  font-size: 11px;
+  color: #1A5336;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.skill-chip-remove {
+  font-size: 12px;
+  line-height: 1;
+  color: rgba(26, 83, 54, 0.55);
+  cursor: pointer;
+}
+.skill-chip-remove:hover {
+  color: #1A5336;
+}
+
+/* 新自动命中的技能闪几秒：用户只是说了句话就被加载了一个技能，得让他看见 */
+.skill-chip.flash {
+  animation: skillChipFlash 1.1s ease-in-out 3;
+}
+@keyframes skillChipFlash {
+  0%, 100% {
+    background: transparent;
+    border-color: rgba(26, 83, 54, 0.3);
+    box-shadow: none;
+  }
+  50% {
+    background: rgba(91, 209, 151, 0.28);
+    border-color: #5BD197;
+    box-shadow: 0 0 0 2px rgba(91, 209, 151, 0.18);
+  }
+}
+
 /* AI 面板窄，工具条已有模式/模型两个文字选择器，故 Skill 用定宽图标按钮，
-   当前钉选的 Skill 名靠高亮 + title + 下拉勾选表达，不占横向空间 */
+   已选数量用角标表达，生效清单在上方 chip 行，不占横向空间 */
 .skill-selector {
   cursor: pointer;
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
+  column-gap: 2px;
+  min-width: 24px;
   height: 24px;
+  padding: 0 3px;
   border-radius: 4px;
   transition: background 0.15s ease;
   flex-shrink: 0;
@@ -3454,12 +3613,23 @@ export default {
   background: rgba(0, 0, 0, 0.05);
 }
 
-/* 钉选态：绿色实心底，让"本轮固定用了某个 Skill"一眼可见 */
+/* 已选态：绿色实心底 + 计数，让"这轮我额外加载了 N 个技能"一眼可见 */
 .skill-selector.pinned {
   background: rgba(91, 209, 151, 0.18);
 }
 .skill-selector.pinned .skill-glyph {
   color: #1A5336;
+}
+/* ASK 模式下 skill 不生效，按钮压暗——下拉仍可打开，里面会说明为什么不能选 */
+.skill-selector.muted .skill-glyph {
+  opacity: 0.45;
+}
+
+.skill-count {
+  font-size: 10px;
+  line-height: 1;
+  color: #1A5336;
+  font-weight: 600;
 }
 
 .skill-glyph {
@@ -3492,10 +3662,30 @@ export default {
   bottom: calc(100% + 4px);
 }
 
+.skill-dropdown-head {
+  padding: 7px 12px 5px;
+  display: flex;
+  flex-direction: column;
+  row-gap: 2px;
+}
+.skill-dropdown-title {
+  font-size: 12px;
+  color: #2C3338;
+  font-weight: 500;
+}
+.skill-dropdown-hint {
+  font-size: 11px;
+  color: #999;
+  white-space: normal;
+}
+
 .skill-option {
   padding: 7px 12px;
   cursor: pointer;
   transition: background 0.15s ease;
+  display: flex;
+  align-items: flex-start;
+  column-gap: 6px;
 }
 .skill-option:hover {
   background: #f5f5f5;
@@ -3503,11 +3693,31 @@ export default {
 .skill-option.active {
   background: rgba(91, 209, 151, 0.12);
 }
+.skill-option.muted {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* 定宽勾选位：勾与不勾的行文字必须左对齐，否则勾一下整列会跳 */
+.skill-check {
+  width: 12px;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: #1A5336;
+}
+
+.skill-empty {
+  padding: 7px 12px;
+  font-size: 12px;
+  color: #999;
+}
 
 .skill-option-text {
   display: flex;
   flex-direction: column;
   row-gap: 2px;
+  min-width: 0;
 }
 
 .skill-option-name {

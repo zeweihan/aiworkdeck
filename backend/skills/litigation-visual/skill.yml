@@ -104,15 +104,20 @@ allowed_tools:
   - dispatch_subtask
 
 output: |
-  交付 = 项目里一个以图名命名的文件夹，内含 .svg（母版，自动在编辑器打开）、.png
-  （唯一能插进正在写的文书的格式）、.drawio（可继续编辑的源文件）。
+  交付 = 项目里一个以图名命名的文件夹，内含 .drawio（可继续编辑的源文件，出图后自动
+  在编辑器打开）、.svg（母版，看与打印）、.png（唯一能插进正在写的文书的格式）。
   回复里给一句审计摘要：用了哪种布局与视觉模式、深红标在哪一处（或"未标"）、
   有哪些没读准的地方。这些话只出现在回复里，绝不画进图上。
+  语义地图全程是工具参数，不要用 write_file/read_file 中转；用户确认后必须调用一次
+  litigation_render，那一步才真正出图。
 
 output_en: |
-  Deliverable = one folder in the project, named after the figure, containing the .svg
-  (master copy, opened in the editor automatically), the .png (the ONLY format that can be
-  inserted into a document being drafted), and the .drawio (editable source file).
+  Deliverable = one folder in the project, named after the figure, containing the .drawio
+  (editable source file, opened in the editor automatically), the .svg (master copy, for
+  viewing and printing), and the .png (the ONLY format that can be inserted into a document
+  being drafted).
   In the reply, give a one-line audit summary: which layout and visual mode were used,
   where the crimson accent was placed (or "none"), and anything that could not be read with
   confidence. These remarks go in the reply ONLY - never onto the figure itself.
+  The semantic map stays an inline tool argument - never stage it through write_file/read_file;
+  after the user confirms you MUST call litigation_render once, that is what renders the figure.

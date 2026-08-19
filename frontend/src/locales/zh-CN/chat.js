@@ -78,14 +78,16 @@ export default {
   modePlanDesc: '规划确认',
   localModeNotice: '本地模型不支持工具调用，Agent 与 Plan 需要云端模型',
   modeUnavailable: '当前供应商不支持这个模式',
-  // ---- Skill 选择 ----
-  skillAutoMatch: '自动匹配',
-  skillAutoMatchDesc: '命中触发词时自动生效',
+  // ---- Skill 选择与本轮生效清单 ----
   skillManualOnly: '仅手动',
   skillNoTriggers: '无触发词',
   skillManage: '管理已安装 Skill',
-  skillPinnedTitle: '已固定使用 Skill：{name}',
-  skillDefaultTitle: 'Skill（默认自动匹配触发词）',
+  skillDefaultTitle: 'Skill（触发词自动匹配始终生效）',
+  skillPickerTitle: '主动加载技能',
+  skillPickerHint: '勾选的技能本轮强制生效，与触发词自动匹配叠加',
+  skillAskDisabled: 'Ask 模式不加载技能',
+  skillNoneInstalled: '暂无可用技能',
+  skillAutoLoadedToast: '已加载技能：{name}',
   // ---- 发送 / 中断 / 续跑 ----
   emptyMessageToast: '请输入消息内容',
   imageNeedsCaptionTitle: '图片需要配一句说明',
@@ -130,6 +132,7 @@ export default {
   exportAsWord: '导出为Word',
   stepN: '步骤 {n}',
   stepsGroup: '执行过程',
+  approvalNeededFlag: '待确认',
   // ---- ProcessCard ----
   statusError: '出错',
   statusSuccess: '成功',

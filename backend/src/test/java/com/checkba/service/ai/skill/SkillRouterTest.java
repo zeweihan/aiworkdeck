@@ -219,6 +219,87 @@ class SkillRouterTest {
         assertEquals("skill-a", router.activeSkill("conv-y").orElseThrow().getId());
     }
 
+    // ==== 手动选择（对话面板的 skill 选择器 / POST /chat 的 skillIds）====
+
+    @Test
+    @DisplayName("手动选择与自动命中取并集：两个 skill 同时生效，工具白名单也是并集")
+    void manualSelectionUnionsWithAutoMatch() {
+        // 输入只命中 skill-b（触发词「上市路径」），用户另外手动勾了 skill-a
+        router.activateForTurn("conv-union", "帮我分析上市路径", null, List.of("skill-a"));
+
+        List<SkillRouter.ActiveSkill> active = router.activeSkills("conv-union");
+        assertEquals(2, active.size(), "手动选的和自动命中的都要生效：" + active);
+        assertEquals("skill-a", active.get(0).definition().getId(), "手动选择排在前面");
+        assertEquals(SkillRouter.SOURCE_MANUAL, active.get(0).source());
+        assertEquals("skill-b", active.get(1).definition().getId());
+        assertEquals(SkillRouter.SOURCE_AUTO, active.get(1).source());
+
+        // 工具可见性必须同时含两边的白名单——只裁到其中一个 skill 的能力就等于
+        // 另一半静默消失（skill 漏工具是排查成本最高的一类 bug）
+        List<String> names = router.visibleTools("conv-union",
+                        specs("law_search", "write_docx", "search_web", "doc_open_file", "read_document"))
+                .stream().map(ToolSpecification::name).toList();
+        assertTrue(names.contains("law_search"), "skill-a 的工具应可见");
+        assertTrue(names.contains("search_web"), "skill-b 的工具应可见");
+        assertFalse(names.contains("doc_open_file"), "两边白名单外的工具仍应被裁掉");
+    }
+
+    @Test
+    @DisplayName("手动选择多枚：全部生效且顺序稳定")
+    void multipleManualSelections() {
+        router.activateForTurn("conv-multi", "随便问点别的", null, List.of("skill-a", "skill-b"));
+
+        assertEquals(List.of("skill-a", "skill-b"),
+                router.activeSkills("conv-multi").stream()
+                        .map(a -> a.definition().getId()).toList());
+        assertTrue(router.activeSkills("conv-multi").stream()
+                .allMatch(a -> SkillRouter.SOURCE_MANUAL.equals(a.source())));
+    }
+
+    @Test
+    @DisplayName("无效的手动 id 静默忽略：不存在 / 已停用的都跳过，其余照常生效")
+    void invalidManualIdsAreIgnored() {
+        registry.setActivationMode("skill-b", SkillRegistry.ActivationMode.DISABLED);
+        router.activateForTurn("conv-bad", "随便问点别的", null,
+                java.util.Arrays.asList("no-such-skill", null, "  ", "skill-b", "skill-a"));
+
+        assertEquals(List.of("skill-a"),
+                router.activeSkills("conv-bad").stream().map(a -> a.definition().getId()).toList(),
+                "无效 id 不该让整轮失败，也不该让停用的 skill 复活");
+    }
+
+    @Test
+    @DisplayName("「仅手动」的 skill 正是靠手动选择生效（自动匹配永远碰不到它）")
+    void manualOnlySkillActivatedBySelection() {
+        registry.setActivationMode("skill-a", SkillRegistry.ActivationMode.MANUAL);
+        router.activateForTurn("conv-manual-only", "公司考虑IPO", null, List.of("skill-a"));
+
+        assertEquals(List.of("skill-a"),
+                router.activeSkills("conv-manual-only").stream()
+                        .map(a -> a.definition().getId()).toList());
+    }
+
+    @Test
+    @DisplayName("手动选择不持久化：下一轮不带 skillIds 就真的不带")
+    void manualSelectionIsPerTurn() {
+        router.activateForTurn("conv-turn", "随便问点别的", null, List.of("skill-a"));
+        assertEquals(1, router.activeSkills("conv-turn").size());
+
+        router.activateForTurn("conv-turn", "随便问点别的", null, null);
+        assertTrue(router.activeSkills("conv-turn").isEmpty(), "上一轮的手动选择不该粘住");
+    }
+
+    @Test
+    @DisplayName("同一个 skill 既被手动选中又命中触发词时只出现一次，且标记为 manual")
+    void manualWinsSourceLabelOnOverlap() {
+        router.activateForTurn("conv-dup", "公司考虑IPO", null, List.of("skill-a"));
+
+        List<SkillRouter.ActiveSkill> active = router.activeSkills("conv-dup");
+        assertEquals(1, active.size(), "同一个 skill 不该在 chip 行里出现两次");
+        assertEquals(SkillRouter.SOURCE_MANUAL, active.get(0).source(),
+                "用户看到的应该是「我选的」，不是「碰巧被关键词猜中」");
+    }
+
     // ==== 应用语言（EN 版 PR5）====
 
     /** 写一个双语 skill（languages: zh-CN/en-US + triggers_en + prompt.en.md + output_en + name_en） */
@@ -295,5 +376,18 @@ class SkillRouterTest {
         assertTrue(zhBlock.contains("用户本轮请求命中了技能「双语技能」"), "中文前缀保持原样");
         assertTrue(zhBlock.contains("中文模板正文"), "中文模式仍注入 prompt.md");
         assertTrue(zhBlock.contains("## 输出约定"), "中文输出约定标题保持原样");
+    }
+
+    @Test
+    @DisplayName("展示名按应用语言解析：en 优先 name_en，缺省回退 name / id（skill_update 载荷用的就是它）")
+    void displayNameFollowsAppLanguage() throws IOException {
+        writeBilingualSkill("skill-bi4");
+        registry.rescan();
+
+        assertEquals("双语技能", router.displayName(registry.getSkill("skill-bi4").orElseThrow()));
+        assertEquals("Bilingual Skill",
+                englishRouter().displayName(registry.getSkill("skill-bi4").orElseThrow()));
+        // skill-a 没有 name_en，英文下回退中文名（可用胜于空白，与注入块同口径）
+        assertEquals("skill-a", englishRouter().displayName(registry.getSkill("skill-a").orElseThrow()));
     }
 }

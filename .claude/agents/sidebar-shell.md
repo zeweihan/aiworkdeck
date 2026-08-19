@@ -27,9 +27,19 @@ description: 侧边栏与工作台外壳领域。任务涉及左侧 rail/左栏�
 布局是四列：常驻 rail（Activity Bar）→ 可收起左栏 sidebar-left → 中间 workbench（含底部工具抽屉）→ 右侧 AI 面板。
 
 **template**
-- :3-168 project-header 顶部条；:47-165 header-tools（开关：左栏:48、底栏:64、右栏:80、分屏:96、截图OCR:112、浏览器:127、活动记录:142、客户视图:159）。
-- :172-295 left-rail：插件按钮 v-for LEFT_SIDEBAR_PLUGINS（:175，@tap toggleLeftPane）、暂存区:209、**系统设置齿轮 :224 goToSystemSettings→admin**、成员堆叠:234、用户头像:288。
-- :354-593 sidebar-left：sidebar-header:358（标题=leftPaneTitle）、sidebar-content:515 按 leftPaneKey 分支（files→FileTree:517、dd-files:532、easyvoice:538、desensitize:544、search:551、动态插件→PluginPane:556）、拖拽手柄:594。
+- project-header 顶部条；header-tools（开关：左栏、底栏、右栏、分屏、截图OCR、浏览器、活动记录、客户视图）。
+  **活动记录右侧新增 `.header-account`**（头像 `.avatar-btn` + 下拉 `.avatar-menu`，2026-08-19
+  从 rail 底部搬上来）。它刻意挂在 `isClientView` 分支**之外**——rail 上那个头像本来
+  就对客户也渲染，收进下拉时不能顺手砍掉客户的「个人中心」。下拉两项：
+  个人中心（仍是 navigateTo，见下）/ 系统设置（`!isClientView` 才渲染，开中栏 tab）。
+- left-rail：插件按钮 v-for LEFT_SIDEBAR_PLUGINS（@tap toggleLeftPane）、spacer、暂存区、成员堆叠。
+  **齿轮与头像都不在 rail 上了**（2026-08-19）；插件广场按钮也不在了，它升成了
+  LEFT_SIDEBAR_PLUGINS 数组里的一项（key `market`）。
+- sidebar-left：sidebar-header（标题=leftPaneTitle）、sidebar-content 按 leftPaneKey 分支
+  （files→FileTree、dd-files→DdFilesPanel（现在只有 CLIENT 走得到）、
+  **home→ProjectHomePane compact**、**voice→内联 tab 宿主**（EasyVoicePane /
+  MeetingRecordingPanel）、desensitize、search、version、market→MarketSidebarPanel、
+  litigation-visual、动态插件→PluginPane）、拖拽手柄。
 - :595-911 workbench：Tab 栏（左:602 / 右:639 仅 splitMode）、编辑器区:676（左窗格:688、右窗格:762）、bottom-panel:833（v-if showToolsPanel，activeToolKey：variables/favorites/clipboard）。
 - :912-983 ai-panel（v-if showAiPanel，内容整块交 ChatInterface:924，历史下拉:961）。
 - :984-1213 根级弹窗层（AI导出Word/图片预览/截图保存/OCR浮层/文件关联/拖拽蒙层）。
@@ -48,9 +58,83 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 
 ## 左栏入口（frontend/src/config/leftSidebarPlugins.js）
 
-固定入口：files(资源管理器→FileTree)、dd-files(尽调文件)、search、easyvoice(**展示名「语音合成」**——路由键仍是 `easyvoice`，那是 uni.storage 里 `leftPaneKey` 的存量值，改键要迁数据；`EasyVoice` 是早已停用的 Docker 服务代号，不再当产品名用)、desensitize、version(版本记录→VersionPanel，见 `.claude/agents/version-control.md`)；
-**shareholder-meeting(股东大会核查) 已于 2026-08-17 下线**：入口从本数组移除即等于功能隐藏，`ShareholderMeetingPanel.vue` / `api.js` 的 `/api/shareholder-meeting/*` / 后端 controller 与实体全部保留（存量案卷数据还在库里），skill 改成 `enabled_by_default: false`。注意 `SkillRegistry` 的种子化只在「第一次见到这个 id」时生效，**存量安装里它仍是启用状态**，要在插件广场手动停用。`EvalHarness` 里显式 `setEnabled(..., true)` 把它开回去——那条回放用例守的是编排契约，与业务在不在产品里无关。requiresSkill 门控入口：litigation-visual(诉讼可视化)、meeting-recorder(会议录音→MeetingRecordingPanel，skill 启用才出现在 rail；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（找不到回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。rail 齿轮对所有人可见，admin 页/接口后端 requireAdmin（用户名 admin）。
-**插件广场入口（2026-08 二改：VS Code 扩展栏形态）**：rail 广场按钮 goToPluginMarket → `toggleLeftPane('market')` 开左栏列表面板（`MarketSidebarPanel`，leftPaneKey='market'，leftPaneTitle 特判）；点列表行 → `openMarketDetail(spec)` 在中栏开详情 tab（`MarketDetailPane`，`tabType:'market-detail'`、单例、isTabVisible 常显、直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported——与浏览器 tab 同法）。独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。详见 plugin-marketplace.md。
+**rail 从上到下的顺序就是 `LEFT_SIDEBAR_PLUGINS` 数组的顺序，只有这一个出处。**
+2026-08-19 起「项目概览」与「插件中心」也收进了数组——它们走的都是普通的
+`toggleLeftPane` 语义，单独硬编码成 rail 按钮只会让顺序有两个出处。
+当前顺序：**home(项目概览) → files(资源管理器) → search(搜索) → market(插件中心) →
+voice(语音) → desensitize(文件脱敏) → litigation-visual(门控) → version(版本)**。
+rail 底部（spacer 之后由模板单独渲染）只剩暂存区与成员堆叠。
+
+- **home（项目概览）**：内容是 `components/project-home/ProjectHomePane.vue`，传 `compact`。
+  此前它是中栏标签（`tabType:'project-home'`），维护者认为「rail 点了开中栏标签」
+  与 rail 其余每一项的语义不一致——**`openProjectHomeTab` / `isProjectHomeTabActive`
+  已删，`isTabVisible` 里那条 project-home 分支也没了**。顶栏切换器的 `.switcher-home`
+  与 rail 第一个按钮是同一个动作（`goProjectHome` → `toggleLeftPane('home')`）。
+  窄栏样式在 `project-home-pane.scss` 的 `.is-compact`：子组件的
+  `.profile-field`(min-width 180) 与 `.stat-tile`(140) **必须靠 `:deep()` 归零**，
+  否则 260px 的左栏里横向溢出。
+- **voice（语音）**：语音合成 + 会议录音的合并入口。宿主是 `project-overview.vue`
+  模板里一段内联的 `.voice-pane`（tab 条 + v-if），**两个面板组件本身一行没改**
+  （不做包装组件是为了免掉五个事件的转发与 check:emits 的连带风险）。
+  入口常显（语音合成本来就无门控）；「会议录音」tab 由 `meetingRecorderEnabled`
+  门控——`enabledSkillIds` **是数组不是 Set**，`null`（还没拉到）按启用处理，
+  与 `LEFT_SIDEBAR_PLUGINS` 那处同一个口径。
+  它不再占 rail 位，所以 **`PANEL_SKILL_IDS` 里必须手工补上 `'meeting-recorder'`**
+  （那张表原本是从数组的 requiresSkill 扫出来的），漏掉会让广场把这个面板型插件
+  当成对话型 skill 呈现「生效方式三档」。录音单例 `utils/meetingRecorder.js` 是
+  页面树外的模块，不受影响。
+- **dd-files(尽调文件) 对律师隐藏**（2026-08-19，同股东大会先例：入口移除即等于
+  功能隐藏，`DdFilesPanel.vue` / `/api/dd/*` / 后端全保留）。它**不能从这个文件里
+  删掉**——`getPluginsForUser('CLIENT')` 只返回它，所以定义搬成了独立导出的
+  `DD_FILES_PLUGIN`，`getLeftSidebarPlugin` 在数组之外再找它一遍（`OFF_RAIL_PLUGINS`）。
+  **CLIENT 行为一字未改。**
+- **`migrateLeftPaneKey(key)`**：`project_<id>_leftPaneKey` 的存量值映射表
+  （easyvoice / meeting-recorder → voice；shareholder-meeting / dd-files → files；
+  project-home → home）。工作台 onLoad 恢复时必须过它——落在一个没有面板分支命中的
+  key 上，左栏是「加载中…」占位符、rail 上一个高亮按钮都没有，看上去就是坏了。
+  **CLIENT 不过这张表**（dd-files→files 对客户是错的，他看不到资源管理器）。
+- easyvoice 的展示名沿革：路由键曾是 `easyvoice`（`EasyVoice` 是早已停用的 Docker
+  服务代号，不当产品名用），#389 改展示名为「语音合成」，2026-08-19 它成了
+  voice 面板里的一个 tab，rail 上的名字是「语音」。
+
+版本记录 version→VersionPanel 见 `.claude/agents/version-control.md`。
+**shareholder-meeting(股东大会核查) 已于 2026-08-17 下线**：入口从本数组移除即等于功能隐藏，`ShareholderMeetingPanel.vue` / `api.js` 的 `/api/shareholder-meeting/*` / 后端 controller 与实体全部保留（存量案卷数据还在库里），skill 改成 `enabled_by_default: false`。注意 `SkillRegistry` 的种子化只在「第一次见到这个 id」时生效，**存量安装里它仍是启用状态**，要在插件广场手动停用。`EvalHarness` 里显式 `setEnabled(..., true)` 把它开回去——那条回放用例守的是编排契约，与业务在不在产品里无关。requiresSkill 门控入口：litigation-visual(诉讼可视化)；meeting-recorder(会议录音→MeetingRecordingPanel，**2026-08-19 起不占 rail 位，是「语音」面板里的一个 tab**，skill 启用才出现；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（数组里找不到再找 OFF_RAIL_PLUGINS，都没有才回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件，返回 DD_FILES_PLUGIN）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。**设置入口不在 rail 上了**，见顶栏头像下拉那一节；admin 页/接口后端仍 requireAdmin（用户名 admin）。
+**插件广场入口（2026-08 二改：VS Code 扩展栏形态；三改：rail 按钮升成数组里的 market 项，动作不变）**：rail market 项 → `toggleLeftPane('market')` 开左栏列表面板（`MarketSidebarPanel`，leftPaneKey='market'，leftPaneTitle 特判）；点列表行 → `openMarketDetail(spec)` 在中栏开详情 tab（`MarketDetailPane`，`tabType:'market-detail'`、单例、isTabVisible 常显、直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported——与浏览器 tab 同法）。独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。详见 plugin-marketplace.md。
+
+## 顶栏头像下拉与「系统设置」标签（2026-08-19）
+
+rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的
+`.header-account`：头像 `.avatar-btn` → 下拉 `.avatar-menu` 两项。
+`.header-account` 挂在 `isClientView` 分支**之外**（rail 那个头像本来就对客户渲染），
+「系统设置」那一项才 `v-if="!isClientView"`。
+
+- **个人中心**：`goToUserProfile` 仍是 `uni.navigateTo`，一个字没改（check:nav 有断言守着）。
+- **系统设置**：`goToSystemSettings(opts)` → `openSettingsTab(opts)`，中栏开单例标签
+  （`tabType:'admin-settings'`、`isTabVisible` 常显、直接 push 进 leftFiles 绕过
+  `isFileTypeSupported`——与 market-detail / 浏览器 tab 同法）。整页跳转会把标签、
+  编辑器、AI 会话整个换掉，改个 API Key 的代价是回来重开一遍文件。
+- **深链等价物**：`openSettingsTab({ nav, service })` 对应薄壳页的
+  `?nav=platform&service=ocr`（网关错误提示的逃生门指着它）。标签是单例，
+  已经开着时再带深链进来只改 props——所以 **`AdminPane` 里加了
+  `watch: { initialNav, initialService }`**，没有它第二次深链会停在用户上次看的面板上。
+  工作台里 `goToAccountPanel()`（顶栏「已连接账户」chip）也改走这条。
+- **应用菜单的「设置…」（⌘,）**：命令表**没动**（仍是 `app:openSettings`，
+  `test:commands` 因此不受影响）；分流在 `appMenuBridge.js` 的
+  `case 'openSettings'`——`state.page === 'workbench'` 时 `uni.$emit(COMMAND_EVENT,
+  { verb:'openSettings' })` 交给工作台，否则照旧 navigateTo 薄壳页。
+  工作台侧在 `menuCommands.js` 的 `runMenuCommand` 加了一条 `case 'openSettings'`。
+
+**实体抽成了 `frontend/src/components/admin/AdminPane.vue`**（4500+ 行整体搬移，
+照 plugin-market.vue + MarketPane 的先例），`pages/admin/admin.vue` 退成 ~30 行薄壳，
+只把 `onLoad(query)` 的 `nav` / `service` 转成 props。搬移时只改了五处：
+`onLoad(query)`→`mounted()`（读 props）、`onUnload()`→`beforeUnmount()`、
+root 加 `is-embedded` class、`goToUserProfile` 在 embedded 下改 navigateTo
+（redirectTo 会把整个工作台替换掉）、新增那对 watch。
+**`activeNav` 默认值仍是 `'ai'`、nav 的 v-if/v-else-if 长链链头仍是 `platform`**——
+这两条是既有地雷，搬移时一个字没动。
+仓里十来处 `navigateTo '/pages/admin/admin?nav=...'`（MarketPane / MarketDetailPane /
+MarketSidebarPanel / CloudAcceptDialog / userprofile / api.js 的 401 兜底）
+**全部原样保留**，它们走薄壳页那条路。
 
 ## 协作入口（PR-E，2026-08-06）
 
@@ -79,7 +163,7 @@ launch（**启动页**）/ unlock / identity / login / newproject / **project-li
 ② **所有「去我的项目」的落点统一到项目列表页**（`launch.vue` 启动、`login.vue` 四处、`newproject/index.vue` 返回、工作台 `goAllProjects`）；
 ③ **列表点卡片 `reLaunch` 直达工作台**，中间不再插概览页。
 
-导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|**project-list**（其余一律）；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list reLaunch→project-overview**（`goToProject`，`onCloudAccepted` 复用同一方法）；**概览在工作台内是标签**（rail 第一个按钮 `openProjectHomeTab`，`tabType:'project-home'`、单例、`isTabVisible` 常显，内容组件 `components/project-home/ProjectHomePane.vue`；顶栏切换器的 `.switcher-home`「项目概览」调的是同一个方法）；**project-home 薄壳页只留给直链/深链**（`goWorkbench` 仍 reLaunch 进工作台并透传 `openFileId`；点 AI 对话历史带 `conversationId`，工作台 `onLoad` 消费后调 `loadHistoryChat`——它要 `$refs.chatInterface`，只能在 AI 面板已渲染之后调；**在工作台标签里点历史对话不跳页**，走 `openConversationInPanel` 就地切会话）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：双向 navigateTo 堆实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`，工作台参与的跳转一律 reLaunch）；overview navigateTo userprofile/admin（**这两条保持 navigateTo 不动**——它们依赖页面栈保留实例以便 onShow 回流刷新）；**admin ⇄ userprofile 互跳用 redirectTo**（同级页面不压栈；两边都 navigateTo 会互相弹成死循环，来处永远够不着）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；退出 reLaunch login。
+导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|**project-list**（其余一律）；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list reLaunch→project-overview**（`goToProject`，`onCloudAccepted` 复用同一方法）；**概览在工作台内是左栏面板**（2026-08-19 从中栏标签改过来；rail 第一个按钮 → `toggleLeftPane('home')`，内容组件 `components/project-home/ProjectHomePane.vue` 传 `compact`；顶栏切换器的 `.switcher-home`「项目概览」调的是同一个 `goProjectHome`）；**project-home 薄壳页只留给直链/深链**（`goWorkbench` 仍 reLaunch 进工作台并透传 `openFileId`；点 AI 对话历史带 `conversationId`，工作台 `onLoad` 消费后调 `loadHistoryChat`——它要 `$refs.chatInterface`，只能在 AI 面板已渲染之后调；**在工作台标签里点历史对话不跳页**，走 `openConversationInPanel` 就地切会话）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：双向 navigateTo 堆实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`，工作台参与的跳转一律 reLaunch）；overview navigateTo userprofile（**这条保持 navigateTo 不动**——它依赖页面栈保留实例以便 onShow 回流刷新）；**overview 不再跳 admin**：设置是中栏标签（见下一节）；**admin ⇄ userprofile 互跳用 redirectTo**（同级页面不压栈；两边都 navigateTo 会互相弹成死循环，来处永远够不着）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；退出 reLaunch login。
 **全局返回键**：`utils/globalBack.js`，body 级单例（同拖拽条/反馈浮窗），落在各页顶部那条 38px 拖拽条里；可见判据只有「页面栈深度 > 1」，工作台与 project-home 走豁免名单（自带左上角导航）。新页不需要各自补返回按钮。
 **启动链只用 reLaunch，不用 navigateTo**——分流页不该留在页面栈里。
 **新页 pages.json 注册必须逐条显式写 `navigationStyle: custom`**：globalStyle 里没有这一项（只有 navigationBarTextStyle / TitleText / BackgroundColor / backgroundColor），漏写会得到一个系统导航栏，与全应用自绘顶栏形制冲突。
@@ -213,7 +297,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - `frontend/src/services/host.js` — **访问桌面壳能力的唯一出口**（浏览器面板/截图/剪贴板/组件下载/自动更新/本地文件对话框/应用菜单等）。业务代码一律 `import { host } from '@/services/host.js'`，**不要再写 `window.checkbaDesktop`**；「是不是桌面壳」用 `isDesktopHost()`。桌面态逐字段透传、Web 态缺席，所以既有的 `if (host.browser && ...)` 子对象守卫必须保留（守卫就是能力探测）。详见 doc-editor.md 的「宿主能力层与编辑器容器」。
 - `frontend/src/config/tools.js` — 底部工具面板 tab（WORKBENCH_TOOLS）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
 - `frontend/src/components/FileTree.vue`（5225 行）— 左栏文件树。
-- 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（项目 tab 已搬出，只剩工作记录/收藏/代办/设置四 tab，行数随之变动、不再登记具体数字）、variable-library.vue(543)、admin.vue(4077，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
+- 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（项目 tab 已搬出，只剩工作记录/收藏/代办/设置四 tab，行数随之变动、不再登记具体数字）、variable-library.vue(543)、admin.vue(**已是薄壳页 ~30 行**，实体在 `components/admin/AdminPane.vue`，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
 - **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。**新建入口在列表下方**（`.create-section`，两张 `.create-card`：打开文件夹 / 新建项目文件夹，走 `utils/ideOpen.js` 的 `openFolderFlow`/`createFolderFlow`，命名弹窗同页）；「单独打开一个文件」已去掉——它造出的是没有归属的临时项目（`openFileFlow` 仍留给应用菜单与拖拽）。浏览器版没有系统文件夹对话框，降级为 navigateTo `newproject` 页填表建托管空白项目。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
 **双视图（2026-08-18）**：页头右侧 `.view-toggle` 两个按钮切 `viewMode`（`'grid'`/`'list'`），
 选择记在 `uni.storage` 的 `checkba_project_list_view`（本机习惯，不进后端）。默认仍是 grid，
@@ -300,6 +384,18 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
   页面路由埋点在 App.vue onLaunch 的 uni.addInterceptor（唯一收口，别在 50 处调用点逐个埋）；
   面板切换埋点在 panelSwitching.js 的 toggleLeftPane（区分 staging/收展/切换三分支）。
 - sed 子串替换改类名会误伤（king-*→awd-* 迁移教训，PR#171）。
+- **左栏面板要给 AI 面板发 prompt，一律走 `resolveChatInterface()`**（工作台 methods）。
+  它做三件事：`showAiPanel` 为 false 时先走既有的 `toggleAiPanel()`（顺带刷 AI 上下文 +
+  拉历史，不能绕过去直接改标志位）→ 有界轮询 ~3s（30×100ms）等 `$refs.chatInterface`
+  暴露 `sendExternalPrompt` → 真等不到才 toast。**别再各写各的
+  `if (!$refs.chatInterface) toast('AI 面板未就绪')`**：AI 面板默认收起，那条分支
+  在真实使用里几乎必中，而且它不告诉人该怎么办。现有三个调用方：
+  `handleShareholderMeetingStart` / `handleMeetingMinutesStart` / `handleLitigationStart`。
+- **rail 上加/改 key 之后自查 `panelSwitching.js`**：`toggleLeftPane` 与
+  `lastActiveIdsByMode` 全按 key 工作（`data()` 里那两个字面量种子只写了
+  `files` / `dd-files`，其余 key 是运行时补的，不用逐个登记）。改 key 集合时
+  同时看 `isTabVisible`（哪些左栏模式下普通文件标签可见）与
+  `migrateLeftPaneKey`（存量 storage 值）。
 - **组件里两个同名 `watch:` / `methods:` 键，后写的会把先写的整个覆盖掉**（本次在
   LibreOfficeEditor 上真踩到，加的 watch 静默失效）。往大组件里加块之前先 grep 一遍。
 - **读非响应式源（如 `documentElement.classList`）不能写成 computed**，首次求值后一直
@@ -332,6 +428,16 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 
 - `cd frontend && npm run check:emits`（死绑定护栏）+ `npm run test:app-e2e`（登录→项目→上传→打开文件→独立页面全旅程）。
 - 布局/编辑器联动改动加跑 `npm run test:lowa-e2e`。
+- **app-e2e 里不要拿 `waitText('资源管理器')` 当「工作台起来了」的判据**：那个词是左栏
+  标题，`leftPaneKey` 被持久化成别的面板（点过一次「项目概览」就会）之后它根本不出现。
+  等 rail 上的 `[title="资源管理器"]`（title 属性与 leftPaneKey 无关）。同理，
+  想回到文件树时**不能无脑点一下 rail**——`toggleLeftPane` 对同一个 key 是「收起/展开」，
+  已经在那个面板上时点它等于把整条左栏收掉。先探测 `[title="上传文件"]` 在不在，
+  需要才点，点完还没有就再点一次（上一次那下是收起）。
+- **并行会话共用一棵 worktree 时，先确认 dev server 是不是自己这棵树起的**：
+  `lsof -p <pid> | grep cwd`。别的 worktree 起的 5174 会让整套 e2e 测的是别人的代码
+  ——本次实测撞上过一次「89 步全红」（其实是端口上有别的进程、整页 404）与一次
+  「J1-J3 全绿但测的是旧 rail」。
 - 改命令表/菜单加跑 `npm run test:commands`（加速键归属与 when 求值断言，已进 CI）。
   真机验菜单不能只看代码：`osascript -e 'tell application "System Events" to tell
   process "Electron" to get name of every menu bar item of menu bar 1'` 能直接读出

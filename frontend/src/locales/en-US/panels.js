@@ -20,7 +20,7 @@ export default {
   litEmptyText: 'No diagrams yet. Select materials above and click "Generate Diagram."',
   litDraftBadge: 'Draft',
   litHandEditedBadge: 'Hand-Edited',
-  litEdit: 'Edit',
+  litViewMaster: 'View SVG',
   litRestyleLabel: 'Restyle',
   litUnavailableFallback: 'Diagram generation is unavailable',
   litStartFailedFallback: 'Failed to start',

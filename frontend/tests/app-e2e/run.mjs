@@ -309,38 +309,51 @@ try {
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
       await page.waitForSelector('.unlock-tabs', { timeout: 20000 })
       if (!trialGateOpen) {
-        // 等 trialCodeEnabled 拉回来（异步），第二个标签从「试用码 / Key」换成「账户 Key」
-        await page.waitForFunction(() => {
-          const tabs = Array.from(document.querySelectorAll('.unlock-tab')).map((t) => t.textContent.trim())
-          return tabs.length === 2 && tabs[1].includes('账户 Key')
-        }, { timeout: 15000 })
+        // 等 trialCodeEnabled 拉回来（异步）：第三个页签（试用码 / Key）整条撤掉，只剩登录与注册
+        await page.waitForFunction(
+          () => document.querySelectorAll('.unlock-tab').length === 2,
+          { timeout: 15000 },
+        )
       }
       const tabs = await page.$$eval('.unlock-tab', (els) => els.map((e) => ({
         text: e.textContent.trim(), active: e.className.includes('is-active'),
       })))
-      // 这两条是 PR#408 的契约，与试用码开关无关：账户登录必须在、且是默认落点
-      if (!tabs[0].text.includes('账户登录')) throw new Error('第一个标签不是「账户登录」：' + tabs[0].text)
-      if (!tabs[0].active) throw new Error('「账户登录」必须是默认标签，否则新用户进来先看到的是一条走不通的路')
+      // PR#408 的契约（账户登录必须在、且是默认落点）在页签改成「登录 / 注册」之后照旧
+      if (tabs[0].text !== '登录') throw new Error('第一个标签不是「登录」：' + tabs[0].text)
+      if (!tabs[0].active) throw new Error('「登录」必须是默认标签，否则新用户进来先看到的是一条走不通的路')
+      // 注册必须在页面上：桌面端允许注册之后，没有这个入口的新用户在这里是死路
+      if (tabs[1].text !== '注册') throw new Error('第二个标签不是「注册」：' + tabs[1].text)
+      const t = await textOf()
+      // 账号密码那条路已从解锁门撤掉（官网验证码端点「不存在即注册」，口令是存量遗留）
+      if (t.includes('用账号密码登录')) throw new Error('解锁门仍留着「用账号密码登录」入口')
+      // 注册即正式版，「获取正式版」这条外链现在是错的指路
+      if (t.includes('获取正式版')) throw new Error('解锁门仍留着「获取正式版」外链')
       if (!trialGateOpen) {
-        if (tabs[1].text.includes('试用码')) throw new Error('试用码已关闭，标签不该还叫「试用码」：' + tabs[1].text)
+        for (const tab of tabs) {
+          if (tab.text.includes('试用码')) throw new Error('试用码已关闭，页签不该还叫「试用码」：' + tab.text)
+        }
         // 「获取试用码」外链指向 README 里已经撤掉的那枚码，必须一并消失
-        const t = await textOf()
         if (t.includes('获取试用码')) throw new Error('试用码已关闭，页面仍留着「获取试用码」外链')
       }
     })
 
-    if (!trialGateOpen) await step('粘试用码被拒且报错说清还剩哪条路', async () => {
+    // 试用码关掉之后，原先「粘试用码被后端拒掉」那一步已经没有落点可点
+    // （官方版整条 Key 页签都不渲染，PR#420）。换成钉住新增的注册页签：
+    // 切过去必须真的换成注册口径，否则「允许注册」只是一个改不动任何东西的装饰页签。
+    await step('注册页签换成注册口径', async () => {
       await mouseClickSel('.unlock-tab:nth-child(2)')
-      await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
-      await page.type('.unlock-input textarea', TRIAL_CODE.slice(0, 40))
-      await sleep(250); await page.type('.unlock-input textarea', TRIAL_CODE.slice(40)); await sleep(250)
-      await mouseClickSel('.unlock-btn')
       await page.waitForFunction(() => {
-        const el = document.querySelector('.unlock-error')
-        return !!el && el.textContent.includes('试用码已停用')
-      }, { timeout: 15000 })
-      const err = await page.$eval('.unlock-error', (e) => e.textContent)
-      if (!err.includes('awdk_')) throw new Error('拒绝文案没给出剩下那条路（awdk_ 账户 Key）：' + err)
+        const btn = document.querySelector('.unlock-btn')
+        return !!btn && btn.textContent.includes('注册')
+      }, { timeout: 10000 })
+      const t = await textOf()
+      if (!t.includes('未注册过的')) throw new Error('注册页签没有说清「未注册即创建账户」这件事')
+      // 切回登录页签，主按钮要变回登录口径（两边都得真的换，不能只单向生效）
+      await mouseClickSel('.unlock-tab:nth-child(1)')
+      await page.waitForFunction(() => {
+        const btn = document.querySelector('.unlock-btn')
+        return !!btn && btn.textContent.trim() === '登录'
+      }, { timeout: 10000 })
     })
 
     await step('后端授权状态未被 J1 改动', async () => {
@@ -366,11 +379,19 @@ try {
     }
   }
 
+  // 解锁门的默认落点是「登录」页签（PR#408 起），试用码在第三个页签上——
+  // 破坏性链路每次进页面都得先切过去，否则根本没有 .unlock-input 可打字。
+  const openTrialCodeTab = async () => {
+    await page.waitForSelector('.unlock-tabs', { timeout: 20000 })
+    await mouseClickSel('.unlock-tab:nth-child(3)')
+    // uni-app 的 .unlock-input 是 wrapper，真 textarea 在里面
+    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+  }
+
   await step('launch 未解锁分流到 unlock 页', async () => {
     await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.waitForFunction(() => location.hash.includes('pages/unlock/unlock'), { timeout: 20000 })
-    // uni-app 的 .unlock-input 是 wrapper，真 textarea 在里面
-    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+    await openTrialCodeTab()
   })
 
   await step('坏码走后端 400 内联报错', async () => {
@@ -391,7 +412,7 @@ try {
     await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.waitForFunction(() => location.hash.includes('pages/unlock/unlock'), { timeout: 20000 })
-    await page.waitForSelector('.unlock-input textarea', { timeout: 10000 })
+    await openTrialCodeTab()
     // 模拟从邮件/网页复制来的粘贴形态：中间夹换行和空格，验证前端去空白
     const messy = TRIAL_CODE.slice(0, 30) + '\n ' + TRIAL_CODE.slice(30)
     await page.type('.unlock-input textarea', messy)
@@ -406,7 +427,19 @@ try {
     }, { timeout: 30000 })
   })
 
+  } // ---- J1 两条分支到此合流：下面各步在两种形态下都要成立 ----
+
+  // 向导巡检 + API 置初始化挪到合流区（2026-08-19）：非破坏性分支（发版默认值，
+  // 试用码关）此前从不经过这一步——长驻后端早就初始化过所以看不出来，冷启动的
+  // 隔离后端 initialized=false，launch 分流永远落 wizard，「已解锁重启 → 落项目
+  // 列表页」在那种环境下必红。步骤自带「不在向导页就跳过」守卫，长驻后端零影响。
   await step('向导页无 admin/123 口令提示（未初始化时）', async () => {
+    // 合流后先回分流起点：非破坏性分支上一步停在哪个页面并不确定
+    await page.goto(BASE + '/', { waitUntil: 'domcontentloaded', timeout: 30000 })
+    await page.waitForFunction(() => {
+      const h = location.hash
+      return h.includes('pages/wizard/wizard') || h.includes('pages/project-list/project-list')
+    }, { timeout: 30000 })
     if (!page.url().includes('pages/wizard/wizard')) return // 已初始化后端：此腿天然不出现
     const t = await textOf()
     if (t.includes('admin') && t.includes('123')) throw new Error('wizard 页仍含 admin/123 提示')
@@ -426,8 +459,6 @@ try {
     const init = await api('/api/admin/wizard', { method: 'POST', body: { ai: { activeProvider: 'OPENROUTER' } } })
     if (!init || init.code !== 0) throw new Error('API 置向导初始化失败: ' + JSON.stringify(init).slice(0, 150))
   })
-
-  } // ---- J1 两条分支到此合流：下面两步在两种形态下都要成立 ----
 
   await step('已解锁重启 → 落项目列表页（即使有最近项目）', async () => {
     // uni h5 getStorageSync 兼容裸字符串
@@ -528,7 +559,10 @@ try {
   // 三个路由互不是子串，但同属 'project-' 前缀家族——一律写全路径判定。
   //
   // 2026-08 改动：概览不再是列表与工作台之间那一站独立页，而是工作台 rail 第一个
-  // 按钮开出来的中栏标签（内容本体 ProjectHomePane 两个宿主共用）。
+  // 按钮开出来的**左栏面板**（内容本体 ProjectHomePane 两个宿主共用）。
+  // 2026-08-19 又从「中栏标签」改成「左栏面板」——rail 按钮点了开左栏，与 rail
+  // 其余每一项同一个语义。锚点类名没变，但它现在会改 leftPaneKey 并被持久化，
+  // 所以后面回工作台必须先点回「资源管理器」（见「回到工作台继续后续旅程」）。
   console.log('== J3 两级导航 ==')
 
   await step('列表页点卡片 → 直达工作台', async () => {
@@ -567,7 +601,7 @@ try {
     await waitText('资源管理器', 30000)
   })
 
-  await step('rail「项目概览」开中栏标签，五个区块齐全', async () => {
+  await step('rail「项目概览」开左栏面板，五个区块齐全', async () => {
     await mouseClickSel('[title="项目概览"]')
     // 组件根类名即 e2e 稳定锚点（仓里既有惯例：.cloud-bar / .adopt-dialog / .clip-panel）。
     // 只等容器是不够的——子组件挂载失败时容器照样在。
@@ -640,7 +674,22 @@ try {
     await mouseClickSel('.project-item-card')
     await page.waitForFunction(
       () => location.hash.includes('pages/project-overview/project-overview'), { timeout: 20000 })
-    await waitText('资源管理器', 30000)
+    // **这里不能用 waitText('资源管理器')**：上一步点过「项目概览」，leftPaneKey 已经
+    // 被持久化成 'home'，再进工作台左栏标题就是「项目概览」，那个词根本不出现。
+    // 等 rail 上的按钮（title 属性，与 leftPaneKey 无关）才是「工作台起来了」的判据。
+    await page.waitForSelector('[title="资源管理器"]', { timeout: 30000 })
+    // 概览是左栏的一个面板，点它会把 leftPaneKey 持久化成 'home'——再进工作台
+    // 就可能落在概览面板上，而 J4 要点的「上传文件」只长在资源管理器的面板头上。
+    // 显式确保停在文件树上，别让后面整段挂在一个看不见的按钮上。
+    //
+    // **不能无脑点一下 rail**：toggleLeftPane 对**同一个 key** 是「收起/展开侧栏」，
+    // 已经在资源管理器上时点它等于把整条左栏收掉，「上传文件」跟着消失。
+    // 所以先探测，需要才点；点完仍没有就再点一次（上一次是收起，这一次是展开）。
+    for (let i = 0; i < 2; i++) {
+      if (await page.$('[title="上传文件"]')) break
+      await mouseClickSel('[title="资源管理器"]')
+    }
+    await page.waitForSelector('[title="上传文件"]', { timeout: 15000 })
   })
   await shot('j3-project')
 
@@ -678,12 +727,45 @@ try {
   // ============ J6 左栏功能区（title 定位图标） ============
   console.log('== J6 左栏功能区 ==')
   // 标题取自 config/leftSidebarPlugins.js 的 label（i18n 键 config.sidebar.*）——
-  // 改名会让这一步整条失配。「EasyVoice」在 #389 已改成「语音合成」，这里跟着改；
-  // 以后再改名，先看这一行。
-  for (const title of ['搜索', '文件脱敏', '语音合成', '文件暂存区', '资源管理器']) {
+  // 改名会让这一步整条失配。「EasyVoice」在 #389 已改成「语音合成」；2026-08-19
+  // 语音合成与会议录音合并成一个 rail 入口「语音」（合成成了面板内的一个 tab），
+  // rail 标题跟着改。以后再改名，先看这一行。
+  for (const title of ['搜索', '文件脱敏', '语音', '文件暂存区', '资源管理器']) {
     await step('左栏 ' + title, () => mouseClickSel('[title="' + title + '"]'))
   }
+  await step('「语音」面板里是两个 tab 而不是两个 rail 入口', async () => {
+    await mouseClickSel('[title="语音"]')
+    await page.waitForSelector('.voice-tabs', { timeout: 10000 })
+    const t = await textOf()
+    if (!t.includes('语音合成')) throw new Error('语音面板里没有「语音合成」tab')
+    // 会议录音那个 tab 是 skill 门控的（meeting-recorder 默认不启用），
+    // 所以这里只断言 tab 条存在与合成 tab 在，不断言录音 tab。
+    await mouseClickSel('[title="资源管理器"]')
+  })
   await shot('j6-rails')
+
+  // ============ J6.3 顶栏头像下拉 → 系统设置中栏标签 ============
+  // 2026-08-19：rail 底部的齿轮与头像撤掉，改成顶栏右上角头像的下拉；
+  // 「系统设置」不再整页跳转，而是中栏的一个标签（薄壳页仍在，J7 单独覆盖）。
+  console.log('== J6.3 头像下拉与设置标签 ==')
+  await step('头像下拉里有个人中心与系统设置', async () => {
+    await mouseClickSel('.avatar-btn')
+    await page.waitForSelector('.avatar-menu', { timeout: 8000 })
+    const t = await textOf()
+    for (const s of ['个人中心', '系统设置']) {
+      if (!t.includes(s)) throw new Error('头像下拉里缺「' + s + '」')
+    }
+  })
+  await step('点「系统设置」开中栏标签而不是跳页', async () => {
+    await mouseClickText('系统设置')
+    await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
+    const h = await page.evaluate(() => location.hash)
+    if (h.includes('pages/admin/admin')) throw new Error('设置又变回整页跳转了')
+    await waitText('系统管理', 10000)
+    // 关掉这个标签，别把后面的旅程都压在设置页上
+    await mouseClickSel('.tab-item.active .tab-close')
+  })
+  await shot('j6-settings-tab')
 
   // ============ J6.6 剪贴板面板 ============
   // 剪贴板簇长期没有端到端覆盖，而它重度依赖 document/window 全局监听

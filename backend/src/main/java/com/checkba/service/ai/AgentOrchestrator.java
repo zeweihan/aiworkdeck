@@ -84,6 +84,14 @@ public class AgentOrchestrator {
         String activeFileName;
     }
 
+    /**
+     * skill_update 载荷序列化用。刻意做成静态字段而不是构造器注入的 bean——
+     * 本类的构造器一动就必须同步 EvalHarness（领域文档里踩过三次的地雷），
+     * 为了一个无状态的 JSON 序列化器付这个代价不值。
+     */
+    private static final com.fasterxml.jackson.databind.ObjectMapper SKILL_UPDATE_MAPPER =
+            new com.fasterxml.jackson.databind.ObjectMapper();
+
     // 取消状态管理：存储被取消的会话ID
     private final Set<String> cancelledConversations = ConcurrentHashMap.newKeySet();
     // 存储当前活跃会话的已生成内容（用于取消时保存部分内容）
@@ -341,6 +349,31 @@ public class AgentOrchestrator {
 
 
     /**
+     * SSE {@code skill_update}：把本轮真正生效的 skill 清单推给前端
+     * （载荷 {@code {"skills":[{"id","name","source"}]}}，source = auto | manual）。
+     *
+     * <p>刻意"每轮必发、空也发"——前端拿它做整表覆写，漏发一次上一轮的 chip 就会一直挂着，
+     * 用户以为某个 skill 还生效着。name 已由 SkillRouter 按应用语言解析好。
+     *
+     * <p>推送失败只 log：一个提示 chip 不该让对话中断（与 plan_update 同口径）。
+     */
+    private void sendSkillUpdate(String conversationId,
+                                 List<com.checkba.service.ai.skill.SkillRouter.ActiveSkill> active) {
+        try {
+            List<java.util.Map<String, String>> skills = active.stream()
+                    .map(a -> java.util.Map.of(
+                            "id", a.definition().getId(),
+                            "name", a.displayName(),
+                            "source", a.source()))
+                    .toList();
+            sseEmitterService.send(conversationId, "skill_update",
+                    SKILL_UPDATE_MAPPER.writeValueAsString(java.util.Map.of("skills", skills)));
+        } catch (Exception e) {
+            log.warn("Failed to push skill_update for {}", conversationId, e);
+        }
+    }
+
+    /**
      * 处理用户消息 (入口)
      */
     @Async("taskExecutor") // Run in separate thread
@@ -407,8 +440,17 @@ public class AgentOrchestrator {
                 }));
             }
             
-            // 1.2 Skill 激活（Phase 3B）：用户钉选优先，否则触发词匹配；都未命中时行为与现状一致
-            skillRouter.activateForTurn(conversationId, request.getMessage(), request.getPinnedSkillId());
+            // 1.2 Skill 激活（Phase 3B）：手动选择 ∪ 触发词自动命中；一个都不生效时行为与现状一致。
+            // ASK 模式下 skill 整体不生效（不传工具、ContextAssembler 也跳过注入），
+            // 因此手动选择在 ASK 下不参与——让"面板上亮着 skill、实际什么都没注入"这种
+            // 显示与实际不一致的状态压根不出现。
+            boolean skillsEffective = agentMode != AgentMode.ASK;
+            skillRouter.activateForTurn(conversationId, request.getMessage(), request.getPinnedSkillId(),
+                    skillsEffective ? request.getSkillIds() : null);
+            // 把本轮真正生效的清单告诉前端（自动命中的那枚在面板里会闪一下）。
+            // 空列表也发：前端靠它把上一轮的 chip 清掉。
+            sendSkillUpdate(conversationId,
+                    skillsEffective ? skillRouter.activeSkills(conversationId) : List.of());
 
             // 1.3 事项类型 AI 兜底分类：仅会话首轮且未命中 skill（skill 命中由 SkillRouter 产出类别）；
             // 异步、开关关闭时 no-op，绝不阻塞对话主链路
