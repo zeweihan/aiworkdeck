@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>card-close</title>
+<style>
+  :root {
+    --paper: #f7f3e8;
+    --ink: #201d18;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    background: var(--paper);
+    overflow: hidden;
+  }
+  body {
+    position: relative;
+    font-family: "Songti SC", "Noto Serif SC", "STSong", serif;
+    color: var(--ink);
+  }
+
+  #stage {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1920px;
+    height: 1080px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #textA, #textB {
+    position: absolute;
+    max-width: 1500px;
+    text-align: center;
+    font-size: 64px;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    opacity: 0;
+    transform: translateY(16px);
+    will-change: opacity, transform;
+  }
+  #textB {
+    font-size: 72px;
+  }
+
+  #corner {
+    position: absolute;
+    right: 96px;
+    bottom: 84px;
+    font-family: Georgia, "Times New Roman", "Songti SC", serif;
+    font-size: 28px;
+    letter-spacing: 0.06em;
+    color: var(--ink);
+    opacity: 0;
+    transform: translateY(10px);
+    will-change: opacity, transform;
+  }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="textA">把整个案子，装进一个窗口。</div>
+    <div id="textB">让专业回归判断。</div>
+  </div>
+  <div id="corner">AI WorkDeck 1.0</div>
+
+  <script>
+    // 确定性逐帧驱动，同 card-open.html / card-reveal.html 的约定。
+    function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+    function easeInOutCubic(x) {
+      x = clamp(x, 0, 1);
+      return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+    }
+    function setEnter(el, p, shiftPx) {
+      el.style.opacity = String(p);
+      el.style.transform = "translateY(" + (shiftPx * (1 - p)) + "px)";
+    }
+
+    var textA = document.getElementById("textA");
+    var textB = document.getElementById("textB");
+    var corner = document.getElementById("corner");
+
+    // 时间轴（秒），总时长 12.0s：
+    //   0.6–1.4   textA 淡入
+    //   1.4–4.4   textA 停留（3.0s）
+    //   4.4–5.2   textA 淡出
+    //   5.6–6.4   textB 淡入
+    //   6.4–12.0  textB 停留（不淡出，作为定格收尾）
+    //   8.0–8.8   角标 textB 停留期间淡入，随之保持到结尾
+    var A_IN_START = 0.6, A_IN_DUR = 0.8;
+    var A_HOLD_END = 4.4;
+    var A_OUT_DUR = 0.8;
+
+    var B_IN_START = 5.6, B_IN_DUR = 0.8;
+    var CORNER_IN_START = 8.0, CORNER_IN_DUR = 0.8;
+
+    window.renderFrame = function (t) {
+      var pA;
+      if (t < A_IN_START) {
+        pA = 0;
+      } else if (t < A_IN_START + A_IN_DUR) {
+        pA = easeInOutCubic((t - A_IN_START) / A_IN_DUR);
+      } else if (t < A_HOLD_END) {
+        pA = 1;
+      } else if (t < A_HOLD_END + A_OUT_DUR) {
+        pA = 1 - easeInOutCubic((t - A_HOLD_END) / A_OUT_DUR);
+      } else {
+        pA = 0;
+      }
+      setEnter(textA, pA, 16);
+
+      var pB;
+      if (t < B_IN_START) {
+        pB = 0;
+      } else if (t < B_IN_START + B_IN_DUR) {
+        pB = easeInOutCubic((t - B_IN_START) / B_IN_DUR);
+      } else {
+        pB = 1;
+      }
+      setEnter(textB, pB, 16);
+
+      var pC;
+      if (t < CORNER_IN_START) {
+        pC = 0;
+      } else if (t < CORNER_IN_START + CORNER_IN_DUR) {
+        pC = easeInOutCubic((t - CORNER_IN_START) / CORNER_IN_DUR);
+      } else {
+        pC = 1;
+      }
+      setEnter(corner, pC, 10);
+    };
+
+    window.renderFrame(0);
+  </script>
+</body>
+</html>

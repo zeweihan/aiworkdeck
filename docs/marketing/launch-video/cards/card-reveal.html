@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>card-reveal</title>
+<style>
+  :root {
+    --paper: #f7f3e8;
+    --ink: #201d18;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    background: var(--paper);
+    overflow: hidden;
+  }
+  body {
+    position: relative;
+    font-family: "Songti SC", "Noto Serif SC", "STSong", serif;
+    color: var(--ink);
+  }
+
+  #lines {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1920px;
+    height: 1080px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 44px;
+  }
+  .line {
+    font-size: 54px;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    text-align: center;
+    opacity: 0;
+    transform: translateY(16px);
+    will-change: opacity, transform;
+  }
+
+  #brandBlock {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 1920px;
+    height: 1080px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+  }
+  #brandName {
+    font-family: Georgia, "Times New Roman", "Songti SC", serif;
+    font-size: 132px;
+    font-weight: 400;
+    letter-spacing: 0.04em;
+    color: var(--ink);
+    transform: translateY(22px);
+    will-change: opacity, transform;
+  }
+  #brandSub {
+    margin-top: 40px;
+    font-size: 32px;
+    font-weight: 400;
+    letter-spacing: 0.05em;
+    color: var(--ink);
+    opacity: 0;
+    transform: translateY(12px);
+    will-change: opacity, transform;
+  }
+</style>
+</head>
+<body>
+  <div id="lines">
+    <div class="line" id="line1">一个懂法律文书的编辑器。</div>
+    <div class="line" id="line2">一个读得完整本案卷的 AI 助手。</div>
+    <div class="line" id="line3">一个可以不断生长的插件平台。</div>
+  </div>
+
+  <div id="brandBlock">
+    <div id="brandName">AI WorkDeck</div>
+    <div id="brandSub">律师第一次，拥有了属于自己的工作台。</div>
+  </div>
+
+  <script>
+    // 确定性逐帧驱动，同 card-open.html 的约定：不用 CSS animation/transition，
+    // render.mjs 逐帧调用 window.renderFrame(t) 计算样式。
+    function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+    function easeInOutCubic(x) {
+      x = clamp(x, 0, 1);
+      return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+    }
+    function setEnter(el, p, shiftPx) {
+      el.style.opacity = String(p);
+      el.style.transform = "translateY(" + (shiftPx * (1 - p)) + "px)";
+    }
+    function setFade(el, p) {
+      el.style.opacity = String(p);
+    }
+
+    var line1 = document.getElementById("line1");
+    var line2 = document.getElementById("line2");
+    var line3 = document.getElementById("line3");
+    var linesGroup = document.getElementById("lines");
+    var brandBlock = document.getElementById("brandBlock");
+    var brandName = document.getElementById("brandName");
+    var brandSub = document.getElementById("brandSub");
+
+    // 时间轴（秒），总时长 26.0s：
+    //   line1 淡入 0.6–1.4，停留至 4.4（读 3.0s）
+    //   line2 淡入 4.4–5.2，停留至 8.2（读 3.0s）
+    //   line3 淡入 8.2–9.0，停留至 12.0（三行共同停留 3.0s）
+    //   12.0–13.0  三行一起淡出
+    //   13.0–13.6  纸白空场
+    //   13.6–14.6  「AI WorkDeck」淡入落定
+    //   15.4–16.2  副标题淡入
+    //   16.2–24.0  停留
+    //   24.0–25.6  整体淡出
+    //   25.6–26.0  纸白收尾
+    var L1_IN_START = 0.6, L1_IN_DUR = 0.8;
+    var L2_IN_START = 4.4, L2_IN_DUR = 0.8;
+    var L3_IN_START = 8.2, L3_IN_DUR = 0.8;
+    var GROUP_OUT_START = 12.0, GROUP_OUT_DUR = 1.0;
+
+    var BRAND_IN_START = 13.6, BRAND_IN_DUR = 1.0;
+    var SUB_IN_START = 15.4, SUB_IN_DUR = 0.8;
+    var FINAL_OUT_START = 24.0, FINAL_OUT_DUR = 1.6;
+
+    function enterProgress(t, start, dur) {
+      if (t < start) return 0;
+      if (t < start + dur) return easeInOutCubic((t - start) / dur);
+      return 1;
+    }
+
+    window.renderFrame = function (t) {
+      // 三行文字：各自独立淡入进度，一旦出现就保持，直到统一淡出
+      var p1 = enterProgress(t, L1_IN_START, L1_IN_DUR);
+      var p2 = enterProgress(t, L2_IN_START, L2_IN_DUR);
+      var p3 = enterProgress(t, L3_IN_START, L3_IN_DUR);
+
+      var groupOutP = 1;
+      if (t >= GROUP_OUT_START && t < GROUP_OUT_START + GROUP_OUT_DUR) {
+        groupOutP = 1 - easeInOutCubic((t - GROUP_OUT_START) / GROUP_OUT_DUR);
+      } else if (t >= GROUP_OUT_START + GROUP_OUT_DUR) {
+        groupOutP = 0;
+      }
+
+      setEnter(line1, p1 * groupOutP, 16);
+      setEnter(line2, p2 * groupOutP, 16);
+      setEnter(line3, p3 * groupOutP, 16);
+      linesGroup.style.visibility =
+        t >= GROUP_OUT_START + GROUP_OUT_DUR && t > BRAND_IN_START - 0.01 ? "hidden" : "visible";
+
+      // 品牌名 + 副标题
+      var brandP = enterProgress(t, BRAND_IN_START, BRAND_IN_DUR);
+      var subP = enterProgress(t, SUB_IN_START, SUB_IN_DUR);
+
+      var finalOutP = 1;
+      if (t >= FINAL_OUT_START && t < FINAL_OUT_START + FINAL_OUT_DUR) {
+        finalOutP = 1 - easeInOutCubic((t - FINAL_OUT_START) / FINAL_OUT_DUR);
+      } else if (t >= FINAL_OUT_START + FINAL_OUT_DUR) {
+        finalOutP = 0;
+      }
+
+      // brandBlock 整体容器透明度只用来做最终整体淡出的乘子；
+      // 品牌名与副标题各自的出现节奏仍由下面单独控制
+      var brandVisible = t >= BRAND_IN_START ? 1 : 0;
+      brandBlock.style.opacity = String(brandVisible * finalOutP);
+      setEnter(brandName, brandP, 22);
+      setEnter(brandSub, subP, 12);
+    };
+
+    window.renderFrame(0);
+  </script>
+</body>
+</html>

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>card-open</title>
+<style>
+  :root {
+    --ink-paper: #efe8d8;
+    --bg-black: #050504;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1920px;
+    height: 1080px;
+    background: var(--bg-black);
+    overflow: hidden;
+  }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  #quote {
+    max-width: 1600px;
+    text-align: center;
+    font-family: "Songti SC", "Noto Serif SC", "STSong", serif;
+    font-weight: 400;
+    font-size: 60px;
+    line-height: 1.7;
+    letter-spacing: 0.03em;
+    color: var(--ink-paper);
+    opacity: 0;
+    transform: translateY(18px);
+    will-change: opacity, transform;
+  }
+</style>
+</head>
+<body>
+  <div id="quote">一个律师的一个案子，<br />要开多少个窗口？</div>
+
+  <script>
+    // 确定性逐帧驱动：render.mjs 会依次调用 window.renderFrame(t)，
+    // t = 相对片段起点的秒数。片内不使用 CSS animation/transition，
+    // 全部由 JS 按 t 直接计算样式，保证截帧与真实播放完全一致。
+    function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+    function easeInOutCubic(x) {
+      x = clamp(x, 0, 1);
+      return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+    }
+    // 进度 [0,1]：0 = 未出现（透明 + 下沉 18px），1 = 完全出现
+    function progressToStyle(el, p, opts) {
+      opts = opts || {};
+      var shiftPx = opts.shiftPx == null ? 18 : opts.shiftPx;
+      el.style.opacity = String(p);
+      el.style.transform = "translateY(" + (shiftPx * (1 - p)) + "px)";
+    }
+
+    // 时间轴（秒），总时长 14.0s：
+    //   0.0 – 1.0   黑场
+    //   1.0 – 2.6   文字淡入 + 轻微上浮（0.03s 缓动）
+    //   2.6 – 9.6   停顿（完全显示，7.0s）
+    //   9.6 – 11.4  文字淡出
+    //   11.4 – 14.0 黑场收尾
+    var T_IN_START = 1.0;
+    var T_IN_DUR = 1.6;
+    var T_HOLD_END = 9.6;
+    var T_OUT_DUR = 1.8;
+
+    var quoteEl = document.getElementById("quote");
+
+    window.renderFrame = function (t) {
+      var p;
+      if (t < T_IN_START) {
+        p = 0;
+      } else if (t < T_IN_START + T_IN_DUR) {
+        p = easeInOutCubic((t - T_IN_START) / T_IN_DUR);
+      } else if (t < T_HOLD_END) {
+        p = 1;
+      } else if (t < T_HOLD_END + T_OUT_DUR) {
+        p = 1 - easeInOutCubic((t - T_HOLD_END) / T_OUT_DUR);
+      } else {
+        p = 0;
+      }
+      progressToStyle(quoteEl, p, { shiftPx: 18 });
+    };
+
+    window.renderFrame(0);
+  </script>
+</body>
+</html>
