@@ -18,6 +18,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -41,7 +42,10 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2))
 const version = JSON.parse(fs.readFileSync(path.join(repoDir, 'desktop', 'package.json'), 'utf8')).version
-const buildDir = path.join(addinDir, 'installer', 'build')
+// 构建区必须在仓库外：仓库坐在 ~/Documents（iCloud 同步范围），FileProvider 会在签名后
+// 异步给 .app 重新挂 FinderInfo 等 xattr，hdiutil 封进 DMG 后严格校验必挂、
+// LaunchServices 拒启（-10810）。系统临时目录不受 iCloud 管
+const buildDir = path.join(os.tmpdir(), 'awd-office-addin-installer-build')
 const distDir = path.join(addinDir, 'installer', 'dist')
 fs.rmSync(buildDir, { recursive: true, force: true })
 fs.mkdirSync(buildDir, { recursive: true })
@@ -124,6 +128,9 @@ if (!args.skipMac) {
 
   const dmgOut = path.join(distDir, `AI-WorkDeck-Office-Addin-${version}.dmg`)
   fs.rmSync(dmgOut, { force: true })
+  // 打包前兜底再清一次 xattr（签名内容不含 xattr，清掉不破坏签名），并严格校验后再封盘
+  execFileSync('xattr', ['-cr', stageDir], { stdio: 'inherit' })
+  if (identity) execFileSync('codesign', ['-v', '--strict', '--deep', appDir], { stdio: 'inherit' })
   execFileSync('hdiutil', ['create', '-volname', 'AI WorkDeck Office 插件',
     '-srcfolder', stageDir, '-ov', '-format', 'UDZO', dmgOut], { stdio: 'inherit' })
 
