@@ -89,3 +89,26 @@ node generate.mjs --all               # 生成全部（自动跳过 D 组未填�
   会自动跳过空提示词的镜头。
 
 视觉母题统一为「纸与光」，呼应官网衬线、纸白的视觉体系。
+
+## 取 ARK_API_KEY（已自动化，无需手工新建）
+
+不必去方舟控制台点「创建 API Key」。账号级 AK/SK 可以直接签名换取**临时、限定资源**的 key：
+
+```bash
+python3 docs/marketing/launch-video/broll/get-ark-key.py
+```
+
+脚本从 `.agent/CREDENTIALS.md` 读账号 AK/SK（只读、不打印），调用 OpenAPI `GetApiKey`
+（host `open.volcengineapi.com`，service=ark，region=cn-beijing，ResourceType=presetendpoint、
+ProjectName=default、ResourceIds 为视频模型 id），换取最长 30 天的 key，写入
+`.agent/ark_api_key.env`（权限 600，`.agent/` 已 gitignore）。
+
+跑生成前先加载：
+
+```bash
+set -a; source "/Users/zewei/Documents/2024-2044/5-Tech/1-2 checkba_cloud/.agent/ark_api_key.env"; set +a
+```
+
+2026-08-20 已换取一把，到期 2026-09-19；过期重跑脚本即可。这把 key 只限视频模型、且会自动过期，
+比长期 key 更稳妥。鉴权自检（不产生费用）：拿一个不存在的任务 id 查询，返回 404 ResourceNotFound
+即为鉴权正常，返回 401/403 才是 key 有问题。
