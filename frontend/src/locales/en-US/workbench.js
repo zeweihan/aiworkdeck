@@ -167,6 +167,10 @@ export default {
   removed: 'Removed',
   removeFailed: 'Failed to remove',
   aiPanelNotReady: 'AI panel is not ready, please try again later',
+  // Kick-off prompt for the plugin dev panel's "Have AI develop it": must start with
+  // the literal Chinese trigger word "插件开发" to hit the skill match, so it stays
+  // untranslated here (same convention as litigation-visual's server-composed prompt).
+  pluginDevAiPrompt: '插件开发：请继续开发本项目「插件开发/{id}/」目录下的插件「{name}」（文件夹 ID {folderId}）。先读取该目录下的 manifest.json 与 web/ 源码了解现状，然后按我的需求迭代；改完用 plugin_dev_install 安装到本机让我测试。',
   projectNameEmpty: 'Project name cannot be empty',
   renameSuccess: 'Renamed',
   renameFailed: 'Rename failed',

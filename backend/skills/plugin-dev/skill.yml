@@ -1,0 +1,46 @@
+# 插件开发 Skill（dev-board#61，打包格式见 docs/SKILL_SPEC.md）
+#
+# 「插件开发形态」的 AI 侧入口：命中触发词后注入 prompt.md——那份文档是
+# Web 插件开发的权威 spec（目录契约、manifest 规则、沙箱边界、SDK 桥 v1 全量 API、
+# 迭代流程），写给模型一次读懂照做。左栏「插件开发」面板经 requiresSkill 门控
+# 与本 skill 同进退：广场启用即出现（leftSidebarPlugins.js）。
+id: plugin-dev
+name: 插件开发
+description: 在 AI WorkDeck 里直接开发 Web 插件：AI 按需求生成/修改插件源码（项目「插件开发」目录，文件树可见可编辑），一键安装到本机沙箱运行测试，全程不离开产品。只支持纯 Web 插件（沙箱 iframe + 受控桥），带 JAR 的插件仍须走广场审核签名流程。
+
+author: AI WorkDeck
+author_url: https://www.aiworkdeck.com
+version: 1.0.0
+license: MIT
+
+# 默认不安装：随包分发但默认关闭，广场启用（= 安装）后左栏入口与 AI 能力同时生效。
+# 形制同 desensitize / litigation-visual 的 requiresSkill 门控。
+enabled_by_default: false
+
+# 法律事项类别（匿名统计用，枚举见 MatterCategory）
+category: 非法律事务
+
+# 面板与 prompt 均为中文，英文侧待补 name_en/triggers_en/prompt.en.md 后再解禁。
+languages:
+  - zh-CN
+
+triggers:
+  - 插件开发
+  - 开发插件
+  - 做个插件
+  - 写个插件
+
+# 业务闭环所需工具全集（base-tools 的 read_document/list_files/query_memory 与
+# 编排类工具恒定可见，不必列；这里逐个列出的是本 skill 的能力边界，漏一个
+# 就等于对模型隐藏了这个能力——见 plugin-system.md「allowed_tools 必读」）。
+allowed_tools:
+  - plugin_dev_scaffold
+  - plugin_dev_install
+  - write_file
+  - read_file
+  - extract_file_text
+  - create_folder
+  - text_write_file
+  - text_find_replace
+
+prompt: prompt.md

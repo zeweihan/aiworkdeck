@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>__PLUGIN_NAME__</title>
+  <style>
+    body { margin: 0; padding: 12px; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; font-size: 13px; color: #1f2933; background: #ffffff; }
+    h1 { font-size: 14px; margin: 0 0 8px; }
+    button { font-size: 12px; padding: 4px 10px; border: 1px solid #d0d7de; border-radius: 4px; background: #f6f8fa; cursor: pointer; }
+    button:hover { background: #eef1f4; }
+    #out { margin-top: 10px; white-space: pre-wrap; color: #52606d; }
+  </style>
+</head>
+<body>
+  <h1>__PLUGIN_NAME__</h1>
+  <p>这是插件骨架。修改 web/ 下的源码并重新安装即可看到变化。</p>
+  <button id="demo">读取项目文件列表</button>
+  <div id="out"></div>
+
+  <!-- SDK 必须用同步 script 且排在业务脚本之前：宿主在 iframe load 后立刻握手 -->
+  <script src="./awd-plugin-sdk.js"></script>
+  <script>
+    awd.ready().then(function (ctx) {
+      document.getElementById('out').textContent = '已连接宿主，项目 ID: ' + ctx.projectId;
+    });
+    document.getElementById('demo').addEventListener('click', function () {
+      awd.files.list().then(function (files) {
+        document.getElementById('out').textContent =
+          files.map(function (f) { return f.path; }).join('\n') || '(项目暂无文件)';
+      }).catch(function (e) {
+        document.getElementById('out').textContent = '调用失败: ' + e.code + ' ' + e.message;
+      });
+    });
+  </script>
+</body>
+</html>

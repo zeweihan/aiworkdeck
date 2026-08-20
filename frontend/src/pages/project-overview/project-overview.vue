@@ -659,6 +659,14 @@
             v-else-if="leftPaneKey === 'calendar'"
             :project-id="projectId"
           />
+          <PluginDevPanel
+            v-else-if="leftPaneKey === 'dev'"
+            :project-id="projectId"
+            @refresh-plugins="loadDynamicPlugins"
+            @refresh-files="onArchiveExtracted"
+            @open-plugin="toggleLeftPane"
+            @ai-develop="onPluginDevAiDevelop"
+          />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
             :url="dynamicPlugins.find(p => p.key === leftPaneKey)?.frontendEntry"
@@ -1556,6 +1564,7 @@ import ProjectFavoritesPanel from '@/components/ProjectFavoritesPanel.vue'
 import FileLinkDropZone from '@/components/FileLinkDropZone.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
+import PluginDevPanel from '@/components/PluginDevPanel.vue'
 import DrawioEditor from '@/components/DrawioEditor.vue'
 import PlainTextEditor from '@/components/PlainTextEditor.vue'
 // 插件广场 VS Code 形态：左栏列表面板 + 中栏详情 tab（整页 MarketPane 仅存于 admin 独立页）
@@ -1686,6 +1695,7 @@ export default {
     ChatInterface,
     MarkdownPreview,
     PluginPane, // Added
+    PluginDevPanel,
     DrawioEditor,
     PlainTextEditor,
     MarketSidebarPanel,
@@ -3496,6 +3506,16 @@ export default {
       await chat.sendExternalPrompt(prompt)
     },
 
+    // 插件开发面板「让 AI 开发」：kick-off prompt 必须以触发词「插件开发」开头才能
+    // 命中 skill 注入，与股东大会核查同一条路——resolveChatInterface 负责在 AI
+    // 面板收起时先打开它。
+    async onPluginDevAiDevelop({ id, name, folderId }) {
+      const chat = await this.resolveChatInterface()
+      if (!chat) return
+      const prompt = this.$t('workbench.pluginDevAiPrompt', { id, name, folderId })
+      await chat.sendExternalPrompt(prompt)
+    },
+
     async handleLitigationOpenFile({ fileId }) {
       if (!fileId) return
       try {
@@ -5066,9 +5086,13 @@ export default {
     async loadDynamicPlugins() {
       try {
         const res = await getPlugins()
-        if (res && res.data) {
+        // /api/plugins/list 裸返回数组（无 {code,data} 信封，request() 原样透传）；
+        // 只认 res.data 会让这里恒为空 = 装了的插件永远不出现在 rail 上，
+        // 与下面 loadEnabledSkills 修过的是同一个坑
+        const list = Array.isArray(res) ? res : ((res && res.data) || null)
+        if (list) {
           // Map backend PluginMetadata to frontend plugin structure
-          this.dynamicPlugins = res.data.map(p => ({
+          this.dynamicPlugins = list.map(p => ({
             key: `plugin-${p.id}`,
             // 左栏面板 key 是 plugin-<id>，桥要的是原始 id（握手上下文 + KV 分区键），
             // 两者别混用
