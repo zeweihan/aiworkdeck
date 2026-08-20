@@ -43,6 +43,7 @@ export default {
   startRecording: 'Start Recording',
   startHint: 'Tap to start. Speakers are separated automatically, and transcription runs once you stop.',
   recording: 'Recording',
+  connectingMic: 'Connecting to microphone…',
   paused: 'Paused',
   pause: 'Pause',
   resume: 'Resume',

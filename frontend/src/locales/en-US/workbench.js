@@ -13,6 +13,7 @@ export default {
   switchRecentProject: 'Switch to a recent project',
   recentProjects: 'Recent Projects',
   noOtherRecentProjects: 'No other recent projects',
+  recentProjectsLoadFailed: 'Failed to load — tap to retry',
   projectHome: 'Project Overview',
   allProjects: 'All Projects…',
   statusInProgress: 'In Progress',

@@ -39,7 +39,10 @@
               >
                 <text class="switcher-item-name">{{ p.name }}</text>
               </view>
-              <view v-if="!switcherProjects.length" class="switcher-item switcher-empty">
+              <view v-if="switcherLoadFailed" class="switcher-item switcher-error" @tap="loadSwitcherProjects">
+                <text>{{ $t('workbench.recentProjectsLoadFailed') }}</text>
+              </view>
+              <view v-else-if="!switcherProjects.length" class="switcher-item switcher-empty">
                 <text>{{ $t('workbench.noOtherRecentProjects') }}</text>
               </view>
               <view class="switcher-item switcher-home" @tap="goProjectHome">
@@ -1880,6 +1883,7 @@ export default {
       menuBarRefreshKey: 0, // Windows 自绘菜单栏的重建信号（跟着 pushMenuState 走）
       projectSwitcherOpen: false, // IDE 化最近项目切换器
       switcherProjects: [],
+      switcherLoadFailed: false, // 拉取最近项目失败：与"确实没有其他最近项目"的空态区分开，不能吞成同一句文案
       versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 顶栏工作状态点
       // 协作（团队案件库）状态：{linked, serverUrl, pendingUpload, remoteAhead, offline}
       collabCloud: null,
@@ -3048,6 +3052,13 @@ export default {
     async toggleProjectSwitcher() {
       this.projectSwitcherOpen = !this.projectSwitcherOpen
       if (!this.projectSwitcherOpen) return
+      await this.loadSwitcherProjects()
+    },
+    // 拉取失败时不能显示"没有其他最近项目"——那是把请求失败静默吞成了真实的
+    // 空态。改成独立的失败态 + 可点重试；这里单独抽出方法是因为菜单里的重试
+    // 项要能重新拉取而不去动 projectSwitcherOpen（它已经是 true）。
+    async loadSwitcherProjects() {
+      this.switcherLoadFailed = false
       try {
         const projects = await getMyProjects()
         const list = Array.isArray(projects) ? projects : (projects && projects.data) || []
@@ -3058,7 +3069,9 @@ export default {
           .filter(Boolean)
           .slice(0, 8)
       } catch (e) {
+        console.warn('[project-overview] failed to load recent projects for switcher', e)
         this.switcherProjects = []
+        this.switcherLoadFailed = true
       }
     },
     switchToProject(p) {

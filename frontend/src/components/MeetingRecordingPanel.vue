@@ -88,7 +88,18 @@
       <text class="mr-record-hint">{{ $t('meeting.startHint') }}</text>
     </template>
     <template v-else-if="recordingHere">
-      <view class="mr-recording-live">
+      <!-- getUserMedia + createMeetingRecording 两个 await 还没走完：秒数/电平/
+           暂停·停止按钮此刻都没有意义（mediaRecorder 尚未建立），单独给一句
+           "正在连接麦克风" 而不是渲染半成品的实时录音面板。 -->
+      <view v-if="recState.status === 'starting'" class="mr-recording-live mr-recording-starting">
+        <view class="mr-live-row">
+          <view class="mr-live-dot"></view>
+          <text class="mr-live-label">{{ $t('meeting.connectingMic') }}</text>
+        </view>
+        <text class="mr-record-hint">{{ $t('meeting.backgroundHint') }}</text>
+        <text class="mr-record-error" v-if="recState.error">{{ recState.error }}</text>
+      </view>
+      <view v-else class="mr-recording-live">
         <view class="mr-live-row">
           <view class="mr-live-dot" :class="{ paused: recState.status === 'paused' }"></view>
           <text class="mr-live-time">{{ formatSeconds(recState.seconds) }}</text>

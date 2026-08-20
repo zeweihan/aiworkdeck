@@ -13,6 +13,7 @@ export default {
   switchRecentProject: '切换到最近项目',
   recentProjects: '最近项目',
   noOtherRecentProjects: '没有其他最近项目',
+  recentProjectsLoadFailed: '加载失败，点此重试',
   projectHome: '项目概览',
   allProjects: '全部项目…',
   statusInProgress: '进行中',

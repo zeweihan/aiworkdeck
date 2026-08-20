@@ -15,7 +15,7 @@
 
 <script>
 import {
-  recorderState, stopRecording, pauseRecording, resumeRecording, formatSeconds
+  recorderState, stopRecording, pauseRecording, resumeRecording, formatSeconds, isRecordingActive
 } from '@/utils/meetingRecorder.js'
 
 export default {
@@ -24,9 +24,11 @@ export default {
     return { state: recorderState }
   },
   computed: {
+    // 复用 meetingRecorder.js 的权威判据，别再手写一份状态枚举——之前这里漏了
+    // 'starting'，窗口期胶囊不出现，但面板已经判定"有项目在录音"，用户被指去
+    // 停止一个还看不见的胶囊。
     visible() {
-      return this.state.status === 'recording' || this.state.status === 'paused'
-        || this.state.status === 'stopping'
+      return isRecordingActive()
     },
     timeText() {
       return formatSeconds(this.state.seconds)

@@ -95,6 +95,7 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - **iframe 容器不能加 sandbox**：沙箱会掐掉 SharedArrayBuffer 与 Worker，引擎起不来；跨源隔离靠站点级 COOP/COEP，不是 iframe 属性。
 - iframe 传输的订阅挂在 `window` 上，不随元素移除消失——`beforeUnmount` 必须显式退订（`_eventUnsub`），否则关一个文档漏一个监听器，且已销毁实例的 `onDocModified` 还会被触发。
 - 引擎仅 Writer+Calc 实锤（PR#165），别承诺 Impress。
+- **`fetchArrayBuffer`（`LibreOfficeEditor.vue`）曾经无 `xhr.timeout`**：请求挂起（代理/网络中间层吞掉响应但不触发 `onerror`）时，`loadDocument()` 里的 `await` 永远不返回——加载面板卡在某个百分比（典型是 85%，`bootMilestone(72,85,...)` 那一档），既不报错也不重试。已修：60s `xhr.timeout` + `ontimeout` reject；`loadDocument` 下载失败自动重试一次；加载卡片同一 `bootStageKey` 停留超过 30s（`startBootTrickle` 定时器里判）会亮出「重试」按钮（`retryLoad()`，引擎已就绪则重放 `finishDocLoad`）。改这段之前留意：`bootMilestone`/`file` watcher/`retryLoad` 三处都要同步维护 `_stageChangedAt`（否则 stuck 判据会误报或漏报）。
 - CJK 字体走类别映射别名（PR#157/158），**不能用 assign 硬替换**；tofu 排查用 list_fonts 诊断 action。
 - 删除键/快捷键必须走 `.uno:` 调度（覆盖层吞键+修订模式手工删卡死教训，PR#164/166）。
 - **IME 覆盖层的「吞掉尾随 input」闩不能无条件置位**（`zetaOfficeImeOverlay.js`）：`compositionend` 之后浏览器**不一定**补发 input 事件（中文态标点直接上屏、组合被取消都不发），闩挂着不解就会吃掉用户随后敲的第一个字符——真机现象是「中文标点要按两次才过去」。判据用 `inputType`（只吞 insertCompositionText/insertFromComposition），并且无论如何在下一个宏任务解闩，绝不让它跨事件循环存活。

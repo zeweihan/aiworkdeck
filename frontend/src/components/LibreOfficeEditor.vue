@@ -33,7 +33,12 @@
           <text class="libre-loading-pct">{{ Math.round(bootPct) }}%</text>
         </view>
         <text v-if="dlText" class="libre-loading-dl">{{ dlText }}</text>
-        <text class="libre-loading-hint">{{ $t('editor.firstOpenHint') }}</text>
+        <text v-if="!stuck" class="libre-loading-hint">{{ $t('editor.firstOpenHint') }}</text>
+        <!-- 同一阶段长时间无进展（大概率是下载/装载卡住）：给出可点的出路，
+             而不是让用户对着一根不动的进度条干等。 -->
+        <view v-if="stuck" class="libre-loading-retry" @click="retryLoad">
+          <text>{{ $t('editor.retryLoad') }}</text>
+        </view>
       </view>
     </view>
     <!-- The Electron <webview> is created imperatively (uni-app's template
@@ -162,6 +167,8 @@ export default {
       // overlay 从进度卡片切换为可滚动阅读的文档 + 顶部细进度条。
       previewReady: false,
       previewFailed: false,
+      // 同一 bootStageKey 停留超过约 30s（下载挂起等场景）时置位，露出重试按钮。
+      stuck: false,
     }
   },
   computed: {
@@ -214,6 +221,8 @@ export default {
       this.bootPct = 75
       this.bootCap = 95
       this.bootStageKey = 'openingDoc'
+      this._stageChangedAt = Date.now()
+      this.stuck = false
       this.startBootTrickle()
       this.finishDocLoad()
     },
@@ -327,16 +336,45 @@ export default {
     // 排版）看起来像卡死；真正的阶段跳变由 boot-log 里程碑驱动。
     startBootTrickle() {
       clearInterval(this._bootTimer)
+      if (!this._stageChangedAt) this._stageChangedAt = Date.now()
       this._bootTimer = setInterval(() => {
         if (this.ready || this.isError) { clearInterval(this._bootTimer); return }
         if (this.bootPct < this.bootCap) this.bootPct = Math.min(this.bootCap, this.bootPct + 0.6)
+        // 同一阶段停了太久（典型是文档下载挂起）：亮出重试按钮，别让用户对着
+        // 一根不动的进度条干等——超时/下载失败已有 fetchArrayBuffer 的 reject
+        // 路径兜底，这里是给"没有报错、就是卡住"的情形一个出路。
+        if (!this.stuck && Date.now() - this._stageChangedAt > 30000) this.stuck = true
       }, 400)
     },
     bootMilestone(base, cap, stageKey) {
       if (this.ready) return
       this.bootPct = Math.max(this.bootPct, base)
       this.bootCap = Math.max(this.bootCap, cap)
-      if (stageKey) this.bootStageKey = stageKey
+      if (stageKey && stageKey !== this.bootStageKey) {
+        this.bootStageKey = stageKey
+        this._stageChangedAt = Date.now()
+        this.stuck = false
+      }
+    },
+    // 手动重试：引擎已就绪的话就是文档下载/装载卡住了，重新走一次装载路径
+    // （与备胎过继 watch:file 那条路同形制）；引擎自己还没起来则没有可重放的
+    // 下载动作，只重置计时器继续等待，30s 后按钮会再次出现。
+    retryLoad() {
+      this.stuck = false
+      this._stageChangedAt = Date.now()
+      if (this._endpointUp) {
+        this.appendLog('用户点击重试 / retry requested')
+        this._bytesPromise = null
+        this.dlLoaded = 0
+        this.dlTotal = 0
+        this.statusKey = this.file ? 'loadingDoc' : 'booting'
+        this.bootStageKey = this.file ? 'openingDoc' : 'almostReady'
+        this.bootCap = Math.max(this.bootCap, 95)
+        this.startBootTrickle()
+        this.finishDocLoad()
+      } else {
+        this.startBootTrickle()
+      }
     },
     // 注意：这里匹配的是引擎 boot-log 的原始消息（含中文），是引擎侧判据，
     // 不随界面语言变化——匹配串一个字都不能动。
@@ -542,7 +580,17 @@ export default {
       if (!fileId) throw new Error('file has no id/wpsFileId')
       const url = getFileDownloadUrl(fileId)
       let buf = this._bytesPromise ? await this._bytesPromise : null
-      if (!buf) buf = await this.fetchArrayBuffer(url)
+      if (!buf) {
+        try {
+          buf = await this.fetchArrayBuffer(url)
+        } catch (e) {
+          // 下载失败自动重试一次（弱网/瞬时超时很常见），仍失败就让异常照常
+          // 抛出——finishDocLoad 的 catch 会置 docLoadFailed + statusKey='loadFailed'，
+          // 走既有的失败可见路径，不静默卡住。
+          this.appendLog('下载失败，重试一次 / download failed, retrying once: ' + (e && e.message ? e.message : e))
+          buf = await this.fetchArrayBuffer(url)
+        }
+      }
       const bytes = new Uint8Array(buf || new ArrayBuffer(0))
       const name = f.name || (String(fileId) + '.' + String(f.fileType || 'docx'))
       // Empty body = a brand-new / unsaved document — the backend streams HTTP
@@ -646,6 +694,10 @@ export default {
         const xhr = new XMLHttpRequest()
         xhr.open('GET', url, true)
         xhr.responseType = 'arraybuffer'
+        // 无超时的话，请求挂起（代理/网络中间层吞掉响应，不触发 onerror）会让
+        // loadDocument 里的 await 永远不返回——加载面板卡在某个百分比，既不报
+        // 错也不重试。60s 覆盖正常大文档下载，挂起的连接会被主动打断。
+        xhr.timeout = 60000
         Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]))
         if (onProgress) {
           xhr.onprogress = (ev) => {
@@ -654,6 +706,7 @@ export default {
         }
         xhr.onload = () => (xhr.status === 200 ? resolve(xhr.response) : reject(new Error('HTTP ' + xhr.status)))
         xhr.onerror = () => reject(new Error('网络错误 / network error'))
+        xhr.ontimeout = () => reject(new Error('下载超时 / download timed out'))
         xhr.send()
       })
     },
@@ -851,6 +904,9 @@ export default {
 .libre-loading-pct { font-size: 12px; color: #1A5336; font-weight: 600; }
 .libre-loading-dl { font-size: 11px; color: #868E96; }
 .libre-loading-hint { font-size: 11px; color: #ADB5BD; margin-top: 6px; }
+.libre-loading-retry { margin-top: 8px; padding: 6px 16px; border-radius: 999px; background: #1A5336;
+  color: #fff; font-size: 12px; cursor: pointer; }
+.libre-loading-retry:hover { background: #16452C; }
 /* ---- 只读预览接力 ---- */
 .libre-preview-strip { position: absolute; top: 0; left: 0; right: 0; z-index: 2; display: flex; flex-direction: column;
   gap: 4px; padding: 6px 14px 8px; background: rgba(248, 249, 250, 0.95); border-bottom: 1px solid #E9ECEF;
