@@ -104,7 +104,22 @@ function runWorkerServer() {
   const sigBytes = fs.readFileSync(path.join(dir, 'manifest.json.sig'))
   const archiveBuf = fs.readFileSync(fx.archivePath)
 
+  // 诊断口：AWD_PACK_STUB_DEBUG_LOG 指一个文件路径时，把每个请求的 method/url/头
+  // （含代理相关头）、archive 端点每个 chunk 的写入时间戳、连接 close/aborted 都落盘。
+  // 默认不开（不设该环境变量则完全零开销），排查 J13 卡死专用。
+  const dbgLogPath = process.env.AWD_PACK_STUB_DEBUG_LOG
+  const dbg = dbgLogPath
+    ? (line) => { try { fs.appendFileSync(dbgLogPath, `[${new Date().toISOString()}] ${line}\n`) } catch (e) { /* ignore */ } }
+    : null
+
   const server = http.createServer((req, res) => {
+    if (dbg) {
+      dbg(`REQ ${req.method} ${req.url} remote=${req.socket.remoteAddress}:${req.socket.remotePort} headers=${JSON.stringify(req.headers)}`)
+      req.on('aborted', () => dbg(`REQ ABORTED ${req.url}`))
+      req.on('close', () => dbg(`REQ CLOSE ${req.url}`))
+      res.on('close', () => dbg(`RES CLOSE ${req.url} finished=${res.writableFinished}`))
+      res.on('error', (e) => dbg(`RES ERROR ${req.url} ${e && e.message}`))
+    }
     const url = new URL(req.url, 'http://internal')
     const prefix = `/plugin-packs/${id}/`
     if (!url.pathname.startsWith(prefix)) { res.writeHead(404); res.end(); return }
@@ -118,10 +133,13 @@ function runWorkerServer() {
     if (rel === `${version}/${fx.archiveName}`) {
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': String(archiveBuf.length) })
       let offset = 0
+      let chunkN = 0
       const pump = () => {
-        if (offset >= archiveBuf.length) { res.end(); return }
+        if (offset >= archiveBuf.length) { if (dbg) dbg(`ARCHIVE END chunks=${chunkN} bytes=${offset}`); res.end(); return }
         const end = Math.min(offset + CHUNK_BYTES, archiveBuf.length)
-        res.write(archiveBuf.subarray(offset, end))
+        const ok = res.write(archiveBuf.subarray(offset, end))
+        chunkN++
+        if (dbg) dbg(`ARCHIVE CHUNK #${chunkN} offset=${offset} end=${end} write()=${ok}`)
         offset = end
         setTimeout(pump, CHUNK_DELAY_MS)
       }
