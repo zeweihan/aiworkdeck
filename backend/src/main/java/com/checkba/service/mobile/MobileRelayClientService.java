@@ -19,6 +19,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -135,11 +136,13 @@ public class MobileRelayClientService {
             if (hash.equals(lastPushedHash)) return;
 
             HttpResponse<String> resp = authed("PUT", "/api/mobile/projects", payload);
-            if (resp != null && resp.statusCode() >= 200 && resp.statusCode() < 300) {
+            if (okEnvelope(resp)) {
                 lastPushedHash = hash;
                 log.info("手机同步：项目目录已推送（{} 项）", arr.size());
             } else if (resp != null) {
-                log.warn("手机同步：目录推送失败 status={}", resp.statusCode());
+                log.warn("手机同步：目录推送失败 status={} body={}", resp.statusCode(),
+                        resp.body() != null && resp.body().length() > 200
+                                ? resp.body().substring(0, 200) : resp.body());
             }
         } catch (Exception e) {
             log.warn("手机同步：目录推送异常（下轮重试）", e);
@@ -202,8 +205,14 @@ public class MobileRelayClientService {
             HttpRequest req = request("/api/mobile/inbox/" + itemId + "/content")
                     .header("X-Session-Id", token).GET().build();
             HttpResponse<InputStream> content = http.send(req, HttpResponse.BodyHandlers.ofInputStream());
-            if (content.statusCode() < 200 || content.statusCode() >= 300) {
-                log.warn("手机同步：影像 {} 内容下载失败 status={}", itemId, content.statusCode());
+            // 拒绝响应也是 HTTP 200（JSON 信封）——不验 Content-Type 就落盘，
+            // 会把 {"code":4010} 当成照片字节写进项目
+            String contentType = content.headers().firstValue("Content-Type").orElse("");
+            if (content.statusCode() < 200 || content.statusCode() >= 300
+                    || !contentType.startsWith("application/octet-stream")) {
+                try (InputStream in = content.body()) { in.transferTo(OutputStream.nullOutputStream()); }
+                log.warn("手机同步：影像 {} 内容下载失败 status={} contentType={}",
+                        itemId, content.statusCode(), contentType);
                 return;
             }
             ProjectFile record = projectFileService.createFile(
@@ -218,7 +227,7 @@ public class MobileRelayClientService {
                     itemId, projectId, "现场影像", dateStr, landedName);
         }
         HttpResponse<String> ack = authed("POST", "/api/mobile/inbox/" + itemId + "/ack", "{}");
-        if (ack == null || ack.statusCode() < 200 || ack.statusCode() >= 300) {
+        if (!okEnvelope(ack)) {
             log.warn("手机同步：影像 {} ACK 失败（已落盘，下轮按同名幂等补发）", itemId);
         }
     }
@@ -262,13 +271,13 @@ public class MobileRelayClientService {
         return enabled && localMode && accountService.currentKeyOrNull() != null;
     }
 
-    /** 带令牌出站；401 时作废令牌重新桥接并重试一次。 */
+    /** 带令牌出站；鉴权失败时作废令牌重新桥接并重试一次。 */
     private HttpResponse<String> authed(String method, String path, String jsonBody) {
         String token = currentToken();
         if (token == null) return null;
         try {
             HttpResponse<String> resp = send(method, path, jsonBody, token);
-            if (resp.statusCode() == 401) {
+            if (authRejected(resp)) {
                 invalidateToken();
                 token = currentToken();
                 if (token == null) return resp;
@@ -279,6 +288,35 @@ public class MobileRelayClientService {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             log.warn("手机同步：出站失败 {} {}", method, path, e);
             return null;
+        }
+    }
+
+    /**
+     * 鉴权被拒的两种形态都要认：裸 401，以及全站惯例的「HTTP 200 + code 4010 信封」
+     * （GlobalExceptionHandler 对 UnauthorizedException 统一返回 200）。只看 401 的话，
+     * 令牌失效后目录推送会被当成功、永不重桥接——上线冒烟时抓到的真形态。
+     */
+    private boolean authRejected(HttpResponse<String> resp) {
+        if (resp.statusCode() == 401) return true;
+        String body = resp.body();
+        if (body == null || !body.startsWith("{")) return false;
+        try {
+            return mapper.readTree(body).path("code").asInt(0)
+                    == com.checkba.config.GlobalExceptionHandler.CODE_UNAUTHENTICATED;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 业务成功 = HTTP 2xx 且（无信封 code 或 code==0）。4010 拒绝也是 200，光看状态码会误判。 */
+    private boolean okEnvelope(HttpResponse<String> resp) {
+        if (resp == null || resp.statusCode() < 200 || resp.statusCode() >= 300) return false;
+        String body = resp.body();
+        if (body == null || !body.startsWith("{")) return true;
+        try {
+            return mapper.readTree(body).path("code").asInt(0) == 0;
+        } catch (Exception e) {
+            return false;
         }
     }
 
