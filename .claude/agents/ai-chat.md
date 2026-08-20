@@ -218,6 +218,13 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   编辑器侧（`zetaOfficeImeOverlay` / `zetaoffice/editor-main.js`）早就为同一类问题做了
   composing 闩，聊天输入框一直漏着。守卫必须排在 `handleSubmit` 之前。
   回归用例 `frontend/tests/project-home/frontend-audit-batch.test.mjs`。
+- **聊天气泡 ID 必须走 `nextBubbleId()`，不许用裸 `Date.now()`**：用户气泡与助手气泡是在
+  **同一个同步块**里先后创建的（`useAgentStream` 里 `push(createUserBubble(...))` 紧接着
+  `createAssistantBubble()`），同一毫秒 = 同一个 ID。而 `ChatInterface` 的列表是
+  `:key="msg.id || index"`——key 撞了之后 Vue 的 diff 会**复用错节点**：一条消息的正文
+  渲染进另一条气泡、用户/助手样式串位、旧内容残留，也就是「历史对话记录杂乱无序」的一种成因。
+  新增任何气泡创建点都要用 `composables/bubbleId.js` 的 `nextBubbleId()`（单调序号 + 时间戳）。
+  回归用例 `frontend/tests/project-home/bubble-id.test.mjs`。
 - **埋点体系**（`com.checkba.service.telemetry`，设计 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
   唯一采集入口 TelemetryService.record/recordConv，字段过 TelemetryAttrWhitelist 白名单
   （新事件/字段要同步白名单 + TelemetryServiceTest + 官网仓 lib/telemetry-store.ts 的 EVENT_WHITELIST）。
