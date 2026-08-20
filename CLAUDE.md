@@ -21,6 +21,7 @@ AI WorkDeck（checkba_cloud）：面向法律行业的 AI 工作台。Java Sprin
 | 构建、发版、CI、测试体系、本地开发启动 | `.claude/agents/eng-infra.md` |
 | 版本记录、工作段、时间线、退回、Git 仓库 | `.claude/agents/version-control.md` |
 | 反馈浮窗、反馈落库、优化者（分诊/开 PR/发邮件）、后台反馈看板 | `.claude/agents/feedback-optimizer.md` |
+| 手机端同步：项目目录镜像、现场影像云中转（/api/mobile/*）、桥接认领手机号、iOS/小程序客户端 | `.claude/agents/mobile-sync.md` |
 
 这些文件同时是可派遣的 sub-agent 定义：需要并行探查或委托领域内工作时，可直接用对应 agent 类型派子任务。
 

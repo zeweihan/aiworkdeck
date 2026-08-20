@@ -118,6 +118,47 @@ public class UserService {
 
     public record PhoneAccount(User user, boolean created) {}
 
+    private static final org.slf4j.Logger claimLog = org.slf4j.LoggerFactory.getLogger(UserService.class);
+
+    /**
+     * 桥接认领手机号（手机端账号归一，dev-board#30）：官网账户带着经短信验证的手机号
+     * 来桥接时，把该号写到桥接用户名下——此后手机端 sms-login 的
+     * {@link #findOrCreateByPhone} 自然解析到同一个账号，不再另建孤号。
+     *
+     * <p>号码正被别的用户占用时<b>转移</b>：占用方是经 sms-login 对同一手机号
+     * 验证过控制权的账号，与官网账户持有人是同一个人，归一正是本方法的目的。
+     * 桥接用户已绑了<b>另一个</b>号码时不覆盖（只记日志）——覆盖会悄悄改变
+     * 一个已工作的登录入口。
+     *
+     * <p>永不抛出：认领是桥接的顺手动作，失败不影响桥接本身。
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public void claimPhoneFromWebsite(User user, String phone) {
+        try {
+            if (user == null || phone == null || !phone.matches("^1\\d{10}$")) return;
+            if (phone.equals(user.getPhone())) return;
+            if (StringUtils.hasText(user.getPhone())) {
+                claimLog.info("桥接用户 {} 已绑 {}，不用官网号码覆盖",
+                        user.getId(), com.checkba.service.sms.SmsAuthService.maskPhone(user.getPhone()));
+                return;
+            }
+            Optional<User> holder = userRepository.findByPhone(phone);
+            if (holder.isPresent() && !holder.get().getId().equals(user.getId())) {
+                User h = holder.get();
+                h.setPhone(null);
+                h.setUpdatedAt(LocalDateTime.now());
+                userRepository.save(h);
+                claimLog.info("手机号 {} 从用户 {} 转移到桥接用户 {}（账号归一）",
+                        com.checkba.service.sms.SmsAuthService.maskPhone(phone), h.getId(), user.getId());
+            }
+            user.setPhone(phone);
+            user.setUpdatedAt(LocalDateTime.now());
+            userRepository.save(user);
+        } catch (Exception e) {
+            claimLog.warn("桥接认领手机号失败（不影响桥接）: user={}", user == null ? null : user.getId(), e);
+        }
+    }
+
     /** 随机短用户名，撞了重试。10 次都撞说明随机源坏了，宁可报错也不静默降级。 */
     private String allocatePhoneUsername() {
         for (int i = 0; i < 10; i++) {

@@ -106,6 +106,10 @@ class AwdkLoginServiceTest {
                 .thenAnswer(inv -> Optional.ofNullable(usersByName.get(inv.getArgument(0, String.class))));
         when(userRepository.findById(anyLong()))
                 .thenAnswer(inv -> Optional.ofNullable(usersById.get(inv.getArgument(0, Long.class))));
+        when(userRepository.findByPhone(anyString()))
+                .thenAnswer(inv -> usersById.values().stream()
+                        .filter(u -> inv.getArgument(0, String.class).equals(u.getPhone()))
+                        .findFirst());
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
             if (u.getId() == null) u.setId(userSeq.getAndIncrement());
@@ -431,5 +435,56 @@ class AwdkLoginServiceTest {
         AccountException e = assertThrows(AccountException.class,
                 () -> service(true).sendLoginCode("13800138000", null));
         assertEquals(AccountException.Kind.NETWORK, e.getKind());
+    }
+
+    // ==================== 桥接认领手机号（手机端账号归一，dev-board#30） ====================
+
+    private static final String ME_WITH_PHONE =
+            "{\"accountId\":\"acc_9f3a\",\"username\":\"hanzewei\",\"displayName\":\"韩泽伟\","
+                    + "\"phone\":\"18610211590\",\"balanceCents\":1980,\"plan\":\"paid\"}";
+
+    @Test
+    @DisplayName("认领：官网 me 带 phone 时写到桥接用户名下（sms-login 由此解析到同一账号）")
+    void bridgeClaimsWebsitePhone() {
+        transport.enqueue(200, ME_WITH_PHONE);
+        AwdkLoginService.BridgeSession session = service(true).login(KEY);
+        assertEquals("18610211590", usersById.get(session.userId()).getPhone());
+    }
+
+    @Test
+    @DisplayName("认领转移：号码正被手机号免密建号的孤立用户占用时，转移到桥接用户（同一个人）")
+    void bridgeClaimTransfersPhoneFromStandaloneUser() {
+        User orphan = userService.findOrCreateByPhone("18610211590").user();
+        assertEquals("18610211590", orphan.getPhone());
+
+        transport.enqueue(200, ME_WITH_PHONE);
+        AwdkLoginService.BridgeSession session = service(true).login(KEY);
+
+        assertEquals("18610211590", usersById.get(session.userId()).getPhone());
+        assertNull(usersById.get(orphan.getId()).getPhone(), "孤立用户的号码应被转移走");
+    }
+
+    @Test
+    @DisplayName("认领不覆盖：桥接用户已绑了另一个号码时保持不动")
+    void bridgeClaimNeverOverwritesDifferentPhone() {
+        transport.enqueue(200, ME_OK);
+        AwdkLoginService.BridgeSession first = service(true).login(KEY);
+        User bridged = usersById.get(first.userId());
+        bridged.setPhone("13900000000");
+
+        transport.enqueue(200, ME_WITH_PHONE);
+        service(true).login(KEY);
+        assertEquals("13900000000", usersById.get(first.userId()).getPhone());
+    }
+
+    @Test
+    @DisplayName("认领容错：me 无 phone / phone 形态不对都不影响桥接")
+    void bridgeClaimToleratesMissingOrMalformedPhone() {
+        transport.enqueue(200, ME_OK);
+        assertDoesNotThrow(() -> service(true).login(KEY));
+
+        transport.enqueue(200, ME_OK.replace("\"plan\":\"paid\"", "\"plan\":\"paid\",\"phone\":\"+86 186\""));
+        AwdkLoginService.BridgeSession session = service(true).login(KEY);
+        assertNull(usersById.get(session.userId()).getPhone());
     }
 }
