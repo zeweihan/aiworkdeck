@@ -20,7 +20,6 @@
  * 不进 CI（NATIVE_PACK_DISTRIBUTION.md §1）。
  */
 const fs = require('fs')
-const os = require('os')
 const path = require('path')
 const crypto = require('crypto')
 const { execFileSync } = require('child_process')
@@ -96,30 +95,29 @@ function listFiles(dir, exclude) {
 // 判据，不会出现「哈希清单排除了 __pycache__，但 tar 整目录打包时忘了排除」
 // 这种两条平行逻辑对不上的漂移。
 //
-// 包内顶层目录名固定为 topName（= manifest 的 unpackDir），**不依赖 srcDir 自身
-// 的目录名**：现有三个组件恰好 srcDir 的 basename 就是组件名（litviz/drawio/
-// graphviz），但显式控制更稳妥，也让打包函数可以对着任意名字的临时目录测试。
-// 做法是建一个指向 srcDir、名字是 topName 的软链，清单里的路径写成
-// topName/<relFile>，tar -h 经软链解析到真实内容。
-function tarPack(srcDir, relFiles, archivePath, topName) {
-  const linkParent = fs.mkdtempSync(path.join(os.tmpdir(), 'aiworkdeck-pack-link-'))
-  const linkPath = path.join(linkParent, topName)
-  const listPath = path.join(linkParent, '.tar-filelist')
+// **包内条目是裸相对路径，不套顶层目录**：安装端会先建 <version>/<unpackDir>/
+// 再解压（NativePackService.doInstall），包里若再带一层目录就会落成
+// <unpackDir>/<unpackDir>/…，verifyContents 找不到 contents.sha256，
+// 安装必挂（dev-board#65 真机「组件缺少 contents.sha256 清单」的根因）。
+function tarPack(srcDir, relFiles, archivePath) {
+  // Windows 上（Git for Windows 的 GNU tar）带盘符的路径 D:\... 会被当成
+  // 远程主机（rsh 语法）报 "Cannot connect to D"。所以 cwd 钉在 srcDir、
+  // 全用相对路径出包，再把成品搬到目标位置（copy 而非 rename，兼容跨盘符）。
+  // 清单与临时包都落在 srcDir 里（与 contents.sha256 同款临时物，finally 清走），
+  // 二者都不在 relFiles 清单里，不会被打进包。
+  const listPath = path.join(srcDir, '.tar-filelist')
+  const tmpArchive = '.out.tar.gz'
   try {
-    fs.symlinkSync(srcDir, linkPath, 'dir')
     // 清单路径一律正斜杠：Windows 下 path.relative 产出反斜杠，tar 不认
-    fs.writeFileSync(listPath, relFiles.map((rel) => `${topName}/${rel.split(path.sep).join('/')}`).join('\n') + '\n')
+    fs.writeFileSync(listPath, relFiles.map((rel) => rel.split(path.sep).join('/')).join('\n') + '\n')
     const env = { ...process.env }
     if (process.platform === 'darwin') env.COPYFILE_DISABLE = '1' // 防 AppleDouble（._ 文件）
-    // Windows 上（Git for Windows 的 GNU tar）带盘符的路径 D:\... 会被当成
-    // 远程主机（rsh 语法）报 "Cannot connect to D"。所以 cwd 钉在 linkParent、
-    // 全用相对路径出包，再把成品搬到目标位置（copy 而非 rename，兼容跨盘符）。
-    const tmpArchive = '.out.tar.gz'
-    execFileSync('tar', ['-czhf', tmpArchive, '-T', '.tar-filelist'], { stdio: 'inherit', env, cwd: linkParent })
+    execFileSync('tar', ['-czhf', tmpArchive, '-T', '.tar-filelist'], { stdio: 'inherit', env, cwd: srcDir })
     fs.mkdirSync(path.dirname(archivePath), { recursive: true })
-    fs.copyFileSync(path.join(linkParent, tmpArchive), archivePath)
+    fs.copyFileSync(path.join(srcDir, tmpArchive), archivePath)
   } finally {
-    fs.rmSync(linkParent, { recursive: true, force: true })
+    fs.rmSync(listPath, { force: true })
+    fs.rmSync(path.join(srcDir, tmpArchive), { force: true })
   }
 }
 
@@ -136,7 +134,7 @@ function packComponent(ctx, { name, srcDir, exclude, archive, platforms, unpackD
   try {
     const archivePath = path.join(ctx.outDir, archive)
     console.log(`打包 ${name} -> ${archivePath}（${files.length} 个文件）`)
-    tarPack(srcDir, [...files, contentsRel], archivePath, topName)
+    tarPack(srcDir, [...files, contentsRel], archivePath)
     const st = fs.statSync(archivePath)
     return {
       name,
