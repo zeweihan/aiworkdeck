@@ -111,6 +111,13 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
 
 ## 已知地雷
 
+- **`@ActiveProfiles("desktop")` 的 `@SpringBootTest` 必须同时把 `spring.datasource.url` 覆盖成
+  `jdbc:h2:mem:`**（写法照 IdorAuthIntegrationTest / DesktopContextSmokeTest）：desktop profile
+  的默认数据源是 `~/.aiworkdeck/local` 文件库且带 `AUTO_SERVER=TRUE`，开发机上测试会直接附着到
+  **正在运行的桌面应用的真实数据库**读写。ChangeSignalWiringTest 曾漏掉这条——它在幽灵项目 7 里
+  建「新建文件夹*」再 permDelete，运行中途崩一次就永久残留垃圾行，此后同名检查让本机所有运行
+  deterministically 红，还查不出所以然（2026-08-20 实测，dev-board#57）。同病残留的清理配方：
+  H2 Shell 带同一 URL（AUTO_SERVER 允许附着活库）先只读核对 name/created_at/user_id 再删。
 - CI 签名→冒烟→打包顺序不可乱（PR#176）。
 - **Windows 上 node:test 的 teardown 删「被本进程 HTTP 服务读流碰过的」临时目录，必须用异步
   `fs.promises.rm(dir, {recursive, force, maxRetries, retryDelay})`，不能用 rmSync**（PR#436，
