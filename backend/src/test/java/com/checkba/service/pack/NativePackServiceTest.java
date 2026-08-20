@@ -169,6 +169,37 @@ class NativePackServiceTest {
                 Files.readString(svc.componentDir(PACK_ID, "litviz").orElseThrow().resolve("cli.py")));
     }
 
+    @Test
+    @DisplayName("越界 Range 收到 416 时清空 .part 并在本轮重试里自愈，不必等用户再点一次安装")
+    void selfHealsAfterOutOfRange416() throws Exception {
+        byte[] archive = tarGzWithContents(Map.of("cli.py", "print(1)".getBytes(StandardCharsets.UTF_8)));
+        // manifest 声明的 size 比实际压缩包大（历史遗留 stale size 的现实场景），这样
+        // 构造性防御（.part >= 声明 size 才预先清空）不会拦下它，真实走到 416 分支。
+        Map<String, Object> comp = component("litviz", List.of("*"), "litviz.tar.gz", archive, "litviz",
+                archive.length + 1000);
+        publishManifest(primary, List.of(comp), true, "0.1.0", 1, 1);
+        primary.files.put("/" + PACK_ID + "/" + VERSION + "/litviz.tar.gz", archive);
+
+        // 本地已有一份"完整"的 .part（等于真实内容长度，但比声明 size 小）——下一次续传
+        // 请求的 Range 起点 == 真实内容长度，服务器如实回 416（线上事故复现的确切分支）。
+        Path part = packsRoot().resolve(".staging").resolve(PACK_ID + "-" + VERSION).resolve("litviz.tar.gz.part");
+        Files.createDirectories(part.getParent());
+        Files.write(part, archive);
+
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        // 单次 install() 调用即可自愈：不是「首次失败、用户再点一次才成功」
+        assertEquals(VERSION, svc.install(PACK_ID));
+
+        assertTrue(svc.isReady(PACK_ID));
+        assertEquals("print(1)",
+                Files.readString(svc.componentDir(PACK_ID, "litviz").orElseThrow().resolve("cli.py")));
+        // 服务器确实回过一次 416（证明真的走了这个分支，不是被构造性防御绕过）
+        assertTrue(primary.requests.stream().anyMatch(r -> r.range() != null
+                && r.range().equals("bytes=" + archive.length + "-")));
+        // .part 没有作为「网络中断」残留下来（此次跑完 staging 应已清空）
+        assertFalse(Files.exists(part));
+    }
+
     // ==================== 哈希不符换源 ====================
 
     @Test
@@ -284,6 +315,25 @@ class NativePackServiceTest {
     }
 
     @Test
+    @DisplayName("从未装成功时卸载不抛异常，只清 staging 残留")
+    void uninstallNeverInstalledClearsStagingWithoutThrowing() throws Exception {
+        // 模拟一次失败的安装尝试留下的残留：pack 目录从未落地，但 staging 里有 .part
+        Path leftover = packsRoot().resolve(".staging").resolve(PACK_ID + "-" + VERSION)
+                .resolve("litviz.tar.gz.part");
+        Files.createDirectories(leftover.getParent());
+        Files.write(leftover, new byte[]{1, 2, 3});
+
+        NativePackService svc = service(publicKeyPem, primary.baseUrl());
+        assertFalse(svc.isReady(PACK_ID));
+
+        svc.uninstall(PACK_ID); // 不该抛异常——卸载是幂等的收口动作
+
+        assertFalse(Files.exists(leftover));
+        assertFalse(svc.isReady(PACK_ID));
+        assertFalse(Files.exists(packsRoot().resolve(PACK_ID)));
+    }
+
+    @Test
     @DisplayName("命中封禁表后资源解析视而不见，但本地文件不删")
     void revokedPackBecomesInvisible() throws Exception {
         byte[] archive = tarGzWithContents(Map.of("cli.py", "x".getBytes(StandardCharsets.UTF_8)));
@@ -390,11 +440,17 @@ class NativePackServiceTest {
 
     private Map<String, Object> component(String name, List<String> platforms, String archiveName,
                                           byte[] archive, String unpackDir) {
+        return component(name, platforms, archiveName, archive, unpackDir, archive.length);
+    }
+
+    /** 声明大小可与实际压缩包不同——用于构造「本地 .part 未达声明大小但已达真实内容长度」的场景 */
+    private Map<String, Object> component(String name, List<String> platforms, String archiveName,
+                                          byte[] archive, String unpackDir, long declaredSize) {
         Map<String, Object> c = new LinkedHashMap<>();
         c.put("name", name);
         c.put("platforms", platforms);
         c.put("archive", archiveName);
-        c.put("size", archive.length);
+        c.put("size", declaredSize);
         c.put("sha256", sha256Hex(archive));
         c.put("unpackDir", unpackDir);
         return c;
@@ -584,6 +640,14 @@ class NativePackServiceTest {
             if (range != null && range.startsWith("bytes=")) {
                 from = Integer.parseInt(range.substring("bytes=".length()).replace("-", ""));
                 rangeServed.add(range);
+                if (from >= body.length) {
+                    // 如实模拟真实服务器对越界 Range 的回应（RFC 7233）：416，不是把 from
+                    // 截回 body.length 再假装 206——这正是线上事故里客户端从未见过的分支。
+                    ex.getResponseHeaders().add("Content-Range", "bytes */" + body.length);
+                    ex.sendResponseHeaders(416, -1);
+                    ex.close();
+                    return;
+                }
             }
             byte[] slice = java.util.Arrays.copyOfRange(body, Math.min(from, body.length), body.length);
             if (from > 0) {

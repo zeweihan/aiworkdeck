@@ -415,7 +415,14 @@ public class NativePackService {
             throw new IllegalStateException(LangText.of("路径检查失败: ", "Path check failed: ") + e.getMessage());
         }
         if (!Files.isDirectory(dir)) {
-            throw new IllegalArgumentException(LangText.of("资源包未安装: ", "Pack not installed: ") + packId);
+            // 从未装成功：pack 目录不存在，但可能有失败安装留下的 staging 残留（.part 等）。
+            // 卸载本该是幂等的收口动作——不能因为"没装成功"就拒绝清理，把用户卡在
+            // 「装不上、卸不掉」的死循环里（见 416 断点续传死循环的排查记录）。
+            deleteStaging(packId);
+            statuses.remove(packId);
+            manifestCache.remove(packId);
+            log.info("Pack {} was never installed; cleared staging leftovers only", packId);
+            return;
         }
         FileUtil.del(dir.toFile());
         deleteStaging(packId);
@@ -425,6 +432,13 @@ public class NativePackService {
     }
 
     // ==================== 下载 ====================
+
+    /** 4xx（含越界 Range → 416）：不是网络抖动，不该保留 .part 等着续传 */
+    private static final class NonResumableHttpException extends IOException {
+        NonResumableHttpException(int status) {
+            super("HTTP " + status);
+        }
+    }
 
     private void downloadComponent(String packId, String version, Component c,
                                    Path part, PackStatus st, long baseBytes) {
@@ -436,6 +450,11 @@ public class NativePackService {
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             String url = sources.get(attempt % sources.size());
             try {
+                // 构造性防御：本地残留 .part 已经不小于 manifest 声明的组件大小，继续带着
+                // 这段 Range 请求必然越界（服务器如实回 416）——直接清空重下，不必先挨一次 416。
+                if (c.size() > 0 && sizeOf(part) >= c.size()) {
+                    FileUtil.del(part.toFile());
+                }
                 fetchToFile(url, part, st, baseBytes);
                 st.setState(STATE_VERIFYING);
                 String actual = sha256Hex(part);
@@ -449,6 +468,13 @@ public class NativePackService {
                 FileUtil.del(part.toFile());
                 lastError = LangText.of("下载内容与签名清单不符", "Downloaded content does not match the signed manifest");
                 st.setState(STATE_DOWNLOADING);
+            } catch (NonResumableHttpException e) {
+                // 4xx（含越界 Range → 416）不是网络抖动：fetchToFile 已经删掉 .part，
+                // 下一次尝试（哪怕就在这轮循环里）会发一次不带 Range 的全量请求，
+                // 不必等用户再点一次「安装」才能自愈。
+                lastError = e.getMessage();
+                log.warn("Pack {} component {} download from {} rejected ({}); restarting full download",
+                        packId, c.name(), url, e.getMessage());
             } catch (IOException | InterruptedException e) {
                 // 网络中断：保留 .part，下次续传
                 if (e instanceof InterruptedException) Thread.currentThread().interrupt();
@@ -477,6 +503,12 @@ public class NativePackService {
             have = 0;
         } else {
             resp.body().close();
+            if (status >= 400 && status < 500) {
+                // 4xx（典型如 416 越界 Range）不是可续传条件：.part 已经跟服务器的认知
+                // 对不上了，留着只会让下一次尝试带着同一个必错的 Range 再犯一次同样的错。
+                FileUtil.del(part.toFile());
+                throw new NonResumableHttpException(status);
+            }
             throw new IOException("HTTP " + status);
         }
 
