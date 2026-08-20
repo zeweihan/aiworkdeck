@@ -88,6 +88,13 @@ local-mode 下本机后端把每个请求都当本机用户，等于把本机管
   **免费额度（PR-C）**：未拥有 `clipboard.unlimited` 时 GET / 只返回「最近 20 条 且 3 天内」，两条同时生效取更严者。**实现是查询侧过滤，绝不删除记录**——超出的行留在库里，解锁后原样可见。GET / 返回体从裸数组改为 `{items, limited, hiddenCount, maxItems, retentionDays}`（`ClipboardListResult`），hiddenCount 只算「因额度看不见」的（= 总数 − min(3天内条数, 20)），不含被分页 limit 挡住的。常量在 `ClipboardService.FREE_MAX_ITEMS/FREE_RETENTION_DAYS`。**额度只在 local-mode（桌面单机版）执行**：`EntitlementService` 是按本机的（无 userId 维度），团队案件库服务器上权益恒为空集，照执行会把每个接入成员截到 20 条且永远无法解锁。
 
 **收藏夹**：`ProjectFavoritesPanel.vue`；网页选中收藏经 `checkba:webmark`（preload ~:26）→ project-overview 订阅入库（~:2003）；后端 `controller/WebFavoriteController.java`（/api/favorites/my、/api/projects/{id}/favorites、DELETE、image）。
+  **收藏成功的反馈必须是「打开收藏面板 + focusFavorite 高亮新卡片」，不能只弹 toast**：
+  用户此刻正在浏览器标签里，toast 在 DOM 层、被原生 BrowserView 整个盖住（实测 toast
+  中心恒落在 view 区域内），只弹 toast 的现象就是「点了没反应」。右键收藏与 OCR 摘录收藏
+  （`ocrDoFavorite`）现在同用这个模式；失败提示同理走 `host.app.confirm`（原生弹窗，不被遮挡）。
+  卡片右下角的来源域名读的是 `meta.sourceHost`（`WebFavoriteListItem.from` 从 meta JSON 提取），
+  新增收藏入口时 meta 里不写 sourceHost 就永远空白。面板 `refresh(force)`：新增收藏后的刷新
+  要传 `force=true` 绕过 1.2s 节流，否则新卡片可能刷不出来、高亮落空。
 
 **搜索**：`SearchPanel.vue`；后端 `controller/SearchController.java`（POST /api/projects/{id}/search）。
 `ContentSearchService` 的全文抽取已改为复用 `DocumentTextService`（PDF 走 PDFBox3 原生

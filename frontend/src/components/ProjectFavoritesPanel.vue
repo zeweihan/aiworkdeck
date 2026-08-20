@@ -173,10 +173,11 @@ export default {
         return String(v)
       }
     },
-    async refresh() {
+    async refresh(force = false) {
       const now = Date.now()
-      // query 变化时绕过时间节流（否则搜索框改了结果却不刷新、停留在旧关键字）；仅对相同 query 的高频刷新节流
-      if (this._lastRefreshAt && now - this._lastRefreshAt < 1200 && this.query === this._lastRefreshQuery) return
+      // query 变化时绕过时间节流（否则搜索框改了结果却不刷新、停留在旧关键字）；仅对相同 query 的高频刷新节流。
+      // force：刚新增了收藏、必须立刻把新卡片刷出来（高亮定位依赖它在列表里）
+      if (!force && this._lastRefreshAt && now - this._lastRefreshAt < 1200 && this.query === this._lastRefreshQuery) return
       this._lastRefreshAt = now
       this._lastRefreshQuery = this.query
       this.loading = true
