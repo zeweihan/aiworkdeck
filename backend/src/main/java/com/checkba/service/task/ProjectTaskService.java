@@ -31,6 +31,7 @@ public class ProjectTaskService {
     private static final String STATUS_OPEN = "OPEN";
     private static final String STATUS_DONE = "DONE";
     private static final String SOURCE_USER = "user";
+    private static final String SOURCE_AI = "ai";
 
     private final ProjectTaskRepository taskRepository;
     private final ProjectFileRepository projectFileRepository;
@@ -42,6 +43,18 @@ public class ProjectTaskService {
 
     /** 创建任务。source 恒为 user，status 恒为 OPEN，uid 现场生成。 */
     public ProjectTask createTask(Long projectId, Long fileId, String title, LocalDate dueDate, LocalTime dueTime, Long userId) {
+        return createTask(projectId, fileId, title, dueDate, dueTime, userId, SOURCE_USER);
+    }
+
+    /**
+     * AI 创建任务：source 恒为 ai（界面据此与用户手动创建区分），其余规则与 {@link #createTask}
+     * 完全一致。供 AI 编排器的 task_create 工具调用（dev-board #53）。
+     */
+    public ProjectTask createAiTask(Long projectId, Long fileId, String title, LocalDate dueDate, LocalTime dueTime, Long userId) {
+        return createTask(projectId, fileId, title, dueDate, dueTime, userId, SOURCE_AI);
+    }
+
+    private ProjectTask createTask(Long projectId, Long fileId, String title, LocalDate dueDate, LocalTime dueTime, Long userId, String source) {
         if (title == null || title.isBlank()) {
             throw new IllegalArgumentException(LangText.of("标题不能为空", "Title must not be empty"));
         }
@@ -60,7 +73,7 @@ public class ProjectTaskService {
         task.setDueDate(dueDate);
         task.setDueTime(dueTime);
         task.setStatus(STATUS_OPEN);
-        task.setSource(SOURCE_USER);
+        task.setSource(source);
         task.setUserId(userId);
         return taskRepository.save(task);
     }
