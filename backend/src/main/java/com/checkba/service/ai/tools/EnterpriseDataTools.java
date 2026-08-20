@@ -69,7 +69,9 @@ public class EnterpriseDataTools implements AgentToolComponent {
             return unavailable("企业工商信息查询", "企业数据", e);
         } catch (Exception e) {
             log.warn("企业工商信息查询失败: {}", e.toString());
-            return "企业工商信息查询失败：" + e.getMessage()
+            // 「错误：」前缀是本仓的失败标记（ToolResult.success 认前缀）——没有它，
+            // 这条真失败会被判成 SUCCESS：过程卡打绿勾、连续失败纠正回路不计数
+            return "错误：企业工商信息查询失败：" + e.getMessage()
                     + " 本次已跳过该查询，请基于已有信息继续完成任务。";
         }
     }
@@ -100,7 +102,8 @@ public class EnterpriseDataTools implements AgentToolComponent {
             return unavailable("金融数据查询", "金融数据", e);
         } catch (Exception e) {
             log.warn("金融数据查询失败: {}", e.toString());
-            return "金融数据查询失败：" + e.getMessage()
+            // 同上：失败标记不能少，否则判据听不见
+            return "错误：金融数据查询失败：" + e.getMessage()
                     + " 本次已跳过该查询，请基于已有信息继续完成任务。";
         }
     }
