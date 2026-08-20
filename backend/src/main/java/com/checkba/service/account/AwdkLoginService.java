@@ -112,6 +112,9 @@ public class AwdkLoginService {
         }
 
         User user = resolveUser(accountId, str(me.get("username")), str(me.get("displayName")));
+        // 手机端账号归一（dev-board#30）：官网账户带手机号时认领到桥接用户名下，
+        // 此后手机端 sms-login 解析到同一账号。方法自吞异常，不影响桥接。
+        userService.claimPhoneFromWebsite(user, str(me.get("phone")));
         // per-user 平台 AI key：此刻是 server 唯一合法持有该用户 awdk_ 的时机，顺手换一把
         // 属于他自己的 OpenRouter runtime key 存起来；awdk_ 本身用完即弃，仍然不落库。
         // 取不到（最常见是还没分配额度）绝不影响桥接——插件的绝大多数能力与 AI 额度无关。
