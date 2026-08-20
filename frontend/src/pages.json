@@ -57,6 +57,13 @@
 			}
 		},
 		{
+			"path": "pages/calendar/calendar",
+			"style": {
+				"navigationBarTitleText": "日历",
+				"navigationStyle": "custom"
+			}
+		},
+		{
 			"path": "pages/variable-library/variable-library",
 			"style": {
 				"navigationBarTitleText": "变量库管理",
