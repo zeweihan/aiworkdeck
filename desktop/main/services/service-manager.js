@@ -189,17 +189,20 @@ class ServiceManager {
     })
   }
 
+  // 并行拉起所有 eager 服务。端口已在 allocatePorts 统一分配好，服务之间没有
+  // "谁先监听"的启动时序依赖（pptx 只是把 mineru 端口写进环境变量，不要求 mineru
+  // 已经监听），逐个 await 纯粹是白白把首启时间叠加起来。单个服务失败互不影响，
+  // 语义与原来串行版本一致：results 里每个 name 各自 {ok, error}。
   async startEager() {
     const results = {}
-    for (const d of this.descriptors.values()) {
-      if (!d.eager) continue
+    const eagerNames = [...this.descriptors.values()].filter((d) => d.eager).map((d) => d.name)
+    await Promise.all(eagerNames.map(async (name) => {
       try {
-        // eslint-disable-next-line no-await-in-loop
-        results[d.name] = await this.start(d.name)
+        results[name] = await this.start(name)
       } catch (e) {
-        results[d.name] = { ok: false, error: String(e && e.message ? e.message : e) }
+        results[name] = { ok: false, error: String(e && e.message ? e.message : e) }
       }
-    }
+    }))
     return results
   }
 

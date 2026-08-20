@@ -135,6 +135,12 @@ export default {
     readFailed: '读取文件失败（{status}）',
     fileEmpty: '文件是空的',
     saveFailed: '保存失败',
+    installHint: '图形编辑器组件还没装，装好后可以继续编辑这份图。',
+    installPack: '安装图形编辑器组件',
+    installPackDownloading: '正在安装…',
+    installPackProgress: '正在下载… {downloaded} / {total} MB',
+    installPackRetry: '安装失败，重试',
+    installPackFailed: '安装失败',
   },
   // 自建工具栏（EditorToolbar.vue）。工具提示、下拉与查找替换条的全部可见文案。
   toolbar: {

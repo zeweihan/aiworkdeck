@@ -4,15 +4,23 @@
       <text class="drawio-status-text">{{ $t('editor.drawio.opening') }}</text>
     </view>
 
-    <!-- 这次构建没烙 draw.io 资源（Web 部署未放 dist/drawio、壳层版本旧），
-         或者资源在但那个 origin 探不通。说清楚比挂一个永远转圈的 iframe、
-         或者让浏览器的 404 页占满整个编辑区诚实。 -->
+    <!-- 这次构建没烙 draw.io 资源，或者资源在但那个 origin 探不通。说清楚比挂一个
+         永远转圈的 iframe、或者让浏览器的 404 页占满整个编辑区诚实。
+         桌面态且探明是"资源包没装"（packId 有值）时给一条能当场解决的路——
+         v0.21.0 起 draw.io 摘出安装包改走 native pack，见 litigation-visual.md。 -->
     <view v-else-if="phase === 'unavailable'" class="drawio-status">
       <text class="drawio-status-text">{{ $t('editor.drawio.unavailable') }}</text>
       <text class="drawio-status-hint">
-        {{ $t('editor.drawio.downloadHint', { name: (file && file.name) || '' }) }}
+        {{ showInstallAction ? $t('editor.drawio.installHint') : $t('editor.drawio.downloadHint', { name: (file && file.name) || '' }) }}
       </text>
       <view class="drawio-actions">
+        <view
+          v-if="showInstallAction"
+          class="drawio-btn primary"
+          :class="{ disabled: installButtonDisabled }"
+          role="button"
+          @tap="installPack"
+        >{{ installButtonText }}</view>
         <view class="drawio-btn" role="button" @tap="download">{{ $t('editor.drawio.downloadFile') }}</view>
         <view class="drawio-btn" role="button" @tap="boot">{{ $t('editor.drawio.retry') }}</view>
       </view>
@@ -61,9 +69,9 @@
 // LitigationVisualPanelService.saveDrawio。**PNG 不用 draw.io 自己导的位图**——
 // 随包中文字体的注册与字体栈兜底都在服务端 Batik 那条路上，绕过它标题在干净的
 // Windows 上会变成方块（记在案的地雷）。
-import { getFileDownloadUrl, saveDrawioDiagram } from '@/services/api.js'
+import { getFileDownloadUrl, saveDrawioDiagram, packStatus, packInstall } from '@/services/api.js'
 import { getAuthHeaders } from '@/utils/auth.js'
-import { host } from '@/services/host.js'
+import { host, isDesktopHost } from '@/services/host.js'
 
 export default {
   name: 'DrawioEditor',
@@ -80,7 +88,36 @@ export default {
       xml: '',
       dirty: false,
       savedTip: '',
-      pendingExport: null     // 保存链路里等 SVG 的那个 resolve
+      pendingExport: null,    // 保存链路里等 SVG 的那个 resolve
+      // 桌面态资源包引导安装：packId 只在 getEditor() 明确回答"资源不在场"时才有值，
+      // 见 boot() 里的判定。与 LitigationVisualPanel.vue 的 native pack 状态条同一套
+      // 契约（packStatus/packInstall + 轮询），docs/NATIVE_PACK_DISTRIBUTION.md §5/§7.1。
+      packId: null,
+      packState: null,        // packStatus() 结果 {state, bytesDownloaded, bytesTotal, error}
+      packInstalling: false,
+      packTimer: null
+    }
+  },
+  computed: {
+    showInstallAction() {
+      return this.phase === 'unavailable' && !!this.packId && isDesktopHost()
+    },
+    installButtonDisabled() {
+      const s = this.packState
+      return this.packInstalling || !!(s && (s.state === 'downloading' || s.state === 'installing' || s.state === 'verifying'))
+    },
+    installButtonText() {
+      const s = this.packState
+      if (!s || s.state === 'not_installed') return this.$t('editor.drawio.installPack')
+      if (s.state === 'failed') return this.$t('editor.drawio.installPackRetry')
+      const total = s.bytesTotal || 0
+      if (total > 0) {
+        return this.$t('editor.drawio.installPackProgress', {
+          downloaded: ((s.bytesDownloaded || 0) / (1024 * 1024)).toFixed(1),
+          total: (total / (1024 * 1024)).toFixed(1)
+        })
+      }
+      return this.$t('editor.drawio.installPackDownloading')
     }
   },
   mounted() {
@@ -89,6 +126,7 @@ export default {
   },
   beforeUnmount() {
     window.removeEventListener('message', this.onMessage)
+    this.stopPackPoll()
   },
   watch: {
     'file.id'() {
@@ -101,6 +139,8 @@ export default {
     async boot() {
       this.phase = 'loading'
       this.errorText = ''
+      this.packId = null
+      this.stopPackPoll()
       try {
         const api = host.drawio
         if (!api || typeof api.getEditor !== 'function') {
@@ -109,7 +149,11 @@ export default {
         }
         const info = await api.getEditor()
         if (!info || !info.available || !info.url) {
+          // packId 只有 main.js 的 checkba:drawio-editor 明确判过资源不在场才带（见
+          // desktop/main/main.js），标志着"装个 pack 就能解决"而不是别的什么坏了
+          this.packId = (info && info.packId) || null
           this.phase = 'unavailable'
+          if (this.packId && isDesktopHost()) this.refreshPackStatus()
           return
         }
         // 先探一下这个 URL 真的能取到再挂 iframe。宿主只回答了"资源目录里有
@@ -273,6 +317,50 @@ export default {
         return
       }
       window.open(getFileDownloadUrl(id), '_blank')
+    },
+
+    // ---- 图形编辑器组件（native pack）引导安装 ----
+    async refreshPackStatus() {
+      if (!this.packId) return
+      try {
+        const res = await packStatus(this.packId)
+        this.packState = (res && res.status) || null
+      } catch (e) {
+        // 拉不到状态：旧后端没有这个端点——按「不可知」处理，用户仍可点「下载文件」兜底
+        this.packState = null
+        this.stopPackPoll()
+        return
+      }
+      const state = this.packState && this.packState.state
+      if (state === 'ready') {
+        this.stopPackPoll()
+        this.boot() // 装好了，自动重新挂编辑器，不用用户再点一次
+        return
+      }
+      if (state === 'failed') {
+        this.stopPackPoll()
+        return
+      }
+      if (state && !this.packTimer) this.startPackPoll()
+    },
+    startPackPoll() {
+      this.stopPackPoll()
+      this.packTimer = setInterval(() => { this.refreshPackStatus() }, 1000)
+    },
+    stopPackPoll() {
+      if (this.packTimer) { clearInterval(this.packTimer); this.packTimer = null }
+    },
+    async installPack() {
+      if (!this.packId || this.installButtonDisabled) return
+      this.packInstalling = true
+      try {
+        await packInstall(this.packId)
+        await this.refreshPackStatus()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('editor.drawio.installPackFailed'), icon: 'none' })
+      } finally {
+        this.packInstalling = false
+      }
     }
   }
 }
@@ -329,4 +417,11 @@ export default {
   user-select: none;
 }
 .drawio-btn:hover { border-color: #c9ced6; background: #fafbfc; }
+.drawio-btn.primary {
+  border-color: #3a7afe;
+  background: #3a7afe;
+  color: #fff;
+}
+.drawio-btn.primary:hover { border-color: #2f68e0; background: #2f68e0; }
+.drawio-btn.disabled { opacity: .6; pointer-events: none; }
 </style>
