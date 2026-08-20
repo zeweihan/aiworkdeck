@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Office 插件独立安装器构建（仅用 node 内置模块 + 系统工具）：
- *   macOS: osacompile 出用户态安装器 .app（AppleScript applet），装进 DMG 分发。
+ *   macOS: swiftc 编译用户态安装器 .app（通用二进制），装进 DMG 分发。
  *          不用 pkg：macOS 26 起应用容器保护拒绝 root 安装脚本写他人容器（dev-board#68），
  *          只有用户会话内的 .app 能经「访问其他 App 的数据」授权弹窗写进 wef/。
  *   Windows: makensis（写 HKCU\...\WEF\Developer 注册表 sideload 键，免管理员）
@@ -71,25 +71,41 @@ if (!args.skipMac) {
   const appName = '安装 AI WorkDeck Office 插件.app'
   const stageDir = path.join(buildDir, 'mac-dmg')
   const appDir = path.join(stageDir, appName)
-  fs.mkdirSync(stageDir, { recursive: true })
-  execFileSync('osacompile', ['-o', appDir,
-    path.join(addinDir, 'installer', 'mac', 'install.applescript')], { stdio: 'inherit' })
+  const macosDir = path.join(appDir, 'Contents', 'MacOS')
+  const resDir = path.join(appDir, 'Contents', 'Resources')
+  fs.mkdirSync(macosDir, { recursive: true })
+  fs.mkdirSync(resDir, { recursive: true })
+
+  // swiftc 出双架构再 lipo（维护者 Mac 有 Xcode 工具链）
+  const swiftSrc = path.join(addinDir, 'installer', 'mac', 'main.swift')
+  const binOut = path.join(macosDir, 'installer')
+  for (const arch of ['arm64', 'x86_64']) {
+    execFileSync('swiftc', ['-O', '-target', `${arch}-apple-macos11`, swiftSrc,
+      '-o', `${binOut}.${arch}`], { stdio: 'inherit' })
+  }
+  execFileSync('lipo', ['-create', `${binOut}.arm64`, `${binOut}.x86_64`, '-output', binOut], { stdio: 'inherit' })
+  fs.rmSync(`${binOut}.arm64`); fs.rmSync(`${binOut}.x86_64`)
+
+  fs.writeFileSync(path.join(appDir, 'Contents', 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>installer</string>
+  <key>CFBundleIconFile</key><string>installer</string>
+  <key>CFBundleIdentifier</key><string>com.aiworkdeck.office-addin.installer</string>
+  <key>CFBundleName</key><string>AI WorkDeck Office 插件安装器</string>
+  <key>CFBundleDisplayName</key><string>安装 AI WorkDeck Office 插件</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>${version}</string>
+  <key>CFBundleVersion</key><string>${version}</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+</dict></plist>
+`)
 
   // manifest 两份：包内资源（安装动作的源）+ DMG 根目录（TCC 被拒时的手动拖拽兜底）
-  fs.copyFileSync(manifestPath, path.join(appDir, 'Contents', 'Resources', 'manifest.xml'))
+  fs.copyFileSync(manifestPath, path.join(resDir, 'manifest.xml'))
   fs.copyFileSync(manifestPath, path.join(stageDir, 'manifest.xml'))
-
-  // Info.plist：osacompile 的默认值换成产品身份（公证要求唯一 bundle id）
-  const plistPath = path.join(appDir, 'Contents', 'Info.plist')
-  for (const [k, v] of [
-    ['CFBundleIdentifier', 'com.aiworkdeck.office-addin.installer'],
-    ['CFBundleName', 'AI WorkDeck Office 插件安装器'],
-    ['CFBundleShortVersionString', version],
-    ['CFBundleVersion', version],
-  ]) {
-    try { execFileSync('/usr/libexec/PlistBuddy', ['-c', `Set :${k} ${v}`, plistPath]) }
-    catch { execFileSync('/usr/libexec/PlistBuddy', ['-c', `Add :${k} string ${v}`, plistPath]) }
-  }
 
   // 图标复用桌面端品牌 icon（png → icns），失败不阻断构建
   try {
@@ -104,8 +120,7 @@ if (!args.skipMac) {
     }
     const icnsPath = path.join(buildDir, 'installer.icns')
     execFileSync('iconutil', ['-c', 'icns', iconsetDir, '-o', icnsPath], { stdio: 'inherit' })
-    // osacompile 应用的 CFBundleIconFile 固定叫 applet.icns，原地替换即可
-    fs.copyFileSync(icnsPath, path.join(appDir, 'Contents', 'Resources', 'applet.icns'))
+    fs.copyFileSync(icnsPath, path.join(resDir, 'installer.icns'))
   } catch (err) {
     console.warn(`[installer] 图标生成失败（不影响功能）：${err.message}`)
   }

@@ -7,7 +7,7 @@
 
 | 平台 | 产物 | 机制 |
 |---|---|---|
-| macOS | `AI-WorkDeck-Office-Addin-<版本>.dmg`（内含用户态安装器 .app） | 双击 app，把 manifest 拷进 Word/Excel/PowerPoint 容器的 `~/Library/Containers/com.microsoft.*/Data/Documents/wef/`；首次写入系统弹「访问其他 App 的数据」授权，拒绝时 app 给手动拖拽指引（DMG 根目录带一份 manifest.xml 兜底） |
+| macOS | `AI-WorkDeck-Office-Addin-<版本>.dmg`（内含用户态安装器 .app，swiftc 编译） | 双击 app，把 manifest 拷进 Word/Excel/PowerPoint 容器的 `~/Library/Containers/com.microsoft.*/Data/Documents/wef/`；首次写入系统弹「访问其他 App 的数据」授权，拒绝时 app 给手动拖拽指引（DMG 根目录带一份 manifest.xml 兜底） |
 | Windows | `AI-WorkDeck-Office-Addin-<版本>.exe`（NSIS，免管理员） | manifest 拷到 `%LOCALAPPDATA%\AIWorkDeck\OfficeAddin\`，写 `HKCU\Software\Microsoft\Office\16.0\WEF\Developer` sideload 键；带 uninstall.exe 并注册到「应用和功能」 |
 
 > 历史教训（dev-board#68）：v0.21 前 macOS 走 payload-free pkg + root postinstall 写容器，
@@ -50,6 +50,15 @@ NOTARY_KEY_ID=<ASC_KEY_ID> NOTARY_ISSUER_ID=<ASC_ISSUER_ID> npm run build:instal
 
 （两个 ID 的值在 `5-BQT_Global/fastlane/.env`。）验证：`spctl --assess --type open -v <dmg>`
 或挂载后 `spctl --assess -v <app>` 应输出 `source=Notarized Developer ID`。
+
+## 测试口径红线（dev-board#68 血泪）
+
+1. Gatekeeper 验证必须在**带 quarantine 的副本**上做（干净本地构建会直接放行，量错对象）。
+2. 手工合成 quarantine 串时标志位只许用浏览器真实值 `0081`/`0083`。**不许用 `0087`**——
+   它含「文件由沙箱应用创建」标志位，系统会因此拒绝执行并报
+   `File created by an AppSandbox, exec/open not allowed`（表现为对话框
+   「The application can't be opened」），与产物本身毫无关系。#68 曾因此连冤三轮形态。
+3. 最终验收以**浏览器真实下载**的包为准，不要信合成串。
 
 ## 已知限制
 
