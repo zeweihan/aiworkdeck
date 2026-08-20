@@ -84,3 +84,29 @@ test('工具输出里的协议标签已被后端中和，不会顶掉标签栈�
     '</process><final>已读完。</final>')
   assert.equal(main, '已读完。')
 })
+
+// ==================== 孤立 '<' 与闭合标签相邻（dev-board#70） ====================
+// 真机「金冠纾困」会话实况：思考文本含「净利润<0」这类比较式时，
+// 「'<' 到最近 '>'」的候选串会把真正的 </thinking> 包进去；旧实现整段放行，
+// 闭合被当正文吞掉、标签栈错位，后续 <process>/<tool_code> 载荷全部漏进思考区。
+// 修复后非标签候选只放行 '<' 本身、从下一字符重扫。
+
+const LEAK_CASE = '<thinking>净利润<0，需追加担保</thinking>' +
+  '<process name="x"><tool_code>foo()</tool_code></process><final>ok</final>'
+
+test('孤立 < 紧邻闭合标签：闭合不被吞、工具载荷不漏进思考区（一次性喂入=历史回放）', () => {
+  const { main, thinking } = parse(LEAK_CASE)
+  assert.equal(thinking, '净利润<0，需追加担保')
+  assert.equal(main, 'ok')
+})
+
+test('同一输入逐字节喂入（实时流式）结果一致', () => {
+  const { main, thinking } = parse(LEAK_CASE.split(''))
+  assert.equal(thinking, '净利润<0，需追加担保')
+  assert.equal(main, 'ok')
+})
+
+test('正文数值比较 <80%> 原样放行（数字开头不像协议标签）', () => {
+  const { main } = parse('<final>担保比例<80%>时豁免</final>')
+  assert.equal(main, '担保比例<80%>时豁免')
+})

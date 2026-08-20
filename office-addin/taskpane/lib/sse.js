@@ -244,7 +244,16 @@ export function createTagStreamParser({ onMainText, onThinkingText, onQuestion }
     } else {
       // 不像协议标签的尖括号——合同里的占位符（<甲方>、<Party A>、<甲方 全称>）
       // 都落在这里，原样当正文。判据是「协议标签的形状」，不是「所有尖括号」。
-      route(candidate)
+      //
+      // **只放行这个 '<' 本身，从下一个字符重扫**（dev-board#70）：候选串是
+      // 「本 '<' 到最近一个 '>'」，里面可能正包着真正的协议闭合标签——
+      // 「净利润<0，需追加担保</thinking>」整段放行会把 </thinking> 一并当
+      // 正文吞掉，标签栈从此错位，后续 <process>/<tool_code> 载荷全部漏进
+      // 思考区（真机「金冠纾困」会话实况；逐字节流式路径因 PARTIAL_TAG_RE
+      // 早失配反而没踩到，一次性喂入的历史回放路径必踩）。
+      route('<')
+      pending = pending.slice(1)
+      return true
     }
     pending = pending.slice(gt + 1)
     return true

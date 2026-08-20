@@ -9,6 +9,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:deploy": "node scripts/build-manifest.mjs",
+    "test": "node --test taskpane/lib/*.test.js",
     "build:installers": "node installer/build-installers.mjs"
   },
   "dependencies": {
