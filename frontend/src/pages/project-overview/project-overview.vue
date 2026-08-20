@@ -414,6 +414,7 @@
 
     <!-- Custom Recording Toast -->
     <view class="recording-toast" :class="{ visible: showRecordingToast }">
+      <view v-if="isRecording" class="recording-toast-dot"></view>
       <text>{{ recordingToastMessage }}</text>
     </view>
 
@@ -3914,7 +3915,7 @@ export default {
       if (!this.isActiveBrowserTab(pane, tabId)) return
       // Track URL Session (flush previous, start new)
       const meta = this.project && this.project.name ? `Project: ${this.project.name}` : ''
-      activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
+      activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, meta)
     },
     onBrowserTitleChange(pane, tabId, title) {
       const active = this.findBrowserTab(pane, tabId)
@@ -3933,7 +3934,7 @@ export default {
       // 同 onBrowserUrlChange：后台标签换标题不算浏览行为
       if (url && this.isActiveBrowserTab(pane, tabId)) {
           // Restart session to capture title in the new segment
-          activityTracker.trackActivePage('OPEN_URL', 0, url, meta)
+          activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, meta)
       }
 
       // 避免过长：保留前 18 字符
@@ -4020,9 +4021,9 @@ export default {
                      const url = file.url || ''
                      const title = file.name || ''
                      const fullMeta = meta + (title ? `. Title: ${title}` : '')
-                     activityTracker.trackActivePage('OPEN_URL', 0, url, fullMeta)
+                     activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, fullMeta)
                  } else {
-                     activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, meta)
+                     activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
                  }
              }
         } else {

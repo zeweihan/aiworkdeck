@@ -121,7 +121,7 @@ export const fileOpenTabsMethods = {
 
       const meta = this.project && this.project.name ? `Project: ${this.project.name}` : ''
       // Start session tracking for this file
-      activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, meta)
+      activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
 
       // 1. 如果已经在某个 pane 打开，则聚焦该 pane
       const existingLeft = this.leftFiles.find(f => f.id === file.id)
@@ -204,10 +204,10 @@ export const fileOpenTabsMethods = {
           const url = file.url || ''
           const title = file.name || ''
           const fullMeta = meta + (title ? `. Title: ${title}` : '')
-          activityTracker.trackActivePage('OPEN_URL', 0, url, fullMeta)
+          activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, fullMeta)
       } else {
           // File
-          activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, meta)
+          activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
       }
     },
 
