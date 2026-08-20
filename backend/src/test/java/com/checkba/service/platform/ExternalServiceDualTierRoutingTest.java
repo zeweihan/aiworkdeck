@@ -249,7 +249,7 @@ class ExternalServiceDualTierRoutingTest {
         private LegalTools tools(ExternalServiceProvider tier, PlatformGatewayClient gateway,
                                  McpClientService mcp) {
             return new LegalTools(null, mcp, null,
-                    resolverWith(ExternalServiceProvider.PKULAW, tier), gateway);
+                    resolverWith(ExternalServiceProvider.PKULAW, tier), gateway, null);
         }
 
         @Test

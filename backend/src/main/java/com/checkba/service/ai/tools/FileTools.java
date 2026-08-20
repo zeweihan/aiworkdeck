@@ -144,13 +144,25 @@ public class FileTools implements AgentToolComponent {
             if (Files.isDirectory(path)) return "Error: Path is a directory.";
             if (Files.size(path) > 10 * 1024 * 1024) return "Error: File too large (>10MB).";
             
-            // Use unified extractor
+            // Use unified extractor：图片/PDF 走 OCR，纯文本直读，其余（docx/xlsx/pptx 等
+            // Office 格式）走 Tika——第三条以前不存在，Office 文件恒返回空串，
+            // 而空串会被 ToolExecutionResultMessage 的 ensureNotBlank 抛出来掀翻整轮
             File file = path.toFile();
+            String content;
             if (fileContentExtractorService.isOcrSupported(file.getName())) {
-               return fileContentExtractorService.extractTextWithOcr(file);
+                content = fileContentExtractorService.extractTextWithOcr(file);
+            } else if (fileContentExtractorService.isTextFile(file.getName())) {
+                content = fileContentExtractorService.extractText(file);
             } else {
-               return fileContentExtractorService.extractText(file);
+                try (java.io.InputStream is = Files.newInputStream(path)) {
+                    content = documentTextService.parse(is);
+                }
             }
+            if (!StringUtils.hasText(content)) {
+                return "Warning: no text extracted from '" + file.getName() + "' — the file may be a scanned "
+                        + "image or empty; try extract_file_text with its database file ID.";
+            }
+            return content;
         } catch (Exception e) {
             return "Error reading file: " + e.getMessage();
         }

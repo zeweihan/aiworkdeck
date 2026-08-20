@@ -156,6 +156,26 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 
 - **改 AgentOrchestrator 构造器必须同步 EvalHarness**（已踩三次；现构造器末三参是
   TelemetryService/TelemetryTurnTracker/MatterClassifierService）。
+- **工具返回空白会掀翻整轮**：`ToolExecutionResultMessage.from(req, text)` 的
+  `ensureNotBlank(text, "text")` 对空串直接抛异常，用户看到的是
+  「Callback Error: text cannot be null or blank」——一个返回空串的工具就能打掉整轮对话。
+  两条入栈点（`AgentOrchestrator` 原生分支、`SubAgentService.executeScoped`）现在都把空白归一成
+  `AgentOrchestrator.BLANK_TOOL_OUTPUT` 并**按 FAILURE 处理**（进连续失败纠正回路）。
+  **新增任何往 messages 里塞工具结果的路径都要带这条归一**；XML 兜底分支因为有模板包裹不受影响。
+  上游诱因是抽取层：`read_document`/`read_file` 对 **Office 格式**必须走
+  `DocumentTextService`（Tika/PDFBox，与 `extract_file_text` 同一套）——docx 既不在
+  `FileContentExtractorService.ALLOWED_TEXT_EXTENSIONS` 也不在 `ai.context.ocr-extensions`，
+  只按那两个白名单分支就恒返回空串。抽不出正文时**返回一句可行动的说明，绝不返回空白**。
+  `ContextAssemblerService` 注入文件正文的两处守卫（`<file>` 段与 `<active_document>` 段）
+  也一律**判空白而不只判 null**，否则模型看到一段空 CDATA 会转头自己再调一次读取工具。
+- **轮次异常终止必须落库**：`onComplete` 的 catch 走 `finishWithError(...)`（与
+  `handleStreamErrorTerminal` 共用），把 `executionLog` + 已流出的部分内容 + 「[生成出错，已中断]」
+  一并写进 ASSISTANT 消息。只发 SSE 不落库 = 那一轮在历史里一个字都没有（「历史对话吃消息」）。
+  同理**执行日志的 `executionLog.append` 必须排在 `ToolExecutionResultMessage.from` 入栈之前**：
+  入栈抛异常时排在后面的 append 不会执行，崩溃轮的过程卡整段丢失。
+  内部一致性错误的 SSE 载荷带 `LlmErrorClassifier.INTERNAL_ERROR_MARKER`（`AI_INTERNAL_ERROR`），
+  前端 `useAgentStream` 据此换成人话（`agentStream.internalErrorNotice`，两套 locale 成对）——
+  这个标记**不由 `classify()` 产出**，是编排器直接拼的，别往 `Kind` 枚举里加。
 - **埋点体系**（`com.checkba.service.telemetry`，设计 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
   唯一采集入口 TelemetryService.record/recordConv，字段过 TelemetryAttrWhitelist 白名单
   （新事件/字段要同步白名单 + TelemetryServiceTest + 官网仓 lib/telemetry-store.ts 的 EVENT_WHITELIST）。
@@ -238,5 +258,8 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
 - 只跑回放：`mvn test -Dtest=OrchestratorReplayEvalTest`；真实 LLM 冒烟：`OPENROUTER_API_KEY=… mvn test -Dtest=RealLlmSmokeTest`（默认模型已换成 deepseek/deepseek-v4-flash，境内可跑）。
 - 身份作用域与模型解析：`mvn test -Dtest=PlatformScopeCloudMultiTenantTest,AuxModelResolverTest,SubAgentServiceTest,AgentOrchestratorFailoverTest,AgentOrchestratorFailoverFlowTest`。
 - 状态持久化/启动回收：`mvn test -Dtest=AgentRunRecoveryServiceTest`（mark 写透、RUNNING→INTERRUPTED+补标记、幂等、续跑翻回 RUNNING）。
+- 工具空输出与崩溃轮落库：`mvn test -Dtest=AgentOrchestratorBlankToolOutputTest,ReadDocumentOfficeFormatTest`
+  （空串工具不掀翻整轮 + 按 FAILURE 回喂；onComplete 异常路径把执行日志与错误摘要落库、error 载荷带
+  `AI_INTERNAL_ERROR`；read_document 对真实 docx fixture 返回非空正文、空文档给可行动说明）。
 - 前端：`npm run check:emits`；标签协议编解码 `npm run test:tag-protocol`（node:test，零依赖）；UI 链路 `npm run test:app-e2e`。
 - Office 插件的标签解析：`node --test office-addin/taskpane/lib/sse.test.js`（零依赖，未进 CI）。

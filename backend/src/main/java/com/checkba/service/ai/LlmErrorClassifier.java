@@ -31,6 +31,16 @@ public final class LlmErrorClassifier {
     /** 上下文超窗的稳定标记（契约同上；只在强制压缩重试也失败的终态才会出现在 error 载荷里）。 */
     public static final String CONTEXT_OVERFLOW_MARKER = "AI_CONTEXT_OVERFLOW";
 
+    /**
+     * 编排器内部一致性错误的稳定标记（契约同上）。
+     *
+     * <p>与上面三个不同，它不是 LLM 调用的错误分类——{@link #classify} 永远不会产出它，
+     * 由 AgentOrchestrator 在 onComplete 回调的 catch 里直接拼上。存在的理由是那条路径
+     * 原来把裸 Java 异常文本发给前端（「Callback Error: text cannot be null or blank」），
+     * 用户既看不懂也无从处理。
+     */
+    public static final String INTERNAL_ERROR_MARKER = "AI_INTERNAL_ERROR";
+
     private LlmErrorClassifier() {
     }
 
