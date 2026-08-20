@@ -5,6 +5,7 @@ import com.checkba.service.ProjectAiMessageService;
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ProjectOverviewService;
 import com.checkba.service.ProjectProfileService;
+import com.checkba.service.task.ProjectTaskService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -16,6 +17,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
@@ -49,15 +51,18 @@ public class ProjectOverviewController {
     private final ProjectOverviewService overviewService;
     private final ProjectProfileService projectProfileService;
     private final ProjectAiMessageService projectAiMessageService;
+    private final ProjectTaskService projectTaskService;
 
     public ProjectOverviewController(ProjectMemberService projectMemberService,
                                      ProjectOverviewService overviewService,
                                      ProjectProfileService projectProfileService,
-                                     ProjectAiMessageService projectAiMessageService) {
+                                     ProjectAiMessageService projectAiMessageService,
+                                     ProjectTaskService projectTaskService) {
         this.projectMemberService = projectMemberService;
         this.overviewService = overviewService;
         this.projectProfileService = projectProfileService;
         this.projectAiMessageService = projectAiMessageService;
+        this.projectTaskService = projectTaskService;
     }
 
     /**
@@ -103,17 +108,20 @@ public class ProjectOverviewController {
     }
 
     /**
-     * 日程与任务。A 期恒空数组，概览页据此渲染空态；B 期接上任务系统时只换实现，
-     * 路径与响应形状一行不改，前端零改动。所以这里不建 service、不建实体。
-     * B 期的任务 CRUD 另起 TaskController(/api/tasks)，但这条列表端点保持在
-     * /api/projects/{projectId}/tasks 不迁移。
+     * 日程与任务。B 期实现：换真查询，路径与响应形状一行不改，前端零改动。
+     * 任务 CRUD 在 TaskController(/api/tasks)，这条列表端点仍留在
+     * /api/projects/{projectId}/tasks，不迁移。
+     *
+     * from/to 可选（ISO 日期区间过滤），缺省不限，按 dueDate asc（dueTime asc nulls first）排序。
      */
     @GetMapping("/tasks")
     public ResponseEntity<Map<String, Object>> tasks(
             @PathVariable Long projectId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireRead(projectId, sessionId);
-        return ok(Map.of("tasks", List.of()));
+        return ok(Map.of("tasks", projectTaskService.listByProject(projectId, from, to)));
     }
 
     // ==================== 项目档案 ====================

@@ -2,6 +2,7 @@ package com.checkba.controller;
 
 import com.checkba.service.ProjectMemberService;
 import com.checkba.service.ProjectOverviewService;
+import com.checkba.service.task.ProjectTaskService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -38,6 +39,7 @@ class ProjectOverviewStatsAuthTest {
 
     @Mock private ProjectMemberService projectMemberService;
     @Mock private ProjectOverviewService overviewService;
+    @Mock private ProjectTaskService projectTaskService;
 
     @InjectMocks private ProjectOverviewController controller;
 
@@ -93,19 +95,20 @@ class ProjectOverviewStatsAuthTest {
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(false);
 
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> controller.tasks(7L, "sess"));
+                    () -> controller.tasks(7L, null, null, "sess"));
             assertEquals("无权访问该项目", e.getMessage());
         }
     }
 
-    /** A 期恒空数组（不是 null）。B 期接上任务系统只换实现，路径与响应形状一行不改。 */
+    /** 会员可读，空列表原样透传（不是 null）。B 期换真查询后路径与响应形状一行不改。 */
     @Test
     void tasksReturnsEmptyListForMember() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
             auth.when(() -> AuthController.getUserIdFromSession("sess")).thenReturn(1L);
             when(projectMemberService.hasReadPermission(7L, 1L)).thenReturn(true);
+            when(projectTaskService.listByProject(7L, null, null)).thenReturn(List.of());
 
-            Map<String, Object> body = controller.tasks(7L, "sess").getBody();
+            Map<String, Object> body = controller.tasks(7L, null, null, "sess").getBody();
 
             assertNotNull(body);
             assertEquals(0, body.get("code"));
