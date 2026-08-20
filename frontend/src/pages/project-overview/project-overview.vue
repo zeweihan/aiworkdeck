@@ -58,15 +58,6 @@
             <view class="project-status-badge">
               <text class="status-text">{{ $t('workbench.statusInProgress') }}</text>
             </view>
-            <!-- IDE 化：常驻工作状态点（版本记录开着且有未收尾工作/稿时可见，点击直达版本面板） -->
-            <view
-              v-if="versionWorkStatus.enabled && (versionWorkStatus.working || versionWorkStatus.onDraft)"
-              class="work-status-chip"
-              @tap.stop="goHandleAdoptConflict"
-            >
-              <view class="work-status-dot"></view>
-              <text class="work-status-text">{{ versionWorkStatusLabel }}</text>
-            </view>
             <!-- 协作状态 chip：只在这份案卷真的放进过团队案件库时才渲染。
                  没连案件库的律师（绝大多数）在界面上看不到任何协作元素——
                  「以自己工作为主」的产品定位要求协作 UI 零打扰。 -->
@@ -656,6 +647,7 @@
             @clear-file-filter="versionFileFilter = null"
             @reload-files="onVersionReloadFiles"
             @adopt-conflict="adoptConflictPending = $event"
+            @status-changed="checkAdoptConflict"
             @open-collab="openCollab"
           />
           <MarketSidebarPanel
@@ -1400,30 +1392,32 @@
 
 
 
-      <!-- 文件关联选择弹窗：一个文本关联多个文件时，点击超链接弹出选择 -->
-      <view v-if="fileLinkPicker.visible" class="upload-mask" @tap="closeFileLinkPicker">
-        <view class="folder-modal" @tap.stop>
-          <view class="upload-header">
-            <text class="upload-title">{{ $t('workbench.chooseFileToOpen') }}</text>
+      <!-- 文件关联选择弹窗：一个文本关联多个文件时，点击超链接弹出选择。
+           独立一套 filelink-* 类，不复用下面导出/截图对话框共用的 upload-mask/
+           folder-modal（那组被三处对话框复用，风险面太大，见样式区注释）。 -->
+      <view v-if="fileLinkPicker.visible" class="filelink-mask" @tap="closeFileLinkPicker">
+        <view class="filelink-dialog" @tap.stop>
+          <view class="filelink-header">
+            <text class="filelink-title">{{ $t('workbench.chooseFileToOpen') }}</text>
           </view>
-          <view class="folder-body">
+          <view class="filelink-body">
             <view
               v-for="f in fileLinkPicker.files"
               :key="f.id"
-              class="folder-item"
+              class="filelink-item"
               @tap="openFileLinkTarget(f.id)"
             >
-              <svg class="folder-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <svg class="filelink-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path v-for="(d, gi) in (f.isFolder ? GLYPHS.folder : GLYPHS.doc)" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
-              <text class="folder-name">{{ f.name }}</text>
+              <text class="filelink-name">{{ f.name }}</text>
             </view>
-            <view v-if="!fileLinkPicker.files || fileLinkPicker.files.length === 0" class="empty-tip">
+            <view v-if="!fileLinkPicker.files || fileLinkPicker.files.length === 0" class="filelink-empty">
               <text>{{ $t('workbench.noLinkedFiles') }}</text>
             </view>
           </view>
-          <view class="upload-footer">
-            <view class="upload-btn upload-btn-secondary" @tap="closeFileLinkPicker">{{ $t('common.close') }}</view>
+          <view class="filelink-footer">
+            <view class="filelink-btn filelink-btn-secondary" @tap="closeFileLinkPicker">{{ $t('common.close') }}</view>
           </view>
         </view>
       </view>
@@ -1866,7 +1860,7 @@ export default {
       projectSwitcherOpen: false, // IDE 化最近项目切换器
       switcherProjects: [],
       switcherLoadFailed: false, // 拉取最近项目失败：与"确实没有其他最近项目"的空态区分开，不能吞成同一句文案
-      versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 顶栏工作状态点
+      versionWorkStatus: { enabled: false, working: false, changedCount: 0, onDraft: null }, // 底部状态栏工作状态点（顶栏胶囊已去掉）
       // 协作（团队案件库）状态：{linked, serverUrl, pendingUpload, remoteAhead, offline}
       collabCloud: null,
       collabDialogVisible: false,
@@ -2082,7 +2076,7 @@ export default {
       return FILE_BATCH_ACTIONS
     },
     // 是否为“仅尽调”视图（客户）
-    // IDE 化顶栏工作状态点文案
+    // 底部状态栏工作状态点文案（顶栏胶囊已去掉，见 .adopt-pending-bar 与 status-item 的用法）
     versionWorkStatusLabel() {
       const s = this.versionWorkStatus
       if (s.onDraft && s.onDraft.name) return this.$t('workbench.workingOnDraft', { name: s.onDraft.name })
@@ -3136,14 +3130,16 @@ export default {
     },
     // 进页面时问一次「有没有停在待裁决的采纳」：版本面板可能整个会话都没被打开过
     // （比如上次崩在裁决窗口里、这次进来直接停在资源管理器），那样就没有任何东西
-    // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管。
+    // 会去拉 /status，律师看不到任何提示。面板打开后由它的 adopt-conflict 事件接管；
+    // 面板内部的结束工作/丢弃/回主线/采纳/放弃等操作完成后也会经 status-changed
+    // 事件再调一次这里，否则底部状态栏会停在操作之前的样子（同步滞后 bug）。
     async checkAdoptConflict() {
       if (!this.projectId) return
       try {
         const res = await getVersionStatus(this.projectId)
         const d = (res && res.data) || {}
         this.adoptConflictPending = !!(d.adoptConflict || d.cloudConflict || d.sessionEndConflict)
-        // IDE 化顶栏工作状态点（同一次 /status，不多打接口）
+        // 底部状态栏工作状态点（同一次 /status，不多打接口）
         this.versionWorkStatus = {
           enabled: !!d.enabled,
           working: !!d.working,

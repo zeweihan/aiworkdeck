@@ -256,50 +256,60 @@ export default {
 <style lang="scss" scoped>
 .awd-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.4);
-  display: flex; align-items: center; justify-content: center; z-index: 999;
+  display: flex; align-items: center; justify-content: center; z-index: 9999;
 }
-.adopt-dialog { width: 680rpx; max-height: 84vh; display: flex; flex-direction: column; background: #fff; border-radius: 12rpx; }
-.awd-header { padding: 24rpx; border-bottom: 1px solid #eee; }
-.awd-title { font-size: 30rpx; font-weight: 600; }
-.awd-body { padding: 24rpx; overflow-y: auto; flex: 1; }
-.adopt-hint { font-size: 24rpx; color: #666; margin-bottom: 14rpx; }
-.adopt-foot-note { font-size: 21rpx; color: #999; line-height: 1.6; margin-top: 16rpx; }
-.adopt-orphan-hint { font-size: 26rpx; color: #b23; line-height: 1.6; }
-.adopt-row { padding: 16rpx 0; border-bottom: 1px solid #f0f0f0; }
-.adopt-row-main { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10rpx; }
-.adopt-row-name { font-size: 26rpx; color: #222; word-break: break-all; }
-.adopt-row-compare { font-size: 23rpx; color: #12344D; text-decoration: underline; flex-shrink: 0; margin-left: 16rpx; }
-.adopt-row-choices { display: flex; flex-direction: column; gap: 8rpx; }
+.adopt-dialog {
+  width: 460px; max-width: 92vw; max-height: 84vh;
+  display: flex; flex-direction: column; background: #fff;
+  border-radius: 12px; overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,.1), 0 10px 10px -5px rgba(0,0,0,.04);
+}
+.awd-header { padding: 18px 24px; border-bottom: 1px solid #f1f5f9; }
+.awd-title { font-size: 16px; font-weight: 600; color: #0f172a; }
+.awd-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+.adopt-hint { font-size: 13px; color: #475569; margin-bottom: 14px; line-height: 1.6; }
+.adopt-foot-note { font-size: 12px; color: #94a3b8; line-height: 1.6; margin-top: 14px; }
+.adopt-orphan-hint { font-size: 13.5px; color: #b23; line-height: 1.6; }
+.adopt-row { padding: 14px 0; border-bottom: 1px solid #f1f5f9; }
+.adopt-row-main { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.adopt-row-name { font-size: 13.5px; color: #0f172a; word-break: break-all; }
+.adopt-row-compare { font-size: 12px; color: #1A5336; text-decoration: underline; cursor: pointer; flex-shrink: 0; margin-left: 12px; }
+.adopt-row-choices { display: flex; flex-direction: column; gap: 6px; }
 .radio-item {
-  display: flex; flex-direction: column; gap: 2rpx; cursor: pointer;
-  padding: 8rpx 12rpx; border: 1px solid #eee; border-radius: 8rpx;
+  display: flex; flex-direction: column; gap: 2px; cursor: pointer;
+  padding: 8px 10px; border: 1px solid #e2e8f0; border-radius: 6px;
 }
-.radio-item.checked { border-color: #12344D; background: #F4F7F9; }
-.radio-head { display: flex; align-items: center; gap: 8rpx; }
+.radio-item.checked { border-color: #1A5336; background: #F0FDF4; }
+.radio-head { display: flex; align-items: center; gap: 8px; }
 .radio-dot {
-  width: 20rpx; height: 20rpx; border-radius: 50%; border: 1px solid #ccc;
-  box-sizing: border-box; flex-shrink: 0;
+  width: 12px; height: 12px; border-radius: 50%; border: 1px solid #cbd5e1;
+  background: #fff; box-sizing: border-box; flex-shrink: 0;
 }
-.radio-item.checked .radio-dot { border-color: #12344D; background: #12344D; }
-.radio-label { font-size: 23rpx; color: #444; }
-.radio-item.checked .radio-label { color: #12344D; font-weight: 600; }
+.radio-item.checked .radio-dot { border-color: #1A5336; background: #1A5336; }
+.radio-label { font-size: 13px; color: #334155; }
+.radio-item.checked .radio-label { color: #1A5336; font-weight: 600; }
 /* 后果说明：律师是靠这行判断「选了会发生什么」，不是靠上面那四个字。
    必须能在一行里放下，理由见 footNote 的注释。 */
-.radio-desc { font-size: 21rpx; color: #888; line-height: 1.5; padding-left: 28rpx; }
+.radio-desc { font-size: 12px; color: #94a3b8; line-height: 1.5; padding-left: 20px; }
 .awd-footer {
-  display: flex; justify-content: flex-end; gap: 16rpx;
-  padding: 20rpx 24rpx; border-top: 1px solid #eee;
+  display: flex; justify-content: flex-end; gap: 12px;
+  padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #f8f9fa;
 }
-.awd-btn { padding: 12rpx 24rpx; border-radius: 6rpx; font-size: 25rpx; }
-.awd-btn-primary { background: #12344D; color: #fff; }
-.awd-btn-secondary { background: #f0f0f0; color: #333; }
-.awd-btn-disabled { opacity: .4; pointer-events: none; }
+.awd-btn {
+  padding: 8px 18px; border-radius: 6px; font-size: 13.5px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.awd-btn-primary { background: #1A5336; color: #fff; }
+.awd-btn-primary:hover { background: #14422b; }
+.awd-btn-secondary { background: #fff; color: #475569; border: 1px solid #cbd5e1; }
+.awd-btn-secondary:hover { background: #f1f5f9; }
+.awd-btn-disabled { opacity: .45; pointer-events: none; }
 
 .adopt-collapsed-bar {
-  position: fixed; left: 50%; bottom: 40rpx; transform: translateX(-50%);
-  display: flex; align-items: center; gap: 16rpx;
-  background: #12344D; color: #fff; padding: 14rpx 24rpx; border-radius: 999rpx;
-  font-size: 24rpx; z-index: 999; box-shadow: 0 4rpx 16rpx rgba(0,0,0,.2);
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px;
+  background: #1A5336; color: #fff; padding: 10px 20px; border-radius: 999px;
+  font-size: 13px; z-index: 9999; box-shadow: 0 10px 25px -5px rgba(0,0,0,.25);
 }
-.adopt-collapsed-resume { text-decoration: underline; flex-shrink: 0; }
+.adopt-collapsed-resume { text-decoration: underline; flex-shrink: 0; cursor: pointer; }
 </style>

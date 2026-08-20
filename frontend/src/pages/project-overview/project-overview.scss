@@ -137,36 +137,7 @@ $bg-white: #FFFFFF;
   }
 }
 
-/* IDE 化：顶栏常驻工作状态点 */
-.work-status-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: rgba(200, 164, 93, 0.12);
-  border: 1px solid rgba(200, 164, 93, 0.3);
-  cursor: pointer;
-
-  &:hover {
-    background: rgba(200, 164, 93, 0.2);
-  }
-}
-
-.work-status-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #c8a45d;
-}
-
-.work-status-text {
-  font-size: 12px;
-  color: #8a6d3b;
-  white-space: nowrap;
-}
-
-/* 协作状态 chip（顶栏，与工作状态点并列；只在案卷已放进团队案件库时渲染） */
+/* 协作状态 chip（顶栏；只在案卷已放进团队案件库时渲染） */
 .collab-chip {
   display: flex;
   align-items: center;
@@ -3209,6 +3180,100 @@ $bg-white: #FFFFFF;
   background-color: #E2E8F0;
   color: #94A3B8;
   cursor: not-allowed;
+}
+
+/* 文档关联弹窗（fileLinkPicker）：独立一套类，不与上面的 upload-mask/folder-modal
+   共用——那组样式同时被导出 Word、截图保存、回收站三处对话框复用，直接改动
+   风险面太大。视觉语言对齐 components/collab/CollabDialog.vue。 */
+.filelink-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+.filelink-dialog {
+  width: 380px;
+  max-width: 90vw;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+}
+.filelink-header {
+  padding: 18px 24px;
+  border-bottom: 1px solid #f1f5f9;
+}
+.filelink-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #0f172a;
+}
+.filelink-body {
+  padding: 12px 16px;
+  overflow-y: auto;
+  flex: 1;
+}
+.filelink-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.filelink-item:hover {
+  background: #f1f5f9;
+}
+.filelink-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: #64748b;
+}
+.filelink-name {
+  flex: 1;
+  font-size: 13.5px;
+  color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filelink-empty {
+  text-align: center;
+  color: #94a3b8;
+  padding: 20px;
+  font-size: 13px;
+}
+.filelink-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 14px 24px;
+  border-top: 1px solid #f1f5f9;
+  background: #f8f9fa;
+}
+.filelink-btn {
+  padding: 8px 18px;
+  border-radius: 6px;
+  font-size: 13.5px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.filelink-btn-secondary {
+  background: #fff;
+  color: #475569;
+  border: 1px solid #cbd5e1;
+}
+.filelink-btn-secondary:hover {
+  background: #f1f5f9;
 }
 
 .dialog-input {
