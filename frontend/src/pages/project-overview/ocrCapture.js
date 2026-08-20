@@ -198,9 +198,14 @@ export const ocrCaptureMethods = {
             return
           }
           // 全局截图：无网页 tab 时走 window 模式（两边都是文档也能截图）
-          const resp = viewId
+          let resp = viewId
             ? await host.ocr.startSelection({ viewId })
             : await host.ocr.startSelection({ mode: 'window' })
+          // viewId 查表失败（如 BrowserView 创建失败留下的僵尸 tab 报 view not
+          // found）不许成死路——降级为窗口截图照样能截。用户主动取消不降级。
+          if (viewId && (!resp || (resp.ok !== true && !resp.cancelled))) {
+            resp = await host.ocr.startSelection({ mode: 'window' })
+          }
           if (!resp || resp.ok !== true) {
             if (resp && resp.cancelled) return
             uni.showToast({ title: (resp && resp.message) ? String(resp.message) : this.$t('workbenchOps.captureFailed'), icon: 'none' })
