@@ -112,6 +112,12 @@ manifest 原始字节上（旁挂 `.sig`，与增量更新的 `manifest.json.sig
   `desktop/bundled/${os}-${arch}` 的命名一致；当前就这两个发行目标）。客户端按
   自身平台过滤 components，取「匹配平台 ∪ `*`」；某平台缺必需组件时如实降级
   （graphviz 的降级语义沿用现状：缺了只报流程图布局不可用）。
+- **包内条目是裸相对路径，不套顶层目录**：安装端负责先建 `<version>/<unpackDir>/`
+  再解压，`contents.sha256` 必须位于压缩包根。包里若再带一层目录会落成
+  `<unpackDir>/<unpackDir>/…`，复核找不到清单、安装必挂（v1.0.0 发布件曾因
+  build-pack 多套一层 `topName/` 全网装不上，dev-board#65）。两侧测试都钉了这条：
+  `desktop/tests/build-pack.test.js` 断言包内无顶层前缀，
+  `NativePackServiceTest` 的夹具即裸路径包。
 - **逐文件哈希**：签名 manifest 只盖**压缩包级** sha256（密码学上已覆盖全部内容）；
   每个压缩包内自带 `contents.sha256`（包内逐文件哈希清单，构建期生成），
   安装端解压后**逐文件复核一遍**才写完成标记。这样 manifest 体积与文件数解耦

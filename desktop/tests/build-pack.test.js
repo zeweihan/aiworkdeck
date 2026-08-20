@@ -65,24 +65,33 @@ test('打包一个自造小目录：manifest 的 size/sha256 与 contents.sha256
   // 这条防的是「git status 多出一个文件」）。
   assert.ok(!fs.existsSync(path.join(srcDir, 'contents.sha256')), '打包后源目录不该留下 contents.sha256')
 
+  // 包内条目必须是**裸相对路径**（不带 unpackDir 顶层目录）：安装端会先建
+  // <version>/<unpackDir>/ 再解压，包里若再套一层 litviz/，落盘就成了
+  // litviz/litviz/…，verifyContents 在外层找不到 contents.sha256，安装必挂
+  // （真机报「组件缺少 contents.sha256 清单」，dev-board#65）。
+  const entries = execFileSync('tar', ['-tzf', archivePath], { encoding: 'utf8' }).trim().split('\n')
+  for (const entry of entries) {
+    assert.ok(!entry.startsWith('litviz/'), `包内条目不该带 unpackDir 顶层前缀：${entry}`)
+  }
+
   // 解开 tar，核对包内 contents.sha256 记的哈希与解出来的文件逐一一致，
   // 并且 __pycache__/*.pyc 确实被排除在外。
   const extractDir = path.join(workRoot, 'extract')
   fs.mkdirSync(extractDir, { recursive: true })
   execFileSync('tar', ['-xzf', archivePath, '-C', extractDir])
 
-  assert.ok(!fs.existsSync(path.join(extractDir, 'litviz', '__pycache__')), '__pycache__ 目录不该被打进包里')
-  assert.ok(!fs.existsSync(path.join(extractDir, 'litviz', 'engine', 'core.pyc')), '.pyc 文件不该被打进包里')
-  assert.ok(fs.existsSync(path.join(extractDir, 'litviz', 'cli.py')), '正常文件应当在包里')
+  assert.ok(!fs.existsSync(path.join(extractDir, '__pycache__')), '__pycache__ 目录不该被打进包里')
+  assert.ok(!fs.existsSync(path.join(extractDir, 'engine', 'core.pyc')), '.pyc 文件不该被打进包里')
+  assert.ok(fs.existsSync(path.join(extractDir, 'cli.py')), '正常文件应当在包里')
 
-  const contentsSha = fs.readFileSync(path.join(extractDir, 'litviz', 'contents.sha256'), 'utf8')
+  const contentsSha = fs.readFileSync(path.join(extractDir, 'contents.sha256'), 'utf8')
   const lines = contentsSha.trim().split('\n').filter(Boolean)
   // 只有 cli.py / engine/core.py 两个正常文件，contents.sha256 不列自身
   assert.strictEqual(lines.length, 2)
   for (const line of lines) {
     const [want, rel] = line.split('  ')
     assert.ok(!rel.includes('__pycache__') && !rel.endsWith('.pyc'), `contents.sha256 不该列出被排除的文件：${rel}`)
-    const got = sha256Of(path.join(extractDir, 'litviz', rel))
+    const got = sha256Of(path.join(extractDir, rel))
     assert.strictEqual(got, want, `contents.sha256 里 ${rel} 的哈希对不上解出来的文件`)
   }
 })
