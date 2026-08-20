@@ -135,7 +135,9 @@ class BuiltinSkillsTest {
         assertTrue(s.getAllowedTools().containsAll(
                         List.of("meeting_get_transcript", "meeting_list_recordings", "write_docx")),
                 "读稿两件套与 write_docx 必须都在白名单里：" + s.getAllowedTools());
-        assertFalse(s.isEnabledByDefault(), "默认不安装（广场装启停），别悄悄改成默认开");
+        assertTrue(s.isEnabledByDefault(),
+                "「语音」合并插件成员默认启用（dev-board#66：与 text-to-speech 启停一体，"
+                        + "SkillRegistry 收敛保证状态一致），别悄悄改回默认关");
         assertFalse(s.getPromptTemplate().isBlank(), "prompt.md 应有内容");
         assertTrue(s.getPromptTemplate().contains("meeting_get_transcript"),
                 "prompt 必须交代先读转写稿再写纪要");
