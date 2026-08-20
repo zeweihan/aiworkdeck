@@ -296,6 +296,13 @@ public class TushareService {
         String token = systemSettingService.get("external.tushare.token", defaultTushareToken);
         String apiUrl = systemSettingService.get("external.tushare.baseUrl", defaultTushareApiUrl);
 
+        // 未配置时给出可读提示（dev-board#69，与 search_web/企查查同口径）：
+        // 空 token 打上游只会换来一条看不出原因的失败。
+        if (token == null || token.isBlank()) {
+            throw new IllegalStateException(
+                    "金融数据查询未配置：缺少 Tushare token（管理页「外部服务」或环境变量 TUSHARE_TOKEN）。请基于已有信息继续完成任务。");
+        }
+
         JSONObject body = new JSONObject();
         body.put("api_name", apiName);
         body.put("token", token);

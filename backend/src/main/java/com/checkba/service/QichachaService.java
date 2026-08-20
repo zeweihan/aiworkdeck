@@ -81,7 +81,13 @@ public class QichachaService {
         String secretKey = systemSettingService.get("external.qichacha.secret", defaultSecretKey);
         String baseUrl = systemSettingService.get("external.qichacha.baseUrl", defaultBaseUrl);
 
-
+        // 未配置时给出与 search_web 同款的可读提示（dev-board#69）：此前空 key 会
+        // 直接打真实接口，失败后被包成泛泛的「外部数据服务暂不可用」，用户和模型
+        // 都猜不到是没配凭证。
+        if (appKey == null || appKey.isBlank() || secretKey == null || secretKey.isBlank()) {
+            throw new IllegalStateException(
+                    "企业工商信息查询未配置：缺少企查查凭证（管理页「外部服务」或环境变量 QICHACHA_KEY/QICHACHA_SECRET）。请基于已有信息继续完成任务。");
+        }
 
         // 1. 准备请求参数
         String timeSpan = String.valueOf(System.currentTimeMillis() / 1000);
