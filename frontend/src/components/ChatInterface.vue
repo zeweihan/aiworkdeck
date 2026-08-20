@@ -2810,7 +2810,10 @@ export default {
   font-size: 13px;
   color: #666;
   cursor: pointer;
-  position: relative;
+  /* 定位基准挪给 .input-card（见 .model-dropdown 注释）——AI 面板最窄 240px，
+     锚在这个只有内容宽的选择器上，下拉框固定 min-width 无论往哪边对齐都会被
+     .chat-interface 的 overflow:hidden 裁掉一截。 */
+  position: static;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -2834,14 +2837,18 @@ export default {
 
 .model-dropdown {
   position: absolute;
+  /* 锚点是 .input-card（position:relative，见上方定义）而不是 .model-selector
+     自己——固定 268px 的 min-width 摆在只有内容宽的选择器上，AI 面板收到最窄
+     240px 时无论往哪边对齐都放不下，会被 .chat-interface 的 overflow:hidden
+     裁掉一截。改成跟随输入卡自身宽度（left/right 都钉到 0），永不溢出。 */
   left: 0;
+  right: 0;
   background: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
   z-index: 1001;
-  /* 分组标题 + 单价标签比原来的纯模型名占位多，窄了会把价格挤成两行 */
-  min-width: 268px;
+  min-width: 0;
   max-height: 320px;
   overflow-y: auto;
   padding: 4px 0;
@@ -2862,7 +2869,11 @@ export default {
   font-size: 13px;
   color: #666;
   cursor: pointer;
-  position: relative;
+  /* 同 .model-selector：定位基准挪给 .input-card。实测在 240px 最窄面板下，
+     min-width:160px 的下拉锚在这个只有内容宽（约 60px）的选择器上，右边缘
+     恰好顶着 .chat-interface 的裁切边界、零余量——字体渲染或文案稍长一点
+     就会被裁掉一截。 */
+  position: static;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -2889,12 +2900,13 @@ export default {
 .mode-dropdown {
   position: absolute;
   left: 0;
+  right: 0;
   background: #fff;
   border: 1px solid #e0e0e0;
   border-radius: 10px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   z-index: 1001;
-  min-width: 160px;
+  min-width: 0;
   padding: 6px 0;
 }
 
@@ -3075,6 +3087,9 @@ export default {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 下拉现在跟随输入卡宽度，窄面板下模型名 + 单价 tag 放不下一行——允许换行，
+     不许把 tag 裁掉。 */
+  flex-wrap: wrap;
 }
 .model-option-name {
   font-size: 13px;
