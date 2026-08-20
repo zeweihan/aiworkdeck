@@ -9,7 +9,6 @@ export default {
   loading: '加载中...',
   clientEmptyHint: '律师把案卷分享给你之后，会出现在这里',
   newProject: '新建项目',
-  createSectionTitle: '新建',
   emptyHint: '还没有案卷。从下面开始：打开一个已有的文件夹，或者新建一个。',
   // project-list.vue：视图切换与列表视图列名
   gridView: '方块视图',
@@ -18,13 +17,6 @@ export default {
   clientColumn: '客户',
   // 档案里没填客户时，列表显示的是推断值（客户成员/上市公司），得让人看得出区别
   clientInferred: '推断',
-  // 「详情」开关：把档案里其余四项补出来（客户是一等列、常显，不在这里）
-  detailToggle: '详情',
-  detailToggleHint: '显示项目档案里的事项类型、对方、立项时间与下一步（在项目概览里填）',
-  matterTypeField: '事项类型',
-  counterpartyField: '对方',
-  openedAtField: '立项时间',
-  nextStepField: '下一步',
   createdColumn: '创建时间',
   updatedColumn: '最近修改',
   membersColumn: '成员',
