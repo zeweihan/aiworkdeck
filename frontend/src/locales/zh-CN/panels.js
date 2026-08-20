@@ -199,6 +199,8 @@ export default {
   bpSwitchToDesktop: '切换回桌面版',
   bpSwitchToMobile: '切换移动版 (解决网页过宽)',
   bpUnsupportedPlatform: '当前平台暂不支持浏览器控件（仅 H5）',
+  bpCreateFailed: '浏览器视图创建失败',
+  bpRetry: '重试',
 
   // ProjectFavoritesPanel.vue
   pfLoading: '加载中...',
