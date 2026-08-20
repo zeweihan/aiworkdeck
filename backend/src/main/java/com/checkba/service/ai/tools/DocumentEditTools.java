@@ -247,10 +247,14 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
-    @Tool("移动文档的光标到指定位置。")
+    // 只宣告编辑器真的实现了的两种：office_thread.js 的 goto() 只处理 start/end，
+    // paragraph/bookmark/line 一律返回 "goto type not supported yet"。
+    // 描述里挂着做不到的能力 = 模型反复往死路上撞、白烧步数预算。
+    @Tool("把光标移到文档开头或结尾。只支持 start/end；要定位到某一段用 doc_select_paragraph，"
+          + "要定位到某处文本用 doc_find_text 拿 anchorId 再 doc_select_anchor。")
     public String doc_goto(
-            @P("定位类型: paragraph(段落)/bookmark(书签)/start(文档开头)/end(文档结尾)/line(行号)") String type,
-            @P("目标值: 段落号、书签名、行号等。对于 start/end 类型可以为空。") String target
+            @P("定位类型：start(文档开头) 或 end(文档结尾)") String type,
+            @P("保留参数，start/end 用不到，传空即可") String target
     ) {
         log.info("Tool: doc_goto called type={}, target={}", type, target);
         try {
@@ -415,11 +419,36 @@ public class DocumentEditTools implements AgentToolComponent {
         }
     }
 
+    /**
+     * 段落号校验。
+     *
+     * <p><b>编辑器侧一律 0 基</b>：{@code office_thread.js} 的 get_paragraph /
+     * modify_paragraph / select_paragraph 都是从 {@code i = 0} 起数、{@code i === idx} 命中，
+     * {@code get_document_text} 返回的也是 {@code index: i}（0 起）。
+     * 而 doc_get_paragraph / doc_modify_paragraph 的参数说明曾写「从 1 开始」——
+     * 照着描述办事的模型会整体差一段，在修订模式下**改错条款**，用户还可能直接接受。
+     *
+     * <p>缺参同样不能放行：编辑器的 {@code Number(p.index) || 0} 会把 null／非数字
+     * 静默当成第 0 段，于是「没给段落号」变成「改第一段」，无人察觉。
+     */
+    private static String rejectBadParagraphIndex(Integer paragraphIndex) {
+        if (paragraphIndex == null) {
+            return "Error: paragraphIndex is required. It is 0-based — use the `index` values returned by "
+                    + "doc_get_document_text / doc_read_paragraphs.";
+        }
+        if (paragraphIndex < 0) {
+            return "Error: paragraphIndex must be >= 0 (0-based). Received: " + paragraphIndex;
+        }
+        return null;
+    }
+
     @Tool("获取文档中指定段落的文本内容。")
     public String doc_get_paragraph(
-            @P("段落索引，从 1 开始") Integer paragraphIndex
+            @P("段落号（0 开始，用 doc_get_document_text / doc_read_paragraphs 返回的 index）") Integer paragraphIndex
     ) {
         log.info("Tool: doc_get_paragraph called index={}", paragraphIndex);
+        String rejected = rejectBadParagraphIndex(paragraphIndex);
+        if (rejected != null) return rejected;
         try {
             return editorBridgeService.executeEditorCommand("get_paragraph", 
                     java.util.Map.of("index", paragraphIndex));
@@ -432,10 +461,16 @@ public class DocumentEditTools implements AgentToolComponent {
     @ToolMeta(displayName = "修改段落", category = "document", fileEffect = "MODIFIED")
     @Tool("修改文档中指定段落的文本内容。修改将以修订模式进行，用户可以审阅后接受或拒绝。")
     public String doc_modify_paragraph(
-            @P("段落索引，从 1 开始") Integer paragraphIndex,
+            @P("段落号（0 开始，用 doc_get_document_text / doc_read_paragraphs 返回的 index）") Integer paragraphIndex,
             @P("新的段落文本") String newText
     ) {
-        log.info("Tool: doc_modify_paragraph called index={}, new text length={}", paragraphIndex, newText.length());
+        log.info("Tool: doc_modify_paragraph called index={}, new text length={}",
+                paragraphIndex, newText == null ? -1 : newText.length());
+        String rejected = rejectBadParagraphIndex(paragraphIndex);
+        if (rejected != null) return rejected;
+        if (newText == null) {
+            return "Error: newText is required. To delete a paragraph's content pass an empty string explicitly.";
+        }
         try {
             return editorBridgeService.executeEditorCommand("modify_paragraph", 
                     java.util.Map.of("index", paragraphIndex, "newText", newText));

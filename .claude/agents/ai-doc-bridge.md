@@ -7,6 +7,25 @@ description: AI↔文档编辑桥接领域。任务涉及 doc_*/sheet_*/slide_* 
 
 职责边界：AI 侧发出编辑指令 → 编辑器执行 的整条链路。不含编辑器内核本身（那是 doc-editor 领域），不含对话编排（ai-chat 领域）。
 
+## 段落号基数：doc_* 全族 0 基（已踩）
+
+编辑器侧一律 0 基——`office_thread.js` 的 `get_paragraph` / `modify_paragraph` /
+`select_paragraph` 都是从 `i = 0` 起数、`i === idx` 命中，`get_document_text` 返回的也是
+`index: i`（0 起）。可 `doc_get_paragraph` 与 `doc_modify_paragraph` 的 `@P` 曾写
+「段落索引，从 1 开始」，而同族的 `doc_get_document_text`、`doc_select_paragraph` 写的是 0 开始。
+
+模型先用 `doc_get_document_text` 拿 0 基编号，再照「从 1 开始」的说明去调
+`doc_modify_paragraph`，就整体差一段——**在修订模式下改错条款**，用户还很可能直接接受。
+
+**新增任何段落定位参数，说明里必须写明 0 基**，并且缺参要在 Java 侧拦下：编辑器的
+`Number(p.index) || 0` 会把 null／非数字静默当成第 0 段，「没给段落号」于是变成「改第一段」。
+回归用例 `ParagraphIndexBaseTest`（反射扫 `@P`，写成 1 基即转红）。
+
+同类：`doc_goto` 的描述曾宣告 `paragraph/bookmark/line` 三种定位，而 `office_thread.js` 的
+`goto()` 只实现 `start/end`，其余一律返回 "goto type not supported yet"——
+**描述里挂着做不到的能力 = 模型反复往死路上撞、白烧步数预算**。已收窄成只宣告 start/end，
+并指向 `doc_select_paragraph` / `doc_select_anchor`。
+
 ## 关键文件
 
 **后端工具原语**
