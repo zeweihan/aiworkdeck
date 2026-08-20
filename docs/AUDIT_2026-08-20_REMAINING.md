@@ -1,0 +1,1188 @@
+# 代码稳定性审计 · 待处理清单（dev-board#74）
+
+> 本清单是 902 个单点子 agent 扫出、每条经两名独立「默认反驳」验证者复核后**存活**的结论，
+> 已剔除本轮 13 个 PR 已修复的部分。**未经我逐条复现**——动手前请照「复现要点」自己验一遍，
+> 本轮实测约每 6 条里有 1 条在复现时被推翻。
+
+共 166 条：critical 3 / high 65 / medium 72 / low 26
+
+## 后端服务与控制器（54）
+
+### [CRITICAL] CHINESE_NAME regex matches any 2-4 char Chinese substring, not just names — mass over-redaction corrupts the whole document
+
+- 位置：`backend/src/main/java/com/checkba/model/SensitiveType.java:47`
+- 触发：POST /api/sensitive/desensitize with strategies=["CHINESE_NAME"] on any Chinese-language document (which is the overwhelming majority of this product's legal documents).
+- 后果：Every 2-4 character Chinese token in the document — legal terms (甲方/乙方/被告/原告), place names (北京市/浙江省), company-name fragments, section headers, clause text — gets matched by replaceSensitiveData/replaceInParagraph and rewritten via SensitiveType.mask() to garbled forms like 甲* or 被**. Because SensitiveService.processText/processDocx apply the pattern over the entire document body (not just name-like fields), selecting this single strategy on a normal Chinese contract effectively destroys the readability of the whole document while the API still returns HTTP 200 with a saved 'successfully desens
+- 复现要点：Select strategies=["CHINESE_NAME"], desensitize any .docx contract containing normal Chinese prose (not just personal names) — inspect the output: most 2-4 char phrases are replaced with X*/X** fragments, e.g. 甲方 -> 甲*, 被告 -> 被*, 有限公司 -> 有**司.
+
+### [HIGH] POST /api/agent/chat has no per-conversation reentrancy guard, so two concurrent messages on the same conversationId corrupt the shared streaming state and interleave/scramble SSE output
+
+- 位置：`backend/src/main/java/com/checkba/controller/ai/AiAgentController.java:137`
+- 触发：Same authenticated user (canUseConversation passes for both, since ownership is per-user not per-request) issues two POST /chat calls for the same conversationId in quick succession — e.g. a double-submit from a flaky client, a retried request after a slow/timed-out response that the client thinks failed, or the same account open in two tabs/devices. Nothing in this controller checks agentRunStateService.statusName(conversationId) before dispatching a new run, and no lock serializes access to the per-conversation entries in activeStreamContent/activeAssistantMessageId/cancelledConversations.
+- 后果：Both requests return 200 immediately (fire-and-forget @Async), then both loops stream tokens into the same SSE emitter for that conversationId (connect() keeps exactly one emitter per conversationId) and both loops read/append to whichever StringBuilder currently sits in the shared activeStreamContent map — so tokens from the two model runs interleave into one garbled assistant bubble, activeAssistantMessageId gets reset mid-flight by the second run causing the first run's completion to either create a duplicate/orphaned message or silently attach its tail to the wrong message id, and agentRun
+- 复现要点：1) Open a conversation, call POST /api/agent/chat with a message that will take several seconds to answer. 2) Before the SSE stream for that turn completes, call POST /api/agent/chat again with the same conversationId and a different message (simulating a double-click or a second tab). 3) Observe the SSE stream on /api/agent/connect/{conversationId}: text_delta events from both turns arrive on the
+
+### [HIGH] EditorResultController authorizes the client-supplied conversationId, not the conversationId that actually owns requestId — cross-conversation result injection
+
+- 位置：`backend/src/main/java/com/checkba/controller/ai/EditorResultController.java:34`
+- 触发：Any authenticated user who can produce a payload {requestId: <a currently-pending requestId that actually belongs to a different conversation>, conversationId: <any conversation of their own, so canUseConversation passes>, success:true, data:{attacker-controlled JSON}} to POST /api/ai/agent/editor-result. The controller only checks that the caller may use payload.conversationId (which it does — it's their own conversation); it never checks that payload.conversationId is the conversation the requestId was actually issued for, because EditorBridgeService.pendingRequests stores only requestId->Fu
+- 后果：Attacker- or race-controlled JSON data completes another user's/another conversation's pending CompletableFuture, is returned as the tool result to that other conversation's running LLM agent loop, and is then treated as trusted document/editor output driving further AI-issued document edits (data corruption) or silently derailing that user's agent run — with the victim seeing incorrect or unexplained document changes with no indication their conversation's tool call was tampered with.
+- 复现要点：1) Start an editor tool call in conversation A (as user A) and capture its requestId from the SSE client_action event. 2) As user B (owner of unrelated conversation B), POST to /api/ai/agent/editor-result with {requestId: <A's requestId>, conversationId: <B's own conversationId>, success:true, data:{...}}. 3) Observe HTTP 200 {received:true} and that conversation A's pending executeEditorCommand c
+
+### [HIGH] getFileBytes silently returns template-document bytes instead of erroring when the physical file is missing on disk
+
+- 位置：`backend/src/main/java/com/checkba/service/ProjectFileService.java:813`
+- 触发：A ProjectFile row exists but its physical file at file.getFilePath() is absent from local disk — e.g. the physical copy failed silently during move/copy (movePhysicalFile and copyPhysicalFile in this same class swallow IOExceptions with only log.warn), storage was pruned/restored from a partial backup, or the file was deleted directly from disk out-of-band. Any subsequent call to getFileBytes(fileId) for that row.
+- 后果：Instead of getFileBytes throwing or returning empty (which every caller — FileContextLoader.extractFileText, LegalTools.read_document, DocumentCheckpointService — explicitly checks for and reports as 'file empty/not found'), LocalFileStorageService.load() transparently copies the global blank-document template over the missing path and returns that resource. getFileBytes then returns non-null, non-empty bytes, so every caller's `fileBytes == null || fileBytes.length == 0` guard passes. The AI pipeline proceeds to extract text from the blank template and returns near-empty/generic content as if
+- 复现要点：1) Create a project file record whose filePath resolves under local storage. 2) Delete the underlying file from disk directly, or trigger a move/copy where the physical copy step throws (swallowed by movePhysicalFile/copyPhysicalFile). 3) Call getFileBytes(fileId) (or drag the file into AI chat / call read_document). Observed: a fresh blank .docx copied from the template is silently written to tha
+
+### [HIGH] uploadFile's non-multipart (raw octet-stream) path never validates that any bytes were actually received, unlike the multipart path
+
+- 位置：`backend/src/main/java/com/checkba/controller/FileController.java:409`
+- 触发：This branch is the one actually used in production by ChatInterface.vue (`xhr.setRequestHeader('Content-Type', 'application/octet-stream')`, xhr.send(fileObject)), FileTree.vue's chunked uploader, and meetingRecorder.js — none of them use multipart/form-data. If `fileObject`/chunk is a 0-byte File (e.g. an unresolved cloud-storage placeholder file, a File object whose underlying handle failed to read, or any client bug that produces an empty Blob), the request arrives with an empty body and this code path saves 0 bytes as if it were the file content.
+- 后果：`Files.copy(inputStream, filePath, REPLACE_EXISTING)` (LocalFileStorageService.save) will overwrite/create the target with 0 bytes and return normally — no exception. The endpoint reports `code:0` success to the frontend (XHR resolves on HTTP 200), the ProjectFile row's updatedAt/fileSize get touched as 'a real edit happened' (lines 498-511), and the user is told their file was saved/uploaded. A subsequent open or /text extraction then silently returns nothing, with no link back to the fact the original upload actually carried zero bytes.
+- 复现要点：POST /api/files/{fileId}/upload with Content-Type: application/octet-stream and an empty body (no X-File-Offset or offset=0) against an existing file record with write permission — response is 200 {code:0}, and the stored file is truncated to 0 bytes.
+
+### [HIGH] Proxy buffers entire upstream response into memory with no size cap, reachable via normal in-app link clicks
+
+- 位置：`backend/src/main/java/com/checkba/controller/BrowserProxyController.java:101`
+- 触发：Any GET /api/browser/proxy?url=... whose target returns a large body (a multi-hundred-MB or multi-GB PDF/video/zip/binary). This is not just an attacker path: the injected click-interceptor in inject() (line ~208, 'window.location.href=proxify(String(abs))') forces EVERY same-tab link click inside the proxied iframe — including plain download links to large files — through this same backend endpoint, so an ordinary user browsing a normal site and clicking a big-file download link drives it.
+- 后果：HttpResponse.BodyHandlers.ofByteArray() fully materializes the upstream body as a byte[] before any code sees it, then (for HTML) it is copied again into a String and again into the injected output string, and the whole byte[]/String is held until Spring finishes writing the ResponseEntity. There is no Content-Length check and no max-body-size enforcement anywhere in this class or in SsrfGuard. Since the backend is a single shared Spring JVM handling all users/tenants, one large-file proxy request can spike heap usage sharply; several concurrent large downloads (or one very large file) risk Ou
+- 复现要点：Open the in-app browser panel, navigate to any page with a large downloadable file (e.g. a public multi-hundred-MB PDF or installer), click the link in-page (not target=_blank). The click handler intercepts it and routes it through /api/browser/proxy, which will attempt to load the entire file into a Java byte[] before responding.
+
+### [HIGH] Idempotent-reinstall shortcut silently clears the revoked flag
+
+- 位置：`backend/src/main/java/com/checkba/service/pack/NativePackService.java:350`
+- 触发：1) Pack X v1.0.0 is installed and complete (.pack-complete present). 2) Platform revokes v1.0.0 via the revoked-list endpoint; syncRevoked() writes current.json={version:1.0.0, revoked:true} and deliberately keeps the files on disk ('不删本地文件，防误封丢数据'). 3) Anything re-triggers installAsync(X) for the same still-latest manifest version — e.g. PackAutoInstaller.checkAndInstall() on the next app restart (resourceReady()==false because isReady() is false while revoked), or the user clicking 'install' again from the UI. 4) doInstall() finds the .pack-complete marker already on disk for m.version() and
+- 后果：The platform's explicit revocation (used for security issues / bad packs) is silently undone on the very next reinstall/restart trigger, with no download, no log warning, and no user-visible signal that a revoked artifact was reactivated. isReady()/resourceReady() go back to true and the pack is served again as if never revoked.
+- 复现要点：Install a pack, then hand-edit its packs/<id>/current.json to {"version":"<installed>","revoked":true} (simulating syncRevoked), then call NativePackService.installAsync(id) (or restart with PackAutoInstaller enabled and the skill still enabled) — current.json comes back with revoked:false even though no bytes were re-verified against a revocation check.
+
+### [HIGH] VerificationCodeStore.verify() increments attempts via unsynchronized field mutation — lost updates let attackers exceed MAX_ATTEMPTS
+
+- 位置：`backend/src/main/java/com/checkba/service/auth/VerificationCodeStore.java:102`
+- 触发：Two or more threads call verify(scene, target, wrongCode) concurrently for the same key (e.g. an attacker fires several parallel guess requests, or a client retries in parallel). Both threads read the same Entry reference and independently execute `temp = entry.attempts; entry.attempts = temp + 1`, interleaved so one increment is lost.
+- 后果：The 5-attempt brute-force lockout on a 6-digit one-time code is not reliably enforced under concurrent load: the counter can undercount real failed attempts, letting more than MAX_ATTEMPTS guesses land against the same code before the entry is purged — silently weakening the anti-bruteforce guarantee the class's own docstring claims ('连续 5 次验错即作废').
+- 复现要点：Unit test: create VerificationCodeStore with a fixed clock, issue() one code, then spawn ~20 threads all calling verify(scene, target, "000000") (guaranteed wrong) concurrently via a CountDownLatch to force overlap; assert entry survives (is not removed) even though 20 >= MAX_ATTEMPTS(5) failed calls were made — demonstrates the counter under-reported failures.
+
+### [HIGH] Single-file move into staging area completely bypasses the free-tier quota gate
+
+- 位置：`backend/src/main/java/com/checkba/service/ProjectFileService.java:483`
+- 触发：A free-tier (limited()) user drags a single file at a time into the __staging_area__ folder — i.e. any use of the single-file drag/drop or single-move endpoint rather than the multi-select batch-move endpoint, which is the normal, most common client interaction for adding one file to staging.
+- 后果：The FREE_MAX_FILES (20) / FREE_MAX_BYTES (500MB) cap documented as the core invariant of the feature is never enforced for this path; a free-tier user can move an unlimited number of files, one at a time, into the staging area with zero quota errors, silently defeating the paywall the batch path enforces.
+- 复现要点：As a local-mode free-tier user, call PUT /api/projects/{projectId}/files/{fileId}/move repeatedly with parentId = the staging folder id, one file id per call. Each call succeeds regardless of how many files already sit in the staging folder or how large they are; only the multi-select 'batch move' UI path (calling batchMove) would ever return StageQuotaExceededException.
+
+### [HIGH] Removing a client member never revokes their access code — invitation.relatedUserId points to the wrong user
+
+- 位置：`backend/src/main/java/com/checkba/service/ProjectMemberService.java:111`
+- 触发：1) Lawyer invites a named client (inviteClient with clientName) or generates a generic code (inviteClient without clientName). 2) Client logs in via POST /api/auth/client-login supplying a displayName (the primary/non-legacy path per the code's own comment) — this creates user Y and adds ProjectMember(userId=Y). 3) Lawyer sees Y in the member list and calls DELETE /{projectId}/members/{Y}.
+- 后果：removeMember looks up the invitation by relatedUserId==Y, but the invitation's relatedUserId is X (the invite-time user) or the generic template user — never Y. The Optional is always empty, so invitation.revokedAt is never set. The access code stays live, and the just-removed client can immediately log back in with the same code (client-login re-validates via validateCode, which only checks revokedAt) and rejoin the project — exactly the scenario the code's own Chinese comments (ProjectMemberService.java:109-110 and ProjectInvitation.java:44-45) say they are trying to prevent, but do not actu
+- 复现要点：Invite a client, log in via /api/auth/client-login with a non-empty displayName, note the resulting user id in the members list, remove that member, then log in again with the same access code — login succeeds and the member reappears.
+
+### [HIGH] Upload success is judged by HTTP status only, ignoring the JSON error envelope — rejected/partial cloud ingests get permanently marked uploaded and are never retried
+
+- 位置：`backend/src/main/java/com/checkba/service/feedback/FeedbackUploadService.java:162`
+- 触发：An audio-only feedback row (no text) whose stored attachment file becomes unreadable/missing on disk before the 30-minute flush (any transient FS issue — nothing in this codebase deletes it, but the effect is reachable). upload() silently skips the missing file via `if (!Files.isRegularFile(p)) continue;` (line 155), sends an empty multipart body, and the cloud's ingest() throws IllegalArgumentException('empty feedback'), which the controller returns as HTTP 200.
+- 后果：upload() sees status==200 and returns true; flush() calls feedbackService.markUploaded(fb) (line 128), permanently setting uploaded=true even though the report was never actually stored in the cloud. It never reaches the optimizer's /pending queue, FeedbackResolutionSyncService only polls rows with uploaded=true so it will never revisit this row, and the user's own 'my feedback' view shows uploaded:true (looks sent) while the report is permanently gone.
+- 复现要点：Stub FeedbackUploadService.Transport to return status 200 with an error-coded JSON body (mirroring any of the ResponseEntity.ok(error(...)) branches in FeedbackIngestController); call flush() on a pending row and observe fb.isUploaded()==true afterward despite no real row existing server-side.
+
+### [HIGH] reconcileProject discards importFolder's truncated flag — background sync silently stops importing past 3000 entries with zero signal
+
+- 位置：`backend/src/main/java/com/checkba/service/LocalProjectService.java:157`
+- 触发：A local-root project folder grows past MAX_IMPORT_ENTRIES=3000 files/folders (realistic for a legal matter folder with scanned exhibits, correspondence, drafts). The watcher fires a reconcile (e.g. one new file dropped into Finder). importFolder walks the tree, hits the 3000 cap partway through, sets stats.truncated=true and TERMINATEs the walk — but reconcileProject never reads stats.truncated and ReconcileResult has no field to carry it.
+- 后果：Every subsequent Finder change (add/edit any file) re-triggers reconcile, which re-walks from the top, re-confirms the same ~3000 already-imported entries (no-op, since rowIndex matches them), hits the cap again before reaching newer files, and again silently drops them — with no log line and no API signal. Unlike openLocalFolder (which logs and returns truncated=true to the caller), the ongoing background sync path gives absolutely no indication that files are not being tracked. Files added beyond the cap never appear in the app's file tree, permanently, until someone manually reopens the fol
+- 复现要点：Seed a local-root project's folder with >3000 files (via a script), open it once (truncated=true logged/returned as expected), then add one more file via Finder. Watcher fires -> reconcileProject runs -> grep logs: no 'truncated' warning anywhere for this pass, and the new file (beyond the cap, depending on directory traversal order) never gets a ProjectFile row.
+
+### [HIGH] Swallowed exceptions from nested @Transactional createFolder/createOrUpdateFile/delete poison the ambient reconcile/import transaction, silently discarding the whole batch
+
+- 位置：`backend/src/main/java/com/checkba/service/LocalProjectService.java:316`
+- 触发：reconcileProject/importFolder are @Transactional; createFolder/createOrUpdateFile/delete are separate @Transactional service-bean methods (real Spring proxies, propagation REQUIRED) called from inside that same ambient transaction. If any of them throws a RuntimeException — e.g. createFolder's own IllegalArgumentException from the 'folder already exists' name-collision check (existsByProjectIdAndParentIdAndNameAndIdNot), which can legitimately fire when a Finder rename or a case-sensitivity/whitespace mismatch between the current rowIndex snapshot and disk produces a name the app thinks is new
+- 后果：The per-entry catch blocks were written to keep the scan going (correct intent: 'skip this bad entry, import the rest'), but they cannot undo the rollback-only flag once set. When reconcileProject/importFolder finishes and its own @Transactional proxy tries to COMMIT, Spring throws UnexpectedRollbackException instead — which propagates up to LocalRootWatchService.scheduleReconcile's catch(Exception e), logged only as a generic '对账失败' warning. Every file import and every soft-delete performed earlier in that same reconcile pass is rolled back, even though the code had already logged '对账完成: chan
+- 复现要点：In a local-root project with an existing DB row for folder 'Contracts' at some parent, arrange for importFolder's rowIndex lookup to miss it while the DB-level existsByProjectIdAndParentIdAndNameAndIdNot check still matches (e.g. via a name whose trim/case differs from what's stored — see the related duplicate-row finding for the exact mechanics), then add any unrelated new file elsewhere in the t
+
+### [HIGH] uploadFile writes the physical file before the DB transaction commits; a later DB failure orphans the storage blob on every retry
+
+- 位置：`backend/src/main/java/com/checkba/service/DdService.java:234`
+- 触发：A client uploads a file whose original filename (fully attacker/browser controlled via the multipart Content-Disposition header, unrelated to the sanitized `rawName` used only for the storage key) exceeds 256 characters, or any other constraint the ProjectFile insert can violate (e.g. a transient DB blip). The physical `save()` at line 234 has already completed successfully before this insert is attempted.
+- 后果：The DataIntegrityViolationException on the ProjectFile insert (or any later exception) rolls back the whole @Transactional method — the folder rows and ProjectFile row are gone — but the physical object already written to storage at `projects/{projectId}/client_uploads/{timestamp}_{name}` is never deleted (no compensating cleanup/try-catch around the DB steps). The client sees a 500 and, per normal UX, retries the upload; each retry generates a new `System.currentTimeMillis()`-based key and leaves another orphaned blob in the storage bucket. Silent, unbounded storage leakage with no correspond
+- 复现要点：POST /api/dd/items/{itemId}/upload with a multipart file part whose filename is a 300+ character string (most HTTP clients/curl allow this in the Content-Disposition header) → observe storage now contains the new object, but the response is a 500 and no ProjectFile/DdItem row was created/updated.
+
+### [HIGH] PDF redaction is line-scoped: a sensitive string that PDFTextStripper splits across writeString() calls is never matched, yet the page is still rasterized as if fully processed
+
+- 位置：`backend/src/main/java/com/checkba/service/SensitiveService.java:223`
+- 触发：A PDF where a sensitive token (phone number, ID number, email, address) is split across two separate writeString segments — e.g. a wrapped/justified line where the token straddles a line break, or a PDF whose glyph run is chunked mid-token by the renderer's word-spacing heuristics.
+- 后果：The split token is never seen as a whole by any SensitiveType regex, so no RedactionArea is recorded for it. Because processPdf unconditionally rasterizes every page to a flattened image afterward ("真删文字层" step) regardless of whether any redaction boxes were drawn there, the caller sees a normal-looking, apparently fully processed 脱敏 output file with no extractable text layer — creating false confidence that the document is safe — while the missed PII remains fully visible to the human eye in the rendered image.
+- 复现要点：Construct a PDF where, e.g., an 11-digit phone number is laid out so PDFBox's default word/line grouping breaks the token into two writeString calls (achievable with unusual letter-spacing or a table cell boundary mid-number); run desensitize with strategies=["PHONE"]; the output PDF still shows the phone number legibly in the rasterized page although the file is reported as successfully desensiti
+
+### [HIGH] DOCX redaction never touches headers, footers, footnotes/endnotes, or text boxes — sensitive data there survives untouched while the API reports success
+
+- 位置：`backend/src/main/java/com/checkba/service/SensitiveService.java:75`
+- 触发：Any real-world .docx that carries sensitive data outside the main body flow — e.g. a company letterhead header containing a phone number/address, or a footer with a case number, or a footnote citing a person's name/ID.
+- 后果：SensitiveController.desensitizeFile returns 200 with a newly registered '[已脱敏]' file, giving the user (a lawyer handling confidential material) the impression the document is safe to share, while PII in the header/footer/footnote is left completely unmasked in the output.
+- 复现要点：Create a .docx with a phone number only in the page header (Insert Header > type '联系电话:13800001111'), leave the body free of that number; call /api/sensitive/desensitize with strategies=["PHONE"]; open the resulting [已脱敏] file — the header phone number is unchanged.
+
+### [HIGH] Concurrent attachMaterial calls on list slots lose updates (silent material drop)
+
+- 位置：`backend/src/main/java/com/checkba/service/ShareholderMeetingService.java:405`
+- 触发：Two POST /api/shareholder-meeting/{checkId}/materials requests for slot=voteResult (or slot=other) with different fileIds arrive close together (e.g. user multi-selects several vote-result PDFs and the frontend fires one request per file, or two browser tabs). Each request independently calls get(checkId) -> reads the current voteResultFileIds JSON string -> appends its own fileId -> saves the whole entity. There is no @Version column on ShareholderMeetingCheck and no per-slot locking.
+- 后果：Whichever request's save() commits second overwrites the first request's write entirely (classic read-modify-write race on a single text column). One of the two attached vote-result files silently disappears from voteResultFileIds — the API call that attached it returned 200 with no error, but the file is not in the checklist and will be reported as a 'missing material' by start()/buildKickoffPrompt, with no indication anything went wrong.
+- 复现要点：Fire two near-simultaneous POST /api/shareholder-meeting/{checkId}/materials with body {slot:'voteResult', fileId:100} and {slot:'voteResult', fileId:101} against the same checkId; inspect voteResultFileIds afterward — it frequently contains only one of the two ids instead of both.
+
+### [HIGH] cninfo auto-fetch can leave an orphan/empty ProjectFile row when storage write fails after the DB row is already committed
+
+- 位置：`backend/src/main/java/com/checkba/service/ShareholderMeetingService.java:186`
+- 触发：fetchFromCninfo() successfully downloads a notice/resolution PDF from cninfo, then calls downloadAndAttach -> saveBytesAsProjectFile. createOrUpdateFile (via ProjectFileService.createFile, confirmed @Transactional and committed on return) inserts and commits the ProjectFile row first; the physical bytes are only written afterward by storageServiceFactory...save(). If that storage write throws (disk full, OSS/network timeout, permission error) — a realistic condition for a background PDF fetch — the exception propagates.
+- 后果：downloadAndAttach's catch(Exception) swallows the failure into the `errors` list ('下载失败 ...'), which is the intended fail-soft UX for the fetch itself, but the ProjectFile database row created by the already-committed createFile() call is never rolled back or cleaned up. A file entry (e.g. in '01-会议通知') now exists in the project file tree with a name and a reported size but no actual/complete content on disk, and it was never attached to the checklist (attachMaterial is only called after the storage save succeeds). The user sees a 'download failed' error yet also a broken, zombie file sitting 
+- 复现要点：Point the storage backend at a path that will fail on write (e.g. simulate OSS timeout or a read-only mount) while cninfo lookup itself succeeds; call POST /{checkId}/fetch-cninfo. Response reports errors containing '下载失败', but GET the project's file tree under 股东大会核查/.../01-会议通知 and observe an orphan file entry with no attached content.
+
+### [HIGH] TTS read-timeout on slow synthesis misreported as "component not installed"
+
+- 位置：`backend/src/main/java/com/checkba/service/TtsService.java:158`
+- 触发：Kokoro is installed and running, but synthesis of a longer document takes longer than the RestTemplate's 60s read timeout (buildRestTemplate() sets factory.setReadTimeout(60_000)), or the local service is transiently overloaded/slow. Spring's RestTemplate wraps both connect-refused AND java.net.SocketTimeoutException (read timeout) into the same ResourceAccessException type, so there is no way in this catch block to distinguish 'never started' from 'started but too slow this one time'.
+- 后果：User sees 'Local speech component is not ready: download it in Admin → Components' (a UI guidance flow keyed off FeatureNotConfiguredException, per TtsController/GlobalExceptionHandler) even though the component is present and working — they are sent to reinstall/redownload a component that isn't the actual problem, while the real fix (shorter text, retry, or raise the timeout) is never surfaced. This is exactly the 'API reports not configured when it actually failed for another reason' pattern.
+- 复现要点：With the local Kokoro service running, submit a long text (or throttle/slow the local service) such that /v1/audio/speech takes >60s to respond; observe the 'not configured, please download' message returned instead of a timeout/failure message.
+
+### [HIGH] ProjectInvitationRepository.findByProjectIdAndType has no DB uniqueness guarantee behind its Optional<T> contract — concurrent invite-link generation throws IncorrectResultSizeDataAccessException and permanently breaks that project's invite link
+
+- 位置：`backend/src/main/java/com/checkba/repository/ProjectInvitationRepository.java:12`
+- 触发：Two concurrent calls to the 'generate/get client invite link' endpoint for the same project (double-click in the UI, or two admins opening the invite dialog at nearly the same time) both execute findByProjectIdAndType and both see it empty (row not yet committed), so both branches fall through to create-and-save a new ProjectInvitation row with type=CLIENT_GENERIC. Two rows for the same (projectId, 'CLIENT_GENERIC') now exist permanently.
+- 后果：Spring Data executes single-entity/Optional derived queries via JPA's getSingleResult(), which throws NonUniqueResultException (translated to org.springframework.dao.IncorrectResultSizeDataAccessException: query did not return a unique result) when more than one row matches. Every subsequent call to inviteClient() (and any other code path hitting findByProjectIdAndType for that project) throws a 500 error — the invite-link feature is permanently broken for that project until someone manually deletes the duplicate row from the database; there is no retry or self-heal.
+- 复现要点：Fire two near-simultaneous POST requests to the invite-client-generic endpoint (clientName blank) for the same projectId, e.g. via curl -s & curl -s targeting the same project; inspect project_invitation table afterward for two rows with type=CLIENT_GENERIC and the same project_id, then call the endpoint again to observe the 500/IncorrectResultSizeDataAccessException.
+
+### [MEDIUM] Backfill can race the embedded HTTP listener at boot, so the very first request after upgrade can see the wrong (default) provider
+
+- 位置：`backend/src/main/java/com/checkba/service/platform/ExternalProviderBackfill.java:82`
+- 触发：Spring Boot's embedded web server (Tomcat) starts accepting TCP connections during context refresh, before ApplicationReadyEvent listeners run. This bean's backfill has no @Order and is one of several ApplicationReadyEvent listeners in the app (LocalRootWatchService, ChatModelFactory, AgentRunRecoveryService, TelemetryStartupReporter, DuplicateAutoTagCleanup also listen on the same event). A request that reaches OcrService/QichachaService/TushareService/MeetingTranscriptionService in the brief window between 'server accepting connections' and 'this listener having run' will call ExternalProvid
+- 后果：ExternalProviderResolver.resolve() falls back to ExternalServiceProvider.PLATFORM by default when no explicit setting row exists yet. For a legacy machine that actually has real BYOK credentials on disk (the exact scenario this whole class exists to protect), a request landing in this narrow startup window is billed to/routed through the platform gateway instead of the user's own paid-for subscription - a one-time, hard-to-reproduce 'first call after upgrade behaves differently than every call after it' defect, matching the audit's named failure family.
+- 复现要点：Not independently reproduced with a live timing test; flagged from documented Spring Boot embedded-container startup semantics plus the absence of any ordering/gating code between ApplicationReadyEvent listeners and request serving in this codebase.
+
+### [MEDIUM] Redirect-hop loop can hold an HTTP worker thread for up to ~150s per request with no aggregate timeout
+
+- 位置：`backend/src/main/java/com/checkba/controller/BrowserProxyController.java:84`
+- 触发：A target URL (or a chain reachable via its 3xx redirects) that is slow to respond but still within the per-hop 20s timeout, repeated across up to 5 hops (connect 10s + read 20s each).
+- 后果：CLIENT.send(...) is a synchronous, blocking call executed on the Spring MVC request-handling thread. Each hop can legitimately take close to connectTimeout(10s)+timeout(20s); with 5 hops the same controller thread can be held for on the order of 100-150s on a single request. Because there is no per-request overall deadline (only per-hop), a handful of concurrent requests to slow-but-legitimate (non-SSRF-blocked) external hosts can occupy a meaningful fraction of the servlet container's worker thread pool for minutes, degrading responsiveness of the whole backend for unrelated requests.
+- 复现要点：Point the proxy at a server you control that responds slowly (e.g. ~15s) on 4-5 chained 3xx redirects each pointing to the next slow endpoint; observe the /api/browser/proxy call and its underlying servlet thread remain blocked for the cumulative duration.
+
+### [MEDIUM] install() and uninstall() share one object monitor, so uninstalling an unrelated pack blocks on an in-progress multi-minute download
+
+- 位置：`backend/src/main/java/com/checkba/service/pack/NativePackService.java:321`
+- 触发：User A triggers install of pack 'litigation-visual' (large archive, slow mirror) via POST /api/packs/litigation-visual/install — installAsync hands it to the single-thread installer executor, which calls the synchronized install(packId), holding the NativePackService instance monitor for the whole download+extract (network reads use up to a 10-minute timeout per attempt, MAX_ATTEMPTS=3). While that is in flight, User A (or another admin session) calls POST /api/packs/some-other-pack/uninstall for a completely unrelated, already-installed pack.
+- 后果：uninstall() is invoked synchronously on the Tomcat request thread and must acquire the same 'synchronized(this)' monitor that install() is holding; the HTTP request blocks with no timeout for as long as the unrelated install keeps running (potentially tens of minutes on a slow/failing mirror). The 'uninstall' button just spins with no error and no indication that it is waiting on an unrelated pack's download, and the Tomcat worker thread is tied up the whole time.
+- 复现要点：Point ai.packs.base-urls at a slow/throttled endpoint, start install of pack A, then immediately call the uninstall endpoint for already-installed pack B from another request — observe the uninstall call/response not returning until A's install thread releases the monitor.
+
+### [MEDIUM] getUsernameFromSession swallows all exceptions and returns null, indistinguishable from 'no such user'
+
+- 位置：`backend/src/main/java/com/checkba/controller/AuthController.java:906`
+- 触发：Any transient failure inside userService.getUserById(userId) for a session that resolves to a real, valid userId — e.g. a momentary DB connection blip, a lazy-load/serialization exception, or any RuntimeException thrown while loading the User entity — on the very call other controllers use to stamp 'who did this' (per the file's own comment: 'Use DisplayName as creator name').
+- 后果：The bare `catch (Exception e) { return null; }` makes a genuine backend error return the exact same null as 'user truly not found' or 'no session'. Callers elsewhere in the codebase that use getUsernameFromSession to attribute uploads/actions to a creator name will silently record a blank/missing creator on the first (failing) call, then work fine on a retry — the precise 'first call returns nothing, second call works' shape called out in the audit brief, except here it additionally erases the actual error instead of surfacing it, so nothing in logs or the response distinguishes a real problem
+- 复现要点：Mock/force staticUserService.getUserById(userId) to throw a RuntimeException (e.g. temporarily break the DB connection) while userId is valid and non-null; call getUsernameFromSession(sessionId) and observe it returns null instead of propagating or logging the error, exactly as it would for an unknown user.
+
+### [MEDIUM] VerificationCodeStore.issue() has a check-then-act race on the resend cooldown and daily send cap
+
+- 位置：`backend/src/main/java/com/checkba/service/auth/VerificationCodeStore.java:64`
+- 触发：Two concurrent issue() calls for the same scene+target (e.g. user double-clicks 'send code', or a scripted client fires two requests within the same few milliseconds) both execute the cooldown/cap read before either has written its Entry/WindowCounter, so both pass the check.
+- 后果：Two verification codes/SMS or emails can be dispatched for the same target within the intended 60-second cooldown window, and the per-target daily cap (MAX_PER_TARGET_PER_DAY=10) can be exceeded by the size of the race window — defeating the anti-bombing guard the class exists to provide, and (for SMS) causing avoidable per-message gateway cost.
+- 复现要点：Unit test with fixed clock: fire two threads calling issue(scene, target) at the same instant via a barrier; assert both succeed (no IllegalArgumentException) despite RESEND_COOLDOWN not having elapsed between them.
+
+### [MEDIUM] Staging-area quota check is a check-then-act race with no locking — concurrent batch moves can both pass and jointly exceed the cap
+
+- 位置：`backend/src/main/java/com/checkba/service/quota/StageQuotaService.java:105`
+- 触发：Two concurrent batchMove requests targeting the same staging folder (e.g. a double-click/double-submit from the UI, or two browser tabs/sync clients moving files into the same project's staging area at nearly the same time), each moving files that individually stay under the cap but together exceed FREE_MAX_FILES or FREE_MAX_BYTES.
+- 后果：Both requests read the same pre-move count/bytes, both pass the newCount > FREE_MAX_FILES / newBytes > FREE_MAX_BYTES checks, and both commit — leaving the staging folder over the advertised free-tier cap with no error ever shown to the user, quietly defeating the quota this service exists to enforce.
+- 复现要点：From two clients (or a scripted double-submit), simultaneously send two batch-move requests into a staging folder that currently has 15 files (cap 20), each moving 4 distinct file ids. Both requests read count=15, both compute newCount=19 <= 20, both pass and commit, leaving the folder with 23 files, over the cap.
+
+### [MEDIUM] finish()/transcribe() endpoints have no double-submit guard, letting a repeated click race MeetingTranscriptionService.startTranscription()'s non-atomic status check-and-set into two parallel cloud submissions for one meeting
+
+- 位置：`backend/src/main/java/com/checkba/controller/MeetingRecordingController.java:89`
+- 触发：Two near-simultaneous calls to POST /api/meetings/{meetingId}/finish (e.g. one from the automatic call at recording end plus a client retry after a slow response) or two rapid clicks on a "重新提交转写" retry button while the meeting is FAILED/RECORDED both read the same pre-transition status before either write commits.
+- 后果：Both requests proceed to submit the same audio for transcription concurrently. For the BYOK tier this means two separate Aliyun Tingwu CreateTask calls (real API cost) racing to overwrite the same OSS object and the same `tingwuTaskId` column, silently orphaning one task (its result is never polled/collected and its billed usage is simply lost). For the platform tier it means two independent `/api/gateway/asr/submit` calls, each of which pre-debits Credits for the meeting — i.e. the user can be double-charged for a single transcription with no de-duplication.
+- 复现要点：With a meeting in RECORDED/FAILED status and platform-tier transcription configured, fire two concurrent POST /api/meetings/{meetingId}/transcribe requests (e.g. `curl ... & curl ... & wait`); observe two `gatewayTaskId` values are briefly in flight (only the last save wins in the DB) and that the platform gateway logs/charges two separate submissions for the one meeting.
+
+### [MEDIUM] Attachment validation failure mid-loop leaves an already-committed, context-less feedback row in the DB even though the caller is told the submission failed
+
+- 位置：`backend/src/main/java/com/checkba/service/feedback/FeedbackService.java:76`
+- 触发：A multi-file submission where an earlier attachment passes validation and a later one in the same request does not (e.g. 3 screenshots where the 3rd exceeds 20MB, or a 2nd voice note attached alongside a valid first one).
+- 后果：The user is told the whole submission failed and typically retries with a trimmed set, producing a second complete row. The first partial, context-less row (source=LOCAL, uploaded=false, status=NEW) is never flagged as an error anywhere — it silently sits in /api/feedback/mine and gets picked up by the next FeedbackUploadService.flush() cycle and shipped to the cloud/optimizer queue as if complete, minus the diagnostic context (backend log tail, runtime info) that makes the report actionable. The identical save-before-storeAttachments ordering exists in ingest() (line 186 vs line 188) on the c
+- 复现要点：Call FeedbackService.submit(userId, req, List.of(smallValidImage, oversizedImage)); the IllegalArgumentException propagates as expected, but a subsequent feedbackRepository.findByUserIdOrderByIdDesc(userId, ...) shows a row for this attempt with contextJson==null and the valid image already persisted on disk and in the attachment table.
+
+### [MEDIUM] Matter classification dedup flag is set before the async AI call succeeds, so any transient failure permanently blocks re-classification for that conversation
+
+- 位置：`backend/src/main/java/com/checkba/service/telemetry/MatterClassifierService.java:68`
+- 触发：First user message of a new conversation reaches classifyAsync (skill not matched, rollup enabled). classified.add() succeeds and marks the conversation as done. The async classify() then hits any transient failure — chatModelFactory.getChatModel() throws, the deepseek/OpenRouter call times out or 5xx's, network blip, or model quota exhausted (matches the exact 'external API reports failure or produces nothing' pattern already flagged elsewhere in this codebase's AI-provider issues).
+- 后果：The matter.classified event for that conversation is silently never produced — no retry is possible for the lifetime of the backend process, because `classified` (a ConcurrentHashMap.newKeySet() with no TTL/eviction) already contains the conversationId. On the cloud/server deployment this process can run for days or weeks, so a single transient AI-call failure permanently loses that conversation's matter-category telemetry with no error surfaced anywhere. Additionally, `classified` has no eviction/bound and grows by one entry per distinct conversationId for the process lifetime — a slow unboun
+- 复现要点：Stub/mock chatModelFactory.getChatModel(...) to throw on first invocation for conversation X, call classifyAsync twice for X (simulating the same conversation retried after the AI call recovers) — assert only one classify() attempt ever fires and matter.classified is never recorded even after the second call.
+
+### [MEDIUM] TelemetryUploadService only rolls up 'yesterday' each cycle — days skipped while the app wasn't running never get a rollup, silently losing that day's aggregated Tier-1 stats forever
+
+- 位置：`backend/src/main/java/com/checkba/service/telemetry/TelemetryUploadService.java:111`
+- 触发：This is a desktop app (Electron shell + local backend, per project docs) that isn't running 24/7 — a user closes the app and doesn't reopen it for, say, 4 days (a long weekend). On the next launch, onStartup() fires sync() which rolls up only 'yesterday' relative to the new launch date. The 3 earlier days in between (which have real telemetry_event rows sitting in the DB, since TelemetryService.record() always writes locally regardless of rollup schedule) never get a TelemetryDailyRollup row created for them at all.
+- 后果：Those skipped days' aggregated counts (ai.turn outcomes, tool usage, skill usage, matter categories, token totals) are never rolled up and therefore never uploaded — permanent silent loss of that day's Tier-1 anonymous stats, with no error, no log line, and no retry mechanism (the 'findByUploadedFalseAndDateAfter(30 days)' backlog-retry logic in uploadPendingRollups() only helps rollup ROWS that were already created but failed to upload over HTTP — it does nothing for days whose rollup row was never created in the first place).
+- 复现要点：Insert telemetry_event rows for date D-3 (and none newer for D-3 through D-1) without ever calling rollupFor(D-3). Advance system clock to D, call TelemetryUploadService.sync(). Assert: rollupRepository.findByDate(D-3) is empty and D-3's events are never represented in any uploaded payload.
+
+### [MEDIUM] Migration's mid-copy re-tally check cannot catch a same-size in-place file modification during the copy window
+
+- 位置：`backend/src/main/java/com/checkba/service/storage/StorageLocationService.java:135`
+- 触发：A multi-minute tree copy (large project storage) is running for `migrate()`, while a document under the source root is open and autosaves shortly after its file has already been walked/copied by copyTree, producing new content of identical byte length.
+- 后果：The migration reports success ('迁移校验未通过' is never thrown) and the pointer is switched to the target. The target directory now contains a stale copy of that one file (pre-autosave content) while the source (kept as backup) has the newer content — the user's most recent edit for that document silently does not exist at the new (now active) storage location, with no error surfaced.
+- 复现要点：Hard to force deterministically in a unit test without controlling autosave timing/content size, but reachable: start a migration on a large tree, and within the copy window overwrite an already-copied source file with same-length different content (e.g. `echo -n "1234" > f` then `echo -n "5678" > f` after it's been copied) — migration completes successfully with source and target diverging on tha
+
+### [MEDIUM] Case-only rename on macOS's default case-insensitive filesystem creates a permanent duplicate ghost folder row that reconcile's deletion sweep can never clean up
+
+- 位置：`backend/src/main/java/com/checkba/service/LocalProjectService.java:168`
+- 触发：Project's localRoot lives on the default macOS APFS volume (case-insensitive, case-preserving — the standard install format). A user renames a tracked folder purely by case in Finder, e.g. 'Docs' -> 'docs' (same inode, no content change). The watcher fires a reconcile.
+- 后果：importFolder's rowIndex lookup uses a case-sensitive Java HashMap key ('P/Docs' stored vs 'P/docs' looked up), so it does NOT recognize 'docs' as the existing row — it calls createFolder and mints a brand-new ProjectFile row for the same physical directory, and any files inside get (correctly) reparented under this new row. Meanwhile the deletion sweep for the STALE old-cased row computes physical = root.resolve('Docs') and calls Files.exists() — which succeeds on the case-insensitive filesystem because 'Docs' still resolves to the very same (now renamed) directory entry. So the stale row is n
+- 复现要点：Open a local-root project on a stock macOS APFS volume. Create/import folder 'Docs' via Finder, let it sync (DB row 'Docs' created). In Finder, rename it to 'docs' (case only). Trigger any watcher event (add a file elsewhere). Inspect project_file table for that project/parent: two active rows exist ('Docs' and 'docs'), and the 'Docs' row is never soft-deleted on any later reconcile.
+
+### [MEDIUM] ensureFolder is a check-then-create race with no DB unique constraint — concurrent uploads into a not-yet-existing shared folder can duplicate folders or spuriously fail
+
+- 位置：`backend/src/main/java/com/checkba/service/DdService.java:261`
+- 触发：Two client uploads for two different DdItems that share the same not-yet-created ancestor folder (e.g. two sibling checklist items both being uploaded to for the first time, common when a client bulk-uploads all requested documents at once) hit uploadFile → ensureFolder concurrently before either transaction commits.
+- 后果：Depending on timing, either: (a) both `createFolder` calls pass their existsBy check and both commit, producing two duplicate folders with the same projectId/parentId/name in the file tree (later lookups via findByProjectIdAndParentIdAndName return whichever JPA happens to pick, so files can end up split across the two duplicates and appear to disappear from the folder the user is looking at), or (b) the second request's createFolder throws "该文件夹下已存在同名文件夹" (IllegalArgumentException) after the first commits, so the second legitimate concurrent upload fails with a confusing 'folder already exist
+- 复现要点：Fire two concurrent POST /api/dd/items/{itemA}/upload and /api/dd/items/{itemB}/upload requests where itemA and itemB are siblings under the same not-yet-materialized ancestor folder — under load/race timing, observe either duplicate folder rows for the same name/parent, or one of the two requests failing with '该文件夹下已存在同名文件夹' despite being a legitimate first-time upload.
+
+### [MEDIUM] BANK_CARD / ID_CARD digit-run patterns over-match generic long numeric identifiers, silently corrupting non-PII content
+
+- 位置：`backend/src/main/java/com/checkba/model/SensitiveType.java:23`
+- 触发：Select strategies=["BANK_CARD"] or ["ID_CARD"] on a legal document containing unrelated long numeric identifiers of the same length — case/docket numbers, filing reference numbers, tracking numbers, invoice numbers, or concatenated timestamps, which are common in Chinese legal filings.
+- 后果：replaceSensitiveData/replaceInParagraph masks these unrelated numbers as if they were bank cards or ID numbers (e.g. a 18-digit court case reference becomes 'xxxxxx********xxxx'), corrupting document content that must remain intact for the document to be usable/citable, without any indication to the user that a false positive occurred.
+- 复现要点：Desensitize a document containing an 18-digit non-ID numeric string (e.g. a filing number '2026010112345678901' trimmed/adjusted to 18 digits) with strategies=["ID_CARD"]; observe it gets masked as an ID card despite not being one.
+
+### [MEDIUM] Material lookups ignore soft-delete, so a trashed/purged file is silently treated as still attached
+
+- 位置：`backend/src/main/java/com/checkba/service/ShareholderMeetingService.java:304`
+- 触发：A material file (notice/resolution/template/voteResult/other) that was attached via attachMaterial is later moved to trash (isDeleted=true) or hard-deleted from the project's file manager elsewhere in the app — ProjectFileService has no awareness of ShareholderMeetingCheck and never calls detachMaterial when a file is deleted. findFiles/copyIntoFolder use projectFileRepository.findById(id), a plain JPA lookup that does not filter on isDeleted (every other repository method in this file's call graph that needs 'live' files explicitly uses ...AndIsDeletedFalse variants; findById is not one of th
+- 后果：start() will keep treating the trashed file as a present material (it will not appear in the 'missing materials' warning in the kickoff prompt), and copyIntoFolder will attempt to copy/reference it. If the file was only soft-deleted this is misleading but often harmless; if it was later purged (storage bytes actually removed), the batchCopy step or the AI's subsequent extract_file_text on that fileId will fail, and the checklist gave no warning that the material was actually gone — contradicting the explicit missing-material UX this code otherwise implements carefully for null slots.
+- 复现要点：Attach a file as slot=notice, then soft-delete that file via the normal file-trash endpoint, then call POST /{checkId}/start. The kickoff prompt lists the trashed file under '股东大会通知' as if it were a valid material, with no '缺失材料' warning for it.
+
+### [MEDIUM] ensureFolder has a TOCTOU race that can create duplicate workpaper folders on double-submit
+
+- 位置：`backend/src/main/java/com/checkba/service/ShareholderMeetingService.java:147`
+- 触发：Two calls to start() (or fetch-cninfo, which also calls ensureWorkpaperFolders) for the same checkId run close together — e.g. a user double-clicks the '开始核查' button before the UI disables it, or a flaky network causes the frontend to retry the POST. Both requests race through ensureFolder's check-then-create for the same root/company folder / same sub-folder name; createFolder's own duplicate guard (existsByProjectIdAndParentIdAndNameAndIdNot) is a separate, non-atomic SELECT-then-INSERT with no DB unique constraint on (projectId, parentId, name).
+- 后果：Both requests can pass the existence check before either commits its INSERT, producing two folders with the identical name (e.g. two '01-会议通知' folders) under the same parent. Subsequent copyIntoFolder calls may then split copies of the same material across the two duplicate folders, and check.workpaperFolderId ends up pointing at whichever folder the second start() call happened to resolve to — silently fragmenting the workpaper structure with no error surfaced to the user.
+- 复现要点：Fire two concurrent POST /{checkId}/start requests for a check whose workpaper folders don't exist yet; inspect the project's file tree — two sibling folders with the same name (e.g. duplicate '02-董事会决议') can appear under the same parent.
+
+### [MEDIUM] Deleting a FILE-type clipboard item never removes the underlying blob
+
+- 位置：`backend/src/main/java/com/checkba/service/ClipboardService.java:168`
+- 触发：User pastes/saves a file (image, etc.) into the clipboard history (saveFile stores a blob via StorageService.save under clipboard/{userId}/{uuid}), then deletes that clipboard entry via DELETE /api/clipboard/{id}.
+- 后果：Only the DB row is removed; the object in StorageService (local disk or OSS/S3) at storagePath is never deleted (StorageService.delete(fileId) exists and is never called from ClipboardService.delete). Every deleted file-type clipboard item leaks its blob permanently, causing unbounded storage growth for a feature the maintainer will not see until disk/bucket usage becomes a problem.
+- 复现要点：POST a file to /api/clipboard/file, note the stored path from meta, then DELETE /api/clipboard/{id}; the object remains present in storage (verifiable via StorageService.exists(path) or by inspecting the storage backend) after the DB row is gone.
+
+### [MEDIUM] resolveUserId writes to DB on every single device-token-authenticated request
+
+- 位置：`backend/src/main/java/com/checkba/service/DeviceTokenService.java:48`
+- 触发：Any request from a cloud-connected desktop/team client that authenticates via device token (X-Session-Id starting with 'awdt_') — this is resolved by AuthController.getUserIdFromSession, which every controller calls for identity resolution, including GET/read-only endpoints and ActivityLogController itself.
+- 后果：Every single API call from a device-token client (not just logins) triggers a synchronous SELECT+UPDATE on the device_token row, unconditionally, with no throttling/coalescing (e.g. update at most once per minute). A client polling frequently (mobile sync relay, activity logging, editor autosave, etc.) turns every read request into a write, multiplying DB write load and lock contention on that row; under concurrent requests from the same device this also causes lost-update races on lastUsedAt (benign for that field alone, but demonstrates the write is not guarded/batched).
+- 复现要点：Issue a device token via POST /api/auth/device-token, then hit any endpoint (e.g. GET /api/activity/history) repeatedly with X-Session-Id=<token>; each call performs a DB write (verifiable via query logging) purely to resolve identity.
+
+### [MEDIUM] user_activity_log has no retention/cleanup — grows without bound forever
+
+- 位置：`backend/src/main/java/com/checkba/service/UserActivityLogService.java:21`
+- 触发：Frontend utils/activityTracker.js fires POST /api/activity/log on routine actions (page views, file open/close) for every active user, continuously, for the lifetime of the product.
+- 后果：The table has no TTL, no archival job, and no @Scheduled purge anywhere in the codebase (grepped all @Scheduled usages — none touch UserActivityLog). Row count grows monotonically with total historical usage across all users, not just active ones; there is no per-user cap on stored rows (only the read path caps results returned via findTop500...). Over time this becomes an unbounded table that inflates backup size, slows full scans/maintenance, and — since metaInfo is an unbounded TEXT column supplied by the client with no length validation in the controller/DTO — makes worst-case row/table si
+- 复现要点：Call POST /api/activity/log repeatedly (or let normal usage run for months); table row count only increases, no code path ever deletes rows.
+
+### [MEDIUM] TOCTOU race in createOrUpdateVariable: concurrent saves with the same name violate the unique constraint and surface as a generic server error
+
+- 位置：`backend/src/main/java/com/checkba/service/ProjectVariableService.java:25`
+- 触发：Two concurrent POST /api/variables (or /api/variables/user, /api/file-variables) requests for the same (projectId,name) / (userId,name) / (fileId,name) — e.g. a double-click on Save, or two browser tabs editing the same project's variable list at once. Both requests execute findByProjectIdAndName and see no existing row (each call is its own auto-committed transaction with no locking), so both fall into the insert branch.
+- 后果：The second insert violates the DB unique constraint (project_variables(project_id,name), user_variables(user_id,name), file_variables(file_id,name)) and throws DataIntegrityViolationException. This isn't handled by any specific @ExceptionHandler in GlobalExceptionHandler, so it falls through to the generic Exception handler, which returns HTTP 200 with code=1 and the opaque message "服务器内部错误" — one of the two user-visible saves silently fails with a generic error instead of being treated as an update, even though logically it should just overwrite the value.
+- 复现要点：Fire two near-simultaneous POST /api/variables requests with the same projectId+name and no existing row for that name; the second response comes back as {code:1, message:"服务器内部错误"} instead of succeeding as an update.
+
+### [MEDIUM] POST /api/cloud/connect NPEs on missing serverUrl/username/password/deviceName instead of validating
+
+- 位置：`backend/src/main/java/com/checkba/controller/CloudController.java:56`
+- 触发：POST /api/cloud/connect with a JSON body missing any one of serverUrl/username/password/deviceName (e.g. {"serverUrl":"https://x"} with no username/password).
+- 后果：Falls through to GlobalExceptionHandler's generic Exception handler, returning {code:1, message:"服务器内部错误"} — the lawyer sees an unhelpful generic error instead of a field-specific validation message, and it's logged at ERROR as an unexpected server fault for what is really a client input problem.
+- 复现要点：curl -X POST http://localhost:PORT/api/cloud/connect -H 'X-Session-Id: <valid>' -H 'Content-Type: application/json' -d '{"serverUrl":"https://cloud.example.com"}' -> HTTP 200 body {code:1, message:'服务器内部错误'} instead of a field-specific validation message.
+
+### [MEDIUM] POST /api/cloud/projects/{id}/members NPEs when username is omitted
+
+- 位置：`backend/src/main/java/com/checkba/controller/CloudController.java:201`
+- 触发：POST /api/cloud/projects/{projectId}/members with a body that has no "username" key (e.g. {} or {"role":"PARTICIPANT"}) from a member with write permission.
+- 后果：requireRemoteBinding()/connectionOf() DB lookups already ran (no side effect), then Map.of() throws NPE, caught only by the generic Exception handler -> {code:1, message:"服务器内部错误"}. User gets a generic server-error toast instead of a username-required message.
+- 复现要点：curl -X POST http://localhost:PORT/api/cloud/projects/123/members -H 'X-Session-Id: <write-member>' -H 'Content-Type: application/json' -d '{}' -> generic error instead of a username-required validation message.
+
+### [MEDIUM] No reconciliation of tasks left in PENDING/PROCESSING after a service crash or restart
+
+- 位置：`pptx-service/backend/services/task_manager.py:68`
+- 触发：The pptx-service process is restarted (deploy, crash, OOM-kill, container restart) while one or more Task rows are in status 'PENDING' or 'PROCESSING'. active_tasks is an in-memory dict local to the TaskManager instance and is lost on restart; nothing in this file, and nothing found elsewhere in backend/ (no startup hook, no scheduler) scans for and reconciles orphaned PENDING/PROCESSING Task rows on boot.
+- 后果：After restart, those Task rows remain permanently in PENDING/PROCESSING in the database even though no worker is actually running them. Any UI polling that task_id spins forever with no error, no timeout, and no way to recover other than the user noticing and starting a brand-new task/project state manually.
+- 复现要点：1) Submit any background task (e.g. POST that calls task_manager.submit_task for generate_images_task). 2) Kill/restart the pptx-service process mid-task (simulating a crash or deploy). 3) Restart the service. 4) GET the task status endpoint for that task_id: it still reports 'PROCESSING' indefinitely, even though the executor that was running it no longer exists.
+
+### [LOW] Interrupt during a gateway HTTP call is silently converted into a retry instead of propagating
+
+- 位置：`backend/src/main/java/com/checkba/service/platform/HttpPlatformGatewayTransport.java:54`
+- 触发：A thread executing a platform gateway call (e.g. during app/executor shutdown, or a request-scoped thread being cancelled) gets interrupted while HttpClient.send() is blocked waiting on the response.
+- 后果：InterruptedException is indistinguishable from any other NETWORK_FAILURE at the PlatformGatewayClient layer, so postJson()/getJson() will immediately fire a second outbound HTTP call with the same idempotency key on a thread whose owner asked it to stop - the retry can block for up to timeoutSeconds more, delaying graceful shutdown, and the interrupted status is set but never checked before that second blocking call is issued.
+- 复现要点：Interrupt a thread mid-flight inside PlatformGatewayClient.postJson()/getJson() (e.g. via executor.shutdownNow() while a gateway call is in progress) and observe a second HTTP request being sent instead of the call aborting immediately.
+
+### [LOW] syncRevoked() has a read-modify-write race with a concurrent install that can revert current.json to a stale, pruned version
+
+- 位置：`backend/src/main/java/com/checkba/service/pack/NativePackService.java:837`
+- 触发：Pack X is installed at v1.0.0. A background syncRevoked() run (startup thread or the daily @Scheduled job) reads current.json and captures installed="1.0.0" for a revoked-list entry targeting v1.0.0. Concurrently, the single-thread installer finishes an in-flight upgrade to v2.0.0 for the same pack, calling writeCurrent(id, "2.0.0", false) and pruneOtherVersions(id, "2.0.0") (which deletes the v1.0.0 directory). syncRevoked() then executes its own writeCurrent(id, "1.0.0", true), using the stale 'installed' value captured before the upgrade.
+- 后果：current.json is overwritten to point at version 1.0.0 with revoked=true, even though 1.0.0's directory has just been deleted by pruneOtherVersions and the actually-installed 2.0.0 is not revoked. currentVersionDir() short-circuits on revoked=true, so the freshly-upgraded pack silently goes from READY to unavailable, and even after this bug is otherwise fixed, next repair would point at a version directory that no longer exists on disk.
+- 复现要点：Hard to reproduce deterministically without instrumentation because the window is a few milliseconds of local file I/O with no network call in between; would need to inject a delay between readCurrent and writeCurrent in syncRevoked (e.g. via a test subclass) while a concurrent install() finishes an upgrade for the same pack id.
+
+### [LOW] addMember's duplicate-check race surfaces as a generic "服务器内部错误" instead of the intended "用户已在项目中" message
+
+- 位置：`backend/src/main/java/com/checkba/service/ProjectMemberService.java:63`
+- 触发：Two concurrent POST /{projectId}/members requests adding the same username to the same project (double-click "添加成员", or two admins racing to add the same user).
+- 后果：The first request succeeds; the second gets a generic `{code:1, message:"服务器内部错误"}` instead of the accurate `{code:1, message:"用户已在项目中"}` that the same request would get if it ran a few milliseconds later — a misleading error that looks like a server fault rather than "already added", and the real exception detail is swallowed (only logged server-side per GlobalExceptionHandler's `handleException`).
+- 复现要点：Fire two near-simultaneous POST /{projectId}/members with the same username/role for a project the user is not yet in; one returns the friendly duplicate message, the other (depending on timing) returns code=1 "服务器内部错误".
+
+### [LOW] Ingest quota check-then-insert is not atomic — concurrent submissions can both pass the daily cap
+
+- 位置：`backend/src/main/java/com/checkba/service/feedback/FeedbackIngestGuard.java:76`
+- 触发：Two or more concurrent /api/feedback/ingest requests from the same installId (or from different installs near the global 2000/day cap) arrive close enough that both read the same pre-insert count and both pass the check before either row commits.
+- 后果：The per-install and global daily caps — the guard's sole documented defense for this unauthenticated public endpoint — can be exceeded by the size of the race window, undermining the abuse-mitigation the class comment calls out for burst scenarios ('a version just shipped and everyone reports the same crash at once').
+- 复现要点：Fire N parallel POST /api/feedback/ingest requests from the same installId, N > perInstallDaily, just as that install's daily count sits at perInstallDaily-1; observe more than perInstallDaily rows land for that install that day.
+
+### [LOW] OptimizerMailer.send() can re-send to already-mailed recipients on retry after a partial failure
+
+- 位置：`backend/src/main/java/com/checkba/service/optimizer/OptimizerMailer.java:72`
+- 触发：`optimizer.mail.to` configured with 2+ recipients on different channels (e.g. one domestic, one global, matching the class-level comment about mixed-channel recipients); `mailRouter.send()` succeeds for the first recipient but throws for the second (channel outage, invalid address, etc.).
+- 后果：The exception propagates out of `send()`/`notify()` into `OptimizerNotifyRouter.notify()`, which is caught by `OptimizerAgentService.notifyOrFail()` and turned into a FAILED/retry (status reverts to NEW if attempts remain). Since no per-recipient sent-state is persisted, the next scheduled run re-invokes `send()` for the same feedback item and re-mails every configured recipient, including the one who already received it — a duplicate email, not lost data, but a visible inconsistency the maintainer may act on twice.
+- 复现要点：Configure `optimizer.mail.to=a@domestic.example,b@global.example` with one channel misconfigured; run the optimizer twice for the same low-confidence feedback item; observe `a@` receives two emails while `b@` never receives one until the misconfigured channel is fixed.
+
+### [LOW] TelemetryService's writer executor is documented as bounded-with-drop but is actually an unbounded queue, so a slow DB stalls telemetry into unbounded memory growth instead of dropping events
+
+- 位置：`backend/src/main/java/com/checkba/service/telemetry/TelemetryService.java:41`
+- 触发：Any sustained period where repository.save(TelemetryEvent) (the single-threaded consumer in persist()) is slower than the producer rate — e.g. a busy legal-tech session generating many ai.tool/editor.action events per second while the DB is momentarily contended by a large document save, a version-control checkpoint write, or disk I/O pressure.
+- 后果：Rather than the documented 'queue full → drop', queued Runnable tasks (each holding a Map<String,Object> and an Instant) accumulate without bound in the executor's internal LinkedBlockingQueue, growing backend heap usage for as long as the stall lasts. This contradicts the class's own stated invariant, and the dropped-event self-monitoring counter (droppedCount()) under-reports backlog since the intended 'drop when full' path never triggers — the design's overload-safety guarantee doesn't actually exist in the implementation.
+- 复现要点：Instrument persist() with an artificial delay (simulate slow DB), fire thousands of TelemetryService.record() calls in a tight loop, and observe the executor's internal queue size grow unbounded rather than the calls ever hitting a RejectedExecutionException / drop path.
+
+### [LOW] MAX_IMPORT_DEPTH hard cutoff silently drops deeply nested files with no truncated flag or log, unlike the entry-count cap
+
+- 位置：`backend/src/main/java/com/checkba/service/LocalProjectService.java:286`
+- 触发：A local-root project's folder hierarchy exceeds 20 levels of nesting from the root (plausible for legal matter structures organized by Matter/Year/Party/Round/Draft/Version/Exhibit/Sub-exhibit, or a folder that itself contains a deeply-nested synced cloud-drive mirror).
+- 后果：Files.walkFileTree simply stops descending past depth 20 — preVisitDirectory/visitFile are never invoked for anything beyond that, with no branch in the visitor ever executing for the truncation (unlike the MAX_IMPORT_ENTRIES cap, which explicitly sets stats.truncated=true and logs via the caller). Files that deep are never imported, never appear in the file tree, and there is no flag or log anywhere indicating the scan stopped early for this reason — a maintainer or user has no way to distinguish 'folder fully synced' from 'silently cut off at depth 20'.
+- 复现要点：Create a local-root project folder with a chain of 21+ nested single-child directories with a file at the bottom, open the project or trigger a reconcile, and confirm the deepest file/folder never gets a ProjectFile row and no log or truncated indicator anywhere reflects why.
+
+### [LOW] Task create casts JSON title without a type guard, turning a bad request into a masked 500-style error
+
+- 位置：`backend/src/main/java/com/checkba/controller/TaskController.java:66`
+- 触发：POST /api/tasks with a JSON body where title is a non-string JSON value, e.g. {"projectId":1,"title":123,"dueDate":"2026-08-20"}.
+- 后果：The cast throws ClassCastException, which is not an IllegalArgumentException, so it skips GlobalExceptionHandler's IllegalArgumentException branch (which would have returned a clean "标题不能为空"-style message) and instead falls into the catch-all Exception handler: the response becomes code=1, message="服务器内部错误", and the real cause (bad title type) is hidden from the client while an ERROR-level stack trace is logged for what is really a routine validation failure. This is the same 'root cause masked behind a generic failure' shape the maintainer flagged, just for task title instead of an external A
+- 复现要点：curl -X POST /api/tasks -H 'X-Session-Id: <valid>' -H 'Content-Type: application/json' -d '{"projectId":1,"title":123,"dueDate":"2026-08-20"}' → code=1, message=服务器内部错误, instead of a title-specific validation message.
+
+### [LOW] device_token rows never expire or get cleaned up, including revoked/dangling tokens
+
+- 位置：`backend/src/main/java/com/checkba/service/DeviceTokenService.java:32`
+- 触发：Repeated device-token issuance (e.g. a client that re-issues a token on every reconnect/reinstall instead of reusing an existing one, or a user provisioning many devices over time) with no server-side cap on tokens per user and no expiry/idle-timeout field on DeviceToken.
+- 后果：device_token table grows without bound and has no automatic idle-expiry — a token that is never explicitly revoked via DELETE /api/auth/device-token/{id} remains valid and stored forever, unlike UserSessionService which has an @Scheduled cleanup. This is a slow-burn growth/staleness issue rather than an acute failure, but is a genuine gap compared to session cleanup elsewhere in the same auth subsystem.
+- 复现要点：Issue several device tokens over time via /api/auth/device-token without ever calling the revoke endpoint; rows persist indefinitely regardless of use.
+
+### [LOW] POST /api/cloud/accept and /projects/{id}/share NPE/ClassCastException on missing or non-numeric connectionId/remoteProjectId
+
+- 位置：`backend/src/main/java/com/checkba/controller/CloudController.java:98`
+- 触发：POST /api/cloud/accept or /api/cloud/projects/{id}/share with a JSON body missing connectionId (unboxing null Number -> NPE) or where connectionId is sent as a JSON string instead of a number (ClassCastException).
+- 后果：Unhandled exception falls to the generic Exception handler, returning a generic '服务器内部错误' instead of a targeted 'connectionId missing' message — same silent-diagnosis loss as the other two findings, lower severity since it's an authenticated same-origin endpoint less likely to see a malformed body outside a client bug.
+- 复现要点：curl -X POST http://localhost:PORT/api/cloud/accept -H 'X-Session-Id: <valid>' -H 'Content-Type: application/json' -d '{"remoteProjectId":5}' (missing connectionId) -> generic error.
+
+### [LOW] AccountController.usage(): a malformed ledger entry from the website discards the already-computed local usage stats too
+
+- 位置：`backend/src/main/java/com/checkba/controller/AccountController.java:277`
+- 触发：The website's /api/account/ledger response has an `entries` array containing a non-object element for one connected account — a contract drift or website-side bug emitting a different shape than documented.
+- 后果：ClassCastException is not an AccountException, so it is NOT caught by the local `catch (AccountException e)` in platformUsage() — it propagates out of usage(), discarding the `data.put("local", ...)` value already computed correctly, and the whole /api/account/usage call fails with a generic error even though local TokenUsage stats were fine and only the platform ledger was malformed.
+- 复现要点：Cannot repro without controlling the website's response; inferred from code path — would need the ledger endpoint to return a non-object element in `entries`.
+
+## AI 编排与工具（46）
+
+### [HIGH] Hand-rolled JSON escaping drops control characters, corrupting SSE payloads whenever LLM output contains a raw tab/control char
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/AgentStreamHandler.java:565`
+- 触发：The model streams a token containing a literal U+0009 TAB (or any other control char < 0x20 other than \n/\r) — very common when the LLM emits a code block or a tab-indented table inside a normal chat answer or inside an <artifact> block. escapeJson only escapes backslash, double-quote, \n and \r; every other JSON-illegal control character (tab, form-feed, etc.) passes through unescaped into the hand-built JSON string literal.
+- 后果：The resulting SSE data payload is not valid JSON. Frontend (frontend/src/composables/useAgentStream.js) does `JSON.parse(dataStr)` inside a try/catch: for `text_delta` the catch falls back to `processTextStream(dataStr)`, which injects the *raw, still-JSON-wrapped* string (e.g. literally `{"content":"...\t..."}`) into the chat bubble as visible text — the user sees garbled JSON/braces mixed into the answer. For the `artifact` event there is no such fallback: the catch only does `console.error(...)` and the artifact is silently dropped — the artifact widget (task list / implementation plan) nev
+- 复现要点：Have the assistant stream an answer containing a tab character (e.g. ask it to reproduce a tab-indented code snippet, or trigger a task_list/implementation_plan artifact whose markdown content contains a literal tab) and observe the SSE frame for text_delta/artifact is malformed JSON; frontend either shows raw `{"content":...}` text or silently drops the artifact.
+
+### [HIGH] tryExtractJsonObjectArgs hijacks any call whose argument text merely contains '({' ... '})', silently replacing all real arguments with a bogus lenient-JSON parse of that substring
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/XmlToolCallParser.java:303`
+- 触发：Any tool call whose string argument happens to contain a literal '(' immediately followed by '{' and, later in the same code block, '}' immediately followed by ')' with something JSON-object-shaped in between. Example: doc_insert_at_cursor(text="def foo(x): return x({a: 1})") — inserting a code/formula snippet into a legal document is plausible. Verified with the project's actual hutool-all 5.8.26 jar that JSONUtil.parseObj("{a: 1}") succeeds and returns {"a":1} (hutool tolerates unquoted keys), so this path executes successfully rather than throwing and falling back.
+- 后果：The real argument ("text", the code snippet the user wanted inserted) is discarded entirely; the tool is invoked with args {"a":1} instead. doc_insert_at_cursor's 'text' parameter arrives null/missing, so either nothing is inserted or an NPE/empty content is silently produced while a SUCCESS status is shown to the user — the document ends up missing the content the user asked the AI to insert, with no error surfaced in the chat.
+- 复现要点：Call parseSingle("doc_insert_at_cursor(text=\"def foo(x): return x({a: 1})\")") directly (or via a model emitting this <tool_code>) and observe ParsedCall.argsJson() is {"a":1} rather than containing the 'text' key.
+
+### [HIGH] pluginToolCache never invalidated on plugin rescan/update/uninstall — stale tool bean+method keeps executing after a plugin is updated or replaced
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/ToolRegistry.java:250`
+- 触发：User calls a plugin tool once (any AI turn invoking e.g. `qichacha_query`), so ToolRegistry.pluginToolCache caches {beanA, methodA} for that name. The plugin author then ships a bug-fixed version under the SAME plugin id / tool name via PluginMarketService.installFromMarket (deletes old plugin dir, writes the new JAR, then calls pluginService.markDisabledBeforeLoad(id) + pluginService.rescan()). rescan() clears and rebuilds PluginService.pluginTools/toolSpecifications/toolToPluginId with a NEW bean instance from the reloaded JAR, but never touches ToolRegistry.pluginToolCache — no caller anywh
+- 后果：The AI keeps executing the plugin's PRE-update (or even pre-uninstall) code indefinitely until the JVM process restarts, even though PluginService's own bookkeeping (enabled state, permission manifest via toolToPluginId) has moved on to the new version. A user who 'installs the fix' from the plugin marketplace sees the exact same bug recur. A plugin update that narrows or changes required permissions is checked in execute() against the NEW manifest (missingPermissionsForTool) while the actually-invoked code is the OLD implementation, so the permission check and the executed code silently diver
+- 复现要点：1) Enable a plugin and have the AI call one of its tools once (populates pluginToolCache). 2) Re-upload the same plugin id via the market 'update' path with a modified method body for that same @Tool name and re-enable it (or uninstall then install a different plugin under the same tool name). 3) Trigger the tool again without restarting the backend — it still runs the original (pre-update/pre-uni
+
+### [HIGH] A null or blank-content stored chat message poisons a conversation forever: assemble() throws when replaying history
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/ContextAssemblerService.java:494`
+- 触发：AiAgentController.AgentChatRequest#message has no @NotBlank/@NotNull and startSession() is not annotated @Valid, so a POST /api/agent/chat body with "message": null (or omitted) reaches AgentOrchestrator.handleUserMessageInScope, which calls messageService.saveMessage(projectId, userId, conversationId, "USER", request.getMessage(), request.getDisplayText()) unconditionally (AgentOrchestrator.java line ~428) — content=null is persisted as-is (ProjectAiMessageService.saveMessage has no content check). The very same turn then calls contextAssemblerService.assemble(...) (AgentOrchestrator.java lin
+- 后果：UserMessage.from(String) -> new UserMessage(String) -> TextContent.from(String) -> TextContent constructor calls ValidationUtils.ensureNotBlank(text, "text"), which throws IllegalArgumentException for both null and blank/whitespace-only strings (confirmed by decompiling langchain4j-core-0.36.0). The exception propagates out of assemble(), is caught by AgentOrchestrator's outer try/catch as a generic failure, and the user sees an SSE "error"/"Internal Error" event instead of a reply. Because the null/blank message is already committed to project_ai_message, every subsequent turn on that convers
+- 复现要点：Send POST /api/agent/chat with a valid session, valid projectId with read access, and body {"projectId":<id>,"conversationId":"<new-uuid>","message":null} (or {"message":""} / {"message":"   "}). Observe an SSE error event instead of a response, then repeat the request with the same conversationId and non-null message — the same error recurs because history replay now includes the earlier null/bla
+
+### [HIGH] Malformed/truncated LLM JSON response causes MemCell extraction to silently produce zero memories, indistinguishable from "nothing worth remembering"
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/memory/MemCellExtractor.java:235`
+- 触发：The aux (cheap) model is asked to emit up to 10 MemCells, each carrying a full legal quote/date/amount in `value`, inside a fenced ```json block. Any of these realistic LLM failure modes reaches this code unguarded: (1) the response is cut off by the model's max-output-token limit mid-JSON (very plausible for a cheap aux model asked to reproduce verbatim legal text for up to 10 items) so the fenced block never closes — the regex fails to match, and the fallback `indexOf("{")`/`lastIndexOf("}")` slices an incomplete/unbalanced JSON string; (2) the model returns `"memcells": {}` (an object) inst
+- 后果：`extractWithLLM`/`parseMemCellResponse` return an empty list; `extractMemCells` returns `Collections.emptyList()`; `MemoryPipelineService` (line ~106-113) only logs when `memCellCount > 0`, so the zero-result path produces no INFO log at all — only a buried `log.error("Failed to parse MemCell JSON: {}", e.getMessage())` deep in MemCellExtractor with no stack trace (the `Throwable` itself is never passed to the logger, so `e.getMessage()` can even be null for NPEs, printing "null"). The conversation's atomic memories for that turn are permanently lost with no retry and no operator-visible signa
+- 复现要点：Unit test: call parseMemCellResponse(...) with a string like "```json\n{\"memcells\": {\"type\":\"FACT\"}}\n```" (memcells as object, not array) and assert it returns an empty list without any way for the caller to know parsing failed vs. nothing to extract. A second test: pass a JSON string truncated mid-object (e.g. cut after 25000 of a would-be 30000-char generation) and confirm JSONUtil.parseO
+
+### [HIGH] Concurrent conversation turns on the same project cause a lost-update race on ProjectMemory
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/memory/ProjectMemoryExtractor.java:83`
+- 触发：Two conversation turns for the SAME projectId finish close together (e.g. two collaborators working the same legal project in separate chat sessions, or a user with two tabs open). MemoryPipelineService.onConversationTurnCompleted is @Async("memoryExecutor") with corePoolSize=2/maxPoolSize=4 (AsyncExecutorConfig), so both runs execute concurrently on different pool threads and both call extractAndUpdateProjectMemory(projectId, ...) around the same time.
+- 后果：Each thread does an unsynchronized read-modify-write: read ProjectMemory, mutate the in-memory object, then MemoryManager.saveProjectMemory (which itself re-reads by projectId, copies id/createdAt, then saves). There is no @Version/optimistic-locking field and no application-level lock (grep for synchronized/Lock in the memory package returns nothing). Whichever thread's save() commits last silently overwrites the other's legalRefs/parties/transactionAmount/keyDates merge, so one collaborator's extracted legal references, party names, or the correct (larger) transaction amount can be silently 
+- 复现要点：Have two chat sessions attached to the same project both complete an agent turn (>=1 message) within roughly the same second; on the second one's log check whether legalRefs/parties merged from the first run are still present in the saved ProjectMemory row - under a tight enough race, the earlier run's merged Set/list additions are overwritten by the later run's read-before-first-run's-write snaps
+
+### [HIGH] No timeout/eviction path for stuck RUNNING tasks lets exception paths in callers leak tasks in activeTasks forever
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/BackgroundTaskService.java:313`
+- 触发：In PptxTools.pptx_generate_internal, taskId is registered via backgroundTaskService.registerTask(...) at line 359 (status RUNNING). If pptxServiceClient.generatePptxWithProgress(...) throws (network error to pptx-service, timeout, etc.) the exception is caught by the outer `catch (Exception e)` at line 472 which only logs and returns an error string to the LLM — it never calls failTask/completeTask. Separately, if result.isSuccess() is true but Files.size(localPath), projectFileService.createOrUpdateFile(...), or editorBridgeService.sendRefreshFilesAction() throws, the inner `catch (Exception 
+- 后果：The task's TaskInfo stays status=RUNNING permanently in activeTasks, conversationTasks, and userTasks. hasActiveTasks(conversationId) returns true forever for that conversation, getActiveTasksForConversation keeps returning the phantom task indefinitely (frontend progress UI can show a never-finishing 'generating...' task for that conversation), and the map entries are never reclaimed by cleanupOldTasks or scheduleCleanup (neither path is ever invoked for this taskId). Every such failure permanently grows the three maps for the life of the JVM.
+- 复现要点：Point pptxServiceClient at an endpoint that accepts the initial call but throws mid-stream (or make projectFileService.createOrUpdateFile throw, e.g. by triggering a DB constraint violation on the file path), call pptx_generate for a project/conversation, and then poll GET .../background-tasks?conversationId=... repeatedly for >30 minutes — the task will still be returned as active/RUNNING indefin
+
+### [HIGH] close() unconditionally removes/completes whatever emitter is currently mapped, killing a freshly reconnected client's SSE stream
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/SseEmitterService.java:114`
+- 触发：Agent turn finishes on the @Async("taskExecutor") background thread (AgentOrchestrator.runLoop/handleCancellation/handleUserMessageInScope etc.) and calls sseEmitterService.close(conversationId) after sending bubble_end/error/cancelled. Concurrently — e.g. the user refreshes the page, opens the chat in a second tab, or the client's own reconnect logic fires right as the turn ends — GET /api/agent/connect/{conversationId} runs on a different HTTP thread and calls createConnection(), which does emitters.put(connectionId, newEmitter) and sends 'connected'/'state_recovery'/'run_state' to the NEW e
+- 后果：The just-established SSE connection is force-completed within moments of connecting. The browser's EventSource sees the stream close right after (or even before) receiving the 'connected'/'run_state' handshake, so the client either shows a spurious 'disconnected'/reconnect-loop state or misses run_state entirely, even though nothing was actually wrong with that connection — it was an innocent bystander killed by a stale close() from the previous turn.
+- 复现要点：1) Start an AI turn (POST /api/agent/chat). 2) Just as the model finishes (bubble_end about to fire), trigger a reconnect on the same conversationId — e.g. reload the chat page or open a second browser tab pointed at the same conversationId — timed so GET /connect/{conversationId} runs concurrently with the tail end of AgentOrchestrator's runLoop finishing. 3) Observe the new EventSource connectio
+
+### [HIGH] Whitelist check outranks the resolved provider, so choosing OLLAMA does not actually keep traffic local
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/ChatModelFactory.java:235`
+- 触发：Admin sets ai.activeProvider = OLLAMA (a fully supported, documented tier — 'local/experimental, no extra key needed', selectable via WizardController/AdminConfigController). Every call to ChatModelFactory.getAuxChatModel() resolves auxModel via AuxModelResolver.auxModelId(), whose fallback default is 'qwen/qwen3.7-flash' (AuxModelResolver.java line 47, `@Value("${ai.aux-model:qwen/qwen3.7-flash}")`). That exact string is a whitelisted entry in AllowedModels (QWEN_3_7_FLASH, AllowedModels.java line 72). Inside getChatModel(auxModel), provider==OLLAMA so the AWD_CLOUD short-circuit is skipped, 
+- 后果：A user/admin who explicitly picked the local/no-external-key OLLAMA tier still has every background AI call (titles, summaries, memory extraction, auto-tagging) sent to OpenRouter. If external.openrouter.apiKey is blank (the normal case for someone who chose OLLAMA specifically to avoid configuring an external key), OpenAiChatModel is built with a blank apiKey and every aux call fails with an auth error from OpenRouter — title generation/summarization/memory features silently break. If a BYOK key happens to be configured, the user's own OpenRouter key gets billed for calls they believed were s
+- 复现要点：1) Set ai.activeProvider=OLLAMA via /api/admin/config (leave external.openrouter.apiKey blank, which is the expected setup for this tier). 2) Trigger any aux-model call, e.g. send a first chat message so title generation runs, or let ConversationSummarizer/MemCellExtractor fire. 3) Observe the request goes out via getOrCreateOpenRouterModel('qwen/qwen3.7-flash') with a blank apiKey (or hits a conf
+
+### [HIGH] Overlapping protected-segment merge keeps stale content while extending the span, silently deleting document text between them
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/context/LegalInfoProtector.java:206`
+- 触发：Text containing an amount matched by two overlapping CRITICAL patterns from legal/protected-patterns.yml, e.g. '人民币500万元': pattern '人民币[\d,]+\.?\d*' matches '人民币500' (span 2-8) and pattern '[\d,]+\.?\d*\s*(万元|亿元|元|万|亿)' matches '500万元' (span 5-10). After merge the segment is start=2,end=10,content="人民币500".
+- 后果：safeCompress() emits only '人民币500' and advances lastEnd to 10, permanently dropping '万元' from the compressed output with no log/error. The compressed text a lawyer or the LLM sees shows a monetary figure off by 4 orders of magnitude (500 vs 5,000,000), inside the exact code path meant to protect legal figures from being lost during context compression.
+- 复现要点：Call LegalInfoProtector.safeCompress("...人民币500万元...", targetLength) with a targetLength that forces the compression branch (protectedLength < targetLength < content.length()); inspect the returned content and observe '万元' is missing even though both patterns matched and neither individual protected segment was longer than targetLength.
+
+### [HIGH] pdf_redact saves the mutated PDF to disk, then throws before finishModification() runs — DB/preview never learn the file changed
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PdfEditService.java:336`
+- 触发：Call pdf_redact(fileId, textsJson=["张三","李四"], pageIndex=null) where "张三" appears in the document but "李四" does not (a very common real case — the LLM guesses a name/ID that isn't verbatim in the text). redact() blacks out and rasterizes the page(s) containing "张三", calls doc.save() writing the redacted bytes to the on-disk file, then throws PdfEditException because "李四" was not found.
+- 后果：PdfTools.pdf_redact's catch block returns "Error: 部分完成：..." to the model/user, but finishModification() is skipped: file.wpsFileId is not rotated and editorBridgeService.sendReloadFileAction() is never sent, so the Chromium PDF preview keeps showing the pre-redaction bytes; file.fileSize/updatedAt in the DB also stay stale even though the file on disk has already been irreversibly rasterized/redacted. The tool call is reported as a failure even though a real, unrecoverable content mutation happened silently underneath — the exact 'result and error look the same to the caller' failure mode, and
+- 复现要点：Unit-test: build a 1-page PDF containing 'ABC', call pdfEditService.redact(path, List.of("ABC","XYZ"), null) — expect it to throw PdfEditException while Files.exists(path)'s bytes already reflect the ABC redaction (re-open the saved file and confirm 'ABC' is no longer extractable text). Then trace PdfTools.pdf_redact and confirm finishModification/sendReloadFileAction is never invoked in that call
+
+### [HIGH] text_find_replace "not found" no-op is reported as tool SUCCESS, firing a false MODIFIED file-change notification
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/tools/TextFileEditTools.java:97`
+- 触发：The LLM calls text_find_replace with a `find` string that does not literally occur in the file (e.g. it guessed slightly wrong text, used LF where the file has CRLF, or is off by whitespace/case). hits==0, so the method returns the Chinese message above with no 'Error' prefix and never calls writeBack.
+- 后果：com.checkba.service.ai.ToolRegistry.ToolResult.success() classifies any output NOT starting with 'Error' as success ('if (trimmed.startsWith("Error")) return false;'). Since this no-op message has no Error prefix, success()==true even though nothing was written. AgentOrchestrator.applyToolSideEffects() then runs because result.success() is true, and since the tool's @ToolMeta.fileEffect() is 'MODIFIED' (a fixed, unconditional annotation value), it unconditionally calls notifyFileChange(conversationId, fileName, "MODIFIED") — the frontend gets a file-changed/refresh signal and the task card sho
+- 复现要点：Call text_find_replace(fileId=<a real txt/md file>, find="some text that isn't in the file", replace="x", replaceAll=false). Observe: no exception, method returns a non-Error string, ToolResult.success() is true, applyToolSideEffects fires notifyFileChange with fileEffect=MODIFIED and (if configured) refresh_files SSE — despite the file being byte-for-byte unchanged.
+
+### [HIGH] Checkpoint map keyed only by conversationId, not by file — restore silently targets stale/wrong document after mid-turn file switch
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/DocumentCheckpointService.java:44`
+- 触发：In a single agent turn (one call to runLoop/one RunGuard) the model opens/edits document A first (checkpoint recorded for A), then calls doc_open_file to switch to document B (AgentOrchestrator.dispatchTool updates guard.activeFileId to B — see AgentOrchestrator.java lines 275-284) and performs a MODIFIED-type tool on B. Because DocumentCheckpointService.checkpoints already contains an entry for this conversationId (pointing at A), ensureCheckpoint(conversationId, B) is a no-op and no snapshot of B's pre-edit content is ever taken.
+- 后果：If the model (or user) then calls doc_restore_checkpoint, DocumentCheckpointService.restore() fetches file A (cp.fileId()), overwrites A's storage with A's own unchanged snapshot (a no-op), calls editorBridgeService.sendReloadFileAction for A, and returns a success message '已将《A》恢复到本轮开始前的快照...本轮所有修改（含修订）已丢弃'. The user believes their edits were rolled back, but document B — the one actually modified and possibly garbled this turn — is left untouched and no snapshot of it exists to recover it later. This is a silent-wrong-result failure: the tool reports success while doing nothing useful for th
+- 复现要点：1) Start a turn with active doc A. 2) Model calls a MODIFIED tool on A (checkpoint for A created). 3) Model calls doc_open_file(B). 4) Model calls a MODIFIED tool on B. 5) Model or user calls doc_restore_checkpoint. Observe: response references document A, A's content is unchanged (no-op restore), B remains modified with no way to recover its pre-turn state.
+
+### [HIGH] Real failure reason from the pptx microservice is discarded and replaced with a generic string
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PptxServiceClient.java:288`
+- 触发：pptx-service marks a description/image task FAILED with a specific error_message (auth failure, quota, bad model id, malformed prompt, etc.). This is a normal external-API failure mode, not a rare edge case.
+- 后果：PptxTools.java returns `"PPTX 生成失败: " + result.getError()` to the AI/user, which becomes the uninformative "PPTX 生成失败: Description generation failed" regardless of the real cause. The user/LLM cannot tell an auth/quota/model problem from a transient timeout, and cannot self-correct; the only place the real reason exists is the server log (log.error at line 289/762), which the caller never sees. This is exactly the 'external API says one thing but failed for another reason' pattern the maintainer is chasing.
+- 复现要点：Point external.pptx-service.base-url at a stub that returns task status {"status":"FAILED","error_message":"invalid api key"} for the descriptions task; call generatePptxSync/WithProgress and observe the returned error is the generic "Description generation failed" string, not "invalid api key".
+
+### [HIGH] downloadPptx writes and reports success on any 200 response regardless of body content
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PptxServiceClient.java:342`
+- 触发：Any 200-status response whose body is empty or not an actual PPTX (e.g. a reverse-proxy/service returns a 200 JSON error envelope instead of binary content, or download_url points at a not-yet-flushed/placeholder resource) — combined with finding #1's null/empty download_url case, or independently if the export endpoint's download_url briefly 200s before the file is fully written.
+- 后果：There is no check on resp.bodyBytes().length or content-type before writing to disk and returning success. downloadPptx returns the local path unconditionally, generatePptxSync/WithProgress sets result.success = true, and PptxTools.pptx_generate_internal (backend/src/main/java/com/checkba/service/ai/tools/PptxTools.java) proceeds to Files.size(localPath) and registers the (possibly 0-byte or garbage) file into the project's file library with a 'PPTX 生成成功！' message — the exact 'feature silently produced nothing but reported success' pattern.
+- 复现要点：Stub the pptx-service download endpoint to return HTTP 200 with an empty body (or a small JSON error blob) for GET {download_url}. Call generatePptxSync with a real project/task flow up to export. Observe a 0-byte (or non-PPTX) file written to localSavePath, result.isSuccess()==true, and no warning/error anywhere in the returned result.
+
+### [HIGH] litviz runtime resolution cached forever; never invalidated after live pack download
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/LitigationVisualService.java:80`
+- 触发：Panel/status calls (LitigationVisualPanelService.status()/doctor(), or any litigation_* tool call) invoke litviz.runtime()/unavailableReason() before the 'litigation-visual' native pack has finished downloading (e.g. panel loads and calls status() to decide whether to show a 'download' button). This lazily computes and permanently caches Runtime(litvizDir=null, python=null, ...). The user then downloads the pack via the marketplace (NativePackService supports live, no-restart download — confirmed by registerBuiltinProbe/packReady wiring), and the pack's cli.py/graphviz files land on disk.
+- 后果：Every subsequent litigation_render/litigation_checkpoint/status/restyle call still reports the exact same '找不到诉讼可视化引擎目录' or 'Python not found' error, even though the engine is now fully installed and would work — because nothing in the codebase ever calls LitigationVisualService.invalidate(). The feature stays silently broken until the backend process is restarted.
+- 复现要点：1) Start backend without the litigation-visual pack installed. 2) Open the litigation-visual panel (calls status() -> litviz.runtime(), caching an unavailable Runtime). 3) Download the pack from the plugin marketplace (completes without restart). 4) Ask the AI to litigation_render — it still returns the pre-download 'engine not found' error.
+
+### [HIGH] Missing backendJar file is silently skipped with zero log output
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PluginService.java:519`
+- 触发：A plugin's manifest.json declares backendJars: ["plugin-backend.jar"] but the file is absent from the directory (partial unzip during install, user manually deleted the jar, packaging bug, or the entry is actually a directory) — i.e. jarFile.isFile() is false.
+- 后果：resolveBackendJar returns null with no log at any level (contrast with the path-escape branch two lines above which does log.error). loadPlugins()/loadJarsIfAbsent() simply skip that jar. The plugin still registers in the plugin list (visible in admin UI, enable/disable works) but contributes zero tools, and there is nothing in the logs explaining why — exactly the 'feature silently produced nothing' failure mode. An admin re-enabling a plugin (setEnabled(true) -> loadJarsIfAbsent) gets the same silent no-op.
+- 复现要点：Create plugins/foo/manifest.json with id=foo and backendJars=["missing.jar"], no such file present; call loadPlugins()/rescan(). Plugin 'foo' appears in plugins list with 0 tools; grep the log output for 'foo' and 'missing.jar' — nothing is emitted.
+
+### [HIGH] Copy-fallback failure after ATOMIC_MOVE failure leaves a corrupt, unregistered plugin directory on disk
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PluginMarketService.java:243`
+- 触发：Files.createTempDirectory() (java.io.tmpdir) and pluginsDir are commonly on different mounts in real deployments (containers, or a data volume separate from /tmp) — the code's own comment acknowledges ATOMIC_MOVE routinely fails cross-filesystem and falls back to FileUtil.copyContent(). If that fallback copy itself fails partway (disk full on the plugins volume, permission error, I/O error), the exception is thrown from inside the `catch (Exception atomicFailed)` block and propagates straight to the method's outer catch, skipping the `FileUtil.del(staging.toFile())` line that sits right after 
+- 后果：The outer catch only deletes `staging` (the temp dir); it never touches `target` (pluginsDir/<id>), which by this point already holds a partially-copied, incomplete plugin (some files present, others missing, some possibly truncated). Since the exception is thrown before `pluginService.markDisabledBeforeLoad(id)` / `rescan()` run, this half-installed directory is left on disk, unregistered and unknown to PluginService, directly contradicting the method's own documented invariant "任一步失败都不留半成品" (no partial artifacts on failure). If anything else later scans pluginsDir (app restart, periodic resc
+- 复现要点：1) Configure ai.plugins.dir to a path on a different filesystem/mount than java.io.tmpdir (or use a container where /tmp is tmpfs and the app volume is separate) so ATOMIC_MOVE reliably throws. 2) Fill the plugins-directory filesystem close to full, or revoke write permission on a subpath, so FileUtil.copyContent fails partway through copying files from staging to target. 3) Call install(id) for a
+
+### [MEDIUM] Multiple statements calling the same tool inside a single <tool_code> block: only the first occurrence of each parameter key is ever extracted, so the second (and later) call is silently dropped with no ParsedCall, no error, no log
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/XmlToolCallParser.java:86`
+- 触发：One <tool_code> block containing two sequential calls to the same function, e.g.: <tool_code> doc_delete_match(findText="a", matchIndex=1) doc_delete_match(findText="b", matchIndex=2) </tool_code> parseSingle() runs exactly once on the whole block (parse() makes one ParsedCall per <tool_code>...</tool_code> match, not per statement). resolveToolName correctly resolves 'doc_delete_match', but extractStringArg(code, "findText") / (code, "matchIndex") both match only the FIRST call's key=value pair; the second call's values are never read anywhere.
+- 后果：Only the first delete executes; the second edit the user asked for never happens, and nothing in the response, log, or UI indicates a requested edit was skipped — the AI reports success because the only ParsedCall produced did succeed.
+- 复现要点：Call parseSingle("doc_delete_match(findText=\"a\", matchIndex=1)\ndoc_delete_match(findText=\"b\", matchIndex=2)") and confirm argsJson() contains only findText="a", matchIndex=1 with no trace of the second statement's values.
+
+### [MEDIUM] saveProjectMemory / saveUserMemory use a find-then-insert pattern that races on the underlying unique(project_id)/unique(user_id) constraint, silently dropping the loser's update
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/memory/MemoryManager.java:628`
+- 触发：Two overlapping onConversationTurnCompleted pipeline runs for the same projectId (memoryExecutor pool allows up to 4 concurrent runs) both call ProjectMemoryExtractor.extractAndUpdateProjectMemory -> memoryManager.saveProjectMemory around the same time, before either transaction has committed. Both read existing == null (row not yet created, or both start before either commits), so both attempt an INSERT rather than an UPDATE.
+- 后果：ProjectMemory.projectId is @Column(unique = true) and the app runs with ddl-auto: update in every profile (application*.yml), so the DB enforces the unique constraint. The second concurrent INSERT throws DataIntegrityViolationException inside the @Transactional method, which propagates up through ProjectMemoryExtractor into MemoryPipelineService.runPipeline's catch(Exception) at the project-memory-extraction stage, caught, logged as an error, and discarded. That turn's freshly-extracted project facts (transaction amount, parties, key dates, legal refs) are silently lost instead of being merged
+- 复现要点：Concurrently invoke memoryManager.saveProjectMemory(pm) twice from two threads with the same new projectId before either has committed (e.g. release both via a CountDownLatch against a project with no existing ProjectMemory row); observe one thread succeeds and the other throws DataIntegrityViolationException on the unique(project_id) constraint, and that thread's field values never reach the tabl
+
+### [MEDIUM] Regex project-memory extraction failure silently skips the LLM MemCell extraction for the whole turn
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/memory/MemoryPipelineService.java:102`
+- 触发：Any exception from the cheap regex step - most plausibly memoryManager.getProjectMemory/saveProjectMemory hitting a transient DB error (connection pool exhaustion, deadlock, unique-constraint violation under the concurrent-write race above) - occurring before the memCellExtractor.extractAndSave call is reached.
+- 后果：Because both the low-cost regex extraction (2.1) and the costlier LLM-based MemCell atomic-memory extraction (2.2) share one try/catch and run sequentially, a failure in 2.1 prevents 2.2 from ever running for that turn. The valuable LLM extraction is silently dropped (not retried, not queued) and the single generic log line ('Failed to extract project memory') gives no indication that MemCell extraction specifically never even attempted to run - it looks the same as if MemCell itself failed.
+- 复现要点：Force memoryManager.saveProjectMemory (or getProjectMemory) to throw once (e.g. simulate a DB constraint violation via the concurrent-write scenario above, or a transient connection error) on a turn where messages.size() >= MEMCELL_THRESHOLD; observe that memCellExtractor.extractAndSave is never invoked and no MemCell rows are written for that turn despite MEMCELL_THRESHOLD being met.
+
+### [MEDIUM] pm.keyDates is a write-once latch: after the first extraction, key dates never update again for the life of the project
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/memory/ProjectMemoryExtractor.java:106`
+- 触发：A project's first conversation turn that mentions any date (e.g. an initial estimated closing date) causes pm.getKeyDates() to become non-null. Every subsequent turn across the life of the project - including turns that mention a revised/corrected date, additional milestone dates, or supersede the original date - hits the `pm.getKeyDates() == null` guard as false and is silently skipped.
+- 后果：Unlike legalRefs (merged via LinkedHashSet union every turn) and transactionAmount (updated whenever a larger value is seen), keyDates freezes permanently after the first turn that produced any date. ProjectMemory.toContextString() (ProjectMemory.java:159-161) injects this stale keyDates map into the AI's context on every later turn, so the assistant keeps citing an outdated/superseded date (e.g. an original closing date that was later postponed) as if it were current, in a legal-deadline context where that is user-visible and consequential.
+- 复现要点：Turn 1 in a project: message contains a mention of an estimated closing date of 2026-03-01 -> keyDates={'日期1':'2026年3月1日'} saved. Turn 5: message contains a correction to 2026-06-01 -> extractAndUpdateProjectMemory runs, dates list contains the new date, but pm.getKeyDates() is already non-null so the branch is skipped; saved ProjectMemory still shows the March date. Subsequent AI turns are fed th
+
+### [MEDIUM] conversationTasks / userTasks map entries are never removed, only their inner lists are emptied — unbounded key growth over server lifetime
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/BackgroundTaskService.java:339`
+- 触发：Any conversation that ever registers at least one background task (e.g. one PPTX generation) leaves a permanent conversationTasks entry for that conversationId, even after the task completes and is cleaned up 5 minutes later — the value becomes an empty CopyOnWriteArrayList that is kept forever. Same for every distinct userId that has ever triggered a background task.
+- 后果：In a long-running production server, conversationTasks and userTasks accumulate one entry per distinct conversationId/userId that has ever run a background task, for the lifetime of the JVM (which per this repo's release history can run for weeks between restarts). This is slow, unbounded heap growth that only a restart clears — not an immediate crash, but a genuine stability/memory-leak defect in a service meant to be a lightweight in-memory registry.
+- 复现要点：Run many distinct conversations each generating one PPTX over the app's uptime, then compare activeTasks.size() (bounded, correctly cleaned by cleanupOldTasks) against conversationTasks.size() (grows monotonically and never shrinks) via a heap dump or debug endpoint.
+
+### [MEDIUM] activeByConversation is last-write-wins per conversationId with no turn isolation, so concurrent requests on the same conversation corrupt each other's skill/tool state mid-stream
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/skill/SkillRouter.java:92`
+- 触发：Two POST /api/agent/chat requests for the same conversationId land close together (no backend re-entrancy guard: AiAgentController.startSession just calls agentOrchestrator.handleUserMessage(request, userId) async with no check for an already-RUNNING turn on that conversationId — AgentRunStateService.mark() unconditionally overwrites status). This is realistic for this app specifically: the mobile-sync bridge mirrors the same project/conversation across desktop and mobile clients, a user can also have two browser tabs open on the same conversation, or a client retry can fire a duplicate POST a
+- 后果：Turn A activates skill X (e.g. matched a legal-domain trigger word) and starts its multi-round tool-calling loop. Turn B, for the same conversationId, calls activateForTurn again (different message, different or no skill match) and overwrites the shared map entry via activeByConversation.put(...). Turn A's still-in-flight recursive tool loop (AgentOrchestrator.java:1206, `skillRouter.visibleTools(conversationId, ...)` called fresh on every LLM round-trip) now reads Turn B's skill set instead of its own: tools that were visible in the first LLM round can silently disappear/appear in a later rou
+- 复现要点：Fire two rapid POST /api/agent/chat for the same conversationId (e.g. via curl in a tight loop, or from two open tabs/devices on the same conversation) where the two messages would trigger different skills; observe via logs (`Skills {} trimmed visible tools` / `Skill Activated for conversation`) that the tool whitelist used mid-stream for the first turn does not match the skill whose prompt was in
+
+### [MEDIUM] Mis-encoded prompt/skill.yml file makes a skill silently vanish with only a server log
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/skill/SkillRegistry.java:424`
+- 触发：A skill.yml or prompt.md file in the writable skills dir is saved with non-UTF-8 bytes (e.g. GBK/Windows-1252 from a non-UTF-8-aware editor), then rescan() is triggered.
+- 后果：Files.readString throws MalformedInputException, caught generically in register() and logged server-side only; the skill silently disappears from getSkills() with zero signal to whoever edited/installed it -- looks like 'nothing happened'.
+- 复现要点：Save skill.yml (or its prompt file) with invalid UTF-8 byte sequences under the writable skills dir, call rescan(), observe the skill id absent from getSkills() with only a backend ERROR log line as evidence.
+
+### [MEDIUM] Check-then-act race in auto-tag gate lets concurrent saves re-multiply tags on the same file
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/AutoTaggingService.java:46`
+- 触发：FileController fires autoTagFile(...) inside CompletableFuture.runAsync() on every completed upload/autosave (chunked-upload branch at FileController.java:458 and legacy no-header branch at FileController.java:481). hasAutoTags() is a plain DB SELECT with no lock/transaction; the window between that check and the first fileTagService.addTagToFile() call spans a full LLM round-trip (hundreds of ms to seconds). Two autosave/upload events for the same fileId close enough together (rapid consecutive editor autosaves, or two tabs/sessions editing the same file) both observe hasAutoTags()==false bef
+- 后果：The exact production bug this code's own comments describe (single file accumulating 338 tags, search-panel tag wall) can recur at smaller scale for every concurrent-save window, since getOrCreateSystemTag only dedupes by exact string match and the LLM produces differently-worded synonyms each call: duplicate FileTag rows and duplicate Tag rows accumulate silently with no user-visible error, degrading the tag filter UI and doubling billed LLM calls for that save.
+- 复现要点：Trigger two near-simultaneous autosave/upload requests for the same new fileId (script two POST /api/files/{id}/upload calls back-to-back before the first LLM call returns); observe fileTagService.getTagsByFileId(fileId) afterward containing up to 10 system tags instead of 5, with several overlapping/synonymous entries.
+
+### [MEDIUM] safeCompress never appends content after the final protected segment, even when compression budget remains
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/context/LegalInfoProtector.java:286`
+- 触发：Any tool output/document compressed via safeCompress whose last protected match (date/amount/legal reference) occurs before the end of the text — the common case for contracts/filings where citations cluster early and prose continues after.
+- 后果：Everything after the last protected match is unconditionally discarded from the compressed result, with no truncation marker (unlike the no-protected-segments branch at line 235 which appends '...'), even if availableForOther still has room. The model/user silently loses the tail of the document without any indication it was cut.
+- 复现要点：Call safeCompress with content where a protected match (e.g. a date) appears near the start and several hundred characters of plain prose follow it, with targetLength large enough to have leftover availableForOther budget; observe the returned content ends exactly at the last protected segment's end with no trailing text and no ellipsis.
+
+### [MEDIUM] office_format_table silently drops borderColor/borderWidth when borders is omitted
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/tools/OfficeEditTools.java:546`
+- 触发：LLM calls office_format_table with borderColor="#FF0000" and headerBold=true, but omits borders. The 'at least one param' guard at line 541 only checks bordersValue/alignmentValue/headerBold/autoFit/fontSize — headerBold being non-null satisfies it, so the call proceeds instead of hitting the explicit error at line 542-543 that would have told the model 'borderColor/borderWidth are only modifiers of borders'.
+- 后果：The command is dispatched and returns success (headerBold applied), but borderColor is silently discarded — no border change happens and there is zero signal in the response that borderColor was ignored. The model (and user) will believe the border color was set when it was not; a follow-up 'why isn't the border red' report becomes a debugging dead end because the tool call 'succeeded'.
+- 复现要点：Call office_format_table(conversationId, tableIndex=0, borders=null, borderColor="#FF0000", borderWidth=null, alignment=null, headerBold=true, autoFit=null, fontSize=null). Expect: tool returns success with headerBold applied, table border color unchanged, and the response contains no indication that borderColor was ignored.
+
+### [MEDIUM] pdf_to_word's text-vs-scan routing uses a flat 20-char corpus threshold, misrouting Bates-stamped/header-only scanned exhibits into the non-OCR path
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PdfEditService.java:152`
+- 触发：A scanned legal exhibit PDF where the scanner/court e-filing system burned a small OCR'd Bates stamp or page-number string onto every page (e.g. 'ABC-000123' ~10 chars) but the actual page body is a pure image with no text layer — a routine artifact of scanned litigation exhibits. With, say, 5+ pages, totalChars exceeds 20 even though there is zero real extractable body content, so pdf_to_word takes the text-type branch (pdf2docx layout conversion or the structural markdown fallback) instead of the MinerU OCR branch.
+- 后果：pdf_to_word reports success ('已将『file.pdf』转换为 Word 文档...', or the pdf2docx path) and opens a Word document in the editor that contains only the Bates-stamp fragments (or is effectively blank), while the real substantive content of the exhibit was never OCR'd or extracted — exactly the 'feature silently produced nothing but claimed success' failure shape, and it never surfaces to the user because the tool's own success message doesn't distinguish 'converted real content' from 'converted stamp noise'.
+- 复现要点：Construct/synthesize a PDF: 6 pages, each page containing only a small drawn text string like 'Page 6 of 6' (~11 chars) via PDPageContentStream, with no other text and a large embedded raster image per page. Call pdfEditService.extractMarkdown(path) — totalChars ~= 66 (>20), so it returns non-null markdown containing only page-number fragments instead of null, which would have routed pdf_to_word i
+
+### [MEDIUM] stdout/stderr captured into unbounded StringBuilders with no size cap
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/tools/PythonTools.java:322`
+- 触发：AI-written Python script legitimately fetches a large document via default_api.read_document(...) and print()s it (a very natural thing for a script whose job is 'summarize this document' to do), or a runaway/looping script produces megabytes of stdout before hitting the 120s wall.
+- 后果：No cap exists on how much output is buffered in JVM heap per concurrent run_python call; several concurrent AI sessions each dumping a multi-MB document to stdout can pressure the shared backend JVM heap, causing GC pauses or OOM that affect unrelated requests, not just the offending one.
+- 复现要点：Run a script that reads a multi-MB document via default_api.read_document and prints it in a loop; stdout capture grows unbounded until the 120s timeout or process exit.
+
+### [MEDIUM] TOCTOU race on _request_ready marker can replay a stale tool request or cross-deliver results
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/tools/PythonTools.java:219`
+- 触发：After Java answers a tool request, it loops back (after only a 100ms sleep) and re-checks `Files.exists(requestReadyPath)` before Python's own cleanup (`os.remove("/workspace/_request_ready")` etc., PYTHON_API_BRIDGE lines ~88-95) has necessarily run — the two sides poll independently on the same 100ms cadence with no locking. This is more reachable than it looks because the shared directory is a Docker bind mount (`-v tempDir:/workspace`), and bind-mount I/O latency on Docker Desktop for macOS is known to add tens-to-hundreds of ms of jitter to file create/delete visibility across the mount b
+- 后果：Java can re-detect the same still-present request_ready marker and re-execute the same tool call a second time, or — if the script has already issued a *new* `_call_tool` for a different tool by the time Java re-checks — process/attribute results across two logically distinct calls. Either way the Python script can silently receive a stale or duplicated result instead of an error, which is exactly the 'looks like success but is wrong' failure mode: nothing in the protocol distinguishes 'fresh request' from 'marker Java already handled but Python hasn't cleaned up yet'.
+- 复现要点：Not independently reproducible without instrumenting timing, but the protocol has no safeguard against it: add an artificial delay between Java's write of resultReadyPath and Python's read/cleanup (or run under real Docker Desktop bind-mount latency) and Java's next loop iteration will find requestReadyPath still present and re-process request.json unchanged.
+
+### [MEDIUM] query_memory / search_knowledge_base / deep_search ignore memory scope entirely, so file- and conversation-scoped saves are not reliably recallable
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/tools/MemoryTools.java:176`
+- 触发：The AI saves a fact with save_memory(scope="file", sourceFileId=123, ...) intending it to surface specifically when the file is discussed. Later, in the same project but a different conversation/topic, it calls query_memory or search_knowledge_base with a query that does not happen to keyword/semantically match that entry's text.
+- 后果：The entry is invisible not because it doesn't exist but because scope/sourceFileId targeting is never applied — recall is purely accidental keyword/embedding luck, not the deterministic "bound to this file" behavior the tool promised at save time and reported success for. There is no dedicated retrieval tool (no get_file_memories-style tool) to compensate, so file-scoped knowledge silently degrades to "maybe found, maybe not" with no error or signal to the caller either way.
+- 复现要点：save_memory(type="fact", key="条款X", value="...", isProtected=false, scope="file", sourceFileId=42) → success. Then query_memory(query="某个不含关键词的相关问题", type="all") in the same project → "未找到相关记忆", even though the fact was explicitly saved and bound to file 42.
+
+### [MEDIUM] get_law_article/law_search/law_recognition dereference LLM-supplied args before validating, producing an uninformative 'Error executing tool: null' instead of an actionable message
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/tools/LegalTools.java:141`
+- 触发：The model omits an optional-looking parameter, e.g. calls get_law_article with only `title` (a very plausible call shape given the tool description says 'by its title and article number' without marking both as strictly required, or simply a model mistake). ToolRegistry.bindArguments (ToolRegistry.java:373-405) binds the missing String parameter to null (no default for non-primitive types), so `number` arrives as null.
+- 后果：`Map.of("title", title, "number", null)` throws `NullPointerException` with a null message (verified: `Map.of` NPE has getMessage()==null). This is caught by ToolRegistry's generic InvocationTargetException/Exception handler and surfaces to the model as the literal string "Error executing tool: null" — technically correctly flagged FAILURE (unlike finding #1), but gives the model zero actionable information about which argument was missing, unlike the sibling tools qichacha_query/tushare_query in EnterpriseDataTools which validate with StringUtils.hasText and return a clear 'Error: X is requir
+- 复现要点：Invoke get_law_article with argsJson `{"title":"民法典"}` (omitting number); tool result comes back as "Error executing tool: null".
+
+### [MEDIUM] Timeout path reads the shared stderr StringBuilder without the synchronization the writer thread uses
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/LitigationVisualService.java:314`
+- 触发：A render on a huge/pathological semantic map (or a graphviz binary that hangs) runs past TIMEOUT_MS (90s). destroyForcibly() kills the process, but the `ep` pump thread (still inside its read loop, may already have buffered a partial line from the just-closed stream) can still be executing `synchronized(sink){ sink.append(...); }` concurrently with the main thread's unsynchronized `err.toString()` call on the same line.
+- 后果：StringBuilder is not thread-safe for concurrent read/append; toString() racing with append() can return a torn/garbled stderr string, and in rare cases (append triggering internal char-array growth mid-toString) can throw an exception, which — since this whole block is inside the outer try — gets caught by the generic `catch (Exception e)` and replaces the intended clear '出图超时' message with a confusing engine-crash-looking one.
+- 复现要点：Feed litigation_render a semantic map large/complex enough (or misconfigure LITVIZ_GRAPHVIZ_DIR to point at a binary that hangs) that the engine runs past 90s while stderr is actively being written; observe the race window between destroyForcibly() and the unsynchronized err.toString() call.
+
+### [MEDIUM] URLClassLoader opened per JAR load is never closed
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PluginService.java:572`
+- 触发：Any path that reloads plugin JARs repeatedly in the same JVM: POST /plugins/rescan (admin-triggered, PluginController), PluginMarketService install/uninstall (each calls pluginService.rescan()), and PluginDevService's hot-reload cycle (rescan() on every dev save, per PluginDevService.java:269/303) — i.e. normal, expected admin/dev workflows.
+- 后果：Each rescan() re-invokes loadJar() for every currently-enabled plugin's backendJars, opening a fresh URLClassLoader (which internally holds the JAR's file descriptor open) with no matching close(). JDK docs explicitly call out that URLClassLoader must be closed to release the underlying JAR file handle promptly; without it, descriptors and loaded-class metadata accumulate across the JVM's lifetime. Over repeated dev-reload or repeated admin rescans, this can exhaust file descriptors or bloat metaspace with retained class definitions, eventually causing plugin JAR loading to start throwing IOEx
+- 复现要点：Call pluginService.rescan() in a loop (e.g. via repeated POST /plugins/rescan) with at least one plugin that has a backendJar; observe open file descriptor count for the JVM process (lsof -p <pid> | grep plugins) climbing with each rescan and never dropping.
+
+### [MEDIUM] 50MB per-file download cap is enforced only after the whole response is already buffered in memory
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PluginMarketService.java:471`
+- 触发：Any response body larger than MAX_FILE_BYTES (50MB) returned from the configured registry endpoint — e.g. a misconfigured reverse proxy/CDN in front of the registry serving an oversized error page, a redirect loop turned into a huge concatenated body, or a compromised/mirrored registry host serving a large file for a plugin file-download URL.
+- 后果：`resp.bodyBytes()` reads the entire HTTP response into a byte[] before `readBinary()` ever checks `data.length > MAX_FILE_BYTES`. The comment on MAX_FILE_BYTES ("防御恶意注册表用超大响应打爆内存") claims this bounds memory, but the bound is only applied after the allocation already happened, so a sufficiently large response (hundreds of MB to GB) can still spike heap usage / trigger OOM before the guard ever fires, defeating the stated purpose of the check.
+- 复现要点：Point ai.plugins.registry-url (or have the real registry host, e.g. via a compromised CDN edge or misconfigured reverse proxy) return a response body larger than 50MB for a GET to <registry>/<id>/file?path=... Observe that the JVM must allocate and hold the full byte array before the code rejects it with "文件超过 50 MB 上限" — for a very large body this can cause memory pressure or OOM prior to the rej
+
+### [LOW] Char-based truncation of file/document content can split a UTF-16 surrogate pair, corrupting the injected context
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/ContextAssemblerService.java:263`
+- 触发：A document (project file, active document, or client-supplied inline content) whose extracted text is longer than the configured cap (default maxCharsPerFile=50000, or MAX_INLINE_CONTENT_CHARS=200000) and happens to have a supplementary-plane character (surrogate pair, e.g. rare CJK Extension B personal-name characters sometimes used in Chinese legal/ID documents) landing exactly at the cut boundary.
+- 后果：String.substring(0, n) is a char (UTF-16 code unit) index, not a codepoint index; if it falls between the high and low surrogate of a pair, the truncated String ends with a lone unpaired surrogate. When this content is later serialized to UTF-8 for the LLM request, the encoder substitutes the invalid surrogate (typically with U+FFFD or similar), silently corrupting the last character of the injected context right at the truncation point — a minor but real data-corruption edge case in the exact byte-vs-char class this audit targets.
+- 复现要点：Construct extracted text of length maxCharsPerFile+k that has a supplementary-plane character (e.g. 𠮷, an Extension B CJK ideograph used in real Chinese names) whose high surrogate sits at index maxCharsPerFile-1; call assemble() with a context file resolving to that content and observe the truncated <file> CDATA ends with a dangling/replacement character.
+
+### [LOW] Timeout/interrupted/cancelled failure results always report toolsUsed=[] and rounds=0, discarding real partial progress the child made
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/subagent/SubAgentService.java:195`
+- 触发：A sub-agent that has already executed several tool calls (e.g. 3-4 rounds, building toolsUsed) then blows its 630s budget on a slow LLM call, gets timed out (or the user clicks 'stop subtask').
+- 后果：The parent model receives toolsUsed=[] and rounds=0 in the JSON result even though the sub-agent may have made real, possibly side-effecting tool calls before the timeout/cancellation. The parent has no way to tell 'nothing happened yet' apart from 'it did significant work and then died', which matters for deciding whether it's safe to retry the same subtask (idempotency) or how to explain the failure to the user.
+- 复现要点：Force a slow provider response after the sub-agent has already run 3 successful tool-call rounds, let it exceed timeoutSeconds, and inspect the SubAgentResult JSON returned to the parent: toolsUsed is empty and rounds is 0 despite 3 real tool invocations having occurred.
+
+### [LOW] AgentRunStateService.states map grows unboundedly for the life of the process
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/AgentRunStateService.java:61`
+- 触发：Every distinct conversationId that ever completes a run leaves a permanent entry in `states`; there is no eviction, TTL, or removal call anywhere in the class (grepped for `states.remove` - zero hits). In a long-lived cloud backend instance serving many tenants over weeks/months, this map accumulates one entry per conversation ever touched and is never trimmed.
+- 后果：Slow, unbounded heap growth over the lifetime of a long-running backend process; in the multi-tenant cloud deployment (mentioned in this file's own comments as an all-tenant shared table) this could eventually contribute to memory pressure/GC overhead on an instance that isn't restarted frequently.
+- 复现要点：Run N distinct conversations to completion over the process lifetime; observe states.size() (e.g. via a debug endpoint or heap dump) grows to N and never decreases even though most of those conversations are long finished and never revisited.
+
+### [LOW] activeByConversation never evicts entries for conversations whose latest turn matched a skill, growing for the life of the JVM
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/skill/SkillRouter.java:92`
+- 触发：Any conversation whose most recent user message matched a manual selection or an auto trigger keyword leaves a permanent entry in this map; there is no removal path on conversation deletion/archival, session expiry, or any TTL/LRU eviction (grepped all callers of activeByConversation and all SkillRouter call sites — only activateForTurn writes/removes it, and only when the newest turn matches zero skills).
+- 后果：Over the lifetime of a long-running backend process, the map accumulates one entry per distinct conversationId that ever last-matched a skill, never shrinking even after the conversation is deleted or goes permanently idle. Slow, unbounded memory growth proportional to total conversations ever handled since last restart, not to active conversations.
+- 复现要点：Run the backend for an extended period across many distinct conversations that each end on a skill-matching message (common, since many built-in skills have short/common trigger words), then inspect heap for the size of SkillRouter.activeByConversation relative to concurrently active conversations.
+
+### [LOW] Quoted truthy strings in enabled_by_default are silently coerced to false
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/skill/SkillRegistry.java:440`
+- 触发：skill.yml author writes enabled_by_default: "yes" (quoted, so SnakeYAML keeps it as the string "yes" rather than auto-resolving to Boolean true).
+- 后果：Boolean.parseBoolean("yes") returns false, so isEnabledByDefault() is false; seedDefaultDisabledIfNeeded() then silently disables the skill by default on first scan with no warning, and because seeding is one-shot (SEEDED_KEY), fixing the YAML later and rescanning will not re-enable it automatically.
+- 复现要点：Create a skill.yml with enabled_by_default: "yes" and other valid required fields, scan it fresh (no prior SEEDED_KEY entry), observe the skill lands in the disabled list despite the author's apparent true intent.
+
+### [LOW] Excerpt truncation cuts by UTF-16 char index and can split a surrogate pair, corrupting the tail of an evidence excerpt
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/evidence/EvidenceItem.java:50`
+- 触发：A memory entry's memoryValue (MemoryEvidenceRetriever.toItem passes it straight through as excerpt) or an MCP source's `excerpt` field (McpEvidenceRetriever.parseItems) is longer than 500 chars and happens to contain a supplementary-plane character (surrogate pair, e.g. an emoji or a rare CJK Extension-B personal/company-name character sometimes seen in Chinese legal filings) whose high surrogate lands exactly at index 499.
+- 后果：substring(0, 500) splits the surrogate pair, leaving a lone unpaired UTF-16 surrogate at the end of the excerpt string. When this string is later serialized to JSON/UTF-8 (in the tool's text response, or if ever round-tripped through Jackson), the unpaired surrogate typically becomes a replacement character or can trip strict UTF-8 encoders, producing a visibly corrupted evidence excerpt shown to the lawyer.
+- 复现要点：Construct an EvidenceItem with excerpt = 499 ASCII chars followed by a 2-char surrogate pair (e.g. an emoji) followed by more text; the constructor truncates to substring(0,500), which is exactly the high surrogate alone. Printing/serializing the resulting String shows a mangled/replacement character at the end instead of a clean content boundary.
+
+### [LOW] Todo items marked 'failed' vanish from the per-turn reminder and keep the nudge alive forever
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/TodoListService.java:143`
+- 触发：Model calls todo_write with one item's status set to "failed" (VALID_STATUSES explicitly allows it) and never revisits it. reminder() is invoked after every subsequent tool call for that conversation (AgentOrchestrator.java:771/866).
+- 后果：done < todos.size() forever (failed items never count as done), so reminder() never returns null and keeps injecting a '[任务清单状态 N/M 完成]' nudge into the model's context on every subsequent tool call for the rest of the conversation, but the summary text never mentions the failed item since it's filtered out of both the in_progress and pending lists, so the model gets no signal via this channel about what's actually blocking completion. This is a permanently-live nag with no exit condition and no useful content.
+- 复现要点：Call todo_write with [{content:"A",status:"failed"},{content:"B",status:"completed"}]; observe reminder(conversationId) returns "[任务清单状态 1/2 完成]..." with no mention of A, and continues returning a non-null nudge on every later tool call for the same conversation even though nothing pending/in_progress remains.
+
+### [LOW] Document checkpoint blobs are written to storage but never deleted — permanent per-turn leak with no cleanup path
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/DocumentCheckpointService.java:53`
+- 触发：Every agent turn that performs at least one MODIFIED-type document tool call creates a new checkpoint blob under checkpoints/<conversationId>/<fileId>_<timestamp> in the storage backend (local disk or OSS). This happens on essentially every AI-driven document edit across all users and projects.
+- 后果：There is no code anywhere in the repo (grepped for 'checkpoints/') that ever deletes these blobs — only the small in-memory ConcurrentHashMap entry is replaced/cleared via clearForNewRun; the underlying storage object is never removed. Over the life of a production deployment this accumulates one file per modifying turn indefinitely, consuming disk/OSS storage with no eviction policy, and requiring manual cleanup that nothing in the codebase performs.
+- 复现要点：Run many agent turns that each touch a document (normal usage); observe the checkpoints/ prefix in the storage backend grows without bound and is never pruned.
+
+### [LOW] Missing download_url in a well-formed response is silently concatenated into a URL, producing a misleading 404 instead of a clear error
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PptxServiceClient.java:345`
+- 触发：editableTaskResult has a 'progress' object (so the earlier null-progress fallback at lines ~476-486 does NOT trigger) but that progress object happens to omit 'download_url' — e.g. the export task reports partial progress fields before fully populating the result, or a future pptx-service version renames the field.
+- 后果：downloadPptx requests `baseUrl + "/api/.../export...null"` (or whatever the concatenation yields), which 404s at the server. The user/LLM sees `"Failed to download PPTX: HTTP 404"`, which reads as a routing/network problem rather than the true cause (the export response was missing its download_url), making the failure much harder to diagnose from the surfaced message.
+- 复现要点：Return editableTaskResult.progress = {"filename": "x.pptx"} (no download_url) from a stubbed export task status endpoint; observe downloadPptx fails with a generic HTTP 404 rather than a message identifying the missing field.
+
+### [LOW] A single transient network error during the 10-minute task-status poll aborts the entire multi-stage generation with no retry
+
+- 位置：`backend/src/main/java/com/checkba/service/ai/PptxServiceClient.java:266`
+- 触发：During the up-to-10-minute polling window for description/image/export generation, any single transient blip against the pptx-service (brief connection reset, one 502 from a fronting proxy during a container restart, a one-off read timeout) on just one of the ~2s-interval poll requests.
+- 后果：The whole waitForTask call throws immediately instead of retrying the next poll tick, discarding all progress already made by the (potentially several-minutes-long) description/image generation task on the pptx-service side; the user has to restart the entire PPTX generation from step 1 for a failure that was purely transient in the polling channel, not in the actual generation work.
+- 复现要点：Have the pptx-service task-status endpoint return one transient 503/connection-reset while the underlying description-generation task is otherwise healthy and would have completed within a few more poll cycles; observe generatePptxSync fails immediately rather than retrying the poll.
+
+## 前端（40）
+
+### [CRITICAL] AI doc-generation stream writes into whatever document the user has focused, not the one it opened
+
+- 位置：`frontend/src/pages/project-overview/agentClientActions.js:71`
+- 触发：1) AI issues doc_open_file_sync for File A; handleEditorOpenFileSync opens A and it becomes the active tab. 2) Backend starts sending doc_stream_data chunks; each chunk is buffered and flushed via this.libreOfficeExecutor.executeCommand('stream_insert', {text}) on a 150ms timer. 3) While generation is still streaming (this can run for many seconds on a long document), the user clicks a different open tab, or opens another file in the same pane, or File A gets evicted from the LRU keep-alive pool (librePool.js touchLibreLru, cap = 3 instances) because it is not the active one. 4) Any of these f
+- 后果：The next 150ms flush (and the final handleDocStreamEnd flush/stream_flush) silently writes the AI-generated buffered text into the now-active, unrelated document instead of File A. There is no error, no toast, no sendEditorResult failure (doc_stream_data/doc_stream_end carry no requestId at all) — the user sees content silently appended into the wrong legal document while File A ends up truncated/incomplete with no indication anything went wrong. If File A was evicted from the keep-alive pool mid-stream, its editor instance is unmounted entirely and the remaining buffered content is lost outri
+- 复现要点：Ask the AI to draft a multi-page document into File A (streaming write), and while it's generating, click on a different already-open tab (or open a new file) in the same pane before the stream finishes. Observe generated paragraphs appended to the wrong document; File A stops receiving further content with no error.
+
+### [HIGH] Staging drop zone silently discards real OS file drags (visually invites them, does nothing)
+
+- 位置：`frontend/src/components/FileStagingArea.vue:283`
+- 触发：Open the staging panel (click the sidebar staging icon, which sets stagingPinned=true and makes the drop zone visible/resident — no drag needed first), then drag a real .docx/.pdf from the OS Finder/Explorer/Desktop onto the panel and drop it.
+- 后果：The container's dragenter/dragover handlers fire for ANY drag (OS-native or internal), so isDragOver flips true and the overlay text '松手暂存文件' / 'Drop to stage files' is shown, actively inviting the drop. On actual drop, dataTransfer carries only a 'Files' type (no app-internal JSON, no text/plain payload) so both extraction paths yield nothing, the emit is skipped, and the user sees the overlay disappear with literally nothing happening — no error, no staged file, no explanation. This is exactly the 'dragged docx returns empty' class: the UI advertises accepting files generically ('拖拽文件到此处暂存' 
+- 复现要点：1) Click the staging sidebar tab to pin the panel open. 2) Drag any local file (e.g. report.docx) from the desktop file manager onto the staging list/empty-state area. 3) Observe the 'drop to stage' overlay appears during drag, then on release nothing is added to the list and no toast/error is shown.
+
+### [HIGH] renderDocx has no request-generation guard — rapid file switching can paint a stale document into the live container
+
+- 位置：`frontend/src/components/FilePreview.vue:633`
+- 触发：User clicks docx file A, then quickly clicks docx file B before A's fetchAuthedBlob()/renderAsync() resolves (realistic in a file-tree UI where users click through several files looking for the right one). reloadPreview() runs for B, calling renderDocx() again, which shares the same `docxContainer` ref/DOM node and the same `docxRenderFailed`/`docxLoading` flags — there is no per-call request id to detect staleness, unlike loadMediaResource() which uses `this._mediaReqId`.
+- 后果：Whichever fetch resolves last wins, regardless of which file is currently selected: if A's slower promise resolves after B's, A's content gets rendered into the container the user believes shows B (`container.innerHTML=''` then re-populated with A's parsed document), or A's later failure sets `docxRenderFailed = true` and wipes B's already-successfully-rendered preview, replacing it with the 'unsupported preview, download it' fallback even though B rendered fine. In a legal-tech tool this means a user can be shown the wrong contract's text under the currently-selected file's name/header, or a 
+- 复现要点：In the project file tree, rapidly click two different .docx files in succession (network throttled or backend slightly slow) and observe the docx-preview pane briefly or persistently shows the first file's content/failure state while the header still names the second file.
+
+### [HIGH] renderPptx has the identical missing-race-guard pattern as renderDocx
+
+- 位置：`frontend/src/components/FilePreview.vue:660`
+- 触发：Same as renderDocx: user selects pptx file A then quickly selects pptx file B before A's fetch+arrayBuffer()+preview() chain (which is longer than docx's — two extra async hops) finishes. No `reqId`/generation token guards this method either.
+- 后果：Slide deck A can be rendered into the pptx-host container while the header/meta shows file B's name, or B's correctly-rendered slides get overwritten/marked failed by A's late-arriving error — same 'wrong content shown as current file, or valid content silently discarded' failure as the docx case, and pptx's extra async hop (arrayBuffer + previewer.preview) widens the race window further.
+- 复现要点：Rapidly click through two different .pptx files in the file tree; observe pptx-host content or the docxRenderFailed-equivalent fallback state lagging behind / mismatching the currently selected file.
+
+### [HIGH] Restoring a nested file/folder from the recycle bin leaves it permanently invisible if its ancestor folder is still deleted
+
+- 位置：`frontend/src/components/FileTree.vue:1684`
+- 触发：1) Right-click a folder that has files/subfolders inside and soft-delete it (backend ProjectFileService.delete -> softDeleteRecursive cascades isDeleted=true to every descendant, confirmed in backend/src/main/java/com/checkba/service/ProjectFileService.java:359-374). 2) Open the recycle bin (flat list containing the folder AND every descendant as separate rows). 3) Click 'Restore' on one of the nested files (not the parent folder) — backend restore() only cascades DOWNWARD to the restored node's own children (ProjectFileService.java:440-460), never upward to ancestors, so the parent folder sta
+- 后果：The UI shows a 'restored' success toast and removes the row from the recycle bin. When the user leaves the recycle bin view, the restored file is present in `allFiles` (non-deleted) but its parentId chain is broken, so buildTreeView never surfaces it anywhere in the main tree — it just vanishes with no error, no indication of why, and no way to find it again short of restoring the parent folder too (which requires the user to somehow know it's still deleted).
+- 复现要点：Create Folder A > File B inside it. Delete Folder A (soft delete). Open recycle bin, find File B's entry, click Restore. Exit recycle bin — File B is nowhere in the tree despite the 'restored' toast.
+
+### [HIGH] Drag-and-drop reorder is enabled inside the Recycle Bin view and silently corrupts soft-deleted items' parentId, orphaning them on restore
+
+- 位置：`frontend/src/components/FileTree.vue:431`
+- 触发：User opens the Recycle Bin (`openRecycleBin`), then drags one deleted item onto another deleted item (or between two deleted rows) inside that view — an action the UI visually permits since the drag handlers are identical to the normal file view.
+- 后果：`moveFile` succeeds and rewrites the dragged item's `parentId` to point at another still-deleted item. If the user later restores only the dragged item (not the folder it now points to), `restoreRecursive` clears `isDeleted` but leaves `parentId` referencing a folder that is still soft-deleted (or later permanently deleted). Back in the normal file view, `buildTreeView` only descends from folders reachable in `this.files`, so the restored file's still-deleted parent is invisible — the file disappears from the tree with zero error, even though the toast said 'restored successfully'. This exactl
+- 复现要点：1. Delete two files/folders A and B (soft delete). 2. Open Recycle Bin. 3. Drag A onto B (or onto another deleted row) — moveFile succeeds, A.parentId = B.id. 4. Restore only A (leave B in trash). 5. Go back to normal file view — A is nowhere in the tree even though 'restored' toast appeared.
+
+### [HIGH] Batch permanent-delete loop swallows per-item failures and reports blanket success, removing failed items from local recycle-bin state anyway
+
+- 位置：`frontend/src/components/FileTree.vue:1648`
+- 触发：User selects multiple items in the Recycle Bin and clicks batch 'permanently delete', while at least one of the selected items fails to delete server-side for a reason other than 404 (e.g. transient network error, a locked/open file, a DB constraint, or a concurrent modification).
+- 后果：The UI shows a success toast and removes the failed item from the local recycle-bin list — the user believes it is permanently gone. It is not: it silently remains on the server in the trash. The failure is only visible in the browser devtools console, never surfaced to the user, so a supposedly-deleted document can reappear or still be discoverable server-side despite the confirmed 'permanently delete' action.
+- 复现要点：Select 3 items in Recycle Bin, batch-permanent-delete, with one deleteFilePerm call mocked/forced to fail with a 500 (not 404) — toast still shows 'permDeleted' success and all 3 vanish from the recycle-bin UI, but the failed one still exists server-side.
+
+### [HIGH] OCR screen-share MediaStream never released after overlay closes
+
+- 位置：`frontend/src/pages/project-overview/ocrCapture.js:153`
+- 触发：On H5/web (non-desktop) build: user taps the OCR button -> startOcrCapture() acquires navigator.mediaDevices.getDisplayMedia() and caches the stream in this.ocrStream (line 229-231, comment explicitly says the stream is meant to be kept alive: '关键：授权一次后保持 stream'). User frames a selection and taps any action (copy/favorite/recognize/web-link) or presses Escape or single-clicks without dragging — all of these paths call closeOcrOverlay(), which hides the overlay UI but leaves this.ocrStream referencing a live capture stream.
+- 后果：The browser's native screen/window-share indicator (red recording border / 'Stop sharing' toolbar) stays active for the rest of the page's lifetime — there is no in-app action that ever calls .stop() on the tracks. The app keeps capturing the user's screen/window in the background with no visible way inside the product to turn it off (the only teardown function, stopOcrCapture, is dead code), which is both a resource leak and a real privacy/trust problem for a legal-tech product handling confidential documents.
+- 复现要点：On the H5/web build, click the OCR capture entry, grant screen-share permission, drag a small selection box, then click 'copy' (or press Escape). Observe the browser's 'sharing your screen' indicator/toolbar remains after the overlay disappears, and no subsequent in-app action removes it.
+
+### [HIGH] MediaRecorder death (device unplugged / track ended) never reconciles with recorderState.status — timer and UI keep reporting live recording
+
+- 位置：`frontend/src/utils/meetingRecorder.js:135`
+- 触发：User starts recording, then the selected microphone is unplugged (or the OS revokes mic access, or the device driver drops) while status is 'recording'. Per the MediaRecorder spec, when the only track in the stream ends, the recorder auto-transitions to 'inactive' and fires 'stop' — but nothing in this module updates recorderState.status away from 'recording' when that happens (only ondataavailable/onstop run, neither touches recorderState.status).
+- 后果：The panel keeps showing the pulsing red dot, 'recording' label, and a live-incrementing timer (mr-live-time) indefinitely even though MediaRecorder is already inactive and no more audio is being captured. When the user eventually notices and clicks Stop, `stopRecording()` computes `durationMs = recorderState.seconds * 1000` from the inflated timer (line 185) and sends that overstated duration to `finishMeetingRecording`, so the recorded meeting's reported duration no longer matches the actual uploaded audio bytes. The user also gets zero visible error/warning that the mic died mid-meeting.
+- 复现要点：1) startRecording via UI. 2) Physically unplug the microphone in use (or revoke mic permission from OS settings) while status is 'recording'. 3) Observe the timer keeps counting up and the live dot keeps pulsing with no error text. 4) Click Stop after ~30s of 'phantom' recording — the meeting is saved with a duration far exceeding the actual captured audio.
+
+### [HIGH] toggleRecording has no re-entrancy guard during the getUserMedia await, so a second click before permission resolves overwrites recorder/stream/timer state and can truncate the submitted audio
+
+- 位置：`frontend/src/components/FeedbackWidget.vue:549`
+- 触发：User clicks the record button, sees the browser mic permission prompt (or any perceptible delay before getUserMedia resolves), and clicks the record button again while `this.recording` is still false (it is only set to true after the await at line 563/591). The second click re-enters the whole try block and starts a second independent getUserMedia/MediaRecorder cycle.
+- 后果：The second call's stream/recorder/timer overwrite `this._recorder`, `this._stream`, `this._recordTimer`, `this._stopped` and `this._resolveStopped` (all plain instance fields, not per-call locals). Concretely: (1) the FIRST stream's tracks are never stopped by anyone reachable from `this` any more, so the OS mic indicator stays lit even after the visible recording stops; (2) the first `setInterval` handle is lost, so it keeps firing forever, double-incrementing `recordSeconds` and repeatedly calling stopRecording once MAX_RECORD_SECONDS is reached, forever, since clearRecordTimer() can only ev
+- 复现要点：1. Click the record-voice tool. 2. While the OS/browser mic permission dialog is visible (or simulate network/permission latency), click the record-voice tool again. 3. Grant permission for both prompts (or the browser silently reuses a cached grant so both resolve). 4. Observe two getUserMedia streams were requested; stop recording normally — the mic indicator remains active and `recordSeconds` i
+
+### [HIGH] bootZetaOffice()'s async Promise-executor swallows any exception thrown after its first await, leaving the boot promise (and the editor's loading overlay) hung forever
+
+- 位置：`frontend/src/composables/zetaOfficeBoot.js:83`
+- 触发：Any exception thrown by code that runs after the executor's first `await` (line 105) or inside the `s.onload` DOM event handler (lines 279-286) never reaches `resolve`/`reject` because: (a) an `async` function passed to `new Promise(...)` only has its *synchronous prefix* wrapped by the Promise constructor's implicit try/catch — once it suspends at the first `await`, later throws become an unhandled rejection of the executor's own discarded return-promise, not a call to `reject`; (b) `s.onload` is a plain (non-async) DOM callback, so a synchronous throw inside it (e.g. `Module.uno_main` being 
+- 后果：`bootZetaOffice()`'s returned promise never settles. In LibreOfficeEditor.vue, `mounted()` does `const info = await api.getEditor(); this.mountEditor(info)` and the boot happens inside the mounted webview/iframe page (editor-main.js: `startEditorEndpoint(...).then(...).catch(...)`), so neither the success nor the `.catch((e)=>{...boot failed...})` path ever runs. The editor's `loadingOverlayVisible` stays true indefinitely (`ready` never becomes true, `isError` never becomes true since `statusKey` never changes), the 30s `stuck` flag does eventually flip on (independent trickle timer) and show
+- 复现要点：Pass an invalid `sofficeBaseUrl` through editor-main.js's `?lowa=` query override (e.g. a value containing only control characters or an empty-but-not-`''` malformed string) and load the editor page directly (bypassing the app's normal fixed bundle path) — the boot promise never resolves or rejects; `console.error('[zeta-editor] boot failed:', e)` is never logged, and no 'ui_ready'/'boot-log' rela
+
+### [HIGH] In-flight TTS generation continues after component unmount, starts leaked audio playback
+
+- 位置：`frontend/src/components/EasyVoicePane.vue:490`
+- 触发：User types text, taps Generate (handleGenerate starts an in-flight generateTtsAudio POST), then before the response arrives switches away from the Voice panel (navigates to another sidebar panel / page, unmounting EasyVoicePane). beforeUnmount fires while the request is still pending.
+- 后果：When the response later resolves, the (already unmounted) component instance still executes the .then body: it creates a Blob, calls URL.createObjectURL, sets this.audioUrl, and schedules $nextTick(() => this.togglePlay()) which constructs `new Audio(url)` and calls .play(). Audio starts playing audibly with no visible player UI (the component is gone) and no way for the user to stop it - stopAudio() is unreachable since the component is destroyed and the play button no longer exists. The Blob URL is also never revoked (no unmount code revokes audioUrl on the object that no longer has a live c
+- 复现要点：Throttle network or use a slow TTS backend response; tap Generate on a nontrivial text, immediately reLaunch/navigateTo away from the panel before the request completes; observe audio begins playing after navigation with no visible control to stop it.
+
+### [HIGH] TOTP setup race: stale totpSetup() response overwrites newer secret/QR after rapid toggle
+
+- 位置：`frontend/src/components/userprofile/PersonalSettingsPanel.vue:394`
+- 触发：User taps '绑定' to open the TOTP panel (fires totpSetup() call A, still in flight), taps it again fast to close (cancelTotpPanel clears totpSecret/totpQrDataUrl and hides panel), then taps '绑定' again to reopen (fires totpSetup() call B). There is no in-flight guard/loading flag and no request-id/generation check, so whichever of A/B resolves last wins the assignment to this.totpSecret / this.totpQrDataUrl, regardless of call order.
+- 后果：If the older call A resolves after the newer call B, the panel displays A's stale secret/QR code while the backend's authoritative pending-setup state is actually B's (assuming server also processes 'last totpSetup wins', which is the typical pattern for a single pending-setup slot per user). The user scans/records the wrong secret in their authenticator app; every 6-digit code they subsequently generate and submit via confirmTotpBind will fail against the server's real secret, with no indication of why (repeated 'invalid code' toasts) until they reopen the panel to get a fresh, correctly-sync
+- 复现要点：1) Open Settings panel with TOTP unbound. 2) Rapidly tap '绑定' / cancel / '绑定' three times before the network round-trip for the first totpSetup() completes (achievable on a slow/throttled connection or by inserting an artificial delay). 3) Observe the final displayed QR/secret can be from the first (stale) request while the server's actual pending secret is from the second.
+
+### [HIGH] Add-colleague / generate-access-code buttons have no re-entrancy guard, unlike sibling dialogs
+
+- 位置：`frontend/src/components/InviteMemberDialog.vue:99`
+- 触发：In the CLIENT/MEMBER tab, fill in a valid username, then double-click (or rapid double-tap) the 'Add'/'Generate access code' button before the first request's response returns.
+- 后果：Two (or more) concurrent addProjectMember / inviteClient requests fire for the same username/client. Backend has no visible idempotency guard referenced here, so this can create duplicate member-add attempts or duplicate client access codes, and the toast/UI only reflects whichever response lands last while the other silently succeeded or failed server-side.
+- 复现要点：Open InviteMemberDialog, type a username on the MEMBER tab, and fire two rapid taps on the primary button (e.g. via test harness dispatching two tap events in the same frame) — observe addProjectMember called twice with the same args before `loading` is set on the first call's synchronous portion.
+
+### [HIGH] VersionPanel.refresh() has no in-flight guard; overlapping calls let a stale response overwrite fresher status
+
+- 位置：`frontend/src/components/version/VersionPanel.vue:162`
+- 触发：refresh() is called from many independent triggers that can overlap: mounted(), the collabRefreshToken watcher (bumped by the page-level collab drawer whenever a submit/pull/connect action finishes), and onReload() (fired by WorkSessionBar 'ended'/'discarded'/'mainline-resumed'/'draft-adopted'/'draft-abandoned', AdoptConflictDialog 'resolved', VersionTimeline 'reload-files'/'draft-created'). There is no busy/sequence guard, so if a user ends a work session (triggering onReload->refresh A) while the collab drawer independently finishes an action a moment later (triggering refresh B), and networ
+- 后果：The panel silently reverts to stale state after a newer, more correct refresh already rendered: e.g. WorkSessionBar flips back to showing 'working' / the old onDraft after the session was just ended, or a just-resolved adoptConflict re-appears (or a real new conflict from B gets clobbered back to null by A), and the emitted 'status-changed'/'adopt-conflict' events push that stale snapshot to the page-level chip/indicator too. The user sees the workbench regress to a state that no longer matches the backend, with no error and no visual indication anything is wrong.
+- 复现要点：1) Open the version panel, 2) trigger two refresh sources close together with the first slower (e.g. end a work session so onReload->refresh runs while the page's collab drawer completes an action and bumps collabRefreshToken moments later, or throttle network so the two getVersionStatus calls resolve out of program order), 3) observe the panel's working/onDraft/adoptConflict fields revert to the 
+
+### [HIGH] Deleted favorite stays visible: post-delete refresh silently throttled away
+
+- 位置：`frontend/src/components/ProjectFavoritesPanel.vue:176`
+- 触发：Panel mounts (immediate projectId watcher calls refresh() at t=0, setting _lastRefreshAt). User taps delete on a card and confirms within 1200ms of that mount refresh (or within 1200ms of any prior refresh for the same query, which is the common case right after opening the tab or after a search). confirmDelete awaits deleteFavorite(id) (a network round-trip), then calls refresh() with force left at its default false.
+- 后果：Because query is unchanged and now - _lastRefreshAt < 1200ms, refresh()'s guard clause returns immediately without re-fetching. The item was actually deleted server-side (the success toast fires), but items[] is never updated, so the deleted card keeps rendering. A second tap on the same card's delete button now targets an id the backend has already removed, producing a spurious 'delete failed' toast (pfDeleteFailed) for an item that was in fact deleted successfully on the first try.
+- 复现要点：1) Open a project, switch to the Favorites tool tab (fires immediate refresh). 2) Within 1.2s, tap the delete icon on the first card and tap confirm. 3) Observe: success toast appears but the card remains on screen (it will only disappear once something else forces a refresh, e.g. query changes or projectId changes).
+
+### [HIGH] DrawioEditor.persist() has no reentrancy guard — concurrent 'save' events can let an older edit overwrite a newer one, and the first pendingExport promise can hang forever
+
+- 位置：`frontend/src/components/DrawioEditor.vue:271`
+- 触发：Two 'save' postMessage events arrive close together (draw.io fires 'save' on both an explicit Ctrl+S and a toolbar Save click in quick succession, or user double-clicks Save before the first round-trip completes). Two persist() calls run concurrently, each calling exportSvg() and then `saveDrawioDiagram(...)`.
+- 后果：(a) The first call's exportSvg() resolver is overwritten by the second call's `this.pendingExport` assignment before the first ever receives its 'export' response; when the single 'export' reply from draw.io arrives it resolves only the second (current) pendingExport, so the first call's Promise is never resolved by the response, and its own 8s timeout finds `this.pendingExport` already null (cleared by the second call) and therefore never calls its `resolve('')` either — an unresolved Promise leaked, silently stalling that persist() call's UI state. (b) More importantly, both persist() calls 
+- 复现要点：1) Open a .drawio file in DrawioEditor. 2) Make edit A, trigger save (Ctrl+S). 3) Immediately (before the network round trip completes) make edit B and trigger save again. 4) Inspect network order / server log: if the first save's HTTP response completes after the second's, the server ends up persisting edit A (older) even though edit B was the user's latest intent, and no error/warning is shown.
+
+### [MEDIUM] 'New Chat' during an active streaming turn abandons the backend generation without sending a cancel request
+
+- 位置：`frontend/src/components/ChatInterface.vue:1260`
+- 触发：User clicks the 'New Chat' header button (line 231, @tap="startNewChat") while isStreaming is true (an assistant turn is actively running, e.g. mid tool-call chain).
+- 后果：Unlike handleAbort (line 1406), which POSTs /api/agent/cancel/{conversationId} before tearing down the frontend connection, startNewChat only calls setConversationId(null) -> resetSSE(), which aborts the frontend's AbortControllers and flips isStreaming to false locally but never notifies the backend to cancel the in-flight orchestrator run. The backend keeps executing the abandoned conversation's turn (LLM calls, tool calls with side effects such as file edits) with no user-visible indication, burning resources/credits and potentially producing writes the user no longer expects, while the UI 
+- 复现要点：Send a message that triggers a longer-running tool call, then click 'New Chat' while the assistant bubble is still streaming; observe network tab shows no /api/agent/cancel/{id} request (compare to clicking the Stop button, which does).
+
+### [MEDIUM] Empty deep watcher on the full `bubbles` tree re-traverses the entire message/tool-output graph on every streamed token
+
+- 位置：`frontend/src/components/ChatInterface.vue:1143`
+- 触发：Any assistant turn that streams content character-by-character or appends large tool outputs (the codebase's own notes mention dispatch_subtask running up to 630 seconds, and PPT/long tool jobs) mutates nested fields of `bubbles.value` (e.g. currentAssistantBubble.content, processes[].items) on essentially every SSE chunk.
+- 后果：A Vue deep watcher must traverse the entire reactive object graph it is watching to (re-)establish dependency tracking each time it fires. Because `bubbles` holds the full conversation including all processes/tool_code/tool_output/artifact payloads, and the watcher body does nothing (it's a stale 'for now simple trigger' placeholder), this becomes O(size of entire conversation) work run repeatedly per streamed chunk with zero benefit — for long tool-heavy turns this manifests as UI jank or the tab becoming unresponsive while streaming, worst during exactly the long-running-tool scenarios this 
+- 复现要点：Trigger a turn that produces a long tool output or long streamed final answer, and profile main-thread activity during streaming; observe repeated full traversal cost attributable to this watcher's dependency re-collection, scaling with total accumulated bubble/process content size.
+
+### [MEDIUM] Ghost ThinkingCard never auto-collapses on completion because its watcher lacks immediate:true and the component remounts fresh at exactly the moment status is already 'done'
+
+- 位置：`frontend/src/components/AgentMessage/ThinkingCard.vue:60`
+- 触发：RootBubble.vue renders two structurally distinct branches: `<div v-if="!isReady && bubble.thinking.status==='thinking'">` (ThinkingCard variant=card) vs `<div v-else>` containing a *different* ThinkingCard instance (variant=ghost, inside .active-bubble-wrapper/.ghost-thinking-wrapper). Because these are separate v-if/v-else DOM subtrees (different parent structure), Vue unmounts the first ThinkingCard and mounts a brand-new instance when `isReady` flips true. `isReady` flips true the moment `bubble.title` (or processes/content/question) first appears -- and in useAgentStream.js, `settleRootThi
+- 后果：Because the watcher only reacts to changes (no immediate:true), and the new instance's isExpanded defaults to ref(true), the auto-collapse branch (`if (newVal==='done') isExpanded.value=false`) never fires. The ghost thinking card is left permanently expanded, showing the model's full raw internal reasoning text under essentially every assistant reply (any reply that produces a title/process/content), instead of collapsing to the intended one-line "Thought for Ns" summary. This defeats the documented design (comment: "Auto-collapse when done") and clutters every response with internal chain-of
+- 复现要点：Send any prompt to the AI panel that produces a normal answer with a title (the common case). Watch the assistant bubble as it streams: once the title/first content appears, the small 'Thought for Ns' ghost thinking line should collapse to a single row per the auto-collapse comment, but instead the full thinking markdown body remains visibly expanded under the response until the user manually clic
+
+### [MEDIUM] Dragging a folder from the file tree into staging is accepted with no folder-type guard
+
+- 位置：`frontend/src/components/FileStagingArea.vue:296`
+- 触发：In FileTree.vue, `draggable="true"` and `handleDragStart` are applied uniformly to every tree-item including folders (isFolder is only used to pick `fileType: item.isFolder ? 'folder' : item.fileType` inside the payload, not to block the drag). Dragging any folder onto the (pinned/resident) staging panel and dropping it triggers onStagingDrop -> batchMoveFiles(projectId, [folderId], stagingFolderId), moving the whole folder (and its contents) into __staging_area__.
+- 后果：The folder is silently staged and listed as if it were a stageable document (generic file icon, selectable, openable via handleStagingOpen -> openFile). Any downstream consumer that treats staged entries as document content to feed to the AI (per the surrounding feature's purpose) would attempt to read a folder as a file and come back with nothing/an error that this component's log-only error handling won't surface distinctly from a real empty document.
+- 复现要点：In the project workbench, pin the staging panel, then drag a folder (not a file) from the left file tree onto the staging list; observe it gets moved into __staging_area__ and appears as a normal staged item with a generic file icon.
+
+### [MEDIUM] loadArchiveEntries has no staleness guard — rapidly switching zip/rar/7z files can display the wrong archive's entry list
+
+- 位置：`frontend/src/components/FilePreview.vue:714`
+- 触发：User clicks archive file A, then clicks archive file B before A's getArchiveEntries() network call resolves. reloadPreview() invokes loadArchiveEntries() again for B with no request-id check; `this.file` inside the async continuation is read live (fresh at assignment time), not captured per-call, so whichever call's promise settles last decides `archiveEntries`/`archiveError` regardless of which file is on screen when it settles.
+- 后果：The entries list (and the 'Extract' button, which operates on `this.file` at click time — a different, correct concern) can show file A's contents while the header names file B, misleading the user about what's inside the currently selected archive before they hit Extract.
+- 复现要点：Rapidly click between two different .zip files in the project file tree with the network slightly throttled; observe the entries list briefly (or persistently, if timing is adverse) shows the previous archive's contents under the new file's header.
+
+### [MEDIUM] Concurrent batch upload can generate duplicate temp IDs, corrupting the in-progress file list
+
+- 位置：`frontend/src/components/FileTree.vue:3245`
+- 触发：Select 3+ files in the upload dialog and confirm upload. The initial `for` loop calls processNext() three times back-to-back synchronously; each invocation runs the pre-await portion of uploadSingleFile (including `Date.now()`) essentially in the same tick, so two of the three concurrent uploads can get an identical tempId in the same millisecond.
+- 后果：Two rows in `this.files`/`this.allFiles` share the same `id`, which Vue's `:key` relies on for identity — the v-for can misattribute DOM/progress state between the two rows (wrong filename/percentage shown against the wrong upload), and `findIndex(f => f.id === tempId)` only ever matches the first occurrence, so one of the two temp rows never gets swapped for its real backend record and stays stuck showing `_isUploading: true` with a bogus id until the whole batch finishes and the following `this.loadFiles()` (in the 'all done' branch) refetches the true state from the server and overwrites it
+- 复现要点：Upload 3+ files of a few MB each simultaneously via the upload dialog; inspect this.allFiles/this.files (or watch the progress rows) during the upload — duplicate `id` values and a stuck '_isUploading' row are observable until the batch completes.
+
+### [MEDIUM] Index-based drag target resolution can race with an in-flight background reload (e.g. concurrent batch-upload completion), moving a file into the wrong folder with no error
+
+- 位置：`frontend/src/components/FileTree.vue:2467`
+- 触发：User starts a multi-file/folder upload (CONCURRENCY=3, can take several seconds for larger batches), and while the upload is still running, begins dragging an existing tree item to reorder/move it. If the upload's `processNext()` finishes and calls `loadFiles()` between the `dragstart` and the `drop` event, `displayFiles` is rebuilt (sorted/filtered afresh) so the row now sitting at the captured `index` is a different file than the one the user is visually looking at when they release the mouse.
+- 后果：`moveFile(projectId, draggedItem.id, targetParentId, ...)` moves the dragged file into or next to a folder/file the user never intended, with a success toast ('moveSuccess') giving no indication anything went wrong — the file simply ends up in an unexpected location.
+- 复现要点：Upload a moderately large folder (enough files that CONCURRENCY=3 processing takes a few seconds), and mid-upload drag an unrelated existing file onto a folder row; if the upload's final loadFiles() reload lands between dragstart and drop, the moved file's destination no longer matches the row the user dropped on.
+
+### [MEDIUM] openPendingLocalFile fails completely silently when the target file isn't found or the fetch errors
+
+- 位置：`frontend/src/pages/project-overview/fileOpenTabs.js:34`
+- 触发：project-overview.vue calls `setTimeout(() => this.openPendingLocalFile(pendingId), 600)` right after navigating in with an `openFileId` query param (e.g. from the new-project flow that just created the file). If the backend hasn't finished persisting/indexing the file within that fixed 600ms window, or getProjectFiles throws (network hiccup, auth refresh, etc.), files.find returns undefined or the try block throws.
+- 后果：The user lands on the workbench expecting the just-created (or requested) file to already be open, but nothing happens — no tab opens, no toast, no error dialog, only a console.warn that no end user will ever see. This is exactly the 'feature silently produced nothing' failure shape: the caller (openPendingLocalFile) and the model/user have no way to distinguish 'file legitimately doesn't exist' from 'race condition, try again' from 'network error'.
+- 复现要点：Create a new project via the flow that passes openFileId (newproject page), then simulate a slow backend response for GET /projects/{id}/files (e.g. throttle network) so the file list returns before the newly created file row is committed/visible. Land on project-overview and observe no tab opens and no error is shown; only a console.warn appears in devtools.
+
+### [MEDIUM] doc_open_file_sync has no re-entrancy guard; a duplicate/retried sync-open request wipes the stream buffer of an in-progress request
+
+- 位置：`frontend/src/pages/project-overview/agentClientActions.js:118`
+- 触发：handleClientAction dispatches doc_open_file_sync/wps_open_file_sync synchronously without awaiting or tracking an in-flight flag. If the backend sends a second doc_open_file_sync (e.g. a retry after a slow/lost sendEditorResult ack, or a new generation request issued before the previous one's up-to-90s editor-ready wait resolves), the two invocations run concurrently and both eventually execute step 5's buffer reset/discard-flush.
+- 后果：If the first request has already received its 'ready' ack and the backend has begun sending doc_stream_data chunks for it, the second concurrent handleEditorOpenFileSync's `this._docStreamBuffer = ''` / `stream_flush({discard:true})` silently discards whatever text had already been buffered/queued for the first stream, and resets `_docStreamBusy` while the first stream is still mid-flight — causing partial, silent data loss with no error surfaced to the backend or user.
+- 复现要点：Simulate two doc_open_file_sync SSE events for the same or different files arriving back-to-back before the first's editor-ready poll resolves (e.g. via a stubbed SSE feed); observe the buffer belonging to the first request's stream getting cleared/discarded by the second call's step-5 reset.
+
+### [MEDIUM] Feedback filter race: switching filter tabs quickly can show the previous filter's stale list under the newly-selected chip
+
+- 位置：`frontend/src/components/admin/AdminPane.vue:2192`
+- 触发：User taps filter chip A, then quickly taps filter chip B before A's getFeedbackList request completes. Both requests run concurrently; nothing checks whether this.feedbackFilter still matches the filter each request was issued for by the time it resolves.
+- 后果：If request A (issued first, for the previously-selected filter) resolves after request B, `this.feedbackList` ends up populated with filter A's items while the UI's active chip and `this.feedbackFilter` state both show filter B selected — the visible list mismatches the selected filter until another interaction reloads it.
+- 复现要点：In 用户反馈, click '全部' then immediately click '待处理' (or any other filter) before the first request would normally return (simulable by throttling network); the list can settle to showing entries that do not match the highlighted filter chip.
+
+### [MEDIUM] Re-tapping the memory-sync nav item silently discards any unsaved edits in the repo connection form
+
+- 位置：`frontend/src/components/admin/AdminPane.vue:2320`
+- 触发：onNavTap unconditionally calls loadMemoryRepos() every time the 'memory' nav item is tapped, with no check for `this.activeNav === nav.key` already being true and no guard against re-entrancy while the panel is already showing. A user on the 记忆同步 tab who has typed a URL/username/secret into one of the repo cards (bound via v-model="repo.form.url" etc., template line ~1035) but hasn't pressed 保存, then taps the same sidebar 'memory' item again (double-tap, or navigates away and immediately back).
+- 后果：loadMemoryRepos() rebuilds `this.memoryRepos` from scratch with brand-new objects (newMemoryRepo(...) creates fresh {form:{url:'',...}} instances), completely replacing the array the inputs are bound to. Whatever the user had typed but not saved is silently wiped with no confirmation prompt, the moment the reload's network round-trip completes.
+- 复现要点：Open 系统设置 → 记忆同步, start typing a sync URL into a repo card, then click the '记忆同步' item in the left sidebar again without saving; once the reload's fetches complete, the typed text is gone and the field is back to its last-saved (or blank) placeholder.
+
+### [MEDIUM] openMine() has no request-sequencing guard, so navigating back and reopening "My Feedback" quickly lets a slower stale response overwrite the newer list
+
+- 位置：`frontend/src/components/FeedbackWidget.vue:434`
+- 触发：From the 'mine' view the back link is always rendered (independent of mineLoading), calling backToForm() which just does `this.view = 'form'` without cancelling the in-flight fetch. The user clicks myFeedback -> back -> myFeedback again quickly, firing openMine() twice concurrently with no id/token to identify which call is 'latest'.
+- 后果：Both calls write unconditionally to the same `this.mineList`/`this.mineError`/`this.mineLoading`. If the first (now stale) request resolves after the second, its (possibly outdated, e.g. missing a just-submitted item or reflecting an old status) data silently replaces the fresher list already rendered, with no indication to the user that the visible list just regressed.
+- 复现要点：1. Open the feedback panel, submit nothing, click 'My Feedback' (view -> 'mine', request A in flight). 2. Immediately click 'Back' then 'My Feedback' again (request B in flight) while A is still pending. 3. If A's response arrives after B's (simulate by throttling one request), the list flips from B's fresh data to A's stale data after B already rendered.
+
+### [MEDIUM] Generated audio Blob URL never revoked on component unmount
+
+- 位置：`frontend/src/components/EasyVoicePane.vue:250`
+- 触发：User generates TTS audio (creating a Blob URL held in audioUrl), then navigates away from the Voice panel without generating a second time (so the revoke-on-regenerate path at line 518 never runs).
+- 后果：The Blob object URL created by URL.createObjectURL for the generated MP3 is never released. Each visit-generate-leave cycle leaks one Blob's worth of memory (audio payload can be substantial for long text) for the lifetime of the page/Electron renderer.
+- 复现要点：Generate TTS audio for a decently long text, switch to another panel/page, repeat several times; the previous audioUrl blobs are never revoked and accumulate for the session.
+
+### [MEDIUM] Login/Register/Client-login submit buttons bind :loading but not :disabled, allowing duplicate submits
+
+- 位置：`frontend/src/pages/login/login.vue:129`
+- 触发：uni-app's <button loading> only renders a spinner; it does not itself block further tap events — that requires a separate `disabled` binding, which is absent here. None of handleLogin/handleRegister/handleClientLogin/handleSmsLogin check `this.loginLoading`/`this.registerLoading`/`this.clientLoginLoading` at the top of the method before proceeding either.
+- 后果：A fast double-tap (common on trackpads/touch and under network latency) fires two concurrent login()/register()/clientLogin() calls. For login, if the account requires 2FA both concurrent calls independently catch smsRequired and each calls resendSmsCode() (compounding finding #2 into two duplicate code sends from a single double-tap). For register, two concurrent register() calls race the backend's uniqueness check; whichever resolves second surfaces a raw 'duplicate username'-style error toast on top of (or instead of) the success toast/redirect the user already saw, which reads as a spuriou
+- 复现要点：On the login tab, rapidly double-tap the login button for an account configured with SMS 2FA; observe two login requests in the network panel and two SMS-send requests firing from the smsRequired catch handlers.
+
+### [MEDIUM] Concurrent refresh() calls race and the slower response overwrites newer variable/field data
+
+- 位置：`frontend/src/components/VariablePanel.vue:199`
+- 触发：User clicks the doc/project/user scope tabs in quick succession (or triggers a write action such as confirmDelete/insertVariable while a scope-switch refresh from a previous click is still in flight). Each click fires an unawaited refresh() that independently reassigns this.docFields/this.projectVars/this.userVars regardless of which call started first.
+- 后果：Because network responses are not guaranteed to resolve in call order, an earlier (now-stale) refresh's response can resolve after a later refresh's response and overwrite this.projectVars/this.userVars/this.docFields with outdated data — e.g. a variable the user just deleted can reappear in the list, or a value the user just updated can revert to the pre-update value, because the stale fetch's result lands last. There is no request token/id or AbortController guarding against out-of-order resolution.
+- 复现要点：1. Open variable panel (doc scope loads). 2. Rapidly click Project tab then User tab then Doc tab (or trigger a delete right after a scope switch) before each refresh's network calls complete. 3. If the network happens to return the first-fired request's data after the later request's data, the list snaps back to older data (e.g. deleted variable reappears, or an updated value reverts) even though
+
+### [MEDIUM] Blur fired while a rename request is in flight nulls renamingProjectId before the async continuation updates the card
+
+- 位置：`frontend/src/pages/project-list/project-list.vue:749`
+- 触发：The rename <input> (both grid view line 137-144 and list view line 237-244) binds both @confirm="confirmRename" and @blur="cancelRename" on the same element. User double-taps a project title to rename it, edits the text, and presses Enter to submit — confirmRename starts and awaits renameProject(). While that network call is still pending, the user taps anywhere else on the page (another card, the header, etc.), which blurs the still-focused rename input and fires cancelRename() synchronously, setting this.renamingProjectId = null and this.renameValue = '' immediately — well before confirmRena
+- 后果：When the renameProject() promise resolves, confirmRename reads this.renamingProjectId (now null) to look up the project — this.projects.find(p => p.id === null) matches nothing, so project.name is never updated in local state. The user sees a 'rename succeeded' toast, but the card still shows the old title until the page is reloaded (next onShow → loadProjects), which reads as the rename silently not taking effect.
+- 复现要点：1) On project-list (grid or list view), tap a project title to enter rename mode. 2) Type a new name. 3) Press Enter to submit, then immediately tap elsewhere on the page (e.g. another card) before the network round-trip completes. 4) Observe the success toast but the card still displaying the old name; reload the page to see the name actually did change server-side.
+
+### [MEDIUM] loadProjects has no in-flight/sequencing guard; an overlapping stale call can resurrect a just-deleted project in the list
+
+- 位置：`frontend/src/pages/project-list/project-list.vue:451`
+- 触发：loadProjects is called from multiple independent triggers with no request token or cancellation: onShow (every time the page becomes visible again, e.g. returning from calendar/personal-center via navigateTo+navigateBack), handleDeleteProject's post-delete refresh (line 681), removeMember's post-removal refresh (line 529), and InviteMemberDialog's @success handler (line 319). None of them check whether a previous loadProjects call is still resolving its N+1 member-fetch fan-out, and this.projects is unconditionally overwritten by whichever call's Promise.all resolves last.
+- 后果：If an older loadProjects call (e.g. triggered by onShow when the user briefly navigated to 日历/calendar and back) is still waiting on its member-fetch fan-out when a newer, faster call finishes (e.g. the one issued right after a delete confirms), the older call's stale snapshot — which still includes the project the user just deleted — overwrites the fresh list once it finally resolves. The deleted project reappears in the UI until the next refresh, even though it is actually gone server-side.
+- 复现要点：1) On project-list with several projects, trigger a slow loadProjects (e.g. throttle network in devtools to slow getProjectMembers). 2) While it's in flight, navigate to calendar (navigateTo) and immediately back — this fires onShow again, starting a second loadProjects. 3) Quickly delete a project once the second call's card list is visible. 4) If the first (slow) call resolves after the delete's
+
+### [MEDIUM] confirmRevert() is the only mutating action in VersionNodeDetail.vue with no busy re-entrancy guard
+
+- 位置：`frontend/src/components/version/VersionNodeDetail.vue:144`
+- 触发：Every other mutating handler in this file (submitMilestone, submitDraftCreate) checks `if (this.busy) return` and sets/resets `this.busy`. confirmRevert omits both. The '退回到这一版' button and dialog stay fully interactive after confirming once, and the dialog is never closed by this handler (no 'close' emit) while the request is in flight. A user who taps '退回到这一版' again while the first revertToVersion request is still pending gets a second uni.showModal confirmation; confirming it fires a second concurrent revertToVersion(sha) call.
+- 后果：Two overlapping revert requests hit the backend for the same sha. Each success independently emits 'reload-files' with its own affectedFileIds up to VersionPanel.onReload, which reloads open editor tabs twice and calls refresh() twice — compounding the stale-response race in VersionPanel.refresh() above, and potentially reloading the editor with the response from whichever revert call happened to finish last, which may not be the one the user most recently intended.
+- 复现要点：1) Open a historical version's detail dialog, tap '退回到这一版', confirm the native modal. 2) While the revertToVersion request is still pending (slow network), tap '退回到这一版' again on the still-open detail dialog and confirm the second modal. 3) Two concurrent revert requests fire for the same version.
+
+### [MEDIUM] Favorites search race: slow keystroke response can overwrite a newer result
+
+- 位置：`frontend/src/components/ProjectFavoritesPanel.vue:106`
+- 触发：Parent binds :query="toolsSearchKeyword" directly to a plain v-model text input (project-overview.vue line 1116) with no debounce. Each keystroke changes query, firing this watcher, which calls refresh() and issues a new getProjectFavorites GET. There is no request token / AbortController / sequence guard, so two in-flight requests for different query strings can resolve in either order.
+- 后果：If the response for an earlier (now-stale) keystroke arrives after the response for the latest keystroke (plausible with backend search-time variance across differently-sized result sets), items is overwritten with results for a search string that no longer matches what's in the input box, showing the wrong favorites list to the user with no indication it's stale.
+- 复现要点：Type a multi-character search quickly in the tools search box while the Favorites tab is active; on a connection/backend with variable per-query latency, the displayed list can end up matching an earlier keystroke rather than the final one.
+
+### [MEDIUM] Clipboard search race: no ordering guard on rapid-typed query refreshes
+
+- 位置：`frontend/src/components/ClipboardPanel.vue:108`
+- 触发：Same shared search input (toolsSearchKeyword) drives this panel's query prop with no debounce (project-overview.vue line 1143). Unlike ProjectFavoritesPanel there isn't even a same-query throttle here — every keystroke fires a fresh listClipboard request with no cancellation of the previous one.
+- 后果：An out-of-order response (earlier keystroke's request resolving after a later one) overwrites items/hiddenCount with results for a stale query string, so the visible clipboard list and the 'N hidden by free quota' hint can silently reflect a search the user already typed past.
+- 复现要点：Rapidly type/edit a search term while the Clipboard tab is open; on variable-latency responses the rendered card list can correspond to an intermediate search string rather than the final one in the box.
+
+### [MEDIUM] AwdSelect's own dropdown scroll immediately self-closes the menu
+
+- 位置：`frontend/src/components/AwdSelect.vue:112`
+- 触发：Open an AwdSelect whose `range` has enough items to exceed the 280px menu height (e.g. the model-catalog pickers in admin/AdminPane.vue at defaultModel/auxModel/subagentModel, which are populated from the AI provider's model list) and try to scroll the open dropdown list to see options below the fold.
+- 后果：The very first scroll gesture inside the open menu is captured by the window-level capturing listener and calls close(), collapsing the dropdown before the user can reach any option past the visible ~8 rows — long option lists are effectively unusable/unscrollable.
+- 复现要点：Populate an AwdSelect with >8 labels (enough to require internal scrolling), open it, and scroll within the open menu — the menu closes immediately instead of scrolling to reveal more items.
+
+### [MEDIUM] Step-group expand/collapse toggle state is keyed only by stepIndex, not by group position, so two non-adjacent groups for the same plan step share one toggle state
+
+- 位置：`frontend/src/components/AgentMessage/RootBubble.vue:199`
+- 触发：A plan step gets marked in_progress again after already having produced a process group earlier in the same assistant turn (e.g. the agent backtracks/retries step 0 after having moved on to step 1 — plausible when a tool call fails and the model redoes an earlier step via todo_write). This produces two separate, non-adjacent entries in `processGroups` that both have `group.key === 's0'` but different `gi`.
+- 后果：Clicking to expand/collapse one of these two 'Step 1' groups (e.g. the later retry) also expands/collapses the earlier, unrelated group with the same stepIndex, because both read/write the same `groupToggles.value['s0']` slot — a user trying to inspect one step's tool calls unexpectedly reveals or hides a different step's tool calls instead.
+- 复现要点：Construct a bubble.processes array with proc A (stepIndex:0), proc B (stepIndex:1), proc C (stepIndex:0) in that order (simulating a step-0 retry after step-1 started) and mount RootBubble; click the chevron on the group containing proc C to expand it, then observe that the earlier group containing proc A also toggles to the same expanded/collapsed state.
+
+### [LOW] handleSave has no re-entrancy guard, allowing a double-tap to fire two concurrent saveAdminConfig requests
+
+- 位置：`frontend/src/components/admin/AdminPane.vue:3089`
+- 触发：The save button only binds `:loading="saving"`, not `:disabled="saving"`, and handleSave itself has no `if (this.saving) return` guard at its top — unlike every other busy-flag-guarded action in this same file (onSaveBudget checks `if (this.budgetBusy) return`, onSwitchSite checks `if (this.siteBusy) return`, etc.). A user double-tapping 保存配置 before the first request round-trips can fire saveAdminConfig(this.form) twice concurrently.
+- 后果：Two overlapping PUT/POST requests carrying the same form snapshot go out; whichever resolves last determines the final toast/state, and this.loadModelCatalog() also fires twice. Not data-corrupting since the payload is identical, but it is an avoidable non-idempotent double network operation with no protection, inconsistent with the rest of the file's own convention.
+- 复现要点：On 系统配置/AI 配置 tabs, double-tap 保存配置 quickly; two saveAdminConfig calls and two loadModelCatalog calls are dispatched with no client-side de-duplication.
+
+## 工程基建/CI（9）
+
+### [HIGH] Desktop launch is never verified — final summary always claims success
+
+- 位置：`restart-all.sh:354`
+- 触发：Electron fails to start right after nohup (missing node_modules/electron binary, macOS gatekeeper block on a freshly-copied worktree, a syntax error in desktop/main, or the port the desktop dev server binds to already in use).
+- 后果：Every other service in the script (backend on 9696, H5 on 5173, PPTX/MinerU via curl) is polled and reported as failed if it didn't actually come up — but desktop has no such check at all. The final status block at line 416 prints "✓ 桌面端: 已启动 (Electron)" unconditionally regardless of whether the process is alive, so a developer trusts the all-green summary and starts debugging the wrong layer, or assumes the app is up when it silently died seconds after nohup.
+- 复现要点：Temporarily rename desktop/node_modules (or break desktop/main.js) and run `./restart-all.sh`; observe it still prints "✓ 桌面端: 已启动 (Electron)" in the final summary even though desktop.log shows a crash and no Electron window ever opens.
+
+### [HIGH] restart-all.sh operates on global ports/container names with no per-checkout scoping, racing across parallel worktrees
+
+- 位置：`restart-all.sh:97`
+- 触发：Two sessions/worktrees of this repo (a documented, recurring pattern in this project — CLAUDE.md explicitly warns 'worktree 有独立 src/' and prior incidents record parallel-session port/process collisions) each run restart-all.sh. Both target the same fixed port numbers (9696, 5173) and the same fixed Docker container names (checkba-pptx-service, checkba-mineru-service), which are host-global, not worktree-scoped.
+- 后果：Running restart-all.sh in worktree B kills whatever process worktree A had bound to port 9696/5173 and stops/removes the shared Docker containers A was using, silently breaking A's dev environment with no indication to that developer why their backend/H5/PPTX just died.
+- 复现要点：Start restart-all.sh in worktree A, then run it again in worktree B while A's stack is up; A's backend/H5/PPTX processes get killed by B's teardown phase (lines 97-145, 41-49).
+
+### [HIGH] Per-OS matrix release attach can publish a partial GitHub Release when one platform fails
+
+- 位置：`.github/workflows/desktop-build.yml:625`
+- 触发：Push a v* tag. The Windows leg succeeds and reaches its Attach-to-Release step, uploading the .exe + patch assets. The macOS leg fails at any point before its own Attach step (e.g. notarization failure, EMFILE during electron-builder packaging, or the mac smoke tests timing out) — a failure mode this exact workflow already has dedicated diagnostic steps for (Notarization failure log, line ~441).
+- 后果：Because fail-fast is disabled and each leg publishes to the shared tag release independently rather than through a single gated publish job, the GitHub Release for that tag ends up live with only the Windows installer attached (no .dmg) while the overall 'build' job/workflow run shows red. A user visiting the Releases page during/after this run sees a seemingly normal release missing the macOS download, with no in-release indication anything is wrong; the failure is only visible to someone checking Actions status. Contrast with pack-release.yml, which correctly gates its single release-creatio
+- 复现要点：Simulate by tagging with the mac build artificially failing after producing no dmg (e.g. temporarily break notarization creds) while windows build passes; observe the tag's GitHub Release page gets the .exe uploaded even though the workflow run is red overall.
+
+### [MEDIUM] docker-compose up for optional services is unguarded under set -e, aborting the whole restart pipeline
+
+- 位置：`restart-all.sh:190`
+- 触发：`docker-compose up -d pptx-service` (or mineru-service) returns non-zero — e.g. the image build fails, a stale container/network from a previous run conflicts, or the host port 5001/8001 is already bound by a leftover process from another instance of this script (see finding above).
+- 后果：With `set -e` active at the top of the script and no `|| true` / `if` guard around these two calls (unlike every docker stop/rm call earlier in the same script, which is deliberately wrapped in `|| true`), the script exits immediately here. Backend (step 2/5), frontend H5 (step 3/5) and desktop (step 4/5) — the actually essential dev services — never get (re)started, even though the banner already printed "所有服务已停止，开始重新启动...", leaving the developer with nothing running and no summary explaining that steps 2-4 were skipped.
+- 复现要点：Leave a stale container or another process bound to host port 5001, then run ./restart-all.sh; docker-compose up -d pptx-service fails, and the script exits before starting the backend/H5/desktop steps.
+
+### [MEDIUM] npm ci fallback to npm install masks lockfile drift without failing CI
+
+- 位置：`.github/workflows/ci.yml:52`
+- 触发：A PR edits frontend/package.json without regenerating frontend/package-lock.json (or the lockfile is otherwise out of sync with package.json), which is exactly the condition `npm ci` exists to catch and fail on.
+- 后果：`npm ci` fails fast as designed, but the `|| npm install` fallback immediately re-resolves and silently rewrites the dependency tree (potentially pulling newer/different transitive versions than what's committed in package-lock.json), then the job continues and passes. There is no follow-up step (e.g. `git diff --exit-code package-lock.json`) that fails the job when the lockfile actually drifted, so CI green does not guarantee the build used the locked, previously-tested dependency graph — a real dependency-resolution difference between CI's build and what a contributor tested locally can ship
+- 复现要点：Bump a dependency's version in frontend/package.json only, open a PR without running `npm install` to update frontend/package-lock.json — the 'Install dependencies' step still succeeds (falls through to npm install) and the job goes green despite the checked-in lockfile now being wrong.
+
+### [MEDIUM] Project cleanup failures are fully silent with zero logging, hiding orphaned QA projects from the real backend
+
+- 位置：`frontend/tests/desktop-e2e/run.mjs:851`
+- 触发：Any transient failure of the DELETE /api/projects/{id} call (backend busy while the just-saved docx write is still flushing, timeout, 4xx/5xx from the API, etc.) during suite teardown.
+- 后果：The bare `catch {}` swallows the error with no console output at all, so unlike feedback-e2e's swallow (which at least carries an explanatory comment) there is no trace that cleanup failed. The `桌面链路QA_<timestamp>` project — which now contains a real, engine-produced .docx with the QA_SAVE_MARKER content — is left permanently in the project list of whatever backend APP_E2E_BACKEND points to (default 9696, commonly the developer's own persistent packaged local-mode backend). Because nothing is printed, repeated flaky runs silently accumulate orphan projects that a maintainer has no way to attri
+- 复现要点：Point APP_E2E_BACKEND at a backend, artificially make one DELETE call fail (e.g. stop the backend right before teardown), and observe the suite exits without printing anything about the failed cleanup; the project remains in subsequent `GET /api/projects` listings.
+
+### [LOW] Final summary reports a possibly-crashed MinerU container as merely 'still loading' after already detecting the timeout
+
+- 位置：`restart-all.sh:394`
+- 触发：MinerU container fails to become healthy within the 300s wait loop (lines 226-236) — e.g. model download fails, container crashes, insufficient memory for the 16G limit in docker-compose.yml.
+- 后果：The script already printed an explicit warning at line 240 telling the user to check Docker logs because startup timed out, but the final summary re-runs the same curl check and, on failure, always prints the generic "启动中...模型加载需要时间" (still loading) message rather than reusing the fact that a full 300s wait already elapsed. A developer who only glances at the final green/red summary (scrolled past the earlier warning) reasonably concludes MinerU is merely slow and will keep waiting for a service that actually crashed.
+- 复现要点：Force MinerU to fail health (e.g. corrupt its Dockerfile build so the container exits immediately); run restart-all.sh and observe the final summary still says "启动中... 模型加载需要时间" instead of pointing back at the earlier timeout warning.
+
+### [LOW] backend/.env.production is loaded via unquoted export $(...) which word-splits on whitespace
+
+- 位置：`restart-all.sh:305`
+- 触发：Any value in backend/.env.production containing a space or shell-glob-sensitive character (e.g. a JSON blob, a path with a space — the project's own CLAUDE.md flags 'spaces in the path' as a real packaged-app hazard — or a value with an embedded '*').
+- 后果：`export $(...)` re-splits the substituted text on whitespace before handing it to `export`; a line like `SOME_VAR=hello world` becomes two separate tokens (`SOME_VAR=hello` and `world`), so the intended value is truncated and an unrelated bare env var `world` gets exported. This silently corrupts the environment the subsequently-launched backend JVM inherits, with no error printed — the script proceeds as if loading succeeded.
+- 复现要点：Add a line like `SOME_VAR=has spaces` to backend/.env.production, run restart-all.sh, then `echo $SOME_VAR` in the backend's environment (or check app.log for the JVM's effective config) — value is truncated to 'has' and a spurious `spaces` variable is exported.
+
+### [LOW] Preflight backend-reachability check accepts any HTTP response including 4xx/5xx as "backend OK"
+
+- 位置：`frontend/tests/desktop-e2e/run.mjs:63`
+- 触发：Backend process is up and accepting TCP connections but the endpoint itself errors (e.g. returns 500 due to a DB migration in progress, or 401/403 due to an auth regression) — fetch() resolves normally for any HTTP status, only network-level failures hit `.catch()`.
+- 后果：The preflight check reports the backend as healthy and the suite proceeds into ~10 minutes of Electron/CDP setup and UI steps, which then fail with confusing mid-test errors (e.g. "渲染层后端不一致" or opaque timeouts) instead of the clear, fast, actionable preflight message "前置缺失: 后端 http://127.0.0.1:9696" the check was designed to give.
+- 复现要点：Start the backend but make /api/skills/market/list return 500 (e.g. break the skills registry file), then run the suite — preflight passes silently and the failure surfaces many minutes later in an unrelated step.
+
+## 桌面外壳（7）
+
+### [HIGH] No single-instance lock — launching the app twice runs two full backend stacks against the same data directory
+
+- 位置：`desktop/main/main.js:1587`
+- 触发：User double-clicks the .app / exe a second time before the first instance has finished opening its window (a common impatience click while the first-run pysvc extraction or Java backend startup is still in progress and the window hasn't appeared yet), or drags multiple associated files onto the Dock icon in quick succession.
+- 后果：A second, fully independent Electron process runs app.whenReady() again: it calls createServices()/allocatePorts()/startEager() a second time, spawning a second Java backend and Python sidecars that all point at the same ~/.aiworkdeck data directory (same H2 file-based DB). Each instance also runs its own createMainWindow(), clipboard watcher, and IPC handlers. Best case the second backend fails to open the exclusively-locked H2 db file and that window shows a broken/errored UI (confusing duplicate window); worst case two live windows/backends compete for the same on-disk state. On quit, each 
+- 复现要点：Build/run the packaged app, then run the executable a second time while the first instance is still mid-startup (or immediately after launch). Observe two separate windows/processes both attempting to own ~/.aiworkdeck.
+
+### [HIGH] fetch-lowa-assets.js: wasm/font magic check has no minimum-size floor, unlike js/blob — truncated download passes validation and is cached forever
+
+- 位置：`desktop/scripts/fetch-lowa-assets.js:209`
+- 触发：Use the documented self-host path (LOWA_BASE_URL, see file header comment lines 26-36 and desktop/scripts/lowa-selfhost.md — a supported production flow for shipping a custom zh-CN LOWA build via e.g. Aliyun OSS) where soffice.wasm/soffice.data are served as identity (no brotli), or hit FONT_SANS_URL/FONT_KAI_URL directly. If the HTTP transfer for one of these binaries is cut short by a flaky proxy/CDN edge that still closes the socket cleanly after only the WASM/font header bytes were sent (Node's `res.on('end', ...)` fires whenever the stream believes it finished; no explicit content-length-
+- 后果：checkMagic() passes, the truncated file is written via the atomic .part->rename path (so it looks like a normal successful asset) and gets baked into the packaged desktop installer as dist/zetaoffice/lowa/soffice.wasm or a cjk-*.ttf/otf. The build reports success ('LOWA + font baked: N MB'). At runtime the LOWA editor engine fails WebAssembly.instantiate for every user of that build (or a CJK font fails to load), producing the exact 'looks alive but a feature silently never works' failure class this audit targets. Worse: on every subsequent CI/dev run, cachedOk() (lines 242-248) re-validates t
+- 复现要点：node desktop/scripts/fetch-lowa-assets.js with LOWA_BASE_URL pointed at a server/proxy that returns HTTP 200 with only the first 16-64 bytes of soffice.wasm (correct 4-byte magic, then closes the connection) — the script accepts and bakes it, exits 0.
+
+### [HIGH] Backend-port-chain test assertion is tautological — cannot detect a broken port allocator
+
+- 位置：`desktop/tests/service-manager.test.js:127`
+- 触发：Any future regression in allocateBackendPort() (desktop/main/services/backend-service.js) — e.g. the DESKTOP_PORT_CHAIN walk breaking, isOurBackend/canBind logic short-circuiting, or the chain silently falling through to the `findFreePort()` random-ephemeral-port fallback even when 5369/5169 were free — still produces a port that satisfies `port > 1024`, because findFreePort() binds via `net.listen(0)` which the OS assigns from the ephemeral range (typically 32768-60999 or 49152-65535), always > 1024.
+- 后果：The test's own docstring says it verifies 'the allocator walks the 5269/5369/5169 chain past a foreign listener' — that is precisely the behavior the `|| port > 1024` clause makes unfalsifiable. A regression that makes the backend land on an unpredictable random port (breaking the desktop shell's hardcoded 5269/5369/5169 assumptions used elsewhere, e.g. by e2e harnesses, dev tooling, or any other component expecting the well-known chain) would pass CI silently. This directly matches the audit brief's 'two instances racing for one port' / port-allocation stability category.
+- 复现要点：Temporarily replace allocateBackendPort's for-loop body with `return findFreePort()` unconditionally (i.e., break the chain-walk logic entirely) and run `node --test desktop/tests/service-manager.test.js` — the test 'backend allocator walks the 5269/5369/5169 chain past a foreign listener' still passes.
+
+### [MEDIUM] will-download listener is attached to the shared default session on every createMainWindow() call with no dedup guard
+
+- 位置：`desktop/main/main.js:423`
+- 触发：On macOS, window-all-closed does not quit the app (line ~1720: `if (process.platform !== 'darwin') app.quit()`), so a user can close the main window and reopen it via the Dock (`app.on('activate', ...)` -> createMainWindow()) repeatedly within one running app instance.
+- 后果：Each createMainWindow() call adds one more permanent 'will-download' listener to the same defaultSession object; old listeners are never removed (unlike the copy-listener path a few lines below, which is explicitly guarded with a `__checkbaCopyBound` flag for exactly this reason). After 10 reopen cycles Electron/Node will emit MaxListenersExceededWarning to the log, and every future download re-runs the save-dialog-options setup once per accumulated listener — a real, unbounded per-window-recreate resource leak in a code path the app is specifically designed to hit repeatedly on macOS.
+- 复现要点：On macOS: launch the app, close the main window (app stays alive), click the Dock icon to reopen (repeat ~10x), then trigger a download and check the main-process log for MaxListenersExceededWarning.
+
+### [MEDIUM] SERVER_PORT env inheritance can silently desync the JVM's actual listen port from the port ServiceManager probes for readiness
+
+- 位置：`desktop/main/services/backend-service.js:125`
+- 触发：The environment the Electron main process inherits already has `SERVER_PORT` set (a common convention used by many frameworks — Node/Rails/etc. — so plausible in a user's shell profile when launching from a terminal, or in some CI/dev/enterprise-managed environment) to a value different from the port `allocateBackendPort()` picked.
+- 后果：The JVM actually binds to the env-inherited SERVER_PORT, but ServiceManager keeps polling `ctx.ports.backend` (a different port) for readiness. `waitStartOrExit` never sees the port open, waits the full `startTimeoutMs` (60s packaged / 15s dev), then kills the (actually-healthy) JVM and retries — eventually throwing 'backend failed to start' and showing a false startup-failure error, even though a working backend process was running the whole time on a different port.
+- 复现要点：`export SERVER_PORT=6001` in the shell that launches the app, then start it: readiness probing targets the allocated port (e.g. 5269) while the JVM listens on 6001, causing a startup timeout despite the JVM being fully up.
+
+### [MEDIUM] prepare-python-service.js: ensurePython() cache check only verifies python3.11 binary presence, not full extraction — interrupted tar leaves a silently-reused broken runtime
+
+- 位置：`desktop/scripts/prepare-python-service.js:61`
+- 触发：The script's own header comment states the design intent: '共享运行时：同一 out 目录下多次调用只下载/解压一次 python/' — i.e. --out is expected to persist and be reused across multiple invocations (once per pysvc service: pptx/mineru/kokoro/asr, per .github/workflows/desktop-build.yml). If a run is interrupted mid-`tar -xzf` (Ctrl-C during local dev, OOM-kill, disk-full, or a cancelled/retried job on a runner where the workspace persists) after tar has already written bin/python3.11 but before the rest of the archive (stdlib, encodings, site-packages support files) finished extracting, the process dies with a half-
+- 后果：The very next invocation of prepare-python-service.js against the same --out (whether for the next pysvc service in the same job, or a rerun) sees the binary present and returns immediately — skipping re-download and re-extraction entirely, with no validation of the rest of the tree. A desktop build then bundles a truncated Python runtime; every Python sidecar service (pptx-service, mineru, kokoro, easyvoice — asr) that depends on stdlib modules missing from the incomplete extraction will crash at startup in the packaged app, which is exactly the 'zombie/silently-never-works sidecar' failure c
+- 复现要点：node desktop/scripts/prepare-python-service.js --service pptx-service --src ../pptx-service/backend --requirements ../pptx-service/requirements.lock --out bundled/mac-arm64, kill -9 the node process partway through the `tar -xzf` step (after bin/python3.11 is visible on disk but before the tree finishes), then rerun the same command — it logs 'python runtime already present' and proceeds straight 
+
+### [MEDIUM] update-service tests never exercise the multi-mirror fallback (fetchFirst) that the code and docs call out as the resilience mechanism
+
+- 位置：`desktop/tests/update-service.test.js:138`
+- 触发：A regression in `fetchFirst()` (desktop/main/services/update-service.js) — e.g. it stops trying the next URL on failure, or swallows the wrong error, or races/leaks a partial file when the first URL times out before falling back to the second — would ship with zero test coverage.
+- 后果：fetchFirst is the exact mechanism relied on for 'first URL unreachable (great-firewall-blocked mirror), second URL (GitHub) works' — the audit brief's own scenario for interrupted/partial download and mirror fallback. If it silently breaks (e.g. always uses the first URL and treats failure as fatal instead of falling through), users behind the primary mirror's failure mode get 'update check failed' forever with no test catching the regression.
+- 复现要点：Break fetchFirst() to `return fetchUrl(urls[0], opts)` (drop the loop/fallback), run the full update-service.test.js suite — all tests still pass because none supplies a first-URL-fails/second-URL-succeeds scenario.
+
+## 会议录音（5）
+
+### [HIGH] Malformed/unexpected-shape transcript JSON is silently treated as a legitimately empty meeting
+
+- 位置：`backend/src/main/java/com/checkba/service/meeting/MeetingTranscriptParser.java:197`
+- 触发：Any case where the downloaded transcription body is not the expected `{Transcription:{Paragraphs:[...]}}` shape: invalid JSON syntax (truncated/garbled body that still returns HTTP 200), a Tingwu API schema/field-name change, or (platform tier) a corrupted/mis-escaped embedded `transcription` string field coming back through the gateway's JSON envelope in completeFromGateway (651-661). readTree() swallows any parse exception and parseSegments/parseLocalSegments also silently return [] when the expected array path is simply absent.
+- 后果：The meeting is saved with STATUS_EMPTY and error=null (line 681), reported to the user exactly like a genuinely silent/no-speech recording, even though the real cause was a parse/format failure. Nothing is logged anywhere in this path, so there is no diagnostic trail either — the 'silently produced nothing' failure shape, indistinguishable from a correct empty result both to the user and to whoever investigates later.
+- 复现要点：Feed parseSegments a transcriptionJson that is valid JSON but lacks Transcription.Paragraphs (e.g. `{"error":"expired"}`) or is truncated/invalid JSON; it returns an empty list with no exception and no log line, and MeetingTranscriptionService.storeSegments lands on STATUS_EMPTY, the same terminal state as a real silent recording.
+
+### [HIGH] A persistently erroring or permanently unresolvable upstream task leaves the meeting stuck in TRANSCRIBING forever with no recovery path
+
+- 位置：`backend/src/main/java/com/checkba/service/meeting/MeetingTranscriptionService.java:613`
+- 触发：Any upstream failure mode that is not exactly 'completed', 'failed', or (platform-only) a BAD_REQUEST GatewayException — e.g. the Tingwu task silently expires/is garbage-collected server-side and getTask starts throwing on every call, or the gateway starts returning a transient-looking error kind forever due to a permanent bug on its side.
+- 后果：MeetingRecording.status stays TRANSCRIBING indefinitely. startTranscription (290-352) treats TRANSCRIBING as idempotent and just returns the existing record (294-297) without resubmitting, so the user has no 'retry' affordance from the UI — the meeting is permanently wedged with no error surfaced, and the only fix is a manual DB edit.
+- 复现要点：Simulate tingwuClient.getTask always throwing (or platformGatewayClient.getJson always throwing a non-BAD_REQUEST GatewayException) for a meeting already in TRANSCRIBING with a taskId set; call refreshIfNeeded repeatedly and observe status never leaves TRANSCRIBING and startTranscription keeps returning the same stuck record.
+
+### [HIGH] Concurrent "start recording" requests can create duplicate ProjectFile rows that map to the same physical audio path, causing recordings to overwrite each other
+
+- 位置：`backend/src/main/java/com/checkba/service/meeting/MeetingRecordingService.java:306`
+- 触发：Two POST /api/meetings/projects/{projectId} requests race (double-click on "start recording", a client retry after a slow/lost response, or two browser tabs) within the same minute. Both threads read `exists=false` for the same audioName before either transaction commits (default READ_COMMITTED, no unique index to serialize them), so both proceed to createFile() with the same name.
+- 后果：ProjectFileService.buildPhysicalPath() derives the physical storage path purely from projectId/parentId/name (not the row id), so two distinct MeetingRecording rows end up with two distinct audioFileId values that both resolve to the identical physical file on disk. Subsequent chunked audio uploads for the two different meetings (which append/write by audioFileId → filePath) will interleave or overwrite each other's bytes on the shared file, silently corrupting or losing one user's recording without any error being surfaced — matches the "feature silently produced nothing / wrong content" fail
+- 复现要点：From two concurrent HTTP clients within the same minute, call POST /api/meetings/projects/{projectId} for the same projectId in quick succession (or literally in parallel with curl -s & twice); inspect the project_file table for two rows sharing project_id/parent_id/name, then verify both audioFileId values resolve to the same filePath via ProjectFileService.buildPhysicalPath.
+
+### [HIGH] MeetingAudioTranscoder.toMp3 has no timeout around the native ffmpeg grab/record loop, so a corrupt or truncated recording can hang the single-threaded transcription worker forever
+
+- 位置：`backend/src/main/java/com/checkba/service/meeting/MeetingAudioTranscoder.java:28`
+- 触发：A recording file that is truncated or corrupt (e.g. the app or renderer crashed mid-recording, which this codebase explicitly designs around elsewhere — see the "崩溃恢复" comments in MeetingRecordingService.finish() and MeetingTranscriptionService.interruptedOrPending()) is fed to toMp3(). Truncated/malformed webm/opus streams are a known way to make ffmpeg demuxers/decoders block on I/O or spin without returning.
+- 后果：toMp3() is invoked from MeetingTranscriptionService's single-thread `meeting-transcribe` executor (one thread services every meeting in the JVM). If the native call hangs, that thread never becomes free again: every other meeting's transcription submission queued after it (BYOK, platform, and local tiers alike) is silently stuck forever behind it, with no error, no timeout, and no way for the user to unstick it short of restarting the whole desktop app process.
+- 复现要点：Create a webm file by starting a real MediaRecorder capture and truncating the resulting file mid-stream (or hand-craft a webm with a valid header but no valid audio track), feed it through MeetingRecordingService's flow so it becomes the audioFileId for a meeting, then call transcribe; observe that the single transcription worker thread stops making progress and no other meeting's transcription s
+
+### [MEDIUM] poll-on-read has no per-meeting locking; concurrent GETs can double-process the same completed task
+
+- 位置：`backend/src/main/java/com/checkba/service/meeting/MeetingTranscriptionService.java:532`
+- 触发：Two GET requests for the same meeting arriving within the same instant (e.g. two browser tabs, or desktop + mobile client both polling the same in-progress meeting) both read a stale/expired lastPolledAt before either has written the refreshed timestamp, so both pass the throttle check and both proceed to call refreshViaTingwu/refreshViaPlatform concurrently.
+- 后果：If the upstream task happens to be 'completed' at that moment, both threads independently call completeMeeting/completeFromGateway, each doing its own download + storeResults + save (duplicate work, last-write-wins). For the platform tier the class's own doc comment states the completion GET triggers settlement inside the gateway in the same request, so two concurrent completion GETs can each independently trigger settlement for the same task.
+- 复现要点：Call refreshIfNeeded(meeting) from two threads simultaneously for a meeting whose lastPolledAt is null/expired and whose upstream task is already 'completed'; observe both threads proceed past the throttle check and both execute completeMeeting/completeFromGateway.
+
+## 手机端同步（2）
+
+### [CRITICAL] Landed media metadata commits before bytes are saved; failure mid-download permanently loses the file yet marks it delivered
+
+- 位置：`backend/src/main/java/com/checkba/service/mobile/MobileRelayClientService.java:218`
+- 触发：During landAndAck(), createFile() runs in its own @Transactional method and commits the ProjectFile metadata row before the subsequent storage.save(in) call. If the HTTP body stream from GET /inbox/{id}/content drops mid-transfer (flaky network, server restart, disk-full on the desktop machine) after createFile() committed but before/while save() writes bytes, the IOException propagates out of landAndAck and is caught only by pollInbox's per-item catch, which logs and moves on ('留在中转区下轮重试'). The ACK call at the end of landAndAck is never reached, so the server-side item stays pending and will 
+- 后果：On the next poll, the idempotency check `already` only tests whether a file with that name exists under the day folder -- it does not check whether the file's bytes were actually written. Since the ProjectFile row from the failed attempt already exists, `already` is true, so the code skips the download+save entirely and jumps straight to sending ACK. The server then deletes the blob (ack() in MobileRelayStoreService) and marks the item delivered. Net result: the media is permanently gone server-side, the desktop project has a ProjectFile row pointing to a file that was never (or only partially
+- 复现要点：1. Desktop client polls /api/mobile/inbox and gets one pending video item. 2. landAndAck() calls createFile() successfully (DB row committed). 3. While streaming content.body() into storage.save(), the connection drops or disk write fails, throwing IOException. 4. pollInbox logs '影像 X 落盘失败' and moves on; ACK is never sent, item remains pending server-side. 5. Next poll (60s later) fetches the same
+
+### [LOW] TOCTOU race on the clientMediaId idempotency check turns a legitimate concurrent retry into a swallowed 'internal error' instead of returning the existing row
+
+- 位置：`backend/src/main/java/com/checkba/service/mobile/MobileRelayStoreService.java:131`
+- 触发：If a mobile client times out on a slow upload (large video, weak signal) and retries with the same clientMediaId while the first request is still in flight on the server, both requests can pass the findByUserIdAndClientMediaId check before either commits (classic TOCTOU on a check-then-insert with no locking/upsert). The loser's inboxRepository.save() then violates the (user_id, client_media_id) unique constraint declared on MobileMediaInbox.
+- 后果：The exception is not caught anywhere in the mobile relay code path, so it falls through to GlobalExceptionHandler's generic Exception handler, which returns HTTP 200 with {"code":1,"message":"服务器内部错误"} -- indistinguishable from any other server fault. The client-side idempotency contract documented in the class comment ('幂等：弱网重传...都不产生重复件') is violated for the specific case it exists to handle: the losing concurrent retry does not get back the existing record, it gets a generic failure and must retry again rather than being told 'already stored'.
+- 复现要点：Fire two POST /api/mobile/media requests concurrently with the same deviceId/projectKey/clientMediaId/fileName/mediaType (simulating a client-side retry-on-timeout) before either has committed; observe one succeeds normally and the other receives {"code":1,"message":"服务器内部错误"} instead of the existing record's id/clientMediaId/delivered fields.
+
+## 版本记录（2）
+
+### [HIGH] Historical file content is always fully buffered in memory with no size limit, then handed straight into an HTTP response
+
+- 位置：`backend/src/main/java/com/checkba/version/ProjectRepoService.java:326`
+- 触发：VersionController exposes this directly: GET /versions/{ref}/file-bytes and /versions/{ref}/file-text both call repoService.readBlobAtCommit(...) and return the resulting byte[] as the full HTTP response body (fileBytesAtRef/fileTextAtRef in VersionController.java). The multipart upload limit is configured at 20GB (application.yml:35-36), so a legal project can realistically contain large committed files (scanned exhibit sets, meeting-recording video/audio per the meeting-recording plugin). abortMerge() (line 582) also calls this for every conflicted path.
+- 后果：A single request for an old version of a large committed file loads the whole blob into heap before it can even be streamed to the client; several concurrent requests (or one very large file) can exhaust the shared backend JVM's heap and crash the process for all projects/users on that server, not just the requesting one. There is no streaming path (e.g. ObjectLoader.copyTo(outputStream) directly to the servlet response) and no size guard before attempting the load.
+- 复现要点：Commit a several-hundred-MB-to-multi-GB file into a project's git history (allowed by the 20GB multipart limit), then call GET /api/version/{projectId}/versions/{ref}/file-bytes?path=<file> for that version; watch heap usage spike by the full file size per concurrent request.
+
+### [MEDIUM] No detection or recovery for a stale .git/index.lock left by a crashed process — autosave then fails forever, silently
+
+- 位置：`backend/src/main/java/com/checkba/version/ProjectRepoService.java:127`
+- 触发：The JVM (or the whole container/desktop process) is killed mid git.add()/git.commit() — OOM-kill, forced quit, power loss, `kill -9` — while JGit holds the on-disk `.git/index.lock` for that project. Git's on-disk index locking (used internally by JGit's add/commit here) never self-heals a stale lock; nothing in this file, WorkSessionService, or RepoMaintenanceJob checks for or removes a leftover index.lock.
+- 后果：Every subsequent git.add()/commit() call for that project (autosave debounce commit, AI-round commit, merge-resolution commit) throws a LockFailedException wrapped as a non-userFacing VersionException. The debounce autosave path (WorkSessionService.scheduleDebounceCommit) catches this and only logs a warning ('自动存档失败') — it never surfaces to the UI and never retries the specific failure. From the moment of the crash onward, that project's version history silently stops advancing (no new autosave commits) with no visible error to the lawyer and no automatic remediation; the only fix is someone 
+- 复现要点：kill -9 the backend process (or the JVM) while a commitAll() is in progress for a project (e.g. pause with a debugger breakpoint inside git.commit().call() and kill the process), leaving .git/repos/project-{id}.git/index.lock behind. Restart the backend and trigger another autosave for that project: it throws immediately and is logged-and-swallowed on every subsequent debounce cycle; the version t
+
+## Office 插件（1）
+
+### [HIGH] Unguarded localStorage access at App.vue setup crashes the entire task pane when storage is blocked
+
+- 位置：`office-addin/taskpane/lib/settings.js:24`
+- 触发：Any environment where the Office task-pane webview blocks or throws on storage access: WebView2 under an enterprise Group Policy that disables site data/cookies for hosted content (plausible for a law-firm managed device, this product's customer base), a Mac Office host loading the pane through a WKWebView with storage partitioning/ITP that throws SecurityError for the pane's frame, or any locked-down browsing mode where localStorage.getItem throws instead of returning null.
+- 后果：loadSettings() throws synchronously inside `reactive(loadSettings())`. Because this executes before App.vue's own onMounted/try-catch wiring and main.js has no wrapper either, the exception propagates out of the Vue setup function and out of the Office.onReady callback uncaught. createApp(App).mount('#app') never completes, so the task pane never renders anything: no error toast, no settings screen. The user sees a permanently blank task pane with no way to reach Settings to diagnose or work around it.
+- 复现要点：In a WebView2/WKWebView configured to throw on storage access (e.g. defineProperty localStorage getter to throw SecurityError for a quick repro, or an actual enterprise policy disabling site data), load the task pane: reactive(loadSettings()) throws, mount() never resolves, task pane stays blank.
+
