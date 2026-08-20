@@ -254,12 +254,14 @@ public class ProjectFileService {
 
         ProjectFile savedFile = projectFileRepository.save(file);
         
-        // 尝试创建物理文件（从模板复制）
+        // 从模板物化物理文件。此前这里调的是 load()——靠「读不到就造一个」的副作用来建文件，
+        // 于是读路径也被迫保留那个副作用，任何一份正文丢失的文档都会被静默读成空白模板。
+        // 建与读拆开后，这里明确表达「创建」，load() 得以回归纯读（文件不存在就报错）。
         try {
-            storageServiceFactory.getStorageService().load(filePath);
+            storageServiceFactory.getStorageService().createFromTemplate(filePath);
             log.info("物理文件创建成功: {}", filePath);
         } catch (Exception e) {
-            log.warn("物理文件创建可能失败 (如果是第一次访问会自动创建): {}", filePath, e);
+            log.warn("物理文件创建失败（首次保存时会重新写入）: {}", filePath, e);
         }
 
         signalChange(projectId, userId);

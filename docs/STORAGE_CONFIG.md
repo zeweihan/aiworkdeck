@@ -17,6 +17,24 @@
 - 实际文件存储在文件系统或对象存储中
 - 通过统一的`StorageService`接口管理文件操作
 
+## StorageService 契约红线：读就是读，别在读路径造文件
+
+`StorageService.load(key)` 是**纯读**：文件不存在必须抛 `StorageException`。
+
+`LocalFileStorageService.load` 曾在文件不存在时**从 `docs/template.docx` 复制一份**并当成
+正常结果返回。于是一份正文丢失的文档（换存储位置、同步失败、只恢复了数据库、
+localRoot 项目里被外部删掉）会被读成一份**空白模板**：用户打开看到空文档、AI 读到的是
+模板内容、下载拿到的是模板，全程零报错；自动保存再把这份空白盖回去，原件就真的没了。
+同一行为在 `OssStorageService.load` 里从来没有（那边一直是抛），所以桌面端伪造、云端报错，
+同一份代码两种行为。
+
+新建文档确实需要物化一个初始文件，那是**另一件事**，走
+`StorageService.createFromTemplate(key)`（幂等，已存在则不动；对象存储侧默认空实现，
+保持其既有行为）。唯一调用方是 `ProjectFileService.createFile`。
+
+**新增存储实现或新增调用点时**：读路径一律 `load`，创建路径一律 `createFromTemplate`，
+不要再让读操作带副作用。回归用例 `MissingFileIsNotFabricatedTest`。
+
 ## 配置方式
 
 ### 1. 本地文件系统存储（默认）
