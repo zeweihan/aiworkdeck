@@ -1,0 +1,174 @@
+{
+  "$schema": "本文件描述发布视频 B-roll 镜头清单，对应 dev-board #59 与 docs/marketing/launch-video/broll-plan.md 第二节。",
+  "note": "三条红线：画面无任何可读文字 / 不出现可辨识正面人脸 / 不涉及产品界面。视觉母题为「纸与光」，组 A 冷调压抑，组 C 暖调明亮，组 B 为冷暖过渡的抽象转场。",
+  "fps": 24,
+  "shots": [
+    {
+      "id": "A1",
+      "group": "A",
+      "title": "深夜律所空工位",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "中景缓慢推近至近景（slow push-in），深夜空旷的律所办公区，一排职员工位在幽暗中向画面深处延伸，唯有最远处一张桌上的金属台灯亮着暖黄光晕，其余环境为冷调的青蓝色环境光，仿佛只剩应急照明未熄灭。窗外可见城市夜景灯火大幅虚化，作为背景光斑。镜头带轻微手持呼吸感，纪实质感，无锐利运动。桌面材质为哑光木纹与金属，边缘可见细微反光。全程无人物入镜，无任何文字或标识，明暗反差强烈，突出孤寂与压抑的氛围。"
+    },
+    {
+      "id": "A2",
+      "group": "A",
+      "title": "卷宗特写与翻页的手",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "特写至大特写，极浅景深，暖色侧逆光勾出边缘轮廓光。镜头缓慢横移（slow slide），跟随一只手（只露手部，不露脸、不露完整身形）快速翻动一叠厚重的牛皮纸卷宗，纸页翻动带起轻微的空气流动感。材质上强调牛皮纸文件夹的粗糙纹理、纸张边缘的绒毛质感与桌面木纹，背景大幅虚化仅剩暖色光斑。纸面留白，不出现任何可辨认的文字、印章或图案，只呈现纸张肌理与光影层次，情绪紧张、忙碌。"
+    },
+    {
+      "id": "A3",
+      "group": "A",
+      "title": "打印机吐纸微距",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "微距特写，固定机位，配合极浅景深的呼吸感缓慢推近。冷白顶光混合设备指示灯投出的冷蓝微光，一张张空白纸页从打印机出纸口缓慢吐出，依次跌落堆叠，纸面完全留白、不出现任何文字或图案。材质上突出打印机哑光塑料外壳与纸张边缘的轻微卷曲与投影，背景虚化为纯色冷调。画面强调机械节奏与重复动作，情绪机械、冷峻、单调。"
+    },
+    {
+      "id": "A4",
+      "group": "A",
+      "title": "挂钟与凉茶静物",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "静物特写组合镜头，冷调侧光，仅指针边缘泛起一丝反光。镜头极缓慢横向摇镜（slow pan），从墙面挂钟摇至桌角的一杯茶。挂钟钟面为极简几何刻度与纯几何指针（无数字、无文字），指针停留在深夜时刻；桌角一杯早已凉透的茶水表面浮着薄雾般的静止光泽。材质上强调金属钟面的哑光质感与瓷杯表面的水汽凝结。整体冷色调，画面留白多，营造时间停滞、疲惫压抑的氛围。"
+    },
+    {
+      "id": "B1",
+      "group": "B",
+      "title": "纸面纹理推近化为光带",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 3,
+      "resolution": "720p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "微距到抽象特写，顶光扫过纸面产生条状高光。镜头极缓慢推近，直至纸张纤维纹理占满画面，随后一道高光带如光线般缓慢横向扫过纸面。材质上呈现纸张纤维在微距下山脉般的粗粝肌理，色调由冷白渐变为暖黄。画面中无文字、无图案，纯粹以肌理与光影的抽象变化完成过渡，适合作为章节转场的柔和衔接镜头。"
+    },
+    {
+      "id": "B2",
+      "group": "B",
+      "title": "墨滴入水扩散",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 3,
+      "resolution": "720p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "微距特写，固定机位，画面内的运动完全由墨滴自身的扩散完成，无镜头位移。侧后方柔光打亮水面，形成透光质感，清水呈现透明质感，一滴深蓝黑色墨迹缓慢晕开出丝绸状纹理。背景为极简的冷灰色，无任何具象物体或文字，呈现优雅克制的抽象美感。"
+    },
+    {
+      "id": "B3",
+      "group": "B",
+      "title": "书页翻动光影",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 3,
+      "resolution": "720p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "特写至近景，侧逆光穿过翻动的纸页，形成明暗交替的光影闪烁。镜头缓慢横移，跟随书页翻动的弧线。材质上强调纸张半透光时的纤维质感与页边微卷的立体感，色调由冷调逐渐过渡到暖调，象征章节转换。书页留白，不出现任何可辨认的文字或图像，只强调光影节奏。"
+    },
+    {
+      "id": "B4",
+      "group": "B",
+      "title": "线条汇聚成网格",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 3,
+      "resolution": "720p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "抽象平视特写，均匀冷调侧光。镜头缓慢拉远（slow pull-back），画面中原本松散的几条光线状细线逐渐汇聚成规整的网格图案。材质接近激光切割纸片边缘的锐利质感与投影，色调以冷灰蓝为主，象征秩序感的建立。纯抽象几何构图，不含任何文字或标识。"
+    },
+    {
+      "id": "B5",
+      "group": "B",
+      "title": "晨光扫过桌面",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 3,
+      "resolution": "720p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "中近景，固定机位，光线本身完成运动，配合极轻微的推镜。一束逐渐增强的暖色晨光从画面一侧缓慢扫过一张空荡的办公桌面，木质桌面纹理在侧光下逐渐显现颗粒质感。色调从清冷的蓝紫晨光过渡到温暖的金黄色，象征天亮与新的开始。桌面干净无杂物、无文字标识，情绪由静谧转向希望。"
+    },
+    {
+      "id": "C1",
+      "group": "C",
+      "title": "清晨办公桌与合上的书",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "中景缓慢推近至近景（slow push-in），清晨阳光斜射入内，形成温暖的丁达尔光束。整洁的办公桌一角，一本合上的书静置桌面（封面纯色或抽象纹理，无文字图案），阳光在桌面投下柔和的光斑与阴影。材质上强调木质桌面的温润光泽与书本布纹质感。色调以暖金色为主基调，明亮通透，与开场组的冷调形成强烈反差，情绪平静、明朗、充满希望。"
+    },
+    {
+      "id": "C2",
+      "group": "C",
+      "title": "背影走向明亮走廊",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "中景至全景跟随镜头，从人物背后缓慢跟拍平移（slow tracking）。走廊尽头的强逆光形成剪影效果，画面中仅可见人物背影剪影，完全不露正面与面部特征，走廊两侧虚化为柔和光斑。材质上强调地面反光的哑光质感与远处玻璃门透出的柔和光晕。色调由中性过渡到明亮的暖白色，象征走向清晰的未来。"
+    },
+    {
+      "id": "C3",
+      "group": "C",
+      "title": "城市天际线延时由暗转亮",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "远景延时镜头，固定机位，云层与光影缓慢流动。天空色温随时间推移由冷蓝渐变为暖橙、再转为明亮天光，城市天际线剪影占据画面下半部分，建筑轮廓不出现任何可辨认招牌或文字。色调从深蓝夜色过渡到金色晨曦，最终呈现清澈明亮的白昼天光，展现城市苏醒的宏观视角，象征新篇章的开启。"
+    },
+    {
+      "id": "C4",
+      "group": "C",
+      "title": "笔搁在空白纸面",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "prompt": "特写静物镜头，固定机位微距，仅光影本身缓慢移动，营造时间流逝感。柔和的自然光从侧上方缓慢扫过，一支笔安静地搁在一张空白纸面中央，纸面留白干净，随着光影移动，笔身与纸面投影角度随之变化。材质上强调钢笔金属笔身的细腻反光与纸张纤维在斜射光下的浅浮雕质感。色调以暖白与米色为主，明亮通透，画面极简克制，作为全片收束的静止画面，呼应「纸与光」的核心视觉母题。"
+    },
+    {
+      "id": "D1",
+      "group": "D",
+      "title": "机动备用镜头一（预留，试映后补充）",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "reserved": true,
+      "prompt": ""
+    },
+    {
+      "id": "D2",
+      "group": "D",
+      "title": "机动备用镜头二（预留，试映后补充）",
+      "generateDurationSec": 5,
+      "finalDurationSecInEdit": 5,
+      "resolution": "1080p",
+      "ratio": "16:9",
+      "firstFrameImagePath": null,
+      "reserved": true,
+      "prompt": ""
+    }
+  ]
+}
