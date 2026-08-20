@@ -51,10 +51,9 @@ export default {
   systemSettings: '系统设置（AI 提供商 / API Key）',
   clientInitial: '客',
   addMember: '加人',
-  profile: '个人中心',
-  // 顶栏右上角的头像下拉（2026-08-19 从 rail 底部搬上来）
-  accountMenu: '账户与设置',
-  settingsTabName: '系统设置',
+  // 顶栏右上角的头像下拉（2026-08-19 从 rail 底部搬上来；2026-08-20 个人中心并进设置后只剩一项）
+  accountMenu: '设置',
+  settingsTabName: '设置',
   // 「语音」面板内部的两个 tab
   voiceTts: '语音合成',
   voiceRecorder: '会议录音',

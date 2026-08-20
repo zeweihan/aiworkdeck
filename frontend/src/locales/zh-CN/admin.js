@@ -1,11 +1,13 @@
-// 系统设置页（pages/admin/admin.vue）文案。语言分区（appLanguage）自带双语三元表达式，不在此列。
+// 统一「设置」页（components/admin/AdminPane.vue）文案。语言分区（appLanguage）自带双语三元表达式，不在此列。
 export default {
   // 左侧导航
-  navCardTitle: '系统管理',
+  navCardTitle: '设置',
   rerunWizard: '重新运行首次向导',
-  // 同级切换而不是「返回」：设置页与个人中心互跳走 redirectTo，
-  // 真正的返回由全局返回键承担（utils/globalBack.js）
-  backToProfile: '个人中心',
+  // 两个分组标题（2026-08-20 个人中心并入设置）
+  navGroupPersonal: '个人',
+  navGroupSystem: '系统',
+  // 「个人」组：工作记录 / 我的收藏 / 我的代办三项复用 account.tab* 文案
+  navPersonalSettings: '账户与安全',
   navAi: 'AI 功能设置',
   navPlatform: '平台服务',
   navAccount: '账户与用量',

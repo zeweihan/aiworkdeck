@@ -288,8 +288,8 @@ export const fileOpenTabsMethods = {
       if (tabType === 'web') return GLYPHS.web
       if (tabType === 'market-detail') return GLYPHS.blocks
       // 项目概览 2026-08-19 起在左栏展示，不再有 project-home 标签
+      // 个人中心 2026-08-20 并进了「设置」标签，不再有 user-profile 标签
       if (tabType === 'admin-settings') return GLYPHS.settings
-      if (tabType === 'user-profile') return GLYPHS.user
       return fileGlyph(type)
     },
     isFileTypeSupported(file) {
