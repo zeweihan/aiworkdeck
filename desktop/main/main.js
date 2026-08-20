@@ -28,6 +28,10 @@ let mainWindow = null
 let services = null
 let modelManager = null
 let updateService = null
+// 首启 pysvc 解压完成后仍需保留的进度窗（见 ensurePysvcReady）：解压只是启动链的一段，
+// 后面 createServices→startEager 还要拉起 Java 后端等本机服务，期间没有它就是纯黑屏，
+// 系统会判定"无响应"。真正销毁挪到 createMainWindow 之后（ready-to-show 时机，见下）。
+let firstLaunchSplash = null
 
 // 增量更新（docs/INCREMENTAL_UPDATE_DESIGN.md）：overlay 上下文——三个 seam
 // （backend jar / h5 / zetaoffice 壳层）与 update-service 共用
@@ -1301,6 +1305,11 @@ function resolvePysvcRoot() {
 // 首启/升级后的 pysvc 解压（幂等）。带一个极简进度窗——mineru lib 解压要数十秒，
 // 无提示会被当成"点了没反应"。失败不阻塞主流程：弹框告知后照常开窗，
 // 相关 Python 服务会各自启动失败并落日志。
+//
+// 解压完成不等于启动完成：后面还要 createServices→allocatePorts→startEager 拉起
+// Java 后端等本机服务，这段同样耗时且此前完全没有 UI（系统据此判定"无响应"，Dock
+// 弹强制退出）。所以这里解压完不销毁窗口，只把文案切到不确定态；真正销毁交给调用方
+// 在 createMainWindow 之后做（见 firstLaunchSplash）。
 async function ensurePysvcReady() {
   const root = resolvePysvcRoot()
   if (!root) return
@@ -1327,14 +1336,28 @@ async function ensurePysvcReady() {
     const html = `<!doctype html><meta charset="utf-8">
       <body style="margin:0;font:14px -apple-system,'Segoe UI',sans-serif;background:#1e1f24;color:#e8e8ea;display:flex;align-items:center;justify-content:center;height:100vh;user-select:none">
         <div style="width:320px;text-align:center">
-          <div style="margin-bottom:6px">正在准备本地组件…</div>
-          <div style="font-size:12px;color:#9a9aa2;margin-bottom:14px">首次启动或版本更新后需解压，约一分钟</div>
+          <div id="title" style="margin-bottom:6px">正在准备本地组件…</div>
+          <div id="subtitle" style="font-size:12px;color:#9a9aa2;margin-bottom:14px">首次启动或版本更新后需解压，约一分钟</div>
           <div style="background:#33343c;border-radius:4px;height:8px;overflow:hidden">
             <div id="bar" style="background:#4f8cff;height:100%;width:0%;transition:width .4s"></div>
           </div>
           <div id="pct" style="font-size:12px;color:#9a9aa2;margin-top:8px">&nbsp;</div>
         </div>
-        <script>window.__setP=function(p){if(p>=0){document.getElementById('bar').style.width=p+'%';document.getElementById('pct').textContent=p+'%'}}</script>
+        <style>
+          @keyframes indet { 0% { margin-left:-40% } 100% { margin-left:100% } }
+          #bar.indet { width:40% !important; animation: indet 1.1s ease-in-out infinite; transition: none }
+        </style>
+        <script>
+          window.__setP=function(p){if(p>=0){document.getElementById('bar').style.width=p+'%';document.getElementById('pct').textContent=p+'%'}}
+          // 解压完成后进入"启动本地服务"阶段：耗时未知，切不确定态进度条
+          window.__setPhase=function(title, subtitle){
+            document.getElementById('title').textContent = title
+            document.getElementById('subtitle').textContent = subtitle
+            document.getElementById('pct').textContent = '\\u00a0'
+            var bar = document.getElementById('bar')
+            bar.classList.add('indet')
+          }
+        </script>
       </body>`
     splash.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html))
     splash.once('ready-to-show', () => { try { splash.show() } catch (e) { /* ignore */ } })
@@ -1348,8 +1371,8 @@ async function ensurePysvcReady() {
     versionDir,
     onProgress: ({ percent }) => setProgress(percent)
   })
-  try { if (splash && !splash.isDestroyed()) splash.destroy() } catch (e) { /* ignore */ }
   if (!result.ok) {
+    try { if (splash && !splash.isDestroyed()) splash.destroy() } catch (e) { /* ignore */ }
     console.error('[pysvc] extract failed:', result.message)
     try {
       const { dialog } = require('electron')
@@ -1361,6 +1384,31 @@ async function ensurePysvcReady() {
         })
       )
     } catch (e) { /* ignore */ }
+    return
+  }
+  // 成功：不销毁，切文案继续等后端等服务起来；调用方在 createMainWindow 后收尾
+  try {
+    if (splash && !splash.isDestroyed()) {
+      splash.webContents.executeJavaScript(
+        `window.__setPhase && window.__setPhase(${JSON.stringify('正在启动本地服务…')}, ${JSON.stringify('首次启动准备就绪，即将打开窗口')})`
+      ).catch(() => {})
+    }
+  } catch (e) { /* ignore */ }
+  firstLaunchSplash = splash
+}
+
+// firstLaunchSplash 收尾：绑到主窗口 ready-to-show，避免解压进度窗与主窗口两个
+// 窗口叠加闪烁；兜个超时兜底，防止极端情况下 ready-to-show 迟迟不来把它卡住。
+function retireFirstLaunchSplash() {
+  const splash = firstLaunchSplash
+  firstLaunchSplash = null
+  if (!splash || splash.isDestroyed()) return
+  const destroy = () => { try { if (!splash.isDestroyed()) splash.destroy() } catch (e) { /* ignore */ } }
+  if (mainWindow) {
+    mainWindow.once('ready-to-show', destroy)
+    setTimeout(destroy, 5000)
+  } else {
+    destroy()
   }
 }
 
@@ -1500,8 +1548,10 @@ ipcMain.handle('checkba:zetaoffice-editor', async () => {
 // 资源没烙进这次构建时返回 { available:false }，渲染层据此退回「下载后用其他程序打开」，
 // 而不是挂一个永远转圈的 iframe。
 ipcMain.handle('checkba:drawio-editor', async () => {
-  const { startDrawioServer, drawioUrl, isAvailable } = require('./drawio-server')
-  if (!(await isAvailable())) return { available: false }
+  const { startDrawioServer, drawioUrl, isAvailable, PACK_ID } = require('./drawio-server')
+  // packId 供渲染层在 unavailable 分支引导安装原生资源包（广场「litigation-visual」）；
+  // 不改变 available:false 本身的既有语义，desktop/tests/drawio-server.test.js 钉着它。
+  if (!(await isAvailable())) return { available: false, packId: PACK_ID }
   const { origin } = await startDrawioServer()
   return { available: true, kind: 'iframe', origin, url: drawioUrl(origin) }
 })
@@ -1596,6 +1646,7 @@ app.whenReady().then(() => {
         }
       } catch (e) { console.error('[overlay]', e) }
       createMainWindow()
+      retireFirstLaunchSplash()
       // 应用内更新检查（P1）：启动 2 分钟后静默首查，之后每 6 小时一次
       try {
         const { createUpdateService } = require('./services/update-service')
@@ -1659,6 +1710,7 @@ app.whenReady().then(() => {
       // 端口分配/启动链失败也要建出主窗口并提示，避免 app 起来却无窗口无提示（静默失败）
       console.error('[startup] service init failed', err)
       try { createMainWindow() } catch (e) { /* ignore */ }
+      retireFirstLaunchSplash()
       try {
         if (mainWindow) mainWindow.webContents.send('checkba:backend-status', { ok: false, message: String(err && err.message ? err.message : err) })
       } catch (e) { /* ignore */ }

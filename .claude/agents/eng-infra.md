@@ -225,6 +225,16 @@ description: 工程基建领域。任务涉及构建、发版、CI workflow、�
   就继续启动——**表根本没建出来，启动看着正常，第一次查询才炸**。
   `EntityIndexColumnNamingTest` 是这条的护栏：反射扫全部 `@Entity`，对着 H2 的
   INFORMATION_SCHEMA 逐条对账列名与索引，新实体写错驼峰会自动红。
+- **Electron 主进程禁用 `spawnSync`/任何同步阻塞调用**：v0.21.0 新机首启 10-30 秒无窗口、
+  Dock 弹强制退出的根因是 `pptx-service.js` 的 `prepare()` 用 `spawnSync` 跑 alembic 迁移——
+  这一步冻住的是**主进程**，Node 事件循环停摆等于整个 app 失去响应，系统据此判定"无响应"。
+  改成 `spawn` + Promise 等 `exit`（模式抄 `pysvc-runtime.js` 的 `extractTarOnce`），语义不变
+  （非零退出码报错、stderr 截断）。同理，首启解压进度窗（`main.js` 的 `ensurePysvcReady`）
+  不能在解压完就销毁——后面 `createServices→allocatePorts→startEager` 还要拉起 Java 后端等
+  本机服务，这段同样耗时且此前完全没有 UI；真正销毁要挪到 `createMainWindow()` 之后
+  （挂在主窗口 `ready-to-show`，避免双窗口叠加闪烁），窗口本身在这期间只切文案不重开。
+  `startEager` 逐个 `await` 也一样是白等：各服务端口已在 `allocatePorts` 统一分配好，
+  互相没有启动时序依赖，串行只是把首启时间累加，已改 `Promise.all` 且保留单服务失败互不影响。
 
 ## 验证（改本领域自身时）
 
