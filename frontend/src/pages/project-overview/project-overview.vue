@@ -2042,6 +2042,9 @@ export default {
         // 页面树之外的浮层（反馈浮窗）也要能压住 BrowserView：它自己不调
         // setViewsVisible，只置这个全局 ref，避免和下面这一处 watcher 互相打架
         globalOverlayActive.value ||
+        // 面板拖拽期间也要藏：BrowserView 是原生层，光标滑进去父窗口就收不到
+        // mousemove，拖拽会冻住（iframe/webview 由 is-resizing 的 CSS 放行）
+        (this.resizing && this.resizing.active) ||
         this.showOcrOverlay ||
         this.showScreenshotSaveDialog ||
         this.showExportDialog ||

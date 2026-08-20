@@ -143,6 +143,14 @@ export const tabDragSplitMethods = {
         evt.preventDefault()
       }
 
+      // 拖拽期间锁全局光标与选区：不锁的话光标滑过文本/按钮会闪回默认形状，
+      // 且快速拖动会顺手拖出一片文本选区
+      if (typeof document !== 'undefined' && document.body) {
+        document.body.style.cursor = target === 'bottom' ? 'row-resize' : 'col-resize'
+        document.body.style.userSelect = 'none'
+        document.body.style.webkitUserSelect = 'none'
+      }
+
       if (typeof window !== 'undefined') {
         if (!this.boundResizeMove) this.boundResizeMove = (e2) => this.onResizeMove(e2)
         if (!this.boundStopResize) this.boundStopResize = () => this.stopResize()
@@ -173,6 +181,16 @@ export const tabDragSplitMethods = {
       if (this._resizeRaf) return
       this._resizeRaf = requestAnimationFrame(() => {
         this._resizeRaf = null
+        this.applyResizeFrame()
+      })
+    },
+
+    // rAF 帧体：把 pending 的光标位置落到面板尺寸上。单独成方法是因为 stopResize
+    // 也要调它——mouseup 常常赶在 rAF 回调前到达，不冲刷这最后一拍，快速拖动
+    // 松手时最后一段位移会被整个丢掉（表现就是「不跟手、松手回弹一截」）。
+    applyResizeFrame() {
+      if (!this.resizing.target) return
+      {
         const vw = typeof window !== 'undefined' ? window.innerWidth : 1200
         const vh = typeof window !== 'undefined' ? window.innerHeight : 800
 
@@ -217,11 +235,18 @@ export const tabDragSplitMethods = {
           }
            this.resizing.currentValue = finalValue
         }
-      })
+      }
     },
 
     stopResize() {
       if (!this.resizing.active) return
+
+      // 冲刷最后一拍：mouseup 赶在 rAF 前到时，pending 位移还没落上去
+      if (this._resizeRaf) {
+        cancelAnimationFrame(this._resizeRaf)
+        this._resizeRaf = null
+        this.applyResizeFrame()
+      }
 
       // Save target and currentValue BEFORE nullifying
       const target = this.resizing.target
@@ -232,9 +257,10 @@ export const tabDragSplitMethods = {
       this.resizing.element = null
       this.resizing.currentValue = null
 
-      if (this._resizeRaf) {
-        cancelAnimationFrame(this._resizeRaf)
-        this._resizeRaf = null
+      if (typeof document !== 'undefined' && document.body) {
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        document.body.style.webkitUserSelect = ''
       }
 
       if (typeof window !== 'undefined') {

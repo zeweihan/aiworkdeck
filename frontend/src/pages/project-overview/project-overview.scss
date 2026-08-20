@@ -1266,6 +1266,15 @@ $bg-white: #FFFFFF;
   transition: none !important;
 }
 
+/* 拖拽期间让 iframe/webview 放行鼠标事件：mousemove 一进嵌入文档，父窗口就
+   收不到了，光标滑过编辑器时拖拽会整个冻住——「不跟手」的根因。桌面端的
+   浏览器面板是原生 BrowserView，CSS 管不到，由 desktopOverlayActive 在拖拽
+   期间隐藏兜底。 */
+.page-project-overview.is-resizing :deep(iframe),
+.page-project-overview.is-resizing :deep(webview) {
+  pointer-events: none !important;
+}
+
 .sidebar-header {
   display: flex;
   flex-direction: row;
@@ -1862,10 +1871,12 @@ $bg-white: #FFFFFF;
   min-width: 0; /* 防止内容撑大 */
   transition: all 0.2s ease-in-out; /* 更好的过渡 */
   overflow: hidden;
-  border-radius: 18px;
-  border: 1px solid rgba(15, 23, 42, 0.05);
-  background: rgba(249, 250, 255, 0.82);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6);
+  /* 方角贴合外壳其余区块（.workbench/.content-area/.side-panel 都已拉平）：
+     圆角卡片残留会在标签栏下沿与分栏缝两侧露出底色小弧口 */
+  border-radius: 0;
+  border: none;
+  background: #ffffff;
+  box-shadow: none;
 
   &.focused {
     /* 聚焦时的高亮提示 */
@@ -1896,9 +1907,9 @@ $bg-white: #FFFFFF;
   width: 100%;
   height: 100%;
   overflow: hidden; /* 确保内部组件不溢出 */
-  border-radius: 16px;
+  border-radius: 0;
   background: #fff;
-  box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.03);
+  box-shadow: none;
 }
 
 /* 预热备胎实例（librePool.js）：未激活时脱离布局流隐形占位。不能用
