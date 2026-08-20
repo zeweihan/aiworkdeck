@@ -2220,6 +2220,18 @@ try {
         }, j13Backend)
 
         const j13WaitText = async (t, ms = 15000) => j13Page.waitForFunction((x) => document.body.innerText.includes(x), { timeout: ms }, t)
+        // 限定容器的文本等待：「已启用」是市场列表里任何一个已启用 skill 都会挂的通用
+        // 状态标签（语音合成默认 enabled_by_default:true，广场列表随时挂着这句），
+        // 用 j13WaitText 查整页文本会在诉讼可视化真正装完、启用之前就被这个不相干的
+        // 标签撞上——2026-08-20 排查「J13 下载卡在固定字节」查到的真根因就是这里：
+        // 整页文本判定提前通过，紧接着立刻采的那个 /status 快照恰好落在下载早期，
+        // 看着像「进度冻结」，其实后端一直在正常往前走（桩服务器一侧、后端安装日志
+        // 都证实归档早已发完、install() 早已成功切到 ready）。限定到 .mdp（详情面板）
+        // 容器内才不会被别的 skill 的同名标签误伤。
+        const j13WaitTextIn = async (containerSel, t, ms = 15000) => j13Page.waitForFunction((sel, x) => {
+          const el = document.querySelector(sel)
+          return !!el && el.innerText.includes(x)
+        }, { timeout: ms }, containerSel, t)
         const j13ClickSel = async (sel) => {
           await j13Page.waitForSelector(sel, { timeout: 10000 })
           const box = await j13Page.evaluate((s) => {
@@ -2287,9 +2299,16 @@ try {
         })
 
         await step13('J13 轮询到 ready 且 skill 自动启用', async () => {
-          await j13WaitText('已启用', 20000)
-          const st = await j13Api('/api/packs/litigation-visual/status')
+          // 直接轮询后端状态（权威数据源），不靠 DOM 文本猜——UI 那句「已启用」见下面
+          // j13WaitTextIn 的注释，整页文本判定会被别的 skill 的同名标签撞上。
+          let st = null
+          for (let i = 0; i < 40; i++) {
+            st = await j13Api('/api/packs/litigation-visual/status')
+            if (st && st.status && (st.status.state === 'ready' || st.status.state === 'failed')) break
+            await sleep(500)
+          }
           if (!st || !st.status || st.status.state !== 'ready') throw new Error('后端状态未到 ready: ' + JSON.stringify(st))
+          await j13WaitTextIn('.mdp', '已启用', 20000)
         })
 
         await step13('J13 左栏 rail 出现诉讼可视化入口', async () => {
@@ -2298,7 +2317,7 @@ try {
 
         await step13('J13 卸载：确认框 + rail 入口消失', async () => {
           await j13ClickTextIn('.msb', '诉讼可视化')
-          await j13WaitText('已启用', 15000)
+          await j13WaitTextIn('.mdp', '已启用', 15000)
           await j13ClickSel('.mdp .mdp-btn.danger')
           // uni.showModal 在 H5 目标下渲染成 .uni-modal，确认按钮是 .uni-modal__btn_primary
           // （不是文案「卸载」本身——那个词在卸载按钮与确认按钮上各出现一次，

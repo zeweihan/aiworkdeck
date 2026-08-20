@@ -159,14 +159,26 @@ public class NativePackService {
     /** {@code /api/packs/{id}/info} 的返回体 */
     public record PackInfo(String latestVersion, long totalSize) {}
 
-    /** 安装进度（内存态；重启后按磁盘重建 ready / not_installed） */
+    /**
+     * 安装进度（内存态；重启后按磁盘重建 ready / not_installed）。
+     *
+     * <p>字段全部 {@code volatile}：写者是安装用的独立执行器线程（{@code installer}），
+     * 读者是任意一条处理 {@code GET /api/packs/{id}/status} 的 Tomcat 请求线程——前端
+     * 每秒轮询一次、app-e2e 测试脚本轮询更密。普通字段没有 happens-before 关系，理论上
+     * JIT 可以让读线程长期看不到写线程的更新。2026-08-20 排查 app-e2e J13「下载进度
+     * 卡在固定字节」时顺带发现这里没上 {@code volatile}——之后查实那次卡死的真根因
+     * 其实是 run.mjs 里 J13 段的一处断言 bug（{@code j13WaitText('已启用', ...)} 没
+     * 限定容器，被市场列表里另一个默认启用的 skill 的「已启用」标签提前撞上，接着立刻
+     * 采的那个 {@code /status} 快照恰好落在下载早期），不是这里；但字段本身缺
+     * {@code volatile} 仍是一个真实、独立成立的内存可见性隐患，顺手补上。
+     */
     public static class PackStatus {
-        private String id;
-        private String state = STATE_NOT_INSTALLED;
-        private String installedVersion;
-        private long bytesDownloaded;
-        private long bytesTotal;
-        private String error;
+        private volatile String id;
+        private volatile String state = STATE_NOT_INSTALLED;
+        private volatile String installedVersion;
+        private volatile long bytesDownloaded;
+        private volatile long bytesTotal;
+        private volatile String error;
 
         public String getId() { return id; }
         public void setId(String id) { this.id = id; }

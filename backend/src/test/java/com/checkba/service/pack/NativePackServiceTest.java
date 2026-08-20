@@ -277,6 +277,21 @@ class NativePackServiceTest {
         assertFalse(Files.exists(packsRoot().resolve(PACK_ID).resolve("current.json")));
     }
 
+    // ==================== 进度跨线程可见性 ====================
+
+    @Test
+    @DisplayName("PackStatus 字段全部 volatile：写者是安装用执行器线程，读者是任意一条处理 /status 的请求线程")
+    void packStatusFieldsAreVolatile() throws Exception {
+        // 2026-08-20 排查 app-e2e J13「下载进度卡在固定字节」时顺带发现的：真根因其实
+        // 是 run.mjs 那侧一处未限定容器的 DOM 文本断言（详见 run.mjs J13 段注释），
+        // 不是这里；但 PackStatus 的字段本来就该是 volatile（写者/读者分属不同线程，
+        // 普通字段没有 happens-before 保证），顺手钉住这条契约，别被后续改动悄悄剥掉。
+        for (String field : new String[] {"id", "state", "installedVersion", "bytesDownloaded", "bytesTotal", "error"}) {
+            java.lang.reflect.Field f = NativePackService.PackStatus.class.getDeclaredField(field);
+            assertTrue(java.lang.reflect.Modifier.isVolatile(f.getModifiers()), "PackStatus." + field + " 应为 volatile");
+        }
+    }
+
     // ==================== 幂等 / 卸载 / 封禁 ====================
 
     @Test
