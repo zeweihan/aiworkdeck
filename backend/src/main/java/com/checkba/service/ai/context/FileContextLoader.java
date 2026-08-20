@@ -33,20 +33,50 @@ public class FileContextLoader {
     private static final int CHAT_FOLDER_MAX_DEPTH = 20;
     /** 文件夹递归的深度保护（Agent 上下文组装场景，行为沿用原实现） */
     private static final int ASSEMBLER_FOLDER_MAX_DEPTH = 5;
+    /** 「读不出正文」提示里最多点名几个文件（其余用省略号，防大文件夹刷屏） */
+    private static final int UNREADABLE_NAMES_SHOWN = 10;
 
     private final ProjectFileService projectFileService;
     private final FileContentExtractorService fileContentExtractorService;
     private final AiContextProperties contextProperties;
     private final com.checkba.storage.ProjectStorageResolver storageResolver;
+    /** Office/PDF 正文抽取（Tika + PDFBox），与 read_document / extract_file_text 同一套 */
+    private final com.checkba.service.DocumentTextService documentTextService;
 
     public FileContextLoader(ProjectFileService projectFileService,
                              FileContentExtractorService fileContentExtractorService,
                              AiContextProperties contextProperties,
-                             com.checkba.storage.ProjectStorageResolver storageResolver) {
+                             com.checkba.storage.ProjectStorageResolver storageResolver,
+                             com.checkba.service.DocumentTextService documentTextService) {
         this.projectFileService = projectFileService;
         this.fileContentExtractorService = fileContentExtractorService;
         this.contextProperties = contextProperties;
         this.storageResolver = storageResolver;
+        this.documentTextService = documentTextService;
+    }
+
+    /**
+     * 文件夹上下文里单个文件的正文抽取。
+     *
+     * <p>纯文本类（java/js/md/txt/csv…）直读；<b>其余（docx/xlsx/pptx/doc/pdf）走
+     * {@link com.checkba.service.DocumentTextService}</b>——与 {@code read_document} /
+     * {@code extract_file_text} 同一套 Tika+PDFBox。
+     *
+     * <p>此前这里只有 {@code FileContentExtractorService.extractText} 一条路，而它的
+     * 白名单不含 Office 格式，恒返回空串，于是「文件夹里的 Word/PDF」在上下文里
+     * 一个字都没有——单文件路径在 17ca80d7 已修（走 read_document），文件夹路径漏了。
+     * 图片仍不在此处做 OCR：文件夹扫描是批量路径，逐张走 OCR 的代价不在本次修复范围内。
+     */
+    private String extractForFolder(ProjectFile f, java.io.File physicalFile) {
+        if (fileContentExtractorService.isTextFile(f.getName())) {
+            return fileContentExtractorService.extractText(physicalFile);
+        }
+        try {
+            return documentTextService.extractText(f);
+        } catch (Exception e) {
+            log.warn("Folder context: failed to extract text from {}: {}", f.getName(), e.getMessage());
+            return "";
+        }
     }
 
     /**
@@ -171,6 +201,9 @@ public class FileContextLoader {
 
             long maxFileSize = contextProperties.getFiles().getMaxFileSizeBytes();
             int maxChars = contextProperties.getFiles().getFolderFileMaxChars();
+            // 读不出正文的文件要在上下文里留痕：静默跳过时模型看到的是
+            // 「Folder Document Contents」标题下空空如也，只能当这些文件不存在或去猜内容。
+            List<String> unreadable = new ArrayList<>();
             for (ProjectFile f : allFiles) {
                 if (reads >= maxReads) break;
                 if (Boolean.TRUE.equals(f.getIsFolder())) continue;
@@ -180,18 +213,30 @@ public class FileContextLoader {
                     // 改走 resolver 才真正读到文件（localRoot 感知）
                     java.io.File physicalFile = storageResolver.resolve(f.getFilePath()).toFile();
                     if (physicalFile.exists() && physicalFile.length() < maxFileSize) {
-                        String text = fileContentExtractorService.extractText(physicalFile);
-                        if (text != null && !text.isEmpty()) {
+                        String text = extractForFolder(f, physicalFile);
+                        if (text != null && !text.isBlank()) {
                             if (text.length() > maxChars) text = text.substring(0, maxChars) + "...[Truncated]";
 
                             sb.append("\n#### File: ").append(f.getName()).append("\n");
                             sb.append("```\n").append(text).append("\n```\n");
                             reads++;
+                        } else {
+                            unreadable.add(f.getName());
                         }
+                    } else {
+                        unreadable.add(f.getName());
                     }
                 } catch (Exception e) {
-                    // Ignore read errors for individual files
+                    unreadable.add(f.getName());
                 }
+            }
+            if (!unreadable.isEmpty()) {
+                int shown = Math.min(unreadable.size(), UNREADABLE_NAMES_SHOWN);
+                sb.append("\n[System Note: ").append(unreadable.size())
+                  .append(" file(s) in this folder have no extractable text (scanned image, unsupported type, or too large): ")
+                  .append(String.join(", ", unreadable.subList(0, shown)));
+                if (unreadable.size() > shown) sb.append(", ...");
+                sb.append(". Use extract_file_text or read_file with OCR if you need their content.]\n");
             }
 
         } catch (Exception e) {

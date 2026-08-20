@@ -92,7 +92,9 @@ public class LegalTools implements AgentToolComponent {
                 return "Warning: no text extracted from '" + name + "' — the file may be a scanned image "
                         + "or empty; try extract_file_text, or read_file with OCR for image PDFs.";
             }
-            return result;
+            // 上限与 extract_file_text 同源：不截断的话，一份几 MB 的合同会变成一条几十万
+            // 字符的工具结果，下一轮必然上下文超限，且它落在 compactor 尾区剪不掉 = 整轮死
+            return ToolFileGuard.capToolText(name, result);
 
         } catch (Exception e) {
             log.error("Failed to read document {}", fileId, e);

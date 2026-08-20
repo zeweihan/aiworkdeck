@@ -176,6 +176,31 @@ template :1-539；script :541-1879（模式/模型选择 :648-766、文件变更
   内部一致性错误的 SSE 载荷带 `LlmErrorClassifier.INTERNAL_ERROR_MARKER`（`AI_INTERNAL_ERROR`），
   前端 `useAgentStream` 据此换成人话（`agentStream.internalErrorNotice`，两套 locale 成对）——
   这个标记**不由 `classify()` 产出**，是编排器直接拼的，别往 `Kind` 枚举里加。
+- **XML 兜底路径的工具反馈不许谎报成功**：`<tool_code>` 分支回喂模型的
+  「[System Tool Execution Log]」文案里，"The tool executed successfully." 曾是**无条件**拼进去的，
+  与同一条消息里的 `Status: FAILURE` 直接打架，紧跟着还催「output `<final>` IMMEDIATELY」。
+  XML 兜底是弱模型的主路径，而末位/最强指令会赢（PR#209 实证）——工具失败时模型被引导去宣布任务完成，
+  用户看到的就是「AI 说做完了，其实什么都没发生」。现按 `xmlToolSuccess` 二选一：成功给原收敛指令，
+  失败给纠错指令。**同一分支还补了原生分支早就有的空输出归一**（空白 → `BLANK_TOOL_OUTPUT` + FAILURE）：
+  模板包裹让它不会像原生分支那样抛 `ensureNotBlank`，但「Output: 空 + 断言成功」照样把模型骗去收尾。
+  回归用例 `AgentOrchestratorXmlToolFeedbackTest`。
+- **读取类工具的正文必须有上限，单一来源是 `ToolFileGuard.capToolText`（80k）**：
+  `extract_file_text` 一直有这个上限，`read_file` / `read_document` 没有——一次读一份几 MB 的合同
+  就产生几十万字符的单条 `ToolExecutionResultMessage`，下一轮必然被服务商以上下文超限 400 挡回。
+  **而且救不回来**：这条超长结果落在 `RunLoopCompactor` 的 keepRecent **尾区**（尾部平时刻意不剪），
+  中段又往往不够 `minMiddleMessages` 条数，于是 `forceCompact` 恒返回原实例、编排器判「压不动」终态，
+  同一份文档每次重试都必然再撞同一个 400。两道防线都要在：工具侧截断 +
+  `forceCompact` 兜底剪尾（**只在 force 下**；非 force 的尾部豁免是刻意设计，别一起改掉）。
+  回归用例 `OversizedToolResultRecoveryTest`。
+- **文件夹上下文要走 `DocumentTextService`，不是 `FileContentExtractorService.extractText`**：
+  后者的白名单（java/js/md/txt/csv…）不含 docx/xlsx/pptx/doc/pdf，恒返回空串，
+  `buildFolderContext` 随后 `if (!text.isEmpty())` 把这些文件**静默跳过**——
+  上下文里「### Folder Document Contents」标题下一个字都没有。17ca80d7 修的是**单文件**路径
+  （`read_document` 改走 Tika）与 `<file>` 段守卫，**文件夹路径当时漏了**。
+  抽不出正文的文件现在会在 `[System Note: ...]` 里点名留痕，不再凭空消失。
+  回归用例 `FolderContextOfficeFormatTest`。
+  （同文件的 `extractFileText` / `collectFolderContent` 有同样的白名单缺陷，但**零生产调用方**，
+  本次刻意没动——要用它们之前先照 `buildFolderContext` 改。）
 - **埋点体系**（`com.checkba.service.telemetry`，设计 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
   唯一采集入口 TelemetryService.record/recordConv，字段过 TelemetryAttrWhitelist 白名单
   （新事件/字段要同步白名单 + TelemetryServiceTest + 官网仓 lib/telemetry-store.ts 的 EVENT_WHITELIST）。
