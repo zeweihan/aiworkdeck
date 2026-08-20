@@ -597,13 +597,17 @@
           />
           <!-- 语音：语音合成 + 会议录音合并成一个入口，面板内部两个 tab。
                两个组件本身一行没改，这里只做宿主（tab 条 + v-if）。
-               「会议录音」tab 仅在 meeting-recorder skill 启用时出现——门控从
-               rail 位挪到了这里，判据仍是同一份 enabledSkillIds。 -->
+               两个 tab 各自门控 text-to-speech / meeting-recorder skill 是否启用——
+               门控从 rail 位挪到了这里，判据仍是同一份 enabledSkillIds；
+               整个 rail 位在两者都停用时才隐藏，见 LEFT_SIDEBAR_PLUGINS 计算属性。
+               实际渲染哪个 tab 走 effectiveVoiceTab（voiceTab 记的是用户选择，
+               选的那个被停用时兜底落到唯一可用的那个）。 -->
           <view v-else-if="leftPaneKey === 'voice'" class="voice-pane">
             <view class="voice-tabs">
               <view
+                v-if="ttsEnabled"
                 class="voice-tab"
-                :class="{ active: voiceTab === 'tts' }"
+                :class="{ active: effectiveVoiceTab === 'tts' }"
                 @tap="voiceTab = 'tts'"
               >
                 <text>{{ $t('workbench.voiceTts') }}</text>
@@ -611,7 +615,7 @@
               <view
                 v-if="meetingRecorderEnabled"
                 class="voice-tab"
-                :class="{ active: voiceTab === 'recorder' }"
+                :class="{ active: effectiveVoiceTab === 'recorder' }"
                 @tap="voiceTab = 'recorder'"
               >
                 <text>{{ $t('workbench.voiceRecorder') }}</text>
@@ -619,13 +623,13 @@
             </view>
             <view class="voice-tab-body">
               <MeetingRecordingPanel
-                v-if="voiceTab === 'recorder' && meetingRecorderEnabled"
+                v-if="effectiveVoiceTab === 'recorder'"
                 :project-id="projectId"
                 :current-user="currentUser"
                 @generate-minutes="handleMeetingMinutesStart"
               />
               <EasyVoicePane
-                v-else
+                v-else-if="effectiveVoiceTab === 'tts'"
                 @request-doc-text="handleEasyVoiceDocRequest"
                 @highlight-sentence="handleTtsHighlight"
                 @clear-highlight="handleTtsClearHighlight"
@@ -1999,6 +2003,28 @@ export default {
       if (this.enabledSkillIds === null) return true
       return this.enabledSkillIds.includes('meeting-recorder')
     },
+    /**
+     * 「语音」面板里的「语音合成」tab 显不显示，判据同 meetingRecorderEnabled：
+     * text-to-speech skill 默认启用（老用户升级后入口不消失），可在广场停用。
+     */
+    ttsEnabled() {
+      if (this.enabledSkillIds === null) return true
+      return this.enabledSkillIds.includes('text-to-speech')
+    },
+    /**
+     * voiceTab 记的是用户上一次点的 tab，与「当前哪个 tab 真的可用」是两回事——
+     * 默认值是 'tts'，如果 text-to-speech 被停用而 meeting-recorder 还启用，
+     * 直接按 voiceTab 渲染会两个面板都不出现。这里做一次兜底折算：优先尊重用户
+     * 选择，选的那个不可用时落到唯一可用的那个，两个都不可用时（rail 位本应已
+     * 隐藏）返回 null。
+     */
+    effectiveVoiceTab() {
+      if (this.voiceTab === 'recorder' && this.meetingRecorderEnabled) return 'recorder'
+      if (this.voiceTab === 'tts' && this.ttsEnabled) return 'tts'
+      if (this.ttsEnabled) return 'tts'
+      if (this.meetingRecorderEnabled) return 'recorder'
+      return null
+    },
     // 历史入口的聚合状态点：等用户操作(黄) > 运行中(绿) > 跑完未读(蓝)
     historyBadge() {
       const list = this.chatHistoryList || []
@@ -2038,7 +2064,13 @@ export default {
       // 功能在每次刚进页面时先从左栏抹掉再冒出来，接口挂了更是永远不见。
       // 宁可多显示一瞬，也不要让用户以为功能没了。
       if (this.enabledSkillIds === null) return base
-      return filterPluginsByEnabledSkills(base, this.enabledSkillIds)
+      const filtered = filterPluginsByEnabledSkills(base, this.enabledSkillIds)
+      // 「语音」rail 位本身没有 requiresSkill（门控在面板内部按两个 tab 分别做），
+      // 两个 tab 都停用时才整个位隐藏，判据复用同一份 ttsEnabled/meetingRecorderEnabled。
+      if (!this.ttsEnabled && !this.meetingRecorderEnabled) {
+        return filtered.filter(p => p.key !== 'voice')
+      }
+      return filtered
     },
     // 版本记录 2026-08-19 挪出 rail 数组、独立渲染在「项目成员」与「暂存区」之间，
     // 模板拿不到裸导入的 VERSION_PLUGIN，包一层 computed 才能在模板里用它的 svgPaths。
