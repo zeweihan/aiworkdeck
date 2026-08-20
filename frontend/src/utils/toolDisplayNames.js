@@ -53,6 +53,10 @@ const NAMES = {
   create_folder: { zh: '新建文件夹', en: 'Create folder' },
   rename_project_file: { zh: '重命名文件', en: 'Rename file' },
   move_project_file: { zh: '移动文件', en: 'Move file' },
+  // 标签（TagTools，标签类型维度 dev-board#63）
+  tag_list: { zh: '查看项目标签', en: 'List tags' },
+  tag_file: { zh: '给文件打标签', en: 'Tag file' },
+  tag_remove_from_file: { zh: '移除文件标签', en: 'Untag file' },
   // 记忆
   save_memory: { zh: '保存记忆', en: 'Save memory' },
   query_memory: { zh: '检索记忆', en: 'Query memory' },

@@ -68,18 +68,25 @@
             :placeholder="$t('files.tagFilterPlaceholder')"
           />
         </view>
-        <view class="tags-container">
-          <view
-            v-for="tag in shownTags"
-            :key="tag.id"
-            class="tag-chip"
-            :class="{ selected: selectedTagIds.includes(tag.id) }"
-            :style="getTagStyle(tag)"
-            @tap="toggleTag(tag.id)"
-          >
-            <text class="tag-name">{{ tag.name }}</text>
+        <!-- 分组只是展示形式，过滤/截断/排序全部作用于 shownTags 这一份全量列表，
+             按组切片渲染，不另起一套逻辑（三个分组共用一份过滤与截断） -->
+        <template v-for="group in shownTagGroups" :key="group.type">
+          <view v-if="group.tags.length > 0" class="tag-subsec-head">
+            <text class="tag-subsec-title">{{ $t(group.labelKey) }}</text>
           </view>
-        </view>
+          <view v-if="group.tags.length > 0" class="tags-container">
+            <view
+              v-for="tag in group.tags"
+              :key="tag.id"
+              class="tag-chip"
+              :class="{ selected: selectedTagIds.includes(tag.id) }"
+              :style="getTagStyle(tag)"
+              @tap="toggleTag(tag.id)"
+            >
+              <text class="tag-name">{{ tag.name }}</text>
+            </view>
+          </view>
+        </template>
         <text
           class="tag-more"
           v-if="filteredTags.length > shownTags.length"
@@ -155,6 +162,7 @@
 <script>
 import { searchProjectContent, getProjectTags } from '@/services/api'
 import FileTypeIcon from '@/components/FileTypeIcon.vue'
+import { TAG_TYPE_PARTY, TAG_TYPE_ISSUE, TAG_TYPE_NORMAL, normalizeTagType } from '@/utils/tagTypes.js'
 
 // 标签超过这个数量才值得再给它一个过滤框
 const TAG_FILTER_THRESHOLD = 12
@@ -231,6 +239,16 @@ export default {
     shownTags() {
       if (this.tagsExpanded || this.tagFilter.trim()) return this.filteredTags
       return this.filteredTags.slice(0, TAG_MAX_COLLAPSED)
+    },
+    // 展开态按「当事人 / 争议焦点 / 其他标签」三组渲染；shownTags 已经算好过滤+截断，
+    // 这里只按类型切片，组内相对顺序原样保留（filteredTags 排好的序不受影响）
+    shownTagGroups() {
+      const list = this.shownTags
+      return [
+        { type: TAG_TYPE_PARTY, labelKey: 'files.tagGroupParty', tags: list.filter(t => normalizeTagType(t) === TAG_TYPE_PARTY) },
+        { type: TAG_TYPE_ISSUE, labelKey: 'files.tagGroupIssue', tags: list.filter(t => normalizeTagType(t) === TAG_TYPE_ISSUE) },
+        { type: TAG_TYPE_NORMAL, labelKey: 'files.tagGroupOther', tags: list.filter(t => normalizeTagType(t) === TAG_TYPE_NORMAL) }
+      ]
     }
   },
   mounted() {
@@ -543,6 +561,22 @@ $border-color: #E9ECEF;
   cursor: pointer;
 
   &:hover { text-decoration: underline; }
+}
+
+/* 展开态内的三段分组头（当事人/争议焦点/其他标签）：与 .tag-sec-head 同一套令牌，
+   不折叠、不带计数/清除按钮——判据类型已经写在标题里了 */
+.tag-subsec-head {
+  display: flex;
+  align-items: center;
+  height: var(--awd-panel-sec-h);
+  padding: 0 var(--awd-panel-pad-x);
+}
+
+.tag-subsec-title {
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--awd-panel-text-2);
 }
 
 .tag-filter-box {

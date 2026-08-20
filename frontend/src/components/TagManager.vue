@@ -11,20 +11,30 @@
     
     <view class="content">
       <view class="add-section">
-        <input 
-          v-model="newTagName" 
-          class="new-tag-input" 
+        <input
+          v-model="newTagName"
+          class="new-tag-input"
           :placeholder="$t('files.tagNamePlaceholder')"
           @confirm="handleAdd"
         />
-        <view 
+        <view
           class="color-picker"
           :style="{ backgroundColor: newTagColor }"
           @click="toggleColorPicker"
         ></view>
         <button class="add-btn" @click="handleAdd" :disabled="!newTagName">{{ $t('files.add') }}</button>
       </view>
-      
+
+      <view class="type-segment">
+        <view
+          v-for="opt in typeOptions"
+          :key="opt.type"
+          class="type-segment-option"
+          :class="{ selected: newTagType === opt.type }"
+          @click="selectNewTagType(opt.type)"
+        >{{ $t(opt.labelKey) }}</view>
+      </view>
+
       <view v-if="showColorPicker" class="color-options">
         <view 
           v-for="color in presetColors" 
@@ -46,18 +56,31 @@
           <view v-for="tag in tags" :key="tag.id" class="tag-row">
             <view class="tag-info">
               <view class="tag-dot" :style="{ backgroundColor: tag.color }"></view>
-              <input 
-                v-if="editingId === tag.id"
-                v-model="editName"
-                class="edit-input"
-                focus
-                @blur="saveEdit(tag)"
-                @confirm="saveEdit(tag)"
-              />
-              <text v-else class="tag-name-text" @click="startEdit(tag)">{{ tag.name }}</text>
-              <text v-if="tag.isSystem" class="system-badge">{{ $t('files.systemBadge') }}</text>
+              <view v-if="editingId === tag.id" class="edit-block">
+                <input
+                  v-model="editName"
+                  class="edit-input"
+                  focus
+                  @confirm="saveEdit(tag)"
+                />
+                <view class="type-segment edit-type-segment">
+                  <view
+                    v-for="opt in typeOptions"
+                    :key="opt.type"
+                    class="type-segment-option"
+                    :class="{ selected: editType === opt.type }"
+                    @click="editType = opt.type"
+                  >{{ $t(opt.labelKey) }}</view>
+                </view>
+                <view class="edit-save-btn" @click="saveEdit(tag)">{{ $t('common.confirm') }}</view>
+              </view>
+              <template v-else>
+                <text class="tag-name-text" @click="startEdit(tag)">{{ tag.name }}</text>
+                <text class="type-badge" :class="'type-' + normType(tag).toLowerCase()">{{ $t(tagTypeLabelKey(tag)) }}</text>
+                <text v-if="tag.isSystem" class="system-badge">{{ $t('files.systemBadge') }}</text>
+              </template>
             </view>
-            <view class="actions">
+            <view class="actions" v-if="editingId !== tag.id">
               <view class="action-btn edit" @click="startEdit(tag)">
                 <svg fill="none" viewBox="0 0 24 24" stroke="currentColor" width="16" height="16">
                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -78,6 +101,14 @@
 
 <script>
 import api from '@/services/api.js'
+import {
+  TAG_TYPE_NORMAL,
+  TAG_TYPE_PARTY,
+  TAG_TYPE_ISSUE,
+  TAG_TYPE_DEFAULT_COLORS,
+  TAG_TYPE_I18N_KEYS,
+  normalizeTagType
+} from '@/utils/tagTypes.js'
 
 export default {
   props: {
@@ -90,14 +121,23 @@ export default {
     return {
       tags: [],
       newTagName: '',
-      newTagColor: '#3B82F6',
+      newTagType: TAG_TYPE_NORMAL,
+      newTagColor: TAG_TYPE_DEFAULT_COLORS[TAG_TYPE_NORMAL],
       showColorPicker: false,
       presetColors: [
-        '#EF4444', '#F97316', '#F59E0B', '#10B981', '#3B82F6', 
-        '#6366F1', '#8B5CF6', '#EC4899', '#6B7280', '#000000'
+        '#EF4444', '#F97316', '#F59E0B', '#10B981', '#3B82F6',
+        '#6366F1', '#8B5CF6', '#EC4899', '#6B7280', '#000000',
+        '#B45309', '#9B1C31'
+      ],
+      // 新建/编辑标签共用的类型三段控件
+      typeOptions: [
+        { type: TAG_TYPE_NORMAL, labelKey: 'files.tagTypeNormal' },
+        { type: TAG_TYPE_PARTY, labelKey: 'files.tagTypeParty' },
+        { type: TAG_TYPE_ISSUE, labelKey: 'files.tagTypeIssue' }
       ],
       editingId: null,
-      editName: ''
+      editName: '',
+      editType: TAG_TYPE_NORMAL
     }
   },
   mounted() {
@@ -122,14 +162,28 @@ export default {
       this.newTagColor = color;
       this.showColorPicker = false;
     },
+    selectNewTagType(type) {
+      this.newTagType = type;
+      // 换型时把颜色带到该型的默认色，色板里仍可手动改
+      this.newTagColor = TAG_TYPE_DEFAULT_COLORS[type];
+    },
+    normType(tag) {
+      return normalizeTagType(tag);
+    },
+    tagTypeLabelKey(tag) {
+      return TAG_TYPE_I18N_KEYS[normalizeTagType(tag)];
+    },
     async handleAdd() {
       if (!this.newTagName.trim()) return;
       try {
         await api.createTag(this.projectId, {
           name: this.newTagName.trim(),
-          color: this.newTagColor
+          color: this.newTagColor,
+          type: this.newTagType
         });
         this.newTagName = '';
+        this.newTagType = TAG_TYPE_NORMAL;
+        this.newTagColor = TAG_TYPE_DEFAULT_COLORS[TAG_TYPE_NORMAL];
         this.refreshTags();
       } catch (e) {
         uni.showToast({ title: 'Failed to create tag', icon: 'none' });
@@ -138,14 +192,19 @@ export default {
     startEdit(tag) {
       this.editingId = tag.id;
       this.editName = tag.name;
+      this.editType = normalizeTagType(tag);
     },
     async saveEdit(tag) {
       if (!this.editingId) return;
-      if (this.editName.trim() && this.editName !== tag.name) {
+      const trimmedName = this.editName.trim();
+      const nameChanged = trimmedName && trimmedName !== tag.name;
+      const typeChanged = this.editType !== normalizeTagType(tag);
+      if (nameChanged || typeChanged) {
         try {
           await api.updateTag(this.projectId, tag.id, {
-            name: this.editName.trim(),
-            color: tag.color // Keep color for now, or allow editing
+            name: nameChanged ? trimmedName : tag.name,
+            color: tag.color, // Keep color for now, or allow editing
+            type: this.editType
           });
           await this.refreshTags();
         } catch (e) {
@@ -257,6 +316,37 @@ export default {
   background: #ccc;
 }
 
+.type-segment {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.type-segment-option {
+  flex: 1;
+  text-align: center;
+  padding: 5px 0;
+  font-size: 12px;
+  color: #666;
+  background: #f3f4f6;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.type-segment-option:hover {
+  background: #e5e7eb;
+}
+
+.type-segment-option.selected {
+  background: #1A5336;
+  color: #fff;
+}
+
+.edit-type-segment {
+  margin: 6px 0 0;
+}
+
 .color-options {
   display: flex;
   flex-wrap: wrap;
@@ -318,6 +408,35 @@ export default {
   font-size: 14px;
   color: #333;
   cursor: pointer;
+}
+
+.type-badge {
+  font-size: 10px;
+  color: #6b7280;
+  background: #f3f4f6;
+  padding: 1px 4px;
+  border-radius: 4px;
+  margin-left: 8px;
+}
+
+.edit-block {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.edit-save-btn {
+  align-self: flex-end;
+  margin-top: 6px;
+  font-size: 12px;
+  color: #1A5336;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 2px 8px;
+}
+
+.edit-save-btn:hover {
+  text-decoration: underline;
 }
 
 .edit-input {

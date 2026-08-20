@@ -15,6 +15,7 @@ import com.checkba.service.ai.tools.PluginDevTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.SubAgentTools;
+import com.checkba.service.ai.tools.TagTools;
 import com.checkba.service.ai.tools.TaskTools;
 import com.checkba.service.ai.tools.TextFileEditTools;
 import com.checkba.service.ai.tools.TodoTools;
@@ -63,6 +64,7 @@ final class RealToolBeans {
                 // offeredToolsInclude 永远失败、offeredToolsExclude 永远通过）。
                 // 补进来后 skill-orchestration-tools-not-trimmed 才真正有意义。
                 TodoTools.class,
+                TagTools.class,
                 TaskTools.class,
                 WebTools.class);
         List<AgentToolComponent> beans = new ArrayList<>();

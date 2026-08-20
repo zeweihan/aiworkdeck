@@ -49,7 +49,7 @@ public class TagController {
             @RequestBody CreateTagRequest request,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireMember(sessionId, projectId);
-        return tagService.createTag(projectId, request.getName(), request.getColor(), request.getDescription());
+        return tagService.createTag(projectId, request.getName(), request.getColor(), request.getDescription(), request.getType());
     }
 
     /**
@@ -62,7 +62,7 @@ public class TagController {
             @RequestBody UpdateTagRequest request,
             @RequestHeader(value = "X-Session-Id", required = false) String sessionId) {
         requireMember(sessionId, projectId);
-        return tagService.updateTag(projectId, tagId, request.getName(), request.getColor(), request.getDescription());
+        return tagService.updateTag(projectId, tagId, request.getName(), request.getColor(), request.getDescription(), request.getType());
     }
 
     /**
@@ -82,6 +82,7 @@ public class TagController {
         private String name;
         private String color;
         private String description;
+        private String type;
     }
 
     @Data
@@ -89,5 +90,6 @@ public class TagController {
         private String name;
         private String color;
         private String description;
+        private String type;
     }
 }

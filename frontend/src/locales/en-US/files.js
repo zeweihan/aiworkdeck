@@ -108,6 +108,15 @@ export default {
   deleteTagTitle: 'Delete Tag',
   deleteTagConfirm: 'Delete tag "{name}"?',
   deleteFailed: 'Failed to delete',
+  // Tag type dimension (dev-board#63): shared by TagSelector/TagManager/SearchPanel
+  tagTypeNormal: 'General',
+  tagTypeParty: 'Party',
+  tagTypeIssue: 'Issue',
+  tagTypeLabel: 'Type',
+  tagGroupParty: 'Party',
+  tagGroupIssue: 'Issue',
+  tagGroupNormal: 'Tags',
+  tagGroupOther: 'Other Tags',
   // MarkdownPreview.vue
   loadingDots: 'Loading...',
   loadFailedWithReason: 'Failed to load: {reason}',

@@ -2827,14 +2827,15 @@ export default {
        }
     },
     async handleCreateNewTag(payload) {
-       // payload can be string (legacy) or { name, color } object
+       // payload can be string (legacy) or { name, color, type } object
        const tagName = typeof payload === 'string' ? payload : payload?.name
        const tagColor = typeof payload === 'object' ? payload?.color : '#5BD197'
+       const tagType = typeof payload === 'object' ? payload?.type : undefined
 
        if (!this.targetFileForTags || !tagName) return
        try {
          // 1. Create Tag
-         const res = await createTag(this.projectId, { name: tagName, color: tagColor })
+         const res = await createTag(this.projectId, { name: tagName, color: tagColor, type: tagType })
          const newTag = res.data || res
 
          // 2. Refresh available tags
