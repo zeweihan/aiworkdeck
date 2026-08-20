@@ -12,12 +12,24 @@
 // 本地回环网络几毫秒就能传完，MarketDetailPane 的下载进度分支（bytesTotal>0 时才
 // 渲染的那一档 UI）在真实断言窗口里根本来不及被轮询到，「进度出现」这条断言会变成
 // 纯粹的运气——这里的延迟不是模拟真实网络，是让进度条状态有时间存在。
+//
+// HTTP 服务器刻意跑在独立 worker 线程（不是随 startPackStub() 调用方共用主线程的
+// 事件循环）：2026-08-20 排查 J13「下载卡在固定字节不再推进」发现，run.mjs 全程在
+// 一个 Node 进程里驱动 Puppeteer/CDP，J1-J12 若干旅程的 page.evaluate 结果处理、
+// GC 都在同一条事件循环上跑；archive 端点靠 setTimeout 链一路推 20 多个分块，主
+// 线程只要有一次忙起来拖住事件循环几百毫秒，pump() 的下一个 tick 就跟着迟到——
+// 两轮复现都卡在同一字节数（~120KB，约合 5 个分块），正是事件循环卡顿早期截断的
+// 痕迹，不是 NativePackService 下载逻辑本身的问题（同一份代码单独起隔离后端直连
+// 这个桩反复验证，从未卡过）。真实场景的 pack 源是独立机器上的 nginx，不共享任何
+// 客户端事件循环，不会被这类问题命中。挪进 worker 线程后，pump() 的计时不再受
+// 主线程忙闲影响，测试桩本身更健壮。
 
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { execFileSync } from 'node:child_process'
+import { Worker, isMainThread, parentPort, workerData } from 'node:worker_threads'
 
 const CHUNK_BYTES = 24 * 1024
 const CHUNK_DELAY_MS = 120
@@ -84,14 +96,9 @@ function buildFixture(dir, { id, version, minAppVersion = '0.1.0' }) {
   return { id, version, archiveName, archivePath, archiveSize: archiveBuf.length, publicKeyPem }
 }
 
-/**
- * 起本地 HTTP pack 源，serve `/plugin-packs/<id>/manifest.json(.sig)` 与
- * `/plugin-packs/<id>/<version>/<archive>`（与 PackProperties.baseUrls 的拼接
- * 规则一致）。archive 端点故意分块限速，manifest/sig 照常即时返回。
- *
- * @returns {{ url: string, publicKeyPem: string, version: string, archiveSize: number, close: () => Promise<void> }}
- */
-export async function startPackStub(dir, { id = 'litigation-visual', version = '9.9.9', minAppVersion } = {}) {
+/** worker 线程体：造 fixture、起 HTTP 服务器，通过 parentPort 把端口/公钥报回主线程。 */
+function runWorkerServer() {
+  const { dir, id, version, minAppVersion } = workerData
   const fx = buildFixture(dir, { id, version, minAppVersion })
   const manifestBytes = fs.readFileSync(path.join(dir, 'manifest.json'))
   const sigBytes = fs.readFileSync(path.join(dir, 'manifest.json.sig'))
@@ -123,16 +130,51 @@ export async function startPackStub(dir, { id = 'litigation-visual', version = '
     }
     res.writeHead(404); res.end('not found: ' + rel)
   })
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
+
+  server.listen(0, '127.0.0.1', () => {
+    const port = server.address().port
+    parentPort.postMessage({
+      type: 'ready', port, publicKeyPem: fx.publicKeyPem, version: fx.version, archiveSize: fx.archiveSize,
+    })
   })
-  const port = server.address().port
+
+  parentPort.on('message', (msg) => {
+    if (msg === 'close') {
+      try { server.closeAllConnections?.() } catch (e) { /* 老 Node 没有这个方法也无妨 */ }
+      server.close(() => { parentPort.postMessage({ type: 'closed' }) })
+    }
+  })
+}
+
+if (!isMainThread) {
+  runWorkerServer()
+}
+
+/**
+ * 起本地 HTTP pack 源，serve `/plugin-packs/<id>/manifest.json(.sig)` 与
+ * `/plugin-packs/<id>/<version>/<archive>`（与 PackProperties.baseUrls 的拼接
+ * 规则一致）。archive 端点故意分块限速，manifest/sig 照常即时返回。服务器本体
+ * 跑在独立 worker 线程，见文件头「HTTP 服务器刻意跑在独立 worker 线程」一节。
+ *
+ * @returns {{ url: string, publicKeyPem: string, version: string, archiveSize: number, close: () => Promise<void> }}
+ */
+export async function startPackStub(dir, { id = 'litigation-visual', version = '9.9.9', minAppVersion } = {}) {
+  const worker = new Worker(new URL(import.meta.url), { workerData: { dir, id, version, minAppVersion } })
+  const ready = await new Promise((resolve, reject) => {
+    worker.once('error', reject)
+    worker.once('exit', (code) => reject(new Error('pack-stub worker exited early (code ' + code + ')')))
+    worker.on('message', (msg) => { if (msg && msg.type === 'ready') resolve(msg) })
+  })
   return {
-    url: `http://127.0.0.1:${port}/plugin-packs`,
-    publicKeyPem: fx.publicKeyPem,
-    version: fx.version,
-    archiveSize: fx.archiveSize,
-    close: () => new Promise((resolve) => { try { server.closeAllConnections?.() } catch (e) {} server.close(() => resolve()) }),
+    url: `http://127.0.0.1:${ready.port}/plugin-packs`,
+    publicKeyPem: ready.publicKeyPem,
+    version: ready.version,
+    archiveSize: ready.archiveSize,
+    close: () => new Promise((resolve) => {
+      const done = () => { clearTimeout(fallback); worker.terminate().then(resolve, resolve) }
+      const fallback = setTimeout(done, 2000) // worker 万一没应答，兜底强制终止，别让 close() 悬着
+      worker.on('message', (msg) => { if (msg && msg.type === 'closed') done() })
+      try { worker.postMessage('close') } catch (e) { done() }
+    }),
   }
 }
