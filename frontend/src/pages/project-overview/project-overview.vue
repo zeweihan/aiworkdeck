@@ -1551,6 +1551,7 @@
 
 <script>
 import { defineAsyncComponent } from 'vue'
+import { flushDirtyEditors } from './flushDirtyEditors.js'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import { host, isDesktopHost } from '@/services/host.js'
 import BrowserPane from '@/components/BrowserPane.vue'
@@ -3115,8 +3116,7 @@ export default {
     switchToProject(p) {
       this.projectSwitcherOpen = false
       if (!p || Number(p.id) === Number(this.projectId)) return
-      // reLaunch：切项目不叠页面栈（多实例地雷）
-      uni.reLaunch({ url: `/pages/project-overview/project-overview?id=${p.id}` })
+      this.leaveWorkbench(`/pages/project-overview/project-overview?id=${p.id}`)
     },
     // 工作台里的「项目概览」= 打开左栏的 home 面板。
     // 顶栏切换器里那一项与 rail 第一个按钮是同一个动作。
@@ -3140,11 +3140,29 @@ export default {
         else setTimeout(() => this.loadHistoryChat({ conversationId }), 600)
       })
     },
+    // 离开工作台的唯一出口。
+    //
+    // 两件事必须在这里一起做，缺一件都出过问题：
+    // 1) **先把还没落盘的编辑器内容存下来**。自动保存是防抖的，敲完最后一个字到真正
+    //    落盘之间有一段窗口；reLaunch 直接销毁页面组件树，LibreOfficeEditor 的
+    //    beforeUnmount 自己写着「export 需要活的 webview，从这里保存已经太晚」——
+    //    于是那几秒的改动静默丢失，连个提示都没有。
+    // 2) 工作台参与的跳转一律 reLaunch：navigateTo 会把工作台留在页面栈里，
+    //    从列表页再进另一个项目就出现两个存活的工作台实例（全局监听多实例地雷）。
+    //
+    // 保存失败不阻断跳转（用户已经在走了），但会留一条日志；逐个实例 try/catch，
+    // 一个失败不拖累其它。
+    async leaveWorkbench(url) {
+      try {
+        await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+      } catch (e) {
+        console.warn('[project-overview] flush before leaving failed', e)
+      }
+      uni.reLaunch({ url })
+    },
     goAllProjects() {
       this.projectSwitcherOpen = false
-      // 工作台参与的跳转一律 reLaunch：navigateTo 会把工作台留在页面栈里，
-      // 从列表页再进另一个项目就出现两个存活的工作台实例（全局监听多实例地雷）
-      uni.reLaunch({ url: '/pages/project-list/project-list' })
+      this.leaveWorkbench('/pages/project-list/project-list')
     },
     // Cmd+P 快速打开面板选中文件
     onQuickOpenFile(file) {
@@ -3622,7 +3640,14 @@ export default {
     toggleFileMoreMenu() {
       this.showFileMoreMenu = !this.showFileMoreMenu
     },
-    handleLogout() {
+    async handleLogout() {
+      // 落盘必须排在 clearSession 之前：会话一清，保存请求就是未授权，
+      // 用户「退出登录」等于顺手丢掉最后几秒的修改。
+      try {
+        await flushDirtyEditors(this._libreRefs, this._plainTextRefs)
+      } catch (e) {
+        console.warn('[project-overview] flush before logout failed', e)
+      }
       try {
          clearSession()
       } catch (e) {}

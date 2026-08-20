@@ -434,13 +434,29 @@ check('newproject 按钮文案与跳转目标一致（不许挂着"个人中心"
   return null
 })
 
-check('工作台「全部项目」用 reLaunch 去项目列表页', () => {
+check('工作台「全部项目」用 reLaunch 去项目列表页，且离开前先落盘', () => {
   const src = readVue('src/pages/project-overview/project-overview.vue')
   const body = extractMethodBody(src, 'goAllProjects()')
   if (!body) return '找不到 goAllProjects'
   if (!body.includes('/pages/project-list/project-list')) return 'goAllProjects 没有指向项目列表页'
-  if (!body.includes('uni.reLaunch')) return '工作台参与的跳转一律 reLaunch，不能用 navigateTo'
   if (body.includes('uni.navigateTo')) return '工作台参与的跳转一律 reLaunch，检测到误用 navigateTo'
+
+  // 跳转本身可以直接 reLaunch，也可以走统一出口 leaveWorkbench()——后者在 reLaunch 之前
+  // 先 flush 未落盘的编辑器内容（自动保存是防抖的，reLaunch 直接销毁组件树，
+  // LibreOfficeEditor 的 beforeUnmount 已经来不及导出）。两种写法都算合规，
+  // 但走 leaveWorkbench 时必须确认那个出口自己是 reLaunch + 落盘。
+  if (!body.includes('uni.reLaunch')) {
+    if (!body.includes('this.leaveWorkbench(')) {
+      return '工作台参与的跳转一律 reLaunch，不能用 navigateTo'
+    }
+    const exit = extractMethodBody(src, 'async leaveWorkbench(url)')
+    if (!exit) return 'goAllProjects 走了 leaveWorkbench，但找不到这个统一出口'
+    if (!exit.includes('uni.reLaunch')) return 'leaveWorkbench 必须用 reLaunch（工作台参与的跳转一律 reLaunch）'
+    if (exit.includes('uni.navigateTo')) return 'leaveWorkbench 里检测到误用 navigateTo'
+    if (!exit.includes('flushDirtyEditors')) {
+      return '离开工作台前必须先落盘：否则自动保存防抖窗口内的改动会被 reLaunch 静默丢掉'
+    }
+  }
   return null
 })
 

@@ -7,6 +7,25 @@ description: 侧边栏与工作台外壳领域。任务涉及左侧 rail/左栏�
 
 职责边界：工作台整体布局、左侧 rail 与左栏、面板切换状态机、页面路由。各面板内部逻辑归 utility-tools / plugin-system；右栏聊天内容归 ai-chat；编辑器归 doc-editor。
 
+## 离开工作台前必须落盘（已踩）
+
+自动保存是防抖的，用户敲完最后一个字到真正落盘之间有一段窗口。`closeFile`
+（fileOpenTabs.js）与 `evictLibreInstance`（librePool.js）都会先 `await inst.flushSave()`
+再拆实例，但**离开整个页面**的三条路——切项目 `switchToProject`、返回列表 `goAllProjects`、
+退出登录 `handleLogout`——走的是 `uni.reLaunch`，页面组件树直接销毁，一次 flush 都没有。
+`LibreOfficeEditor.beforeUnmount` 自己写着「export 需要活的 webview，从这里保存已经太晚」，
+所以 Office 文档那几秒的改动**静默丢失且无任何提示**（纯文本有 PlainTextEditor 自己的
+beforeUnmount 兜底，Office 没有）。
+
+现在离开工作台只有一个出口 `leaveWorkbench(url)`：先 `flushDirtyEditors`（纯函数，
+`pages/project-overview/flushDirtyEditors.js`，零依赖便于单测）再 `uni.reLaunch`。
+`handleLogout` 因为要在 `clearSession()` **之前**落盘（会话一清保存就是未授权），
+自己显式 flush 而不复用出口。
+
+**新增任何离开工作台的路径都要走 `leaveWorkbench`**；`npm run check:nav` 已把这条钉住
+（goAllProjects 允许直接 reLaunch 或走 leaveWorkbench，走出口时会连带校验出口里有
+flushDirtyEditors），单测见 `frontend/tests/project-home/flush-dirty-editors.test.mjs`。
+
 ## project-overview.vue 内部地图（4939 行，主战场）
 
 > **下面这份 :xxx 行号地图早于「project-overview 分阶段拆分」，多数已漂（实测：
