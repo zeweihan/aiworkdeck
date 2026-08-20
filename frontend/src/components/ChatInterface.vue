@@ -1823,6 +1823,12 @@ export default {
 
     // --- Handle Enter Key ---
     const handleEnterKey = (e) => {
+      // 输入法组合中按下的 Enter 是「上屏候选词」，不是「发送」。
+      // 中文/日文/韩文输入时浏览器照样派发 keydown（isComposing=true，部分浏览器 keyCode=229），
+      // 不挡住的话这一下会把还没上屏的拼音直接当成消息发出去——中文用户天天撞。
+      // 编辑器侧（zetaOfficeImeOverlay / editor-main）早就为同一类问题做了 composing 闩，
+      // 聊天输入框一直漏着。
+      if (e.isComposing || e.keyCode === 229) return
       if (!e.shiftKey) {
         // Plain Enter -> Send
         e.preventDefault()
