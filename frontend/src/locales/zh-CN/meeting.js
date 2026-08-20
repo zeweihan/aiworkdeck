@@ -44,6 +44,9 @@ export default {
   notConfiguredByok: '未配置转写服务：录音会保存到项目文件，但不能转文字。管理员可在「系统管理 - 平台服务 - 会议录音转写」里填阿里云听悟凭证，或改用平台代采。',
 
   // ---- 录音 ----
+  micDeviceLabel: '麦克风',
+  micDeviceFallbackName: '麦克风 {n}',
+  micDeviceFallback: '选中的麦克风不可用，已切换到默认设备',
   startRecording: '开始录音',
   startHint: '点击即开始，说话人自动区分，结束后自动转写',
   recording: '录音中',

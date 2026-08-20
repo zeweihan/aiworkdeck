@@ -81,6 +81,10 @@
   <!-- 录音区：开会点一下就开录，录前零表单 -->
   <view class="mr-record-zone">
     <template v-if="!recordingActive">
+      <view class="mr-device-picker" v-if="audioDevices.length > 1">
+        <text class="mr-device-picker-label">{{ $t('meeting.micDeviceLabel') }}</text>
+        <AwdSelect :range="deviceLabels" :value="selectedDeviceIndex" @change="onDeviceChange" />
+      </view>
       <view class="mr-record-btn" @tap="onStartRecording">
         <view class="mr-record-dot"></view>
         <text class="mr-record-text">{{ $t('meeting.startRecording') }}</text>
@@ -141,6 +145,12 @@
           <text class="mr-item-meta">{{ metaLine(m) }}</text>
         </view>
         <text class="mr-status" :class="m.status.toLowerCase()">{{ statusText(m.status) }}</text>
+        <view class="mr-item-delete" :title="$t('meeting.delete')" @tap.stop="confirmDelete(m)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="3 6 5 6 21 6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </view>
       </view>
 
       <!-- 详情 -->
@@ -279,13 +289,17 @@ import {
 import { getAuthHeaders } from '@/utils/auth.js'
 import {
   recorderState, startRecording, stopRecording, pauseRecording, resumeRecording,
-  isRecordingActive, formatSeconds
+  isRecordingActive, formatSeconds, listAudioInputDevices
 } from '@/utils/meetingRecorder.js'
 import {
   localTierReady, localAsrProbeResult, refreshLocalAsrReadiness
 } from '@/config/platformServices.js'
 import { host } from '@/services/host.js'
 import AwdSwitch from '@/components/AwdSwitch.vue'
+import AwdSelect from '@/components/AwdSelect.vue'
+
+// 选中的麦克风设备持久化到本机，跨会议记住上次的选择
+const MIC_DEVICE_STORAGE_KEY = 'awd_meeting_mic_device_id'
 
 const POLL_INTERVAL_MS = 8000
 
@@ -313,7 +327,7 @@ const NOTICE_COPY = {
 
 export default {
   name: 'MeetingRecordingPanel',
-  components: { AwdSwitch },
+  components: { AwdSwitch, AwdSelect },
   props: {
     projectId: {
       type: [String, Number],
@@ -340,6 +354,10 @@ export default {
       showDeleteDialog: false,
       deletingMeeting: null,
       playingId: null,
+      // 麦克风选择（反馈8）。只有多于 1 个输入设备时下拉才出现——单设备的机器没有可选的意义。
+      audioDevices: [],
+      selectedDeviceIndex: 0,
+      _onDeviceChange: null,
       // 转写档位（GET /api/platform-services 的 asr 那一项）。
       // null = 还没读到 / 读不到（server 模式下非 admin 就会读不到），此时整块不渲染——
       // 摆一个「未知」比不摆更让人不安。
@@ -380,6 +398,9 @@ export default {
     },
     recordingHere() {
       return this.recordingActive && String(this.recState.projectId) === String(this.projectId)
+    },
+    deviceLabels() {
+      return this.audioDevices.map(d => d.label)
     },
     tierKnown() {
       return this.asrProvider !== null
@@ -456,6 +477,12 @@ export default {
     this.loadMeetings()
     this.loadAsrTier()
     this.loadAsrNotice()
+    this.loadAudioDevices()
+    // 设备插拔（外接麦克风/耳机）实时刷新列表；未授权时 label 也可能借这个事件补上
+    if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+      this._onDeviceChange = () => this.loadAudioDevices()
+      navigator.mediaDevices.addEventListener('devicechange', this._onDeviceChange)
+    }
     // 装载时就探一次：面板要在**按下录音键之前**说清这段录音会不会出本机（设计 §6.2.1）
     refreshLocalAsrReadiness()
     this.loadModelState()
@@ -482,6 +509,10 @@ export default {
   beforeUnmount() {
     if (this._pollTimer) clearInterval(this._pollTimer)
     try { if (this._onStopped) uni.$off('awd:meeting-recording-stopped', this._onStopped) } catch (e) { /* ignore */ }
+    if (this._onDeviceChange && navigator.mediaDevices && navigator.mediaDevices.removeEventListener) {
+      navigator.mediaDevices.removeEventListener('devicechange', this._onDeviceChange)
+    }
+    this._onDeviceChange = null
     if (this._modelProgressUnsub) {
       this._modelProgressUnsub()
       this._modelProgressUnsub = null
@@ -627,6 +658,27 @@ export default {
       }
     },
 
+    // ==================== 麦克风设备（反馈8） ====================
+    // 未授权过麦克风时浏览器把 device.label 恒置空字符串，只能用「麦克风 N」占位；
+    // startRecording 成功后（此时必然已拿到授权）会再调一次本方法把真实 label 换上来。
+    async loadAudioDevices() {
+      const list = await listAudioInputDevices()
+      const savedId = uni.getStorageSync(MIC_DEVICE_STORAGE_KEY)
+      this.audioDevices = list.map((d, i) => ({
+        deviceId: d.deviceId,
+        label: (d.label && d.label.trim())
+          ? d.label
+          : this.$t('meeting.micDeviceFallbackName', { n: i + 1 })
+      }))
+      const idx = savedId ? this.audioDevices.findIndex(d => d.deviceId === savedId) : -1
+      this.selectedDeviceIndex = idx >= 0 ? idx : 0
+    },
+    onDeviceChange(i) {
+      this.selectedDeviceIndex = i
+      const d = this.audioDevices[i]
+      if (d) uni.setStorageSync(MIC_DEVICE_STORAGE_KEY, d.deviceId)
+    },
+
     // ==================== 录音 ====================
     async onStartRecording() {
       // 告知没确认就不开录。**拦在这一刻是刻意的**：此时什么都还没发生，
@@ -637,8 +689,11 @@ export default {
         return
       }
       try {
-        await startRecording(this.projectId)
+        const device = this.audioDevices[this.selectedDeviceIndex]
+        await startRecording(this.projectId, device && device.deviceId)
         if (recorderState.configured !== null) this.configured = recorderState.configured
+        // 权限刚拿到手：重新枚举一次，把「麦克风 N」占位换成浏览器现在肯给的真实 label
+        await this.loadAudioDevices()
         await this.loadMeetings()
       } catch (e) {
         uni.showToast({ title: (e && e.message) || this.$t('meeting.cannotStartRecording'), icon: 'none' })
@@ -1009,15 +1064,15 @@ $mr-muted: #6B7280;
 }
 
 /* ---- 平台档转写的单独告知（录音开始之前）----
-   跟随 #389 定的面板密度令牌（与上面的 .mr-tier 同形），不自带一套 12px 的边距：
-   这块就摆在档位卡下面，两者用不同的节奏会让 260px 宽的左栏更挤。
-   唯一不跟的是正文行高——它是一段要读完的告知，不是一行状态。 */
+   视觉对齐 components/collab/CollabDialog.vue 的浅色语言（Slate 色阶、12px 圆角、
+   克制的边框底色）——原先的浅绿卡片与面板其余部分的中性灰不是一套语言（反馈15）。
+   横向节奏仍跟随 #389 定的面板密度令牌，只换配色与圆角，不动布局。 */
 .mr-notice {
   margin: var(--awd-panel-gap) var(--awd-panel-pad-x) 0;
-  padding: 8px;
-  border: 1px solid #D6E4DC;
-  border-radius: var(--awd-panel-radius);
-  background: #F4F9F6;
+  padding: 10px;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  background: #F8F9FA;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1026,12 +1081,12 @@ $mr-muted: #6B7280;
 .mr-notice-title {
   font-size: 12px;
   font-weight: 600;
-  color: #1F2328;
+  color: #0F172A;
 }
 
 .mr-notice-body {
   font-size: var(--awd-panel-fs-meta);
-  color: #4B5563;
+  color: #475569;
   line-height: 1.7;
 }
 
@@ -1047,7 +1102,7 @@ $mr-muted: #6B7280;
   width: 13px;
   height: 13px;
   flex: none;
-  border: 1px solid #9CA3AF;
+  border: 1px solid #CBD5E1;
   border-radius: 3px;
   background: #FFFFFF;
 
@@ -1059,7 +1114,7 @@ $mr-muted: #6B7280;
 
 .mr-notice-check-label {
   font-size: var(--awd-panel-fs-meta);
-  color: #374151;
+  color: #334155;
 }
 
 .mr-notice-actions {
@@ -1081,6 +1136,18 @@ $mr-muted: #6B7280;
   flex-direction: column;
   align-items: center;
   gap: 6px;
+}
+
+.mr-device-picker {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mr-device-picker-label {
+  font-size: 11px;
+  color: $mr-muted;
 }
 
 .mr-record-btn {
@@ -1287,6 +1354,34 @@ $mr-muted: #6B7280;
   &.transcribing { background: #EBF5FF; color: #1D6FC2; }
   &.transcribed { background: #EAF7F0; color: $mr-primary; }
   &.failed { background: #FDF2F2; color: $mr-danger; }
+}
+
+/* 收起行的删除入口（反馈10）：常驻显示会跟状态徽标抢视线，收起时只在 hover 时露出，
+   与 FileTree 的 .tree-item-actions 同一套显隐节奏 */
+.mr-item-delete {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: $mr-muted;
+  opacity: 0;
+  /* 不显示时不能吃点击：opacity 不影响命中测试，漏了这行的话，行右侧那块看不见的
+     区域仍会响应点击，弹出删除确认框却查不出缘由 */
+  pointer-events: none;
+  transition: opacity 0.15s;
+
+  &:hover {
+    background: #FDF2F2;
+    color: $mr-danger;
+  }
+}
+
+.mr-item-head:hover .mr-item-delete {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 /* ---- 详情 ---- */
