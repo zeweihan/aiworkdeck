@@ -47,6 +47,7 @@ export default {
   startRecording: '开始录音',
   startHint: '点击即开始，说话人自动区分，结束后自动转写',
   recording: '录音中',
+  connectingMic: '正在连接麦克风…',
   paused: '已暂停',
   pause: '暂停',
   resume: '继续',

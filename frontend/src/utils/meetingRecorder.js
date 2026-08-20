@@ -77,12 +77,16 @@ export async function startRecording(projectId) {
   }
   recorderState.status = 'starting'
   recorderState.error = ''
+  // projectId 必须与 status='starting' 同步写入，不能等 getUserMedia/建档两个
+  // await 都过了才赋值：面板的 recordingHere 计算属性同时判 isRecordingActive()
+  // 与 recState.projectId === this.projectId，projectId 还是 null 的这段窗口期
+  // 会被误判成"别的项目在录音"（新机首次要等系统麦克风授权弹窗，窗口被拉到必现）。
+  recorderState.projectId = projectId
   try {
     // 先拿麦克风再建档：权限被拒时不留空会议记录
     mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true })
     const res = await createMeetingRecording(projectId)
     const meeting = res.meeting || res
-    recorderState.projectId = projectId
     recorderState.meetingId = meeting.id
     recorderState.audioFileId = meeting.audioFileId
     recorderState.configured = res.configured !== undefined ? !!res.configured : null
