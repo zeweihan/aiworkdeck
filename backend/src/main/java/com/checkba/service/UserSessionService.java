@@ -99,6 +99,25 @@ public class UserSessionService {
         repository.deleteByTokenHash(sha256(plaintext));
     }
 
+    /**
+     * 作废某个用户的全部登录会话。
+     *
+     * <p>用在「手机号被转移到另一个账号」之后：老账号已经不再拥有这个号码，可它手上的
+     * 会话仍然有效，手机端会继续以老账号的身份请求——而老账号名下什么都没有，
+     * 于是项目列表恒为空且没有任何提示（用户看到的就是「一个项目都读不到」）。
+     * 作废之后手机端被迫重新登录，短信验证会把它落到归一后的账号上。
+     *
+     * @return 实际作废的会话条数
+     */
+    public long revokeAllForUser(Long userId) {
+        if (userId == null) return 0;
+        long removed = repository.deleteByUserId(userId);
+        if (removed > 0) {
+            log.info("作废用户 {} 的全部登录会话 {} 条（手机号已转移到其它账号）", userId, removed);
+        }
+        return removed;
+    }
+
     /** 每日清理过期会话（滑动过期在读路径已兜住，这里只是让表不积灰）。 */
     @Scheduled(fixedDelay = 24 * 60 * 60 * 1000, initialDelay = 10 * 60 * 1000)
     public void purgeExpired() {

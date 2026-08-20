@@ -15,6 +15,12 @@ import java.util.Optional;
 public class UserService {
 
     private final UserRepository userRepository;
+    /**
+     * 手机号转移后要作废原持有者的会话。用 @Lazy 打断 UserSessionService ->
+     * AuthController.registerUserSessionService -> ... 这条启动期的相互引用。
+     */
+    @org.springframework.context.annotation.Lazy
+    private final UserSessionService userSessionService;
 
     /** BCrypt 无状态、线程安全，可静态复用。 */
     private static final BCryptPasswordEncoder PW_ENCODER = new BCryptPasswordEncoder();
@@ -150,6 +156,17 @@ public class UserService {
                 userRepository.save(h);
                 claimLog.info("手机号 {} 从用户 {} 转移到桥接用户 {}（账号归一）",
                         com.checkba.service.sms.SmsAuthService.maskPhone(phone), h.getId(), user.getId());
+                // 转移完必须把原持有者的会话一并作废。否则手机端手上那张老会话仍然有效，
+                // 它会继续以老账号的身份请求 /api/mobile/projects——而目录镜像挂在归一后的
+                // 账号名下，老账号名下空空如也，返回的是合法的空数组：**没有报错、没有提示，
+                // 用户看到的就是「一个项目都读不到」，而且怎么重进都一样**（会话不过期就永远不会自愈）。
+                // 作废后手机端被迫重新走短信登录，落到归一后的账号上。
+                // 同一个人：占用方本就是用这个号码验证过控制权的账号。
+                try {
+                    userSessionService.revokeAllForUser(h.getId());
+                } catch (Exception e) {
+                    claimLog.warn("作废原持有者 {} 的会话失败（手机号已转移，用户需手动重新登录）", h.getId(), e);
+                }
             }
             user.setPhone(phone);
             user.setUpdatedAt(LocalDateTime.now());

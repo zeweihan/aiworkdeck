@@ -81,6 +81,7 @@ class AwdkLoginServiceTest {
 
     private StubTransport transport;
     private UserService userService;
+    private com.checkba.service.UserSessionService sessionService;
     private DeviceTokenService deviceTokenService;
     private AccountBindingRepository bindingRepository;
     private com.checkba.service.ai.PlatformAiKeyService platformAiKeyService;
@@ -117,7 +118,8 @@ class AwdkLoginServiceTest {
             usersById.put(u.getId(), u);
             return u;
         });
-        userService = new UserService(userRepository);
+        sessionService = mock(com.checkba.service.UserSessionService.class);
+        userService = new UserService(userRepository, sessionService);
 
         DeviceTokenRepository tokenRepository = mock(DeviceTokenRepository.class);
         when(tokenRepository.save(any(DeviceToken.class))).thenAnswer(inv -> {
