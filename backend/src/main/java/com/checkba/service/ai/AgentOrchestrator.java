@@ -46,6 +46,17 @@ public class AgentOrchestrator {
     // 工具连续失败达到该次数后，向模型注入强提示要求收敛
     private static final int CONSECUTIVE_FAILURE_NUDGE = 3;
 
+    /**
+     * 工具返回空白时替入上下文的占位说明。
+     *
+     * <p>不能原样把空串交给 {@code ToolExecutionResultMessage.from}：它的
+     * {@code ensureNotBlank(text, "text")} 会抛异常，一个返回空串的工具就掀翻整轮对话。
+     * 英文是给模型看的（与其它工具错误串同语种），不进用户可见文案。
+     */
+    public static final String BLANK_TOOL_OUTPUT =
+            "Error: the tool returned no output. Treat this as a failure: do not assume the operation "
+                    + "succeeded — verify with a read-only tool, or tell the user what is missing.";
+
     // LLM 失败自动重试：退避档位与次数上限按错误类型区分（见 LlmErrorClassifier.Kind），
     // 且仅在本轮尚未流出任何 token 时重放（对话状态未被污染，重放安全且用户无感知重复内容）；
     // 重试预算耗尽或模型下线时改走故障转移链（ai.failover），仍在同一计费通道内换模型
@@ -723,21 +734,33 @@ public class AgentOrchestrator {
                         result = toolResult.output();
                         success = toolResult.success();
                     }
+                    // 空输出归一：langchain4j 的 ToolExecutionResultMessage.from 对空白 text 抛
+                    // ensureNotBlank，一个返回空串的工具就能掀翻整轮对话（用户看到
+                    // 「Callback Error: text cannot be null or blank」）。任何工具返回空都不允许
+                    // 掀翻整轮——换成显式说明并按失败处理，走连续失败纠正回路让模型换个思路。
+                    if (!org.springframework.util.StringUtils.hasText(result)) {
+                        result = BLANK_TOOL_OUTPUT;
+                        success = false;
+                    }
                     result = appendFailureNudge(guard, result, success);
-                    messages.add(dev.langchain4j.data.message.ToolExecutionResultMessage.from(req, result));
 
                     // Determine status for history and display
                     String nativeToolStatus = success ? "SUCCESS" : "FAILURE";
+
+                    // Log for history persistence (include status attribute)
+                    // 先落执行日志再入栈：入栈那步一旦抛异常（历史上就是上面的 ensureNotBlank），
+                    // 排在它后面的 append 不会执行，崩溃轮的过程卡整段丢失、历史里无从回放
+                    executionLog.append(String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
+                        displayName.replace("\"", "'"), req.name(), AgentTagProtocol.escape(req.arguments()),
+                        nativeToolStatus, AgentTagProtocol.escape(result)));
+
                     // 载荷先截断再中和：截断口径按原文字数（与前端「...(截断)」提示一致），
                     // 中和只保证载荷不会顶掉外层标签（AgentTagProtocol，两侧契约）
                     sendTextDelta(conversationId, String.format("<tool_output status=\"%s\">%s</tool_output>",
                             nativeToolStatus,
                             AgentTagProtocol.escape(truncate(result, toolOutputDisplayLimit(req.name())))));
 
-                    // Log for history persistence (include status attribute)
-                    executionLog.append(String.format("<process name=\"%s\"><tool_code>%s(%s)</tool_code><tool_output status=\"%s\">%s</tool_output></process>\n",
-                        displayName.replace("\"", "'"), req.name(), AgentTagProtocol.escape(req.arguments()),
-                        nativeToolStatus, AgentTagProtocol.escape(result)));
+                    messages.add(dev.langchain4j.data.message.ToolExecutionResultMessage.from(req, result));
                 }
 
                 // 防走神注入（Claude Code system-reminder 模式）：每次工具执行后带上任务清单状态，
@@ -1068,13 +1091,16 @@ public class AgentOrchestrator {
             clearCancelledState(conversationId);
             activeStreamContent.remove(conversationId); // CLEANUP
           } catch (Exception e) {
-            // 确保异常时也能正确结束 bubble，避免前端一直显示加载状态
+            // 确保异常时也能正确结束 bubble，避免前端一直显示加载状态。
+            //
+            // 走 finishWithError 而不是只发一个 SSE：原来这里不落库，于是异常终止的那一轮
+            // 在历史里一个字都没有——用户当时看到过工具在跑、看到过半截回复，刷新后全没了
+            // （「历史对话吃消息」）。对照 handleStreamErrorTerminal 与 handleCancellation：
+            // 两者都存了部分内容。executionLog 一并带上，崩溃轮的过程卡才能回放。
             log.error("Error in onComplete callback for conversation: " + conversationId, e);
-            agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
-            sseEmitterService.send(conversationId, "error", "Callback Error: " + e.getMessage());
-            sseEmitterService.close(conversationId);
-            clearCancelledState(conversationId);
-            activeStreamContent.remove(conversationId); // CLEANUP
+            finishWithError(conversationId, projectId, userId,
+                    LlmErrorClassifier.INTERNAL_ERROR_MARKER + ": Callback Error: " + e.getMessage(),
+                    executionLog);
           } finally {
             // 流式回调运行在可复用线程池线程上，用完清理 ThreadLocal，防止会话串号
             editorBridgeService.clearCurrentConversationId();
@@ -1246,7 +1272,24 @@ public class AgentOrchestrator {
         String message = kind == null
                 ? err.getMessage()
                 : LlmErrorClassifier.taggedErrorMessage(kind, err.getMessage());
-        sseEmitterService.send(conversationId, "error", "Stream Error: " + message);
+        finishWithError(conversationId, projectId, userId, "Stream Error: " + message, null);
+    }
+
+    /**
+     * 错误终态的统一收尾：发 error 事件、保存已生成内容、关流、复位状态。
+     *
+     * <p>{@link #handleStreamErrorTerminal}（流式传输出错）与 onComplete 的 catch
+     * （回调内部一致性错误）共用这一条路径——两处都必须落库，否则那一轮在历史里
+     * 一个字都没有。
+     *
+     * @param ssePayload 直接下发给前端的 error 载荷，标记（AI_REGION_BLOCKED /
+     *                   AI_INTERNAL_ERROR 等）由调用方拼好
+     * @param executionLog 本轮已产生的工具过程日志，可为 null；非空时一并落库，
+     *                     崩溃轮的过程卡才能在历史里回放
+     */
+    private void finishWithError(String conversationId, String projectId, Long userId,
+                                 String ssePayload, StringBuilder executionLog) {
+        sseEmitterService.send(conversationId, "error", ssePayload);
         agentRunStateService.mark(conversationId, AgentRunStateService.RunStatus.ERROR);
         boolean wasStreamingOnError = editorBridgeService.isStreamingMode(conversationId);
         editorBridgeService.setStreamingMode(conversationId, false);
@@ -1257,9 +1300,11 @@ public class AgentOrchestrator {
         // 保存已生成的部分内容，避免"当时看到了回复、历史里却没有"
         StringBuilder sb = activeStreamContent.get(conversationId);
         String partialContent = sb != null ? sb.toString() : "";
-        if (!partialContent.isEmpty()) {
+        String logText = executionLog != null ? executionLog.toString() : "";
+        if (!partialContent.isEmpty() || !logText.isEmpty()) {
             saveAssistantMessage(conversationId, projectId, userId,
-                    partialContent + LangText.of("\n\n[生成出错，已中断]", "\n\n[Generation error, interrupted]"));
+                    logText + partialContent
+                            + LangText.of("\n\n[生成出错，已中断]", "\n\n[Generation error, interrupted]"));
         }
         sseEmitterService.close(conversationId);
         clearCancelledState(conversationId);

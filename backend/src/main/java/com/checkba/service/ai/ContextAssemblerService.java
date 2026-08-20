@@ -265,7 +265,11 @@ public class ContextAssemblerService {
                     }
                     systemText.append("<file id=\"").append(item.getId())
                               .append("\" name=\"").append(attrSafe(item.getName())).append("\"><![CDATA[\n");
-                    systemText.append(content != null ? fenceSafe(content) : "[Empty or unreadable file]");
+                    // 判空白而不只判 null：抽不出正文时（扫描件、抽取失败）拿到的是空串，
+                    // 原来会往上下文里注入一段空 CDATA——模型看到「文件在这儿但里面什么都没有」，
+                    // 于是转头自己再调一次读取工具。可见地写明读不出来才有下一步。
+                    systemText.append(content != null && !content.isBlank()
+                            ? fenceSafe(content) : "[Empty or unreadable file]");
                     systemText.append("\n]]></file>\n");
                     totalFileCount++;
                 }
@@ -386,7 +390,9 @@ public class ContextAssemblerService {
             }
             } // end zh active-document guidance
 
-            if (content != null && !content.isEmpty()) {
+            // 同 <file> 段：空白正文等于没读到，走下面的 readHint 分支明说「内容暂不可读」，
+            // 别注入一段空 CDATA 让模型以为文档本身是空的
+            if (content != null && !content.isBlank()) {
                 // Truncate if too long
                 int maxCharsPerFile = contextProperties.getFiles().getMaxCharsPerFile();
                 if (content.length() > maxCharsPerFile) {

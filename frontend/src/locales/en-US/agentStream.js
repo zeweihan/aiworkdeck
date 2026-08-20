@@ -19,6 +19,7 @@ export default {
   regionBlockedNotice: '> **This model is not available in your current network region**: models hosted overseas are blocked by their providers when accessed from a Mainland China network. Switch to the AI WorkDeck Cloud channel in Settings, or choose a model marked as available in both regions and resend.',
   quotaExhaustedNotice: '> **AI service credits exhausted**: the balance or quota for the current channel has been used up. With your own key, top up with your provider (such as OpenRouter); with the AI WorkDeck Cloud channel, check your credit allocation on the account page.',
   contextOverflowNotice: '> **The conversation exceeds the model context window**: automatic compression was attempted but it still does not fit. Start a new conversation, or attach fewer or shorter files.',
+  internalErrorNotice: '> **This run was interrupted by an internal error**: the work already done and the tool execution log have been saved and remain visible in the history. Send another message to continue; if this keeps happening, use the feedback button in the bottom-right corner to send us this conversation.',
   // Subtask progress rows
   subtaskStarted: 'Subtask started',
   subtaskEnded: 'Subtask finished',

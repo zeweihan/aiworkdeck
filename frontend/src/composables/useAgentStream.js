@@ -898,6 +898,12 @@ export function useAgentStream() {
                     // 走到这里说明后端强制压缩后仍装不下（或压不动）
                     currentAssistantBubble.value.content +=
                         '\n\n' + t('agentStream.contextOverflowNotice') + '\n'
+                } else if (errMsg.includes('AI_INTERNAL_ERROR')) {
+                    // 编排器内部一致性错误（后端 LlmErrorClassifier.INTERNAL_ERROR_MARKER）：
+                    // 载荷后面拼着裸 Java 异常文本（如 "text cannot be null or blank"），
+                    // 对用户毫无意义。已生成的部分内容与工具过程后端都落了库，刷新看得到。
+                    currentAssistantBubble.value.content +=
+                        '\n\n' + t('agentStream.internalErrorNotice') + '\n'
                 } else {
                     currentAssistantBubble.value.content += '\n\n' + t('agentStream.executionInterrupted', { message: errMsg }) + '\n'
                 }

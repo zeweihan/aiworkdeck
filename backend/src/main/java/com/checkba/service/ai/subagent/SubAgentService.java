@@ -372,7 +372,11 @@ public class SubAgentService {
         }
         toolsUsed.add(resolved);
         ToolRegistry.ToolResult result = toolRegistry.execute(rawName, argsJson, subCtx);
-        return result.output();
+        String output = result.output();
+        // 空输出归一（同主编排器）：ToolExecutionResultMessage.from 的 ensureNotBlank 会对空白
+        // 抛异常，一个返回空串的工具就能把整个子任务打成 LLM call failed。两条协议分支共用这里。
+        return output == null || output.isBlank()
+                ? com.checkba.service.ai.AgentOrchestrator.BLANK_TOOL_OUTPUT : output;
     }
 
     /**

@@ -33,9 +33,29 @@ public class LegalTools implements AgentToolComponent {
     private final com.checkba.service.ai.context.FileContentExtractorService fileContentExtractorService;
     private final com.checkba.service.platform.ExternalProviderResolver externalProviderResolver;
     private final com.checkba.service.platform.PlatformGatewayClient platformGatewayClient;
+    private final com.checkba.service.DocumentTextService documentTextService;
 
     // --- File Operations ---
 
+    /**
+     * 读取项目文件正文。
+     *
+     * <p>三条抽取路径，缺一条就有一整类文件读不出来：
+     * <ul>
+     *   <li>图片 / PDF → OCR（{@code ai.context.ocr-extensions}）；</li>
+     *   <li>纯文本类（java/js/md/txt/csv…）→ 直接按字符集解码；</li>
+     *   <li>其余（<b>docx/xlsx/pptx/doc 等 Office 格式</b>）→ Tika（{@link com.checkba.service.DocumentTextService}，
+     *       与 extract_file_text 同一套）。</li>
+     * </ul>
+     *
+     * <p>第三条曾经不存在：docx 两个白名单都不在，恒定落进
+     * {@code FileContentExtractorService.extractText} 的 else 分支返回空串——
+     * 而空串会被 {@code ToolExecutionResultMessage.from} 的 ensureNotBlank 抛出来掀翻整轮
+     * （用户看到「Callback Error: text cannot be null or blank」），
+     * 同时 Active Document 注入的正文也恒为空，模型转头自己再调一次本工具。
+     *
+     * <p>抽不出正文时<b>绝不返回空白</b>，而是给一句可行动的说明（口径抄 extract_file_text）。
+     */
     @ToolMeta(displayName = "读取文档", category = "file")
     @Tool("Read document content. Use this to read files from the project. Provide fileId.")
     public String read_document(String fileId) {
@@ -50,22 +70,30 @@ public class LegalTools implements AgentToolComponent {
 
             byte[] bytes = projectFileService.getFileBytes(fId);
             if (bytes == null || bytes.length == 0) return "File is empty.";
-            
-            // Create temp file for extractor (needed for Tika/PDFBox/OCR)
-            String ext = file.getFileType() != null ? "." + file.getFileType() : ".tmp";
-            tempPath = java.nio.file.Files.createTempFile("checkba_legal_" + fId + "_", ext);
-            java.nio.file.Files.write(tempPath, bytes);
-            java.io.File tempFile = tempPath.toFile();
-            
+
+            String name = file.getName();
+            boolean ocr = fileContentExtractorService.isOcrSupported(name);
             String result;
-            if (fileContentExtractorService.isOcrSupported(file.getName())) {
-               result = fileContentExtractorService.extractTextWithOcr(tempFile);
+            if (ocr || fileContentExtractorService.isTextFile(name)) {
+                // Create temp file for extractor (needed for OCR / charset decoding)
+                String ext = file.getFileType() != null ? "." + file.getFileType() : ".tmp";
+                tempPath = java.nio.file.Files.createTempFile("checkba_legal_" + fId + "_", ext);
+                java.nio.file.Files.write(tempPath, bytes);
+                java.io.File tempFile = tempPath.toFile();
+                result = ocr
+                        ? fileContentExtractorService.extractTextWithOcr(tempFile)
+                        : fileContentExtractorService.extractText(tempFile);
             } else {
-               result = fileContentExtractorService.extractText(tempFile);
+                // Office 格式（docx/xlsx/pptx/doc…）：Tika，与 extract_file_text 同一条路
+                result = documentTextService.extractText(file);
             }
-            
+
+            if (!StringUtils.hasText(result)) {
+                return "Warning: no text extracted from '" + name + "' — the file may be a scanned image "
+                        + "or empty; try extract_file_text, or read_file with OCR for image PDFs.";
+            }
             return result;
-            
+
         } catch (Exception e) {
             log.error("Failed to read document {}", fileId, e);
             return "Error reading document: " + e.getMessage();
