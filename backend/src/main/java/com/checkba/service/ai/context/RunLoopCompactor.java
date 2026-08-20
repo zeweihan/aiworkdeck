@@ -93,6 +93,34 @@ public class RunLoopCompactor {
         if (!cfg.isEnabled() || messages == null || messages.isEmpty()) {
             return messages;
         }
+        List<ChatMessage> outcome = compactCore(messages, modelId, force);
+        if (!force || outcome != messages) {
+            return outcome;
+        }
+        // 兜底：强制压缩（服务商已用 400 证实装不下）走到这里说明中段无可折、无可剪——
+        // 剩下的大头只可能在**尾部**。尾部平时刻意不剪（模型正在引用最近的结果），
+        // 但此刻的选择不是「剪不剪」而是「剪一刀还是整轮直接死」：一次
+        // read_document 读一份几 MB 的合同就能把单条工具结果顶到几十万字符，
+        // 它落在 keepRecent 尾区，中段又不够条数，于是 forceCompact 恒返回原实例、
+        // 编排器判定「压不动」终态——同一份文档每次重试都必然再撞同一个 400。
+        // 只剪正文、id/toolName 原样保留，工具配对不受影响；剪枝标记会告诉模型
+        // 中段没了、要全文就重新调用该工具。
+        try {
+            int headEnd = headEnd(messages);
+            List<ChatMessage> lastResort = pruneMiddleToolResults(messages, headEnd, messages.size());
+            if (lastResort != messages) {
+                log.warn("Context compaction last resort: pruned oversized tool result(s) in the keepRecent tail, "
+                        + "{} -> {} tokens", estimateTokens(messages), estimateTokens(lastResort));
+                return lastResort;
+            }
+        } catch (Exception e) {
+            log.warn("Last-resort tail pruning failed, keeping the original message stack", e);
+        }
+        return messages;
+    }
+
+    private List<ChatMessage> compactCore(List<ChatMessage> messages, String modelId, boolean force) {
+        AiContextProperties.Compaction cfg = properties.getCompaction();
         try {
             int tokens = estimateTokens(messages);
             int threshold = triggerThreshold(modelId);

@@ -846,6 +846,13 @@ public class AgentOrchestrator {
                                 : "Unknown tool in custom parser: " + code;
                         xmlToolSuccess = toolResult.found() && toolResult.success();
                     }
+                    // 空输出归一（与原生分支同口径，见上）：XML 兜底路径不会因空白抛
+                    // ensureNotBlank（feedbackMsg 有模板包裹），但「Output: 空」配上下面那句
+                    // 成功断言，等于告诉模型「跑成功了、只是没输出」——模型转头就收尾。
+                    if (!org.springframework.util.StringUtils.hasText(result)) {
+                        result = BLANK_TOOL_OUTPUT;
+                        xmlToolSuccess = false;
+                    }
                     result = appendFailureNudge(guard, result, xmlToolSuccess);
 
                     // Add Result to History
@@ -857,9 +864,17 @@ public class AgentOrchestrator {
                          result += "\n\n(System Note: File operation completed successfully.)";
                     }
 
-                    // Explicitly tell the model to EVALUATE - with strict anti-over-execution instructions
-                    String feedbackMsg = String.format("[System Tool Execution Log]\nTool: %s\nStatus: %s\nOutput: %s\n\n(CRITICAL INSTRUCTION: The tool executed successfully. Now compare with the ORIGINAL user request. If the SPECIFIC task the user asked for is complete, output `<final>` IMMEDIATELY. DO NOT perform additional operations unless the user EXPLICITLY requested them. For example, if user asked to 'delete the 3rd z' and you deleted it, you are DONE - do not delete other z's.)",
-                        code, statusPrefix, result);
+                    // Explicitly tell the model to EVALUATE - with strict anti-over-execution instructions.
+                    // 收敛指令**只在成功时**给：这段文案里的 "The tool executed successfully" 原来是
+                    // 无条件拼进去的，与同一条消息里的 Status: FAILURE 直接打架，紧跟着还催
+                    // 「output <final> IMMEDIATELY」。XML 兜底是弱模型的主路径，而末位/最强指令
+                    // 会赢（PR#209 实证）——工具失败时模型被引导去宣布任务完成，用户看到的就是
+                    // 「AI 说做完了，其实什么都没发生」。失败时改成纠错指令，与原生分支语义一致。
+                    String instruction = xmlToolSuccess
+                            ? "(CRITICAL INSTRUCTION: The tool executed successfully. Now compare with the ORIGINAL user request. If the SPECIFIC task the user asked for is complete, output `<final>` IMMEDIATELY. DO NOT perform additional operations unless the user EXPLICITLY requested them. For example, if user asked to 'delete the 3rd z' and you deleted it, you are DONE - do not delete other z's.)"
+                            : "(CRITICAL INSTRUCTION: The tool FAILED - the operation did NOT take effect. Do NOT claim the task is done. Read the Output above, then either fix the call (correct arguments, or verify state with a read-only tool) or use `<final>` to tell the user plainly what failed and why. Never report success for a failed tool.)";
+                    String feedbackMsg = String.format("[System Tool Execution Log]\nTool: %s\nStatus: %s\nOutput: %s\n\n%s",
+                        code, statusPrefix, result, instruction);
 
                     // 防走神注入：任务清单状态随工具反馈一起带回（刚更新清单的轮次不注入）
                     if (!"todo_write".equals(call.toolName())) {

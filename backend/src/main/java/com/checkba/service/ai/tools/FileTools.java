@@ -162,7 +162,9 @@ public class FileTools implements AgentToolComponent {
                 return "Warning: no text extracted from '" + file.getName() + "' — the file may be a scanned "
                         + "image or empty; try extract_file_text with its database file ID.";
             }
-            return content;
+            // 同 extract_file_text 的上限（单一来源见 ToolFileGuard）：超长单条工具结果
+            // 会把整轮顶进上下文超限，而且落在 compactor 尾区剪不掉
+            return ToolFileGuard.capToolText(file.getName(), content);
         } catch (Exception e) {
             return "Error reading file: " + e.getMessage();
         }
@@ -267,12 +269,9 @@ public class FileTools implements AgentToolComponent {
             if (text == null || text.isBlank()) {
                 return "Warning: No text extracted from '" + pf.getName() + "'. The file may be a scanned image; try read_file with OCR for image PDFs.";
             }
-            final int maxChars = 80_000;
-            if (text.length() > maxChars) {
-                return "[文件 " + pf.getName() + "，全文 " + text.length() + " 字符，已截断至前 " + maxChars + " 字符]\n"
-                        + text.substring(0, maxChars);
-            }
-            return "[文件 " + pf.getName() + "]\n" + text;
+            String capped = ToolFileGuard.capToolText(pf.getName(), text);
+            // 未截断时保留原有的「[文件 X]」抬头（模型据此知道正文属于哪个文件）
+            return capped.length() == text.length() ? "[文件 " + pf.getName() + "]\n" + text : capped;
         } catch (Exception e) {
             log.warn("extract_file_text failed for fileId={}", fileId, e);
             return "Error extracting text: " + e.getMessage();
