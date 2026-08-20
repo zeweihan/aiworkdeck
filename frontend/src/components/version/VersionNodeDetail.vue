@@ -68,6 +68,25 @@
 <script>
 import { getVersionChanges, revertToVersion, markVersionMilestone, createDraft } from '@/services/api.js'
 
+// uni.showModal 生成的 <uni-modal> 挂在页面上，框架内建 z-index 恒为 999
+// （node_modules/@dcloudio/uni-h5/style/api/modal.css）。「退回到这一版」
+// （confirmRevert）会在本组件自己的 .awd-dialog 仍开着时再弹一层 uni.showModal
+// 确认——PR455 把 .awd-mask 的 z-index 从 999 提到 9999（对齐 CollabDialog 的弹窗
+// 层级）之后反而盖住了这层确认弹窗：真实点击落在被挡住的 .awd-mask 上，
+// OK/确定按钮点不到，退回请求根本发不出去（app-e2e J9「历史只增不减」实测抓到，
+// document.elementFromPoint 在按钮坐标上返回的是 .awd-footer 而不是 uni-modal
+// 里的按钮）。<uni-modal> 由 uni 的 showModal API 直接挂到 document.body，不在本
+// 组件的渲染树里，SFC 的 scoped <style> 加不上 data-v 属性也够不到它（试过，编译
+// 结果两个 <style> 块都被强行套了同一个 data-v 选择器，未 scoped 的那块形同虚设）
+// ——只能在脚本里注入一条真正全局的样式规则，模块加载时执行一次即可（VersionPanel
+// 静态 import 本组件，不依赖某次 v-if 渲染）。
+if (typeof document !== 'undefined' && !document.getElementById('awd-uni-modal-zfix')) {
+  const style = document.createElement('style')
+  style.id = 'awd-uni-modal-zfix'
+  style.textContent = 'uni-modal { z-index: 10000 !important; }'
+  document.head.appendChild(style)
+}
+
 export default {
   name: 'VersionNodeDetail',
   props: {
