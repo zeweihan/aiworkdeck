@@ -27,13 +27,30 @@ public interface StorageService {
     String save(String fileId, InputStream inputStream) throws StorageException;
 
     /**
-     * 读取文件
-     * 
+     * 读取文件。
+     *
+     * <p><b>纯读操作：文件不存在必须抛 {@link StorageException}，绝不允许就地造一个出来。</b>
+     * 本地实现曾在此处「文件不存在就从模板复制一份」，于是一份正文丢失的合同被读成一份
+     * 空白模板，用户打开看到的是空文档、AI 读到的是模板内容，全程没有任何报错；
+     * 自动保存再把这份空白盖回去，原件就真的没了。新建文档要物化模板请走
+     * {@link #createFromTemplate(String)}——建和读是两件事，别再合用一个方法。
+     *
      * @param fileId 文件ID
      * @return 文件资源
-     * @throws StorageException 存储异常
+     * @throws StorageException 文件不存在或读取失败
      */
     Resource load(String fileId) throws StorageException;
+
+    /**
+     * 新建文档时物化一个初始文件（本地实现从 docs/template.docx 复制，缺模板则建空文件）。
+     *
+     * <p>只有「创建」路径可以调用；已存在则原样不动（幂等）。
+     * 默认空实现：对象存储此前根本没有这条路（{@code load} 直接抛，调用方 catch 掉记一行日志），
+     * 保持这个既有行为，不在本次修复里给 OSS 新增一次上传。
+     */
+    default void createFromTemplate(String fileId) throws StorageException {
+        // no-op：见 javadoc
+    }
 
     /**
      * 删除文件
