@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Office 插件独立安装器构建（仅用 node 内置模块 + 系统工具）：
- *   macOS: pkgbuild（payload-free pkg，postinstall 把 manifest 种进三个 Office 容器的 wef/）
+ *   macOS: swiftc 编译用户态安装器 .app（通用二进制），装进 DMG 分发。
+ *          不用 pkg：macOS 26 起应用容器保护拒绝 root 安装脚本写他人容器（dev-board#68），
+ *          只有用户会话内的 .app 能经「访问其他 App 的数据」授权弹窗写进 wef/。
  *   Windows: makensis（写 HKCU\...\WEF\Developer 注册表 sideload 键，免管理员）
  *
  * 两个安装器只携带一份指向托管地址的 manifest（任务窗格本体在服务端），
@@ -11,11 +13,12 @@
  *   node installer/build-installers.mjs [--url https://addin.aiworkdeck.com/office-addin]
  *                                       [--skip-mac] [--skip-win]
  * 版本号取 desktop/package.json（单一来源）。产物在 installer/dist/。
- * makensis 缺失时提示 brew install makensis。签名：pkg 需 Developer ID Installer 证书，
- * 本机没有则产出未签名 pkg（下载后需右键打开/系统设置放行）。
+ * makensis 缺失时提示 brew install makensis。签名：.app 需 Developer ID Application 证书，
+ * 本机没有则产出未签名 app（下载后需右键打开/系统设置放行）。
  */
 import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -39,7 +42,10 @@ function parseArgs(argv) {
 
 const args = parseArgs(process.argv.slice(2))
 const version = JSON.parse(fs.readFileSync(path.join(repoDir, 'desktop', 'package.json'), 'utf8')).version
-const buildDir = path.join(addinDir, 'installer', 'build')
+// 构建区必须在仓库外：仓库坐在 ~/Documents（iCloud 同步范围），FileProvider 会在签名后
+// 异步给 .app 重新挂 FinderInfo 等 xattr，hdiutil 封进 DMG 后严格校验必挂、
+// LaunchServices 拒启（-10810）。系统临时目录不受 iCloud 管
+const buildDir = path.join(os.tmpdir(), 'awd-office-addin-installer-build')
 const distDir = path.join(addinDir, 'installer', 'dist')
 fs.rmSync(buildDir, { recursive: true, force: true })
 fs.mkdirSync(buildDir, { recursive: true })
@@ -60,49 +66,102 @@ if (!fs.existsSync(manifestPath)) {
 
 const made = []
 
-// 2. macOS pkg
+// 2. macOS 安装器 .app + DMG
 if (!args.skipMac) {
-  const scriptsDir = path.join(buildDir, 'mac-scripts')
-  fs.mkdirSync(scriptsDir, { recursive: true })
-  fs.copyFileSync(path.join(addinDir, 'installer', 'mac', 'postinstall'), path.join(scriptsDir, 'postinstall'))
-  fs.chmodSync(path.join(scriptsDir, 'postinstall'), 0o755)
-  fs.copyFileSync(manifestPath, path.join(scriptsDir, 'manifest.xml'))
-  const pkgOut = path.join(distDir, `AI-WorkDeck-Office-Addin-${version}.pkg`)
-  execFileSync('pkgbuild', [
-    '--identifier', 'com.aiworkdeck.office-addin',
-    '--version', version,
-    '--nopayload',
-    '--scripts', scriptsDir,
-    pkgOut,
-  ], { stdio: 'inherit' })
+  const appName = '安装 AI WorkDeck Office 插件.app'
+  const stageDir = path.join(buildDir, 'mac-dmg')
+  const appDir = path.join(stageDir, appName)
+  const macosDir = path.join(appDir, 'Contents', 'MacOS')
+  const resDir = path.join(appDir, 'Contents', 'Resources')
+  fs.mkdirSync(macosDir, { recursive: true })
+  fs.mkdirSync(resDir, { recursive: true })
 
-  // 钥匙串里有 Developer ID Installer 身份就签名（维护者机器 2026-08-19 起有，
-  // 证书文件在 5-Tech/DeveloperID_Installer_X9B97KVA84.cer）；没有则保持未签名并告警
+  // swiftc 出双架构再 lipo（维护者 Mac 有 Xcode 工具链）
+  const swiftSrc = path.join(addinDir, 'installer', 'mac', 'main.swift')
+  const binOut = path.join(macosDir, 'installer')
+  for (const arch of ['arm64', 'x86_64']) {
+    execFileSync('swiftc', ['-O', '-target', `${arch}-apple-macos11`, swiftSrc,
+      '-o', `${binOut}.${arch}`], { stdio: 'inherit' })
+  }
+  execFileSync('lipo', ['-create', `${binOut}.arm64`, `${binOut}.x86_64`, '-output', binOut], { stdio: 'inherit' })
+  fs.rmSync(`${binOut}.arm64`); fs.rmSync(`${binOut}.x86_64`)
+
+  fs.writeFileSync(path.join(appDir, 'Contents', 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>installer</string>
+  <key>CFBundleIconFile</key><string>installer</string>
+  <key>CFBundleIdentifier</key><string>com.aiworkdeck.office-addin.installer</string>
+  <key>CFBundleName</key><string>AI WorkDeck Office 插件安装器</string>
+  <key>CFBundleDisplayName</key><string>安装 AI WorkDeck Office 插件</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>${version}</string>
+  <key>CFBundleVersion</key><string>${version}</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+</dict></plist>
+`)
+
+  // manifest 两份：包内资源（安装动作的源）+ DMG 根目录（TCC 被拒时的手动拖拽兜底）
+  fs.copyFileSync(manifestPath, path.join(resDir, 'manifest.xml'))
+  fs.copyFileSync(manifestPath, path.join(stageDir, 'manifest.xml'))
+
+  // 图标复用桌面端品牌 icon（png → icns），失败不阻断构建
+  try {
+    const iconsetDir = path.join(buildDir, 'installer.iconset')
+    fs.mkdirSync(iconsetDir, { recursive: true })
+    const srcIcon = path.join(repoDir, 'desktop', 'build', 'icon.png')
+    for (const size of [16, 32, 128, 256, 512]) {
+      execFileSync('sips', ['-z', String(size), String(size), srcIcon, '--out',
+        path.join(iconsetDir, `icon_${size}x${size}.png`)], { stdio: 'ignore' })
+      execFileSync('sips', ['-z', String(size * 2), String(size * 2), srcIcon, '--out',
+        path.join(iconsetDir, `icon_${size}x${size}@2x.png`)], { stdio: 'ignore' })
+    }
+    const icnsPath = path.join(buildDir, 'installer.icns')
+    execFileSync('iconutil', ['-c', 'icns', iconsetDir, '-o', icnsPath], { stdio: 'inherit' })
+    fs.copyFileSync(icnsPath, path.join(resDir, 'installer.icns'))
+  } catch (err) {
+    console.warn(`[installer] 图标生成失败（不影响功能）：${err.message}`)
+  }
+
+  // 钥匙串里有 Developer ID Application 身份就签名（证书 fastlane/certs/devid-app-local.cer，
+  // 私钥同目录 devid-app-local.key.pem，均在维护者钥匙串）；没有则保持未签名并告警
   let identity = ''
   try {
-    identity = (execFileSync('security', ['find-identity', '-v'], { encoding: 'utf8' })
-      .split('\n').find(l => l.includes('Developer ID Installer')) || '').match(/"([^"]+)"/)?.[1] || ''
+    identity = (execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], { encoding: 'utf8' })
+      .split('\n').find(l => l.includes('Developer ID Application')) || '').match(/"([^"]+)"/)?.[1] || ''
   } catch { /* 非 mac 或无 security，保持未签名 */ }
   if (identity) {
-    const signedTmp = pkgOut.replace(/\.pkg$/, '.signed.pkg')
-    execFileSync('productsign', ['--sign', identity, pkgOut, signedTmp], { stdio: 'inherit' })
-    fs.renameSync(signedTmp, pkgOut)
-    // 公证（可选）：环境变量给齐 ASC API key 三件套才做。维护者本机来源：
-    //   5-Tech/5-BQT_Global/fastlane/.env（ASC_KEY_ID / ASC_ISSUER_ID / ASCKey.p8）
-    const { NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER_ID } = process.env
-    if (NOTARY_KEY_PATH && NOTARY_KEY_ID && NOTARY_ISSUER_ID) {
-      execFileSync('xcrun', ['notarytool', 'submit', pkgOut,
-        '--key', NOTARY_KEY_PATH, '--key-id', NOTARY_KEY_ID, '--issuer', NOTARY_ISSUER_ID,
-        '--wait'], { stdio: 'inherit' })
-      execFileSync('xcrun', ['stapler', 'staple', pkgOut], { stdio: 'inherit' })
-      console.log('[installer] pkg 已签名并公证装订')
-    } else {
-      console.warn('[installer] pkg 已签名但未公证（缺 NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID）')
-    }
+    // sips/复制会给包内文件挂扩展属性，codesign 见 resource fork 直接拒签，先清干净
+    execFileSync('xattr', ['-cr', appDir], { stdio: 'inherit' })
+    execFileSync('codesign', ['--force', '--deep', '--options', 'runtime', '--timestamp',
+      '--sign', identity, appDir], { stdio: 'inherit' })
   } else {
-    console.warn('[installer] 未找到 Developer ID Installer 身份，pkg 未签名')
+    console.warn('[installer] 未找到 Developer ID Application 身份，app 未签名')
   }
-  made.push(pkgOut)
+
+  const dmgOut = path.join(distDir, `AI-WorkDeck-Office-Addin-${version}.dmg`)
+  fs.rmSync(dmgOut, { force: true })
+  // 打包前兜底再清一次 xattr（签名内容不含 xattr，清掉不破坏签名），并严格校验后再封盘
+  execFileSync('xattr', ['-cr', stageDir], { stdio: 'inherit' })
+  if (identity) execFileSync('codesign', ['-v', '--strict', '--deep', appDir], { stdio: 'inherit' })
+  execFileSync('hdiutil', ['create', '-volname', 'AI WorkDeck Office 插件',
+    '-srcfolder', stageDir, '-ov', '-format', 'UDZO', dmgOut], { stdio: 'inherit' })
+
+  // 公证（可选）：环境变量给齐 ASC API key 三件套才做。维护者本机来源：
+  //   5-Tech/5-BQT_Global/fastlane/.env（ASC_KEY_ID / ASC_ISSUER_ID / ASCKey.p8）
+  const { NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER_ID } = process.env
+  if (identity && NOTARY_KEY_PATH && NOTARY_KEY_ID && NOTARY_ISSUER_ID) {
+    execFileSync('xcrun', ['notarytool', 'submit', dmgOut,
+      '--key', NOTARY_KEY_PATH, '--key-id', NOTARY_KEY_ID, '--issuer', NOTARY_ISSUER_ID,
+      '--wait'], { stdio: 'inherit' })
+    execFileSync('xcrun', ['stapler', 'staple', dmgOut], { stdio: 'inherit' })
+    console.log('[installer] dmg 已签名并公证装订')
+  } else if (identity) {
+    console.warn('[installer] app 已签名但未公证（缺 NOTARY_KEY_PATH/NOTARY_KEY_ID/NOTARY_ISSUER_ID）')
+  }
+  made.push(dmgOut)
 }
 
 // 3. Windows exe
