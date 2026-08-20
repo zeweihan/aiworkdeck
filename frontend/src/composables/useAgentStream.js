@@ -3,6 +3,7 @@ import { getApiBaseUrl, getConversationMetadata } from '@/services/api.js'
 import { getSessionId } from '@/utils/auth.js'
 import { createProtocolTagRegex, decodeProtocolTags } from '@/composables/agentTagProtocol.mjs'
 import { t } from '@/i18n'
+import { nextBubbleId } from './bubbleId.js'
 
 // 网络恢复/页面回前台时触发重连的激活实例指针（模块级单例）。
 // 页面栈会多次实例化本 composable（PR#148 重复订阅地雷），window 监听只挂一次，
@@ -134,7 +135,7 @@ export function useAgentStream() {
 
     // --- HELPER: Create a new Assistant Bubble Structure ---
     const createAssistantBubble = () => ({
-        id: `msg-${Date.now()}`,
+        id: nextBubbleId(),
         role: 'ASSISTANT',
         thinking: { status: 'idle', content: '', duration: 0, startTime: 0, endTime: 0 },
         title: '',
@@ -158,7 +159,7 @@ export function useAgentStream() {
     // displayContent 为空则回退 content。渲染侧一律 displayContent || content，
     // 与 GET /api/ai/history 返回体的同名字段口径一致（否则刷新页面文案会变）。
     const createUserBubble = (content, images = [], contextFiles = [], contentHtml = '', displayContent = '') => ({
-        id: `msg-${Date.now()}`,
+        id: nextBubbleId(),
         role: 'USER',
         content: content,
         displayContent: displayContent || '',
