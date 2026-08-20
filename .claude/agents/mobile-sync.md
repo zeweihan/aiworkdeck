@@ -52,6 +52,29 @@ dev-board#30）；更早的产品设计 `2026-08-17-mobile-clients-design.md`。
    那等于把用户拍的证据静默删掉。
 4. 云端/团队服务器绝不能跑客户端：双闸 = `security.local-mode` + 账户 Key 在场。
 
+## 排查「手机端一个项目都读不到」的顺序（dev-board#75 实测路径）
+
+空数组是**合法响应**，没有报错也没有 4010，所以必须按下面的顺序把「哪一环是空的」逐段夹出来：
+
+1. 桌面端有没有桥接：`~/.aiworkdeck/mobile-relay.json` 在不在（不在 = `active()` 没过闸，
+   多半是没连账户，`enabled && local-mode && currentKeyOrNull() != null`）。
+2. 云端目录镜像有没有：拿那个文件里的 `awdt_` 打
+   `curl -H "X-Session-Id: awdt_…" https://addin.aiworkdeck.com/api/mobile/projects`。
+   **有数组** = 桌面端推送这一段是好的，问题在手机侧账号。
+3. 桥接账号是谁、有没有认领到手机号：同一个 `awdt_` 打 `/api/auth/me`，看 `phoneMasked`。
+4. 手机端登录的是不是同一个账号——**这一步是历史坑的高发区**，见下。
+
+## 已知地雷（续）
+
+5. **手机号转移不动会话**：`claimPhoneFromWebsite` 把号码从旧账号 A 转到桥接账号 B 时，
+   A 名下的登录会话**仍然有效**。手机 App 手里那张 A 的会话会继续用下去，而目录镜像挂在 B
+   名下，A 名下空空如也 → 返回合法空数组 → 用户看到「一个项目都读不到」，
+   **且反复重进也一样**（会话不到期就永远不会自愈）。
+   现在转移时会调 `UserSessionService.revokeAllForUser(A)` 逼手机端重新登录，
+   短信验证会把它落到归一后的 B 上。
+   **已经踩了的存量用户**（转移发生在这个修复之前）修不回来，只能在手机端手动退出登录再登一次。
+   回归用例 `PhoneClaimSessionRevocationTest`。
+
 ## 验证
 
 - `mvn test -Dtest='MobileRelay*Test,AwdkLoginServiceTest'`（JDK 21）。

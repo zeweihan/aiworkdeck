@@ -15,4 +15,8 @@ public interface UserSessionRepository extends JpaRepository<UserSession, Long> 
 
     @Transactional
     long deleteByLastUsedAtBefore(LocalDateTime cutoff);
+
+    /** 作废某个用户的全部登录会话（手机号被转移走时用，见 UserService.claimPhoneFromWebsite）。 */
+    @Transactional
+    long deleteByUserId(Long userId);
 }
