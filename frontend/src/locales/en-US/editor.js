@@ -29,6 +29,7 @@ export default {
   dlProgress: 'Document content {loaded} / {total}',
   dlLoadedOnly: 'Downloaded {size} of document content',
   firstOpenHint: 'The first open initializes the document engine; large documents may take a moment',
+  retryLoad: 'Stuck? Tap to retry',
   review: {
     revTab: 'Tracked Changes {count}',
     cmtTab: 'Comments {count}',

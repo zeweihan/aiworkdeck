@@ -29,6 +29,7 @@ export default {
   dlProgress: '文档内容 {loaded} / {total}',
   dlLoadedOnly: '已下载文档内容 {size}',
   firstOpenHint: '首次打开需初始化文档引擎，大文档会稍慢，请稍候',
+  retryLoad: '一直卡着？点此重试',
   review: {
     revTab: '修订 {count}',
     cmtTab: '批注 {count}',
