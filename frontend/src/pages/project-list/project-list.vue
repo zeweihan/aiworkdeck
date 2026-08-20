@@ -37,6 +37,7 @@
             <template v-if="SHOW_CLOUD_ACCEPT && !isClientUser && projects.length > 0">
               <button class="btn-secondary-small" @tap="openCloudAccept">{{ $t('projects.pullFromTeamLibrary') }}</button>
             </template>
+            <button class="btn-secondary-small" @tap="goToCalendar">{{ $t('projects.calendarEntry') }}</button>
             <button class="btn-secondary-small" @tap="goToUserProfile">{{ $t('projects.personalCenter') }}</button>
           </view>
         </view>
@@ -735,6 +736,10 @@ export default {
     // 本页与个人中心两端都不是工作台，用 navigateTo（工作台参与的跳转才 reLaunch）
     goToUserProfile() {
       uni.navigateTo({ url: '/pages/userprofile/userprofile' })
+    },
+    // 日历页同样不是工作台，同一模式
+    goToCalendar() {
+      uni.navigateTo({ url: '/pages/calendar/calendar' })
     },
     startRename(project) {
       if (this.isClientUser) return

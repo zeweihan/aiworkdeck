@@ -2572,11 +2572,47 @@ export function getProjectConversations(projectId, options = {}) {
   });
 }
 
-/** A 期恒返回 {code:0,data:{tasks:[]}}；B 期接任务系统时本函数一行不改。 */
+/** B 期（日历/任务系统）起返回真实任务列表，响应形状 {code:0,data:{tasks:[...]}} 不变。 */
 export function getProjectTasks(projectId) {
   return request({
     url: `/api/projects/${projectId}/tasks`,
     method: 'GET'
+  });
+}
+
+// ==================== 日历/任务（B 期，spec: docs/superpowers/specs/2026-08-20-calendar-view-design.md） ====================
+
+/** data: {projectId, fileId?, title, dueDate(ISO 日期), dueTime?(HH:mm)}，source 由后端定为 user。 */
+export function createTask(data) {
+  return request({
+    url: '/api/tasks',
+    method: 'POST',
+    data
+  });
+}
+
+/** data 可含 title/dueDate/dueTime/status(OPEN|DONE) 的任意子集；dueTime 传 null 表示清空。 */
+export function updateTask(taskId, data) {
+  return request({
+    url: `/api/tasks/${taskId}`,
+    method: 'PUT',
+    data
+  });
+}
+
+export function deleteTask(taskId) {
+  return request({
+    url: `/api/tasks/${taskId}`,
+    method: 'DELETE'
+  });
+}
+
+/** 跨项目全盘日历。from/to 为 ISO 日期（含端点），返回 {code:0,data:{tasks:[...含 projectName]}}。 */
+export function getCalendarTasks(from, to) {
+  return request({
+    url: '/api/calendar',
+    method: 'GET',
+    params: { from, to }
   });
 }
 

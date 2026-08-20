@@ -5,6 +5,8 @@ export default {
   pullFromTeamLibrary: 'Pull a Case File from the Team Case Library',
   // Lands on the Personal group of the unified Settings page (merged 2026-08-20; key kept)
   personalCenter: 'Settings',
+  // Header "Calendar" entry, opens pages/calendar/calendar (cross-project task calendar)
+  calendarEntry: 'Calendar',
   allProjects: 'All Projects',
   loading: 'Loading…',
   clientEmptyHint: 'After your lawyer shares a case file with you, it will appear here.',

@@ -1,0 +1,285 @@
+/* 密度令牌见 App.vue 的 --awd-panel-*（基准 = 插件广场），FullCalendar 内部样式
+   用 :deep() 覆盖到同一套浅色专业风上——组件自带的默认皮肤是偏蓝的表格线条，
+   和外壳的森林绿/浅灰体系对不上。 */
+
+.pcp {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.pcp-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: var(--awd-panel-sec-h);
+  padding: 0 var(--awd-panel-pad-x);
+  flex: none;
+  border-bottom: 1px solid var(--awd-panel-border);
+}
+
+.pcp-nav-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--awd-panel-radius);
+  font-size: 14px;
+  color: var(--awd-panel-text-2);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--awd-panel-hover);
+  }
+}
+
+.pcp-month-title {
+  font-size: var(--awd-panel-fs-sec);
+  font-weight: 700;
+  color: var(--awd-panel-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pcp-spacer {
+  flex: 1;
+  min-width: 4px;
+}
+
+.pcp-add-btn {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: var(--awd-panel-radius);
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-accent);
+  background: var(--awd-panel-accent-wash);
+  cursor: pointer;
+
+  &:hover {
+    background: rgba(26, 83, 54, 0.08);
+  }
+}
+
+.pcp-quick-create {
+  display: flex;
+  flex-direction: column;
+  gap: var(--awd-panel-gap);
+  padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  border-bottom: 1px solid var(--awd-panel-border);
+  flex: none;
+}
+
+.pcp-quick-input {
+  height: var(--awd-panel-row-h);
+  padding: 0 10px;
+  border: 1px solid var(--awd-panel-border);
+  border-radius: var(--awd-panel-radius);
+  font-size: var(--awd-panel-fs);
+  color: var(--awd-panel-text);
+  background: #fff;
+  box-sizing: border-box;
+
+  &::placeholder {
+    color: var(--awd-panel-text-4);
+  }
+}
+
+.pcp-quick-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pcp-quick-btn {
+  padding: 5px 12px;
+  border-radius: var(--awd-panel-radius);
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-text-2);
+  background: var(--awd-panel-hover);
+  cursor: pointer;
+}
+
+.pcp-quick-btn-primary {
+  color: #fff;
+  background: var(--awd-panel-accent);
+
+  &:hover {
+    background: #164229;
+  }
+}
+
+.pcp-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 0 var(--awd-panel-gap-lg);
+}
+
+.pcp-hint {
+  padding: var(--awd-panel-gap-lg) var(--awd-panel-pad-x);
+  font-size: var(--awd-panel-fs);
+  color: var(--awd-panel-text-3);
+}
+
+.pcp-body :deep(.fc) {
+  font-family: inherit;
+  font-size: var(--awd-panel-fs);
+  color: var(--awd-panel-text);
+}
+
+.pcp-body :deep(.fc-list-day-cushion) {
+  background: var(--awd-panel-hover);
+  padding: 4px var(--awd-panel-pad-x);
+}
+
+.pcp-body :deep(.fc-list-day-text),
+.pcp-body :deep(.fc-list-day-side-text) {
+  font-size: var(--awd-panel-fs-meta);
+  font-weight: 700;
+  color: var(--awd-panel-text-2);
+}
+
+.pcp-body :deep(.fc-list-event) {
+  cursor: pointer;
+}
+
+.pcp-body :deep(.fc-list-event:hover td) {
+  background: var(--awd-panel-accent-wash);
+}
+
+.pcp-body :deep(.fc-list-event-dot) {
+  border-color: var(--awd-panel-accent) !important;
+}
+
+.pcp-body :deep(.fc-list-event-title) {
+  font-size: var(--awd-panel-fs);
+  color: var(--awd-panel-text);
+}
+
+.pcp-body :deep(.fc-list-event-time) {
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-text-3);
+}
+
+.pcp-body :deep(.pcp-evt-done .fc-list-event-title) {
+  color: var(--awd-panel-text-4);
+  text-decoration: line-through;
+}
+
+.pcp-body :deep(.fc-list-empty) {
+  padding: var(--awd-panel-gap-lg) var(--awd-panel-pad-x);
+  font-size: var(--awd-panel-fs);
+  color: var(--awd-panel-text-3);
+  background: transparent;
+}
+
+.pcp-body :deep(.fc-theme-standard td),
+.pcp-body :deep(.fc-theme-standard th) {
+  border-color: var(--awd-panel-border);
+}
+
+.pcp-action-bar {
+  flex: none;
+  padding: var(--awd-panel-gap) var(--awd-panel-pad-x);
+  border-top: 1px solid var(--awd-panel-border);
+  background: var(--awd-panel-hover);
+  display: flex;
+  flex-direction: column;
+  gap: var(--awd-panel-gap);
+}
+
+.pcp-action-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pcp-action-title {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--awd-panel-fs);
+  font-weight: 600;
+  color: var(--awd-panel-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcp-action-close {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--awd-panel-text-3);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--awd-panel-border);
+  }
+}
+
+.pcp-action-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pcp-action-label {
+  flex: none;
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-text-3);
+}
+
+.pcp-action-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.pcp-action-btn {
+  flex: 1;
+  text-align: center;
+  padding: 6px 0;
+  border-radius: var(--awd-panel-radius);
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-text-2);
+  background: #fff;
+  border: 1px solid var(--awd-panel-border);
+  cursor: pointer;
+
+  &:hover {
+    border-color: var(--awd-panel-accent-2);
+  }
+}
+
+.pcp-action-btn-danger {
+  color: #C0392B;
+
+  &:hover {
+    border-color: #C0392B;
+  }
+}
+
+.pcp-footer {
+  flex: none;
+  padding: 6px var(--awd-panel-pad-x);
+  border-top: 1px solid var(--awd-panel-border);
+  text-align: center;
+}
+
+.pcp-footer-link {
+  font-size: var(--awd-panel-fs-meta);
+  color: var(--awd-panel-accent);
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}

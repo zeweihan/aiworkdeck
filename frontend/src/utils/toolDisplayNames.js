@@ -14,6 +14,10 @@ const NAMES = {
   update_project_info: { zh: '更新项目信息', en: 'Update project info' },
   get_conversation_summary: { zh: '回顾会话记录', en: 'Recall conversation' },
   list_project_folders: { zh: '列出项目文件夹', en: 'List folders' },
+  // 日程/日历（dev-board #53）：项目级任务/里程碑，与上面 todo_write 的
+  // AI 单次工作步骤条是两个概念，不要合并成一个分组。
+  task_create: { zh: '创建日程任务', en: 'Create task' },
+  task_list: { zh: '查询日程任务', en: 'List tasks' },
   // 网络
   search_web: { zh: '网络搜索', en: 'Web search' },
   browse_url: { zh: '浏览网页', en: 'Browse page' },

@@ -13,6 +13,7 @@ export default {
     tts: '语音合成',
     desensitize: '文件脱敏',
     version: '版本',
+    calendar: '日历',
   },
   tools: {
     variables: '变量库',

@@ -62,7 +62,7 @@ rail 点击 → toggleLeftPane(key)（:2988）：staging 单独分支 → 把当
 2026-08-19 起「项目概览」与「插件中心」也收进了数组——它们走的都是普通的
 `toggleLeftPane` 语义，单独硬编码成 rail 按钮只会让顺序有两个出处。
 当前顺序：**home(项目概览) → files(资源管理器) → search(搜索) → market(插件中心) →
-voice(语音) → desensitize(文件脱敏) → litigation-visual(门控)**。
+voice(语音) → desensitize(文件脱敏) → litigation-visual(门控) → calendar(日历)**。
 **版本记录同一天又挪出了这个数组**（一进一出）：维护者认为它视觉上该挨着
 「暂存区」（都是围绕本机改动/存档的动作），不该跟文件树/搜索这类常驻浏览面板
 混排。定义照 `DD_FILES_PLUGIN` 的先例独立导出成 `VERSION_PLUGIN`，进
@@ -113,6 +113,31 @@ rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版�
 版本记录 version→VersionPanel 见 `.claude/agents/version-control.md`。
 **shareholder-meeting(股东大会核查) 已于 2026-08-17 下线**：入口从本数组移除即等于功能隐藏，`ShareholderMeetingPanel.vue` / `api.js` 的 `/api/shareholder-meeting/*` / 后端 controller 与实体全部保留（存量案卷数据还在库里），skill 改成 `enabled_by_default: false`。注意 `SkillRegistry` 的种子化只在「第一次见到这个 id」时生效，**存量安装里它仍是启用状态**，要在插件广场手动停用。`EvalHarness` 里显式 `setEnabled(..., true)` 把它开回去——那条回放用例守的是编排契约，与业务在不在产品里无关。requiresSkill 门控入口：litigation-visual(诉讼可视化)；meeting-recorder(会议录音→MeetingRecordingPanel，**2026-08-19 起不占 rail 位，是「语音」面板里的一个 tab**，skill 启用才出现；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（数组里找不到再找 OFF_RAIL_PLUGINS，都没有才回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件，返回 DD_FILES_PLUGIN）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。**设置入口不在 rail 上了**，见顶栏头像下拉那一节；admin 页/接口后端仍 requireAdmin（用户名 admin）。
 **插件广场入口（2026-08 二改：VS Code 扩展栏形态；三改：rail 按钮升成数组里的 market 项，动作不变）**：rail market 项 → `toggleLeftPane('market')` 开左栏列表面板（`MarketSidebarPanel`，leftPaneKey='market'，leftPaneTitle 特判）；点列表行 → `openMarketDetail(spec)` 在中栏开详情 tab（`MarketDetailPane`，`tabType:'market-detail'`、单例、isTabVisible 常显、直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported——与浏览器 tab 同法）。独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。详见 plugin-marketplace.md。
+
+## 日历/任务系统的外壳挂载点（2026-08-20，dev-board #48-#53）
+
+数据模型是后端 `project_task`（`ProjectTaskService`/`TaskController(/api/tasks)`/
+`CalendarController(/api/calendar)`，概览页 `GET /api/projects/{id}/tasks` 的 B 期真实现）。
+外壳侧三个挂载点 + 一个全局页：
+
+- **全局日历页 `pages/calendar/calendar`**：与 project-list 平级的全局页（列表页顶栏
+  「日历」按钮 `navigateTo` 过去，同旧个人中心按钮模式）。FullCalendar v6 组件式集成
+  （@fullcalendar/vue3，月历为主/周/listMonth 可切），`chinese-days` 标法定节假日
+  「休」/调休「班」（`components/calendar/holidayMarks.js`，带按天 Map 缓存）。
+  「进入项目」是工作台跳转，用 reLaunch；返回项目列表按栈深分流（navigateBack /
+  栈底 redirectTo）。
+- **rail `calendar` 面板**：`ProjectCalendarPane.vue`（listMonth 列表视图，窄栏放不下
+  月历网格）。**在 project-overview.vue 里必须保持 defineAsyncComponent 懒加载**——
+  静态 import 会把 FullCalendar 整包拖进工作台主 chunk。
+- **文件右键「设置截止日」**（FileTree.vue，照「管理标签」弹窗模式，任务锚 fileId）。
+- **概览页 TaskSchedule**（B 期真数据，读走 ProjectHomePane 的 loadTasks，写 emit 给宿主）。
+
+共享逻辑单一出处 `components/calendar/taskUtils.js`（isDone/daysUntil/dueBadge/
+toEventStart），五个消费组件都从这里拿，别再各写一份。
+
+**地雷：uni-h5 的 `<input>` 把 type 收窄成白名单**（text/number/idcard/digit/password/tel），
+`type="date"/"time"` 会静默降级成文本框。日期/时间输入一律用 `components/AwdDatePicker.vue`
+（mounted 手工挂真原生 input 绕开 uni 模板劫持；只监听 change 防中间值上抛）。
 
 ## 顶栏头像下拉与统一「设置」标签（2026-08-19 立，2026-08-20 并）
 

@@ -655,6 +655,10 @@
             v-else-if="leftPaneKey === 'market'"
             @open-detail="openMarketDetail"
           />
+          <ProjectCalendarPane
+            v-else-if="leftPaneKey === 'calendar'"
+            :project-id="projectId"
+          />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
             :url="dynamicPlugins.find(p => p.key === leftPaneKey)?.frontendEntry"
@@ -1538,6 +1542,7 @@
 </template>
 
 <script>
+import { defineAsyncComponent } from 'vue'
 import LibreOfficeEditor from '@/components/LibreOfficeEditor.vue'
 import { host, isDesktopHost } from '@/services/host.js'
 import BrowserPane from '@/components/BrowserPane.vue'
@@ -1563,6 +1568,9 @@ import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import VersionPanel from '@/components/version/VersionPanel.vue'
+// 异步组件：ProjectCalendarPane 静态 import 会把 FullCalendar 整包拖进工作台主
+// chunk（工作台是全应用最热路由），懒加载让只有真点开「日历」面板的会话付这个成本。
+const ProjectCalendarPane = defineAsyncComponent(() => import('@/components/project-calendar/ProjectCalendarPane.vue'))
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CollabDialog from '@/components/collab/CollabDialog.vue'
 import { MEMBER_GROUP_LABELS } from '@/config/memberRoles.js'
@@ -1691,7 +1699,8 @@ export default {
     DesensitizePane,
     FilePickerDialog,
     SearchPanel,
-    VersionPanel
+    VersionPanel,
+    ProjectCalendarPane
   },
   data() {
     return {

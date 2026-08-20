@@ -13,6 +13,7 @@ export default {
     tts: 'Text to Speech',
     desensitize: 'File Redaction',
     version: 'Version History',
+    calendar: 'Calendar',
   },
   tools: {
     variables: 'Variable Library',

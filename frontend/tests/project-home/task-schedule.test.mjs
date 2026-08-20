@@ -33,12 +33,16 @@ test('空态文案存在（A 期唯一会渲染的分支）', () => {
   assert.ok(SRC.includes('noTasksTitle'), '组件要引用该 key')
 })
 
-test('列表分支已落地（B 期只换渲染分支，父页面与端点不改）', () => {
-  assert.match(SRC, /v-for="t in tasks"/)
+test('列表分支已落地（B 期真数据：未完成/已完成两个分支，写操作 emit 给宿主）', () => {
+  // 2026-08-20 B 期落地（dev-board #52）：渲染分支从单一 tasks 拆成
+  // openTasks（按 dueDate 升序）+ doneTasks（开关折叠），字段契约来自真实的
+  // project_task 表（GET /api/projects/{id}/tasks）。
+  assert.match(SRC, /v-for="t in openTasks"/)
+  assert.match(SRC, /v-for="t in doneTasks"/)
   assert.ok(SRC.includes('t.title'))
-  // 其余字段（uid / status / dueDate）是 B 期 project_task 的预期形状：
-  // A 期后端恒返回 []，本切片没有任何任务定义该表，故不断言，避免把
-  // 未落地的表结构钉成硬契约。
+  // 写操作不落在本组件：完成勾选/快捷创建一律 emit 给 ProjectHomePane
+  assert.ok(SRC.includes("$emit('toggle', t)"))
+  assert.ok(SRC.includes("'quick-create'"))
 })
 
 test('不混用 AI 步骤条的词', () => {
