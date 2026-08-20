@@ -5,8 +5,9 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
-import jakarta.persistence.Lob;
 import jakarta.persistence.Table;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 import java.util.Objects;
@@ -94,23 +95,25 @@ public class CompanyMirror {
     private String equityStructureRemark;
 
     /**
-     * 前十大股东列表 JSON
+     * 前十大股东列表 JSON。
+     * 长文本不用 @Lob：PG 方言下 @Lob String 走 large-object（oid）读写会炸，
+     * LONGVARCHAR + TEXT 在 H2（MODE=PostgreSQL）与 PG 双方言通吃（下两个 JSON 字段同理）。
      */
-    @Lob
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
     @Column(columnDefinition = "TEXT")
     private String top10ShareholdersJson;
 
     /**
      * 董监高列表 JSON
      */
-    @Lob
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
     @Column(columnDefinition = "TEXT")
     private String executivesJson;
 
     /**
      * 股东列表 JSON（标的公司）
      */
-    @Lob
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
     @Column(columnDefinition = "TEXT")
     private String shareholdersJson;
 
