@@ -42,7 +42,12 @@
 
       <view class="home-section">
         <text class="home-section-title">{{ $t('projects.taskSectionTitle') }}</text>
-        <TaskSchedule :tasks="tasks" :loading="tasksLoading" />
+        <TaskSchedule
+          :tasks="tasks"
+          :loading="tasksLoading"
+          @toggle="onTaskToggle"
+          @quick-create="onTaskQuickCreate"
+        />
       </view>
 
       <view class="home-section">
@@ -72,6 +77,8 @@ import {
   saveProjectProfileField,
   getProjectConversations,
   getProjectTasks,
+  createTask,
+  updateTask,
   getVersionTimeline,
 } from '@/services/api.js'
 import { canEditProfile } from '@/utils/projectHomeFormat.js'
@@ -240,6 +247,27 @@ export default {
         this.nextBeforeId = null
       } finally {
         this.conversationsLoading = false
+      }
+    },
+    /** 行内勾选框标记完成/恢复未完成：乐观更新，失败回滚（跟 onProfileSave 同一个套路）。 */
+    async onTaskToggle(task) {
+      const prevStatus = task.status
+      const nextStatus = String(prevStatus || '').toUpperCase() === 'DONE' ? 'OPEN' : 'DONE'
+      task.status = nextStatus
+      try {
+        await updateTask(task.id, { status: nextStatus })
+      } catch (e) {
+        task.status = prevStatus
+        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
+      }
+    },
+    /** 顶部「添加」快捷创建：项目级事项，不带 fileId。创建后整轮重取，拿到后端生成的 id/uid。 */
+    async onTaskQuickCreate(payload) {
+      try {
+        await createTask({ projectId: this.projectId, title: payload.title, dueDate: payload.dueDate })
+        this.loadTasks()
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
       }
     },
     onLoadMoreConversations() {

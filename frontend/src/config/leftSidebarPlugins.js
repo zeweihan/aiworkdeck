@@ -138,6 +138,19 @@ export const LEFT_SIDEBAR_PLUGINS = [
       { d: 'M7 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' },
       { d: 'M17 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' }
     ]
+  },
+  {
+    // 日历：内置功能（文件右键「设置截止日」/概览页日程块 落的同一张 project_task 表
+    // 在这里再开一个入口），不做 requiresSkill 门控。放在数组末位——rail 上它紧挨着
+    // 底部单独渲染的「版本记录」，视觉上与版本相邻。
+    key: 'calendar',
+    label: t('config.sidebar.calendar'),
+    svgPaths: [
+      { d: 'M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z' },
+      { d: 'M16 2v4' },
+      { d: 'M8 2v4' },
+      { d: 'M3 10h18' }
+    ]
   }
 ]
 

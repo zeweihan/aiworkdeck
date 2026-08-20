@@ -159,6 +159,36 @@
       </view>
     </view>
 
+    <!-- 4b. Set Deadline Modal（project_task，文件/文件夹右键「设置截止日」） -->
+    <view v-if="showDeadlineDialog" class="awd-dialog-mask" @tap="showDeadlineDialog = false">
+      <view class="awd-dialog" @tap.stop>
+        <view class="awd-dialog-header">
+          <text class="awd-dialog-title">{{ $t('calendar.deadlineDialogTitle') }}</text>
+        </view>
+        <view class="awd-dialog-body">
+          <text class="awd-dialog-text" style="display: block; margin-bottom: 12px;">
+            {{ $t('calendar.deadlineForFile', { name: deadlineTargetItem ? deadlineTargetItem.name : '' }) }}
+          </text>
+          <view class="form-group">
+            <text class="form-label">{{ $t('calendar.taskTitleLabel') }}</text>
+            <input v-model="deadlineTitle" class="awd-input" :placeholder="$t('calendar.taskTitlePlaceholder')" />
+          </view>
+          <view class="form-group">
+            <text class="form-label">{{ $t('calendar.dateLabel') }}</text>
+            <AwdDatePicker v-model="deadlineDate" type="date" />
+          </view>
+          <view class="form-group">
+            <text class="form-label">{{ $t('calendar.timeLabel') }}</text>
+            <AwdDatePicker v-model="deadlineTime" type="time" />
+          </view>
+        </view>
+        <view class="awd-dialog-footer">
+          <view class="awd-btn awd-btn-secondary" @tap="showDeadlineDialog = false">{{ $t('calendar.cancel') }}</view>
+          <view class="awd-btn awd-btn-primary" @tap="confirmSetDeadline">{{ $t('calendar.save') }}</view>
+        </view>
+      </view>
+    </view>
+
     <!-- 5. Tag Manager (Global) -->
     <view v-if="showTagManager" class="awd-dialog-mask" style="z-index: 3100;" @tap="showTagManager = false">
        <view @tap.stop>
@@ -291,6 +321,17 @@
             </svg>
           </view>
           <text class="context-menu-text">{{ $t('fileTree.manageTags') }}</text>
+        </view>
+        <view v-if="contextMenu.targetItem" class="context-menu-item" @tap="openDeadlineDialog(contextMenu.targetItem); closeContextMenu()">
+          <view class="context-menu-icon" style="display: flex; align-items: center; justify-content: center;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M16 2v4" stroke-linecap="round"/>
+              <path d="M8 2v4" stroke-linecap="round"/>
+              <path d="M3 10h18" stroke-linecap="round"/>
+            </svg>
+          </view>
+          <text class="context-menu-text">{{ $t('calendar.setDeadline') }}</text>
         </view>
         <view v-if="contextMenu.targetItem && !contextMenu.targetItem.isFolder" class="context-menu-item"
           @tap="$emit('file-history', contextMenu.targetItem); closeContextMenu()">
@@ -833,12 +874,14 @@ import FileTypeIcon from '@/components/FileTypeIcon.vue'
 import TagChip from '@/components/TagChip.vue'
 import TagSelector from '@/components/TagSelector.vue'
 import TagManager from '@/components/TagManager.vue'
+import AwdDatePicker from '@/components/AwdDatePicker.vue'
 import { ICONS } from '@/config/icons.js'
 import {
   getProjectTags,
   addTagToFile,
   removeTagFromFile,
-  createTag
+  createTag,
+  createTask
 } from '@/services/api.js'
 
 export default {
@@ -848,7 +891,8 @@ export default {
     FileTypeIcon,
     TagChip,
     TagSelector,
-    TagManager
+    TagManager,
+    AwdDatePicker
   },
   props: {
     projectId: {
@@ -973,7 +1017,15 @@ export default {
       showTagEditDialog: false,
       projectTags: [],
       targetFileForTags: null,
-      editingFileId: null // ID of file currently editing tags for
+      editingFileId: null, // ID of file currently editing tags for
+
+      // 设置截止日（project_task，文件/文件夹右键）
+      showDeadlineDialog: false,
+      deadlineTargetItem: null,
+      deadlineTitle: '',
+      deadlineDate: '',
+      deadlineTime: '',
+      deadlineSaving: false
     }
 
   },
@@ -2709,6 +2761,43 @@ export default {
       }
       this.selectedUploadParent = this.tempSelectedParent
       this.showFolderSelector = false
+    },
+
+    // 设置截止日（project_task）
+    openDeadlineDialog(item) {
+      this.deadlineTargetItem = item
+      this.deadlineTitle = item ? item.name : ''
+      this.deadlineDate = ''
+      this.deadlineTime = ''
+      this.showDeadlineDialog = true
+    },
+    async confirmSetDeadline() {
+      if (this.deadlineSaving) return
+      const title = (this.deadlineTitle || '').trim()
+      if (!title) {
+        uni.showToast({ title: this.$t('calendar.requiredTitle'), icon: 'none' })
+        return
+      }
+      if (!this.deadlineDate) {
+        uni.showToast({ title: this.$t('calendar.requiredDate'), icon: 'none' })
+        return
+      }
+      this.deadlineSaving = true
+      try {
+        await createTask({
+          projectId: this.projectId,
+          fileId: this.deadlineTargetItem ? this.deadlineTargetItem.id : null,
+          title,
+          dueDate: this.deadlineDate,
+          dueTime: this.deadlineTime || null
+        })
+        this.showDeadlineDialog = false
+        uni.showToast({ title: this.$t('calendar.deadlineSet'), icon: 'none' })
+      } catch (e) {
+        uni.showToast({ title: (e && e.message) || this.$t('calendar.saveFailed'), icon: 'none' })
+      } finally {
+        this.deadlineSaving = false
+      }
     },
 
     // Tag Methods

@@ -662,6 +662,10 @@
             v-else-if="leftPaneKey === 'market'"
             @open-detail="openMarketDetail"
           />
+          <ProjectCalendarPane
+            v-else-if="leftPaneKey === 'calendar'"
+            :project-id="projectId"
+          />
           <PluginPane
             v-else-if="leftPaneKey && dynamicPlugins.some(p => p.key === leftPaneKey)"
             :url="dynamicPlugins.find(p => p.key === leftPaneKey)?.frontendEntry"
@@ -1550,6 +1554,7 @@ import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
 import SearchPanel from '@/components/SearchPanel.vue'
 import VersionPanel from '@/components/version/VersionPanel.vue'
+import ProjectCalendarPane from '@/components/project-calendar/ProjectCalendarPane.vue'
 import InviteMemberDialog from '@/components/InviteMemberDialog.vue'
 import CollabDialog from '@/components/collab/CollabDialog.vue'
 import { MEMBER_GROUP_LABELS } from '@/config/memberRoles.js'
@@ -1677,7 +1682,8 @@ export default {
     DesensitizePane,
     FilePickerDialog,
     SearchPanel,
-    VersionPanel
+    VersionPanel,
+    ProjectCalendarPane
   },
   data() {
     return {
