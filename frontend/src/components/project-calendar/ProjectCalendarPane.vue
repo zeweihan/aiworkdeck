@@ -76,10 +76,7 @@ import zhCnLocale from '@fullcalendar/core/locales/zh-cn'
 import AwdDatePicker from '@/components/AwdDatePicker.vue'
 import { getProjectTasks, createTask, updateTask, deleteTask } from '@/services/api.js'
 import { isEnglish } from '@/utils/appLanguage.js'
-
-function toEventStart(task) {
-  return task.dueTime ? `${task.dueDate}T${task.dueTime}` : task.dueDate
-}
+import { isDone, toEventStart } from '@/components/calendar/taskUtils.js'
 
 export default {
   name: 'ProjectCalendarPane',
@@ -130,7 +127,7 @@ export default {
   },
   methods: {
     isDone(task) {
-      return String(task && task.status || '').toUpperCase() === 'DONE'
+      return isDone(task)
     },
     async loadTasks() {
       if (!this.projectId) return

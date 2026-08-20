@@ -64,6 +64,7 @@
 <script>
 import AwdDatePicker from '@/components/AwdDatePicker.vue'
 import AwdSwitch from '@/components/AwdSwitch.vue'
+import { isDone, dueBadge } from '@/components/calendar/taskUtils.js'
 
 // 概览页「日程与任务」块。B 期起 tasks 是 ProjectHomePane 从真实的
 // GET /api/projects/{id}/tasks 拉回来的数据，本组件只管展示与交互，
@@ -106,32 +107,16 @@ export default {
     },
   },
   methods: {
-    statusKey(status) {
-      return String(status || 'OPEN').toLowerCase()
-    },
     isDone(task) {
-      return this.statusKey(task && task.status) === 'done'
-    },
-    daysUntil(dueDate) {
-      if (!dueDate) return null
-      const due = new Date(dueDate + 'T00:00:00')
-      if (Number.isNaN(due.getTime())) return null
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      return Math.round((due.getTime() - today.getTime()) / 86400000)
+      return isDone(task)
     },
     dueBadge(task) {
-      const diff = this.daysUntil(task.dueDate)
-      if (diff === null) return ''
-      if (diff === 0) return this.$t('calendar.dueToday')
-      if (diff > 0) return this.$t('calendar.daysLeft', { count: diff })
-      return this.$t('calendar.overdueDays', { count: Math.abs(diff) })
+      return dueBadge(task, (k, p) => this.$t(k, p)).text
     },
     dueBadgeClass(task) {
-      const diff = this.daysUntil(task.dueDate)
-      if (diff === null) return ''
-      if (diff < 0) return 'is-overdue'
-      if (diff <= 7) return 'is-soon'
+      const kind = dueBadge(task, (k, p) => this.$t(k, p)).kind
+      if (kind === 'overdue') return 'is-overdue'
+      if (kind === 'today' || kind === 'soon') return 'is-soon'
       return ''
     },
     toggleQuickCreate() {
@@ -348,8 +333,7 @@ export default {
   }
 
   .task-due,
-  .task-due-badge,
-  .task-status {
+  .task-due-badge {
     font-size: 10px;
   }
 }

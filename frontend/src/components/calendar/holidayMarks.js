@@ -9,11 +9,24 @@
 // 但只有前者该显「休」角标，纯周末只吃浅灰底、不挂角标。
 import { getDayDetail } from 'chinese-days'
 
+// FullCalendar 对同一个格子会分别调 dayCellClassNames 与 dayCellContent（表头同理），
+// 每次渲染每格两次查询；结果按天恒定，用 Map 记住即可（键=本地 YYYY-MM-DD）。
+const markCache = new Map()
+
 /**
  * @param {Date} date 本地日期（时分秒不参与判定）
  * @returns {'holiday'|'makeup'|'weekend'|'none'}
  */
 export function getDayMarkType(date) {
+  const key = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0')
+  const cached = markCache.get(key)
+  if (cached) return cached
+  const mark = computeMarkType(date)
+  markCache.set(key, mark)
+  return mark
+}
+
+function computeMarkType(date) {
   const dow = date.getDay()
   const isWeekend = dow === 0 || dow === 6
   let detail = null

@@ -29,6 +29,8 @@
 </template>
 
 <script>
+import { isDone, dueBadge } from '@/components/calendar/taskUtils.js'
+
 export default {
   name: 'UpcomingList',
   props: {
@@ -38,7 +40,7 @@ export default {
   computed: {
     upcoming() {
       return this.tasks
-        .filter((t) => String(t.status || '').toUpperCase() !== 'DONE')
+        .filter((t) => !isDone(t))
         .slice()
         .sort((a, b) => {
           const ka = (a.dueDate || '') + 'T' + (a.dueTime || '00:00')
@@ -48,22 +50,13 @@ export default {
     },
   },
   methods: {
-    daysUntil(dueDate) {
-      const today = new Date()
-      today.setHours(0, 0, 0, 0)
-      const due = new Date(`${dueDate}T00:00:00`)
-      return Math.round((due - today) / 86400000)
-    },
     badgeText(t) {
-      const diff = this.daysUntil(t.dueDate)
-      if (diff === 0) return this.$t('calendar.dueToday')
-      if (diff > 0) return this.$t('calendar.daysLeft', { count: diff })
-      return this.$t('calendar.overdueDays', { count: -diff })
+      return dueBadge(t, (k, p) => this.$t(k, p)).text
     },
     badgeClass(t) {
-      const diff = this.daysUntil(t.dueDate)
-      if (diff < 0) return 'badge-overdue'
-      if (diff <= 7) return 'badge-soon'
+      const kind = dueBadge(t, (k, p) => this.$t(k, p)).kind
+      if (kind === 'overdue') return 'badge-overdue'
+      if (kind === 'today' || kind === 'soon') return 'badge-soon'
       return 'badge-normal'
     },
   },

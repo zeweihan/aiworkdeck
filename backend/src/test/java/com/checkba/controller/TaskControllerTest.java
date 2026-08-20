@@ -52,6 +52,22 @@ class TaskControllerTest {
         return t;
     }
 
+    /** 模拟 ProjectTaskService.toResponseMap 的字段集（真实现在 ProjectTaskServiceTest 里覆盖）。 */
+    private Map<String, Object> responseMapOf(ProjectTask t) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", t.getId());
+        m.put("uid", t.getUid());
+        m.put("projectId", t.getProjectId());
+        m.put("fileId", t.getFileId());
+        m.put("fileName", null);
+        m.put("title", t.getTitle());
+        m.put("dueDate", t.getDueDate());
+        m.put("dueTime", t.getDueTime());
+        m.put("status", t.getStatus());
+        m.put("source", t.getSource());
+        return m;
+    }
+
     @Test
     void createRejectsAnonymous() {
         try (MockedStatic<AuthController> auth = mockStatic(AuthController.class)) {
@@ -110,6 +126,7 @@ class TaskControllerTest {
             when(taskService.createTask(eq(7L), eq(42L), eq("起诉状截止"),
                     eq(LocalDate.of(2026, 9, 1)), eq(LocalTime.of(9, 30)), eq(1L)))
                     .thenReturn(created);
+            when(taskService.toResponseMap(created)).thenReturn(responseMapOf(created));
 
             Map<String, Object> resp = controller.create(body, "sess").getBody();
             assertNotNull(resp);
@@ -149,6 +166,7 @@ class TaskControllerTest {
             ProjectTask updated = stubTask(100L, 7L);
             updated.setStatus("DONE");
             when(taskService.updateTask(100L, body)).thenReturn(updated);
+            when(taskService.toResponseMap(updated)).thenReturn(responseMapOf(updated));
 
             Map<String, Object> resp = controller.update(100L, body, "sess").getBody();
             assertEquals(0, resp.get("code"));

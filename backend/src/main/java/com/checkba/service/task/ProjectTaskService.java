@@ -143,6 +143,11 @@ public class ProjectTaskService {
         return tasks.stream().map(t -> toMap(t, fileNames)).collect(Collectors.toList());
     }
 
+    /** 单任务响应体（含 fileName）。create/update 端点用，字段集与列表端点完全一致。 */
+    public Map<String, Object> toResponseMap(ProjectTask t) {
+        return toMap(t, loadFileNames(List.of(t)));
+    }
+
     private void validateFileInProject(Long fileId, Long projectId) {
         ProjectFile file = projectFileRepository.findById(fileId)
                 .orElseThrow(() -> new IllegalArgumentException(LangText.of("文件不存在", "File not found")));

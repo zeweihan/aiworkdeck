@@ -29,7 +29,7 @@
           <FullCalendar ref="fc" class="fc-host" :options="calendarOptions" />
         </view>
         <view class="calendar-sidebar">
-          <UpcomingList :tasks="tasks" @select="onUpcomingSelect" />
+          <UpcomingList :tasks="upcomingTasks" @select="onUpcomingSelect" />
         </view>
       </view>
     </view>
@@ -58,6 +58,7 @@ import { getCalendarTasks, getMyProjects, updateTask } from '@/services/api.js'
 import { getAppLanguage } from '@/utils/appLanguage.js'
 import { colorForProject } from '@/components/calendar/eventColors.js'
 import { getDayMarkType } from '@/components/calendar/holidayMarks.js'
+import { isDone, toEventStart } from '@/components/calendar/taskUtils.js'
 import TaskDialog from '@/components/calendar/TaskDialog.vue'
 import UpcomingList from '@/components/calendar/UpcomingList.vue'
 
@@ -79,6 +80,9 @@ export default {
     return {
       calendarOptions: {},
       tasks: [],
+      // 「近期截止」侧栏的数据源，固定锚在「今天起 90 天」，与日历视图区间解耦——
+      // 用户翻到别的月份浏览时，侧栏不能跟着漂移（漂了会把本周真正紧迫的截止日藏掉）。
+      upcomingTasks: [],
       projects: [],
       dialogVisible: false,
       editingTask: null,
@@ -90,6 +94,7 @@ export default {
   created() {
     this.buildCalendarOptions()
     this.loadProjects()
+    this.loadUpcoming()
   },
   methods: {
     buildCalendarOptions() {
@@ -145,19 +150,32 @@ export default {
       }
     },
 
+    async loadUpcoming() {
+      try {
+        const today = new Date()
+        const from = today.toISOString().slice(0, 10)
+        const to = new Date(today.getTime() + 90 * 86400000).toISOString().slice(0, 10)
+        const res = await getCalendarTasks(from, to)
+        this.upcomingTasks = (res.data && res.data.tasks) || []
+      } catch (e) {
+        console.error('[calendar] 加载近期截止失败', e)
+      }
+    },
+
     refresh() {
       if (this.currentFrom && this.currentTo) this.loadTasks(this.currentFrom, this.currentTo)
+      this.loadUpcoming()
     },
 
     buildEvents() {
       return this.tasks.map((t) => {
-        const isDone = String(t.status || '').toUpperCase() === 'DONE'
-        const color = isDone ? { bg: DONE_BG, text: DONE_TEXT } : colorForProject(t.projectId)
-        const classNames = isDone ? ['fc-event-done'] : []
+        const done = isDone(t)
+        const color = done ? { bg: DONE_BG, text: DONE_TEXT } : colorForProject(t.projectId)
+        const classNames = done ? ['fc-event-done'] : []
         return {
           id: String(t.id),
           title: t.title,
-          start: t.dueTime ? `${t.dueDate}T${t.dueTime}` : t.dueDate,
+          start: toEventStart(t),
           allDay: !t.dueTime,
           backgroundColor: color.bg,
           borderColor: color.bg,
@@ -190,10 +208,16 @@ export default {
     async onEventDrop(info) {
       const task = info.event.extendedProps.task
       if (!task) return
-      const newDate = info.event.startStr.slice(0, 10)
+      const startStr = info.event.startStr || ''
+      const newDate = startStr.slice(0, 10)
+      // 周视图里纵向拖拽会改时刻，startStr 带 T 时以新时刻为准；
+      // 月视图/全天事件的 startStr 只有日期，时刻保持原值。
+      const newTime = startStr.length > 10 ? startStr.slice(11, 16) : (task.dueTime || null)
       try {
-        await updateTask(task.id, { dueDate: newDate, dueTime: task.dueTime || null })
+        await updateTask(task.id, { dueDate: newDate, dueTime: newTime })
         task.dueDate = newDate
+        task.dueTime = newTime
+        this.loadUpcoming()
       } catch (e) {
         console.error('[calendar] 拖拽改期失败', e)
         uni.showToast({ title: this.$t('calendar.saveFailed'), icon: 'none' })

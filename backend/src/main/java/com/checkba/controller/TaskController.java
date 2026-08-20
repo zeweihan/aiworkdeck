@@ -16,7 +16,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -46,7 +45,7 @@ public class TaskController {
     /** 登录 + 写权限 + 拒 CLIENT，参数序恒为 (projectId, sessionId)，照 ProjectOverviewController.requireWrite。 */
     private Long requireWrite(Long projectId, String sessionId) {
         Long userId = AuthController.getUserIdFromSession(sessionId);
-        if (userId == null) throw new IllegalArgumentException("未登录");
+        if (userId == null) throw new IllegalArgumentException(LangText.of("未登录", "Not signed in"));
         if (projectId == null
                 || !projectMemberService.hasWritePermission(projectId, userId)
                 || projectMemberService.isClient(projectId, userId)) {
@@ -69,7 +68,7 @@ public class TaskController {
         LocalTime dueTime = toLocalTime(body.get("dueTime"));
 
         ProjectTask task = taskService.createTask(projectId, fileId, title, dueDate, dueTime, userId);
-        return ok(toResponseMap(task));
+        return ok(taskService.toResponseMap(task));
     }
 
     /** body: {title?, dueDate?, dueTime?, status?}——任意子集，缺席字段不动。 */
@@ -83,7 +82,7 @@ public class TaskController {
         requireWrite(existing.getProjectId(), sessionId);
 
         ProjectTask updated = taskService.updateTask(id, body == null ? Map.of() : body);
-        return ok(toResponseMap(updated));
+        return ok(taskService.toResponseMap(updated));
     }
 
     @DeleteMapping("/{id}")
@@ -95,20 +94,6 @@ public class TaskController {
 
         taskService.deleteTask(id);
         return ok(Map.of("deleted", true));
-    }
-
-    private Map<String, Object> toResponseMap(ProjectTask t) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        m.put("id", t.getId());
-        m.put("uid", t.getUid());
-        m.put("projectId", t.getProjectId());
-        m.put("fileId", t.getFileId());
-        m.put("title", t.getTitle());
-        m.put("dueDate", t.getDueDate());
-        m.put("dueTime", t.getDueTime());
-        m.put("status", t.getStatus());
-        m.put("source", t.getSource());
-        return m;
     }
 
     private ResponseEntity<Map<String, Object>> ok(Map<String, Object> data) {

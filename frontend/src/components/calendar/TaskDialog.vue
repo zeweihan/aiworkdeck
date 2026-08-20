@@ -39,11 +39,11 @@
         <view class="form-row form-row-inline">
           <view class="form-col">
             <text class="form-label">{{ $t('calendar.dateLabel') }}</text>
-            <input class="form-input" type="date" v-model="form.dueDate" />
+            <AwdDatePicker type="date" v-model="form.dueDate" />
           </view>
           <view class="form-col">
             <text class="form-label">{{ $t('calendar.timeLabel') }}</text>
-            <input class="form-input" type="time" v-model="form.dueTime" />
+            <AwdDatePicker type="time" v-model="form.dueTime" />
           </view>
         </view>
 
@@ -73,11 +73,13 @@
 
 <script>
 import AwdSelect from '@/components/AwdSelect.vue'
+import AwdDatePicker from '@/components/AwdDatePicker.vue'
 import { createTask, updateTask, deleteTask } from '@/services/api.js'
+import { isDone } from '@/components/calendar/taskUtils.js'
 
 export default {
   name: 'TaskDialog',
-  components: { AwdSelect },
+  components: { AwdSelect, AwdDatePicker },
   props: {
     visible: { type: Boolean, default: false },
     /** 编辑态传入完整任务对象；创建态传 null */
@@ -100,7 +102,7 @@ export default {
       return !!(this.task && this.task.id)
     },
     isDone() {
-      return String((this.task && this.task.status) || '').toUpperCase() === 'DONE'
+      return isDone(this.task)
     },
     projectLabels() {
       return this.projects.map((p) => p.name)

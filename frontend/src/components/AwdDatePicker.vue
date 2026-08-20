@@ -76,7 +76,9 @@ export default {
       ].join(';')
       input.addEventListener('focus', this.handleFocus)
       input.addEventListener('blur', this.handleBlur)
-      input.addEventListener('input', this.handleInput)
+      // 只听 change 不听 input：原生日期框键盘逐段输入时 input 事件会带不完整的
+      // 中间值，直接上抛会让「改期即保存」类调用方（ProjectCalendarPane）拿中间值
+      // 发请求。change 只在值完整合法（或失焦）时触发。
       input.addEventListener('change', this.handleInput)
       host.appendChild(input)
       this._input = input
@@ -94,7 +96,6 @@ export default {
       if (!this._input) return
       this._input.removeEventListener('focus', this.handleFocus)
       this._input.removeEventListener('blur', this.handleBlur)
-      this._input.removeEventListener('input', this.handleInput)
       this._input.removeEventListener('change', this.handleInput)
       if (this._input.parentNode) this._input.parentNode.removeChild(this._input)
       this._input = null
