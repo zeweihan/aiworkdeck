@@ -519,11 +519,12 @@ try {
     const t = await textOf()
     const m = t.match(/.{0,40}(undefined|NaN|\[object|服务器内部错误).{0,40}/)
     if (m) throw new Error('页面文本可疑: ' + m[0])
-    // 空项目态与有项目态都必须渲染「从团队案件库取一份案卷」——它是协作的唯一
-    // 入口，且 CollabDialog.vue:271 的邀请话术第 1 步就指着它。搬迁时漏掉
-    // CloudAcceptDialog 的两个入口，这条断言会红。
-    if (!t.includes('从团队案件库取一份案卷')) {
-      throw new Error('项目列表页缺「从团队案件库取一份案卷」入口（CloudAcceptDialog 没搬全）')
+    // 「从团队案件库取一份案卷」入口 2026-08-20 起有意收起（PR#457，
+    // project-list.vue 的 SHOW_CLOUD_ACCEPT=false 常量，方法与弹窗组件原样保留）。
+    // 这里断言它确实没渲染——谁把常量开回来，这行要一起翻回 includes 断言，
+    // 别让「收起」与「巡检」各说各话。
+    if (t.includes('从团队案件库取一份案卷')) {
+      throw new Error('SHOW_CLOUD_ACCEPT 已开回但 J2 巡检还是收起口径，两处要一起改')
     }
   })
 
