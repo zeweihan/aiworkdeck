@@ -89,6 +89,18 @@ Impress **没有 redline**：`slide_write_notes`/`slide_set_shape_text`/`slide_r
 
 **Phase 1 未做、明确延后的项**（spec §5.2/§6 已标注理由，不是遗漏）：LRU 保活权重（Impress 实例记双倍权重）——spec 原话「具体阈值在 Phase 1 用真实 pptx 测了内存再定」，没有真机内存数据前不写死阈值；预热备胎过继到 Impress 文档的稳定性——架构上不需要改（池按 key 存实例，与文档类型无关），但"同一 Qt 窗口从 Writer view 换成 Impress view 是否稳定"必须真机验证，若不稳定的退化方案（pptx 不吃备胎）也留给真机验证后再决定要不要写。`layoutNameOf()` 的 `AutoLayout` 数值→名称映射是最佳努力（只覆盖几个常被引用的值，未逐值核对 idl），不影响原语契约，命中不了就回退 `null`。
 
+## 纯文本 text_* 原语（dev-board#37：后端直读直写，不走编辑器桥）
+
+txt/md/markdown 自 dev-board#37 起不进 LOWA（前端走 PlainTextEditor.vue，见 doc-editor.md「纯文本分流」），doc_* 桥对它们不适用。AI 改这类文件走 `backend/.../tools/TextFileEditTools.java`：
+
+- `text_write_file`（整篇覆盖）、`text_find_replace`（字面量替换，replaceAll 可选，返回命中数）；读取复用 `extract_file_text`。均按扩展名校验（`PLAIN_TEXT_TYPES`，与前端 fileOpenTabs.js 的同名表对齐），docx 等一律拒绝并指回 doc_*。
+- 实现：StorageService 读写（存储键 filePath 优先、回退 wpsFileId，与 DocumentTextService 同口径；UTF-8 直读直写，**不走 Tika**）+ 回写 fileSize/updatedAt + `WorkSessionService.onChangeSignal`（与 FileController.uploadFile 同款版本信号）+ SSE 单向 `client_action {action:'text_reload_file', fileId}`（EditorBridgeService.sendTextReloadFileAction，单名无 wps_* 双轨）。
+- 前端消费：agentClientActions.js `handleTextReloadFile` → `reloadPlainTextInstances(fileId)` 就地重载打开中的文本标签（丢本地未保存态）；未打开不硬拉。
+- **能力过滤刻意不收 text_ 前缀**：这是纯后端执行工具（无客户端执行器依赖，SSE 刷新是 fire-and-forget），按 ClientCapabilityService 的既有语义对所有能力档位可见（与 extract_file_text 同口径）——不要把它加进 lowaOnly，那会让 office/none 会话白白失去纯文本编辑能力。
+- 上下文侧：ContextAssemblerService 的 `lowaDocKind` 新增 `"text"` 分支（txt/md/markdown），active-document 指引/末位提醒/readHint 三处（含英文版）都指向 extract_file_text + text_*，并禁止对其调 doc_*/sheet_*/slide_*；DocumentEditTools.doc_open_file 对纯文本返回指路错误。
+- 纯文本没有修订机制：安全网是版本记录（每次写入都发 onChangeSignal）。工具无 worker action、无 EDITOR_ACTIONS 白名单项——"四件套"清单对 text_* 只剩两件：@Tool + toolDisplayNames.js 中文名（ToolDisplayNameCoverageTest 钉着）。
+- 单测：`TextFileEditToolsTest`（命中/未命中/非文本拒绝/信号触发/跨项目拒绝）。
+
 ## 第二条桥：office_* 工具桥（Word 插件，Phase C）
 
 与 LOWA 桥并存的独立桥，服务 `office-addin/`（Word/Excel/PowerPoint 任务窗格插件）。**逐字同构但零共享**：不复用 EditorBridgeService、超时常量独立、单名契约（无双轨旧名）。

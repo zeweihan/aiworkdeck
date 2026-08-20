@@ -380,6 +380,12 @@ public class ContextAssemblerService {
                                     "形状填充边框透明度用 slide_format_shape；表格建改用 slide_add_table / slide_table_read / " +
                                     "slide_table_set_cell / slide_table_set_style；超链接用 slide_set_hyperlink。\n\n");
                         }
+                        case "text" -> {
+                            systemText.append("这是一份纯文本文件（txt/md），在轻量文本编辑器中打开，没有修订机制。" +
+                                    "读取用 extract_file_text，修改用 text_write_file（整篇覆盖）或 " +
+                                    "text_find_replace（字面量查找替换），改动直接生效、自动进入版本记录并同步刷新" +
+                                    "用户打开的文本标签——**无需也不要**对它调用 doc_* / sheet_* / slide_* 工具。\n\n");
+                        }
                         default -> {
                             systemText.append("所有 doc_* 编辑/读取工具直接作用于该文档——**无需也不要**调用 ");
                             systemText.append("`doc_list_project_files` 或 `doc_open_file` 去重新发现/打开它；");
@@ -415,6 +421,7 @@ public class ContextAssemblerService {
                     default -> switch (lowaDocKind(activeContext)) {
                         case "sheet" -> "[内容暂不可读，可用 sheet_get_overview / sheet_read_range 直接读取]";
                         case "slide" -> "[内容暂不可读，可用 slide_get_overview / slide_get_page 直接读取]";
+                        case "text" -> "[内容暂不可读，可用 extract_file_text 直接读取]";
                         default -> "[正文暂不可读，可用 doc_get_document_text 直接分段读取]";
                     };
                 };
@@ -637,6 +644,11 @@ public class ContextAssemblerService {
                         + "表格用 slide_add_table / slide_table_read / slide_table_set_cell / slide_table_set_style，"
                         + "超链接用 slide_set_hyperlink，"
                         + "**禁止**再调 doc_list_project_files 或 doc_open_file 去重新发现或打开它。";
+                case "text" -> "\n\n[系统提醒] 用户此刻打开的是纯文本文件" + docLabel + "（id="
+                        + activeContext.getId() + "），其内容见 system prompt 的 <active_document>。"
+                        + "用户未指明别的文件时，「这个」「当前文件」「改一下」等都指它——"
+                        + "读取用 extract_file_text，修改用 text_write_file / text_find_replace"
+                        + "（写入直接生效并进入版本记录），**禁止**对它调用 doc_* / sheet_* / slide_* 工具。";
                 default -> "\n\n[系统提醒] 编辑器中当前已打开文档" + docLabel + "（id="
                         + activeContext.getId() + "），其正文见 system prompt 的 <active_document>。"
                         + "用户未指明别的文档时，「这个」「当前文档」「修订一下」等都指它——"
@@ -660,6 +672,8 @@ public class ContextAssemblerService {
         ext = ext.toLowerCase(java.util.Locale.ROOT);
         if (ext.startsWith("xls") || ext.startsWith("et") || "csv".equals(ext)) return "sheet";
         if (ext.startsWith("ppt") || "odp".equals(ext) || "potx".equals(ext)) return "slide";
+        // 纯文本（dev-board#37 起走轻量文本编辑器，不进 LOWA）：text_* 后端直改口径
+        if ("txt".equals(ext) || "md".equals(ext) || "markdown".equals(ext)) return "text";
         return "doc";
     }
 
@@ -1034,6 +1048,11 @@ This is a spreadsheet. Read and modify it exclusively with the sheet_* tools (sh
 
 """;
 
+    private static final String EN_GUIDE_LOWA_TEXT = """
+This is a plain-text file (txt/md), open in the lightweight text editor; it has no track-changes mechanism. Read it with extract_file_text; modify it with text_write_file (whole-file overwrite) or text_find_replace (literal find and replace). Changes take effect immediately, enter the version history automatically, and refresh the user's open text tab. You need NOT - and must NOT - call doc_* / sheet_* / slide_* tools on it.
+
+""";
+
     private static final String EN_GUIDE_LOWA_SLIDE = """
 This is a presentation. Read and modify it exclusively with the slide_* tools (slide_get_overview first for the deck overview, slide_get_page for one slide's details, slide_set_shape_text / slide_replace_text to change text, slide_write_notes to change speaker notes); writes take effect immediately (presentations have no track-changes mechanism; roll back mistakes with doc_restore_checkpoint). You need NOT - and must NOT - call `doc_list_project_files` or `doc_open_file` to rediscover or reopen it; those two tools are needed only when the user explicitly wants to work on a DIFFERENT document. This session has no doc_* tools.
 Slide and shape structure: slide_add_page / slide_delete_page / slide_move_page / slide_set_layout to add, delete, move slides and set layouts; slide_add_text_box / slide_add_shape to insert text boxes and shapes; slide_delete_shape / slide_set_shape_geometry to delete shapes and adjust position and size.
@@ -1070,6 +1089,7 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                 switch (lowaDocKind(activeContext)) {
                     case "sheet" -> sb.append(EN_GUIDE_LOWA_SHEET);
                     case "slide" -> sb.append(EN_GUIDE_LOWA_SLIDE);
+                    case "text" -> sb.append(EN_GUIDE_LOWA_TEXT);
                     default -> sb.append(EN_GUIDE_LOWA_DOC);
                 }
             }
@@ -1091,6 +1111,7 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
             default -> switch (lowaDocKind(activeContext)) {
                 case "sheet" -> "[Content temporarily unreadable - read it directly with sheet_get_overview / sheet_read_range]";
                 case "slide" -> "[Content temporarily unreadable - read it directly with slide_get_overview / slide_get_page]";
+                case "text" -> "[Content temporarily unreadable - read it directly with extract_file_text]";
                 default -> "[Body temporarily unreadable - read it in chunks with doc_get_document_text]";
             };
         };
@@ -1183,6 +1204,12 @@ All doc_* editing and reading tools act directly on this document. You need NOT 
                         + "slide_table_read / slide_table_set_cell / slide_table_set_style; hyperlinks use "
                         + "slide_set_hyperlink. "
                         + "Calling doc_list_project_files or doc_open_file to rediscover or reopen it is **FORBIDDEN**.";
+                case "text" -> "\n\n[System reminder] The user currently has the plain-text file " + docLabel
+                        + " (id=" + activeContext.getId() + ") open; its content is in the system prompt's "
+                        + "<active_document>. Unless the user names another file, \"this\", \"the current file\", "
+                        + "\"change it\", and the like refer to it - read it with extract_file_text and modify it with "
+                        + "text_write_file / text_find_replace (writes take effect immediately and enter the version "
+                        + "history). Calling doc_* / sheet_* / slide_* tools on it is **FORBIDDEN**.";
                 default -> "\n\n[System reminder] The editor currently has the document " + docLabel
                         + " (id=" + activeContext.getId() + ") open; its body text is in the system prompt's "
                         + "<active_document>. Unless the user names another document, \"this\", \"the current document\", "

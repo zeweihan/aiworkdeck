@@ -51,6 +51,11 @@
     "test:zeta-relay": "node --test tests/zeta-relay/*.test.mjs"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.9",
     "@dcloudio/uni-app": "3.0.0-4080420251103001",
     "@dcloudio/uni-app-harmony": "3.0.0-4080420251103001",
     "@dcloudio/uni-app-plus": "3.0.0-4080420251103001",

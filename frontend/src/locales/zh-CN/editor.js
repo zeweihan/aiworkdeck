@@ -142,6 +142,19 @@ export default {
     installPackRetry: '安装失败，重试',
     installPackFailed: '安装失败',
   },
+  // 纯文本轻量编辑器（PlainTextEditor.vue，dev-board#37）
+  plainText: {
+    opening: '正在打开文本编辑器…',
+    loadFailed: '读取文件失败',
+    readFailed: '读取文件失败（{status}）',
+    fileMissing: '文件不存在',
+    emptyDownload: '文件内容下载为空，为防覆盖真实内容已禁止编辑，请重试',
+    retry: '重试',
+    edit: '编辑',
+    preview: '预览',
+    unsaved: '未保存',
+    saveFailedRetry: '保存失败，点击重试',
+  },
   // 自建工具栏（EditorToolbar.vue）。工具提示、下拉与查找替换条的全部可见文案。
   toolbar: {
     undo: '撤销 (Cmd/Ctrl+Z)',

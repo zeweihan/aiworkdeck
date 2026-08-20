@@ -32,6 +32,11 @@ export const agentClientActionMethods = {
         else if (action.action === 'doc_reload_file' || action.action === 'wps_reload_file') {
             this.handleEditorReloadFile(action)
         }
+        // AI 后端直改了纯文本文件（text_write_file / text_find_replace，dev-board#37）：
+        // 刷新打开中的文本标签。单名新契约，无 wps_* 旧名双轨。
+        else if (action.action === 'text_reload_file') {
+            this.handleTextReloadFile(action)
+        }
         // AI Agent 请求执行编辑器命令
         else if (action.tool === 'editor_command' || action.tool === 'wps_command') {
             // 特殊处理同步打开命令（新建文件流式写入）
@@ -333,6 +338,27 @@ export const agentClientActionMethods = {
             console.error('[ProjectOverview] handleEditorReloadFile error:', e)
             uni.showToast({ title: this.$t('workbenchOps.refreshFileFailed'), icon: 'none' })
             return false
+        }
+    },
+
+    /**
+     * AI text_* 工具后端直改纯文本文件后的前端刷新（text_reload_file）。
+     * 与 handleEditorReloadFile 的分工：那条链服务 LOWA 保活池（逐 LRU、强刷活动
+     * 实例），文本编辑器是 v-if 单实例——只有"正激活显示"的标签有组件，就地重载
+     * 它（丢弃本地未保存态，AI 刚写进后端的才是权威版本）；未打开/未激活的什么都
+     * 不做（下次挂载自然拉新内容），也不把文件硬拉出来打开。
+     */
+    async handleTextReloadFile(action) {
+        try {
+            const fileId = action.fileId
+            if (!fileId) return
+            await this.reloadPlainTextInstances(fileId)
+            // 文件大小/修改时间变了，树上的元数据跟着刷
+            if (this.$refs.fileTree && this.$refs.fileTree.loadFiles) {
+                this.$refs.fileTree.loadFiles()
+            }
+        } catch (e) {
+            console.warn('[ProjectOverview] handleTextReloadFile error:', e)
         }
     },
 

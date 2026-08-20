@@ -144,6 +144,30 @@ public class EditorBridgeService {
     }
 
     /**
+     * 通知前端重载纯文本标签（text_write_file / text_find_replace 后端直改之后）。
+     * 单向、单名（dev-board#37 新增，没有 wps_* 时代的旧名要背）；前端只对
+     * 「该文件正开着的文本标签」就地重载，没开着就什么都不做。
+     */
+    public void sendTextReloadFileAction(ProjectFile file) {
+        String conversationId = currentConversationId.get();
+        if (conversationId == null) {
+            log.warn("No conversation ID set, cannot send text reload file action");
+            return;
+        }
+        try {
+            String payload = objectMapper.writeValueAsString(Map.of(
+                    "action", "text_reload_file",
+                    "fileId", file.getId(),
+                    "fileName", file.getName()
+            ));
+            sseEmitterService.send(conversationId, "client_action", payload);
+            log.info("Sent text_reload_file action for file: {} (id={})", file.getName(), file.getId());
+        } catch (Exception e) {
+            log.error("Failed to send text reload file action", e);
+        }
+    }
+
+    /**
      * 双轨迁移期的单向 client_action 发送：同一份载荷按"新名在前、旧名在后"各发一次。
      * 顺序是契约的一部分——前端凭"先见新名"判定新后端并丢弃随后的旧名事件去重。
      */

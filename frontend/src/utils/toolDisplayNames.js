@@ -37,6 +37,9 @@ const NAMES = {
   list_files: { zh: '列出文件', en: 'List files' },
   write_file: { zh: '写入文件', en: 'Write file' },
   write_docx: { zh: '生成Word文档', en: 'Create Word doc' },
+  // 纯文本直读直写（TextFileEditTools，dev-board#37）
+  text_write_file: { zh: '写入文本文件', en: 'Write text file' },
+  text_find_replace: { zh: '文本查找替换', en: 'Text find and replace' },
   scan_files: { zh: '扫描项目文件', en: 'Scan files' },
   delete_file: { zh: '删除文件', en: 'Delete file' },
   move_file: { zh: '移动文件', en: 'Move file' },

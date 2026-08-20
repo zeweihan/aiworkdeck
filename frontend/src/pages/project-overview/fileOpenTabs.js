@@ -6,6 +6,11 @@ import { getProjectFiles } from '@/services/api.js'
 import { activityTracker } from '@/utils/activityTracker.js'
 import { ICONS as GLYPHS, fileGlyph } from '@/config/icons.js'
 
+// 轻量文本编辑器（PlainTextEditor.vue）承接的扩展名（dev-board#37）。
+// 写成表便于日后扩展 json/js 等；当前刻意只收 txt/md/markdown——其它文本类
+// 扩展名仍走 FilePreview，不要顺手加。
+const PLAIN_TEXT_TYPES = ['txt', 'md', 'markdown']
+
 export const fileOpenTabsMethods = {
     handleFileTreeSelect(file) {
       if (!file || file.isFolder) return
@@ -249,6 +254,16 @@ export const fileOpenTabsMethods = {
         idx = list.findIndex(f => f.id === fileId)
         if (idx === -1) return
       }
+      // 文本标签（PlainTextEditor）的平行分支：v-if 单实例，只有"正激活显示"的
+      // 标签才有组件实例；非激活标签在切走时已由组件 beforeUnmount 兜底落盘。
+      else if (file && this.isPlainTextFile(file)) {
+        const inst = (this._plainTextRefs || {})[pane]
+        if (inst && inst.file && inst.file.id === fileId && (inst.dirty || inst.saving)) {
+          try { await inst.flushSave() } catch (e) { console.warn('[ProjectOverview] close flush-save (text) failed:', e) }
+        }
+        idx = list.findIndex(f => f.id === fileId)
+        if (idx === -1) return
+      }
       // 浏览器标签：BrowserPane 卸载时只把 BrowserView 摘下（保活，为的是切标签
       // 不丢网页内容），真正销毁只发生在标签关闭——也就是这里，以及页面卸载。
       // 跨窗格拖拽是「在另一侧也打开同一个标签」（同 id 双开，见 tabDragSplit），
@@ -347,8 +362,10 @@ export const fileOpenTabsMethods = {
       const externalSourceTypes = ['drawio', 'vsdx', 'vsd']
       if (externalSourceTypes.includes(type)) return false
 
-      // 2. 排除 Markdown 文件，使用专门的 Markdown 预览组件
-      if (type === 'md' || type === 'markdown') return false
+      // 2. 纯文本走轻量文本编辑器（PlainTextEditor.vue，dev-board#37），不进 LOWA。
+      // 必须排在下面 wpsFileId 兜底之前——上传的 txt 都被 FileTree 合成了 wpsFileId，
+      // 不拦就会被兜底分支判成"可编辑"送进 150MB 的 WASM 引擎。
+      if (PLAIN_TEXT_TYPES.includes(type)) return false
 
       // 3. Office 文档格式 —— 仅限自建 LOWA 引擎真正编入的模块（probe_modules
       // 实测：r3 起仅 Writer + Calc；Impress/Draw 随 r4 引擎补齐——见
@@ -367,8 +384,8 @@ export const fileOpenTabsMethods = {
           'pptx', 'ppt', 'pptm', 'potx', 'odp'
       ]
 
-      // Office 类型或带文件 ID（非媒体/markdown）即视为文档编辑器可打开
-      return wpsFormats.includes(type) || (file.wpsFileId && !mediaTypes.includes(type) && type !== 'md' && type !== 'markdown')
+      // Office 类型或带文件 ID（非媒体，纯文本已在上面拦下）即视为文档编辑器可打开
+      return wpsFormats.includes(type) || (file.wpsFileId && !mediaTypes.includes(type))
     },
 
     // Epic #43 Track B / #79: should this Office file open in the embedded
@@ -379,6 +396,43 @@ export const fileOpenTabsMethods = {
       return this.libreOfficePreferred && this.isEditorOpenableFile(file)
     },
 
+    // 纯文本文件（txt/md/markdown）走轻量文本编辑器（PlainTextEditor.vue，dev-board#37）。
+    // tabType 有值的都是虚拟标签（web/markdown/diff…），不归这里。
+    isPlainTextFile(file) {
+      if (!file || file.tabType || file.isFolder || !file.fileType) return false
+      return PLAIN_TEXT_TYPES.includes(file.fileType.toLowerCase())
+    },
+
+    // PlainTextEditor 实例登记（v-if 单实例，每窗格至多一个；对齐 _libreRefs 的
+    // 非响应式口径）。closeFile 落盘、版本重载、AI text_reload_file 都从这里取实例。
+    setPlainTextRef(pane, el) {
+      if (!this._plainTextRefs) this._plainTextRefs = {}
+      if (el) this._plainTextRefs[pane] = el
+      else delete this._plainTextRefs[pane]
+    },
+
+    /**
+     * 让正在显示 fileId 的文本编辑器实例就地重载（版本退回 / AI text_* 直改后调用）。
+     * 未激活的文本标签没有组件实例（v-if 单实例，切走即销毁），下次激活时挂载
+     * 自然拉取新内容，无需处理。返回是否全部成功（没有命中的实例也算成功）。
+     */
+    async reloadPlainTextInstances(fileId) {
+      let ok = true
+      for (const pane of ['left', 'right']) {
+        const inst = (this._plainTextRefs || {})[pane]
+        if (inst && inst.file && inst.file.id === fileId) {
+          try {
+            const r = await inst.reloadFromBackend()
+            if (!r) ok = false
+          } catch (e) {
+            console.warn('[ProjectOverview] plain text reload failed:', e)
+            ok = false
+          }
+        }
+      }
+      return ok
+    },
+
     // .drawio 走内嵌 draw.io 编辑器（DrawioEditor.vue）。诉讼可视化出的四份产物里
     // 它是唯一的「可继续编辑版」——没有这条分支它就会落进 FilePreview 的
     // 「暂不支持预览」兜底，等于这个格式白出了。
@@ -387,14 +441,10 @@ export const fileOpenTabsMethods = {
       return file.fileType.toLowerCase() === 'drawio'
     },
 
-    // Check if file is a markdown tab (for AI artifacts or real .md files)
+    // AI 虚拟 markdown 产物标签（tabType='markdown'，无真实 fileId）才走只读
+    // MarkdownPreview；真正的 .md 文件自 dev-board#37 起走 PlainTextEditor（可编辑）。
     isMarkdownTab(file) {
-      if (!file) return false
-      // 1. AI 创建的虚拟 markdown 标签
-      if (file.tabType === 'markdown') return true
-      // 2. 真正的 .md 文件（从文件树打开）
-      if (file.fileType && (file.fileType.toLowerCase() === 'md' || file.fileType.toLowerCase() === 'markdown')) return true
-      return false
+      return !!(file && file.tabType === 'markdown')
     },
 
     isDiffTab(file) {
@@ -552,6 +602,15 @@ export const fileOpenTabsMethods = {
       // 失败的那几份各自已经报过（静音只吞成功提示），这里只汇报成功的份数。
       if (many && ok) {
         uni.showToast({ title: this.$t('workbenchOps.updatedOpenFiles', { count: ok }), icon: 'success' })
+      }
+
+      // 文本标签（PlainTextEditor）的平行分支：正在显示的实例必须就地重载并丢弃
+      // 本地未保存态（版本操作以后端为准），否则画面不变、下一次自动保存还会把
+      // 退回前的旧内容写回去——与上面 forceActive 是同一类数据事故。未激活的文本
+      // 标签没有实例（v-if 单实例），下次激活挂载即拉新内容。失败时组件自己转入
+      // 错误相位并封死保存，这里不再叠加提示。
+      for (const fileId of idSet) {
+        await this.reloadPlainTextInstances(fileId)
       }
     },
 }

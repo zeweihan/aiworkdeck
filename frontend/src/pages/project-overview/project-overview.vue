@@ -869,6 +869,15 @@
                       :content="activeFileLeft.content"
                       :file="activeFileLeft"
                     />
+                    <!-- 纯文本（txt/md/markdown）：轻量文本编辑器，不进 LOWA
+                         （dev-board#37）。v-if 单实例，切标签销毁重建，无保活池。 -->
+                    <PlainTextEditor
+                      v-else-if="isPlainTextFile(activeFileLeft)"
+                      :key="'ptx-left-' + activeFileLeft.id"
+                      :ref="el => setPlainTextRef('left', el)"
+                      :file="activeFileLeft"
+                      :project-id="projectId"
+                    />
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileLeft)"
                       :source-id="activeFileLeft.diffSource.id"
@@ -981,6 +990,14 @@
                       v-if="isMarkdownTab(activeFileRight)"
                       :content="activeFileRight.content"
                       :file="activeFileRight"
+                    />
+                    <!-- 纯文本轻量编辑器：见左窗格同名注释 -->
+                    <PlainTextEditor
+                      v-else-if="isPlainTextFile(activeFileRight)"
+                      :key="'ptx-right-' + activeFileRight.id"
+                      :ref="el => setPlainTextRef('right', el)"
+                      :file="activeFileRight"
+                      :project-id="projectId"
                     />
                     <DocDiffViewer
                       v-else-if="isDiffTab(activeFileRight)"
@@ -1534,6 +1551,7 @@ import FileLinkDropZone from '@/components/FileLinkDropZone.vue'
 import FileStagingArea from '@/components/FileStagingArea.vue'
 import PluginPane from '@/components/PluginPane.vue' // Added
 import DrawioEditor from '@/components/DrawioEditor.vue'
+import PlainTextEditor from '@/components/PlainTextEditor.vue'
 // 插件广场 VS Code 形态：左栏列表面板 + 中栏详情 tab（整页 MarketPane 仅存于 admin 独立页）
 import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
 import MarketDetailPane from '@/components/MarketDetailPane.vue'
@@ -1660,6 +1678,7 @@ export default {
     MarkdownPreview,
     PluginPane, // Added
     DrawioEditor,
+    PlainTextEditor,
     MarketSidebarPanel,
     MarketDetailPane,
     ProjectHomePane,
@@ -4538,6 +4557,12 @@ export default {
         candidate = this.activeFileLeft || this.activeFileRight || null
       }
       if (!candidate) return null
+      // 纯文本标签（PlainTextEditor）也是合法的 AI 目标：后端按 fileType 走
+      // text_* 工具口径（dev-board#37）。不放行的话，用户盯着一份 txt 问 AI，
+      // 上下文里却没有这份文件。
+      if (typeof this.isPlainTextFile === 'function' && this.isPlainTextFile(candidate)) {
+        return candidate
+      }
       if (typeof this.isEditorOpenableFile === 'function' && !this.isEditorOpenableFile(candidate)) {
         return null
       }
@@ -4634,7 +4659,20 @@ export default {
              }
         }
 
-        if (useEditor && this.libreOfficeActive && this.libreOfficeExecutor) {
+        // 纯文本标签：正文/选区直接从 CodeMirror 实例取（拿到的是含未保存输入的
+        // 活内容）。不能落进下面的 LOWA 分支——executor 指着的是别的文档，会把
+        // 那份 docx 的正文错标成这份 txt 的内容。
+        if (useEditor && this.isPlainTextFile(file)) {
+            for (const pane of ['left', 'right']) {
+                const inst = (this._plainTextRefs || {})[pane]
+                if (inst && inst.file && inst.file.id === (file.id || file.fileId)) {
+                    context.selectionText = this.normalizeContextText(inst.getSelectionText(), 1500)
+                    context.documentText = this.normalizeContextText(inst.getText(), 8000)
+                    break
+                }
+            }
+        }
+        else if (useEditor && this.useLibreEditor(file) && this.libreOfficeActive && this.libreOfficeExecutor) {
             try {
                  const sel = await this.libreOfficeExecutor.executeCommand('get_selection', {})
                  context.selectionText = this.normalizeContextText((sel && sel.text) || '', 1500)

@@ -37,6 +37,15 @@ description: 文档编辑器（LOWA/zetaoffice）领域。任务涉及 LibreOffi
 - `frontend/src/components/LibreOfficeEditor.vue` — 单文档编辑器组件：webview 创建、prefetch、load/export、autoSave、flushSave、reloadFromBackend。支持**备胎过继**（watch file 仅 null→文档；引擎已就绪走 finishDocLoad，未就绪由 onEndpointReady 接手）与**只读预览接力**（字节预取完成即 docx-preview 本地渲染，previewReady 后 overlay 变成可滚动阅读 + 顶部细进度条，ready 后整体消失）。
 - `frontend/src/pages/project-overview/librePool.js` — 保活池方法组（Phase 1 外置）：libreLruKeys/touchLibreLru/evictLibreInstance、syncLibreExecutor 活跃指针、`_libreRefs`/`_libreExecMap` 非响应式注册表、`LIBRE_KEEPALIVE_MAX = 3`、reloadActiveLibreInstances（版本退回/检查点恢复后就地重载）；**预热备胎**（PR#220）：libreSpares（{key, file}，file=null 是后台预 boot 的空白隐藏实例），onActiveOfficeFileChanged 里 maybeAdoptLibreSpare（须在 touchLibreLru 之前，靠"不在 lru 记账"识别无实例）过继给池外首开文档，过继后按 'left:fileId' 常规记账；补胎在过继 ready 后（scheduleLibreSpare，4s 延迟）。仅左窗格设备胎（webview 不能跨容器移动）；h5 无 checkbaDesktop 不建胎；常驻多一个空白实例内存（数百 MB）。
 
+## 纯文本分流（dev-board#37，不进 LOWA）
+
+- `txt/md/markdown` 走 `frontend/src/components/PlainTextEditor.vue`（CodeMirror 6），**不进 LOWA**。分流表 `fileOpenTabs.js` 的 `PLAIN_TEXT_TYPES`（模块顶部常量）+ `isPlainTextFile()`；判定在 `isEditorOpenableFile` 的 wpsFileId 兜底**之前**——上传文件都被合成了 wpsFileId，不先拦就会被兜底判成"可编辑"送进引擎。当前刻意只收这三种扩展名，别顺手加 json/js。
+- 该组件是 **v-if 单实例**（每窗格至多一个，无保活池/LRU/备胎那一套）：切标签即销毁，未保存内容由 `beforeUnmount` 兜底落盘 + `closeFile` 的文本分支显式 `flushSave`。实例登记在 `_plainTextRefs`（`setPlainTextRef`，非响应式，对齐 `_libreRefs` 口径）。
+- 存取走与 LOWA 相同的通用字节接口（GET /download、POST /upload multipart）——upload 成功后端 `signalChange` 自动接版本记录，无需额外接线。保存闸：下载失败或"fileSize>0 却空下载"即禁编辑（`_loadOk`，PR#194 同款事故的朴素版预防）。
+- **版本退回/AI 直改后必须走 `reloadPlainTextInstances(fileId)`**（fileOpenTabs.js）：`onVersionReloadFiles` 与 `handleTextReloadFile`（SSE `text_reload_file`，AI text_* 工具后端直改后下发）都调用它，让正在显示的实例 `reloadFromBackend()` 就地重载并丢弃本地未保存态——不做的话画面不变、下次 autosave 把旧内容写回去。未激活的文本标签没有实例，下次挂载自然拉新内容。
+- 真 `.md` 文件自此可编辑（编辑/预览切换在组件内，markdown-it 渲染）；`isMarkdownTab` 已收窄为只认 `tabType==='markdown'` 的 AI 虚拟产物标签。
+- AI 侧对纯文本走后端直读直写（`text_write_file`/`text_find_replace`），不经编辑器桥——契约见 ai-doc-bridge.md。
+
 ## 启动链路（打开 docx → 可编辑）
 
 激活文档 → 渲染 LibreOfficeEditor → getEditor() IPC（装隔离+起服务）→ 建 webview（persist:zetaoffice）+ 并行 prefetch 文档字节 → editor.html/editor-main.js 选传输 → bootZetaOffice（校验 crossOriginIsolated、fetch CJK 字体、fontconfig conf、加载 soffice.js、uno_main resolve worker port）→ office_thread.js boot（Desktop.create → 空白 swriter、RecordChanges=true、installModifyListener → ui_ready）→ executor 握手 ready → loadDocument：`load_document {bytes}` 写 MEMFS + loadComponentFromURL 重定位 xModel → ready → onLibreReady 注册 executor + syncLibreExecutor。
