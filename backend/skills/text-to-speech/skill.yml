@@ -1,0 +1,43 @@
+# 语音合成 Skill（打包格式见 docs/SKILL_SPEC.md）
+#
+# 本 skill 背后没有可执行的工具：文本转语音的实际操作在左栏「语音」面板的
+# 「语音合成」tab 里完成（EasyVoicePane.vue：选文本或朗读当前文档、挑音色、生成音频），
+# 本机引擎离线合成，不经过 AI 编排，也没有对应的 langchain4j @Tool。这个 skill
+# 存在的唯一作用是——命中触发词时把用户引导去用那个面板，而不是假装能在对话里
+# 直接完成语音合成。
+id: text-to-speech
+name: 语音合成
+description: 文本转语音：朗读文档或输入的文字，本机引擎离线合成，无需联网。首次使用需在面板内下载约 300MB 的语音组件。
+
+author: AI Workdeck
+author_url: https://www.aiworkdeck.com
+version: 1.0.0
+license: MIT
+
+# 默认启用：语音合成此前在「语音」面板里无任何门控，老用户升级后入口不应消失；
+# 可在插件广场里手动停用。
+enabled_by_default: true
+
+# 法律事项类别（匿名统计用，枚举见 MatterCategory）
+category: 其他法律事务
+
+# 可用语言：朗读文本不绑法域，面板本身已双语。
+languages:
+  - zh-CN
+  - en-US
+
+name_en: Text to Speech
+
+# 触发条件：用户输入包含任一关键词即命中
+triggers:
+  - 语音合成
+  - 文本转语音
+  - 朗读文档
+
+# 英文触发词（仅 en-US 应用语言下参与匹配；zh-CN 匹配行为不受影响）
+triggers_en:
+  - text to speech
+  - read aloud
+  - speech synthesis
+
+prompt: prompt.md

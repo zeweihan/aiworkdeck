@@ -26,26 +26,38 @@
         <view v-if="!installedRows.length" class="msb-empty">
           <text>{{ searchText ? $t('market.noMatchingInstalled') : $t('market.noInstalledYet') }}</text>
         </view>
-        <view
-          v-for="row in installedRows"
-          :key="'ins-' + row.kind + '-' + row.id"
-          class="msb-row"
-          @tap="openDetail(row)"
-        >
-          <view class="msb-row-glyph" :class="{ 'is-plugin': row.kind === 'plugin' }">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </view>
-          <view class="msb-row-main">
-            <text class="msb-row-name">{{ row.name }}</text>
-            <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
-            <text class="msb-row-meta">{{ row.meta }}</text>
-          </view>
-          <view class="msb-row-state" :class="row.stateClass">
-            <text>{{ row.stateLabel }}</text>
-          </view>
-        </view>
+        <!-- 「已安装」拆两个子分组：插件（面板型 skill + JAR/Web 插件）在前、Skill
+             （纯对话型）在后，与 MarketPane.vue 已安装 tab 的分区顺序一致。
+             子分组头是折叠头的视觉降级（更小字号、无 chevron、不再折叠一层），
+             判据类型已经写在分组标题里，行内不再重复"面板插件/Skill"小字标签。 -->
+        <template v-else>
+          <template v-for="group in installedGroups" :key="group.key">
+            <view v-if="group.rows.length" class="msb-subsec-head">
+              <text class="msb-subsec-title">{{ group.title }}</text>
+              <text class="msb-sec-count">{{ group.rows.length }}</text>
+            </view>
+            <view
+              v-for="row in group.rows"
+              :key="'ins-' + row.kind + '-' + row.id"
+              class="msb-row"
+              @tap="openDetail(row)"
+            >
+              <view class="msb-row-glyph" :class="{ 'is-plugin': row.kind === 'plugin' || row.panel }">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                  <path v-for="(d, gi) in row.glyph" :key="gi" :d="d" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+              </view>
+              <view class="msb-row-main">
+                <text class="msb-row-name">{{ row.name }}</text>
+                <text v-if="row.desc" class="msb-row-desc">{{ row.desc }}</text>
+                <text class="msb-row-meta">{{ row.meta }}</text>
+              </view>
+              <view class="msb-row-state" :class="row.stateClass">
+                <text>{{ row.stateLabel }}</text>
+              </view>
+            </view>
+          </template>
+        </template>
       </view>
 
       <!-- ===== Skill 广场 ===== -->
@@ -225,7 +237,9 @@ export default {
         // 面板型（背后挂着左栏面板）在列表里也按插件标注：用户看到的是一个面板，
         // 说它是「Skill · 自动触发」只会让人对不上号。判据见 leftSidebarPlugins.js。
         const panel = isPanelSkill(s.id) && !s.sourcePluginId
-        const metaParts = [panel ? this.$t('market.panelPluginLabel') : this.$t('market.skillWord')]
+        // 「面板插件/Skill」标签不再在行内重复——子分组标题（installedGroups）已经
+        // 表明了这一行属于哪一类，见下方 installedSkillRows/installedPluginRows。
+        const metaParts = []
         if (s.version) metaParts.push('v' + s.version)
         if (s.author) metaParts.push(s.author)
         if (s.sourcePluginId) metaParts.push(this.$t('market.fromPluginTag'))
@@ -241,6 +255,8 @@ export default {
           desc: s.description || '',
           glyph: panel ? ICONS.panelLeft : (CATEGORY_GLYPHS[s.category] || ICONS.skill),
           meta: metaParts.join(' · '),
+          // 子分组归属：面板型进「插件」组，其余进「Skill」组。见 installedGroups。
+          panel,
           stateLabel: packPending
             ? this.$t('market.packDownloadingShort')
             : panel
@@ -257,13 +273,27 @@ export default {
           name: p.name || p.id,
           desc: p.description || '',
           glyph: ICONS.blocks,
-          meta: this.$t('market.pluginLabel') + (p.version ? ' · v' + p.version : ''),
+          meta: p.version ? ('v' + p.version) : '',
           stateLabel: p.enabled ? this.$t('market.enabledTag') : this.$t('market.disabledTag'),
           stateClass: p.enabled ? 'ok' : 'off',
           raw: p,
         })
       }
       return kw ? rows.filter(r => (r.name + ' ' + r.id + ' ' + r.desc).toLowerCase().includes(kw)) : rows
+    },
+    /** 「已安装」子分组：插件 = 面板型 skill + JAR/Web 插件；Skill = 纯对话型。 */
+    installedPluginRows() {
+      return this.installedRows.filter(r => r.kind === 'plugin' || r.panel)
+    },
+    installedSkillRows() {
+      return this.installedRows.filter(r => r.kind === 'skill' && !r.panel)
+    },
+    /** 渲染顺序：插件在前、Skill 在后，与 MarketPane.vue 已安装 tab 一致。 */
+    installedGroups() {
+      return [
+        { key: 'plugin', title: this.$t('market.sectionPluginTitle'), rows: this.installedPluginRows },
+        { key: 'skill', title: this.$t('market.sectionSkillTitle'), rows: this.installedSkillRows },
+      ]
     },
     skillRows() {
       const kw = this.searchText.trim().toLowerCase()
@@ -600,6 +630,23 @@ export default {
 
 @keyframes msb-spin {
   to { transform: rotate(360deg); }
+}
+
+/* 「已安装」子分组头：折叠头（.msb-sec-head）的视觉降级——更小字号、无 chevron、
+   不可折叠。分组类型已经在这写明了，行内不再重复"面板插件/Skill"标签。 */
+.msb-subsec-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 4px 10px 2px 22px;
+}
+
+.msb-subsec-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #ADB5BD;
 }
 
 .msb-empty {

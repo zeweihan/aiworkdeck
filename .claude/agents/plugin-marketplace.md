@@ -10,7 +10,7 @@ description: 插件市场领域。任务涉及插件广场页、在线 Skill 广
 ## 关键文件
 
 **前端（2026-08 二改：VS Code 扩展栏形态，主入口）**
-- `frontend/src/components/MarketSidebarPanel.vue` — **左栏列表面板**（rail 广场按钮 → `toggleLeftPane('market')` 打开）：顶部搜索（过滤全部分组）+ 三个折叠分组「已安装（含重扫按钮）/ Skill 广场 / 插件广场」的紧凑行（分类图标+名称+一行描述+版本·下载·分类，行内快捷安装钮）。点行 emit `open-detail`。
+- `frontend/src/components/MarketSidebarPanel.vue` — **左栏列表面板**（rail 广场按钮 → `toggleLeftPane('market')` 打开）：顶部搜索（过滤全部分组）+ 三个折叠分组「已安装（含重扫按钮）/ Skill 广场 / 插件广场」的紧凑行（分类图标+名称+一行描述+版本·下载·分类，行内快捷安装钮）。点行 emit `open-detail`。**「已安装」内部再拆两个不可折叠的子分组**（`installedGroups`：插件在前 = 面板型 skill ∪ JAR/Web 插件，Skill 在后 = 纯对话型），判据仍是 `isPanelSkill`（`leftSidebarPlugins.js`）；子分组头是 `.msb-sec-head` 的视觉降级（更小字号、无 chevron、不再折叠一层），行内因此去掉了原来重复的「面板插件/Skill」小字标签，只留图标底色深浅区分（`.msb-row-glyph.is-plugin`，现在面板型 skill 也吃这个深底）。`MarketPane.vue` 的整页版「已安装」tab 本来就是分区展示（`sectionPluginTitle`/`sectionSkillTitle`），两处子分组标题复用同一对 i18n 键，不新增词条。
 - `frontend/src/components/MarketDetailPane.vue` — **中栏详情 tab**（overview `openMarketDetail(spec)` 打开，`tabType:'market-detail'`、id=`market-detail_{kind}_{id}`、单例、isTabVisible 常显）：头部图标+衬线标题+作者/版本/下载+动作区（Skill：安装/更新/卸载/生效方式三档；插件：安装带权限确认/启停 switch/卸载），正文触发词「」排版、能力、详细信息（标识/来源/主页，主页 emit open-url 走浏览器 tab）。
 - 两件通过 `uni.$emit('awd:market-changed')`（详情→列表）与 `'awd:market-changed-from-sidebar'`（列表→详情）互相刷新；组件卸载时 $off，不涉页面栈多实例地雷。
 - `frontend/src/components/MarketPane.vue` — 原整页版（深绿 hero 三 tab），现有两个宿主：admin 页内嵌

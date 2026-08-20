@@ -204,14 +204,15 @@ export function filterPluginsByEnabledSkills(plugins, enabledSkillIds) {
  * 所以广场里按插件呈现（启用/停用一个开关），判据就是这里的 requiresSkill——
  * 不另立一张表，rail 上有没有它跟广场里怎么呈现必须是同一个事实。
  *
- * meeting-recorder 是唯一的例外，得手工补上：语音两项合并后它不再占一个 rail 位，
- * 而是「语音」面板里的一个 tab，所以数组里扫不到它的 requiresSkill。它在广场里
- * 仍然是一个面板型插件（启用/停用一个开关，装了那个 tab 才出现），漏掉这一条会让
- * 广场把它当成对话型 skill 呈现「生效方式三档」——那对面板讲不通（见上）。
+ * meeting-recorder 与 text-to-speech 是手工补的两个例外：语音两项合并后它们都不再
+ * 占一个 rail 位，而是「语音」面板里的一个 tab，所以数组里扫不到 requiresSkill。
+ * 它们在广场里仍然是面板型插件（启用/停用一个开关，装了那个 tab 才出现），漏掉会让
+ * 广场把它们当成对话型 skill 呈现「生效方式三档」——那对面板讲不通（见上）。
  */
 export const PANEL_SKILL_IDS = [
   ...LEFT_SIDEBAR_PLUGINS.filter(p => p.requiresSkill).map(p => p.requiresSkill),
   'meeting-recorder',
+  'text-to-speech',
 ]
 
 export function isPanelSkill(skillId) {
