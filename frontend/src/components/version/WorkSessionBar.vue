@@ -176,25 +176,33 @@ export default {
 .session-idle { color: #999; }
 .session-btn { flex-shrink: 0; }
 
-.awd-btn { padding: 10rpx 20rpx; border-radius: 6rpx; font-size: 24rpx; }
-.awd-btn-primary { background: #12344D; color: #fff; }
-.awd-btn-secondary { background: #f0f0f0; color: #333; }
-.awd-btn-danger { background: #fff; color: #b23; border: 1px solid #e0c0c0; }
+.awd-btn {
+  padding: 8px 18px; border-radius: 6px; font-size: 13.5px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.awd-btn-primary { background: #1A5336; color: #fff; }
+.awd-btn-primary:hover { background: #14422b; }
+.awd-btn-secondary { background: #fff; color: #475569; border: 1px solid #cbd5e1; }
+.awd-btn-secondary:hover { background: #f1f5f9; }
+.awd-btn-danger { background: #fff; color: #b23; border: 1px solid #f0c4c4; }
 
 .awd-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.4);
-  display: flex; align-items: center; justify-content: center; z-index: 999;
+  display: flex; align-items: center; justify-content: center; z-index: 9999;
 }
-.awd-dialog { width: 600rpx; background: #fff; border-radius: 12rpx; overflow: hidden; }
-.awd-header { padding: 24rpx; border-bottom: 1px solid #eee; }
-.awd-title { font-size: 30rpx; font-weight: 600; }
-.awd-body { padding: 24rpx; }
+.awd-dialog {
+  width: 380px; max-width: 90vw; background: #fff; border-radius: 12px; overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,.1), 0 10px 10px -5px rgba(0,0,0,.04);
+}
+.awd-header { padding: 18px 24px; border-bottom: 1px solid #f1f5f9; }
+.awd-title { font-size: 16px; font-weight: 600; color: #0f172a; }
+.awd-body { padding: 20px 24px; }
 .awd-input {
-  width: 100%; padding: 16rpx; border: 1px solid #ddd;
-  border-radius: 8rpx; font-size: 26rpx;
+  width: 100%; height: 38px; padding: 0 12px; border: 1px solid #cbd5e1;
+  border-radius: 6px; font-size: 14px; color: #0f172a; box-sizing: border-box;
 }
 .awd-footer {
-  display: flex; justify-content: flex-end; gap: 16rpx;
-  padding: 20rpx 24rpx; border-top: 1px solid #eee;
+  display: flex; justify-content: flex-end; gap: 12px;
+  padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #f8f9fa;
 }
 </style>

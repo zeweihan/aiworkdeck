@@ -1,6 +1,6 @@
 <template>
   <view class="awd-mask" @tap.self="$emit('close')">
-    <view class="awd-dialog">
+    <view class="awd-dialog detail-dialog">
       <view class="awd-header">
         <text class="awd-title">{{ version.note || version.message }}</text>
       </view>
@@ -192,30 +192,45 @@ export default {
 <style lang="scss" scoped>
 .awd-mask {
   position: fixed; inset: 0; background: rgba(0,0,0,.4);
-  display: flex; align-items: center; justify-content: center; z-index: 999;
+  display: flex; align-items: center; justify-content: center; z-index: 9999;
 }
-.awd-dialog { width: 640rpx; max-height: 70vh; background: #fff; border-radius: 12rpx; display: flex; flex-direction: column; }
-.awd-header { padding: 24rpx; border-bottom: 1px solid #eee; }
-.awd-title { font-size: 30rpx; font-weight: 600; }
-.awd-body { padding: 24rpx; overflow-y: auto; flex: 1; }
-.detail-meta { font-size: 24rpx; color: #999; margin-bottom: 16rpx; }
-.detail-empty { font-size: 26rpx; color: #999; }
-.detail-error { display: flex; align-items: center; gap: 16rpx; }
-.detail-error-desc { font-size: 26rpx; color: #b23; }
-.detail-error-retry { font-size: 26rpx; color: #12344D; text-decoration: underline; }
-.detail-change { display: flex; gap: 12rpx; padding: 8rpx 0; }
-.change-type { font-size: 23rpx; flex-shrink: 0; }
-.type-ADD { color: #2a7; }
+.awd-dialog {
+  width: 380px; max-width: 90vw; max-height: 76vh;
+  display: flex; flex-direction: column; background: #fff;
+  border-radius: 12px; overflow: hidden;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,.1), 0 10px 10px -5px rgba(0,0,0,.04);
+}
+.awd-dialog.detail-dialog { width: 460px; }
+.awd-header { padding: 18px 24px; border-bottom: 1px solid #f1f5f9; }
+.awd-title { font-size: 16px; font-weight: 600; color: #0f172a; }
+.awd-body { padding: 20px 24px; overflow-y: auto; flex: 1; }
+.detail-meta { font-size: 12.5px; color: #94a3b8; margin-bottom: 14px; }
+.detail-empty { font-size: 13.5px; color: #94a3b8; }
+.detail-error { display: flex; align-items: center; gap: 12px; }
+.detail-error-desc { font-size: 13.5px; color: #b23; }
+.detail-error-retry { font-size: 13.5px; color: #1A5336; text-decoration: underline; cursor: pointer; }
+.detail-change { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid #f8fafc; }
+.change-type { font-size: 12px; font-weight: 500; flex-shrink: 0; }
+.type-ADD { color: #4C9A6A; }
 .type-MODIFY { color: #C8A45D; }
 .type-DELETE { color: #b23; }
-.type-RENAME { color: #666; }
-.change-path { font-size: 25rpx; color: #333; word-break: break-all; }
-.change-compare-btn { flex-shrink: 0; padding: 6rpx 14rpx; font-size: 22rpx; }
+.type-RENAME { color: #64748b; }
+.change-path { font-size: 13px; color: #334155; word-break: break-all; flex: 1; }
+.change-compare-btn { flex-shrink: 0; padding: 5px 12px; font-size: 12px; }
 .awd-footer {
-  display: flex; justify-content: flex-end; gap: 16rpx;
-  padding: 20rpx 24rpx; border-top: 1px solid #eee;
+  display: flex; justify-content: flex-end; gap: 12px; flex-wrap: wrap;
+  padding: 14px 24px; border-top: 1px solid #f1f5f9; background: #f8f9fa;
 }
-.awd-btn { padding: 12rpx 24rpx; border-radius: 6rpx; font-size: 25rpx; }
-.awd-btn-primary { background: #12344D; color: #fff; }
-.awd-btn-secondary { background: #f0f0f0; color: #333; }
+.awd-btn {
+  padding: 8px 18px; border-radius: 6px; font-size: 13.5px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+}
+.awd-btn-primary { background: #1A5336; color: #fff; }
+.awd-btn-primary:hover { background: #14422b; }
+.awd-btn-secondary { background: #fff; color: #475569; border: 1px solid #cbd5e1; }
+.awd-btn-secondary:hover { background: #f1f5f9; }
+.awd-input {
+  width: 100%; height: 38px; padding: 0 12px; border: 1px solid #cbd5e1;
+  border-radius: 6px; font-size: 14px; color: #0f172a; box-sizing: border-box;
+}
 </style>

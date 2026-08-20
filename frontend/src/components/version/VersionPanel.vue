@@ -120,7 +120,10 @@ export default {
   // adopt-conflict：把「有没有采纳等待处理」同步给页面。本面板一关（切去资源管理器
   // 等），三选一弹窗随组件卸载消失，而后端仍停在待裁决状态、版本捕获整体关闭——
   // 页面据此在面板之外挂一条固定提示条（project-overview.vue 的 .adopt-pending-bar）。
-  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab'],
+  // status-changed：面板内的结束工作/丢弃/回主线/采纳/放弃等操作都只更新面板自己的
+  // 状态，不会通知页面级的顶栏/底部工作状态 chip（它们各自轮询/事件驱动，互不相通）。
+  // refresh()/onReload() 每次拉完 /status 都发一次，页面据此重新拉一次自己的状态点。
+  emits: ['compare-file', 'clear-file-filter', 'reload-files', 'adopt-conflict', 'open-collab', 'status-changed'],
   provide() {
     return { projectId: this.projectId }
   },
@@ -169,6 +172,7 @@ export default {
         this.cloudConflict = d.cloudConflict || null
         this.sessionEndConflict = d.sessionEndConflict || null
         this.$emit('adopt-conflict', !!(this.adoptConflict || this.cloudConflict || this.sessionEndConflict))
+        this.$emit('status-changed', { enabled: this.enabled, working: this.working, changedCount: this.changedCount, onDraft: this.onDraft })
         this.timelineKey += 1
         this.loadError = false
         if (this.enabled) {
