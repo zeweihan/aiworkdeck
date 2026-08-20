@@ -11,7 +11,12 @@
   <view class="panel-work-log">
     <view class="log-filter-bar">
       <input class="filter-input" v-model="activityFilter.date" :placeholder="$t('account.filterDatePlaceholder')" />
-      <input class="filter-input" v-model="activityFilter.project" :placeholder="$t('account.projectNameLabel')" />
+      <AwdSelect
+        class="filter-project-select"
+        :range="projectFilterLabels"
+        :value="projectFilterIndex"
+        @change="onProjectFilterChange"
+      />
       <input class="filter-input" v-model="activityFilter.content" :placeholder="$t('account.filterContentPlaceholder')" />
       <button class="btn-export" @tap="exportLogsToExcel">{{ $t('account.exportExcelBtn') }}</button>
     </view>
@@ -30,7 +35,7 @@
       <view v-else-if="getFilteredLogs().length === 0" class="empty-row">{{ $t('account.noRecords') }}</view>
       <scroll-view v-else scroll-y class="log-table-body">
         <view v-for="log in getFilteredLogs()" :key="log.id" class="log-table-row">
-          <text class="td td-project" :title="getLogProject(log)">{{ getLogProject(log) }}</text>
+          <text class="td td-project" :title="getLogProject(log)"><text class="project-badge">{{ getLogProject(log) }}</text></text>
           <text class="td td-action">{{ log.actionType }}</text>
           <text class="td td-object" :title="getLogObject(log)">{{ getLogObject(log) }}</text>
           <text class="td td-start">{{ getLogStartTime(log) }}</text>
@@ -45,24 +50,60 @@
 
 <script>
 import { getUserActivityHistory } from '@/services/api.js'
+import AwdSelect from '@/components/AwdSelect.vue'
 
 export default {
   name: 'PersonalWorkLogPanel',
+  components: { AwdSelect },
   data() {
     return {
       activityLogs: [],
       activityLoading: false,
       activityFilter: {
         date: '',
-        project: '',
         content: '',
       },
+      // 'all' | 'unassociated' | 项目 id 的字符串形式
+      projectFilterKey: 'all',
     }
+  },
+  computed: {
+    // 从当前记录里去重出的项目筛选项：全部 + 各项目 + 未关联项目（只在存在时才出现）
+    projectFilterOptions() {
+      const options = [{ key: 'all', label: this.$t('account.allProjectsOption') }]
+      const seen = new Map()
+      let hasUnassociated = false
+      this.activityLogs.forEach(log => {
+        if (log.projectId) {
+          if (!seen.has(log.projectId)) {
+            seen.set(log.projectId, log.projectName || this.$t('account.unassociatedProjectOption'))
+          }
+        } else {
+          hasUnassociated = true
+        }
+      })
+      seen.forEach((label, id) => options.push({ key: String(id), label }))
+      if (hasUnassociated) {
+        options.push({ key: 'unassociated', label: this.$t('account.unassociatedProjectOption') })
+      }
+      return options
+    },
+    projectFilterLabels() {
+      return this.projectFilterOptions.map(o => o.label)
+    },
+    projectFilterIndex() {
+      const idx = this.projectFilterOptions.findIndex(o => o.key === this.projectFilterKey)
+      return idx >= 0 ? idx : 0
+    },
   },
   mounted() {
     this.loadActivityLogs()
   },
   methods: {
+    onProjectFilterChange(index) {
+      const option = this.projectFilterOptions[index]
+      this.projectFilterKey = option ? option.key : 'all'
+    },
     async loadActivityLogs() {
       this.activityLoading = true
       try {
@@ -77,18 +118,28 @@ export default {
     getFilteredLogs() {
       return this.activityLogs.filter(log => {
         const dateMatch = !this.activityFilter.date || this.formatTime(log.timestamp).includes(this.activityFilter.date)
-        const projectMatch = !this.activityFilter.project || (log.targetName && log.targetName.includes(this.activityFilter.project))
         const contentMatch = !this.activityFilter.content || (log.metaInfo && log.metaInfo.includes(this.activityFilter.content))
+        let projectMatch = true
+        if (this.projectFilterKey === 'unassociated') {
+          projectMatch = !log.projectId
+        } else if (this.projectFilterKey !== 'all') {
+          projectMatch = String(log.projectId) === this.projectFilterKey
+        }
         return dateMatch && projectMatch && contentMatch
       })
     },
     getLogProject(log) {
+      // 结构化项目归属优先；projectId 有值但查不到名字（项目已删除）归「未关联项目」
+      if (log.projectId) {
+        return log.projectName || this.$t('account.unassociatedProjectOption')
+      }
+      // 老数据没有 projectId，兼容旧的 metaInfo 自由文本 "Project: 名称"
       if (log.metaInfo && log.metaInfo.includes('Project:')) {
         const match = log.metaInfo.match(/Project:\s*([^,;]+)/)
         if (match) return match[1]
       }
-      if (log.actionType === 'WORK') return log.targetName
-      return '-'
+      if (log.actionType === 'WORK' && log.targetName) return log.targetName
+      return this.$t('account.unassociatedProjectOption')
     },
     getLogObject(log) {
       if (log.actionType === 'OPEN_FILE' || log.actionType === 'CLOSE_FILE') return log.targetName
@@ -216,6 +267,10 @@ $brand-dark: #212629;
   font-size: 13px;
 }
 
+.filter-project-select {
+  flex: 1;
+}
+
 .btn-export {
   height: 36px;
   line-height: 36px;
@@ -285,7 +340,21 @@ $brand-dark: #212629;
   white-space: nowrap;
 }
 
-.td-project { width: 120px; color: $brand-dark; font-weight: 500; }
+.td-project { width: 120px; }
+
+.project-badge {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: $brand-dark;
+  font-size: 12px;
+  font-weight: 500;
+}
 .td-action { width: 80px; font-weight: 500; }
 .td-object { width: 150px; color: #334155; }
 .td-start { width: 140px; color: #64748b; font-size: 12px; }

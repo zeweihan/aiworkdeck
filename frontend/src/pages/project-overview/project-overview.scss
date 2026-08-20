@@ -4030,27 +4030,43 @@ $bg-white: #FFFFFF;
 /* Custom Recording Toast */
 .recording-toast {
   position: fixed;
-  top: 50%;
+  top: 60px;
   left: 50%;
-  transform: translate(-50%, -50%);
-  background-color: rgba(44, 51, 56, 0.9); /* AI WorkDeck Gray-Dark with opacity */
-  color: #fff;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-size: 16px;
+  transform: translate(-50%, -6px);
+  background-color: #fff;
+  color: #0f172a;
+  padding: 8px 16px;
+  border: 1px solid #E2E8F0;
+  border-radius: 12px;
+  font-size: 13px;
   font-weight: 500;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.3s ease;
+  transition: opacity 0.25s ease, transform 0.25s ease;
   z-index: 9999;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
   display: flex;
   align-items: center;
-  justify-content: center;
+  gap: 8px;
 
   &.visible {
     opacity: 1;
+    transform: translate(-50%, 0);
   }
+}
+
+.recording-toast-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #EF4444;
+  flex-shrink: 0;
+  animation: recording-toast-dot-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes recording-toast-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 /* AI Context Drag & Drop */
 .side-panel-ai.drag-over {

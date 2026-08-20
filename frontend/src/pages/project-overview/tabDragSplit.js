@@ -294,9 +294,9 @@ export const tabDragSplitMethods = {
                    const url = file.url || ''
                    const title = file.name || ''
                    const fullMeta = meta + (title ? `. Title: ${title}` : '')
-                   activityTracker.trackActivePage('OPEN_URL', 0, url, fullMeta)
+                   activityTracker.trackActivePage('OPEN_URL', 0, url, this.project && this.project.id, fullMeta)
               } else {
-                   activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, meta)
+                   activityTracker.trackActivePage('OPEN_FILE', file.id, file.name, this.project && this.project.id, meta)
               }
           }
       }

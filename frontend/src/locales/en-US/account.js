@@ -31,6 +31,8 @@ export default {
   loadingEllipsis: 'Loading…',
   noRecords: 'No records',
   minutesSuffix: '{count} min',
+  allProjectsOption: 'All Projects',
+  unassociatedProjectOption: 'No Project',
 
   // ---- userprofile.vue: favorites / to-dos placeholder ----
   emptyFavoritesDesc: 'No favorites yet',

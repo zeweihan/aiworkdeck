@@ -48,6 +48,18 @@ public class UserActivityLog {
     private String targetName;
 
     /**
+     * 结构化项目归属。可为空——老数据没有这一列，前端归类为「未关联项目」。
+     */
+    @Column(name = "project_id")
+    private Long projectId;
+
+    /**
+     * 项目名，按 projectId 批量查 Project 表回填，不落库。
+     */
+    @Transient
+    private String projectName;
+
+    /**
      * 发生时间
      */
     @CreationTimestamp
@@ -108,6 +120,22 @@ public class UserActivityLog {
 
     public void setTargetName(String targetName) {
         this.targetName = targetName;
+    }
+
+    public Long getProjectId() {
+        return projectId;
+    }
+
+    public void setProjectId(Long projectId) {
+        this.projectId = projectId;
+    }
+
+    public String getProjectName() {
+        return projectName;
+    }
+
+    public void setProjectName(String projectName) {
+        this.projectName = projectName;
     }
 
     public LocalDateTime getTimestamp() {

@@ -30,6 +30,8 @@ export default {
   loadingEllipsis: '加载中...',
   noRecords: '无记录',
   minutesSuffix: '{count}分',
+  allProjectsOption: '全部项目',
+  unassociatedProjectOption: '未关联项目',
 
   // ---- userprofile.vue：我的收藏 / 我的代办占位 ----
   emptyFavoritesDesc: '暂无收藏内容',

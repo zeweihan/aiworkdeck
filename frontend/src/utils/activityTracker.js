@@ -47,38 +47,41 @@ class ActivityTracker {
     
     // Track a specific active item (File or URL) as a session
     // Replaces logAction for session-based tracking
-    trackActivePage(actionType, targetId, targetName, projectMeta = '') {
+    // projectId：结构化项目归属，供后端 /api/activity/history 按项目分类；
+    // projectMeta 是旧的 "Project: 名称" 自由文本，为老展示逻辑保留兼容
+    trackActivePage(actionType, targetId, targetName, projectId, projectMeta = '') {
         if (!this.isRecording) return
 
         // If switching to the same item, check if we need to do anything.
         // Usually switching means we came from somewhere else, or opened it.
         // Let's just flush previous and start new to be safe and accurate with segments.
-        
+
         this.flushActiveSession()
-        
+
         this.activeSession = {
             actionType,
             targetId,
             targetName,
             startTime: Date.now(),
+            projectId,
             projectMeta
         }
         console.log(`[ActivityTracker] Started session: ${targetName} (${actionType})`)
     }
-    
+
     flushActiveSession() {
         if (!this.activeSession) return
-        
-        const { actionType, targetId, targetName, startTime, projectMeta } = this.activeSession
+
+        const { actionType, targetId, targetName, startTime, projectId, projectMeta } = this.activeSession
         const endTime = Date.now()
         const duration = endTime - startTime
-        
+
         // Log even short durations if precise mode requested, or at least > 100ms to avoid noise
         if (duration > 100) {
-            logActivity(actionType, targetId, targetName, duration, projectMeta)
+            logActivity(actionType, targetId, targetName, duration, projectMeta, projectId)
                 .catch(e => console.error('[ActivityTracker] Log active session failed', e))
         }
-        
+
         this.activeSession = null
     }
 
@@ -149,8 +152,8 @@ class ActivityTracker {
         if (this.isRecording && this.lastPausedSession) {
             console.log('[ActivityTracker] Window focus: Resuming active session')
             // Resume tracking the same item
-            const { actionType, targetId, targetName, projectMeta } = this.lastPausedSession
-            this.trackActivePage(actionType, targetId, targetName, projectMeta)
+            const { actionType, targetId, targetName, projectId, projectMeta } = this.lastPausedSession
+            this.trackActivePage(actionType, targetId, targetName, projectId, projectMeta)
             this.lastPausedSession = null
         }
     }
