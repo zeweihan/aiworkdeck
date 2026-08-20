@@ -48,10 +48,12 @@ if failed.isEmpty {
     alert.runModal()
 } else {
     let names = failed.map { $0.name }.joined(separator: "、")
-    alert.messageText = "需要手动完成安装"
+    alert.messageText = "还差一步授权"
     alert.informativeText = "系统未允许写入 \(names) 的插件目录（macOS 隐私保护）。\n\n"
-        + "点击「打开目标文件夹」，把随后高亮显示的 manifest.xml 拷进每个打开的文件夹"
-        + "（如果里面没有 wef 文件夹，先新建一个再拷入）。"
+        + "推荐做法：打开「系统设置 → 隐私与安全」，找到「安装 AI WorkDeck Office 插件」，"
+        + "打开 Word / Excel / PowerPoint 的访问开关，然后重新运行本安装器即可。\n\n"
+        + "或手动完成：点击「打开目标文件夹」，把随后高亮显示的 manifest.xml 拷进每个打开的"
+        + "文件夹（如果里面没有 wef 文件夹，先新建一个再拷入）。"
     alert.addButton(withTitle: "打开目标文件夹")
     alert.addButton(withTitle: "取消")
     if alert.runModal() == .alertFirstButtonReturn {
