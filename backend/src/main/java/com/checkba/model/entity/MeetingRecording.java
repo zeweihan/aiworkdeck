@@ -3,7 +3,9 @@ package com.checkba.model.entity;
 import jakarta.persistence.*;
 import lombok.Data;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -71,9 +73,12 @@ public class MeetingRecording {
      * 转写结果（压缩后的段落 JSON 数组）：
      * [{"speaker":"1","start":毫秒,"end":毫秒,"text":"..."}]
      * speaker 是听悟的说话人编号字符串，展示名经 speakerNames 映射。
+     *
+     * <p>长文本不用 @Lob：PG 方言下 @Lob String 走 large-object（oid）读写会炸，
+     * LONGVARCHAR + TEXT 在 H2（MODE=PostgreSQL）与 PG 双方言通吃（summaryJson 同理）。
      */
-    @Lob
-    @Column(columnDefinition = "CLOB")
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column(columnDefinition = "TEXT")
     private String transcriptJson;
 
     /** 说话人改名映射 JSON：{"1":"张律师","2":"对方代理人"}，未改名的用默认「说话人N」 */
@@ -84,8 +89,8 @@ public class MeetingRecording {
      * 听悟增值结果 JSON：{"chapters":[...],"summary":"...","todos":[...],"keywords":[...]}
      * 作为纪要生成的素材，缺失不影响主流程。
      */
-    @Lob
-    @Column(columnDefinition = "CLOB")
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column(columnDefinition = "TEXT")
     private String summaryJson;
 
     /** 最近一次失败原因（FAILED 态展示与排障用） */
