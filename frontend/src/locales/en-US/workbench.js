@@ -51,9 +51,8 @@ export default {
   systemSettings: 'Settings (AI Provider / API Key)',
   clientInitial: 'C',
   addMember: 'Add Member',
-  profile: 'Profile',
-  // Top-right avatar dropdown (moved up from the rail bottom, 2026-08-19)
-  accountMenu: 'Account and Settings',
+  // Top-right avatar dropdown (2026-08-19 moved up from the rail bottom; a single entry since profile merged into settings, 2026-08-20)
+  accountMenu: 'Settings',
   settingsTabName: 'Settings',
   // The two tabs inside the "Voice" panel
   voiceTts: 'Text to Speech',

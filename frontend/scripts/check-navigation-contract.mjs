@@ -268,50 +268,104 @@ check('项目列表页别把裸数组当信封解', () => {
   return null
 })
 
-// ==================== 个人中心瘦身 ====================
-// 2026-08-19 起个人中心内容本体已搬进 components/userprofile/UserProfilePane.vue
-// （工作台中栏标签 + pages/userprofile 薄壳页共用同一份，照 AdminPane 的先例）。
-// 下面五条断言的目标文件跟着搬——断言强度不变，只是内容不再长在薄壳页里。
+// ==================== 个人中心并入统一「设置」页 ====================
+// 2026-08-20：个人中心不再是独立面板，它是 components/admin/AdminPane.vue 里
+// 「个人」组的四个栏目（内容各自成组件，放在 components/userprofile/ 下）。
+// 下面这几条接着守原来那五条的东西：默认不落空白页、项目那摊没被带回来、
+// 该留的没被搬丢；外加两条新不变式（旧实体已消失、定时器仍在清）。
 
-check('个人中心默认 tab 不再是被搬走的 projects', () => {
-  const src = readVue('src/components/userprofile/UserProfilePane.vue')
-  if (!/activeTab:\s*'work_log'/.test(src)) return "activeTab 默认值必须是 'work_log'"
-  if (/key:\s*'projects'/.test(src)) return 'tabs 数组里还留着 projects 项'
+const PERSONAL_PANELS = [
+  'src/components/userprofile/PersonalWorkLogPanel.vue',
+  'src/components/userprofile/PersonalFavoritesPanel.vue',
+  'src/components/userprofile/PersonalTodosPanel.vue',
+  'src/components/userprofile/PersonalSettingsPanel.vue',
+]
+
+check('统一设置页有完整的「个人」组，且没把搬走的 projects 带回来', () => {
+  const src = readVue('src/components/admin/AdminPane.vue')
+  const missing = ['work_log', 'favorites', 'todos', 'personal_settings']
+    .filter((k) => !new RegExp("key: '" + k + "'[^\\n]*group: 'personal'").test(src))
+  if (missing.length) return '个人组缺: ' + missing.join(', ')
+  if (/key:\s*'projects'/.test(src)) return "navItems 里冒出了 projects——那一栏 2026-08 搬去项目列表页了"
+  if (!src.includes("group: 'system'")) return '系统组的 group 标记没了，两组会挤成一堆'
   return null
 })
 
-check('个人中心默认 tab 有人给它加载数据', () => {
-  const src = readVue('src/components/userprofile/UserProfilePane.vue')
-  // 工作记录是懒加载的（只在 switchTab 里触发），默认落它就必须在 mounted 里补一次
-  // （原页面 onLoad() 已随薄壳化改成组件的 mounted()）
-  const mounted = src.slice(src.indexOf('mounted()'), src.indexOf('methods:'))
-  return mounted.includes('this.loadActivityLogs()')
-    ? null
-    : 'mounted 里没有 loadActivityLogs()，默认 tab 会永远空白'
+check('统一设置页的默认落点是可见的面板', () => {
+  const src = readVue('src/components/admin/AdminPane.vue')
+  // 非管理员看不见「系统」组，默认值还写死 'ai' 的话他进来就是一张空白页
+  if (!src.includes("activeNav: cachedIsAdmin() ? 'ai' : 'work_log'")) {
+    return "activeNav 默认值要按 cachedIsAdmin() 分流（管理员 'ai'，其余 'work_log'）"
+  }
+  if (!src.includes("if (n.group === 'system' && !this.isAdminUser) return false")) {
+    return 'visibleNavItems 没有把系统组按 isAdmin 收起（原个人中心 checkAdminTab 那条规则）'
+  }
+  return null
 })
 
-check('个人中心已清空项目相关的模板与方法', () => {
-  const src = readVue('src/components/userprofile/UserProfilePane.vue')
-  const left = [
-    'project-item-card', 'panel-projects', 'projects-stats-row',
-    'loadProjects', 'goToProject', 'handleDeleteProject', 'confirmRename',
-    'CloudAcceptDialog', 'InviteMemberDialog', 'getRoleLabel',
-  ].filter((s) => src.includes(s))
+check('个人组四栏各自有人给它加载数据', () => {
+  // 四段内容只在被选中时渲染，加载时机就是各自的 mounted。少一处就是一张永远空白的栏目。
+  const log = readVue('src/components/userprofile/PersonalWorkLogPanel.vue')
+  if (!extractMethodBody(log, 'mounted()').includes('this.loadActivityLogs()')) {
+    return '工作记录的 mounted 里没有 loadActivityLogs()'
+  }
+  const fav = readVue('src/components/userprofile/PersonalFavoritesPanel.vue')
+  if (!extractMethodBody(fav, 'mounted()').includes('this.loadFavorites()')) {
+    return '我的收藏的 mounted 里没有 loadFavorites()'
+  }
+  const set = readVue('src/components/userprofile/PersonalSettingsPanel.vue')
+  if (!extractMethodBody(set, 'mounted()').includes('this.loadUserInfo()')) {
+    return '账户与安全的 mounted 里没有 loadUserInfo()'
+  }
+  return null
+})
+
+check('个人组没把项目那摊带回来', () => {
+  const left = []
+  for (const f of PERSONAL_PANELS) {
+    const src = readVue(f)
+    for (const s of ['project-item-card', 'panel-projects', 'loadProjects', 'goToProject',
+      'handleDeleteProject', 'CloudAcceptDialog', 'InviteMemberDialog', 'getRoleLabel',
+      'getMyProjects', 'deleteProject', 'renameProject', 'getProjectMembers', 'getProjectTypeLabel']) {
+      if (src.includes(s)) left.push(f.split('/').pop() + ':' + s)
+    }
+  }
   return left.length ? '还残留: ' + left.join(', ') : null
 })
 
-check('个人中心已摘掉被搬迁搞成孤儿的导入', () => {
-  const src = readVue('src/components/userprofile/UserProfilePane.vue')
-  const orphan = ['getMyProjects', 'deleteProject', 'renameProject', 'getProjectMembers', 'removeProjectMember', 'getProjectTypeLabel']
-    .filter((s) => src.includes(s))
-  return orphan.length ? '孤儿导入: ' + orphan.join(', ') : null
+check('个人组保住了不该删的东西', () => {
+  const log = readVue('src/components/userprofile/PersonalWorkLogPanel.vue')
+  const gone = ['formatTime(', 'formatDateTime(', 'loadActivityLogs', 'exportLogsToExcel']
+    .filter((s) => !log.includes(s))
+  const fav = readVue('src/components/userprofile/PersonalFavoritesPanel.vue')
+  gone.push(...['loadFavorites', 'deleteFavorite', 'getFavoriteImageUrl'].filter((s) => !fav.includes(s)))
+  const set = readVue('src/components/userprofile/PersonalSettingsPanel.vue')
+  gone.push(...['totpSetup', 'bindPhone', 'bindEmail', 'listDeviceTokens', 'getLicenseStatus',
+    'setAppLanguage', 'signOut'].filter((s) => !set.includes(s)))
+  return gone.length ? '误删: ' + gone.join(', ') : null
 })
 
-check('个人中心保住了不该删的东西', () => {
-  const src = readVue('src/components/userprofile/UserProfilePane.vue')
-  const gone = ['formatTime(', 'formatDateTime(', '.role-text', '.empty-icon', 'loadActivityLogs', 'loadFavorites', 'addProjectMember', 'inviteClient']
-    .filter((s) => !src.includes(s))
-  return gone.length ? '误删: ' + gone.join(', ') : null
+check('账户与安全仍然清那两个验证码倒计时', () => {
+  // 统一设置页是常驻工作台的标签，不会随导航销毁重建；不清定时器会跨标签泄漏。
+  // 这是修过的坑（PR#424），搬家时最容易掉的就是它。
+  const src = readVue('src/components/userprofile/PersonalSettingsPanel.vue')
+  const body = extractMethodBody(src, 'beforeUnmount()')
+  if (!body) return '缺 beforeUnmount()'
+  for (const t of ['bindCountdownTimer', 'bindEmailCountdownTimer']) {
+    if (!body.includes('clearInterval(this.' + t + ')')) return '没清 ' + t
+  }
+  return null
+})
+
+check('旧的个人中心实体已经不在了', () => {
+  if (hasFile('src/components/userprofile/UserProfilePane.vue')) {
+    return 'UserProfilePane.vue 还在——两个设置入口的根因就是它，内容已并进 AdminPane'
+  }
+  for (const f of ['src/pages/userprofile/userprofile.vue', 'src/pages/project-overview/project-overview.vue',
+    'src/components/admin/AdminPane.vue']) {
+    if (readVue(f).includes('UserProfilePane')) return f + ' 还引用着 UserProfilePane'
+  }
+  return null
 })
 
 // ==================== 导航入口与出口 ====================
@@ -381,15 +435,19 @@ check('工作台「全部项目」用 reLaunch 去项目列表页', () => {
   return null
 })
 
-check('顶栏头像「个人中心」中栏开标签，不再整页跳转（2026-08-19 新契约）', () => {
-  // 与「系统设置」同款改造：整页 navigateTo 会把工作台（标签、编辑器、AI 会话）
-  // 整个换掉，回来还要重开一遍文件。goToUserProfile 现在薄转发到 openUserProfileTab，
-  // 真正开标签的逻辑照 openSettingsTab 的形制单独测；这里只守「不许再退回 navigateTo」。
+check('顶栏头像下拉只剩「设置」一项（2026-08-20 新契约）', () => {
+  // 用户的原话是「个人中心和系统设置是整个面板切换、还互相跳」。合并之后
+  // 下拉里只能有一个入口，个人内容是那一页里的「个人」组。
   const src = readVue('src/pages/project-overview/project-overview.vue')
-  const body = extractMethodBody(src, 'goToUserProfile()')
-  if (!body) return '找不到 goToUserProfile'
-  if (!body.includes('openUserProfileTab')) return 'goToUserProfile 必须转发到 openUserProfileTab'
-  if (body.includes('navigateTo')) return 'goToUserProfile 不应再直接 navigateTo（个人中心已标签化）'
+  const items = src.split('avatar-menu-item').length - 1
+  if (items !== 1) return '头像下拉应当恰好一项，实际 ' + items + ' 项'
+  for (const dead of ['openUserProfileTab', 'goToUserProfile', "workbench.profile", "'user-profile'"]) {
+    if (src.includes(dead)) return '还残留个人中心标签那一套: ' + dead
+  }
+  // 客户也要进得去：个人组的工作记录/账号安全对他一样成立，收系统组是面板自己的事
+  const menu = src.slice(src.indexOf('avatar-menu"'), src.indexOf('avatar-menu"') + 400)
+  if (menu.includes('isClientView')) return '设置入口不该按 isClientView 藏起来（客户也有自己的个人组）'
+  if (!menu.includes('goToSystemSettings')) return '下拉里那一项没有指向 goToSystemSettings'
   return null
 })
 
@@ -445,27 +503,13 @@ check('pages/admin 薄壳页仍在，且把 query 透给 AdminPane', () => {
   return null
 })
 
-check('个人中心在工作台里是中栏标签，不是跳页（同系统设置形制）', () => {
-  const src = readVue('src/pages/project-overview/project-overview.vue')
-  const body = extractMethodBody(src, 'goToUserProfile()')
-  if (!body) return '找不到 goToUserProfile'
-  if (body.includes(USERPROFILE_ROUTE)) {
-    return '不许再跳独立页：那等于把整个工作台（标签、编辑器、AI 会话）换成一页个人中心'
-  }
-  if (!body.includes('openUserProfileTab')) return '应当调 openUserProfileTab() 开中栏标签'
-  const tab = extractMethodBody(src, 'openUserProfileTab()')
-  if (!tab) return '缺 openUserProfileTab()'
-  if (!tab.includes("tabType: 'user-profile'")) return '标签没有带 tabType: user-profile'
-  const vis = extractMethodBody(src, 'isTabVisible(file) {')
-  if (!vis || !vis.includes("file.tabType === 'user-profile'")) {
-    return "isTabVisible 没放行 user-profile 标签，点菜单会开一个被 v-show 藏死的标签"
-  }
-  return null
-})
-
-check('pages/userprofile 薄壳页仍在，且挂了 UserProfilePane', () => {
+check('pages/userprofile 薄壳页仍在，且挂的是统一设置面板', () => {
+  // 选项 A：路由与仓里既有的 navigateTo '/pages/userprofile/userprofile'
+  //（应用菜单「账户」、项目列表页按钮）一条都不动，只把落地内容换成统一设置页，
+  // 初始落在个人组第一栏——与老页面进来看到的东西一致。
   const src = readVue('src/pages/userprofile/userprofile.vue')
-  if (!src.includes('<UserProfilePane')) return '薄壳页没有挂 UserProfilePane'
+  if (!src.includes('<AdminPane')) return '薄壳页没有挂 AdminPane'
+  if (!src.includes('initial-nav="work_log"')) return '薄壳页没有落在个人组的「工作记录」'
   return null
 })
 

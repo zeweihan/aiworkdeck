@@ -3,7 +3,8 @@ export default {
   // project-list.vue：页头与空态
   myProjects: '我的项目',
   pullFromTeamLibrary: '从团队案件库取一份案卷',
-  personalCenter: '个人中心',
+  // 落点是统一「设置」页的「个人」组（2026-08-20 个人中心并入设置，键名不动免得动调用点）
+  personalCenter: '设置',
   allProjects: '全部项目',
   loading: '加载中...',
   clientEmptyHint: '律师把案卷分享给你之后，会出现在这里',

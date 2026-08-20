@@ -10,11 +10,10 @@ export default {
   createBtn: '创建',
   projectNameLabel: '项目名称',
 
-  // ---- userprofile.vue：导航 tab ----
+  // ---- 统一「设置」页「个人」组的三个栏目名（2026-08-20 由个人中心并入）----
   tabWorkLog: '工作记录',
   tabFavorites: '我的收藏',
   tabTodos: '我的代办',
-  systemSettingsTab: '系统设置',
 
   // ---- userprofile.vue：工作记录 ----
   defaultUserName: '用户',

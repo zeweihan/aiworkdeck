@@ -38,8 +38,8 @@
 | 插件 | Plugin | |
 | 技能 | Skill | |
 | 组件管理 | Components | 模型/组件下载 |
-| 系统设置 | Settings | admin 页 |
-| 个人中心 | Profile | |
+| 设置 | Settings | 统一设置页（2026-08-20 个人中心并入，侧栏分「个人 / 系统」两组）|
+| 账户与安全 | Account & Security | 个人组里原「个人中心 → 设置」那一栏 |
 | 工作记录 | Activity Log | |
 | 代办/待办 | To-dos | |
 | 向导 | Setup Wizard | |

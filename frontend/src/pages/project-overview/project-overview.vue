@@ -224,12 +224,11 @@
         </view>
 
         <!-- 用户头像 + 下拉（2026-08-19 从 rail 底部搬上来）。
-             刻意放在 isClientView 分支之外：rail 上那个头像本来就对客户也渲染，
-             收进下拉时不能顺手把客户的「个人中心」入口砍掉。系统设置那一项才是
-             律师专有的（客户视图里整片工具区都收起来了）。
+             刻意放在 isClientView 分支之外：rail 上那个头像本来就对客户也渲染。
 
-             「个人中心」仍是整页 navigateTo（它依赖页面栈保留工作台实例以便
-             onShow 回流刷新）；「系统设置」改成中栏标签，不再把工作台整个换掉。
+             2026-08-20：个人中心并进了「设置」，下拉只剩这一项——两个入口各开一个
+             整面板、彼此还互相跳的形态是用户明确抱怨过的。客户同样要能进（个人组
+             的工作记录/账号安全对他一样成立），面板内的「系统」组自己按 isAdmin 收。
              顶栏里每一个能点的东西都必须在 App.vue 的 no-drag 名单里，
              下拉菜单本身也要——它画在 .project-header 这条 drag 区之内。 -->
         <view class="header-account">
@@ -239,10 +238,7 @@
           </view>
           <view v-if="avatarMenuOpen" class="avatar-menu-mask" @tap.stop="avatarMenuOpen = false"></view>
           <view v-if="avatarMenuOpen" class="avatar-menu" @tap.stop>
-            <view class="avatar-menu-item" @tap="goToUserProfile">
-              <text>{{ $t('workbench.profile') }}</text>
-            </view>
-            <view v-if="!isClientView" class="avatar-menu-item" @tap="goToSystemSettings">
+            <view class="avatar-menu-item" @tap="goToSystemSettings">
               <text>{{ $t('workbench.settingsTabName') }}</text>
             </view>
           </view>
@@ -307,7 +303,7 @@
         </view>
 
         <!-- 插件中心与系统设置都不在 rail 底部了（2026-08-19）：前者升成 rail 数组
-             里的一项（排在搜索之后），后者与个人中心一起收进顶栏右上角的头像下拉。
+             里的一项（排在搜索之后），后者收进顶栏右上角的头像下拉。
              rail 底部现在是「暂存区」「版本记录」「成员堆叠（协作）」三件跟当前
              案卷有关的东西——版本记录挪到这里（原先在 rail 数组里，见
              config/leftSidebarPlugins.js 的 VERSION_PLUGIN），视觉上放在项目成员
@@ -381,7 +377,7 @@
            </view>
         </view>
 
-        <!-- 用户头像已搬到顶栏右上角（个人中心 / 系统设置的下拉入口）。 -->
+        <!-- 用户头像已搬到顶栏右上角（「设置」的下拉入口）。 -->
       </view>
 
       <!-- File Picker Dialog (for EasyVoice Import) -->
@@ -908,21 +904,15 @@
                       :spec="activeFileLeft.marketSpec"
                       @open-url="openBrowserTab($event)"
                     />
-                    <!-- 系统设置标签：与 pages/admin 薄壳页共用同一个 AdminPane
-                         （照插件广场 market-detail 那套 tab 形制）。 -->
+                    <!-- 「设置」标签：与 pages/admin 薄壳页共用同一个 AdminPane
+                         （照插件广场 market-detail 那套 tab 形制）。个人中心 2026-08-20
+                         并进了它的「个人」组，工作台里不再有第二个设置类标签。 -->
                     <AdminPane
                       v-else-if="activeFileLeft.tabType === 'admin-settings'"
                       :key="activeFileLeft.id"
                       embedded
                       :initial-nav="activeFileLeft.adminNav || ''"
                       :initial-service="activeFileLeft.adminService || ''"
-                    />
-                    <!-- 个人中心标签：与 pages/userprofile 薄壳页共用同一个 UserProfilePane
-                         （同上，照插件广场 market-detail 那套 tab 形制）。 -->
-                    <UserProfilePane
-                      v-else-if="activeFileLeft.tabType === 'user-profile'"
-                      :key="activeFileLeft.id"
-                      embedded
                     />
                     <PluginPane
                       v-else-if="activeFileLeft.fileType === 'plugin'"
@@ -1027,19 +1017,13 @@
                       :spec="activeFileRight.marketSpec"
                       @open-url="openBrowserTab($event)"
                     />
-                    <!-- 系统设置标签：见左窗格同名注释 -->
+                    <!-- 「设置」标签：见左窗格同名注释 -->
                     <AdminPane
                       v-else-if="activeFileRight.tabType === 'admin-settings'"
                       :key="activeFileRight.id"
                       embedded
                       :initial-nav="activeFileRight.adminNav || ''"
                       :initial-service="activeFileRight.adminService || ''"
-                    />
-                    <!-- 个人中心标签：见左窗格同名注释 -->
-                    <UserProfilePane
-                      v-else-if="activeFileRight.tabType === 'user-profile'"
-                      :key="activeFileRight.id"
-                      embedded
                     />
                     <PluginPane
                       v-else-if="activeFileRight.fileType === 'plugin'"
@@ -1561,7 +1545,6 @@ import MarketSidebarPanel from '@/components/MarketSidebarPanel.vue'
 import MarketDetailPane from '@/components/MarketDetailPane.vue'
 import ProjectHomePane from '@/components/project-home/ProjectHomePane.vue'
 import AdminPane from '@/components/admin/AdminPane.vue'
-import UserProfilePane from '@/components/userprofile/UserProfilePane.vue'
 import EasyVoicePane from '@/components/EasyVoicePane.vue'
 import DesensitizePane from '@/components/DesensitizePane.vue'
 import ClipboardPanel from '@/components/ClipboardPanel.vue'
@@ -1687,7 +1670,6 @@ export default {
     MarketDetailPane,
     ProjectHomePane,
     AdminPane,
-    UserProfilePane,
     CompareDocDialog,
     DocDiffViewer,
     VersionCompareTab,
@@ -1740,7 +1722,7 @@ export default {
       // 会议录音那个 tab 是 skill 门控的，记住它会让停用 skill 之后再进来落在
       // 一个不渲染的 tab 上（v-else 兜底能救，但 tab 条上没有高亮项，看着像坏了）。
       voiceTab: 'tts',
-      // 顶栏右上角头像下拉（个人中心 / 系统设置）
+      // 顶栏右上角头像下拉（只有「设置」一项）
       avatarMenuOpen: false,
       // 单文件历史：右键「这份文件的历史」时设置，version 面板据此只显示这份文件的版本
       versionFileFilter: null,
@@ -3529,13 +3511,9 @@ export default {
       if (file.tabType === 'market-detail') {
         return true
       }
-      // 系统设置 tab：同理常显。它的入口是顶栏头像下拉，不属于任何左栏模式，
+      // 「设置」tab：同理常显。它的入口是顶栏头像下拉，不属于任何左栏模式，
       // 被 v-show 藏死的话点了菜单什么也不会发生。
       if (file.tabType === 'admin-settings') {
-        return true
-      }
-      // 个人中心 tab：同理常显，入口同样是顶栏头像下拉。
-      if (file.tabType === 'user-profile') {
         return true
       }
       // 普通文件在资源管理器、搜索或语音模式下都可见（语音合成要在编辑器里
@@ -4275,40 +4253,8 @@ export default {
     toggleAvatarMenu() {
       this.avatarMenuOpen = !this.avatarMenuOpen
     },
-    goToUserProfile() {
-      this.avatarMenuOpen = false
-      this.openUserProfileTab()
-    },
     /**
-     * 中栏开「个人中心」标签（单例；任一窗格已开则激活）。照 openSettingsTab 的形制——
-     * 整页跳转会把工作台（标签、编辑器、AI 会话）整个换掉，改个头像/工作记录的代价
-     * 是回来重开一遍文件。pages/userprofile 薄壳页仍在，直链与浏览器端走那条。
-     */
-    openUserProfileTab() {
-      const tabId = 'user-profile'
-      for (const pane of ['left', 'right']) {
-        const list = pane === 'left' ? this.leftFiles : this.rightFiles
-        const existing = list.find(f => f.id === tabId)
-        if (existing) {
-          this[pane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = existing.id
-          this.focusedPane = pane
-          this.$nextTick(() => this.triggerWorkbenchResize())
-          return
-        }
-      }
-      const targetPane = this.splitMode ? this.focusedPane : 'left'
-      const list = targetPane === 'left' ? this.leftFiles : this.rightFiles
-      list.push({
-        id: tabId,
-        tabType: 'user-profile',
-        name: this.$t('workbench.profile'),
-      })
-      this[targetPane === 'left' ? 'activeFileIdLeft' : 'activeFileIdRight'] = tabId
-      this.focusedPane = targetPane
-      this.$nextTick(() => this.triggerWorkbenchResize())
-    },
-    /**
-     * 系统设置：中栏开标签，不再整页跳转（2026-08-19）。
+     * 设置：中栏开标签，不再整页跳转（2026-08-19）。
      * 整页跳转会把工作台（标签、编辑器、AI 会话）整个换掉，改个 API Key 的代价
      * 是回来重开一遍文件——照插件广场详情 tab 那套形制改成标签。
      * pages/admin 薄壳页仍在，直链与浏览器端走那条。

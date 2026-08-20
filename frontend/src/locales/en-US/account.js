@@ -11,11 +11,10 @@ export default {
   createBtn: 'Create',
   projectNameLabel: 'Project Name',
 
-  // ---- userprofile.vue: nav tabs ----
+  // ---- Personal group entries in the unified Settings page (merged 2026-08-20) ----
   tabWorkLog: 'Activity Log',
   tabFavorites: 'My Favorites',
   tabTodos: 'My To-dos',
-  systemSettingsTab: 'System Settings',
 
   // ---- userprofile.vue: activity log ----
   defaultUserName: 'User',

@@ -2,7 +2,7 @@
 // 全应用"真人模拟"e2e / whole-app human-simulation e2e (browser target).
 //
 // 从桌面首启解锁门（launch → unlock）开始，以真实鼠标点击
-// 走完核心用户旅程：项目列表页、个人中心四 tab、三级导航（列表→概览页→工作台，
+// 走完核心用户旅程：项目列表页、统一设置页的「个人」组、两级导航（列表→工作台，
 // 含概览页档案手填落库）、上传文件（含 >5MB 分片路径回归）、
 // 打开文件、左栏功能区、独立页面——全程收集控制台错误 / 失败 API / 可疑文案，
 // 任何断言失败退出码非 0。
@@ -497,15 +497,13 @@ try {
     }
   })
 
-  // ============ J2 项目列表页 + 个人中心四 tab ============
-  // 三级导航改造后「我的项目」不再是个人中心的一个 tab，而是独立页面
-  // pages/project-list/project-list；个人中心的默认 tab 随之变成「工作记录」，
-  // tabs 数组里已无 projects 项。这里拆成两段独立断言：
+  // ============ J2 项目列表页 + 统一设置页的「个人」组 ============
   //  ① 项目列表页自己能加载出卡片（J3 的起点，必须先立住）
-  //  ② 个人中心剩下的四个 tab 仍能切、且默认 tab 不是空白页
-  // 不要再用「点『我的项目』tab 回到列表」这条老路径——那个 tab 已经不存在，
-  // mouseClickText 会抛「找不到文本」。
-  console.log('== J2 项目列表页 + 个人中心 ==')
+  //  ② 个人内容仍然到得了、四个栏目都不是空白页
+  // 2026-08-20：个人中心并进了统一「设置」页（AdminPane 的「个人」组），
+  // /pages/userprofile 薄壳页仍在、落点就是这一组，所以这一段的入口 URL 没变，
+  // 变的是页面结构（.page-admin 的侧栏分组，不再是 .nav-menu 那套 tab）。
+  console.log('== J2 项目列表页 + 个人设置 ==')
 
   await step('项目列表页加载出项目卡片', async () => {
     await page.goto(BASE + '/#/pages/project-list/project-list', { waitUntil: 'networkidle2' })
@@ -528,24 +526,40 @@ try {
 
   await shot('j2-project-list')
 
-  await step('个人中心不再有「我的项目」tab', async () => {
+  await step('/pages/userprofile 落在统一设置页的「个人」组', async () => {
     await page.goto(BASE + '/#/pages/userprofile/userprofile', { waitUntil: 'networkidle2' })
+    await page.waitForSelector('.page-admin', { timeout: 20000 })
     await waitText('工作记录', 20000)
-    // 只看 tab 栏本身（.nav-menu .nav-text），不看整页 innerText——
-    // 页面别处出现「我的项目」四个字不该让这条断言误红。
+    // 只看侧栏导航本身（.nav-list .nav-text），不看整页 innerText
     const labels = await page.evaluate(
-      () => [...document.querySelectorAll('.nav-menu .nav-text')].map((e) => e.innerText.trim()))
-    if (labels.includes('我的项目')) {
-      throw new Error('个人中心仍有「我的项目」tab（userprofile.vue:494 那行没删）: ' + JSON.stringify(labels))
+      () => [...document.querySelectorAll('.nav-list .nav-text')].map((e) => e.innerText.trim()))
+    for (const want of ['工作记录', '我的收藏', '我的代办', '账户与安全']) {
+      if (!labels.includes(want)) {
+        throw new Error('「个人」组缺栏目「' + want + '」: ' + JSON.stringify(labels))
+      }
     }
-    if (labels[0] !== '工作记录') {
-      throw new Error('个人中心首个 tab 不是「工作记录」（userprofile.vue:492 默认值没改）: ' + JSON.stringify(labels))
+    if (labels.includes('我的项目')) {
+      throw new Error('侧栏里冒出了「我的项目」（那一栏已搬去项目列表页）: ' + JSON.stringify(labels))
+    }
+    const active = await page.evaluate(() => {
+      const el = document.querySelector('.nav-item.active .nav-text')
+      return el ? el.innerText.trim() : ''
+    })
+    if (active !== '工作记录') {
+      throw new Error('薄壳页没有落在「工作记录」（initial-nav="work_log" 没接上）: ' + active)
     }
   })
 
-  for (const tab of ['工作记录', '我的收藏', '我的代办', '设置']) {
-    await step('tab ' + tab, async () => {
+  // 四个栏目依次点开，每个都要真渲染出自己的面板（不是一片空白）
+  for (const [tab, sel] of [
+    ['工作记录', '.panel-work-log'],
+    ['我的收藏', '.panel-favorites'],
+    ['我的代办', '.panel-placeholder'],
+    ['账户与安全', '.panel-settings'],
+  ]) {
+    await step('个人组栏目 ' + tab, async () => {
       await mouseClickText(tab)
+      await page.waitForSelector(sel, { timeout: 15000 })
       const t = await textOf()
       const m = t.match(/.{0,40}(undefined|NaN|\[object).{0,40}/)
       if (m) throw new Error('页面文本可疑: ' + m[0])
@@ -781,30 +795,22 @@ try {
       await page.waitForSelector('.avatar-menu', { timeout: 8000 })
     }
   }
-  await step('头像下拉里有个人中心与系统设置', async () => {
+  await step('头像下拉只有「设置」一项（2026-08-20 个人中心已并入）', async () => {
     await openAvatarMenu()
-    const t = await textOf()
-    for (const s of ['个人中心', '系统设置']) {
-      if (!t.includes(s)) throw new Error('头像下拉里缺「' + s + '」')
-    }
+    const items = await page.evaluate(
+      () => [...document.querySelectorAll('.avatar-menu-item')].map((e) => e.innerText.trim()))
+    if (items.length !== 1) throw new Error('头像下拉应当只剩一项，实际: ' + JSON.stringify(items))
+    if (!items[0].includes('设置')) throw new Error('那一项不是「设置」: ' + JSON.stringify(items))
   })
-  await step('点「个人中心」开中栏标签而不是跳页（2026-08-19 前是整页 navigateTo）', async () => {
+  await step('点「设置」开中栏标签而不是跳页', async () => {
     await openAvatarMenu()
-    await mouseClickText('个人中心')
-    await page.waitForSelector('.page-userprofile.is-embedded', { timeout: 15000 })
-    const h = await page.evaluate(() => location.hash)
-    if (h.includes('pages/userprofile/userprofile')) throw new Error('个人中心又变回整页跳转了')
-    await waitText('工作记录', 10000)
-    // 关掉这个标签，别把后面的旅程都压在个人中心页上
-    await mouseClickSel('.tab-item.active .tab-close')
-  })
-  await step('点「系统设置」开中栏标签而不是跳页', async () => {
-    await openAvatarMenu()
-    await mouseClickText('系统设置')
+    await mouseClickSel('.avatar-menu-item')
     await page.waitForSelector('.page-admin.is-embedded', { timeout: 15000 })
     const h = await page.evaluate(() => location.hash)
     if (h.includes('pages/admin/admin')) throw new Error('设置又变回整页跳转了')
-    await waitText('系统管理', 10000)
+    // 个人组与系统组都要在同一页里够得着
+    await waitText('工作记录', 10000)
+    await waitText('账户与安全', 10000)
     // 关掉这个标签，别把后面的旅程都压在设置页上
     await mouseClickSel('.tab-item.active .tab-close')
   })
@@ -1082,9 +1088,10 @@ try {
   for (const [name, route, expectText] of [
     ['插件广场', '/pages/plugin-market/plugin-market', '插件广场'],
     ['变量库', '/pages/variable-library/variable-library', '新增变量'],
-    // 「系统配置」分区 2026-08-18 已整体撤掉（OpenRouter 并入 AI 功能设置、
-    // 语言搬去个人中心），改断言左侧导航卡的标题——它不随分区增减变化
-    ['管理页(只读)', '/pages/admin/admin', '系统管理'],
+    // 侧栏标题 2026-08-20 从「系统管理」改成「设置」（个人中心并入这一页）；
+    // 「设置」两个字满页都是，所以断言「账户与安全」——个人组那一栏的名字，
+    // 不随分区增减变化（此前断言的是导航卡标题，同一个道理）
+    ['管理页(只读)', '/pages/admin/admin', '账户与安全'],
     // 新建项目页 2026-08 起不再是主入口（两个新建动作已内嵌在项目列表页下方），
     // 保留给浏览器降级与应用菜单的 ?auto=create-folder，所以仍然要能打开
     ['新建项目页', '/pages/newproject/index', '新建或打开项目'],

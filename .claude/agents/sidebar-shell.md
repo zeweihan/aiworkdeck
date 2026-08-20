@@ -30,8 +30,8 @@ description: 侧边栏与工作台外壳领域。任务涉及左侧 rail/左栏�
 - project-header 顶部条；header-tools（开关：左栏、底栏、右栏、分屏、截图OCR、浏览器、活动记录、客户视图）。
   **活动记录右侧新增 `.header-account`**（头像 `.avatar-btn` + 下拉 `.avatar-menu`，2026-08-19
   从 rail 底部搬上来）。它刻意挂在 `isClientView` 分支**之外**——rail 上那个头像本来
-  就对客户也渲染，收进下拉时不能顺手砍掉客户的「个人中心」。下拉两项：
-  个人中心（仍是 navigateTo，见下）/ 系统设置（`!isClientView` 才渲染，开中栏 tab）。
+  就对客户也渲染。2026-08-20 起下拉**只有「设置」一项**（个人中心已并入），
+  这一项对客户同样渲染，开中栏 tab。
 - left-rail：插件按钮 v-for LEFT_SIDEBAR_PLUGINS（@tap toggleLeftPane）、spacer、暂存区、成员堆叠。
   **齿轮与头像都不在 rail 上了**（2026-08-19）；插件广场按钮也不在了，它升成了
   LEFT_SIDEBAR_PLUGINS 数组里的一项（key `market`）。
@@ -114,25 +114,21 @@ rail 底部（spacer 之后由模板单独渲染）现在是**暂存区 → 版�
 **shareholder-meeting(股东大会核查) 已于 2026-08-17 下线**：入口从本数组移除即等于功能隐藏，`ShareholderMeetingPanel.vue` / `api.js` 的 `/api/shareholder-meeting/*` / 后端 controller 与实体全部保留（存量案卷数据还在库里），skill 改成 `enabled_by_default: false`。注意 `SkillRegistry` 的种子化只在「第一次见到这个 id」时生效，**存量安装里它仍是启用状态**，要在插件广场手动停用。`EvalHarness` 里显式 `setEnabled(..., true)` 把它开回去——那条回放用例守的是编排契约，与业务在不在产品里无关。requiresSkill 门控入口：litigation-visual(诉讼可视化)；meeting-recorder(会议录音→MeetingRecordingPanel，**2026-08-19 起不占 rail 位，是「语音」面板里的一个 tab**，skill 启用才出现；录音本体是页面树外的模块级单例 `utils/meetingRecorder.js` + body 级浮动指示器 `utils/recordingIndicator.js`，见 plugin-system.md)。辅助函数 getLeftSidebarPlugin(key)（数组里找不到再找 OFF_RAIL_PLUGINS，都没有才回退第一项）、getPluginsForUser(role)（CLIENT 只见尽调文件，返回 DD_FILES_PLUGIN）。动态插件后端拉取后追加 rail 并用 PluginPane 渲染。**设置入口不在 rail 上了**，见顶栏头像下拉那一节；admin 页/接口后端仍 requireAdmin（用户名 admin）。
 **插件广场入口（2026-08 二改：VS Code 扩展栏形态；三改：rail 按钮升成数组里的 market 项，动作不变）**：rail market 项 → `toggleLeftPane('market')` 开左栏列表面板（`MarketSidebarPanel`，leftPaneKey='market'，leftPaneTitle 特判）；点列表行 → `openMarketDetail(spec)` 在中栏开详情 tab（`MarketDetailPane`，`tabType:'market-detail'`、单例、isTabVisible 常显、直接 push 进 leftFiles/rightFiles 绕过 isFileTypeSupported——与浏览器 tab 同法）。独立页面路由保留给 admin 入口与直链（薄壳页 + `<MarketPane :standalone="true">`）。详见 plugin-marketplace.md。
 
-## 顶栏头像下拉与「系统设置」标签（2026-08-19）
+## 顶栏头像下拉与统一「设置」标签（2026-08-19 立，2026-08-20 并）
 
 rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活动记录」右侧的
-`.header-account`：头像 `.avatar-btn` → 下拉 `.avatar-menu` 两项。
-`.header-account` 挂在 `isClientView` 分支**之外**（rail 那个头像本来就对客户渲染），
-「系统设置」那一项才 `v-if="!isClientView"`。
+`.header-account`：头像 `.avatar-btn` → 下拉 `.avatar-menu`。
+**2026-08-20 起下拉只有一项「设置」**——个人中心并进了系统设置，两个入口各开一整块
+面板、彼此还互相跳（个人中心侧栏给管理员插一条「系统设置」走 navigateTo，设置页侧栏
+又有一条「个人中心」）是用户点名抱怨过的形态。那一项**不再按 `isClientView` 收**：
+客户也有自己的工作记录与账号安全，「系统」组由面板内部按 isAdmin 自己收。
 
-- **个人中心**（2026-08-19 二改）：`goToUserProfile` 从 `uni.navigateTo` 改薄转发到
-  `openUserProfileTab()`——与「系统设置」同一套形制，中栏开单例标签
-  （`tabType:'user-profile'`、`isTabVisible` 常显、直接 push 进 leftFiles 绕过
-  `isFileTypeSupported`）。`check-navigation-contract.mjs` 的断言跟着倒转：现在守的是
-  「必须调 openUserProfileTab 且不许再 navigateTo」，不是反过来。**`pages/admin/admin.vue`
-  内部设置页链到个人中心的那条 `goToUserProfile`（AdminPane.vue 自己的方法，走的是
-  设置页 ⇄ 个人中心互跳，embedded 下 navigateTo / 非 embedded 下 redirectTo）没有动**——
-  它是另一个入口，与顶栏头像下拉的这条各自独立。
-- **系统设置**：`goToSystemSettings(opts)` → `openSettingsTab(opts)`，中栏开单例标签
+- **入口**：`goToSystemSettings(opts)` → `openSettingsTab(opts)`，中栏开单例标签
   （`tabType:'admin-settings'`、`isTabVisible` 常显、直接 push 进 leftFiles 绕过
   `isFileTypeSupported`——与 market-detail / 浏览器 tab 同法）。整页跳转会把标签、
   编辑器、AI 会话整个换掉，改个 API Key 的代价是回来重开一遍文件。
+  **`goToUserProfile` / `openUserProfileTab` / `tabType:'user-profile'` 全没了**，
+  `check-navigation-contract.mjs` 现在守的是「头像下拉恰好一项、且这四个名字一个都不许回来」。
 - **深链等价物**：`openSettingsTab({ nav, service })` 对应薄壳页的
   `?nav=platform&service=ocr`（网关错误提示的逃生门指着它）。标签是单例，
   已经开着时再带深链进来只改 props——所以 **`AdminPane` 里加了
@@ -144,37 +140,46 @@ rail 底部的**齿轮与用户头像都撤了**，收进顶栏右上角「活�
   { verb:'openSettings' })` 交给工作台，否则照旧 navigateTo 薄壳页。
   工作台侧在 `menuCommands.js` 的 `runMenuCommand` 加了一条 `case 'openSettings'`。
 
-**实体抽成了 `frontend/src/components/admin/AdminPane.vue`**（4500+ 行整体搬移，
-照 plugin-market.vue + MarketPane 的先例），`pages/admin/admin.vue` 退成 ~30 行薄壳，
-只把 `onLoad(query)` 的 `nav` / `service` 转成 props。搬移时只改了五处：
-`onLoad(query)`→`mounted()`（读 props）、`onUnload()`→`beforeUnmount()`、
-root 加 `is-embedded` class、`goToUserProfile` 在 embedded 下改 navigateTo
-（redirectTo 会把整个工作台替换掉）、新增那对 watch。
-**`activeNav` 默认值仍是 `'ai'`、nav 的 v-if/v-else-if 长链链头仍是 `platform`**——
-这两条是既有地雷，搬移时一个字没动。
-仓里十来处 `navigateTo '/pages/admin/admin?nav=...'`（MarketPane / MarketDetailPane /
-MarketSidebarPanel / CloudAcceptDialog / userprofile / api.js 的 401 兜底）
-**全部原样保留**，它们走薄壳页那条路。
+**实体是 `frontend/src/components/admin/AdminPane.vue`**（`pages/admin/admin.vue` 退成
+~30 行薄壳，只把 `onLoad(query)` 的 `nav` / `service` 转成 props）。侧栏分两组：
 
-**个人中心同一天照抄了这套搬法**：实体抽成 `frontend/src/components/userprofile/UserProfilePane.vue`
-（931 行整体搬移），`pages/userprofile/userprofile.vue` 退成几行薄壳，只挂
-`<UserProfilePane />`（没有 query 要转，个人中心不吃深链参数）。搬移改了四处：
-`onLoad()`→`mounted()`、新增 `embedded` prop 与 `is-embedded` class、
-`host.browser.setViewsVisible({visible:false})` 只在非 embedded 时调用（embedded 时
-工作台自有 `desktopOverlayActive` watcher 管 BrowserView 显隐，照抄会把用户开着的
-浏览器标签隐藏掉）、「返回项目列表」出口（`goBackToList`）embedded 下不渲染（标签
-靠自身关闭按钮退出，没有页面栈可退）。原页面没有 `onUnload`，新增的 `beforeUnmount()`
-只清两个绑定验证码的倒计时定时器（标签常驻工作台不会像整页那样随导航销毁重建）。
-仓里既有的 `navigateTo '/pages/userprofile/userprofile'`（AdminPane 自己的
-`goToUserProfile`、项目列表页 `goToUserProfile`、应用菜单 `appMenuBridge.js` 的
-`case 'openAccount'`）**全部原样保留**，走薄壳页那条路。
+| 组 | key | 内容 |
+|---|---|---|
+| 个人 | `work_log` / `favorites` / `todos` / `personal_settings` | 原个人中心四栏；内容各自成组件，在 `components/userprofile/Personal*Panel.vue` |
+| 系统 | `ai` / `platform` / `account` / `components` / `updates` / `cloud` / `memory` / `telemetry` / `feedback` / `plugins` | 原样未动 |
+
+- **个人组的 key 刻意避开 `account`**（系统组的「账户与用量」已经占了这个 key）。
+- **可见性只有 `visibleNavItems` 一处**：`desktopOnly && !isDesktop` 收起，
+  `group === 'system' && !isAdminUser` 收起。后一条就是原个人中心 `checkAdminTab`
+  那条规则（管理员才多出「系统设置」入口），合并后它换了长处。
+- **`isAdminUser` 读不到用户时按管理员处理**：桌面单机免登下本来就没有会话缓存，
+  按 false 起步会让整个系统组在首帧消失、默认面板也落空。真值由 `loadUserInfo()`
+  拉 `/api/auth/me` 覆盖；转成 false 时若当前面板已不可见就落回 `work_log`。
+- **`activeNav` 默认值按 `cachedIsAdmin()` 分流**（管理员 `'ai'`、其余 `'work_log'`）；
+  **nav 的 v-if/v-else-if 长链链头仍是 `platform`**，个人组四条是追加在链尾的
+  `v-else-if`，动链头仍然会得到「v-else/v-else-if has no adjacent v-if」的编译错。
+- **系统组那三条初始加载（`loadConfig` / `loadModelCatalog` / `loadTelemetry`）收进了
+  `loadAdminSections()` 并按 isAdmin 跳过**：`/api/admin/*` 对普通账号是 403，会弹
+  「请用 admin 账号登录」——个人中心并进来之后非管理员也会打开这一页，不能让他一进门就吃这条。
+- 侧栏顶部是**用户信息卡**（`.sidebar-user`，头像可点走 `uploadAvatar`），取代了原来的
+  纯 logo 头部；`.sidebar-logo-area` 与它那条 is-embedded 隐藏规则一并删了。
+- 个人组四栏的**加载时机是各自组件的 `mounted`**（它们只在被选中时渲染）。
+  `PersonalSettingsPanel` 的 `beforeUnmount` 必须继续清那两个验证码倒计时——
+  设置标签常驻工作台，不清会跨标签泄漏（修过的坑，契约脚本里有断言守着）。
+
+**`pages/userprofile/userprofile.vue` 薄壳页仍在，但挂的是 `<AdminPane initial-nav="work_log" />`**
+（选项 A：一条既有链接都不断）。仓里那些 `navigateTo '/pages/userprofile/userprofile'`
+（项目列表页的「个人中心」按钮、应用菜单 `appMenuBridge.js` 的 `case 'openAccount'`）
+**全部原样保留**，落点就是个人组第一栏。`UserProfilePane.vue` 已删除。
+仓里十来处 `navigateTo '/pages/admin/admin?nav=...'`（MarketPane / MarketDetailPane /
+MarketSidebarPanel / CloudAcceptDialog / api.js 的 401 兜底）同样原样保留。
 
 ## 协作入口（PR-E，2026-08-06）
 
 顶栏项目名区在 `.work-status-chip` 旁新增 `.collab-chip`（`collab-chip-green/-blue/-amber` 三态），底部 `.status-bar` 同源加一格，两处都 `v-if="collabLinked"`——**只有这份案卷真的放进过团队案件库才渲染任何协作元素**，没连案件库的律师在界面上看不到一个协作字样（「以自己工作为主」的定位要求零打扰）。点开的是页面级 `components/collab/CollabDialog.vue`（三 tab：这份案卷 / 案件参与人 / 团队案件库），交稿、取回最新稿、放进案件库、加人、连/退案件库全部收在这里，是**唯一**动作入口；版本面板的 `CloudSyncBar` 只剩一行只读状态 + 一个 `open-collab` 链接。admin 页的「团队案件库」分区保留给多库管理与浏览器端。
 没有动 rail 配置、没有动 `leftPaneKey` 状态机、没有拆 `VersionPanel` 组件树——`LEFT_SIDEBAR_PLUGINS` 仍是纯静态数组，rail 上有哪些入口不依赖运行时状态。角色展示文案的唯一来源是 `frontend/src/config/memberRoles.js`（`ROLE_LABELS`/`ASSIGNABLE_ROLES`/`MEMBER_GROUP_LABELS`），`CloudSyncBar`/`InviteMemberDialog`/`groupedMembers` 三处各写各的历史已清；**枚举键名是后端 `ProjectMember.Role` 的值也是接口字段值，只改 label 不改 key**。协作状态口径与刷新机制见 `.claude/agents/version-control.md`。
 **「加人」是两条轨，界面上必须说破**：顶栏成员堆叠的 `InviteMemberDialog` 走 `addProjectMember`（本机这份案卷的参与人表），协作抽屉「案件参与人」tab 走 `addCloudMember`（代理到团队案件库那边的成员表，`api.js` 注释已自陈「不是本地项目成员」）。双轨是既有机制、本 PR 不动，但两处现在共用同一套 `memberRoles.js` 标签后界面上再无区别信号——只在一侧加人的律师会让同事白等且毫无提示，所以 `InviteMemberDialog` 的「所里同事」tab 底部常驻一句「这里加的是本机的参与人，案卷进了案件库还要在顶栏协作里再加一次」。改这两个弹窗的文案时别把它删了。
-**邀请话术里的每一步都要指向收件人真看得见的入口**：`CollabDialog.inviteText` 是发给一个此刻手上还没有这份案卷的人的，他打开软件停在项目列表页——那里的协作入口只有「从团队案件库取一份案卷」（空项目态与有项目态都渲染），连库也要从那个弹窗里的「去连一个」进。别写「打开左下角设置」：项目列表页左侧的「设置」面板里没有团队案件库（那是 admin 页的分区，且入口叫「系统设置」、只对 `isAdmin` 渲染）。
+**邀请话术里的每一步都要指向收件人真看得见的入口**：`CollabDialog.inviteText` 是发给一个此刻手上还没有这份案卷的人的，他打开软件停在项目列表页——那里的协作入口只有「从团队案件库取一份案卷」（空项目态与有项目态都渲染），连库也要从那个弹窗里的「去连一个」进。别写「打开左下角设置」：项目列表页左侧的「设置」面板里没有团队案件库（那是设置页的分区，入口叫「设置」、「系统」组只对管理员渲染）。
 
 ## 页面路由（frontend/src/pages.json，全部 navigationStyle: custom）
 
@@ -196,11 +201,11 @@ launch（**启动页**）/ unlock / identity / login / newproject / **project-li
 ② **所有「去我的项目」的落点统一到项目列表页**（`launch.vue` 启动、`login.vue` 四处、`newproject/index.vue` 返回、工作台 `goAllProjects`）；
 ③ **列表点卡片 `reLaunch` 直达工作台**，中间不再插概览页。
 
-导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|**project-list**（其余一律）；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list reLaunch→project-overview**（`goToProject`，`onCloudAccepted` 复用同一方法）；**概览在工作台内是左栏面板**（2026-08-19 从中栏标签改过来；rail 第一个按钮 → `toggleLeftPane('home')`，内容组件 `components/project-home/ProjectHomePane.vue` 传 `compact`；顶栏切换器的 `.switcher-home`「项目概览」调的是同一个 `goProjectHome`）；**project-home 薄壳页只留给直链/深链**（`goWorkbench` 仍 reLaunch 进工作台并透传 `openFileId`；点 AI 对话历史带 `conversationId`，工作台 `onLoad` 消费后调 `loadHistoryChat`——它要 `$refs.chatInterface`，只能在 AI 面板已渲染之后调；**在工作台标签里点历史对话不跳页**，走 `openConversationInPanel` 就地切会话）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：双向 navigateTo 堆实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`，工作台参与的跳转一律 reLaunch）；overview navigateTo userprofile（**这条保持 navigateTo 不动**——它依赖页面栈保留实例以便 onShow 回流刷新）；**overview 不再跳 admin**：设置是中栏标签（见下一节）；**admin ⇄ userprofile 互跳用 redirectTo**（同级页面不压栈；两边都 navigateTo 会互相弹成死循环，来处永远够不着）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；退出 reLaunch login。
+导航流：launch reLaunch→login（非桌面）|unlock（未解锁）|identity（本机工作区待选定）|wizard（未初始化）|**project-list**（其余一律）；unlock/identity 完成后一律 reLaunch 回 launch 重跑分流，不自己跳工作区；**project-list reLaunch→project-overview**（`goToProject`，`onCloudAccepted` 复用同一方法）；**概览在工作台内是左栏面板**（2026-08-19 从中栏标签改过来；rail 第一个按钮 → `toggleLeftPane('home')`，内容组件 `components/project-home/ProjectHomePane.vue` 传 `compact`；顶栏切换器的 `.switcher-home`「项目概览」调的是同一个 `goProjectHome`）；**project-home 薄壳页只留给直链/深链**（`goWorkbench` 仍 reLaunch 进工作台并透传 `openFileId`；点 AI 对话历史带 `conversationId`，工作台 `onLoad` 消费后调 `loadHistoryChat`——它要 `$refs.chatInterface`，只能在 AI 面板已渲染之后调；**在工作台标签里点历史对话不跳页**，走 `openConversationInPanel` 就地切会话）；**project-home →project-list 条件分流**——上一页 route 是 `pages/project-list/project-list` 就 `navigateBack({delta:1})`，否则 `redirectTo`（**不能无脑 navigateTo**：双向 navigateTo 堆实例）；**project-overview reLaunch→project-list**（顶栏切换器里的「全部项目…」`.switcher-all`，工作台参与的跳转一律 reLaunch）；**overview 既不跳 admin 也不跳 userprofile**：设置是中栏标签，个人中心 2026-08-20 并进了它（见下一节）；`pages/userprofile` 与 `pages/admin` 两个薄壳页都还在，只留给直链、浏览器端与仓里既有的 navigateTo（前者现在挂的也是 `AdminPane`，落在个人组的「工作记录」）；admin 内「插件广场」是页内切换（plugin-market 独立页仅直链保留）；newproject reLaunch→overview；退出 reLaunch login。
 **全局返回键**：`utils/globalBack.js`，body 级单例（同拖拽条/反馈浮窗），落在各页顶部那条 38px 拖拽条里；可见判据只有「页面栈深度 > 1」，工作台与 project-home 走豁免名单（自带左上角导航）。新页不需要各自补返回按钮。
 **启动链只用 reLaunch，不用 navigateTo**——分流页不该留在页面栈里。
 **新页 pages.json 注册必须逐条显式写 `navigationStyle: custom`**：globalStyle 里没有这一项（只有 navigationBarTextStyle / TitleText / BackgroundColor / backgroundColor），漏写会得到一个系统导航栏，与全应用自绘顶栏形制冲突。
-**个人中心配套三改（已落地，实测行号）**：`userprofile.vue:324` 的 `activeTab` 默认值是 `'work_log'`、`:326` 起的 `tabs` 数组已不含 `{ key: 'projects', label: '我的项目' }`（只剩工作记录/收藏/代办/设置四项）、`onLoad`（:379）里 `$nextTick` 直接调一次 `loadActivityLogs()`（**不是删除**，:409）——工作记录 tab 是懒加载的，另一个触发点是 `switchTab`（:547）里 `key === 'work_log'` 分支（`loadActivityLogs` 定义在 :561）；默认 tab 落在懒加载 tab 上却不在 `onLoad` 里补调一次，就会得到一个默认打开却永远空白的 tab。
+**个人内容那条老地雷仍然成立，只是换了长处**（2026-08-20 并进统一设置页之后）：四栏都是懒加载的，加载时机现在是各自组件的 `mounted`（它们只在被选中时渲染）。默认落点落在一个没人给它加载数据的栏目上，就会得到一个默认打开却永远空白的页——`check-navigation-contract.mjs` 有一条断言逐个盯着 `PersonalWorkLogPanel` / `PersonalFavoritesPanel` / `PersonalSettingsPanel` 的 mounted。
 **identity（本机工作区选择，2026-08-05）**：单机免登下所有请求解析为同一个「本机用户」，老安装的库里常有多个历史账号（admin 往往是空壳，真实数据在用户自己注册的账号名下）。后端 `LocalIdentityService` 按数据量解析，多个账号都有数据时不猜，`GET /api/local-identity/status` 回 needsSelection，launch 页据此分流到 identity 页；选定经 `POST /api/local-identity/select` 持久化到 SystemSetting，之后不再出现。补救入口在 admin 页「账户与用量」的「本机工作区」卡（候选 >1 才渲染）。
 **IDE 化体验对齐第二轮（2026-07-31，同分支）**：① 启动直达——login 页 `tryAutoResume()` 存储会话有效即 reLaunch 上次项目（`utils/recentProjects.js` 的 `checkba_last_project_id`），登录页只在会话失效时出现（**PR-A 去登录后这条只对浏览器访问团队服务器有效**：桌面端启动链已改为 launch 页分流，直达逻辑迁到 `launch.vue`，登录页在桌面端不再出现）；② 桌面应用菜单 `desktop/main/app-menu.js`（文件→打开文件夹 Cmd+O/打开文件/新建项目文件夹/最近打开动态子菜单；编辑菜单是 editMenu role，删了它 mac 输入框 Cmd+C/V 全灭；窗口菜单刻意无 close role——Cmd+W 留给渲染层关标签），动作经 `checkba:menu-action` 到 App.vue 全局处理器（`utils/ideOpen.js` 共用流程）；③ overview 键位 Cmd+P（`QuickOpenPanel.vue` 快速打开，document 捕获段拦键：uni input 不透传 keydown）/Cmd+W 关活跃标签，焦点在 LOWA webview 内收不到属已知边界；④ 顶栏项目名旁最近项目切换器（`.project-switcher`/`.switcher-menu`）与工作状态点（`.work-status-chip`，复用 `checkAdoptConflict` 的 /status，working/onDraft 才渲染）；⑤ 窗口标题「文件 — 项目 — AI WorkDeck」（watch activeFileIdLeft/project.name）；⑥ 拖文件夹到窗口（App.vue capture 段 drop，单目录才接管，`fs.getPathForFile` preload helper）与 macOS open-file 事件（main.js `dispatchOpenPath`，窗口未就绪先存后发）都走 open-local。文件树方向键导航有意缓做（全局拦方向键与编辑器输入冲突）。
 **newproject 已 IDE 化（2026-07-31）**：桌面态三动作「打开文件夹/新建项目文件夹/打开文件」走 `window.checkbaDesktop.fs.showOpenDialog` + `POST /api/projects/open-local`（同一 localRoot 重复打开复用项目并幂等重扫导入，见 `LocalProjectService`）；浏览器降级为托管空白项目（BLANK）；成功后 reLaunch 进 overview，单文件过渡版带 `openFileId` 查询参数（`fileOpenTabs.js` 的 `openPendingLocalFile`）。项目类型选择表单已删除（`config/projectTypes.js` 仅剩 `getProjectTypeLabel` 供存量项目卡片显示）。FileTree 右键新增「在访达中显示」（`reveal-file` → overview `onRevealFile` → `/local-path` 端点 + `fs.showItemInFolder` IPC）。
@@ -330,7 +335,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - `frontend/src/services/host.js` — **访问桌面壳能力的唯一出口**（浏览器面板/截图/剪贴板/组件下载/自动更新/本地文件对话框/应用菜单等）。业务代码一律 `import { host } from '@/services/host.js'`，**不要再写 `window.checkbaDesktop`**；「是不是桌面壳」用 `isDesktopHost()`。桌面态逐字段透传、Web 态缺席，所以既有的 `if (host.browser && ...)` 子对象守卫必须保留（守卫就是能力探测）。详见 doc-editor.md 的「宿主能力层与编辑器容器」。
 - `frontend/src/config/tools.js` — 底部工具面板 tab（WORKBENCH_TOOLS）；`fileActions.js` — 文件树批量操作；`workbenchActions.js` — OCR/内链 scheme 常量。
 - `frontend/src/components/FileTree.vue`（5225 行）— 左栏文件树。
-- 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（项目 tab 已搬出，只剩工作记录/收藏/代办/设置四 tab，行数随之变动、不再登记具体数字）、variable-library.vue(543)、admin.vue(**已是薄壳页 ~30 行**，实体在 `components/admin/AdminPane.vue`，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
+- 各页面（行数实测）：login.vue(931)、newproject/index.vue(680)、wizard.vue(1007，重跑语义见 PR#134)、userprofile.vue（**已是薄壳页**，2026-08-20 起挂 `AdminPane initial-nav="work_log"`，个人中心的四栏内容在 `components/userprofile/Personal*Panel.vue`）、variable-library.vue(543)、admin.vue(**已是薄壳页 ~30 行**，实体在 `components/admin/AdminPane.vue`，含插件广场入口与「记忆同步」面板——nav key `memory`、desktopOnly，配置记忆 Git 远端，见 version-control.md)、plugin-market.vue(22，**已是薄壳页**，实体在 `MarketPane`)。
 - **项目列表页** `frontend/src/pages/project-list/project-list.vue` + 同目录 `project-list.scss`（样式 `@import` 引入，照 project-overview.vue + .scss 的既有形制）。整块搬自 `userprofile.vue` 的 projects tab，卡片类名 `.project-item-card` 保持不变（e2e 锚点）；页面根 `.page-project-list`。**新建入口在列表下方**（`.create-section`，两张 `.create-card`：打开文件夹 / 新建项目文件夹，走 `utils/ideOpen.js` 的 `openFolderFlow`/`createFolderFlow`，命名弹窗同页）；「单独打开一个文件」已去掉——它造出的是没有归属的临时项目（`openFileFlow` 仍留给应用菜单与拖拽）。浏览器版没有系统文件夹对话框，降级为 navigateTo `newproject` 页填表建托管空白项目。承载 `InviteMemberDialog` 与 `CloudAcceptDialog`（**这两个必须一起搬**，`CloudAcceptDialog` 的两个入口是协作唯一入口，`CollabDialog.vue:271` 的邀请话术还指着它）。CLIENT 隐藏「+ 新建项目」「从团队案件库取一份案卷」与卡片上的删除/重命名/邀请。角色文案唯一来源是 `config/memberRoles.js`（搬迁时把原来硬编码的 `getRoleLabel` 映射表换掉）。**不要搬**「进行中/已完成」那两张统计卡——它们是写死的字面量 0，Project 实体根本没有状态字段。
 **双视图（2026-08-18）**：页头右侧 `.view-toggle` 两个按钮切 `viewMode`（`'grid'`/`'list'`），
 选择记在 `uni.storage` 的 `checkba_project_list_view`（本机习惯，不进后端）。默认仍是 grid，
@@ -375,7 +380,7 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 - **项目概览**：内容本体 `frontend/src/components/project-home/ProjectHomePane.vue` + 同目录 `project-home-pane.scss`（**两个宿主共用**：工作台中栏标签、`pages/project-home` 薄壳页）；五个子组件在同目录：`ProfileHeader` / `OverviewStatsBar` / `ActivityFeed` / `TaskSchedule` / `ConversationList`。薄壳页 `frontend/src/pages/project-home/project-home.vue` + `project-home.scss` 只剩顶栏与 query 处理。**十个 e2e 稳定锚点类名**：内容根 `.project-home-pane`、薄壳页根 `.page-project-home`、项目列表页根 `.page-project-list`、薄壳页两按钮 `.btn-workbench` / `.btn-project-list`、五个组件根 `.overview-stats-bar` / `.profile-header` / `.activity-feed` / `.task-schedule` / `.conversation-list`——**改这些名字要同步改 `frontend/tests/app-e2e/run.mjs` 的 J2/J3 段**。取数纪律（请求代、绝不调 `/version/status`）随内容一起搬进了 Pane。档案编辑刻意走行内 input、删除确认走 `uni.showModal`，因此两个新页与五个新组件**都不需要自带 awd-\* 样式副本**（awd-\* 没有集中定义，改成弹窗就必须自带一份 scoped 副本，否则渲染成无样式裸框）。
 - **admin 的「系统配置」分区（nav key `config`）已整体撤掉**（2026-08-18）。它到最后只剩两样东西，
   各自都有更该待的地方：① OpenRouter 的 Key 与地址 → 「AI 功能设置」的供应商单选下面、
-  **选中 OpenRouter 那一档才渲染**（形制同跨境同意块）；② 界面语言 → **个人中心「设置」**
+  **选中 OpenRouter 那一档才渲染**（形制同跨境同意块）；② 界面语言 → **设置页「个人 → 账户与安全」**（2026-08-20 前叫「个人中心 → 设置」）
   （语言是每个人自己的偏好：storage 权威源、人人可改、不要 admin 权限，摆在「系统管理」下面
   本身就是错的分类）。`admin.externalTitle` 文案随之改成「OpenRouter 接入参数」，
   七家非 AI 服务的指路条 `externalMovedNote` 挪到 AI 面板底部，`admin.navConfig` 键已删。
@@ -460,6 +465,9 @@ DdFilesPanel / ShareholderMeetingPanel。新面板照抄这套，不要再自定
 ## 验证
 
 - `cd frontend && npm run check:emits`（死绑定护栏）+ `npm run test:app-e2e`（登录→项目→上传→打开文件→独立页面全旅程）。
+- 改导航/入口/设置页结构加跑 `npm run check:nav` 与 `npm run check:nav:full`（导航契约静态护栏，
+  含「头像下拉只剩一项」「个人组四栏各自有人加载数据」「薄壳页挂的是统一设置面板」等断言）；
+  改文案加跑 `npm run check:locales`（zh/en 键对拍）。
 - 布局/编辑器联动改动加跑 `npm run test:lowa-e2e`。
 - **app-e2e 里不要拿 `waitText('资源管理器')` 当「工作台起来了」的判据**：那个词是左栏
   标题，`leftPaneKey` 被持久化成别的面板（点过一次「项目概览」就会）之后它根本不出现。

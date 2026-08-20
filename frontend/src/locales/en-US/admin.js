@@ -1,11 +1,13 @@
-// Settings page (pages/admin/admin.vue) copy. The language section keeps its own bilingual ternaries.
+// Unified Settings page (components/admin/AdminPane.vue) copy. The language section keeps its own bilingual ternaries.
 export default {
   // Sidebar navigation
-  navCardTitle: 'System Administration',
+  navCardTitle: 'Settings',
   rerunWizard: 'Rerun Setup Wizard',
-  // A sibling switch, not a "back": settings and profile redirectTo each other;
-  // the real back is the global control (utils/globalBack.js)
-  backToProfile: 'Profile',
+  // The two sidebar groups (profile merged into settings, 2026-08-20)
+  navGroupPersonal: 'Personal',
+  navGroupSystem: 'System',
+  // Personal group: the other three entries reuse account.tab*
+  navPersonalSettings: 'Account & Security',
   navAi: 'AI Settings',
   navPlatform: 'Platform Services',
   navAccount: 'Account & Usage',

@@ -17,33 +17,53 @@
     <view class="admin-container">
       <!-- Sidebar -->
       <view class="admin-sidebar">
-        <view class="sidebar-logo-area">
-            <image src="/static/logo_full_v2.png" class="sidebar-logo" mode="heightFix" />
+        <!-- 用户信息卡取代了原来的纯 logo 头部（2026-08-20 个人中心并进本页）：
+             这一页现在同时是「我的」和「系统的」，顶上摆的应该是「我是谁」。
+             头像可点，走的还是原个人中心那条 uni.chooseImage + uploadAvatar。 -->
+        <view class="sidebar-user">
+          <view class="user-avatar-wrapper" @tap="triggerAvatarUpload">
+            <image
+              v-if="userInfo.avatarUrl"
+              class="user-avatar"
+              :src="userInfo.avatarUrl"
+              mode="aspectFill"
+            />
+            <view v-else class="user-avatar-placeholder">
+              <text class="avatar-text">{{ getInitial(userInfo.displayName) || 'U' }}</text>
+            </view>
+          </view>
+          <text class="user-name">{{ userInfo.displayName || $t('account.defaultUserName') }}</text>
+          <text class="user-handle">@{{ userInfo.username || userInfo.id || 'unknown' }}</text>
+          <view class="user-role-tag">
+            <text class="role-text">{{ $t('account.standardUserRole') }}</text>
+          </view>
         </view>
 
         <view class="nav-card">
             <view class="nav-card-header">
                 <text class="nav-card-title">{{ $t('admin.navCardTitle') }}</text>
             </view>
-            <view class="nav-list">
-                <view
-                  v-for="nav in visibleNavItems"
-                  :key="nav.key"
-                  class="nav-item"
-                  :class="{ active: activeNav === nav.key }"
-                  @tap="onNavTap(nav)"
-                >
-                  <text class="nav-text">{{ nav.label }}</text>
-                </view>
+            <!-- 两组：「个人」（原个人中心四栏）与「系统」（原系统设置各分区）。
+                 分组只是排版，可见性仍由 visibleNavItems 一处决定
+                 （desktopOnly + 系统组要 isAdmin）。 -->
+            <view v-for="group in navGroups" :key="group.key" class="nav-group">
+              <text class="nav-group-title">{{ group.label }}</text>
+              <view class="nav-list">
+                  <view
+                    v-for="nav in group.items"
+                    :key="nav.key"
+                    class="nav-item"
+                    :class="{ active: activeNav === nav.key }"
+                    @tap="onNavTap(nav)"
+                  >
+                    <text class="nav-text">{{ nav.label }}</text>
+                  </view>
+              </view>
             </view>
-            
-            <view class="nav-footer">
+
+            <view v-if="isAdminUser" class="nav-footer">
                 <view class="action-item" @tap="handleRerunWizard">
                   <text class="action-text">{{ $t('admin.rerunWizard') }}</text>
-                  <text class="action-arrow">›</text>
-                </view>
-                <view class="action-item" @tap="goToUserProfile">
-                  <text class="action-text">{{ $t('admin.backToProfile') }}</text>
                   <text class="action-arrow">›</text>
                 </view>
             </view>
@@ -1300,6 +1320,21 @@
         >
           <MarketPane :standalone="false" />
         </view>
+
+        <!-- 「个人」组四栏（2026-08-20 从个人中心并进来）。四段内容各自成组件，
+             都只在被选中时渲染，各自的 mounted 就是那一次数据加载。 -->
+        <scroll-view v-else-if="activeNav === 'work_log'" scroll-y class="config-scroll">
+          <PersonalWorkLogPanel />
+        </scroll-view>
+        <scroll-view v-else-if="activeNav === 'favorites'" scroll-y class="config-scroll">
+          <PersonalFavoritesPanel />
+        </scroll-view>
+        <scroll-view v-else-if="activeNav === 'todos'" scroll-y class="config-scroll">
+          <PersonalTodosPanel />
+        </scroll-view>
+        <scroll-view v-else-if="activeNav === 'personal_settings'" scroll-y class="config-scroll">
+          <PersonalSettingsPanel />
+        </scroll-view>
       </view>
     </view>
 
@@ -1314,7 +1349,7 @@ import {
   getStorageLocation, moveStorageLocation, resetStorageLocation,
   getLocalIdentityCandidates, selectLocalIdentity,
   getMemorySyncStatus, setMemorySyncRemote, removeMemorySyncRemote, syncMemoryNow,
-  getCurrentUser as fetchCurrentUser, getMyProjects,
+  getCurrentUser as fetchCurrentUser, getMyProjects, uploadAvatar,
   getTelemetrySettings, updateTelemetrySettings, getTelemetrySummary,
   fetchAiModels,
   getFeedbackList, getFeedbackDetail, getOptimizerStatus, runOptimizer, getApiBaseUrl,
@@ -1324,7 +1359,8 @@ import {
 import {
   platformServiceMeta, sortPlatformServices, localTierReady, refreshLocalAsrReadiness,
 } from '@/config/platformServices.js'
-import { getCurrentUser, getSessionId } from '@/utils/auth.js'
+import { getCurrentUser, getSessionId, setSessionUser } from '@/utils/auth.js'
+import { getInitial } from '@/utils/textInitial.js'
 import { getLastProjectId } from '@/utils/recentProjects.js'
 import { openExternalUrl } from '@/utils/externalLink.js'
 import { accountPageUrl, siteBaseUrl, loadSiteLinks, resetSiteLinks } from '@/utils/siteLinks.js'
@@ -1335,10 +1371,29 @@ import UnlockHint from '@/components/UnlockHint.vue'
 import MarketPane from '@/components/MarketPane.vue'
 import AwdSelect from '@/components/AwdSelect.vue'
 import AwdSwitch from '@/components/AwdSwitch.vue'
+import PersonalWorkLogPanel from '@/components/userprofile/PersonalWorkLogPanel.vue'
+import PersonalFavoritesPanel from '@/components/userprofile/PersonalFavoritesPanel.vue'
+import PersonalTodosPanel from '@/components/userprofile/PersonalTodosPanel.vue'
+import PersonalSettingsPanel from '@/components/userprofile/PersonalSettingsPanel.vue'
+
+/**
+ * 缓存里的登录用户是不是管理员。isAdmin 由 /api/auth/me 下发（桌面单机=全员管理员；
+ * 云端=仅 admin 账号），username==='admin' 兜底兼容缓存的旧 userInfo（无 isAdmin 字段）。
+ * **读不到用户时按管理员处理**：桌面单机免登下本来就没有会话缓存，按 false 起步会让
+ * 整个「系统」组在首帧消失、默认面板也落空。真值在 loadUserInfo() 里覆盖。
+ */
+function cachedIsAdmin() {
+  const u = getCurrentUser()
+  if (!u) return true
+  return u.isAdmin === true || u.username === 'admin'
+}
 
 export default {
   name: 'AdminPane',
-  components: { UnlockHint, MarketPane, AwdSelect, AwdSwitch },
+  components: {
+    UnlockHint, MarketPane, AwdSelect, AwdSwitch,
+    PersonalWorkLogPanel, PersonalFavoritesPanel, PersonalTodosPanel, PersonalSettingsPanel,
+  },
   props: {
     /** true = 嵌在工作台中栏的标签里（去掉整页的 40px 外边距，自己滚动） */
     embedded: { type: Boolean, default: false },
@@ -1349,24 +1404,41 @@ export default {
   },
   data() {
     return {
-      userDisplayName: this.$t('admin.userFallbackName'),
-      activeNav: 'ai',
+      // 侧栏用户卡（头像/昵称/@用户名）。loadUserInfo() 先读缓存再拉 /api/auth/me 合并。
+      userInfo: {
+        id: null,
+        username: '',
+        displayName: '',
+        avatarUrl: null,
+      },
+      // 「系统」组是否可见。原来这条规则长在个人中心的 checkAdminTab（只有管理员
+      // 才多出一个「系统设置」tab），两页合并后它就是这一处。
+      isAdminUser: cachedIsAdmin(),
+      // 非管理员进来时默认落个人组第一栏——落在一个自己看不见的面板上等于空白页
+      activeNav: cachedIsAdmin() ? 'ai' : 'work_log',
       /** 服务端记录的同意时间戳；空 = 未同意或告知文本已改版需重新征求 */
       crossBorderConsentAt: '',
+      // 两组导航。group 只决定排版分组，可见性一律在 visibleNavItems 里判。
       navItems: [
-        // 'config'（系统配置）已撤，内容分别并入 'ai' 与个人中心「设置」
-        { key: 'ai', label: this.$t('admin.navAi') },
+        // 「个人」组：2026-08-20 从个人中心搬来的四栏。key 刻意避开 'account'
+        //（系统组的「账户与用量」已经占了这个 key）。
+        { key: 'work_log', label: this.$t('account.tabWorkLog'), group: 'personal' },
+        { key: 'favorites', label: this.$t('account.tabFavorites'), group: 'personal' },
+        { key: 'todos', label: this.$t('account.tabTodos'), group: 'personal' },
+        { key: 'personal_settings', label: this.$t('admin.navPersonalSettings'), group: 'personal' },
+        // 「系统」组：'config'（系统配置）已撤，内容分别并入 'ai' 与「账户与安全」
+        { key: 'ai', label: this.$t('admin.navAi'), group: 'system' },
         // 平台服务对团队服务器同样要可见：平台档在那里不可选，但那 21 个 BYOK 凭证字段
         // 已经搬进这个面板，标成 desktopOnly 会让自建服务器的管理员没地方填。
-        { key: 'platform', label: this.$t('admin.navPlatform') },
-        { key: 'account', label: this.$t('admin.navAccount'), desktopOnly: true },
-        { key: 'components', label: this.$t('admin.navComponents'), desktopOnly: true },
-        { key: 'updates', label: this.$t('admin.navUpdates'), desktopOnly: true },
-        { key: 'cloud', label: this.$t('admin.navCloud'), desktopOnly: true },
-        { key: 'memory', label: this.$t('admin.navMemory'), desktopOnly: true },
-        { key: 'telemetry', label: this.$t('admin.navTelemetry') },
-        { key: 'feedback', label: this.$t('admin.navFeedback') },
-        { key: 'plugins', label: this.$t('admin.navPlugins') },
+        { key: 'platform', label: this.$t('admin.navPlatform'), group: 'system' },
+        { key: 'account', label: this.$t('admin.navAccount'), group: 'system', desktopOnly: true },
+        { key: 'components', label: this.$t('admin.navComponents'), group: 'system', desktopOnly: true },
+        { key: 'updates', label: this.$t('admin.navUpdates'), group: 'system', desktopOnly: true },
+        { key: 'cloud', label: this.$t('admin.navCloud'), group: 'system', desktopOnly: true },
+        { key: 'memory', label: this.$t('admin.navMemory'), group: 'system', desktopOnly: true },
+        { key: 'telemetry', label: this.$t('admin.navTelemetry'), group: 'system' },
+        { key: 'feedback', label: this.$t('admin.navFeedback'), group: 'system' },
+        { key: 'plugins', label: this.$t('admin.navPlugins'), group: 'system' },
       ],
       // 用户反馈与优化者（右下角浮窗提交 → 优化者分诊 → 开 PR / 发邮件）
       feedbackList: [],
@@ -1519,8 +1591,23 @@ export default {
       const entitled = this.storageLocation.entitled
       return entitled === undefined || entitled === null ? this.stageUnlimited : !!entitled
     },
+    // 可见性只有这一处：desktopOnly（浏览器端没有的能力）+ 系统组要管理员。
+    // 个人组对所有人可见，客户视图也一样——他也有自己的工作记录与账号安全。
     visibleNavItems() {
-      return this.navItems.filter((n) => !n.desktopOnly || this.isDesktop)
+      return this.navItems.filter((n) => {
+        if (n.desktopOnly && !this.isDesktop) return false
+        if (n.group === 'system' && !this.isAdminUser) return false
+        return true
+      })
+    },
+    navGroups() {
+      const groups = [
+        { key: 'personal', label: this.$t('admin.navGroupPersonal') },
+        { key: 'system', label: this.$t('admin.navGroupSystem') },
+      ]
+      return groups
+        .map((g) => ({ ...g, items: this.visibleNavItems.filter((n) => n.group === g.key) }))
+        .filter((g) => g.items.length > 0)
     },
     // 「平台服务」的每一行：当前档位标签 + 可切的档位清单 + 说明。
     //
@@ -1744,10 +1831,7 @@ export default {
     },
   },
   mounted() {
-    const user = getCurrentUser()
-    if (user) {
-      this.userDisplayName = user.displayName || user.username || this.$t('admin.userFallbackName')
-    }
+    this.loadUserInfo()
     // 深链定位面板（顶栏「已连接账户」chip → ?nav=account）；只认当前可见的本页面板
     const nav = this.initialNav
     if (nav && this.visibleNavItems.some((n) => n.key === nav)) {
@@ -1759,9 +1843,11 @@ export default {
     if (nav === 'platform' && svc) {
       this.platformByokOpen = { ...this.platformByokOpen, [svc]: true }
     }
-    this.loadConfig()
-    this.loadModelCatalog()
-    this.loadTelemetry()
+    // 系统组的三条初始加载只有管理员打得动（/api/admin/* 对普通账号是 403，
+    // 会弹一条「请用 admin 账号登录」的 toast）。个人中心并进来之后，非管理员
+    // 也会打开这一页，不能让他一进来就吃这条提示。真值到手后在 loadUserInfo()
+    // 里补跑一次。
+    this.loadAdminSections()
     // 官网链接预热：本页多处「跳官网」（取 Key、解锁提示、广场购买）都是同步取地址，
     // 而 siteLinks 的模块缓存不会被面板自己的 getSiteStatus 顺带填上。
     // 不预热时第一次点击只能拿到兜底站点，国际站用户会被送到没有他账户的站
@@ -1959,20 +2045,65 @@ export default {
         this.loadComponents()
       }
     },
-    // 设置页与个人中心是**同级**的两个页面，互跳一律 redirectTo（替换本页）而不是
-    // navigateTo（往栈里再压一页）。压栈的旧写法配上个人中心那边的 navigateBack，
-    // 形成了 admin ⇄ 个人中心互相弹的死循环——从工作台点进设置的人再也回不到项目。
-    // 替换之后栈始终是 [来处, 当前设置页]，全局返回键一步就能回到来处。
-    //
-    // 嵌在工作台标签里时这条逻辑不成立：那里本页并不占页面栈的一格，redirectTo
-    // 会把整个工作台（标签、编辑器、AI 会话）替换掉。工作台 → 个人中心一律
-    // navigateTo（它依赖页面栈保留实例以便 onShow 回流刷新）。
-    goToUserProfile() {
-      if (this.embedded) {
-        uni.navigateTo({ url: '/pages/userprofile/userprofile' })
-        return
+    // Options API 模板拿不到裸导入函数，包一层 method 才能在模板里当 getInitial(...) 调用
+    getInitial,
+    /**
+     * 侧栏用户卡的数据 + 「系统」组的可见性。先用缓存的登录用户渲染，再拉
+     * /api/auth/me 校正（缓存的登录响应里没有 isAdmin 这类字段）。
+     */
+    async loadUserInfo() {
+      const cached = getCurrentUser()
+      if (cached) {
+        this.userInfo = { ...this.userInfo, ...cached }
       }
-      uni.redirectTo({ url: '/pages/userprofile/userprofile' })
+      try {
+        const res = await fetchCurrentUser()
+        if (res.code === 0 && res.data) {
+          this.userInfo = { ...this.userInfo, ...res.data }
+          const wasAdmin = this.isAdminUser
+          this.isAdminUser = res.data.isAdmin === true || this.userInfo.username === 'admin'
+          // 缓存说不是管理员、服务端说是：把先前跳过的那三条初始加载补上
+          if (!wasAdmin && this.isAdminUser) this.loadAdminSections()
+          // 反过来：停在一个自己看不见的面板上等于空白页，落回个人组第一栏
+          if (!this.visibleNavItems.some((n) => n.key === this.activeNav)) {
+            this.onNavTap({ key: 'work_log' })
+          }
+        }
+      } catch (e) {
+        console.error('获取用户信息失败:', e)
+      }
+    },
+    /** 「系统」组的初始加载。只有管理员打得动，非管理员一律跳过（见 mounted 的注释） */
+    loadAdminSections() {
+      if (!this.isAdminUser) return
+      this.loadConfig()
+      this.loadModelCatalog()
+      this.loadTelemetry()
+    },
+    triggerAvatarUpload() {
+      uni.chooseImage({
+        count: 1,
+        sizeType: ['compressed'],
+        sourceType: ['album', 'camera'],
+        success: async (res) => {
+          const tempFilePath = res.tempFilePaths[0]
+          try {
+            uni.showLoading({ title: this.$t('account.uploadingTitle') })
+            const result = await uploadAvatar(tempFilePath)
+            if (result.data && result.data.avatarUrl) {
+              this.userInfo = { ...this.userInfo, avatarUrl: result.data.avatarUrl }
+              // Update local storage/session
+              setSessionUser(this.userInfo)
+              uni.showToast({ title: this.$t('account.avatarUpdateSuccess'), icon: 'success' })
+            }
+          } catch (e) {
+            console.error('Avatar upload failed', e)
+            uni.showToast({ title: this.$t('account.avatarUploadFailed', { message: e.message }), icon: 'none' })
+          } finally {
+            uni.hideLoading()
+          }
+        },
+      })
     },
     // 重跑首次向导：重置 completed 标记后跳向导页。已有配置不清空，
     // 向导提交时按新填内容覆盖对应 key。
@@ -3012,11 +3143,6 @@ $border-color: #E9ECEF; // Gray-Light
   padding: 20px 16px;
 }
 
-/* 工作台顶栏那条已经有 logo 了，标签里再来一个是重复噪声 */
-.page-admin.is-embedded .sidebar-logo-area {
-  display: none;
-}
-
 .admin-container {
   max-width: 1200px;
   margin: 0 auto;
@@ -3034,17 +3160,75 @@ $border-color: #E9ECEF; // Gray-Light
   flex-direction: column;
 }
 
-.sidebar-logo-area {
+/* 侧栏顶部的用户卡（取代原来的 logo 头部）。样式沿用原个人中心那张卡，
+   只是不再单独占一张白卡片——它就是侧栏的头。 */
+.sidebar-user {
     display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 12px;
-    margin-bottom: 24px;
-    padding-left: 8px;
+    padding: 20px 16px 24px;
+    margin-bottom: 16px;
+    background: $brand-white;
+    border-radius: 16px;
+    box-shadow: 0 4px 16px rgba(18, 52, 77, 0.05);
+    border: 1px solid rgba(0, 0, 0, 0.02);
 }
 
-.sidebar-logo {
-    height: 32px;
-    width: auto;
+.user-avatar-wrapper {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    overflow: hidden;
+    margin-bottom: 14px;
+    background-color: #eef2f5;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    cursor: pointer;
+}
+
+.user-avatar {
+    width: 100%;
+    height: 100%;
+}
+
+.user-avatar-placeholder {
+    width: 100%;
+    height: 100%;
+    background: #212629;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.avatar-text {
+    font-size: 28px;
+    color: #fff;
+    font-weight: 500;
+}
+
+.user-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: $text-main;
+    margin-bottom: 4px;
+}
+
+.user-handle {
+    font-size: 13px;
+    color: $text-secondary;
+    margin-bottom: 10px;
+}
+
+.user-role-tag {
+    background: rgba(26, 83, 54, 0.08);
+    padding: 4px 12px;
+    border-radius: 4px;
+    border: 1px solid rgba(26, 83, 54, 0.1);
+}
+
+.role-text {
+    font-size: 12px;
+    color: $brand-primary;
+    font-weight: 500;
 }
 
 .nav-card {
@@ -3070,6 +3254,21 @@ $border-color: #E9ECEF; // Gray-Light
    color: $text-secondary;
    text-transform: uppercase;
    letter-spacing: 0.5px;
+}
+
+/* 分组（个人 / 系统）。组标题只是排版，别把它做成可点的东西 */
+.nav-group + .nav-group {
+    margin-top: 16px;
+}
+
+.nav-group-title {
+    display: block;
+    padding: 0 24px 6px;
+    font-size: 11px;
+    font-weight: 700;
+    color: #ADB5BD;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
 }
 
 .nav-list {
