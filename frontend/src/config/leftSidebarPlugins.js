@@ -90,6 +90,21 @@ export const LEFT_SIDEBAR_PLUGINS = [
     ]
   },
   {
+    // 插件开发：项目里的「插件开发/<id>/」目录，每个子文件夹是一个插件的源码
+    // （manifest.json + web/index.html 等）。面板列出这些插件项目，提供新建/装到
+    // 本机/卸载/交给 AI 开发/打开运行五个动作。requiresSkill 门控形制照抄
+    // litigation-visual 的先例——默认不装，装了 skill 才在 rail 上出现。
+    key: 'dev',
+    label: t('config.sidebar.dev'),
+    requiresSkill: 'plugin-dev',
+    // 尖括号（代码/开发意象）
+    svgPaths: [
+      { d: 'M9 8l-5 4 5 4' },
+      { d: 'M15 8l5 4-5 4' },
+      { d: 'M13 5l-2 14' }
+    ]
+  },
+  {
     // 语音：语音合成 + 会议录音的合并入口（2026-08-19）。两者都是语音功能，
     // 各占一个 rail 位纯属浪费；面板内部用两个 tab 切换，组件本身一行没改。
     //

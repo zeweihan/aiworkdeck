@@ -167,6 +167,8 @@ export default {
   removed: '已移出',
   removeFailed: '没能移出',
   aiPanelNotReady: 'AI 面板未就绪，请稍后重试',
+  // 插件开发面板「让 AI 开发」的 kick-off prompt：必须以「插件开发」开头才能命中 skill 注入
+  pluginDevAiPrompt: '插件开发：请继续开发本项目「插件开发/{id}/」目录下的插件「{name}」（文件夹 ID {folderId}）。先读取该目录下的 manifest.json 与 web/ 源码了解现状，然后按我的需求迭代；改完用 plugin_dev_install 安装到本机让我测试。',
   projectNameEmpty: '项目名称不能为空',
   renameSuccess: '重命名成功',
   renameFailed: '重命名失败',

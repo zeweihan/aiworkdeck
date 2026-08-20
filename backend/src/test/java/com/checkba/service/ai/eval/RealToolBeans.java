@@ -11,6 +11,7 @@ import com.checkba.service.ai.tools.MeetingTools;
 import com.checkba.service.ai.tools.MemoryTools;
 import com.checkba.service.ai.tools.OfficeEditTools;
 import com.checkba.service.ai.tools.PdfTools;
+import com.checkba.service.ai.tools.PluginDevTools;
 import com.checkba.service.ai.tools.PptxTools;
 import com.checkba.service.ai.tools.PythonTools;
 import com.checkba.service.ai.tools.SubAgentTools;
@@ -52,6 +53,7 @@ final class RealToolBeans {
                 MemoryTools.class,
                 OfficeEditTools.class,
                 PdfTools.class,
+                PluginDevTools.class,
                 PptxTools.class,
                 PythonTools.class,
                 SubAgentTools.class,
