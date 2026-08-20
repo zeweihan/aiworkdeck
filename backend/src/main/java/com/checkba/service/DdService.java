@@ -23,6 +23,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class DdService {
 
+    /** 尽调清单的父子链深度上限：既是环检测的步数保护，也挡住异常深的层级。 */
+    private static final int MAX_DD_TREE_DEPTH = 100;
+
     private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(DdService.class);
 
     private final DdRequestRepository ddRequestRepository;
@@ -352,8 +355,12 @@ public class DdService {
         if (newParentId != null) {
             // Check loop
             if (itemId.equals(newParentId)) throw new IllegalArgumentException("不能移动到自己下面");
-            // TODO: check deeper loops if needed
-            
+            // 深层环检测（原来是一句 TODO）：只挡「移到自己身上」挡不住「移到自己的子孙身上」。
+            // 一旦成环（A.parent=B 且 B 在 A 的子树里），凡是顺着父子关系走的代码都会打转——
+            // deleteItem 的递归删子项会直接 StackOverflowError，前端建树也拼不出来，
+            // 而且这条坏数据**存进库里就再也移不回来**（每次操作都先撞上死循环）。
+            rejectIfDescendant(itemId, newParentId);
+
             DdItem newParent = ddItemRepository.findById(newParentId).orElseThrow(() -> new IllegalArgumentException("父项不存在"));
             item.setParentId(newParentId);
             item.setLevel(newParent.getLevel() + 1);
@@ -365,6 +372,28 @@ public class DdService {
         return ddItemRepository.save(item);
     }
 
+
+    /**
+     * 目标父节点是不是自己的子孙——是就拒绝，否则会在树里成环。
+     *
+     * <p>从目标父节点顺着 parentId 往上爬到根：路上遇到 itemId 说明它在 itemId 的子树里。
+     * 同时带一个步数上限，万一库里已经有历史坏数据（成环），这里也不会跟着一起打转。
+     */
+    private void rejectIfDescendant(Long itemId, Long newParentId) {
+        Long cursor = newParentId;
+        int guard = 0;
+        while (cursor != null && guard++ < MAX_DD_TREE_DEPTH) {
+            if (cursor.equals(itemId)) {
+                throw new IllegalArgumentException("不能移动到自己的子项下面");
+            }
+            DdItem node = ddItemRepository.findById(cursor).orElse(null);
+            if (node == null) break;
+            cursor = node.getParentId();
+        }
+        if (guard >= MAX_DD_TREE_DEPTH) {
+            throw new IllegalArgumentException("清单层级异常（疑似已有循环引用），请刷新后重试");
+        }
+    }
 
     /**
      * 删除项

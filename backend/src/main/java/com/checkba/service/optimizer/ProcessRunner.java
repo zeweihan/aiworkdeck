@@ -42,18 +42,47 @@ public interface ProcessRunner {
                 // 两条流合一：只读 stdout 再 waitFor 的写法，会在 stderr 缓冲区写满时死锁
                 pb.redirectErrorStream(true);
                 Process p = pb.start();
-                String out = read(p.getInputStream());
+                // 输出必须在**另一条线程**上读。原来是先 read(...) 读到 EOF、再 waitFor(timeout)：
+                // readAllBytes 只有在进程退出（或自己关掉 stdout）时才返回，于是「卡住但没退出」
+                // 的进程会把调用线程永久阻塞在 read 里，waitFor 的超时根本没机会执行——
+                // 而这正是超时存在的唯一理由（进程正常退出时 waitFor 本来就立刻返回）。
+                java.util.concurrent.CompletableFuture<String> reader =
+                        java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+                            try {
+                                return read(p.getInputStream());
+                            } catch (Exception e) {
+                                return "";
+                            }
+                        }, OUTPUT_READERS);
                 boolean done = p.waitFor(Math.max(1, timeoutSeconds), TimeUnit.SECONDS);
                 if (!done) {
                     p.destroyForcibly();
-                    return new Result(-1, out, "[超时 " + timeoutSeconds + "s，已终止]");
+                    // 强杀后管道关闭，reader 随即返回已读到的部分输出；再等一小会儿就够
+                    return new Result(-1, partial(reader), "[超时 " + timeoutSeconds + "s，已终止]");
                 }
-                return new Result(p.exitValue(), out, "");
+                return new Result(p.exitValue(), partial(reader), "");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return new Result(-1, "", "被中断: " + e);
             } catch (Exception e) {
                 return new Result(-1, "", String.valueOf(e));
+            }
+        }
+
+        /** 读子进程输出的守护线程池：绝不能是非守护线程，否则卡住的读会拖住 JVM 退出。 */
+        private static final java.util.concurrent.ExecutorService OUTPUT_READERS =
+                java.util.concurrent.Executors.newCachedThreadPool(r -> {
+                    Thread t = new Thread(r, "proc-output-reader");
+                    t.setDaemon(true);
+                    return t;
+                });
+
+        /** 取已读到的输出；读线程若还卡着就返回空串，绝不把调用方再拖进去。 */
+        private static String partial(java.util.concurrent.CompletableFuture<String> reader) {
+            try {
+                return reader.get(5, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                return "";
             }
         }
 
