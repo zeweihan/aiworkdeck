@@ -134,6 +134,12 @@ export default {
     readFailed: 'Failed to read the file ({status})',
     fileEmpty: 'The file is empty',
     saveFailed: 'Failed to save',
+    installHint: 'The diagram editor component isn\'t installed yet. Install it to keep editing this diagram.',
+    installPack: 'Install Diagram Editor Component',
+    installPackDownloading: 'Installing…',
+    installPackProgress: 'Downloading… {downloaded} / {total} MB',
+    installPackRetry: 'Install failed, retry',
+    installPackFailed: 'Installation failed',
   },
   // Self-built toolbar (EditorToolbar.vue): tooltips, dropdowns and the find bar.
   toolbar: {

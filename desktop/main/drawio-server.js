@@ -227,4 +227,4 @@ async function stopDrawioServer() {
   } catch (e) { /* 起都没起来，无需关闭 */ }
 }
 
-module.exports = { startDrawioServer, stopDrawioServer, drawioUrl, isAvailable }
+module.exports = { startDrawioServer, stopDrawioServer, drawioUrl, isAvailable, PACK_ID }

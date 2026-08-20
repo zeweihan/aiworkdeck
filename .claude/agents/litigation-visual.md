@@ -213,6 +213,16 @@ Python 下限 **3.11**（与打包运行时一致）。引擎原本要 3.12+，�
 - 上游 `doctor.py` 自称「Python ≥ 3.9」与实际不符（见 PATCHES.md PATCH 2）；
   `schemas/` 的 layout 枚举曾漏 `comparison_table`（PATCH 3）。**升级引擎后
   重跑 `litviz/tests/test_cli.py`，别信上游的自述。**
+- **`.drawio` 打不开不能只说「没有编辑器」就完事**：v0.21.0 摘除随包 drawio 资源后，
+  `checkba:drawio-editor`（`desktop/main/main.js`）在 `isAvailable()` 为假时除了
+  `available:false` 还要带上 `packId:'litigation-visual'`（`drawio-server.js` 导出的
+  `PACK_ID` 常量），`DrawioEditor.vue` 桌面态下才能在 unavailable 分支画出「安装图形
+  编辑器组件」主按钮——复用 `packInfo`/`packInstall`/`packStatus`（`services/api.js`）
+  与 `LitigationVisualPanel.vue` 同一套轮询模式，`state:'ready'` 后自动重新 `boot()`
+  挂载编辑器，不用用户再点一次。Web 部署没有这条路（`host.js` 的 Web 能力表 `getEditor()`
+  从不带 `packId`），仍是「下载文件」兜底。这条不是给 draw.io 专属加的特权——任何后续
+  「资源摘出安装包、改走 native pack」的功能点想做到「打不开时能当场装」，都是这个形状：
+  IPC/接口把 `packId` 带出来，前端拿它去连 packInstall/packStatus。
 
 ## 验证
 
