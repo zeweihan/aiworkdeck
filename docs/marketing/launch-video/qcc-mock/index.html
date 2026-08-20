@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>企查查复刻页（演示素材）</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+  :root {
+    --qcc-blue: #1e5eff;
+    --qcc-blue-dark: #1546c9;
+    --qcc-blue-pale: #eef3ff;
+    --qcc-text: #1a1d29;
+    --qcc-text-sub: #767a8a;
+    --qcc-border: #e6e8ee;
+    --qcc-bg: #f5f6fa;
+    --qcc-green: #17b881;
+    --qcc-green-bg: #e9faf3;
+    --qcc-red: #f5483b;
+    --qcc-red-bg: #fdecea;
+    --qcc-orange: #ff9933;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--qcc-bg);
+    color: var(--qcc-text);
+    font-family: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+
+  /* ---------- 顶部导航 ---------- */
+  .qcc-topbar {
+    background: var(--qcc-text);
+    color: #cfd3e6;
+    font-size: 12px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    padding: 0 40px;
+    justify-content: space-between;
+  }
+  .qcc-topbar .links span { margin-left: 18px; color: #cfd3e6; }
+  .qcc-topbar .links span:first-child { margin-left: 0; }
+
+  .qcc-nav {
+    background: #ffffff;
+    border-bottom: 1px solid var(--qcc-border);
+    display: flex;
+    align-items: center;
+    height: 64px;
+    padding: 0 40px;
+    gap: 32px;
+  }
+  .qcc-logo {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .qcc-logo .mark {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    background: linear-gradient(135deg, var(--qcc-blue), var(--qcc-blue-dark));
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 18px;
+    margin-right: 4px;
+  }
+  .qcc-logo .word {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--qcc-blue);
+    letter-spacing: 1px;
+  }
+  .qcc-logo .tagline {
+    font-size: 11px;
+    color: var(--qcc-text-sub);
+    margin-left: 6px;
+    border-left: 1px solid var(--qcc-border);
+    padding-left: 8px;
+  }
+  .qcc-navlinks {
+    display: flex;
+    gap: 28px;
+    font-size: 14px;
+    color: #444a5c;
+    flex-shrink: 0;
+  }
+  .qcc-navlinks .active { color: var(--qcc-blue); font-weight: 600; position: relative; }
+  .qcc-navlinks .active::after {
+    content: "";
+    position: absolute;
+    left: 0; right: 0; bottom: -21px;
+    height: 2px;
+    background: var(--qcc-blue);
+  }
+  .qcc-search {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    max-width: 480px;
+    height: 38px;
+    border: 1.5px solid var(--qcc-blue);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .qcc-search input {
+    border: none;
+    outline: none;
+    flex: 1;
+    height: 100%;
+    padding: 0 14px;
+    font-size: 14px;
+    color: var(--qcc-text);
+  }
+  .qcc-search button {
+    background: var(--qcc-blue);
+    color: #fff;
+    border: none;
+    height: 100%;
+    padding: 0 22px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  /* ---------- 顶部公司切换 ---------- */
+  .company-switch {
+    background: #ffffff;
+    border-bottom: 1px solid var(--qcc-border);
+    padding: 0 40px;
+    display: flex;
+    gap: 4px;
+  }
+  .company-switch button {
+    border: none;
+    background: transparent;
+    padding: 14px 20px;
+    font-size: 14px;
+    color: var(--qcc-text-sub);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .company-switch button.active {
+    color: var(--qcc-blue);
+    font-weight: 600;
+    border-bottom-color: var(--qcc-blue);
+  }
+
+  .qcc-main {
+    max-width: 1720px;
+    margin: 20px auto;
+    padding: 0 40px 60px;
+  }
+
+  /* ---------- 面包屑 ---------- */
+  .crumb {
+    font-size: 12px;
+    color: var(--qcc-text-sub);
+    margin-bottom: 14px;
+  }
+  .crumb .cur { color: var(--qcc-text); }
+
+  /* ---------- 公司信息头 ---------- */
+  .company-header {
+    background: #fff;
+    border: 1px solid var(--qcc-border);
+    border-radius: 6px;
+    padding: 26px 28px;
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+  }
+  .company-avatar {
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    background: var(--qcc-blue-pale);
+    color: var(--qcc-blue);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 26px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .company-title-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .company-title-row h1 {
+    font-size: 22px;
+    margin: 0;
+    font-weight: 700;
+  }
+  .tag {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 3px;
+    line-height: 1.8;
+  }
+  .tag-status { background: var(--qcc-green-bg); color: var(--qcc-green); }
+  .tag-risk { background: var(--qcc-red-bg); color: var(--qcc-red); }
+  .company-meta {
+    margin-top: 12px;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(260px, 1fr));
+    gap: 8px 40px;
+    font-size: 13px;
+    color: #444a5c;
+  }
+  .company-meta .k { color: var(--qcc-text-sub); margin-right: 6px; }
+  .company-actions {
+    margin-left: auto;
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .btn {
+    border-radius: 4px;
+    padding: 8px 16px;
+    font-size: 13px;
+    cursor: pointer;
+    border: 1px solid var(--qcc-border);
+    background: #fff;
+    color: #444a5c;
+  }
+  .btn-primary {
+    background: var(--qcc-blue);
+    border-color: var(--qcc-blue);
+    color: #fff;
+  }
+
+  /* ---------- 主体两栏 ---------- */
+  .body-grid {
+    display: grid;
+    grid-template-columns: 1fr 300px;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .panel {
+    background: #fff;
+    border: 1px solid var(--qcc-border);
+    border-radius: 6px;
+  }
+  .tabbar {
+    display: flex;
+    gap: 6px;
+    padding: 0 20px;
+    border-bottom: 1px solid var(--qcc-border);
+  }
+  .tabbar button {
+    border: none;
+    background: transparent;
+    padding: 16px 6px;
+    margin-right: 26px;
+    font-size: 15px;
+    color: #444a5c;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .tabbar button.active {
+    color: var(--qcc-blue);
+    font-weight: 600;
+    border-bottom-color: var(--qcc-blue);
+  }
+  .tabbar button .count {
+    display: inline-block;
+    margin-left: 4px;
+    background: var(--qcc-red);
+    color: #fff;
+    font-size: 11px;
+    border-radius: 8px;
+    padding: 0 6px;
+  }
+  .tabpage { padding: 24px 28px 30px; display: none; }
+  .tabpage.active { display: block; }
+
+  .info-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  .info-table td {
+    padding: 12px 16px;
+    font-size: 13px;
+    border-bottom: 1px solid #f0f1f5;
+    vertical-align: top;
+  }
+  .info-table td.label {
+    width: 140px;
+    color: var(--qcc-text-sub);
+    background: #fafbfd;
+  }
+  .info-table td.value { color: var(--qcc-text); }
+
+  .section-title {
+    font-size: 15px;
+    font-weight: 700;
+    margin: 26px 0 12px;
+    padding-left: 10px;
+    border-left: 3px solid var(--qcc-blue);
+  }
+  .section-title:first-child { margin-top: 0; }
+
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  table.data-table th {
+    background: #fafbfd;
+    color: var(--qcc-text-sub);
+    text-align: left;
+    font-weight: 500;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--qcc-border);
+  }
+  table.data-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #f0f1f5;
+  }
+  table.data-table tr:last-child td { border-bottom: none; }
+  .link-blue { color: var(--qcc-blue); }
+  .pct { color: var(--qcc-blue); font-weight: 600; }
+
+  /* ---------- 风险页 ---------- */
+  .risk-alert {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--qcc-red-bg);
+    color: var(--qcc-red);
+    padding: 12px 16px;
+    border-radius: 4px;
+    font-size: 13px;
+    margin-bottom: 18px;
+  }
+  .risk-alert.ok { background: var(--qcc-green-bg); color: var(--qcc-green); }
+  .risk-alert .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: currentColor; flex-shrink: 0;
+  }
+  .case-no { color: var(--qcc-blue); font-weight: 600; }
+  .status-chip {
+    display: inline-block;
+    font-size: 12px;
+    padding: 1px 8px;
+    border-radius: 3px;
+    background: var(--qcc-red-bg);
+    color: var(--qcc-red);
+  }
+
+  /* ---------- 侧栏 ---------- */
+  .side-card { padding: 20px; border-bottom: 1px solid var(--qcc-border); }
+  .side-card:last-child { border-bottom: none; }
+  .side-card h3 {
+    font-size: 14px;
+    margin: 0 0 14px;
+    font-weight: 700;
+  }
+  .risk-score {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .risk-ring {
+    width: 78px;
+    height: 78px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+    background: conic-gradient(var(--qcc-orange) 0% 62%, #eceef4 62% 100%);
+    position: relative;
+  }
+  .risk-ring::after {
+    content: "";
+    position: absolute;
+    width: 58px; height: 58px;
+    border-radius: 50%;
+    background: #fff;
+  }
+  .risk-ring span { position: relative; color: var(--qcc-orange); }
+  .risk-score .desc { font-size: 12px; color: var(--qcc-text-sub); line-height: 1.7; }
+  .kv-list div {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    padding: 7px 0;
+    color: #444a5c;
+    border-bottom: 1px dashed #f0f1f5;
+  }
+  .kv-list div:last-child { border-bottom: none; }
+  .kv-list .k { color: var(--qcc-text-sub); }
+
+  /* ---------- 股权穿透 ---------- */
+  .equity-wrap {
+    background: #fbfbfd;
+    border: 1px solid var(--qcc-border);
+    border-radius: 6px;
+    padding: 30px 10px 10px;
+  }
+  .equity-caption {
+    font-size: 12px;
+    color: var(--qcc-text-sub);
+    margin: 8px 0 0 14px;
+  }
+
+  /* ---------- 角标 ---------- */
+  .demo-badge {
+    position: fixed;
+    right: 14px;
+    bottom: 10px;
+    font-size: 11px;
+    color: #b7bcce;
+    background: rgba(255,255,255,0.7);
+    padding: 2px 8px;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    z-index: 999;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="qcc-topbar">
+  <div class="links">
+    <span>企查查 · 让商业更透明</span>
+  </div>
+  <div class="links">
+    <span>APP下载</span>
+    <span>企业服务</span>
+    <span>登录</span>
+    <span>免费注册</span>
+  </div>
+</div>
+
+<div class="qcc-nav">
+  <div class="qcc-logo">
+    <div class="mark">企</div>
+    <span class="word">企查查</span>
+    <span class="tagline">企业信用信息查询平台</span>
+  </div>
+  <div class="qcc-navlinks">
+    <span class="active">企业查询</span>
+    <span>老板查询</span>
+    <span>风险监控</span>
+    <span>核查报告</span>
+    <span>财税服务</span>
+  </div>
+  <div class="qcc-search">
+    <input id="qcc-search-input" type="text" value="星澜科技（上海）有限公司" readonly>
+    <button type="button">搜索</button>
+  </div>
+</div>
+
+<div class="company-switch">
+  <button class="active" data-company="c1" onclick="switchCompany('c1', this)">星澜科技（上海）有限公司</button>
+  <button data-company="c2" onclick="switchCompany('c2', this)">星澜网络科技有限公司</button>
+  <button data-company="c3" onclick="switchCompany('c3', this)">星澜信息技术（苏州）有限公司</button>
+</div>
+
+<div class="qcc-main">
+
+  <div class="crumb">首页 &nbsp;›&nbsp; 企业查询 &nbsp;›&nbsp; <span class="cur" id="crumb-name">星澜科技（上海）有限公司</span></div>
+
+  <div class="company-header">
+    <div class="company-avatar" id="avatar-letter">星</div>
+    <div style="flex:1">
+      <div class="company-title-row">
+        <h1 id="company-name">星澜科技（上海）有限公司</h1>
+        <span class="tag tag-status">存续</span>
+        <span class="tag tag-risk" id="risk-tag">2条被执行记录</span>
+      </div>
+      <div class="company-meta">
+        <div><span class="k">法定代表人</span><span id="m-oper">陈曦</span></div>
+        <div><span class="k">注册资本</span><span id="m-capital">5000万人民币</span></div>
+        <div><span class="k">成立日期</span><span id="m-start">2015-06-12</span></div>
+        <div><span class="k">统一社会信用代码</span><span id="m-no">91310115MA1GN8XQ4X</span></div>
+        <div><span class="k">纳税人识别号</span><span id="m-taxno">91310115MA1GN8XQ4X</span></div>
+        <div><span class="k">登记机关</span><span id="m-authority">上海市浦东新区市场监督管理局</span></div>
+        <div style="grid-column: 1 / -1;"><span class="k">注册地址</span><span id="m-address">上海市浦东新区蓝天路588号星澜大厦12层</span></div>
+      </div>
+    </div>
+    <div class="company-actions">
+      <button class="btn">发送短信</button>
+      <button class="btn btn-primary">生成公司名片</button>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <div class="panel">
+      <div class="tabbar">
+        <button class="active" data-tab="basic" onclick="switchTab('basic', this)">工商信息</button>
+        <button data-tab="equity" onclick="switchTab('equity', this)">股权穿透</button>
+        <button data-tab="shareholders" onclick="switchTab('shareholders', this)">股东信息</button>
+        <button data-tab="risk" onclick="switchTab('risk', this)">风险信息 <span class="count" id="risk-count">2</span></button>
+      </div>
+
+      <!-- 工商信息 -->
+      <div class="tabpage active" data-page="basic">
+        <div class="section-title">工商信息</div>
+        <table class="info-table">
+          <tr><td class="label">公司名称</td><td class="value" id="b-name">星澜科技（上海）有限公司</td><td class="label">登记状态</td><td class="value">存续</td></tr>
+          <tr><td class="label">法定代表人</td><td class="value" id="b-oper">陈曦</td><td class="label">注册资本</td><td class="value" id="b-capital">5000万人民币</td></tr>
+          <tr><td class="label">成立日期</td><td class="value" id="b-start">2015-06-12</td><td class="label">统一社会信用代码</td><td class="value" id="b-no">91310115MA1GN8XQ4X</td></tr>
+          <tr><td class="label">企业类型</td><td class="value">有限责任公司（非自然人投资或控股的法人独资）</td><td class="label">营业期限</td><td class="value">2015-06-12 至 无固定期限</td></tr>
+          <tr><td class="label">注册地址</td><td class="value" colspan="3" id="b-address">上海市浦东新区蓝天路588号星澜大厦12层</td></tr>
+          <tr><td class="label">经营范围</td><td class="value" colspan="3" id="b-scope">计算机软件开发、软件外包服务、信息技术咨询服务、企业管理咨询、市场营销策划等</td></tr>
+        </table>
+
+        <div class="section-title">主要人员</div>
+        <table class="data-table">
+          <thead><tr><th>姓名</th><th>职务</th></tr></thead>
+          <tbody id="employees-body">
+            <tr><td>陈曦</td><td>法定代表人、执行董事</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 股权穿透 -->
+      <div class="tabpage" data-page="equity">
+        <div class="section-title">股权穿透图</div>
+        <div class="equity-wrap">
+          <svg viewBox="0 0 1180 460" width="100%" height="460" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+                <path d="M0,0 L6,3 L0,6 Z" fill="#8b91a7"></path>
+              </marker>
+            </defs>
+
+            <!-- 自然人层 -->
+            <rect x="430" y="18" width="150" height="54" rx="6" fill="#fff2e0" stroke="#f0a93a" stroke-width="2"></rect>
+            <text x="505" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="#c9720a">沈某某</text>
+            <text x="505" y="58" text-anchor="middle" font-size="11" fill="#c9720a">实际控制人（自然人）</text>
+
+            <rect x="640" y="18" width="150" height="54" rx="6" fill="#f3f4f8" stroke="#c7cbd9" stroke-width="1.5"></rect>
+            <text x="715" y="40" text-anchor="middle" font-size="14" font-weight="700" fill="#444a5c">黄敏</text>
+            <text x="715" y="58" text-anchor="middle" font-size="11" fill="#767a8a">自然人</text>
+
+            <!-- 持股平台层 -->
+            <rect x="60" y="140" width="230" height="58" rx="6" fill="#fff" stroke="#c7cbd9" stroke-width="1.5"></rect>
+            <text x="175" y="164" text-anchor="middle" font-size="13" font-weight="700" fill="var(--qcc-text)">星澜控股集团有限公司</text>
+            <text x="175" y="182" text-anchor="middle" font-size="11" fill="#767a8a">持股平台</text>
+
+            <rect x="330" y="140" width="290" height="58" rx="6" fill="#fff" stroke="#c7cbd9" stroke-width="1.5"></rect>
+            <text x="475" y="164" text-anchor="middle" font-size="13" font-weight="700" fill="var(--qcc-text)">上海澜屿企业管理咨询</text>
+            <text x="475" y="182" text-anchor="middle" font-size="11" fill="#767a8a">合伙企业（有限合伙）</text>
+
+            <!-- 三家目标公司层 -->
+            <rect x="30" y="300" width="290" height="72" rx="6" fill="var(--qcc-blue-pale)" stroke="#1e5eff" stroke-width="2"></rect>
+            <text x="175" y="330" text-anchor="middle" font-size="14" font-weight="700" fill="#1546c9">星澜科技（上海）有限公司</text>
+            <text x="175" y="350" text-anchor="middle" font-size="11" fill="#5c6bb0">被执行 2 条</text>
+
+            <rect x="360" y="300" width="290" height="72" rx="6" fill="#fff" stroke="#c7cbd9" stroke-width="1.5"></rect>
+            <text x="505" y="330" text-anchor="middle" font-size="14" font-weight="700" fill="var(--qcc-text)">星澜网络科技有限公司</text>
+            <text x="505" y="350" text-anchor="middle" font-size="11" fill="#767a8a">未检索到被执行记录</text>
+
+            <rect x="690" y="300" width="330" height="72" rx="6" fill="#fff" stroke="#c7cbd9" stroke-width="1.5"></rect>
+            <text x="855" y="330" text-anchor="middle" font-size="14" font-weight="700" fill="var(--qcc-text)">星澜信息技术（苏州）有限公司</text>
+            <text x="855" y="350" text-anchor="middle" font-size="11" fill="#767a8a">未检索到被执行记录；星澜科技全资子公司</text>
+
+            <!-- 连线：自然人 -> 持股平台 -->
+            <line x1="480" y1="72" x2="200" y2="140" stroke="#8b91a7" stroke-width="1.5" marker-end="url(#arrow)"></line>
+            <text x="330" y="108" font-size="12" fill="#c9720a">70%</text>
+
+            <line x1="530" y1="72" x2="230" y2="140" stroke="#8b91a7" stroke-width="1.5" marker-end="url(#arrow)"></line>
+            <text x="418" y="118" font-size="12" fill="#767a8a">30%</text>
+
+            <line x1="490" y1="72" x2="470" y2="140" stroke="#8b91a7" stroke-width="1.5" marker-end="url(#arrow)"></line>
+            <text x="495" y="108" font-size="12" fill="#c9720a">100%（间接持有）</text>
+
+            <!-- 持股平台 -> 三家公司 -->
+            <line x1="175" y1="198" x2="175" y2="300" stroke="#8b91a7" stroke-width="1.5" marker-end="url(#arrow)"></line>
+            <text x="182" y="255" font-size="12" fill="#767a8a">100%</text>
+
+            <line x1="475" y1="198" x2="505" y2="300" stroke="#8b91a7" stroke-width="1.5" marker-end="url(#arrow)"></line>
+            <text x="482" y="255" font-size="12" fill="#767a8a">100%</text>
+
+            <!-- 星澜科技 -> 星澜信息技术（苏州）：全资子公司 -->
+            <path d="M320 336 C 500 420, 600 420, 690 340" fill="none" stroke="#1e5eff" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrow)"></path>
+            <text x="470" y="418" font-size="12" fill="#1546c9">100%（全资子公司）</text>
+          </svg>
+          <div class="equity-caption">穿透路径：沈某某持股70% → 星澜控股集团有限公司 100% → 星澜科技（上海）有限公司；沈某某通过上海澜屿企业管理咨询合伙企业（有限合伙）间接持有星澜网络科技有限公司100%；星澜信息技术（苏州）有限公司系星澜科技（上海）有限公司全资子公司。三家公司股权穿透后实际控制人均指向沈某某。</div>
+        </div>
+      </div>
+
+      <!-- 股东信息 -->
+      <div class="tabpage" data-page="shareholders">
+        <div class="section-title">股东信息</div>
+        <table class="data-table" id="shareholders-table">
+          <thead><tr><th>股东名称</th><th>持股比例</th><th>认缴出资额</th></tr></thead>
+          <tbody id="shareholders-body">
+            <tr>
+              <td class="link-blue">星澜控股集团有限公司</td>
+              <td class="pct">100%</td>
+              <td>5000万元人民币</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="section-title">穿透后受益人</div>
+        <table class="data-table">
+          <thead><tr><th>姓名</th><th>类型</th><th>穿透后持股比例</th></tr></thead>
+          <tbody id="beneficiary-body">
+            <tr><td class="link-blue">沈某某</td><td>自然人</td><td class="pct">70%</td></tr>
+            <tr><td class="link-blue">黄敏</td><td>自然人</td><td class="pct">30%</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- 风险信息 -->
+      <div class="tabpage" data-page="risk">
+        <div class="section-title">被执行人信息</div>
+        <div id="risk-alert-box">
+          <div class="risk-alert">
+            <span class="dot"></span>
+            共检索到 2 条被执行记录，执行标的合计 1,073,600.00 元，均处于执行中状态。
+          </div>
+          <table class="data-table">
+            <thead><tr><th>案号</th><th>执行法院</th><th>执行标的（元）</th><th>立案日期</th><th>案件状态</th></tr></thead>
+            <tbody id="zhixing-body">
+              <tr>
+                <td class="case-no">(2026)沪01执12345号</td>
+                <td>上海市第一中级人民法院</td>
+                <td>860,000.00</td>
+                <td>2026-03-17</td>
+                <td><span class="status-chip">执行中</span></td>
+              </tr>
+              <tr>
+                <td class="case-no">(2025)沪0115执8967号</td>
+                <td>上海市浦东新区人民法院</td>
+                <td>213,600.00</td>
+                <td>2025-09-02</td>
+                <td><span class="status-chip">执行中</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="section-title">其他风险提示</div>
+        <table class="data-table">
+          <thead><tr><th>风险类型</th><th>数量</th></tr></thead>
+          <tbody>
+            <tr><td>失信被执行人</td><td>0</td></tr>
+            <tr><td>限制高消费</td><td>0</td></tr>
+            <tr><td>司法拍卖</td><td>0</td></tr>
+            <tr><td>股权冻结</td><td>0</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="side-card">
+        <h3>企业信用风险</h3>
+        <div class="risk-score">
+          <div class="risk-ring"><span>62</span></div>
+          <div class="desc">风险等级：中等<br>主要来自2条被执行记录<br>建议结合工商信息进一步核实</div>
+        </div>
+      </div>
+      <div class="side-card">
+        <h3>工商速览</h3>
+        <div class="kv-list">
+          <div><span class="k">参保人数</span><span>128人</span></div>
+          <div><span class="k">行业</span><span>软件和信息技术服务业</span></div>
+          <div><span class="k">企业规模</span><span>中型</span></div>
+          <div><span class="k">曾用名</span><span>无</span></div>
+          <div><span class="k">英文名</span><span>Xinglan Technology (Shanghai) Co., Ltd.</span></div>
+        </div>
+      </div>
+      <div class="side-card">
+        <h3>关联企业</h3>
+        <div class="kv-list">
+          <div><span class="k">全资子公司</span><span class="link-blue">星澜信息技术（苏州）有限公司</span></div>
+          <div><span class="k">同一实控人</span><span class="link-blue">星澜网络科技有限公司</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="demo-badge">演示数据，人物公司均属虚构</div>
+
+<script>
+  var COMPANIES = {
+    c1: {
+      name: "星澜科技（上海）有限公司",
+      avatar: "星",
+      oper: "陈曦",
+      capital: "5000万人民币",
+      start: "2015-06-12",
+      no: "91310115MA1GN8XQ4X",
+      authority: "上海市浦东新区市场监督管理局",
+      address: "上海市浦东新区蓝天路588号星澜大厦12层",
+      scope: "计算机软件开发、软件外包服务、信息技术咨询服务、企业管理咨询、市场营销策划等",
+      employees: [["陈曦", "法定代表人、执行董事"]],
+      shareholders: [["星澜控股集团有限公司", "100%", "5000万元人民币"]],
+      beneficiaries: [["沈某某", "自然人", "70%"], ["黄敏", "自然人", "30%"]],
+      zhixing: [
+        ["(2026)沪01执12345号", "上海市第一中级人民法院", "860,000.00", "2026-03-17"],
+        ["(2025)沪0115执8967号", "上海市浦东新区人民法院", "213,600.00", "2025-09-02"]
+      ]
+    },
+    c2: {
+      name: "星澜网络科技有限公司",
+      avatar: "星",
+      oper: "黄敏",
+      capital: "1000万人民币",
+      start: "2020-09-08",
+      no: "91310104MA1HK3YB2M",
+      authority: "上海市徐汇区市场监督管理局",
+      address: "上海市徐汇区漕溪北路288号5层",
+      scope: "网络技术开发、技术服务、劳务派遣、企业管理咨询等",
+      employees: [["黄敏", "法定代表人、执行董事"]],
+      shareholders: [["上海澜屿企业管理咨询合伙企业（有限合伙）", "100%", "1000万元人民币"]],
+      beneficiaries: [["沈某某", "自然人（通过持股平台间接持有）", "100%"]],
+      zhixing: []
+    },
+    c3: {
+      name: "星澜信息技术（苏州）有限公司",
+      avatar: "星",
+      oper: "沈某某",
+      capital: "2000万人民币",
+      start: "2018-01-20",
+      no: "91320594MA1YQ7F63P",
+      authority: "苏州工业园区市场监督管理局",
+      address: "江苏省苏州市工业园区星湖街328号创意产业园A座3层",
+      scope: "信息技术咨询服务、人力资源服务（不含职业中介活动及劳务派遣业务）、企业管理咨询等",
+      employees: [["沈某某", "法定代表人、执行董事"]],
+      shareholders: [["星澜科技（上海）有限公司", "100%", "2000万元人民币"]],
+      beneficiaries: [["沈某某", "自然人（穿透，经星澜科技（上海）有限公司）", "70%"], ["黄敏", "自然人（穿透，经星澜科技（上海）有限公司）", "30%"]],
+      zhixing: []
+    }
+  };
+
+  function esc(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function renderCompany(id) {
+    var c = COMPANIES[id];
+
+    document.getElementById("qcc-search-input").value = c.name;
+    document.getElementById("crumb-name").textContent = c.name;
+    document.getElementById("company-name").textContent = c.name;
+    document.getElementById("avatar-letter").textContent = c.avatar;
+    document.getElementById("m-oper").textContent = c.oper;
+    document.getElementById("m-capital").textContent = c.capital;
+    document.getElementById("m-start").textContent = c.start;
+    document.getElementById("m-no").textContent = c.no;
+    document.getElementById("m-taxno").textContent = c.no;
+    document.getElementById("m-authority").textContent = c.authority;
+    document.getElementById("m-address").textContent = c.address;
+
+    document.getElementById("b-name").textContent = c.name;
+    document.getElementById("b-oper").textContent = c.oper;
+    document.getElementById("b-capital").textContent = c.capital;
+    document.getElementById("b-start").textContent = c.start;
+    document.getElementById("b-no").textContent = c.no;
+    document.getElementById("b-address").textContent = c.address;
+    document.getElementById("b-scope").textContent = c.scope;
+
+    document.getElementById("employees-body").innerHTML = c.employees.map(function (e) {
+      return "<tr><td>" + esc(e[0]) + "</td><td>" + esc(e[1]) + "</td></tr>";
+    }).join("");
+
+    document.getElementById("shareholders-body").innerHTML = c.shareholders.map(function (s) {
+      return "<tr><td class=\"link-blue\">" + esc(s[0]) + "</td><td class=\"pct\">" + esc(s[1]) + "</td><td>" + esc(s[2]) + "</td></tr>";
+    }).join("");
+
+    document.getElementById("beneficiary-body").innerHTML = c.beneficiaries.map(function (b) {
+      return "<tr><td class=\"link-blue\">" + esc(b[0]) + "</td><td>" + esc(b[1]) + "</td><td class=\"pct\">" + esc(b[2]) + "</td></tr>";
+    }).join("");
+
+    var riskTag = document.getElementById("risk-tag");
+    var riskCount = document.getElementById("risk-count");
+    var riskBox = document.getElementById("risk-alert-box");
+
+    if (c.zhixing.length > 0) {
+      riskTag.style.display = "inline-block";
+      riskTag.textContent = c.zhixing.length + "条被执行记录";
+      riskCount.style.display = "inline-block";
+      riskCount.textContent = c.zhixing.length;
+
+      var total = c.zhixing.reduce(function (sum, z) {
+        return sum + parseFloat(z[2].replace(/,/g, ""));
+      }, 0);
+      var rows = c.zhixing.map(function (z) {
+        return "<tr><td class=\"case-no\">" + esc(z[0]) + "</td><td>" + esc(z[1]) + "</td><td>" + esc(z[2])
+          + "</td><td>" + esc(z[3]) + "</td><td><span class=\"status-chip\">执行中</span></td></tr>";
+      }).join("");
+      riskBox.innerHTML =
+        "<div class=\"risk-alert\"><span class=\"dot\"></span>共检索到 " + c.zhixing.length
+        + " 条被执行记录，执行标的合计 " + total.toLocaleString("zh-CN", {minimumFractionDigits: 2})
+        + " 元，均处于执行中状态。</div>"
+        + "<table class=\"data-table\"><thead><tr><th>案号</th><th>执行法院</th><th>执行标的（元）</th><th>立案日期</th><th>案件状态</th></tr></thead><tbody>"
+        + rows + "</tbody></table>";
+    } else {
+      riskTag.style.display = "none";
+      riskCount.style.display = "none";
+      riskBox.innerHTML = "<div class=\"risk-alert ok\"><span class=\"dot\"></span>未检索到有效的被执行记录。</div>";
+    }
+  }
+
+  function switchCompany(id, btn) {
+    document.querySelectorAll(".company-switch button").forEach(function (b) { b.classList.remove("active"); });
+    btn.classList.add("active");
+    renderCompany(id);
+  }
+
+  function switchTab(tab, btn) {
+    document.querySelectorAll(".tabbar button").forEach(function (b) { b.classList.remove("active"); });
+    btn.classList.add("active");
+    document.querySelectorAll(".tabpage").forEach(function (p) { p.classList.remove("active"); });
+    document.querySelector(".tabpage[data-page=\"" + tab + "\"]").classList.add("active");
+  }
+
+  renderCompany("c1");
+</script>
+
+</body>
+</html>

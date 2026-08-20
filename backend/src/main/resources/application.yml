@@ -343,6 +343,11 @@ ai:
     disabled-cache-ttl-ms: 5000
     # 在线 Skill 广场注册表地址（官网公共注册表，见 SkillMarketService）
     registry-url: https://www.aiworkdeck.com/api/registry/skills
+  tools:
+    # 演示桩：企查查工具命中固定公司名时返回预置 JSON，不打真实网关。
+    # 留空 = 关闭（默认），不影响任何现有行为。指向一个目录，
+    # 目录下 "<公司名>.json" 命中即返回，见 docs/marketing/launch-video/qcc-fixtures/。
+    enterprise-demo-fixtures: ${AI_TOOLS_ENTERPRISE_DEMO_FIXTURES:}
 
 # 匿名使用统计（设计见 docs/ANALYTICS_TELEMETRY_DESIGN.md）：
 # 本地账本永远记录；出本机由 system_setting 的 telemetry.rollup.enabled（默认开）/
